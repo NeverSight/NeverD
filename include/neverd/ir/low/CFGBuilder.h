@@ -22,12 +22,26 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseSet.h"
 
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
 #include <vector>
 
 namespace neverd {
+
+namespace detail {
+using JumpTableProofPoint = std::pair<va_t, int>;
+using JumpTableProofLocation = std::pair<int, int>;
+
+/// Record one exact LowIR occurrence point.  A second operation carrying the
+/// same (address, sequence) key permanently makes the point ambiguous; callers
+/// must not let map insertion order choose which operation an exact proof sees.
+bool recordUniqueJumpTableProofPoint(
+    std::map<JumpTableProofPoint, JumpTableProofLocation> &UniquePoints,
+    std::set<JumpTableProofPoint> &AmbiguousPoints, JumpTableProofPoint Point,
+    JumpTableProofLocation Location);
+} // namespace detail
 
 class CFGBuilder {
 public:
@@ -40,6 +54,72 @@ public:
   void setKnownFuncEntries(const std::set<va_t> *Entries) {
     KnownFuncEntries = Entries;
   }
+  /// Override the fixed i386 GOTPC model-completion work budget in focused
+  /// tests.  Production callers leave this unset and use the global ceiling;
+  /// exhaustion publishes no partial scalar-model batch.
+  void setI386GOTModelEvidenceBudgetForTesting(std::optional<size_t> Limit) {
+    I386GOTModelEvidenceBudgetForTesting = Limit;
+  }
+  /// Override the per-candidate work budget for i386 GOTOFF root refinement.
+  /// Production callers leave this unset; each resolver candidate gets one
+  /// bounded allowance whose actual use also debits the transactional stage
+  /// account, so sibling branches cannot starve one another or multiply work.
+  void
+  setI386GOTOFFProposalEvidenceBudgetForTesting(std::optional<size_t> Limit) {
+    I386GOTOFFProposalEvidenceBudgetForTesting = Limit;
+  }
+  /// Override the per-resolver-stage stack-materialized jump-table evidence
+  /// budget in focused tests.  Production callers leave this unset; every
+  /// candidate in one immutable resolver graph shares the global ceiling.
+  void setStackTableEvidenceBudgetForTesting(std::optional<size_t> Limit) {
+    StackTableEvidenceBudgetForTesting = Limit;
+  }
+  /// Override the aggregate candidate-local jump-table allowance in focused
+  /// tests.  Production callers leave this unset; target/address roles,
+  /// modulo/mask domains, recursive graph snapshots, and closure queries in
+  /// one resolver stage share the bounded balance.
+  void
+  setMaskFixedPointEvidenceBudgetForTesting(std::optional<size_t> Limit) {
+    MaskFixedPointEvidenceBudgetForTesting = Limit;
+  }
+  /// Expose only whether a failed mask proof left provisional exploration
+  /// state behind.  Budget exhaustion must be transactional: focused tests use
+  /// this after build() to ensure an incomplete proof cannot schedule a case
+  /// target for a later resolver stage.
+  bool hasMaskFixedPointExplorationTargetsForTesting() const {
+    return !MaskFixedPointExplorationTargets.empty();
+  }
+  /// Focused transaction boundary hooks.  They expose no proposal contents:
+  /// tests only distinguish a commit-tail budget failure from an earlier proof
+  /// failure and verify rollback did not mutate the persistent quarantine set.
+  bool proposalStageCommitTailEvidenceExhaustedForTesting() const {
+    return ProposalStageCommitTailEvidenceExhaustedForTesting;
+  }
+  bool proposalStageRollbackMutatedQuarantineForTesting() const {
+    return ProposalStageRollbackMutatedQuarantineForTesting;
+  }
+  bool hasQuarantinedJumpTableProposalsForTesting() const {
+    return !QuarantinedJumpTableProposals.empty();
+  }
+  struct ProposalCleanupEvidenceStateForTesting {
+    bool OldStateReserved = false;
+    bool OldStateExhausted = false;
+    bool NewTargetsReserved = false;
+    bool NewTargetsExhausted = false;
+    bool NewInfoReserved = false;
+    bool NewInfoExhausted = false;
+    bool MutationObservedBeforeReservation = false;
+  };
+  const ProposalCleanupEvidenceStateForTesting &
+  proposalCleanupEvidenceStateForTesting() const {
+    return ProposalCleanupEvidenceForTesting;
+  }
+  /// Inject one generic, one-shot failure at the old-state cleanup reservation
+  /// in focused transaction tests.  This is not fixture/address based;
+  /// production callers leave it disabled.
+  void setProposalOldStateCleanupEvidenceExhaustionForTesting(bool Enabled) {
+    ProposalOldStateCleanupEvidenceExhaustionForTesting = Enabled;
+  }
 
   /// Freeze module-wide relocation consumers discovered after the first
   /// per-function LowIR pass.  A protected slot may still be physical table
@@ -47,6 +127,17 @@ public:
   /// field.  The pointed-to set must outlive build().
   void setProtectedJumpTableRelocationSlots(const std::set<va_t> *Slots) {
     ProtectedJumpTableRelocationSlots = Slots;
+  }
+
+  /// Seed guest branches that an earlier build of this same function proved to
+  /// be jump tables.  A fresh module-arbitration rebuild may lose every current
+  /// target before it can republish the table.  The builder copies this input
+  /// and consumes it on the next build only; callers need not retain the set,
+  /// and a reused builder cannot leak history into a later function.  build()
+  /// accepts only addresses that still name a current non-call indirect branch.
+  void setPreviouslyPublishedJumpTableBranches(const std::set<va_t> *Branches) {
+    PendingPreviouslyPublishedJumpTableBranches =
+        Branches ? *Branches : std::set<va_t>{};
   }
 
   /// Reject table metadata whose runtime storage is written by another
@@ -194,6 +285,20 @@ private:
     bool operator==(const JumpTableValueOccurrence &Other) const = default;
   };
 
+  /// Exact proof that a bit-setting operation constrains the dynamic input of
+  /// one authenticated mask occurrence.  This permits a following negative
+  /// translation only when every feasible mask coordinate remains
+  /// non-negative.  The OR output, mask output, and constant operand are all
+  /// occurrence-local and are replayed after final proof roots are known.
+  struct JumpTableMaskKnownOneWitness {
+    JumpTableValueOccurrence OrOutput;
+    JumpTableValueOccurrence MaskOutput;
+    NdVar ConstantOperand = {};
+    uint64_t KnownOneBits = 0;
+
+    bool operator==(const JumpTableMaskKnownOneWitness &Other) const = default;
+  };
+
   enum class JumpTableValueRelation : uint8_t {
     /// Every feasible reaching value must equal one authenticated alternative.
     MustEqual,
@@ -206,14 +311,28 @@ private:
     /// Every feasible bit-pattern of the exact value at this use is strictly
     /// below UnsignedUpperBound.  This is a complete bit-vector proof over the
     /// resolver's CFG/lane-aware expression, not a sampled range or a table
-    /// storage-capacity inference.
+    /// storage-capacity inference.  UnsignedUpperBound also carries the exact
+    /// divisor for ExactUnsignedModuloRecipe queries.
     UnsignedLessThan,
     /// The candidate is the exact output occurrence of an unsigned remainder
     /// producer.  Resolve immediately after that definition and require the
     /// complete LLVM constant-division recipe for UnsignedUpperBound as the
     /// divisor.  This structural relation never falls back to a generic range
-    /// solver.
+    /// solver: one wrong reciprocal, shift, dividend, or back-multiply fails.
     ExactUnsignedModuloRecipe,
+    /// Candidate and its single alternative are exact frame-address operand
+    /// uses.  Canonicalize both through CFG-aware SP/FP epochs and require
+    /// equality after their explicit signed byte addends.
+    SameCanonicalFrameAddress,
+    /// Resolve one exact frame-memory slot immediately before Candidate's use.
+    /// Every all-path first overlapping definition must be one of the exact
+    /// authenticated STORE/memcpy writers carried by the query; calls,
+    /// atomics, unknown aliases, partial writes, or an uninitialized arm fail.
+    AuthenticatedFrameMemory,
+    /// Resolve one exact frame-memory slot and require its value to equal one
+    /// of Alternatives.  This is used to bind i386 outgoing stack arguments to
+    /// the current CALL epoch rather than a lexical historical STORE.
+    FrameMemoryMatches,
   };
 
   struct JumpTableValueQuery {
@@ -224,9 +343,6 @@ private:
     bool AllowZeroExtension = false;
     bool AllowSignExtension = false;
     JumpTableValueRelation Relation = JumpTableValueRelation::MustEqual;
-    /// Resolve DefinedAtPoint alternatives by their exact output occurrence.
-    /// Ordinary queries retain the historical instruction-point anchoring.
-    bool RequireExactAlternativeDefinitions = false;
     /// UnsignedLessThan's exclusive bound, or
     /// ExactUnsignedModuloRecipe's exact divisor.
     uint64_t UnsignedUpperBound = 0;
@@ -234,6 +350,93 @@ private:
     /// Scalar-model certificates use this to require the exact raw-PC owner
     /// carried by their authenticated producer occurrence.
     bool RequireExactAddressOwner = false;
+    /// Signed byte adjustments applied only by SameCanonicalFrameAddress.
+    /// The candidate and its single alternative are both exact address-use
+    /// occurrences; the shared point-sensitive frame resolver canonicalizes
+    /// them to the incoming SP epoch before these addends are compared.
+    int64_t FrameByteAddend = 0;
+    int64_t AlternativeFrameByteAddend = 0;
+    va_t FrameAddressUseAddr = InvalidVA;
+    int FrameAddressUseSeq = -1;
+    uint16_t FrameMemorySize = 0;
+    std::vector<uint16_t> AlternativeFrameValueOffsets;
+    std::vector<JumpTableValueOccurrence> AuthenticatedFrameStoreWriters;
+    std::vector<JumpTableValueOccurrence> AuthenticatedFrameMemcpyWriters;
+  };
+
+  struct JumpTableFrameAddressUse {
+    /// Exact operand use of a frame-derived address.  Frame addresses are not
+    /// value definitions: the resolver must inspect the state immediately
+    /// before the named LowIR operation.
+    JumpTableValueOccurrence Use;
+    int64_t ByteAddend = 0;
+
+    bool operator==(const JumpTableFrameAddressUse &Other) const = default;
+  };
+
+  struct JumpTableFrameInitializerChunk {
+    struct StaticSourcePiece {
+      JumpTableValueOccurrence Value;
+      JumpTableValueOccurrence Address;
+      /// Exact loader-authenticated operation occurrence that materialized
+      /// StaticAddress.  This is intentionally distinct from Address, which is
+      /// the later LOAD address use: relocation-suppression may exempt only
+      /// this candidate-specific producer, never every numeric occurrence of
+      /// the same address.
+      JumpTableValueOccurrence StaticAddressProducer;
+      va_t StaticAddressFieldVA = InvalidVA;
+      /// Exact target named by StaticAddressProducer.  A later LOAD may use an
+      /// authenticated constant byte offset within the same owner, so this is
+      /// intentionally distinct from the piece's effective StaticAddress.
+      va_t StaticAddressProducerTargetVA = InvalidVA;
+      va_t StaticAddress = InvalidVA;
+      uint16_t ByteCount = 0;
+      ConstantAddressProvenance StaticAddressProvenance =
+          ConstantAddressProvenance::Unknown;
+      va_t StaticAddressOwnerVA = InvalidVA;
+
+      bool operator==(const StaticSourcePiece &Other) const = default;
+    };
+
+    /// Exact STORE or memcpy CALL that defines this positional chunk.
+    JumpTableValueOccurrence Writer;
+    JumpTableFrameAddressUse Destination;
+    /// Exact stored-value use for STORE chunks.  memcpy chunks instead carry
+    /// SourceAddress and Length at the authenticated CALL/ABI use point.
+    JumpTableValueOccurrence StoredValue;
+    JumpTableValueOccurrence SourceAddress;
+    JumpTableValueOccurrence Length;
+    JumpTableValueOccurrence LengthProducer;
+    uint64_t ByteCount = 0;
+    va_t StaticSourceAddress = InvalidVA;
+    ConstantAddressProvenance StaticSourceProvenance =
+        ConstantAddressProvenance::Unknown;
+    va_t StaticSourceOwnerVA = InvalidVA;
+    JumpTableValueOccurrence StaticSourceProducer;
+    va_t StaticSourceFieldVA = InvalidVA;
+    va_t StaticSourceProducerTargetVA = InvalidVA;
+    bool IsMemcpy = false;
+    /// Exact static LOAD outputs on which StoredValue depends.  These bind the
+    /// positional source trace to occurrence-level value flow before any
+    /// relocation consumer exemption is published.
+    std::vector<StaticSourcePiece> StaticSources;
+
+    bool
+    operator==(const JumpTableFrameInitializerChunk &Other) const = default;
+  };
+
+  /// Occurrence-level bridge between a runtime stack-table LOAD and the
+  /// STORE/memcpy destination that received its immutable initializer.  The
+  /// runtime base remains distinct from the static BaseAddr used to decode
+  /// entries.  Publication requires the shared CFG-aware frame resolver to
+  /// prove every destination and the runtime base name the same incoming-SP
+  /// epoch and byte coordinate.
+  struct JumpTableFrameStorageRole {
+    JumpTableFrameAddressUse RuntimeBase;
+    JumpTableValueOccurrence CompleteAddress;
+    std::vector<JumpTableFrameInitializerChunk> Initializers;
+
+    bool operator==(const JumpTableFrameStorageRole &Other) const = default;
   };
 
   /// Occurrence-level certificate for one physical LOAD in a recovered table
@@ -246,6 +449,7 @@ private:
     JumpTableValueOccurrence Load;
     uint16_t LoadWidth = 0;
     std::vector<va_t> AllowedBases;
+    JumpTableFrameStorageRole FrameStorage;
     std::vector<JumpTableValueOccurrence> Indices;
     /// Exact dynamic operand of the final table-address ADD.  For a scaled
     /// table this is the MULT/LEFT output; for a pre-scaled table it is the
@@ -305,6 +509,8 @@ private:
     uint32_t AuthenticatedGuardBound = 0;
     uint32_t AuthenticatedModuloBound = 0;
     std::vector<uint32_t> AuthenticatedMaskCoordinates;
+    std::vector<JumpTableMaskKnownOneWitness>
+        AuthenticatedMaskKnownOneWitnesses;
     /// Exact physical storage runs owned by this recovery.  Strategies with a
     /// single dispatch table may leave this empty and let extraction derive
     /// one range from BaseAddr/MaxEntries/EntryIndices.  Composite strategies
@@ -431,6 +637,18 @@ private:
     /// fill this occurrence and pass the shared branch-target dependency proof.
     std::vector<JumpTableValueOccurrence> TargetLoads;
 
+    /// Strategy-local bridge between static target-decoding storage and the
+    /// exact runtime frame mirror.  BaseAddr remains the static initializer VA;
+    /// this role authorizes the different LOAD base only after point-sensitive
+    /// frame-root/epoch equality, index, displacement, and LOAD-use proofs.
+    JumpTableFrameStorageRole AuthenticatedFrameStorage;
+
+    /// Exact reads of BaseAddr's static storage that were proven to initialize
+    /// an authenticated runtime mirror.  Relocation-suppression arbitration
+    /// excludes only these use occurrences; another LOAD/CALL/escape of the
+    /// same object still vetoes suppression and preserves its code roots.
+    std::vector<JumpTableValueOccurrence> AuthenticatedStorageConsumers;
+
     /// Exact address roles for every table LOAD that participates in the
     /// recovered shape.  TargetLoads proves value-flow into INDIR_BR;
     /// LoadRoles independently proves that those occurrences (and any outer
@@ -551,16 +769,28 @@ private:
   va_t resolveStackMaterializedTableSource(
       const BinaryImage &Img, const InsnRecord &Rec,
       const std::vector<LowOp> &Ops, int LoadIdx, uint64_t BaseReg,
-      uint16_t LoadWidth, int64_t TableDisp, bool *MutatedOut = nullptr) const;
+      uint16_t LoadWidth, int64_t TableDisp, bool *MutatedOut = nullptr,
+      std::vector<JumpTableFrameInitializerChunk> *InitializersOut = nullptr,
+      std::vector<JumpTableValueOccurrence> *StorageConsumersOut =
+          nullptr) const;
   bool tryAArch64CompactTable(const BinaryImage &Img, const InsnRecord &Rec,
                               JumpTableInfo &Info);
-  bool analyzeTableLoadAddr(const std::vector<LowOp> &Ops, int FromIdx,
-                            const NdVar &AddrV, uint64_t &BaseReg,
-                            uint64_t &IndexReg, bool &HasScaledIndex,
-                            uint64_t &Disp, va_t *AddrAddVA = nullptr,
-                            NdVar *IndexValue = nullptr,
-                            va_t *IndexUseAddr = nullptr,
-                            int *IndexUseSeq = nullptr) const;
+  bool analyzeTableLoadAddr(
+      const std::vector<LowOp> &Ops, int FromIdx, const NdVar &AddrV,
+      uint64_t &BaseReg, uint64_t &IndexReg, bool &HasScaledIndex,
+      uint64_t &Disp, va_t *AddrAddVA = nullptr, NdVar *IndexValue = nullptr,
+      va_t *IndexUseAddr = nullptr, int *IndexUseSeq = nullptr,
+      JumpTableValueOccurrence *AddressOccurrence = nullptr,
+      JumpTableFrameAddressUse *FrameRuntimeBase = nullptr) const;
+  /// Bind one i386 ELF GOTOFF constant input to its unique decoded operand,
+  /// relocation field, owner, and LowIR occurrence.  A numerically equal
+  /// scalar or generic R_386_32 field is not interchangeable with this proof.
+  bool isExactI386GOTOFFInput(const LowOp &Add, int ConstantSide) const;
+  /// Prove that the selected input of \p Use must reach an authenticated
+  /// I386ELFGOTBaseZero scalar-model output on every CFG path.  The table base
+  /// participates in the candidate-local proof-root/cache identity.
+  bool exactI386ModelZeroReaches(const LowOp &Use, int BaseSide,
+                                 va_t TableBase) const;
   // Detect a size-optimized computed goto whose entry-size scale is folded into
   // the index (`shr idx,3; and idx,0x38; jmp *(table,idx)` — scale 1, the index
   // is already a byte offset).  Such a load carries no INT_MULT/INT_LEFT for
@@ -592,7 +822,8 @@ private:
   // jmptab run length.  Composes the per-case target for each switch value into
   // Info.ExplicitTargets and dispatches on the real switch variable.
   bool tryTwoLevelIndexTable(const BinaryImage &Img, const InsnRecord &Rec,
-                             JumpTableInfo &Info);
+                             JumpTableInfo &Info,
+                             size_t *CandidateEvidenceBudget);
   // Decompose an index-table load address (`idxtab + switchvar[*scale]`) into
   // the folded constant table base, the index register, and the index scale
   // (1 for a byte index table, the entry width for a halfword one).  Tolerates
@@ -606,9 +837,10 @@ private:
                                    NdVar *IndexValue = nullptr,
                                    va_t *IndexUseAddr = nullptr,
                                    int *IndexUseSeq = nullptr) const;
-  std::optional<uint64_t> foldRegConstant(const BinaryImage &Img,
-                                          const InsnRecord &Rec, uint64_t Reg,
-                                          va_t CutoffAddr = InvalidVA) const;
+  std::optional<uint64_t>
+  foldRegConstant(const BinaryImage &Img, const InsnRecord &Rec, uint64_t Reg,
+                  va_t CutoffAddr = InvalidVA,
+                  std::function<bool(size_t)> ConsumeWork = {}) const;
   bool tryARMTableBranch(const BinaryImage &Img, const InsnRecord &Rec,
                          JumpTableInfo &Info);
   bool tryDualPathRecovery(const InsnRecord &Rec, JumpTableInfo &Info);
@@ -640,7 +872,9 @@ private:
   bool inferBoundsFromLoadAliasGuard(const InsnRecord &Rec,
                                      JumpTableInfo &Info);
   bool inferBoundsFromModulo(const BinaryImage &Img, const InsnRecord &Rec,
-                             JumpTableInfo &Info);
+                             JumpTableInfo &Info,
+                             size_t *AggregateEvidenceBudget,
+                             bool *EvidenceIncomplete = nullptr);
   /// Recover the entry count from an AND mask that confines the table index.
   /// By default only a clean contiguous low-bit mask (`2^k - 1`) is accepted,
   /// since it exactly bounds the index to [0, 2^k).  With \p AllowNonContiguous
@@ -648,19 +882,29 @@ private:
   /// bounds a `switch(x & M)` table whose M is not `2^k - 1` (the table is then
   /// dense over the raw index with filler in the gaps).  When that form
   /// supplies the returned proof, \p UsedNonContiguous is set so consumers do
-  /// not mistake its zero-bit gaps for a case-label stride.
+  /// not mistake its zero-bit gaps for a case-label stride.  A provisional
+  /// pass may bootstrap a cyclic dispatch from a dense constant selector arm;
+  /// replay after provisional table edges exist sets
+  /// \p RequireProducerReachability so at least one feasible reaching value
+  /// must contain the authenticated mask occurrence.
   uint32_t inferBoundsFromMask(
       const InsnRecord &Rec, const JumpTableInfo &Info,
       bool AllowNonContiguous = false, bool *IncompleteIndexDomain = nullptr,
       bool *UsedNonContiguous = nullptr,
-      std::vector<uint32_t> *FeasibleCoordinates = nullptr) const;
+      std::vector<uint32_t> *FeasibleCoordinates = nullptr,
+      std::vector<JumpTableMaskKnownOneWitness> *KnownOneWitnesses = nullptr,
+      bool RequireProducerReachability = false,
+      const std::vector<va_t> *CandidateTargetsOverride = nullptr,
+      const std::set<va_t> *ReachableInstructions = nullptr,
+      bool AllowFixedPointBootstrap = true, bool AllowRawDenseShortcut = true,
+      size_t *AggregateEvidenceBudget = nullptr) const;
   void detectNormalization(const InsnRecord &Rec, JumpTableInfo &Info);
   void detectStride(const InsnRecord &Rec, JumpTableInfo &Info);
   uint32_t pullBackBound(uint32_t RawBound, const JumpTableInfo &Info) const;
   bool recoverCaseLabels(JumpTable &JT, const JumpTableInfo &Info) const;
   std::vector<va_t>
   readTableEntries(const BinaryImage &Img, const JumpTableInfo &Info,
-                   std::vector<uint32_t> *KeptIndices = nullptr);
+                   std::vector<uint32_t> *KeptIndices = nullptr) const;
   /// Emulate the dispatch arithmetic to recover targets, sidestepping static
   /// entry-layout classification.  When \p SelfBounding is true the scan is
   /// treated as unbounded (no comparison-guard / relocation-run bound): it
@@ -707,8 +951,12 @@ private:
   /// unambiguous reaching definition, its index leaf must denote the exact
   /// table-index value at the comparison use, and the table-reaching branch
   /// polarity is evaluated explicitly.  Sequential guards intersect; no
-  /// address-ordered comparison or same-location shortcut participates.
-  bool inferBoundsFromPreciseGuards(const InsnRecord &Rec, JumpTableInfo &Info);
+  /// address-ordered comparison or same-location shortcut participates.  The
+  /// required candidate-local budget is shared by initial proof and final
+  /// revalidation; no graph, alias, or value query may restart a private
+  /// aggregate allowance.
+  bool inferBoundsFromPreciseGuards(const InsnRecord &Rec, JumpTableInfo &Info,
+                                    size_t *CandidateEvidenceBudget);
   bool guardUsesInclusiveCompare(const InsnRecord &Rec,
                                  const JumpTableInfo &Info,
                                  uint64_t Bound) const;
@@ -721,19 +969,25 @@ private:
                                    int UseSeq, const JumpTableInfo &Info,
                                    bool AllowZeroExtension = false,
                                    bool AllowSignExtension = false) const;
-  std::vector<bool>
-  tableValuesMatchAtUses(const std::vector<JumpTableValueQuery> &Queries,
-                         bool *AnalysisComplete = nullptr) const;
+  std::vector<bool> tableValuesMatchAtUses(
+      const std::vector<JumpTableValueQuery> &Queries,
+      bool *AnalysisComplete = nullptr,
+      std::vector<bool> *QueryAnalysisComplete = nullptr,
+      va_t CandidateBranchOverride = InvalidVA,
+      const std::vector<va_t> *CandidateTargetsOverride = nullptr,
+      size_t *GraphWorkBudget = nullptr) const;
   /// Prove that the actual INDIR_BR input is derived from the strategy's exact
   /// TargetLoad occurrence on every feasible path.  Mere address co-occurrence
   /// in static scans or emulation is not sufficient.
   bool branchTargetDependsOnTableLoad(const InsnRecord &Rec,
-                                      const JumpTableInfo &Info) const;
+                                      const JumpTableInfo &Info,
+                                      size_t *AggregateEvidenceBudget) const;
   /// Prove that every authenticated target LOAD reads the declared table role
   /// at that exact occurrence: base + certified-index * physical stride.
   /// Output-to-branch dependence alone is insufficient when a sibling or
   /// ambiguous predecessor can supply a different LOAD address.
-  bool tableLoadAddressesMatchRole(JumpTableInfo &Info) const;
+  bool tableLoadAddressesMatchRole(JumpTableInfo &Info,
+                                   size_t *AggregateEvidenceBudget) const;
   /// Build the root set used while proving one candidate table.  A
   /// relocation-discovered interior label is not an independent entry when
   /// every relocation that names it is a physical slot owned by this exact
@@ -744,23 +998,30 @@ private:
   std::set<va_t> candidateReachableInstructions(
       const InsnRecord &Candidate, const std::vector<va_t> &CandidateTargets,
       const std::set<va_t> &Roots,
-      const std::vector<JumpTableStorageRange> &CandidateStorage) const;
+      const std::vector<JumpTableStorageRange> &CandidateStorage,
+      size_t *GraphWorkBudget = nullptr,
+      bool *AnalysisComplete = nullptr) const;
   /// Prove that the conditional branch at BranchAddr actually gates the table
   /// LOAD: it dominates the LOAD and only one of its outgoing CFG edges can
   /// reach the access.  A comparison in a sibling/case-body block is not a
   /// dispatch guard even when it happens to consume the same register.
-  bool branchControlsTableLoad(va_t BranchAddr,
-                               const JumpTableInfo &Info) const;
+  bool branchControlsTableLoad(
+      va_t BranchAddr, const JumpTableInfo &Info,
+      size_t *GraphWorkBudget = nullptr) const;
   /// Return the boolean value of a COND_BR condition on the unique edge that
   /// reaches the table LOAD.  nullopt means the branch does not dominate/gate
-  /// the access or its successor polarity cannot be proved.
+  /// the access or its successor polarity cannot be proved.  A supplied graph
+  /// budget is consumed by snapshot construction, reachability, and ownership
+  /// checks; exhaustion leaves AnalysisComplete false.
   std::vector<std::optional<bool>>
   tableLoadConditionValues(llvm::ArrayRef<va_t> BranchAddrs,
                            const JumpTableInfo &Info,
-                           bool *AnalysisComplete = nullptr) const;
-  std::optional<bool> tableLoadConditionValue(va_t BranchAddr,
-                                              const JumpTableInfo &Info) const;
-  bool isValidTarget(const BinaryImage &Img, va_t Target, va_t FuncEntry);
+                           bool *AnalysisComplete = nullptr,
+                           size_t *GraphWorkBudget = nullptr) const;
+  std::optional<bool>
+  tableLoadConditionValue(va_t BranchAddr, const JumpTableInfo &Info,
+                          size_t *GraphWorkBudget = nullptr) const;
+  bool isValidTarget(const BinaryImage &Img, va_t Target, va_t FuncEntry) const;
   bool sanityCheckTargets(const BinaryImage &Img,
                           std::vector<va_t> &Targets) const;
 
@@ -772,17 +1033,72 @@ private:
   /// initial CFG construction provided more block coverage.
   void multiStageResolve(const BinaryImage &Img, Decoder &Dec, LowFunc &Func);
 
-  /// Reconcile indirect branches that dispatch through the same rodata jump
-  /// table (e.g. a clang-peeled first loop iteration and the loop body) so the
-  /// copy in the messier block adopts the most complete recovery.  Returns true
-  /// when any branch's target set changed.
-  bool reconcileSharedTables(const BinaryImage &Img, Decoder &Dec);
-  bool resolvedJumpTableOwnsStorageAddress(
-      va_t Address, const std::set<va_t> *ReachableInsnFilter = nullptr) const;
+  /// Return whether a currently reachable published table owns Address.
+  /// Budgeted candidate-graph callers pass their shared evidence balance; an
+  /// exhausted scan returns std::nullopt so graph construction fails closed
+  /// instead of treating an unexamined table as "not owned".
+  std::optional<bool> resolvedJumpTableOwnsStorageAddress(
+      va_t Address, const std::set<va_t> *ReachableInsnFilter = nullptr,
+      size_t *EvidenceBudget = nullptr) const;
 
   /// Cached JumpTableInfo per INDIR_BR address, filled during resolution
   /// and consumed by extractJumpTables to avoid duplicate analysis.
   std::map<va_t, JumpTableInfo> ResolvedTableInfo;
+
+  struct StrongJumpTableLoadRole {
+    JumpTableValueOccurrence Load;
+    uint16_t LoadWidth = 0;
+
+    bool operator==(const StrongJumpTableLoadRole &Other) const = default;
+  };
+  struct StrongJumpTableRoleProposal {
+    std::vector<JumpTableStorageRange> StorageRanges;
+    std::vector<StrongJumpTableLoadRole> LoadRoles;
+    /// Exact relocation slots that the candidate proved were consumed only by
+    /// this table.  A later, higher-rank proposal may suppress their synthetic
+    /// CFG roots while replaying its own reaching-value proof.
+    std::vector<va_t> SuppressibleRelocationSlots;
+    /// Least-fixed-point dependency level.  Rank zero is independently
+    /// provable; a candidate may borrow root suppression only from lower ranks.
+    uint32_t ProofRank = 0;
+
+    bool operator==(const StrongJumpTableRoleProposal &Other) const = default;
+  };
+  enum class StrongJumpTableProposalOutcome : uint8_t {
+    DefinitiveLocalProofLoss,
+    EvidenceIncomplete,
+    StrongProposed,
+  };
+
+  /// Immutable occurrence/storage certificates proposed by strong,
+  /// candidate-local table proofs in the preceding multi-stage round.  Exact
+  /// LOAD roles may classify same-storage consumers; exact relocation slots
+  /// may suppress synthetic roots only across a strictly lower proof rank.
+  /// Selector/domain/target metadata remains entirely candidate-local.  A
+  /// separate next-round map prevents branch iteration order from changing
+  /// the certificate universe visible to arbitration.
+  std::map<va_t, StrongJumpTableRoleProposal>
+      PriorStrongJumpTableProposals;
+  std::map<va_t, StrongJumpTableRoleProposal>
+      NextStrongJumpTableProposals;
+  std::map<va_t, StrongJumpTableProposalOutcome>
+      StrongJumpTableProposalOutcomes;
+  /// Once a previously proposed candidate loses its independent local proof,
+  /// it cannot bootstrap itself back into the role universe in this build.
+  /// Evidence exhaustion is not a proof loss and therefore never enters this
+  /// set; the whole stage is retried transactionally instead.
+  std::set<va_t> QuarantinedJumpTableProposals;
+  /// Strong proposals are more specific than an arbitrary indirect callback.
+  /// If one never reaches a validated target set, preserve it as an opaque,
+  /// unsafe INDIR_BR instead of rewriting it as an indirect tail call.
+  std::set<va_t> EverStrongJumpTableProposalBranches;
+  bool CandidateProposalStageActive = false;
+  size_t CandidateProposalStageEvidenceRemaining = 0;
+  bool CandidateProposalStageEvidenceIncomplete = false;
+  bool ProposalStageCommitTailEvidenceExhaustedForTesting = false;
+  bool ProposalStageRollbackMutatedQuarantineForTesting = false;
+  ProposalCleanupEvidenceStateForTesting ProposalCleanupEvidenceForTesting;
+  bool ProposalOldStateCleanupEvidenceExhaustionForTesting = false;
 
   /// Whole-function predecessor/lane proofs are only conclusive after the
   /// initial recursive-descent worklist has decoded every direct CFG arm.
@@ -810,6 +1126,14 @@ private:
   /// Candidate-specific roots shared by all occurrence/lane proof queries in
   /// one resolveJumpTable invocation.
   mutable std::optional<std::set<va_t>> ActiveJumpTableProofRoots;
+  /// Candidate identity and least-fixed-point rank for occurrence-level root
+  /// replay.  resolveJumpTable scopes both fields transactionally.
+  va_t ActiveJumpTableCandidateAddr = InvalidVA;
+  uint32_t ActiveJumpTableCandidateProofRank = 0;
+  /// Local core replay borrows only lower ranks.  Once that core is complete,
+  /// the transactional consumer audit may hide synthetic roots from every
+  /// other frozen proposal; a lost proposal forces another resolver round.
+  bool ActiveJumpTableConsumerAudit = false;
   /// Instruction starts in the most recently rebuilt public CFG.  Resolver
   /// metadata for decoded-but-pruned provisional cases remains cached for
   /// revalidation, but it must not arbitrate table storage or conditional code
@@ -846,8 +1170,74 @@ private:
   std::vector<RelocatedInstructionAddressOccurrence>
       RelocatedInstructionAddressOccurrences;
   std::vector<I386GetPcOccurrence> I386GetPcOccurrences;
+  std::vector<RelocatedInstructionScalarOperandOccurrence>
+      RelocatedInstructionScalarOperandOccurrences;
   std::vector<RelocatedInstructionScalarModelOccurrence>
       RelocatedInstructionScalarModelOccurrences;
+  std::optional<size_t> I386GOTModelEvidenceBudgetForTesting;
+  std::optional<size_t> I386GOTOFFProposalEvidenceBudgetForTesting;
+  std::optional<size_t> StackTableEvidenceBudgetForTesting;
+  std::optional<size_t> MaskFixedPointEvidenceBudgetForTesting;
+  /// One candidate-local allowance for i386 GOTOFF reaching-value evidence.
+  /// It is reset exactly once at resolver entry; its actual use is charged to
+  /// the candidate/stage aggregate before the candidate outcome is committed.
+  mutable size_t I386GOTOFFProposalEvidenceRemaining = 0;
+  /// Sticky exhaustion bit for the current candidate.  An unfinished exact
+  /// GOTOFF query is evidence-incomplete, never definitive proposal loss.
+  mutable bool I386GOTOFFProposalEvidenceIncomplete = false;
+  /// One transactional allowance for stack-materialized table evidence in the
+  /// current resolver graph.  Candidate retries in one stage share the same
+  /// monotonically decreasing balance; a bounded fixed-point rebuild receives
+  /// a fresh allowance for its newly published graph.
+  mutable size_t StackTableEvidenceRemaining = 0;
+  /// Exact literal coordinates admitted by the empty-edge mask proof may
+  /// expose case code that has not been decoded yet.  These targets are used
+  /// only to continue recursive descent in the next bounded resolver stage;
+  /// they are never published as a jump table until the complete least fixed
+  /// point closes.
+  mutable std::map<va_t, std::vector<va_t>>
+      MaskFixedPointExplorationTargets;
+  /// Branches whose stack-table proof stopped because the current stage's
+  /// allowance was exhausted.  They are neither failed table proofs nor
+  /// tail-call evidence: retain their original opaque indirect-branch identity
+  /// and publish the address as unsafe.
+  mutable std::set<va_t> StackTableEvidenceIncompleteBranches;
+  /// Branches whose final runtime-index proof was incomplete.  A physical
+  /// table shape plus an unfinished mask/domain certificate is not evidence
+  /// for either a switch or a function-pointer tail call, so retain the source
+  /// INDIR_BR identity and publish it as unsafe.
+  std::set<va_t> IndexDomainEvidenceIncompleteBranches;
+  /// Candidate root sets are stable only within one resolver graph.  Cache
+  /// accepted and rejected table bases for the current stage, then clear this
+  /// map whenever multi-stage resolution rebuilds reachability.
+  mutable std::map<std::tuple<va_t, uint32_t, bool>,
+                   std::optional<std::set<va_t>>>
+      I386GOTOFFProposalRootCache;
+  using I386GOTOFFModelReachKey =
+      std::tuple<va_t, int, int, va_t, uint8_t, uint64_t, uint16_t, uint8_t,
+                 uint64_t, std::vector<va_t>>;
+  /// Whole-CFG reaching-value queries are the dominant proposal cost.  Cache
+  /// the exact use/input/table/root-set identity within one resolver stage;
+  /// roots are part of the key so a provisional proof can never authorize the
+  /// stricter final revalidation graph.
+  mutable std::map<I386GOTOFFModelReachKey, bool> I386GOTOFFModelReachCache;
+  bool consumeI386GOTOFFProposalEvidence(size_t Amount = 1) const {
+    if (Amount > I386GOTOFFProposalEvidenceRemaining) {
+      I386GOTOFFProposalEvidenceRemaining = 0;
+      I386GOTOFFProposalEvidenceIncomplete = true;
+      return false;
+    }
+    I386GOTOFFProposalEvidenceRemaining -= Amount;
+    return true;
+  }
+  bool consumeStackTableEvidence(size_t Amount = 1) const {
+    if (Amount > StackTableEvidenceRemaining) {
+      StackTableEvidenceRemaining = 0;
+      return false;
+    }
+    StackTableEvidenceRemaining -= Amount;
+    return true;
+  }
   /// Exact table-base anchors materialized by relocation occurrences whose
   /// source instruction belongs to the currently published proof graph.
   /// Recomputed after each CFG rebuild so a speculative/pruned LEA cannot
@@ -866,10 +1256,20 @@ private:
   const BinaryImage *CurrentImg = nullptr;
   const std::set<va_t> *KnownFuncEntries = nullptr;
   const std::set<va_t> *ProtectedJumpTableRelocationSlots = nullptr;
+  /// Owned one-shot history for the next build, plus the snapshot active in
+  /// the current build.  Keeping these separate makes builder reuse safe even
+  /// if the caller's source set has already gone out of scope.
+  std::set<va_t> PendingPreviouslyPublishedJumpTableBranches;
+  std::set<va_t> PreviouslyPublishedJumpTableBranches;
   const std::set<va_t> *UnsafeJumpTableBranches = nullptr;
   std::set<va_t> PotentialJumpTableBranches;
-  /// Indirect branches that published a validated jump table during this
-  /// build but lost every target after the final fixed-point revalidation.
+  /// Monotone identity for current non-call indirect branches that published
+  /// at least one validated jump-table edge in this or a seeded earlier build.
+  /// Unlike LostValidatedJumpTableBranches, this also includes branches whose
+  /// final target set remains non-empty.
+  std::set<va_t> EverPublishedJumpTableBranches;
+  /// Indirect branches that published a validated jump table during this or a
+  /// seeded earlier build but lost every target after final revalidation.
   /// They remain opaque INDIR_BR terminators: treating the now-unprovable
   /// guest dispatch as a function-pointer tail call would change semantics.
   std::set<va_t> LostValidatedJumpTableBranches;

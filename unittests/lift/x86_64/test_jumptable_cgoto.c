@@ -68,6 +68,18 @@ L5:
   return acc;
 }
 
+/* Non-static label table: clang materialises the initializer in a frame slot
+   at -O0.  The focused evidence-budget test builds this function directly so
+   exhaustion can be observed at the public LowFunc boundary. */
+int cg_local_budget(int sel) {
+  const void *tab[] = {&&L0, &&L1, &&L2, &&L3};
+  goto *tab[(unsigned)sel & 3];
+L0: return 11;
+L1: return 22;
+L2: return 33;
+L3: return 44;
+}
+
 void _start(void) {
   int a[4] = {1, 2, 3, 4};
   S = cg_single(2) + cg_loop(a, 4);

@@ -127,15 +127,25 @@ bool CFGBuilder::detectUnscaledRelocTableLoad(
     const NdVar &AddrV = (L.NumInputs >= 2) ? L.Inputs[1] : L.Inputs[0];
     if (!AddrV.isReg() && !AddrV.isTemp())
       continue;
-    // Resolve the load address (through COPY) to its defining INT_ADD.
+    // Resolve the load address through value-preserving transports to its
+    // defining INT_ADD.  The i386 lifter zero-extends a complete 32-bit guest
+    // address to the host address width immediately before LOAD; that is an
+    // address-container conversion, not a different provenance root.
+    auto isAddressTransport = [&](const LowOp &Op) {
+      if (Op.NumInputs < 1 || (!Op.Inputs[0].isReg() && !Op.Inputs[0].isTemp()))
+        return false;
+      if (Op.Opcode == NdOp::COPY)
+        return true;
+      return Op.Opcode == NdOp::INT_ZEXT &&
+             Op.Inputs[0].Size == Img.getPointerSize() &&
+             Op.Output.Size > Op.Inputs[0].Size;
+    };
     int AddIdx = reachingDefIdx(Ops, I - 1, AddrV);
-    for (int G = 0;
-         AddIdx >= 0 && Ops[AddIdx].Opcode == NdOp::COPY &&
-         Ops[AddIdx].NumInputs >= 1 &&
-         (Ops[AddIdx].Inputs[0].isReg() || Ops[AddIdx].Inputs[0].isTemp()) &&
-         G < limits::kMaxQuasiCopyDepth;
-         ++G)
+    for (int G = 0; AddIdx >= 0 && isAddressTransport(Ops[AddIdx]) &&
+                    G < limits::kMaxQuasiCopyDepth;
+         ++G) {
       AddIdx = reachingDefIdx(Ops, AddIdx - 1, Ops[AddIdx].Inputs[0]);
+    }
     if (AddIdx < 0 || Ops[AddIdx].Opcode != NdOp::INT_ADD ||
         Ops[AddIdx].NumInputs < 2)
       continue;
@@ -145,20 +155,20 @@ bool CFGBuilder::detectUnscaledRelocTableLoad(
     //   * GOTOFF (i386):  INT_ADD(INT_ADD(got_base_reg, index), disp); the
     //     loader baked the table VA into `disp`, so the table sits there.
     int InnerIdx = AddIdx;
+    int DispSide = -1;
     uint64_t LocalDisp = 0;
     for (int Which = 0; Which < 2; ++Which) {
       if (!Ops[AddIdx].Inputs[Which].isConst())
         continue;
+      DispSide = Which;
       LocalDisp = Ops[AddIdx].Inputs[Which].Offset;
       int Inner =
           reachingDefIdx(Ops, AddIdx - 1, Ops[AddIdx].Inputs[1 - Which]);
-      for (int G = 0;
-           Inner >= 0 && Ops[Inner].Opcode == NdOp::COPY &&
-           Ops[Inner].NumInputs >= 1 &&
-           (Ops[Inner].Inputs[0].isReg() || Ops[Inner].Inputs[0].isTemp()) &&
-           G < limits::kMaxQuasiCopyDepth;
-           ++G)
+      for (int G = 0; Inner >= 0 && isAddressTransport(Ops[Inner]) &&
+                      G < limits::kMaxQuasiCopyDepth;
+           ++G) {
         Inner = reachingDefIdx(Ops, Inner - 1, Ops[Inner].Inputs[0]);
+      }
       InnerIdx = Inner;
       break;
     }
@@ -177,6 +187,20 @@ bool CFGBuilder::detectUnscaledRelocTableLoad(
       uint64_t Idx = traceToRegister(Ops, InnerIdx - 1, Sum.Inputs[Side]);
       uint64_t Base = traceToRegister(Ops, InnerIdx - 1, Sum.Inputs[1 - Side]);
       if (Idx == InvalidVA || Base == InvalidVA)
+        continue;
+      // On i386 ELF an outer displacement is not an address by numeric value.
+      // Require both halves of the relocation contract used by the ordinary
+      // scaled path: this exact LowIR input must name the instruction's unique
+      // R_386_GOTOFF field, and this exact base input must reach the
+      // lifter-authenticated GOT-base-zero model on every path.  A generic
+      // R_386_32 field, raw scalar collision, or unrelated literal zero may
+      // still point at a relocation run but cannot authorize GOTOFF arithmetic.
+      const bool IsI386ELFDisplacement = DispSide >= 0 &&
+                                         Img.Arch == Arch::X86 && Img.isELF() &&
+                                         Img.getPointerSize() == 4;
+      if (IsI386ELFDisplacement &&
+          (!isExactI386GOTOFFInput(Ops[AddIdx], DispSide) ||
+           !exactI386ModelZeroReaches(Sum, 1 - Side, LocalDisp)))
         continue;
       // Confirm a code-pointer relocation run at the table VA: GOTOFF tables
       // sit at `disp`; plain tables at the folded base register.  This is the
@@ -260,6 +284,8 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
   int LoadIdx = -1;
   uint64_t Disp = 0;
   va_t CrossBlockAddVA = InvalidVA;
+  JumpTableValueOccurrence AddressOccurrence;
+  JumpTableFrameAddressUse FrameRuntimeBase;
 
   for (int I = static_cast<int>(BlockOps.size()) - 1; I >= 0; --I) {
     auto &L = BlockOps[I];
@@ -273,7 +299,8 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
       continue;
     if (analyzeTableLoadAddr(BlockOps, I - 1, AddrV, BaseReg, IndexReg,
                              HasScaledIndex, Disp, nullptr, &IndexValueAtUse,
-                             &IndexUseAddr, &IndexUseSeq)) {
+                             &IndexUseAddr, &IndexUseSeq, &AddressOccurrence,
+                             &FrameRuntimeBase)) {
       LoadWidth = W;
       LoadIdx = I;
       for (int K = I + 1; K < static_cast<int>(BlockOps.size()); ++K)
@@ -307,8 +334,8 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
           continue;
         if (analyzeTableLoadAddr(PathOps, I - 1, AddrV, BaseReg, IndexReg,
                                  HasScaledIndex, Disp, &CrossBlockAddVA,
-                                 &IndexValueAtUse, &IndexUseAddr,
-                                 &IndexUseSeq)) {
+                                 &IndexValueAtUse, &IndexUseAddr, &IndexUseSeq,
+                                 &AddressOccurrence, &FrameRuntimeBase)) {
           LoadWidth = W;
           LoadIdx = I;
           for (int K = I + 1; K < static_cast<int>(PathOps.size()); ++K)
@@ -388,8 +415,117 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
   // regardless.)
   const TargetRegInfo &TRIcg = getTargetRegInfo(Img.Arch);
   bool BaseIsFrame = BaseReg != InvalidVA && TRIcg.isFrameReg(BaseReg);
-  bool DispIsDataVA = Disp != 0 && Img.getSegmentFor(Disp) != nullptr;
-  bool GotOff = Disp != 0 && (!BaseIsFrame || DispIsDataVA);
+  if (!BaseIsFrame) {
+    // AArch64/ARM commonly materialise a local table base in a scratch
+    // register (`add x8, sp, #off`) before combining it with the scaled index.
+    // This preflight only decides whether the full all-path stack-table
+    // resolver should run; it does not authorise a source or a target.  Start
+    // from the exact input occurrence recorded by analyzeTableLoadAddr and
+    // accept only a bounded chain of address-preserving operations that
+    // reaches an architectural frame register.
+    auto derivedFromFrameAtExactUse = [&]() {
+      bool EvidenceComplete = true;
+      auto chargeEvidence = [&]() {
+        if (EvidenceComplete && consumeStackTableEvidence())
+          return true;
+        EvidenceComplete = false;
+        StackTableEvidenceIncompleteBranches.insert(Rec.Addr);
+        return false;
+      };
+
+      const JumpTableValueOccurrence &Use = FrameRuntimeBase.Use;
+      if (Use.Value.Size == 0 || Use.Addr == InvalidVA || Use.Seq < 0 ||
+          Use.DefinedAtPoint || (!Use.Value.isReg() && !Use.Value.isTemp()))
+        return false;
+
+      int UseIdx = -1;
+      for (int I = 0; I < static_cast<int>(BlockOps.size()); ++I) {
+        if (!chargeEvidence())
+          return false;
+        const LowOp &Op = BlockOps[I];
+        if (Op.Addr != Use.Addr || Op.Seq != Use.Seq)
+          continue;
+        unsigned ExactInputs = 0;
+        for (unsigned N = 0; N < Op.NumInputs; ++N)
+          ExactInputs += Op.Inputs[N] == Use.Value;
+        if (UseIdx >= 0 || ExactInputs != 1)
+          return false;
+        UseIdx = I;
+      }
+      if (UseIdx < 0)
+        return false;
+
+      NdVar Value = Use.Value;
+      int FromIdx = UseIdx - 1;
+      for (int Depth = 0; Depth < limits::kMaxQuasiCopyDepth; ++Depth) {
+        if (!chargeEvidence())
+          return false;
+        if (Value.isReg() && TRIcg.isFrameReg(Value.Offset))
+          return true;
+        if (!Value.isReg() && !Value.isTemp())
+          return false;
+
+        int DefIdx = -1;
+        for (int I = FromIdx; I >= 0; --I) {
+          if (!chargeEvidence())
+            return false;
+          if (BlockOps[I].Output == Value) {
+            DefIdx = I;
+            break;
+          }
+        }
+        if (DefIdx < 0)
+          return false;
+
+        const LowOp &Def = BlockOps[DefIdx];
+        NdVar Next;
+        if (Def.Opcode == NdOp::COPY && Def.NumInputs >= 1 &&
+            (Def.Inputs[0].isReg() || Def.Inputs[0].isTemp())) {
+          Next = Def.Inputs[0];
+        } else if (Def.Opcode == NdOp::INT_ZEXT && Def.NumInputs >= 1 &&
+                   Def.Inputs[0].Size == Img.getPointerSize() &&
+                   Def.Output.Size > Def.Inputs[0].Size &&
+                   (Def.Inputs[0].isReg() || Def.Inputs[0].isTemp())) {
+          Next = Def.Inputs[0];
+        } else if (Def.Opcode == NdOp::INT_ADD && Def.NumInputs >= 2) {
+          const bool LeftScalar =
+              Def.Inputs[0].isConst() &&
+              Def.Inputs[0].Provenance == ConstantAddressProvenance::Scalar;
+          const bool RightScalar =
+              Def.Inputs[1].isConst() &&
+              Def.Inputs[1].Provenance == ConstantAddressProvenance::Scalar;
+          if (LeftScalar == RightScalar)
+            return false;
+          Next = Def.Inputs[LeftScalar ? 1 : 0];
+          if (!Next.isReg() && !Next.isTemp())
+            return false;
+        } else if (Def.Opcode == NdOp::INT_SUB && Def.NumInputs >= 2 &&
+                   Def.Inputs[1].isConst() &&
+                   Def.Inputs[1].Provenance ==
+                       ConstantAddressProvenance::Scalar &&
+                   (Def.Inputs[0].isReg() || Def.Inputs[0].isTemp())) {
+          Next = Def.Inputs[0];
+        } else {
+          return false;
+        }
+        Value = Next;
+        FromIdx = DefIdx - 1;
+      }
+      return false;
+    };
+    BaseIsFrame = derivedFromFrameAtExactUse();
+  }
+  if (StackTableEvidenceIncompleteBranches.count(Rec.Addr))
+    return false;
+
+  const bool DispIsDataVA = Disp != 0 && Img.getSegmentFor(Disp) != nullptr;
+  // Only i386 ELF legitimately reuses a nominal frame register as its GOT
+  // base.  A data-looking displacement must not redirect a derived ARM frame
+  // base away from the all-path stack proof.
+  const bool FrameMayBeI386GOT = BaseIsFrame && Img.Arch == Arch::X86 &&
+                                 Img.isELF() && Img.getPointerSize() == 4 &&
+                                 DispIsDataVA;
+  const bool GotOff = Disp != 0 && (!BaseIsFrame || FrameMayBeI386GOT);
   if (Unscaled) {
     TableAddr = UnscaledTableAddr;
   } else if (GotOff) {
@@ -415,11 +551,35 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
     // any non-stack base, so a normal PIC/lea base falls through to the fold
     // below.
     bool StackTableMutated = false;
-    va_t StackSrc = resolveStackMaterializedTableSource(
-        Img, Rec, BlockOps, LoadIdx, BaseReg, LoadWidth,
-        static_cast<int64_t>(Disp), &StackTableMutated);
+    std::vector<JumpTableFrameInitializerChunk> StackInitializers;
+    std::vector<JumpTableValueOccurrence> StackStorageConsumers;
+    va_t StackSrc = InvalidVA;
+    if (BaseIsFrame)
+      StackSrc = resolveStackMaterializedTableSource(
+          Img, Rec, BlockOps, LoadIdx, BaseReg, LoadWidth,
+          FrameRuntimeBase.ByteAddend, &StackTableMutated, &StackInitializers,
+          &StackStorageConsumers);
+    // Resource exhaustion is not negative table evidence.  Stop this strategy
+    // transaction immediately so the same branch cannot be reinterpreted by a
+    // cheaper numeric/folding fallback after its stack proof became incomplete.
+    if (StackTableEvidenceIncompleteBranches.count(Rec.Addr))
+      return false;
     if (StackSrc != InvalidVA) {
       TableAddr = StackSrc;
+      if (AddressOccurrence.Value.Size == 0 ||
+          AddressOccurrence.Addr == InvalidVA || AddressOccurrence.Seq < 0 ||
+          !AddressOccurrence.DefinedAtPoint)
+        return false;
+      if (FrameRuntimeBase.Use.Value.Size == 0 ||
+          FrameRuntimeBase.Use.Addr == InvalidVA ||
+          FrameRuntimeBase.Use.Seq < 0 || FrameRuntimeBase.Use.DefinedAtPoint ||
+          StackInitializers.empty())
+        return false;
+      Info.AuthenticatedFrameStorage.RuntimeBase = FrameRuntimeBase;
+      Info.AuthenticatedFrameStorage.CompleteAddress = AddressOccurrence;
+      Info.AuthenticatedFrameStorage.Initializers =
+          std::move(StackInitializers);
+      Info.AuthenticatedStorageConsumers = std::move(StackStorageConsumers);
       // A runtime-permuted stack table keeps its (static) targets so the
       // dispatch retains successors, but is marked so the emitter traps rather
       // than dispatching on the now-stale index->target map.
@@ -463,9 +623,256 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
   // the 4-byte absolute-vs-PIC-relative ambiguity — a PIC switch table carries
   // no relocations on its entries.
   uint32_t RelocRun = countCodePtrRelocRun(Img, TableAddr, LoadWidth);
+
+  // A stack-table source proof is not complete until its exact initializer
+  // occurrences have also been reconciled with the independently published
+  // relocation anchors below.  Keep that post-processing on the same
+  // resolver-stage allowance as the frame/memory proof: every candidate in
+  // this graph shares one transactional scan budget.  Ordinary non-stack
+  // tables retain their existing behaviour and do not consume this specialized
+  // allowance.
+  const bool BudgetAuthenticatedSources =
+      !Info.AuthenticatedFrameStorage.Initializers.empty();
+  bool AuthenticatedSourceEvidenceComplete = true;
+  auto chargeAuthenticatedSourceEvidence = [&](size_t Amount = 1) {
+    if (!BudgetAuthenticatedSources)
+      return true;
+    if (AuthenticatedSourceEvidenceComplete &&
+        consumeStackTableEvidence(Amount))
+      return true;
+    AuthenticatedSourceEvidenceComplete = false;
+    StackTableEvidenceIncompleteBranches.insert(Rec.Addr);
+    return false;
+  };
+
+  // currentRelocatedInstructionTableAnchors() visits every published address
+  // occurrence once.  Pre-charge that exact traversal so exhaustion happens
+  // before it can construct a partial candidate-local anchor set.
+  if (!chargeAuthenticatedSourceEvidence(
+          RelocatedInstructionAddressOccurrences.size()))
+    return false;
+  std::set<va_t> CandidateAnchors =
+      currentRelocatedInstructionTableAnchors(Img);
+  // The source trace above authenticates the exact immutable LOADs that filled
+  // this frame table.  Their address materializations are consumers of this
+  // candidate's one storage owner, not independent adjacent table bases.  Drop
+  // only direct exact-field source addresses whose complete byte spans belong
+  // to this candidate.  Adjusted pointers and unrelated anchors, including an
+  // adjacent table in the same section, continue to bound the run.
+  auto authenticatedSourceForOccurrence =
+      [&](const RelocatedInstructionAddressOccurrence &Occurrence)
+      -> std::optional<AuthenticatedSourceAnchorExemption> {
+    auto Matches = [&](const JumpTableValueOccurrence &Producer, va_t FieldVA,
+                       va_t TargetVA, va_t OwnerVA,
+                       ConstantAddressProvenance Provenance,
+                       va_t EffectiveSourceVA, uint64_t SourceByteCount)
+        -> std::optional<AuthenticatedSourceAnchorExemption> {
+      if (FieldVA == InvalidVA || TargetVA == InvalidVA ||
+          OwnerVA == InvalidVA || EffectiveSourceVA == InvalidVA ||
+          SourceByteCount == 0 ||
+          Provenance != ConstantAddressProvenance::DataAddress ||
+          Occurrence.FieldVA != FieldVA || Occurrence.TargetVA != TargetVA ||
+          Occurrence.TargetOwnerVA != OwnerVA ||
+          Occurrence.Provenance != Provenance ||
+          Occurrence.InstructionAddr != Producer.Addr ||
+          Occurrence.OpSeq != Producer.Seq || Occurrence.OutputMayDepend)
+        return std::nullopt;
+      const bool ExactProducer =
+          Producer.DefinedAtPoint
+              ? Occurrence.DefinesOutput &&
+                    Occurrence.OutputWitness == Producer.Value
+              : !Occurrence.DefinesOutput && Occurrence.InputIndex >= 0 &&
+                    Producer.Value.isConst() &&
+                    Producer.Value.Offset == TargetVA &&
+                    Producer.Value.Provenance == Provenance &&
+                    Producer.Value.AddressOwnerVA == OwnerVA;
+      if (!ExactProducer)
+        return std::nullopt;
+      return AuthenticatedSourceAnchorExemption{
+          TableAddr, FieldVA,           TargetVA,
+          OwnerVA,   EffectiveSourceVA, SourceByteCount};
+    };
+    std::optional<AuthenticatedSourceAnchorExemption> Exact;
+    auto RecordExact =
+        [&](std::optional<AuthenticatedSourceAnchorExemption> Candidate) {
+          if (!Candidate)
+            return true;
+          if (Exact)
+            return false;
+          Exact = std::move(Candidate);
+          return true;
+        };
+    for (const JumpTableFrameInitializerChunk &Initializer :
+         Info.AuthenticatedFrameStorage.Initializers) {
+      if (!chargeAuthenticatedSourceEvidence())
+        return std::nullopt;
+      if (Initializer.IsMemcpy &&
+          !RecordExact(Matches(
+              Initializer.StaticSourceProducer, Initializer.StaticSourceFieldVA,
+              Initializer.StaticSourceProducerTargetVA,
+              Initializer.StaticSourceOwnerVA,
+              Initializer.StaticSourceProvenance,
+              Initializer.StaticSourceAddress, Initializer.ByteCount)))
+        return std::nullopt;
+      for (const auto &Source : Initializer.StaticSources) {
+        if (!chargeAuthenticatedSourceEvidence())
+          return std::nullopt;
+        if (!RecordExact(Matches(
+                Source.StaticAddressProducer, Source.StaticAddressFieldVA,
+                Source.StaticAddressProducerTargetVA,
+                Source.StaticAddressOwnerVA, Source.StaticAddressProvenance,
+                Source.StaticAddress, Source.ByteCount)))
+          return std::nullopt;
+      }
+    }
+    return Exact;
+  };
+  // Exact decoded occurrences are authoritative for instruction-relative
+  // fields: the loader deliberately leaves their TargetVA unset because it
+  // does not know the containing instruction end.  Keep those occurrences in
+  // the candidate-anchor exemption set, while passing only ordinary complete
+  // fields to the raw loader-anchor helper below.
+  std::map<va_t, AuthenticatedSourceAnchorExemption>
+      AuthenticatedOccurrenceSources;
+  std::map<va_t, AuthenticatedSourceAnchorExemption> AuthenticatedSources;
+  std::map<va_t, RelocatedInstructionAddressOccurrence>
+      AuthenticatedSourceOccurrences;
+  std::set<va_t> AmbiguousAuthenticatedSourceFields;
+  if (BudgetAuthenticatedSources) {
+    for (const RelocatedInstructionAddressOccurrence &Occurrence :
+         RelocatedInstructionAddressOccurrences) {
+      if (!chargeAuthenticatedSourceEvidence())
+        return false;
+      std::optional<AuthenticatedSourceAnchorExemption> Exemption =
+          authenticatedSourceForOccurrence(Occurrence);
+      if (!AuthenticatedSourceEvidenceComplete)
+        return false;
+      if (!Exemption)
+        continue;
+      if (Occurrence.Width == 0)
+        continue;
+
+      // First validate the direct source span against the exact target/owner
+      // already bound to this decoded operation.  A synthetic complete field
+      // is used only for the shared span/owner predicate; a separate check
+      // below requires exactly one real loader-side field record.
+      const RelocatedAddressField ExactDecodedField{
+          0, Occurrence.TargetVA, Occurrence.Width, Occurrence.TargetOwnerVA};
+      if (!authenticatedSourceAnchorExemptionMatches(
+              *Exemption, TableAddr, LoadWidth, RelocRun, Exemption->FieldVA,
+              ExactDecodedField))
+        continue;
+
+      unsigned LoaderFieldMatches = 0;
+      bool HasCompleteRawField = false;
+      const auto Field = Img.DataAddressRelocOperands.find(Exemption->FieldVA);
+      if (Field != Img.DataAddressRelocOperands.end() &&
+          Field->second.Width == Occurrence.Width &&
+          Field->second.TargetOwnerVA == Occurrence.TargetOwnerVA &&
+          Field->second.PCRelativeFromInstructionEnd ==
+              Occurrence.PCRelativeFromInstructionEnd) {
+        if (Field->second.PCRelativeFromInstructionEnd) {
+          // The loader cannot know InsnEnd and therefore must not publish an
+          // approximate target.  Occurrence.TargetVA is the sole target used.
+          if (Field->second.TargetVA == InvalidVA)
+            ++LoaderFieldMatches;
+        } else if (Field->second.TargetVA == Occurrence.TargetVA) {
+          ++LoaderFieldMatches;
+          HasCompleteRawField = true;
+        }
+      }
+      const auto Materialized =
+          Img.InstructionAddressMaterializations.find(Exemption->FieldVA);
+      if (Materialized != Img.InstructionAddressMaterializations.end() &&
+          Occurrence.DefinesOutput &&
+          !Occurrence.PCRelativeFromInstructionEnd && Occurrence.Width == 4 &&
+          Materialized->second.TargetVA == Occurrence.TargetVA &&
+          Materialized->second.TargetOwnerVA == Occurrence.TargetOwnerVA)
+        ++LoaderFieldMatches;
+      const auto ARMRelative =
+          Img.ARMRelativeLiteralFields.find(Exemption->FieldVA);
+      if (ARMRelative != Img.ARMRelativeLiteralFields.end() &&
+          Occurrence.DefinesOutput &&
+          !Occurrence.PCRelativeFromInstructionEnd && Occurrence.Width == 4 &&
+          ARMRelative->second.TargetVA == Occurrence.TargetVA &&
+          ARMRelative->second.TargetOwnerVA == Occurrence.TargetOwnerVA)
+        ++LoaderFieldMatches;
+      if (LoaderFieldMatches != 1)
+        continue;
+
+      if (AmbiguousAuthenticatedSourceFields.count(Exemption->FieldVA))
+        continue;
+      if (!AuthenticatedOccurrenceSources
+               .emplace(Exemption->FieldVA, *Exemption)
+               .second) {
+        AuthenticatedOccurrenceSources.erase(Exemption->FieldVA);
+        AuthenticatedSources.erase(Exemption->FieldVA);
+        AuthenticatedSourceOccurrences.erase(Exemption->FieldVA);
+        AmbiguousAuthenticatedSourceFields.insert(Exemption->FieldVA);
+        continue;
+      }
+      if (HasCompleteRawField)
+        AuthenticatedSources.emplace(Exemption->FieldVA, *Exemption);
+      AuthenticatedSourceOccurrences.emplace(Exemption->FieldVA, Occurrence);
+    }
+    std::set<va_t> AuthenticatedSourceTargets;
+    for (const auto &[FieldVA, Exemption] : AuthenticatedOccurrenceSources) {
+      if (!chargeAuthenticatedSourceEvidence())
+        return false;
+      (void)FieldVA;
+      AuthenticatedSourceTargets.insert(Exemption.TargetVA);
+    }
+    std::set<va_t> TargetsWithIndependentOccurrences;
+    for (const RelocatedInstructionAddressOccurrence &Occurrence :
+         RelocatedInstructionAddressOccurrences) {
+      if (!chargeAuthenticatedSourceEvidence())
+        return false;
+      if (!AuthenticatedSourceTargets.count(Occurrence.TargetVA) ||
+          !PublishedReachableInsns.count(Occurrence.InstructionAddr) ||
+          Occurrence.OutputMayDepend ||
+          Occurrence.Provenance != ConstantAddressProvenance::DataAddress ||
+          (!Img.RelCodeRelocSlots.count(Occurrence.TargetVA) &&
+           !Img.CodePtrRelocSlots.count(Occurrence.TargetVA)))
+        continue;
+      const auto Exemption =
+          AuthenticatedOccurrenceSources.find(Occurrence.FieldVA);
+      const auto Identity =
+          AuthenticatedSourceOccurrences.find(Occurrence.FieldVA);
+      const bool IsAuthenticatedSource =
+          Exemption != AuthenticatedOccurrenceSources.end() &&
+          Identity != AuthenticatedSourceOccurrences.end() &&
+          Exemption->second.TargetVA == Occurrence.TargetVA &&
+          Exemption->second.TargetOwnerVA == Occurrence.TargetOwnerVA &&
+          Identity->second == Occurrence;
+      if (!IsAuthenticatedSource)
+        TargetsWithIndependentOccurrences.insert(Occurrence.TargetVA);
+    }
+    for (va_t Target : AuthenticatedSourceTargets) {
+      if (!chargeAuthenticatedSourceEvidence())
+        return false;
+      if (!TargetsWithIndependentOccurrences.count(Target))
+        CandidateAnchors.erase(Target);
+    }
+  }
+
+  // boundCodePtrRunByNextAnchor() copies both anchor sets, scans every loader
+  // address-relocation field once, then walks at most the union of those three
+  // inventories.  Charge that provable upper bound before entering the helper;
+  // this keeps an exhausted stack candidate transactional without changing the
+  // shared helper's non-stack callers.
+  if (RelocRun != 0) {
+    if (!chargeAuthenticatedSourceEvidence(Img.RelCodeTableAnchors.size()) ||
+        !chargeAuthenticatedSourceEvidence(CandidateAnchors.size()) ||
+        !chargeAuthenticatedSourceEvidence(
+            Img.DataAddressRelocOperands.size()) ||
+        !chargeAuthenticatedSourceEvidence(Img.RelCodeTableAnchors.size()) ||
+        !chargeAuthenticatedSourceEvidence(CandidateAnchors.size()) ||
+        !chargeAuthenticatedSourceEvidence(Img.DataAddressRelocOperands.size()))
+      return false;
+  }
   RelocRun =
       boundCodePtrRunByNextAnchor(Img, TableAddr, LoadWidth, RelocRun,
-                                  currentRelocatedInstructionTableAnchors(Img));
+                                  CandidateAnchors, AuthenticatedSources);
   // The pre-scaled form is only sound when a relocation run confirms the table;
   // without one there is no valid decoding for a bare base+index load.
   if (Unscaled && RelocRun < limits::kMinJumpTableEntries)

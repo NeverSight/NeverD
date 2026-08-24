@@ -81,7 +81,7 @@ uint32_t CFGBuilder::getInsnAlignment() const {
 }
 
 bool CFGBuilder::isValidTarget(const BinaryImage &Img, va_t Target,
-                               va_t FuncEntry) {
+                               va_t FuncEntry) const {
   const auto *Seg = Img.getSegmentFor(Target);
   if (!Seg || !Img.hasExecutableCodeOwnerAt(Target))
     return false;
@@ -298,7 +298,7 @@ std::optional<va_t> canonicalizeAbsoluteTableCodeTarget(const BinaryImage &Img,
 
 std::vector<va_t>
 CFGBuilder::readTableEntries(const BinaryImage &Img, const JumpTableInfo &Info,
-                             std::vector<uint32_t> *KeptIndices) {
+                             std::vector<uint32_t> *KeptIndices) const {
   if (KeptIndices)
     KeptIndices->clear();
   if (!Info.HasBaseAddr || (Info.EntrySize != 1 && Info.EntrySize != 2 &&

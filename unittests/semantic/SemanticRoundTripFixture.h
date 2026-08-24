@@ -43,6 +43,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <string_view>
 #include <thread>
 
 namespace fs = std::filesystem;
@@ -50,6 +51,12 @@ namespace fs = std::filesystem;
 // ============================================================================
 // Roundtrip test-case descriptor
 // ============================================================================
+enum class RecoveredSwitchExpectation : uint8_t {
+  Unspecified,
+  Required,
+  Forbidden,
+};
+
 struct RoundTripTC {
   std::string Name;
 
@@ -101,6 +108,13 @@ struct RoundTripTC {
   /// instruction under directed rounding without depending on FPCR system-
   /// register lifting, which is a separate semantic concern.
   uint64_t InitialAArch64FPCR = 0;
+
+  /// Structural expectation for the exact target function.  A required
+  /// computed-goto switch prevents an indirect-call accidental pass; a
+  /// forbidden switch is a fail-closed certificate test and returns after the
+  /// IR assertion rather than executing the deliberately unsafe branch shape.
+  RecoveredSwitchExpectation RecoveredSwitch =
+      RecoveredSwitchExpectation::Unspecified;
 };
 
 inline std::ostream &operator<<(std::ostream &OS, const RoundTripTC &TC) {
@@ -112,6 +126,36 @@ inline std::ostream &operator<<(std::ostream &OS, const RoundTripTC &TC) {
 // ============================================================================
 class SemanticRoundTripFixture : public ::testing::Test {
 protected:
+  static bool functionBodyContainsSwitch(std::string_view IR,
+                                         std::string_view FunctionName) {
+    const std::string DefinitionName = "@" + std::string(FunctionName) + "(";
+    size_t SearchFrom = 0;
+    while (true) {
+      const size_t NameAt = IR.find(DefinitionName, SearchFrom);
+      if (NameAt == std::string_view::npos)
+        break;
+      const size_t LineBegin =
+          NameAt == 0 ? 0 : IR.rfind('\n', NameAt - 1) + 1;
+      const size_t LineEnd = IR.find('\n', NameAt);
+      const std::string_view DefinitionLine = IR.substr(
+          LineBegin, LineEnd == std::string_view::npos
+                         ? IR.size() - LineBegin
+                         : LineEnd - LineBegin);
+      if (DefinitionLine.find("define ") != std::string_view::npos) {
+        const size_t BodyBegin = IR.find('{', NameAt + DefinitionName.size());
+        if (BodyBegin == std::string_view::npos)
+          return false;
+        const size_t BodyEnd = IR.find("\n}", BodyBegin + 1);
+        if (BodyEnd == std::string_view::npos)
+          return false;
+        const size_t SwitchAt = IR.find("switch i", BodyBegin + 1);
+        return SwitchAt != std::string_view::npos && SwitchAt < BodyEnd;
+      }
+      SearchFrom = NameAt + DefinitionName.size();
+    }
+    return false;
+  }
+
   static void SetUpTestSuite() {
     LLVMMCAssembler::initTargets();
     if (!Sess)
@@ -310,7 +354,7 @@ private:
     SectionData OrigSections;
     {
       auto PlainSD = extractSectionsFromFile(ObjPath);
-      bool NeedLink = PlainSD.hasData();
+      bool NeedLink = PlainSD.requiresLink();
       if (!NeedLink) {
         auto BufOrErr = llvm::MemoryBuffer::getFile(ObjPath);
         if (BufOrErr) {
@@ -321,27 +365,31 @@ private:
         }
       }
       if (NeedLink) {
-        auto Linked =
-            linkAndExtract(ObjPath, TC.Name + "_orig", UcArch, UcMode);
-        // The object has relocations/data — only the LINKED image has correct
-        // addresses.  Do NOT fall back to the unlinked object: its unresolved
-        // relocations emulate to wrong/unmapped memory and would surface as a
-        // bogus semantic failure.  A link still failing after retries is a
-        // transient infrastructure problem, so skip honestly.
-        if (Linked.Text.empty()) {
+        bool OriginalLinkFailed = false;
+        auto Linked = linkAndExtract(ObjPath, TC.Name + "_orig", UcArch,
+                                     UcMode, &OriginalLinkFailed);
+        // The object has relocations/data or split text — only the LINKED image
+        // has correct addresses and section layout.  Do NOT fall back to the
+        // unlinked object: unresolved relocations emulate to wrong/unmapped
+        // memory and would surface as a bogus semantic failure.  A link still
+        // failing after retries is a transient infrastructure problem, so skip
+        // honestly.
+        if (OriginalLinkFailed) {
           GTEST_SKIP() << "original link failed after retries (transient infra)"
                        << "\n  Test: " << TC.Name;
           return;
         }
+        ASSERT_FALSE(Linked.Text.empty())
+            << "linked original has no executable text"
+            << "\n  Test: " << TC.Name;
         OrigSections = std::move(Linked);
       } else {
         OrigSections = std::move(PlainSD);
       }
     }
-    if (OrigSections.Text.empty()) {
-      GTEST_SKIP() << "Could not extract .text from original object";
-      return;
-    }
+    ASSERT_FALSE(OrigSections.Text.empty())
+        << "Could not extract executable text from original object"
+        << "\n  Test: " << TC.Name;
     packSections(OrigSections);
 
     // ---- Step 4: Run original in Unicorn ----
@@ -358,8 +406,28 @@ private:
     if (Ret != 0) {
       const char *Err = neverd_last_error(Sess);
       GTEST_SKIP() << "Lift-to-obj failed: " << (Err ? Err : "unknown")
-                    << "\n  Test: " << TC.Name;
+                   << "\n  Test: " << TC.Name;
       return;
+    }
+
+    if (TC.RecoveredSwitch != RecoveredSwitchExpectation::Unspecified) {
+      const char *RawIR = neverd_roundtrip_ir(Sess);
+      ASSERT_NE(RawIR, nullptr) << "No roundtrip IR for " << TC.Name;
+      const std::string RoundTripIR(RawIR);
+      neverd_free_string(RawIR);
+      const bool HasSwitch = functionBodyContainsSwitch(RoundTripIR, TC.Name);
+      if (TC.RecoveredSwitch == RecoveredSwitchExpectation::Required) {
+        ASSERT_TRUE(HasSwitch)
+            << "computed-goto dispatch was not recovered as a switch in the "
+               "target function"
+            << "\n  Test: " << TC.Name;
+      } else {
+        ASSERT_FALSE(HasSwitch)
+            << "unauthenticated computed-goto frame storage was recovered as "
+               "a switch in the target function"
+            << "\n  Test: " << TC.Name;
+        return;
+      }
     }
 
     int FuncCount = neverd_roundtrip_func_count(Sess);
@@ -382,11 +450,9 @@ private:
                    << "\n  Test: " << TC.Name;
       return;
     }
-    if (RecompSections.Text.empty()) {
-      GTEST_SKIP() << "Could not extract .text from recompiled object"
-                   << "\n  Test: " << TC.Name;
-      return;
-    }
+    ASSERT_FALSE(RecompSections.Text.empty())
+        << "Could not extract executable text from recompiled object"
+        << "\n  Test: " << TC.Name;
     packSections(RecompSections);
 
     // ---- Step 7: Run recompiled in Unicorn (same ABI) ----
@@ -566,6 +632,12 @@ private:
 
   struct SectionData {
     std::vector<uint8_t> Text;
+    // A relocatable input may place all code in a split section such as
+    // `.text.unlikely.` while leaving the canonical `.text` section empty.
+    // Do not concatenate such sections at VMA zero: their relocations and
+    // relative layout become valid only after linking.  This bit records that
+    // executable input exists and forces the common link-and-extract path.
+    bool HasSplitText = false;
     // Every allocated read-only AND writable data section (.rodata*,
     // .data.rel.ro, .data, .bss) at its VMA relative to the text base.  Captured
     // as a list — not a single blob — so a function touching several globals (a
@@ -579,6 +651,9 @@ private:
           return true;
       return false;
     }
+
+    bool hasText() const { return !Text.empty() || HasSplitText; }
+    bool requiresLink() const { return HasSplitText || hasData(); }
   };
 
   // Collect .text and every allocated data section (read-only and writable) from
@@ -592,9 +667,14 @@ private:
       if (!NameOrErr)
         continue;
       llvm::StringRef Name = *NameOrErr;
-      if (Name == neverd::section_names::elf::Text) {
-        if (auto C = Sec.getContents())
+      if (neverd::section_names::isTextSectionName(Name)) {
+        auto C = Sec.getContents();
+        if (!C || C->empty())
+          continue;
+        if (Name == neverd::section_names::elf::Text)
           SD.Text = {C->begin(), C->end()};
+        else
+          SD.HasSplitText = true;
         continue;
       }
       bool IsData = neverd::section_names::isElfImageDataSectionName(Name);
@@ -772,7 +852,10 @@ private:
 
   SectionData linkAndExtract(const std::string &ObjPath,
                              const std::string &Tag, uc_arch Arch,
-                             uc_mode Mode = UC_MODE_64) {
+                             uc_mode Mode = UC_MODE_64,
+                             bool *LinkFailed = nullptr) {
+    if (LinkFailed)
+      *LinkFailed = false;
     auto LinkedFile = (Work / (Tag + "_linked.elf")).string();
 
     std::string Emul;
@@ -813,8 +896,11 @@ private:
       std::this_thread::sleep_for(
           std::chrono::milliseconds(30 * (Attempt + 1)));
     }
-    if (!LR.ok())
+    if (!LR.ok()) {
+      if (LinkFailed)
+        *LinkFailed = true;
       return {};
+    }
 
     auto LinkedBufOrErr = llvm::MemoryBuffer::getFile(LinkedFile);
     if (!LinkedBufOrErr)
@@ -838,7 +924,7 @@ private:
                                        bool &LinkFailed) {
     LinkFailed = false;
     auto PlainSD = extractSections(Data, Len);
-    if (PlainSD.Text.empty())
+    if (!PlainSD.hasText())
       return PlainSD;
 
     auto ObjFile = (Work / (Name + "_recomp.o")).string();
@@ -865,14 +951,14 @@ private:
     else if (ObjArch == llvm::Triple::x86)
       Mode = UC_MODE_32;
 
-    if (PlainSD.hasData() || objectNeedsLink(**ObjOrErr)) {
-      auto SD = linkAndExtract(ObjFile, Name + "_recomp", Arch, Mode);
-      if (!SD.Text.empty())
-        return SD;
-      // Link was required but failed: signal the caller to skip rather than
-      // silently emulate the unlinked (unrelocated) object.
-      LinkFailed = true;
-      return {};
+    if (PlainSD.requiresLink() || objectNeedsLink(**ObjOrErr)) {
+      // Split `.text.*` is a required-link input even without data or explicit
+      // relocations: only the linker owns its placement relative to the entry
+      // image.  A successful link that still exposes no executable text is an
+      // invalid roundtrip result, not transient infrastructure; leave
+      // LinkFailed false so the caller reports an assertion failure.
+      return linkAndExtract(ObjFile, Name + "_recomp", Arch, Mode,
+                            &LinkFailed);
     }
     return PlainSD;
   }

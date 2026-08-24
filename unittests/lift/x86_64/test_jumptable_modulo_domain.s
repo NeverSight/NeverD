@@ -186,6 +186,180 @@ jt_modulo_wrong_postshift:
         .quad .Lwrong_shift_case3
         .quad .Lwrong_shift_case4
 
+// A dead unsigned remainder may propose a modulus during the provisional
+// whole-function scan, but it has no path to the real selector use.  The live
+// arm dispatches with the literal zero.  Five relocation-backed slots are
+// physical capacity only; final replay must require the selector to depend on
+// the exact INT_REM occurrence before it may publish this table.
+        .text
+        .globl  jt_modulo_constant_selector_unreachable_rem
+        .type   jt_modulo_constant_selector_unreachable_rem,@function
+jt_modulo_constant_selector_unreachable_rem:
+        xorl    %r10d, %r10d
+        testl   %r10d, %r10d
+        je      .Lunreachable_rem_dispatch
+.Lunreachable_rem_producer:
+        movl    %edi, %eax
+        xorl    %edx, %edx
+        movl    $5, %ecx
+        divl    %ecx
+        movl    $4799, %eax
+        retq
+.Lunreachable_rem_dispatch:
+        leaq    .Lunreachable_rem_table(%rip), %rax
+        movq    (%rax,%r10,8), %rcx
+        jmpq    *%rcx
+.Lunreachable_rem_case0:
+        movl    $4790, %eax
+        retq
+.Lunreachable_rem_case1:
+        movl    $4791, %eax
+        retq
+.Lunreachable_rem_case2:
+        movl    $4792, %eax
+        retq
+.Lunreachable_rem_case3:
+        movl    $4793, %eax
+        retq
+.Lunreachable_rem_case4:
+        movl    $4794, %eax
+        retq
+        .size   jt_modulo_constant_selector_unreachable_rem, .-jt_modulo_constant_selector_unreachable_rem
+
+        .section .data.rel.ro,"aw",@progbits
+        .p2align 3
+        .globl  jt_modulo_unreachable_rem_table
+        .type   jt_modulo_unreachable_rem_table,@object
+jt_modulo_unreachable_rem_table:
+.Lunreachable_rem_table:
+        .quad .Lunreachable_rem_case0
+        .quad .Lunreachable_rem_case1
+        .quad .Lunreachable_rem_case2
+        .quad .Lunreachable_rem_case3
+        .quad .Lunreachable_rem_case4
+        .size jt_modulo_unreachable_rem_table, .-jt_modulo_unreachable_rem_table
+
+// The dead proposal chain is a shared doubling DAG: each add reads the same
+// reaching value twice.  A recursive coefficient walk without occurrence-key
+// memoization expands it exponentially and exhausts the proof budget before
+// reaching the later producers.  The unused exact `% 1000` producer also
+// precedes the real `% 5`; physical capacity must discard it before it can
+// consume the table-probe/replay budget needed by the small real modulus.
+// With bounded memoization and ascending per-bound probes the valid table
+// remains recoverable.
+        .text
+        .globl  jt_modulo_shared_dag_budget
+        .type   jt_modulo_shared_dag_budget,@function
+jt_modulo_shared_dag_budget:
+        movq    %rsi, %r8
+        addq    %r8, %r8
+        addq    %r8, %r8
+        addq    %r8, %r8
+        addq    %r8, %r8
+        addq    %r8, %r8
+        addq    %r8, %r8
+        addq    %r8, %r8
+        addq    %r8, %r8
+        addq    %r8, %r8
+        addq    %r8, %r8
+        addq    %r8, %r8
+        addq    %r8, %r8
+        movq    %rdi, %r9
+        subq    %r8, %r9
+
+        movl    %esi, %eax
+        xorl    %edx, %edx
+        movl    $1000, %ecx
+        divl    %ecx
+
+        movl    %edi, %eax
+        xorl    %edx, %edx
+        movl    $5, %ecx
+        divl    %ecx
+        leaq    .Lshared_dag_table(%rip), %rax
+        movq    (%rax,%rdx,8), %rdx
+        jmpq    *%rdx
+.Lshared_dag_case0:
+        movl    $4810, %eax
+        retq
+.Lshared_dag_case1:
+        movl    $4811, %eax
+        retq
+.Lshared_dag_case2:
+        movl    $4812, %eax
+        retq
+.Lshared_dag_case3:
+        movl    $4813, %eax
+        retq
+.Lshared_dag_case4:
+        movl    $4814, %eax
+        retq
+        .size   jt_modulo_shared_dag_budget, .-jt_modulo_shared_dag_budget
+
+        .section .data.rel.ro,"aw",@progbits
+        .p2align 3
+        .globl  jt_modulo_shared_dag_table
+        .type   jt_modulo_shared_dag_table,@object
+jt_modulo_shared_dag_table:
+.Lshared_dag_table:
+        .quad .Lshared_dag_case0
+        .quad .Lshared_dag_case1
+        .quad .Lshared_dag_case2
+        .quad .Lshared_dag_case3
+        .quad .Lshared_dag_case4
+        .size jt_modulo_shared_dag_table, .-jt_modulo_shared_dag_table
+
+// Both exact producers are legitimate proposals, but only `% 5` reaches the
+// dispatch.  The inline relative table has no relocation-derived physical
+// capacity and exactly five readable entries.  Probing one synthetic max of
+// seven would fail the bounded read and incorrectly discard the valid five;
+// each candidate must be probed independently.
+        .text
+        .globl  jt_modulo_compact_probe_isolated
+        .type   jt_modulo_compact_probe_isolated,@function
+jt_modulo_compact_probe_isolated:
+        movl    %esi, %eax
+        xorl    %edx, %edx
+        movl    $7, %ecx
+        divl    %ecx
+
+        movl    %edi, %eax
+        xorl    %edx, %edx
+        movl    $5, %ecx
+        divl    %ecx
+        leaq    .Lcompact_probe_table(%rip), %rax
+        movslq  (%rax,%rdx,4), %rcx
+        addq    %rax, %rcx
+        jmpq    *%rcx
+.Lcompact_probe_case0:
+        movl    $4820, %eax
+        retq
+.Lcompact_probe_case1:
+        movl    $4821, %eax
+        retq
+.Lcompact_probe_case2:
+        movl    $4822, %eax
+        retq
+.Lcompact_probe_case3:
+        movl    $4823, %eax
+        retq
+.Lcompact_probe_case4:
+        movl    $4824, %eax
+        retq
+        .size   jt_modulo_compact_probe_isolated, .-jt_modulo_compact_probe_isolated
+
+        .p2align 2
+        .globl  jt_modulo_compact_probe_table
+        .type   jt_modulo_compact_probe_table,@object
+jt_modulo_compact_probe_table:
+.Lcompact_probe_table:
+        .long .Lcompact_probe_case0-.Lcompact_probe_table
+        .long .Lcompact_probe_case1-.Lcompact_probe_table
+        .long .Lcompact_probe_case2-.Lcompact_probe_table
+        .long .Lcompact_probe_case3-.Lcompact_probe_table
+        .long .Lcompact_probe_case4-.Lcompact_probe_table
+        .size jt_modulo_compact_probe_table, .-jt_modulo_compact_probe_table
+
 // The third relocation is outside the authenticated guard domain, but points
 // back into this function at a path that bypasses the guard.  Provisional
 // capacity ownership hides that root during bootstrap; after the exact domain
@@ -978,5 +1152,412 @@ jt_modulo_u140_spill_reload_loop:
         .long   .Lmod140_case_138-.Lmod140_table
         .long   .Lmod140_case_139-.Lmod140_table
         .long   0
+// clang's unsigned `% 7` lowering forms the back-multiply as q*8, subtracts
+// that from q, and only then adds the original dividend:
+//
+//   remainder = (q - q*8) + x
+//
+// This is the same exact x-q*7 identity as `(x+q)-q*8`, but the final producer
+// is an ADD.  Candidate discovery may propose seven from this spelling only;
+// the exact modulo-recipe relation must still authenticate the reciprocal,
+// shift, and shared dividend before the table is published.
+        .text
+        .globl  jt_modulo_add_after_scaled_difference
+        .type   jt_modulo_add_after_scaled_difference,@function
+jt_modulo_add_after_scaled_difference:
+        movl    %edi, %eax
+        movl    %eax, %ecx
+        imulq   $0x24924925, %rcx, %rcx
+        shrq    $32, %rcx
+        movl    %eax, %edx
+        subl    %ecx, %edx
+        shrl    %edx
+        addl    %ecx, %edx
+        shrl    $2, %edx
+        leal    (,%rdx,8), %ecx
+        subl    %ecx, %edx
+        addl    %eax, %edx
+        leaq    .Ladd_after_scaled_table(%rip), %rax
+        movslq  (%rax,%rdx,4), %rdx
+        addq    %rax, %rdx
+        jmpq    *%rdx
+.Ladd_after_scaled_case0:
+        movl    $4830, %eax
+        retq
+.Ladd_after_scaled_case1:
+        movl    $4831, %eax
+        retq
+.Ladd_after_scaled_case2:
+        movl    $4832, %eax
+        retq
+.Ladd_after_scaled_case3:
+        movl    $4833, %eax
+        retq
+.Ladd_after_scaled_case4:
+        movl    $4834, %eax
+        retq
+.Ladd_after_scaled_case5:
+        movl    $4835, %eax
+        retq
+.Ladd_after_scaled_case6:
+        movl    $4836, %eax
+        retq
+        .size   jt_modulo_add_after_scaled_difference, .-jt_modulo_add_after_scaled_difference
+
+        .section .rodata,"a",@progbits
+        // Keep the first relocation-backed table away from the section's
+        // numeric zero anchor; this fixture exercises modulo occurrence proof,
+        // not the separate zero-address table-base boundary.
+        .quad 0
+        .p2align 3
+.Ladd_after_scaled_table:
+        .long .Ladd_after_scaled_case0-.Ladd_after_scaled_table
+        .long .Ladd_after_scaled_case1-.Ladd_after_scaled_table
+        .long .Ladd_after_scaled_case2-.Ladd_after_scaled_table
+        .long .Ladd_after_scaled_case3-.Ladd_after_scaled_table
+        .long .Ladd_after_scaled_case4-.Ladd_after_scaled_table
+        .long .Ladd_after_scaled_case5-.Ladd_after_scaled_table
+        .long .Ladd_after_scaled_case6-.Ladd_after_scaled_table
+
+// The commuted final ADD is equally exact: x + (q-q*8).
+        .text
+        .globl  jt_modulo_add_after_scaled_difference_commuted
+        .type   jt_modulo_add_after_scaled_difference_commuted,@function
+jt_modulo_add_after_scaled_difference_commuted:
+        movl    %edi, %eax
+        movl    %eax, %ecx
+        imulq   $0x24924925, %rcx, %rcx
+        shrq    $32, %rcx
+        movl    %eax, %edx
+        subl    %ecx, %edx
+        shrl    %edx
+        addl    %ecx, %edx
+        shrl    $2, %edx
+        leal    (,%rdx,8), %ecx
+        subl    %ecx, %edx
+        movl    %eax, %esi
+        addl    %edx, %esi
+        leaq    .Ladd_after_scaled_commuted_table(%rip), %rax
+        movslq  (%rax,%rsi,4), %rsi
+        addq    %rax, %rsi
+        jmpq    *%rsi
+.Ladd_after_scaled_commuted_case0:
+        movl    $4840, %eax
+        retq
+.Ladd_after_scaled_commuted_case1:
+        movl    $4841, %eax
+        retq
+.Ladd_after_scaled_commuted_case2:
+        movl    $4842, %eax
+        retq
+.Ladd_after_scaled_commuted_case3:
+        movl    $4843, %eax
+        retq
+.Ladd_after_scaled_commuted_case4:
+        movl    $4844, %eax
+        retq
+.Ladd_after_scaled_commuted_case5:
+        movl    $4845, %eax
+        retq
+.Ladd_after_scaled_commuted_case6:
+        movl    $4846, %eax
+        retq
+        .size   jt_modulo_add_after_scaled_difference_commuted, .-jt_modulo_add_after_scaled_difference_commuted
+
+        .section .rodata,"a",@progbits
+        .p2align 3
+.Ladd_after_scaled_commuted_table:
+        .long .Ladd_after_scaled_commuted_case0-.Ladd_after_scaled_commuted_table
+        .long .Ladd_after_scaled_commuted_case1-.Ladd_after_scaled_commuted_table
+        .long .Ladd_after_scaled_commuted_case2-.Ladd_after_scaled_commuted_table
+        .long .Ladd_after_scaled_commuted_case3-.Ladd_after_scaled_commuted_table
+        .long .Ladd_after_scaled_commuted_case4-.Ladd_after_scaled_commuted_table
+        .long .Ladd_after_scaled_commuted_case5-.Ladd_after_scaled_commuted_table
+        .long .Ladd_after_scaled_commuted_case6-.Ladd_after_scaled_commuted_table
+
+// A syntactically identical q-q*8 arm derived from a different dividend is a
+// proposal only.  It cannot authenticate x+(q(y)-q(y)*8) as x%7.
+        .text
+        .globl  jt_modulo_add_after_scaled_difference_foreign
+        .type   jt_modulo_add_after_scaled_difference_foreign,@function
+jt_modulo_add_after_scaled_difference_foreign:
+        movl    %esi, %eax
+        movl    %eax, %ecx
+        imulq   $0x24924925, %rcx, %rcx
+        shrq    $32, %rcx
+        movl    %eax, %edx
+        subl    %ecx, %edx
+        shrl    %edx
+        addl    %ecx, %edx
+        shrl    $2, %edx
+        leal    (,%rdx,8), %ecx
+        subl    %ecx, %edx
+        addl    %edi, %edx
+        leaq    .Ladd_after_scaled_foreign_table(%rip), %rax
+        movq    (%rax,%rdx,8), %rdx
+        jmpq    *%rdx
+.Ladd_after_scaled_foreign_case0:
+        movl    $4850, %eax
+        retq
+.Ladd_after_scaled_foreign_case1:
+        movl    $4851, %eax
+        retq
+.Ladd_after_scaled_foreign_case2:
+        movl    $4852, %eax
+        retq
+.Ladd_after_scaled_foreign_case3:
+        movl    $4853, %eax
+        retq
+.Ladd_after_scaled_foreign_case4:
+        movl    $4854, %eax
+        retq
+.Ladd_after_scaled_foreign_case5:
+        movl    $4855, %eax
+        retq
+.Ladd_after_scaled_foreign_case6:
+        movl    $4856, %eax
+        retq
+        .size   jt_modulo_add_after_scaled_difference_foreign, .-jt_modulo_add_after_scaled_difference_foreign
+
+        .section .data.rel.ro,"aw",@progbits
+        .p2align 3
+.Ladd_after_scaled_foreign_table:
+        .quad .Ladd_after_scaled_foreign_case0
+        .quad .Ladd_after_scaled_foreign_case1
+        .quad .Ladd_after_scaled_foreign_case2
+        .quad .Ladd_after_scaled_foreign_case3
+        .quad .Ladd_after_scaled_foreign_case4
+        .quad .Ladd_after_scaled_foreign_case5
+        .quad .Ladd_after_scaled_foreign_case6
+
+// The exact producer is `% 7`, but the relocation run exposes only five
+// physical slots.  Capacity five may be proposed to the structural theorem,
+// but it does not match the producer's divisor; the real bound seven is in
+// turn larger than the table.  Neither number may publish this malformed
+// dispatch.
+        .text
+        .globl  jt_modulo_add_after_scaled_difference_wrong_capacity
+        .type   jt_modulo_add_after_scaled_difference_wrong_capacity,@function
+jt_modulo_add_after_scaled_difference_wrong_capacity:
+        movl    %edi, %eax
+        movl    %eax, %ecx
+        imulq   $0x24924925, %rcx, %rcx
+        shrq    $32, %rcx
+        movl    %eax, %edx
+        subl    %ecx, %edx
+        shrl    %edx
+        addl    %ecx, %edx
+        shrl    $2, %edx
+        leal    (,%rdx,8), %ecx
+        subl    %ecx, %edx
+        addl    %eax, %edx
+        leaq    .Ladd_after_scaled_wrong_capacity_table(%rip), %rax
+        movq    (%rax,%rdx,8), %rdx
+        jmpq    *%rdx
+.Ladd_after_scaled_wrong_capacity_case0:
+        movl    $4860, %eax
+        retq
+.Ladd_after_scaled_wrong_capacity_case1:
+        movl    $4861, %eax
+        retq
+.Ladd_after_scaled_wrong_capacity_case2:
+        movl    $4862, %eax
+        retq
+.Ladd_after_scaled_wrong_capacity_case3:
+        movl    $4863, %eax
+        retq
+.Ladd_after_scaled_wrong_capacity_case4:
+        movl    $4864, %eax
+        retq
+        .size   jt_modulo_add_after_scaled_difference_wrong_capacity, .-jt_modulo_add_after_scaled_difference_wrong_capacity
+
+        .section .data.rel.ro,"aw",@progbits
+        .p2align 3
+.Ladd_after_scaled_wrong_capacity_table:
+        .quad .Ladd_after_scaled_wrong_capacity_case0
+        .quad .Ladd_after_scaled_wrong_capacity_case1
+        .quad .Ladd_after_scaled_wrong_capacity_case2
+        .quad .Ladd_after_scaled_wrong_capacity_case3
+        .quad .Ladd_after_scaled_wrong_capacity_case4
+
+// clang's x86 `% 6u` lowering keeps the quotient in a 64-bit container, then
+// spells q*6 as low32(3*zext32(2*q)).  Low-bit ring normalization must prove
+// that exact factorized back-multiply without admitting a wrong factor,
+// reciprocal, or post-shift.
+        .text
+        .globl  jt_modulo_factorized_six
+        .type   jt_modulo_factorized_six,@function
+jt_modulo_factorized_six:
+        movl    %edi, %eax
+        movl    $0xaaaaaaab, %ecx
+        imulq   %rax, %rcx
+        shrq    $34, %rcx
+        addl    %ecx, %ecx
+        leal    (%rcx,%rcx,2), %edx
+        subl    %edx, %eax
+        leaq    .Lfactorized_six_table(%rip), %rcx
+        movq    (%rcx,%rax,8), %rdx
+        jmpq    *%rdx
+.Lfactorized_six_case0:
+        movl    $4870, %eax
+        retq
+.Lfactorized_six_case1:
+        movl    $4871, %eax
+        retq
+.Lfactorized_six_case2:
+        movl    $4872, %eax
+        retq
+.Lfactorized_six_case3:
+        movl    $4873, %eax
+        retq
+.Lfactorized_six_case4:
+        movl    $4874, %eax
+        retq
+.Lfactorized_six_case5:
+        movl    $4875, %eax
+        retq
+        .size   jt_modulo_factorized_six, .-jt_modulo_factorized_six
+
+        .section .data.rel.ro,"aw",@progbits
+        .p2align 3
+.Lfactorized_six_table:
+        .quad .Lfactorized_six_case0
+        .quad .Lfactorized_six_case1
+        .quad .Lfactorized_six_case2
+        .quad .Lfactorized_six_case3
+        .quad .Lfactorized_six_case4
+        .quad .Lfactorized_six_case5
+
+        .text
+        .globl  jt_modulo_factorized_six_wrong_factor
+        .type   jt_modulo_factorized_six_wrong_factor,@function
+jt_modulo_factorized_six_wrong_factor:
+        movl    %edi, %eax
+        movl    $0xaaaaaaab, %ecx
+        imulq   %rax, %rcx
+        shrq    $34, %rcx
+        addl    %ecx, %ecx
+        leal    (%rcx,%rcx,4), %edx
+        subl    %edx, %eax
+        leaq    .Lfactorized_six_wrong_factor_table(%rip), %rcx
+        movq    (%rcx,%rax,8), %rdx
+        jmpq    *%rdx
+.Lfactorized_six_wrong_factor_case0:
+        movl    $4880, %eax
+        retq
+.Lfactorized_six_wrong_factor_case1:
+        movl    $4881, %eax
+        retq
+.Lfactorized_six_wrong_factor_case2:
+        movl    $4882, %eax
+        retq
+.Lfactorized_six_wrong_factor_case3:
+        movl    $4883, %eax
+        retq
+.Lfactorized_six_wrong_factor_case4:
+        movl    $4884, %eax
+        retq
+.Lfactorized_six_wrong_factor_case5:
+        movl    $4885, %eax
+        retq
+        .size   jt_modulo_factorized_six_wrong_factor, .-jt_modulo_factorized_six_wrong_factor
+
+        .section .data.rel.ro,"aw",@progbits
+        .p2align 3
+.Lfactorized_six_wrong_factor_table:
+        .quad .Lfactorized_six_wrong_factor_case0
+        .quad .Lfactorized_six_wrong_factor_case1
+        .quad .Lfactorized_six_wrong_factor_case2
+        .quad .Lfactorized_six_wrong_factor_case3
+        .quad .Lfactorized_six_wrong_factor_case4
+        .quad .Lfactorized_six_wrong_factor_case5
+
+        .text
+        .globl  jt_modulo_factorized_six_wrong_magic
+        .type   jt_modulo_factorized_six_wrong_magic,@function
+jt_modulo_factorized_six_wrong_magic:
+        movl    %edi, %eax
+        movl    $0xaaaaaaac, %ecx
+        imulq   %rax, %rcx
+        shrq    $34, %rcx
+        addl    %ecx, %ecx
+        leal    (%rcx,%rcx,2), %edx
+        subl    %edx, %eax
+        leaq    .Lfactorized_six_wrong_magic_table(%rip), %rcx
+        movq    (%rcx,%rax,8), %rdx
+        jmpq    *%rdx
+.Lfactorized_six_wrong_magic_case0:
+        movl    $4890, %eax
+        retq
+.Lfactorized_six_wrong_magic_case1:
+        movl    $4891, %eax
+        retq
+.Lfactorized_six_wrong_magic_case2:
+        movl    $4892, %eax
+        retq
+.Lfactorized_six_wrong_magic_case3:
+        movl    $4893, %eax
+        retq
+.Lfactorized_six_wrong_magic_case4:
+        movl    $4894, %eax
+        retq
+.Lfactorized_six_wrong_magic_case5:
+        movl    $4895, %eax
+        retq
+        .size   jt_modulo_factorized_six_wrong_magic, .-jt_modulo_factorized_six_wrong_magic
+
+        .section .data.rel.ro,"aw",@progbits
+        .p2align 3
+.Lfactorized_six_wrong_magic_table:
+        .quad .Lfactorized_six_wrong_magic_case0
+        .quad .Lfactorized_six_wrong_magic_case1
+        .quad .Lfactorized_six_wrong_magic_case2
+        .quad .Lfactorized_six_wrong_magic_case3
+        .quad .Lfactorized_six_wrong_magic_case4
+        .quad .Lfactorized_six_wrong_magic_case5
+
+        .text
+        .globl  jt_modulo_factorized_six_wrong_postshift
+        .type   jt_modulo_factorized_six_wrong_postshift,@function
+jt_modulo_factorized_six_wrong_postshift:
+        movl    %edi, %eax
+        movl    $0xaaaaaaab, %ecx
+        imulq   %rax, %rcx
+        shrq    $33, %rcx
+        addl    %ecx, %ecx
+        leal    (%rcx,%rcx,2), %edx
+        subl    %edx, %eax
+        leaq    .Lfactorized_six_wrong_postshift_table(%rip), %rcx
+        movq    (%rcx,%rax,8), %rdx
+        jmpq    *%rdx
+.Lfactorized_six_wrong_postshift_case0:
+        movl    $4900, %eax
+        retq
+.Lfactorized_six_wrong_postshift_case1:
+        movl    $4901, %eax
+        retq
+.Lfactorized_six_wrong_postshift_case2:
+        movl    $4902, %eax
+        retq
+.Lfactorized_six_wrong_postshift_case3:
+        movl    $4903, %eax
+        retq
+.Lfactorized_six_wrong_postshift_case4:
+        movl    $4904, %eax
+        retq
+.Lfactorized_six_wrong_postshift_case5:
+        movl    $4905, %eax
+        retq
+        .size   jt_modulo_factorized_six_wrong_postshift, .-jt_modulo_factorized_six_wrong_postshift
+
+        .section .data.rel.ro,"aw",@progbits
+        .p2align 3
+.Lfactorized_six_wrong_postshift_table:
+        .quad .Lfactorized_six_wrong_postshift_case0
+        .quad .Lfactorized_six_wrong_postshift_case1
+        .quad .Lfactorized_six_wrong_postshift_case2
+        .quad .Lfactorized_six_wrong_postshift_case3
+        .quad .Lfactorized_six_wrong_postshift_case4
+        .quad .Lfactorized_six_wrong_postshift_case5
 
         .section .note.GNU-stack,"",@progbits

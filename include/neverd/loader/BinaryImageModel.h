@@ -16,6 +16,7 @@
 #define NEVERD_LOADER_BINARYIMAGEMODEL_H
 
 #include "neverd/Common.h"
+#include "neverd/Limits.h"
 #include "neverd/evm/EVMImageMetadata.h"
 #include "neverd/loader/BinaryImageDynamic.h"
 #include "neverd/loader/BinaryImageRelocation.h"
@@ -56,6 +57,13 @@ struct ImportBindSlot {
 /// bytes; TargetVA is the mapped address it denotes. Keeping both prevents a
 /// section-difference expression (whose field is A-B but whose eventual target
 /// is A) from being mistaken for a complete address occurrence.
+enum class RelocatedAddressFieldKind : uint8_t {
+  Generic,
+  /// i386 ELF R_386_GOTOFF instruction operand.  This is distinct from an
+  /// absolute R_386_32 field even when both encode the same mapped data VA.
+  I386ELFGOTOFF,
+};
+
 struct RelocatedAddressField {
   uint64_t EncodedValue = 0;
   va_t TargetVA = InvalidVA;
@@ -70,6 +78,11 @@ struct RelocatedAddressField {
   /// not know that boundary; CFG lifting recomputes TargetVA occurrence-
   /// locally before the architecture lifter consumes the field.
   bool PCRelativeFromInstructionEnd = false;
+  /// Relocation semantics that cannot be reconstructed from the folded value
+  /// or PC-relative bit alone.  Most address operands are Generic; consumers
+  /// of the i386 GOT-base-zero model must require I386ELFGOTOFF explicitly so
+  /// an absolute field cannot borrow that proof.
+  RelocatedAddressFieldKind Kind = RelocatedAddressFieldKind::Generic;
 };
 
 /// Loader-authenticated instruction whose architectural output materializes a
@@ -516,6 +529,50 @@ struct BinaryImage {
                           : TargetVA <= End);
     }
     return false;
+  }
+
+  /// Verify the symbol owner retained for an i386 ELF R_386_GOTOFF field.
+  /// Most GOTOFF addends resolve inside (or one-past) their symbol's ordinary
+  /// section owner and use relocatedTargetBelongsToOwner directly.  Clang may
+  /// instead fold a negative selector bias into the relocation, placing S+A
+  /// before the symbol's rodata load segment.  The ELF loader records that
+  /// exceptional relation in RodataAnchorSeg; accept it only when the exact
+  /// folded VA names the same read-only data segment as the exact section owner.
+  bool relocatedI386GOTOFFTargetBelongsToOwner(va_t TargetVA,
+                                               va_t OwnerVA) const {
+    if (Arch != Arch::X86 || !isELF() || getPointerSize() != 4 ||
+        OwnerVA == InvalidVA)
+      return false;
+    if (relocatedTargetBelongsToOwner(TargetVA, OwnerVA))
+      return true;
+
+    const auto Anchor = RodataAnchorSeg.find(TargetVA);
+    if (Anchor == RodataAnchorSeg.end())
+      return false;
+    const Segment *OwnerSeg = getSegmentFor(OwnerVA);
+    if (!OwnerSeg || Anchor->second != OwnerSeg->VA ||
+        !OwnerSeg->isReadable() || OwnerSeg->isWritable() ||
+        TargetVA > std::numeric_limits<uint32_t>::max() ||
+        OwnerSeg->VA > std::numeric_limits<uint32_t>::max() ||
+        hasExecutableCodeOwnerAt(OwnerVA) ||
+        !hasObjectDataProvenance(OwnerVA))
+      return false;
+
+    // GOTOFF arithmetic is performed in the i386 guest's 32-bit address
+    // space.  A negative selector bias may therefore wrap below a rodata
+    // segment at VA zero to (for example) 0xfffffff0.  Authenticate only the
+    // exact loader-recorded anchor and a small, non-zero modular backward
+    // distance; ordinary absolute relocations never populate this relation.
+    const uint32_t BackDistance = static_cast<uint32_t>(OwnerSeg->VA) -
+                                  static_cast<uint32_t>(TargetVA);
+    if (BackDistance == 0 ||
+        BackDistance > limits::kMaxRodataAnchorBackDistance)
+      return false;
+
+    if (const Section *OwnerSec = getSectionFor(OwnerVA))
+      return OwnerSec->VA == OwnerVA && OwnerSec->isReadable() &&
+             !OwnerSec->isWritable() && !OwnerSec->isExecutable();
+    return OwnerSeg->VA == OwnerVA;
   }
 
   /// Half-open end of the mapped section/object-storage owner containing

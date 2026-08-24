@@ -38,13 +38,35 @@
 #include "llvm/ADT/ArrayRef.h"
 
 #include <cstdint>
+#include <map>
 #include <optional>
+#include <set>
 #include <vector>
 
 namespace neverd {
 
 struct BinaryImage;
+struct RelocatedAddressField;
 struct TargetRegInfo;
+
+/// Checked signed frame-offset arithmetic used by stack-table proofs.  A
+/// failure is evidence incompleteness, never a wrapping offset.
+std::optional<int64_t> stackCheckedOffset(int64_t Base, int64_t Delta,
+                                          bool Subtract = false);
+
+/// Apply a signed frame delta to a guest virtual address without host signed
+/// casts or modular wraparound.
+std::optional<va_t> checkedVAOffset(va_t Base, int64_t Delta);
+
+/// Return the unique immutable object-data owner of the complete byte span
+/// [Start, Start + Size), or nullopt when the span is empty, wraps, crosses an
+/// exact section/segment owner, reaches executable or runtime-writable bytes,
+/// or does not match \p ExpectedOwner.  Unlike
+/// BinaryImage::relocatedTargetBelongsToOwner, this is a memory-access proof:
+/// a data owner's legal one-past address is deliberately not dereferenceable.
+std::optional<va_t>
+exactImmutableDataSpanOwner(const BinaryImage &Img, va_t Start, uint64_t Size,
+                            va_t ExpectedOwner = InvalidVA);
 
 /// Registers that survive a call under \p Img's target ABI.  Shared by
 /// constant-folding and path-emulation fallbacks.  Defined in
@@ -110,12 +132,40 @@ bool resolveConstThroughCopy(const std::vector<LowOp> &Ops, int Before,
 uint32_t countCodePtrRelocRun(const BinaryImage &Img, va_t TableAddr,
                               uint64_t EntryStride);
 
+/// One candidate-local exemption for an address materialization that directly
+/// names immutable bytes copied into a stack-resident jump table.  Keeping the
+/// field, target, owner, effective source span, and candidate base together
+/// prevents an adjusted pointer to a neighbouring table from erasing that
+/// table's independent boundary anchor.
+struct AuthenticatedSourceAnchorExemption {
+  va_t CandidateBaseVA = InvalidVA;
+  va_t FieldVA = InvalidVA;
+  va_t TargetVA = InvalidVA;
+  va_t TargetOwnerVA = InvalidVA;
+  va_t EffectiveSourceVA = InvalidVA;
+  uint64_t SourceByteCount = 0;
+
+  bool
+  operator==(const AuthenticatedSourceAnchorExemption &Other) const = default;
+};
+
+/// Validate an exemption against the exact loader field and the current raw
+/// relocation run.  In particular, TargetVA must directly equal the effective
+/// source address; deriving source A from an occurrence that names adjacent B
+/// does not make B a consumer of A's table.
+bool authenticatedSourceAnchorExemptionMatches(
+    const AuthenticatedSourceAnchorExemption &Exemption, va_t BaseAddr,
+    uint64_t EntryStride, uint32_t Run, va_t FieldVA,
+    const RelocatedAddressField &Field);
+
 /// Truncate an absolute code-pointer relocation run at the next independently
 /// materialized table-base anchor.  This prevents two adjacent absolute tables
 /// from being conflated into one physical owner.
-uint32_t boundCodePtrRunByNextAnchor(const BinaryImage &Img, va_t BaseAddr,
-                                     uint64_t EntryStride, uint32_t Run,
-                                     const std::set<va_t> &DecodedAnchors);
+uint32_t boundCodePtrRunByNextAnchor(
+    const BinaryImage &Img, va_t BaseAddr, uint64_t EntryStride, uint32_t Run,
+    const std::set<va_t> &DecodedAnchors,
+    const std::map<va_t, AuthenticatedSourceAnchorExemption>
+        &AuthenticatedSources = {});
 
 /// True when the end of an absolute relocation run is independently bounded
 /// by the mapped storage owner or another materialized table-base anchor.

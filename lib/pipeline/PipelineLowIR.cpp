@@ -2266,6 +2266,12 @@ void Pipeline::buildLowIR(
     }
   });
 
+  std::vector<std::set<va_t>> EverPublishedJumpTableBranchHistory(Total);
+  for (size_t I = 0; I < Total; ++I)
+    EverPublishedJumpTableBranchHistory[I].insert(
+        AllLow[I].EverPublishedJumpTableBranchAddresses.begin(),
+        AllLow[I].EverPublishedJumpTableBranchAddresses.end());
+
   // Per-function recovery cannot see a later function that independently
   // reads or escapes one of its table's relocation slots.  Resolve that
   // module-wide veto after every provisional LowFunc exists, then rebuild only
@@ -2291,8 +2297,13 @@ void Pipeline::buildLowIR(
       for (size_t I; (I = Claim()) < N;) {
         if (!Rebuild[I])
           continue;
+        LocalCFG.setPreviouslyPublishedJumpTableBranches(
+            &EverPublishedJumpTableBranchHistory[I]);
         AllLow[I] = LocalCFG.build(Img, LocalDec, Candidates[I].first,
                                    Candidates[I].second);
+        EverPublishedJumpTableBranchHistory[I].insert(
+            AllLow[I].EverPublishedJumpTableBranchAddresses.begin(),
+            AllLow[I].EverPublishedJumpTableBranchAddresses.end());
         trimFuncStorage(AllLow[I]);
       }
     });

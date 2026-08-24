@@ -16,11 +16,15 @@
 
 #include "NeverDLiftFixture.h"
 #include "PipelineLowIRDetail.h"
+#include "../../../lib/ir/low/jumptable/JumpTableResolverDetail.h"
 
+#include "neverd/Limits.h"
+#include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/med/LowToMed.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/BinaryLoading.h"
@@ -86,6 +90,21 @@ static bool lowFunctionHasOpcode(const neverd::LowFunc &Function,
             [&](const neverd::LowOp &Op) { return Op.Opcode == Opcode; }))
       return true;
   return false;
+}
+
+static const neverd::LowOp *
+findExactLowOp(const neverd::LowFunc &Function, neverd::va_t Address,
+               int Sequence, neverd::NdOp Opcode) {
+  const neverd::LowOp *Match = nullptr;
+  for (const neverd::LowBlock &Block : Function.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops)
+      if (Op.Addr == Address && Op.Seq == Sequence &&
+          Op.Opcode == Opcode) {
+        if (Match)
+          return nullptr;
+        Match = &Op;
+      }
+  return Match;
 }
 
 static std::optional<std::string>
@@ -268,7 +287,13 @@ TEST_F(JTE_X86_32, GOTPCModelRequiresLifterAuthenticatedCallPopSeed) {
   const neverd::Symbol *Function =
       Image.findSymbol("jt_i386_gotpc_call_pop_seed");
   ASSERT_NE(Function, nullptr);
-  ASSERT_EQ(Image.I386GOTPCFields.size(), 2u);
+  size_t FunctionGOTPCFields = 0;
+  for (const auto &[FieldVA, Field] : Image.I386GOTPCFields) {
+    (void)Field;
+    if (FieldVA >= Function->Addr && FieldVA < Function->Addr + Function->Size)
+      ++FunctionGOTPCFields;
+  }
+  ASSERT_EQ(FunctionGOTPCFields, 1u);
 
   neverd::Decoder Decoder;
   ASSERT_TRUE(Decoder.init(neverd::Arch::X86));
@@ -281,8 +306,31 @@ TEST_F(JTE_X86_32, GOTPCModelRequiresLifterAuthenticatedCallPopSeed) {
   const auto &GetPc = Low.I386GetPcOccurrences.front();
   const auto &Model = Low.RelocatedInstructionScalarModelOccurrences.front();
   EXPECT_EQ(GetPc.PCValue, 5u);
+  EXPECT_EQ(GetPc.CallInstructionAddr, 0u);
   EXPECT_EQ(GetPc.InstructionAddr, 5u);
   EXPECT_EQ(GetPc.OutputOpcode, neverd::NdOp::COPY);
+  const neverd::LowOp *SeedCopy =
+      findExactLowOp(Low, GetPc.InstructionAddr, GetPc.OpSeq,
+                     GetPc.OutputOpcode);
+  ASSERT_NE(SeedCopy, nullptr);
+  ASSERT_EQ(SeedCopy->NumInputs, 1u);
+  EXPECT_EQ(GetPc.InputWitness, SeedCopy->Inputs[0]);
+  EXPECT_FALSE(GetPc.RawPCAuthenticated)
+      << "ELF must publish only the paired GOTPC scalar model";
+  EXPECT_TRUE(SeedCopy->Inputs[0].isTemp())
+      << "the occurrence must name the real pop LOAD/COPY, not a synthetic "
+         "constant overwrite";
+  const neverd::LowOp *SeedLoad = nullptr;
+  for (const neverd::LowBlock &Block : Low.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops)
+      if (Op.Addr == GetPc.InstructionAddr && Op.Opcode == neverd::NdOp::LOAD &&
+          Op.Output == SeedCopy->Inputs[0]) {
+        ASSERT_EQ(SeedLoad, nullptr);
+        SeedLoad = &Op;
+      }
+  ASSERT_NE(SeedLoad, nullptr);
+  ASSERT_EQ(SeedLoad->NumInputs, 1u);
+  EXPECT_TRUE(SeedLoad->Inputs[0].isReg());
   EXPECT_EQ(Model.Model, neverd::RelocatedInstructionScalarModelOccurrence::
                              ModelKind::I386ELFGOTBaseZero);
   EXPECT_EQ(Model.SeedInstructionAddr, GetPc.InstructionAddr);
@@ -310,6 +358,266 @@ TEST_F(JTE_X86_32, GOTPCModelRejectsRelocationFreeAbsoluteAddressSeed) {
   EXPECT_TRUE(Low.RelocatedInstructionScalarModelOccurrences.empty())
       << "a role-neutral Address constant with the expected numeric value "
          "must not authenticate the relocatable GOTPC model";
+}
+
+TEST_F(JTE_X86_32, GOTPCModelRejectsAddressTakenPopEntry) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_i386_gotpc_rooted_pop");
+  const neverd::Symbol *Pointer =
+      Image.findSymbol("jt_i386_gotpc_rooted_pop_pointer");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Pointer, nullptr);
+  ASSERT_TRUE(Image.CodePtrRelocSlots.count(Pointer->Addr));
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(neverd::Arch::X86));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low = Builder.build(
+      Image, Decoder, Function->Addr, "jt_i386_gotpc_rooted_pop");
+
+  ASSERT_EQ(Low.I386GetPcOccurrences.size(), 1u);
+  const auto &GetPc = Low.I386GetPcOccurrences.front();
+  const neverd::LowOp *SeedCopy =
+      findExactLowOp(Low, GetPc.InstructionAddr, GetPc.OpSeq,
+                     GetPc.OutputOpcode);
+  ASSERT_NE(SeedCopy, nullptr);
+  ASSERT_EQ(SeedCopy->NumInputs, 1u);
+  EXPECT_EQ(GetPc.InputWitness, SeedCopy->Inputs[0]);
+  EXPECT_FALSE(GetPc.RawPCAuthenticated);
+  EXPECT_TRUE(SeedCopy->Inputs[0].isTemp())
+      << "an independently reachable pop must retain its actual stack value";
+  EXPECT_TRUE(Low.RelocatedInstructionScalarModelOccurrences.empty())
+      << "an address-taken pop has an independent live-in and cannot inherit "
+         "the adjacent call's pushed PC";
+}
+
+TEST_F(JTE_X86_32, GOTOFFSwitchRequiresExactCallPopAndDataFieldOccurrences) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Positive =
+      Image.findSymbol("jt_i386_gotoff_switch_call_pop");
+  const neverd::Symbol *Negative =
+      Image.findSymbol("jt_i386_gotoff_switch_absolute_seed");
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_i386_gotoff_switch_table");
+  ASSERT_NE(Positive, nullptr);
+  ASSERT_NE(Negative, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Table->Size, 5u * 4u);
+
+  auto Recover = [&](const neverd::Symbol &Function) {
+    neverd::Decoder Decoder;
+    EXPECT_TRUE(Decoder.init(neverd::Arch::X86));
+    neverd::CFGBuilder Builder;
+    return Builder.build(Image, Decoder, Function.Addr, Function.Name);
+  };
+
+  const neverd::LowFunc Authenticated = Recover(*Positive);
+  ASSERT_EQ(Authenticated.JumpTables.size(), 1u);
+  EXPECT_EQ(Authenticated.JumpTables.front().Targets.size(), 5u);
+
+  const neverd::LowFunc Unauthenticated = Recover(*Negative);
+  EXPECT_TRUE(Unauthenticated.JumpTables.empty())
+      << "a numerically equal absolute seed is not an exact GOTPC producer";
+
+  std::vector<neverd::va_t> MatchingFields;
+  for (const auto &[FieldVA, Field] : Image.DataAddressRelocOperands)
+    if (FieldVA >= Positive->Addr &&
+        FieldVA < Positive->Addr + Positive->Size &&
+        Field.Width == Image.getPointerSize() &&
+        Field.TargetVA == Table->Addr)
+      MatchingFields.push_back(FieldVA);
+  ASSERT_EQ(MatchingFields.size(), 1u);
+  const neverd::va_t FieldVA = MatchingFields.front();
+  const neverd::RelocatedAddressField SavedField =
+      Image.DataAddressRelocOperands.at(FieldVA);
+
+  Image.DataAddressRelocOperands.erase(FieldVA);
+  EXPECT_TRUE(Recover(*Positive).JumpTables.empty())
+      << "the numeric GOTOFF displacement cannot replace its exact field";
+
+  Image.DataAddressRelocOperands.emplace(FieldVA, SavedField);
+  Image.DataAddressRelocOperands.at(FieldVA).TargetOwnerVA = neverd::InvalidVA;
+  EXPECT_TRUE(Recover(*Positive).JumpTables.empty())
+      << "a GOTOFF field without an authenticated target owner must fail closed";
+
+  Image.DataAddressRelocOperands.at(FieldVA) = SavedField;
+  ASSERT_EQ(SavedField.Kind,
+            neverd::RelocatedAddressFieldKind::I386ELFGOTOFF);
+  Image.DataAddressRelocOperands.at(FieldVA).Kind =
+      neverd::RelocatedAddressFieldKind::Generic;
+  EXPECT_TRUE(Recover(*Positive).JumpTables.empty())
+      << "an absolute relocation with the same folded value and owner must "
+         "not borrow GOTOFF semantics";
+}
+
+TEST_F(JTE_X86_32, GOTPCOperandBindingRejectsDisplacementImmediateCollision) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_i386_gotpc_operand_collision");
+  ASSERT_NE(Function, nullptr);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(neverd::Arch::X86));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low = Builder.build(
+      Image, Decoder, Function->Addr, "jt_i386_gotpc_operand_collision");
+
+  ASSERT_EQ(Low.I386GetPcOccurrences.size(), 1u);
+  EXPECT_TRUE(Low.RelocatedInstructionScalarModelOccurrences.empty())
+      << "the GOTPC immediate must not authenticate a numerically equal "
+         "effective-address displacement in the same instruction";
+}
+
+TEST_F(JTE_X86_32, AbsoluteDataRelocationCannotMasqueradeAsGOTOFF) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_i386_abs32_displacement_switch");
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_i386_abs32_switch_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+
+  std::vector<neverd::RelocatedAddressField> Fields;
+  for (const auto &[FieldVA, Field] : Image.DataAddressRelocOperands)
+    if (FieldVA >= Function->Addr &&
+        FieldVA < Function->Addr + Function->Size &&
+        Field.TargetVA == Table->Addr)
+      Fields.push_back(Field);
+  ASSERT_EQ(Fields.size(), 1u);
+  EXPECT_EQ(Fields.front().Kind,
+            neverd::RelocatedAddressFieldKind::Generic);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(neverd::Arch::X86));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low = Builder.build(
+      Image, Decoder, Function->Addr, "jt_i386_abs32_displacement_switch");
+  ASSERT_EQ(Low.RelocatedInstructionScalarModelOccurrences.size(), 1u);
+  EXPECT_TRUE(Low.JumpTables.empty())
+      << "R_386_32 is an absolute address field, not a GOTOFF displacement";
+}
+
+TEST_F(JTE_X86_32, GOTOFFSwitchRequiresTheExactScalarModelOrigin) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+
+  auto Recover = [&](llvm::StringRef Name) {
+    const neverd::Symbol *Function = Image.findSymbol(Name);
+    EXPECT_NE(Function, nullptr);
+    if (!Function)
+      return neverd::LowFunc{};
+    neverd::Decoder Decoder;
+    EXPECT_TRUE(Decoder.init(neverd::Arch::X86));
+    neverd::CFGBuilder Builder;
+    return Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  };
+
+  const neverd::LowFunc Computed =
+      Recover("jt_i386_gotoff_literal_zero_base");
+  ASSERT_EQ(Computed.RelocatedInstructionScalarModelOccurrences.size(), 1u);
+  EXPECT_TRUE(Computed.JumpTables.empty())
+      << "an independently computed zero cannot borrow another register's "
+         "GOT model occurrence";
+
+  const neverd::LowFunc Mixed = Recover("jt_i386_gotoff_mixed_zero_base");
+  ASSERT_EQ(Mixed.RelocatedInstructionScalarModelOccurrences.size(), 1u);
+  EXPECT_TRUE(Mixed.JumpTables.empty())
+      << "a merge containing an unauthenticated zero arm is not a must-origin "
+         "GOT base";
+}
+
+TEST_F(JTE_X86_32, PreScaledGOTOFFRequiresExactFieldAndModelZeroOrigin) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+
+  auto Recover = [&](llvm::StringRef Name) {
+    const neverd::Symbol *Function = Image.findSymbol(Name);
+    EXPECT_NE(Function, nullptr);
+    if (!Function)
+      return neverd::LowFunc{};
+    neverd::Decoder Decoder;
+    EXPECT_TRUE(Decoder.init(neverd::Arch::X86));
+    neverd::CFGBuilder Builder;
+    return Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  };
+
+  const neverd::LowFunc Authenticated =
+      Recover("jt_i386_gotoff_prescaled_call_pop");
+  ASSERT_EQ(Authenticated.JumpTables.size(), 1u);
+  EXPECT_EQ(Authenticated.JumpTables.front().Targets.size(), 4u);
+
+  const neverd::LowFunc Absolute = Recover("jt_i386_abs32_prescaled_switch");
+  ASSERT_EQ(Absolute.RelocatedInstructionScalarModelOccurrences.size(), 1u);
+  EXPECT_TRUE(Absolute.JumpTables.empty())
+      << "a pre-scaled R_386_32 operand must not borrow GOTOFF semantics";
+
+  const neverd::LowFunc Literal =
+      Recover("jt_i386_gotoff_prescaled_literal_zero");
+  ASSERT_EQ(Literal.RelocatedInstructionScalarModelOccurrences.size(), 1u);
+  EXPECT_TRUE(Literal.JumpTables.empty())
+      << "an exact pre-scaled GOTOFF field still requires the exact base input "
+         "to reach the model-zero occurrence";
+}
+
+TEST_F(JTE_X86_32, GOTPCModelBudgetExhaustionPublishesNoPartialProof) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_i386_gotoff_switch_call_pop");
+  ASSERT_NE(Function, nullptr);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(neverd::Arch::X86));
+  neverd::CFGBuilder Builder;
+  Builder.setI386GOTModelEvidenceBudgetForTesting(0);
+  const neverd::LowFunc Low = Builder.build(Image, Decoder, Function->Addr,
+                                            "jt_i386_gotoff_switch_call_pop");
+
+  EXPECT_TRUE(Low.RelocatedInstructionScalarModelOccurrences.empty());
+  EXPECT_TRUE(Low.JumpTables.empty())
+      << "budget exhaustion must not publish a partial GOT model batch";
+}
+
+TEST_F(JTE_X86_32, GOTOFFProposalBudgetExhaustionFailsClosed) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_i386_gotoff_switch_call_pop");
+  ASSERT_NE(Function, nullptr);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(neverd::Arch::X86));
+  neverd::CFGBuilder Builder;
+  Builder.setI386GOTOFFProposalEvidenceBudgetForTesting(0);
+  const neverd::LowFunc Low = Builder.build(Image, Decoder, Function->Addr,
+                                            "jt_i386_gotoff_switch_call_pop");
+
+  ASSERT_EQ(Low.RelocatedInstructionScalarModelOccurrences.size(), 1u)
+      << "model completion has an independent transactional budget";
+  EXPECT_TRUE(Low.JumpTables.empty())
+      << "proposal-budget exhaustion must not suppress relocation roots or "
+         "publish a partial GOTOFF table proof";
 }
 
 TEST_F(JTE_X86_32, FullWidthESPPrivateFrameSpillPreservesSwitch) {
@@ -862,6 +1170,140 @@ TEST_F(JTE_X86_64,
   EXPECT_EQ(LLVMBody.find("switch i"), std::string::npos) << LLVMBody;
 }
 
+TEST_F(JTE_X86_64,
+       FreshBuilderRetainsPreviouslyPublishedOpaqueBranchIdentity) {
+  auto ImageOrErr = neverd::loadBinary(lostPublishedX64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_identity_fresh_published_table");
+  const neverd::Symbol *Observer =
+      Image.findSymbol("jt_identity_fresh_published_observer");
+  const neverd::Symbol *IndirectCall =
+      Image.findSymbol("jt_identity_fresh_published_indirect_call");
+  const neverd::Symbol *Storage =
+      Image.findSymbol("jt_identity_fresh_published_table_storage");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Observer, nullptr);
+  ASSERT_NE(IndirectCall, nullptr);
+  ASSERT_NE(Storage, nullptr);
+
+  const std::set<neverd::va_t> Entries{Function->Addr, Observer->Addr,
+                                       IndirectCall->Addr};
+  neverd::Decoder FirstDecoder;
+  ASSERT_TRUE(FirstDecoder.init(neverd::Arch::X64));
+  neverd::CFGBuilder FirstBuilder;
+  FirstBuilder.setKnownFuncEntries(&Entries);
+  const neverd::LowFunc First = FirstBuilder.build(
+      Image, FirstDecoder, Function->Addr, Function->Name);
+  ASSERT_EQ(First.JumpTables.size(), 1u);
+  const neverd::va_t Branch = First.JumpTables.front().InsnAddr;
+  ASSERT_EQ(First.JumpTables.front().Targets.size(), 2u);
+  ASSERT_NE(std::find(First.JumpTables.front().SuppressibleRelocationSlots.begin(),
+                      First.JumpTables.front().SuppressibleRelocationSlots.end(),
+                      Storage->Addr),
+            First.JumpTables.front().SuppressibleRelocationSlots.end());
+  ASSERT_EQ(First.EverPublishedJumpTableBranchAddresses.count(Branch), 1u);
+
+  // Protecting slot zero makes case 0 an independent proof root.  Even without
+  // history, full-object storage and authoritative local target ownership
+  // preserve the unresolved dispatch as an opaque branch.  Published history
+  // remains a separate, one-shot fact checked below.
+  const std::set<neverd::va_t> ProtectedSlots{Storage->Addr};
+  neverd::Decoder NoSeedDecoder;
+  ASSERT_TRUE(NoSeedDecoder.init(neverd::Arch::X64));
+  neverd::CFGBuilder NoSeedBuilder;
+  NoSeedBuilder.setKnownFuncEntries(&Entries);
+  NoSeedBuilder.setProtectedJumpTableRelocationSlots(&ProtectedSlots);
+  const neverd::LowFunc NoSeed = NoSeedBuilder.build(
+      Image, NoSeedDecoder, Function->Addr, Function->Name);
+  ASSERT_TRUE(NoSeed.JumpTables.empty());
+  EXPECT_TRUE(lowFunctionHasOpcode(NoSeed, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(lowFunctionHasOpcode(NoSeed, neverd::NdOp::INDIR_CALL));
+  EXPECT_EQ(NoSeed.UnsafeIndirectBranchAddresses.count(Branch), 1u);
+  EXPECT_TRUE(NoSeed.EverPublishedJumpTableBranchAddresses.empty());
+
+  neverd::Decoder SeededDecoder;
+  ASSERT_TRUE(SeededDecoder.init(neverd::Arch::X64));
+  neverd::CFGBuilder SeededBuilder;
+  SeededBuilder.setKnownFuncEntries(&Entries);
+  SeededBuilder.setProtectedJumpTableRelocationSlots(&ProtectedSlots);
+  std::set<neverd::va_t> SeedHistory =
+      First.EverPublishedJumpTableBranchAddresses;
+  SeedHistory.insert(Function->Addr); // current, but not an indirect branch
+  SeedHistory.insert(Storage->Addr);  // data, not a current instruction
+  SeededBuilder.setPreviouslyPublishedJumpTableBranches(&SeedHistory);
+  const neverd::LowFunc Seeded = SeededBuilder.build(
+      Image, SeededDecoder, Function->Addr, Function->Name);
+  ASSERT_TRUE(Seeded.JumpTables.empty());
+  EXPECT_TRUE(lowFunctionHasOpcode(Seeded, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(lowFunctionHasOpcode(Seeded, neverd::NdOp::INDIR_CALL));
+  EXPECT_EQ(Seeded.EverPublishedJumpTableBranchAddresses.count(Branch), 1u);
+  EXPECT_EQ(Seeded.EverPublishedJumpTableBranchAddresses.size(), 1u);
+  EXPECT_EQ(Seeded.UnsafeIndirectBranchAddresses.count(Branch), 1u);
+
+  // A history seed is scoped to exactly one build.  Reusing the public
+  // builder without another setter call must neither dereference the caller's
+  // old set nor inject the previous function/build's branch identities.
+  neverd::Decoder ReusedDecoder;
+  ASSERT_TRUE(ReusedDecoder.init(neverd::Arch::X64));
+  const neverd::LowFunc Reused = SeededBuilder.build(
+      Image, ReusedDecoder, Function->Addr, Function->Name);
+  ASSERT_TRUE(Reused.JumpTables.empty());
+  EXPECT_TRUE(lowFunctionHasOpcode(Reused, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(lowFunctionHasOpcode(Reused, neverd::NdOp::INDIR_CALL));
+  EXPECT_EQ(Reused.UnsafeIndirectBranchAddresses.count(Branch), 1u);
+  EXPECT_TRUE(Reused.EverPublishedJumpTableBranchAddresses.empty());
+
+  const std::set<neverd::va_t> CallSeed{IndirectCall->Addr};
+  neverd::Decoder CallDecoder;
+  ASSERT_TRUE(CallDecoder.init(neverd::Arch::X64));
+  neverd::CFGBuilder CallBuilder;
+  CallBuilder.setKnownFuncEntries(&Entries);
+  CallBuilder.setPreviouslyPublishedJumpTableBranches(&CallSeed);
+  const neverd::LowFunc CallControl = CallBuilder.build(
+      Image, CallDecoder, IndirectCall->Addr, IndirectCall->Name);
+  EXPECT_TRUE(CallControl.EverPublishedJumpTableBranchAddresses.empty());
+  EXPECT_TRUE(lowFunctionHasOpcode(CallControl, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(CallControl.UnsafeIndirectBranchAddresses.empty());
+
+  neverd::LowToMedConverter Converter;
+  Converter.setBinaryImage(&Image);
+  neverd::MedFunc Med =
+      Converter.convert(Seeded, neverd::Arch::X64, neverd::BinaryFormat::ELF);
+  llvm::LLVMContext Context;
+  auto Module = neverd::MedLLVMEmitter().emit(
+      {Med}, Context, "fresh-builder-ever-published", neverd::Arch::X64, {},
+      &Image, neverd::BinaryFormat::ELF);
+  ASSERT_NE(Module, nullptr);
+  std::string IR;
+  llvm::raw_string_ostream OS(IR);
+  Module->print(OS, nullptr);
+  OS.flush();
+  const std::string Body = llvmFunctionBody(IR, Function->Name);
+  ASSERT_FALSE(Body.empty()) << IR;
+  EXPECT_NE(Body.find("llvm.trap"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("switch i"), std::string::npos) << Body;
+
+  DirectPipelineRun PipelineRun = runPipelineWithEvidenceBudget(Image, 256);
+  ASSERT_TRUE(PipelineRun.Result.Success) << PipelineRun.Result.Error;
+  const neverd::LowFunc *PipelineLow =
+      findLowFunction(PipelineRun.Result, Function->Name);
+  ASSERT_NE(PipelineLow, nullptr);
+  EXPECT_TRUE(PipelineLow->JumpTables.empty());
+  EXPECT_EQ(
+      PipelineLow->EverPublishedJumpTableBranchAddresses.count(Branch), 1u);
+  EXPECT_EQ(PipelineLow->UnsafeIndirectBranchAddresses.count(Branch), 1u);
+  EXPECT_TRUE(lowFunctionHasOpcode(*PipelineLow, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(lowFunctionHasOpcode(*PipelineLow, neverd::NdOp::INDIR_CALL));
+  const std::string PipelineBody =
+      llvmFunctionBody(PipelineRun.LLVMIR, Function->Name);
+  ASSERT_FALSE(PipelineBody.empty()) << PipelineRun.LLVMIR;
+  EXPECT_NE(PipelineBody.find("llvm.trap"), std::string::npos) << PipelineBody;
+  EXPECT_EQ(PipelineBody.find("switch i"), std::string::npos) << PipelineBody;
+}
+
 TEST_F(JTE_X86_64, IndexIdentityRejectsAtomicFrameOverwrite) {
   auto R = liftToLowIR(identityCfgLaneObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
@@ -1237,6 +1679,240 @@ TEST_F(JTE_X86_64, ModuloBoundRejectsWrongUnsignedDivisionPostShift) {
   EXPECT_EQ(HighBody.find("switch"), std::string::npos) << HighBody;
 }
 
+TEST_F(JTE_X86_64, ModuloBoundAcceptsExactFactorizedSixBackMultiply) {
+  auto ImageOrErr = neverd::loadBinary(moduloDomainObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_modulo_factorized_six");
+  ASSERT_NE(Function, nullptr);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_EQ(Low.JumpTables.front().Targets.size(), 6u);
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
+TEST_F(JTE_X86_64, ModuloBoundRejectsInexactFactorizedSixRecipes) {
+  constexpr const char *Names[] = {
+      "jt_modulo_factorized_six_wrong_factor",
+      "jt_modulo_factorized_six_wrong_magic",
+      "jt_modulo_factorized_six_wrong_postshift",
+  };
+
+  auto Low = liftToLowIR(moduloDomainObj());
+  ASSERT_EQ(Low.exitCode, 0) << Low.err;
+  for (const char *Name : Names) {
+    const std::string Body = lowFunctionBody(Low.out, Name);
+    ASSERT_FALSE(Body.empty()) << Name << '\n' << Low.out;
+    expectIndirectDispatchHasNoStaticSuccessors(Body);
+  }
+
+  auto LLVM = liftToLLVMIRUnopt(moduloDomainObj());
+  ASSERT_EQ(LLVM.exitCode, 0) << LLVM.err;
+  for (const char *Name : Names) {
+    const std::string Body = llvmFunctionBody(LLVM.out, Name);
+    ASSERT_FALSE(Body.empty()) << Name << '\n' << LLVM.out;
+    EXPECT_EQ(Body.find("switch i"), std::string::npos) << Body;
+  }
+
+  auto High = liftToHighIR(moduloDomainObj());
+  ASSERT_EQ(High.exitCode, 0) << High.err;
+  for (const char *Name : Names) {
+    const std::string Body = lowFunctionBody(High.out, Name);
+    ASSERT_FALSE(Body.empty()) << Name << '\n' << High.out;
+    EXPECT_EQ(Body.find("switch"), std::string::npos) << Body;
+  }
+}
+
+TEST_F(JTE_X86_64,
+       ModuloBoundAuthenticatesExactPreLoadAddAfterScaledDifference) {
+  auto ImageOrErr = neverd::loadBinary(moduloDomainObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+
+  auto Recover = [&](const char *Name) {
+    const neverd::Symbol *Function = Image.findSymbol(Name);
+    EXPECT_NE(Function, nullptr) << Name;
+    if (!Function)
+      return neverd::LowFunc{};
+    neverd::Decoder Decoder;
+    EXPECT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    return Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  };
+
+  const neverd::LowFunc Ordered =
+      Recover("jt_modulo_add_after_scaled_difference");
+  ASSERT_EQ(Ordered.JumpTables.size(), 1u);
+  EXPECT_EQ(Ordered.JumpTables.front().Targets.size(), 7u);
+
+  const neverd::LowFunc Commuted =
+      Recover("jt_modulo_add_after_scaled_difference_commuted");
+  ASSERT_EQ(Commuted.JumpTables.size(), 1u);
+  EXPECT_EQ(Commuted.JumpTables.front().Targets.size(), 7u);
+
+  const neverd::LowFunc Foreign =
+      Recover("jt_modulo_add_after_scaled_difference_foreign");
+  EXPECT_TRUE(Foreign.JumpTables.empty())
+      << "a quotient derived from a different dividend must remain only a "
+         "failed modulus proposal";
+
+  const neverd::LowFunc WrongCapacity =
+      Recover("jt_modulo_add_after_scaled_difference_wrong_capacity");
+  EXPECT_TRUE(WrongCapacity.JumpTables.empty())
+      << "a five-slot relocation run cannot authorize a selector whose exact "
+         "producer is remainder modulo seven";
+
+  auto LLVM = liftToLLVMIRUnopt(moduloDomainObj());
+  ASSERT_EQ(LLVM.exitCode, 0) << LLVM.err;
+  for (const char *Name : {
+           "jt_modulo_add_after_scaled_difference_foreign",
+           "jt_modulo_add_after_scaled_difference_wrong_capacity",
+       }) {
+    const std::string Body = llvmFunctionBody(LLVM.out, Name);
+    ASSERT_FALSE(Body.empty()) << Name << "\n" << LLVM.out;
+    EXPECT_EQ(Body.find("switch i"), std::string::npos) << Name << "\n" << Body;
+  }
+}
+
+TEST_F(JTE_X86_64, ModuloBoundFinalReplayRequiresReachableProducer) {
+  auto ImageOrErr = neverd::loadBinary(moduloDomainObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_modulo_constant_selector_unreachable_rem");
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_modulo_unreachable_rem_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Table->Size, 5u * 8u);
+  EXPECT_EQ(std::count_if(Image.CodePtrRelocSlots.begin(),
+                          Image.CodePtrRelocSlots.end(),
+                          [&](neverd::va_t Slot) {
+                            return Slot >= Table->Addr &&
+                                   Slot < Table->Addr + Table->Size;
+                          }),
+            5)
+      << "the regression requires five physical code-pointer slots";
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  bool SawUnsignedRemainder = false;
+  for (const neverd::LowBlock &Block : Low.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops)
+      SawUnsignedRemainder |= Op.Opcode == neverd::NdOp::INT_REM;
+  ASSERT_TRUE(SawUnsignedRemainder)
+      << "the dead lexical block must still propose an unsigned remainder";
+  EXPECT_TRUE(Low.JumpTables.empty())
+      << "a literal selector must not borrow five cases from an unreachable "
+         "INT_REM occurrence";
+}
+
+TEST_F(JTE_X86_64, ModuloBoundSharedDAGStaysWithinEvidenceBudget) {
+  auto ImageOrErr = neverd::loadBinary(moduloDomainObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_modulo_shared_dag_budget");
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_modulo_shared_dag_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Table->Size, 5u * 8u);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+
+  size_t AddCount = 0;
+  size_t UnsignedRemainderCount = 0;
+  for (const neverd::LowBlock &Block : Low.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops) {
+      AddCount += Op.Opcode == neverd::NdOp::INT_ADD;
+      UnsignedRemainderCount += Op.Opcode == neverd::NdOp::INT_REM;
+    }
+  ASSERT_GE(AddCount, 12u)
+      << "the regression requires the shared doubling proposal DAG";
+  ASSERT_GE(UnsignedRemainderCount, 2u)
+      << "the regression requires an unrelated exact large modulus before "
+         "the real small producer";
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_EQ(Low.JumpTables.front().Targets.size(), 5u);
+}
+
+TEST(JumpTableProofPointTest, AnyDuplicateOccurrenceIsPermanentlyAmbiguous) {
+  std::map<neverd::detail::JumpTableProofPoint,
+           neverd::detail::JumpTableProofLocation>
+      Unique;
+  std::set<neverd::detail::JumpTableProofPoint> Ambiguous;
+  const neverd::detail::JumpTableProofPoint Point{0x1234, 2};
+
+  EXPECT_TRUE(neverd::detail::recordUniqueJumpTableProofPoint(
+      Unique, Ambiguous, Point, {/*Block=*/1, /*Op=*/3}));
+  ASSERT_EQ(Unique.count(Point), 1u);
+  EXPECT_TRUE(Ambiguous.empty());
+
+  EXPECT_FALSE(neverd::detail::recordUniqueJumpTableProofPoint(
+      Unique, Ambiguous, Point, {/*Block=*/1, /*Op=*/4}));
+  EXPECT_EQ(Unique.count(Point), 0u);
+  EXPECT_EQ(Ambiguous.count(Point), 1u);
+
+  EXPECT_FALSE(neverd::detail::recordUniqueJumpTableProofPoint(
+      Unique, Ambiguous, Point, {/*Block=*/2, /*Op=*/0}));
+  EXPECT_EQ(Unique.count(Point), 0u)
+      << "a third insertion must not resurrect a last-wins proof point";
+}
+
+TEST_F(JTE_X86_64, ModuloBoundProbesCompactCandidatesIndependently) {
+  auto ImageOrErr = neverd::loadBinary(moduloDomainObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_modulo_compact_probe_isolated");
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_modulo_compact_probe_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Table->Size, 5u * 4u);
+  EXPECT_EQ(std::count_if(Image.CodePtrRelocSlots.begin(),
+                          Image.CodePtrRelocSlots.end(),
+                          [&](neverd::va_t Slot) {
+                            return Slot >= Table->Addr &&
+                                   Slot < Table->Addr + Table->Size;
+                          }),
+            0)
+      << "the compact-table regression requires no relocation capacity";
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  size_t UnsignedRemainderCount = 0;
+  for (const neverd::LowBlock &Block : Low.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops)
+      UnsignedRemainderCount += Op.Opcode == neverd::NdOp::INT_REM;
+  ASSERT_GE(UnsignedRemainderCount, 2u)
+      << "the fixture requires exact `% 5` and `% 7` proposals";
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_EQ(Low.JumpTables.front().Targets.size(), 5u);
+}
+
 TEST_F(JTE_X86_64, GuardDomainReplaysAfterForeignRootIsRestored) {
   auto Low = liftToLowIR(moduloDomainObj());
   ASSERT_EQ(Low.exitCode, 0) << Low.err;
@@ -1369,6 +2045,63 @@ TEST_F(JTE_X86_64, MaskBoundReplaysTightenedDenseMerge) {
             (std::vector<int64_t>{0, 1, 2, 3}));
 }
 
+TEST_F(JTE_X86_64, DeadMaskDependencyDoesNotOverrideModuloDomain) {
+  auto ImageOrErr = neverd::loadBinary(identityCfgLaneObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_identity_dead_mask_dependency_mod5");
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_identity_dead_mask_dependency_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Table->Size, 32u * 4u);
+  EXPECT_EQ(std::count_if(Image.RelCodeRelocSlots.begin(),
+                          Image.RelCodeRelocSlots.end(),
+                          [&](neverd::va_t Slot) {
+                            return Slot >= Table->Addr &&
+                                   Slot < Table->Addr + Table->Size;
+                          }),
+            32)
+      << "the regression requires one continuous 32-slot relocation run";
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+
+  bool SawMask31 = false;
+  bool SawMultiplyByZero = false;
+  bool SawRemainder = false;
+  for (const neverd::LowBlock &Block : Low.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops) {
+      auto HasScalar = [&](uint64_t Value) {
+        for (uint8_t I = 0; I < Op.NumInputs; ++I)
+          if (Op.Inputs[I].isConst() && Op.Inputs[I].Offset == Value)
+            return true;
+        return false;
+      };
+      SawMask31 |= Op.Opcode == neverd::NdOp::INT_AND && HasScalar(31);
+      SawMultiplyByZero |=
+          Op.Opcode == neverd::NdOp::INT_MULT && HasScalar(0);
+      SawRemainder |= Op.Opcode == neverd::NdOp::INT_REM;
+    }
+  ASSERT_TRUE(SawMask31);
+  ASSERT_TRUE(SawMultiplyByZero);
+  ASSERT_TRUE(SawRemainder);
+
+  ASSERT_LE(Low.JumpTables.size(), 1u);
+  if (!Low.JumpTables.empty()) {
+    EXPECT_EQ(Low.JumpTables.front().Targets.size(), 5u)
+        << "x&31 is erased by multiplication by zero and cannot widen the "
+           "authenticated modulo domain";
+    EXPECT_EQ(Low.JumpTables.front().CaseLabels,
+              (std::vector<int64_t>{0, 1, 2, 3, 4}));
+  }
+}
+
 TEST_F(JTE_X86_64, MaskBoundDistinguishesStackPointerEpochs) {
   auto R = liftToLowIR(identityCfgLaneObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
@@ -1465,6 +2198,508 @@ TEST_F(JTE_X86_64, MaskBoundIntersectsNestedMaskDomains) {
   EXPECT_NE(Body.find("cst:0xC1D:4"), std::string::npos) << Body;
   EXPECT_EQ(Body.find("cst:0xC78:4"), std::string::npos) << Body;
   EXPECT_EQ(Body.find("cst:0xC7D:4"), std::string::npos) << Body;
+}
+
+TEST_F(JTE_X86_64, MaskBoundIntersectsTranslatedNestedMergeDomains) {
+  auto ImageOrErr = neverd::loadBinary(identityCfgLaneObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_identity_nested_mask_offset_merge");
+  ASSERT_NE(Function, nullptr);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  ASSERT_EQ(Low.JumpTables.front().Targets.size(), 2u);
+  EXPECT_EQ(Low.JumpTables.front().CaseLabels,
+            (std::vector<int64_t>{1, 2}));
+}
+
+TEST_F(JTE_X86_64, MaskRawDenseNestedPreciseReplayFailsClosed) {
+  auto ImageOrErr = neverd::loadBinary(identityCfgLaneObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_identity_nested_mask_offset_merge");
+  ASSERT_NE(Function, nullptr);
+
+  auto BuildWithBudget = [&](std::optional<size_t> Budget) {
+    neverd::Decoder Decoder;
+    EXPECT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    Builder.setMaskFixedPointEvidenceBudgetForTesting(Budget);
+    return Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  };
+
+  const neverd::LowFunc Full = BuildWithBudget(std::nullopt);
+  ASSERT_EQ(Full.JumpTables.size(), 1u);
+  ASSERT_EQ(Full.JumpTables.front().Targets.size(), 2u);
+  const neverd::va_t Branch = Full.JumpTables.front().InsnAddr;
+
+  // The capacity-shaped outer mask schedules an eight-slot raw batch, while
+  // the nested translated mask proves only cases {1,2}.  Sweep bounded
+  // allowances across the raw-to-precise handoff: an unfinished precise replay
+  // may remain opaque or eventually recover the exact two cases, but must never
+  // fall through and publish the outer eight-slot capacity.  Restoring the old
+  // Bounds.cpp fallthrough after a failed/incomplete precise replay makes an
+  // intermediate allowance publish eight targets and turns this test RED.
+  constexpr size_t Budgets[] = {
+      8192,  16384, 32768, 65536,
+      131072, 262144,
+      neverd::limits::kMaxJumpTableMaskFixedPointEvidenceWork};
+  bool SawOpaque = false;
+  bool SawExact = false;
+  for (size_t Budget : Budgets) {
+    const neverd::LowFunc Low = BuildWithBudget(Budget);
+    if (Low.JumpTables.empty()) {
+      SawOpaque = true;
+      EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
+      EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+      EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(Branch), 1u);
+      continue;
+    }
+
+    ASSERT_EQ(Low.JumpTables.size(), 1u) << "budget=" << Budget;
+    EXPECT_EQ(Low.JumpTables.front().Targets.size(), 2u)
+        << "raw capacity widened a failed precise replay; budget=" << Budget;
+    EXPECT_EQ(Low.JumpTables.front().CaseLabels,
+              (std::vector<int64_t>{1, 2}))
+        << "budget=" << Budget;
+    SawExact = true;
+  }
+  EXPECT_TRUE(SawOpaque)
+      << "the sweep must cross an incomplete precise-replay boundary";
+  EXPECT_TRUE(SawExact)
+      << "the largest allowance must recover the exact domain";
+}
+
+TEST_F(JTE_X86_64,
+       MaskFixedPointEvidenceBudgetExhaustionIsTransactionalAndOpaque) {
+  auto ImageOrErr = neverd::loadBinary(identityCfgLaneObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_identity_nested_mask_offset_merge");
+  ASSERT_NE(Function, nullptr);
+
+  auto BuildWithBudget = [&](std::optional<size_t> Budget,
+                             bool *HasPendingExploration = nullptr) {
+    neverd::Decoder Decoder;
+    EXPECT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    Builder.setMaskFixedPointEvidenceBudgetForTesting(Budget);
+    neverd::LowFunc Low =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    if (HasPendingExploration)
+      *HasPendingExploration =
+          Builder.hasMaskFixedPointExplorationTargetsForTesting();
+    return Low;
+  };
+
+  const neverd::LowFunc Full = BuildWithBudget(std::nullopt);
+  ASSERT_EQ(Full.JumpTables.size(), 1u);
+  const neverd::va_t Branch = Full.JumpTables.front().InsnAddr;
+
+  // This allowance pays the physical-prefix/seed/core work and recovers the
+  // table if resolver-graph charging is removed.  With complete accounting it
+  // is exhausted inside graph/value evidence, so this locks the transactional
+  // fail-closed boundary instead of failing before the code under test runs.
+  bool HasPendingExploration = true;
+  const neverd::LowFunc Exhausted =
+      BuildWithBudget(size_t{8192}, &HasPendingExploration);
+  EXPECT_TRUE(Exhausted.JumpTables.empty());
+  EXPECT_TRUE(lowFunctionHasOpcode(Exhausted, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(lowFunctionHasOpcode(Exhausted, neverd::NdOp::INDIR_CALL));
+  EXPECT_EQ(Exhausted.UnsafeIndirectBranchAddresses.count(Branch), 1u);
+  EXPECT_FALSE(HasPendingExploration)
+      << "budget exhaustion must not retain provisional case targets";
+}
+
+TEST_F(JTE_X86_64, MaskFixedPointRejectsSelfBootstrappedCaseMasks) {
+  auto ImageOrErr = neverd::loadBinary(identityCfgLaneObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_identity_mask_fp_self_bootstrap");
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_identity_mask_fp_self_bootstrap_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Table->Size, 8u * 8u);
+  EXPECT_EQ(std::count_if(Image.CodePtrRelocSlots.begin(),
+                          Image.CodePtrRelocSlots.end(),
+                          [&](neverd::va_t Slot) {
+                            return Slot >= Table->Addr &&
+                                   Slot < Table->Addr + Table->Size;
+                          }),
+            8)
+      << "the regression requires eight physical code-pointer slots";
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  bool SawMask7 = false;
+  const neverd::LowBlock *Dispatch = nullptr;
+  neverd::va_t DispatchAddr = neverd::InvalidVA;
+  for (const neverd::LowBlock &Block : Low.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops) {
+      if (Op.Opcode == neverd::NdOp::INT_AND)
+        for (uint8_t I = 0; I < Op.NumInputs; ++I)
+          SawMask7 |= Op.Inputs[I].isConst() && Op.Inputs[I].Offset == 7;
+      if (Op.Opcode == neverd::NdOp::INDIR_BR) {
+        ASSERT_EQ(Dispatch, nullptr)
+            << "the fixture must contain one indirect dispatch";
+        Dispatch = &Block;
+        DispatchAddr = Op.Addr;
+      }
+    }
+  ASSERT_TRUE(SawMask7)
+      << "the case-local x&7 producer must be present in LowIR";
+  ASSERT_NE(Dispatch, nullptr);
+  EXPECT_TRUE(Dispatch->Succs.empty());
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(DispatchAddr), 1u);
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(Low.JumpTables.empty());
+}
+
+TEST_F(JTE_X86_64, MaskFixedPointRejectsLateOutOfDomainSelector) {
+  auto ImageOrErr = neverd::loadBinary(identityCfgLaneObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_identity_mask_fp_late_escape");
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_identity_mask_fp_late_escape_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Table->Size, 8u * 8u);
+  EXPECT_EQ(std::count_if(Image.CodePtrRelocSlots.begin(),
+                          Image.CodePtrRelocSlots.end(),
+                          [&](neverd::va_t Slot) {
+                            return Slot >= Table->Addr &&
+                                   Slot < Table->Addr + Table->Size;
+                          }),
+            8)
+      << "the regression requires eight physical code-pointer slots";
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  bool SawMask7 = false;
+  bool SawLiteral15 = false;
+  const neverd::LowBlock *Dispatch = nullptr;
+  neverd::va_t DispatchAddr = neverd::InvalidVA;
+  for (const neverd::LowBlock &Block : Low.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops) {
+      if (Op.Opcode == neverd::NdOp::INT_AND)
+        for (uint8_t I = 0; I < Op.NumInputs; ++I)
+          SawMask7 |= Op.Inputs[I].isConst() && Op.Inputs[I].Offset == 7;
+      for (uint8_t I = 0; I < Op.NumInputs; ++I)
+        SawLiteral15 |= Op.Inputs[I].isConst() && Op.Inputs[I].Offset == 15;
+      if (Op.Opcode == neverd::NdOp::INDIR_BR) {
+        ASSERT_EQ(Dispatch, nullptr)
+            << "the fixture must contain one indirect dispatch";
+        Dispatch = &Block;
+        DispatchAddr = Op.Addr;
+      }
+    }
+  ASSERT_TRUE(SawMask7)
+      << "case zero must expose the eight-value mask domain";
+  ASSERT_TRUE(SawLiteral15)
+      << "case seven must expose the late out-of-domain selector";
+  ASSERT_NE(Dispatch, nullptr);
+  EXPECT_TRUE(Dispatch->Succs.empty());
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(DispatchAddr), 1u);
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(Low.JumpTables.empty());
+}
+
+TEST_F(JTE_X86_64, MaskFixedPointReplaysCompleteEntryDomain) {
+  auto ImageOrErr = neverd::loadBinary(identityCfgLaneObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_identity_mask_fp_entry_bound_late_escape");
+  const neverd::Symbol *Table = Image.findSymbol(
+      "jt_identity_mask_fp_entry_bound_late_escape_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Table->Size, 8u * 8u);
+  EXPECT_EQ(std::count_if(Image.CodePtrRelocSlots.begin(),
+                          Image.CodePtrRelocSlots.end(),
+                          [&](neverd::va_t Slot) {
+                            return Slot >= Table->Addr &&
+                                   Slot < Table->Addr + Table->Size;
+                          }),
+            8)
+      << "the regression requires eight physical code-pointer slots";
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  bool SawMask7 = false;
+  bool SawLiteral15 = false;
+  const neverd::LowBlock *Dispatch = nullptr;
+  neverd::va_t DispatchAddr = neverd::InvalidVA;
+  for (const neverd::LowBlock &Block : Low.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops) {
+      if (Op.Opcode == neverd::NdOp::INT_AND)
+        for (uint8_t I = 0; I < Op.NumInputs; ++I)
+          SawMask7 |= Op.Inputs[I].isConst() && Op.Inputs[I].Offset == 7;
+      for (uint8_t I = 0; I < Op.NumInputs; ++I)
+        SawLiteral15 |= Op.Inputs[I].isConst() && Op.Inputs[I].Offset == 15;
+      if (Op.Opcode == neverd::NdOp::INDIR_BR) {
+        ASSERT_EQ(Dispatch, nullptr)
+            << "the fixture must contain one indirect dispatch";
+        Dispatch = &Block;
+        DispatchAddr = Op.Addr;
+      }
+    }
+  ASSERT_TRUE(SawMask7) << "entry must expose the initial eight-value domain";
+  ASSERT_TRUE(SawLiteral15)
+      << "case seven must expose the post-edge out-of-domain selector";
+  ASSERT_NE(Dispatch, nullptr);
+  EXPECT_TRUE(Dispatch->Succs.empty());
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(DispatchAddr), 1u);
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(Low.JumpTables.empty());
+}
+
+TEST_F(JTE_X86_64, MaskFixedPointRejectsPrescaledBackedgeWidening) {
+  auto ImageOrErr = neverd::loadBinary(identityCfgLaneObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_identity_mask_fp_prescaled_late_escape");
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_identity_mask_fp_prescaled_late_escape_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Table->Size, 8u * 8u);
+  EXPECT_EQ(std::count_if(Image.CodePtrRelocSlots.begin(),
+                          Image.CodePtrRelocSlots.end(),
+                          [&](neverd::va_t Slot) {
+                            return Slot >= Table->Addr &&
+                                   Slot < Table->Addr + Table->Size;
+                          }),
+            8)
+      << "the regression requires eight physical code-pointer slots";
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  bool SawMask56 = false;
+  bool SawLiteral120 = false;
+  const neverd::LowBlock *Dispatch = nullptr;
+  neverd::va_t DispatchAddr = neverd::InvalidVA;
+  for (const neverd::LowBlock &Block : Low.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops) {
+      if (Op.Opcode == neverd::NdOp::INT_AND)
+        for (uint8_t I = 0; I < Op.NumInputs; ++I)
+          SawMask56 |= Op.Inputs[I].isConst() && Op.Inputs[I].Offset == 56;
+      for (uint8_t I = 0; I < Op.NumInputs; ++I)
+        SawLiteral120 |= Op.Inputs[I].isConst() && Op.Inputs[I].Offset == 120;
+      if (Op.Opcode == neverd::NdOp::INDIR_BR) {
+        ASSERT_EQ(Dispatch, nullptr)
+            << "the fixture must contain one indirect dispatch";
+        Dispatch = &Block;
+        DispatchAddr = Op.Addr;
+      }
+    }
+  ASSERT_TRUE(SawMask56)
+      << "entry must expose the initial pre-scaled eight-value domain";
+  ASSERT_TRUE(SawLiteral120)
+      << "case seven must expose the widened pre-scaled selector";
+  EXPECT_TRUE(Low.JumpTables.empty());
+  if (Dispatch) {
+    EXPECT_TRUE(Dispatch->Succs.empty());
+    EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(DispatchAddr), 1u);
+  } else {
+    EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+    EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::RETURN));
+  }
+}
+
+TEST_F(JTE_X86_64,
+       SiblingCandidatesPublishFromOneStageSnapshotWithOwnOccurrences) {
+  auto ImageOrErr = neverd::loadBinary(identityCfgLaneObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+
+  struct ExpectedSibling {
+    const char *BeginName;
+    const char *EndName;
+  };
+
+  auto CheckLayout = [&](const char *FunctionName, const char *TableName,
+                         const std::vector<const char *> &TargetNames,
+                         const std::vector<ExpectedSibling> &AddressOrder) {
+    const neverd::Symbol *Function = Image.findSymbol(FunctionName);
+    const neverd::Symbol *Table = Image.findSymbol(TableName);
+    ASSERT_NE(Function, nullptr) << FunctionName;
+    ASSERT_NE(Table, nullptr) << TableName;
+    ASSERT_EQ(TargetNames.size(), 4u);
+    ASSERT_EQ(AddressOrder.size(), 5u);
+
+    std::vector<const neverd::Symbol *> Targets;
+    for (const char *TargetName : TargetNames) {
+      const neverd::Symbol *Target = Image.findSymbol(TargetName);
+      ASSERT_NE(Target, nullptr) << TargetName;
+      Targets.push_back(Target);
+    }
+
+    std::vector<const neverd::Symbol *> Begins;
+    std::vector<const neverd::Symbol *> Ends;
+    for (const ExpectedSibling &Expected : AddressOrder) {
+      const neverd::Symbol *Begin = Image.findSymbol(Expected.BeginName);
+      const neverd::Symbol *End = Image.findSymbol(Expected.EndName);
+      ASSERT_NE(Begin, nullptr) << Expected.BeginName;
+      ASSERT_NE(End, nullptr) << Expected.EndName;
+      ASSERT_LT(Begin->Addr, End->Addr);
+      if (!Ends.empty())
+        ASSERT_LE(Ends.back()->Addr, Begin->Addr)
+            << "the mirror must reverse only the sibling address order";
+      Begins.push_back(Begin);
+      Ends.push_back(End);
+    }
+
+    ASSERT_EQ(Table->Size, 4u * 8u);
+    EXPECT_EQ(std::count_if(Image.CodePtrRelocSlots.begin(),
+                            Image.CodePtrRelocSlots.end(),
+                            [&](neverd::va_t Slot) {
+                              return Slot >= Table->Addr &&
+                                     Slot < Table->Addr + Table->Size;
+                            }),
+              4)
+        << "the fixture requires four conditional code-root relocations";
+
+    neverd::Decoder Decoder;
+    ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    const neverd::LowFunc Low =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    ASSERT_EQ(Low.JumpTables.size(), AddressOrder.size())
+        << FunctionName
+        << " must publish the entry and all four cyclic siblings as one "
+           "stage batch";
+    EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL))
+        << "a lost sibling must not be reclassified as an indirect tail call";
+    EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty())
+        << "every cyclic sibling has a complete four-value domain";
+
+    auto FindIn = [&](const neverd::Symbol &Begin,
+                      const neverd::Symbol &End)
+        -> const neverd::JumpTable * {
+      const neverd::JumpTable *Found = nullptr;
+      for (const neverd::JumpTable &JT : Low.JumpTables) {
+        if (JT.InsnAddr < Begin.Addr || JT.InsnAddr >= End.Addr)
+          continue;
+        if (Found)
+          return nullptr;
+        Found = &JT;
+      }
+      return Found;
+    };
+
+    std::set<std::pair<neverd::va_t, int>> SelectorOccurrences;
+    std::set<std::pair<neverd::va_t, int>> LoadOccurrences;
+    std::set<const neverd::JumpTable *> SeenTables;
+    for (size_t I = 0; I < AddressOrder.size(); ++I) {
+      const ExpectedSibling &Expected = AddressOrder[I];
+      const neverd::Symbol &Begin = *Begins[I];
+      const neverd::Symbol &End = *Ends[I];
+      const neverd::JumpTable *JT = FindIn(Begin, End);
+      ASSERT_NE(JT, nullptr) << Expected.BeginName;
+      ASSERT_TRUE(SeenTables.insert(JT).second)
+          << "one branch cannot stand in for a sibling candidate";
+
+      EXPECT_EQ(JT->BaseAddr, Table->Addr);
+      EXPECT_TRUE(JT->HasBaseAddr);
+      ASSERT_EQ(JT->Targets.size(), Targets.size())
+          << "every sibling must publish its own complete four-value domain";
+      for (const neverd::Symbol *Target : Targets)
+        EXPECT_EQ(std::count(JT->Targets.begin(), JT->Targets.end(),
+                             Target->Addr),
+                  1)
+            << "the candidate graph must retain every sibling consumer";
+
+      ASSERT_EQ(JT->SelectorUseRefs.size(), 1u)
+          << "a sibling JumpTableInfo must not import the other branch's "
+             "selector alternatives";
+      const neverd::JumpTableSelectorUseRef &Selector =
+          JT->SelectorUseRefs.front();
+      EXPECT_GE(Selector.Addr, Begin.Addr);
+      EXPECT_LT(Selector.Addr, End.Addr)
+          << "selector occurrence escaped its owning sibling";
+      EXPECT_NE(findExactLowOp(Low, Selector.Addr, Selector.Seq,
+                               Selector.ExpectedOpcode),
+                nullptr);
+      EXPECT_TRUE(
+          SelectorOccurrences.insert({Selector.Addr, Selector.Seq}).second)
+          << "numeric register equality is not exact occurrence identity";
+
+      ASSERT_EQ(JT->AuthenticatedTableLoads.size(), 1u)
+          << "a sibling JumpTableInfo must retain only its own table LOAD";
+      const neverd::JumpTableOpOccurrence &Load =
+          JT->AuthenticatedTableLoads.front();
+      EXPECT_GE(Load.Addr, Begin.Addr);
+      EXPECT_LT(Load.Addr, End.Addr)
+          << "authenticated LOAD occurrence escaped its owning sibling";
+      EXPECT_NE(
+          findExactLowOp(Low, Load.Addr, Load.Seq, neverd::NdOp::LOAD),
+          nullptr);
+      EXPECT_TRUE(LoadOccurrences.insert({Load.Addr, Load.Seq}).second)
+          << "shared storage does not make sibling LOAD occurrences aliases";
+    }
+  };
+
+  CheckLayout(
+      "jt_identity_sibling_snapshot_narrow_first",
+      "jt_identity_sibling_nf_table",
+      {"jt_identity_sibling_nf_t0_begin",
+       "jt_identity_sibling_nf_t1_begin",
+       "jt_identity_sibling_nf_t2_begin",
+       "jt_identity_sibling_nf_t3_begin"},
+      {{"jt_identity_sibling_nf_entry_begin",
+        "jt_identity_sibling_nf_entry_end"},
+       {"jt_identity_sibling_nf_t0_begin", "jt_identity_sibling_nf_t0_end"},
+       {"jt_identity_sibling_nf_t1_begin", "jt_identity_sibling_nf_t1_end"},
+       {"jt_identity_sibling_nf_t2_begin", "jt_identity_sibling_nf_t2_end"},
+       {"jt_identity_sibling_nf_t3_begin", "jt_identity_sibling_nf_t3_end"}});
+  CheckLayout(
+      "jt_identity_sibling_snapshot_wide_first",
+      "jt_identity_sibling_wf_table",
+      {"jt_identity_sibling_wf_t0_begin",
+       "jt_identity_sibling_wf_t1_begin",
+       "jt_identity_sibling_wf_t2_begin",
+       "jt_identity_sibling_wf_t3_begin"},
+      {{"jt_identity_sibling_wf_entry_begin",
+        "jt_identity_sibling_wf_entry_end"},
+       {"jt_identity_sibling_wf_t3_begin", "jt_identity_sibling_wf_t3_end"},
+       {"jt_identity_sibling_wf_t2_begin", "jt_identity_sibling_wf_t2_end"},
+       {"jt_identity_sibling_wf_t1_begin", "jt_identity_sibling_wf_t1_end"},
+       {"jt_identity_sibling_wf_t0_begin", "jt_identity_sibling_wf_t0_end"}});
 }
 
 TEST_F(JTE_X86_64, MaskDomainMustFitAuthenticatedPhysicalStorage) {
@@ -2155,6 +3390,114 @@ TEST_F(JTE_X86_64, EvidenceBudgetDoesNotCaptureIndexedCallbackTailCall) {
   EXPECT_EQ(LLVMBody.find("switch i"), std::string::npos) << LLVMBody;
 }
 
+TEST_F(JTE_X86_64,
+       IncompleteMaskDomainDoesNotCaptureIndexedCallbackTailCall) {
+  auto ImageOrErr = neverd::loadBinary(maskEqualBoundObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_identity_incomplete_mask_callback_table");
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Table->Size, 2u * 8u);
+  EXPECT_EQ(std::count_if(Image.CodePtrRelocSlots.begin(),
+                          Image.CodePtrRelocSlots.end(),
+                          [&](neverd::va_t Slot) {
+                            return Slot >= Table->Addr &&
+                                   Slot < Table->Addr + Table->Size;
+                          }),
+            2);
+
+  DirectPipelineRun Run = runPipelineWithEvidenceBudget(Image, 0);
+  ASSERT_TRUE(Run.Result.Success) << Run.Result.Error;
+  const neverd::LowFunc *Low = findLowFunction(
+      Run.Result, "jt_identity_incomplete_mask_callback_tailcall");
+  ASSERT_NE(Low, nullptr);
+  EXPECT_TRUE(lowFunctionHasOpcode(*Low, neverd::NdOp::INT_AND));
+  EXPECT_TRUE(lowFunctionHasOpcode(*Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(lowFunctionHasOpcode(*Low, neverd::NdOp::RETURN));
+  EXPECT_FALSE(lowFunctionHasOpcode(*Low, neverd::NdOp::INDIR_BR));
+  EXPECT_TRUE(Low->JumpTables.empty());
+  EXPECT_TRUE(Low->UnsafeIndirectBranchAddresses.empty());
+
+  const std::string LLVMBody = llvmFunctionBody(
+      Run.LLVMIR, "jt_identity_incomplete_mask_callback_tailcall");
+  ASSERT_FALSE(LLVMBody.empty()) << Run.LLVMIR;
+  EXPECT_NE(LLVMBody.find("call"), std::string::npos) << LLVMBody;
+  EXPECT_NE(LLVMBody.find("ret"), std::string::npos) << LLVMBody;
+  EXPECT_EQ(LLVMBody.find("llvm.trap"), std::string::npos) << LLVMBody;
+  EXPECT_EQ(LLVMBody.find("switch i"), std::string::npos) << LLVMBody;
+}
+
+TEST_F(JTE_X86_64,
+       IncompleteMaskDomainValidatesWholeSizedCallbackObject) {
+  auto ImageOrErr = neverd::loadBinary(maskEqualBoundObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function = Image.findSymbol(
+      "jt_identity_incomplete_mask_prefix_callback_tailcall");
+  const neverd::Symbol *Table = Image.findSymbol(
+      "jt_identity_incomplete_mask_prefix_callback_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Table->Size, 4u * 8u);
+  EXPECT_EQ(std::count_if(Image.CodePtrRelocSlots.begin(),
+                          Image.CodePtrRelocSlots.end(),
+                          [&](neverd::va_t Slot) {
+                            return Slot >= Table->Addr &&
+                                   Slot < Table->Addr + Table->Size;
+                          }),
+            4);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INT_AND));
+  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::RETURN));
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
+  EXPECT_TRUE(Low.JumpTables.empty());
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
+TEST_F(JTE_X86_64,
+       IncompleteMaskDomainRejectsNestedFunctionSymbolsWithoutEntrySet) {
+  auto ImageOrErr = neverd::loadBinary(maskEqualBoundObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function = Image.findSymbol(
+      "jt_identity_incomplete_mask_nested_function_tailcall");
+  const neverd::Symbol *Table = Image.findSymbol(
+      "jt_identity_incomplete_mask_nested_function_table");
+  const neverd::Symbol *CallbackA =
+      Image.findSymbol("jt_identity_nested_callback_a");
+  const neverd::Symbol *CallbackB =
+      Image.findSymbol("jt_identity_nested_callback_b");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_NE(CallbackA, nullptr);
+  ASSERT_NE(CallbackB, nullptr);
+  ASSERT_EQ(Table->Size, 2u * 8u);
+  ASSERT_TRUE(Image.hasFunctionSymbolAt(CallbackA->Addr));
+  ASSERT_TRUE(Image.hasFunctionSymbolAt(CallbackB->Addr));
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INT_AND));
+  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::RETURN));
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
+  EXPECT_TRUE(Low.JumpTables.empty());
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
 TEST_F(JTE_X86_64, EvidenceBudgetDoesNotClaimNextEntryOnlyCallbackEnvelope) {
   auto ImageOrErr = neverd::loadBinary(maskEqualBoundObj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
@@ -2444,6 +3787,53 @@ TEST_F(JTE_X86_64, ComputedGotoRecoversDispatch) {
       << R.out;
 }
 
+TEST_F(JTE_X86_64,
+       StackTableEvidenceBudgetExhaustionIsTransactionalAndOpaque) {
+  auto ImageOrErr = neverd::loadBinary(cgotoObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function = Image.findSymbol("cg_local_budget");
+  ASSERT_NE(Function, nullptr);
+
+  auto BuildWithBudget = [&](size_t Budget) {
+    neverd::Decoder Decoder;
+    EXPECT_TRUE(Decoder.init(neverd::Arch::X64));
+    neverd::CFGBuilder Builder;
+    Builder.setStackTableEvidenceBudgetForTesting(Budget);
+    return Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  };
+  auto Recovered = [](const neverd::LowFunc &Low) {
+    return !Low.JumpTables.empty();
+  };
+
+  const neverd::LowFunc Full =
+      BuildWithBudget(neverd::limits::kMaxJumpTableEvidenceWork);
+  ASSERT_TRUE(Recovered(Full));
+  ASSERT_EQ(Full.JumpTables.size(), 1u);
+  const neverd::va_t Branch = Full.JumpTables.front().InsnAddr;
+
+  size_t Lo = 1;
+  size_t Hi = neverd::limits::kMaxJumpTableEvidenceWork;
+  while (Lo < Hi) {
+    const size_t Mid = Lo + (Hi - Lo) / 2;
+    if (Recovered(BuildWithBudget(Mid)))
+      Hi = Mid;
+    else
+      Lo = Mid + 1;
+  }
+  const size_t MinimumSuccessfulBudget = Lo;
+  ASSERT_GT(MinimumSuccessfulBudget, 0u);
+  EXPECT_TRUE(Recovered(BuildWithBudget(MinimumSuccessfulBudget)));
+
+  const neverd::LowFunc Exhausted =
+      BuildWithBudget(MinimumSuccessfulBudget - 1);
+  EXPECT_TRUE(Exhausted.JumpTables.empty());
+  EXPECT_TRUE(lowFunctionHasOpcode(Exhausted, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(lowFunctionHasOpcode(Exhausted, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(Exhausted.UnsafeIndirectBranchAddresses.count(Branch));
+}
+
 TEST_F(JTE_X86_64, PatchELFExecutable) {
   auto ElfExe = fs::path(TEST_OBJ_DIR) / "test_jumptable_enhanced_elf";
   if (!fs::exists(ElfExe))
@@ -2480,6 +3870,71 @@ static fs::path pageoffAlternativesA64Obj() {
 
 static fs::path pageoffNominalMissA64Obj() {
   return fs::path(TEST_OBJ_DIR) / "test_pageoff_nominal_miss_a64.o";
+}
+
+static neverd::BinaryImage a64StrictSourceSpanImage(bool RightWritable = false) {
+  neverd::BinaryImage Image;
+  Image.Arch = neverd::Arch::AArch64;
+  Image.Format = neverd::BinaryFormat::ELF;
+  Image.Bits = neverd::Bitness::Bits64;
+  Image.IsRelocatable = false;
+
+  neverd::Segment Mapped;
+  Mapped.Name = "rodata";
+  Mapped.VA = 0x1000;
+  Mapped.Size = 0x20;
+  Mapped.FileSz = 0x20;
+  Mapped.Flags = neverd::SegmentFlags::Readable;
+  Mapped.Data.resize(0x20);
+  Image.Segments.push_back(std::move(Mapped));
+
+  neverd::Section Left;
+  Left.Name = ".rodata.left";
+  Left.VA = 0x1000;
+  Left.Size = 0x10;
+  Left.FileSz = 0x10;
+  Left.Flags = neverd::SegmentFlags::Readable;
+  Image.Sections.push_back(std::move(Left));
+
+  neverd::Section Right;
+  Right.Name = ".rodata.right";
+  Right.VA = 0x1010;
+  Right.Size = 0x10;
+  Right.FileSz = 0x10;
+  Right.Flags = neverd::SegmentFlags::Readable;
+  if (RightWritable)
+    Right.Flags = Right.Flags | neverd::SegmentFlags::Writable;
+  Image.Sections.push_back(std::move(Right));
+  return Image;
+}
+
+TEST_F(JTE_AArch64, RelocationFreeLoadCannotCrossSourceOwner) {
+  const neverd::BinaryImage Image = a64StrictSourceSpanImage();
+  ASSERT_EQ(neverd::exactImmutableDataSpanOwner(Image, 0x1008, 8, 0x1000),
+            std::optional<neverd::va_t>{0x1000});
+  EXPECT_FALSE(
+      neverd::exactImmutableDataSpanOwner(Image, 0x100c, 8, 0x1000))
+      << "an authenticated ADRP/ADD address does not authorize LOAD bytes "
+         "owned by the adjacent object";
+}
+
+TEST_F(JTE_AArch64, RelocationFreeLoadCannotDereferenceOwnerOnePast) {
+  const neverd::BinaryImage Image = a64StrictSourceSpanImage();
+  ASSERT_EQ(neverd::exactImmutableDataSpanOwner(Image, 0x1010, 8, 0x1010),
+            std::optional<neverd::va_t>{0x1010});
+  EXPECT_FALSE(
+      neverd::exactImmutableDataSpanOwner(Image, 0x1010, 8, 0x1000))
+      << "the left object's legal one-past pointer is not authority to read "
+         "the adjacent right object";
+}
+
+TEST_F(JTE_AArch64, RelocationFreeMemcpyRejectsRuntimeWritableSourceSpan) {
+  const neverd::BinaryImage Image = a64StrictSourceSpanImage(true);
+  ASSERT_EQ(neverd::exactImmutableDataSpanOwner(Image, 0x1000, 0x10, 0x1000),
+            std::optional<neverd::va_t>{0x1000});
+  EXPECT_FALSE(
+      neverd::exactImmutableDataSpanOwner(Image, 0x1010, 0x10, 0x1010))
+      << "the exact memcpy length must remain inside immutable source bytes";
 }
 
 static fs::path widthMismatchA64Obj() {
@@ -2524,6 +3979,89 @@ TEST_F(JTE_AArch64, NestedSwitchLifts) {
   auto R = liftToHighIR(jteA64Obj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
   EXPECT_FALSE(R.out.empty());
+}
+
+TEST_F(JTE_AArch64, MaskBoundRejectsConstantSelectorWithUnreachableProducer) {
+  auto ImageOrErr = neverd::loadBinary(indexIdentityA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("a64_constant_selector_unreachable_mask");
+  const neverd::Symbol *Table =
+      Image.findSymbol("a64_constant_selector_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Table->Size, 4u * 8u);
+  EXPECT_EQ(std::count_if(Image.CodePtrRelocSlots.begin(),
+                          Image.CodePtrRelocSlots.end(),
+                          [&](neverd::va_t Slot) {
+                            return Slot >= Table->Addr &&
+                                   Slot < Table->Addr + Table->Size;
+                          }),
+            4)
+      << "the regression requires four absolute code-pointer relocations";
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  bool SawDeadMask3 = false;
+  for (const neverd::LowBlock &Block : Low.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops)
+      if (Op.Opcode == neverd::NdOp::INT_AND)
+        for (uint8_t I = 0; I < Op.NumInputs; ++I)
+          SawDeadMask3 |= Op.Inputs[I].isConst() && Op.Inputs[I].Offset == 3;
+  ASSERT_TRUE(SawDeadMask3)
+      << "the regression requires the unreachable lexical x&3 producer to "
+         "be present in LowIR";
+  ASSERT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
+  EXPECT_TRUE(Low.JumpTables.empty())
+      << "a literal-zero selector must not borrow four cases from a "
+         "disconnected lexical x&3 producer";
+}
+
+TEST_F(JTE_AArch64, ModuloBoundRejectsDestructiveDivisionNumerator) {
+  auto ImageOrErr = neverd::loadBinary(indexIdentityA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("a64_destructive_udiv_is_not_remainder");
+  const neverd::Symbol *Table =
+      Image.findSymbol("a64_destructive_udiv_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Table->Size, 5u * 8u);
+  EXPECT_EQ(std::count_if(Image.CodePtrRelocSlots.begin(),
+                          Image.CodePtrRelocSlots.end(),
+                          [&](neverd::va_t Slot) {
+                            return Slot >= Table->Addr &&
+                                   Slot < Table->Addr + Table->Size;
+                          }),
+            5)
+      << "the regression requires five physical code-pointer slots";
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  bool SawUnsignedDivision = false;
+  bool SawMultiply = false;
+  bool SawSubtract = false;
+  for (const neverd::LowBlock &Block : Low.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops) {
+      SawUnsignedDivision |= Op.Opcode == neverd::NdOp::INT_DIV;
+      SawMultiply |= Op.Opcode == neverd::NdOp::INT_MULT;
+      SawSubtract |= Op.Opcode == neverd::NdOp::INT_SUB;
+    }
+  ASSERT_TRUE(SawUnsignedDivision);
+  ASSERT_TRUE(SawMultiply);
+  ASSERT_TRUE(SawSubtract);
+  EXPECT_TRUE(Low.JumpTables.empty())
+      << "q-q*N after a destructive UDIV is not an unsigned remainder";
 }
 
 TEST_F(JTE_AArch64, CompactIndexAcceptsExplicitWToXZeroExtension) {
@@ -3252,4 +4790,284 @@ TEST_F(JTE_ARM32, WorldClassRecoversControlFlow) {
   EXPECT_TRUE(R.contains("switch i"))
       << "Expected at least one recovered switch on ARM32:\n"
       << R.out;
+}
+
+TEST_F(JTE_X86_64, MaskBoundAcceptsBitSetBeforeNegativeOffset) {
+  auto ImageOrErr = neverd::loadBinary(identityCfgLaneObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_identity_mask_or_negative_offset");
+  const neverd::Symbol *TableSymbol =
+      Image.findSymbol("jt_identity_mask_or_negative_offset_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(TableSymbol, nullptr);
+  ASSERT_EQ(TableSymbol->Size, 8u * 4u);
+  EXPECT_EQ(std::count_if(Image.RelCodeRelocSlots.begin(),
+                          Image.RelCodeRelocSlots.end(),
+                          [&](neverd::va_t Slot) {
+                            return Slot >= TableSymbol->Addr &&
+                                   Slot < TableSymbol->Addr + TableSymbol->Size;
+                          }),
+            8)
+      << "the odd poison slots must be real adjacent code relocations";
+
+  auto SymbolAddress = [&](const char *Name) {
+    const neverd::Symbol *Symbol = Image.findSymbol(Name);
+    EXPECT_NE(Symbol, nullptr) << Name;
+    return Symbol ? Symbol->Addr : neverd::va_t{0};
+  };
+  const std::vector<neverd::va_t> ExpectedTargets = {
+      SymbolAddress("jt_identity_mask_or_negative_case0"),
+      SymbolAddress("jt_identity_mask_or_negative_case2"),
+      SymbolAddress("jt_identity_mask_or_negative_case4"),
+      SymbolAddress("jt_identity_mask_or_negative_case6")};
+  const std::vector<neverd::va_t> PoisonTargets = {
+      SymbolAddress("jt_identity_mask_or_negative_poison1"),
+      SymbolAddress("jt_identity_mask_or_negative_poison3"),
+      SymbolAddress("jt_identity_mask_or_negative_poison5"),
+      SymbolAddress("jt_identity_mask_or_negative_poison7")};
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  const neverd::JumpTable &Table = Low.JumpTables.front();
+  EXPECT_EQ(Table.CaseLabels, (std::vector<int64_t>{0, 2, 4, 6}));
+  EXPECT_TRUE(Table.HasDispatchSlotMap);
+  EXPECT_EQ(Table.SlotIndices, (std::vector<uint32_t>{0, 2, 4, 6}));
+  EXPECT_EQ(Table.Targets, ExpectedTargets)
+      << "the low-bit OR proves only the four even physical coordinates";
+  for (neverd::va_t Poison : PoisonTargets)
+    EXPECT_EQ(std::find(Table.Targets.begin(), Table.Targets.end(), Poison),
+              Table.Targets.end())
+        << "an adjacent odd poison slot was published";
+}
+
+TEST_F(JTE_X86_64,
+       MaskKnownOneWitnessDoesNotLeakFromUnrelatedSiblingPath) {
+  auto ImageOrErr = neverd::loadBinary(identityCfgLaneObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_identity_mask_or_unrelated_sibling");
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_identity_mask_or_unrelated_sibling_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Table->Size, 8u * 8u);
+  EXPECT_EQ(std::count_if(Image.CodePtrRelocSlots.begin(),
+                          Image.CodePtrRelocSlots.end(),
+                          [&](neverd::va_t Slot) {
+                            return Slot >= Table->Addr &&
+                                   Slot < Table->Addr + Table->Size;
+                          }),
+            8)
+      << "the regression requires eight physical code-pointer slots";
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+
+  size_t Mask7Count = 0;
+  bool SawOrOne = false;
+  for (const neverd::LowBlock &Block : Low.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops) {
+      auto HasScalar = [&](uint64_t Value) {
+        for (uint8_t I = 0; I < Op.NumInputs; ++I)
+          if (Op.Inputs[I].isConst() && Op.Inputs[I].Offset == Value)
+            return true;
+        return false;
+      };
+      Mask7Count += Op.Opcode == neverd::NdOp::INT_AND && HasScalar(7);
+      SawOrOne |= Op.Opcode == neverd::NdOp::INT_OR && HasScalar(1);
+    }
+  ASSERT_GE(Mask7Count, 2u)
+      << "both the dispatch mask and reachable sibling mask must be decoded";
+  ASSERT_TRUE(SawOrOne)
+      << "the unrelated sibling must expose a real known-one producer";
+
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  const neverd::JumpTable &JumpTable = Low.JumpTables.front();
+  EXPECT_EQ(JumpTable.Targets.size(), 8u)
+      << "the sibling OR must not narrow the independent x&7 selector";
+  EXPECT_EQ(JumpTable.CaseLabels,
+            (std::vector<int64_t>{0, 1, 2, 3, 4, 5, 6, 7}));
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
+TEST_F(JTE_X86_64,
+       MaskKnownOneFixedPointRejectsSelfBootstrappedProducer) {
+  auto ImageOrErr = neverd::loadBinary(identityCfgLaneObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_identity_mask_or_fp_self_bootstrap");
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_identity_mask_or_fp_self_bootstrap_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Table->Size, 8u * 8u);
+  EXPECT_EQ(std::count_if(Image.CodePtrRelocSlots.begin(),
+                          Image.CodePtrRelocSlots.end(),
+                          [&](neverd::va_t Slot) {
+                            return Slot >= Table->Addr &&
+                                   Slot < Table->Addr + Table->Size;
+                          }),
+            8)
+      << "the provisional proposal must expose all eight physical targets";
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+
+  bool SawOrOne = false;
+  bool SawMask7 = false;
+  bool SawSubtractOne = false;
+  const neverd::LowBlock *Dispatch = nullptr;
+  neverd::va_t DispatchAddr = neverd::InvalidVA;
+  for (const neverd::LowBlock &Block : Low.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops) {
+      auto HasScalar = [&](uint64_t Value) {
+        for (uint8_t I = 0; I < Op.NumInputs; ++I)
+          if (Op.Inputs[I].isConst() && Op.Inputs[I].Offset == Value)
+            return true;
+        return false;
+      };
+      SawOrOne |= Op.Opcode == neverd::NdOp::INT_OR && HasScalar(1);
+      SawMask7 |= Op.Opcode == neverd::NdOp::INT_AND && HasScalar(7);
+      SawSubtractOne |= Op.Opcode == neverd::NdOp::INT_SUB && HasScalar(1);
+      if (Op.Opcode == neverd::NdOp::INDIR_BR) {
+        ASSERT_EQ(Dispatch, nullptr)
+            << "the fixture must contain one indirect dispatch";
+        Dispatch = &Block;
+        DispatchAddr = Op.Addr;
+      }
+    }
+  ASSERT_TRUE(SawOrOne);
+  ASSERT_TRUE(SawMask7);
+  ASSERT_TRUE(SawSubtractOne)
+      << "case two must contain the complete (x|1)&7; -1 producer";
+
+  ASSERT_NE(Dispatch, nullptr);
+  EXPECT_TRUE(Dispatch->Succs.empty());
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(DispatchAddr), 1u);
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(Low.JumpTables.empty())
+      << "a provisional case edge cannot authenticate the known-one producer "
+         "that would keep that same case reachable";
+}
+
+TEST_F(JTE_X86_64, MaskKnownOneLineageIgnoresPrunedProvisionalSibling) {
+  auto ImageOrErr = neverd::loadBinary(identityCfgLaneObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_identity_mask_or_pruned_sibling_clean");
+  const neverd::Symbol *TableSymbol =
+      Image.findSymbol("jt_identity_mask_or_pruned_sibling_clean_table");
+  const neverd::Symbol *FirstCase =
+      Image.findSymbol("jt_identity_mask_or_pruned_sibling_case0");
+  const neverd::Symbol *SiblingBegin =
+      Image.findSymbol("jt_identity_mask_or_pruned_sibling_begin");
+  const neverd::Symbol *SiblingEnd =
+      Image.findSymbol("jt_identity_mask_or_pruned_sibling_end");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(TableSymbol, nullptr);
+  ASSERT_NE(FirstCase, nullptr);
+  ASSERT_NE(SiblingBegin, nullptr);
+  ASSERT_NE(SiblingEnd, nullptr);
+  ASSERT_LT(Function->Addr, FirstCase->Addr);
+  ASSERT_LT(SiblingBegin->Addr, SiblingEnd->Addr);
+  ASSERT_EQ(TableSymbol->Size, 8u * 4u);
+  EXPECT_EQ(std::count_if(Image.RelCodeRelocSlots.begin(),
+                          Image.RelCodeRelocSlots.end(),
+                          [&](neverd::va_t Slot) {
+                            return Slot >= TableSymbol->Addr &&
+                                   Slot < TableSymbol->Addr + TableSymbol->Size;
+                          }),
+            8)
+      << "the four excluded odd slots must be genuine adjacent code "
+         "relocations";
+
+  auto SymbolAddress = [&](const char *Name) {
+    const neverd::Symbol *Symbol = Image.findSymbol(Name);
+    EXPECT_NE(Symbol, nullptr) << Name;
+    return Symbol ? Symbol->Addr : neverd::va_t{0};
+  };
+  const std::vector<neverd::va_t> ExpectedTargets = {
+      SymbolAddress("jt_identity_mask_or_pruned_sibling_case0"),
+      SymbolAddress("jt_identity_mask_or_pruned_sibling_case2"),
+      SymbolAddress("jt_identity_mask_or_pruned_sibling_case4"),
+      SymbolAddress("jt_identity_mask_or_pruned_sibling_case6")};
+  const std::vector<neverd::va_t> PoisonTargets = {
+      SymbolAddress("jt_identity_mask_or_pruned_sibling_poison1"),
+      SymbolAddress("jt_identity_mask_or_pruned_sibling_poison3"),
+      SymbolAddress("jt_identity_mask_or_pruned_sibling_poison5"),
+      SymbolAddress("jt_identity_mask_or_pruned_sibling_poison7")};
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+
+  bool SawCleanOrOne = false;
+  bool SawCleanMaskSeven = false;
+  bool SawCleanSubtractOne = false;
+  bool RetainedPrunedSibling = false;
+  for (const neverd::LowBlock &Block : Low.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops) {
+      auto HasScalar = [&](uint64_t Value) {
+        for (uint8_t I = 0; I < Op.NumInputs; ++I)
+          if (Op.Inputs[I].isConst() && Op.Inputs[I].Offset == Value)
+            return true;
+        return false;
+      };
+      if (Op.Addr >= Function->Addr && Op.Addr < FirstCase->Addr) {
+        SawCleanOrOne |= Op.Opcode == neverd::NdOp::INT_OR && HasScalar(1);
+        SawCleanMaskSeven |= Op.Opcode == neverd::NdOp::INT_AND && HasScalar(7);
+        SawCleanSubtractOne |=
+            Op.Opcode == neverd::NdOp::INT_SUB && HasScalar(1);
+      }
+      RetainedPrunedSibling |=
+          Op.Addr >= SiblingBegin->Addr && Op.Addr < SiblingEnd->Addr;
+    }
+  ASSERT_TRUE(SawCleanOrOne);
+  ASSERT_TRUE(SawCleanMaskSeven);
+  ASSERT_TRUE(SawCleanSubtractOne)
+      << "the entry graph must contain its complete independent sparse proof";
+  EXPECT_FALSE(RetainedPrunedSibling)
+      << "the unrelated OR recipe must disappear with its provisional odd "
+         "case root";
+
+  ASSERT_EQ(Low.JumpTables.size(), 1u)
+      << "removing the unrelated sibling root must not remove the clean "
+         "selector's witness";
+  const neverd::JumpTable &Table = Low.JumpTables.front();
+  ASSERT_EQ(Table.Targets.size(), 4u);
+  EXPECT_EQ(Table.Targets, ExpectedTargets);
+  EXPECT_EQ(Table.CaseLabels, (std::vector<int64_t>{0, 2, 4, 6}));
+  EXPECT_TRUE(Table.HasDispatchSlotMap);
+  ASSERT_EQ(Table.SlotIndices.size(), 4u);
+  EXPECT_EQ(Table.SlotIndices, (std::vector<uint32_t>{0, 2, 4, 6}));
+  for (neverd::va_t Poison : PoisonTargets)
+    EXPECT_EQ(std::find(Table.Targets.begin(), Table.Targets.end(), Poison),
+              Table.Targets.end())
+        << "a provisional odd sibling escaped the exact sparse domain";
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
 }

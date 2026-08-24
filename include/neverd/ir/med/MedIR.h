@@ -119,6 +119,19 @@ struct MedScalarAddressModel {
   MedVar Value = {};
 };
 
+/// Post-SSA binding of a CFG-authenticated i386 `call $+5; pop reg` result.
+/// The value is a raw architectural PC used in PIC arithmetic, not permission
+/// to reinterpret another numerically equal value as an address.
+struct MedI386GetPcModel {
+  /// Exact surviving architectural COPY output.  This is the only operation
+  /// the emitter may replace with the authenticated raw PC.
+  MedVar Output = {};
+  /// Exact COPY input carrying the POP LOAD result.  Med copy propagation may
+  /// route later PIC arithmetic through this SSA value instead of Output.
+  MedVar Value = {};
+  uint32_t PCValue = 0;
+};
+
 struct PhiNode {
   MedVar Output;
   std::vector<std::pair<int, MedVar>> Args;
@@ -313,6 +326,7 @@ struct MedFunc {
   /// Exact Med SSA selector plans keyed by the indirect-branch address.
   std::map<va_t, MedSwitchSelectorPlan> SwitchSelectorPlans;
   std::vector<MedScalarAddressModel> ScalarAddressModels;
+  std::vector<MedI386GetPcModel> I386GetPcModels;
   /// LowIR fail-closed identity for mutable/uncertain indirect branches.  Kept
   /// separately from JumpTables so HighIR never turns a rejected table back
   /// into an indirect call merely because the CFG has no static successors.

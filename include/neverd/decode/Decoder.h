@@ -85,6 +85,19 @@ struct RelocatedAddressOperand {
   bool PCRelativeFromInstructionEnd = false;
 };
 
+/// One loader-authenticated scalar relocation field inside an encoded
+/// instruction.  Scalar relocations never confer address provenance; the x86
+/// lifter binds the exact immediate field to a LowOp input occurrence so a
+/// later CFG proof can consume it without matching by numeric value.
+struct RelocatedScalarOperand {
+  enum class Kind : uint8_t { I386ELFGOTPC };
+
+  va_t FieldVA = InvalidVA;
+  uint64_t EncodedValue = 0;
+  uint8_t Width = 0;
+  Kind Semantics = Kind::I386ELFGOTPC;
+};
+
 class Decoder {
 public:
   Decoder();
@@ -131,7 +144,13 @@ public:
   /// describes exact loader-authenticated address operands in the encoded
   /// instruction; unsupported architectures/operand encodings ignore them.
   void liftToLow(const DecodedInsn &Insn, std::vector<LowOp> &Ops,
-                 llvm::ArrayRef<RelocatedAddressOperand> Relocs = {});
+                 llvm::ArrayRef<RelocatedAddressOperand> Relocs = {},
+                 llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs = {});
+
+  /// Exact scalar relocation operand consumed by the most recently lifted x86
+  /// instruction, if any.  The occurrence is reset for every instruction.
+  std::optional<RelocatedInstructionScalarOperandOccurrence>
+  getX86ScalarOperandOccurrence() const;
 
   /// Whether \p Insn ends a function's straight-line decode.  Dispatches to
   /// the active architecture lifter's terminator classification.

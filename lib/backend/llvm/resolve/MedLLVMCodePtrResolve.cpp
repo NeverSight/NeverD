@@ -556,7 +556,12 @@ MedLLVMEmitter::jumpTableForLoad(const MedOp &Load,
       Load.MemoryOrdering != NdMemoryOrdering::None || Load.OriginSeq < 0)
     return nullptr;
 
-  const AddressProvenanceVarKey LoadKey = addressProvenanceVarKey(Load.Output);
+  // One call may inspect several input-controlled table records claiming the
+  // same LOAD occurrence.  Share the terminal-use account across that entire
+  // candidate batch so duplicate certificates cannot multiply the ceiling.
+  uint64_t TerminalUseEvidenceRemaining =
+      TerminalUseEvidenceBudgetForTesting.value_or(
+          limits::kMaxJumpTableTerminalUseEvidenceWork);
 
   for (const JumpTable &JT : CurMedFunc->JumpTables) {
     if (JT.EntrySize != Load.Output.Size || JT.Targets.empty() ||
@@ -684,20 +689,48 @@ MedLLVMEmitter::jumpTableForLoad(const MedOp &Load,
     // the post-SSA use graph in the forward direction: pure target transforms
     // and PHIs are allowed, but any memory/control/observable use other than
     // this JT's terminal INDIR_BR keeps the normal mirror path mandatory.
-    std::vector<MedVar> Work{Load.Output};
-    std::set<AddressProvenanceVarKey> Seen;
+    struct UseClosureItem {
+      MedVar Value;
+      bool MayReachTerminal = false;
+    };
+    std::vector<UseClosureItem> Work;
+    std::set<std::pair<AddressProvenanceVarKey, bool>> Seen;
     bool ReachesTerminalBranch = false;
     bool EscapesSwitch = false;
+    auto consumeEvidence = [&](uint64_t Amount) {
+      if (Amount > TerminalUseEvidenceRemaining) {
+        EscapesSwitch = true;
+        return false;
+      }
+      TerminalUseEvidenceRemaining -= Amount;
+      return true;
+    };
+    auto enqueue = [&](const MedVar &Value, bool MayReachTerminal) {
+      // Prepay retained closure state as well as the later traversal so an
+      // adversarial fan-out cannot grow Work past the finite proof account.
+      if (!consumeEvidence(1))
+        return;
+      Work.push_back({Value, MayReachTerminal});
+    };
+    enqueue(Load.Output, true);
     while (!Work.empty() && !EscapesSwitch) {
-      const MedVar Current = Work.back();
+      if (!consumeEvidence(1))
+        break;
+      const UseClosureItem Item = Work.back();
       Work.pop_back();
+      const MedVar Current = Item.Value;
       const AddressProvenanceVarKey CurrentKey =
           addressProvenanceVarKey(Current);
-      if (!Seen.insert(CurrentKey).second)
+      if (!Seen.insert({CurrentKey, Item.MayReachTerminal}).second)
         continue;
 
       for (const MedBlock &Block : CurMedFunc->Blocks) {
+        if (!consumeEvidence(1))
+          break;
         for (const PhiNode &Phi : Block.Phis) {
+          if (!consumeEvidence(1) ||
+              !consumeEvidence(uint64_t(Phi.Args.size())))
+            break;
           bool Used = false;
           for (const auto &[Pred, Arg] : Phi.Args) {
             (void)Pred;
@@ -709,10 +742,14 @@ MedLLVMEmitter::jumpTableForLoad(const MedOp &Load,
             // that is used solely by this recovered INDIR_BR remains safe,
             // while any STORE/CALL/RETURN/other branch reached from the PHI is
             // still rejected below.
-            Work.push_back(Phi.Output);
+            enqueue(Phi.Output, Item.MayReachTerminal);
           }
         }
+        if (EscapesSwitch)
+          break;
         for (const MedOp &Op : Block.Ops) {
+          if (!consumeEvidence(1 + uint64_t(Op.NumInputs)))
+            break;
           bool Used = false;
           for (uint8_t I = 0; I < Op.NumInputs; ++I)
             Used |= addressProvenanceVarKey(Op.Inputs[I]) == CurrentKey;
@@ -720,8 +757,12 @@ MedLLVMEmitter::jumpTableForLoad(const MedOp &Load,
             continue;
 
           if (Op.Opcode == NdOp::INDIR_BR && Op.Addr == JT.InsnAddr) {
-            ReachesTerminalBranch = true;
-            continue;
+            if (Item.MayReachTerminal) {
+              ReachesTerminalBranch = true;
+              continue;
+            }
+            EscapesSwitch = true;
+            break;
           }
 
           switch (Op.Opcode) {
@@ -731,7 +772,7 @@ MedLLVMEmitter::jumpTableForLoad(const MedOp &Load,
             if (Op.Output.Size == 0 || Op.Output.isConst())
               EscapesSwitch = true;
             else
-              Work.push_back(Op.Output);
+              enqueue(Op.Output, Item.MayReachTerminal);
             break;
           case NdOp::SUBBYTES:
             if (Op.NumInputs < 2 || !Op.Inputs[1].isConst() ||
@@ -739,7 +780,7 @@ MedLLVMEmitter::jumpTableForLoad(const MedOp &Load,
                 Op.Output.isConst())
               EscapesSwitch = true;
             else
-              Work.push_back(Op.Output);
+              enqueue(Op.Output, Item.MayReachTerminal);
             break;
           case NdOp::INT_ADD:
           case NdOp::INT_SUB: {
@@ -766,14 +807,23 @@ MedLLVMEmitter::jumpTableForLoad(const MedOp &Load,
                 ZeroInput = &Op.Inputs[0];
             }
             if (!ZeroInput || !valueIsAuthenticatedModelZero(*ZeroInput)) {
-              EscapesSwitch = true;
+              // Arithmetic used only to synthesize dead flags is not an
+              // observable escape.  Track the destructive side result as
+              // non-terminal taint: it may die in pure SSA, but any later
+              // branch/store/call/return (including this JT's branch) vetoes
+              // suppression.
+              enqueue(Op.Output, false);
               break;
             }
-            Work.push_back(Op.Output);
+            enqueue(Op.Output, Item.MayReachTerminal);
             break;
           }
           default:
-            EscapesSwitch = true;
+            if (operationUsesRelocatableCodeIdentity(Op.Opcode) &&
+                Op.Output.Size != 0 && !Op.Output.isConst())
+              enqueue(Op.Output, false);
+            else
+              EscapesSwitch = true;
             break;
           }
           if (EscapesSwitch)

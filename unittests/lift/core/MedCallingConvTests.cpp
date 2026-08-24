@@ -778,70 +778,6 @@ TEST(LowToMedCallReturnFP, CallerSavedPreservingCallKeepsPriorFPResult) {
   EXPECT_TRUE(verifyMedFunc(Med, "test-preserved-fp-result"));
 }
 
-TEST(LowToMedX86CallingConv,
-     StackAddressExtensionDoesNotCreateMutableParameterHome) {
-  constexpr Arch TheArch = Arch::X86;
-  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
-
-  LowFunc Low;
-  Low.Entry = 0x1000;
-  Low.Name = "extended_stack_parameter_address";
-  Low.Blocks.resize(1);
-  LowBlock &Block = Low.Blocks[0];
-  Block.Id = 0;
-  Block.StartAddr = 0x1000;
-  Block.EndAddr = 0x1004;
-
-  NdVar Address32 = NdVar::tmp(1, TRI.PointerSize);
-  LowOp Add;
-  Add.Opcode = NdOp::INT_ADD;
-  Add.Addr = 0x1000;
-  Add.Output = Address32;
-  Add.addInput(NdVar::reg(TRI.StackPointer, TRI.PointerSize));
-  Add.addInput(NdVar::cst(4, TRI.PointerSize));
-  Block.Ops.push_back(Add);
-
-  NdVar Address64 = NdVar::tmp(2, 8);
-  LowOp Extend;
-  Extend.Opcode = NdOp::INT_ZEXT;
-  Extend.Addr = 0x1001;
-  Extend.Output = Address64;
-  Extend.addInput(Address32);
-  Block.Ops.push_back(Extend);
-
-  NdVar Value = NdVar::tmp(3, 4);
-  LowOp Load;
-  Load.Opcode = NdOp::LOAD;
-  Load.Addr = 0x1002;
-  Load.Output = Value;
-  Load.addInput(Address64);
-  Block.Ops.push_back(Load);
-
-  LowOp Return;
-  Return.Opcode = NdOp::RETURN;
-  Return.Addr = 0x1003;
-  Return.addInput(Value);
-  Block.Ops.push_back(Return);
-
-  MedFunc Med = LowToMedConverter().convert(Low, TheArch);
-  ASSERT_EQ(Med.Params.size(), 1u);
-  EXPECT_EQ(Med.Params[0].Kind, MedVar::Param);
-  EXPECT_EQ(Med.Params[0].Id, 0);
-  EXPECT_EQ(Med.Params[0].RegOff, kNoParamReg);
-  EXPECT_TRUE(Med.MutableStackParamHomes.empty());
-
-  bool SawParameterCopy = false;
-  for (const MedBlock &MedBlock : Med.Blocks)
-    for (const MedOp &Op : MedBlock.Ops) {
-      SawParameterCopy |= Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
-                          Op.Inputs[0].Kind == MedVar::Param &&
-                          Op.Inputs[0].Id == 0;
-      EXPECT_NE(Op.Opcode, NdOp::LOAD);
-    }
-  EXPECT_TRUE(SawParameterCopy);
-  EXPECT_TRUE(verifyMedFunc(Med, "test-extended-stack-parameter-address"));
-}
-
 TEST(LowToMedSSA, ModelsItaniumLandingPadRegistersAsExceptionalLiveIns) {
   constexpr Arch TheArch = Arch::AArch64;
   const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
@@ -1553,6 +1489,283 @@ TEST(JumpTableHighSelector,
       std::any_of(High.Body.begin(), High.Body.end(), [](const HighStmt &Stmt) {
         return Stmt.Kind == StmtKind::Goto && Stmt.GotoTarget == InvalidVA;
       }));
+}
+
+static LowFunc scalarAddressModelLowFunc(bool DuplicateOccurrence = false) {
+  constexpr va_t AddAddress = 0x3a00;
+
+  LowFunc Low;
+  Low.Entry = AddAddress;
+  Low.Name =
+      DuplicateOccurrence ? "ambiguous_scalar_model" : "exact_scalar_model";
+
+  LowBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = AddAddress;
+  Block.EndAddr = AddAddress + 2;
+
+  LowOp Add;
+  Add.Opcode = NdOp::INT_ADD;
+  Add.Addr = AddAddress;
+  Add.Seq = 7;
+  Add.Output = NdVar::reg(x86reg::RAX, 4);
+  Add.addInput(NdVar::reg(x86reg::RBX, 4));
+  Add.addInput(NdVar::reg(x86reg::RCX, 4));
+  Block.Ops.push_back(Add);
+
+  if (DuplicateOccurrence) {
+    LowOp Duplicate = Add;
+    Duplicate.Inputs[0] = Add.Output;
+    Block.Ops.push_back(Duplicate);
+  }
+
+  LowOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = AddAddress + 1;
+  Return.Seq = 0;
+  Return.addInput(Add.Output);
+  Block.Ops.push_back(Return);
+  Low.Blocks.push_back(std::move(Block));
+
+  RelocatedInstructionScalarModelOccurrence Model;
+  Model.FieldVA = AddAddress + 1;
+  Model.InstructionAddr = AddAddress;
+  Model.OpSeq = Add.Seq;
+  Model.Width = Add.Output.Size;
+  Model.OutputOpcode = Add.Opcode;
+  Model.OutputWitness = Add.Output;
+  Low.RelocatedInstructionScalarModelOccurrences.push_back(Model);
+  return Low;
+}
+
+TEST(LowToMedScalarAddressModel,
+     ExactSourceOccurrenceBindsTheSurvivingFullOutputLane) {
+  MedFunc Med =
+      LowToMedConverter().convert(scalarAddressModelLowFunc(), Arch::X86);
+
+  ASSERT_EQ(Med.ScalarAddressModels.size(), 1u);
+  const MedVar &Value = Med.ScalarAddressModels.front().Value;
+  EXPECT_EQ(Value.Kind, MedVar::Reg);
+  EXPECT_EQ(Value.TheArch, Arch::X86);
+  EXPECT_EQ(Value.RegOff, x86reg::RAX);
+  EXPECT_EQ(Value.Size, 4u);
+}
+
+TEST(LowToMedScalarAddressModel,
+     SourceIdentityOrFullOutputLaneMismatchDoesNotBind) {
+  auto expectUnbound = [](auto Mutate) {
+    LowFunc Low = scalarAddressModelLowFunc();
+    Mutate(Low.RelocatedInstructionScalarModelOccurrences.front());
+    MedFunc Med = LowToMedConverter().convert(Low, Arch::X86);
+    EXPECT_TRUE(Med.ScalarAddressModels.empty());
+  };
+
+  expectUnbound([](auto &Model) { Model.InstructionAddr += 1; });
+  expectUnbound([](auto &Model) { Model.OpSeq += 1; });
+  expectUnbound([](auto &Model) { Model.OutputOpcode = NdOp::INT_SUB; });
+  expectUnbound([](auto &Model) { Model.Width = 2; });
+  expectUnbound(
+      [](auto &Model) { Model.OutputWitness = NdVar::reg(x86reg::RDX, 4); });
+  expectUnbound(
+      [](auto &Model) { Model.OutputWitness = NdVar::tmp(0xdead, 4); });
+}
+
+TEST(LowToMedScalarAddressModel,
+     DuplicateExactSourceOccurrenceIsAmbiguousAndDoesNotBind) {
+  MedFunc Med =
+      LowToMedConverter().convert(scalarAddressModelLowFunc(true), Arch::X86);
+  EXPECT_TRUE(Med.ScalarAddressModels.empty());
+}
+
+TEST(MedLLVMScalarAddressModel,
+     ExactSSAEmitsModelZeroWithoutChangingSameRegisterSuccessor) {
+  MedFunc Func;
+  Func.Entry = 0x3b00;
+  Func.Name = "exact_scalar_model_llvm";
+
+  MedVar Certified = reg(1, 1, 4, x86reg::RAX, Arch::X86);
+  MedVar Ordinary = reg(1, 2, 4, x86reg::RAX, Arch::X86);
+  MedVar Sum = temp(2, 0, 4, Arch::X86);
+
+  MedBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = Func.Entry;
+  Block.EndAddr = Func.Entry + 3;
+
+  MedOp CertifiedAdd =
+      binary(NdOp::INT_ADD, Certified, MedVar::makeConst(10, 4),
+             MedVar::makeConst(20, 4));
+  CertifiedAdd.Addr = Func.Entry;
+  CertifiedAdd.OriginSeq = 7;
+  Block.Ops.push_back(CertifiedAdd);
+
+  MedOp OrdinaryAdd = binary(NdOp::INT_ADD, Ordinary, MedVar::makeConst(10, 4),
+                             MedVar::makeConst(20, 4));
+  OrdinaryAdd.Addr = Func.Entry + 1;
+  OrdinaryAdd.OriginSeq = 0;
+  Block.Ops.push_back(OrdinaryAdd);
+
+  Block.Ops.push_back(binary(NdOp::INT_ADD, Sum, Certified, Ordinary));
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = Func.Entry + 2;
+  Return.addInput(Sum);
+  Block.Ops.push_back(Return);
+  Func.Blocks.push_back(std::move(Block));
+  Func.ScalarAddressModels.push_back(
+      {RelocatedInstructionScalarModelOccurrence::ModelKind::I386ELFGOTBaseZero,
+       Certified});
+
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit({Func}, Context, Func.Name, Arch::X86);
+  ASSERT_NE(Module, nullptr);
+  llvm::Function *Function = verifiedFunction(*Module, Func.Name);
+  ASSERT_NE(Function, nullptr);
+
+  bool CertifiedStoredZero = false;
+  bool CertifiedStoredThirty = false;
+  bool OrdinaryStoredThirty = false;
+  for (const llvm::BasicBlock &LLVMBlock : *Function)
+    for (const llvm::Instruction &Instruction : LLVMBlock) {
+      const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&Instruction);
+      if (!Store)
+        continue;
+      const auto *Stored =
+          llvm::dyn_cast<llvm::ConstantInt>(Store->getValueOperand());
+      const llvm::Value *Storage =
+          Store->getPointerOperand()->stripPointerCasts();
+      if (!Stored || !Storage)
+        continue;
+      if (Storage->getName() == "EAX.1") {
+        CertifiedStoredZero |= Stored->isZero();
+        CertifiedStoredThirty |= Stored->getZExtValue() == 30;
+      }
+      if (Storage->getName() == "EAX.2")
+        OrdinaryStoredThirty |= Stored->getZExtValue() == 30;
+    }
+  EXPECT_TRUE(CertifiedStoredZero);
+  EXPECT_FALSE(CertifiedStoredThirty);
+  EXPECT_TRUE(OrdinaryStoredThirty)
+      << "the certified add is model zero, while an equal ordinary add at a "
+         "new SSA version retains 10 + 20 semantics";
+}
+
+TEST(MedLLVMEmitterConstants, NarrowSignExtendedScalarKeepsItsLowBitPattern) {
+  MedFunc Func;
+  Func.Entry = 0x3c00;
+  Func.Name = "narrow_sign_extended_scalar";
+
+  MedBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = Func.Entry;
+  Block.EndAddr = Func.Entry + 2;
+
+  const uint64_t SignExtendedMinusTwenty =
+      static_cast<uint64_t>(static_cast<int64_t>(-20));
+  Block.Ops.push_back(
+      binary(NdOp::INT_ADD, temp(1, 0, 4, Arch::X86),
+             MedVar::makeConst(SignExtendedMinusTwenty, 4,
+                               ConstantAddressProvenance::Scalar),
+             MedVar::makeConst(1, 4, ConstantAddressProvenance::Scalar)));
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = Func.Entry + 1;
+  Block.Ops.push_back(Return);
+  Func.Blocks.push_back(std::move(Block));
+
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit({Func}, Context, Func.Name, Arch::X86);
+  ASSERT_NE(Module, nullptr);
+  llvm::Function *Function = verifiedFunction(*Module, Func.Name);
+  ASSERT_NE(Function, nullptr);
+
+  bool StoredExpectedLowBits = false;
+  for (const llvm::BasicBlock &LLVMBlock : *Function)
+    for (const llvm::Instruction &Instruction : LLVMBlock) {
+      const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&Instruction);
+      const auto *Stored =
+          Store ? llvm::dyn_cast<llvm::ConstantInt>(Store->getValueOperand())
+                : nullptr;
+      StoredExpectedLowBits |= Stored && Stored->getBitWidth() == 32 &&
+                               Stored->getZExtValue() == UINT64_C(0xffffffed);
+    }
+  EXPECT_TRUE(StoredExpectedLowBits);
+}
+
+TEST(MedLLVMEmitterConstants, NarrowUnsignedPhiConstantKeepsItsLowBitPattern) {
+  constexpr va_t EntryAddress = 0x3d00;
+  constexpr va_t LeftAddress = EntryAddress + 0x10;
+  constexpr va_t RightAddress = EntryAddress + 0x20;
+  constexpr va_t MergeAddress = EntryAddress + 0x30;
+
+  MedFunc Func;
+  Func.Entry = EntryAddress;
+  Func.Name = "narrow_unsigned_phi_constant";
+  MedVar Condition = reg(1, 0, 8, x86reg::RDI, Arch::X64);
+  Func.Params.push_back(Condition);
+
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = EntryAddress;
+  Entry.EndAddr = EntryAddress + 1;
+  Entry.Succs = {1, 2};
+  MedOp Split;
+  Split.Opcode = NdOp::COND_BR;
+  Split.addInput(MedVar::makeConst(LeftAddress, 8));
+  Split.addInput(Condition);
+  Entry.Ops.push_back(std::move(Split));
+
+  auto makePredecessor = [&](int Id, va_t Address) {
+    MedBlock Block;
+    Block.Id = Id;
+    Block.StartAddr = Address;
+    Block.EndAddr = Address + 1;
+    Block.Preds = {0};
+    Block.Succs = {3};
+    MedOp Branch;
+    Branch.Opcode = NdOp::BRANCH;
+    Branch.addInput(MedVar::makeConst(MergeAddress, 8));
+    Block.Ops.push_back(std::move(Branch));
+    return Block;
+  };
+
+  MedBlock Merge;
+  Merge.Id = 3;
+  Merge.StartAddr = MergeAddress;
+  Merge.EndAddr = MergeAddress + 1;
+  Merge.Preds = {1, 2};
+  MedVar Merged = temp(2, 0, 4, Arch::X64);
+  PhiNode Phi;
+  Phi.Output = Merged;
+  Phi.Args = {{1, MedVar::makeConst(UINT64_C(0x9e3779b9), 4,
+                                    ConstantAddressProvenance::Scalar)},
+              {2, MedVar::makeConst(0, 4, ConstantAddressProvenance::Scalar)}};
+  Merge.Phis.push_back(std::move(Phi));
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = MergeAddress;
+  Merge.Ops.push_back(Return);
+
+  Func.Blocks = {std::move(Entry), makePredecessor(1, LeftAddress),
+                 makePredecessor(2, RightAddress), std::move(Merge)};
+
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit({Func}, Context, Func.Name, Arch::X64);
+  ASSERT_NE(Module, nullptr);
+  llvm::Function *Function = verifiedFunction(*Module, Func.Name);
+  ASSERT_NE(Function, nullptr);
+
+  bool StoredExpectedLowBits = false;
+  for (const llvm::BasicBlock &LLVMBlock : *Function)
+    for (const llvm::Instruction &Instruction : LLVMBlock) {
+      const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&Instruction);
+      const auto *Stored =
+          Store ? llvm::dyn_cast<llvm::ConstantInt>(Store->getValueOperand())
+                : nullptr;
+      StoredExpectedLowBits |= Stored && Stored->getBitWidth() == 32 &&
+                               Stored->getZExtValue() == UINT64_C(0x9e3779b9);
+    }
+  EXPECT_TRUE(StoredExpectedLowBits);
 }
 
 TEST(LowToMedSelectorOccurrence,

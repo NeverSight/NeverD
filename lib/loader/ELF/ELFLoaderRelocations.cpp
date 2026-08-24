@@ -770,8 +770,10 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
             } else if (PlaceIsCode && SymbolIsData) {
               RecordDataTarget(Folded);
               RecordWritableDataTarget(Folded);
-              Img.DataAddressRelocOperands[P] = {Folded, Folded, 4,
-                                                 SymbolOwnerAnchor};
+              Img.DataAddressRelocOperands[P] = {
+                  Folded, Folded, 4, SymbolOwnerAnchor,
+                  /*PCRelativeFromInstructionEnd=*/false,
+                  RelocatedAddressFieldKind::I386ELFGOTOFF};
               // `leal table@GOTOFF(%ebx)` anchors a PIC switch table's base in
               // read-only data; record it so the resolver bounds an over-long
               // RelCodeReloc run at the next table's base.
@@ -788,14 +790,19 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
             // to the wrong segment.  When the *symbol* itself sits in clean
             // rodata, anchor the folded base to the symbol's own segment so
             // the emitter pins `base + runtime_index` back inside the table.
+            const uint32_t AnchorBackDistance =
+                SymSeg ? static_cast<uint32_t>(SymSeg->VA) - Folded : 0;
             if (PlaceIsCode && SymbolIsData && SymSeg &&
                 !SymSeg->isWritable() &&
                 Img.hasObjectDataProvenance(SymbolVA) &&
-                !SymSeg->Data.empty() && SymSeg->VA > Folded &&
-                SymSeg->VA - Folded <= limits::kMaxRodataAnchorBackDistance) {
+                !SymSeg->Data.empty() && AnchorBackDistance != 0 &&
+                AnchorBackDistance <=
+                    limits::kMaxRodataAnchorBackDistance) {
               Img.RodataAnchorSeg[Folded] = SymSeg->VA;
-              Img.DataAddressRelocOperands[P] = {Folded, Folded, 4,
-                                                 SymbolOwnerAnchor};
+              Img.DataAddressRelocOperands[P] = {
+                  Folded, Folded, 4, SymbolOwnerAnchor,
+                  /*PCRelativeFromInstructionEnd=*/false,
+                  RelocatedAddressFieldKind::I386ELFGOTOFF};
             }
             break;
           }

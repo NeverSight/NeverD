@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -174,6 +175,141 @@ TEST(LowInstructionBoundary,
       Image.relocatedTargetBelongsToOwner(Code.VA + Code.Size, Code.VA));
   EXPECT_TRUE(Image.relocatedTargetBelongsToOwner(CString.VA + CString.Size,
                                                   CString.VA));
+}
+
+TEST(LowInstructionBoundary,
+     I386GOTOFFOwnerRequiresTheExactRodataAnchorAssociation) {
+  BinaryImage Image;
+  Image.Arch = Arch::X86;
+  Image.Mode = InstructionMode::Default;
+  Image.Bits = Bitness::Bits32;
+  Image.Format = BinaryFormat::ELF;
+
+  Segment RodataSegment;
+  RodataSegment.Name = ".rodata.load";
+  RodataSegment.VA = 0x4000;
+  RodataSegment.Size = 0x200;
+  RodataSegment.Flags = SegmentFlags::Readable;
+  RodataSegment.Data.resize(RodataSegment.Size);
+  Image.Segments.push_back(std::move(RodataSegment));
+
+  Section Rodata;
+  Rodata.Name = ".rodata";
+  Rodata.VA = 0x4080;
+  Rodata.Size = 0x40;
+  Rodata.FileSz = Rodata.Size;
+  Rodata.Flags = SegmentFlags::Readable;
+  Image.Sections.push_back(Rodata);
+
+  constexpr va_t FoldedBeforeOwner = 0x3ff0;
+  ASSERT_FALSE(
+      Image.relocatedTargetBelongsToOwner(FoldedBeforeOwner, Rodata.VA));
+  EXPECT_FALSE(Image.relocatedI386GOTOFFTargetBelongsToOwner(FoldedBeforeOwner,
+                                                             Rodata.VA));
+
+  Image.RodataAnchorSeg[FoldedBeforeOwner] = 0x5000;
+  EXPECT_FALSE(Image.relocatedI386GOTOFFTargetBelongsToOwner(FoldedBeforeOwner,
+                                                             Rodata.VA))
+      << "an unrelated anchor segment must not authenticate the folded VA";
+
+  Image.RodataAnchorSeg[FoldedBeforeOwner] = 0x4000;
+  EXPECT_TRUE(Image.relocatedI386GOTOFFTargetBelongsToOwner(FoldedBeforeOwner,
+                                                            Rodata.VA));
+  EXPECT_FALSE(Image.relocatedI386GOTOFFTargetBelongsToOwner(FoldedBeforeOwner,
+                                                             Rodata.VA + 1))
+      << "the anchor must retain the loader's exact section owner";
+
+  // Relocatable i386 objects commonly place their rodata owner at guest VA
+  // zero.  A -16 GOTOFF bias is then encoded as 0xfffffff0; owner checking
+  // must use guest-width modular arithmetic without accepting an arbitrary
+  // large or foreign wrapped address.
+  Image.Segments.front().VA = 0;
+  Image.Sections.front().VA = 0;
+  constexpr va_t WrappedBeforeOwner = 0xfffffff0u;
+  Image.RodataAnchorSeg.clear();
+  Image.RodataAnchorSeg[WrappedBeforeOwner] = 0;
+  EXPECT_TRUE(
+      Image.relocatedI386GOTOFFTargetBelongsToOwner(WrappedBeforeOwner, 0));
+  Image.RodataAnchorSeg[WrappedBeforeOwner] = 0x1000;
+  EXPECT_FALSE(
+      Image.relocatedI386GOTOFFTargetBelongsToOwner(WrappedBeforeOwner, 0))
+      << "a wrapped target still requires the exact loader owner segment";
+  Image.RodataAnchorSeg[0xff000000u] = 0;
+  EXPECT_FALSE(Image.relocatedI386GOTOFFTargetBelongsToOwner(0xff000000u, 0))
+      << "a modular distance beyond the bounded selector bias is not an anchor";
+
+  Image.Format = BinaryFormat::MachO;
+  EXPECT_FALSE(Image.relocatedI386GOTOFFTargetBelongsToOwner(FoldedBeforeOwner,
+                                                             Rodata.VA))
+      << "synthetic anchor metadata cannot grant GOTOFF semantics cross-format";
+}
+
+TEST(LowInstructionBoundary,
+     StackTableSourceCannotSuppressAnAdjustedAdjacentAnchor) {
+  constexpr va_t TableA = 0x4000;
+  constexpr va_t TableB = TableA + 16;
+  constexpr va_t FieldVA = 0x1010;
+  constexpr va_t OwnerVA = TableA;
+
+  BinaryImage Image;
+  Segment Text;
+  Text.VA = 0x1000;
+  Text.Size = 0x100;
+  Text.FileSz = Text.Size;
+  Text.Data.resize(Text.Size);
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Image.Segments.push_back(std::move(Text));
+  for (va_t Slot : {TableA, TableA + 8, TableB, TableB + 8})
+    Image.CodePtrRelocSlots.insert(Slot);
+  Image.DataAddressRelocOperands[FieldVA] = {
+      TableB, TableB, 8, OwnerVA, /*PCRelativeFromInstructionEnd=*/false};
+
+  // The exact field names B, but scalar arithmetic derives A and the LOAD
+  // consumes A's two entries.  B remains an independent boundary anchor.
+  const AuthenticatedSourceAnchorExemption Adjusted{TableA,  FieldVA, TableB,
+                                                    OwnerVA, TableA,  16};
+  EXPECT_FALSE(authenticatedSourceAnchorExemptionMatches(
+      Adjusted, TableA, 8, 4, FieldVA,
+      Image.DataAddressRelocOperands.at(FieldVA)));
+  EXPECT_EQ(boundCodePtrRunByNextAnchor(Image, TableA, 8, 4, {},
+                                        {{FieldVA, Adjusted}}),
+            2u);
+
+  // A direct occurrence for an interior source chunk may be ignored only
+  // under the same exact field/target/owner and candidate-local byte span.
+  Image.DataAddressRelocOperands[FieldVA].EncodedValue = TableA + 8;
+  Image.DataAddressRelocOperands[FieldVA].TargetVA = TableA + 8;
+  const AuthenticatedSourceAnchorExemption Direct{
+      TableA, FieldVA, TableA + 8, OwnerVA, TableA + 8, 8};
+  EXPECT_TRUE(authenticatedSourceAnchorExemptionMatches(
+      Direct, TableA, 8, 4, FieldVA,
+      Image.DataAddressRelocOperands.at(FieldVA)));
+  EXPECT_EQ(
+      boundCodePtrRunByNextAnchor(Image, TableA, 8, 4, {}, {{FieldVA, Direct}}),
+      4u);
+
+  auto EscapesRun = Direct;
+  EscapesRun.SourceByteCount = 32;
+  EXPECT_FALSE(authenticatedSourceAnchorExemptionMatches(
+      EscapesRun, TableA, 8, 4, FieldVA,
+      Image.DataAddressRelocOperands.at(FieldVA)));
+}
+
+TEST(LowInstructionBoundary, StackTableMutationArithmeticFailsClosed) {
+  constexpr int64_t Min = std::numeric_limits<int64_t>::min();
+  constexpr int64_t Max = std::numeric_limits<int64_t>::max();
+
+  EXPECT_FALSE(stackCheckedOffset(Max, 1));
+  EXPECT_FALSE(stackCheckedOffset(Min, -1));
+  EXPECT_FALSE(stackCheckedOffset(Min, 1, /*Subtract=*/true));
+  EXPECT_FALSE(stackCheckedOffset(Max, -1, /*Subtract=*/true));
+  EXPECT_EQ(stackCheckedOffset(-8, 16), 8);
+  EXPECT_EQ(stackCheckedOffset(8, 16, /*Subtract=*/true), -8);
+
+  EXPECT_FALSE(checkedVAOffset(InvalidVA - 1, 2));
+  EXPECT_FALSE(checkedVAOffset(0, -1));
+  EXPECT_EQ(checkedVAOffset(InvalidVA - 1, 1), InvalidVA);
+  EXPECT_EQ(checkedVAOffset(1, -1), 0u);
 }
 
 TEST(LowInstructionBoundary, JumpTableTargetsUseGuestWidthModularArithmetic) {
@@ -383,6 +519,27 @@ std::vector<LowOp> liftARMInstruction(InstructionMode Mode,
   return Ops;
 }
 
+TEST(LowInstructionBoundary,
+     ARMPredicatedRegisterEffectsHaveUniqueOccurrenceSequences) {
+  // movhi r0, #0.  The ARM lifter represents the predicated register write as
+  // a SELECT after the instruction's architectural-PC seed.  Every emitted
+  // LowOp must retain a unique (Addr, Seq) occurrence so exact provenance
+  // consumers cannot confuse the SELECT with the PC COPY.
+  const std::vector<uint8_t> MovHiR0Zero = {0x00, 0x00, 0xa0, 0x83};
+  const std::vector<LowOp> Ops =
+      liftARMInstruction(InstructionMode::ARM, MovHiR0Zero);
+  ASSERT_FALSE(Ops.empty());
+  ASSERT_TRUE(std::any_of(Ops.begin(), Ops.end(), [](const LowOp &Op) {
+    return Op.Opcode == NdOp::SELECT;
+  }));
+
+  std::set<std::pair<va_t, int>> Occurrences;
+  for (const LowOp &Op : Ops)
+    EXPECT_TRUE(Occurrences.emplace(Op.Addr, Op.Seq).second)
+        << "duplicate LowIR occurrence at 0x" << std::hex << Op.Addr << "."
+        << std::dec << Op.Seq;
+}
+
 std::vector<LowOp> liftAArch64Instruction(const std::vector<uint8_t> &Bytes,
                                           va_t Address = kEntry) {
   Decoder Dec;
@@ -424,6 +581,32 @@ std::vector<LowOp> liftX86Instruction(Arch Architecture,
   std::vector<LowOp> Ops;
   Dec.liftToLow(Insn, Ops);
   return Ops;
+}
+
+TEST(LowInstructionBoundary, X86GetPcPairCannotCrossDisjointDecodeRoots) {
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X86));
+
+  // call $+5
+  const std::array<uint8_t, 5> CallNext = {0xe8, 0x00, 0x00, 0x00, 0x00};
+  DecodedInsn Call{};
+  ASSERT_EQ(
+      Dec.decodeOneForLift(CallNext.data(), CallNext.size(), kEntry, Call),
+      static_cast<int>(CallNext.size()));
+  std::vector<LowOp> Ops;
+  Dec.liftToLow(Call, Ops);
+  EXPECT_FALSE(Dec.getX86GetPcOccurrence());
+
+  // pop %esi at an independently explored address.  The decoder may visit
+  // disconnected CFG roots in this order, but the machine instructions are
+  // not adjacent and therefore do not form a get-PC thunk.
+  const std::array<uint8_t, 1> PopESI = {0x5e};
+  DecodedInsn Pop{};
+  ASSERT_EQ(
+      Dec.decodeOneForLift(PopESI.data(), PopESI.size(), kEntry + 0x100, Pop),
+      static_cast<int>(PopESI.size()));
+  Dec.liftToLow(Pop, Ops);
+  EXPECT_FALSE(Dec.getX86GetPcOccurrence());
 }
 
 LowFunc buildAArch64PageBaseUse(std::vector<uint8_t> Bytes) {

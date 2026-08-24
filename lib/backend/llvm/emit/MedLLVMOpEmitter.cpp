@@ -28,6 +28,8 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 
+#include <algorithm>
+
 namespace neverd {
 
 namespace {
@@ -184,6 +186,25 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
 
   switch (Op.Opcode) {
   case NdOp::COPY: {
+    // A non-ELF i386 call-next/POP keeps the real LOAD/COPY in MedIR so an
+    // independently reachable POP never inherits a synthetic PC.  Only the
+    // final CFG-authenticated, post-SSA occurrence may replace that exact COPY
+    // with the raw architectural PC used by PIC arithmetic.
+    if (CurMedFunc) {
+      const AddressProvenanceVarKey OutputKey =
+          addressProvenanceVarKey(Op.Output);
+      auto GetPc = std::find_if(
+          CurMedFunc->I386GetPcModels.begin(),
+          CurMedFunc->I386GetPcModels.end(),
+          [&](const MedI386GetPcModel &Model) {
+            return addressProvenanceVarKey(Model.Output) == OutputKey;
+          });
+      if (GetPc != CurMedFunc->I386GetPcModels.end()) {
+        Result = llvm::ConstantInt::get(sizeToType(Op.Output.Size),
+                                        GetPc->PCValue);
+        break;
+      }
+    }
     // A direct occurrence that names an emitted function is unambiguous even
     // before a later use supplies a code role. Materialize it once at the COPY
     // so PHI/SELECT transports and no-opt IR cannot retain a dead original VA.

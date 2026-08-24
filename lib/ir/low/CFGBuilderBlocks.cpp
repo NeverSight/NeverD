@@ -205,7 +205,8 @@ void CFGBuilder::rebuildBlocks(LowFunc &Func) {
     for (bool Added = true; Added;) {
       Added = false;
       for (const auto &[Target, Sources] : DiscoveredCodeRefSources) {
-        if (resolvedJumpTableOwnsStorageAddress(Target, &ActiveTableOwners))
+        if (resolvedJumpTableOwnsStorageAddress(Target, &ActiveTableOwners)
+                .value_or(false))
           continue;
         auto TargetBlock = AddrToBlock.find(Target);
         if (TargetBlock == AddrToBlock.end() || Reachable[TargetBlock->second])

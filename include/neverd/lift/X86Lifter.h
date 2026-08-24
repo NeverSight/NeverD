@@ -26,13 +26,15 @@
 namespace neverd {
 
 struct RelocatedAddressOperand;
+struct RelocatedScalarOperand;
 
 class X86Lifter {
 public:
   explicit X86Lifter(Arch TargetArch);
 
   void lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
-            llvm::ArrayRef<RelocatedAddressOperand> Relocs = {});
+            llvm::ArrayRef<RelocatedAddressOperand> Relocs = {},
+            llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs = {});
 
   void setStrict(bool S) { Strict = S; }
   bool isStrict() const { return Strict; }
@@ -54,7 +56,9 @@ public:
     GetPcPending = false;
     GetPcArmedThisInsn = false;
     GetPcValue = 0;
+    GetPcCallAddr = InvalidVA;
     LastGetPcOccurrence.reset();
+    LastScalarOperandOccurrence.reset();
   }
   bool fpuDidReset() const { return FpuReset; }
 
@@ -62,6 +66,11 @@ public:
   /// completed a `call $+5; pop reg` get-PC pair.
   const std::optional<I386GetPcOccurrence> &getLastGetPcOccurrence() const {
     return LastGetPcOccurrence;
+  }
+
+  const std::optional<RelocatedInstructionScalarOperandOccurrence> &
+  getLastScalarOperandOccurrence() const {
+    return LastScalarOperandOccurrence;
   }
 
   /// Largest `ret imm` pop seen while lifting the current function (the i386
@@ -215,13 +224,17 @@ private:
 
   /// Cross-instruction state for the i386 PIC get-PC thunk `call $+5; pop reg`.
   /// The CALL handler arms \c GetPcPending with the next-instruction address;
-  /// if the very next instruction is a `pop`, the POP handler resolves the
-  /// popped register to that constant PC (so the constant pool / GOT base folds
-  /// to a known VA the emitter can redirect to rodata).
+  /// if the very next instruction is a `pop`, the POP handler records its
+  /// ordinary LOAD/COPY occurrence.  The CFG builder, not the lifter, decides
+  /// whether the call is the POP's sole predecessor before granting GOTPC
+  /// scalar-model semantics.
   bool GetPcPending = false;
   bool GetPcArmedThisInsn = false;
   uint64_t GetPcValue = 0;
+  uint64_t GetPcCallAddr = InvalidVA;
   std::optional<I386GetPcOccurrence> LastGetPcOccurrence;
+  std::optional<RelocatedInstructionScalarOperandOccurrence>
+      LastScalarOperandOccurrence;
 };
 
 } // namespace neverd

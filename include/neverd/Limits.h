@@ -41,11 +41,52 @@ constexpr uint64_t kMaxSegmentZeroFill = 1ull << 30; // 1 GiB
 /// almost certainly false positives.
 constexpr uint32_t kMaxJumpTableEntries = 4096;
 
-/// Shared work budget for occurrence-level jump-table evidence discovery.
-/// Candidate enumeration is input-controlled; exceeding this budget fails the
-/// proof closed instead of allowing repeated whole-CFG query batches to grow
-/// quadratically with function size.
+/// Aggregate retained-state/query budget for one occurrence-level jump-table
+/// evidence phase.  Modulo inference partitions this total into fixed proposal,
+/// structural-retention, direct, and replay accounts whose sum remains this
+/// value; the resolver's expression traversal separately shares one instance
+/// across its complete structural-query batch.  Candidate enumeration is
+/// input-controlled, so every retained item and query allocation is prepaid.
 constexpr uint32_t kMaxJumpTableEvidenceWork = 4096;
+
+/// Per-core proposal allowance inside one mask-domain fixed point.  Retained
+/// LowIR, coordinates and proposal batches also debit the aggregate account
+/// below; this smaller ceiling prevents one recursive core from monopolizing
+/// it while accommodating the largest supported real computed-goto core.
+constexpr uint32_t kMaxJumpTableMaskCoreEvidenceWork = 262144;
+
+/// Per-query-batch structural match allowance.  Every node/comparison also
+/// debits the caller's aggregate account when one is supplied; this local cap
+/// keeps legacy non-fixed-point callers bounded as well.
+constexpr uint32_t kMaxJumpTableValueMatchEvidenceWork = 65536;
+
+/// Structural-symbolization allowance shared by the exact unsigned-modulo
+/// recipe queries for one candidate.  Expression visits also debit the
+/// candidate-wide aggregate account, so this local ceiling cannot multiply
+/// whole-CFG work across query batches.
+constexpr uint32_t kMaxJumpTableModuloRecipeSymbolEvidenceWork = 131072;
+
+/// Aggregate allowance for one jump-table candidate in a resolver stage.
+/// Target/address roles, modulo/mask domains, every candidate-graph snapshot,
+/// recursive core proof, and precise-before-upper-bound replay all debit this
+/// one balance.  The larger explicit ceiling accommodates real multi-case
+/// computed gotos while preventing fresh per-phase or per-round allowances.
+constexpr uint32_t kMaxJumpTableMaskFixedPointEvidenceWork = 16777216;
+
+/// Aggregate allowance for one transactional multi-candidate resolver stage.
+/// A real function can contain several exact branch occurrences that consume
+/// the same physical table (peeled loops and computed-goto dispatch relays are
+/// common examples).  Each occurrence remains independently capped by
+/// kMaxJumpTableMaskFixedPointEvidenceWork; this larger, still finite account
+/// lets the stage validate the complete sibling batch before committing it.
+constexpr uint32_t kMaxJumpTableProposalStageEvidenceWork = 67108864;
+
+/// Aggregate allowance for proving that one authenticated Med jump-table
+/// target load is consumed exclusively by its recovered terminal branch.
+/// The proof walks a forward SSA use closure and otherwise could rescan an
+/// attacker-controlled function once for every derived value.  Exhaustion
+/// keeps the ordinary relocation mirror instead of suppressing any slot.
+constexpr uint32_t kMaxJumpTableTerminalUseEvidenceWork = 16777216;
 
 /// Maximum recursive depth while reconstructing one exact guard expression.
 /// The shared evidence-work budget bounds total graph size; this separate

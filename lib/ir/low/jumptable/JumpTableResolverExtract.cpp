@@ -6,9 +6,8 @@
 ///
 /// \file
 /// Construction of the resolver's results: inverse-normalizing table positions
-/// back into the case labels the emitter dispatches on, aligning branches that
-/// share one table so a short copy adopts its most complete sibling, and
-/// collecting the per-branch metadata into LowFunc::JumpTables.
+/// back into the case labels the emitter dispatches on and collecting the
+/// per-branch metadata into LowFunc::JumpTables.
 ///
 /// Part of the CFGBuilder jump-table resolver; see JumpTableResolver.cpp for
 /// top-level strategy dispatch.
@@ -26,67 +25,30 @@
 
 #include <climits>
 #include <cstdint>
-#include <map>
 #include <numeric>
 #include <set>
-#include <tuple>
 #include <vector>
 
 #define DEBUG_TYPE "neverd-cfg-builder"
 
 namespace neverd {
 
-namespace {
-
-struct TableDecodeIdentity {
-  va_t BaseAddr = 0;
-  uint16_t EntrySize = 0;
-  uint64_t EntryStride = 0;
-  std::vector<JumpTableStorageRange> StorageRanges;
-  std::vector<va_t> SuppressibleRelocationSlots;
-  bool IsRelative = false;
-  bool IsSigned = false;
-  bool HasTargetBase = false;
-  va_t TargetBase = 0;
-  uint32_t EntryScale = 1;
-  bool PreScaledIndex = false;
-  bool TwoTableSelect = false;
-  uint32_t TwoTableOffset = 0;
-  bool TwoTableHiPositive = false;
-  bool TwoLevelIndex = false;
-  int64_t NormBase = 0;
-  uint32_t NormShift = 0;
-  uint32_t Stride = 1;
-  std::vector<uint32_t> RuntimeCaseLabels;
-  std::vector<uint32_t> RuntimeSlotIndices;
-  bool RelocAbsolute = false;
-  bool MutatedUnsafe = false;
-
-  bool operator<(const TableDecodeIdentity &Other) const {
-    return std::tie(BaseAddr, EntrySize, EntryStride, StorageRanges,
-                    SuppressibleRelocationSlots, IsRelative, IsSigned,
-                    HasTargetBase, TargetBase, EntryScale, PreScaledIndex,
-                    TwoTableSelect, TwoTableOffset, TwoTableHiPositive,
-                    TwoLevelIndex, NormBase, NormShift, Stride,
-                    RuntimeCaseLabels, RuntimeSlotIndices, RelocAbsolute,
-                    MutatedUnsafe) <
-           std::tie(Other.BaseAddr, Other.EntrySize, Other.EntryStride,
-                    Other.StorageRanges, Other.SuppressibleRelocationSlots,
-                    Other.IsRelative, Other.IsSigned, Other.HasTargetBase,
-                    Other.TargetBase, Other.EntryScale, Other.PreScaledIndex,
-                    Other.TwoTableSelect, Other.TwoTableOffset,
-                    Other.TwoTableHiPositive, Other.TwoLevelIndex,
-                    Other.NormBase, Other.NormShift, Other.Stride,
-                    Other.RuntimeCaseLabels, Other.RuntimeSlotIndices,
-                    Other.RelocAbsolute, Other.MutatedUnsafe);
-  }
-};
-
-} // namespace
-
-bool CFGBuilder::resolvedJumpTableOwnsStorageAddress(
-    va_t Address, const std::set<va_t> *ReachableInsnFilter) const {
+std::optional<bool> CFGBuilder::resolvedJumpTableOwnsStorageAddress(
+    va_t Address, const std::set<va_t> *ReachableInsnFilter,
+    size_t *EvidenceBudget) const {
+  auto consumeEvidence = [&](size_t Amount = 1) {
+    if (!EvidenceBudget)
+      return true;
+    if (Amount > *EvidenceBudget) {
+      *EvidenceBudget = 0;
+      return false;
+    }
+    *EvidenceBudget -= Amount;
+    return true;
+  };
   for (const auto &[BranchAddr, Info] : ResolvedTableInfo) {
+    if (!consumeEvidence())
+      return std::nullopt;
     auto Rec = Insns.find(BranchAddr);
     if (Rec == Insns.end() || Rec->second.JumpTableTargets.empty())
       continue;
@@ -99,9 +61,12 @@ bool CFGBuilder::resolvedJumpTableOwnsStorageAddress(
     }
 
     if (!Info.StorageRanges.empty()) {
-      for (const JumpTableStorageRange &Range : Info.StorageRanges)
+      for (const JumpTableStorageRange &Range : Info.StorageRanges) {
+        if (!consumeEvidence())
+          return std::nullopt;
         if (Range.ownsStorageAddress(Address))
           return true;
+      }
       continue;
     }
 
@@ -115,6 +80,8 @@ bool CFGBuilder::resolvedJumpTableOwnsStorageAddress(
     JumpTableStorageRange Range{
         Info.BaseAddr, Info.EntrySize,
         Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize, SlotCount};
+    if (!consumeEvidence())
+      return std::nullopt;
     if (Range.ownsStorageAddress(Address))
       return true;
   }
@@ -216,119 +183,6 @@ bool CFGBuilder::recoverCaseLabels(JumpTable &JT,
                  << ", stride=" << Info.Stride << ")\n";
   });
   return true;
-}
-
-//===----------------------------------------------------------------------===//
-// reconcileSharedTables — align branches dispatching through the same table
-//===----------------------------------------------------------------------===//
-
-bool CFGBuilder::reconcileSharedTables(const BinaryImage &Img, Decoder &Dec) {
-  bool Changed = false;
-  auto DecodeIdentity = [](const JumpTableInfo &Info) {
-    return TableDecodeIdentity{Info.BaseAddr,
-                               Info.EntrySize,
-                               Info.EntryStride != 0 ? Info.EntryStride
-                                                     : Info.EntrySize,
-                               Info.StorageRanges,
-                               Info.SuppressibleRelocationSlots,
-                               Info.IsRelative,
-                               Info.IsSigned,
-                               Info.HasTargetBase,
-                               Info.TargetBase,
-                               Info.EntryScale,
-                               Info.PreScaledIndex,
-                               Info.TwoTableSelect,
-                               Info.TwoTableOffset,
-                               Info.TwoTableHiPositive,
-                               Info.TwoLevelIndex,
-                               Info.NormBase,
-                               Info.NormShift,
-                               Info.Stride,
-                               Info.RuntimeCaseLabels,
-                               Info.RuntimeSlotIndices,
-                               Info.RelocAbsolute,
-                               Info.MutatedUnsafe};
-  };
-  // A clang-peeled first loop iteration and the loop body dispatch through the
-  // *same* rodata jump table.  The peeled copy lives in the large
-  // function-prologue block, where pre-SSA register reuse can leave the bound /
-  // normalization analysis short (e.g. a case body's `and x,15` intersecting
-  // the index's `and x,31`), while the loop body — sitting in a small, clean
-  // block — recovers fully.  Group resolved branches by table base and let
-  // every short copy adopt the most complete sibling, so a peeled copy never
-  // drops cases.
-  std::map<TableDecodeIdentity, va_t> BestByIdentity;
-  for (auto &[Addr, Rec] : Insns) {
-    if (Rec.JumpTableTargets.empty())
-      continue;
-    auto It = ResolvedTableInfo.find(Addr);
-    if (It == ResolvedTableInfo.end() || !It->second.HasBaseAddr)
-      continue;
-    if (It->second.RequiresCompleteCFGProof)
-      continue;
-    const TableDecodeIdentity Key = DecodeIdentity(It->second);
-    auto B = BestByIdentity.find(Key);
-    if (B == BestByIdentity.end() ||
-        Insns[B->second].JumpTableTargets.size() < Rec.JumpTableTargets.size())
-      BestByIdentity[Key] = Addr;
-  }
-
-  // Collect the branches to upgrade first; applying them calls explore(), which
-  // mutates Insns and would invalidate an in-flight iterator.
-  std::vector<va_t> ToUpgrade;
-  for (auto &[Addr, Rec] : Insns) {
-    if (Rec.JumpTableTargets.empty())
-      continue;
-    auto It = ResolvedTableInfo.find(Addr);
-    if (It == ResolvedTableInfo.end() || !It->second.HasBaseAddr)
-      continue;
-    if (It->second.RequiresCompleteCFGProof)
-      continue;
-    auto B = BestByIdentity.find(DecodeIdentity(It->second));
-    if (B == BestByIdentity.end() || B->second == Addr)
-      continue;
-    const auto &BestInfo = ResolvedTableInfo[B->second];
-    if (BestInfo.RequiresCompleteCFGProof)
-      continue;
-    if (Insns[B->second].JumpTableTargets.size() <= Rec.JumpTableTargets.size())
-      continue;
-    ToUpgrade.push_back(Addr);
-  }
-
-  for (va_t Addr : ToUpgrade) {
-    auto RecIt = Insns.find(Addr);
-    if (RecIt == Insns.end())
-      continue;
-    InsnRecord &Rec = RecIt->second;
-    const TableDecodeIdentity Key = DecodeIdentity(ResolvedTableInfo[Addr]);
-
-    // Re-read with the sibling's (more complete) table parameters, keeping this
-    // branch's own index register so its switch variable stays correct.
-    JumpTableInfo Adopted = ResolvedTableInfo[BestByIdentity[Key]];
-    Adopted.IndexReg = ResolvedTableInfo[Addr].IndexReg;
-    Adopted.IndexValueAtUse = ResolvedTableInfo[Addr].IndexValueAtUse;
-    Adopted.IndexUseAddr = ResolvedTableInfo[Addr].IndexUseAddr;
-    Adopted.IndexUseSeq = ResolvedTableInfo[Addr].IndexUseSeq;
-    Adopted.IndexValueDefinedAtUse =
-        ResolvedTableInfo[Addr].IndexValueDefinedAtUse;
-    Adopted.TableLoadAddr = ResolvedTableInfo[Addr].TableLoadAddr;
-    Adopted.TableLoadSeq = ResolvedTableInfo[Addr].TableLoadSeq;
-    Adopted.TargetLoads = ResolvedTableInfo[Addr].TargetLoads;
-    auto NewTargets = readTableEntries(Img, Adopted);
-    if (NewTargets.size() <= Rec.JumpTableTargets.size())
-      continue;
-
-    Rec.JumpTableTargets = NewTargets;
-    ResolvedTableInfo[Addr] = Adopted;
-    Changed = true;
-    for (va_t T : NewTargets) {
-      if (!ExploredAddrs.count(T)) {
-        BlockStarts.insert(T);
-        explore(Img, Dec, T);
-      }
-    }
-  }
-  return Changed;
 }
 
 //===----------------------------------------------------------------------===//

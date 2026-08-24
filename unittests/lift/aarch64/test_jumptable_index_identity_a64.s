@@ -251,6 +251,71 @@ a64_pageoff_clobbered_base_no_escape:
 .size a64_pageoff_clobbered_base_no_escape, .-a64_pageoff_clobbered_base_no_escape
 
 .p2align 2
+// A literal-zero selector must not borrow a four-entry domain from an x&3
+// producer on the architecturally dead fallthrough of `cbz w10`.  CFG
+// discovery still decodes that lexical block, but it has no path to the
+// table-index use.
+.globl a64_constant_selector_unreachable_mask
+.type a64_constant_selector_unreachable_mask, %function
+a64_constant_selector_unreachable_mask:
+  mov w10, wzr
+  cbz w10, .La64_constant_selector_dispatch
+.La64_constant_selector_dead_mask:
+  and w10, w0, #3
+  mov w0, #1624
+  ret
+.La64_constant_selector_dispatch:
+  adrp x9, a64_constant_selector_table
+  add x9, x9, :lo12:a64_constant_selector_table
+  ldr x11, [x9, w10, uxtw #3]
+  br x11
+.La64_constant_selector_case0:
+  mov w0, #1620
+  ret
+.La64_constant_selector_case1:
+  mov w0, #1621
+  ret
+.La64_constant_selector_case2:
+  mov w0, #1622
+  ret
+.La64_constant_selector_case3:
+  mov w0, #1623
+  ret
+.size a64_constant_selector_unreachable_mask, .-a64_constant_selector_unreachable_mask
+
+.p2align 2
+// This is q-q*5, not x-(x/5)*5: UDIV destructively overwrites the register that
+// held x before the later SUB reads it.  Physical register-name equality across
+// that defining occurrence must not authenticate a five-value modulo domain.
+.globl a64_destructive_udiv_is_not_remainder
+.type a64_destructive_udiv_is_not_remainder, %function
+a64_destructive_udiv_is_not_remainder:
+  mov w1, #5
+  udiv w0, w0, w1
+  mul w2, w0, w1
+  sub w0, w0, w2
+  adrp x9, a64_destructive_udiv_table
+  add x9, x9, :lo12:a64_destructive_udiv_table
+  ldr x10, [x9, w0, uxtw #3]
+  br x10
+.La64_destructive_udiv_case0:
+  mov w0, #1630
+  ret
+.La64_destructive_udiv_case1:
+  mov w0, #1631
+  ret
+.La64_destructive_udiv_case2:
+  mov w0, #1632
+  ret
+.La64_destructive_udiv_case3:
+  mov w0, #1633
+  ret
+.La64_destructive_udiv_case4:
+  mov w0, #1634
+  ret
+.size a64_destructive_udiv_is_not_remainder, .-a64_destructive_udiv_is_not_remainder
+
+.p2align 2
 .globl a64_writable_unknown_callee
 .type a64_writable_unknown_callee, %function
 a64_writable_unknown_callee:
@@ -290,3 +355,26 @@ a64_pageoff_clobbered_base_table:
   .xword .La64_pageoff_clobbered_case0
   .xword .La64_pageoff_clobbered_case1
 .size a64_pageoff_clobbered_base_table, .-a64_pageoff_clobbered_base_table
+
+.section .rodata.jt_a64_constant_selector,"a",%progbits
+.p2align 3
+.globl a64_constant_selector_table
+.type a64_constant_selector_table, %object
+a64_constant_selector_table:
+  .xword .La64_constant_selector_case0
+  .xword .La64_constant_selector_case1
+  .xword .La64_constant_selector_case2
+  .xword .La64_constant_selector_case3
+.size a64_constant_selector_table, .-a64_constant_selector_table
+
+.section .rodata.jt_a64_destructive_udiv,"a",%progbits
+.p2align 3
+.globl a64_destructive_udiv_table
+.type a64_destructive_udiv_table, %object
+a64_destructive_udiv_table:
+  .xword .La64_destructive_udiv_case0
+  .xword .La64_destructive_udiv_case1
+  .xword .La64_destructive_udiv_case2
+  .xword .La64_destructive_udiv_case3
+  .xword .La64_destructive_udiv_case4
+.size a64_destructive_udiv_table, .-a64_destructive_udiv_table

@@ -533,8 +533,9 @@ std::optional<uint64_t> evaluateGuardExpr(const GuardExprPtr &Expr,
 // inferBoundsFromPreciseGuards — shared CFG/value/polarity bound evidence
 //===----------------------------------------------------------------------===//
 
-bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
-                                              JumpTableInfo &Info) {
+bool CFGBuilder::inferBoundsFromPreciseGuards(
+    const InsnRecord &Rec, JumpTableInfo &Info,
+    size_t *CandidateEvidenceBudget) {
   if ((!Info.IndexValueAtUse.isReg() && !Info.IndexValueAtUse.isTemp()) ||
       Info.IndexUseAddr == InvalidVA || Info.IndexUseSeq < 0 ||
       Info.TableLoadAddr == InvalidVA)
@@ -544,17 +545,47 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
     Info.IncompleteGuardDomain = true;
     return false;
   }
+  if (!CandidateEvidenceBudget) {
+    Info.IncompleteGuardDomain = true;
+    return false;
+  }
 
   bool SawControllingGuard = false;
   bool GuardBuildExhausted = false;
   size_t GuardBuildWork = limits::kMaxJumpTableEvidenceWork;
-  auto consumeGuardBuildWork = [&]() {
-    if (GuardBuildWork == 0) {
+  auto consumeCandidateEvidence = [&](size_t Amount = 1) {
+    if (Amount > *CandidateEvidenceBudget) {
+      *CandidateEvidenceBudget = 0;
       GuardBuildExhausted = true;
       return false;
     }
-    --GuardBuildWork;
+    *CandidateEvidenceBudget -= Amount;
     return true;
+  };
+  auto consumeCandidateProduct = [&](size_t Left, size_t Right,
+                                     size_t Extra = 0) {
+    if (Left != 0 && Right >
+                         (std::numeric_limits<size_t>::max() - Extra) / Left) {
+      *CandidateEvidenceBudget = 0;
+      GuardBuildExhausted = true;
+      return false;
+    }
+    return consumeCandidateEvidence(Left * Right + Extra);
+  };
+  auto consumeGuardBuildWork = [&](size_t Amount = 1) {
+    if (Amount > GuardBuildWork) {
+      GuardBuildWork = 0;
+      GuardBuildExhausted = true;
+      return false;
+    }
+    if (!consumeCandidateEvidence(Amount))
+      return false;
+    GuardBuildWork -= Amount;
+    return true;
+  };
+  auto failIncomplete = [&]() {
+    Info.IncompleteGuardDomain = true;
+    return false;
   };
   struct GuardSyntaxNode;
   using GuardSyntaxPtr = std::shared_ptr<GuardSyntaxNode>;
@@ -571,12 +602,17 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
   };
   using BuildKey = std::tuple<uint8_t, uint64_t, uint16_t, va_t, int>;
   std::map<BuildKey, GuardSyntaxPtr> SyntaxMemo;
-  std::vector<JumpTableValueOccurrence> IndexAlternatives =
-      Info.IndexValueAlternatives;
-  if (IndexAlternatives.empty())
+  if (!consumeCandidateEvidence(Info.IndexValueAlternatives.size()))
+    return failIncomplete();
+  std::vector<JumpTableValueOccurrence> IndexAlternatives(
+      Info.IndexValueAlternatives);
+  if (IndexAlternatives.empty()) {
+    if (!consumeCandidateEvidence())
+      return failIncomplete();
     IndexAlternatives.push_back({Info.IndexValueAtUse, Info.IndexUseAddr,
                                  Info.IndexUseSeq,
                                  Info.IndexValueDefinedAtUse});
+  }
   std::vector<JumpTableValueQuery> ProofQueries;
   std::vector<std::pair<GuardSyntaxPtr, bool>> GuardRoots;
 
@@ -620,14 +656,19 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
 
   std::vector<va_t> GuardBranchAddrs;
   for (const auto &[BranchAddr, BranchRec] : Insns) {
+    if (!consumeCandidateEvidence())
+      return failIncomplete();
     if (BranchAddr == Rec.Addr || !BranchRec.IsCond || !BranchRec.IsBranch)
       continue;
+    if (!consumeCandidateEvidence())
+      return failIncomplete();
     GuardBranchAddrs.push_back(BranchAddr);
   }
   bool ControlAnalysisComplete = false;
   const std::vector<std::optional<bool>> TableConditions =
       tableLoadConditionValues(GuardBranchAddrs, Info,
-                               &ControlAnalysisComplete);
+                               &ControlAnalysisComplete,
+                               CandidateEvidenceBudget);
   if (!ControlAnalysisComplete ||
       TableConditions.size() != GuardBranchAddrs.size()) {
     if (!GuardBranchAddrs.empty()) {
@@ -693,17 +734,44 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
       return false;
     }
   };
+  bool AliasEvidenceExhausted = false;
   size_t AliasSyntaxWork = limits::kMaxJumpTableEvidenceWork;
+  auto consumeAliasSyntaxWork = [&](size_t Amount = 1) {
+    if (Amount > AliasSyntaxWork) {
+      AliasSyntaxWork = 0;
+      AliasEvidenceExhausted = true;
+      return false;
+    }
+    if (!consumeCandidateEvidence(Amount)) {
+      AliasEvidenceExhausted = true;
+      return false;
+    }
+    AliasSyntaxWork -= Amount;
+    return true;
+  };
+  auto consumeAliasQueryWork = [&](size_t QueryCount,
+                                   size_t EvidenceAmount) {
+    if (AliasQueries.size() > limits::kMaxJumpTableEvidenceWork ||
+        QueryCount >
+            limits::kMaxJumpTableEvidenceWork - AliasQueries.size() ||
+        !consumeCandidateEvidence(EvidenceAmount)) {
+      AliasEvidenceExhausted = true;
+      return false;
+    }
+    return true;
+  };
   auto buildLocalPredicate = [&](const InsnRecord &Insn, const NdVar &Root,
                                  size_t Before) -> LocalPredicatePtr {
+    if (!consumeAliasSyntaxWork())
+      return {};
     std::function<LocalPredicatePtr(const NdVar &, size_t, uint32_t)> Build =
         [&](const NdVar &Value, size_t Cutoff,
             uint32_t Depth) -> LocalPredicatePtr {
       if (Depth > limits::kMaxJumpTableGuardExpressionDepth ||
-          AliasSyntaxWork == 0 || Value.Size == 0 ||
-          Value.Size > sizeof(uint64_t))
+          Value.Size == 0 || Value.Size > sizeof(uint64_t))
         return {};
-      --AliasSyntaxWork;
+      if (!consumeAliasSyntaxWork())
+        return {};
       auto Node = std::make_shared<LocalPredicateExpr>();
       Node->Size = Value.Size;
       if (Value.isConst()) {
@@ -725,6 +793,8 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
       };
       size_t DefIndex = Insn.Ops.size();
       for (size_t I = std::min(Cutoff, Insn.Ops.size()); I > 0; --I) {
+        if (!consumeAliasSyntaxWork())
+          return {};
         const LowOp &Def = Insn.Ops[I - 1];
         if (!overlaps(Def.Output, Value))
           continue;
@@ -749,8 +819,12 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
       Node->Opcode = Def.Opcode;
       Node->Size = Def.Output.Size;
       for (uint8_t Input = 0; Input < Def.NumInputs; ++Input) {
+        if (!consumeAliasSyntaxWork())
+          return {};
         LocalPredicatePtr Child = Build(Def.Inputs[Input], DefIndex, Depth + 1);
         if (!Child)
+          return {};
+        if (!consumeAliasSyntaxWork())
           return {};
         Node->Inputs.push_back(std::move(Child));
       }
@@ -761,10 +835,14 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
   auto pairLocalPredicates = [&](const LocalPredicatePtr &Left,
                                  const LocalPredicatePtr &Right,
                                  std::vector<size_t> &Queries) {
+    if (!consumeAliasSyntaxWork())
+      return false;
     std::function<bool(const LocalPredicatePtr &, const LocalPredicatePtr &,
                        uint32_t)>
         Pair = [&](const LocalPredicatePtr &A, const LocalPredicatePtr &B,
                    uint32_t Depth) {
+          if (!consumeAliasSyntaxWork())
+            return false;
           if (!A || !B || Depth > limits::kMaxJumpTableGuardExpressionDepth ||
               A->Size != B->Size)
             return false;
@@ -777,7 +855,8 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
               B->K == LocalPredicateExpr::Kind::Leaf) {
             if (A->K != LocalPredicateExpr::Kind::Leaf ||
                 B->K != LocalPredicateExpr::Kind::Leaf ||
-                AliasQueries.size() >= limits::kMaxJumpTableEvidenceWork)
+                !consumeAliasQueryWork(/*QueryCount=*/1,
+                                       /*query + alternative + index=*/3))
               return false;
             Queries.push_back(AliasQueries.size());
             AliasQueries.push_back({A->Leaf.Value,
@@ -799,6 +878,8 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
   };
   for (size_t GuardIndex = 0; GuardIndex < GuardBranchAddrs.size();
        ++GuardIndex) {
+    if (!consumeAliasSyntaxWork())
+      return failIncomplete();
     if (!TableConditions[GuardIndex])
       continue;
     const va_t BranchAddr = GuardBranchAddrs[GuardIndex];
@@ -808,6 +889,8 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
     const LowOp *CondBranch = nullptr;
     size_t CondBranchIndex = 0;
     for (size_t I = 0; I < BranchIt->second.Ops.size(); ++I) {
+      if (!consumeAliasSyntaxWork())
+        return failIncomplete();
       const LowOp &Op = BranchIt->second.Ops[I];
       if (Op.Opcode == NdOp::COND_BR && Op.NumInputs >= 2)
         CondBranch = &Op, CondBranchIndex = I;
@@ -820,9 +903,13 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
     bool Complemented = false;
     int BeforeSeq = CondBranch->Seq;
     for (int Depth = 0; Depth < limits::kMaxQuasiCopyDepth; ++Depth) {
+      if (!consumeAliasSyntaxWork())
+        return failIncomplete();
       const LowOp *Def = nullptr;
       size_t DefIndex = BranchIt->second.Ops.size();
       for (size_t I = PredicateUseIndex; I > 0; --I) {
+        if (!consumeAliasSyntaxWork())
+          return failIncomplete();
         const LowOp &Candidate = BranchIt->second.Ops[I - 1];
         if (Candidate.Seq >= BeforeSeq || !sameVar(Candidate.Output, Predicate))
           continue;
@@ -841,13 +928,23 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
     }
     const LocalPredicatePtr BranchPredicate =
         buildLocalPredicate(BranchIt->second, Predicate, PredicateUseIndex);
+    if (AliasEvidenceExhausted) {
+      Info.IncompleteGuardDomain = true;
+      return false;
+    }
     if (!BranchPredicate)
       continue;
 
     for (const auto &[Addr, Insn] : Insns) {
+      if (!consumeAliasSyntaxWork())
+        return failIncomplete();
       if (Insn.IsInstructionGuard || Addr > BranchAddr)
         continue;
-      for (const LowOp &Select : Insn.Ops) {
+      for (size_t SelectIndex = 0; SelectIndex < Insn.Ops.size();
+           ++SelectIndex) {
+        if (!consumeAliasSyntaxWork())
+          return failIncomplete();
+        const LowOp &Select = Insn.Ops[SelectIndex];
         if (Select.Opcode != NdOp::SELECT || Select.NumInputs < 3 ||
             Select.Output.Size == 0 ||
             !beforePoint(Select, BranchAddr, CondBranch->Seq))
@@ -861,20 +958,26 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
         PredicatedIndexAlias Candidate;
         Candidate.Arm = {SelectedArm, Select.Addr, Select.Seq,
                          /*DefinedAtPoint=*/false};
-        const auto SelectIt =
-            std::find_if(Insn.Ops.begin(), Insn.Ops.end(),
-                         [&](const LowOp &Op) { return &Op == &Select; });
-        if (SelectIt == Insn.Ops.end())
-          continue;
         const LocalPredicatePtr SelectPredicate = buildLocalPredicate(
-            Insn, Select.Inputs[0],
-            static_cast<size_t>(std::distance(Insn.Ops.begin(), SelectIt)));
-        if (!SelectPredicate ||
-            !pairLocalPredicates(BranchPredicate, SelectPredicate,
-                                 Candidate.Queries))
+            Insn, Select.Inputs[0], SelectIndex);
+        if (AliasEvidenceExhausted) {
+          Info.IncompleteGuardDomain = true;
+          return false;
+        }
+        const bool PredicatesMatch =
+            SelectPredicate &&
+            pairLocalPredicates(BranchPredicate, SelectPredicate,
+                                Candidate.Queries);
+        if (AliasEvidenceExhausted) {
+          Info.IncompleteGuardDomain = true;
+          return false;
+        }
+        if (!PredicatesMatch)
           continue;
-        if (AliasQueries.size() + IndexAlternatives.size() >
-            limits::kMaxJumpTableEvidenceWork) {
+        if (IndexAlternatives.size() >
+                std::numeric_limits<size_t>::max() / 3 ||
+            !consumeAliasQueryWork(IndexAlternatives.size(),
+                                   IndexAlternatives.size() * 3)) {
           Info.IncompleteGuardDomain = true;
           return false;
         }
@@ -888,35 +991,56 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
                                   /*AllowZeroExtension=*/false,
                                   /*AllowSignExtension=*/false});
         }
+        if (!consumeAliasSyntaxWork())
+          return failIncomplete();
         AliasCandidates.push_back(std::move(Candidate));
       }
     }
   }
   if (!AliasQueries.empty()) {
     bool AliasProofComplete = false;
-    const std::vector<bool> AliasResults =
-        tableValuesMatchAtUses(AliasQueries, &AliasProofComplete);
+    const std::vector<bool> AliasResults = tableValuesMatchAtUses(
+        AliasQueries, &AliasProofComplete, nullptr, InvalidVA, nullptr,
+        CandidateEvidenceBudget);
     if (!AliasProofComplete || AliasResults.size() != AliasQueries.size()) {
       Info.IncompleteGuardDomain = true;
       return false;
     }
     for (const PredicatedIndexAlias &Candidate : AliasCandidates) {
-      if (!std::all_of(Candidate.Queries.begin(), Candidate.Queries.end(),
-                       [&](size_t Query) {
-                         return Query < AliasResults.size() &&
-                                AliasResults[Query];
-                       }))
+      if (!consumeAliasSyntaxWork())
+        return failIncomplete();
+      bool CandidateMatches = true;
+      for (size_t Query : Candidate.Queries) {
+        if (!consumeAliasSyntaxWork())
+          return failIncomplete();
+        if (Query >= AliasResults.size() || !AliasResults[Query]) {
+          CandidateMatches = false;
+          break;
+        }
+      }
+      if (!CandidateMatches)
         continue;
-      if (std::none_of(IndexAlternatives.begin(), IndexAlternatives.end(),
-                       [&](const JumpTableValueOccurrence &Known) {
-                         return Known == Candidate.Arm;
-                       }))
+      bool KnownAlternative = false;
+      for (const JumpTableValueOccurrence &Known : IndexAlternatives) {
+        if (!consumeAliasSyntaxWork())
+          return failIncomplete();
+        if (Known == Candidate.Arm) {
+          KnownAlternative = true;
+          break;
+        }
+      }
+      if (!KnownAlternative) {
+        if (!consumeAliasSyntaxWork())
+          return failIncomplete();
         IndexAlternatives.push_back(Candidate.Arm);
+      }
     }
   }
 
   for (size_t GuardIndex = 0; GuardIndex < GuardBranchAddrs.size();
        ++GuardIndex) {
+    if (!consumeGuardBuildWork())
+      return failIncomplete();
     const va_t BranchAddr = GuardBranchAddrs[GuardIndex];
     const std::optional<bool> &TableCondition = TableConditions[GuardIndex];
     if (!TableCondition)
@@ -932,12 +1056,14 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
     std::vector<LowOp> Ops;
     for (auto It = Insns.lower_bound(BlockStart);
          It != Insns.end() && It->first <= BranchAddr; ++It) {
+      if (!consumeGuardBuildWork())
+        break;
       auto NextBlock = BlockStarts.upper_bound(It->first);
       if (NextBlock == BlockStarts.begin() ||
           *std::prev(NextBlock) != BlockStart)
         break;
       for (const LowOp &Op : It->second.Ops) {
-        if (!consumeGuardBuildWork())
+        if (!consumeGuardBuildWork(/*scan + retention=*/2))
           break;
         Ops.push_back(Op);
       }
@@ -966,6 +1092,8 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
       continue;
 
     std::set<BuildKey> Active;
+    if (!consumeGuardBuildWork())
+      return failIncomplete();
     std::function<GuardSyntaxPtr(const NdVar &, int, va_t, int, uint32_t)>
         Collect = [&](const NdVar &V, int Before, va_t UseAddr, int UseSeq,
                       uint32_t Depth) -> GuardSyntaxPtr {
@@ -991,25 +1119,33 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
 
       BuildKey Key{static_cast<uint8_t>(V.Space), V.Offset, V.Size, UseAddr,
                    UseSeq};
+      if (!consumeGuardBuildWork())
+        return {};
       if (auto It = SyntaxMemo.find(Key); It != SyntaxMemo.end())
         return It->second;
+      if (!consumeGuardBuildWork())
+        return {};
       if (!Active.insert(Key).second)
         return {};
       auto Finish = [&](GuardSyntaxPtr Result) {
         Active.erase(Key);
+        if (!consumeGuardBuildWork())
+          return GuardSyntaxPtr{};
         SyntaxMemo.emplace(Key, Result);
         return Result;
       };
 
+      if (!consumeGuardBuildWork())
+        return Finish({});
       auto Node = std::make_shared<GuardSyntaxNode>();
       Node->Value = V;
       Node->UseAddr = UseAddr;
       Node->UseSeq = UseSeq;
-      if (IndexAlternatives.size() > GuardBuildWork) {
-        GuardBuildExhausted = true;
+      if (IndexAlternatives.size() ==
+              std::numeric_limits<size_t>::max() ||
+          !consumeGuardBuildWork(IndexAlternatives.size() + 1)) {
         return Finish({});
       }
-      GuardBuildWork -= IndexAlternatives.size();
       Node->IndexQuery = ProofQueries.size();
       ProofQueries.push_back({V, UseAddr, UseSeq, IndexAlternatives,
                               /*AllowZeroExtension=*/true,
@@ -1047,7 +1183,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
       }
       if (!supportedGuardOpcode(Def.Opcode))
         return Finish(Node);
-      if (!consumeGuardBuildWork())
+      if (!consumeGuardBuildWork(/*query + one alternative=*/2))
         return Finish({});
       Node->HasDef = true;
       Node->Def = Def;
@@ -1061,11 +1197,14 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
           /*AllowSignExtension=*/false,
       });
       for (int I = 0; I < Def.NumInputs; ++I) {
+        // Charge the input scan independently from recursive collection.
         if (!consumeGuardBuildWork())
           return Finish({});
         GuardSyntaxPtr Input =
             Collect(Def.Inputs[I], DefIndex - 1, Def.Addr, Def.Seq, Depth + 1);
         if (!Input)
+          return Finish({});
+        if (!consumeGuardBuildWork())
           return Finish({});
         Node->Inputs.push_back(std::move(Input));
       }
@@ -1079,8 +1218,11 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
       Info.IncompleteGuardDomain = true;
       return false;
     }
-    if (Root)
+    if (Root) {
+      if (!consumeGuardBuildWork())
+        return failIncomplete();
       GuardRoots.emplace_back(std::move(Root), *TableCondition);
+    }
   }
 
   if (GuardBuildExhausted) {
@@ -1095,7 +1237,9 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
   bool ProofComplete = false;
   std::vector<bool> ProofResults;
   if (!ProofQueries.empty())
-    ProofResults = tableValuesMatchAtUses(ProofQueries, &ProofComplete);
+    ProofResults = tableValuesMatchAtUses(
+        ProofQueries, &ProofComplete, nullptr, InvalidVA, nullptr,
+        CandidateEvidenceBudget);
   if (!ProofComplete || ProofResults.size() != ProofQueries.size()) {
     if (SawControllingGuard)
       Info.IncompleteGuardDomain = true;
@@ -1104,6 +1248,8 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
 
   std::map<const GuardSyntaxNode *, GuardExprPtr> ExprMemo;
   std::set<const GuardSyntaxNode *> ActiveExprs;
+  if (!consumeGuardBuildWork())
+    return failIncomplete();
   std::function<GuardExprPtr(const GuardSyntaxPtr &, uint32_t)> Materialize =
       [&](const GuardSyntaxPtr &Node, uint32_t Depth) -> GuardExprPtr {
     if (!Node || Depth > limits::kMaxJumpTableGuardExpressionDepth ||
@@ -1111,12 +1257,18 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
       GuardBuildExhausted = true;
       return {};
     }
+    if (!consumeGuardBuildWork())
+      return {};
     if (auto It = ExprMemo.find(Node.get()); It != ExprMemo.end())
       return It->second;
+    if (!consumeGuardBuildWork())
+      return {};
     if (!ActiveExprs.insert(Node.get()).second)
       return {};
     auto Finish = [&](GuardExprPtr Result) {
       ActiveExprs.erase(Node.get());
+      if (!consumeGuardBuildWork())
+        return GuardExprPtr{};
       ExprMemo.emplace(Node.get(), Result);
       return Result;
     };
@@ -1145,10 +1297,13 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
     Expr->Size = Node->Def.Output.Size;
     Expr->Opcode = Node->Def.Opcode;
     for (const GuardSyntaxPtr &InputNode : Node->Inputs) {
+      // Charge both the child-edge scan and the retained expression edge.
       if (!consumeGuardBuildWork())
         return Finish({});
       GuardExprPtr Input = Materialize(InputNode, Depth + 1);
       if (!Input)
+        return Finish({});
+      if (!consumeGuardBuildWork())
         return Finish({});
       Expr->ContainsIndex |= Input->ContainsIndex;
       Expr->Inputs.push_back(std::move(Input));
@@ -1157,14 +1312,23 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
   };
 
   std::vector<std::pair<GuardExprPtr, bool>> IndexGuards;
+  if (!consumeGuardBuildWork(GuardRoots.size()))
+    return failIncomplete();
   IndexGuards.reserve(GuardRoots.size());
   auto indexWidth = [&](const GuardExprPtr &Root) -> std::optional<uint16_t> {
     std::optional<uint16_t> Width;
     bool Conflict = false;
-    std::function<void(const GuardExprPtr &)> Visit =
-        [&](const GuardExprPtr &Expr) {
-          if (!Expr || Conflict)
+    if (!consumeGuardBuildWork())
+      return std::nullopt;
+    std::function<void(const GuardExprPtr &, uint32_t)> Visit =
+        [&](const GuardExprPtr &Expr, uint32_t Depth) {
+          if (!Expr || Conflict || GuardBuildExhausted)
             return;
+          if (Depth > limits::kMaxJumpTableGuardExpressionDepth ||
+              !consumeGuardBuildWork()) {
+            GuardBuildExhausted = true;
+            return;
+          }
           if (Expr->K == GuardExpr::Kind::Index) {
             if (Width && *Width != Expr->Size)
               Conflict = true;
@@ -1173,10 +1337,10 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
             return;
           }
           for (const GuardExprPtr &Input : Expr->Inputs)
-            Visit(Input);
+            Visit(Input, Depth + 1);
         };
-    Visit(Root);
-    return Conflict ? std::nullopt : Width;
+    Visit(Root, 0);
+    return Conflict || GuardBuildExhausted ? std::nullopt : Width;
   };
   struct MaterializedGuard {
     GuardExprPtr Expr;
@@ -1184,8 +1348,12 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
     uint16_t IndexWidth = 0;
   };
   std::vector<MaterializedGuard> MaterializedGuards;
+  if (!consumeGuardBuildWork(GuardRoots.size()))
+    return failIncomplete();
   MaterializedGuards.reserve(GuardRoots.size());
   for (const auto &[Root, TableCondition] : GuardRoots) {
+    if (!consumeGuardBuildWork())
+      return failIncomplete();
     GuardExprPtr Expr = Materialize(Root, /*Depth=*/0);
     if (GuardBuildExhausted) {
       Info.IncompleteGuardDomain = true;
@@ -1195,9 +1363,14 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
     // different views cannot share one unconstrained symbolic variable; the
     // coherent view used for the proof is selected below.
     const std::optional<uint16_t> Width = indexWidth(Expr);
+    if (GuardBuildExhausted)
+      return failIncomplete();
     if (Expr && Expr->ContainsIndex && Width && *Width != 0 &&
-        *Width <= Info.IndexValueAtUse.Size)
+        *Width <= Info.IndexValueAtUse.Size) {
+      if (!consumeGuardBuildWork())
+        return failIncomplete();
       MaterializedGuards.push_back({std::move(Expr), TableCondition, *Width});
+    }
   }
 
   // Prefer constraints written directly over the table-address coordinate.
@@ -1208,16 +1381,26 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
   // and is therefore conservative.  A later bound check excludes the part of
   // a narrow signed lane where sign- and zero-extension no longer agree.
   uint16_t SelectedIndexWidth = Info.IndexValueAtUse.Size;
-  const bool HasCanonicalGuard =
-      std::any_of(MaterializedGuards.begin(), MaterializedGuards.end(),
-                  [&](const MaterializedGuard &Guard) {
-                    return Guard.IndexWidth == Info.IndexValueAtUse.Size;
-                  });
+  bool HasCanonicalGuard = false;
+  for (const MaterializedGuard &Guard : MaterializedGuards) {
+    if (!consumeGuardBuildWork())
+      return failIncomplete();
+    if (Guard.IndexWidth == Info.IndexValueAtUse.Size) {
+      HasCanonicalGuard = true;
+      break;
+    }
+  }
   if (!HasCanonicalGuard && !MaterializedGuards.empty())
     SelectedIndexWidth = MaterializedGuards.front().IndexWidth;
-  for (MaterializedGuard &Guard : MaterializedGuards)
-    if (Guard.IndexWidth == SelectedIndexWidth)
+  for (MaterializedGuard &Guard : MaterializedGuards) {
+    if (!consumeGuardBuildWork())
+      return failIncomplete();
+    if (Guard.IndexWidth == SelectedIndexWidth) {
+      if (!consumeGuardBuildWork())
+        return failIncomplete();
       IndexGuards.emplace_back(std::move(Guard.Expr), Guard.TableCondition);
+    }
+  }
 
   if (IndexGuards.empty()) {
     if (SawControllingGuard)
@@ -1230,15 +1413,48 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
   // upper bound is sound only when a separate dominating guard excludes the
   // negative half-domain, while either comparison alone is not a dense
   // zero-based table domain.
+  if (!consumeGuardBuildWork())
+    return failIncomplete();
   GuardSymbolization Symbolic;
   std::vector<SymRef> SymbolicConstraints;
+  if (!consumeGuardBuildWork(IndexGuards.size()))
+    return failIncomplete();
   SymbolicConstraints.reserve(IndexGuards.size());
+  if (!consumeGuardBuildWork())
+    return failIncomplete();
+  std::function<std::optional<size_t>(const GuardExprPtr &, uint32_t)>
+      symbolicGuardWork = [&](const GuardExprPtr &Expr,
+                              uint32_t Depth) -> std::optional<size_t> {
+    if (!Expr || Depth > limits::kMaxJumpTableGuardExpressionDepth ||
+        !consumeGuardBuildWork())
+      return std::nullopt;
+    // One symbolic expression node plus its retained input vector.  Integer
+    // symbolization can add coercions and, for carry/overflow, a small fixed
+    // expansion; four units per input plus twelve covers every opcode above.
+    size_t Work = Expr->K == GuardExpr::Kind::Operation ? 12 : 2;
+    if (Expr->Inputs.size() >
+        (std::numeric_limits<size_t>::max() - Work) / 4)
+      return std::nullopt;
+    Work += Expr->Inputs.size() * 4;
+    for (const GuardExprPtr &Input : Expr->Inputs) {
+      std::optional<size_t> Child = symbolicGuardWork(Input, Depth + 1);
+      if (!Child || *Child > std::numeric_limits<size_t>::max() - Work)
+        return std::nullopt;
+      Work += *Child;
+    }
+    return Work;
+  };
   for (const auto &[Expr, TableCondition] : IndexGuards) {
+    std::optional<size_t> SymbolWork = symbolicGuardWork(Expr, 0);
+    if (!SymbolWork || !consumeGuardBuildWork(*SymbolWork))
+      return failIncomplete();
     std::optional<SymRef> Condition = symbolizeGuardExpr(Expr, Symbolic);
     if (!Condition) {
       Info.IncompleteGuardDomain = true;
       return false;
     }
+    if (!consumeGuardBuildWork(/*zero + ne + optional not + retention=*/4))
+      return failIncomplete();
     SymRef NonZero = Symbolic.Ctx.mkNe(
         *Condition, Symbolic.Ctx.mkZero(Symbolic.Ctx.width(*Condition)));
     SymbolicConstraints.push_back(TableCondition ? NonZero
@@ -1249,14 +1465,56 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
     Info.IncompleteGuardDomain = true;
     return false;
   }
-  const SymRef ReachesTable = SymbolicConstraints.size() == 1
-                                  ? SymbolicConstraints.front()
-                                  : Symbolic.Ctx.mkAnd(SymbolicConstraints);
+  SymRef ReachesTable;
+  if (SymbolicConstraints.size() == 1) {
+    ReachesTable = SymbolicConstraints.front();
+  } else {
+    if (!consumeGuardBuildWork(SymbolicConstraints.size() + 1))
+      return failIncomplete();
+    ReachesTable = Symbolic.Ctx.mkAnd(SymbolicConstraints);
+  }
 
   uint64_t LastSample = limits::kMaxJumpTableEntries;
   const unsigned IndexBits = unsigned(Symbolic.IndexSize) * 8u;
   if (IndexBits < 64)
     LastSample = std::min<uint64_t>(LastSample, (uint64_t(1) << IndexBits) - 1);
+
+  if (!consumeGuardBuildWork())
+    return failIncomplete();
+  std::function<std::optional<size_t>(const GuardExprPtr &, uint32_t)>
+      concreteGuardWork = [&](const GuardExprPtr &Expr,
+                              uint32_t Depth) -> std::optional<size_t> {
+    if (!Expr || Depth > limits::kMaxJumpTableGuardExpressionDepth ||
+        !consumeGuardBuildWork())
+      return std::nullopt;
+    // Each replay visits the node and materializes its input values; primitive
+    // comparisons additionally materialize the parallel input-width vector.
+    size_t Work = 1;
+    if (Expr->Inputs.size() >
+        (std::numeric_limits<size_t>::max() - Work) / 3)
+      return std::nullopt;
+    Work += Expr->Inputs.size() * 3;
+    for (const GuardExprPtr &Input : Expr->Inputs) {
+      std::optional<size_t> Child = concreteGuardWork(Input, Depth + 1);
+      if (!Child || *Child > std::numeric_limits<size_t>::max() - Work)
+        return std::nullopt;
+      Work += *Child;
+    }
+    return Work;
+  };
+  size_t ConcreteWorkPerValue = 0;
+  for (const auto &[Expr, TableCondition] : IndexGuards) {
+    (void)TableCondition;
+    std::optional<size_t> GuardWork = concreteGuardWork(Expr, 0);
+    if (!GuardWork ||
+        *GuardWork > std::numeric_limits<size_t>::max() -
+                         ConcreteWorkPerValue)
+      return failIncomplete();
+    ConcreteWorkPerValue += *GuardWork;
+  }
+  if (!consumeCandidateProduct(ConcreteWorkPerValue,
+                               static_cast<size_t>(LastSample) + 1))
+    return failIncomplete();
 
   uint32_t FirstRejected = 0;
   bool SawRejected = false;
@@ -1293,6 +1551,14 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
       return false;
     }
   }
+  constexpr size_t SolverProofWork =
+      size_t(limits::kMaxJumpTableGuardSolverConflicts) +
+      size_t(limits::kMaxJumpTableGuardSolverPropagations) +
+      size_t(limits::kMaxJumpTableGuardSolverWatchVisits) +
+      limits::kMaxJumpTableGuardSolverGates;
+  if (!consumeGuardBuildWork(/*constant + ult + xor=*/3) ||
+      !consumeCandidateEvidence(SolverProofWork))
+    return failIncomplete();
   if (!proveDenseGuardPrefix(Symbolic, ReachesTable, FirstRejected)) {
     Info.IncompleteGuardDomain = true;
     return false;

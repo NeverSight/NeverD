@@ -37,7 +37,7 @@ TEST_P(ARM32CGotoRT, Verify) { roundTripARM32(GetParam()); }
 static std::vector<RoundTripTC> makeCGotoTC(const char *prefix, const char *T,
                                             int Opt) {
   std::string p = prefix, t = T;
-  return {
+  std::vector<RoundTripTC> Cases = {
     // 4-way computed-goto dispatch; next label index derived from the running
     // accumulator so the dispatch sequence is data-dependent (no constant fold).
     {p+"_disp4",
@@ -131,6 +131,11 @@ static std::vector<RoundTripTC> makeCGotoTC(const char *prefix, const char *T,
      "  fin: return ("+t+")(unsigned long)(acc^n); }\n",
      {0x2468ULL}, "CGoto", Opt},
   };
+  if (p == "x64cg")
+    for (RoundTripTC &TC : Cases)
+      if (TC.Name == "x64cg_vm6" || TC.Name == "x64cg_thread")
+        TC.RecoveredSwitch = RecoveredSwitchExpectation::Required;
+  return Cases;
 }
 
 // Mixed variable/CONSTANT-index dispatch: some goto-sites use a literal index
@@ -174,7 +179,7 @@ static std::vector<RoundTripTC> makeCGotoConstTC(const char *prefix,
 static std::vector<RoundTripTC> makeCGotoLocalTC(const char *prefix,
                                                  const char *T) {
   std::string p = prefix, t = T;
-  return {
+  std::vector<RoundTripTC> Cases = {
     {p+"_loc4",
      t+" "+p+"_loc4("+t+" a){\n"
      "  const void *tab[4]={&&L0,&&L1,&&L2,&&L3};\n"
@@ -212,9 +217,39 @@ static std::vector<RoundTripTC> makeCGotoLocalTC(const char *prefix,
      {0x51ULL}, "CGoto", 0, /*ExtraFlags=*/"", /*NoOpt=*/false,
      /*ClangTargetOverride=*/"", /*UcCpuModel=*/-1, /*LinkMemBuiltins=*/true},
   };
+  for (RoundTripTC &TC : Cases)
+    TC.RecoveredSwitch = RecoveredSwitchExpectation::Required;
+  return Cases;
+}
+
+// A lexical initializer is not an all-path reaching-memory proof.  The test
+// executes the fully initialized arm, while the feasible sibling deliberately
+// leaves the runtime table undefined.  Recovering a static switch would erase
+// that unsafe arm; the frame certificate must therefore fail closed.
+static std::vector<RoundTripTC> makeCGotoFrameRejectTC(const char *prefix,
+                                                       const char *T) {
+  std::string p = prefix, t = T;
+  RoundTripTC SiblingOnly{
+      p + "_frame_sibling_init",
+      t + " " + p + "_frame_sibling_init(" + t + " a){\n"
+      "  if(!(((unsigned)a)&1u)) goto Dispatch;\n"
+      "  const void *tab[4]={&&L0,&&L1,&&L2,&&L3};\n"
+      "  Dispatch:;\n"
+      "  unsigned pc=((unsigned)a>>1)&3u; goto *tab[pc];\n"
+      "  L0:return (" + t + ")11; L1:return (" + t + ")22;\n"
+      "  L2:return (" + t + ")33; L3:return (" + t + ")44; }\n",
+      {1ULL}, "CGotoFrameReject", 0};
+  SiblingOnly.RecoveredSwitch = RecoveredSwitchExpectation::Forbidden;
+  return {std::move(SiblingOnly)};
 }
 // clang-format on
 
+static const std::vector<RoundTripTC> kX64FrameReject =
+    makeCGotoFrameRejectTC("x64cgr", "long");
+INSTANTIATE_TEST_SUITE_P(CGotoFrameReject, X64CGotoRT,
+                         ::testing::ValuesIn(kX64FrameReject), rtTCName);
+
+#ifndef NEVERD_COMPUTED_GOTO_STRUCTURAL_ONLY
 static const std::vector<RoundTripTC> kX64 = makeCGotoTC("x64cg", "long", 2);
 static const std::vector<RoundTripTC> kX86 = makeCGotoTC("x86cg", "int", 2);
 static const std::vector<RoundTripTC> kA64 = makeCGotoTC("a64cg", "long", 2);
@@ -274,3 +309,27 @@ INSTANTIATE_TEST_SUITE_P(CGotoO0, X64CGotoRT, ::testing::ValuesIn(kX64O0), rtTCN
 INSTANTIATE_TEST_SUITE_P(CGotoO0, X86CGotoRT, ::testing::ValuesIn(kX86O0), rtTCName);
 INSTANTIATE_TEST_SUITE_P(CGotoO0, A64CGotoRT, ::testing::ValuesIn(kA64O0), rtTCName);
 INSTANTIATE_TEST_SUITE_P(CGotoO0, ARM32CGotoRT, ::testing::ValuesIn(kARMO0), rtTCName);
+#else
+// The standalone CI target is intentionally limited to the eight local-table
+// cases that carry the structural switch assertion.  The monolithic semantic
+// suite still instantiates the complete optimized and -O0 computed-goto
+// matrix; duplicating that whole matrix here would add dozens of compile/link/
+// Unicorn roundtrips without strengthening this platform-specific gate.
+static const std::vector<RoundTripTC> kX64Local =
+    makeCGotoLocalTC("x64cgo0", "long");
+static const std::vector<RoundTripTC> kX86Local =
+    makeCGotoLocalTC("x86cgo0", "int");
+static const std::vector<RoundTripTC> kA64Local =
+    makeCGotoLocalTC("a64cgo0", "long");
+static const std::vector<RoundTripTC> kARMLocal =
+    makeCGotoLocalTC("armcgo0", "int");
+
+INSTANTIATE_TEST_SUITE_P(CGotoLocal, X64CGotoRT,
+                         ::testing::ValuesIn(kX64Local), rtTCName);
+INSTANTIATE_TEST_SUITE_P(CGotoLocal, X86CGotoRT,
+                         ::testing::ValuesIn(kX86Local), rtTCName);
+INSTANTIATE_TEST_SUITE_P(CGotoLocal, A64CGotoRT,
+                         ::testing::ValuesIn(kA64Local), rtTCName);
+INSTANTIATE_TEST_SUITE_P(CGotoLocal, ARM32CGotoRT,
+                         ::testing::ValuesIn(kARMLocal), rtTCName);
+#endif

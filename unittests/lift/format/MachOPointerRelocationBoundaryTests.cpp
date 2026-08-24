@@ -305,6 +305,11 @@ public:
     prepareFreshAnalysis(Emitter, Func, Image, Image.Arch, Image.Format);
     return Emitter.recoveredJumpTableForLoad(Load) != nullptr;
   }
+
+  static void setTerminalUseEvidenceBudget(MedLLVMEmitter &Emitter,
+                                           uint64_t Budget) {
+    Emitter.TerminalUseEvidenceBudgetForTesting = Budget;
+  }
 };
 
 } // namespace neverd
@@ -483,6 +488,64 @@ TEST(MedLLVMRecoveredTargetLoadBoundary,
     AuthenticatedTargetLoadFixture Fixture;
     MedLLVMEmitter Emitter;
     EXPECT_TRUE(MedLLVMProvenanceTestPeer::recoveredTargetLoadIsFullyConsumed(
+        Emitter, Fixture.Func, Fixture.Image, Fixture.load()));
+  }
+
+  {
+    AuthenticatedTargetLoadFixture Fixture;
+    MedLLVMEmitter Emitter;
+    MedLLVMProvenanceTestPeer::setTerminalUseEvidenceBudget(Emitter, 2);
+    // Exhaustion is not permission to suppress relocation storage.  Reject
+    // the exclusive-consumer proof even though the exact LOAD and branch
+    // certificates otherwise form a valid recovered switch.
+    EXPECT_FALSE(MedLLVMProvenanceTestPeer::recoveredTargetLoadIsFullyConsumed(
+        Emitter, Fixture.Func, Fixture.Image, Fixture.load()));
+  }
+
+  {
+    AuthenticatedTargetLoadFixture Fixture;
+    MedVar DeadFlags;
+    DeadFlags.Kind = MedVar::Temp;
+    DeadFlags.Id = 2;
+    DeadFlags.SSAVer = 1;
+    DeadFlags.Size = 8;
+    MedOp Xor;
+    Xor.Opcode = NdOp::INT_XOR;
+    Xor.Output = DeadFlags;
+    Xor.addInput(Fixture.load().Output);
+    Xor.addInput(MedVar::makeConst(0, 8));
+    Fixture.Func.Blocks.front().Ops.insert(
+        std::next(Fixture.Func.Blocks.front().Ops.begin()), Xor);
+    MedLLVMEmitter Emitter;
+    // A dead, pure flag side calculation does not consume code identity and
+    // must not veto the otherwise exclusive terminal branch.
+    EXPECT_TRUE(MedLLVMProvenanceTestPeer::recoveredTargetLoadIsFullyConsumed(
+        Emitter, Fixture.Func, Fixture.Image, Fixture.load()));
+  }
+
+  {
+    AuthenticatedTargetLoadFixture Fixture;
+    MedVar EscapingFlags;
+    EscapingFlags.Kind = MedVar::Temp;
+    EscapingFlags.Id = 2;
+    EscapingFlags.SSAVer = 1;
+    EscapingFlags.Size = 8;
+    MedOp Xor;
+    Xor.Opcode = NdOp::INT_XOR;
+    Xor.Output = EscapingFlags;
+    Xor.addInput(Fixture.load().Output);
+    Xor.addInput(MedVar::makeConst(0, 8));
+    MedOp SideStore;
+    SideStore.Opcode = NdOp::STORE;
+    SideStore.addInput(MedVar::makeConst(0x4000, 8));
+    SideStore.addInput(EscapingFlags);
+    auto Insert = std::next(Fixture.Func.Blocks.front().Ops.begin());
+    Insert = Fixture.Func.Blocks.front().Ops.insert(Insert, Xor);
+    Fixture.Func.Blocks.front().Ops.insert(std::next(Insert), SideStore);
+    MedLLVMEmitter Emitter;
+    // Once the non-terminal taint reaches an observable use, keeping the real
+    // target value is mandatory even though the main path reaches the switch.
+    EXPECT_FALSE(MedLLVMProvenanceTestPeer::recoveredTargetLoadIsFullyConsumed(
         Emitter, Fixture.Func, Fixture.Image, Fixture.load()));
   }
 

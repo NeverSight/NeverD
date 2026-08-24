@@ -251,6 +251,15 @@ void ARMLifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops) {
         ++I; // step over the inserted SELECT
       }
     }
+    // SELECTs are inserted after the original instruction ops rather than
+    // emitted through LiftState, so their provisional Seq value is not an
+    // occurrence identity.  Re-number the complete same-instruction slice
+    // before a possible PC terminator is appended.  Exact provenance consumers
+    // must never see the inserted SELECT alias the architectural-PC COPY at
+    // (Addr, 0).
+    for (size_t I = S.OpsStart; I < Ops.size(); ++I)
+      Ops[I].Seq = static_cast<int>(I - S.OpsStart);
+    S.Seq = static_cast<int>(Ops.size() - S.OpsStart);
   }
 
   // PC control is classified from the decoded instruction, not inferred from

@@ -124,6 +124,9 @@ private:
   // counters never participate in an emission decision.
   mutable AddressProvenanceWorkCounts AddressProvenanceWork;
   mutable FrameReloadSourceWorkCounts FrameReloadSourceWork;
+  // Test-only override for exercising fail-closed terminal-use exhaustion.
+  // Production always uses the central finite limit.
+  std::optional<uint64_t> TerminalUseEvidenceBudgetForTesting;
 
   /// Linkage for a synthesized data/table global: linkonce_odr in mergeable
   /// (sharded) mode so identical per-address globals from sibling shards merge;

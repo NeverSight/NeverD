@@ -46,18 +46,18 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     NdVar Rsp = NdVar::reg(x86reg::RSP, PtrSize);
     NdVar Val = S.makeTemp(PopSz);
     S.emit(NdOp::LOAD, Val, {Rsp});
+    const int PopCopySeq = S.Seq;
     S.emit(NdOp::COPY, DstW, {Val});
-    // get-PC thunk: a `pop` immediately after `call $+5` yields the constant PC
-    // (the i386 PIC GOT-base seed), not a stack value.  Overwrite the loaded
-    // value with a role-neutral address occurrence so GOTOFF/SECTDIFF scalar
-    // offsets retain the complete address relation without relying on numeric
-    // coincidence with a loader target inventory.
+    // Record the exact ordinary POP producer for the CFG proof of an adjacent
+    // `call $+5; pop reg` get-PC thunk.  Do not replace the loaded value with a
+    // constant here: the POP can also be an independently reachable entry, in
+    // which case it must retain the caller-provided stack value.  The CFG
+    // builder grants GOTPC semantics only after proving the call is the sole
+    // predecessor and that this LOAD/COPY consumes its exact stack push.
     if (GetPcArmedThisInsn) {
-      const int GetPcSeq = S.Seq;
-      S.emit(NdOp::COPY, DstW, {NdVar::address(GetPcValue, PopSz)});
       LastGetPcOccurrence = I386GetPcOccurrence{
-          S.Addr, GetPcSeq, static_cast<uint32_t>(GetPcValue), NdOp::COPY,
-          DstW};
+          GetPcCallAddr, S.Addr, PopCopySeq,
+          static_cast<uint32_t>(GetPcValue), NdOp::COPY, DstW, Val};
     }
     S.emit(NdOp::INT_ADD, Rsp, {Rsp, NdVar::scalar(PopSz, PtrSize)});
     break;
@@ -82,6 +82,7 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
         S.emit(NdOp::STORE, {}, {Rsp, NdVar::cst(Target, PtrSize)});
         GetPcPending = true;
         GetPcValue = Target;
+        GetPcCallAddr = S.Addr;
       } else {
         NdVar TargetValue = NdVar::cst(Target, PtrSize);
         if (S.RelocatedImmediate) {

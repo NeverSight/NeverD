@@ -1062,7 +1062,48 @@ jt_identity_mask_exceeds_storage:
 .Lselect_store_global:
         .long 0
 
-        .section .note.GNU-stack,"",@progbits
+
+// The guard independently proves [0,5), while the merged selector's complete
+// mask domain tightens that to [0,4).  Final replay may preserve or tighten the
+// authenticated domain, but a dense fallback may never widen it.
+        .text
+        .globl  jt_identity_guard5_mask4_dense_merge
+        .type   jt_identity_guard5_mask4_dense_merge,@function
+jt_identity_guard5_mask4_dense_merge:
+        xorl    %r10d, %r10d
+        jmp     .Lguard5_mask4_dispatch
+.Lguard5_mask4_case0:
+        movl    %edi, %r10d
+        andl    $3, %r10d
+.Lguard5_mask4_dispatch:
+        cmpl    $5, %r10d
+        jae     .Lguard5_mask4_default
+        leaq    .Lguard5_mask4_table(%rip), %rax
+        movslq  (%rax,%r10,4), %rcx
+        addq    %rax, %rcx
+        jmpq    *%rcx
+.Lguard5_mask4_case1:
+        movl    $4601, %eax
+        retq
+.Lguard5_mask4_case2:
+        movl    $4602, %eax
+        retq
+.Lguard5_mask4_case3:
+        movl    $4603, %eax
+        retq
+.Lguard5_mask4_default:
+        movl    $4699, %eax
+        retq
+        .size   jt_identity_guard5_mask4_dense_merge, .-jt_identity_guard5_mask4_dense_merge
+
+        .section .rodata,"a",@progbits
+        .p2align 2
+.Lguard5_mask4_table:
+        .long .Lguard5_mask4_case0-.Lguard5_mask4_table
+        .long .Lguard5_mask4_case1-.Lguard5_mask4_table
+        .long .Lguard5_mask4_case2-.Lguard5_mask4_table
+        .long .Lguard5_mask4_case3-.Lguard5_mask4_table
+
 
 // The comparison looks like a dense four-entry upper bound only in the
 // sampled prefix [0,4096].  Over the real 32-bit selector domain the mask
@@ -1147,7 +1188,6 @@ jt_identity_guard_signed_negative_alias:
         .long .Lguard_signed_case3-.Lguard_signed_table
         .long 0
 
-        .section .note.GNU-stack,"",@progbits
 
 // The low-byte write changes the RAX value tested by the guard while the table
 // address still consumes the independent raw index in R10.  For example,
@@ -1230,7 +1270,6 @@ jt_identity_guard_bound_beyond_sample:
         .long .Lguard_large_case3-.Lguard_large_table
         .long 0
 
-        .section .note.GNU-stack,"",@progbits
 
 // The controlling comparison is laid out after the dispatch and jumps
 // backward to it.  Instruction virtual-address order is not execution order:
@@ -1317,7 +1356,6 @@ jt_identity_postlaid_guard_four:
         .long .Lpostlaid_four_case3-.Lpostlaid_four_table
         .long 0
 
-        .section .note.GNU-stack,"",@progbits
 
 // Each AND reads the same prior SSA value twice.  A tree-shaped recursive
 // builder expands this as 2^20 subexpressions; an exact-occurrence DAG memo
@@ -1404,7 +1442,6 @@ jt_identity_guard_depth_budget:
         .long .Lguard_depth_case3-.Lguard_depth_table
         .long 0
 
-        .section .note.GNU-stack,"",@progbits
 
 // Hundreds of unrelated conditions precede the one real table guard.  Control
 // discovery must build one CFG and share a traversal budget; exhaustion is an
@@ -1452,7 +1489,6 @@ jt_identity_guard_control_budget:
         .long .Lguard_control_budget_case3-.Lguard_control_budget_table
         .long 0
 
-        .section .note.GNU-stack,"",@progbits
 
 // Merely seeing `x - y*N` does not prove a modulo domain: y is an independent
 // input, not floor(x/N), so the 32-bit result can name any table slot.  Keep the
@@ -1561,39 +1597,6 @@ jt_identity_mask_dense_bounded_merge:
         retq
         .size   jt_identity_mask_dense_bounded_merge, .-jt_identity_mask_dense_bounded_merge
 
-// The guard independently proves [0,5), while the merged selector's complete
-// mask domain tightens that to [0,4).  Revalidating the final jump-table proof
-// must replay the equal [0,4) mask certificate rather than treating it as a
-// stale attempt to widen the already-tightened bound.
-        .globl  jt_identity_guard5_mask4_dense_merge
-        .type   jt_identity_guard5_mask4_dense_merge,@function
-jt_identity_guard5_mask4_dense_merge:
-        xorl    %r10d, %r10d
-        jmp     .Lguard5_mask4_dispatch
-.Lguard5_mask4_case0:
-        movl    %edi, %r10d
-        andl    $3, %r10d
-.Lguard5_mask4_dispatch:
-        cmpl    $5, %r10d
-        jae     .Lguard5_mask4_default
-        leaq    .Lguard5_mask4_table(%rip), %rax
-        movslq  (%rax,%r10,4), %rcx
-        addq    %rax, %rcx
-        jmpq    *%rcx
-.Lguard5_mask4_case1:
-        movl    $4601, %eax
-        retq
-.Lguard5_mask4_case2:
-        movl    $4602, %eax
-        retq
-.Lguard5_mask4_case3:
-        movl    $4603, %eax
-        retq
-.Lguard5_mask4_default:
-        movl    $4699, %eax
-        retq
-        .size   jt_identity_guard5_mask4_dense_merge, .-jt_identity_guard5_mask4_dense_merge
-
         .section .rodata,"a",@progbits
         .p2align 2
 .Lmask_dense_merge_table:
@@ -1602,11 +1605,846 @@ jt_identity_guard5_mask4_dense_merge:
         .long .Lmask_dense_merge_case2-.Lmask_dense_merge_table
         .long .Lmask_dense_merge_case3-.Lmask_dense_merge_table
 
+// The real selector is y%5.  The x&31 value is carried through a multiply by
+// zero before being added to that selector, so occurrence-level dependency can
+// see the mask while machine semantics erase it.  The 32 physical relocation
+// slots make a bogus mask-derived domain observable: a sound resolver either
+// recovers only the independent five-value modulo domain or fails closed.
+        .text
+        .globl  jt_identity_dead_mask_dependency_mod5
+        .type   jt_identity_dead_mask_dependency_mod5,@function
+jt_identity_dead_mask_dependency_mod5:
+        movl    %edi, %r10d
+        andl    $31, %r10d
+        imull   $0, %r10d, %r10d
+        movl    %esi, %eax
+        xorl    %edx, %edx
+        movl    $5, %ecx
+        divl    %ecx
+        addl    %r10d, %edx
+        leaq    jt_identity_dead_mask_dependency_table(%rip), %rax
+        movslq  (%rax,%rdx,4), %rcx
+        addq    %rax, %rcx
+        jmpq    *%rcx
+.Ldead_mask_dependency_case0:
+        movl    $4700, %eax
+        retq
+.Ldead_mask_dependency_case1:
+        movl    $4701, %eax
+        retq
+.Ldead_mask_dependency_case2:
+        movl    $4702, %eax
+        retq
+.Ldead_mask_dependency_case3:
+        movl    $4703, %eax
+        retq
+.Ldead_mask_dependency_case4:
+        movl    $4704, %eax
+        retq
+.Ldead_mask_dependency_case5:
+        movl    $4705, %eax
+        retq
+.Ldead_mask_dependency_case6:
+        movl    $4706, %eax
+        retq
+.Ldead_mask_dependency_case7:
+        movl    $4707, %eax
+        retq
+.Ldead_mask_dependency_case8:
+        movl    $4708, %eax
+        retq
+.Ldead_mask_dependency_case9:
+        movl    $4709, %eax
+        retq
+.Ldead_mask_dependency_case10:
+        movl    $4710, %eax
+        retq
+.Ldead_mask_dependency_case11:
+        movl    $4711, %eax
+        retq
+.Ldead_mask_dependency_case12:
+        movl    $4712, %eax
+        retq
+.Ldead_mask_dependency_case13:
+        movl    $4713, %eax
+        retq
+.Ldead_mask_dependency_case14:
+        movl    $4714, %eax
+        retq
+.Ldead_mask_dependency_case15:
+        movl    $4715, %eax
+        retq
+.Ldead_mask_dependency_case16:
+        movl    $4716, %eax
+        retq
+.Ldead_mask_dependency_case17:
+        movl    $4717, %eax
+        retq
+.Ldead_mask_dependency_case18:
+        movl    $4718, %eax
+        retq
+.Ldead_mask_dependency_case19:
+        movl    $4719, %eax
+        retq
+.Ldead_mask_dependency_case20:
+        movl    $4720, %eax
+        retq
+.Ldead_mask_dependency_case21:
+        movl    $4721, %eax
+        retq
+.Ldead_mask_dependency_case22:
+        movl    $4722, %eax
+        retq
+.Ldead_mask_dependency_case23:
+        movl    $4723, %eax
+        retq
+.Ldead_mask_dependency_case24:
+        movl    $4724, %eax
+        retq
+.Ldead_mask_dependency_case25:
+        movl    $4725, %eax
+        retq
+.Ldead_mask_dependency_case26:
+        movl    $4726, %eax
+        retq
+.Ldead_mask_dependency_case27:
+        movl    $4727, %eax
+        retq
+.Ldead_mask_dependency_case28:
+        movl    $4728, %eax
+        retq
+.Ldead_mask_dependency_case29:
+        movl    $4729, %eax
+        retq
+.Ldead_mask_dependency_case30:
+        movl    $4730, %eax
+        retq
+.Ldead_mask_dependency_case31:
+        movl    $4731, %eax
+        retq
+        .size   jt_identity_dead_mask_dependency_mod5, .-jt_identity_dead_mask_dependency_mod5
+
+        .section .rodata,"a",@progbits
         .p2align 2
-.Lguard5_mask4_table:
-        .long .Lguard5_mask4_case0-.Lguard5_mask4_table
-        .long .Lguard5_mask4_case1-.Lguard5_mask4_table
-        .long .Lguard5_mask4_case2-.Lguard5_mask4_table
-        .long .Lguard5_mask4_case3-.Lguard5_mask4_table
+        .globl  jt_identity_dead_mask_dependency_table
+        .type   jt_identity_dead_mask_dependency_table,@object
+jt_identity_dead_mask_dependency_table:
+        .long .Ldead_mask_dependency_case0-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case1-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case2-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case3-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case4-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case5-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case6-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case7-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case8-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case9-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case10-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case11-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case12-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case13-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case14-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case15-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case16-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case17-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case18-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case19-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case20-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case21-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case22-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case23-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case24-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case25-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case26-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case27-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case28-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case29-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case30-jt_identity_dead_mask_dependency_table
+        .long .Ldead_mask_dependency_case31-jt_identity_dead_mask_dependency_table
+        .size jt_identity_dead_mask_dependency_table, .-jt_identity_dead_mask_dependency_table
+
+        .text
+// A cyclic/double-producer fast path must not treat producer multiplicity as a
+// complete domain certificate.  Both predecessor arms have distinct outer
+// `&7` occurrences, but their inputs are the translated inner domain
+// `(x&1)+1`, so only physical coordinates 1 and 2 are feasible.
+        .globl  jt_identity_nested_mask_offset_merge
+        .type   jt_identity_nested_mask_offset_merge,@function
+jt_identity_nested_mask_offset_merge:
+        testl   %edi, %edi
+        js      .Lnested_offset_arm1
+        movl    %edi, %r10d
+        andl    $1, %r10d
+        addl    $1, %r10d
+        andl    $7, %r10d
+        jmp     .Lnested_offset_dispatch
+.Lnested_offset_arm1:
+        movl    %edi, %r10d
+        andl    $1, %r10d
+        addl    $1, %r10d
+        andl    $7, %r10d
+.Lnested_offset_dispatch:
+        leaq    jt_identity_nested_mask_offset_merge_table(%rip), %rax
+        movslq  (%rax,%r10,4), %rcx
+        addq    %rax, %rcx
+        jmpq    *%rcx
+.Lnested_offset_poison0:
+        movl    $4800, %eax
+        retq
+.Lnested_offset_case1:
+        movl    $4801, %eax
+        retq
+.Lnested_offset_case2:
+        movl    $4802, %eax
+        retq
+.Lnested_offset_poison3:
+        movl    $4803, %eax
+        retq
+.Lnested_offset_poison4:
+        movl    $4804, %eax
+        retq
+.Lnested_offset_poison5:
+        movl    $4805, %eax
+        retq
+.Lnested_offset_poison6:
+        movl    $4806, %eax
+        retq
+.Lnested_offset_poison7:
+        movl    $4807, %eax
+        retq
+        .size jt_identity_nested_mask_offset_merge, .-jt_identity_nested_mask_offset_merge
+
+        .section .rodata,"a",@progbits
+        .p2align 2
+        .globl  jt_identity_nested_mask_offset_merge_table
+        .type   jt_identity_nested_mask_offset_merge_table,@object
+jt_identity_nested_mask_offset_merge_table:
+        .long .Lnested_offset_poison0-jt_identity_nested_mask_offset_merge_table
+        .long .Lnested_offset_case1-jt_identity_nested_mask_offset_merge_table
+        .long .Lnested_offset_case2-jt_identity_nested_mask_offset_merge_table
+        .long .Lnested_offset_poison3-jt_identity_nested_mask_offset_merge_table
+        .long .Lnested_offset_poison4-jt_identity_nested_mask_offset_merge_table
+        .long .Lnested_offset_poison5-jt_identity_nested_mask_offset_merge_table
+        .long .Lnested_offset_poison6-jt_identity_nested_mask_offset_merge_table
+        .long .Lnested_offset_poison7-jt_identity_nested_mask_offset_merge_table
+        .size jt_identity_nested_mask_offset_merge_table, .-jt_identity_nested_mask_offset_merge_table
+
+        .text
+// Provisional table edges must not make unreachable case-local masks prove
+// their own reachability.  The only real selector is the constant zero loop;
+// cases 1..7 are physical table entries but outside the least fixed point.
+        .globl  jt_identity_mask_fp_self_bootstrap
+        .type   jt_identity_mask_fp_self_bootstrap,@function
+jt_identity_mask_fp_self_bootstrap:
+        xorl    %r10d, %r10d
+        jmp     .Lmask_fp_self_dispatch
+.Lmask_fp_self_case0:
+        movl    %edi, %r11d
+        andl    $7, %r11d
+        xorl    %r10d, %r10d
+        jmp     .Lmask_fp_self_dispatch
+.Lmask_fp_self_case1:
+        movl    %edi, %r10d
+        andl    $7, %r10d
+        jmp     .Lmask_fp_self_dispatch
+.Lmask_fp_self_case2:
+        movl    %edi, %r10d
+        andl    $7, %r10d
+        jmp     .Lmask_fp_self_dispatch
+.Lmask_fp_self_case3:
+        movl    %edi, %r10d
+        andl    $7, %r10d
+        jmp     .Lmask_fp_self_dispatch
+.Lmask_fp_self_case4:
+        movl    %edi, %r10d
+        andl    $7, %r10d
+        jmp     .Lmask_fp_self_dispatch
+.Lmask_fp_self_case5:
+        movl    %edi, %r10d
+        andl    $7, %r10d
+        jmp     .Lmask_fp_self_dispatch
+.Lmask_fp_self_case6:
+        movl    %edi, %r10d
+        andl    $7, %r10d
+        jmp     .Lmask_fp_self_dispatch
+.Lmask_fp_self_case7:
+        movl    %edi, %r10d
+        andl    $7, %r10d
+.Lmask_fp_self_dispatch:
+        leaq    jt_identity_mask_fp_self_bootstrap_table(%rip), %rax
+        jmpq    *(%rax,%r10,8)
+        .size jt_identity_mask_fp_self_bootstrap, .-jt_identity_mask_fp_self_bootstrap
+
+// Case zero legitimately expands the seed to all eight coordinates, but that
+// makes case seven reachable and exposes its out-of-domain selector 15.  A
+// one-shot seed proof would publish the table; fixed-point revalidation must
+// reject it after rebuilding with the proposed target set.
+        .globl  jt_identity_mask_fp_late_escape
+        .type   jt_identity_mask_fp_late_escape,@function
+jt_identity_mask_fp_late_escape:
+        xorl    %r10d, %r10d
+        jmp     .Lmask_fp_late_dispatch
+.Lmask_fp_late_case0:
+        movl    %edi, %r10d
+        andl    $7, %r10d
+        jmp     .Lmask_fp_late_dispatch
+.Lmask_fp_late_case1:
+        movl    %edi, %r10d
+        andl    $7, %r10d
+        jmp     .Lmask_fp_late_dispatch
+.Lmask_fp_late_case2:
+        movl    %edi, %r10d
+        andl    $7, %r10d
+        jmp     .Lmask_fp_late_dispatch
+.Lmask_fp_late_case3:
+        movl    %edi, %r10d
+        andl    $7, %r10d
+        jmp     .Lmask_fp_late_dispatch
+.Lmask_fp_late_case4:
+        movl    %edi, %r10d
+        andl    $7, %r10d
+        jmp     .Lmask_fp_late_dispatch
+.Lmask_fp_late_case5:
+        movl    %edi, %r10d
+        andl    $7, %r10d
+        jmp     .Lmask_fp_late_dispatch
+.Lmask_fp_late_case6:
+        movl    %edi, %r10d
+        andl    $7, %r10d
+        jmp     .Lmask_fp_late_dispatch
+.Lmask_fp_late_case7:
+        movl    $15, %r10d
+.Lmask_fp_late_dispatch:
+        leaq    jt_identity_mask_fp_late_escape_table(%rip), %rax
+        jmpq    *(%rax,%r10,8)
+        .size jt_identity_mask_fp_late_escape, .-jt_identity_mask_fp_late_escape
+
+// A complete entry-side mask is still only a fixed-point seed when candidate
+// targets can flow back to the same dispatch.  Case seven widens the selector
+// after the initially valid arg&7 domain, so publishing the empty-edge proof
+// without replay would admit an out-of-bounds table read on the second trip.
+        .globl  jt_identity_mask_fp_entry_bound_late_escape
+        .type   jt_identity_mask_fp_entry_bound_late_escape,@function
+jt_identity_mask_fp_entry_bound_late_escape:
+        movl    %edi, %r10d
+        andl    $7, %r10d
+        jmp     .Lmask_fp_entry_bound_dispatch
+.Lmask_fp_entry_bound_case0:
+        xorl    %eax, %eax
+        retq
+.Lmask_fp_entry_bound_case1:
+        movl    $1, %eax
+        retq
+.Lmask_fp_entry_bound_case2:
+        movl    $2, %eax
+        retq
+.Lmask_fp_entry_bound_case3:
+        movl    $3, %eax
+        retq
+.Lmask_fp_entry_bound_case4:
+        movl    $4, %eax
+        retq
+.Lmask_fp_entry_bound_case5:
+        movl    $5, %eax
+        retq
+.Lmask_fp_entry_bound_case6:
+        movl    $6, %eax
+        retq
+.Lmask_fp_entry_bound_case7:
+        movl    $15, %r10d
+.Lmask_fp_entry_bound_dispatch:
+        leaq    jt_identity_mask_fp_entry_bound_late_escape_table(%rip), %rax
+        jmpq    *(%rax,%r10,8)
+        .size jt_identity_mask_fp_entry_bound_late_escape, .-jt_identity_mask_fp_entry_bound_late_escape
+
+// Same closure hazard through a pre-scaled byte selector.  Its address scale
+// intentionally differs from the physical entry stride, exercising the
+// generic provisional-graph fallback rather than the dense 1:1 mapper.
+        .globl  jt_identity_mask_fp_prescaled_late_escape
+        .type   jt_identity_mask_fp_prescaled_late_escape,@function
+jt_identity_mask_fp_prescaled_late_escape:
+        movl    %edi, %r10d
+        shll    $3, %r10d
+        andl    $56, %r10d
+        jmp     .Lmask_fp_prescaled_dispatch
+.Lmask_fp_prescaled_case0:
+        xorl    %eax, %eax
+        retq
+.Lmask_fp_prescaled_case1:
+        movl    $1, %eax
+        retq
+.Lmask_fp_prescaled_case2:
+        movl    $2, %eax
+        retq
+.Lmask_fp_prescaled_case3:
+        movl    $3, %eax
+        retq
+.Lmask_fp_prescaled_case4:
+        movl    $4, %eax
+        retq
+.Lmask_fp_prescaled_case5:
+        movl    $5, %eax
+        retq
+.Lmask_fp_prescaled_case6:
+        movl    $6, %eax
+        retq
+.Lmask_fp_prescaled_case7:
+        movl    $120, %r10d
+.Lmask_fp_prescaled_dispatch:
+        leaq    jt_identity_mask_fp_prescaled_late_escape_table(%rip), %rax
+        movq    (%rax,%r10), %rcx
+        jmpq    *%rcx
+        .size jt_identity_mask_fp_prescaled_late_escape, .-jt_identity_mask_fp_prescaled_late_escape
+
+        .section .rodata,"a",@progbits
+        .p2align 2
+        .globl  jt_identity_mask_fp_self_bootstrap_table
+        .type   jt_identity_mask_fp_self_bootstrap_table,@object
+jt_identity_mask_fp_self_bootstrap_table:
+        .quad .Lmask_fp_self_case0
+        .quad .Lmask_fp_self_case1
+        .quad .Lmask_fp_self_case2
+        .quad .Lmask_fp_self_case3
+        .quad .Lmask_fp_self_case4
+        .quad .Lmask_fp_self_case5
+        .quad .Lmask_fp_self_case6
+        .quad .Lmask_fp_self_case7
+        .size jt_identity_mask_fp_self_bootstrap_table, .-jt_identity_mask_fp_self_bootstrap_table
+
+        .globl  jt_identity_mask_fp_late_escape_table
+        .type   jt_identity_mask_fp_late_escape_table,@object
+jt_identity_mask_fp_late_escape_table:
+        .quad .Lmask_fp_late_case0
+        .quad .Lmask_fp_late_case1
+        .quad .Lmask_fp_late_case2
+        .quad .Lmask_fp_late_case3
+        .quad .Lmask_fp_late_case4
+        .quad .Lmask_fp_late_case5
+        .quad .Lmask_fp_late_case6
+        .quad .Lmask_fp_late_case7
+        .size jt_identity_mask_fp_late_escape_table, .-jt_identity_mask_fp_late_escape_table
+
+        .globl  jt_identity_mask_fp_entry_bound_late_escape_table
+        .type   jt_identity_mask_fp_entry_bound_late_escape_table,@object
+jt_identity_mask_fp_entry_bound_late_escape_table:
+        .quad .Lmask_fp_entry_bound_case0
+        .quad .Lmask_fp_entry_bound_case1
+        .quad .Lmask_fp_entry_bound_case2
+        .quad .Lmask_fp_entry_bound_case3
+        .quad .Lmask_fp_entry_bound_case4
+        .quad .Lmask_fp_entry_bound_case5
+        .quad .Lmask_fp_entry_bound_case6
+        .quad .Lmask_fp_entry_bound_case7
+        .size jt_identity_mask_fp_entry_bound_late_escape_table, .-jt_identity_mask_fp_entry_bound_late_escape_table
+
+        .globl  jt_identity_mask_fp_prescaled_late_escape_table
+        .type   jt_identity_mask_fp_prescaled_late_escape_table,@object
+jt_identity_mask_fp_prescaled_late_escape_table:
+        .quad .Lmask_fp_prescaled_case0
+        .quad .Lmask_fp_prescaled_case1
+        .quad .Lmask_fp_prescaled_case2
+        .quad .Lmask_fp_prescaled_case3
+        .quad .Lmask_fp_prescaled_case4
+        .quad .Lmask_fp_prescaled_case5
+        .quad .Lmask_fp_prescaled_case6
+        .quad .Lmask_fp_prescaled_case7
+        .size jt_identity_mask_fp_prescaled_late_escape_table, .-jt_identity_mask_fp_prescaled_late_escape_table
+
+// The optimized x64 computed-goto shape: one entry LEA defines the shared table
+// base and five memory-indirect branches (entry plus four target bodies) each
+// contribute their own selector, LOAD and INDIR_BR occurrence.  The four table
+// targets close the candidate-reachable consumer cycle.  Publishing the entry
+// candidate must not suppress the conditional roots needed to prove every
+// sibling from the same stage snapshot.  The two functions differ only in the
+// physical order of the four target bodies; no shared-table cleanup may copy a
+// sibling's occurrence-bearing JumpTableInfo.
+        .text
+        .globl  jt_identity_sibling_snapshot_narrow_first
+        .type   jt_identity_sibling_snapshot_narrow_first,@function
+jt_identity_sibling_snapshot_narrow_first:
+        .globl  jt_identity_sibling_nf_entry_begin
+jt_identity_sibling_nf_entry_begin:
+        leaq    jt_identity_sibling_nf_table(%rip), %rdx
+        movl    %edi, %esi
+        andl    $3, %esi
+        jmpq    *(%rdx,%rsi,8)
+        .globl  jt_identity_sibling_nf_entry_end
+jt_identity_sibling_nf_entry_end:
+
+        .globl  jt_identity_sibling_nf_t0_begin
+jt_identity_sibling_nf_t0_begin:
+        movl    %edi, %esi
+        addl    $1, %esi
+        andl    $3, %esi
+        jmpq    *(%rdx,%rsi,8)
+        .globl  jt_identity_sibling_nf_t0_end
+jt_identity_sibling_nf_t0_end:
+
+        .globl  jt_identity_sibling_nf_t1_begin
+jt_identity_sibling_nf_t1_begin:
+        movl    %edi, %esi
+        shrl    $2, %esi
+        andl    $3, %esi
+        jmpq    *(%rdx,%rsi,8)
+        .globl  jt_identity_sibling_nf_t1_end
+jt_identity_sibling_nf_t1_end:
+
+        .globl  jt_identity_sibling_nf_t2_begin
+jt_identity_sibling_nf_t2_begin:
+        movl    %edi, %esi
+        shrl    $5, %esi
+        andl    $3, %esi
+        jmpq    *(%rdx,%rsi,8)
+        .globl  jt_identity_sibling_nf_t2_end
+jt_identity_sibling_nf_t2_end:
+
+        .globl  jt_identity_sibling_nf_t3_begin
+jt_identity_sibling_nf_t3_begin:
+        movl    %edi, %esi
+        shrl    $9, %esi
+        andl    $3, %esi
+        jmpq    *(%rdx,%rsi,8)
+        .globl  jt_identity_sibling_nf_t3_end
+jt_identity_sibling_nf_t3_end:
+        .size jt_identity_sibling_snapshot_narrow_first, .-jt_identity_sibling_snapshot_narrow_first
+
+        .globl  jt_identity_sibling_snapshot_wide_first
+        .type   jt_identity_sibling_snapshot_wide_first,@function
+jt_identity_sibling_snapshot_wide_first:
+        .globl  jt_identity_sibling_wf_entry_begin
+jt_identity_sibling_wf_entry_begin:
+        leaq    jt_identity_sibling_wf_table(%rip), %rdx
+        movl    %edi, %esi
+        andl    $3, %esi
+        jmpq    *(%rdx,%rsi,8)
+        .globl  jt_identity_sibling_wf_entry_end
+jt_identity_sibling_wf_entry_end:
+
+        .globl  jt_identity_sibling_wf_t3_begin
+jt_identity_sibling_wf_t3_begin:
+        movl    %edi, %esi
+        shrl    $9, %esi
+        andl    $3, %esi
+        jmpq    *(%rdx,%rsi,8)
+        .globl  jt_identity_sibling_wf_t3_end
+jt_identity_sibling_wf_t3_end:
+
+        .globl  jt_identity_sibling_wf_t2_begin
+jt_identity_sibling_wf_t2_begin:
+        movl    %edi, %esi
+        shrl    $5, %esi
+        andl    $3, %esi
+        jmpq    *(%rdx,%rsi,8)
+        .globl  jt_identity_sibling_wf_t2_end
+jt_identity_sibling_wf_t2_end:
+
+        .globl  jt_identity_sibling_wf_t1_begin
+jt_identity_sibling_wf_t1_begin:
+        movl    %edi, %esi
+        shrl    $2, %esi
+        andl    $3, %esi
+        jmpq    *(%rdx,%rsi,8)
+        .globl  jt_identity_sibling_wf_t1_end
+jt_identity_sibling_wf_t1_end:
+
+        .globl  jt_identity_sibling_wf_t0_begin
+jt_identity_sibling_wf_t0_begin:
+        movl    %edi, %esi
+        addl    $1, %esi
+        andl    $3, %esi
+        jmpq    *(%rdx,%rsi,8)
+        .globl  jt_identity_sibling_wf_t0_end
+jt_identity_sibling_wf_t0_end:
+        .size jt_identity_sibling_snapshot_wide_first, .-jt_identity_sibling_snapshot_wide_first
+
+        .section .rodata,"a",@progbits
+        .p2align 3
+        .globl  jt_identity_sibling_nf_table
+        .type   jt_identity_sibling_nf_table,@object
+jt_identity_sibling_nf_table:
+        .quad jt_identity_sibling_nf_t0_begin
+        .quad jt_identity_sibling_nf_t1_begin
+        .quad jt_identity_sibling_nf_t2_begin
+        .quad jt_identity_sibling_nf_t3_begin
+        .size jt_identity_sibling_nf_table, .-jt_identity_sibling_nf_table
+
+        .p2align 3
+        .globl  jt_identity_sibling_wf_table
+        .type   jt_identity_sibling_wf_table,@object
+jt_identity_sibling_wf_table:
+        .quad jt_identity_sibling_wf_t0_begin
+        .quad jt_identity_sibling_wf_t1_begin
+        .quad jt_identity_sibling_wf_t2_begin
+        .quad jt_identity_sibling_wf_t3_begin
+        .size jt_identity_sibling_wf_table, .-jt_identity_sibling_wf_table
+
+
+// Setting bit zero before masking proves that the subsequent -1 cannot wrap:
+// `(x | 1) & 7` is exactly {1,3,5,7}, so the physical table coordinates are
+// exactly {0,2,4,6}.  The adjacent odd slots are readable relocation-backed
+// entries on purpose; a dense-capacity shortcut would incorrectly publish
+// their poison targets.
+        .text
+        .globl  jt_identity_mask_or_negative_offset
+        .type   jt_identity_mask_or_negative_offset,@function
+jt_identity_mask_or_negative_offset:
+        movl    %edi, %r10d
+        orl     $1, %r10d
+        andl    $7, %r10d
+        subl    $1, %r10d
+        leaq    jt_identity_mask_or_negative_offset_table(%rip), %rax
+        movslq  (%rax,%r10,4), %rcx
+        addq    %rax, %rcx
+        jmpq    *%rcx
+
+        .globl  jt_identity_mask_or_negative_case0
+jt_identity_mask_or_negative_case0:
+        movl    $6200, %eax
+        retq
+        .globl  jt_identity_mask_or_negative_poison1
+jt_identity_mask_or_negative_poison1:
+        movl    $6291, %eax
+        retq
+        .globl  jt_identity_mask_or_negative_case2
+jt_identity_mask_or_negative_case2:
+        movl    $6202, %eax
+        retq
+        .globl  jt_identity_mask_or_negative_poison3
+jt_identity_mask_or_negative_poison3:
+        movl    $6293, %eax
+        retq
+        .globl  jt_identity_mask_or_negative_case4
+jt_identity_mask_or_negative_case4:
+        movl    $6204, %eax
+        retq
+        .globl  jt_identity_mask_or_negative_poison5
+jt_identity_mask_or_negative_poison5:
+        movl    $6295, %eax
+        retq
+        .globl  jt_identity_mask_or_negative_case6
+jt_identity_mask_or_negative_case6:
+        movl    $6206, %eax
+        retq
+        .globl  jt_identity_mask_or_negative_poison7
+jt_identity_mask_or_negative_poison7:
+        movl    $6297, %eax
+        retq
+        .size jt_identity_mask_or_negative_offset, .-jt_identity_mask_or_negative_offset
+
+        .section .rodata,"a",@progbits
+        .p2align 2
+        .globl  jt_identity_mask_or_negative_offset_table
+        .type   jt_identity_mask_or_negative_offset_table,@object
+jt_identity_mask_or_negative_offset_table:
+        .long jt_identity_mask_or_negative_case0-jt_identity_mask_or_negative_offset_table
+        .long jt_identity_mask_or_negative_poison1-jt_identity_mask_or_negative_offset_table
+        .long jt_identity_mask_or_negative_case2-jt_identity_mask_or_negative_offset_table
+        .long jt_identity_mask_or_negative_poison3-jt_identity_mask_or_negative_offset_table
+        .long jt_identity_mask_or_negative_case4-jt_identity_mask_or_negative_offset_table
+        .long jt_identity_mask_or_negative_poison5-jt_identity_mask_or_negative_offset_table
+        .long jt_identity_mask_or_negative_case6-jt_identity_mask_or_negative_offset_table
+        .long jt_identity_mask_or_negative_poison7-jt_identity_mask_or_negative_offset_table
+        .size jt_identity_mask_or_negative_offset_table, .-jt_identity_mask_or_negative_offset_table
+
+
+// The dispatch selector has its own complete x&7 domain.  A reachable sibling
+// path computes `(y|1)&7` and consumes it as control, but that value never
+// reaches the table address.  Known-one evidence is occurrence-local: the
+// sibling OR must not narrow the dispatch to the odd coordinates or otherwise
+// perturb final-root replay.
+        .text
+        .globl  jt_identity_mask_or_unrelated_sibling
+        .type   jt_identity_mask_or_unrelated_sibling,@function
+jt_identity_mask_or_unrelated_sibling:
+        movl    %edi, %r10d
+        andl    $7, %r10d
+        movl    %esi, %r11d
+        orl     $1, %r11d
+        andl    $7, %r11d
+        testl   $2, %r11d
+        je      .Lmask_or_sibling_dispatch
+        xorl    %r11d, %r11d
+.Lmask_or_sibling_dispatch:
+        leaq    jt_identity_mask_or_unrelated_sibling_table(%rip), %rax
+        jmpq    *(%rax,%r10,8)
+
+.Lmask_or_sibling_case0:
+        movl    $6300, %eax
+        retq
+.Lmask_or_sibling_case1:
+        movl    $6301, %eax
+        retq
+.Lmask_or_sibling_case2:
+        movl    $6302, %eax
+        retq
+.Lmask_or_sibling_case3:
+        movl    $6303, %eax
+        retq
+.Lmask_or_sibling_case4:
+        movl    $6304, %eax
+        retq
+.Lmask_or_sibling_case5:
+        movl    $6305, %eax
+        retq
+.Lmask_or_sibling_case6:
+        movl    $6306, %eax
+        retq
+.Lmask_or_sibling_case7:
+        movl    $6307, %eax
+        retq
+        .size jt_identity_mask_or_unrelated_sibling, .-jt_identity_mask_or_unrelated_sibling
+
+        .section .rodata,"a",@progbits
+        .p2align 3
+        .globl  jt_identity_mask_or_unrelated_sibling_table
+        .type   jt_identity_mask_or_unrelated_sibling_table,@object
+jt_identity_mask_or_unrelated_sibling_table:
+        .quad .Lmask_or_sibling_case0
+        .quad .Lmask_or_sibling_case1
+        .quad .Lmask_or_sibling_case2
+        .quad .Lmask_or_sibling_case3
+        .quad .Lmask_or_sibling_case4
+        .quad .Lmask_or_sibling_case5
+        .quad .Lmask_or_sibling_case6
+        .quad .Lmask_or_sibling_case7
+        .size jt_identity_mask_or_unrelated_sibling_table, .-jt_identity_mask_or_unrelated_sibling_table
+
+// The only entry-reachable selector is constant zero, and case zero loops with
+// that same value.  The real `(x|1)&7; -1` producer lives in case two, which is
+// reachable only if the resolver first lends the physical table's provisional
+// targets to its own proof.  Case two would then support itself in the apparent
+// {0,2,4,6} domain.  Least-fixed-point final replay must remove that circular
+// certificate and leave the original indirect branch opaque and unsafe.
+        .text
+        .globl  jt_identity_mask_or_fp_self_bootstrap
+        .type   jt_identity_mask_or_fp_self_bootstrap,@function
+jt_identity_mask_or_fp_self_bootstrap:
+        xorl    %r10d, %r10d
+        jmp     .Lmask_or_fp_dispatch
+.Lmask_or_fp_case0:
+        xorl    %r10d, %r10d
+        jmp     .Lmask_or_fp_dispatch
+.Lmask_or_fp_case1:
+        movl    $6401, %eax
+        retq
+.Lmask_or_fp_case2:
+        movl    %edi, %r10d
+        orl     $1, %r10d
+        andl    $7, %r10d
+        subl    $1, %r10d
+        jmp     .Lmask_or_fp_dispatch
+.Lmask_or_fp_case3:
+        movl    $6403, %eax
+        retq
+.Lmask_or_fp_case4:
+        movl    $6404, %eax
+        retq
+.Lmask_or_fp_case5:
+        movl    $6405, %eax
+        retq
+.Lmask_or_fp_case6:
+        movl    $6406, %eax
+        retq
+.Lmask_or_fp_case7:
+        movl    $6407, %eax
+        retq
+.Lmask_or_fp_dispatch:
+        leaq    jt_identity_mask_or_fp_self_bootstrap_table(%rip), %rax
+        jmpq    *(%rax,%r10,8)
+        .size jt_identity_mask_or_fp_self_bootstrap, .-jt_identity_mask_or_fp_self_bootstrap
+
+        .section .rodata,"a",@progbits
+        .p2align 3
+        .globl  jt_identity_mask_or_fp_self_bootstrap_table
+        .type   jt_identity_mask_or_fp_self_bootstrap_table,@object
+jt_identity_mask_or_fp_self_bootstrap_table:
+        .quad .Lmask_or_fp_case0
+        .quad .Lmask_or_fp_case1
+        .quad .Lmask_or_fp_case2
+        .quad .Lmask_or_fp_case3
+        .quad .Lmask_or_fp_case4
+        .quad .Lmask_or_fp_case5
+        .quad .Lmask_or_fp_case6
+        .quad .Lmask_or_fp_case7
+        .size jt_identity_mask_or_fp_self_bootstrap_table, .-jt_identity_mask_or_fp_self_bootstrap_table
+
+
+// The entry path proves `(x|1)&7; -1` without borrowing a single table edge,
+// so its exact physical domain is {0,2,4,6}.  Odd slot one contains another
+// syntactically identical OR/mask/sub recipe over an unrelated register.  That
+// sibling exists only while the resolver provisionally explores the odd
+// relocation targets; final sparse-domain replay removes its root.  The clean
+// selector's known-one certificate must therefore contain only its own exact
+// OR occurrence, not every same-bound proposal seen in the provisional graph.
+        .text
+        .globl  jt_identity_mask_or_pruned_sibling_clean
+        .type   jt_identity_mask_or_pruned_sibling_clean,@function
+jt_identity_mask_or_pruned_sibling_clean:
+        movl    %edi, %r10d
+        orl     $1, %r10d
+        andl    $7, %r10d
+        subl    $1, %r10d
+        leaq    jt_identity_mask_or_pruned_sibling_clean_table(%rip), %rax
+        movslq  (%rax,%r10,4), %rcx
+        addq    %rax, %rcx
+        jmpq    *%rcx
+
+        .globl  jt_identity_mask_or_pruned_sibling_case0
+jt_identity_mask_or_pruned_sibling_case0:
+        movl    $6500, %eax
+        retq
+        .globl  jt_identity_mask_or_pruned_sibling_poison1
+jt_identity_mask_or_pruned_sibling_poison1:
+        .globl  jt_identity_mask_or_pruned_sibling_begin
+jt_identity_mask_or_pruned_sibling_begin:
+        movl    %esi, %r11d
+        orl     $1, %r11d
+        andl    $7, %r11d
+        subl    $1, %r11d
+        movl    $6591, %eax
+        addl    %r11d, %eax
+        .globl  jt_identity_mask_or_pruned_sibling_end
+jt_identity_mask_or_pruned_sibling_end:
+        retq
+        .globl  jt_identity_mask_or_pruned_sibling_case2
+jt_identity_mask_or_pruned_sibling_case2:
+        movl    $6502, %eax
+        retq
+        .globl  jt_identity_mask_or_pruned_sibling_poison3
+jt_identity_mask_or_pruned_sibling_poison3:
+        movl    $6593, %eax
+        retq
+        .globl  jt_identity_mask_or_pruned_sibling_case4
+jt_identity_mask_or_pruned_sibling_case4:
+        movl    $6504, %eax
+        retq
+        .globl  jt_identity_mask_or_pruned_sibling_poison5
+jt_identity_mask_or_pruned_sibling_poison5:
+        movl    $6595, %eax
+        retq
+        .globl  jt_identity_mask_or_pruned_sibling_case6
+jt_identity_mask_or_pruned_sibling_case6:
+        movl    $6506, %eax
+        retq
+        .globl  jt_identity_mask_or_pruned_sibling_poison7
+jt_identity_mask_or_pruned_sibling_poison7:
+        movl    $6597, %eax
+        retq
+        .size jt_identity_mask_or_pruned_sibling_clean, .-jt_identity_mask_or_pruned_sibling_clean
+
+        .section .rodata,"a",@progbits
+        .p2align 2
+        .globl  jt_identity_mask_or_pruned_sibling_clean_table
+        .type   jt_identity_mask_or_pruned_sibling_clean_table,@object
+jt_identity_mask_or_pruned_sibling_clean_table:
+        .long jt_identity_mask_or_pruned_sibling_case0-jt_identity_mask_or_pruned_sibling_clean_table
+        .long jt_identity_mask_or_pruned_sibling_poison1-jt_identity_mask_or_pruned_sibling_clean_table
+        .long jt_identity_mask_or_pruned_sibling_case2-jt_identity_mask_or_pruned_sibling_clean_table
+        .long jt_identity_mask_or_pruned_sibling_poison3-jt_identity_mask_or_pruned_sibling_clean_table
+        .long jt_identity_mask_or_pruned_sibling_case4-jt_identity_mask_or_pruned_sibling_clean_table
+        .long jt_identity_mask_or_pruned_sibling_poison5-jt_identity_mask_or_pruned_sibling_clean_table
+        .long jt_identity_mask_or_pruned_sibling_case6-jt_identity_mask_or_pruned_sibling_clean_table
+        .long jt_identity_mask_or_pruned_sibling_poison7-jt_identity_mask_or_pruned_sibling_clean_table
+        .size jt_identity_mask_or_pruned_sibling_clean_table, .-jt_identity_mask_or_pruned_sibling_clean_table
 
         .section .note.GNU-stack,"",@progbits

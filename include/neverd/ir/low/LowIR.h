@@ -450,11 +450,38 @@ struct LowBlock {
   }
 };
 
-/// One loader-authenticated address field that a final published LowIR
-/// instruction actually consumed.  Loader-side PC-relative records cannot
-/// name the semantic target until the containing instruction has been
-/// decoded: x86 displacements are relative to the instruction end, which need
-/// not immediately follow the relocation field.  Keeping the decoded
+/// How an exact address occurrence was authenticated.  Most occurrences bind
+/// a real loader field.  A linked AArch64 image can instead contain a fully
+/// resolved ADRP/add sequence with no surviving PAGE/PAGEOFF relocation; that
+/// form is admitted only when the final address is immediately and exactly
+/// dereferenced inside one immutable data owner.
+enum class RelocatedInstructionAddressProofKind : uint8_t {
+  LoaderField,
+  AArch64RelocationFreeDataDereference,
+};
+
+/// One exact full-width arithmetic step in a relocation-free AArch64 address
+/// proof.  Retaining every occurrence prevents a later LowIR rewrite from
+/// preserving only the same numeric result while changing the reaching ADRP
+/// definition or introducing a partial-register alias.
+struct RelocatedInstructionAddressArithmeticStep {
+  va_t InstructionAddr = InvalidVA;
+  int OpSeq = -1;
+  NdOp Opcode = NdOp::NOP;
+  uint8_t BaseInputIndex = 0;
+  NdVar BaseInputWitness = {};
+  NdVar ScalarInputWitness = {};
+  NdVar OutputWitness = {};
+
+  bool operator==(
+      const RelocatedInstructionAddressArithmeticStep &Other) const = default;
+};
+
+/// One exact address occurrence that a final published LowIR instruction
+/// consumed or defined.  Loader-side PC-relative records cannot name the
+/// semantic target until the containing instruction has been decoded: x86
+/// displacements are relative to the instruction end, which need not
+/// immediately follow the relocation field.  Keeping the decoded
 /// instruction/op occurrence beside the recomputed target prevents global
 /// users from treating a loader approximation as address provenance.
 struct RelocatedInstructionAddressOccurrence {
@@ -482,21 +509,75 @@ struct RelocatedInstructionAddressOccurrence {
   /// operation's output lane or semantic role.
   NdOp OutputOpcode = NdOp::NOP;
   NdVar OutputWitness = {};
+  /// Exact input position that consumed the encoded field, or -1 when the
+  /// field authenticates the operation output.  Equal constants in two input
+  /// positions are permanently ambiguous and retain -1.
+  int InputIndex = -1;
+
+  /// LoaderField requires a real FieldVA.  The relocation-free AArch64 kind
+  /// deliberately keeps FieldVA invalid and carries the complete semantic
+  /// proof below, so consumers that require a loader field cannot silently
+  /// reinterpret it as one.
+  RelocatedInstructionAddressProofKind Authority =
+      RelocatedInstructionAddressProofKind::LoaderField;
+  va_t SeedInstructionAddr = InvalidVA;
+  int SeedOpSeq = -1;
+  NdOp SeedOpcode = NdOp::NOP;
+  NdVar SeedInputWitness = {};
+  NdVar SeedOutputWitness = {};
+  std::vector<RelocatedInstructionAddressArithmeticStep> ArithmeticProof;
+  va_t DereferenceInstructionAddr = InvalidVA;
+  int DereferenceOpSeq = -1;
+  NdOp DereferenceOpcode = NdOp::NOP;
+  NdVar DereferenceAddressWitness = {};
+  uint16_t DereferenceAccessSize = 0;
 
   bool operator==(const RelocatedInstructionAddressOccurrence &Other) const =
       default;
 };
 
-/// Exact LowIR producer emitted only for the i386 PIC get-PC idiom
-/// `call $+5; pop reg`.  A role-neutral Address constant with the same numeric
-/// value is not equivalent: a relocation-free absolute materialization does
-/// not move with the GOTPC relocation when the object is linked elsewhere.
+/// Exact scalar relocation operand consumed by one LowOp input.  Unlike an
+/// address occurrence, an i386 GOTPC immediate is a scalar adjustment; only
+/// the completed CFG proof may turn its output into a model-zero witness.
+struct RelocatedInstructionScalarOperandOccurrence {
+  enum class OperandKind : uint8_t { I386ELFGOTPC };
+
+  va_t FieldVA = InvalidVA;
+  va_t InstructionAddr = InvalidVA;
+  int OpSeq = -1;
+  uint8_t Width = 0;
+  uint8_t InputIndex = 0;
+  uint64_t EncodedValue = 0;
+  OperandKind Kind = OperandKind::I386ELFGOTPC;
+  NdOp Opcode = NdOp::NOP;
+  NdVar OutputWitness = {};
+
+  bool operator==(
+      const RelocatedInstructionScalarOperandOccurrence &Other) const =
+      default;
+};
+
+/// Exact ordinary POP LOAD/COPY producer observed for the i386 PIC get-PC
+/// idiom `call $+5; pop reg`.  This occurrence is only a candidate seed: the
+/// CFG proof must establish that the adjacent call's exact stack push is the
+/// POP's sole reaching predecessor before publishing a scalar model.  A
+/// role-neutral Address constant with the same numeric value is not equivalent.
 struct I386GetPcOccurrence {
+  va_t CallInstructionAddr = InvalidVA;
   va_t InstructionAddr = InvalidVA;
   int OpSeq = -1;
   uint32_t PCValue = 0;
   NdOp OutputOpcode = NdOp::NOP;
   NdVar OutputWitness = {};
+  /// Exact value copied out of the POP's LOAD.  Copy propagation may make
+  /// later PIC arithmetic refer to this SSA value directly, so consumers must
+  /// bind it alongside (but never confuse it with) the architectural output.
+  NdVar InputWitness = {};
+  /// Permission to fold the raw architectural PC on non-ELF i386 after the
+  /// final CFG proves that the adjacent CALL's exact stack push is the POP
+  /// LOAD/COPY's sole reaching definition.  ELF publishes its stricter paired
+  /// GOTPC scalar model instead and deliberately leaves this false.
+  bool RawPCAuthenticated = false;
 
   bool operator==(const I386GetPcOccurrence &Other) const = default;
 };
@@ -826,6 +907,11 @@ struct LowFunc {
   /// Exact scalar address-model outputs retained from final CFG proof.
   std::vector<RelocatedInstructionScalarModelOccurrence>
       RelocatedInstructionScalarModelOccurrences;
+  /// Non-call indirect branches that published at least one validated jump-
+  /// table target in this function's monotone build history.  This is distinct
+  /// from the final JumpTables list: a later complete proof may remove every
+  /// target without changing the guest instruction's branch identity.
+  std::set<va_t> EverPublishedJumpTableBranchAddresses;
   /// Indirect branches whose target storage may be mutable or whose module-
   /// wide evidence analysis failed closed.  This identity is deliberately
   /// independent of JumpTables: a later proof gate may reject all table

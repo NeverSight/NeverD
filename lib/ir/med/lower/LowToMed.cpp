@@ -24,6 +24,7 @@
 #include <functional>
 #include <map>
 #include <set>
+#include <tuple>
 
 #define DEBUG_TYPE "neverd-low-to-med"
 
@@ -435,6 +436,7 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
   resolveSwitchSelectorPlans(Func);
   resolveScalarAddressModels(Func,
                              Low.RelocatedInstructionScalarModelOccurrences);
+  resolveI386GetPcModels(Func, Low.I386GetPcOccurrences);
 
   LLVM_DEBUG(llvm::dbgs() << "LowIR -> MedIR: " << Func.Blocks.size()
                           << " blocks, " << Func.Params.size() << " params, "
@@ -480,6 +482,85 @@ void LowToMedConverter::resolveScalarAddressModels(
     if (Ambiguous || !Bound)
       continue;
     Func.ScalarAddressModels.push_back({Model.Model, *Bound});
+  }
+}
+
+void LowToMedConverter::resolveI386GetPcModels(
+    MedFunc &Func, const std::vector<I386GetPcOccurrence> &Occurrences) {
+  Func.I386GetPcModels.clear();
+  using Key = std::tuple<int, int, int, uint16_t, int>;
+  auto keyFor = [](const MedVar &Value) {
+    return Key{static_cast<int>(Value.Kind), Value.Id, Value.SSAVer,
+               Value.Size, Value.RegOff};
+  };
+  std::map<Key, MedI386GetPcModel> BoundModels;
+  std::set<Key> Ambiguous;
+
+  for (const I386GetPcOccurrence &Occurrence : Occurrences) {
+    if (!Occurrence.RawPCAuthenticated ||
+        Occurrence.InstructionAddr == InvalidVA || Occurrence.OpSeq < 0 ||
+        Occurrence.OutputOpcode != NdOp::COPY ||
+        Occurrence.OutputWitness.Size != 4 ||
+        (!Occurrence.OutputWitness.isReg() &&
+         !Occurrence.OutputWitness.isTemp()) ||
+        !Occurrence.InputWitness.isTemp() || Occurrence.InputWitness.Size != 4)
+      continue;
+
+    const MedVar Expected = ndVarToMedVar(Occurrence.OutputWitness);
+    const MedVar ExpectedInput = ndVarToMedVar(Occurrence.InputWitness);
+    std::optional<MedI386GetPcModel> Bound;
+    bool Multiple = false;
+    for (const MedBlock &Block : Func.Blocks) {
+      for (const MedOp &Op : Block.Ops) {
+        if (Op.Addr != Occurrence.InstructionAddr ||
+            Op.OriginSeq != Occurrence.OpSeq ||
+            Op.Opcode != Occurrence.OutputOpcode || Op.Output.Size != 4)
+          continue;
+        const MedVar &Candidate = Op.Output;
+        const bool SameLane =
+            !Candidate.isConst() && Candidate.Kind == Expected.Kind &&
+            Candidate.Id == Expected.Id && Candidate.Size == Expected.Size &&
+            (Candidate.Kind != MedVar::Reg ||
+             Candidate.RegOff == Expected.RegOff);
+        if (!SameLane || Op.NumInputs != 1)
+          continue;
+        const MedVar &CandidateInput = Op.Inputs[0];
+        const bool SameInputLane =
+            !CandidateInput.isConst() &&
+            CandidateInput.Kind == ExpectedInput.Kind &&
+            CandidateInput.Id == ExpectedInput.Id &&
+            CandidateInput.Size == ExpectedInput.Size &&
+            (CandidateInput.Kind != MedVar::Reg ||
+             CandidateInput.RegOff == ExpectedInput.RegOff);
+        if (!SameInputLane)
+          continue;
+        if (Bound) {
+          Multiple = true;
+          break;
+        }
+        Bound = MedI386GetPcModel{Candidate, CandidateInput,
+                                  Occurrence.PCValue};
+      }
+      if (Multiple)
+        break;
+    }
+    if (Multiple || !Bound)
+      continue;
+
+    const Key BoundKey = keyFor(Bound->Output);
+    if (Ambiguous.count(BoundKey))
+      continue;
+    auto [It, Inserted] = BoundModels.emplace(
+        BoundKey, *Bound);
+    if (!Inserted && It->second.PCValue != Occurrence.PCValue) {
+      BoundModels.erase(It);
+      Ambiguous.insert(BoundKey);
+    }
+  }
+
+  for (const auto &[BoundKey, Model] : BoundModels) {
+    (void)BoundKey;
+    Func.I386GetPcModels.push_back(Model);
   }
 }
 

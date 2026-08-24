@@ -46,8 +46,12 @@ NdVar X86Lifter::LiftState::computeEA(const cs_x86_op &MemOp) {
       return V;
     if (V.isConst()) {
       const uint64_t Original = V.Offset;
-      if (ArithmeticSize < 8)
-        V.Offset &= (uint64_t{1} << (ArithmeticSize * 8)) - 1;
+      if (ArithmeticSize < 8) {
+        const unsigned Bits = ArithmeticSize * 8;
+        const uint64_t Mask = (uint64_t{1} << Bits) - 1;
+        const uint64_t Narrow = Original & Mask;
+        V.Offset = Narrow;
+      }
       V.Size = ArithmeticSize;
       if (V.Offset != Original &&
           V.Provenance != ConstantAddressProvenance::Unknown &&
@@ -349,8 +353,10 @@ void X86Lifter::emitZeroCountFlagGuard(
 // ===----------------------------------------------------------------------===//
 
 void X86Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
-                     llvm::ArrayRef<RelocatedAddressOperand> Relocs) {
+                     llvm::ArrayRef<RelocatedAddressOperand> Relocs,
+                     llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs) {
   LastGetPcOccurrence.reset();
+  LastScalarOperandOccurrence.reset();
   auto *Detail = Insn->detail;
   if (!Detail)
     return;
@@ -408,6 +414,32 @@ void X86Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
         S.RelocatedImmediate = Candidate;
     }
   }
+
+  // Bind i386 GOTPC only to the exact encoded immediate of `addl imm32,reg`.
+  // A memory-form ADD may contain both a displacement and an equal immediate;
+  // instruction membership plus numeric equality is therefore insufficient.
+  std::optional<RelocatedScalarOperand> ExactGOTPC;
+  bool AmbiguousGOTPC = false;
+  if (TargetArch == Arch::X86 && Insn->id == X86_INS_ADD &&
+      X86.op_count == 2 && X86.operands[0].type == X86_OP_REG &&
+      X86.operands[1].type == X86_OP_IMM && X86.encoding.imm_size == 4) {
+    for (const RelocatedScalarOperand &Reloc : ScalarRelocs) {
+      if (Reloc.Semantics !=
+              RelocatedScalarOperand::Kind::I386ELFGOTPC ||
+          Reloc.Width != X86.encoding.imm_size ||
+          Reloc.FieldVA != Insn->address + X86.encoding.imm_offset ||
+          static_cast<uint32_t>(Reloc.EncodedValue) !=
+              static_cast<uint32_t>(X86.operands[1].imm))
+        continue;
+      if (ExactGOTPC) {
+        AmbiguousGOTPC = true;
+        break;
+      }
+      ExactGOTPC = Reloc;
+    }
+  }
+  if (AmbiguousGOTPC)
+    ExactGOTPC.reset();
   // Two loader owners for the same encoded field are corrupt/ambiguous
   // provenance.  Falling back to a raw immediate would freeze the old VA, so
   // reject the instruction before emitting any LowIR instead.
@@ -421,7 +453,7 @@ void X86Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
   // get-PC thunk: capture whether the previous instruction was a `call $+5`, so
   // the POP handler can resolve this instruction's destination to the constant
   // PC.  Cleared each instruction; the CALL handler re-arms it for the next.
-  GetPcArmedThisInsn = GetPcPending;
+  GetPcArmedThisInsn = GetPcPending && Insn->address == GetPcValue;
   GetPcPending = false;
 
   // Track CQO/CDQ/CWD → IDIV/DIV pattern.
@@ -475,6 +507,52 @@ void X86Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
     LLVM_DEBUG(llvm::dbgs()
                << "Unlifted instruction: " << Insn->mnemonic << " "
                << Insn->op_str << " @ 0x" << llvm::utohexstr(S.Addr) << "\n");
+  }
+
+  if (ExactGOTPC) {
+    const RegInfo Destination =
+        mapCapstoneReg(static_cast<x86_reg>(X86.operands[0].reg));
+    const NdVar ExpectedOutput =
+        NdVar::reg(Destination.Offset, Destination.Size);
+    const LowOp *ExactAdd = nullptr;
+    uint8_t ExactInput = 0;
+    for (size_t I = S.OpsStart; I < Ops.size(); ++I) {
+      const LowOp &Op = Ops[I];
+      if (Op.Addr != Insn->address || Op.Opcode != NdOp::INT_ADD ||
+          Op.Output != ExpectedOutput)
+        continue;
+      unsigned MatchingInputs = 0;
+      uint8_t MatchingInput = 0;
+      for (uint8_t Input = 0; Input < Op.NumInputs; ++Input)
+        if (Op.Inputs[Input].isConst() && Op.Inputs[Input].Size == 4 &&
+            Op.Inputs[Input].Provenance ==
+                ConstantAddressProvenance::Scalar &&
+            static_cast<uint32_t>(Op.Inputs[Input].Offset) ==
+                static_cast<uint32_t>(ExactGOTPC->EncodedValue)) {
+          ++MatchingInputs;
+          MatchingInput = Input;
+        }
+      if (MatchingInputs != 1)
+        continue;
+      if (ExactAdd) {
+        ExactAdd = nullptr;
+        break;
+      }
+      ExactAdd = &Op;
+      ExactInput = MatchingInput;
+    }
+    if (ExactAdd)
+      LastScalarOperandOccurrence = {
+          ExactGOTPC->FieldVA,
+          Insn->address,
+          ExactAdd->Seq,
+          ExactGOTPC->Width,
+          ExactInput,
+          ExactGOTPC->EncodedValue,
+          RelocatedInstructionScalarOperandOccurrence::OperandKind::
+              I386ELFGOTPC,
+          ExactAdd->Opcode,
+          ExactAdd->Output};
   }
 
   // x86-64: writing to a 32-bit register implicitly zero-extends to 64 bits.

@@ -236,9 +236,10 @@ void Decoder::setDetail(bool On) {
 }
 
 void Decoder::liftToLow(const DecodedInsn &Insn, std::vector<LowOp> &Ops,
-                        llvm::ArrayRef<RelocatedAddressOperand> Relocs) {
+                        llvm::ArrayRef<RelocatedAddressOperand> Relocs,
+                        llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs) {
   if (X86) {
-    X86->lift(Insn.Raw, Ops, Relocs);
+    X86->lift(Insn.Raw, Ops, Relocs, ScalarRelocs);
   } else if (AArch64) {
     AArch64->lift(Insn.Raw, Ops);
   } else if (ARM) {
@@ -267,6 +268,11 @@ int Decoder::getX86RetPopBytes() const {
 
 std::optional<I386GetPcOccurrence> Decoder::getX86GetPcOccurrence() const {
   return X86 ? X86->getLastGetPcOccurrence() : std::nullopt;
+}
+
+std::optional<RelocatedInstructionScalarOperandOccurrence>
+Decoder::getX86ScalarOperandOccurrence() const {
+  return X86 ? X86->getLastScalarOperandOccurrence() : std::nullopt;
 }
 
 void Decoder::fixupDecodedInsn(cs_insn *I) const {

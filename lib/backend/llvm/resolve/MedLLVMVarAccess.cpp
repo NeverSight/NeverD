@@ -47,6 +47,14 @@ static bool isIncompleteRelocatableConstant(const MedVar &V, Arch TargetArch) {
   return V.Size != 0 && PointerSize != 0 && V.Size < PointerSize;
 }
 
+static llvm::ConstantInt *rawIntegerConstant(llvm::LLVMContext &Context,
+                                             llvm::Type *Type, uint64_t Value) {
+  auto *IntType = llvm::cast<llvm::IntegerType>(Type);
+  return llvm::ConstantInt::get(
+      Context, llvm::APInt(IntType->getBitWidth(), Value,
+                           /*isSigned=*/false, /*implicitTrunc=*/true));
+}
+
 //===----------------------------------------------------------------------===//
 // Definition / PHI index
 //
@@ -608,9 +616,7 @@ MedLLVMEmitter::getPhiIncomingConstant(const MedVar &V, uint16_t OutputSize,
   assert(V.isConst() && "PHI constant materializer requires a constant");
   if (isExactAddressProvenance(V.Provenance))
     return getVar(V, Builder);
-  return llvm::ConstantInt::get(sizeToType(OutputSize),
-                                static_cast<int64_t>(V.ConstVal),
-                                /*isSigned=*/true);
+  return rawIntegerConstant(*Ctx, sizeToType(OutputSize), V.ConstVal);
 }
 
 llvm::Value *MedLLVMEmitter::getPhiIncomingValue(const MedVar &V,
@@ -667,6 +673,14 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
   if (V.isConst()) {
     constexpr uint64_t kMinGlobalDataAddr = limits::kMinGlobalDataAddr;
     unsigned PtrSz = getTargetRegInfo(TargetArch).PointerSize;
+    // ConstVal stores the raw low Size-byte bit pattern.  It may therefore be
+    // represented as a sign-extended uint64_t (for example an i386 -20
+    // displacement).  ConstantInt's uint64_t overload requires the value to
+    // fit the destination width and asserts on that representation, so every
+    // raw numeric exit from this classifier must truncate explicitly.
+    auto rawConstant = [&]() -> llvm::ConstantInt * {
+      return rawIntegerConstant(*Ctx, sizeToType(V.Size), V.ConstVal);
+    };
     // A pointer-width constant above the heuristic threshold, or one the
     // loader proved is a relocation target inside read-only data, is a real
     // pointer rather than an integer literal — resolve it to the embedded
@@ -711,7 +725,7 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
     // intermediate ADRP/page-base value; escape sinks reject it separately.
     if (V.Provenance == ConstantAddressProvenance::Scalar ||
         V.Provenance == ConstantAddressProvenance::AddressFragment)
-      return llvm::ConstantInt::get(sizeToType(V.Size), V.ConstVal);
+      return rawConstant();
 
     // Explicit provenance owns the occurrence and never falls through to the
     // legacy value-global classifier. Role-neutral Address is resolved only
@@ -720,7 +734,7 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
     if (isExactAddressProvenance(V.Provenance)) {
       const bool IsPointerWidth = V.Size == 0 || PtrSz == 0 || V.Size >= PtrSz;
       if (!IsPointerWidth)
-        return llvm::ConstantInt::get(sizeToType(V.Size), V.ConstVal);
+        return rawConstant();
 
       if (isCodeAddressProvenance(V.Provenance)) {
         if (llvm::Constant *Code = resolveLiftedCodeAddress(V.ConstVal))
@@ -744,7 +758,7 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
         // in-memory BlockAddress owned by a different cloning context.  Code
         // and data use sites own that decision; only an explicit CodeAddress
         // is materialized above.
-        return llvm::ConstantInt::get(sizeToType(V.Size), V.ConstVal);
+        return rawConstant();
       }
 
       // A role-neutral address anywhere in a contiguous pointer-mirror run
@@ -754,7 +768,7 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
       // that tail would mix it with the raw RELRO head nodes in a PHI/SELECT.
       if (V.Provenance == ConstantAddressProvenance::Address &&
           addrInCodePtrMirrorRun(V.ConstVal))
-        return llvm::ConstantInt::get(sizeToType(V.Size), V.ConstVal);
+        return rawConstant();
 
       uint64_t Address = 0;
       uint64_t OwnerVA = InvalidVA;
@@ -762,7 +776,7 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
         return materializeDataRelationConstant(Address, V.Size, Builder,
                                                OwnerVA);
       if (V.Provenance == ConstantAddressProvenance::Address)
-        return llvm::ConstantInt::get(sizeToType(V.Size), V.ConstVal);
+        return rawConstant();
       return failUnresolvableDataConstant();
     }
     if (getVarSymbolizesDataConstant(V.ConstVal, V.Size)) {
@@ -868,10 +882,7 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
     // width with implicit truncation so the low bits are taken verbatim —
     // correct for both zero-extended unsigned constants and sign-extended
     // negative ones.
-    auto *IntTy = llvm::cast<llvm::IntegerType>(sizeToType(V.Size));
-    return llvm::ConstantInt::get(
-        *Ctx, llvm::APInt(IntTy->getBitWidth(), V.ConstVal, /*isSigned=*/false,
-                          /*implicitTrunc=*/true));
+    return rawConstant();
   }
 
   auto Key = std::make_pair(V.Id, V.SSAVer);

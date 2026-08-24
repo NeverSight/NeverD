@@ -18,6 +18,7 @@
 #include "neverd/ir/low/CFGBuilder.h"
 
 #include "neverd/Limits.h"
+#include "neverd/loader/PointerRelocation.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -25,7 +26,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
-#include <cstdlib>
+#include <initializer_list>
 #include <iterator>
 #include <limits>
 #include <queue>
@@ -89,14 +90,32 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   DiscoveredCodeRefs.clear();
   DiscoveredCodeRefSources.clear();
   ResolvedTableInfo.clear();
+  PriorStrongJumpTableProposals.clear();
+  NextStrongJumpTableProposals.clear();
+  StrongJumpTableProposalOutcomes.clear();
+  QuarantinedJumpTableProposals.clear();
+  EverStrongJumpTableProposalBranches.clear();
+  CandidateProposalStageActive = false;
+  CandidateProposalStageEvidenceRemaining = 0;
+  CandidateProposalStageEvidenceIncomplete = false;
+  ProposalStageCommitTailEvidenceExhaustedForTesting = false;
+  ProposalStageRollbackMutatedQuarantineForTesting = false;
+  ProposalCleanupEvidenceForTesting = {};
   JumpTableProofContextComplete = false;
   RequestedCompleteJumpTableProof = false;
   PersistentCFGRoots.clear();
   DurableCFGRoots.clear();
   RelocationCFGRootSources.clear();
   ActiveJumpTableProofRoots.reset();
+  ActiveJumpTableCandidateAddr = InvalidVA;
+  ActiveJumpTableCandidateProofRank = 0;
+  ActiveJumpTableConsumerAudit = false;
   PotentialJumpTableBranches.clear();
+  EverPublishedJumpTableBranches.clear();
   LostValidatedJumpTableBranches.clear();
+  StackTableEvidenceIncompleteBranches.clear();
+  IndexDomainEvidenceIncompleteBranches.clear();
+  MaskFixedPointExplorationTargets.clear();
   PublishedReachableInsns.clear();
   DecodedInstructionCount = 0;
   LiftedInstructionCount = 0;
@@ -107,7 +126,19 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   TruncatedPathAddresses.clear();
   RelocatedInstructionAddressOccurrences.clear();
   I386GetPcOccurrences.clear();
+  RelocatedInstructionScalarOperandOccurrences.clear();
   RelocatedInstructionScalarModelOccurrences.clear();
+  I386GOTOFFProposalRootCache.clear();
+  I386GOTOFFModelReachCache.clear();
+  I386GOTOFFProposalEvidenceRemaining = 0;
+  I386GOTOFFProposalEvidenceIncomplete = false;
+  StackTableEvidenceRemaining = std::min<size_t>(
+      limits::kMaxJumpTableEvidenceWork,
+      StackTableEvidenceBudgetForTesting.value_or(
+          limits::kMaxJumpTableEvidenceWork));
+  PreviouslyPublishedJumpTableBranches =
+      std::move(PendingPreviouslyPublishedJumpTableBranches);
+  PendingPreviouslyPublishedJumpTableBranches.clear();
 
   CurrentFuncEntry = EntryAddr;
   CurrentFuncRange.reset();
@@ -294,6 +325,214 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
     }
   }
 
+  auto exactProofOp = [&](va_t Addr, int Seq) -> const LowOp * {
+    const auto Insn = Insns.find(Addr);
+    if (Insn == Insns.end() || Insn->second.IsInstructionGuard)
+      return nullptr;
+    const LowOp *Found = nullptr;
+    for (const LowOp &Op : Insn->second.Ops) {
+      if (Op.Addr != Addr || Op.Seq != Seq)
+        continue;
+      if (Found)
+        return nullptr;
+      Found = &Op;
+    }
+    return Found;
+  };
+  auto proofRegistersOverlap = [](const NdVar &Left, const NdVar &Right) {
+    if (!Left.isReg() || !Right.isReg() || Left.Size == 0 || Right.Size == 0)
+      return false;
+    const uint64_t LeftEnd = Left.Offset + Left.Size;
+    const uint64_t RightEnd = Right.Offset + Right.Size;
+    return Left.Offset < RightEnd && Right.Offset < LeftEnd;
+  };
+  auto relocationFreeProofStillMatches =
+      [&](const RelocatedInstructionAddressOccurrence &Occurrence) {
+    if (Occurrence.Authority != RelocatedInstructionAddressProofKind::
+                                    AArch64RelocationFreeDataDereference)
+      return true;
+    const uint16_t PointerSize = Img.getPointerSize();
+    if (Img.Arch != Arch::AArch64 || Img.IsRelocatable || PointerSize == 0 ||
+        PointerSize > sizeof(va_t) || Occurrence.FieldVA != InvalidVA ||
+        Occurrence.Width != PointerSize || !Occurrence.DefinesOutput ||
+        Occurrence.OutputMayDepend ||
+        Occurrence.Provenance != ConstantAddressProvenance::DataAddress ||
+        Occurrence.TargetVA == InvalidVA ||
+        Occurrence.TargetOwnerVA == InvalidVA ||
+        Occurrence.ArithmeticProof.empty() ||
+        Occurrence.ArithmeticProof.size() > 32)
+      return false;
+    const auto RootIt = Insns.find(Occurrence.SeedInstructionAddr);
+    const LowOp *Root =
+        exactProofOp(Occurrence.SeedInstructionAddr, Occurrence.SeedOpSeq);
+    if (RootIt == Insns.end() || !Root || RootIt->second.Ops.size() != 1 ||
+        RootIt->second.Size == 0 ||
+        RootIt->second.Size > InvalidVA - RootIt->second.Addr ||
+        RootIt->second.IsBranch || RootIt->second.IsCall ||
+        RootIt->second.IsRet || RootIt->second.IsOpaqueTerminator ||
+        RootIt->second.IsResumableTerminator ||
+        Root->Opcode != Occurrence.SeedOpcode || Root->Opcode != NdOp::COPY ||
+        Root->NumInputs != 1 || Root->Inputs[0] != Occurrence.SeedInputWitness ||
+        Root->Output != Occurrence.SeedOutputWitness ||
+        !Root->Output.isReg() || Root->Output.Size != PointerSize ||
+        !Root->Inputs[0].isConst() || Root->Inputs[0].Size != PointerSize ||
+        Root->Inputs[0].Provenance !=
+            ConstantAddressProvenance::AddressFragment)
+      return false;
+
+    const unsigned PointerBits = static_cast<unsigned>(PointerSize) * 8;
+    const uint64_t PointerMask =
+        PointerBits == 64 ? std::numeric_limits<uint64_t>::max()
+                          : (uint64_t{1} << PointerBits) - 1;
+    auto canonicalScalar =
+        [&](const LowOp &Op,
+            const RelocatedInstructionAddressArithmeticStep &Step)
+        -> std::optional<uint64_t> {
+      if (!Step.ScalarInputWitness.isConst() ||
+          Step.ScalarInputWitness.Provenance !=
+              ConstantAddressProvenance::Scalar)
+        return std::nullopt;
+      if (Step.ScalarInputWitness.Size == PointerSize)
+        return Step.ScalarInputWitness.Offset & PointerMask;
+      if (PointerSize != 8 || Step.ScalarInputWitness.Size != 4 ||
+          Step.BaseInputIndex != 0)
+        return std::nullopt;
+      const uint8_t *Bytes = Img.readVA(Op.Addr, sizeof(uint32_t));
+      if (!Bytes)
+        return std::nullopt;
+      const uint32_t Word = readLE<uint32_t>(Bytes);
+      if ((Word & 0x1f000000u) != 0x11000000u ||
+          (Word & 0x80000000u) == 0 || (Word & 0x20000000u) != 0 ||
+          (((Word & 0x40000000u) != 0) !=
+           (Op.Opcode == NdOp::INT_SUB)))
+        return std::nullopt;
+      const uint64_t Encoded = uint64_t((Word >> 10) & 0xfffu)
+                               << (((Word >> 22) & 1u) ? 12 : 0);
+      return Encoded == Step.ScalarInputWitness.Offset
+                 ? std::optional<uint64_t>(Encoded)
+                 : std::nullopt;
+    };
+    NdVar Current = Root->Output;
+    va_t Address = Root->Inputs[0].Offset;
+    va_t ExpectedAddress = RootIt->second.Addr + RootIt->second.Size;
+    for (const RelocatedInstructionAddressArithmeticStep &Step :
+         Occurrence.ArithmeticProof) {
+      const auto Rec = Insns.find(Step.InstructionAddr);
+      const LowOp *Op = exactProofOp(Step.InstructionAddr, Step.OpSeq);
+      if (Rec == Insns.end() || Rec->second.Addr != ExpectedAddress || !Op ||
+          Rec->second.Size == 0 ||
+          Rec->second.Size > InvalidVA - Rec->second.Addr ||
+          Rec->second.IsBranch || Rec->second.IsCall || Rec->second.IsRet ||
+          Rec->second.IsOpaqueTerminator ||
+          Rec->second.IsResumableTerminator ||
+          (Step.Opcode != NdOp::INT_ADD && Step.Opcode != NdOp::INT_SUB) ||
+          Op->Opcode != Step.Opcode || Op->NumInputs != 2 ||
+          Step.BaseInputIndex > 1 ||
+          (Op->Opcode == NdOp::INT_SUB && Step.BaseInputIndex != 0) ||
+          Op->Inputs[Step.BaseInputIndex] != Step.BaseInputWitness ||
+          Step.BaseInputWitness != Current ||
+          Op->Inputs[1 - Step.BaseInputIndex] != Step.ScalarInputWitness ||
+          Op->Output != Step.OutputWitness || !Op->Output.isReg() ||
+          Op->Output.Size != PointerSize ||
+          Step.BaseInputWitness.Size != PointerSize ||
+          Img.InstructionAddressMaterializations.count(Op->Addr))
+        return false;
+      for (const LowOp &Other : Rec->second.Ops) {
+        const LowMemoryOperandView Memory = lowMemoryOperands(Other);
+        if (Memory.Complete ||
+            (&Other != Op &&
+             (proofRegistersOverlap(Other.Output, Current) ||
+              proofRegistersOverlap(Other.Output, Op->Output))))
+          return false;
+      }
+      const std::optional<uint64_t> Delta = canonicalScalar(*Op, Step);
+      if (!Delta || Address > PointerMask ||
+          (Op->Opcode == NdOp::INT_ADD &&
+           *Delta > PointerMask - Address) ||
+          (Op->Opcode == NdOp::INT_SUB && *Delta > Address))
+        return false;
+      Address = Op->Opcode == NdOp::INT_ADD ? Address + *Delta
+                                            : Address - *Delta;
+      Current = Op->Output;
+      ExpectedAddress = Rec->second.Addr + Rec->second.Size;
+    }
+    const RelocatedInstructionAddressArithmeticStep &Final =
+        Occurrence.ArithmeticProof.back();
+    if (Occurrence.InstructionAddr != Final.InstructionAddr ||
+        Occurrence.OpSeq != Final.OpSeq ||
+        Occurrence.OutputOpcode != Final.Opcode ||
+        Occurrence.OutputWitness != Final.OutputWitness ||
+        Occurrence.TargetVA != Address)
+      return false;
+
+    const auto DereferenceRec =
+        Insns.find(Occurrence.DereferenceInstructionAddr);
+    const LowOp *Dereference = exactProofOp(
+        Occurrence.DereferenceInstructionAddr, Occurrence.DereferenceOpSeq);
+    if (DereferenceRec == Insns.end() || !Dereference ||
+        DereferenceRec->second.Addr != ExpectedAddress ||
+        DereferenceRec->second.IsBranch || DereferenceRec->second.IsCall ||
+        DereferenceRec->second.IsRet ||
+        DereferenceRec->second.IsOpaqueTerminator ||
+        DereferenceRec->second.IsResumableTerminator ||
+        Dereference->Opcode != Occurrence.DereferenceOpcode ||
+        (Dereference->Opcode != NdOp::LOAD &&
+         Dereference->Opcode != NdOp::STORE))
+      return false;
+    NdVar DereferenceAddress = Current;
+    bool SawDereference = false;
+    for (const LowOp &Op : DereferenceRec->second.Ops) {
+      const LowMemoryOperandView CandidateMemory = lowMemoryOperands(Op);
+      if (&Op == Dereference) {
+        if (!CandidateMemory.Complete || !CandidateMemory.Address ||
+            *CandidateMemory.Address != DereferenceAddress || SawDereference ||
+            proofRegistersOverlap(Op.Output, Current))
+          return false;
+        SawDereference = true;
+        continue;
+      }
+      if (CandidateMemory.Complete || proofRegistersOverlap(Op.Output, Current))
+        return false;
+      if (!SawDereference) {
+        if (Op.Opcode != NdOp::COPY || Op.NumInputs != 1 ||
+            Op.Inputs[0] != DereferenceAddress ||
+            (!Op.Output.isReg() && !Op.Output.isTemp()) ||
+            Op.Output.Size != PointerSize ||
+            (Op.Output.isReg() &&
+             proofRegistersOverlap(Op.Output, Current)))
+          return false;
+        DereferenceAddress = Op.Output;
+      }
+    }
+    const LowMemoryOperandView Memory = lowMemoryOperands(*Dereference);
+    if (!SawDereference || !Memory.Complete || !Memory.Address ||
+        DereferenceAddress != Occurrence.DereferenceAddressWitness ||
+        *Memory.Address != DereferenceAddress ||
+        Memory.AccessSize != Occurrence.DereferenceAccessSize ||
+        Memory.AccessSize == 0 ||
+        Memory.AccessSize - 1 > InvalidVA - Address)
+      return false;
+    const va_t Last = Address + Memory.AccessSize - 1;
+    if (!Img.hasObjectDataProvenance(Address) ||
+        !Img.hasObjectDataProvenance(Last) ||
+        Img.hasExecutableCodeOwnerAt(Address) ||
+        Img.hasExecutableCodeOwnerAt(Last) ||
+        isRuntimeWritableAddress(Img, Address) ||
+        isRuntimeWritableAddress(Img, Last) ||
+        !Img.relocatedTargetBelongsToOwner(Address,
+                                           Occurrence.TargetOwnerVA))
+      return false;
+    const Section *StartSection = Img.getSectionFor(Address);
+    const Section *LastSection = Img.getSectionFor(Last);
+    if (StartSection || LastSection)
+      return StartSection && StartSection == LastSection &&
+             StartSection->VA == Occurrence.TargetOwnerVA;
+    const Segment *StartSegment = Img.getSegmentFor(Address);
+    const Segment *LastSegment = Img.getSegmentFor(Last);
+    return StartSegment && StartSegment == LastSegment &&
+           StartSegment->VA == Occurrence.TargetOwnerVA;
+  };
+
   Func.RelocatedInstructionAddressOccurrences.clear();
   for (const RelocatedInstructionAddressOccurrence &Occurrence :
        RelocatedInstructionAddressOccurrences) {
@@ -343,7 +582,7 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
       if (Published)
         break;
     }
-    if (Published) {
+    if (Published && relocationFreeProofStillMatches(Occurrence)) {
       Func.RelocatedInstructionAddressOccurrences.push_back(Occurrence);
       if (!Occurrence.OutputMayDepend &&
           Occurrence.Provenance == ConstantAddressProvenance::CodeAddress)
@@ -368,7 +607,8 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
           if (Op.Addr == Occurrence.InstructionAddr &&
               Op.Seq == Occurrence.OpSeq &&
               Op.Opcode == Occurrence.OutputOpcode &&
-              Op.Output == Occurrence.OutputWitness) {
+              Op.Output == Occurrence.OutputWitness && Op.NumInputs == 1 &&
+              Op.Inputs[0] == Occurrence.InputWitness) {
             Published = true;
             break;
           }
@@ -533,7 +773,16 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
     for (va_t Addr : PotentialJumpTableBranches)
       if (Insns.count(Addr))
         Func.UnsafeIndirectBranchAddresses.insert(Addr);
+  Func.EverPublishedJumpTableBranchAddresses.insert(
+      EverPublishedJumpTableBranches.begin(),
+      EverPublishedJumpTableBranches.end());
   for (va_t Addr : LostValidatedJumpTableBranches)
+    if (Insns.count(Addr))
+      Func.UnsafeIndirectBranchAddresses.insert(Addr);
+  for (va_t Addr : StackTableEvidenceIncompleteBranches)
+    if (Insns.count(Addr))
+      Func.UnsafeIndirectBranchAddresses.insert(Addr);
+  for (va_t Addr : IndexDomainEvidenceIncompleteBranches)
     if (Insns.count(Addr))
       Func.UnsafeIndirectBranchAddresses.insert(Addr);
 
@@ -544,6 +793,14 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
 }
 
 void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
+  // Resolver-stage proposal caches are valid only for one immutable decoded
+  // graph.  Exploring even one new target can add an alternate predecessor,
+  // persistent relocation root, or source occurrence that invalidates a
+  // previously successful exact reaching-value proof.  Centralize the
+  // invalidation here so target publication, relocated-interior recovery, and
+  // shared-table reconciliation cannot accidentally reuse a stale result.
+  I386GOTOFFProposalRootCache.clear();
+  I386GOTOFFModelReachCache.clear();
   std::queue<va_t> Worklist;
   Worklist.push(Addr);
 
@@ -621,8 +878,14 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
                 if (Img.getPointerSize() == 4)
                   TargetVA = static_cast<uint32_t>(TargetVA);
               }
-              if (!Img.relocatedTargetBelongsToOwner(TargetVA,
-                                                     It->second.TargetOwnerVA))
+              const bool OwnerMatches =
+                  It->second.Kind ==
+                          RelocatedAddressFieldKind::I386ELFGOTOFF
+                      ? Img.relocatedI386GOTOFFTargetBelongsToOwner(
+                            TargetVA, It->second.TargetOwnerVA)
+                      : Img.relocatedTargetBelongsToOwner(
+                            TargetVA, It->second.TargetOwnerVA);
+              if (!OwnerMatches)
                 continue;
               RelocatedOperands.push_back(RelocatedAddressOperand{
                   It->first, It->second.EncodedValue, TargetVA,
@@ -634,8 +897,19 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
                              ConstantAddressProvenance::DataAddress);
       selectRelocatedOperand(Img.CodeAddressRelocOperands,
                              ConstantAddressProvenance::CodeAddress);
+      std::vector<RelocatedScalarOperand> RelocatedScalarOperands;
+      if (Img.Arch == Arch::X86 && Img.isELF() &&
+          Img.getPointerSize() == 4) {
+        auto Field = Img.I386GOTPCFields.lower_bound(Cur);
+        for (; Field != Img.I386GOTPCFields.end() && Field->first < Next;
+             ++Field)
+          RelocatedScalarOperands.push_back(
+              {Field->first, Field->second.EncodedValue, 4,
+               RelocatedScalarOperand::Kind::I386ELFGOTPC});
+      }
       try {
-        Dec.liftToLow(DI, Rec.Ops, RelocatedOperands);
+        Dec.liftToLow(DI, Rec.Ops, RelocatedOperands,
+                      RelocatedScalarOperands);
       } catch (const UnliftedInstruction &Failure) {
         UnsupportedInstructionAddresses.insert(Failure.getAddr());
         break;
@@ -643,6 +917,9 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       if (std::optional<I386GetPcOccurrence> GetPc =
               Dec.getX86GetPcOccurrence())
         I386GetPcOccurrences.push_back(*GetPc);
+      if (std::optional<RelocatedInstructionScalarOperandOccurrence> Scalar =
+              Dec.getX86ScalarOperandOccurrence())
+        RelocatedInstructionScalarOperandOccurrences.push_back(*Scalar);
       for (const RelocatedAddressOperand &Reloc : RelocatedOperands) {
         for (const LowOp &Op : Rec.Ops) {
           auto Matches = [&](const NdVar &Value) {
@@ -653,16 +930,24 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
                    (Reloc.TargetOwnerVA == InvalidVA ||
                     Value.AddressOwnerVA == Reloc.TargetOwnerVA);
           };
-          bool Consumed = Matches(Op.Output);
-          for (uint8_t I = 0; !Consumed && I < Op.NumInputs; ++I)
-            Consumed = Matches(Op.Inputs[I]);
-          if (!Consumed)
+          const bool ConsumedOutput = Matches(Op.Output);
+          unsigned MatchingInputs = 0;
+          int MatchingInput = -1;
+          for (uint8_t I = 0; I < Op.NumInputs; ++I)
+            if (Matches(Op.Inputs[I])) {
+              ++MatchingInputs;
+              MatchingInput = I;
+            }
+          if (!ConsumedOutput && MatchingInputs == 0)
             continue;
+          RelocatedInstructionAddressOccurrence Occurrence{
+              Reloc.FieldVA, Rec.Addr, Op.Seq, Reloc.TargetVA,
+              Reloc.TargetOwnerVA, Reloc.Width, Reloc.Provenance,
+              Reloc.PCRelativeFromInstructionEnd};
+          if (!ConsumedOutput && MatchingInputs == 1)
+            Occurrence.InputIndex = MatchingInput;
           RelocatedInstructionAddressOccurrences.push_back(
-              RelocatedInstructionAddressOccurrence{
-                  Reloc.FieldVA, Rec.Addr, Op.Seq, Reloc.TargetVA,
-                  Reloc.TargetOwnerVA, Reloc.Width, Reloc.Provenance,
-                  Reloc.PCRelativeFromInstructionEnd});
+              std::move(Occurrence));
           break;
         }
       }
@@ -803,8 +1088,24 @@ std::set<va_t> CFGBuilder::currentRelocatedInstructionTableAnchors(
 
 void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
   RelocatedInstructionScalarModelOccurrences.clear();
-  if (Img.Arch != Arch::X86 || !Img.isELF() || Img.getPointerSize() != 4 ||
-      !JumpTableProofContextComplete || Img.I386GOTPCFields.empty())
+  for (I386GetPcOccurrence &Occurrence : I386GetPcOccurrences)
+    Occurrence.RawPCAuthenticated = false;
+  if (Img.Arch != Arch::X86 || Img.getPointerSize() != 4 ||
+      !JumpTableProofContextComplete)
+    return;
+
+  size_t EvidenceWork = std::min<size_t>(
+      limits::kMaxJumpTableEvidenceWork,
+      I386GOTModelEvidenceBudgetForTesting.value_or(
+          limits::kMaxJumpTableEvidenceWork));
+  auto Consume = [&](size_t Amount = 1) {
+    if (Amount > EvidenceWork)
+      return false;
+    EvidenceWork -= Amount;
+    return true;
+  };
+  if (!Consume(RelocatedInstructionScalarOperandOccurrences.size()) ||
+      !Consume(I386GetPcOccurrences.size()))
     return;
 
   struct PendingModel {
@@ -816,102 +1117,223 @@ void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
   std::vector<JumpTableValueQuery> Queries;
   std::vector<PendingModel> Pending;
 
-  for (const auto &[FieldVA, Field] : Img.I386GOTPCFields) {
-    const InsnRecord *Containing = nullptr;
-    for (const auto &[Addr, Rec] : Insns) {
-      if (Rec.Size == 0 || Rec.Size > InvalidVA - Addr || FieldVA < Addr ||
-          FieldVA >= Addr + Rec.Size)
-        continue;
-      if (Containing) {
-        Containing = nullptr;
-        break;
+  std::map<uint32_t, std::vector<const I386GetPcOccurrence *>> SeedsByPC;
+  std::vector<I386GetPcOccurrence *> AuthenticatedGetPcSeeds;
+  std::vector<std::tuple<va_t, int, NdVar>> SeenSeedPoints;
+  for (I386GetPcOccurrence &GetPc : I386GetPcOccurrences) {
+    if (!Consume())
+      return;
+    if (GetPc.OutputOpcode != NdOp::COPY || GetPc.OutputWitness.Size != 4 ||
+        (!GetPc.OutputWitness.isReg() && !GetPc.OutputWitness.isTemp()) ||
+        !GetPc.InputWitness.isTemp() || GetPc.InputWitness.Size != 4 ||
+        GetPc.PCValue != GetPc.InstructionAddr ||
+        GetPc.CallInstructionAddr == InvalidVA ||
+        GetPc.CallInstructionAddr >= GetPc.InstructionAddr ||
+        !PublishedReachableInsns.count(GetPc.InstructionAddr) ||
+        PersistentCFGRoots.count(GetPc.InstructionAddr))
+      continue;
+
+    // The pop is a valid get-PC seed only when the adjacent call is its sole
+    // machine-code predecessor.  An address-taken/exception root, another
+    // fall-through decode, or a direct/indirect branch into the pop can enter
+    // with an arbitrary stack value and must not inherit the call's pushed PC.
+    const auto CallIt = Insns.find(GetPc.CallInstructionAddr);
+    if (CallIt == Insns.end() || CallIt->second.Size == 0 ||
+        CallIt->second.Size > InvalidVA - GetPc.CallInstructionAddr ||
+        GetPc.CallInstructionAddr + CallIt->second.Size !=
+            GetPc.InstructionAddr)
+      continue;
+    const LowOp *PushAdjust = nullptr;
+    const LowOp *PushStore = nullptr;
+    for (const LowOp &Op : CallIt->second.Ops) {
+      if (Op.Opcode == NdOp::INT_SUB && Op.NumInputs == 2 &&
+          Op.Output.isReg() && Op.Output.Size == 4 &&
+          Op.Inputs[0] == Op.Output && Op.Inputs[1].isConst() &&
+          Op.Inputs[1].Size == 4 && Op.Inputs[1].Offset == 4) {
+        if (PushAdjust)
+          return;
+        PushAdjust = &Op;
       }
-      Containing = &Rec;
+      if (Op.Opcode == NdOp::STORE && Op.NumInputs == 2 &&
+          Op.Inputs[0].isReg() && Op.Inputs[0].Size == 4 &&
+          Op.Inputs[1].isConst() && Op.Inputs[1].Size == 4 &&
+          static_cast<uint32_t>(Op.Inputs[1].Offset) == GetPc.PCValue) {
+        if (PushStore)
+          return;
+        PushStore = &Op;
+      }
     }
-    if (!Containing || Containing->IsInstructionGuard)
+    if (!PushAdjust || !PushStore ||
+        PushStore->Inputs[0] != PushAdjust->Output ||
+        PushAdjust->Seq >= PushStore->Seq)
+      continue;
+    bool HasAlternateEntry = false;
+    for (const auto &[Addr, Rec] : Insns) {
+      if (!Consume())
+        return;
+      if (Addr != GetPc.CallInstructionAddr && Rec.Size != 0 &&
+          Rec.Size <= InvalidVA - Addr &&
+          Addr + Rec.Size == GetPc.InstructionAddr)
+        HasAlternateEntry = true;
+      if ((Rec.BranchTarget == GetPc.InstructionAddr) ||
+          (Rec.IsCall && Rec.Immediate &&
+           *Rec.Immediate == GetPc.InstructionAddr) ||
+          llvm::is_contained(Rec.JumpTableTargets,
+                             GetPc.InstructionAddr))
+        HasAlternateEntry = true;
+    }
+    if (HasAlternateEntry)
+      continue;
+    const auto Identity = std::make_tuple(
+        GetPc.InstructionAddr, GetPc.OpSeq, GetPc.OutputWitness);
+    if (llvm::is_contained(SeenSeedPoints, Identity))
+      return;
+    SeenSeedPoints.push_back(Identity);
+    const auto RecIt = Insns.find(GetPc.InstructionAddr);
+    if (RecIt == Insns.end() || RecIt->second.IsInstructionGuard)
+      continue;
+    const LowOp *Producer = nullptr;
+    for (const LowOp &Op : RecIt->second.Ops) {
+      if (!Consume())
+        return;
+      if (Op.Addr == GetPc.InstructionAddr && Op.Seq == GetPc.OpSeq &&
+          Op.Opcode == GetPc.OutputOpcode && Op.Output == GetPc.OutputWitness) {
+        if (Producer)
+          return;
+        Producer = &Op;
+      }
+    }
+    if (!Producer || Producer->NumInputs != 1 ||
+        Producer->Inputs[0] != GetPc.InputWitness)
+      continue;
+    const LowOp *PopLoad = nullptr;
+    const LowOp *PopAdjust = nullptr;
+    for (const LowOp &Op : RecIt->second.Ops) {
+      if (!Consume())
+        return;
+      if (Op.Opcode == NdOp::LOAD && Op.NumInputs == 1 &&
+          Op.Output == Producer->Inputs[0] && Op.Inputs[0].isReg() &&
+          Op.Inputs[0].Size == 4) {
+        if (PopLoad)
+          return;
+        PopLoad = &Op;
+      }
+      if (Op.Opcode == NdOp::INT_ADD && Op.NumInputs == 2 &&
+          Op.Output.isReg() && Op.Output.Size == 4 &&
+          Op.Inputs[0] == Op.Output && Op.Inputs[1].isConst() &&
+          Op.Inputs[1].Size == 4 && Op.Inputs[1].Offset == 4) {
+        if (PopAdjust)
+          return;
+        PopAdjust = &Op;
+      }
+    }
+    if (!PopLoad || !PopAdjust ||
+        PopLoad->Inputs[0] != PushStore->Inputs[0] ||
+        PopAdjust->Output != PopLoad->Inputs[0] ||
+        PopLoad->Seq >= Producer->Seq || Producer->Seq >= PopAdjust->Seq)
+      continue;
+    if (!Consume())
+      return;
+    SeedsByPC[GetPc.PCValue].push_back(&GetPc);
+    AuthenticatedGetPcSeeds.push_back(&GetPc);
+  }
+
+  // Mach-O/COFF PIC arithmetic has no ELF R_386_GOTPC scalar field to bind,
+  // but the same call-next/POP seed is still an exact architectural PC once
+  // the CFG proof above succeeds.  Publish that fact without rewriting the
+  // ordinary LOAD/COPY: Low-to-Med will bind the exact surviving occurrence,
+  // and the LLVM data resolver may fold only arithmetic rooted at that bound
+  // value.  ELF keeps its stricter combined call/POP + exact GOTPC contract
+  // below, so a raw encoded displacement cannot borrow this permission.
+  if (!Img.isELF()) {
+    for (I386GetPcOccurrence *Seed : AuthenticatedGetPcSeeds)
+      Seed->RawPCAuthenticated = true;
+    return;
+  }
+  if (Img.I386GOTPCFields.empty())
+    return;
+
+  std::set<std::tuple<va_t, va_t, int>> SeenOperandPoints;
+  for (const RelocatedInstructionScalarOperandOccurrence &Operand :
+       RelocatedInstructionScalarOperandOccurrences) {
+    if (!Consume(3))
+      return;
+    if (Operand.Kind !=
+            RelocatedInstructionScalarOperandOccurrence::OperandKind::
+                I386ELFGOTPC ||
+        Operand.Width != 4 || Operand.InputIndex >= 2 ||
+        Operand.Opcode != NdOp::INT_ADD || Operand.OutputWitness.Size != 4 ||
+        (!Operand.OutputWitness.isReg() &&
+         !Operand.OutputWitness.isTemp()) ||
+        !PublishedReachableInsns.count(Operand.InstructionAddr) ||
+        !SeenOperandPoints
+             .insert({Operand.FieldVA, Operand.InstructionAddr, Operand.OpSeq})
+             .second)
+      return;
+
+    const auto FieldIt = Img.I386GOTPCFields.find(Operand.FieldVA);
+    const auto InsnIt = Insns.find(Operand.InstructionAddr);
+    if (FieldIt == Img.I386GOTPCFields.end() || InsnIt == Insns.end() ||
+        InsnIt->second.IsInstructionGuard || InsnIt->second.Size == 0 ||
+        InsnIt->second.Size > InvalidVA - Operand.InstructionAddr ||
+        Operand.FieldVA < Operand.InstructionAddr ||
+        Operand.FieldVA >= Operand.InstructionAddr + InsnIt->second.Size ||
+        FieldIt->second.EncodedValue !=
+            static_cast<uint32_t>(Operand.EncodedValue) ||
+        static_cast<uint32_t>(FieldIt->second.EncodedValue +
+                              FieldIt->second.ExpectedPCValue) != 0)
+      continue;
+
+    unsigned InstructionFields = 0;
+    auto Field = Img.I386GOTPCFields.lower_bound(Operand.InstructionAddr);
+    for (; Field != Img.I386GOTPCFields.end() &&
+           Field->first < Operand.InstructionAddr + InsnIt->second.Size;
+         ++Field) {
+      if (!Consume())
+        return;
+      ++InstructionFields;
+    }
+    if (InstructionFields != 1)
       continue;
 
     const LowOp *Candidate = nullptr;
-    uint8_t BaseInput = 0;
-    bool Ambiguous = false;
-    for (const LowOp &Op : Containing->Ops) {
-      if (Op.Opcode != NdOp::INT_ADD || Op.NumInputs != 2 ||
-          (!Op.Output.isReg() && !Op.Output.isTemp()) || Op.Output.Size != 4)
-        continue;
-      for (uint8_t ImmediateSide = 0; ImmediateSide < 2; ++ImmediateSide) {
-        const NdVar &Immediate = Op.Inputs[ImmediateSide];
-        const NdVar &Base = Op.Inputs[1 - ImmediateSide];
-        if (!Immediate.isConst() || Immediate.Size != 4 ||
-            Immediate.Provenance != ConstantAddressProvenance::Scalar ||
-            static_cast<uint32_t>(Immediate.Offset) != Field.EncodedValue ||
-            (!Base.isReg() && !Base.isTemp()) || Base.Size != 4)
-          continue;
-        if (Candidate) {
-          Ambiguous = true;
-          break;
-        }
+    for (const LowOp &Op : InsnIt->second.Ops) {
+      if (!Consume())
+        return;
+      if (Op.Addr == Operand.InstructionAddr && Op.Seq == Operand.OpSeq &&
+          Op.Opcode == Operand.Opcode && Op.Output == Operand.OutputWitness) {
+        if (Candidate)
+          return;
         Candidate = &Op;
-        BaseInput = 1 - ImmediateSide;
       }
-      if (Ambiguous)
-        break;
     }
-    if (Ambiguous || !Candidate)
+    if (!Candidate || Candidate->NumInputs != 2 ||
+        Operand.InputIndex >= Candidate->NumInputs)
+      continue;
+    const NdVar &Immediate = Candidate->Inputs[Operand.InputIndex];
+    const NdVar &Base = Candidate->Inputs[1 - Operand.InputIndex];
+    if (!Immediate.isConst() || Immediate.Size != 4 ||
+        Immediate.Provenance != ConstantAddressProvenance::Scalar ||
+        static_cast<uint32_t>(Immediate.Offset) !=
+            FieldIt->second.EncodedValue ||
+        (!Base.isReg() && !Base.isTemp()) || Base.Size != 4)
       continue;
 
-    // The relocation proves only the scalar adjustment.  Bind its other
-    // operand to an exact lifter-authenticated call/pop get-PC producer on
-    // every feasible incoming path before publishing the model-zero result.
-    // A role-neutral Address constant with the same numeric value is not a
-    // substitute: it need not move with this relocation at link time.
-    std::vector<JumpTableValueOccurrence> PCDefinitions;
-    std::vector<I386GetPcOccurrence> Seeds;
-    for (const I386GetPcOccurrence &GetPc : I386GetPcOccurrences) {
-      if (GetPc.PCValue != Field.ExpectedPCValue ||
-          GetPc.OutputOpcode != NdOp::COPY || GetPc.OutputWitness.Size != 4 ||
-          (!GetPc.OutputWitness.isReg() && !GetPc.OutputWitness.isTemp()) ||
-          !PublishedReachableInsns.count(GetPc.InstructionAddr))
-        continue;
-      const auto RecIt = Insns.find(GetPc.InstructionAddr);
-      if (RecIt == Insns.end() || RecIt->second.IsInstructionGuard)
-        continue;
-      const LowOp *Producer = nullptr;
-      for (const LowOp &Op : RecIt->second.Ops)
-        if (Op.Addr == GetPc.InstructionAddr && Op.Seq == GetPc.OpSeq &&
-            Op.Opcode == GetPc.OutputOpcode &&
-            Op.Output == GetPc.OutputWitness) {
-          if (Producer) {
-            Producer = nullptr;
-            break;
-          }
-          Producer = &Op;
-        }
-      if (!Producer || Producer->NumInputs != 1 ||
-          !Producer->Inputs[0].isConst() || Producer->Inputs[0].Size != 4 ||
-          Producer->Inputs[0].Provenance !=
-              ConstantAddressProvenance::Address ||
-          Producer->Inputs[0].AddressOwnerVA != InvalidVA ||
-          static_cast<uint32_t>(Producer->Inputs[0].Offset) != GetPc.PCValue)
-        continue;
-      PCDefinitions.push_back({GetPc.OutputWitness, GetPc.InstructionAddr,
-                               GetPc.OpSeq, /*DefinedAtPoint=*/true});
-      Seeds.push_back(GetPc);
-    }
-    if (PCDefinitions.empty() || PCDefinitions.size() != Seeds.size())
+    const auto Seeds = SeedsByPC.find(FieldIt->second.ExpectedPCValue);
+    if (Seeds == SeedsByPC.end() || Seeds->second.size() != 1)
       continue;
-
+    const I386GetPcOccurrence &Seed = *Seeds->second.front();
+    if (!Consume(2))
+      return;
     JumpTableValueQuery Query;
-    Query.Candidate = Candidate->Inputs[BaseInput];
+    Query.Candidate = Base;
     Query.UseAddr = Candidate->Addr;
     Query.UseSeq = Candidate->Seq;
-    Query.Alternatives = std::move(PCDefinitions);
+    Query.Alternatives.push_back({Seed.OutputWitness, Seed.InstructionAddr,
+                                  Seed.OpSeq, /*DefinedAtPoint=*/true});
     Query.RequireExactAddressOwner = true;
-    // All accepted alternatives must be the same exact call/pop producer.
-    // Multiple distinct producers can carry the same PC number but do not
-    // define one stable cross-layer model witness.
-    if (Seeds.size() != 1)
-      continue;
-    Pending.push_back({FieldVA, Candidate, Seeds.front(), Queries.size()});
+    Pending.push_back(
+        {Operand.FieldVA, Candidate, Seed, Queries.size()});
     Queries.push_back(std::move(Query));
   }
 
@@ -1121,7 +1543,10 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
     const va_t PageBase = Materialized->second.TargetVA & ~AArch64PageMask;
     if (Op.Opcode != NdOp::COPY || Op.NumInputs != 1 || !Op.Output.isReg() ||
         Op.Output.Size != Img.getPointerSize() || !Op.Inputs[0].isConst() ||
-        Op.Inputs[0].Provenance != ConstantAddressProvenance::AddressFragment ||
+        (Op.Inputs[0].Provenance !=
+             ConstantAddressProvenance::AddressFragment &&
+         Op.Inputs[0].Provenance !=
+             ConstantAddressProvenance::DataAddress) ||
         Op.Inputs[0].Offset != PageBase)
       continue;
     PageDefinitions.push_back(
@@ -1200,48 +1625,383 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
     }
   }
 
-  if (Queries.empty())
+  if (!Queries.empty()) {
+    bool AnalysisComplete = false;
+    const std::vector<bool> Matches =
+        tableValuesMatchAtUses(Queries, &AnalysisComplete);
+    const bool Complete = AnalysisComplete && Matches.size() == Queries.size();
+    for (const PendingMaterialization &Candidate : Pending) {
+      if (!Candidate.Op)
+        continue;
+      const bool HasExactQuery =
+          Candidate.ExactQuery != std::numeric_limits<size_t>::max();
+      const bool IsExact = Complete && HasExactQuery &&
+                           Candidate.ExactQuery < Matches.size() &&
+                           Matches[Candidate.ExactQuery];
+      const bool MayDepend = Complete &&
+                             Candidate.MayQuery < Matches.size() &&
+                             Matches[Candidate.MayQuery];
+      // A complete query that proves no authenticated page reaches this ADD is
+      // not address evidence: an unrelated/sibling ADRP must not poison module
+      // arbitration.  An incomplete proof is different — the PAGEOFF output
+      // may still carry a reachable page definition, so publish an explicit
+      // partial certificate and let module arbitration fail closed.
+      if (Complete && !IsExact && !MayDepend)
+        continue;
+      const LowOp &Op = *Candidate.Op;
+      const RelocatedInstructionAddressMaterialization &Materialized =
+          Candidate.Materialized;
+      RelocatedInstructionAddressOccurrence Occurrence;
+      Occurrence.FieldVA = Op.Addr;
+      Occurrence.InstructionAddr = Op.Addr;
+      Occurrence.OpSeq = Op.Seq;
+      Occurrence.TargetVA = Materialized.TargetVA;
+      Occurrence.TargetOwnerVA = Materialized.TargetOwnerVA;
+      Occurrence.Width = 4;
+      Occurrence.Provenance =
+          Img.hasExecutableCodeOwnerAt(Materialized.TargetVA)
+              ? ConstantAddressProvenance::CodeAddress
+              : ConstantAddressProvenance::DataAddress;
+      Occurrence.DefinesOutput = true;
+      Occurrence.OutputMayDepend = !IsExact;
+      Occurrence.OutputOpcode = Op.Opcode;
+      Occurrence.OutputWitness = Op.Output;
+      if (!llvm::is_contained(RelocatedInstructionAddressOccurrences,
+                              Occurrence))
+        RelocatedInstructionAddressOccurrences.push_back(
+            std::move(Occurrence));
+    }
+  }
+
+  // A linked AArch64 image may no longer carry PAGE/PAGEOFF relocation
+  // records even though the decoded ADRP/add pair still computes an exact
+  // image address.  Do not turn numeric foldability into provenance.  The
+  // fallback below publishes only a fully occurrence-bound chain whose final
+  // full-width scalar result is immediately dereferenced in one immutable
+  // object-data owner.  Relocatable objects and any instruction with loader
+  // materialization authority remain exclusively on the path above.
+  if (Img.IsRelocatable || Img.getPointerSize() == 0 ||
+      Img.getPointerSize() > sizeof(va_t))
     return;
-  bool AnalysisComplete = false;
-  const std::vector<bool> Matches =
-      tableValuesMatchAtUses(Queries, &AnalysisComplete);
-  const bool Complete = AnalysisComplete && Matches.size() == Queries.size();
-  for (const PendingMaterialization &Candidate : Pending) {
-    if (!Candidate.Op)
-      continue;
-    const bool HasExactQuery =
-        Candidate.ExactQuery != std::numeric_limits<size_t>::max();
-    const bool IsExact = Complete && HasExactQuery &&
-                         Candidate.ExactQuery < Matches.size() &&
-                         Matches[Candidate.ExactQuery];
-    const bool MayDepend = Complete && Candidate.MayQuery < Matches.size() &&
-                           Matches[Candidate.MayQuery];
-    // A complete query that proves no authenticated page reaches this ADD is
-    // not address evidence: an unrelated/sibling ADRP must not poison module
-    // arbitration.  An incomplete proof is different — the PAGEOFF output may
-    // still carry a reachable page definition, so publish an explicit partial
-    // certificate and let module arbitration fail closed.
-    if (Complete && !IsExact && !MayDepend)
-      continue;
-    const LowOp &Op = *Candidate.Op;
-    const RelocatedInstructionAddressMaterialization &Materialized =
-        Candidate.Materialized;
+
+  const uint16_t PointerSize = Img.getPointerSize();
+  const unsigned PointerBits = static_cast<unsigned>(PointerSize) * 8;
+  const uint64_t PointerMask =
+      PointerBits == 64 ? std::numeric_limits<uint64_t>::max()
+                        : (uint64_t{1} << PointerBits) - 1;
+  auto canonicalArithmeticScalar =
+      [&](const LowOp &Op, int BaseSide) -> std::optional<uint64_t> {
+    if (BaseSide < 0 || BaseSide > 1 ||
+        !Op.Inputs[1 - BaseSide].isConst() ||
+        Op.Inputs[1 - BaseSide].Provenance !=
+            ConstantAddressProvenance::Scalar)
+      return std::nullopt;
+    const NdVar &Scalar = Op.Inputs[1 - BaseSide];
+    if (Scalar.Size == PointerSize)
+      return Scalar.Offset & PointerMask;
+
+    // AArch64Lifter intentionally retains a compact 32-bit NdVar for an
+    // encoded ADD/SUB immediate whose value fits in uint32_t; INT_ADD/SUB then
+    // applies that non-negative displacement in the destination width.  Admit
+    // this mixed-width form only when the exact machine word independently
+    // proves a 64-bit, non-flag-setting immediate instruction and its imm12 +
+    // optional lsl #12 value is exactly the scalar carried by this LowOp.
+    if (PointerSize != 8 || Scalar.Size != 4 || BaseSide != 0)
+      return std::nullopt;
+    const uint8_t *Bytes = Img.readVA(Op.Addr, sizeof(uint32_t));
+    if (!Bytes)
+      return std::nullopt;
+    const uint32_t Word = readLE<uint32_t>(Bytes);
+    if ((Word & 0x1f000000u) != 0x11000000u ||
+        (Word & 0x80000000u) == 0 || (Word & 0x20000000u) != 0 ||
+        (((Word & 0x40000000u) != 0) != (Op.Opcode == NdOp::INT_SUB)))
+      return std::nullopt;
+    const uint64_t Encoded =
+        uint64_t((Word >> 10) & 0xfffu) << (((Word >> 22) & 1u) ? 12 : 0);
+    if (Encoded != Scalar.Offset)
+      return std::nullopt;
+    return Encoded;
+  };
+  auto checkedArithmetic = [&](va_t Base, const LowOp &Op,
+                               int BaseSide) -> std::optional<va_t> {
+    if ((Op.Opcode != NdOp::INT_ADD && Op.Opcode != NdOp::INT_SUB) ||
+        Op.NumInputs != 2 || BaseSide < 0 || BaseSide > 1 ||
+        (Op.Opcode == NdOp::INT_SUB && BaseSide != 0) ||
+        Op.Output.Size != PointerSize ||
+        Op.Inputs[BaseSide].Size != PointerSize ||
+        Base > PointerMask)
+      return std::nullopt;
+    const std::optional<uint64_t> Delta =
+        canonicalArithmeticScalar(Op, BaseSide);
+    if (!Delta)
+      return std::nullopt;
+    if (Op.Opcode == NdOp::INT_ADD) {
+      if (*Delta > PointerMask - Base)
+        return std::nullopt;
+      return Base + *Delta;
+    }
+    if (*Delta > Base)
+      return std::nullopt;
+    return Base - *Delta;
+  };
+
+  auto uniqueImmutableDataOwner =
+      [&](va_t Address, uint16_t AccessSize) -> std::optional<va_t> {
+    if (AccessSize == 0 || AccessSize - 1 > InvalidVA - Address)
+      return std::nullopt;
+    const va_t Last = Address + AccessSize - 1;
+    if (!Img.hasObjectDataProvenance(Address) ||
+        !Img.hasObjectDataProvenance(Last) ||
+        Img.hasExecutableCodeOwnerAt(Address) ||
+        Img.hasExecutableCodeOwnerAt(Last) ||
+        isRuntimeWritableAddress(Img, Address) ||
+        isRuntimeWritableAddress(Img, Last))
+      return std::nullopt;
+
+    const Section *OnlySection = nullptr;
+    for (const Section &Section : Img.Sections) {
+      if (!Section.isReadable() || Section.isExecutable() ||
+          !Section.contains(Address) || !Section.contains(Last))
+        continue;
+      if (OnlySection)
+        return std::nullopt;
+      OnlySection = &Section;
+    }
+    if (OnlySection)
+      return OnlySection->VA;
+
+    const Segment *OnlySegment = nullptr;
+    for (const Segment &Segment : Img.Segments) {
+      if (!Segment.isReadable() || Segment.isExecutable() ||
+          !Segment.contains(Address) || !Segment.contains(Last) ||
+          Address < Segment.VA || Last < Segment.VA ||
+          Last - Segment.VA >= Segment.Data.size())
+        continue;
+      if (OnlySegment)
+        return std::nullopt;
+      OnlySegment = &Segment;
+    }
+    return OnlySegment ? std::optional<va_t>(OnlySegment->VA) : std::nullopt;
+  };
+
+  struct RelocationFreeCandidate {
     RelocatedInstructionAddressOccurrence Occurrence;
-    Occurrence.FieldVA = Op.Addr;
-    Occurrence.InstructionAddr = Op.Addr;
-    Occurrence.OpSeq = Op.Seq;
-    Occurrence.TargetVA = Materialized.TargetVA;
-    Occurrence.TargetOwnerVA = Materialized.TargetOwnerVA;
-    Occurrence.Width = 4;
-    Occurrence.Provenance = Img.hasExecutableCodeOwnerAt(Materialized.TargetVA)
-                                ? ConstantAddressProvenance::CodeAddress
-                                : ConstantAddressProvenance::DataAddress;
-    Occurrence.DefinesOutput = true;
-    Occurrence.OutputMayDepend = !IsExact;
-    Occurrence.OutputOpcode = Op.Opcode;
-    Occurrence.OutputWitness = Op.Output;
-    if (!llvm::is_contained(RelocatedInstructionAddressOccurrences, Occurrence))
-      RelocatedInstructionAddressOccurrences.push_back(std::move(Occurrence));
+    std::vector<size_t> QueryIndices;
+  };
+  std::vector<JumpTableValueQuery> RelocationFreeQueries;
+  std::vector<RelocationFreeCandidate> RelocationFreeCandidates;
+  for (auto RootIt = Insns.begin(); RootIt != Insns.end(); ++RootIt) {
+    const InsnRecord &RootRec = RootIt->second;
+    if (RootRec.IsInstructionGuard || RootRec.IsBranch || RootRec.IsCall ||
+        RootRec.IsRet || RootRec.IsOpaqueTerminator ||
+        RootRec.IsResumableTerminator || RootRec.Size == 0 ||
+        RootRec.Size > InvalidVA - RootRec.Addr || RootRec.Ops.size() != 1)
+      continue;
+    const LowOp &Root = RootRec.Ops.front();
+    if (Root.Opcode != NdOp::COPY || Root.NumInputs != 1 ||
+        !Root.Output.isReg() || Root.Output.Size != PointerSize ||
+        !Root.Inputs[0].isConst() || Root.Inputs[0].Size != PointerSize ||
+        Root.Inputs[0].Provenance !=
+            ConstantAddressProvenance::AddressFragment ||
+        Root.Inputs[0].Offset > PointerMask ||
+        (Root.Inputs[0].Offset & AArch64PageMask) != 0)
+      continue;
+
+    NdVar CurrentValue = Root.Output;
+    va_t CurrentAddress = Root.Inputs[0].Offset;
+    JumpTableValueOccurrence CurrentDefinition{
+        Root.Output, Root.Addr, Root.Seq, /*DefinedAtPoint=*/true};
+    std::vector<RelocatedInstructionAddressArithmeticStep> Steps;
+    std::vector<JumpTableValueQuery> CandidateQueries;
+    va_t ExpectedAddress = RootRec.Addr + RootRec.Size;
+
+    for (auto UseIt = std::next(RootIt);
+         UseIt != Insns.end() &&
+         Steps.size() < MaxLookaheadInstructions;
+         ++UseIt) {
+      const InsnRecord &UseRec = UseIt->second;
+      if (UseRec.Addr != ExpectedAddress || UseRec.Size == 0 ||
+          UseRec.Size > InvalidVA - UseRec.Addr ||
+          UseRec.IsInstructionGuard || UseRec.IsBranch || UseRec.IsCall ||
+          UseRec.IsRet || UseRec.IsOpaqueTerminator ||
+          UseRec.IsResumableTerminator)
+        break;
+
+      const LowOp *Arithmetic = nullptr;
+      int BaseSide = -1;
+      for (const LowOp &Op : UseRec.Ops) {
+        if ((Op.Opcode != NdOp::INT_ADD && Op.Opcode != NdOp::INT_SUB) ||
+            Op.NumInputs != 2 || !Op.Output.isReg() ||
+            Op.Output.Size != PointerSize)
+          continue;
+        int CandidateBase = -1;
+        if (Op.Inputs[0] == CurrentValue && Op.Inputs[1].isConst())
+          CandidateBase = 0;
+        if (Op.Opcode == NdOp::INT_ADD && Op.Inputs[1] == CurrentValue &&
+            Op.Inputs[0].isConst()) {
+          if (CandidateBase >= 0) {
+            CandidateBase = -2;
+          } else {
+            CandidateBase = 1;
+          }
+        }
+        if (CandidateBase < 0 ||
+            !checkedArithmetic(CurrentAddress, Op, CandidateBase))
+          continue;
+        if (Arithmetic) {
+          Arithmetic = nullptr;
+          BaseSide = -2;
+          break;
+        }
+        Arithmetic = &Op;
+        BaseSide = CandidateBase;
+      }
+
+      if (Arithmetic && BaseSide >= 0) {
+        bool InvalidStep = false;
+        for (const LowOp &Op : UseRec.Ops) {
+          const LowMemoryOperandView Memory = lowMemoryOperands(Op);
+          if (Memory.Complete ||
+              (&Op != Arithmetic &&
+               (overlapsRegister(Op.Output, CurrentValue) ||
+                overlapsRegister(Op.Output, Arithmetic->Output)))) {
+            InvalidStep = true;
+            break;
+          }
+        }
+        if (InvalidStep ||
+            Img.InstructionAddressMaterializations.count(Arithmetic->Addr))
+          break;
+        const std::optional<va_t> NextAddress =
+            checkedArithmetic(CurrentAddress, *Arithmetic, BaseSide);
+        if (!NextAddress)
+          break;
+        CandidateQueries.push_back(
+            {Arithmetic->Inputs[BaseSide], Arithmetic->Addr, Arithmetic->Seq,
+             {CurrentDefinition}, /*AllowZeroExtension=*/false,
+             /*AllowSignExtension=*/false});
+        Steps.push_back({Arithmetic->Addr,
+                         Arithmetic->Seq,
+                         Arithmetic->Opcode,
+                         static_cast<uint8_t>(BaseSide),
+                         Arithmetic->Inputs[BaseSide],
+                         Arithmetic->Inputs[1 - BaseSide],
+                         Arithmetic->Output});
+        CurrentValue = Arithmetic->Output;
+        CurrentAddress = *NextAddress;
+        CurrentDefinition = {Arithmetic->Output, Arithmetic->Addr,
+                             Arithmetic->Seq, /*DefinedAtPoint=*/true};
+        ExpectedAddress = UseRec.Addr + UseRec.Size;
+        continue;
+      }
+
+      if (Steps.empty())
+        break;
+      const LowOp *Dereference = nullptr;
+      LowMemoryOperandView DereferenceMemory;
+      NdVar DereferenceAddress = CurrentValue;
+      bool InvalidDereference = false;
+      for (const LowOp &Op : UseRec.Ops) {
+        const LowMemoryOperandView Memory = lowMemoryOperands(Op);
+        if (Memory.Complete) {
+          if ((Op.Opcode != NdOp::LOAD && Op.Opcode != NdOp::STORE) ||
+              !Memory.Address || *Memory.Address != DereferenceAddress ||
+              Dereference) {
+            InvalidDereference = true;
+            break;
+          }
+          Dereference = &Op;
+          DereferenceMemory = Memory;
+          if (overlapsRegister(Op.Output, CurrentValue)) {
+            InvalidDereference = true;
+            break;
+          }
+          continue;
+        }
+        if (!Dereference) {
+          if (Op.Opcode != NdOp::COPY || Op.NumInputs != 1 ||
+              Op.Inputs[0] != DereferenceAddress ||
+              (!Op.Output.isReg() && !Op.Output.isTemp()) ||
+              Op.Output.Size != PointerSize ||
+              (Op.Output.isReg() &&
+               overlapsRegister(Op.Output, CurrentValue))) {
+            InvalidDereference = true;
+            break;
+          }
+          DereferenceAddress = Op.Output;
+        }
+        if (overlapsRegister(Op.Output, CurrentValue)) {
+          InvalidDereference = true;
+          break;
+        }
+      }
+      if (InvalidDereference || !Dereference ||
+          DereferenceMemory.AccessSize == 0)
+        break;
+      const std::optional<va_t> Owner = uniqueImmutableDataOwner(
+          CurrentAddress, DereferenceMemory.AccessSize);
+      if (!Owner ||
+          !Img.relocatedTargetBelongsToOwner(CurrentAddress, *Owner))
+        break;
+
+      CandidateQueries.push_back(
+          {DereferenceAddress, Dereference->Addr, Dereference->Seq,
+           {CurrentDefinition}, /*AllowZeroExtension=*/false,
+           /*AllowSignExtension=*/false});
+      RelocationFreeCandidate Candidate;
+      for (JumpTableValueQuery &Query : CandidateQueries) {
+        Candidate.QueryIndices.push_back(RelocationFreeQueries.size());
+        RelocationFreeQueries.push_back(std::move(Query));
+      }
+      RelocatedInstructionAddressOccurrence &Occurrence =
+          Candidate.Occurrence;
+      Occurrence.FieldVA = InvalidVA;
+      Occurrence.InstructionAddr = Steps.back().InstructionAddr;
+      Occurrence.OpSeq = Steps.back().OpSeq;
+      Occurrence.TargetVA = CurrentAddress;
+      Occurrence.TargetOwnerVA = *Owner;
+      Occurrence.Width = static_cast<uint8_t>(PointerSize);
+      Occurrence.Provenance = ConstantAddressProvenance::DataAddress;
+      Occurrence.DefinesOutput = true;
+      Occurrence.OutputOpcode = Steps.back().Opcode;
+      Occurrence.OutputWitness = Steps.back().OutputWitness;
+      Occurrence.Authority = RelocatedInstructionAddressProofKind::
+          AArch64RelocationFreeDataDereference;
+      Occurrence.SeedInstructionAddr = Root.Addr;
+      Occurrence.SeedOpSeq = Root.Seq;
+      Occurrence.SeedOpcode = Root.Opcode;
+      Occurrence.SeedInputWitness = Root.Inputs[0];
+      Occurrence.SeedOutputWitness = Root.Output;
+      Occurrence.ArithmeticProof = Steps;
+      Occurrence.DereferenceInstructionAddr = Dereference->Addr;
+      Occurrence.DereferenceOpSeq = Dereference->Seq;
+      Occurrence.DereferenceOpcode = Dereference->Opcode;
+      Occurrence.DereferenceAddressWitness = DereferenceAddress;
+      Occurrence.DereferenceAccessSize = DereferenceMemory.AccessSize;
+      RelocationFreeCandidates.push_back(std::move(Candidate));
+      break;
+    }
+  }
+
+  if (RelocationFreeQueries.empty())
+    return;
+  bool RelocationFreeAnalysisComplete = false;
+  const std::vector<bool> RelocationFreeMatches = tableValuesMatchAtUses(
+      RelocationFreeQueries, &RelocationFreeAnalysisComplete);
+  if (!RelocationFreeAnalysisComplete ||
+      RelocationFreeMatches.size() != RelocationFreeQueries.size())
+    return;
+  for (RelocationFreeCandidate &Candidate : RelocationFreeCandidates) {
+    if (!std::all_of(Candidate.QueryIndices.begin(),
+                     Candidate.QueryIndices.end(), [&](size_t Index) {
+                       return Index < RelocationFreeMatches.size() &&
+                              RelocationFreeMatches[Index];
+                     }))
+      continue;
+    if (!llvm::is_contained(RelocatedInstructionAddressOccurrences,
+                            Candidate.Occurrence))
+      RelocatedInstructionAddressOccurrences.push_back(
+          std::move(Candidate.Occurrence));
   }
 }
 
@@ -1459,30 +2219,232 @@ void CFGBuilder::completeExactARMRelativeLiteralAddresses(
 
 void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
                                    LowFunc &Func) {
-  std::set<va_t> EverPublishedJumpTableBranches;
+  for (va_t Addr : PreviouslyPublishedJumpTableBranches) {
+    auto It = Insns.find(Addr);
+    if (It != Insns.end() && It->second.IsBranch && It->second.IsIndirect &&
+        !It->second.IsCall)
+      EverPublishedJumpTableBranches.insert(Addr);
+  }
   auto RememberPublishedJumpTables = [&]() {
     for (const auto &[Addr, Rec] : Insns)
-      if (Rec.IsBranch && Rec.IsIndirect && !Rec.JumpTableTargets.empty())
+      if (Rec.IsBranch && Rec.IsIndirect && !Rec.IsCall &&
+          !Rec.JumpTableTargets.empty())
         EverPublishedJumpTableBranches.insert(Addr);
   };
   RememberPublishedJumpTables();
 
   bool ReachedFixedPoint = false;
   for (int Stage = 0; Stage < limits::kMaxMultiStageRetries; ++Stage) {
+    // Reachability and relocation-root suppression can change after every
+    // published candidate.  Reuse proposal roots within this stage only; the
+    // fixed retry bound caps total work, while each newly published resolver
+    // graph receives one transactional stack-evidence allowance shared by all
+    // candidates in that stage.  Do not let a provisional graph consume the
+    // final revalidation graph's proof budget.
+    StackTableEvidenceRemaining =
+        std::min<size_t>(limits::kMaxJumpTableEvidenceWork,
+                         StackTableEvidenceBudgetForTesting.value_or(
+                             limits::kMaxJumpTableEvidenceWork));
+    StackTableEvidenceIncompleteBranches.clear();
+    IndexDomainEvidenceIncompleteBranches.clear();
+    MaskFixedPointExplorationTargets.clear();
+    I386GOTOFFProposalRootCache.clear();
+    I386GOTOFFModelReachCache.clear();
+    NextStrongJumpTableProposals.clear();
+    StrongJumpTableProposalOutcomes.clear();
+    CandidateProposalStageEvidenceRemaining = std::min<size_t>(
+        limits::kMaxJumpTableProposalStageEvidenceWork,
+        MaskFixedPointEvidenceBudgetForTesting.value_or(
+            limits::kMaxJumpTableProposalStageEvidenceWork));
+    CandidateProposalStageEvidenceIncomplete = false;
+    CandidateProposalStageActive = true;
+    const size_t QuarantineSizeAtStageStart =
+        QuarantinedJumpTableProposals.size();
+    auto ConsumeProposalStageEvidence = [&](size_t Amount = 1) {
+      if (Amount > CandidateProposalStageEvidenceRemaining) {
+        CandidateProposalStageEvidenceRemaining = 0;
+        CandidateProposalStageEvidenceIncomplete = true;
+        return false;
+      }
+      CandidateProposalStageEvidenceRemaining -= Amount;
+      return true;
+    };
+    auto ConsumeProposalStageProducts =
+        [&](std::initializer_list<std::pair<size_t, size_t>> Products) {
+          const size_t Max = std::numeric_limits<size_t>::max();
+          size_t Total = 0;
+          for (const auto &[Count, Cost] : Products) {
+            if (Count != 0 && Cost > Max / Count)
+              return ConsumeProposalStageEvidence(Max);
+            const size_t Product = Count * Cost;
+            if (Product > Max - Total)
+              return ConsumeProposalStageEvidence(Max);
+            Total += Product;
+          }
+          return ConsumeProposalStageEvidence(Total);
+        };
+    auto OrderedLookupWork = [](size_t Count) {
+      size_t Work = 1;
+      for (size_t N = Count; N > 1; N = (N + 1) / 2)
+        ++Work;
+      return Work;
+    };
+    auto PrepayTargetSetOperations = [&](size_t TargetCount) {
+      const size_t Max = std::numeric_limits<size_t>::max();
+      if (Insns.size() > Max - BlockStarts.size() ||
+          Insns.size() + BlockStarts.size() > Max - TargetCount ||
+          Insns.size() > Max - ExploredAddrs.size() ||
+          Insns.size() + ExploredAddrs.size() > Max - TargetCount)
+        return ConsumeProposalStageEvidence(Max);
+      const size_t FutureBlockStarts =
+          Insns.size() + BlockStarts.size() + TargetCount;
+      const size_t FutureExplored =
+          Insns.size() + ExploredAddrs.size() + TargetCount;
+      const size_t BlockWork = OrderedLookupWork(FutureBlockStarts);
+      const size_t ExploreWork = OrderedLookupWork(FutureExplored);
+      if (BlockWork > Max - 1 || ExploreWork > Max - (BlockWork + 1))
+        return ConsumeProposalStageEvidence(Max);
+      const size_t PerTarget = BlockWork + 1 + ExploreWork;
+      return ConsumeProposalStageProducts({{TargetCount, PerTarget}});
+    };
+    auto ConsumeJumpTableInfoComparison = [&](const JumpTableInfo &Candidate) {
+      if (!ConsumeProposalStageProducts(
+              {{Candidate.AuthenticatedMaskCoordinates.size(), 1},
+               {Candidate.AuthenticatedMaskKnownOneWitnesses.size(), 1},
+               {Candidate.StorageRanges.size(), 1},
+               {Candidate.SuppressibleRelocationSlots.size(), 1},
+               {Candidate.IndexValueAlternatives.size(), 1},
+               {Candidate.TargetLoads.size(), 1},
+               {Candidate.AuthenticatedFrameStorage.Initializers.size(), 1},
+               {Candidate.AuthenticatedStorageConsumers.size(), 1},
+               {Candidate.LoadRoles.size(), 1},
+               {Candidate.EntryIndices.size(), 1},
+               {Candidate.RuntimeCaseLabels.size(), 1},
+               {Candidate.RuntimeSlotIndices.size(), 1},
+               {Candidate.ExplicitTargets.size(), 1}}))
+        return false;
+      for (const JumpTableFrameInitializerChunk &Initializer :
+           Candidate.AuthenticatedFrameStorage.Initializers)
+        if (!ConsumeProposalStageEvidence(Initializer.StaticSources.size()))
+          return false;
+      for (const JumpTableLoadRole &Role : Candidate.LoadRoles) {
+        if (!ConsumeProposalStageEvidence(Role.AllowedBases.size()) ||
+            !ConsumeProposalStageEvidence(Role.Indices.size()) ||
+            !ConsumeProposalStageEvidence(
+                Role.FrameStorage.Initializers.size()))
+          return false;
+        for (const JumpTableFrameInitializerChunk &Initializer :
+             Role.FrameStorage.Initializers)
+          if (!ConsumeProposalStageEvidence(Initializer.StaticSources.size()))
+            return false;
+      }
+      return ConsumeProposalStageEvidence(1);
+    };
+    // Architecture address models are CFG proofs, not decoder-time numeric
+    // facts.  Recompute them from the currently rebuilt graph before every
+    // resolver stage so a frame initializer can consume the same exact
+    // occurrence certificate that final module arbitration will replay.  The
+    // next stage rebuilds these transactionally after any newly published
+    // table edges change reachability.
+    const bool RefreshAArch64Addresses = Img.Arch == Arch::AArch64;
+    const bool RefreshARMAddresses =
+        Img.Arch == Arch::ARM && Img.isELF() && Img.getPointerSize() == 4;
+    const bool RefreshI386Addresses =
+        Img.Arch == Arch::X86 && Img.isELF() && Img.getPointerSize() == 4 &&
+        !Img.I386GOTPCFields.empty();
+    if (RefreshAArch64Addresses || RefreshARMAddresses ||
+        RefreshI386Addresses) {
+      ActiveJumpTableProofRoots.reset();
+      JumpTableProofContextComplete = true;
+      if (RefreshAArch64Addresses)
+        completeExactAArch64PageBases(Img);
+      if (RefreshARMAddresses)
+        completeExactARMRelativeLiteralAddresses(Img);
+      if (RefreshI386Addresses)
+        completeExactI386GOTBaseModels(Img);
+      JumpTableProofContextComplete = false;
+    }
+
     std::vector<va_t> CandidateAddrs;
+    // Prepay the complete inventory and the worst-case rollback cleanup before
+    // reserving either container.  Every instruction can conservatively be a
+    // candidate: inventory performs ordered lookups in Resolved/Prior and an
+    // outcome insertion, while rollback later looks it up in Insns and erases
+    // its Resolved/mask records before clearing the two proposal maps.  Keeping
+    // this cleanup reserve outside the spendable candidate balance makes an
+    // exhausted stage transactionally removable without post-exhaustion work.
+    const size_t InsnLookupWork = OrderedLookupWork(Insns.size());
+    const size_t ResolvedLookupWork =
+        OrderedLookupWork(std::max(Insns.size(), ResolvedTableInfo.size()));
+    const size_t PriorLookupWork =
+        OrderedLookupWork(PriorStrongJumpTableProposals.size());
+    const size_t OutcomeLookupWork = OrderedLookupWork(Insns.size());
+    const size_t MaskLookupWork =
+        OrderedLookupWork(std::max(Insns.size(),
+                                   MaskFixedPointExplorationTargets.size()));
+    if (!ConsumeProposalStageProducts(
+            {// Inventory scan, Resolved/Prior lookup, retained candidate,
+             // and ordered outcome insert plus its node.
+             {Insns.size(), 3},
+             {Insns.size(), ResolvedLookupWork},
+             {Insns.size(), PriorLookupWork},
+             {Insns.size(), OutcomeLookupWork},
+             // Reserved rollback: Insns lookup, target clear, two ordered
+             // erases, and the Next/Outcome node destruction.
+             {Insns.size(), 3},
+             {Insns.size(), InsnLookupWork},
+             {Insns.size(), ResolvedLookupWork},
+             {Insns.size(), MaskLookupWork}})) {
+      CandidateProposalStageActive = false;
+      NextStrongJumpTableProposals.clear();
+      continue;
+    }
+    CandidateAddrs.reserve(Insns.size());
     for (auto &[Addr, Rec] : Insns) {
       if (!Rec.IsBranch || !Rec.IsIndirect || Rec.IsCall)
         continue;
       auto Info = ResolvedTableInfo.find(Addr);
       const bool NeedsRevalidation = Info != ResolvedTableInfo.end() &&
                                      Info->second.RequiresCompleteCFGProof;
-      if (Rec.JumpTableTargets.empty() || NeedsRevalidation)
+      if (Rec.JumpTableTargets.empty() || NeedsRevalidation ||
+          PriorStrongJumpTableProposals.count(Addr)) {
         CandidateAddrs.push_back(Addr);
+        StrongJumpTableProposalOutcomes.emplace(
+            Addr,
+            StrongJumpTableProposalOutcome::DefinitiveLocalProofLoss);
+      }
     }
 
     bool MadeProgress = false;
     bool RefreshedProofMetadata = false;
     for (va_t UA : CandidateAddrs) {
+      // Charge the invocation itself before resolveJumpTable snapshots the
+      // remaining stage balance into its local account.  Every nested helper
+      // then consumes only min(per-candidate-cap, stage-remaining); the exact
+      // used delta is debited when the invocation returns.
+      const size_t CurrentResolvedLookupWork =
+          OrderedLookupWork(std::max(Insns.size(), ResolvedTableInfo.size()));
+      const size_t CurrentMaskLookupWork = OrderedLookupWork(
+          std::max(Insns.size(), MaskFixedPointExplorationTargets.size()));
+      if (!ConsumeProposalStageProducts(
+              {// Insns lookup plus the resolver's erase and the three outer
+               // before/after comparison lookups.  Resolver writes debit the
+               // nested candidate account and flow back as its used delta.
+               {1, OrderedLookupWork(Insns.size())},
+               {4, CurrentResolvedLookupWork},
+               // Outer erase/find of the exploration record.
+               {2, CurrentMaskLookupWork},
+               // Quarantine and incomplete-domain set lookups.
+               {1, OrderedLookupWork(QuarantinedJumpTableProposals.size())},
+               {2, OrderedLookupWork(
+                       IndexDomainEvidenceIncompleteBranches.size())},
+               {1, 1},
+               // CandidateOutcome lookup.  Proposal/strong-set insertions
+               // occur inside the candidate-local account and their exact
+               // delta is debited from this same stage balance on return.
+               {1, OrderedLookupWork(StrongJumpTableProposalOutcomes.size())},
+              }))
+        break;
       auto It = Insns.find(UA);
       if (It == Insns.end())
         continue;
@@ -1490,11 +2452,10 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       auto PriorInfo = ResolvedTableInfo.find(UA);
       const bool WasProofDependent = PriorInfo != ResolvedTableInfo.end() &&
                                      PriorInfo->second.RequiresCompleteCFGProof;
-      const std::optional<JumpTableInfo> OldInfo =
-          PriorInfo == ResolvedTableInfo.end()
-              ? std::nullopt
-              : std::optional<JumpTableInfo>(PriorInfo->second);
 
+      if (It->second.JumpTableTargets.empty() &&
+          !PrepayTargetSetOperations(1))
+        break;
       if (It->second.JumpTableTargets.empty() &&
           resolveRelocatedInteriorBranch(Img, It->second)) {
         const va_t Target = It->second.BranchTarget;
@@ -1507,37 +2468,308 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
         continue;
       }
 
-      const std::vector<va_t> OldTargets = It->second.JumpTableTargets;
+      // resolveJumpTable erases the old map entry first.  Move its dynamic
+      // metadata into the comparison snapshot instead of copying it before
+      // the candidate-local account begins.
+      // Reserve both persistent objects' destruction before either the map
+      // value is moved or the resolver can exhaust its local share.  Exactly
+      // one of replacement or transactional rollback consumes the target
+      // reserve; OldInfo itself is destroyed at the end of this iteration.
+      const size_t OldTargetCount = It->second.JumpTableTargets.size();
+      PriorInfo = ResolvedTableInfo.find(UA);
+      const bool HasOldPersistentState =
+          OldTargetCount != 0 || PriorInfo != ResolvedTableInfo.end();
+      const size_t OldStorageRangeCount =
+          PriorInfo == ResolvedTableInfo.end()
+              ? 0
+              : PriorInfo->second.StorageRanges.size();
+      const size_t OldLoadRoleCount =
+          PriorInfo == ResolvedTableInfo.end()
+              ? 0
+              : PriorInfo->second.LoadRoles.size();
+      auto OldStateMutated = [&] {
+        auto Current = ResolvedTableInfo.find(UA);
+        return It->second.JumpTableTargets.size() != OldTargetCount ||
+               (PriorInfo == ResolvedTableInfo.end()) !=
+                   (Current == ResolvedTableInfo.end()) ||
+               (Current != ResolvedTableInfo.end() &&
+                (Current->second.StorageRanges.size() != OldStorageRangeCount ||
+                 Current->second.LoadRoles.size() != OldLoadRoleCount));
+      };
+      if (HasOldPersistentState &&
+          ProposalOldStateCleanupEvidenceExhaustionForTesting) {
+        ProposalOldStateCleanupEvidenceExhaustionForTesting = false;
+        ConsumeProposalStageEvidence(std::numeric_limits<size_t>::max());
+        ProposalCleanupEvidenceForTesting.OldStateExhausted = true;
+        ProposalCleanupEvidenceForTesting.MutationObservedBeforeReservation |=
+            OldStateMutated();
+        break;
+      }
+      if (!ConsumeProposalStageEvidence(OldTargetCount)) {
+        if (HasOldPersistentState) {
+          ProposalCleanupEvidenceForTesting.OldStateExhausted = true;
+          ProposalCleanupEvidenceForTesting
+              .MutationObservedBeforeReservation |= OldStateMutated();
+        }
+        break;
+      }
+      std::optional<JumpTableInfo> OldInfo;
+      if (PriorInfo != ResolvedTableInfo.end()) {
+        if (!ConsumeJumpTableInfoComparison(PriorInfo->second)) {
+          ProposalCleanupEvidenceForTesting.OldStateExhausted = true;
+          ProposalCleanupEvidenceForTesting
+              .MutationObservedBeforeReservation |= OldStateMutated();
+          break;
+        }
+      }
+      if (HasOldPersistentState)
+        ProposalCleanupEvidenceForTesting.OldStateReserved = true;
+      if (PriorInfo != ResolvedTableInfo.end())
+        OldInfo.emplace(std::move(PriorInfo->second));
+      MaskFixedPointExplorationTargets.erase(UA);
       JumpTableProofContextComplete = true;
       auto Targets = resolveJumpTable(Img, It->second);
       JumpTableProofContextComplete = false;
+      if (CandidateProposalStageEvidenceIncomplete)
+        break;
       auto NewInfo = ResolvedTableInfo.find(UA);
-      const bool MetadataChanged =
-          OldInfo.has_value() != (NewInfo != ResolvedTableInfo.end()) ||
-          (OldInfo && NewInfo != ResolvedTableInfo.end() &&
-           *OldInfo != NewInfo->second);
+      bool MetadataChanged =
+          OldInfo.has_value() != (NewInfo != ResolvedTableInfo.end());
+      if (OldInfo && NewInfo != ResolvedTableInfo.end()) {
+        if (!ConsumeJumpTableInfoComparison(*OldInfo) ||
+            !ConsumeJumpTableInfoComparison(NewInfo->second))
+          break;
+        MetadataChanged = *OldInfo != NewInfo->second;
+      }
       RefreshedProofMetadata |= WasProofDependent && MetadataChanged;
-      if (Targets != OldTargets) {
-        It->second.JumpTableTargets = Targets;
+      // Old/new destruction was reserved before materialization.  Charge only
+      // the element-wise equality walk here, still before comparing or moving
+      // either target vector.
+      if (!ConsumeProposalStageProducts(
+              {{It->second.JumpTableTargets.size(), 1},
+               {Targets.size(), 1}}))
+        break;
+      if (Targets != It->second.JumpTableTargets) {
+        It->second.JumpTableTargets = std::move(Targets);
         MadeProgress = true;
       }
-      if (!Targets.empty())
+      const std::vector<va_t> &PublishedTargets =
+          It->second.JumpTableTargets;
+      if (!PublishedTargets.empty()) {
+        if (!ConsumeProposalStageEvidence(
+                OrderedLookupWork(EverPublishedJumpTableBranches.size()) + 1))
+          break;
         EverPublishedJumpTableBranches.insert(UA);
+      }
 
-      for (va_t T : Targets) {
-        if (!ExploredAddrs.count(T)) {
-          BlockStarts.insert(T);
-          explore(Img, Dec, T);
+      if (!ConsumeProposalStageEvidence(
+              OrderedLookupWork(MaskFixedPointExplorationTargets.size())))
+        break;
+      auto Exploration = MaskFixedPointExplorationTargets.find(UA);
+      if (PublishedTargets.empty() &&
+          Exploration != MaskFixedPointExplorationTargets.end()) {
+        if (!PrepayTargetSetOperations(Exploration->second.size()))
+          break;
+        for (va_t T : Exploration->second) {
+          MadeProgress |= BlockStarts.insert(T).second;
+          if (!ExploredAddrs.count(T)) {
+            explore(Img, Dec, T);
+            MadeProgress = true;
+          }
         }
+      }
+
+      if (!PrepayTargetSetOperations(PublishedTargets.size()))
+        break;
+      for (va_t T : PublishedTargets) {
+        // A complete-CFG proof can recover a target only after recursive
+        // descent already decoded it as ordinary fall-through.  It is still a
+        // distinct jump-table destination and must split the containing block;
+        // exploration state answers only whether its bytes need decoding.
+        MadeProgress |= BlockStarts.insert(T).second;
+        if (!ExploredAddrs.count(T))
+          explore(Img, Dec, T);
       }
     }
 
-    // Align branches that share a jump table so a peeled copy in a messy block
-    // inherits the loop body's complete recovery.  This can make progress even
-    // when nothing was newly resolved this stage, so check it before bailing.
-    if (reconcileSharedTables(Img, Dec))
-      MadeProgress = true;
-    RememberPublishedJumpTables();
+    auto RollBackIncompleteProposalStage = [&]() {
+      // A shared-stage exhaustion cannot publish the prefix that happened to
+      // run first.  Remove every candidate result from this immutable stage,
+      // preserve Prior for a bounded retry, and discard all provisional mask
+      // exploration.  Decoded bytes may remain cached, but no edge/metadata
+      // certificate from the incomplete stage survives rebuildBlocks.
+      for (va_t Addr : CandidateAddrs) {
+        auto It = Insns.find(Addr);
+        if (It != Insns.end())
+          It->second.JumpTableTargets.clear();
+        ResolvedTableInfo.erase(Addr);
+        MaskFixedPointExplorationTargets.erase(Addr);
+      }
+      NextStrongJumpTableProposals.clear();
+      StrongJumpTableProposalOutcomes.clear();
+      CandidateProposalStageActive = false;
+      ProposalStageRollbackMutatedQuarantineForTesting |=
+          QuarantinedJumpTableProposals.size() != QuarantineSizeAtStageStart;
+      rebuildBlocks(Func);
+    };
+    if (CandidateProposalStageEvidenceIncomplete) {
+      RollBackIncompleteProposalStage();
+      continue;
+    }
+
+    // A stage observes only PriorStrongJumpTableProposals.  Outcomes are
+    // explicit: an independently complete loss is quarantined monotonically,
+    // while evidence exhaustion invalidates the whole stage above and can
+    // never masquerade as a definitive loss.  Compare the ordered maps
+    // manually so every key/vector visit is prepaid before equality or state
+    // mutation; std::map's deep operator== would hide attacker-shaped work.
+    for (const auto &[Addr, Outcome] : StrongJumpTableProposalOutcomes) {
+      (void)Addr;
+      if (!ConsumeProposalStageEvidence(1))
+        break;
+      if (Outcome == StrongJumpTableProposalOutcome::EvidenceIncomplete) {
+        CandidateProposalStageEvidenceIncomplete = true;
+        break;
+      }
+    }
+    if (CandidateProposalStageEvidenceIncomplete) {
+      RollBackIncompleteProposalStage();
+      continue;
+    }
+
+    if (!ConsumeProposalStageEvidence(PriorStrongJumpTableProposals.size())) {
+      RollBackIncompleteProposalStage();
+      continue;
+    }
+    std::vector<va_t> DefinitiveLosses;
+    DefinitiveLosses.reserve(PriorStrongJumpTableProposals.size());
+    size_t QuarantineTailWork = 0;
+    size_t PriorClearWork = PriorStrongJumpTableProposals.size();
+    auto AccumulatePriorClearWork =
+        [&](const StrongJumpTableRoleProposal &Proposal) {
+          const size_t Max = std::numeric_limits<size_t>::max();
+          if (Proposal.StorageRanges.size() > Max - PriorClearWork) {
+            CandidateProposalStageEvidenceIncomplete = true;
+            return false;
+          }
+          PriorClearWork += Proposal.StorageRanges.size();
+          if (Proposal.LoadRoles.size() > Max - PriorClearWork) {
+            CandidateProposalStageEvidenceIncomplete = true;
+            return false;
+          }
+          PriorClearWork += Proposal.LoadRoles.size();
+          if (Proposal.SuppressibleRelocationSlots.size() >
+              Max - PriorClearWork) {
+            CandidateProposalStageEvidenceIncomplete = true;
+            return false;
+          }
+          PriorClearWork += Proposal.SuppressibleRelocationSlots.size();
+          return true;
+        };
+    bool ProposalUniverseChanged =
+        PriorStrongJumpTableProposals.size() !=
+        NextStrongJumpTableProposals.size();
+    auto PriorIt = PriorStrongJumpTableProposals.begin();
+    auto NextIt = NextStrongJumpTableProposals.begin();
+    while (PriorIt != PriorStrongJumpTableProposals.end() ||
+           NextIt != NextStrongJumpTableProposals.end()) {
+      if (!ConsumeProposalStageEvidence(1))
+        break;
+      if (NextIt == NextStrongJumpTableProposals.end() ||
+          (PriorIt != PriorStrongJumpTableProposals.end() &&
+           PriorIt->first < NextIt->first)) {
+        if (!AccumulatePriorClearWork(PriorIt->second)) {
+          CandidateProposalStageEvidenceIncomplete = true;
+          break;
+        }
+        const va_t LostAddr = PriorIt->first;
+        if (!ConsumeProposalStageEvidence(OrderedLookupWork(
+                StrongJumpTableProposalOutcomes.size())))
+          break;
+        auto OutcomeIt = StrongJumpTableProposalOutcomes.find(LostAddr);
+        if (OutcomeIt == StrongJumpTableProposalOutcomes.end() ||
+            OutcomeIt->second ==
+                StrongJumpTableProposalOutcome::EvidenceIncomplete) {
+          CandidateProposalStageEvidenceIncomplete = true;
+          break;
+        }
+        if (OutcomeIt->second !=
+            StrongJumpTableProposalOutcome::DefinitiveLocalProofLoss) {
+          CandidateProposalStageEvidenceIncomplete = true;
+          break;
+        }
+        // One retained vector slot and one future set node are both charged
+        // before recording the loss.
+        if (!ConsumeProposalStageEvidence(2))
+          break;
+        if (DefinitiveLosses.size() >
+            std::numeric_limits<size_t>::max() -
+                QuarantinedJumpTableProposals.size()) {
+          CandidateProposalStageEvidenceIncomplete = true;
+          break;
+        }
+        const size_t Lookup = OrderedLookupWork(
+            QuarantinedJumpTableProposals.size() + DefinitiveLosses.size());
+        if (Lookup > std::numeric_limits<size_t>::max() - 1 ||
+            QuarantineTailWork >
+                std::numeric_limits<size_t>::max() - (Lookup + 1)) {
+          CandidateProposalStageEvidenceIncomplete = true;
+          break;
+        }
+        QuarantineTailWork += Lookup + 1;
+        DefinitiveLosses.push_back(LostAddr);
+        ProposalUniverseChanged = true;
+        ++PriorIt;
+        continue;
+      }
+      if (PriorIt == PriorStrongJumpTableProposals.end() ||
+          NextIt->first < PriorIt->first) {
+        ProposalUniverseChanged = true;
+        ++NextIt;
+        continue;
+      }
+
+      const StrongJumpTableRoleProposal &Prior = PriorIt->second;
+      const StrongJumpTableRoleProposal &Next = NextIt->second;
+      if (!ConsumeProposalStageEvidence(Prior.StorageRanges.size()) ||
+          !ConsumeProposalStageEvidence(Next.StorageRanges.size()) ||
+          !ConsumeProposalStageEvidence(Prior.LoadRoles.size()) ||
+          !ConsumeProposalStageEvidence(Next.LoadRoles.size()) ||
+          !ConsumeProposalStageEvidence(
+              Prior.SuppressibleRelocationSlots.size()) ||
+          !ConsumeProposalStageEvidence(
+              Next.SuppressibleRelocationSlots.size()) ||
+          !AccumulatePriorClearWork(Prior))
+        break;
+      ProposalUniverseChanged |= Prior != Next;
+      ++PriorIt;
+      ++NextIt;
+    }
+    if (CandidateProposalStageEvidenceIncomplete) {
+      RollBackIncompleteProposalStage();
+      continue;
+    }
+    // Preflight every ordered insertion and every container traversal needed
+    // by the commit before the first persistent mutation.  In particular, an
+    // exact budget boundary cannot insert a quarantine record and then fail on
+    // swap/clear, which would poison the bounded retry despite rollback.
+    if (CandidateProposalStageEvidenceIncomplete ||
+        !ConsumeProposalStageProducts(
+            {{1, QuarantineTailWork},
+             {1, 1}, // Prior/Next swap.
+             {1, PriorClearWork},
+             {1, StrongJumpTableProposalOutcomes.size()}})) {
+      ProposalStageCommitTailEvidenceExhaustedForTesting = true;
+      RollBackIncompleteProposalStage();
+      continue;
+    }
+    for (va_t Addr : DefinitiveLosses)
+      QuarantinedJumpTableProposals.insert(Addr);
+    PriorStrongJumpTableProposals.swap(NextStrongJumpTableProposals);
+    NextStrongJumpTableProposals.clear();
+    StrongJumpTableProposalOutcomes.clear();
+    CandidateProposalStageActive = false;
+
 
     if (!MadeProgress) {
       // Targets can remain byte-for-byte equal while the complete CFG changes
@@ -1546,7 +2778,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       // round on that published CFG.  Only an equal target set *and* equal
       // proof metadata in the following round is a fixed point; a metadata
       // cycle consumes the bounded retry budget and is discarded below.
-      if (RefreshedProofMetadata) {
+      if (RefreshedProofMetadata || ProposalUniverseChanged) {
         rebuildBlocks(Func);
         continue;
       }
@@ -1562,6 +2794,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
                << "  multi-stage " << (Stage + 1) << ": rebuilt to "
                << Func.Blocks.size() << " blocks\n");
   }
+  CandidateProposalStageActive = false;
 
   // A proof-dependent target set may only escape after one whole round saw no
   // new decoded targets and no target-set change.  If the bounded iteration
@@ -1586,11 +2819,25 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
   // lost validated table only after convergence (or the bounded cleanup above)
   // has established the final target state.  These addresses are not generic
   // detector claims: every member published at least one concrete table edge
-  // earlier in this very build.
-  for (va_t Addr : EverPublishedJumpTableBranches) {
-    auto It = Insns.find(Addr);
-    if (It != Insns.end() && It->second.IsBranch && It->second.IsIndirect &&
-        !It->second.IsCall && It->second.JumpTableTargets.empty())
+  // earlier in this build or in a seeded build of this same function.
+  for (auto It = EverPublishedJumpTableBranches.begin();
+       It != EverPublishedJumpTableBranches.end();) {
+    const va_t Addr = *It;
+    auto InsnIt = Insns.find(Addr);
+    if (InsnIt == Insns.end() || !InsnIt->second.IsBranch ||
+        !InsnIt->second.IsIndirect || InsnIt->second.IsCall) {
+      It = EverPublishedJumpTableBranches.erase(It);
+      continue;
+    }
+    if (InsnIt->second.JumpTableTargets.empty())
+      LostValidatedJumpTableBranches.insert(Addr);
+    ++It;
+  }
+  for (va_t Addr : EverStrongJumpTableProposalBranches) {
+    auto InsnIt = Insns.find(Addr);
+    if (InsnIt != Insns.end() && InsnIt->second.IsBranch &&
+        InsnIt->second.IsIndirect && !InsnIt->second.IsCall &&
+        InsnIt->second.JumpTableTargets.empty())
       LostValidatedJumpTableBranches.insert(Addr);
   }
 }

@@ -694,6 +694,72 @@ jt_identity_callback_tailcall:
         jmpq    *(%rax,%rdi,8)
         .size   jt_identity_callback_tailcall, .-jt_identity_callback_tailcall
 
+// A mask on only one predecessor does not authenticate the merged runtime
+// index.  The resulting incomplete-domain marker must still distinguish this
+// external callback array from a local basic-block table and preserve the
+// ordinary indirect-tailcall lowering.
+        .globl  jt_identity_incomplete_mask_callback_tailcall
+        .type   jt_identity_incomplete_mask_callback_tailcall,@function
+jt_identity_incomplete_mask_callback_tailcall:
+        movl    %edi, %r10d
+        testl   %esi, %esi
+        jne     .Lincomplete_mask_callback_dispatch
+        andl    $1, %r10d
+.Lincomplete_mask_callback_dispatch:
+        leaq    jt_identity_incomplete_mask_callback_table(%rip), %rax
+        jmpq    *(%rax,%r10,8)
+        .size   jt_identity_incomplete_mask_callback_tailcall, .-jt_identity_incomplete_mask_callback_tailcall
+
+// A separately materialized address at slot two bounds the detector's initial
+// relocation run to the first two local entries, while the sized object owns
+// four entries and ends with external callbacks.  Incomplete-domain ownership
+// must validate the whole sized object, never just that local prefix.
+        .globl  jt_identity_incomplete_mask_prefix_callback_tailcall
+        .type   jt_identity_incomplete_mask_prefix_callback_tailcall,@function
+jt_identity_incomplete_mask_prefix_callback_tailcall:
+        movl    %edi, %r10d
+        testl   %esi, %esi
+        jne     .Lincomplete_mask_prefix_callback_dispatch
+        andl    $3, %r10d
+.Lincomplete_mask_prefix_callback_dispatch:
+        leaq    jt_identity_incomplete_mask_prefix_callback_table(%rip), %rax
+        jmpq    *(%rax,%r10,8)
+.Lincomplete_mask_prefix_callback_case0:
+        xorl    %eax, %eax
+        retq
+.Lincomplete_mask_prefix_callback_case1:
+        leaq    jt_identity_incomplete_mask_prefix_callback_table+16(%rip), %r11
+        movl    $1, %eax
+        retq
+        .size   jt_identity_incomplete_mask_prefix_callback_tailcall, .-jt_identity_incomplete_mask_prefix_callback_tailcall
+
+// A sized outer body can contain independently callable typed entries.  A
+// direct CFGBuilder has no KnownFuncEntries set, so ownership must still reject
+// these symbol entries rather than treating them as ordinary interior blocks.
+        .globl  jt_identity_incomplete_mask_nested_function_tailcall
+        .type   jt_identity_incomplete_mask_nested_function_tailcall,@function
+jt_identity_incomplete_mask_nested_function_tailcall:
+        movl    %edi, %r10d
+        testl   %esi, %esi
+        jne     .Lincomplete_mask_nested_function_dispatch
+        andl    $1, %r10d
+.Lincomplete_mask_nested_function_dispatch:
+        leaq    jt_identity_incomplete_mask_nested_function_table(%rip), %rax
+        jmpq    *(%rax,%r10,8)
+        .globl  jt_identity_nested_callback_a
+        .type   jt_identity_nested_callback_a,@function
+jt_identity_nested_callback_a:
+        leal    303(%rdi), %eax
+        retq
+        .size   jt_identity_nested_callback_a, .-jt_identity_nested_callback_a
+        .globl  jt_identity_nested_callback_b
+        .type   jt_identity_nested_callback_b,@function
+jt_identity_nested_callback_b:
+        leal    404(%rdi), %eax
+        retq
+        .size   jt_identity_nested_callback_b, .-jt_identity_nested_callback_b
+        .size   jt_identity_incomplete_mask_nested_function_tailcall, .-jt_identity_incomplete_mask_nested_function_tailcall
+
         .globl  jt_identity_callback_a
         .type   jt_identity_callback_a,@function
 jt_identity_callback_a:
@@ -932,6 +998,29 @@ jt_identity_unsized_self_callback_boundary:
         .quad jt_identity_callback_a
         .quad jt_identity_callback_b
         .size .Lcallback_tailcall_table, .-.Lcallback_tailcall_table
+
+        .globl  jt_identity_incomplete_mask_callback_table
+        .type   jt_identity_incomplete_mask_callback_table,@object
+jt_identity_incomplete_mask_callback_table:
+        .quad jt_identity_callback_a
+        .quad jt_identity_callback_b
+        .size jt_identity_incomplete_mask_callback_table, .-jt_identity_incomplete_mask_callback_table
+
+        .globl  jt_identity_incomplete_mask_prefix_callback_table
+        .type   jt_identity_incomplete_mask_prefix_callback_table,@object
+jt_identity_incomplete_mask_prefix_callback_table:
+        .quad .Lincomplete_mask_prefix_callback_case0
+        .quad .Lincomplete_mask_prefix_callback_case1
+        .quad jt_identity_callback_a
+        .quad jt_identity_callback_b
+        .size jt_identity_incomplete_mask_prefix_callback_table, .-jt_identity_incomplete_mask_prefix_callback_table
+
+        .globl  jt_identity_incomplete_mask_nested_function_table
+        .type   jt_identity_incomplete_mask_nested_function_table,@object
+jt_identity_incomplete_mask_nested_function_table:
+        .quad jt_identity_nested_callback_a
+        .quad jt_identity_nested_callback_b
+        .size jt_identity_incomplete_mask_nested_function_table, .-jt_identity_incomplete_mask_nested_function_table
 
         .section .data.rel.ro.jt_unsized_callback_tailcall,"aw",@progbits
         .p2align 3

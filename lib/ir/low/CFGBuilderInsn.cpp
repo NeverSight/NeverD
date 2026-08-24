@@ -81,7 +81,10 @@ void CFGBuilder::convertIndirectTailCalls(LowFunc &Func) {
     // unaffected.
     if (!Rec.IsBranch || !Rec.IsIndirect || Rec.IsCall || Rec.IsRet ||
         Rec.IsCond || !Rec.JumpTableTargets.empty() ||
+        EverPublishedJumpTableBranches.count(Addr) ||
         LostValidatedJumpTableBranches.count(Addr) ||
+        StackTableEvidenceIncompleteBranches.count(Addr) ||
+        IndexDomainEvidenceIncompleteBranches.count(Addr) ||
         (PreservePotentialJumpTableBranches &&
          PotentialJumpTableBranches.count(Addr)) ||
         (UnsafeJumpTableBranches && UnsafeJumpTableBranches->count(Addr)))

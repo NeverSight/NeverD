@@ -7,6 +7,7 @@
 #include "gtest/gtest.h"
 
 #include "MachOI386RelocationTestsDetail.h"
+#include "neverd/ir/low/CFGBuilder.h"
 
 namespace {
 
@@ -128,6 +129,30 @@ TEST_F(MachOI386Relocation,
   EXPECT_EQ(PICImgOrErr->CodePtrRelocSlots.count(LoadedData->VA + 4), 0u);
   EXPECT_NE(PICImgOrErr->CodePtrRelocSlots.count(LoadedData->VA + 8), 0u);
   EXPECT_NE(PICImgOrErr->WritableRelocDataAddrs.count(LoadedData->VA + 8), 0u);
+
+  const Symbol *Dispatch = findSymbol(*PICImgOrErr, "_i386_call_dispatch");
+  ASSERT_NE(Dispatch, nullptr);
+  Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Arch::X86));
+  CFGBuilder Builder;
+  const LowFunc Low =
+      Builder.build(*PICImgOrErr, Decoder, Dispatch->Addr,
+                    "_i386_call_dispatch");
+  ASSERT_EQ(Low.I386GetPcOccurrences.size(), 1u);
+  const I386GetPcOccurrence &GetPc = Low.I386GetPcOccurrences.front();
+  EXPECT_TRUE(GetPc.RawPCAuthenticated);
+  const LowOp *SeedCopy = nullptr;
+  for (const LowBlock &Block : Low.Blocks)
+    for (const LowOp &Op : Block.Ops)
+      if (Op.Addr == GetPc.InstructionAddr && Op.Seq == GetPc.OpSeq &&
+          Op.Opcode == GetPc.OutputOpcode &&
+          Op.Output == GetPc.OutputWitness) {
+        ASSERT_EQ(SeedCopy, nullptr);
+        SeedCopy = &Op;
+      }
+  ASSERT_NE(SeedCopy, nullptr);
+  ASSERT_EQ(SeedCopy->NumInputs, 1u);
+  EXPECT_EQ(GetPc.InputWitness, SeedCopy->Inputs[0]);
 
   for (llvm::StringRef Name : {llvm::StringRef("test_macho_i386.o"),
                                llvm::StringRef("test_macho_i386_nopic.o")}) {

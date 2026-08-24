@@ -168,7 +168,8 @@ bool CFGBuilder::decomposeIndexTableLoadAddr(
 
 bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
                                        const InsnRecord &Rec,
-                                       JumpTableInfo &Info) {
+                                       JumpTableInfo &Info,
+                                       size_t *CandidateEvidenceBudget) {
   if (!CurrentImg)
     return false;
   bool HasIndBranch = false;
@@ -431,7 +432,8 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   // index past jmptab, does not constrain the runtime switch value.  Reuse the
   // same CFG/lane/polarity proof as ordinary tables and require an exact bound
   // before publishing the composed target vector.
-  if (!inferBoundsFromPreciseGuards(Rec, Info) ||
+  if (!CandidateEvidenceBudget ||
+      !inferBoundsFromPreciseGuards(Rec, Info, CandidateEvidenceBudget) ||
       Info.MaxEntries < limits::kMinJumpTableEntries ||
       Info.MaxEntries > limits::kMaxJumpTableEntries)
     return false;

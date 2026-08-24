@@ -961,6 +961,47 @@ if(TARGET neverd)
   add_dependencies(NeverDPatchFullTests neverd)
 endif()
 
+# --- Computed-goto / local label-table probing suite ---
+# Keep these structural soundness checks in every CI profile.  In particular,
+# a runtime roundtrip can appear to pass when an unresolved indirect branch is
+# emitted as a call into an interior block of the original image; the fixture
+# now requires the local-table cases to produce a real LLVM switch.
+add_neverd_unittest(NeverDComputedGotoTests
+  allplatform/controlflow/AllPlatform_ComputedGotoRTTests.cpp
+
+  TIMEOUT 600
+)
+
+target_compile_definitions(NeverDComputedGotoTests PRIVATE
+  NEVERD_BINARY="$<TARGET_FILE:neverd>"
+  TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+  NEVERD_COMPUTED_GOTO_STRUCTURAL_ONLY=1
+)
+
+target_include_directories(NeverDComputedGotoTests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+  ${CMAKE_SOURCE_DIR}/third_party/unicorn/include
+)
+
+target_link_libraries(NeverDComputedGotoTests PRIVATE
+  unicorn
+  neverd_shared
+  NeverDPassMIR
+  LLVMMC
+  LLVMMCParser
+  LLVMObject
+  LLVMX86AsmParser LLVMX86Desc LLVMX86Info
+  LLVMAArch64AsmParser LLVMAArch64Desc LLVMAArch64Info
+  LLVMARMAsmParser LLVMARMDesc LLVMARMInfo
+  LLVMSupport
+)
+
+if(TARGET neverd)
+  add_dependencies(NeverDComputedGotoTests neverd)
+endif()
+
 # --- Switch / jump-table transformation probing suite ---
 # Standalone small TU (compiles in seconds, links against the prebuilt
 # neverd_shared) so switch/indirect-branch transformation + backend bugs can be

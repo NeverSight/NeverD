@@ -51,10 +51,20 @@ std::vector<uint64_t> callPreservedRegs(const BinaryImage &Img) {
 /// branch.  The emulator halts at the first control-flow op, so for a
 /// loop-body branch this still executes the dominating block where a PIC
 /// table base is materialised.
-std::optional<uint64_t> CFGBuilder::foldRegConstant(const BinaryImage &Img,
-                                                    const InsnRecord &Rec,
-                                                    uint64_t Reg,
-                                                    va_t CutoffAddr) const {
+std::optional<uint64_t>
+CFGBuilder::foldRegConstant(const BinaryImage &Img, const InsnRecord &Rec,
+                            uint64_t Reg, va_t CutoffAddr,
+                            std::function<bool(size_t)> ConsumeWork) const {
+  bool WorkComplete = true;
+  auto consume = [&](size_t Amount = 1) {
+    if (!WorkComplete)
+      return false;
+    if (!ConsumeWork || ConsumeWork(Amount))
+      return true;
+    WorkComplete = false;
+    return false;
+  };
+
   // Emulate up to (exclusive) the cutoff instruction.  The default cutoff is
   // the branch itself, but a table-base register may be reused (clobbered)
   // between the table load and the indirect branch — e.g. x86-64 `lea
@@ -64,18 +74,29 @@ std::optional<uint64_t> CFGBuilder::foldRegConstant(const BinaryImage &Img,
   auto emulateFrom = [&](va_t Start) -> std::optional<uint64_t> {
     std::vector<LowOp> Prefix;
     for (auto It = Insns.lower_bound(Start);
-         It != Insns.end() && It->first < Cutoff; ++It)
-      for (auto &Op : It->second.Ops)
+         It != Insns.end() && It->first < Cutoff; ++It) {
+      if (!consume())
+        return std::nullopt;
+      for (auto &Op : It->second.Ops) {
+        if (!consume())
+          return std::nullopt;
         Prefix.push_back(Op);
+      }
+    }
+    if (!consume(Prefix.size()))
+      return std::nullopt;
     NdOpEmulator Emu(Img);
     Emu.setCallPreservedRegisters(callPreservedRegs(Img));
     size_t Executed = Emu.run(Prefix);
     int LastRegDef = -1;
-    for (int I = static_cast<int>(Prefix.size()) - 1; I >= 0; --I)
+    for (int I = static_cast<int>(Prefix.size()) - 1; I >= 0; --I) {
+      if (!consume())
+        return std::nullopt;
       if (Prefix[I].Output.isReg() && Prefix[I].Output.Offset == Reg) {
         LastRegDef = I;
         break;
       }
+    }
     auto V = Emu.getRegister(Reg);
     // A failed load or unsupported operation can stop emulation before the
     // table-base LEA while leaving an older value in the same register.  That
@@ -95,7 +116,9 @@ std::optional<uint64_t> CFGBuilder::foldRegConstant(const BinaryImage &Img,
     // AArch64 ADRP+ADD after unsupported vector loads; `add reg, unknown_reg`
     // still fails because the unknown input has no definition in the slice.
     size_t StraightEnd = Prefix.size();
-    for (size_t I = 0; I < Prefix.size(); ++I)
+    for (size_t I = 0; I < Prefix.size(); ++I) {
+      if (!consume())
+        return std::nullopt;
       switch (Prefix[I].Opcode) {
       case NdOp::BRANCH:
       case NdOp::COND_BR:
@@ -107,38 +130,50 @@ std::optional<uint64_t> CFGBuilder::foldRegConstant(const BinaryImage &Img,
       default:
         break;
       }
+    }
 
     int RegDef = -1;
-    for (int I = static_cast<int>(StraightEnd) - 1; I >= 0; --I)
+    for (int I = static_cast<int>(StraightEnd) - 1; I >= 0; --I) {
+      if (!consume())
+        return std::nullopt;
       if (Prefix[I].Output.isReg() && Prefix[I].Output.Offset == Reg) {
         RegDef = I;
         break;
       }
+    }
     if (RegDef < 0)
       return std::nullopt;
 
     std::set<int> SliceIdx;
     std::function<bool(const NdVar &, int)> addConstantDef =
         [&](const NdVar &Var, int Before) -> bool {
+      if (!consume())
+        return false;
       if (Var.isConst())
         return true;
       if (!Var.isReg() && !Var.isTemp())
         return false;
       int Def = -1;
       for (int I = std::min(Before, static_cast<int>(StraightEnd) - 1); I >= 0;
-           --I)
+           --I) {
+        if (!consume())
+          return false;
         if (Prefix[I].Output.Space == Var.Space &&
             Prefix[I].Output.Offset == Var.Offset) {
           Def = I;
           break;
         }
+      }
       if (Def < 0)
         return false;
       if (!SliceIdx.insert(Def).second)
         return true;
-      for (uint8_t I = 0; I < Prefix[Def].NumInputs; ++I)
+      for (uint8_t I = 0; I < Prefix[Def].NumInputs; ++I) {
+        if (!consume())
+          return false;
         if (!addConstantDef(Prefix[Def].Inputs[I], Def - 1))
           return false;
+      }
       return true;
     };
 
@@ -146,8 +181,13 @@ std::optional<uint64_t> CFGBuilder::foldRegConstant(const BinaryImage &Img,
       return std::nullopt;
     std::vector<LowOp> Slice;
     Slice.reserve(SliceIdx.size());
-    for (int I : SliceIdx)
+    for (int I : SliceIdx) {
+      if (!consume())
+        return std::nullopt;
       Slice.push_back(Prefix[I]);
+    }
+    if (!consume(Slice.size()))
+      return std::nullopt;
     NdOpEmulator LocalEmu(Img);
     if (LocalEmu.run(Slice) != Slice.size())
       return std::nullopt;
@@ -169,6 +209,8 @@ std::optional<uint64_t> CFGBuilder::foldRegConstant(const BinaryImage &Img,
   }
   if (auto V = emulateFrom(BlkStart))
     return V;
+  if (!WorkComplete)
+    return std::nullopt;
 
   // A call before the base's materialisation (e.g. an FP `bl` inside a switch
   // block, then `add r,pc,#imm` forms the table base) halts run() at the call,
@@ -180,8 +222,12 @@ std::optional<uint64_t> CFGBuilder::foldRegConstant(const BinaryImage &Img,
   va_t AfterLastTerm = InvalidVA;
   for (auto It = Insns.lower_bound(BlkStart);
        It != Insns.end() && It->first < Cutoff; ++It) {
+    if (!consume())
+      return std::nullopt;
     bool IsTerm = false;
-    for (auto &Op : It->second.Ops)
+    for (auto &Op : It->second.Ops) {
+      if (!consume())
+        return std::nullopt;
       switch (Op.Opcode) {
       case NdOp::CALL:
       case NdOp::INDIR_CALL:
@@ -194,6 +240,7 @@ std::optional<uint64_t> CFGBuilder::foldRegConstant(const BinaryImage &Img,
       default:
         break;
       }
+    }
     if (IsTerm) {
       auto Nx = std::next(It);
       AfterLastTerm = (Nx != Insns.end()) ? Nx->first : InvalidVA;
@@ -202,6 +249,8 @@ std::optional<uint64_t> CFGBuilder::foldRegConstant(const BinaryImage &Img,
   if (AfterLastTerm != InvalidVA && AfterLastTerm < Cutoff)
     if (auto V = emulateFrom(AfterLastTerm))
       return V;
+  if (!WorkComplete)
+    return std::nullopt;
 
   // The base may be loop-invariant and materialised in a dominating block that
   // is neither the INDIR_BR's own block nor reachable from the function entry
@@ -213,9 +262,13 @@ std::optional<uint64_t> CFGBuilder::foldRegConstant(const BinaryImage &Img,
   int Tries = 0;
   for (auto It = BlockStarts.lower_bound(BlkStart);
        It != BlockStarts.begin() && Tries < limits::kMaxQuasiCopyDepth;) {
+    if (!consume())
+      return std::nullopt;
     --It;
     if (auto V = emulateFrom(*It))
       return V;
+    if (!WorkComplete)
+      return std::nullopt;
     ++Tries;
   }
   if (BlkStart != CurrentFuncEntry)
