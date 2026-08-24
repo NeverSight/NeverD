@@ -22,6 +22,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
+      BWRAP_APPARMOR_PROFILE_DESTINATION: /etc/apparmor.d/bwrap-userns-restrict
+      BWRAP_APPARMOR_PROFILE_SOURCE: /usr/share/apparmor/extra-profiles/bwrap-userns-restrict
       GOTOOLCHAIN: local
 
     steps:
@@ -45,8 +47,13 @@ jobs:
       - name: Install fail-closed upstream sandbox
         run: |
           sudo apt-get update
-          sudo apt-get install --yes bubblewrap
+          sudo apt-get install --yes apparmor-profiles apparmor-utils bubblewrap
+          sudo install --mode=0644 \
+            "$BWRAP_APPARMOR_PROFILE_SOURCE" \
+            "$BWRAP_APPARMOR_PROFILE_DESTINATION"
+          sudo apparmor_parser --replace "$BWRAP_APPARMOR_PROFILE_DESTINATION"
           bwrap --version
+          bwrap --cap-drop ALL --unshare-net --ro-bind / / -- /bin/true
 
       - name: Test the upstream audit
         run: python -m unittest -v scripts.tests.test_audit_evm_opcode_metadata

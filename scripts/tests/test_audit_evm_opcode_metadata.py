@@ -183,7 +183,10 @@ EVM_GETH_ACTIVE_WITHOUT_COST(STOP, Frontier)
         self.assertIn("check-latest: true", workflow)
         self.assertIn("GOTOOLCHAIN: local", workflow)
         self.assertIn("permissions:\n  contents: read", workflow)
-        self.assertIn("apt-get install --yes bubblewrap", workflow)
+        self.assertIn(
+            "apt-get install --yes apparmor-profiles apparmor-utils bubblewrap",
+            workflow,
+        )
         self.assertIn("bwrap --version", workflow)
         self.assertIn("python scripts/audit_evm_opcode_metadata.py", workflow)
         self.assertNotIn("--geth-cache", workflow)
@@ -215,6 +218,35 @@ EVM_GETH_ACTIVE_WITHOUT_COST(STOP, Frontier)
             job_timeout_seconds - subprocess_deadlines,
             2 * opcode_audit.GIT_FETCH_TIMEOUT_SECONDS,
         )
+
+    def test_ci_loads_and_exercises_the_bubblewrap_apparmor_profile(self):
+        workflow = (
+            Path(__file__).resolve().parents[2]
+            / ".github/workflows/evm-upstream-audit.yml"
+        ).read_text(encoding="utf-8")
+        for profile_contract in (
+            "BWRAP_APPARMOR_PROFILE_SOURCE: "
+            "/usr/share/apparmor/extra-profiles/bwrap-userns-restrict",
+            "BWRAP_APPARMOR_PROFILE_DESTINATION: /etc/apparmor.d/bwrap-userns-restrict",
+        ):
+            with self.subTest(profile_contract=profile_contract):
+                self.assertIn(profile_contract, workflow)
+        step_marker = "      - name: Install fail-closed upstream sandbox\n"
+        self.assertEqual(workflow.count(step_marker), 1)
+        sandbox_step = workflow.split(step_marker, 1)[1].split("\n      - name:", 1)[0]
+
+        for required_contract in (
+            "apparmor-profiles",
+            "BWRAP_APPARMOR_PROFILE_SOURCE",
+            "BWRAP_APPARMOR_PROFILE_DESTINATION",
+            "sudo install --mode=0644",
+            'sudo apparmor_parser --replace "$BWRAP_APPARMOR_PROFILE_DESTINATION"',
+            "bwrap --cap-drop ALL --unshare-net --ro-bind / / -- /bin/true",
+        ):
+            with self.subTest(required_contract=required_contract):
+                self.assertIn(required_contract, sandbox_step)
+        self.assertNotIn("apparmor_restrict_unprivileged_userns=0", sandbox_step)
+        self.assertNotIn("--share-net", sandbox_step)
 
     def test_fetches_and_refreshes_remote_head(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
