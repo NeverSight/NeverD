@@ -1423,6 +1423,7 @@ endif()
 
 set(_neverd_semantic_fixture_targets
     NeverDSemanticTests
+    NeverDComputedGotoTests
     NeverDSwitchXformTests
     NeverDIndCallXformTests
     NeverDCFGLoopXformTests
@@ -1434,14 +1435,21 @@ set(_neverd_semantic_fixture_targets
     NeverDFMARoundingTests
     NeverDFPSRTests)
 
-# The fixture uses LLVM MC/Object APIs directly while libneverd also embeds
+# These test executables embed LLVM MC/Object code while libneverd also embeds
 # LLVM.  Do not export the executables' weak LLVM definitions on macOS: dyld
 # would otherwise coalesce them with libneverd's private copy and split
 # AnalysisKey identity inside a pass pipeline.
 if(APPLE)
-  foreach(_neverd_semantic_fixture_target IN LISTS
-      _neverd_semantic_fixture_targets)
-    target_link_options(${_neverd_semantic_fixture_target} PRIVATE
+  # PatchFull does not use SemanticRoundTripFixture, but it likewise embeds
+  # LLVM MC/Object code while linking neverd_shared.  Keep it in the macOS
+  # symbol-privacy set without making it inherit the fixture-only Windows
+  # NeverDLibC dependency below.
+  set(_neverd_macos_private_llvm_targets
+      ${_neverd_semantic_fixture_targets}
+      NeverDPatchFullTests)
+  foreach(_neverd_macos_private_llvm_target IN LISTS
+      _neverd_macos_private_llvm_targets)
+    target_link_options(${_neverd_macos_private_llvm_target} PRIVATE
       "LINKER:-no_exported_symbols")
   endforeach()
 endif()
