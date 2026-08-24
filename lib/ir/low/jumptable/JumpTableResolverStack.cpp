@@ -293,6 +293,8 @@ va_t CFGBuilder::resolveStackMaterializedTableSource(
   });
 
   const TargetRegInfo &TRI = getTargetRegInfo(CurrentImg->Arch);
+  const llvm::ArrayRef<uint64_t> IntParamRegs =
+      TRI.integerParamRegs(CurrentImg->Format);
   auto isGuestAddressZExt = [&](const LowOp &Op) {
     return Op.Opcode == NdOp::INT_ZEXT && Op.NumInputs >= 1 &&
            Op.Inputs[0].Size == CurrentImg->getPointerSize() &&
@@ -1489,8 +1491,9 @@ va_t CFGBuilder::resolveStackMaterializedTableSource(
       uint64_t DB = InvalidVA;
       int64_t DOff = 0;
       // arg0 (dst, the table frame slot) and arg1 (src, the const initializer
-      // VA).  Register-based ABIs (x86-64 SysV / AArch64 / ARM) pass them in
-      // IntParamRegs[0]/[1]; i386 cdecl passes them on the outgoing stack
+      // VA). Register-based ABIs (x86-64 SysV/Win64, AArch64, ARM) pass them in
+      // the image ABI's integer parameter registers; i386 cdecl passes them on
+      // the outgoing stack
       // ([sp+0]=dst, [sp+ptr]=src), recovered from the stores that fill those
       // slots just before the call.
       // Resolve a value that holds a constant data address (the memcpy source =
@@ -1696,19 +1699,19 @@ va_t CFGBuilder::resolveStackMaterializedTableSource(
       JumpTableValueOccurrence DestinationUse;
       JumpTableValueOccurrence SourceUse;
       JumpTableValueOccurrence LengthUse;
-      // Register-passed args (x86-64 SysV / AArch64 / ARM): dst in
-      // IntParamRegs[0], src in IntParamRegs[1].  Commit only when the source
+      // Register-passed args (x86-64 SysV/Win64, AArch64, ARM): dst in
+      // IntParamRegs[0], src in IntParamRegs[1]. Commit only when the source
       // also folds — on i386 the dst register may coincidentally still hold the
       // table address while the args truly live on the stack, so a register dst
       // with no register source must fall through to the stack recovery below.
-      if (TRI.IntParamRegs.size() >= 3 &&
+      if (IntParamRegs.size() >= 3 &&
           canonFrameSlot(FuncOps,
-                         NdVar::reg(TRI.IntParamRegs[0], Img.getPointerSize()),
+                         NdVar::reg(IntParamRegs[0], Img.getPointerSize()),
                          I - 1, DB, DOff, /*FollowSubpiece=*/true)) {
         NdVar RegisterSource =
-            NdVar::reg(TRI.IntParamRegs[1], Img.getPointerSize());
+            NdVar::reg(IntParamRegs[1], Img.getPointerSize());
         NdVar RegisterLength =
-            NdVar::reg(TRI.IntParamRegs[2], Img.getPointerSize());
+            NdVar::reg(IntParamRegs[2], Img.getPointerSize());
         if (auto F = addrToConstVA(RegisterSource, I - 1);
             F && Img.getSegmentFor(*F)) {
           Folded = *F;
@@ -1720,9 +1723,8 @@ va_t CFGBuilder::resolveStackMaterializedTableSource(
         }
         if (Folded && CopyLength && SourceMetadata) {
           ArgsOk = true;
-          DestinationUse = {
-              NdVar::reg(TRI.IntParamRegs[0], Img.getPointerSize()), Op.Addr,
-              Op.Seq, /*DefinedAtPoint=*/false};
+          DestinationUse = {NdVar::reg(IntParamRegs[0], Img.getPointerSize()),
+                            Op.Addr, Op.Seq, /*DefinedAtPoint=*/false};
           SourceUse = {RegisterSource, Op.Addr, Op.Seq,
                        /*DefinedAtPoint=*/false};
           LengthUse = {RegisterLength, Op.Addr, Op.Seq,

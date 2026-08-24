@@ -250,6 +250,11 @@ struct TargetRegInfo {
   /// \p Inverted is true when the flag is wrapped in BOOL_NOT.
   CondCode singleFlagCond(uint64_t FlagOff, bool Inverted) const;
 
+  /// Integer argument-register order for an image format. x86-64 COFF follows
+  /// Win64 (RCX, RDX, R8, R9); other formats and architectures use the
+  /// architecture's ordinary integer parameter order.
+  llvm::ArrayRef<uint64_t> integerParamRegs(BinaryFormat Format) const;
+
   /// Map a register offset to a parameter index, or -1 if not a param reg.
   int regToArgIdx(uint64_t RegOff) const;
 

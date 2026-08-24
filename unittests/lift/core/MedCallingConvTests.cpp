@@ -308,6 +308,24 @@ TEST(TargetRegInfo, EnumeratesWin64CallPreservation) {
   EXPECT_FALSE(HasRange(Ranges, x86reg::XMM5, 16));
 }
 
+TEST(TargetRegInfo, SelectsIntegerArgumentRegistersFromImageFormat) {
+  const TargetRegInfo &X64 = getTargetRegInfo(Arch::X64);
+  const llvm::ArrayRef<uint64_t> Win64Args =
+      X64.integerParamRegs(BinaryFormat::COFF);
+  EXPECT_EQ(Win64Args, X64.Win64ParamRegs);
+  ASSERT_GE(Win64Args.size(), 3u);
+  EXPECT_EQ(Win64Args[0], x86reg::RCX);
+  EXPECT_EQ(Win64Args[1], x86reg::RDX);
+  EXPECT_EQ(Win64Args[2], x86reg::R8);
+  EXPECT_EQ(X64.integerParamRegs(BinaryFormat::ELF), X64.IntParamRegs);
+  EXPECT_EQ(X64.integerParamRegs(BinaryFormat::MachO), X64.IntParamRegs);
+
+  const TargetRegInfo &X86 = getTargetRegInfo(Arch::X86);
+  EXPECT_EQ(X86.integerParamRegs(BinaryFormat::COFF), X86.IntParamRegs);
+  const TargetRegInfo &A64 = getTargetRegInfo(Arch::AArch64);
+  EXPECT_EQ(A64.integerParamRegs(BinaryFormat::COFF), A64.IntParamRegs);
+}
+
 TEST(TargetRegInfo, X86UsesSysVCalleeSavedRegisters) {
   const TargetRegInfo &TRI = getTargetRegInfo(Arch::X86);
 

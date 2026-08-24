@@ -446,14 +446,16 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
 
       // Some AArch64 memory encodings lower their unsigned offset into the
       // same instruction record as an instruction-local COPY/ADD/LOAD chain.
-      // Reconstruct only an exact, full-width COPY chain from the previous
-      // address value to this arithmetic input.  Other operations may coexist
-      // in the record only when they neither touch that chain nor memory.
-      NdVar BaseAlias = Current;
+      // Reconstruct only exact, full-width COPY aliases from the previous
+      // address value to this arithmetic input. P-code may retain both the
+      // architectural register and a bookkeeping temporary in one record; a
+      // COPY to the temporary does not invalidate the still-live register.
+      std::vector<NdVar> BaseAliases{Current};
       bool SawArithmetic = false;
       for (const LowOp &Other : Rec->second.Ops) {
         if (&Other == Op) {
-          if (BaseAlias != Step.BaseInputWitness)
+          if (std::find(BaseAliases.begin(), BaseAliases.end(),
+                        Step.BaseInputWitness) == BaseAliases.end())
             return false;
           SawArithmetic = true;
           continue;
@@ -462,14 +464,22 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
         if (!SawArithmetic) {
           if (Memory.Complete)
             return false;
-          if (Other.Opcode == NdOp::COPY && Other.NumInputs == 1 &&
-              Other.Inputs[0] == BaseAlias &&
+          const bool CopiesAlias =
+              Other.Opcode == NdOp::COPY && Other.NumInputs == 1 &&
               (Other.Output.isReg() || Other.Output.isTemp()) &&
-              Other.Output.Size == PointerSize) {
-            BaseAlias = Other.Output;
+              Other.Output.Size == PointerSize &&
+              std::find(BaseAliases.begin(), BaseAliases.end(),
+                        Other.Inputs[0]) != BaseAliases.end();
+          if (CopiesAlias) {
+            if (std::find(BaseAliases.begin(), BaseAliases.end(),
+                          Other.Output) == BaseAliases.end())
+              BaseAliases.push_back(Other.Output);
             continue;
           }
-          if (proofValueClobbers(Other.Output, BaseAlias) ||
+          if (std::any_of(BaseAliases.begin(), BaseAliases.end(),
+                          [&](const NdVar &Alias) {
+                            return proofValueClobbers(Other.Output, Alias);
+                          }) ||
               proofValueClobbers(Other.Output, Op->Output))
             return false;
           continue;

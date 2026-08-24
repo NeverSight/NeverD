@@ -284,6 +284,14 @@ uint64_t TargetRegInfo::indirectResultReg() const {
   return TheArch == Arch::AArch64 ? a64reg::X8 : 0;
 }
 
+llvm::ArrayRef<uint64_t>
+TargetRegInfo::integerParamRegs(BinaryFormat Format) const {
+  if (TheArch == Arch::X64 && Format == BinaryFormat::COFF &&
+      !Win64ParamRegs.empty())
+    return Win64ParamRegs;
+  return IntParamRegs;
+}
+
 int TargetRegInfo::regToArgIdx(uint64_t RegOff) const {
   for (size_t I = 0; I < IntParamRegs.size(); ++I)
     if (IntParamRegs[I] == RegOff)

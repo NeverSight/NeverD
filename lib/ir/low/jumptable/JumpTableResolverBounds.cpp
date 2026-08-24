@@ -3221,7 +3221,6 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
                 break;
               }
             }
-
             bool EntryReachabilityComplete = false;
             const std::set<va_t> EntryReachable =
                 candidateReachableInstructions(
@@ -3266,6 +3265,51 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
                     : 0;
             if (!EntryModulo)
               RetainedProducers.clear();
+
+            // The entry selector may be independently confined to the complete
+            // physical coordinate domain without being an unsigned-modulo
+            // producer itself.  Clang -O0, for example, lowers a known-zero
+            // signed `% N` before the first computed-goto edge, then writes
+            // exact unsigned `% N` values in the newly reachable cases.  An
+            // empty-edge unsigned-upper-bound proof may authorize those
+            // coordinates for graph exploration, but it does not publish the
+            // table: every case is decoded and the full selector/producer proof
+            // is replayed below before closure.
+            if (Authorized.empty()) {
+              if (!consumeFixedPointProducts({{SeedOccurrences.size(), 5}}))
+                return false;
+              std::vector<JumpTableValueQuery> BoundQueries;
+              BoundQueries.reserve(SeedOccurrences.size());
+              for (const JumpTableValueOccurrence &Index : SeedOccurrences) {
+                JumpTableValueQuery Query;
+                Query.Candidate = Index.Value;
+                Query.UseAddr = Index.Addr;
+                Query.UseSeq = Index.Seq;
+                Query.Relation = JumpTableValueRelation::UnsignedLessThan;
+                Query.UnsignedUpperBound = CandidateCapacity;
+                BoundQueries.push_back(std::move(Query));
+              }
+              std::vector<bool> BoundComplete;
+              const std::vector<bool> BoundMatches = tableValuesMatchAtUses(
+                  BoundQueries, nullptr, &BoundComplete, Rec.Addr, &NoTargets,
+                  AggregateEvidenceBudget);
+              if (BoundMatches.size() != BoundQueries.size() ||
+                  BoundComplete.size() != BoundQueries.size() ||
+                  std::any_of(BoundComplete.begin(), BoundComplete.end(),
+                              [](bool Complete) { return !Complete; })) {
+                if (EvidenceIncomplete)
+                  *EvidenceIncomplete = true;
+                return false;
+              }
+              if (std::all_of(BoundMatches.begin(), BoundMatches.end(),
+                              [](bool Match) { return Match; })) {
+                if (!consumeFixedPointEvidence(CandidateCapacity))
+                  return false;
+                for (uint32_t Coordinate = 0; Coordinate < CandidateCapacity;
+                     ++Coordinate)
+                  Authorized.insert(Coordinate);
+              }
+            }
 
             if (Authorized.empty())
               return false;
@@ -3686,6 +3730,7 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
     bool IsInstructionGuard = false;
   };
   std::vector<RetainedInstructionSpan> RetainedInstructionSpans;
+  va_t RetainedInstructionThrough = InvalidVA;
   auto retainInstruction = [&](const InsnRecord &Instruction) {
     // Charge the instruction record even when it carries no LowOps.  Otherwise
     // an attacker can place an unbounded run of zero-op decoded records in
@@ -3729,7 +3774,10 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
           UniqueIndexPoints, AmbiguousIndexPoints, Point,
           {/*Block=*/-1, static_cast<int>(Begin + J)});
     }
-    return !ProposalBudget.exhausted();
+    if (ProposalBudget.exhausted())
+      return false;
+    RetainedInstructionThrough = Instruction.Addr;
+    return true;
   };
   if (!RestrictProducerDiscovery && ReachableInstructions) {
     if (!ProposalBudget.consume(
@@ -3742,8 +3790,19 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
         break;
       }
       const auto It = Insns.find(Addr);
-      if (It != Insns.end() && !retainInstruction(It->second))
-        break;
+      if (It != Insns.end()) {
+        if (!retainInstruction(It->second))
+          break;
+        // Once every exact selector-use point is present, later reachable
+        // instructions need not be copied into the flat lexical proposal
+        // prefix.  The target-graph scan below visits every newly reachable
+        // INT_SUB/INT_REM occurrence directly; stopping here keeps that exact
+        // structural pass and final replay from being starved by a duplicate
+        // copy/scan of all case bodies.
+        if (UniqueIndexPoints.size() + AmbiguousIndexPoints.size() ==
+            IndexOccurrencePoints.size())
+          break;
+      }
     }
   } else if (!RestrictProducerDiscovery) {
     if (!ProposalBudget.consume(orderedEvidenceLookupWork(Insns.size())))
@@ -3995,6 +4054,9 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
               orderedEvidenceLookupWork(ReachableInstructions->size()))) {
         for (va_t Addr : *ReachableInstructions) {
           if (!inProofEnvelope(Addr))
+            continue;
+          if (RetainedInstructionThrough != InvalidVA &&
+              Addr <= RetainedInstructionThrough)
             continue;
           if (!StructuralBudget.consume(
                   orderedEvidenceLookupWork(Insns.size()) + 1)) {

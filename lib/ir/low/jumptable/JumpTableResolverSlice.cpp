@@ -2528,6 +2528,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     return -1;
   };
   const TargetRegInfo &TRI = getTargetRegInfo(CurrentImg->Arch);
+  const llvm::ArrayRef<uint64_t> IntParamRegs =
+      TRI.integerParamRegs(CurrentImg->Format);
   const std::vector<TargetRegisterRange> CallPreservedRanges =
       TRI.callPreservedRanges(CurrentImg->Format);
   struct LaneView {
@@ -3184,12 +3186,11 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       // gives that exact constant its numeric meaning.  Any relocation-backed
       // or owner-carrying address constant remains ineligible.
       bool ExactDisjointMemset = false;
-      if (isKnownMemsetCall(Op) &&
-          !Graph.InstructionGuards.count(Op.Addr) &&
-          TRI.IntParamRegs.size() >= 3 && CurrentImg->getPointerSize() != 0) {
+      if (isKnownMemsetCall(Op) && !Graph.InstructionGuards.count(Op.Addr) &&
+          IntParamRegs.size() >= 3 && CurrentImg->getPointerSize() != 0) {
         const uint16_t PointerSize = CurrentImg->getPointerSize();
-        const NdVar Destination = NdVar::reg(TRI.IntParamRegs[0], PointerSize);
-        const NdVar Length = NdVar::reg(TRI.IntParamRegs[2], PointerSize);
+        const NdVar Destination = NdVar::reg(IntParamRegs[0], PointerSize);
+        const NdVar Length = NdVar::reg(IntParamRegs[2], PointerSize);
         uint64_t DestinationBase = InvalidVA;
         int64_t DestinationOffset = 0;
         const ResolverResult LengthValue =
@@ -6071,14 +6072,18 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
         return false;
 
       // AArch64 unsigned-offset memory operations lower as an
-      // instruction-local COPY/ADD/LOAD chain. Reconstruct only a full-width
-      // COPY chain into the authenticated arithmetic input; any unrelated
-      // memory effect or clobber fails closed.
-      NdVar BaseAlias = Current;
+      // instruction-local COPY/ADD/LOAD chain. Reconstruct only full-width COPY
+      // aliases into the authenticated arithmetic input. P-code may preserve
+      // the architectural register while also materializing a bookkeeping
+      // temporary, so a COPY does not consume its source. Any unrelated memory
+      // effect or alias clobber fails closed.
+      std::vector<NdVar> BaseAliases{Current};
       bool SawArithmetic = false;
       for (const LowOp &Other : Rec->second.Ops) {
         if (&Other == Op) {
-          if (BaseAlias != Step.BaseInputWitness)
+          if (!consumeWork(BaseAliases.size()) ||
+              std::find(BaseAliases.begin(), BaseAliases.end(),
+                        Step.BaseInputWitness) == BaseAliases.end())
             return false;
           SawArithmetic = true;
           continue;
@@ -6087,14 +6092,30 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
         if (!SawArithmetic) {
           if (Memory.Complete)
             return false;
-          if (Other.Opcode == NdOp::COPY && Other.NumInputs == 1 &&
-              Other.Inputs[0] == BaseAlias &&
+          if (!consumeWork(BaseAliases.size()))
+            return false;
+          const bool CopiesAlias =
+              Other.Opcode == NdOp::COPY && Other.NumInputs == 1 &&
               (Other.Output.isReg() || Other.Output.isTemp()) &&
-              Other.Output.Size == PointerSize) {
-            BaseAlias = Other.Output;
+              Other.Output.Size == PointerSize &&
+              std::find(BaseAliases.begin(), BaseAliases.end(),
+                        Other.Inputs[0]) != BaseAliases.end();
+          if (CopiesAlias) {
+            if (!consumeWork(BaseAliases.size()))
+              return false;
+            if (std::find(BaseAliases.begin(), BaseAliases.end(),
+                          Other.Output) == BaseAliases.end()) {
+              if (!consumeWork())
+                return false;
+              BaseAliases.push_back(Other.Output);
+            }
             continue;
           }
-          if (proofValueClobbers(Other.Output, BaseAlias) ||
+          if (!consumeWork(BaseAliases.size()) ||
+              std::any_of(BaseAliases.begin(), BaseAliases.end(),
+                          [&](const NdVar &Alias) {
+                            return proofValueClobbers(Other.Output, Alias);
+                          }) ||
               proofValueClobbers(Other.Output, Op->Output))
             return false;
           continue;
@@ -6393,6 +6414,8 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
       }
 
       const TargetRegInfo &TRI = getTargetRegInfo(CurrentImg->Arch);
+      const llvm::ArrayRef<uint64_t> IntParamRegs =
+          TRI.integerParamRegs(CurrentImg->Format);
       const uint16_t PointerSize = CurrentImg->getPointerSize();
       std::vector<JumpTableValueOccurrence> StoreWriters;
       std::vector<JumpTableValueOccurrence> MemcpyWriters;
@@ -6417,10 +6440,8 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
               guestAddressView(Destination.Use.Value));
         const bool ImplicitFirstCallArgument =
             DestinationUse->Opcode == NdOp::CALL &&
-            Destination.Use.Value.isReg() &&
-            !getTargetRegInfo(CurrentImg->Arch).IntParamRegs.empty() &&
-            Destination.Use.Value.Offset ==
-                getTargetRegInfo(CurrentImg->Arch).IntParamRegs.front();
+            Destination.Use.Value.isReg() && !IntParamRegs.empty() &&
+            Destination.Use.Value.Offset == IntParamRegs.front();
         if (!ExplicitUse && !ImplicitFirstCallArgument)
           return false;
         auto FrameQuery = pushQuery(
@@ -6501,14 +6522,12 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
               Initializer.Length.Addr == Writer->Addr &&
               Initializer.Length.Seq == Writer->Seq;
           if (RegisterArguments) {
-            if (TRI.IntParamRegs.size() < 3 ||
-                !Destination.Use.Value.isReg() ||
+            if (IntParamRegs.size() < 3 || !Destination.Use.Value.isReg() ||
                 !Initializer.SourceAddress.Value.isReg() ||
                 !Initializer.Length.Value.isReg() ||
-                Destination.Use.Value.Offset != TRI.IntParamRegs[0] ||
-                Initializer.SourceAddress.Value.Offset !=
-                    TRI.IntParamRegs[1] ||
-                Initializer.Length.Value.Offset != TRI.IntParamRegs[2])
+                Destination.Use.Value.Offset != IntParamRegs[0] ||
+                Initializer.SourceAddress.Value.Offset != IntParamRegs[1] ||
+                Initializer.Length.Value.Offset != IntParamRegs[2])
               return false;
           } else {
             if (CurrentImg->Arch != Arch::X86 ||
