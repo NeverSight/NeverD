@@ -189,7 +189,7 @@ add_neverd_unittest(NeverDSBFIntegrationTests
 # import library only exposes public DLL exports, so link the component archive
 # explicitly on Windows.
 if(WIN32)
-  target_link_libraries(NeverDSBFIntegrationTests PRIVATE NeverDSBF)
+  target_link_libraries(NeverDSBFIntegrationTests PRIVATE NeverDSBF NeverDSupport)
 endif()
 
 target_include_directories(NeverDSBFIntegrationTests PRIVATE
