@@ -481,7 +481,11 @@ bool X86Lifter::liftFPU(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     S.emit(NdOp::FLOAT_LESS, Lt, {ST(0), Rhs});
     S.emit(NdOp::BOOL_OR, NdVar::reg(x86reg::CF, 1), {Lt, Unord});
     S.emit(NdOp::COPY, NdVar::reg(x86reg::PF, 1), {Unord});
+    // FCOMI/FUCOMI define the remaining arithmetic flags as zero rather than
+    // preserving their prior values.
     S.emit(NdOp::COPY, NdVar::reg(x86reg::OF, 1), {NdVar::cst(0, 1)});
+    S.emit(NdOp::COPY, NdVar::reg(x86reg::SF, 1), {NdVar::cst(0, 1)});
+    S.emit(NdOp::COPY, NdVar::reg(x86reg::AF, 1), {NdVar::cst(0, 1)});
     if (InsnId == X86_INS_FCOMPI || InsnId == X86_INS_FUCOMPI)
       FPUTop = (FPUTop + 1) & 7;
     break;

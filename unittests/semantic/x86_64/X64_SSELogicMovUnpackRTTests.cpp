@@ -83,6 +83,23 @@ static const std::vector<RoundTripTC> kSSELogicMov = {
    "}\n",
    {0x40A00000, 0x40800000}, "LogicMov", 1, "-msse"},
 
+  // Scalar ordered compares unconditionally clear OF, SF, and AF.  Seed all
+  // three, then materialize them after both the legacy and VEX encodings.
+  {"comiss_vcomiss_clear_of_sf_af",
+   "unsigned long f(unsigned long a,unsigned long b){\n"
+   " unsigned long lf,vf,lo,vo;\n"
+   " __asm__ volatile(\n"
+   "  \"movd %k4, %%xmm0\\n\\tmovd %k5, %%xmm1\\n\\t\"\n"
+   "  \"movb $0x7f, %%al\\n\\taddb $1, %%al\\n\\tcomiss %%xmm1, %%xmm0\\n\\t\"\n"
+   "  \"seto %b2\\n\\tlahf\\n\\tmovzbl %%ah, %%eax\\n\\tmovl %%eax, %k0\\n\\t\"\n"
+   "  \"movb $0x7f, %%al\\n\\taddb $1, %%al\\n\\tvcomiss %%xmm1, %%xmm0\\n\\t\"\n"
+   "  \"seto %b3\\n\\tlahf\\n\\tmovzbl %%ah, %%eax\\n\\tmovl %%eax, %k1\"\n"
+   "  :\"=&r\"(lf),\"=&r\"(vf),\"=&q\"(lo),\"=&q\"(vo)\n"
+   "  :\"r\"(a),\"r\"(b):\"rax\",\"xmm0\",\"xmm1\",\"cc\");\n"
+   " return (lf&0x90UL)|((lo&1)<<11)|((vf&0x90UL)<<16)|((vo&1)<<27);\n"
+   "}\n",
+   {0x3f800000, 0x40000000}, "LogicMov", 1, "-mavx"},
+
   {"comisd_compare",
    "long comisd_compare(long a, long b) {\n"
    "  double da = *(double*)&a, db = *(double*)&b;\n"

@@ -23,14 +23,13 @@
 
 namespace neverd {
 
-// Phase B2x: cross-block narrow partial write → wide parent definition.
+// Phase B2x: cross-block preserving partial write → wide parent definition.
 //
-// Phase B2 (above) only merges a partial write into a wider read in the *same*
-// block.  When clang seeds an induction variable with a 16-bit move whose
-// parent is consumed in another block (clang -O2 revstride: `movw $0x70,%cx`
-// before the loop, `ecx` read inside it via a phi), the parent's low bytes are
-// written but the wide value flowing into the successor never observes them —
-// buildSsa carries the stale entry register and the low bits become garbage.
+// Phase B2 (above) only merges a preserving partial write into a wider read in
+// the *same* block.  Examples are a 16-bit induction-variable seed whose GPR
+// parent is consumed in a successor, and a legacy XMM write whose YMM parent is
+// stored after a branch.  Without an eager parent definition, buildSsa carries
+// the stale entry value across that edge.
 //
 // Mirror Phase A's eager-zext model for the partial-write case: right after
 // such a write, define the wide parent as `(parent & ~mask) | (zext(narrow) <<
@@ -43,6 +42,12 @@ void LowToMedConverter::mergePartialWritesCrossBlockX86(MedFunc &Func) {
     return;
 
   const auto &TRI = getTargetRegInfo(TargetArch);
+
+  auto isPreservingPartialWrite = [&](uint64_t Off, uint16_t Sz) {
+    if (Sz == 0 || TRI.writeZeroExtends(Off, Sz))
+      return false;
+    return TRI.findWideReg(Off, Sz).second > Sz;
+  };
 
   // Every register read region with the block it occurs in.  buildSsa has not
   // run yet, so there are no phis; plain operand reads carry the cross-block
@@ -98,9 +103,9 @@ void LowToMedConverter::mergePartialWritesCrossBlockX86(MedFunc &Func) {
     }
   }
 
-  // Wide-parent regions that are loop-carried via *narrow* (8/16-bit) partial
-  // writes inside a loop (e.g. clang's BL/BH sliding-window idiom).  For those
-  // the parent is reconstructed from narrow loop-carried phis by Phase B2 /
+  // Wide-parent regions that are loop-carried via preserving partial writes
+  // inside a loop (e.g. BL/BH, or a legacy XMM write into YMM). For those the
+  // parent is reconstructed from loop-carried sub-register phis by Phase B2 /
   // mergeLoopCarriedPartialReads; an eager seed definition would make the
   // parent a wide loop phi and disable that machinery, so the seed merge is
   // ceded.
@@ -110,7 +115,7 @@ void LowToMedConverter::mergePartialWritesCrossBlockX86(MedFunc &Func) {
       continue;
     for (const auto &MOp : Func.Blocks[BI].Ops) {
       if (MOp.Output.Kind != MedVar::Reg ||
-          (MOp.Output.Size != 1 && MOp.Output.Size != 2))
+          !isPreservingPartialWrite(MOp.Output.RegOff, MOp.Output.Size))
         continue;
       if (MOp.Opcode == NdOp::SUBBYTES && MOp.NumInputs >= 1) {
         const MedVar &In0 = MOp.Inputs[0];
@@ -123,8 +128,9 @@ void LowToMedConverter::mergePartialWritesCrossBlockX86(MedFunc &Func) {
     }
   }
 
-  // Wide-parent regions that get a genuine full-width (>= 32-bit, i.e. zero-
-  // extending or whole-register) write inside a loop.  Such a parent forms its
+  // Wide-parent regions that get a genuine whole-parent definition (a full
+  // register write or an architecturally zero-extending sub-register write)
+  // inside a loop. Such a parent forms its
   // own wide loop phi (clang uses the full register as scratch on some arms — a
   // `mov`/`lea`/`call` result), so every loop arm that updates only its low
   // byte
@@ -138,10 +144,13 @@ void LowToMedConverter::mergePartialWritesCrossBlockX86(MedFunc &Func) {
     if (!InLoop[BI])
       continue;
     for (const auto &MOp : Func.Blocks[BI].Ops) {
-      if (MOp.Output.Kind != MedVar::Reg || MOp.Output.Size < 4)
+      if (MOp.Output.Kind != MedVar::Reg || MOp.Output.Size == 0)
         continue;
-      WideFullWrittenInLoop.insert(
-          TRI.findWideReg(MOp.Output.RegOff, MOp.Output.Size).first);
+      auto [WideOff, WideSz] =
+          TRI.findWideReg(MOp.Output.RegOff, MOp.Output.Size);
+      if (MOp.Output.Size >= WideSz ||
+          TRI.writeZeroExtends(MOp.Output.RegOff, MOp.Output.Size))
+        WideFullWrittenInLoop.insert(WideOff);
     }
   }
 
@@ -198,10 +207,11 @@ void LowToMedConverter::mergePartialWritesCrossBlockX86(MedFunc &Func) {
 
     for (size_t OI = 0; OI < MB.Ops.size(); ++OI) {
       MedOp &MOp = MB.Ops[OI];
-      // Only genuine 8/16-bit partial writes preserve the parent's upper bits;
-      // 32-bit writes zero-extend (Phase A) and wider writes need no merge.
+      // Use the target's alias table rather than a size test: a 32-bit GPR
+      // write zero-extends its parent, while a 16-byte legacy XMM write still
+      // preserves the high half of the 32-byte YMM slot.
       if (MOp.Output.Kind != MedVar::Reg ||
-          (MOp.Output.Size != 1 && MOp.Output.Size != 2))
+          !isPreservingPartialWrite(MOp.Output.RegOff, MOp.Output.Size))
         continue;
 
       // A SUBBYTES that self-slices its own wider register is a read-view, not
@@ -255,42 +265,7 @@ void LowToMedConverter::mergePartialWritesCrossBlockX86(MedFunc &Func) {
         RegVarMap[WideKey] = WideId;
       }
 
-      uint64_t Mask = ((1ULL << (PSz * 8)) - 1) << (ByteOff * 8);
-      uint64_t ClearMask = ~Mask;
-      if (WSz < 8)
-        ClearMask &= ((1ULL << (WSz * 8)) - 1);
-
       std::vector<MedOp> Ops;
-
-      MedVar Zext;
-      Zext.Kind = MedVar::Temp;
-      Zext.Id = allocVarId();
-      Zext.Size = WSz;
-      Zext.TheArch = TargetArch;
-      MedOp ZextOp;
-      ZextOp.Opcode = NdOp::INT_ZEXT;
-      ZextOp.Addr = MOp.Addr;
-      ZextOp.Output = Zext;
-      ZextOp.addInput(MOp.Output);
-      Ops.push_back(ZextOp);
-
-      MedVar Placed = Zext;
-      if (ByteOff > 0) {
-        MedVar Shifted;
-        Shifted.Kind = MedVar::Temp;
-        Shifted.Id = allocVarId();
-        Shifted.Size = WSz;
-        Shifted.TheArch = TargetArch;
-        MedOp ShOp;
-        ShOp.Opcode = NdOp::INT_LEFT;
-        ShOp.Addr = MOp.Addr;
-        ShOp.Output = Shifted;
-        ShOp.addInput(Zext);
-        ShOp.addInput(
-            MedVar::makeConst(static_cast<uint64_t>(ByteOff) * 8, WSz));
-        Ops.push_back(ShOp);
-        Placed = Shifted;
-      }
 
       MedVar WideIn;
       WideIn.Kind = MedVar::Reg;
@@ -299,18 +274,8 @@ void LowToMedConverter::mergePartialWritesCrossBlockX86(MedFunc &Func) {
       WideIn.Size = WSz;
       WideIn.TheArch = TargetArch;
 
-      MedVar Cleared;
-      Cleared.Kind = MedVar::Temp;
-      Cleared.Id = allocVarId();
-      Cleared.Size = WSz;
-      Cleared.TheArch = TargetArch;
-      MedOp AndOp;
-      AndOp.Opcode = NdOp::INT_AND;
-      AndOp.Addr = MOp.Addr;
-      AndOp.Output = Cleared;
-      AndOp.addInput(WideIn);
-      AndOp.addInput(MedVar::makeConst(ClearMask, WSz));
-      Ops.push_back(AndOp);
+      MedVar Combined = spliceX86Subregister(
+          WideIn, MOp.Output, static_cast<uint16_t>(ByteOff), MOp.Addr, Ops);
 
       MedVar WideOut;
       WideOut.Kind = MedVar::Reg;
@@ -318,13 +283,12 @@ void LowToMedConverter::mergePartialWritesCrossBlockX86(MedFunc &Func) {
       WideOut.RegOff = WOff;
       WideOut.Size = WSz;
       WideOut.TheArch = TargetArch;
-      MedOp OrOp;
-      OrOp.Opcode = NdOp::INT_OR;
-      OrOp.Addr = MOp.Addr;
-      OrOp.Output = WideOut;
-      OrOp.addInput(Cleared);
-      OrOp.addInput(Placed);
-      Ops.push_back(OrOp);
+      MedOp Copy;
+      Copy.Opcode = NdOp::COPY;
+      Copy.Addr = MOp.Addr;
+      Copy.Output = WideOut;
+      Copy.addInput(Combined);
+      Ops.push_back(std::move(Copy));
 
       Pending.push_back({OI, std::move(Ops)});
     }

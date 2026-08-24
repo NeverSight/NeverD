@@ -250,40 +250,47 @@ bool liftSIMDAVXSSE(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     NdVar A = L.operandRead(S, X86.operands[SrcIdx]);
     NdVar B = L.operandRead(S, X86.operands[SrcIdx + 1]);
     uint8_t Imm = (uint8_t)X86.operands[X86.op_count - 1].imm;
-    NdVar Sum;
-    bool HasSum = false;
-    for (unsigned I = 0; I < 4; ++I) {
-      if (!(Imm & (1u << (I + 4))))
-        continue;
-      NdVar AI = S.makeTemp(4), BI = S.makeTemp(4);
-      S.emit(NdOp::SUBBYTES, AI, {A, NdVar::cst(I * 4, 4)});
-      S.emit(NdOp::SUBBYTES, BI, {B, NdVar::cst(I * 4, 4)});
-      NdVar Prod = S.makeTemp(4);
-      S.emit(NdOp::FLOAT_MULT, Prod, {AI, BI});
-      if (!HasSum) {
-        Sum = Prod;
-        HasSum = true;
-      } else {
-        NdVar NewSum = S.makeTemp(4);
-        S.emit(NdOp::FLOAT_ADD, NewSum, {Sum, Prod});
-        Sum = NewSum;
+    std::vector<NdVar> Blocks;
+    for (unsigned Block = 0; Block < Dst.Size / 16; ++Block) {
+      std::vector<NdVar> Products;
+      for (unsigned I = 0; I < 4; ++I) {
+        if (!(Imm & (1u << (I + 4)))) {
+          Products.push_back(NdVar::cst(0, 4));
+          continue;
+        }
+        unsigned Offset = Block * 16 + I * 4;
+        NdVar AI = S.makeTemp(4), BI = S.makeTemp(4);
+        S.emit(NdOp::SUBBYTES, AI, {A, NdVar::cst(Offset, 4)});
+        S.emit(NdOp::SUBBYTES, BI, {B, NdVar::cst(Offset, 4)});
+        NdVar Prod = S.makeTemp(4);
+        S.emit(NdOp::FLOAT_MULT, Prod, {AI, BI});
+        Products.push_back(Prod);
       }
+      NdVar Pair01 = S.makeTemp(4), Pair23 = S.makeTemp(4);
+      NdVar Sum = S.makeTemp(4);
+      S.emit(NdOp::FLOAT_ADD, Pair01, {Products[0], Products[1]});
+      S.emit(NdOp::FLOAT_ADD, Pair23, {Products[2], Products[3]});
+      S.emit(NdOp::FLOAT_ADD, Sum, {Pair01, Pair23});
+      std::vector<NdVar> Lanes;
+      for (unsigned I = 0; I < 4; ++I) {
+        if (Imm & (1u << I))
+          Lanes.push_back(Sum);
+        else
+          Lanes.push_back(NdVar::cst(0, 4));
+      }
+      NdVar Lo = S.makeTemp(8), Hi = S.makeTemp(8), Result = S.makeTemp(16);
+      S.emit(NdOp::CONCAT, Lo, {Lanes[1], Lanes[0]});
+      S.emit(NdOp::CONCAT, Hi, {Lanes[3], Lanes[2]});
+      S.emit(NdOp::CONCAT, Result, {Hi, Lo});
+      Blocks.push_back(Result);
     }
-    if (!HasSum) {
-      Sum = S.makeTemp(4);
-      S.emit(NdOp::COPY, Sum, {NdVar::cst(0, 4)});
+    NdVar Result = Blocks[0];
+    for (unsigned Block = 1; Block < Blocks.size(); ++Block) {
+      NdVar Combined = S.makeTemp((Block + 1) * 16);
+      S.emit(NdOp::CONCAT, Combined, {Blocks[Block], Result});
+      Result = Combined;
     }
-    std::vector<NdVar> Lanes;
-    for (unsigned I = 0; I < 4; ++I) {
-      if (Imm & (1u << I))
-        Lanes.push_back(Sum);
-      else
-        Lanes.push_back(NdVar::cst(0, 4));
-    }
-    NdVar Lo = S.makeTemp(8), Hi = S.makeTemp(8);
-    S.emit(NdOp::CONCAT, Lo, {Lanes[1], Lanes[0]});
-    S.emit(NdOp::CONCAT, Hi, {Lanes[3], Lanes[2]});
-    S.emit(NdOp::CONCAT, Dst, {Hi, Lo});
+    S.emit(NdOp::COPY, Dst, {Result});
     break;
   }
   case X86_INS_DPPD:
@@ -295,29 +302,21 @@ bool liftSIMDAVXSSE(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     NdVar A = L.operandRead(S, X86.operands[SrcIdx]);
     NdVar B = L.operandRead(S, X86.operands[SrcIdx + 1]);
     uint8_t Imm = (uint8_t)X86.operands[X86.op_count - 1].imm;
-    NdVar Sum;
-    bool HasSum = false;
+    std::vector<NdVar> Products;
     for (unsigned I = 0; I < 2; ++I) {
-      if (!(Imm & (1u << (I + 4))))
+      if (!(Imm & (1u << (I + 4)))) {
+        Products.push_back(NdVar::cst(0, 8));
         continue;
+      }
       NdVar AI = S.makeTemp(8), BI = S.makeTemp(8);
       S.emit(NdOp::SUBBYTES, AI, {A, NdVar::cst(I * 8, 4)});
       S.emit(NdOp::SUBBYTES, BI, {B, NdVar::cst(I * 8, 4)});
       NdVar Prod = S.makeTemp(8);
       S.emit(NdOp::FLOAT_MULT, Prod, {AI, BI});
-      if (!HasSum) {
-        Sum = Prod;
-        HasSum = true;
-      } else {
-        NdVar NewSum = S.makeTemp(8);
-        S.emit(NdOp::FLOAT_ADD, NewSum, {Sum, Prod});
-        Sum = NewSum;
-      }
+      Products.push_back(Prod);
     }
-    if (!HasSum) {
-      Sum = S.makeTemp(8);
-      S.emit(NdOp::COPY, Sum, {NdVar::cst(0, 8)});
-    }
+    NdVar Sum = S.makeTemp(8);
+    S.emit(NdOp::FLOAT_ADD, Sum, {Products[0], Products[1]});
     NdVar L0 = (Imm & 1) ? Sum : NdVar::cst(0, 8);
     NdVar L1 = (Imm & 2) ? Sum : NdVar::cst(0, 8);
     S.emit(NdOp::CONCAT, Dst, {L1, L0});

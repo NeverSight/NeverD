@@ -19,9 +19,71 @@ class X64x87FPURT : public SemanticRoundTripFixture,
                     public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(X64x87FPURT, Verify) { roundTripX64(GetParam()); }
 
+TEST(X64X87FscaleKnownAnswer, IgnoresControlWordPrecision) {
+  // 1/3 scaled by 2^2 is exact in the x87 extended format: only the exponent
+  // changes.  The control word requests 24-bit precision, which FSCALE must
+  // ignore for its result.
+  static constexpr uint8_t Code[] = {0xd9, 0xfd}; // fscale
+  union X87Value {
+    uint64_t Alignment;
+    uint8_t Bytes[10];
+  };
+  auto MakeX87 = [](uint64_t Significand, uint16_t SignExponent) {
+    X87Value Value{};
+    std::memcpy(Value.Bytes, &Significand, sizeof(Significand));
+    std::memcpy(Value.Bytes + sizeof(Significand), &SignExponent,
+                sizeof(SignExponent));
+    return Value;
+  };
+
+  X87Value St0 = MakeX87(0xaaaaaaaaaaaaaaabULL, 0x3ffd);
+  X87Value St1 = MakeX87(0x8000000000000000ULL, 0x4000);
+  uint16_t ControlWord = 0x007f; // round-to-nearest, 24-bit precision
+  uint16_t StatusWord = 0;
+  uint16_t TagWord = 0;
+
+  uc_engine *UC = nullptr;
+  ASSERT_EQ(uc_open(UC_ARCH_X86, UC_MODE_64, &UC), UC_ERR_OK);
+  ASSERT_EQ(uc_mem_map(UC, CODE_BASE, 0x1000, UC_PROT_ALL), UC_ERR_OK);
+  ASSERT_EQ(uc_mem_write(UC, CODE_BASE, Code, sizeof(Code)), UC_ERR_OK);
+  ASSERT_EQ(uc_reg_write(UC, UC_X86_REG_FPCW, &ControlWord), UC_ERR_OK);
+  ASSERT_EQ(uc_reg_write(UC, UC_X86_REG_FPSW, &StatusWord), UC_ERR_OK);
+  ASSERT_EQ(uc_reg_write(UC, UC_X86_REG_FPTAG, &TagWord), UC_ERR_OK);
+  ASSERT_EQ(uc_reg_write(UC, UC_X86_REG_FP0, &St0), UC_ERR_OK);
+  ASSERT_EQ(uc_reg_write(UC, UC_X86_REG_FP1, &St1), UC_ERR_OK);
+  ASSERT_EQ(uc_emu_start(UC, CODE_BASE, CODE_BASE + sizeof(Code), 0, 0),
+            UC_ERR_OK);
+  ASSERT_EQ(uc_reg_read(UC, UC_X86_REG_FP0, &St0), UC_ERR_OK);
+
+  uint64_t ResultSignificand = 0;
+  uint16_t ResultSignExponent = 0;
+  std::memcpy(&ResultSignificand, St0.Bytes, sizeof(ResultSignificand));
+  std::memcpy(&ResultSignExponent, St0.Bytes + sizeof(ResultSignificand),
+              sizeof(ResultSignExponent));
+  EXPECT_EQ(ResultSignificand, 0xaaaaaaaaaaaaaaabULL);
+  EXPECT_EQ(ResultSignExponent, 0x3fffu);
+  EXPECT_EQ(uc_close(UC), UC_ERR_OK);
+}
+
 // clang-format off
 
 static const std::vector<RoundTripTC> kX64x87FPU = {
+
+  // ===== FSCALE ignores the control-word precision field =====
+  {"x87_fscale_precision",
+   "struct __attribute__((packed)) X87V { unsigned long long sig; unsigned short se; };\n"
+   "unsigned long f(unsigned long unused) {\n"
+   "  (void)unused;\n"
+   "  struct X87V src={0xaaaaaaaaaaaaaaabULL,0x3ffd};\n"
+   "  struct X87V scale={0x8000000000000000ULL,0x4000}, out;\n"
+   "  unsigned short saved, cw=0x007f;\n"
+   "  __asm__ volatile(\"fnstcw %0\\n\\tfldcw %1\" : \"=m\"(saved) : \"m\"(cw) : \"memory\");\n"
+   "  __asm__ volatile(\"fldt %2\\n\\tfldt %1\\n\\tfscale\\n\\tfstpt %0\\n\\tfstp %%st(0)\"\n"
+   "                   : \"=m\"(out) : \"m\"(src), \"m\"(scale) : \"memory\");\n"
+   "  __asm__ volatile(\"fldcw %0\" : : \"m\"(saved) : \"memory\");\n"
+   "  return (unsigned long)(out.sig ^ ((unsigned long long)out.se << 48));\n"
+   "}\n",
+   {0}, "x87FPU", 0, "-mno-sse -mfpmath=387"},
 
   // ===== FADD via x87 forced mode =====
   {"x87_fadd",

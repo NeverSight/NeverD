@@ -141,11 +141,12 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
   }
 
   // ========================================================================
-  // r/m16 system-register loads/stores: LLDT/LTR/LMSW read r/m16,
-  // SLDT/STR/SMSW write r/m16.  Capture the operand so codegen can re-emit a
-  // valid mnemonic.  Discriminator: a memory base is captured as an 8-byte
-  // pointer input; a register source is captured as a 2-byte value input; a
-  // register destination (store form) becomes the INTRINSIC output.
+  // r/m16 system-register loads/stores: LLDT/LTR/LMSW read r/m16, while the
+  // memory forms of SLDT/STR/SMSW write 16 bits.  Their register-destination
+  // forms retain the decoded register width so r32/r64 receive the selector or
+  // machine-status word zero-extended to the full destination.  A memory base
+  // is captured as an 8-byte pointer input; a register destination becomes the
+  // INTRINSIC output.
   // ========================================================================
   case X86_INS_LLDT:
   case X86_INS_LTR:
@@ -184,7 +185,7 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     } else if (X86.op_count >= 1 && X86.operands[0].type == X86_OP_REG) {
       auto RI = mapCapstoneReg(static_cast<x86_reg>(X86.operands[0].reg));
       if (IsStore)
-        S.emitIntrinsic(Id, NdVar::reg(RI.Offset, 2), {});
+        S.emitIntrinsic(Id, NdVar::reg(RI.Offset, RI.Size), {});
       else
         S.emitIntrinsic(Id, NdVar::reg(x86reg::RAX, 8),
                         {NdVar::reg(RI.Offset, 2)});

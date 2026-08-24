@@ -352,6 +352,50 @@ void X86Lifter::emitZeroCountFlagGuard(
 // Main dispatch
 // ===----------------------------------------------------------------------===//
 
+namespace {
+
+bool isLegacyEncodingPrefix(uint8_t Byte, bool Is64Bit) {
+  switch (Byte) {
+  case 0xF0:
+  case 0xF2:
+  case 0xF3:
+  case 0x2E:
+  case 0x36:
+  case 0x3E:
+  case 0x26:
+  case 0x64:
+  case 0x65:
+  case 0x66:
+  case 0x67:
+    return true;
+  default:
+    return Is64Bit && Byte >= 0x40 && Byte <= 0x4F;
+  }
+}
+
+// VEX.128 and EVEX.128 register destinations clear every modeled vector bit
+// above bit 127. Capstone exposes the decoded operands but not the encoded
+// vector length, so read L/LL directly from the prefix bytes. Legacy prefixes
+// are skipped to keep address-size and segment overrides from changing this
+// encoding decision.
+bool isEncodedVex128(const cs_insn *Insn, bool Is64Bit) {
+  size_t I = 0;
+  while (I < Insn->size && isLegacyEncodingPrefix(Insn->bytes[I], Is64Bit))
+    ++I;
+  if (I >= Insn->size)
+    return false;
+
+  if (Insn->bytes[I] == 0xC5 && I + 1 < Insn->size)
+    return (Insn->bytes[I + 1] & 0x04) == 0;
+  if (Insn->bytes[I] == 0xC4 && I + 2 < Insn->size)
+    return (Insn->bytes[I + 2] & 0x04) == 0;
+  if (Insn->bytes[I] == 0x62 && I + 3 < Insn->size)
+    return (Insn->bytes[I + 3] & 0x60) == 0;
+  return false;
+}
+
+} // namespace
+
 void X86Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
                      llvm::ArrayRef<RelocatedAddressOperand> Relocs,
                      llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs) {
@@ -553,6 +597,36 @@ void X86Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
               I386ELFGOTPC,
           ExactAdd->Opcode,
           ExactAdd->Output};
+  }
+
+  // A VEX/EVEX 128-bit *destination* write also defines the corresponding YMM
+  // high half as zero. Detect writes from emitted LowIR rather than operand
+  // position: this excludes memory destinations and read-only vector operands
+  // such as VUCOMISS/VTEST, and remains correct for handlers with implicit or
+  // unusual operand layouts. Legacy SSE reaches the same XMM offsets without a
+  // VEX/EVEX prefix and therefore keeps the prior high half.
+  if (isEncodedVex128(Insn, TargetArch == Arch::X64)) {
+    bool ClearUpper[16] = {};
+    const size_t End = Ops.size();
+    for (size_t I = S.OpsStart; I < End; ++I) {
+      const NdVar &Out = Ops[I].Output;
+      if (Out.Space != VnodeSpace::REG || Out.Size != 16 ||
+          Out.Offset < x86reg::XMM0)
+        continue;
+      uint64_t Delta = Out.Offset - x86reg::XMM0;
+      if (Delta % 32 != 0)
+        continue;
+      unsigned Index = static_cast<unsigned>(Delta / 32);
+      if (Index < 16)
+        ClearUpper[Index] = true;
+    }
+    for (unsigned Index = 0; Index < 16; ++Index) {
+      if (!ClearUpper[Index])
+        continue;
+      uint64_t Offset = x86reg::XMM0 + static_cast<uint64_t>(Index) * 32;
+      S.emit(NdOp::INT_ZEXT, NdVar::reg(Offset, 32),
+             {NdVar::reg(Offset, 16)});
+    }
   }
 
   // x86-64: writing to a 32-bit register implicitly zero-extends to 64 bits.

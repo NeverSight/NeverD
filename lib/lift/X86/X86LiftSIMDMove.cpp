@@ -80,11 +80,20 @@ bool liftSIMDMove(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   }
 
   case X86_INS_VZEROUPPER:
-  case X86_INS_VZEROALL:
-    // Clear Upper 128b of all YMM regs. We don't model YMM separately
-    // (using XMM for both), so this is conservatively a NOP.
-    S.emit(NdOp::NOP, {}, {});
+  case X86_INS_VZEROALL: {
+    const unsigned RegisterCount = L.targetArch() == Arch::X64 ? 16 : 8;
+    for (unsigned Index = 0; Index < RegisterCount; ++Index) {
+      uint64_t Offset =
+          x86reg::XMM0 + static_cast<uint64_t>(Index) * 32;
+      NdVar Ymm = NdVar::reg(Offset, 32);
+      if (InsnId == X86_INS_VZEROALL) {
+        S.emit(NdOp::COPY, Ymm, {NdVar::cst(0, 32)});
+      } else {
+        S.emit(NdOp::INT_ZEXT, Ymm, {NdVar::reg(Offset, 16)});
+      }
+    }
     break;
+  }
 
   // PMOVMSKB / VPMOVMSKB — extract MSBs of each byte → GPR bitmask.
   case X86_INS_PMOVMSKB:

@@ -1421,23 +1421,38 @@ if(TARGET neverd)
   add_dependencies(NeverDFPSRTests neverd)
 endif()
 
+set(_neverd_semantic_fixture_targets
+    NeverDSemanticTests
+    NeverDSwitchXformTests
+    NeverDIndCallXformTests
+    NeverDCFGLoopXformTests
+    NeverDTwoTableXformTests
+    NeverDAvxUpperXformTests
+    NeverDFP16ReduceTests
+    NeverDFP16PairwiseTests
+    NeverDFP16ConvTests
+    NeverDFMARoundingTests
+    NeverDFPSRTests)
+
+# The fixture uses LLVM MC/Object APIs directly while libneverd also embeds
+# LLVM.  Do not export the executables' weak LLVM definitions on macOS: dyld
+# would otherwise coalesce them with libneverd's private copy and split
+# AnalysisKey identity inside a pass pipeline.
+if(APPLE)
+  foreach(_neverd_semantic_fixture_target IN LISTS
+      _neverd_semantic_fixture_targets)
+    target_link_options(${_neverd_semantic_fixture_target} PRIVATE
+      "LINKER:-no_exported_symbols")
+  endforeach()
+endif()
+
 # LibCNames' C++ helpers are intentionally not exported from neverd_shared on
 # Windows.  Every executable that compiles SemanticRoundTripFixture calls them
 # directly, so provide their static definitions to all fixture users.  Keep
 # this after the focused targets above so the list cannot omit later targets.
 if(WIN32)
-  foreach(_neverd_semantic_fixture_target IN ITEMS
-      NeverDSemanticTests
-      NeverDSwitchXformTests
-      NeverDIndCallXformTests
-      NeverDCFGLoopXformTests
-      NeverDTwoTableXformTests
-      NeverDAvxUpperXformTests
-      NeverDFP16ReduceTests
-      NeverDFP16PairwiseTests
-      NeverDFP16ConvTests
-      NeverDFMARoundingTests
-      NeverDFPSRTests)
+  foreach(_neverd_semantic_fixture_target IN LISTS
+      _neverd_semantic_fixture_targets)
     target_link_libraries(${_neverd_semantic_fixture_target} PRIVATE NeverDLibC)
   endforeach()
 endif()

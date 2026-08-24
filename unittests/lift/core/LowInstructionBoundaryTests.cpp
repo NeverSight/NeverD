@@ -665,6 +665,156 @@ bool containsOp(const std::vector<LowOp> &Ops, NdOp Opcode) {
                      [Opcode](const LowOp &Op) { return Op.Opcode == Opcode; });
 }
 
+TEST(LowInstructionBoundary,
+     DisabledMpxHintNopsPreserveLengthAndHaveNoEffects) {
+  struct TailCase {
+    const char *Name;
+    std::vector<uint8_t> Bytes;
+    uint16_t InstructionSize;
+  };
+  const std::array<TailCase, 9> Tails = {{
+      {"register", {0xde}, 3},
+      {"mod00", {0x00}, 3},
+      {"mod00_sib", {0x04, 0x08}, 4},
+      {"mod00_sib_disp32", {0x04, 0x0d, 0x78, 0x56, 0x34, 0x12}, 8},
+      {"mod00_disp32", {0x05, 0x78, 0x56, 0x34, 0x12}, 7},
+      {"mod01_disp8", {0x40, 0x7f}, 4},
+      {"mod01_sib_disp8", {0x44, 0x08, 0x7f}, 5},
+      {"mod10_disp32", {0x80, 0x78, 0x56, 0x34, 0x12}, 7},
+      {"mod10_sib_disp32", {0x84, 0x08, 0x78, 0x56, 0x34, 0x12}, 8},
+  }};
+
+  for (Arch Architecture : {Arch::X86, Arch::X64}) {
+    Decoder Full;
+    ASSERT_TRUE(Full.init(Architecture));
+    Decoder Light;
+    ASSERT_TRUE(Light.init(Architecture));
+    Light.setDetail(false);
+
+    for (uint8_t Opcode : {uint8_t{0x1a}, uint8_t{0x1b}}) {
+      for (const TailCase &Tail : Tails) {
+        SCOPED_TRACE(::testing::Message()
+                     << "arch=" << static_cast<unsigned>(Architecture)
+                     << " opcode=0x" << std::hex
+                     << static_cast<unsigned>(Opcode) << " " << Tail.Name);
+        std::vector<uint8_t> Bytes = {0x0f, Opcode};
+        Bytes.insert(Bytes.end(), Tail.Bytes.begin(), Tail.Bytes.end());
+
+        DecodedInsn Insn{};
+        ASSERT_EQ(Full.decodeOne(Bytes.data(), Bytes.size(), kEntry, Insn),
+                  Tail.InstructionSize);
+        EXPECT_EQ(Insn.Id, X86_INS_NOP);
+        EXPECT_EQ(Insn.Size, Tail.InstructionSize);
+
+        std::vector<LowOp> Ops;
+        Full.liftToLow(Insn, Ops);
+        ASSERT_EQ(Ops.size(), 1u);
+        EXPECT_EQ(Ops.front().Opcode, NdOp::NOP);
+
+        DecodedInsn LightInsn{};
+        ASSERT_EQ(Light.decodeOneLight(Bytes.data(), Bytes.size(), kEntry,
+                                       LightInsn),
+                  Tail.InstructionSize);
+        EXPECT_EQ(LightInsn.Id, X86_INS_NOP);
+        EXPECT_EQ(LightInsn.Size, Tail.InstructionSize);
+      }
+    }
+  }
+}
+
+TEST(LowInstructionBoundary, MandatoryMpxPrefixesRemainDistinct) {
+  struct PrefixCase {
+    const char *Name;
+    std::vector<uint8_t> Bytes;
+    uint32_t ExpectedId;
+  };
+  const std::array<PrefixCase, 6> Cases = {{
+      {"bndcl", {0xf3, 0x0f, 0x1a, 0xc0}, X86_INS_BNDCL},
+      {"bndcu", {0xf2, 0x0f, 0x1a, 0xc0}, X86_INS_BNDCU},
+      {"bndmov_load", {0x66, 0x0f, 0x1a, 0xc0}, X86_INS_BNDMOV},
+      {"bndmk", {0xf3, 0x0f, 0x1b, 0x00}, X86_INS_BNDMK},
+      {"bndcn", {0xf2, 0x0f, 0x1b, 0xc0}, X86_INS_BNDCN},
+      {"bndmov_store", {0x66, 0x0f, 0x1b, 0xc0}, X86_INS_BNDMOV},
+  }};
+
+  for (Arch Architecture : {Arch::X86, Arch::X64}) {
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(Architecture));
+    for (const PrefixCase &Test : Cases) {
+      SCOPED_TRACE(::testing::Message()
+                   << "arch=" << static_cast<unsigned>(Architecture) << " "
+                   << Test.Name);
+      DecodedInsn Insn{};
+      ASSERT_EQ(Dec.decodeOne(Test.Bytes.data(), Test.Bytes.size(), kEntry,
+                              Insn),
+                static_cast<int>(Test.Bytes.size()));
+      EXPECT_EQ(Insn.Id, Test.ExpectedId);
+    }
+  }
+}
+
+TEST(LowInstructionBoundary, ReachableMpxHintNopsPreserveCfgBoundaries) {
+  const std::vector<uint8_t> Bytes = {
+      0x0f, 0x1a, 0x84, 0x08, 0x78, 0x56, 0x34, 0x12,
+      0x0f, 0x1b, 0xde,
+      0xc3,
+  };
+
+  for (Arch Architecture : {Arch::X86, Arch::X64}) {
+    SCOPED_TRACE(::testing::Message()
+                 << "arch=" << static_cast<unsigned>(Architecture));
+    LowFunc Function =
+        buildFunction(Architecture, InstructionMode::Default, Bytes);
+    EXPECT_TRUE(Function.hasCompleteLiftCoverage());
+    EXPECT_EQ(Function.DecodedInstructionCount, 3u);
+    EXPECT_EQ(Function.LiftedInstructionCount, 3u);
+
+    const LowBlock *Entry = findBlock(Function, kEntry);
+    ASSERT_NE(Entry, nullptr);
+    ASSERT_EQ(Entry->InstructionBoundaries.size(), 3u);
+    EXPECT_EQ(Entry->InstructionBoundaries[0].Address, kEntry);
+    EXPECT_EQ(Entry->InstructionBoundaries[0].Size, 8u);
+    EXPECT_EQ(Entry->InstructionBoundaries[1].Address, kEntry + 8);
+    EXPECT_EQ(Entry->InstructionBoundaries[1].Size, 3u);
+    EXPECT_EQ(Entry->InstructionBoundaries[2].Address, kEntry + 11);
+    EXPECT_EQ(Entry->InstructionBoundaries[2].Size, 1u);
+
+    for (size_t I = 0; I < 2; ++I) {
+      const LowInstructionBoundary &Boundary =
+          Entry->InstructionBoundaries[I];
+      ASSERT_EQ(Boundary.OpCount, 1u);
+      ASSERT_LT(Boundary.FirstOp, Entry->Ops.size());
+      EXPECT_EQ(Entry->Ops[Boundary.FirstOp].Opcode, NdOp::NOP);
+    }
+    EXPECT_FALSE(containsOp(Entry->Ops, NdOp::LOAD));
+    EXPECT_FALSE(containsOp(Entry->Ops, NdOp::STORE));
+  }
+}
+
+TEST(LowInstructionBoundary, UnreachableMpxHintBytesAreNotDecoded) {
+  // jmp +3; unreachable 0F 1A /r register form; ret
+  const std::vector<uint8_t> Bytes = {0xeb, 0x03, 0x0f, 0x1a, 0xde, 0xc3};
+  for (Arch Architecture : {Arch::X86, Arch::X64}) {
+    SCOPED_TRACE(::testing::Message()
+                 << "arch=" << static_cast<unsigned>(Architecture));
+    LowFunc Function =
+        buildFunction(Architecture, InstructionMode::Default, Bytes);
+    EXPECT_TRUE(Function.hasCompleteLiftCoverage());
+    EXPECT_EQ(Function.DecodedInstructionCount, 2u);
+    EXPECT_EQ(Function.LiftedInstructionCount, 2u);
+    EXPECT_TRUE(Function.DecodeFailureAddresses.empty());
+
+    const LowBlock *Entry = findBlock(Function, kEntry);
+    const LowBlock *Target = findBlock(Function, kEntry + 5);
+    ASSERT_NE(Entry, nullptr);
+    ASSERT_NE(Target, nullptr);
+    ASSERT_EQ(Entry->InstructionBoundaries.size(), 1u);
+    ASSERT_EQ(Target->InstructionBoundaries.size(), 1u);
+    EXPECT_EQ(Entry->InstructionBoundaries.front().Address, kEntry);
+    EXPECT_EQ(Target->InstructionBoundaries.front().Address, kEntry + 5);
+  }
+}
+
 TEST(LowInstructionBoundary, PreservesInstructionSlicesAcrossBlockSplits) {
   // xor eax, eax; je target; nop; target: ret
   LowFunc Function = buildFunction(Arch::X64, InstructionMode::Default,

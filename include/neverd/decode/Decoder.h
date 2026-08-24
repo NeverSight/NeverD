@@ -204,6 +204,16 @@ private:
   /// binaries accept them.  Returns true after populating InsnBuf.
   bool decodePrefixedX86Fence(const uint8_t *Bytes, size_t Len, va_t Addr);
 
+  /// Decode the unprefixed register forms of 0F 1A /r and 0F 1B /r.  These
+  /// encodings are no-ops, but Capstone rejects them instead of consuming the
+  /// ModR/M byte.  Mandatory-prefix MPX encodings are deliberately excluded.
+  bool decodeUnprefixedX86MpxRegisterNop(const uint8_t *Bytes, size_t Len,
+                                         va_t Addr);
+
+  /// Apply instruction-id normalization that does not require operand detail.
+  /// Both full and lightweight decode paths use this semantic profile.
+  void fixupDecodedInsnId(cs_insn *I) const;
+
   /// Correct capstone decode-id quirks on \p I, dispatching to the active
   /// architecture lifter's fixup.
   void fixupDecodedInsn(cs_insn *I) const;

@@ -26,6 +26,45 @@ class X64FcomiRT : public SemanticRoundTripFixture,
                    public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(X64FcomiRT, Verify) { roundTripX64(GetParam()); }
 
+TEST(X64FcomiKnownAnswer, UnorderedClearsOfSfAfAndPops) {
+  // Seed OF/SF/AF, compare a quiet NaN with 1.0, then materialize both the
+  // arithmetic flags and the surviving x87 value.  FUCOMIP must produce the
+  // unordered CF/PF/ZF pattern, clear OF/SF/AF, and pop exactly one value.
+  static constexpr uint8_t Code[] = {
+      0xd9, 0xe8,       // fld1
+      0xdd, 0x03,       // fld qword ptr [rbx]
+      0xdf, 0xe9,       // fucomip st, st(1)
+      0xdb, 0x5b, 0x08, // fistp dword ptr [rbx + 8]
+  };
+  static constexpr uint64_t QuietNaN = 0x7ff8000000000000ULL;
+  static constexpr uint64_t SeededFlags = 0x890;
+  static constexpr uint64_t ArithmeticFlags = 0x8d5;
+
+  uc_engine *UC = nullptr;
+  ASSERT_EQ(uc_open(UC_ARCH_X86, UC_MODE_64, &UC), UC_ERR_OK);
+  ASSERT_EQ(uc_mem_map(UC, CODE_BASE, 0x1000, UC_PROT_ALL), UC_ERR_OK);
+  ASSERT_EQ(uc_mem_map(UC, DATA_BASE, 0x1000, UC_PROT_ALL), UC_ERR_OK);
+  ASSERT_EQ(uc_mem_write(UC, CODE_BASE, Code, sizeof(Code)), UC_ERR_OK);
+  ASSERT_EQ(uc_mem_write(UC, DATA_BASE, &QuietNaN, sizeof(QuietNaN)),
+            UC_ERR_OK);
+
+  uint64_t DataAddress = DATA_BASE;
+  uint64_t Flags = SeededFlags;
+  ASSERT_EQ(uc_reg_write(UC, UC_X86_REG_RBX, &DataAddress), UC_ERR_OK);
+  ASSERT_EQ(uc_reg_write(UC, UC_X86_REG_EFLAGS, &Flags), UC_ERR_OK);
+  ASSERT_EQ(uc_emu_start(UC, CODE_BASE, CODE_BASE + sizeof(Code), 0, 0),
+            UC_ERR_OK);
+
+  uint32_t RemainingValue = 0;
+  ASSERT_EQ(uc_reg_read(UC, UC_X86_REG_EFLAGS, &Flags), UC_ERR_OK);
+  ASSERT_EQ(
+      uc_mem_read(UC, DATA_BASE + 8, &RemainingValue, sizeof(RemainingValue)),
+      UC_ERR_OK);
+  EXPECT_EQ(Flags & ArithmeticFlags, 0x45u);
+  EXPECT_EQ(RemainingValue, 1u);
+  EXPECT_EQ(uc_close(UC), UC_ERR_OK);
+}
+
 #define FCOMI_FN \
   "long f(long a,long b){\n" \
   "  double x,y; __builtin_memcpy(&x,&a,8); __builtin_memcpy(&y,&b,8);\n" \
@@ -51,6 +90,19 @@ static const std::vector<RoundTripTC> kX64 = {
   {"fucomi_nan_x",   FCOMI_FN, {D_NAN, D_1  }, "Fcomi", 1, "-mno-sse"},
   {"fucomi_nan_y",   FCOMI_FN, {D_1,   D_NAN}, "Fcomi", 1, "-mno-sse"},
   {"fucomi_nan_both",FCOMI_FN, {D_NAN, D_NAN}, "Fcomi", 1, "-mno-sse"},
+  {"fucomip_flags_clear_pop",
+   "unsigned long f(unsigned long bits){\n"
+   "  double x; __builtin_memcpy(&x,&bits,8);\n"
+   "  unsigned long flags; int marker;\n"
+   "  __asm__ volatile(\n"
+   "    \"mov $0x890, %%eax\\n\\tpush %%rax\\n\\tpopfq\\n\\t\"\n"
+   "    \"fld1\\n\\tfldl %2\\n\\tfucomip %%st(1), %%st\\n\\t\"\n"
+   "    \"fistpl %1\\n\\tpushfq\\n\\tpop %0\"\n"
+   "    : \"=r\"(flags), \"=m\"(marker) : \"m\"(x)\n"
+   "    : \"rax\", \"cc\", \"memory\");\n"
+   "  return ((unsigned long)(unsigned)marker << 12) | (flags & 0x8d5ul);\n"
+   "}\n",
+   {D_NAN}, "Fcomi", 0, "-mno-sse -mfpmath=387"},
 };
 // clang-format on
 

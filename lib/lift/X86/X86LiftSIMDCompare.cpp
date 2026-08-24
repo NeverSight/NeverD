@@ -332,6 +332,7 @@ bool liftSIMDCompare(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     S.emit(NdOp::COPY, NdVar::reg(x86reg::PF, 1), {Unord});
     S.emit(NdOp::COPY, NdVar::reg(x86reg::OF, 1), {NdVar::cst(0, 1)});
     S.emit(NdOp::COPY, NdVar::reg(x86reg::SF, 1), {NdVar::cst(0, 1)});
+    S.emit(NdOp::COPY, NdVar::reg(x86reg::AF, 1), {NdVar::cst(0, 1)});
     break;
   }
   // VEX FP compare (3-operand: dst, src1, src2 [, imm]).  The predicate lives

@@ -203,3 +203,17 @@ static const std::vector<RoundTripTC> kX64CoreRT = {
 // clang-format on
 
 INSTANTIATE_TEST_SUITE_P(CoreRT, X64RoundTrip, ::testing::ValuesIn(kX64CoreRT), rtTCName);
+
+class X64SysRegRT : public SemanticRoundTripFixture {};
+
+TEST_F(X64SysRegRT, StrR32ZeroExt) {
+  // A 32-bit register destination receives the 16-bit task-register selector
+  // zero-extended to 32 bits.  The nonzero upper-word sentinel distinguishes
+  // that architectural write from a 16-bit partial-register update.
+  roundTripX64({"str_r32_zero_ext",
+                "unsigned long str_r32_zero_ext(unsigned long x) {\n"
+                "  __asm__ volatile (\"str %k0\" : \"+r\"(x));\n"
+                "  return x;\n"
+                "}\n",
+                {0xA5A55A5ADEADBEEFULL}, "SysRegRT", 1});
+}

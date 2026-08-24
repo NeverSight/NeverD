@@ -16,11 +16,80 @@
 #include "neverd/ir/med/LowToMed.h"
 
 #include <algorithm>
+#include <cassert>
 #include <map>
 #include <set>
 #include <vector>
 
 namespace neverd {
+
+MedVar LowToMedConverter::spliceX86Subregister(const MedVar &Wide,
+                                               const MedVar &Narrow,
+                                               uint16_t ByteOffset, va_t Addr,
+                                               std::vector<MedOp> &Ops) {
+  assert(Wide.Size > 0 && Narrow.Size > 0);
+  assert(Narrow.Size <= Wide.Size);
+  assert(ByteOffset + Narrow.Size <= Wide.Size);
+
+  auto slice = [&](uint16_t Offset, uint16_t Size) {
+    if (Offset == 0 && Size == Wide.Size)
+      return Wide;
+    MedVar Piece;
+    Piece.Kind = MedVar::Temp;
+    Piece.Id = allocVarId();
+    Piece.Size = Size;
+    Piece.TheArch = TargetArch;
+    MedOp Sub;
+    Sub.Opcode = NdOp::SUBBYTES;
+    Sub.Addr = Addr;
+    Sub.Output = Piece;
+    Sub.addInput(Wide);
+    Sub.addInput(MedVar::makeConst(Offset, 4));
+    Ops.push_back(std::move(Sub));
+    return Piece;
+  };
+
+  // CONCAT inputs are ordered (high, low).  Start with the replacement bytes,
+  // prepend the preserved low prefix, then append the preserved high suffix.
+  MedVar Acc = Narrow;
+  if (ByteOffset > 0) {
+    MedVar Low = slice(0, ByteOffset);
+    MedVar Combined;
+    Combined.Kind = MedVar::Temp;
+    Combined.Id = allocVarId();
+    Combined.Size = static_cast<uint16_t>(ByteOffset + Narrow.Size);
+    Combined.TheArch = TargetArch;
+    MedOp Cat;
+    Cat.Opcode = NdOp::CONCAT;
+    Cat.Addr = Addr;
+    Cat.Output = Combined;
+    Cat.addInput(Acc);
+    Cat.addInput(Low);
+    Ops.push_back(std::move(Cat));
+    Acc = Combined;
+  }
+
+  uint16_t HighOffset = static_cast<uint16_t>(ByteOffset + Narrow.Size);
+  if (HighOffset < Wide.Size) {
+    MedVar High = slice(HighOffset,
+                        static_cast<uint16_t>(Wide.Size - HighOffset));
+    MedVar Combined;
+    Combined.Kind = MedVar::Temp;
+    Combined.Id = allocVarId();
+    Combined.Size = Wide.Size;
+    Combined.TheArch = TargetArch;
+    MedOp Cat;
+    Cat.Opcode = NdOp::CONCAT;
+    Cat.Addr = Addr;
+    Cat.Output = Combined;
+    Cat.addInput(High);
+    Cat.addInput(Acc);
+    Ops.push_back(std::move(Cat));
+    Acc = Combined;
+  }
+
+  return Acc;
+}
 
 // Post-SSA: reconstruct wide reads that overlap a *loop-carried* narrow
 // sub-register phi (x86/x64 only).
@@ -52,8 +121,9 @@ void LowToMedConverter::mergeLoopCarriedPartialReads(MedFunc &Func) {
   const auto &TRI = getTargetRegInfo(TargetArch);
 
   for (auto &MB : Func.Blocks) {
-    // Narrow (<8 byte) sub-register phi outputs carry partial values across the
-    // loop back-edge.  `Current` drops once a later op overwrites the region,
+    // Preserving sub-register phi outputs carry partial values across the loop
+    // back-edge.  This includes AL/AX and legacy XMM/scalar SIMD writes into a
+    // wider vector slot. `Current` drops once a later op overwrites the region,
     // so reads after an in-block redefinition keep their own (SSA) value.
     struct PhiInfo {
       int Id;
@@ -72,14 +142,13 @@ void LowToMedConverter::mergeLoopCarriedPartialReads(MedFunc &Func) {
       if (Phi.Output.Kind == MedVar::Reg && Phi.Output.Size > 0)
         AllPhiRegions.push_back({Phi.Output.RegOff, Phi.Output.Size});
     for (const auto &Phi : MB.Phis)
-      // Only 8-bit and 16-bit sub-register writes are *partial* on x86-64
-      // (they preserve the parent's upper bits).  A 32-bit write zero-extends
-      // the full 64-bit register, so a 32-bit phi must NOT be merged as a
-      // partial value into a 64-bit read — that case is a plain zext handled by
-      // the wide-register phi / Phase A.  Merging it here corrupted loops whose
-      // counter lives in a 32-bit sub-register (reverse_bits/interleave_bits…).
-      if (Phi.Output.Kind == MedVar::Reg &&
-          (Phi.Output.Size == 1 || Phi.Output.Size == 2))
+      // Decide from the target table, not from a width shortcut: EAX writes
+      // zero-extend and are whole-parent definitions, while a same-sized XMM
+      // write preserves the YMM high half and remains genuinely partial.
+      if (Phi.Output.Kind == MedVar::Reg && Phi.Output.Size > 0 &&
+          !TRI.writeZeroExtends(Phi.Output.RegOff, Phi.Output.Size) &&
+          TRI.findWideReg(Phi.Output.RegOff, Phi.Output.Size).second >
+              Phi.Output.Size)
         NarrowPhis[{Phi.Output.RegOff, Phi.Output.Size}] = {
             Phi.Output.Id, Phi.Output.SSAVer, true};
     if (NarrowPhis.empty())
@@ -97,7 +166,7 @@ void LowToMedConverter::mergeLoopCarriedPartialReads(MedFunc &Func) {
 
       for (uint8_t I = 0; I < MOp.NumInputs; ++I) {
         const MedVar &Inp = MOp.Inputs[I];
-        if (Inp.Kind != MedVar::Reg || Inp.Size == 0 || Inp.Size > 8)
+        if (Inp.Kind != MedVar::Reg || Inp.Size == 0)
           continue;
         uint64_t WideOff = Inp.RegOff;
         uint16_t WideSz = Inp.Size;
@@ -144,12 +213,6 @@ void LowToMedConverter::mergeLoopCarriedPartialReads(MedFunc &Func) {
         std::vector<MedOp> Ops;
         MedVar Cur = Inp;
         for (const auto &NW : Narrows) {
-          uint64_t Mask = ((NW.Sz >= 8) ? ~0ULL : ((1ULL << (NW.Sz * 8)) - 1))
-                          << (NW.ByteOff * 8);
-          uint64_t ClearMask = ~Mask;
-          if (WideSz < 8)
-            ClearMask &= ((1ULL << (WideSz * 8)) - 1);
-
           MedVar Narrow;
           Narrow.Kind = MedVar::Reg;
           Narrow.Id = NW.Id;
@@ -157,64 +220,7 @@ void LowToMedConverter::mergeLoopCarriedPartialReads(MedFunc &Func) {
           Narrow.Size = NW.Sz;
           Narrow.RegOff = NW.Off;
           Narrow.TheArch = TargetArch;
-
-          MedVar Zext;
-          Zext.Kind = MedVar::Temp;
-          Zext.Id = allocVarId();
-          Zext.Size = WideSz;
-          Zext.TheArch = TargetArch;
-          MedOp ZextOp;
-          ZextOp.Opcode = NdOp::INT_ZEXT;
-          ZextOp.Addr = MOp.Addr;
-          ZextOp.Output = Zext;
-          ZextOp.addInput(Narrow);
-          Ops.push_back(ZextOp);
-
-          MedVar Placed = Zext;
-          if (NW.ByteOff > 0) {
-            MedVar Shifted;
-            Shifted.Kind = MedVar::Temp;
-            Shifted.Id = allocVarId();
-            Shifted.Size = WideSz;
-            Shifted.TheArch = TargetArch;
-            MedOp ShOp;
-            ShOp.Opcode = NdOp::INT_LEFT;
-            ShOp.Addr = MOp.Addr;
-            ShOp.Output = Shifted;
-            ShOp.addInput(Zext);
-            ShOp.addInput(MedVar::makeConst(
-                static_cast<uint64_t>(NW.ByteOff) * 8, WideSz));
-            Ops.push_back(ShOp);
-            Placed = Shifted;
-          }
-
-          MedVar Cleared;
-          Cleared.Kind = MedVar::Temp;
-          Cleared.Id = allocVarId();
-          Cleared.Size = WideSz;
-          Cleared.TheArch = TargetArch;
-          MedOp AndOp;
-          AndOp.Opcode = NdOp::INT_AND;
-          AndOp.Addr = MOp.Addr;
-          AndOp.Output = Cleared;
-          AndOp.addInput(Cur);
-          AndOp.addInput(MedVar::makeConst(ClearMask, WideSz));
-          Ops.push_back(AndOp);
-
-          MedVar Combined;
-          Combined.Kind = MedVar::Temp;
-          Combined.Id = allocVarId();
-          Combined.Size = WideSz;
-          Combined.TheArch = TargetArch;
-          MedOp OrOp;
-          OrOp.Opcode = NdOp::INT_OR;
-          OrOp.Addr = MOp.Addr;
-          OrOp.Output = Combined;
-          OrOp.addInput(Cleared);
-          OrOp.addInput(Placed);
-          Ops.push_back(OrOp);
-
-          Cur = Combined;
+          Cur = spliceX86Subregister(Cur, Narrow, NW.ByteOff, MOp.Addr, Ops);
         }
 
         Merged[{WideOff, WideSz}] = Cur;
@@ -345,79 +351,13 @@ void LowToMedConverter::fixupPartialWritesX86(MedFunc &Func) {
         std::vector<MedOp> Ops;
         MedVar Cur = Inp; // start from the wide value as-is
         for (const auto &NW : Narrows) {
-          uint64_t Mask = ((NW.Sz >= 8) ? ~0ULL : ((1ULL << (NW.Sz * 8)) - 1))
-                          << (NW.ByteOff * 8);
-          uint64_t ClearMask = ~Mask;
-          if (WideSz < 8)
-            ClearMask &= (WideSz >= 8) ? ~0ULL : ((1ULL << (WideSz * 8)) - 1);
-
           MedVar Narrow;
           Narrow.Kind = MedVar::Reg;
           Narrow.Id = NW.Id;
           Narrow.Size = NW.Sz;
           Narrow.RegOff = NW.Off;
           Narrow.TheArch = TargetArch;
-
-          // zext narrow → wide width
-          MedVar Zext;
-          Zext.Kind = MedVar::Temp;
-          Zext.Id = allocVarId();
-          Zext.Size = WideSz;
-          Zext.TheArch = TargetArch;
-          MedOp ZextOp;
-          ZextOp.Opcode = NdOp::INT_ZEXT;
-          ZextOp.Addr = MOp.Addr;
-          ZextOp.Output = Zext;
-          ZextOp.addInput(Narrow);
-          Ops.push_back(ZextOp);
-
-          MedVar Placed = Zext;
-          if (NW.ByteOff > 0) {
-            MedVar Shifted;
-            Shifted.Kind = MedVar::Temp;
-            Shifted.Id = allocVarId();
-            Shifted.Size = WideSz;
-            Shifted.TheArch = TargetArch;
-            MedOp ShOp;
-            ShOp.Opcode = NdOp::INT_LEFT;
-            ShOp.Addr = MOp.Addr;
-            ShOp.Output = Shifted;
-            ShOp.addInput(Zext);
-            ShOp.addInput(MedVar::makeConst(
-                static_cast<uint64_t>(NW.ByteOff) * 8, WideSz));
-            Ops.push_back(ShOp);
-            Placed = Shifted;
-          }
-
-          // clear the target bytes of the running value
-          MedVar Cleared;
-          Cleared.Kind = MedVar::Temp;
-          Cleared.Id = allocVarId();
-          Cleared.Size = WideSz;
-          Cleared.TheArch = TargetArch;
-          MedOp AndOp;
-          AndOp.Opcode = NdOp::INT_AND;
-          AndOp.Addr = MOp.Addr;
-          AndOp.Output = Cleared;
-          AndOp.addInput(Cur);
-          AndOp.addInput(MedVar::makeConst(ClearMask, WideSz));
-          Ops.push_back(AndOp);
-
-          // or in the placed narrow value
-          MedVar Combined;
-          Combined.Kind = MedVar::Temp;
-          Combined.Id = allocVarId();
-          Combined.Size = WideSz;
-          Combined.TheArch = TargetArch;
-          MedOp OrOp;
-          OrOp.Opcode = NdOp::INT_OR;
-          OrOp.Addr = MOp.Addr;
-          OrOp.Output = Combined;
-          OrOp.addInput(Cleared);
-          OrOp.addInput(Placed);
-          Ops.push_back(OrOp);
-
-          Cur = Combined;
+          Cur = spliceX86Subregister(Cur, Narrow, NW.ByteOff, MOp.Addr, Ops);
         }
 
         Merged[{WideOff, WideSz}] = Cur;

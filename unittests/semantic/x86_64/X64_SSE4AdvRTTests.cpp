@@ -167,6 +167,48 @@ static const std::vector<RoundTripTC> kRoundSS = {
 // DPPS / DPPD — SSE4.1 dot product
 // ============================================================================
 static const std::vector<RoundTripTC> kDPPS = {
+  {"dpps_pairwise_order",
+   "typedef float v4f __attribute__((vector_size(16)));\n"
+   "long dpps_pairwise_order(long bits) {\n"
+   "  float x; __builtin_memcpy(&x, &bits, 4);\n"
+   "  v4f lhs = {x, 1.0f, -x, 1.0f};\n"
+   "  v4f rhs = {1.0f, 1.0f, 1.0f, 1.0f};\n"
+   "  v4f result = __builtin_ia32_dpps(lhs, rhs, 0xf1);\n"
+   "  float lane = result[0];\n"
+   "  unsigned out; __builtin_memcpy(&out, &lane, 4);\n"
+   "  return (long)out;\n"
+   "}\n",
+   {0x60ad78ecULL}, "DPPS", 1, "-msse4.1 -mno-avx"},
+
+  {"dppd_masked_negative_zero",
+   "typedef double v2d __attribute__((vector_size(16)));\n"
+   "long dppd_masked_negative_zero(long bits) {\n"
+   "  double x; __builtin_memcpy(&x, &bits, 8);\n"
+   "  v2d lhs = {x, 0.0};\n"
+   "  v2d rhs = {1.0, 1.0};\n"
+   "  v2d result = __builtin_ia32_dppd(lhs, rhs, 0x11);\n"
+   "  double lane = result[0];\n"
+   "  long out; __builtin_memcpy(&out, &lane, 8);\n"
+   "  return out;\n"
+   "}\n",
+   {0x8000000000000000ULL}, "DPPS", 1, "-msse4.1 -mno-avx"},
+
+  {"vdpps_ymm_pairwise_lanes",
+   "typedef float v8f __attribute__((vector_size(32)));\n"
+   "long vdpps_ymm_pairwise_lanes(long bits) {\n"
+   "  float x; __builtin_memcpy(&x, &bits, 4);\n"
+   "  v8f lhs = {x, 1.0f, -x, 1.0f, 1.0f, 2.0f, 3.0f, 4.0f};\n"
+   "  v8f rhs = {1.0f, 1.0f, 1.0f, 1.0f,\n"
+   "             1.0f, 1.0f, 1.0f, 1.0f};\n"
+   "  v8f result = __builtin_ia32_dpps256(lhs, rhs, 0xf1);\n"
+   "  float lo = result[0], hi = result[4];\n"
+   "  unsigned lo_bits, hi_bits;\n"
+   "  __builtin_memcpy(&lo_bits, &lo, 4);\n"
+   "  __builtin_memcpy(&hi_bits, &hi, 4);\n"
+   "  return (long)(((unsigned long)hi_bits << 32) | lo_bits);\n"
+   "}\n",
+   {0x60ad78ecULL}, "DPPS", 1, "-mavx"},
+
   {"dpps_basic",
    "typedef float v4f __attribute__((vector_size(16)));\n"
    "long dpps_basic(long a, long b) {\n"

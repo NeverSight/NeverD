@@ -113,11 +113,18 @@ private:
   /// x86/x86-64: merge a more-recent narrow partial write (AL/AH/AX/...) into a
   /// subsequent wider read of the parent register (LowToMedX86.cpp, Phase B2).
   void fixupPartialWritesX86(MedFunc &Func);
-  /// x86/x86-64: when an 8/16-bit partial write's parent register is read in a
-  /// *different* block (so Phase B2's in-block merge cannot reach it), define
-  /// the wide parent right after the partial write so buildSsa carries the
-  /// merged value across the block boundary / into successor phis
-  /// (LowToMedX86.cpp, Phase B2x).
+  /// Replace one byte region of an x86 register value without assuming the
+  /// containing register fits in a uint64_t.  SUBBYTES keeps the unaffected
+  /// prefix/suffix and CONCAT rebuilds the full value, so this is equally valid
+  /// for GPR, XMM/YMM, and future wider register slots.
+  MedVar spliceX86Subregister(const MedVar &Wide, const MedVar &Narrow,
+                              uint16_t ByteOffset, va_t Addr,
+                              std::vector<MedOp> &Ops);
+  /// x86/x86-64: when a preserving partial write (AL/AX, legacy XMM/scalar
+  /// SIMD, ...) has a parent register read in a *different* block (so Phase
+  /// B2's in-block merge cannot reach it), define the wide parent right after
+  /// the partial write so buildSsa carries the merged value across the block
+  /// boundary / into successor phis (LowToMedX86.cpp, Phase B2x).
   void mergePartialWritesCrossBlockX86(MedFunc &Func);
   /// ARM/AArch64: reconstruct a full-width NEON Q read from its two more-recent
   /// 8-byte D halves within a block (LowToMedARM.cpp, Phase B3).

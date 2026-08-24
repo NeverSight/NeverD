@@ -38,6 +38,7 @@ public:
 
   void setStrict(bool S) { Strict = S; }
   bool isStrict() const { return Strict; }
+  Arch targetArch() const { return TargetArch; }
 
   /// x87 stack-top (TOP) accessors.  The ST(i) macro names physical slot
   /// (TOP+i)&7, so TOP advances in lift order; the CFG builder reads it around

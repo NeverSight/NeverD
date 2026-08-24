@@ -132,7 +132,8 @@ int Decoder::decodeOne(const uint8_t *Bytes, size_t Len, va_t Addr,
   uint64_t A = Addr;
 
   if (!cs_disasm_iter(Handle, &Code, &Sz, &A, InsnBuf) &&
-      !decodePrefixedX86Fence(Bytes, Len, Addr))
+      !decodePrefixedX86Fence(Bytes, Len, Addr) &&
+      !decodeUnprefixedX86MpxRegisterNop(Bytes, Len, Addr))
     return 0;
 
   fixupDecodedInsn(InsnBuf);
@@ -182,13 +183,13 @@ int Decoder::decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,
   uint64_t A = Addr;
 
   if (!cs_disasm_iter(Handle, &Code, &Sz, &A, InsnBuf) &&
-      !decodePrefixedX86Fence(Bytes, Len, Addr))
+      !decodePrefixedX86Fence(Bytes, Len, Addr) &&
+      !decodeUnprefixedX86MpxRegisterNop(Bytes, Len, Addr))
     return 0;
 
-  // No fixupDecodedInsn here: the id fixups (x86 cmp/vex-cmp) read cs_detail,
-  // which is absent when detail is disabled, and they only matter for lifting,
-  // never for size stepping.  Operand-aware classification is valid when the
-  // caller deliberately leaves detail enabled (ARM function verification).
+  // Detail-independent profile normalization must agree with the full decode
+  // path.  Operand-aware id fixups remain exclusive to decodeOne.
+  fixupDecodedInsnId(InsnBuf);
   Out.Addr = InsnBuf->address;
   Out.Size = static_cast<uint16_t>(InsnBuf->size);
   Out.Id = InsnBuf->id;
@@ -225,6 +226,36 @@ bool Decoder::decodePrefixedX86Fence(const uint8_t *Bytes, size_t Len,
   std::memset(InsnBuf->bytes, 0x66, PrefixCount);
   InsnBuf->address = Addr;
   InsnBuf->size = static_cast<uint16_t>(TotalSize);
+  return true;
+}
+
+bool Decoder::decodeUnprefixedX86MpxRegisterNop(const uint8_t *Bytes,
+                                                size_t Len, va_t Addr) {
+  if (!X86 || !Bytes || !InsnBuf || Len < 3 || Bytes[0] != 0x0f ||
+      (Bytes[1] != 0x1a && Bytes[1] != 0x1b) ||
+      (Bytes[2] & 0xc0) != 0xc0)
+    return false;
+
+  // cs_malloc owns the detail allocation.  Preserve its pointer while
+  // replacing the failed decode result with a complete three-byte NOP.
+  cs_detail *SavedDetail = InsnBuf->detail;
+  std::memset(InsnBuf, 0, sizeof(*InsnBuf));
+  InsnBuf->detail = SavedDetail;
+  if (SavedDetail)
+    std::memset(SavedDetail, 0, sizeof(*SavedDetail));
+
+  InsnBuf->id = X86_INS_NOP;
+  InsnBuf->address = Addr;
+  InsnBuf->size = 3;
+  std::memcpy(InsnBuf->bytes, Bytes, InsnBuf->size);
+  std::memcpy(InsnBuf->mnemonic, "nop", 4);
+  if (SavedDetail) {
+    SavedDetail->x86.opcode[0] = Bytes[0];
+    SavedDetail->x86.opcode[1] = Bytes[1];
+    SavedDetail->x86.addr_size = TargetArch == Arch::X64 ? 8 : 4;
+    SavedDetail->x86.modrm = Bytes[2];
+    SavedDetail->x86.encoding.modrm_offset = 2;
+  }
   return true;
 }
 
@@ -278,12 +309,29 @@ Decoder::getX86ScalarOperandOccurrence() const {
 void Decoder::fixupDecodedInsn(cs_insn *I) const {
   if (!I)
     return;
+  fixupDecodedInsnId(I);
   if (X86)
     X86Lifter::fixupDecodedInsn(I);
   else if (AArch64)
     AArch64Lifter::fixupDecodedInsn(I);
   else if (ARM)
     ARMLifter::fixupDecodedInsn(I);
+}
+
+void Decoder::fixupDecodedInsnId(cs_insn *I) const {
+  if (!X86 || !I ||
+      (I->id != X86_INS_BNDLDX && I->id != X86_INS_BNDSTX))
+    return;
+
+  // The x86 compatibility profile treats no-mandatory-prefix 0F 1A/1B as the
+  // MPX-disabled form.  Retaining Capstone's BND ids would incorrectly
+  // introduce a memory effect during lifting.  Mandatory-prefix forms use
+  // distinct ids and remain untouched.
+  I->id = X86_INS_NOP;
+  std::memcpy(I->mnemonic, "nop", 4);
+  I->op_str[0] = '\0';
+  if (I->detail)
+    I->detail->x86.op_count = 0;
 }
 
 bool Decoder::isFunctionTerminator(const DecodedInsn &Insn) const {

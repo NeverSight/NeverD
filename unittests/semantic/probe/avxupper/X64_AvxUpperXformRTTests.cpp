@@ -264,6 +264,54 @@ static const std::vector<RoundTripTC> kX64 = {
    "    ::\"r\"(o),\"r\"(x),\"r\"(y):\"ymm0\",\"ymm1\",\"ymm2\",\"memory\");\n" HASH8("o") "}\n",
    {0xa3}, "AvxUpper", 3, "-mavx2"},
 
+  // Legacy SSE XMM writes preserve the corresponding YMM high half, while a
+  // VEX.128 destination write clears it.  A read-only VEX compare must do
+  // neither.  The jumps place each observation in a successor block so the
+  // register-alias invariant is also exercised through SSA construction.
+  {"vex128_upper_policy",
+   "long vex128_upper_policy(long a){\n"
+   "  unsigned long long init[4]={0x1111111122222222ULL,0x3333333344444444ULL,"
+   "0x5555555566666666ULL,0x7777777788888888ULL};\n"
+   "  unsigned long long legacy[4],vex[4],read_only[4];\n"
+   "  __asm__ volatile(\"vmovdqu (%3),%%ymm0\\n\\t"
+   "pxor %%xmm0,%%xmm0\\n\\tjmp 1f\\n\\t1: vmovdqu %%ymm0,(%0)\\n\\t"
+   "vmovdqu (%3),%%ymm0\\n\\tmovl $0x1234,%%eax\\n\\t"
+   "vpinsrw $1,%%eax,%%xmm0,%%xmm0\\n\\tjmp 2f\\n\\t"
+   "2: vmovdqu %%ymm0,(%1)\\n\\tvmovdqu (%3),%%ymm0\\n\\t"
+   "vucomiss %%xmm0,%%xmm0\\n\\tjmp 3f\\n\\t"
+   "3: vmovdqu %%ymm0,(%2)\"\n"
+   "    ::\"r\"(legacy),\"r\"(vex),\"r\"(read_only),\"r\"(init)"
+   ":\"ymm0\",\"eax\",\"cc\",\"memory\");\n"
+   "  long r=0;\n"
+   "  if(legacy[0]==0 && legacy[1]==0 && legacy[2]==init[2] && legacy[3]==init[3]) r|=1;\n"
+   "  if(vex[2]==0 && vex[3]==0) r|=2;\n"
+   "  if(read_only[2]==init[2] && read_only[3]==init[3]) r|=4;\n"
+   "  return r+(a&0); }\n",
+   {0xa3}, "AvxUpper", 3, "-mavx2"},
+
+  {"vzero_state_policy",
+   "long vzero_state_policy(long a){\n"
+   "  unsigned long long x[4]={0x1111111122222222ULL,0x3333333344444444ULL,"
+   "0x5555555566666666ULL,0x7777777788888888ULL};\n"
+   "  unsigned long long y[4]={0x99999999aaaaaaaaULL,0xbbbbbbbbccccccccULL,"
+   "0xddddddddeeeeeeeeULL,0xffffffff12345678ULL};\n"
+   "  unsigned long long up0[4],up1[4],all0[4],all1[4];\n"
+   "  __asm__ volatile(\"vmovdqu (%4),%%ymm0\\n\\tvmovdqu (%5),%%ymm1\\n\\t"
+   "vzeroupper\\n\\tjmp 1f\\n\\t1: vmovdqu %%ymm0,(%0)\\n\\t"
+   "vmovdqu %%ymm1,(%1)\\n\\tvmovdqu (%4),%%ymm0\\n\\t"
+   "vmovdqu (%5),%%ymm1\\n\\tvzeroall\\n\\tjmp 2f\\n\\t"
+   "2: vmovdqu %%ymm0,(%2)\\n\\tvmovdqu %%ymm1,(%3)\"\n"
+   "    ::\"r\"(up0),\"r\"(up1),\"r\"(all0),\"r\"(all1),\"r\"(x),\"r\"(y)\n"
+   "    :\"ymm0\",\"ymm1\",\"ymm2\",\"ymm3\",\"ymm4\",\"ymm5\",\"ymm6\",\"ymm7\",\n"
+   "     \"ymm8\",\"ymm9\",\"ymm10\",\"ymm11\",\"ymm12\",\"ymm13\",\"ymm14\",\"ymm15\",\"memory\");\n"
+   "  long r=0;\n"
+   "  if(up0[0]==x[0] && up0[1]==x[1] && up0[2]==0 && up0[3]==0 &&\n"
+   "     up1[0]==y[0] && up1[1]==y[1] && up1[2]==0 && up1[3]==0) r|=1;\n"
+   "  if((all0[0]|all0[1]|all0[2]|all0[3]|all1[0]|all1[1]|all1[2]|all1[3])==0) r|=2;\n"
+   "  return r+(a&0); }\n",
+   {0xa3}, "AvxUpper", 3,
+   "-mavx2 -fno-vectorize -fno-slp-vectorize"},
+
   // The real magic-modulo shape carried forward (clang autovectorised).
   {"magic_modu1000",
    "long magic_modu1000(long a){\n"
