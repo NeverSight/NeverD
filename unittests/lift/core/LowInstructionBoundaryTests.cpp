@@ -295,6 +295,63 @@ TEST(LowInstructionBoundary,
       Image.DataAddressRelocOperands.at(FieldVA)));
 }
 
+TEST(LowInstructionBoundary,
+     RelocationFreeStackSourceRequiresExactOccurrenceAuthority) {
+  constexpr va_t Table = 0x4000;
+  constexpr va_t InteriorSource = Table + 16;
+  constexpr va_t Owner = Table;
+
+  const AuthenticatedSourceAnchorExemption Exemption{
+      Table, InvalidVA, InteriorSource, Owner, InteriorSource, 8};
+  RelocatedInstructionAddressOccurrence Occurrence;
+  Occurrence.FieldVA = InvalidVA;
+  Occurrence.InstructionAddr = 0x1014;
+  Occurrence.OpSeq = 2;
+  Occurrence.TargetVA = InteriorSource;
+  Occurrence.TargetOwnerVA = Owner;
+  Occurrence.Width = 8;
+  Occurrence.Provenance = ConstantAddressProvenance::DataAddress;
+  Occurrence.DefinesOutput = true;
+  Occurrence.OutputOpcode = NdOp::INT_ADD;
+  Occurrence.OutputWitness = NdVar::tmp(7, 8);
+  Occurrence.Authority = RelocatedInstructionAddressProofKind::
+      AArch64RelocationFreeDataDereference;
+  Occurrence.SeedInstructionAddr = 0x1010;
+  Occurrence.SeedOpSeq = 0;
+  Occurrence.SeedOpcode = NdOp::COPY;
+  Occurrence.SeedInputWitness = NdVar::addressFragment(Table, 8);
+  Occurrence.SeedOutputWitness = NdVar::reg(8, 8);
+  Occurrence.ArithmeticProof.push_back(
+      {Occurrence.InstructionAddr, Occurrence.OpSeq, NdOp::INT_ADD, 0,
+       Occurrence.SeedOutputWitness, NdVar::scalar(16, 8),
+       Occurrence.OutputWitness});
+  Occurrence.DereferenceInstructionAddr = 0x1018;
+  Occurrence.DereferenceOpSeq = 0;
+  Occurrence.DereferenceOpcode = NdOp::LOAD;
+  Occurrence.DereferenceAddressWitness = Occurrence.OutputWitness;
+  Occurrence.DereferenceAccessSize = 8;
+
+  EXPECT_TRUE(authenticatedSourceAnchorExemptionMatches(Exemption, Table, 8, 5,
+                                                        Occurrence));
+
+  auto MayDepend = Occurrence;
+  MayDepend.OutputMayDepend = true;
+  EXPECT_FALSE(authenticatedSourceAnchorExemptionMatches(Exemption, Table, 8, 5,
+                                                         MayDepend));
+
+  auto FakeLoaderField = Occurrence;
+  FakeLoaderField.Authority = RelocatedInstructionAddressProofKind::LoaderField;
+  EXPECT_FALSE(authenticatedSourceAnchorExemptionMatches(Exemption, Table, 8, 5,
+                                                         FakeLoaderField))
+      << "LoaderField authority cannot exist without a real loader field";
+
+  auto EscapesRun = Occurrence;
+  const AuthenticatedSourceAnchorExemption TooWide{
+      Table, InvalidVA, InteriorSource, Owner, InteriorSource, 32};
+  EXPECT_FALSE(authenticatedSourceAnchorExemptionMatches(TooWide, Table, 8, 5,
+                                                         EscapesRun));
+}
+
 TEST(LowInstructionBoundary, StackTableMutationArithmeticFailsClosed) {
   constexpr int64_t Min = std::numeric_limits<int64_t>::min();
   constexpr int64_t Max = std::numeric_limits<int64_t>::max();
@@ -648,6 +705,52 @@ LowFunc buildAArch64PageBaseUse(std::vector<uint8_t> Bytes) {
   }
   CFGBuilder Builder;
   return Builder.build(Image, Dec, kEntry, "aarch64_page_base_use");
+}
+
+LowFunc buildAArch64RelocationFreeOffsetLoad(bool WritableData = false) {
+  constexpr va_t DataPage = 0x9000;
+  constexpr va_t Target = DataPage + 0x10;
+  // adrp x8,0x9000; ldr x8,[x8,#0x10]; ret
+  std::vector<uint8_t> Bytes = {0x48, 0x00, 0x00, 0x90, 0x08, 0x09,
+                                0x40, 0xf9, 0xc0, 0x03, 0x5f, 0xd6};
+
+  BinaryImage Image;
+  Image.Arch = Arch::AArch64;
+  Image.Mode = InstructionMode::Default;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::MachO;
+  Image.Base = kEntry;
+  Image.Entry = kEntry;
+
+  Segment Text;
+  Text.Name = "__TEXT";
+  Text.VA = kEntry;
+  Text.Size = Bytes.size();
+  Text.FileSz = Text.Size;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data = std::move(Bytes);
+  Image.Segments.push_back(std::move(Text));
+
+  Segment Data;
+  Data.Name = "__DATA_CONST";
+  Data.VA = DataPage;
+  Data.Size = 0x100;
+  Data.FileSz = Data.Size;
+  Data.Flags = SegmentFlags::Readable;
+  if (WritableData)
+    Data.Flags = Data.Flags | SegmentFlags::Writable;
+  Data.Data.resize(Data.Size);
+  Image.Segments.push_back(std::move(Data));
+  Image.CodePtrRelocSlots.insert(Target);
+
+  Decoder Dec;
+  if (!Dec.init(Arch::AArch64, InstructionMode::Default)) {
+    ADD_FAILURE() << "decoder initialization failed";
+    return {};
+  }
+  CFGBuilder Builder;
+  return Builder.build(Image, Dec, kEntry,
+                       "aarch64_relocation_free_offset_load");
 }
 
 const LowOp *findAddressMaterialization(const LowFunc &Function,
@@ -1777,6 +1880,42 @@ TEST(LowInstructionBoundary,
   EXPECT_EQ(Materialization->Inputs[0].Provenance,
             ConstantAddressProvenance::DataAddress);
   EXPECT_EQ(Materialization->Inputs[0].AddressOwnerVA, 0x9000u);
+}
+
+TEST(LowInstructionBoundary,
+     AArch64UnsignedOffsetLoadPublishesExactRelocationFreeOccurrence) {
+  const LowFunc Function = buildAArch64RelocationFreeOffsetLoad();
+  std::vector<const RelocatedInstructionAddressOccurrence *> Found;
+  for (const RelocatedInstructionAddressOccurrence &Occurrence :
+       Function.RelocatedInstructionAddressOccurrences)
+    if (Occurrence.TargetVA == 0x9010)
+      Found.push_back(&Occurrence);
+
+  ASSERT_EQ(Found.size(), 1u);
+  const RelocatedInstructionAddressOccurrence &Occurrence = *Found.front();
+  EXPECT_EQ(Occurrence.Authority, RelocatedInstructionAddressProofKind::
+                                      AArch64RelocationFreeDataDereference);
+  EXPECT_EQ(Occurrence.FieldVA, InvalidVA);
+  EXPECT_TRUE(Occurrence.DefinesOutput);
+  EXPECT_FALSE(Occurrence.OutputMayDepend);
+  EXPECT_EQ(Occurrence.Provenance, ConstantAddressProvenance::DataAddress);
+  EXPECT_EQ(Occurrence.TargetOwnerVA, 0x9000u);
+  EXPECT_EQ(Occurrence.InstructionAddr, kEntry + 4);
+  EXPECT_EQ(Occurrence.DereferenceInstructionAddr, kEntry + 4);
+  EXPECT_EQ(Occurrence.DereferenceOpcode, NdOp::LOAD);
+  EXPECT_EQ(Occurrence.DereferenceAccessSize, 8u);
+}
+
+TEST(LowInstructionBoundary,
+     AArch64UnsignedOffsetLoadIntoWritableDataPublishesNoOccurrence) {
+  const LowFunc Function = buildAArch64RelocationFreeOffsetLoad(
+      /*WritableData=*/true);
+  EXPECT_TRUE(
+      std::none_of(Function.RelocatedInstructionAddressOccurrences.begin(),
+                   Function.RelocatedInstructionAddressOccurrences.end(),
+                   [](const RelocatedInstructionAddressOccurrence &Occurrence) {
+                     return Occurrence.TargetVA == 0x9010;
+                   }));
 }
 
 TEST(LowInstructionBoundary,

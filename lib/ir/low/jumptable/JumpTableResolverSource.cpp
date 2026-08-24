@@ -24,6 +24,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <utility>
@@ -657,9 +658,11 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
   // The source trace above authenticates the exact immutable LOADs that filled
   // this frame table.  Their address materializations are consumers of this
   // candidate's one storage owner, not independent adjacent table bases.  Drop
-  // only direct exact-field source addresses whose complete byte spans belong
-  // to this candidate.  Adjusted pointers and unrelated anchors, including an
-  // adjacent table in the same section, continue to bound the run.
+  // only exact source occurrences whose complete byte spans belong to this
+  // candidate.  Loader-field authority remains field keyed; linked AArch64 may
+  // instead use a field-less relocation-free dereference certificate.  Adjusted
+  // pointers and unrelated anchors, including an adjacent table in the same
+  // section, continue to bound the run.
   auto authenticatedSourceForOccurrence =
       [&](const RelocatedInstructionAddressOccurrence &Occurrence)
       -> std::optional<AuthenticatedSourceAnchorExemption> {
@@ -668,15 +671,24 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
                        ConstantAddressProvenance Provenance,
                        va_t EffectiveSourceVA, uint64_t SourceByteCount)
         -> std::optional<AuthenticatedSourceAnchorExemption> {
-      if (FieldVA == InvalidVA || TargetVA == InvalidVA ||
-          OwnerVA == InvalidVA || EffectiveSourceVA == InvalidVA ||
-          SourceByteCount == 0 ||
+      if (TargetVA == InvalidVA || OwnerVA == InvalidVA ||
+          EffectiveSourceVA == InvalidVA || SourceByteCount == 0 ||
           Provenance != ConstantAddressProvenance::DataAddress ||
-          Occurrence.FieldVA != FieldVA || Occurrence.TargetVA != TargetVA ||
+          Occurrence.TargetVA != TargetVA ||
           Occurrence.TargetOwnerVA != OwnerVA ||
           Occurrence.Provenance != Provenance ||
           Occurrence.InstructionAddr != Producer.Addr ||
           Occurrence.OpSeq != Producer.Seq || Occurrence.OutputMayDepend)
+        return std::nullopt;
+      const bool ExactLoaderField =
+          Occurrence.Authority ==
+              RelocatedInstructionAddressProofKind::LoaderField &&
+          FieldVA != InvalidVA && Occurrence.FieldVA == FieldVA;
+      const bool ExactRelocationFreeOccurrence =
+          Occurrence.Authority == RelocatedInstructionAddressProofKind::
+                                      AArch64RelocationFreeDataDereference &&
+          FieldVA == InvalidVA && Occurrence.FieldVA == InvalidVA;
+      if (!ExactLoaderField && !ExactRelocationFreeOccurrence)
         return std::nullopt;
       const bool ExactProducer =
           Producer.DefinedAtPoint
@@ -728,20 +740,26 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
     }
     return Exact;
   };
-  // Exact decoded occurrences are authoritative for instruction-relative
-  // fields: the loader deliberately leaves their TargetVA unset because it
-  // does not know the containing instruction end.  Keep those occurrences in
-  // the candidate-anchor exemption set, while passing only ordinary complete
-  // fields to the raw loader-anchor helper below.
-  std::map<va_t, AuthenticatedSourceAnchorExemption>
-      AuthenticatedOccurrenceSources;
+  // Keep exact decoded identities instead of copying their variable-length
+  // proof payloads.  Loader-field exemptions are also passed to the raw
+  // loader-anchor helper; relocation-free identities have no FieldVA and can
+  // only remove their already-published decoded anchor below.
+  struct AuthenticatedOccurrenceSource {
+    AuthenticatedSourceAnchorExemption Exemption;
+    size_t OccurrenceIndex = 0;
+  };
+  std::map<va_t, AuthenticatedOccurrenceSource>
+      AuthenticatedLoaderOccurrenceSources;
+  std::vector<AuthenticatedOccurrenceSource>
+      AuthenticatedRelocationFreeOccurrenceSources;
   std::map<va_t, AuthenticatedSourceAnchorExemption> AuthenticatedSources;
-  std::map<va_t, RelocatedInstructionAddressOccurrence>
-      AuthenticatedSourceOccurrences;
   std::set<va_t> AmbiguousAuthenticatedSourceFields;
   if (BudgetAuthenticatedSources) {
-    for (const RelocatedInstructionAddressOccurrence &Occurrence :
-         RelocatedInstructionAddressOccurrences) {
+    for (size_t OccurrenceIndex = 0;
+         OccurrenceIndex < RelocatedInstructionAddressOccurrences.size();
+         ++OccurrenceIndex) {
+      const RelocatedInstructionAddressOccurrence &Occurrence =
+          RelocatedInstructionAddressOccurrences[OccurrenceIndex];
       if (!chargeAuthenticatedSourceEvidence())
         return false;
       std::optional<AuthenticatedSourceAnchorExemption> Exemption =
@@ -753,79 +771,104 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
       if (Occurrence.Width == 0)
         continue;
 
-      // First validate the direct source span against the exact target/owner
-      // already bound to this decoded operation.  A synthetic complete field
-      // is used only for the shared span/owner predicate; a separate check
-      // below requires exactly one real loader-side field record.
-      const RelocatedAddressField ExactDecodedField{
-          0, Occurrence.TargetVA, Occurrence.Width, Occurrence.TargetOwnerVA};
-      if (!authenticatedSourceAnchorExemptionMatches(
-              *Exemption, TableAddr, LoadWidth, RelocRun, Exemption->FieldVA,
-              ExactDecodedField))
-        continue;
-
       unsigned LoaderFieldMatches = 0;
       bool HasCompleteRawField = false;
-      const auto Field = Img.DataAddressRelocOperands.find(Exemption->FieldVA);
-      if (Field != Img.DataAddressRelocOperands.end() &&
-          Field->second.Width == Occurrence.Width &&
-          Field->second.TargetOwnerVA == Occurrence.TargetOwnerVA &&
-          Field->second.PCRelativeFromInstructionEnd ==
-              Occurrence.PCRelativeFromInstructionEnd) {
-        if (Field->second.PCRelativeFromInstructionEnd) {
-          // The loader cannot know InsnEnd and therefore must not publish an
-          // approximate target.  Occurrence.TargetVA is the sole target used.
-          if (Field->second.TargetVA == InvalidVA)
-            ++LoaderFieldMatches;
-        } else if (Field->second.TargetVA == Occurrence.TargetVA) {
-          ++LoaderFieldMatches;
-          HasCompleteRawField = true;
-        }
-      }
-      const auto Materialized =
-          Img.InstructionAddressMaterializations.find(Exemption->FieldVA);
-      if (Materialized != Img.InstructionAddressMaterializations.end() &&
-          Occurrence.DefinesOutput &&
-          !Occurrence.PCRelativeFromInstructionEnd && Occurrence.Width == 4 &&
-          Materialized->second.TargetVA == Occurrence.TargetVA &&
-          Materialized->second.TargetOwnerVA == Occurrence.TargetOwnerVA)
-        ++LoaderFieldMatches;
-      const auto ARMRelative =
-          Img.ARMRelativeLiteralFields.find(Exemption->FieldVA);
-      if (ARMRelative != Img.ARMRelativeLiteralFields.end() &&
-          Occurrence.DefinesOutput &&
-          !Occurrence.PCRelativeFromInstructionEnd && Occurrence.Width == 4 &&
-          ARMRelative->second.TargetVA == Occurrence.TargetVA &&
-          ARMRelative->second.TargetOwnerVA == Occurrence.TargetOwnerVA)
-        ++LoaderFieldMatches;
-      if (LoaderFieldMatches != 1)
-        continue;
+      const bool IsLoaderField =
+          Occurrence.Authority ==
+          RelocatedInstructionAddressProofKind::LoaderField;
+      if (IsLoaderField) {
+        // First validate the direct source span against the exact target/owner
+        // already bound to this decoded operation. A synthetic complete field
+        // is used only for the shared span/owner predicate; a separate check
+        // below requires exactly one real loader-side field record.
+        const RelocatedAddressField ExactDecodedField{
+            0, Occurrence.TargetVA, Occurrence.Width,
+            Occurrence.TargetOwnerVA};
+        if (!authenticatedSourceAnchorExemptionMatches(
+                *Exemption, TableAddr, LoadWidth, RelocRun,
+                Exemption->FieldVA, ExactDecodedField))
+          continue;
 
-      if (AmbiguousAuthenticatedSourceFields.count(Exemption->FieldVA))
-        continue;
-      if (!AuthenticatedOccurrenceSources
-               .emplace(Exemption->FieldVA, *Exemption)
-               .second) {
-        AuthenticatedOccurrenceSources.erase(Exemption->FieldVA);
-        AuthenticatedSources.erase(Exemption->FieldVA);
-        AuthenticatedSourceOccurrences.erase(Exemption->FieldVA);
-        AmbiguousAuthenticatedSourceFields.insert(Exemption->FieldVA);
+        const auto Field =
+            Img.DataAddressRelocOperands.find(Exemption->FieldVA);
+        if (Field != Img.DataAddressRelocOperands.end() &&
+            Field->second.Width == Occurrence.Width &&
+            Field->second.TargetOwnerVA == Occurrence.TargetOwnerVA &&
+            Field->second.PCRelativeFromInstructionEnd ==
+                Occurrence.PCRelativeFromInstructionEnd) {
+          if (Field->second.PCRelativeFromInstructionEnd) {
+            // The loader cannot know InsnEnd and therefore must not publish an
+            // approximate target.  Occurrence.TargetVA is the sole target.
+            if (Field->second.TargetVA == InvalidVA)
+              ++LoaderFieldMatches;
+          } else if (Field->second.TargetVA == Occurrence.TargetVA) {
+            ++LoaderFieldMatches;
+            HasCompleteRawField = true;
+          }
+        }
+        const auto Materialized =
+            Img.InstructionAddressMaterializations.find(Exemption->FieldVA);
+        if (Materialized != Img.InstructionAddressMaterializations.end() &&
+            Occurrence.DefinesOutput &&
+            !Occurrence.PCRelativeFromInstructionEnd &&
+            Occurrence.Width == 4 &&
+            Materialized->second.TargetVA == Occurrence.TargetVA &&
+            Materialized->second.TargetOwnerVA == Occurrence.TargetOwnerVA)
+          ++LoaderFieldMatches;
+        const auto ARMRelative =
+            Img.ARMRelativeLiteralFields.find(Exemption->FieldVA);
+        if (ARMRelative != Img.ARMRelativeLiteralFields.end() &&
+            Occurrence.DefinesOutput &&
+            !Occurrence.PCRelativeFromInstructionEnd &&
+            Occurrence.Width == 4 &&
+            ARMRelative->second.TargetVA == Occurrence.TargetVA &&
+            ARMRelative->second.TargetOwnerVA == Occurrence.TargetOwnerVA)
+          ++LoaderFieldMatches;
+        if (LoaderFieldMatches != 1 ||
+            AmbiguousAuthenticatedSourceFields.count(Exemption->FieldVA))
+          continue;
+        if (!AuthenticatedLoaderOccurrenceSources
+                 .emplace(
+                     Exemption->FieldVA,
+                     AuthenticatedOccurrenceSource{*Exemption, OccurrenceIndex})
+                 .second) {
+          AuthenticatedLoaderOccurrenceSources.erase(Exemption->FieldVA);
+          AuthenticatedSources.erase(Exemption->FieldVA);
+          AmbiguousAuthenticatedSourceFields.insert(Exemption->FieldVA);
+          continue;
+        }
+        if (HasCompleteRawField)
+          AuthenticatedSources.emplace(Exemption->FieldVA, *Exemption);
         continue;
       }
-      if (HasCompleteRawField)
-        AuthenticatedSources.emplace(Exemption->FieldVA, *Exemption);
-      AuthenticatedSourceOccurrences.emplace(Exemption->FieldVA, Occurrence);
+
+      if (Img.Arch != Arch::AArch64 || Img.IsRelocatable ||
+          !authenticatedSourceAnchorExemptionMatches(
+              *Exemption, TableAddr, LoadWidth, RelocRun, Occurrence))
+        continue;
+      AuthenticatedRelocationFreeOccurrenceSources.push_back(
+          {*Exemption, OccurrenceIndex});
     }
+
     std::set<va_t> AuthenticatedSourceTargets;
-    for (const auto &[FieldVA, Exemption] : AuthenticatedOccurrenceSources) {
+    for (const auto &[FieldVA, Source] : AuthenticatedLoaderOccurrenceSources) {
       if (!chargeAuthenticatedSourceEvidence())
         return false;
       (void)FieldVA;
-      AuthenticatedSourceTargets.insert(Exemption.TargetVA);
+      AuthenticatedSourceTargets.insert(Source.Exemption.TargetVA);
+    }
+    for (const AuthenticatedOccurrenceSource &Source :
+         AuthenticatedRelocationFreeOccurrenceSources) {
+      if (!chargeAuthenticatedSourceEvidence())
+        return false;
+      AuthenticatedSourceTargets.insert(Source.Exemption.TargetVA);
     }
     std::set<va_t> TargetsWithIndependentOccurrences;
-    for (const RelocatedInstructionAddressOccurrence &Occurrence :
-         RelocatedInstructionAddressOccurrences) {
+    for (size_t OccurrenceIndex = 0;
+         OccurrenceIndex < RelocatedInstructionAddressOccurrences.size();
+         ++OccurrenceIndex) {
+      const RelocatedInstructionAddressOccurrence &Occurrence =
+          RelocatedInstructionAddressOccurrences[OccurrenceIndex];
       if (!chargeAuthenticatedSourceEvidence())
         return false;
       if (!AuthenticatedSourceTargets.count(Occurrence.TargetVA) ||
@@ -835,16 +878,26 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
           (!Img.RelCodeRelocSlots.count(Occurrence.TargetVA) &&
            !Img.CodePtrRelocSlots.count(Occurrence.TargetVA)))
         continue;
-      const auto Exemption =
-          AuthenticatedOccurrenceSources.find(Occurrence.FieldVA);
-      const auto Identity =
-          AuthenticatedSourceOccurrences.find(Occurrence.FieldVA);
+      const size_t AuthenticatedOccurrenceCount =
+          AuthenticatedLoaderOccurrenceSources.size() +
+          AuthenticatedRelocationFreeOccurrenceSources.size();
+      if (!chargeAuthenticatedSourceEvidence(AuthenticatedOccurrenceCount))
+        return false;
+      auto MatchesAuthenticatedSource = [&](const AuthenticatedOccurrenceSource
+                                                &Source) {
+        return Source.Exemption.TargetVA == Occurrence.TargetVA &&
+               Source.Exemption.TargetOwnerVA == Occurrence.TargetOwnerVA &&
+               Source.OccurrenceIndex == OccurrenceIndex;
+      };
       const bool IsAuthenticatedSource =
-          Exemption != AuthenticatedOccurrenceSources.end() &&
-          Identity != AuthenticatedSourceOccurrences.end() &&
-          Exemption->second.TargetVA == Occurrence.TargetVA &&
-          Exemption->second.TargetOwnerVA == Occurrence.TargetOwnerVA &&
-          Identity->second == Occurrence;
+          std::any_of(AuthenticatedLoaderOccurrenceSources.begin(),
+                      AuthenticatedLoaderOccurrenceSources.end(),
+                      [&](const auto &Item) {
+                        return MatchesAuthenticatedSource(Item.second);
+                      }) ||
+          std::any_of(AuthenticatedRelocationFreeOccurrenceSources.begin(),
+                      AuthenticatedRelocationFreeOccurrenceSources.end(),
+                      MatchesAuthenticatedSource);
       if (!IsAuthenticatedSource)
         TargetsWithIndependentOccurrences.insert(Occurrence.TargetVA);
     }

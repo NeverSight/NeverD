@@ -167,6 +167,15 @@ bool authenticatedSourceAnchorExemptionMatches(
     uint64_t EntryStride, uint32_t Run, va_t FieldVA,
     const RelocatedAddressField &Field);
 
+/// Validate an exemption backed by one exact relocation-free address
+/// occurrence.  Unlike the loader-field overload, this form deliberately has
+/// no FieldVA: its authority is the complete AArch64 materialization and
+/// immediate immutable dereference certificate carried by \p Occurrence.
+bool authenticatedSourceAnchorExemptionMatches(
+    const AuthenticatedSourceAnchorExemption &Exemption, va_t BaseAddr,
+    uint64_t EntryStride, uint32_t Run,
+    const RelocatedInstructionAddressOccurrence &Occurrence);
+
 /// Truncate an absolute code-pointer relocation run at the next independently
 /// materialized table-base anchor.  This prevents two adjacent absolute tables
 /// from being conflated into one physical owner.

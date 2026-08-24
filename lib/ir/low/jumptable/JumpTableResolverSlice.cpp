@@ -5968,6 +5968,10 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
     const uint64_t RightEnd = Right.Offset + Right.Size;
     return Left.Offset < RightEnd && Right.Offset < LeftEnd;
   };
+  auto proofValueClobbers = [&](const NdVar &Output, const NdVar &Value) {
+    return Output.Size != 0 &&
+           (Output == Value || proofRegistersOverlap(Output, Value));
+  };
   auto exactRelocationFreeAddressProof =
       [&](const RelocatedInstructionAddressOccurrence &Occurrence) {
     if (!CurrentImg ||
@@ -6056,33 +6060,69 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
           Step.BaseInputIndex > 1 ||
           (Op->Opcode == NdOp::INT_SUB && Step.BaseInputIndex != 0) ||
           Op->Inputs[Step.BaseInputIndex] != Step.BaseInputWitness ||
-          Step.BaseInputWitness != Current ||
           Op->Inputs[1 - Step.BaseInputIndex] != Step.ScalarInputWitness ||
-          Op->Output != Step.OutputWitness || !Op->Output.isReg() ||
+          Op->Output != Step.OutputWitness ||
+          (!Op->Output.isReg() && !Op->Output.isTemp()) ||
           Op->Output.Size != PointerSize ||
           Step.BaseInputWitness.Size != PointerSize ||
           CurrentImg->InstructionAddressMaterializations.count(Op->Addr))
         return false;
       if (!consumeWork(Rec->second.Ops.size()))
         return false;
+
+      // AArch64 unsigned-offset memory operations lower as an
+      // instruction-local COPY/ADD/LOAD chain. Reconstruct only a full-width
+      // COPY chain into the authenticated arithmetic input; any unrelated
+      // memory effect or clobber fails closed.
+      NdVar BaseAlias = Current;
+      bool SawArithmetic = false;
       for (const LowOp &Other : Rec->second.Ops) {
+        if (&Other == Op) {
+          if (BaseAlias != Step.BaseInputWitness)
+            return false;
+          SawArithmetic = true;
+          continue;
+        }
         const LowMemoryOperandView Memory = lowMemoryOperands(Other);
-        if (Memory.Complete ||
-            (&Other != Op &&
-             (proofRegistersOverlap(Other.Output, Current) ||
-              proofRegistersOverlap(Other.Output, Op->Output))))
+        if (!SawArithmetic) {
+          if (Memory.Complete)
+            return false;
+          if (Other.Opcode == NdOp::COPY && Other.NumInputs == 1 &&
+              Other.Inputs[0] == BaseAlias &&
+              (Other.Output.isReg() || Other.Output.isTemp()) &&
+              Other.Output.Size == PointerSize) {
+            BaseAlias = Other.Output;
+            continue;
+          }
+          if (proofValueClobbers(Other.Output, BaseAlias) ||
+              proofValueClobbers(Other.Output, Op->Output))
+            return false;
+          continue;
+        }
+
+        const bool SameRecordFinalDereference =
+            &Step == &Occurrence.ArithmeticProof.back() &&
+            Occurrence.DereferenceInstructionAddr == Step.InstructionAddr;
+        if (!SameRecordFinalDereference &&
+            (Memory.Complete || proofValueClobbers(Other.Output, Current) ||
+             proofValueClobbers(Other.Output, Op->Output)))
           return false;
       }
+      if (!SawArithmetic)
+        return false;
       const std::optional<uint64_t> Delta = canonicalScalar(*Op, Step);
       if (!Delta || Address > PointerMask ||
-          (Op->Opcode == NdOp::INT_ADD &&
-           *Delta > PointerMask - Address) ||
+          (Op->Opcode == NdOp::INT_ADD && *Delta > PointerMask - Address) ||
           (Op->Opcode == NdOp::INT_SUB && *Delta > Address))
         return false;
       Address = Op->Opcode == NdOp::INT_ADD ? Address + *Delta
                                             : Address - *Delta;
       Current = Op->Output;
-      ExpectedAddress = Rec->second.Addr + Rec->second.Size;
+      ExpectedAddress =
+          (&Step == &Occurrence.ArithmeticProof.back() &&
+           Occurrence.DereferenceInstructionAddr == Step.InstructionAddr)
+              ? Rec->second.Addr
+              : Rec->second.Addr + Rec->second.Size;
     }
     const RelocatedInstructionAddressArithmeticStep &Final =
         Occurrence.ArithmeticProof.back();
@@ -6109,19 +6149,28 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
       return false;
     NdVar DereferenceAddress = Current;
     bool SawDereference = false;
+    bool SawFinalArithmetic =
+        DereferenceRec->second.Addr != Final.InstructionAddr;
     if (!consumeWork(DereferenceRec->second.Ops.size()))
       return false;
     for (const LowOp &Op : DereferenceRec->second.Ops) {
+      if (!SawFinalArithmetic) {
+        if (Op.Addr == Final.InstructionAddr && Op.Seq == Final.OpSeq) {
+          SawFinalArithmetic = true;
+          continue;
+        }
+        continue;
+      }
       const LowMemoryOperandView CandidateMemory = lowMemoryOperands(Op);
       if (&Op == Dereference) {
         if (!CandidateMemory.Complete || !CandidateMemory.Address ||
             *CandidateMemory.Address != DereferenceAddress || SawDereference ||
-            proofRegistersOverlap(Op.Output, Current))
+            proofValueClobbers(Op.Output, Current))
           return false;
         SawDereference = true;
         continue;
       }
-      if (CandidateMemory.Complete || proofRegistersOverlap(Op.Output, Current))
+      if (CandidateMemory.Complete || proofValueClobbers(Op.Output, Current))
         return false;
       if (!SawDereference) {
         if (Op.Opcode != NdOp::COPY || Op.NumInputs != 1 ||
@@ -6135,7 +6184,8 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
       }
     }
     const LowMemoryOperandView Memory = lowMemoryOperands(*Dereference);
-    if (!SawDereference || !Memory.Complete || !Memory.Address ||
+    if (!SawFinalArithmetic || !SawDereference || !Memory.Complete ||
+        !Memory.Address ||
         DereferenceAddress != Occurrence.DereferenceAddressWitness ||
         *Memory.Address != DereferenceAddress ||
         Memory.AccessSize != Occurrence.DereferenceAccessSize ||

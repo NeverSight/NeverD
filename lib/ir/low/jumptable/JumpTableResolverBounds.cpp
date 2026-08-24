@@ -249,17 +249,13 @@ uint32_t countCodePtrRelocRun(const BinaryImage &Img, va_t TableAddr,
   return Run;
 }
 
-bool authenticatedSourceAnchorExemptionMatches(
+static bool authenticatedSourceAnchorSpanMatches(
     const AuthenticatedSourceAnchorExemption &Exemption, va_t BaseAddr,
-    uint64_t EntryStride, uint32_t Run, va_t FieldVA,
-    const RelocatedAddressField &Field) {
+    uint64_t EntryStride, uint32_t Run) {
   if (EntryStride == 0 || Run == 0 || Exemption.CandidateBaseVA != BaseAddr ||
-      Exemption.FieldVA != FieldVA || Exemption.TargetVA == InvalidVA ||
-      Exemption.TargetOwnerVA == InvalidVA ||
+      Exemption.TargetVA == InvalidVA || Exemption.TargetOwnerVA == InvalidVA ||
       Exemption.EffectiveSourceVA == InvalidVA ||
-      Exemption.SourceByteCount == 0 || Field.PCRelativeFromInstructionEnd ||
-      Field.TargetVA != Exemption.TargetVA ||
-      Field.TargetOwnerVA != Exemption.TargetOwnerVA ||
+      Exemption.SourceByteCount == 0 ||
       // An occurrence naming B that is adjusted to read A is not B's storage
       // consumer.  Suppressing B in that case would merge adjacent A/B runs.
       Exemption.TargetVA != Exemption.EffectiveSourceVA ||
@@ -272,6 +268,62 @@ bool authenticatedSourceAnchorExemptionMatches(
   const va_t SourceEnd =
       Exemption.EffectiveSourceVA + Exemption.SourceByteCount;
   return Exemption.EffectiveSourceVA < RunEnd && SourceEnd <= RunEnd;
+}
+
+bool authenticatedSourceAnchorExemptionMatches(
+    const AuthenticatedSourceAnchorExemption &Exemption, va_t BaseAddr,
+    uint64_t EntryStride, uint32_t Run, va_t FieldVA,
+    const RelocatedAddressField &Field) {
+  return Exemption.FieldVA == FieldVA && FieldVA != InvalidVA &&
+         !Field.PCRelativeFromInstructionEnd &&
+         Field.TargetVA == Exemption.TargetVA &&
+         Field.TargetOwnerVA == Exemption.TargetOwnerVA &&
+         authenticatedSourceAnchorSpanMatches(Exemption, BaseAddr, EntryStride,
+                                              Run);
+}
+
+bool authenticatedSourceAnchorExemptionMatches(
+    const AuthenticatedSourceAnchorExemption &Exemption, va_t BaseAddr,
+    uint64_t EntryStride, uint32_t Run,
+    const RelocatedInstructionAddressOccurrence &Occurrence) {
+  if (Exemption.FieldVA != InvalidVA ||
+      Occurrence.Authority != RelocatedInstructionAddressProofKind::
+                                  AArch64RelocationFreeDataDereference ||
+      Occurrence.FieldVA != InvalidVA ||
+      Occurrence.TargetVA != Exemption.TargetVA ||
+      Occurrence.TargetOwnerVA != Exemption.TargetOwnerVA ||
+      Occurrence.Width == 0 ||
+      Occurrence.Provenance != ConstantAddressProvenance::DataAddress ||
+      !Occurrence.DefinesOutput || Occurrence.OutputMayDepend ||
+      Occurrence.InstructionAddr == InvalidVA || Occurrence.OpSeq < 0 ||
+      Occurrence.OutputOpcode == NdOp::NOP ||
+      (!Occurrence.OutputWitness.isReg() &&
+       !Occurrence.OutputWitness.isTemp()) ||
+      Occurrence.OutputWitness.Size != Occurrence.Width ||
+      Occurrence.SeedInstructionAddr == InvalidVA || Occurrence.SeedOpSeq < 0 ||
+      Occurrence.SeedOpcode != NdOp::COPY ||
+      !Occurrence.SeedInputWitness.isConst() ||
+      Occurrence.SeedInputWitness.Provenance !=
+          ConstantAddressProvenance::AddressFragment ||
+      (!Occurrence.SeedOutputWitness.isReg() &&
+       !Occurrence.SeedOutputWitness.isTemp()) ||
+      Occurrence.ArithmeticProof.empty() ||
+      Occurrence.DereferenceInstructionAddr == InvalidVA ||
+      Occurrence.DereferenceOpSeq < 0 ||
+      (Occurrence.DereferenceOpcode != NdOp::LOAD &&
+       Occurrence.DereferenceOpcode != NdOp::STORE) ||
+      Occurrence.DereferenceAccessSize == 0)
+    return false;
+  const RelocatedInstructionAddressArithmeticStep &Final =
+      Occurrence.ArithmeticProof.back();
+  if (Final.InstructionAddr != Occurrence.InstructionAddr ||
+      Final.OpSeq != Occurrence.OpSeq ||
+      Final.Opcode != Occurrence.OutputOpcode ||
+      Final.OutputWitness != Occurrence.OutputWitness ||
+      Occurrence.DereferenceAddressWitness.Size != Occurrence.Width)
+    return false;
+  return authenticatedSourceAnchorSpanMatches(Exemption, BaseAddr, EntryStride,
+                                              Run);
 }
 
 uint32_t boundCodePtrRunByNextAnchor(

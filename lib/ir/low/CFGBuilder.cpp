@@ -348,6 +348,10 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
     const uint64_t RightEnd = Right.Offset + Right.Size;
     return Left.Offset < RightEnd && Right.Offset < LeftEnd;
   };
+  auto proofValueClobbers = [&](const NdVar &Output, const NdVar &Value) {
+    return Output.Size != 0 &&
+           (Output == Value || proofRegistersOverlap(Output, Value));
+  };
   auto relocationFreeProofStillMatches =
       [&](const RelocatedInstructionAddressOccurrence &Occurrence) {
     if (Occurrence.Authority != RelocatedInstructionAddressProofKind::
@@ -432,31 +436,68 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
           Step.BaseInputIndex > 1 ||
           (Op->Opcode == NdOp::INT_SUB && Step.BaseInputIndex != 0) ||
           Op->Inputs[Step.BaseInputIndex] != Step.BaseInputWitness ||
-          Step.BaseInputWitness != Current ||
           Op->Inputs[1 - Step.BaseInputIndex] != Step.ScalarInputWitness ||
-          Op->Output != Step.OutputWitness || !Op->Output.isReg() ||
+          Op->Output != Step.OutputWitness ||
+          (!Op->Output.isReg() && !Op->Output.isTemp()) ||
           Op->Output.Size != PointerSize ||
           Step.BaseInputWitness.Size != PointerSize ||
           Img.InstructionAddressMaterializations.count(Op->Addr))
         return false;
+
+      // Some AArch64 memory encodings lower their unsigned offset into the
+      // same instruction record as an instruction-local COPY/ADD/LOAD chain.
+      // Reconstruct only an exact, full-width COPY chain from the previous
+      // address value to this arithmetic input.  Other operations may coexist
+      // in the record only when they neither touch that chain nor memory.
+      NdVar BaseAlias = Current;
+      bool SawArithmetic = false;
       for (const LowOp &Other : Rec->second.Ops) {
+        if (&Other == Op) {
+          if (BaseAlias != Step.BaseInputWitness)
+            return false;
+          SawArithmetic = true;
+          continue;
+        }
         const LowMemoryOperandView Memory = lowMemoryOperands(Other);
-        if (Memory.Complete ||
-            (&Other != Op &&
-             (proofRegistersOverlap(Other.Output, Current) ||
-              proofRegistersOverlap(Other.Output, Op->Output))))
+        if (!SawArithmetic) {
+          if (Memory.Complete)
+            return false;
+          if (Other.Opcode == NdOp::COPY && Other.NumInputs == 1 &&
+              Other.Inputs[0] == BaseAlias &&
+              (Other.Output.isReg() || Other.Output.isTemp()) &&
+              Other.Output.Size == PointerSize) {
+            BaseAlias = Other.Output;
+            continue;
+          }
+          if (proofValueClobbers(Other.Output, BaseAlias) ||
+              proofValueClobbers(Other.Output, Op->Output))
+            return false;
+          continue;
+        }
+
+        const bool SameRecordFinalDereference =
+            &Step == &Occurrence.ArithmeticProof.back() &&
+            Occurrence.DereferenceInstructionAddr == Step.InstructionAddr;
+        if (!SameRecordFinalDereference &&
+            (Memory.Complete || proofValueClobbers(Other.Output, Current) ||
+             proofValueClobbers(Other.Output, Op->Output)))
           return false;
       }
+      if (!SawArithmetic)
+        return false;
       const std::optional<uint64_t> Delta = canonicalScalar(*Op, Step);
       if (!Delta || Address > PointerMask ||
-          (Op->Opcode == NdOp::INT_ADD &&
-           *Delta > PointerMask - Address) ||
+          (Op->Opcode == NdOp::INT_ADD && *Delta > PointerMask - Address) ||
           (Op->Opcode == NdOp::INT_SUB && *Delta > Address))
         return false;
       Address = Op->Opcode == NdOp::INT_ADD ? Address + *Delta
                                             : Address - *Delta;
       Current = Op->Output;
-      ExpectedAddress = Rec->second.Addr + Rec->second.Size;
+      ExpectedAddress =
+          (&Step == &Occurrence.ArithmeticProof.back() &&
+           Occurrence.DereferenceInstructionAddr == Step.InstructionAddr)
+              ? Rec->second.Addr
+              : Rec->second.Addr + Rec->second.Size;
     }
     const RelocatedInstructionAddressArithmeticStep &Final =
         Occurrence.ArithmeticProof.back();
@@ -483,17 +524,26 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
       return false;
     NdVar DereferenceAddress = Current;
     bool SawDereference = false;
+    bool SawFinalArithmetic =
+        DereferenceRec->second.Addr != Final.InstructionAddr;
     for (const LowOp &Op : DereferenceRec->second.Ops) {
+      if (!SawFinalArithmetic) {
+        if (Op.Addr == Final.InstructionAddr && Op.Seq == Final.OpSeq) {
+          SawFinalArithmetic = true;
+          continue;
+        }
+        continue;
+      }
       const LowMemoryOperandView CandidateMemory = lowMemoryOperands(Op);
       if (&Op == Dereference) {
         if (!CandidateMemory.Complete || !CandidateMemory.Address ||
             *CandidateMemory.Address != DereferenceAddress || SawDereference ||
-            proofRegistersOverlap(Op.Output, Current))
+            proofValueClobbers(Op.Output, Current))
           return false;
         SawDereference = true;
         continue;
       }
-      if (CandidateMemory.Complete || proofRegistersOverlap(Op.Output, Current))
+      if (CandidateMemory.Complete || proofValueClobbers(Op.Output, Current))
         return false;
       if (!SawDereference) {
         if (Op.Opcode != NdOp::COPY || Op.NumInputs != 1 ||
@@ -507,7 +557,8 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
       }
     }
     const LowMemoryOperandView Memory = lowMemoryOperands(*Dereference);
-    if (!SawDereference || !Memory.Complete || !Memory.Address ||
+    if (!SawFinalArithmetic || !SawDereference || !Memory.Complete ||
+        !Memory.Address ||
         DereferenceAddress != Occurrence.DereferenceAddressWitness ||
         *Memory.Address != DereferenceAddress ||
         Memory.AccessSize != Occurrence.DereferenceAccessSize ||
@@ -1838,6 +1889,171 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
           UseRec.IsRet || UseRec.IsOpaqueTerminator ||
           UseRec.IsResumableTerminator)
         break;
+
+      // AArch64 unsigned-offset LDR/STR folds the address calculation into the
+      // memory instruction.  Its LowIR is instruction-local rather than three
+      // records:
+      //
+      //   COPY    tmp, page-reg
+      //   INT_ADD tmp, tmp, #offset
+      //   LOAD    value, tmp
+      //
+      // The relocation-free proof still owns the exact ADD output occurrence;
+      // the immediately following memory op is its dereference witness.  Keep
+      // this narrow shape separate from the ordinary cross-instruction walk:
+      // every transport and the sole memory effect must occur in this exact
+      // InsnRecord, and the usual all-path value queries remain authoritative.
+      const LowOp *LocalArithmetic = nullptr;
+      const LowOp *LocalDereference = nullptr;
+      LowMemoryOperandView LocalDereferenceMemory;
+      NdVar LocalDereferenceAddress;
+      int LocalBaseSide = -1;
+      NdVar LocalAddressValue = CurrentValue;
+      bool InvalidLocalShape = false;
+      for (const LowOp &Op : UseRec.Ops) {
+        const LowMemoryOperandView Memory = lowMemoryOperands(Op);
+        if (!LocalArithmetic) {
+          if (Memory.Complete) {
+            InvalidLocalShape = true;
+            break;
+          }
+          int CandidateBase = -1;
+          if ((Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) &&
+              Op.NumInputs == 2 && (Op.Output.isReg() || Op.Output.isTemp()) &&
+              Op.Output.Size == PointerSize) {
+            const bool LeftAlias = Op.Inputs[0] == LocalAddressValue;
+            const bool RightAlias = Op.Inputs[1] == LocalAddressValue;
+            if (LeftAlias && Op.Inputs[1].isConst())
+              CandidateBase = 0;
+            if (Op.Opcode == NdOp::INT_ADD && RightAlias &&
+                Op.Inputs[0].isConst()) {
+              if (CandidateBase >= 0)
+                CandidateBase = -2;
+              else
+                CandidateBase = 1;
+            }
+          }
+          if (CandidateBase >= 0 &&
+              checkedArithmetic(CurrentAddress, Op, CandidateBase)) {
+            LocalArithmetic = &Op;
+            LocalBaseSide = CandidateBase;
+            LocalAddressValue = Op.Output;
+            continue;
+          }
+          if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+              Op.Inputs[0] == LocalAddressValue &&
+              (Op.Output.isReg() || Op.Output.isTemp()) &&
+              Op.Output.Size == PointerSize) {
+            LocalAddressValue = Op.Output;
+            continue;
+          }
+          if (Op.Output == LocalAddressValue ||
+              overlapsRegister(Op.Output, LocalAddressValue)) {
+            InvalidLocalShape = true;
+            break;
+          }
+          continue;
+        }
+
+        if (Memory.Complete) {
+          if (LocalDereference ||
+              (Op.Opcode != NdOp::LOAD && Op.Opcode != NdOp::STORE) ||
+              !Memory.Address || *Memory.Address != LocalAddressValue ||
+              Op.Output == LocalAddressValue ||
+              overlapsRegister(Op.Output, LocalAddressValue)) {
+            InvalidLocalShape = true;
+            break;
+          }
+          LocalDereference = &Op;
+          LocalDereferenceMemory = Memory;
+          LocalDereferenceAddress = *Memory.Address;
+          continue;
+        }
+        if (!LocalDereference && Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+            Op.Inputs[0] == LocalAddressValue &&
+            (Op.Output.isReg() || Op.Output.isTemp()) &&
+            Op.Output.Size == PointerSize) {
+          LocalAddressValue = Op.Output;
+          continue;
+        }
+        if (!LocalDereference || Op.Output == LocalAddressValue ||
+            overlapsRegister(Op.Output, LocalAddressValue)) {
+          InvalidLocalShape = true;
+          break;
+        }
+      }
+
+      if (!InvalidLocalShape && LocalArithmetic && LocalBaseSide >= 0 &&
+          LocalDereference && LocalDereferenceMemory.AccessSize != 0 &&
+          !Img.InstructionAddressMaterializations.count(
+              LocalArithmetic->Addr)) {
+        const std::optional<va_t> NextAddress =
+            checkedArithmetic(CurrentAddress, *LocalArithmetic, LocalBaseSide);
+        const std::optional<va_t> Owner =
+            NextAddress ? uniqueImmutableDataOwner(
+                              *NextAddress, LocalDereferenceMemory.AccessSize)
+                        : std::nullopt;
+        if (!NextAddress || !Owner ||
+            !Img.relocatedTargetBelongsToOwner(*NextAddress, *Owner))
+          break;
+
+        CandidateQueries.push_back({LocalArithmetic->Inputs[LocalBaseSide],
+                                    LocalArithmetic->Addr,
+                                    LocalArithmetic->Seq,
+                                    {CurrentDefinition},
+                                    /*AllowZeroExtension=*/false,
+                                    /*AllowSignExtension=*/false});
+        Steps.push_back({LocalArithmetic->Addr, LocalArithmetic->Seq,
+                         LocalArithmetic->Opcode,
+                         static_cast<uint8_t>(LocalBaseSide),
+                         LocalArithmetic->Inputs[LocalBaseSide],
+                         LocalArithmetic->Inputs[1 - LocalBaseSide],
+                         LocalArithmetic->Output});
+        CurrentValue = LocalArithmetic->Output;
+        CurrentAddress = *NextAddress;
+        CurrentDefinition = {LocalArithmetic->Output, LocalArithmetic->Addr,
+                             LocalArithmetic->Seq,
+                             /*DefinedAtPoint=*/true};
+        CandidateQueries.push_back({LocalDereferenceAddress,
+                                    LocalDereference->Addr,
+                                    LocalDereference->Seq,
+                                    {CurrentDefinition},
+                                    /*AllowZeroExtension=*/false,
+                                    /*AllowSignExtension=*/false});
+
+        RelocationFreeCandidate Candidate;
+        for (JumpTableValueQuery &Query : CandidateQueries) {
+          Candidate.QueryIndices.push_back(RelocationFreeQueries.size());
+          RelocationFreeQueries.push_back(std::move(Query));
+        }
+        RelocatedInstructionAddressOccurrence &Occurrence =
+            Candidate.Occurrence;
+        Occurrence.FieldVA = InvalidVA;
+        Occurrence.InstructionAddr = Steps.back().InstructionAddr;
+        Occurrence.OpSeq = Steps.back().OpSeq;
+        Occurrence.TargetVA = CurrentAddress;
+        Occurrence.TargetOwnerVA = *Owner;
+        Occurrence.Width = static_cast<uint8_t>(PointerSize);
+        Occurrence.Provenance = ConstantAddressProvenance::DataAddress;
+        Occurrence.DefinesOutput = true;
+        Occurrence.OutputOpcode = Steps.back().Opcode;
+        Occurrence.OutputWitness = Steps.back().OutputWitness;
+        Occurrence.Authority = RelocatedInstructionAddressProofKind::
+            AArch64RelocationFreeDataDereference;
+        Occurrence.SeedInstructionAddr = Root.Addr;
+        Occurrence.SeedOpSeq = Root.Seq;
+        Occurrence.SeedOpcode = Root.Opcode;
+        Occurrence.SeedInputWitness = Root.Inputs[0];
+        Occurrence.SeedOutputWitness = Root.Output;
+        Occurrence.ArithmeticProof = Steps;
+        Occurrence.DereferenceInstructionAddr = LocalDereference->Addr;
+        Occurrence.DereferenceOpSeq = LocalDereference->Seq;
+        Occurrence.DereferenceOpcode = LocalDereference->Opcode;
+        Occurrence.DereferenceAddressWitness = LocalDereferenceAddress;
+        Occurrence.DereferenceAccessSize = LocalDereferenceMemory.AccessSize;
+        RelocationFreeCandidates.push_back(std::move(Candidate));
+        break;
+      }
 
       const LowOp *Arithmetic = nullptr;
       int BaseSide = -1;
