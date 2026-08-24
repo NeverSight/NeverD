@@ -62,7 +62,7 @@ cxx_func_info:
         .long   (cxx_unwind_map)@IMGREL
         .long   1
         .long   (cxx_try_map)@IMGREL
-        .long   2
+        .long   3
         .long   (cxx_ip_map)@IMGREL
         .long   0
         .long   0
@@ -93,3 +93,5 @@ cxx_ip_map:
         .long   0
         .long   (cxx_try_end)@IMGREL
         .long   -1
+        .long   (cxx_catch_body)@IMGREL
+        .long   1

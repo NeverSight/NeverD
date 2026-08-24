@@ -41,9 +41,19 @@ struct COFFExceptionPatchPlan {
   std::vector<va_t> LanguageExceptionFunctionEntries;
 };
 
-/// Validate every lifted Windows EH contract represented in \p Mod.  Records
-/// that the current native lowering cannot reproduce fail closed here, before
-/// the output file is written.
+/// Authenticate the immutable source side of a COFF exception rewrite: every
+/// defined Windows EH attachment, its exact named-table row, its
+/// RewriteSourceIdentity, and the canonical primary source-image record must
+/// form one closed mapping. This check is body-preserving and is safe to run
+/// before source preparation externalizes preserved definitions.
+llvm::Error validateCOFFExceptionSourceIdentityClosure(
+    const llvm::Module &Mod, const BinaryImage &Image);
+
+/// Validate every lifted Windows EH contract represented in \p Mod.  Each
+/// defined attachment must be the canonical schema-v5 re-encoding of the exact
+/// primary source-image record named by RewriteSourceIdentity and must have one
+/// pointer-identical module-table row. Records that the current native lowering
+/// cannot reproduce fail closed here, before the output file is mutated.
 llvm::Expected<COFFExceptionPatchPlan>
 planCOFFExceptionPatch(const llvm::Module &Mod, const BinaryImage &Image,
                        Arch TargetArch);

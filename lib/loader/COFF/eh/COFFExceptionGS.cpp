@@ -9,10 +9,14 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include <capstone/capstone.h>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <limits>
+#include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -94,81 +98,600 @@ std::optional<va_t> sehGSCookieAddress(const ExceptionFunction &F,
   return F.HandlerDataVA + sizeof(uint32_t) + ScopeBytes;
 }
 
-/// Every routine a wrapper body calls or tail-jumps to, in whichever
-/// instruction encoding \p Arch uses.  Only the direct forms are decoded: an
-/// indirect call names nothing at this level, and a wrapper that reaches its
-/// base handler indirectly is left unclassified rather than guessed at.
-void collectDirectCallTargets(const BinaryImage &Img, Arch A, va_t BodyVA,
-                              const uint8_t *Code, size_t CodeSize,
-                              std::vector<std::string> &Names) {
-  // A Thumb routine is named at its odd, interworking-tagged address while a
-  // branch resolves to the even one, so both spellings are offered.
-  const bool IsThumb = A == Arch::ARM;
-  auto record = [&](std::optional<va_t> Target) {
-    if (!Target)
-      return;
-    Names.push_back(resolvePersonality(Img, *Target).second);
-    if (IsThumb && Names.back().empty())
-      Names.back() = resolvePersonality(Img, *Target | 1).second;
-  };
+namespace {
 
+constexpr size_t MaxWrapperBytes = 512;
+constexpr size_t MaxWrapperInstructions = 64;
+constexpr size_t MaxWrapperBlocks = 32;
+constexpr size_t MaxWrapperEdges = 128;
+
+class CapstoneSession {
+public:
+  CapstoneSession(cs_arch A, cs_mode M) {
+    if (cs_open(A, M, &Handle) != CS_ERR_OK)
+      return;
+    if (cs_option(Handle, CS_OPT_DETAIL, CS_OPT_ON) != CS_ERR_OK)
+      return;
+    Insn = cs_malloc(Handle);
+  }
+
+  ~CapstoneSession() {
+    if (Insn)
+      cs_free(Insn, 1);
+    if (Handle)
+      cs_close(&Handle);
+  }
+
+  CapstoneSession(const CapstoneSession &) = delete;
+  CapstoneSession &operator=(const CapstoneSession &) = delete;
+
+  explicit operator bool() const { return Handle != 0 && Insn != nullptr; }
+  csh handle() const { return Handle; }
+  cs_insn *instruction() const { return Insn; }
+
+private:
+  csh Handle = 0;
+  cs_insn *Insn = nullptr;
+};
+
+enum class ControlKind : uint8_t {
+  None,
+  Call,
+  Branch,
+  Return,
+  Trap,
+};
+
+struct DirectControl {
+  ControlKind Kind = ControlKind::None;
+  bool Conditional = false;
+  bool SwitchesMode = false;
+  std::optional<va_t> Target;
+  std::optional<std::string> RuntimeName;
+};
+
+bool isTerminalTrap(Arch A, const cs_insn &Insn) {
   switch (A) {
   case Arch::X64:
   case Arch::X86:
-    for (size_t Offset = 0; Offset + 5 <= CodeSize; ++Offset) {
-      if (Code[Offset] == 0xe8) {
-        record(addSignedOffset(BodyVA + Offset + 5,
-                               readLE<int32_t>(Code + Offset + 1)));
-      } else if (Offset + 6 <= CodeSize && Code[Offset] == 0xff &&
-                 Code[Offset + 1] == 0x15) {
-        if (auto Slot = addSignedOffset(BodyVA + Offset + 6,
-                                        readLE<int32_t>(Code + Offset + 2)))
-          Names.push_back(directNameAt(Img, *Slot));
-      }
-    }
-    break;
-
+    return Insn.id == X86_INS_UD0 || Insn.id == X86_INS_UD1 ||
+           Insn.id == X86_INS_UD2;
   case Arch::AArch64:
-    // `bl`/`b` share the imm26 form and differ only in bit 31, and a GS
-    // wrapper reaches its base handler both ways: it calls the cookie check
-    // and tail-jumps to the handler it wraps.
-    for (size_t Offset = 0; Offset + 4 <= CodeSize; Offset += 4) {
-      const uint32_t Word = readLE<uint32_t>(Code + Offset);
-      if ((Word & 0x7c000000u) != 0x14000000u)
-        continue;
-      const int64_t Imm =
-          static_cast<int64_t>(static_cast<int32_t>(Word << 6) >> 6) * 4;
-      record(addSignedOffset(BodyVA + Offset, Imm));
-    }
-    break;
-
+    return Insn.id == AARCH64_INS_BRK || Insn.id == AARCH64_INS_UDF;
   case Arch::ARM:
-    // Thumb-2 `bl` and `b.w`, which share a first halfword and differ in bit
-    // 12 of the second.  The branch is relative to the address of the
-    // instruction plus four, and the two `J` bits are stored inverted
-    // relative to the sign.
-    for (size_t Offset = 0; Offset + 4 <= CodeSize; Offset += 2) {
-      const uint16_t Hi = readLE<uint16_t>(Code + Offset);
-      const uint16_t Lo = readLE<uint16_t>(Code + Offset + 2);
-      if ((Hi & 0xf800u) != 0xf000u || (Lo & 0xc000u) != 0xc000u)
-        continue;
-      const uint32_t S = (Hi >> 10) & 1;
-      const uint32_t J1 = (Lo >> 13) & 1;
-      const uint32_t J2 = (Lo >> 11) & 1;
-      const uint32_t I1 = (~(J1 ^ S)) & 1;
-      const uint32_t I2 = (~(J2 ^ S)) & 1;
-      uint32_t Value = (S << 24) | (I1 << 23) | (I2 << 22) |
-                       ((Hi & 0x3ffu) << 12) | ((Lo & 0x7ffu) << 1);
-      int64_t Imm = static_cast<int32_t>(Value << 7) >> 7;
-      // Thumb code addresses carry the interworking bit, which is not part of
-      // the address the branch resolves to.
-      record(addSignedOffset((BodyVA & ~va_t(1)) + Offset + 4, Imm));
-    }
-    break;
-
+    return Insn.id == ARM_INS_UDF;
   default:
-    break;
+    return false;
   }
+}
+
+bool isUnconditional(AArch64CC_CondCode CC) {
+  return CC == AArch64CC_Invalid || CC == AArch64CC_AL || CC == AArch64CC_NV;
+}
+
+bool isUnconditional(ARMCC_CondCodes CC) {
+  return CC == ARMCC_Invalid || CC == ARMCC_AL;
+}
+
+bool exactIATNameAt(const BinaryImage &Img, va_t Slot, std::string &Name) {
+  const Import *Match = nullptr;
+  for (const Import &Imp : Img.Imports) {
+    if (Imp.IATAddr != Slot)
+      continue;
+    if (Match && Match->Name != Imp.Name)
+      return false;
+    Match = &Imp;
+  }
+  if (!Match || Slot == 0)
+    return false;
+  Name = Match->Name;
+  return true;
+}
+
+bool classifyX86Control(const BinaryImage &Img, Arch A, csh Handle,
+                        const cs_insn &Insn, DirectControl &Control) {
+  const bool IsCall = cs_insn_group(Handle, &Insn, CS_GRP_CALL);
+  const bool IsLoop = Insn.id == X86_INS_LOOP || Insn.id == X86_INS_LOOPE ||
+                      Insn.id == X86_INS_LOOPNE;
+  const bool IsBranch = cs_insn_group(Handle, &Insn, CS_GRP_JUMP) || IsLoop;
+  const bool IsReturn = cs_insn_group(Handle, &Insn, CS_GRP_RET);
+  if (IsReturn) {
+    if (IsCall)
+      return false;
+    Control.Kind = ControlKind::Return;
+    return true;
+  }
+  if (IsCall == IsBranch && IsCall)
+    return false;
+  if (!IsCall && !IsBranch)
+    return true;
+  if (IsCall && Insn.id != X86_INS_CALL)
+    return false;
+
+  Control.Kind = IsCall ? ControlKind::Call : ControlKind::Branch;
+  Control.Conditional = IsBranch && Insn.id != X86_INS_JMP;
+  const cs_x86 &X = Insn.detail->x86;
+  if (X.op_count != 1)
+    return false;
+  const cs_x86_op &Op = X.operands[0];
+  if (Op.type == X86_OP_IMM) {
+    if (A == Arch::X64 && Op.imm < 0)
+      return false;
+    Control.Target = A == Arch::X86
+                         ? static_cast<va_t>(static_cast<uint32_t>(Op.imm))
+                         : static_cast<va_t>(Op.imm);
+    return true;
+  }
+
+  if (Op.type != X86_OP_MEM ||
+      (Insn.id != X86_INS_CALL && Insn.id != X86_INS_JMP) ||
+      Op.mem.segment != X86_REG_INVALID || Op.mem.index != X86_REG_INVALID)
+    return false;
+
+  std::optional<va_t> Slot;
+  if (A == Arch::X64 && Op.mem.base == X86_REG_RIP) {
+    if (Insn.address > InvalidVA - Insn.size)
+      return false;
+    Slot = addSignedOffset(Insn.address + Insn.size, Op.mem.disp);
+  } else if (A == Arch::X86 && Op.mem.base == X86_REG_INVALID) {
+    Slot = static_cast<va_t>(static_cast<uint32_t>(Op.mem.disp));
+  }
+  const size_t PointerSize = A == Arch::X64 ? 8 : 4;
+  std::string Name;
+  if (!Slot || Op.size != PointerSize || (*Slot % PointerSize) != 0 ||
+      !exactIATNameAt(Img, *Slot, Name))
+    return false;
+  Control.RuntimeName = std::move(Name);
+  return true;
+}
+
+bool classifyAArch64Control(csh Handle, const cs_insn &Insn,
+                            DirectControl &Control) {
+  const bool IsCall = cs_insn_group(Handle, &Insn, CS_GRP_CALL);
+  const bool IsBranch = cs_insn_group(Handle, &Insn, CS_GRP_JUMP);
+  const bool IsReturn = cs_insn_group(Handle, &Insn, CS_GRP_RET);
+  if (IsReturn) {
+    if (IsCall)
+      return false;
+    Control.Kind = ControlKind::Return;
+    return true;
+  }
+  if (IsCall == IsBranch && IsCall)
+    return false;
+  if (!IsCall && !IsBranch)
+    return true;
+  if (IsCall && Insn.id != AARCH64_INS_BL)
+    return false;
+
+  const cs_aarch64 &Arm64 = Insn.detail->aarch64;
+  Control.Kind = IsCall ? ControlKind::Call : ControlKind::Branch;
+  Control.Conditional =
+      IsBranch && (Insn.id != AARCH64_INS_B || !isUnconditional(Arm64.cc));
+  if (Arm64.op_count == 0)
+    return false;
+  const cs_aarch64_op &Target = Arm64.operands[Arm64.op_count - 1];
+  if (Target.type != AARCH64_OP_IMM || Target.imm < 0)
+    return false;
+  Control.Target = static_cast<va_t>(Target.imm);
+  return true;
+}
+
+bool classifyThumbControl(csh Handle, const cs_insn &Insn,
+                          DirectControl &Control) {
+  if (Insn.id == ARM_INS_IT)
+    return false;
+
+  const cs_arm &Arm = Insn.detail->arm;
+  const bool IsCall = cs_insn_group(Handle, &Insn, CS_GRP_CALL);
+  const bool IsBranch = cs_insn_group(Handle, &Insn, CS_GRP_JUMP);
+  const bool IsReturn = cs_insn_group(Handle, &Insn, CS_GRP_RET);
+  const bool IsBXReturn = Insn.id == ARM_INS_BX && Arm.op_count == 1 &&
+                          Arm.operands[0].type == ARM_OP_REG &&
+                          Arm.operands[0].reg == ARM_REG_LR &&
+                          isUnconditional(Arm.cc);
+  if (IsReturn || IsBXReturn) {
+    if (IsCall || !isUnconditional(Arm.cc))
+      return false;
+    Control.Kind = ControlKind::Return;
+    return true;
+  }
+  if (IsCall == IsBranch && IsCall)
+    return false;
+  if (!IsCall && !IsBranch)
+    return true;
+  if (IsCall && Insn.id != ARM_INS_BL && Insn.id != ARM_INS_BLX)
+    return false;
+  if (IsBranch && Insn.id != ARM_INS_B && Insn.id != ARM_INS_CBZ &&
+      Insn.id != ARM_INS_CBNZ)
+    return false;
+
+  if (IsCall && !isUnconditional(Arm.cc))
+    return false;
+  Control.Kind = IsCall ? ControlKind::Call : ControlKind::Branch;
+  Control.Conditional =
+      IsBranch && (Insn.id != ARM_INS_B || !isUnconditional(Arm.cc));
+  Control.SwitchesMode = IsCall && Insn.id == ARM_INS_BLX;
+  if (Arm.op_count == 0)
+    return false;
+  const cs_arm_op &Target = Arm.operands[Arm.op_count - 1];
+  if (Target.type != ARM_OP_IMM || Target.imm < 0)
+    return false;
+  Control.Target = static_cast<va_t>(Target.imm);
+  return true;
+}
+
+bool classifyControl(const BinaryImage &Img, Arch A, csh Handle,
+                     const cs_insn &Insn, DirectControl &Control) {
+  if (isTerminalTrap(A, Insn)) {
+    Control.Kind = ControlKind::Trap;
+    return true;
+  }
+
+  bool Valid = false;
+  switch (A) {
+  case Arch::X64:
+  case Arch::X86:
+    Valid = classifyX86Control(Img, A, Handle, Insn, Control);
+    break;
+  case Arch::AArch64:
+    Valid = classifyAArch64Control(Handle, Insn, Control);
+    break;
+  case Arch::ARM:
+    Valid = classifyThumbControl(Handle, Insn, Control);
+    break;
+  default:
+    return false;
+  }
+  if (!Valid)
+    return false;
+  if (Control.Kind == ControlKind::None &&
+      (cs_insn_group(Handle, &Insn, CS_GRP_INT) ||
+       cs_insn_group(Handle, &Insn, CS_GRP_IRET)))
+    return false;
+  return true;
+}
+
+bool validInstructionShape(Arch A, const cs_insn &Insn) {
+  switch (A) {
+  case Arch::X64:
+  case Arch::X86:
+    return Insn.size <= 15;
+  case Arch::AArch64:
+    return (Insn.address % 4) == 0 && Insn.size == 4;
+  case Arch::ARM:
+    return (Insn.address % 2) == 0 && (Insn.size == 2 || Insn.size == 4);
+  default:
+    return false;
+  }
+}
+
+enum class DelegationState : uint8_t {
+  None,
+  CSpecific,
+  CxxFH3,
+  CxxFH4,
+  Conflict,
+};
+
+std::optional<DelegationState> delegationStateForName(const std::string &Name) {
+  switch (classifyPersonality(Name)) {
+  case ExceptionPersonality::CSpecificHandler:
+    return DelegationState::CSpecific;
+  case ExceptionPersonality::CxxFrameHandler3:
+    return DelegationState::CxxFH3;
+  case ExceptionPersonality::CxxFrameHandler4:
+    return DelegationState::CxxFH4;
+  default:
+    return std::nullopt;
+  }
+}
+
+} // namespace
+
+/// Collect direct runtime targets from the reachable CFG of a small wrapper.
+/// Any ambiguity invalidates the complete candidate: a branch into an
+/// instruction, an overlapping decode, an indirect transfer not backed by an
+/// exact IAT slot, or an exhausted analysis budget must not contribute a name.
+bool collectDirectCallTargets(const BinaryImage &Img, Arch A, va_t BodyVA,
+                              const uint8_t *Code, size_t CodeSize,
+                              std::vector<std::string> &Names) {
+  Names.clear();
+  if (!Code || CodeSize == 0 || CodeSize > MaxWrapperBytes ||
+      BodyVA > InvalidVA - CodeSize || !Img.isCodeRange(BodyVA, CodeSize))
+    return false;
+  if ((A == Arch::AArch64 && ((BodyVA % 4) != 0 || (CodeSize % 4) != 0)) ||
+      (A == Arch::ARM && ((BodyVA % 2) != 0 || (CodeSize % 2) != 0)))
+    return false;
+
+  cs_arch CSArch;
+  cs_mode CSMode;
+  switch (A) {
+  case Arch::X64:
+    CSArch = CS_ARCH_X86;
+    CSMode = CS_MODE_64;
+    break;
+  case Arch::X86:
+    CSArch = CS_ARCH_X86;
+    CSMode = CS_MODE_32;
+    break;
+  case Arch::AArch64:
+    CSArch = CS_ARCH_AARCH64;
+    CSMode = CS_MODE_ARM;
+    break;
+  case Arch::ARM:
+    CSArch = CS_ARCH_ARM;
+    CSMode = static_cast<cs_mode>(CS_MODE_THUMB | CS_MODE_V8);
+    break;
+  default:
+    return false;
+  }
+
+  CapstoneSession Disassembler(CSArch, CSMode);
+  if (!Disassembler)
+    return false;
+
+  std::map<size_t, size_t> Instructions;
+  std::map<size_t, DirectControl> Controls;
+  std::set<size_t> BlockStarts;
+  std::vector<size_t> Worklist;
+  size_t InstructionCount = 0;
+  size_t DecodedBytes = 0;
+  size_t EdgeCount = 0;
+
+  auto consumeEdge = [&]() {
+    if (EdgeCount == MaxWrapperEdges)
+      return false;
+    ++EdgeCount;
+    return true;
+  };
+
+  auto isInstructionInterior = [&](size_t Offset) {
+    auto It = Instructions.upper_bound(Offset);
+    if (It == Instructions.begin())
+      return false;
+    --It;
+    return Offset > It->first && Offset < It->second;
+  };
+
+  auto scheduleBlock = [&](size_t Offset) {
+    if (Offset >= CodeSize || isInstructionInterior(Offset))
+      return false;
+    auto [It, Inserted] = BlockStarts.insert(Offset);
+    (void)It;
+    if (BlockStarts.size() > MaxWrapperBlocks)
+      return false;
+    if (Inserted && Instructions.find(Offset) == Instructions.end())
+      Worklist.push_back(Offset);
+    return true;
+  };
+
+  auto scheduleEdge = [&](size_t Offset) {
+    return consumeEdge() && scheduleBlock(Offset);
+  };
+
+  auto normalizedTarget = [&](va_t Target) {
+    return A == Arch::ARM ? (Target & ~va_t(1)) : Target;
+  };
+
+  auto validTargetAlignment = [&](va_t Target, bool SwitchesMode) {
+    if (A == Arch::AArch64)
+      return (Target % 4) == 0;
+    if (A == Arch::ARM)
+      return (Target % (SwitchesMode ? 4 : 2)) == 0;
+    return true;
+  };
+
+  auto resolveTargetName = [&](va_t Target, std::string &Name) {
+    if (!isExecutableAddress(Img, Target))
+      return false;
+    Name = resolvePersonality(Img, Target).second;
+    if (A == Arch::ARM && Name.empty())
+      Name = resolvePersonality(Img, Target | 1).second;
+    return true;
+  };
+
+  if (!scheduleBlock(0))
+    return false;
+
+  for (size_t WorkIndex = 0; WorkIndex < Worklist.size(); ++WorkIndex) {
+    const size_t BlockStart = Worklist[WorkIndex];
+    if (Instructions.find(BlockStart) != Instructions.end())
+      continue;
+    if (isInstructionInterior(BlockStart))
+      return false;
+
+    size_t Offset = BlockStart;
+    while (true) {
+      if (Offset >= CodeSize)
+        return false;
+      if (Offset != BlockStart && BlockStarts.count(Offset) != 0) {
+        if (!consumeEdge())
+          return false;
+        break;
+      }
+      if (Instructions.find(Offset) != Instructions.end()) {
+        if (!consumeEdge())
+          return false;
+        break;
+      }
+      if (isInstructionInterior(Offset))
+        return false;
+
+      const uint8_t *Cursor = Code + Offset;
+      size_t Remaining = CodeSize - Offset;
+      const va_t AddressBefore = BodyVA + Offset;
+      uint64_t Address = AddressBefore;
+      cs_insn *Insn = Disassembler.instruction();
+      if (!cs_disasm_iter(Disassembler.handle(), &Cursor, &Remaining, &Address,
+                          Insn) ||
+          !Insn->detail || Insn->address != AddressBefore || Insn->size == 0 ||
+          Insn->size > CodeSize - Offset || !validInstructionShape(A, *Insn) ||
+          Cursor != Code + Offset + Insn->size ||
+          Address != AddressBefore + Insn->size)
+        return false;
+
+      const size_t End = Offset + Insn->size;
+      auto Next = Instructions.lower_bound(Offset);
+      if ((Next != Instructions.end() && Next->first < End) ||
+          (Next != Instructions.begin() && std::prev(Next)->second > Offset))
+        return false;
+      auto Boundary = BlockStarts.upper_bound(Offset);
+      if (Boundary != BlockStarts.end() && *Boundary < End)
+        return false;
+
+      if (++InstructionCount > MaxWrapperInstructions ||
+          Insn->size > MaxWrapperBytes - DecodedBytes)
+        return false;
+      DecodedBytes += Insn->size;
+      Instructions.emplace(Offset, End);
+
+      DirectControl Control;
+      if (!classifyControl(Img, A, Disassembler.handle(), *Insn, Control))
+        return false;
+      if (Control.Kind == ControlKind::None) {
+        Controls.emplace(Offset, std::move(Control));
+        if (End == CodeSize)
+          return false;
+        Offset = End;
+        continue;
+      }
+      if (Control.Kind == ControlKind::Return ||
+          Control.Kind == ControlKind::Trap) {
+        Controls.emplace(Offset, std::move(Control));
+        if (!consumeEdge())
+          return false;
+        break;
+      }
+
+      if (Control.RuntimeName) {
+        if (Control.Conditional || !consumeEdge())
+          return false;
+        if (Control.Kind == ControlKind::Call && !scheduleEdge(End))
+          return false;
+        Controls.emplace(Offset, std::move(Control));
+        break;
+      }
+      if (!Control.Target)
+        return false;
+
+      va_t Target = normalizedTarget(*Control.Target);
+      if (!validTargetAlignment(Target, Control.SwitchesMode))
+        return false;
+      Control.Target = Target;
+      const bool IsInternal = Target >= BodyVA && Target < BodyVA + CodeSize;
+      if (IsInternal) {
+        // Correctly propagating a callee's delegation through an internal
+        // call requires a return-sensitive summary.  Treating its target and
+        // continuation as independent paths is unsound, so stripped-wrapper
+        // inference fails closed for this uncommon shape.
+        if (Control.Kind == ControlKind::Call || Control.SwitchesMode)
+          return false;
+        if (!scheduleEdge(Target - BodyVA))
+          return false;
+        if (Control.Conditional && !scheduleEdge(End))
+          return false;
+        Controls.emplace(Offset, std::move(Control));
+        break;
+      }
+
+      if (Control.Conditional || !consumeEdge())
+        return false;
+      std::string RuntimeName;
+      if (!resolveTargetName(Target, RuntimeName))
+        return false;
+      Control.RuntimeName = std::move(RuntimeName);
+      if (Control.Kind == ControlKind::Call && !scheduleEdge(End))
+        return false;
+      Controls.emplace(Offset, std::move(Control));
+      break;
+    }
+  }
+
+  if (Controls.size() != Instructions.size())
+    return false;
+
+  // The structural pass above proves that every reachable instruction has a
+  // single bounded decode.  This second pass attaches the base-personality
+  // delegation to paths: a handler observed on one branch cannot justify a
+  // return or tail exit reached along another branch.  Terminal traps have no
+  // successor and are intentionally exempt from the normal-exit obligation.
+  using FlowState = std::pair<size_t, DelegationState>;
+  std::set<FlowState> SeenStates;
+  std::vector<FlowState> FlowWorklist;
+  std::map<DelegationState, std::string> DelegationNames;
+  std::optional<DelegationState> ExitDelegation;
+
+  auto scheduleFlow = [&](size_t Offset, DelegationState State) {
+    if (Controls.find(Offset) == Controls.end())
+      return false;
+    if (SeenStates.emplace(Offset, State).second)
+      FlowWorklist.emplace_back(Offset, State);
+    return true;
+  };
+
+  auto advanceDelegation = [&](DelegationState State,
+                               const std::optional<std::string> &Name) {
+    if (!Name)
+      return State;
+    std::optional<DelegationState> Candidate = delegationStateForName(*Name);
+    if (!Candidate)
+      return State;
+    DelegationNames.try_emplace(*Candidate, *Name);
+    if (State == DelegationState::None || State == *Candidate)
+      return *Candidate;
+    return DelegationState::Conflict;
+  };
+
+  auto completeNormalExit = [&](DelegationState State) {
+    if (State == DelegationState::None || State == DelegationState::Conflict)
+      return false;
+    if (ExitDelegation && *ExitDelegation != State)
+      return false;
+    ExitDelegation = State;
+    return true;
+  };
+
+  if (!scheduleFlow(0, DelegationState::None))
+    return false;
+  for (size_t WorkIndex = 0; WorkIndex < FlowWorklist.size(); ++WorkIndex) {
+    auto [Offset, State] = FlowWorklist[WorkIndex];
+    const DirectControl &Control = Controls.at(Offset);
+    const size_t End = Instructions.at(Offset);
+    State = advanceDelegation(State, Control.RuntimeName);
+
+    switch (Control.Kind) {
+    case ControlKind::None:
+    case ControlKind::Call:
+      if (!scheduleFlow(End, State))
+        return false;
+      break;
+    case ControlKind::Branch:
+      if (Control.Target && *Control.Target >= BodyVA &&
+          *Control.Target < BodyVA + CodeSize) {
+        if (!scheduleFlow(*Control.Target - BodyVA, State) ||
+            (Control.Conditional && !scheduleFlow(End, State)))
+          return false;
+        break;
+      }
+      if (!completeNormalExit(State))
+        return false;
+      break;
+    case ControlKind::Return:
+      if (!completeNormalExit(State))
+        return false;
+      break;
+    case ControlKind::Trap:
+      break;
+    }
+  }
+
+  if (!ExitDelegation)
+    return false;
+  auto Name = DelegationNames.find(*ExitDelegation);
+  if (Name == DelegationNames.end())
+    return false;
+  Names.push_back(Name->second);
+  return true;
 }
 
 std::optional<ExceptionPersonality>
@@ -195,6 +718,7 @@ inferGSPersonality(const ExceptionFunction &F, const BinaryImage &Img) {
     }
   }
   if (!Wrapper ||
+      (Img.Arch == Arch::ARM && (Wrapper->CodeRange.Begin & 1u) != 0) ||
       Wrapper->CodeRange.size() > std::numeric_limits<size_t>::max())
     return std::nullopt;
 
@@ -213,7 +737,8 @@ inferGSPersonality(const ExceptionFunction &F, const BinaryImage &Img) {
   // the wrapper runtime function to a named base handler, and a payload that
   // is valid for that handler followed by valid GS cookie data.
   std::vector<std::string> Names;
-  collectDirectCallTargets(Img, Img.Arch, BodyVA, Code, CodeSize, Names);
+  if (!collectDirectCallTargets(Img, Img.Arch, BodyVA, Code, CodeSize, Names))
+    return std::nullopt;
 
   ExceptionPersonality BasePersonality = ExceptionPersonality::Unknown;
   for (const std::string &Name : Names) {
@@ -243,7 +768,7 @@ inferGSPersonality(const ExceptionFunction &F, const BinaryImage &Img) {
       std::optional<va_t> CookieVA = sehGSCookieAddress(Probe, Img);
       PayloadMatches = CookieVA && parseGSCookie(Probe, Img, *CookieVA);
     }
-    if (PayloadMatches)
+    if (PayloadMatches && Probe.ParseStatus == ExceptionParseStatus::Complete)
       return ExceptionPersonality::GSHandlerCheckSEH;
     break;
   case ExceptionPersonality::CxxFrameHandler3:
@@ -251,7 +776,7 @@ inferGSPersonality(const ExceptionFunction &F, const BinaryImage &Img) {
         parseFH3(Probe, Img) &&
         F.HandlerDataVA <= InvalidVA - sizeof(uint32_t) &&
         parseGSCookie(Probe, Img, F.HandlerDataVA + sizeof(uint32_t));
-    if (PayloadMatches)
+    if (PayloadMatches && Probe.ParseStatus == ExceptionParseStatus::Complete)
       return ExceptionPersonality::GSHandlerCheckEH;
     break;
   case ExceptionPersonality::CxxFrameHandler4:
@@ -259,7 +784,7 @@ inferGSPersonality(const ExceptionFunction &F, const BinaryImage &Img) {
         parseFH4(Probe, Img) &&
         F.HandlerDataVA <= InvalidVA - sizeof(uint32_t) &&
         parseGSCookie(Probe, Img, F.HandlerDataVA + sizeof(uint32_t));
-    if (PayloadMatches)
+    if (PayloadMatches && Probe.ParseStatus == ExceptionParseStatus::Complete)
       return ExceptionPersonality::GSHandlerCheckEH4;
     break;
   default:

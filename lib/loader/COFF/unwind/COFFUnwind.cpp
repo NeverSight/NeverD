@@ -321,6 +321,7 @@ void parseARMExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
 
     bool IsFragment =
         Flag == llvm::ARM::WinEH::RuntimeFunctionFlag::RFF_PackedFragment;
+    bool HasNoPhysicalPrologue = IsFragment;
     if (Flag == llvm::ARM::WinEH::RuntimeFunctionFlag::RFF_Unpacked) {
       if (XDataRVA > InvalidVA - ImageBase) {
         LLVM_DEBUG(llvm::dbgs() << "coff: " << ArchName << " pdata entry " << I
@@ -361,6 +362,7 @@ void parseARMExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
       } else {
         Length = XR.FunctionLengthInBytesARM();
         IsFragment = XR.F();
+        HasNoPhysicalPrologue = IsFragment;
       }
 
       const uint64_t HeaderWords = HasExtension ? 2 : 1;
@@ -493,6 +495,15 @@ void parseARMExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
         applyUnwindCodes(EF, IsAArch64,
                          Structural.slice(UnwindCodeOffset, UnwindCodeLength),
                          Scopes, SingleEpilogueIndex);
+        if (IsAArch64 &&
+            std::any_of(EF.UnwindOperations.begin(),
+                        EF.UnwindOperations.end(),
+                        [](const UnwindOperation &Op) {
+                          return Op.Kind == UnwindOperationKind::EndChained;
+                        })) {
+          IsFragment = true;
+          EF.Kind = RuntimeFunctionKind::Fragment;
+        }
       }
       if (PersonalityVA != 0) {
         EF.PersonalityVA = PersonalityVA;
@@ -514,6 +525,13 @@ void parseARMExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
                                : ExceptionEncoding::ARM32Packed;
       applyPackedUnwind(EF, expandARM32PackedUnwind(UnwindWord));
     }
+    // Packed fragments and ARM32's unpacked F form explicitly have no physical
+    // prologue.  ARM64 instead marks a secondary region with `end_c`; a
+    // shrink-wrapped region may have real local prologue operations before that
+    // marker, whose size was already separated from the phantom parent scope by
+    // the unwind-code decoder and must be retained.
+    if (HasNoPhysicalPrologue)
+      EF.PrologueSize = 0;
     Img.ExceptionMetadata.ParseStatus = mergeExceptionParseStatus(
         Img.ExceptionMetadata.ParseStatus, EF.ParseStatus);
     const bool IsSymbolEligible =
@@ -591,6 +609,18 @@ void unwind_detail::resolveX64UnwindChains(ExceptionInfo &Info) {
       const ExceptionFunction &CurrentFunction = Info.Functions[Current];
       if (CurrentFunction.Kind != RuntimeFunctionKind::Chained) {
         ReachedTerminal = true;
+        if (Root.FrameRegister != CurrentFunction.FrameRegister) {
+          Root.ParseStatus = mergeExceptionParseStatus(
+              Root.ParseStatus, ExceptionParseStatus::Malformed);
+          Root.Diagnostics.push_back(
+              "chained x64 frame register differs from primary record");
+        }
+        if (Root.FrameOffset != CurrentFunction.FrameOffset) {
+          Root.ParseStatus = mergeExceptionParseStatus(
+              Root.ParseStatus, ExceptionParseStatus::Malformed);
+          Root.Diagnostics.push_back(
+              "chained x64 frame offset differs from primary record");
+        }
         break;
       }
       if (!CurrentFunction.PrimaryFunctionIndex)

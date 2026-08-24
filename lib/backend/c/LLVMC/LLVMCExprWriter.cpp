@@ -66,8 +66,7 @@ std::string LLVMCWriter::getName(const llvm::Value *V) {
       else
         Clean += '_';
     }
-    if (!Clean.empty() &&
-        !std::isdigit(static_cast<unsigned char>(Clean[0])))
+    if (!Clean.empty() && !std::isdigit(static_cast<unsigned char>(Clean[0])))
       Hint = Clean;
   }
   auto Name = freshVar(Hint);
@@ -114,10 +113,8 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C) {
     if (CE->getOpcode() == llvm::Instruction::PtrToInt) {
       auto *Src = CE->getOperand(0);
       if (auto *Fn = llvm::dyn_cast<llvm::Function>(Src)) {
-        std::string N = Fn->getName().str();
-        if (!N.empty() && N[0] == '_')
-          N = N.substr(1);
-        return "(" + typeToCLLVM(CE->getType()) + ")(void*)" + N;
+        return "(" + typeToCLLVM(CE->getType()) + ")(void*)" +
+               functionIdentifier(*Fn);
       }
       if (auto *GV = llvm::dyn_cast<llvm::GlobalVariable>(Src)) {
         if (GV->hasInitializer()) {
@@ -143,6 +140,8 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C) {
   }
 
   if (auto *GV = llvm::dyn_cast<llvm::GlobalValue>(C)) {
+    if (const auto *Fn = llvm::dyn_cast<llvm::Function>(GV))
+      return functionIdentifier(*Fn);
     std::string N = GV->getName().str();
     if (N.empty())
       return getName(C);
@@ -160,8 +159,7 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C) {
       else
         Clean += '_';
     }
-    if (Clean.empty() ||
-        std::isdigit(static_cast<unsigned char>(Clean[0])))
+    if (Clean.empty() || std::isdigit(static_cast<unsigned char>(Clean[0])))
       Clean = "g_" + Clean;
     return Clean;
   }

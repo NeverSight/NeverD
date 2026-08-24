@@ -7,8 +7,11 @@
 #include "neverd/backend/codegen/COFF/COFFExceptionPatch.h"
 
 #include "neverd/backend/ExceptionRewriteContract.h"
+#include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
+#include "neverd/backend/llvm/WindowsEHMetadataEncoder.h"
+#include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFException.h"
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
@@ -21,6 +24,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Object/COFF.h"
@@ -96,12 +100,166 @@ std::optional<va_t> autoFunctionAddress(llvm::StringRef Name) {
   return Address;
 }
 
-const ExceptionFunction *findExactExceptionFunction(const BinaryImage &Image,
-                                                    va_t Begin, va_t End) {
-  for (const ExceptionFunction &EH : Image.ExceptionMetadata.Functions)
-    if (EH.CodeRange.Begin == Begin && EH.CodeRange.End == End)
-      return &EH;
-  return nullptr;
+struct CanonicalWindowsEHFunction {
+  const llvm::Function *Function = nullptr;
+  const ExceptionFunction *Source = nullptr;
+};
+
+/// Authenticate the three representations of every lifted Windows exception
+/// function before any patch planning is allowed to use one of them:
+///
+///   * the function attachment,
+///   * its exact row in the module-level function table, and
+///   * a canonical schema-v5 re-encoding of the primary source-image record.
+///
+/// RewriteSourceIdentity is the only join key.  Function names and selected
+/// scalar attachment operands are deliberately insufficient: either would let
+/// a structurally changed nested record retain the same apparent entry.
+llvm::Expected<std::vector<CanonicalWindowsEHFunction>>
+validateCanonicalWindowsEHIdentity(const llvm::Module &Mod,
+                                   const BinaryImage &Image) {
+  std::vector<CanonicalWindowsEHFunction> Functions;
+  std::map<const llvm::Function *, const llvm::MDNode *> Attachments;
+  std::vector<const llvm::Function *> AttachedDeclarations;
+  std::set<va_t> ClaimedPrimaryEntries;
+
+  auto FindPrimary = [&](va_t Entry, llvm::StringRef FunctionName)
+      -> llvm::Expected<const ExceptionFunction *> {
+    const ExceptionFunction *Primary = nullptr;
+    for (const ExceptionFunction &EH : Image.ExceptionMetadata.Functions) {
+      if (EH.Kind != RuntimeFunctionKind::Primary ||
+          EH.CodeRange.Begin != Entry)
+        continue;
+      if (Primary)
+        return patchError(
+            "rewrite source identity names more than one primary Windows EH "
+            "record for function " +
+            FunctionName);
+      Primary = &EH;
+    }
+    if (!Primary)
+      return patchError(
+          "rewrite source identity does not name a primary Windows EH record "
+          "for function " +
+          FunctionName);
+    return Primary;
+  };
+
+  for (const llvm::Function &F : Mod) {
+    const llvm::MDNode *Attachment =
+        F.getMetadata(windows_eh_md::FunctionAttachment);
+    auto SourceIdentity = rewrite_source::getOriginalVA(F);
+    if (!SourceIdentity)
+      return patchError("invalid rewrite source identity on function " +
+                        F.getName() + ": " +
+                        llvm::toString(SourceIdentity.takeError()));
+
+    if (!Attachment) {
+      // A defined lifted source which maps exactly to a primary runtime record
+      // may not silently omit its exception contract.  Retain the historical
+      // auto-name check for manually supplied modules without source identity.
+      if (!F.isDeclaration() && *SourceIdentity) {
+        const size_t PrimaryMatches = static_cast<size_t>(std::count_if(
+            Image.ExceptionMetadata.Functions.begin(),
+            Image.ExceptionMetadata.Functions.end(),
+            [&](const ExceptionFunction &EH) {
+              return EH.Kind == RuntimeFunctionKind::Primary &&
+                     EH.CodeRange.Begin == **SourceIdentity;
+            }));
+        if (PrimaryMatches != 0)
+          return patchError("function " + F.getName() +
+                            " omits its Windows EH metadata");
+      } else if (!F.isDeclaration()) {
+        if (auto Address = autoFunctionAddress(F.getName()))
+          if (const ExceptionFunction *EH =
+                  Image.ExceptionMetadata.findFunction(*Address)) {
+            (void)EH;
+            return patchError("function " + F.getName() +
+                              " omits its Windows EH metadata");
+          }
+      }
+      continue;
+    }
+
+    Attachments.emplace(&F, Attachment);
+    if (F.isDeclaration()) {
+      AttachedDeclarations.push_back(&F);
+      continue;
+    }
+    if (!*SourceIdentity || **SourceIdentity == InvalidVA)
+      return patchError("Windows EH function lacks an exact rewrite source "
+                        "identity: " +
+                        F.getName());
+
+    auto Primary = FindPrimary(**SourceIdentity, F.getName());
+    if (!Primary)
+      return Primary.takeError();
+    llvm::MDNode *Canonical = windows_eh_md::getCanonicalFunctionMetadata(
+        Mod.getContext(), **Primary, Image.Arch, BinaryFormat::COFF);
+    if (Attachment != Canonical)
+      return patchError("Windows EH metadata does not match the input image "
+                        "for function " +
+                        F.getName());
+    if (!ClaimedPrimaryEntries.insert((*Primary)->CodeRange.Begin).second)
+      return patchError("more than one IR function names Windows EH source "
+                        "entry 0x" +
+                        llvm::utohexstr((*Primary)->CodeRange.Begin));
+    Functions.push_back({&F, *Primary});
+  }
+
+  const llvm::NamedMDNode *Table =
+      Mod.getNamedMetadata(windows_eh_md::FunctionTable);
+  if (!Attachments.empty() && !Table)
+    return patchError("module omits the Windows EH function table");
+  if (!Table)
+    return Functions;
+  if (!Attachments.empty() && Table->getNumOperands() == 0)
+    return patchError("Windows EH function table is empty while function "
+                      "attachments are present");
+
+  std::map<const llvm::Function *, const llvm::MDNode *> Rows;
+  for (const llvm::MDNode *Row : Table->operands()) {
+    if (!Row || Row->getNumOperands() != 2)
+      return patchError("malformed Windows EH function-table row");
+    const auto *FunctionValue = llvm::dyn_cast_or_null<llvm::ValueAsMetadata>(
+        Row->getOperand(0).get());
+    const auto *Function =
+        FunctionValue
+            ? llvm::dyn_cast<llvm::Function>(FunctionValue->getValue())
+            : nullptr;
+    const auto *Payload =
+        llvm::dyn_cast_or_null<llvm::MDNode>(Row->getOperand(1).get());
+    if (!Function || !Payload)
+      return patchError("malformed Windows EH function-table row");
+    if (Function->getParent() != &Mod)
+      return patchError("Windows EH function-table row references external "
+                        "function " +
+                        Function->getName());
+
+    auto Attachment = Attachments.find(Function);
+    if (Attachment == Attachments.end())
+      return patchError("orphan Windows EH function-table row for function " +
+                        Function->getName());
+    if (Payload != Attachment->second)
+      return patchError("Windows EH function-table payload does not match the "
+                        "function attachment for function " +
+                        Function->getName());
+    if (Function->isDeclaration())
+      return patchError("Windows EH function-table row references declaration " +
+                        Function->getName());
+    if (!Rows.emplace(Function, Payload).second)
+      return patchError("duplicate Windows EH function-table row for function " +
+                        Function->getName());
+  }
+
+  for (const CanonicalWindowsEHFunction &Entry : Functions)
+    if (!Rows.count(Entry.Function))
+      return patchError("Windows EH function table omits attached function " +
+                        Entry.Function->getName());
+  if (!AttachedDeclarations.empty())
+    return patchError("Windows EH attachment is present on declaration " +
+                      AttachedDeclarations.front()->getName());
+  return Functions;
 }
 
 bool hasNativeEHMarker(const llvm::Function &F, llvm::StringRef Kind) {
@@ -119,37 +277,768 @@ bool hasPersonality(const llvm::Function &F, llvm::StringRef Name) {
   return PersonalityFunction && PersonalityFunction->getName() == Name;
 }
 
-bool hasNativeLanguageIRShape(const llvm::Function &F,
-                              const ExceptionFunction &EH) {
-  bool HasInvoke = false;
-  bool HasCatchSwitch = false;
-  bool HasCatchPad = false;
-  bool HasCleanupPad = false;
-  for (const llvm::BasicBlock &Block : F)
-    for (const llvm::Instruction &Inst : Block) {
-      HasInvoke |= llvm::isa<llvm::InvokeInst>(Inst);
-      HasCatchSwitch |= llvm::isa<llvm::CatchSwitchInst>(Inst);
-      HasCatchPad |= llvm::isa<llvm::CatchPadInst>(Inst);
-      HasCleanupPad |= llvm::isa<llvm::CleanupPadInst>(Inst);
+const llvm::Instruction *
+nextSemanticInstruction(const llvm::Instruction &Instruction) {
+  const llvm::Instruction *Next = Instruction.getNextNode();
+  while (Next && Next->isDebugOrPseudoInst())
+    Next = Next->getNextNode();
+  return Next;
+}
+
+const llvm::Instruction *
+previousSemanticInstruction(const llvm::Instruction &Instruction) {
+  const llvm::Instruction *Previous = Instruction.getPrevNode();
+  while (Previous && Previous->isDebugOrPseudoInst())
+    Previous = Previous->getPrevNode();
+  return Previous;
+}
+
+std::optional<uint64_t> provenanceUInt(const llvm::OperandBundleUse &Bundle,
+                                       unsigned Index, unsigned BitWidth) {
+  if (Index >= Bundle.Inputs.size())
+    return std::nullopt;
+  const auto *Value =
+      llvm::dyn_cast<llvm::ConstantInt>(Bundle.Inputs[Index].get());
+  if (!Value || Value->getBitWidth() != BitWidth)
+    return std::nullopt;
+  return Value->getZExtValue();
+}
+
+struct NativeEHProvenance {
+  windows_eh_md::NativeProvenanceModel Model =
+      windows_eh_md::NativeProvenanceModel::SEH;
+  windows_eh_md::NativeProvenanceRole Role =
+      windows_eh_md::NativeProvenanceRole::ProtectedInvoke;
+  va_t FunctionVA = 0;
+  va_t SourceVA = 0;
+  uint32_t Region = 0;
+  uint32_t Clause = 0;
+  va_t AuxVA = 0;
+  uint32_t Flags = 0;
+};
+
+std::optional<NativeEHProvenance>
+parseNativeEHProvenance(const llvm::CallInst &Anchor) {
+  const llvm::Function *Callee = Anchor.getCalledFunction();
+  if (!Callee || Callee->getIntrinsicID() != llvm::Intrinsic::sideeffect ||
+      Anchor.countOperandBundlesOfType(windows_eh_md::ProvenanceBundle) != 1)
+    return std::nullopt;
+  auto Bundle = Anchor.getOperandBundle(windows_eh_md::ProvenanceBundle);
+  if (!Bundle || Bundle->Inputs.size() != windows_eh_md::ProvenanceOperandCount)
+    return std::nullopt;
+
+  auto Version = provenanceUInt(*Bundle, windows_eh_md::ProvenanceVersion, 32);
+  auto Model = provenanceUInt(*Bundle, windows_eh_md::ProvenanceModel, 8);
+  auto Role = provenanceUInt(*Bundle, windows_eh_md::ProvenanceRole, 8);
+  auto FunctionVA =
+      provenanceUInt(*Bundle, windows_eh_md::ProvenanceFunctionVA, 64);
+  auto SourceVA =
+      provenanceUInt(*Bundle, windows_eh_md::ProvenanceSourceVA, 64);
+  auto Region = provenanceUInt(*Bundle, windows_eh_md::ProvenanceRegion, 32);
+  auto Clause = provenanceUInt(*Bundle, windows_eh_md::ProvenanceClause, 32);
+  auto AuxVA = provenanceUInt(*Bundle, windows_eh_md::ProvenanceAuxVA, 64);
+  auto Flags = provenanceUInt(*Bundle, windows_eh_md::ProvenanceFlags, 32);
+  if (!Version || *Version != windows_eh_md::ProvenanceSchemaVersion ||
+      !Model || !Role || !FunctionVA || !SourceVA || !Region || !Clause ||
+      !AuxVA || !Flags)
+    return std::nullopt;
+  if (*Model !=
+          static_cast<unsigned>(windows_eh_md::NativeProvenanceModel::SEH) &&
+      *Model !=
+          static_cast<unsigned>(windows_eh_md::NativeProvenanceModel::CxxFH3))
+    return std::nullopt;
+  if (*Role != static_cast<unsigned>(
+                   windows_eh_md::NativeProvenanceRole::ProtectedInvoke) &&
+      *Role != static_cast<unsigned>(
+                   windows_eh_md::NativeProvenanceRole::RegionDispatch) &&
+      *Role != static_cast<unsigned>(
+                   windows_eh_md::NativeProvenanceRole::HandlerTarget) &&
+      *Role != static_cast<unsigned>(
+                   windows_eh_md::NativeProvenanceRole::RangeEnter) &&
+      *Role != static_cast<unsigned>(
+                   windows_eh_md::NativeProvenanceRole::RangeExit) &&
+      *Role != static_cast<unsigned>(
+                   windows_eh_md::NativeProvenanceRole::RangeEnterTarget) &&
+      *Role != static_cast<unsigned>(
+                   windows_eh_md::NativeProvenanceRole::RangeExitTarget))
+    return std::nullopt;
+
+  return NativeEHProvenance{
+      static_cast<windows_eh_md::NativeProvenanceModel>(*Model),
+      static_cast<windows_eh_md::NativeProvenanceRole>(*Role),
+      *FunctionVA,
+      *SourceVA,
+      static_cast<uint32_t>(*Region),
+      static_cast<uint32_t>(*Clause),
+      *AuxVA,
+      static_cast<uint32_t>(*Flags)};
+}
+
+struct NativeEHClause {
+  const llvm::CatchPadInst *CatchPad = nullptr;
+  const llvm::CleanupPadInst *CleanupPad = nullptr;
+  va_t SourceVA = 0;
+  va_t AuxVA = 0;
+  uint32_t Flags = 0;
+};
+
+struct NativeEHDispatch {
+  const llvm::BasicBlock *Destination = nullptr;
+  bool IsCleanup = false;
+  std::set<uint32_t> Clauses;
+  std::map<uint32_t, const llvm::BasicBlock *> Continuations;
+  std::map<uint32_t, NativeEHClause> ClauseSemantics;
+};
+
+struct NativeEHHandlerTarget {
+  const llvm::BasicBlock *Target = nullptr;
+  va_t SourceVA = 0;
+};
+
+struct NativeEHProtectedInvoke {
+  const llvm::InvokeInst *Invoke = nullptr;
+  va_t SourceVA = 0;
+  uint32_t Region = 0;
+};
+
+struct NativeEHRangeMarker {
+  const llvm::InvokeInst *Invoke = nullptr;
+  va_t SourceVA = 0;
+};
+
+struct NativeEHRangeTarget {
+  const llvm::BasicBlock *Target = nullptr;
+  va_t SourceVA = 0;
+};
+
+bool hasExactCxxTypeDescriptor(const llvm::Function &Function,
+                               const llvm::Value &Argument,
+                               va_t TypeDescriptorVA) {
+  if (TypeDescriptorVA == 0)
+    return llvm::isa<llvm::ConstantPointerNull>(Argument);
+  const auto *Descriptor = llvm::dyn_cast<llvm::GlobalVariable>(
+      Argument.stripPointerCasts());
+  if (!Descriptor ||
+      Descriptor !=
+          Function.getParent()->getNamedGlobal(
+              makeNdDataSymbol(TypeDescriptorVA)) ||
+      !Descriptor->isDeclaration() || !Descriptor->hasExternalLinkage() ||
+      Descriptor->getVisibility() != llvm::GlobalValue::DefaultVisibility ||
+      !Descriptor->isConstant() ||
+      !Descriptor->getValueType()->isIntegerTy(8) ||
+      Descriptor->getAddressSpace() != 0 || Descriptor->isThreadLocal())
+    return false;
+  return true;
+}
+
+bool hasExactSourceFunctionIdentity(const llvm::Function &Owner,
+                                    const llvm::Value &Value, va_t SourceVA,
+                                    const llvm::FunctionType &ExpectedType) {
+  const auto *Function =
+      llvm::dyn_cast<llvm::Function>(Value.stripPointerCasts());
+  if (!Function || Function == &Owner ||
+      Function->getFunctionType() != &ExpectedType ||
+      Function->getCallingConv() != llvm::CallingConv::C ||
+      !(Function->hasExternalLinkage() ||
+        (Function->hasLocalLinkage() && !Function->isDeclaration())))
+    return false;
+  auto Identity = rewrite_source::getOriginalVA(*Function);
+  if (!Identity) {
+    llvm::consumeError(Identity.takeError());
+    return false;
+  }
+  return *Identity && **Identity == SourceVA;
+}
+
+llvm::Error validateNativeLanguageIRGraph(const llvm::Function &F,
+                                          const ExceptionFunction &EH) {
+  auto SourceIdentity = rewrite_source::getOriginalVA(F);
+  if (!SourceIdentity)
+    return patchError("invalid rewrite source identity on native WinEH "
+                      "function " +
+                      F.getName() + ": " +
+                      llvm::toString(SourceIdentity.takeError()));
+  if (!*SourceIdentity || **SourceIdentity != EH.CodeRange.Begin)
+    return patchError("rewrite source identity does not match native WinEH "
+                      "function " +
+                      F.getName());
+  const auto ExpectedModel =
+      EH.Personality == ExceptionPersonality::CSpecificHandler
+          ? windows_eh_md::NativeProvenanceModel::SEH
+          : windows_eh_md::NativeProvenanceModel::CxxFH3;
+  std::map<uint32_t, NativeEHDispatch> Dispatches;
+  std::vector<NativeEHProtectedInvoke> ProtectedInvokes;
+  std::set<const llvm::InvokeInst *> AnchoredInvokes;
+  std::set<va_t> SourceAddresses;
+  std::map<std::pair<uint32_t, uint32_t>, NativeEHHandlerTarget>
+      HandlerTargets;
+  using RangeKey = std::pair<uint32_t, uint32_t>;
+  std::map<RangeKey, NativeEHRangeMarker> RangeEnters;
+  std::map<RangeKey, NativeEHRangeMarker> RangeExits;
+  std::map<RangeKey, NativeEHRangeTarget> RangeEnterTargets;
+  std::map<RangeKey, NativeEHRangeTarget> RangeExitTargets;
+  std::set<const llvm::InvokeInst *> AnchoredRangeMarkers;
+
+  for (const llvm::BasicBlock &Block : F) {
+    for (const llvm::Instruction &Instruction : Block) {
+      const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction);
+      if (!Call)
+        continue;
+      unsigned ProvenanceCount =
+          Call->countOperandBundlesOfType(windows_eh_md::ProvenanceBundle);
+      if (ProvenanceCount == 0)
+        continue;
+      const auto *Anchor = llvm::dyn_cast<llvm::CallInst>(Call);
+      if (ProvenanceCount != 1 || !Anchor)
+        return patchError("malformed native WinEH provenance in function " +
+                          F.getName());
+      auto Provenance = parseNativeEHProvenance(*Anchor);
+      if (!Provenance || Provenance->Model != ExpectedModel ||
+          Provenance->FunctionVA != EH.CodeRange.Begin)
+        return patchError("malformed native WinEH provenance in function " +
+                          F.getName());
+
+      if (Provenance->Role ==
+          windows_eh_md::NativeProvenanceRole::ProtectedInvoke) {
+        if (Anchor->getNumOperandBundles() != 1 || Provenance->Clause != 0 ||
+            Provenance->AuxVA != 0 || Provenance->Flags != 0 ||
+            !EH.CodeRange.contains(Provenance->SourceVA))
+          return patchError(
+              "malformed protected-invoke provenance in function " +
+              F.getName());
+        const auto *Invoke = llvm::dyn_cast_or_null<llvm::InvokeInst>(
+            nextSemanticInstruction(*Anchor));
+        const llvm::Function *Callee =
+            Invoke ? Invoke->getCalledFunction() : nullptr;
+        if (!Invoke || (Callee && Callee->isIntrinsic()) ||
+            !AnchoredInvokes.insert(Invoke).second ||
+            !SourceAddresses.insert(Provenance->SourceVA).second)
+          return patchError(
+              "protected invoke has invalid native WinEH provenance in "
+              "function " +
+              F.getName());
+        ProtectedInvokes.push_back(
+            {Invoke, Provenance->SourceVA, Provenance->Region});
+        continue;
+      }
+
+      if (Provenance->Role ==
+          windows_eh_md::NativeProvenanceRole::HandlerTarget) {
+        const std::pair<uint32_t, uint32_t> Key{Provenance->Region,
+                                                Provenance->Clause};
+        if (Anchor->getNumOperandBundles() != 1 ||
+            Provenance->AuxVA != 0 || Provenance->Flags != 0 ||
+            !EH.CodeRange.contains(Provenance->SourceVA) ||
+            !HandlerTargets
+                 .emplace(Key, NativeEHHandlerTarget{Anchor->getParent(),
+                                                     Provenance->SourceVA})
+                 .second)
+          return patchError("malformed native WinEH handler-target "
+                            "provenance in function " +
+                            F.getName());
+        continue;
+      }
+
+      const bool IsRangeEnter =
+          Provenance->Role ==
+          windows_eh_md::NativeProvenanceRole::RangeEnter;
+      const bool IsRangeExit =
+          Provenance->Role == windows_eh_md::NativeProvenanceRole::RangeExit;
+      if (IsRangeEnter || IsRangeExit) {
+        const RangeKey Key{Provenance->Region, Provenance->Clause};
+        const auto ExpectedIntrinsic = IsRangeEnter
+                                           ? llvm::Intrinsic::seh_try_begin
+                                           : llvm::Intrinsic::seh_try_end;
+        const auto *Invoke = llvm::dyn_cast_or_null<llvm::InvokeInst>(
+            nextSemanticInstruction(*Anchor));
+        const llvm::Function *Callee =
+            Invoke ? Invoke->getCalledFunction() : nullptr;
+        auto &Markers = IsRangeEnter ? RangeEnters : RangeExits;
+        if (ExpectedModel != windows_eh_md::NativeProvenanceModel::SEH ||
+            Anchor->getNumOperandBundles() != 1 || Provenance->AuxVA != 0 ||
+            Provenance->Flags != 0 || !Invoke || !Callee ||
+            Callee->getIntrinsicID() != ExpectedIntrinsic ||
+            Invoke->arg_size() != 0 || Invoke->getNumOperandBundles() != 0 ||
+            !AnchoredRangeMarkers.insert(Invoke).second ||
+            !Markers
+                 .emplace(Key,
+                          NativeEHRangeMarker{Invoke, Provenance->SourceVA})
+                 .second)
+          return patchError("malformed native SEH range-marker provenance in "
+                            "function " +
+                            F.getName());
+        continue;
+      }
+
+      const bool IsRangeEnterTarget =
+          Provenance->Role ==
+          windows_eh_md::NativeProvenanceRole::RangeEnterTarget;
+      const bool IsRangeExitTarget =
+          Provenance->Role ==
+          windows_eh_md::NativeProvenanceRole::RangeExitTarget;
+      if (IsRangeEnterTarget || IsRangeExitTarget) {
+        const RangeKey Key{Provenance->Region, Provenance->Clause};
+        auto &Targets =
+            IsRangeEnterTarget ? RangeEnterTargets : RangeExitTargets;
+        if (ExpectedModel != windows_eh_md::NativeProvenanceModel::SEH ||
+            Anchor->getNumOperandBundles() != 1 || Provenance->AuxVA != 0 ||
+            Provenance->Flags != 0 ||
+            !Targets
+                 .emplace(Key, NativeEHRangeTarget{Anchor->getParent(),
+                                                   Provenance->SourceVA})
+                 .second)
+          return patchError("malformed native SEH range-target provenance in "
+                            "function " +
+                            F.getName());
+        continue;
+      }
+
+      if (Anchor->getNumOperandBundles() != 2 ||
+          Anchor->countOperandBundlesOfType("funclet") != 1)
+        return patchError("malformed region-dispatch provenance in function " +
+                          F.getName());
+      auto FuncletBundle = Anchor->getOperandBundle("funclet");
+      if (!FuncletBundle || FuncletBundle->Inputs.size() != 1)
+        return patchError("malformed region-dispatch provenance in function " +
+                          F.getName());
+
+      const llvm::Instruction *Previous = previousSemanticInstruction(*Anchor);
+      const llvm::BasicBlock *Destination = nullptr;
+      bool IsCleanup = false;
+      const llvm::Value *ExpectedToken = nullptr;
+      const llvm::BasicBlock *Continuation = nullptr;
+      const llvm::CatchPadInst *CatchPad = nullptr;
+      const llvm::CleanupPadInst *CleanupPad = nullptr;
+      if (const auto *Pad =
+              llvm::dyn_cast_or_null<llvm::CatchPadInst>(Previous)) {
+        CatchPad = Pad;
+        Destination = Pad->getCatchSwitch()->getParent();
+        ExpectedToken = Pad;
+        const auto *Return = llvm::dyn_cast_or_null<llvm::CatchReturnInst>(
+            nextSemanticInstruction(*Anchor));
+        if (!Return || Return->getCatchPad() != Pad)
+          return patchError("region-dispatch provenance has no exact catchret "
+                            "in function " +
+                            F.getName());
+        Continuation = Return->getSuccessor();
+      } else if (const auto *Pad =
+                     llvm::dyn_cast_or_null<llvm::CleanupPadInst>(Previous)) {
+        CleanupPad = Pad;
+        Destination = Pad->getParent();
+        ExpectedToken = Pad;
+        IsCleanup = true;
+      }
+      if (!Destination || FuncletBundle->Inputs.front().get() != ExpectedToken)
+        return patchError("region-dispatch provenance is detached from its "
+                          "funclet in function " +
+                          F.getName());
+
+      NativeEHDispatch &Dispatch = Dispatches[Provenance->Region];
+      if ((Dispatch.Destination && (Dispatch.Destination != Destination ||
+                                    Dispatch.IsCleanup != IsCleanup)) ||
+          !Dispatch.Clauses.insert(Provenance->Clause).second ||
+          !Dispatch.ClauseSemantics
+               .emplace(Provenance->Clause,
+                        NativeEHClause{CatchPad, CleanupPad,
+                                       Provenance->SourceVA,
+                                       Provenance->AuxVA, Provenance->Flags})
+               .second ||
+          (Continuation &&
+           !Dispatch.Continuations
+                .emplace(Provenance->Clause, Continuation)
+                .second))
+        return patchError("ambiguous native WinEH region provenance in "
+                          "function " +
+                          F.getName());
+      Dispatch.Destination = Destination;
+      Dispatch.IsCleanup = IsCleanup;
     }
-  if (!HasInvoke)
-    return false;
-  if (EH.Personality == ExceptionPersonality::CxxFrameHandler3)
-    return HasCatchSwitch && HasCatchPad;
-  if (EH.Personality != ExceptionPersonality::CSpecificHandler || !EH.SEH)
-    return false;
-  const bool NeedsCatch =
-      std::any_of(EH.SEH->Scopes.begin(), EH.SEH->Scopes.end(),
-                  [](const SEHScopeRecord &Scope) {
-                    return Scope.Kind != SEHScopeKind::Finally;
-                  });
-  const bool NeedsCleanup =
-      std::any_of(EH.SEH->Scopes.begin(), EH.SEH->Scopes.end(),
-                  [](const SEHScopeRecord &Scope) {
-                    return Scope.Kind == SEHScopeKind::Finally;
-                  });
-  return (!NeedsCatch || (HasCatchSwitch && HasCatchPad)) &&
-         (!NeedsCleanup || HasCleanupPad);
+  }
+
+  if (Dispatches.empty() ||
+      (ExpectedModel == windows_eh_md::NativeProvenanceModel::CxxFH3 &&
+       ProtectedInvokes.empty()))
+    return patchError("native WinEH provenance is incomplete for function " +
+                      F.getName());
+  for (const llvm::BasicBlock &Block : F) {
+    for (const llvm::Instruction &Instruction : Block) {
+      const auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(&Instruction);
+      if (!Invoke)
+        continue;
+      const llvm::Function *Callee = Invoke->getCalledFunction();
+      if (Callee && Callee->isIntrinsic()) {
+        if ((Callee->getIntrinsicID() == llvm::Intrinsic::seh_try_begin ||
+             Callee->getIntrinsicID() == llvm::Intrinsic::seh_try_end) &&
+            !AnchoredRangeMarkers.count(Invoke))
+          return patchError("SEH range marker lacks native provenance in "
+                            "function " +
+                            F.getName());
+        continue;
+      }
+      if (!AnchoredInvokes.count(Invoke) ||
+          previousSemanticInstruction(*Invoke) == nullptr)
+        return patchError("protected invoke lacks native WinEH provenance in "
+                          "function " +
+                          F.getName());
+    }
+  }
+
+  auto ValidateUnwindDestinations = [&]() -> llvm::Error {
+    for (const NativeEHProtectedInvoke &Protected : ProtectedInvokes) {
+      auto Dispatch = Dispatches.find(Protected.Region);
+      if (Dispatch == Dispatches.end() ||
+          Protected.Invoke->getUnwindDest() != Dispatch->second.Destination)
+        return patchError("protected invoke unwind destination does not match "
+                          "its source region in function " +
+                          F.getName());
+    }
+    return llvm::Error::success();
+  };
+
+  if (ExpectedModel == windows_eh_md::NativeProvenanceModel::SEH) {
+    if (!EH.SEH || Dispatches.size() != EH.SEH->Scopes.size())
+      return patchError("native SEH region provenance is incomplete for "
+                        "function " +
+                        F.getName());
+    auto ParentRegion = [&](size_t Region) -> std::optional<uint32_t> {
+      const ExceptionAddressRange &Range = EH.SEH->Scopes[Region].GuardedRange;
+      std::optional<uint32_t> Parent;
+      uint64_t ParentSize = std::numeric_limits<uint64_t>::max();
+      for (size_t Candidate = 0; Candidate < EH.SEH->Scopes.size();
+           ++Candidate) {
+        const ExceptionAddressRange &CandidateRange =
+            EH.SEH->Scopes[Candidate].GuardedRange;
+        if (Candidate == Region || !CandidateRange.contains(Range) ||
+            CandidateRange.size() <= Range.size() ||
+            CandidateRange.size() >= ParentSize)
+          continue;
+        Parent = static_cast<uint32_t>(Candidate);
+        ParentSize = CandidateRange.size();
+      }
+      return Parent;
+    };
+    auto ExpectedParentDestination =
+        [&](size_t Region) -> const llvm::BasicBlock * {
+      std::optional<uint32_t> Parent = ParentRegion(Region);
+      if (!Parent)
+        return nullptr;
+      auto Dispatch = Dispatches.find(*Parent);
+      return Dispatch == Dispatches.end() ? nullptr
+                                          : Dispatch->second.Destination;
+    };
+    auto *PtrTy = llvm::PointerType::get(F.getContext(), 0);
+    auto *FilterType = llvm::FunctionType::get(
+        llvm::Type::getInt32Ty(F.getContext()), {PtrTy, PtrTy}, false);
+    auto *FinallyType = llvm::FunctionType::get(
+        llvm::Type::getVoidTy(F.getContext()),
+        {llvm::Type::getInt8Ty(F.getContext()), PtrTy}, false);
+    auto ValidateRangeMarkers =
+        [&](const std::map<RangeKey, NativeEHRangeMarker> &Markers,
+            const std::map<RangeKey, NativeEHRangeTarget> &Targets,
+            bool IsEnter) -> llvm::Error {
+      if (Markers.size() != Targets.size())
+        return patchError("native SEH range provenance has invalid exact "
+                          "cardinality in function " +
+                          F.getName());
+      std::map<uint32_t, std::set<uint32_t>> Clauses;
+      for (const auto &[Key, Marker] : Markers) {
+        if (Key.first >= EH.SEH->Scopes.size())
+          return patchError("native SEH range provenance names an unknown "
+                            "scope in function " +
+                            F.getName());
+        auto Target = Targets.find(Key);
+        auto Dispatch = Dispatches.find(Key.first);
+        const ExceptionAddressRange &Range =
+            EH.SEH->Scopes[Key.first].GuardedRange;
+        const va_t ExpectedSource = IsEnter ? Range.Begin : Range.End;
+        if (Target == Targets.end() || Dispatch == Dispatches.end() ||
+            Marker.SourceVA != ExpectedSource ||
+            Target->second.SourceVA != ExpectedSource || !Marker.Invoke ||
+            Marker.Invoke->getNormalDest() != Target->second.Target ||
+            Marker.Invoke->getUnwindDest() != Dispatch->second.Destination)
+          return patchError("native SEH range marker has an altered "
+                            "normal/unwind destination in function " +
+                            F.getName());
+        Clauses[Key.first].insert(Key.second);
+      }
+      for (const auto &[Key, Target] : Targets) {
+        (void)Target;
+        if (!Markers.count(Key))
+          return patchError("native SEH range-target provenance has no exact "
+                            "marker in function " +
+                            F.getName());
+      }
+      for (size_t Region = 0; Region < EH.SEH->Scopes.size(); ++Region) {
+        auto RegionClauses = Clauses.find(static_cast<uint32_t>(Region));
+        if (IsEnter && RegionClauses == Clauses.end())
+          return patchError("native SEH range-enter provenance is incomplete "
+                            "for function " +
+                            F.getName());
+        if (RegionClauses == Clauses.end())
+          continue;
+        uint32_t ExpectedClause = 0;
+        for (uint32_t Clause : RegionClauses->second)
+          if (Clause != ExpectedClause++)
+            return patchError("native SEH range provenance has non-canonical "
+                              "cardinality in function " +
+                              F.getName());
+      }
+      return llvm::Error::success();
+    };
+    if (llvm::Error Err =
+            ValidateRangeMarkers(RangeEnters, RangeEnterTargets, true))
+      return Err;
+    if (llvm::Error Err =
+            ValidateRangeMarkers(RangeExits, RangeExitTargets, false))
+      return Err;
+    size_t ExpectedHandlerTargets = 0;
+    for (size_t I = 0; I < EH.SEH->Scopes.size(); ++I) {
+      auto Dispatch = Dispatches.find(static_cast<uint32_t>(I));
+      const SEHScopeRecord &Scope = EH.SEH->Scopes[I];
+      if (Dispatch == Dispatches.end() ||
+          Dispatch->second.Clauses.size() != 1 ||
+          !Dispatch->second.Clauses.count(0) ||
+          Dispatch->second.IsCleanup != (Scope.Kind == SEHScopeKind::Finally))
+        return patchError("native SEH region provenance does not match the "
+                          "input scope table for function " +
+                          F.getName());
+      auto Semantics = Dispatch->second.ClauseSemantics.find(0);
+      if (Semantics == Dispatch->second.ClauseSemantics.end() ||
+          Semantics->second.Flags != static_cast<uint32_t>(Scope.Kind))
+        return patchError("native SEH funclet provenance does not match the "
+                          "input scope table for function " +
+                          F.getName());
+
+      const llvm::BasicBlock *ParentDestination =
+          ExpectedParentDestination(I);
+      if (Scope.Kind != SEHScopeKind::Finally) {
+        ++ExpectedHandlerTargets;
+        const std::pair<uint32_t, uint32_t> Key{
+            static_cast<uint32_t>(I), 0};
+        auto HandlerTarget = HandlerTargets.find(Key);
+        auto Continuation = Dispatch->second.Continuations.find(0);
+        const va_t ExpectedFilter = Scope.Kind == SEHScopeKind::Filter
+                                        ? Scope.FilterOrFinallyVA
+                                        : 0;
+        if (!Semantics->second.CatchPad || Semantics->second.CleanupPad ||
+            Semantics->second.SourceVA != Scope.HandlerVA ||
+            Semantics->second.AuxVA != ExpectedFilter ||
+            HandlerTarget == HandlerTargets.end() ||
+            HandlerTarget->second.SourceVA != Scope.HandlerVA ||
+            Continuation == Dispatch->second.Continuations.end() ||
+            Continuation->second != HandlerTarget->second.Target)
+          return patchError(
+              "native SEH catchret continuation does not match its source "
+              "handler in function " +
+              F.getName());
+
+        const llvm::CatchPadInst &Pad = *Semantics->second.CatchPad;
+        const llvm::CatchSwitchInst *Switch = Pad.getCatchSwitch();
+        if (Pad.arg_size() != 1 || !Switch || Switch->getNumHandlers() != 1 ||
+            *Switch->handler_begin() != Pad.getParent() ||
+            !llvm::isa<llvm::ConstantTokenNone>(Switch->getParentPad()) ||
+            Switch->getUnwindDest() != ParentDestination ||
+            Switch->hasUnwindDest() != (ParentDestination != nullptr))
+          return patchError("native SEH catch funclet ABI was altered in "
+                            "function " +
+                            F.getName());
+        if (Scope.Kind == SEHScopeKind::CatchAll) {
+          if (!llvm::isa<llvm::ConstantPointerNull>(Pad.getArgOperand(0)))
+            return patchError("native SEH catch-all filter was altered in "
+                              "function " +
+                              F.getName());
+        } else if (!hasExactSourceFunctionIdentity(
+                       F, *Pad.getArgOperand(0), Scope.FilterOrFinallyVA,
+                       *FilterType)) {
+          return patchError("native SEH filter callback was altered in "
+                            "function " +
+                            F.getName());
+        }
+        continue;
+      }
+
+      if (Semantics->second.CatchPad || !Semantics->second.CleanupPad ||
+          Semantics->second.SourceVA != 0 ||
+          Semantics->second.AuxVA != Scope.FilterOrFinallyVA)
+        return patchError("native SEH finally provenance does not match its "
+                          "source callback in function " +
+                          F.getName());
+      const llvm::CleanupPadInst &Pad = *Semantics->second.CleanupPad;
+      const auto *Return =
+          llvm::dyn_cast<llvm::CleanupReturnInst>(Pad.getParent()->getTerminator());
+      if (Pad.arg_size() != 0 ||
+          !llvm::isa<llvm::ConstantTokenNone>(Pad.getParentPad()) || !Return ||
+          Return->getCleanupPad() != &Pad ||
+          Return->getUnwindDest() != ParentDestination ||
+          Return->hasUnwindDest() != (ParentDestination != nullptr))
+        return patchError("native SEH finally cleanupret was altered in "
+                          "function " +
+                          F.getName());
+
+      const llvm::CallInst *LocalAddress = nullptr;
+      const llvm::CallInst *CallbackCall = nullptr;
+      size_t LocalAddressCount = 0;
+      size_t CallbackCount = 0;
+      for (const llvm::Instruction &Instruction : *Pad.getParent()) {
+        const auto *Call = llvm::dyn_cast<llvm::CallInst>(&Instruction);
+        if (!Call)
+          continue;
+        const llvm::Function *Callee = Call->getCalledFunction();
+        if (Callee && Callee->getIntrinsicID() == llvm::Intrinsic::sideeffect)
+          continue;
+        if (Callee &&
+            Callee->getIntrinsicID() == llvm::Intrinsic::localaddress) {
+          LocalAddress = Call;
+          ++LocalAddressCount;
+          continue;
+        }
+        CallbackCall = Call;
+        ++CallbackCount;
+      }
+      if (LocalAddressCount != 1 || CallbackCount != 1 || !LocalAddress ||
+          !CallbackCall || LocalAddress->arg_size() != 0 ||
+          LocalAddress->getNumOperandBundles() != 0 ||
+          CallbackCall->arg_size() != 2 ||
+          CallbackCall->getFunctionType() != FinallyType ||
+          CallbackCall->getCallingConv() != llvm::CallingConv::C ||
+          CallbackCall->getNumOperandBundles() != 1 ||
+          CallbackCall->countOperandBundlesOfType("funclet") != 1 ||
+          !hasExactSourceFunctionIdentity(
+              F, *CallbackCall->getCalledOperand(), Scope.FilterOrFinallyVA,
+              *FinallyType))
+        return patchError("native SEH finally callback was altered in "
+                          "function " +
+                          F.getName());
+      auto Funclet = CallbackCall->getOperandBundle("funclet");
+      const auto *AbnormalTermination =
+          llvm::dyn_cast<llvm::ConstantInt>(CallbackCall->getArgOperand(0));
+      if (!Funclet || Funclet->Inputs.size() != 1 ||
+          Funclet->Inputs.front().get() != &Pad || !AbnormalTermination ||
+          AbnormalTermination->getBitWidth() != 8 ||
+          AbnormalTermination->getZExtValue() != 1 ||
+          CallbackCall->getArgOperand(1) != LocalAddress)
+        return patchError("native SEH finally callback ABI was altered in "
+                          "function " +
+                          F.getName());
+    }
+    if (HandlerTargets.size() != ExpectedHandlerTargets)
+      return patchError("native SEH handler-target provenance has invalid "
+                        "cardinality in function " +
+                        F.getName());
+    for (const NativeEHProtectedInvoke &Protected : ProtectedInvokes) {
+      std::optional<uint32_t> ExpectedRegion;
+      uint64_t InnermostSize = std::numeric_limits<uint64_t>::max();
+      for (size_t I = 0; I < EH.SEH->Scopes.size(); ++I) {
+        const ExceptionAddressRange &Range = EH.SEH->Scopes[I].GuardedRange;
+        if (!Range.contains(Protected.SourceVA) ||
+            Range.size() >= InnermostSize)
+          continue;
+        ExpectedRegion = static_cast<uint32_t>(I);
+        InnermostSize = Range.size();
+      }
+      if (!ExpectedRegion || Protected.Region != *ExpectedRegion)
+        return patchError("protected invoke does not match its source SEH "
+                          "scope in function " +
+                          F.getName());
+    }
+    return ValidateUnwindDestinations();
+  }
+
+  if (!RangeEnters.empty() || !RangeExits.empty() ||
+      !RangeEnterTargets.empty() || !RangeExitTargets.empty())
+    return patchError("native FH3 provenance contains SEH range markers in "
+                      "function " +
+                      F.getName());
+
+  if (!EH.Cxx || Dispatches.size() != EH.Cxx->TryBlocks.size())
+    return patchError("native FH3 region provenance is incomplete for "
+                      "function " +
+                      F.getName());
+  size_t ExpectedHandlerTargets = 0;
+  for (size_t I = 0; I < EH.Cxx->TryBlocks.size(); ++I) {
+    auto Dispatch = Dispatches.find(static_cast<uint32_t>(I));
+    const CxxTryBlock &Try = EH.Cxx->TryBlocks[I];
+    ExpectedHandlerTargets += Try.Handlers.size();
+    if (Dispatch == Dispatches.end() || Dispatch->second.IsCleanup ||
+        Dispatch->second.Clauses.size() != Try.Handlers.size())
+      return patchError("native FH3 region provenance does not match the input "
+                        "try map for function " +
+                        F.getName());
+    for (size_t Clause = 0; Clause < Try.Handlers.size(); ++Clause) {
+      const uint32_t ClauseIndex = static_cast<uint32_t>(Clause);
+      const std::pair<uint32_t, uint32_t> Key{static_cast<uint32_t>(I),
+                                              ClauseIndex};
+      auto HandlerTarget = HandlerTargets.find(Key);
+      auto Continuation = Dispatch->second.Continuations.find(ClauseIndex);
+      auto Semantics = Dispatch->second.ClauseSemantics.find(ClauseIndex);
+      if (!Dispatch->second.Clauses.count(ClauseIndex))
+        return patchError("native FH3 clause provenance does not match the "
+                          "input try map for function " +
+                          F.getName());
+      if (HandlerTarget == HandlerTargets.end() ||
+          HandlerTarget->second.SourceVA != Try.Handlers[Clause].HandlerVA ||
+          Continuation == Dispatch->second.Continuations.end() ||
+          Continuation->second != HandlerTarget->second.Target)
+        return patchError("native FH3 catchret continuation does not match its "
+                          "source handler in function " +
+                          F.getName());
+      const CxxCatchHandler &Handler = Try.Handlers[Clause];
+      if (Semantics == Dispatch->second.ClauseSemantics.end() ||
+          !Semantics->second.CatchPad || Semantics->second.CleanupPad ||
+          Semantics->second.SourceVA != Handler.HandlerVA ||
+          Semantics->second.AuxVA != Handler.TypeDescriptorVA ||
+          Semantics->second.Flags != Handler.Adjectives)
+        return patchError("native FH3 catchpad provenance does not match its "
+                          "source handler in function " +
+                          F.getName());
+      const llvm::CatchPadInst &Pad = *Semantics->second.CatchPad;
+      if (Pad.arg_size() != 3 ||
+          !llvm::isa<llvm::ConstantPointerNull>(Pad.getArgOperand(2)))
+        return patchError("native FH3 catchpad ABI was altered in function " +
+                          F.getName());
+      if (!hasExactCxxTypeDescriptor(F, *Pad.getArgOperand(0),
+                                     Handler.TypeDescriptorVA))
+        return patchError("native FH3 catchpad RTTI was altered in function " +
+                          F.getName());
+      const auto *Adjectives =
+          llvm::dyn_cast<llvm::ConstantInt>(Pad.getArgOperand(1));
+      if (!Adjectives || Adjectives->getBitWidth() != 32 ||
+          Adjectives->getZExtValue() != Handler.Adjectives)
+        return patchError(
+            "native FH3 catchpad adjectives were altered in function " +
+            F.getName());
+    }
+  }
+  if (HandlerTargets.size() != ExpectedHandlerTargets)
+    return patchError("native FH3 handler-target provenance has invalid "
+                      "cardinality in function " +
+                      F.getName());
+  for (const NativeEHProtectedInvoke &Protected : ProtectedInvokes) {
+    int32_t State = -1;
+    for (const CxxIPState &Entry : EH.Cxx->IPMap) {
+      if (Entry.IP > Protected.SourceVA)
+        break;
+      State = Entry.State;
+    }
+    std::optional<uint32_t> ExpectedRegion;
+    uint64_t InnermostSpan = std::numeric_limits<uint64_t>::max();
+    for (size_t I = 0; I < EH.Cxx->TryBlocks.size(); ++I) {
+      const CxxTryBlock &Try = EH.Cxx->TryBlocks[I];
+      if (State < Try.TryLow || State > Try.TryHigh)
+        continue;
+      uint64_t Span = static_cast<uint64_t>(Try.TryHigh) -
+                      static_cast<uint64_t>(Try.TryLow);
+      if (Span >= InnermostSpan)
+        continue;
+      ExpectedRegion = static_cast<uint32_t>(I);
+      InnermostSpan = Span;
+    }
+    if (!ExpectedRegion || Protected.Region != *ExpectedRegion)
+      return patchError("protected invoke does not match its source FH3 try "
+                        "region in function " +
+                        F.getName());
+  }
+  return ValidateUnwindDestinations();
 }
 
 llvm::Error validateExceptionRecord(const ExceptionFunction &EH,
@@ -188,13 +1077,17 @@ llvm::Error validateExceptionRecord(const ExceptionFunction &EH,
     return patchError("unknown Windows personality in " + Context);
 
   if (EH.Personality != ExceptionPersonality::None) {
-    if (TargetArch != Arch::X64)
-      return patchError("ARM language-handler reconstruction is not yet "
-                        "native for " +
-                        Context);
-    if (!EH.canRegenerateLanguageMetadata())
-      return patchError("language metadata failed regeneration checks for " +
-                        Context);
+    const WindowsEHNativeSourceClassification Source =
+        classifyWindowsEHNativeSource(EH, TargetArch, BinaryFormat::COFF);
+    const bool ModelMatchesPersonality =
+        (EH.Personality == ExceptionPersonality::CSpecificHandler &&
+         Source.Model == WindowsEHNativeSourceModel::SEH) ||
+        (EH.Personality == ExceptionPersonality::CxxFrameHandler3 &&
+         Source.Model == WindowsEHNativeSourceModel::CxxFH3);
+    if (!Source.canRegenerateLanguageMetadata() || !ModelMatchesPersonality)
+      return patchError(
+          "language metadata failed target-aware regeneration checks for " +
+          Context + ": " + getWindowsEHNativeSourceReasonName(Source.Reason));
   }
   return llvm::Error::success();
 }
@@ -218,9 +1111,11 @@ llvm::Error validateExceptionFunction(const llvm::Function &F,
     if (!hasNativeEHMarker(F, NativeKind))
       return patchError("native WinEH lowering is unavailable for function " +
                         F.getName());
-    if (!hasPersonality(F, PersonalityName) || !hasNativeLanguageIRShape(F, EH))
+    if (!hasPersonality(F, PersonalityName))
       return patchError("native WinEH IR contract was altered for function " +
                         F.getName());
+    if (llvm::Error Err = validateNativeLanguageIRGraph(F, EH))
+      return Err;
   }
   return llvm::Error::success();
 }
@@ -471,6 +1366,14 @@ llvm::Error validateRuntimeEntries(llvm::ArrayRef<RuntimeEntry> Entries,
 
 } // namespace
 
+llvm::Error validateCOFFExceptionSourceIdentityClosure(
+    const llvm::Module &Mod, const BinaryImage &Image) {
+  auto Functions = validateCanonicalWindowsEHIdentity(Mod, Image);
+  if (!Functions)
+    return Functions.takeError();
+  return llvm::Error::success();
+}
+
 std::optional<va_t> findCOFFExceptionPersonalityVA(const BinaryImage &Image,
                                                    llvm::StringRef SymbolName) {
   SymbolName.consume_front("\01");
@@ -506,46 +1409,18 @@ planCOFFExceptionPatch(const llvm::Module &Mod, const BinaryImage &Image,
   if (Image.ExceptionMetadata.ParseStatus == ExceptionParseStatus::Malformed)
     return patchError("input exception directory is malformed");
 
-  std::set<va_t> Seen;
-  for (const llvm::Function &F : Mod) {
-    if (F.isDeclaration())
-      continue;
-    const llvm::MDNode *MD = F.getMetadata(windows_eh_md::FunctionAttachment);
-    if (!MD) {
-      // A manually supplied module can still target an auto-named lifted
-      // function.  Refuse omission of an exception contract for that case.
-      if (auto Address = autoFunctionAddress(F.getName())) {
-        if (const ExceptionFunction *EH =
-                Image.ExceptionMetadata.findFunction(*Address))
-          return patchError("function " + F.getName() +
-                            " omits its Windows EH metadata");
-      }
-      continue;
-    }
-    if (MD->getNumOperands() != windows_eh_md::OperandCount)
-      return patchError("unsupported Windows EH metadata shape on function " +
-                        F.getName());
-    auto Version = metadataUInt(*MD, windows_eh_md::Version);
-    auto Begin = metadataUInt(*MD, windows_eh_md::CodeBegin);
-    auto End = metadataUInt(*MD, windows_eh_md::CodeEnd);
-    auto Status = metadataString(*MD, windows_eh_md::ParseStatus);
-    if (!Version || *Version != windows_eh_md::SchemaVersion || !Begin ||
-        !End || !Status || *Status != "complete" || *Begin >= *End)
-      return patchError("invalid/incomplete Windows EH metadata on function " +
-                        F.getName());
-    const ExceptionFunction *EH =
-        findExactExceptionFunction(Image, *Begin, *End);
-    if (!EH)
-      return patchError("Windows EH metadata does not match the input image "
-                        "for function " +
-                        F.getName());
-    if (llvm::Error Err = validateExceptionFunction(F, *EH, TargetArch))
+  auto CanonicalFunctions = validateCanonicalWindowsEHIdentity(Mod, Image);
+  if (!CanonicalFunctions)
+    return CanonicalFunctions.takeError();
+
+  for (const CanonicalWindowsEHFunction &Entry : *CanonicalFunctions) {
+    const llvm::Function &F = *Entry.Function;
+    const ExceptionFunction &EH = *Entry.Source;
+    if (llvm::Error Err = validateExceptionFunction(F, EH, TargetArch))
       return std::move(Err);
-    if (Seen.insert(*Begin).second) {
-      Plan.ExceptionFunctionEntries.push_back(*Begin);
-      if (EH->Personality != ExceptionPersonality::None)
-        Plan.LanguageExceptionFunctionEntries.push_back(*Begin);
-    }
+    Plan.ExceptionFunctionEntries.push_back(EH.CodeRange.Begin);
+    if (EH.Personality != ExceptionPersonality::None)
+      Plan.LanguageExceptionFunctionEntries.push_back(EH.CodeRange.Begin);
   }
   if ((TargetArch == Arch::ARM || TargetArch == Arch::AArch64) &&
       !Plan.ExceptionFunctionEntries.empty() &&

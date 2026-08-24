@@ -85,7 +85,7 @@ bool parseFH4(ExceptionFunction &F, const BinaryImage &Img);
 bool parseGSCookie(ExceptionFunction &F, const BinaryImage &Img, va_t CookieVA);
 std::optional<va_t> sehGSCookieAddress(const ExceptionFunction &F,
                                        const BinaryImage &Img);
-void collectDirectCallTargets(const BinaryImage &Img, Arch A, va_t BodyVA,
+bool collectDirectCallTargets(const BinaryImage &Img, Arch A, va_t BodyVA,
                               const uint8_t *Code, size_t CodeSize,
                               std::vector<std::string> &Names);
 std::optional<ExceptionPersonality>

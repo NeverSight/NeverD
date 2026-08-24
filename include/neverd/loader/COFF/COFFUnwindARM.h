@@ -51,10 +51,12 @@ struct ARMUnwindDecode {
 /// byte index within it to begin at — an epilogue scope names its first code
 /// by exactly that index, and the prologue always begins at zero.
 ///
-/// Decoding stops at `end` or `end_c`.  Codes that run past the end of the
+/// Decoding stops at `end`.  `end_c` closes the current scope and decoding
+/// continues through the parent/phantom scope that follows; those operations
+/// remain part of the unwind program but do not increase the current
+/// fragment's physical prologue size.  Codes that run past the end of the
 /// array, or that name a reserved encoding, produce a Partial result holding
-/// everything decoded before them rather than discarding the frame: a
-/// prologue's leading operations remain true whatever follows them.
+/// everything decoded before them rather than discarding the frame.
 ARMUnwindDecode decodeARM64UnwindCodes(llvm::ArrayRef<uint8_t> Codes,
                                        uint32_t StartOffset = 0);
 

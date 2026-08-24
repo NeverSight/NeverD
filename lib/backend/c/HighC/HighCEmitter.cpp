@@ -98,6 +98,47 @@ void validateAtomicStoreOrdering(NdMemoryOrdering Ordering) {
 
 } // anonymous namespace
 
+void HighCWriter::prepareFunctionIdentifiers(
+    const std::vector<HighFunc> &Funcs) {
+  GlobalIdentifierAllocator = CProjectionIdentifierAllocator{};
+  FunctionIdentifiers.clear();
+  FunctionIdentifiersBySourceName.clear();
+  ExternalFunctionIdentifiers.clear();
+
+  for (const HighFunc &Func : Funcs) {
+    if (Func.Name.empty())
+      continue;
+    llvm::StringRef SourceName(Func.Name);
+    llvm::StringRef RenderedName = SourceName;
+    RenderedName.consume_front("_");
+    std::string Identifier =
+        GlobalIdentifierAllocator.allocate(RenderedName, "nd_function");
+    FunctionIdentifiers.emplace(&Func, Identifier);
+    FunctionIdentifiersBySourceName.try_emplace(SourceName.str(), Identifier);
+    FunctionIdentifiersBySourceName.try_emplace(RenderedName.str(), Identifier);
+  }
+}
+
+std::string HighCWriter::functionIdentifier(const HighFunc &Func) const {
+  if (auto It = FunctionIdentifiers.find(&Func);
+      It != FunctionIdentifiers.end())
+    return It->second;
+  llvm::StringRef Name(Func.Name);
+  Name.consume_front("_");
+  return canonicalizeCProjectionIdentifier(Name, "nd_function");
+}
+
+std::string HighCWriter::functionIdentifier(llvm::StringRef SourceName) const {
+  if (auto It = FunctionIdentifiersBySourceName.find(SourceName.str());
+      It != FunctionIdentifiersBySourceName.end())
+    return It->second;
+  if (auto It = ExternalFunctionIdentifiers.find(SourceName.str());
+      It != ExternalFunctionIdentifiers.end())
+    return It->second;
+  SourceName.consume_front("_");
+  return canonicalizeCProjectionIdentifier(SourceName, "nd_function");
+}
+
 std::string HighCWriter::memoryTypeName(const TypeRef &Ty) const {
   std::string Name = typeToC(Ty);
   return Name == "void" ? "uint32_t" : Name;
@@ -129,6 +170,8 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
   };
 
   for (const HighFunc &Func : Funcs) {
+    if (GuardAnalysisOnlyFunctions && isAnalysisOnlyFunction(Func))
+      continue;
     walkStmts(Func.Body, [&](const HighStmt &Stmt) {
       if (Stmt.Kind == StmtKind::Store && Stmt.StoreVal) {
         std::string Type = memoryTypeName(Stmt.StoreVal->Type);
@@ -226,9 +269,10 @@ std::string HighCWriter::memoryStoreExpr(const TypeRef &Ty,
          Val.str() + ")";
 }
 
-std::string HighCWriter::atomicExchangeExpr(
-    const TypeRef &Ty, llvm::StringRef Addr, llvm::StringRef Val,
-    NdMemoryOrdering Ordering) const {
+std::string HighCWriter::atomicExchangeExpr(const TypeRef &Ty,
+                                            llvm::StringRef Addr,
+                                            llvm::StringRef Val,
+                                            NdMemoryOrdering Ordering) const {
   if (Ordering == NdMemoryOrdering::None)
     llvm::report_fatal_error("atomic exchange requires memory ordering");
   std::string Type = memoryTypeName(Ty);
@@ -318,8 +362,11 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
     Headers.insert("string.h");
 
   std::set<std::string> CallTargets;
-  for (auto &F : Funcs)
+  for (auto &F : Funcs) {
+    if (GuardAnalysisOnlyFunctions && isAnalysisOnlyFunction(F))
+      continue;
     collectCallTargets(F.Body, CallTargets);
+  }
 
   for (auto &Name : CallTargets) {
     if (const char *Hdr = libc::headerFor(Name))
@@ -349,8 +396,11 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
   }
 
   std::set<std::string> CallTargets;
-  for (auto &F : Funcs)
+  for (auto &F : Funcs) {
+    if (GuardAnalysisOnlyFunctions && isAnalysisOnlyFunction(F))
+      continue;
     collectCallTargets(F.Body, CallTargets);
+  }
 
   for (auto &Name : CallTargets) {
     if (DefinedFuncs.count(Name))
@@ -369,14 +419,22 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
     ExternFuncs.insert(Name);
   }
 
-  for (auto &Name : ExternFuncs)
-    OS << "extern int " << Name << "();\n";
+  for (const std::string &Name : ExternFuncs) {
+    llvm::StringRef RenderedName(Name);
+    RenderedName.consume_front("_");
+    std::string Identifier =
+        GlobalIdentifierAllocator.allocate(RenderedName, "nd_external");
+    ExternalFunctionIdentifiers.emplace(Name, Identifier);
+    ExternalFunctionIdentifiers.try_emplace(RenderedName.str(), Identifier);
+    OS << "extern int " << Identifier << "();\n";
+  }
 
   if (!ExternFuncs.empty())
     OS << "\n";
 }
 
 void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
+  prepareFunctionIdentifiers(Funcs);
   collectMemoryTypes(Funcs);
   writeIncludes(Funcs);
   writeMemoryHelpers();

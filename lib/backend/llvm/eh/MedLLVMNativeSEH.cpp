@@ -14,6 +14,7 @@
 #include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
+#include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/loader/ExceptionInfo.h"
 
 #include "llvm/ADT/SmallVector.h"
@@ -62,15 +63,13 @@ bool hasSupportedX64SEHCallbackABI(const llvm::Function &Callback,
 bool MedLLVMEmitter::emitNativeSEH(
     const MedFunc &Func, llvm::Function &LLVMFunc,
     const std::map<int, llvm::BasicBlock *> &OriginalBlockMap) {
-  if (TargetArch != Arch::X64 || TargetFormat != BinaryFormat::COFF ||
-      !Func.ExceptionMetadata)
+  if (!Func.ExceptionMetadata)
     return false;
   const ExceptionFunction &EH = *Func.ExceptionMetadata;
-  if (EH.ParseStatus != ExceptionParseStatus::Complete ||
-      EH.Personality != ExceptionPersonality::CSpecificHandler || !EH.SEH ||
-      EH.SEH->Scopes.empty() ||
-      (EH.Encoding != ExceptionEncoding::X64UnwindV1 &&
-       EH.Encoding != ExceptionEncoding::X64UnwindV2))
+  const WindowsEHNativeSourceClassification Source =
+      classifyWindowsEHNativeSource(EH, TargetArch, TargetFormat);
+  if (!Source.canRegenerateLanguageMetadata() ||
+      Source.Model != WindowsEHNativeSourceModel::SEH)
     return false;
 
   if (!med_llvm_eh::collectExactSourceCallAddresses(LLVMFunc, CallSiteAddrs))
@@ -99,6 +98,7 @@ bool MedLLVMEmitter::emitNativeSEH(
     llvm::BasicBlock *UnwindDest = nullptr;
     int Parent = -1;
     std::set<llvm::BasicBlock *> Blocks;
+    uint32_t SourceIndex = 0;
   };
 
   auto FunctionAt = [&](va_t Address) -> llvm::Function * {
@@ -119,7 +119,11 @@ bool MedLLVMEmitter::emitNativeSEH(
 
   std::vector<Region> Regions;
   Regions.reserve(EH.SEH->Scopes.size());
-  for (const SEHScopeRecord &Scope : EH.SEH->Scopes) {
+  if (EH.SEH->Scopes.size() > std::numeric_limits<uint32_t>::max())
+    return false;
+  for (size_t ScopeIndex = 0; ScopeIndex < EH.SEH->Scopes.size();
+       ++ScopeIndex) {
+    const SEHScopeRecord &Scope = EH.SEH->Scopes[ScopeIndex];
     if (Scope.ParseStatus != ExceptionParseStatus::Complete ||
         !Scope.GuardedRange.isValid() ||
         !EH.CodeRange.contains(Scope.GuardedRange))
@@ -127,6 +131,7 @@ bool MedLLVMEmitter::emitNativeSEH(
 
     Region R;
     R.Scope = &Scope;
+    R.SourceIndex = static_cast<uint32_t>(ScopeIndex);
     if (Scope.Kind == SEHScopeKind::Finally) {
       R.Callback = FunctionAt(Scope.FilterOrFinallyVA);
       if (!R.Callback || R.Callback == &LLVMFunc ||
@@ -211,6 +216,7 @@ bool MedLLVMEmitter::emitNativeSEH(
   struct CallPlan {
     llvm::CallInst *Call = nullptr;
     size_t RegionIndex = 0;
+    va_t SourceAddress = 0;
   };
 
   std::set<const llvm::CallInst *> ProtectedCalls;
@@ -226,6 +232,7 @@ bool MedLLVMEmitter::emitNativeSEH(
 
   llvm::SmallVector<CallPlan, 16> CallPlans;
   std::set<const llvm::CallInst *> PlannedCalls;
+  std::set<va_t> PlannedAddresses;
   for (const MedBlock &MedBB : Func.Blocks) {
     auto BBIt = OriginalBlockMap.find(MedBB.Id);
     if (BBIt == OriginalBlockMap.end())
@@ -250,11 +257,15 @@ bool MedLLVMEmitter::emitNativeSEH(
       auto *Call = llvm::dyn_cast<llvm::CallInst>(&Inst);
       if (!Call || !IsMayUnwindCall(*Call))
         continue;
+      auto AddressIt = CallSiteAddrs.find(Call);
       if (Call->getParent() != InitialBB || !Call->getNextNode() ||
-          CallSiteAddrs.find(Call) == CallSiteAddrs.end() ||
-          !PlannedCalls.insert(Call).second)
+          AddressIt == CallSiteAddrs.end() ||
+          !EH.CodeRange.contains(AddressIt->second) ||
+          !PlannedCalls.insert(Call).second ||
+          !PlannedAddresses.insert(AddressIt->second).second)
         return false;
-      CallPlans.push_back({Call, static_cast<size_t>(Innermost)});
+      CallPlans.push_back(
+          {Call, static_cast<size_t>(Innermost), AddressIt->second});
     }
   }
   if (PlannedCalls != ProtectedCalls)
@@ -285,6 +296,12 @@ bool MedLLVMEmitter::emitNativeSEH(
           *Ctx, "seh.finally.dispatch." + Suffix, &LLVMFunc);
       llvm::IRBuilder<> B(PadBB);
       auto *Pad = B.CreateCleanupPad(TokenNone, {}, "seh.finally.pad");
+      med_llvm_eh::emitWindowsEHProvenanceAnchor(
+          B, windows_eh_md::NativeProvenanceModel::SEH,
+          windows_eh_md::NativeProvenanceRole::RegionDispatch,
+          EH.CodeRange.Begin, /*SourceVA=*/0, R.SourceIndex, /*Clause=*/0, Pad,
+          R.Scope->FilterOrFinallyVA,
+          static_cast<uint32_t>(R.Scope->Kind));
       llvm::Function *LocalAddress = llvm::Intrinsic::getOrInsertDeclaration(
           Mod, llvm::Intrinsic::localaddress);
       llvm::Value *Frame = B.CreateCall(LocalAddress);
@@ -313,7 +330,20 @@ bool MedLLVMEmitter::emitNativeSEH(
                   llvm::cast<llvm::PointerType>(PtrTy)))
             : static_cast<llvm::Value *>(R.Callback);
     auto *Pad = PB.CreateCatchPad(Switch, {Filter}, "seh.catch.pad.token");
+    med_llvm_eh::emitWindowsEHProvenanceAnchor(
+        PB, windows_eh_md::NativeProvenanceModel::SEH,
+        windows_eh_md::NativeProvenanceRole::RegionDispatch, EH.CodeRange.Begin,
+        R.Scope->HandlerVA, R.SourceIndex, /*Clause=*/0, Pad,
+        R.Scope->Kind == SEHScopeKind::Filter
+            ? R.Scope->FilterOrFinallyVA
+            : 0,
+        static_cast<uint32_t>(R.Scope->Kind));
     PB.CreateCatchRet(Pad, R.Handler);
+    llvm::IRBuilder<> HandlerBuilder(&*R.Handler->getFirstInsertionPt());
+    med_llvm_eh::emitWindowsEHProvenanceAnchor(
+        HandlerBuilder, windows_eh_md::NativeProvenanceModel::SEH,
+        windows_eh_md::NativeProvenanceRole::HandlerTarget,
+        EH.CodeRange.Begin, R.Scope->HandlerVA, R.SourceIndex, /*Clause=*/0);
     R.UnwindDest = Dispatch;
   }
 
@@ -337,6 +367,12 @@ bool MedLLVMEmitter::emitNativeSEH(
         Call->getFunctionType(), Call->getCalledOperand(), Cont,
         Regions[Plan.RegionIndex].UnwindDest, Args, Bundles, Call->getName(),
         OldBranch->getIterator());
+    llvm::IRBuilder<> ProvenanceBuilder(Invoke);
+    med_llvm_eh::emitWindowsEHProvenanceAnchor(
+        ProvenanceBuilder, windows_eh_md::NativeProvenanceModel::SEH,
+        windows_eh_md::NativeProvenanceRole::ProtectedInvoke,
+        EH.CodeRange.Begin, Plan.SourceAddress,
+        Regions[Plan.RegionIndex].SourceIndex, /*Clause=*/0);
     Invoke->setCallingConv(Call->getCallingConv());
     Invoke->setAttributes(Call->getAttributes());
     Invoke->setDebugLoc(Call->getDebugLoc());
@@ -360,6 +396,15 @@ bool MedLLVMEmitter::emitNativeSEH(
     if (llvm::isa<llvm::CatchSwitchInst, llvm::CleanupReturnInst>(Term))
       return false;
     return true;
+  };
+  auto EmitRangeTarget = [&](llvm::BasicBlock *Target,
+                             windows_eh_md::NativeProvenanceRole Role,
+                             va_t SourceVA, uint32_t Region,
+                             uint32_t Boundary) {
+    llvm::IRBuilder<> TargetBuilder(&*Target->getFirstInsertionPt());
+    med_llvm_eh::emitWindowsEHProvenanceAnchor(
+        TargetBuilder, windows_eh_md::NativeProvenanceModel::SEH, Role,
+        EH.CodeRange.Begin, SourceVA, Region, Boundary);
   };
 
   // Outer-first placement produces the required nesting order on a shared
@@ -391,25 +436,43 @@ bool MedLLVMEmitter::emitNativeSEH(
 
     unsigned Marker = 0;
     for (const EntryEdge &Edge : Entries) {
+      const uint32_t Boundary = Marker++;
       auto *BeginBB = llvm::BasicBlock::Create(
           *Ctx,
           "seh.try.begin." + std::to_string(RegionIndex) + "." +
-              std::to_string(Marker++),
+              std::to_string(Boundary),
           &LLVMFunc, Edge.Target);
       Edge.Pred->getTerminator()->setSuccessor(Edge.SuccessorIndex, BeginBB);
       llvm::IRBuilder<> B(BeginBB);
+      med_llvm_eh::emitWindowsEHProvenanceAnchor(
+          B, windows_eh_md::NativeProvenanceModel::SEH,
+          windows_eh_md::NativeProvenanceRole::RangeEnter, EH.CodeRange.Begin,
+          R.Scope->GuardedRange.Begin, R.SourceIndex, Boundary);
       B.CreateInvoke(TryBegin, Edge.Target, R.UnwindDest);
+      EmitRangeTarget(Edge.Target,
+                      windows_eh_md::NativeProvenanceRole::RangeEnterTarget,
+                      R.Scope->GuardedRange.Begin, R.SourceIndex, Boundary);
       for (int Parent = R.Parent; Parent >= 0;
            Parent = Regions[static_cast<size_t>(Parent)].Parent)
         Regions[static_cast<size_t>(Parent)].Blocks.insert(BeginBB);
     }
     if (EntryWithoutPred) {
+      const uint32_t Boundary = Marker++;
       auto *OldEntry = &LLVMFunc.getEntryBlock();
       auto *BeginBB = llvm::BasicBlock::Create(
-          *Ctx, "seh.try.begin." + std::to_string(RegionIndex) + ".entry",
+          *Ctx,
+          "seh.try.begin." + std::to_string(RegionIndex) + "." +
+              std::to_string(Boundary),
           &LLVMFunc, OldEntry);
       llvm::IRBuilder<> B(BeginBB);
+      med_llvm_eh::emitWindowsEHProvenanceAnchor(
+          B, windows_eh_md::NativeProvenanceModel::SEH,
+          windows_eh_md::NativeProvenanceRole::RangeEnter, EH.CodeRange.Begin,
+          R.Scope->GuardedRange.Begin, R.SourceIndex, Boundary);
       B.CreateInvoke(TryBegin, OldEntry, R.UnwindDest);
+      EmitRangeTarget(OldEntry,
+                      windows_eh_md::NativeProvenanceRole::RangeEnterTarget,
+                      R.Scope->GuardedRange.Begin, R.SourceIndex, Boundary);
       for (int Parent = R.Parent; Parent >= 0;
            Parent = Regions[static_cast<size_t>(Parent)].Parent)
         Regions[static_cast<size_t>(Parent)].Blocks.insert(BeginBB);
@@ -437,24 +500,33 @@ bool MedLLVMEmitter::emitNativeSEH(
 
     Marker = 0;
     for (const ExitEdge &Edge : Exits) {
-      auto *EndBB = llvm::BasicBlock::Create(*Ctx,
-                                             "seh.try.end." +
-                                                 std::to_string(RegionIndex) +
-                                                 "." + std::to_string(Marker++),
-                                             &LLVMFunc, Edge.Target);
+      const uint32_t Boundary = Marker++;
+      auto *EndBB = llvm::BasicBlock::Create(
+          *Ctx,
+          "seh.try.end." + std::to_string(RegionIndex) + "." +
+              std::to_string(Boundary),
+          &LLVMFunc, Edge.Target);
       Edge.Term->setSuccessor(Edge.SuccessorIndex, EndBB);
       llvm::IRBuilder<> B(EndBB);
+      med_llvm_eh::emitWindowsEHProvenanceAnchor(
+          B, windows_eh_md::NativeProvenanceModel::SEH,
+          windows_eh_md::NativeProvenanceRole::RangeExit, EH.CodeRange.Begin,
+          R.Scope->GuardedRange.End, R.SourceIndex, Boundary);
       B.CreateInvoke(TryEnd, Edge.Target, R.UnwindDest);
+      EmitRangeTarget(Edge.Target,
+                      windows_eh_md::NativeProvenanceRole::RangeExitTarget,
+                      R.Scope->GuardedRange.End, R.SourceIndex, Boundary);
       for (int Parent = R.Parent; Parent >= 0;
            Parent = Regions[static_cast<size_t>(Parent)].Parent)
         Regions[static_cast<size_t>(Parent)].Blocks.insert(EndBB);
     }
     for (llvm::ReturnInst *Ret : Returns) {
+      const uint32_t Boundary = Marker++;
       llvm::BasicBlock *Source = Ret->getParent();
       auto *EndBB = llvm::BasicBlock::Create(
           *Ctx,
           "seh.try.end." + std::to_string(RegionIndex) + ".ret." +
-              std::to_string(Marker++),
+              std::to_string(Boundary),
           &LLVMFunc);
       auto *RetBB = llvm::BasicBlock::Create(
           *Ctx, "seh.try.ret." + std::to_string(RegionIndex), &LLVMFunc);
@@ -463,12 +535,19 @@ bool MedLLVMEmitter::emitNativeSEH(
       llvm::IRBuilder<> SourceBuilder(Source);
       SourceBuilder.CreateBr(EndBB);
       llvm::IRBuilder<> EndBuilder(EndBB);
+      med_llvm_eh::emitWindowsEHProvenanceAnchor(
+          EndBuilder, windows_eh_md::NativeProvenanceModel::SEH,
+          windows_eh_md::NativeProvenanceRole::RangeExit, EH.CodeRange.Begin,
+          R.Scope->GuardedRange.End, R.SourceIndex, Boundary);
       EndBuilder.CreateInvoke(TryEnd, RetBB, R.UnwindDest);
       llvm::IRBuilder<> RetBuilder(RetBB);
       if (ReturnValue)
         RetBuilder.CreateRet(ReturnValue);
       else
         RetBuilder.CreateRetVoid();
+      EmitRangeTarget(RetBB,
+                      windows_eh_md::NativeProvenanceRole::RangeExitTarget,
+                      R.Scope->GuardedRange.End, R.SourceIndex, Boundary);
       for (int Parent = R.Parent; Parent >= 0;
            Parent = Regions[static_cast<size_t>(Parent)].Parent)
         Regions[static_cast<size_t>(Parent)].Blocks.insert(EndBB);

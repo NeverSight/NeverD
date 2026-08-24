@@ -151,6 +151,122 @@ TEST(COFFExceptionParser, RejectsCyclicX64UnwindChainExplicitly) {
   }
 }
 
+TEST(COFFExceptionParser,
+     RejectsX64UnwindChainWithDifferentFrameRegister) {
+  ExceptionInfo Info;
+
+  ExceptionFunction Chained;
+  Chained.CodeRange = {0x140001000, 0x140001010};
+  Chained.UnwindInfoRVA = 0x3000;
+  Chained.Kind = RuntimeFunctionKind::Chained;
+  Chained.FrameRegister = 5;
+  Chained.FrameOffset = 32;
+  Chained.ChainedPrimaryRange =
+      ExceptionAddressRange{0x140001020, 0x140001030};
+  Chained.ChainedUnwindInfoRVA = 0x3020;
+  Info.Functions.push_back(std::move(Chained));
+
+  ExceptionFunction Primary;
+  Primary.CodeRange = {0x140001020, 0x140001030};
+  Primary.UnwindInfoRVA = 0x3020;
+  Primary.Kind = RuntimeFunctionKind::Primary;
+  Primary.FrameRegister = 13;
+  Primary.FrameOffset = 32;
+  Info.Functions.push_back(std::move(Primary));
+
+  coff_loader::unwind_detail::resolveX64UnwindChains(Info);
+
+  EXPECT_EQ(Info.ParseStatus, ExceptionParseStatus::Malformed);
+  EXPECT_EQ(Info.Functions[0].ParseStatus,
+            ExceptionParseStatus::Malformed);
+  ASSERT_TRUE(Info.Functions[0].PrimaryFunctionIndex.has_value());
+  EXPECT_EQ(*Info.Functions[0].PrimaryFunctionIndex, 1u);
+  EXPECT_TRUE(std::any_of(
+      Info.Functions[0].Diagnostics.begin(),
+      Info.Functions[0].Diagnostics.end(), [](const std::string &Message) {
+        return Message.find("frame register") != std::string::npos;
+      }));
+  EXPECT_EQ(Info.Functions[1].ParseStatus, ExceptionParseStatus::Complete);
+}
+
+TEST(COFFExceptionParser, RejectsX64UnwindChainWithDifferentFrameOffset) {
+  ExceptionInfo Info;
+
+  ExceptionFunction Chained;
+  Chained.CodeRange = {0x140001000, 0x140001010};
+  Chained.UnwindInfoRVA = 0x3000;
+  Chained.Kind = RuntimeFunctionKind::Chained;
+  Chained.FrameRegister = 5;
+  Chained.FrameOffset = 32;
+  Chained.ChainedPrimaryRange =
+      ExceptionAddressRange{0x140001020, 0x140001030};
+  Chained.ChainedUnwindInfoRVA = 0x3020;
+  Info.Functions.push_back(std::move(Chained));
+
+  ExceptionFunction Primary;
+  Primary.CodeRange = {0x140001020, 0x140001030};
+  Primary.UnwindInfoRVA = 0x3020;
+  Primary.Kind = RuntimeFunctionKind::Primary;
+  Primary.FrameRegister = 5;
+  Primary.FrameOffset = 48;
+  Info.Functions.push_back(std::move(Primary));
+
+  coff_loader::unwind_detail::resolveX64UnwindChains(Info);
+
+  EXPECT_EQ(Info.ParseStatus, ExceptionParseStatus::Malformed);
+  EXPECT_EQ(Info.Functions[0].ParseStatus,
+            ExceptionParseStatus::Malformed);
+  ASSERT_TRUE(Info.Functions[0].PrimaryFunctionIndex.has_value());
+  EXPECT_EQ(*Info.Functions[0].PrimaryFunctionIndex, 1u);
+  EXPECT_TRUE(std::any_of(
+      Info.Functions[0].Diagnostics.begin(),
+      Info.Functions[0].Diagnostics.end(), [](const std::string &Message) {
+        return Message.find("frame offset") != std::string::npos;
+      }));
+  EXPECT_EQ(Info.Functions[1].ParseStatus, ExceptionParseStatus::Complete);
+}
+
+TEST(COFFExceptionParser,
+     RejectsEveryX64UnwindChainNodeWithDifferentTerminalFrame) {
+  ExceptionInfo Info;
+  for (size_t I = 0; I < 3; ++I) {
+    ExceptionFunction Function;
+    Function.CodeRange = {0x140001000 + I * 0x20,
+                          0x140001010 + I * 0x20};
+    Function.UnwindInfoRVA = static_cast<uint32_t>(0x3000 + I * 0x20);
+    Function.Kind = I == 2 ? RuntimeFunctionKind::Primary
+                           : RuntimeFunctionKind::Chained;
+    Function.FrameRegister = I == 2 ? 13 : 5;
+    Function.FrameOffset = I == 2 ? 48 : 32;
+    Info.Functions.push_back(std::move(Function));
+  }
+  for (size_t I = 0; I < 2; ++I) {
+    Info.Functions[I].ChainedPrimaryRange = Info.Functions[I + 1].CodeRange;
+    Info.Functions[I].ChainedUnwindInfoRVA =
+        Info.Functions[I + 1].UnwindInfoRVA;
+  }
+
+  coff_loader::unwind_detail::resolveX64UnwindChains(Info);
+
+  EXPECT_EQ(Info.ParseStatus, ExceptionParseStatus::Malformed);
+  for (size_t I = 0; I < 2; ++I) {
+    SCOPED_TRACE(I);
+    EXPECT_EQ(Info.Functions[I].ParseStatus,
+              ExceptionParseStatus::Malformed);
+    EXPECT_TRUE(std::any_of(
+        Info.Functions[I].Diagnostics.begin(),
+        Info.Functions[I].Diagnostics.end(), [](const std::string &Message) {
+          return Message.find("frame register") != std::string::npos;
+        }));
+    EXPECT_TRUE(std::any_of(
+        Info.Functions[I].Diagnostics.begin(),
+        Info.Functions[I].Diagnostics.end(), [](const std::string &Message) {
+          return Message.find("frame offset") != std::string::npos;
+        }));
+  }
+  EXPECT_EQ(Info.Functions[2].ParseStatus, ExceptionParseStatus::Complete);
+}
+
 TEST(COFFExceptionParser, DecodesX64V1OperationsAndHandlerLocation) {
   BinaryImage Img = makeX64ExceptionImage();
   uint8_t *X = Img.Segments[1].Data.data();

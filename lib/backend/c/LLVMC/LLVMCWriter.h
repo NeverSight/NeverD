@@ -14,6 +14,8 @@
 #ifndef NEVERD_LIB_BACKEND_C_LLVMC_LLVMCWRITER_H
 #define NEVERD_LIB_BACKEND_C_LLVMC_LLVMCWRITER_H
 
+#include "../CIdentifier.h"
+
 #include "neverd/backend/c/CEmitterOptions.h"
 #include "neverd/backend/c/pass/LLVMC/LLVMCPasses.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
@@ -49,18 +51,26 @@ namespace neverd {
 class LLVMCWriter {
 public:
   LLVMCWriter(llvm::raw_ostream &OS, const CEmitterOptions &Opts,
-              DebugContext *Dbg, const BinaryImage *Img = nullptr)
-      : OS(OS), Opts(Opts), Dbg(Dbg), Img(Img) {}
+              DebugContext *Dbg, const BinaryImage *Img = nullptr,
+              bool GuardAnalysisOnlyFunctions = true)
+      : OS(OS), Opts(Opts), Dbg(Dbg), Img(Img),
+        GuardAnalysisOnlyFunctions(GuardAnalysisOnlyFunctions) {}
 
   //--- Module-level (LLVMCEmitter.cpp) ---
   void writeModule(llvm::Module &Mod);
+  void prepareFunctionIdentifiers(llvm::Module &Mod);
+  std::string functionIdentifier(const llvm::Function &Fn) const;
   void writeIncludes(llvm::Module &Mod);
   void writeStructDefs(llvm::Module &Mod);
   void writeGlobals(llvm::Module &Mod);
   void writeForwardDecls(llvm::Module &Mod);
 
   //--- Function rendering (LLVMCFuncWriter.cpp) ---
+  bool isAnalysisOnlyFunction(const llvm::Function &Fn) const;
+  bool isReferencedByExecutableProjection(const llvm::Function &Fn) const;
   void writeFunction(llvm::Function &Fn);
+  void writeAnalysisOnlyFunction(llvm::Function &Fn);
+  void writeFunctionProjection(llvm::Function &Fn);
   void setupFunction(llvm::Function &Fn);
   void emitFunctionDecls(llvm::Function &Fn);
   void scanReferencedBlocks(llvm::Function &Fn);
@@ -101,6 +111,9 @@ public:
   CEmitterOptions Opts;
   DebugContext *Dbg;
   const BinaryImage *Img;
+  bool GuardAnalysisOnlyFunctions;
+  CProjectionIdentifierAllocator GlobalIdentifierAllocator;
+  std::map<const llvm::Function *, std::string> FunctionIdentifiers;
 
   int NextVar = 0;
   std::map<const llvm::Value *, std::string> ValNames;

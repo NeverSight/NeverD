@@ -127,6 +127,17 @@ BinaryImage makeFH3MagicImage(uint32_t MagicWord) {
   return Img;
 }
 
+BinaryImage makeARM32FH3Image() {
+  BinaryImage Img = makeX64ExceptionImage(0x300);
+  Img.Arch = Arch::ARM;
+  Img.Bits = Bitness::Bits32;
+  Img.Mode = InstructionMode::Thumb;
+  Img.Base = 0x10000000;
+  Img.Segments[0].VA = Img.Base + 0x1000;
+  Img.Segments[1].VA = Img.Base + 0x3000;
+  return Img;
+}
+
 } // namespace
 
 TEST(COFFExceptionParser, StopsLegacyFH3RecordsAtTheirDeclaredLength) {
@@ -237,6 +248,134 @@ TEST(COFFExceptionParser, DecodesFH3ExceptionSpecificationList) {
   EXPECT_EQ(Decoded.Cxx->ExceptionSpecTypes[0].Adjectives, 0x40u);
   EXPECT_EQ(Decoded.Cxx->ExceptionSpecTypes[0].TypeDescriptorVA,
             Img.Base + 0x3180);
+  EXPECT_EQ(Decoded.Cxx->ExceptionSpecTypes[1].TypeDescriptorVA,
+            Img.Base + 0x3190);
+}
+
+TEST(COFFExceptionParser, UsesARM32HandlerTypeStrideForFH3CatchMaps) {
+  BinaryImage Img = makeARM32FH3Image();
+  addPersonalityImport(Img, Img.Base + 0x1100, "__CxxFrameHandler3");
+  uint8_t *X = Img.Segments[1].Data.data();
+  writeLE<uint32_t>(X, 0x3040);
+
+  uint8_t *FI = X + 0x40;
+  writeLE<uint32_t>(FI, 0x19930522);
+  writeLE<int32_t>(FI + 4, 2);
+  writeLE<uint32_t>(FI + 8, 0x3080);
+  writeLE<uint32_t>(FI + 12, 1);
+  writeLE<uint32_t>(FI + 16, 0x3090);
+  writeLE<uint32_t>(FI + 20, 1);
+  writeLE<uint32_t>(FI + 24, 0x30d0);
+  writeLE<int32_t>(FI + 28, -8);
+  writeLE<uint32_t>(FI + 32, 0);
+  writeLE<uint32_t>(FI + 36, 1);
+
+  uint8_t *Unwind = X + 0x80;
+  writeLE<int32_t>(Unwind, -1);
+  writeLE<uint32_t>(Unwind + 4, 0);
+  writeLE<int32_t>(Unwind + 8, 0);
+  writeLE<uint32_t>(Unwind + 12, 0);
+
+  uint8_t *Try = X + 0x90;
+  writeLE<int32_t>(Try, 0);
+  writeLE<int32_t>(Try + 4, 0);
+  writeLE<int32_t>(Try + 8, 1);
+  writeLE<uint32_t>(Try + 12, 2);
+  writeLE<uint32_t>(Try + 16, 0x30b0);
+
+  // ARM32 HandlerType has four 32-bit fields.  The handler code RVAs retain
+  // their Thumb bit in the table and are normalized by the decoder.
+  uint8_t *Catch = X + 0xb0;
+  writeLE<uint32_t>(Catch, 0x40);
+  writeLE<uint32_t>(Catch + 4, 0);
+  writeLE<int32_t>(Catch + 8, 0);
+  writeLE<uint32_t>(Catch + 12, 0x1151);
+  writeLE<uint32_t>(Catch + 16, 0x80);
+  writeLE<uint32_t>(Catch + 20, 0);
+  writeLE<int32_t>(Catch + 24, 0);
+  writeLE<uint32_t>(Catch + 28, 0x1161);
+
+  uint8_t *IPMap = X + 0xd0;
+  writeLE<uint32_t>(IPMap, 0x1001);
+  writeLE<int32_t>(IPMap + 4, 0);
+
+  ExceptionFunction F;
+  F.CodeRange = {Img.Base + 0x1000, Img.Base + 0x1200};
+  F.PersonalityVA = Img.Base + 0x1101;
+  F.HandlerDataVA = Img.Base + 0x3000;
+  Img.ExceptionMetadata.Functions.push_back(std::move(F));
+
+  coff_loader::resolveExceptionHandlers(Img);
+  const ExceptionFunction &Decoded = Img.ExceptionMetadata.Functions[0];
+  EXPECT_EQ(Decoded.ParseStatus, ExceptionParseStatus::Complete);
+  ASSERT_TRUE(Decoded.Cxx.has_value());
+  ASSERT_EQ(Decoded.Cxx->TryBlocks.size(), 1u);
+  ASSERT_EQ(Decoded.Cxx->TryBlocks.front().Handlers.size(), 2u);
+  const CxxCatchHandler &First =
+      Decoded.Cxx->TryBlocks.front().Handlers[0];
+  const CxxCatchHandler &Second =
+      Decoded.Cxx->TryBlocks.front().Handlers[1];
+  EXPECT_EQ(First.Adjectives, 0x40u);
+  EXPECT_EQ(First.HandlerVA, Img.Base + 0x1150);
+  EXPECT_EQ(First.ParentFrameOffset, 0);
+  EXPECT_EQ(Second.Adjectives, 0x80u);
+  EXPECT_EQ(Second.HandlerVA, Img.Base + 0x1160);
+  EXPECT_EQ(Second.ParentFrameOffset, 0);
+}
+
+TEST(COFFExceptionParser, UsesARM32HandlerTypeStrideForFH3ESTypeLists) {
+  BinaryImage Img = makeARM32FH3Image();
+  addPersonalityImport(Img, Img.Base + 0x1100, "__CxxFrameHandler3");
+  uint8_t *X = Img.Segments[1].Data.data();
+  writeLE<uint32_t>(X, 0x3040);
+
+  uint8_t *FI = X + 0x40;
+  writeLE<uint32_t>(FI, 0x19930522);
+  writeLE<int32_t>(FI + 4, 1);
+  writeLE<uint32_t>(FI + 8, 0x3080);
+  writeLE<uint32_t>(FI + 12, 0);
+  writeLE<uint32_t>(FI + 16, 0);
+  writeLE<uint32_t>(FI + 20, 1);
+  writeLE<uint32_t>(FI + 24, 0x30d0);
+  writeLE<int32_t>(FI + 28, -8);
+  writeLE<uint32_t>(FI + 32, 0x30e0);
+  writeLE<uint32_t>(FI + 36, 1);
+
+  uint8_t *Unwind = X + 0x80;
+  writeLE<int32_t>(Unwind, -1);
+  writeLE<uint32_t>(Unwind + 4, 0);
+  uint8_t *IPMap = X + 0xd0;
+  writeLE<uint32_t>(IPMap, 0x1001);
+  writeLE<int32_t>(IPMap + 4, -1);
+
+  uint8_t *ESTypeList = X + 0xe0;
+  writeLE<int32_t>(ESTypeList, 2);
+  writeLE<uint32_t>(ESTypeList + 4, 0x3100);
+  uint8_t *Specs = X + 0x100;
+  writeLE<uint32_t>(Specs, 0x40);
+  writeLE<uint32_t>(Specs + 4, 0x3180);
+  writeLE<uint32_t>(Specs + 8, 0xaaaaaaaa);
+  writeLE<uint32_t>(Specs + 12, 0xbbbbbbbb);
+  writeLE<uint32_t>(Specs + 16, 0x80);
+  writeLE<uint32_t>(Specs + 20, 0x3190);
+  writeLE<uint32_t>(Specs + 24, 0xcccccccc);
+  writeLE<uint32_t>(Specs + 28, 0xdddddddd);
+
+  ExceptionFunction F;
+  F.CodeRange = {Img.Base + 0x1000, Img.Base + 0x1200};
+  F.PersonalityVA = Img.Base + 0x1101;
+  F.HandlerDataVA = Img.Base + 0x3000;
+  Img.ExceptionMetadata.Functions.push_back(std::move(F));
+
+  coff_loader::resolveExceptionHandlers(Img);
+  const ExceptionFunction &Decoded = Img.ExceptionMetadata.Functions[0];
+  EXPECT_EQ(Decoded.ParseStatus, ExceptionParseStatus::Complete);
+  ASSERT_TRUE(Decoded.Cxx.has_value());
+  ASSERT_EQ(Decoded.Cxx->ExceptionSpecTypes.size(), 2u);
+  EXPECT_EQ(Decoded.Cxx->ExceptionSpecTypes[0].Adjectives, 0x40u);
+  EXPECT_EQ(Decoded.Cxx->ExceptionSpecTypes[0].TypeDescriptorVA,
+            Img.Base + 0x3180);
+  EXPECT_EQ(Decoded.Cxx->ExceptionSpecTypes[1].Adjectives, 0x80u);
   EXPECT_EQ(Decoded.Cxx->ExceptionSpecTypes[1].TypeDescriptorVA,
             Img.Base + 0x3190);
 }

@@ -14,6 +14,8 @@
 #ifndef NEVERD_LIB_BACKEND_C_HIGHC_HIGHCWRITER_H
 #define NEVERD_LIB_BACKEND_C_HIGHC_HIGHCWRITER_H
 
+#include "../CIdentifier.h"
+
 #include "neverd/backend/c/CEmitterOptions.h"
 #include "neverd/backend/c/pass/HighC/HighCPasses.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
@@ -38,11 +40,15 @@ namespace neverd {
 class HighCWriter {
 public:
   HighCWriter(llvm::raw_ostream &OS, const CEmitterOptions &Opts,
-              DebugContext *Dbg)
-      : OS(OS), Opts(Opts), Dbg(Dbg) {}
+              DebugContext *Dbg, bool GuardAnalysisOnlyFunctions = true)
+      : OS(OS), Opts(Opts), Dbg(Dbg),
+        GuardAnalysisOnlyFunctions(GuardAnalysisOnlyFunctions) {}
 
   //--- Module-level (HighCEmitter.cpp) ---
   void writeAll(const std::vector<HighFunc> &Funcs);
+  void prepareFunctionIdentifiers(const std::vector<HighFunc> &Funcs);
+  std::string functionIdentifier(const HighFunc &Func) const;
+  std::string functionIdentifier(llvm::StringRef SourceName) const;
   void collectMemoryTypes(const std::vector<HighFunc> &Funcs);
   std::string memoryTypeName(const TypeRef &Ty) const;
   void writeIncludes(const std::vector<HighFunc> &Funcs);
@@ -70,7 +76,10 @@ public:
                               std::set<std::string> &Targets);
 
   //--- Function rendering (HighCFuncWriter.cpp) ---
+  bool isAnalysisOnlyFunction(const HighFunc &Func) const;
   void writeFunction(const HighFunc &Func);
+  void writeAnalysisOnlyFunction(const HighFunc &Func);
+  void writeFunctionProjection(const HighFunc &Func);
   void runAnalysisPasses(const HighFunc &Func);
   void writeExceptionAnnotation(const HighFunc &Func);
   void emitLocalDecls(const HighFunc &Func,
@@ -99,9 +108,14 @@ public:
   llvm::raw_ostream &OS;
   CEmitterOptions Opts;
   DebugContext *Dbg;
+  bool GuardAnalysisOnlyFunctions;
 
   std::set<std::string> ExternFuncs;
   std::map<std::string, const HighFunc *> DefinedFuncs;
+  CProjectionIdentifierAllocator GlobalIdentifierAllocator;
+  std::map<const HighFunc *, std::string> FunctionIdentifiers;
+  std::map<std::string, std::string> FunctionIdentifiersBySourceName;
+  std::map<std::string, std::string> ExternalFunctionIdentifiers;
   std::set<va_t> GotoTargets;
   bool HasCIntrinsics = false;
   bool NeedsFEnvAccess = false;

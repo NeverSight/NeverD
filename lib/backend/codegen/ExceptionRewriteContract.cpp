@@ -8,6 +8,7 @@
 
 #include "neverd/backend/codegen/BinaryRewriter.h"
 
+#include "llvm/ADT/Twine.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
@@ -102,6 +103,24 @@ bool hasNativeIRExceptionContract(const llvm::Function &Function) {
               Instruction))
         return true;
   return false;
+}
+
+uint64_t countNativeProtectedCalls(const llvm::Function &Function) {
+  uint64_t Count = 0;
+  for (const llvm::BasicBlock &Block : Function)
+    for (const llvm::Instruction &Instruction : Block) {
+      const auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(&Instruction);
+      if (!Invoke)
+        continue;
+      // WinEH uses invoke-form marker intrinsics for asynchronous SEH region
+      // boundaries.  They are CFG sentinels, not protected source calls, and
+      // therefore do not participate in the producer's protected-call count.
+      const llvm::Function *Callee = Invoke->getCalledFunction();
+      if (Callee && Callee->isIntrinsic())
+        continue;
+      ++Count;
+    }
+  return Count;
 }
 
 } // namespace
@@ -202,6 +221,14 @@ validateExceptionRewriteContracts(const llvm::Module &Module) {
     }
     if (*Required != *Lowered || *Skipped != 0)
       return contractError(Function, ContractErrorReason::CounterMismatch);
+    const uint64_t ActualProtectedCalls = countNativeProtectedCalls(Function);
+    if (ActualProtectedCalls != *Lowered)
+      return contractError(
+          Function, ContractErrorReason::CounterMismatch,
+          (llvm::Twine("metadata records ") + llvm::Twine(*Lowered) +
+           " lowered protected calls but IR contains " +
+           llvm::Twine(ActualProtectedCalls) + " invokes")
+              .str());
     Result.Functions.push_back({Function.getName().str(), true});
   }
   Result.RequiresRegisteredUnwind = !Result.Functions.empty();

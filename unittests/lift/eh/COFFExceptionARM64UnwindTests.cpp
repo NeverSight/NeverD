@@ -77,6 +77,25 @@ TEST(ARM64Unwind, StartsAnEpilogueMidwayThroughASharedCodeArray) {
   EXPECT_EQ(Epilogue.Operations[0].CodeOffset, 4u);
 }
 
+TEST(ARM64Unwind, ContinuesThroughAChainedScopeTerminator) {
+  // `end_c` closes only the current unwind scope.  The runtime continues with
+  // the parent scope encoded immediately after it and stops at the real
+  // `end`.  Large functions emitted by the Windows ARM64 assembler use this
+  // exact shape when a fragment reuses its parent's prologue.
+  const std::vector<uint8_t> Codes = {0xE5, 0xD5, 0x61, 0xE4};
+  coff_loader::ARMUnwindDecode Decoded = decodeARM64UnwindCodes(Codes);
+
+  EXPECT_EQ(Decoded.Status, ExceptionParseStatus::Complete);
+  ASSERT_EQ(Decoded.Operations.size(), 3u);
+  EXPECT_EQ(Decoded.Operations[0].Kind, UnwindOperationKind::EndChained);
+  EXPECT_EQ(Decoded.Operations[1].Kind,
+            UnwindOperationKind::SaveRegisterPreIndexed);
+  EXPECT_EQ(Decoded.Operations[1].Register, 30u);
+  EXPECT_EQ(Decoded.Operations[1].StackOffset, 16u);
+  EXPECT_EQ(Decoded.Operations[2].Kind, UnwindOperationKind::End);
+  EXPECT_EQ(Decoded.PrologueSize, 0u);
+}
+
 TEST(ARM64Unwind, ResolvesSaveNextAgainstTheCodeThatFollowsIt) {
   // The array runs from the last prologue instruction back towards the first,
   // so the pair a `save_next` extends is described by the *following* code.

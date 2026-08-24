@@ -7,6 +7,8 @@
 #include "PatchFormatTestsDetail.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/llvm/WindowsEHNativeSource.h"
+
 namespace {
 
 using namespace neverd;
@@ -233,6 +235,11 @@ TEST_F(PatchCOFF_X64, ReconstructsNativeFH3StateGraph) {
   EXPECT_EQ(OriginalCxx->ParseStatus, ExceptionParseStatus::Complete);
   ASSERT_TRUE(OriginalCxx->Cxx.has_value());
   EXPECT_TRUE(OriginalCxx->Cxx->hasValidStateGraph());
+  const WindowsEHNativeSourceClassification NativeSource =
+      classifyWindowsEHNativeSource(*OriginalCxx, Arch::X64,
+                                    BinaryFormat::COFF);
+  ASSERT_TRUE(NativeSource.canRegenerateLanguageMetadata())
+      << getWindowsEHNativeSourceReasonName(NativeSource.Reason);
   ASSERT_EQ(OriginalCxx->Cxx->TryBlocks.size(), 1u);
   ASSERT_EQ(OriginalCxx->Cxx->TryBlocks.front().Handlers.size(), 1u);
   const uint8_t *OriginalPersonality =

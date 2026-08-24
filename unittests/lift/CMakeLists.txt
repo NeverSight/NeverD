@@ -123,7 +123,6 @@ add_neverd_unittest(NeverDLiftTests
   eh/COFFExceptionGSTests.cpp
   eh/COFFExceptionIRTests.cpp
   eh/COFFExceptionNativeIRTests.cpp
-  eh/COFFExceptionPatchTests.cpp
   eh/COFFExceptionSEHTests.cpp
   eh/ELFARMEHABIPatchTests.cpp
   eh/ELFExceptionTests.cpp
@@ -214,6 +213,18 @@ target_link_libraries(NeverDLiftTests PRIVATE
   NeverDSupport
 )
 
+add_neverd_unittest(NeverDWindowsEHMetadataEncoderTests
+  eh/WindowsEHMetadataEncoderTests.cpp
+
+  LINK_COMPONENTS
+  WindowsEHMetadata
+)
+
+target_include_directories(NeverDWindowsEHMetadataEncoderTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
 if(TARGET neverd)
   add_dependencies(NeverDLiftTests neverd)
 endif()
@@ -233,9 +244,35 @@ target_include_directories(NeverDLLVMCVoidAnalysisTests PRIVATE
   ${LLVM_INCLUDE_DIRS}
 )
 
+# Keeps the COFF exception-metadata authentication contract independently
+# runnable during RED/GREEN iterations of the patch planner.
+add_neverd_unittest(NeverDCOFFExceptionPatchTests
+  eh/COFFExceptionPatchTests.cpp
+
+  LINK_COMPONENTS
+  BackendLLVM
+  CodeGen
+  LibC
+  Lift
+)
+
+target_include_directories(NeverDCOFFExceptionPatchTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+if(UNIX AND NOT APPLE)
+  target_link_libraries(NeverDCOFFExceptionPatchTests PRIVATE
+    "-Wl,--start-group"
+    "$<TARGET_FILE:NeverDIR>"
+    "$<TARGET_FILE:NeverDLift>"
+    "-Wl,--end-group"
+  )
+endif()
+
 # Pins the source-EH-to-native-rewrite contract without relinking the large
-# lift suite. The emitter creates the deliberately unlowerable source contract,
-# and the two format installers are the public fail-closed boundary under test.
+# lift suite. The emitter creates the source contract, and the format installers
+# are the public fail-closed boundary under test.
 add_neverd_unittest(NeverDNativeExceptionRewriteContractTests
   eh/DwarfEHFrameTests.cpp
   eh/MachOCompactUnwindPatchTests.cpp

@@ -22,8 +22,7 @@ namespace neverd {
 std::string HighCWriter::varName(const MedVar &V) {
   if (CurrentFunc &&
       (CurrentFunc->FrameSize > 0 || CurrentFunc->FrameHeadroom > 0) &&
-      V.Kind == MedVar::Reg &&
-      V.RenameTag < 0 && V.SSAVer == 0 &&
+      V.Kind == MedVar::Reg && V.RenameTag < 0 && V.SSAVer == 0 &&
       V.RegOff == getTargetRegInfo(Opts.TheArch).StackPointer)
     return "frame_base";
   if (V.RenameTag >= 0)
@@ -145,8 +144,7 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
         OpStrs.push_back(exprStr(*Op));
 
     using I = Intrinsic;
-    if (E.IntrinsicId == I::A64_GetFPSR ||
-        E.IntrinsicId == I::A64_SetFPSR)
+    if (E.IntrinsicId == I::A64_GetFPSR || E.IntrinsicId == I::A64_SetFPSR)
       OpStrs.insert(OpStrs.begin(), "\"FPSR\"");
     if (E.IntrinsicId == I::A64_GetFPCR || E.IntrinsicId == I::A64_SetFPCR)
       OpStrs.insert(OpStrs.begin(), "\"FPCR\"");
@@ -173,8 +171,8 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
       return Rendered;
   }
 
-  if (E.IntrinsicId == Intrinsic::None && !Name.empty() && Name[0] == '_')
-    Name = Name.substr(1);
+  if (E.IntrinsicId == Intrinsic::None)
+    Name = functionIdentifier(Name);
 
   std::string S = Name + "(";
   for (size_t I = 0; I < E.Operands.size(); ++I) {

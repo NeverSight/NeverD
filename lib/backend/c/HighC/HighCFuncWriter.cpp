@@ -35,7 +35,105 @@ uint64_t checkedStackAlign(uint64_t Size) {
   return checkedStackAdd(Size, Mask) & ~Mask;
 }
 
+bool isWindowsLanguagePersonality(ExceptionPersonality Personality) {
+  switch (Personality) {
+  case ExceptionPersonality::CSpecificHandler:
+  case ExceptionPersonality::CxxFrameHandler3:
+  case ExceptionPersonality::CxxFrameHandler4:
+  case ExceptionPersonality::GSHandlerCheckSEH:
+  case ExceptionPersonality::GSHandlerCheckEH:
+  case ExceptionPersonality::GSHandlerCheckEH4:
+  case ExceptionPersonality::ExceptHandler3:
+  case ExceptionPersonality::ExceptHandler4:
+  case ExceptionPersonality::CxxFrameHandlerX86:
+  case ExceptionPersonality::GxxPersonalitySEH0:
+  case ExceptionPersonality::GccPersonalitySEH0:
+  case ExceptionPersonality::GnuObjCPersonalitySEH0:
+  case ExceptionPersonality::GnatPersonalitySEH0:
+  case ExceptionPersonality::GdcPersonalitySEH0:
+  case ExceptionPersonality::DelphiX86Handler:
+  case ExceptionPersonality::DelphiExceptionHandler:
+  case ExceptionPersonality::GoSEHTrampoline:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool hasX64LanguageHandlerFlags(const ExceptionFunction &EH) {
+  if (EH.Encoding != ExceptionEncoding::X64UnwindV1 &&
+      EH.Encoding != ExceptionEncoding::X64UnwindV2 &&
+      EH.Encoding != ExceptionEncoding::X64UnwindV3)
+    return false;
+  // UNW_FLAG_EHANDLER and UNW_FLAG_UHANDLER are the low two flag bits.  The
+  // third bit is a structural chained-unwind record and remains executable.
+  return (EH.UnwindFlags & 0x3u) != 0;
+}
+
+bool carriesWindowsLanguageSemantics(const ExceptionFunction &EH) {
+  if (EH.SEH || EH.Cxx || EH.GSCookie || EH.Registration || EH.Delphi ||
+      EH.DelphiScopes)
+    return true;
+
+  const ExceptionModel Model = EH.model();
+  if (isWindowsLanguagePersonality(EH.Personality))
+    return true;
+
+  // Every normalized registration record is itself language dispatch data;
+  // there is no unwind-only x86 registration encoding in this model.
+  if (Model == ExceptionModel::WindowsRegistration)
+    return true;
+
+  if (Model != ExceptionModel::WindowsTable)
+    return false;
+
+  // A Windows table record is executable only after positively proving that
+  // it carries unwind state and nothing that could dispatch a handler.  Missing
+  // or internally inconsistent decode evidence therefore fails closed.
+  if (EH.ParseStatus != ExceptionParseStatus::Complete ||
+      EH.Personality != ExceptionPersonality::None ||
+      !EH.PersonalityName.empty() || EH.PersonalityVA != 0 ||
+      EH.HandlerDataVA != 0 || hasX64LanguageHandlerFlags(EH) || EH.Rust ||
+      EH.ObjC || EH.Go)
+    return true;
+
+  if (EH.DecodeProvenance && (EH.DecodeProvenance->Structural.ParseStatus !=
+                                  ExceptionParseStatus::Complete ||
+                              EH.DecodeProvenance->Language.ParseStatus !=
+                                  ExceptionParseStatus::Complete))
+    return true;
+
+  return false;
+}
+
+void writeCommentedLine(llvm::raw_ostream &OS, llvm::StringRef Line) {
+  OS << "// ";
+  for (unsigned char Ch : Line.bytes()) {
+    if (Ch == '\r' || Ch == '\0' || (Ch < 0x20 && Ch != '\t'))
+      OS << ' ';
+    else
+      OS << static_cast<char>(Ch);
+  }
+  // A trailing space prevents a hostile final backslash (or trigraph that an
+  // older preprocessor turns into one) from splicing the active trap stub into
+  // the comment during translation phase two.
+  OS << " \n";
+}
+
 } // anonymous namespace
+
+bool HighCWriter::isAnalysisOnlyFunction(const HighFunc &Func) const {
+  if (Func.ExceptionMetadata &&
+      carriesWindowsLanguageSemantics(*Func.ExceptionMetadata))
+    return true;
+
+  bool HasWindowsRegion = false;
+  walkStmts(Func.Body, [&](const HighStmt &Stmt) {
+    HasWindowsRegion |=
+        Stmt.Kind == StmtKind::SEHTry || Stmt.Kind == StmtKind::CxxTry;
+  });
+  return HasWindowsRegion;
+}
 
 void HighCWriter::runAnalysisPasses(const HighFunc &Func) {
   GotoTargets.clear();
@@ -347,6 +445,62 @@ void HighCWriter::writeExceptionAnnotation(const HighFunc &Func) {
 }
 
 void HighCWriter::writeFunction(const HighFunc &Func) {
+  if (GuardAnalysisOnlyFunctions && isAnalysisOnlyFunction(Func)) {
+    writeAnalysisOnlyFunction(Func);
+    return;
+  }
+  writeFunctionProjection(Func);
+}
+
+void HighCWriter::writeAnalysisOnlyFunction(const HighFunc &Func) {
+  if (Opts.EmitComments) {
+    std::string Listing;
+    llvm::raw_string_ostream ListingOS(Listing);
+    HighCWriter ListingWriter(ListingOS, Opts, Dbg,
+                              /*GuardAnalysisOnlyFunctions=*/false);
+    ListingWriter.DefinedFuncs = DefinedFuncs;
+    ListingWriter.ExternFuncs = ExternFuncs;
+    ListingWriter.GlobalIdentifierAllocator = GlobalIdentifierAllocator;
+    ListingWriter.FunctionIdentifiers = FunctionIdentifiers;
+    ListingWriter.FunctionIdentifiersBySourceName =
+        FunctionIdentifiersBySourceName;
+    ListingWriter.ExternalFunctionIdentifiers = ExternalFunctionIdentifiers;
+    ListingWriter.collectMemoryTypes({Func});
+    ListingWriter.writeFunction(Func);
+    ListingOS.flush();
+
+    OS << "/* neverd.analysis-only: Windows EH semantics are not projected "
+          "as executable C; the active definition traps. */\n";
+    llvm::StringRef Remaining(Listing);
+    while (!Remaining.empty()) {
+      auto [Line, Rest] = Remaining.split('\n');
+      writeCommentedLine(OS, Line);
+      Remaining = Rest;
+    }
+  }
+
+  std::string RetType = Func.ReturnType ? typeToC(Func.ReturnType) : "uint32_t";
+  std::string FName = functionIdentifier(Func);
+
+  CProjectionIdentifierAllocator ParameterIdentifiers;
+
+  if (Func.DoesNotReturn)
+    OS << "_Noreturn ";
+  OS << RetType << " " << FName << "(";
+  for (size_t I = 0; I < Func.Params.size(); ++I) {
+    if (I > 0)
+      OS << ", ";
+    OS << typeToC(Func.Params[I].Type) << " "
+       << ParameterIdentifiers.allocate(Func.Params[I].Name, "nd_arg");
+  }
+  if (Func.Params.empty())
+    OS << "void";
+  OS << ") {\n"
+     << "    __builtin_trap();\n"
+     << "}\n";
+}
+
+void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   CurrentFunc = &Func;
   runAnalysisPasses(Func);
 
@@ -399,9 +553,7 @@ void HighCWriter::writeFunction(const HighFunc &Func) {
   else
     RetType = FuncReturnType ? typeToC(FuncReturnType) : "uint32_t";
 
-  std::string FName = Func.Name;
-  if (!FName.empty() && FName[0] == '_')
-    FName = FName.substr(1);
+  std::string FName = functionIdentifier(Func);
 
   if (Opts.EmitComments && !Func.DebugName.empty() &&
       Func.DebugName != Func.Name) {

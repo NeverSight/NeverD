@@ -15,6 +15,7 @@
 #include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
+#include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/loader/ExceptionInfo.h"
 
 #include "llvm/ADT/SmallVector.h"
@@ -44,14 +45,13 @@ using med_llvm_eh::mdUInt;
 bool MedLLVMEmitter::emitNativeCxxEH(
     const MedFunc &Func, llvm::Function &LLVMFunc,
     const std::map<int, llvm::BasicBlock *> &OriginalBlockMap) {
-  if (TargetArch != Arch::X64 || TargetFormat != BinaryFormat::COFF ||
-      !Func.ExceptionMetadata)
+  if (!Func.ExceptionMetadata)
     return false;
   const ExceptionFunction &EH = *Func.ExceptionMetadata;
-  if (EH.ParseStatus != ExceptionParseStatus::Complete ||
-      EH.Personality != ExceptionPersonality::CxxFrameHandler3 || !EH.Cxx ||
-      (EH.Encoding != ExceptionEncoding::X64UnwindV1 &&
-       EH.Encoding != ExceptionEncoding::X64UnwindV2))
+  const WindowsEHNativeSourceClassification Source =
+      classifyWindowsEHNativeSource(EH, TargetArch, TargetFormat);
+  if (!Source.canRegenerateLanguageMetadata() ||
+      Source.Model != WindowsEHNativeSourceModel::CxxFH3)
     return false;
   const CxxExceptionInfo &Cxx = *EH.Cxx;
 
@@ -91,6 +91,7 @@ bool MedLLVMEmitter::emitNativeCxxEH(
   struct Handler {
     const CxxCatchHandler *Catch = nullptr;
     llvm::BasicBlock *Target = nullptr;
+    uint32_t SourceIndex = 0;
   };
   struct Region {
     const CxxTryBlock *Try = nullptr;
@@ -98,6 +99,7 @@ bool MedLLVMEmitter::emitNativeCxxEH(
     std::vector<Handler> Handlers;
     llvm::BasicBlock *UnwindDest = nullptr;
     int Parent = -1;
+    uint32_t SourceIndex = 0;
   };
 
   auto StateAt = [&](va_t Address) {
@@ -138,11 +140,16 @@ bool MedLLVMEmitter::emitNativeCxxEH(
 
   std::vector<Region> Regions;
   Regions.reserve(Cxx.TryBlocks.size());
-  for (const CxxTryBlock &Try : Cxx.TryBlocks) {
-    if (Try.Handlers.empty())
+  if (Cxx.TryBlocks.size() > std::numeric_limits<uint32_t>::max())
+    return false;
+  for (size_t TryIndex = 0; TryIndex < Cxx.TryBlocks.size(); ++TryIndex) {
+    const CxxTryBlock &Try = Cxx.TryBlocks[TryIndex];
+    if (Try.Handlers.empty() ||
+        Try.Handlers.size() > std::numeric_limits<uint32_t>::max())
       return false;
     Region R;
     R.Try = &Try;
+    R.SourceIndex = static_cast<uint32_t>(TryIndex);
     for (const MedBlock &Block : Func.Blocks) {
       int32_t State = StateAt(Block.StartAddr);
       if (State < Try.TryLow || State > Try.TryHigh)
@@ -155,7 +162,9 @@ bool MedLLVMEmitter::emitNativeCxxEH(
     }
     if (R.Blocks.empty())
       return false;
-    for (const CxxCatchHandler &Catch : Try.Handlers) {
+    for (size_t HandlerIndex = 0; HandlerIndex < Try.Handlers.size();
+         ++HandlerIndex) {
+      const CxxCatchHandler &Catch = Try.Handlers[HandlerIndex];
       if (Catch.CatchObjectOffset != 0 || Catch.ParentFrameOffset != 0 ||
           Catch.HandlerVA == 0)
         return false;
@@ -163,7 +172,8 @@ bool MedLLVMEmitter::emitNativeCxxEH(
       if (!Target || Target == &LLVMFunc.getEntryBlock() ||
           R.Blocks.count(Target) || !llvm::pred_empty(Target))
         return false;
-      R.Handlers.push_back({&Catch, Target});
+      R.Handlers.push_back(
+          {&Catch, Target, static_cast<uint32_t>(HandlerIndex)});
     }
     Regions.push_back(std::move(R));
   }
@@ -236,9 +246,11 @@ bool MedLLVMEmitter::emitNativeCxxEH(
   struct CallPlan {
     llvm::CallInst *Call = nullptr;
     size_t RegionIndex = 0;
+    va_t SourceAddress = 0;
   };
   llvm::SmallVector<CallPlan, 16> CallPlans;
   std::set<const llvm::CallInst *> PlannedCalls;
+  std::set<va_t> PlannedAddresses;
   for (const MedBlock &MedBB : Func.Blocks) {
     auto BBIt = OriginalBlockMap.find(MedBB.Id);
     if (BBIt == OriginalBlockMap.end())
@@ -263,11 +275,15 @@ bool MedLLVMEmitter::emitNativeCxxEH(
       auto *Call = llvm::dyn_cast<llvm::CallInst>(&Inst);
       if (!Call || !IsMayUnwindCall(*Call))
         continue;
+      auto AddressIt = CallSiteAddrs.find(Call);
       if (Call->getParent() != InitialBB || !Call->getNextNode() ||
-          CallSiteAddrs.find(Call) == CallSiteAddrs.end() ||
-          !PlannedCalls.insert(Call).second)
+          AddressIt == CallSiteAddrs.end() ||
+          !EH.CodeRange.contains(AddressIt->second) ||
+          !PlannedCalls.insert(Call).second ||
+          !PlannedAddresses.insert(AddressIt->second).second)
         return false;
-      CallPlans.push_back({Call, static_cast<size_t>(Innermost)});
+      CallPlans.push_back(
+          {Call, static_cast<size_t>(Innermost), AddressIt->second});
     }
   }
   if (PlannedCalls != MayUnwindCallSet)
@@ -329,7 +345,19 @@ bool MedLLVMEmitter::emitNativeCxxEH(
           llvm::ConstantInt::get(I32Ty, H.Catch->Adjectives),
           llvm::ConstantPointerNull::get(PtrTy)};
       auto *Pad = PB.CreateCatchPad(Switch, Args, "cxx.catch.pad.token");
+      med_llvm_eh::emitWindowsEHProvenanceAnchor(
+          PB, windows_eh_md::NativeProvenanceModel::CxxFH3,
+          windows_eh_md::NativeProvenanceRole::RegionDispatch,
+          EH.CodeRange.Begin, H.Catch->HandlerVA, R.SourceIndex, H.SourceIndex,
+          Pad, H.Catch->TypeDescriptorVA, H.Catch->Adjectives);
       PB.CreateCatchRet(Pad, H.Target);
+      llvm::IRBuilder<> HandlerBuilder(
+          &*H.Target->getFirstInsertionPt());
+      med_llvm_eh::emitWindowsEHProvenanceAnchor(
+          HandlerBuilder, windows_eh_md::NativeProvenanceModel::CxxFH3,
+          windows_eh_md::NativeProvenanceRole::HandlerTarget,
+          EH.CodeRange.Begin, H.Catch->HandlerVA, R.SourceIndex,
+          H.SourceIndex);
     }
     R.UnwindDest = Dispatch;
   }
@@ -352,6 +380,12 @@ bool MedLLVMEmitter::emitNativeCxxEH(
         Call->getFunctionType(), Call->getCalledOperand(), Cont,
         Regions[Plan.RegionIndex].UnwindDest, Args, Bundles, Call->getName(),
         OldBranch->getIterator());
+    llvm::IRBuilder<> ProvenanceBuilder(Invoke);
+    med_llvm_eh::emitWindowsEHProvenanceAnchor(
+        ProvenanceBuilder, windows_eh_md::NativeProvenanceModel::CxxFH3,
+        windows_eh_md::NativeProvenanceRole::ProtectedInvoke,
+        EH.CodeRange.Begin, Plan.SourceAddress,
+        Regions[Plan.RegionIndex].SourceIndex, /*Clause=*/0);
     Invoke->setCallingConv(Call->getCallingConv());
     Invoke->setAttributes(Call->getAttributes());
     Invoke->setDebugLoc(Call->getDebugLoc());

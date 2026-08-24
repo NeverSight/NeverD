@@ -42,6 +42,37 @@ TEST(COFFExceptionParser, ReconstructsCSpecificScopeTable) {
   EXPECT_EQ(Decoded.SEH->Scopes[0].GuardedRange.Begin, Img.Base + 0x1000);
   EXPECT_EQ(Decoded.SEH->Scopes[0].HandlerVA, Img.Base + 0x1080);
 }
+
+TEST(COFFExceptionParser, MarksFunctionPartialForEmptySEHScope) {
+  BinaryImage Img = makeX64ExceptionImage(0x200);
+  addPersonalityImport(Img, Img.Base + 0x1100, "__C_specific_handler");
+  uint8_t *X = Img.Segments[1].Data.data();
+  writeLE<uint32_t>(X, 1);
+  writeLE<uint32_t>(X + 4, 0x1020);
+  writeLE<uint32_t>(X + 8, 0x1020);
+  writeLE<uint32_t>(X + 12, 1); // catch-all filter
+  writeLE<uint32_t>(X + 16, 0x1080);
+
+  ExceptionFunction F;
+  F.CodeRange = {Img.Base + 0x1000, Img.Base + 0x1200};
+  F.Encoding = ExceptionEncoding::X64UnwindV1;
+  F.PersonalityVA = Img.Base + 0x1100;
+  F.HandlerDataVA = Img.Base + 0x3000;
+  Img.ExceptionMetadata.Functions.push_back(std::move(F));
+
+  coff_loader::resolveExceptionHandlers(Img);
+  const ExceptionFunction &Decoded = Img.ExceptionMetadata.Functions[0];
+  EXPECT_EQ(Decoded.ParseStatus, ExceptionParseStatus::Partial);
+  EXPECT_FALSE(Decoded.canRegenerateLanguageMetadata());
+  ASSERT_TRUE(Decoded.SEH.has_value());
+  ASSERT_EQ(Decoded.SEH->Scopes.size(), 1u);
+  EXPECT_EQ(Decoded.SEH->Scopes[0].ParseStatus,
+            ExceptionParseStatus::Partial);
+  EXPECT_EQ(Decoded.SEH->Scopes[0].GuardedRange.Begin,
+            Img.Base + 0x1020);
+  EXPECT_EQ(Decoded.SEH->Scopes[0].GuardedRange.End, Img.Base + 0x1020);
+}
+
 TEST(COFFExceptionParser, ResolvesAArch64PersonalityBranchVeneer) {
   BinaryImage Img = makeX64ExceptionImage();
   Img.Arch = Arch::AArch64;

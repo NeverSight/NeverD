@@ -292,16 +292,12 @@ void LLVMCWriter::writeCall(llvm::CallInst &Call, const std::string &Name,
 
   std::string CalleeName;
   if (auto *Callee = Call.getCalledFunction()) {
-    CalleeName = Callee->getName().str();
-    const char *CN = llvmIntrinsicToCName(CalleeName.c_str());
+    const std::string RawCalleeName = Callee->getName().str();
+    const char *CN = llvmIntrinsicToCName(RawCalleeName.c_str());
     if (CN) {
       CalleeName = CN;
     } else {
-      if (!CalleeName.empty() && CalleeName[0] == '_')
-        CalleeName = CalleeName.substr(1);
-      for (char &Ch : CalleeName)
-        if (Ch == '.')
-          Ch = '_';
+      CalleeName = functionIdentifier(*Callee);
     }
   } else {
     CalleeName = "(" + valueStr(Call.getCalledOperand()) + ")";

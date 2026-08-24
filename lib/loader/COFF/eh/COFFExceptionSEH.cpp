@@ -87,8 +87,9 @@ bool parseSEH(ExceptionFunction &F, const BinaryImage &Img) {
       }
       Scope.GuardedRange = {Point, Point};
       Scope.ParseStatus = ExceptionParseStatus::Partial;
-      F.Diagnostics.push_back("SEH scope at 0x" + llvm::utohexstr(Point) +
-                              " guards an empty range");
+      diagnose(F, ExceptionParseStatus::Partial,
+               "SEH scope at 0x" + llvm::utohexstr(Point) +
+                   " guards an empty range");
     } else {
       auto Range = checkedCodeRange(Img, BeginRVA, EndRVA);
       if (!Range || (!F.CodeRange.contains(*Range) &&

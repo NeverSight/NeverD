@@ -14,11 +14,15 @@
 
 #include "neverd/Common.h"
 #include "neverd/backend/llvm/LanguageEHMetadata.h"
+#include "neverd/backend/llvm/WindowsEHMetadata.h"
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 
@@ -29,6 +33,44 @@
 #include <vector>
 
 namespace neverd::med_llvm_eh {
+
+/// Emit a codegen-neutral anchor for one native Windows EH edge.  The
+/// sideeffect intrinsic survives LLVM optimization while its unknown numeric
+/// bundle remains available to the patch verifier; target lowering discards
+/// the intrinsic itself.
+inline llvm::CallInst *emitWindowsEHProvenanceAnchor(
+    llvm::IRBuilder<> &Builder, windows_eh_md::NativeProvenanceModel Model,
+    windows_eh_md::NativeProvenanceRole Role, va_t FunctionVA, va_t SourceVA,
+    uint32_t Region, uint32_t Clause, llvm::Value *FuncletToken = nullptr,
+    va_t AuxVA = 0, uint32_t Flags = 0) {
+  llvm::Module *Module = Builder.GetInsertBlock()->getModule();
+  llvm::Function *SideEffect = llvm::Intrinsic::getOrInsertDeclaration(
+      Module, llvm::Intrinsic::sideeffect);
+  llvm::LLVMContext &Context = Module->getContext();
+  llvm::SmallVector<llvm::Value *, windows_eh_md::ProvenanceOperandCount>
+      Inputs{
+          llvm::ConstantInt::get(llvm::Type::getInt32Ty(Context),
+                                 windows_eh_md::ProvenanceSchemaVersion),
+          llvm::ConstantInt::get(llvm::Type::getInt8Ty(Context),
+                                 static_cast<unsigned>(Model)),
+          llvm::ConstantInt::get(llvm::Type::getInt8Ty(Context),
+                                 static_cast<unsigned>(Role)),
+          llvm::ConstantInt::get(llvm::Type::getInt64Ty(Context), FunctionVA),
+          llvm::ConstantInt::get(llvm::Type::getInt64Ty(Context), SourceVA),
+          llvm::ConstantInt::get(llvm::Type::getInt32Ty(Context), Region),
+          llvm::ConstantInt::get(llvm::Type::getInt32Ty(Context), Clause),
+          llvm::ConstantInt::get(llvm::Type::getInt64Ty(Context), AuxVA),
+          llvm::ConstantInt::get(llvm::Type::getInt32Ty(Context), Flags),
+      };
+  llvm::SmallVector<llvm::OperandBundleDef, 2> Bundles;
+  Bundles.emplace_back(windows_eh_md::ProvenanceBundle.str(), Inputs);
+  if (FuncletToken) {
+    llvm::SmallVector<llvm::Value *, 1> FuncletInputs{FuncletToken};
+    Bundles.emplace_back("funclet", FuncletInputs);
+  }
+  return Builder.CreateCall(SideEffect->getFunctionType(), SideEffect, {},
+                            Bundles);
+}
 
 inline llvm::Metadata *mdUInt(llvm::LLVMContext &Ctx, uint64_t Value,
                               unsigned Bits = 64) {

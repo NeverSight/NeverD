@@ -93,10 +93,11 @@ RangeClass classifyStatement(const HighStmt &Stmt,
   return RangeClass::Unknown;
 }
 
-bool extractProtectedSlice(std::vector<HighStmt> &Statements,
-                           const ExceptionAddressRange &Range,
-                           const ExceptionAddressRange &FunctionRange,
-                           std::vector<HighStmt> &Body, size_t &InsertAt) {
+bool extractAddressSlice(std::vector<HighStmt> &Statements,
+                         const ExceptionAddressRange &Range,
+                         const ExceptionAddressRange &FunctionRange,
+                         std::vector<HighStmt> &Body, size_t &InsertAt,
+                         bool IncludeFunctionEdgeUnknown = true) {
   std::optional<size_t> First;
   std::optional<size_t> Last;
   std::vector<RangeClass> Classes;
@@ -123,10 +124,10 @@ bool extractProtectedSlice(std::vector<HighStmt> &Statements,
   // synthesized trailing return without swallowing an unrelated neighbour.
   size_t Begin = *First;
   size_t End = *Last + 1;
-  if (Range.Begin == FunctionRange.Begin)
+  if (IncludeFunctionEdgeUnknown && Range.Begin == FunctionRange.Begin)
     while (Begin != 0 && Classes[Begin - 1] == RangeClass::Unknown)
       --Begin;
-  if (Range.End == FunctionRange.End)
+  if (IncludeFunctionEdgeUnknown && Range.End == FunctionRange.End)
     while (End < Classes.size() && Classes[End] == RangeClass::Unknown)
       ++End;
 
@@ -503,11 +504,49 @@ bool hasCrossingRegions(const std::vector<RegionCandidate> &Candidates,
   return false;
 }
 
+std::optional<va_t> windowsClauseBodyTarget(const HighEHClause &Clause) {
+  if (Clause.Kind == HighEHClauseKind::SEHExcept ||
+      Clause.Kind == HighEHClauseKind::CxxCatch)
+    return Clause.HandlerVA;
+  if (Clause.Kind == HighEHClauseKind::SEHFinally ||
+      Clause.Kind == HighEHClauseKind::CxxCleanup)
+    return Clause.FilterOrActionVA;
+  return std::nullopt;
+}
+
+std::optional<ExceptionAddressRange>
+uniqueHandlerBlockRange(const MedFunc &Med, const ExceptionFunction &EH,
+                        va_t Target,
+                        const std::vector<RegionCandidate> &ProtectedRegions) {
+  if (Target == 0 || Target == InvalidVA)
+    return std::nullopt;
+
+  const MedBlock *Match = nullptr;
+  for (const MedBlock &Block : Med.Blocks) {
+    if (Block.StartAddr != Target)
+      continue;
+    if (Match)
+      return std::nullopt;
+    Match = &Block;
+  }
+  if (!Match)
+    return std::nullopt;
+
+  ExceptionAddressRange Range{Match->StartAddr, Match->EndAddr};
+  if (!Range.isValid() || !EH.CodeRange.contains(Range))
+    return std::nullopt;
+  if (std::any_of(ProtectedRegions.begin(), ProtectedRegions.end(),
+                  [&](const RegionCandidate &Candidate) {
+                    return Range.overlaps(Candidate.Range);
+                  }))
+    return std::nullopt;
+  return Range;
+}
+
 } // anonymous namespace
 
 void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
                                                    const MedFunc &Med) {
-  (void)Med;
   if (!Func.ExceptionMetadata)
     return;
   const ExceptionFunction &EH = *Func.ExceptionMetadata;
@@ -555,6 +594,13 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
   }
   Candidates = std::move(Merged);
 
+  std::map<va_t, unsigned> WindowsTargetUses;
+  for (const RegionCandidate &Candidate : Candidates)
+    for (const HighEHClause &Clause : Candidate.Clauses)
+      if (std::optional<va_t> Target = windowsClauseBodyTarget(Clause);
+          Target && *Target != 0 && *Target != InvalidVA)
+        ++WindowsTargetUses[*Target];
+
   for (size_t I = 0; I < Candidates.size(); ++I) {
     RegionCandidate &Candidate = Candidates[I];
     if (hasCrossingRegions(Candidates, I)) {
@@ -563,8 +609,8 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
     }
     std::vector<HighStmt> ProtectedBody;
     size_t InsertAt = 0;
-    if (!extractProtectedSlice(Func.Body, Candidate.Range, EH.CodeRange,
-                               ProtectedBody, InsertAt)) {
+    if (!extractAddressSlice(Func.Body, Candidate.Range, EH.CodeRange,
+                             ProtectedBody, InsertAt)) {
       Rejected += Candidate.NativeRegionCount;
       continue;
     }
@@ -574,11 +620,43 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
     Try.Addr = Candidate.Range.Begin;
     Try.Body = std::move(ProtectedBody);
     Try.EHRange = Candidate.Range;
+    std::vector<std::optional<va_t>> ClauseTargets;
+    ClauseTargets.reserve(Candidate.Clauses.size());
+    for (const HighEHClause &Clause : Candidate.Clauses)
+      ClauseTargets.push_back(windowsClauseBodyTarget(Clause));
     Try.EHClauses = std::move(Candidate.Clauses);
     Try.EHClauseBodies.resize(Try.EHClauses.size());
     Try.EHIsReducible = true;
     Func.Body.insert(Func.Body.begin() + static_cast<ptrdiff_t>(InsertAt),
                      std::move(Try));
+
+    std::vector<std::vector<HighStmt>> ClauseBodies(ClauseTargets.size());
+    for (size_t ClauseIndex = 0; ClauseIndex < ClauseTargets.size();
+         ++ClauseIndex) {
+      std::optional<va_t> Target = ClauseTargets[ClauseIndex];
+      if (!Target || WindowsTargetUses[*Target] != 1)
+        continue;
+      std::optional<ExceptionAddressRange> HandlerRange =
+          uniqueHandlerBlockRange(Med, EH, *Target, Candidates);
+      if (!HandlerRange)
+        continue;
+      size_t HandlerAt = 0;
+      std::vector<HighStmt> HandlerBody;
+      if (!extractAddressSlice(Func.Body, *HandlerRange, EH.CodeRange,
+                               HandlerBody, HandlerAt,
+                               /*IncludeFunctionEdgeUnknown=*/false))
+        continue;
+      ClauseBodies[ClauseIndex] = std::move(HandlerBody);
+    }
+
+    auto InsertedTry = std::find_if(
+        Func.Body.begin(), Func.Body.end(), [&](const HighStmt &Stmt) {
+          return Stmt.Kind == Candidate.Kind &&
+                 Stmt.EHRange.Begin == Candidate.Range.Begin &&
+                 Stmt.EHRange.End == Candidate.Range.End;
+        });
+    if (InsertedTry != Func.Body.end())
+      InsertedTry->EHClauseBodies = std::move(ClauseBodies);
     Func.StructuredExceptionRegions += Candidate.NativeRegionCount;
   }
   Func.UnstructuredExceptionRegions += Rejected;

@@ -14,6 +14,7 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/loader/ExceptionInfo.h"
+#include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
@@ -25,6 +26,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 
 #include <map>
 #include <mutex>
@@ -200,6 +202,21 @@ void expectCompleteRewriteContract(const llvm::Function &Function,
       metadataInteger(Contract, exception_rewrite::SkippedLandingPads, 64), 0u);
 }
 
+std::pair<size_t, size_t>
+countNativeEHProvenanceAnchors(const llvm::Function &Function) {
+  size_t Anchors = 0;
+  size_t FuncletAnchors = 0;
+  for (const llvm::BasicBlock &Block : Function)
+    for (const llvm::Instruction &Instruction : Block)
+      if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction);
+          Call && Call->countOperandBundlesOfType(
+                      windows_eh_md::ProvenanceBundle) == 1) {
+        ++Anchors;
+        FuncletAnchors += Call->countOperandBundlesOfType("funclet") == 1;
+      }
+  return {Anchors, FuncletAnchors};
+}
+
 struct DirectSEHFixture {
   llvm::LLVMContext Context;
   llvm::Module Module;
@@ -230,12 +247,14 @@ struct DirectSEHFixture {
     EH.Encoding = ExceptionEncoding::X64UnwindV1;
     EH.ParseStatus = ExceptionParseStatus::Complete;
     EH.Personality = ExceptionPersonality::CSpecificHandler;
+    EH.PersonalityVA = Source.Entry + 0x100;
     SEHExceptionInfo SEH;
     SEHScopeRecord Scope;
     Scope.ParseStatus = ExceptionParseStatus::Complete;
     Scope.GuardedRange = {Source.Entry, Source.Entry + 0x10};
     Scope.Kind = SEHScopeKind::CatchAll;
     Scope.HandlerVA = Source.Entry + 0x20;
+    Scope.ContinuationVA = Scope.HandlerVA;
     SEH.Scopes.push_back(Scope);
     EH.SEH = std::move(SEH);
     Source.ExceptionMetadata = std::move(EH);
@@ -290,7 +309,10 @@ struct DirectCxxFixture {
     EH.Encoding = ExceptionEncoding::X64UnwindV1;
     EH.ParseStatus = ExceptionParseStatus::Complete;
     EH.Personality = ExceptionPersonality::CxxFrameHandler3;
+    EH.PersonalityVA = Source.Entry + 0x100;
     CxxExceptionInfo Cxx;
+    Cxx.Magic = 0x19930522;
+    Cxx.Version = CxxFuncInfoVersion::WithEHFlags;
     Cxx.Flags = 1;
     Cxx.IsSynchronous = true;
     Cxx.MaxState = 2;
@@ -379,6 +401,7 @@ TEST(COFFExceptionIR, EmitsVerifierCleanNativeCatchAllSEH) {
   Scope.GuardedRange = {Func.Entry, Func.Entry + 0x10};
   Scope.Kind = SEHScopeKind::CatchAll;
   Scope.HandlerVA = Func.Entry + 0x20;
+  Scope.ContinuationVA = Scope.HandlerVA;
   SEH.Scopes.push_back(Scope);
   EH.SEH = std::move(SEH);
   const va_t PersonalityVA = EH.PersonalityVA;
@@ -423,6 +446,227 @@ TEST(COFFExceptionIR, EmitsVerifierCleanNativeCatchAllSEH) {
   EXPECT_NE(IR.find("catchswitch within none"), std::string::npos);
   EXPECT_NE(IR.find("catchpad within"), std::string::npos);
   EXPECT_NE(IR.find("catchret from"), std::string::npos);
+
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::COFF;
+  Image.Base = 0x140000000;
+  ASSERT_TRUE(Func.ExceptionMetadata.has_value());
+  Image.ExceptionMetadata.Functions.push_back(*Func.ExceptionMetadata);
+  Image.ExceptionMetadata.rebuildIndex();
+
+  llvm::CatchReturnInst *CatchReturn = nullptr;
+  llvm::InvokeInst *ProtectedInvoke = nullptr;
+  for (llvm::BasicBlock &Block : *F) {
+    for (llvm::Instruction &Instruction : Block) {
+      if (!CatchReturn)
+        CatchReturn = llvm::dyn_cast<llvm::CatchReturnInst>(&Instruction);
+      auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(&Instruction);
+      const llvm::Function *Callee =
+          Invoke ? Invoke->getCalledFunction() : nullptr;
+      if (Callee && Callee->getName() == "may_throw")
+        ProtectedInvoke = Invoke;
+    }
+  }
+  ASSERT_NE(CatchReturn, nullptr);
+  ASSERT_NE(ProtectedInvoke, nullptr);
+  llvm::BasicBlock *HandlerTarget = CatchReturn->getSuccessor();
+  CatchReturn->setSuccessor(ProtectedInvoke->getNormalDest());
+  expectVerifierClean(*Mod);
+  auto RetargetedPlan = planCOFFExceptionPatch(*Mod, Image, Arch::X64);
+  ASSERT_FALSE(static_cast<bool>(RetargetedPlan));
+  EXPECT_NE(llvm::toString(RetargetedPlan.takeError())
+                .find("SEH catchret continuation"),
+            std::string::npos);
+  CatchReturn->setSuccessor(HandlerTarget);
+  expectVerifierClean(*Mod);
+
+  auto Plan = planCOFFExceptionPatch(*Mod, Image, Arch::X64);
+  ASSERT_TRUE(static_cast<bool>(Plan)) << llvm::toString(Plan.takeError());
+  EXPECT_EQ(countNativeEHProvenanceAnchors(*F),
+            (std::pair<size_t, size_t>{7, 1}));
+
+  Pipeline::OptimizationOptions Options;
+  Options.Strength = Pipeline::OptStrength::Deep;
+  Options.LLVMLevel = llvm::OptimizationLevel::O3;
+  OptimizationResult Optimization = Pipeline::optimizeModule(*Mod, Options);
+  EXPECT_NE(Optimization.Stop, OptimizationStopReason::InputInvalid);
+  EXPECT_NE(Optimization.Stop, OptimizationStopReason::VerificationFailed);
+  expectVerifierClean(*Mod);
+
+  F = Mod->getFunction(Func.Name);
+  ASSERT_NE(F, nullptr);
+  EXPECT_EQ(countNativeEHProvenanceAnchors(*F),
+            (std::pair<size_t, size_t>{7, 1}));
+  auto OptimizedPlan = planCOFFExceptionPatch(*Mod, Image, Arch::X64);
+  ASSERT_TRUE(static_cast<bool>(OptimizedPlan))
+      << llvm::toString(OptimizedPlan.takeError());
+
+  ensureCOFFCodegenTargets();
+  CompiledImage Compiled = compileImageForPatch(
+      *Mod, Arch::X64, BinaryFormat::COFF, 0x140004000,
+      [&](llvm::StringRef Symbol, uint32_t) -> std::optional<uint64_t> {
+        if (Symbol == "may_throw")
+          return MayThrowVA;
+        if (Symbol == "__C_specific_handler")
+          return PersonalityVA;
+        return std::nullopt;
+      },
+      Image.Base);
+  ASSERT_TRUE(Compiled.Success);
+  EXPECT_TRUE(Compiled.Unresolved.empty());
+}
+
+TEST(COFFExceptionIR, PreservesAndAuthenticatesHardwareOnlySEHRanges) {
+  MedFunc Func;
+  Func.Entry = 0x140001000;
+  Func.Name = "native_hardware_only_seh";
+  Func.ReturnType = NdType::makeVoid();
+  MedBlock Protected;
+  Protected.Id = 0;
+  Protected.StartAddr = Func.Entry;
+  Protected.EndAddr = Func.Entry + 0x10;
+  MedOp ProtectedReturn;
+  ProtectedReturn.Opcode = NdOp::RETURN;
+  ProtectedReturn.Addr = Func.Entry + 8;
+  Protected.Ops.push_back(ProtectedReturn);
+  MedBlock Handler;
+  Handler.Id = 1;
+  Handler.StartAddr = Func.Entry + 0x20;
+  Handler.EndAddr = Func.Entry + 0x30;
+  MedOp HandlerReturn;
+  HandlerReturn.Opcode = NdOp::RETURN;
+  HandlerReturn.Addr = Func.Entry + 0x28;
+  Handler.Ops.push_back(HandlerReturn);
+  Func.Blocks.push_back(std::move(Protected));
+  Func.Blocks.push_back(std::move(Handler));
+
+  ExceptionFunction EH;
+  EH.CodeRange = {Func.Entry, Func.Entry + 0x40};
+  EH.Encoding = ExceptionEncoding::X64UnwindV1;
+  EH.ParseStatus = ExceptionParseStatus::Complete;
+  EH.Personality = ExceptionPersonality::CSpecificHandler;
+  EH.PersonalityVA = Func.Entry + 0x100;
+  SEHExceptionInfo SEH;
+  SEHScopeRecord Scope;
+  Scope.ParseStatus = ExceptionParseStatus::Complete;
+  Scope.GuardedRange = {Func.Entry, Func.Entry + 0x10};
+  Scope.Kind = SEHScopeKind::CatchAll;
+  Scope.HandlerVA = Func.Entry + 0x20;
+  Scope.ContinuationVA = Scope.HandlerVA;
+  SEH.Scopes.push_back(Scope);
+  EH.SEH = std::move(SEH);
+  const va_t PersonalityVA = EH.PersonalityVA;
+  Func.ExceptionMetadata = std::move(EH);
+  MedFunc Personality =
+      makeAddressBackedPersonality(PersonalityVA, "\01__C_specific_handler");
+
+  llvm::LLVMContext Context;
+  MedLLVMEmitter Emitter;
+  auto Mod = Emitter.emit({Func, Personality}, Context, "hardware_only_seh",
+                          Arch::X64, {}, nullptr, BinaryFormat::COFF);
+  ASSERT_NE(Mod, nullptr);
+  expectVerifierClean(*Mod);
+  llvm::Function *Function = Mod->getFunction(Func.Name);
+  ASSERT_NE(Function, nullptr);
+  expectCompleteRewriteContract(*Function, 0);
+
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::COFF;
+  Image.Base = 0x140000000;
+  ASSERT_TRUE(Func.ExceptionMetadata.has_value());
+  Image.ExceptionMetadata.Functions.push_back(*Func.ExceptionMetadata);
+  Image.ExceptionMetadata.rebuildIndex();
+  ASSERT_NE(Function->getMetadata(windows_eh_md::FunctionAttachment), nullptr);
+  auto Plan = planCOFFExceptionPatch(*Mod, Image, Arch::X64);
+  ASSERT_TRUE(static_cast<bool>(Plan)) << llvm::toString(Plan.takeError());
+  ASSERT_EQ(Plan->LanguageExceptionFunctionEntries.size(), 1u);
+
+  auto FindRangeEnter = [](llvm::Function &Function) -> llvm::InvokeInst * {
+    for (llvm::BasicBlock &Block : Function)
+      for (llvm::Instruction &Instruction : Block) {
+        auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(&Instruction);
+        const llvm::Function *Callee =
+            Invoke ? Invoke->getCalledFunction() : nullptr;
+        if (Callee &&
+            Callee->getIntrinsicID() == llvm::Intrinsic::seh_try_begin)
+          return Invoke;
+      }
+    return nullptr;
+  };
+  auto ExpectRejected = [&](llvm::Module &Module, llvm::StringRef Message) {
+    expectVerifierClean(Module);
+    auto Rejected = planCOFFExceptionPatch(Module, Image, Arch::X64);
+    ASSERT_FALSE(static_cast<bool>(Rejected));
+    EXPECT_NE(llvm::toString(Rejected.takeError()).find(Message),
+              std::string::npos);
+  };
+
+  std::unique_ptr<llvm::Module> Retargeted = llvm::CloneModule(*Mod);
+  llvm::Function *RetargetedFunction =
+      Retargeted->getFunction(Function->getName());
+  ASSERT_NE(RetargetedFunction, nullptr);
+  ASSERT_NE(RetargetedFunction->getMetadata(windows_eh_md::FunctionAttachment),
+            nullptr);
+  llvm::InvokeInst *RetargetedEnter = FindRangeEnter(*RetargetedFunction);
+  ASSERT_NE(RetargetedEnter, nullptr);
+  llvm::CatchReturnInst *RetargetedCatchReturn = nullptr;
+  for (llvm::BasicBlock &Block : *RetargetedFunction)
+    if (auto *Return =
+            llvm::dyn_cast<llvm::CatchReturnInst>(Block.getTerminator()))
+      RetargetedCatchReturn = Return;
+  ASSERT_NE(RetargetedCatchReturn, nullptr);
+  RetargetedEnter->setNormalDest(RetargetedCatchReturn->getSuccessor());
+  ExpectRejected(*Retargeted, "range marker has an altered");
+
+  std::unique_ptr<llvm::Module> Deleted = llvm::CloneModule(*Mod);
+  llvm::Function *DeletedFunction = Deleted->getFunction(Function->getName());
+  ASSERT_NE(DeletedFunction, nullptr);
+  llvm::InvokeInst *DeletedEnter = FindRangeEnter(*DeletedFunction);
+  ASSERT_NE(DeletedEnter, nullptr);
+  llvm::BasicBlock *DeletedBlock = DeletedEnter->getParent();
+  llvm::BasicBlock *DeletedNormalDest = DeletedEnter->getNormalDest();
+  DeletedEnter->eraseFromParent();
+  llvm::UncondBrInst::Create(DeletedNormalDest, DeletedBlock);
+  ExpectRejected(*Deleted, "range-marker provenance");
+
+  std::unique_ptr<llvm::Module> Duplicated = llvm::CloneModule(*Mod);
+  llvm::Function *DuplicatedFunction =
+      Duplicated->getFunction(Function->getName());
+  ASSERT_NE(DuplicatedFunction, nullptr);
+  llvm::InvokeInst *DuplicatedEnter = FindRangeEnter(*DuplicatedFunction);
+  ASSERT_NE(DuplicatedEnter, nullptr);
+  llvm::Instruction *RangeAnchor = DuplicatedEnter->getPrevNode();
+  ASSERT_NE(RangeAnchor, nullptr);
+  llvm::Instruction *DuplicateAnchor = RangeAnchor->clone();
+  DuplicateAnchor->insertBefore(DuplicatedEnter->getIterator());
+  ExpectRejected(*Duplicated, "range-marker provenance");
+
+  Pipeline::OptimizationOptions Options;
+  Options.Strength = Pipeline::OptStrength::Deep;
+  Options.LLVMLevel = llvm::OptimizationLevel::O3;
+  OptimizationResult Optimization = Pipeline::optimizeModule(*Mod, Options);
+  EXPECT_NE(Optimization.Stop, OptimizationStopReason::InputInvalid);
+  EXPECT_NE(Optimization.Stop, OptimizationStopReason::VerificationFailed);
+  expectVerifierClean(*Mod);
+  auto OptimizedPlan = planCOFFExceptionPatch(*Mod, Image, Arch::X64);
+  ASSERT_TRUE(static_cast<bool>(OptimizedPlan))
+      << llvm::toString(OptimizedPlan.takeError());
+
+  ensureCOFFCodegenTargets();
+  CompiledImage Compiled = compileImageForPatch(
+      *Mod, Arch::X64, BinaryFormat::COFF, 0x140004000,
+      [&](llvm::StringRef Symbol, uint32_t) -> std::optional<uint64_t> {
+        if (Symbol == "__C_specific_handler")
+          return PersonalityVA;
+        return std::nullopt;
+      },
+      Image.Base);
+  ASSERT_TRUE(Compiled.Success);
+  EXPECT_TRUE(Compiled.Unresolved.empty());
 }
 
 TEST(COFFExceptionIR, RejectsMissingSEHCallSiteWithoutMutation) {
@@ -532,6 +776,65 @@ TEST(COFFExceptionIR, RejectsUnterminatedCxxIntermediateWithoutMutation) {
   EXPECT_EQ(printModuleIR(Fixture.Module), BeforeIR);
   EXPECT_EQ(MedLLVMEmitterTestPeer::callSiteAddresses(Emitter),
             BeforeCallSites);
+}
+
+TEST(COFFExceptionIR, RejectsCxxLanguageOverlaysWithoutMutation) {
+  enum class OverlayKind { Rust, ObjectiveC };
+  for (OverlayKind Kind : {OverlayKind::Rust, OverlayKind::ObjectiveC}) {
+    SCOPED_TRACE(Kind == OverlayKind::Rust ? "rust" : "objective-c");
+    DirectCxxFixture Fixture("atomic_cxx_language_overlay",
+                             /*TerminateProtectedBlock=*/true);
+    if (Kind == OverlayKind::Rust)
+      Fixture.Source.ExceptionMetadata->Rust.emplace();
+    else
+      Fixture.Source.ExceptionMetadata->ObjC.emplace();
+
+    MedLLVMEmitter Emitter;
+    MedLLVMEmitterTestPeer::prepare(Emitter, Fixture.Context, Fixture.Module,
+                                    *Fixture.Function, Fixture.Source);
+    MedLLVMEmitterTestPeer::setCallSiteAddress(Emitter, *Fixture.Call,
+                                               Fixture.Source.Entry + 4);
+    expectVerifierClean(Fixture.Module);
+    const std::string BeforeIR = printModuleIR(Fixture.Module);
+    const auto BeforeCallSites =
+        MedLLVMEmitterTestPeer::callSiteAddresses(Emitter);
+
+    bool Lowered = MedLLVMEmitterTestPeer::emitCxx(
+        Emitter, Fixture.Source, *Fixture.Function, Fixture.OriginalBlockMap);
+
+    EXPECT_FALSE(Lowered);
+    EXPECT_EQ(printModuleIR(Fixture.Module), BeforeIR);
+    EXPECT_EQ(MedLLVMEmitterTestPeer::callSiteAddresses(Emitter),
+              BeforeCallSites);
+    expectVerifierClean(Fixture.Module);
+  }
+}
+
+TEST(COFFExceptionIR, RejectsInconsistentDecodeProvenanceWithoutMutation) {
+  DirectSEHFixture Fixture("atomic_seh_stale_decode_summary",
+                           /*TerminateProtectedBlock=*/true);
+  ExceptionFunctionDecodeProvenance Provenance;
+  Provenance.Language.Diagnostics = {"language decode changed"};
+  Fixture.Source.ExceptionMetadata->DecodeProvenance = std::move(Provenance);
+
+  MedLLVMEmitter Emitter;
+  MedLLVMEmitterTestPeer::prepare(Emitter, Fixture.Context, Fixture.Module,
+                                  *Fixture.Function, Fixture.Source);
+  MedLLVMEmitterTestPeer::setCallSiteAddress(Emitter, *Fixture.Call,
+                                             Fixture.Source.Entry + 4);
+  expectVerifierClean(Fixture.Module);
+  const std::string BeforeIR = printModuleIR(Fixture.Module);
+  const auto BeforeCallSites =
+      MedLLVMEmitterTestPeer::callSiteAddresses(Emitter);
+
+  bool Lowered = MedLLVMEmitterTestPeer::emitSEH(
+      Emitter, Fixture.Source, *Fixture.Function, Fixture.OriginalBlockMap);
+
+  EXPECT_FALSE(Lowered);
+  EXPECT_EQ(printModuleIR(Fixture.Module), BeforeIR);
+  EXPECT_EQ(MedLLVMEmitterTestPeer::callSiteAddresses(Emitter),
+            BeforeCallSites);
+  expectVerifierClean(Fixture.Module);
 }
 
 TEST(COFFExceptionIR, RejectsWrongSEHSourceCallAddressWithoutMutation) {
@@ -819,6 +1122,10 @@ TEST(COFFExceptionIR, RejectsConflictingSEHCallbackABIWithoutMutation) {
           Fixture.Source.ExceptionMetadata->SEH->Scopes.front();
       Scope.Kind = ScopeKind;
       Scope.FilterOrFinallyVA = CallbackVA;
+      if (ScopeKind == SEHScopeKind::Finally) {
+        Scope.HandlerVA = CallbackVA;
+        Scope.ContinuationVA = 0;
+      }
 
       llvm::FunctionType *ExpectedType =
           sehCallbackType(Fixture.Context, ScopeKind);
@@ -928,6 +1235,7 @@ TEST(COFFExceptionIR, EmitsVerifierCleanNativeSimpleFH3Catch) {
   Func.Name = "native_cxx_test";
   Func.ReturnType = NdType::makeVoid();
   constexpr va_t MayThrowVA = 0x140001100;
+  constexpr va_t TypeDescriptorVA = 0x140001200;
 
   MedBlock Protected;
   Protected.Id = 0;
@@ -962,6 +1270,8 @@ TEST(COFFExceptionIR, EmitsVerifierCleanNativeSimpleFH3Catch) {
   EH.Personality = ExceptionPersonality::CxxFrameHandler3;
   EH.PersonalityVA = Func.Entry + 0x180;
   CxxExceptionInfo Cxx;
+  Cxx.Magic = 0x19930522;
+  Cxx.Version = CxxFuncInfoVersion::WithEHFlags;
   Cxx.Flags = 1;
   Cxx.IsSynchronous = true;
   Cxx.MaxState = 2;
@@ -972,13 +1282,15 @@ TEST(COFFExceptionIR, EmitsVerifierCleanNativeSimpleFH3Catch) {
   State1.ToState = 0;
   State1.Kind = CxxUnwindAction::ActionKind::None;
   Cxx.UnwindMap = {State0, State1};
-  Cxx.IPMap = {{Func.Entry, 0}, {Func.Entry + 0x10, -1}};
+  Cxx.IPMap = {
+      {Func.Entry, 0}, {Func.Entry + 0x10, -1}, {Func.Entry + 0x20, 1}};
   CxxTryBlock Try;
   Try.TryLow = 0;
   Try.TryHigh = 0;
   Try.CatchHigh = 1;
   CxxCatchHandler Catch;
   Catch.Adjectives = 0x40;
+  Catch.TypeDescriptorVA = TypeDescriptorVA;
   Catch.HandlerVA = Func.Entry + 0x20;
   Try.Handlers.push_back(Catch);
   Cxx.TryBlocks.push_back(std::move(Try));
@@ -1043,6 +1355,68 @@ TEST(COFFExceptionIR, EmitsVerifierCleanNativeSimpleFH3Catch) {
   auto Plan = planCOFFExceptionPatch(*Mod, Image, Arch::X64);
   ASSERT_TRUE(static_cast<bool>(Plan)) << llvm::toString(Plan.takeError());
 
+  llvm::CatchReturnInst *CatchReturn = nullptr;
+  llvm::CatchPadInst *CatchPad = nullptr;
+  llvm::InvokeInst *ProtectedInvoke = nullptr;
+  for (llvm::BasicBlock &Block : *F)
+    for (llvm::Instruction &Instruction : Block) {
+      if (auto *Return = llvm::dyn_cast<llvm::CatchReturnInst>(&Instruction))
+        CatchReturn = Return;
+      if (auto *Pad = llvm::dyn_cast<llvm::CatchPadInst>(&Instruction))
+        CatchPad = Pad;
+      if (auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(&Instruction))
+        ProtectedInvoke = Invoke;
+    }
+  ASSERT_NE(CatchReturn, nullptr);
+  ASSERT_NE(ProtectedInvoke, nullptr);
+  llvm::BasicBlock *HandlerContinuation = CatchReturn->getSuccessor();
+  llvm::BasicBlock *WrongContinuation = ProtectedInvoke->getNormalDest();
+  ASSERT_NE(HandlerContinuation, WrongContinuation);
+  CatchReturn->setSuccessor(WrongContinuation);
+  expectVerifierClean(*Mod);
+  auto WrongContinuationPlan = planCOFFExceptionPatch(*Mod, Image, Arch::X64);
+  ASSERT_FALSE(static_cast<bool>(WrongContinuationPlan));
+  EXPECT_NE(llvm::toString(WrongContinuationPlan.takeError())
+                .find("catchret continuation"),
+            std::string::npos);
+  CatchReturn->setSuccessor(HandlerContinuation);
+  expectVerifierClean(*Mod);
+  auto RestoredContinuationPlan =
+      planCOFFExceptionPatch(*Mod, Image, Arch::X64);
+  ASSERT_TRUE(static_cast<bool>(RestoredContinuationPlan))
+      << llvm::toString(RestoredContinuationPlan.takeError());
+
+  ASSERT_NE(CatchPad, nullptr);
+  ASSERT_EQ(CatchPad->arg_size(), 3u);
+  llvm::Value *OriginalRTTI = CatchPad->getArgOperand(0);
+  CatchPad->setArgOperand(
+      0, llvm::ConstantPointerNull::get(llvm::PointerType::get(Ctx, 0)));
+  expectVerifierClean(*Mod);
+  auto WrongRTTIPlan = planCOFFExceptionPatch(*Mod, Image, Arch::X64);
+  ASSERT_FALSE(static_cast<bool>(WrongRTTIPlan));
+  EXPECT_NE(llvm::toString(WrongRTTIPlan.takeError()).find("catchpad RTTI"),
+            std::string::npos);
+  CatchPad->setArgOperand(0, OriginalRTTI);
+  expectVerifierClean(*Mod);
+  auto RestoredRTTIPlan = planCOFFExceptionPatch(*Mod, Image, Arch::X64);
+  ASSERT_TRUE(static_cast<bool>(RestoredRTTIPlan))
+      << llvm::toString(RestoredRTTIPlan.takeError());
+
+  llvm::Value *OriginalAdjectives = CatchPad->getArgOperand(1);
+  CatchPad->setArgOperand(
+      1, llvm::ConstantInt::get(llvm::Type::getInt32Ty(Ctx), 0x41));
+  expectVerifierClean(*Mod);
+  auto WrongAdjectivesPlan = planCOFFExceptionPatch(*Mod, Image, Arch::X64);
+  ASSERT_FALSE(static_cast<bool>(WrongAdjectivesPlan));
+  EXPECT_NE(llvm::toString(WrongAdjectivesPlan.takeError())
+                .find("catchpad adjectives"),
+            std::string::npos);
+  CatchPad->setArgOperand(1, OriginalAdjectives);
+  expectVerifierClean(*Mod);
+  auto RestoredAdjectivesPlan = planCOFFExceptionPatch(*Mod, Image, Arch::X64);
+  ASSERT_TRUE(static_cast<bool>(RestoredAdjectivesPlan))
+      << llvm::toString(RestoredAdjectivesPlan.takeError());
+
   ensureCOFFCodegenTargets();
   constexpr uint64_t GeneratedVA = 0x140004000;
   CompiledImage Compiled = compileImageForPatch(
@@ -1052,6 +1426,8 @@ TEST(COFFExceptionIR, EmitsVerifierCleanNativeSimpleFH3Catch) {
           return MayThrowVA;
         if (Symbol == "__CxxFrameHandler3")
           return PersonalityVA;
+        if (Symbol == makeNdDataSymbol(TypeDescriptorVA))
+          return TypeDescriptorVA;
         return std::nullopt;
       },
       Image.Base);
@@ -1134,7 +1510,10 @@ TEST(COFFExceptionIR, EmitsVerifierCleanNestedFH3CatchRegions) {
   EH.Encoding = ExceptionEncoding::X64UnwindV1;
   EH.ParseStatus = ExceptionParseStatus::Complete;
   EH.Personality = ExceptionPersonality::CxxFrameHandler3;
+  EH.PersonalityVA = Func.Entry + 0x180;
   CxxExceptionInfo Cxx;
+  Cxx.Magic = 0x19930522;
+  Cxx.Version = CxxFuncInfoVersion::WithEHFlags;
   Cxx.Flags = 1;
   Cxx.IsSynchronous = true;
   Cxx.MaxState = 4;
@@ -1144,8 +1523,11 @@ TEST(COFFExceptionIR, EmitsVerifierCleanNestedFH3CatchRegions) {
     Action.Kind = CxxUnwindAction::ActionKind::None;
     Cxx.UnwindMap.push_back(Action);
   }
-  Cxx.IPMap = {
-      {Func.Entry, 0}, {Func.Entry + 0x10, 1}, {Func.Entry + 0x20, -1}};
+  Cxx.IPMap = {{Func.Entry, 0},
+               {Func.Entry + 0x10, 1},
+               {Func.Entry + 0x20, -1},
+               {Func.Entry + 0x40, 3},
+               {Func.Entry + 0x50, 2}};
 
   CxxTryBlock Outer;
   Outer.TryLow = 0;
@@ -1201,6 +1583,83 @@ TEST(COFFExceptionIR, EmitsVerifierCleanNestedFH3CatchRegions) {
 
   auto Plan = planCOFFExceptionPatch(*Mod, Image, Arch::X64);
   ASSERT_TRUE(static_cast<bool>(Plan)) << llvm::toString(Plan.takeError());
+
+  // Retargeting the inner protected call to the outer dispatch preserves the
+  // invoke count and leaves a verifier-clean funclet graph, but changes which
+  // source try region handles the call.  Patch planning must authenticate that
+  // edge rather than accepting an unchanged aggregate count.
+  llvm::InvokeInst *InnerInvoke = nullptr;
+  llvm::BasicBlock *OuterDispatch = nullptr;
+  for (llvm::BasicBlock &Block : *F) {
+    if (Block.getName() == "cxx.catch.dispatch.0")
+      OuterDispatch = &Block;
+    auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(Block.getTerminator());
+    if (Invoke && Invoke->getUnwindDest()->getName() == "cxx.catch.dispatch.1")
+      InnerInvoke = Invoke;
+  }
+  ASSERT_NE(InnerInvoke, nullptr);
+  ASSERT_NE(OuterDispatch, nullptr);
+  llvm::BasicBlock *InnerDispatch = InnerInvoke->getUnwindDest();
+  InnerInvoke->setUnwindDest(OuterDispatch);
+
+  std::string RetargetedVerification;
+  llvm::raw_string_ostream RetargetedVerificationOS(RetargetedVerification);
+  ASSERT_FALSE(llvm::verifyModule(*Mod, &RetargetedVerificationOS))
+      << RetargetedVerification;
+  auto RetargetedPlan = planCOFFExceptionPatch(*Mod, Image, Arch::X64);
+  ASSERT_FALSE(static_cast<bool>(RetargetedPlan));
+  EXPECT_NE(
+      llvm::toString(RetargetedPlan.takeError()).find("unwind destination"),
+      std::string::npos);
+
+  InnerInvoke->setUnwindDest(InnerDispatch);
+  std::string RestoredVerification;
+  llvm::raw_string_ostream RestoredVerificationOS(RestoredVerification);
+  ASSERT_FALSE(llvm::verifyModule(*Mod, &RestoredVerificationOS))
+      << RestoredVerification;
+  auto RestoredPlan = planCOFFExceptionPatch(*Mod, Image, Arch::X64);
+  ASSERT_TRUE(static_cast<bool>(RestoredPlan))
+      << llvm::toString(RestoredPlan.takeError());
+
+  // A legal optimizer may turn one protected invoke back into an ordinary
+  // call.  The remaining invoke and the complete funclet tree keep the module
+  // verifier-clean, so a mere "has some WinEH" shape check is insufficient:
+  // patch must recount the actual protected calls and reject the stale
+  // producer contract.
+  llvm::InvokeInst *DroppedInvoke = nullptr;
+  for (llvm::BasicBlock &Block : *F)
+    if (auto *Invoke =
+            llvm::dyn_cast<llvm::InvokeInst>(Block.getTerminator())) {
+      DroppedInvoke = Invoke;
+      break;
+    }
+  ASSERT_NE(DroppedInvoke, nullptr);
+  llvm::IRBuilder<> Builder(DroppedInvoke);
+  llvm::SmallVector<llvm::Value *, 8> Args;
+  for (llvm::Use &Arg : DroppedInvoke->args())
+    Args.push_back(Arg.get());
+  llvm::SmallVector<llvm::OperandBundleDef, 2> Bundles;
+  DroppedInvoke->getOperandBundlesAsDefs(Bundles);
+  llvm::CallInst *PlainCall =
+      Builder.CreateCall(DroppedInvoke->getFunctionType(),
+                         DroppedInvoke->getCalledOperand(), Args, Bundles);
+  PlainCall->setCallingConv(DroppedInvoke->getCallingConv());
+  PlainCall->setAttributes(DroppedInvoke->getAttributes());
+  PlainCall->setDebugLoc(DroppedInvoke->getDebugLoc());
+  PlainCall->copyMetadata(*DroppedInvoke);
+  Builder.CreateBr(DroppedInvoke->getNormalDest());
+  DroppedInvoke->replaceAllUsesWith(PlainCall);
+  DroppedInvoke->eraseFromParent();
+
+  std::string TamperedVerification;
+  llvm::raw_string_ostream TamperedVerificationOS(TamperedVerification);
+  ASSERT_FALSE(llvm::verifyModule(*Mod, &TamperedVerificationOS))
+      << TamperedVerification;
+  auto TamperedPlan = planCOFFExceptionPatch(*Mod, Image, Arch::X64);
+  ASSERT_FALSE(static_cast<bool>(TamperedPlan));
+  EXPECT_NE(
+      llvm::toString(TamperedPlan.takeError()).find("IR contains 1 invokes"),
+      std::string::npos);
 }
 
 } // namespace

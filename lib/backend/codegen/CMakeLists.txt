@@ -29,4 +29,5 @@ add_neverd_component_library(NeverDCodeGen
   LINK_COMPONENTS
   IR
   Loader
+  WindowsEHMetadata
 )

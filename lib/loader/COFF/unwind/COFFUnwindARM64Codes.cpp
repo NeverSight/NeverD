@@ -339,12 +339,16 @@ ARMUnwindDecode decodeARM64UnwindCodes(llvm::ArrayRef<uint8_t> Codes,
     } else if (B0 == 0xE4u || B0 == 0xE5u) { // end, end_c
       if (!take(1))
         break;
-      // Neither terminator stands against a prologue instruction: `end` maps
-      // to the `ret` an epilogue finishes with, and a prologue has none.
+      // Neither marker stands against a prologue instruction: `end` maps to
+      // the `ret` an epilogue finishes with, and a prologue has none.  `end_c`
+      // closes only the current chained scope; the parent scope follows in the
+      // same byte-code stream and is itself terminated by `end`.
       Builder.add(B0 == 0xE4u ? UnwindOperationKind::End
                               : UnwindOperationKind::EndChained,
                   Offset, 1, 0);
-      Terminated = true;
+      Terminated = B0 == 0xE4u;
+      if (!Terminated)
+        Builder.enterChainedParentScope();
     } else if (B0 == 0xE6u) { // save_next
       if (!take(1))
         break;

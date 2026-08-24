@@ -20,14 +20,34 @@
 #define DEBUG_TYPE "neverd-llvmc-emitter"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/WithColor.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include <cctype>
 
 namespace neverd {
 
+void LLVMCWriter::prepareFunctionIdentifiers(llvm::Module &Mod) {
+  GlobalIdentifierAllocator = CProjectionIdentifierAllocator{};
+  FunctionIdentifiers.clear();
+  for (llvm::Function &Fn : Mod) {
+    llvm::StringRef Name = Fn.getName();
+    Name.consume_front("_");
+    FunctionIdentifiers.emplace(
+        &Fn, GlobalIdentifierAllocator.allocate(Name, "nd_function"));
+  }
+}
+
+std::string LLVMCWriter::functionIdentifier(const llvm::Function &Fn) const {
+  if (auto It = FunctionIdentifiers.find(&Fn); It != FunctionIdentifiers.end())
+    return It->second;
+  llvm::StringRef Name = Fn.getName();
+  Name.consume_front("_");
+  return canonicalizeCProjectionIdentifier(Name, "nd_function");
+}
+
 void LLVMCWriter::writeModule(llvm::Module &Mod) {
+  prepareFunctionIdentifiers(Mod);
   writeIncludes(Mod);
   OS << "\n";
   writeStructDefs(Mod);
@@ -51,6 +71,9 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
   Headers.insert("stdint.h");
 
   for (auto &Fn : Mod) {
+    if (!Fn.isDeclaration() && GuardAnalysisOnlyFunctions &&
+        isAnalysisOnlyFunction(Fn))
+      continue;
     for (auto &BB : Fn) {
       for (auto &Inst : BB) {
         if (llvm::isa<llvm::FenceInst>(&Inst))
@@ -179,6 +202,8 @@ void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
       continue;
     if (Fn.isIntrinsic())
       continue;
+    if (GuardAnalysisOnlyFunctions && !isReferencedByExecutableProjection(Fn))
+      continue;
 
     std::string RawName = Fn.getName().str();
 
@@ -188,9 +213,7 @@ void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
     if (llvmIntrinsicToCName(RawName.c_str()))
       continue;
 
-    std::string Name = RawName;
-    if (!Name.empty() && Name[0] == '_')
-      Name = Name.substr(1);
+    std::string Name = functionIdentifier(Fn);
 
     if (libc::isKnownFunction(Name))
       continue;
@@ -200,7 +223,10 @@ void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
     if (FT->getNumParams() == 0 && !FT->isVarArg()) {
       OS << "void";
     } else if (FT->getNumParams() == 0 && FT->isVarArg()) {
-      OS << "...";
+      // ISO C before C23 cannot spell a prototype containing only `...`.
+      // An empty parameter list is deliberately non-prototyped and therefore
+      // keeps the analysis projection callable without inventing an ABI-visible
+      // fixed argument.
     } else {
       for (unsigned I = 0; I < FT->getNumParams(); ++I) {
         if (I > 0)

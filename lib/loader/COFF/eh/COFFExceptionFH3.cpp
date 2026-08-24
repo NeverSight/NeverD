@@ -20,6 +20,16 @@
 #include <vector>
 
 namespace neverd::coff_loader::detail {
+namespace {
+
+/// ARM32's FH3 HandlerType ends after the handler RVA.  The 64-bit Microsoft
+/// targets append dispFrame, which makes the same logical record five words
+/// instead of four.  ESTypeList reuses this target record verbatim.
+size_t fh3HandlerTypeSize(Arch TargetArch) {
+  return TargetArch == Arch::ARM ? 16u : 20u;
+}
+
+} // namespace
 
 bool parseFH3(ExceptionFunction &F, const BinaryImage &Img) {
   auto FuncInfoRVA = readScalar<uint32_t>(Img, F.HandlerDataVA);
@@ -69,6 +79,7 @@ bool parseFH3(ExceptionFunction &F, const BinaryImage &Img) {
   }
 
   CxxExceptionInfo Info;
+  const size_t HandlerTypeSize = fh3HandlerTypeSize(Img.Arch);
   Info.Magic = Magic;
   Info.Version = Version;
   Info.BBTFlags = *MagicWord >> 29;
@@ -223,7 +234,7 @@ bool parseFH3(ExceptionFunction &F, const BinaryImage &Img) {
           return false;
         }
         const uint8_t *Handlers = nullptr;
-        uint64_t HandlerBytes = uint64_t(CatchCount) * 20;
+        uint64_t HandlerBytes = uint64_t(CatchCount) * HandlerTypeSize;
         if (HandlerBytes > std::numeric_limits<size_t>::max() ||
             !readBytes(Img, HandlerMapVA, static_cast<size_t>(HandlerBytes),
                        Handlers)) {
@@ -233,7 +244,7 @@ bool parseFH3(ExceptionFunction &F, const BinaryImage &Img) {
         }
         Try.Handlers.reserve(CatchCount);
         for (uint32_t J = 0; J < CatchCount; ++J) {
-          const uint8_t *H = Handlers + uint64_t(J) * 20;
+          const uint8_t *H = Handlers + uint64_t(J) * HandlerTypeSize;
           CxxCatchHandler Catch;
           Catch.Adjectives = readLE<uint32_t>(H);
           if (!readRVAField(Img.Base, H + 4, Catch.TypeDescriptorVA)) {
@@ -259,7 +270,8 @@ bool parseFH3(ExceptionFunction &F, const BinaryImage &Img) {
                      "C++ catch handler is not mapped executable code");
             return false;
           }
-          Catch.ParentFrameOffset = readLE<int32_t>(H + 16);
+          if (HandlerTypeSize == 20)
+            Catch.ParentFrameOffset = readLE<int32_t>(H + 16);
           Try.Handlers.push_back(std::move(Catch));
         }
       }
@@ -338,7 +350,7 @@ bool parseFH3(ExceptionFunction &F, const BinaryImage &Img) {
     }
     if (SpecCount != 0) {
       const uint8_t *Specs = nullptr;
-      uint64_t SpecBytes = uint64_t(SpecCount) * 20;
+      uint64_t SpecBytes = uint64_t(SpecCount) * HandlerTypeSize;
       if (SpecArrayVA == 0 || SpecBytes > std::numeric_limits<size_t>::max() ||
           !readBytes(Img, SpecArrayVA, static_cast<size_t>(SpecBytes), Specs)) {
         diagnose(F, ExceptionParseStatus::Malformed,
@@ -347,7 +359,7 @@ bool parseFH3(ExceptionFunction &F, const BinaryImage &Img) {
       }
       Info.ExceptionSpecTypes.reserve(static_cast<size_t>(SpecCount));
       for (int32_t I = 0; I < SpecCount; ++I) {
-        const uint8_t *S = Specs + uint64_t(I) * 20;
+        const uint8_t *S = Specs + uint64_t(I) * HandlerTypeSize;
         CxxExceptionSpecType Spec;
         Spec.Adjectives = readLE<uint32_t>(S);
         if (!readRVAField(Img.Base, S + 4, Spec.TypeDescriptorVA)) {

@@ -18,12 +18,14 @@
 
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/codegen/BinaryUtils.h"
+#include "neverd/backend/codegen/COFF/COFFExceptionPatch.h"
 #include "neverd/backend/codegen/COFF/COFFInplace.h"
 #include "neverd/backend/codegen/COFF/COFFPatch.h"
 #include "neverd/backend/codegen/ELF/ELFInplace.h"
 #include "neverd/backend/codegen/ELF/ELFPatch.h"
 #include "neverd/backend/codegen/MachO/MachOInplace.h"
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
+#include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/object/ELFLayout.h"
 #include "neverd/object/MachOLayout.h"
 #include "neverd/object/PELayout.h"
@@ -36,6 +38,7 @@
 #include "llvm/BinaryFormat/Magic.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileOutputBuffer.h"
@@ -421,6 +424,20 @@ bool BinaryPatcher::prepareSourceFunctionsForPatch(
     SourceFunctionPreparation &Preparation, std::string &Detail) {
   Preparation = SourceFunctionPreparation{};
   Detail.clear();
+
+  // COFF source preparation can turn a preserved lifted definition into a
+  // declaration.  Authenticate the complete attachment/table/source-image
+  // closure while every body and every named-table row is still intact; a
+  // later planner must never be asked to infer whether a declaration used to
+  // be a valid source definition.
+  if (Image && Image->Format == BinaryFormat::COFF) {
+    if (llvm::Error Error =
+            validateCOFFExceptionSourceIdentityClosure(Module, *Image)) {
+      Detail = llvm::toString(std::move(Error));
+      return false;
+    }
+  }
+
   std::set<va_t> SeenEntries;
   struct SourceCandidate {
     llvm::Function *Function = nullptr;
@@ -532,9 +549,50 @@ bool BinaryPatcher::prepareSourceFunctionsForPatch(
     }
   }
 
+  // A preserved source is resolved to its authenticated original body and is
+  // not compiled.  Remove its Windows EH row and attachment together before
+  // externalizing it, so the post-preparation module remains an exact closure
+  // over only the definitions whose unwind records will actually be generated.
+  // The preauthentication above makes every row shape and pointer identity
+  // trustworthy; all fallible validation, including blockaddress escape
+  // checks, has completed before this first mutation.
+  llvm::NamedMDNode *WindowsEHTable =
+      Image && Image->Format == BinaryFormat::COFF
+          ? Module.getNamedMetadata(windows_eh_md::FunctionTable)
+          : nullptr;
+  std::vector<llvm::MDNode *> RetainedWindowsEHRows;
+  bool RemovesWindowsEHRow = false;
+  if (WindowsEHTable) {
+    RetainedWindowsEHRows.reserve(WindowsEHTable->getNumOperands());
+    for (llvm::MDNode *Row : WindowsEHTable->operands()) {
+      const auto *FunctionValue = llvm::dyn_cast<llvm::ValueAsMetadata>(
+          Row->getOperand(0).get());
+      const auto *Function =
+          llvm::cast<llvm::Function>(FunctionValue->getValue());
+      if (FunctionsToExternalize.contains(Function)) {
+        RemovesWindowsEHRow = true;
+        continue;
+      }
+      RetainedWindowsEHRows.push_back(Row);
+    }
+  }
+  if (RemovesWindowsEHRow) {
+    WindowsEHTable->clearOperands();
+    for (llvm::MDNode *Row : RetainedWindowsEHRows)
+      WindowsEHTable->addOperand(Row);
+    if (RetainedWindowsEHRows.empty())
+      WindowsEHTable->eraseFromParent();
+  }
+
   for (const SourceCandidate &Candidate : Candidates) {
     if (Candidate.Replaceable)
       continue;
+    if (Image && Image->Format == BinaryFormat::COFF) {
+      Candidate.Function->setMetadata(windows_eh_md::FunctionAttachment,
+                                      nullptr);
+      Candidate.Function->setMetadata(windows_eh_md::NativeAttachment,
+                                      nullptr);
+    }
     Candidate.Function->deleteBody();
     Candidate.Function->setLinkage(llvm::GlobalValue::ExternalLinkage);
     Candidate.Function->setDSOLocal(true);

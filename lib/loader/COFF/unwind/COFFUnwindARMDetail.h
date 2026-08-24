@@ -75,10 +75,16 @@ public:
     Op.CodeOffset = CodeOffset;
     Op.SlotCount = CodeLength;
     Op.InstructionSize = InstructionSize;
-    Result.PrologueSize += InstructionSize;
+    if (CountsTowardPhysicalPrologue)
+      Result.PrologueSize += InstructionSize;
     Result.Operations.push_back(std::move(Op));
     return Result.Operations.back();
   }
+
+  /// Operations following `end_c` belong to a parent/phantom scope.  They are
+  /// required to unwind the body, but they do not stand against instructions
+  /// in the current fragment's physical prologue.
+  void enterChainedParentScope() { CountsTowardPhysicalPrologue = false; }
 
   void degrade(ExceptionParseStatus Status, std::string Message) {
     Result.Status = mergeExceptionParseStatus(Result.Status, Status);
@@ -87,6 +93,7 @@ public:
 
 private:
   ARMUnwindDecode &Result;
+  bool CountsTowardPhysicalPrologue = true;
 };
 
 std::string atOffset(const char *What, size_t Offset);

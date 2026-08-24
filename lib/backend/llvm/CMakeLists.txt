@@ -1,3 +1,8 @@
+add_neverd_component_library(NeverDWindowsEHMetadata
+  eh/WindowsEHMetadataEncoder.cpp
+  eh/WindowsEHNativeSource.cpp
+)
+
 add_neverd_component_library(NeverDBackendLLVM
   AArch64/MedLLVMAArch64Sideeffect.cpp
   AArch64/MedLLVMAArch64ValueEmitter.cpp
@@ -39,4 +44,5 @@ add_neverd_component_library(NeverDBackendLLVM
 
   LINK_COMPONENTS
   IR
+  WindowsEHMetadata
 )
