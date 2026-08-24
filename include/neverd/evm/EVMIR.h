@@ -26,6 +26,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <set>
 #include <string>
@@ -171,9 +172,165 @@ enum class EdgeKind : uint8_t {
   Indirect,
 };
 
+/// Whether a CFG fact follows a feasible analyzed path or only a conservative
+/// overapproximation introduced while resolving an indirect destination.
+enum class Reachability : uint8_t {
+  MayReachable,
+  Reachable,
+};
+
+/// Strong identifiers for immutable, hash-consed abstract values and stack
+/// states. Their underlying values are stable table indices within one
+/// EVMLowIR instance; lanes use the self-describing identifier below.
+enum class LowAbstractValueID : uint32_t {};
+enum class LowAbstractStackID : uint32_t {};
+
+inline constexpr LowAbstractValueID kInvalidLowAbstractValueID =
+    static_cast<LowAbstractValueID>(std::numeric_limits<uint32_t>::max());
+inline constexpr LowAbstractStackID kInvalidLowAbstractStackID =
+    static_cast<LowAbstractStackID>(std::numeric_limits<uint32_t>::max());
+
+/// A self-describing block-local lane identifier. Ordinals are deterministic
+/// within BlockPC and do not depend on the layout of EVMLowIR::StateLanes.
+struct LowStateLaneID {
+  uint64_t BlockPC = std::numeric_limits<uint64_t>::max();
+  uint32_t Ordinal = std::numeric_limits<uint32_t>::max();
+
+  [[nodiscard]] constexpr bool isValid() const {
+    return BlockPC != std::numeric_limits<uint64_t>::max() &&
+           Ordinal != std::numeric_limits<uint32_t>::max();
+  }
+
+  friend constexpr bool operator==(const LowStateLaneID &,
+                                   const LowStateLaneID &) = default;
+  friend constexpr bool operator<(const LowStateLaneID &Left,
+                                  const LowStateLaneID &Right) {
+    return Left.BlockPC < Right.BlockPC ||
+           (Left.BlockPC == Right.BlockPC && Left.Ordinal < Right.Ordinal);
+  }
+};
+
+[[nodiscard]] constexpr uint32_t lowAbstractValueIndex(LowAbstractValueID ID) {
+  return static_cast<uint32_t>(ID);
+}
+
+[[nodiscard]] constexpr uint32_t lowAbstractStackIndex(LowAbstractStackID ID) {
+  return static_cast<uint32_t>(ID);
+}
+
+[[nodiscard]] constexpr bool isValidLowAbstractValueID(LowAbstractValueID ID) {
+  return ID != kInvalidLowAbstractValueID;
+}
+
+[[nodiscard]] constexpr bool isValidLowAbstractStackID(LowAbstractStackID ID) {
+  return ID != kInvalidLowAbstractStackID;
+}
+
+enum class LowAbstractValueKind : uint8_t {
+  Top,
+  ConstantSet,
+  Symbol,
+  Expression,
+};
+
+enum class LowAbstractExactness : uint8_t {
+  Exact,
+  OverApproximation,
+};
+
+/// Identity of one opaque EVM value producer transfer. ProducerLane keeps
+/// repeated executions of the same PC distinct; OutputOrdinal separates
+/// multi-result instructions without equating unrelated environment reads.
+struct LowAbstractSymbolKey {
+  LowStateLaneID ProducerLane{};
+  uint64_t ProducerPC = 0;
+  Opcode ProducerOpcode = Opcode::STOP;
+  uint8_t OutputOrdinal = 0;
+
+  friend bool operator==(const LowAbstractSymbolKey &,
+                         const LowAbstractSymbolKey &) = default;
+};
+
+/// Identity of a pure expression over canonical abstract value nodes.
+struct LowAbstractExpressionKey {
+  Opcode Operator = Opcode::STOP;
+  std::vector<LowAbstractValueID> Operands;
+
+  friend bool operator==(const LowAbstractExpressionKey &,
+                         const LowAbstractExpressionKey &) = default;
+};
+
+/// One immutable abstract operand-stack value. ConstantSet values are sorted
+/// and duplicate-free. Top has no identity; exact Symbol and Expression nodes
+/// preserve producer correlation across DUP and pure operations.
+struct LowAbstractValue {
+  LowAbstractValueID ID = kInvalidLowAbstractValueID;
+  LowAbstractValueKind Kind = LowAbstractValueKind::Top;
+  LowAbstractExactness Exactness = LowAbstractExactness::OverApproximation;
+  std::vector<llvm::APInt> Constants;
+  std::optional<LowAbstractSymbolKey> Symbol;
+  std::optional<LowAbstractExpressionKey> Expression;
+
+  friend bool operator==(const LowAbstractValue &,
+                         const LowAbstractValue &) = default;
+};
+
+/// An immutable whole-stack state shared by every lane with identical words.
+struct LowAbstractStack {
+  LowAbstractStackID ID = kInvalidLowAbstractStackID;
+  std::vector<LowAbstractValueID> Words;
+
+  friend bool operator==(const LowAbstractStack &,
+                         const LowAbstractStack &) = default;
+};
+
+/// One indivisible block-entry state. EntryState, rather than stack height,
+/// defines lane identity. ExitState is populated after the lane is transferred.
+struct LowStateLane {
+  LowStateLaneID ID{};
+  Reachability Evidence = Reachability::Reachable;
+  LowAbstractStackID EntryState = kInvalidLowAbstractStackID;
+  std::optional<LowAbstractStackID> ExitState;
+
+  friend bool operator==(const LowStateLane &, const LowStateLane &) = default;
+};
+
+/// Path-sensitive transfer between immutable lanes. A missing target preserves
+/// an unresolved indirect jump without inventing a destination lane.
+struct LowLaneTransition {
+  LowStateLaneID Source{};
+  std::optional<LowStateLaneID> Target;
+  EdgeKind Kind = EdgeKind::Fallthrough;
+  std::optional<uint64_t> TargetPC;
+  Reachability Evidence = Reachability::Reachable;
+
+  friend bool operator==(const LowLaneTransition &,
+                         const LowLaneTransition &) = default;
+};
+
 struct LowEdge {
   EdgeKind Kind = EdgeKind::Fallthrough;
   std::optional<uint64_t> Target;
+  Reachability Evidence = Reachability::Reachable;
+};
+
+/// Runtime fault classes that terminate one analyzed LowIR path prefix.
+enum class LowFaultKind : uint8_t {
+#define EVM_LOW_FAULT_KIND(ID, CONSUMES_INPUTS) ID,
+#include "neverd/evm/analysis/EVMLowFaultKinds.def"
+};
+
+/// A typed runtime fault for one current abstract block-entry lane. Evidence is
+/// obtained from the referenced lane; only Reachable faults are definite.
+///
+/// Lane is the path identity. EntryStackHeight remains compatibility metadata
+/// for consumers that have not yet adopted lane-sensitive lowering; it must
+/// never be used to merge fault prefixes.
+struct LowFaultPrefix {
+  LowStateLaneID Lane{};
+  size_t EntryStackHeight = 0;
+  uint64_t PC = 0;
+  LowFaultKind Kind = LowFaultKind::NonExecutableInstruction;
 };
 
 /// Sorted, duplicate-free concrete operand-stack heights reaching a block.
@@ -210,12 +367,28 @@ struct LowBlock {
   uint64_t EndPC = 0;
   size_t FirstInstruction = 0;
   size_t InstructionCount = 0;
+  std::vector<LowStateLaneID> StateLanes;
   std::vector<LowEdge> Successors;
+  /// Predecessors supported by Reachable evidence. Semantic lowering consumes
+  /// this compatibility view and therefore cannot ingest speculative PHIs.
   std::vector<uint64_t> Predecessors;
+  /// Predecessors supported only by conservative indirect-target expansion.
+  std::vector<uint64_t> MayPredecessors;
+  /// Compatibility view consumed by semantic recovery: at least one analyzed
+  /// path reaches this block without conservative indirect-target expansion.
   bool Reachable = false;
+  /// At least one lane reaches this block through conservative target
+  /// expansion. A block can be both Reachable and MayReachable.
+  bool MayReachable = false;
   bool HasIndirectSuccessor = false;
+  /// Stack-height domains supported by Reachable evidence.
   StackHeightDomain EntryStackHeights;
   StackHeightDomain ExitStackHeights;
+  /// Stack-height domains supported by conservative target expansion. These
+  /// remain visible to CFG clients without becoming semantic-lowering inputs.
+  StackHeightDomain MayEntryStackHeights;
+  StackHeightDomain MayExitStackHeights;
+  std::vector<LowFaultPrefix> FaultPrefixes;
 };
 
 /// Lossless bytecode and CFG representation at the decoder boundary.
@@ -225,6 +398,10 @@ struct EVMLowIR {
   std::vector<uint8_t> Code;
   std::vector<LowInstruction> Instructions;
   std::vector<LowBlock> Blocks;
+  std::vector<LowAbstractValue> AbstractValues;
+  std::vector<LowAbstractStack> AbstractStacks;
+  std::vector<LowStateLane> StateLanes;
+  std::vector<LowLaneTransition> LaneTransitions;
   std::set<uint64_t> JumpDestinations;
   std::vector<Diagnostic> Diagnostics;
 
@@ -242,6 +419,21 @@ struct EVMLowIR {
         });
     return It != Blocks.end() && It->StartPC == PC ? &*It : nullptr;
   }
+  const LowAbstractValue *findAbstractValue(LowAbstractValueID ID) const {
+    const size_t Index = lowAbstractValueIndex(ID);
+    return Index < AbstractValues.size() ? &AbstractValues[Index] : nullptr;
+  }
+  const LowAbstractStack *findAbstractStack(LowAbstractStackID ID) const {
+    const size_t Index = lowAbstractStackIndex(ID);
+    return Index < AbstractStacks.size() ? &AbstractStacks[Index] : nullptr;
+  }
+  const LowStateLane *findStateLane(LowStateLaneID ID) const {
+    const auto It = llvm::lower_bound(
+        StateLanes, ID, [](const LowStateLane &Lane, LowStateLaneID Candidate) {
+          return Lane.ID < Candidate;
+        });
+    return It != StateLanes.end() && It->ID == ID ? &*It : nullptr;
+  }
   bool hasEdge(uint64_t From, uint64_t To, EdgeKind Kind) const {
     const LowBlock *Block = findBlock(From);
     if (!Block)
@@ -254,16 +446,47 @@ struct EVMLowIR {
 };
 
 using ValueID = uint32_t;
+inline constexpr ValueID kInvalidValueID = std::numeric_limits<ValueID>::max();
+
+/// Strong identifier for one lane-sensitive MedIR stack state. The table
+/// index is stable within one EVMMedIR instance; LowLane preserves the
+/// self-describing control-flow identity across the lowering boundary.
+enum class MedStateLaneID : uint32_t {};
+inline constexpr MedStateLaneID kInvalidMedStateLaneID =
+    static_cast<MedStateLaneID>(std::numeric_limits<uint32_t>::max());
+
+[[nodiscard]] constexpr uint32_t medStateLaneIndex(MedStateLaneID ID) {
+  return static_cast<uint32_t>(ID);
+}
+
+[[nodiscard]] constexpr bool isValidMedStateLaneID(MedStateLaneID ID) {
+  return ID != kInvalidMedStateLaneID;
+}
+
+struct MedPhiIncoming {
+  MedStateLaneID SourceLane = kInvalidMedStateLaneID;
+  ValueID Value = kInvalidValueID;
+
+  friend bool operator==(const MedPhiIncoming &,
+                         const MedPhiIncoming &) = default;
+  friend bool operator<(const MedPhiIncoming &Left,
+                        const MedPhiIncoming &Right) {
+    return Left.SourceLane < Right.SourceLane ||
+           (Left.SourceLane == Right.SourceLane && Left.Value < Right.Value);
+  }
+};
 
 enum class ValueKind : uint8_t { Constant, Instruction, Phi, Unknown };
 
 struct MedValue {
-  ValueID ID = 0;
+  ValueID ID = kInvalidValueID;
   ValueKind Kind = ValueKind::Unknown;
   uint64_t PC = 0;
   std::string Name;
   std::vector<ValueID> Inputs;
-  std::vector<uint64_t> IncomingBlocks;
+  /// Lane-keyed inputs for Phi values. Inputs is the corresponding value-only
+  /// compatibility view and must exactly match this vector's Value sequence.
+  std::vector<MedPhiIncoming> PhiIncomings;
   std::optional<llvm::APInt> Constant;
 };
 
@@ -277,10 +500,30 @@ struct MedOperation {
   MemoryAccessKind MemoryAccess = MemoryAccessKind::Unknown;
   StateAccessKind StateAccess = StateAccessKind::Unknown;
   CallValueAccessKind CallValueAccess = CallValueAccessKind::Unknown;
+  /// Sorted, duplicate-free lane provenance. A lane that faults before this
+  /// opcode cannot also execute it.
+  std::vector<MedStateLaneID> ExecutingLanes;
+  std::vector<MedStateLaneID> FaultingLanes;
+
+  [[nodiscard]] bool mayExecute() const { return !ExecutingLanes.empty(); }
+  [[nodiscard]] bool mayFault() const { return !FaultingLanes.empty(); }
+};
+
+struct MedStateLane {
+  MedStateLaneID ID = kInvalidMedStateLaneID;
+  LowStateLaneID LowLane{};
+  Reachability Evidence = Reachability::Reachable;
+  std::vector<ValueID> EntryStack;
+  std::vector<ValueID> ExitStack;
+
+  friend bool operator==(const MedStateLane &, const MedStateLane &) = default;
 };
 
 struct MedBlock {
   uint64_t StartPC = 0;
+  std::vector<MedStateLaneID> StateLanes;
+  /// Proven-reachable, uniform-height compatibility views. Lane-sensitive
+  /// consumers must use StateLanes instead of treating these as path identity.
   std::vector<ValueID> EntryStack;
   std::vector<ValueID> PhiValues;
   std::vector<MedOperation> Operations;
@@ -291,12 +534,22 @@ struct MedBlock {
 struct EVMMedIR {
   std::vector<MedValue> Values;
   std::vector<MedBlock> Blocks;
+  std::vector<MedStateLane> StateLanes;
   std::vector<Diagnostic> Diagnostics;
 
   const MedValue *findValue(ValueID ID) const {
     if (ID >= Values.size())
       return nullptr;
     return &Values[ID];
+  }
+
+  const MedStateLane *findStateLane(MedStateLaneID ID) const {
+    const size_t Index = medStateLaneIndex(ID);
+    return Index < StateLanes.size() ? &StateLanes[Index] : nullptr;
+  }
+  MedStateLane *findStateLane(MedStateLaneID ID) {
+    const size_t Index = medStateLaneIndex(ID);
+    return Index < StateLanes.size() ? &StateLanes[Index] : nullptr;
   }
 };
 
@@ -318,10 +571,14 @@ struct RecoveredFunction {
   uint32_t Selector = 0;
   uint64_t EntryPC = 0;
   std::string Name;
-  /// The tabulated signature the selector is the hash of, null when the
-  /// dictionary does not know it. Recovery never synthesizes a signature from
-  /// inferred types: a signature is either exhibited by a preimage or absent.
+  /// The tabulated hash candidate compatible with recovered argument use, null
+  /// when the dictionary has none or dataflow contradicts it. Recovery never
+  /// synthesizes a signature from inferred types.
   const KnownSignatureInfo *Known = nullptr;
+  /// The uniquely recognized standard declaration of Known, when interface
+  /// evidence disambiguates it. A canonical selector can have multiple
+  /// variants with different returns, so this is never chosen by table order.
+  const KnownFunctionVariantInfo *KnownVariant = nullptr;
   std::vector<RecoveredArgument> Arguments;
   std::vector<std::string> Returns;
   ABITypeSource ReturnSource = ABITypeSource::Default;
@@ -406,8 +663,9 @@ struct CallFact {
   /// value transfer, which is how a contract pays an address that may not have
   /// code at all.
   std::optional<uint32_t> Selector;
-  /// The tabulated signature that selector is the hash of, null when the
-  /// dictionary does not know it.
+  /// The tabulated hash candidate for that selector, null when the dictionary
+  /// has none. Outgoing calldata is not treated as an interface the current
+  /// program implements.
   const KnownSignatureInfo *Known = nullptr;
   /// The value transferred, for the members of the family that carry one and
   /// when it is a constant. A proven zero is what distinguishes a call that
@@ -420,7 +678,8 @@ struct EventFact {
   uint64_t PC = 0;
   unsigned Topics = 0;
   std::optional<llvm::APInt> Topic0;
-  /// The tabulated event whose signature hashes to the first topic.
+  /// The unique tabulated event whose full signature topic and exact indexed
+  /// topic arity match this LOG operation.
   const KnownSignatureInfo *Known = nullptr;
   std::string SuggestedName;
 };
@@ -444,7 +703,9 @@ struct ErrorFact {
   uint64_t PC = 0;
   RevertKind Kind = RevertKind::Bare;
   std::optional<uint32_t> Selector;
-  /// The tabulated error whose signature hashes to the selector.
+  /// The tabulated custom-error candidate whose signature hashes to the
+  /// selector. The four-byte match names the payload but is not standard
+  /// evidence.
   const KnownSignatureInfo *Known = nullptr;
   /// Which compiler-inserted check failed, when the payload is a panic whose
   /// code is constant.
@@ -470,9 +731,10 @@ struct EVMHighIR {
   /// Every call this program makes into another program, in program order.
   std::vector<CallFact> Calls;
   std::vector<StructuredRegion> Regions;
-  /// The standards the program answers to, in table order. One matched
-  /// selector says little on its own; the set is what makes a contract
-  /// recognizable as a token, a proxy, or a pool.
+  /// The standards the program answers to, in table order. Recognition needs
+  /// either each standard's declared minimum of distinct ABI-compatible
+  /// function selectors or strong full-topic event, storage, or proxy
+  /// evidence; a single four-byte function or error selector is insufficient.
   std::vector<KnownStandard> Standards;
   /// True only when the path taken by a call whose selector matched nothing
   /// provably does something other than reject it. A dispatcher that only

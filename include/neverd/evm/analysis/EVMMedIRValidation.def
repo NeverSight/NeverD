@@ -1,0 +1,97 @@
+//===- EVMMedIRValidation.def - Structural validation reasons -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
+// Defines stable reasons emitted by the read-only LowIR/MedIR boundary
+// verifier. Consumers must define EVM_MED_IR_VALIDATION_FAILURE(ID, MESSAGE).
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_MED_IR_VALIDATION_FAILURE
+#error                                                                         \
+    "Define EVM_MED_IR_VALIDATION_FAILURE before including EVMMedIRValidation.def"
+#endif
+
+EVM_MED_IR_VALIDATION_FAILURE(LowInstructionTable,
+                              "non-canonical LowIR instruction table")
+EVM_MED_IR_VALIDATION_FAILURE(LowBlockTable,
+                              "non-canonical LowIR basic block table")
+EVM_MED_IR_VALIDATION_FAILURE(LowBlockInstructionRange,
+                              "invalid LowIR basic block instruction range")
+EVM_MED_IR_VALIDATION_FAILURE(LowJumpDestination,
+                              "invalid LowIR jump destination table")
+EVM_MED_IR_VALIDATION_FAILURE(LowAbstractValueTable,
+                              "invalid LowIR abstract value table")
+EVM_MED_IR_VALIDATION_FAILURE(LowAbstractValuePayload,
+                              "invalid LowIR abstract value payload")
+EVM_MED_IR_VALIDATION_FAILURE(LowAbstractValueReference,
+                              "invalid LowIR abstract value reference")
+EVM_MED_IR_VALIDATION_FAILURE(LowAbstractStackTable,
+                              "invalid LowIR abstract stack table")
+EVM_MED_IR_VALIDATION_FAILURE(LowAbstractStackReference,
+                              "invalid LowIR abstract stack reference")
+EVM_MED_IR_VALIDATION_FAILURE(LowBlockLaneTable,
+                              "invalid LowIR block lane table")
+EVM_MED_IR_VALIDATION_FAILURE(LowStateLaneTable,
+                              "non-canonical LowIR state lane table")
+EVM_MED_IR_VALIDATION_FAILURE(LowStateLaneRecord,
+                              "invalid LowIR state lane record")
+EVM_MED_IR_VALIDATION_FAILURE(LowFaultTable,
+                              "non-canonical LowIR fault prefix table")
+EVM_MED_IR_VALIDATION_FAILURE(LowFaultReference,
+                              "invalid LowIR fault prefix reference")
+EVM_MED_IR_VALIDATION_FAILURE(LowTransitionTable,
+                              "non-canonical LowIR lane transition table")
+EVM_MED_IR_VALIDATION_FAILURE(LowTransitionReference,
+                              "invalid LowIR lane transition reference")
+EVM_MED_IR_VALIDATION_FAILURE(MedTableCardinality,
+                              "LowIR and MedIR table cardinalities disagree")
+EVM_MED_IR_VALIDATION_FAILURE(MedValueTable,
+                              "invalid MedIR value table identity")
+EVM_MED_IR_VALIDATION_FAILURE(MedValuePayload, "invalid MedIR value payload")
+EVM_MED_IR_VALIDATION_FAILURE(MedValueReference,
+                              "invalid MedIR value reference")
+EVM_MED_IR_VALIDATION_FAILURE(MedPhiTable,
+                              "non-canonical MedIR phi incoming table")
+EVM_MED_IR_VALIDATION_FAILURE(MedPhiReference,
+                              "invalid MedIR phi incoming reference")
+EVM_MED_IR_VALIDATION_FAILURE(MedBlockTable,
+                              "non-canonical MedIR basic block table")
+EVM_MED_IR_VALIDATION_FAILURE(MedBlockLaneTable,
+                              "invalid MedIR block lane table")
+EVM_MED_IR_VALIDATION_FAILURE(MedBlockStack,
+                              "invalid MedIR block stack compatibility view")
+EVM_MED_IR_VALIDATION_FAILURE(MedStateLaneTable,
+                              "invalid MedIR state lane table identity")
+EVM_MED_IR_VALIDATION_FAILURE(MedStateLaneReference,
+                              "invalid MedIR state lane reference")
+EVM_MED_IR_VALIDATION_FAILURE(MedStateLaneStack,
+                              "invalid MedIR state lane stack")
+EVM_MED_IR_VALIDATION_FAILURE(MedStateLanePhi,
+                              "MedIR lane phi disagrees with LowIR transitions")
+EVM_MED_IR_VALIDATION_FAILURE(MedOperationTable,
+                              "non-canonical MedIR operation table")
+EVM_MED_IR_VALIDATION_FAILURE(MedOperationReference,
+                              "invalid MedIR operation reference")
+EVM_MED_IR_VALIDATION_FAILURE(MedOperationLaneTable,
+                              "invalid MedIR operation lane table")
+EVM_MED_IR_VALIDATION_FAILURE(MedOperationLowLink,
+                              "MedIR operation disagrees with LowIR")
+EVM_MED_IR_VALIDATION_FAILURE(MedOperationMetadata,
+                              "MedIR operation metadata is non-canonical")
+EVM_MED_IR_VALIDATION_FAILURE(MedOperationResult,
+                              "invalid MedIR operation result")
+EVM_MED_IR_VALIDATION_FAILURE(MedValueDefinition,
+                              "invalid MedIR value definition")
+EVM_MED_IR_VALIDATION_FAILURE(AnalysisResourceLimit,
+                              "IR exceeds its configured analysis limits")
+EVM_MED_IR_VALIDATION_FAILURE(CanonicalReplayFailure,
+                              "canonical IR replay failed")
+EVM_MED_IR_VALIDATION_FAILURE(LowCanonicalMismatch,
+                              "LowIR disagrees with canonical replay")
+EVM_MED_IR_VALIDATION_FAILURE(MedCanonicalMismatch,
+                              "MedIR disagrees with canonical replay")
+
+#undef EVM_MED_IR_VALIDATION_FAILURE

@@ -1,0 +1,22 @@
+//===- EVMABITableLimits.def - ABI dictionary resource bounds -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// EVM_ABI_TABLE_LIMIT(NAME, VALUE)
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_ABI_TABLE_LIMIT
+#error "Define EVM_ABI_TABLE_LIMIT before including EVMABITableLimits.def"
+#endif
+
+// Public validation accepts caller-provided tables, so it bounds cardinality
+// and aggregate text before parsing or hashing any entry. The byte allowance
+// covers canonical signature spellings and function return lists together.
+EVM_ABI_TABLE_LIMIT(MaxKnownSignatureTableEntries, 4'096)
+EVM_ABI_TABLE_LIMIT(MaxKnownFunctionVariantTableEntries, 8'192)
+EVM_ABI_TABLE_LIMIT(MaxKnownSignatureTableTextBytes, 4 * 1'024 * 1'024)
+
+#undef EVM_ABI_TABLE_LIMIT

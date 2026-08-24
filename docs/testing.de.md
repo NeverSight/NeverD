@@ -46,7 +46,7 @@ gefundenen Fall ein CTest-Label mit dem Namen dieses Executable-Targets zu.
 | `unittests/safety` | `NeverDSafetyTests`, `NeverDSafetyIntegrationTests` | Senkenkatalog, Identitätsvorrang, Argument-Vorfilter, Copy-Überlauf-Hunt, Heap-Lebensdauer-Audit und die verpflichtende Sechs-Zellen-Matrix PE/ELF/Mach-O × x86-64/AArch64 |
 | `unittests/lift` | `NeverDLiftTests` | Decoder-/Lifter-LowIR-Formen, IR-Stufen, Loader, Relokationen, Format-Fixtures, Dekompilierung und repräsentative Patch-Flows |
 | Die meisten Dateien in `unittests/semantic` | `NeverDSemanticTests` | Differentielle Semantik von Instruktionen, ABI, Kontrollfluss, C-Ausdrücken und Lift/Recompile |
-| `unittests/evm` | `NeverDEVMOpcodeTests`, `NeverDEVMBytecodeTests`, `NeverDEVMLoaderTests`, `NeverDEVMAnalyzerTests`, `NeverDEVMSemanticTests`, `NeverDEVMEmitterTests`, `NeverDEVMIntegrationTests` | Hardfork-Metadata, Eingabenormalisierung, CFG/SSA/Recovery, Interpreter-Semantik, differentielle LLVM/C/Solidity-Ausführung und API-Routing |
+| `unittests/evm` | `NeverDEVMOpcodeTests`, `NeverDEVMBytecodeTests`, `NeverDEVMLoaderTests`, `NeverDEVMABITests`, `NeverDEVMAnalyzerTests`, `NeverDEVMDecoderPropertyTests`, `NeverDEVMProxyTests`, `NeverDEVMCallTests`, `NeverDEVMSemanticTests`, `NeverDEVMEmitterTests`, `NeverDEVMIntegrationTests` | Hardfork-Metadata, Eingabenormalisierung, ABI-/Signatur-Ambiguität, CFG/SSA/Recovery, exhaustive Decoder-Grenzen und feindliche Eingaben, Proxy-/Call-Fakten, Interpreter-Semantik, differentielle LLVM/C/Solidity-Ausführung und API-Routing |
 | `unittests/sbf` | `NeverDSBFMetadataTests`, `NeverDSBFProgramImageTests`, `NeverDSBFLoaderTests`, `NeverDSBFAnalyzerTests`, `NeverDSBFVerifierTests`, `NeverDSBFISAConformanceTests`, `NeverDSBFAgaveConformanceTests`, `NeverDSBFSemanticTests`, `NeverDSBFEmitterTests`, `NeverDSBFLLVMEmitterTests`, `NeverDSBFLLVMDifferentialTests`, `NeverDSBFSourceDifferentialTests`, `NeverDSBFMalformedCorpusTests`, `NeverDSBFUpstreamConformanceTests`, `NeverDSBFExternalOracleTests`, `NeverDSBFSolanaModelTests`, `NeverDSBFIntegrationTests` | v0-v4-Metadaten und ELF-Layouts, striktes Verifier-/Loader-Verhalten, 23 gepinnte ELF-Artefakte, unabhängiges offizielles Oracle, vollständige Opcode-Verfügbarkeit, feindliche Eingaben, CFG/Recovery sowie ausgeführte LLVM-/C-/Rust-Differenzen |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | Rewrite-/Obfuskationsäquivalenz über vier ISAs und drei Objektformate |
 | Fokussierte Transformationsdateien in `unittests/semantic` | `NeverDSwitchXformTests`, `NeverDIndCallXformTests`, `NeverDCFGLoopXformTests`, `NeverDTwoTableXformTests`, `NeverDAvxUpperXformTests` | Schnell relinkbare Sonden außerhalb des großen Semantikprogramms |
@@ -92,35 +92,146 @@ fünf Labels fehlt, denn ein Build, der das Corpus stillschweigend nicht mehr
 liest, ist eine Regression, die kein Test fangen kann — der Test ist ja das, was
 abhandenkam.
 
-Der EVM-Opcode-Audit führt bei jedem Lauf einen flachen `git fetch` des Remote-
-`HEAD` aus dem offiziellen
-[go-ethereum-Repository](https://github.com/ethereum/go-ethereum) aus und meldet
-anschließend den exakt geprüften Commit. Er verwendet den ignorierten Bare-Cache
-`build/evm-opcode-audit/go-ethereum.git` erneut, aktualisiert ihn jedoch vor dem
-Lesen des geschlossenen Opcode-Inventars und der Byte-Zuordnungen:
+Der Live-EVM-Opcode-Audit wird so ausgeführt:
 
 ```bash
 python3 scripts/audit_evm_opcode_metadata.py
 ```
 
-CI führt denselben Live-Audit bei jedem Push und Pull Request, bei manueller
-Auslösung und einmal täglich aus. So wird Upstream-Drift auch ohne NeverD-Änderung
-erkannt. Wählen Sie für eine Offline- oder historische Reproduktion ausdrücklich
-einen vorhandenen Checkout:
+Lokal und in CI erzwingt der Standardpfad
+`git fetch --depth=1 --force` von der offiziellen URL
+`https://github.com/ethereum/go-ethereum.git` und prüft ausschließlich
+den frisch vom Remote-`HEAD` des Default-Branches geholten exakten SHA in einem
+detached Worktree. Jeder Lauf verwendet ein unvorhersagbar benanntes privates temporäres
+Bare-Repository, hält die vom Fetch gelieferte authority ref und ihren exakten
+SHA über die Lebensdauer des detached Worktree und vernichtet danach Repository
+und Worktree gemeinsam. Es gibt kein gemeinsam genutztes dauerhaftes
+Git-Repository und keinen Cache. `local_docs`, ein vorhandener Checkout
+und ein Submodule sind keine Audit-Pfade, denn ein Submodule-Pin wäre gerade
+beim Erkennen von Live-Drift veraltet.
 
-```bash
-python3 scripts/audit_evm_opcode_metadata.py \
-  --geth-root /path/to/go-ethereum
-```
+Jeder Git-Befehl entfernt zuerst alle geerbten `GIT_*`, einschließlich
+`GIT_CONFIG_*`, und setzt danach nur geprüfte Werte. `GIT_CONFIG_NOSYSTEM` und
+`GIT_CONFIG_GLOBAL` deaktivieren System-/globale Konfiguration;
+`GIT_ATTR_NOSYSTEM` und das befehlslokale `core.attributesFile` deaktivieren
+System-/globale Attribute, `core.hooksPath` deaktiviert Hooks. Unerwartete
+Konfiguration des privaten Repository, Grafts,
+`objects/info/alternates` und `refs/replace` lassen die Prüfung scheitern;
+`GIT_NO_REPLACE_OBJECTS` deaktiviert Replacement-Lookup.
 
-Der Audit erlaubt ausschließlich die in `EVMUpstreamOpcodePolicy.def`
-benannten Ausschlüsse. Ein Upstream-Opcode, der weder repräsentiert noch
-ausdrücklich geprüft wurde, lässt den Befehl fehlschlagen. Parser und
-Drift-Diagnosen besitzen unabhängige Python-Unit-Abdeckung in CI:
+Der Probe reflektiert alle exportierten booleschen
+Felder von `params.Rules`, ruft `LookupInstructionSet(params.Rules)` auf und
+scannt alle 256 Slots. `EVMUpstreamOpcodePolicy.def` besitzt Aliase und typisierte
+historische bzw. nicht eingeplante EOF-Ausschlüsse;
+`EVMUpstreamSemanticsPolicy.def` besitzt das geschlossene Rules-Inventar,
+Fork-Zuordnungen, Base-Stack-Ausnahmen und Dynamic-Immediate-Familien.
+
+CI führt denselben Live-Audit nur bei Pushes nach `dev`, Pull Requests, manueller
+Auslösung und täglich aus. Der Go-Probe ruft für jeden abgebildeten Fork die
+öffentliche API `LookupInstructionSet(params.Rules)` auf.
+Die öffentliche CLI bietet ausschließlich `--manifest-output`; das geschlossene
+Manifest verwendet `schema 3`, und Quelle, Ref, Checkout sowie Toolchain sind
+nicht wählbar.
+`EVMUpstreamOpcodePolicy.def` verwaltet Namensaliase und geprüfte historische/
+nicht eingeplante EOF-Ausschlüsse; die orthogonale `EVMUpstreamSemanticsPolicy.def`
+verwaltet Forkregeln und Ausnahmen der Stacksemantik. Das geschlossene Manifest
+prüft exakte Revision, Aktivierung, Byte/Name, `base_min_stack` und
+`net_stack_delta` und lehnt unbekannte oder doppelte Felder, Forks, Namen und
+Bytes ab. Die Belegung folgt ausschließlich `operation.undefined`; `HasCost`
+ist nur eine Kosten-Gegenprüfung, da definierte Nullkosten-Operationen ebenfalls
+false liefern. Jeder Slot `defined && !HasCost` muss ab seinem deklarierten
+Aktivierungs-Fork exakt zu `EVM_GETH_ACTIVE_WITHOUT_COST` passen. Ein undefined
+Slot mit Kosten, ein ungeprüfter defined Slot oder ein fehlender Marker schlägt
+geschlossen fehl. Bei CI-Fehlern werden Revision, Manifest und Log als Artifact
+hochgeladen. Fehlende, außerhalb des Wertebereichs liegende oder syntaktisch
+nicht verbrauchte Deklarationen schlagen ebenfalls fehl: Jeder `.def parser`
+verwirft `partial` Policy-Eingabe. Parser und Drift-Diagnosen besitzen
+unabhängige Python-Abdeckung:
+
+`EVMUpstreamSemanticsPolicy.def` ordnet jedes exportierte boolesche
+`params.Rules`-Feld mit genau einem `EVM_GETH_RULE_FIELD` den Kategorien
+`MappedForkSelector`, `NoOpcodeAllocation` oder
+`ExcludedSelectorExpectedError` zu. Der Probe aktiviert jedes Feld einzeln über
+`LookupInstructionSet`: Die ersten beiden Kategorien brauchen nil error, die
+dritte error, und jeder vollständige 256-Slot-Opcode/Stack-Fingerprint muss
+`ExpectedFork` entsprechen. `IsEIP155`, `IsEIP2929`, `IsEIP4762` und
+`IsPetersburg` sind aktuell No-Allocation-Felder mit Frontier-Fingerprint;
+`IsUBT` muss fehlschlagen und Cancun ergeben.
+
+`EVMUpstreamSemanticsPolicy.def` deklariert die dynamischen EIP-8024-OpCode-
+Familien, Operationsarten und gültigen Stack-Deltas;
+`EVMEIP8024Immediates.def` besitzt getrennt die Immediate-Decodierung und
+klassifiziert alle 256 Bytes der Single-/Pair-Inventare. Per `go -overlay` holt
+das Audit die echten privaten `operation.execute`-Handler und prüft die
+`canonical fork jump tables` sowie die `mainnet active/scheduled jump tables`
+einzeln. Eine `inactive` Familie wird protokolliert, eine unvollständige Familie
+ist ein Fehler. Jede aktive Tabelle führt `DUPN`, `SWAPN` und `EXCHANGE` für alle Bytes
+(`3x256`) plus `3 missing-operand cases` aus und prüft Akzeptanz, PC-Delta,
+Mutation, Underflow und fehlenden Operanden gegen dieselben deklarativen Daten.
+
+`EVM_HARDFORK_LATEST` hat genau ein kanonisches Ziel. Das geschlossene
+`EVMUpstreamForkAliases.def` mappt Prague→Pectra, Osaka und BPO1–BPO5→Fusaka
+sowie Paris/Shanghai/Cancun/Amsterdam/Bogota auf sich selbst; unbekannte Namen
+schlagen geschlossen fehl. Ein protokolliertes `audit_unix_time` steuert
+`MainnetChainConfig.LatestFork(time)` (muss NeverD latest entsprechen) und die
+Alias-/Probe-Prüfung für `LatestFork(max uint64)`; beide Instruction Sets werden
+vollständig verglichen. Das Manifest fixiert `authority=official-fresh-fetch`,
+offizielle URL, angefordertes `HEAD` und SHA. Der Probe nutzt
+`GOTOOLCHAIN=local`.
+
+Go-Probe und Python-Controller erzwingen `input/collection/string hard limits`;
+übergroße Eingaben, Collections oder Strings schlagen geschlossen fehl. Für
+`bounded diagnostic output` erhält eine überlange Anzeige den vollständigen
+`digest` und einen `explicit truncated marker`. Begrenzte Ausgabe und eine
+gemeinsame Frist gelten für jeden Kindprozess; bei Überschreitung wird die
+gesamte `process group` beziehungsweise der process tree beendet und geleert.
+
+Der aktuelle schema-3-Beleg enthält `schema_version=3`,
+`audit_unix_time=1787534659`, `authority=official-fresh-fetch`,
+`remote=https://github.com/ethereum/go-ethereum.git`, `ref=HEAD`, Revision
+`02b73d4ea7181464175e0a6cbecc0a3a2655a562`, lokales `Go 1.24.0`,
+`stack_limit=1024` und `diagnostics=[]`. Geprüft wurden `21 fork tables` und
+`20 Rules probes` mit `15 mapped/4 no-op/1 expected-error`. Beide
+`mainnet active/scheduled`-Einträge melden `upstream BPO2`, geschlossen auf
+`NeverD Fusaka` gemappt. Von `23 table targets` sind nur `Amsterdam/Bogota`
+aktiv; daraus folgen `1536 candidate executions` und
+`6 missing-operand cases`. Die `three handler symbols` stimmen an beiden
+aktiven Zielen überein. Python-Audit `67/67` und `C++ Opcode 10/10` bestanden.
+Der echte macOS-Lauf war unter `sandbox-exec` erfolgreich, das finale `go run`
+offline; der Linux-Workflow verlangt `bubblewrap`.
+
+Alle Go-Stufen — `go env`, `go mod init`, `go mod edit`, `go mod tidy`,
+`go mod download` und `go run` — passieren den `capability-root`-Dateisystem-
+Sandbox. Er liest nur privaten Probe, frisches geth, validiertes
+`resolved GOROOT` und exakt benötigte System-Runtime-Roots und schreibt nur in
+isolierte Environment-Roots. Netzwerk erhalten nur notwendige Dependency-
+Stufen; der finale Lauf ist offline. Tests verlangen Zugriffsverweigerung für
+Sentinels im `host HOME/workspace` und verhindern deren Inhalt in jeder Ausgabe.
+Linux prüft dieselbe `bubblewrap`-Policy ohne `/` broad bind.
 
 ```bash
 python3 -m unittest -v scripts.tests.test_audit_evm_opcode_metadata
 ```
+
+Die elf aktuell von CMake registrierten EVM-Testziele sind:
+
+```text
+NeverDEVMOpcodeTests
+NeverDEVMBytecodeTests
+NeverDEVMLoaderTests
+NeverDEVMABITests
+NeverDEVMAnalyzerTests
+NeverDEVMDecoderPropertyTests
+NeverDEVMProxyTests
+NeverDEVMCallTests
+NeverDEVMSemanticTests
+NeverDEVMEmitterTests
+NeverDEVMIntegrationTests
+```
+
+`NeverDEVMDecoderPropertyTests` prüft für jeden decoder-verändernden Fork alle
+Zwei-Byte-Eingaben, vollständigen Decode und exakte `JUMPDEST`-Grenzen sowie
+deterministische feindliche Eingaben begrenzter Länge über alle Forks.
 
 Führen Sie bei Änderungen am EVM-Kontrollfluss zuerst den Fixpunkt- und
 Höhendomänenvertrag aus:
@@ -132,13 +243,11 @@ build/bin/NeverDEVMAnalyzerTests \
 ```
 
 Diese Fälle decken blockübergreifende interne Returns, endliche Multi-Target-
-Merges, Schleifenkonvergenz und deterministische Kantenreihenfolge,
-pfadabhängige Stack-Höhen, beschränktes Widening, korrelationsbedingte
-kartesische Over-Approximation, unbekannte Sprünge, präzise ungültige Ziele und
-Stackfehler im strikten wie im entspannten Modus ab. Führen Sie anschließend
-alle sieben EVM-Binaries und den Upstream-Metadata-Audit aus; CFG-Änderungen
-können Emitter und Integration beeinflussen, selbst wenn die lokale
-Analyzer-Form korrekt ist.
+Merges, Schleifenkonvergenz, deterministische Kantenreihenfolge, pfadsensitive
+Whole-Stack-Lanes, erhaltene Korrelation, unbekannte Sprünge, exakt ungültige
+Ziele, Fail-loud-Budgets und Stackfehler ab. `MayReachable` bewahrt nur einen
+CFG-Kandidaten und erzeugt keine sicheren Fakten. Führen Sie danach alle elf
+EVM-Ziele und den Live-Upstream-Audit aus.
 
 Führen Sie bei MedIR-/HighIR-Dataflow-Änderungen außerdem die Verträge für
 Constant-Phis, Selector, typisierte Operanden, fehlerhafte Graphen und tiefe
@@ -317,8 +426,92 @@ Solidity lokal. Verglichen werden Status, Storage und Trace-Zähler. Ein separat
 Raw-Bytecode-Corpus führt Pre-Fusaka-ALU, Calldata-/Memory-Copy, überlappendes
 `MCOPY`, Keccak und Return Data in Anvils nativer EVM aus.
 
-`NeverDEVMOpcodeTests` erzwingt zudem die Metadata-Architektur: 150 Opcodes
-roundtrippen zwischen Encoding und typisiertem Wert; Familiengrenzen,
+Low-/Med-Tests bewahren pfadsensitive Whole-Stack-Execution-Lanes und die
+Lane-Identität der Phis; erschöpfte Budgets einschließlich
+`MaxAbstractInstructionTransfers` sind harte Fehler. Strict lehnt unbekannte oder
+inaktive Opcodes nur auf einer bewiesenen `Reachable` Lane ab; `MayReachable`
+erzeugt keinen bestimmten Fakt. HighIR beschränkt Selector-, Receive- und
+Fallback-Walks auf die Root-Lane und erfolgreiche Endzustände. Ein geteilter
+Selector ist kein unabhängiger Standardbeleg: Erst die standardbezogene
+`KnownFunctionVariantInfo` und eine über alle erfolgreichen Enden übereinstimmende
+exakte Return-Form wählen Variante und Return-Liste.
+
+Der Interpreter führt die typisierte Stack-Vorprüfung vor jedem opcode-eigenen
+Effekt aus. `EVMForkSemantics.def` definiert Byte `0x44` vor Paris als
+`DIFFICULTY`, ab Paris als `PREVRANDAO`. `REVERT`, Faults, Step-Limit und
+Ressourcenerschöpfung rollen Transaktionszustand zurück. Allokationsfehler sind
+`ExecutionFaultKind::ResourceExhausted`; kann selbst der Eingabe-Snapshot nicht
+entstehen, ist `HasPersistentStateSnapshot` false und ein Commit ausgeschlossen.
+
+### Regressionen für öffentliche EVM-Grenzen und Budgets
+
+Public-API-Tests manipulieren kanonische
+`Code`/`Fork`/`Instructions`/`JumpDestinations` und jede LowIR-Tabelle, Range,
+ID, Lane und Kantenreferenz unabhängig. `execute` muss vor der
+Instruktionssuche `llvm::Error` liefern; `lowerToMedIR` muss vollständig
+fehlerhaftes oder überbudgetiertes LowIR vor Indexaufbau oder inputproportionaler
+Allokation ablehnen. Für `lowerToMedIR` erzwingen Tests Options-, Ressourcen- und
+Strukturprüfung vor einem feldweisen `canonical decode replay` und vor
+`lowerCanonicalLowToMedIR`. Öffentliches HighIR-Recovery replay-prüft externe
+LowIR/MedIR; nur `analyze` darf für eigenes kanonisches IR
+`lowerCanonicalLowToMedIR` und `recoverCanonicalHighIR` ohne rekursives oder
+doppeltes Replay nutzen, muss aber alle HighIR option/resource budgets anwenden.
+Danach prüfen Interpretertests alle Grenzen aus
+`EVMInterpreterLimits.def` am exakten Rand und eins darüber. `MaxSteps` behält
+den eigenen `StepLimit`; Erschöpfung von `MaxMemoryBytes`, `MaxTraceEntries`,
+`MaxLogEntries`, aggregiertem `MaxLogDataBytes` und laufzeitigem
+`MaxPersistentStateEntries` liefert `ResourceExhausted` und rollt
+Transaktionseffekte zurück. Zu große initiale Aggregate unter
+`MaxHostReturnDataBytes` oder Persistent State sind API-Fehler.
+Auch `MaxCalldataBytes`, das Aggregat `MaxHostEnvironmentEntries` über
+`BlockHashes`, `Balances`, `CodeHashes`, `ExternalCode`, `BlobHashes` und das
+Aggregat `MaxExternalCodeBytes` führen zu API-Fehlern. Der
+`const execute preflight` verwirft sie vor Environment-, Snapshot- oder
+Result-Kopie. Return-Data-`ArrayRef`-Views und `lower_bound` auf der sortierten
+Tabelle werden ohne
+Bufferkopie oder PC-Map abgedeckt.
+
+Separate LowIR-Randtests prüfen die aggregierten Diagnoselimits
+`MaxLowDiagnostics` und `MaxLowDiagnosticBytes`: Linearer Decode und CFG-Aufbau
+belasten exakte Anzahl/finale Bytes vor und Null wird verworfen.
+HighIR-Sicherheitstests decken die sortierte Lane-Domäne
+`Any/Exact/Excluded`, Equality-Treffer/Ausschluss, beim rohen
+`XOR(selector, constant)` den False-Kanten-Treffer und True-Kanten-Nichttreffer,
+die Verfeinerung von Nullwort/Calldata-Größe/Call Value und fail-closed
+unbekannte Bedingungen ab. Ihre exakten Rand- und Eins-darunter-Tests prüfen aus
+`EVMAnalysisLimits.def` `MaxHighDispatchCandidates`, das Aggregat
+`MaxHighRecoveredArguments`, `MaxHighDiagnostics`, `MaxHighDiagnosticBytes`,
+`MaxHighReferenceVisits`, `MaxHighMemoryTransferCells` und
+`MaxHighMemoryValueVisits`. Jede ausgegebene Diagnose, auch die feste
+Malformed-Diagnose, muss Anzahl und finale Bytes vor Allokation berechnen.
+LowIR- und HighIR-Diagnosebudgets werden unabhängig geprüft; die Default-Root-
+CFG-Region muss `MaxHighRegionBlockReferences` vor Reserve oder Block-PC-Kopie
+belasten.
+Function-Scope-Regressionen prüfen sowohl `EQ`- als auch `raw XOR`-Rücksprünge
+in einen gemeinsamen Dispatcher. Dabei dürfen `arguments`, `mutability`,
+`return shape` und `region` nicht durch eine andere Funktion verunreinigt
+werden; gemeinsame Bodies und Tail Calls bleiben erreichbar.
+Externe CALL/CREATE-Ergebnisse werden als nichtdeterministische Host-Outcomes
+über beide präzisen CFG-Kanten geprüft, wodurch die ERC-1167-Fallback-Recovery
+erhalten bleibt. Eine unlesbare Selector-Bedingung bleibt Unknown und kann keine
+Fallback- oder Funktionsfakten erzeugen.
+
+CFG-Tests leiten `InvalidJumpDestination` aus `EVMLowFaultKinds.def` für ein
+`end-of-code JUMPI` ab: Sicher true mit ungültigem Ziel hat keinen erfolgreichen
+Nachlauf und ist ein definitiver Fehler; sicher false ist erfolgreich; Unknown
+behält den möglicherweise erfolgreichen False-Pfad, ohne die ganze Lane als
+definitiv fehlerhaft zu markieren.
+
+ABI-Tests prüfen die Grammatikgrenzen aus `EVMABIParserLimits.def` und die
+Kardinalitäts-/Textgrenzen öffentlicher Tabellen aus `EVMABITableLimits.def`
+am exakten Limit und eins darüber. Sie verwerfen außerdem ungültige
+Kind-/Standard-/Evidence-Enums, unpassende Metadaten, nichtkanonische Signaturen
+und Return-Listen, fälschlich unabhängige geteilte Selectors, hängende oder
+doppelte Varianten sowie einen Event-Topic-`APInt` falscher Wortbreite vor
+indizierter Selector- oder sortierter Topic-Suche.
+
+`NeverDEVMOpcodeTests` erzwingt zudem die Metadata-Architektur: Jeder zugewiesene
+Opcode roundtrippt zwischen Encoding und typisiertem Wert; Familiengrenzen,
 Hardfork-Aliase sowie abgeleitete Stack-/Host-Maxima werden geprüft.
 
 ### Differentielle Solana-SBF-Backends
@@ -385,7 +578,9 @@ ctest --test-dir build-release --build-config Release \
 # Alle fokussierten EVM-Targets/-Fälle
 cmake --build build-release --target \
   NeverDEVMOpcodeTests NeverDEVMBytecodeTests NeverDEVMLoaderTests \
-  NeverDEVMAnalyzerTests NeverDEVMSemanticTests NeverDEVMEmitterTests \
+  NeverDEVMABITests NeverDEVMAnalyzerTests NeverDEVMDecoderPropertyTests \
+  NeverDEVMProxyTests NeverDEVMCallTests NeverDEVMSemanticTests \
+  NeverDEVMEmitterTests \
   NeverDEVMIntegrationTests --parallel 4
 ctest --test-dir build-release --build-config Release \
   -R 'EVM' --output-on-failure --parallel 4

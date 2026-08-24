@@ -40,10 +40,13 @@
 - **反編譯輸出** — 具明確 host-effect contract 的可編譯 C23 與 Solidity state machine，以及已驗證 LLVM IR
 - **CLI / C API** — 對 EVM 輸入與原生二進位一致
 
-**狀態：** 傳統 EVM 位元組碼從 Frontier 到 Fusaka 已完成。實作涵蓋全部 150 個
-assigned opcode、raw/hex/artifact 輸入、creation-to-runtime 擷取、CFG 與
-stack-SSA 復原、strict/relaxed 分析、C23/LLVM/Solidity backend、CLI/C API，
-以及與 Anvil 原生 EVM 的獨立差分執行。host ABI 與明確限制見
+**狀態：** Frontier 至 Fusaka 的傳統 opcode decode 與 lifting 已完成並有迴歸測試覆蓋。
+原始碼重建仍持續保守演進：selector、event、型別、標準、名稱與動態 control flow 只在
+證據充分時回報，不聲稱原始碼身分、完整 ABI 或完整 ERC 相容性。canonical function
+selector、逐標準 ABI variant 與成功 return shape 彼此分離，因此共享 ERC selector
+既不能憑空證明某個標準，也不會借用不相容的 return type。Amsterdam 僅是明確
+opt-in 的 Review/development target；`latest` 仍為 Fusaka。EOFv1/EIP-7692 尚未排程，
+EIP-3540 為 Stagnant，兩者都不冒充已定案 mainnet 行為。host ABI 與限制見
 [EVM 反編譯](../evm.zh-TW.md)。
 
 ### 為什麼做 EVM？
@@ -103,12 +106,14 @@ stack-SSA 復原、strict/relaxed 分析、C23/LLVM/Solidity backend、CLI/C API
 
 ## 時間線
 
-原生格式補齊、傳統 EVM 與 Solana SBF 反編譯、記憶體安全 P0 均已完成，並有迴歸測試覆蓋。不承諾具體發布日期。
+原生格式補齊、Fusaka 以前的傳統 EVM decode/lifting、Solana SBF 反編譯與記憶體安全
+P0 已有迴歸覆蓋；保守 EVM 原始碼重建仍在進行。不承諾具體發布日期。
 
 | 功能 | 狀態 |
 |------|------|
 | 原生格式補齊（PE ARM*、Mach-O i386） | 已完成 |
-| EVM 位元組碼反編譯 | 已完成 — C、Solidity 與 LLVM；有迴歸測試覆蓋 |
+| EVM 傳統 decode/lifting | 至 Fusaka 已完成；有迴歸測試覆蓋 |
+| EVM 原始碼重建 | 持續進行 — 只回報有證據的保守結果 |
 | Solana eBPF（SBF）反編譯 | 已完成 — v0-v4、C、Rust 與 LLVM；有迴歸測試覆蓋 |
 | 記憶體安全稽核與獵取 | 已完成 — PE、ELF、Mach-O 的 P0；有迴歸測試覆蓋 |
 | 引擎與產品加固 | 持續進行 |

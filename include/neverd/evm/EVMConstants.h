@@ -53,28 +53,10 @@ inline constexpr std::size_t kMebibyte = std::size_t{1024} * 1024;
 inline constexpr std::size_t kOpcodeSpaceSize = 1U << kBitsPerByte;
 inline constexpr std::size_t kStackLimit = 1024;
 inline constexpr std::size_t kMaxImmediateStackOperands = 2;
-inline constexpr uint8_t kEIP8024SingleForbiddenFirst = 91;
-inline constexpr uint8_t kEIP8024SingleForbiddenLast = 127;
-inline constexpr uint8_t kEIP8024PairForbiddenFirst = 82;
-inline constexpr uint8_t kEIP8024PairForbiddenLast =
-    kEIP8024SingleForbiddenLast;
-inline constexpr unsigned kEIP8024SingleDecodeBias = 145;
-inline constexpr unsigned kEIP8024PairXorMask = 143;
-inline constexpr unsigned kEIP8024PairGridBits = kHexDigitBits;
-inline constexpr unsigned kEIP8024PairGridMask =
-    (1U << kEIP8024PairGridBits) - 1U;
-inline constexpr unsigned kEIP8024PairLowerTriangleSum = 29;
-inline constexpr uint16_t kEIP8024MinimumSingleDepth = 17;
-inline constexpr uint16_t kEIP8024MaximumSingleDepth = 235;
-inline constexpr uint16_t kEIP8024MaximumPairDepth =
-    kEIP8024PairLowerTriangleSum;
-inline constexpr uint16_t kMaximumInstructionStackHeight =
-    kEIP8024MaximumSingleDepth + 1;
 inline constexpr uint64_t kEntryPC = 0;
+inline constexpr uint32_t kEntryStateLaneOrdinal = 0;
 inline constexpr uint64_t kCodeAlignment = 1;
 inline constexpr std::size_t kMaxCodeSize = 64 * kMebibyte;
-inline constexpr std::size_t kDefaultMaxSteps = 1'000'000;
-inline constexpr std::size_t kDefaultMaxMemoryBytes = 64 * kMebibyte;
 inline constexpr uint64_t kDefaultGasLimit = 30'000'000;
 inline constexpr uint64_t kDefaultChainID = 1;
 inline constexpr uint64_t kBlockHashHistoryWindow = 256;
@@ -82,8 +64,14 @@ inline constexpr uint64_t kBlockHashHistoryWindow = 256;
 /// Hostile-input bounds for the non-consensus control-flow analysis lattice.
 /// These deliberately live apart from protocol resource limits such as the
 /// operand stack maximum above.
-inline constexpr std::size_t kDefaultMaxAbstractValuesPerSlot = 32;
-inline constexpr std::size_t kDefaultMaxStackHeightVariants = 16;
+#define EVM_ANALYSIS_LIMIT(STAGE, NAME, DEFAULT_VALUE)                         \
+  inline constexpr std::size_t kDefault##NAME = (DEFAULT_VALUE);
+#include "neverd/evm/analysis/EVMAnalysisLimits.def"
+
+/// Stable option spellings used by stage-specific resource diagnostics.
+#define EVM_ANALYSIS_LIMIT(STAGE, NAME, DEFAULT_VALUE)                         \
+  inline constexpr llvm::StringLiteral k##NAME##Name = #NAME;
+#include "neverd/evm/analysis/EVMAnalysisLimits.def"
 
 /// The most calldata head slots one recovered function will describe. A hostile
 /// input can load calldata at any offset, and every head slot below the highest
@@ -104,8 +92,6 @@ inline constexpr std::size_t kMaxCalleeTraceSteps = 8;
 static_assert(kWordBits % kBitsPerByte == 0);
 static_assert(kByteMax == std::numeric_limits<uint8_t>::max());
 static_assert(kOpcodeSpaceSize == static_cast<std::size_t>(kByteMax) + 1);
-static_assert(kMaximumInstructionStackHeight <= kStackLimit);
-static_assert(kEIP8024PairGridMask == kHexRadix - 1);
 static_assert(1U << kHexDigitBits == kHexRadix);
 static_assert(kWideWordBits == 2 * kWordBits);
 static_assert((kWordBytes & (kWordBytes - 1)) == 0,
@@ -117,8 +103,9 @@ static_assert(kMetadataLengthBytes <= sizeof(uint64_t));
 static_assert(kStackLimit <= std::numeric_limits<uint32_t>::max());
 static_assert(kBlockHashHistoryWindow > 0);
 static_assert(kCodeAlignment > 0);
-static_assert(kDefaultMaxAbstractValuesPerSlot > 0);
-static_assert(kDefaultMaxStackHeightVariants > 0);
+#define EVM_ANALYSIS_LIMIT(STAGE, NAME, DEFAULT_VALUE)                         \
+  static_assert(kDefault##NAME > 0);
+#include "neverd/evm/analysis/EVMAnalysisLimits.def"
 
 inline constexpr llvm::StringLiteral kUnknownOpcodeName = "UNKNOWN";
 inline constexpr llvm::StringLiteral kUnknownName = "unknown";
@@ -139,6 +126,21 @@ inline constexpr llvm::StringLiteral kOverapproximatedJumpTargetPrefix =
     "over-approximated jump candidate ";
 inline constexpr llvm::StringLiteral kMalformedMedIRDiagnostic =
     "malformed MedIR disables value recovery";
+inline constexpr llvm::StringLiteral kIncompatibleKnownFunctionPrefix =
+    "selector candidate contradicts recovered ABI: ";
+inline constexpr llvm::StringLiteral kIncompatibleKnownReturnPrefix =
+    "standard return declaration contradicts successful return shape: ";
+inline constexpr llvm::StringLiteral kDuplicateSelectorDiagnosticPrefix =
+    "duplicate selector 0x";
+inline constexpr llvm::StringLiteral kDuplicateSelectorDiagnosticSuffix =
+    " maps to multiple entry points";
+inline constexpr llvm::StringLiteral kHighIRAnalysisDiagnosticPrefix =
+    "evm: HighIR ";
+inline constexpr llvm::StringLiteral kAnalysisLimitSuffix = " limit ";
+inline constexpr llvm::StringLiteral kAnalysisLimitExceededSuffix = " exceeded";
+inline constexpr llvm::StringLiteral kAnalysisLimitMustBePositiveSuffix =
+    " must be greater than zero";
+inline constexpr llvm::StringLiteral kAnalysisAtPCInfix = " at pc 0x";
 inline constexpr llvm::StringLiteral kRecoveredFunctionPrefix = "func_";
 inline constexpr llvm::StringLiteral kRecoveredArgumentPrefix = "arg";
 inline constexpr llvm::StringLiteral kRecoveredDeclarationPrefix = "recovered_";

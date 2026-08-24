@@ -27,13 +27,26 @@
 
 namespace neverd::evm {
 
-/// Controls opcode activation, unknown/inactive-byte policy, and resources.
-/// Strict mode still represents malformed conditional immediates because
-/// their non-consumption is required to recover later instruction boundaries.
+/// Controls opcode activation, downstream reachable-code validation, and
+/// resources. Linear decoding is always lossless: Strict is carried into
+/// LowIR so control-flow analysis can reject a reachable inactive or unknown
+/// byte without mistaking unreachable legacy data for executed code.
 struct DecodeOptions {
   Hardfork Fork = Hardfork::Latest;
   bool Strict = true;
   size_t MaxCodeSize = kMaxCodeSize;
+#define EVM_ANALYSIS_LIMIT_DECODE(NAME, DEFAULT_VALUE)                         \
+  size_t NAME = kDefault##NAME;
+#define EVM_ANALYSIS_LIMIT_CONTROL_FLOW(NAME, DEFAULT_VALUE)
+#define EVM_ANALYSIS_LIMIT_MEDIUM_IR(NAME, DEFAULT_VALUE)
+#define EVM_ANALYSIS_LIMIT_HIGH_IR(NAME, DEFAULT_VALUE)
+#define EVM_ANALYSIS_LIMIT(STAGE, NAME, DEFAULT_VALUE)                         \
+  EVM_ANALYSIS_LIMIT_##STAGE(NAME, DEFAULT_VALUE)
+#include "neverd/evm/analysis/EVMAnalysisLimits.def"
+#undef EVM_ANALYSIS_LIMIT_DECODE
+#undef EVM_ANALYSIS_LIMIT_CONTROL_FLOW
+#undef EVM_ANALYSIS_LIMIT_MEDIUM_IR
+#undef EVM_ANALYSIS_LIMIT_HIGH_IR
 };
 
 /// Lossless result of linear instruction decoding. An invalid conditional
@@ -75,6 +88,9 @@ llvm::StringRef immediateDecodeStatusName(ImmediateDecodeStatus Status);
 /// zeroes. Invalid EIP-8024 candidates are formatted even though they are not
 /// part of Encoding. Returns an empty string when no immediate was examined.
 std::string formatImmediate(const LowInstruction &Instruction);
+
+/// Formats one opcode byte with the protocol's fixed two hexadecimal digits.
+std::string formatOpcodeByte(uint8_t Byte);
 
 /// Returns a compact annotation for non-default decode state, or an empty
 /// string for an active instruction with a complete (or absent) immediate.

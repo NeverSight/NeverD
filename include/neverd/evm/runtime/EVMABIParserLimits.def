@@ -1,0 +1,24 @@
+//===- EVMABIParserLimits.def - ABI grammar resource bounds ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// EVM_ABI_PARSER_LIMIT(NAME, VALUE)
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_ABI_PARSER_LIMIT
+#error "Define EVM_ABI_PARSER_LIMIT before including EVMABIParserLimits.def"
+#endif
+
+// Canonical signatures produced by compilers are shallow. These ceilings are
+// deliberately generous while keeping adversarial text from consuming an
+// unbounded native call stack or an unbounded number of grammar actions.
+// Nesting counts tuple containers; the other two budgets are aggregate across
+// one parsed signature or type list.
+EVM_ABI_PARSER_LIMIT(MaxABITypeNestingDepth, 64)
+EVM_ABI_PARSER_LIMIT(MaxABITypeNodes, 4'096)
+EVM_ABI_PARSER_LIMIT(MaxABIArrayDimensions, 256)
+
+#undef EVM_ABI_PARSER_LIMIT

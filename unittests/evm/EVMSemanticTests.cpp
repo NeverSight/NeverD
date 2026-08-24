@@ -12,6 +12,8 @@
 
 #include "llvm/Support/Error.h"
 
+#include <limits>
+
 namespace neverd::evm {
 namespace {
 
@@ -31,6 +33,48 @@ ExecutionResult executeCode(const std::vector<uint8_t> &Code,
     return {};
   }
   return std::move(*Result);
+}
+
+constexpr uint8_t kTransactionDiagnosticByte = 0xcc;
+
+llvm::APInt testWord(uint64_t Value) { return llvm::APInt(kWordBits, Value); }
+
+ExecutionEnvironment transactionEnvironment() {
+  ExecutionEnvironment Environment;
+  Environment.Storage.emplace(testWord(1), testWord(0x11));
+  Environment.TransientStorage.emplace(testWord(2), testWord(0x22));
+  return Environment;
+}
+
+std::vector<uint8_t> transactionMutationPrefix() {
+  return {
+      opcodeByte(Opcode::PUSH1),
+      0xaa,
+      opcodeByte(Opcode::PUSH1),
+      1,
+      opcodeByte(Opcode::SSTORE),
+      opcodeByte(Opcode::PUSH1),
+      0xbb,
+      opcodeByte(Opcode::PUSH1),
+      2,
+      opcodeByte(Opcode::TSTORE),
+      opcodeByte(Opcode::PUSH1),
+      kTransactionDiagnosticByte,
+      opcodeByte(Opcode::PUSH0),
+      opcodeByte(Opcode::MSTORE8),
+      opcodeByte(Opcode::PUSH1),
+      1,
+      opcodeByte(Opcode::PUSH0),
+      opcodeByte(Opcode::LOG0),
+  };
+}
+
+void expectTransactionStateRestored(const ExecutionResult &Result) {
+  EXPECT_TRUE(Result.Logs.empty());
+  ASSERT_EQ(Result.Storage.size(), 1u);
+  EXPECT_EQ(Result.Storage.at(testWord(1)), testWord(0x11));
+  ASSERT_EQ(Result.TransientStorage.size(), 1u);
+  EXPECT_EQ(Result.TransientStorage.at(testWord(2)), testWord(0x22));
 }
 
 TEST(EVMInterpreter, ExecutesAmsterdamSlotAndDeepStackOpcodes) {
@@ -73,9 +117,13 @@ TEST(EVMInterpreter, ExecutesAmsterdamSlotAndDeepStackOpcodes) {
   EXPECT_TRUE(JumpPastInvalid.Error.empty());
 }
 
-TEST(EVMInterpreter, MatchesGoEthereumEIP8024ExecutionVectors) {
+TEST(EVMInterpreter, ExecutesRepresentativeEIP8024StackShapes) {
   AnalyzeOptions Amsterdam;
   Amsterdam.Fork = Hardfork::Amsterdam;
+
+  // These cases exercise the decoder-to-interpreter integration, not an
+  // independent encoding oracle. The fresh-fetch go-ethereum differential
+  // audit is the semantic gate for every EIP-8024 candidate.
 
   const auto PushSequence = [](unsigned Count) {
     std::vector<uint8_t> Code;
@@ -209,6 +257,215 @@ TEST(EVMInterpreter, ImplementsWideArithmeticTransientStorageAndClz) {
   EXPECT_EQ(Result->ReturnData[30], 1u);
   EXPECT_EQ(Result->ReturnData[31], 0u);
   ASSERT_EQ(Result->TransientStorage.size(), 1u);
+}
+
+TEST(EVMInterpreter, RevertRestoresStateAndLogsButKeepsDiagnostics) {
+  std::vector<uint8_t> Code = transactionMutationPrefix();
+  Code.insert(Code.end(),
+              {opcodeByte(Opcode::PUSH1), 1, opcodeByte(Opcode::PUSH0),
+               opcodeByte(Opcode::REVERT)});
+  const ExecutionResult Result = executeCode(Code, transactionEnvironment());
+
+  EXPECT_EQ(Result.Status, ExecutionStatus::Reverted);
+  ASSERT_EQ(Result.ReturnData.size(), 1u);
+  EXPECT_EQ(Result.ReturnData.front(), kTransactionDiagnosticByte);
+  ASSERT_GE(Result.Memory.size(), 1u);
+  EXPECT_EQ(Result.Memory.front(), kTransactionDiagnosticByte);
+  EXPECT_FALSE(Result.Trace.empty());
+  expectTransactionStateRestored(Result);
+}
+
+TEST(EVMInterpreter, FaultRestoresStateAndLogsButKeepsDiagnostics) {
+  std::vector<uint8_t> Code = transactionMutationPrefix();
+  Code.push_back(opcodeByte(Opcode::POP));
+
+  AnalyzeOptions Relaxed;
+  Relaxed.Strict = false;
+  auto Low = decodeLowIR(Code, Relaxed);
+  ASSERT_TRUE(static_cast<bool>(Low)) << llvm::toString(Low.takeError());
+  auto Result = execute(*Low, transactionEnvironment());
+  ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
+
+  EXPECT_EQ(Result->Status, ExecutionStatus::Faulted);
+  EXPECT_EQ(Result->FaultKind, ExecutionFaultKind::Semantic);
+  EXPECT_NE(Result->Error.find("stack underflow"), std::string::npos);
+  ASSERT_GE(Result->Memory.size(), 1u);
+  EXPECT_EQ(Result->Memory.front(), kTransactionDiagnosticByte);
+  EXPECT_FALSE(Result->Trace.empty());
+  expectTransactionStateRestored(*Result);
+}
+
+TEST(EVMInterpreter, StepLimitIsInconclusiveAndCannotCommitState) {
+  std::vector<uint8_t> Code = transactionMutationPrefix();
+  Code.push_back(opcodeByte(Opcode::STOP));
+  auto Program = analyze(Code);
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+  ASSERT_FALSE(Program->Low.Instructions.empty());
+
+  InterpreterOptions Options;
+  Options.MaxSteps = Program->Low.Instructions.size() - 1;
+  auto Result = execute(Program->Low, transactionEnvironment(), Options);
+  ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
+
+  EXPECT_EQ(Result->Status, ExecutionStatus::StepLimit);
+  EXPECT_EQ(Result->Steps, Program->Low.Instructions.size() - 1);
+  ASSERT_GE(Result->Memory.size(), 1u);
+  EXPECT_EQ(Result->Memory.front(), kTransactionDiagnosticByte);
+  EXPECT_FALSE(Result->Trace.empty());
+  expectTransactionStateRestored(*Result);
+}
+
+TEST(EVMInterpreter, NaturalStopPrecedesTheStepBudgetAtEmptyCode) {
+  auto Low = decodeLowIR({});
+  ASSERT_TRUE(static_cast<bool>(Low)) << llvm::toString(Low.takeError());
+  InterpreterOptions Options;
+  Options.MaxSteps = 0;
+
+  auto Result = execute(*Low, transactionEnvironment(), Options);
+  ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
+  EXPECT_EQ(Result->Status, ExecutionStatus::Stopped);
+  EXPECT_EQ(Result->Steps, 0u);
+  EXPECT_TRUE(Result->Error.empty());
+  expectTransactionStateRestored(*Result);
+}
+
+TEST(EVMInterpreter, ExactStepBudgetCommitsBeforeFallingOffCode) {
+  const std::vector<uint8_t> Code = transactionMutationPrefix();
+  auto Program = analyze(Code);
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+
+  InterpreterOptions Options;
+  Options.MaxSteps = Program->Low.Instructions.size();
+  auto Result = execute(Program->Low, transactionEnvironment(), Options);
+  ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
+
+  EXPECT_EQ(Result->Status, ExecutionStatus::Stopped);
+  EXPECT_EQ(Result->Steps, Program->Low.Instructions.size());
+  EXPECT_TRUE(Result->Error.empty());
+  ASSERT_EQ(Result->Storage.size(), 1u);
+  EXPECT_EQ(Result->Storage.at(testWord(1)), testWord(0xaa));
+  ASSERT_EQ(Result->TransientStorage.size(), 1u);
+  EXPECT_EQ(Result->TransientStorage.at(testWord(2)), testWord(0xbb));
+  ASSERT_EQ(Result->Logs.size(), 1u);
+  EXPECT_TRUE(Result->Logs.front().Topics.empty());
+  ASSERT_EQ(Result->Logs.front().Data.size(), 1u);
+  EXPECT_EQ(Result->Logs.front().Data.front(), kTransactionDiagnosticByte);
+}
+
+TEST(EVMInterpreter, TraceBudgetAcceptsTheBoundaryAndRollsBackTheNextEntry) {
+  const std::vector<uint8_t> Code = transactionMutationPrefix();
+  auto Program = analyze(Code);
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+  const size_t ExactTraceEntries = Program->Low.Instructions.size();
+  ASSERT_GT(ExactTraceEntries, 1u);
+
+  InterpreterOptions AtBoundary;
+  AtBoundary.MaxTraceEntries = ExactTraceEntries;
+  auto Accepted = execute(Program->Low, transactionEnvironment(), AtBoundary);
+  ASSERT_TRUE(static_cast<bool>(Accepted))
+      << llvm::toString(Accepted.takeError());
+  ASSERT_EQ(Accepted->Status, ExecutionStatus::Stopped);
+  EXPECT_EQ(Accepted->Trace.size(), ExactTraceEntries);
+  EXPECT_EQ(Accepted->Storage.at(testWord(1)), testWord(0xaa));
+
+  InterpreterOptions BelowBoundary = AtBoundary;
+  --BelowBoundary.MaxTraceEntries;
+  auto Rejected =
+      execute(Program->Low, transactionEnvironment(), BelowBoundary);
+  ASSERT_TRUE(static_cast<bool>(Rejected))
+      << llvm::toString(Rejected.takeError());
+  EXPECT_EQ(Rejected->Status, ExecutionStatus::Faulted);
+  EXPECT_EQ(Rejected->FaultKind, ExecutionFaultKind::ResourceExhausted);
+  EXPECT_EQ(Rejected->Trace.size(), ExactTraceEntries - 1);
+  expectTransactionStateRestored(*Rejected);
+}
+
+TEST(EVMInterpreter, LogEntryBudgetAcceptsTheBoundaryAndRollsBackTheNextLog) {
+  constexpr size_t kExactLogEntries = 2;
+  const std::vector<uint8_t> Code = {
+      opcodeByte(Opcode::PUSH0), opcodeByte(Opcode::PUSH0),
+      opcodeByte(Opcode::LOG0),  opcodeByte(Opcode::PUSH0),
+      opcodeByte(Opcode::PUSH0), opcodeByte(Opcode::LOG0),
+      opcodeByte(Opcode::STOP)};
+  auto Program = analyze(Code);
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+
+  InterpreterOptions AtBoundary;
+  AtBoundary.MaxLogEntries = kExactLogEntries;
+  auto Accepted = execute(Program->Low, {}, AtBoundary);
+  ASSERT_TRUE(static_cast<bool>(Accepted))
+      << llvm::toString(Accepted.takeError());
+  EXPECT_EQ(Accepted->Status, ExecutionStatus::Stopped);
+  EXPECT_EQ(Accepted->Logs.size(), kExactLogEntries);
+
+  InterpreterOptions BelowBoundary = AtBoundary;
+  --BelowBoundary.MaxLogEntries;
+  auto Rejected = execute(Program->Low, {}, BelowBoundary);
+  ASSERT_TRUE(static_cast<bool>(Rejected))
+      << llvm::toString(Rejected.takeError());
+  EXPECT_EQ(Rejected->Status, ExecutionStatus::Faulted);
+  EXPECT_EQ(Rejected->FaultKind, ExecutionFaultKind::ResourceExhausted);
+  EXPECT_TRUE(Rejected->Logs.empty());
+}
+
+TEST(EVMInterpreter, LogDataBudgetChargesAggregateBytesBeforeAllocation) {
+  constexpr size_t kExactLogDataBytes = 3;
+  const std::vector<uint8_t> Code = {
+      opcodeByte(Opcode::PUSH1), 0xaa,
+      opcodeByte(Opcode::PUSH0), opcodeByte(Opcode::MSTORE8),
+      opcodeByte(Opcode::PUSH1), 1,
+      opcodeByte(Opcode::PUSH0), opcodeByte(Opcode::LOG0),
+      opcodeByte(Opcode::PUSH1), 2,
+      opcodeByte(Opcode::PUSH0), opcodeByte(Opcode::LOG0),
+      opcodeByte(Opcode::STOP),
+  };
+  auto Program = analyze(Code);
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+
+  InterpreterOptions AtBoundary;
+  AtBoundary.MaxLogDataBytes = kExactLogDataBytes;
+  auto Accepted = execute(Program->Low, {}, AtBoundary);
+  ASSERT_TRUE(static_cast<bool>(Accepted))
+      << llvm::toString(Accepted.takeError());
+  ASSERT_EQ(Accepted->Status, ExecutionStatus::Stopped);
+  ASSERT_EQ(Accepted->Logs.size(), 2u);
+  EXPECT_EQ(Accepted->Logs[0].Data.size(), 1u);
+  EXPECT_EQ(Accepted->Logs[1].Data.size(), 2u);
+
+  InterpreterOptions BelowBoundary = AtBoundary;
+  --BelowBoundary.MaxLogDataBytes;
+  auto Rejected = execute(Program->Low, {}, BelowBoundary);
+  ASSERT_TRUE(static_cast<bool>(Rejected))
+      << llvm::toString(Rejected.takeError());
+  EXPECT_EQ(Rejected->Status, ExecutionStatus::Faulted);
+  EXPECT_EQ(Rejected->FaultKind, ExecutionFaultKind::ResourceExhausted);
+  EXPECT_TRUE(Rejected->Logs.empty());
+}
+
+TEST(EVMInterpreter, LoopingLogsStopAtTheDeclarativeEntryBudget) {
+  constexpr size_t kLoopLogEntries = 2;
+  const std::vector<uint8_t> Code = {
+      opcodeByte(Opcode::JUMPDEST), opcodeByte(Opcode::PUSH0),
+      opcodeByte(Opcode::PUSH0),    opcodeByte(Opcode::LOG0),
+      opcodeByte(Opcode::PUSH0),    opcodeByte(Opcode::JUMP),
+  };
+  auto Program = analyze(Code);
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+  InterpreterOptions Options;
+  Options.MaxLogEntries = kLoopLogEntries;
+  auto Result = execute(Program->Low, {}, Options);
+  ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
+  EXPECT_EQ(Result->Status, ExecutionStatus::Faulted);
+  EXPECT_EQ(Result->FaultKind, ExecutionFaultKind::ResourceExhausted);
+  EXPECT_TRUE(Result->Logs.empty());
+  EXPECT_TRUE(Result->Memory.empty());
+  EXPECT_LT(Result->Steps, Options.MaxSteps);
 }
 
 TEST(EVMInterpreter, UsesYellowPaperOperandOrderForNonCommutativeOps) {
@@ -381,6 +638,8 @@ TEST(EVMInterpreter, EnforcesMemoryLimitAtEVMWordGranularity) {
   ASSERT_TRUE(static_cast<bool>(Faulted))
       << llvm::toString(Faulted.takeError());
   EXPECT_EQ(Faulted->Status, ExecutionStatus::Faulted);
+  EXPECT_EQ(Faulted->FaultKind, ExecutionFaultKind::ResourceExhausted);
+  EXPECT_TRUE(Faulted->Error.empty());
   EXPECT_TRUE(Faulted->Memory.empty());
 
   InterpreterOptions OneWord;
@@ -389,6 +648,532 @@ TEST(EVMInterpreter, EnforcesMemoryLimitAtEVMWordGranularity) {
   ASSERT_TRUE(static_cast<bool>(Stored)) << llvm::toString(Stored.takeError());
   EXPECT_EQ(Stored->Status, ExecutionStatus::Stopped);
   EXPECT_EQ(Stored->Memory.size(), kWordBytes);
+}
+
+TEST(EVMInterpreter, MemoryBudgetExhaustionRollsBackPersistentEffects) {
+  std::vector<uint8_t> Code = transactionMutationPrefix();
+  Code.push_back(opcodeByte(Opcode::STOP));
+  auto Program = analyze(Code);
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+
+  InterpreterOptions Options;
+  Options.MaxMemoryBytes = 0;
+  auto Result = execute(Program->Low, transactionEnvironment(), Options);
+  ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
+  EXPECT_EQ(Result->Status, ExecutionStatus::Faulted);
+  EXPECT_EQ(Result->FaultKind, ExecutionFaultKind::ResourceExhausted);
+  EXPECT_TRUE(Result->Error.empty());
+  EXPECT_TRUE(Result->Memory.empty());
+  expectTransactionStateRestored(*Result);
+}
+
+TEST(EVMInterpreter, PreflightsStackBeforeMemoryAndStateEffects) {
+  static_assert(kDefaultMaxMemoryBytes <= std::numeric_limits<uint32_t>::max());
+  const uint32_t RequestedSize = static_cast<uint32_t>(kDefaultMaxMemoryBytes);
+  const std::vector<uint8_t> Code = {
+      opcodeByte(Opcode::PUSH4),
+      static_cast<uint8_t>(RequestedSize >> 24),
+      static_cast<uint8_t>(RequestedSize >> 16),
+      static_cast<uint8_t>(RequestedSize >> 8),
+      static_cast<uint8_t>(RequestedSize),
+      opcodeByte(Opcode::PUSH0),
+      opcodeByte(Opcode::LOG4),
+  };
+
+  AnalyzeOptions Relaxed;
+  Relaxed.Strict = false;
+  auto Low = decodeLowIR(Code, Relaxed);
+  ASSERT_TRUE(static_cast<bool>(Low)) << llvm::toString(Low.takeError());
+  auto Result = execute(*Low);
+  ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
+
+  EXPECT_EQ(Result->Status, ExecutionStatus::Faulted);
+  EXPECT_NE(Result->Error.find("stack underflow"), std::string::npos);
+  EXPECT_TRUE(Result->Memory.empty());
+  EXPECT_TRUE(Result->Logs.empty());
+  ASSERT_EQ(Result->Stack.size(), 2u);
+  EXPECT_EQ(Result->Stack.front().getZExtValue(), RequestedSize);
+  EXPECT_TRUE(Result->Stack.back().isZero());
+}
+
+TEST(EVMInterpreter, PreflightsEveryAssignedOpcodeStackRequirement) {
+  for (size_t Byte = 0; Byte < kOpcodeSpaceSize; ++Byte) {
+    const auto Info =
+        opcodeInfo(static_cast<uint8_t>(Byte), kNewestKnownHardfork);
+    if (!Info)
+      continue;
+
+    std::vector<uint8_t> EncodedInstruction{static_cast<uint8_t>(Byte)};
+    EncodedInstruction.insert(EncodedInstruction.end(), Info->ImmediateBytes,
+                              uint8_t{0});
+    DecodeOptions Decode;
+    Decode.Fork = kNewestKnownHardfork;
+    Decode.Strict = false;
+    auto Decoded = decodeBytecode(EncodedInstruction, Decode);
+    ASSERT_TRUE(static_cast<bool>(Decoded))
+        << llvm::toString(Decoded.takeError());
+    ASSERT_FALSE(Decoded->Instructions.empty());
+    const LowInstruction &DecodedInstruction = Decoded->Instructions.front();
+    if (!DecodedInstruction.isExecutable() ||
+        DecodedInstruction.requiredStackHeight() == 0)
+      continue;
+
+    SCOPED_TRACE(testing::Message()
+                 << Info->Name.str() << " (0x" << std::hex << Byte << ")");
+    const size_t InitialStackHeight =
+        DecodedInstruction.requiredStackHeight() - 1;
+    std::vector<uint8_t> Code(InitialStackHeight, opcodeByte(Opcode::PUSH0));
+    const uint64_t InstructionPC = Code.size();
+    Code.insert(Code.end(), EncodedInstruction.begin(),
+                EncodedInstruction.end());
+
+    AnalyzeOptions Relaxed;
+    Relaxed.Fork = kNewestKnownHardfork;
+    Relaxed.Strict = false;
+    auto Low = decodeLowIR(Code, Relaxed);
+    ASSERT_TRUE(static_cast<bool>(Low)) << llvm::toString(Low.takeError());
+    auto Result = execute(*Low);
+    ASSERT_TRUE(static_cast<bool>(Result))
+        << llvm::toString(Result.takeError());
+
+    EXPECT_EQ(Result->Status, ExecutionStatus::Faulted);
+    EXPECT_EQ(Result->FinalPC, InstructionPC);
+    EXPECT_NE(Result->Error.find("stack underflow"), std::string::npos);
+    EXPECT_EQ(Result->Stack.size(), InitialStackHeight);
+    EXPECT_TRUE(Result->Memory.empty());
+    EXPECT_TRUE(Result->Storage.empty());
+    EXPECT_TRUE(Result->TransientStorage.empty());
+    EXPECT_TRUE(Result->Logs.empty());
+  }
+}
+
+TEST(EVMInterpreter, PreflightsMaximumResultStackHeight) {
+  std::vector<uint8_t> Code(kStackLimit, opcodeByte(Opcode::PUSH0));
+  Code.push_back(opcodeByte(Opcode::DUP1));
+
+  AnalyzeOptions Relaxed;
+  Relaxed.Strict = false;
+  auto Low = decodeLowIR(Code, Relaxed);
+  ASSERT_TRUE(static_cast<bool>(Low)) << llvm::toString(Low.takeError());
+  auto Result = execute(*Low);
+  ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
+
+  EXPECT_EQ(Result->Status, ExecutionStatus::Faulted);
+  EXPECT_NE(Result->Error.find("stack overflow"), std::string::npos);
+  EXPECT_EQ(Result->FinalPC, kStackLimit);
+  EXPECT_EQ(Result->Stack.size(), kStackLimit);
+  ASSERT_FALSE(Result->Trace.empty());
+  EXPECT_EQ(Result->Trace.back().StackBefore, kStackLimit);
+  EXPECT_EQ(Result->Trace.back().StackAfter, kStackLimit);
+}
+
+TEST(EVMInterpreter, ConvertsAllocationFailuresIntoRuntimeFaults) {
+  const size_t MaximumVectorSize = std::vector<uint8_t>{}.max_size();
+  ASSERT_LT(MaximumVectorSize, std::numeric_limits<size_t>::max());
+  const size_t ImpossibleSize = MaximumVectorSize + 1;
+  const llvm::APInt SizeWord(kWordBits, ImpossibleSize);
+
+  std::vector<uint8_t> Code{opcodeByte(Opcode::PUSH32)};
+  for (unsigned Byte = 0; Byte < kWordBytes; ++Byte) {
+    const unsigned BitOffset = (kWordBytes - 1 - Byte) * kBitsPerByte;
+    Code.push_back(static_cast<uint8_t>(
+        SizeWord.extractBitsAsZExtValue(kBitsPerByte, BitOffset)));
+  }
+  Code.push_back(opcodeByte(Opcode::PUSH0));
+  Code.push_back(opcodeByte(Opcode::LOG0));
+
+  AnalyzeOptions Relaxed;
+  Relaxed.Strict = false;
+  auto Low = decodeLowIR(Code, Relaxed);
+  ASSERT_TRUE(static_cast<bool>(Low)) << llvm::toString(Low.takeError());
+  InterpreterOptions Options;
+  Options.MaxMemoryBytes = std::numeric_limits<size_t>::max();
+  const ExecutionEnvironment Environment = transactionEnvironment();
+  auto Result = execute(*Low, Environment, Options);
+  ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
+
+  EXPECT_EQ(Result->Status, ExecutionStatus::Faulted);
+  EXPECT_EQ(Result->FaultKind, ExecutionFaultKind::ResourceExhausted);
+  EXPECT_TRUE(Result->Error.empty());
+  EXPECT_TRUE(Result->HasPersistentStateSnapshot);
+  EXPECT_TRUE(Result->Memory.empty());
+  expectTransactionStateRestored(*Result);
+  EXPECT_EQ(Environment.Storage.at(testWord(1)), testWord(0x11));
+  EXPECT_EQ(Environment.TransientStorage.at(testWord(2)), testWord(0x22));
+}
+
+TEST(EVMInterpreter, RejectsNonCanonicalLowIRBeforeExecution) {
+  const std::vector<uint8_t> Code = {opcodeByte(Opcode::PUSH1), 2,
+                                     opcodeByte(Opcode::JUMPDEST),
+                                     opcodeByte(Opcode::STOP)};
+  auto Program = analyze(Code);
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+  ASSERT_EQ(Program->Low.Instructions.size(), 3u);
+  ASSERT_EQ(Program->Low.JumpDestinations.size(), 1u);
+
+  const auto ExpectRejected = [](EVMLowIR Mutated, llvm::StringRef Case) {
+    SCOPED_TRACE(Case.str());
+    auto Result = execute(Mutated);
+    ASSERT_FALSE(static_cast<bool>(Result));
+    EXPECT_NE(llvm::toString(Result.takeError()).find("LowIR"),
+              std::string::npos);
+  };
+
+  EVMLowIR WrongImmediateWidth = Program->Low;
+  WrongImmediateWidth.Instructions.front().Immediate = llvm::APInt(8, 2);
+  ExpectRejected(std::move(WrongImmediateWidth), "Immediate width");
+
+  EVMLowIR WrongInfo = Program->Low;
+  WrongInfo.Instructions.front().Info.StackPushes = 0;
+  ExpectRejected(std::move(WrongInfo), "OpcodeInfo");
+
+  EVMLowIR WrongNextPC = Program->Low;
+  ++WrongNextPC.Instructions.front().NextPC;
+  ExpectRejected(std::move(WrongNextPC), "NextPC");
+
+  EVMLowIR WrongJumpDestinations = Program->Low;
+  WrongJumpDestinations.JumpDestinations.clear();
+  ExpectRejected(std::move(WrongJumpDestinations), "JumpDestinations");
+}
+
+TEST(EVMInterpreter, HostReturnDataBudgetValidatesTheAggregateBeforeCopying) {
+  constexpr size_t kInitialReturnBytes = 1;
+  constexpr size_t kCallReturnBytes = 2;
+  constexpr size_t kCreateReturnBytes = 3;
+  constexpr size_t kExactHostReturnBytes =
+      kInitialReturnBytes + kCallReturnBytes + kCreateReturnBytes;
+  auto Program = analyze(std::vector<uint8_t>{opcodeByte(Opcode::STOP)});
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+
+  ExecutionEnvironment Environment;
+  Environment.InitialReturnData.resize(kInitialReturnBytes);
+  Environment.CallReturnData.resize(kCallReturnBytes);
+  Environment.CreateReturnData.resize(kCreateReturnBytes);
+
+  InterpreterOptions AtBoundary;
+  AtBoundary.MaxHostReturnDataBytes = kExactHostReturnBytes;
+  auto Accepted = execute(Program->Low, Environment, AtBoundary);
+  ASSERT_TRUE(static_cast<bool>(Accepted))
+      << llvm::toString(Accepted.takeError());
+  EXPECT_EQ(Accepted->Status, ExecutionStatus::Stopped);
+
+  InterpreterOptions BelowBoundary = AtBoundary;
+  --BelowBoundary.MaxHostReturnDataBytes;
+  auto Rejected = execute(Program->Low, Environment, BelowBoundary);
+  ASSERT_FALSE(static_cast<bool>(Rejected));
+  EXPECT_NE(llvm::toString(Rejected.takeError())
+                .find(kMaxHostReturnDataBytesName.str()),
+            std::string::npos);
+}
+
+TEST(EVMInterpreter, EntireHostEnvironmentIsBoundedBeforeCopying) {
+  constexpr size_t kCalldataBytes = 3;
+  constexpr size_t kHostEntries = 6;
+  constexpr size_t kExternalCodeBytes = 3;
+  auto Program = analyze(std::vector<uint8_t>{opcodeByte(Opcode::STOP)});
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+
+  ExecutionEnvironment Environment;
+  Environment.Calldata.resize(kCalldataBytes);
+  Environment.BlockHashes.emplace(testWord(1), testWord(0x11));
+  Environment.Balances.emplace(testWord(2), testWord(0x22));
+  Environment.CodeHashes.emplace(testWord(3), testWord(0x33));
+  Environment.ExternalCode.emplace(testWord(4), std::vector<uint8_t>{0xaa});
+  Environment.ExternalCode.emplace(testWord(5),
+                                   std::vector<uint8_t>{0xbb, 0xcc});
+  Environment.BlobHashes.push_back(testWord(0x44));
+
+  InterpreterOptions AtBoundary;
+  AtBoundary.MaxCalldataBytes = kCalldataBytes;
+  AtBoundary.MaxHostEnvironmentEntries = kHostEntries;
+  AtBoundary.MaxExternalCodeBytes = kExternalCodeBytes;
+  auto Accepted = execute(Program->Low, Environment, AtBoundary);
+  ASSERT_TRUE(static_cast<bool>(Accepted))
+      << llvm::toString(Accepted.takeError());
+  EXPECT_EQ(Accepted->Status, ExecutionStatus::Stopped);
+
+  const auto ExpectRejected = [&](InterpreterOptions Options,
+                                  llvm::StringRef LimitName) {
+    auto Rejected = execute(Program->Low, Environment, Options);
+    ASSERT_FALSE(static_cast<bool>(Rejected));
+    EXPECT_NE(llvm::toString(Rejected.takeError()).find(LimitName.str()),
+              std::string::npos);
+  };
+
+  InterpreterOptions CalldataOverflow = AtBoundary;
+  --CalldataOverflow.MaxCalldataBytes;
+  ExpectRejected(CalldataOverflow, kMaxCalldataBytesName);
+
+  InterpreterOptions EntryOverflow = AtBoundary;
+  --EntryOverflow.MaxHostEnvironmentEntries;
+  ExpectRejected(EntryOverflow, kMaxHostEnvironmentEntriesName);
+
+  InterpreterOptions CodeOverflow = AtBoundary;
+  --CodeOverflow.MaxExternalCodeBytes;
+  ExpectRejected(CodeOverflow, kMaxExternalCodeBytesName);
+}
+
+TEST(EVMInterpreter, HostEntryBoundPrecedesMapWidthTraversal) {
+  auto Program = analyze(std::vector<uint8_t>{opcodeByte(Opcode::STOP)});
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+
+  ExecutionEnvironment Environment;
+  Environment.ExternalCode.emplace(llvm::APInt(kWordBits / 2, 1),
+                                   std::vector<uint8_t>{});
+  InterpreterOptions Options;
+  Options.MaxHostEnvironmentEntries = 0;
+  auto Result = execute(Program->Low, Environment, Options);
+  ASSERT_FALSE(static_cast<bool>(Result));
+  const std::string Error = llvm::toString(Result.takeError());
+  EXPECT_NE(Error.find(kMaxHostEnvironmentEntriesName.str()),
+            std::string::npos);
+  EXPECT_EQ(Error.find("256-bit"), std::string::npos);
+}
+
+TEST(EVMInterpreter, ZeroSizedHostOutputsKeepReturnDataAsBoundedViews) {
+  constexpr size_t kCallReturnBytes = 4'096;
+  constexpr size_t kCreateReturnBytes = 2'048;
+  const std::vector<uint8_t> Code = {
+      opcodeByte(Opcode::PUSH0),          opcodeByte(Opcode::PUSH0),
+      opcodeByte(Opcode::PUSH0),          opcodeByte(Opcode::PUSH0),
+      opcodeByte(Opcode::PUSH0),          opcodeByte(Opcode::PUSH0),
+      opcodeByte(Opcode::PUSH0),          opcodeByte(Opcode::CALL),
+      opcodeByte(Opcode::PUSH0),          opcodeByte(Opcode::PUSH0),
+      opcodeByte(Opcode::PUSH0),          opcodeByte(Opcode::CREATE),
+      opcodeByte(Opcode::RETURNDATASIZE), opcodeByte(Opcode::STOP),
+  };
+  auto Program = analyze(Code);
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+
+  ExecutionEnvironment Environment;
+  Environment.CallReturnData.resize(kCallReturnBytes, 0xaa);
+  Environment.CreateSuccess = false;
+  Environment.CreateReturnData.resize(kCreateReturnBytes, 0xbb);
+  InterpreterOptions Options;
+  Options.MaxMemoryBytes = 0;
+  Options.MaxHostReturnDataBytes = kCallReturnBytes + kCreateReturnBytes;
+  auto Result = execute(Program->Low, std::move(Environment), Options);
+  ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
+  EXPECT_EQ(Result->Status, ExecutionStatus::Stopped);
+  EXPECT_TRUE(Result->Memory.empty());
+  EXPECT_TRUE(Result->ReturnData.empty());
+  ASSERT_EQ(Result->Stack.size(), 3u);
+  EXPECT_EQ(Result->Stack.back().getZExtValue(), kCreateReturnBytes);
+}
+
+TEST(EVMInterpreter, PersistentStateBudgetIsExactAtEntryAndAtRuntime) {
+  constexpr size_t kExactPersistentEntries = 2;
+  auto Stop = analyze(std::vector<uint8_t>{opcodeByte(Opcode::STOP)});
+  ASSERT_TRUE(static_cast<bool>(Stop)) << llvm::toString(Stop.takeError());
+  ExecutionEnvironment InitialState;
+  InitialState.Storage.emplace(testWord(1), testWord(0x11));
+  InitialState.TransientStorage.emplace(testWord(2), testWord(0x22));
+
+  InterpreterOptions AtBoundary;
+  AtBoundary.MaxPersistentStateEntries = kExactPersistentEntries;
+  auto AcceptedInitial = execute(Stop->Low, InitialState, AtBoundary);
+  ASSERT_TRUE(static_cast<bool>(AcceptedInitial))
+      << llvm::toString(AcceptedInitial.takeError());
+  EXPECT_EQ(AcceptedInitial->Status, ExecutionStatus::Stopped);
+
+  InterpreterOptions BelowInitialBoundary = AtBoundary;
+  --BelowInitialBoundary.MaxPersistentStateEntries;
+  auto RejectedInitial = execute(Stop->Low, InitialState, BelowInitialBoundary);
+  ASSERT_FALSE(static_cast<bool>(RejectedInitial));
+  EXPECT_NE(llvm::toString(RejectedInitial.takeError())
+                .find(kMaxPersistentStateEntriesName.str()),
+            std::string::npos);
+
+  const std::vector<uint8_t> MutateCode = {
+      opcodeByte(Opcode::PUSH1),
+      0xaa,
+      opcodeByte(Opcode::PUSH1),
+      1,
+      opcodeByte(Opcode::SSTORE),
+      opcodeByte(Opcode::PUSH1),
+      0xbb,
+      opcodeByte(Opcode::PUSH1),
+      2,
+      opcodeByte(Opcode::TSTORE),
+      opcodeByte(Opcode::STOP),
+  };
+  auto Mutate = analyze(MutateCode);
+  ASSERT_TRUE(static_cast<bool>(Mutate)) << llvm::toString(Mutate.takeError());
+  auto AcceptedRuntime = execute(Mutate->Low, {}, AtBoundary);
+  ASSERT_TRUE(static_cast<bool>(AcceptedRuntime))
+      << llvm::toString(AcceptedRuntime.takeError());
+  EXPECT_EQ(AcceptedRuntime->Status, ExecutionStatus::Stopped);
+  EXPECT_EQ(AcceptedRuntime->Storage.size(), 1u);
+  EXPECT_EQ(AcceptedRuntime->TransientStorage.size(), 1u);
+
+  InterpreterOptions BelowRuntimeBoundary = AtBoundary;
+  --BelowRuntimeBoundary.MaxPersistentStateEntries;
+  auto RejectedRuntime = execute(Mutate->Low, {}, BelowRuntimeBoundary);
+  ASSERT_TRUE(static_cast<bool>(RejectedRuntime))
+      << llvm::toString(RejectedRuntime.takeError());
+  EXPECT_EQ(RejectedRuntime->Status, ExecutionStatus::Faulted);
+  EXPECT_EQ(RejectedRuntime->FaultKind, ExecutionFaultKind::ResourceExhausted);
+  EXPECT_TRUE(RejectedRuntime->Storage.empty());
+  EXPECT_TRUE(RejectedRuntime->TransientStorage.empty());
+}
+
+TEST(EVMInterpreter, RejectsExplicitZeroEntriesInSparseStateInputs) {
+  auto Program = analyze(std::vector<uint8_t>{opcodeByte(Opcode::STOP)});
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+
+  InterpreterOptions Options;
+  Options.MaxPersistentStateEntries = 1;
+
+  ExecutionEnvironment StorageEnvironment;
+  StorageEnvironment.Storage.emplace(testWord(1), testWord(0));
+  auto StorageResult = execute(Program->Low, StorageEnvironment, Options);
+  ASSERT_FALSE(static_cast<bool>(StorageResult));
+  const std::string StorageError = llvm::toString(StorageResult.takeError());
+  EXPECT_NE(StorageError.find("Storage"), std::string::npos);
+  EXPECT_NE(StorageError.find("zero-valued"), std::string::npos);
+
+  ExecutionEnvironment TransientEnvironment;
+  TransientEnvironment.TransientStorage.emplace(testWord(1), testWord(0));
+  auto TransientResult =
+      execute(Program->Low, std::move(TransientEnvironment), Options);
+  ASSERT_FALSE(static_cast<bool>(TransientResult));
+  const std::string TransientError =
+      llvm::toString(TransientResult.takeError());
+  EXPECT_NE(TransientError.find("TransientStorage"), std::string::npos);
+  EXPECT_NE(TransientError.find("zero-valued"), std::string::npos);
+  EXPECT_EQ(TransientEnvironment.TransientStorage.size(), 1u);
+}
+
+TEST(EVMInterpreter, ZeroSStoreToAbsentSlotDoesNotConsumeStateBudget) {
+  const std::vector<uint8_t> Code = {
+      opcodeByte(Opcode::PUSH0),  opcodeByte(Opcode::PUSH1), 1,
+      opcodeByte(Opcode::SSTORE), opcodeByte(Opcode::STOP),
+  };
+  auto Program = analyze(Code);
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+
+  InterpreterOptions Options;
+  Options.MaxPersistentStateEntries = 0;
+  auto Result = execute(Program->Low, {}, Options);
+  ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
+  EXPECT_EQ(Result->Status, ExecutionStatus::Stopped);
+  EXPECT_TRUE(Result->Storage.empty());
+  EXPECT_TRUE(Result->TransientStorage.empty());
+}
+
+TEST(EVMInterpreter, ZeroTStoreToAbsentSlotDoesNotConsumeStateBudget) {
+  const std::vector<uint8_t> Code = {
+      opcodeByte(Opcode::PUSH0),  opcodeByte(Opcode::PUSH1), 1,
+      opcodeByte(Opcode::TSTORE), opcodeByte(Opcode::STOP),
+  };
+  auto Program = analyze(Code);
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+
+  InterpreterOptions Options;
+  Options.MaxPersistentStateEntries = 0;
+  auto Result = execute(Program->Low, {}, Options);
+  ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
+  EXPECT_EQ(Result->Status, ExecutionStatus::Stopped);
+  EXPECT_TRUE(Result->Storage.empty());
+  EXPECT_TRUE(Result->TransientStorage.empty());
+}
+
+TEST(EVMInterpreter, ClearingSStoreReleasesBudgetForTStore) {
+  const std::vector<uint8_t> Code = {
+      opcodeByte(Opcode::PUSH0),
+      opcodeByte(Opcode::PUSH1),
+      1,
+      opcodeByte(Opcode::SSTORE),
+      opcodeByte(Opcode::PUSH1),
+      0xbb,
+      opcodeByte(Opcode::PUSH1),
+      2,
+      opcodeByte(Opcode::TSTORE),
+      opcodeByte(Opcode::STOP),
+  };
+  auto Program = analyze(Code);
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+  ExecutionEnvironment Environment;
+  Environment.Storage.emplace(testWord(1), testWord(0x11));
+  InterpreterOptions Options;
+  Options.MaxPersistentStateEntries = 1;
+
+  auto Result = execute(Program->Low, std::move(Environment), Options);
+  ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
+  EXPECT_EQ(Result->Status, ExecutionStatus::Stopped);
+  EXPECT_TRUE(Result->Storage.empty());
+  ASSERT_EQ(Result->TransientStorage.size(), 1u);
+  EXPECT_EQ(Result->TransientStorage.at(testWord(2)), testWord(0xbb));
+}
+
+TEST(EVMInterpreter, ClearingTStoreReleasesBudgetForSStore) {
+  const std::vector<uint8_t> Code = {
+      opcodeByte(Opcode::PUSH0),
+      opcodeByte(Opcode::PUSH1),
+      1,
+      opcodeByte(Opcode::TSTORE),
+      opcodeByte(Opcode::PUSH1),
+      0xaa,
+      opcodeByte(Opcode::PUSH1),
+      2,
+      opcodeByte(Opcode::SSTORE),
+      opcodeByte(Opcode::STOP),
+  };
+  auto Program = analyze(Code);
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+  ExecutionEnvironment Environment;
+  Environment.TransientStorage.emplace(testWord(1), testWord(0x11));
+  InterpreterOptions Options;
+  Options.MaxPersistentStateEntries = 1;
+
+  auto Result = execute(Program->Low, std::move(Environment), Options);
+  ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
+  EXPECT_EQ(Result->Status, ExecutionStatus::Stopped);
+  ASSERT_EQ(Result->Storage.size(), 1u);
+  EXPECT_EQ(Result->Storage.at(testWord(2)), testWord(0xaa));
+  EXPECT_TRUE(Result->TransientStorage.empty());
+}
+
+TEST(EVMInterpreter, StateEntryExhaustionRollsBackEarlierSparseWrites) {
+  const std::vector<uint8_t> Code = {
+      opcodeByte(Opcode::PUSH1),
+      0xaa,
+      opcodeByte(Opcode::PUSH1),
+      1,
+      opcodeByte(Opcode::SSTORE),
+      opcodeByte(Opcode::PUSH1),
+      0xbb,
+      opcodeByte(Opcode::PUSH1),
+      2,
+      opcodeByte(Opcode::TSTORE),
+      opcodeByte(Opcode::STOP),
+  };
+  auto Program = analyze(Code);
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+  ExecutionEnvironment Environment;
+  Environment.Storage.emplace(testWord(1), testWord(0x11));
+  InterpreterOptions Options;
+  Options.MaxPersistentStateEntries = 1;
+
+  auto Result = execute(Program->Low, std::move(Environment), Options);
+  ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
+  EXPECT_EQ(Result->Status, ExecutionStatus::Faulted);
+  EXPECT_EQ(Result->FaultKind, ExecutionFaultKind::ResourceExhausted);
+  ASSERT_EQ(Result->Storage.size(), 1u);
+  EXPECT_EQ(Result->Storage.at(testWord(1)), testWord(0x11));
+  EXPECT_TRUE(Result->TransientStorage.empty());
 }
 
 TEST(EVMInterpreter, RejectsEnvironmentValuesWithTheWrongWordWidth) {
@@ -480,6 +1265,29 @@ TEST(EVMInterpreter, BlockhashRejectsCurrentFutureAndExpiredBlocks) {
     ASSERT_EQ(Result.Stack.size(), 1u);
     EXPECT_EQ(Result.Stack.back().getZExtValue(), Case.Expected);
   }
+}
+
+TEST(EVMInterpreter, SelectsDifficultyOrPrevRandaoAtTheParisBoundary) {
+  AnalyzeOptions London;
+  London.Fork = Hardfork::London;
+  AnalyzeOptions Paris;
+  Paris.Fork = Hardfork::Paris;
+
+  ExecutionEnvironment Environment;
+  Environment.Difficulty = llvm::APInt(kWordBits, 0xd1);
+  Environment.PrevRandao = llvm::APInt(kWordBits, 0xa2);
+  const std::vector<uint8_t> Code = {opcodeByte(Opcode::PREVRANDAO),
+                                     opcodeByte(Opcode::STOP)};
+
+  const ExecutionResult BeforeParis = executeCode(Code, Environment, London);
+  ASSERT_EQ(BeforeParis.Status, ExecutionStatus::Stopped);
+  ASSERT_EQ(BeforeParis.Stack.size(), 1u);
+  EXPECT_EQ(BeforeParis.Stack.back(), Environment.Difficulty);
+
+  const ExecutionResult FromParis = executeCode(Code, Environment, Paris);
+  ASSERT_EQ(FromParis.Status, ExecutionStatus::Stopped);
+  ASSERT_EQ(FromParis.Stack.size(), 1u);
+  EXPECT_EQ(FromParis.Stack.back(), Environment.PrevRandao);
 }
 
 TEST(EVMInterpreter, EveryAssignedOpcodeHasAStackSafeDispatchPath) {

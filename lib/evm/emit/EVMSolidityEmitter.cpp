@@ -291,10 +291,20 @@ emitSolidity(const EVMProgram &Program, const SolidityEmitterOptions &Options) {
         continue;
       if (!ErrorNames.insert(Fact.SuggestedName).second)
         continue;
-      if (Fact.Known && isInlineSpellable(Fact.Known->Signature))
-        OS << "    error " << Fact.Known->Signature << ";\n";
-      else
+      const auto Declared = Fact.Known
+                                ? signatureArgumentTypes(Fact.Known->Signature)
+                                : llvm::SmallVector<llvm::StringRef, 8>{};
+      if (!Fact.Known || !llvm::all_of(Declared, isInlineSpellable)) {
         OS << "    error " << Fact.SuggestedName << "();\n";
+        continue;
+      }
+      OS << "    error " << Fact.Known->name() << "(";
+      for (size_t I = 0; I < Declared.size(); ++I) {
+        if (I)
+          OS << ", ";
+        OS << Declared[I];
+      }
+      OS << ");\n";
     }
     if (!EventNames.empty() || !ErrorNames.empty())
       OS << "\n";
@@ -305,8 +315,16 @@ emitSolidity(const EVMProgram &Program, const SolidityEmitterOptions &Options) {
                                        false)
          << ", entry pc 0x" << llvm::utohexstr(Function.EntryPC) << "\n";
       if (Function.Known)
-        OS << "    // hashed signature " << Function.Known->Signature << " ("
-           << getKnownStandardInfo(Function.Known->Standard).Name << ")\n";
+        // The selector hashes the canonical name and arguments, not a return
+        // type or one standard membership. Shared ERC-20/ERC-721 spellings in
+        // particular have no single truthful standard annotation until the
+        // analyzer records a uniquely evidenced variant.
+        OS << "    // hashed signature " << Function.Known->Signature;
+      if (Function.KnownVariant)
+        OS << " (" << getKnownStandardInfo(Function.KnownVariant->Standard).Name
+           << ")";
+      if (Function.Known)
+        OS << "\n";
       if (!allInlineSpellable(Function)) {
         OS << "    // no declaration: the signature contains a tuple, which "
               "needs a named struct\n\n";

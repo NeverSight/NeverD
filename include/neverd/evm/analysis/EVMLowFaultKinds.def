@@ -1,0 +1,22 @@
+//===- EVMLowFaultKinds.def - LowIR runtime fault kinds --------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
+// Defines every terminal runtime fault represented by a LowIR lane prefix.
+// Keep consumers table-driven so the public enum and boundary validation
+// cannot silently diverge.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_LOW_FAULT_KIND
+#define EVM_LOW_FAULT_KIND(ID, CONSUMES_INPUTS)
+#endif
+
+EVM_LOW_FAULT_KIND(NonExecutableInstruction, false)
+EVM_LOW_FAULT_KIND(StackUnderflow, false)
+EVM_LOW_FAULT_KIND(StackOverflow, false)
+EVM_LOW_FAULT_KIND(InvalidJumpDestination, true)
+
+#undef EVM_LOW_FAULT_KIND

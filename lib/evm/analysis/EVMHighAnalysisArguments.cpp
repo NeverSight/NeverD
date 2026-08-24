@@ -35,20 +35,63 @@ std::optional<size_t> headSlot(uint64_t Offset) {
 
 } // namespace
 
-ArgumentRecovery::ArgumentRecovery(const EVMMedIR &Med,
-                                   const ProducerIndex &Index,
-                                   const std::set<uint64_t> &Blocks) {
-  for (uint64_t PC : Blocks)
+llvm::Expected<ArgumentRecovery> ArgumentRecovery::create(
+    const EVMMedIR &Med, const ProducerIndex &Index,
+    const DefiniteExecutionIndex &Execution,
+    const std::set<MedStateLaneID> &Lanes,
+    llvm::function_ref<llvm::Error(uint64_t)> NoteOperationVisit,
+    llvm::function_ref<llvm::Error(uint64_t)> NoteReferenceVisit) {
+  ArgumentRecovery Result(Execution, Lanes, NoteOperationVisit,
+                          NoteReferenceVisit);
+  if (llvm::Error Error = Result.run(Med, Index))
+    return std::move(Error);
+  return std::move(Result);
+}
+
+llvm::Error ArgumentRecovery::run(const EVMMedIR &Med,
+                                  const ProducerIndex &Index) {
+  std::set<uint64_t> BlockPCs;
+  for (MedStateLaneID ID : Lanes) {
+    if (llvm::Error Error = NoteReferenceVisit(kEntryPC))
+      return Error;
+    if (const MedStateLane *Lane = Execution.lane(ID))
+      BlockPCs.insert(Lane->LowLane.BlockPC);
+  }
+  for (uint64_t PC : BlockPCs) {
+    if (llvm::Error Error = NoteReferenceVisit(PC))
+      return Error;
     if (const MedBlock *Block = Index.block(PC))
       Ordered.push_back(Block);
+  }
   Owner.assign(Med.Values.size(), kNoArgument);
-  seed(Med);
+  if (llvm::Error Error = seed(Med))
+    return Error;
   if (Constraints.empty())
-    return;
-  propagate(Med);
+    return llvm::Error::success();
+  if (llvm::Error Error = propagate(Med))
+    return Error;
   for (const MedBlock *Block : Ordered)
-    for (const MedOperation &Operation : Block->Operations)
-      observe(Med, Operation);
+    for (const MedOperation &Operation : Block->Operations) {
+      if (llvm::Error Error = NoteOperationVisit(Operation.PC))
+        return Error;
+      if (llvm::Error Error = NoteReferenceVisit(Operation.PC))
+        return Error;
+      auto Executes =
+          Execution.executesInAny(Operation, Lanes, NoteReferenceVisit);
+      if (!Executes)
+        return Executes.takeError();
+      if (*Executes)
+        if (llvm::Error Error = observe(Med, Operation))
+          return Error;
+    }
+  return llvm::Error::success();
+}
+
+llvm::Error ArgumentRecovery::noteReferences(size_t Count, uint64_t PC) const {
+  for (size_t Index = 0; Index < Count; ++Index)
+    if (llvm::Error Error = NoteReferenceVisit(PC))
+      return Error;
+  return llvm::Error::success();
 }
 
 size_t ArgumentRecovery::owner(ValueID Value) const {
@@ -63,14 +106,27 @@ bool ArgumentRecovery::adopt(ValueID Value, size_t Position) {
   return true;
 }
 
-void ArgumentRecovery::seed(const EVMMedIR &Med) {
+llvm::Error ArgumentRecovery::seed(const EVMMedIR &Med) {
   llvm::SmallVector<std::pair<ValueID, size_t>, 8> Loads;
   size_t Highest = 0;
   for (const MedBlock *Block : Ordered)
     for (const MedOperation &Operation : Block->Operations) {
+      if (llvm::Error Error = NoteOperationVisit(Operation.PC))
+        return Error;
+      if (llvm::Error Error = NoteReferenceVisit(Operation.PC))
+        return Error;
+      auto Executes =
+          Execution.executesInAny(Operation, Lanes, NoteReferenceVisit);
+      if (!Executes)
+        return Executes.takeError();
+      if (!*Executes)
+        continue;
       if (Operation.Op != Opcode::CALLDATALOAD ||
           Operation.Inputs.size() != 1 || Operation.Outputs.size() != 1)
         continue;
+      if (llvm::Error Error = noteReferences(
+              Operation.Inputs.size() + Operation.Outputs.size(), Operation.PC))
+        return Error;
       const auto Offset = constantWord(Med.findValue(Operation.Inputs[0]));
       if (!Offset)
         continue;
@@ -81,7 +137,7 @@ void ArgumentRecovery::seed(const EVMMedIR &Med) {
       Highest = std::max(Highest, *Position);
     }
   if (Loads.empty())
-    return;
+    return llvm::Error::success();
 
   Constraints.resize(Highest + 1);
   Read.assign(Highest + 1, false);
@@ -89,39 +145,73 @@ void ArgumentRecovery::seed(const EVMMedIR &Med) {
     adopt(Value, Position);
     Read[Position] = true;
   }
+  return llvm::Error::success();
 }
 
-void ArgumentRecovery::propagate(const EVMMedIR &Med) {
+llvm::Error ArgumentRecovery::propagate(const EVMMedIR &Med) {
   for (size_t Round = 0; Round < kMaxArgumentAliasRounds; ++Round) {
     bool Changed = false;
     for (const MedBlock *Block : Ordered) {
       for (const MedOperation &Operation : Block->Operations) {
+        if (llvm::Error Error = NoteOperationVisit(Operation.PC))
+          return Error;
+        if (llvm::Error Error = NoteReferenceVisit(Operation.PC))
+          return Error;
+        auto Executes =
+            Execution.executesInAny(Operation, Lanes, NoteReferenceVisit);
+        if (!Executes)
+          return Executes.takeError();
+        if (!*Executes)
+          continue;
         if (!evm::isDup(Operation.Op) && !evm::isDeepDup(Operation.Op))
           continue;
         if (Operation.Inputs.size() != 1 || Operation.Outputs.size() != 1)
           continue;
+        if (llvm::Error Error = noteReferences(Operation.Inputs.size() +
+                                                   Operation.Outputs.size(),
+                                               Operation.PC))
+          return Error;
         Changed |= adopt(Operation.Outputs[0], owner(Operation.Inputs.front()));
       }
       // A merge carries one argument only when every path brought that same
       // argument; a merge of an argument with anything else is neither.
       for (ValueID Phi : Block->PhiValues) {
+        if (llvm::Error Error = NoteReferenceVisit(Block->StartPC))
+          return Error;
         const MedValue *Value = Med.findValue(Phi);
-        if (!Value || Value->Inputs.empty())
+        if (!Value || Value->PhiIncomings.empty())
           continue;
-        size_t Common = owner(Value->Inputs.front());
-        for (ValueID Incoming : Value->Inputs)
-          if (owner(Incoming) != Common)
+        size_t Common = kNoArgument;
+        bool SawIncoming = false;
+        for (const MedPhiIncoming &Incoming : Value->PhiIncomings) {
+          if (llvm::Error Error = NoteReferenceVisit(Value->PC))
+            return Error;
+          if (!Execution.isReachable(Incoming.SourceLane) ||
+              !Lanes.contains(Incoming.SourceLane))
+            continue;
+          const size_t Candidate = owner(Incoming.Value);
+          if (!SawIncoming) {
+            Common = Candidate;
+            SawIncoming = true;
+          } else if (Candidate != Common) {
             Common = kNoArgument;
+          }
+        }
+        if (!SawIncoming)
+          continue;
         Changed |= adopt(Phi, Common);
       }
     }
     if (!Changed)
-      return;
+      return llvm::Error::success();
   }
+  return llvm::Error::success();
 }
 
-void ArgumentRecovery::observe(const EVMMedIR &Med,
-                               const MedOperation &Operation) {
+llvm::Error ArgumentRecovery::observe(const EVMMedIR &Med,
+                                      const MedOperation &Operation) {
+  if (llvm::Error Error = noteReferences(Operation.Inputs.size(), Operation.PC))
+    return Error;
   const auto Argument = [&](size_t Position) -> ABIConstraint * {
     if (Position >= Operation.Inputs.size())
       return nullptr;
@@ -230,6 +320,7 @@ void ArgumentRecovery::observe(const EVMMedIR &Med,
   default:
     break;
   }
+  return llvm::Error::success();
 }
 
 } // namespace neverd::evm::detail

@@ -49,15 +49,19 @@ Extend NeverD from native ISAs to **Ethereum Virtual Machine (EVM)** contract by
   with explicit host-effect contracts, plus verified LLVM IR
 - **CLI / C API** — `neverd decompile` / session APIs work on EVM inputs the same way as native binaries
 
-**Status:** Complete for legacy EVM bytecode from Frontier through Fusaka. The
-implementation covers all 150 assigned legacy opcodes, raw/hex/artifact inputs,
-creation-to-runtime extraction, CFG and stack-SSA recovery, strict and relaxed
-analysis, C23/LLVM/Solidity backends, and CLI/C API integration. The focused EVM
-suite includes interpreter-to-generated-C, LLVM, and deployed Solidity
-differential execution, plus an independent comparison against Anvil's native
-EVM. Four Amsterdam opcodes are additionally available behind an explicit
-development-fork target, with official/upstream vectors and metadata-drift
-auditing while `latest` remains finalized Fusaka. See
+**Status:** Legacy opcode decoding and lifting from Frontier through Fusaka are
+complete and regression-covered. The implementation covers all assigned legacy
+opcodes, raw/hex/artifact inputs, creation-to-runtime extraction, strict and
+relaxed analysis, C23/LLVM/Solidity backends, and CLI/C API integration. Source
+reconstruction remains an ongoing, conservative analysis: selectors, events,
+types, standards, names, and dynamic control flow are reported only when the
+available evidence supports them, never as original-source identity or complete
+ERC compliance. Canonical function selectors, per-standard ABI variants, and
+successful return shapes are kept separate so a shared ERC selector cannot
+invent a standard or borrow an incompatible return type. Amsterdam is an
+explicit opt-in Review/development target;
+`latest` remains Fusaka. EOFv1/EIP-7692 is unscheduled and EIP-3540 is Stagnant,
+so neither is represented as finalized mainnet behavior. See
 [EVM decompilation](../evm.md) for the host
 ABI and the intentionally explicit limits around dynamic jumps, external host
 effects, heuristic high-level naming, and EOF bytecode.
@@ -141,14 +145,16 @@ Cross-cutting work that unblocks the items above and improves today’s native e
 
 ## Timeline
 
-Native format completeness, legacy EVM decompilation, and Solana SBF
-decompilation are complete and regression-covered. No release dates are
-committed. Progress will be tracked here.
+Native format completeness, legacy EVM decoding/lifting through Fusaka, and
+Solana SBF decompilation are regression-covered. Conservative EVM source
+reconstruction remains ongoing. No release dates are committed. Progress will
+be tracked here.
 
 | Feature | Status |
 |---------|--------|
 | Native format completeness (PE ARM*, Mach-O i386) | Complete — regression-covered |
-| EVM bytecode decompilation | Complete — C, Solidity, and LLVM; regression-covered |
+| EVM legacy decoding/lifting | Complete through Fusaka — regression-covered |
+| EVM source reconstruction | Ongoing — evidence-backed and conservative |
 | Solana eBPF (SBF) decompilation | Complete — v0-v4, C, Rust, and LLVM; regression-covered |
 | Memory-safety audit & hunt | Complete — P0 for PE, ELF, and Mach-O; regression-covered |
 | Engine & product hardening | Ongoing |

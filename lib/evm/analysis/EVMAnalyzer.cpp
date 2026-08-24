@@ -7,6 +7,8 @@
 #include "neverd/evm/analysis/EVMAnalyzer.h"
 
 #include "EVMControlFlow.h"
+#include "EVMHighAnalysis.h"
+#include "EVMMedAnalysis.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallString.h"
@@ -33,10 +35,18 @@ std::string wordHex(const llvm::APInt &Value, unsigned MinDigits = 1) {
   return "0x" + wordHexDigits(Value, MinDigits);
 }
 
+llvm::Error lowIRAnalysisError(uint64_t PC, llvm::Twine Message) {
+  return llvm::make_error<llvm::StringError>(
+      "evm: " + Message + " at pc 0x" + llvm::Twine(llvm::utohexstr(PC)),
+      llvm::inconvertibleErrorCode());
+}
+
 } // namespace
 
 llvm::Expected<EVMLowIR> decodeLowIR(llvm::ArrayRef<uint8_t> Code,
                                      AnalyzeOptions Options) {
+  if (Options.MaxBlocks == 0)
+    return lowIRAnalysisError(kEntryPC, "MaxBlocks must be greater than zero");
   auto Decoded = decodeBytecode(Code, Options);
   if (!Decoded)
     return Decoded.takeError();
@@ -49,12 +59,28 @@ llvm::Expected<EVMLowIR> decodeLowIR(llvm::ArrayRef<uint8_t> Code,
   Low.JumpDestinations = std::move(Decoded->JumpDestinations);
   Low.Diagnostics = std::move(Decoded->Diagnostics);
 
-  std::set<uint64_t> Starts{kEntryPC};
+  std::set<uint64_t> Starts;
+  const auto InsertBlockStart = [&](uint64_t PC) -> llvm::Error {
+    if (Starts.contains(PC))
+      return llvm::Error::success();
+    if (Starts.size() >= Options.MaxBlocks)
+      return lowIRAnalysisError(PC, "basic block limit " +
+                                        llvm::Twine(Options.MaxBlocks) +
+                                        " exceeded");
+    Starts.insert(PC);
+    return llvm::Error::success();
+  };
+  if (llvm::Error Error = InsertBlockStart(kEntryPC))
+    return std::move(Error);
   for (const auto &Instruction : Low.Instructions) {
-    if (Instruction.is(Opcode::JUMPDEST))
-      Starts.insert(Instruction.PC);
-    if (Instruction.isTerminator() && Instruction.NextPC < Low.Code.size())
-      Starts.insert(Instruction.NextPC);
+    if (Instruction.is(Opcode::JUMPDEST)) {
+      if (llvm::Error Error = InsertBlockStart(Instruction.PC))
+        return std::move(Error);
+    }
+    if (Instruction.isTerminator() && Instruction.NextPC < Low.Code.size()) {
+      if (llvm::Error Error = InsertBlockStart(Instruction.NextPC))
+        return std::move(Error);
+    }
   }
 
   llvm::DenseMap<uint64_t, size_t> InstructionIndex;
@@ -74,6 +100,10 @@ llvm::Expected<EVMLowIR> decodeLowIR(llvm::ArrayRef<uint8_t> Code,
            Low.Instructions[EndIndex].PC < Block.EndPC)
       ++EndIndex;
     Block.InstructionCount = EndIndex - Block.FirstInstruction;
+    if (Low.Blocks.size() >= Options.MaxBlocks)
+      return lowIRAnalysisError(
+          Block.StartPC,
+          "basic block limit " + llvm::Twine(Options.MaxBlocks) + " exceeded");
     Low.Blocks.push_back(std::move(Block));
   }
 
@@ -87,14 +117,19 @@ llvm::Expected<EVMProgram> analyze(llvm::ArrayRef<uint8_t> Code,
   auto Low = decodeLowIR(Code, Options);
   if (!Low)
     return Low.takeError();
-  auto Med = lowerToMedIR(*Low);
+  auto Med = detail::lowerCanonicalLowToMedIR(*Low, Options);
   if (!Med)
     return Med.takeError();
   EVMProgram Program;
   Program.Low = std::move(*Low);
   Program.Med = std::move(*Med);
-  if (Options.RecoverHighLevel)
-    Program.High = recoverHighIR(Program.Low, Program.Med);
+  if (Options.RecoverHighLevel) {
+    auto High =
+        detail::recoverCanonicalHighIR(Program.Low, Program.Med, Options);
+    if (!High)
+      return High.takeError();
+    Program.High = std::move(*High);
+  }
   return Program;
 }
 
@@ -177,6 +212,9 @@ std::string dumpHighIR(const EVMHighIR &High) {
        << " entry 0x" << llvm::utohexstr(Function.EntryPC);
     if (Function.Known)
       OS << " signature " << Function.Known->Signature;
+    if (Function.KnownVariant)
+      OS << " standard "
+         << getKnownStandardInfo(Function.KnownVariant->Standard).Name;
     OS << "\n";
     for (const auto &Argument : Function.Arguments)
       OS << "  argument " << Argument.Index << " " << Argument.Type << " "

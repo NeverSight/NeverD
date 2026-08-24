@@ -6,9 +6,11 @@
 
 NeverD loads legacy Ethereum Virtual Machine bytecode, builds dedicated
 256-bit LowIR, stack-SSA MedIR, and recovered HighIR representations, and can
-emit LLVM IR, C23, or Solidity. Strict analysis is the default: an unassigned
-opcode or an opcode that is inactive for the selected hardfork is an error at
-its exact program counter.
+emit LLVM IR, C23, or Solidity. Strict analysis is the default, but legacy EVM
+has no whole-image opcode validation: only a definitely reachable execution
+lane that reaches an unassigned or fork-inactive opcode is rejected at that
+opcode's exact program counter. Dead bytes and merely `MayReachable` CFG
+candidates do not turn into strict errors.
 
 The Solidity and C outputs are semantic reconstructions. They preserve decoded
 opcode order, 256-bit arithmetic, stack checks, and validated control flow, but
@@ -53,10 +55,12 @@ creation code is available, NeverD recognizes bounded, constant
 `CODECOPY`/`RETURN` constructor wrappers and extracts the copied runtime slice.
 The constructor walk uses the same single-instruction decoder as the real
 decoder, under the hardfork being analyzed, so a byte that is data on one fork
-and an opcode on another cannot move the boundary. A compiler artifact field
-containing only an optional `0x` prefix is treated as empty, so an empty
-`deployedBytecode` or `runtimeBytecode` field cannot hide a usable
-creation-bytecode fallback.
+and an opcode on another cannot move the boundary. A present
+`deployedBytecode` or `runtimeBytecode` field is authoritative: an explicit
+`0x` value is accepted as an empty, naturally stopped runtime and deliberately
+prevents fallback to creation bytecode. A missing field may fall through to the
+next candidate, while missing or whitespace-only hex without the explicit
+prefix is rejected. Explicit raw input may likewise be empty.
 
 ### Compiler trailers
 
@@ -96,8 +100,9 @@ any other length is malformed input rather than a variant of the container, and
 stays instructions so the decoder can name the byte it could not read.
 
 Malformed hex, odd digit counts, unresolved linker placeholders, ambiguous
-multi-contract artifacts, invalid metadata bounds, and empty normalized code
-produce actionable errors. The C++ loader API can select a contract from a
+multi-contract artifacts, invalid metadata bounds, and missing or blank hex
+produce actionable errors. An explicit empty raw input or `0x` runtime remains
+a valid empty program. The C++ loader API can select a contract from a
 multi-contract artifact with `BytecodeLoadOptions::ArtifactContract`, using
 either `Contract` or `path/File.sol:Contract`. An unqualified contract name is
 rejected when multiple source files define it; use the qualified spelling so
@@ -143,22 +148,26 @@ Treating it as an ordinary fixed-width immediate would corrupt instruction and
 `JUMPDEST` boundaries.
 
 EOF is not part of the Fusaka target: Ethereum removed it from the upgrade in
-[Fusaka checkpoint 2](https://blog.ethereum.org/2025/04/29/checkpoint-2), and
-the execution-spec-tests project records EOF as
-[removed from Osaka and unscheduled](https://github.com/ethereum/execution-spec-tests/blob/main/docs/CHANGELOG.md).
-NeverD therefore does not accept the withdrawn EOF proposal as if it were
-finalized mainnet behavior.
+[Fusaka checkpoint 2](https://blog.ethereum.org/2025/04/29/checkpoint-2).
+EOFv1/EIP-7692 is unscheduled, while the container proposal
+[EIP-3540](https://eips.ethereum.org/EIPS/eip-3540) is Stagnant. The old
+`execution-spec-tests` repository has been archived and its maintained tests
+moved to
+[execution-specs](https://github.com/ethereum/execution-specs/tree/master/tests).
+NeverD therefore does not accept an experimental EOF container as finalized
+mainnet behavior.
 
-Strict mode rejects unknown and fork-inactive bytes. `--evm-relaxed` retains
-them in LowIR and diagnostics, but generated backends still fault if execution
-reaches one; relaxed mode never silently treats an unknown byte as a NOP.
+Strict mode rejects an unknown or fork-inactive byte only when a definitely
+`Reachable` state lane proves execution reaches it. `--evm-relaxed` retains
+such bytes as typed fault prefixes and diagnostics, and generated backends
+still fault on execution; relaxed mode never treats an unknown byte as a NOP.
 
 ## LLVM-style metadata architecture
 
 Hand-maintained EVM metadata follows LLVM's multiply-included `.def` pattern:
 
-- `EVMOpcodes.def` is the single source of truth for 150 finalized and four
-  opt-in development-fork opcodes: encoding, actual pop/push mutations,
+- `EVMOpcodes.def` is the single source of truth for every finalized legacy and
+  opt-in development-fork opcode: encoding, actual pop/push mutations,
   immediate encoding, opcode class, activation fork, primary effect,
   orthogonal EVM-memory access,
   source-level state access, call-value access, and termination. Every required
@@ -180,8 +189,11 @@ Hand-maintained EVM metadata follows LLVM's multiply-included `.def` pattern:
 - `EVMImmediateKinds.def` defines fixed PUSH data and EIP-8024's conditional
   single/pair encodings; `EVMDecodeStatuses.def` owns the stable vocabulary
   exposed by LowIR and disassembly. `EVMUpstreamOpcodePolicy.def` records the
-  sole go-ethereum naming alias plus deliberate historical/withdrawn
-  exclusions; `scripts/audit_evm_opcode_metadata.py` rejects byte drift and
+  sole go-ethereum naming alias plus deliberate historical and unscheduled-EOF
+  exclusions. The orthogonal `EVMUpstreamSemanticsPolicy.def` maps NeverD forks
+  to go-ethereum `params.Rules`, names exceptional base-stack prechecks, and
+  classifies dynamic-immediate stack instructions. The upstream audit rejects
+  byte, activation, `base_min_stack`, and `net_stack_delta` drift as well as
   every new unreviewed upstream constant.
 - `EVMHardforks.def`, `EVMEffects.def`, `EVMExitStatuses.def`, and
   `OutputLanguages.def` provide the corresponding ordered enums, parsers,
@@ -204,8 +216,19 @@ Hand-maintained EVM metadata follows LLVM's multiply-included `.def` pattern:
 - `EVMRecoveredFacts.def` owns the spellings of the recovered-fact
   vocabularies, so a name that reaches output lives in one place rather than
   in a switch a new enumerator can be left out of. `EVMKnownSignatures.def`
-  does the same for the three roles a signature holds.
-- `EVMConstants.h` owns protocol widths, limits, and stable default names.
+  stores each canonical function spelling and selector once, then declares
+  separate per-standard `KnownFunctionVariantInfo` memberships with their
+  return lists and independent/non-independent evidence role. Shared ERC-20 /
+  ERC-721 spellings therefore remain one callable candidate without becoming
+  independent evidence for either standard or inheriting the first variant's
+  return type. Events and custom errors retain their distinct typed records.
+- `EVMAnalysisLimits.def`, `EVMInterpreterLimits.def`,
+  `EVMABIParserLimits.def`, and `EVMABITableLimits.def` declare their
+  stage-specific analysis, interpreter, parser, and public-table ceilings.
+  `EVMConstants.h` owns shared protocol widths and stable internal names and
+  materializes the analysis defaults and diagnostic option names from
+  `EVMAnalysisLimits.def`; the interpreter and ABI headers materialize the
+  limits declared by their own tables.
 - `Semantics.h` owns the target-independent scalar ALU evaluator. Constant
   folding and interpretation call the same checked `APInt` implementation;
   LLVM, C, and Solidity retain explicit target lowerings so backend contracts
@@ -266,35 +289,42 @@ semantic switches remain explicit and fail loudly if an ALU case is omitted.
 - **EVM LowIR** preserves PC, encoding, typed immediate status and decoded
   stack-depth operands (including PUSH right-zero padding and EIP-8024's
   conditional-consumption rule), basic blocks, predecessor/successor edges,
-  validated `JUMPDEST` targets, reachability, and stack-height domains. CFG
-  recovery is a deterministic whole-program fixed point: one bounded finite
-  set of 256-bit values is propagated per stack slot and one abstract stack is
-  retained per concrete height. Constants carried through internal-call and
-  return blocks, stack shuffles, `PC`/`CODESIZE`, and scalar ALU operations can
-  therefore resolve one or several concrete jump targets. A genuinely unknown
-  target remains an explicit indirect edge instead of being guessed.
+  validated `JUMPDEST` targets, and path-sensitive whole-stack state lanes.
+  Values are constants, producer-identified symbols, hash-consed expressions,
+  finite constant sets with explicit exactness, or top. Correlated operands
+  stay in the same lane, so a Cartesian product from unrelated paths cannot
+  manufacture a definite jump target. `MayReachable` indirect edges preserve
+  conservative CFG candidates, but never authorize definite semantic facts.
 
-  `AnalyzeOptions::MaxAbstractValuesPerSlot` bounds each finite value set;
-  exceeding it widens the slot to `Unknown`. `MaxStackHeightVariants` bounds
-  the number of path-dependent heights at a block and produces an explicit
-  analysis-limit error instead of truncating the CFG. Both limits reject zero.
-  Finite values created by a Cartesian operation after a non-relational stack
-  merge are marked as over-approximations: invalid candidates are diagnosed,
-  but cannot make strict analysis reject bytecode solely because slot
-  correlation was lost. Precise invalid targets still fail at the exact jump
-  PC. In relaxed mode, stack faults are diagnosed and terminate only the
-  faulting abstract path; no impossible post-fault fallthrough is fabricated.
-- **EVM MedIR** represents every stack value as a 256-bit SSA value and wires
-  all merge phis before running a deterministic sparse constant worklist. Its
-  private lattice is `Uninitialized`, one exact `Constant`, or `Overdefined`:
-  equal constants propagate across blocks and anchored phi cycles, while a
-  conflicting or runtime-dependent cycle cannot fabricate a constant. The
-  worklist uses checked def-use IDs and the same `Semantics.h` ALU evaluator as
-  the interpreter. MedIR also preserves the primary semantic effect plus
-  orthogonal `none/read/write/readwrite` EVM-memory, source-level state, and
-  call-value access. A polymorphic LowIR stack is conservatively top-aligned at
-  this boundary: slots absent on some incoming height become explicit unknown
-  values and a deterministic diagnostic records the precision loss.
+  Every instruction, block, state, value, stack, edge, worklist update, and
+  instruction-by-lane transfer is charged to a named `AnalyzeOptions` limit,
+  including `MaxAbstractValuesPerSlot`, `MaxStackHeightVariants`, and
+  `MaxAbstractInstructionTransfers`. Zero or exhaustion is a hard analysis
+  error before insertion. Loop recurrence is a semantic abstraction, not a resource escape:
+  on a back-edge, a changed loop-carried slot becomes `Top` so the fixed point
+  converges. Budget exhaustion never requests any additional emergency widening
+  and instead returns a hard error. Exact invalid targets still fail at their
+  jump PC. In relaxed mode, stack faults terminate only their own lanes; no
+  impossible post-fault fallthrough is fabricated.
+
+  `EVMLowFaultKinds.def::InvalidJumpDestination` is path-sensitive at an
+  `end-of-code JUMPI`: a definitely true condition with an invalid target has
+  no successful tail and records a definite fault; a definitely false condition
+  succeeds. An unknown condition retains only its possible successful false
+  path and does not mislabel the entire lane as a definite fault.
+- **EVM MedIR** keeps one explicit SSA execution lane for each LowIR state lane
+  instead of merging incompatible stacks by maximum height. Each operation
+  records its executing and faulting lanes, and phis retain source-lane
+  identity. Its private constant lattice is `Uninitialized`, one exact
+  `Constant`, or `Overdefined`: equal constants propagate across blocks and
+  anchored phi cycles, while incomplete, conflicting, or runtime-dependent
+  inputs cannot fabricate a constant. Checked def-use IDs and independent
+  budgets for values, state lanes, stack entries, operations, operation-lane
+  references, phi incomings, and worklist updates make malformed graphs and
+  exhaustion fail loudly. The shared `Semantics.h` evaluator keeps constant
+  folding aligned with interpretation. MedIR also preserves the primary effect plus orthogonal
+  `none/read/write/readwrite` EVM-memory, source-level state, and call-value
+  access.
 - **EVM HighIR** recovers Solidity dispatcher selectors, likely calldata and
   return words, mutability, constant storage slots, LOG/event facts, revert
   facts, and function/CFG regions. A checked producer index and iterative,
@@ -304,12 +334,43 @@ semantic switches remain explicit and fail loudly if an ALU case is omitted.
   keys, event topic0, non-payable and receive guards, and exact 32-byte return
   sizes use their semantic inputs. The iterative walk is structurally bounded
   by the MedIR graph and treats malformed, mixed, or cyclic expressions as
-  unknown. Conflicting dispatcher targets for the same selector are diagnosed
-  and omitted. Solidity payability remains independent from the state-access
+  unknown. Conflicting dispatcher targets or incompatible ABI evidence for the
+  same selector are diagnosed and omitted. Selector discovery starts from the
+  root lane and follows the dispatcher's unmatched edges; selector-like tests
+  nested inside a handler are not promoted to public functions. Receive and
+  fallback recovery is root-constrained too and requires a definitely reachable
+  successful terminal; reverting, faulting, non-payable empty-calldata, and
+  merely possible paths cannot establish either entry point.
+
+  The byte-granular, flow-sensitive
+  memory analysis follows constant-offset writes across blocks, composes
+  overlaps with byte-level kill/gen semantics, and invalidates knowledge on an
+  unknown write. Proven payload recovery currently covers selectors and known
+  Panic bytes. For a known custom-error declaration, the Solidity emitter keeps
+  its canonical parameter types; NeverD does not claim to recover every runtime
+  argument value. Solidity payability remains independent from the state-access
   lattice, and a reachable unresolved dynamic jump forces conservative
-  `nonpayable` recovery. Until MedIR gains memory SSA, custom-error and
-  outgoing-call payload recovery are the retained bounded instruction-window
-  heuristics; recovered names and types remain explicitly heuristic.
+  `nonpayable` recovery.
+
+  A selector, event topic, or familiar signature is only an evidence-backed
+  candidate. A canonical function candidate is rejected by contradictory
+  calldata use; shared selectors contribute no independent standard evidence.
+  A standard needs its configured number of independent compatible selectors
+  or strong exact event-topic/arity, storage-slot, or proxy evidence. Only then
+  can a per-standard function variant be selected. Its static return list is
+  emitted only when every definitely reachable successful terminal agrees on
+  the exact ABI byte count; unresolved transfers, conflicting success shapes,
+  or a mismatch fail closed without borrowing a dictionary return type.
+  Reverts and faults are not successful returns. Event names likewise require a
+  compatible indexed-topic count, and ambiguous signatures stay unnamed.
+  Standard labels are conservative observations, not claims of original
+  source, complete ABI recovery, or full ERC compliance.
+
+  HighIR has separate hostile-input budgets for functions, lane and operation
+  visits, region block references, memory read requests, tracked bytes, memory
+  state cells, and memory worklist updates. The memory fixed point consumes only
+  definitely reachable executing lanes, meets predecessor bytes by consensus,
+  and returns a hard error on budget exhaustion rather than truncating facts.
 
   HighIR also records the outgoing half of the interface: every `CALL`,
   `CALLCODE`, `DELEGATECALL`, and `STATICCALL`, with the callee's provenance,
@@ -351,6 +412,230 @@ environment values and maps are validated before execution so malformed
 `APInt` widths cannot reach LLVM assertions. `BLOCKHASH` also enforces the
 protocol's previous-256-block window rather than trusting an out-of-range mock
 environment entry.
+
+Before any opcode-specific side effect, the interpreter preflights the typed
+required stack height, pop count, and retained-plus-pushed height, so underflow
+or overflow cannot partially execute an instruction. `EVMForkSemantics.def`
+selects the meaning of byte `0x44`: `DIFFICULTY` before Paris and `PREVRANDAO`
+from Paris onward. `REVERT`, semantic faults, step limits, and allocation/length
+resource exhaustion restore storage, transient storage, logs, and selfdestruct
+effects to the entry snapshot while retaining frame-local diagnostics and
+explicit revert bytes. Allocation failure is reported as
+`ExecutionFaultKind::ResourceExhausted` without requiring an error-string
+allocation; if even the entry snapshot could not be materialized,
+`HasPersistentStateSnapshot` is false and the result is never committable.
+
+### Public IR and resource boundaries
+
+Public `execute` first verifies that
+`Code`/`Fork`/`Instructions`/`JumpDestinations` form canonical LowIR. A changed
+fork, forged instruction record, inconsistent encoding, or jump-destination
+table therefore returns `llvm::Error` before execution indexes the instruction
+table. Public `lowerToMedIR` likewise validates every configured option,
+resource bound, and structural invariant—in that order—before a
+`canonical decode replay` decodes `Low.Code` under the embedded fork/strictness
+and compares every LowIR field. Only then may it call
+`lowerCanonicalLowToMedIR`, build an index, or allocate output proportional to
+caller-controlled records. Public `recoverHighIR` similarly replay-validates
+external LowIR/MedIR. The private `lowerCanonicalLowToMedIR` and
+`recoverCanonicalHighIR` paths are reserved for IR owned by `analyze`; they skip
+only redundant, non-recursive replay, while HighIR option/resource budgets
+remain mandatory.
+
+Dispatcher proof keeps one sorted `Any/Exact/Excluded` selector domain per
+`MedStateLane`. Joins union exact sets, intersect exclusion sets, and remove an
+exact set from a cofinite exclusion set; widening a domain requeues the lane.
+An equality records its true-edge candidate only when the selector is allowed
+and excludes it on the false edge. Raw `XOR(selector, constant)` records the
+zero/false match when every canonical successor names the same entry; this
+fallthrough form need not target `JUMPDEST`. Its nonzero/true mismatch edge
+excludes that selector, while `ISZERO` converts the same expression to equality.
+Selector-word, zero-calldata-word, calldata-size, and call-value guards refine
+their individual edges. An unknown conditional stops the dispatcher proof
+instead of exploring a merely possible branch.
+
+After a function candidate is recognized, function-scope traversal continues
+with that candidate's `exact singleton selector`. If control jumps back into a
+shared dispatcher, `SelectorEquality`, raw `XOR`, and `SelectorWord` conditions
+take only the `definite edge` consistent with the already matched selector.
+Unknown or unrelated predicates conservatively retain all `definite edges`.
+The traversal never uses an “exclude other entry blocks” heuristic: legitimate
+`shared body/tail-call` control flow remains part of the function scope.
+
+External CALL/CREATE outcomes are different: the host result is genuinely
+nondeterministic, so analysis explores both precise CFG outcomes. This retains
+ERC-1167 fallback recovery without treating an unreadable selector condition
+as evidence; a genuinely unknown dispatcher still fails closed.
+
+`EVMAnalysisLimits.def` gives the linear decoder and CFG builder one aggregate
+LowIR diagnostic budget through `MaxLowDiagnostics` and
+`MaxLowDiagnosticBytes`. Both paths precharge exact count and final bytes, and
+reject zero limits. Low and High diagnostic budgets remain independent. The
+same table independently charges
+`MaxHighDispatchCandidates`, aggregate `MaxHighRecoveredArguments`,
+`MaxHighDiagnostics` plus `MaxHighDiagnosticBytes`,
+`MaxHighReferenceVisits`, `MaxHighMemoryTransferCells`, and
+`MaxHighMemoryValueVisits`. Candidate and recovered-argument records are
+precharged before either destination container or any name/type allocation.
+Every HighIR output diagnostic is charged by count and final message bytes
+before construction or copying, including the fixed malformed-IR diagnostic;
+an exhausted diagnostic budget returns its named hard error rather than
+silently omitting the diagnostic or facts.
+The default root CFG region charges `MaxHighRegionBlockReferences` before
+reserving or copying its block-PC list.
+
+`EVMABIParserLimits.def` bounds tuple nesting, type nodes, and aggregate array
+dimensions. `EVMABITableLimits.def` bounds public signature/variant table
+cardinality and aggregate text. Public table validation applies those bounds
+before parsing or hashing and then rejects invalid enum values, kind metadata,
+standards, selector-evidence roles, canonical types, derived hashes,
+memberships, and collisions. Production selector lookup is indexed, event
+lookup uses a sorted topic table, and topic APIs verify an `APInt` is exactly
+one EVM word before comparison or ordering.
+
+`EVMInterpreterLimits.def` declares `MaxSteps`, `MaxMemoryBytes`,
+`MaxTraceEntries`, `MaxLogEntries`, aggregate `MaxLogDataBytes`, aggregate
+`MaxHostReturnDataBytes`, `MaxCalldataBytes`, aggregate
+`MaxHostEnvironmentEntries`, aggregate `MaxExternalCodeBytes`, and
+`MaxPersistentStateEntries`. The host-entry aggregate spans `BlockHashes`,
+`Balances`, `CodeHashes`, `ExternalCode`, and `BlobHashes`; the external-code
+byte limit spans every `ExternalCode` body. `MaxSteps` retains
+its explicit `StepLimit` result. Runtime memory, trace, log, log-data, and new
+persistent-state growth are precharged; exceeding those configured ceilings
+returns `ResourceExhausted` and rolls back persistent state, logs, and
+selfdestruct effects. An oversized initial host return-data aggregate or
+persistent-state map is instead an `execute` API error. The interpreter keeps
+host return data as `ArrayRef` views and uses `lower_bound` over the already
+validated sorted instruction table rather than copying buffers or rebuilding a
+per-execution PC map. The `const execute preflight` validates program and all
+host-input limits before copying the environment, taking a persistent-state
+snapshot, or constructing a result.
+
+### Live go-ethereum differential audit
+
+The standard local and CI audit always runs `git fetch --depth=1 --force` for
+the official `https://github.com/ethereum/go-ethereum.git` default branch's
+remote `HEAD`. Each run creates an unpredictable private temporary bare repository;
+there is no shared persistent Git repository or cache. Only the authority ref
+returned by that fetch and its resolved exact SHA select the revision. The SHA
+is reported and probed in a detached temporary worktree, then the authority
+repository and worktree are destroyed together. Neither
+`local_docs`, an existing checkout, nor a submodule is an audit path; a pinned
+submodule would be stale precisely when the live drift check is needed.
+
+Every Git command first clears all inherited `GIT_*`, including
+`GIT_CONFIG_*`, then installs only audited settings. `GIT_CONFIG_NOSYSTEM`
+and `GIT_CONFIG_GLOBAL` disable system/global configuration;
+`GIT_ATTR_NOSYSTEM` and command-scoped `core.attributesFile` disable
+system/global attributes; command-scoped `core.hooksPath` disables hooks. The
+private repository rejects unexpected local
+configuration, grafts, `objects/info/alternates`, and `refs/replace`;
+`GIT_NO_REPLACE_OBJECTS` also disables replacement lookup. Any violation
+fails closed.
+
+```bash
+python3 scripts/audit_evm_opcode_metadata.py
+```
+
+The public CLI exposes only `--manifest-output`; source, ref, and toolchain are
+not caller-selectable. Its `schema 3` manifest is a closed record of source
+identity, canonical and live-mainnet table evidence, dynamic-family evidence,
+and diagnostics. The Go probe reflects the complete exported boolean-field
+inventory of `params.Rules`, calls `LookupInstructionSet(params.Rules)` for
+every mapped fork, and scans all 256 byte slots so an unreviewed activation
+cannot hide outside NeverD's request. Allocation is determined from geth's
+`operation.undefined`; `HasCost` is only a cost cross-check because it is also
+false for defined zero-cost operations. Every `defined && !HasCost` slot must
+match `EVM_GETH_ACTIVE_WITHOUT_COST` exactly at its declared activation fork;
+an undefined slot with cost, an unreviewed defined slot, or an upstream change
+that hides the marker fails closed. Unknown, duplicate, missing, out-of-range,
+or unparsed fields, forks, names, bytes, and records are errors. Every `.def parser`
+also rejects unconsumed macro-looking input instead of silently accepting a
+partial policy. `EVMUpstreamOpcodePolicy.def` owns aliases and typed reviewed
+historical/unscheduled-EOF exclusions, whose overlap/inactive invariants are
+validated. The orthogonal `EVMUpstreamSemanticsPolicy.def` owns the closed
+`params.Rules` reflection inventory, fork mapping, base-stack exceptions, and
+dynamic-immediate families. CI runs this job on pushes to `dev`, pull requests,
+manual dispatch, and the daily schedule, and uploads the exact revision,
+manifest, and log as a failure artifact.
+
+More specifically, `EVMUpstreamSemanticsPolicy.def` gives every exported
+boolean `params.Rules` field exactly one `EVM_GETH_RULE_FIELD` entry in one of
+three categories: `MappedForkSelector`, `NoOpcodeAllocation`, or
+`ExcludedSelectorExpectedError`. The audit enables each field alone and calls
+`LookupInstructionSet`: the first two categories require a nil error and the
+third requires an error, while the returned complete 256-slot opcode/stack
+fingerprint must always equal its `ExpectedFork`. The currently reviewed
+no-allocation fields `IsEIP155`, `IsEIP2929`, `IsEIP4762`, and `IsPetersburg`
+fingerprint as Frontier; `IsUBT` is expected to error and return the Cancun
+fingerprint.
+
+`EVMUpstreamSemanticsPolicy.def` declares which opcodes form each EIP-8024
+dynamic family and the family's operation kind and valid stack delta;
+`EVMEIP8024Immediates.def` remains the sole immediate-decoding authority. Its
+single- and pair-operand inventories each classify all 256 byte values
+explicitly as valid or invalid, and production decoding uses a direct table
+lookup. The fresh-geth audit uses `go -overlay` to inject a virtual wrapper into
+`core/vm` and obtains the real private `operation.execute` handlers from each
+audited jump table. It covers the real `canonical fork jump tables` and the
+`mainnet active/scheduled jump tables` table by table. An `inactive` declared
+family is recorded explicitly; a `partial` family is an error. For every table
+where the family is active, the probe executes the three declared operations
+across all immediate bytes (`3x256`) plus `3 missing-operand cases`. It checks
+acceptance, PC delta, unique-marker-derived stack operands and mutation, exact
+valid-case underflow, and the missing operand's `0x00` behavior. Python compares
+every observation with the same two declarative policies; it does not duplicate
+the decoding formula.
+
+There is exactly one canonical target of `EVM_HARDFORK_LATEST`.
+`EVMUpstreamForkAliases.def` is the closed map for geth's `LatestFork` names:
+Prague maps to Pectra; Osaka and BPO1 through BPO5 map to Fusaka; Paris,
+Shanghai, Cancun, Amsterdam, and Bogota are identities. An unknown new name
+fails closed. Each audit fixes and records one `audit_unix_time`, requires
+`MainnetChainConfig.LatestFork(time)` to map to NeverD's latest fork, and
+requires `LatestFork(max uint64)` to be in the alias inventory with its
+canonical fork already probed; both instruction sets receive a complete table
+comparison. The manifest records `authority=official-fresh-fetch`, the official
+URL, requested `HEAD`, and resolved SHA. The probe fixes `GOTOOLCHAIN=local`.
+
+Both sides bound hostile metadata before materializing it. Go and Python apply
+`input/collection/string hard limits`; oversized JSON, arrays, or text fail
+closed. They also enforce `bounded diagnostic output`: an overlong displayed
+diagnostic carries its full-content `digest` and an `explicit truncated marker`
+instead of being mistaken for the complete message. Every child command runs
+with bounded output and a deadline. Timeout or output-limit failure kills the
+entire `process group`/process tree and drains its pipes, so a grandchild cannot
+outlive the audit or hold a descriptor indefinitely.
+
+The current schema-3 live receipt records `schema_version=3`,
+`audit_unix_time=1787534659`, `authority=official-fresh-fetch`,
+`remote=https://github.com/ethereum/go-ethereum.git`, `ref=HEAD`, revision
+`02b73d4ea7181464175e0a6cbecc0a3a2655a562`, local `Go 1.24.0`,
+`stack_limit=1024`, and `diagnostics=[]`. It compares `21 fork tables` and
+`20 Rules probes` classified as `15 mapped/4 no-op/1 expected-error`. Both
+`mainnet active/scheduled` records name `upstream BPO2`, which the closed alias
+maps to `NeverD Fusaka`. EIP-8024 covers `23 table targets`; only
+`Amsterdam/Bogota` are active, producing `1536 candidate executions` and
+`6 missing-operand cases`, and the `three handler symbols` match across both
+active targets. The closing tests are Python audit `67/67` and
+`C++ Opcode 10/10`. On macOS, `sandbox-exec` completed the real audit with
+network disabled for the final `go run`; the Linux workflow requires
+`bubblewrap`.
+
+Every Go phase—`go env`, `go mod init`, `go mod edit`, `go mod tidy`,
+`go mod download`, and `go run`—runs inside a capability-root filesystem
+sandbox. Read capability is limited to the private probe, fresh geth worktree,
+validated `resolved GOROOT`, and exact required system runtime roots; only the
+isolated environment roots are writable. Network capability is added only to
+the dependency stages that need it, and the final run is offline. Sentinels in
+the `host HOME/workspace` are denied and their contents cannot appear in
+output. Linux uses an isomorphic `bubblewrap` policy with no `/` broad bind.
+
+`NeverDEVMDecoderPropertyTests` independently exhausts every two-byte input at
+each decoder-changing fork and checks complete instruction/JUMPDEST boundaries;
+it also feeds deterministic hostile byte strings through every fork with a
+bounded input size. This complements, rather than substitutes for, the live
+client comparison.
 
 The interpreter also keeps EIP-211's per-frame return-data buffer separate
 from the current frame's final output. `RETURNDATASIZE` and
@@ -466,7 +751,8 @@ provides an EVM ABI.
 
 ## Explicit limitations
 
-- Legacy bytecode only; EOF containers are not decoded yet.
+- Legacy bytecode only; experimental EOFv1/EIP-7692 containers are not decoded
+  as finalized mainnet instructions, and EIP-3540 remains Stagnant.
 - Amsterdam/Bogota are explicit development targets; `latest` remains the
   finalized Fusaka instruction set until the scheduled opcodes are final.
 - No RPC fetching, chain-state discovery, gas accounting/refunds, or precompile
@@ -474,9 +760,10 @@ provides an EVM ABI.
   interpreter fields or backend host hooks.
 - Creation-code extraction recognizes common static wrappers; it is not a full
   constructor transaction emulator.
-- Dynamic jumps remain explicit indirect CFG edges unless a bounded constant
-  analysis proves a valid `JUMPDEST`; unresolved reachable jumps also make
-  recovered source mutability conservative.
+- Dynamic jumps remain explicit indirect CFG edges unless exact lane evidence
+  proves a valid `JUMPDEST`; may-reachable candidates never create definite
+  HighIR facts, and unresolved reachable jumps keep source recovery
+  conservative.
 - ABI types, source names, mappings, events, and custom errors are best-effort
   recovery facts. NeverD does not claim original-source identity.
 - The C and Solidity environment hooks must be implemented for standalone

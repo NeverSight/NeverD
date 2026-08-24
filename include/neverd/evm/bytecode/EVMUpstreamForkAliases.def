@@ -1,0 +1,28 @@
+//===- EVMUpstreamForkAliases.def - geth fork aliases -------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard. It maps every go-ethereum
+// MainnetChainConfig.LatestFork spelling that can share an EVM instruction set
+// with one canonical NeverD hardfork. Unknown upstream fork names fail closed.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_GETH_FORK_ALIAS
+#define EVM_GETH_FORK_ALIAS(GETH_FORK, NEVERD_FORK)
+#endif
+
+EVM_GETH_FORK_ALIAS(Paris, Paris)
+EVM_GETH_FORK_ALIAS(Shanghai, Shanghai)
+EVM_GETH_FORK_ALIAS(Cancun, Cancun)
+EVM_GETH_FORK_ALIAS(Prague, Pectra)
+EVM_GETH_FORK_ALIAS(Osaka, Fusaka)
+EVM_GETH_FORK_ALIAS(BPO1, Fusaka)
+EVM_GETH_FORK_ALIAS(BPO2, Fusaka)
+EVM_GETH_FORK_ALIAS(BPO3, Fusaka)
+EVM_GETH_FORK_ALIAS(BPO4, Fusaka)
+EVM_GETH_FORK_ALIAS(BPO5, Fusaka)
+EVM_GETH_FORK_ALIAS(Amsterdam, Amsterdam)
+EVM_GETH_FORK_ALIAS(Bogota, Bogota)
+
+#undef EVM_GETH_FORK_ALIAS

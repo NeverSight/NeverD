@@ -78,10 +78,14 @@ TEST(EVMAnalyzer, EveryTruncatedPushIsRightZeroPadded) {
   }
 }
 
-TEST(EVMAnalyzer, DecodesOfficialEIP8024InstructionBoundaries) {
+TEST(EVMAnalyzer, DecodesRepresentativeEIP8024InstructionBoundaries) {
   AnalyzeOptions Amsterdam;
   Amsterdam.Fork = Hardfork::Amsterdam;
   Amsterdam.Strict = false;
+
+  // These spot checks cover decoded instruction boundaries and operands. The
+  // fresh-fetch go-ethereum differential audit remains the semantic authority
+  // for the complete EIP-8024 encoding space.
 
   const struct {
     std::vector<uint8_t> Code;
@@ -187,11 +191,15 @@ TEST(EVMAnalyzer, MissingEIP8024ImmediateUsesSemanticZero) {
   EXPECT_TRUE(Inactive->Instructions[1].is(Opcode::DUP1));
 }
 
-TEST(EVMAnalyzer, EIP8024ConsumptionPolicyIsExhaustive) {
+TEST(EVMAnalyzer, EIP8024ConsumptionMatchesTheClosedDeclarativePolicy) {
   DecodeOptions Amsterdam;
   Amsterdam.Fork = Hardfork::Amsterdam;
   Amsterdam.Strict = false;
 
+  // This checks that the production decoder consumes bytes consistently with
+  // its closed declarative table. It is intentionally not a second semantic
+  // oracle: the required fresh-fetch go-ethereum audit differentially executes
+  // every candidate and is the authority for the table's EIP-8024 meaning.
   const Opcode ConditionalOpcodes[] = {Opcode::DUPN, Opcode::SWAPN,
                                        Opcode::EXCHANGE};
   for (const Opcode Op : ConditionalOpcodes) {
@@ -235,7 +243,58 @@ TEST(EVMAnalyzer, RelaxedDecoderAcceptsEveryByteValue) {
   }
 }
 
-TEST(EVMAnalyzer, StrictModeRejectsUnknownAndInactiveOpcodes) {
+TEST(EVMAnalyzer, LinearDecoderPreservesUnknownAndInactiveBytesLosslessly) {
+  DecodeOptions StrictDecode;
+  auto Unknown = decodeBytecode(std::vector<uint8_t>{0x0c}, StrictDecode);
+  ASSERT_TRUE(static_cast<bool>(Unknown))
+      << llvm::toString(Unknown.takeError());
+  ASSERT_EQ(Unknown->Instructions.size(), 1u);
+  EXPECT_EQ(Unknown->Instructions.front().DecodeStatus,
+            OpcodeDecodeStatus::Unknown);
+  ASSERT_EQ(Unknown->Diagnostics.size(), 1u);
+
+  StrictDecode.Fork = Hardfork::London;
+  auto Inactive = decodeBytecode(std::vector<uint8_t>{0x5f}, StrictDecode);
+  ASSERT_TRUE(static_cast<bool>(Inactive))
+      << llvm::toString(Inactive.takeError());
+  ASSERT_EQ(Inactive->Instructions.size(), 1u);
+  EXPECT_EQ(Inactive->Instructions.front().DecodeStatus,
+            OpcodeDecodeStatus::Inactive);
+}
+
+TEST(EVMAnalyzer, LinearDecoderPrechargesDiagnosticCountAndBytes) {
+  constexpr uint8_t kUnknownOpcode = 0x0c;
+  auto Baseline = decodeBytecode(std::vector<uint8_t>{kUnknownOpcode});
+  ASSERT_TRUE(static_cast<bool>(Baseline))
+      << llvm::toString(Baseline.takeError());
+  ASSERT_EQ(Baseline->Diagnostics.size(), 1u);
+  const size_t ExactBytes = Baseline->Diagnostics.front().Message.size();
+
+  DecodeOptions Exact;
+  Exact.MaxLowDiagnostics = 1;
+  Exact.MaxLowDiagnosticBytes = ExactBytes;
+  auto Accepted = decodeBytecode(std::vector<uint8_t>{kUnknownOpcode}, Exact);
+  ASSERT_TRUE(static_cast<bool>(Accepted))
+      << llvm::toString(Accepted.takeError());
+
+  auto TooMany = decodeBytecode(
+      std::vector<uint8_t>{kUnknownOpcode, kUnknownOpcode}, Exact);
+  ASSERT_FALSE(static_cast<bool>(TooMany));
+  EXPECT_NE(llvm::toString(TooMany.takeError())
+                .find("LowIR diagnostic limit 1 exceeded"),
+            std::string::npos);
+
+  DecodeOptions TooManyBytes = Exact;
+  --TooManyBytes.MaxLowDiagnosticBytes;
+  auto Rejected =
+      decodeBytecode(std::vector<uint8_t>{kUnknownOpcode}, TooManyBytes);
+  ASSERT_FALSE(static_cast<bool>(Rejected));
+  EXPECT_NE(
+      llvm::toString(Rejected.takeError()).find("LowIR diagnostic byte limit"),
+      std::string::npos);
+}
+
+TEST(EVMAnalyzer, StrictModeRejectsOnlyReachableNonExecutableOpcodes) {
   auto Unknown = decodeLowIR(std::vector<uint8_t>{0x0c});
   ASSERT_FALSE(static_cast<bool>(Unknown));
   const std::string UnknownError = llvm::toString(Unknown.takeError());
@@ -248,6 +307,25 @@ TEST(EVMAnalyzer, StrictModeRejectsUnknownAndInactiveOpcodes) {
   ASSERT_FALSE(static_cast<bool>(Inactive));
   EXPECT_NE(llvm::toString(Inactive.takeError()).find("inactive"),
             std::string::npos);
+
+  // Legacy code has no whole-image opcode validation. Both bytes at pc 3 are
+  // dead data skipped by the definite JUMP, so geth never executes their
+  // exceptional instruction and strict analysis must accept the program.
+  auto DeadUnknown =
+      decodeLowIR(std::vector<uint8_t>{0x60, 0x04, 0x56, 0x0c, 0x5b, 0x00});
+  ASSERT_TRUE(static_cast<bool>(DeadUnknown))
+      << llvm::toString(DeadUnknown.takeError());
+  const LowBlock *UnknownData = DeadUnknown->findBlock(3);
+  ASSERT_NE(UnknownData, nullptr);
+  EXPECT_FALSE(UnknownData->Reachable);
+
+  auto DeadInactive = decodeLowIR(
+      std::vector<uint8_t>{0x60, 0x04, 0x56, 0x5f, 0x5b, 0x00}, London);
+  ASSERT_TRUE(static_cast<bool>(DeadInactive))
+      << llvm::toString(DeadInactive.takeError());
+  const LowBlock *InactiveData = DeadInactive->findBlock(3);
+  ASSERT_NE(InactiveData, nullptr);
+  EXPECT_FALSE(InactiveData->Reachable);
 
   AnalyzeOptions Relaxed;
   Relaxed.Strict = false;
@@ -266,6 +344,23 @@ TEST(EVMAnalyzer, StrictModeRejectsUnknownAndInactiveOpcodes) {
   ASSERT_FALSE(static_cast<bool>(Invalid));
   EXPECT_NE(llvm::toString(Invalid.takeError()).find("invalid hardfork"),
             std::string::npos);
+}
+
+TEST(EVMAnalyzer, EmptyRuntimeIsAValidStoppedProgram) {
+  auto Decoded = decodeBytecode({});
+  ASSERT_TRUE(static_cast<bool>(Decoded))
+      << llvm::toString(Decoded.takeError());
+  EXPECT_TRUE(Decoded->Code.empty());
+  EXPECT_TRUE(Decoded->Instructions.empty());
+
+  auto Program = analyze({});
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+  EXPECT_TRUE(Program->Low.Code.empty());
+  EXPECT_TRUE(Program->Low.Instructions.empty());
+  EXPECT_TRUE(Program->Low.Blocks.empty());
+  EXPECT_TRUE(Program->Med.Blocks.empty());
+  EXPECT_TRUE(Program->High.Functions.empty());
 }
 
 TEST(EVMAnalyzer, RelaxedInactiveOpcodesRemainFaultNodesAcrossIRStages) {

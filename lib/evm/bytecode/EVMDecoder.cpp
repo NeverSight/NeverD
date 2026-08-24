@@ -18,8 +18,28 @@ llvm::Error decoderError(uint64_t PC, llvm::Twine Message) {
       llvm::inconvertibleErrorCode());
 }
 
-std::string byteHex(uint8_t Byte) {
-  return "0x" + llvm::utohexstr(Byte, /*LowerCase=*/true, kHexDigitsPerByte);
+Diagnostic invalidImmediateDiagnostic(const LowInstruction &Instruction) {
+  const auto Encoded =
+      static_cast<uint8_t>(Instruction.Immediate.getZExtValue());
+  return {Instruction.PC, "invalid immediate " + formatOpcodeByte(Encoded) +
+                              " for " + std::string(Instruction.Info.Name)};
+}
+
+llvm::Error appendDiagnostic(std::vector<Diagnostic> &Diagnostics,
+                             Diagnostic Entry, size_t &DiagnosticBytes,
+                             const DecodeOptions &Options) {
+  if (Diagnostics.size() >= Options.MaxLowDiagnostics)
+    return decoderError(Entry.PC, "LowIR diagnostic limit " +
+                                      llvm::Twine(Options.MaxLowDiagnostics) +
+                                      " exceeded");
+  if (DiagnosticBytes > Options.MaxLowDiagnosticBytes ||
+      Entry.Message.size() > Options.MaxLowDiagnosticBytes - DiagnosticBytes)
+    return decoderError(
+        Entry.PC, "LowIR diagnostic byte limit " +
+                      llvm::Twine(Options.MaxLowDiagnosticBytes) + " exceeded");
+  DiagnosticBytes += Entry.Message.size();
+  Diagnostics.push_back(std::move(Entry));
+  return llvm::Error::success();
 }
 
 void decodePushData(LowInstruction &Instruction, llvm::ArrayRef<uint8_t> Code,
@@ -82,9 +102,7 @@ void decodeConditionalImmediate(LowInstruction &Instruction,
 
   Instruction.ImmediateStatus = ImmediateDecodeStatus::Invalid;
   if (Diagnostics)
-    Diagnostics->push_back(
-        {Instruction.PC, "invalid immediate " + byteHex(Encoded) + " for " +
-                             std::string(Instruction.Info.Name)});
+    Diagnostics->push_back(invalidImmediateDiagnostic(Instruction));
 }
 
 } // namespace
@@ -107,6 +125,10 @@ llvm::StringRef immediateDecodeStatusName(ImmediateDecodeStatus Status) {
 #include "neverd/evm/bytecode/EVMDecodeStatuses.def"
   }
   return kUnknownName;
+}
+
+std::string formatOpcodeByte(uint8_t Byte) {
+  return "0x" + llvm::utohexstr(Byte, /*LowerCase=*/true, kHexDigitsPerByte);
 }
 
 std::string formatImmediate(const LowInstruction &Instruction) {
@@ -175,8 +197,19 @@ llvm::Expected<DecodedBytecode> decodeBytecode(llvm::ArrayRef<uint8_t> Code,
                                                DecodeOptions Options) {
   if (!isValidHardfork(Options.Fork))
     return decoderError(kEntryPC, "invalid hardfork value");
-  if (Code.empty())
-    return decoderError(kEntryPC, "empty bytecode");
+#define EVM_ANALYSIS_LIMIT_DECODE(NAME, DEFAULT_VALUE)                         \
+  if (Options.NAME == 0)                                                       \
+    return decoderError(kEntryPC, #NAME " must be greater than zero");
+#define EVM_ANALYSIS_LIMIT_CONTROL_FLOW(NAME, DEFAULT_VALUE)
+#define EVM_ANALYSIS_LIMIT_MEDIUM_IR(NAME, DEFAULT_VALUE)
+#define EVM_ANALYSIS_LIMIT_HIGH_IR(NAME, DEFAULT_VALUE)
+#define EVM_ANALYSIS_LIMIT(STAGE, NAME, DEFAULT_VALUE)                         \
+  EVM_ANALYSIS_LIMIT_##STAGE(NAME, DEFAULT_VALUE)
+#include "neverd/evm/analysis/EVMAnalysisLimits.def"
+#undef EVM_ANALYSIS_LIMIT_DECODE
+#undef EVM_ANALYSIS_LIMIT_CONTROL_FLOW
+#undef EVM_ANALYSIS_LIMIT_MEDIUM_IR
+#undef EVM_ANALYSIS_LIMIT_HIGH_IR
   if (Code.size() > Options.MaxCodeSize)
     return decoderError(kEntryPC, "bytecode exceeds configured size limit");
 
@@ -184,19 +217,32 @@ llvm::Expected<DecodedBytecode> decodeBytecode(llvm::ArrayRef<uint8_t> Code,
   Result.Fork = Options.Fork;
   Result.Strict = Options.Strict;
   Result.Code.assign(Code.begin(), Code.end());
+  size_t DiagnosticBytes = 0;
 
   for (size_t PC = 0; PC < Code.size();) {
+    if (Result.Instructions.size() >= Options.MaxInstructions)
+      return decoderError(PC, "instruction limit " +
+                                  llvm::Twine(Options.MaxInstructions) +
+                                  " exceeded");
     LowInstruction Instruction =
-        decodeInstructionAt(Code, PC, Options.Fork, &Result.Diagnostics);
+        decodeInstructionAt(Code, PC, Options.Fork, /*Diagnostics=*/nullptr);
     PC = Instruction.NextPC;
+
+    if (Instruction.ImmediateStatus == ImmediateDecodeStatus::Invalid)
+      if (llvm::Error Error = appendDiagnostic(
+              Result.Diagnostics, invalidImmediateDiagnostic(Instruction),
+              DiagnosticBytes, Options))
+        return std::move(Error);
 
     if (!Instruction.isActive()) {
       const std::string Reason =
           Instruction.isAssigned() ? "inactive opcode " : "unknown opcode ";
-      const std::string Spelled = byteHex(Instruction.Encoding.front());
-      if (Options.Strict)
-        return decoderError(Instruction.PC, Reason + llvm::Twine(Spelled));
-      Result.Diagnostics.push_back({Instruction.PC, Reason + Spelled});
+      const std::string Spelled =
+          formatOpcodeByte(Instruction.Encoding.front());
+      if (llvm::Error Error = appendDiagnostic(
+              Result.Diagnostics, {Instruction.PC, Reason + Spelled},
+              DiagnosticBytes, Options))
+        return std::move(Error);
     }
 
     if (Instruction.is(Opcode::JUMPDEST))

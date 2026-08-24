@@ -30,10 +30,22 @@ add_neverd_unittest(NeverDEVMABITests
 )
 
 add_neverd_unittest(NeverDEVMAnalyzerTests
+  EVMAnalyzerABISoundnessTests.cpp
+  EVMAnalyzerDispatchSoundnessTests.cpp
+  EVMAnalyzerHighIRSafetyTests.cpp
   EVMAnalyzerHighIRTests.cpp
   EVMAnalyzerControlFlowTests.cpp
   EVMAnalyzerDecodeTests.cpp
   EVMAnalyzerMedIRTests.cpp
+
+  LINK_COMPONENTS
+  EVM
+)
+
+add_neverd_unittest(NeverDEVMDecoderPropertyTests
+  EVMDecoderPropertyTests.cpp
+
+  TIMEOUT 900
 
   LINK_COMPONENTS
   EVM

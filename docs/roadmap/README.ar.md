@@ -34,10 +34,16 @@
 
 - محمّل EVM · lifter أكواد 1:1 (strict) · مكدس/ذاكرة · JUMP/JUMPI → CFG · تخزين/calldata · C23 وSolidity وLLVM · CLI/C API موحّدة
 
-**الحالة:** مكتمل لبايت كود EVM التقليدي من Frontier حتى Fusaka: كل 150 opcode
-مخصصة، ومدخلات raw/hex/artifact، واستخراج runtime، وCFG وstack-SSA، وتحليل
-strict/relaxed، وbackends C23/LLVM/Solidity، وتكامل CLI/C API، واختبارات تفاضلية
-مقابل Anvil. راجع [فك تجميع EVM](../evm.ar.md) لعقود host والحدود الصريحة.
+**الحالة:** اكتمل decode وlifting للـlegacy opcodes من Frontier حتى Fusaka
+وتغطيهما اختبارات الانحدار. ما زالت إعادة بناء source مستمرة بتحفظ: لا تُبلغ
+selectors وevents والأنواع والمعايير والأسماء وcontrol flow الديناميكي إلا بدليل
+كافٍ، ولا تُقدَّم كـsource أصلي أوABI كاملة أوتوافق ERC كامل. تبقى canonical
+function selectors وABI variants الخاصة بكل standard وأشكال return الناجحة
+منفصلة، فلا يستطيع selector مشترك بين ERCs اختلاق standard أو استعارة return
+type غير متوافق. Amsterdam هدف
+Review/development صريح opt-in، ويبقى `latest` هو Fusaka. EOFv1/EIP-7692 غير
+مجدول وEIP-3540 في حالة Stagnant، فلا يُقدمان كسلوك mainnet نهائي. راجع
+[فك تجميع EVM](../evm.ar.md).
 
 ### لماذا EVM
 
@@ -88,12 +94,15 @@ strict/relaxed، وbackends C23/LLVM/Solidity، وتكامل CLI/C API، واخ�
 
 ## الجدول الزمني
 
-اكتملت الصيغ الأصلية وفك تجميع EVM وSolana SBF وأمان الذاكرة P0 وتغطيها اختبارات انحدار. لا تواريخ ملزمة.
+تغطي اختبارات الانحدار الصيغ الأصلية وlegacy EVM decode/lifting حتى Fusaka و
+Solana SBF وأمان الذاكرة P0. ما زالت إعادة بناء source ‏EVM المحافظة مستمرة.
+لا تواريخ ملزمة.
 
 | الميزة | الحالة |
 |--------|--------|
 | اكتمال الصيغ الأصلية (PE ARM*، Mach-O i386) | مكتمل |
-| إعادة تجميع EVM | مكتمل — C وSolidity وLLVM؛ مغطى باختبارات انحدار |
+| Legacy EVM decode/lifting | مكتمل حتى Fusaka؛ مغطى باختبارات انحدار |
+| إعادة بناء source ‏EVM | مستمرة — مسندة بالأدلة ومحافظة |
 | إعادة تجميع Solana eBPF (SBF) | مكتمل — v0-v4 وC وRust وLLVM؛ مغطى باختبارات انحدار |
 | تدقيق وصيد أمان الذاكرة | مكتمل — P0 لـ PE وELF وMach-O؛ مغطى باختبارات انحدار |
 | تعزيز المحرك والمنتج | مستمر |

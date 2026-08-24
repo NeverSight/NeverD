@@ -43,7 +43,7 @@ fixture をコンパイル/リンクできずスキップされたテストは�
 | `unittests/safety` | `NeverDSafetyTests`、`NeverDSafetyIntegrationTests` | シンクカタログ、識別優先順位、引数事前フィルタ、コピー越境ハント、ヒープ寿命監査、必須の PE/ELF/Mach-O × x86-64/AArch64 6 セル行列 |
 | `unittests/lift` | `NeverDLiftTests` | Decoder/lifter の LowIR 形状、IR 段階、loader、relocation、形式 fixture、デコンパイル、代表的 patch 経路 |
 | `unittests/semantic` の大半 | `NeverDSemanticTests` | 命令、ABI、制御フロー、C 式、lift/recompile の差分セマンティクス |
-| `unittests/evm` | `NeverDEVMOpcodeTests`、`NeverDEVMBytecodeTests`、`NeverDEVMLoaderTests`、`NeverDEVMAnalyzerTests`、`NeverDEVMSemanticTests`、`NeverDEVMEmitterTests`、`NeverDEVMIntegrationTests` | hardfork metadata、input normalization、CFG/SSA/recovery、interpreter semantics、LLVM/C/Solidity differential execution、public API routing |
+| `unittests/evm` | `NeverDEVMOpcodeTests`、`NeverDEVMBytecodeTests`、`NeverDEVMLoaderTests`、`NeverDEVMABITests`、`NeverDEVMAnalyzerTests`、`NeverDEVMDecoderPropertyTests`、`NeverDEVMProxyTests`、`NeverDEVMCallTests`、`NeverDEVMSemanticTests`、`NeverDEVMEmitterTests`、`NeverDEVMIntegrationTests` | hardfork metadata、input normalization、ABI/signature ambiguity、CFG/SSA/recovery、decoder boundary 全網羅と hostile input、proxy/call fact、interpreter semantics、LLVM/C/Solidity differential execution、public API routing |
 | `unittests/sbf` | `NeverDSBFMetadataTests`、`NeverDSBFProgramImageTests`、`NeverDSBFLoaderTests`、`NeverDSBFAnalyzerTests`、`NeverDSBFVerifierTests`、`NeverDSBFISAConformanceTests`、`NeverDSBFAgaveConformanceTests`、`NeverDSBFSemanticTests`、`NeverDSBFEmitterTests`、`NeverDSBFLLVMEmitterTests`、`NeverDSBFLLVMDifferentialTests`、`NeverDSBFSourceDifferentialTests`、`NeverDSBFMalformedCorpusTests`、`NeverDSBFUpstreamConformanceTests`、`NeverDSBFExternalOracleTests`、`NeverDSBFSolanaModelTests`、`NeverDSBFIntegrationTests` | v0-v4 メタデータと ELF レイアウト、厳格な verifier/loader 動作、固定済み ELF 成果物 23 個、独立 official oracle、全 opcode の可用性、敵対的入力、CFG/復元、実行済み LLVM/C/Rust 差分 |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | 4 ISA×3 オブジェクト形式の書き換え/難読化等価性 |
 | `unittests/semantic` の重点変換ファイル | `NeverDSwitchXformTests`、`NeverDIndCallXformTests`、`NeverDCFGLoopXformTests`、`NeverDTwoTableXformTests`、`NeverDAvxUpperXformTests` | 大きなセマンティック実行形式から分離した高速再リンク用プローブ |
@@ -87,32 +87,131 @@ corpus 実行は他の 2 ホストについて何も証明しません。
 します。corpus を静かに読まなくなったビルドは、どのテストにも捕捉できない回帰だから
 です。消えたものがテストそのものなのです。
 
-EVM opcode audit は実行のたびに公式
-[go-ethereum repository](https://github.com/ethereum/go-ethereum) の remote `HEAD` を
-shallow `git fetch` し、実際に監査した exact commit を報告します。ignore される bare
-cache `build/evm-opcode-audit/go-ethereum.git` を再利用しますが、closed opcode
-inventory と byte assignment を読む前に必ず refresh します。
+live EVM opcode audit は次のコマンドで実行します。
 
 ```bash
 python3 scripts/audit_evm_opcode_metadata.py
 ```
 
-CI は同じ live audit を各 push、pull request、manual dispatch、daily schedule で実行し、
-NeverD に変更がなくても upstream drift を検出します。offline または historical
-reproduction では、既存 checkout を明示的に選択します。
+public CLI が受理する唯一の option は `--manifest-output` で、remote/ref/toolchain override は
+提供しません。出力 manifest の closed contract は `schema 3` です。
 
-```bash
-python3 scripts/audit_evm_opcode_metadata.py \
-  --geth-root /path/to/go-ethereum
-```
+ローカルと CI の標準経路は、公式
+`https://github.com/ethereum/go-ethereum.git` に対して必ず
+`git fetch --depth=1 --force` を行い、default branch の remote `HEAD` から得た正確な
+SHA だけを detached worktree で検査します。各実行は予測不能な名前の private temporary
+bare repository を使い、official fetch の authority ref と exact SHA を detached worktree
+の生存期間中保持して、最後に repository と worktree をまとめて破棄します。shared persistent
+Git repository や cache はありません。`local_docs`、既存 checkout、
+submodule は監査経路ではなく、pin された submodule は live drift を検出すべき時点で古くなります。
 
-この監査が許可する除外は `EVMUpstreamOpcodePolicy.def` に明記されたものだけです。
-表現も明示的な review もない upstream opcode があれば command は失敗します。parser と
-drift diagnostic は CI で独立した Python unit coverage を持ち、次で実行できます。
+各 Git command は継承した `GIT_*`（`GIT_CONFIG_*` を含む）を最初に全消去し、監査済みの
+値だけを設定します。`GIT_CONFIG_NOSYSTEM` と `GIT_CONFIG_GLOBAL` は system/global
+config を、`GIT_ATTR_NOSYSTEM` と command scope の `core.attributesFile` は system/global
+attributes を、`core.hooksPath` は hooks を無効化します。想定外の private-repository config、graft、
+`objects/info/alternates`、`refs/replace` は検証失敗となり、
+`GIT_NO_REPLACE_OBJECTS` も replacement lookup を無効化します。
+
+probe は `params.Rules` の export 済み bool field をすべて反射し、各 fork で
+`LookupInstructionSet(params.Rules)` を呼んで 256 byte slot 全体を走査します。
+`EVMUpstreamOpcodePolicy.def` は typed historical/unscheduled-EOF exclusion と alias、
+`EVMUpstreamSemanticsPolicy.def` は closed Rules inventory、fork mapping、base-stack
+exception、EIP-8024 dynamic opcode family の宣言をそれぞれ所有します。
+
+CI は `dev` への push、pull request、manual dispatch、daily schedule でだけ同じ live
+audit を実行します。Go probe は対応する各 fork で公開 API
+`LookupInstructionSet(params.Rules)` を呼びます。`EVMUpstreamOpcodePolicy.def` は name
+alias と review 済み historical/unscheduled-EOF exclusion を、直交する
+`EVMUpstreamSemanticsPolicy.def` は fork rule、stack semantics 例外、EIP-8024 dynamic opcode
+family の membership/activation を所有します。
+closed manifest は正確な revision、fork activation、byte/name、`base_min_stack`、
+`net_stack_delta` を検査し、未知または重複した field、fork、name、byte を拒否します。
+allocation は `operation.undefined` だけで判定し、`HasCost` は defined zero-cost operation
+でも false なので cost cross-check にのみ使います。すべての `defined && !HasCost` slot は
+宣言した fork から `EVM_GETH_ACTIVE_WITHOUT_COST` と正確に一致する必要があります。cost を
+持つ undefined slot、未レビューの defined slot、marker の消失は fail closed です。
+CI 失敗時には正確な revision、manifest、log が artifact になります。parser と drift
+diagnostic には独立した Python unit coverage があります。
+
+`EVMUpstreamSemanticsPolicy.def` は export された boolean `params.Rules` field ごとに唯一の
+`EVM_GETH_RULE_FIELD` を置き、`MappedForkSelector`、`NoOpcodeAllocation`、
+`ExcludedSelectorExpectedError` のいずれかに分類します。probe は field を 1 つだけ有効にして
+`LookupInstructionSet` を呼びます。最初の 2 category は nil error、3 番目は error でなければ
+ならず、返された完全な 256-slot opcode/stack fingerprint は `ExpectedFork` と一致する必要が
+あります。`IsEIP155`、`IsEIP2929`、`IsEIP4762`、`IsPetersburg` は現在 Frontier fingerprint
+の no-allocation fields、`IsUBT` は error と Cancun fingerprint が期待値です。
+
+`EVMEIP8024Immediates.def` は引き続き single/pair の各 byte に対する immediate semantics の
+唯一の authority で、各 256 byte を明示分類します。production は直接 lookup します。live
+audit は `go -overlay` で `core/vm` に virtual wrapper を注入して本物の private
+`operation.execute` handler を得て、active な table/family ごとに `DUPN`、`SWAPN`、
+`EXCHANGE` の `3x256` candidates と `3 missing-operand cases` を実行します。acceptance、PC
+delta、marker-derived operand/stack mutation、valid case の正確な underflow、operand 欠落時の
+`0x00` を検査し、Python は formula を再記述せず同じ `.def` と比較します。
+
+`EVM_HARDFORK_LATEST` の canonical target は 1 つだけです。closed
+`EVMUpstreamForkAliases.def` は Prague→Pectra、Osaka と BPO1〜BPO5→Fusaka、
+Paris/Shanghai/Cancun/Amsterdam/Bogota→自身を定義し、未知名は fail closed です。記録した
+1 つの `audit_unix_time` で `MainnetChainConfig.LatestFork(time)`（NeverD latest と一致必須）
+と `LatestFork(max uint64)` の alias/probed canonical fork を検査します。probe は実在する
+`canonical fork jump tables` と `mainnet active/scheduled jump tables` を列挙して一表ずつ完全
+比較し、dynamic family または fork の `inactive` 状態を明示的に記録します。一部の
+table/family/probe しか得られない `partial` result は受理せず fail closed です。manifest は
+`authority=official-fresh-fetch`、公式 URL、要求 `HEAD`、SHA を固定
+します。public CLI に remote/ref/toolchain bypass はなく、probe は `GOTOOLCHAIN=local` です。
+
+Go の request/response と Python controller は hostile metadata を allocate する前に
+`input/collection/string hard limits` を適用し、上限を超える input、array、string を fail
+closed にします。別途 `bounded diagnostic output` を強制し、長すぎる表示には full-content
+`digest` と `explicit truncated marker` が含まれます。すべての command に bounded child output
+と共通 deadline が適用され、timeout または output-limit 違反は `process group` 全体と子孫
+process tree を kill して pipe を drain します。すべての `.def parser` は unparsed、unknown、
+duplicate、missing、out-of-range の entry を拒否して fail closed します。
+
+現在の schema-3 live receipt は `schema_version=3`、
+`audit_unix_time=1787534659`、`authority=official-fresh-fetch`、
+`remote=https://github.com/ethereum/go-ethereum.git`、`ref=HEAD`、revision
+`02b73d4ea7181464175e0a6cbecc0a3a2655a562`、local `Go 1.24.0`、
+`stack_limit=1024`、`diagnostics=[]` を記録しています。`21 fork tables` と
+`20 Rules probes` を対象とし、分類は `15 mapped/4 no-op/1 expected-error` です。2 つの
+`mainnet active/scheduled` record は `upstream BPO2` を報告し、closed map はこれを
+`NeverD Fusaka` に対応させます。EIP-8024 の `23 table targets` のうち active なのは
+`Amsterdam/Bogota` だけで、`1536 candidate executions` と `6 missing-operand cases` を
+生成します。`three handler symbols` は 2 つの active target 間で一致します。Python audit は
+`67/67`、`C++ Opcode 10/10` です。macOS の実 run は `sandbox-exec` 内で成功し、最後の
+`go run` は offline でした。Linux workflow は `bubblewrap` を必須にします。
+
+すべての Go stage、すなわち `go env`、`go mod init`、`go mod edit`、`go mod tidy`、
+`go mod download`、`go run` は `capability-root` filesystem sandbox を通過する必要があります。
+read capability は private probe、fresh geth、検証済み `resolved GOROOT`、必要な system runtime
+root の正確な集合だけを含み、書き込み可能なのは isolated environment root だけです。network は
+必要な dependency stage にのみ許可され、final run は offline です。test は
+`host HOME/workspace` に sentinel を置き、access が拒否され、どの output にも内容が現れないことを
+要求します。Linux は `/` broad bind を持たない同型の `bubblewrap` policy を検証します。
 
 ```bash
 python3 -m unittest -v scripts.tests.test_audit_evm_opcode_metadata
 ```
+
+CMake に登録された 11 個の EVM test target は次のとおりです。
+
+```text
+NeverDEVMOpcodeTests
+NeverDEVMBytecodeTests
+NeverDEVMLoaderTests
+NeverDEVMABITests
+NeverDEVMAnalyzerTests
+NeverDEVMDecoderPropertyTests
+NeverDEVMProxyTests
+NeverDEVMCallTests
+NeverDEVMSemanticTests
+NeverDEVMEmitterTests
+NeverDEVMIntegrationTests
+```
+
+`NeverDEVMDecoderPropertyTests` は decoder が変わる各 fork で全 2-byte input を網羅し、
+完全な decode と正確な `JUMPDEST` boundary を比較します。さらに長さを制限した決定的な
+hostile input を全 fork に通します。
 
 EVM control-flow の変更では、まず fixed-point と height-domain contract を実行します。
 
@@ -123,11 +222,10 @@ build/bin/NeverDEVMAnalyzerTests \
 ```
 
 これらの case は block をまたぐ internal return、有限 multi-target merge、loop
-convergence と deterministic edge ordering、path-dependent stack height、bounded
-widening、correlation による Cartesian over-approximation、unknown jump、exact invalid
-target、strict/relaxed の stack fault を網羅します。続けて 7 つすべての EVM binary と
-upstream metadata audit を実行してください。CFG の変更は analyzer の局所的な形が正しく
-ても emitter と integration に影響し得ます。
+convergence、deterministic edge ordering、path-sensitive whole-stack lane、correlation
+preservation、unknown jump、exact invalid target、fail-loud budget、strict/relaxed stack
+fault を網羅します。`MayReachable` は CFG candidate のみで確定 semantic fact を作れません。
+続けて 11 個すべての EVM target と live upstream audit を実行してください。
 
 MedIR/HighIR dataflow の変更では、constant-phi、selector、typed-operand、
 malformed-graph、deep-chain contract も実行します。
@@ -288,7 +386,74 @@ storage、instruction trace count を比較します。別の raw-bytecode corpu
 EVM 上で pre-Fusaka ALU、calldata/memory copy、overlapping `MCOPY`、Keccak、return
 data を実行します。
 
-`NeverDEVMOpcodeTests` は metadata architecture も強制します。150 opcode の
+Low/Med のテストは path-sensitive whole-stack execution lane と phi lane identity を
+維持し、`MaxAbstractInstructionTransfers` を含む budget exhaustion を hard error にします。
+strict は証明済み `Reachable` lane 上の unknown/fork-inactive opcode だけを拒否し、
+`MayReachable` は確定 fact を生成しません。HighIR の selector/receive/fallback は root
+lane と成功 terminal に制限されます。共有 selector は独立した standard evidence では
+なく、standard ごとの `KnownFunctionVariantInfo` と成功 terminal の厳密な return shape
+が一致したときだけ variant と return list を選びます。
+
+interpreter は opcode 固有の side effect より前に typed stack preflight を実行します。
+`EVMForkSemantics.def` は byte `0x44` を Paris より前の `DIFFICULTY`、Paris 以降の
+`PREVRANDAO` と定義します。`REVERT`、fault、step limit、resource exhaustion は state を
+rollback します。allocation failure は `ExecutionFaultKind::ResourceExhausted` であり、
+entry snapshot 自体が作れなければ `HasPersistentStateSnapshot` は false で commit 不能です。
+
+### EVM public boundary と budget regression
+
+public API test は canonical
+`Code`/`Fork`/`Instructions`/`JumpDestinations` と、すべての LowIR table、range、ID、lane、edge
+reference を個別に改ざんします。`execute` は instruction lookup 前に `llvm::Error` を返し、
+`lowerToMedIR` は index 構築や入力比例 allocation の前に、完全な malformed/over-budget LowIR
+を拒否しなければなりません。`lowerToMedIR` については option validation、resource validation、
+structure validation の順序を強制し、field ごとの `canonical decode replay` と
+`lowerCanonicalLowToMedIR` より前に完了させます。public HighIR recovery は外部 LowIR/MedIR を
+replay 検証し、`analyze` だけが自身の canonical IR に `lowerCanonicalLowToMedIR` と
+`recoverCanonicalHighIR` を使用できます。これにより recursive/duplicate replay を避けつつ、
+すべての HighIR option/resource budget を引き続き適用します。
+interpreter は `EVMInterpreterLimits.def` の全 limit を exact
+boundary/+1 で検証します。`MaxSteps` は専用 `StepLimit`、`MaxMemoryBytes`、
+`MaxTraceEntries`、`MaxLogEntries`、aggregate `MaxLogDataBytes`、runtime
+`MaxPersistentStateEntries` の exhaustion は `ResourceExhausted` で transaction effect を
+rollback します。初期 aggregate `MaxHostReturnDataBytes` または persistent state の超過は API
+error です。初期 `MaxCalldataBytes`、`BlockHashes`/`Balances`/`CodeHashes`/`ExternalCode`/
+`BlobHashes` 全体の aggregate `MaxHostEnvironmentEntries`、aggregate
+`MaxExternalCodeBytes` も API error です。`const execute preflight` は environment、snapshot、
+result の copy より前にこれらを拒否します。return-data `ArrayRef` view と sort 済み table の
+`lower_bound` lookup も、buffer copy や PC map なしで検証します。
+
+独立した LowIR boundary test は aggregate diagnostic limit
+`MaxLowDiagnostics` と `MaxLowDiagnosticBytes` を検証し、linear decode/CFG construction が
+正確な count/最終 bytes を precharge して zero を拒否することを確認します。
+HighIR safety test は lane ごとの sort 済み `Any/Exact/Excluded` domain、equality
+match/exclusion、raw `XOR(selector, constant)` の false-edge match/true-edge mismatch、zero
+word/calldata size/call value refinement、unknown condition の fail-closed を網羅します。
+さらに `EQ` と `raw XOR` の両方の back-jump regression を検証し、別の function によって
+`arguments`、`mutability`、`return shape`、`region` が汚染されないことを保証します。
+`EVMAnalysisLimits.def` の `MaxHighDispatchCandidates`、aggregate
+`MaxHighRecoveredArguments`、`MaxHighDiagnostics`、`MaxHighDiagnosticBytes`、
+`MaxHighReferenceVisits`、`MaxHighMemoryTransferCells`、`MaxHighMemoryValueVisits` は exact
+boundary/-1 で検証されます。fixed malformed diagnostic を含む全 output diagnostic は allocation
+前に count と最終 bytes を課金しなければなりません。LowIR と HighIR の diagnostic budget は
+独立に検証し、default root CFG region は block-PC list の reserve/copy より前に
+`MaxHighRegionBlockReferences` を課金しなければなりません。
+外部 CALL/CREATE result は nondeterministic host outcome として 2 本の正確な CFG edge を
+検査するため ERC-1167 fallback recovery が保たれます。読めない selector condition は Unknown
+のままで、fallback/function fact を作れません。
+
+control-flow test は `EVMLowFaultKinds.def` の `InvalidJumpDestination` を
+`end-of-code JUMPI` に適用します。invalid target かつ確実に true なら successful tail はなく
+definite fault、確実に false なら成功です。unknown は成功し得る false path を残し、lane 全体を
+definite fault としません。
+
+ABI test は `EVMABIParserLimits.def` の grammar boundary と `EVMABITableLimits.def` の public
+table cardinality/text boundary を exact limit/+1 で検証します。また invalid
+kind/standard/evidence enum、metadata mismatch、noncanonical signature/return list、誤って
+independent とされた shared selector、dangling/duplicate variant、word width でない event-topic
+`APInt` を indexed selector/sorted topic lookup より前に拒否します。
+
+`NeverDEVMOpcodeTests` は metadata architecture も強制します。割り当て済み opcode の
 encoding/typed-value roundtrip、family boundary、hardfork alias、derived stack/host
 maxima を検証します。
 
@@ -354,7 +519,9 @@ ctest --test-dir build-release --build-config Release \
 # すべての重点 EVM ターゲット/ケース
 cmake --build build-release --target \
   NeverDEVMOpcodeTests NeverDEVMBytecodeTests NeverDEVMLoaderTests \
-  NeverDEVMAnalyzerTests NeverDEVMSemanticTests NeverDEVMEmitterTests \
+  NeverDEVMABITests NeverDEVMAnalyzerTests NeverDEVMDecoderPropertyTests \
+  NeverDEVMProxyTests NeverDEVMCallTests NeverDEVMSemanticTests \
+  NeverDEVMEmitterTests \
   NeverDEVMIntegrationTests --parallel 4
 ctest --test-dir build-release --build-config Release \
   -R 'EVM' --output-on-failure --parallel 4

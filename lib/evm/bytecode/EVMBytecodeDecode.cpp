@@ -36,12 +36,6 @@ std::optional<llvm::StringRef> bytecodeObject(const llvm::json::Value *Value) {
   return std::nullopt;
 }
 
-bool hasHexPayload(llvm::StringRef Text) {
-  Text = Text.trim();
-  (void)(Text.consume_front("0x") || Text.consume_front("0X"));
-  return !Text.trim().empty();
-}
-
 struct ArtifactCandidate {
   std::string Contract;
   llvm::StringRef Text;
@@ -55,17 +49,16 @@ void appendContractCandidate(std::vector<ArtifactCandidate> &Candidates,
   const llvm::json::Object &Container = EVM ? *EVM : Object;
 
   if (auto Text = bytecodeObject(Container.get(kArtifactDeployedBytecodeKey));
-      Text && hasHexPayload(*Text)) {
+      Text) {
     Candidates.push_back({Contract.str(), *Text, true});
     return;
   }
   if (auto Text = bytecodeObject(Container.get(kArtifactRuntimeBytecodeKey));
-      Text && hasHexPayload(*Text)) {
+      Text) {
     Candidates.push_back({Contract.str(), *Text, true});
     return;
   }
-  if (auto Text = bytecodeObject(Container.get(kArtifactBytecodeKey));
-      Text && hasHexPayload(*Text))
+  if (auto Text = bytecodeObject(Container.get(kArtifactBytecodeKey)); Text)
     Candidates.push_back({Contract.str(), *Text, false});
 }
 
@@ -138,10 +131,9 @@ decodeHexBytecode(llvm::StringRef Content, llvm::StringRef SourceName) {
       Compact.push_back(C);
 
   llvm::StringRef Text(Compact);
-  if (Text.consume_front("0x") || Text.consume_front("0X")) {
-    // Prefix consumed.
-  }
-  if (Text.empty())
+  const bool HasExplicitPrefix =
+      Text.consume_front("0x") || Text.consume_front("0X");
+  if (Text.empty() && !HasExplicitPrefix)
     return inputError(SourceName, "empty bytecode");
   if (Text.contains("__") || Text.contains('$'))
     return inputError(SourceName, "unresolved library placeholder in bytecode");
@@ -173,6 +165,11 @@ decodeArtifactBytecode(llvm::StringRef Content,
   auto Candidate = selectArtifactBytecode(*Parsed, Options, SourceName);
   if (!Candidate)
     return Candidate.takeError();
+  // solc represents an interface or abstract contract's explicitly present
+  // runtime as an empty object string. Field presence makes that different
+  // from a missing standalone hex input; whitespace is still malformed.
+  if (Candidate->Text.empty())
+    return DecodedArtifact{{}, Candidate->IsRuntime};
   auto Code = decodeHexBytecode(Candidate->Text, SourceName);
   if (!Code)
     return Code.takeError();

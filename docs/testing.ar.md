@@ -42,7 +42,7 @@ cmake --build build-release --parallel 4
 | `unittests/safety` | `NeverDSafetyTests`، `NeverDSafetyIntegrationTests` | كتالوج المصارف، وأولوية الهوية، ومرشح الوسائط المسبق، وصيد فيضان النسخ، وتدقيق عمر الكومة، ومصفوفة إلزامية من ست خلايا PE/ELF/Mach-O × x86-64/AArch64 |
 | `unittests/lift` | `NeverDLiftTests` | أشكال LowIR لـ decoder/lifter، ومراحل IR، وloader، وrelocation، وfixtures الصيغ، وإعادة التجميع، ومسارات patch الممثلة |
 | معظم ملفات `unittests/semantic` | `NeverDSemanticTests` | دلالات تفاضلية للتعليمات وABI والتحكم وتعابير C وlift/recompile |
-| `unittests/evm` | `NeverDEVMOpcodeTests` و`NeverDEVMBytecodeTests` و`NeverDEVMLoaderTests` و`NeverDEVMAnalyzerTests` و`NeverDEVMSemanticTests` و`NeverDEVMEmitterTests` و`NeverDEVMIntegrationTests` | metadata للـhardfork وتطبيع الإدخال وCFG/SSA والاستعادة ودلالات interpreter وتنفيذ LLVM/C/Solidity التفاضلي وتوجيه API العامة |
+| `unittests/evm` | `NeverDEVMOpcodeTests` و`NeverDEVMBytecodeTests` و`NeverDEVMLoaderTests` و`NeverDEVMABITests` و`NeverDEVMAnalyzerTests` و`NeverDEVMDecoderPropertyTests` و`NeverDEVMProxyTests` و`NeverDEVMCallTests` و`NeverDEVMSemanticTests` و`NeverDEVMEmitterTests` و`NeverDEVMIntegrationTests` | metadata للـhardfork وتطبيع الإدخال وغموض ABI/signature وCFG/SSA والاستعادة واستنفاد حدود decoder والمدخلات العدائية وحقائق proxy/call ودلالات interpreter وتنفيذ LLVM/C/Solidity التفاضلي وتوجيه API العامة |
 | `unittests/sbf` | `NeverDSBFMetadataTests`، `NeverDSBFProgramImageTests`، `NeverDSBFLoaderTests`، `NeverDSBFAnalyzerTests`، `NeverDSBFVerifierTests`، `NeverDSBFISAConformanceTests`، `NeverDSBFAgaveConformanceTests`، `NeverDSBFSemanticTests`، `NeverDSBFEmitterTests`، `NeverDSBFLLVMEmitterTests`، `NeverDSBFLLVMDifferentialTests`، `NeverDSBFSourceDifferentialTests`، `NeverDSBFMalformedCorpusTests`، `NeverDSBFUpstreamConformanceTests`، `NeverDSBFExternalOracleTests`، `NeverDSBFSolanaModelTests`، `NeverDSBFIntegrationTests` | بيانات v0-v4 الوصفية وتخطيطات ELF، وسلوك التحقق والتحميل الصارم، و23 من عناصر ELF المثبتة، وoracle الرسمي المنفصل، وتغطية opcode الشاملة، والمدخلات العدائية، وCFG/الاستعادة، وفروق LLVM/C/Rust المنفّذة |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | تكافؤ إعادة الكتابة/التشويش عبر أربع ISA وثلاث صيغ كائنات |
 | ملفات التحويل المحددة في `unittests/semantic` | `NeverDSwitchXformTests` و`NeverDIndCallXformTests` و`NeverDCFGLoopXformTests` و`NeverDTwoTableXformTests` و`NeverDAvxUpperXformTests` | مجسات سريعة الربط منفصلة عن الثنائي الدلالي الكبير |
@@ -86,32 +86,127 @@ cmake --build build-corpus --target check-neverd-corpus --parallel 4
 بناءً توقف بصمت عن قراءة الـcorpus هو انحدار لا يستطيع أي اختبار التقاطه —
 فالاختبار نفسه هو ما اختفى.
 
-ينفذ تدقيق opcodes ‏EVM في كل تشغيل `git fetch` سطحيًا للـremote `HEAD` من
-[مستودع go-ethereum الرسمي](https://github.com/ethereum/go-ethereum)، ثم يبلغ
-عن commit الدقيق الذي دُقق. يعيد استخدام bare cache المتجاهلة في
-`build/evm-opcode-audit/go-ethereum.git`، لكنه يحدّثها قبل قراءة inventory المغلق
-للـopcodes وتعيينات bytes:
+يُشغّل تدقيق opcodes ‏EVM الحي بالأمر التالي:
 
 ```bash
 python3 scripts/audit_evm_opcode_metadata.py
 ```
 
-يشغل CI التدقيق الحي نفسه عند كل push وpull request وعند التشغيل اليدوي ومرة
-يوميًا، لاكتشاف upstream drift حتى إن لم يتغير NeverD. للاختبار offline أو إعادة
-إنتاج نسخة تاريخية، اختر checkout موجودة صراحة:
+يفرض المسار القياسي محليًا وفي CI تنفيذ
+`git fetch --depth=1 --force` من URL الرسمي
+`https://github.com/ethereum/go-ethereum.git`، ولا يفحص في worktree مؤقت detached
+إلا SHA الدقيق الذي جُلب للتو من remote `HEAD` للـdefault branch. كل تشغيل يستخدم
+bare repository خاصًا مؤقتًا باسم غير متوقع، ويحفظ authority ref
+الذي أعاده fetch والـSHA الدقيق المحلول منه طوال عمر worktree الـdetached، ثم
+يدمرهما معًا. لا يوجد Git repository أو cache دائم مشترك. ليست
+`local_docs` ولا checkout موجود ولا submodule مسارات تدقيق؛ إذ يصبح pin
+الـsubmodule قديمًا تحديدًا عند الحاجة إلى كشف live drift.
 
-```bash
-python3 scripts/audit_evm_opcode_metadata.py \
-  --geth-root /path/to/go-ethereum
-```
+تحذف كل أوامر Git أولًا جميع `GIT_*` الموروثة، ومنها `GIT_CONFIG_*`، ثم تثبت
+القيم المدققة فقط. يعطل `GIT_CONFIG_NOSYSTEM` و`GIT_CONFIG_GLOBAL` إعدادات
+system/global؛ ويعطل `GIT_ATTR_NOSYSTEM` و`core.attributesFile` على مستوى الأمر
+attributes النظام والعامة، كما يعطل `core.hooksPath` hooks. يفشل الفحص عند إعداد غير متوقع في
+الـrepository الخاص أو
+grafts أو `objects/info/alternates` أو `refs/replace`، ويعطل
+`GIT_NO_REPLACE_OBJECTS` replacement lookup.
 
-لا يسمح التدقيق إلا بالاستثناءات المسماة في `EVMUpstreamOpcodePolicy.def`؛ ويفشل
-الأمر إذا لم يكن opcode من upstream ممثلًا أو مراجعًا صراحة. للـparser وتشخيص
-الانحراف تغطية unit مستقلة في CI، ويمكن تشغيلها عبر:
+يعكس probe كل حقول bool المصدرة في `params.Rules`،
+ويستدعي `LookupInstructionSet(params.Rules)` ويفحص كل 256 slots. يملك
+`EVMUpstreamOpcodePolicy.def` aliases وtyped exclusions التاريخية/EOF غير
+المجدولة؛ ويملك `EVMUpstreamSemanticsPolicy.def` inventory الـRules المغلق وfork
+mappings وbase-stack exceptions وعائلات dynamic-immediate.
+
+يشغل CI التدقيق الحي نفسه فقط عند push إلى `dev` وpull request والتشغيل اليدوي
+والجدول اليومي. يستدعي Go probe الواجهة العامة
+`LookupInstructionSet(params.Rules)` لكل fork مربوط. يملك
+لا تعرض CLI العامة سوى `--manifest-output`؛ ويستخدم manifest المغلق `schema 3`
+ولا يسمح باختيار source أوref أوcheckout أوtoolchain.
+`EVMUpstreamOpcodePolicy.def` aliases والاستثناءات التاريخية/EOF غير المجدولة المراجعة،
+بينما يملك `EVMUpstreamSemanticsPolicy.def` المستقل قواعد forks واستثناءات stack
+semantics. يفحص manifest المغلق revision الدقيقة وactivation وbyte/name و
+`base_min_stack` و`net_stack_delta`، ويرفض fields وforks والأسماء والbytes المجهولة
+أو المكررة. يحدد probe allocation من `operation.undefined` وحده؛ و`HasCost` مجرد
+فحص متقاطع للكلفة لأن العملية المعرّفة صفرية الكلفة تعيد false أيضًا. يجب أن
+يطابق كل `defined && !HasCost` ‏slot تصريح `EVM_GETH_ACTIVE_WITHOUT_COST` تمامًا
+من fork التفعيل المحدد؛ ويفشل undefined slot ذو كلفة أو defined slot غير مراجع
+أو اختفاء marker بشكل مغلق. تفشل كذلك declarations المفقودة أوخارج النطاق أوغير
+المستهلكة نحويًا؛ فكل `.def parser` يرفض policy ‏`partial`. عند فشل CI تُرفع
+revision وmanifest وlog كـartifact. للـparser وتشخيص الانحراف تغطية unit مستقلة:
+
+يصنّف `EVMUpstreamSemanticsPolicy.def` كل boolean field مصدّر في `params.Rules`
+بسجل `EVM_GETH_RULE_FIELD` واحد: `MappedForkSelector` أو `NoOpcodeAllocation` أو
+`ExcludedSelectorExpectedError`. يفعّل probe كل field منفردًا عبر
+`LookupInstructionSet`؛ يجب أن يعيد الصنفان الأولان nil error والثالث error، وأن
+تطابق fingerprint الكاملة لـ256 opcode/stack slots قيمة `ExpectedFork`.
+الحقول `IsEIP155` و`IsEIP2929` و`IsEIP4762` و`IsPetersburg` بلا allocation وتطابق
+Frontier؛ أما `IsUBT` فيجب أن يفشل ويطابق Cancun.
+
+يصرح `EVMUpstreamSemanticsPolicy.def` بعائلات opcodes الديناميكية EIP-8024 ونوع
+العملية وstack delta الصالح، بينما يملك `EVMEIP8024Immediates.def` فك immediate
+المنفصل ويصنف 256 byte من single/pair. عبر `go -overlay` يحصل التدقيق على private
+handlers الحقيقية `operation.execute`، ويمر على `canonical fork jump tables` و
+`mainnet active/scheduled jump tables` جدولًا بجدول. يسجل العائلة `inactive`
+ويرفض `partial`. يختبر كل جدول نشط `DUPN` و`SWAPN` و`EXCHANGE` مع كل immediate (`3x256`)
+و`3 missing-operand cases` مقابل المصادر التصريحية نفسها.
+
+لـ`EVM_HARDFORK_LATEST` target canonical واحد. يربط
+`EVMUpstreamForkAliases.def` المغلق Prague→Pectra وOsaka وBPO1–BPO5→Fusaka، وتعود
+Paris/Shanghai/Cancun/Amsterdam/Bogota إلى نفسها؛ وتفشل الأسماء المجهولة مغلقًا.
+تقود قيمة `audit_unix_time` المسجلة فحص `MainnetChainConfig.LatestFork(time)`
+(يجب أن يساوي NeverD latest) وفحص alias/probe لـ`LatestFork(max uint64)`؛ وتقارن
+مجموعتا التعليمات كاملتين. يثبت manifest ‏`authority=official-fresh-fetch` وURL الرسمي
+و`HEAD` وSHA. يستخدم probe ‏`GOTOOLCHAIN=local`.
+
+يفرض Go probe وPython controller ‏`input/collection/string hard limits`؛ فتفشل
+المدخلات أوالمجموعات أوالنصوص الضخمة مغلقًا. أما
+`bounded diagnostic output` فيرفق بالعرض الطويل `digest` كامل المحتوى و
+`explicit truncated marker`. يطبق على كل child خرج وdeadline محدودان؛ وعند
+التجاوز تُقتل `process group` كاملة/process tree وتُصرّف pipes.
+
+تسجل وصلة schema 3 الحالية `schema_version=3` و
+`audit_unix_time=1787534659` و`authority=official-fresh-fetch` و
+`remote=https://github.com/ethereum/go-ethereum.git` و`ref=HEAD` وrevision
+`02b73d4ea7181464175e0a6cbecc0a3a2655a562` و`Go 1.24.0` محلية و
+`stack_limit=1024` و`diagnostics=[]`. تغطي `21 fork tables` و`20 Rules probes`
+بتصنيف `15 mapped/4 no-op/1 expected-error`. يسمي سجلا
+`mainnet active/scheduled` ‏`upstream BPO2` المربوط مغلقًا بـ`NeverD Fusaka`.
+ومن `23 table targets` لا ينشط إلا `Amsterdam/Bogota`، بنتيجة
+`1536 candidate executions` و`6 missing-operand cases`. وتتطابق
+`three handler symbols` بين الهدفين النشطين. نجح Python audit ‏`67/67` و
+`C++ Opcode 10/10`. نجح macOS تحت `sandbox-exec` مع `go run` نهائي بلا شبكة،
+ويفرض Linux ‏`bubblewrap`.
+
+تمر كل مراحل Go، أي `go env` و`go mod init` و`go mod edit` و`go mod tidy` و
+`go mod download` و`go run`، عبر filesystem sandbox من نوع `capability-root`.
+تسمح القراءة فقط لـprivate probe وfresh geth و`resolved GOROOT` المتحقق منه وجذور
+system runtime المطلوبة بدقة، وتسمح الكتابة فقط في isolated environment roots.
+تمنح الشبكة لمراحل dependencies التي تحتاجها وحدها ويبقى run النهائي offline.
+تثبت الاختبارات أن sentinels في `host HOME/workspace` مرفوضة وأن محتواها لا يظهر
+في output. ويطابق Linux هذه السياسة بـ`bubblewrap` من دون `/` broad bind.
 
 ```bash
 python3 -m unittest -v scripts.tests.test_audit_evm_opcode_metadata
 ```
+
+أهداف اختبار EVM الأحد عشر المسجلة حاليًا في CMake هي:
+
+```text
+NeverDEVMOpcodeTests
+NeverDEVMBytecodeTests
+NeverDEVMLoaderTests
+NeverDEVMABITests
+NeverDEVMAnalyzerTests
+NeverDEVMDecoderPropertyTests
+NeverDEVMProxyTests
+NeverDEVMCallTests
+NeverDEVMSemanticTests
+NeverDEVMEmitterTests
+NeverDEVMIntegrationTests
+```
+
+يستنفد `NeverDEVMDecoderPropertyTests` كل مدخلات البايتين في كل fork يغيّر
+decoder، ويقارن decode كاملًا وحدود `JUMPDEST` الدقيقة، ثم يمرر مدخلات عدائية
+حتمية محدودة الطول عبر كل forks.
 
 لتغييرات control flow في EVM، شغّل أولًا عقد fixed point وheight domain:
 
@@ -121,12 +216,11 @@ build/bin/NeverDEVMAnalyzerTests \
   --gtest_filter='EVMAnalyzer.StackHeightDomain*:EVMAnalyzer.WholeProgram*'
 ```
 
-تغطي هذه الحالات returns داخلية عابرة للـblocks وmerges محدودة متعددة الأهداف
-وتقارب loops وترتيب edges الحتمي وstack heights المعتمدة على المسار وwidening
-المحدود وCartesian over-approximation الناتجة عن correlation وunknown jumps
-والأهداف غير الصالحة الدقيقة وstack faults في الوضعين strict وrelaxed. بعدها
-شغّل ثنائيات EVM السبعة كلها مع تدقيق metadata upstream؛ فتغييرات CFG قد تؤثر
-في emitter وintegration حتى لو كان شكل analyzer المحلي صحيحًا.
+تغطي هذه الحالات returns عابرة للـblocks وmerges محدودة متعددة الأهداف وتقارب
+loops وترتيب edges الحتمي وwhole-stack lanes الحساسة للمسار وحفظ correlation و
+unknown jumps والأهداف غير الصالحة الدقيقة وfail-loud budgets وstack faults.
+لا يمثل `MayReachable` إلا مرشح CFG ولا ينتج حقيقة يقينية. بعدها شغّل أهداف EVM
+الأحد عشر كلها مع live upstream audit.
 
 ولتغييرات dataflow في MedIR/HighIR، شغّل أيضًا عقود constant-phi وselector
 وtyped-operand وmalformed-graph وdeep-chain:
@@ -280,7 +374,81 @@ build/bin/NeverDLanguageEHTests --gtest_filter='ObjC*'
 تعليمات trace. ويشغل corpus raw-bytecode مستقل ALU قبل Fusaka ونسخ calldata/
 memory و`MCOPY` المتداخل وKeccak وreturn data في EVM الأصلي لـAnvil.
 
-يفرض `NeverDEVMOpcodeTests` بنية metadata أيضًا: تدور كل 150 opcode بين encoding
+تحفظ اختبارات Low/Med ‏execution lanes لكامل stack الحساسة للـpath وهوية lane في
+phi؛ ويكون نفاد أي budget، ومنها `MaxAbstractInstructionTransfers`، hard error.
+لا يرفض strict opcode مجهولة أوfork-inactive إلا على lane ثبت أنها `Reachable`،
+ولا تنتج `MayReachable` حقائق مؤكدة. يقيد HighIR ‏selector/receive/fallback بالـroot
+lane والـterminals الناجحة. لا يمثل selector مشترك دليل standard مستقلًا؛ ولا
+تُختار variant وreturn list إلا من `KnownFunctionVariantInfo` الخاصة بالـstandard
+وبعد اتفاق كل terminals الناجحة على return shape الدقيقة.
+
+يجري interpreter ‏typed stack preflight قبل أي أثر خاص بالـopcode. يعرّف
+`EVMForkSemantics.def` البايت `0x44` بأنه `DIFFICULTY` قبل Paris و`PREVRANDAO`
+بدءًا من Paris. تعيد `REVERT` وfaults وstep limit ونفاد الموارد حالة transaction
+إلى snapshot. يكون فشل allocation من النوع
+`ExecutionFaultKind::ResourceExhausted`؛ وإذا تعذر حتى snapshot الدخول تكون
+`HasPersistentStateSnapshot` بالقيمة false ولا يمكن commit للنتيجة.
+
+### اختبارات انحدار حدود EVM العامة وميزانياتها
+
+تعبث اختبارات الـAPI العامة كلًا على حدة بالـ
+`Code`/`Fork`/`Instructions`/`JumpDestinations` القانونية وبكل table وrange وID
+وlane وedge reference في LowIR. يجب أن يعيد `execute` ‏`llvm::Error` قبل lookup
+التعليمات، وأن يرفض `lowerToMedIR` كامل LowIR الـmalformed أو المتجاوز للميزانية
+قبل بناء index أو تخصيص output متناسب مع input. وتفرض tests في `lowerToMedIR`
+ترتيب validation: options ثم resources ثم structure، وبعدها مقارنة field-by-field
+عبر `canonical decode replay` وقبل `lowerCanonicalLowToMedIR`. يعيد public HighIR
+recovery التحقق من LowIR/MedIR الخارجيين؛ ولا يستخدم
+`lowerCanonicalLowToMedIR` و`recoverCanonicalHighIR` على IR القانوني الخاص إلا
+`analyze`، بلا replay عودي أو مكرر ومع إبقاء HighIR option/resource budgets.
+ثم تختبر حالات الـinterpreter
+الحد الدقيق و+1 لكل حدود `EVMInterpreterLimits.def`: يحتفظ `MaxSteps` بـ
+`StepLimit` المخصص، بينما يعيد نفاد `MaxMemoryBytes` أو `MaxTraceEntries` أو
+`MaxLogEntries` أو aggregate ‏`MaxLogDataBytes` أو runtime
+`MaxPersistentStateEntries` القيمة `ResourceExhausted` مع rollback لتأثيرات
+المعاملة. يعد تجاوز aggregate أولي `MaxHostReturnDataBytes` أو persistent state
+خطأ API. كما تعد مجاوزة `MaxCalldataBytes` أو aggregate
+`MaxHostEnvironmentEntries` عبر `BlockHashes` و`Balances` و`CodeHashes` و
+`ExternalCode` و`BlobHashes`، أو aggregate `MaxExternalCodeBytes`، خطأ API.
+يرفضها `const execute preflight` قبل نسخ environment أو snapshot أو result. وتغطي
+الاختبارات views ‏return-data من `ArrayRef` وlookup ‏`lower_bound`
+في الجدول المرتب بلا نسخ buffer أو PC map.
+
+تغطي اختبارات LowIR المنفصلة عند الحد الدقيق ميزانيتي diagnostic الـaggregate
+`MaxLowDiagnostics` و`MaxLowDiagnosticBytes`: يحاسب linear decode وبناء CFG العدد
+الدقيق والبايتات النهائية مسبقًا ويرفضان الصفر.
+تغطي اختبارات أمان HighIR مجال `Any/Exact/Excluded` المرتب لكل lane، ومطابقة/
+استبعاد equality، ومطابقة false edge وmismatch ‏true edge في
+`XOR(selector, constant)` الخام، وتنقيح zero word/calldata size/call value،
+والإغلاق عند unknown condition. كما تختبر الحدود الدقيقة و-1 في
+`EVMAnalysisLimits.def`
+`MaxHighDispatchCandidates` والـaggregate `MaxHighRecoveredArguments` و
+`MaxHighDiagnostics` و`MaxHighDiagnosticBytes` و`MaxHighReferenceVisits` و
+`MaxHighMemoryTransferCells` و`MaxHighMemoryValueVisits` من
+`EVMAnalysisLimits.def`. ويجب أن يحاسب كل output diagnostic، بما فيه malformed
+diagnostic الثابت، العدد والبايتات النهائية قبل allocation.
+وتُختبر ميزانيتا diagnostic في LowIR وHighIR كل على حدة، ويجب أن تحاسب root CFG
+region الافتراضية `MaxHighRegionBlockReferences` قبل reserve أو نسخ block PC.
+تغطي regressions نطاق function كلا back-jump عبر `EQ` و`raw XOR` إلى dispatcher
+مشترك، وتثبت أن function أخرى لا تلوث `arguments` أو`mutability` أو
+`return shape` أو`region`، مع إبقاء shared bodies وtail calls قابلة للوصول.
+تختبر نتائج CALL/CREATE الخارجية كـhost outcomes غير حتمية على حافتي CFG الدقيقتين،
+فتبقى استعادة fallback في ERC-1167. ويظل selector condition غير المقروء Unknown ولا
+يمكنه اختلاق facts لـfallback أو function.
+
+تستمد اختبارات CFG ‏`InvalidJumpDestination` من `EVMLowFaultKinds.def` لحالة
+`end-of-code JUMPI`: true المؤكد إلى هدف غير صالح definite fault بلا successful
+tail، وfalse المؤكد ناجح، وunknown يحتفظ فقط بمسار false محتمل النجاح من دون وسم
+lane كاملة كـdefinite fault.
+
+تطبق اختبارات ABI حدود grammar من `EVMABIParserLimits.def` وحدود cardinality/text
+للجداول العامة من `EVMABITableLimits.def` عند الحد الدقيق و+1. كما ترفض
+kind/standard/evidence enums غير الصالحة وmetadata غير المتطابقة وsignature/return
+list غير القانونية وshared selector الموسوم independent خطأً وvariant المعلق أو
+المكرر وevent-topic ‏`APInt` غير بعرض word، قبل indexed selector أو sorted topic
+lookup.
+
+يفرض `NeverDEVMOpcodeTests` بنية metadata أيضًا: تدور كل opcode مخصصة بين encoding
 وtyped value، وتُختبر حدود العائلات وaliases للـhardfork، وتبقى maxima لعقد stack
 وhost arguments مشتقة بدل تكرارها في backends.
 
@@ -345,7 +513,9 @@ ctest --test-dir build-release --build-config Release \
 # جميع أهداف/حالات EVM المحددة
 cmake --build build-release --target \
   NeverDEVMOpcodeTests NeverDEVMBytecodeTests NeverDEVMLoaderTests \
-  NeverDEVMAnalyzerTests NeverDEVMSemanticTests NeverDEVMEmitterTests \
+  NeverDEVMABITests NeverDEVMAnalyzerTests NeverDEVMDecoderPropertyTests \
+  NeverDEVMProxyTests NeverDEVMCallTests NeverDEVMSemanticTests \
+  NeverDEVMEmitterTests \
   NeverDEVMIntegrationTests --parallel 4
 ctest --test-dir build-release --build-config Release \
   -R 'EVM' --output-on-failure --parallel 4

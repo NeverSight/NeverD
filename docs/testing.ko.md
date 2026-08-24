@@ -42,7 +42,7 @@ target 이름과 같은 CTest label을 지정합니다.
 | `unittests/safety` | `NeverDSafetyTests`, `NeverDSafetyIntegrationTests` | 싱크 카탈로그, 신원 우선순위, 인수 사전 필터, 복사 오버플로 헌트, 힙 수명 감사, 필수 PE/ELF/Mach-O × x86-64/AArch64 6셀 매트릭스 |
 | `unittests/lift` | `NeverDLiftTests` | Decoder/lifter LowIR 모양, IR 단계, loader, relocation, 포맷 fixture, 디컴파일, 대표 patch 흐름 |
 | `unittests/semantic`의 대부분 파일 | `NeverDSemanticTests` | 명령어, ABI, 제어 흐름, C 표현식, lift/recompile 차등 의미론 |
-| `unittests/evm` | `NeverDEVMOpcodeTests`, `NeverDEVMBytecodeTests`, `NeverDEVMLoaderTests`, `NeverDEVMAnalyzerTests`, `NeverDEVMSemanticTests`, `NeverDEVMEmitterTests`, `NeverDEVMIntegrationTests` | hardfork metadata, input normalization, CFG/SSA/recovery, interpreter semantics, LLVM/C/Solidity differential execution, public API routing |
+| `unittests/evm` | `NeverDEVMOpcodeTests`, `NeverDEVMBytecodeTests`, `NeverDEVMLoaderTests`, `NeverDEVMABITests`, `NeverDEVMAnalyzerTests`, `NeverDEVMDecoderPropertyTests`, `NeverDEVMProxyTests`, `NeverDEVMCallTests`, `NeverDEVMSemanticTests`, `NeverDEVMEmitterTests`, `NeverDEVMIntegrationTests` | hardfork metadata, input normalization, ABI/signature ambiguity, CFG/SSA/recovery, decoder boundary 전수 검사와 hostile input, proxy/call fact, interpreter semantics, LLVM/C/Solidity differential execution, public API routing |
 | `unittests/sbf` | `NeverDSBFMetadataTests`, `NeverDSBFProgramImageTests`, `NeverDSBFLoaderTests`, `NeverDSBFAnalyzerTests`, `NeverDSBFVerifierTests`, `NeverDSBFISAConformanceTests`, `NeverDSBFAgaveConformanceTests`, `NeverDSBFSemanticTests`, `NeverDSBFEmitterTests`, `NeverDSBFLLVMEmitterTests`, `NeverDSBFLLVMDifferentialTests`, `NeverDSBFSourceDifferentialTests`, `NeverDSBFMalformedCorpusTests`, `NeverDSBFUpstreamConformanceTests`, `NeverDSBFExternalOracleTests`, `NeverDSBFSolanaModelTests`, `NeverDSBFIntegrationTests` | v0-v4 메타데이터와 ELF 레이아웃, 엄격한 verifier/loader 동작, 고정된 ELF 아티팩트 23개, 독립 official oracle, 모든 opcode 가용성, 적대적 입력, CFG/복원, 실행된 LLVM/C/Rust 차분 |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | 네 ISA×세 object 포맷 재작성/난독화 동등성 |
 | `unittests/semantic`의 집중 변환 파일 | `NeverDSwitchXformTests`, `NeverDIndCallXformTests`, `NeverDCFGLoopXformTests`, `NeverDTwoTableXformTests`, `NeverDAvxUpperXformTests` | 큰 의미론 바이너리에서 분리한 빠른 재링크 probe |
@@ -86,32 +86,129 @@ corpus 실행은 나머지 두 호스트에 대해 아무것도 증명하지 않
 거부합니다. corpus를 조용히 읽지 않게 된 빌드는 어떤 테스트도 잡을 수 없는
 회귀이기 때문입니다. 사라진 것이 바로 그 테스트입니다.
 
-EVM opcode audit는 실행할 때마다 공식
-[go-ethereum repository](https://github.com/ethereum/go-ethereum)의 remote `HEAD`를 shallow
-`git fetch`하고 실제로 감사한 exact commit을 보고합니다. ignore되는 bare cache
-`build/evm-opcode-audit/go-ethereum.git`를 재사용하지만 closed opcode inventory와 byte
-assignment를 읽기 전에 항상 refresh합니다.
+live EVM opcode audit는 다음 명령으로 실행합니다.
 
 ```bash
 python3 scripts/audit_evm_opcode_metadata.py
 ```
 
-CI는 같은 live audit를 모든 push, pull request, manual dispatch, daily schedule에서 실행하여
-NeverD 변경이 없어도 upstream drift를 감지합니다. offline 또는 historical reproduction에는
-기존 checkout을 명시적으로 선택합니다.
+public CLI가 받는 유일한 option은 `--manifest-output`이며 remote/ref/toolchain override를 제공하지
+않습니다. 출력 manifest의 closed contract는 `schema 3`입니다.
 
-```bash
-python3 scripts/audit_evm_opcode_metadata.py \
-  --geth-root /path/to/go-ethereum
-```
+로컬과 CI의 표준 경로는 공식 `https://github.com/ethereum/go-ethereum.git`에
+`git fetch --depth=1 --force`를 실행해 default
+branch의 remote `HEAD`에서 방금 얻은 정확한 SHA만 detached worktree에서 검사합니다.
+실행마다 예측할 수 없는 이름의 private temporary bare repository를 쓰고, official fetch의
+authority ref와 exact SHA를 detached worktree 수명 동안 유지한 뒤 repository와 worktree를 함께
+폐기합니다. shared persistent Git repository나 cache는 없습니다. `local_docs`,
+기존 checkout, submodule은 감사 경로가 아니며, pin된 submodule은 live drift를 찾아야 할 때
+낡습니다.
 
-감사는 `EVMUpstreamOpcodePolicy.def`에 이름이 있는 제외만 허용합니다. 표현되지도 명시적으로
-검토되지도 않은 upstream opcode가 있으면 명령이 실패합니다. parser와 drift diagnostic은
-CI에서 독립적인 Python unit coverage를 가지며 다음과 같이 실행할 수 있습니다.
+각 Git command는 상속된 `GIT_*`를 먼저 전부 지우고(`GIT_CONFIG_*` 포함), 검토한 값만
+설정합니다. `GIT_CONFIG_NOSYSTEM`과 `GIT_CONFIG_GLOBAL`은 system/global config를,
+`GIT_ATTR_NOSYSTEM`과 command scope의 `core.attributesFile`은 system/global attributes를,
+`core.hooksPath`는 hooks를 끕니다. 예상 밖 private-repository config, graft,
+`objects/info/alternates`, `refs/replace`는 검증을 실패시키고,
+`GIT_NO_REPLACE_OBJECTS`도 replacement lookup을 비활성화합니다.
+
+probe는 `params.Rules`가 export한 모든 bool field를 반사하고 각 fork에서
+`LookupInstructionSet(params.Rules)`를 호출해 256 byte slot 전부를 스캔합니다.
+`EVMUpstreamOpcodePolicy.def`는 typed historical/unscheduled-EOF exclusion과 alias를,
+`EVMUpstreamSemanticsPolicy.def`는 closed Rules inventory, fork mapping, base-stack exception,
+EIP-8024 dynamic opcode family 선언을 각각 소유합니다.
+
+CI는 `dev` push, pull request, manual dispatch, daily schedule에서만 같은 live audit를
+실행합니다. Go probe는 매핑된 각 fork에서 공개 `LookupInstructionSet(params.Rules)` API를
+호출합니다. `EVMUpstreamOpcodePolicy.def`는 name alias와 검토된 historical/unscheduled-EOF
+exclusion을, 직교하는 `EVMUpstreamSemanticsPolicy.def`는 fork rule, stack semantics 예외,
+EIP-8024 dynamic opcode family의 membership/activation을 소유합니다. closed manifest는 정확한 revision, fork activation, byte/name,
+`base_min_stack`, `net_stack_delta`를 검사하며 알 수 없거나 중복된 field, fork, name, byte를
+거부합니다. allocation은 `operation.undefined`만으로 판정하고 `HasCost`는 defined zero-cost
+operation에도 false이므로 cost cross-check로만 씁니다. 모든 `defined && !HasCost` slot은
+선언된 fork부터 `EVM_GETH_ACTIVE_WITHOUT_COST`와 정확히 일치해야 합니다. cost가 있는 undefined
+slot, 검토하지 않은 defined slot, marker 소실은 fail closed입니다.
+CI 실패 시 정확한 revision, manifest, log가 artifact로 올라갑니다. parser와
+drift diagnostic에는 독립적인 Python unit coverage가 있습니다.
+
+`EVMUpstreamSemanticsPolicy.def`는 export된 boolean `params.Rules` field마다 정확히 하나의
+`EVM_GETH_RULE_FIELD`를 두고 `MappedForkSelector`, `NoOpcodeAllocation`,
+`ExcludedSelectorExpectedError`로 분류합니다. probe는 field 하나만 켜서 `LookupInstructionSet`을
+호출합니다. 앞의 두 category는 nil error, 세 번째는 error여야 하며 반환된 전체 256-slot
+opcode/stack fingerprint는 `ExpectedFork`와 일치해야 합니다. 현재 `IsEIP155`, `IsEIP2929`,
+`IsEIP4762`, `IsPetersburg`는 Frontier fingerprint인 no-allocation fields이고, `IsUBT`는 error와
+Cancun fingerprint가 기대값입니다.
+
+`EVMEIP8024Immediates.def`는 계속해서 single/pair의 각 byte에 대한 immediate semantics의 유일한
+authority이며, 각각 256개 byte 전부를 명시적으로 분류합니다. production은 직접 lookup합니다.
+live audit는 `go -overlay`로 `core/vm`에 virtual wrapper를 주입해 실제 private
+`operation.execute` handler를 얻고, active table/family마다 `DUPN`, `SWAPN`, `EXCHANGE`의
+`3x256` candidates와 `3 missing-operand cases`를 실행합니다. acceptance, PC delta,
+marker-derived operand/stack mutation, valid case의 정확한 underflow, operand 누락 시 `0x00`을
+확인하며 Python은 formula를 다시 쓰지 않고 같은 `.def`와 비교합니다.
+
+`EVM_HARDFORK_LATEST`의 canonical target은 하나뿐입니다. closed
+`EVMUpstreamForkAliases.def`는 Prague→Pectra, Osaka와 BPO1~BPO5→Fusaka,
+Paris/Shanghai/Cancun/Amsterdam/Bogota→자기 자신을 정의하며 알 수 없는 이름은 fail
+closed입니다. 기록된 하나의 `audit_unix_time`으로 `MainnetChainConfig.LatestFork(time)`
+(NeverD latest와 일치해야 함)와 `LatestFork(max uint64)`의 alias/probed canonical fork를
+검사합니다. probe는 실제 `canonical fork jump tables`와 `mainnet active/scheduled jump tables`를
+열거해 table별로 완전 비교하고 dynamic family 또는 fork의 `inactive` 상태도 명시적으로
+기록합니다. table/family/probe의 일부만 얻은 `partial` result는 받지 않고 fail closed입니다.
+manifest는 `authority=official-fresh-fetch`, 공식 URL,
+요청한 `HEAD`, SHA를 고정합니다. public CLI에 remote/ref/toolchain bypass는 없고 probe는
+`GOTOOLCHAIN=local`을 사용합니다.
+
+Go request/response와 Python controller는 hostile metadata를 allocate하기 전에
+`input/collection/string hard limits`를 적용하고 한도를 넘는 input, array, string을 fail
+closed합니다. 별도로 `bounded diagnostic output`을 강제하여 너무 긴 display에 full-content
+`digest`와 `explicit truncated marker`를 포함합니다. 모든 command에는 bounded child output과
+공통 deadline이 적용되며 timeout 또는 output-limit 위반은 전체 `process group`과 하위
+process tree를 kill하고 pipe를 drain합니다. 모든 `.def parser`는 unparsed, unknown, duplicate, missing,
+out-of-range entry를 거부하고 fail closed합니다.
+
+현재 schema-3 live receipt는 `schema_version=3`, `audit_unix_time=1787534659`,
+`authority=official-fresh-fetch`, `remote=https://github.com/ethereum/go-ethereum.git`,
+`ref=HEAD`, revision `02b73d4ea7181464175e0a6cbecc0a3a2655a562`, local `Go 1.24.0`,
+`stack_limit=1024`, `diagnostics=[]`를 기록합니다. `21 fork tables`와 `20 Rules probes`를
+다루며 분류는 `15 mapped/4 no-op/1 expected-error`입니다. 두 `mainnet active/scheduled`
+record는 모두 `upstream BPO2`를 보고하며 closed map으로 `NeverD Fusaka`에 대응됩니다.
+EIP-8024의 `23 table targets` 가운데 `Amsterdam/Bogota`만 active이며
+`1536 candidate executions`와 `6 missing-operand cases`를 생성합니다. `three handler symbols`는
+두 active target에서 일치합니다. Python audit는 `67/67`, `C++ Opcode 10/10`입니다. macOS 실제
+run은 `sandbox-exec` 안에서 성공했고 마지막 `go run`은 offline이었습니다. Linux workflow는
+`bubblewrap`을 강제합니다.
+
+모든 Go stage인 `go env`, `go mod init`, `go mod edit`, `go mod tidy`, `go mod download`,
+`go run`은 `capability-root` filesystem sandbox를 통과해야 합니다. read capability에는 private
+probe, fresh geth, 검증된 `resolved GOROOT`, 필요한 system runtime root의 정확한 집합만 포함되고
+isolated environment root만 쓸 수 있습니다. network는 필요한 dependency stage에만 허용되며 final
+run은 offline입니다. test는 `host HOME/workspace`에 sentinel을 놓고 접근이 거부되며 어떤 output에도
+그 내용이 나타나지 않음을 요구합니다. Linux는 `/` broad bind가 없는 동형의 `bubblewrap` policy를
+검증합니다.
 
 ```bash
 python3 -m unittest -v scripts.tests.test_audit_evm_opcode_metadata
 ```
+
+CMake에 등록된 EVM test target 11개는 다음과 같습니다.
+
+```text
+NeverDEVMOpcodeTests
+NeverDEVMBytecodeTests
+NeverDEVMLoaderTests
+NeverDEVMABITests
+NeverDEVMAnalyzerTests
+NeverDEVMDecoderPropertyTests
+NeverDEVMProxyTests
+NeverDEVMCallTests
+NeverDEVMSemanticTests
+NeverDEVMEmitterTests
+NeverDEVMIntegrationTests
+```
+
+`NeverDEVMDecoderPropertyTests`는 decoder가 달라지는 각 fork의 모든 2-byte input에 대해
+완전한 decode와 정확한 `JUMPDEST` boundary를 비교하고, 길이가 제한된 결정적 hostile input을
+모든 fork에 통과시킵니다.
 
 EVM control-flow 변경에서는 fixed-point 및 height-domain contract를 먼저 실행합니다.
 
@@ -121,11 +218,11 @@ build/bin/NeverDEVMAnalyzerTests \
   --gtest_filter='EVMAnalyzer.StackHeightDomain*:EVMAnalyzer.WholeProgram*'
 ```
 
-이 case들은 block을 가로지르는 internal return, finite multi-target merge, loop convergence와
-deterministic edge ordering, path-dependent stack height, bounded widening, correlation이 만든
-Cartesian over-approximation, unknown jump, exact invalid target, strict 및 relaxed stack fault를
-포함합니다. 이어서 EVM binary 일곱 개와 upstream metadata audit를 모두 실행하세요. CFG
-변경은 analyzer의 로컬 모양이 올바르더라도 emitter와 integration에 영향을 줄 수 있습니다.
+이 case들은 block을 가로지르는 internal return, finite multi-target merge, loop convergence,
+deterministic edge ordering, path-sensitive whole-stack lane, correlation preservation, unknown
+jump, exact invalid target, fail-loud budget, strict/relaxed stack fault를 포함합니다.
+`MayReachable`은 CFG candidate일 뿐 확정 semantic fact를 만들지 못합니다. 이어서 11개 EVM
+target과 live upstream audit를 모두 실행하세요.
 
 MedIR/HighIR dataflow 변경에서는 constant-phi, selector, typed-operand,
 malformed-graph, deep-chain contract도 실행합니다.
@@ -283,7 +380,71 @@ compile/execute하고 C23을 Clang으로 같은 host harness에 lower하며 `sol
 instruction trace count를 비교합니다. 별도 raw-bytecode corpus는 Anvil native EVM에서
 pre-Fusaka ALU, calldata/memory copy, overlapping `MCOPY`, Keccak, return data를 실행합니다.
 
-`NeverDEVMOpcodeTests`는 metadata architecture도 강제합니다. 150 opcode의
+Low/Med 테스트는 path-sensitive whole-stack execution lane과 phi lane identity를 보존하고
+`MaxAbstractInstructionTransfers`를 포함한 budget exhaustion을 hard error로 만듭니다.
+strict는 증명된 `Reachable` lane의 unknown/fork-inactive opcode만 거부하며
+`MayReachable`은 definite fact를 만들지 않습니다. HighIR의 selector/receive/fallback은 root
+lane과 성공 terminal로 제한됩니다. 공유 selector는 독립 standard evidence가 아니며,
+standard별 `KnownFunctionVariantInfo`와 성공 terminal의 정확한 return shape가 일치할 때만
+variant와 return list를 선택합니다.
+
+interpreter는 opcode별 side effect 전에 typed stack preflight를 수행합니다.
+`EVMForkSemantics.def`는 byte `0x44`를 Paris 이전의 `DIFFICULTY`, Paris부터의
+`PREVRANDAO`로 정의합니다. `REVERT`, fault, step limit, resource exhaustion은 state를
+rollback합니다. allocation failure는 `ExecutionFaultKind::ResourceExhausted`이고 entry
+snapshot 자체를 만들지 못하면 `HasPersistentStateSnapshot`은 false이며 commit할 수 없습니다.
+
+### EVM public boundary 및 budget regression
+
+public API test는 canonical
+`Code`/`Fork`/`Instructions`/`JumpDestinations`와 모든 LowIR table, range, ID, lane, edge
+reference를 각각 변조합니다. `execute`는 instruction lookup 전에 `llvm::Error`를 반환해야 하고,
+`lowerToMedIR`는 index 생성이나 입력 비례 allocation 전에 전체 malformed/over-budget LowIR를
+거부해야 합니다. `lowerToMedIR`는 option validation, resource validation, structure validation을
+이 순서로 수행하고 field별 `canonical decode replay` 및 `lowerCanonicalLowToMedIR`보다 먼저
+완료해야 합니다. public HighIR recovery는 외부 LowIR/MedIR를 replay 검증하며 `analyze`만 자체
+canonical IR에 `lowerCanonicalLowToMedIR`와 `recoverCanonicalHighIR`를 사용할 수 있습니다.
+따라서 recursive/duplicate replay를 피하면서 모든 HighIR option/resource budget을 계속 적용합니다.
+interpreter는 `EVMInterpreterLimits.def`의 모든 limit를 exact boundary/+1로
+검증합니다. `MaxSteps`는 전용 `StepLimit`를 유지하고, `MaxMemoryBytes`, `MaxTraceEntries`,
+`MaxLogEntries`, aggregate `MaxLogDataBytes`, runtime `MaxPersistentStateEntries` exhaustion은
+`ResourceExhausted`로 transaction effect를 rollback합니다. 초기 aggregate
+`MaxHostReturnDataBytes`나 persistent state 초과는 API error입니다. 초기 `MaxCalldataBytes`,
+`BlockHashes`/`Balances`/`CodeHashes`/`ExternalCode`/`BlobHashes` 전체의 aggregate
+`MaxHostEnvironmentEntries`, aggregate `MaxExternalCodeBytes`도 API error입니다.
+`const execute preflight`는 environment, snapshot, result copy 전에 이를 거부합니다. return-data
+`ArrayRef` view와 정렬 table의 `lower_bound` lookup도 buffer copy나 PC map 없이 검증합니다.
+
+별도의 LowIR boundary test는 aggregate diagnostic limit `MaxLowDiagnostics`와
+`MaxLowDiagnosticBytes`를 검증하며 linear decode/CFG construction이 정확한 count/final byte를
+precharge하고 zero를 거부하는지 확인합니다.
+HighIR safety test는 lane별 정렬 `Any/Exact/Excluded` domain, equality match/exclusion, raw
+`XOR(selector, constant)`의 false-edge match/true-edge mismatch, zero word/calldata size/call
+value refinement, unknown condition fail-closed를 다룹니다.
+`EQ`와 `raw XOR` 두 back-jump regression은 다른 function이 `arguments`, `mutability`,
+`return shape`, `region`을 오염시키지 않음을 보장합니다. `EVMAnalysisLimits.def`의
+`MaxHighDispatchCandidates`, aggregate `MaxHighRecoveredArguments`, `MaxHighDiagnostics`,
+`MaxHighDiagnosticBytes`, `MaxHighReferenceVisits`, `MaxHighMemoryTransferCells`,
+`MaxHighMemoryValueVisits`는 exact boundary/-1로 검증됩니다. fixed malformed diagnostic을 포함한
+모든 output diagnostic은 allocation 전에 count와 최종 byte를 과금해야 합니다.
+LowIR와 HighIR diagnostic budget은 독립적으로 검증하며 default root CFG region은 block-PC list를
+reserve/copy하기 전에 `MaxHighRegionBlockReferences`를 과금해야 합니다.
+외부 CALL/CREATE result는 nondeterministic host outcome으로 두 개의 정확한 CFG edge를 검사하므로
+ERC-1167 fallback recovery가 유지됩니다. 읽을 수 없는 selector condition은 Unknown으로 남아
+fallback/function fact를 만들 수 없습니다.
+
+control-flow test는 `EVMLowFaultKinds.def`의 `InvalidJumpDestination`을
+`end-of-code JUMPI`에 적용합니다. invalid target에서 확실히 true면 successful tail 없이 definite
+fault이고 확실히 false면 성공합니다. unknown은 성공 가능한 false path를 남기며 lane 전체를 definite
+fault로 표시하지 않습니다.
+
+ABI test는 `EVMABIParserLimits.def`의 grammar boundary와 `EVMABITableLimits.def`의 public table
+cardinality/text boundary를 exact limit/+1로 검증합니다. 또한 invalid kind/standard/evidence enum,
+metadata mismatch, noncanonical signature/return list, 잘못 independent로 표시된 shared selector,
+dangling/duplicate variant, word width가 아닌 event-topic `APInt`를 indexed selector/sorted topic
+lookup 전에 거부합니다.
+
+`NeverDEVMOpcodeTests`는 metadata architecture도 강제합니다. 할당된 opcode의
 encoding/typed-value roundtrip, family boundary, hardfork alias, derived stack/host
 maxima를 검증합니다.
 
@@ -348,7 +509,9 @@ ctest --test-dir build-release --build-config Release \
 # 모든 집중 EVM target/case
 cmake --build build-release --target \
   NeverDEVMOpcodeTests NeverDEVMBytecodeTests NeverDEVMLoaderTests \
-  NeverDEVMAnalyzerTests NeverDEVMSemanticTests NeverDEVMEmitterTests \
+  NeverDEVMABITests NeverDEVMAnalyzerTests NeverDEVMDecoderPropertyTests \
+  NeverDEVMProxyTests NeverDEVMCallTests NeverDEVMSemanticTests \
+  NeverDEVMEmitterTests \
   NeverDEVMIntegrationTests --parallel 4
 ctest --test-dir build-release --build-config Release \
   -R 'EVM' --output-on-failure --parallel 4

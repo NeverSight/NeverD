@@ -1,0 +1,67 @@
+//===- EVMAnalysisLimits.def - EVM analysis resource limits ----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
+// Defines configurable hostile-input bounds for whole-program EVM analysis.
+// Consumers must define EVM_ANALYSIS_LIMIT(STAGE, NAME, DEFAULT_VALUE).
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_ANALYSIS_LIMIT
+#error "Define EVM_ANALYSIS_LIMIT before including EVMAnalysisLimits.def"
+#endif
+
+// Front-end structure bounds. Each stage charges its table before inserting a
+// new record.
+EVM_ANALYSIS_LIMIT(DECODE, MaxInstructions, 1'000'000)
+EVM_ANALYSIS_LIMIT(DECODE, MaxLowDiagnostics, 1'000'000)
+EVM_ANALYSIS_LIMIT(DECODE, MaxLowDiagnosticBytes, 64 * kMebibyte)
+EVM_ANALYSIS_LIMIT(CONTROL_FLOW, MaxBlocks, 262'144)
+
+// Whole-stack abstract-domain bounds. The two compatibility limits retain the
+// pre-lane API while immutable values, stacks, and block-local state lanes each
+// receive an independent ceiling.
+EVM_ANALYSIS_LIMIT(CONTROL_FLOW, MaxAbstractValuesPerSlot, 32)
+EVM_ANALYSIS_LIMIT(CONTROL_FLOW, MaxStackHeightVariants, 16)
+EVM_ANALYSIS_LIMIT(CONTROL_FLOW, MaxAbstractValueNodes, 65'536)
+EVM_ANALYSIS_LIMIT(CONTROL_FLOW, MaxAbstractStackNodes, 65'536)
+EVM_ANALYSIS_LIMIT(CONTROL_FLOW, MaxAbstractStackEntries, 4'000'000)
+EVM_ANALYSIS_LIMIT(CONTROL_FLOW, MaxAbstractStateLanesPerBlock, 256)
+
+// MaxEdges is one shared allowance for aggregate LowEdge records and
+// path-sensitive LowLaneTransition records.
+EVM_ANALYSIS_LIMIT(CONTROL_FLOW, MaxEdges, 262'144)
+EVM_ANALYSIS_LIMIT(CONTROL_FLOW, MaxWorklistUpdates, 1'000'000)
+EVM_ANALYSIS_LIMIT(CONTROL_FLOW, MaxAbstractInstructionTransfers, 16'000'000)
+
+// Downstream lowering bounds.
+EVM_ANALYSIS_LIMIT(MEDIUM_IR, MaxMedValues, 1'000'000)
+EVM_ANALYSIS_LIMIT(MEDIUM_IR, MaxMedStateLanes, 1'000'000)
+EVM_ANALYSIS_LIMIT(MEDIUM_IR, MaxMedStackEntries, 4'000'000)
+EVM_ANALYSIS_LIMIT(MEDIUM_IR, MaxMedOperations, 1'000'000)
+EVM_ANALYSIS_LIMIT(MEDIUM_IR, MaxMedOperationLaneReferences, 4'000'000)
+EVM_ANALYSIS_LIMIT(MEDIUM_IR, MaxMedPhiIncomings, 4'000'000)
+EVM_ANALYSIS_LIMIT(MEDIUM_IR, MaxMedWorklistUpdates, 4'000'000)
+
+// HighIR tracks only memory bytes requested by recovered calls and reverts,
+// but lane-sensitive entry/exit states and fixed-point work still need
+// independent hostile-input ceilings.
+EVM_ANALYSIS_LIMIT(HIGH_IR, MaxHighFunctions, 262'144)
+EVM_ANALYSIS_LIMIT(HIGH_IR, MaxHighDispatchCandidates, 262'144)
+EVM_ANALYSIS_LIMIT(HIGH_IR, MaxHighRecoveredArguments, 4'000'000)
+EVM_ANALYSIS_LIMIT(HIGH_IR, MaxHighDiagnostics, 1'000'000)
+EVM_ANALYSIS_LIMIT(HIGH_IR, MaxHighDiagnosticBytes, 64 * kMebibyte)
+EVM_ANALYSIS_LIMIT(HIGH_IR, MaxHighLaneVisits, 4'000'000)
+EVM_ANALYSIS_LIMIT(HIGH_IR, MaxHighOperationVisits, 16'000'000)
+EVM_ANALYSIS_LIMIT(HIGH_IR, MaxHighReferenceVisits, 64'000'000)
+EVM_ANALYSIS_LIMIT(HIGH_IR, MaxHighRegionBlockReferences, 4'000'000)
+EVM_ANALYSIS_LIMIT(HIGH_IR, MaxHighMemoryReadRequests, 262'144)
+EVM_ANALYSIS_LIMIT(HIGH_IR, MaxHighTrackedMemoryBytes, 1'000'000)
+EVM_ANALYSIS_LIMIT(HIGH_IR, MaxHighMemoryStateCells, 4'000'000)
+EVM_ANALYSIS_LIMIT(HIGH_IR, MaxHighMemoryWorklistUpdates, 4'000'000)
+EVM_ANALYSIS_LIMIT(HIGH_IR, MaxHighMemoryTransferCells, 64'000'000)
+EVM_ANALYSIS_LIMIT(HIGH_IR, MaxHighMemoryValueVisits, 16'000'000)
+
+#undef EVM_ANALYSIS_LIMIT

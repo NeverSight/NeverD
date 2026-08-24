@@ -34,10 +34,15 @@
 
 - EVM loader, 1:1 opcode lifter (strict), 스택/메모리, JUMP/JUMPI CFG, storage/calldata, C23/Solidity/LLVM, 통일 CLI/C API
 
-**상태:** Frontier부터 Fusaka legacy EVM을 완료했습니다. 150 assigned opcode,
-raw/hex/artifact input, runtime extraction, CFG/stack-SSA, strict/relaxed analysis,
-C23/LLVM/Solidity backend, CLI/C API, Anvil differential을 포함합니다. host ABI와
-제한은 [EVM 디컴파일](../evm.ko.md)을 참고하세요.
+**상태:** Frontier부터 Fusaka까지 legacy opcode decode/lifting은 완료되어 회귀 테스트로
+보호됩니다. source reconstruction은 보수적으로 계속 진행합니다. selector, event, type,
+standard, name, dynamic control flow는 evidence가 충분할 때만 보고하며 original source,
+완전한 ABI, 완전한 ERC compliance를 주장하지 않습니다. canonical function selector,
+standard별 ABI variant, 성공 return shape를 분리하므로 공유 ERC selector가 standard를
+지어내거나 호환되지 않는 return type을 빌리지 않습니다. Amsterdam은 explicit opt-in
+Review/development target이고 `latest`는 Fusaka입니다. EOFv1/EIP-7692는 일정이 없으며
+EIP-3540은 Stagnant라 확정 mainnet behavior로 다루지 않습니다. 자세한 내용은
+[EVM 디컴파일](../evm.ko.md)을 참고하세요.
 
 ### 왜 EVM인가
 
@@ -88,12 +93,15 @@ C23/LLVM/Solidity backend, CLI/C API, Anvil differential을 포함합니다. hos
 
 ## 일정
 
-네이티브 포맷, EVM, Solana SBF 디컴파일과 메모리 안전성 P0은 구현 및 회귀 테스트가 완료되었습니다. 출시일을 약속하지 않습니다.
+네이티브 포맷, Fusaka까지의 legacy EVM decode/lifting, Solana SBF, 메모리 안전성 P0은
+회귀 테스트로 보호됩니다. 보수적인 EVM source reconstruction은 계속 진행 중입니다.
+출시일을 약속하지 않습니다.
 
 | 기능 | 상태 |
 |------|------|
 | 네이티브 포맷 완성 (PE ARM*, Mach-O i386) | 완료 |
-| EVM 바이트코드 디컴파일 | 완료 — C, Solidity, LLVM; 회귀 테스트 완료 |
+| EVM legacy decode/lifting | Fusaka까지 완료; 회귀 테스트 적용 |
+| EVM source reconstruction | 진행 중 — evidence-backed, 보수적 |
 | Solana eBPF (SBF) 디컴파일 | 완료 — v0-v4, C, Rust, LLVM; 회귀 테스트 완료 |
 | 메모리 안전성 감사와 헌트 | 완료 — PE, ELF, Mach-O의 P0; 회귀 테스트 완료 |
 | 엔진·제품 강화 | 지속 |

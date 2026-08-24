@@ -33,7 +33,8 @@ llvm::APInt boolWord(bool Value);
 
 /// Reject an environment whose words are not machine words and whose address
 /// fields do not fit an address, before a single instruction runs.
-llvm::Error validateEnvironment(const ExecutionEnvironment &Environment);
+llvm::Error validateEnvironment(const ExecutionEnvironment &Environment,
+                                const InterpreterOptions &Options);
 
 std::optional<size_t> toSize(const llvm::APInt &Word, size_t Limit);
 bool checkedRange(size_t Offset, size_t Size, size_t Limit, size_t &End);

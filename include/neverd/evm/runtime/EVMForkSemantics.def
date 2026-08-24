@@ -1,0 +1,21 @@
+//===- EVMForkSemantics.def - Fork-dependent EVM semantics -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard. It declares semantic changes
+// for bytes whose execution meaning, rather than activation, changes at a
+// hardfork boundary.
+//
+// EVM_FORK_ENVIRONMENT_VALUE(OPCODE, BEFORE_FORK_FIELD, AT_OR_AFTER_FIELD,
+//                            TRANSITION_FORK)
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_FORK_ENVIRONMENT_VALUE
+#define EVM_FORK_ENVIRONMENT_VALUE(OPCODE, BEFORE_FORK_FIELD,                  \
+                                   AT_OR_AFTER_FIELD, TRANSITION_FORK)
+#endif
+
+EVM_FORK_ENVIRONMENT_VALUE(PREVRANDAO, Difficulty, PrevRandao, Paris)
+
+#undef EVM_FORK_ENVIRONMENT_VALUE

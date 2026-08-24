@@ -15,6 +15,7 @@
 
 #include "neverd/evm/EVMIR.h"
 
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
 
 #include <cstddef>
@@ -25,6 +26,11 @@
 #include <vector>
 
 namespace neverd::evm {
+
+#define EVM_INTERPRETER_LIMIT(NAME, DEFAULT_VALUE)                             \
+  inline constexpr size_t kDefault##NAME = (DEFAULT_VALUE);                    \
+  inline constexpr llvm::StringLiteral k##NAME##Name = #NAME;
+#include "neverd/evm/runtime/EVMInterpreterLimits.def"
 
 struct WordLess {
   bool operator()(const llvm::APInt &Left, const llvm::APInt &Right) const {
@@ -51,6 +57,7 @@ struct ExecutionEnvironment {
   llvm::APInt Timestamp = llvm::APInt(kWordBits, 0);
   llvm::APInt BlockNumber = llvm::APInt(kWordBits, 0);
   uint64_t SlotNumber = 0;
+  llvm::APInt Difficulty = llvm::APInt(kWordBits, 0);
   llvm::APInt PrevRandao = llvm::APInt(kWordBits, 0);
   llvm::APInt GasLimit = llvm::APInt(kWordBits, kDefaultGasLimit);
   llvm::APInt ChainID = llvm::APInt(kWordBits, kDefaultChainID);
@@ -97,12 +104,30 @@ enum class ExecutionStatus : uint8_t {
   Reverted,
   SelfDestructed,
   Faulted,
+  /// Inconclusive resource cutoff; persistent state and logs are rolled back.
   StepLimit,
 };
 
+/// Classifies faulted execution without requiring a diagnostic allocation.
+enum class ExecutionFaultKind : uint8_t {
+  None,
+  Semantic,
+  ResourceExhausted,
+};
+
 /// Captures observable execution state, diagnostics, logs, and trace entries.
+/// When HasPersistentStateSnapshot is true, reverted, faulted, and step-limited
+/// results restore storage, transient storage, and logs to their entry snapshot
+/// while retaining frame-local stack, memory, return bytes, and trace data for
+/// diagnosis. REVERT therefore preserves its explicit return bytes without
+/// exposing committable effects. Resource exhaustion is identified by
+/// FaultKind even when allocating a human-readable Error is unsafe.
 struct ExecutionResult {
   ExecutionStatus Status = ExecutionStatus::Running;
+  ExecutionFaultKind FaultKind = ExecutionFaultKind::None;
+  /// False only when resource exhaustion prevented the entry-state snapshot
+  /// itself from being materialized. Such a result is never committable.
+  bool HasPersistentStateSnapshot = true;
   std::string Error;
   uint64_t FinalPC = 0;
   size_t Steps = 0;
@@ -118,15 +143,19 @@ struct ExecutionResult {
 
 /// Bounds execution resources and controls trace collection.
 struct InterpreterOptions {
-  size_t MaxSteps = kDefaultMaxSteps;
-  size_t MaxMemoryBytes = kDefaultMaxMemoryBytes;
+#define EVM_INTERPRETER_LIMIT(NAME, DEFAULT_VALUE) size_t NAME = kDefault##NAME;
+#include "neverd/evm/runtime/EVMInterpreterLimits.def"
   bool RecordTrace = true;
 };
 
 /// Executes a decoded program. Runtime faults are returned in
 /// `ExecutionResult::Status`; `llvm::Error` is reserved for API failures.
+llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program);
 llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
-                                        ExecutionEnvironment Environment = {},
+                                        ExecutionEnvironment &&Environment,
+                                        InterpreterOptions Options = {});
+llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
+                                        const ExecutionEnvironment &Environment,
                                         InterpreterOptions Options = {});
 
 } // namespace neverd::evm

@@ -5,8 +5,10 @@
 [← 文件索引](README.zh-TW.md)
 
 NeverD 可載入傳統以太坊虛擬機位元組碼，建立專用的 256 位元 LowIR、堆疊 SSA
-MedIR 與復原後的 HighIR，並輸出 LLVM IR、C23 或 Solidity。預設採嚴格分析：
-未分配的操作碼或在所選硬分叉中尚未啟用的操作碼，會在其精確 PC 位置報錯。
+MedIR 與復原後的 HighIR，並輸出 LLVM IR、C23 或 Solidity。預設採嚴格分析，但
+傳統 EVM 不會預先驗證整個映像的操作碼：只有確定 `Reachable` 的執行 lane 真正抵達
+未分配或在所選 hardfork 中未啟用的操作碼時，才在該操作碼的精確 PC 報錯。dead byte
+與僅 `MayReachable` 的 CFG candidate 不會變成嚴格錯誤。
 
 Solidity 與 C 輸出屬於語意重建：它們保留解碼後的操作碼順序、256 位元算術、堆疊
 檢查與已驗證的控制流程，但不宣稱還原合約原始的原始碼、識別字或型別。
@@ -45,8 +47,10 @@ Solidity 與 C 輸出屬於語意重建：它們保留解碼後的操作碼順�
 執行期/部署位元組碼優先於建立位元組碼。若只有建立程式碼，NeverD 會辨識有界、常數
 的 `CODECOPY`/`RETURN` 建構子包裝並擷取被複製的執行期切片。建構子巡訪使用與真正解碼
 器相同的單指令解碼器，並以正在分析的硬分叉為準，因此某個位元組在一個分叉是資料、在
-另一個分叉是操作碼時，也無法移動這條邊界。只含可選 `0x` 前綴的產物欄位視為空，因此
-空的 `deployedBytecode` 或 `runtimeBytecode` 不會遮蔽可用的建立位元組碼回退。
+另一個分叉是操作碼時，也無法移動這條邊界。只要 `deployedBytecode` 或
+`runtimeBytecode` 欄位存在，它就是權威輸入：明確的 `0x` 會被接受為空的、自然停止的
+runtime，並刻意阻止回退到 creation bytecode。欄位缺失時才會尋找下一候選；沒有明確
+prefix 的缺失或純空白 hex 會被拒絕。明確 raw 輸入也可為空。
 
 ### 編譯器尾端資料
 
@@ -79,7 +83,8 @@ delegation 指示子的二十個位元組是一個位址，而不是程式碼。
 處理，好讓解碼器能指出它讀不了的那個位元組。
 
 格式錯誤的十六進位、奇數位數、未解析 linker placeholder、有歧義的多合約產物、
-無效 metadata 邊界與正規化後的空程式碼都會產生可操作錯誤。C++ loader API 可用
+無效 metadata 邊界，以及缺失或純空白 hex 都會產生可操作錯誤；明確空 raw 輸入或
+`0x` runtime 仍是合法空程式。C++ loader API 可用
 `BytecodeLoadOptions::ArtifactContract` 選取 `Contract` 或
 `path/File.sol:Contract`。多個來源檔定義同名合約時，未限定名稱會被拒絕，避免產物
 順序靜默選錯位元組碼。
@@ -112,19 +117,22 @@ Ethereum 將 [Glamsterdam](https://ethereum.org/roadmap/glamsterdam/) 描述為�
 EIP-8024 只消耗合法立即數；非法候選仍是下一條指令，缺失位元組的語義值為零。
 
 EOF 不屬於 Fusaka：Ethereum 在
-[Fusaka checkpoint 2](https://blog.ethereum.org/2025/04/29/checkpoint-2) 移除了它，
-execution-spec-tests 亦記錄 EOF 已
-[自 Osaka 移除且未重新排程](https://github.com/ethereum/execution-spec-tests/blob/main/docs/CHANGELOG.md)。
-NeverD 不會把已撤回的 EOF 提案當作最終主網行為。
+[Fusaka checkpoint 2](https://blog.ethereum.org/2025/04/29/checkpoint-2) 移除了它。
+EOFv1/EIP-7692 尚未排程，而容器提案
+[EIP-3540](https://eips.ethereum.org/EIPS/eip-3540) 的狀態為 Stagnant。舊的
+`execution-spec-tests` repository 已歸檔，仍維護的測試已移至
+[execution-specs](https://github.com/ethereum/execution-specs/tree/master/tests)。NeverD
+不會把實驗性 EOF container 當作已定案的主網行為。
 
-嚴格模式拒絕未知及分叉中未啟用的位元組。`--evm-relaxed` 會保留它們於 LowIR 與
-診斷中，但執行抵達時生成 backend 仍會故障；寬鬆模式絕不靜默視未知位元組為 NOP。
+嚴格模式只在確定 `Reachable` 的 state lane 證明執行會抵達時，才拒絕未知或 fork-inactive
+位元組。`--evm-relaxed` 將它們保留為 typed fault prefix 與診斷，backend 執行到它們時
+仍會 fault；寬鬆模式絕不把未知位元組視為 NOP。
 
 ## LLVM 風格的 metadata 架構
 
 手工維護的 EVM metadata 採用 LLVM 可多次 include 的 `.def` 模式：
 
-- `EVMOpcodes.def` 是 150 個已定案操作碼與 4 個 opt-in 開發操作碼的唯一事實來源：
+- `EVMOpcodes.def` 是全部已定案 legacy 與 opt-in 開發操作碼的唯一事實來源：
   編碼、實際 pop/push 變化、立即數種類、類別、啟用分叉、主要 effect、正交 EVM
   記憶體存取、原始碼層狀態存取、
   call-value 存取與終止屬性全在同一筆記錄，新增操作碼不會靜默繼承預設值。
@@ -138,8 +146,8 @@ NeverD 不會把已撤回的 EOF 提案當作最終主網行為。
   才忽略這次編譯器生成的讀取。
 - `EVMImmediateKinds.def` 定義固定寬度 PUSH data 與 EIP-8024 條件 single/pair
   encoding；`EVMDecodeStatuses.def` 統一 LowIR 與 disassembly 公開的穩定狀態詞彙。
-  `EVMUpstreamOpcodePolicy.def` 記錄 go-ethereum naming alias 及有意排除的歷史/已撤回
-  項目；`scripts/audit_evm_opcode_metadata.py` 會拒絕 byte drift 和任何未經 review 的
+  `EVMUpstreamOpcodePolicy.def` 記錄 go-ethereum naming alias，以及有意排除的歷史項目與
+  未排程 EOF 項目；`scripts/audit_evm_opcode_metadata.py` 會拒絕 byte drift 和任何未經 review 的
   upstream 新常數。
 - `EVMHardforks.def`、`EVMEffects.def`、`EVMExitStatuses.def` 和
   `OutputLanguages.def` 生成有序 enum、parser、顯示名稱、CLI 選項與 C ABI 值。
@@ -155,8 +163,16 @@ NeverD 不會把已撤回的 EOF 提案當作最終主網行為。
   究竟是什麼：兩種編譯器尾端取框方式，以及那些位元組根本不是指令的容器。
 - `EVMRecoveredFacts.def` 擁有復原事實各詞彙的拼寫，使出現在輸出中的名稱集中於
   一處，而不是散落在可能遺漏新列舉項的 `switch` 中。`EVMKnownSignatures.def`
-  對 signature 的三種角色做同樣的事。
-- `EVMConstants.h` 統一管理協定寬度、限制與穩定預設名稱。
+  將每個 canonical function spelling 與 selector 只存一次，再以獨立的每標準
+  `KnownFunctionVariantInfo` record 宣告 return list 與 independent/non-independent
+  evidence role。ERC-20/ERC-721 共享 spelling 因而仍是一個 callable candidate，卻不會
+  獨立證明任一標準，也不會借用第一個 variant 的 return type；event 與 custom error
+  維持各自 typed record。
+- `EVMAnalysisLimits.def`、`EVMInterpreterLimits.def`、
+  `EVMABIParserLimits.def` 與 `EVMABITableLimits.def` 分別宣告 analysis、interpreter、
+  parser 與 public table 的分階段上限。`EVMConstants.h` 統一管理共享 protocol width 與
+  穩定 internal name，並由 `EVMAnalysisLimits.def` 產生 analysis default 與 diagnostic
+  option name；interpreter 與 ABI header 則由各自的表產生所宣告的限制。
 - `Semantics.h` 管理與目標無關的 scalar ALU evaluator。常數折疊與 interpreter 使用
   同一套已檢查 `APInt` 實作；LLVM、C、Solidity 保持明確 target lowering，使
   backend 契約與不支援情況可見。
@@ -202,21 +218,26 @@ generator、只看似生成的 EVM `.inc` 只會增加形式負擔。
   scalar ALU operation 能解析一個或多個具體 jump target；真正未知的 target 則保留為
   明確 indirect edge，不會被猜測。
 
-  `AnalyzeOptions::MaxAbstractValuesPerSlot` 限制每個 finite value set，超限時將 slot
-  widening 為 `Unknown`；`MaxStackHeightVariants` 限制一個基本塊內與路徑相關的高度數量，
-  超限會回報明確的 analysis-limit error，而不是截斷 CFG。兩個限制均拒絕零值。非關聯
-  stack merge 後的 Cartesian operation 會將 finite value 標為 over-approximation：
-  無效 candidate 會被診斷，但 strict analysis 不會僅因 slot correlation 遺失就拒絕
-  bytecode；精確的無效 target 仍會在對應 jump PC 失敗。relaxed mode 會診斷 stack fault，
-  並只終止出錯的 abstract path，不會虛構 fault 後的 fallthrough。
+  back-edge 上發生變化的 loop-carried slot 會依語意 over-approximate 成 `Top`，使 fixed
+  point 收斂；此 loop recurrence 抽象與資源 budget 無關。instruction、block、state、
+  value node、abstract stack、lane、edge、worklist update 與 instruction×lane transfer
+  都由具名 budget 計費，包括 `MaxAbstractValuesPerSlot`、`MaxStackHeightVariants` 與
+  `MaxAbstractInstructionTransfers`。零值或超限在 insertion 前回報硬錯誤，絕不觸發
+  額外 emergency widening 或靜默截斷。精確無效 target 仍在對應 jump PC 失敗。
+
+  `EVMLowFaultKinds.def::InvalidJumpDestination` 在 `end-of-code JUMPI` 依 path 判定：condition
+  確定為 true 且 target 無效時，沒有 successful tail 並記錄 definite fault；condition 確定為
+  false 時成功。condition 未知時只保留可能成功的 false path，不會把整條 lane 誤標為 definite
+  fault。
 - **EVM MedIR** 將每個堆疊值表示為 256 位元 SSA value，先連接所有 merge phi，再執行
   確定性的 sparse constant worklist。私有 lattice 為 `Uninitialized`、一個精確
   `Constant` 或 `Overdefined`：相同常數可跨基本塊及有 anchor 的 phi cycle 傳播，衝突或
-  依賴 runtime 的 cycle 則不能虛構常數。worklist 會檢查 def-use ID，並使用與 interpreter
-  相同的 `Semantics.h` ALU evaluator。MedIR 亦保留主要 semantic effect，以及正交的
+  依賴 runtime 的 cycle 則不能虛構常數。worklist 會檢查 def-use ID；value、state lane、
+  stack entry、operation、operation-lane reference、phi incoming 與 worklist update
+  各有獨立 budget，並使用與 interpreter 相同的 `Semantics.h` ALU evaluator。MedIR 亦保留主要 semantic effect，以及正交的
   `none/read/write/readwrite` EVM-memory access、source-level state access 與 call-value
-  access。多高度 LowIR stack 在此邊界保守地以堆疊頂端對齊；某些 incoming height 不存在
-  的 slot 會成為明確 unknown value，並由確定性 diagnostic 記錄精確度損失。
+  access。每個 LowIR whole-stack lane 都有獨立 SSA execution lane，phi 明確保留來源 lane；
+  不再以最大高度將不相容 stack 對齊。
 - **EVM HighIR** 復原 Solidity dispatcher selector、可能的 calldata/return word、
   mutability、常數 storage slot、LOG/event 與 revert 事實及 function/CFG region。經檢查的
   producer index 與 iterative、memoized value walk 從型別化 MedIR operand 復原事實，
@@ -225,9 +246,27 @@ generator、只看似生成的 EVM `.inc` 只會增加形式負擔。
   non-payable/receive guard 與精確 32-byte return size 均使用其 semantic input。iterative
   walk 由 MedIR graph 提供結構邊界，將 malformed、mixed 或 cyclic expression 視為 unknown。
   同一 selector 的 conflicting target 會被診斷並省略。payability 與 state-access lattice
-  維持獨立，可達但未解析的 dynamic jump 會強制保守的 `nonpayable` recovery。在 MedIR
-  尚無 memory SSA 前，custom-error payload recovery 與對外 call 的 payload recovery
-  是僅存的兩項 bounded instruction-window heuristic；復原的名稱與型別仍明確屬於 heuristic。
+  維持獨立，可達但未解析的 dynamic jump 會強制保守的 `nonpayable` recovery。逐位元組、
+  flow-sensitive memory dataflow 可跨 block 追蹤固定 offset 寫入，依 overlap/kill 合成
+  byte，並在動態或未知寫入時使知識失效。目前經證明的 payload 復原僅含 selector 與已知
+  Panic byte。對已知 custom-error declaration，Solidity emitter 會保留 canonical parameter
+  type；這不表示復原每一個執行期 argument value。
+
+  selector discovery 僅從 root lane 開始並沿 dispatcher 的 unmatched edge 前進；handler
+  內形似 selector 的判斷不會升格為 public function。receive 與 fallback 同樣受 root
+  constraint，且必須抵達確定可達的 successful terminal；revert、fault、non-payable
+  empty-calldata handler 或僅可能路徑都不能建立入口。canonical function candidate 會被
+  衝突 calldata 使用否決；shared selector 不提供 independent standard evidence。只有達到
+  設定數量的獨立相容 selector，或有 exact event topic/arity、storage slot、proxy 等強證據，
+  才辨識標準並選擇 per-standard variant。其 static return list 也只有在所有確定可達的成功
+  終態同意精確 ABI byte count 時才輸出；unresolved transfer、衝突 shape 或 mismatch 都會
+  fail closed，revert/fault 不算成功 return。名稱、型別、event 與標準標籤仍只是有證據
+  支持的 candidate。
+
+  HighIR 對 function、lane/operation visit、region block reference、memory read request、
+  tracked byte、memory state cell 與 memory worklist update 分別設有 hostile-input budget。
+  memory fixed point 僅消費確定可達且實際執行的 lane，並在 predecessor 間按 byte consensus
+  meet；budget 耗盡直接報硬錯，不會截斷 fact。
 
   HighIR 同時記錄 interface 的對外一半：每一條 `CALL`、`CALLCODE`、`DELEGATECALL`
   與 `STATICCALL`，包含被呼叫者的來源、當所分析的 fork 在該位址上有保留時它所命名的
@@ -255,11 +294,196 @@ pre-Fusaka raw-bytecode corpus 在 Anvil 原生 EVM 執行，涵蓋 scalar ALU�
 把堆疊 operand 遮罩為協定的 160 位元 address；公開 environment value 和 map 會先
 驗證，避免錯誤 `APInt` width 觸發 LLVM assertion。`BLOCKHASH` 亦執行前 256 區塊窗口。
 
+interpreter 在任何 opcode-specific side effect 前，先 preflight typed required stack height、
+pop count 與 retained-plus-pushed height，因此 underflow/overflow 不會讓指令只執行一半。
+`EVMForkSemantics.def` 規定 byte `0x44` 在 Paris 前讀取 `DIFFICULTY`，自 Paris 起讀取
+`PREVRANDAO`。`REVERT`、semantic fault、step limit，以及 allocation/length resource
+exhaustion 都將 storage、transient storage、log 與 selfdestruct effect 回復至 entry
+snapshot，同時保留 frame-local diagnostic 與明確 revert byte。allocation failure 以
+`ExecutionFaultKind::ResourceExhausted` 表示，不必配置 error string；若連 entry snapshot
+都無法建立，`HasPersistentStateSnapshot` 為 false，結果絕不可 commit。
+
 interpreter 將 EIP-211 每 frame returndata buffer 與目前 frame 最終輸出分離：
 `RETURNDATASIZE`/`RETURNDATACOPY` 觀察最近 subcall buffer，僅 `RETURN`/`REVERT`
 寫入 `ExecutionResult::ReturnData`。因此 call 後 `STOP` 不會錯誤暴露 callee bytes。
 CREATE/CREATE2 遵循同一規則：建立失敗壓入零並以 EIP-211 buffer 暴露 revert bytes；
 成功壓入設定 address 並清除 buffer。`InitialReturnData` 只是 snapshot/test seed。
+
+### Public IR 與資源邊界
+
+public `execute` 會先驗證
+`Code`/`Fork`/`Instructions`/`JumpDestinations` 共同構成 canonical LowIR。變造 fork、偽造
+instruction record、使 encoding 不一致或破壞 jump-destination table，都會在 interpreter
+索引 instruction table 前回傳 `llvm::Error`。public `lowerToMedIR` 同樣會先驗證所有設定的
+option、resource bound 與 structural invariant，並嚴格維持此順序；接著才以內嵌的
+fork/strictness decode `Low.Code`，透過 `canonical decode replay` 逐 field 比對 LowIR。通過後
+才可呼叫 `lowerCanonicalLowToMedIR`、建立 index 或按 caller-controlled record 配置輸出。
+public `recoverHighIR` 同樣會 replay 驗證外部 LowIR/MedIR。private
+`lowerCanonicalLowToMedIR` 與 `recoverCanonicalHighIR` 僅供 `analyze` 自己持有的 IR 使用；
+它們只省略冗餘且非遞迴的 replay，HighIR option/resource budget 仍強制執行。
+
+dispatcher proof 為每個 `MedStateLane` 保存排序的 `Any/Exact/Excluded` selector domain。
+join 會 union Exact set、intersect Excluded exclusion set，並從 cofinite exclusion 減去
+Exact set；domain widen 後會重新造訪該 lane。equality 僅在 selector 仍被允許時記錄
+true-edge candidate，並在 false edge 排除它。raw `XOR(selector, constant)` 在所有
+canonical successor 指向同一入口時，把 zero/false edge 記為 match；此 fallthrough 不要求
+目標為 `JUMPDEST`。nonzero/true mismatch edge 排除該 selector，`ISZERO` 則將同一 expression
+轉成 equality。selector word、zero-calldata word、calldata size 與 call value guard 皆逐 edge
+精化；unknown conditional 會停止 dispatcher proof，不沿僅可能的 branch 前進。
+
+識別出 function 後，function-scope traversal 會攜帶該 candidate 的
+`exact singleton selector` 繼續。若 control flow 跳回 shared dispatcher，
+`SelectorEquality`、raw `XOR` 與 `SelectorWord` 只沿與已 match selector 一致的
+`definite edge`；predicate 為 Unknown 或與 selector 無關時，則保守保留全部
+`definite edges`。此處絕不採用「排除其他 entry block」的 heuristic，以保留合法的
+`shared body/tail-call`。
+
+外部 CALL/CREATE 的結果則不同：host 結果本來就是非確定的，因此分析會探索兩條精確 CFG
+edge。這既保留 ERC-1167 fallback 復原，又不會把無法讀取的 selector 條件當作證據；真正
+Unknown 的 dispatcher 仍會封閉失敗。
+
+`EVMAnalysisLimits.def` 透過 `MaxLowDiagnostics` 與 `MaxLowDiagnosticBytes`，讓線性 decoder
+和 CFG builder 共用同一個 aggregate LowIR diagnostic budget。兩條路徑都按精確 count 與最終
+bytes 預先計費，且拒絕零上限。LowIR 與 HighIR 的 diagnostic budget 彼此獨立。同一張表另
+分別計費 `MaxHighDispatchCandidates`、全程 aggregate
+`MaxHighRecoveredArguments`、`MaxHighDiagnostics` 與 `MaxHighDiagnosticBytes`、
+`MaxHighReferenceVisits`、`MaxHighMemoryTransferCells` 及
+`MaxHighMemoryValueVisits`。candidate 與 recovered-argument record 在寫入任一 destination
+container 或配置 name/type 前先計費。所有 HighIR output diagnostic 都在建立或複製前按
+count 與最終 message bytes 計費，固定 malformed-IR diagnostic 亦無豁免；budget 不足會回傳
+具名 hard error，不會默默省略 diagnostic 或 fact。
+default root CFG region 會在 reserve 或複製 block-PC 清單前計入
+`MaxHighRegionBlockReferences`。
+
+`EVMABIParserLimits.def` 限制 tuple nesting、type node 與 aggregate array dimension；
+`EVMABITableLimits.def` 限制 public signature/variant table 的 cardinality 與 aggregate text。
+public table validation 在 parse/hash 前先套用上限，再拒絕非法 enum、kind metadata、standard、
+selector-evidence role、noncanonical type、錯誤 derived hash、membership 與 collision。production
+selector lookup 使用 index，event lookup 使用按 topic 排序的表；topic API 先確認 `APInt`
+恰為一個 EVM word，再比較或排序。
+
+`EVMInterpreterLimits.def` 宣告 `MaxSteps`、`MaxMemoryBytes`、`MaxTraceEntries`、
+`MaxLogEntries`、aggregate `MaxLogDataBytes`、aggregate
+`MaxHostReturnDataBytes`、`MaxCalldataBytes`、aggregate `MaxHostEnvironmentEntries`、
+aggregate `MaxExternalCodeBytes` 與 `MaxPersistentStateEntries`。host entry aggregate 橫跨
+`BlockHashes`、`Balances`、`CodeHashes`、`ExternalCode` 與 `BlobHashes`；external-code byte
+limit 累加所有 `ExternalCode` body。`MaxSteps` 保持明確的 `StepLimit` 結果。runtime
+memory、trace、log、log data 與新增 persistent-state key 都會先
+計費；超過設定上限回傳 `ResourceExhausted`，並 rollback persistent state、log 與
+selfdestruct effect。初始 host return-data aggregate 或 persistent-state map 過大則是
+`execute` API error。interpreter 以 `ArrayRef` view 保存 host return data，並在已驗證排序的
+instruction table 使用 `lower_bound`，不複製 buffer 或為每次執行重建 PC map。
+`const execute preflight` 會在複製 environment、取得 persistent-state snapshot 或建立 result
+之前，驗證 program 與所有 host-input limit。
+
+### 即時 go-ethereum 差分稽核
+
+標準本機與 CI 稽核每次都以 `git fetch --depth=1 --force` 強制取得官方
+`https://github.com/ethereum/go-ethereum.git` default branch 的 remote `HEAD`。每次執行都會
+建立名稱不可預測的 private temporary bare repository，不使用 shared persistent Git repository
+或 cache。只有這次 fetch 回傳的 authority ref 及由它解析出的精確 SHA 能選擇 revision。
+腳本會回報 SHA，於 detached 暫存 worktree 探測它，然後一併銷毀 authority repository 與
+worktree。`local_docs`、既有
+source checkout 與 submodule 都不是稽核路徑；固定 submodule 正會在最需要偵測 live drift
+時過時。
+
+每個 Git command 都會先清空全部繼承的 `GIT_*`（包含 `GIT_CONFIG_*`），再只裝入經過
+稽核的設定。`GIT_CONFIG_NOSYSTEM` 與 `GIT_CONFIG_GLOBAL` 停用 system/global
+configuration；`GIT_ATTR_NOSYSTEM` 與按 command 設定的 `core.attributesFile` 停用
+system/global attributes，`core.hooksPath` 停用 hooks。private repository 會拒絕非預期 local configuration、graft、
+`objects/info/alternates` 與 `refs/replace`；`GIT_NO_REPLACE_OBJECTS` 也會停用 replacement
+lookup。任何偏離都會封閉失敗。
+
+```bash
+python3 scripts/audit_evm_opcode_metadata.py
+```
+
+public CLI 唯一接受的 option 是 `--manifest-output`，不提供 remote/ref/toolchain override。輸出
+manifest 的封閉契約為 `schema 3`。
+
+Go probe 會反射 `params.Rules` 所有 exported boolean field，針對每個 mapped fork 呼叫
+公開的 `LookupInstructionSet(params.Rules)`，並掃描全部 256 個 byte slot，使未經 review
+的 activation 無法藏在 NeverD request 之外。slot allocation 只依 geth 的
+`operation.undefined` 判定；`HasCost` 只用於 cost cross-check，因為 defined zero-cost
+operation 也會回傳 false。每個 `defined && !HasCost` slot 都必須從宣告的 activation fork
+起與 `EVM_GETH_ACTIVE_WITHOUT_COST` 精確相符；undefined 卻有 cost 的 slot、未 review 的
+defined slot，或隱藏 marker 的 upstream representation 變更都會封閉失敗。封閉 schema 僅接受 schema version、精確
+geth revision、Go version、stack limit、fork rules，以及各 opcode 的 byte、name、
+`base_min_stack` 和 `net_stack_delta`；audit manifest 只額外加入 diagnostics array。未知或
+重複欄位、rule、fork、名稱與 byte 都會失敗。`EVMUpstreamOpcodePolicy.def` 管理 naming
+alias 與 typed、經 review 的歷史/未排程 EOF exclusion，並驗證其 overlap/inactive
+invariant；正交的 `EVMUpstreamSemanticsPolicy.def` 管理封閉 `params.Rules` reflection
+inventory、fork mapping、base-stack exception 與 EIP-8024 dynamic opcode family 宣告。CI 僅在
+`dev` push、pull request、手動啟動和每日排程中執行；失敗時上傳精確
+revision、manifest 與 log artifact。
+
+更精確地說，`EVMUpstreamSemanticsPolicy.def` 用唯一一筆 `EVM_GETH_RULE_FIELD`，將每個匯出的
+boolean `params.Rules` field 歸入 `MappedForkSelector`、`NoOpcodeAllocation` 或
+`ExcludedSelectorExpectedError`。audit 每次只啟用一個 field 並呼叫 `LookupInstructionSet`：前
+兩類必須沒有 error，第三類必須回傳 error；回傳的完整 256-slot opcode/stack fingerprint 永遠
+必須等於 `ExpectedFork`。目前已 review 的 no-allocation fields `IsEIP155`、`IsEIP2929`、
+`IsEIP4762` 與 `IsPetersburg` fingerprint 為 Frontier；`IsUBT` 應報錯並回傳 Cancun
+fingerprint。
+
+EIP-8024 dynamic opcode family 的 membership 與 activation 由
+`EVMUpstreamSemanticsPolicy.def` 宣告；`EVMEIP8024Immediates.def` 仍是 single/pair 各 byte
+immediate semantics 的唯一 authority。single/pair inventory 各自明確將全部 256 個 byte value
+分類為 valid 或 invalid，production decoder 直接查表。live audit 以 `go -overlay` 向
+`core/vm` 虛擬注入 wrapper，取得真正的 private `operation.execute` handler，並針對每個 active
+table/family 執行 `DUPN`、`SWAPN` 與 `EXCHANGE` 的 `3x256` candidates 加
+`3 missing-operand cases`。它核對 acceptance、PC delta、由唯一 marker 推導的 stack
+operand/mutation、valid case 的精確 underflow，以及缺 operand 時的 `0x00`；Python 逐項對照
+同一 `.def`，不複製 decode formula。
+
+`EVM_HARDFORK_LATEST` 只有一個 canonical target。封閉的 `EVMUpstreamForkAliases.def` 將 Prague
+映射至 Pectra，將 Osaka 與 BPO1 至 BPO5 映射至 Fusaka；Paris、Shanghai、Cancun、Amsterdam
+與 Bogota 為 identity，未知新名稱會封閉失敗。每次 audit 固定並記錄一個
+`audit_unix_time`，要求 `MainnetChainConfig.LatestFork(time)` 映射至 NeverD latest，且
+`LatestFork(max uint64)` 位於 alias inventory 並已探測其 canonical fork。probe 會列舉真實的
+`canonical fork jump tables` 與 `mainnet active/scheduled jump tables`，逐 table 完整比較，並
+明確記錄 dynamic family 或 fork 的 `inactive` 狀態。僅取得部分 table、family 或 probe 的
+`partial` result 不會被接受為 manifest，而會封閉失敗。manifest 記錄
+`authority=official-fresh-fetch`、官方 URL、要求的
+`HEAD` 與解析出的 SHA。public CLI 不提供 remote/ref/toolchain bypass，probe 固定使用
+`GOTOOLCHAIN=local`。
+
+Go 與 Python 都會在具現惡意 metadata 前施加邊界。兩側採用
+`input/collection/string hard limits`，超限的 JSON input、array 或 string 均封閉失敗；另行執行
+`bounded diagnostic output`：過長 diagnostic 的 display 會攜帶 full-content `digest` 與
+`explicit truncated marker`，不會被誤認為完整 message。每個 child command 的 output 與
+deadline 亦有界；timeout 或 output-limit 違規會終止整個 `process group` 及其後代 process tree，
+並排空 pipe。所有 `.def parser` 都會拒絕 unparsed、unknown、duplicate、missing、out-of-range
+entry，任何偏離均封閉失敗。
+
+目前 schema-3 live receipt 記錄 `schema_version=3`、`audit_unix_time=1787534659`、
+`authority=official-fresh-fetch`、`remote=https://github.com/ethereum/go-ethereum.git`、
+`ref=HEAD`、revision `02b73d4ea7181464175e0a6cbecc0a3a2655a562`、本機 `Go 1.24.0`、
+`stack_limit=1024` 與 `diagnostics=[]`。它比對 `21 fork tables` 與 `20 Rules probes`，分類為
+`15 mapped/4 no-op/1 expected-error`。兩筆 `mainnet active/scheduled` record 都是
+`upstream BPO2`，並由封閉 alias 映射至 `NeverD Fusaka`。EIP-8024 覆蓋
+`23 table targets`；只有 `Amsterdam/Bogota` 為 active，共產生
+`1536 candidate executions` 與 `6 missing-operand cases`，且 `three handler symbols` 在兩個
+active target 間一致。收尾測試為 Python audit `67/67` 與 `C++ Opcode 10/10`。macOS 上的真實
+audit 在 `sandbox-exec` 中成功，最後的 `go run` 保持 offline；Linux workflow 強制使用
+`bubblewrap`。
+
+所有 Go phase——`go env`、`go mod init`、`go mod edit`、`go mod tidy`、
+`go mod download` 與 `go run`——皆在 `capability-root` filesystem sandbox 中執行。read
+capability 僅授予 private probe、fresh geth worktree、已驗證的 `resolved GOROOT` 與精確所需的
+system runtime root；只有隔離的 environment root 可寫。network capability 僅在需要它的
+dependency phase 開放，final run 保持 offline。`host HOME/workspace` 中的 sentinel 會被拒絕
+存取，其內容亦不得出現在 output。Linux 使用同構的 `bubblewrap` policy，且不使用
+`/` broad bind。
+
+`NeverDEVMDecoderPropertyTests` 另會在每個改變 decoder 的 fork 上窮舉所有雙位元組
+輸入，比對完整 decode 與精確 `JUMPDEST` 邊界，並以長度受限的確定性惡意位元組串覆蓋
+所有 fork。
+
+LowIR/MedIR 的 path lane 保留路徑內關聯；`MayReachable` 只提供 CFG candidate，不得產生
+確定語意。HighIR 的 selector、receive、fallback、return shape 與 byte-granular memory
+fact 都只消費 definitely reachable executing lane。shared selector 與 per-standard
+`KnownFunctionVariantInfo` 分離，return type 必須通過所有 successful terminal 的 shape
+檢查。所有 analysis budget 耗盡皆 fail loud，不會觸發 emergency widening 或靜默截斷。
 
 ## 生成 C 的契約
 

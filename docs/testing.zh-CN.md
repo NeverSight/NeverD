@@ -40,7 +40,7 @@ cmake --build build-release --parallel 4
 | `unittests/safety` | `NeverDSafetyTests`、`NeverDSafetyIntegrationTests` | 汇目录、身份优先序、参数预过滤、拷贝越界猎取、堆生命周期审计，以及强制执行的 PE/ELF/Mach-O × x86-64/AArch64 六单元矩阵 |
 | `unittests/lift` | `NeverDLiftTests` | Decoder/lifter LowIR 形状、IR 阶段、loader、重定位、格式 fixture、反编译与代表性 patch 流程 |
 | `unittests/semantic` 中的大多数文件 | `NeverDSemanticTests` | 指令、ABI、控制流、C 表达式和 lift/recompile 差分语义 |
-| `unittests/evm` | `NeverDEVMOpcodeTests`、`NeverDEVMBytecodeTests`、`NeverDEVMLoaderTests`、`NeverDEVMAnalyzerTests`、`NeverDEVMSemanticTests`、`NeverDEVMEmitterTests`、`NeverDEVMIntegrationTests` | 硬分叉元数据、输入规范化、CFG/SSA/恢复、解释器语义、LLVM/C/Solidity 差分执行及公共 API 路由 |
+| `unittests/evm` | `NeverDEVMOpcodeTests`、`NeverDEVMBytecodeTests`、`NeverDEVMLoaderTests`、`NeverDEVMABITests`、`NeverDEVMAnalyzerTests`、`NeverDEVMDecoderPropertyTests`、`NeverDEVMProxyTests`、`NeverDEVMCallTests`、`NeverDEVMSemanticTests`、`NeverDEVMEmitterTests`、`NeverDEVMIntegrationTests` | 硬分叉元数据、输入规范化、ABI/签名歧义、CFG/SSA/恢复、穷举 decoder 边界与恶意输入、proxy/call 事实、解释器语义、LLVM/C/Solidity 差分执行及公共 API 路由 |
 | `unittests/sbf` | `NeverDSBFMetadataTests`、`NeverDSBFProgramImageTests`、`NeverDSBFLoaderTests`、`NeverDSBFAnalyzerTests`、`NeverDSBFVerifierTests`、`NeverDSBFISAConformanceTests`、`NeverDSBFAgaveConformanceTests`、`NeverDSBFSemanticTests`、`NeverDSBFEmitterTests`、`NeverDSBFLLVMEmitterTests`、`NeverDSBFLLVMDifferentialTests`、`NeverDSBFSourceDifferentialTests`、`NeverDSBFMalformedCorpusTests`、`NeverDSBFUpstreamConformanceTests`、`NeverDSBFExternalOracleTests`、`NeverDSBFSolanaModelTests`、`NeverDSBFIntegrationTests` | v0-v4 元数据与 ELF 布局、严格 verifier/loader 行为、23 个固定 ELF 工件、独立 official oracle、全部 opcode 可用性、恶意输入、CFG/恢复及已执行的 LLVM/C/Rust 差分 |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | 四 ISA×三对象格式的重写/混淆等价性 |
 | `unittests/semantic` 中的聚焦变换文件 | `NeverDSwitchXformTests`、`NeverDIndCallXformTests`、`NeverDCFGLoopXformTests`、`NeverDTwoTableXformTests`、`NeverDAvxUpperXformTests` | 从大型语义二进制拆出的快速重链接探针 |
@@ -79,31 +79,113 @@ CI 宿主都带着这个开关配置并跑全部五条产线：字节到处都�
 个标签中任何一个的清单——构建悄悄不再读 corpus 是一种没有任何测试能捕获的回归，因为
 消失的正是那个测试。
 
-EVM 操作码审计每次运行都会对官方
-[go-ethereum 仓库](https://github.com/ethereum/go-ethereum)的远端 `HEAD` 执行浅层
-`git fetch`，并报告实际审计的精确提交。它复用已忽略的 bare cache
-`build/evm-opcode-audit/go-ethereum.git`，但在读取封闭的操作码清单与字节分配前
-一定会刷新缓存：
+EVM 操作码审计每次运行都会用 `git fetch --depth=1 --force` 强制获取官方默认分支的远端
+`HEAD`：`https://github.com/ethereum/go-ethereum.git`。脚本解析并报告刚取得的精确
+SHA，再在 detached 临时 worktree 中探测该对象。每次运行都使用名称不可预测的私有临时 bare
+repository，在 detached worktree 的整个生命周期持有官方 fetch 的 authority ref 与精确 SHA，
+最后一起销毁 repository 和 worktree。不使用共享持久 Git repository 或 cache。
+本地与 CI 都不读取 `local_docs`、已有源码 checkout 或 submodule。固定 submodule 反而会在
+最需发现实时漂移时陈旧：
 
 ```bash
 python3 scripts/audit_evm_opcode_metadata.py
 ```
 
-CI 会在每次 push、pull request、手动触发以及每日定时任务中运行同一项在线审计，
-因此即使 NeverD 没有变化，也能发现上游漂移。离线测试或复现历史版本时，才显式指定
-已有 checkout：
+公开 CLI 唯一接受的选项是 `--manifest-output`，不提供 remote/ref/toolchain override。输出
+manifest 的封闭契约是 `schema 3`。
 
-```bash
-python3 scripts/audit_evm_opcode_metadata.py \
-  --geth-root /path/to/go-ethereum
-```
+每条 Git 命令都会先清空全部继承的 `GIT_*`（包括 `GIT_CONFIG_*`），再只装入经过审计的
+设置。`GIT_CONFIG_NOSYSTEM` 与 `GIT_CONFIG_GLOBAL` 禁用 system/global 配置；
+`GIT_ATTR_NOSYSTEM` 与按命令设置的 `core.attributesFile` 禁用 system/global attributes，
+`core.hooksPath` 禁用 hooks。意外的 private-repository 配置、graft、`objects/info/alternates` 或
+`refs/replace` 都会让校验失败；`GIT_NO_REPLACE_OBJECTS` 会禁用 replacement 查找。
 
-该审计只允许 `EVMUpstreamOpcodePolicy.def` 中明确列出的排除项；任何未表示或未明确
-评审的上游操作码都会令命令失败。其 parser 与漂移诊断在 CI 中有独立 Python 单元测试：
+CI 仅在 `dev` 分支 push、pull request、手动触发与每日定时任务中运行同一项在线审计。
+Go 探针反射 `params.Rules` 导出的全部 bool 字段，针对每个映射分叉调用公开的
+`LookupInstructionSet(params.Rules)`，并扫描全部 256 个 byte slot。
+`EVMUpstreamOpcodePolicy.def` 管理名称别名及类型化的历史/未排期 EOF 排除项，并校验
+overlap/inactive 不变量；正交的 `EVMUpstreamSemanticsPolicy.def` 管理封闭的 Rules
+清单、分叉映射、base-stack 例外与 EIP-8024 dynamic opcode family 声明。封闭 manifest 检查精确
+revision、fork activation、byte/name、`base_min_stack` 和 `net_stack_delta`，拒绝未知或
+重复字段、规则、分叉、名称与字节。槽位分配只依据 `operation.undefined`；`HasCost` 只用于
+费用交叉检查，因为已定义的零费用操作也返回 false。每个 `defined && !HasCost` 槽位都必须
+从声明的分叉起与 `EVM_GETH_ACTIVE_WITHOUT_COST` 精确匹配。未定义却有费用、未经评审却已
+定义，或 marker 消失都会封闭失败。失败的 CI 会上传精确 revision、manifest 与日志 artifact。
+parser 与漂移诊断有独立 Python 单元测试：
+
+`EVMUpstreamSemanticsPolicy.def` 用唯一一条 `EVM_GETH_RULE_FIELD` 将每个导出的布尔
+`params.Rules` 字段归入 `MappedForkSelector`、`NoOpcodeAllocation` 或
+`ExcludedSelectorExpectedError`。probe 每次只启用一个字段并调用 `LookupInstructionSet`；前两类
+必须无错误，第三类必须报错，返回的完整 256 槽 opcode/stack 指纹都必须等于 `ExpectedFork`。
+当前 `IsEIP155`、`IsEIP2929`、`IsEIP4762` 与 `IsPetersburg` 是 Frontier 指纹的无分配字段；
+`IsUBT` 必须报错并呈现 Cancun 指纹。
+
+EIP-8024 dynamic opcode family 的成员与启用条件由 `EVMUpstreamSemanticsPolicy.def` 声明；
+`EVMEIP8024Immediates.def` 仍是 single/pair 各字节 immediate semantics 的唯一权威，其清单都
+显式分类全部 256 个字节。生产代码直接查表；实时审计以 `go -overlay` 向 `core/vm` 虚拟注入
+wrapper，取得真正的私有 `operation.execute` handler，并对每个 active table/family 执行
+`DUPN`、`SWAPN` 和 `EXCHANGE` 的 `3x256` candidates 加 `3 missing-operand cases`。测试核对
+接受性、PC 增量、marker 推导的 operand/stack 变更、有效值的精确 underflow 和缺少 operand 时的
+`0x00`；Python 对照同一 `.def`，不重复公式。
+
+`EVM_HARDFORK_LATEST` 只有一个规范目标；封闭的 `EVMUpstreamForkAliases.def` 将 Prague 映射到
+Pectra，将 Osaka 与 BPO1 至 BPO5 映射到 Fusaka，而 Paris/Shanghai/Cancun/Amsterdam/Bogota
+映射到自身。未知名称封闭失败。单次审计记录的 `audit_unix_time` 同时驱动
+`MainnetChainConfig.LatestFork(time)`（必须等于 NeverD latest）和
+`LatestFork(max uint64)` 的 alias/已探测规范分叉检查。探针枚举真实的
+`canonical fork jump tables` 与 `mainnet active/scheduled jump tables`，逐表完整比较，并显式
+记录 dynamic family 或分叉的 `inactive` 状态。只得到部分表、family 或探针的 `partial` result
+不会被接受，而会封闭失败。manifest 固定
+`authority=official-fresh-fetch`、官方 URL、请求的 `HEAD` 与 SHA；公开 CLI 没有
+remote/ref/toolchain 绕过，probe 使用 `GOTOOLCHAIN=local`。
+
+Go request/response 与 Python controller 会在分配恶意元数据前执行
+`input/collection/string hard limits`，超限输入、数组或字符串均封闭失败。它们还独立执行
+`bounded diagnostic output`：超长展示包含 full-content `digest` 与
+`explicit truncated marker`。每条命令都有有界的子进程输出和共享 deadline；超时或输出超限会
+终止整个 `process group` 及其后代 process tree，并排空 pipe。所有 `.def parser` 都会拒绝
+unparsed、unknown、duplicate、missing、out-of-range 条目并封闭失败。
+
+当前 schema-3 实时回执记录 `schema_version=3`、`audit_unix_time=1787534659`、
+`authority=official-fresh-fetch`、`remote=https://github.com/ethereum/go-ethereum.git`、
+`ref=HEAD`、revision `02b73d4ea7181464175e0a6cbecc0a3a2655a562`、本地 `Go 1.24.0`、
+`stack_limit=1024` 与 `diagnostics=[]`。它覆盖 `21 fork tables` 和 `20 Rules probes`，分类为
+`15 mapped/4 no-op/1 expected-error`。两个 `mainnet active/scheduled` 记录均报告
+`upstream BPO2`，由封闭映射对应到 `NeverD Fusaka`。EIP-8024 有 `23 table targets`，其中只有
+`Amsterdam/Bogota` 为 active，产生 `1536 candidate executions` 与
+`6 missing-operand cases`。`three handler symbols` 在两个 active target 间一致。Python audit 为
+`67/67`，`C++ Opcode 10/10`。macOS 真实运行在 `sandbox-exec` 下成功，最终 `go run` 保持
+offline；Linux workflow 强制 `bubblewrap`。
+
+所有 Go 阶段——`go env`、`go mod init`、`go mod edit`、`go mod tidy`、
+`go mod download` 与 `go run`——都必须经过 `capability-root` 文件系统沙箱。其读取能力只包含
+私有 probe、fresh geth、校验后的 `resolved GOROOT` 和精确必需的系统 runtime root；只有隔离的
+environment root 可写。网络仅授予需要它的依赖阶段，最终运行保持离线。测试在
+`host HOME/workspace` 中放置 sentinel，要求访问被拒，并要求任何输出都不含其内容。Linux 验证
+同构的 `bubblewrap` 策略，且不使用 `/` broad bind。
 
 ```bash
 python3 -m unittest -v scripts.tests.test_audit_evm_opcode_metadata
 ```
+
+当前 CMake 注册的 11 个 EVM 测试目标为：
+
+```text
+NeverDEVMOpcodeTests
+NeverDEVMBytecodeTests
+NeverDEVMLoaderTests
+NeverDEVMABITests
+NeverDEVMAnalyzerTests
+NeverDEVMDecoderPropertyTests
+NeverDEVMProxyTests
+NeverDEVMCallTests
+NeverDEVMSemanticTests
+NeverDEVMEmitterTests
+NeverDEVMIntegrationTests
+```
+
+`NeverDEVMDecoderPropertyTests` 会在每个改变 decoder 的分叉上穷举全部双字节输入，比较
+完整解码和精确 `JUMPDEST` 边界；它还以长度受限的确定性恶意输入覆盖所有分叉。
 
 修改 EVM 控制流时，先运行不动点与高度域契约：
 
@@ -114,9 +196,11 @@ build/bin/NeverDEVMAnalyzerTests \
 ```
 
 这些用例覆盖跨基本块 internal return、有限多目标合并、循环收敛与确定性边排序、
-路径相关栈高度、有界 widening、相关性丢失导致的 Cartesian 过近似、未知跳转、精确
-非法目标，以及 strict/relaxed 栈 fault。随后应运行全部七个 EVM 二进制和上游元数据
-审计；即使 analyzer 的局部形状正确，CFG 修改也可能影响 emitter 与集成行为。
+路径相关 whole-stack lane、相关性保留、未知跳转、精确非法目标，以及包括
+`MaxAbstractInstructionTransfers` 在内的 fail-loud 分析预算。strict 只在已证明
+`Reachable` 的 lane 上拒绝未知或分叉未激活 opcode；`MayReachable` 只保留 CFG 候选，
+不能产出确定语义。随后应
+运行全部 11 个 EVM 测试目标与在线上游审计；CFG 修改也可能影响 emitter 与集成行为。
 
 修改 MedIR/HighIR 数据流时，还要运行 constant-phi、selector、类型化操作数、
 格式错误图和深链契约：
@@ -127,8 +211,10 @@ build/bin/NeverDEVMAnalyzerTests \
 ```
 
 这些用例验证相等与冲突的循环 phi、非相邻和跨基本块 selector 表达式、等式两种操作数
-顺序、精确 ABI 位宽检查、类型化 storage/event/calldata 操作数、格式错误 MedIR 的
-确定性处理，以及对 16,384 个值进行的迭代式 producer walk。
+顺序、精确 ABI 位宽检查、类型化 storage/event/calldata 操作数、只从 root lane 沿
+dispatcher 不匹配边恢复 selector/receive/fallback、共享 selector 的标准歧义、逐标准
+`KnownFunctionVariantInfo` 选择，以及只在所有已证明可达的成功终态返回形状一致时输出
+return list。它们还覆盖格式错误 MedIR 的确定性处理与深 producer walk。
 
 ## fixture 如何生成
 
@@ -250,7 +336,60 @@ EVM 解释器测试提供确定性的 256 位 oracle。emitter suite 直接编�
 storage 与 instruction trace count。独立 raw-bytecode corpus 直接在 Anvil 原生 EVM
 中执行 pre-Fusaka 标量 ALU、calldata/memory 复制、重叠 `MCOPY`、Keccak 与 return data。
 
-`NeverDEVMOpcodeTests` 还约束 metadata 架构：全部 150 个 opcode 在 byte encoding 与
+解释器在任何 opcode 特有副作用之前执行类型化 stack preflight；
+`EVMForkSemantics.def` 规定字节 `0x44` 在 Paris 前为 `DIFFICULTY`、从 Paris 起为
+`PREVRANDAO`。`REVERT`、fault、step limit 和资源耗尽都会回滚事务状态；分配失败标为
+`ExecutionFaultKind::ResourceExhausted`，若入口快照都无法建立，
+`HasPersistentStateSnapshot` 为 false，结果不可提交。
+
+### EVM 公开边界与预算回归
+
+公开 API 测试会分别篡改规范
+`Code`/`Fork`/`Instructions`/`JumpDestinations`，以及每个 LowIR table、range、ID、lane 与
+edge reference。`execute` 必须在查找 instruction 前返回 `llvm::Error`；`lowerToMedIR`
+必须在建立索引或按输入规模分配输出前，拒绝完整结构非法或超预算的 LowIR。
+`lowerToMedIR` 测试还强制 option validation、resource validation、structure validation 的顺序，
+并要求它们先于逐字段 `canonical decode replay` 和 `lowerCanonicalLowToMedIR`。公开 HighIR
+恢复会重放校验外部 LowIR/MedIR；只有 `analyze` 能对自己持有的规范 IR 使用
+`lowerCanonicalLowToMedIR` 与 `recoverCanonicalHighIR`，既避免递归或重复重放，也继续强制
+所有 HighIR option/resource 预算。解释器随后对
+`EVMInterpreterLimits.def` 声明的所有上限执行 exact-boundary 与 +1 测试：`MaxSteps`
+保持专用 `StepLimit`；`MaxMemoryBytes`、`MaxTraceEntries`、`MaxLogEntries`、aggregate
+`MaxLogDataBytes` 与运行期 `MaxPersistentStateEntries` 耗尽都返回
+`ResourceExhausted` 并回滚事务效果。初始 aggregate `MaxHostReturnDataBytes` 或 persistent
+state 过大是 API error。初始 `MaxCalldataBytes`、横跨 `BlockHashes`/`Balances`/`CodeHashes`/
+`ExternalCode`/`BlobHashes` 的 aggregate `MaxHostEnvironmentEntries`，以及 aggregate
+`MaxExternalCodeBytes` 同样属于 API error。`const execute preflight` 会在复制 environment、
+snapshot 或 result 前拒绝它们。测试也覆盖 return-data `ArrayRef` view 与排序表 `lower_bound`
+lookup，无需复制 buffer 或建立 PC map。
+
+独立的 LowIR 边界测试覆盖 aggregate diagnostic 上限 `MaxLowDiagnostics` 与
+`MaxLowDiagnosticBytes`，验证线性 decode/CFG 构造按精确数量和最终字节预先计费并拒绝零上限。
+HighIR 安全测试覆盖按 lane 排序的 `Any/Exact/Excluded` domain、相等 match/exclusion、原始
+`XOR(selector, constant)` 的 false-edge match 与 true-edge mismatch、零 word/calldata
+size/call value 的逐边精化，以及 unknown condition 的 fail-closed 行为。
+测试还包含 `EQ` 与 `raw XOR` 两类 back-jump regression，确保 `arguments`、`mutability`、
+`return shape`、`region` 不受另一函数污染。其 exact-boundary 与 -1 测试覆盖
+`EVMAnalysisLimits.def` 中的 `MaxHighDispatchCandidates`、aggregate
+`MaxHighRecoveredArguments`、`MaxHighDiagnostics`、`MaxHighDiagnosticBytes`、
+`MaxHighReferenceVisits`、`MaxHighMemoryTransferCells` 与
+`MaxHighMemoryValueVisits`；所有输出 diagnostic（包括固定 malformed diagnostic）都必须在
+分配前计入数量与最终字节数。LowIR 与 HighIR diagnostic 预算会独立测试；构造默认根 CFG
+region 时必须在 reserve 或复制 block-PC 清单前计入 `MaxHighRegionBlockReferences`。
+外部 CALL/CREATE 结果作为非确定 host outcome 探索两条精确 CFG 边，因此保留 ERC-1167
+fallback 恢复；不可读的 selector 条件仍是 Unknown，不能凭空产生 fallback 或 function 事实。
+
+控制流测试从 `EVMLowFaultKinds.def` 取得 `InvalidJumpDestination`，并用于
+`end-of-code JUMPI`：目标非法且条件确定为 true 时没有成功 tail，属于确定 fault；条件确定为
+false 时成功；条件未知时保留可能成功的 false 路径，不把整条 lane 标为确定 fault。
+
+ABI 测试在精确上限和 +1 位置验证 `EVMABIParserLimits.def` 的 grammar 边界，以及
+`EVMABITableLimits.def` 的公开表基数/text 边界；还会拒绝非法 kind/standard/evidence
+enum、错配 metadata、非规范 signature/return list、被错误标记为 independent 的共享
+selector、悬空或重复 variant，以及非 word 宽度的 event-topic `APInt`，再进入索引化
+selector 或排序 topic lookup。
+
+`NeverDEVMOpcodeTests` 还约束 metadata 架构：每个已分配 opcode 都在 byte encoding 与
 typed value 之间往返，测试 family helper 边界与 hardfork alias，完整 stack contract
 和 host argument maximum 保持推导而不在 backend 中重复。
 
@@ -314,7 +453,9 @@ ctest --test-dir build-release --build-config Release \
 # 所有聚焦的 EVM 目标/用例
 cmake --build build-release --target \
   NeverDEVMOpcodeTests NeverDEVMBytecodeTests NeverDEVMLoaderTests \
-  NeverDEVMAnalyzerTests NeverDEVMSemanticTests NeverDEVMEmitterTests \
+  NeverDEVMABITests NeverDEVMAnalyzerTests NeverDEVMDecoderPropertyTests \
+  NeverDEVMProxyTests NeverDEVMCallTests NeverDEVMSemanticTests \
+  NeverDEVMEmitterTests \
   NeverDEVMIntegrationTests --parallel 4
 ctest --test-dir build-release --build-config Release \
   -R 'EVM' --output-on-failure --parallel 4

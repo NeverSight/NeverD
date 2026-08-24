@@ -1,0 +1,27 @@
+//===- EVMInterpreterLimits.def - Interpreter resource limits -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
+// Defines deterministic hostile-input and runtime bounds for the EVM semantic
+// oracle. Consumers must define EVM_INTERPRETER_LIMIT(NAME, DEFAULT_VALUE).
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_INTERPRETER_LIMIT
+#error "Define EVM_INTERPRETER_LIMIT before including EVMInterpreterLimits.def"
+#endif
+
+EVM_INTERPRETER_LIMIT(MaxSteps, 1'000'000)
+EVM_INTERPRETER_LIMIT(MaxMemoryBytes, 64 * kMebibyte)
+EVM_INTERPRETER_LIMIT(MaxTraceEntries, 1'000'000)
+EVM_INTERPRETER_LIMIT(MaxLogEntries, 262'144)
+EVM_INTERPRETER_LIMIT(MaxLogDataBytes, 64 * kMebibyte)
+EVM_INTERPRETER_LIMIT(MaxCalldataBytes, 64 * kMebibyte)
+EVM_INTERPRETER_LIMIT(MaxHostReturnDataBytes, 64 * kMebibyte)
+EVM_INTERPRETER_LIMIT(MaxHostEnvironmentEntries, 1'000'000)
+EVM_INTERPRETER_LIMIT(MaxExternalCodeBytes, 64 * kMebibyte)
+EVM_INTERPRETER_LIMIT(MaxPersistentStateEntries, 1'000'000)
+
+#undef EVM_INTERPRETER_LIMIT

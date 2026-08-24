@@ -7,7 +7,9 @@ add_neverd_component_library(NeverDEVM
   analysis/EVMHighAnalysisDispatch.cpp
   analysis/EVMHighAnalysisFacts.cpp
   analysis/EVMHighAnalysisValues.cpp
+  analysis/EVMMemoryDataflow.cpp
   analysis/EVMMedAnalysis.cpp
+  analysis/EVMMedIRVerifier.cpp
   analysis/EVMStorageSlots.cpp
   bytecode/EVMBytecode.cpp
   bytecode/EVMBytecodeContainers.cpp

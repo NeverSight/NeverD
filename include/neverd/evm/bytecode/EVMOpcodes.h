@@ -17,6 +17,7 @@
 
 #include "llvm/ADT/StringRef.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -350,35 +351,72 @@ inline constexpr uint8_t kMaxALUStackPops = [] {
   return Op == Opcode::EXCHANGE;
 }
 
+struct EIP8024ImmediatePolicyTables {
+  std::array<uint16_t, kOpcodeSpaceSize> SingleDepths{};
+  std::array<StackDepthPair, kOpcodeSpaceSize> PairDepths{};
+  std::array<uint16_t, kOpcodeSpaceSize> SingleClassifications{};
+  std::array<uint16_t, kOpcodeSpaceSize> PairClassifications{};
+};
+
+inline constexpr EIP8024ImmediatePolicyTables kEIP8024ImmediatePolicy = [] {
+  EIP8024ImmediatePolicyTables Policy{};
+#define EVM_EIP8024_SINGLE_VALID(ENCODED, DEPTH)                               \
+  ++Policy.SingleClassifications[(ENCODED)];                                   \
+  Policy.SingleDepths[(ENCODED)] = (DEPTH);
+#define EVM_EIP8024_SINGLE_INVALID(ENCODED)                                    \
+  ++Policy.SingleClassifications[(ENCODED)];
+#define EVM_EIP8024_PAIR_VALID(ENCODED, FIRST, SECOND)                         \
+  ++Policy.PairClassifications[(ENCODED)];                                     \
+  Policy.PairDepths[(ENCODED)] = StackDepthPair{(FIRST), (SECOND)};
+#define EVM_EIP8024_PAIR_INVALID(ENCODED)                                      \
+  ++Policy.PairClassifications[(ENCODED)];
+#include "neverd/evm/bytecode/EVMEIP8024Immediates.def"
+  return Policy;
+}();
+
+[[nodiscard]] constexpr bool eip8024PolicyIsClosed() {
+  for (const uint16_t Count : kEIP8024ImmediatePolicy.SingleClassifications)
+    if (Count != 1)
+      return false;
+  for (const uint16_t Count : kEIP8024ImmediatePolicy.PairClassifications)
+    if (Count != 1)
+      return false;
+  return true;
+}
+
+static_assert(eip8024PolicyIsClosed(),
+              "each EIP-8024 immediate byte must be classified exactly once");
+
+inline constexpr const auto &kEIP8024SingleDepths =
+    kEIP8024ImmediatePolicy.SingleDepths;
+inline constexpr const auto &kEIP8024PairDepths =
+    kEIP8024ImmediatePolicy.PairDepths;
+
+inline constexpr uint16_t kMaximumEIP8024SingleDepth = [] {
+  uint16_t Maximum = 0;
+  for (const uint16_t Depth : kEIP8024SingleDepths)
+    if (Depth > Maximum)
+      Maximum = Depth;
+  return Maximum;
+}();
+
+inline constexpr uint16_t kMaximumInstructionStackHeight =
+    kMaximumEIP8024SingleDepth + 1;
+
+static_assert(kMaximumInstructionStackHeight <= kStackLimit);
+
 [[nodiscard]] constexpr std::optional<uint16_t>
 decodeEIP8024Single(uint8_t Encoded) {
-  if (Encoded >= kEIP8024SingleForbiddenFirst &&
-      Encoded <= kEIP8024SingleForbiddenLast)
-    return std::nullopt;
-  const auto Depth = static_cast<uint16_t>(
-      (static_cast<unsigned>(Encoded) + kEIP8024SingleDecodeBias) & kByteMax);
-  if (Depth < kEIP8024MinimumSingleDepth || Depth > kEIP8024MaximumSingleDepth)
+  const uint16_t Depth = kEIP8024SingleDepths[Encoded];
+  if (Depth == 0)
     return std::nullopt;
   return Depth;
 }
 
 [[nodiscard]] constexpr std::optional<StackDepthPair>
 decodeEIP8024Pair(uint8_t Encoded) {
-  if (Encoded >= kEIP8024PairForbiddenFirst &&
-      Encoded <= kEIP8024PairForbiddenLast)
-    return std::nullopt;
-  const unsigned Grid = Encoded ^ kEIP8024PairXorMask;
-  const unsigned Row = Grid >> kEIP8024PairGridBits;
-  const unsigned Column = Grid & kEIP8024PairGridMask;
-  StackDepthPair Result =
-      Row < Column ? StackDepthPair{static_cast<uint16_t>(Row + 1),
-                                    static_cast<uint16_t>(Column + 1)}
-                   : StackDepthPair{static_cast<uint16_t>(Column + 1),
-                                    static_cast<uint16_t>(
-                                        kEIP8024PairLowerTriangleSum - Row)};
-  if (Result.First == 0 || Result.First >= Result.Second ||
-      Result.Second > kEIP8024MaximumPairDepth ||
-      Result.First + Result.Second > kEIP8024PairLowerTriangleSum + 1)
+  const StackDepthPair Result = kEIP8024PairDepths[Encoded];
+  if (Result.First == 0)
     return std::nullopt;
   return Result;
 }

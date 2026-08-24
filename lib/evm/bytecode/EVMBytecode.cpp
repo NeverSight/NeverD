@@ -56,8 +56,6 @@ llvm::Expected<LoadedBytecode> finishLoaded(std::vector<uint8_t> Code,
                                             bool SourceIsRuntime,
                                             const BytecodeLoadOptions &Options,
                                             llvm::StringRef SourceName) {
-  if (Code.empty())
-    return detail::inputError(SourceName, "empty bytecode");
   if (!isValidHardfork(Options.Fork))
     return detail::inputError(SourceName, "invalid hardfork value");
 
@@ -86,7 +84,7 @@ llvm::Expected<LoadedBytecode> finishLoaded(std::vector<uint8_t> Code,
 
   if (Options.ExtractRuntime && !SourceIsRuntime) {
     if (auto Runtime = detail::extractStaticRuntime(Code, Options.Fork);
-        Runtime && !Runtime->empty() && *Runtime != Code) {
+        Runtime && *Runtime != Code) {
       Code = std::move(*Runtime);
       Result.RuntimeExtracted = true;
     }
@@ -102,9 +100,6 @@ llvm::Expected<LoadedBytecode> finishLoaded(std::vector<uint8_t> Code,
     Code.resize(Result.RuntimeMetadata->Offset);
     Result.MetadataStripped = true;
   }
-  if (Code.empty())
-    return detail::inputError(
-        SourceName, "no executable bytecode remains after normalization");
   Result.Code = std::move(Code);
   return Result;
 }
@@ -192,7 +187,7 @@ bool looksLikeEVMInput(const std::filesystem::path &Path) {
     llvm::consumeError(Loaded.takeError());
     return false;
   }
-  return !Loaded->Code.empty();
+  return true;
 }
 
 } // namespace neverd::evm

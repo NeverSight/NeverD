@@ -349,6 +349,142 @@ def execution_matrix_marker_present(text: str, marker: str) -> bool:
     return marker in text
 
 
+EVM_PUBLIC_BOUNDARY_TOKENS = (
+    "EVMAnalysisLimits.def",
+    "EVMInterpreterLimits.def",
+    "EVMABIParserLimits.def",
+    "EVMABITableLimits.def",
+    "`Code`/`Fork`/`Instructions`/`JumpDestinations`",
+    "lowerToMedIR",
+    "llvm::Error",
+    "Any/Exact/Excluded",
+    "XOR(selector, constant)",
+    "MaxHighDispatchCandidates",
+    "MaxHighRecoveredArguments",
+    "MaxHighDiagnostics",
+    "MaxHighDiagnosticBytes",
+    "MaxHighReferenceVisits",
+    "MaxHighMemoryTransferCells",
+    "MaxHighMemoryValueVisits",
+    "MaxSteps",
+    "MaxMemoryBytes",
+    "MaxTraceEntries",
+    "MaxLogEntries",
+    "MaxLogDataBytes",
+    "MaxHostReturnDataBytes",
+    "MaxPersistentStateEntries",
+    "StepLimit",
+    "ArrayRef",
+    "lower_bound",
+    "APInt",
+)
+EVM_UPSTREAM_CLOSURE_TOKENS = (
+    "EVM_GETH_RULE_FIELD",
+    "MappedForkSelector",
+    "NoOpcodeAllocation",
+    "ExcludedSelectorExpectedError",
+    "EVMEIP8024Immediates.def",
+    "go -overlay",
+    "operation.execute",
+    "DUPN",
+    "SWAPN",
+    "EXCHANGE",
+    "EVM_HARDFORK_LATEST",
+    "EVMUpstreamForkAliases.def",
+    "BPO5",
+    "IsUBT",
+    "audit_unix_time",
+    "MainnetChainConfig.LatestFork",
+    "official-fresh-fetch",
+    "GOTOOLCHAIN=local",
+)
+EVM_LOW_DIAGNOSTIC_TOKENS = (
+    "MaxLowDiagnostics",
+    "MaxLowDiagnosticBytes",
+    "ERC-1167",
+)
+EVM_UPSTREAM_LIVE_RESULT_TOKENS = (
+    "02b73d4ea7181464175e0a6cbecc0a3a2655a562",
+    "schema_version=3",
+    "audit_unix_time=1787534659",
+    "remote=https://github.com/ethereum/go-ethereum.git",
+    "ref=HEAD",
+    "Go 1.24.0",
+    "stack_limit=1024",
+    "diagnostics=[]",
+    "21 fork tables",
+    "20 Rules probes",
+    "15 mapped/4 no-op/1 expected-error",
+    "upstream BPO2",
+    "NeverD Fusaka",
+    "23 table targets",
+    "Amsterdam/Bogota",
+    "1536 candidate executions",
+    "6 missing-operand cases",
+    "three handler symbols",
+    "sandbox-exec",
+    "go run",
+    "bubblewrap",
+)
+EVM_UPSTREAM_SCHEMA3_TOKENS = (
+    "--manifest-output",
+    "canonical fork jump tables",
+    "mainnet active/scheduled jump tables",
+    "inactive",
+    "partial",
+    "3x256",
+    "input/collection/string hard limits",
+    "bounded diagnostic output",
+    "explicit truncated marker",
+    "digest",
+    "process group",
+    "process tree",
+    ".def parser",
+)
+EVM_FINAL_RUNTIME_IR_TOKENS = (
+    "MaxCalldataBytes",
+    "MaxHostEnvironmentEntries",
+    "BlockHashes",
+    "Balances",
+    "CodeHashes",
+    "ExternalCode",
+    "BlobHashes",
+    "MaxExternalCodeBytes",
+    "MaxHighRegionBlockReferences",
+    "EVMLowFaultKinds.def",
+    "InvalidJumpDestination",
+    "end-of-code JUMPI",
+    "canonical decode replay",
+    "lowerCanonicalLowToMedIR",
+    "recoverCanonicalHighIR",
+    "const execute preflight",
+    "capability-root",
+    "go env",
+    "go mod init",
+    "go mod edit",
+    "go mod tidy",
+    "go mod download",
+    "resolved GOROOT",
+    "host HOME/workspace",
+    "audit_unix_time=1787534659",
+    "67/67",
+    "C++ Opcode 10/10",
+    "`/` broad bind",
+)
+EVM_FUNCTION_SCOPE_GUIDE_TOKENS = (
+    "exact singleton selector",
+    "SelectorEquality",
+    "definite edge",
+    "shared body/tail-call",
+)
+EVM_FUNCTION_SCOPE_TEST_TOKENS = (
+    "`EQ`",
+    "`raw XOR`",
+    "`arguments`",
+    "`mutability`",
+    "`return shape`",
+    "`region`",
+)
 GUIDE_REQUIRED_TOKENS = {
     "evm": (
         "frontier",
@@ -367,7 +503,43 @@ GUIDE_REQUIRED_TOKENS = {
         "eip-7951",
         "vyper",
         "EVMUpstreamOpcodePolicy.def",
+        "EVMUpstreamSemanticsPolicy.def",
         "audit_evm_opcode_metadata.py",
+        "git fetch",
+        "--depth=1",
+        "--force",
+        "bare",
+        "authority",
+        "local_docs",
+        "GIT_CONFIG_NOSYSTEM",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_*",
+        "GIT_*",
+        "GIT_ATTR_NOSYSTEM",
+        "core.attributesFile",
+        "core.hooksPath",
+        "objects/info/alternates",
+        "refs/replace",
+        "GIT_NO_REPLACE_OBJECTS",
+        "operation.undefined",
+        "HasCost",
+        "EVM_GETH_ACTIVE_WITHOUT_COST",
+        "LookupInstructionSet",
+        "base_min_stack",
+        "net_stack_delta",
+        "NeverDEVMDecoderPropertyTests",
+        "KnownFunctionVariantInfo",
+        "MaxAbstractInstructionTransfers",
+        "EVMForkSemantics.def",
+        "ExecutionFaultKind::ResourceExhausted",
+        "HasPersistentStateSnapshot",
+        *EVM_PUBLIC_BOUNDARY_TOKENS,
+        *EVM_UPSTREAM_CLOSURE_TOKENS,
+        *EVM_LOW_DIAGNOSTIC_TOKENS,
+        *EVM_UPSTREAM_LIVE_RESULT_TOKENS,
+        *EVM_UPSTREAM_SCHEMA3_TOKENS,
+        *EVM_FINAL_RUNTIME_IR_TOKENS,
+        *EVM_FUNCTION_SCOPE_GUIDE_TOKENS,
         "Instruction.def",
         "TableGen",
         "_BitInt",
@@ -423,10 +595,44 @@ GUIDE_REQUIRED_TOKENS = {
 }
 TESTING_REQUIRED_TOKENS = (
     "git fetch",
-    "build/evm-opcode-audit/go-ethereum.git",
+    "--depth=1",
+    "--force",
+    "bare",
+    "authority",
+    "local_docs",
+    "GIT_CONFIG_NOSYSTEM",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_*",
+    "GIT_*",
+    "GIT_ATTR_NOSYSTEM",
+    "core.attributesFile",
+    "core.hooksPath",
+    "objects/info/alternates",
+    "refs/replace",
+    "GIT_NO_REPLACE_OBJECTS",
+    "operation.undefined",
+    "HasCost",
+    "EVM_GETH_ACTIVE_WITHOUT_COST",
+    "https://github.com/ethereum/go-ethereum.git",
     "audit_evm_opcode_metadata.py",
-    "--geth-root",
     "EVMUpstreamOpcodePolicy.def",
+    "EVMUpstreamSemanticsPolicy.def",
+    "LookupInstructionSet",
+    "base_min_stack",
+    "net_stack_delta",
+    "NeverDEVMDecoderPropertyTests",
+    "KnownFunctionVariantInfo",
+    "MaxAbstractInstructionTransfers",
+    "EVMForkSemantics.def",
+    "ExecutionFaultKind::ResourceExhausted",
+    "HasPersistentStateSnapshot",
+    *EVM_PUBLIC_BOUNDARY_TOKENS,
+    *EVM_UPSTREAM_CLOSURE_TOKENS,
+    *EVM_LOW_DIAGNOSTIC_TOKENS,
+    *EVM_UPSTREAM_LIVE_RESULT_TOKENS,
+    *EVM_UPSTREAM_SCHEMA3_TOKENS,
+    *EVM_FINAL_RUNTIME_IR_TOKENS,
+    *EVM_FUNCTION_SCOPE_TEST_TOKENS,
     "EVMAnalyzer.StackHeightDomain",
     "EVMAnalyzer.WholeProgram",
     "EVMAnalyzer.MediumIR",
@@ -495,6 +701,7 @@ def localized_paths(locale: str) -> tuple[Path, ...]:
 LOCALIZED_DOCS = tuple(path for locale in LOCALES for path in localized_paths(locale))
 MARKDOWN_DOCS = ENGLISH_DOCS + LOCALIZED_DOCS
 PROHIBITED_STAGED_PREFIXES = ("docs/superpowers/",)
+EVM_TESTS_CMAKE = Path("unittests/evm/CMakeLists.txt")
 
 LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
@@ -504,6 +711,9 @@ EXPLICIT_ANCHOR_RE = re.compile(
 )
 FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 SBF_TESTING_ROW_RE = re.compile(r"^\| `unittests/sbf` \|.*$", re.MULTILINE)
+EVM_TEST_TARGET_RE = re.compile(
+    r"add_neverd_unittest\(\s*(NeverDEVM[A-Za-z0-9_]*Tests)\b"
+)
 
 
 class RepositoryView:
@@ -729,6 +939,23 @@ def validate_sbf_c_status_contract(
             f"{display_path(path)}: C v2 status extensions must match "
             "SBFSourceStatuses.def",
         )
+
+
+def evm_test_targets(errors: list[str], view: RepositoryView) -> tuple[str, ...]:
+    """Return every registered EVM unit-test target in declaration order."""
+
+    targets = EVM_TEST_TARGET_RE.findall(view.read_text(EVM_TESTS_CMAKE))
+    if not targets:
+        report(errors, f"{display_path(EVM_TESTS_CMAKE)}: no EVM test targets found")
+        return ()
+    duplicates = sorted(target for target in set(targets) if targets.count(target) != 1)
+    if duplicates:
+        report(
+            errors,
+            f"{display_path(EVM_TESTS_CMAKE)}: duplicate EVM test targets: "
+            + ", ".join(duplicates),
+        )
+    return tuple(dict.fromkeys(targets))
 
 
 def validate_architecture_semantics(errors: list[str], view: RepositoryView) -> None:
@@ -1774,6 +2001,7 @@ def validate_matrix(errors: list[str], view: RepositoryView) -> None:
     validate_sbf_testing_ownership(errors, view)
     validate_sbf_testing_evidence_prose(errors, view)
     validate_sbf_testing_release_commands(errors, view)
+    registered_evm_tests = evm_test_targets(errors, view)
 
     selector_tokens = {
         stem: (f"{stem}.md", *(f"{stem}.{locale}.md" for locale in LOCALES))
@@ -1786,6 +2014,13 @@ def validate_matrix(errors: list[str], view: RepositoryView) -> None:
             errors,
             view,
         )
+
+    require_tokens(
+        Path("docs/testing.md"),
+        (*registered_evm_tests, *TESTING_REQUIRED_TOKENS),
+        errors,
+        view,
+    )
 
     for locale in LOCALES:
         (
@@ -1836,9 +2071,7 @@ def validate_matrix(errors: list[str], view: RepositoryView) -> None:
         require_tokens(
             testing,
             (
-                "NeverDEVMOpcodeTests",
-                "NeverDEVMSemanticTests",
-                "NeverDEVMIntegrationTests",
+                *registered_evm_tests,
                 "NeverDSBFMetadataTests",
                 "NeverDSBFSemanticTests",
                 "NeverDSBFIntegrationTests",

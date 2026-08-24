@@ -12,8 +12,8 @@
 
 #include "gtest/gtest.h"
 
-#include "neverd/evm/bytecode/EVMBytecode.h"
 #include "neverd/evm/EVMConstants.h"
+#include "neverd/evm/bytecode/EVMBytecode.h"
 
 #include "llvm/Support/Error.h"
 
@@ -50,6 +50,21 @@ TEST(EVMBytecode, AcceptsWhitespaceButRejectsMalformedHex) {
             std::string::npos);
 }
 
+TEST(EVMBytecode, AcceptsExplicitEmptyRuntimeButRejectsMissingHexInput) {
+  auto Explicit = decodeBytecodeInput(" 0x \n", "empty-runtime.hex");
+  ASSERT_TRUE(static_cast<bool>(Explicit))
+      << llvm::toString(Explicit.takeError());
+  EXPECT_TRUE(Explicit->Code.empty());
+  EXPECT_TRUE(Explicit->Original.empty());
+  EXPECT_EQ(Explicit->Container, BytecodeContainer::Legacy);
+
+  auto Direct =
+      normalizeBytecode({}, BytecodeSourceKind::Raw,
+                        /*SourceIsRuntime=*/true, "empty-runtime.raw");
+  ASSERT_TRUE(static_cast<bool>(Direct)) << llvm::toString(Direct.takeError());
+  EXPECT_TRUE(Direct->Code.empty());
+}
+
 TEST(EVMBytecode, PreservesRawBinaryWhenExplicitlyRequested) {
   const char Bytes[] = {'\x60', '\0', '\x7f', '\xff'};
   BytecodeLoadOptions Options;
@@ -75,16 +90,36 @@ TEST(EVMBytecode, PrefersDeployedBytecodeFromCompilerArtifacts) {
   EXPECT_FALSE(Loaded->RuntimeExtracted);
 }
 
-TEST(EVMBytecode, IgnoresEmptyRuntimeFieldsInCompilerArtifacts) {
-  constexpr llvm::StringLiteral Artifact = R"json({
+TEST(EVMBytecode, PrefersExplicitEmptyRuntimeFieldsInCompilerArtifacts) {
+  constexpr llvm::StringLiteral PrefixedArtifact = R"json({
     "bytecode": {"object": "0x6000"},
     "deployedBytecode": {"object": "0x"}
   })json";
-  auto Loaded = decodeBytecodeInput(Artifact, "CreationOnly.json");
+  auto Loaded = decodeBytecodeInput(PrefixedArtifact, "CreationOnly.json");
   ASSERT_TRUE(static_cast<bool>(Loaded)) << llvm::toString(Loaded.takeError());
-  EXPECT_EQ(Loaded->Code, (std::vector<uint8_t>{0x60, 0x00}));
+  EXPECT_TRUE(Loaded->Code.empty());
   EXPECT_EQ(Loaded->Source, BytecodeSourceKind::Artifact);
+  EXPECT_TRUE(Loaded->SourceIsRuntime);
   EXPECT_FALSE(Loaded->RuntimeExtracted);
+
+  constexpr llvm::StringLiteral SolcEmptyArtifact = R"json({
+    "bytecode": {"object": "0x6000"},
+    "deployedBytecode": {"object": ""}
+  })json";
+  auto SolcEmpty = decodeBytecodeInput(SolcEmptyArtifact, "Interface.json");
+  ASSERT_TRUE(static_cast<bool>(SolcEmpty))
+      << llvm::toString(SolcEmpty.takeError());
+  EXPECT_TRUE(SolcEmpty->Code.empty());
+  EXPECT_TRUE(SolcEmpty->SourceIsRuntime);
+
+  constexpr llvm::StringLiteral WhitespaceArtifact = R"json({
+    "deployedBytecode": {"object": "   "}
+  })json";
+  auto Whitespace =
+      decodeBytecodeInput(WhitespaceArtifact, "MalformedInterface.json");
+  ASSERT_FALSE(static_cast<bool>(Whitespace));
+  EXPECT_NE(llvm::toString(Whitespace.takeError()).find("empty bytecode"),
+            std::string::npos);
 }
 
 TEST(EVMBytecode, SelectsAContractFromSolcStandardJson) {
@@ -160,6 +195,17 @@ TEST(EVMBytecode, ExtractsStaticRuntimeFromCreationCode) {
   EXPECT_EQ(Loaded->Code, (std::vector<uint8_t>{0x60, 0x01, 0x60, 0x00, 0x55}));
   EXPECT_TRUE(Loaded->RuntimeExtracted);
   EXPECT_EQ(Loaded->Original.size(), 17u);
+}
+
+TEST(EVMBytecode, ExtractsAStaticallyProvenEmptyRuntime) {
+  // PUSH1 0; PUSH1 12; PUSH1 0; CODECOPY; PUSH1 0; PUSH1 0; RETURN.
+  // optional<vector>{} is a successful extraction, not "no proof".
+  auto Loaded =
+      decodeBytecodeInput("6000600c60003960006000f3", "empty-creation.hex");
+  ASSERT_TRUE(static_cast<bool>(Loaded)) << llvm::toString(Loaded.takeError());
+  EXPECT_TRUE(Loaded->Code.empty());
+  EXPECT_TRUE(Loaded->RuntimeExtracted);
+  EXPECT_FALSE(Loaded->SourceIsRuntime);
 }
 
 TEST(EVMBytecode, DoesNotExtractRuntimeModifiedAfterCodecopy) {

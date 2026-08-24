@@ -18,9 +18,11 @@ concurrency:
 
 jobs:
   opcode-metadata:
-    name: Audit latest go-ethereum opcodes
+    name: Audit latest go-ethereum instruction sets
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 30
+    env:
+      GOTOOLCHAIN: local
 
     steps:
       - name: Checkout repository
@@ -33,8 +35,59 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: stable
+          check-latest: true
+          cache: false
+
+      - name: Install fail-closed upstream sandbox
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
+          bwrap --version
+
       - name: Test the upstream audit
         run: python -m unittest -v scripts.tests.test_audit_evm_opcode_metadata
 
       - name: Fetch and audit current go-ethereum HEAD
-        run: python scripts/audit_evm_opcode_metadata.py
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -o pipefail
+          audit_directory="${RUNNER_TEMP}/evm-upstream-audit"
+          audit_manifest="${audit_directory}/manifest.json"
+          audit_log="${audit_directory}/audit.log"
+          revision_file="${audit_directory}/geth-revision.txt"
+          mkdir -p "${audit_directory}"
+          set +e
+          python scripts/audit_evm_opcode_metadata.py \
+            --manifest-output "${audit_manifest}" 2>&1 | tee "${audit_log}"
+          audit_status="${PIPESTATUS[0]}"
+          set -e
+          revision="$(python -c \
+            'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("geth_revision") or "unavailable")' \
+            "${audit_manifest}" 2>/dev/null || echo unavailable)"
+          echo "${revision}" > "${revision_file}"
+          {
+            echo '## EVM upstream audit'
+            echo
+            echo "**go-ethereum SHA:** \`${revision}\`"
+            echo
+            echo '```text'
+            cat "${audit_log}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+          exit "${audit_status}"
+
+      - name: Upload failed EVM upstream audit diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: evm-upstream-audit-diagnostics
+          path: |
+            ${{ runner.temp }}/evm-upstream-audit/geth-revision.txt
+            ${{ runner.temp }}/evm-upstream-audit/manifest.json
+            ${{ runner.temp }}/evm-upstream-audit/audit.log
+          if-no-files-found: warn

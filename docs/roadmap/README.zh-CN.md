@@ -42,12 +42,14 @@
 - **反编译输出** — 带显式 host-effect 契约的可编译 C23 与 Solidity 状态机，以及已验证 LLVM IR
 - **CLI / C API** — `neverd decompile` / session API 对 EVM 输入与原生二进制一致
 
-**状态：** 传统 EVM 字节码从 Frontier 到 Fusaka 已完成。实现覆盖全部 150 个已分配
-opcode、raw/hex/artifact 输入、creation-to-runtime 提取、CFG 与 stack-SSA 恢复、
-strict/relaxed 分析、C23/LLVM/Solidity backend、CLI/C API，以及与 Anvil 原生 EVM
-的独立差分执行。另有四个 Amsterdam 操作码通过显式开发分叉 target 提供，并由
-官方/上游向量与元数据漂移审计约束；`latest` 仍保持已定案 Fusaka。host ABI 与明确
-限制见 [EVM 反编译](../evm.zh-CN.md)。
+**状态：** Frontier 到 Fusaka 的传统操作码解码与 lifting 已完成并有回归测试覆盖。
+源码重建仍在持续保守演进：selector、event、类型、标准、名称与动态控制流只有在证据
+充分时才报告，不声称原始源码身份、完整 ABI 或完整 ERC 合规性。规范函数 selector、
+逐标准 ABI 变体与成功返回形状彼此分离，因此共享 ERC selector 既不能凭空证明某个
+标准，也不会借用不兼容的返回类型。Amsterdam 只作为
+Review/development 的显式 opt-in target；`latest` 仍为 Fusaka。EOFv1/EIP-7692 尚未
+排期，EIP-3540 为 Stagnant，均不冒充已定案主网行为。host ABI 与明确限制见
+[EVM 反编译](../evm.zh-CN.md)。
 
 ### 为什么做 EVM？
 
@@ -110,13 +112,15 @@ strict/relaxed 分析、C23/LLVM/Solidity backend、CLI/C API，以及与 Anvil 
 
 ## 时间线
 
-原生格式补齐、传统 EVM 与 Solana SBF 反编译、内存安全 P0 均已完成，并有回归测试覆盖。不承诺具体发布日期。
+原生格式补齐、Fusaka 及以前的传统 EVM 解码/lifting、Solana SBF 反编译与内存安全 P0
+已有回归覆盖；保守的 EVM 源码重建仍在进行。不承诺具体发布日期。
 
 
 | 功能                          | 状态        |
 | --------------------------- | --------- |
 | 原生格式补齐（PE ARM*、Mach-O i386） | 已完成       |
-| EVM 字节码反编译                  | 已完成 — C、Solidity 与 LLVM；有回归测试覆盖 |
+| EVM 传统解码/lifting              | 到 Fusaka 已完成；有回归测试覆盖 |
+| EVM 源码重建                      | 持续进行 — 有证据才报告，保持保守 |
 | Solana eBPF（SBF）反编译         | 已完成 — v0-v4、C、Rust 与 LLVM；有回归测试覆盖 |
 | 内存安全审计与猎取                   | 已完成 — PE、ELF、Mach-O 的 P0；有回归测试覆盖 |
 | 引擎与产品加固                     | 持续进行      |

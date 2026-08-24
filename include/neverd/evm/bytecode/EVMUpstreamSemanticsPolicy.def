@@ -1,0 +1,129 @@
+//===- EVMUpstreamSemanticsPolicy.def - geth semantic policy -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard. It maps NeverD's canonical
+// hardfork names to exported go-ethereum params.Rules fields and records the
+// exceptional interpreter base stack prechecks that cannot be derived from
+// EVM_OPCODE's mutation counts. Dynamic operation contracts live here; their
+// exhaustive encoded-byte tables live in EVMEIP8024Immediates.def.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_GETH_FORK_RULE
+#define EVM_GETH_FORK_RULE(FORK, RULE)
+#endif
+
+#ifndef EVM_GETH_RULE_FIELD
+#define EVM_GETH_RULE_FIELD(NAME, CATEGORY, EXPECTED_FORK)
+#endif
+
+#ifndef EVM_GETH_BASE_MIN_STACK
+#define EVM_GETH_BASE_MIN_STACK(OPCODE, DEPTH)
+#endif
+
+#ifndef EVM_GETH_ACTIVE_WITHOUT_COST
+#define EVM_GETH_ACTIVE_WITHOUT_COST(OPCODE, FORK)
+#endif
+
+#ifndef EVM_GETH_DYNAMIC_STACK_IMMEDIATE
+#define EVM_GETH_DYNAMIC_STACK_IMMEDIATE(OPCODE, FAMILY, OPERATION_KIND,       \
+                                         VALID_STACK_DELTA)
+#endif
+
+// Closed reflection inventory of params.Rules. A newly exported boolean can
+// select a jump table even when upstream adds no opcode constant, so the live
+// probe refuses any field not reviewed here.
+EVM_GETH_RULE_FIELD(IsHomestead, MappedForkSelector, Homestead)
+EVM_GETH_RULE_FIELD(IsEIP150, MappedForkSelector, TangerineWhistle)
+EVM_GETH_RULE_FIELD(IsEIP155, NoOpcodeAllocation, Frontier)
+EVM_GETH_RULE_FIELD(IsEIP158, MappedForkSelector, SpuriousDragon)
+EVM_GETH_RULE_FIELD(IsEIP2929, NoOpcodeAllocation, Frontier)
+EVM_GETH_RULE_FIELD(IsEIP4762, NoOpcodeAllocation, Frontier)
+EVM_GETH_RULE_FIELD(IsByzantium, MappedForkSelector, Byzantium)
+EVM_GETH_RULE_FIELD(IsConstantinople, MappedForkSelector, Constantinople)
+EVM_GETH_RULE_FIELD(IsPetersburg, NoOpcodeAllocation, Frontier)
+EVM_GETH_RULE_FIELD(IsIstanbul, MappedForkSelector, Istanbul)
+EVM_GETH_RULE_FIELD(IsBerlin, MappedForkSelector, Berlin)
+EVM_GETH_RULE_FIELD(IsLondon, MappedForkSelector, London)
+EVM_GETH_RULE_FIELD(IsMerge, MappedForkSelector, Paris)
+EVM_GETH_RULE_FIELD(IsShanghai, MappedForkSelector, Shanghai)
+EVM_GETH_RULE_FIELD(IsCancun, MappedForkSelector, Cancun)
+EVM_GETH_RULE_FIELD(IsPrague, MappedForkSelector, Pectra)
+EVM_GETH_RULE_FIELD(IsOsaka, MappedForkSelector, Fusaka)
+EVM_GETH_RULE_FIELD(IsAmsterdam, MappedForkSelector, Amsterdam)
+EVM_GETH_RULE_FIELD(IsBogota, MappedForkSelector, Bogota)
+EVM_GETH_RULE_FIELD(IsUBT, ExcludedSelectorExpectedError, Cancun)
+
+EVM_GETH_FORK_RULE(Frontier, None)
+EVM_GETH_FORK_RULE(Homestead, IsHomestead)
+EVM_GETH_FORK_RULE(DaoFork, None)
+EVM_GETH_FORK_RULE(TangerineWhistle, IsEIP150)
+EVM_GETH_FORK_RULE(SpuriousDragon, IsEIP158)
+EVM_GETH_FORK_RULE(Byzantium, IsByzantium)
+EVM_GETH_FORK_RULE(Constantinople, IsConstantinople)
+EVM_GETH_FORK_RULE(Petersburg, None)
+EVM_GETH_FORK_RULE(Istanbul, IsIstanbul)
+EVM_GETH_FORK_RULE(MuirGlacier, None)
+EVM_GETH_FORK_RULE(Berlin, IsBerlin)
+EVM_GETH_FORK_RULE(London, IsLondon)
+EVM_GETH_FORK_RULE(ArrowGlacier, None)
+EVM_GETH_FORK_RULE(GrayGlacier, None)
+EVM_GETH_FORK_RULE(Paris, IsMerge)
+EVM_GETH_FORK_RULE(Shanghai, IsShanghai)
+EVM_GETH_FORK_RULE(Cancun, IsCancun)
+EVM_GETH_FORK_RULE(Pectra, IsPrague)
+EVM_GETH_FORK_RULE(Fusaka, IsOsaka)
+EVM_GETH_FORK_RULE(Amsterdam, IsAmsterdam)
+EVM_GETH_FORK_RULE(Bogota, IsBogota)
+
+EVM_GETH_BASE_MIN_STACK(DUP1, 1)
+EVM_GETH_BASE_MIN_STACK(DUP2, 2)
+EVM_GETH_BASE_MIN_STACK(DUP3, 3)
+EVM_GETH_BASE_MIN_STACK(DUP4, 4)
+EVM_GETH_BASE_MIN_STACK(DUP5, 5)
+EVM_GETH_BASE_MIN_STACK(DUP6, 6)
+EVM_GETH_BASE_MIN_STACK(DUP7, 7)
+EVM_GETH_BASE_MIN_STACK(DUP8, 8)
+EVM_GETH_BASE_MIN_STACK(DUP9, 9)
+EVM_GETH_BASE_MIN_STACK(DUP10, 10)
+EVM_GETH_BASE_MIN_STACK(DUP11, 11)
+EVM_GETH_BASE_MIN_STACK(DUP12, 12)
+EVM_GETH_BASE_MIN_STACK(DUP13, 13)
+EVM_GETH_BASE_MIN_STACK(DUP14, 14)
+EVM_GETH_BASE_MIN_STACK(DUP15, 15)
+EVM_GETH_BASE_MIN_STACK(DUP16, 16)
+
+EVM_GETH_BASE_MIN_STACK(SWAP1, 2)
+EVM_GETH_BASE_MIN_STACK(SWAP2, 3)
+EVM_GETH_BASE_MIN_STACK(SWAP3, 4)
+EVM_GETH_BASE_MIN_STACK(SWAP4, 5)
+EVM_GETH_BASE_MIN_STACK(SWAP5, 6)
+EVM_GETH_BASE_MIN_STACK(SWAP6, 7)
+EVM_GETH_BASE_MIN_STACK(SWAP7, 8)
+EVM_GETH_BASE_MIN_STACK(SWAP8, 9)
+EVM_GETH_BASE_MIN_STACK(SWAP9, 10)
+EVM_GETH_BASE_MIN_STACK(SWAP10, 11)
+EVM_GETH_BASE_MIN_STACK(SWAP11, 12)
+EVM_GETH_BASE_MIN_STACK(SWAP12, 13)
+EVM_GETH_BASE_MIN_STACK(SWAP13, 14)
+EVM_GETH_BASE_MIN_STACK(SWAP14, 15)
+EVM_GETH_BASE_MIN_STACK(SWAP15, 16)
+EVM_GETH_BASE_MIN_STACK(SWAP16, 17)
+
+EVM_GETH_BASE_MIN_STACK(DUPN, 1)
+EVM_GETH_BASE_MIN_STACK(SWAPN, 2)
+EVM_GETH_BASE_MIN_STACK(EXCHANGE, 2)
+
+EVM_GETH_ACTIVE_WITHOUT_COST(STOP, Frontier)
+EVM_GETH_ACTIVE_WITHOUT_COST(INVALID, Frontier)
+
+EVM_GETH_DYNAMIC_STACK_IMMEDIATE(DUPN, Single, Dup, 1)
+EVM_GETH_DYNAMIC_STACK_IMMEDIATE(SWAPN, Single, Swap, 0)
+EVM_GETH_DYNAMIC_STACK_IMMEDIATE(EXCHANGE, Pair, Exchange, 0)
+
+#undef EVM_GETH_DYNAMIC_STACK_IMMEDIATE
+#undef EVM_GETH_ACTIVE_WITHOUT_COST
+#undef EVM_GETH_BASE_MIN_STACK
+#undef EVM_GETH_FORK_RULE
+#undef EVM_GETH_RULE_FIELD

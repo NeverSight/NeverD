@@ -34,10 +34,17 @@
 
 - Loader EVM · 1:1 lifter opcodes (strict) · стек/память · JUMP/JUMPI → CFG · storage/calldata · C23/Solidity/LLVM · единый CLI/C API
 
-**Статус:** Завершено для legacy EVM от Frontier до Fusaka: 150 opcodes,
-raw/hex/artifact, runtime extraction, CFG и stack-SSA, strict/relaxed analysis,
-backends C23/LLVM/Solidity, CLI/C API и differential tests с Anvil. Host ABI и
-ограничения описаны в [декомпиляции EVM](../evm.ru.md).
+**Статус:** Decode и lifting legacy opcodes от Frontier до Fusaka завершены и
+покрыты регрессионными тестами. Реконструкция исходника продолжается
+консервативно: selectors, events, типы, стандарты, имена и динамическое
+управление сообщаются только при достаточных свидетельствах, не как исходный
+код, полный ABI или полная совместимость с ERC. Канонические selectors функций,
+ABI variants отдельных стандартов и успешные return shapes разделены: общий ERC
+selector не может придумать стандарт или заимствовать несовместимый return type.
+Amsterdam — явная opt-in цель
+Review/development; `latest` остаётся Fusaka. EOFv1/EIP-7692 не запланирован, а
+EIP-3540 имеет статус Stagnant, поэтому они не выдаются за mainnet. Подробнее:
+[декомпиляция EVM](../evm.ru.md).
 
 ### Зачем EVM
 
@@ -88,12 +95,15 @@ backends C23/LLVM/Solidity, CLI/C API и differential tests с Anvil. Host ABI �
 
 ## Сроки
 
-Нативные форматы, декомпиляции EVM и Solana SBF и безопасность памяти P0 завершены и покрыты регрессионными тестами. Даты не обещаем.
+Нативные форматы, legacy EVM decode/lifting до Fusaka, Solana SBF и безопасность
+памяти P0 покрыты регрессионными тестами. Консервативная реконструкция исходника
+EVM продолжается. Даты не обещаем.
 
 | Функция | Статус |
 |---------|--------|
 | Завершение нативных форматов (PE ARM*, Mach-O i386) | Завершено |
-| Декомпиляция EVM | Завершено — C, Solidity и LLVM; регрессионное покрытие |
+| Legacy EVM decode/lifting | Завершено до Fusaka; регрессионное покрытие |
+| Реконструкция исходника EVM | Продолжается — по свидетельствам и консервативно |
 | Декомпиляция Solana eBPF (SBF) | Завершено — v0-v4, C, Rust и LLVM; регрессионное покрытие |
 | Аудит и охота на ошибки безопасности памяти | Завершено — P0 для PE, ELF и Mach-O; регрессионное покрытие |
 | Укрепление движка и продукта | Постоянно |

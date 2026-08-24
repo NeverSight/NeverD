@@ -6,9 +6,11 @@
 
 NeverD lädt klassischen Bytecode der Ethereum Virtual Machine, erzeugt ein
 eigenes 256-Bit-LowIR, Stack-SSA-MedIR und rekonstruiertes HighIR und gibt LLVM
-IR, C23 oder Solidity aus. Strikte Analyse ist Standard: Ein nicht zugewiesener
-oder im gewählten Hardfork inaktiver Opcode meldet einen Fehler an seinem
-exakten PC.
+IR, C23 oder Solidity aus. Strikte Analyse ist Standard, doch Legacy-EVM
+validiert nicht alle Bytes eines Images als Opcodes: Abgelehnt wird nur eine
+definitiv `Reachable` Ausführungs-Lane, die einen nicht zugewiesenen oder im Fork
+inaktiven Opcode erreicht, und zwar an dessen exaktem PC. Tote Bytes und nur
+`MayReachable` CFG-Kandidaten werden nicht zu Strict-Fehlern.
 
 Solidity und C sind semantische Rekonstruktionen. Opcode-Reihenfolge,
 256-Bit-Arithmetik, Stack-Prüfungen und validierter Kontrollfluss bleiben
@@ -50,9 +52,13 @@ vorhanden, erkennt NeverD begrenzte konstante `CODECOPY`/`RETURN`-Wrapper und
 extrahiert den kopierten Runtime-Bereich. Der Constructor-Durchlauf verwendet
 denselben Einzelinstruktions-Decoder wie der echte Decoder, unter dem
 analysierten Hardfork; ein Byte, das auf einem Fork Daten und auf einem anderen
-ein Opcode ist, kann die Grenze daher nicht verschieben. Ein Feld mit nur
-optionalem `0x` gilt als leer; ein leeres Runtime-Feld verdeckt keinen nutzbaren
-Creation-Fallback.
+ein Opcode ist, kann die Grenze daher nicht verschieben. Ein vorhandenes
+`deployedBytecode`- oder `runtimeBytecode`-Feld ist maßgeblich: Ein explizites
+`0x` gilt als leeres, natürlich stoppendes Runtime-Programm und verhindert
+absichtlich den Rückfall auf Creation-Code. Ein fehlendes Feld darf zum nächsten
+Kandidaten übergehen; fehlendes oder ausschließlich aus Whitespace bestehendes
+Hex ohne expliziten Präfix wird abgelehnt. Explizite Roheingabe darf ebenfalls
+leer sein.
 
 ### Compiler-Trailer
 
@@ -95,8 +101,10 @@ des Containers und bleibt Instruktionen, damit der Decoder das Byte benennen
 kann, das er nicht lesen konnte.
 
 Fehlerhaftes Hex, ungerade Ziffern, ungelöste Linker-Platzhalter, mehrdeutige
-Multi-Contract-Artefakte, ungültige Metadata-Grenzen und leerer Code erzeugen
-verwertbare Fehler. `BytecodeLoadOptions::ArtifactContract` wählt `Contract`
+Multi-Contract-Artefakte, ungültige Metadata-Grenzen sowie fehlendes oder leeres
+Hex erzeugen verwertbare Fehler. Eine explizit leere Roheingabe oder ein
+`0x`-Runtime-Feld bleibt dagegen ein gültiges leeres Programm.
+`BytecodeLoadOptions::ArtifactContract` wählt `Contract`
 oder `path/File.sol:Contract`. Bei gleichen Namen in mehreren Quelldateien wird
 der unqualifizierte Name abgelehnt, damit JSON-Reihenfolge nie falsch auswählt.
 
@@ -106,9 +114,10 @@ normalisierte Abbildung und dieselben Optionen.
 
 ## Hardforks und Opcodes
 
-Alle 150 zugewiesenen Legacy-Opcodes von Frontier bis Fusaka sind abgedeckt,
+Der finalisierte Legacy-Opcode-Satz ist von Frontier bis Fusaka abgedeckt,
 einschließlich `PUSH0`, transientem Storage, `MCOPY`, Blob-Opcodes und `CLZ`.
-`latest` wählt standardmäßig Fusaka.
+Die für Amsterdam geplanten Opcodes sind nur über ein ausdrückliches
+Entwicklungs-Fork-Ziel verfügbar; `latest` bleibt Fusaka.
 
 ```text
 frontier, homestead, dao-fork, tangerine-whistle, spurious-dragon,
@@ -132,20 +141,23 @@ Immediate konsumiert; ein ungültiger Kandidat bleibt die nächste Instruktion.
 
 EOF wurde im
 [Fusaka checkpoint 2](https://blog.ethereum.org/2025/04/29/checkpoint-2)
-entfernt und ist in execution-spec-tests als
-[aus Osaka entfernt und nicht geplant](https://github.com/ethereum/execution-spec-tests/blob/main/docs/CHANGELOG.md)
-vermerkt. NeverD behandelt den zurückgezogenen Entwurf nicht als Mainnet-Regel.
+entfernt. EOFv1/EIP-7692 ist nicht eingeplant; der Containerentwurf
+[EIP-3540](https://eips.ethereum.org/EIPS/eip-3540) ist Stagnant. Das alte
+Repository `execution-spec-tests` ist archiviert, die gepflegten Tests sind nach
+[execution-specs](https://github.com/ethereum/execution-specs/tree/master/tests)
+umgezogen. NeverD gibt daher keinen experimentellen EOF-Container als Mainnet-Regel aus.
 
-Strict lehnt unbekannte und fork-inaktive Bytes ab. `--evm-relaxed` bewahrt sie
-in LowIR und Diagnosen, aber Backends lösen bei Ausführung einen Fehler aus;
-unbekannte Bytes werden nie still zu NOP.
+Strict lehnt ein unbekanntes oder fork-inaktives Byte nur ab, wenn eine definitiv
+`Reachable` Lane beweist, dass die Ausführung es erreicht. `--evm-relaxed`
+bewahrt solche Bytes als typisierte Fehlerpräfixe und in Diagnosen; Backends
+lösen bei Ausführung weiterhin einen Fehler aus, niemals still einen NOP.
 
 ## Metadata-Architektur im LLVM-Stil
 
 Handgeschriebene EVM-Metadata folgt LLVMs mehrfach eingebundenem `.def`-Muster:
 
-- `EVMOpcodes.def` ist die einzige Wahrheit für 150 finalisierte und vier
-  opt-in Entwicklungs-Opcodes: Encoding, tatsächliche Pop/Push-Änderungen,
+- `EVMOpcodes.def` ist die einzige Wahrheit für jeden finalisierten Legacy- und
+  jeden opt-in Entwicklungs-Opcode: Encoding, tatsächliche Pop/Push-Änderungen,
   Immediate-Art, Klasse, Aktivierungs-Fork,
   Haupteffekt, orthogonaler EVM-Memory-, Source-State- und Call-Value-Zugriff
   sowie Terminierung stehen in jedem Record; es gibt keine stillen Defaults.
@@ -160,12 +172,21 @@ Handgeschriebene EVM-Metadata folgt LLVMs mehrfach eingebundenem `.def`-Muster:
   bedingte Single-/Pair-Encodings; `EVMDecodeStatuses.def` besitzt das stabile
   Vokabular, das LowIR und Disassembly veröffentlichen.
   `EVMUpstreamOpcodePolicy.def` verzeichnet den go-ethereum-Namensalias und die
-  absichtlichen historischen/zurückgezogenen Ausschlüsse;
-  `scripts/audit_evm_opcode_metadata.py` lehnt Byte-Drift und jede neue
-  ungeprüfte Upstream-Konstante ab.
+  absichtlichen historischen und nicht eingeplanten EOF-Ausschlüsse. Die
+  orthogonale `EVMUpstreamSemanticsPolicy.def` ordnet Forks `params.Rules` zu,
+  benennt Ausnahmen der grundlegenden Stack-Vorprüfung und klassifiziert
+  Dynamic-Immediate-Familien. Das Audit lehnt Drift bei Byte, Aktivierung,
+  `base_min_stack` und `net_stack_delta` sowie jede neue ungeprüfte
+  Upstream-Konstante ab.
 - `EVMHardforks.def`, `EVMEffects.def`, `EVMExitStatuses.def` und
   `OutputLanguages.def` erzeugen geordnete Enums, Parser, Anzeigenamen,
-  CLI-Auswahl und C-ABI-Werte. `EVMConstants.h` besitzt Breiten und Limits.
+  CLI-Auswahl und C-ABI-Werte. `EVMAnalysisLimits.def`,
+  `EVMInterpreterLimits.def`, `EVMABIParserLimits.def` und
+  `EVMABITableLimits.def` deklarieren die stufenspezifischen Grenzen für
+  Analyse, Interpreter, Parser und öffentliche Tabellen. `EVMConstants.h`
+  besitzt gemeinsame Protokollbreiten und stabile interne Namen und erzeugt aus
+  `EVMAnalysisLimits.def` die Analyse-Standardwerte und Diagnoseoptionsnamen;
+  Interpreter- und ABI-Header erzeugen die Grenzen aus ihren eigenen Tabellen.
 - `EVMCalls.def` beschreibt die vier Instruktionen, die ein anderes Programm
   aufrufen, und das Gitter der Herkünfte einer Callee-Adresse. Ein einziges Flag
   pro Eintrag, ob ein Value-Operand zwischen Callee und Argumentfenster liegt,
@@ -187,8 +208,13 @@ Handgeschriebene EVM-Metadata folgt LLVMs mehrfach eingebundenem `.def`-Muster:
 - `EVMRecoveredFacts.def` besitzt die Schreibweisen der
   Rekonstruktionsvokabulare, damit ein Name, der in der Ausgabe erscheint, an
   einer Stelle lebt statt in einem `switch`, in dem ein neuer Enumerator fehlen
-  kann. `EVMKnownSignatures.def` tut dasselbe für die drei Rollen einer
-  Signatur.
+  kann. `EVMKnownSignatures.def` speichert kanonische Schreibweise und Selector
+  jeder Funktion einmal und deklariert getrennte Standard-Mitgliedschaften als
+  `KnownFunctionVariantInfo`, jeweils mit Return-Liste und
+  independent/non-independent Beweisrolle. Eine von ERC-20 und ERC-721 geteilte
+  Signatur bleibt damit ein aufrufbarer Kandidat, beweist allein aber keinen
+  Standard und übernimmt nicht den Rückgabetyp der ersten Variante. Events und
+  Custom Errors behalten eigene typisierte Records.
 - `Semantics.h` enthält den zielunabhängigen Scalar-ALU-Evaluator. Interpreter
   und Constant Folding teilen die geprüfte `APInt`-Implementierung; LLVM-, C-
   und Solidity-Lowering bleiben explizit und fail-loud.
@@ -234,17 +260,21 @@ Lookup, Validierung, Klassifikation und CLI wachsen ohne Paralleltabellen.
   ALU-Operationen können so ein oder mehrere konkrete Sprungziele auflösen. Ein
   wirklich unbekanntes Ziel bleibt eine explizite indirekte Kante.
 
-  `AnalyzeOptions::MaxAbstractValuesPerSlot` begrenzt jede endliche Wertemenge;
-  bei Überschreitung wird der Slot zu `Unknown` aufgeweitet.
-  `MaxStackHeightVariants` begrenzt die Zahl pfadabhängiger Höhen eines Blocks
-  und erzeugt bei Überschreitung einen ausdrücklichen Analysis-Limit-Fehler,
-  statt den CFG abzuschneiden. Beide Grenzen lehnen Null ab. Endliche Werte aus
-  einer kartesischen Operation nach einem nicht-relationalen Stack-Merge werden
-  als Over-Approximation markiert: Ungültige Kandidaten werden diagnostiziert,
-  führen aber nicht allein wegen verlorener Slot-Korrelation zur Ablehnung durch
-  die strikte Analyse. Präzise ungültige Ziele scheitern weiterhin am exakten
-  Jump-PC. Im Relaxed-Modus werden Stackfehler diagnostiziert und beenden nur
-  den fehlerhaften abstrakten Pfad; es entsteht kein unmöglicher Fallthrough.
+  Auf einem Back-Edge wird ein geänderter loop-carried Slot semantisch zu `Top`
+  überapproximiert, damit der Fixpunkt konvergiert; diese Rekurrenzabstraktion ist
+  unabhängig von Ressourcen. `MaxAbstractValuesPerSlot`,
+  `MaxStackHeightVariants`, `MaxAbstractInstructionTransfers` und die Grenzen
+  für Instruktionen, Blöcke, Zustände, Werte, Stacks, Lanes, Edges und Worklist
+  sind benannte Budgets. Null oder Erschöpfung ist vor dem
+  Einfügen ein harter Fehler, niemals zusätzliches Emergency-Widening oder stilles
+  Abschneiden.
+
+  `EVMLowFaultKinds.def::InvalidJumpDestination` bleibt bei einem
+  `end-of-code JUMPI` pfadsensitiv: Eine sicher wahre Bedingung mit ungültigem
+  Ziel besitzt keinen erfolgreichen Nachlauf und ergibt einen definitiven
+  Fehler; eine sicher falsche Bedingung ist erfolgreich. Bei Unknown bleibt nur
+  der möglicherweise erfolgreiche False-Pfad erhalten, ohne die ganze Lane
+  fälschlich als definitiven Fehler zu markieren.
 - **EVM MedIR** bildet jeden Stack-Wert als 256-Bit-SSA-Wert ab und verdrahtet
   alle Merge-Phis, bevor eine deterministische Sparse-Constant-Worklist läuft.
   Das private Gitter ist `Uninitialized`, eine exakte `Constant` oder
@@ -253,10 +283,9 @@ Lookup, Validierung, Klassifikation und CLI wachsen ohne Paralleltabellen.
   Konstante erfinden kann. Die Worklist prüft Def-Use-IDs und verwendet denselben
   ALU-Evaluator aus `Semantics.h` wie der Interpreter. MedIR erhält außerdem den
   primären semantischen Effekt sowie orthogonalen EVM-Speicherzugriff
-  `none/read/write/readwrite`, Quellzustands- und Call-Value-Zugriff. Ein
-  polymorpher LowIR-Stack wird an dieser Grenze konservativ am Stack-Top
-  ausgerichtet; auf manchen Pfaden fehlende Slots werden explizit unbekannt und
-  ein deterministischer Hinweis protokolliert den Präzisionsverlust.
+  `none/read/write/readwrite`, Quellzustands- und Call-Value-Zugriff. Jede
+  Whole-Stack-Lane des LowIR behält eine eigene SSA-Execution-Lane; Phis nennen
+  ihre Source-Lane. Inkompatible Stacks werden nicht an der Maximalhöhe ausgerichtet.
 - **EVM HighIR** rekonstruiert Solidity-Dispatcher-Selector, wahrscheinliche
   Calldata- und Return-Wörter, Mutability, konstante Storage-Slots, LOG-/Event-
   Fakten, Revert-Fakten und Function-/CFG-Regionen. Ein geprüfter Producer-Index
@@ -270,10 +299,33 @@ Lookup, Validierung, Klassifikation und CLI wachsen ohne Paralleltabellen.
   unbekannt. Widersprüchliche Ziele desselben Selectors werden diagnostiziert
   und weggelassen. Payability bleibt unabhängig vom State-Access-Gitter; ein
   erreichbarer ungelöster dynamischer Sprung erzwingt konservatives
-  `nonpayable`. Bis MedIR Memory SSA besitzt, bleiben die Rekonstruktion von
-  Custom-Error-Payloads und die des ausgehenden Aufruf-Payloads die einzigen
-  beschränkten Instruktionsfenster-Heuristiken;
-  rekonstruierte Namen und Typen bleiben ausdrücklich heuristisch.
+  `nonpayable`. Der bytegenaue flusssensitive Speicher-Dataflow verfolgt konstante
+  Writes blockübergreifend, kombiniert Overlap/Kill und invalidiert Wissen bei
+  dynamischen oder unbekannten Writes. Nachgewiesen sind derzeit Selector und
+  bekannte Panic-Bytes. Für eine bekannte Custom-Error-Deklaration behält der
+  Solidity-Emitter kanonische Parametertypen; er behauptet nicht, jeden Runtime-
+  Argumentwert zu rekonstruieren. Andere Fakten bleiben Evidenzkandidaten.
+
+  Die Selector-Suche beginnt nur an der Root-Lane und folgt den
+  Nichttreffer-Kanten des Dispatchers; ein selectorähnlicher Vergleich in einem
+  Handler wird nicht zur öffentlichen Funktion. Receive und Fallback sind
+  ebenfalls auf die Root-Lane beschränkt und verlangen ein definitiv
+  erreichbares erfolgreiches Ende: Revert, Fault, ein nicht zahlbarer
+  Empty-Calldata-Handler oder ein nur möglicher Pfad beweisen keinen Entry. Eine
+  unvereinbare Calldata-Nutzung verwirft den kanonischen Kandidaten, und ein
+  geteilter Selector ist kein unabhängiger Standardbeleg. Erst genügend
+  kompatible unabhängige Selectors oder starke Evidenz durch exakte Topic/Arity,
+  Storage-Slot oder Proxy wählen Standard und Variante. Eine statische
+  Return-Liste wird nur ausgegeben, wenn alle definitiv erreichbaren
+  erfolgreichen Enden auf dieselbe exakte ABI-Bytezahl kommen; ungelöste
+  Transfers, widersprüchliche Formen oder Mismatches scheitern geschlossen.
+  Revert und Fault sind keine erfolgreichen Returns.
+
+  HighIR budgetiert Funktionen, Lane-/Operationsbesuche,
+  Blockreferenzen in Regionen, Memory-Anfragen und -Bytes, Zustandszellen und
+  Worklist-Updates getrennt. Der Memory-Fixpunkt verarbeitet nur definitiv
+  erreichbare Ausführungs-Lanes, bildet einen Byte-Konsens-Meet und liefert bei
+  Erschöpfung einen harten Fehler, ohne Fakten abzuschneiden.
 
   HighIR erfasst außerdem die ausgehende Hälfte der Schnittstelle: jeden `CALL`,
   `CALLCODE`, `DELEGATECALL` und `STATICCALL` mit der Herkunft des Callees, der
@@ -312,6 +364,236 @@ auf 160 Bit maskiert; Environment-Breiten werden vor der Ausführung validiert
 und `BLOCKHASH` beachtet das 256-Block-Fenster. Der EIP-211-Return-Data-Puffer
 ist vom finalen Frame-Output getrennt: Nur `RETURN`/`REVERT` setzen
 `ExecutionResult::ReturnData`; CREATE/CREATE2 folgen derselben Regel.
+
+Vor jedem opcode-spezifischen Effekt prüft der Interpreter die typisierte
+Mindesthöhe, Pops sowie erhaltene Höhe plus Pushes vorab; Underflow oder Overflow
+können keine halbe Instruktion ausführen. `EVMForkSemantics.def` wählt für Byte
+`0x44` vor Paris `DIFFICULTY` und ab Paris `PREVRANDAO`. `REVERT`, semantische
+Faults, Step-Limit und Ressourcenerschöpfung durch Allocation/Length setzen
+Storage, transienten Storage, Logs und Selfdestruct-Effekte auf den
+Eingabe-Snapshot zurück und bewahren Frame-Diagnose sowie explizite Revert-Bytes.
+Ein Allokationsfehler wird ohne neue Fehlerstring-Allokation als
+`ExecutionFaultKind::ResourceExhausted` markiert. Konnte selbst der Snapshot
+nicht erzeugt werden, ist `HasPersistentStateSnapshot` false und das Ergebnis
+niemals committable.
+
+### Öffentliche IR- und Ressourcengrenzen
+
+Die öffentliche Funktion `execute` prüft zuerst, dass
+`Code`/`Fork`/`Instructions`/`JumpDestinations` kanonisches LowIR bilden. Ein
+veränderter Fork, gefälschter Instruktionseintrag, widersprüchliches Encoding
+oder eine falsche Sprungzieltabelle liefert daher `llvm::Error`, bevor der
+Interpreter die Instruktionstabelle indiziert. Das öffentliche `lowerToMedIR`
+prüft der Reihe nach Optionen, Ressourcen und Struktur; danach dekodiert ein
+`canonical decode replay` den `Low.Code` mit eingebettetem Fork/Strictness und
+vergleicht jedes LowIR-Feld. Erst dann darf `lowerCanonicalLowToMedIR` laufen
+oder dürfen Indizes und aufruferproportionale Ausgaben entstehen. Öffentliches
+`recoverHighIR` replay-validiert externe LowIR/MedIR ebenso. Die privaten Pfade
+`lowerCanonicalLowToMedIR` und `recoverCanonicalHighIR` sind nur für
+`analyze`-eigenes IR; sie überspringen lediglich redundantes, nichtrekursives
+Replay, während alle HighIR option/resource budgets verpflichtend bleiben.
+
+Der Dispatcher-Beweis hält pro `MedStateLane` eine sortierte
+`Any/Exact/Excluded`-Selector-Domäne. Joins vereinigen Exact-Mengen, schneiden
+Excluded-Ausschlussmengen und ziehen eine Exact-Menge von einem kofiniten
+Ausschluss ab; eine aufgeweitete Domäne stellt die Lane erneut an. Ein
+Gleichheitstest erfasst den Kandidaten der True-Kante nur, wenn der Selector
+zulässig ist, und schließt ihn auf der False-Kante aus. Rohes
+`XOR(selector, constant)` erfasst die Null-/False-Kante als Treffer, wenn alle
+kanonischen Nachfolger denselben Einstieg benennen; dieser Fallthrough muss
+kein `JUMPDEST` treffen. Die Nichtnull-/True-Kante ist der Nichttreffer und
+schließt den Selector aus; `ISZERO` macht denselben Ausdruck zum Gleichheitstest.
+Selector-Wort, Null-Calldata-Wort, Calldata-Größe und Call-Value-Guard werden
+kantenweise verfeinert. Eine unbekannte Bedingung beendet den Beweis, statt
+einen nur möglichen Zweig zu verfolgen.
+
+Nach Erkennung eines Funktionskandidaten setzt der Function-Scope-Traversal mit
+dessen `exact singleton selector` fort. Springt die Funktion in den gemeinsamen
+Dispatcher zurück, folgen `SelectorEquality`, rohes `XOR` und `SelectorWord`
+nur dem zum bereits gematchten Selector passenden `definite edge`. Unknown oder
+unabhängige Prädikate behalten konservativ alle `definite edges`. Eine
+Heuristik, die andere Entry Blocks ausschließt, ist verboten: legitimer
+`shared body/tail-call`-Kontrollfluss bleibt im Function Scope.
+
+Externe CALL/CREATE-Ergebnisse sind davon getrennt: Das Host-Ergebnis ist
+tatsächlich nichtdeterministisch, daher untersucht die Analyse beide präzisen
+CFG-Kanten. So bleibt die ERC-1167-Fallback-Recovery erhalten, ohne eine
+unlesbare Selector-Bedingung als Evidenz zu behandeln; ein wirklich Unknown
+Dispatcher schlägt weiterhin geschlossen fehl.
+
+`EVMAnalysisLimits.def` gibt linearem Decoder und CFG-Builder über
+`MaxLowDiagnostics` und `MaxLowDiagnosticBytes` ein gemeinsames aggregiertes
+LowIR-Diagnosebudget. Beide Pfade belasten exakte Anzahl und finale Bytes vor und
+verwerfen ein Null-Limit. LowIR- und HighIR-Diagnosebudgets bleiben unabhängig.
+Dieselbe Tabelle berechnet `MaxHighDispatchCandidates`, das
+programmweite Aggregat `MaxHighRecoveredArguments`, `MaxHighDiagnostics` und
+`MaxHighDiagnosticBytes`, `MaxHighReferenceVisits`,
+`MaxHighMemoryTransferCells` sowie `MaxHighMemoryValueVisits` unabhängig.
+Kandidaten und wiederhergestellte Argumenteinträge werden vor dem Einfügen in
+einen Zielcontainer und vor jeder Namens-/Typallokation vorbelastet. Jede
+HighIR-Ausgabediagnose wird vor Konstruktion oder Kopie nach Anzahl und finalen
+Nachrichtenbytes berechnet, einschließlich der festen Malformed-IR-Diagnose.
+Eine erschöpfte Grenze liefert den benannten harten Fehler, ohne Diagnose oder
+Fakten still zu verwerfen.
+Die standardmäßige Root-CFG-Region belastet `MaxHighRegionBlockReferences`,
+bevor ihre Block-PC-Liste reserviert oder kopiert wird.
+
+`EVMABIParserLimits.def` begrenzt Tuple-Schachtelung, Typknoten und aggregierte
+Array-Dimensionen. `EVMABITableLimits.def` begrenzt Kardinalität und
+Gesamttext öffentlicher Signatur-/Variantentabellen. Die öffentliche
+Tabellenprüfung wendet diese Grenzen vor Parsen oder Hashen an und verwirft
+danach ungültige Enumwerte, Kind-Metadaten, Standards, Selector-Beweisrollen,
+nichtkanonische Typen, abgeleitete Hashes, Mitgliedschaften und Kollisionen.
+Produktive Selector-Suche ist indiziert, Event-Suche nutzt eine sortierte
+Topic-Tabelle, und Topic-APIs prüfen vor Vergleich oder Ordnung, dass ein
+`APInt` genau ein EVM-Wort breit ist.
+
+`EVMInterpreterLimits.def` deklariert `MaxSteps`, `MaxMemoryBytes`,
+`MaxTraceEntries`, `MaxLogEntries`, aggregiertes `MaxLogDataBytes`,
+aggregiertes `MaxHostReturnDataBytes`, `MaxCalldataBytes`, aggregiertes
+`MaxHostEnvironmentEntries`, aggregiertes `MaxExternalCodeBytes` und
+`MaxPersistentStateEntries`. Das Host-Entry-Aggregat umfasst `BlockHashes`,
+`Balances`, `CodeHashes`, `ExternalCode` und `BlobHashes`; das Code-Byte-Limit
+umfasst alle `ExternalCode`-Bodies.
+`MaxSteps` behält das ausdrückliche Ergebnis `StepLimit`. Laufzeitwachstum von
+Memory, Trace, Logs, Logdaten und neuen Persistent-State-Schlüsseln wird
+vorbelastet; eine Überschreitung liefert `ResourceExhausted` und rollt
+persistenten Zustand, Logs und Selfdestruct-Effekte zurück. Zu große initiale
+Host-Return-Data-Aggregate oder Persistent-State-Maps sind stattdessen ein
+`execute`-API-Fehler. Der Interpreter hält Host-Return-Data als `ArrayRef`-Views
+und verwendet `lower_bound` auf der bereits validierten sortierten
+Instruktionstabelle, ohne Buffer zu kopieren oder pro Ausführung eine PC-Map
+aufzubauen. Der `const execute preflight` prüft Programm und alle Host-Input-
+Grenzen vor jeder Environment-, Snapshot- oder Result-Kopie.
+
+### Live-Differenzaudit gegen go-ethereum
+
+Der normale lokale Audit und CI erzwingen bei jedem Lauf
+`git fetch --depth=1 --force` für den Remote-`HEAD` des offiziellen Default-Branches von
+`https://github.com/ethereum/go-ethereum.git`. Jeder Lauf erzeugt ein
+unvorhersagbar benanntes privates temporäres
+Bare-Repository; es gibt kein gemeinsam genutztes dauerhaftes Git-Repository
+und keinen Cache. Nur die von diesem Fetch gelieferte authority ref und der
+daraus aufgelöste exakte SHA wählen die Revision. Das Skript meldet den SHA und
+prüft ihn in einem detached temporären Worktree; anschließend werden
+authority repository und Worktree gemeinsam vernichtet. Weder `local_docs` noch ein
+vorhandener Checkout oder ein Submodule sind Audit-Pfade; ein Submodule-Pin wäre
+gerade dann veraltet, wenn Live-Drift erkannt werden soll.
+
+Jeder Git-Befehl entfernt zuerst alle geerbten `GIT_*`, einschließlich
+`GIT_CONFIG_*`, und setzt danach nur geprüfte Werte. `GIT_CONFIG_NOSYSTEM` und
+`GIT_CONFIG_GLOBAL` schalten System-/globale Konfiguration ab;
+`GIT_ATTR_NOSYSTEM` und das befehlslokale `core.attributesFile` deaktivieren
+System-/globale Attribute, `core.hooksPath` deaktiviert Hooks. Das private
+Repository verwirft unerwartete
+lokale Konfiguration, Grafts, `objects/info/alternates` und `refs/replace`;
+`GIT_NO_REPLACE_OBJECTS` deaktiviert zusätzlich Ersetzungen. Jede Abweichung
+führt zu einem geschlossenen Fehler.
+
+```bash
+python3 scripts/audit_evm_opcode_metadata.py
+```
+
+Die öffentliche CLI bietet ausschließlich `--manifest-output`; Quelle, Ref und
+Toolchain sind nicht wählbar. Ihr geschlossenes Manifest verwendet `schema 3`.
+Der Go-Probe reflektiert das vollständige exportierte boolesche Inventar von
+`params.Rules`, ruft für jeden abgebildeten Fork
+`LookupInstructionSet(params.Rules)` auf und prüft alle 256 Byte-Slots. Die
+Belegung bestimmt ausschließlich geths `operation.undefined`; `HasCost`
+ist nur eine Kosten-Gegenprüfung, weil es auch für definierte Nullkosten-
+Operationen false liefert. Jeder Slot mit `defined && !HasCost` muss genau ab
+seinem deklarierten Aktivierungs-Fork zu `EVM_GETH_ACTIVE_WITHOUT_COST` passen.
+Ein undefinierter Slot mit Kosten, ein ungeprüfter definierter Slot oder ein
+Upstream-Umbau ohne diesen Marker schlägt geschlossen fehl. Unbekannte,
+doppelte, fehlende, außerhalb des Wertebereichs liegende oder nicht geparste
+Felder und Datensätze sind Fehler. Jeder `.def parser` verwirft außerdem nicht
+verbrauchte makroähnliche Eingabe, statt eine `partial` Policy zu akzeptieren.
+`EVMUpstreamOpcodePolicy.def` verwaltet Aliase und typisierte historische bzw.
+nicht eingeplante EOF-Ausschlüsse samt Overlap-/Inactive-Invarianten. Die
+orthogonale `EVMUpstreamSemanticsPolicy.def` verwaltet das geschlossene,
+reflektierte `params.Rules`-Inventar, Fork-Zuordnungen, Base-Stack-Ausnahmen und
+Dynamic-Immediate-Familien. CI läuft bei Pushes nach `dev`, Pull Requests, manueller
+Auslösung und täglich; bei Fehlern werden exakte Revision, Manifest und Log als
+Artifact hochgeladen.
+
+Konkret ordnet `EVMUpstreamSemanticsPolicy.def` jedes exportierte boolesche
+`params.Rules`-Feld mit genau einem `EVM_GETH_RULE_FIELD` einer der Kategorien
+`MappedForkSelector`, `NoOpcodeAllocation` oder
+`ExcludedSelectorExpectedError` zu. Das Audit aktiviert jedes Feld einzeln und
+ruft `LookupInstructionSet` auf: Die ersten beiden Kategorien verlangen nil
+error, die dritte error; der vollständige 256-Slot-Opcode/Stack-Fingerprint muss
+stets `ExpectedFork` entsprechen. Die geprüften No-Allocation-Felder
+`IsEIP155`, `IsEIP2929`, `IsEIP4762` und `IsPetersburg` ergeben Frontier;
+`IsUBT` muss fehlschlagen und den Cancun-Fingerprint liefern.
+
+`EVMUpstreamSemanticsPolicy.def` deklariert die OpCodes jeder dynamischen
+EIP-8024-Familie, ihre Operationsart und ihr gültiges Stack-Delta;
+`EVMEIP8024Immediates.def` bleibt die alleinige Decode-Autorität der Immediates.
+Single- und Pair-Inventar klassifizieren jeweils alle 256 Bytewerte explizit.
+Per `go -overlay` holt das Audit die echten privaten `operation.execute`-Handler
+und prüft die `canonical fork jump tables` sowie die
+`mainnet active/scheduled jump tables` einzeln. Eine `inactive` Familie wird
+explizit protokolliert; eine nur teilweise vorhandene Familie schlägt fehl. Für
+jede aktive Tabelle werden die drei deklarierten Operationen über alle Bytes
+(`3x256`) plus `3 missing-operand cases` ausgeführt. Akzeptanz, PC-Delta,
+marker-abgeleitete Operanden/Mutation, exakter gültiger Underflow und das
+`0x00`-Verhalten bei fehlendem Operanden werden mit denselben deklarativen
+Policies verglichen, ohne die Formel in Python zu duplizieren.
+
+`EVM_HARDFORK_LATEST` besitzt genau ein kanonisches Ziel. Das geschlossene
+`EVMUpstreamForkAliases.def` mappt Prague auf Pectra, Osaka und BPO1 bis BPO5 auf
+Fusaka; Paris, Shanghai, Cancun, Amsterdam und Bogota sind Identitäten. Ein
+unbekannter neuer Name schlägt geschlossen fehl. Jedes Audit fixiert und
+protokolliert ein `audit_unix_time`, verlangt von
+`MainnetChainConfig.LatestFork(time)` das NeverD-Latest und von
+`LatestFork(max uint64)` einen Alias im Inventar mit bereits geprüftem
+kanonischem Fork; beide Instruction Sets werden vollständig verglichen. Das
+Manifest enthält `authority=official-fresh-fetch`, offizielle URL, angefordertes
+`HEAD` und aufgelöstes SHA. Der Probe setzt `GOTOOLCHAIN=local`.
+
+Go und Python erzwingen vor der Materialisierung feindlicher Metadaten
+`input/collection/string hard limits`; zu große Eingaben, Collections oder
+Strings schlagen geschlossen fehl. Zusätzlich gilt `bounded diagnostic output`:
+Eine überlange Anzeige trägt den `digest` des vollständigen Inhalts und einen
+`explicit truncated marker`. Jeder Kindprozess hat begrenzte Ausgabe und eine
+Frist; bei Überschreitung wird die gesamte `process group` beziehungsweise der
+process tree beendet und ihre Pipes werden geleert.
+
+Der aktuelle schema-3-Live-Beleg enthält `schema_version=3`,
+`audit_unix_time=1787534659`, `authority=official-fresh-fetch`,
+`remote=https://github.com/ethereum/go-ethereum.git`, `ref=HEAD`, Revision
+`02b73d4ea7181464175e0a6cbecc0a3a2655a562`, lokales `Go 1.24.0`,
+`stack_limit=1024` und `diagnostics=[]`. Er vergleicht `21 fork tables` und
+`20 Rules probes` mit `15 mapped/4 no-op/1 expected-error`. Beide
+`mainnet active/scheduled`-Einträge nennen `upstream BPO2`, das der geschlossene
+Alias auf `NeverD Fusaka` abbildet. EIP-8024 umfasst `23 table targets`; nur
+`Amsterdam/Bogota` sind aktiv und ergeben `1536 candidate executions` sowie
+`6 missing-operand cases`. Die `three handler symbols` stimmen über beide
+aktiven Ziele überein. Python-Audit `67/67` und `C++ Opcode 10/10` schließen den
+Beleg. Unter macOS lief das echte Audit erfolgreich in `sandbox-exec`, wobei das
+finale `go run` offline war; der Linux-Workflow erzwingt `bubblewrap`.
+
+Alle Go-Phasen — `go env`, `go mod init`, `go mod edit`, `go mod tidy`,
+`go mod download` und `go run` — laufen in einem `capability-root`-Dateisystem-
+Sandbox. Lesbar sind nur privater Probe, frisches geth, validiertes
+`resolved GOROOT` und exakt benötigte System-Runtime-Roots; schreibbar sind nur
+isolierte Environment-Roots. Netzwerk wird nur nötigen Dependency-Phasen
+gewährt, der finale Lauf bleibt offline. Sentinels im `host HOME/workspace`
+müssen unlesbar sein und dürfen in keiner Ausgabe erscheinen. Linux bildet die
+Policy mit `bubblewrap` ohne `/` broad bind nach.
+
+`NeverDEVMDecoderPropertyTests` prüft für jeden decoder-verändernden Fork alle
+Zwei-Byte-Eingaben, den vollständigen Decode und die exakten `JUMPDEST`-Grenzen.
+Zusätzlich durchlaufen deterministische feindliche Bytefolgen begrenzter Länge
+jeden Fork.
+
+LowIR-Lanes für den gesamten Stack bewahren Korrelationen innerhalb eines Pfads.
+`MayReachable` ist nur ein CFG-Kandidat. Ein geänderter loop-carried Slot wird am
+Back-Edge semantisch `Top`, unabhängig von Budgets; deren Erschöpfung führt ohne
+Emergency-Widening zum Fehler. HighIR-Speicher verfolgt konstante Writes,
+Overlap/Kill und unbekannte Invalidierung. Nachgewiesen sind Selector und bekannte
+Panic-Bytes; bekannte Custom-Error-Deklarationen behalten kanonische Typen, ohne
+Anspruch auf jeden Runtime-Argumentwert. Weitere Fakten sind Evidenzkandidaten.
 
 ## Vertrag des erzeugten C
 

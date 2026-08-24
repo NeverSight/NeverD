@@ -138,7 +138,11 @@ TEST(EVMOpcodeMetadata, AmsterdamOpcodesAreOptInAndFullyTyped) {
   EXPECT_EQ(AmsterdamAssigned, 154u);
 }
 
-TEST(EVMOpcodeMetadata, EIP8024ImmediateDecodingIsExhaustive) {
+TEST(EVMOpcodeMetadata, EIP8024ImmediateTableHasClosedStructuralCoverage) {
+  // These assertions protect exact-once table coverage and structural bounds,
+  // not the upstream encoding semantics. The required fresh-fetch
+  // go-ethereum differential audit is the semantic gate for all 256 candidates
+  // of each EIP-8024 opcode.
   unsigned ValidSingles = 0;
   unsigned ValidPairs = 0;
   for (unsigned Encoded = 0; Encoded <= kByteMax; ++Encoded) {

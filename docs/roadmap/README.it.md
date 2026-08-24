@@ -34,10 +34,16 @@ Estendere NeverD al **bytecode EVM** con lifting 1:1 sullo stesso stack IR e out
 
 - Loader EVM · lifter opcode 1:1 (strict) · stack/memoria · JUMP/JUMPI → CFG · storage/calldata · C23/Solidity/LLVM · CLI/C API unificati
 
-**Stato:** Completato per EVM legacy da Frontier a Fusaka: 150 opcode, input
-raw/hex/artifact, runtime extraction, CFG e stack-SSA, analisi strict/relaxed,
-backend C23/LLVM/Solidity, CLI/C API e differenziali Anvil. Vedi
-[decompilazione EVM](../evm.it.md) per ABI host e limiti.
+**Stato:** Decode e lifting degli opcode legacy da Frontier a Fusaka sono
+completati e coperti da regressione. La ricostruzione sorgente continua in modo
+conservativo: selector, event, tipi, standard, nomi e control flow dinamico sono
+riportati solo con evidenza sufficiente, mai come sorgente originale, ABI completa
+o piena conformità ERC. Selector canonici di funzione, varianti ABI per standard
+e forme di ritorno riuscite restano separati: un selector ERC condiviso non può
+inventare uno standard né prendere un tipo di ritorno incompatibile. Amsterdam è un target Review/development opt-in;
+`latest` resta Fusaka. EOFv1/EIP-7692 non è pianificato ed EIP-3540 è Stagnant,
+quindi nessuno è presentato come mainnet definitivo. Vedi
+[decompilazione EVM](../evm.it.md).
 
 ### Perché EVM
 
@@ -88,12 +94,15 @@ Analizzare un binario sollevato per difetti di vita dell’heap (leak, doppia fr
 
 ## Tempistica
 
-Formati nativi, decompilazioni EVM e Solana SBF e sicurezza della memoria P0 sono completati e coperti da regressione. Nessuna data impegnativa.
+Formati nativi, decode/lifting EVM legacy fino a Fusaka, Solana SBF e sicurezza
+della memoria P0 sono coperti da regressione. La ricostruzione sorgente EVM
+conservativa resta in corso. Nessuna data impegnativa.
 
 | Funzione | Stato |
 |----------|-------|
 | Completezza formati nativi (PE ARM*, Mach-O i386) | Completata |
-| Decompilazione EVM | Completata — C, Solidity e LLVM; coperta da regressione |
+| Decode/lifting EVM legacy | Completato fino a Fusaka; coperto da regressione |
+| Ricostruzione sorgente EVM | In corso — evidence-backed e conservativa |
 | Decompilazione Solana eBPF (SBF) | Completata — v0-v4, C, Rust e LLVM; coperta da regressione |
 | Audit e hunt di sicurezza della memoria | Completata — P0 per PE, ELF e Mach-O; coperta da regressione |
 | Rafforzamento motore e prodotto | Continuo |

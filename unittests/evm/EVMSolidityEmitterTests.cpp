@@ -18,10 +18,9 @@ using test::writeTemporarySource;
 
 TEST(EVMSolidityEmitter, ProducesCompilableRecoveredContractAndStateMachine) {
   const std::vector<uint8_t> Code = {
-      0x60, 0x00, 0x35, 0x60, 0xe0, 0x1c, 0x80, 0x63, 0x12, 0x34,
-      0x56, 0x78, 0x14, 0x60, 0x15, 0x57, 0x5b, 0x60, 0x00, 0x80,
-      0xfd, 0x5b, 0x60, 0x2a, 0x60, 0x00, 0x52, 0x60, 0x20, 0x60,
-      0x00, 0xf3, 0x60, 0x03, 0x54, 0x50, 0x00};
+      0x60, 0x00, 0x35, 0x60, 0xe0, 0x1c, 0x80, 0x63, 0x12, 0x34, 0x56, 0x78,
+      0x14, 0x60, 0x15, 0x57, 0x5b, 0x60, 0x00, 0x80, 0xfd, 0x5b, 0x60, 0x03,
+      0x54, 0x50, 0x60, 0x2a, 0x60, 0x00, 0x52, 0x60, 0x20, 0x60, 0x00, 0xf3};
   auto Program = analyze(Code);
   ASSERT_TRUE(static_cast<bool>(Program))
       << llvm::toString(Program.takeError());
@@ -47,11 +46,10 @@ TEST(EVMSolidityEmitter, ProducesCompilableRecoveredContractAndStateMachine) {
   std::filesystem::remove(Path, EC);
 }
 
-// A hashed signature turns a recovered entry point into a declaration a reader
-// can compare against the interface the contract claims to implement, so the
-// declaration has to be spelled the way Solidity accepts it, data locations
-// and all.
-TEST(EVMSolidityEmitter, DeclaresHashedSignaturesWithTheirDataLocations) {
+// A selector hash names arguments but neither its declaring standard nor its
+// return list. This fixture has no independent standard evidence, and its
+// successful exits contradict the tabulated return declarations.
+TEST(EVMSolidityEmitter, DoesNotInventStandardsOrReturnsFromSelectorHashes) {
   const std::vector<uint8_t> Code = {
       0x60, 0x00, 0x35, 0x60, 0xe0, 0x1c,             // selector
       0x80, 0x63, 0xa9, 0x05, 0x9c, 0xbb, 0x14, 0x60, // transfer(address,
@@ -69,15 +67,17 @@ TEST(EVMSolidityEmitter, DeclaresHashedSignaturesWithTheirDataLocations) {
 
   auto Source = emitSolidity(*Program);
   ASSERT_TRUE(static_cast<bool>(Source)) << llvm::toString(Source.takeError());
-  EXPECT_NE(Source->find("hashed signature transfer(address,uint256) (erc-20)"),
+  EXPECT_NE(Source->find("hashed signature transfer(address,uint256)"),
+            std::string::npos);
+  EXPECT_EQ(Source->find("hashed signature transfer(address,uint256) (erc-20)"),
             std::string::npos);
   EXPECT_NE(Source->find("function transfer(address arg0, uint256 arg1) "
-                         "external pure virtual returns (bool);"),
+                         "external pure virtual;"),
             std::string::npos);
   EXPECT_NE(
-      Source->find("function name() external pure virtual returns (string "
-                   "memory);"),
+      Source->find("function name() external pure virtual returns (uint256);"),
       std::string::npos);
+  EXPECT_EQ(Source->find("returns (string memory)"), std::string::npos);
 
   if (std::system("command -v solc >/dev/null 2>&1") != 0)
     GTEST_SKIP() << "solc is unavailable";
@@ -87,6 +87,69 @@ TEST(EVMSolidityEmitter, DeclaresHashedSignaturesWithTheirDataLocations) {
   EXPECT_EQ(std::system(Command.c_str()), 0);
   std::error_code EC;
   std::filesystem::remove(Path, EC);
+}
+
+TEST(EVMSolidityEmitter, SpellsEvidenceBackedABIReferenceTypeLocations) {
+  const KnownSignatureInfo *Transfer = findKnownFunction(0xa9059cbb);
+  ASSERT_NE(Transfer, nullptr);
+  const KnownFunctionVariantInfo *ERC20Transfer = nullptr;
+  for (const KnownFunctionVariantInfo *Variant :
+       knownFunctionVariants(*Transfer))
+    if (Variant->Standard == KnownStandard::ERC20)
+      ERC20Transfer = Variant;
+  ASSERT_NE(ERC20Transfer, nullptr);
+
+  EVMProgram Program;
+  RecoveredFunction Known;
+  Known.Selector = Transfer->Selector;
+  Known.Name = Transfer->name().str();
+  Known.Known = Transfer;
+  Known.KnownVariant = ERC20Transfer;
+  Known.Arguments.push_back({0, kSelectorBytes, "address", "arg0",
+                             ABITypeSource::KnownSignature, false});
+  Known.Arguments.push_back({1, kSelectorBytes + kWordBytes, "uint256", "arg1",
+                             ABITypeSource::KnownSignature, false});
+  Known.Returns.push_back("bool");
+  Known.ReturnSource = ABITypeSource::KnownSignature;
+  Program.High.Functions.push_back(std::move(Known));
+
+  RecoveredFunction Dynamic;
+  Dynamic.Name = "dynamic_types";
+  Dynamic.Arguments.push_back(
+      {0, kSelectorBytes, "bytes", "arg0", ABITypeSource::Dataflow, true});
+  Dynamic.Returns.push_back("string");
+  Dynamic.ReturnSource = ABITypeSource::Dataflow;
+  Program.High.Functions.push_back(std::move(Dynamic));
+
+  auto Source = emitSolidity(Program);
+  ASSERT_TRUE(static_cast<bool>(Source)) << llvm::toString(Source.takeError());
+  EXPECT_NE(Source->find("hashed signature transfer(address,uint256) (erc-20)"),
+            std::string::npos);
+  EXPECT_NE(Source->find("function transfer(address arg0, uint256 arg1) "
+                         "external pure virtual returns (bool);"),
+            std::string::npos);
+  EXPECT_NE(Source->find("function dynamic_types(bytes calldata arg0) external "
+                         "pure virtual returns (string memory);"),
+            std::string::npos);
+}
+
+TEST(EVMSolidityEmitter, PreservesParametersOfKnownCustomErrors) {
+  std::vector<uint8_t> Code = {opcodeByte(Opcode::PUSH32), 0x11, 0x8c, 0xda,
+                               0xa7};
+  Code.resize(1 + kWordBytes, 0);
+  Code.insert(Code.end(),
+              {opcodeByte(Opcode::PUSH0), opcodeByte(Opcode::MSTORE),
+               opcodeByte(Opcode::PUSH1),
+               static_cast<uint8_t>(kSelectorBytes + kWordBytes),
+               opcodeByte(Opcode::PUSH0), opcodeByte(Opcode::REVERT)});
+
+  auto Program = analyze(Code);
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+  auto Source = emitSolidity(*Program);
+  ASSERT_TRUE(static_cast<bool>(Source)) << llvm::toString(Source.takeError());
+  EXPECT_NE(Source->find("error OwnableUnauthorizedAccount(address);"),
+            std::string::npos);
 }
 
 TEST(EVMSolidityEmitter, EmitsRecoveredPayabilityIndependentlyOfStateAccess) {

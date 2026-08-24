@@ -40,10 +40,16 @@ NeverD を **Ethereum Virtual Machine (EVM)** bytecode へ拡張し、同一 IR 
 - **出力** — explicit host contract を持つ C23/Solidity state machine と verified LLVM IR
 - **CLI / C API** — ネイティブと同じ入口
 
-**状態:** Frontier から Fusaka の legacy EVM について完了しました。150 assigned
-opcode、raw/hex/artifact input、runtime extraction、CFG/stack-SSA、strict/relaxed
-analysis、C23/LLVM/Solidity backend、CLI/C API、Anvil differential を網羅します。
-host ABI と制限は [EVM 逆コンパイル](../evm.ja.md)を参照してください。
+**状態:** Frontier から Fusaka までの legacy opcode decode/lifting は完了し、回帰試験で
+保護されています。source reconstruction は保守的に継続中です。selector、event、type、
+standard、name、dynamic control flow は evidence が十分な場合だけ報告し、original source、
+完全な ABI、完全な ERC compliance を主張しません。canonical function selector、
+standard ごとの ABI variant、成功時の return shape は分離されているため、共有 ERC
+selector が standard を捏造したり非互換な return type を借用したりしません。
+Amsterdam は Review/development の
+explicit opt-in target で、`latest` は Fusaka のままです。EOFv1/EIP-7692 は未予定、
+EIP-3540 は Stagnant であり、確定 mainnet behavior として扱いません。詳細は
+[EVM 逆コンパイル](../evm.ja.md)を参照してください。
 
 ### なぜ EVM か
 
@@ -102,12 +108,15 @@ host ABI と制限は [EVM 逆コンパイル](../evm.ja.md)を参照してく�
 
 ## タイムライン
 
-native format、EVM、Solana SBF、メモリ安全性 P0 は実装済みで回帰試験により保護されています。リリース日は約束しません。
+native format、Fusaka までの legacy EVM decode/lifting、Solana SBF、メモリ安全性 P0 は
+回帰試験で保護されています。保守的な EVM source reconstruction は継続中です。
+リリース日は約束しません。
 
 | 機能 | 状態 |
 |------|------|
 | ネイティブ形式の完成（PE ARM*、Mach-O i386） | 完了 |
-| EVM バイトコード逆コンパイル | 完了 — C、Solidity、LLVM；回帰試験済み |
+| EVM legacy decode/lifting | Fusaka まで完了；回帰試験済み |
+| EVM source reconstruction | 継続 — evidence-backed かつ保守的 |
 | Solana eBPF（SBF）逆コンパイル | 完了 — v0-v4、C、Rust、LLVM；回帰試験済み |
 | メモリ安全性の監査とハント | 完了 — PE、ELF、Mach-O の P0；回帰試験済み |
 | エンジンとプロダクト強化 | 継続 |

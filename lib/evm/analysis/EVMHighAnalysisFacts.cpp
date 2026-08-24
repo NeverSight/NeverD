@@ -5,40 +5,25 @@
 //===----------------------------------------------------------------------===//
 
 #include "EVMHighAnalysisDetail.h"
+#include "EVMMemoryDataflow.h"
 
 #include <limits>
 
 namespace neverd::evm::detail {
 namespace {
 
-/// The last word a store placed at \p Offset plus \p Displacement inside
-/// \p Block before \p BeforePC.
-///
-/// A revert payload is assembled by the stores that immediately precede the
-/// revert, so this is what reads one back. Matching on the offset's own value
-/// covers the usual case where the same expression addresses both, and
-/// matching on equal constants covers a payload written field by field.
-const MedValue *storedWordAt(const EVMMedIR &Med, const MedBlock &Block,
-                             ValueID Offset, uint64_t Displacement,
-                             uint64_t BeforePC) {
+std::optional<uint32_t> selectorAt(const EVMMedIR &Med,
+                                   const EVMMemoryDataflow &Memory,
+                                   ValueID Offset, ValueID Size,
+                                   uint64_t BeforePC) {
   const auto Base = constantWord(Med.findValue(Offset));
-  const MedValue *Found = nullptr;
-  for (const MedOperation &Operation : Block.Operations) {
-    if (Operation.PC >= BeforePC)
-      break;
-    if (Operation.Op != Opcode::MSTORE || Operation.Inputs.size() != 2)
-      continue;
-    const bool SameExpression =
-        Displacement == 0 && Operation.Inputs[0] == Offset;
-    const auto At = constantWord(Med.findValue(Operation.Inputs[0]));
-    const bool SameAddress =
-        Base && At &&
-        Displacement <= std::numeric_limits<uint64_t>::max() - *Base &&
-        *At == *Base + Displacement;
-    if (SameExpression || SameAddress)
-      Found = Med.findValue(Operation.Inputs[1]);
-  }
-  return Found;
+  const auto Length = constantWord(Med.findValue(Size));
+  if (!Base || !Length || *Length < kSelectorBytes)
+    return std::nullopt;
+  const auto Bytes = Memory.read(BeforePC, *Base, kSelectorBytes);
+  if (!Bytes)
+    return std::nullopt;
+  return static_cast<uint32_t>(Bytes->getZExtValue());
 }
 
 /// Where a call site's callee came from, and what that address is.
@@ -131,7 +116,7 @@ CalleeProvenance traceCallee(const EVMMedIR &Med, const ProducerIndex &Index,
 /// same shape a revert payload has. The word the window starts with is
 /// therefore what names the operation being requested.
 std::optional<uint32_t> outboundSelector(const EVMMedIR &Med,
-                                         const MedBlock &Block,
+                                         const EVMMemoryDataflow &Memory,
                                          const CallFamilyInfo &Family,
                                          const MedOperation &Call) {
   if (Call.Inputs.size() <= Family.argumentsLengthOperand())
@@ -139,27 +124,13 @@ std::optional<uint32_t> outboundSelector(const EVMMedIR &Med,
   const ValueID Offset = Call.Inputs[Family.argumentsOffsetOperand()];
   const ValueID Size = Call.Inputs[Family.argumentsLengthOperand()];
 
-  // Calldata too short to hold a selector carries none. An empty window is
-  // what paying an address compiles to, and that address may have no code at
-  // all.
-  if (const auto Length = constantWord(Med.findValue(Size));
-      Length && *Length < kSelectorBytes)
-    return std::nullopt;
-
-  const MedValue *Head = storedWordAt(Med, Block, Offset, 0, Call.PC);
-  if (!Head || !Head->Constant || Head->Constant->getBitWidth() != kWordBits)
-    return std::nullopt;
-  const auto Selector =
-      static_cast<uint32_t>(Head->Constant->extractBitsAsZExtValue(
-          kSelectorBits, kWordBits - kSelectorBits));
-  if (Selector == 0)
-    return std::nullopt;
-  return Selector;
+  const auto Selector = selectorAt(Med, Memory, Offset, Size, Call.PC);
+  return Selector && *Selector != 0 ? Selector : std::nullopt;
 }
 
 } // namespace
 
-ErrorFact classifyRevert(const EVMMedIR &Med, const MedBlock &Block,
+ErrorFact classifyRevert(const EVMMedIR &Med, const EVMMemoryDataflow &Memory,
                          const MedOperation &Revert) {
   ErrorFact Fact;
   Fact.PC = Revert.PC;
@@ -167,41 +138,31 @@ ErrorFact classifyRevert(const EVMMedIR &Med, const MedBlock &Block,
   if (Revert.Inputs.size() != 2)
     return Fact;
 
-  // A payload shorter than a selector cannot carry one, and an empty one is
-  // the bare revert a require without a message compiles to.
-  if (const auto Size = constantWord(Med.findValue(Revert.Inputs[1]));
-      Size && *Size < kSelectorBytes)
-    return Fact;
-
-  const MedValue *Payload =
-      storedWordAt(Med, Block, Revert.Inputs[0], 0, Revert.PC);
-  if (!Payload || !Payload->Constant ||
-      Payload->Constant->getBitWidth() != kWordBits)
-    return Fact;
-
-  // The ABI left-aligns a selector, so it is the leading four bytes of the
-  // word the store wrote.
   const auto Selector =
-      static_cast<uint32_t>(Payload->Constant->extractBitsAsZExtValue(
-          kSelectorBits, kWordBits - kSelectorBits));
-  if (Selector == 0)
+      selectorAt(Med, Memory, Revert.Inputs[0], Revert.Inputs[1], Revert.PC);
+  if (!Selector || *Selector == 0)
     return Fact;
 
-  Fact.Selector = Selector;
-  Fact.Known = findKnownError(Selector);
+  Fact.Selector = *Selector;
+  Fact.Known = findKnownError(*Selector);
   Fact.Kind = RevertKind::Custom;
   if (Fact.Known == &getLanguageRevertInfo(LanguageRevert::Message)) {
     Fact.Kind = RevertKind::Message;
   } else if (Fact.Known == &getLanguageRevertInfo(LanguageRevert::Panic)) {
     Fact.Kind = RevertKind::Panic;
-    if (const MedValue *Code = storedWordAt(Med, Block, Revert.Inputs[0],
-                                            kSelectorBytes, Revert.PC))
-      if (const auto Value = constantWord(Code))
-        Fact.Panic = findPanicCode(*Value);
+    const auto Base = constantWord(Med.findValue(Revert.Inputs[0]));
+    const auto Size = constantWord(Med.findValue(Revert.Inputs[1]));
+    constexpr uint64_t kPanicPayloadBytes = kSelectorBytes + kWordBytes;
+    if (Base && Size && *Size >= kPanicPayloadBytes &&
+        *Base <= std::numeric_limits<uint64_t>::max() - kSelectorBytes)
+      if (const auto Code =
+              Memory.read(Revert.PC, *Base + kSelectorBytes, kWordBytes))
+        if (Code->getActiveBits() <= std::numeric_limits<uint64_t>::digits)
+          Fact.Panic = findPanicCode(Code->getZExtValue());
   }
   Fact.SuggestedName =
       Fact.Known ? Fact.Known->name().str()
-                 : kRecoveredErrorPrefix.str() + selectorHex(Selector);
+                 : kRecoveredErrorPrefix.str() + selectorHex(*Selector);
   return Fact;
 }
 
@@ -244,8 +205,9 @@ ProxyFact classifyDelegation(const EVMMedIR &Med, const ProducerIndex &Index,
 }
 
 CallFact classifyCall(const EVMMedIR &Med, const ProducerIndex &Index,
-                      const MedBlock &Block, const CallFamilyInfo &Family,
-                      const MedOperation &Call, Hardfork Fork) {
+                      const EVMMemoryDataflow &Memory,
+                      const CallFamilyInfo &Family, const MedOperation &Call,
+                      Hardfork Fork) {
   CallFact Fact;
   Fact.PC = Call.PC;
   Fact.Op = Call.Op;
@@ -265,7 +227,7 @@ CallFact classifyCall(const EVMMedIR &Med, const ProducerIndex &Index,
         Transferred && Transferred->Constant)
       Fact.Value = Transferred->Constant;
 
-  Fact.Selector = outboundSelector(Med, Block, Family, Call);
+  Fact.Selector = outboundSelector(Med, Memory, Family, Call);
   if (Fact.Selector)
     Fact.Known = findKnownFunction(*Fact.Selector);
 

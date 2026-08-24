@@ -907,6 +907,168 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
             ],
         )
 
+    def test_evm_test_targets_are_derived_from_cmake(self) -> None:
+        errors: list[str] = []
+        targets = i18n.evm_test_targets(
+            errors,
+            _TextView(
+                "add_neverd_unittest(NeverDEVMOpcodeTests source.cpp)\n"
+                "add_neverd_unittest(\n"
+                "  NeverDEVMDecoderPropertyTests source.cpp)\n"
+            ),
+        )
+
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            targets,
+            ("NeverDEVMOpcodeTests", "NeverDEVMDecoderPropertyTests"),
+        )
+
+    def test_duplicate_evm_test_target_is_rejected(self) -> None:
+        errors: list[str] = []
+        targets = i18n.evm_test_targets(
+            errors,
+            _TextView(
+                "add_neverd_unittest(NeverDEVMOpcodeTests one.cpp)\n"
+                "add_neverd_unittest(NeverDEVMOpcodeTests two.cpp)\n"
+            ),
+        )
+
+        self.assertEqual(targets, ("NeverDEVMOpcodeTests",))
+        self.assertEqual(
+            errors,
+            [
+                "unittests/evm/CMakeLists.txt: duplicate EVM test targets: "
+                "NeverDEVMOpcodeTests"
+            ],
+        )
+
+    def test_every_testing_locale_requires_literal_git_fetch(self) -> None:
+        token = "git fetch"
+        testing_paths = (
+            Path("docs/testing.md"),
+            *(Path(f"docs/testing.{locale}.md") for locale in i18n.LOCALES),
+        )
+        self.assertIn(token, i18n.TESTING_REQUIRED_TOKENS)
+
+        base = i18n.RepositoryView(use_index=False)
+        for path in testing_paths:
+            text = base.read_text(path)
+            self.assertIn(token, text)
+            errors: list[str] = []
+            i18n.validate_matrix(
+                errors,
+                _OverlayView({path: text.replace(token, "")}),
+            )
+            with self.subTest(path=path):
+                self.assertEqual(
+                    errors,
+                    [f"{path.as_posix()}: missing required token {token!r}"],
+                )
+
+    def test_every_evm_function_scope_locale_carries_selector_constraints(
+        self,
+    ) -> None:
+        guide_paths = (
+            Path("docs/evm.md"),
+            *(Path(f"docs/evm.{locale}.md") for locale in i18n.LOCALES),
+        )
+        testing_paths = (
+            Path("docs/testing.md"),
+            *(Path(f"docs/testing.{locale}.md") for locale in i18n.LOCALES),
+        )
+        view = i18n.RepositoryView(use_index=False)
+
+        for token in i18n.EVM_FUNCTION_SCOPE_GUIDE_TOKENS:
+            self.assertIn(token, i18n.GUIDE_REQUIRED_TOKENS["evm"])
+            for path in guide_paths:
+                with self.subTest(path=path, token=token):
+                    self.assertIn(token, view.read_text(path))
+        for token in i18n.EVM_FUNCTION_SCOPE_TEST_TOKENS:
+            self.assertIn(token, i18n.TESTING_REQUIRED_TOKENS)
+            for path in testing_paths:
+                with self.subTest(path=path, token=token):
+                    self.assertIn(token, view.read_text(path))
+
+        for path, token in (
+            (guide_paths[0], i18n.EVM_FUNCTION_SCOPE_GUIDE_TOKENS[0]),
+            (testing_paths[0], i18n.EVM_FUNCTION_SCOPE_TEST_TOKENS[0]),
+        ):
+            text = view.read_text(path)
+            errors: list[str] = []
+            i18n.validate_matrix(
+                errors,
+                _OverlayView({path: text.replace(token, "", 1)}),
+            )
+            with self.subTest(path=path, guarded_token=token):
+                self.assertEqual(
+                    errors,
+                    [f"{path.as_posix()}: missing required token {token!r}"],
+                )
+
+    def test_every_evm_audit_locale_carries_git_and_allocation_invariants(
+        self,
+    ) -> None:
+        tokens = (
+            "bare",
+            "authority",
+            "local_docs",
+            "GIT_CONFIG_NOSYSTEM",
+            "GIT_CONFIG_GLOBAL",
+            "GIT_CONFIG_*",
+            "GIT_*",
+            "GIT_ATTR_NOSYSTEM",
+            "core.attributesFile",
+            "core.hooksPath",
+            "objects/info/alternates",
+            "refs/replace",
+            "GIT_NO_REPLACE_OBJECTS",
+            "operation.undefined",
+            "HasCost",
+            "EVM_GETH_ACTIVE_WITHOUT_COST",
+            *i18n.EVM_PUBLIC_BOUNDARY_TOKENS,
+            *i18n.EVM_UPSTREAM_CLOSURE_TOKENS,
+            *i18n.EVM_LOW_DIAGNOSTIC_TOKENS,
+            *i18n.EVM_UPSTREAM_LIVE_RESULT_TOKENS,
+            *i18n.EVM_UPSTREAM_SCHEMA3_TOKENS,
+            *i18n.EVM_FINAL_RUNTIME_IR_TOKENS,
+        )
+        for token in tokens:
+            self.assertIn(token, i18n.GUIDE_REQUIRED_TOKENS["evm"])
+            self.assertIn(token, i18n.TESTING_REQUIRED_TOKENS)
+
+        paths = (
+            Path("docs/evm.md"),
+            Path("docs/testing.md"),
+            *(Path(f"docs/evm.{locale}.md") for locale in i18n.LOCALES),
+            *(Path(f"docs/testing.{locale}.md") for locale in i18n.LOCALES),
+        )
+        view = i18n.RepositoryView(use_index=False)
+        for path in paths:
+            text = view.read_text(path)
+            for token in tokens:
+                with self.subTest(path=path, token=token):
+                    self.assertIn(token, text)
+
+        removed_shared_cache = "build/evm-opcode-audit/go-ethereum.git"
+        self.assertNotIn(removed_shared_cache, i18n.TESTING_REQUIRED_TOKENS)
+        for path in paths:
+            with self.subTest(path=path, removed=removed_shared_cache):
+                self.assertNotIn(removed_shared_cache, view.read_text(path))
+
+        guarded_path = Path("docs/evm.zh-CN.md")
+        guarded_token = "operation.undefined"
+        guarded_text = view.read_text(guarded_path)
+        errors: list[str] = []
+        i18n.validate_matrix(
+            errors,
+            _OverlayView({guarded_path: guarded_text.replace(guarded_token, "", 1)}),
+        )
+        self.assertEqual(
+            errors,
+            [f"{guarded_path.as_posix()}: missing required token {guarded_token!r}"],
+        )
+
     # Headings a reader can write in any script have to slug the same way the
     # links to them are spelled, and a heading inside a sample is not a heading.
     def test_anchors_skip_fenced_samples_and_number_repeated_headings(self) -> None:

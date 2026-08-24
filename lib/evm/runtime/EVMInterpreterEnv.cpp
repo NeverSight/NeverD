@@ -6,6 +6,7 @@
 
 #include "EVMInterpreterDetail.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 
@@ -14,6 +15,8 @@
 
 namespace neverd::evm::detail {
 namespace {
+
+enum class WordMapValuePolicy { Any, NonZero };
 
 llvm::Error validateWordWidth(llvm::Twine Field, const llvm::APInt &Value) {
   if (Value.getBitWidth() == kWordBits)
@@ -24,12 +27,18 @@ llvm::Error validateWordWidth(llvm::Twine Field, const llvm::APInt &Value) {
       llvm::inconvertibleErrorCode());
 }
 
-llvm::Error validateWordMap(llvm::StringRef Name, const WordMap &Map) {
+llvm::Error validateWordMap(llvm::StringRef Name, const WordMap &Map,
+                            WordMapValuePolicy ValuePolicy) {
   for (const auto &[Key, Value] : Map) {
     if (llvm::Error E = validateWordWidth(llvm::Twine(Name) + " key", Key))
       return E;
     if (llvm::Error E = validateWordWidth(llvm::Twine(Name) + " value", Value))
       return E;
+    if (ValuePolicy == WordMapValuePolicy::NonZero && Value.isZero())
+      return llvm::make_error<llvm::StringError>(
+          "evm: environment field " + llvm::Twine(Name) +
+              " contains a zero-valued entry; sparse state must omit it",
+          llvm::inconvertibleErrorCode());
   }
   return llvm::Error::success();
 }
@@ -55,6 +64,36 @@ llvm::Error validateAddressMap(llvm::StringRef Name, const WordMap &Map) {
   return llvm::Error::success();
 }
 
+llvm::Error validateAggregateLimit(llvm::StringRef Name, size_t Limit,
+                                   llvm::ArrayRef<size_t> Amounts) {
+  size_t Used = 0;
+  for (size_t Amount : Amounts) {
+    if (Used > Limit || Amount > Limit - Used)
+      return llvm::make_error<llvm::StringError>(
+          "evm: environment exceeds " + llvm::Twine(Name) + " limit " +
+              llvm::Twine(Limit),
+          llvm::inconvertibleErrorCode());
+    Used += Amount;
+  }
+  return llvm::Error::success();
+}
+
+llvm::Error validateExternalCode(const BytecodeMap &ExternalCode,
+                                 size_t ByteLimit) {
+  size_t Bytes = 0;
+  for (const auto &[Address, Code] : ExternalCode) {
+    if (llvm::Error E = validateAddress("ExternalCode key", Address))
+      return E;
+    if (Bytes > ByteLimit || Code.size() > ByteLimit - Bytes)
+      return llvm::make_error<llvm::StringError>(
+          "evm: environment exceeds " + llvm::Twine(kMaxExternalCodeBytesName) +
+              " limit " + llvm::Twine(ByteLimit),
+          llvm::inconvertibleErrorCode());
+    Bytes += Code.size();
+  }
+  return llvm::Error::success();
+}
+
 } // namespace
 
 llvm::APInt zeroWord() { return llvm::APInt(kWordBits, 0); }
@@ -62,7 +101,34 @@ llvm::APInt boolWord(bool Value) {
   return llvm::APInt(kWordBits, Value ? 1 : 0);
 }
 
-llvm::Error validateEnvironment(const ExecutionEnvironment &Environment) {
+llvm::Error validateEnvironment(const ExecutionEnvironment &Environment,
+                                const InterpreterOptions &Options) {
+  const size_t CalldataBytes[] = {Environment.Calldata.size()};
+  if (llvm::Error E = validateAggregateLimit(
+          kMaxCalldataBytesName, Options.MaxCalldataBytes, CalldataBytes))
+    return E;
+  const size_t HostEnvironmentEntries[] = {
+      Environment.BlockHashes.size(), Environment.Balances.size(),
+      Environment.CodeHashes.size(), Environment.ExternalCode.size(),
+      Environment.BlobHashes.size()};
+  if (llvm::Error E = validateAggregateLimit(kMaxHostEnvironmentEntriesName,
+                                             Options.MaxHostEnvironmentEntries,
+                                             HostEnvironmentEntries))
+    return E;
+  const size_t HostReturnDataBytes[] = {Environment.InitialReturnData.size(),
+                                        Environment.CallReturnData.size(),
+                                        Environment.CreateReturnData.size()};
+  if (llvm::Error E = validateAggregateLimit(kMaxHostReturnDataBytesName,
+                                             Options.MaxHostReturnDataBytes,
+                                             HostReturnDataBytes))
+    return E;
+  const size_t PersistentStateEntries[] = {Environment.Storage.size(),
+                                           Environment.TransientStorage.size()};
+  if (llvm::Error E = validateAggregateLimit(kMaxPersistentStateEntriesName,
+                                             Options.MaxPersistentStateEntries,
+                                             PersistentStateEntries))
+    return E;
+
   struct NamedWord {
     llvm::StringLiteral Name;
     const llvm::APInt *Value;
@@ -72,6 +138,7 @@ llvm::Error validateEnvironment(const ExecutionEnvironment &Environment) {
       {"GasPrice", &Environment.GasPrice},
       {"Timestamp", &Environment.Timestamp},
       {"BlockNumber", &Environment.BlockNumber},
+      {"Difficulty", &Environment.Difficulty},
       {"PrevRandao", &Environment.PrevRandao},
       {"GasLimit", &Environment.GasLimit},
       {"ChainID", &Environment.ChainID},
@@ -94,13 +161,20 @@ llvm::Error validateEnvironment(const ExecutionEnvironment &Environment) {
     if (llvm::Error E = validateAddress(Address.Name, *Address.Value))
       return E;
 
-  const std::pair<llvm::StringLiteral, const WordMap *> Maps[] = {
-      {"Storage", &Environment.Storage},
-      {"TransientStorage", &Environment.TransientStorage},
-      {"BlockHashes", &Environment.BlockHashes},
+  struct NamedWordMap {
+    llvm::StringLiteral Name;
+    const WordMap *Map;
+    WordMapValuePolicy ValuePolicy;
   };
-  for (const auto &[Name, Map] : Maps)
-    if (llvm::Error E = validateWordMap(Name, *Map))
+  const NamedWordMap Maps[] = {
+      {"Storage", &Environment.Storage, WordMapValuePolicy::NonZero},
+      {"TransientStorage", &Environment.TransientStorage,
+       WordMapValuePolicy::NonZero},
+      {"BlockHashes", &Environment.BlockHashes, WordMapValuePolicy::Any},
+  };
+  for (const NamedWordMap &NamedMap : Maps)
+    if (llvm::Error E =
+            validateWordMap(NamedMap.Name, *NamedMap.Map, NamedMap.ValuePolicy))
       return E;
 
   if (llvm::Error E = validateAddressMap("Balances", Environment.Balances))
@@ -108,9 +182,9 @@ llvm::Error validateEnvironment(const ExecutionEnvironment &Environment) {
   if (llvm::Error E = validateAddressMap("CodeHashes", Environment.CodeHashes))
     return E;
 
-  for (const auto &Entry : Environment.ExternalCode)
-    if (llvm::Error E = validateAddress("ExternalCode key", Entry.first))
-      return E;
+  if (llvm::Error E = validateExternalCode(Environment.ExternalCode,
+                                           Options.MaxExternalCodeBytes))
+    return E;
   for (const llvm::APInt &Hash : Environment.BlobHashes)
     if (llvm::Error E = validateWordWidth("BlobHashes value", Hash))
       return E;

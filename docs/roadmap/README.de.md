@@ -34,11 +34,17 @@ Ziele abschließen, die Loader schon teilweise erkennen.
 
 - EVM-Loader · 1:1-Opcode-Lifter (strict) · Stack/Speicher · JUMP/JUMPI-CFG · Storage/Calldata · C23/Solidity/LLVM · einheitliche CLI/C-API
 
-**Status:** Für Legacy-EVM von Frontier bis Fusaka abgeschlossen: alle 150
-zugewiesenen Opcodes, Raw/Hex/Artifact-Eingaben, Runtime-Extraktion, CFG und
-Stack-SSA, Strict/Relaxed-Analyse, C23/LLVM/Solidity-Backends, CLI/C-API und
-Differentialtests gegen Anvil. Host-ABI und Grenzen stehen unter
-[EVM-Dekompilation](../evm.de.md).
+**Status:** Legacy-Opcode-Decoding und -Lifting von Frontier bis Fusaka sind
+abgeschlossen und regressionstestgedeckt. Source-Rekonstruktion bleibt eine
+laufende, konservative Analyse: Selector, Events, Typen, Standards, Namen und
+dynamischer Kontrollfluss werden nur mit hinreichender Evidenz gemeldet, nie als
+Originalquelle, vollständige ABI oder volle ERC-Konformität. Kanonische
+Funktions-Selectors, standardbezogene ABI-Varianten und erfolgreiche Return-
+Formen bleiben getrennt; ein geteilter ERC-Selector kann weder einen Standard
+erfinden noch einen unvereinbaren Rückgabetyp übernehmen. Amsterdam ist ein
+explizites opt-in Review-/Development-Target; `latest` bleibt Fusaka.
+EOFv1/EIP-7692 ist nicht geplant und EIP-3540 Stagnant, also keine finale
+Mainnet-Semantik. Siehe [EVM-Dekompilation](../evm.de.md).
 
 ### Warum EVM
 
@@ -89,12 +95,15 @@ Ein geliftetes Binärfile auf Heap-Lebensdauerfehler (Leak, Double-Free, Use-aft
 
 ## Zeitplan
 
-Native Formatvollständigkeit, EVM- und Solana-SBF-Dekompilation sowie Speichersicherheit P0 sind abgeschlossen und regressionstestgedeckt. Keine Termine zugesagt.
+Native Formate, Legacy-EVM-Decoding/Lifting bis Fusaka, Solana SBF und
+Speichersicherheit P0 sind regressionstestgedeckt. Die konservative EVM-Source-
+Rekonstruktion läuft weiter. Keine Termine zugesagt.
 
 | Feature | Status |
 |---------|--------|
 | Native Formatvollständigkeit (PE ARM*, Mach-O i386) | Abgeschlossen |
-| EVM-Bytecode-Dekompilation | Abgeschlossen — C, Solidity und LLVM; regressionstestgedeckt |
+| Legacy-EVM-Decoding/Lifting | Bis Fusaka abgeschlossen; regressionstestgedeckt |
+| EVM-Source-Rekonstruktion | Laufend — evidenzgestützt und konservativ |
 | Solana-eBPF-(SBF)-Dekompilation | Abgeschlossen — v0-v4, C, Rust und LLVM; regressionstestgedeckt |
 | Speicher-Audit und Hunt | Abgeschlossen — P0 für PE, ELF und Mach-O; regressionstestgedeckt |
 | Engine- & Produkt-Härtung | Laufend |
