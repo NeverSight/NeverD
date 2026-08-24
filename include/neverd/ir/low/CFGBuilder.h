@@ -1169,6 +1169,13 @@ private:
   bool CandidateProposalStageActive = false;
   size_t CandidateProposalStageEvidenceRemaining = 0;
   bool CandidateProposalStageEvidenceIncomplete = false;
+  /// Bookkeeping for persistent incomplete-branch markers is independent of
+  /// the user-overridable candidate proof allowance.  An explicit zero proof
+  /// budget must still be able to record the exact branch whose proof stopped;
+  /// exhausting this separate bounded account conservatively preserves every
+  /// remaining indirect jump in the function.
+  size_t IncompleteBranchMarkerEvidenceRemaining = 0;
+  bool IncompleteBranchMarkerEvidenceIncomplete = false;
   bool ProposalStageCommitTailEvidenceExhaustedForTesting = false;
   bool CommitTailRollbackRetainedPendingI386AmbiguityForTesting = false;
   bool ExhaustStableI386AmbiguityCommitTailForTesting = false;

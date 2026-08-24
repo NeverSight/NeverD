@@ -388,13 +388,28 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     return Work;
   };
   // Reserve the exact branch-scoped incomplete marker before any nested proof
-  // can exhaust its allowance.  CandidateOutcome may then insert without
-  // allocating or performing an unmetered ordered lookup at zero balance; the
-  // reservation also covers final clear/destruction of the set node.
-  if (!consumeCandidateProducts(
-          {{1, orderedLookupWork(IndexDomainEvidenceIncompleteBranches.size())},
-           {1, 2}}))
+  // can exhaust its allowance.  This bookkeeping must not debit the
+  // user-overridable candidate proof budget: budget zero means "no proof", not
+  // "forget which branch failed closed".  Every invocation uses this separate
+  // bounded account, including indirect branches discovered recursively while
+  // a proposal stage is active; those nested candidates are not members of the
+  // stage's initial inventory.  The stage rollback reserve is intentionally an
+  // additional conservative bound.  If this account is exhausted, a scalar
+  // function-level bit preserves all remaining indirect jumps without
+  // allocating after exhaustion.
+  const size_t LookupWork =
+      orderedLookupWork(IndexDomainEvidenceIncompleteBranches.size());
+  constexpr size_t NodeAndCleanupWork = 2;
+  if (LookupWork >
+          std::numeric_limits<size_t>::max() - NodeAndCleanupWork ||
+      LookupWork + NodeAndCleanupWork >
+          IncompleteBranchMarkerEvidenceRemaining) {
+    IncompleteBranchMarkerEvidenceRemaining = 0;
+    IncompleteBranchMarkerEvidenceIncomplete = true;
     return {};
+  }
+  IncompleteBranchMarkerEvidenceRemaining -=
+      LookupWork + NodeAndCleanupWork;
   IncompleteBranchInsertPrepaid = true;
   auto insertIncompleteBranchOnce = [&]() {
     if (IncompleteBranchAlreadyInserted)

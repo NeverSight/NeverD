@@ -115,6 +115,9 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   CandidateProposalStageActive = false;
   CandidateProposalStageEvidenceRemaining = 0;
   CandidateProposalStageEvidenceIncomplete = false;
+  IncompleteBranchMarkerEvidenceRemaining =
+      limits::kMaxJumpTableProposalStageEvidenceWork;
+  IncompleteBranchMarkerEvidenceIncomplete = false;
   ProposalStageCommitTailEvidenceExhaustedForTesting = false;
   CommitTailRollbackRetainedPendingI386AmbiguityForTesting = false;
   ExhaustedStableI386AmbiguityCommitTailForTesting = false;
@@ -879,6 +882,11 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   for (va_t Addr : IndexDomainEvidenceIncompleteBranches)
     if (Insns.count(Addr))
       Func.UnsafeIndirectBranchAddresses.insert(Addr);
+  if (IncompleteBranchMarkerEvidenceIncomplete)
+    for (const auto &[Addr, Rec] : Insns)
+      if (Rec.IsBranch && Rec.IsIndirect && !Rec.IsCall && !Rec.IsRet &&
+          !Rec.IsCond && Rec.JumpTableTargets.empty())
+        Func.UnsafeIndirectBranchAddresses.insert(Addr);
   for (va_t Addr : ValidatedPhysicalJumpTableBranches)
     if (auto It = Insns.find(Addr);
         It != Insns.end() && It->second.JumpTableTargets.empty())

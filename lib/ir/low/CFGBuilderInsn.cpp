@@ -85,6 +85,7 @@ void CFGBuilder::convertIndirectTailCalls(LowFunc &Func) {
         LostValidatedJumpTableBranches.count(Addr) ||
         StackTableEvidenceIncompleteBranches.count(Addr) ||
         IndexDomainEvidenceIncompleteBranches.count(Addr) ||
+        IncompleteBranchMarkerEvidenceIncomplete ||
         ValidatedPhysicalJumpTableBranches.count(Addr) ||
         AmbiguousI386GOTPCBranches.count(Addr) ||
         PendingAmbiguousI386GOTPCBranches.count(Addr) ||
