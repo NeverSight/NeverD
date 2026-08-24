@@ -507,6 +507,79 @@ a64_explicit_udiv_late_selector_escape:
 .size a64_explicit_udiv_late_selector_escape, .-a64_explicit_udiv_late_selector_escape
 
 .p2align 2
+// A 65-slot object is deliberately outside the bounded <=64 coordinate LFP.
+// The candidate-free graph reaches the shared signed normalization with only
+// literal zero.  Revalidation must then rediscover the same conditional proof
+// in the complete old-target graph, where every case feeds a literal in [0,5)
+// back to the numerator.  SDIV itself supplies no unsigned range authority.
+.globl a64_ineligible_sdiv_old_targets
+.type a64_ineligible_sdiv_old_targets, %function
+a64_ineligible_sdiv_old_targets:
+  mov w0, wzr
+  b .La64_ineligible_sdiv_normalize
+.La64_ineligible_sdiv_normalize:
+  mov w1, #5
+  sdiv w2, w0, w1
+  mul w3, w2, w1
+  sub w10, w0, w3
+.La64_ineligible_sdiv_dispatch:
+  adrp x9, a64_ineligible_sdiv_old_targets_table
+  add x9, x9, :lo12:a64_ineligible_sdiv_old_targets_table
+  ldr x12, [x9, w10, uxtw #3]
+  br x12
+.La64_ineligible_sdiv_case0:
+  mov w0, #0
+  b .La64_ineligible_sdiv_normalize
+.La64_ineligible_sdiv_case1:
+  mov w0, #1
+  b .La64_ineligible_sdiv_normalize
+.La64_ineligible_sdiv_case2:
+  mov w0, #2
+  b .La64_ineligible_sdiv_normalize
+.La64_ineligible_sdiv_case3:
+  mov w0, #3
+  b .La64_ineligible_sdiv_normalize
+.La64_ineligible_sdiv_case4:
+  mov w0, #4
+  b .La64_ineligible_sdiv_normalize
+.size a64_ineligible_sdiv_old_targets, .-a64_ineligible_sdiv_old_targets
+
+.p2align 2
+// The same ineligible old-target replay must fail closed when a newly visible
+// case can feed an unauthenticated signed numerator into the common recipe.
+.globl a64_ineligible_sdiv_old_target_escape
+.type a64_ineligible_sdiv_old_target_escape, %function
+a64_ineligible_sdiv_old_target_escape:
+  mov w0, wzr
+  b .La64_ineligible_sdiv_escape_normalize
+.La64_ineligible_sdiv_escape_normalize:
+  mov w1, #5
+  sdiv w2, w0, w1
+  mul w3, w2, w1
+  sub w10, w0, w3
+.La64_ineligible_sdiv_escape_dispatch:
+  adrp x9, a64_ineligible_sdiv_old_target_escape_table
+  add x9, x9, :lo12:a64_ineligible_sdiv_old_target_escape_table
+  ldr x12, [x9, w10, uxtw #3]
+  br x12
+.La64_ineligible_sdiv_escape_case0:
+  mov w0, #0
+  b .La64_ineligible_sdiv_escape_normalize
+.La64_ineligible_sdiv_escape_case1:
+  mov w0, #1
+  b .La64_ineligible_sdiv_escape_normalize
+.La64_ineligible_sdiv_escape_case2:
+  mov w0, #2
+  b .La64_ineligible_sdiv_escape_normalize
+.La64_ineligible_sdiv_escape_case3:
+  mov w0, #3
+  b .La64_ineligible_sdiv_escape_normalize
+.La64_ineligible_sdiv_escape_case4:
+  mov w0, w13
+  b .La64_ineligible_sdiv_escape_normalize
+.size a64_ineligible_sdiv_old_target_escape, .-a64_ineligible_sdiv_old_target_escape
+
+.p2align 2
 .globl a64_writable_unknown_callee
 .type a64_writable_unknown_callee, %function
 a64_writable_unknown_callee:
@@ -656,3 +729,33 @@ a64_explicit_udiv_late_selector_escape_table:
   .xword .La64_explicit_escape_case3
   .xword .La64_explicit_escape_case4
 .size a64_explicit_udiv_late_selector_escape_table, .-a64_explicit_udiv_late_selector_escape_table
+
+.section .rodata.jt_a64_ineligible_sdiv_old_targets,"a",%progbits
+.p2align 3
+.globl a64_ineligible_sdiv_old_targets_table
+.type a64_ineligible_sdiv_old_targets_table, %object
+a64_ineligible_sdiv_old_targets_table:
+  .xword .La64_ineligible_sdiv_case0
+  .xword .La64_ineligible_sdiv_case1
+  .xword .La64_ineligible_sdiv_case2
+  .xword .La64_ineligible_sdiv_case3
+  .xword .La64_ineligible_sdiv_case4
+  .rept 60
+  .xword .La64_ineligible_sdiv_case0
+  .endr
+.size a64_ineligible_sdiv_old_targets_table, .-a64_ineligible_sdiv_old_targets_table
+
+.section .rodata.jt_a64_ineligible_sdiv_escape,"a",%progbits
+.p2align 3
+.globl a64_ineligible_sdiv_old_target_escape_table
+.type a64_ineligible_sdiv_old_target_escape_table, %object
+a64_ineligible_sdiv_old_target_escape_table:
+  .xword .La64_ineligible_sdiv_escape_case0
+  .xword .La64_ineligible_sdiv_escape_case1
+  .xword .La64_ineligible_sdiv_escape_case2
+  .xword .La64_ineligible_sdiv_escape_case3
+  .xword .La64_ineligible_sdiv_escape_case4
+  .rept 60
+  .xword .La64_ineligible_sdiv_escape_case0
+  .endr
+.size a64_ineligible_sdiv_old_target_escape_table, .-a64_ineligible_sdiv_old_target_escape_table

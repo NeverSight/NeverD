@@ -4956,6 +4956,78 @@ TEST_F(JTE_AArch64,
   EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
 }
 
+TEST_F(JTE_AArch64,
+       ModuloBoundReplaysIneligibleConditionalSignedOldTargets) {
+  auto ImageOrErr = neverd::loadBinary(indexIdentityA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("a64_ineligible_sdiv_old_targets");
+  const neverd::Symbol *Table =
+      Image.findSymbol("a64_ineligible_sdiv_old_targets_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Table->Size, 65u * 8u);
+  EXPECT_EQ(std::count_if(Image.CodePtrRelocSlots.begin(),
+                          Image.CodePtrRelocSlots.end(),
+                          [&](neverd::va_t Slot) {
+                            return Slot >= Table->Addr &&
+                                   Slot < Table->Addr + Table->Size;
+                          }),
+            65);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INT_SDIV));
+  ASSERT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INT_MULT));
+  ASSERT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INT_SUB));
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  ASSERT_EQ(Low.JumpTables.front().Targets.size(), 5u);
+  EXPECT_EQ(std::set<neverd::va_t>(Low.JumpTables.front().Targets.begin(),
+                                  Low.JumpTables.front().Targets.end())
+                .size(),
+            5u);
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
+TEST_F(JTE_AArch64,
+       ModuloBoundRejectsIneligibleConditionalSignedOldTargetEscape) {
+  auto ImageOrErr = neverd::loadBinary(indexIdentityA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("a64_ineligible_sdiv_old_target_escape");
+  const neverd::Symbol *Table =
+      Image.findSymbol("a64_ineligible_sdiv_old_target_escape_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Table->Size, 65u * 8u);
+  EXPECT_EQ(std::count_if(Image.CodePtrRelocSlots.begin(),
+                          Image.CodePtrRelocSlots.end(),
+                          [&](neverd::va_t Slot) {
+                            return Slot >= Table->Addr &&
+                                   Slot < Table->Addr + Table->Size;
+                          }),
+            65);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INT_SDIV));
+  ASSERT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INT_MULT));
+  ASSERT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INT_SUB));
+  EXPECT_TRUE(Low.JumpTables.empty());
+  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+}
+
 TEST_F(JTE_AArch64, ModuloBoundRejectsInexactExplicitDivisionRecipes) {
   auto ImageOrErr = neverd::loadBinary(indexIdentityA64Obj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
