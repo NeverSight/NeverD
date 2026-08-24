@@ -781,6 +781,49 @@ static ResolverValue resolverExtend(
   return Extend(Input, 0);
 }
 
+static bool isRoleNeutralNumericOccurrence(const ResolverValue &Value) {
+  return Value && Value->K == ResolverValueExpr::Kind::Constant &&
+         Value->Provenance == ConstantAddressProvenance::Unknown &&
+         Value->AddressOwnerVA == InvalidVA && !Value->ScalarModelOrigin &&
+         !Value->Input && Value->Inputs.empty() && Value->Root.empty();
+}
+
+template <typename SameAllowedValueFn, typename ConsumeWorkFn>
+static bool resolverNumericOccurrenceExtensionMatches(
+    const ResolverValue &Value, const ResolverValue &Allowed, bool Signed,
+    bool RequireExactAddressOwner, SameAllowedValueFn &&SameAllowedValue,
+    ConsumeWorkFn &&ConsumeWork, bool *AnalysisIncomplete = nullptr) {
+  if (!Value || !Allowed || Value->Size == Allowed->Size)
+    return false;
+
+  const bool ValueIsSmaller = Value->Size < Allowed->Size;
+  const ResolverValue &Smaller = ValueIsSmaller ? Value : Allowed;
+  const ResolverValue &Larger = ValueIsSmaller ? Allowed : Value;
+  if (!isRoleNeutralNumericOccurrence(Smaller))
+    return false;
+
+  // Decoder literals are role-neutral until an operation consumes them.  At
+  // this exact numeric query, promote only the plain leaf occurrence to the
+  // scalar role before applying the query-authorized virtual extension.  Do
+  // not mutate the original expression: Unknown-to-Unknown architectural
+  // transports must continue to use the ordinary structural path above.
+  if (!ConsumeWork(1)) {
+    if (AnalysisIncomplete)
+      *AnalysisIncomplete = true;
+    return false;
+  }
+  ResolverValue Scalar = resolverConstant(
+      Smaller->Constant, Smaller->Size, ConstantAddressProvenance::Scalar);
+  ResolverValue Extended = resolverExtend(
+      std::move(Scalar), Larger->Size, Signed,
+      std::forward<ConsumeWorkFn>(ConsumeWork), AnalysisIncomplete);
+  if (!Extended)
+    return false;
+  return ValueIsSmaller
+             ? SameAllowedValue(Extended, Allowed, RequireExactAddressOwner)
+             : SameAllowedValue(Value, Extended, RequireExactAddressOwner);
+}
+
 static ResolverValue resolverSlice(
     ResolverValue Input, uint16_t Offset, uint16_t Size,
     const std::function<bool(size_t)> &ConsumeWork = {},
@@ -3108,12 +3151,9 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   };
   auto applyNumericOperandRole = [&](const LowOp &Use, unsigned InputIndex,
                                      ResolverResult Result) -> ResolverResult {
-    if (Result.Kind != ResolverResultKind::Value || !Result.Value ||
+    if (Result.Kind != ResolverResultKind::Value ||
         !isNumericConstantOperand(Use.Opcode, InputIndex) ||
-        Result.Value->K != ResolverValueExpr::Kind::Constant ||
-        Result.Value->Provenance != ConstantAddressProvenance::Unknown ||
-        Result.Value->AddressOwnerVA != InvalidVA ||
-        Result.Value->ScalarModelOrigin)
+        !isRoleNeutralNumericOccurrence(Result.Value))
       return Result;
     // COPY deliberately transports an encoded immediate without deciding
     // whether its bits are a pointer.  Once that value reaches a numeric LowIR
@@ -5247,7 +5287,17 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                                   resolverExtend(Allowed, Value->Size, true,
                                                  consumeMatchWork,
                                                  &MatchBudgetExhausted),
-                                  Query.RequireExactAddressOwner))) {
+                                  Query.RequireExactAddressOwner)) ||
+                (Query.AllowZeroExtension &&
+                 resolverNumericOccurrenceExtensionMatches(
+                     Value, Allowed, /*Signed=*/false,
+                     Query.RequireExactAddressOwner, sameAllowedValue,
+                     consumeMatchWork, &MatchBudgetExhausted)) ||
+                (Query.AllowSignExtension &&
+                 resolverNumericOccurrenceExtensionMatches(
+                     Value, Allowed, /*Signed=*/true,
+                     Query.RequireExactAddressOwner, sameAllowedValue,
+                     consumeMatchWork, &MatchBudgetExhausted))) {
               Matches = true;
               break;
             }

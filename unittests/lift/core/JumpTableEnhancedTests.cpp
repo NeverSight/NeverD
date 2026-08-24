@@ -5221,6 +5221,43 @@ static fs::path cgotoObj() {
   return fs::path(TEST_OBJ_DIR) / "test_jumptable_cgoto.o";
 }
 
+static fs::path stackMemcpyObj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_stack_memcpy.o";
+}
+
+static neverd::LowFunc buildNamedLowFunction(neverd::BinaryImage &Image,
+                                             llvm::StringRef Name) {
+  const neverd::Symbol *Function = Image.findSymbol(Name.str());
+  EXPECT_NE(Function, nullptr);
+  if (!Function)
+    return {};
+  neverd::Decoder Decoder;
+  EXPECT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  return Builder.build(Image, Decoder, Function->Addr, Function->Name);
+}
+
+TEST_F(JTE_X86_64, StackMemcpyLengthClobberFailsClosed) {
+  auto ImageOrErr = neverd::loadBinary(stackMemcpyObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::LowFunc Low = buildNamedLowFunction(
+      *ImageOrErr, "jt_stack_memcpy_length_clobber");
+
+  bool Saw56 = false;
+  bool Saw64 = false;
+  for (const neverd::LowBlock &Block : Low.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops)
+      if (Op.Opcode == neverd::NdOp::COPY && Op.NumInputs == 1 &&
+          Op.Output.Size == 4 && Op.Inputs[0].isConst()) {
+        Saw56 |= Op.Inputs[0].Offset == 56;
+        Saw64 |= Op.Inputs[0].Offset == 64;
+      }
+  ASSERT_TRUE(Saw56 && Saw64)
+      << "fixture must keep both feasible CALL-time length definitions";
+  EXPECT_TRUE(Low.JumpTables.empty());
+}
+
 TEST_F(JTE_X86_64, ComputedGotoAllStagesSucceed) {
   verifyAllStages(cgotoObj());
 }

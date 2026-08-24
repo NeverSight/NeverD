@@ -174,8 +174,8 @@ static std::vector<RoundTripTC> makeCGotoConstTC(const char *prefix,
 // direct copy: AArch64 (adrp/add __const base), x86-64 (RIP-relative scalar
 // copy, frame offset in the dispatch load disp), i386 (PIC GOTOFF GOT-base-0),
 // ARM32 (PC-relative literal-pool base + scaled index folded into the frame
-// base).  Larger tables (clang memcpy/staged init on x86) remain a documented
-// gap (localtab-cgoto).
+// base).  Larger x86 tables use the authenticated memcpy/staged-initializer
+// path covered by the required loc8 case below.
 static std::vector<RoundTripTC> makeCGotoLocalTC(const char *prefix,
                                                  const char *T) {
   std::string p = prefix, t = T;

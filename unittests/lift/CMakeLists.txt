@@ -777,6 +777,7 @@ set(X86_64_TEST_SOURCES
   x86_64/test_jumptable_masked_abs.c
   x86_64/test_jumptable_worldclass.c
   x86_64/test_jumptable_cgoto.c
+  x86_64/test_jumptable_stack_memcpy.s
   x86_64/test_global_volatile.c
 )
 
