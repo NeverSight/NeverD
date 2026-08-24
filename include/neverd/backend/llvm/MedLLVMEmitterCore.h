@@ -1653,12 +1653,37 @@ private:
     bool Proven = false;
     std::vector<MedVar> Sources;
   };
+  struct FrameReloadWrite {
+    std::size_t Index = 0;
+    MedVar Address;
+    MedVar Value;
+    uint16_t Size = 0;
+    bool HasAddress = false;
+    bool HasValue = false;
+    bool IsStore = false;
+  };
+  struct FrameReloadBlock {
+    std::vector<int> Successors;
+    std::set<int> StructuralPreds;
+    std::vector<FrameReloadWrite> Writes;
+  };
+  struct FrameReloadLoadSite {
+    int BlockId = -1;
+    std::size_t Index = 0;
+  };
+  struct FrameReloadAnalysis {
+    bool Valid = false;
+    int EntryBlockId = -1;
+    std::map<int, FrameReloadBlock> Blocks;
+    std::map<FrameReloadOccurrenceKey, FrameReloadLoadSite> Loads;
+  };
   enum class FrameReloadCacheState { Empty, Building, Ready };
 
   static std::optional<FrameReloadOccurrenceKey>
   frameReloadOccurrenceKey(const MedOp &Load);
   void invalidateFrameReloadSourceCache() const;
   bool ensureFrameReloadOccurrenceIndex() const;
+  void ensureFrameReloadAnalysis() const;
 
   // Stable, exact-occurrence memoization for all-path frame reload proofs.
   // The cache never retains MedOp pointers: a key records the complete load
@@ -1677,6 +1702,12 @@ private:
   mutable bool FrameReloadBuildSawReentrantQuery = false;
   mutable std::map<FrameReloadOccurrenceKey, FrameReloadSourceResult>
       FrameReloadSourceCache;
+  // Immutable per-function write/CFG facts reused by every occurrence proof.
+  // Result cache identity remains the upstream stable occurrence key.
+  mutable bool FrameReloadAnalysisBuilt = false;
+  mutable FrameReloadAnalysis FrameReloadIndex;
+  mutable uint64_t FrameReloadAnalysisBuilds = 0;
+  mutable uint64_t FrameReloadSourceGeneration = 0;
 
   // Exact, cycle-safe propagation of incomplete architectural address
   // fragments for the function currently being emitted. Observable sinks and

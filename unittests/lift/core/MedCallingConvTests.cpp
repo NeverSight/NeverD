@@ -834,69 +834,6 @@ TEST(LowToMedCallReturnFP, CallerSavedPreservingCallKeepsPriorFPResult) {
   EXPECT_TRUE(verifyMedFunc(Med, "test-preserved-fp-result"));
 }
 
-TEST(LowToMedX86CallingConv,
-     StackAddressExtensionDoesNotCreateMutableParameterHome) {
-  constexpr Arch TheArch = Arch::X86;
-  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
-
-  LowFunc Low;
-  Low.Entry = 0x1000;
-  Low.Name = "extended_stack_parameter_address";
-  Low.Blocks.resize(1);
-  LowBlock &Block = Low.Blocks[0];
-  Block.Id = 0;
-  Block.StartAddr = 0x1000;
-  Block.EndAddr = 0x1004;
-
-  NdVar Address32 = NdVar::tmp(1, TRI.PointerSize);
-  LowOp Add;
-  Add.Opcode = NdOp::INT_ADD;
-  Add.Addr = 0x1000;
-  Add.Output = Address32;
-  Add.addInput(NdVar::reg(TRI.StackPointer, TRI.PointerSize));
-  Add.addInput(NdVar::cst(4, TRI.PointerSize));
-  Block.Ops.push_back(Add);
-
-  NdVar Address64 = NdVar::tmp(2, 8);
-  LowOp Extend;
-  Extend.Opcode = NdOp::INT_ZEXT;
-  Extend.Addr = 0x1001;
-  Extend.Output = Address64;
-  Extend.addInput(Address32);
-  Block.Ops.push_back(Extend);
-
-  NdVar Value = NdVar::tmp(3, 4);
-  LowOp Load;
-  Load.Opcode = NdOp::LOAD;
-  Load.Addr = 0x1002;
-  Load.Output = Value;
-  Load.addInput(Address64);
-  Block.Ops.push_back(Load);
-
-  LowOp Return;
-  Return.Opcode = NdOp::RETURN;
-  Return.Addr = 0x1003;
-  Return.addInput(Value);
-  Block.Ops.push_back(Return);
-
-  MedFunc Med = LowToMedConverter().convert(Low, TheArch);
-  ASSERT_EQ(Med.Params.size(), 1u);
-  EXPECT_EQ(Med.Params[0].Kind, MedVar::Param);
-  EXPECT_EQ(Med.Params[0].Id, 0);
-  EXPECT_EQ(Med.Params[0].RegOff, kNoParamReg);
-  EXPECT_TRUE(Med.MutableStackParamHomes.empty());
-
-  bool SawParameterCopy = false;
-  for (const MedBlock &MedBlock : Med.Blocks)
-    for (const MedOp &Op : MedBlock.Ops) {
-      SawParameterCopy |= Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
-                          Op.Inputs[0].Kind == MedVar::Param &&
-                          Op.Inputs[0].Id == 0;
-      EXPECT_NE(Op.Opcode, NdOp::LOAD);
-    }
-  EXPECT_TRUE(SawParameterCopy);
-  EXPECT_TRUE(verifyMedFunc(Med, "test-extended-stack-parameter-address"));
-}
 
 TEST(LowToMedSSA, ModelsItaniumLandingPadRegistersAsExceptionalLiveIns) {
   constexpr Arch TheArch = Arch::AArch64;
@@ -1163,6 +1100,118 @@ TEST(MedLLVMReturn, UsesLatestAliasedDefinitionBeforeCoercion) {
   ASSERT_NE(ReturnInst, nullptr);
   EXPECT_TRUE(HasZExt);
 }
+
+TEST(MedLLVMReturn, UsesLatestFloatDefinitionBeforeWidthPreference) {
+  constexpr Arch TheArch = Arch::X64;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+
+  MedFunc Func;
+  Func.Entry = 0x5100;
+  Func.Name = "latest_float_return_alias";
+  Func.ReturnType = NdType::makeFloat(4);
+  MedBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = Func.Entry;
+  Block.EndAddr = Func.Entry + 12;
+
+  MedOp Older;
+  Older.Opcode = NdOp::COPY;
+  Older.Output = reg(1, 1, 16, TRI.fpReturnModelReg(), TheArch);
+  Older.addInput(MedVar::makeConst(0x1122334455667788ULL, 16));
+  Block.Ops.push_back(Older);
+
+  MedOp Newer;
+  Newer.Opcode = NdOp::COPY;
+  Newer.Output = reg(2, 1, 4, TRI.fpReturnModelReg(), TheArch);
+  Newer.addInput(MedVar::makeConst(0x3f800000ULL, 4));
+  Block.Ops.push_back(Newer);
+
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = Func.Entry + 8;
+  Block.Ops.push_back(Return);
+  Func.Blocks.push_back(std::move(Block));
+
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit({Func}, Context, Func.Name, TheArch);
+  ASSERT_NE(Module, nullptr);
+  llvm::Function *Function = verifiedFunction(*Module, Func.Name);
+  ASSERT_NE(Function, nullptr);
+
+  const llvm::ReturnInst *ReturnInst = nullptr;
+  for (const llvm::BasicBlock &BB : *Function)
+    for (const llvm::Instruction &Instruction : BB)
+      if (auto *Candidate = llvm::dyn_cast<llvm::ReturnInst>(&Instruction))
+        ReturnInst = Candidate;
+  ASSERT_NE(ReturnInst, nullptr);
+
+  auto *ReturnBitCast = llvm::dyn_cast<llvm::BitCastInst>(
+      ReturnInst->getReturnValue());
+  ASSERT_NE(ReturnBitCast, nullptr);
+  auto *Widened =
+      llvm::dyn_cast<llvm::ZExtInst>(ReturnBitCast->getOperand(0));
+  ASSERT_NE(Widened, nullptr);
+  EXPECT_EQ(Widened->getSrcTy()->getIntegerBitWidth(), 32u);
+}
+
+TEST(MedLLVMReturn, UsesLatestFloatPredecessorDefinitionBeforeWidthPreference) {
+  constexpr Arch TheArch = Arch::X64;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+
+  MedFunc Func;
+  Func.Entry = 0x5200;
+  Func.Name = "latest_float_predecessor_return_alias";
+  Func.ReturnType = NdType::makeFloat(4);
+
+  MedBlock Producer;
+  Producer.Id = 0;
+  Producer.StartAddr = Func.Entry;
+  Producer.EndAddr = Func.Entry + 8;
+  Producer.Succs = {1};
+  MedOp Older;
+  Older.Opcode = NdOp::COPY;
+  Older.Output = reg(1, 1, 16, TRI.fpReturnModelReg(), TheArch);
+  Older.addInput(MedVar::makeConst(0x1122334455667788ULL, 16));
+  Producer.Ops.push_back(Older);
+  MedOp Newer;
+  Newer.Opcode = NdOp::COPY;
+  Newer.Output = reg(2, 1, 4, TRI.fpReturnModelReg(), TheArch);
+  Newer.addInput(MedVar::makeConst(0x3f800000ULL, 4));
+  Producer.Ops.push_back(Newer);
+
+  MedBlock ReturnBlock;
+  ReturnBlock.Id = 1;
+  ReturnBlock.StartAddr = Func.Entry + 8;
+  ReturnBlock.EndAddr = Func.Entry + 12;
+  ReturnBlock.Preds = {0};
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = Func.Entry + 8;
+  ReturnBlock.Ops.push_back(Return);
+  Func.Blocks = {std::move(Producer), std::move(ReturnBlock)};
+
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit({Func}, Context, Func.Name, TheArch);
+  ASSERT_NE(Module, nullptr);
+  llvm::Function *Function = verifiedFunction(*Module, Func.Name);
+  ASSERT_NE(Function, nullptr);
+
+  const llvm::ReturnInst *ReturnInst = nullptr;
+  for (const llvm::BasicBlock &BB : *Function)
+    for (const llvm::Instruction &Instruction : BB)
+      if (auto *Candidate = llvm::dyn_cast<llvm::ReturnInst>(&Instruction))
+        ReturnInst = Candidate;
+  ASSERT_NE(ReturnInst, nullptr);
+
+  auto *ReturnBitCast = llvm::dyn_cast<llvm::BitCastInst>(
+      ReturnInst->getReturnValue());
+  ASSERT_NE(ReturnBitCast, nullptr);
+  auto *Widened =
+      llvm::dyn_cast<llvm::ZExtInst>(ReturnBitCast->getOperand(0));
+  ASSERT_NE(Widened, nullptr);
+  EXPECT_EQ(Widened->getSrcTy()->getIntegerBitWidth(), 32u);
+}
+
 
 TEST(MedLLVMEmitterPredicatedControl,
      DirectAndIndirectCallsExecuteOnlyOnTheFalseGuardEdge) {

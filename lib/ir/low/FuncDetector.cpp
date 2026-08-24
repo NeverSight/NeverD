@@ -235,11 +235,6 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
     const size_t N = Results.size();
     std::vector<char> Keep(N, 0);
     std::vector<size_t> NeedVerify;
-    std::set<va_t> ExplicitFunctionStarts;
-    for (const auto &Sym : Img.Symbols)
-      if (Sym.IsFunc)
-        ExplicitFunctionStarts.insert(
-            normalizeCodeAddress(Sym.Addr, Img.Arch, Img.Mode));
     for (size_t I = 0; I < N; ++I) {
       va_t Addr = Results[I].first;
       if (Trusted.count(Addr))

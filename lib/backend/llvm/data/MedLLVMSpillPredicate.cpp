@@ -669,6 +669,9 @@ void MedLLVMEmitter::invalidateFrameReloadSourceCache() const {
   FrameReloadSourceState = FrameReloadCacheState::Empty;
   FrameReloadBuildSawReentrantQuery = false;
   FrameReloadSourceCache.clear();
+  FrameReloadAnalysisBuilt = false;
+  FrameReloadIndex = {};
+  ++FrameReloadSourceGeneration;
 }
 
 bool MedLLVMEmitter::ensureFrameReloadOccurrenceIndex() const {
@@ -709,6 +712,83 @@ bool MedLLVMEmitter::ensureFrameReloadOccurrenceIndex() const {
   AmbiguousFrameReloadOccurrences = std::move(NextAmbiguous);
   FrameReloadOccurrenceIndexState = FrameReloadCacheState::Ready;
   return true;
+}
+void MedLLVMEmitter::ensureFrameReloadAnalysis() const {
+  if (!CurMedFunc || FrameReloadAnalysisBuilt)
+    return;
+  FrameReloadAnalysisBuilt = true;
+  ++FrameReloadAnalysisBuilds;
+  const MedFunc &Func = *CurMedFunc;
+  auto isMemoryWrite = [](NdOp Opcode) {
+    return Opcode == NdOp::STORE || Opcode == NdOp::ATOMIC_XCHG ||
+           Opcode == NdOp::ATOMIC_ADD || Opcode == NdOp::ATOMIC_CMPXCHG;
+  };
+  std::map<int, std::set<int>> DeclaredPreds;
+  for (const MedBlock &Block : Func.Blocks) {
+    auto [It, Inserted] = FrameReloadIndex.Blocks.emplace(
+        Block.Id, FrameReloadBlock{});
+    if (!Inserted)
+      return;
+    FrameReloadBlock &Indexed = It->second;
+    if (Block.StartAddr == Func.Entry) {
+      if (FrameReloadIndex.EntryBlockId >= 0)
+        return;
+      FrameReloadIndex.EntryBlockId = Block.Id;
+    }
+    Indexed.Successors = Block.Succs;
+    for (const ExceptionalEdge &Edge : Block.ExceptionalSuccs)
+      if (Edge.BlockId >= 0)
+        Indexed.Successors.push_back(Edge.BlockId);
+    auto &Declared = DeclaredPreds[Block.Id];
+    Declared.insert(Block.Preds.begin(), Block.Preds.end());
+    for (const ExceptionalEdge &Edge : Block.ExceptionalPreds)
+      if (Edge.BlockId >= 0)
+        Declared.insert(Edge.BlockId);
+    for (std::size_t I = 0; I < Block.Ops.size(); ++I) {
+      const MedOp &Op = Block.Ops[I];
+      if (isMemoryWrite(Op.Opcode)) {
+        FrameReloadWrite Write;
+        Write.Index = I;
+        Write.HasAddress = Op.NumInputs >= 1;
+        Write.IsStore = Op.Opcode == NdOp::STORE;
+        if (Write.HasAddress)
+          Write.Address = Op.Inputs[0];
+        if (Write.IsStore && Op.NumInputs >= 2) {
+          Write.HasValue = true;
+          Write.Value = Op.Inputs[1];
+          Write.Size = Op.Inputs[1].Size;
+        } else {
+          Write.HasValue = Op.Output.Size != 0;
+          Write.Value = Op.Output;
+          Write.Size = Op.Output.Size;
+        }
+        Indexed.Writes.push_back(std::move(Write));
+      }
+      if (auto Key = frameReloadOccurrenceKey(Op)) {
+        FrameReloadLoadSite Site;
+        Site.BlockId = Block.Id;
+        Site.Index = I;
+        if (!FrameReloadIndex.Loads.emplace(*Key, std::move(Site)).second)
+          return;
+      }
+    }
+  }
+  if (FrameReloadIndex.EntryBlockId < 0)
+    return;
+  for (const auto &[Id, Block] : FrameReloadIndex.Blocks) {
+    for (int SuccId : Block.Successors) {
+      auto It = FrameReloadIndex.Blocks.find(SuccId);
+      if (It == FrameReloadIndex.Blocks.end())
+        return;
+      It->second.StructuralPreds.insert(Id);
+    }
+  }
+  for (const auto &[Id, Block] : FrameReloadIndex.Blocks) {
+    auto It = DeclaredPreds.find(Id);
+    if (It == DeclaredPreds.end() || It->second != Block.StructuralPreds)
+      return;
+  }
+  FrameReloadIndex.Valid = true;
 }
 
 bool MedLLVMEmitter::collectFrameReloadSources(
@@ -818,68 +898,17 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
   if (!Target)
     return false;
 
-  std::map<int, const MedBlock *> BlocksById;
-  const MedBlock *EntryBlock = nullptr;
-  const MedBlock *LoadBlock = nullptr;
-  size_t LoadIndex = 0;
-  for (const MedBlock &Block : CurMedFunc->Blocks) {
-    if (!BlocksById.emplace(Block.Id, &Block).second)
-      return false;
-    if (Block.StartAddr == CurMedFunc->Entry) {
-      if (EntryBlock)
-        return false;
-      EntryBlock = &Block;
-    }
-    for (size_t I = 0; I < Block.Ops.size(); ++I)
-      if (&Block.Ops[I] == &Load) {
-        if (LoadBlock)
-          return false;
-        LoadBlock = &Block;
-        LoadIndex = I;
-      }
-  }
-  if (!EntryBlock || !LoadBlock)
+  ensureFrameReloadAnalysis();
+  if (!FrameReloadIndex.Valid)
     return false;
+  auto Key = frameReloadOccurrenceKey(Load);
+  if (!Key)
+    return false;
+  auto SiteIt = FrameReloadIndex.Loads.find(*Key);
+  if (SiteIt == FrameReloadIndex.Loads.end())
+    return false;
+  const FrameReloadLoadSite Site = SiteIt->second;
 
-  // Preds is cached IR metadata, not authority for reachability.  Reconstruct
-  // the incoming relation from every ordinary/exceptional successor and
-  // require the two views to agree before proving an all-path reaching store.
-  // A malformed or stale predecessor list must not hide an uninitialized
-  // bypass and turn a later table-looking STORE into pointer provenance.
-  std::map<int, std::set<int>> StructuralPreds;
-  for (const auto &[Id, Block] : BlocksById) {
-    (void)Block;
-    StructuralPreds.emplace(Id, std::set<int>{});
-  }
-  for (const auto &[Id, Block] : BlocksById) {
-    for (int SuccId : Block->Succs) {
-      auto It = StructuralPreds.find(SuccId);
-      if (It == StructuralPreds.end())
-        return false;
-      It->second.insert(Id);
-    }
-    for (const ExceptionalEdge &Edge : Block->ExceptionalSuccs) {
-      if (Edge.BlockId < 0)
-        continue;
-      auto It = StructuralPreds.find(Edge.BlockId);
-      if (It == StructuralPreds.end())
-        return false;
-      It->second.insert(Id);
-    }
-  }
-  for (const auto &[Id, Block] : BlocksById) {
-    std::set<int> Declared(Block->Preds.begin(), Block->Preds.end());
-    for (const ExceptionalEdge &Edge : Block->ExceptionalPreds)
-      if (Edge.BlockId >= 0)
-        Declared.insert(Edge.BlockId);
-    if (Declared != StructuralPreds[Id])
-      return false;
-  }
-
-  auto isMemoryWrite = [](NdOp Opcode) {
-    return Opcode == NdOp::STORE || Opcode == NdOp::ATOMIC_XCHG ||
-           Opcode == NdOp::ATOMIC_ADD || Opcode == NdOp::ATOMIC_CMPXCHG;
-  };
   auto overlaps = [](int64_t A, uint16_t ASize, int64_t B, uint16_t BSize) {
     if (ASize == 0 || BSize == 0)
       return true;
@@ -920,27 +949,22 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
       addUnique(Dst.Values, Value);
     return !sameState(Before, Dst);
   };
-  auto transfer = [&](const MedBlock &Block, size_t Boundary,
+  auto transfer = [&](const FrameReloadBlock &Block, std::size_t Boundary,
                       ReachingState State) {
-    if (!State.Reachable || Boundary > Block.Ops.size()) {
-      State.Invalid |= Boundary > Block.Ops.size();
+    if (!State.Reachable)
       return State;
-    }
-    for (size_t I = 0; I < Boundary; ++I) {
-      const MedOp &Op = Block.Ops[I];
-      if (!isMemoryWrite(Op.Opcode))
-        continue;
-      if (Op.NumInputs < 1) {
+    for (const FrameReloadWrite &Write : Block.Writes) {
+      if (Write.Index >= Boundary)
+        break;
+      if (!Write.HasAddress) {
         State.Invalid = true;
         State.Values.clear();
         continue;
       }
-      const MedVar &WriteAddr = Op.Inputs[0];
+      const MedVar &WriteAddr = Write.Address;
       if (!varMayBeFrameAddress(WriteAddr))
         continue;
-      uint16_t WriteSize = Op.Opcode == NdOp::STORE && Op.NumInputs >= 2
-                               ? Op.Inputs[1].Size
-                               : Op.Output.Size;
+      const uint16_t WriteSize = Write.Size;
       const auto WriteKey = canonicalFrameSlotKey(WriteAddr);
       // A frame-derived write whose slot cannot be canonicalized, or whose
       // root differs from the reload's root, may still alias after an
@@ -949,24 +973,24 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
       if (!WriteKey || WriteKey->first != Target->first) {
         const bool ProvenDisjoint =
             !WriteKey &&
-            frameAccessesProvenDisjoint(WriteAddr, WriteSize, Load.Inputs[0],
-                                        Load.Output.Size);
+            frameAccessesProvenDisjoint(WriteAddr, WriteSize,
+                                         Load.Inputs[0], Load.Output.Size);
         if (ProvenDisjoint)
           continue;
         State.Invalid = true;
         State.Values.clear();
         continue;
       }
-
       if (!overlaps(WriteKey->second, WriteSize, Target->second,
                     Load.Output.Size))
         continue;
-      if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2 && WriteSize != 0 &&
-          WriteKey->second == Target->second && WriteSize == Load.Output.Size) {
+      if (Write.IsStore && Write.HasValue && WriteSize != 0 &&
+          WriteKey->second == Target->second &&
+          WriteSize == Load.Output.Size) {
         State.Uninitialized = false;
         State.Invalid = false;
         State.Values.clear();
-        addUnique(State.Values, Op.Inputs[1]);
+        addUnique(State.Values, Write.Value);
         continue;
       }
       State.Uninitialized = false;
@@ -976,47 +1000,43 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
     return State;
   };
 
-  // Forward may-reach dataflow over the exact slot.  Unlike a recursive
-  // backwards walk, this reaches a fixed point across loop back-edges and
-  // therefore distinguishes a preheader definition from a STORE that occurs
-  // only after the LOAD and can affect later iterations.
+  // Forward may-reach dataflow over the exact slot. The immutable snapshot
+  // keeps CFG and write construction out of this per-occurrence proof.
   std::map<int, ReachingState> InStates;
   std::map<int, ReachingState> OutStates;
   ReachingState Entry;
   Entry.Reachable = true;
   Entry.Uninitialized = true;
-  InStates[EntryBlock->Id] = Entry;
-  std::vector<int> Work{EntryBlock->Id};
+  InStates[FrameReloadIndex.EntryBlockId] = Entry;
+  std::vector<int> Work{FrameReloadIndex.EntryBlockId};
   while (!Work.empty()) {
     int BlockId = Work.back();
     Work.pop_back();
-    auto BlockIt = BlocksById.find(BlockId);
-    if (BlockIt == BlocksById.end())
+    auto BlockIt = FrameReloadIndex.Blocks.find(BlockId);
+    if (BlockIt == FrameReloadIndex.Blocks.end())
       return false;
-    const MedBlock &Block = *BlockIt->second;
-    ReachingState Next = transfer(Block, Block.Ops.size(), InStates[BlockId]);
+    const FrameReloadBlock &Block = BlockIt->second;
+    ReachingState Next =
+        transfer(Block, std::numeric_limits<std::size_t>::max(),
+                 InStates[BlockId]);
     if (sameState(OutStates[BlockId], Next))
       continue;
     OutStates[BlockId] = Next;
 
-    auto propagate = [&](int SuccId) {
-      auto Succ = BlocksById.find(SuccId);
-      if (Succ == BlocksById.end())
+    for (int SuccId : Block.Successors) {
+      if (FrameReloadIndex.Blocks.find(SuccId) ==
+          FrameReloadIndex.Blocks.end())
         return false;
       if (mergeInto(InStates[SuccId], Next))
         Work.push_back(SuccId);
-      return true;
-    };
-    for (int SuccId : Block.Succs)
-      if (!propagate(SuccId))
-        return false;
-    for (const ExceptionalEdge &Edge : Block.ExceptionalSuccs)
-      if (Edge.BlockId >= 0 && !propagate(Edge.BlockId))
-        return false;
+    }
   }
 
+  auto LoadBlockIt = FrameReloadIndex.Blocks.find(Site.BlockId);
+  if (LoadBlockIt == FrameReloadIndex.Blocks.end())
+    return false;
   ReachingState AtLoad =
-      transfer(*LoadBlock, LoadIndex, InStates[LoadBlock->Id]);
+      transfer(LoadBlockIt->second, Site.Index, InStates[Site.BlockId]);
   if (!AtLoad.Reachable || AtLoad.Uninitialized || AtLoad.Invalid ||
       AtLoad.Values.empty())
     return false;
