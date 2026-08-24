@@ -50,6 +50,13 @@ from scripts.audit_evm_opcode_metadata import (
 )
 
 
+requires_bounded_process = unittest.skipUnless(
+    os.name == "posix"
+    and (sys.platform == "darwin" or sys.platform.startswith("linux")),
+    "bounded process execution is unavailable on this platform",
+)
+
+
 class EVMOpcodeAuditTests(unittest.TestCase):
     @staticmethod
     def _git(repository: Path, *arguments: str) -> str:
@@ -99,7 +106,7 @@ EVM_GETH_ACTIVE_WITHOUT_COST(STOP, Frontier)
         }
 
     @staticmethod
-    def _minimal_probe_files(root: Path) -> tuple[Path, Path]:
+    def _minimal_probe_files(root: Path) -> tuple[Path, Path, Path]:
         geth = root / "go-ethereum"
         geth.mkdir()
         (geth / "core/vm").mkdir(parents=True)
@@ -110,7 +117,13 @@ EVM_GETH_ACTIVE_WITHOUT_COST(STOP, Frontier)
         (geth / "go.sum").write_text("", encoding="utf-8")
         helper = root / "probe.go"
         helper.write_text("package main\n", encoding="utf-8")
-        return geth, helper
+        go_executable = root / "test-go-root/bin" / (
+            "go.exe" if os.name == "nt" else "go"
+        )
+        go_executable.parent.mkdir(parents=True)
+        go_executable.write_bytes(b"test executable")
+        go_executable.chmod(0o700)
+        return geth, helper, go_executable
 
     @staticmethod
     def _empty_probe_request():
@@ -248,6 +261,7 @@ EVM_GETH_ACTIVE_WITHOUT_COST(STOP, Frontier)
         self.assertNotIn("apparmor_restrict_unprivileged_userns=0", sandbox_step)
         self.assertNotIn("--share-net", sandbox_step)
 
+    @requires_bounded_process
     def test_fetches_and_refreshes_remote_head(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -461,6 +475,7 @@ EVM_GETH_ACTIVE_WITHOUT_COST(STOP, Frontier)
         self.assertEqual(offline_environment["GOPROXY"], "off")
         self.assertEqual(offline_environment["GOVCS"], "*:off")
 
+    @requires_bounded_process
     def test_process_output_limit_accepts_exact_capacity_and_rejects_one_more(self):
         command = (
             sys.executable,
@@ -700,7 +715,7 @@ EVM_GETH_ACTIVE_WITHOUT_COST(STOP, Frontier)
         revision = "e" * 40
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            geth, helper = self._minimal_probe_files(root)
+            geth, helper, go_executable = self._minimal_probe_files(root)
             false_go_root = root / "false-go-root"
             (false_go_root / "bin").mkdir(parents=True)
             completed = opcode_audit.BoundedProcessResult(
@@ -721,6 +736,7 @@ EVM_GETH_ACTIVE_WITHOUT_COST(STOP, Frontier)
                         geth_revision=revision,
                         request=self._empty_probe_request(),
                         helper=helper,
+                        go_executable=str(go_executable),
                         sandbox_required=False,
                     )
             self.assertEqual(run.call_count, 1)
@@ -778,6 +794,7 @@ EVM_GETH_ACTIVE_WITHOUT_COST(STOP, Frontier)
                     self.assertNotEqual(denied_result.returncode, 0)
                     self.assertNotIn(secret, combined_output)
 
+    @requires_bounded_process
     def test_fetch_ignores_global_url_rewrites(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -810,6 +827,7 @@ EVM_GETH_ACTIVE_WITHOUT_COST(STOP, Frontier)
             self.assertIn("STOP", source.text)
             self.assertNotIn("ADD", source.text)
 
+    @requires_bounded_process
     def test_concurrent_fetches_keep_independent_authority_refs(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -874,6 +892,7 @@ EVM_GETH_ACTIVE_WITHOUT_COST(STOP, Frontier)
             self.assertNotIn("STOP", second.text)
             self.assertNotEqual(first.authority_ref, second.authority_ref)
 
+    @requires_bounded_process
     def test_checks_out_the_exact_fetched_revision_temporarily(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -934,7 +953,7 @@ EVM_GETH_ACTIVE_WITHOUT_COST(STOP, Frontier)
         audit_time = 123
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            geth, helper = self._minimal_probe_files(root)
+            geth, helper, go_executable = self._minimal_probe_files(root)
             response = {
                 **self._stop_manifest(revision, "go1.24.0", 1024),
                 "authority": opcode_audit.GETH_AUDIT_AUTHORITY,
@@ -987,6 +1006,7 @@ EVM_GETH_ACTIVE_WITHOUT_COST(STOP, Frontier)
                     geth_revision=revision,
                     request=self._empty_probe_request(),
                     helper=helper,
+                    go_executable=str(go_executable),
                     audit_unix_time=audit_time,
                     sandbox_required=False,
                 )
@@ -1008,7 +1028,7 @@ EVM_GETH_ACTIVE_WITHOUT_COST(STOP, Frontier)
         revision = "b" * 40
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            geth, helper = self._minimal_probe_files(root)
+            geth, helper, go_executable = self._minimal_probe_files(root)
 
             def run_process(command, **_kwargs):
                 stdout = ""
@@ -1049,6 +1069,7 @@ EVM_GETH_ACTIVE_WITHOUT_COST(STOP, Frontier)
                         geth_revision=revision,
                         request=self._empty_probe_request(),
                         helper=helper,
+                        go_executable=str(go_executable),
                         sandbox_required=False,
                     )
 
@@ -1059,7 +1080,7 @@ EVM_GETH_ACTIVE_WITHOUT_COST(STOP, Frontier)
         revision = "d" * 40
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            geth, helper = self._minimal_probe_files(root)
+            geth, helper, go_executable = self._minimal_probe_files(root)
             run = mock.Mock(
                 side_effect=subprocess.TimeoutExpired(("go", "mod"), timeout=899)
             )
@@ -1078,11 +1099,13 @@ EVM_GETH_ACTIVE_WITHOUT_COST(STOP, Frontier)
                         geth_revision=revision,
                         request=self._empty_probe_request(),
                         helper=helper,
+                        go_executable=str(go_executable),
                         sandbox_required=False,
                     )
 
             self.assertEqual(run.call_count, 1)
 
+    @requires_bounded_process
     @unittest.skipUnless(shutil.which("go"), "Go is unavailable")
     def test_probe_uses_exported_geth_api_from_an_external_module(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1526,7 +1549,6 @@ func LookupInstructionSet(rules params.Rules) (JumpTable, error) {
                     },
                 )
 
-    @unittest.skipUnless(shutil.which("go"), "Go is unavailable")
     def test_main_audits_exported_api_at_the_exact_fetched_revision(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -1608,30 +1630,36 @@ EVM_OPCODE(ADD, 0x01, 2, 1, 0, None, Arithmetic, Frontier,
            None, None, None, None, false)
 """,
                 encoding="utf-8",
+                newline="\n",
             )
             hardforks = root / "EVMHardforks.def"
             hardforks.write_text(
                 'EVM_HARDFORK(Frontier, "frontier")\n'
                 'EVM_HARDFORK_LATEST(Frontier, "latest")\n',
                 encoding="utf-8",
+                newline="\n",
             )
             fork_aliases = root / "EVMUpstreamForkAliases.def"
             fork_aliases.write_text(
-                "EVM_GETH_FORK_ALIAS(Paris, Frontier)\n", encoding="utf-8"
+                "EVM_GETH_FORK_ALIAS(Paris, Frontier)\n",
+                encoding="utf-8",
+                newline="\n",
             )
             opcode_policy = root / "EVMUpstreamOpcodePolicy.def"
-            opcode_policy.write_text("", encoding="utf-8")
+            opcode_policy.write_text("", encoding="utf-8", newline="\n")
             semantics_policy = root / "EVMUpstreamSemanticsPolicy.def"
             semantics_policy.write_text(
                 """EVM_GETH_FORK_RULE(Frontier, None)
 EVM_GETH_ACTIVE_WITHOUT_COST(STOP, Frontier)
 """,
                 encoding="utf-8",
+                newline="\n",
             )
             constants = root / "EVMConstants.h"
             constants.write_text(
                 "inline constexpr std::size_t kStackLimit = 16;\n",
                 encoding="utf-8",
+                newline="\n",
             )
             manifest_path = root / "manifest.json"
 
@@ -1833,6 +1861,7 @@ EVM_GETH_ACTIVE_WITHOUT_COST(STOP, Frontier)
             with self.assertRaisesRegex(OpcodeAuditError, "bare Git repository"):
                 fetch_geth_opcode_source(remote="unused", ref="HEAD", cache=cache)
 
+    @requires_bounded_process
     def test_fetch_rejects_cache_config_and_object_indirection(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
