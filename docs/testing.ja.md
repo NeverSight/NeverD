@@ -44,7 +44,7 @@ fixture をコンパイル/リンクできずスキップされたテストは�
 | `unittests/lift` | `NeverDLiftTests` | Decoder/lifter の LowIR 形状、IR 段階、loader、relocation、形式 fixture、デコンパイル、代表的 patch 経路 |
 | `unittests/semantic` の大半 | `NeverDSemanticTests` | 命令、ABI、制御フロー、C 式、lift/recompile の差分セマンティクス |
 | `unittests/evm` | `NeverDEVMOpcodeTests`、`NeverDEVMBytecodeTests`、`NeverDEVMLoaderTests`、`NeverDEVMAnalyzerTests`、`NeverDEVMSemanticTests`、`NeverDEVMEmitterTests`、`NeverDEVMIntegrationTests` | hardfork metadata、input normalization、CFG/SSA/recovery、interpreter semantics、LLVM/C/Solidity differential execution、public API routing |
-| `unittests/sbf` | `NeverDSBFMetadataTests`、`NeverDSBFLoaderTests`、`NeverDSBFAnalyzerTests`、`NeverDSBFSemanticTests`、`NeverDSBFLLVMEmitterTests`、`NeverDSBFEmitterTests`、`NeverDSBFIntegrationTests` | v0-v4 メタデータと ELF レイアウト、厳格な検証、CFG/復元、独立した raw 実行、LLVM 検証、C/Rust コンパイル、公開 API ルーティング |
+| `unittests/sbf` | `NeverDSBFMetadataTests`、`NeverDSBFProgramImageTests`、`NeverDSBFLoaderTests`、`NeverDSBFAnalyzerTests`、`NeverDSBFVerifierTests`、`NeverDSBFISAConformanceTests`、`NeverDSBFAgaveConformanceTests`、`NeverDSBFSemanticTests`、`NeverDSBFEmitterTests`、`NeverDSBFLLVMEmitterTests`、`NeverDSBFLLVMDifferentialTests`、`NeverDSBFSourceDifferentialTests`、`NeverDSBFMalformedCorpusTests`、`NeverDSBFUpstreamConformanceTests`、`NeverDSBFExternalOracleTests`、`NeverDSBFSolanaModelTests`、`NeverDSBFIntegrationTests` | v0-v4 メタデータと ELF レイアウト、厳格な verifier/loader 動作、固定済み ELF 成果物 23 個、独立 official oracle、全 opcode の可用性、敵対的入力、CFG/復元、実行済み LLVM/C/Rust 差分 |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | 4 ISA×3 オブジェクト形式の書き換え/難読化等価性 |
 | `unittests/semantic` の重点変換ファイル | `NeverDSwitchXformTests`、`NeverDIndCallXformTests`、`NeverDCFGLoopXformTests`、`NeverDTwoTableXformTests`、`NeverDAvxUpperXformTests` | 大きなセマンティック実行形式から分離した高速再リンク用プローブ |
 | `unittests/corpus`（submodule） | `NeverDWindowsEHCorpusTests`、`NeverDRustEHCorpusTests`、`NeverDGoEHCorpusTests`、`NeverDCxxItaniumEHCorpusTests`、`NeverDObjCEHCorpusTests` | pin された 317 個の実バイナリから読み取る例外とランタイム metadata。各バイナリは manifest で復元が満たすべき下限を宣言している |
@@ -296,6 +296,12 @@ maxima を検証します。
 
 SBF メタデータテストは、各バージョン機能、オペコード衝突境界、Murmur3 syscall hash、リロケーション、ELF machine、レジスタ、VM アドレス定数を検証します。Loader fixture は vendored バイナリを使わず、従来の v0-v2 section レイアウトと section を持たない厳格な v3/v4 program-header レイアウトの両方を生成します。
 
+`NeverDSBFISAConformanceTests` は v0-v4 の各 version について、すべての byte
+encoding を独立監査済みの typed manifest と照合します。
+`NeverDSBFExternalOracleTests` は activation と boundary の判断を、別途 build
+した official Anza process と比較します。`NeverDSBFUpstreamConformanceTests`
+は pinned Anza revision にある 23 個すべての ELF に明示的な outcome を割り当てます。
+
 `NeverDSBFSemanticTests` は検証済み命令バイトを直接実行し、MedIR を消費しません。このため、正規化 IR の変更や破損によって source oracle と backend が偶然一致することはありません。非単調な v2 セマンティクス、メモリ、syscall、内部 call frame、fault、trace、resource limit を網羅します。LLVM module は検証され、生成 C は warning を error として、Rust は `-D warnings` 付きでコンパイルされます。公開 API テストは生成した厳格な SBF ELF から、全 IR 段階、逆アセンブル、CFG、メタデータ、LLVM、C、Rust を通過します。
 
 ## 一括ターゲット
@@ -354,12 +360,7 @@ ctest --test-dir build-release --build-config Release \
   -R 'EVM' --output-on-failure --parallel 4
 
 # すべての重点 Solana SBF ターゲット/ケース
-cmake --build build-release --target \
-  NeverDSBFMetadataTests NeverDSBFLoaderTests NeverDSBFAnalyzerTests \
-  NeverDSBFSemanticTests NeverDSBFLLVMEmitterTests NeverDSBFEmitterTests \
-  NeverDSBFIntegrationTests --parallel 4
-ctest --test-dir build-release --build-config Release \
-  -R 'SBF' --output-on-failure --parallel 4
+cmake --build build-release --target check-neverd-sbf --parallel 4
 ```
 
 GoogleTest 由来の CTest 名を使って単一の回帰を実行します。
@@ -426,16 +427,17 @@ clang に加えて `rustc` が必要で、compiler skip は coverage 欠落で�
 `NeverDSBFISAConformanceTests`、`NeverDSBFUpstreamConformanceTests`、
 `NeverDSBFLLVMDifferentialTests`、`NeverDSBFSourceDifferentialTests` と、metadata、
 loader、analyzer、semantic、emitter、integration target が含まれます。integrated
-profile は 14 binary の 145/145 case を通過します。
+profile は変動する総数ではなく、named target と結果を記録します。
 
-sanitizer profile は `build-sbf-asan-ubsan` に分離して build します。13 core binary
-の 141/141 case が ASan/UBSan report なしで通過します。prebuilt package に必要な
+sanitizer profile は `build-sbf-asan-ubsan` に分離して build します。focused target
+を fail-fast で実行し ASan/UBSan report がないことを確認します。prebuilt package に必要な
 fork-only header がないため、integration は integrated LLVM build で実行します。
 
 ```bash
 cmake --build build-sbf-asan-ubsan --parallel 4 --target \
   NeverDSBFMetadataTests NeverDSBFProgramImageTests NeverDSBFLoaderTests \
   NeverDSBFAnalyzerTests NeverDSBFISAConformanceTests \
+  NeverDSBFVerifierTests NeverDSBFAgaveConformanceTests \
   NeverDSBFSemanticTests NeverDSBFEmitterTests NeverDSBFLLVMEmitterTests \
   NeverDSBFLLVMDifferentialTests NeverDSBFSourceDifferentialTests \
   NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests \
@@ -444,6 +446,46 @@ cmake --build build-sbf-asan-ubsan --parallel 4 --target \
 ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:strict_string_checks=1 \
 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
 NEVERD_SBPF_ROOT=/path/to/sbpf \
+NEVERD_AGAVE_CONFORMANCE_ROOT=/path/to/firedancer-test-vectors \
+NEVERD_AGAVE_CONFORMANCE_REVISION=68bb4af40235562e8852fa23d5727e49c2a0b862 \
 ctest --test-dir build-sbf-asan-ubsan --output-on-failure --parallel 4 \
   -L '^NeverDSBF' -E 'SBFIntegration'
 ```
+
+### pinned SBF evidence snapshot（2026-08-24）
+
+gate は Anza `sbpf`
+`2510663bb8d894e8e3094be351e4bb4b604f1f84`、Agave
+`ef210d67f2fabeee1730498188fa78854260c679`、Solana SDK
+`122f32e571ce39face4beffaccea733e37c207fd` を固定します。official ELF manifest
+は 23/23 を通過し、`NeverDSBFExternalOracleTests` は 1,411 opcode/boundary
+case を `SBFOfficialOracleProtocol.def`、`SBFOfficialVerifierCases.def`、
+`SBFOfficialExecutionConstants.def` 経由で
+照合します。`SBFOfficialELFMutations.def` が malformed ELF の table-driven
+contract であり、変動する総数は固定しません。
+別軸の `41-case strict ELF differential` は strict-v3 matrix 全体を official
+`verify-elf-batch` と NeverD に通します。この 41 case は 1,411 total に含みません。
+`NeverDSBFAgaveConformanceTests` は Firedancer test-vectors の
+`68bb4af40235562e8852fa23d5727e49c2a0b862` を認証し、loader fixture 1,955 `sol_compat_elf_loader_v1` 個
+（accept 1,399、reject 556）を照合し、accept された各 ELF について `entry_pc`、`text_off`、
+`text_cnt`、`rodata_hash`、`calldests_hash` を比較します。この gate は後段の instruction verifier を実行しません。
+
+追加の official execution matrix は別枠です。active `(Version,Opcode)` case が
+正確に 508、boundary case が 58、合計 566 の exact execution case です。1,411 の
+verifier probe や `41-case strict ELF differential` を置き換えず、その総数にも含みません。
+Linux Release CI は `--print-pinned-revision`、`--print-test-vectors-revision`、
+`--print-toolchain` を使い、`NEVERD_SBPF_ORACLE` と
+`NEVERD_AGAVE_CONFORMANCE_ROOT` を export するため両 external gate は必須です。
+明示 oracle/corpus env がない local run は case を discover しますが skip できます。
+
+`SBF_RUNTIME_VERSION` により `RuntimeVersionPolicy::ChainProfile` は historical
+cluster/slot を反映し、official feature account activation に従って maximum ISA を
+V0→V1→V2→V3 と進めます。現在は V3 です。明示 v4 は offline 分析用の
+`RuntimeVersionPolicy::UpstreamToolchain` を使います。
+現在の 10 MiB 上限は正確に `10'485'760` byte、65,536 は historical
+provenance/test のみです。`SBFFaultCodes.def` は execution fault の安定値、
+`SBFSourceStatuses.def` は別レイヤーの generated-source ABI を持ちます。
+
+10,000 scale fixture が worklist、function ownership、multi-latch を守り、
+machine 固有時間は固定しません。cluster/account/slot row は通常 test を
+deterministic/offline に保ったまま `RPC activation audit` を可能にします。

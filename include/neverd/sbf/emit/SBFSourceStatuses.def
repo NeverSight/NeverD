@@ -1,0 +1,87 @@
+//===- SBFSourceStatuses.def - Generated source status ABI -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard. C status codes and Rust error
+// discriminants are separate stable ABIs: C reserves zero for success, while
+// the original Rust enum started its first error at zero. Existing rows are
+// append-only, and neither numeric column may be renumbered.
+//
+// SBF_SOURCE_SUCCESS(NAME, FAULT_CODE, C_NAME, C_STATUS_VALUE)
+// SBF_SOURCE_ERROR(NAME, FAULT_CODE, C_NAME, C_STATUS_VALUE, RUST_ERROR_VALUE)
+// SBF_SOURCE_C_V1_ERROR(NAME)
+// SBF_SOURCE_C_V1_FALLBACK(NAME, LEGACY_NAME)
+// SBF_SOURCE_RUST_V1_ERROR(NAME)
+// SBF_SOURCE_RUST_V1_FALLBACK(NAME, LEGACY_NAME)
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_SOURCE_SUCCESS
+#define SBF_SOURCE_SUCCESS(NAME, FAULT_CODE, C_NAME, VALUE)
+#endif
+
+#ifndef SBF_SOURCE_ERROR
+#define SBF_SOURCE_ERROR(NAME, FAULT_CODE, C_NAME, C_STATUS_VALUE,             \
+                         RUST_ERROR_VALUE)
+#endif
+
+#ifndef SBF_SOURCE_RUST_V1_ERROR
+#define SBF_SOURCE_RUST_V1_ERROR(NAME)
+#endif
+
+#ifndef SBF_SOURCE_C_V1_ERROR
+#define SBF_SOURCE_C_V1_ERROR(NAME)
+#endif
+
+#ifndef SBF_SOURCE_C_V1_FALLBACK
+#define SBF_SOURCE_C_V1_FALLBACK(NAME, LEGACY_NAME)
+#endif
+
+#ifndef SBF_SOURCE_RUST_V1_FALLBACK
+#define SBF_SOURCE_RUST_V1_FALLBACK(NAME, LEGACY_NAME)
+#endif
+
+SBF_SOURCE_SUCCESS(Ok, None, NEVERD_SBF_OK, 0)
+SBF_SOURCE_C_V1_ERROR(InvalidInstruction)
+SBF_SOURCE_RUST_V1_ERROR(InvalidInstruction)
+SBF_SOURCE_ERROR(InvalidInstruction, InvalidInstruction,
+                 NEVERD_SBF_INVALID_INSTRUCTION, 1, 0)
+SBF_SOURCE_C_V1_ERROR(MemoryAccess)
+SBF_SOURCE_RUST_V1_ERROR(MemoryAccess)
+SBF_SOURCE_ERROR(MemoryAccess, MemoryAccess, NEVERD_SBF_MEMORY_ACCESS, 2, 1)
+SBF_SOURCE_C_V1_ERROR(DivideByZero)
+SBF_SOURCE_RUST_V1_ERROR(DivideByZero)
+SBF_SOURCE_ERROR(DivideByZero, DivideByZero, NEVERD_SBF_DIVIDE_BY_ZERO, 3, 2)
+SBF_SOURCE_C_V1_ERROR(DivideOverflow)
+SBF_SOURCE_RUST_V1_ERROR(DivideOverflow)
+SBF_SOURCE_ERROR(DivideOverflow, DivideOverflow, NEVERD_SBF_DIVIDE_OVERFLOW, 4,
+                 3)
+SBF_SOURCE_C_V1_ERROR(CallDepth)
+SBF_SOURCE_RUST_V1_ERROR(CallDepth)
+SBF_SOURCE_ERROR(CallDepth, CallDepth, NEVERD_SBF_CALL_DEPTH, 5, 4)
+SBF_SOURCE_C_V1_ERROR(UnknownSyscall)
+SBF_SOURCE_RUST_V1_ERROR(UnknownSyscall)
+SBF_SOURCE_ERROR(UnknownSyscall, UnknownSyscall, NEVERD_SBF_UNKNOWN_SYSCALL, 6,
+                 5)
+SBF_SOURCE_C_V1_ERROR(UnknownFunction)
+SBF_SOURCE_RUST_V1_ERROR(UnknownFunction)
+SBF_SOURCE_ERROR(UnknownFunction, UnknownIndirectCall,
+                 NEVERD_SBF_UNKNOWN_FUNCTION, 7, 6)
+SBF_SOURCE_C_V1_ERROR(ExecutionOverrun)
+SBF_SOURCE_RUST_V1_ERROR(ExecutionOverrun)
+SBF_SOURCE_ERROR(ExecutionOverrun, ExecutionOverrun,
+                 NEVERD_SBF_EXECUTION_OVERRUN, 8, 7)
+SBF_SOURCE_C_V1_FALLBACK(InvalidRegister, InvalidInstruction)
+SBF_SOURCE_RUST_V1_FALLBACK(InvalidRegister, InvalidInstruction)
+SBF_SOURCE_ERROR(InvalidRegister, InvalidRegister, NEVERD_SBF_INVALID_REGISTER,
+                 9, 8)
+SBF_SOURCE_C_V1_FALLBACK(InvalidBranch, InvalidInstruction)
+SBF_SOURCE_RUST_V1_FALLBACK(InvalidBranch, InvalidInstruction)
+SBF_SOURCE_ERROR(InvalidBranch, InvalidBranch, NEVERD_SBF_INVALID_BRANCH, 10, 9)
+
+#undef SBF_SOURCE_C_V1_FALLBACK
+#undef SBF_SOURCE_C_V1_ERROR
+#undef SBF_SOURCE_RUST_V1_FALLBACK
+#undef SBF_SOURCE_RUST_V1_ERROR
+#undef SBF_SOURCE_SUCCESS
+#undef SBF_SOURCE_ERROR

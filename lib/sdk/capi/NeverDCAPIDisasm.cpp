@@ -9,10 +9,12 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "JSONText.h"
 #include "SessionImpl.h"
 
 #include "neverd/evm/analysis/EVMAnalyzer.h"
 #include "neverd/sbf/analysis/SBFAnalyzer.h"
+#include "neverd/sbf/analysis/SBFFunctionBody.h"
 
 #include "llvm/ADT/BitVector.h"
 #include "llvm/Support/Format.h"
@@ -45,7 +47,8 @@ std::string sbfBytes(const sbf::LowInstruction &Instruction) {
 llvm::BitVector functionSlots(const sbf::SBFProgram &Program,
                               const sbf::Function &Function) {
   llvm::BitVector Slots(Program.Low.Instructions.size());
-  for (size_t BlockID : Function.Blocks) {
+  const sbf::FunctionBodyIndex FunctionBodies(Program);
+  for (size_t BlockID : FunctionBodies.blocks(Function)) {
     if (BlockID >= Program.Low.Blocks.size())
       continue;
     const sbf::BasicBlock &Block = Program.Low.Blocks[BlockID];
@@ -125,7 +128,7 @@ const char *neverd_disasm_json(neverd_session_t Sess, neverd_va_t Addr,
           static_cast<int64_t>(Instruction.SlotWidth * sbf::kInstructionSize);
       Object["mnemonic"] =
           Instruction.Info ? Instruction.Info->Mnemonic.str() : ".byte";
-      Object["op_str"] = sbf::formatInstruction(Instruction);
+      Object["op_str"] = jsonSafeText(sbf::formatInstruction(Instruction));
       Object["bytes"] = sbfBytes(Instruction);
       Instructions.push_back(std::move(Object));
       ++Count;

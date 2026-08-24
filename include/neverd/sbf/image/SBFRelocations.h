@@ -18,6 +18,8 @@
 
 namespace neverd::sbf {
 
+inline constexpr int32_t kLegacyUnresolvedCallImmediate = -1;
+
 enum class Relocation : uint32_t {
 #define SBF_RELOCATION(ID, VALUE, NAME, WIDTH_BITS, PURPOSE, FIELD_LAYOUT,     \
                        TARGETS, SYMBOL_REQUIREMENT, VERSION_POLICY)            \
@@ -38,7 +40,11 @@ enum class RelocationTargetKind : uint8_t {
   TextCall = 1u << 1,
   ReadOnlyData = 1u << 2,
 };
-enum class RelocationSymbolRequirement : uint8_t { None, Required };
+enum class RelocationSymbolRequirement : uint8_t {
+  None,
+  Record,
+  RecordAndName,
+};
 enum class RelocationVersionPolicy : uint8_t { LegacyOnly };
 
 constexpr RelocationTargetKind operator|(RelocationTargetKind Left,

@@ -320,8 +320,8 @@ void emitInstruction(EmitContext &Context, const MedInstruction &Instruction) {
                      {Context.Environment, Address,
                       Context.i32(Instruction.Width), Context.RuntimeResult},
                      "load.status");
-    Context.guard(B.CreateICmpEQ(Status, Context.i32(0)),
-                  FaultCode::MemoryAccess, Instruction.Address, "memory.load");
+    Context.guardRuntimeStatus(Status, Instruction.Address, "memory.load",
+                               FaultCode::MemoryAccess);
     Result = B.CreateLoad(Context.I64, Context.RuntimeResult, "load.value");
     break;
   }
@@ -335,8 +335,8 @@ void emitInstruction(EmitContext &Context, const MedInstruction &Instruction) {
                                         Context.i32(Instruction.Width),
                                         source(Context, Instruction)},
                                        "store.status");
-    Context.guard(B.CreateICmpEQ(Status, Context.i32(0)),
-                  FaultCode::MemoryAccess, Instruction.Address, "memory.store");
+    Context.guardRuntimeStatus(Status, Instruction.Address, "memory.store",
+                               FaultCode::MemoryAccess);
     branchNext(Context, Instruction);
     return;
   }
@@ -380,16 +380,76 @@ void emitInstruction(EmitContext &Context, const MedInstruction &Instruction) {
     return;
   }
   case Operation::Call:
-    if (Instruction.Call == CallKind::Syscall) {
-      llvm::SmallVector<llvm::Value *, kRuntimeSyscallArgumentCount> Arguments{
-          Context.Environment, Context.i32(Instruction.SyscallHash)};
-      for (unsigned Index = 0; Index < kArgumentRegisterCount; ++Index)
-        Arguments.push_back(Context.loadReg(kFirstArgumentRegister + Index));
-      Arguments.push_back(Context.RuntimeResult);
+    if (Instruction.Call == CallKind::Unsupported) {
+      B.CreateCall(
+          Context.Runtime.Fault,
+          {Context.Environment,
+           Context.i32(static_cast<uint32_t>(FaultCode::InvalidInstruction)),
+           Context.i64(Instruction.Address)});
+      B.CreateRet(Context.i64(0));
+      return;
+    }
+    if (Instruction.Dispatch == CallDispatchPolicy::LegacyRuntimeThenFunction &&
+        Instruction.Call == CallKind::Internal && Instruction.CallTarget) {
+      auto Arguments = Context.runtimeSyscallArguments(Instruction.SyscallHash);
+      llvm::Value *Status = B.CreateCall(Context.Runtime.Syscall, Arguments,
+                                         "legacy.syscall.status");
+      Status =
+          Context.normalizeRuntimeStatus(Status, FaultCode::InvalidInstruction);
+      auto *Handled =
+          llvm::BasicBlock::Create(Context.Module.getContext(),
+                                   "legacy.syscall.handled", &Context.Function);
+      auto *Classify = llvm::BasicBlock::Create(Context.Module.getContext(),
+                                                "legacy.syscall.classify",
+                                                &Context.Function);
+      auto *InvokeFunction =
+          llvm::BasicBlock::Create(Context.Module.getContext(),
+                                   "legacy.function.invoke", &Context.Function);
+      auto *Fault =
+          llvm::BasicBlock::Create(Context.Module.getContext(),
+                                   "legacy.syscall.fault", &Context.Function);
+      B.CreateCondBr(B.CreateICmpEQ(Status, Context.i32(static_cast<uint32_t>(
+                                                FaultCode::None))),
+                     Handled, Classify);
+
+      B.SetInsertPoint(Handled);
+      Context.storeReg(
+          kReturnRegister,
+          B.CreateLoad(Context.I64, Context.RuntimeResult, "syscall.result"));
+      B.CreateBr(InvokeFunction);
+
+      B.SetInsertPoint(Classify);
+      B.CreateCondBr(B.CreateICmpEQ(Status, Context.i32(static_cast<uint32_t>(
+                                                FaultCode::UnknownSyscall))),
+                     InvokeFunction, Fault);
+
+      B.SetInsertPoint(Fault);
+      B.CreateCall(Context.Runtime.Fault, {Context.Environment, Status,
+                                           Context.i64(Instruction.Address)});
+      B.CreateRet(Context.i64(0));
+
+      B.SetInsertPoint(InvokeFunction);
+      pushFrame(Context, Instruction);
+      if (llvm::BasicBlock *Target =
+              blockFor(Context, *Instruction.CallTarget)) {
+        B.CreateBr(Target);
+      } else {
+        B.CreateCall(
+            Context.Runtime.Fault,
+            {Context.Environment,
+             Context.i32(static_cast<uint32_t>(FaultCode::InvalidBranch)),
+             Context.i64(Instruction.Address)});
+        B.CreateRet(Context.i64(0));
+      }
+      return;
+    }
+    if (Instruction.Call == CallKind::Syscall ||
+        Instruction.Call == CallKind::Unresolved) {
+      auto Arguments = Context.runtimeSyscallArguments(Instruction.SyscallHash);
       llvm::Value *Status =
           B.CreateCall(Context.Runtime.Syscall, Arguments, "syscall.status");
-      Context.guard(B.CreateICmpEQ(Status, Context.i32(0)),
-                    FaultCode::UnknownSyscall, Instruction.Address, "syscall");
+      Context.guardRuntimeStatus(Status, Instruction.Address, "syscall",
+                                 FaultCode::InvalidInstruction);
       Result =
           B.CreateLoad(Context.I64, Context.RuntimeResult, "syscall.result");
       Context.storeReg(kReturnRegister, Result);
@@ -465,14 +525,16 @@ void emitInstruction(EmitContext &Context, const MedInstruction &Instruction) {
     B.CreateBr(Context.ReturnDispatch);
     return;
   }
-  case Operation::Invalid:
+  case Operation::Invalid: {
     B.CreateCall(
         Context.Runtime.Fault,
         {Context.Environment,
-         Context.i32(static_cast<uint32_t>(FaultCode::InvalidInstruction)),
+         Context.i32(static_cast<uint32_t>(
+             executionFaultForValidationRule(Instruction.InvalidReason))),
          Context.i64(Instruction.Address)});
     B.CreateRet(Context.i64(0));
     return;
+  }
   }
 
   if (Result) {

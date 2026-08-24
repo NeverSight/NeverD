@@ -51,7 +51,7 @@ constexpr bool validateRelocationTable() {
       if (Info.Width != kDoubleWordBitWidth ||
           Info.Purpose != RelocationPurpose::Absolute ||
           Info.Targets != TextLDDW ||
-          Info.SymbolRequirement != RelocationSymbolRequirement::Required)
+          Info.SymbolRequirement != RelocationSymbolRequirement::Record)
         return false;
       break;
     case RelocationFieldLayout::SplitLDDWOrData:
@@ -65,7 +65,7 @@ constexpr bool validateRelocationTable() {
     case RelocationFieldLayout::CallImmediate:
       if (Info.Width != kWordBitWidth ||
           Info.Purpose != RelocationPurpose::Call || Info.Targets != TextCall ||
-          Info.SymbolRequirement != RelocationSymbolRequirement::Required)
+          Info.SymbolRequirement != RelocationSymbolRequirement::RecordAndName)
         return false;
       break;
     }

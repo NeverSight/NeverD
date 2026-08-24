@@ -24,8 +24,10 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Compiler.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -83,8 +85,17 @@ private:
 class Recovery {
 public:
   Recovery(const SBFProgram &Program, const SolanaRecoveryOptions &Options)
-      : Program(Program), Options(Options), Index(Program.Med),
-        Flow(Program, Index) {}
+      : Program(Program), Options(Options), Index(Program.Med) {
+    // CPI/PDA visitors are the only consumers that dereference program-built
+    // scratch descriptors. Programs without such a call must not pay for a
+    // whole-CFG memory fixed point.
+    if (std::any_of(Program.Med.Instructions.begin(),
+                    Program.Med.Instructions.end(), consumesScratchFacts))
+      Flow.emplace(Program, Index);
+    if (Flow &&
+        Flow->statistics().Precision == ScratchFlowPrecision::WidenedToUnknown)
+      Model.ScratchPrecision = ScratchRecoveryPrecision::BlockLocal;
+  }
 
   SolanaModel run();
 
@@ -131,7 +142,8 @@ private:
   const SBFProgram &Program;
   const SolanaRecoveryOptions &Options;
   MedInstructionIndex Index;
-  ScratchFlow Flow;
+  std::optional<ScratchFlow> Flow;
+  ScratchState EmptyScratch;
   SolanaModel Model;
 
   /// Discriminator candidates in program order, before name resolution.
@@ -145,8 +157,10 @@ private:
   /// Constants that reach a return, before they are judged to be error codes.
   std::vector<ReturnedError> ErrorCandidates;
 
-  /// Keys already recorded, so one address reported twice stays one entry.
-  llvm::DenseMap<uint64_t, size_t> KeyIndexByFirstWord;
+  /// Keys already recorded, bucketed by a cheap prefix before full comparison.
+  /// A hostile binary controls key bytes, so a prefix collision must neither
+  /// duplicate a key nor merge two distinct keys.
+  llvm::DenseMap<uint64_t, llvm::SmallVector<size_t, 1>> KeyIndicesByFirstWord;
 };
 
 } // namespace LLVM_LIBRARY_VISIBILITY_NAMESPACE solana_recovery_detail

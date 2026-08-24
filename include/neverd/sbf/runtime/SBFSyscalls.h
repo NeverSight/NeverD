@@ -17,6 +17,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 namespace neverd::sbf {
 
@@ -179,6 +180,9 @@ struct SyscallGateInfo {
   Syscall ID;
   RuntimeFeature Feature;
   SyscallGatePolarity Polarity;
+  /// Registries in which the gate applies. Most gates apply to both; sparse
+  /// purpose-scoped rows preserve historical registry differences.
+  RuntimePurposeSet Purposes;
 };
 
 llvm::ArrayRef<SyscallGateInfo> syscallGateInfos();
@@ -198,10 +202,22 @@ enum class SyscallRegistration : uint8_t {
 
 llvm::StringRef syscallRegistrationName(SyscallRegistration Registration);
 
+/// Whether \p ID resolves in an explicitly selected Agave registry and
+/// feature snapshot.  This is the primitive authority used by both named
+/// chain profiles and conformance snapshots whose feature set came directly
+/// from a validator test vector.
+SyscallRegistration syscallRegistration(Syscall ID, RuntimePurpose Purpose,
+                                        RuntimeFeature ActiveFeatures);
+
 /// Whether \p ID resolves under \p Profile, and if not, which of the two
 /// reasons applies.
 SyscallRegistration syscallRegistration(Syscall ID,
                                         const RuntimeProfile &Profile);
+
+/// Every registered syscall hash for one Agave registry/feature snapshot,
+/// sorted and deduplicated for deterministic legacy relocation lookup.
+std::vector<uint32_t> registeredSyscallHashes(RuntimePurpose Purpose,
+                                              RuntimeFeature ActiveFeatures);
 
 /// Report a gate or environment row naming a syscall the syscall table does
 /// not declare, or two rows claiming the same syscall.

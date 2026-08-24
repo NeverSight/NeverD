@@ -30,11 +30,27 @@ namespace neverd::sbf {
 
 namespace {
 
+bool virtualSpan(const MemoryRegion &Region, uint64_t &Size) {
+  const uint64_t BackingSize = Region.Bytes.size();
+  if (Region.VMGapSize == 0) {
+    Size = BackingSize;
+    return true;
+  }
+  if (BackingSize % Region.VMGapSize != 0 ||
+      BackingSize >
+          std::numeric_limits<uint64_t>::max() / kStackFrameGapMultiplier)
+    return false;
+  Size = BackingSize * kStackFrameGapMultiplier;
+  return true;
+}
+
 bool rangesOverlap(const MemoryRegion &Left, const MemoryRegion &Right) {
   if (Left.Bytes.empty() || Right.Bytes.empty())
     return false;
-  const uint64_t LeftSize = Left.Bytes.size();
-  const uint64_t RightSize = Right.Bytes.size();
+  uint64_t LeftSize = 0;
+  uint64_t RightSize = 0;
+  if (!virtualSpan(Left, LeftSize) || !virtualSpan(Right, RightSize))
+    return true;
   if (LeftSize > std::numeric_limits<uint64_t>::max() - Left.Address ||
       RightSize > std::numeric_limits<uint64_t>::max() - Right.Address)
     return true;
@@ -102,15 +118,26 @@ RawInstruction decodeRaw(const SBFProgram &Program, size_t Slot) {
   Instruction.Immediate = static_cast<int32_t>(
       llvm::support::endian::read32le(Bytes + kImmediateOffset));
   Instruction.Info =
-      getOpcodeInfo(Instruction.RawOpcode, Program.Low.TheVersion);
+      getOpcodeInfo(Instruction.RawOpcode, Program.ExecutableImage.version());
   return Instruction;
+}
+
+validation_detail::InstructionValidation
+validateRawInstruction(const SBFProgram &Program,
+                       const RawInstruction &Instruction) {
+  const Version TheVersion = Program.ExecutableImage.version();
+  return validation_detail::validateInstruction(
+      Program.text(), TheVersion,
+      {Instruction.Slot, Instruction.RawOpcode, Instruction.Dst,
+       Instruction.Src, Instruction.Offset, Instruction.Immediate,
+       Instruction.Info});
 }
 
 llvm::Error validateProgram(const SBFProgram &Program,
                             const InterpreterOptions &Options) {
   if (llvm::Error Error = validateVMConfig(Program.Config))
     return Error;
-  if (!isConcreteVersion(Program.Low.TheVersion))
+  if (!isConcreteVersion(Program.ExecutableImage.version()))
     return llvm::make_error<llvm::StringError>(
         "sbf: raw interpreter requires a concrete SBF version",
         llvm::inconvertibleErrorCode());
@@ -123,7 +150,7 @@ llvm::Error validateProgram(const SBFProgram &Program,
     return llvm::make_error<llvm::StringError>(
         "sbf: raw interpreter program exceeds the instruction limit",
         llvm::inconvertibleErrorCode());
-  if (Program.Low.EntrySlot >= Text.size() / kInstructionSize)
+  if (Program.ExecutableImage.entrySlot() >= Text.size() / kInstructionSize)
     return llvm::make_error<llvm::StringError>(
         "sbf: raw interpreter entry point is outside program text",
         llvm::inconvertibleErrorCode());
@@ -144,34 +171,61 @@ bool rangeContains(const MemoryRegion &Region, uint64_t Address, size_t Size,
   if (Address < Region.Address)
     return false;
   const uint64_t Delta = Address - Region.Address;
-  if (Delta > Region.Bytes.size() || Size > Region.Bytes.size() - Delta)
+  if (Region.VMGapSize == 0) {
+    if (Delta > Region.Bytes.size() || Size > Region.Bytes.size() - Delta)
+      return false;
+    Offset = static_cast<size_t>(Delta);
+    return true;
+  }
+
+  uint64_t Span = 0;
+  if (!virtualSpan(Region, Span) || Delta >= Span)
     return false;
-  Offset = static_cast<size_t>(Delta);
+  const uint64_t GapSize = Region.VMGapSize;
+  const uint64_t Period = GapSize * kStackFrameGapMultiplier;
+  const uint64_t PeriodOffset = Delta % Period;
+  if (PeriodOffset >= GapSize || Size > GapSize - PeriodOffset)
+    return false;
+  const uint64_t Frame = Delta / Period;
+  const uint64_t BackingOffset = Frame * GapSize + PeriodOffset;
+  if (BackingOffset > Region.Bytes.size() ||
+      Size > Region.Bytes.size() - BackingOffset)
+    return false;
+  Offset = static_cast<size_t>(BackingOffset);
   return true;
 }
 
 llvm::Error validateMemory(const std::vector<MemoryRegion> &Memory,
-                           Version TheVersion) {
+                           Version TheVersion, const SBFVMConfig &Config) {
+  const bool RequiresAlignedMapping =
+      versionHasFeature(TheVersion, VersionFeature::AlignedMemoryMapping) ||
+      Config.AlignedMemoryMapping;
   std::set<uint64_t> AlignedRegionIndices;
   for (size_t I = 0; I < Memory.size(); ++I) {
-    if (Memory[I].Bytes.size() >
-        std::numeric_limits<uint64_t>::max() - Memory[I].Address)
+    if (Memory[I].VMGapSize != 0 && !std::has_single_bit(Memory[I].VMGapSize))
+      return llvm::make_error<llvm::StringError>(
+          "sbf: VM memory gap size must be a power of two",
+          llvm::inconvertibleErrorCode());
+    uint64_t Span = 0;
+    if (!virtualSpan(Memory[I], Span))
+      return llvm::make_error<llvm::StringError>(
+          "sbf: gapped VM memory region has an invalid backing size",
+          llvm::inconvertibleErrorCode());
+    if (Span > std::numeric_limits<uint64_t>::max() - Memory[I].Address)
       return llvm::make_error<llvm::StringError>(
           "sbf: VM memory region address range overflows",
           llvm::inconvertibleErrorCode());
-    if (versionHasFeature(TheVersion, VersionFeature::AlignedMemoryMapping)) {
+    if (RequiresAlignedMapping) {
       const uint64_t RegionIndex = Memory[I].Address >> kVirtualAddressBits;
       const uint64_t LastAddress =
-          Memory[I].Bytes.empty()
-              ? Memory[I].Address
-              : Memory[I].Address + Memory[I].Bytes.size() - 1;
+          Span == 0 ? Memory[I].Address : Memory[I].Address + Span - 1;
       if (LastAddress >> kVirtualAddressBits != RegionIndex)
         return llvm::make_error<llvm::StringError>(
-            "sbf: v4 memory region crosses an aligned VM region boundary",
+            "sbf: memory region crosses an aligned VM region boundary",
             llvm::inconvertibleErrorCode());
       if (!AlignedRegionIndices.insert(RegionIndex).second)
         return llvm::make_error<llvm::StringError>(
-            "sbf: v4 memory mapping has multiple regions at one aligned index",
+            "sbf: memory mapping has multiple regions at one aligned index",
             llvm::inconvertibleErrorCode());
     }
     for (size_t J = I + 1; J < Memory.size(); ++J)
@@ -188,7 +242,20 @@ void appendProgramMemory(const SBFProgram &Program,
     if (Region.DataVisible && !Region.Bytes.empty())
       Memory.push_back({Region.Address, Region.Bytes, false, Region.Name});
 
-  if (usesStackFrameGaps(Program.Low.TheVersion, Program.Config)) {
+  const Version TheVersion = Program.ExecutableImage.version();
+  const bool HasStackFrameGaps = usesStackFrameGaps(TheVersion, Program.Config);
+  const bool RequiresAlignedMapping =
+      versionHasFeature(TheVersion, VersionFeature::AlignedMemoryMapping) ||
+      Program.Config.AlignedMemoryMapping;
+  if (HasStackFrameGaps && RequiresAlignedMapping) {
+    MemoryRegion Stack;
+    Stack.Address = kStackStart;
+    Stack.Bytes.resize(stackSize(Program.Config));
+    Stack.Writable = true;
+    Stack.Name = "stack";
+    Stack.VMGapSize = Program.Config.StackFrameSize;
+    Memory.push_back(std::move(Stack));
+  } else if (HasStackFrameGaps) {
     for (size_t Frame = 0; Frame < Program.Config.MaxCallDepth; ++Frame) {
       MemoryRegion Stack;
       Stack.Address = kStackStart + Frame * Program.Config.StackFrameSize *
@@ -206,15 +273,6 @@ void appendProgramMemory(const SBFProgram &Program,
     Stack.Name = "stack";
     Memory.push_back(std::move(Stack));
   }
-}
-
-const LowInstruction *findAnalyzedInstruction(const SBFProgram &Program,
-                                              size_t Slot) {
-  if (Slot >= Program.Low.Instructions.size())
-    return nullptr;
-  const LowInstruction &Instruction = Program.Low.Instructions[Slot];
-  return Instruction.Slot == Slot && !Instruction.IsContinuation ? &Instruction
-                                                                 : nullptr;
 }
 
 } // namespace interpreter_detail

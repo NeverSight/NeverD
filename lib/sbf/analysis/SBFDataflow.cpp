@@ -19,6 +19,7 @@
 
 #include <cstdint>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -46,12 +47,18 @@ std::optional<va_t> effectiveAddress(const RegisterValue &Base,
   return std::nullopt;
 }
 
+bool isScratchRange(va_t Address, uint64_t Size) {
+  const auto IsWithin = [Address, Size](va_t RegionStart) {
+    if (Address < RegionStart)
+      return false;
+    const uint64_t Offset = Address - RegionStart;
+    return Offset < kMemoryRegionSize && Size <= kMemoryRegionSize - Offset;
+  };
+  return IsWithin(kStackStart) || IsWithin(kHeapStart);
+}
+
 bool isScratchAddress(va_t Address) {
-  const bool OnStack =
-      Address >= kStackStart && Address < kStackStart + kMemoryRegionSize;
-  const bool OnHeap =
-      Address >= kHeapStart && Address < kHeapStart + kMemoryRegionSize;
-  return OnStack || OnHeap;
+  return isScratchRange(Address, /*Size=*/1);
 }
 
 //===----------------------------------------------------------------------===//
@@ -62,9 +69,38 @@ void MemoryModel::clear() {
   TrackedBytes = 0;
 }
 
+uint64_t MemoryModel::retainedByteEstimate() const {
+  if (Runs.empty())
+    return 0;
+
+  // A std::map node owns its value plus parent/left/right links and balancing
+  // metadata. Pointer-width charges conservatively cover those fields plus
+  // allocator bookkeeping on the supported standard libraries; vector
+  // capacity accounts for bytes reserved beyond its current logical size.
+  constexpr uint64_t OrderedNodeLinkAndTagWords = 4;
+  constexpr uint64_t AllocatorBookkeepingWords = 2;
+  constexpr uint64_t OrderedNodeOverhead =
+      (OrderedNodeLinkAndTagWords + AllocatorBookkeepingWords) * sizeof(void *);
+  uint64_t Bytes = sizeof(*this);
+  for (const auto &[Address, Run] : Runs) {
+    (void)Address;
+    Bytes += sizeof(decltype(Runs)::value_type) + OrderedNodeOverhead;
+    Bytes += Run.capacity() * sizeof(uint8_t);
+  }
+  return Bytes;
+}
+
 void MemoryModel::invalidate(va_t Address, uint64_t Size) {
   if (Size == 0 || Runs.empty())
     return;
+  // A counted syscall can receive the full register width as its length.
+  // Once the half-open end cannot be represented, there is no sound finite
+  // interval to retain: conservatively forget every scratch fact instead of
+  // letting the wrapped end make the write look empty.
+  if (Size > std::numeric_limits<va_t>::max() - Address) {
+    clear();
+    return;
+  }
   const va_t End = Address + Size;
 
   auto It = Runs.upper_bound(Address);
@@ -190,11 +226,10 @@ bool MemoryModel::operator==(const MemoryModel &Other) const {
 
 void ScratchState::meet(const ScratchState &Other) {
   Memory.meet(Other.Memory);
-  Escaped = Escaped || Other.Escaped;
 }
 
 bool ScratchState::operator==(const ScratchState &Other) const {
-  return Escaped == Other.Escaped && Memory == Other.Memory;
+  return Memory == Other.Memory;
 }
 
 } // namespace neverd::sbf

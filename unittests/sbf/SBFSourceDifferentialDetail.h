@@ -49,9 +49,17 @@ inline llvm::StringRef compilerName(SourceBackend Backend) {
 }
 
 struct DifferentialCase {
+  struct HostFault {
+    uint32_t Hash = 0;
+    FaultCode Fault = FaultCode::None;
+  };
+
   std::string Name;
   SBFProgram Program;
   ExecutionEnvironment Environment;
+  std::vector<HostFault> HostFaults;
+  std::optional<FaultCode> LoadFault;
+  std::optional<FaultCode> StoreFault;
 };
 
 class TemporaryFile {
@@ -104,12 +112,13 @@ encodeLDDW(uint8_t Dst, uint64_t Immediate) {
 
 inline llvm::Expected<SBFProgram>
 analyzeProgram(Version TheVersion,
-               std::initializer_list<EncodedInstruction> Instructions) {
+               std::initializer_list<EncodedInstruction> Instructions,
+               const AnalyzeOptions &Options = {}, size_t EntrySlot = 0) {
   BinaryImage Image;
   Image.Arch = Arch::SBF;
   Image.Format = BinaryFormat::ELF;
   Image.Bits = Bitness::Bits64;
-  Image.Entry = kBytecodeStart;
+  Image.Entry = kBytecodeStart + EntrySlot * kInstructionSize;
   for (const EncodedInstruction &Instruction : Instructions)
     Image.Raw.insert(Image.Raw.end(), Instruction.begin(), Instruction.end());
 
@@ -131,7 +140,7 @@ analyzeProgram(Version TheVersion,
   Meta.TextFile = {0, Image.Raw.size()};
   Meta.TextVM = {kBytecodeStart, Image.Raw.size()};
   Image.SBF = Meta;
-  return analyze(Image);
+  return analyze(Image, Options);
 }
 
 inline std::vector<MemoryRegion>
@@ -142,7 +151,20 @@ initialMemory(const SBFProgram &Program,
     if (Region.DataVisible && !Region.Bytes.empty())
       Memory.push_back({Region.Address, Region.Bytes, false, Region.Name});
 
-  if (usesStackFrameGaps(Program.Low.TheVersion, Program.Config)) {
+  const Version TheVersion = Program.ExecutableImage.version();
+  const bool HasStackFrameGaps = usesStackFrameGaps(TheVersion, Program.Config);
+  const bool RequiresAlignedMapping =
+      versionHasFeature(TheVersion, VersionFeature::AlignedMemoryMapping) ||
+      Program.Config.AlignedMemoryMapping;
+  if (HasStackFrameGaps && RequiresAlignedMapping) {
+    MemoryRegion Stack;
+    Stack.Address = kStackStart;
+    Stack.Bytes.resize(stackSize(Program.Config));
+    Stack.Writable = true;
+    Stack.Name = "stack";
+    Stack.VMGapSize = Program.Config.StackFrameSize;
+    Memory.push_back(std::move(Stack));
+  } else if (HasStackFrameGaps) {
     for (size_t Frame = 0; Frame < Program.Config.MaxCallDepth; ++Frame) {
       MemoryRegion Stack;
       Stack.Address = kStackStart + Frame * Program.Config.StackFrameSize *
@@ -173,6 +195,17 @@ inline uint64_t hashWritableMemory(const std::vector<MemoryRegion> &Memory) {
 
 inline std::string hexWord(uint64_t Value) {
   return "0x" + llvm::utohexstr(Value) + "u64";
+}
+
+inline std::string cRuntimeFeatureMaskWord(RuntimeFeatureMask Value) {
+  return "UINT" +
+         std::to_string(std::numeric_limits<RuntimeFeatureMask>::digits) +
+         "_C(0x" + llvm::utohexstr(Value) + ")";
+}
+
+inline std::string rustRuntimeFeatureMaskWord(RuntimeFeatureMask Value) {
+  return "0x" + llvm::utohexstr(Value) + "u" +
+         std::to_string(std::numeric_limits<RuntimeFeatureMask>::digits);
 }
 
 inline bool isZeroFilled(const MemoryRegion &Region) {

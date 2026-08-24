@@ -1,0 +1,79 @@
+//===- SBFOfficialVerifierCases.def - Official verifier matrix -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_OFFICIAL_VERIFIER_CASE(ID, NAME, BUILDER, VERSION_MASK, EXPECTATION)
+//
+// These are semantic-domain probes, not opcode-activation records.  The
+// exhaustive 256 x 5 activation matrix is generated separately from the
+// independently audited opcode manifest.  Every row here names one boundary
+// in anza-xyz/sbpf's RequisiteVerifier.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_OFFICIAL_VERIFIER_CASE
+#define SBF_OFFICIAL_VERIFIER_CASE(ID, NAME, BUILDER, VERSION_MASK, EXPECTATION)
+#endif
+
+SBF_OFFICIAL_VERIFIER_CASE(LDDWComplete, "lddw-complete", LDDWComplete, NotV2,
+                           Accept)
+SBF_OFFICIAL_VERIFIER_CASE(LDDWLast, "lddw-last", LDDWLast, NotV2, Reject)
+SBF_OFFICIAL_VERIFIER_CASE(LDDWNonZeroContinuation, "lddw-nonzero-continuation",
+                           LDDWNonZeroContinuation, NotV2, Reject)
+SBF_OFFICIAL_VERIFIER_CASE(BranchToLDDWContinuation,
+                           "branch-to-lddw-continuation",
+                           BranchToLDDWContinuation, NotV2, Reject)
+
+SBF_OFFICIAL_VERIFIER_CASE(RegisterBoundary, "register-boundary",
+                           RegisterBoundary, All, Accept)
+SBF_OFFICIAL_VERIFIER_CASE(FramePointerWrite, "frame-pointer-write",
+                           FramePointerWrite, All, Reject)
+SBF_OFFICIAL_VERIFIER_CASE(InvalidDestinationNibble,
+                           "invalid-destination-nibble",
+                           InvalidDestinationNibble, All, Reject)
+SBF_OFFICIAL_VERIFIER_CASE(InvalidSourceNibble, "invalid-source-nibble",
+                           InvalidSourceNibble, All, Reject)
+SBF_OFFICIAL_VERIFIER_CASE(StoreThroughFramePointer,
+                           "store-through-frame-pointer",
+                           StoreThroughFramePointer, All, Accept)
+
+SBF_OFFICIAL_VERIFIER_CASE(DivisionOne, "division-one", DivisionOne, All,
+                           Accept)
+SBF_OFFICIAL_VERIFIER_CASE(DivisionZero, "division-zero", DivisionZero, All,
+                           Reject)
+SBF_OFFICIAL_VERIFIER_CASE(ShiftMaximum, "shift-maximum", ShiftMaximum, All,
+                           Accept)
+SBF_OFFICIAL_VERIFIER_CASE(ShiftWidth, "shift-width", ShiftWidth, All, Reject)
+SBF_OFFICIAL_VERIFIER_CASE(ShiftNegative, "shift-negative", ShiftNegative, All,
+                           Reject)
+
+SBF_OFFICIAL_VERIFIER_CASE(Endian16, "endian-16", Endian16, All, Accept)
+SBF_OFFICIAL_VERIFIER_CASE(Endian32, "endian-32", Endian32, All, Accept)
+SBF_OFFICIAL_VERIFIER_CASE(Endian64, "endian-64", Endian64, All, Accept)
+SBF_OFFICIAL_VERIFIER_CASE(EndianZero, "endian-zero", EndianZero, All, Reject)
+SBF_OFFICIAL_VERIFIER_CASE(EndianByte, "endian-byte", EndianByte, All, Reject)
+SBF_OFFICIAL_VERIFIER_CASE(EndianBelowDoubleWord, "endian-below-double-word",
+                           EndianBelowDoubleWord, All, Reject)
+SBF_OFFICIAL_VERIFIER_CASE(EndianAboveDoubleWord, "endian-above-double-word",
+                           EndianAboveDoubleWord, All, Reject)
+
+SBF_OFFICIAL_VERIFIER_CASE(BranchInRange, "branch-in-range", BranchInRange, All,
+                           Accept)
+SBF_OFFICIAL_VERIFIER_CASE(BranchForwardOutOfRange,
+                           "branch-forward-out-of-range",
+                           BranchForwardOutOfRange, All, Reject)
+SBF_OFFICIAL_VERIFIER_CASE(BranchBackwardOutOfRange,
+                           "branch-backward-out-of-range",
+                           BranchBackwardOutOfRange, All, Reject)
+
+SBF_OFFICIAL_VERIFIER_CASE(CallXSelectedMaximum, "callx-selected-maximum",
+                           CallXSelectedMaximum, All, Accept)
+SBF_OFFICIAL_VERIFIER_CASE(CallXSelectedFramePointer,
+                           "callx-selected-frame-pointer",
+                           CallXSelectedFramePointer, All, Reject)
+SBF_OFFICIAL_VERIFIER_CASE(CallXUnselectedOperands, "callx-unselected-operands",
+                           CallXUnselectedOperands, All, Accept)
+
+#undef SBF_OFFICIAL_VERIFIER_CASE

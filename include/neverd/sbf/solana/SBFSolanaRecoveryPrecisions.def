@@ -1,0 +1,18 @@
+//===- SBFSolanaRecoveryPrecisions.def - Recovery precision ----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_SOLANA_RECOVERY_PRECISION(ID, VALUE, API_NAME)
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_SOLANA_RECOVERY_PRECISION
+#define SBF_SOLANA_RECOVERY_PRECISION(ID, VALUE, API_NAME)
+#endif
+
+SBF_SOLANA_RECOVERY_PRECISION(Exact, 0, "exact")
+SBF_SOLANA_RECOVERY_PRECISION(BlockLocal, 1, "block-local")
+
+#undef SBF_SOLANA_RECOVERY_PRECISION

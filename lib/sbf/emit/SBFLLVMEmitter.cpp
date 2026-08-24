@@ -29,6 +29,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -53,14 +54,21 @@ void addRuntimeOutputAttributes(llvm::FunctionCallee Callee,
   Function->addParamAttr(Parameter, llvm::Attribute::WriteOnly);
 }
 
-RuntimeABI declareRuntime(llvm::Module &Module) {
+RuntimeABI declareRuntime(llvm::Module &Module,
+                          LLVMRuntimeSyscallABI SyscallABI,
+                          RuntimeFeatureMask RuntimeFeatures) {
   llvm::LLVMContext &Context = Module.getContext();
   auto *Ptr = llvm::PointerType::getUnqual(Context);
   auto *I32 = llvm::Type::getInt32Ty(Context);
   auto *I64 = llvm::Type::getInt64Ty(Context);
+  auto *FeatureMaskType = llvm::IntegerType::get(
+      Context, std::numeric_limits<RuntimeFeatureMask>::digits);
   auto *Void = llvm::Type::getVoidTy(Context);
-  llvm::SmallVector<llvm::Type *, kRuntimeSyscallArgumentCount>
-      SyscallParameters{Ptr, I32};
+  llvm::SmallVector<llvm::Type *, kRuntimeFeatureAwareSyscallArgumentCount>
+      SyscallParameters{Ptr};
+  if (SyscallABI == LLVMRuntimeSyscallABI::FeatureAware)
+    SyscallParameters.push_back(FeatureMaskType);
+  SyscallParameters.push_back(I32);
   for (unsigned Index = 0; Index < kArgumentRegisterCount; ++Index)
     SyscallParameters.push_back(I64);
   SyscallParameters.push_back(Ptr);
@@ -72,18 +80,25 @@ RuntimeABI declareRuntime(llvm::Module &Module) {
           kRuntimeStoreName,
           llvm::FunctionType::get(I32, {Ptr, I64, I32, I64}, false)),
       Module.getOrInsertFunction(
-          kRuntimeSyscallName,
+          SyscallABI == LLVMRuntimeSyscallABI::FeatureAware
+              ? kRuntimeFeatureAwareSyscallName
+              : kRuntimeSyscallName,
           llvm::FunctionType::get(I32, SyscallParameters, false)),
       Module.getOrInsertFunction(
           kRuntimeFaultName,
           llvm::FunctionType::get(Void, {Ptr, I32, I64}, false)),
+      SyscallABI,
+      RuntimeFeatures,
   };
   addRuntimeAttributes(ABI.Load);
   addRuntimeAttributes(ABI.Store);
   addRuntimeAttributes(ABI.Syscall);
   addRuntimeAttributes(ABI.Fault);
   addRuntimeOutputAttributes(ABI.Load, kRuntimeLoadOutputParameter);
-  addRuntimeOutputAttributes(ABI.Syscall, kRuntimeSyscallOutputParameter);
+  addRuntimeOutputAttributes(ABI.Syscall,
+                             SyscallABI == LLVMRuntimeSyscallABI::FeatureAware
+                                 ? kRuntimeFeatureAwareSyscallOutputParameter
+                                 : kRuntimeSyscallOutputParameter);
   llvm::cast<llvm::Function>(ABI.Fault.getCallee())
       ->addFnAttr(llvm::Attribute::Cold);
   return ABI;
@@ -101,7 +116,10 @@ emitLLVM(const SBFProgram &Program, llvm::LLVMContext &Context,
         "sbf: cannot emit LLVM IR for an empty MedIR",
         llvm::inconvertibleErrorCode());
   auto Module = std::make_unique<llvm::Module>(Options.ModuleName, Context);
-  RuntimeABI Runtime = declareRuntime(*Module);
+  const RuntimeFeature RuntimeFeatures =
+      Options.RuntimeFeatures.value_or(Program.ActiveRuntimeFeatures);
+  RuntimeABI Runtime = declareRuntime(*Module, Options.SyscallABI,
+                                      runtimeFeatureMask(RuntimeFeatures));
   auto *Ptr = llvm::PointerType::getUnqual(Context);
   auto *I64 = llvm::Type::getInt64Ty(Context);
   // The loader hands the program two addresses, so the recovered entry point
@@ -151,9 +169,12 @@ emitLLVM(const SBFProgram &Program, llvm::LLVMContext &Context,
         "sbf: LLVM emitter requires a non-empty LowIR CFG",
         llvm::inconvertibleErrorCode());
   for (const BasicBlock &Block : Program.Low.Blocks) {
+    const bool ContinuationEntry =
+        Block.StartSlot < Program.Low.Instructions.size() &&
+        Program.Low.Instructions[Block.StartSlot].IsContinuation;
     if (Block.StartSlot >= Block.EndSlot ||
         Block.EndSlot > Program.Low.Instructions.size() ||
-        !EC.Instructions.contains(Block.StartSlot) ||
+        (!ContinuationEntry && !EC.Instructions.contains(Block.StartSlot)) ||
         !EC.Blocks
              .insert({Block.StartSlot,
                       llvm::BasicBlock::Create(
@@ -167,9 +188,10 @@ emitLLVM(const SBFProgram &Program, llvm::LLVMContext &Context,
           llvm::inconvertibleErrorCode());
   }
 
-  // CALLX accepts any complete instruction address at runtime. Splitting every
-  // possible dynamic entry preserves that contract while ordinary programs
-  // retain one LLVM block per analyzed SBF basic block.
+  // CALLX accepts any in-range raw slot at runtime, including the continuation
+  // half of an LDDW. Splitting every possible dynamic entry preserves that
+  // contract while ordinary programs retain one LLVM block per analyzed SBF
+  // basic block.
   const bool HasIndirectCall = std::any_of(
       Program.Med.Instructions.begin(), Program.Med.Instructions.end(),
       [](const MedInstruction &Instruction) {
@@ -233,18 +255,20 @@ emitLLVM(const SBFProgram &Program, llvm::LLVMContext &Context,
       emitInstruction(EC, *It->second);
     }
   }
-  if (HasIndirectCall)
-    for (const LowInstruction &Low : Program.Low.Instructions) {
-      if (!Low.IsContinuation)
-        continue;
-      EC.Builder.SetInsertPoint(blockFor(EC, Low.Slot));
-      EC.Builder.CreateCall(
-          Runtime.Fault,
-          {Environment,
-           EC.i32(static_cast<uint32_t>(FaultCode::InvalidInstruction)),
-           EC.i64(Low.Address)});
-      EC.Builder.CreateRet(EC.i64(0));
-    }
+  for (const LowInstruction &Low : Program.Low.Instructions) {
+    if (!Low.IsContinuation)
+      continue;
+    llvm::BasicBlock *Target = blockFor(EC, Low.Slot);
+    if (!Target || Target->hasTerminator())
+      continue;
+    EC.Builder.SetInsertPoint(Target);
+    EC.Builder.CreateCall(
+        Runtime.Fault,
+        {Environment,
+         EC.i32(static_cast<uint32_t>(FaultCode::InvalidInstruction)),
+         EC.i64(Low.Address)});
+    EC.Builder.CreateRet(EC.i64(0));
+  }
 
   EC.Builder.SetInsertPoint(EC.ReturnDispatch);
   llvm::Value *Depth = EC.Builder.CreateLoad(EC.I32, EC.Depth);

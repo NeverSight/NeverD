@@ -7,6 +7,7 @@
 // SBF_SYSCALL_GATE_POLARITY(ID, NAME, SUMMARY)
 // SBF_SYSCALL_PURPOSES(SYSCALL, PURPOSES)
 // SBF_SYSCALL_GATE(SYSCALL, FEATURE, POLARITY)
+// SBF_SYSCALL_PURPOSE_GATE(SYSCALL, PURPOSE, FEATURE, POLARITY)
 //
 //   Whether a program's reference to a syscall resolves is not one fact. The
 //   runtime builds two registries, from the same list, with different
@@ -17,7 +18,7 @@
 //   introducing a second vocabulary for the same two things: "which registry"
 //   and "what is being asked" are one question asked from two ends.
 //
-//   Both of the last two tables are sparse, and deliberately so. A syscall
+//   The last three tables are sparse, and deliberately so. A syscall
 //   with no row is in both registries and governed by no gate, which is true
 //   of nearly all of them; writing that out once per syscall would bury the
 //   handful of entries that are actually conditional, and those are the only
@@ -42,6 +43,10 @@
 #define SBF_SYSCALL_GATE(SYSCALL, FEATURE, POLARITY)
 #endif
 
+#ifndef SBF_SYSCALL_PURPOSE_GATE
+#define SBF_SYSCALL_PURPOSE_GATE(SYSCALL, PURPOSE, FEATURE, POLARITY)
+#endif
+
 //===----------------------------------------------------------------------===//
 // Which way a gate points
 //===----------------------------------------------------------------------===//
@@ -54,24 +59,43 @@ SBF_SYSCALL_GATE_POLARITY(RequiresInactive, "requires-inactive",
                           "so it resolves only where the gate is still off")
 
 //===----------------------------------------------------------------------===//
-// The syscalls that are not in both registries
+// The syscalls unconditionally absent from a registry
 //
-// The runtime keeps running programs that call the retired allocator, because
-// refusing to would break contracts that have been on chain for years, and it
-// refuses to accept a new program that calls it. That is a difference between
-// the two registries and nothing else: it does not depend on the cluster, on
-// the slot, or on which loader owns the program.
+// This sparse table is currently empty. alloc_free is intentionally not here:
+// it was present in the deployment registry before its feature activation and
+// therefore belongs in the purpose-scoped gate table below.
 //===----------------------------------------------------------------------===//
-
-SBF_SYSCALL_PURPOSES(AllocFree, Execution)
 
 //===----------------------------------------------------------------------===//
 // The syscalls a gate governs
 //===----------------------------------------------------------------------===//
 
+SBF_SYSCALL_GATE(Blake3, Blake3Syscall, RequiresActive)
 SBF_SYSCALL_GATE(Sha512, Sha512Syscall, RequiresActive)
+SBF_SYSCALL_GATE(Poseidon, PoseidonSyscall, RequiresActive)
+SBF_SYSCALL_GATE(CurveValidatePoint, Curve25519Syscalls, RequiresActive)
+SBF_SYSCALL_GATE(CurveGroupOp, Curve25519Syscalls, RequiresActive)
+SBF_SYSCALL_GATE(CurveMultiscalarMul, Curve25519Syscalls, RequiresActive)
+SBF_SYSCALL_GATE(CurveDecompress, BLS12381Syscalls, RequiresActive)
+SBF_SYSCALL_GATE(CurvePairingMap, BLS12381Syscalls, RequiresActive)
+SBF_SYSCALL_GATE(AltBn128GroupOp, AltBn128Syscall, RequiresActive)
+SBF_SYSCALL_GATE(AltBn128Compression, AltBn128CompressionSyscall,
+                 RequiresActive)
+SBF_SYSCALL_GATE(BigModExp, BigModExpSyscall, RequiresActive)
+SBF_SYSCALL_GATE(GetLastRestartSlot, LastRestartSlotSysvar, RequiresActive)
 SBF_SYSCALL_GATE(GetFeesSysvar, FeesSysvarDisabled, RequiresInactive)
+SBF_SYSCALL_GATE(GetSysvar, GetSysvarSyscall, RequiresActive)
+SBF_SYSCALL_GATE(GetEpochStake, GetEpochStakeSyscall, RequiresActive)
+SBF_SYSCALL_GATE(RemainingComputeUnits, RemainingComputeUnitsSyscall,
+                 RequiresActive)
 
+// Unlike the all-purpose gates above, this historical removing gate applies
+// only while constructing the deployment registry. Execution keeps the
+// retired allocator registered on both sides of the activation boundary.
+SBF_SYSCALL_PURPOSE_GATE(AllocFree, Deployment, DisableAllocFreeDeployment,
+                         RequiresInactive)
+
+#undef SBF_SYSCALL_PURPOSE_GATE
 #undef SBF_SYSCALL_GATE
 #undef SBF_SYSCALL_PURPOSES
 #undef SBF_SYSCALL_GATE_POLARITY

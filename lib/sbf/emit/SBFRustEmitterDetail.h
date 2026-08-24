@@ -54,7 +54,7 @@ void emitInstruction(llvm::raw_ostream &OS, const MedInstruction &Instruction,
 /// plan contains a node this backend cannot render.
 bool emitStructuredNodes(llvm::raw_ostream &OS, const SBFProgram &Program,
                          const std::map<size_t, const MedInstruction *> &BySlot,
-                         const std::vector<StructuredNode> &Nodes,
+                         const StructuredControlFlow &Plan,
                          llvm::StringRef Indent);
 
 } // namespace LLVM_LIBRARY_VISIBILITY_NAMESPACE rust_emitter_detail

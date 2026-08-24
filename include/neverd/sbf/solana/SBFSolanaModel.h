@@ -51,6 +51,30 @@ enum class RecoveryEvidence : uint8_t {
 
 llvm::StringRef recoveryEvidenceName(RecoveryEvidence Evidence);
 
+/// Precision of scratch-backed CPI/PDA recovery. BlockLocal is a sound
+/// resource widening: cross-block must-facts were discarded, while the
+/// bounded lattice can still recover stores earlier in the same block.
+enum class ScratchRecoveryPrecision : uint8_t {
+#define SBF_SOLANA_RECOVERY_PRECISION(ID, VALUE, API_NAME) ID = VALUE,
+#include "neverd/sbf/solana/SBFSolanaRecoveryPrecisions.def"
+};
+
+struct ScratchRecoveryPrecisionInfo {
+  ScratchRecoveryPrecision Precision;
+  llvm::StringLiteral APIName;
+};
+
+constexpr ScratchRecoveryPrecisionInfo
+getScratchRecoveryPrecisionInfo(ScratchRecoveryPrecision Precision) {
+  switch (Precision) {
+#define SBF_SOLANA_RECOVERY_PRECISION(ID, VALUE, API_NAME)                     \
+  case ScratchRecoveryPrecision::ID:                                           \
+    return {ScratchRecoveryPrecision::ID, API_NAME};
+#include "neverd/sbf/solana/SBFSolanaRecoveryPrecisions.def"
+  }
+  llvm_unreachable("unknown Solana scratch recovery precision");
+}
+
 /// A 32-byte address found in the program's read-only data.
 struct RecoveredPubkey {
   va_t Address = 0;
@@ -220,6 +244,9 @@ struct SolanaModel {
   std::vector<ReturnedError> Errors;
   std::vector<AccountAccess> AccountAccesses;
   std::vector<LintFinding> Findings;
+  /// Appended so existing aggregate field order and member offsets remain
+  /// stable for source clients that predate precision reporting.
+  ScratchRecoveryPrecision ScratchPrecision = ScratchRecoveryPrecision::Exact;
 
   bool empty() const;
 };

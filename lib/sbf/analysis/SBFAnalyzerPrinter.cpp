@@ -26,23 +26,7 @@ namespace neverd::sbf {
 namespace {
 
 llvm::StringRef edgeKindName(EdgeKind Kind) {
-  switch (Kind) {
-  case EdgeKind::Fallthrough:
-    return "fallthrough";
-  case EdgeKind::BranchTaken:
-    return "taken";
-  case EdgeKind::Branch:
-    return "branch";
-  case EdgeKind::Call:
-    return "call";
-  case EdgeKind::IndirectCall:
-    return "callx";
-  case EdgeKind::Return:
-    return "return";
-  case EdgeKind::Invalid:
-    return "invalid";
-  }
-  return "invalid";
+  return getEdgeKindInfo(Kind).IRName;
 }
 
 llvm::StringRef operationName(Operation Op) {
@@ -99,10 +83,23 @@ llvm::StringRef operationName(Operation Op) {
 std::string formatInstruction(const LowInstruction &Instruction) {
   if (Instruction.IsContinuation)
     return ".lddw.cont";
+  if (Instruction.isInvalid()) {
+    const ValidationRuleInfo RuleInfo =
+        getValidationRuleInfo(Instruction.InvalidReason);
+    return (llvm::Twine("invalid[") + RuleInfo.StableID + "] .byte 0x" +
+            llvm::utohexstr(Instruction.RawOpcode))
+        .str();
+  }
   if (!Instruction.Info)
     return ".byte 0x" + llvm::utohexstr(Instruction.RawOpcode);
   std::string Buffer;
   llvm::raw_string_ostream OS(Buffer);
+  auto PrintBranchTarget = [&] {
+    if (Instruction.BranchTarget)
+      OS << "block_" << *Instruction.BranchTarget;
+    else
+      OS << "<invalid-target>";
+  };
   OS << Instruction.Info->Mnemonic;
   switch (Instruction.Info->Form) {
   case OperandForm::None:
@@ -143,17 +140,18 @@ std::string formatInstruction(const LowInstruction &Instruction) {
     OS << " r" << unsigned(Instruction.Dst) << ", " << Instruction.RawImmediate;
     break;
   case OperandForm::Branch:
-    OS << " block_" << Instruction.BranchTarget.value_or(0);
+    OS << " ";
+    PrintBranchTarget();
     break;
   case OperandForm::BranchImm:
     OS << " r" << unsigned(Instruction.Dst) << ", "
-       << static_cast<int64_t>(Instruction.RawImmediate) << ", block_"
-       << Instruction.BranchTarget.value_or(0);
+       << static_cast<int64_t>(Instruction.RawImmediate) << ", ";
+    PrintBranchTarget();
     break;
   case OperandForm::BranchReg:
     OS << " r" << unsigned(Instruction.Dst) << ", r"
-       << unsigned(Instruction.Src) << ", block_"
-       << Instruction.BranchTarget.value_or(0);
+       << unsigned(Instruction.Src) << ", ";
+    PrintBranchTarget();
     break;
   case OperandForm::CallImm:
     OS << " "
@@ -243,7 +241,7 @@ std::string dumpHighIR(const HighIR &IR) {
   for (const Function &Function : IR.Functions) {
     OS << "function " << Function.Name << " @ 0x"
        << llvm::utohexstr(Function.Address) << " {";
-    for (size_t Block : Function.Blocks)
+    for (size_t Block : IR.ownedBlocks(Function))
       OS << " block_" << Block;
     OS << " }\n";
   }

@@ -41,7 +41,7 @@ cmake --build build-release --parallel 4
 | `unittests/lift` | `NeverDLiftTests` | Decoder/lifter LowIR 形狀、IR 階段、loader、重定位、格式 fixture、反編譯與代表性 patch 流程 |
 | `unittests/semantic` 中的大多數檔案 | `NeverDSemanticTests` | 指令、ABI、控制流、C 運算式與 lift/recompile 差分語意 |
 | `unittests/evm` | `NeverDEVMOpcodeTests`、`NeverDEVMBytecodeTests`、`NeverDEVMLoaderTests`、`NeverDEVMAnalyzerTests`、`NeverDEVMSemanticTests`、`NeverDEVMEmitterTests`、`NeverDEVMIntegrationTests` | 硬分叉中繼資料、輸入正規化、CFG/SSA/還原、interpreter 語意、LLVM/C/Solidity 差分執行及公共 API routing |
-| `unittests/sbf` | `NeverDSBFMetadataTests`、`NeverDSBFLoaderTests`、`NeverDSBFAnalyzerTests`、`NeverDSBFSemanticTests`、`NeverDSBFLLVMEmitterTests`、`NeverDSBFEmitterTests`、`NeverDSBFIntegrationTests` | v0-v4 中繼資料與 ELF 配置、嚴格驗證、CFG/還原、獨立原始執行、LLVM 驗證、C/Rust 編譯及公共 API 路由 |
+| `unittests/sbf` | `NeverDSBFMetadataTests`、`NeverDSBFProgramImageTests`、`NeverDSBFLoaderTests`、`NeverDSBFAnalyzerTests`、`NeverDSBFVerifierTests`、`NeverDSBFISAConformanceTests`、`NeverDSBFAgaveConformanceTests`、`NeverDSBFSemanticTests`、`NeverDSBFEmitterTests`、`NeverDSBFLLVMEmitterTests`、`NeverDSBFLLVMDifferentialTests`、`NeverDSBFSourceDifferentialTests`、`NeverDSBFMalformedCorpusTests`、`NeverDSBFUpstreamConformanceTests`、`NeverDSBFExternalOracleTests`、`NeverDSBFSolanaModelTests`、`NeverDSBFIntegrationTests` | v0-v4 中繼資料與 ELF 配置、嚴格 verifier/loader 行為、23 個固定 ELF 成品、獨立 official oracle、完整 opcode 可用性、惡意輸入、CFG/還原及已執行的 LLVM/C/Rust 差分 |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | 四 ISA×三物件格式的重寫/混淆等價性 |
 | `unittests/semantic` 中的聚焦轉換檔案 | `NeverDSwitchXformTests`、`NeverDIndCallXformTests`、`NeverDCFGLoopXformTests`、`NeverDTwoTableXformTests`、`NeverDAvxUpperXformTests` | 從大型語意二進位拆出的快速重新連結探針 |
 | `unittests/corpus`（submodule） | `NeverDWindowsEHCorpusTests`、`NeverDRustEHCorpusTests`、`NeverDGoEHCorpusTests`、`NeverDCxxItaniumEHCorpusTests`、`NeverDObjCEHCorpusTests` | 從 317 個釘住的真實二進位讀出的例外與執行期 metadata，每一個都在 manifest 裡宣告了其復原必須達到的下限 |
@@ -270,6 +270,12 @@ contract 與 host argument maximum 保持推導而不在 backend 重複。
 
 SBF 中繼資料測試會驗證每個版本特性、操作碼衝突邊界、Murmur3 syscall hash、重定位、ELF machine、暫存器和 VM 位址常數。Loader fixture 不依賴 vendored 二進位，直接產生舊式 v0-v2 section 配置和無 section 的嚴格 v3/v4 program-header 配置。
 
+`NeverDSBFISAConformanceTests` 依 v0-v4 的每個版本，將每一種 byte encoding
+與獨立稽核的 typed manifest 比對。`NeverDSBFExternalOracleTests` 接著把 activation
+與 boundary 決策和另外建置的官方 Anza 程序比較。
+`NeverDSBFUpstreamConformanceTests` 為固定 Anza revision 中的全部 23 個 ELF
+指定明確結果。
+
 `NeverDSBFSemanticTests` 直接執行已驗證的指令位元組而不取用 MedIR，因此修改或破壞正規化 IR 不會讓來源 oracle 與後端意外達成一致。涵蓋範圍包括非單調的 v2 語意、記憶體、syscall、內部呼叫框架、fault、trace 和資源限制。LLVM module 會被驗證；產生的 C 以 warnings-as-errors 編譯，Rust 使用 `-D warnings`。公共 API 測試從產生的嚴格 SBF ELF 出發，走過所有 IR 階段、反組譯、CFG、中繼資料、LLVM、C 與 Rust。
 
 ## 一次性目標
@@ -326,12 +332,7 @@ ctest --test-dir build-release --build-config Release \
   -R 'EVM' --output-on-failure --parallel 4
 
 # 所有聚焦的 Solana SBF 目標/案例
-cmake --build build-release --target \
-  NeverDSBFMetadataTests NeverDSBFLoaderTests NeverDSBFAnalyzerTests \
-  NeverDSBFSemanticTests NeverDSBFLLVMEmitterTests NeverDSBFEmitterTests \
-  NeverDSBFIntegrationTests --parallel 4
-ctest --test-dir build-release --build-config Release \
-  -R 'SBF' --output-on-failure --parallel 4
+cmake --build build-release --target check-neverd-sbf --parallel 4
 ```
 
 使用 GoogleTest 衍生的 CTest 名稱執行單一迴歸：
@@ -395,17 +396,18 @@ CI 在 Linux、macOS 和 Windows 上以 Release 開啟測試建置，先稽核�
 `NeverDSBFProgramImageTests`、`NeverDSBFMalformedCorpusTests`、
 `NeverDSBFISAConformanceTests`、`NeverDSBFUpstreamConformanceTests`、
 `NeverDSBFLLVMDifferentialTests`、`NeverDSBFSourceDifferentialTests`，以及 metadata、
-loader、analyzer、semantic、emitter、integration target。integrated profile 在
-14 個 binary 中通過 145/145 個 case。
+loader、analyzer、semantic、emitter、integration target。integrated profile 記錄
+命名 target 與結果，不固定快速變動的匯總 case 數。
 
-sanitizer profile 分開建置於 `build-sbf-asan-ubsan`。13 個 core binary 的
-141/141 個 case 全數通過，且沒有 ASan/UBSan report；prebuilt package 缺少必要的
+sanitizer profile 分開建置於 `build-sbf-asan-ubsan`。focused target 以 fail-fast
+方式執行且沒有 ASan/UBSan report；prebuilt package 缺少必要的
 fork-only header，因此 integration 在 integrated LLVM build 執行。
 
 ```bash
 cmake --build build-sbf-asan-ubsan --parallel 4 --target \
   NeverDSBFMetadataTests NeverDSBFProgramImageTests NeverDSBFLoaderTests \
   NeverDSBFAnalyzerTests NeverDSBFISAConformanceTests \
+  NeverDSBFVerifierTests NeverDSBFAgaveConformanceTests \
   NeverDSBFSemanticTests NeverDSBFEmitterTests NeverDSBFLLVMEmitterTests \
   NeverDSBFLLVMDifferentialTests NeverDSBFSourceDifferentialTests \
   NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests \
@@ -414,6 +416,45 @@ cmake --build build-sbf-asan-ubsan --parallel 4 --target \
 ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:strict_string_checks=1 \
 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
 NEVERD_SBPF_ROOT=/path/to/sbpf \
+NEVERD_AGAVE_CONFORMANCE_ROOT=/path/to/firedancer-test-vectors \
+NEVERD_AGAVE_CONFORMANCE_REVISION=68bb4af40235562e8852fa23d5727e49c2a0b862 \
 ctest --test-dir build-sbf-asan-ubsan --output-on-failure --parallel 4 \
   -L '^NeverDSBF' -E 'SBFIntegration'
 ```
+
+### 固定的 SBF 證據快照（2026-08-24）
+
+gate 將 Anza `sbpf` 固定於
+`2510663bb8d894e8e3094be351e4bb4b604f1f84`、Agave 固定於
+`ef210d67f2fabeee1730498188fa78854260c679`、Solana SDK 固定於
+`122f32e571ce39face4beffaccea733e37c207fd`。官方 ELF manifest 全部 23/23 通過；
+`NeverDSBFExternalOracleTests` 經 `SBFOfficialOracleProtocol.def` 與
+`SBFOfficialVerifierCases.def` 與 `SBFOfficialExecutionConstants.def` 對照
+1,411 個 opcode/verifier boundary case。
+`SBFOfficialELFMutations.def` 是畸形 ELF 的 table-driven contract；總數仍會演進，
+因此不固定。
+另有獨立的 `41-case strict ELF differential`，將完整 strict-v3 mutation matrix 送入
+官方 `verify-elf-batch` 與 NeverD；這 41 個 case 不計入 1,411 總數。
+`NeverDSBFAgaveConformanceTests` 驗證 Firedancer test-vectors 的
+`68bb4af40235562e8852fa23d5727e49c2a0b862`，比對全部 1,955 `sol_compat_elf_loader_v1` 個 loader fixture
+（接受 1,399、拒絕 556），並針對每個接受的 ELF 比較 `entry_pc`、`text_off`、`text_cnt`、
+`rodata_hash` 與 `calldests_hash`。此 gate 不執行後續 instruction verifier。
+
+額外的官方執行矩陣分開統計：恰有 508 個 active `(Version,Opcode)` case，另有
+58 個 boundary case，共 566 個 exact execution case。它既不取代、也不計入
+1,411 個 verifier probe 或 `41-case strict ELF differential`。
+Linux Release CI 使用 `--print-pinned-revision`、`--print-test-vectors-revision` 與
+`--print-toolchain`，並匯出 `NEVERD_SBPF_ORACLE` 和
+`NEVERD_AGAVE_CONFORMANCE_ROOT`，因此兩個 external gate 都強制執行；一般本機執行
+未提供明確 oracle/corpus env 時仍會發現 case，但允許 skip。
+
+`SBF_RUNTIME_VERSION` 讓 `RuntimeVersionPolicy::ChainProfile` 依歷史 cluster/slot
+計算：官方 feature account activation 使最大 ISA 由 V0 依序推進至 V1、V2、V3；
+目前仍為 V3。明確 v4 使用 `RuntimeVersionPolicy::UpstreamToolchain` 做 offline 分析。
+目前 10 MiB 上限精確為
+`10'485'760` byte；65,536 僅是歷史 provenance/test。`SBFFaultCodes.def` 固定
+execution fault 的穩定值；`SBFSourceStatuses.def` 獨立擁有 generated-source ABI。
+
+10,000 規模 fixture 守護 worklist、function ownership 與 multi-latch，不固定特定機器
+的耗時。cluster/account/slot row 支援 `RPC activation audit`，一般測試仍保持
+deterministic 與 offline。

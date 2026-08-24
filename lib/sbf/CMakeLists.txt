@@ -7,7 +7,10 @@ add_neverd_component_library(NeverDSBF
   analysis/SBFDataflow.cpp
   analysis/SBFDataflowScratch.cpp
   analysis/SBFDataflowTransfer.cpp
+  analysis/SBFFunctionBody.cpp
+  analysis/SBFInstructionValidation.cpp
   analysis/SBFStructuredCFG.cpp
+  analysis/SBFVerifier.cpp
   emit/SBFCEmitter.cpp
   emit/SBFCEmitterInstruction.cpp
   emit/SBFCEmitterStructured.cpp
@@ -22,6 +25,7 @@ add_neverd_component_library(NeverDSBF
   runtime/SBFInterpreter.cpp
   runtime/SBFInterpreterSupport.cpp
   runtime/SBFOpcodes.cpp
+  runtime/SBFRuntimeEnvironment.cpp
   runtime/SBFRuntimeProfile.cpp
   runtime/SBFSemantics.cpp
   runtime/SBFSyscalls.cpp

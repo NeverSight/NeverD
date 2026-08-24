@@ -131,10 +131,50 @@ std::optional<Loader> loaderForAddress(KnownAddress Address) {
 // The gates
 //===----------------------------------------------------------------------===//
 
+llvm::ArrayRef<RuntimeFeatureDomainInfo> runtimeFeatureDomainInfos() {
+  static const std::array Table = {
+#define SBF_RUNTIME_FEATURE_DOMAIN(ID, NAME, SUMMARY)                          \
+  RuntimeFeatureDomainInfo{RuntimeFeatureDomain::ID, NAME, SUMMARY},
+#include "neverd/sbf/runtime/SBFRuntimeFeatures.def"
+  };
+  return Table;
+}
+
+llvm::StringRef runtimeFeatureDomainName(RuntimeFeatureDomain Domain) {
+  if (!isValidRuntimeFeatureDomain(Domain))
+    return {};
+  return runtimeFeatureDomainInfos()[static_cast<size_t>(Domain)].Name;
+}
+
+llvm::ArrayRef<RuntimeFeatureDispositionInfo> runtimeFeatureDispositionInfos() {
+  static const std::array Table = {
+#define SBF_RUNTIME_FEATURE_DISPOSITION(ID, NAME, SUMMARY)                     \
+  RuntimeFeatureDispositionInfo{RuntimeFeatureDisposition::ID, NAME, SUMMARY},
+#include "neverd/sbf/runtime/SBFRuntimeFeatures.def"
+  };
+  return Table;
+}
+
+llvm::StringRef
+runtimeFeatureDispositionName(RuntimeFeatureDisposition Disposition) {
+  if (!isValidRuntimeFeatureDisposition(Disposition))
+    return {};
+  return runtimeFeatureDispositionInfos()[static_cast<size_t>(Disposition)]
+      .Name;
+}
+
 llvm::ArrayRef<RuntimeFeatureInfo> runtimeFeatureInfos() {
   static const std::array Table = {
-#define SBF_RUNTIME_FEATURE(ID, NAME, GATE, ADDRESS, SIMD, SUMMARY)            \
-  RuntimeFeatureInfo{RuntimeFeature::ID, NAME, GATE, ADDRESS, SIMD, SUMMARY},
+#define SBF_RUNTIME_FEATURE(ID, NAME, GATE, ADDRESS, SIMD, DOMAIN,             \
+                            DISPOSITION, SUMMARY)                              \
+  RuntimeFeatureInfo{RuntimeFeature::ID,                                       \
+                     NAME,                                                     \
+                     GATE,                                                     \
+                     ADDRESS,                                                  \
+                     SIMD,                                                     \
+                     RuntimeFeatureDomain::DOMAIN,                             \
+                     RuntimeFeatureDisposition::DISPOSITION,                   \
+                     SUMMARY},
 #include "neverd/sbf/runtime/SBFRuntimeFeatures.def"
   };
   return Table;

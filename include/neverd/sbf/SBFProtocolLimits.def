@@ -15,6 +15,10 @@
 #define SBF_PROTOCOL_LIMIT(NAME, VALUE, SOURCE)
 #endif
 
+// anza-xyz/sbpf/src/ebpf.rs defines every encoded instruction as eight bytes.
+// Keep the width in the same authority as limits derived from encoded size.
+SBF_PROTOCOL_LIMIT(InstructionByteCount, 8, SBPFMain)
+
 // anza-xyz/sbpf/src/ebpf.rs retains this historical constant as
 // PROG_MAX_INSNS, although the current loader and verifier do not enforce it.
 SBF_PROTOCOL_LIMIT(LegacyProgramInstructionCount, 65'536, SBPFMain)
@@ -23,6 +27,20 @@ SBF_PROTOCOL_LIMIT(LegacyProgramInstructionCount, 65'536, SBPFMain)
 // data length. A deployable ELF is necessarily smaller than its containing
 // program-data account, so this is a conservative hostile-input ceiling.
 SBF_PROTOCOL_LIMIT(MaxProgramAccountDataSize, 10'485'760, SolanaSDKMaster)
+
+// anza-xyz/sbpf/src/elf_parser/mod.rs bounds every section name while parsing
+// the execution-relevant legacy ELF inventory. The NUL terminator must occur
+// inside this many bytes.
+SBF_PROTOCOL_LIMIT(ELFSectionNameByteLimit, 16, SBPFMain)
+
+// Static function labels are optional debug metadata. Latest sbpf keeps names
+// whose NUL terminator occurs inside this larger, non-consensus window and
+// skips only an individual label when it does not.
+SBF_PROTOCOL_LIMIT(ELFDebugSymbolNameByteLimit, 255, SBPFMain)
+
+// anza-xyz/sbpf/src/elf_parser/mod.rs bounds names resolved by a dynamic
+// relocation. The NUL terminator must occur inside this many bytes.
+SBF_PROTOCOL_LIMIT(RelocationSymbolNameByteLimit, 64, SBPFMain)
 
 // anza-xyz/solana-sdk/pubkey/src/lib.rs bounds address derivation. The runtime
 // rejects a call that exceeds either, so recovery reading a seed array stops

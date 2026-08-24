@@ -30,6 +30,10 @@ std::string dumpSolanaModel(const SolanaModel &Model) {
   std::string Buffer;
   llvm::raw_string_ostream OS(Buffer);
 
+  if (Model.ScratchPrecision != ScratchRecoveryPrecision::Exact)
+    OS << "recovery scratch-precision="
+       << getScratchRecoveryPrecisionInfo(Model.ScratchPrecision).APIName
+       << "\n";
   if (Model.ProgramId)
     OS << "program-id " << formatPubkey(*Model.ProgramId) << "\n";
   if (Model.IsAnchor)

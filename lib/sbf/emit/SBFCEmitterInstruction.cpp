@@ -13,6 +13,8 @@
 
 #include "SBFCEmitterDetail.h"
 
+#include "neverd/sbf/emit/SBFSourceStatus.h"
+
 #include "llvm/ADT/StringExtras.h"
 
 #include <cstdlib>
@@ -74,13 +76,14 @@ void emitAdvance(llvm::raw_ostream &OS, const MedInstruction &Instruction,
   if (Next < InstructionCount)
     OS << "        pc = " << Next << "; continue;\n";
   else
-    OS << "        return NEVERD_SBF_EXECUTION_OVERRUN;\n";
+    OS << "        return " << cSourceStatusName(FaultCode::ExecutionOverrun)
+       << ";\n";
 }
 
 void emitPushFrame(llvm::raw_ostream &OS, const MedInstruction &Instruction,
                    const SBFProgram &Program) {
   OS << "        if (depth + 1 >= NEVERD_SBF_MAX_CALL_DEPTH) return "
-        "NEVERD_SBF_CALL_DEPTH;\n"
+     << cSourceStatusName(FaultCode::CallDepth) << ";\n"
      << "        return_pc[depth] = " << Instruction.Slot + 1 << ";\n"
      << "        for (i = 0; i < NEVERD_SBF_SAVED_REGISTERS; ++i) "
         "saved[depth][i] = r[NEVERD_SBF_FIRST_SAVED_REGISTER + i];\n"
@@ -143,6 +146,8 @@ std::string comparison(const MedInstruction &Instruction) {
 bool emitLinearInstruction(llvm::raw_ostream &OS,
                            const MedInstruction &Instruction,
                            llvm::StringRef Indent) {
+  if (Instruction.Op == Operation::Invalid)
+    return false;
   const std::string D = reg(Instruction.Dst);
   const std::string S = source(Instruction);
   switch (Instruction.Op) {
@@ -207,7 +212,8 @@ bool emitLinearInstruction(llvm::raw_ostream &OS,
   case Operation::URem:
     OS << Indent << "if (("
        << (Instruction.Width == kWordBitWidth ? "(uint32_t)" : "") << S
-       << ") == 0) return NEVERD_SBF_DIVIDE_BY_ZERO;\n";
+       << ") == 0) return " << cSourceStatusName(FaultCode::DivideByZero)
+       << ";\n";
     emitAssign(OS, Instruction,
                (Instruction.Width == kWordBitWidth ? "(uint32_t)" : "") + D +
                    (Instruction.Op == Operation::UDiv ? " / " : " % ") +
@@ -216,10 +222,13 @@ bool emitLinearInstruction(llvm::raw_ostream &OS,
     break;
   case Operation::SDiv:
   case Operation::SRem:
-    OS << Indent << "{ int fault = 0; uint64_t value = nd_sdivrem(" << D << ", "
-       << S << ", " << unsigned(Instruction.Width) << ", "
+    OS << Indent << "{ neverd_sbf_status_v2 fault = "
+       << cSourceStatusName(SourceStatus::Ok)
+       << "; uint64_t value = nd_sdivrem(" << D << ", " << S << ", "
+       << unsigned(Instruction.Width) << ", "
        << (Instruction.Op == Operation::SRem ? 1 : 0)
-       << ", &fault); if (fault) return (neverd_sbf_status)fault;\n";
+       << ", &fault); if (fault != " << cSourceStatusName(SourceStatus::Ok)
+       << ") return fault;\n";
     emitAssign(OS, Instruction, "value", (Indent + "  ").str());
     OS << Indent << "}\n";
     break;
@@ -250,10 +259,17 @@ bool emitLinearInstruction(llvm::raw_ostream &OS,
         word(static_cast<uint64_t>(
             std::abs(static_cast<int>(Instruction.Offset))));
     OS << Indent
-       << "{ uint64_t value = 0; if (!env || !env->load || "
+       << "{ uint64_t value = 0; neverd_sbf_status_v2 runtime_status; if "
+          "(!env "
+          "|| !env->load) return "
+       << cSourceStatusName(FaultCode::MemoryAccess)
+       << "; runtime_status = nd_runtime_status(env, "
           "env->load(env->context, "
-       << Address << ", " << unsigned(Instruction.Width)
-       << ", &value) != 0) return NEVERD_SBF_MEMORY_ACCESS;\n";
+       << Address << ", " << unsigned(Instruction.Width) << ", &value), "
+       << cSourceStatusName(FaultCode::MemoryAccess) << ", "
+       << cSourceStatusName(FaultCode::MemoryAccess)
+       << "); if (runtime_status != " << cSourceStatusName(SourceStatus::Ok)
+       << ") return runtime_status;\n";
     emitAssign(OS, Instruction, "value", (Indent + "  ").str());
     OS << Indent << "}\n";
     break;
@@ -263,22 +279,34 @@ bool emitLinearInstruction(llvm::raw_ostream &OS,
         reg(Instruction.Dst) + (Instruction.Offset < 0 ? " - " : " + ") +
         word(static_cast<uint64_t>(
             std::abs(static_cast<int>(Instruction.Offset))));
-    OS << Indent << "if (!env || !env->store || env->store(env->context, "
-       << Address << ", " << unsigned(Instruction.Width) << ", " << S
-       << ") != 0) return NEVERD_SBF_MEMORY_ACCESS;\n";
+    OS << Indent
+       << "{ neverd_sbf_status_v2 runtime_status; if (!env || !env->store) "
+          "return "
+       << cSourceStatusName(FaultCode::MemoryAccess)
+       << "; runtime_status = nd_runtime_status(env, "
+          "env->store(env->context, "
+       << Address << ", " << unsigned(Instruction.Width) << ", " << S << "), "
+       << cSourceStatusName(FaultCode::MemoryAccess) << ", "
+       << cSourceStatusName(FaultCode::MemoryAccess)
+       << "); if (runtime_status != " << cSourceStatusName(SourceStatus::Ok)
+       << ") return runtime_status; }\n";
     break;
   }
   case Operation::Call:
-    if (Instruction.Call != CallKind::Syscall)
+    if (Instruction.Call != CallKind::Syscall &&
+        Instruction.Call != CallKind::Unresolved)
       return false;
     OS << Indent
-       << "{ uint64_t value = 0; if (!env || !env->syscall || "
-          "env->syscall(env->context, UINT32_C(0x"
+       << "{ uint64_t value = 0; neverd_sbf_status_v2 syscall_status; "
+          "syscall_status = nd_runtime_status(env, nd_syscall(env, "
+          "UINT32_C(0x"
        << llvm::utohexstr(Instruction.SyscallHash) << ")";
     emitArgumentRegisters(OS);
-    OS << ", &value) != 0) return "
-          "NEVERD_SBF_UNKNOWN_SYSCALL; "
-          "r[NEVERD_SBF_RETURN_REGISTER] = value; }\n";
+    OS << ", &value), " << cSourceStatusName(FaultCode::UnknownSyscall) << ", "
+       << cSourceStatusName(FaultCode::InvalidInstruction)
+       << "); if (syscall_status != " << cSourceStatusName(SourceStatus::Ok)
+       << ") return syscall_status"
+       << "; r[NEVERD_SBF_RETURN_REGISTER] = value; }\n";
     break;
   case Operation::Jump:
   case Operation::Eq:
@@ -313,8 +341,12 @@ void emitInstruction(llvm::raw_ostream &OS, const MedInstruction &Instruction,
 
   switch (Instruction.Op) {
   case Operation::Jump:
-    OS << "        pc = " << Instruction.BranchTarget.value_or(0)
-       << "; continue;\n";
+    if (!Instruction.BranchTarget) {
+      OS << "        return " << cSourceStatusName(FaultCode::InvalidBranch)
+         << ";\n";
+      return;
+    }
+    OS << "        pc = " << *Instruction.BranchTarget << "; continue;\n";
     return;
   case Operation::Eq:
   case Operation::Ne:
@@ -327,38 +359,69 @@ void emitInstruction(llvm::raw_ostream &OS, const MedInstruction &Instruction,
   case Operation::SLt:
   case Operation::SLe:
   case Operation::Set:
+    if (!Instruction.BranchTarget) {
+      OS << "        return " << cSourceStatusName(FaultCode::InvalidBranch)
+         << ";\n";
+      return;
+    }
     OS << "        pc = (" << comparison(Instruction) << ") ? "
-       << Instruction.BranchTarget.value_or(0) << " : " << Instruction.Slot + 1
+       << *Instruction.BranchTarget << " : " << Instruction.Slot + 1
        << "; continue;\n";
     return;
   case Operation::Call:
+    if (Instruction.Call == CallKind::Unsupported) {
+      OS << "        return "
+         << cSourceStatusName(FaultCode::InvalidInstruction) << ";\n";
+      return;
+    }
     if (Instruction.Call == CallKind::Internal && Instruction.CallTarget) {
+      if (Instruction.Dispatch ==
+          CallDispatchPolicy::LegacyRuntimeThenFunction) {
+        OS << "        { uint64_t value = 0; "
+              "neverd_sbf_status_v2 syscall_status = nd_runtime_status("
+              "env, nd_syscall(env, UINT32_C(0x"
+           << llvm::utohexstr(Instruction.SyscallHash) << ")";
+        emitArgumentRegisters(OS);
+        OS << ", &value), " << cSourceStatusName(FaultCode::UnknownSyscall)
+           << ", " << cSourceStatusName(FaultCode::InvalidInstruction)
+           << "); if (syscall_status == " << cSourceStatusName(SourceStatus::Ok)
+           << ") { r[NEVERD_SBF_RETURN_REGISTER] = value; } else if "
+              "(syscall_status != "
+           << cSourceStatusName(FaultCode::UnknownSyscall)
+           << ") return syscall_status; }\n";
+      }
       emitPushFrame(OS, Instruction, Program);
       OS << "        pc = " << *Instruction.CallTarget << "; continue;\n";
       return;
     }
-    OS << "        return NEVERD_SBF_UNKNOWN_SYSCALL;\n";
+    OS << "        return " << cSourceStatusName(FaultCode::UnknownSyscall)
+       << ";\n";
     return;
   case Operation::CallX:
     emitPushFrame(OS, Instruction, Program);
     OS << "        { uint64_t target = r[" << unsigned(Instruction.CallRegister)
-       << "]; if (target < NEVERD_SBF_TEXT_ADDRESS) return "
-          "NEVERD_SBF_UNKNOWN_FUNCTION; pc = (uint32_t)((target - "
-          "NEVERD_SBF_TEXT_ADDRESS) / NEVERD_SBF_INSTRUCTION_SIZE); "
-          "if (pc >= NEVERD_SBF_INSTRUCTION_COUNT) return "
-          "NEVERD_SBF_UNKNOWN_FUNCTION; continue; }\n";
+       << "], target_slot; if (target < NEVERD_SBF_TEXT_ADDRESS) return "
+       << cSourceStatusName(FaultCode::UnknownIndirectCall)
+       << "; target_slot = (target - NEVERD_SBF_TEXT_ADDRESS) / "
+          "NEVERD_SBF_INSTRUCTION_SIZE; if (target_slot >= "
+          "(uint64_t)NEVERD_SBF_INSTRUCTION_COUNT) return "
+       << cSourceStatusName(FaultCode::UnknownIndirectCall)
+       << "; pc = (uint32_t)target_slot; continue; }\n";
     return;
   case Operation::Exit:
     OS << "        if (depth == 0) { if (result) *result = "
           "r[NEVERD_SBF_RETURN_REGISTER]; return "
-          "NEVERD_SBF_OK; }\n"
+       << cSourceStatusName(SourceStatus::Ok) << "; }\n"
        << "        --depth; for (i = 0; i < NEVERD_SBF_SAVED_REGISTERS; ++i) "
           "r[NEVERD_SBF_FIRST_SAVED_REGISTER + i] = saved[depth][i];\n"
        << "        r[NEVERD_SBF_FRAME_POINTER] = saved_fp[depth]; pc = "
           "return_pc[depth]; continue;\n";
     return;
   case Operation::Invalid:
-    OS << "        return NEVERD_SBF_INVALID_INSTRUCTION;\n";
+    OS << "        return "
+       << cSourceStatusName(
+              executionFaultForValidationRule(Instruction.InvalidReason))
+       << ";\n";
     return;
   case Operation::LoadImm:
   case Operation::Load:

@@ -1,0 +1,123 @@
+//===- SBFOfficialExecutionCases.def - High-value execution cases -*- C++
+//-*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_OFFICIAL_EXECUTION_CASE(ID, NAME, BUILDER, VERSION_MASK, BUDGET,
+//                             OUTCOME, FAULT, TARGET_HITS)
+//
+// Each row expands over the concrete versions in VERSION_MASK. The resulting
+// pinned matrix is intentionally small enough for every release gate and rich
+// enough to cover version boundaries, runtime faults, call precedence,
+// memory effects, metering precedence, and syscall side effects.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_OFFICIAL_EXECUTION_CASE
+#define SBF_OFFICIAL_EXECUTION_CASE(ID, NAME, BUILDER, VERSION_MASK, BUDGET,   \
+                                    OUTCOME, FAULT, TARGET_HITS)
+#endif
+
+SBF_OFFICIAL_EXECUTION_CASE(Alu32NegativeResult, "alu32-negative-result",
+                            Alu32NegativeResult, VersionMask::All, 64, Returned,
+                            None, 1)
+SBF_OFFICIAL_EXECUTION_CASE(Mov32NegativeRegister, "mov32-negative-register",
+                            Mov32NegativeRegister, VersionMask::All, 64,
+                            Returned, None, 1)
+SBF_OFFICIAL_EXECUTION_CASE(Sub32ImmediateOrder, "sub32-immediate-order",
+                            Sub32ImmediateOrder,
+                            executionVersionMask(Version::V1, Version::V2), 64,
+                            Returned, None, 1)
+SBF_OFFICIAL_EXECUTION_CASE(Sub64ImmediateOrder, "sub64-immediate-order",
+                            Sub64ImmediateOrder,
+                            executionVersionMask(Version::V1, Version::V2), 64,
+                            Returned, None, 1)
+SBF_OFFICIAL_EXECUTION_CASE(CallXUnalignedFloor, "callx-unaligned-floor",
+                            CallXUnalignedFloor,
+                            executionVersionMask(Version::V2, Version::V3), 64,
+                            Returned, None, 1)
+SBF_OFFICIAL_EXECUTION_CASE(CallXOutsideText, "callx-outside-text",
+                            CallXOutsideText,
+                            executionVersionMask(Version::V0, Version::V2,
+                                                 Version::V3, Version::V4),
+                            64, Faulted, UnknownIndirectCall, 1)
+SBF_OFFICIAL_EXECUTION_CASE(UnknownImmediateCall, "unknown-immediate-call",
+                            UnknownImmediateCall,
+                            executionVersionMask(Version::V0, Version::V3), 64,
+                            Faulted, UnresolvedCall, 1)
+SBF_OFFICIAL_EXECUTION_CASE(RecursiveCallDepth, "recursive-call-depth",
+                            RecursiveCallDepth,
+                            executionVersionMask(Version::V0, Version::V3), 256,
+                            Faulted, CallDepth, 64)
+SBF_OFFICIAL_EXECUTION_CASE(MemoryLoadLastByte, "memory-load-last-byte",
+                            MemoryLoadLastByte, VersionMask::V3Plus, 64,
+                            Returned, None, 1)
+SBF_OFFICIAL_EXECUTION_CASE(MemoryLoadPastEnd, "memory-load-past-end",
+                            MemoryLoadPastEnd, VersionMask::V3Plus, 64, Faulted,
+                            MemoryAccess, 1)
+SBF_OFFICIAL_EXECUTION_CASE(DivisionZero32Legacy, "division-zero-32-legacy",
+                            DivisionZero32Legacy, VersionMask::NotV2, 64,
+                            Faulted, DivideByZero, 1)
+SBF_OFFICIAL_EXECUTION_CASE(DivisionZero64Legacy, "division-zero-64-legacy",
+                            DivisionZero64Legacy, VersionMask::NotV2, 64,
+                            Faulted, DivideByZero, 1)
+SBF_OFFICIAL_EXECUTION_CASE(UDivisionZero32, "udivision-zero-32",
+                            UDivisionZero32, VersionMask::V2Only, 64, Faulted,
+                            DivideByZero, 1)
+SBF_OFFICIAL_EXECUTION_CASE(UDivisionZero64, "udivision-zero-64",
+                            UDivisionZero64, VersionMask::V2Only, 64, Faulted,
+                            DivideByZero, 1)
+SBF_OFFICIAL_EXECUTION_CASE(SDivisionZero32, "sdivision-zero-32",
+                            SDivisionZero32, VersionMask::V2Only, 64, Faulted,
+                            DivideByZero, 1)
+SBF_OFFICIAL_EXECUTION_CASE(SDivisionZero64, "sdivision-zero-64",
+                            SDivisionZero64, VersionMask::V2Only, 64, Faulted,
+                            DivideByZero, 1)
+SBF_OFFICIAL_EXECUTION_CASE(SDivisionOverflow32Immediate,
+                            "sdivision-overflow-32-immediate",
+                            SDivisionOverflow32Immediate, VersionMask::V2Only,
+                            64, Faulted, DivideOverflow, 1)
+SBF_OFFICIAL_EXECUTION_CASE(SDivisionOverflow32Register,
+                            "sdivision-overflow-32-register",
+                            SDivisionOverflow32Register, VersionMask::V2Only,
+                            64, Faulted, DivideOverflow, 1)
+SBF_OFFICIAL_EXECUTION_CASE(SDivisionOverflow64Immediate,
+                            "sdivision-overflow-64-immediate",
+                            SDivisionOverflow64Immediate, VersionMask::V2Only,
+                            64, Faulted, DivideOverflow, 1)
+SBF_OFFICIAL_EXECUTION_CASE(SDivisionOverflow64Register,
+                            "sdivision-overflow-64-register",
+                            SDivisionOverflow64Register, VersionMask::V2Only,
+                            64, Faulted, DivideOverflow, 1)
+SBF_OFFICIAL_EXECUTION_CASE(LDDWWideSignBoundary, "lddw-wide-sign-boundary",
+                            LDDWWideSignBoundary, VersionMask::NotV2, 64,
+                            Returned, None, 1)
+SBF_OFFICIAL_EXECUTION_CASE(Jmp32UnsignedLowHalf, "jmp32-unsigned-low-half",
+                            Jmp32UnsignedLowHalf, VersionMask::V3Plus, 64,
+                            Returned, None, 1)
+SBF_OFFICIAL_EXECUTION_CASE(Jmp32SignedLowHalf, "jmp32-signed-low-half",
+                            Jmp32SignedLowHalf, VersionMask::V3Plus, 64,
+                            Returned, None, 1)
+SBF_OFFICIAL_EXECUTION_CASE(LegacySyscallFunctionCollision,
+                            "legacy-syscall-function-collision",
+                            LegacySyscallFunctionCollision, VersionMask::V0, 64,
+                            Returned, None, 1)
+SBF_OFFICIAL_EXECUTION_CASE(StaticProbeSyscall, "static-probe-syscall",
+                            StaticProbeSyscall, VersionMask::V3Plus, 64,
+                            Returned, None, 1)
+SBF_OFFICIAL_EXECUTION_CASE(CallXContinuationInvalidFetch,
+                            "callx-continuation-invalid-fetch",
+                            CallXContinuationInvalidFetch, VersionMask::V3, 16,
+                            Faulted, InvalidInstruction, 1)
+SBF_OFFICIAL_EXECUTION_CASE(CallXContinuationMeterPrecedesFetch,
+                            "callx-continuation-meter-precedes-fetch",
+                            CallXContinuationMeterPrecedesFetch,
+                            VersionMask::V3, 2, Faulted, InstructionMeter, 0)
+SBF_OFFICIAL_EXECUTION_CASE(CallXContinuationFetchAtBudget,
+                            "callx-continuation-fetch-at-budget",
+                            CallXContinuationFetchAtBudget, VersionMask::V3, 3,
+                            Faulted, InvalidInstruction, 1)
+
+#undef SBF_OFFICIAL_EXECUTION_CASE

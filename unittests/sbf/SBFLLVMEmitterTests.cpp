@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <array>
 #include <initializer_list>
+#include <limits>
 #include <set>
 #include <string>
 #include <vector>
@@ -227,6 +228,49 @@ TEST(SBFLLVMEmitter, UsesCheckedRuntimeCallsForMemoryAndSyscalls) {
   EXPECT_NE(IR.find("memory.load.fault"), std::string::npos);
   EXPECT_NE(IR.find("memory.store.fault"), std::string::npos);
   EXPECT_NE(IR.find("syscall.fault"), std::string::npos);
+}
+
+TEST(SBFLLVMEmitter, OffersAnExplicitFeatureAwareSyscallABI) {
+  MedInstruction Syscall =
+      instruction(0, Opcode::CALL_IMM, Operation::Call, OperandForm::CallImm);
+  Syscall.Call = CallKind::Syscall;
+  Syscall.SyscallHash = hashSymbolName("sol_log_64_");
+  MedInstruction Exit =
+      instruction(1, Opcode::EXIT, Operation::Exit, OperandForm::None);
+  SBFProgram Program = makeProgram(Version::V3, {Syscall, Exit});
+  Program.ActiveRuntimeFeatures =
+      RuntimeFeature::SyscallParameterAddressRestrictions |
+      RuntimeFeature::AccountDataDirectMapping |
+      RuntimeFeature::DisableAllocFreeDeployment;
+
+  LLVMEmitterOptions Options;
+  Options.SyscallABI = LLVMRuntimeSyscallABI::FeatureAware;
+  llvm::LLVMContext Context;
+  auto Module = emitLLVM(Program, Context, Options);
+  ASSERT_TRUE(static_cast<bool>(Module)) << llvm::toString(Module.takeError());
+
+  EXPECT_EQ((*Module)->getFunction(kRuntimeSyscallName), nullptr);
+  const llvm::Function *Runtime =
+      (*Module)->getFunction(kRuntimeFeatureAwareSyscallName);
+  ASSERT_NE(Runtime, nullptr);
+  EXPECT_EQ(Runtime->arg_size(), kRuntimeFeatureAwareSyscallArgumentCount);
+  EXPECT_TRUE(
+      Runtime->getArg(kRuntimeFeatureAwareSyscallFeaturesParameter)
+          ->getType()
+          ->isIntegerTy(std::numeric_limits<RuntimeFeatureMask>::digits));
+  EXPECT_TRUE(Runtime->getArg(kRuntimeFeatureAwareSyscallOutputParameter)
+                  ->hasNoCaptureAttr());
+  EXPECT_TRUE(Runtime->hasParamAttribute(
+      kRuntimeFeatureAwareSyscallOutputParameter, llvm::Attribute::WriteOnly));
+
+  const std::string IR = emitLLVMText(**Module);
+  const RuntimeFeatureMask ExpectedBits =
+      runtimeFeatureMask(Program.ActiveRuntimeFeatures);
+  EXPECT_NE(
+      IR.find("i" +
+              std::to_string(std::numeric_limits<RuntimeFeatureMask>::digits) +
+              " " + std::to_string(ExpectedBits)),
+      std::string::npos);
 }
 
 } // namespace

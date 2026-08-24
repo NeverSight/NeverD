@@ -43,7 +43,7 @@ target 이름과 같은 CTest label을 지정합니다.
 | `unittests/lift` | `NeverDLiftTests` | Decoder/lifter LowIR 모양, IR 단계, loader, relocation, 포맷 fixture, 디컴파일, 대표 patch 흐름 |
 | `unittests/semantic`의 대부분 파일 | `NeverDSemanticTests` | 명령어, ABI, 제어 흐름, C 표현식, lift/recompile 차등 의미론 |
 | `unittests/evm` | `NeverDEVMOpcodeTests`, `NeverDEVMBytecodeTests`, `NeverDEVMLoaderTests`, `NeverDEVMAnalyzerTests`, `NeverDEVMSemanticTests`, `NeverDEVMEmitterTests`, `NeverDEVMIntegrationTests` | hardfork metadata, input normalization, CFG/SSA/recovery, interpreter semantics, LLVM/C/Solidity differential execution, public API routing |
-| `unittests/sbf` | `NeverDSBFMetadataTests`, `NeverDSBFLoaderTests`, `NeverDSBFAnalyzerTests`, `NeverDSBFSemanticTests`, `NeverDSBFLLVMEmitterTests`, `NeverDSBFEmitterTests`, `NeverDSBFIntegrationTests` | v0-v4 메타데이터와 ELF 레이아웃, 엄격한 검증, CFG/복원, 독립 raw 실행, LLVM 검증, C/Rust 컴파일, 공개 API 라우팅 |
+| `unittests/sbf` | `NeverDSBFMetadataTests`, `NeverDSBFProgramImageTests`, `NeverDSBFLoaderTests`, `NeverDSBFAnalyzerTests`, `NeverDSBFVerifierTests`, `NeverDSBFISAConformanceTests`, `NeverDSBFAgaveConformanceTests`, `NeverDSBFSemanticTests`, `NeverDSBFEmitterTests`, `NeverDSBFLLVMEmitterTests`, `NeverDSBFLLVMDifferentialTests`, `NeverDSBFSourceDifferentialTests`, `NeverDSBFMalformedCorpusTests`, `NeverDSBFUpstreamConformanceTests`, `NeverDSBFExternalOracleTests`, `NeverDSBFSolanaModelTests`, `NeverDSBFIntegrationTests` | v0-v4 메타데이터와 ELF 레이아웃, 엄격한 verifier/loader 동작, 고정된 ELF 아티팩트 23개, 독립 official oracle, 모든 opcode 가용성, 적대적 입력, CFG/복원, 실행된 LLVM/C/Rust 차분 |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | 네 ISA×세 object 포맷 재작성/난독화 동등성 |
 | `unittests/semantic`의 집중 변환 파일 | `NeverDSwitchXformTests`, `NeverDIndCallXformTests`, `NeverDCFGLoopXformTests`, `NeverDTwoTableXformTests`, `NeverDAvxUpperXformTests` | 큰 의미론 바이너리에서 분리한 빠른 재링크 probe |
 | `unittests/corpus`(submodule) | `NeverDWindowsEHCorpusTests`, `NeverDRustEHCorpusTests`, `NeverDGoEHCorpusTests`, `NeverDCxxItaniumEHCorpusTests`, `NeverDObjCEHCorpusTests` | pin 된 실제 바이너리 317개에서 읽어내는 예외 및 런타임 metadata. 각 바이너리는 manifest에 복원이 넘어야 할 하한을 선언한다 |
@@ -291,6 +291,12 @@ maxima를 검증합니다.
 
 SBF 메타데이터 테스트는 모든 버전 기능, opcode 충돌 경계, Murmur3 syscall hash, 재배치, ELF machine, 레지스터, VM 주소 상수를 검증합니다. Loader fixture는 vendored 바이너리 없이 레거시 v0-v2 section 레이아웃과 section이 없는 엄격한 v3/v4 program-header 레이아웃을 모두 생성합니다.
 
+`NeverDSBFISAConformanceTests`는 v0-v4 각 version의 모든 byte encoding을 독립적으로
+감사한 typed manifest와 대조합니다. `NeverDSBFExternalOracleTests`는 activation 및
+boundary 결정을 별도로 build한 official Anza process와 비교합니다.
+`NeverDSBFUpstreamConformanceTests`는 pinned Anza revision의 ELF 23개 모두에 명시적
+outcome을 부여합니다.
+
 `NeverDSBFSemanticTests`는 검증된 명령 바이트를 직접 실행하고 MedIR을 사용하지 않으므로, 정규화된 IR을 변경하거나 손상해도 source oracle과 backend가 우연히 일치할 수 없습니다. 비단조 v2 시맨틱, 메모리, syscall, 내부 call frame, fault, trace, resource limit을 다룹니다. LLVM module은 검증하며, 생성 C는 warning을 error로 처리하고 Rust는 `-D warnings`로 컴파일합니다. 공개 API 테스트는 생성된 엄격한 SBF ELF에서 모든 IR 단계, 디스어셈블리, CFG, 메타데이터, LLVM, C, Rust를 통과합니다.
 
 ## 일회성 target
@@ -348,12 +354,7 @@ ctest --test-dir build-release --build-config Release \
   -R 'EVM' --output-on-failure --parallel 4
 
 # 모든 집중 Solana SBF target/case
-cmake --build build-release --target \
-  NeverDSBFMetadataTests NeverDSBFLoaderTests NeverDSBFAnalyzerTests \
-  NeverDSBFSemanticTests NeverDSBFLLVMEmitterTests NeverDSBFEmitterTests \
-  NeverDSBFIntegrationTests --parallel 4
-ctest --test-dir build-release --build-config Release \
-  -R 'SBF' --output-on-failure --parallel 4
+cmake --build build-release --target check-neverd-sbf --parallel 4
 ```
 
 GoogleTest에서 파생된 CTest 이름으로 단일 회귀를 실행합니다.
@@ -420,16 +421,17 @@ audit한 다음 플랫폼별 label 제외를 적용합니다. 프로필은
 `NeverDSBFISAConformanceTests`, `NeverDSBFUpstreamConformanceTests`,
 `NeverDSBFLLVMDifferentialTests`, `NeverDSBFSourceDifferentialTests`와 metadata,
 loader, analyzer, semantic, emitter, integration target이 포함됩니다. integrated
-profile은 14 binary의 145/145 case를 통과합니다.
+profile은 변동하는 총계 대신 named target과 결과를 기록합니다.
 
-sanitizer profile은 `build-sbf-asan-ubsan`에 별도로 build합니다. 13 core binary의
-141/141 case가 ASan/UBSan report 없이 통과합니다. prebuilt package에 필요한
+sanitizer profile은 `build-sbf-asan-ubsan`에 별도로 build합니다. focused target을
+fail-fast로 실행해 ASan/UBSan report가 없음을 확인합니다. prebuilt package에 필요한
 fork-only header가 없으므로 integration은 integrated LLVM build에서 실행합니다.
 
 ```bash
 cmake --build build-sbf-asan-ubsan --parallel 4 --target \
   NeverDSBFMetadataTests NeverDSBFProgramImageTests NeverDSBFLoaderTests \
   NeverDSBFAnalyzerTests NeverDSBFISAConformanceTests \
+  NeverDSBFVerifierTests NeverDSBFAgaveConformanceTests \
   NeverDSBFSemanticTests NeverDSBFEmitterTests NeverDSBFLLVMEmitterTests \
   NeverDSBFLLVMDifferentialTests NeverDSBFSourceDifferentialTests \
   NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests \
@@ -438,6 +440,46 @@ cmake --build build-sbf-asan-ubsan --parallel 4 --target \
 ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:strict_string_checks=1 \
 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
 NEVERD_SBPF_ROOT=/path/to/sbpf \
+NEVERD_AGAVE_CONFORMANCE_ROOT=/path/to/firedancer-test-vectors \
+NEVERD_AGAVE_CONFORMANCE_REVISION=68bb4af40235562e8852fa23d5727e49c2a0b862 \
 ctest --test-dir build-sbf-asan-ubsan --output-on-failure --parallel 4 \
   -L '^NeverDSBF' -E 'SBFIntegration'
 ```
+
+### pinned SBF evidence snapshot (2026-08-24)
+
+gate는 Anza `sbpf`
+`2510663bb8d894e8e3094be351e4bb4b604f1f84`, Agave
+`ef210d67f2fabeee1730498188fa78854260c679`, Solana SDK
+`122f32e571ce39face4beffaccea733e37c207fd`를 고정합니다. official ELF manifest는
+23/23을 통과하고, `NeverDSBFExternalOracleTests`는 1,411 opcode/boundary case를
+`SBFOfficialOracleProtocol.def`, `SBFOfficialVerifierCases.def`,
+`SBFOfficialExecutionConstants.def`를 통해 대조합니다.
+`SBFOfficialELFMutations.def`가 malformed ELF의 table-driven contract이며 변동하는
+총계는 고정하지 않습니다.
+별도 축인 `41-case strict ELF differential`은 strict-v3 matrix 전체를 official
+`verify-elf-batch`와 NeverD에 통과시킵니다. 이 41 case는 1,411 total에 포함하지 않습니다.
+`NeverDSBFAgaveConformanceTests`는 Firedancer test-vectors의
+`68bb4af40235562e8852fa23d5727e49c2a0b862`를 인증하고 loader fixture 1,955 `sol_compat_elf_loader_v1`개
+(accept 1,399, reject 556)를 대조하고, 승인된 각 ELF에 대해 `entry_pc`, `text_off`,
+`text_cnt`, `rodata_hash`, `calldests_hash`를 비교합니다. 이 gate는 후속 instruction verifier를 실행하지 않습니다.
+
+추가 official execution matrix는 별도입니다. active `(Version,Opcode)` case 정확히
+508개와 boundary case 58개를 합쳐 exact execution case 566개입니다. 1,411개의
+verifier probe나 `41-case strict ELF differential`을 대체하지 않으며 그 합계에도 넣지 않습니다.
+Linux Release CI는 `--print-pinned-revision`, `--print-test-vectors-revision`,
+`--print-toolchain`을 사용하고 `NEVERD_SBPF_ORACLE`과
+`NEVERD_AGAVE_CONFORMANCE_ROOT`를 export하므로 두 external gate가 필수입니다. 명시
+oracle/corpus env가 없는 local run은 case를 discover하지만 skip할 수 있습니다.
+
+`SBF_RUNTIME_VERSION`에 따라 `RuntimeVersionPolicy::ChainProfile`은 historical
+cluster/slot을 반영하며 official feature account activation에 맞춰 maximum ISA를
+V0→V1→V2→V3으로 전진시킵니다. 현재는 V3입니다. 명시 v4는 offline 분석용
+`RuntimeVersionPolicy::UpstreamToolchain`을 사용합니다. 현재 10 MiB
+상한은 정확히 `10'485'760` byte이고, 65,536은 historical provenance/test뿐입니다.
+`SBFFaultCodes.def`는 execution fault의 안정된 값을, `SBFSourceStatuses.def`는 별도
+계층인 generated-source ABI를 소유합니다.
+
+10,000 scale fixture가 worklist, function ownership, multi-latch를 보호하며 machine별
+시간은 고정하지 않습니다. cluster/account/slot row는 일반 test를 deterministic 및
+offline으로 유지하면서 `RPC activation audit`를 가능하게 합니다.

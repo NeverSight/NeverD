@@ -28,15 +28,17 @@
 
 #include "neverd/Common.h"
 #include "neverd/debug/DebugInfoDiscovery.h"
+#include "neverd/sbf/analysis/SBFAnalysisLimits.h"
+#include "neverd/sbf/analysis/SBFFunctionBody.h"
 #include "neverd/sdk/NeverDPlugin.h"
 #include "neverd/support/BinaryLoading.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
-#include <iterator>
 
 using namespace neverd;
 using namespace neverd::sdk;
@@ -54,27 +56,35 @@ bool Session::synchronizeFunctions() {
   resetFunctionsFromImage();
 
   const sbf::SBFProgram &Program = *PipeResult.SBF;
-  for (const sbf::Function &Function : Program.High.Functions) {
-    uint64_t Size = 0;
-    for (size_t BlockID : Function.Blocks) {
-      if (BlockID >= Program.Low.Blocks.size())
-        continue;
-      const sbf::BasicBlock &Block = Program.Low.Blocks[BlockID];
-      Size += (Block.EndSlot - Block.StartSlot) * sbf::kInstructionSize;
-    }
+  const sbf::FunctionBodyIndex FunctionBodies(Program);
+  const sbf::FunctionBodyIndex::ByteSizeBatch FunctionSizes =
+      FunctionBodies.byteSizes(sbf::kFunctionBodyBatchBlockVisitBudget);
+  llvm::DenseMap<va_t, size_t> FunctionIndices;
+  FunctionIndices.reserve(Functions.size() + Program.High.Functions.size());
+  for (size_t FunctionID = 0; FunctionID < Functions.size(); ++FunctionID)
+    FunctionIndices.try_emplace(Functions[FunctionID].Entry, FunctionID);
 
-    auto Existing = std::find_if(
-        Functions.begin(), Functions.end(),
-        [&](const FuncInfo &Info) { return Info.Entry == Function.Address; });
-    if (Existing == Functions.end()) {
-      Functions.push_back({Function.Address, Size, Function.Name});
-      Existing = std::prev(Functions.end());
-    } else if (Existing->Size == 0) {
-      Existing->Size = Size;
+  for (size_t SBFID = 0; SBFID < Program.High.Functions.size(); ++SBFID) {
+    const sbf::Function &Function = Program.High.Functions[SBFID];
+    const uint64_t Size = FunctionSizes.Bytes[SBFID];
+    size_t FunctionID = 0;
+    if (auto Existing = FunctionIndices.find(Function.Address);
+        Existing != FunctionIndices.end()) {
+      FunctionID = Existing->second;
+      // SBF semantic reachability, not attacker-controlled ELF st_size, is the
+      // public function-size authority. A budget-exhausted batch is explicitly
+      // unknown and therefore overwrites any untrusted symbol size with zero.
+      Functions[FunctionID].Size = FunctionSizes.Exact.test(SBFID) ? Size : 0;
+    } else {
+      FunctionID = Functions.size();
+      Functions.push_back({Function.Address,
+                           FunctionSizes.Exact.test(SBFID) ? Size : 0,
+                           Function.Name});
+      FunctionIndices.try_emplace(Function.Address, FunctionID);
     }
     OriginalNames.try_emplace(Function.Address, Function.Name);
     if (auto Rename = Renames.find(Function.Address); Rename != Renames.end())
-      Existing->Name = Rename->second;
+      Functions[FunctionID].Name = Rename->second;
   }
   std::sort(Functions.begin(), Functions.end(),
             [](const FuncInfo &Left, const FuncInfo &Right) {

@@ -46,7 +46,7 @@ scoperto una label CTest uguale al nome del target eseguibile.
 | `unittests/lift` | `NeverDLiftTests` | Forme LowIR decoder/lifter, fasi IR, loader, relocation, fixture di formato, decompilazione e flussi patch rappresentativi |
 | La maggior parte di `unittests/semantic` | `NeverDSemanticTests` | Semantica differenziale di istruzioni, ABI, controllo, espressioni C e lift/recompile |
 | `unittests/evm` | `NeverDEVMOpcodeTests`, `NeverDEVMBytecodeTests`, `NeverDEVMLoaderTests`, `NeverDEVMAnalyzerTests`, `NeverDEVMSemanticTests`, `NeverDEVMEmitterTests`, `NeverDEVMIntegrationTests` | Metadata hardfork, normalizzazione input, CFG/SSA/recovery, semantica interpreter, esecuzione differenziale LLVM/C/Solidity e API pubblica |
-| `unittests/sbf` | `NeverDSBFMetadataTests`, `NeverDSBFLoaderTests`, `NeverDSBFAnalyzerTests`, `NeverDSBFSemanticTests`, `NeverDSBFLLVMEmitterTests`, `NeverDSBFEmitterTests`, `NeverDSBFIntegrationTests` | Metadati v0-v4 e layout ELF, verifica rigorosa, CFG/recupero, esecuzione raw indipendente, verifica LLVM, compilazione C/Rust e instradamento dell’API pubblica |
+| `unittests/sbf` | `NeverDSBFMetadataTests`, `NeverDSBFProgramImageTests`, `NeverDSBFLoaderTests`, `NeverDSBFAnalyzerTests`, `NeverDSBFVerifierTests`, `NeverDSBFISAConformanceTests`, `NeverDSBFAgaveConformanceTests`, `NeverDSBFSemanticTests`, `NeverDSBFEmitterTests`, `NeverDSBFLLVMEmitterTests`, `NeverDSBFLLVMDifferentialTests`, `NeverDSBFSourceDifferentialTests`, `NeverDSBFMalformedCorpusTests`, `NeverDSBFUpstreamConformanceTests`, `NeverDSBFExternalOracleTests`, `NeverDSBFSolanaModelTests`, `NeverDSBFIntegrationTests` | Metadati v0-v4 e layout ELF, comportamento rigoroso di verifier/loader, 23 artefatti ELF fissati, oracle ufficiale indipendente, disponibilità esaustiva degli opcode, input ostili, CFG/recupero e differenze eseguite LLVM/C/Rust |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | Equivalenza riscrittura/offuscamento su quattro ISA e tre formati oggetto |
 | File di trasformazione mirati in `unittests/semantic` | `NeverDSwitchXformTests`, `NeverDIndCallXformTests`, `NeverDCFGLoopXformTests`, `NeverDTwoTableXformTests`, `NeverDAvxUpperXformTests` | Sonde veloci da ricollegare separate dal grande binario semantico |
 | `unittests/corpus` (sottomodulo) | `NeverDWindowsEHCorpusTests`, `NeverDRustEHCorpusTests`, `NeverDGoEHCorpusTests`, `NeverDCxxItaniumEHCorpusTests`, `NeverDObjCEHCorpusTests` | Metadati di eccezioni e runtime letti da 317 binari reali fissati, ciascuno dichiarato in un manifest con le soglie minime che il suo recupero deve superare |
@@ -318,6 +318,13 @@ alias hardfork e massimi stack/host derivati.
 
 I test dei metadati SBF convalidano ogni funzionalità di versione, i confini di collisione degli opcode, gli hash syscall Murmur3, le rilocazioni e le costanti di machine ELF, registro e indirizzo VM. Le fixture del loader generano, senza binari inclusi, sia layout legacy v0-v2 a sezioni sia layout rigorosi v3/v4 senza sezioni e basati sui program header.
 
+`NeverDSBFISAConformanceTests` verifica ogni byte encoding per ciascuna versione
+v0-v4 rispetto a un manifest tipizzato sottoposto ad audit indipendente.
+`NeverDSBFExternalOracleTests` confronta poi le decisioni di attivazione e di
+confine con un processo Anza ufficiale costruito separatamente.
+`NeverDSBFUpstreamConformanceTests` assegna un esito esplicito a tutti i 23 ELF
+alla revisione Anza fissata.
+
 `NeverDSBFSemanticTests` esegue direttamente byte di istruzioni verificati e non usa MedIR; modificare o corrompere l’IR normalizzato non può quindi far concordare accidentalmente il source oracle con un backend. Copre la semantica v2 non monotona, memoria, syscall, frame di chiamata interni, fault, trace e limiti di risorse. I moduli LLVM vengono verificati; il C generato è compilato con i warning come errori e Rust con `-D warnings`. I test dell’API pubblica attraversano tutti gli stadi IR, disassembly, CFG, metadati, LLVM, C e Rust partendo da un ELF SBF rigoroso generato.
 
 ## Target in un solo comando
@@ -376,12 +383,7 @@ ctest --test-dir build-release --build-config Release \
   -R 'EVM' --output-on-failure --parallel 4
 
 # Tutti i target/casi Solana SBF mirati
-cmake --build build-release --target \
-  NeverDSBFMetadataTests NeverDSBFLoaderTests NeverDSBFAnalyzerTests \
-  NeverDSBFSemanticTests NeverDSBFLLVMEmitterTests NeverDSBFEmitterTests \
-  NeverDSBFIntegrationTests --parallel 4
-ctest --test-dir build-release --build-config Release \
-  -R 'SBF' --output-on-failure --parallel 4
+cmake --build build-release --target check-neverd-sbf --parallel 4
 ```
 
 Usa un nome CTest derivato da GoogleTest per una singola regressione:
@@ -455,10 +457,10 @@ indica coverage mancante. L’aggregato completo include
 `NeverDSBFISAConformanceTests`, `NeverDSBFUpstreamConformanceTests`,
 `NeverDSBFLLVMDifferentialTests` e `NeverDSBFSourceDifferentialTests`, oltre ai
 target metadata, loader, analyzer, semantic, emitter e integration. Il profilo
-integrato supera 145/145 casi in 14 binari.
+integrato registra target e risultati nominati, non un totale che cambia presto.
 
 Il profilo sanitizer viene costruito separatamente in `build-sbf-asan-ubsan`.
-Supera 141/141 casi core in 13 binari senza report ASan o UBSan; integration
+I target mirati girano fail-fast senza report ASan o UBSan; integration
 resta nella build LLVM integrata perché il package prebuilt omette l’header
 fork-only richiesto.
 
@@ -466,6 +468,7 @@ fork-only richiesto.
 cmake --build build-sbf-asan-ubsan --parallel 4 --target \
   NeverDSBFMetadataTests NeverDSBFProgramImageTests NeverDSBFLoaderTests \
   NeverDSBFAnalyzerTests NeverDSBFISAConformanceTests \
+  NeverDSBFVerifierTests NeverDSBFAgaveConformanceTests \
   NeverDSBFSemanticTests NeverDSBFEmitterTests NeverDSBFLLVMEmitterTests \
   NeverDSBFLLVMDifferentialTests NeverDSBFSourceDifferentialTests \
   NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests \
@@ -474,6 +477,50 @@ cmake --build build-sbf-asan-ubsan --parallel 4 --target \
 ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:strict_string_checks=1 \
 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
 NEVERD_SBPF_ROOT=/path/to/sbpf \
+NEVERD_AGAVE_CONFORMANCE_ROOT=/path/to/firedancer-test-vectors \
+NEVERD_AGAVE_CONFORMANCE_REVISION=68bb4af40235562e8852fa23d5727e49c2a0b862 \
 ctest --test-dir build-sbf-asan-ubsan --output-on-failure --parallel 4 \
   -L '^NeverDSBF' -E 'SBFIntegration'
 ```
+
+### Snapshot di evidenza SBF fissato (2026-08-24)
+
+La gate fissa Anza `sbpf` a
+`2510663bb8d894e8e3094be351e4bb4b604f1f84`, Agave a
+`ef210d67f2fabeee1730498188fa78854260c679` e Solana SDK a
+`122f32e571ce39face4beffaccea733e37c207fd`. Il manifest ELF ufficiale passa
+23/23; `NeverDSBFExternalOracleTests` confronta 1,411 casi opcode/boundary via
+`SBFOfficialOracleProtocol.def`, `SBFOfficialVerifierCases.def` e
+`SBFOfficialExecutionConstants.def`.
+`SBFOfficialELFMutations.def` è il contratto tabellare degli ELF malformati; il
+totale variabile non viene fissato.
+Separatamente, il `41-case strict ELF differential` esegue l’intera matrice
+strict-v3 tramite `verify-elf-batch` ufficiale e NeverD; i suoi 41 casi non
+fanno parte del totale 1,411.
+
+La matrice di esecuzione ufficiale aggiuntiva resta separata: esattamente 508
+casi attivi `(Version,Opcode)` più 58 casi di confine producono 566 casi di
+esecuzione esatta. Non sostituisce né rientra nelle 1,411 probe del verifier o
+nel `41-case strict ELF differential`.
+`NeverDSBFAgaveConformanceTests` autentica Firedancer test-vectors
+`68bb4af40235562e8852fa23d5727e49c2a0b862` e confronta tutti i 1,955 `sol_compat_elf_loader_v1` fixture
+del loader (1,399 accettati, 556 rifiutati). Per ogni ELF accettato confronta
+`entry_pc`, `text_off`, `text_cnt`, `rodata_hash` e `calldests_hash`. Questa gate non esegue il successivo
+instruction verifier.
+La Linux Release CI usa `--print-pinned-revision`,
+`--print-test-vectors-revision` e `--print-toolchain`, ed esporta
+`NEVERD_SBPF_ORACLE` e `NEVERD_AGAVE_CONFORMANCE_ROOT`, rendendo obbligatorie
+entrambe le gate esterne. In locale, senza env oracle/corpus esplicito, i casi
+vengono scoperti ma possono essere saltati.
+
+`SBF_RUNTIME_VERSION` rende `RuntimeVersionPolicy::ChainProfile` dipendente dal
+cluster/slot storico: i feature account ufficiali fanno avanzare l’ISA massimo
+da V0 a V1, V2 e V3; oggi resta V3. v4 esplicito usa
+`RuntimeVersionPolicy::UpstreamToolchain` per analisi
+offline. Il limite corrente di 10 MiB è esattamente `10'485'760` byte; 65,536 è
+solo provenance/test storico. `SBFFaultCodes.def` stabilizza i valori degli
+execution fault e `SBFSourceStatuses.def` possiede separatamente l’ABI source.
+
+Fixture in scala 10,000 proteggono worklist, function ownership e multi-latch
+senza fissare tempi di macchina. Le righe cluster/account/slot consentono un
+`RPC activation audit` mentre i test ordinari restano deterministic e offline.

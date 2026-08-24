@@ -32,6 +32,13 @@ namespace neverd::sbf {
 
 using namespace interpreter_detail;
 
+namespace {
+
+constexpr llvm::StringLiteral kHostSyscallFaultMessage(
+    "SBF host syscall callback reported an execution fault");
+
+} // namespace
+
 //===----------------------------------------------------------------------===//
 // executeRaw
 //===----------------------------------------------------------------------===//
@@ -43,22 +50,26 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
 
   appendProgramMemory(Program, Environment.Memory);
   if (llvm::Error Error =
-          validateMemory(Environment.Memory, Program.Low.TheVersion))
+          validateMemory(Environment.Memory, Program.ExecutableImage.version(),
+                         Program.Config))
     return std::move(Error);
 
   ExecutionResult Result;
+  const Version TheVersion = Program.ExecutableImage.version();
+  const RuntimeFeature RuntimeFeatures =
+      Environment.RuntimeFeatures.value_or(Program.ActiveRuntimeFeatures);
   std::array<uint64_t, kRegisterCount> Registers{};
   Registers[kFirstArgumentRegister] = Environment.Input;
   Registers[kInstructionDataRegister] = Environment.InstructionData;
   Registers[kFramePointerRegister] =
-      initialFramePointer(Program.Low.TheVersion, Program.Config);
+      initialFramePointer(TheVersion, Program.Config);
   std::vector<CallFrame> Frames;
   const size_t MaxCallDepth =
       Options.MaxCallDepth.value_or(Program.Config.MaxCallDepth);
   Frames.reserve(MaxCallDepth);
   const llvm::ArrayRef<uint8_t> Text = Program.text();
   const size_t InstructionCount = Text.size() / kInstructionSize;
-  size_t PC = Program.Low.EntrySlot;
+  size_t PC = Program.ExecutableImage.entrySlot();
 
   auto Finish = [&] {
     Result.Registers = Registers;
@@ -122,28 +133,12 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
     Frame.ReturnSlot = ReturnSlot;
     Frames.push_back(Frame);
     Result.MaxCallDepth = std::max(Result.MaxCallDepth, Frames.size());
-    if (!versionHasFeature(Program.Low.TheVersion,
-                           VersionFeature::ManualStackFrames)) {
+    if (!versionHasFeature(TheVersion, VersionFeature::ManualStackFrames)) {
       Registers[kFramePointerRegister] +=
-          automaticFrameStride(Program.Low.TheVersion, Program.Config);
+          automaticFrameStride(TheVersion, Program.Config);
     }
     return true;
   };
-  auto BranchTarget = [&](int64_t Target) -> std::optional<size_t> {
-    if (Target < 0 || static_cast<uint64_t>(Target) >= InstructionCount) {
-      Fail(FaultCode::InvalidBranch, "control-flow target is outside text");
-      return std::nullopt;
-    }
-    const size_t Slot = static_cast<size_t>(Target);
-    if (const LowInstruction *Low = findAnalyzedInstruction(Program, Slot);
-        !Low) {
-      Fail(FaultCode::InvalidBranch,
-           "control-flow target is not a complete instruction");
-      return std::nullopt;
-    }
-    return Slot;
-  };
-
   while (Result.Status == ExecutionStatus::Running) {
     if (Result.Steps >= Options.MaxSteps) {
       Result.Status = ExecutionStatus::StepLimit;
@@ -158,26 +153,29 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
     }
 
     RawInstruction Instruction = decodeRaw(Program, PC);
-    if (!Instruction.Info) {
-      Fail(FaultCode::InvalidInstruction,
-           "unknown or version-inactive SBF opcode");
-      break;
-    }
-    if (Instruction.Dst >= kRegisterCount ||
-        Instruction.Src >= kRegisterCount) {
-      Fail(FaultCode::InvalidRegister,
-           "SBF instruction references an invalid register");
-      break;
-    }
+    // Upstream meters and traces a successfully fetched raw slot before the
+    // dynamic instruction check. This is observable when CALLX lands on an
+    // LDDW continuation: the continuation fetch consumes one instruction,
+    // while the top-of-loop meter and PC checks retain precedence.
     if (Options.RecordTrace)
       Result.Trace.push_back(
-          {PC, Program.Low.TextAddress + PC * kInstructionSize,
-           Instruction.RawOpcode, Instruction.Info->ID, Frames.size()});
+          {PC, Program.ExecutableImage.textAddress() + PC * kInstructionSize,
+           Instruction.RawOpcode,
+           Instruction.Info ? Instruction.Info->ID : Opcode::Unknown,
+           Frames.size()});
     ++Result.Steps;
     Result.FinalSlot = PC;
+    const validation_detail::InstructionValidation Validation =
+        validateRawInstruction(Program, Instruction);
+    if (!Validation.valid()) {
+      const ValidationRuleInfo RuleInfo =
+          getValidationRuleInfo(Validation.Rule);
+      Fail(executionFaultForValidationRule(Validation.Rule), RuleInfo.Message);
+      break;
+    }
     size_t NextPC = PC + 1;
     const OpcodeInfo &Info = *Instruction.Info;
-    const SemanticTraits Traits = semanticTraits(Info, Program.Low.TheVersion);
+    const SemanticTraits Traits = semanticTraits(Info, TheVersion);
     const uint64_t Immediate = normalizeImmediate(
         static_cast<uint32_t>(Instruction.Immediate), Traits.Immediate);
     const uint64_t Source = Traits.Source == OperandSourceKind::SourceRegister
@@ -185,17 +183,7 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
                                 : Immediate;
 
     if (Info.ID == Opcode::LDDW) {
-      if (PC + 1 >= InstructionCount) {
-        Fail(FaultCode::InvalidInstruction,
-             "LDDW is missing its continuation slot");
-        continue;
-      }
       const uint8_t *Continuation = Text.data() + (PC + 1) * kInstructionSize;
-      if (Continuation[kOpcodeOffset] != 0) {
-        Fail(FaultCode::InvalidInstruction,
-             "LDDW continuation has a non-zero opcode");
-        continue;
-      }
       const uint64_t High =
           llvm::support::endian::read32le(Continuation + kImmediateOffset);
       Registers[Instruction.Dst] =
@@ -387,10 +375,7 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
           static_cast<uint64_t>(static_cast<uint32_t>(Instruction.Immediate))
           << kWordBitWidth;
     } else if (Info.Op == Operation::Jump) {
-      auto Target = BranchTarget(static_cast<int64_t>(PC) + 1 +
-                                 static_cast<int64_t>(Instruction.Offset));
-      if (Target)
-        NextPC = *Target;
+      NextPC = *Validation.BranchTarget;
     } else if (Info.isConditionalBranch()) {
       const uint64_t Left64 = Registers[Instruction.Dst];
       const uint64_t Right64 = Source;
@@ -474,75 +459,86 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
           llvm_unreachable("covered JMP64 operation");
         }
       }
-      if (Taken) {
-        auto Target = BranchTarget(static_cast<int64_t>(PC) + 1 +
-                                   static_cast<int64_t>(Instruction.Offset));
-        if (Target)
-          NextPC = *Target;
-      }
+      if (Taken)
+        NextPC = *Validation.BranchTarget;
     } else if (Info.Op == Operation::Call) {
-      const LowInstruction *Analyzed = findAnalyzedInstruction(Program, PC);
-      CallKind Kind = Analyzed ? Analyzed->Call : CallKind::Unresolved;
-      uint32_t Hash = static_cast<uint32_t>(Instruction.Immediate);
-      std::optional<size_t> Target =
-          Analyzed ? Analyzed->CallTarget : std::nullopt;
-      if (versionHasFeature(Program.Low.TheVersion,
-                            VersionFeature::StaticSyscalls)) {
-        if (Instruction.Src == 0)
-          Kind = CallKind::Syscall;
-        else if (Instruction.Src == 1) {
-          Kind = CallKind::Internal;
-          const int64_t RawTarget = static_cast<int64_t>(PC) + 1 +
-                                    static_cast<int64_t>(Instruction.Immediate);
-          if (RawTarget >= 0)
-            Target = static_cast<size_t>(RawTarget);
-        }
-      }
-      if (Kind == CallKind::Syscall) {
+      const uint32_t Hash = static_cast<uint32_t>(Instruction.Immediate);
+      auto DispatchSyscall = [&] {
         SyscallArguments Arguments{};
         for (unsigned I = 0; I < kArgumentRegisterCount; ++I)
           Arguments[I] = Registers[kFirstArgumentRegister + I];
-        std::optional<uint64_t> Value =
-            Environment.Syscall ? Environment.Syscall(Hash, Arguments)
-                                : std::nullopt;
-        if (!Value) {
+        SyscallOutcome Outcome = SyscallOutcome::unregistered();
+        if (Environment.FeatureAwareSyscall) {
+          Outcome = Environment.FeatureAwareSyscall(
+              SyscallInvocation{Hash, Arguments, RuntimeFeatures});
+        } else if (Environment.HostSyscall) {
+          Outcome = Environment.HostSyscall(Hash, Arguments);
+        } else if (Environment.Syscall) {
+          std::optional<uint64_t> Value = Environment.Syscall(Hash, Arguments);
+          Outcome = Value ? SyscallOutcome::returned(*Value)
+                          : SyscallOutcome::unregistered();
+        }
+        if (Outcome.kind() == SyscallOutcome::Kind::Returned) {
+          Registers[kReturnRegister] = Outcome.value();
+          Result.Syscalls.push_back({PC, Hash, Arguments, Outcome.value()});
+        }
+        return Outcome;
+      };
+
+      const bool StaticSyscalls =
+          versionHasFeature(TheVersion, VersionFeature::StaticSyscalls);
+      if (StaticSyscalls && Instruction.Src == 0) {
+        const SyscallOutcome Outcome = DispatchSyscall();
+        if (Outcome.kind() == SyscallOutcome::Kind::Unregistered) {
           Fail(FaultCode::UnknownSyscall,
                "SBF syscall is not registered in the test environment");
-        } else {
-          Registers[kReturnRegister] = *Value;
-          Result.Syscalls.push_back({PC, Hash, Arguments, *Value});
+        } else if (Outcome.kind() == SyscallOutcome::Kind::Fault) {
+          Fail(Outcome.faultCode(), kHostSyscallFaultMessage);
         }
-      } else if (Kind == CallKind::Internal && Target) {
-        auto ValidTarget = BranchTarget(static_cast<int64_t>(*Target));
-        if (ValidTarget && PushFrame(NextPC))
-          NextPC = *ValidTarget;
+      } else if (StaticSyscalls && Instruction.Src == 1) {
+        const int64_t Target = static_cast<int64_t>(PC) + 1 +
+                               static_cast<int64_t>(Instruction.Immediate);
+        if (Target < 0 || static_cast<uint64_t>(Target) >= InstructionCount) {
+          Fail(FaultCode::InvalidInstruction,
+               "unsupported static SBF immediate call");
+        } else if (PushFrame(NextPC)) {
+          // Any in-range slot is callable. If this lands on an LDDW
+          // continuation, the next raw fetch reports the malformed opcode;
+          // pushing first preserves the upstream call-depth precedence.
+          NextPC = static_cast<size_t>(Target);
+        }
+      } else if (StaticSyscalls) {
+        Fail(FaultCode::InvalidInstruction,
+             "unsupported static SBF immediate call");
       } else {
-        Fail(FaultCode::UnknownSyscall,
-             "SBF immediate call target cannot be resolved");
+        const SyscallOutcome Outcome = DispatchSyscall();
+        if (Outcome.kind() == SyscallOutcome::Kind::Fault &&
+            !Outcome.representsUnregisteredSyscall()) {
+          Fail(Outcome.faultCode(), kHostSyscallFaultMessage);
+        } else if (const ProgramFunctionEntry *Function =
+                       Program.ExecutableImage.findFunction(Hash)) {
+          if (PushFrame(NextPC))
+            NextPC = Function->TargetSlot;
+        } else if (Outcome.kind() != SyscallOutcome::Kind::Returned) {
+          Fail(FaultCode::UnknownSyscall,
+               "SBF immediate call target cannot be resolved");
+        }
       }
     } else if (Info.Op == Operation::CallX) {
-      const int64_t Register =
-          callxRegisterIndex(Program.Low.TheVersion, Instruction.Dst,
-                             Instruction.Src, Instruction.Immediate);
-      if (Register < 0 || Register >= kFramePointerRegister) {
-        Fail(FaultCode::InvalidRegister,
-             "SBF indirect call uses an invalid register");
-      } else {
-        const uint64_t TargetAddress =
-            Registers[static_cast<unsigned>(Register)];
-        const uint64_t TargetSlot =
-            (TargetAddress - Program.Low.TextAddress) / kInstructionSize;
-        // Upstream pushes the frame before checking the dynamic PC. This
-        // determines fault precedence when both call depth and target are bad.
-        if (PushFrame(NextPC)) {
-          if (TargetSlot >= InstructionCount)
-            Fail(FaultCode::UnknownIndirectCall,
-                 "SBF indirect call target is outside program text");
-          else
-            // A target may be any in-range slot. Landing on an LDDW
-            // continuation is observed as InvalidInstruction on the next step.
-            NextPC = static_cast<size_t>(TargetSlot);
-        }
+      const uint64_t TargetAddress = Registers[*Validation.CallXRegister];
+      const uint64_t TargetSlot =
+          (TargetAddress - Program.ExecutableImage.textAddress()) /
+          kInstructionSize;
+      // Upstream pushes the frame before checking the dynamic PC. This
+      // determines fault precedence when both call depth and target are bad.
+      if (PushFrame(NextPC)) {
+        if (TargetSlot >= InstructionCount)
+          Fail(FaultCode::UnknownIndirectCall,
+               "SBF indirect call target is outside program text");
+        else
+          // A target may be any in-range slot. Landing on an LDDW continuation
+          // is observed as InvalidInstruction on the next step.
+          NextPC = static_cast<size_t>(TargetSlot);
       }
     } else if (Info.Op == Operation::Exit) {
       if (Frames.empty()) {

@@ -59,6 +59,9 @@ struct PipelineOptions {
   std::string OutputFile;
   evm::Hardfork EVMFork = evm::Hardfork::Latest;
   bool EVMStrict = true;
+  /// Auto-detection preserves the selected chain profile's activation range;
+  /// a concrete override explicitly selects the pinned upstream toolchain's
+  /// offline version range.
   sbf::Version SBFVersion = sbf::Version::Auto;
   bool SBFStrict = true;
   /// The runtime a recovered Solana program is described against. It is

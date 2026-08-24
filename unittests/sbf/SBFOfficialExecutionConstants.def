@@ -1,0 +1,62 @@
+//===- SBFOfficialExecutionConstants.def - Execution oracle ABI -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_OFFICIAL_EXECUTION_CONSTANT(ID, RUST_ID, RUST_TYPE, CXX_TYPE, VALUE)
+//
+// Values shared by the C++ differential driver and detached Rust oracle live
+// here so protocol limits, probe semantics, and pinned cardinalities cannot
+// drift between the two implementations.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_OFFICIAL_EXECUTION_CONSTANT
+#define SBF_OFFICIAL_EXECUTION_CONSTANT(ID, RUST_ID, RUST_TYPE, CXX_TYPE, VALUE)
+#endif
+
+SBF_OFFICIAL_EXECUTION_CONSTANT(PinnedActiveOpcodeVersionPairCount,
+                                PINNED_ACTIVE_OPCODE_VERSION_PAIR_COUNT, usize,
+                                size_t, 508)
+SBF_OFFICIAL_EXECUTION_CONSTANT(PinnedBoundaryExecutionCaseCount,
+                                PINNED_BOUNDARY_EXECUTION_CASE_COUNT, usize,
+                                size_t, 58)
+SBF_OFFICIAL_EXECUTION_CONSTANT(PinnedManifestELFCount,
+                                PINNED_MANIFEST_ELF_COUNT, usize, size_t, 23)
+SBF_OFFICIAL_EXECUTION_CONSTANT(PinnedVerificationCaseCount,
+                                PINNED_VERIFICATION_CASE_COUNT, usize, size_t,
+                                1411)
+SBF_OFFICIAL_EXECUTION_CONSTANT(PinnedStrictELFMutationCount,
+                                PINNED_STRICT_ELF_MUTATION_COUNT, usize, size_t,
+                                41)
+SBF_OFFICIAL_EXECUTION_CONSTANT(PinnedExecutionCaseCount,
+                                PINNED_EXECUTION_CASE_COUNT, usize, size_t, 566)
+SBF_OFFICIAL_EXECUTION_CONSTANT(ExecutionBatchCaseLimit,
+                                EXECUTION_BATCH_CASE_LIMIT, usize, size_t, 2048)
+SBF_OFFICIAL_EXECUTION_CONSTANT(ExecutionTextByteLimit,
+                                EXECUTION_TEXT_BYTE_LIMIT, usize, size_t,
+                                1048576)
+SBF_OFFICIAL_EXECUTION_CONSTANT(ExecutionInputByteLimit,
+                                EXECUTION_INPUT_BYTE_LIMIT, usize, size_t, 4096)
+SBF_OFFICIAL_EXECUTION_CONSTANT(ExecutionBudget, EXECUTION_BUDGET, u64,
+                                uint64_t, 64)
+SBF_OFFICIAL_EXECUTION_CONSTANT(SyscallDigestOffsetBasis,
+                                SYSCALL_DIGEST_OFFSET_BASIS, u64, uint64_t,
+                                0xcbf29ce484222325)
+SBF_OFFICIAL_EXECUTION_CONSTANT(SyscallDigestPrime, SYSCALL_DIGEST_PRIME, u64,
+                                uint64_t, 0x100000001b3)
+SBF_OFFICIAL_EXECUTION_CONSTANT(ProbeReturnBias, PROBE_RETURN_BIAS, u64,
+                                uint64_t, 0x51bfa7e3d92c460d)
+SBF_OFFICIAL_EXECUTION_CONSTANT(ExecutionFunctionKey, EXECUTION_FUNCTION_KEY,
+                                u32, uint32_t, 0x13572468)
+SBF_OFFICIAL_EXECUTION_CONSTANT(CollisionFunctionSlot, COLLISION_FUNCTION_SLOT,
+                                u64, uint64_t, 7)
+SBF_OFFICIAL_EXECUTION_CONSTANT(ExecutionPassMarker, EXECUTION_PASS_MARKER, u64,
+                                uint64_t, 0x5a)
+SBF_OFFICIAL_EXECUTION_CONSTANT(ExecutionPoisonMarker, EXECUTION_POISON_MARKER,
+                                u64, uint64_t, 0xbad)
+SBF_OFFICIAL_EXECUTION_CONSTANT(ExecutionMemoryValue, EXECUTION_MEMORY_VALUE,
+                                i32, int32_t, 0x13579bdf)
+
+#undef SBF_OFFICIAL_EXECUTION_CONSTANT

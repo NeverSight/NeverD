@@ -19,14 +19,25 @@ namespace neverd::sbf {
 inline constexpr uint16_t kELFMachineBPF = 247;
 inline constexpr uint16_t kELFMachineSBPF = 263;
 
-inline constexpr size_t kInstructionSize = 8;
+/// Provenance identity for protocol evidence.  Generating this enum before
+/// consuming SBFProtocolLimits.def makes a misspelled SOURCE a compile error;
+/// the documentation gate additionally requires every used source to carry a
+/// full pinned revision.
+enum class ProtocolLimitSource : uint8_t {
+#define SBF_UPSTREAM_SOURCE(ID, NAME, REVISION) ID,
+#include "neverd/sbf/runtime/SBFUpstreamSources.def"
+};
+
+#define SBF_PROTOCOL_LIMIT(NAME, VALUE, SOURCE)                                \
+  inline constexpr size_t k##NAME = VALUE;                                     \
+  inline constexpr ProtocolLimitSource k##NAME##Source =                       \
+      ProtocolLimitSource::SOURCE;
+#include "neverd/sbf/SBFProtocolLimits.def"
+inline constexpr size_t kInstructionSize = kInstructionByteCount;
 inline constexpr size_t kOpcodeOffset = 0;
 inline constexpr size_t kRegisterByteOffset = 1;
 inline constexpr size_t kBranchOffsetOffset = 2;
 inline constexpr size_t kImmediateOffset = 4;
-#define SBF_PROTOCOL_LIMIT(NAME, VALUE, SOURCE)                                \
-  inline constexpr size_t k##NAME = VALUE;
-#include "neverd/sbf/SBFProtocolLimits.def"
 inline constexpr size_t kMaxInstructions =
     kMaxProgramAccountDataSize / kInstructionSize;
 static_assert(kMaxProgramAccountDataSize % kInstructionSize == 0,
@@ -114,11 +125,18 @@ inline constexpr llvm::StringLiteral kUnknownSyscallName("unknown_syscall");
 inline constexpr llvm::StringLiteral kUnknownFunctionName("unknown_function");
 inline constexpr llvm::StringLiteral kModuleName("neverd_sbf_output");
 inline constexpr llvm::StringLiteral kEntryFunctionName("neverd_sbf_program");
-inline constexpr llvm::StringLiteral kRuntimeLoadName("neverd_sbf_load");
-inline constexpr llvm::StringLiteral kRuntimeStoreName("neverd_sbf_store");
-inline constexpr llvm::StringLiteral kRuntimeSyscallName("neverd_sbf_syscall");
-inline constexpr llvm::StringLiteral kRuntimeCallXName("neverd_sbf_callx");
-inline constexpr llvm::StringLiteral kRuntimeFaultName("neverd_sbf_fault");
+/// The host callbacks return one stable SBFFaultCodes.def value. For memory
+/// operations None is success and every other known value is the exact fault.
+/// For syscalls None also writes the output value, UnknownSyscall means
+/// unregistered, and every other value is a handled execution fault.
+#define SBF_HOST_ABI_SYMBOL(ID, NAME)                                          \
+  inline constexpr llvm::StringLiteral kRuntime##ID##Name(NAME);
+#include "neverd/sbf/runtime/SBFHostABI.def"
+
+inline bool isLegacyReadOnlySectionName(llvm::StringRef Name) {
+  return Name == kTextSectionName || Name == kRodataSectionName ||
+         Name == kDataRelROSectionName || Name == kEhFrameSectionName;
+}
 
 inline constexpr unsigned kRuntimeEnvironmentParameter = 0;
 inline constexpr unsigned kRuntimeLoadAddressParameter =
@@ -145,6 +163,16 @@ inline constexpr unsigned kRuntimeSyscallOutputParameter =
     kRuntimeSyscallFirstArgumentParameter + kArgumentRegisterCount;
 inline constexpr unsigned kRuntimeSyscallArgumentCount =
     kRuntimeSyscallOutputParameter + 1;
+inline constexpr unsigned kRuntimeFeatureAwareSyscallFeaturesParameter =
+    kRuntimeEnvironmentParameter + 1;
+inline constexpr unsigned kRuntimeFeatureAwareSyscallHashParameter =
+    kRuntimeFeatureAwareSyscallFeaturesParameter + 1;
+inline constexpr unsigned kRuntimeFeatureAwareSyscallFirstArgumentParameter =
+    kRuntimeFeatureAwareSyscallHashParameter + 1;
+inline constexpr unsigned kRuntimeFeatureAwareSyscallOutputParameter =
+    kRuntimeFeatureAwareSyscallFirstArgumentParameter + kArgumentRegisterCount;
+inline constexpr unsigned kRuntimeFeatureAwareSyscallArgumentCount =
+    kRuntimeFeatureAwareSyscallOutputParameter + 1;
 inline constexpr unsigned kRuntimeFaultCodeParameter =
     kRuntimeEnvironmentParameter + 1;
 inline constexpr unsigned kRuntimeFaultAddressParameter =
@@ -153,18 +181,19 @@ inline constexpr unsigned kRuntimeFaultArgumentCount =
     kRuntimeFaultAddressParameter + 1;
 
 enum class FaultCode : uint32_t {
-  None = 0,
-  InvalidInstruction,
-  InvalidRegister,
-  InvalidBranch,
-  DivideByZero,
-  DivideOverflow,
-  MemoryAccess,
-  CallDepth,
-  UnknownSyscall,
-  UnknownIndirectCall,
-  ExecutionOverrun,
+#define SBF_FAULT_CODE(NAME, VALUE) NAME = VALUE,
+#include "neverd/sbf/SBFFaultCodes.def"
 };
+
+[[nodiscard]] constexpr bool isKnownFaultCodeValue(uint32_t Value) {
+  switch (Value) {
+#define SBF_FAULT_CODE(NAME, VALUE)                                            \
+  case static_cast<uint32_t>(FaultCode::NAME):                                 \
+    return true;
+#include "neverd/sbf/SBFFaultCodes.def"
+  }
+  return false;
+}
 
 } // namespace neverd::sbf
 

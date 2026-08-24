@@ -100,7 +100,11 @@ BinaryImage makeImage(Version TheVersion, llvm::ArrayRef<uint8_t> TextBytes) {
 
 llvm::Expected<SBFProgram> analyzeBytes(Version TheVersion,
                                         llvm::ArrayRef<uint8_t> TextBytes) {
-  return analyze(makeImage(TheVersion, TextBytes));
+  AnalyzeOptions Options;
+  if (TheVersion == Version::V4)
+    Options.ExpertEnvironment = ExpertRuntimeEnvironmentOverride{
+        Version::V0, Version::V4, SBFVMConfig{}};
+  return analyze(makeImage(TheVersion, TextBytes), Options);
 }
 
 bool accepts(Version TheVersion, llvm::ArrayRef<uint8_t> TextBytes,

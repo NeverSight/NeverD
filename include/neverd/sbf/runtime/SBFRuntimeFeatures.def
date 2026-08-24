@@ -6,8 +6,12 @@
 //
 // SBF_CLUSTER(ID, NAME, ACTIVATES_EVERYTHING, SUMMARY)
 // SBF_RUNTIME_PURPOSE(ID, NAME, SUMMARY)
-// SBF_RUNTIME_FEATURE(ID, NAME, GATE, ADDRESS, SIMD, SUMMARY)
+// SBF_RUNTIME_FEATURE_DOMAIN(ID, NAME, SUMMARY)
+// SBF_RUNTIME_FEATURE_DISPOSITION(ID, NAME, SUMMARY)
+// SBF_RUNTIME_FEATURE(ID, NAME, GATE, ADDRESS, SIMD, DOMAIN, DISPOSITION,
+//                     SUMMARY)
 // SBF_RUNTIME_FEATURE_ACTIVATION(ID, CLUSTER, SLOT)
+// SBF_RUNTIME_VERSION(VERSION, ENABLE_FEATURE)
 //
 //   Three questions get confused with each other constantly, and each has its
 //   own answer:
@@ -29,17 +33,33 @@
 //   activation is recorded per cluster with the slot it happened at, and a
 //   feature with no record on a cluster has not been activated there.
 //
-//   GATE is the identifier Agave gives the switch and ADDRESS is the account
-//   whose existence turns it on, which is what makes an activation checkable
-//   against a live node rather than a claim made here. SIMD is the proposal
-//   that specified the behaviour, empty for the switches that predate the
-//   process.
+//   GATE is the identifier Agave gives the switch and ADDRESS is the feature
+//   account whose state records the activation slot. A pending account may
+//   already exist without activating the gate, so the state rather than mere
+//   existence is what makes an activation checkable against a live node. SIMD
+//   is the proposal that specified the behaviour, empty for the switches that
+//   predate the process.
+//
+//   DOMAIN classifies the upstream subsystem whose behaviour changes.
+//   DISPOSITION records whether the pinned revision still branches on the
+//   field, has folded the active side into unconditional code, or only retains
+//   the activation account as historical chain-ISA provenance.  These are
+//   typed table columns so consumers never infer semantics from gate strings.
 //
 //   ACTIVATES_EVERYTHING marks a cluster that starts from a fresh genesis and
 //   therefore turns on every gate its validator knows. Recording that as a
 //   property of the cluster keeps a developer's local validator from needing
 //   an activation row per feature, and keeps those rows from being mistaken
 //   for observations of a real chain.
+//
+//   Feature row order assigns RuntimeFeature's public bit identities. Existing
+//   rows are therefore append-only even when grouping a new row beside an old
+//   one would look tidier.
+//
+//   SBF_RUNTIME_VERSION records the monotonically activated chain ISA range.
+//   V0 uses RuntimeFeature::None because it predates feature activation; a
+//   version absent from this list is known to the pinned upstream toolchain but
+//   is not yet admitted by the pinned Agave runtime.
 //
 //===----------------------------------------------------------------------===//
 
@@ -51,12 +71,25 @@
 #define SBF_RUNTIME_PURPOSE(ID, NAME, SUMMARY)
 #endif
 
+#ifndef SBF_RUNTIME_FEATURE_DOMAIN
+#define SBF_RUNTIME_FEATURE_DOMAIN(ID, NAME, SUMMARY)
+#endif
+
+#ifndef SBF_RUNTIME_FEATURE_DISPOSITION
+#define SBF_RUNTIME_FEATURE_DISPOSITION(ID, NAME, SUMMARY)
+#endif
+
 #ifndef SBF_RUNTIME_FEATURE
-#define SBF_RUNTIME_FEATURE(ID, NAME, GATE, ADDRESS, SIMD, SUMMARY)
+#define SBF_RUNTIME_FEATURE(ID, NAME, GATE, ADDRESS, SIMD, DOMAIN,             \
+                            DISPOSITION, SUMMARY)
 #endif
 
 #ifndef SBF_RUNTIME_FEATURE_ACTIVATION
 #define SBF_RUNTIME_FEATURE_ACTIVATION(ID, CLUSTER, SLOT)
+#endif
+
+#ifndef SBF_RUNTIME_VERSION
+#define SBF_RUNTIME_VERSION(VERSION, ENABLE_FEATURE)
 #endif
 
 //===----------------------------------------------------------------------===//
@@ -92,17 +125,53 @@ SBF_RUNTIME_PURPOSE(Deployment, "deployment",
                     "things it will happily keep running")
 
 //===----------------------------------------------------------------------===//
+// Typed feature classifications
+//===----------------------------------------------------------------------===//
+
+SBF_RUNTIME_FEATURE_DOMAIN(EntrypointABI, "entrypoint-abi",
+                           "register and input arguments visible at entry")
+SBF_RUNTIME_FEATURE_DOMAIN(InputMemory, "input-memory",
+                           "serialized input and VM memory-region topology")
+SBF_RUNTIME_FEATURE_DOMAIN(SyscallRegistration, "syscall-registration",
+                           "whether a syscall symbol resolves")
+SBF_RUNTIME_FEATURE_DOMAIN(SyscallSemantics, "syscall-semantics",
+                           "results, errors, byte order, and argument checks")
+SBF_RUNTIME_FEATURE_DOMAIN(CPIExecution, "cpi-execution",
+                           "cross-program invocation limits and validation")
+SBF_RUNTIME_FEATURE_DOMAIN(VMFaultPolicy, "vm-fault-policy",
+                           "observable VM failure and compute-unit policy")
+SBF_RUNTIME_FEATURE_DOMAIN(LoaderManagement, "loader-management",
+                           "loader instructions and program-account mutation")
+SBF_RUNTIME_FEATURE_DOMAIN(ProgramAdmission, "program-admission",
+                           "deployment and execution admission policy")
+SBF_RUNTIME_FEATURE_DOMAIN(
+    ISAAvailability, "isa-availability",
+    "which SBPF instruction-set versions the chain admits")
+
+SBF_RUNTIME_FEATURE_DISPOSITION(
+    RuntimeBranch, "runtime-branch",
+    "the pinned Agave revision directly consults this FeatureSnapshot field")
+SBF_RUNTIME_FEATURE_DISPOSITION(
+    FoldedBranch, "folded-branch",
+    "the snapshot retains provenance but the pinned revision has folded the "
+    "active behaviour into unconditional code")
+SBF_RUNTIME_FEATURE_DISPOSITION(
+    HistoricalActivation, "historical-activation",
+    "the activation account is required for a slot-qualified historical "
+    "answer although the pinned revision no longer branches on it")
+
+//===----------------------------------------------------------------------===//
 // The gates
 //
-// Only the gates that change what this analysis reports are tabulated. A gate
-// that has been active on every cluster for years and that Agave no longer
-// even consults is history, not a variable, and adding it here would invite a
-// reader to think it could still be off.
+// Only gates that change a current or slot-qualified SBF answer are tabulated.
+// The disposition column distinguishes current runtime branches from active
+// behaviour folded into the pin and from historical chain-ISA activations.
 //===----------------------------------------------------------------------===//
 
 SBF_RUNTIME_FEATURE(InstructionDataPointer, "instruction-data-pointer",
                     "provide_instruction_data_offset_in_vm_r2",
                     "5xXZc66h4UdB6Yq7FzdBxBiRAFMMScMLwHxk2QZDaNZL", "simd-0321",
+                    EntrypointABI, RuntimeBranch,
                     "the entrypoint receives the address of the instruction "
                     "data in r2, so a program no longer has to walk the "
                     "serialized accounts to find it")
@@ -113,6 +182,7 @@ SBF_RUNTIME_FEATURE_ACTIVATION(InstructionDataPointer, Devnet, 446688000)
 SBF_RUNTIME_FEATURE(DirectAccountPointers, "direct-account-pointers",
                     "direct_account_pointers_in_program_input",
                     "ptr9umikaeAS7ZBBp2fsfRhie16F1V2jCKA2y6gXNAK", "simd-0449",
+                    EntrypointABI, RuntimeBranch,
                     "an array of addresses, one per account, is appended after "
                     "the program id, so a program reaches account N without "
                     "walking the N-1 variable-length entries before it")
@@ -121,6 +191,7 @@ SBF_RUNTIME_FEATURE_ACTIVATION(DirectAccountPointers, Devnet, 474768000)
 
 SBF_RUNTIME_FEATURE(Sha512Syscall, "sha512-syscall", "enable_sha512_syscall",
                     "s512oDwgx8hjMnaQjXfqqrZroVj4HvC6TkN3iSSWXCh", "simd-0512",
+                    SyscallRegistration, RuntimeBranch,
                     "the SHA-512 syscall is registered, so a program calling "
                     "it links on the clusters that have it and fails to link "
                     "on the ones that do not")
@@ -134,13 +205,375 @@ SBF_RUNTIME_FEATURE_ACTIVATION(Sha512Syscall, Devnet, 471744000)
 SBF_RUNTIME_FEATURE(FeesSysvarDisabled, "fees-sysvar-disabled",
                     "disable_fees_sysvar",
                     "JAN1trEUEtZjgXYzNBYHU9DYd7GnThhXfFP7SzPXkPsG", "",
+                    SyscallRegistration, RuntimeBranch,
                     "the fees sysvar syscall is no longer registered, because "
                     "the sysvar it reads stopped being maintained")
 SBF_RUNTIME_FEATURE_ACTIVATION(FeesSysvarDisabled, MainnetBeta, 208656004)
 SBF_RUNTIME_FEATURE_ACTIVATION(FeesSysvarDisabled, Testnet, 213500260)
 SBF_RUNTIME_FEATURE_ACTIVATION(FeesSysvarDisabled, Devnet, 234576000)
 
+// The remaining syscall gates are appended in Agave FeatureSnapshot order.
+// Gate identifiers and addresses are from the Agave revision pinned in
+// SBFUpstreamSources.def; the revision is recorded there once at full length.
+// No activation was observed for Blake3, BigModExp or RemainingComputeUnits on
+// the three real clusters represented here, so those features deliberately
+// have no activation rows.
+SBF_RUNTIME_FEATURE(Blake3Syscall, "blake3-syscall", "blake3_syscall_enabled",
+                    "HTW2pSyErTj4BV6KBM9NZ9VBUJVxt7sacNWcf76wtzb3", "",
+                    SyscallRegistration, RuntimeBranch,
+                    "the BLAKE3 hashing syscall is registered")
+
+SBF_RUNTIME_FEATURE(Curve25519Syscalls, "curve25519-syscalls",
+                    "curve25519_syscall_enabled",
+                    "7rcw5UtqgDTBBv2EcynNfYckgdAaH1MAsCjKgXMkN7Ri", "",
+                    SyscallRegistration, RuntimeBranch,
+                    "the Curve25519 validation, group-operation and "
+                    "multiscalar-multiplication syscalls are registered")
+SBF_RUNTIME_FEATURE_ACTIVATION(Curve25519Syscalls, MainnetBeta, 275184000)
+SBF_RUNTIME_FEATURE_ACTIVATION(Curve25519Syscalls, Testnet, 268364256)
+SBF_RUNTIME_FEATURE_ACTIVATION(Curve25519Syscalls, Devnet, 240192004)
+
+SBF_RUNTIME_FEATURE(AltBn128Syscall, "alt-bn128-syscall",
+                    "enable_alt_bn128_syscall",
+                    "A16q37opZdQMCbe5qJ6xpBB9usykfv8jZaMkxvZQi4GJ", "",
+                    SyscallRegistration, RuntimeBranch,
+                    "the alt_bn128 group-operation syscall is registered")
+SBF_RUNTIME_FEATURE_ACTIVATION(AltBn128Syscall, MainnetBeta, 275616000)
+SBF_RUNTIME_FEATURE_ACTIVATION(AltBn128Syscall, Testnet, 247628260)
+SBF_RUNTIME_FEATURE_ACTIVATION(AltBn128Syscall, Devnet, 235872000)
+
+SBF_RUNTIME_FEATURE(BigModExpSyscall, "big-mod-exp-syscall",
+                    "enable_big_mod_exp_syscall",
+                    "expH2ppKPW2ANEdEmAjfhSEcnBQJfmoX4FjuNpe9ttg", "simd-0529",
+                    SyscallRegistration, RuntimeBranch,
+                    "the big-integer modular-exponentiation syscall is "
+                    "registered")
+
+SBF_RUNTIME_FEATURE(LastRestartSlotSysvar, "last-restart-slot-sysvar",
+                    "last_restart_slot_sysvar",
+                    "HooKD5NC9QNxk25QuzCssB8ecrEzGt6eXEPBUxWp1LaR", "simd-0047",
+                    SyscallRegistration, RuntimeBranch,
+                    "the last-restart-slot sysvar syscall is registered")
+SBF_RUNTIME_FEATURE_ACTIVATION(LastRestartSlotSysvar, MainnetBeta, 282096004)
+SBF_RUNTIME_FEATURE_ACTIVATION(LastRestartSlotSysvar, Testnet, 283916256)
+SBF_RUNTIME_FEATURE_ACTIVATION(LastRestartSlotSysvar, Devnet, 313632000)
+
+SBF_RUNTIME_FEATURE(PoseidonSyscall, "poseidon-syscall",
+                    "enable_poseidon_syscall",
+                    "FL9RsQA6TVUoh5xJQ9d936RHSebA1NLQqe3Zv9sXZRpr", "",
+                    SyscallRegistration, RuntimeBranch,
+                    "the Poseidon hashing syscall is registered")
+SBF_RUNTIME_FEATURE_ACTIVATION(PoseidonSyscall, MainnetBeta, 278208000)
+SBF_RUNTIME_FEATURE_ACTIVATION(PoseidonSyscall, Testnet, 280892257)
+SBF_RUNTIME_FEATURE_ACTIVATION(PoseidonSyscall, Devnet, 310608000)
+
+SBF_RUNTIME_FEATURE(RemainingComputeUnitsSyscall,
+                    "remaining-compute-units-syscall",
+                    "remaining_compute_units_syscall_enabled",
+                    "5TuppMutoyzhUSfuYdhgzD47F92GL1g89KpCZQKqedxP", "",
+                    SyscallRegistration, RuntimeBranch,
+                    "the remaining-compute-units syscall is registered")
+
+SBF_RUNTIME_FEATURE(AltBn128CompressionSyscall, "alt-bn128-compression-syscall",
+                    "enable_alt_bn128_compression_syscall",
+                    "EJJewYSddEEtSZHiqugnvhQHiWyZKjkFDQASd7oKSagn", "",
+                    SyscallRegistration, RuntimeBranch,
+                    "the alt_bn128 compression syscall is registered")
+SBF_RUNTIME_FEATURE_ACTIVATION(AltBn128CompressionSyscall, MainnetBeta,
+                               276912000)
+SBF_RUNTIME_FEATURE_ACTIVATION(AltBn128CompressionSyscall, Testnet, 279164260)
+SBF_RUNTIME_FEATURE_ACTIVATION(AltBn128CompressionSyscall, Devnet, 309312000)
+
+SBF_RUNTIME_FEATURE(GetSysvarSyscall, "get-sysvar-syscall",
+                    "get_sysvar_syscall_enabled",
+                    "CLCoTADvV64PSrnR6QXty6Fwrt9Xc6EdxSJE4wLRePjq", "simd-0127",
+                    SyscallRegistration, RuntimeBranch,
+                    "the generic sysvar byte-range syscall is registered")
+SBF_RUNTIME_FEATURE_ACTIVATION(GetSysvarSyscall, MainnetBeta, 321840000)
+SBF_RUNTIME_FEATURE_ACTIVATION(GetSysvarSyscall, Testnet, 316748256)
+SBF_RUNTIME_FEATURE_ACTIVATION(GetSysvarSyscall, Devnet, 348192000)
+
+SBF_RUNTIME_FEATURE(GetEpochStakeSyscall, "get-epoch-stake-syscall",
+                    "enable_get_epoch_stake_syscall",
+                    "FKe75t4LXxGaQnVHdUKM6DSFifVVraGZ8LyNo7oPwy1Z", "simd-0133",
+                    SyscallRegistration, RuntimeBranch,
+                    "the epoch-stake syscall is registered")
+SBF_RUNTIME_FEATURE_ACTIVATION(GetEpochStakeSyscall, MainnetBeta, 330912000)
+SBF_RUNTIME_FEATURE_ACTIVATION(GetEpochStakeSyscall, Testnet, 322796256)
+SBF_RUNTIME_FEATURE_ACTIVATION(GetEpochStakeSyscall, Devnet, 368496000)
+
+SBF_RUNTIME_FEATURE(BLS12381Syscalls, "bls12-381-syscalls",
+                    "enable_bls12_381_syscall",
+                    "b1sgUiJ3qu7hYm3tNDyyqZNQd6gLGJmJppnLNa93PCQ", "simd-0388",
+                    SyscallRegistration, RuntimeBranch,
+                    "the BLS12-381 decompression and pairing-map syscalls are "
+                    "registered")
+SBF_RUNTIME_FEATURE_ACTIVATION(BLS12381Syscalls, MainnetBeta, 425952004)
+SBF_RUNTIME_FEATURE_ACTIVATION(BLS12381Syscalls, Testnet, 406604256)
+SBF_RUNTIME_FEATURE_ACTIVATION(BLS12381Syscalls, Devnet, 457488000)
+
+SBF_RUNTIME_FEATURE(VirtualAddressSpaceAdjustments,
+                    "virtual-address-space-adjustments",
+                    "virtual_address_space_adjustments",
+                    "7VgiehxNxu53KdxgLspGQY8myE6f7UokaWa4jsGcaSz", "simd-0460",
+                    InputMemory, RuntimeBranch,
+                    "the runtime uses the adjusted virtual-address-space "
+                    "layout instead of stack gaps and aligned mapping")
+SBF_RUNTIME_FEATURE_ACTIVATION(VirtualAddressSpaceAdjustments, Testnet,
+                               407900256)
+SBF_RUNTIME_FEATURE_ACTIVATION(VirtualAddressSpaceAdjustments, Devnet,
+                               463536000)
+
+// These two test-only gates model Agave's disable-then-reenable execution
+// policy. They intentionally have no activation on a real cluster.
+SBF_RUNTIME_FEATURE(DisableSBPFV0Execution, "disable-sbpf-v0-execution",
+                    "disable_sbpf_v0_execution",
+                    "TestFeature11111111111111111111111111111111", "simd-0161",
+                    ProgramAdmission, RuntimeBranch,
+                    "SBPF v0 execution is disabled")
+SBF_RUNTIME_FEATURE(ReenableSBPFV0Execution, "reenable-sbpf-v0-execution",
+                    "reenable_sbpf_v0_execution",
+                    "TestFeature21111111111111111111111111111111", "",
+                    ProgramAdmission, RuntimeBranch,
+                    "SBPF v0 execution is re-enabled after its disable gate")
+
+SBF_RUNTIME_FEATURE(DisableLegacyDeployment, "disable-legacy-deployment",
+                    "disable_sbpf_v0_v1_v2_deployment",
+                    "B8JJXCy5amZyWG9r7EnUYLwzXSXTxG7GZ1qZ1qggo83g", "simd-0500",
+                    ProgramAdmission, RuntimeBranch,
+                    "deployment of SBPF v0, v1 and v2 programs is disabled")
+
+// These activation accounts introduced the later chain ISA versions. They are
+// appended after the pre-existing public feature identities. Agave's current
+// runtime no longer branches on them because every supported cluster activated
+// them, but a slot-qualified historical profile must still do so.
+SBF_RUNTIME_FEATURE(EnableSBPFV1, "enable-sbpf-v1",
+                    "enable_sbpf_v1_deployment_and_execution",
+                    "JE86WkYvTrzW8HgNmrHY7dFYpCmSptUpKupbo2AdQ9cG", "",
+                    ISAAvailability, HistoricalActivation,
+                    "SBPF v1 deployment and execution are enabled")
+SBF_RUNTIME_FEATURE_ACTIVATION(EnableSBPFV1, MainnetBeta, 349488000)
+SBF_RUNTIME_FEATURE_ACTIVATION(EnableSBPFV1, Testnet, 338780256)
+SBF_RUNTIME_FEATURE_ACTIVATION(EnableSBPFV1, Devnet, 389664000)
+
+SBF_RUNTIME_FEATURE(EnableSBPFV2, "enable-sbpf-v2",
+                    "enable_sbpf_v2_deployment_and_execution",
+                    "F6UVKh1ujTEFK3en2SyAL3cdVnqko1FVEXWhmdLRu6WP", "",
+                    ISAAvailability, HistoricalActivation,
+                    "SBPF v2 deployment and execution are enabled")
+SBF_RUNTIME_FEATURE_ACTIVATION(EnableSBPFV2, MainnetBeta, 356400000)
+SBF_RUNTIME_FEATURE_ACTIVATION(EnableSBPFV2, Testnet, 346124256)
+SBF_RUNTIME_FEATURE_ACTIVATION(EnableSBPFV2, Devnet, 396576000)
+
+SBF_RUNTIME_FEATURE(EnableSBPFV3, "enable-sbpf-v3",
+                    "enable_sbpf_v3_deployment_and_execution",
+                    "5cC3foj77CWun58pC51ebHFUWavHWKarWyR5UUik7dnC", "",
+                    ISAAvailability, HistoricalActivation,
+                    "SBPF v3 deployment and execution are enabled")
+SBF_RUNTIME_FEATURE_ACTIVATION(EnableSBPFV3, MainnetBeta, 428976000)
+SBF_RUNTIME_FEATURE_ACTIVATION(EnableSBPFV3, Testnet, 406604256)
+SBF_RUNTIME_FEATURE_ACTIVATION(EnableSBPFV3, Devnet, 461808000)
+
+// These execution-topology gates were added after the original public feature
+// identities and therefore stay here to preserve the append-only bit ABI. They
+// are independent of the loader-selected account serialization: one changes
+// which VM addresses syscalls accept, while the other changes the backing
+// regions for account data without changing the logical ABIv0/ABIv1 fields.
+SBF_RUNTIME_FEATURE(SyscallParameterAddressRestrictions,
+                    "syscall-parameter-address-restrictions",
+                    "syscall_parameter_address_restrictions",
+                    "EDGMC5kxFxGk4ixsNkGt8bW7QL5hDMXnbwaZvYMwNfzF", "simd-0459",
+                    SyscallSemantics, RuntimeBranch,
+                    "syscall and CPI parameters must satisfy the runtime's "
+                    "VM-address and alignment restrictions")
+SBF_RUNTIME_FEATURE_ACTIVATION(SyscallParameterAddressRestrictions, MainnetBeta,
+                               429840000)
+SBF_RUNTIME_FEATURE_ACTIVATION(SyscallParameterAddressRestrictions, Testnet,
+                               407468256)
+SBF_RUNTIME_FEATURE_ACTIVATION(SyscallParameterAddressRestrictions, Devnet,
+                               462240000)
+
+SBF_RUNTIME_FEATURE(AccountDataDirectMapping, "account-data-direct-mapping",
+                    "account_data_direct_mapping",
+                    "CR3dVN2Yoo95Y96kLSTaziWDAQT2MNEpiWh5cqVq2pNE", "",
+                    InputMemory, RuntimeBranch,
+                    "with adjusted virtual addresses, account data is backed "
+                    "by account memory regions instead of an input-buffer copy")
+SBF_RUNTIME_FEATURE_ACTIVATION(AccountDataDirectMapping, Testnet, 408332256)
+SBF_RUNTIME_FEATURE_ACTIVATION(AccountDataDirectMapping, Devnet, 463968000)
+
+// Observable loader, VM, CPI and syscall semantics retained by the pinned
+// FeatureSnapshot. RuntimeBranch rows still have an upstream use site.
+// FoldedBranch rows describe the pre-activation side for historical analysis;
+// the pin retains their typed field but implements the active side
+// unconditionally. Rows remain in upstream snapshot order where practical and
+// are appended here to preserve every earlier public bit identity.
+SBF_RUNTIME_FEATURE(
+    EnableLoaderSetAuthorityChecked, "loader-set-authority-checked",
+    "enable_bpf_loader_set_authority_checked_ix",
+    "5x3825XS7M2A3Ekbn5VGGkvFoAg5qrRWkTrY4bARP1GL", "", LoaderManagement,
+    RuntimeBranch,
+    "the loader accepts the checked set-authority instruction and requires the "
+    "new authority to sign")
+SBF_RUNTIME_FEATURE_ACTIVATION(EnableLoaderSetAuthorityChecked, MainnetBeta,
+                               251424000)
+SBF_RUNTIME_FEATURE_ACTIVATION(EnableLoaderSetAuthorityChecked, Testnet,
+                               247628260)
+SBF_RUNTIME_FEATURE_ACTIVATION(EnableLoaderSetAuthorityChecked, Devnet,
+                               255744000)
+
+SBF_RUNTIME_FEATURE(
+    RemoveLoaderIncorrectProgramID, "remove-loader-incorrect-program-id",
+    "remove_bpf_loader_incorrect_program_id",
+    "2HmTkCj9tXuPE4ueHzdD7jPeMf9JGCoZh5AsyoATiWEe", "", LoaderManagement,
+    FoldedBranch,
+    "loader management instructions reject the historical incorrect program-id "
+    "path")
+SBF_RUNTIME_FEATURE_ACTIVATION(RemoveLoaderIncorrectProgramID, MainnetBeta,
+                               237168000)
+SBF_RUNTIME_FEATURE_ACTIVATION(RemoveLoaderIncorrectProgramID, Testnet,
+                               224300256)
+SBF_RUNTIME_FEATURE_ACTIVATION(RemoveLoaderIncorrectProgramID, Devnet,
+                               247104000)
+
+SBF_RUNTIME_FEATURE(
+    SimplifyAltBn128ErrorCodes, "simplify-alt-bn128-error-codes",
+    "simplify_alt_bn128_syscall_error_codes",
+    "JDn5q3GBeqzvUa7z67BbmVHVdE3EbUAjvFep3weR3jxX", "simd-0129",
+    SyscallSemantics, FoldedBranch,
+    "alt_bn128 syscalls expose the simplified stable error-code mapping")
+SBF_RUNTIME_FEATURE_ACTIVATION(SimplifyAltBn128ErrorCodes, MainnetBeta,
+                               274320000)
+SBF_RUNTIME_FEATURE_ACTIVATION(SimplifyAltBn128ErrorCodes, Testnet, 278300256)
+SBF_RUNTIME_FEATURE_ACTIVATION(SimplifyAltBn128ErrorCodes, Devnet, 308448000)
+
+SBF_RUNTIME_FEATURE(
+    AbortOnInvalidCurve, "abort-on-invalid-curve", "abort_on_invalid_curve",
+    "FuS3FPfJDKSNot99ECLXtp3rueq36hMNStJkPJwWodLh", "simd-0137",
+    SyscallSemantics, RuntimeBranch,
+    "curve syscalls abort instead of returning legacy invalid-point results")
+SBF_RUNTIME_FEATURE_ACTIVATION(AbortOnInvalidCurve, MainnetBeta, 311904000)
+SBF_RUNTIME_FEATURE_ACTIVATION(AbortOnInvalidCurve, Testnet, 300764256)
+SBF_RUNTIME_FEATURE_ACTIVATION(AbortOnInvalidCurve, Devnet, 342576000)
+
+SBF_RUNTIME_FEATURE(
+    DepleteCUMeterOnVMFailure, "deplete-cu-meter-on-vm-failure",
+    "deplete_cu_meter_on_vm_failure",
+    "B7H2caeia4ZFcpE3QcgMqbiWiBtWrdBRBSJ1DY6Ktxbq", "simd-0182", VMFaultPolicy,
+    RuntimeBranch,
+    "a VM failure consumes the invocation's remaining compute units")
+SBF_RUNTIME_FEATURE_ACTIVATION(DepleteCUMeterOnVMFailure, MainnetBeta,
+                               327888000)
+SBF_RUNTIME_FEATURE_ACTIVATION(DepleteCUMeterOnVMFailure, Testnet, 319340257)
+SBF_RUNTIME_FEATURE_ACTIVATION(DepleteCUMeterOnVMFailure, Devnet, 364176000)
+
+SBF_RUNTIME_FEATURE(
+    FixAltBn128MultiplicationInputLength,
+    "fix-alt-bn128-multiplication-input-length",
+    "fix_alt_bn128_multiplication_input_length",
+    "bn2puAyxUx6JUabAxYdKdJ5QHbNNmKw8dCGuGCyRrFN", "simd-0222",
+    SyscallSemantics, FoldedBranch,
+    "alt_bn128 multiplication validates the corrected input length")
+SBF_RUNTIME_FEATURE_ACTIVATION(FixAltBn128MultiplicationInputLength,
+                               MainnetBeta, 361152000)
+SBF_RUNTIME_FEATURE_ACTIVATION(FixAltBn128MultiplicationInputLength, Testnet,
+                               346988256)
+SBF_RUNTIME_FEATURE_ACTIVATION(FixAltBn128MultiplicationInputLength, Devnet,
+                               397440000)
+
+SBF_RUNTIME_FEATURE(
+    RaiseCPINestingLimit, "raise-cpi-nesting-limit",
+    "raise_cpi_nesting_limit_to_8",
+    "6TkHkRmP7JZy1fdM6fg5uXn76wChQBWGokHBJzrLB3mj", "simd-0268", CPIExecution,
+    RuntimeBranch,
+    "cross-program invocations may use the raised call-depth limit")
+
+SBF_RUNTIME_FEATURE(
+    IncreaseCPIAccountInfoLimit, "increase-cpi-account-info-limit",
+    "increase_cpi_account_info_limit",
+    "H6iVbVaDZgDphcPbcZwc5LoznMPWQfnJ1AM7L1xzqvt5", "simd-0339", CPIExecution,
+    FoldedBranch,
+    "a CPI may carry the expanded account-info set and its compute costs")
+SBF_RUNTIME_FEATURE_ACTIVATION(IncreaseCPIAccountInfoLimit, MainnetBeta,
+                               403056000)
+SBF_RUNTIME_FEATURE_ACTIVATION(IncreaseCPIAccountInfoLimit, Testnet, 385868256)
+SBF_RUNTIME_FEATURE_ACTIVATION(IncreaseCPIAccountInfoLimit, Devnet, 435456000)
+
+SBF_RUNTIME_FEATURE(PoseidonEnforcePadding, "poseidon-enforce-padding",
+                    "poseidon_enforce_padding",
+                    "poUdAqRXXsNmfqAZ6UqpjbeYgwBygbfQLEvWSqVhSnb", "simd-0359",
+                    SyscallSemantics, FoldedBranch,
+                    "the Poseidon syscall enforces canonical input padding")
+SBF_RUNTIME_FEATURE_ACTIVATION(PoseidonEnforcePadding, MainnetBeta, 406080000)
+SBF_RUNTIME_FEATURE_ACTIVATION(PoseidonEnforcePadding, Testnet, 385868256)
+SBF_RUNTIME_FEATURE_ACTIVATION(PoseidonEnforcePadding, Devnet, 438048000)
+
+SBF_RUNTIME_FEATURE(
+    FixAltBn128PairingLength, "fix-alt-bn128-pairing-length",
+    "fix_alt_bn128_pairing_length_check",
+    "bnYzodLwmybj7e1HAe98yZrdJTd7we69eMMLgCXqKZm", "simd-0334",
+    SyscallSemantics, FoldedBranch,
+    "alt_bn128 pairing validates the corrected element-aligned input length")
+SBF_RUNTIME_FEATURE_ACTIVATION(FixAltBn128PairingLength, MainnetBeta, 406944000)
+SBF_RUNTIME_FEATURE_ACTIVATION(FixAltBn128PairingLength, Testnet, 385868256)
+SBF_RUNTIME_FEATURE_ACTIVATION(FixAltBn128PairingLength, Devnet, 438480000)
+
+SBF_RUNTIME_FEATURE(
+    AltBn128LittleEndian, "alt-bn128-little-endian", "alt_bn128_little_endian",
+    "bn2oPgpkzQPT3tohMaAsMVGjhDmmDa4jCaVPqCFmtxM", "simd-0284",
+    SyscallSemantics, RuntimeBranch,
+    "alt_bn128 group operations use little-endian field-element encoding")
+SBF_RUNTIME_FEATURE_ACTIVATION(AltBn128LittleEndian, MainnetBeta, 425088000)
+SBF_RUNTIME_FEATURE_ACTIVATION(AltBn128LittleEndian, Testnet, 406604256)
+SBF_RUNTIME_FEATURE_ACTIVATION(AltBn128LittleEndian, Devnet, 456192000)
+
+SBF_RUNTIME_FEATURE(AltBn128G2Syscalls, "alt-bn128-g2-syscalls",
+                    "enable_alt_bn128_g2_syscalls",
+                    "bn1hKNURMGQaQoEVxahcEAcqiX3NwRs6hgKKNSLeKxH", "simd-0302",
+                    SyscallSemantics, RuntimeBranch,
+                    "alt_bn128 group-operation dispatch admits G2 operations")
+SBF_RUNTIME_FEATURE_ACTIVATION(AltBn128G2Syscalls, MainnetBeta, 425520000)
+SBF_RUNTIME_FEATURE_ACTIVATION(AltBn128G2Syscalls, Testnet, 406604256)
+SBF_RUNTIME_FEATURE_ACTIVATION(AltBn128G2Syscalls, Devnet, 457056000)
+
+SBF_RUNTIME_FEATURE(
+    LoaderV3MinimumExtendProgramSize, "loader-v3-minimum-extend-program-size",
+    "loader_v3_minimum_extend_program_size",
+    "YbbRLkvenrocjGPGyoQE4wjnvYzTgfsk38NFmcYK7a5", "simd-0431",
+    LoaderManagement, RuntimeBranch,
+    "loader-v3 extension enforces the minimum added program-data size")
+SBF_RUNTIME_FEATURE_ACTIVATION(LoaderV3MinimumExtendProgramSize, MainnetBeta,
+                               432864000)
+SBF_RUNTIME_FEATURE_ACTIVATION(LoaderV3MinimumExtendProgramSize, Testnet,
+                               416540256)
+SBF_RUNTIME_FEATURE_ACTIVATION(LoaderV3MinimumExtendProgramSize, Devnet,
+                               470880000)
+
+SBF_RUNTIME_FEATURE(
+    DisableAllocFreeDeployment, "disable-alloc-free-deployment",
+    "disable_deploy_of_alloc_free_syscall",
+    "79HWsX9rpnnJBPcdNURVqygpMAfxdrAirzAGAVmf92im", "", ProgramAdmission,
+    FoldedBranch,
+    "deployment stops registering the retired alloc-free syscall while "
+    "execution remains backward compatible")
+SBF_RUNTIME_FEATURE_ACTIVATION(DisableAllocFreeDeployment, MainnetBeta,
+                               209088008)
+SBF_RUNTIME_FEATURE_ACTIVATION(DisableAllocFreeDeployment, Testnet, 195356264)
+SBF_RUNTIME_FEATURE_ACTIVATION(DisableAllocFreeDeployment, Devnet, 224208000)
+
+//===----------------------------------------------------------------------===//
+// Chain ISA availability
+//===----------------------------------------------------------------------===//
+
+SBF_RUNTIME_VERSION(V0, None)
+SBF_RUNTIME_VERSION(V1, EnableSBPFV1)
+SBF_RUNTIME_VERSION(V2, EnableSBPFV2)
+SBF_RUNTIME_VERSION(V3, EnableSBPFV3)
+
+#undef SBF_RUNTIME_VERSION
 #undef SBF_RUNTIME_FEATURE_ACTIVATION
 #undef SBF_RUNTIME_FEATURE
+#undef SBF_RUNTIME_FEATURE_DISPOSITION
+#undef SBF_RUNTIME_FEATURE_DOMAIN
 #undef SBF_RUNTIME_PURPOSE
 #undef SBF_CLUSTER

@@ -44,7 +44,14 @@ namespace neverd::sbf {
 enum class Cluster : uint8_t {
 #define SBF_CLUSTER(ID, NAME, ACTIVATES_EVERYTHING, SUMMARY) ID,
 #include "neverd/sbf/runtime/SBFRuntimeFeatures.def"
+  Count,
 };
+
+inline constexpr size_t kClusterCount = static_cast<size_t>(Cluster::Count);
+
+constexpr bool isValidCluster(Cluster ID) {
+  return static_cast<size_t>(ID) < kClusterCount;
+}
 
 struct ClusterInfo {
   Cluster ID;
@@ -67,7 +74,15 @@ std::optional<Cluster> parseCluster(llvm::StringRef Name);
 enum class RuntimePurpose : uint8_t {
 #define SBF_RUNTIME_PURPOSE(ID, NAME, SUMMARY) ID,
 #include "neverd/sbf/runtime/SBFRuntimeFeatures.def"
+  Count,
 };
+
+inline constexpr size_t kRuntimePurposeCount =
+    static_cast<size_t>(RuntimePurpose::Count);
+
+constexpr bool isValidRuntimePurpose(RuntimePurpose Purpose) {
+  return static_cast<size_t>(Purpose) < kRuntimePurposeCount;
+}
 
 struct RuntimePurposeInfo {
   RuntimePurpose ID;
@@ -88,6 +103,9 @@ enum class RuntimePurposeSet : uint8_t {
 #include "neverd/sbf/runtime/SBFRuntimeFeatures.def"
 };
 
+static_assert(kRuntimePurposeCount <= std::numeric_limits<uint8_t>::digits,
+              "the purpose set must hold every tabulated runtime purpose");
+
 constexpr RuntimePurposeSet operator|(RuntimePurposeSet L,
                                       RuntimePurposeSet R) {
   return static_cast<RuntimePurposeSet>(static_cast<uint8_t>(L) |
@@ -95,7 +113,8 @@ constexpr RuntimePurposeSet operator|(RuntimePurposeSet L,
 }
 
 constexpr bool contains(RuntimePurposeSet Set, RuntimePurpose Purpose) {
-  return (static_cast<uint8_t>(Set) &
+  return isValidRuntimePurpose(Purpose) &&
+         (static_cast<uint8_t>(Set) &
           (uint8_t{1} << static_cast<uint8_t>(Purpose))) != 0;
 }
 
@@ -118,7 +137,14 @@ enum class Loader : uint8_t {
                    SUMMARY)                                                    \
   ID,
 #include "neverd/sbf/runtime/SBFLoaders.def"
+  Count,
 };
+
+inline constexpr size_t kLoaderCount = static_cast<size_t>(Loader::Count);
+
+constexpr bool isValidLoader(Loader ID) {
+  return static_cast<size_t>(ID) < kLoaderCount;
+}
 
 struct LoaderInfo {
   Loader ID;
@@ -144,8 +170,62 @@ std::optional<Loader> loaderForAddress(KnownAddress Address);
 // The gates
 //===----------------------------------------------------------------------===//
 
+/// The runtime subsystem whose externally observable behaviour a gate changes.
+/// This is generated from the same definition file as the feature identities,
+/// so consumers never have to classify gates by matching their spelling.
+enum class RuntimeFeatureDomain : uint8_t {
+#define SBF_RUNTIME_FEATURE_DOMAIN(ID, NAME, SUMMARY) ID,
+#include "neverd/sbf/runtime/SBFRuntimeFeatures.def"
+  Count,
+};
+
+inline constexpr size_t kRuntimeFeatureDomainCount =
+    static_cast<size_t>(RuntimeFeatureDomain::Count);
+
+constexpr bool isValidRuntimeFeatureDomain(RuntimeFeatureDomain Domain) {
+  return static_cast<size_t>(Domain) < kRuntimeFeatureDomainCount;
+}
+
+struct RuntimeFeatureDomainInfo {
+  RuntimeFeatureDomain ID;
+  llvm::StringLiteral Name;
+  llvm::StringLiteral Summary;
+};
+
+llvm::ArrayRef<RuntimeFeatureDomainInfo> runtimeFeatureDomainInfos();
+llvm::StringRef runtimeFeatureDomainName(RuntimeFeatureDomain Domain);
+
+/// Whether the pinned Agave revision still branches on a feature at runtime.
+/// Folded and historical rows remain valuable to a slot-qualified analysis,
+/// but must not be presented as a current dynamic branch in upstream code.
+enum class RuntimeFeatureDisposition : uint8_t {
+#define SBF_RUNTIME_FEATURE_DISPOSITION(ID, NAME, SUMMARY) ID,
+#include "neverd/sbf/runtime/SBFRuntimeFeatures.def"
+  Count,
+};
+
+inline constexpr size_t kRuntimeFeatureDispositionCount =
+    static_cast<size_t>(RuntimeFeatureDisposition::Count);
+
+constexpr bool
+isValidRuntimeFeatureDisposition(RuntimeFeatureDisposition Disposition) {
+  return static_cast<size_t>(Disposition) < kRuntimeFeatureDispositionCount;
+}
+
+struct RuntimeFeatureDispositionInfo {
+  RuntimeFeatureDisposition ID;
+  llvm::StringLiteral Name;
+  llvm::StringLiteral Summary;
+};
+
+llvm::ArrayRef<RuntimeFeatureDispositionInfo> runtimeFeatureDispositionInfos();
+llvm::StringRef
+runtimeFeatureDispositionName(RuntimeFeatureDisposition Disposition);
+
 enum class RuntimeFeatureBit : uint8_t {
-#define SBF_RUNTIME_FEATURE(ID, NAME, GATE, ADDRESS, SIMD, SUMMARY) ID,
+#define SBF_RUNTIME_FEATURE(ID, NAME, GATE, ADDRESS, SIMD, DOMAIN,             \
+                            DISPOSITION, SUMMARY)                              \
+  ID,
 #include "neverd/sbf/runtime/SBFRuntimeFeatures.def"
   Count,
 };
@@ -153,23 +233,49 @@ enum class RuntimeFeatureBit : uint8_t {
 inline constexpr size_t kRuntimeFeatureCount =
     static_cast<size_t>(RuntimeFeatureBit::Count);
 
-enum class RuntimeFeature : uint32_t {
+/// Frozen storage and host-ABI width of one version-2 runtime-feature snapshot.
+/// Feature identities are append-only, but this public width is not: if the
+/// table ever outgrows this word, introduce a version-3 multiword snapshot
+/// instead of changing this alias and silently breaking existing hosts.
+using RuntimeFeatureMask = uint64_t;
+
+enum class RuntimeFeature : RuntimeFeatureMask {
   None = 0,
-#define SBF_RUNTIME_FEATURE(ID, NAME, GATE, ADDRESS, SIMD, SUMMARY)            \
-  ID = uint32_t{1} << static_cast<uint32_t>(RuntimeFeatureBit::ID),
+#define SBF_RUNTIME_FEATURE(ID, NAME, GATE, ADDRESS, SIMD, DOMAIN,             \
+                            DISPOSITION, SUMMARY)                              \
+  ID = RuntimeFeatureMask{1}                                                   \
+       << static_cast<RuntimeFeatureMask>(RuntimeFeatureBit::ID),
 #include "neverd/sbf/runtime/SBFRuntimeFeatures.def"
 };
 
-static_assert(kRuntimeFeatureCount <= std::numeric_limits<uint32_t>::digits,
+static_assert(kRuntimeFeatureCount <=
+                  std::numeric_limits<RuntimeFeatureMask>::digits,
               "a runtime feature set must hold every tabulated gate");
+static_assert(std::numeric_limits<RuntimeFeatureMask>::digits >
+                  std::numeric_limits<uint32_t>::digits,
+              "the host ABI must not truncate append-only feature bits");
+
+constexpr RuntimeFeatureMask runtimeFeatureMask(RuntimeFeature Feature) {
+  return static_cast<RuntimeFeatureMask>(Feature);
+}
+
+/// Every bit assigned by the append-only runtime-feature table.
+constexpr RuntimeFeatureMask knownRuntimeFeatureMask() {
+  RuntimeFeatureMask Known = 0;
+#define SBF_RUNTIME_FEATURE(ID, NAME, GATE, ADDRESS, SIMD, DOMAIN,             \
+                            DISPOSITION, SUMMARY)                              \
+  Known |= runtimeFeatureMask(RuntimeFeature::ID);
+#include "neverd/sbf/runtime/SBFRuntimeFeatures.def"
+  return Known;
+}
 
 constexpr RuntimeFeature operator|(RuntimeFeature L, RuntimeFeature R) {
-  return static_cast<RuntimeFeature>(static_cast<uint32_t>(L) |
-                                     static_cast<uint32_t>(R));
+  return static_cast<RuntimeFeature>(runtimeFeatureMask(L) |
+                                     runtimeFeatureMask(R));
 }
 
 constexpr bool hasFeature(RuntimeFeature Set, RuntimeFeature Feature) {
-  return (static_cast<uint32_t>(Set) & static_cast<uint32_t>(Feature)) != 0;
+  return (runtimeFeatureMask(Set) & runtimeFeatureMask(Feature)) != 0;
 }
 
 struct RuntimeFeatureInfo {
@@ -177,12 +283,14 @@ struct RuntimeFeatureInfo {
   llvm::StringLiteral Name;
   /// The identifier the runtime gives the switch.
   llvm::StringLiteral Gate;
-  /// The account whose existence turns it on, which is what makes an
-  /// activation checkable against a live node.
+  /// The feature account whose state records its activation slot. A pending
+  /// account can exist without activating the gate.
   llvm::StringLiteral Address;
   /// The proposal that specified the behaviour, empty for switches that
   /// predate the process.
   llvm::StringLiteral SIMD;
+  RuntimeFeatureDomain Domain;
+  RuntimeFeatureDisposition Disposition;
   llvm::StringLiteral Summary;
 };
 
@@ -221,6 +329,9 @@ struct RuntimeProfile {
   RuntimeFeature Forced = RuntimeFeature::None;
   RuntimeFeature Suppressed = RuntimeFeature::None;
 
+  /// The loader-selected logical serialization. Runtime memory-topology gates
+  /// can change how account data is backed or which addresses syscalls accept,
+  /// but do not create another ABIv0/ABIv1 field layout.
   [[nodiscard]] AccountABI accountABI() const;
 };
 

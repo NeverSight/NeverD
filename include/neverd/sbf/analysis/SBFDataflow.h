@@ -16,6 +16,7 @@
 #define NEVERD_SBF_ANALYSIS_SBFDATAFLOW_H
 
 #include "neverd/sbf/SBFIR.h"
+#include "neverd/sbf/analysis/SBFAnalysisLimits.h"
 #include "neverd/sbf/image/SBFProgramImage.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -25,6 +26,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -44,12 +46,11 @@ std::optional<va_t> effectiveAddress(const RegisterValue &Base,
 /// every invoked program share it.
 bool isScratchAddress(va_t Address);
 
-/// The most scratch bytes one program point may describe.
-///
-/// A serialized instruction, its account references, and its payload are a few
-/// hundred bytes together, so this is a generous ceiling on anything recovery
-/// reads and a hard bound on what a store loop can make the analysis hold.
-inline constexpr uint64_t kMaxModeledScratchBytes = 1024;
+/// Whether the full half-open range `[Address, Address + Size)` stays inside
+/// one scratch VM region. This is the checked authority for facts created by
+/// multi-byte stores and memory-transfer syscalls; a range crossing from one
+/// VM region to the next faults at runtime and proves no bytes.
+bool isScratchRange(va_t Address, uint64_t Size);
 
 /// Scratch bytes whose value is proven at one program point.
 ///
@@ -78,6 +79,11 @@ public:
   bool empty() const { return Runs.empty(); }
   uint64_t trackedBytes() const { return TrackedBytes; }
 
+  /// Conservative bytes charged for retaining this logical snapshot. The
+  /// estimate includes byte buffers, ordered-map nodes, and owning objects;
+  /// shared snapshots are deliberately charged once per retaining slot.
+  uint64_t retainedByteEstimate() const;
+
   /// The proven bytes at \p Address, empty unless every one of them is proven.
   llvm::ArrayRef<uint8_t> read(va_t Address, uint64_t Size) const;
 
@@ -99,11 +105,9 @@ private:
 };
 
 /// What the register fixed point does not carry: the scratch bytes a program
-/// has written, and whether a pointer into that scratch could have reached a
-/// callee by a route the register file no longer shows.
+/// has written.
 struct ScratchState {
   MemoryModel Memory;
-  bool Escaped = false;
 
   void meet(const ScratchState &Other);
   bool operator==(const ScratchState &Other) const;
@@ -151,6 +155,13 @@ void applyRegisterTransfer(const MedInstruction &Instruction,
 void applyTransfer(const MedInstruction &Instruction, MachineState &State,
                    const ProgramImage &Image);
 
+/// Whether Solana recovery reads scratch bytes at this runtime call. CPI and
+/// PDA decoding dereference program-built descriptors; other recovery
+/// visitors consume registers or the immutable ProgramImage only.
+bool consumesScratchFacts(const MedInstruction &Instruction);
+
+enum class ScratchFlowPrecision : uint8_t { Exact, WidenedToUnknown };
+
 /// Entry scratch state of every block.
 ///
 /// A program does not have to finish assembling an argument in the block that
@@ -160,18 +171,30 @@ void applyTransfer(const MedInstruction &Instruction, MachineState &State,
 /// frame and inherits nothing from its caller's.
 class ScratchFlow {
 public:
+  struct Statistics {
+    ScratchFlowPrecision Precision = ScratchFlowPrecision::Exact;
+    uint64_t RetainedByteEstimate = 0;
+    uint64_t PeakRetainedByteEstimate = 0;
+    size_t IndexedBlockCount = 0;
+    size_t IndexedEdgeCount = 0;
+    size_t SuccessorIndexEntryCount = 0;
+  };
+
   ScratchFlow(const SBFProgram &Program, const MedInstructionIndex &Index);
 
   const ScratchState &entryState(size_t BlockID) const;
+  const Statistics &statistics() const { return Stats; }
 
 private:
-  std::vector<ScratchState> Entry;
+  /// Sparse, shared immutable states. Empty/basic blocks reuse the same state
+  /// object, so the storage scales with distinct scratch mutations rather than
+  /// with the program's block count.
+  std::vector<std::shared_ptr<const ScratchState>> Entry;
+  std::shared_ptr<const ScratchState> Empty =
+      std::make_shared<const ScratchState>();
   ScratchState Unreached;
+  Statistics Stats;
 };
-
-/// The most blocks \c ScratchFlow will describe. A larger program still gets
-/// per-block recovery; it only loses the facts that cross a block boundary.
-inline constexpr size_t kMaxScratchFlowBlocks = 16384;
 
 /// Replay \p Block from \p Entry and the block's recorded register inputs,
 /// reporting the state that reaches each instruction before it executes.

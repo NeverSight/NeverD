@@ -344,7 +344,10 @@ llvm::ArrayRef<SyscallGateInfo> syscallGateInfos() {
   static const std::array Table = {
 #define SBF_SYSCALL_GATE(SYSCALL, FEATURE, POLARITY)                           \
   SyscallGateInfo{Syscall::SYSCALL, RuntimeFeature::FEATURE,                   \
-                  SyscallGatePolarity::POLARITY},
+                  SyscallGatePolarity::POLARITY, kEveryPurpose},
+#define SBF_SYSCALL_PURPOSE_GATE(SYSCALL, PURPOSE, FEATURE, POLARITY)          \
+  SyscallGateInfo{Syscall::SYSCALL, RuntimeFeature::FEATURE,                   \
+                  SyscallGatePolarity::POLARITY, RuntimePurposeSet::PURPOSE},
 #include "neverd/sbf/runtime/SBFSyscallRegistration.def"
   };
   return Table;
@@ -357,21 +360,39 @@ const SyscallGateInfo *getSyscallGate(Syscall ID) {
   return nullptr;
 }
 
-SyscallRegistration syscallRegistration(Syscall ID,
-                                        const RuntimeProfile &Profile) {
+SyscallRegistration syscallRegistration(Syscall ID, RuntimePurpose Purpose,
+                                        RuntimeFeature ActiveFeatures) {
   // Which registry is asked about comes first: a syscall the deployment
   // registry never contains is excluded there no matter what the chain has
   // switched on, and reporting a gate for it would send a reader looking for
   // a cluster where it works.
-  if (!contains(syscallPurposes(ID), Profile.Purpose))
+  if (!contains(syscallPurposes(ID), Purpose))
     return SyscallRegistration::EnvironmentExcluded;
   const SyscallGateInfo *Gate = getSyscallGate(ID);
-  if (!Gate)
+  if (!Gate || !contains(Gate->Purposes, Purpose))
     return SyscallRegistration::Registered;
-  const bool Active = isFeatureActive(Profile, Gate->Feature);
+  const bool Active = hasFeature(ActiveFeatures, Gate->Feature);
   const bool Wanted = Gate->Polarity == SyscallGatePolarity::RequiresActive;
   return Active == Wanted ? SyscallRegistration::Registered
                           : SyscallRegistration::GateUnmet;
+}
+
+SyscallRegistration syscallRegistration(Syscall ID,
+                                        const RuntimeProfile &Profile) {
+  return syscallRegistration(ID, Profile.Purpose, activeFeatures(Profile));
+}
+
+std::vector<uint32_t> registeredSyscallHashes(RuntimePurpose Purpose,
+                                              RuntimeFeature ActiveFeatures) {
+  std::vector<uint32_t> Hashes;
+  Hashes.reserve(syscallInfos().size());
+  for (const SyscallInfo &Info : syscallInfos())
+    if (syscallRegistration(Info.ID, Purpose, ActiveFeatures) ==
+        SyscallRegistration::Registered)
+      Hashes.push_back(Info.Hash);
+  llvm::sort(Hashes);
+  Hashes.erase(std::unique(Hashes.begin(), Hashes.end()), Hashes.end());
+  return Hashes;
 }
 
 llvm::Error validateSyscallRegistrationTable() {
@@ -385,6 +406,8 @@ llvm::Error validateSyscallRegistrationTable() {
     const SyscallInfo *Syscall = getSyscallInfo(Info.ID);
     if (!Syscall)
       return Report("a gate names a syscall the table does not declare");
+    if (Info.Purposes == RuntimePurposeSet::None)
+      return Report("a syscall gate applies to no runtime purpose");
     // A gate is the whole reason a signature is conditional, so a syscall the
     // gate table governs and the syscall table calls settled is one of the two
     // files being wrong about the other.
@@ -398,9 +421,14 @@ llvm::Error validateSyscallRegistrationTable() {
         return Report("syscall '" + Syscall->Name + "' is governed twice");
   }
 
-  for (const SyscallInfo &Info : syscallInfos())
+  for (const SyscallInfo &Info : syscallInfos()) {
     if (syscallPurposes(Info.ID) == RuntimePurposeSet::None)
       return Report("syscall '" + Info.Name + "' belongs to no registry");
+    if (Info.Lifecycle == SyscallLifecycle::FeatureGated &&
+        !getSyscallGate(Info.ID))
+      return Report("feature-gated syscall '" + Info.Name +
+                    "' has no registration gate");
+  }
   return llvm::Error::success();
 }
 

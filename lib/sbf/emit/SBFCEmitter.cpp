@@ -18,18 +18,67 @@
 
 #include "neverd/sbf/analysis/SBFAnalyzer.h"
 #include "neverd/sbf/analysis/SBFStructuredCFG.h"
+#include "neverd/sbf/emit/SBFSourceLimits.h"
+#include "neverd/sbf/emit/SBFSourceStatus.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstddef>
+#include <limits>
 #include <map>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 namespace neverd::sbf {
 
 using namespace c_emitter_detail;
+
+namespace {
+
+static_assert(std::is_unsigned_v<RuntimeFeatureMask>,
+              "runtime feature masks must use an unsigned source ABI");
+
+std::string cRuntimeFeatureName(llvm::StringRef Name) {
+  std::string Result = "NEVERD_SBF_RUNTIME_FEATURE_";
+  for (char Character : Name)
+    Result.push_back(Character == '-' ? '_' : llvm::toUpper(Character));
+  return Result;
+}
+
+template <typename Mask> llvm::StringRef cRuntimeFeatureMaskTypeImpl() {
+  constexpr unsigned Bits = std::numeric_limits<Mask>::digits;
+  static_assert(Bits == std::numeric_limits<uint32_t>::digits ||
+                    Bits == std::numeric_limits<uint64_t>::digits,
+                "generated C supports 32-bit and 64-bit feature masks");
+  if constexpr (Bits == std::numeric_limits<uint64_t>::digits)
+    return "uint64_t";
+  return "uint32_t";
+}
+
+llvm::StringRef cRuntimeFeatureMaskType() {
+  return cRuntimeFeatureMaskTypeImpl<RuntimeFeatureMask>();
+}
+
+template <typename Mask>
+std::string cRuntimeFeatureMaskLiteralImpl(Mask Value) {
+  constexpr unsigned Bits = std::numeric_limits<Mask>::digits;
+  const llvm::StringRef Macro =
+      Bits == std::numeric_limits<uint64_t>::digits ? "UINT64_C" : "UINT32_C";
+  std::string Result = Macro.str();
+  Result += "(0x";
+  Result += llvm::utohexstr(Value);
+  Result += ')';
+  return Result;
+}
+
+std::string cRuntimeFeatureMaskLiteral(RuntimeFeatureMask Value) {
+  return cRuntimeFeatureMaskLiteralImpl(Value);
+}
+
+} // namespace
 
 llvm::Expected<std::string> emitC(const SBFProgram &Program,
                                   const CEmitterOptions &Options) {
@@ -43,10 +92,12 @@ llvm::Expected<std::string> emitC(const SBFProgram &Program,
   std::map<size_t, const MedInstruction *> BySlot;
   for (const MedInstruction &Instruction : Program.Med.Instructions)
     BySlot[Instruction.Slot] = &Instruction;
-  const std::optional<StructuredControlFlow> Structured =
+  std::optional<StructuredControlFlow> Structured =
       Options.PreferStructuredControlFlow
           ? buildStructuredControlFlow(Program)
           : std::optional<StructuredControlFlow>{};
+  if (Structured && Structured->MaximumDepth > kMaximumCStructuredNestingDepth)
+    Structured.reset();
 
   bool NeedsSignExtension = false;
   bool NeedsSignedCompare32 = false;
@@ -57,7 +108,8 @@ llvm::Expected<std::string> emitC(const SBFProgram &Program,
   bool NeedsSignedHighMultiply = false;
   bool NeedsByteSwap = false;
   bool NeedsSignedDivision = false;
-  bool NeedsIndirectCall = false;
+  bool NeedsRuntimeStatus = false;
+  bool NeedsSyscall = false;
   for (const MedInstruction &Instruction : Program.Med.Instructions) {
     NeedsSignExtension |=
         Instruction.Semantics.Result == ResultExtension::Sign32;
@@ -77,7 +129,21 @@ llvm::Expected<std::string> emitC(const SBFProgram &Program,
     NeedsByteSwap |= Instruction.Op == Operation::EndianBE;
     NeedsSignedDivision |=
         Instruction.Op == Operation::SDiv || Instruction.Op == Operation::SRem;
-    NeedsIndirectCall |= Instruction.Op == Operation::CallX;
+    NeedsRuntimeStatus |=
+        Instruction.Op == Operation::Load ||
+        Instruction.Op == Operation::Store ||
+        (Instruction.Op == Operation::Call &&
+         (Instruction.Call == CallKind::Syscall ||
+          Instruction.Call == CallKind::Unresolved ||
+          (Instruction.Call == CallKind::Internal &&
+           Instruction.Dispatch ==
+               CallDispatchPolicy::LegacyRuntimeThenFunction)));
+    NeedsSyscall |= Instruction.Op == Operation::Call &&
+                    (Instruction.Call == CallKind::Syscall ||
+                     Instruction.Call == CallKind::Unresolved ||
+                     (Instruction.Call == CallKind::Internal &&
+                      Instruction.Dispatch ==
+                          CallDispatchPolicy::LegacyRuntimeThenFunction));
   }
 
   std::string Buffer;
@@ -86,14 +152,67 @@ llvm::Expected<std::string> emitC(const SBFProgram &Program,
      << versionDisplayName(Program.Low.TheVersion)
      << ". */\n"
         "#include <stddef.h>\n#include <stdint.h>\n#include <limits.h>\n\n"
-        "typedef enum neverd_sbf_status {\n"
-        "  NEVERD_SBF_OK = 0, NEVERD_SBF_INVALID_INSTRUCTION,\n"
-        "  NEVERD_SBF_MEMORY_ACCESS, NEVERD_SBF_DIVIDE_BY_ZERO,\n"
-        "  NEVERD_SBF_DIVIDE_OVERFLOW, NEVERD_SBF_CALL_DEPTH,\n"
-        "  NEVERD_SBF_UNKNOWN_SYSCALL, NEVERD_SBF_UNKNOWN_FUNCTION,\n"
-        "  NEVERD_SBF_EXECUTION_OVERRUN\n"
-        "} neverd_sbf_status;\n\n"
+        "typedef enum neverd_sbf_status {\n";
+#define SBF_SOURCE_SUCCESS(NAME, FAULT_CODE, C_NAME, VALUE)                    \
+  OS << "  " #C_NAME " = " << sourceStatusCode(SourceStatus::NAME) << ",\n";
+#define SBF_SOURCE_C_V1_ERROR(NAME)                                            \
+  OS << "  " << cSourceStatusName(SourceStatus::NAME) << " = "                 \
+     << sourceStatusCode(SourceStatus::NAME) << ",\n";
+#include "neverd/sbf/emit/SBFSourceStatuses.def"
+  OS << "} neverd_sbf_status;\n\n"
+        "/* Version 2 has a fixed-width, append-only status domain. Values "
+        "zero through eight are the legacy enum values above. */\n"
+        "typedef uint32_t neverd_sbf_status_v2;\n"
+        "enum {\n";
+#define SBF_SOURCE_C_V1_FALLBACK(NAME, LEGACY_NAME)                            \
+  OS << "  " << cSourceStatusName(SourceStatus::NAME) << " = "                 \
+     << sourceStatusCode(SourceStatus::NAME) << ",\n";
+#include "neverd/sbf/emit/SBFSourceStatuses.def"
+  OS << "};\n\n"
+        "typedef "
+     << cRuntimeFeatureMaskType()
+     << " neverd_sbf_runtime_feature_mask;\n"
+        "typedef struct neverd_sbf_runtime_features {\n"
+        "  neverd_sbf_runtime_feature_mask bits;\n"
+        "} neverd_sbf_runtime_features;\n";
+  for (const RuntimeFeatureInfo &Info : runtimeFeatureInfos())
+    OS << "#define " << cRuntimeFeatureName(Info.Name) << " "
+       << cRuntimeFeatureMaskLiteral(runtimeFeatureMask(Info.ID)) << "\n";
+  OS << "\n"
+        "typedef struct neverd_sbf_syscall_invocation {\n"
+        "  uint32_t hash;\n"
+        "  uint64_t arguments["
+     << kArgumentRegisterCount
+     << "];\n"
+        "  neverd_sbf_runtime_features runtime_features;\n"
+        "} neverd_sbf_syscall_invocation;\n\n"
         "typedef struct neverd_sbf_environment {\n"
+        "  void *context;\n"
+        "  int (*load)(void *, uint64_t, uint32_t, uint64_t *);\n"
+        "  int (*store)(void *, uint64_t, uint32_t, uint64_t);\n"
+        "  /* Version 1 callbacks return zero on success and nonzero for the "
+        "operation's legacy generic fault. */\n"
+        "  int (*syscall)(void *, uint32_t";
+  for (unsigned Index = 0; Index < kArgumentRegisterCount; ++Index)
+    OS << ", uint64_t";
+  OS << ", uint64_t *);\n"
+        "} neverd_sbf_environment;\n\n"
+        "/* Version 2 is a distinct ABI. The original environment layout and "
+        "entrypoint never read this extension. Through the v2 entrypoint, "
+        "all callbacks may return any declared status for an exact handled "
+        "fault. */\n"
+        "typedef struct neverd_sbf_environment_v2 {\n"
+        "  neverd_sbf_environment base;\n"
+        "  int (*syscall_with_features)(\n"
+        "      void *, const neverd_sbf_syscall_invocation *, uint64_t *);\n"
+        "  /* Null selects the program's resolved snapshot; a pointer to zero "
+        "is an explicit empty snapshot. */\n"
+        "  const neverd_sbf_runtime_features *runtime_features;\n"
+        "} neverd_sbf_environment_v2;\n\n"
+        "typedef enum nd_status_abi {\n"
+        "  ND_STATUS_ABI_V1, ND_STATUS_ABI_V2\n"
+        "} nd_status_abi;\n\n"
+        "typedef struct nd_environment_view {\n"
         "  void *context;\n"
         "  int (*load)(void *, uint64_t, uint32_t, uint64_t *);\n"
         "  int (*store)(void *, uint64_t, uint32_t, uint64_t);\n"
@@ -101,9 +220,84 @@ llvm::Expected<std::string> emitC(const SBFProgram &Program,
   for (unsigned Index = 0; Index < kArgumentRegisterCount; ++Index)
     OS << ", uint64_t";
   OS << ", uint64_t *);\n"
-        "} neverd_sbf_environment;\n\n"
-        "enum { NEVERD_SBF_REGISTER_COUNT = "
-     << kRegisterCount << ", NEVERD_SBF_RETURN_REGISTER = " << kReturnRegister
+        "  int (*syscall_with_features)(\n"
+        "      void *, const neverd_sbf_syscall_invocation *, uint64_t *);\n"
+        "  const neverd_sbf_runtime_features *runtime_features;\n"
+        "  nd_status_abi status_abi;\n"
+        "} nd_environment_view;\n\n";
+  OS << "static neverd_sbf_status nd_legacy_status(\n"
+        "    neverd_sbf_status_v2 status) {\n"
+        "  switch (status) {\n";
+#define SBF_SOURCE_SUCCESS(NAME, FAULT_CODE, C_NAME, VALUE)                    \
+  OS << "  case " #C_NAME ": return " #C_NAME ";\n";
+#define SBF_SOURCE_C_V1_ERROR(NAME)                                            \
+  OS << "  case " << cSourceStatusName(SourceStatus::NAME)                     \
+     << ": return (neverd_sbf_status)status;\n";
+#define SBF_SOURCE_C_V1_FALLBACK(NAME, LEGACY_NAME)                            \
+  OS << "  case " << cSourceStatusName(SourceStatus::NAME) << ": return "      \
+     << cSourceStatusName(SourceStatus::LEGACY_NAME) << ";\n";
+#include "neverd/sbf/emit/SBFSourceStatuses.def"
+  OS << "  default: return "
+     << cSourceStatusName(SourceStatus::InvalidInstruction)
+     << ";\n"
+        "  }\n"
+        "}\n\n";
+  if (NeedsRuntimeStatus) {
+    OS << "static neverd_sbf_status_v2 nd_runtime_status(\n"
+          "    const nd_environment_view *env, int status,\n"
+          "    neverd_sbf_status_v2 legacy_status,\n"
+          "    neverd_sbf_status_v2 invalid_status) {\n"
+          "  if (status == "
+       << cSourceStatusName(SourceStatus::Ok) << ") return "
+       << cSourceStatusName(SourceStatus::Ok)
+       << ";\n"
+          "  if (env && env->status_abi == ND_STATUS_ABI_V1)\n"
+          "    return legacy_status;\n"
+          "  switch ((neverd_sbf_status_v2)status) {\n";
+#define SBF_SOURCE_SUCCESS(NAME, FAULT_CODE, C_NAME, VALUE)
+#define SBF_SOURCE_ERROR(NAME, FAULT_CODE, C_NAME, C_VALUE, RUST_VALUE)        \
+  OS << "  case " #C_NAME ": return " #C_NAME ";\n";
+#include "neverd/sbf/emit/SBFSourceStatuses.def"
+    OS << "  default: return invalid_status;\n"
+          "  }\n"
+          "}\n\n";
+  }
+  if (NeedsSyscall) {
+    OS << "static const neverd_sbf_runtime_features "
+          "NEVERD_SBF_PROGRAM_RUNTIME_FEATURES = { "
+       << cRuntimeFeatureMaskLiteral(
+              runtimeFeatureMask(Program.ActiveRuntimeFeatures))
+       << " };\n\n"
+          "static int nd_syscall(nd_environment_view *env, uint32_t hash";
+    for (unsigned Index = 0; Index < kArgumentRegisterCount; ++Index)
+      OS << ", uint64_t a" << Index;
+    OS << ", uint64_t *value) {\n"
+          "  neverd_sbf_syscall_invocation invocation = { hash, { ";
+    for (unsigned Index = 0; Index < kArgumentRegisterCount; ++Index) {
+      if (Index)
+        OS << ", ";
+      OS << "a" << Index;
+    }
+    OS << " }, NEVERD_SBF_PROGRAM_RUNTIME_FEATURES };\n"
+          "  if (!env) return "
+       << cSourceStatusName(SourceStatus::UnknownSyscall)
+       << ";\n"
+          "  if (env->runtime_features)\n"
+          "    invocation.runtime_features = *env->runtime_features;\n"
+          "  if (env->syscall_with_features)\n"
+          "    return env->syscall_with_features(env->context, &invocation, "
+          "value);\n"
+          "  if (!env->syscall) return "
+       << cSourceStatusName(SourceStatus::UnknownSyscall)
+       << ";\n"
+          "  return env->syscall(env->context, hash";
+    for (unsigned Index = 0; Index < kArgumentRegisterCount; ++Index)
+      OS << ", a" << Index;
+    OS << ", value);\n"
+          "}\n\n";
+  }
+  OS << "enum { NEVERD_SBF_REGISTER_COUNT = " << kRegisterCount
+     << ", NEVERD_SBF_RETURN_REGISTER = " << kReturnRegister
      << ", NEVERD_SBF_INPUT_REGISTER = " << kFirstArgumentRegister
      << ", NEVERD_SBF_INSTRUCTION_DATA_REGISTER = " << kInstructionDataRegister
      << ", NEVERD_SBF_FRAME_POINTER = " << kFramePointerRegister
@@ -167,11 +361,15 @@ llvm::Expected<std::string> emitC(const SBFProgram &Program,
           "UINT64_C(0x0000ffff0000ffff)); return (v << 32) | (v >> 32); }\n";
   if (NeedsSignedDivision)
     OS << "static uint64_t nd_sdivrem(uint64_t a, uint64_t b, unsigned bits, "
-          "int rem, int *fault) { uint64_t mask = bits == 32 ? UINT32_MAX : "
+          "int rem, neverd_sbf_status_v2 *fault) { uint64_t mask = bits == "
+          "32 ? "
+          "UINT32_MAX : "
           "UINT64_MAX, sign = bits == 32 ? (UINT64_C(1)<<31) : "
           "(UINT64_C(1)<<63); a &= mask; b &= mask; if (!b) { *fault = "
-          "NEVERD_SBF_DIVIDE_BY_ZERO; return 0; } if (a == sign && b == mask) "
-          "{ *fault = NEVERD_SBF_DIVIDE_OVERFLOW; return 0; } { int na = "
+       << cSourceStatusName(FaultCode::DivideByZero)
+       << "; return 0; } if (a == sign && b == mask) { *fault = "
+       << cSourceStatusName(FaultCode::DivideOverflow)
+       << "; return 0; } { int na = "
           "(a&sign)!=0, nb=(b&sign)!=0; uint64_t ua=na?((~a+1)&mask):a, "
           "ub=nb?((~b+1)&mask):b, value=rem?(ua%ub):(ua/ub); if ((rem?na:"
           "(na!=nb)) && value) value=(~value+1)&mask; return value; } }\n";
@@ -189,8 +387,43 @@ llvm::Expected<std::string> emitC(const SBFProgram &Program,
   // The loader hands the program the input buffer and, on a runtime that has
   // activated it, the instruction data. A callable that only takes the first
   // cannot reproduce a program that reads the second.
-  OS << "neverd_sbf_status " << Options.FunctionName
-     << "(neverd_sbf_environment *env, uint64_t input, "
+  const auto EmitPublicEntrypoints = [&] {
+    OS << "neverd_sbf_status " << Options.FunctionName
+       << "(neverd_sbf_environment *env, uint64_t input, "
+          "uint64_t instruction_data, uint64_t *result) {\n"
+          "  nd_environment_view view;\n"
+          "  if (!env) return nd_legacy_status(nd_program_impl(\n"
+          "      NULL, input, instruction_data, result));\n"
+          "  view.context = env->context;\n"
+          "  view.load = env->load;\n"
+          "  view.store = env->store;\n"
+          "  view.syscall = env->syscall;\n"
+          "  view.syscall_with_features = NULL;\n"
+          "  view.runtime_features = NULL;\n"
+          "  view.status_abi = ND_STATUS_ABI_V1;\n"
+          "  return nd_legacy_status(nd_program_impl(\n"
+          "      &view, input, instruction_data, result));\n"
+          "}\n\n"
+          "neverd_sbf_status_v2 "
+       << Options.FunctionName
+       << "_v2(neverd_sbf_environment_v2 *env, uint64_t input, "
+          "uint64_t instruction_data, uint64_t *result) {\n"
+          "  nd_environment_view view;\n"
+          "  if (!env) return nd_program_impl(NULL, input, instruction_data, "
+          "result);\n"
+          "  view.context = env->base.context;\n"
+          "  view.load = env->base.load;\n"
+          "  view.store = env->base.store;\n"
+          "  view.syscall = env->base.syscall;\n"
+          "  view.syscall_with_features = env->syscall_with_features;\n"
+          "  view.runtime_features = env->runtime_features;\n"
+          "  view.status_abi = ND_STATUS_ABI_V2;\n"
+          "  return nd_program_impl(&view, input, instruction_data, result);\n"
+          "}\n";
+  };
+
+  OS << "static neverd_sbf_status_v2 nd_program_impl("
+        "nd_environment_view *env, uint64_t input, "
         "uint64_t instruction_data, uint64_t *result) {\n"
         "  (void)env;\n"
         "  (void)result;\n"
@@ -213,32 +446,34 @@ llvm::Expected<std::string> emitC(const SBFProgram &Program,
              : "NEVERD_SBF_STACK_FRAME_SIZE")
      << ";\n";
   if (Structured) {
-    if (!emitStructuredNodes(OS, Program, BySlot, Structured->Body, "  "))
+    if (!emitStructuredNodes(OS, Program, BySlot, *Structured, "  "))
       return llvm::make_error<llvm::StringError>(
           "sbf: structured C emission rejected its validated control-flow plan",
           llvm::inconvertibleErrorCode());
-    OS << "  return NEVERD_SBF_EXECUTION_OVERRUN;\n}\n";
+    OS << "  return " << cSourceStatusName(FaultCode::ExecutionOverrun)
+       << ";\n}\n";
+    EmitPublicEntrypoints();
     return Buffer;
   }
 
   OS << "  for (;;) {\n    switch (pc) {\n";
   for (size_t Slot = 0; Slot < Program.Low.Instructions.size(); ++Slot) {
     if (Program.Low.Instructions[Slot].IsContinuation) {
-      if (NeedsIndirectCall)
-        OS << "      case " << Slot
-           << ": return NEVERD_SBF_INVALID_INSTRUCTION;\n";
+      OS << "      case " << Slot << ": return "
+         << cSourceStatusName(FaultCode::InvalidInstruction) << ";\n";
       continue;
     }
     auto It = BySlot.find(Slot);
     if (It == BySlot.end()) {
-      OS << "      case " << Slot
-         << ": return NEVERD_SBF_INVALID_INSTRUCTION;\n";
+      OS << "      case " << Slot << ": return "
+         << cSourceStatusName(FaultCode::InvalidInstruction) << ";\n";
       continue;
     }
     emitInstruction(OS, *It->second, Program);
   }
-  OS << "      default: return NEVERD_SBF_EXECUTION_OVERRUN;\n"
-        "    }\n  }\n}\n";
+  OS << "      default: return "
+     << cSourceStatusName(FaultCode::ExecutionOverrun) << ";\n    }\n  }\n}\n";
+  EmitPublicEntrypoints();
   return Buffer;
 }
 

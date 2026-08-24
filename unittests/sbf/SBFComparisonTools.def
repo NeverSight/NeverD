@@ -1,0 +1,65 @@
+//===- SBFComparisonTools.def - Audited public SBF tools ----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_COMPARISON_TOOL(ID, DISPLAY_NAME, REVISION)
+//
+// Every row names a public comparison tool at the exact object audited on
+// 2026-08-24.  The documentation checker consumes the display names and full
+// revisions from this table; localized guides must not maintain private copies.
+// Inclusion records audit scope, not semantic equivalence or endorsement.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_COMPARISON_TOOL
+#define SBF_COMPARISON_TOOL(ID, DISPLAY_NAME, REVISION)
+#endif
+
+SBF_COMPARISON_TOOL(Blueshift, "Blueshift",
+                    "704e40f7aa82446555b19d9ffbc0a6e18a35480f")
+SBF_COMPARISON_TOOL(EzBPF, "ezBPF", "88829078a6d7682a2baed0d696d500401c263750")
+SBF_COMPARISON_TOOL(QedSVM, "qedsvm",
+                    "99bd5ede85374adc7fc5c835c2432ecf4e123fd1")
+SBF_COMPARISON_TOOL(LeanProverSolanaLib, "leanprover-solanalib",
+                    "6c115ef1ef6a0cde8dbd6fd875b7dc87d60939ec")
+SBF_COMPARISON_TOOL(SolAzy, "sol-azy",
+                    "362327a798e5dad6e12aa9abf3ed9ed52c17ef6a")
+SBF_COMPARISON_TOOL(SolanaDataReverser, "solana-data-reverser",
+                    "bf90923adec984a61ca0437e9d341360ac1b11ee")
+SBF_COMPARISON_TOOL(SolDragon, "SolDragon",
+                    "002b98677a5e595a773af6607b77210f5ea71db7")
+SBF_COMPARISON_TOOL(BinaryNinjaEBPFSolana, "bn-ebpf-solana",
+                    "c3fe0de45d37eb68dcb08f2498c6e1f986056572")
+SBF_COMPARISON_TOOL(R2GhidraSolana, "r2ghidra-solana",
+                    "eca0b8e2d307e00991e289b8f9b0f45743819f1b")
+SBF_COMPARISON_TOOL(Radare2Solana, "radare2-solana",
+                    "292d845681be377cadc9959a74c2cadeb6e7f412")
+SBF_COMPARISON_TOOL(SBPF31, "SBPF-3-1",
+                    "0e602c93007faa96bccb8e1e12040954ff108b6f")
+
+SBF_COMPARISON_TOOL(BlastrockGhidra, "blastrock/Solana-eBPF-for-Ghidra",
+                    "c3ad719004726fe924dbed901eca2744ad82c85d")
+SBF_COMPARISON_TOOL(SolEmuGhidra, "SolEmu-Ghidra",
+                    "6520af2ff104d5adbec24632ba3afa3bef0da529")
+SBF_COMPARISON_TOOL(GhidraSBPF, "Ghidra_sBPF",
+                    "907bd4476432ca83bb2352686ad1ccafdb38504c")
+SBF_COMPARISON_TOOL(IDAProcessor, "solana-ebpf-ida-processor",
+                    "aacd215907266190ed9c6c1b408ca9309f92ecdd")
+SBF_COMPARISON_TOOL(SolanaBPFReverse, "solana-bpf-reverse",
+                    "39479a3bddb8cb866ee499266a76a1b54069b222")
+SBF_COMPARISON_TOOL(Solens, "solens",
+                    "22defa1c8f4118dacd42f5c291f1ac31609fc0e5")
+SBF_COMPARISON_TOOL(SpriteDayDecompiler, "sbpf-decompiler",
+                    "37b8bc0edc7ce347abee466f5f974e900c1948df")
+SBF_COMPARISON_TOOL(SBPFEye, "sbpf-eye",
+                    "5277a52aeb58e50b6ff8f9020414334765369b49")
+SBF_COMPARISON_TOOL(SVMBytecodeAnalyzer, "svm_bytecode_analyzer",
+                    "12aa236db8964e6be661e38131c2dc81588cf19c")
+SBF_COMPARISON_TOOL(GiraffexiuGhidra, "giraffexiu/Solana-eBPF-for-Ghidra",
+                    "81c1e3c2b9ba35091e4a2d8bb6eb23fd59339f07")
+SBF_COMPARISON_TOOL(CertSBF, "CertSBF",
+                    "bb93a97cf0c64d119d08ec851e8e820315beb59e")
+
+#undef SBF_COMPARISON_TOOL

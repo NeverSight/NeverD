@@ -72,8 +72,7 @@ TEST(SBFSolanaRecovery, RecoversAnAnchorStyleDispatchAndItsAddresses) {
   // named fields of the first account entry.
   const uint64_t Account = firstAccountOffset();
   const auto FieldOffset = [&](AccountField Field) {
-    const AccountLayoutInfo *Info =
-        getAccountFieldInfo(AccountABI::V1, Field);
+    const AccountLayoutInfo *Info = getAccountFieldInfo(AccountABI::V1, Field);
     return static_cast<int16_t>(Account + (Info ? Info->Offset : 0));
   };
   Text.push_back(encode(Opcode::LD_DW_REG, 8, kFirstArgumentRegister,
@@ -168,6 +167,46 @@ TEST(SBFSolanaRecovery, RecoversAnAnchorStyleDispatchAndItsAddresses) {
   EXPECT_NE(Dump.find("deposit"), std::string::npos);
   EXPECT_NE(Dump.find("sysvar::rent"), std::string::npos);
   EXPECT_NE(Dump.find("accounts[0].lamports"), std::string::npos);
+}
+
+TEST(SBFSolanaRecovery, DeduplicatesFullKeysAfterHostilePrefixCollisions) {
+  Pubkey First;
+  Pubkey Second;
+  for (size_t Index = 0; Index < kPubkeyByteCount; ++Index) {
+    First.Bytes[Index] = static_cast<uint8_t>(Index);
+    Second.Bytes[Index] = static_cast<uint8_t>(Index);
+  }
+  Second.Bytes.back() ^= 1;
+  ASSERT_TRUE(
+      llvm::equal(llvm::ArrayRef(First.Bytes).take_front(sizeof(uint64_t)),
+                  llvm::ArrayRef(Second.Bytes).take_front(sizeof(uint64_t))));
+  ASSERT_NE(First, Second);
+
+  RodataBuilder Rodata;
+  const va_t FirstAddress = Rodata.append(First.Bytes);
+  const va_t SecondAddress = Rodata.append(Second.Bytes);
+  std::vector<EncodedInstruction> Text;
+  const auto Append = [&](std::vector<EncodedInstruction> Slots) {
+    Text.insert(Text.end(), Slots.begin(), Slots.end());
+  };
+  Append(loadImm64(kFirstArgumentRegister, FirstAddress));
+  Append(loadImm64(kFirstArgumentRegister + 1, SecondAddress));
+  Text.push_back(encode(Opcode::MOV64_IMM, kFirstArgumentRegister + 2, 0, 0,
+                        kPubkeyByteCount));
+  const int32_t Memcmp = static_cast<int32_t>(hashSymbolName("sol_memcmp_"));
+  Text.push_back(encode(Opcode::CALL_IMM, 0, 0, 0, Memcmp));
+  Append(loadImm64(kFirstArgumentRegister, SecondAddress));
+  Text.push_back(encode(Opcode::CALL_IMM, 0, 0, 0, Memcmp));
+  Text.push_back(encode(Opcode::EXIT));
+
+  auto Program = analyze(makeImage(Text, Rodata.bytes()));
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+  ASSERT_EQ(Program->High.Solana.Pubkeys.size(), 2u);
+  EXPECT_EQ(Program->High.Solana.Pubkeys[0].Key, First);
+  EXPECT_EQ(Program->High.Solana.Pubkeys[1].Key, Second);
+  EXPECT_TRUE(Program->High.Solana.Pubkeys[0].ReferencedByCode);
+  EXPECT_TRUE(Program->High.Solana.Pubkeys[1].ReferencedByCode);
 }
 
 TEST(SBFSolanaRecovery, PrefersASuppliedIDLOverTheBuiltInDictionary) {
@@ -316,8 +355,7 @@ TEST(SBFSolanaRecovery, FindsAccountDiscriminatorsSittingInReadOnlyData) {
   RodataBuilder Rodata;
   const va_t At = Rodata.append(Account->Discriminator.Bytes);
 
-  auto Program =
-      analyze(makeImage({encode(Opcode::EXIT)}, Rodata.bytes()));
+  auto Program = analyze(makeImage({encode(Opcode::EXIT)}, Rodata.bytes()));
   ASSERT_TRUE(static_cast<bool>(Program))
       << llvm::toString(Program.takeError());
 

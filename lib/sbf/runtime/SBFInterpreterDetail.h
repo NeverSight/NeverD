@@ -18,6 +18,8 @@
 #ifndef NEVERD_SBF_RUNTIME_SBFINTERPRETERDETAIL_H
 #define NEVERD_SBF_RUNTIME_SBFINTERPRETERDETAIL_H
 
+#include "../analysis/SBFInstructionValidation.h"
+
 #include "neverd/sbf/runtime/SBFInterpreter.h"
 
 #include "llvm/Support/Compiler.h"
@@ -59,6 +61,11 @@ uint64_t signedHighMultiply64(uint64_t Left, uint64_t Right);
 /// Decode the raw encoding at \p Slot without consulting the analyzed LowIR.
 RawInstruction decodeRaw(const SBFProgram &Program, size_t Slot);
 
+/// Validate one decoded raw instruction without consulting LowIR or MedIR.
+validation_detail::InstructionValidation
+validateRawInstruction(const SBFProgram &Program,
+                       const RawInstruction &Instruction);
+
 /// Reject a program the raw interpreter cannot execute deterministically.
 llvm::Error validateProgram(const SBFProgram &Program,
                             const InterpreterOptions &Options);
@@ -69,16 +76,11 @@ bool rangeContains(const MemoryRegion &Region, uint64_t Address, size_t Size,
 
 /// Reject an overlapping or misaligned VM memory mapping.
 llvm::Error validateMemory(const std::vector<MemoryRegion> &Memory,
-                           Version TheVersion);
+                           Version TheVersion, const SBFVMConfig &Config);
 
 /// Append the program's own data regions and its stack to \p Memory.
 void appendProgramMemory(const SBFProgram &Program,
                          std::vector<MemoryRegion> &Memory);
-
-/// The analyzed instruction at \p Slot, or null when the slot does not begin
-/// a complete instruction.
-const LowInstruction *findAnalyzedInstruction(const SBFProgram &Program,
-                                              size_t Slot);
 
 } // namespace LLVM_LIBRARY_VISIBILITY_NAMESPACE interpreter_detail
 } // namespace neverd::sbf

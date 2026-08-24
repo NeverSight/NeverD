@@ -1,0 +1,24 @@
+//===- SBFVerifierRules.def - Layered SBF verifier rules ------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_VERIFIER_RULE(NAME, STABLE_ID, STAGE, PAYLOAD_KIND, MESSAGE)
+//
+// These are policy failures, not malformed instructions.  Requisite encoding
+// rules remain in SBFValidationRules.def; keeping the tables separate prevents
+// a local tooling preflight from being mistaken for Agave consensus policy.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_VERIFIER_RULE
+#define SBF_VERIFIER_RULE(NAME, STABLE_ID, STAGE, PAYLOAD_KIND, MESSAGE)
+#endif
+
+SBF_VERIFIER_RULE(InvalidSyscall, "invalid-syscall", LocalPreflight,
+                  SyscallHash, "local-preflight syscall is not registered")
+SBF_VERIFIER_RULE(InvalidFunction, "invalid-function", LocalPreflight,
+                  InstructionSlot, "local-preflight function is unresolved")
+
+#undef SBF_VERIFIER_RULE

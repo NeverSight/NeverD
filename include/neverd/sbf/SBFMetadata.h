@@ -12,6 +12,7 @@
 #include "llvm/ADT/StringRef.h"
 
 #include <cstdint>
+#include <vector>
 
 namespace neverd::sbf {
 
@@ -46,6 +47,16 @@ struct VMRange {
   uint64_t Size = 0;
 };
 
+/// Exact raw layout of one section consumed by the legacy executable loader.
+/// The inventory includes empty and non-SHF_ALLOC sections because latest
+/// sbpf selects these sections by name for its profile-aware layout policy.
+struct LegacyReadOnlySectionLayout {
+  uint32_t SectionIndex = 0;
+  uint64_t RawAddress = 0;
+  uint64_t FileOffset = 0;
+  uint64_t FileSize = 0;
+};
+
 struct Metadata {
   uint16_t Machine = 0;
   uint32_t ELFFlags = 0;
@@ -56,6 +67,7 @@ struct Metadata {
   VMRange TextVM;
   FileRange RodataFile;
   VMRange RodataVM;
+  std::vector<LegacyReadOnlySectionLayout> LegacyReadOnlySections;
 };
 
 } // namespace neverd::sbf

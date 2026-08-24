@@ -22,6 +22,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Endian.h"
 
 #include <algorithm>
@@ -39,14 +40,15 @@ namespace solana_recovery_detail {
 void Recovery::scanReadOnlyData() {
   // Index both tables by their leading word so a region scan costs one hash
   // probe per offset instead of one comparison per table entry.
-  llvm::DenseMap<uint64_t, const KnownAddressInfo *> AddressByFirstWord;
+  llvm::DenseMap<uint64_t, llvm::SmallVector<const KnownAddressInfo *, 1>>
+      AddressesByFirstWord;
   for (const KnownAddressInfo &Info : knownAddressInfos()) {
     // The all-zero System Program address would match every zero run in
     // read-only data, so it is only recognized when code references it.
     if (!Info.Decoded || Info.Key.isZero())
       continue;
-    AddressByFirstWord.try_emplace(
-        llvm::support::endian::read64le(Info.Key.Bytes.data()), &Info);
+    AddressesByFirstWord[llvm::support::endian::read64le(Info.Key.Bytes.data())]
+        .push_back(&Info);
   }
 
   // A discriminator is only eight bytes, so one probe is the whole comparison.
@@ -85,15 +87,17 @@ void Recovery::scanReadOnlyData() {
 
       if (!HoldsKey || Offset > LastKey)
         continue;
-      auto Address = AddressByFirstWord.find(Word);
-      if (Address == AddressByFirstWord.end())
+      const auto Addresses = AddressesByFirstWord.find(Word);
+      if (Addresses == AddressesByFirstWord.end())
         continue;
       const llvm::ArrayRef<uint8_t> Window =
           llvm::ArrayRef(Region.Bytes).slice(Offset, kPubkeyByteCount);
-      if (!llvm::equal(Window, Address->second->Key.Bytes))
-        continue;
-      noteKey(Region.Address + Offset, Address->second->Key,
-              /*ReferencedByCode=*/false);
+      for (const KnownAddressInfo *Address : Addresses->second)
+        if (llvm::equal(Window, Address->Key.Bytes)) {
+          noteKey(Region.Address + Offset, Address->Key,
+                  /*ReferencedByCode=*/false);
+          break;
+        }
     }
   }
 }
@@ -190,21 +194,33 @@ void Recovery::addLints() {
     // will not run.
     if (Use.Info->Lifecycle == SyscallLifecycle::Deprecated)
       Report(Lint::DeprecatedSyscall, Use.Slot, Use.Info->Name.str());
-    switch (syscallRegistration(Use.Info->ID, Options.Profile)) {
-    case SyscallRegistration::Registered:
-      break;
-    case SyscallRegistration::GateUnmet:
-      Report(Lint::FeatureGatedSyscall, Use.Slot,
-             Use.Info->Name.str() + " is not registered on " +
-                 clusterName(Options.Profile.OnCluster).str());
-      break;
-    case SyscallRegistration::EnvironmentExcluded:
-      Report(Lint::FeatureGatedSyscall, Use.Slot,
-             Use.Info->Name.str() + " is not in the " +
-                 runtimePurposeName(Options.Profile.Purpose).str() +
-                 " registry");
-      break;
+    if (Program.isSyscallRegistered(Use.Info->Hash))
+      continue;
+
+    // Profile classification only explains an already-resolved registry
+    // answer. It never replaces that answer: custom environments have no
+    // Agave profile, and even an Agave consumer must not independently derive
+    // a second registry that can drift from the loader and verifier.
+    if (Program.Profile) {
+      switch (syscallRegistration(Use.Info->ID, *Program.Profile)) {
+      case SyscallRegistration::Registered:
+        break;
+      case SyscallRegistration::GateUnmet:
+        Report(Lint::FeatureGatedSyscall, Use.Slot,
+               Use.Info->Name.str() + " is not registered on " +
+                   clusterName(Program.Profile->OnCluster).str());
+        continue;
+      case SyscallRegistration::EnvironmentExcluded:
+        Report(Lint::FeatureGatedSyscall, Use.Slot,
+               Use.Info->Name.str() + " is not in the " +
+                   runtimePurposeName(Program.Profile->Purpose).str() +
+                   " registry");
+        continue;
+      }
     }
+    Report(Lint::FeatureGatedSyscall, Use.Slot,
+           Use.Info->Name.str() +
+               " is not registered by the resolved runtime environment");
   }
 
   if (Program.Low.TheVersion < Version::V3)
@@ -215,9 +231,11 @@ void Recovery::addLints() {
 SolanaModel Recovery::run() {
   scanReadOnlyData();
 
-  for (const MedBlock &Block : Program.Med.Blocks)
+  for (const MedBlock &Block : Program.Med.Blocks) {
+    const ScratchState &Entry =
+        Flow ? Flow->entryState(Block.ID) : EmptyScratch;
     replayBlock(
-        Index, Block, Flow.entryState(Block.ID), Program.ExecutableImage,
+        Index, Block, Entry, Program.ExecutableImage,
         [&](const MedInstruction &Instruction, const MachineState &State) {
           if (Instruction.Op == Operation::Load ||
               Instruction.Op == Operation::Store)
@@ -227,9 +245,11 @@ SolanaModel Recovery::run() {
             visitComparison(Instruction, State);
           else if (Instruction.Op == Operation::Exit)
             visitExit(Instruction, State);
-          if (Instruction.Call == CallKind::Syscall && Instruction.Syscall)
+          if (Instruction.Syscall &&
+              dispatchesRuntimeSyscall(Instruction.Call, Instruction.Dispatch))
             visitSyscall(Instruction, State);
         });
+  }
 
   resolveHandlers();
   resolveErrors();

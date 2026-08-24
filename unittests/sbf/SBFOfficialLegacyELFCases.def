@@ -1,0 +1,33 @@
+//===- SBFOfficialLegacyELFCases.def - Lenient ELF oracle matrix --------===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_OFFICIAL_LEGACY_ELF_CASE(ID, NAME, BUILDER, EXPECTATION)
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_OFFICIAL_LEGACY_ELF_CASE
+#define SBF_OFFICIAL_LEGACY_ELF_CASE(ID, NAME, BUILDER, EXPECTATION)
+#endif
+
+SBF_OFFICIAL_LEGACY_ELF_CASE(Baseline, "baseline", Baseline, Accept)
+SBF_OFFICIAL_LEGACY_ELF_CASE(TextWithoutAlloc, "text-without-shf-alloc",
+                             TextWithoutAlloc, Accept)
+SBF_OFFICIAL_LEGACY_ELF_CASE(RodataWithoutAlloc, "rodata-without-shf-alloc",
+                             RodataWithoutAlloc, Accept)
+SBF_OFFICIAL_LEGACY_ELF_CASE(UnknownAllocProgbits,
+                             "unknown-alloc-progbits-is-ignored",
+                             UnknownAllocProgbits, Accept)
+SBF_OFFICIAL_LEGACY_ELF_CASE(UnknownAllocNobits,
+                             "unknown-alloc-nobits-is-ignored",
+                             UnknownAllocNobits, Accept)
+SBF_OFFICIAL_LEGACY_ELF_CASE(PrebasedRodata,
+                             "prebased-rodata-does-not-skip-rebasing",
+                             PrebasedRodata, Reject)
+SBF_OFFICIAL_LEGACY_ELF_CASE(RelocationBeforeEntryAlignment,
+                             "relocation-before-entry-alignment",
+                             RelocationBeforeEntryAlignment, Reject)
+
+#undef SBF_OFFICIAL_LEGACY_ELF_CASE

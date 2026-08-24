@@ -1,0 +1,81 @@
+//===- SBFOfficialOracleProtocol.def - External oracle protocol -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_OFFICIAL_ORACLE_STRING(ID, RUST_ID, VALUE)
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_OFFICIAL_ORACLE_STRING
+#define SBF_OFFICIAL_ORACLE_STRING(ID, RUST_ID, VALUE)
+#endif
+
+SBF_OFFICIAL_ORACLE_STRING(ExecutableEnvironment, EXECUTABLE_ENVIRONMENT,
+                           "NEVERD_SBPF_ORACLE")
+SBF_OFFICIAL_ORACLE_STRING(CorpusEnvironment, CORPUS_ENVIRONMENT,
+                           "NEVERD_SBPF_ROOT")
+SBF_OFFICIAL_ORACLE_STRING(RequiredEnvironment, REQUIRED_ENVIRONMENT,
+                           "NEVERD_REQUIRE_SBPF_ORACLE")
+SBF_OFFICIAL_ORACLE_STRING(RequiredValue, REQUIRED_VALUE, "1")
+SBF_OFFICIAL_ORACLE_STRING(Protocol, PROTOCOL, "NEVERD_SBPF_OFFICIAL_ORACLE_V1")
+SBF_OFFICIAL_ORACLE_STRING(BatchProtocol, BATCH_PROTOCOL,
+                           "NEVERD_SBPF_OFFICIAL_ORACLE_BATCH_V1")
+SBF_OFFICIAL_ORACLE_STRING(ELFBatchProtocol, ELF_BATCH_PROTOCOL,
+                           "NEVERD_SBPF_OFFICIAL_ORACLE_ELF_BATCH_V1")
+SBF_OFFICIAL_ORACLE_STRING(ExecutionBatchProtocol, EXECUTION_BATCH_PROTOCOL,
+                           "NEVERD_SBPF_OFFICIAL_ORACLE_EXECUTION_BATCH_V1")
+SBF_OFFICIAL_ORACLE_STRING(VersionRecord, VERSION_RECORD, "version")
+SBF_OFFICIAL_ORACLE_STRING(CorpusTestsDirectory, CORPUS_TESTS_DIRECTORY,
+                           "tests")
+SBF_OFFICIAL_ORACLE_STRING(CorpusELFDirectory, CORPUS_ELF_DIRECTORY, "elfs")
+
+SBF_OFFICIAL_ORACLE_STRING(VersionCommand, VERSION_COMMAND, "--version")
+SBF_OFFICIAL_ORACLE_STRING(ELFCommand, ELF_COMMAND, "probe-elf")
+SBF_OFFICIAL_ORACLE_STRING(TextCommand, TEXT_COMMAND, "execute-text")
+SBF_OFFICIAL_ORACLE_STRING(ExecuteBatchCommand, EXECUTE_BATCH_COMMAND,
+                           "execute-text-batch")
+SBF_OFFICIAL_ORACLE_STRING(VerifyBatchCommand, VERIFY_BATCH_COMMAND,
+                           "verify-batch")
+SBF_OFFICIAL_ORACLE_STRING(VerifyELFBatchCommand, VERIFY_ELF_BATCH_COMMAND,
+                           "verify-elf-batch")
+SBF_OFFICIAL_ORACLE_STRING(ELFArgument, ELF_ARGUMENT, "--elf")
+SBF_OFFICIAL_ORACLE_STRING(TextArgument, TEXT_ARGUMENT, "--text")
+SBF_OFFICIAL_ORACLE_STRING(HexArgument, HEX_ARGUMENT, "--hex")
+SBF_OFFICIAL_ORACLE_STRING(BatchInputArgument, BATCH_INPUT_ARGUMENT, "--input")
+SBF_OFFICIAL_ORACLE_STRING(SBPFVersionArgument, SBPF_VERSION_ARGUMENT,
+                           "--sbpf-version")
+SBF_OFFICIAL_ORACLE_STRING(OptimizeRodataArgument, OPTIMIZE_RODATA_ARGUMENT,
+                           "--optimize-rodata")
+SBF_OFFICIAL_ORACLE_STRING(InputArgument, INPUT_ARGUMENT, "--input")
+SBF_OFFICIAL_ORACLE_STRING(SyscallsArgument, SYSCALLS_ARGUMENT, "--syscalls")
+SBF_OFFICIAL_ORACLE_STRING(BudgetArgument, BUDGET_ARGUMENT, "--budget")
+SBF_OFFICIAL_ORACLE_STRING(FunctionArgument, FUNCTION_ARGUMENT, "--function")
+
+SBF_OFFICIAL_ORACLE_STRING(Accepted, ACCEPTED, "accepted")
+SBF_OFFICIAL_ORACLE_STRING(Rejected, REJECTED, "rejected")
+SBF_OFFICIAL_ORACLE_STRING(Returned, RETURNED, "returned")
+SBF_OFFICIAL_ORACLE_STRING(CallDepthFault, CALL_DEPTH_FAULT, "fault-call-depth")
+SBF_OFFICIAL_ORACLE_STRING(OtherFault, OTHER_FAULT, "fault-other")
+SBF_OFFICIAL_ORACLE_STRING(VerificationRecord, VERIFICATION_RECORD,
+                           "verification")
+SBF_OFFICIAL_ORACLE_STRING(ELFVerificationRecord, ELF_VERIFICATION_RECORD,
+                           "elf-verification")
+SBF_OFFICIAL_ORACLE_STRING(ExecutionRecord, EXECUTION_RECORD, "execution")
+SBF_OFFICIAL_ORACLE_STRING(ExecutionSummaryRecord, EXECUTION_SUMMARY_RECORD,
+                           "execution-summary")
+SBF_OFFICIAL_ORACLE_STRING(Faulted, FAULTED, "faulted")
+
+SBF_OFFICIAL_ORACLE_STRING(NoneProfile, NONE_PROFILE, "none")
+SBF_OFFICIAL_ORACLE_STRING(ByteOneProfile, BYTE_ONE_PROFILE, "byte-one")
+SBF_OFFICIAL_ORACLE_STRING(LogProfile, LOG_PROFILE, "log")
+SBF_OFFICIAL_ORACLE_STRING(ProbeProfile, PROBE_PROFILE, "probe")
+SBF_OFFICIAL_ORACLE_STRING(CollisionProbeProfile, COLLISION_PROBE_PROFILE,
+                           "collision-probe")
+SBF_OFFICIAL_ORACLE_STRING(ProbeSyscallName, PROBE_SYSCALL_NAME,
+                           "neverd_execution_probe")
+SBF_OFFICIAL_ORACLE_STRING(EmptyField, EMPTY_FIELD, "-")
+SBF_OFFICIAL_ORACLE_STRING(TrueValue, TRUE_VALUE, "true")
+SBF_OFFICIAL_ORACLE_STRING(FalseValue, FALSE_VALUE, "false")
+#undef SBF_OFFICIAL_ORACLE_STRING

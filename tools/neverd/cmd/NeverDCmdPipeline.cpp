@@ -69,8 +69,9 @@ const char *sbfClusterSpelling(sbf::Cluster Cluster) {
   case sbf::Cluster::ID:                                                       \
     return NAME;
 #include "neverd/sbf/runtime/SBFRuntimeFeatures.def"
+  default:
+    return "";
   }
-  return "";
 }
 
 const char *sbfLoaderSpelling(sbf::Loader Loader) {
@@ -80,8 +81,9 @@ const char *sbfLoaderSpelling(sbf::Loader Loader) {
   case sbf::Loader::ID:                                                        \
     return NAME;
 #include "neverd/sbf/runtime/SBFLoaders.def"
+  default:
+    return "";
   }
-  return "";
 }
 
 const char *sbfPurposeSpelling(sbf::RuntimePurpose Purpose) {
@@ -90,8 +92,9 @@ const char *sbfPurposeSpelling(sbf::RuntimePurpose Purpose) {
   case sbf::RuntimePurpose::ID:                                                \
     return NAME;
 #include "neverd/sbf/runtime/SBFRuntimeFeatures.def"
+  default:
+    return "";
   }
-  return "";
 }
 
 bool configureEVM(neverd_session_t Sess) {

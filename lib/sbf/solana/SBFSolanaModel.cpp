@@ -74,7 +74,8 @@ bool PDADerivation::complete() const {
 }
 
 bool SolanaModel::empty() const {
-  return !ProgramId && !IsAnchor && Pubkeys.empty() && Handlers.empty() &&
+  return ScratchPrecision == ScratchRecoveryPrecision::Exact && !ProgramId &&
+         !IsAnchor && Pubkeys.empty() && Handlers.empty() &&
          Discriminators.empty() && CPISites.empty() && Derivations.empty() &&
          Errors.empty() && AccountAccesses.empty() && Findings.empty();
 }

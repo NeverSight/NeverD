@@ -13,7 +13,13 @@
 
 #include "SBFCEmitterDetail.h"
 
+#include "neverd/sbf/emit/SBFSourceStatus.h"
+
+#include "llvm/ADT/BitVector.h"
+
+#include <algorithm>
 #include <string>
+#include <vector>
 
 namespace neverd::sbf {
 
@@ -55,7 +61,7 @@ bool emitStructuredBlock(llvm::raw_ostream &OS, const SBFProgram &Program,
       continue;
     if (Instruction.Op == Operation::Exit) {
       OS << Indent << "if (result) *result = r[NEVERD_SBF_RETURN_REGISTER];\n"
-         << Indent << "return NEVERD_SBF_OK;\n";
+         << Indent << "return " << cSourceStatusName(SourceStatus::Ok) << ";\n";
       continue;
     }
     if (!emitLinearInstruction(OS, Instruction, Indent))
@@ -64,55 +70,112 @@ bool emitStructuredBlock(llvm::raw_ostream &OS, const SBFProgram &Program,
   return true;
 }
 
+size_t maximumDisplayedDepth(size_t NodeCount) {
+  size_t Depth = 0;
+  while (NodeCount > 1) {
+    NodeCount = NodeCount / 2 + NodeCount % 2;
+    ++Depth;
+  }
+  return Depth;
+}
+
+std::string displayedIndent(llvm::StringRef Base, size_t Depth,
+                            size_t MaximumDepth) {
+  constexpr llvm::StringLiteral kIndentUnit = "  ";
+  std::string Result = Base.str();
+  for (size_t Level = 0; Level < std::min(Depth, MaximumDepth); ++Level)
+    Result += kIndentUnit;
+  return Result;
+}
+
+enum class EmitActionKind : uint8_t { Sequence, IfElse, CloseScope };
+
+struct EmitAction {
+  EmitActionKind Kind = EmitActionKind::Sequence;
+  size_t Node = StructuredNode::NoNode;
+  size_t Depth = 0;
+};
+
 } // namespace
 
 namespace c_emitter_detail {
 
 bool emitStructuredNodes(llvm::raw_ostream &OS, const SBFProgram &Program,
                          const std::map<size_t, const MedInstruction *> &BySlot,
-                         const std::vector<StructuredNode> &Nodes,
+                         const StructuredControlFlow &Plan,
                          llvm::StringRef Indent) {
-  for (const StructuredNode &Node : Nodes) {
-    if (Node.Block >= Program.Low.Blocks.size())
-      return false;
-    const BasicBlock &Block = Program.Low.Blocks[Node.Block];
-    const MedInstruction *Terminator = blockTerminator(Block, BySlot);
-    if (!Terminator)
-      return false;
-    if (Node.Kind == StructuredNodeKind::Block) {
-      if (!emitStructuredBlock(OS, Program, BySlot, Node.Block, Indent))
-        return false;
+  if (Plan.Entry == StructuredNode::NoNode)
+    return Plan.Nodes.empty();
+  const size_t MaximumDepth = maximumDisplayedDepth(Plan.Nodes.size());
+  llvm::BitVector Emitted(Plan.Nodes.size());
+  std::vector<EmitAction> Work{{EmitActionKind::Sequence, Plan.Entry, 0}};
+  while (!Work.empty()) {
+    const EmitAction Action = Work.back();
+    Work.pop_back();
+    const std::string CurrentIndent =
+        displayedIndent(Indent, Action.Depth, MaximumDepth);
+    if (Action.Kind == EmitActionKind::IfElse) {
+      OS << CurrentIndent << "} else {\n";
+      continue;
+    }
+    if (Action.Kind == EmitActionKind::CloseScope) {
+      OS << CurrentIndent << "}\n";
       continue;
     }
 
-    if (Node.Kind == StructuredNodeKind::If) {
-      if (!emitStructuredBlock(OS, Program, BySlot, Node.Block, Indent))
+    size_t NodeIndex = Action.Node;
+    while (NodeIndex != StructuredNode::NoNode) {
+      if (NodeIndex >= Plan.Nodes.size() || Emitted.test(NodeIndex))
         return false;
-      OS << Indent << "if (" << comparison(*Terminator) << ") {\n";
-      if (!emitStructuredNodes(OS, Program, BySlot, Node.Body,
-                               (Indent + "  ").str()))
+      Emitted.set(NodeIndex);
+      const StructuredNode &Node = Plan.Nodes[NodeIndex];
+      if (Node.Block >= Program.Low.Blocks.size())
         return false;
-      OS << Indent << "} else {\n";
-      if (!emitStructuredNodes(OS, Program, BySlot, Node.Alternative,
-                               (Indent + "  ").str()))
+      const BasicBlock &Block = Program.Low.Blocks[Node.Block];
+      const MedInstruction *Terminator = blockTerminator(Block, BySlot);
+      if (!Terminator)
         return false;
-      OS << Indent << "}\n";
-      continue;
-    }
+      if (Node.Kind == StructuredNodeKind::Block) {
+        if (!emitStructuredBlock(OS, Program, BySlot, Node.Block,
+                                 CurrentIndent))
+          return false;
+        NodeIndex = Node.Next;
+        continue;
+      }
 
-    OS << Indent << "while (1) {\n";
-    const std::string Inner = (Indent + "  ").str();
-    if (!emitStructuredBlock(OS, Program, BySlot, Node.Block, Inner))
-      return false;
-    if (Node.ConditionTrueEntersBody)
-      OS << Inner << "if (!(" << comparison(*Terminator) << ")) break;\n";
-    else
-      OS << Inner << "if (" << comparison(*Terminator) << ") break;\n";
-    if (!emitStructuredNodes(OS, Program, BySlot, Node.Body, Inner))
-      return false;
-    OS << Indent << "}\n";
+      if (Node.Kind == StructuredNodeKind::If) {
+        if (!emitStructuredBlock(OS, Program, BySlot, Node.Block,
+                                 CurrentIndent))
+          return false;
+        OS << CurrentIndent << "if (" << comparison(*Terminator) << ") {\n";
+        Work.push_back({EmitActionKind::Sequence, Node.Next, Action.Depth});
+        Work.push_back(
+            {EmitActionKind::CloseScope, StructuredNode::NoNode, Action.Depth});
+        Work.push_back(
+            {EmitActionKind::Sequence, Node.Alternative, Action.Depth + 1});
+        Work.push_back(
+            {EmitActionKind::IfElse, StructuredNode::NoNode, Action.Depth});
+        Work.push_back({EmitActionKind::Sequence, Node.Body, Action.Depth + 1});
+        break;
+      }
+
+      OS << CurrentIndent << "while (1) {\n";
+      const std::string Inner =
+          displayedIndent(Indent, Action.Depth + 1, MaximumDepth);
+      if (!emitStructuredBlock(OS, Program, BySlot, Node.Block, Inner))
+        return false;
+      if (Node.ConditionTrueEntersBody)
+        OS << Inner << "if (!(" << comparison(*Terminator) << ")) break;\n";
+      else
+        OS << Inner << "if (" << comparison(*Terminator) << ") break;\n";
+      Work.push_back({EmitActionKind::Sequence, Node.Next, Action.Depth});
+      Work.push_back(
+          {EmitActionKind::CloseScope, StructuredNode::NoNode, Action.Depth});
+      Work.push_back({EmitActionKind::Sequence, Node.Body, Action.Depth + 1});
+      break;
+    }
   }
-  return true;
+  return Emitted.count() == Plan.Nodes.size();
 }
 
 } // namespace c_emitter_detail

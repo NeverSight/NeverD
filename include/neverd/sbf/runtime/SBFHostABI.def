@@ -1,0 +1,26 @@
+//===- SBFHostABI.def - Generated-code host symbol ABI --------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_HOST_ABI_SYMBOL(ID, NAME)
+//
+// These exported names are an append-only interface between NeverD's LLVM
+// backend and a host runtime. Keep them centralized so declarations, JIT
+// bindings, and tests cannot silently choose different spellings.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_HOST_ABI_SYMBOL
+#define SBF_HOST_ABI_SYMBOL(ID, NAME)
+#endif
+
+SBF_HOST_ABI_SYMBOL(Load, "neverd_sbf_load")
+SBF_HOST_ABI_SYMBOL(Store, "neverd_sbf_store")
+SBF_HOST_ABI_SYMBOL(Syscall, "neverd_sbf_syscall")
+SBF_HOST_ABI_SYMBOL(FeatureAwareSyscall, "neverd_sbf_syscall_with_features")
+SBF_HOST_ABI_SYMBOL(CallX, "neverd_sbf_callx")
+SBF_HOST_ABI_SYMBOL(Fault, "neverd_sbf_fault")
+
+#undef SBF_HOST_ABI_SYMBOL

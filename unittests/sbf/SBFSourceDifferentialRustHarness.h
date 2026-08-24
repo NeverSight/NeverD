@@ -15,6 +15,8 @@
 
 #include "SBFSourceDifferentialDetail.h"
 
+#include "neverd/sbf/emit/SBFSourceStatus.h"
+
 #include "llvm/Support/raw_ostream.h"
 
 #include <string>
@@ -23,29 +25,7 @@
 namespace neverd::sbf::test {
 
 inline llvm::StringRef rustError(FaultCode Fault) {
-  switch (Fault) {
-  case FaultCode::InvalidInstruction:
-  case FaultCode::InvalidRegister:
-  case FaultCode::InvalidBranch:
-    return "SbfError::InvalidInstruction";
-  case FaultCode::DivideByZero:
-    return "SbfError::DivideByZero";
-  case FaultCode::DivideOverflow:
-    return "SbfError::DivideOverflow";
-  case FaultCode::MemoryAccess:
-    return "SbfError::MemoryAccess";
-  case FaultCode::CallDepth:
-    return "SbfError::CallDepth";
-  case FaultCode::UnknownSyscall:
-    return "SbfError::UnknownSyscall";
-  case FaultCode::UnknownIndirectCall:
-    return "SbfError::UnknownFunction";
-  case FaultCode::ExecutionOverrun:
-    return "SbfError::ExecutionOverrun";
-  case FaultCode::None:
-    break;
-  }
-  return "SbfError::InvalidInstruction";
+  return rustSourceErrorName(Fault);
 }
 
 inline void emitRustBytes(llvm::raw_ostream &OS, const MemoryRegion &Region) {
@@ -62,69 +42,121 @@ inline void emitRustBytes(llvm::raw_ostream &OS, const MemoryRegion &Region) {
   OS << "]";
 }
 
-inline std::string makeRustHarness(const ExecutionEnvironment &Environment,
-                                   const ExecutionResult &Expected,
-                                   const std::vector<MemoryRegion> &Memory) {
+inline std::string makeRustHarness(
+    const ExecutionEnvironment &Environment, const ExecutionResult &Expected,
+    RuntimeFeature ProgramRuntimeFeatures,
+    const std::vector<MemoryRegion> &Memory,
+    const std::vector<DifferentialCase::HostFault> &HostFaults,
+    std::optional<FaultCode> LoadFault, std::optional<FaultCode> StoreFault) {
   std::string Buffer;
   llvm::raw_string_ostream OS(Buffer);
-  OS << "\nstruct Region { address: u64, bytes: Vec<u8>, writable: bool }\n"
+  const RuntimeFeature ResolvedRuntimeFeatures =
+      Environment.RuntimeFeatures.value_or(ProgramRuntimeFeatures);
+  OS << "\nstruct Region { address: u64, bytes: Vec<u8>, gap_size: usize, "
+        "writable: bool }\n"
         "struct Env { regions: Vec<Region>, syscalls: Vec<(u32, [u64; "
-     << kArgumentRegisterCount << "], u64)> }\n"
+     << kArgumentRegisterCount
+     << "], u64)>, load_fault: Option<SbfErrorV2>, store_fault: "
+        "Option<SbfErrorV2>, runtime_features: Option<SbfRuntimeFeatures>, "
+        "expected_runtime_features: SbfRuntimeFeatures }\n"
      << "const HASH_OFFSET: u64 = " << hexWord(kHashOffset) << ";\n"
      << "const HASH_PRIME: u64 = " << hexWord(kHashPrime) << ";\n\n"
-     << R"(impl SbfEnvironment for Env {
-    fn load(&mut self, address: u64, width: u8) -> Result<u64, SbfError> {
-        if width == 0 || width % 8 != 0 { return Err(SbfError::MemoryAccess); }
+     << "const GAP_MULTIPLIER: u64 = " << kStackFrameGapMultiplier << "u64;\n\n"
+     << R"(fn region_offset(region: &Region, address: u64, size: usize) -> Option<usize> {
+    let delta = address.checked_sub(region.address)?;
+    if region.gap_size == 0 {
+        let offset = usize::try_from(delta).ok()?;
+        return (offset <= region.bytes.len() &&
+                size <= region.bytes.len() - offset).then_some(offset);
+    }
+    if region.bytes.len() % region.gap_size != 0 { return None; }
+    let backing_size = u64::try_from(region.bytes.len()).ok()?;
+    let gap_size = u64::try_from(region.gap_size).ok()?;
+    let span = backing_size.checked_mul(GAP_MULTIPLIER)?;
+    if delta >= span { return None; }
+    let period = gap_size.checked_mul(GAP_MULTIPLIER)?;
+    let period_offset = delta % period;
+    let size64 = u64::try_from(size).ok()?;
+    if period_offset >= gap_size || size64 > gap_size - period_offset {
+        return None;
+    }
+    let backing_offset = (delta / period)
+        .checked_mul(gap_size)?.checked_add(period_offset)?;
+    let offset = usize::try_from(backing_offset).ok()?;
+    (offset <= region.bytes.len() &&
+     size <= region.bytes.len() - offset).then_some(offset)
+}
+
+impl SbfEnvironmentV2 for Env {
+    fn load(&mut self, address: u64, width: u8) -> Result<u64, SbfErrorV2> {
+        if let Some(error) = self.load_fault { return Err(error); }
+        if width == 0 || width % 8 != 0 { return Err(SbfErrorV2::MemoryAccess); }
         let size = usize::from(width / 8);
         if size > core::mem::size_of::<u64>() {
-            return Err(SbfError::MemoryAccess);
+            return Err(SbfErrorV2::MemoryAccess);
         }
         for region in &self.regions {
-            if address < region.address { continue; }
-            let delta = address - region.address;
-            let Ok(offset) = usize::try_from(delta) else { continue; };
-            if offset > region.bytes.len() || size > region.bytes.len() - offset {
-                continue;
-            }
+            let Some(offset) = region_offset(region, address, size) else { continue; };
             let mut value = 0u64;
             for byte in 0..size {
                 value |= u64::from(region.bytes[offset + byte]) << (byte * 8);
             }
             return Ok(value);
         }
-        Err(SbfError::MemoryAccess)
+        Err(SbfErrorV2::MemoryAccess)
     }
 
     fn store(&mut self, address: u64, width: u8, value: u64)
-        -> Result<(), SbfError> {
-        if width == 0 || width % 8 != 0 { return Err(SbfError::MemoryAccess); }
+        -> Result<(), SbfErrorV2> {
+        if let Some(error) = self.store_fault { return Err(error); }
+        if width == 0 || width % 8 != 0 { return Err(SbfErrorV2::MemoryAccess); }
         let size = usize::from(width / 8);
         if size > core::mem::size_of::<u64>() {
-            return Err(SbfError::MemoryAccess);
+            return Err(SbfErrorV2::MemoryAccess);
         }
         for region in &mut self.regions {
-            if address < region.address { continue; }
-            let delta = address - region.address;
-            let Ok(offset) = usize::try_from(delta) else { continue; };
-            if offset > region.bytes.len() || size > region.bytes.len() - offset {
-                continue;
-            }
-            if !region.writable { return Err(SbfError::MemoryAccess); }
+            let Some(offset) = region_offset(region, address, size) else { continue; };
+            if !region.writable { return Err(SbfErrorV2::MemoryAccess); }
             for byte in 0..size {
                 region.bytes[offset + byte] = (value >> (byte * 8)) as u8;
             }
             return Ok(());
         }
-        Err(SbfError::MemoryAccess)
-    }
+        Err(SbfErrorV2::MemoryAccess)
+}
 
 )";
   OS << "    fn syscall(&mut self, hash: u32, args: [u64; "
      << kArgumentRegisterCount << "])\n";
-  OS << R"(        -> Result<u64, SbfError> {
-        let result = args[0].wrapping_add(1);
+  OS << "        -> Result<u64, SbfErrorV2> {\n";
+  for (const DifferentialCase::HostFault &Fault : HostFaults)
+    OS << "        if hash == 0x" << llvm::utohexstr(Fault.Hash)
+       << "u32 { return Err(" << rustSourceErrorName(Fault.Fault) << "); }\n";
+  OS << "        if !matches!(hash, ";
+  if (Expected.Syscalls.empty()) {
+    OS << "_ if false";
+  } else {
+    for (size_t I = 0; I < Expected.Syscalls.size(); ++I) {
+      if (I)
+        OS << " | ";
+      OS << "0x" << llvm::utohexstr(Expected.Syscalls[I].Hash) << "u32";
+    }
+  }
+  OS << ") { return Err(SbfErrorV2::UnknownSyscall); }\n";
+  OS << R"(        let result = args[0].wrapping_add(1);
         self.syscalls.push((hash, args, result));
         Ok(result)
+    }
+
+    fn runtime_features(&self) -> Option<SbfRuntimeFeatures> {
+        self.runtime_features
+    }
+
+    fn syscall_with_features(
+        &mut self, invocation: SbfSyscallInvocation
+    ) -> SbfSyscallOutcomeV2 {
+        assert_eq!(invocation.runtime_features, self.expected_runtime_features);
+        self.syscall_outcome(invocation.hash, invocation.args)
     }
 }
 
@@ -146,10 +178,32 @@ fn main() {
     OS << "        Region { address: " << hexWord(Region.Address)
        << ", bytes: ";
     emitRustBytes(OS, Region);
-    OS << ", writable: " << (Region.Writable ? "true" : "false") << " },\n";
+    OS << ", gap_size: " << Region.VMGapSize
+       << "usize, writable: " << (Region.Writable ? "true" : "false")
+       << " },\n";
   }
-  OS << "    ], syscalls: Vec::new() };\n"
-     << "    let result = " << kEntryFunctionName << "(&mut env, "
+  OS << "    ], syscalls: Vec::new(), load_fault: ";
+  if (LoadFault)
+    OS << "Some(" << rustSourceErrorName(*LoadFault) << ")";
+  else
+    OS << "None";
+  OS << ", store_fault: ";
+  if (StoreFault)
+    OS << "Some(" << rustSourceErrorName(*StoreFault) << ")";
+  else
+    OS << "None";
+  OS << ", runtime_features: ";
+  if (Environment.RuntimeFeatures)
+    OS << "Some(SbfRuntimeFeatures::from_bits("
+       << rustRuntimeFeatureMaskWord(
+              runtimeFeatureMask(*Environment.RuntimeFeatures))
+       << "))";
+  else
+    OS << "None";
+  OS << ", expected_runtime_features: SbfRuntimeFeatures::from_bits("
+     << rustRuntimeFeatureMaskWord(runtimeFeatureMask(ResolvedRuntimeFeatures))
+     << ") };\n"
+     << "    let result = " << kEntryFunctionName << "_v2(&mut env, "
      << hexWord(Environment.Input) << ", "
      << hexWord(Environment.InstructionData) << ");\n";
   if (Expected.Status == ExecutionStatus::Returned)

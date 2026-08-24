@@ -1,0 +1,70 @@
+//===- SBFAnalysisLimits.def - SBF analysis resource policy -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_ANALYSIS_LIMIT(NAME, VALUE)
+// SBF_ANALYSIS_DIAGNOSTIC(NAME, TEXT)
+//
+// These values bound host resources used by optional recovery analyses. They
+// are neither SBF protocol limits nor verifier rules. Each consumer documents
+// its conservative fallback; no consumer may publish a partially converged or
+// partially serialized result.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_ANALYSIS_LIMIT
+#define SBF_ANALYSIS_LIMIT(NAME, VALUE)
+#endif
+
+#ifndef SBF_ANALYSIS_DIAGNOSTIC
+#define SBF_ANALYSIS_DIAGNOSTIC(NAME, TEXT)
+#endif
+
+// The largest set of proven scratch bytes held at one program point. CPI and
+// PDA descriptors are bounded protocol structures, so retaining more only
+// lets a store loop amplify analysis memory without improving recovery.
+SBF_ANALYSIS_LIMIT(MaxModeledScratchBytes, 1'024)
+
+// ScratchFlow retains immutable entry/exit snapshots while solving the CFG.
+// Charge every logical reference conservatively, even when two slots share a
+// snapshot, so adversarial block layouts cannot amplify a 10 MiB program into
+// unbounded host memory. Recovery falls back to block-local scratch facts once
+// this budget is reached.
+SBF_ANALYSIS_LIMIT(ScratchFlowRetainedByteBudget, 8'388'608)
+
+// Function-size synchronization serves an untrusted CFG through the public C
+// API. Exact semantic size can require a distinct reachability query for every
+// function in a graph with shared tails. Common frontier sets are coalesced;
+// this remaining global block-visit budget makes pathological distinct
+// frontiers terminate. A query that crosses it reports size zero (unknown),
+// never a partial size.
+SBF_ANALYSIS_LIMIT(FunctionBodyBatchBlockVisitBudget, 8'388'608)
+
+// Public call-graph recovery batches every internal target against semantic
+// function bodies. Bound both traversal work and the exact caller-target
+// relation: a compact shared tail can otherwise request a quadratic JSON
+// document from linear bytecode. Crossing either limit fails the whole query;
+// partial call graphs are never returned.
+SBF_ANALYSIS_LIMIT(CallGraphProvenanceBlockVisitBudget, 8'388'608)
+SBF_ANALYSIS_LIMIT(CallGraphInputCallSiteBudget, 524'288)
+SBF_ANALYSIS_LIMIT(CallGraphTargetGroupBudget, 262'144)
+SBF_ANALYSIS_LIMIT(CallGraphOutputNodeBudget, 262'144)
+SBF_ANALYSIS_LIMIT(CallGraphOutputEdgeBudget, 262'144)
+SBF_ANALYSIS_LIMIT(CallGraphOutputElementBudget, 524'288)
+SBF_ANALYSIS_LIMIT(CallGraphOutputByteBudget, 67'108'864)
+
+SBF_ANALYSIS_DIAGNOSTIC(CallGraphProvenanceBudgetDiagnostic,
+                        "SBF call graph provenance work budget exhausted")
+SBF_ANALYSIS_DIAGNOSTIC(CallGraphInputBudgetDiagnostic,
+                        "SBF call graph input budget exhausted")
+SBF_ANALYSIS_DIAGNOSTIC(CallGraphNodeBudgetDiagnostic,
+                        "SBF call graph node budget exhausted")
+SBF_ANALYSIS_DIAGNOSTIC(CallGraphEdgeBudgetDiagnostic,
+                        "SBF call graph edge budget exhausted")
+SBF_ANALYSIS_DIAGNOSTIC(CallGraphByteBudgetDiagnostic,
+                        "SBF call graph JSON byte budget exhausted")
+
+#undef SBF_ANALYSIS_LIMIT
+#undef SBF_ANALYSIS_DIAGNOSTIC

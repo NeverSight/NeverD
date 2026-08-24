@@ -1,0 +1,119 @@
+//===- SBFAgaveConformanceProtocol.def - Agave fixture ABI -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_AGAVE_CONFORMANCE_STRING(ID, VALUE)
+// SBF_AGAVE_CONFORMANCE_LIMIT(ID, VALUE)
+// SBF_AGAVE_XXH64_CONSTANT(ID, VALUE)
+// SBF_AGAVE_NON_WIRE_RUNTIME_FEATURE(ID)
+// SBF_AGAVE_PROTO_WIRE(ID, VALUE)
+// SBF_AGAVE_PROTO_FIELD(ID, VALUE, WIRE)
+//
+// The wire records are the protosol 12.0.0
+// org.solana.sealevel.v1.ELFLoaderFixture schema consumed by Agave's
+// sol_compat_elf_loader_v1 target at the pinned Agave revision.  The corpus
+// repository's pinned HEAD later regenerated only its shred fixtures for
+// protosol 13.0.0; its elf_loader fixtures retain this v12 schema. Keeping
+// field identities here makes a schema change a reviewable table edit instead
+// of a collection of numeric literals hidden inside a parser.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_AGAVE_CONFORMANCE_STRING
+#define SBF_AGAVE_CONFORMANCE_STRING(ID, VALUE)
+#endif
+
+#ifndef SBF_AGAVE_CONFORMANCE_LIMIT
+#define SBF_AGAVE_CONFORMANCE_LIMIT(ID, VALUE)
+#endif
+
+#ifndef SBF_AGAVE_PROTO_WIRE
+#define SBF_AGAVE_PROTO_WIRE(ID, VALUE)
+#endif
+
+#ifndef SBF_AGAVE_XXH64_CONSTANT
+#define SBF_AGAVE_XXH64_CONSTANT(ID, VALUE)
+#endif
+
+#ifndef SBF_AGAVE_PROTO_FIELD
+#define SBF_AGAVE_PROTO_FIELD(ID, VALUE, WIRE)
+#endif
+
+#ifndef SBF_AGAVE_NON_WIRE_RUNTIME_FEATURE
+#define SBF_AGAVE_NON_WIRE_RUNTIME_FEATURE(ID)
+#endif
+
+SBF_AGAVE_CONFORMANCE_STRING(RootEnvironment, "NEVERD_AGAVE_CONFORMANCE_ROOT")
+SBF_AGAVE_CONFORMANCE_STRING(RevisionEnvironment,
+                             "NEVERD_AGAVE_CONFORMANCE_REVISION")
+SBF_AGAVE_CONFORMANCE_STRING(RequiredEnvironment,
+                             "NEVERD_REQUIRE_AGAVE_CONFORMANCE")
+SBF_AGAVE_CONFORMANCE_STRING(RequiredValue, "1")
+SBF_AGAVE_CONFORMANCE_STRING(FixtureDirectory, "elf_loader/fixtures")
+SBF_AGAVE_CONFORMANCE_STRING(FixtureExtension, ".fix")
+SBF_AGAVE_CONFORMANCE_STRING(FixtureEntrypoint, "sol_compat_elf_loader_v1")
+SBF_AGAVE_CONFORMANCE_STRING(XXH64HelloInput, "hello world")
+SBF_AGAVE_CONFORMANCE_STRING(GitProgram, "git")
+SBF_AGAVE_CONFORMANCE_STRING(GitHeadCommit, "HEAD^{commit}")
+
+SBF_AGAVE_CONFORMANCE_LIMIT(FixtureCount, 1955)
+SBF_AGAVE_CONFORMANCE_LIMIT(AcceptedFixtureCount, 1399)
+SBF_AGAVE_CONFORMANCE_LIMIT(RejectedFixtureCount, 556)
+// Includes success code zero; the rejected fixtures use the other 17 codes.
+SBF_AGAVE_CONFORMANCE_LIMIT(DistinctOutputCodeCount, 18)
+SBF_AGAVE_CONFORMANCE_LIMIT(XXH64TestSeed, 42)
+SBF_AGAVE_CONFORMANCE_LIMIT(XXH64TestRangeSize, 100)
+SBF_AGAVE_CONFORMANCE_LIMIT(GitTimeoutSeconds, 30)
+
+// Canonical XXH64 constants and vectors used by Agave's fd_hash.rs.  Keeping
+// them together makes an accidental XXH3 substitution or algorithm drift
+// visible in review.
+SBF_AGAVE_XXH64_CONSTANT(Prime1, 0x9e3779b185ebca87ULL)
+SBF_AGAVE_XXH64_CONSTANT(Prime2, 0xc2b2ae3d27d4eb4fULL)
+SBF_AGAVE_XXH64_CONSTANT(Prime3, 0x165667b19e3779f9ULL)
+SBF_AGAVE_XXH64_CONSTANT(Prime4, 0x85ebca77c2b2ae63ULL)
+SBF_AGAVE_XXH64_CONSTANT(Prime5, 0x27d4eb2f165667c5ULL)
+SBF_AGAVE_XXH64_CONSTANT(EmptyHash, 0xef46db3751d8e999ULL)
+SBF_AGAVE_XXH64_CONSTANT(HelloWorldHash, 0x45ab6734b21e6968ULL)
+SBF_AGAVE_XXH64_CONSTANT(SeededHelloWorldHash, 0x69c2b68f9d9352a1ULL)
+SBF_AGAVE_XXH64_CONSTANT(ByteRangeHash, 0x6ac1e58032166597ULL)
+
+// Agave declares these two test-only full pubkeys, but protosol serializes
+// only the first eight pubkey bytes and those prefixes collide.  The official
+// corpus therefore cannot identify either gate on the wire.  Keep the scope
+// typed so adding a real feature with a similar spelling cannot hide it.
+SBF_AGAVE_NON_WIRE_RUNTIME_FEATURE(DisableSBPFV0Execution)
+SBF_AGAVE_NON_WIRE_RUNTIME_FEATURE(ReenableSBPFV0Execution)
+
+SBF_AGAVE_PROTO_WIRE(Varint, 0)
+SBF_AGAVE_PROTO_WIRE(Fixed64, 1)
+SBF_AGAVE_PROTO_WIRE(LengthDelimited, 2)
+SBF_AGAVE_PROTO_WIRE(Fixed32, 5)
+
+SBF_AGAVE_PROTO_FIELD(FixtureMetadata, 1, LengthDelimited)
+SBF_AGAVE_PROTO_FIELD(FixtureInput, 2, LengthDelimited)
+SBF_AGAVE_PROTO_FIELD(FixtureOutput, 3, LengthDelimited)
+
+SBF_AGAVE_PROTO_FIELD(MetadataEntrypoint, 1, LengthDelimited)
+
+SBF_AGAVE_PROTO_FIELD(InputELFData, 1, LengthDelimited)
+SBF_AGAVE_PROTO_FIELD(InputFeatures, 2, LengthDelimited)
+SBF_AGAVE_PROTO_FIELD(InputDeployChecks, 3, Varint)
+
+SBF_AGAVE_PROTO_FIELD(FeatureSetFeatures, 1, Fixed64)
+
+SBF_AGAVE_PROTO_FIELD(OutputErrorCode, 1, Varint)
+SBF_AGAVE_PROTO_FIELD(OutputRodataHash, 2, Fixed64)
+SBF_AGAVE_PROTO_FIELD(OutputTextCount, 3, Varint)
+SBF_AGAVE_PROTO_FIELD(OutputTextOffset, 4, Varint)
+SBF_AGAVE_PROTO_FIELD(OutputEntryPC, 5, Varint)
+SBF_AGAVE_PROTO_FIELD(OutputCallDestinationsHash, 6, Fixed64)
+
+#undef SBF_AGAVE_PROTO_FIELD
+#undef SBF_AGAVE_PROTO_WIRE
+#undef SBF_AGAVE_NON_WIRE_RUNTIME_FEATURE
+#undef SBF_AGAVE_XXH64_CONSTANT
+#undef SBF_AGAVE_CONFORMANCE_LIMIT
+#undef SBF_AGAVE_CONFORMANCE_STRING

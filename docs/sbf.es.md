@@ -64,12 +64,59 @@ versión no puede expresar nada de eso, así que estos son ejes separados con
 tablas separadas.
 
 `SBFRuntimeFeatures.def` registra clusters, propósitos y las gates que cambian lo
-que NeverD informa, cada una con su identificador de runtime, la cuenta cuya
-existencia la activa y el slot en el que cada cluster la activó. Una gate sin
+que NeverD informa, cada una con su identificador de runtime, la cuenta feature
+cuyo estado registra la activación y el slot en el que cada cluster la activó.
+Una cuenta pending puede existir sin activar su gate. Una gate sin
 fila para un cluster no se ha activado allí. `simd-0321` está activa en todos los
 clusters; `simd-0449` y el syscall SHA-512 lo están en testnet y devnet y no en
 mainnet, que es exactamente por lo que un programa que funciona en devnet falla
 en mainnet.
+
+En la revisión fijada de Agave, la gate
+`syscall_parameter_address_restrictions` (`simd-0459`) endurece el contrato de
+dirección VM y alineación de los parámetros de syscall y CPI; el estado RPC
+finalizado registra su activación en los slots 429,840,000 de mainnet,
+407,468,256 de testnet y 462,240,000 de devnet. La gate
+`account_data_direct_mapping` sustituye la copia de datos de cuenta en el búfer
+de entrada por regiones de memoria con respaldo directo cuando se usa el
+espacio de direcciones ajustado; no está activa en mainnet y se activa en los
+slots 408,332,256 de testnet y 463,968,000 de devnet. Ninguna gate crea una ABI
+de cuenta nueva ni cambia los offsets lógicos de ABIv0/ABIv1: el loader
+propietario sigue eligiendo la serialización y NeverD registra ambas como
+metadatos de topología del runtime.
+
+Los bits de feature siguen siendo append-only. Como el snapshot observable ya
+supera 32 bits, `RuntimeFeatureMask` es el único tipo `uint64_t` de almacenamiento
+y host ABI. `RuntimeFeatureDisposition` distingue un `RuntimeBranch` vivo de un
+El ancho del ABI v2 queda congelado y no se amplía in-place; más de 64 bits requieren v3 o una representación multiword, nunca cambiar el ancho de v2.
+`FoldedBranch` cuyo lado activo es incondicional en la revisión fijada, aunque su
+lado antiguo sigue importando en slots históricos. Activaciones del RPC
+finalizado (`—` significa no activado):
+
+| gate | domain / disposition | mainnet | testnet | devnet |
+|------|----------------------|---------|---------|--------|
+| `disable_deploy_of_alloc_free_syscall` | `ProgramAdmission` / `FoldedBranch` | 209,088,008 | 195,356,264 | 224,208,000 |
+| `enable_bpf_loader_set_authority_checked_ix` | `LoaderManagement` / `RuntimeBranch` | 251,424,000 | 247,628,260 | 255,744,000 |
+| `remove_bpf_loader_incorrect_program_id` | `LoaderManagement` / `FoldedBranch` | 237,168,000 | 224,300,256 | 247,104,000 |
+| `simplify_alt_bn128_syscall_error_codes` | `SyscallSemantics` / `FoldedBranch` | 274,320,000 | 278,300,256 | 308,448,000 |
+| `abort_on_invalid_curve` | `SyscallSemantics` / `RuntimeBranch` | 311,904,000 | 300,764,256 | 342,576,000 |
+| `deplete_cu_meter_on_vm_failure` | `VMFaultPolicy` / `RuntimeBranch` | 327,888,000 | 319,340,257 | 364,176,000 |
+| `fix_alt_bn128_multiplication_input_length` | `SyscallSemantics` / `FoldedBranch` | 361,152,000 | 346,988,256 | 397,440,000 |
+| `raise_cpi_nesting_limit_to_8` | `CPIExecution` / `RuntimeBranch` | — | — | — |
+| `increase_cpi_account_info_limit` | `CPIExecution` / `FoldedBranch` | 403,056,000 | 385,868,256 | 435,456,000 |
+| `poseidon_enforce_padding` | `SyscallSemantics` / `FoldedBranch` | 406,080,000 | 385,868,256 | 438,048,000 |
+| `fix_alt_bn128_pairing_length_check` | `SyscallSemantics` / `FoldedBranch` | 406,944,000 | 385,868,256 | 438,480,000 |
+| `alt_bn128_little_endian` | `SyscallSemantics` / `RuntimeBranch` | 425,088,000 | 406,604,256 | 456,192,000 |
+| `enable_alt_bn128_g2_syscalls` | `SyscallSemantics` / `RuntimeBranch` | 425,520,000 | 406,604,256 | 457,056,000 |
+| `loader_v3_minimum_extend_program_size` | `LoaderManagement` / `RuntimeBranch` | 432,864,000 | 416,540,256 | 470,880,000 |
+
+Este alcance no pretende cubrir todo el `FeatureSnapshot` de Agave. NeverD sólo
+incluye gates de loader, verifier, VM, entry/input, syscall e infraestructura
+CPI cuando cambian directamente el decoding o el host contract emitido. El
+scheduling de transacciones, fees, consenso, verificación de precompile a nivel
+de transacción y la semántica de negocio de un `CPI target built-in` pertenecen
+al `external runtime`; añadir sus bits sin implementar esos built-ins anunciaría
+una capacidad inexistente.
 
 `SBFLoaders.def` registra propiedad y serialización. Desplegar y ejecutar dejaron
 de ser la misma respuesta hace años: `loader-v1` y `loader-v2` rechazan toda
@@ -97,9 +144,12 @@ qué gate lo gobierna y hacia dónde apunta esa gate. La dirección importa porq
 una gate puede quitar algo con la misma facilidad con la que lo añade —activar
 `disable_fees_sysvar` es lo que eliminó el syscall del sysvar de fees— y leer una
 gate que quita como si añadiera invierte la respuesta para todos los clusters a
-la vez. `sol_alloc_free_` no necesita gate alguna: el runtime lo sigue atendiendo
-y se niega a aceptar un programa nuevo que lo llame, que es una diferencia entre
-los dos registries y nada más.
+la vez. `sol_alloc_free_` sigue registrado para ejecución a ambos lados del
+límite. Deployment lo registraba antes de
+`disable_deploy_of_alloc_free_syscall` y lo rechaza desde el slot de activación
+específico de cada cluster. La revisión de Agave fijada ha plegado el lado activo
+de deployment en la construcción del registry; NeverD conserva la gate para que
+un perfil histórico obtenga la respuesta anterior a la activación.
 
 En un runtime que ha activado `simd-0321`, el entrypoint recibe además la
 dirección de los datos de la instrucción en `r2`. NeverD lo modela como una clase
@@ -189,7 +239,7 @@ lo que los bytes no deciden queda sin fijar en lugar de adivinarse.
 
 | Recuperado | Evidencia |
 |------------|-----------|
-| Direcciones base58 en datos de solo lectura | coincidencia en `SBFKnownAddresses.def`, o una constante que el código materializa |
+| Direcciones base58 en datos de solo lectura | coincidencia en `SBFKnownAddresses.def` y `SBFAnchorNamespaces.def`, o una constante que el código materializa |
 | La dirección propia declarada | un `sol_memcmp_` de exactamente una longitud de clave contra una constante de solo lectura |
 | Despacho de instrucciones Anchor | una comparación de 64 bits cuya constante iguala un discriminator SHA-256 con namespace |
 | Destinos de CPI | el registro de instruction alcanzable desde el argumento del invoke |
@@ -238,6 +288,18 @@ de lo que direcciona; por eso la recuperación mantiene un modelo con precisión
 byte de la memoria que solo este programa puede escribir, acotado por
 `kMaxModeledScratchBytes`.
 
+La recuperación de scratch es bajo demanda: el fixed point de scratch de Solana
+CPI/PDA solo se construye cuando existe un `scratch consumer` real; los programas
+sin él omiten el `whole-CFG fixed point`. `SBFAnalysisLimits.def` define la
+`analysis policy` del host, no `protocol limits`: `MaxModeledScratchBytes` permite
+1,024 bytes por `program point`, y `ScratchFlowRetainedByteBudget` es una
+`logical retained estimate` de 8,388,608 bytes. Al superar el presupuesto, la
+recuperación hace widening explícito a `ScratchRecoveryPrecision::BlockLocal`.
+Solo se descartan `cross-block must-facts`; `block-local replay` sigue siendo `sound`
+y todavía puede recuperar `same-block stores`.
+El printer emite de forma estable la línea `recovery scratch-precision=block-local`,
+y widening nunca devuelve `half-converged must-facts`.
+
 Dos hechos deciden qué sobrevive a una llamada. `SBFSyscalls.def` dice qué
 registros de argumento llevan una dirección VM; `SBFSyscallMemory.def` dice qué
 hace el runtime a través de ellos, como lectura o escritura con una extensión
@@ -255,20 +317,20 @@ invalidarse: con destino, longitud y origen probados, los bytes de destino pasan
 a conocerse. Eso es lo que recupera la operación que invoca un programa Anchor,
 ya que su carga útil se copia en su lugar en vez de mapearse.
 
-Una llamada a una función que este análisis no ha descrito se supone que escribe
-en todo lo que pueda alcanzar. El llamado corre en un frame propio, así que una
-llamada cuyos registros de argumento demostrablemente no direccionan memoria de
-trabajo deja el modelo intacto; cualquier otra cosa lo descarta.
-`sol_invoke_signed_rust` y `sol_invoke_signed_c` escriben datos de cuenta y no la
-memoria del llamador, de modo que dos invocaciones ensambladas en un mismo bloque
-quedan ambas legibles.
+Solo un syscall de runtime resuelto puede conservar scratch, y únicamente según
+sus ventanas de escritura auditadas. Toda llamada interna, indirecta o no
+resuelta borra los bytes modelados, incluso cuando ningún argumento actual
+apunta a scratch, porque un puntero escapado antes o un alias global aún puede
+permitir que el llamado los modifique. `sol_invoke_signed_rust` y
+`sol_invoke_signed_c` escriben datos de cuenta y no la memoria del llamador, de
+modo que dos invocaciones ensambladas en un mismo bloque quedan ambas legibles.
 
 El modelo es un análisis «must» hacia adelante sobre el CFG intraprocedural: un
 byte sobrevive hasta un bloque solo cuando todo camino que llega a él escribió el
 mismo valor. Las aristas de llamada no se siguen, porque un llamado no hereda
-nada del frame de su llamador. Los programas con más de
-`kMaxScratchFlowBlocks` bloques conservan la recuperación por bloque y solo
-pierden los hechos que cruzan un límite de bloque.
+nada del frame de su llamador. Su worklist de dependencias no tiene una salida
+de precisión por número de bloques; un gate Release opcional ejercita el límite
+completo de 10 MiB y `1,310,720` instrucciones.
 
 `SBFLints.def` cataloga observaciones de programa completo: falta de comprobación
 de signer u owner, un destino de invocación no constante, un syscall obsoleto o
@@ -286,24 +348,130 @@ pasa `llvm::verifyModule` antes de salir.
 ## Contrato host C generado
 
 ```c
+#include <stdint.h>
+
+typedef enum neverd_sbf_status {
+  NEVERD_SBF_OK = 0,
+  NEVERD_SBF_INVALID_INSTRUCTION = 1,
+  NEVERD_SBF_MEMORY_ACCESS = 2,
+  NEVERD_SBF_DIVIDE_BY_ZERO = 3,
+  NEVERD_SBF_DIVIDE_OVERFLOW = 4,
+  NEVERD_SBF_CALL_DEPTH = 5,
+  NEVERD_SBF_UNKNOWN_SYSCALL = 6,
+  NEVERD_SBF_UNKNOWN_FUNCTION = 7,
+  NEVERD_SBF_EXECUTION_OVERRUN = 8,
+} neverd_sbf_status;
+/* v2 is fixed-width: values 0..8 reuse the legacy constants above. */
+typedef uint32_t neverd_sbf_status_v2;
+enum {
+  NEVERD_SBF_INVALID_REGISTER = 9,
+  NEVERD_SBF_INVALID_BRANCH = 10,
+};
+typedef uint64_t neverd_sbf_runtime_feature_mask;
+typedef struct neverd_sbf_runtime_features {
+  neverd_sbf_runtime_feature_mask bits;
+} neverd_sbf_runtime_features;
+
+/* Generated feature constants have the form NEVERD_SBF_RUNTIME_FEATURE_<Name>. */
+typedef struct neverd_sbf_syscall_invocation {
+  uint32_t hash;
+  uint64_t arguments[5];
+  neverd_sbf_runtime_features runtime_features;
+} neverd_sbf_syscall_invocation;
+
+/* v1 is the exact legacy four-field ABI. */
+/* All callback fields return int, including the v2 callback. */
 typedef struct neverd_sbf_environment {
   void *context;
   int (*load)(void *, uint64_t address, uint32_t width, uint64_t *value);
   int (*store)(void *, uint64_t address, uint32_t width, uint64_t value);
+  /* Legacy syscall callback: hash, five arguments, output value. */
   int (*syscall)(void *, uint32_t hash,
                  uint64_t r1, uint64_t r2, uint64_t r3,
                  uint64_t r4, uint64_t r5, uint64_t *result);
 } neverd_sbf_environment;
+
+/* The v1 entrypoint reads only the four fields above. */
+neverd_sbf_status neverd_sbf_program(
+    neverd_sbf_environment *env, uint64_t input,
+    uint64_t instruction_data, uint64_t *result);
+
+/* v2 is a distinct ABI: the old layout is embedded and never extended in place. */
+typedef struct neverd_sbf_environment_v2 {
+  neverd_sbf_environment base;
+  /* NULL callback falls back to base.syscall. */
+  int (*syscall_with_features)(
+      void *, const neverd_sbf_syscall_invocation *, uint64_t *result);
+  /* NULL selects the program snapshot; a pointer to zero is an explicit empty snapshot. */
+  const neverd_sbf_runtime_features *runtime_features;
+} neverd_sbf_environment_v2;
+
+neverd_sbf_status_v2 neverd_sbf_program_v2(
+    neverd_sbf_environment_v2 *env, uint64_t input,
+    uint64_t instruction_data, uint64_t *result);
 ```
 
-`width` está en bits; un retorno host no cero es un status SBF explícito. Se
-representan registros, return PC, r6-r9 preservados, frame pointer, direcciones
-VM, fallos de división, PQR ancho y wrapping shifts. Sólo se emiten helpers
-usados, por lo que pasa `clang -Wall -Wextra -Werror`.
+`width` se expresa en bits. Cada callback C generado devuelve `int`, incluido
+`syscall_with_features`. En el entrypoint v1 `neverd_sbf_program`, cero significa
+éxito; cualquier retorno distinto de cero de `load` o `store` se normaliza a
+`NEVERD_SBF_MEMORY_ACCESS`, y cualquier retorno distinto de cero de `syscall` a
+`NEVERD_SBF_UNKNOWN_SYSCALL`; los contratos son `v1-load-store-nonzero` y
+`v1-syscall-nonzero`; v1 no propaga un status exacto del callback.
+Los fallos internos `InvalidRegister` e `InvalidBranch` también se normalizan a
+`NEVERD_SBF_INVALID_INSTRUCTION` (`internal-invalid-instruction`).
+El entrypoint v2 `neverd_sbf_program_v2` es la ruta de status exacto: un valor de
+callback reconocido de `neverd_sbf_status_v2`, incluidos 9 y 10, se conserva como
+fallo gestionado (`v2-exact-status`). El entrypoint v2 también conserva los fallos internos
+`InvalidRegister` e `InvalidBranch` como 9 y 10. Un valor de callback desconocido
+usa el fallback específico de la operación generado (`operation-specific-fallback`). Si
+`syscall_with_features` es nulo, vuelve a `base.syscall`; su callback también devuelve `int`
+(`feature-aware-null-base-syscall`).
+El struct y entrypoint v1 siguen siendo compatibles con hosts legacy. Usa el
+entrypoint v2 separado para recibir `syscall_with_features` y el snapshot de
+runtime features resuelto. El código generado representa registros, return PCs,
+r6-r9 callee-saved, frame pointers, direcciones VM, fallos de división, operaciones
+PQR anchas y wrapping shifts. Solo se emiten helpers realmente usados, por lo que
+la salida mínima pasa `clang -Wall -Wextra -Werror`.
 
 ## Contrato host Rust generado
 
 ```rust
+// The v1 source contract remains Result-based.
+pub enum SbfError {
+    InvalidInstruction, MemoryAccess, DivideByZero, DivideOverflow,
+    CallDepth, UnknownSyscall, UnknownFunction, ExecutionOverrun,
+}
+
+#[repr(u32)]
+#[non_exhaustive]
+pub enum SbfErrorV2 {
+    InvalidInstruction = 0, MemoryAccess = 1, DivideByZero = 2,
+    DivideOverflow = 3, CallDepth = 4, UnknownSyscall = 5,
+    UnknownFunction = 6, ExecutionOverrun = 7, InvalidRegister = 8,
+    InvalidBranch = 9,
+}
+
+pub struct SbfRuntimeFeatures { bits: u64 }
+impl SbfRuntimeFeatures {
+    pub const fn from_bits(bits: u64) -> Self { Self { bits } }
+    pub const fn bits(self) -> u64 { self.bits }
+    pub const fn contains(self, feature: Self) -> bool {
+        (self.bits & feature.bits) != 0
+    }
+}
+
+pub struct SbfSyscallInvocation {
+    pub hash: u32,
+    pub args: [u64; 5],
+    pub runtime_features: SbfRuntimeFeatures,
+}
+
+pub enum SbfSyscallOutcomeV2 {
+    Unregistered,
+    Returned(u64),
+    Fault(SbfErrorV2),
+}
+
 pub trait SbfEnvironment {
     fn load(&mut self, address: u64, width: u8) -> Result<u64, SbfError>;
     fn store(&mut self, address: u64, width: u8, value: u64)
@@ -311,7 +479,54 @@ pub trait SbfEnvironment {
     fn syscall(&mut self, hash: u32, args: [u64; 5])
         -> Result<u64, SbfError>;
 }
+
+pub trait SbfEnvironmentV2 {
+    fn load(&mut self, address: u64, width: u8) -> Result<u64, SbfErrorV2>;
+    fn store(&mut self, address: u64, width: u8, value: u64)
+        -> Result<(), SbfErrorV2>;
+    fn syscall(&mut self, hash: u32, args: [u64; 5])
+        -> Result<u64, SbfErrorV2> {
+        let _ = (hash, args);
+        Err(SbfErrorV2::UnknownSyscall)
+    }
+    fn syscall_outcome(&mut self, hash: u32, args: [u64; 5])
+        -> SbfSyscallOutcomeV2 {
+        match self.syscall(hash, args) {
+            Ok(value) => SbfSyscallOutcomeV2::Returned(value),
+            Err(SbfErrorV2::UnknownSyscall) => SbfSyscallOutcomeV2::Unregistered,
+            Err(error) => SbfSyscallOutcomeV2::Fault(error),
+        }
+    }
+    // Some(SbfRuntimeFeatures::from_bits(0)) is an explicit empty snapshot.
+    fn runtime_features(&self) -> Option<SbfRuntimeFeatures> { None }
+    fn syscall_with_features(
+        &mut self, invocation: SbfSyscallInvocation
+    ) -> SbfSyscallOutcomeV2 {
+        self.syscall_outcome(invocation.hash, invocation.args)
+    }
+}
+
+pub fn neverd_sbf_program<E: SbfEnvironment>(
+    env: &mut E, input: u64, instruction_data: u64,
+) -> Result<u64, SbfError> {
+    let _ = (env, input, instruction_data);
+    unimplemented!("generated program body")
+}
+pub fn neverd_sbf_program_v2<E: SbfEnvironmentV2>(
+    env: &mut E, input: u64, instruction_data: u64,
+) -> Result<u64, SbfErrorV2> {
+    let _ = (env, input, instruction_data);
+    unimplemented!("generated v2 program body")
+}
 ```
+
+El entrypoint antiguo `neverd_sbf_program` y `SbfEnvironment` forman el
+`v1-result-abi`; sus métodos host usan `Result`. Un
+`Some(SbfRuntimeFeatures::from_bits(0))` es el marcador
+`explicit-empty-snapshot` y se distingue de `None`. `syscall_outcome` es el
+`result-host-bridge` desde el método host basado en Result hasta
+`SbfSyscallOutcomeV2`. Como `SbfErrorV2` lleva `#[non_exhaustive]`, los llamadores
+deben usar un `non-exhaustive-wildcard` (`_`) al hacer match.
 
 La salida es Rust stable seguro sin punteros crudos. El entry point es genérico
 sobre el trait y usa arrays seguros de tamaño fijo. Las pruebas compilan con
@@ -333,6 +548,8 @@ neverd_sbf_set_cluster(session, "devnet");
 neverd_sbf_set_slot(session, 474768000);
 neverd_sbf_set_loader(session, "loader-v3");
 neverd_sbf_set_purpose(session, "deployment");
+/* Optional: name Anchor handlers from the program's own IDL. */
+neverd_sbf_set_idl(session, idl_json);
 const char *rust = neverd_decompile_all_ex(
     session, "program.so", NEVERD_OUTPUT_RUST, 0, 0);
 /* consume rust, then: */
@@ -354,7 +571,7 @@ localmente sin incorporar binarios de terceros.
   runtime Solana autónomo.
 - Relaxed sólo sirve para inspección; nunca asigna semántica adivinada.
 
-## Base de conformidad actual (2026-08-10)
+## Base de conformidad actual (2026-08-24)
 
 Después de aplicar las relocations, un único `ProgramImage` inmutable y
 direccionado por VM es la fuente de verdad para decoder, interpreter,
@@ -381,20 +598,22 @@ inmutabilizar la imagen.
 
 | Evidencia | Resultado auditado |
 |-----------|--------------------|
-| Manifest ELF oficial | 20/20 artefactos de `sbpf/tests/elfs` |
-| Matriz ISA | los 256 encodings para v0-v4, 1,280 celdas, más límites del verifier |
+| Manifest ELF oficial | 23/23 artefactos de `sbpf/tests/elfs` |
+| Oracle oficial | `NeverDSBFExternalOracleTests` contrasta 1,411 casos de opcode/límite con el verifier fijado |
 | Ejecución diferencial | oracle de bytes raw frente a LLVM ORC, C11 y Rust stable, incluidos memory/fault/syscall trace |
-| Agregado integrado | 145/145 casos en 14 binarios de prueba |
-| ASan + UBSan | 141/141 casos core en 13 binarios sin informes |
+| Agregado integrado | `check-neverd-sbf` ejecuta todas las suites registradas; no se fija un total que cambia con frecuencia |
+| ASan + UBSan | los targets enfocados se ejecutan fail-fast sin informes; no se fija un total que cambia con frecuencia |
 
 La auditoría fija Anza `sbpf` en
-`71425d0de59e0bff048c6be8f4a8a9bc655916e2` y Agave en
-`cae40aa610fdbdb313209bc1eec737079eb59688`. Para actualizarla, revise
+`2510663bb8d894e8e3094be351e4bb4b604f1f84` y Agave en
+`ef210d67f2fabeee1730498188fa78854260c679`. Para actualizarla, revise
 `SBFUpstreamManifest.def`, `SBFUpstreamOpcodes.def` y
 `SBFUpstreamSources.def`, y ejecute:
 
 ```bash
 NEVERD_SBPF_ROOT=/path/to/sbpf \
+NEVERD_AGAVE_CONFORMANCE_ROOT=/path/to/firedancer-test-vectors \
+NEVERD_AGAVE_CONFORMANCE_REVISION=68bb4af40235562e8852fa23d5727e49c2a0b862 \
   cmake --build build --target check-neverd-sbf
 ```
 
@@ -402,3 +621,158 @@ La comparación mostró que `sol-azy` falla con el ELF strict actual y conserva
 un nodo CFG legacy indefinido; `solana-data-reverser` se centra en account data,
 `SolDragon` marca el análisis como WIP y `bn-ebpf-solana` requiere Binary Ninja.
 Por ello, `sbpf` y Agave oficiales siguen siendo la autoridad semántica.
+
+## Contrato de evidencia auditado el 2026-08-24
+
+`SBFUpstreamSources.def` fija la auditoría en Anza `sbpf`
+`2510663bb8d894e8e3094be351e4bb4b604f1f84`, Agave
+`ef210d67f2fabeee1730498188fa78854260c679` y Solana SDK
+`122f32e571ce39face4beffaccea733e37c207fd`. El manifest oficial pasa 23/23;
+`NeverDSBFExternalOracleTests` contrasta 1,411 casos opcode/boundary con el
+verifier oficial independiente mediante `SBFOfficialOracleProtocol.def` y
+`SBFOfficialVerifierCases.def` y `SBFOfficialExecutionConstants.def`. Los ELF dañados proceden de
+`SBFOfficialELFMutations.def` y de un corpus tabulado; no se congela un total
+que cambia con frecuencia.
+Por separado, el `diferencial ELF estricto de 41 casos` ejecuta toda la matriz
+strict-v3 mediante el proceso oficial `verify-elf-batch` y NeverD; esos 41 casos
+no forman parte del total 1,411.
+
+La matriz oficial adicional de ejecución (`additional execution matrix`) es
+independiente: contiene exactamente 508 casos activos `(Version,Opcode)` y 58
+casos de frontera, es decir, 566 casos de ejecución exactos. No sustituye ni
+se cuenta dentro de los 1,411 `verifier probes` ni del diferencial ELF estricto
+de ELF estricto con 41 casos.
+
+`NeverDSBFAgaveConformanceTests` también autentica la revisión de Firedancer
+test-vectors `68bb4af40235562e8852fa23d5727e49c2a0b862` y contrasta los 1,955 fixtures
+`sol_compat_elf_loader_v1` (1,399 aceptados y 556 rechazados). Para cada ELF
+aceptado compara además `entry_pc`, `text_off`, `text_cnt`, `rodata_hash` y
+`calldests_hash`. Esta gate comprueba deliberadamente sólo el loader y no
+ejecuta el verifier de instrucciones posterior, para mantener separadas las
+dos etapas de Agave.
+
+El perfil chain predeterminado sigue siendo fiel a Agave: las filas
+`SBF_RUNTIME_VERSION` calculan por cluster/slot histórico el ISA máximo y lo
+hacen avanzar de V0 a V1, V2 y V3 al activarse las feature accounts oficiales;
+el máximo actual sigue en V3. Usa `RuntimeVersionPolicy::ChainProfile`. Sólo
+`--sbf-version=v4` explícito elige
+`RuntimeVersionPolicy::UpstreamToolchain` para análisis offline según el `sbpf`
+fijado, sin afirmar que v4 esté activado on-chain. El límite actual de 10 MiB
+es exactamente `10'485'760` bytes; 65,536 se conserva sólo como provenance/test
+histórico y no se aplica en ejecución.
+
+Los registros `.def` tipados son la autoridad para features, syscalls, faults
+y source ABI: `SBFSyscallRegistration.def`, `SBFValidationRules.def`, `SBFFaultCodes.def`,
+`SBFSourceStatuses.def`, `SBFArgumentRegisters.def` y `SBFEdgeKinds.def`.
+`SBFFaultCodes.def` fija los valores execution-fault y
+`SBFSourceStatuses.def` posee por separado el ABI del source generado. El
+loader es `raw-first`: corrige relative CALL, aplica una sola vez las raw
+relocations en orden ELF ordinal y conserva el orden de error text identity,
+CALL, relocation, entrypoint y read-only layout. El mapeo file/VM es gap-aware
+y nunca inventa bytes en los huecos.
+
+CFG y dataflow son por función: un call edge no es predecessor local, una
+shared tail queda ambigua y todos los latches de un bucle forman una sola
+región multi-latch. Worklist y ownership se prueban con 10,000 funciones,
+bloques en orden inverso y conditional latches, sin adivinar tiempo de máquina.
+
+El call graph público de SBF usa `callgraph-budget=fail-closed`: los límites
+tipados de input, provenance, node, edge, element y `CallGraphOutputByteBudget`
+hacen que el JSON sea exacto o vacío. Al agotarse devuelve
+`{"nodes":[],"edges":[]}`, establece `neverd_last_error()` y nunca publica una
+relación parcial.
+
+Cada fila de activación guarda cluster, feature account y slot; un
+`RPC activation audit` puede compararla con un nodo vivo manteniendo offline el
+análisis normal. La comparación incluye Blueshift, `qedsvm` (pruebas Lean de
+rutas seleccionadas, pero su ELF loader actual sólo acepta V0),
+`leanprover-solanalib`, `sol-azy`, `bn-ebpf-solana` y Ghidra/SolDragon.
+`ezBPF` se declara deprecated en
+`88829078a6d7682a2baed0d696d500401c263750` y remite a Blueshift; es un
+predecesor archivado con un único mapa byte-to-enum, no un decoder consciente
+de versiones para moved-memory, JMP32 y la matriz v0-v4 actual. En esta
+auditoría, los pins de comparación son Blueshift
+`704e40f7aa82446555b19d9ffbc0a6e18a35480f`, `qedsvm`
+`99bd5ede85374adc7fc5c835c2432ecf4e123fd1` y `leanprover-solanalib`
+`6c115ef1ef6a0cde8dbd6fd875b7dc87d60939ec`; las cuatro herramientas locales
+están fijadas como `sol-azy` `362327a798e5dad6e12aa9abf3ed9ed52c17ef6a`,
+`solana-data-reverser` `bf90923adec984a61ca0437e9d341360ac1b11ee`, `SolDragon`
+`002b98677a5e595a773af6607b77210f5ea71db7` y `bn-ebpf-solana`
+`c3fe0de45d37eb68dcb08f2498c6e1f986056572`.
+instantánea, NeverD tiene la evidencia reproducible más fuerte que encontramos
+entre los decompiladores SBF generales públicos auditados; es una afirmación
+comparativa acotada, no un «número uno mundial» absoluto.
+
+La auditoría pública añade `r2ghidra-solana` fijado en
+`eca0b8e2d307e00991e289b8f9b0f45743819f1b`, con UX de Ghidra C-like y
+`C-like-pdg` para cuentas, Anchor, strings y syscalls; su CI pasó en el HEAD
+fijado, pero la suite específica de Solana está comentada y el smoke de CI sólo
+decompila `/bin/ls`. La reproducción directa confirma que el
+`relative_call_sbpfv0.so` oficial de V0 produce C razonable, mientras el
+`relative_call.so` oficial de V3 falla en `pdg`; el resultado es reproducible.
+`radare2-solana`, fijado en
+`292d845681be377cadc9959a74c2cadeb6e7f412`, amplía SIMD-0173/0174 exclusivos de
+V2 a `>=V2` y por tanto a V3/V4, aunque el `program.rs` oficial los declara sólo
+V2. `SBPF-3-1`, fijado en `0e602c93007faa96bccb8e1e12040954ff108b6f`, sólo tiene
+2/2 pruebas cargo triviales y no CI; la detección de versión es un placeholder
+none/V0, el decoder de opcode por high-nibble es incorrecto y el salto usa imm
+en vez de off. Los ELF relative_call de V0 y V3 producen el mismo pseudocódigo
+erróneo. La ventaja de NeverD es la evidencia oficial reproducible de loader,
+verifier, runtime y process-oracle V0–V4, sin negar la UX ni la salida C de estas
+herramientas.
+
+`SBFComparisonTools.def` es la única autoridad para los nombres visibles y las
+revisiones completas de las herramientas comparadas. El barrido público final,
+delimitado, añadió estas conclusiones:
+
+- `blastrock/Solana-eBPF-for-Ghidra`, fijado en
+  `c3ad719004726fe924dbed901eca2744ad82c85d`, ofrece UX real de Ghidra P-code,
+  pero un único modelo SLEIGH sin versión fija CALLX a `dst` y mezcla opcodes
+  legacy/current. No tiene pruebas reales ni CI, y al source predeterminado le
+  falta una clase de constantes de relocation que referencia.
+- `SolEmu-Ghidra`, fijado en `6520af2ff104d5adbec24632ba3afa3bef0da529`,
+  hereda ese decoder idéntico y añade UX de emulador alrededor de comportamiento
+  CPI, criptográfico y ZK explícitamente simulado o placeholder; tampoco tiene
+  pruebas reales ni CI. `Ghidra_sBPF`, fijado en
+  `907bd4476432ca83bb2352686ad1ccafdb38504c`, permite elegir v1-v3 manualmente,
+  pero acumula encodings exclusivos de V2 dentro de V3, sin selección automática
+  V0/V4, pruebas ni CI.
+- `solana-ebpf-ida-processor`, fijado en
+  `aacd215907266190ed9c6c1b408ca9309f92ecdd`, es una UI útil de IDA para
+  desensamblado/relocations, no un source lifter; su mapa mixto siempre lee CALLX
+  de `imm` y carece de pruebas y CI. `solana-bpf-reverse`, fijado en
+  `39479a3bddb8cb866ee499266a76a1b54069b222`, genera informes heurísticos y
+  esqueletos Rust con TODO a partir de layouts hard-coded; la ejecución dio
+  9 pass, 2 fail y 1 skip, sin CI.
+- `solens`, fijado en `22defa1c8f4118dacd42f5c291f1ac31609fc0e5`, es un
+  desensamblador terminal sólo V2 con 0 pruebas y sin CI. `sbpf-decompiler`,
+  fijado en `37b8bc0edc7ce347abee466f5f974e900c1948df`, sólo implementa por ahora
+  tres líneas de `Hello, world!`, con 0 pruebas y sin CI.
+- `sbpf-eye`, fijado en `5277a52aeb58e50b6ff8f9020414334765369b49`, se declara
+  TUI lightweight WIP de instrucciones/CFG: pasan 3 pruebas, pero no tiene IR
+  semántico, emisor de source ni CI. `svm_bytecode_analyzer`, fijado en
+  `12aa236db8964e6be661e38131c2dc81588cf19c`, es un analizador disassembler/CFG,
+  no un lifter; decodifica mal los bytes de registro/offset y su ejecución dio
+  17 pass y 1 fail, sin CI.
+- `giraffexiu/Solana-eBPF-for-Ghidra`, fijado en
+  `81c1e3c2b9ba35091e4a2d8bb6eb23fd59339f07`, es un snapshot de un commit del
+  mismo linaje Ghidra, sin semántica de versión, pruebas ni CI adicionales.
+  `CertSBF`, fijado en `bb93a97cf0c64d119d08ec851e8e820315beb59e`, es una
+  valiosa formalización Isabelle/HOL de semántica rBPF antigua, no un decompilador
+  source V0-V4 actual de programa completo.
+
+Estos hallazgos sólo refuerzan la evidencia comparativa en el snapshot público
+delimitado; no son una conclusión absoluta sobre herramientas futuras o privadas.
+
+La auditoría final de RPC del 2026-08-24 coincidió exactamente: 38 feature
+accounts y 89 activation rows; mainnet en el slot 441305159, testnet en 433055669
+y devnet en 487238699. La cuenta vacía pendiente y propiedad del sistema
+(`VirtualAddressSpaceAdjustments` en mainnet) no estaba activada. No se fija
+ninguna URL RPC en la documentación.
+
+Linux Release CI lee los pins exactos con `--print-pinned-revision`,
+`--print-test-vectors-revision` y `--print-toolchain`, autentica el oracle y el
+corpus sparse, y exporta `NEVERD_SBPF_ORACLE` y
+`NEVERD_AGAVE_CONFORMANCE_ROOT`; por ello ambas pruebas externas son
+obligatorias. Una ejecución local normal sin env explícito de oracle/corpus
+descubre los casos, pero puede omitirlos.

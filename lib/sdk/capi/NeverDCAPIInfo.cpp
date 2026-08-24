@@ -9,6 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "JSONText.h"
 #include "SessionImpl.h"
 
 #include "neverd/evm/bytecode/EVMBytecode.h"
@@ -105,8 +106,8 @@ const char *neverd_imports_json(neverd_session_t Sess) {
   llvm::json::Array Arr;
   for (const auto &Imp : S->Img.Imports) {
     llvm::json::Object Obj;
-    Obj["module"] = Imp.Module;
-    Obj["name"] = Imp.Name;
+    Obj["module"] = jsonSafeText(Imp.Module);
+    Obj["name"] = jsonSafeText(Imp.Name);
     Obj["ordinal"] = static_cast<int64_t>(Imp.Ordinal);
     Obj["iat_addr"] = vaHex(Imp.IATAddr);
     Arr.push_back(std::move(Obj));
@@ -122,7 +123,7 @@ const char *neverd_exports_json(neverd_session_t Sess) {
   llvm::json::Array Arr;
   for (const auto &Exp : S->Img.Exports) {
     llvm::json::Object Obj;
-    Obj["name"] = Exp.Name;
+    Obj["name"] = jsonSafeText(Exp.Name);
     Obj["ordinal"] = static_cast<int64_t>(Exp.Ordinal);
     Obj["addr"] = vaHex(Exp.Addr);
     Arr.push_back(std::move(Obj));
@@ -138,7 +139,7 @@ const char *neverd_segments_json(neverd_session_t Sess) {
   llvm::json::Array Arr;
   for (const auto &Seg : S->Img.Segments) {
     llvm::json::Object Obj;
-    Obj["name"] = Seg.Name;
+    Obj["name"] = jsonSafeText(Seg.Name);
     Obj["va"] = vaHex(Seg.VA);
     Obj["size"] = vaHex(Seg.Size);
     std::string Flags;
@@ -197,8 +198,8 @@ const char *neverd_sections_json(neverd_session_t Sess) {
   llvm::json::Array Arr;
   for (const auto &Sec : S->Img.Sections) {
     llvm::json::Object Obj;
-    Obj["name"] = Sec.Name;
-    Obj["segment"] = Sec.SegmentName;
+    Obj["name"] = jsonSafeText(Sec.Name);
+    Obj["segment"] = jsonSafeText(Sec.SegmentName);
     Obj["va"] = vaHex(Sec.VA);
     Obj["size"] = static_cast<int64_t>(Sec.Size);
     Obj["file_off"] = static_cast<int64_t>(Sec.FileOff);
@@ -222,7 +223,7 @@ const char *neverd_symbols_json(neverd_session_t Sess) {
   llvm::json::Array Arr;
   for (const auto &Sym : S->Img.Symbols) {
     llvm::json::Object Obj;
-    Obj["name"] = Sym.Name;
+    Obj["name"] = jsonSafeText(Sym.Name);
     Obj["addr"] = vaHex(Sym.Addr);
     Obj["size"] = static_cast<int64_t>(Sym.Size);
     Arr.push_back(std::move(Obj));
@@ -240,8 +241,8 @@ const char *neverd_relocs_json(neverd_session_t Sess) {
     llvm::json::Object Obj;
     Obj["addr"] = vaHex(Rel.Address);
     Obj["type"] = static_cast<int64_t>(Rel.Type);
-    Obj["symbol"] = Rel.SymbolName;
-    Obj["section"] = Rel.SectionName;
+    Obj["symbol"] = jsonSafeText(Rel.SymbolName);
+    Obj["section"] = jsonSafeText(Rel.SectionName);
     Obj["addend"] = Rel.Addend;
     Obj["sym_index"] = static_cast<int64_t>(Rel.SymbolIndex);
     Arr.push_back(std::move(Obj));
@@ -384,7 +385,7 @@ const char *neverd_entrypoints_json(neverd_session_t Sess) {
     llvm::json::Object O;
     O["type"] = Type;
     O["addr"] = vaHex(Addr);
-    O["name"] = Name;
+    O["name"] = jsonSafeText(Name);
     Arr.push_back(std::move(O));
   };
 
@@ -508,7 +509,7 @@ const char *neverd_resolve_addr(neverd_session_t Sess, neverd_va_t Addr) {
   for (const auto &F : S->Functions) {
     if (F.Entry == Addr) {
       Obj["type"] = "function";
-      Obj["name"] = F.Name;
+      Obj["name"] = jsonSafeText(F.Name);
       Obj["addr"] = vaHex(F.Entry);
       return dupStr(jsonToString(llvm::json::Value(std::move(Obj))));
     }
@@ -516,8 +517,8 @@ const char *neverd_resolve_addr(neverd_session_t Sess, neverd_va_t Addr) {
 
   if (const Import *Imp = S->Img.findImportAt(Addr)) {
     Obj["type"] = "import";
-    Obj["name"] = Imp->Name;
-    Obj["module"] = Imp->Module;
+    Obj["name"] = jsonSafeText(Imp->Name);
+    Obj["module"] = jsonSafeText(Imp->Module);
     Obj["addr"] = vaHex(Addr);
     return dupStr(jsonToString(llvm::json::Value(std::move(Obj))));
   }
@@ -525,7 +526,7 @@ const char *neverd_resolve_addr(neverd_session_t Sess, neverd_va_t Addr) {
   for (const auto &Exp : S->Img.Exports) {
     if (Exp.Addr == Addr) {
       Obj["type"] = "export";
-      Obj["name"] = Exp.Name;
+      Obj["name"] = jsonSafeText(Exp.Name);
       Obj["addr"] = vaHex(Addr);
       return dupStr(jsonToString(llvm::json::Value(std::move(Obj))));
     }

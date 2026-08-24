@@ -1,0 +1,26 @@
+//===- SBFSourceLimits.def - Portable source backend limits ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_SOURCE_LIMIT(NAME, VALUE)
+//
+// These are backend portability policies, not Solana protocol limits. Keep
+// them centralized so source emitters cannot silently choose different magic
+// recursion depths.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_SOURCE_LIMIT
+#define SBF_SOURCE_LIMIT(NAME, VALUE)
+#endif
+
+// Stay below common C-family parser bracket-depth defaults while leaving room
+// for the generated function and helper scopes around the structured body.
+SBF_SOURCE_LIMIT(MaximumCStructuredNestingDepth, 128)
+
+// Stay below Rust's default recursion-limit class of frontend processing.
+SBF_SOURCE_LIMIT(MaximumRustStructuredNestingDepth, 64)
+
+#undef SBF_SOURCE_LIMIT

@@ -1,0 +1,55 @@
+//===- SBFValidationRules.def - SBF validation fault rules ------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_VALIDATION_RULE(NAME, STABLE_ID, FAULT_CODE, MESSAGE)
+//
+// This is the single authority for stable validation identities and their
+// normalized execution faults. The rows follow Anza's requisite-verifier
+// precedence. Runtime call-resolution and deployment-policy failures are
+// intentionally modeled elsewhere: they do not make an instruction malformed.
+// A malformed instruction is assigned exactly one row before any semantic
+// consumer can observe it.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_VALIDATION_RULE
+#define SBF_VALIDATION_RULE(NAME, STABLE_ID, FAULT_CODE, MESSAGE)
+#endif
+
+SBF_VALIDATION_RULE(UnknownOpcode, "unknown-opcode", InvalidInstruction,
+                    "unknown or version-inactive opcode")
+SBF_VALIDATION_RULE(MissingLDDWContinuation, "missing-lddw-continuation",
+                    InvalidInstruction, "LDDW is missing its continuation slot")
+SBF_VALIDATION_RULE(NonZeroLDDWContinuation, "nonzero-lddw-continuation",
+                    InvalidInstruction,
+                    "LDDW continuation has a non-zero opcode")
+SBF_VALIDATION_RULE(ImmediateDivisionByZero, "immediate-division-by-zero",
+                    DivideByZero, "immediate division or remainder by zero")
+SBF_VALIDATION_RULE(ImmediateShiftOutOfRange, "immediate-shift-out-of-range",
+                    InvalidInstruction, "immediate shift exceeds operand width")
+SBF_VALIDATION_RULE(InvalidEndianImmediate, "invalid-endian-immediate",
+                    InvalidInstruction,
+                    "endianness conversion width is invalid")
+SBF_VALIDATION_RULE(MisalignedFrameAdjustment, "misaligned-frame-adjustment",
+                    InvalidInstruction,
+                    "dynamic stack-frame adjustment is misaligned")
+SBF_VALIDATION_RULE(BranchOutOfRange, "branch-out-of-range", InvalidBranch,
+                    "branch target is outside program text")
+SBF_VALIDATION_RULE(BranchToLDDWContinuation, "branch-to-lddw-continuation",
+                    InvalidBranch, "branch targets an LDDW continuation")
+SBF_VALIDATION_RULE(InvalidCallXRegister, "invalid-callx-register",
+                    InvalidRegister,
+                    "CALLX register is outside the callable register range")
+SBF_VALIDATION_RULE(InvalidSourceRegister, "invalid-source-register",
+                    InvalidRegister,
+                    "source register is outside the SBF register file")
+SBF_VALIDATION_RULE(FramePointerWrite, "frame-pointer-write", InvalidRegister,
+                    "instruction cannot write the frame pointer")
+SBF_VALIDATION_RULE(InvalidDestinationRegister, "invalid-destination-register",
+                    InvalidRegister,
+                    "destination register is outside the SBF register file")
+
+#undef SBF_VALIDATION_RULE

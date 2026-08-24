@@ -13,6 +13,8 @@
 
 #include "SBFRustEmitterDetail.h"
 
+#include "neverd/sbf/emit/SBFSourceStatus.h"
+
 #include "llvm/ADT/StringExtras.h"
 
 #include <cstdlib>
@@ -82,13 +84,14 @@ void advance(llvm::raw_ostream &OS, const MedInstruction &Instruction,
   if (Next < Count)
     OS << "                pc = " << Next << ";\n";
   else
-    OS << "                return Err(SbfError::ExecutionOverrun);\n";
+    OS << "                return Err("
+       << rustSourceErrorName(FaultCode::ExecutionOverrun) << ");\n";
 }
 
 void pushFrame(llvm::raw_ostream &OS, const MedInstruction &Instruction,
                const SBFProgram &Program) {
-  OS << "                if depth + 1 >= MAX_CALL_DEPTH { return "
-        "Err(SbfError::CallDepth); }\n"
+  OS << "                if depth + 1 >= MAX_CALL_DEPTH { return Err("
+     << rustSourceErrorName(FaultCode::CallDepth) << "); }\n"
      << "                return_pc[depth] = " << Instruction.Slot + 1 << ";\n"
      << "                "
         "saved[depth].copy_from_slice(&r[FIRST_SAVED..FIRST_SAVED + "
@@ -157,6 +160,8 @@ std::string comparison(const MedInstruction &Instruction) {
 bool emitLinearInstruction(llvm::raw_ostream &OS,
                            const MedInstruction &Instruction,
                            llvm::StringRef Indent) {
+  if (Instruction.Op == Operation::Invalid)
+    return false;
   const std::string D = reg(Instruction.Dst);
   const std::string S = source(Instruction);
   switch (Instruction.Op) {
@@ -244,8 +249,8 @@ bool emitLinearInstruction(llvm::raw_ostream &OS,
         Instruction.Width == kWordBitWidth ? "(" + S + " as u32)" : S;
     const std::string Dividend =
         Instruction.Width == kWordBitWidth ? "(" + D + " as u32)" : D;
-    OS << Indent << "if " << Divisor
-       << " == 0 { return Err(SbfError::DivideByZero); }\n";
+    OS << Indent << "if " << Divisor << " == 0 { return Err("
+       << rustSourceErrorName(FaultCode::DivideByZero) << "); }\n";
     assign(OS, Instruction,
            Dividend + (Instruction.Op == Operation::UDiv ? " / " : " % ") +
                Divisor,
@@ -259,12 +264,13 @@ bool emitLinearInstruction(llvm::raw_ostream &OS,
         Width32 ? "(" + D + " as i32)" : "(" + D + " as i64)";
     const std::string SignedS =
         Width32 ? "(" + S + " as i32)" : "(" + S + " as i64)";
-    OS << Indent << "if " << SignedS
-       << " == 0 { return Err(SbfError::DivideByZero); }\n"
+    OS << Indent << "if " << SignedS << " == 0 { return Err("
+       << rustSourceErrorName(FaultCode::DivideByZero) << "); }\n"
        << Indent << "let value = " << SignedD
        << (Instruction.Op == Operation::SDiv ? ".checked_div("
                                              : ".checked_rem(")
-       << SignedS << ").ok_or(SbfError::DivideOverflow)?;\n";
+       << SignedS << ").ok_or("
+       << rustSourceErrorName(FaultCode::DivideOverflow) << ")?;\n";
     assign(OS, Instruction, Width32 ? "value as u32" : "value as u64", Indent);
     break;
   }
@@ -315,11 +321,23 @@ bool emitLinearInstruction(llvm::raw_ostream &OS,
     break;
   }
   case Operation::Call:
-    if (Instruction.Call != CallKind::Syscall)
+    if (Instruction.Call != CallKind::Syscall &&
+        Instruction.Call != CallKind::Unresolved)
       return false;
-    OS << Indent << "r[RETURN_REGISTER] = env.syscall(0x"
-       << llvm::utohexstr(Instruction.SyscallHash, true) << "u32, "
-       << argumentRegisters() << ")?;\n";
+    OS << Indent
+       << "let runtime_features = env.runtime_features()"
+          ".unwrap_or(PROGRAM_RUNTIME_FEATURES);\n"
+       << Indent << "match env.syscall_with_features(SbfSyscallInvocation { "
+       << "hash: 0x" << llvm::utohexstr(Instruction.SyscallHash, true)
+       << "u32, args: " << argumentRegisters() << ", runtime_features }) {\n"
+       << Indent
+       << "    SbfSyscallOutcomeV2::Returned(value) => r[RETURN_REGISTER] = "
+          "value,\n"
+       << Indent << "    SbfSyscallOutcomeV2::Unregistered => return Err("
+       << rustSourceErrorName(FaultCode::UnknownSyscall) << "),\n"
+       << Indent
+       << "    SbfSyscallOutcomeV2::Fault(error) => return Err(error),\n"
+       << Indent << "}\n";
     break;
   case Operation::Jump:
   case Operation::Eq:
@@ -354,8 +372,13 @@ void emitInstruction(llvm::raw_ostream &OS, const MedInstruction &Instruction,
 
   switch (Instruction.Op) {
   case Operation::Jump:
-    OS << "                pc = " << Instruction.BranchTarget.value_or(0)
-       << ";\n";
+    if (!Instruction.BranchTarget) {
+      OS << "                return Err("
+         << rustSourceErrorName(FaultCode::InvalidBranch) << ");\n"
+         << "            }\n";
+      return;
+    }
+    OS << "                pc = " << *Instruction.BranchTarget << ";\n";
     OS << "            }\n";
     return;
   case Operation::Eq:
@@ -369,19 +392,51 @@ void emitInstruction(llvm::raw_ostream &OS, const MedInstruction &Instruction,
   case Operation::SLt:
   case Operation::SLe:
   case Operation::Set:
+    if (!Instruction.BranchTarget) {
+      OS << "                return Err("
+         << rustSourceErrorName(FaultCode::InvalidBranch) << ");\n"
+         << "            }\n";
+      return;
+    }
     OS << "                pc = if " << comparison(Instruction) << " { "
-       << Instruction.BranchTarget.value_or(0) << " } else { "
-       << Instruction.Slot + 1 << " };\n"
+       << *Instruction.BranchTarget << " } else { " << Instruction.Slot + 1
+       << " };\n"
        << "            }\n";
     return;
   case Operation::Call:
+    if (Instruction.Call == CallKind::Unsupported) {
+      OS << "                return Err("
+         << rustSourceErrorName(FaultCode::InvalidInstruction) << ");\n"
+         << "            }\n";
+      return;
+    }
     if (Instruction.Call == CallKind::Internal && Instruction.CallTarget) {
+      if (Instruction.Dispatch ==
+          CallDispatchPolicy::LegacyRuntimeThenFunction) {
+        OS << "                let runtime_features = env.runtime_features()"
+              ".unwrap_or(PROGRAM_RUNTIME_FEATURES);\n"
+              "                match env.syscall_with_features("
+              "SbfSyscallInvocation { hash: 0x"
+           << llvm::utohexstr(Instruction.SyscallHash, true)
+           << "u32, args: " << argumentRegisters()
+           << ", runtime_features }) {\n"
+              "                    SbfSyscallOutcomeV2::Returned(value) => "
+              "r[RETURN_REGISTER] = value,\n"
+              "                    SbfSyscallOutcomeV2::Unregistered => {},\n"
+              "                    SbfSyscallOutcomeV2::Fault("
+           << rustSourceErrorName(FaultCode::UnknownSyscall)
+           << ") => {},\n"
+              "                    SbfSyscallOutcomeV2::Fault(error) => return "
+              "Err(error),\n"
+              "                }\n";
+      }
       pushFrame(OS, Instruction, Program);
       OS << "                pc = " << *Instruction.CallTarget << ";\n"
          << "            }\n";
       return;
     }
-    OS << "                return Err(SbfError::UnknownSyscall);\n"
+    OS << "                return Err("
+       << rustSourceErrorName(FaultCode::UnknownSyscall) << ");\n"
        << "            }\n";
     return;
   case Operation::CallX:
@@ -389,12 +444,16 @@ void emitInstruction(llvm::raw_ostream &OS, const MedInstruction &Instruction,
     OS << "                let target = r["
        << unsigned(Instruction.CallRegister)
        << "];\n"
-          "                if target < TEXT_ADDRESS { return "
-          "Err(SbfError::UnknownFunction); }\n"
-          "                pc = ((target - TEXT_ADDRESS) / INSTRUCTION_SIZE) "
-          "as usize;\n"
-          "                if pc >= INSTRUCTION_COUNT { return "
-          "Err(SbfError::UnknownFunction); }\n"
+          "                if target < TEXT_ADDRESS { return Err("
+       << rustSourceErrorName(FaultCode::UnknownIndirectCall)
+       << "); }\n"
+          "                let target_slot = (target - TEXT_ADDRESS) / "
+          "INSTRUCTION_SIZE;\n"
+          "                if target_slot >= INSTRUCTION_COUNT as u64 { "
+          "return Err("
+       << rustSourceErrorName(FaultCode::UnknownIndirectCall)
+       << "); }\n"
+          "                pc = target_slot as usize;\n"
           "            }\n";
     return;
   case Operation::Exit:
@@ -407,7 +466,10 @@ void emitInstruction(llvm::raw_ostream &OS, const MedInstruction &Instruction,
           "            }\n";
     return;
   case Operation::Invalid:
-    OS << "                return Err(SbfError::InvalidInstruction);\n"
+    OS << "                return Err("
+       << rustSourceErrorName(
+              executionFaultForValidationRule(Instruction.InvalidReason))
+       << ");\n"
        << "            }\n";
     return;
   case Operation::LoadImm:

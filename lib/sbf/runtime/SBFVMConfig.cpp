@@ -21,6 +21,10 @@ llvm::Error validateVMConfig(const SBFVMConfig &Config) {
     return llvm::make_error<llvm::StringError>(
         "sbf: maximum call depth must be non-zero",
         llvm::inconvertibleErrorCode());
+  if (Config.MaxCallDepth > kMaximumHostCallDepth)
+    return llvm::make_error<llvm::StringError>(
+        "sbf: maximum call depth exceeds the host call-depth limit",
+        llvm::inconvertibleErrorCode());
   if (Config.MaxCallDepth >
       std::numeric_limits<size_t>::max() / Config.StackFrameSize)
     return llvm::make_error<llvm::StringError>(
@@ -29,6 +33,10 @@ llvm::Error validateVMConfig(const SBFVMConfig &Config) {
   if (StackSize >= kMemoryRegionSize)
     return llvm::make_error<llvm::StringError>(
         "sbf: configured stack exceeds one VM region",
+        llvm::inconvertibleErrorCode());
+  if (StackSize > kMaximumHostStackByteCount)
+    return llvm::make_error<llvm::StringError>(
+        "sbf: configured stack exceeds the host stack-byte limit",
         llvm::inconvertibleErrorCode());
   return llvm::Error::success();
 }

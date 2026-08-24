@@ -69,6 +69,11 @@ NEVERD_API const char *neverd_cfg_json(neverd_session_t Sess,
 // Call graph (function-level call relationships)
 // ===--------------------------------------------------------------------===//
 
+/// Return an owned JSON object with complete function nodes and call edges.
+/// SBF recovery is exact-or-empty under typed host resource budgets: when a
+/// budget is exhausted this returns {"nodes":[],"edges":[]} and records the
+/// diagnostic for neverd_last_error(). A partial edge relation is never
+/// published.
 NEVERD_API const char *neverd_callgraph_json(neverd_session_t Sess);
 
 // ===--------------------------------------------------------------------===//

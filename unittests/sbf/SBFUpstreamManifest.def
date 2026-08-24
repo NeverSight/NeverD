@@ -3,7 +3,7 @@
 // NeverD Decompiler
 //
 // Derived from anza-xyz/sbpf tests/elf.rs and tests/execution.rs at
-// 71425d0de59e0bff048c6be8f4a8a9bc655916e2 (audited 2026-08-10).
+// 2510663bb8d894e8e3094be351e4bb4b604f1f84 (audited 2026-08-24).
 // This file intentionally has no include guard.
 //
 // SBF_UPSTREAM_ELF(FILE, VERSION, LOAD, VM_PROFILE, INPUT_PROFILE,
@@ -24,6 +24,12 @@ SBF_UPSTREAM_ELF("data_section_sbpfv0.so", V0, Reject, Default, None, None, 0,
                  NotRun, 0)
 SBF_UPSTREAM_ELF("long_section_name.so", V0, Reject, Default, None, None, 0,
                  NotRun, 0)
+SBF_UPSTREAM_ELF("long_dynamic_symbol_name_sbpfv0.so", V0, Reject, Default,
+                 None, None, 0, NotRun, 0)
+SBF_UPSTREAM_ELF("long_symbol_name.so", V3, Accept, Default, None, None, 0,
+                 NotRun, 0)
+SBF_UPSTREAM_ELF("long_symbol_name_sbpfv0.so", V0, Accept, Default, None, None,
+                 0, NotRun, 0)
 SBF_UPSTREAM_ELF("program_headers_overflow.so", V3, Reject, Default, None,
                  None, 0, NotRun, 0)
 SBF_UPSTREAM_ELF("relative_call.so", V3, Accept, Default, ByteOne, None, 16,

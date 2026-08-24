@@ -13,10 +13,10 @@
 #endif
 
 SBF_RELOCATION(Abs64, 1, "R_BPF_64_64", 64, Absolute, SplitLDDWImmediate,
-               TextLDDW, Required, LegacyOnly)
+               TextLDDW, Record, LegacyOnly)
 SBF_RELOCATION(Relative64, 8, "R_BPF_64_RELATIVE", 64, Relative,
                SplitLDDWOrData, TextLDDW | ReadOnlyData, None, LegacyOnly)
 SBF_RELOCATION(Call32, 10, "R_BPF_64_32", 32, Call, CallImmediate, TextCall,
-               Required, LegacyOnly)
+               RecordAndName, LegacyOnly)
 
 #undef SBF_RELOCATION

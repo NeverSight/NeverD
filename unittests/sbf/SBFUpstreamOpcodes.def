@@ -1,7 +1,7 @@
 //===- SBFUpstreamOpcodes.def - Audited Anza opcode manifest -*- C++ -*-===//
 //
 // Derived independently from anza-xyz/sbpf src/ebpf.rs, src/program.rs,
-// and src/verifier.rs at 71425d0de59e0bff048c6be8f4a8a9bc655916e2.
+// and src/verifier.rs at 2510663bb8d894e8e3094be351e4bb4b604f1f84.
 // SBF_UPSTREAM_OPCODE(ID, ENCODING, MNEMONIC, FORM, WIDTH, VERSION_MASK)
 //
 //===----------------------------------------------------------------------===//

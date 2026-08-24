@@ -1,0 +1,38 @@
+//===- SBFOfficialExecutionFaults.def - Oracle fault vocabulary -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_OFFICIAL_EXECUTION_FAULT(ID, RUST_ID, SPELLING)
+//
+// These are semantic, cross-implementation fault classes.  The Rust oracle
+// maps every reachable EbpfError variant explicitly; NeverD maps its stable
+// FaultCode ABI to the same closed vocabulary.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_OFFICIAL_EXECUTION_FAULT
+#define SBF_OFFICIAL_EXECUTION_FAULT(ID, RUST_ID, SPELLING)
+#endif
+
+SBF_OFFICIAL_EXECUTION_FAULT(None, FAULT_NONE, "none")
+SBF_OFFICIAL_EXECUTION_FAULT(InstructionMeter, FAULT_INSTRUCTION_METER,
+                             "instruction-meter")
+SBF_OFFICIAL_EXECUTION_FAULT(InvalidInstruction, FAULT_INVALID_INSTRUCTION,
+                             "invalid-instruction")
+SBF_OFFICIAL_EXECUTION_FAULT(DivideByZero, FAULT_DIVIDE_BY_ZERO,
+                             "divide-by-zero")
+SBF_OFFICIAL_EXECUTION_FAULT(DivideOverflow, FAULT_DIVIDE_OVERFLOW,
+                             "divide-overflow")
+SBF_OFFICIAL_EXECUTION_FAULT(MemoryAccess, FAULT_MEMORY_ACCESS, "memory-access")
+SBF_OFFICIAL_EXECUTION_FAULT(CallDepth, FAULT_CALL_DEPTH, "call-depth")
+SBF_OFFICIAL_EXECUTION_FAULT(UnresolvedCall, FAULT_UNRESOLVED_CALL,
+                             "unresolved-call")
+SBF_OFFICIAL_EXECUTION_FAULT(UnknownIndirectCall, FAULT_UNKNOWN_INDIRECT_CALL,
+                             "unknown-indirect-call")
+SBF_OFFICIAL_EXECUTION_FAULT(ExecutionOverrun, FAULT_EXECUTION_OVERRUN,
+                             "execution-overrun")
+SBF_OFFICIAL_EXECUTION_FAULT(Syscall, FAULT_SYSCALL, "syscall")
+
+#undef SBF_OFFICIAL_EXECUTION_FAULT

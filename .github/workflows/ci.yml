@@ -205,6 +205,63 @@ jobs:
         env:
           BUILD_PARALLEL: ${{ matrix.parallel }}
 
+      # The C++ side alone cannot prove agreement with the implementation that
+      # validators execute. Build the process-isolated oracle from the exact
+      # source object and Cargo.lock named by NeverD's typed provenance table,
+      # then make the Linux semantic leg treat every skipped oracle case as a
+      # configured, executable differential test.
+      - name: Build the pinned Anza SBF oracle
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision="$("$PYTHON" scripts/build_sbf_official_oracle.py --print-pinned-revision)"
+          toolchain="$("$PYTHON" scripts/build_sbf_official_oracle.py --print-toolchain)"
+          oracle_source="$RUNNER_TEMP/neverd-sbpf-oracle-source"
+          oracle_binary="$GITHUB_WORKSPACE/build-ci/bin/neverd-sbpf-official-oracle"
+          git init "$oracle_source"
+          git -C "$oracle_source" remote add origin https://github.com/anza-xyz/sbpf.git
+          git -C "$oracle_source" fetch --depth=1 origin "$revision"
+          git -C "$oracle_source" checkout --detach FETCH_HEAD
+          rustup toolchain install "$toolchain" --profile minimal
+          "$PYTHON" scripts/build_sbf_official_oracle.py \
+            --sbpf-root "$oracle_source" \
+            --output "$oracle_binary" \
+            --toolchain "$toolchain"
+          {
+            echo "NEVERD_SBPF_ROOT=$oracle_source"
+            echo "NEVERD_SBPF_ORACLE=$oracle_binary"
+            echo "NEVERD_REQUIRE_SBPF_ORACLE=1"
+          } >> "$GITHUB_ENV"
+        env:
+          PYTHON: ${{ matrix.python }}
+
+      # The loader corpus is large enough that CI should fetch only its one
+      # audited fixture directory.  Both the checkout and the C++ gate derive
+      # the object identity from SBFUpstreamSources.def, and the required flag
+      # turns a missing, partial, or wrong checkout into a hard failure.
+      - name: Fetch the pinned Agave ELF-loader corpus
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision="$("$PYTHON" scripts/build_sbf_official_oracle.py --print-test-vectors-revision)"
+          fixture_root="$RUNNER_TEMP/neverd-firedancer-test-vectors"
+          git init "$fixture_root"
+          git -C "$fixture_root" remote add origin https://github.com/firedancer-io/test-vectors.git
+          git -C "$fixture_root" sparse-checkout init --cone
+          git -C "$fixture_root" sparse-checkout set elf_loader/fixtures
+          git -C "$fixture_root" fetch --depth=1 origin "$revision"
+          git -C "$fixture_root" checkout --detach FETCH_HEAD
+          test "$(git -C "$fixture_root" rev-parse HEAD)" = "$revision"
+          {
+            echo "NEVERD_AGAVE_CONFORMANCE_ROOT=$fixture_root"
+            echo "NEVERD_AGAVE_CONFORMANCE_REVISION=$revision"
+            echo "NEVERD_REQUIRE_AGAVE_CONFORMANCE=1"
+          } >> "$GITHUB_ENV"
+        env:
+          PYTHON: ${{ matrix.python }}
+
       - name: Run native and Python semantic plugin examples
         shell: bash
         run: |

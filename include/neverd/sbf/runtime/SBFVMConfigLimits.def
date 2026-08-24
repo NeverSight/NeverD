@@ -1,0 +1,30 @@
+//===- SBFVMConfigLimits.def - Host VM resource limits -------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_VM_CONFIG_LIMIT(NAME, VALUE)
+//
+// These are host-safety policy, not SBF wire or verifier limits. Every
+// interpreter and emitter entrypoint validates the same configuration before
+// allocating memory or materializing fixed-size call-frame arrays.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_VM_CONFIG_LIMIT
+#define SBF_VM_CONFIG_LIMIT(NAME, VALUE)
+#endif
+
+// The pinned Anza Config::default() and the validator runtime use the default
+// call depth. A larger expert override would expand three independent
+// host-side arrays without changing deployable Solana semantics.
+SBF_VM_CONFIG_LIMIT(MaximumHostCallDepth, kDefaultMaxCallDepth)
+
+// Keep the total eagerly allocated stack backing inside the validator's
+// pinned default resource envelope. Expert configurations may trade frame
+// width for depth, but cannot silently scale the host allocation.
+SBF_VM_CONFIG_LIMIT(MaximumHostStackByteCount,
+                    kDefaultStackFrameSize *kDefaultMaxCallDepth)
+
+#undef SBF_VM_CONFIG_LIMIT

@@ -100,24 +100,41 @@ constexpr Version versionFromELFFlags(uint32_t Flags) {
   }
 }
 
-enum class VersionMask : uint8_t {
+enum class VersionMask : uint64_t {
   None = 0,
-  V0 = 1u << 0,
-  V1 = 1u << 1,
-  V2 = 1u << 2,
-  V3 = 1u << 3,
-  V4 = 1u << 4,
-  All = (1u << 5) - 1,
-  NotV2 = (1u << 0) | (1u << 1) | (1u << 3) | (1u << 4),
-  V2Only = 1u << 2,
-  V3Plus = (1u << 3) | (1u << 4),
+#define SBF_VERSION(NAME, ELF_FLAGS, SPELLING, DISPLAY_NAME, FEATURES, STATUS) \
+  NAME = uint64_t{1} << ELF_FLAGS,
+#include "neverd/sbf/image/SBFVersions.def"
+  All = uint64_t{0}
+#define SBF_VERSION(NAME, ELF_FLAGS, SPELLING, DISPLAY_NAME, FEATURES, STATUS) \
+  | (uint64_t{1} << ELF_FLAGS)
+#include "neverd/sbf/image/SBFVersions.def"
+  ,
+  NotV2 = (uint64_t{0}
+#define SBF_VERSION(NAME, ELF_FLAGS, SPELLING, DISPLAY_NAME, FEATURES, STATUS) \
+  | (uint64_t{1} << ELF_FLAGS)
+#include "neverd/sbf/image/SBFVersions.def"
+           ) &
+          ~(uint64_t{1} << static_cast<uint8_t>(Version::V2)),
+  V2Only = uint64_t{1} << static_cast<uint8_t>(Version::V2),
+  V3Plus = (uint64_t{0}
+#define SBF_VERSION(NAME, ELF_FLAGS, SPELLING, DISPLAY_NAME, FEATURES, STATUS) \
+  | (uint64_t{1} << ELF_FLAGS)
+#include "neverd/sbf/image/SBFVersions.def"
+            ) &
+           ~((uint64_t{1} << static_cast<uint8_t>(Version::V3)) - 1),
 };
+
+#define SBF_VERSION(NAME, ELF_FLAGS, SPELLING, DISPLAY_NAME, FEATURES, STATUS) \
+  static_assert(ELF_FLAGS < std::numeric_limits<uint64_t>::digits,             \
+                "SBF version mask cannot represent this ELF flag");
+#include "neverd/sbf/image/SBFVersions.def"
 
 constexpr bool versionInMask(Version V, VersionMask Mask) {
   if (!isConcreteVersion(V))
     return false;
-  const auto Bit = uint8_t{1} << static_cast<uint8_t>(V);
-  return (static_cast<uint8_t>(Mask) & Bit) != 0;
+  const auto Bit = uint64_t{1} << static_cast<uint8_t>(V);
+  return (static_cast<uint64_t>(Mask) & Bit) != 0;
 }
 
 struct VersionInfo {

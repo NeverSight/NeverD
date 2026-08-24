@@ -1,0 +1,108 @@
+//===- SBFOfficialELFMutations.def - Strict ELF mutation matrix -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_OFFICIAL_ELF_MUTATION(ID, NAME, BUILDER, EXPECTATION)
+//
+// Every row starts from the same accepted, sectionless strict-v3 ELF and
+// changes exactly the named header or range property.  The expected status is
+// audited from anza-xyz/sbpf's strict parser; both implementations still see
+// the independently serialized mutated bytes.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_OFFICIAL_ELF_MUTATION
+#define SBF_OFFICIAL_ELF_MUTATION(ID, NAME, BUILDER, EXPECTATION)
+#endif
+
+SBF_OFFICIAL_ELF_MUTATION(Baseline, "baseline", Baseline, Accept)
+SBF_OFFICIAL_ELF_MUTATION(InvalidMagic, "ident-magic", InvalidMagic, Reject)
+SBF_OFFICIAL_ELF_MUTATION(InvalidClass, "ident-class", InvalidClass, Reject)
+SBF_OFFICIAL_ELF_MUTATION(InvalidData, "ident-data", InvalidData, Reject)
+SBF_OFFICIAL_ELF_MUTATION(InvalidIdentVersion, "ident-version",
+                          InvalidIdentVersion, Reject)
+SBF_OFFICIAL_ELF_MUTATION(InvalidOSABI, "ident-osabi", InvalidOSABI, Reject)
+SBF_OFFICIAL_ELF_MUTATION(InvalidABIVersion, "ident-abi-version",
+                          InvalidABIVersion, Reject)
+SBF_OFFICIAL_ELF_MUTATION(InvalidIdentPadding, "ident-padding",
+                          InvalidIdentPadding, Reject)
+SBF_OFFICIAL_ELF_MUTATION(ExecutableType, "type-exec-is-ignored",
+                          ExecutableType, Accept)
+SBF_OFFICIAL_ELF_MUTATION(InvalidMachine, "machine", InvalidMachine, Reject)
+SBF_OFFICIAL_ELF_MUTATION(InvalidHeaderVersion, "header-version",
+                          InvalidHeaderVersion, Reject)
+SBF_OFFICIAL_ELF_MUTATION(ReservedSBPFVersion, "sbpf-version-reserved",
+                          ReservedSBPFVersion, Reject)
+
+SBF_OFFICIAL_ELF_MUTATION(InvalidELFHeaderSize, "elf-header-size",
+                          InvalidELFHeaderSize, Reject)
+SBF_OFFICIAL_ELF_MUTATION(InvalidProgramHeaderEntrySize,
+                          "program-header-entry-size",
+                          InvalidProgramHeaderEntrySize, Reject)
+SBF_OFFICIAL_ELF_MUTATION(NoProgramHeaders, "program-header-count-zero",
+                          NoProgramHeaders, Reject)
+SBF_OFFICIAL_ELF_MUTATION(ProgramHeaderOffsetOverlapsFileHeader,
+                          "program-header-overlaps-file-header",
+                          ProgramHeaderOffsetOverlapsFileHeader, Reject)
+SBF_OFFICIAL_ELF_MUTATION(ProgramHeaderOffsetOverflow,
+                          "program-header-offset-overflow",
+                          ProgramHeaderOffsetOverflow, Reject)
+SBF_OFFICIAL_ELF_MUTATION(ProgramHeaderCountMaximum,
+                          "program-header-count-maximum",
+                          ProgramHeaderCountMaximum, Reject)
+SBF_OFFICIAL_ELF_MUTATION(TruncatedProgramHeaderTable,
+                          "program-header-table-truncated",
+                          TruncatedProgramHeaderTable, Reject)
+SBF_OFFICIAL_ELF_MUTATION(ProgramHeaderTableOverlapsSegments,
+                          "program-header-table-overlaps-segments",
+                          ProgramHeaderTableOverlapsSegments, Reject)
+
+SBF_OFFICIAL_ELF_MUTATION(InvalidRodataSegmentType, "rodata-segment-type",
+                          InvalidRodataSegmentType, Reject)
+SBF_OFFICIAL_ELF_MUTATION(InvalidTextSegmentType, "text-segment-type",
+                          InvalidTextSegmentType, Reject)
+SBF_OFFICIAL_ELF_MUTATION(InvalidRodataSegmentFlags, "rodata-segment-flags",
+                          InvalidRodataSegmentFlags, Reject)
+SBF_OFFICIAL_ELF_MUTATION(InvalidTextSegmentFlags, "text-segment-flags",
+                          InvalidTextSegmentFlags, Reject)
+SBF_OFFICIAL_ELF_MUTATION(RodataOffsetUnaligned, "rodata-offset-unaligned",
+                          RodataOffsetUnaligned, Reject)
+SBF_OFFICIAL_ELF_MUTATION(TextOffsetUnaligned, "text-offset-unaligned",
+                          TextOffsetUnaligned, Reject)
+SBF_OFFICIAL_ELF_MUTATION(TextOffsetAtEndOfFile, "text-offset-at-eof",
+                          TextOffsetAtEndOfFile, Reject)
+SBF_OFFICIAL_ELF_MUTATION(TextFileRangePastEnd, "text-file-range-past-eof",
+                          TextFileRangePastEnd, Reject)
+SBF_OFFICIAL_ELF_MUTATION(TextFileSizeUnaligned, "text-size-unaligned",
+                          TextFileSizeUnaligned, Reject)
+SBF_OFFICIAL_ELF_MUTATION(TextFileMemorySizeMismatch,
+                          "text-file-memory-size-mismatch",
+                          TextFileMemorySizeMismatch, Reject)
+SBF_OFFICIAL_ELF_MUTATION(InvalidTextVirtualAddress, "text-virtual-address",
+                          InvalidTextVirtualAddress, Reject)
+SBF_OFFICIAL_ELF_MUTATION(InvalidTextPhysicalAddress, "text-physical-address",
+                          InvalidTextPhysicalAddress, Reject)
+SBF_OFFICIAL_ELF_MUTATION(RodataTextFileOverlap, "rodata-text-file-overlap",
+                          RodataTextFileOverlap, Reject)
+SBF_OFFICIAL_ELF_MUTATION(RodataTextVMOverlap, "rodata-text-vm-overlap",
+                          RodataTextVMOverlap, Reject)
+SBF_OFFICIAL_ELF_MUTATION(TextAlignmentValueIgnored,
+                          "text-alignment-field-is-ignored",
+                          TextAlignmentValueIgnored, Accept)
+SBF_OFFICIAL_ELF_MUTATION(TruncatedTextBytes, "text-bytes-truncated",
+                          TruncatedTextBytes, Reject)
+SBF_OFFICIAL_ELF_MUTATION(EmptyTextSegment, "text-segment-empty",
+                          EmptyTextSegment, Reject)
+
+SBF_OFFICIAL_ELF_MUTATION(EntryAtSecondInstruction, "entry-second-instruction",
+                          EntryAtSecondInstruction, Accept)
+SBF_OFFICIAL_ELF_MUTATION(EntryUnaligned, "entry-unaligned", EntryUnaligned,
+                          Reject)
+SBF_OFFICIAL_ELF_MUTATION(EntryBeforeText, "entry-before-text", EntryBeforeText,
+                          Reject)
+SBF_OFFICIAL_ELF_MUTATION(EntryAtTextEnd, "entry-at-text-end", EntryAtTextEnd,
+                          Reject)
+
+#undef SBF_OFFICIAL_ELF_MUTATION

@@ -1,0 +1,31 @@
+//===- SBFFaultCodes.def - Stable SBF execution faults ---------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_FAULT_CODE(NAME, VALUE)
+//
+// VALUE is the stable ABI passed to the LLVM runtime fault callback. Existing
+// rows are append-only; generated-source status values are a separate ABI in
+// SBFSourceStatuses.def and deliberately need not share these numbers.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_FAULT_CODE
+#define SBF_FAULT_CODE(NAME, VALUE)
+#endif
+
+SBF_FAULT_CODE(None, 0)
+SBF_FAULT_CODE(InvalidInstruction, 1)
+SBF_FAULT_CODE(InvalidRegister, 2)
+SBF_FAULT_CODE(InvalidBranch, 3)
+SBF_FAULT_CODE(DivideByZero, 4)
+SBF_FAULT_CODE(DivideOverflow, 5)
+SBF_FAULT_CODE(MemoryAccess, 6)
+SBF_FAULT_CODE(CallDepth, 7)
+SBF_FAULT_CODE(UnknownSyscall, 8)
+SBF_FAULT_CODE(UnknownIndirectCall, 9)
+SBF_FAULT_CODE(ExecutionOverrun, 10)
+
+#undef SBF_FAULT_CODE

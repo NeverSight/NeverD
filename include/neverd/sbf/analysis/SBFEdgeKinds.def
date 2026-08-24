@@ -1,0 +1,27 @@
+//===- SBFEdgeKinds.def - SBF control-flow edge kinds ---------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// This file defines the canonical SBF CFG edge vocabulary.  Keep the textual
+/// IR spelling, stable C API spellings, and function-local control-flow trait
+/// here so every consumer evolves with the enum. Define SBF_EDGE_KIND before
+/// including this file.
+///
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_EDGE_KIND
+#error "Define SBF_EDGE_KIND before including SBFEdgeKinds.def"
+#endif
+
+SBF_EDGE_KIND(Fallthrough, "fallthrough", "fallthrough", "false", true)
+SBF_EDGE_KIND(BranchTaken, "taken", "true", "true", true)
+SBF_EDGE_KIND(Branch, "branch", "unconditional", "unconditional", true)
+SBF_EDGE_KIND(Call, "call", "call", "call", false)
+SBF_EDGE_KIND(IndirectCall, "callx", "indirect-call", "indirect-call", false)
+SBF_EDGE_KIND(Return, "return", "return", "return", false)
+SBF_EDGE_KIND(Fault, "fault", "fault", "fault", false)
+SBF_EDGE_KIND(Invalid, "invalid", "invalid", "invalid", false)
+
+#undef SBF_EDGE_KIND

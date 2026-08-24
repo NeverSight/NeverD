@@ -17,8 +17,9 @@
 
 #include "neverd/sbf/analysis/SBFAnalyzer.h"
 #include "neverd/sbf/emit/SBFCEmitter.h"
-#include "neverd/sbf/runtime/SBFInterpreter.h"
 #include "neverd/sbf/emit/SBFRustEmitter.h"
+#include "neverd/sbf/image/SBFRelocations.h"
+#include "neverd/sbf/runtime/SBFInterpreter.h"
 #include "neverd/support/BinaryLoading.h"
 
 #include "llvm/ADT/SmallVector.h"
@@ -102,13 +103,27 @@ void compileAndRun(SourceBackend Backend, llvm::StringRef Source) {
 void runDifferential(SourceBackend Backend, const DifferentialCase &Case) {
   SCOPED_TRACE(Case.Name);
   ExecutionEnvironment OracleEnvironment = Case.Environment;
-  OracleEnvironment.Syscall = [](uint32_t, const SyscallArguments &Arguments)
-      -> std::optional<uint64_t> { return Arguments[0] + 1; };
+  SyscallCallback CustomSyscall = OracleEnvironment.Syscall;
+  OracleEnvironment.Syscall =
+      [CustomSyscall = std::move(CustomSyscall)](
+          uint32_t Hash,
+          const SyscallArguments &Arguments) -> std::optional<uint64_t> {
+    if (CustomSyscall)
+      return CustomSyscall(Hash, Arguments);
+    if (!getSyscallInfo(Hash))
+      return std::nullopt;
+    return Arguments[0] + 1;
+  };
   std::vector<MemoryRegion> Memory =
       initialMemory(Case.Program, OracleEnvironment);
   auto Expected = executeRaw(Case.Program, std::move(OracleEnvironment));
   ASSERT_TRUE(static_cast<bool>(Expected))
       << llvm::toString(Expected.takeError());
+  if (Case.LoadFault || Case.StoreFault) {
+    ASSERT_EQ(Expected->Status, ExecutionStatus::Faulted);
+    ASSERT_EQ(Expected->Fault, FaultCode::MemoryAccess);
+    Expected->Fault = Case.LoadFault ? *Case.LoadFault : *Case.StoreFault;
+  }
   ASSERT_EQ(Expected->Memory.size(), Memory.size());
 
   if (Backend == SourceBackend::C) {
@@ -118,7 +133,9 @@ void runDifferential(SourceBackend Backend, const DifferentialCase &Case) {
     ASSERT_TRUE(static_cast<bool>(Source))
         << llvm::toString(Source.takeError());
     *Source = "#include <string.h>\n" + *Source +
-              makeCHarness(Case.Environment, *Expected, Memory);
+              makeCHarness(Case.Environment, *Expected,
+                           Case.Program.ActiveRuntimeFeatures, Memory,
+                           Case.HostFaults, Case.LoadFault, Case.StoreFault);
     compileAndRun(Backend, *Source);
     return;
   }
@@ -127,17 +144,23 @@ void runDifferential(SourceBackend Backend, const DifferentialCase &Case) {
   Options.PreferStructuredControlFlow = false;
   auto Source = emitRust(Case.Program, Options);
   ASSERT_TRUE(static_cast<bool>(Source)) << llvm::toString(Source.takeError());
-  *Source += makeRustHarness(Case.Environment, *Expected, Memory);
+  *Source += makeRustHarness(Case.Environment, *Expected,
+                             Case.Program.ActiveRuntimeFeatures, Memory,
+                             Case.HostFaults, Case.LoadFault, Case.StoreFault);
   compileAndRun(Backend, *Source);
 }
 
 void addSyntheticCases(std::vector<DifferentialCase> &Cases) {
   auto Add = [&](std::string Name, auto Program,
-                 ExecutionEnvironment Environment = {}) {
+                 ExecutionEnvironment Environment = {},
+                 std::vector<DifferentialCase::HostFault> HostFaults = {},
+                 std::optional<FaultCode> LoadFault = std::nullopt,
+                 std::optional<FaultCode> StoreFault = std::nullopt) {
     ASSERT_TRUE(static_cast<bool>(Program))
         << llvm::toString(Program.takeError());
-    Cases.push_back(
-        {std::move(Name), std::move(*Program), std::move(Environment)});
+    Cases.push_back({std::move(Name), std::move(*Program),
+                     std::move(Environment), std::move(HostFaults), LoadFault,
+                     StoreFault});
   };
 
   Add("v0-sign-extension",
@@ -182,20 +205,215 @@ void addSyntheticCases(std::vector<DifferentialCase> &Cases) {
            encode(Opcode::CALL_IMM, 0, 0, 0, static_cast<int32_t>(Log64->Hash)),
            encode(Opcode::EXIT)}),
       std::move(MemoryEnvironment));
+  auto WideFeatureSnapshot = analyzeProgram(
+      Version::V3,
+      {encode(Opcode::CALL_IMM, 0, 0, 0, static_cast<int32_t>(Log64->Hash)),
+       encode(Opcode::EXIT)});
+  ASSERT_TRUE(static_cast<bool>(WideFeatureSnapshot))
+      << llvm::toString(WideFeatureSnapshot.takeError());
+  WideFeatureSnapshot->ActiveRuntimeFeatures =
+      RuntimeFeature::SyscallParameterAddressRestrictions |
+      RuntimeFeature::DisableAllocFreeDeployment;
+  Add("wide-runtime-feature-snapshot", std::move(WideFeatureSnapshot));
   Add("memory-fault",
       analyzeProgram(Version::V3,
                      {encode(Opcode::MOV64_IMM, 1, 0, 0, 1),
                       encode(Opcode::LD_DW_REG, 0, 1), encode(Opcode::EXIT)}));
+  Add("host-load-propagates-non-memory-fault",
+      analyzeProgram(Version::V3,
+                     {encode(Opcode::MOV64_IMM, 1, 0, 0, 1),
+                      encode(Opcode::LD_DW_REG, 0, 1), encode(Opcode::EXIT)}),
+      {}, {}, FaultCode::DivideByZero);
+  Add("host-store-propagates-non-memory-fault",
+      analyzeProgram(Version::V3, {encode(Opcode::MOV64_IMM, 1, 0, 0, 1),
+                                   encode(Opcode::ST_DW_IMM, 1, 0, 0, 42),
+                                   encode(Opcode::EXIT)}),
+      {}, {}, std::nullopt, FaultCode::DivideOverflow);
   Add("unresolved-legacy-call",
       analyzeProgram(Version::V0, {encode(Opcode::CALL_IMM, 0, 0, 0, -1),
                                    encode(Opcode::EXIT)}));
+  ExecutionEnvironment CustomSyscallEnvironment;
+  CustomSyscallEnvironment.RuntimeFeatures = RuntimeFeature::None;
+  CustomSyscallEnvironment.Syscall =
+      [](uint32_t Hash,
+         const SyscallArguments &Arguments) -> std::optional<uint64_t> {
+    if (Hash != std::numeric_limits<uint32_t>::max())
+      return std::nullopt;
+    return Arguments[0] + 1;
+  };
+  Add("runtime-resolved-legacy-syscall",
+      analyzeProgram(Version::V0, {encode(Opcode::MOV64_IMM, 1, 0, 0, 41),
+                                   encode(Opcode::CALL_IMM, 0, 0, 0, -1),
+                                   encode(Opcode::EXIT)}),
+      std::move(CustomSyscallEnvironment));
+
+  constexpr size_t CollisionTargetSlot = 4;
+  const uint32_t CollisionKey = legacyFunctionKey(CollisionTargetSlot, {});
+  ExecutionEnvironment CollisionEnvironment;
+  CollisionEnvironment.Syscall =
+      [CollisionKey](
+          uint32_t Hash,
+          const SyscallArguments &Arguments) -> std::optional<uint64_t> {
+    if (Hash != CollisionKey)
+      return std::nullopt;
+    return Arguments[0] + 1;
+  };
+  Add("legacy-runtime-syscall-then-internal-call-key",
+      analyzeProgram(Version::V0, {encode(Opcode::MOV64_IMM, 1, 0, 0, 41),
+                                   encode(Opcode::CALL_IMM, 0, 0, 0, 2),
+                                   encode(Opcode::ADD64_IMM, 0, 0, 0, 1),
+                                   encode(Opcode::EXIT),
+                                   encode(Opcode::MOV64_IMM, 0, 0, 0, 7),
+                                   encode(Opcode::EXIT)}),
+      std::move(CollisionEnvironment));
+
+  ExecutionEnvironment DirectFaultEnvironment;
+  DirectFaultEnvironment.HostSyscall =
+      [Hash = Log64->Hash](uint32_t Candidate,
+                           const SyscallArguments &) -> SyscallOutcome {
+    return Candidate == Hash ? SyscallOutcome::fault(FaultCode::MemoryAccess)
+                             : SyscallOutcome::unregistered();
+  };
+  Add("handled-direct-syscall-fault",
+      analyzeProgram(Version::V3, {encode(Opcode::CALL_IMM, 0, 0, 0,
+                                          static_cast<int32_t>(Log64->Hash)),
+                                   encode(Opcode::EXIT)}),
+      std::move(DirectFaultEnvironment),
+      {{Log64->Hash, FaultCode::MemoryAccess}});
+
+  ExecutionEnvironment CollisionFaultEnvironment;
+  CollisionFaultEnvironment.HostSyscall =
+      [CollisionKey](uint32_t Hash,
+                     const SyscallArguments &) -> SyscallOutcome {
+    return Hash == CollisionKey ? SyscallOutcome::fault(FaultCode::MemoryAccess)
+                                : SyscallOutcome::unregistered();
+  };
+  Add("legacy-collision-propagates-handled-syscall-fault",
+      analyzeProgram(Version::V0, {encode(Opcode::MOV64_IMM, 1, 0, 0, 41),
+                                   encode(Opcode::CALL_IMM, 0, 0, 0, 2),
+                                   encode(Opcode::ADD64_IMM, 0, 0, 0, 1),
+                                   encode(Opcode::EXIT),
+                                   encode(Opcode::MOV64_IMM, 0, 0, 0, 7),
+                                   encode(Opcode::EXIT)}),
+      std::move(CollisionFaultEnvironment),
+      {{CollisionKey, FaultCode::MemoryAccess}});
 
   const auto ContinuationTarget =
       encodeLDDW(2, kBytecodeStart + kInstructionSize);
+  Add("entrypoint-continuation",
+      analyzeProgram(
+          Version::V3,
+          {ContinuationTarget[0], ContinuationTarget[1], encode(Opcode::EXIT)},
+          {}, 1));
   Add("callx-continuation",
       analyzeProgram(Version::V3,
                      {ContinuationTarget[0], ContinuationTarget[1],
                       encode(Opcode::CALL_REG, 2), encode(Opcode::EXIT)}));
+
+  constexpr uint64_t NarrowedTargetSlot = kLDDWSlotCount + 1;
+  constexpr uint64_t WideSlotAlias = uint64_t{1}
+                                     << std::numeric_limits<uint32_t>::digits;
+  const auto WideCallXTarget = encodeLDDW(
+      kInstructionDataRegister,
+      kBytecodeStart + (WideSlotAlias + NarrowedTargetSlot) * kInstructionSize);
+  Add("callx-target-does-not-narrow-before-bounds-check",
+      analyzeProgram(Version::V3,
+                     {WideCallXTarget[0], WideCallXTarget[1],
+                      encode(Opcode::CALL_REG, kInstructionDataRegister),
+                      encode(Opcode::EXIT)}));
+
+  const auto StaticContinuation = encodeLDDW(0, 0);
+  Add("static-call-continuation",
+      analyzeProgram(Version::V3, {encode(Opcode::CALL_IMM, 0, 1, 0, 1),
+                                   StaticContinuation[0], StaticContinuation[1],
+                                   encode(Opcode::EXIT)}));
+  auto DepthFirst = analyzeProgram(
+      Version::V3, {encode(Opcode::CALL_IMM, 0, 1, 0, 1), StaticContinuation[0],
+                    StaticContinuation[1], encode(Opcode::EXIT)});
+  ASSERT_TRUE(static_cast<bool>(DepthFirst))
+      << llvm::toString(DepthFirst.takeError());
+  DepthFirst->Config.MaxCallDepth = 1;
+  Cases.push_back(
+      {"static-call-depth-before-continuation", std::move(*DepthFirst), {}});
+  Add("unsupported-static-call-discriminator",
+      analyzeProgram(Version::V3,
+                     {encode(Opcode::CALL_IMM, 0, 2), encode(Opcode::EXIT)}));
+  Add("unsupported-static-call-target",
+      analyzeProgram(Version::V3, {encode(Opcode::CALL_IMM, 0, 1, 0,
+                                          std::numeric_limits<int32_t>::max()),
+                                   encode(Opcode::EXIT)}));
+
+  AnalyzeOptions Relaxed;
+  Relaxed.Strict = false;
+  test::EncodedInstruction Unknown{};
+  Unknown[kOpcodeOffset] = std::numeric_limits<uint8_t>::max();
+  Add("malformed-unknown-opcode",
+      analyzeProgram(Version::V3, {Unknown, encode(Opcode::EXIT)}, Relaxed));
+  Add("malformed-missing-lddw-continuation",
+      analyzeProgram(Version::V3,
+                     {encode(Opcode::CALL_IMM, 0, 1, 0, 1),
+                      encode(Opcode::EXIT), encode(Opcode::LDDW)},
+                     Relaxed));
+  Add("malformed-nonzero-lddw-continuation",
+      analyzeProgram(
+          Version::V0,
+          {encode(Opcode::LDDW), encode(Opcode::EXIT), encode(Opcode::EXIT)},
+          Relaxed));
+  Add("malformed-invalid-lddw-destination",
+      analyzeProgram(Version::V0,
+                     {encode(Opcode::LDDW, 15), {}, encode(Opcode::EXIT)},
+                     Relaxed));
+  Add("malformed-immediate-division-by-zero",
+      analyzeProgram(
+          Version::V2,
+          {encode(Opcode::UDIV64_IMM, 0, 0, 0, 0), encode(Opcode::EXIT)},
+          Relaxed));
+  Add("malformed-immediate-shift-out-of-range",
+      analyzeProgram(Version::V3,
+                     {encode(Opcode::LSH64_IMM, 0, 0, 0, kDoubleWordBitWidth),
+                      encode(Opcode::EXIT)},
+                     Relaxed));
+  Add("malformed-invalid-endian-immediate",
+      analyzeProgram(Version::V3,
+                     {encode(Opcode::BE, 0, 0, 0, 24), encode(Opcode::EXIT)},
+                     Relaxed));
+  Add("malformed-misaligned-frame-adjustment",
+      analyzeProgram(Version::V2,
+                     {encode(Opcode::ADD64_IMM, kFramePointerRegister, 0, 0, 1),
+                      encode(Opcode::EXIT)},
+                     Relaxed));
+  Add("malformed-invalid-source-register",
+      analyzeProgram(
+          Version::V3,
+          {encode(Opcode::MOV64_REG, 0, std::numeric_limits<uint8_t>::max()),
+           encode(Opcode::EXIT)},
+          Relaxed));
+  Add("malformed-frame-pointer-write",
+      analyzeProgram(Version::V3,
+                     {encode(Opcode::MOV64_IMM, kFramePointerRegister),
+                      encode(Opcode::EXIT)},
+                     Relaxed));
+  Add("malformed-invalid-destination-register",
+      analyzeProgram(Version::V3,
+                     {encode(Opcode::MOV64_IMM, 15), encode(Opcode::EXIT)},
+                     Relaxed));
+  Add("malformed-branch-out-of-range",
+      analyzeProgram(
+          Version::V3,
+          {encode(Opcode::JA, 0, 0, std::numeric_limits<int16_t>::max()),
+           encode(Opcode::EXIT)},
+          Relaxed));
+  const auto InvalidBranchTarget = encodeLDDW(0, 0);
+  Add("malformed-branch-to-lddw-continuation",
+      analyzeProgram(Version::V0,
+                     {InvalidBranchTarget[0], InvalidBranchTarget[1],
+                      encode(Opcode::JA, 0, 0, -2), encode(Opcode::EXIT)},
+                     Relaxed));
+  Add("malformed-invalid-callx-register",
+      analyzeProgram(
+          Version::V0,
+          {encode(Opcode::CALL_REG, 0, 0, 0, -1), encode(Opcode::EXIT)},
+          Relaxed));
 }
 
 void addOfficialRelocationCase(std::vector<DifferentialCase> &Cases) {
@@ -212,7 +430,8 @@ void addOfficialRelocationCase(std::vector<DifferentialCase> &Cases) {
   auto Program = analyze(*Image);
   ASSERT_TRUE(static_cast<bool>(Program))
       << llvm::toString(Program.takeError());
-  Cases.push_back({"official-v0-relocated-data", std::move(*Program), {}});
+  Cases.push_back(
+      {"official-v0-relocated-data", std::move(*Program), {}, {}, {}, {}});
 }
 
 void runAllSourceCases(SourceBackend Backend) {

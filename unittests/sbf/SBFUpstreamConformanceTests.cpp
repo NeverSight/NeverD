@@ -136,7 +136,8 @@ TEST_P(SBFUpstreamConformanceTest, MatchesPublishedLoadAndExecutionContract) {
   EXPECT_EQ(Image->SBF->Version, Fixture.TheVersion);
 
   AnalyzeOptions Analyze;
-  Analyze.VMConfig = makeVMConfig(Fixture.VM);
+  Analyze.ExpertEnvironment = ExpertRuntimeEnvironmentOverride{
+      Version::V0, Version::V4, makeVMConfig(Fixture.VM)};
   auto Program = analyze(*Image, Analyze);
   ASSERT_TRUE(static_cast<bool>(Program))
       << (Program ? std::string() : llvm::toString(Program.takeError()));

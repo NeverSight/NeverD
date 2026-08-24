@@ -12,7 +12,9 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Error.h"
 
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace llvm {
@@ -21,9 +23,19 @@ class LLVMContext;
 
 namespace neverd::sbf {
 
+/// Selects the syscall callback contract emitted into an LLVM module.
+/// Legacy remains the default so an existing host symbol keeps linking.
+/// FeatureAware selects the append-only SBFHostABI.def symbol whose explicit
+/// RuntimeFeatureMask-width integer precedes the syscall hash.
+enum class LLVMRuntimeSyscallABI : uint8_t { Legacy, FeatureAware };
+
 struct LLVMEmitterOptions {
   std::string ModuleName = kModuleName.str();
   std::string FunctionName = kEntryFunctionName.str();
+  LLVMRuntimeSyscallABI SyscallABI = LLVMRuntimeSyscallABI::Legacy;
+  /// Runtime snapshot embedded in feature-aware syscall invocations. Absence
+  /// means SBFProgram::ActiveRuntimeFeatures; explicit None remains empty.
+  std::optional<RuntimeFeature> RuntimeFeatures;
 };
 
 llvm::Expected<std::unique_ptr<llvm::Module>>

@@ -102,8 +102,22 @@ add_neverd_unittest(NeverDSBFAnalyzerTests
   SBF
 )
 
+add_neverd_unittest(NeverDSBFVerifierTests
+  SBFVerifierTests.cpp
+
+  LINK_COMPONENTS
+  Loader
+  SBF
+)
+
+target_include_directories(NeverDSBFVerifierTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
 target_include_directories(NeverDSBFAnalyzerTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include
+  ${CMAKE_SOURCE_DIR}/lib/sbf/analysis
   ${LLVM_INCLUDE_DIRS}
 )
 
@@ -194,6 +208,44 @@ add_neverd_unittest(NeverDSBFUpstreamConformanceTests
 )
 
 target_include_directories(NeverDSBFUpstreamConformanceTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# This suite is always discoverable but skips unless both NEVERD_SBPF_ORACLE
+# and NEVERD_SBPF_ROOT select an independently built official oracle and its
+# pinned corpus.  Keeping it separate makes the process boundary visible in
+# CTest labels and release logs.
+add_neverd_unittest(NeverDSBFExternalOracleTests
+  SBFExternalOracleTests.cpp
+
+  LINK_COMPONENTS
+  Loader
+  Support
+  SBF
+)
+
+target_include_directories(NeverDSBFExternalOracleTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Agave publishes its validator-compatible ELF-loader input/output records in
+# Firedancer's pinned test-vector corpus. The executable stays discoverable in
+# every build, skips when no root is selected, and fails closed when CI sets
+# NEVERD_REQUIRE_AGAVE_CONFORMANCE=1.
+add_neverd_unittest(NeverDSBFAgaveConformanceTests
+  SBFAgaveConformanceTests.cpp
+
+  LINK_COMPONENTS
+  Loader
+  Support
+  SBF
+)
+
+target_include_directories(NeverDSBFAgaveConformanceTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${LLVM_INCLUDE_DIRS}

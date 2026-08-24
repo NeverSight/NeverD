@@ -57,10 +57,9 @@ void Recovery::noteKey(va_t Address, const Pubkey &Key, bool ReferencedByCode) {
   // Deduplicate on the key rather than the address so a value repeated across
   // read-only data appears once, at the first place it was found.
   const uint64_t FirstWord = llvm::support::endian::read64le(Key.Bytes.data());
-  auto [It, Inserted] =
-      KeyIndexByFirstWord.try_emplace(FirstWord, Model.Pubkeys.size());
-  if (!Inserted) {
-    RecoveredPubkey &Existing = Model.Pubkeys[It->second];
+  llvm::SmallVector<size_t, 1> &Bucket = KeyIndicesByFirstWord[FirstWord];
+  for (size_t Index : Bucket) {
+    RecoveredPubkey &Existing = Model.Pubkeys[Index];
     if (Existing.Key == Key) {
       Existing.ReferencedByCode |= ReferencedByCode;
       if (ReferencedByCode)
@@ -68,8 +67,6 @@ void Recovery::noteKey(va_t Address, const Pubkey &Key, bool ReferencedByCode) {
                                            : RecoveryEvidence::ConstantDataflow;
       return;
     }
-    // A different key sharing a leading word is possible in principle; fall
-    // through and record it separately rather than merging distinct addresses.
   }
 
   RecoveredPubkey Recovered;
@@ -79,6 +76,7 @@ void Recovery::noteKey(va_t Address, const Pubkey &Key, bool ReferencedByCode) {
   Recovered.ReferencedByCode = ReferencedByCode;
   Recovered.Evidence = Recovered.Known ? RecoveryEvidence::KnownAddressTable
                                        : RecoveryEvidence::ConstantDataflow;
+  Bucket.push_back(Model.Pubkeys.size());
   Model.Pubkeys.push_back(std::move(Recovered));
 }
 
@@ -104,7 +102,7 @@ void Recovery::visitMemoryAccess(const MedInstruction &Instruction,
   // produces, so the profile is what answers it. Guessing would not fail
   // loudly: under the other serialization the same offset is a different real
   // field, and the recovered name would look entirely plausible.
-  const AccountABI ABI = Options.Profile.accountABI();
+  const AccountABI ABI = Program.RuntimeAccountABI;
   const uint64_t FirstAccount = firstAccountOffset();
   if (Access.InputOffset < FirstAccount) {
     for (auto [Ordinal, Field] : llvm::enumerate(inputFieldInfos()))

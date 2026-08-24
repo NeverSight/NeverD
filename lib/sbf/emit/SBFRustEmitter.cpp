@@ -17,18 +17,55 @@
 #include "SBFRustEmitterDetail.h"
 
 #include "neverd/sbf/analysis/SBFStructuredCFG.h"
+#include "neverd/sbf/emit/SBFSourceLimits.h"
+#include "neverd/sbf/emit/SBFSourceStatus.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstddef>
+#include <limits>
 #include <map>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 namespace neverd::sbf {
 
 using namespace rust_emitter_detail;
+
+namespace {
+
+static_assert(std::is_unsigned_v<RuntimeFeatureMask>,
+              "runtime feature masks must use an unsigned source ABI");
+
+std::string rustRuntimeFeatureName(llvm::StringRef Name) {
+  std::string Result = "SBF_RUNTIME_FEATURE_";
+  for (char Character : Name)
+    Result.push_back(Character == '-' ? '_' : llvm::toUpper(Character));
+  return Result;
+}
+
+template <typename Mask> llvm::StringRef rustRuntimeFeatureMaskTypeImpl() {
+  constexpr unsigned Bits = std::numeric_limits<Mask>::digits;
+  static_assert(Bits == std::numeric_limits<uint32_t>::digits ||
+                    Bits == std::numeric_limits<uint64_t>::digits,
+                "generated Rust supports 32-bit and 64-bit feature masks");
+  if constexpr (Bits == std::numeric_limits<uint64_t>::digits)
+    return "u64";
+  return "u32";
+}
+
+llvm::StringRef rustRuntimeFeatureMaskType() {
+  return rustRuntimeFeatureMaskTypeImpl<RuntimeFeatureMask>();
+}
+
+std::string rustRuntimeFeatureMaskLiteral(RuntimeFeatureMask Value) {
+  return "0x" + llvm::utohexstr(Value) + rustRuntimeFeatureMaskType().str();
+}
+
+} // namespace
 
 llvm::Expected<std::string> emitRust(const SBFProgram &Program,
                                      const RustEmitterOptions &Options) {
@@ -42,20 +79,30 @@ llvm::Expected<std::string> emitRust(const SBFProgram &Program,
   std::map<size_t, const MedInstruction *> BySlot;
   for (const MedInstruction &Instruction : Program.Med.Instructions)
     BySlot[Instruction.Slot] = &Instruction;
-  const std::optional<StructuredControlFlow> Structured =
+  std::optional<StructuredControlFlow> Structured =
       Options.PreferStructuredControlFlow
           ? buildStructuredControlFlow(Program)
           : std::optional<StructuredControlFlow>{};
+  if (Structured &&
+      Structured->MaximumDepth > kMaximumRustStructuredNestingDepth)
+    Structured.reset();
 
   bool NeedsSignExtension = false;
   bool NeedsCallFrames = false;
   bool NeedsIndirectCall = false;
+  bool NeedsSyscall = false;
   for (const MedInstruction &Instruction : Program.Med.Instructions) {
     NeedsSignExtension |=
         Instruction.Semantics.Result == ResultExtension::Sign32;
     NeedsCallFrames |= Instruction.Call == CallKind::Internal ||
                        Instruction.Op == Operation::CallX;
     NeedsIndirectCall |= Instruction.Op == Operation::CallX;
+    NeedsSyscall |= Instruction.Op == Operation::Call &&
+                    (Instruction.Call == CallKind::Syscall ||
+                     Instruction.Call == CallKind::Unresolved ||
+                     (Instruction.Call == CallKind::Internal &&
+                      Instruction.Dispatch ==
+                          CallDispatchPolicy::LegacyRuntimeThenFunction));
   }
 
   std::string Buffer;
@@ -64,10 +111,91 @@ llvm::Expected<std::string> emitRust(const SBFProgram &Program,
      << versionDisplayName(Program.Low.TheVersion)
      << ".\n"
         "#![allow(clippy::unusual_byte_groupings)]\n\n"
+        "/// Original generated-source error contract. This enum intentionally "
+        "remains\n"
+        "/// exhaustive and layout-identical for existing hosts.\n"
         "#[derive(Clone, Copy, Debug, Eq, PartialEq)]\n"
-        "pub enum SbfError { InvalidInstruction, MemoryAccess, DivideByZero, "
-        "DivideOverflow, CallDepth, UnknownSyscall, UnknownFunction, "
-        "ExecutionOverrun }\n\n"
+        "pub enum SbfError {";
+  bool FirstLegacyError = true;
+#define SBF_SOURCE_RUST_V1_ERROR(NAME)                                         \
+  do {                                                                         \
+    OS << (FirstLegacyError ? " " : ", ") << #NAME;                            \
+    FirstLegacyError = false;                                                  \
+  } while (false);
+#include "neverd/sbf/emit/SBFSourceStatuses.def"
+  OS << " }\n\n"
+        "/// Versioned exact error contract. Variants and discriminants are "
+        "append-only.\n"
+        "#[repr(u32)]\n"
+        "#[non_exhaustive]\n"
+        "#[derive(Clone, Copy, Debug, Eq, PartialEq)]\n"
+        "pub enum SbfErrorV2 {";
+  bool FirstError = true;
+#define SBF_SOURCE_SUCCESS(NAME, FAULT_CODE, C_NAME, VALUE)
+#define SBF_SOURCE_ERROR(NAME, FAULT_CODE, C_NAME, C_VALUE, RUST_VALUE)        \
+  do {                                                                         \
+    OS << (FirstError ? " " : ", ") << #NAME << " = " << (RUST_VALUE);         \
+    FirstError = false;                                                        \
+  } while (false);
+#include "neverd/sbf/emit/SBFSourceStatuses.def"
+  OS << " }\n\n"
+        "impl From<SbfError> for SbfErrorV2 {\n"
+        "    fn from(error: SbfError) -> Self {\n"
+        "        match error {\n";
+#define SBF_SOURCE_RUST_V1_ERROR(NAME)                                         \
+  OS << "            SbfError::" #NAME " => SbfErrorV2::" #NAME ",\n";
+#include "neverd/sbf/emit/SBFSourceStatuses.def"
+  OS << "        }\n"
+        "    }\n"
+        "}\n\n"
+        "impl From<SbfErrorV2> for SbfError {\n"
+        "    fn from(error: SbfErrorV2) -> Self {\n"
+        "        match error {\n";
+#define SBF_SOURCE_RUST_V1_ERROR(NAME)                                         \
+  OS << "            SbfErrorV2::" #NAME " => SbfError::" #NAME ",\n";
+#define SBF_SOURCE_RUST_V1_FALLBACK(NAME, LEGACY_NAME)                         \
+  OS << "            SbfErrorV2::" #NAME " => SbfError::" #LEGACY_NAME ",\n";
+#include "neverd/sbf/emit/SBFSourceStatuses.def"
+  OS << "        }\n"
+        "    }\n"
+        "}\n\n"
+        "/// Exact, already-resolved runtime feature bits for one execution.\n"
+        "#[derive(Clone, Copy, Debug, Eq, PartialEq)]\n"
+        "pub struct SbfRuntimeFeatures { bits: "
+     << rustRuntimeFeatureMaskType()
+     << " }\n"
+        "impl SbfRuntimeFeatures {\n"
+        "    pub const fn from_bits(bits: "
+     << rustRuntimeFeatureMaskType()
+     << ") -> Self { Self { bits } }\n"
+        "    pub const fn bits(self) -> "
+     << rustRuntimeFeatureMaskType()
+     << " { self.bits }\n"
+        "    pub const fn contains(self, feature: Self) -> bool {\n"
+        "        (self.bits & feature.bits) != 0\n"
+        "    }\n"
+        "}\n";
+  for (const RuntimeFeatureInfo &Info : runtimeFeatureInfos())
+    OS << "pub const " << rustRuntimeFeatureName(Info.Name)
+       << ": SbfRuntimeFeatures = SbfRuntimeFeatures::from_bits("
+       << rustRuntimeFeatureMaskLiteral(runtimeFeatureMask(Info.ID)) << ");\n";
+  OS << "\n"
+        "/// Immutable facts supplied to one feature-aware host dispatch.\n"
+        "#[derive(Clone, Copy, Debug, Eq, PartialEq)]\n"
+        "pub struct SbfSyscallInvocation {\n"
+        "    pub hash: u32,\n"
+        "    pub args: [u64; "
+     << kArgumentRegisterCount
+     << "],\n"
+        "    pub runtime_features: SbfRuntimeFeatures,\n"
+        "}\n\n"
+        "/// Typed result of one host syscall lookup.\n"
+        "#[derive(Clone, Copy, Debug, Eq, PartialEq)]\n"
+        "pub enum SbfSyscallOutcomeV2 {\n"
+        "    Unregistered,\n"
+        "    Returned(u64),\n"
+        "    Fault(SbfErrorV2),\n"
+        "}\n\n"
         "pub trait SbfEnvironment {\n"
         "    fn load(&mut self, address: u64, width: u8) -> Result<u64, "
         "SbfError>;\n"
@@ -77,6 +205,63 @@ llvm::Expected<std::string> emitRust(const SBFProgram &Program,
      << kArgumentRegisterCount
      << "]) -> Result<u64, SbfError>;\n"
         "}\n\n"
+        "pub trait SbfEnvironmentV2 {\n"
+        "    /// The host owns the VM topology. Direct account mapping is "
+        "represented by the host's load/store regions, never synthesized by "
+        "this program.\n"
+        "    fn load(&mut self, address: u64, width: u8) -> Result<u64, "
+        "SbfErrorV2>;\n"
+        "    fn store(&mut self, address: u64, width: u8, value: u64) -> "
+        "Result<(), SbfErrorV2>;\n"
+        "    fn syscall(&mut self, hash: u32, args: [u64; "
+     << kArgumentRegisterCount
+     << "]) -> Result<u64, SbfErrorV2> {\n"
+        "        let _ = (hash, args);\n"
+        "        Err(SbfErrorV2::UnknownSyscall)\n"
+        "    }\n"
+        "    /// Compatibility bridge: existing Result-valued hosts need not "
+        "change.\n"
+        "    fn syscall_outcome(&mut self, hash: u32, args: [u64; "
+     << kArgumentRegisterCount
+     << "]) -> SbfSyscallOutcomeV2 {\n"
+        "        match self.syscall(hash, args) {\n"
+        "            Ok(value) => SbfSyscallOutcomeV2::Returned(value),\n"
+        "            Err("
+     << rustSourceErrorName(FaultCode::UnknownSyscall)
+     << ") => SbfSyscallOutcomeV2::Unregistered,\n"
+        "            Err(error) => SbfSyscallOutcomeV2::Fault(error),\n"
+        "        }\n"
+        "    }\n"
+        "    /// An explicit snapshot overrides the program default. An empty "
+        "snapshot is Some(SbfRuntimeFeatures::from_bits(0)).\n"
+        "    fn runtime_features(&self) -> Option<SbfRuntimeFeatures> { None "
+        "}\n"
+        "    /// Preferred feature-aware bridge; legacy hosts inherit this "
+        "default unchanged.\n"
+        "    fn syscall_with_features(\n"
+        "        &mut self, invocation: SbfSyscallInvocation\n"
+        "    ) -> SbfSyscallOutcomeV2 {\n"
+        "        self.syscall_outcome(invocation.hash, invocation.args)\n"
+        "    }\n"
+        "}\n\n"
+        "struct NdLegacyEnvironment<'a, E: SbfEnvironment>(&'a mut E);\n"
+        "impl<E: SbfEnvironment> SbfEnvironmentV2 for "
+        "NdLegacyEnvironment<'_, E> {\n"
+        "    fn load(&mut self, address: u64, width: u8) -> "
+        "Result<u64, SbfErrorV2> {\n"
+        "        self.0.load(address, width).map_err(SbfErrorV2::from)\n"
+        "    }\n"
+        "    fn store(&mut self, address: u64, width: u8, value: u64) -> "
+        "Result<(), SbfErrorV2> {\n"
+        "        self.0.store(address, width, "
+        "value).map_err(SbfErrorV2::from)\n"
+        "    }\n"
+        "    fn syscall(&mut self, hash: u32, args: [u64; "
+     << kArgumentRegisterCount
+     << "]) -> Result<u64, SbfErrorV2> {\n"
+        "        self.0.syscall(hash, args).map_err(SbfErrorV2::from)\n"
+        "    }\n"
+        "}\n\n"
         "const REGISTER_COUNT: usize = "
      << kRegisterCount
      << ";\nconst RETURN_REGISTER: usize = " << kReturnRegister
@@ -84,6 +269,12 @@ llvm::Expected<std::string> emitRust(const SBFProgram &Program,
      << ";\nconst INSTRUCTION_DATA_REGISTER: usize = "
      << kInstructionDataRegister
      << ";\nconst FRAME_POINTER: usize = " << kFramePointerRegister << ";\n";
+  if (NeedsSyscall)
+    OS << "const PROGRAM_RUNTIME_FEATURES: SbfRuntimeFeatures = "
+          "SbfRuntimeFeatures::from_bits("
+       << rustRuntimeFeatureMaskLiteral(
+              runtimeFeatureMask(Program.ActiveRuntimeFeatures))
+       << ");\n";
   if (!Structured)
     OS << "const FIRST_SAVED: usize = " << kFirstCalleeSavedRegister
        << ";\nconst SAVED_REGISTERS: usize = " << kCalleeSavedRegisterCount
@@ -114,12 +305,27 @@ llvm::Expected<std::string> emitRust(const SBFProgram &Program,
          << " at block_" << Region.HeaderBlock << "\n";
   }
 
+  auto EmitPublicEntrypoints = [&] {
+    OS << "\npub fn " << Options.FunctionName
+       << "<E: SbfEnvironment>(env: &mut E, input: u64, instruction_data: "
+          "u64) -> Result<u64, SbfError> {\n"
+          "    let mut adapter = NdLegacyEnvironment(env);\n"
+          "    nd_program_impl(&mut adapter, input, instruction_data)"
+          ".map_err(SbfError::from)\n"
+          "}\n\n"
+          "pub fn "
+       << Options.FunctionName
+       << "_v2<E: SbfEnvironmentV2>(env: &mut E, input: u64, "
+          "instruction_data: u64) -> Result<u64, SbfErrorV2> {\n"
+          "    nd_program_impl(env, input, instruction_data)\n"
+          "}\n";
+  };
+
   // The loader hands the program the input buffer and, on a runtime that has
   // activated it, the instruction data. A callable that only takes the first
   // cannot reproduce a program that reads the second.
-  OS << "pub fn " << Options.FunctionName
-     << "<E: SbfEnvironment>(env: &mut E, input: u64, instruction_data: u64) "
-        "-> Result<u64, SbfError> "
+  OS << "fn nd_program_impl<E: SbfEnvironmentV2>(env: &mut E, input: u64, "
+        "instruction_data: u64) -> Result<u64, SbfErrorV2> "
         "{\n"
         "    let _ = &mut *env;\n"
         "    let mut r = [0u64; REGISTER_COUNT];\n";
@@ -149,33 +355,35 @@ llvm::Expected<std::string> emitRust(const SBFProgram &Program,
              : "STACK_FRAME_SIZE")
      << ";\n";
   if (Structured) {
-    if (!emitStructuredNodes(OS, Program, BySlot, Structured->Body, "    "))
+    if (!emitStructuredNodes(OS, Program, BySlot, *Structured, "    "))
       return llvm::make_error<llvm::StringError>(
           "sbf: structured Rust emission rejected its validated control-flow "
           "plan",
           llvm::inconvertibleErrorCode());
     OS << "}\n";
+    EmitPublicEntrypoints();
     return Buffer;
   }
 
   OS << "    loop {\n        match pc {\n";
   for (size_t Slot = 0; Slot < Program.Low.Instructions.size(); ++Slot) {
     if (Program.Low.Instructions[Slot].IsContinuation) {
-      if (NeedsIndirectCall)
-        OS << "            " << Slot
-           << " => return Err(SbfError::InvalidInstruction),\n";
+      OS << "            " << Slot << " => return Err("
+         << rustSourceErrorName(FaultCode::InvalidInstruction) << "),\n";
       continue;
     }
     auto It = BySlot.find(Slot);
     if (It == BySlot.end()) {
-      OS << "            " << Slot
-         << " => return Err(SbfError::InvalidInstruction),\n";
+      OS << "            " << Slot << " => return Err("
+         << rustSourceErrorName(FaultCode::InvalidInstruction) << "),\n";
       continue;
     }
     emitInstruction(OS, *It->second, Program);
   }
-  OS << "            _ => return Err(SbfError::ExecutionOverrun),\n"
-        "        }\n    }\n}\n";
+  OS << "            _ => return Err("
+     << rustSourceErrorName(FaultCode::ExecutionOverrun)
+     << "),\n        }\n    }\n}\n";
+  EmitPublicEntrypoints();
   return Buffer;
 }
 
