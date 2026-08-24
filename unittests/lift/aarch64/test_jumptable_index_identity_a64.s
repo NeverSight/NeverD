@@ -316,6 +316,197 @@ a64_destructive_udiv_is_not_remainder:
 .size a64_destructive_udiv_is_not_remainder, .-a64_destructive_udiv_is_not_remainder
 
 .p2align 2
+// The literal entry coordinate opens case zero.  Its exact unsigned
+// `x-(x/5)*5` producer then opens the complete five-slot table and returns to
+// the same dispatch.  The four lexically earlier cases deliberately contain
+// more than the flat proposal prefix, so the producer must be retained and
+// replayed after those case edges become reachable.
+.globl a64_explicit_udiv_modulo_lfp
+.type a64_explicit_udiv_modulo_lfp, %function
+a64_explicit_udiv_modulo_lfp:
+  mov w10, wzr
+.La64_explicit_udiv_dispatch:
+  adrp x9, a64_explicit_udiv_modulo_lfp_table
+  add x9, x9, :lo12:a64_explicit_udiv_modulo_lfp_table
+  ldr x12, [x9, w10, uxtw #3]
+  br x12
+.La64_explicit_udiv_case1:
+  .rept 140
+  add x11, x11, #1
+  .endr
+  mov w0, #1641
+  ret
+.La64_explicit_udiv_case2:
+  .rept 140
+  add x11, x11, #1
+  .endr
+  mov w0, #1642
+  ret
+.La64_explicit_udiv_case3:
+  .rept 140
+  add x11, x11, #1
+  .endr
+  mov w0, #1643
+  ret
+.La64_explicit_udiv_case4:
+  .rept 140
+  add x11, x11, #1
+  .endr
+  mov w0, #1644
+  ret
+.La64_explicit_udiv_case0:
+  mov w1, #5
+  udiv w2, w0, w1
+  // Keep the scalar first: symbolic multiplication is commutative, so operand
+  // order cannot be part of the exact remainder certificate.
+  mul w3, w1, w2
+  sub w10, w0, w3
+  b .La64_explicit_udiv_dispatch
+.size a64_explicit_udiv_modulo_lfp, .-a64_explicit_udiv_modulo_lfp
+
+.p2align 2
+// Signed division does not bound negative inputs to an unsigned table domain.
+.globl a64_explicit_sdiv_not_unsigned_modulo
+.type a64_explicit_sdiv_not_unsigned_modulo, %function
+a64_explicit_sdiv_not_unsigned_modulo:
+  mov w1, #5
+  sdiv w2, w0, w1
+  mul w3, w2, w1
+  sub w10, w0, w3
+  adrp x9, a64_explicit_sdiv_not_unsigned_modulo_table
+  add x9, x9, :lo12:a64_explicit_sdiv_not_unsigned_modulo_table
+  ldr x12, [x9, w10, uxtw #3]
+  br x12
+.La64_explicit_sdiv_case0: mov w0, #1650; ret
+.La64_explicit_sdiv_case1: mov w0, #1651; ret
+.La64_explicit_sdiv_case2: mov w0, #1652; ret
+.La64_explicit_sdiv_case3: mov w0, #1653; ret
+.La64_explicit_sdiv_case4: mov w0, #1654; ret
+.size a64_explicit_sdiv_not_unsigned_modulo, .-a64_explicit_sdiv_not_unsigned_modulo
+
+.p2align 2
+// The quotient and subtraction must use the same dividend expression.
+.globl a64_explicit_udiv_foreign_dividend
+.type a64_explicit_udiv_foreign_dividend, %function
+a64_explicit_udiv_foreign_dividend:
+  mov w1, #5
+  udiv w2, w0, w1
+  mul w3, w2, w1
+  sub w10, w4, w3
+  adrp x9, a64_explicit_udiv_foreign_dividend_table
+  add x9, x9, :lo12:a64_explicit_udiv_foreign_dividend_table
+  ldr x12, [x9, w10, uxtw #3]
+  br x12
+.La64_explicit_foreign_case0: mov w0, #1660; ret
+.La64_explicit_foreign_case1: mov w0, #1661; ret
+.La64_explicit_foreign_case2: mov w0, #1662; ret
+.La64_explicit_foreign_case3: mov w0, #1663; ret
+.La64_explicit_foreign_case4: mov w0, #1664; ret
+.size a64_explicit_udiv_foreign_dividend, .-a64_explicit_udiv_foreign_dividend
+
+.p2align 2
+// A table-sized back multiply cannot repair a quotient divided by another N.
+.globl a64_explicit_udiv_wrong_divisor
+.type a64_explicit_udiv_wrong_divisor, %function
+a64_explicit_udiv_wrong_divisor:
+  mov w1, #7
+  udiv w2, w0, w1
+  mov w5, #5
+  mul w3, w2, w5
+  sub w10, w0, w3
+  adrp x9, a64_explicit_udiv_wrong_divisor_table
+  add x9, x9, :lo12:a64_explicit_udiv_wrong_divisor_table
+  ldr x12, [x9, w10, uxtw #3]
+  br x12
+.La64_explicit_wrong_divisor_case0: mov w0, #1670; ret
+.La64_explicit_wrong_divisor_case1: mov w0, #1671; ret
+.La64_explicit_wrong_divisor_case2: mov w0, #1672; ret
+.La64_explicit_wrong_divisor_case3: mov w0, #1673; ret
+.La64_explicit_wrong_divisor_case4: mov w0, #1674; ret
+.size a64_explicit_udiv_wrong_divisor, .-a64_explicit_udiv_wrong_divisor
+
+.p2align 2
+// Conversely, q=(x/5) followed by q*7 is not x%7 merely because the table has
+// seven physical entries.
+.globl a64_explicit_udiv_wrong_multiplier
+.type a64_explicit_udiv_wrong_multiplier, %function
+a64_explicit_udiv_wrong_multiplier:
+  mov w1, #5
+  udiv w2, w0, w1
+  mov w5, #7
+  mul w3, w2, w5
+  sub w10, w0, w3
+  adrp x9, a64_explicit_udiv_wrong_multiplier_table
+  add x9, x9, :lo12:a64_explicit_udiv_wrong_multiplier_table
+  ldr x12, [x9, w10, uxtw #3]
+  br x12
+.La64_explicit_wrong_multiplier_case0: mov w0, #1680; ret
+.La64_explicit_wrong_multiplier_case1: mov w0, #1681; ret
+.La64_explicit_wrong_multiplier_case2: mov w0, #1682; ret
+.La64_explicit_wrong_multiplier_case3: mov w0, #1683; ret
+.La64_explicit_wrong_multiplier_case4: mov w0, #1684; ret
+.La64_explicit_wrong_multiplier_case5: mov w0, #1685; ret
+.La64_explicit_wrong_multiplier_case6: mov w0, #1686; ret
+.size a64_explicit_udiv_wrong_multiplier, .-a64_explicit_udiv_wrong_multiplier
+
+.p2align 2
+// Case zero initially proves x%6.  Once that opens case five, its edge enters
+// the middle of the retained recipe with a foreign quotient.  Full-graph exact
+// replay must invalidate the producer before publication.
+.globl a64_explicit_udiv_late_interior
+.type a64_explicit_udiv_late_interior, %function
+a64_explicit_udiv_late_interior:
+  mov w10, wzr
+.La64_explicit_interior_dispatch:
+  adrp x9, a64_explicit_udiv_late_interior_table
+  add x9, x9, :lo12:a64_explicit_udiv_late_interior_table
+  ldr x12, [x9, w10, uxtw #3]
+  br x12
+.La64_explicit_interior_case0:
+  mov w1, #6
+  udiv w2, w0, w1
+.La64_explicit_interior_product:
+  mul w3, w2, w1
+  sub w10, w0, w3
+  b .La64_explicit_interior_dispatch
+.La64_explicit_interior_case1: mov w0, #1691; ret
+.La64_explicit_interior_case2: mov w0, #1692; ret
+.La64_explicit_interior_case3: mov w0, #1693; ret
+.La64_explicit_interior_case4: mov w0, #1694; ret
+.La64_explicit_interior_case5:
+  mov w1, #6
+  mov w2, #1
+  b .La64_explicit_interior_product
+.size a64_explicit_udiv_late_interior, .-a64_explicit_udiv_late_interior
+
+.p2align 2
+// The producer remains exact, but the last newly authorized case writes a
+// selector outside [0,5) before returning to the same dispatch.  Final domain
+// replay must reject this table independently of recipe recognition.
+.globl a64_explicit_udiv_late_selector_escape
+.type a64_explicit_udiv_late_selector_escape, %function
+a64_explicit_udiv_late_selector_escape:
+  mov w10, wzr
+.La64_explicit_escape_dispatch:
+  adrp x9, a64_explicit_udiv_late_selector_escape_table
+  add x9, x9, :lo12:a64_explicit_udiv_late_selector_escape_table
+  ldr x12, [x9, w10, uxtw #3]
+  br x12
+.La64_explicit_escape_case0:
+  mov w1, #5
+  udiv w2, w0, w1
+  mul w3, w2, w1
+  sub w10, w0, w3
+  b .La64_explicit_escape_dispatch
+.La64_explicit_escape_case1: mov w0, #1701; ret
+.La64_explicit_escape_case2: mov w0, #1702; ret
+.La64_explicit_escape_case3: mov w0, #1703; ret
+.La64_explicit_escape_case4:
+  mov w10, #0x100
+  b .La64_explicit_escape_dispatch
+.size a64_explicit_udiv_late_selector_escape, .-a64_explicit_udiv_late_selector_escape
+
+.p2align 2
 .globl a64_writable_unknown_callee
 .type a64_writable_unknown_callee, %function
 a64_writable_unknown_callee:
@@ -378,3 +569,90 @@ a64_destructive_udiv_table:
   .xword .La64_destructive_udiv_case3
   .xword .La64_destructive_udiv_case4
 .size a64_destructive_udiv_table, .-a64_destructive_udiv_table
+
+.section .rodata.jt_a64_explicit_udiv_lfp,"a",%progbits
+.p2align 3
+.globl a64_explicit_udiv_modulo_lfp_table
+.type a64_explicit_udiv_modulo_lfp_table, %object
+a64_explicit_udiv_modulo_lfp_table:
+  .xword .La64_explicit_udiv_case0
+  .xword .La64_explicit_udiv_case1
+  .xword .La64_explicit_udiv_case2
+  .xword .La64_explicit_udiv_case3
+  .xword .La64_explicit_udiv_case4
+.size a64_explicit_udiv_modulo_lfp_table, .-a64_explicit_udiv_modulo_lfp_table
+
+.section .rodata.jt_a64_explicit_sdiv,"a",%progbits
+.p2align 3
+.globl a64_explicit_sdiv_not_unsigned_modulo_table
+.type a64_explicit_sdiv_not_unsigned_modulo_table, %object
+a64_explicit_sdiv_not_unsigned_modulo_table:
+  .xword .La64_explicit_sdiv_case0
+  .xword .La64_explicit_sdiv_case1
+  .xword .La64_explicit_sdiv_case2
+  .xword .La64_explicit_sdiv_case3
+  .xword .La64_explicit_sdiv_case4
+.size a64_explicit_sdiv_not_unsigned_modulo_table, .-a64_explicit_sdiv_not_unsigned_modulo_table
+
+.section .rodata.jt_a64_explicit_foreign,"a",%progbits
+.p2align 3
+.globl a64_explicit_udiv_foreign_dividend_table
+.type a64_explicit_udiv_foreign_dividend_table, %object
+a64_explicit_udiv_foreign_dividend_table:
+  .xword .La64_explicit_foreign_case0
+  .xword .La64_explicit_foreign_case1
+  .xword .La64_explicit_foreign_case2
+  .xword .La64_explicit_foreign_case3
+  .xword .La64_explicit_foreign_case4
+.size a64_explicit_udiv_foreign_dividend_table, .-a64_explicit_udiv_foreign_dividend_table
+
+.section .rodata.jt_a64_explicit_wrong_divisor,"a",%progbits
+.p2align 3
+.globl a64_explicit_udiv_wrong_divisor_table
+.type a64_explicit_udiv_wrong_divisor_table, %object
+a64_explicit_udiv_wrong_divisor_table:
+  .xword .La64_explicit_wrong_divisor_case0
+  .xword .La64_explicit_wrong_divisor_case1
+  .xword .La64_explicit_wrong_divisor_case2
+  .xword .La64_explicit_wrong_divisor_case3
+  .xword .La64_explicit_wrong_divisor_case4
+.size a64_explicit_udiv_wrong_divisor_table, .-a64_explicit_udiv_wrong_divisor_table
+
+.section .rodata.jt_a64_explicit_wrong_multiplier,"a",%progbits
+.p2align 3
+.globl a64_explicit_udiv_wrong_multiplier_table
+.type a64_explicit_udiv_wrong_multiplier_table, %object
+a64_explicit_udiv_wrong_multiplier_table:
+  .xword .La64_explicit_wrong_multiplier_case0
+  .xword .La64_explicit_wrong_multiplier_case1
+  .xword .La64_explicit_wrong_multiplier_case2
+  .xword .La64_explicit_wrong_multiplier_case3
+  .xword .La64_explicit_wrong_multiplier_case4
+  .xword .La64_explicit_wrong_multiplier_case5
+  .xword .La64_explicit_wrong_multiplier_case6
+.size a64_explicit_udiv_wrong_multiplier_table, .-a64_explicit_udiv_wrong_multiplier_table
+
+.section .rodata.jt_a64_explicit_late_interior,"a",%progbits
+.p2align 3
+.globl a64_explicit_udiv_late_interior_table
+.type a64_explicit_udiv_late_interior_table, %object
+a64_explicit_udiv_late_interior_table:
+  .xword .La64_explicit_interior_case0
+  .xword .La64_explicit_interior_case1
+  .xword .La64_explicit_interior_case2
+  .xword .La64_explicit_interior_case3
+  .xword .La64_explicit_interior_case4
+  .xword .La64_explicit_interior_case5
+.size a64_explicit_udiv_late_interior_table, .-a64_explicit_udiv_late_interior_table
+
+.section .rodata.jt_a64_explicit_late_escape,"a",%progbits
+.p2align 3
+.globl a64_explicit_udiv_late_selector_escape_table
+.type a64_explicit_udiv_late_selector_escape_table, %object
+a64_explicit_udiv_late_selector_escape_table:
+  .xword .La64_explicit_escape_case0
+  .xword .La64_explicit_escape_case1
+  .xword .La64_explicit_escape_case2
+  .xword .La64_explicit_escape_case3
+  .xword .La64_explicit_escape_case4
+.size a64_explicit_udiv_late_selector_escape_table, .-a64_explicit_udiv_late_selector_escape_table

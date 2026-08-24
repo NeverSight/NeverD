@@ -73,6 +73,13 @@ exactImmutableDataSpanOwner(const BinaryImage &Img, va_t Start, uint64_t Size,
 /// JumpTableResolverFold.cpp.
 std::vector<uint64_t> callPreservedRegs(const BinaryImage &Img);
 
+/// True when exception/unwind metadata links \p Target's cold/chained range
+/// to the exact primary function at \p FunctionEntry.  Shared by ordinary
+/// switch-target validation and opaque mixed-table identity classification so
+/// the two paths cannot drift on out-of-line local fragments.
+bool isExplicitlyOwnedFunctionFragment(const BinaryImage &Img,
+                                       va_t FunctionEntry, va_t Target);
+
 //===----------------------------------------------------------------------===//
 // Backward data-flow slicing
 //===----------------------------------------------------------------------===//
@@ -127,10 +134,12 @@ bool resolveConstThroughCopy(const std::vector<LowOp> &Ops, int Before,
                              const NdVar &V, uint64_t &Out);
 
 /// Count consecutive code-pointer relocation slots from \p TableAddr -- the
-/// entry count of an absolute-pointer jump table.  Defined in
-/// JumpTableResolverBounds.cpp.
+/// bounded entry count of an absolute-pointer jump table.  \p ScanComplete is
+/// false only when another slot exists beyond the global scan limit.  Defined
+/// in JumpTableResolverBounds.cpp.
 uint32_t countCodePtrRelocRun(const BinaryImage &Img, va_t TableAddr,
-                              uint64_t EntryStride);
+                              uint64_t EntryStride,
+                              bool *ScanComplete = nullptr);
 
 /// One candidate-local exemption for an address materialization that directly
 /// names immutable bytes copied into a stack-resident jump table.  Keeping the
@@ -174,10 +183,12 @@ bool codePtrRelocRunHasExactBoundary(const BinaryImage &Img, va_t BaseAddr,
                                      const std::set<va_t> &DecodedAnchors);
 
 /// Count consecutive PC-relative-to-code relocation slots from \p TableAddr --
-/// the entry count of a PIC `switch` jump table.  Defined in
-/// JumpTableResolverBounds.cpp.
+/// the bounded entry count of a PIC `switch` jump table.  \p ScanComplete is
+/// false only when another slot exists beyond the global scan limit.  Defined
+/// in JumpTableResolverBounds.cpp.
 uint32_t countRelCodeRelocRun(const BinaryImage &Img, va_t TableAddr,
-                              uint64_t EntryStride);
+                              uint64_t EntryStride,
+                              bool *ScanComplete = nullptr);
 
 /// Truncate a RelCodeReloc entry \p Run so it stops at the next PIC jump-table
 /// base anchor after \p BaseAddr.  Defined in JumpTableResolverBounds.cpp.

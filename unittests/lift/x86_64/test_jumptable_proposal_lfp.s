@@ -7,8 +7,9 @@
         .text
 
 // A sized function and a sized relocation-backed table are both authoritative,
-// but every table entry names the function entry.  The memory-indirect tail
-// call is therefore a callback, not an internal computed-goto dispatch.
+// and every table entry names the current function entry.  The machine-level
+// jump re-enters the current frame; rewriting it as a call would push a new
+// continuation on every iteration, so it must remain an opaque indirect branch.
         .globl  jt_lfp_sized_self_callback
         .type   jt_lfp_sized_self_callback,@function
 jt_lfp_sized_self_callback:

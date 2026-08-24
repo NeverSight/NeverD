@@ -1428,6 +1428,576 @@ jt_modulo_factorized_six:
         .quad .Lfactorized_six_case4
         .quad .Lfactorized_six_case5
 
+// clang's `% 12u` lowering materializes the shift count through the standard
+// masked-count LowIR temporary before spelling q*12 as `(q << 2) * 3`.
+// Constant proposal folding must preserve that exact shape, while the full
+// recipe theorem remains responsible for the quotient/dividend identity.
+        .text
+        .globl  jt_modulo_factorized_twelve_masked_shift
+        .type   jt_modulo_factorized_twelve_masked_shift,@function
+jt_modulo_factorized_twelve_masked_shift:
+        movl    %edi, %eax
+        movq    %rax, %r8
+        movl    $0xaaaaaaab, %esi
+        imulq   %rsi, %r8
+        shrq    $35, %r8
+        shll    $2, %r8d
+        leal    (%r8,%r8,2), %r9d
+        movl    %edi, %r8d
+        subl    %r9d, %r8d
+        leaq    .Lfactorized_twelve_table(%rip), %rax
+        movq    (%rax,%r8,8), %rcx
+        jmpq    *%rcx
+.Lfactorized_twelve_case0:  movl $4930, %eax; retq
+.Lfactorized_twelve_case1:  movl $4931, %eax; retq
+.Lfactorized_twelve_case2:  movl $4932, %eax; retq
+.Lfactorized_twelve_case3:  movl $4933, %eax; retq
+.Lfactorized_twelve_case4:  movl $4934, %eax; retq
+.Lfactorized_twelve_case5:  movl $4935, %eax; retq
+.Lfactorized_twelve_case6:  movl $4936, %eax; retq
+.Lfactorized_twelve_case7:  movl $4937, %eax; retq
+.Lfactorized_twelve_case8:  movl $4938, %eax; retq
+.Lfactorized_twelve_case9:  movl $4939, %eax; retq
+.Lfactorized_twelve_case10: movl $4940, %eax; retq
+.Lfactorized_twelve_case11: movl $4941, %eax; retq
+        .size   jt_modulo_factorized_twelve_masked_shift, .-jt_modulo_factorized_twelve_masked_shift
+
+        .section .data.rel.ro,"aw",@progbits
+        .p2align 3
+.Lfactorized_twelve_table:
+        .quad .Lfactorized_twelve_case0
+        .quad .Lfactorized_twelve_case1
+        .quad .Lfactorized_twelve_case2
+        .quad .Lfactorized_twelve_case3
+        .quad .Lfactorized_twelve_case4
+        .quad .Lfactorized_twelve_case5
+        .quad .Lfactorized_twelve_case6
+        .quad .Lfactorized_twelve_case7
+        .quad .Lfactorized_twelve_case8
+        .quad .Lfactorized_twelve_case9
+        .quad .Lfactorized_twelve_case10
+        .quad .Lfactorized_twelve_case11
+
+// A direct 64-bit URem has an exact APInt divisor theorem and does not need
+// the reciprocal lowering's bounded 2W-bit product construction.
+        .text
+        .globl  jt_modulo_u64_direct_remainder
+        .type   jt_modulo_u64_direct_remainder,@function
+jt_modulo_u64_direct_remainder:
+        movq    %rdi, %rax
+        xorq    %rdx, %rdx
+        movq    $5, %rcx
+        divq    %rcx
+        leaq    jt_modulo_u64_direct_table(%rip), %rax
+        movq    (%rax,%rdx,8), %rcx
+        jmpq    *%rcx
+.Lmodulo_u64_case0: movl $4950, %eax; retq
+.Lmodulo_u64_case1: movl $4951, %eax; retq
+.Lmodulo_u64_case2: movl $4952, %eax; retq
+.Lmodulo_u64_case3: movl $4953, %eax; retq
+.Lmodulo_u64_case4: movl $4954, %eax; retq
+        .size jt_modulo_u64_direct_remainder, .-jt_modulo_u64_direct_remainder
+
+        .section .data.rel.ro,"aw",@progbits
+        .p2align 3
+        .globl  jt_modulo_u64_direct_table
+        .type   jt_modulo_u64_direct_table,@object
+jt_modulo_u64_direct_table:
+        .quad .Lmodulo_u64_case0
+        .quad .Lmodulo_u64_case1
+        .quad .Lmodulo_u64_case2
+        .quad .Lmodulo_u64_case3
+        .quad .Lmodulo_u64_case4
+        .size jt_modulo_u64_direct_table, .-jt_modulo_u64_direct_table
+        .zero 8
+
+// The exact x-(x/udiv N)*N identity is width-independent as well.  Keep this
+// separate from direct divq remainder use so the final occurrence replay must
+// relate the 64-bit quotient and dividend, not merely recognize INT_REM.
+        .text
+        .globl  jt_modulo_u64_explicit_udiv
+        .type   jt_modulo_u64_explicit_udiv,@function
+jt_modulo_u64_explicit_udiv:
+        movq    %rdi, %r8
+        movq    %rdi, %rax
+        xorq    %rdx, %rdx
+        movq    $5, %rcx
+        divq    %rcx
+        imulq   $5, %rax, %r9
+        subq    %r9, %r8
+        leaq    jt_modulo_u64_explicit_udiv_table(%rip), %rax
+        movq    (%rax,%r8,8), %rcx
+        jmpq    *%rcx
+.Lmodulo_u64_udiv_case0: movl $4955, %eax; retq
+.Lmodulo_u64_udiv_case1: movl $4956, %eax; retq
+.Lmodulo_u64_udiv_case2: movl $4957, %eax; retq
+.Lmodulo_u64_udiv_case3: movl $4958, %eax; retq
+.Lmodulo_u64_udiv_case4: movl $4959, %eax; retq
+        .size jt_modulo_u64_explicit_udiv, .-jt_modulo_u64_explicit_udiv
+
+        .section .data.rel.ro,"aw",@progbits
+        .p2align 3
+        .globl  jt_modulo_u64_explicit_udiv_table
+        .type   jt_modulo_u64_explicit_udiv_table,@object
+jt_modulo_u64_explicit_udiv_table:
+        .quad .Lmodulo_u64_udiv_case0
+        .quad .Lmodulo_u64_udiv_case1
+        .quad .Lmodulo_u64_udiv_case2
+        .quad .Lmodulo_u64_udiv_case3
+        .quad .Lmodulo_u64_udiv_case4
+        .size jt_modulo_u64_explicit_udiv_table, .-jt_modulo_u64_explicit_udiv_table
+        .zero 8
+
+// A sized mixed table cannot be rewritten as a tail call merely because its
+// prefix names foreign functions.  The trailing current-function entry must
+// re-enter with the original frame; a synthetic CALL continuation would grow
+// the stack on every iteration.  Whole-object identity must therefore be
+// independent of table-entry order while authorizing none of the mixed targets
+// as switch successors.
+        .text
+        .globl  jt_modulo_sized_mixed_callback
+        .type   jt_modulo_sized_mixed_callback,@function
+jt_modulo_sized_mixed_callback:
+        leaq    jt_modulo_sized_mixed_callback_table(%rip), %rax
+        jmpq    *(%rax,%rdi,8)
+        .size jt_modulo_sized_mixed_callback, .-jt_modulo_sized_mixed_callback
+
+        .globl  jt_modulo_foreign_callback
+        .type   jt_modulo_foreign_callback,@function
+jt_modulo_foreign_callback:
+        movl    $4962, %eax
+.Lmodulo_foreign_callback_interior:
+        retq
+        .size jt_modulo_foreign_callback, .-jt_modulo_foreign_callback
+
+        .section .data.rel.ro,"aw",@progbits
+        .p2align 3
+        .globl  jt_modulo_sized_mixed_callback_table
+        .type   jt_modulo_sized_mixed_callback_table,@object
+jt_modulo_sized_mixed_callback_table:
+        .quad jt_modulo_foreign_callback
+        .quad jt_modulo_foreign_callback
+        .quad jt_modulo_sized_mixed_callback
+        .size jt_modulo_sized_mixed_callback_table, .-jt_modulo_sized_mixed_callback_table
+
+// An exactly sized all-callback table is a valid semantic tail-call fallback,
+// but it cannot override graph/value evidence exhaustion.  The focused test
+// sweeps the candidate allowance across the inner proof boundary and requires
+// the incomplete run to retain the original branch opaquely.
+        .section .text.jt_modulo_callback_graph_incomplete,"ax",@progbits
+        .globl  jt_modulo_callback_graph_incomplete
+        .type   jt_modulo_callback_graph_incomplete,@function
+jt_modulo_callback_graph_incomplete:
+        testl   %esi, %esi
+        jne     .Lmodulo_callback_truncated
+        leaq    jt_modulo_callback_graph_incomplete_table(%rip), %rax
+        jmpq    *(%rax,%rdi,8)
+.Lmodulo_callback_truncated:
+        .byte   0x0f
+        .size jt_modulo_callback_graph_incomplete, .-jt_modulo_callback_graph_incomplete
+
+        .section .data.rel.ro.jt_modulo_callback_graph_incomplete,"aw",@progbits
+        .p2align 3
+        .globl  jt_modulo_callback_graph_incomplete_table
+        .type   jt_modulo_callback_graph_incomplete_table,@object
+jt_modulo_callback_graph_incomplete_table:
+        .quad jt_modulo_foreign_callback
+        .quad jt_modulo_foreign_callback
+        .size jt_modulo_callback_graph_incomplete_table, .-jt_modulo_callback_graph_incomplete_table
+
+// The same reverse-ordered mixed identity without a symbol size.  A separately
+// materialized address at the following relocation slot is only an exploration
+// hint; identity must classify the complete owner-capped raw relocation run
+// instead of truncating at the first two (foreign) entries.
+        .text
+        .globl  jt_modulo_unsized_mixed_callback
+        .type   jt_modulo_unsized_mixed_callback,@function
+jt_modulo_unsized_mixed_callback:
+        leaq    jt_modulo_unsized_mixed_callback_table(%rip), %rax
+        jmpq    *(%rax,%rdi,8)
+.Lmodulo_unsized_mixed_local: movl $4963, %eax; retq
+        .size jt_modulo_unsized_mixed_callback, .-jt_modulo_unsized_mixed_callback
+
+        .globl  jt_modulo_unsized_mixed_anchor_user
+        .type   jt_modulo_unsized_mixed_anchor_user,@function
+jt_modulo_unsized_mixed_anchor_user:
+        movabsq $jt_modulo_unsized_mixed_next_anchor, %rax
+        retq
+        .size jt_modulo_unsized_mixed_anchor_user, .-jt_modulo_unsized_mixed_anchor_user
+
+        .section .data.rel.ro,"aw",@progbits
+        .p2align 3
+        .globl  jt_modulo_unsized_mixed_callback_table
+jt_modulo_unsized_mixed_callback_table:
+        .quad jt_modulo_foreign_callback
+        .quad jt_modulo_foreign_callback
+        .quad .Lmodulo_unsized_mixed_local
+        .globl  jt_modulo_unsized_mixed_next_anchor
+        .type   jt_modulo_unsized_mixed_next_anchor,@object
+jt_modulo_unsized_mixed_next_anchor:
+        .quad jt_modulo_foreign_callback
+        .size jt_modulo_unsized_mixed_next_anchor, .-jt_modulo_unsized_mixed_next_anchor
+
+// A contiguous raw pointer run may contain an executable target that cannot
+// be authenticated as either a callable entry or a current-frame arm.  That
+// tri-state "unknown" is not evidence for tail-call lowering and must remain
+// an opaque branch.
+        .text
+        .globl  jt_modulo_unsized_interior_anchor_unknown_callback
+        .type   jt_modulo_unsized_interior_anchor_unknown_callback,@function
+jt_modulo_unsized_interior_anchor_unknown_callback:
+        leaq    jt_modulo_unsized_interior_anchor_unknown_callback_table(%rip), %rax
+        jmpq    *(%rax,%rdi,8)
+        .size jt_modulo_unsized_interior_anchor_unknown_callback, .-jt_modulo_unsized_interior_anchor_unknown_callback
+
+        .globl  jt_modulo_unsized_interior_anchor_unknown_user
+        .type   jt_modulo_unsized_interior_anchor_unknown_user,@function
+jt_modulo_unsized_interior_anchor_unknown_user:
+        movabsq $jt_modulo_unsized_interior_anchor_unknown_callback_table+8, %rax
+        retq
+        .size jt_modulo_unsized_interior_anchor_unknown_user, .-jt_modulo_unsized_interior_anchor_unknown_user
+
+        .section .data.rel.ro.jt_modulo_unsized_interior_anchor_unknown,"aw",@progbits
+        .p2align 3
+        .globl  jt_modulo_unsized_interior_anchor_unknown_callback_table
+jt_modulo_unsized_interior_anchor_unknown_callback_table:
+        .quad jt_modulo_foreign_callback
+        .quad jt_modulo_foreign_callback
+        .quad .Lmodulo_foreign_callback_interior
+
+// A materialized address of an interior slot is an exploration hint, not an
+// object-boundary certificate.  The first two entries are callable, while the
+// third returns into the current machine frame.  Truncating the relocation run
+// at table+8 and treating that address as an exact end would rewrite this JMP
+// as CALL+RETURN and silently change the local arm's stack semantics.
+        .text
+        .globl  jt_modulo_unsized_interior_anchor_mixed_callback
+        .type   jt_modulo_unsized_interior_anchor_mixed_callback,@function
+jt_modulo_unsized_interior_anchor_mixed_callback:
+        leaq    jt_modulo_unsized_interior_anchor_mixed_callback_table(%rip), %rax
+        jmpq    *(%rax,%rdi,8)
+.Lmodulo_unsized_interior_anchor_local:
+        movl    $4964, %eax
+        retq
+        .size jt_modulo_unsized_interior_anchor_mixed_callback, .-jt_modulo_unsized_interior_anchor_mixed_callback
+
+        .globl  jt_modulo_unsized_interior_anchor_user
+        .type   jt_modulo_unsized_interior_anchor_user,@function
+jt_modulo_unsized_interior_anchor_user:
+        movabsq $jt_modulo_unsized_interior_anchor_mixed_callback_table+8, %rax
+        retq
+        .size jt_modulo_unsized_interior_anchor_user, .-jt_modulo_unsized_interior_anchor_user
+
+        .section .data.rel.ro.jt_modulo_unsized_interior_anchor,"aw",@progbits
+        .p2align 3
+        .globl  jt_modulo_unsized_interior_anchor_mixed_callback_table
+jt_modulo_unsized_interior_anchor_mixed_callback_table:
+        .quad jt_modulo_foreign_callback
+        .quad jt_modulo_foreign_callback
+        .quad .Lmodulo_unsized_interior_anchor_local
+
+// The same open-ended/interior-anchor shape with only authenticated foreign
+// callables must remain an ordinary tail callback.  Looking beyond the first
+// two slots is conservative identity classification, not permission to label
+// every truncated relocation run as a local-frame dispatch.
+        .text
+        .globl  jt_modulo_unsized_interior_anchor_foreign_callback
+        .type   jt_modulo_unsized_interior_anchor_foreign_callback,@function
+jt_modulo_unsized_interior_anchor_foreign_callback:
+        leaq    jt_modulo_unsized_interior_anchor_foreign_callback_table(%rip), %rax
+        jmpq    *(%rax,%rdi,8)
+        .size jt_modulo_unsized_interior_anchor_foreign_callback, .-jt_modulo_unsized_interior_anchor_foreign_callback
+
+        .globl  jt_modulo_unsized_interior_anchor_foreign_user
+        .type   jt_modulo_unsized_interior_anchor_foreign_user,@function
+jt_modulo_unsized_interior_anchor_foreign_user:
+        movabsq $jt_modulo_unsized_interior_anchor_foreign_callback_table+8, %rax
+        retq
+        .size jt_modulo_unsized_interior_anchor_foreign_user, .-jt_modulo_unsized_interior_anchor_foreign_user
+
+        .section .data.rel.ro.jt_modulo_unsized_interior_anchor_foreign,"aw",@progbits
+        .p2align 3
+        .globl  jt_modulo_unsized_interior_anchor_foreign_callback_table
+jt_modulo_unsized_interior_anchor_foreign_callback_table:
+        .quad jt_modulo_foreign_callback
+        .quad jt_modulo_foreign_callback
+        .quad jt_modulo_foreign_callback
+
+// A literal entry coordinate opens case zero, whose exact `% 5u` producer
+// then widens the same dispatch to all five coordinates.  The four lexically
+// earlier cases deliberately contain more LowOps than the flat modulo proposal
+// prefix can retain.  Candidate-local discovery must ignore those unreachable
+// instructions until their coordinates have been authorized; simply raising
+// the global prefix would miss the least-fixed-point property under test.
+        .text
+        .globl  jt_modulo_lfp_late_reachable_producer
+        .type   jt_modulo_lfp_late_reachable_producer,@function
+jt_modulo_lfp_late_reachable_producer:
+        xorl    %r10d, %r10d
+.Lmodulo_lfp_dispatch:
+        leaq    jt_modulo_lfp_table(%rip), %rax
+        movq    (%rax,%r10,8), %rcx
+        jmpq    *%rcx
+.Lmodulo_lfp_case1:
+        .rept 140
+        addl    $1, %r11d
+        .endr
+        movl    $4911, %eax
+        retq
+.Lmodulo_lfp_case2:
+        .rept 140
+        addl    $1, %r11d
+        .endr
+        movl    $4912, %eax
+        retq
+.Lmodulo_lfp_case3:
+        .rept 140
+        addl    $1, %r11d
+        .endr
+        movl    $4913, %eax
+        retq
+.Lmodulo_lfp_case4:
+        .rept 140
+        addl    $1, %r11d
+        .endr
+        movl    $4914, %eax
+        retq
+.Lmodulo_lfp_case0:
+        movl    %edi, %eax
+        xorl    %edx, %edx
+        movl    $5, %ecx
+        divl    %ecx
+        movl    %edx, %r10d
+        jmp     .Lmodulo_lfp_dispatch
+        .size   jt_modulo_lfp_late_reachable_producer, .-jt_modulo_lfp_late_reachable_producer
+
+        .section .data.rel.ro,"aw",@progbits
+        .p2align 3
+        .globl  jt_modulo_lfp_table
+        .type   jt_modulo_lfp_table,@object
+jt_modulo_lfp_table:
+        .quad .Lmodulo_lfp_case0
+        .quad .Lmodulo_lfp_case1
+        .quad .Lmodulo_lfp_case2
+        .quad .Lmodulo_lfp_case3
+        .quad .Lmodulo_lfp_case4
+        .size jt_modulo_lfp_table, .-jt_modulo_lfp_table
+        .zero 8
+
+// The same physical layout is not authority to open case four.  Case zero is
+// the only literal seed and returns immediately; the exact `% 5u` producer in
+// case four is therefore self-bootstrapped and must remain unreachable.
+        .text
+        .globl  jt_modulo_lfp_rejects_self_bootstrap
+        .type   jt_modulo_lfp_rejects_self_bootstrap,@function
+jt_modulo_lfp_rejects_self_bootstrap:
+        xorl    %r10d, %r10d
+.Lmodulo_lfp_bad_dispatch:
+        leaq    jt_modulo_lfp_bad_table(%rip), %rax
+        movq    (%rax,%r10,8), %rcx
+        jmpq    *%rcx
+.Lmodulo_lfp_bad_case0:
+        movl    $4920, %eax
+        retq
+.Lmodulo_lfp_bad_case1:
+        movl    $4921, %eax
+        retq
+.Lmodulo_lfp_bad_case2:
+        movl    $4922, %eax
+        retq
+.Lmodulo_lfp_bad_case3:
+        movl    $4923, %eax
+        retq
+.Lmodulo_lfp_bad_case4:
+        movl    %edi, %eax
+        xorl    %edx, %edx
+        movl    $5, %ecx
+        divl    %ecx
+        movl    %edx, %r10d
+        jmp     .Lmodulo_lfp_bad_dispatch
+        .size   jt_modulo_lfp_rejects_self_bootstrap, .-jt_modulo_lfp_rejects_self_bootstrap
+
+        .section .data.rel.ro,"aw",@progbits
+        .p2align 3
+        .globl  jt_modulo_lfp_bad_table
+        .type   jt_modulo_lfp_bad_table,@object
+jt_modulo_lfp_bad_table:
+        .quad .Lmodulo_lfp_bad_case0
+        .quad .Lmodulo_lfp_bad_case1
+        .quad .Lmodulo_lfp_bad_case2
+        .quad .Lmodulo_lfp_bad_case3
+        .quad .Lmodulo_lfp_bad_case4
+        .size jt_modulo_lfp_bad_table, .-jt_modulo_lfp_bad_table
+        .zero 8
+
+// Case zero initially exposes a valid `% 6u` producer.  Publishing the full
+// candidate table would make case five reachable, and that case enters the
+// producer in the middle with a foreign quotient.  The fixed point must replay
+// the exact recipe after adding the late edge and reject the polluted producer;
+// a discovery-only MustEqual check is not a sufficient final certificate.
+        .text
+        .globl  jt_modulo_lfp_rejects_late_interior_predecessor
+        .type   jt_modulo_lfp_rejects_late_interior_predecessor,@function
+jt_modulo_lfp_rejects_late_interior_predecessor:
+        xorl    %r10d, %r10d
+.Lmodulo_lfp_interior_dispatch:
+        leaq    jt_modulo_lfp_interior_table(%rip), %rax
+        movq    (%rax,%r10,8), %rdx
+        jmpq    *%rdx
+.Lmodulo_lfp_interior_case0:
+        movl    %edi, %eax
+        movl    $0xaaaaaaab, %ecx
+        imulq   %rax, %rcx
+        shrq    $34, %rcx
+.Lmodulo_lfp_interior_product:
+        addl    %ecx, %ecx
+        leal    (%rcx,%rcx,2), %edx
+        subl    %edx, %eax
+        movl    %eax, %r10d
+        jmp     .Lmodulo_lfp_interior_dispatch
+.Lmodulo_lfp_interior_case1: movl $4951, %eax; retq
+.Lmodulo_lfp_interior_case2: movl $4952, %eax; retq
+.Lmodulo_lfp_interior_case3: movl $4953, %eax; retq
+.Lmodulo_lfp_interior_case4: movl $4954, %eax; retq
+.Lmodulo_lfp_interior_case5:
+        movl    %edi, %eax
+        movl    $0x12345678, %ecx
+        jmp     .Lmodulo_lfp_interior_product
+        .size   jt_modulo_lfp_rejects_late_interior_predecessor, .-jt_modulo_lfp_rejects_late_interior_predecessor
+
+        .section .data.rel.ro,"aw",@progbits
+        .p2align 3
+        .globl  jt_modulo_lfp_interior_table
+        .type   jt_modulo_lfp_interior_table,@object
+jt_modulo_lfp_interior_table:
+        .quad .Lmodulo_lfp_interior_case0
+        .quad .Lmodulo_lfp_interior_case1
+        .quad .Lmodulo_lfp_interior_case2
+        .quad .Lmodulo_lfp_interior_case3
+        .quad .Lmodulo_lfp_interior_case4
+        .quad .Lmodulo_lfp_interior_case5
+        .size jt_modulo_lfp_interior_table, .-jt_modulo_lfp_interior_table
+        .zero 8
+
+// The exact producer itself remains valid after all targets are authorized,
+// but the last case writes a value outside [0,5) before returning to the same
+// dispatch.  Final selector-domain replay, not recipe recognition alone, must
+// reject the table.
+        .text
+        .globl  jt_modulo_lfp_rejects_late_selector_escape
+        .type   jt_modulo_lfp_rejects_late_selector_escape,@function
+jt_modulo_lfp_rejects_late_selector_escape:
+        xorl    %r10d, %r10d
+.Lmodulo_lfp_escape_dispatch:
+        leaq    jt_modulo_lfp_escape_table(%rip), %rax
+        movq    (%rax,%r10,8), %rdx
+        jmpq    *%rdx
+.Lmodulo_lfp_escape_case0:
+        movl    %edi, %eax
+        xorl    %edx, %edx
+        movl    $5, %ecx
+        divl    %ecx
+        movl    %edx, %r10d
+        jmp     .Lmodulo_lfp_escape_dispatch
+.Lmodulo_lfp_escape_case1: movl $4961, %eax; retq
+.Lmodulo_lfp_escape_case2: movl $4962, %eax; retq
+.Lmodulo_lfp_escape_case3: movl $4963, %eax; retq
+.Lmodulo_lfp_escape_case4:
+        movl    $0x100, %r10d
+        jmp     .Lmodulo_lfp_escape_dispatch
+        .size   jt_modulo_lfp_rejects_late_selector_escape, .-jt_modulo_lfp_rejects_late_selector_escape
+
+        .section .data.rel.ro,"aw",@progbits
+        .p2align 3
+        .globl  jt_modulo_lfp_escape_table
+        .type   jt_modulo_lfp_escape_table,@object
+jt_modulo_lfp_escape_table:
+        .quad .Lmodulo_lfp_escape_case0
+        .quad .Lmodulo_lfp_escape_case1
+        .quad .Lmodulo_lfp_escape_case2
+        .quad .Lmodulo_lfp_escape_case3
+        .quad .Lmodulo_lfp_escape_case4
+        .size jt_modulo_lfp_escape_table, .-jt_modulo_lfp_escape_table
+        .zero 8
+
+// PC-relative table entries provide an exact physical capacity without adding
+// absolute code-pointer roots.  The entry's valid `% 5u` producer authorizes
+// every coordinate before any destination is decoded, but the table must not
+// publish until graph growth has decoded case four and final replay observes
+// its out-of-domain selector.
+        .text
+        .globl  jt_modulo_lfp_rejects_undecoded_late_escape
+        .type   jt_modulo_lfp_rejects_undecoded_late_escape,@function
+jt_modulo_lfp_rejects_undecoded_late_escape:
+        movl    %edi, %eax
+        xorl    %edx, %edx
+        movl    $5, %ecx
+        divl    %ecx
+        movl    %edx, %r10d
+.Lmodulo_lfp_rel_dispatch:
+        leaq    jt_modulo_lfp_relative_table(%rip), %rax
+        movslq  (%rax,%r10,4), %rdx
+        addq    %rax, %rdx
+        jmpq    *%rdx
+.Lmodulo_lfp_rel_case0:
+        movl    $4970, %eax
+        retq
+.Lmodulo_lfp_rel_case1: movl $4971, %eax; retq
+.Lmodulo_lfp_rel_case2: movl $4972, %eax; retq
+.Lmodulo_lfp_rel_case3: movl $4973, %eax; retq
+.Lmodulo_lfp_rel_case4:
+        movl    $0x100, %r10d
+        jmp     .Lmodulo_lfp_rel_dispatch
+        .size   jt_modulo_lfp_rejects_undecoded_late_escape, .-jt_modulo_lfp_rejects_undecoded_late_escape
+
+        .section .rodata.jt_modulo_lfp_relative,"a",@progbits
+        .p2align 2
+        .globl  jt_modulo_lfp_relative_table
+        .type   jt_modulo_lfp_relative_table,@object
+jt_modulo_lfp_relative_table:
+        .long .Lmodulo_lfp_rel_case0-jt_modulo_lfp_relative_table
+        .long .Lmodulo_lfp_rel_case1-jt_modulo_lfp_relative_table
+        .long .Lmodulo_lfp_rel_case2-jt_modulo_lfp_relative_table
+        .long .Lmodulo_lfp_rel_case3-jt_modulo_lfp_relative_table
+        .long .Lmodulo_lfp_rel_case4-jt_modulo_lfp_relative_table
+        .size jt_modulo_lfp_relative_table, .-jt_modulo_lfp_relative_table
+
+// Positive companion for graph-growth and transactional-budget tests.  The
+// complete modulo domain is independent of candidate edges, but none of the
+// PC-relative destinations is an address-taken root.
+        .text
+        .globl  jt_modulo_lfp_relative_entry_positive
+        .type   jt_modulo_lfp_relative_entry_positive,@function
+jt_modulo_lfp_relative_entry_positive:
+        movl    %edi, %eax
+        xorl    %edx, %edx
+        movl    $5, %ecx
+        divl    %ecx
+        movl    %edx, %r10d
+.Lmodulo_lfp_rel_positive_dispatch:
+        leaq    jt_modulo_lfp_relative_positive_table(%rip), %rax
+        movslq  (%rax,%r10,4), %rdx
+        addq    %rax, %rdx
+        jmpq    *%rdx
+.Lmodulo_lfp_rel_positive_case0: movl $4980, %eax; retq
+.Lmodulo_lfp_rel_positive_case1: movl $4981, %eax; retq
+.Lmodulo_lfp_rel_positive_case2: movl $4982, %eax; retq
+.Lmodulo_lfp_rel_positive_case3: movl $4983, %eax; retq
+.Lmodulo_lfp_rel_positive_case4: movl $4984, %eax; retq
+        .size jt_modulo_lfp_relative_entry_positive, .-jt_modulo_lfp_relative_entry_positive
+
+        .section .rodata.jt_modulo_lfp_relative_positive,"a",@progbits
+        .p2align 2
+        .globl  jt_modulo_lfp_relative_positive_table
+        .type   jt_modulo_lfp_relative_positive_table,@object
+jt_modulo_lfp_relative_positive_table:
+        .long .Lmodulo_lfp_rel_positive_case0-jt_modulo_lfp_relative_positive_table
+        .long .Lmodulo_lfp_rel_positive_case1-jt_modulo_lfp_relative_positive_table
+        .long .Lmodulo_lfp_rel_positive_case2-jt_modulo_lfp_relative_positive_table
+        .long .Lmodulo_lfp_rel_positive_case3-jt_modulo_lfp_relative_positive_table
+        .long .Lmodulo_lfp_rel_positive_case4-jt_modulo_lfp_relative_positive_table
+        .size jt_modulo_lfp_relative_positive_table, .-jt_modulo_lfp_relative_positive_table
+
         .text
         .globl  jt_modulo_factorized_six_wrong_factor
         .type   jt_modulo_factorized_six_wrong_factor,@function
@@ -1559,5 +2129,159 @@ jt_modulo_factorized_six_wrong_postshift:
         .quad .Lfactorized_six_wrong_postshift_case3
         .quad .Lfactorized_six_wrong_postshift_case4
         .quad .Lfactorized_six_wrong_postshift_case5
+
+// Clang 18 lowers `% 12u` as q=((uint64_t)x*0xaaaaaaab)>>35 followed
+// by q*12=(q<<2)*3.  The x86 shl lift materializes its immediate through a
+// masked temporary, so the exact recipe must normalize a proved constant
+// shift without weakening the multiplier or machine-width checks.
+        .text
+        .globl  jt_modulo_factorized_twelve_shift
+        .type   jt_modulo_factorized_twelve_shift,@function
+jt_modulo_factorized_twelve_shift:
+        movl    %edi, %eax
+        movl    $0xaaaaaaab, %ecx
+        imulq   %rax, %rcx
+        shrq    $35, %rcx
+        shll    $2, %ecx
+        leal    (%rcx,%rcx,2), %edx
+        subl    %edx, %eax
+        leaq    jt_modulo_factorized_twelve_shift_table(%rip), %rcx
+        movq    (%rcx,%rax,8), %rdx
+        jmpq    *%rdx
+.Lfactorized_twelve_shift_case:
+        movl    $4910, %eax
+        retq
+        .size   jt_modulo_factorized_twelve_shift, .-jt_modulo_factorized_twelve_shift
+
+        .section .data.rel.ro,"aw",@progbits
+        .p2align 3
+        .globl  jt_modulo_factorized_twelve_shift_table
+        .type   jt_modulo_factorized_twelve_shift_table,@object
+jt_modulo_factorized_twelve_shift_table:
+        .rept 12
+        .quad .Lfactorized_twelve_shift_case
+        .endr
+        .size   jt_modulo_factorized_twelve_shift_table, .-jt_modulo_factorized_twelve_shift_table
+
+        .text
+        .globl  jt_modulo_factorized_twelve_wrong_shift
+        .type   jt_modulo_factorized_twelve_wrong_shift,@function
+jt_modulo_factorized_twelve_wrong_shift:
+        movl    %edi, %eax
+        movl    $0xaaaaaaab, %ecx
+        imulq   %rax, %rcx
+        shrq    $35, %rcx
+        shll    $1, %ecx
+        leal    (%rcx,%rcx,2), %edx
+        subl    %edx, %eax
+        leaq    jt_modulo_factorized_twelve_wrong_shift_table(%rip), %rcx
+        movq    (%rcx,%rax,8), %rdx
+        jmpq    *%rdx
+.Lfactorized_twelve_wrong_shift_case:
+        movl    $4920, %eax
+        retq
+        .size   jt_modulo_factorized_twelve_wrong_shift, .-jt_modulo_factorized_twelve_wrong_shift
+
+        .section .data.rel.ro,"aw",@progbits
+        .p2align 3
+        .globl  jt_modulo_factorized_twelve_wrong_shift_table
+        .type   jt_modulo_factorized_twelve_wrong_shift_table,@object
+jt_modulo_factorized_twelve_wrong_shift_table:
+        .rept 12
+        .quad .Lfactorized_twelve_wrong_shift_case
+        .endr
+        .size   jt_modulo_factorized_twelve_wrong_shift_table, .-jt_modulo_factorized_twelve_wrong_shift_table
+
+        .text
+        .globl  jt_modulo_factorized_twelve_wrong_multiplier
+        .type   jt_modulo_factorized_twelve_wrong_multiplier,@function
+jt_modulo_factorized_twelve_wrong_multiplier:
+        movl    %edi, %eax
+        movl    $0xaaaaaaab, %ecx
+        imulq   %rax, %rcx
+        shrq    $35, %rcx
+        shll    $2, %ecx
+        leal    (%rcx,%rcx,4), %edx
+        subl    %edx, %eax
+        leaq    jt_modulo_factorized_twelve_wrong_multiplier_table(%rip), %rcx
+        movq    (%rcx,%rax,8), %rdx
+        jmpq    *%rdx
+.Lfactorized_twelve_wrong_multiplier_case:
+        movl    $4930, %eax
+        retq
+        .size   jt_modulo_factorized_twelve_wrong_multiplier, .-jt_modulo_factorized_twelve_wrong_multiplier
+
+        .section .data.rel.ro,"aw",@progbits
+        .p2align 3
+        .globl  jt_modulo_factorized_twelve_wrong_multiplier_table
+        .type   jt_modulo_factorized_twelve_wrong_multiplier_table,@object
+jt_modulo_factorized_twelve_wrong_multiplier_table:
+        .rept 12
+        .quad .Lfactorized_twelve_wrong_multiplier_case
+        .endr
+        .size   jt_modulo_factorized_twelve_wrong_multiplier_table, .-jt_modulo_factorized_twelve_wrong_multiplier_table
+
+        .text
+        .globl  jt_modulo_factorized_twelve_wrong_width
+        .type   jt_modulo_factorized_twelve_wrong_width,@function
+jt_modulo_factorized_twelve_wrong_width:
+        movl    %edi, %eax
+        movl    $0xaaaaaaab, %ecx
+        imulq   %rax, %rcx
+        shrq    $35, %rcx
+        shlq    $2, %rcx
+        leaq    (%rcx,%rcx,2), %rdx
+        subq    %rdx, %rax
+        leaq    jt_modulo_factorized_twelve_wrong_width_table(%rip), %rcx
+        movq    (%rcx,%rax,8), %rdx
+        jmpq    *%rdx
+.Lfactorized_twelve_wrong_width_case:
+        movl    $4940, %eax
+        retq
+        .size   jt_modulo_factorized_twelve_wrong_width, .-jt_modulo_factorized_twelve_wrong_width
+
+        .section .data.rel.ro,"aw",@progbits
+        .p2align 3
+        .globl  jt_modulo_factorized_twelve_wrong_width_table
+        .type   jt_modulo_factorized_twelve_wrong_width_table,@object
+jt_modulo_factorized_twelve_wrong_width_table:
+        .rept 12
+        .quad .Lfactorized_twelve_wrong_width_case
+        .endr
+        .size   jt_modulo_factorized_twelve_wrong_width_table, .-jt_modulo_factorized_twelve_wrong_width_table
+
+// IDIV publishes a signed remainder occurrence.  Even with a matching
+// five-slot relocation run, negative inputs do not establish the unsigned
+// selector domain [0,5), so ExactUnsignedModuloRecipe must reject SRem.
+        .text
+        .globl  jt_modulo_signed_remainder_not_unsigned
+        .type   jt_modulo_signed_remainder_not_unsigned,@function
+jt_modulo_signed_remainder_not_unsigned:
+        movl    %edi, %eax
+        cltd
+        movl    $5, %ecx
+        idivl   %ecx
+        movl    %edx, %r10d
+        leaq    jt_modulo_signed_remainder_table(%rip), %rax
+        movq    (%rax,%r10,8), %rcx
+        jmpq    *%rcx
+.Lsigned_remainder_case0: movl $4970, %eax; retq
+.Lsigned_remainder_case1: movl $4971, %eax; retq
+.Lsigned_remainder_case2: movl $4972, %eax; retq
+.Lsigned_remainder_case3: movl $4973, %eax; retq
+.Lsigned_remainder_case4: movl $4974, %eax; retq
+        .size   jt_modulo_signed_remainder_not_unsigned, .-jt_modulo_signed_remainder_not_unsigned
+
+        .section .data.rel.ro,"aw",@progbits
+        .p2align 3
+        .globl  jt_modulo_signed_remainder_table
+        .type   jt_modulo_signed_remainder_table,@object
+jt_modulo_signed_remainder_table:
+        .quad .Lsigned_remainder_case0
+        .quad .Lsigned_remainder_case1
+        .quad .Lsigned_remainder_case2
+        .quad .Lsigned_remainder_case3
+        .quad .Lsigned_remainder_case4
+        .size   jt_modulo_signed_remainder_table, .-jt_modulo_signed_remainder_table
 
         .section .note.GNU-stack,"",@progbits

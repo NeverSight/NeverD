@@ -617,9 +617,10 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
   }
 
   // Reloc-driven absolute table: a run of loader-applied absolute code-pointer
-  // relocations starting at the base means the entries are absolute targets and
-  // the run length is the exact entry count.  This recovers a computed-goto /
-  // threaded dispatch (which has no comparison guard to bound it) and resolves
+  // relocations starting at the base means the entries are absolute targets;
+  // the bounded run length is authenticated physical capacity.  This recovers
+  // a computed-goto or threaded dispatch (which has no comparison guard to
+  // bound it) and resolves
   // the 4-byte absolute-vs-PIC-relative ambiguity — a PIC switch table carries
   // no relocations on its entries.
   uint32_t RelocRun = countCodePtrRelocRun(Img, TableAddr, LoadWidth);

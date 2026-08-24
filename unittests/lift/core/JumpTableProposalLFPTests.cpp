@@ -168,7 +168,7 @@ void expectCompleteSiblingBatch(const neverd::BinaryImage &Image,
   }
 }
 
-TEST_F(JumpTableProposalLFP, SizedAuthoritativeSelfCallbackStaysIndirectCall) {
+TEST_F(JumpTableProposalLFP, SizedAuthoritativeSelfDispatchStaysOpaqueBranch) {
   auto ImageOrErr = neverd::loadBinary(proposalLFPObj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
       << llvm::toString(ImageOrErr.takeError());
@@ -180,9 +180,9 @@ TEST_F(JumpTableProposalLFP, SizedAuthoritativeSelfCallbackStaysIndirectCall) {
   ASSERT_NE(Function, nullptr);
   ASSERT_NE(Table, nullptr);
   ASSERT_GT(Function->Size, 0u)
-      << "the negative requires an authoritative sized function body";
+      << "the regression requires an authoritative sized function body";
   ASSERT_EQ(Table->Size, 2u * 8u)
-      << "the negative requires an authoritative sized table object";
+      << "the regression requires an authoritative sized table object";
   ASSERT_EQ(std::count_if(Image.CodePtrRelocSlots.begin(),
                           Image.CodePtrRelocSlots.end(),
                           [&](neverd::va_t Slot) {
@@ -193,20 +193,18 @@ TEST_F(JumpTableProposalLFP, SizedAuthoritativeSelfCallbackStaysIndirectCall) {
       << "both self-callback entries must be authenticated code roots";
 
   const neverd::LowFunc Low = buildLow(Image, *Function);
-  EXPECT_TRUE(hasOpcode(Low, neverd::NdOp::INDIR_CALL));
-  EXPECT_TRUE(hasOpcode(Low, neverd::NdOp::RETURN));
-  EXPECT_FALSE(hasOpcode(Low, neverd::NdOp::INDIR_BR));
+  EXPECT_TRUE(hasOpcode(Low, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(hasOpcode(Low, neverd::NdOp::INDIR_CALL));
   EXPECT_TRUE(Low.JumpTables.empty());
-  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+  EXPECT_FALSE(Low.UnsafeIndirectBranchAddresses.empty());
 
   const RunResult Run = liftToLLVMIR(proposalLFPObj());
   ASSERT_EQ(Run.exitCode, 0) << Run.err;
   const std::string Body =
       llvmFunctionBody(Run.out, "jt_lfp_sized_self_callback");
   ASSERT_FALSE(Body.empty()) << Run.out;
-  EXPECT_NE(Body.find("call"), std::string::npos) << Body;
-  EXPECT_NE(Body.find("ret"), std::string::npos) << Body;
-  EXPECT_EQ(Body.find("llvm.trap"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("call i64"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("llvm.trap"), std::string::npos) << Body;
   EXPECT_EQ(Body.find("switch i"), std::string::npos) << Body;
 }
 
@@ -286,7 +284,16 @@ TEST_F(JumpTableProposalLFP,
   EXPECT_TRUE(Exhausted.JumpTables.empty());
   EXPECT_TRUE(hasOpcode(Exhausted, neverd::NdOp::INDIR_BR));
   EXPECT_FALSE(hasOpcode(Exhausted, neverd::NdOp::INDIR_CALL));
-  EXPECT_FALSE(Exhausted.UnsafeIndirectBranchAddresses.empty());
+  std::set<neverd::va_t> OpaqueSiblingBranches;
+  for (const neverd::LowBlock &Block : Exhausted.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops)
+      if (Op.Opcode == neverd::NdOp::INDIR_BR)
+        OpaqueSiblingBranches.insert(Op.Addr);
+  EXPECT_EQ(OpaqueSiblingBranches.size(), 5u)
+      << "every sibling must remain an indirect branch after rollback";
+  EXPECT_EQ(Exhausted.UnsafeIndirectBranchAddresses, OpaqueSiblingBranches)
+      << "rollback must retain both entry markers and incomplete evidence "
+         "discovered by later sibling candidates";
   EXPECT_FALSE(HasPendingExploration)
       << "one exhausted stage must not leak provisional case targets into the "
          "next fixed-point stage";

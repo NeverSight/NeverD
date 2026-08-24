@@ -690,7 +690,7 @@ jt_identity_readonly_dataptr_dispatch:
         .type   jt_identity_callback_tailcall,@function
 jt_identity_callback_tailcall:
         andl    $1, %edi
-        leaq    .Lcallback_tailcall_table(%rip), %rax
+        leaq    jt_identity_callback_tailcall_table(%rip), %rax
         jmpq    *(%rax,%rdi,8)
         .size   jt_identity_callback_tailcall, .-jt_identity_callback_tailcall
 
@@ -994,10 +994,12 @@ jt_identity_unsized_self_callback_boundary:
 
         .section .data.rel.ro.jt_callback_tailcall,"aw",@progbits
         .p2align 3
-.Lcallback_tailcall_table:
+        .globl jt_identity_callback_tailcall_table
+        .type jt_identity_callback_tailcall_table,@object
+jt_identity_callback_tailcall_table:
         .quad jt_identity_callback_a
         .quad jt_identity_callback_b
-        .size .Lcallback_tailcall_table, .-.Lcallback_tailcall_table
+        .size jt_identity_callback_tailcall_table, .-jt_identity_callback_tailcall_table
 
         .globl  jt_identity_incomplete_mask_callback_table
         .type   jt_identity_incomplete_mask_callback_table,@object

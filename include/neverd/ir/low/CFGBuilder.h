@@ -82,12 +82,12 @@ public:
   setMaskFixedPointEvidenceBudgetForTesting(std::optional<size_t> Limit) {
     MaskFixedPointEvidenceBudgetForTesting = Limit;
   }
-  /// Expose only whether a failed mask proof left provisional exploration
-  /// state behind.  Budget exhaustion must be transactional: focused tests use
-  /// this after build() to ensure an incomplete proof cannot schedule a case
-  /// target for a later resolver stage.
+  /// Expose only whether a failed candidate-local proof left provisional
+  /// exploration state behind.  Budget exhaustion must be transactional:
+  /// focused tests use this after build() to ensure an incomplete proof cannot
+  /// schedule a case target for a later resolver stage.
   bool hasMaskFixedPointExplorationTargetsForTesting() const {
-    return !MaskFixedPointExplorationTargets.empty();
+    return !CandidateFixedPointExplorationTargets.empty();
   }
   /// Focused transaction boundary hooks.  They expose no proposal contents:
   /// tests only distinguish a commit-tail budget failure from an earlier proof
@@ -696,13 +696,18 @@ private:
     /// value, an unbounded read may not substitute for the missing proof.
     bool HasControllingGuard = false;
 
-    /// A controlling condition was tied to the exact table-index occurrence,
-    /// but its complete bit-domain was not a dense zero-based prefix (or the
-    /// exact proof exhausted its budget).  A relocation run is physical
-    /// storage evidence, not a replacement index-domain certificate, so this
-    /// state blocks that fallback unless a separate complete mask/modulo proof
-    /// establishes the runtime domain.
+    /// The precise guard proof did not complete because its CFG, value query,
+    /// solver, or bounded work allowance was incomplete.  This is distinct
+    /// from a completed semantic rejection and always preserves the original
+    /// indirect branch fail-closed.
     bool IncompleteGuardDomain = false;
+
+    /// The complete guard expression was tied to the exact selector, but its
+    /// bit-domain is not a dense zero-based prefix (for example a periodic
+    /// alias or an admitted signed-negative half-domain).  Physical storage
+    /// cannot authenticate a switch from this fact; an independently exact
+    /// all-callable object may nevertheless remain an ordinary tail callback.
+    bool SemanticGuardDomainAmbiguous = false;
 
     bool operator==(const JumpTableInfo &Other) const = default;
   };
@@ -874,7 +879,19 @@ private:
   bool inferBoundsFromModulo(const BinaryImage &Img, const InsnRecord &Rec,
                              JumpTableInfo &Info,
                              size_t *AggregateEvidenceBudget,
-                             bool *EvidenceIncomplete = nullptr);
+                             bool *EvidenceIncomplete = nullptr,
+                             bool RequireProducerReachability = false,
+                             const std::vector<va_t> *CandidateTargetsOverride =
+                                 nullptr,
+                             const std::set<va_t> *ReachableInstructions =
+                                 nullptr,
+                             bool AllowFixedPointBootstrap = true,
+                             std::vector<JumpTableValueOccurrence>
+                                 *AuthenticatedProducers = nullptr,
+                             uint32_t RequiredProducerBound = 0,
+                             const std::vector<JumpTableValueOccurrence>
+                                 *RequiredProducers = nullptr,
+                             bool RestrictProducerDiscovery = false);
   /// Recover the entry count from an AND mask that confines the table index.
   /// By default only a clean contiguous low-bit mask (`2^k - 1`) is accepted,
   /// since it exactly bounds the index to [0, 2^k).  With \p AllowNonContiguous
@@ -897,14 +914,21 @@ private:
       const std::vector<va_t> *CandidateTargetsOverride = nullptr,
       const std::set<va_t> *ReachableInstructions = nullptr,
       bool AllowFixedPointBootstrap = true, bool AllowRawDenseShortcut = true,
-      size_t *AggregateEvidenceBudget = nullptr) const;
+      size_t *AggregateEvidenceBudget = nullptr,
+      bool *SemanticIndexDomainAmbiguous = nullptr) const;
   void detectNormalization(const InsnRecord &Rec, JumpTableInfo &Info);
   void detectStride(const InsnRecord &Rec, JumpTableInfo &Info);
   uint32_t pullBackBound(uint32_t RawBound, const JumpTableInfo &Info) const;
   bool recoverCaseLabels(JumpTable &JT, const JumpTableInfo &Info) const;
+  enum class JumpTableTargetReadPolicy {
+    SwitchPublication,
+    PhysicalBranchIdentity,
+  };
   std::vector<va_t>
   readTableEntries(const BinaryImage &Img, const JumpTableInfo &Info,
-                   std::vector<uint32_t> *KeptIndices = nullptr) const;
+                   std::vector<uint32_t> *KeptIndices = nullptr,
+                   JumpTableTargetReadPolicy Policy =
+                       JumpTableTargetReadPolicy::SwitchPublication) const;
   /// Emulate the dispatch arithmetic to recover targets, sidestepping static
   /// entry-layout classification.  When \p SelfBounding is true the scan is
   /// treated as unbounded (no comparison-guard / relocation-run bound): it
@@ -994,7 +1018,9 @@ private:
   /// candidate; durable entry/exception roots and labels with any outside
   /// relocation source remain roots and therefore fail ambiguous proofs
   /// closed.
-  std::set<va_t> jumpTableProofRoots(const JumpTableInfo &Info) const;
+  std::set<va_t> jumpTableProofRoots(
+      const JumpTableInfo &Info,
+      const std::set<va_t> *DecodedTableAnchors = nullptr) const;
   std::set<va_t> candidateReachableInstructions(
       const InsnRecord &Candidate, const std::vector<va_t> &CandidateTargets,
       const std::set<va_t> &Roots,
@@ -1182,6 +1208,10 @@ private:
   /// It is reset exactly once at resolver entry; its actual use is charged to
   /// the candidate/stage aggregate before the candidate outcome is committed.
   mutable size_t I386GOTOFFProposalEvidenceRemaining = 0;
+  /// Whole-graph GOT-base model completion ran out of its independent
+  /// transactional allowance.  An exact GOTOFF consumer that subsequently
+  /// finds no model is evidence-incomplete, not a definitive non-table.
+  bool I386GOTModelEvidenceIncomplete = false;
   /// Sticky exhaustion bit for the current candidate.  An unfinished exact
   /// GOTOFF query is evidence-incomplete, never definitive proposal loss.
   mutable bool I386GOTOFFProposalEvidenceIncomplete = false;
@@ -1190,13 +1220,13 @@ private:
   /// monotonically decreasing balance; a bounded fixed-point rebuild receives
   /// a fresh allowance for its newly published graph.
   mutable size_t StackTableEvidenceRemaining = 0;
-  /// Exact literal coordinates admitted by the empty-edge mask proof may
-  /// expose case code that has not been decoded yet.  These targets are used
-  /// only to continue recursive descent in the next bounded resolver stage;
-  /// they are never published as a jump table until the complete least fixed
-  /// point closes.
+  /// Exact literal coordinates admitted by an empty-edge mask or modulo proof
+  /// may expose case code that has not been decoded yet.  These targets are
+  /// used only to continue recursive descent in the next bounded resolver
+  /// stage; they are never published as a jump table until the complete least
+  /// fixed point closes.
   mutable std::map<va_t, std::vector<va_t>>
-      MaskFixedPointExplorationTargets;
+      CandidateFixedPointExplorationTargets;
   /// Branches whose stack-table proof stopped because the current stage's
   /// allowance was exhausted.  They are neither failed table proofs nor
   /// tail-call evidence: retain their original opaque indirect-branch identity
@@ -1207,6 +1237,11 @@ private:
   /// for either a switch or a function-pointer tail call, so retain the source
   /// INDIR_BR identity and publish it as unsafe.
   std::set<va_t> IndexDomainEvidenceIncompleteBranches;
+  /// Indirect jumps whose exact physical LOAD/address roles and local table
+  /// destinations prove dispatch identity even when selector-domain recovery
+  /// is definitively rejected.  This certificate preserves branch semantics;
+  /// it never authorizes targets or relocation suppression.
+  std::set<va_t> ValidatedPhysicalJumpTableBranches;
   /// Candidate root sets are stable only within one resolver graph.  Cache
   /// accepted and rejected table bases for the current stage, then clear this
   /// map whenever multi-stage resolution rebuilds reachability.

@@ -304,7 +304,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
 
   // 5) The address table's signature: a run of loader-applied code-pointer
   //    relocations (absolute) or PC-relative-to-code relocations (relative).
-  //    The run length M is the exact address-table entry count, and every
+  //    The bounded run length M is authenticated physical capacity, and every
   //    idxtab byte must be < M — the constraint that distinguishes a genuine
   //    two-level table from an unrelated pair of chained loads.
   bool Relative = false;

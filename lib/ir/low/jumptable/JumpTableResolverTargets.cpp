@@ -38,8 +38,6 @@
 
 namespace neverd {
 
-namespace {
-
 bool isExplicitlyOwnedFunctionFragment(const BinaryImage &Img,
                                        va_t FunctionEntry, va_t Target) {
   const auto &Functions = Img.ExceptionMetadata.Functions;
@@ -66,8 +64,6 @@ bool isExplicitlyOwnedFunctionFragment(const BinaryImage &Img,
   }
   return false;
 }
-
-} // namespace
 
 //===----------------------------------------------------------------------===//
 // isValidTarget — sanity check a resolved target address
@@ -298,7 +294,8 @@ std::optional<va_t> canonicalizeAbsoluteTableCodeTarget(const BinaryImage &Img,
 
 std::vector<va_t>
 CFGBuilder::readTableEntries(const BinaryImage &Img, const JumpTableInfo &Info,
-                             std::vector<uint32_t> *KeptIndices) const {
+                             std::vector<uint32_t> *KeptIndices,
+                             JumpTableTargetReadPolicy Policy) const {
   if (KeptIndices)
     KeptIndices->clear();
   if (!Info.HasBaseAddr || (Info.EntrySize != 1 && Info.EntrySize != 2 &&
@@ -377,12 +374,14 @@ CFGBuilder::readTableEntries(const BinaryImage &Img, const JumpTableInfo &Info,
       Target = *Canonical;
     }
 
-    if (!isValidTarget(Img, Target, CurrentFuncEntry)) {
+    if (Policy == JumpTableTargetReadPolicy::SwitchPublication &&
+        !isValidTarget(Img, Target, CurrentFuncEntry)) {
       if (Bounded)
         return {};
       break;
     }
-    if (Target == PrevTarget) {
+    if (Policy == JumpTableTargetReadPolicy::SwitchPublication &&
+        Target == PrevTarget) {
       if (++DuplicateRun > limits::kMaxDuplicateRun && !Bounded)
         break;
     } else {

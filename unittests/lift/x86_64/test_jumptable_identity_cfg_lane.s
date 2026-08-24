@@ -911,6 +911,28 @@ jt_identity_mask_exceeds_storage:
         retq
         .size   jt_identity_mask_exceeds_storage, .-jt_identity_mask_exceeds_storage
 
+// The authenticated selector still admits eight slots, but only the first four
+// contain code-pointer relocations.  Those four happen to be callable entries;
+// they cannot authorize CALL lowering because slots 4..7 remain feasible and
+// have no authenticated target identity.
+        .globl  jt_identity_mask_exceeds_callback_storage
+        .type   jt_identity_mask_exceeds_callback_storage,@function
+jt_identity_mask_exceeds_callback_storage:
+        movl    %edi, %r10d
+        andl    $7, %r10d
+        leaq    jt_identity_mask_exceeds_callback_table(%rip), %rax
+        jmpq    *(%rax,%r10,8)
+        .size   jt_identity_mask_exceeds_callback_storage, .-jt_identity_mask_exceeds_callback_storage
+
+        .irp callback,0,1,2,3
+        .globl jt_identity_mask_exceeds_callback_\callback
+        .type jt_identity_mask_exceeds_callback_\callback,@function
+jt_identity_mask_exceeds_callback_\callback:
+        movl $(3210 + \callback), %eax
+        retq
+        .size jt_identity_mask_exceeds_callback_\callback, .-jt_identity_mask_exceeds_callback_\callback
+        .endr
+
         .section .rodata,"a",@progbits
         .p2align 2
 .Ldiamond_agree_table:
@@ -1057,6 +1079,20 @@ jt_identity_mask_exceeds_storage:
         .long 0
         .long 0
         .long 0
+        .section .data.rel.ro.jt_mask_exceeds_callback,"aw",@progbits
+        .p2align 3
+        .globl jt_identity_mask_exceeds_callback_table
+        .type jt_identity_mask_exceeds_callback_table,@object
+jt_identity_mask_exceeds_callback_table:
+        .quad jt_identity_mask_exceeds_callback_0
+        .quad jt_identity_mask_exceeds_callback_1
+        .quad jt_identity_mask_exceeds_callback_2
+        .quad jt_identity_mask_exceeds_callback_3
+        .quad 0
+        .quad 0
+        .quad 0
+        .quad 0
+        .size jt_identity_mask_exceeds_callback_table, .-jt_identity_mask_exceeds_callback_table
         .data
         .p2align 2
 .Lselect_store_global:
@@ -1170,6 +1206,47 @@ jt_identity_guard_signed_negative_alias:
         movl    $3599, %eax
         retq
         .size   jt_identity_guard_signed_negative_alias, .-jt_identity_guard_signed_negative_alias
+
+// The same complete signed-negative guard rejection over an exactly sized
+// table whose entries are both authenticated callable functions.  This is a
+// semantic tail-callback classification, not graph/resource incompleteness;
+// no local-frame target exists that would require preserving JMP identity.
+        .globl  jt_identity_guard_signed_callback_tailcall
+        .type   jt_identity_guard_signed_callback_tailcall,@function
+jt_identity_guard_signed_callback_tailcall:
+        movl    %edi, %r10d
+        cmpl    $2, %r10d
+        jge     .Lguard_signed_callback_default
+        leaq    jt_identity_guard_signed_callback_table(%rip), %rax
+        movq    (%rax,%r10,8), %rax
+        jmpq    *%rax
+.Lguard_signed_callback_default:
+        movl    $3598, %eax
+        retq
+        .size   jt_identity_guard_signed_callback_tailcall, .-jt_identity_guard_signed_callback_tailcall
+
+        .globl  jt_identity_guard_callback_a
+        .type   jt_identity_guard_callback_a,@function
+jt_identity_guard_callback_a:
+        movl    $3580, %eax
+        retq
+        .size   jt_identity_guard_callback_a, .-jt_identity_guard_callback_a
+
+        .globl  jt_identity_guard_callback_b
+        .type   jt_identity_guard_callback_b,@function
+jt_identity_guard_callback_b:
+        movl    $3581, %eax
+        retq
+        .size   jt_identity_guard_callback_b, .-jt_identity_guard_callback_b
+
+        .section .data.rel.ro.jt_identity_guard_signed_callback,"aw",@progbits
+        .p2align 3
+        .globl  jt_identity_guard_signed_callback_table
+        .type   jt_identity_guard_signed_callback_table,@object
+jt_identity_guard_signed_callback_table:
+        .quad   jt_identity_guard_callback_a
+        .quad   jt_identity_guard_callback_b
+        .size   jt_identity_guard_signed_callback_table, .-jt_identity_guard_signed_callback_table
 
         .section .rodata,"a",@progbits
         .p2align 2

@@ -115,7 +115,8 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   LostValidatedJumpTableBranches.clear();
   StackTableEvidenceIncompleteBranches.clear();
   IndexDomainEvidenceIncompleteBranches.clear();
-  MaskFixedPointExplorationTargets.clear();
+  ValidatedPhysicalJumpTableBranches.clear();
+  CandidateFixedPointExplorationTargets.clear();
   PublishedReachableInsns.clear();
   DecodedInstructionCount = 0;
   LiftedInstructionCount = 0;
@@ -132,10 +133,11 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   I386GOTOFFModelReachCache.clear();
   I386GOTOFFProposalEvidenceRemaining = 0;
   I386GOTOFFProposalEvidenceIncomplete = false;
-  StackTableEvidenceRemaining = std::min<size_t>(
-      limits::kMaxJumpTableEvidenceWork,
-      StackTableEvidenceBudgetForTesting.value_or(
-          limits::kMaxJumpTableEvidenceWork));
+  I386GOTModelEvidenceIncomplete = false;
+  StackTableEvidenceRemaining =
+      std::min<size_t>(limits::kMaxJumpTableEvidenceWork,
+                       StackTableEvidenceBudgetForTesting.value_or(
+                           limits::kMaxJumpTableEvidenceWork));
   PreviouslyPublishedJumpTableBranches =
       std::move(PendingPreviouslyPublishedJumpTableBranches);
   PendingPreviouslyPublishedJumpTableBranches.clear();
@@ -785,6 +787,10 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   for (va_t Addr : IndexDomainEvidenceIncompleteBranches)
     if (Insns.count(Addr))
       Func.UnsafeIndirectBranchAddresses.insert(Addr);
+  for (va_t Addr : ValidatedPhysicalJumpTableBranches)
+    if (auto It = Insns.find(Addr);
+        It != Insns.end() && It->second.JumpTableTargets.empty())
+      Func.UnsafeIndirectBranchAddresses.insert(Addr);
 
   LLVM_DEBUG(llvm::dbgs() << "CFG built: " << Func.Blocks.size()
                           << " blocks for " << Func.Name << " @ 0x"
@@ -1088,6 +1094,7 @@ std::set<va_t> CFGBuilder::currentRelocatedInstructionTableAnchors(
 
 void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
   RelocatedInstructionScalarModelOccurrences.clear();
+  I386GOTModelEvidenceIncomplete = false;
   for (I386GetPcOccurrence &Occurrence : I386GetPcOccurrences)
     Occurrence.RawPCAuthenticated = false;
   if (Img.Arch != Arch::X86 || Img.getPointerSize() != 4 ||
@@ -1099,8 +1106,11 @@ void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
       I386GOTModelEvidenceBudgetForTesting.value_or(
           limits::kMaxJumpTableEvidenceWork));
   auto Consume = [&](size_t Amount = 1) {
-    if (Amount > EvidenceWork)
+    if (Amount > EvidenceWork) {
+      EvidenceWork = 0;
+      I386GOTModelEvidenceIncomplete = true;
       return false;
+    }
     EvidenceWork -= Amount;
     return true;
   };
@@ -1340,10 +1350,12 @@ void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
   if (Queries.empty())
     return;
   bool AnalysisComplete = false;
-  const std::vector<bool> Matches =
-      tableValuesMatchAtUses(Queries, &AnalysisComplete);
-  if (!AnalysisComplete || Matches.size() != Queries.size())
+  const std::vector<bool> Matches = tableValuesMatchAtUses(
+      Queries, &AnalysisComplete, nullptr, InvalidVA, nullptr, &EvidenceWork);
+  if (!AnalysisComplete || Matches.size() != Queries.size()) {
+    I386GOTModelEvidenceIncomplete = true;
     return;
+  }
 
   for (const PendingModel &Model : Pending) {
     if (!Model.Op || Model.QueryIndex >= Matches.size() ||
@@ -2235,6 +2247,43 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
 
   bool ReachedFixedPoint = false;
   for (int Stage = 0; Stage < limits::kMaxMultiStageRetries; ++Stage) {
+    // Incomplete-evidence branch identity is persistent safety state.  Rebuild
+    // it transactionally with the proposal graph: a stage may clear an old
+    // marker only after every candidate and the proposal commit tail have
+    // completed.  Moving the committed sets aside also avoids an unmetered
+    // deep snapshot; the empty member sets are the stage-local shadows.
+    std::set<va_t> SavedStackTableEvidenceIncompleteBranches;
+    std::set<va_t> SavedIndexDomainEvidenceIncompleteBranches;
+    SavedStackTableEvidenceIncompleteBranches.swap(
+        StackTableEvidenceIncompleteBranches);
+    SavedIndexDomainEvidenceIncompleteBranches.swap(
+        IndexDomainEvidenceIncompleteBranches);
+    bool IncompleteBranchMarkerStageActive = true;
+    auto RestoreIncompleteBranchMarkers = [&]() {
+      if (!IncompleteBranchMarkerStageActive)
+        return;
+      // A failed stage cannot commit deletion of an entry marker, but newly
+      // observed resource-incomplete candidates must remain fail-closed when
+      // bounded retries end.  Node-merge preserves both sets without a second
+      // allocation; duplicate working nodes are destroyed by the cleanup
+      // reserve charged below.
+      SavedStackTableEvidenceIncompleteBranches.merge(
+          StackTableEvidenceIncompleteBranches);
+      SavedIndexDomainEvidenceIncompleteBranches.merge(
+          IndexDomainEvidenceIncompleteBranches);
+      StackTableEvidenceIncompleteBranches.clear();
+      IndexDomainEvidenceIncompleteBranches.clear();
+      StackTableEvidenceIncompleteBranches.swap(
+          SavedStackTableEvidenceIncompleteBranches);
+      IndexDomainEvidenceIncompleteBranches.swap(
+          SavedIndexDomainEvidenceIncompleteBranches);
+      IncompleteBranchMarkerStageActive = false;
+    };
+    auto CommitIncompleteBranchMarkers = [&]() {
+      SavedStackTableEvidenceIncompleteBranches.clear();
+      SavedIndexDomainEvidenceIncompleteBranches.clear();
+      IncompleteBranchMarkerStageActive = false;
+    };
     // Reachability and relocation-root suppression can change after every
     // published candidate.  Reuse proposal roots within this stage only; the
     // fixed retry bound caps total work, while each newly published resolver
@@ -2245,9 +2294,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
         std::min<size_t>(limits::kMaxJumpTableEvidenceWork,
                          StackTableEvidenceBudgetForTesting.value_or(
                              limits::kMaxJumpTableEvidenceWork));
-    StackTableEvidenceIncompleteBranches.clear();
-    IndexDomainEvidenceIncompleteBranches.clear();
-    MaskFixedPointExplorationTargets.clear();
+    CandidateFixedPointExplorationTargets.clear();
     I386GOTOFFProposalRootCache.clear();
     I386GOTOFFModelReachCache.clear();
     NextStrongJumpTableProposals.clear();
@@ -2379,9 +2426,9 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
     const size_t PriorLookupWork =
         OrderedLookupWork(PriorStrongJumpTableProposals.size());
     const size_t OutcomeLookupWork = OrderedLookupWork(Insns.size());
-    const size_t MaskLookupWork =
-        OrderedLookupWork(std::max(Insns.size(),
-                                   MaskFixedPointExplorationTargets.size()));
+    const size_t MaskLookupWork = OrderedLookupWork(
+        std::max(Insns.size(), CandidateFixedPointExplorationTargets.size()));
+    const size_t MarkerRollbackLookupWork = OrderedLookupWork(Insns.size()) + 1;
     if (!ConsumeProposalStageProducts(
             {// Inventory scan, Resolved/Prior lookup, retained candidate,
              // and ordered outcome insert plus its node.
@@ -2394,9 +2441,19 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
              {Insns.size(), 3},
              {Insns.size(), InsnLookupWork},
              {Insns.size(), ResolvedLookupWork},
-             {Insns.size(), MaskLookupWork}})) {
+             {Insns.size(), MaskLookupWork},
+             // Incomplete-marker state is part of the same transaction.  A
+             // successful commit destroys every saved node; rollback instead
+             // destroys at most one stack and one index marker per candidate
+             // before swapping the saved sets back in place.
+             {SavedStackTableEvidenceIncompleteBranches.size(), 1},
+             {SavedIndexDomainEvidenceIncompleteBranches.size(), 1},
+             {Insns.size(), 2},
+             {Insns.size(), MarkerRollbackLookupWork},
+             {Insns.size(), MarkerRollbackLookupWork}})) {
       CandidateProposalStageActive = false;
       NextStrongJumpTableProposals.clear();
+      RestoreIncompleteBranchMarkers();
       continue;
     }
     CandidateAddrs.reserve(Insns.size());
@@ -2425,7 +2482,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       const size_t CurrentResolvedLookupWork =
           OrderedLookupWork(std::max(Insns.size(), ResolvedTableInfo.size()));
       const size_t CurrentMaskLookupWork = OrderedLookupWork(
-          std::max(Insns.size(), MaskFixedPointExplorationTargets.size()));
+          std::max(Insns.size(), CandidateFixedPointExplorationTargets.size()));
       if (!ConsumeProposalStageProducts(
               {// Insns lookup plus the resolver's erase and the three outer
                // before/after comparison lookups.  Resolver writes debit the
@@ -2526,7 +2583,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
         ProposalCleanupEvidenceForTesting.OldStateReserved = true;
       if (PriorInfo != ResolvedTableInfo.end())
         OldInfo.emplace(std::move(PriorInfo->second));
-      MaskFixedPointExplorationTargets.erase(UA);
+      CandidateFixedPointExplorationTargets.erase(UA);
       JumpTableProofContextComplete = true;
       auto Targets = resolveJumpTable(Img, It->second);
       JumpTableProofContextComplete = false;
@@ -2563,11 +2620,11 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       }
 
       if (!ConsumeProposalStageEvidence(
-              OrderedLookupWork(MaskFixedPointExplorationTargets.size())))
+              OrderedLookupWork(CandidateFixedPointExplorationTargets.size())))
         break;
-      auto Exploration = MaskFixedPointExplorationTargets.find(UA);
+      auto Exploration = CandidateFixedPointExplorationTargets.find(UA);
       if (PublishedTargets.empty() &&
-          Exploration != MaskFixedPointExplorationTargets.end()) {
+          Exploration != CandidateFixedPointExplorationTargets.end()) {
         if (!PrepayTargetSetOperations(Exploration->second.size()))
           break;
         for (va_t T : Exploration->second) {
@@ -2603,11 +2660,12 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
         if (It != Insns.end())
           It->second.JumpTableTargets.clear();
         ResolvedTableInfo.erase(Addr);
-        MaskFixedPointExplorationTargets.erase(Addr);
+        CandidateFixedPointExplorationTargets.erase(Addr);
       }
       NextStrongJumpTableProposals.clear();
       StrongJumpTableProposalOutcomes.clear();
       CandidateProposalStageActive = false;
+      RestoreIncompleteBranchMarkers();
       ProposalStageRollbackMutatedQuarantineForTesting |=
           QuarantinedJumpTableProposals.size() != QuarantineSizeAtStageStart;
       rebuildBlocks(Func);
@@ -2779,13 +2837,23 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       // proof metadata in the following round is a fixed point; a metadata
       // cycle consumes the bounded retry budget and is discarded below.
       if (RefreshedProofMetadata || ProposalUniverseChanged) {
+        // This stage committed proposal metadata, but the next round observes
+        // a different proof universe.  Keep both the prior safety markers and
+        // any newly incomplete candidates until a later no-progress round can
+        // revalidate their removal on the stable graph.
+        RestoreIncompleteBranchMarkers();
         rebuildBlocks(Func);
         continue;
       }
+      CommitIncompleteBranchMarkers();
       ReachedFixedPoint = true;
       break;
     }
 
+    // Newly decoded targets change reaching definitions and table ownership.
+    // Marker deletion is a declassification and therefore cannot commit on a
+    // graph-growing round; carry the conservative union into revalidation.
+    RestoreIncompleteBranchMarkers();
     completeExactAArch64PageBases(Img);
     splitBlocks();
     rebuildBlocks(Func);

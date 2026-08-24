@@ -29,6 +29,7 @@
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Support/DivisionByConstantInfo.h"
 #include "llvm/Support/MathExtras.h"
@@ -889,11 +890,12 @@ static ResolverValue resolverSlice(
 /// Prove the complete unsigned remainder recipe emitted for division by a
 /// constant.  This is deliberately a structural theorem over the expression
 /// produced by the point-sensitive resolver, not a lexical recognition of a
-/// multiply and shift: the exact same dividend expression must feed both the
-/// LLVM-defined quotient recipe and the final `x - q*N` back-multiply.
+/// multiply and shift: direct URem, explicit UDiv, and LLVM's reciprocal
+/// quotient lowering each require the exact scalar N, while the latter two
+/// require the same dividend expression in the quotient and `x - q*N`.
 /// Consequently a sibling quotient, a predicated reaching definition, or one
 /// wrong magic/shift bit cannot authorize a table domain.
-static bool provesLLVMUnsignedModuloRecipe(
+static bool provesExactUnsignedModuloRecipe(
     symbolic::SymContext &Ctx, symbolic::SymRef Index, uint64_t Divisor,
     const std::function<bool(size_t)> &ConsumeWork = {},
     bool *AnalysisIncomplete = nullptr) {
@@ -925,26 +927,37 @@ static bool provesLLVMUnsignedModuloRecipe(
     Remainder = Ctx.operand(Remainder, 0);
   }
   const uint32_t Width = Ctx.width(Remainder);
-  if (Width < 2 || Width > 32 || Divisor >= (uint64_t{1} << Width)) {
-    // The supported lowering uses a 2W-bit full product.  Keep the theorem's
-    // bit-blast-free construction bounded until a production 64-bit modulo
-    // dispatch provides a concrete 128-bit recipe test.
+  if (Width < 2 || Width > 64)
+    return false;
+  if (Width < 64 && Divisor >= (uint64_t{1} << Width))
+    return false;
+
+  // At -O0 the exact machine operation can survive directly as urem.  It is
+  // the same occurrence-level theorem as the reciprocal lowering below: the
+  // divisor must be this scalar N in the current CFG snapshot, while the
+  // dividend remains an arbitrary bit-vector.  Never admit srem here; a
+  // negative signed remainder does not establish an unsigned table domain.
+  if (Ctx.op(Remainder) == SymOp::URem &&
+      Ctx.numOperands(Remainder) == 2) {
+    const SymRef CandidateDivisor = Ctx.operand(Remainder, 1);
+    const std::optional<llvm::APInt> ExactDivisor =
+        Ctx.asConst(CandidateDivisor);
+    if (ExactDivisor && ExactDivisor->getBitWidth() == Width &&
+        ExactDivisor->getActiveBits() <= 64 &&
+        ExactDivisor->getZExtValue() == Divisor)
+      return true;
+  }
+
+  // Builders below intern comparison forms into the same context.  Restrict
+  // structural searches to nodes that came from the resolved selector so a
+  // failed candidate cannot seed a later proof with theorem-created nodes.
+  const size_t ExpressionNodeCount = Ctx.numNodes();
+  if (ExpressionNodeCount > std::numeric_limits<uint32_t>::max()) {
+    if (AnalysisIncomplete)
+      *AnalysisIncomplete = true;
     return false;
   }
 
-  const llvm::APInt D(Width, Divisor, /*isSigned=*/false,
-                      /*implicitTrunc=*/true);
-  if (D.isZero() || D.isOne())
-    return false;
-  const llvm::UnsignedDivisionByConstantInfo Magic =
-      llvm::UnsignedDivisionByConstantInfo::get(
-          D, /*LeadingZeros=*/0, /*AllowEvenDivisorOptimization=*/true,
-          /*AllowWidenOptimization=*/false);
-  if (Magic.Widen || Magic.Magic.getBitWidth() != Width ||
-      Magic.PreShift >= Width || Magic.PostShift >= Width)
-    return false;
-
-  const uint32_t WideWidth = Width * 2;
   auto consumeSortWork = [&](size_t Count) {
     const size_t Levels =
         Count > 1 ? llvm::Log2_64_Ceil(static_cast<uint64_t>(Count)) : 0;
@@ -1056,6 +1069,93 @@ static bool provesLLVMUnsignedModuloRecipe(
     return true;
   };
 
+  // AArch64 and other -O0 paths can preserve the exact machine identity
+  //
+  //   x - (x /u N) * N.
+  //
+  // Search only UDiv factors of the selector's top-level subtraction term,
+  // rebuild that one identity with the context's canonical arithmetic, and
+  // require node equality with the selector.  This keeps reciprocal recipes
+  // on their established budget path while admitting commuted multiplication
+  // and rejecting SDiv/SRem, a foreign dividend, or either scalar differing
+  // from N; it is not a generic range or algebraic-equivalence fallback.
+  auto matchesExplicitUnsignedDivision = [&](SymRef Quotient) {
+    if (Ctx.op(Quotient) != SymOp::UDiv ||
+        Ctx.width(Quotient) != Width || Ctx.numOperands(Quotient) != 2)
+      return false;
+    const SymRef Dividend = Ctx.operand(Quotient, 0);
+    const SymRef CandidateDivisor = Ctx.operand(Quotient, 1);
+    const std::optional<llvm::APInt> ExactDivisor =
+        Ctx.asConst(CandidateDivisor);
+    if (!ExactDivisor || Ctx.width(Dividend) != Width ||
+        ExactDivisor->getBitWidth() != Width ||
+        ExactDivisor->getActiveBits() > 64 ||
+        ExactDivisor->getZExtValue() != Divisor)
+      return false;
+    const SymRef Product = mkMul2Budgeted(Quotient, CandidateDivisor);
+    const SymRef Expected =
+        Product ? mkSubBudgeted(Dividend, Product) : SymRef{};
+    if (!Expected)
+      return false;
+    return Expected == Remainder;
+  };
+  llvm::SmallVector<SymRef, 4> ExplicitQuotients;
+  if (Ctx.op(Remainder) == SymOp::Add) {
+    const llvm::ArrayRef<SymRef> Terms = Ctx.operands(Remainder);
+    if (!consume(Terms.size()))
+      return false;
+    for (SymRef Term : Terms) {
+      if (!consume())
+        return false;
+      if (Ctx.op(Term) != SymOp::Mul)
+        continue;
+      const llvm::ArrayRef<SymRef> Factors = Ctx.operands(Term);
+      if (!consume(Factors.size()))
+        return false;
+      for (SymRef Factor : Factors) {
+        if (!consume())
+          return false;
+        if (Ctx.op(Factor) == SymOp::UDiv) {
+          if (!consume())
+            return false;
+          ExplicitQuotients.push_back(Factor);
+        }
+      }
+    }
+  }
+  // operands() borrows the context's shared operand pool.  Compare only after
+  // every candidate ref has been copied: the canonical builders may intern new
+  // nodes and reallocate that pool when a candidate is a completed negative.
+  for (SymRef Quotient : ExplicitQuotients) {
+    if (!consume())
+      return false;
+    if (matchesExplicitUnsignedDivision(Quotient))
+      return true;
+  }
+
+  if (Width > 32) {
+    // The two exact machine identities above need no widened reciprocal
+    // construction and therefore remain valid for a 64-bit selector.  The
+    // compiler-reciprocal theorem below uses a bounded 2W-bit full product and
+    // is deliberately limited to widths whose double fits this symbolizer's
+    // 64-bit bit-vector envelope.
+    return false;
+  }
+
+  const llvm::APInt D(Width, Divisor, /*isSigned=*/false,
+                      /*implicitTrunc=*/true);
+  if (D.isZero() || D.isOne())
+    return false;
+  const llvm::UnsignedDivisionByConstantInfo Magic =
+      llvm::UnsignedDivisionByConstantInfo::get(
+          D, /*LeadingZeros=*/0, /*AllowEvenDivisorOptimization=*/true,
+          /*AllowWidenOptimization=*/false);
+  if (Magic.Widen || Magic.Magic.getBitWidth() != Width ||
+      Magic.PreShift >= Width || Magic.PostShift >= Width)
+    return false;
+
+  const uint32_t WideWidth = Width * 2;
+
   struct QuotientForm {
     SymRef Narrow;
     SymRef Wide;
@@ -1075,14 +1175,6 @@ static bool provesLLVMUnsignedModuloRecipe(
     return true;
   };
 
-  // Iterate only nodes that belonged to the resolved selector expression.
-  // Builders below intern derived comparison forms into the same context.
-  const size_t ExpressionNodeCount = Ctx.numNodes();
-  if (ExpressionNodeCount > std::numeric_limits<uint32_t>::max()) {
-    if (AnalysisIncomplete)
-      *AnalysisIncomplete = true;
-    return false;
-  }
   // Low-bit extraction is a ring homomorphism for addition and
   // multiplication.  Backends may therefore spell q*N in a wider address
   // container (including factored LEAs) before taking the low machine word,
@@ -1127,6 +1219,27 @@ static bool provesLLVMUnsignedModuloRecipe(
                Ctx.numOperands(Value) == 1 &&
                Ctx.width(Ctx.operand(Value, 0)) == Width) {
       Result = Ctx.operand(Value, 0);
+    } else if (Op == SymOp::Shl && ValueWidth == Width &&
+               Ctx.numOperands(Value) == 2) {
+      // A width-preserving constant left shift is multiplication by an exact
+      // power of two in the same modulo-2^W ring.  Backends routinely use this
+      // spelling inside factored q*N back-multiplies (for example
+      // `(q << 2) * 3` for q*12).  Normalize only an in-range scalar constant;
+      // a variable, oversized, or differently sized shift remains opaque and
+      // therefore cannot authenticate a modulo domain.
+      const SymRef Input = Ctx.operand(Value, 0);
+      const SymRef Amount = Ctx.operand(Value, 1);
+      const std::optional<llvm::APInt> Shift = Ctx.asConst(Amount);
+      if (!Shift || Shift->getActiveBits() > 64 ||
+          Shift->getZExtValue() >= Width)
+        return {};
+      SymRef Low = normalizeLowRing(Input, Depth + 1);
+      if (!Low || !consume(2))
+        return {};
+      const llvm::APInt Factor =
+          llvm::APInt::getOneBitSet(Width,
+                                    static_cast<unsigned>(Shift->getZExtValue()));
+      Result = mkMul2Budgeted(Low, Ctx.mkConst(Factor));
     } else if ((Op == SymOp::Add || Op == SymOp::Mul) && ValueWidth >= Width) {
       const llvm::ArrayRef<SymRef> Operands = Ctx.operands(Value);
       if (Operands.empty() || !consume(Operands.size()))
@@ -1890,6 +2003,10 @@ bool CFGBuilder::exactI386ModelZeroReaches(const LowOp &Use, int BaseSide,
       CurrentImg->getPointerSize() != 4 || BaseSide < 0 ||
       BaseSide >= Use.NumInputs || Use.Inputs[BaseSide].Size != 4)
     return false;
+  if (I386GOTModelEvidenceIncomplete) {
+    I386GOTOFFProposalEvidenceIncomplete = true;
+    return false;
+  }
   if (!consumeI386GOTOFFProposalEvidence(
           RelocatedInstructionScalarModelOccurrences.size()))
     return false;
@@ -2076,27 +2193,23 @@ bool CFGBuilder::exactI386ModelZeroReaches(const LowOp &Use, int BaseSide,
     return Cached->second;
   }
 
-  // tableValuesMatchAtUses builds a whole-function proof graph.  Charge its
-  // concrete instruction/op inventory once per exact use/root-set query.
-  // Restore candidate-local roots on exhaustion so the failed proof is
-  // transactional.
-  if (!consumeI386GOTOFFProposalEvidence(Insns.size())) {
-    ActiveJumpTableProofRoots = SavedProofRoots;
-    return false;
-  }
-  for (const auto &[Addr, Insn] : Insns) {
-    (void)Addr;
-    if (!consumeI386GOTOFFProposalEvidence(Insn.Ops.size())) {
-      ActiveJumpTableProofRoots = SavedProofRoots;
-      return false;
-    }
-  }
+  // tableValuesMatchAtUses builds and propagates a whole-function proof graph.
+  // Give it the same candidate-local account so graph construction, state
+  // propagation and symbolic comparison cannot restart an unmetered private
+  // allowance.  An unfinished query is not a cacheable false fact: a later
+  // tail-call conversion must see the sticky incomplete bit and preserve the
+  // table-shaped branch opaquely.
   bool AnalysisComplete = false;
   const std::vector<bool> Matches = tableValuesMatchAtUses(
       {{Use.Inputs[BaseSide], Use.Addr, Use.Seq, std::move(Alternatives)}},
-      &AnalysisComplete);
-  const bool Result =
-      AnalysisComplete && Matches.size() == 1 && Matches.front();
+      &AnalysisComplete, nullptr, InvalidVA, nullptr,
+      &I386GOTOFFProposalEvidenceRemaining);
+  if (!AnalysisComplete || Matches.size() != 1) {
+    I386GOTOFFProposalEvidenceIncomplete = true;
+    ActiveJumpTableProofRoots = SavedProofRoots;
+    return false;
+  }
+  const bool Result = Matches.front();
   I386GOTOFFModelReachCache.emplace(ReachKey, Result);
   ActiveJumpTableProofRoots = SavedProofRoots;
   return Result;
@@ -4023,15 +4136,11 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       Work -= Amount;
       return true;
     };
-    auto unknown = [&](const ResolverValue &Node) -> symbolic::SymRef {
+    auto unknownNamed = [&](std::string Name,
+                            uint32_t Width) -> symbolic::SymRef {
       if (!consumeSymbolWork())
         return {};
-      std::string Name = Node->Root;
-      if (Name.empty())
-        Name =
-            "opaque:" + std::to_string(reinterpret_cast<uintptr_t>(Node.get()));
-      const auto Key =
-          std::make_pair(std::move(Name), uint32_t(Node->Size) * 8u);
+      const auto Key = std::make_pair(std::move(Name), Width);
       auto It = Variables.find(Key);
       if (It == Variables.end()) {
         // Prepay both the context node and the retained map entry.
@@ -4041,6 +4150,13 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                  .first;
       }
       return It->second;
+    };
+    auto unknown = [&](const ResolverValue &Node) -> symbolic::SymRef {
+      std::string Name = Node->Root;
+      if (Name.empty())
+        Name =
+            "opaque:" + std::to_string(reinterpret_cast<uintptr_t>(Node.get()));
+      return unknownNamed(std::move(Name), uint32_t(Node->Size) * 8u);
     };
 
     std::function<symbolic::SymRef(const ResolverValue &, unsigned)> Symbolize =
@@ -4102,20 +4218,14 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       case ResolverValueExpr::Kind::Merge: {
         if (Node->Inputs.empty())
           break;
-        // An exact modulo-recipe theorem needs the algebra surrounding a CFG
-        // value, not an expansion of every loop iteration that can feed it.
-        // A named merge root identifies one block-entry lane in this immutable
-        // graph snapshot.  Model that whole incoming value as one arbitrary
-        // bit-vector: the quotient and back-subtract must still consume the
-        // same root, while a sibling merge, local rewrite, or differently
-        // named lane remains independent.  This also keeps final fixed-point
-        // replay invariant under the addition of authenticated backedges.
-        if (ExactModuloRecipeOnly && !Node->Root.empty()) {
-          Result = unknown(Node);
-          break;
-        }
-        // The hoist predicate scans every arm before recursion; debit that
-        // complete prepass and reject a malformed null first arm safely.
+        // Inspect a uniform extension before collapsing a named merge to an
+        // arbitrary block-entry value.  The resolver can represent the same
+        // predecessor lane once at its machine width and once after every arm
+        // applies the same zext/sext.  Treating those named merges as unrelated
+        // SymVar32/SymVar64 roots destroys the dividend identity of an exact
+        // modulo recipe.  Hoisting preserves the real relation
+        //   merge(ext(x_i)) == ext(merge(x_i))
+        // without inspecting or constraining any predecessor value.
         if (!consumeSymbolWork(Node->Inputs.size()) ||
             !Node->Inputs.front())
           break;
@@ -4131,6 +4241,67 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                                  Arm->Input->Size ==
                                      Node->Inputs.front()->Input->Size;
                         });
+        std::optional<ResolverValueExpr::Kind> EnvelopeKind;
+        uint16_t EnvelopeInputSize = 0;
+        std::function<bool(const ResolverValue &, unsigned)>
+            CollectUniformExtensionEnvelope =
+                [&](const ResolverValue &Arm, unsigned EnvelopeDepth) {
+                  if (!Arm || Arm->Size != Node->Size ||
+                      EnvelopeDepth >
+                          limits::kMaxJumpTableGuardExpressionDepth ||
+                      !consumeSymbolWork())
+                    return false;
+                  if ((Arm->K == ResolverValueExpr::Kind::ZeroExtend ||
+                       Arm->K == ResolverValueExpr::Kind::SignExtend) &&
+                      Arm->Input && Arm->Input->Size < Arm->Size) {
+                    if (!EnvelopeKind) {
+                      EnvelopeKind = Arm->K;
+                      EnvelopeInputSize = Arm->Input->Size;
+                      return true;
+                    }
+                    return *EnvelopeKind == Arm->K &&
+                           EnvelopeInputSize == Arm->Input->Size;
+                  }
+                  if (Arm->K != ResolverValueExpr::Kind::Merge ||
+                      Arm->Inputs.empty() ||
+                      !consumeSymbolWork(Arm->Inputs.size()))
+                    return false;
+                  return std::all_of(
+                      Arm->Inputs.begin(), Arm->Inputs.end(),
+                      [&](const ResolverValue &Nested) {
+                        return CollectUniformExtensionEnvelope(
+                            Nested, EnvelopeDepth + 1);
+                      });
+                };
+        const bool ExactHoistExtension =
+            ExactModuloRecipeOnly && !Node->Root.empty() &&
+            std::all_of(Node->Inputs.begin(), Node->Inputs.end(),
+                        [&](const ResolverValue &Arm) {
+                          return CollectUniformExtensionEnvelope(Arm, 0);
+                        }) &&
+            EnvelopeKind.has_value();
+        // An exact modulo-recipe theorem needs the algebra surrounding a CFG
+        // value, not an expansion of every loop iteration that can feed it.
+        // A named merge root identifies one block-entry lane in this immutable
+        // graph snapshot.  Model that whole incoming value as one arbitrary
+        // bit-vector: the quotient and back-subtract must still consume the
+        // same root, while a sibling merge, local rewrite, or differently
+        // named lane remains independent.  This also keeps final fixed-point
+        // replay invariant under the addition of authenticated backedges.
+        if (ExactModuloRecipeOnly && !Node->Root.empty()) {
+          if (!ExactHoistExtension) {
+            Result = unknown(Node);
+            break;
+          }
+          symbolic::SymRef Input = unknownNamed(
+              Node->Root, uint32_t(EnvelopeInputSize) * 8u);
+          if (!Input || !consumeSymbolWork())
+            break;
+          Result = *EnvelopeKind == ResolverValueExpr::Kind::ZeroExtend
+                       ? Ctx.mkZExt(Input, NodeWidth)
+                       : Ctx.mkSExt(Input, NodeWidth);
+          break;
+        }
         auto SymbolizeArm = [&](const ResolverValue &Arm) {
           return Symbolize(HoistExtension ? Arm->Input : Arm, Depth + 1);
         };
@@ -4254,17 +4425,17 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       Options.Blast.MaxGates = limits::kMaxJumpTableGuardSolverGates;
       return Options;
     };
-    if (provesLLVMUnsignedModuloRecipe(Ctx, Index, Bound,
-                                       consumeSymbolWork, &Exhausted)) {
+    if (provesExactUnsignedModuloRecipe(Ctx, Index, Bound,
+                                        consumeSymbolWork, &Exhausted)) {
       ProofComplete = true;
       return true;
     }
     SymbolBudgetExhausted |= Exhausted;
     if (ExactModuloRecipeOnly) {
-      // A fully symbolized expression that does not match the exact LLVM
-      // recipe is a completed negative structural result.  In particular, do
-      // not ask SAT whether the unrelated expression merely happens to fit
-      // below the proposed table capacity.
+      // A fully symbolized expression that does not match an exact unsigned
+      // modulo recipe is a completed negative structural result.  In
+      // particular, do not ask SAT whether the unrelated expression merely
+      // happens to fit below the proposed table capacity.
       ProofComplete = !Exhausted;
       return false;
     }

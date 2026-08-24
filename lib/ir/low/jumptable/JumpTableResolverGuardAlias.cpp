@@ -363,12 +363,19 @@ std::optional<SymRef> symbolizeGuardExpr(const GuardExprPtr &Expr,
                                             Inputs);
 }
 
-bool proveDenseGuardPrefix(GuardSymbolization &State, SymRef ReachesTable,
-                           uint32_t Prefix) {
+enum class DenseGuardPrefixProof : uint8_t {
+  Proven,
+  Counterexample,
+  Incomplete,
+};
+
+DenseGuardPrefixProof proveDenseGuardPrefix(GuardSymbolization &State,
+                                            SymRef ReachesTable,
+                                            uint32_t Prefix) {
   if (!State.Index || !ReachesTable || State.Ctx.width(ReachesTable) != 1 ||
       Prefix < limits::kMinJumpTableEntries ||
       Prefix > limits::kMaxJumpTableEntries)
-    return false;
+    return DenseGuardPrefixProof::Incomplete;
   const uint32_t IndexWidth = State.Ctx.width(State.Index);
   SymRef Expected = State.Ctx.mkUlt(
       State.Index, State.Ctx.mkConst(IndexWidth, uint64_t(Prefix)));
@@ -381,8 +388,16 @@ bool proveDenseGuardPrefix(GuardSymbolization &State, SymRef ReachesTable,
   Options.Sat.MaxWatchVisits = limits::kMaxJumpTableGuardSolverWatchVisits;
   Options.Blast.MaxWidth = 64;
   Options.Blast.MaxGates = limits::kMaxJumpTableGuardSolverGates;
-  return solver::checkSat(State.Ctx, Counterexample, nullptr, Options) ==
-         solver::SatResult::Unsat;
+  switch (solver::checkSat(State.Ctx, Counterexample, nullptr, Options)) {
+  case solver::SatResult::Unsat:
+    return DenseGuardPrefixProof::Proven;
+  case solver::SatResult::Sat:
+    return DenseGuardPrefixProof::Counterexample;
+  case solver::SatResult::Unknown:
+  case solver::SatResult::Invalid:
+    return DenseGuardPrefixProof::Incomplete;
+  }
+  return DenseGuardPrefixProof::Incomplete;
 }
 
 std::optional<uint64_t> evaluateGuardExpr(const GuardExprPtr &Expr,
@@ -533,16 +548,18 @@ std::optional<uint64_t> evaluateGuardExpr(const GuardExprPtr &Expr,
 // inferBoundsFromPreciseGuards — shared CFG/value/polarity bound evidence
 //===----------------------------------------------------------------------===//
 
-bool CFGBuilder::inferBoundsFromPreciseGuards(
-    const InsnRecord &Rec, JumpTableInfo &Info,
-    size_t *CandidateEvidenceBudget) {
+bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
+                                              JumpTableInfo &Info,
+                                              size_t *CandidateEvidenceBudget) {
+  Info.IncompleteGuardDomain = false;
+  Info.SemanticGuardDomainAmbiguous = false;
   if ((!Info.IndexValueAtUse.isReg() && !Info.IndexValueAtUse.isTemp()) ||
       Info.IndexUseAddr == InvalidVA || Info.IndexUseSeq < 0 ||
       Info.TableLoadAddr == InvalidVA)
     return false;
   if (Info.IndexValueAtUse.Size == 0 ||
       Info.IndexValueAtUse.Size > sizeof(uint64_t)) {
-    Info.IncompleteGuardDomain = true;
+    Info.SemanticGuardDomainAmbiguous = true;
     return false;
   }
   if (!CandidateEvidenceBudget) {
@@ -585,6 +602,10 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
   };
   auto failIncomplete = [&]() {
     Info.IncompleteGuardDomain = true;
+    return false;
+  };
+  auto failSemantic = [&]() {
+    Info.SemanticGuardDomainAmbiguous = true;
     return false;
   };
   struct GuardSyntaxNode;
@@ -1404,7 +1425,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
 
   if (IndexGuards.empty()) {
     if (SawControllingGuard)
-      Info.IncompleteGuardDomain = true;
+      Info.SemanticGuardDomainAmbiguous = true;
     return false;
   }
 
@@ -1449,10 +1470,8 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
     if (!SymbolWork || !consumeGuardBuildWork(*SymbolWork))
       return failIncomplete();
     std::optional<SymRef> Condition = symbolizeGuardExpr(Expr, Symbolic);
-    if (!Condition) {
-      Info.IncompleteGuardDomain = true;
-      return false;
-    }
+    if (!Condition)
+      return failSemantic();
     if (!consumeGuardBuildWork(/*zero + ne + optional not + retention=*/4))
       return failIncomplete();
     SymRef NonZero = Symbolic.Ctx.mkNe(
@@ -1461,10 +1480,8 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
                                                  : Symbolic.Ctx.mkNot(NonZero));
   }
   if (!Symbolic.Index || Symbolic.IndexSize == 0 ||
-      Symbolic.IndexSize > sizeof(uint64_t)) {
-    Info.IncompleteGuardDomain = true;
-    return false;
-  }
+      Symbolic.IndexSize > sizeof(uint64_t))
+    return failSemantic();
   SymRef ReachesTable;
   if (SymbolicConstraints.size() == 1) {
     ReachesTable = SymbolicConstraints.front();
@@ -1522,24 +1539,21 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
     bool Reaches = true;
     for (const auto &[Expr, TableCondition] : IndexGuards) {
       std::optional<uint64_t> Condition = evaluateGuardExpr(Expr, Value);
-      if (!Condition) {
-        Info.IncompleteGuardDomain = true;
-        return false;
-      }
+      if (!Condition)
+        return failSemantic();
       Reaches &= ((*Condition != 0) == TableCondition);
     }
     if (!SawRejected && !Reaches) {
       FirstRejected = static_cast<uint32_t>(Value);
       SawRejected = true;
     } else if (SawRejected && Reaches) {
-      Info.IncompleteGuardDomain = true;
-      return false;
+      return failSemantic();
     }
   }
   if (!SawRejected || FirstRejected < limits::kMinJumpTableEntries ||
       FirstRejected > limits::kMaxJumpTableEntries) {
     if (SawControllingGuard)
-      Info.IncompleteGuardDomain = true;
+      Info.SemanticGuardDomainAmbiguous = true;
     return false;
   }
   if (SelectedIndexWidth < Info.IndexValueAtUse.Size) {
@@ -1547,8 +1561,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
     if (SourceBits == 0 ||
         (SourceBits < 64 &&
          FirstRejected > (uint64_t(1) << (SourceBits - 1)))) {
-      Info.IncompleteGuardDomain = true;
-      return false;
+      return failSemantic();
     }
   }
   constexpr size_t SolverProofWork =
@@ -1559,14 +1572,19 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
   if (!consumeGuardBuildWork(/*constant + ult + xor=*/3) ||
       !consumeCandidateEvidence(SolverProofWork))
     return failIncomplete();
-  if (!proveDenseGuardPrefix(Symbolic, ReachesTable, FirstRejected)) {
-    Info.IncompleteGuardDomain = true;
-    return false;
+  switch (proveDenseGuardPrefix(Symbolic, ReachesTable, FirstRejected)) {
+  case DenseGuardPrefixProof::Proven:
+    break;
+  case DenseGuardPrefixProof::Counterexample:
+    return failSemantic();
+  case DenseGuardPrefixProof::Incomplete:
+    return failIncomplete();
   }
 
   if (Info.MaxEntries == 0 || FirstRejected < Info.MaxEntries)
     Info.MaxEntries = FirstRejected;
   Info.IncompleteGuardDomain = false;
+  Info.SemanticGuardDomainAmbiguous = false;
   LLVM_DEBUG(llvm::dbgs() << "  precise-guard: bound " << FirstRejected
                           << " from CFG/value/polarity evidence\n");
   return true;
