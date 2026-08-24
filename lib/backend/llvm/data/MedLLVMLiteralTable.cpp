@@ -999,7 +999,13 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
     // accepts multiply/shift/flag-expanded induction DAGs, but rejects any
     // feasible data/code-address leaf, mixed PHI, incomplete frame reload, or
     // relocatable constant, so a second base cannot hide behind this shortcut.
-    if (valueIsStableAddressOffset(V))
+    const MedOp *Def = findDef(V);
+    const bool IsForwardingWrapper =
+        Def && (Def->Opcode == NdOp::COPY ||
+                Def->Opcode == NdOp::INT_ZEXT ||
+                Def->Opcode == NdOp::INT_SEXT ||
+                Def->Opcode == NdOp::SUBBYTES);
+    if (!IsForwardingWrapper && valueIsStableAddressOffset(V))
       return BaseProof::NoBase;
     auto Key = std::make_tuple(static_cast<int>(V.Kind), V.Id, V.SSAVer);
     if (!Seen.insert(Key).second)
@@ -1030,7 +1036,6 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       return BaseProof::HasBase;
     }
 
-    const MedOp *Def = findDef(V);
     bool SawLoad = false;
     bool SawArithmetic = false;
     uint16_t OriginSize = V.Size;

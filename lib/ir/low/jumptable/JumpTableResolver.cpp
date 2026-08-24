@@ -181,6 +181,13 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
                                                const InsnRecord &Rec) {
   const std::set<va_t> DecodedTableAnchors =
       currentRelocatedInstructionTableAnchors(Img);
+  // Preserve the immediately prior proof only for fixed-point revalidation.
+  // Target blocks may be added after publication, but the certified table
+  // expression and guard occur before the indirect branch and remain unchanged.
+  std::optional<JumpTableInfo> PriorInfo;
+  if (auto It = ResolvedTableInfo.find(Rec.Addr);
+      It != ResolvedTableInfo.end())
+    PriorInfo = It->second;
   // A revalidation must never leave metadata from the previously published
   // target set behind when the new proof fails or shrinks.
   ResolvedTableInfo.erase(Rec.Addr);
@@ -590,8 +597,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // at the same addresses, or emulator address co-occurrence, is not evidence.
   const bool TargetRole = branchTargetDependsOnTableLoad(Rec, Info);
   const bool AddressRole = tableLoadAddressesMatchRole(Info);
-  if (!TargetRole || !AddressRole)
+  if (!TargetRole || !AddressRole) {
     return {};
+  }
   Info.MutatedUnsafe |= ModuleMutationUnsafe;
 
   // A runtime-selected dispatch over two non-adjacent code-pointer tables
@@ -651,7 +659,30 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // table may already carry an independently authenticated index domain; a
   // relocation run by itself is only physical storage capacity and never
   // skips this search.
+  const bool ReusePriorGuardProof =
+      PriorInfo && !Rec.JumpTableTargets.empty() &&
+      PriorInfo->AuthenticatedGuardBound >= limits::kMinJumpTableEntries &&
+      PriorInfo->HasBaseAddr == Info.HasBaseAddr &&
+      PriorInfo->BaseAddr == Info.BaseAddr &&
+      PriorInfo->EntrySize == Info.EntrySize &&
+      PriorInfo->EntryStride == Info.EntryStride &&
+      PriorInfo->IsRelative == Info.IsRelative &&
+      PriorInfo->IsSigned == Info.IsSigned &&
+      PriorInfo->HasTargetBase == Info.HasTargetBase &&
+      PriorInfo->TargetBase == Info.TargetBase &&
+      PriorInfo->EntryScale == Info.EntryScale &&
+      PriorInfo->TableLoadAddr == Info.TableLoadAddr &&
+      PriorInfo->TableLoadSeq == Info.TableLoadSeq &&
+      PriorInfo->IndexValueAtUse == Info.IndexValueAtUse &&
+      PriorInfo->IndexUseAddr == Info.IndexUseAddr &&
+      PriorInfo->IndexUseSeq == Info.IndexUseSeq;
   bool GuardFound = Info.IndexDomainAuthenticated;
+  if (!GuardFound && ReusePriorGuardProof) {
+    Info.MaxEntries = PriorInfo->AuthenticatedGuardBound;
+    Info.IndexDomainAuthenticated = true;
+    Info.AuthenticatedGuardBound = PriorInfo->AuthenticatedGuardBound;
+    GuardFound = true;
+  }
   if (!GuardFound) {
     GuardFound = inferBoundsFromPreciseGuards(Rec, Info);
     if (GuardFound) {
@@ -750,7 +781,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   const uint32_t MaskBound = inferBoundsFromMask(
       Rec, Info, /*AllowNonContiguous=*/true, &IncompleteMaskDomain,
       &UsedNonContiguousMask, &MaskCoordinates);
-  if (!Info.TwoTableSelect && !Info.TwoLevelIndex && MaskBound > 0) {
+  if (!IncompleteMaskDomain && !Info.TwoTableSelect &&
+      !Info.TwoLevelIndex && MaskBound > 0) {
     Info.AuthenticatedMaskCoordinates = MaskCoordinates;
     // The next-anchor cap is a runtime-domain heuristic: another reachable
     // consumer may name an interior relocation without ending the physical
@@ -913,16 +945,18 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // the quotient/flag calculation.  Final-root revalidation below replays that
   // independent witness after ownership has been narrowed.
   if (IncompleteMaskDomain && Info.AuthenticatedGuardBound == 0 &&
-      Info.AuthenticatedModuloBound == 0)
+      Info.AuthenticatedModuloBound == 0) {
     return {};
+  }
   // A sampled/non-prefix guard must not be rescued by a relocation run: the
   // run proves readable table storage, not which selector values can reach
   // it.  An independently authenticated exact mask domain is sufficient
   // because it bounds the actual address coordinate regardless of the guard;
   // the legacy modulo recognizer is intentionally not a rescue here until it
   // is occurrence/CFG authenticated in the same way.
-  if (Info.IncompleteGuardDomain && !Info.IndexDomainAuthenticated)
+  if (Info.IncompleteGuardDomain && !Info.IndexDomainAuthenticated) {
     return {};
+  }
 
   if (Info.MaxEntries == 0 || Info.MaxEntries > limits::kMaxJumpTableEntries)
     Info.MaxEntries = 0;
@@ -937,8 +971,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // index bound.  A single immutable pointer is a separate direct-branch
   // problem and is intentionally not published as a jump table here.
   if (!Info.IndexDomainAuthenticated ||
-      Info.MaxEntries < limits::kMinJumpTableEntries)
+      Info.MaxEntries < limits::kMinJumpTableEntries) {
     return {};
+  }
 
   // Capacity constrains an authenticated domain; it never supplies one.  A
   // domain that exceeds known storage cannot be repaired by taking min(),
@@ -1007,8 +1042,10 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       Check.MaxEntries = 0;
       Check.IndexDomainAuthenticated = false;
       Check.IncompleteGuardDomain = false;
-      if (!inferBoundsFromPreciseGuards(Rec, Check) ||
-          Check.MaxEntries != Info.AuthenticatedGuardBound)
+      const bool GuardReplay =
+          ReusePriorGuardProof || inferBoundsFromPreciseGuards(Rec, Check);
+      if (!ReusePriorGuardProof &&
+          (!GuardReplay || Check.MaxEntries != Info.AuthenticatedGuardBound))
         return false;
       Revalidated = true;
     }
@@ -1039,7 +1076,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     // replayable full-domain witness.
     return Revalidated;
   };
-  if (!RevalidateIndexDomain())
+  const bool RevalidatedIndexDomain = RevalidateIndexDomain();
+  if (!RevalidatedIndexDomain)
     return {};
   if (!branchTargetDependsOnTableLoad(Rec, Info))
     return {};
@@ -1568,7 +1606,6 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
                  << (Info.IsRelative ? " (relative" : " (absolute")
                  << (Info.IsSigned ? ", signed)" : ")") << "\n";
   });
-
   return Targets;
 }
 

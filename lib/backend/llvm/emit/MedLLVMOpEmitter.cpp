@@ -778,8 +778,12 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         bool AllowImplicitZeroBase = false;
         if (const JumpTable *JT = authenticatedJumpTableForLoad(Op))
           AllowImplicitZeroBase = JT->HasBaseAddr && JT->BaseAddr == 0;
+        const MedVar *LoadedRole =
+            Op.Output.Size == getTargetRegInfo(TargetArch).PointerSize
+                ? &Op.Output
+                : nullptr;
         Ptr = tryResolveCodePtrTablePtr(AddrVar, Builder, AllowImplicitZeroBase,
-                                        &Op.Output);
+                                        LoadedRole);
       }
       if (!Ptr)
         // Immutable-data resolver arbitration is shared with pointer

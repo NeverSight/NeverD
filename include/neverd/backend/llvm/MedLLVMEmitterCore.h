@@ -1584,6 +1584,23 @@ private:
 
   using AddressProvenanceVarKey =
       std::tuple<int, int, int, int, int, uint16_t, uint64_t, int, uint64_t>;
+  struct FrameReloadCacheKey {
+    va_t Addr = InvalidVA;
+    int OriginSeq = -1;
+    uint16_t Width = 0;
+    AddressProvenanceVarKey Address = {};
+    AddressProvenanceVarKey Output = {};
+
+    bool operator<(const FrameReloadCacheKey &Other) const {
+      return std::tie(Addr, OriginSeq, Width, Address, Output) <
+             std::tie(Other.Addr, Other.OriginSeq, Other.Width,
+                       Other.Address, Other.Output);
+    }
+  };
+  struct FrameReloadCacheEntry {
+    bool Proven = false;
+    std::vector<MedVar> Sources;
+  };
   struct IndexedGlobalBaseProof {
     bool Proven = false;
     uint64_t Base = 0;
@@ -1685,7 +1702,11 @@ private:
   mutable std::map<
       std::tuple<AddressProvenanceVarKey, bool, AddressProvenanceVarKey>, bool>
       StableOffsetCache;
-
+  // A failed select/PHI table audit has no LLVM value to cache, but its
+  // MedIR result is independent of the current IRBuilder.
+  mutable const MedFunc *SelectMergeFailureCacheFor = nullptr;
+  mutable std::set<std::tuple<AddressProvenanceVarKey, uint16_t, bool>>
+      SelectMergeFailureCache;
   // Cache of writable-segment base VAs that contain at least one already-
   // symbolized writable-reloc pointer constant (see
   // hasSymbolizedWritableSibling); keyed on the current function.  Mutable so
@@ -1753,6 +1774,12 @@ private:
   mutable llvm::DenseMap<std::pair<int64_t, int>, bool> FrameDerivedCache;
   mutable const MedFunc *FrameAddressCacheFor = nullptr;
   mutable llvm::DenseMap<std::pair<int64_t, int>, bool> FrameAddressCache;
+  mutable const MedFunc *FrameReloadCacheFor = nullptr;
+  mutable uint64_t FrameReloadCacheGeneration = 0;
+  mutable std::map<FrameReloadCacheKey, FrameReloadCacheEntry>
+      FrameReloadCache;
+  mutable uint64_t FrameReloadProofBuilds = 0;
+  mutable uint64_t FrameReloadProofHits = 0;
 
   // Per-function memoized results of the stack-slot address predicates, dropped
   // when CurMedFunc changes (see ensureAddrPredCache).  Each answer depends

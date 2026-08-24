@@ -2533,9 +2533,26 @@ TEST_F(JTE_AArch64, CompactIndexAcceptsExplicitWToXZeroExtension) {
   ASSERT_FALSE(Body.empty()) << R.out;
   EXPECT_TRUE(llvmHasSwitchCase(Body, 0)) << Body;
   EXPECT_TRUE(llvmHasSwitchCase(Body, 1)) << Body;
-  EXPECT_NE(Body.find("i64 2, label"), std::string::npos) << Body;
+  EXPECT_TRUE(llvmHasSwitchCase(Body, 2)) << Body;
   EXPECT_EQ(Body.find("ret i64 399"), std::string::npos) << Body;
   expectSwitchNotOnLoadedEntry(Body, "i8");
+  auto ImageOrErr = neverd::loadBinary(indexIdentityA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  auto Run = runPipelineWithEvidenceBudget(*ImageOrErr,
+                                           neverd::limits::kMaxJumpTableEvidenceWork);
+  ASSERT_TRUE(Run.Result.Success) << Run.Result.Error;
+  const neverd::LowFunc *Function =
+      findLowFunction(Run.Result, "a64_compact_explicit_zext");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_FALSE(Function->JumpTables.empty());
+  ASSERT_FALSE(Function->JumpTables.front().SelectorUseRefs.empty());
+  EXPECT_TRUE(std::all_of(
+      Function->JumpTables.front().SelectorUseRefs.begin(),
+      Function->JumpTables.front().SelectorUseRefs.end(),
+      [](const neverd::JumpTableSelectorUseRef &Ref) {
+        return Ref.ExpectedSize == 4;
+      }));
 }
 
 TEST_F(JTE_AArch64, CompactIndexFollowsExactFrameSpillReload) {
@@ -2543,9 +2560,9 @@ TEST_F(JTE_AArch64, CompactIndexFollowsExactFrameSpillReload) {
   ASSERT_EQ(R.exitCode, 0) << R.err;
   std::string Body = llvmFunctionBody(R.out, "a64_compact_spill_reload");
   ASSERT_FALSE(Body.empty()) << R.out;
-  EXPECT_NE(Body.find("i64 0, label"), std::string::npos) << Body;
-  EXPECT_NE(Body.find("i64 1, label"), std::string::npos) << Body;
-  EXPECT_NE(Body.find("i64 2, label"), std::string::npos) << Body;
+  EXPECT_TRUE(llvmHasSwitchCase(Body, 0)) << Body;
+  EXPECT_TRUE(llvmHasSwitchCase(Body, 1)) << Body;
+  EXPECT_TRUE(llvmHasSwitchCase(Body, 2)) << Body;
   EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
   expectSwitchNotOnLoadedEntry(Body, "i8");
 }
@@ -2555,8 +2572,8 @@ TEST_F(JTE_AArch64, CompactIndexRejectsAtomicFrameOverwrite) {
   ASSERT_EQ(R.exitCode, 0) << R.err;
   std::string Body = llvmFunctionBody(R.out, "a64_compact_atomic_overwrite");
   ASSERT_FALSE(Body.empty()) << R.out;
-  EXPECT_NE(Body.find("i64 0, label"), std::string::npos) << Body;
-  EXPECT_NE(Body.find("i64 1, label"), std::string::npos) << Body;
+  EXPECT_TRUE(llvmHasSwitchCase(Body, 0)) << Body;
+  EXPECT_TRUE(llvmHasSwitchCase(Body, 1)) << Body;
   EXPECT_EQ(Body.find("i64 2, label"), std::string::npos) << Body;
   EXPECT_EQ(Body.find("ret i64 1599"), std::string::npos) << Body;
   expectSwitchNotOnLoadedEntry(Body, "i8");

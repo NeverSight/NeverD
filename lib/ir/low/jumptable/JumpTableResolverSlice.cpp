@@ -3765,7 +3765,9 @@ bool CFGBuilder::tableLoadAddressesMatchRole(JumpTableInfo &Info) const {
           std::optional<size_t> IndexQuery;
           if (!LocallyAuthenticatedIndex)
             IndexQuery = pushQuery(AddressQueries, DynamicValue, Add,
-                                   State.DynamicAlternatives);
+                                   State.DynamicAlternatives,
+                                   Role.AllowZeroExtension,
+                                   Role.AllowSignExtension);
           if (!BaseQuery || (!LocallyAuthenticatedIndex && !IndexQuery))
             return false;
           ProofQueries.push_back(*BaseQuery);
@@ -3951,11 +3953,12 @@ CFGBuilder::tableLoadConditionValues(llvm::ArrayRef<va_t> BranchAddrs,
     WorkBudget -= Amount;
     return true;
   };
-
+  // Snapshot bookkeeping is per instruction; op-level proof work is charged by
+  // the CFG walks and value matcher below.
   std::vector<ResolverInsnSnapshot> Snapshot;
   Snapshot.reserve(Insns.size());
   for (const auto &[Addr, Rec] : Insns) {
-    if (!consumeWork(1 + Rec.Ops.size()))
+    if (!consumeWork())
       return Results;
     ResolverInsnSnapshot S;
     S.Addr = Addr;
@@ -4010,7 +4013,6 @@ CFGBuilder::tableLoadConditionValues(llvm::ArrayRef<va_t> BranchAddrs,
     }
     return false;
   };
-
   const std::vector<int> &Roots = Graph.RootBlocks;
   auto blockFor = [&](va_t Addr) -> int {
     auto It = Graph.InsnToBlock.find(Addr);

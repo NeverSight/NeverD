@@ -97,7 +97,8 @@ static void propagateForwardedCallArities(
     const std::map<va_t, bool> &CalleeReturnsVec,
     std::map<va_t, std::vector<uint64_t>> &CalleeFPRegs,
     const std::map<va_t, bool> &CalleeHasSret,
-    const std::map<va_t, bool> &CalleeIsVariadic) {
+    std::map<va_t, bool> &CalleeIsVariadic,
+    const std::map<va_t, bool> &CalleeConsumesVaList) {
   if (Funcs.empty())
     return;
 
@@ -123,11 +124,16 @@ static void propagateForwardedCallArities(
     Work.pop();
     Queued[I] = false;
 
+    const int PreviousRegArity = CalleeRegArity[Funcs[I].Entry];
+    const int PreviousTotalArity = CalleeTotalArity[Funcs[I].Entry];
+    const bool PreviousVariadic =
+        CalleeIsVariadic.count(Funcs[I].Entry) != 0 &&
+        CalleeIsVariadic.at(Funcs[I].Entry);
     MedFunc Probe = Funcs[I];
     recoverCallAbi(Probe, TheArch, FuncNames, &Img, &CalleeRegArity,
                    &CalleeTotalArity, &CalleeFPArity, &CalleeReturnsVec,
-                   &CalleeFPRegs, &CalleeHasSret, &CalleeIsVariadic);
-
+                   &CalleeFPRegs, &CalleeHasSret, &CalleeIsVariadic,
+                   &CalleeConsumesVaList);
     int MaxRegIdx = -1;
     int MaxIdx = -1;
     std::vector<uint64_t> FPRegs;
@@ -148,21 +154,33 @@ static void propagateForwardedCallArities(
     std::sort(FPRegs.begin(), FPRegs.end());
 
     const int RegArity = MaxRegIdx + 1;
-    const int TotalArity = callRecoveryTotalArity(Probe, MaxIdx);
+    const bool IsVariadicPublic =
+        Probe.IsVariadic ||
+        (CalleeIsVariadic.count(Probe.Entry) != 0 &&
+         CalleeIsVariadic.at(Probe.Entry));
+    const int TotalArity = IsVariadicPublic ? MaxIdx + 1
+                                            : callRecoveryTotalArity(Probe, MaxIdx);
     const int FPArity = static_cast<int>(FPRegs.size());
-    bool Grew = false;
+    if (IsVariadicPublic)
+      CalleeIsVariadic[Probe.Entry] = true;
+    bool Grew = CalleeRegArity[Probe.Entry] > PreviousRegArity ||
+                 CalleeTotalArity[Probe.Entry] > PreviousTotalArity ||
+                 (CalleeIsVariadic.count(Probe.Entry) != 0 &&
+                  CalleeIsVariadic.at(Probe.Entry) != PreviousVariadic);
     if (RegArity > CalleeRegArity[Probe.Entry]) {
       CalleeRegArity[Probe.Entry] = RegArity;
       Grew = true;
     }
-    if (TotalArity > CalleeTotalArity[Probe.Entry]) {
-      CalleeTotalArity[Probe.Entry] = TotalArity;
-      Grew = true;
-    }
-    if (FPArity > CalleeFPArity[Probe.Entry]) {
-      CalleeFPArity[Probe.Entry] = FPArity;
-      CalleeFPRegs[Probe.Entry] = std::move(FPRegs);
-      Grew = true;
+    if (!IsVariadicPublic) {
+      if (TotalArity > CalleeTotalArity[Probe.Entry]) {
+        CalleeTotalArity[Probe.Entry] = TotalArity;
+        Grew = true;
+      }
+      if (FPArity > CalleeFPArity[Probe.Entry]) {
+        CalleeFPArity[Probe.Entry] = FPArity;
+        CalleeFPRegs[Probe.Entry] = std::move(FPRegs);
+        Grew = true;
+      }
     }
     if (!Grew)
       continue;
@@ -292,6 +310,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   std::map<va_t, bool> CalleeReturnsVec;
   std::map<va_t, bool> CalleeHasSret;
   std::map<va_t, bool> CalleeIsVariadic;
+  std::map<va_t, bool> CalleeConsumesVaList;
   {
     const auto &TRI = getTargetRegInfo(Img.Arch);
     // On x86-64 a floating-point return lands in XMM0 (a vector register); on
@@ -326,6 +345,18 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
           MaxIdx = std::max(MaxIdx, P.Id);
         }
       }
+      bool ConsumesVaList = false;
+      for (const auto &Blk : MF.Blocks)
+        for (const auto &Op : Blk.Ops)
+          if (Op.Opcode == NdOp::CALL && Op.NumInputs >= 1 &&
+              Op.Inputs[0].isConst()) {
+            if (const Import *Imp = Img.findImportAt(Op.Inputs[0].ConstVal)) {
+              if (libc::isVaListConsumer(
+                      stripLeadingUnderscores(Imp->Name)))
+                ConsumesVaList = true;
+            }
+          }
+      CalleeConsumesVaList[MF.Entry] = ConsumesVaList;
       std::sort(FPRegs.begin(), FPRegs.end());
       CalleeRegArity[MF.Entry] = MaxRegIdx + 1;
       CalleeTotalArity[MF.Entry] = callRecoveryTotalArity(MF, MaxIdx);
@@ -484,12 +515,13 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   propagateForwardedCallArities(Result.MedFuncs, Img.Arch, AllFuncNames, Img,
                                 CalleeRegArity, CalleeTotalArity, CalleeFPArity,
                                 CalleeReturnsVec, CalleeFPRegs, CalleeHasSret,
-                                CalleeIsVariadic);
+                                CalleeIsVariadic, CalleeConsumesVaList);
 
   for (auto &MF : Result.MedFuncs)
     recoverCallAbi(MF, Img.Arch, AllFuncNames, &Img, &CalleeRegArity,
                    &CalleeTotalArity, &CalleeFPArity, &CalleeReturnsVec,
-                   &CalleeFPRegs, &CalleeHasSret, &CalleeIsVariadic);
+                   &CalleeFPRegs, &CalleeHasSret, &CalleeIsVariadic,
+                   &CalleeConsumesVaList);
 
   remodelStructReturnForwarderCalls(Img, Result);
 
@@ -516,7 +548,8 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     for (auto &MF : Result.MedFuncs)
       recoverCallAbi(MF, Img.Arch, AllFuncNames, &Img, &CRA2, &CTA2,
                      &CalleeFPArity, &CalleeReturnsVec, &CalleeFPRegs,
-                     &CalleeHasSret, &CalleeIsVariadic);
+                     &CalleeHasSret, &CalleeIsVariadic,
+                     &CalleeConsumesVaList);
   }
 
   // Variadic callees: size each one's overflow stack-parameter list from its

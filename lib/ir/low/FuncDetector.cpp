@@ -227,10 +227,19 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
     // cover unsymbolized leaf callees on every supported architecture.
     // Untyped COFF exports are always verified because they can be either
     // callable aliases or data.  Only the remaining candidates need the
-    // expensive trial decode.
+    // The trial decode dominates only when the scan produced many untrusted
+    // candidates; each check is independent and reads only the immutable image,
+    // so spread that subset across worker threads with per-thread decoders. A
+    // symbol-rich binary (almost everything trusted) leaves NeedVerify small
+    // and stays single-threaded, avoiding pointless thread-spawn overhead.
     const size_t N = Results.size();
     std::vector<char> Keep(N, 0);
     std::vector<size_t> NeedVerify;
+    std::set<va_t> ExplicitFunctionStarts;
+    for (const auto &Sym : Img.Symbols)
+      if (Sym.IsFunc)
+        ExplicitFunctionStarts.insert(
+            normalizeCodeAddress(Sym.Addr, Img.Arch, Img.Mode));
     for (size_t I = 0; I < N; ++I) {
       va_t Addr = Results[I].first;
       if (Trusted.count(Addr))

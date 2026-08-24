@@ -620,7 +620,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
 
   std::vector<va_t> GuardBranchAddrs;
   for (const auto &[BranchAddr, BranchRec] : Insns) {
-    if (BranchAddr == Rec.Addr || !BranchRec.IsCond || !BranchRec.IsBranch)
+    if (!BranchRec.IsCond || !BranchRec.IsBranch)
       continue;
     GuardBranchAddrs.push_back(BranchAddr);
   }

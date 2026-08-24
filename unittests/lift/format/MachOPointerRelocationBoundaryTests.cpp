@@ -214,6 +214,8 @@ public:
       Emitter.FrameDerivedCache[{1, 1}] = true;
       Emitter.FrameAddressCacheFor = Emitter.CurMedFunc;
       Emitter.FrameAddressCache[{2, 2}] = true;
+      Emitter.FrameReloadCacheFor = Emitter.CurMedFunc;
+      Emitter.FrameReloadCache[MedLLVMEmitter::FrameReloadCacheKey{}] = {};
 
       const auto Result = Emitter.classifyPhiIncomingEdge(Phi, PredId);
       ObservedProvisionalQuery =
@@ -242,7 +244,9 @@ public:
            Emitter.FrameDerivedCacheFor == nullptr &&
            Emitter.FrameDerivedCache.empty() &&
            Emitter.FrameAddressCacheFor == nullptr &&
-           Emitter.FrameAddressCache.empty();
+           Emitter.FrameAddressCache.empty() &&
+           Emitter.FrameReloadCacheFor == nullptr &&
+           Emitter.FrameReloadCache.empty();
   }
 
   static bool stableOffset(MedLLVMEmitter &Emitter, const MedVar &Value,
@@ -296,6 +300,11 @@ public:
     Emitter.TargetArch = TargetArch;
     Emitter.CurMedFunc = &Func;
     return Emitter.collectFrameReloadSources(Load, Sources);
+  }
+  static std::tuple<uint64_t, uint64_t, uint64_t> frameReloadCounters(
+      const MedLLVMEmitter &Emitter) {
+    return {Emitter.FrameReloadCacheGeneration, Emitter.FrameReloadProofBuilds,
+            Emitter.FrameReloadProofHits};
   }
 
   static bool recoveredTargetLoadIsFullyConsumed(MedLLVMEmitter &Emitter,
@@ -10324,6 +10333,74 @@ TEST(MachOLLVMDataPointerBoundary,
   const auto Work = MedLLVMProvenanceTestPeer::addressProvenanceWork(Emitter);
   EXPECT_LE(std::get<2>(Work), 2U)
       << "stable-offset cache keys must preserve the optional forbidden value";
+}
+TEST(MachOLLVMDataPointerBoundary, FrameReloadCacheUsesStableOccurrenceIdentity) {
+  MedFunc Func = makeSpilledConstTableLookup(Arch::X64);
+  auto findLoads = [](MedFunc &F) {
+    std::vector<MedOp *> Loads;
+    for (MedBlock &Block : F.Blocks)
+      for (MedOp &Op : Block.Ops)
+        if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1)
+          Loads.push_back(&Op);
+    return Loads;
+  };
+
+  auto Loads = findLoads(Func);
+  ASSERT_GE(Loads.size(), 2u);
+  Loads.front()->OriginSeq = 10;
+  MedOp Second = *Loads.front();
+  Second.Output.Id += 100;
+  Second.OriginSeq = 11;
+  Func.Blocks.front().Ops.insert(
+      std::next(Func.Blocks.front().Ops.begin(), 4), std::move(Second));
+  Loads = findLoads(Func);
+  ASSERT_EQ(Loads.size(), 3u);
+  auto FirstIt = std::find_if(Loads.begin(), Loads.end(),
+                              [](const MedOp *Op) { return Op->OriginSeq == 10; });
+  auto SecondIt = std::find_if(Loads.begin(), Loads.end(),
+                               [](const MedOp *Op) { return Op->OriginSeq == 11; });
+  ASSERT_NE(FirstIt, Loads.end());
+  ASSERT_NE(SecondIt, Loads.end());
+
+  MedLLVMEmitter Emitter;
+  std::vector<MedVar> Sources;
+  ASSERT_TRUE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+      Emitter, Func, Arch::X64, **FirstIt, Sources));
+  const auto AfterFirst =
+      MedLLVMProvenanceTestPeer::frameReloadCounters(Emitter);
+  EXPECT_EQ(std::get<1>(AfterFirst), 1u);
+  EXPECT_EQ(std::get<2>(AfterFirst), 0u);
+  ASSERT_TRUE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+      Emitter, Func, Arch::X64, **FirstIt, Sources));
+  const auto AfterPositiveHit =
+      MedLLVMProvenanceTestPeer::frameReloadCounters(Emitter);
+  EXPECT_EQ(std::get<1>(AfterPositiveHit), 1u);
+  EXPECT_EQ(std::get<2>(AfterPositiveHit), 1u);
+
+  ASSERT_TRUE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+      Emitter, Func, Arch::X64, **SecondIt, Sources));
+  const auto AfterDistinctOccurrence =
+      MedLLVMProvenanceTestPeer::frameReloadCounters(Emitter);
+  EXPECT_EQ(std::get<1>(AfterDistinctOccurrence), 2u);
+  EXPECT_EQ(std::get<2>(AfterDistinctOccurrence), 1u);
+
+  MedFunc Other = makeRejectedFrameReloadLookup(
+      Arch::X64, ReachingStoreCase::StoreAfterLoad);
+  auto OtherLoads = findLoads(Other);
+  ASSERT_GE(OtherLoads.size(), 2u);
+  EXPECT_FALSE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+      Emitter, Other, Arch::X64, *OtherLoads.front(), Sources));
+  const auto AfterNegativeBuild =
+      MedLLVMProvenanceTestPeer::frameReloadCounters(Emitter);
+  EXPECT_FALSE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+      Emitter, Other, Arch::X64, *OtherLoads.front(), Sources));
+  const auto AfterNegativeHit =
+      MedLLVMProvenanceTestPeer::frameReloadCounters(Emitter);
+  EXPECT_EQ(std::get<1>(AfterNegativeHit), std::get<1>(AfterNegativeBuild));
+  EXPECT_EQ(std::get<2>(AfterNegativeHit),
+            std::get<2>(AfterNegativeBuild) + 1);
+  EXPECT_GT(std::get<0>(AfterNegativeHit),
+             std::get<0>(AfterDistinctOccurrence));
 }
 
 TEST(LLVMDataPointerInvariantBoundary,

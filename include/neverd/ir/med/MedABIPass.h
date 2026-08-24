@@ -53,13 +53,14 @@ int regToArgIdx(uint64_t RegOff, Arch TheArch);
 void recoverCallAbi(
     MedFunc &Func, Arch TheArch, const std::map<va_t, std::string> &FuncNames,
     const BinaryImage *Img = nullptr,
-    const std::map<va_t, int> *CalleeRegArity = nullptr,
-    const std::map<va_t, int> *CalleeTotalArity = nullptr,
+    std::map<va_t, int> *CalleeRegArity = nullptr,
+    std::map<va_t, int> *CalleeTotalArity = nullptr,
     const std::map<va_t, int> *CalleeFPArity = nullptr,
     const std::map<va_t, bool> *CalleeReturnsVec = nullptr,
     const std::map<va_t, std::vector<uint64_t>> *CalleeFPRegs = nullptr,
     const std::map<va_t, bool> *CalleeHasSret = nullptr,
-    const std::map<va_t, bool> *CalleeIsVariadic = nullptr);
+    std::map<va_t, bool> *CalleeIsVariadic = nullptr,
+    const std::map<va_t, bool> *CalleeConsumesVaList = nullptr);
 
 // Finalize the overflow stack parameters of every variadic callee once all call
 // sites have been recovered.  A variadic function's va_arg overflow reads land

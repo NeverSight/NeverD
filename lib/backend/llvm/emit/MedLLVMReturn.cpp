@@ -187,6 +187,20 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
     bool WantWide64 = !WantFloat && RetTy->isIntegerTy(64) &&
                       TRI.PointerSize == 4 && TRI.IntReturnReg2 != 0;
     uint64_t HiRetOff = TRI.IntReturnReg2;
+    const uint16_t IntegerReturnSize =
+        WantWide64 ? TRI.PointerSize
+                   : RetTy->isIntegerTy()
+                         ? static_cast<uint16_t>(
+                               (RetTy->getIntegerBitWidth() + 7) / 8)
+                         : 0;
+    auto isAuthoritativeIntegerReturnView = [&](const MedVar &V) {
+      if (WantFloat || V.RegOff != IntRetOff || IntegerReturnSize == 0)
+        return false;
+      if (V.Size >= IntegerReturnSize)
+        return true;
+      return TRI.writeZeroExtends(V.RegOff, V.Size) &&
+             TRI.isSubRegOf(V.RegOff, V.Size, IntRetOff, IntegerReturnSize);
+    };
 
     for (auto &Blk : CurMedFunc->Blocks) {
       bool HasThisRet = false;
@@ -214,10 +228,8 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
           if (!RetVar || RIt->Output.Size > RetVar->Size)
             RetVar = &RIt->Output;
         }
-        if (!WantFloat && RIt->Output.RegOff == IntRetOff) {
-          if (!RetVar || RIt->Output.Size > RetVar->Size)
-            RetVar = &RIt->Output;
-        }
+        if (isAuthoritativeIntegerReturnView(RIt->Output) && !RetVar)
+          RetVar = &RIt->Output;
         if (WantWide64 && RIt->Output.RegOff == HiRetOff) {
           // A SUBBYTES that extracts the high PointerSize bytes (e.g. ARM
           // `vmov rLo,rHi,dN` lowers the high register to SUBBYTES(d,4)) is a
@@ -247,10 +259,8 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
             if (!RetVar || Phi.Output.Size > RetVar->Size)
               RetVar = &Phi.Output;
           }
-          if (!WantFloat && Phi.Output.RegOff == IntRetOff) {
-            if (!RetVar || Phi.Output.Size > RetVar->Size)
-              RetVar = &Phi.Output;
-          }
+          if (isAuthoritativeIntegerReturnView(Phi.Output) && !RetVar)
+            RetVar = &Phi.Output;
         }
       }
       if (WantWide64 && !HiVar) {

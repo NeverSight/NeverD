@@ -530,9 +530,11 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
       if (Insns.count(Addr))
         Func.UnsafeIndirectBranchAddresses.insert(Addr);
   if (PreservePotentialJumpTableBranches)
-    for (va_t Addr : PotentialJumpTableBranches)
-      if (Insns.count(Addr))
+    for (va_t Addr : PotentialJumpTableBranches) {
+      auto It = Insns.find(Addr);
+      if (It != Insns.end() && It->second.JumpTableTargets.empty())
         Func.UnsafeIndirectBranchAddresses.insert(Addr);
+    }
   for (va_t Addr : LostValidatedJumpTableBranches)
     if (Insns.count(Addr))
       Func.UnsafeIndirectBranchAddresses.insert(Addr);
@@ -1525,10 +1527,13 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
         EverPublishedJumpTableBranches.insert(UA);
 
       for (va_t T : Targets) {
-        if (!ExploredAddrs.count(T)) {
-          BlockStarts.insert(T);
+        // A target may already be decoded when proof metadata is
+        // revalidated.  It still needs a block boundary before Med/LLVM
+        // lowers the indirect branch to a finite switch.
+        if (BlockStarts.insert(T).second)
+          MadeProgress = true;
+        if (!ExploredAddrs.count(T))
           explore(Img, Dec, T);
-        }
       }
     }
 
