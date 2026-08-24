@@ -39,6 +39,50 @@ namespace neverd {
 namespace elf_loader {
 namespace detail {
 
+namespace {
+
+struct I386RelocationWriterFootprint {
+  int64_t OffsetBias = 0;
+  size_t Width = 4;
+};
+
+I386RelocationWriterFootprint i386RelocationWriterFootprint(uint32_t Type) {
+  using namespace llvm::ELF;
+  switch (Type) {
+  case R_386_NONE:
+    return {0, 0};
+  case R_386_8:
+  case R_386_PC8:
+    return {0, 1};
+  case R_386_16:
+  case R_386_PC16:
+    return {0, 2};
+  case R_386_TLS_DESC:
+    // The relocation record identifies the first word of the two-word TLS
+    // descriptor, but the linker's value write lands in the second word.
+    return {4, 4};
+  default:
+    // Unknown/legacy i386 records conservatively claim one full word.  This
+    // may suppress exact provenance but can never manufacture it.
+    return {0, 4};
+  }
+}
+
+std::optional<va_t> addSignedOffsetBias(va_t Offset, int64_t Bias) {
+  if (Bias >= 0) {
+    const uint64_t Magnitude = static_cast<uint64_t>(Bias);
+    if (Magnitude > InvalidVA - Offset)
+      return std::nullopt;
+    return Offset + Magnitude;
+  }
+  const uint64_t Magnitude = static_cast<uint64_t>(-(Bias + 1)) + 1;
+  if (Magnitude > Offset)
+    return std::nullopt;
+  return Offset - Magnitude;
+}
+
+} // namespace
+
 template <typename ELFT>
 void collectRelocations(const llvm::object::ELFFile<ELFT> &ELF,
                         llvm::ArrayRef<typename ELFT::Shdr> Sections,
@@ -397,43 +441,29 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
             FieldOffset = R.r_offset;
             Type = R.getType(false);
           }
-          size_t WriterWidth = 4;
-          switch (Type) {
-          case R_386_NONE:
-            WriterWidth = 0;
-            break;
-          case R_386_8:
-          case R_386_PC8:
-            WriterWidth = 1;
-            break;
-          case R_386_16:
-          case R_386_PC16:
-            WriterWidth = 2;
-            break;
-          default:
-            // Unknown/legacy i386 records conservatively claim one full word.
-            // This may suppress exact provenance but can never manufacture it.
-            break;
-          }
-          if (WriterWidth == 0 ||
-              !rangeInBounds(FieldOffset, WriterWidth,
+          const I386RelocationWriterFootprint Footprint =
+              i386RelocationWriterFootprint(Type);
+          const std::optional<va_t> WriterOffset =
+              addSignedOffsetBias(FieldOffset, Footprint.OffsetBias);
+          if (Footprint.Width == 0 || !WriterOffset ||
+              !rangeInBounds(*WriterOffset, Footprint.Width,
                              PreApplySeg->Data.size()) ||
-              FieldOffset > InvalidVA - PreApplyVA)
+              *WriterOffset > InvalidVA - PreApplyVA)
             continue;
 
-          const va_t FieldVA = PreApplyVA + FieldOffset;
-          for (size_t Byte = 0; Byte < WriterWidth; ++Byte) {
+          const va_t FieldVA = PreApplyVA + *WriterOffset;
+          for (size_t Byte = 0; Byte < Footprint.Width; ++Byte) {
             if (Byte > InvalidVA - FieldVA)
               break;
             ++I386RelocationByteWriterCounts[FieldVA + Byte];
           }
           if (Type == R_386_GOTPC)
             I386GOTPCWriterStarts.insert(FieldVA);
-          if (WriterWidth == 4) {
+          if (Footprint.Width == 4) {
             auto [It, Inserted] = I386RelocationFields.try_emplace(FieldVA);
             if (Inserted)
               std::memcpy(&It->second.OriginalAddend,
-                          PreApplySeg->Data.data() + FieldOffset, 4);
+                          PreApplySeg->Data.data() + *WriterOffset, 4);
             ++It->second.ValueWriterCount;
             It->second.HasGOTPCWriter |= Type == R_386_GOTPC;
           }

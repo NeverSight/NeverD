@@ -280,6 +280,10 @@ static fs::path i386GOTPCModelObj() {
   return fs::path(TEST_OBJ_DIR) / "test_i386_gotpc_model.o";
 }
 
+static fs::path i386RelocationWriterFootprintObj() {
+  return fs::path(TEST_OBJ_DIR) / "test_i386_relocation_writer_footprint.o";
+}
+
 TEST_F(JTE_X86_32, GOTPCModelRequiresLifterAuthenticatedCallPopSeed) {
   auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
@@ -461,6 +465,85 @@ TEST_F(JTE_X86_32, GOTOFFSwitchRequiresExactCallPopAndDataFieldOccurrences) {
   EXPECT_TRUE(Recover(*Positive).JumpTables.empty())
       << "an absolute relocation with the same folded value and owner must "
          "not borrow GOTOFF semantics";
+}
+
+TEST_F(JTE_X86_32, TLSDescWriterFootprintInvalidatesOnlyOverlappingGOTPCField) {
+  auto ImageOrErr = neverd::loadBinary(i386RelocationWriterFootprintObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Overlap =
+      Image.findSymbol("jt_i386_gotoff_tls_desc_overlap");
+  const neverd::Symbol *OverlapRecord =
+      Image.findSymbol("jt_i386_gotoff_tls_desc_overlap_record");
+  const neverd::Symbol *OverlapField =
+      Image.findSymbol("jt_i386_gotoff_tls_desc_overlap_field");
+  const neverd::Symbol *OverlapBranch =
+      Image.findSymbol("jt_i386_gotoff_tls_desc_overlap_branch");
+  const neverd::Symbol *NonOverlap =
+      Image.findSymbol("jt_i386_gotoff_tls_desc_nonoverlap");
+  const neverd::Symbol *NonOverlapRecord =
+      Image.findSymbol("jt_i386_gotoff_tls_desc_nonoverlap_record");
+  const neverd::Symbol *NonOverlapField =
+      Image.findSymbol("jt_i386_gotoff_tls_desc_nonoverlap_field");
+  const neverd::Symbol *NonOverlapBranch =
+      Image.findSymbol("jt_i386_gotoff_tls_desc_nonoverlap_branch");
+  ASSERT_NE(Overlap, nullptr);
+  ASSERT_NE(OverlapRecord, nullptr);
+  ASSERT_NE(OverlapField, nullptr);
+  ASSERT_NE(OverlapBranch, nullptr);
+  ASSERT_NE(NonOverlap, nullptr);
+  ASSERT_NE(NonOverlapRecord, nullptr);
+  ASSERT_NE(NonOverlapField, nullptr);
+  ASSERT_NE(NonOverlapBranch, nullptr);
+  ASSERT_EQ(OverlapRecord->Addr + 4, OverlapField->Addr)
+      << "R_386_TLS_DESC writes the four-byte word at r_offset+4";
+  ASSERT_LE(NonOverlapRecord->Addr + 8, NonOverlapField->Addr)
+      << "the positive control's biased writer footprint must stay disjoint";
+
+  EXPECT_EQ(Image.AmbiguousI386GOTPCFields.count(OverlapField->Addr), 1u);
+  EXPECT_EQ(Image.I386GOTPCFields.count(OverlapField->Addr), 0u)
+      << "a biased overlapping writer must suppress exact GOTPC provenance";
+  EXPECT_EQ(Image.AmbiguousI386GOTPCFields.count(NonOverlapField->Addr), 0u);
+  EXPECT_EQ(Image.I386GOTPCFields.count(NonOverlapField->Addr), 1u)
+      << "a disjoint TLS descriptor relocation cannot taint the GOTPC field";
+
+  auto Recover = [&](const neverd::Symbol &Function) {
+    neverd::Decoder Decoder;
+    EXPECT_TRUE(Decoder.init(neverd::Arch::X86));
+    neverd::CFGBuilder Builder;
+    return Builder.build(Image, Decoder, Function.Addr, Function.Name);
+  };
+  auto HasOpcodeAt = [](const neverd::LowFunc &Low, neverd::va_t Addr,
+                        neverd::NdOp Opcode) {
+    for (const neverd::LowBlock &Block : Low.Blocks)
+      for (const neverd::LowOp &Op : Block.Ops)
+        if (Op.Addr == Addr && Op.Opcode == Opcode)
+          return true;
+    return false;
+  };
+
+  const neverd::LowFunc Ambiguous = Recover(*Overlap);
+  EXPECT_TRUE(Ambiguous.JumpTables.empty());
+  EXPECT_TRUE(
+      HasOpcodeAt(Ambiguous, OverlapBranch->Addr, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(
+      HasOpcodeAt(Ambiguous, OverlapBranch->Addr, neverd::NdOp::INDIR_CALL));
+  EXPECT_EQ(Ambiguous.UnsafeIndirectBranchAddresses.count(OverlapBranch->Addr),
+            1u);
+  EXPECT_EQ(Ambiguous.EverPublishedJumpTableBranchAddresses.count(
+                OverlapBranch->Addr),
+            0u);
+
+  const neverd::LowFunc Exact = Recover(*NonOverlap);
+  ASSERT_EQ(Exact.JumpTables.size(), 1u);
+  EXPECT_EQ(Exact.JumpTables.front().Targets.size(), 2u);
+  EXPECT_TRUE(
+      HasOpcodeAt(Exact, NonOverlapBranch->Addr, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(
+      HasOpcodeAt(Exact, NonOverlapBranch->Addr, neverd::NdOp::INDIR_CALL));
+  EXPECT_EQ(Exact.UnsafeIndirectBranchAddresses.count(NonOverlapBranch->Addr),
+            0u);
 }
 
 TEST_F(JTE_X86_32,

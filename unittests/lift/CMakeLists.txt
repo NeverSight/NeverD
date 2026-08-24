@@ -782,6 +782,7 @@ set(X86_64_TEST_SOURCES
 
 set(X86_32_TEST_SOURCES
   x86_32/test_i386_gotpc_model.s
+  x86_32/test_i386_relocation_writer_footprint.s
   x86_32/test_jumptable_frame_lane32.s
   x86_32/test_arith32.c
   x86_32/test_control32.c
