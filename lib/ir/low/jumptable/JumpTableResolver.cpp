@@ -400,16 +400,12 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   const size_t LookupWork =
       orderedLookupWork(IndexDomainEvidenceIncompleteBranches.size());
   constexpr size_t NodeAndCleanupWork = 2;
-  if (LookupWork >
-          std::numeric_limits<size_t>::max() - NodeAndCleanupWork ||
-      LookupWork + NodeAndCleanupWork >
-          IncompleteBranchMarkerEvidenceRemaining) {
-    IncompleteBranchMarkerEvidenceRemaining = 0;
-    IncompleteBranchMarkerEvidenceIncomplete = true;
+  const size_t MarkerWork =
+      LookupWork > std::numeric_limits<size_t>::max() - NodeAndCleanupWork
+          ? std::numeric_limits<size_t>::max()
+          : LookupWork + NodeAndCleanupWork;
+  if (!consumeIncompleteBranchMarkerEvidence(MarkerWork))
     return {};
-  }
-  IncompleteBranchMarkerEvidenceRemaining -=
-      LookupWork + NodeAndCleanupWork;
   IncompleteBranchInsertPrepaid = true;
   auto insertIncompleteBranchOnce = [&]() {
     if (IncompleteBranchAlreadyInserted)

@@ -835,7 +835,7 @@ TEST_F(JTE_X86_32,
   ASSERT_TRUE(LookupExhaustedDecoder.init(neverd::Arch::X86));
   neverd::CFGBuilder LookupExhaustedBuilder;
   LookupExhaustedBuilder
-      .setI386GOTOFFTombstoneBookkeepingBudgetForTesting(0);
+      .setIncompleteBranchMarkerEvidenceBudgetForTesting(6);
   const neverd::LowFunc LookupExhausted = LookupExhaustedBuilder.build(
       Image, LookupExhaustedDecoder, Function->Addr, Function->Name);
   auto LookupExhaustedHasOpcodeAt = [&](neverd::va_t Addr,
@@ -848,8 +848,9 @@ TEST_F(JTE_X86_32,
   };
   EXPECT_EQ(
       LookupExhaustedBuilder.i386GOTOFFTombstoneLookupCountForTesting(), 0u)
-      << "ordered-set lookup must not execute after its independent "
-         "bookkeeping account is exhausted";
+      << "two discovery generations reserve the empty-set marker first; the "
+         "exact field lookup must not execute after exhausting the shared "
+         "account";
   EXPECT_TRUE(LookupExhausted.JumpTables.empty());
   EXPECT_TRUE(
       LookupExhaustedHasOpcodeAt(Branch->Addr, neverd::NdOp::INDIR_BR));

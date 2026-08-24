@@ -1976,7 +1976,7 @@ std::optional<va_t> CFGBuilder::lookupAmbiguousI386GOTOFFField(
   // Keep the actual ordered lookup and its test observer behind one bounded
   // entry point.  This makes "no debit, no lookup" structural: a zero
   // bookkeeping allowance cannot even inspect the attacker-sized field set.
-  if (!consumeI386GOTOFFTombstoneBookkeepingEvidence(
+  if (!consumeIncompleteBranchMarkerEvidence(
           orderedSetLookupWork(
               CurrentImg->AmbiguousI386GOTOFFFields.size()) +
           1))
@@ -2021,10 +2021,11 @@ bool CFGBuilder::isExactI386GOTOFFInput(const LowOp &Add,
     // or callback in the same function cannot acquire the semantic marker.
     // This lookup is required to claim the exact negative shape, so it cannot
     // run on the user-controlled nested proof balance: budget zero must still
-    // identify the affected branch.  Debit a separate function-scoped
-    // bookkeeping account before touching the ordered set.  Its exhaustion
-    // shares the incomplete-marker function-level fail-closed bit, avoiding
-    // both an unmetered lookup and a shape-less tail-call conversion.
+    // identify the affected branch.  Debit the existing function-scoped
+    // incomplete-marker bookkeeping account before touching the ordered set.
+    // Its exhaustion is already function-level fail-closed, avoiding both an
+    // unmetered lookup and a shape-less tail-call conversion without opening
+    // a second function-scoped work allowance.
     bool HasAdditionalField = false;
     const std::optional<va_t> Field = lookupAmbiguousI386GOTOFFField(
         Add.Addr, End, HasAdditionalField);
