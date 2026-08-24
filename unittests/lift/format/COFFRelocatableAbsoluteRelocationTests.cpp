@@ -51,6 +51,62 @@ protected:
                            [&](const Symbol &Sym) { return Sym.Name == Name; });
     return It == Img.Symbols.end() ? nullptr : &*It;
   }
+
+  fs::path compileI386PicObject(std::string_view Name, bool AlternateEntry) {
+    auto Assembly = [&](uint32_t Displacement) {
+      std::string Source = R"(
+.text
+.def coff_i386_pic_load; .scl 2; .type 32; .endef
+.globl coff_i386_pic_load
+coff_i386_pic_load:
+  calll coff_i386_pic_pc
+.globl coff_i386_pic_pc
+coff_i386_pic_pc:
+  popl %eax
+  .byte 0x05
+  .long )";
+      Source += std::to_string(Displacement);
+      Source += R"(
+  movl (%eax), %eax
+)";
+      if (AlternateEntry)
+        Source += R"(
+  testl %ecx, %ecx
+  jne coff_i386_pic_pc
+)";
+      Source += R"(
+  retl
+
+.section .rdata,"dr"
+.p2align 2
+.globl coff_i386_pic_data
+coff_i386_pic_data:
+  .long 0x11223344
+)";
+      return Source;
+    };
+
+    const fs::path Probe =
+        compileCOFF(std::string(Name) + "_probe", "i686-pc-windows-msvc",
+                    Assembly(0));
+    if (Probe.empty())
+      return {};
+    auto ProbeImage = loadBinary(Probe);
+    if (!ProbeImage) {
+      ADD_FAILURE() << "could not load the COFF PIC layout probe: "
+                    << llvm::toString(ProbeImage.takeError());
+      return {};
+    }
+    const Symbol *PC = findSymbol(*ProbeImage, "coff_i386_pic_pc");
+    const Symbol *Data = findSymbol(*ProbeImage, "coff_i386_pic_data");
+    if (!PC || !Data || Data->Addr < PC->Addr ||
+        Data->Addr - PC->Addr > UINT32_MAX) {
+      ADD_FAILURE() << "COFF PIC fixture layout is not representable";
+      return {};
+    }
+    return compileCOFF(Name, "i686-pc-windows-msvc",
+                       Assembly(static_cast<uint32_t>(Data->Addr - PC->Addr)));
+  }
 };
 
 TEST_F(COFFRelocatableAbsoluteRelocation,
@@ -141,6 +197,74 @@ callee:
   ASSERT_NE(Bytes, nullptr);
   EXPECT_EQ(readLE<uint32_t>(Bytes),
             static_cast<uint32_t>(Callee->Addr + 4 - (FieldVA + 4)));
+}
+
+TEST_F(COFFRelocatableAbsoluteRelocation,
+       I386CallNextPopDirectDataAddressUsesExactPostSSAOccurrence) {
+  const fs::path Object =
+      compileI386PicObject("coff_i386_pic_exact_data", false);
+  ASSERT_FALSE(Object.empty());
+
+  auto ImgOrErr = loadBinary(Object);
+  ASSERT_TRUE(static_cast<bool>(ImgOrErr))
+      << llvm::toString(ImgOrErr.takeError());
+  const BinaryImage &Img = *ImgOrErr;
+  ASSERT_EQ(Img.Format, BinaryFormat::COFF);
+  ASSERT_EQ(Img.Arch, Arch::X86);
+  ASSERT_TRUE(Img.IsRelocatable);
+
+  const Symbol *Function = findSymbol(Img, "coff_i386_pic_load");
+  const Symbol *PC = findSymbol(Img, "coff_i386_pic_pc");
+  const Symbol *Data = findSymbol(Img, "coff_i386_pic_data");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(PC, nullptr);
+  ASSERT_NE(Data, nullptr);
+  EXPECT_EQ(PC->Addr, Function->Addr + 5);
+  ASSERT_LT(PC->Addr, Data->Addr);
+  const uint8_t *Displacement = Img.readVA(PC->Addr + 2, sizeof(uint32_t));
+  ASSERT_NE(Displacement, nullptr);
+  EXPECT_EQ(readLE<uint32_t>(Displacement), Data->Addr - PC->Addr);
+
+  const RunResult LLVM = liftToLLVMIRUnopt(Object);
+  ASSERT_EQ(LLVM.exitCode, 0) << LLVM.err;
+  EXPECT_NE(LLVM.out.find("@__nd_data_"), std::string::npos) << LLVM.out;
+  EXPECT_NE(LLVM.out.find("load volatile i32, ptr @__nd_data_"),
+            std::string::npos)
+      << LLVM.out;
+}
+
+TEST_F(COFFRelocatableAbsoluteRelocation,
+       I386AlternatePopEntryDoesNotAuthenticateRawPC) {
+  const fs::path Object =
+      compileI386PicObject("coff_i386_pic_alternate_pop_entry", true);
+  ASSERT_FALSE(Object.empty());
+
+  auto ImgOrErr = loadBinary(Object);
+  ASSERT_TRUE(static_cast<bool>(ImgOrErr))
+      << llvm::toString(ImgOrErr.takeError());
+  const BinaryImage &Img = *ImgOrErr;
+  ASSERT_EQ(Img.Format, BinaryFormat::COFF);
+  ASSERT_EQ(Img.Arch, Arch::X86);
+  ASSERT_TRUE(Img.IsRelocatable);
+
+  const Symbol *Function = findSymbol(Img, "coff_i386_pic_load");
+  const Symbol *PC = findSymbol(Img, "coff_i386_pic_pc");
+  const Symbol *Data = findSymbol(Img, "coff_i386_pic_data");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(PC, nullptr);
+  ASSERT_NE(Data, nullptr);
+  EXPECT_EQ(PC->Addr, Function->Addr + 5);
+  ASSERT_LT(PC->Addr, Data->Addr);
+  const uint8_t *Displacement = Img.readVA(PC->Addr + 2, sizeof(uint32_t));
+  ASSERT_NE(Displacement, nullptr);
+  EXPECT_EQ(readLE<uint32_t>(Displacement), Data->Addr - PC->Addr);
+
+  const RunResult LLVM = liftToLLVMIRUnopt(Object);
+  ASSERT_EQ(LLVM.exitCode, 0) << LLVM.err;
+  EXPECT_EQ(LLVM.out.find("load volatile i32, ptr @__nd_data_"),
+            std::string::npos)
+      << LLVM.out;
+  EXPECT_NE(LLVM.out.find("inttoptr"), std::string::npos) << LLVM.out;
 }
 
 TEST_F(COFFRelocatableAbsoluteRelocation,
