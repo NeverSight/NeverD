@@ -1375,9 +1375,87 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
   if (!HasIndBranch)
     return completed(false);
 
+  std::vector<va_t> DecoupledPredecessorLoadAddrs;
+  bool HasDecoupledPredecessorGroup = false;
+  if (ScanExactGroup && !HasInstructionLocalPointerLoad && CurrentFuncRange &&
+      CurrentFuncRange->first == CurrentFuncEntry) {
+    // A shared -O0 local computed-goto dispatch reloads its target from a
+    // frame slot in the branch block.  Its scaled table LOADs live in two or
+    // more direct predecessors.  Inventory only pointer LOADs in those direct
+    // predecessor blocks; a normal single-site spill/reload deliberately does
+    // not enter the multi-consumer group path.
+    if (!consume(4) || !consume(orderedLookupWork(BlockStarts.size())))
+      return false;
+    auto BranchBlock = BlockStarts.upper_bound(Rec.Addr);
+    if (BranchBlock != BlockStarts.begin()) {
+      --BranchBlock;
+      std::vector<va_t> PredecessorBlocks;
+      for (const auto &[Addr, Candidate] : Insns) {
+        if (!consume())
+          return false;
+        if (!Candidate.IsBranch || Candidate.IsCall)
+          continue;
+        const bool DirectTarget = Candidate.BranchTarget == *BranchBlock;
+        const bool FallthroughTarget =
+            Candidate.IsCond && Candidate.Size <= InvalidVA - Addr &&
+            Addr + Candidate.Size == *BranchBlock;
+        if (!DirectTarget && !FallthroughTarget)
+          continue;
+        if (!consume(orderedLookupWork(BlockStarts.size())))
+          return false;
+        auto PredBlock = BlockStarts.upper_bound(Addr);
+        if (PredBlock == BlockStarts.begin())
+          continue;
+        --PredBlock;
+        if (!consume(PredecessorBlocks.size()))
+          return false;
+        if (llvm::is_contained(PredecessorBlocks, *PredBlock))
+          continue;
+        if (!ensureAppendCapacity(PredecessorBlocks) || !consume())
+          return false;
+        PredecessorBlocks.push_back(*PredBlock);
+      }
+
+      size_t LoadBearingPredecessors = 0;
+      for (va_t PredStart : PredecessorBlocks) {
+        if (!consume() ||
+            !consume(orderedLookupWork(BlockStarts.size())) ||
+            !consume(orderedLookupWork(Insns.size())))
+          return false;
+        const auto PredEndIt = BlockStarts.upper_bound(PredStart);
+        const va_t PredEnd =
+            PredEndIt == BlockStarts.end() ? InvalidVA : *PredEndIt;
+        bool HasPointerLoad = false;
+        for (auto It = Insns.lower_bound(PredStart);
+             It != Insns.end() && It->first < PredEnd; ++It) {
+          if (!consume() || !consume(It->second.Ops.size()))
+            return false;
+          const bool InstructionHasPointerLoad = std::any_of(
+              It->second.Ops.begin(), It->second.Ops.end(),
+              [](const LowOp &Op) {
+                return Op.Opcode == NdOp::LOAD &&
+                       (Op.Output.Size == 4 || Op.Output.Size == 8);
+              });
+          if (!InstructionHasPointerLoad)
+            continue;
+          HasPointerLoad = true;
+          if (!ensureAppendCapacity(DecoupledPredecessorLoadAddrs) ||
+              !consume())
+            return false;
+          DecoupledPredecessorLoadAddrs.push_back(It->first);
+        }
+        LoadBearingPredecessors += HasPointerLoad ? 1 : 0;
+      }
+      HasDecoupledPredecessorGroup = LoadBearingPredecessors >= 2;
+      if (!HasDecoupledPredecessorGroup)
+        DecoupledPredecessorLoadAddrs.clear();
+    }
+  }
+
   const bool WantsExactGroupInventory =
-      ScanExactGroup && HasInstructionLocalPointerLoad && CurrentFuncRange &&
-      CurrentFuncRange->first == CurrentFuncEntry;
+      ScanExactGroup &&
+      (HasInstructionLocalPointerLoad || HasDecoupledPredecessorGroup) &&
+      CurrentFuncRange && CurrentFuncRange->first == CurrentFuncEntry;
   if (WantsExactGroupInventory) {
     // Establish the current branch's exact local absolute-table model before
     // copying/scanning the rest of an attacker-sized function.  The recursive
@@ -1401,7 +1479,7 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
     // Exact-group authority is anchored in the current branch.  A generic
     // memory callback in the same function must never borrow a later sibling's
     // absolute relocation model.
-    if (!LocalRecovered)
+    if (!LocalRecovered && !HasDecoupledPredecessorGroup)
       return completed(false);
   }
 
@@ -1418,8 +1496,7 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
   // prove their union as one atomic candidate group.  Loads from ordinary
   // instructions remain excluded from that group.
   const bool ScanWholeFunction =
-      ScanExactGroup && HasInstructionLocalPointerLoad && CurrentFuncRange &&
-      CurrentFuncRange->first == CurrentFuncEntry;
+      WantsExactGroupInventory;
   std::set<va_t> InstructionLocalBranchAddrs;
   std::vector<LowOp> Ops;
   auto appendOps = [&](const std::vector<LowOp> &Source) {
@@ -1493,6 +1570,44 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
   auto chargeRegisterTrace = [&]() {
     return consumeProducts({{Ops.size(), limits::kMaxQuasiCopyDepth}});
   };
+  auto chargeExactI386GOTOFFInput = [&]() {
+    const size_t Max = std::numeric_limits<size_t>::max();
+    const size_t Occurrences = RelocatedInstructionAddressOccurrences.size();
+    size_t OwnerQueryWork = 1;
+    auto addProduct = [&](size_t Count, size_t Cost) {
+      if (Count != 0 && Cost > Max / Count)
+        return false;
+      const size_t Product = Count * Cost;
+      if (Product > Max - OwnerQueryWork)
+        return false;
+      OwnerQueryWork += Product;
+      return true;
+    };
+    // isExactI386GOTOFFInput authenticates the relocation field, its decoded
+    // LowIR input occurrence, and the field's data-object owner.  Pay the
+    // complete positive-path inventory before entering that helper; a numeric
+    // displacement without this exact provenance is never a table base.
+    if (!addProduct(7, Img.Segments.size()) ||
+        !addProduct(6, Img.Sections.size()) ||
+        !addProduct(2, orderedLookupWork(Img.ImportStubIndices.size())) ||
+        !addProduct(2, Img.ImportStubRanges.size()) ||
+        !addProduct(2, Img.Imports.size()) ||
+        !addProduct(3, orderedLookupWork(Img.RuntimeFunctionAddrs.size())) ||
+        !addProduct(1,
+                    orderedLookupWork(Img.VerifiedFunctionEntries.size())) ||
+        !addProduct(1, Img.KnownCodeRanges.size()) ||
+        !addProduct(1, Img.Symbols.size()) ||
+        !addProduct(1, orderedLookupWork(Img.RodataAnchorSeg.size())))
+      return consume(Max);
+    return consumeProducts(
+        {{size_t{1}, orderedLookupWork(Insns.size())},
+         {size_t{1}, orderedLookupWork(Img.DataAddressRelocOperands.size())},
+         {Img.DataAddressRelocOperands.size(), 1},
+         {Occurrences, 1},
+         {Occurrences,
+          orderedLookupWork(Img.DataAddressRelocOperands.size())},
+         {Occurrences, OwnerQueryWork}});
+  };
 
   // Recover the concrete scale of a scaled-index operand (INT_MULT const /
   // INT_LEFT shift), traced through value-preserving reshapes.  A null result
@@ -1533,15 +1648,81 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
   // reads one common base, so any site's load recovers the same table.
   bool FoundModel = false;
   va_t ModelBase = 0;
+  va_t ModelOwnerVA = InvalidVA;
   uint16_t ModelWidth = 0;
   uint32_t ModelRun = 0;
+  std::optional<JumpTableValueOccurrence> ModelZeroOccurrence;
+  bool AllowI386GOTOFFRelay = false;
+  if (!HasInstructionLocalPointerLoad && Img.Arch == Arch::X86 &&
+      Img.isELF() && Img.getPointerSize() == 4 &&
+      !Img.I386GOTPCFields.empty() &&
+      !RelocatedInstructionScalarModelOccurrences.empty()) {
+    if (!consume(Img.DataAddressRelocOperands.size()))
+      return false;
+    size_t PositiveGOTOFFFields = 0;
+    for (const auto &[FieldVA, Field] : Img.DataAddressRelocOperands) {
+      if (FieldVA < CurrentFuncEntry || FieldVA > Rec.Addr ||
+          Field.Kind != RelocatedAddressFieldKind::I386ELFGOTOFF ||
+          Field.TargetOwnerVA == InvalidVA)
+        continue;
+      if (++PositiveGOTOFFFields >= 2)
+        break;
+    }
+    if (PositiveGOTOFFFields >= 2) {
+      // This producer-first pass is specific to an -O0 relay: the indirect
+      // branch must reload its target through a value-preserving chain from a
+      // prior pointer-sized LOAD.  A direct callback later in the same
+      // function must not inherit an earlier table merely because several
+      // GOTOFF fields precede it lexically.
+      if (!consume(Ops.size()))
+        return false;
+      int BranchIndex = -1;
+      for (int I = static_cast<int>(Ops.size()) - 1; I >= 0; --I)
+        if (Ops[I].Addr == Rec.Addr && Ops[I].Opcode == NdOp::INDIR_BR &&
+            Ops[I].NumInputs >= 1) {
+          BranchIndex = I;
+          break;
+        }
+      if (BranchIndex >= 0) {
+        NdVar Value = Ops[BranchIndex].Inputs[0];
+        int From = BranchIndex - 1;
+        for (int Depth = 0; Depth < limits::kMaxQuasiCopyDepth; ++Depth) {
+          const std::optional<int> Def = reachingDef(From, Value);
+          if (!Def)
+            return false;
+          if (*Def < 0)
+            break;
+          const LowOp &Producer = Ops[*Def];
+          if (Producer.Opcode == NdOp::LOAD) {
+            AllowI386GOTOFFRelay =
+                Producer.Output.Size == Img.getPointerSize();
+            break;
+          }
+          if ((Producer.Opcode != NdOp::COPY &&
+               Producer.Opcode != NdOp::INT_ZEXT &&
+               Producer.Opcode != NdOp::INT_SEXT) ||
+              Producer.NumInputs < 1)
+            break;
+          Value = Producer.Inputs[0];
+          From = *Def - 1;
+        }
+      }
+    }
+  }
   std::vector<int> LoadScanOrder;
   if (!consumeProducts(
-          {{Ops.size(), ScanWholeFunction ? 2 : 1},
+          {{Ops.size(), ScanWholeFunction ? 2
+                                         : (AllowI386GOTOFFRelay ? 2 : 1)},
            {Ops.size(),
             ScanWholeFunction
                 ? orderedLookupWork(InstructionLocalBranchAddrs.size())
-                : 0}}))
+                : 0},
+           {Ops.size(),
+            ScanWholeFunction
+                ? orderedLookupWork(InstructionLocalBranchAddrs.size())
+                : 0},
+           {Ops.size(), DecoupledPredecessorLoadAddrs.empty() ? 0 : 1},
+           {Ops.size(), DecoupledPredecessorLoadAddrs.size()}}))
     return false;
   if (ScanWholeFunction) {
     // Anchor the model in the current branch before considering siblings.  A
@@ -1560,6 +1741,14 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
           return false;
         LoadScanOrder.push_back(I);
       }
+    for (int I = static_cast<int>(Ops.size()) - 1; I >= 0; --I)
+      if (Ops[I].Addr != Rec.Addr &&
+          !InstructionLocalBranchAddrs.count(Ops[I].Addr) &&
+          llvm::is_contained(DecoupledPredecessorLoadAddrs, Ops[I].Addr)) {
+        if (!ensureAppendCapacity(LoadScanOrder) || !consume())
+          return false;
+        LoadScanOrder.push_back(I);
+      }
   } else if (RequireCurrentBranchLoad) {
     for (int I = static_cast<int>(Ops.size()) - 1; I >= 0; --I)
       if (Ops[I].Addr == Rec.Addr) {
@@ -1567,6 +1756,23 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
           return false;
         LoadScanOrder.push_back(I);
       }
+  } else if (AllowI386GOTOFFRelay) {
+    // An i386 call/POP model is produced before any frame spill/reload of the
+    // GOT base.  Visit the lexical producer first so its exact candidate-local
+    // graph proof can authenticate the table once; later loads of that same
+    // exact GOTOFF table are still required to pass the complete address-role
+    // proof below.  The ordinary reverse pass remains available when this
+    // positive-only pass finds no model.
+    for (int I = 0; I < static_cast<int>(Ops.size()); ++I) {
+      if (!ensureAppendCapacity(LoadScanOrder) || !consume())
+        return false;
+      LoadScanOrder.push_back(I);
+    }
+    for (int I = static_cast<int>(Ops.size()) - 1; I >= 0; --I) {
+      if (!ensureAppendCapacity(LoadScanOrder) || !consume())
+        return false;
+      LoadScanOrder.push_back(I);
+    }
   } else {
     for (int I = static_cast<int>(Ops.size()) - 1; I >= 0; --I) {
       if (!ensureAppendCapacity(LoadScanOrder) || !consume())
@@ -1656,7 +1862,14 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
                             {size_t{1}, AnchorLookup},
                             {AnchorUpper, CodePtrLookup + 1}});
   };
-  for (int I : LoadScanOrder) {
+  const size_t I386GOTOFFPriorityCount =
+      AllowI386GOTOFFRelay ? Ops.size() : 0;
+  for (size_t OrderIndex = 0; OrderIndex < LoadScanOrder.size(); ++OrderIndex) {
+    if (OrderIndex == I386GOTOFFPriorityCount && FoundModel)
+      break;
+    const bool ExactI386GOTOFFOnly =
+        OrderIndex < I386GOTOFFPriorityCount;
+    const int I = LoadScanOrder[OrderIndex];
     if (!consume())
       return false;
     const LowOp &L = Ops[I];
@@ -1665,6 +1878,56 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
     uint16_t W = L.Output.Size;
     if (W != 4 && W != 8)
       continue;
+    auto appendOccurrence =
+        [&](va_t ResolvedBase, const NdVar &ExactIndex, va_t IndexUseAddr,
+            int IndexUseSeq, va_t RoleBase, const NdVar &RoleIndex,
+            va_t RoleIndexUseAddr, int RoleIndexUseSeq,
+            uint64_t RoleAddressScale,
+            std::optional<uint32_t> LiteralCoordinate,
+            JumpTableFrameStorageRole FrameStorage = {}) {
+      JumpTableValueOccurrence IndexOccurrence{ExactIndex, IndexUseAddr,
+                                               IndexUseSeq,
+                                               /*DefinedAtPoint=*/false};
+      JumpTableValueOccurrence RoleIndexOccurrence{
+          RoleIndex, RoleIndexUseAddr, RoleIndexUseSeq,
+          /*DefinedAtPoint=*/false};
+      JumpTableValueOccurrence LoadOccurrence{L.Output, L.Addr, L.Seq,
+                                              /*DefinedAtPoint=*/true};
+      if (ShapeClaimed)
+        *ShapeClaimed = true;
+      if ((!LiteralCoordinate &&
+           !ensureAppendCapacity(Info.IndexValueAlternatives)) ||
+          !ensureAppendCapacity(Info.TargetLoads) ||
+          !ensureAppendCapacity(Info.LoadRoles) ||
+          (ScanWholeFunction && ExactConsumerGroup && !LiteralCoordinate &&
+           !AllowI386GOTOFFRelay &&
+           (!ensureAppendCapacity(ExactConsumerGroup->IndexOccurrences) ||
+            !ensureAppendCapacity(ExactConsumerGroup->BranchAddrs))) ||
+          !consume(8))
+        return false;
+      if (!LiteralCoordinate)
+        Info.IndexValueAlternatives.push_back(IndexOccurrence);
+      Info.TargetLoads.push_back(LoadOccurrence);
+      JumpTableLoadRole Role;
+      Role.Load = LoadOccurrence;
+      Role.LoadWidth = W;
+      Role.FrameStorage = std::move(FrameStorage);
+      if (!ensureAppendCapacity(Role.AllowedBases) ||
+          !ensureAppendCapacity(Role.Indices) || !consume(4))
+        return false;
+      Role.AllowedBases.push_back(RoleBase);
+      Role.Indices.push_back(RoleIndexOccurrence);
+      Role.AddressScale = RoleAddressScale;
+      Role.IsLiteralCoordinate = LiteralCoordinate.has_value();
+      Role.LiteralCoordinate = LiteralCoordinate.value_or(0);
+      Info.LoadRoles.push_back(std::move(Role));
+      if (ScanWholeFunction && ExactConsumerGroup && !LiteralCoordinate &&
+          !AllowI386GOTOFFRelay) {
+        ExactConsumerGroup->IndexOccurrences.push_back(IndexOccurrence);
+        ExactConsumerGroup->BranchAddrs.push_back(L.Addr);
+      }
+      return true;
+    };
     const NdVar &AddrV = (L.NumInputs >= 2) ? L.Inputs[1] : L.Inputs[0];
     if (!AddrV.isReg() && !AddrV.isTemp())
       continue;
@@ -1691,18 +1954,84 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
         Ops[AddIdx].NumInputs < 2)
       continue;
 
+    // i386 PIC folds an exact R_386_GOTOFF displacement into a second ADD:
+    //   address = (authenticated_GOT_zero + index * W) + GOTOFF(table)
+    // Peel only that exact relocation occurrence.  The inner base still has to
+    // reach the matching call/POP + GOTPC model below, so neither a numeric
+    // constant nor an unrelated absolute relocation can acquire this shape.
+    int AddressAddIdx = AddIdx;
+    std::optional<va_t> ExactI386GOTOFFBase;
+    std::optional<va_t> ExactI386GOTOFFOwner;
+    bool ExactI386GOTOFFHasScaledInner = false;
+    for (int ConstantSide = 0;
+         AllowI386GOTOFFRelay && ConstantSide < 2; ++ConstantSide) {
+      const NdVar &Constant = Ops[AddIdx].Inputs[ConstantSide];
+      if (!Constant.isConst() || Constant.Size != 4 ||
+          Constant.Provenance != ConstantAddressProvenance::DataAddress ||
+          Constant.AddressOwnerVA == InvalidVA)
+        continue;
+      if (!chargeExactI386GOTOFFInput())
+        return false;
+      if (!isExactI386GOTOFFInput(Ops[AddIdx], ConstantSide))
+        continue;
+      ExactI386GOTOFFBase = static_cast<va_t>(Constant.Offset);
+      ExactI386GOTOFFOwner = Constant.AddressOwnerVA;
+      const std::optional<int> Inner =
+          reachingDef(AddIdx - 1, Ops[AddIdx].Inputs[1 - ConstantSide]);
+      if (!Inner)
+        return false;
+      if (*Inner >= 0 && Ops[*Inner].Opcode == NdOp::INT_ADD &&
+          Ops[*Inner].NumInputs >= 2) {
+        AddressAddIdx = *Inner;
+        ExactI386GOTOFFHasScaledInner = true;
+      }
+      break;
+    }
+    if (ExactI386GOTOFFOnly && !ExactI386GOTOFFBase)
+      continue;
+
+    // A literal computed-goto arm such as `goto *table[2]` has no scaled
+    // index in LowIR: clang emits `GOT_zero + GOTOFF(table + 2*W)`.  Once a
+    // variable arm has authenticated the physical table, retain this exact
+    // relocation occurrence as the corresponding scalar index.  The field
+    // must remain inside the same complete, sized relocation object.  The
+    // ordinary address-role proof below still has to authenticate this LOAD's
+    // runtime address, so a numeric displacement or another object cannot
+    // become a table arm.
+    if (ExactI386GOTOFFBase && !ExactI386GOTOFFHasScaledInner && FoundModel &&
+        ModelZeroOccurrence) {
+      const va_t SlotAddress = *ExactI386GOTOFFBase;
+      const uint64_t Span = uint64_t(ModelRun) * ModelWidth;
+      if (W == ModelWidth && SlotAddress >= ModelBase &&
+          ExactI386GOTOFFOwner &&
+          *ExactI386GOTOFFOwner == ModelOwnerVA &&
+          SlotAddress - ModelBase < Span &&
+          (SlotAddress - ModelBase) % ModelWidth == 0) {
+        const uint64_t Slot = (SlotAddress - ModelBase) / ModelWidth;
+        if (!appendOccurrence(
+                ModelBase, NdVar::scalar(Slot, W), InvalidVA, -1, SlotAddress,
+                ModelZeroOccurrence->Value, ModelZeroOccurrence->Addr,
+                ModelZeroOccurrence->Seq, 1,
+                static_cast<uint32_t>(Slot), {}))
+          return false;
+      }
+      continue;
+    }
+
     for (int Side = 0; Side < 2; ++Side) {
       if (!consume() || !chargeScaledIndexTrace())
         return false;
       NdVar ExactIndex;
       va_t IndexUseAddr = InvalidVA;
       int IndexUseSeq = -1;
-      uint64_t Idx = scaledIndexReg(Ops, AddIdx - 1, Ops[AddIdx].Inputs[Side],
-                                    &ExactIndex, &IndexUseAddr, &IndexUseSeq);
+      uint64_t Idx =
+          scaledIndexReg(Ops, AddressAddIdx - 1,
+                         Ops[AddressAddIdx].Inputs[Side], &ExactIndex,
+                         &IndexUseAddr, &IndexUseSeq);
       if (Idx == InvalidVA)
         continue;
       const std::optional<uint32_t> Scale =
-          scaleOf(Ops[AddIdx].Inputs[Side], AddIdx - 1);
+          scaleOf(Ops[AddressAddIdx].Inputs[Side], AddressAddIdx - 1);
       if (!Scale)
         return false;
       if (*Scale != W)
@@ -1710,14 +2039,36 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
 
       // The other operand is the table base: a constant data VA, either a
       // literal (`disp(,idx,W)`) or a register folded to one (`lea tab,%rN`).
-      const NdVar &BaseV = Ops[AddIdx].Inputs[1 - Side];
+      const NdVar &BaseV = Ops[AddressAddIdx].Inputs[1 - Side];
       std::optional<va_t> Base;
-      if (BaseV.isConst())
+      JumpTableFrameStorageRole FrameStorage;
+      std::vector<JumpTableValueOccurrence> StackStorageConsumers;
+      bool StackTableMutated = false;
+      if (ExactI386GOTOFFBase) {
+        // The first occurrence establishes the candidate-local GOT-zero
+        // model.  A later occurrence may reuse only that same exact relocation
+        // target; tableLoadAddressesMatchRole subsequently proves every
+        // retained runtime address, so a frame reload or unrelated base cannot
+        // borrow the model merely because the displacement bytes match.
+        if (FoundModel &&
+            (*ExactI386GOTOFFBase != ModelBase ||
+             !ExactI386GOTOFFOwner ||
+             *ExactI386GOTOFFOwner != ModelOwnerVA))
+          continue;
+        const bool ReusesAuthenticatedTableBase = FoundModel;
+        const bool ModelZero =
+            ReusesAuthenticatedTableBase ||
+            exactI386ModelZeroReaches(Ops[AddressAddIdx], 1 - Side,
+                                      *ExactI386GOTOFFBase);
+        if (!ModelZero)
+          continue;
+        Base = *ExactI386GOTOFFBase;
+      } else if (BaseV.isConst())
         Base = static_cast<va_t>(BaseV.Offset);
       else if (BaseV.isReg() || BaseV.isTemp()) {
         if (!chargeRegisterTrace())
           return false;
-        uint64_t BReg = traceToRegister(Ops, AddIdx - 1, BaseV);
+        uint64_t BReg = traceToRegister(Ops, AddressAddIdx - 1, BaseV);
         if (BReg != InvalidVA) {
           if (!consumeProducts(
                   {{Img.Segments.size(), 4}, {Img.Sections.size(), 2}}))
@@ -1729,6 +2080,37 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
             return false;
           if (F && Img.getSegmentFor(*F))
             Base = static_cast<va_t>(*F);
+          if (!Base && !DecoupledPredecessorLoadAddrs.empty()) {
+            if (!consume(DecoupledPredecessorLoadAddrs.size()))
+              return false;
+            if (!llvm::is_contained(DecoupledPredecessorLoadAddrs, L.Addr))
+              continue;
+            std::vector<JumpTableFrameInitializerChunk> Initializers;
+            const va_t StackSource = resolveStackMaterializedTableSource(
+                Img, Rec, Ops, I, BReg, W, /*TableDisp=*/0,
+                &StackTableMutated, &Initializers, &StackStorageConsumers);
+            if (StackTableEvidenceIncompleteBranches.count(Rec.Addr))
+              return false;
+            if (StackSource != InvalidVA) {
+              FrameStorage.RuntimeBase = {
+                  {BaseV, Ops[AddressAddIdx].Addr, Ops[AddressAddIdx].Seq,
+                   /*DefinedAtPoint=*/false},
+                  /*ByteAddend=*/0};
+              FrameStorage.CompleteAddress = {
+                  Ops[AddressAddIdx].Output, Ops[AddressAddIdx].Addr,
+                  Ops[AddressAddIdx].Seq, /*DefinedAtPoint=*/true};
+              FrameStorage.Initializers = std::move(Initializers);
+              if (FrameStorage.RuntimeBase.Use.Value.Size == 0 ||
+                  FrameStorage.RuntimeBase.Use.Addr == InvalidVA ||
+                  FrameStorage.RuntimeBase.Use.Seq < 0 ||
+                  FrameStorage.RuntimeBase.Use.DefinedAtPoint ||
+                  FrameStorage.CompleteAddress.Value.Size == 0 ||
+                  !FrameStorage.CompleteAddress.DefinedAtPoint ||
+                  FrameStorage.Initializers.empty())
+                continue;
+              Base = StackSource;
+            }
+          }
         }
       }
       if (!Base)
@@ -1765,12 +2147,41 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
       if (!chargeRelocationRun())
         return false;
       uint32_t Run = countCodePtrRelocRun(Img, ResolvedBase, W);
-      if (!ensureDecodedAnchors())
-        return false;
-      if (Run != 0 && !chargeNextAnchorBound())
-        return false;
-      Run = boundCodePtrRunByNextAnchor(Img, ResolvedBase, W, Run,
-                                        *DecodedAnchors);
+      bool HasExactSizedObject = false;
+      if (ExactI386GOTOFFBase && ExactI386GOTOFFOwner &&
+          *ExactI386GOTOFFOwner == ResolvedBase) {
+        // An exact data symbol owns the whole table even when another GOTOFF
+        // field names an interior constant arm.  Validate that complete object
+        // against its mapped owner and the already authenticated relocation
+        // run before ignoring such an interior consumer anchor.
+        if (!consumeProducts({{Img.Symbols.size(), 2},
+                              {Img.Segments.size(), 2},
+                              {Img.Sections.size(), 2}}))
+          return false;
+        const std::optional<va_t> OwnerEnd =
+            Img.mappedObjectOwnerEnd(ResolvedBase);
+        const uint64_t ObjectSize = Img.dataObjectSizeAt(ResolvedBase);
+        if (ObjectSize >= W && OwnerEnd &&
+            ObjectSize <= InvalidVA - ResolvedBase &&
+            ResolvedBase + ObjectSize <= *OwnerEnd &&
+            ObjectSize % W == 0) {
+          const uint64_t ExactSlots = ObjectSize / W;
+          if (ExactSlots >= limits::kMinJumpTableEntries &&
+              ExactSlots <= limits::kMaxJumpTableEntries &&
+              ExactSlots <= Run) {
+            Run = static_cast<uint32_t>(ExactSlots);
+            HasExactSizedObject = true;
+          }
+        }
+      }
+      if (!HasExactSizedObject) {
+        if (!ensureDecodedAnchors())
+          return false;
+        if (Run != 0 && !chargeNextAnchorBound())
+          return false;
+        Run = boundCodePtrRunByNextAnchor(Img, ResolvedBase, W, Run,
+                                          *DecodedAnchors);
+      }
       if (Run < limits::kMinJumpTableEntries)
         continue;
 
@@ -1787,12 +2198,17 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
 
       if (!chargeRegisterTrace())
         return false;
-      uint64_t IdxSrc = traceRegSource(Ops, AddIdx - 1, Idx);
+      uint64_t IdxSrc = traceRegSource(Ops, AddressAddIdx - 1, Idx);
       if (!FoundModel) {
         FoundModel = true;
         ModelBase = ResolvedBase;
+        ModelOwnerVA = ExactI386GOTOFFOwner.value_or(InvalidVA);
         ModelWidth = W;
         ModelRun = Run;
+        if (ExactI386GOTOFFBase)
+          ModelZeroOccurrence = JumpTableValueOccurrence{
+              Ops[AddressAddIdx].Inputs[1 - Side], Ops[AddressAddIdx].Addr,
+              Ops[AddressAddIdx].Seq, /*DefinedAtPoint=*/false};
         Info.setBaseAddr(ResolvedBase);
         Info.EntrySize = W;
         Info.IsRelative = false;
@@ -1808,38 +2224,30 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
         // mask, or complete modulo proof.
         Info.PhysicalCapacity = Run;
         Info.RelocAbsolute = true;
+        if (!FrameStorage.Initializers.empty()) {
+          size_t StaticSourceCount = 0;
+          for (const JumpTableFrameInitializerChunk &Initializer :
+               FrameStorage.Initializers) {
+            if (Initializer.StaticSources.size() >
+                std::numeric_limits<size_t>::max() - StaticSourceCount)
+              return false;
+            StaticSourceCount += Initializer.StaticSources.size();
+          }
+          if (!consumeProducts(
+                  {{FrameStorage.Initializers.size(), 5},
+                   {StaticSourceCount, 3},
+                   {StackStorageConsumers.size(), 3}}))
+            return false;
+          Info.AuthenticatedFrameStorage = FrameStorage;
+          Info.AuthenticatedStorageConsumers = StackStorageConsumers;
+          Info.MutatedUnsafe = StackTableMutated;
+        }
       }
-      JumpTableValueOccurrence IndexOccurrence{ExactIndex, IndexUseAddr,
-                                               IndexUseSeq,
-                                               /*DefinedAtPoint=*/false};
-      JumpTableValueOccurrence LoadOccurrence{L.Output, L.Addr, L.Seq,
-                                              /*DefinedAtPoint=*/true};
-      if (ShapeClaimed)
-        *ShapeClaimed = true;
-      if (!ensureAppendCapacity(Info.IndexValueAlternatives) ||
-          !ensureAppendCapacity(Info.TargetLoads) ||
-          !ensureAppendCapacity(Info.LoadRoles) ||
-          (ScanWholeFunction && ExactConsumerGroup &&
-           (!ensureAppendCapacity(ExactConsumerGroup->IndexOccurrences) ||
-            !ensureAppendCapacity(ExactConsumerGroup->BranchAddrs))) ||
-          !consume(8))
+      if (!appendOccurrence(ResolvedBase, ExactIndex, IndexUseAddr,
+                            IndexUseSeq, ResolvedBase, ExactIndex,
+                            IndexUseAddr, IndexUseSeq, W, std::nullopt,
+                            std::move(FrameStorage)))
         return false;
-      Info.IndexValueAlternatives.push_back(IndexOccurrence);
-      Info.TargetLoads.push_back(LoadOccurrence);
-      JumpTableLoadRole Role;
-      Role.Load = LoadOccurrence;
-      Role.LoadWidth = W;
-      if (!ensureAppendCapacity(Role.AllowedBases) ||
-          !ensureAppendCapacity(Role.Indices) || !consume(4))
-        return false;
-      Role.AllowedBases.push_back(ResolvedBase);
-      Role.Indices.push_back(IndexOccurrence);
-      Role.AddressScale = W;
-      Info.LoadRoles.push_back(std::move(Role));
-      if (ScanWholeFunction && ExactConsumerGroup) {
-        ExactConsumerGroup->IndexOccurrences.push_back(IndexOccurrence);
-        ExactConsumerGroup->BranchAddrs.push_back(L.Addr);
-      }
       LLVM_DEBUG(llvm::dbgs() << "  const-base-abs: decoupled absolute table 0x"
                               << llvm::utohexstr(ResolvedBase) << " (W=" << W
                               << ", " << Run << " entries)\n");

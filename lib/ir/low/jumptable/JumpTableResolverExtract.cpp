@@ -321,7 +321,7 @@ void CFGBuilder::extractJumpTables(LowFunc &Func) {
       JT.TwoTableHiPositive = Info.TwoTableHiPositive;
       JT.TwoLevelIndex = Info.TwoLevelIndex;
       JT.MutatedUnsafe = Info.MutatedUnsafe;
-      if (Info.IndexReg != InvalidVA)
+      if (!Info.UseSharedDispatchSelector && Info.IndexReg != InvalidVA)
         JT.IndexRegOff = static_cast<int>(Info.IndexReg);
       if (Info.TwoTableSelect) {
         const JumpTableLoadRole *CompositeRole = nullptr;
@@ -357,7 +357,7 @@ void CFGBuilder::extractJumpTables(LowFunc &Func) {
               JT.CompositeSelectorUseRef = std::move(Composite);
           }
         }
-      } else {
+      } else if (!Info.UseSharedDispatchSelector) {
         std::vector<JumpTableValueOccurrence> IndexOccurrences =
             Info.IndexValueAlternatives;
         if (IndexOccurrences.empty())

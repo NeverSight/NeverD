@@ -322,9 +322,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
                    ActiveJumpTableCandidateProofRank,
                    ActiveJumpTableConsumerAudit, Rec.Addr};
   const size_t RequestedI386GOTOFFEvidenceBudget = std::min<size_t>(
-      limits::kMaxJumpTableValueMatchEvidenceWork,
+      limits::kMaxI386GOTOFFProposalEvidenceWork,
       I386GOTOFFProposalEvidenceBudgetForTesting.value_or(
-          limits::kMaxJumpTableValueMatchEvidenceWork));
+          limits::kMaxI386GOTOFFProposalEvidenceWork));
   I386GOTOFFProposalEvidenceRemaining =
       RequestedI386GOTOFFEvidenceBudget;
   I386GOTOFFProposalShapeClaimed = false;
@@ -1825,6 +1825,22 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     return Proven && Complete && CaptureTargetRoleCertificate();
   };
 
+  // Preserve the complete target-role occurrence inventory before the
+  // address proof narrows it to roles reachable in the current immutable CFG.
+  // A strong proposal uses this inventory only transactionally: it may stop a
+  // newly proposed table LOAD from being classified as an independent
+  // consumer of its own storage, while the next graph round must rediscover
+  // and address-authenticate every role before stable publication.
+  std::vector<StrongJumpTableLoadRole> PrePruningLoadRoles;
+  if (CandidateProposalStageActive) {
+    if (!consumeCandidateProducts({{Info.LoadRoles.size(), 3}}) ||
+        !consumeCandidateEvidence(4))
+      return {};
+    PrePruningLoadRoles.reserve(Info.LoadRoles.size());
+    for (const JumpTableLoadRole &Role : Info.LoadRoles)
+      PrePruningLoadRoles.push_back({Role.Load, Role.LoadWidth});
+  }
+
   bool AddressRoleComplete = false;
   const bool AddressRole = tableLoadAddressesMatchRole(
       Info, &CandidateEvidenceBudget, &AddressRoleComplete);
@@ -2344,6 +2360,16 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   if (!MaskGraphGrowth || *MaskGraphGrowth)
     return {};
   if (!Info.TwoTableSelect && !Info.TwoLevelIndex && MaskBound > 0) {
+    if (!consumeCandidateProducts(
+            {{Info.LoadRoles.size(), MaskCoordinates.size() + 2}}))
+      return {};
+    for (const JumpTableLoadRole &Role : Info.LoadRoles)
+      if (Role.IsLiteralCoordinate &&
+          std::find(MaskCoordinates.begin(), MaskCoordinates.end(),
+                    Role.LiteralCoordinate) == MaskCoordinates.end()) {
+        ClaimRejectedPhysicalTableIdentity();
+        return {};
+      }
     Info.AuthenticatedMaskCoordinates = MaskCoordinates;
     Info.AuthenticatedMaskKnownOneWitnesses =
         std::move(MaskKnownOneWitnesses);
@@ -2387,6 +2413,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
 
     std::optional<uint64_t> AddressScale;
     for (const JumpTableLoadRole &Role : Info.LoadRoles) {
+      if (Role.IsLiteralCoordinate)
+        continue;
       if (Role.LoadWidth != Info.EntrySize || Role.AddressScale == 0 ||
           std::find(Role.AllowedBases.begin(), Role.AllowedBases.end(),
                     Info.BaseAddr) == Role.AllowedBases.end())
@@ -2763,9 +2791,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     // Scan/copy each occurrence role now and reserve one additional unit for
     // transactional destruction if this stage later rolls back.  That cleanup
     // reserve is consumed before proposal allocation and is never refreshed.
-    if (!consumeCandidateProducts(
-            {{Info.StorageRanges.size(), 3},
-             {Info.LoadRoles.size(), 3}}) ||
+    if (!consumeCandidateProducts({{Info.StorageRanges.size(), 3}}) ||
         !consumeCandidateEvidence(
             orderedLookupWork(NextStrongJumpTableProposals.size()) + 1) ||
         !consumeCandidateEvidence(
@@ -2775,9 +2801,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     StrongJumpTableRoleProposal Proposal;
     Proposal.StorageRanges = Info.StorageRanges;
     Proposal.ExactPhysicalStorageRange = Info.ExactPhysicalStorageRange;
-    Proposal.LoadRoles.reserve(Info.LoadRoles.size());
-    for (const JumpTableLoadRole &Role : Info.LoadRoles)
-      Proposal.LoadRoles.push_back({Role.Load, Role.LoadWidth});
+    Proposal.LoadRoles = std::move(PrePruningLoadRoles);
     Proposal.ProofRank = ActiveJumpTableCandidateProofRank;
     NextStrongJumpTableProposals.insert_or_assign(Rec.Addr,
                                                   std::move(Proposal));
@@ -3123,6 +3147,29 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
         return true;
       if (!AnalysisComplete)
         return false;
+      if (CandidateProposalStageActive &&
+          CandidateStrongProposalRecorded) {
+        if (!consumeCandidateEvidence(
+                orderedLookupWork(NextStrongJumpTableProposals.size()))) {
+          AnalysisComplete = false;
+          return false;
+        }
+        const auto Current = NextStrongJumpTableProposals.find(Rec.Addr);
+        if (Current == NextStrongJumpTableProposals.end()) {
+          AnalysisComplete = false;
+          return false;
+        }
+        // The current stage's proposal was captured from the complete
+        // pre-pruning address-role inventory above.  Use it transactionally
+        // while deciding whether one of those exact table LOADs is an
+        // independent consumer of its own storage.  Publication still
+        // requires the final role/domain replay, and rollback discards this
+        // proposal together with every suppression decision derived from it.
+        if (Authenticates(Current->second))
+          return true;
+        if (!AnalysisComplete)
+          return false;
+      }
       const size_t RoleUniverseSize =
           CandidateProposalStageActive
               ? PriorStrongJumpTableProposals.size()
@@ -3220,6 +3267,25 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
         return AuthenticatesSibling(PriorStrongJumpTableProposals);
       return AuthenticatesSibling(ResolvedTableInfo);
     };
+    auto instructionHasAuthenticatedTargetLoad =
+        [&](va_t Addr, bool &AnalysisComplete) {
+          if (!consumeCandidateEvidence(orderedLookupWork(Insns.size()))) {
+            AnalysisComplete = false;
+            return false;
+          }
+          const auto It = Insns.find(Addr);
+          if (It == Insns.end())
+            return false;
+          if (!consumeCandidateEvidence(It->second.Ops.size())) {
+            AnalysisComplete = false;
+            return false;
+          }
+          for (const LowOp &Op : It->second.Ops)
+            if (Op.Opcode == NdOp::LOAD &&
+                isAuthenticatedTargetLoad(Op, AnalysisComplete))
+              return true;
+          return false;
+        };
     auto isAuthenticatedStorageConsumer = [&](const LowOp &Op,
                                                const NdVar &Value,
                                                bool &AnalysisComplete) {
@@ -3538,6 +3604,11 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
           auto It = Insns.upper_bound(FieldVA);
           if (It != Insns.begin()) {
             --It;
+            if (instructionHasAuthenticatedTargetLoad(It->first,
+                                                      AnalysisComplete))
+              continue;
+            if (!AnalysisComplete)
+              return true;
             if (isAuthenticatedStaticSourceRelocation(
                     Slot, FieldVA, Field.TargetOwnerVA, It->first,
                     AnalysisComplete))
@@ -3554,6 +3625,11 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
           auto It = Insns.upper_bound(FieldVA);
           if (It != Insns.begin()) {
             --It;
+            if (instructionHasAuthenticatedTargetLoad(It->first,
+                                                      AnalysisComplete))
+              continue;
+            if (!AnalysisComplete)
+              return true;
             if (isAuthenticatedStaticSourceRelocation(
                     Slot, FieldVA, Field.TargetOwnerVA, It->first,
                     AnalysisComplete))
@@ -3576,15 +3652,39 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
           return true;
         }
         for (const LowOp &Op : It->second.Ops) {
+          if (!consumeCandidateEvidence(static_cast<size_t>(Op.NumInputs) +
+                                        1)) {
+            AnalysisComplete = false;
+            return true;
+          }
+          auto IsExactSlotValue = [&](const NdVar &V) {
+            return V.isConst() && V.Offset == Slot && !SlotIsStorageBase &&
+                   isExactAddressProvenance(V.Provenance);
+          };
+          bool CarriesExactSlot = IsExactSlotValue(Op.Output);
+          for (uint8_t I = 0; !CarriesExactSlot && I < Op.NumInputs; ++I)
+            CarriesExactSlot = IsExactSlotValue(Op.Inputs[I]);
+          if (!CarriesExactSlot)
+            continue;
+          if (instructionHasAuthenticatedTargetLoad(Op.Addr,
+                                                    AnalysisComplete))
+            continue;
+          if (!AnalysisComplete)
+            return true;
+
+          // Authentication is relevant only to an occurrence that actually
+          // materializes this exact slot.  Querying every LOAD and every
+          // operand once per physical table entry turns the audit into
+          // slots-times-graph proof work and can exhaust a complete large
+          // switch before reaching the only values that could affect this
+          // slot's suppression decision.
           if (isAuthenticatedTargetLoad(Op, AnalysisComplete))
             continue;
           if (!AnalysisComplete)
             return true;
-          if (!consumeCandidateEvidence(static_cast<size_t>(Op.NumInputs) + 1)) {
-            AnalysisComplete = false;
-            return true;
-          }
           auto IsExactSlot = [&](const NdVar &V) {
+            if (!IsExactSlotValue(V))
+              return false;
             if (isAuthenticatedStorageConsumer(Op, V, AnalysisComplete))
               return false;
             if (!AnalysisComplete)
@@ -3594,8 +3694,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
               return false;
             if (!AnalysisComplete)
               return false;
-            return V.isConst() && V.Offset == Slot && !SlotIsStorageBase &&
-                   isExactAddressProvenance(V.Provenance);
+            return true;
           };
           if (IsExactSlot(Op.Output))
             return true;
@@ -3684,11 +3783,14 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       std::vector<va_t> Refined;
       Refined.reserve(Allowlist.size());
       for (va_t Slot : Allowlist) {
-        if (!WholeObjectEscapes && !AmbiguousObjectLoad &&
+        const bool Independent =
+            !WholeObjectEscapes && !AmbiguousObjectLoad &&
             !DirectReadSlots.count(Slot) &&
-            !hasReachableIndependentConsumer(Slot, Reachable,
-                                             /*WholeObjectEscapes=*/false,
-                                             ConsumerAnalysisComplete))
+            hasReachableIndependentConsumer(Slot, Reachable,
+                                            /*WholeObjectEscapes=*/false,
+                                            ConsumerAnalysisComplete);
+        if (!WholeObjectEscapes && !AmbiguousObjectLoad &&
+            !DirectReadSlots.count(Slot) && !Independent)
           Refined.push_back(Slot);
         if (!ConsumerAnalysisComplete) {
           CandidateEvidenceAnalysisIncomplete = true;
@@ -3704,6 +3806,13 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     if (!Stable)
       return {};
     Info.SuppressibleRelocationSlots = std::move(Allowlist);
+    // Consumer-audit proof context is needed only while the final candidate
+    // actually suppresses relocation roots.  If the fixed point retains every
+    // physical slot, publish against the ordinary full-root context; forcing
+    // the audit-only i386 proposal context here can reject an otherwise exact
+    // table even though this candidate grants no suppression permission.
+    ActiveJumpTableConsumerAudit =
+        !Info.SuppressibleRelocationSlots.empty();
 
     // A newly preserved relocation target is a real proof root.  Re-run both
     // occurrence certificates with the final allowlist before publishing.
@@ -3743,7 +3852,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       return {};
     if (!FinalIndexDomain)
       return {};
-    if (!EnsureTargetRoleProofCurrent())
+    const bool FinalTargetRoleCurrent = EnsureTargetRoleProofCurrent();
+    if (!FinalTargetRoleCurrent)
       return {};
   } else {
     // This fixed point grants permission to suppress independent code-pointer
@@ -3777,6 +3887,10 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     Proposal->second.SuppressibleRelocationSlots =
         Info.SuppressibleRelocationSlots;
   }
+  const bool HasLiteralDispatchRole = std::any_of(
+      Info.LoadRoles.begin(), Info.LoadRoles.end(),
+      [](const JumpTableLoadRole &Role) { return Role.IsLiteralCoordinate; });
+  Info.UseSharedDispatchSelector = HasLiteralDispatchRole;
   Info.RequiresCompleteCFGProof = RequestedCompleteJumpTableProof;
   if (!reserveResolvedInfoMaterialization(Info) ||
       !consumeCandidateEvidence(

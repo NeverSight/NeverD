@@ -944,6 +944,8 @@ uint32_t CFGBuilder::inferBoundsFromMask(
             FixedPointGateIncomplete = true;
             return false;
           }
+          if (Role.IsLiteralCoordinate)
+            continue;
           if (Role.LoadWidth != Info.EntrySize || Role.AddressScale == 0 ||
               std::find(Role.AllowedBases.begin(), Role.AllowedBases.end(),
                         Info.BaseAddr) == Role.AllowedBases.end())
@@ -3710,6 +3712,8 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
     for (const JumpTableLoadRole &Role : Info.LoadRoles) {
       if (!consumeFixedPointProducts({{1, 1}, {Role.AllowedBases.size(), 1}}))
         return false;
+      if (Role.IsLiteralCoordinate)
+        continue;
       if (Role.LoadWidth != Info.EntrySize || Role.AddressScale == 0 ||
           std::find(Role.AllowedBases.begin(), Role.AllowedBases.end(),
                     Info.BaseAddr) == Role.AllowedBases.end())

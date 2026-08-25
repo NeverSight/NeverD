@@ -87,16 +87,23 @@ constexpr uint32_t kMaxJumpTableRoleMatchEvidenceWork = 524288;
 /// memo, string and container-lifetime accounting makes the largest supported
 /// x64/AArch64 initializer audit consume about 154 Ki work, while the largest
 /// supported O0 12-way expanded object-escape audit consumes about 539 Ki.
-/// Retain the next power of two locally.  The work still debits the same
-/// candidate-wide aggregate account.
-constexpr uint32_t kMaxJumpTableConsumerAuditMatchEvidenceWork = 1048576;
+/// An i386 PIC 140-way switch with every final target exposed consumes about
+/// 9.3 Mi work in the same immutable audit.  Retain the next power of two
+/// locally.  The work still debits the same candidate-wide aggregate account.
+constexpr uint32_t kMaxJumpTableConsumerAuditMatchEvidenceWork = 16777216;
 
 /// Aggregate allowance for completing one function's exact i386 GOT-base
-/// models.  Completion performs the same whole-graph value matching as a
-/// jump-table relation batch, so it uses the corresponding bounded ceiling;
-/// test overrides may still select a smaller fail-closed boundary.
-constexpr uint32_t kMaxI386GOTModelEvidenceWork =
-    kMaxJumpTableValueMatchEvidenceWork;
+/// models.  Completion performs whole-graph value matching; the largest
+/// supported 762-instruction O0 switch consumes about 377 Ki, so retain the
+/// next power of two.  Test overrides may still select a smaller fail-closed
+/// boundary.
+constexpr uint32_t kMaxI386GOTModelEvidenceWork = 1048576;
+
+/// Candidate-local exact GOTOFF reaching proof.  The same large expanded graph
+/// consumes about 581 Ki after occurrence and cache bookkeeping.  This
+/// allowance is reserved from, and refunds its unused tail to, the candidate
+/// aggregate account; it is not a fresh per-query budget.
+constexpr uint32_t kMaxI386GOTOFFProposalEvidenceWork = 1048576;
 
 /// Structural-symbolization allowance shared by the exact unsigned-modulo
 /// recipe queries for one candidate.  Expression visits also debit the

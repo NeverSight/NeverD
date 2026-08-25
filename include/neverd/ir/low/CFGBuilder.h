@@ -607,6 +607,11 @@ private:
     /// coordinate, not the logical slot index recorded in Indices.
     JumpTableValueOccurrence AddressIndex;
     uint64_t AddressScale = 0;
+    /// This LOAD uses a compile-time coordinate rather than a runtime table
+    /// selector.  Its address role is still authenticated, but it must not
+    /// participate in the common dynamic address-scale inference.
+    bool IsLiteralCoordinate = false;
+    uint32_t LiteralCoordinate = 0;
     bool AllowZeroExtension = false;
     bool AllowSignExtension = false;
 
@@ -717,6 +722,13 @@ private:
     /// emitter dispatches on the resolver index register instead of the
     /// backward scan.
     bool PreScaledIndex = false;
+
+    /// The recovered dispatch joins both runtime-indexed and literal-slot
+    /// table loads in one spill/reload branch.  Its selector therefore cannot
+    /// be represented by only the dynamic IndexValueAlternatives; extraction
+    /// leaves selector references empty so the backend authenticates every
+    /// predecessor and synthesizes the complete edge-merged index.
+    bool UseSharedDispatchSelector = false;
 
     /// Runtime-selected table base: the dispatch loads from `(cond ? A :
     /// B)[idx]` with two adjacent code-pointer tables merged into one at
