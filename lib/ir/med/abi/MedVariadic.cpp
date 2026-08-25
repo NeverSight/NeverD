@@ -75,13 +75,14 @@ std::optional<int64_t> entrySpDelta(const MedFunc &Func, uint64_t SpOff,
   std::set<Key> Active;
   std::function<std::optional<int64_t>(const MedVar &, int)> Eval =
       [&](const MedVar &V, int Remaining) -> std::optional<int64_t> {
-    if (Remaining <= 0 || V.isConst()) {
-      if (V.isConst() &&
-          (V.Provenance == ConstantAddressProvenance::Unknown ||
-           V.Provenance == ConstantAddressProvenance::Scalar))
-        return static_cast<int64_t>(V.ConstVal);
+    // A bare constant is an absolute value, not evidence of an entry-SP
+    // relative address.  Constants participate only as the offset operand of
+    // an ADD/SUB whose other side is already proven entry-SP-derived below.
+    // In particular, i386 PIC's call-next/pop get-PC idiom stores and reloads
+    // a constant return address; treating that literal as entry_sp+constant
+    // misclassifies an ordinary function as variadic and drops its cdecl args.
+    if (Remaining <= 0 || V.isConst())
       return std::nullopt;
-    }
     if (V.Kind != MedVar::Reg && V.Kind != MedVar::Temp)
       return std::nullopt;
     if (V.Kind == MedVar::Reg && V.RegOff == SpOff && V.SSAVer == 0)
