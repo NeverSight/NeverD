@@ -2719,6 +2719,28 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     ClaimRejectedPhysicalTableIdentity();
     return {};
   }
+  // Runtime storage ranges describe only the coordinates used by this
+  // dispatch.  Preserve a separate whole-object identity when the absolute
+  // relocation run has an independently exact end, so peeled/sparse and full
+  // dispatches over one physical table can authenticate each other's exact
+  // LOAD occurrence without equating their selector domains.  A prefix-only
+  // run deliberately leaves the certificate absent.
+  Info.ExactPhysicalStorageRange.reset();
+  if (Info.RelocAbsolute && !Info.IsRelative && Info.HasBaseAddr &&
+      Info.EntrySize != 0 && Info.PhysicalCapacity != 0) {
+    const uint64_t PhysicalStride =
+        Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize;
+    if (PhysicalStride >= Info.EntrySize) {
+      if (!consumeExactBoundaryInventory(Img, DecodedTableAnchors.size()))
+        return {};
+      if (codePtrRelocRunHasExactBoundary(Img, Info.BaseAddr, PhysicalStride,
+                                          Info.PhysicalCapacity,
+                                          DecodedTableAnchors))
+        Info.ExactPhysicalStorageRange =
+            JumpTableStorageRange{Info.BaseAddr, Info.EntrySize, PhysicalStride,
+                                  Info.PhysicalCapacity};
+    }
+  }
   if (!consumeJumpTableInfoTraversal(Info))
     return {};
   const JumpTableInfo PreReadValidatedInfo = Info;
@@ -2752,6 +2774,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       return {};
     StrongJumpTableRoleProposal Proposal;
     Proposal.StorageRanges = Info.StorageRanges;
+    Proposal.ExactPhysicalStorageRange = Info.ExactPhysicalStorageRange;
     Proposal.LoadRoles.reserve(Info.LoadRoles.size());
     for (const JumpTableLoadRole &Role : Info.LoadRoles)
       Proposal.LoadRoles.push_back({Role.Load, Role.LoadWidth});
@@ -3165,14 +3188,21 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       auto AuthenticatesSibling = [&](const auto &RoleUniverse) {
         for (const auto &Entry : RoleUniverse) {
           const auto &Other = Entry.second;
-          if (!consumeCandidateProducts(
-                  {{Info.StorageRanges.size(), 1},
-                   {Other.StorageRanges.size(), 1}})) {
+          if (!consumeCandidateProducts({{Info.StorageRanges.size(), 1},
+                                         {Other.StorageRanges.size(), 1}}) ||
+              !consumeCandidateEvidence(1)) {
             AnalysisComplete = false;
             return false;
           }
-          if (!Info.StorageRanges.empty() &&
-              Other.StorageRanges == Info.StorageRanges &&
+          const bool SameRuntimeStorage =
+              !Info.StorageRanges.empty() &&
+              Other.StorageRanges == Info.StorageRanges;
+          const bool SameExactPhysicalStorage =
+              Info.ExactPhysicalStorageRange &&
+              Other.ExactPhysicalStorageRange &&
+              *Info.ExactPhysicalStorageRange ==
+                  *Other.ExactPhysicalStorageRange;
+          if ((SameRuntimeStorage || SameExactPhysicalStorage) &&
               Authenticates(Other))
             return true;
           // A frozen exact LOAD over disjoint storage is not an independent

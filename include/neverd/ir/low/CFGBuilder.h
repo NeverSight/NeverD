@@ -666,6 +666,11 @@ private:
     /// one range from BaseAddr/MaxEntries/EntryIndices.  Composite strategies
     /// must populate every disjoint run explicitly.
     std::vector<JumpTableStorageRange> StorageRanges;
+    /// Exact whole-object identity of an absolute relocation table.  Runtime
+    /// StorageRanges remain selector-domain-specific, so sparse and full
+    /// dispatches over the same object can differ without losing this
+    /// immutable physical identity.
+    std::optional<JumpTableStorageRange> ExactPhysicalStorageRange;
     /// Exact code-pointer relocation slots consumed exclusively by this
     /// dispatch.  Unlike StorageRanges, this is an occurrence-level permission
     /// to suppress an otherwise independent relocation root/mirror field.
@@ -1242,6 +1247,11 @@ private:
   };
   struct StrongJumpTableRoleProposal {
     std::vector<JumpTableStorageRange> StorageRanges;
+    /// Exact whole-object identity for an absolute relocation table.  This is
+    /// separate from StorageRanges: two dispatches may use different runtime
+    /// subsets of the same physical table while still authenticating one
+    /// another's exact target LOAD occurrence during consumer arbitration.
+    std::optional<JumpTableStorageRange> ExactPhysicalStorageRange;
     std::vector<StrongJumpTableLoadRole> LoadRoles;
     /// Exact relocation slots that the candidate proved were consumed only by
     /// this table.  A later, higher-rank proposal may suppress their synthetic

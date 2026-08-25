@@ -3473,7 +3473,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
               Prior.SuppressibleRelocationSlots.size()) ||
           !ConsumeProposalStageEvidence(
               Next.SuppressibleRelocationSlots.size()) ||
-          !AccumulatePriorClearWork(Prior))
+          !ConsumeProposalStageEvidence(1) || !AccumulatePriorClearWork(Prior))
         break;
       ProposalUniverseChanged |= Prior != Next;
       ++PriorIt;
