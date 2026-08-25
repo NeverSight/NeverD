@@ -41,6 +41,21 @@ bool hasOpcode(const neverd::LowFunc &Function, neverd::NdOp Opcode) {
   return false;
 }
 
+const neverd::LowOp *findOpcodeAtAddress(const neverd::LowFunc &Function,
+                                         neverd::va_t Address,
+                                         neverd::NdOp Opcode) {
+  const neverd::LowOp *Found = nullptr;
+  for (const neverd::LowBlock &Block : Function.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops) {
+      if (Op.Addr != Address || Op.Opcode != Opcode)
+        continue;
+      if (Found)
+        return nullptr;
+      Found = &Op;
+    }
+  return Found;
+}
+
 const neverd::LowOp *findExactOp(const neverd::LowFunc &Function,
                                  neverd::va_t Address, int Sequence,
                                  neverd::NdOp Opcode) {
@@ -417,6 +432,278 @@ TEST_F(JumpTableProposalLFP,
                              NewInfoBoundary.Cleanup.NewInfoExhausted,
                              /*RequiresOpaqueFinalState=*/true,
                              /*RequiresStrongIdentity=*/false);
+}
+
+TEST_F(JumpTableProposalLFP,
+       UntrackedNestedResourceExhaustionRollsBackItsStage) {
+  auto ImageOrErr = neverd::loadBinary(proposalLFPObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function = Image.findSymbol("jt_lfp_nested_relative");
+  ASSERT_NE(Function, nullptr);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  Builder.setExhaustUntrackedJumpTableCandidateForTesting(true);
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+
+  EXPECT_TRUE(Builder.untrackedJumpTableCandidateRollbackObservedForTesting())
+      << "a recursively discovered candidate's resource failure must abort "
+         "the immutable stage that owns its provisional parent edges";
+  EXPECT_TRUE(
+      Builder.untrackedJumpTableCandidateProvisionalStateObservedForTesting())
+      << "the injected failure must occur after the nested resolver published "
+         "state, otherwise it does not cover the post-mutation seam";
+  EXPECT_TRUE(
+      Builder.untrackedJumpTableCandidateStateClearedOnRollbackForTesting())
+      << "the same rollback must clear the exact nested address before any "
+         "later retry can hide leaked provisional state";
+  EXPECT_FALSE(Builder.hasMaskFixedPointExplorationTargetsForTesting());
+  EXPECT_EQ(Low.JumpTables.size(), 2u)
+      << "the one-shot failed stage must be retryable from clean state";
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
+TEST_F(JumpTableProposalLFP,
+       NestedMutationTrackingBudgetExhaustionPreservesExactBranch) {
+  auto ImageOrErr = neverd::loadBinary(proposalLFPObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function = Image.findSymbol("jt_lfp_nested_relative");
+  ASSERT_NE(Function, nullptr);
+
+  neverd::Decoder ExhaustedDecoder;
+  ASSERT_TRUE(ExhaustedDecoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder ExhaustedBuilder;
+  ExhaustedBuilder.setNestedMutationTrackingStageAllowanceForTesting(0);
+  const neverd::LowFunc Exhausted = ExhaustedBuilder.build(
+      Image, ExhaustedDecoder, Function->Addr, Function->Name);
+  ASSERT_TRUE(
+      ExhaustedBuilder.nestedMutationTrackingEvidenceExhaustedForTesting())
+      << "the measured stage boundary must fail inside nested mutation "
+         "tracking, not during an unrelated preflight; tables="
+      << Exhausted.JumpTables.size()
+      << " unsafe=" << Exhausted.UnsafeIndirectBranchAddresses.size();
+  const neverd::va_t NestedAddr =
+      ExhaustedBuilder.nestedMutationTrackingEvidenceExhaustedAddrForTesting();
+  ASSERT_NE(NestedAddr, neverd::InvalidVA);
+
+  bool SawOp = false;
+  bool SawBranch = false;
+  bool SawCall = false;
+  for (const neverd::LowBlock &Block : Exhausted.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops)
+      if (Op.Addr == NestedAddr) {
+        SawOp = true;
+        SawBranch |= Op.Opcode == neverd::NdOp::INDIR_BR;
+        SawCall |= Op.Opcode == neverd::NdOp::INDIR_CALL;
+      }
+  // Transaction rollback also removes the parent table edge that first made
+  // this nested block reachable.  Do not promote that untrusted target to a
+  // persistent CFG root merely to keep an operation in the final LowIR; if a
+  // separate path retains it, however, it must remain a branch rather than be
+  // rewritten as a call.
+  EXPECT_TRUE(!SawOp || SawBranch);
+  EXPECT_FALSE(SawCall);
+  EXPECT_TRUE(Exhausted.UnsafeIndirectBranchAddresses.count(NestedAddr))
+      << "a nested branch whose transaction could not be inventoried must "
+         "retain exact fail-closed identity across bounded retries";
+}
+
+TEST_F(JumpTableProposalLFP,
+       ExactFiniteLocalExhaustionPreservesOpaqueBranchIdentity) {
+  auto ImageOrErr = neverd::loadBinary(proposalLFPObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function = Image.findSymbol("jt_lfp_nested_relative");
+  ASSERT_NE(Function, nullptr);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  Builder.setFiniteSetSymbolEvidenceBudgetForTesting(0);
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+
+  EXPECT_TRUE(Low.JumpTables.empty());
+  EXPECT_TRUE(hasOpcode(Low, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(hasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_FALSE(Low.UnsafeIndirectBranchAddresses.empty())
+      << "local finite-symbol exhaustion must remain evidence-incomplete, "
+         "not a definitive proof loss eligible for tail-call rewriting";
+  EXPECT_FALSE(Builder.hasMaskFixedPointExplorationTargetsForTesting());
+}
+
+TEST_F(JumpTableProposalLFP,
+       ConstBaseGroupInventoryExhaustionPreservesOnlyClaimedTableShape) {
+  auto ImageOrErr = neverd::loadBinary(proposalLFPObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *TableFunction =
+      Image.findSymbol("jt_lfp_constbase_budget");
+  const neverd::Symbol *ClaimedBranch =
+      Image.findSymbol("jt_lfp_constbase_budget_claimed_branch");
+  const neverd::Symbol *UnclaimedSibling =
+      Image.findSymbol("jt_lfp_constbase_budget_unclaimed_sibling");
+  const neverd::Symbol *CallbackFunction =
+      Image.findSymbol("jt_lfp_memory_callback");
+  ASSERT_NE(TableFunction, nullptr);
+  ASSERT_NE(ClaimedBranch, nullptr);
+  ASSERT_NE(UnclaimedSibling, nullptr);
+  ASSERT_NE(CallbackFunction, nullptr);
+
+  struct BudgetedBuild {
+    neverd::LowFunc Low;
+    bool LocalShapeClaimed = false;
+    bool PostShapeIncomplete = false;
+  };
+  auto BuildWithBudget = [&](const neverd::Symbol &Function, size_t Budget) {
+    neverd::Decoder Decoder;
+    EXPECT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    Builder.setMaskFixedPointEvidenceBudgetForTesting(Budget);
+    BudgetedBuild Result;
+    Result.Low = Builder.build(Image, Decoder, Function.Addr, Function.Name);
+    Result.LocalShapeClaimed = Builder.constBaseLocalShapeClaimedForTesting();
+    Result.PostShapeIncomplete =
+        Builder.constBasePostShapeAnalysisIncompleteForTesting();
+    return Result;
+  };
+
+  std::optional<size_t> ExhaustingBudget;
+  BudgetedBuild Exhausted;
+  size_t LastUnclaimedBudget = 0;
+  size_t FirstClaimedBudget = 256;
+  for (; FirstClaimedBudget <=
+         neverd::limits::kMaxJumpTableMaskFixedPointEvidenceWork;
+       FirstClaimedBudget *= 2) {
+    const BudgetedBuild Candidate =
+        BuildWithBudget(*TableFunction, FirstClaimedBudget);
+    if (Candidate.LocalShapeClaimed)
+      break;
+    LastUnclaimedBudget = FirstClaimedBudget;
+  }
+  ASSERT_LE(FirstClaimedBudget,
+            neverd::limits::kMaxJumpTableMaskFixedPointEvidenceWork);
+  while (LastUnclaimedBudget + 1 < FirstClaimedBudget) {
+    const size_t Mid =
+        LastUnclaimedBudget + (FirstClaimedBudget - LastUnclaimedBudget) / 2;
+    const BudgetedBuild Candidate = BuildWithBudget(*TableFunction, Mid);
+    if (Candidate.LocalShapeClaimed)
+      FirstClaimedBudget = Mid;
+    else
+      LastUnclaimedBudget = Mid;
+  }
+  ExhaustingBudget = FirstClaimedBudget;
+  Exhausted = BuildWithBudget(*TableFunction, *ExhaustingBudget);
+  ASSERT_TRUE(ExhaustingBudget.has_value())
+      << "the padded fixture must expose a budget boundary after local model "
+         "authentication but before whole-function group completion";
+  ASSERT_TRUE(Exhausted.LocalShapeClaimed);
+  ASSERT_TRUE(Exhausted.PostShapeIncomplete)
+      << "the first budget that can authenticate the minimum relocation "
+         "prefix must still stop before the attacker-sized full/group audit; "
+         "budget="
+      << *ExhaustingBudget;
+  EXPECT_TRUE(Exhausted.Low.JumpTables.empty());
+  EXPECT_NE(findOpcodeAtAddress(Exhausted.Low, ClaimedBranch->Addr,
+                                neverd::NdOp::INDIR_BR),
+            nullptr);
+  EXPECT_EQ(findOpcodeAtAddress(Exhausted.Low, ClaimedBranch->Addr,
+                                neverd::NdOp::INDIR_CALL),
+            nullptr);
+  EXPECT_TRUE(
+      Exhausted.Low.UnsafeIndirectBranchAddresses.count(ClaimedBranch->Addr))
+      << "the exact branch whose local relocation model was claimed must stay "
+         "fail-closed when its group inventory runs out";
+  EXPECT_NE(findOpcodeAtAddress(Exhausted.Low, UnclaimedSibling->Addr,
+                                neverd::NdOp::INDIR_CALL),
+            nullptr);
+  EXPECT_EQ(findOpcodeAtAddress(Exhausted.Low, UnclaimedSibling->Addr,
+                                neverd::NdOp::INDIR_BR),
+            nullptr);
+  EXPECT_FALSE(
+      Exhausted.Low.UnsafeIndirectBranchAddresses.count(UnclaimedSibling->Addr))
+      << "a sibling not reached by the bounded inventory owns no borrowed "
+         "shape certificate and remains eligible for callback lowering";
+
+  const BudgetedBuild Callback =
+      BuildWithBudget(*CallbackFunction, *ExhaustingBudget);
+  EXPECT_FALSE(Callback.LocalShapeClaimed);
+  EXPECT_FALSE(Callback.PostShapeIncomplete);
+  EXPECT_TRUE(Callback.Low.JumpTables.empty());
+  EXPECT_FALSE(hasOpcode(Callback.Low, neverd::NdOp::INDIR_BR));
+  EXPECT_TRUE(hasOpcode(Callback.Low, neverd::NdOp::INDIR_CALL))
+      << "a generic memory callback must not inherit the absolute-table "
+         "shape marker";
+}
+
+TEST_F(JumpTableProposalLFP,
+       ConstBaseExactGroupDoesNotAuthorizeSameFunctionCallback) {
+  auto ImageOrErr = neverd::loadBinary(proposalLFPObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  // A failed register-base fold used to fall through with Base==0.  Seed a
+  // valid-looking relocation prefix there so this same-function callback
+  // proves that only an explicitly resolved (including legitimately zero)
+  // base can authenticate the early shape certificate.
+  Image.CodePtrRelocSlots.insert(0);
+  Image.CodePtrRelocSlots.insert(8);
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_lfp_mixed_callback_group");
+  const neverd::Symbol *CallbackBegin =
+      Image.findSymbol("jt_lfp_mixed_callback_begin");
+  const neverd::Symbol *CallbackEnd =
+      Image.findSymbol("jt_lfp_mixed_callback_end");
+  const neverd::Symbol *IndexedCallback =
+      Image.findSymbol("jt_lfp_indexed_memory_callback");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(CallbackBegin, nullptr);
+  ASSERT_NE(CallbackEnd, nullptr);
+  ASSERT_NE(IndexedCallback, nullptr);
+  ASSERT_LT(CallbackBegin->Addr, CallbackEnd->Addr);
+
+  const neverd::LowFunc Low = buildLow(Image, *Function);
+  EXPECT_EQ(Low.JumpTables.size(), 2u);
+  bool SawCallbackBranch = false;
+  bool SawCallbackCall = false;
+  bool SawCallbackReturn = false;
+  for (const neverd::LowBlock &Block : Low.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops)
+      if (Op.Addr >= CallbackBegin->Addr && Op.Addr < CallbackEnd->Addr) {
+        SawCallbackBranch |= Op.Opcode == neverd::NdOp::INDIR_BR;
+        SawCallbackCall |= Op.Opcode == neverd::NdOp::INDIR_CALL;
+        SawCallbackReturn |= Op.Opcode == neverd::NdOp::RETURN;
+      }
+  EXPECT_FALSE(SawCallbackBranch);
+  EXPECT_TRUE(SawCallbackCall)
+      << "a callback must not borrow an absolute-table model from sibling "
+         "consumers in the same authoritative function";
+  EXPECT_TRUE(SawCallbackReturn)
+      << "the same callback must retain ordinary tail-call CALL+RETURN "
+         "lowering";
+  for (neverd::va_t Addr : Low.UnsafeIndirectBranchAddresses)
+    EXPECT_TRUE(Addr < CallbackBegin->Addr || Addr >= CallbackEnd->Addr);
+
+  neverd::Decoder CallbackDecoder;
+  ASSERT_TRUE(CallbackDecoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder CallbackBuilder;
+  const neverd::LowFunc CallbackLow = CallbackBuilder.build(
+      Image, CallbackDecoder, IndexedCallback->Addr, IndexedCallback->Name);
+  EXPECT_FALSE(CallbackBuilder.constBaseLocalShapeClaimedForTesting())
+      << "an unresolved register base must not borrow a relocation prefix at "
+         "the legitimate VA-zero code segment";
+  EXPECT_FALSE(hasOpcode(CallbackLow, neverd::NdOp::INDIR_BR));
+  EXPECT_TRUE(hasOpcode(CallbackLow, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(hasOpcode(CallbackLow, neverd::NdOp::RETURN));
+  EXPECT_TRUE(CallbackLow.UnsafeIndirectBranchAddresses.empty());
 }
 
 TEST_F(JumpTableProposalLFP,

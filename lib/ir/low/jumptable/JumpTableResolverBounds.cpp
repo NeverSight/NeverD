@@ -145,7 +145,7 @@ static size_t orderedEvidenceLookupWork(size_t Count) {
 // symbolization ceiling, while its CFG snapshot, value reconstruction and
 // every expression visit debit the same candidate-wide aggregate account as
 // target/address roles and mask-domain recovery.
-static constexpr size_t kModuloProposalWork = 2560;
+static constexpr size_t kModuloProposalWork = 3072;
 static constexpr size_t kModuloStructuralRetentionWork = 1536;
 static constexpr size_t kModuloDirectWork = 512;
 static constexpr size_t kModuloReplayWork = 1024;
@@ -740,7 +740,8 @@ uint32_t CFGBuilder::inferBoundsFromMask(
     const std::vector<va_t> *CandidateTargetsOverride,
     const std::set<va_t> *ReachableInstructions, bool AllowFixedPointBootstrap,
     bool AllowRawDenseShortcut, size_t *AggregateEvidenceBudget,
-    bool *SemanticIndexDomainAmbiguous) const {
+    bool *SemanticIndexDomainAmbiguous,
+    const JumpTableExactConsumerGroup *ExactConsumerGroup) const {
   if (IncompleteIndexDomain)
     *IncompleteIndexDomain = false;
   if (SemanticIndexDomainAmbiguous)
@@ -1064,7 +1065,11 @@ uint32_t CFGBuilder::inferBoundsFromMask(
       const uint32_t CandidateCapacity =
           static_cast<uint32_t>(PhysicalTargets.size());
       if (PhysicalSlots.empty()) {
-        if (!consumeBudgetProducts({{PhysicalTargets.size(), 2}}))
+        // Direct sized-vector construction owns its buffer, element lifetime
+        // and eventual destruction; the subsequent initialization loop is a
+        // separate full traversal.  Reserve both before resize mutates state.
+        if (!consumeBudgetProducts({{PhysicalTargets.size(), 4}}) ||
+            !consumeBudget(*EvidenceBudget, 2))
           return 0;
         PhysicalSlots.resize(PhysicalTargets.size());
         for (uint32_t I = 0; I < PhysicalSlots.size(); ++I)
@@ -1176,6 +1181,149 @@ uint32_t CFGBuilder::inferBoundsFromMask(
                                           ? *ActiveJumpTableProofRoots
                                           : PersistentCFGRoots;
         std::set<uint32_t> Authorized;
+        std::set<va_t> ExactFiniteGroupBranches;
+        const bool HasExactGroupInventory =
+            ExactConsumerGroup &&
+            ExactConsumerGroup->IndexOccurrences.size() ==
+                ExactConsumerGroup->BranchAddrs.size() &&
+            !ExactConsumerGroup->IndexOccurrences.empty();
+        if (ExactConsumerGroup && ExactConsumerGroup->IndexOccurrences.size() !=
+                                      ExactConsumerGroup->BranchAddrs.size()) {
+          if (IncompleteIndexDomain)
+            *IncompleteIndexDomain = true;
+          return 0;
+        }
+        if (HasExactGroupInventory) {
+          const size_t GroupCount = ExactConsumerGroup->BranchAddrs.size();
+          if (!consumeBudgetProducts(
+                  {{GroupCount, orderedEvidenceLookupWork(GroupCount) + 4}}) ||
+              !consumeBudget(*EvidenceBudget, 2))
+            return 0;
+          for (va_t BranchAddr : ExactConsumerGroup->BranchAddrs)
+            ExactFiniteGroupBranches.insert(BranchAddr);
+        }
+        auto exactFiniteCoordinatesForTargets =
+            [&](const std::vector<va_t> *Targets,
+                const std::vector<JumpTableValueOccurrence> &Occurrences,
+                const std::vector<va_t> *OccurrenceBranches,
+                const std::set<va_t> *SharedTargetBranches,
+                size_t MinimumPresentBranches)
+            -> std::optional<std::vector<uint32_t>> {
+          if (CandidateCapacity > 64)
+            return std::vector<uint32_t>{};
+          if (OccurrenceBranches &&
+              OccurrenceBranches->size() != Occurrences.size()) {
+            if (IncompleteIndexDomain)
+              *IncompleteIndexDomain = true;
+            return std::nullopt;
+          }
+          // Each consumer owns one presence query and one complete finite-set
+          // query.  The latter symbolizes the resolver DAG once, proves the
+          // upper bound, then enumerates every coordinate in that same solver
+          // context; it does not rebuild graph/value evidence N times.
+          constexpr size_t QueriesPerOccurrence = 2;
+          if (Occurrences.size() >
+              std::numeric_limits<size_t>::max() / QueriesPerOccurrence) {
+            consumeBudget(*EvidenceBudget, std::numeric_limits<size_t>::max());
+            return std::nullopt;
+          }
+          const size_t QueryCount = Occurrences.size() * QueriesPerOccurrence;
+          // Each retained query owns its outer vector element plus the fixed
+          // construction/destruction lifetime of its four embedded vectors.
+          // The concrete output vectors are charged inside
+          // tableValuesMatchAtUses; the caller separately prepays every scan
+          // and its own finite-domain containers below.
+          constexpr size_t QueryOuterStorageAndLifetimeWork = 3;
+          constexpr size_t EmbeddedVectorFixedLifetimeWork = 2;
+          constexpr size_t EmbeddedVectorCount = 4;
+          constexpr size_t QueryConstructionWork = 1;
+          constexpr size_t WorkPerQuery =
+              QueryOuterStorageAndLifetimeWork +
+              EmbeddedVectorCount * EmbeddedVectorFixedLifetimeWork +
+              QueryConstructionWork;
+          if (!consumeBudgetProducts({{QueryCount, WorkPerQuery}}) ||
+              !consumeBudget(*EvidenceBudget, 2))
+            return std::nullopt;
+          std::vector<JumpTableValueQuery> Queries;
+          Queries.reserve(QueryCount);
+          for (const JumpTableValueOccurrence &Index : Occurrences) {
+            JumpTableValueQuery Present;
+            Present.Candidate = Index.Value;
+            Present.UseAddr = Index.Addr;
+            Present.UseSeq = Index.Seq;
+            Present.Relation = JumpTableValueRelation::ResolvableValue;
+            Queries.push_back(std::move(Present));
+
+            JumpTableValueQuery Feasible;
+            Feasible.Candidate = Index.Value;
+            Feasible.UseAddr = Index.Addr;
+            Feasible.UseSeq = Index.Seq;
+            Feasible.Relation = JumpTableValueRelation::UnsignedFeasibleSet;
+            Feasible.UnsignedUpperBound = CandidateCapacity;
+            Queries.push_back(std::move(Feasible));
+          }
+          std::vector<bool> QueryComplete;
+          std::vector<uint64_t> FeasibleMasks;
+          const std::vector<bool> Matches = tableValuesMatchAtUses(
+              Queries, nullptr, &QueryComplete, Rec.Addr, Targets,
+              EvidenceBudget, /*LocalMatchEvidenceLimit=*/0,
+              SharedTargetBranches, &FeasibleMasks);
+          if (!consumeBudgetProducts({{QueryCount, 2}}))
+            return std::nullopt;
+          if (Matches.size() != Queries.size() ||
+              QueryComplete.size() != Queries.size() ||
+              FeasibleMasks.size() != Queries.size() ||
+              std::any_of(QueryComplete.begin(), QueryComplete.end(),
+                          [](bool Complete) { return !Complete; })) {
+            // A missing occurrence is a completed false match above.  A query
+            // explicitly marked incomplete means solver/depth/local evidence
+            // ran out and must remain fail-closed for both the initial seed and
+            // every required replay.
+            if (IncompleteIndexDomain)
+              *IncompleteIndexDomain = true;
+            return std::nullopt;
+          }
+          if (!consumeBudgetProducts(
+                  {{CandidateCapacity, 3},
+                   {Occurrences.size(), 2},
+                   {Occurrences.size(),
+                    orderedEvidenceLookupWork(Occurrences.size()) + 4}}) ||
+              !consumeBudgetFactorProduct(
+                  {Occurrences.size(), CandidateCapacity}) ||
+              !consumeBudget(*EvidenceBudget, 4))
+            return std::nullopt;
+          std::vector<bool> Seen(CandidateCapacity, false);
+          std::set<va_t> PresentBranches;
+          for (size_t Occurrence = 0; Occurrence < Occurrences.size();
+               ++Occurrence) {
+            const size_t Begin = Occurrence * QueriesPerOccurrence;
+            if (!Matches[Begin])
+              continue;
+            PresentBranches.insert(OccurrenceBranches
+                                       ? (*OccurrenceBranches)[Occurrence]
+                                       : Rec.Addr);
+            if (!Matches[Begin + 1] || FeasibleMasks[Begin + 1] == 0)
+              return std::nullopt;
+            for (uint32_t Coordinate = 0; Coordinate < CandidateCapacity;
+                 ++Coordinate) {
+              if ((FeasibleMasks[Begin + 1] & (uint64_t{1} << Coordinate)) == 0)
+                continue;
+              Seen[Coordinate] = true;
+            }
+          }
+          if (PresentBranches.size() < MinimumPresentBranches)
+            return std::vector<uint32_t>{};
+          if (!consumeBudgetProducts({{CandidateCapacity, 4}}) ||
+              !consumeBudget(*EvidenceBudget, 2))
+            return std::nullopt;
+          std::vector<uint32_t> Coordinates;
+          Coordinates.reserve(CandidateCapacity);
+          for (uint32_t Coordinate = 0; Coordinate < CandidateCapacity;
+               ++Coordinate)
+            if (Seen[Coordinate])
+              Coordinates.push_back(Coordinate);
+          return Coordinates;
+        };
         std::vector<JumpTableValueQuery> SeedQueries;
         const size_t Capacity = CandidateCapacity;
         if (IndexOccurrences.size() >
@@ -1237,6 +1385,52 @@ uint32_t CFGBuilder::inferBoundsFromMask(
             break;
           }
         }
+        const std::vector<JumpTableValueOccurrence>
+            *ExactFiniteReplayOccurrences = nullptr;
+        const std::vector<va_t> *ExactFiniteReplayOccurrenceBranches = nullptr;
+        const std::set<va_t> *ExactFiniteReplaySharedTargetBranches = nullptr;
+        size_t ExactFiniteReplayMinimumPresentBranches = 0;
+        auto seedExactFiniteDomain =
+            [&](const std::vector<JumpTableValueOccurrence> &Occurrences,
+                const std::vector<va_t> *OccurrenceBranches,
+                const std::set<va_t> *SharedTargetBranches,
+                size_t MinimumPresentBranches) {
+              const std::optional<std::vector<uint32_t>> ExactCoordinates =
+                  exactFiniteCoordinatesForTargets(
+                      &NoTargets, Occurrences, OccurrenceBranches,
+                      SharedTargetBranches, MinimumPresentBranches);
+              if (!ExactCoordinates || ExactCoordinates->empty())
+                return true;
+              if (!consumeBudgetProducts(
+                      {{ExactCoordinates->size(),
+                        orderedEvidenceLookupWork(Authorized.size() +
+                                                  ExactCoordinates->size()) +
+                            4}}))
+                return false;
+              for (uint32_t Coordinate : *ExactCoordinates)
+                Authorized.insert(Coordinate);
+              ExactFiniteReplayOccurrences = &Occurrences;
+              ExactFiniteReplayOccurrenceBranches = OccurrenceBranches;
+              ExactFiniteReplaySharedTargetBranches = SharedTargetBranches;
+              ExactFiniteReplayMinimumPresentBranches = MinimumPresentBranches;
+              return true;
+            };
+        if (Authorized.size() < limits::kMinJumpTableEntries &&
+            Info.RelocAbsolute && HasExactGroupInventory &&
+            ExactFiniteGroupBranches.size() >= 2 &&
+            !seedExactFiniteDomain(ExactConsumerGroup->IndexOccurrences,
+                                   &ExactConsumerGroup->BranchAddrs,
+                                   &ExactFiniteGroupBranches,
+                                   /*MinimumPresentBranches=*/2))
+          return 0;
+        if (Authorized.size() < limits::kMinJumpTableEntries &&
+            !ExactFiniteReplayOccurrences && Info.IsRelative &&
+            !Info.RelocAbsolute &&
+            !seedExactFiniteDomain(IndexOccurrences,
+                                   /*OccurrenceBranches=*/nullptr,
+                                   /*SharedTargetBranches=*/nullptr,
+                                   /*MinimumPresentBranches=*/1))
+          return 0;
         // A selector may already be bounded before the first indirect edge
         // (for example `arg & 7`).  Run the ordinary proof once in the empty-
         // edge graph so that dynamic, but independently authenticated, entry
@@ -1304,6 +1498,61 @@ uint32_t CFGBuilder::inferBoundsFromMask(
             if (!AuthorizedTargetsOr)
               return 0;
             const std::vector<va_t> &AuthorizedTargets = *AuthorizedTargetsOr;
+
+            if (ExactFiniteReplayOccurrences) {
+              const std::optional<std::vector<uint32_t>> ExactCoordinates =
+                  exactFiniteCoordinatesForTargets(
+                      &AuthorizedTargets, *ExactFiniteReplayOccurrences,
+                      ExactFiniteReplayOccurrenceBranches,
+                      ExactFiniteReplaySharedTargetBranches,
+                      ExactFiniteReplayMinimumPresentBranches);
+              if (!ExactCoordinates || ExactCoordinates->empty())
+                return 0;
+              if (!consumeBudgetProducts(
+                      {{Authorized.size(), 5},
+                       {ExactCoordinates->size(),
+                        orderedEvidenceLookupWork(Authorized.size() +
+                                                  ExactCoordinates->size()) +
+                            4}}))
+                return 0;
+              std::set<uint32_t> Next = Authorized;
+              for (uint32_t Coordinate : *ExactCoordinates) {
+                if (Coordinate >= CandidateCapacity)
+                  return 0;
+                Next.insert(Coordinate);
+              }
+              if (Next == Authorized) {
+                const std::optional<bool> Growth =
+                    queueGraphGrowth(AuthorizedTargets);
+                if (!Growth)
+                  return 0;
+                if (*Growth)
+                  return 0;
+                if (Authorized.size() < limits::kMinJumpTableEntries)
+                  return 0;
+                const uint32_t Bound = *Authorized.rbegin() + 1;
+                if (FeasibleCoordinates &&
+                    !consumeBudgetProducts({{Authorized.size(), 3}}))
+                  return 0;
+                if (UsedNonContiguous)
+                  *UsedNonContiguous = Authorized.size() != Bound;
+                if (FeasibleCoordinates)
+                  FeasibleCoordinates->assign(Authorized.begin(),
+                                              Authorized.end());
+                return Bound;
+              }
+              std::optional<std::vector<va_t>> NextTargets = targetsFor(Next);
+              if (!NextTargets)
+                return 0;
+              const std::optional<bool> Growth = queueGraphGrowth(*NextTargets);
+              if (!Growth)
+                return 0;
+              if (*Growth)
+                return 0;
+              Authorized = std::move(Next);
+              continue;
+            }
+
             bool ReachabilityComplete = false;
             const std::set<va_t> Reachable = candidateReachableInstructions(
                 Rec, AuthorizedTargets, Roots, Info.StorageRanges,

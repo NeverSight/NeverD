@@ -72,6 +72,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <initializer_list>
 #include <limits>
@@ -203,6 +204,90 @@ std::set<va_t> CFGBuilder::jumpTableProofRoots(
 
 std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
                                                const InsnRecord &Rec) {
+  // The stage-start candidate vector cannot contain indirect branches decoded
+  // recursively while another candidate explores its provisional targets.
+  // Register each such invocation before the resolver erases or publishes any
+  // persistent state.  The shared stage account prepays both the tracking node
+  // and every lookup/cleanup the eventual rollback will perform.
+  if (CandidateProposalStageActive && !CandidateProposalOutcomeTracked) {
+    if (NestedMutationTrackingStageAllowanceForTesting)
+      CandidateProposalStageEvidenceRemaining =
+          std::min(CandidateProposalStageEvidenceRemaining,
+                   *NestedMutationTrackingStageAllowanceForTesting);
+    auto OrderedLookupWork = [](size_t Count) {
+      size_t Work = 1;
+      for (size_t N = Count; N > 1; N = N / 2 + N % 2)
+        ++Work;
+      return Work;
+    };
+    auto ConsumeStageWork = [&](size_t Amount) {
+      if (Amount > CandidateProposalStageEvidenceRemaining) {
+        CandidateProposalStageEvidenceRemaining = 0;
+        CandidateProposalStageEvidenceIncomplete = true;
+        return false;
+      }
+      CandidateProposalStageEvidenceRemaining -= Amount;
+      return true;
+    };
+    auto PreserveNestedIncompleteBranchIdentity = [&]() {
+      const size_t Lookup =
+          OrderedLookupWork(IndexDomainEvidenceIncompleteBranches.size());
+      constexpr size_t NodeAndCleanupWork = 2;
+      const size_t Max = std::numeric_limits<size_t>::max();
+      const size_t MarkerWork =
+          Lookup > Max - NodeAndCleanupWork ? Max : Lookup + NodeAndCleanupWork;
+      if (consumeIncompleteBranchMarkerEvidence(MarkerWork))
+        IndexDomainEvidenceIncompleteBranches.insert(Rec.Addr);
+    };
+    auto FailNestedMutationTracking = [&]() {
+      CandidateProposalStageEvidenceRemaining = 0;
+      CandidateProposalStageEvidenceIncomplete = true;
+      NestedMutationTrackingEvidenceExhaustedForTesting = true;
+      NestedMutationTrackingEvidenceExhaustedAddrForTesting = Rec.Addr;
+      PreserveNestedIncompleteBranchIdentity();
+    };
+    if (CandidateProposalStageMutationAddrs.size() ==
+        std::numeric_limits<size_t>::max()) {
+      FailNestedMutationTracking();
+      return {};
+    }
+    const size_t TrackLookup =
+        OrderedLookupWork(CandidateProposalStageMutationAddrs.size());
+    if (!ConsumeStageWork(TrackLookup)) {
+      FailNestedMutationTracking();
+      return {};
+    }
+    if (!CandidateProposalStageMutationAddrs.count(Rec.Addr)) {
+      const size_t Max = std::numeric_limits<size_t>::max();
+      const size_t RollbackLookupCeiling = OrderedLookupWork(Max);
+      const size_t MarkerRollbackLookup = RollbackLookupCeiling + 1;
+      const std::array<size_t, 9> Terms{
+          // Ordered insertion plus source/node/future destruction.
+          OrderedLookupWork(CandidateProposalStageMutationAddrs.size() + 1) + 3,
+          RollbackLookupCeiling, RollbackLookupCeiling, RollbackLookupCeiling,
+          // The forced transaction gate performs one exact resolved-state
+          // lookup after rollback; the exploration lookup above likewise
+          // covers its exact post-clear observation.
+          RollbackLookupCeiling,
+          // Target clear plus the two ordered erases.
+          3,
+          // Stack/index marker merge and duplicate-node cleanup.
+          MarkerRollbackLookup, MarkerRollbackLookup, 2};
+      size_t RollbackReservation = 0;
+      for (size_t Term : Terms) {
+        if (Term > Max - RollbackReservation) {
+          FailNestedMutationTracking();
+          return {};
+        }
+        RollbackReservation += Term;
+      }
+      if (!ConsumeStageWork(RollbackReservation)) {
+        FailNestedMutationTracking();
+        return {};
+      }
+      CandidateProposalStageMutationAddrs.insert(Rec.Addr);
+    }
+  }
   // A revalidation must never leave metadata from the previously published
   // target set behind when the new proof fails or shrinks.
   ResolvedTableInfo.erase(Rec.Addr);
@@ -257,6 +342,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
           : CandidateEvidenceLimit;
   size_t CandidateEvidenceBudget = InitialCandidateEvidenceBudget;
   JumpTableInfo Info;
+  JumpTableExactConsumerGroup ExactConsumerGroup;
   bool CandidateEvidenceShapeClaimed = false;
   bool CandidateEvidencePublished = false;
   bool CandidateEvidenceAnalysisIncomplete = false;
@@ -285,6 +371,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     const bool &IncompleteAlreadyInserted;
     const bool &StrongProposalRecorded;
     const bool StageActive;
+    const bool OutcomeTracked;
     size_t &StageRemaining;
     bool &StageIncomplete;
     std::map<va_t, StrongJumpTableProposalOutcome> &ProposalOutcomes;
@@ -314,6 +401,20 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       } else {
         StageRemaining -= Initial - Remaining;
       }
+      // A nested probe is allowed to defer candidate-local graph/semantic
+      // incompleteness until that branch joins the next immutable inventory.
+      // It is not allowed to hide real resource exhaustion: the probe shares
+      // this stage's account and may already have produced provisional graph
+      // or resolver metadata that must be rolled back transactionally.
+      StageIncomplete |= ResourceIncomplete;
+      if (!OutcomeTracked) {
+        // Recursive descent can discover a new indirect branch after the
+        // stage-start outcome inventory was frozen.  It still consumes the
+        // shared stage account.  Any actual aggregate-account exhaustion was
+        // handled above; candidate-local incompleteness merely defers the new
+        // branch until the next immutable stage inventories it.
+        return;
+      }
       auto It = ProposalOutcomes.find(BranchAddr);
       if (It == ProposalOutcomes.end()) {
         StageIncomplete = true;
@@ -321,7 +422,11 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       }
       if (I386GOTOFFIncomplete || (!Published && EvidenceIncomplete)) {
         It->second = StrongJumpTableProposalOutcome::EvidenceIncomplete;
-        StageIncomplete = true;
+        // Resource exhaustion invalidates the shared account immediately.
+        // Graph/semantic incompleteness is still recorded as an incomplete
+        // outcome, but the frozen candidate inventory must finish: a later
+        // candidate can authorize the graph growth needed by an earlier one.
+        // Reconciliation below will roll the whole stage back before commit.
       } else if (I386GOTOFFSemanticAmbiguous) {
         It->second = StrongJumpTableProposalOutcome::SemanticOpaque;
       } else if (StrongProposalRecorded) {
@@ -331,26 +436,88 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
             StrongJumpTableProposalOutcome::DefinitiveLocalProofLoss;
       }
     }
-  } CandidateOutcome{
-      IndexDomainEvidenceIncompleteBranches,
-      Rec.Addr,
-      InitialCandidateEvidenceBudget,
-      CandidateEvidenceBudget,
-      CandidateEvidenceShapeClaimed,
-      I386GOTOFFProposalShapeClaimed,
-      CandidateEvidencePublished,
-      CandidateEvidenceAnalysisIncomplete,
-      I386GOTOFFProposalEvidenceIncomplete,
-      I386GOTOFFAmbiguousModelReach,
+  } CandidateOutcome{IndexDomainEvidenceIncompleteBranches,
+                     Rec.Addr,
+                     InitialCandidateEvidenceBudget,
+                     CandidateEvidenceBudget,
+                     CandidateEvidenceShapeClaimed,
+                     I386GOTOFFProposalShapeClaimed,
+                     CandidateEvidencePublished,
+                     CandidateEvidenceAnalysisIncomplete,
+                     I386GOTOFFProposalEvidenceIncomplete,
+                     I386GOTOFFAmbiguousModelReach,
+                     CandidateEvidenceChargeFailed,
+                     CandidateEvidenceExhaustedBeforeDedicatedRefund,
+                     IncompleteBranchInsertPrepaid,
+                     IncompleteBranchAlreadyInserted,
+                     CandidateStrongProposalRecorded,
+                     CandidateProposalStageActive,
+                     CandidateProposalOutcomeTracked,
+                     CandidateProposalStageEvidenceRemaining,
+                     CandidateProposalStageEvidenceIncomplete,
+                     StrongJumpTableProposalOutcomes};
+  const bool ForceUntrackedResourceExhaustion =
+      CandidateProposalStageActive && !CandidateProposalOutcomeTracked &&
+      ExhaustUntrackedJumpTableCandidateForTesting;
+  bool ForcedResolvedMutationPrepaid = false;
+  if (ForceUntrackedResourceExhaustion) {
+    ExhaustUntrackedJumpTableCandidateForTesting = false;
+    ForcedUntrackedJumpTableCandidateAddrForTesting = Rec.Addr;
+    if (ResolvedTableInfo.size() == std::numeric_limits<size_t>::max()) {
+      CandidateEvidenceBudget = 0;
+      CandidateEvidenceChargeFailed = true;
+    } else {
+      size_t LookupWork = 1;
+      for (size_t N = ResolvedTableInfo.size() + 1; N > 1; N = N / 2 + N % 2)
+        ++LookupWork;
+      constexpr size_t NodeAndCleanupWork = 3;
+      if (LookupWork <=
+              std::numeric_limits<size_t>::max() - NodeAndCleanupWork &&
+          LookupWork + NodeAndCleanupWork <= CandidateEvidenceBudget) {
+        CandidateEvidenceBudget -= LookupWork + NodeAndCleanupWork;
+        ForcedResolvedMutationPrepaid = true;
+      } else {
+        CandidateEvidenceBudget = 0;
+        CandidateEvidenceChargeFailed = true;
+      }
+    }
+  }
+  // Run the real nested probe first so the transaction test exercises the
+  // exact post-mutation seam.  This guard is declared after CandidateOutcome,
+  // therefore it marks resource exhaustion before that outcome is settled.
+  struct ForcedUntrackedResourceExhaustionGuard {
+    const bool Active;
+    bool &ChargeFailed;
+    size_t &Remaining;
+    bool &ExhaustedThisStage;
+    const bool &ResolvedMutationPrepaid;
+    std::map<va_t, JumpTableInfo> &ResolvedInfo;
+    va_t BranchAddr;
+    bool &ProvisionalStateObserved;
+    ~ForcedUntrackedResourceExhaustionGuard() {
+      if (!Active)
+        return;
+      if (ResolvedMutationPrepaid) {
+        // The real eager resolver runs first.  If that graph shape correctly
+        // defers publication, inject one prepaid provisional metadata node at
+        // the same post-resolver seam so rollback is still required to prove
+        // exact cleanup rather than passing on an empty state.
+        ResolvedInfo.try_emplace(BranchAddr);
+        ProvisionalStateObserved = true;
+      }
+      ChargeFailed = true;
+      Remaining = 0;
+      ExhaustedThisStage = true;
+    }
+  } ForceUntrackedResourceExhaustionOnExit{
+      ForceUntrackedResourceExhaustion,
       CandidateEvidenceChargeFailed,
-      CandidateEvidenceExhaustedBeforeDedicatedRefund,
-      IncompleteBranchInsertPrepaid,
-      IncompleteBranchAlreadyInserted,
-      CandidateStrongProposalRecorded,
-      CandidateProposalStageActive,
-      CandidateProposalStageEvidenceRemaining,
-      CandidateProposalStageEvidenceIncomplete,
-      StrongJumpTableProposalOutcomes};
+      CandidateEvidenceBudget,
+      UntrackedJumpTableCandidateExhaustedThisStageForTesting,
+      ForcedResolvedMutationPrepaid,
+      ResolvedTableInfo,
+      Rec.Addr,
+      UntrackedJumpTableCandidateProvisionalStateObservedForTesting};
   auto consumeCandidateEvidence = [&](size_t Amount = 1) {
     if (Amount > CandidateEvidenceBudget) {
       CandidateEvidenceBudget = 0;
@@ -885,8 +1052,68 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // block or a single-predecessor path, so a many-predecessor shared dispatch
   // reaches none; this recovers the table from the code-pointer relocation run
   // at its constant base regardless of how many goto sites share it.
-  if (!Recovered)
-    Recovered = tryConstBaseAbsoluteTable(Img, Rec, Info);
+  if (!Recovered) {
+    bool ConstBaseAnalysisComplete = false;
+    bool ConstBaseShapeClaimed = false;
+    Recovered = tryConstBaseAbsoluteTable(
+        Img, Rec, Info, &ExactConsumerGroup, &ConstBaseShapeClaimed,
+        &CandidateEvidenceBudget, &ConstBaseAnalysisComplete);
+    CandidateEvidenceShapeClaimed |= ConstBaseShapeClaimed;
+    ConstBaseLocalShapeClaimedForTesting |= ConstBaseShapeClaimed;
+    ConstBasePostShapeAnalysisIncompleteForTesting |=
+        ConstBaseShapeClaimed && !ConstBaseAnalysisComplete;
+    CandidateEvidenceAnalysisIncomplete |= !ConstBaseAnalysisComplete;
+    if (!ConstBaseAnalysisComplete)
+      return {};
+  }
+  // A direct memory dispatch can be recognized by an earlier single-consumer
+  // strategy before the constant-base detector gets a chance to inventory its
+  // tail-duplicated siblings.  Enrich that already recovered absolute-table
+  // candidate once, under the same candidate account, and accept the group
+  // only when the independent detector names the exact same physical object.
+  // This is metadata enrichment, not a second source of table authority: the
+  // original strategy remains responsible for the candidate shape itself.
+  bool HasInstructionLocalPointerLoad = false;
+  if (Recovered && Info.RelocAbsolute &&
+      ExactConsumerGroup.IndexOccurrences.empty()) {
+    if (!consumeCandidateEvidence(Rec.Ops.size()))
+      return {};
+    for (const LowOp &Op : Rec.Ops)
+      if (Op.Opcode == NdOp::LOAD &&
+          (Op.Output.Size == 4 || Op.Output.Size == 8)) {
+        HasInstructionLocalPointerLoad = true;
+        break;
+      }
+  }
+  if (HasInstructionLocalPointerLoad) {
+    JumpTableInfo GroupInfo;
+    bool GroupShapeClaimed = false;
+    bool GroupAnalysisComplete = false;
+    const bool GroupRecovered = tryConstBaseAbsoluteTable(
+        Img, Rec, GroupInfo, &ExactConsumerGroup, &GroupShapeClaimed,
+        &CandidateEvidenceBudget, &GroupAnalysisComplete);
+    CandidateEvidenceShapeClaimed |= GroupShapeClaimed;
+    CandidateEvidenceAnalysisIncomplete |= !GroupAnalysisComplete;
+    if (!GroupAnalysisComplete)
+      return {};
+    const uint64_t PhysicalStride =
+        Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize;
+    const uint64_t GroupPhysicalStride = GroupInfo.EntryStride != 0
+                                             ? GroupInfo.EntryStride
+                                             : GroupInfo.EntrySize;
+    const bool SamePhysicalTable =
+        GroupRecovered && Info.HasBaseAddr && GroupInfo.HasBaseAddr &&
+        Info.BaseAddr == GroupInfo.BaseAddr &&
+        Info.EntrySize == GroupInfo.EntrySize &&
+        PhysicalStride == GroupPhysicalStride &&
+        Info.PhysicalCapacity == GroupInfo.PhysicalCapacity &&
+        Info.RelocAbsolute && !Info.IsRelative && GroupInfo.RelocAbsolute &&
+        !GroupInfo.IsRelative;
+    if (!SamePhysicalTable) {
+      ExactConsumerGroup.IndexOccurrences.clear();
+      ExactConsumerGroup.BranchAddrs.clear();
+    }
+  }
   if (Recovered && !HasOccurrenceMetadata(Info))
     Recovered = RejectIncompleteCandidate();
 
@@ -2046,14 +2273,13 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   std::vector<JumpTableMaskKnownOneWitness> MaskKnownOneWitnesses;
   const uint32_t MaskBound = inferBoundsFromMask(
       Rec, Info, /*AllowNonContiguous=*/true, &IncompleteMaskDomain,
-      &UsedNonContiguousMask, &MaskCoordinates,
-      &MaskKnownOneWitnesses,
+      &UsedNonContiguousMask, &MaskCoordinates, &MaskKnownOneWitnesses,
       /*RequireProducerReachability=*/false,
       /*CandidateTargetsOverride=*/nullptr,
       /*ReachableInstructions=*/nullptr,
       /*AllowFixedPointBootstrap=*/true,
       /*AllowRawDenseShortcut=*/true, &CandidateEvidenceBudget,
-      &SemanticMaskDomainAmbiguous);
+      &SemanticMaskDomainAmbiguous, &ExactConsumerGroup);
   const std::optional<bool> MaskGraphGrowth = SuspendForPendingGraphGrowth();
   if (!MaskGraphGrowth || *MaskGraphGrowth)
     return {};
@@ -2395,7 +2621,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
           /*ReachableInstructions=*/nullptr,
           /*AllowFixedPointBootstrap=*/true,
           /*AllowRawDenseShortcut=*/true, &CandidateEvidenceBudget,
-          &SemanticAmbiguous);
+          &SemanticAmbiguous, &ExactConsumerGroup);
       if (Incomplete || SemanticAmbiguous || Bound == 0 ||
           Coordinates != Info.AuthenticatedMaskCoordinates ||
           KnownOneWitnesses != Info.AuthenticatedMaskKnownOneWitnesses) {

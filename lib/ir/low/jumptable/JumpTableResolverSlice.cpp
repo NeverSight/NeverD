@@ -3362,12 +3362,16 @@ bool CFGBuilder::tableIndexMatchesValueAtUse(const NdVar &Candidate,
 std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     const std::vector<JumpTableValueQuery> &Queries, bool *AnalysisComplete,
     std::vector<bool> *QueryAnalysisComplete, va_t CandidateBranchOverride,
-    const std::vector<va_t> *CandidateTargetsOverride,
-    size_t *GraphWorkBudget, size_t LocalMatchEvidenceLimit) const {
+    const std::vector<va_t> *CandidateTargetsOverride, size_t *GraphWorkBudget,
+    size_t LocalMatchEvidenceLimit,
+    const std::set<va_t> *CandidateBranchesSharingTargets,
+    std::vector<uint64_t> *QueryUnsignedFeasibleMasks) const {
   if (AnalysisComplete)
     *AnalysisComplete = false;
   if (QueryAnalysisComplete)
     QueryAnalysisComplete->clear();
+  if (QueryUnsignedFeasibleMasks)
+    QueryUnsignedFeasibleMasks->clear();
   RequestedCompleteJumpTableProof = true;
   size_t ResultStorage = Queries.size();
   if (QueryAnalysisComplete) {
@@ -3379,12 +3383,22 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     }
     ResultStorage += Queries.size();
   }
+  if (QueryUnsignedFeasibleMasks) {
+    if (Queries.size() > std::numeric_limits<size_t>::max() - ResultStorage) {
+      if (GraphWorkBudget)
+        *GraphWorkBudget = 0;
+      return {};
+    }
+    ResultStorage += Queries.size();
+  }
   // A budgeted query may return an empty batch on exhaustion; every fixed-point
   // caller treats a size mismatch as incomplete.  This lets us charge output
   // storage before allocating it instead of allocating an attacker-sized false
   // vector after the shared allowance has already run out.  Null-budget legacy
   // callers retain the established one-result-per-query shape.
-  const size_t ResultFixedWork = QueryAnalysisComplete ? 4 : 2;
+  const size_t ResultFixedWork =
+      (QueryAnalysisComplete ? size_t{4} : size_t{2}) +
+      (QueryUnsignedFeasibleMasks ? size_t{2} : size_t{0});
   if ((ResultStorage != 0 &&
        3 > std::numeric_limits<size_t>::max() / ResultStorage) ||
       ResultStorage * 3 >
@@ -3399,8 +3413,22 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   std::vector<bool> Results(Queries.size(), false);
   if (QueryAnalysisComplete)
     QueryAnalysisComplete->assign(Queries.size(), false);
+  if (QueryUnsignedFeasibleMasks)
+    QueryUnsignedFeasibleMasks->assign(Queries.size(), 0);
   if (!JumpTableProofContextComplete || !CurrentImg || Queries.empty())
     return Results;
+  if (CandidateTargetsOverride && CandidateBranchesSharingTargets &&
+      GraphWorkBudget) {
+    const size_t Lookup =
+        orderedSetLookupWork(CandidateBranchesSharingTargets->size());
+    if (!Insns.empty() &&
+        Lookup > std::numeric_limits<size_t>::max() / Insns.size()) {
+      *GraphWorkBudget = 0;
+      return Results;
+    }
+    if (!consumeResolverGraphWork(GraphWorkBudget, Insns.size() * Lookup))
+      return Results;
+  }
   bool Complete = true;
   if (QueryAnalysisComplete)
     std::fill(QueryAnalysisComplete->begin(), QueryAnalysisComplete->end(),
@@ -3416,7 +3444,9 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
           Insns, Snapshot,
           [&](va_t Addr, const auto &Rec) -> const std::vector<va_t> & {
             return CandidateTargetsOverride &&
-                           Addr == CandidateBranchOverride
+                           (Addr == CandidateBranchOverride ||
+                            (CandidateBranchesSharingTargets &&
+                             CandidateBranchesSharingTargets->count(Addr)))
                        ? *CandidateTargetsOverride
                        : Rec.JumpTableTargets;
           },
@@ -5317,21 +5347,28 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       limits::kMaxJumpTableModuloRecipeSymbolEvidenceWork;
   auto provesUnsignedUpperBound = [&](const ResolverValue &Value,
                                       uint64_t Bound, bool &ProofComplete,
-                                      bool ExactModuloRecipeOnly = false) {
+                                      bool ExactModuloRecipeOnly = false,
+                                      uint64_t *FeasibleMask = nullptr) {
     ProofComplete = false;
     if (!Value || Value->Size == 0 || Value->Size > sizeof(uint64_t) ||
-        Bound == 0)
+        Bound == 0 || (FeasibleMask && Bound > 64))
       return false;
 
     const uint32_t Width = uint32_t(Value->Size) * 8u;
-    if (!ExactModuloRecipeOnly && Width < 64 &&
+    if (!ExactModuloRecipeOnly && !FeasibleMask && Width < 64 &&
         Bound >= (uint64_t{1} << Width)) {
       ProofComplete = true;
       return true;
     }
 
     symbolic::SymContext Ctx;
-    size_t LocalWork = limits::kMaxJumpTableEvidenceWork;
+    size_t LocalWork =
+        FeasibleMask
+            ? std::min<size_t>(
+                  limits::kMaxJumpTableFiniteSetSymbolEvidenceWork,
+                  FiniteSetSymbolEvidenceBudgetForTesting.value_or(
+                      limits::kMaxJumpTableFiniteSetSymbolEvidenceWork))
+            : limits::kMaxJumpTableEvidenceWork;
     size_t &Work =
         ExactModuloRecipeOnly ? ExactModuloRecipeWork : LocalWork;
     std::map<const ResolverValueExpr *, symbolic::SymRef> Memo;
@@ -5741,8 +5778,9 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       Options.Blast.MaxGates = limits::kMaxJumpTableGuardSolverGates;
       return Options;
     };
-    if (provesExactUnsignedModuloRecipe(Ctx, Index, Bound,
-                                        consumeSymbolWork, &Exhausted)) {
+    if (!FeasibleMask &&
+        provesExactUnsignedModuloRecipe(Ctx, Index, Bound, consumeSymbolWork,
+                                        &Exhausted)) {
       ProofComplete = true;
       return true;
     }
@@ -5755,14 +5793,53 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       ProofComplete = !Exhausted;
       return false;
     }
-    if (!consumeSymbolWork(3))
-      return false;
-    symbolic::SymRef Counterexample =
-        Ctx.mkNot(Ctx.mkUlt(Index, Ctx.mkConst(Width, Bound)));
-    const solver::SatResult Result =
-        solver::checkSat(Ctx, Counterexample, nullptr, makeSolverOptions());
-    ProofComplete = Result != solver::SatResult::Unknown;
-    return Result == solver::SatResult::Unsat;
+    const bool FullWidthEnvelope =
+        Width < 64 && Bound >= (uint64_t{1} << Width);
+    if (!FullWidthEnvelope) {
+      if (!consumeSymbolWork(3))
+        return false;
+      symbolic::SymRef Counterexample =
+          Ctx.mkNot(Ctx.mkUlt(Index, Ctx.mkConst(Width, Bound)));
+      const solver::SatResult Result =
+          solver::checkSat(Ctx, Counterexample, nullptr, makeSolverOptions());
+      switch (Result) {
+      case solver::SatResult::Unknown:
+      case solver::SatResult::Invalid:
+        return false;
+      case solver::SatResult::Sat:
+        ProofComplete = true;
+        return false;
+      case solver::SatResult::Unsat:
+        break;
+      }
+    }
+    if (!FeasibleMask) {
+      ProofComplete = true;
+      return true;
+    }
+    uint64_t Mask = 0;
+    for (uint64_t Coordinate = 0; Coordinate < Bound; ++Coordinate) {
+      if (Width < 64 && Coordinate >= (uint64_t{1} << Width))
+        continue;
+      if (!consumeSymbolWork(3))
+        return false;
+      const solver::SatResult Result =
+          solver::checkSat(Ctx, Ctx.mkEq(Index, Ctx.mkConst(Width, Coordinate)),
+                           nullptr, makeSolverOptions());
+      switch (Result) {
+      case solver::SatResult::Unknown:
+      case solver::SatResult::Invalid:
+        return false;
+      case solver::SatResult::Sat:
+        Mask |= uint64_t{1} << Coordinate;
+        break;
+      case solver::SatResult::Unsat:
+        break;
+      }
+    }
+    *FeasibleMask = Mask;
+    ProofComplete = true;
+    return Mask != 0;
   };
 
   for (size_t QueryIndex = 0; QueryIndex < Queries.size(); ++QueryIndex) {
@@ -5773,10 +5850,10 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     const JumpTableValueQuery &Query = Queries[QueryIndex];
     if (Query.Candidate.Size == 0 ||
         (Query.Relation != JumpTableValueRelation::UnsignedLessThan &&
-         Query.Relation !=
-             JumpTableValueRelation::ExactUnsignedModuloRecipe &&
-         Query.Relation !=
-             JumpTableValueRelation::AuthenticatedFrameMemory &&
+         Query.Relation != JumpTableValueRelation::ResolvableValue &&
+         Query.Relation != JumpTableValueRelation::UnsignedFeasibleSet &&
+         Query.Relation != JumpTableValueRelation::ExactUnsignedModuloRecipe &&
+         Query.Relation != JumpTableValueRelation::AuthenticatedFrameMemory &&
          Query.Alternatives.empty()))
       continue;
 
@@ -5933,9 +6010,16 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     }
     if (CandidateValue.Kind != ResolverResultKind::Value) {
       if (Query.Relation == JumpTableValueRelation::MayDepend ||
-          Query.Relation == JumpTableValueRelation::UnsignedLessThan) {
+          Query.Relation == JumpTableValueRelation::UnsignedLessThan ||
+          Query.Relation == JumpTableValueRelation::ResolvableValue ||
+          Query.Relation == JumpTableValueRelation::UnsignedFeasibleSet) {
         markIncomplete(QueryIndex);
       }
+      continue;
+    }
+
+    if (Query.Relation == JumpTableValueRelation::ResolvableValue) {
+      Results[QueryIndex] = true;
       continue;
     }
 
@@ -5958,6 +6042,19 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       if (!ProofComplete) {
         markIncomplete(QueryIndex);
       }
+      continue;
+    }
+
+    if (Query.Relation == JumpTableValueRelation::UnsignedFeasibleSet) {
+      bool ProofComplete = false;
+      uint64_t FeasibleMask = 0;
+      Results[QueryIndex] = provesUnsignedUpperBound(
+          CandidateValue.Value, Query.UnsignedUpperBound, ProofComplete,
+          /*ExactModuloRecipeOnly=*/false, &FeasibleMask);
+      if (QueryUnsignedFeasibleMasks)
+        (*QueryUnsignedFeasibleMasks)[QueryIndex] = FeasibleMask;
+      if (!ProofComplete)
+        markIncomplete(QueryIndex);
       continue;
     }
 

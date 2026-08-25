@@ -110,6 +110,7 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   PriorStrongJumpTableProposals.clear();
   NextStrongJumpTableProposals.clear();
   StrongJumpTableProposalOutcomes.clear();
+  CandidateProposalStageMutationAddrs.clear();
   QuarantinedJumpTableProposals.clear();
   EverStrongJumpTableProposalBranches.clear();
   CandidateProposalStageActive = false;
@@ -127,6 +128,15 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   ExhaustedProposalStageCommitTailForTesting = false;
   ProposalStageForcedCommitTailRollbackPreservedStateForTesting = false;
   ProposalStageRollbackMutatedQuarantineForTesting = false;
+  UntrackedJumpTableCandidateExhaustedThisStageForTesting = false;
+  UntrackedJumpTableCandidateRollbackObservedForTesting = false;
+  ForcedUntrackedJumpTableCandidateAddrForTesting = InvalidVA;
+  UntrackedJumpTableCandidateProvisionalStateObservedForTesting = false;
+  UntrackedJumpTableCandidateStateClearedOnRollbackForTesting = false;
+  NestedMutationTrackingEvidenceExhaustedForTesting = false;
+  NestedMutationTrackingEvidenceExhaustedAddrForTesting = InvalidVA;
+  ConstBaseLocalShapeClaimedForTesting = false;
+  ConstBasePostShapeAnalysisIncompleteForTesting = false;
   ProposalCleanupEvidenceForTesting = {};
   JumpTableProofContextComplete = false;
   RequestedCompleteJumpTableProof = false;
@@ -1323,9 +1333,8 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
         if (Saved.IsIndirect && !Saved.IsCond) {
           auto Targets = resolveJumpTable(Img, Saved);
           if (!Targets.empty()) {
-            Saved.JumpTableTargets = Targets;
-            Insns[Cur].JumpTableTargets = Targets;
-            for (va_t T : Targets) {
+            Saved.JumpTableTargets = std::move(Targets);
+            for (va_t T : Saved.JumpTableTargets) {
               BlockStarts.insert(T);
               if (!ExploredAddrs.count(T))
                 Worklist.push(T);
@@ -2866,8 +2875,20 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
         limits::kMaxJumpTableProposalStageEvidenceWork,
         MaskFixedPointEvidenceBudgetForTesting.value_or(
             limits::kMaxJumpTableProposalStageEvidenceWork));
+    // The nested-tracking boundary hook models a persistent attacker-sized
+    // stage after the first recursively discovered candidate reaches that
+    // boundary.  Do not clamp the initial parent stage: it must first decode
+    // the exact nested branch whose identity the regression observes.
+    if (NestedMutationTrackingEvidenceExhaustedForTesting &&
+        NestedMutationTrackingStageAllowanceForTesting)
+      CandidateProposalStageEvidenceRemaining =
+          std::min(CandidateProposalStageEvidenceRemaining,
+                   *NestedMutationTrackingStageAllowanceForTesting);
     CandidateProposalStageEvidenceIncomplete = false;
     CandidateProposalStageActive = true;
+    UntrackedJumpTableCandidateExhaustedThisStageForTesting = false;
+    assert(CandidateProposalStageMutationAddrs.empty() &&
+           "proposal mutation inventory must be retired with its stage");
     const size_t QuarantineSizeAtStageStart =
         QuarantinedJumpTableProposals.size();
     auto ConsumeProposalStageEvidence = [&](size_t Amount = 1) {
@@ -2895,7 +2916,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
         };
     auto OrderedLookupWork = [](size_t Count) {
       size_t Work = 1;
-      for (size_t N = Count; N > 1; N = (N + 1) / 2)
+      for (size_t N = Count; N > 1; N = N / 2 + N % 2)
         ++Work;
       return Work;
     };
@@ -2976,50 +2997,32 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
     }
 
     std::vector<va_t> CandidateAddrs;
-    // Prepay the complete inventory and the worst-case rollback cleanup before
-    // reserving either container.  Every instruction can conservatively be a
-    // candidate: inventory performs ordered lookups in Resolved/Prior and an
-    // outcome insertion, while rollback later looks it up in Insns and erases
-    // its Resolved/mask records before clearing the two proposal maps.  Keeping
-    // this cleanup reserve outside the spendable candidate balance makes an
-    // exhausted stage transactionally removable without post-exhaustion work.
-    const size_t InsnLookupWork = OrderedLookupWork(Insns.size());
+    // First build an immutable candidate-address inventory.  Every instruction
+    // can conservatively be retained, so prepay the vector's full ownership
+    // and the two read-only ordered lookups before reserving its storage.  The
+    // later phases separately reserve old-state destruction and proposal-map
+    // rollback before either proposal container can be mutated.
     const size_t ResolvedLookupWork =
         OrderedLookupWork(std::max(Insns.size(), ResolvedTableInfo.size()));
     const size_t PriorLookupWork =
         OrderedLookupWork(PriorStrongJumpTableProposals.size());
-    const size_t OutcomeLookupWork = OrderedLookupWork(Insns.size());
-    const size_t MaskLookupWork = OrderedLookupWork(
-        std::max(Insns.size(), CandidateFixedPointExplorationTargets.size()));
-    const size_t MarkerRollbackLookupWork = OrderedLookupWork(Insns.size()) + 1;
+    const size_t RollbackLookupCeiling =
+        OrderedLookupWork(std::numeric_limits<size_t>::max());
+    const size_t MarkerRollbackLookupWork = RollbackLookupCeiling + 1;
     if (!ConsumeProposalStageProducts(
-            {// Inventory scan, Resolved/Prior lookup, retained candidate,
-             // and ordered outcome insert plus its node.
-             {Insns.size(), 3},
+            {// CandidateAddrs owns a reserved buffer and its eventual cleanup
+             // (2N), one retained value per candidate (N), and the complete
+             // source-instruction traversal (N).  Fixed vector lifetime is
+             // paid separately below.
+             {Insns.size(), 4},
              {Insns.size(), ResolvedLookupWork},
-             {Insns.size(), PriorLookupWork},
-             {Insns.size(), OutcomeLookupWork},
-             // Reserved rollback: Insns lookup, target clear, two ordered
-             // erases, and the Next/Outcome node destruction.
-             {Insns.size(), 3},
-             {Insns.size(), InsnLookupWork},
-             {Insns.size(), ResolvedLookupWork},
-             {Insns.size(), MaskLookupWork},
-             // Incomplete-marker state is part of the same transaction.  A
-             // successful commit destroys every saved node; rollback instead
-             // destroys at most one stack and one index marker per candidate
-             // before swapping the saved sets back in place.
-             {SavedStackTableEvidenceIncompleteBranches.size(), 1},
-             {SavedIndexDomainEvidenceIncompleteBranches.size(), 1},
-             {Insns.size(), 2},
-             {Insns.size(), MarkerRollbackLookupWork},
-             {Insns.size(), MarkerRollbackLookupWork}})) {
+             {Insns.size(), PriorLookupWork}}) ||
+        !ConsumeProposalStageEvidence(2)) {
       CandidateProposalStageActive = false;
       NextStrongJumpTableProposals.clear();
       RestoreIncompleteBranchMarkers();
       continue;
     }
-    IncompleteBranchMarkerCleanupReserved = true;
     CandidateAddrs.reserve(Insns.size());
     for (auto &[Addr, Rec] : Insns) {
       if (!Rec.IsBranch || !Rec.IsIndirect || Rec.IsCall)
@@ -3030,10 +3033,103 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       if (Rec.JumpTableTargets.empty() || NeedsRevalidation ||
           PriorStrongJumpTableProposals.count(Addr)) {
         CandidateAddrs.push_back(Addr);
-        StrongJumpTableProposalOutcomes.emplace(
-            Addr,
-            StrongJumpTableProposalOutcome::DefinitiveLocalProofLoss);
       }
+    }
+
+    // This second traversal is real work of its own.  Prepay its source visit
+    // and both ordered lookups at the maximum possible final tree height; the
+    // stage may decode additional instructions before rollback actually uses
+    // the corresponding cleanup reservation.
+    if (!ConsumeProposalStageProducts(
+            {{CandidateAddrs.size(), size_t{1} + 2 * RollbackLookupCeiling}})) {
+      CandidateProposalStageActive = false;
+      NextStrongJumpTableProposals.clear();
+      RestoreIncompleteBranchMarkers();
+      continue;
+    }
+
+    // CandidateAddrs is now an immutable, read-only stage inventory.  Before
+    // inserting any address into the mutation set, reserve destruction of all
+    // pre-existing persistent state for the complete batch.  A preceding
+    // candidate may exhaust before a later candidate runs, yet rollback still
+    // clears that later candidate's old targets/metadata; its per-candidate
+    // reservation therefore cannot be deferred to the execution loop.
+    bool StageStartRollbackStateReserved = true;
+    for (va_t Addr : CandidateAddrs) {
+      auto It = Insns.find(Addr);
+      auto Info = ResolvedTableInfo.find(Addr);
+      const size_t OldTargetCount =
+          It == Insns.end() ? 0 : It->second.JumpTableTargets.size();
+      const bool HasOldPersistentState =
+          OldTargetCount != 0 || Info != ResolvedTableInfo.end();
+      if (HasOldPersistentState &&
+          ProposalOldStateCleanupEvidenceExhaustionForTesting) {
+        ProposalOldStateCleanupEvidenceExhaustionForTesting = false;
+        CandidateProposalStageEvidenceRemaining = 0;
+        CandidateProposalStageEvidenceIncomplete = true;
+        ProposalCleanupEvidenceForTesting.OldStateExhausted = true;
+        StageStartRollbackStateReserved = false;
+        break;
+      }
+      if (!ConsumeProposalStageEvidence(OldTargetCount) ||
+          (Info != ResolvedTableInfo.end() &&
+           !ConsumeJumpTableInfoComparison(Info->second))) {
+        if (HasOldPersistentState)
+          ProposalCleanupEvidenceForTesting.OldStateExhausted = true;
+        StageStartRollbackStateReserved = false;
+        break;
+      }
+      if (HasOldPersistentState)
+        ProposalCleanupEvidenceForTesting.OldStateReserved = true;
+    }
+    if (!StageStartRollbackStateReserved) {
+      CandidateProposalStageActive = false;
+      CandidateProposalStageMutationAddrs.clear();
+      NextStrongJumpTableProposals.clear();
+      StrongJumpTableProposalOutcomes.clear();
+      RestoreIncompleteBranchMarkers();
+      continue;
+    }
+
+    // Only after every old dynamic object is covered may stage bookkeeping
+    // itself become persistent.  Pay the third CandidateAddrs traversal, both
+    // ordered-container insertions and node/value lifetimes, exact rollback,
+    // and transactional incomplete-marker cleanup before either insert.
+    const size_t CandidateInventoryLookup =
+        OrderedLookupWork(CandidateAddrs.size());
+    if (!ConsumeProposalStageProducts(
+            {// Third-phase CandidateAddrs source traversal.
+             {CandidateAddrs.size(), 1},
+             // Mutation set lookup plus node/value/future destruction.
+             {CandidateAddrs.size(), CandidateInventoryLookup},
+             {CandidateAddrs.size(), 3},
+             // Outcome map lookup plus node/value/future destruction.
+             {CandidateAddrs.size(), CandidateInventoryLookup},
+             {CandidateAddrs.size(), 3},
+             // Rollback source/clear/erase constants and final-height lookups.
+             {CandidateAddrs.size(), 3},
+             {CandidateAddrs.size(), RollbackLookupCeiling},
+             {CandidateAddrs.size(), RollbackLookupCeiling},
+             {CandidateAddrs.size(), RollbackLookupCeiling},
+             // Marker commit/rollback owns saved nodes plus at most one stack
+             // and one index marker per exact stage-start candidate.
+             {SavedStackTableEvidenceIncompleteBranches.size(), 1},
+             {SavedIndexDomainEvidenceIncompleteBranches.size(), 1},
+             {CandidateAddrs.size(), 2},
+             {CandidateAddrs.size(), MarkerRollbackLookupWork},
+             {CandidateAddrs.size(), MarkerRollbackLookupWork}})) {
+      CandidateProposalStageActive = false;
+      CandidateProposalStageMutationAddrs.clear();
+      NextStrongJumpTableProposals.clear();
+      StrongJumpTableProposalOutcomes.clear();
+      RestoreIncompleteBranchMarkers();
+      continue;
+    }
+    IncompleteBranchMarkerCleanupReserved = true;
+    for (va_t Addr : CandidateAddrs) {
+      CandidateProposalStageMutationAddrs.insert(Addr);
+      StrongJumpTableProposalOutcomes.emplace(
+          Addr, StrongJumpTableProposalOutcome::DefinitiveLocalProofLoss);
     }
 
     bool MadeProgress = false;
@@ -3092,64 +3188,29 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       // resolveJumpTable erases the old map entry first.  Move its dynamic
       // metadata into the comparison snapshot instead of copying it before
       // the candidate-local account begins.
-      // Reserve both persistent objects' destruction before either the map
-      // value is moved or the resolver can exhaust its local share.  Exactly
-      // one of replacement or transactional rollback consumes the target
-      // reserve; OldInfo itself is destroyed at the end of this iteration.
-      const size_t OldTargetCount = It->second.JumpTableTargets.size();
+      // The immutable stage-inventory preflight reserved destruction of every
+      // old persistent object before any candidate mutation.  Move this map
+      // value into the comparison snapshot without duplicating its storage;
+      // candidate-local accounting separately reserves any replacement.
       PriorInfo = ResolvedTableInfo.find(UA);
-      const bool HasOldPersistentState =
-          OldTargetCount != 0 || PriorInfo != ResolvedTableInfo.end();
-      const size_t OldStorageRangeCount =
-          PriorInfo == ResolvedTableInfo.end()
-              ? 0
-              : PriorInfo->second.StorageRanges.size();
-      const size_t OldLoadRoleCount =
-          PriorInfo == ResolvedTableInfo.end()
-              ? 0
-              : PriorInfo->second.LoadRoles.size();
-      auto OldStateMutated = [&] {
-        auto Current = ResolvedTableInfo.find(UA);
-        return It->second.JumpTableTargets.size() != OldTargetCount ||
-               (PriorInfo == ResolvedTableInfo.end()) !=
-                   (Current == ResolvedTableInfo.end()) ||
-               (Current != ResolvedTableInfo.end() &&
-                (Current->second.StorageRanges.size() != OldStorageRangeCount ||
-                 Current->second.LoadRoles.size() != OldLoadRoleCount));
-      };
-      if (HasOldPersistentState &&
-          ProposalOldStateCleanupEvidenceExhaustionForTesting) {
-        ProposalOldStateCleanupEvidenceExhaustionForTesting = false;
-        ConsumeProposalStageEvidence(std::numeric_limits<size_t>::max());
-        ProposalCleanupEvidenceForTesting.OldStateExhausted = true;
-        ProposalCleanupEvidenceForTesting.MutationObservedBeforeReservation |=
-            OldStateMutated();
-        break;
-      }
-      if (!ConsumeProposalStageEvidence(OldTargetCount)) {
-        if (HasOldPersistentState) {
-          ProposalCleanupEvidenceForTesting.OldStateExhausted = true;
-          ProposalCleanupEvidenceForTesting
-              .MutationObservedBeforeReservation |= OldStateMutated();
-        }
-        break;
-      }
       std::optional<JumpTableInfo> OldInfo;
-      if (PriorInfo != ResolvedTableInfo.end()) {
-        if (!ConsumeJumpTableInfoComparison(PriorInfo->second)) {
-          ProposalCleanupEvidenceForTesting.OldStateExhausted = true;
-          ProposalCleanupEvidenceForTesting
-              .MutationObservedBeforeReservation |= OldStateMutated();
-          break;
-        }
-      }
-      if (HasOldPersistentState)
-        ProposalCleanupEvidenceForTesting.OldStateReserved = true;
       if (PriorInfo != ResolvedTableInfo.end())
         OldInfo.emplace(std::move(PriorInfo->second));
       CandidateFixedPointExplorationTargets.erase(UA);
       JumpTableProofContextComplete = true;
-      auto Targets = resolveJumpTable(Img, It->second);
+      std::vector<va_t> Targets;
+      {
+        struct ProposalOutcomeTrackingScope {
+          bool &Tracked;
+          const bool Saved;
+          explicit ProposalOutcomeTrackingScope(bool &Tracked)
+              : Tracked(Tracked), Saved(Tracked) {
+            Tracked = true;
+          }
+          ~ProposalOutcomeTrackingScope() { Tracked = Saved; }
+        } TrackProposalOutcome{CandidateProposalOutcomeTracked};
+        Targets = resolveJumpTable(Img, It->second);
+      }
       JumpTableProofContextComplete = false;
       if (CandidateProposalStageEvidenceIncomplete)
         break;
@@ -3221,13 +3282,47 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       // preserve Prior for a bounded retry, and discard all provisional mask
       // exploration.  Decoded bytes may remain cached, but no edge/metadata
       // certificate from the incomplete stage survives rebuildBlocks.
-      for (va_t Addr : CandidateAddrs) {
+      bool SawForcedUntrackedCandidate = false;
+      bool ForcedUntrackedCandidateTargetsCleared = false;
+      for (va_t Addr : CandidateProposalStageMutationAddrs) {
         auto It = Insns.find(Addr);
-        if (It != Insns.end())
+        const bool IsForcedUntrackedCandidate =
+            Addr == ForcedUntrackedJumpTableCandidateAddrForTesting;
+        if (It != Insns.end()) {
+          if (IsForcedUntrackedCandidate)
+            UntrackedJumpTableCandidateProvisionalStateObservedForTesting |=
+                !It->second.JumpTableTargets.empty();
           It->second.JumpTableTargets.clear();
-        ResolvedTableInfo.erase(Addr);
-        CandidateFixedPointExplorationTargets.erase(Addr);
+        }
+        const size_t ErasedResolved = ResolvedTableInfo.erase(Addr);
+        if (IsForcedUntrackedCandidate) {
+          SawForcedUntrackedCandidate = true;
+          UntrackedJumpTableCandidateProvisionalStateObservedForTesting |=
+              ErasedResolved != 0;
+          ForcedUntrackedCandidateTargetsCleared =
+              It == Insns.end() || It->second.JumpTableTargets.empty();
+        }
       }
+      CandidateFixedPointExplorationTargets.clear();
+      bool ForcedUntrackedCandidateResolvedCleared = false;
+      bool ForcedUntrackedCandidateExplorationCleared = false;
+      if (SawForcedUntrackedCandidate) {
+        ForcedUntrackedCandidateResolvedCleared =
+            ResolvedTableInfo.count(
+                ForcedUntrackedJumpTableCandidateAddrForTesting) == 0;
+        ForcedUntrackedCandidateExplorationCleared =
+            CandidateFixedPointExplorationTargets.count(
+                ForcedUntrackedJumpTableCandidateAddrForTesting) == 0;
+      }
+      if (UntrackedJumpTableCandidateExhaustedThisStageForTesting) {
+        UntrackedJumpTableCandidateRollbackObservedForTesting = true;
+        UntrackedJumpTableCandidateStateClearedOnRollbackForTesting |=
+            SawForcedUntrackedCandidate &&
+            ForcedUntrackedCandidateTargetsCleared &&
+            ForcedUntrackedCandidateResolvedCleared &&
+            ForcedUntrackedCandidateExplorationCleared;
+      }
+      CandidateProposalStageMutationAddrs.clear();
       NextStrongJumpTableProposals.clear();
       StrongJumpTableProposalOutcomes.clear();
       StageAmbiguousI386GOTPCBranches.clear();
@@ -3481,6 +3576,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
     PriorStrongJumpTableProposals.swap(NextStrongJumpTableProposals);
     NextStrongJumpTableProposals.clear();
     StrongJumpTableProposalOutcomes.clear();
+    CandidateProposalStageMutationAddrs.clear();
     CandidateProposalStageActive = false;
 
     if (!MadeProgress) {
@@ -3539,6 +3635,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
                << Func.Blocks.size() << " blocks\n");
   }
   CandidateProposalStageActive = false;
+  CandidateProposalStageMutationAddrs.clear();
 
   // A proof-dependent target set may only escape after one whole round saw no
   // new decoded targets and no target-set change.  If the bounded iteration

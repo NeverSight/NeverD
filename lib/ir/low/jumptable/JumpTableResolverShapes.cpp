@@ -37,6 +37,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -1286,44 +1287,225 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
 // tryConstBaseAbsoluteTable — constant-base absolute table, decoupled load
 //===----------------------------------------------------------------------===//
 
-bool CFGBuilder::tryConstBaseAbsoluteTable(const BinaryImage &Img,
-                                           const InsnRecord &Rec,
-                                           JumpTableInfo &Info) {
+bool CFGBuilder::tryConstBaseAbsoluteTable(
+    const BinaryImage &Img, const InsnRecord &Rec, JumpTableInfo &Info,
+    JumpTableExactConsumerGroup *ExactConsumerGroup, bool *ShapeClaimed,
+    size_t *EvidenceBudget, bool *AnalysisComplete, bool ScanExactGroup,
+    bool RequireCurrentBranchLoad) const {
+  if (AnalysisComplete)
+    *AnalysisComplete = false;
+  if (ShapeClaimed)
+    *ShapeClaimed = false;
+  if (ExactConsumerGroup) {
+    ExactConsumerGroup->IndexOccurrences.clear();
+    ExactConsumerGroup->BranchAddrs.clear();
+  }
+  bool BudgetExhausted = false;
+  auto orderedLookupWork = [](size_t Count) {
+    size_t Work = 1;
+    for (size_t N = Count; N > 1; N = N / 2 + N % 2)
+      ++Work;
+    return Work;
+  };
+  auto consume = [&](size_t Amount = 1) {
+    if (!EvidenceBudget)
+      return true;
+    if (Amount > *EvidenceBudget) {
+      *EvidenceBudget = 0;
+      BudgetExhausted = true;
+      return false;
+    }
+    *EvidenceBudget -= Amount;
+    return true;
+  };
+  auto consumeProducts =
+      [&](std::initializer_list<std::pair<size_t, size_t>> Products) {
+        const size_t Max = std::numeric_limits<size_t>::max();
+        size_t Total = 0;
+        for (const auto &[Count, Cost] : Products) {
+          if (Count != 0 && Cost > Max / Count)
+            return consume(Max);
+          const size_t Product = Count * Cost;
+          if (Product > Max - Total)
+            return consume(Max);
+          Total += Product;
+        }
+        return consume(Total);
+      };
+  auto ensureAppendCapacity = [&](auto &Values, size_t Additional = 1) {
+    const size_t Max = std::numeric_limits<size_t>::max();
+    if (Additional > Max - Values.size())
+      return consume(Max);
+    const size_t Required = Values.size() + Additional;
+    if (Required <= Values.capacity())
+      return true;
+    const size_t Doubled =
+        Values.capacity() == 0
+            ? size_t{1}
+            : (Values.capacity() > Max / 2 ? Max : Values.capacity() * 2);
+    const size_t NewCapacity = std::max(Required, Doubled);
+    if (NewCapacity == Max) {
+      consume(Max);
+      return false;
+    }
+    if (!consumeProducts({{NewCapacity, 2}, {Values.size(), 1}}))
+      return false;
+    Values.reserve(NewCapacity);
+    return true;
+  };
+  auto completed = [&](bool Result) {
+    if (AnalysisComplete)
+      *AnalysisComplete = true;
+    return Result;
+  };
+
   if (!CurrentImg)
+    return completed(false);
+  if (!consumeProducts({{Rec.Ops.size(), 2}}))
     return false;
   bool HasIndBranch = false;
+  bool HasInstructionLocalPointerLoad = false;
   for (auto &Op : Rec.Ops) {
     if (Op.Opcode == NdOp::INDIR_BR && Op.NumInputs >= 1)
       HasIndBranch = true;
+    if (Op.Opcode == NdOp::LOAD && (Op.Output.Size == 4 || Op.Output.Size == 8))
+      HasInstructionLocalPointerLoad = true;
   }
   if (!HasIndBranch)
-    return false;
+    return completed(false);
+
+  const bool WantsExactGroupInventory =
+      ScanExactGroup && HasInstructionLocalPointerLoad && CurrentFuncRange &&
+      CurrentFuncRange->first == CurrentFuncEntry;
+  if (WantsExactGroupInventory) {
+    // Establish the current branch's exact local absolute-table model before
+    // copying/scanning the rest of an attacker-sized function.  The recursive
+    // local phase retains lexical definitions through Rec but considers only
+    // Rec's own LOADs, and disables group recursion; all of its work debits the
+    // same candidate account.  Once it has authenticated the base/width/
+    // relocation run and exact load/index occurrence, later group inventory
+    // exhaustion is evidence-incomplete for a claimed table shape, never
+    // ordinary callback evidence.
+    JumpTableInfo LocalInfo;
+    bool LocalShapeClaimed = false;
+    bool LocalAnalysisComplete = false;
+    const bool LocalRecovered = tryConstBaseAbsoluteTable(
+        Img, Rec, LocalInfo, /*ExactConsumerGroup=*/nullptr, &LocalShapeClaimed,
+        EvidenceBudget, &LocalAnalysisComplete,
+        /*ScanExactGroup=*/false, /*RequireCurrentBranchLoad=*/true);
+    if ((LocalRecovered || LocalShapeClaimed) && ShapeClaimed)
+      *ShapeClaimed = true;
+    if (!LocalAnalysisComplete)
+      return false;
+    // Exact-group authority is anchored in the current branch.  A generic
+    // memory callback in the same function must never borrow a later sibling's
+    // absolute relocation model.
+    if (!LocalRecovered)
+      return completed(false);
+  }
 
   // This occurrence-backed strategy handles both an in-instruction memory
   // jump (`jmp *tab(,idx,W)`) and a decoupled spill/reload relay.  The unified
   // load-address and load-output certificates below prevent an unrelated
   // prefix LOAD from being adopted merely because it has the same shape.
 
-  // Flatten the whole function prefix up to and including the dispatch so a
-  // table load in any predecessor goto-site is in scope — this covers both a
-  // single decoupled relay (one predecessor) and a shared multi-site dispatch
-  // (several goto-site predecessors all reading one common table).
+  // A decoupled relay still needs the whole lexical prefix because its table
+  // loads live in predecessor goto-sites.  An in-instruction memory branch is
+  // different: optimized classifiers can tail-duplicate several independently
+  // bounded consumers of the same label table.  When an authoritative function
+  // range exists, retain every such direct consumer so the bounds resolver can
+  // prove their union as one atomic candidate group.  Loads from ordinary
+  // instructions remain excluded from that group.
+  const bool ScanWholeFunction =
+      ScanExactGroup && HasInstructionLocalPointerLoad && CurrentFuncRange &&
+      CurrentFuncRange->first == CurrentFuncEntry;
+  std::set<va_t> InstructionLocalBranchAddrs;
   std::vector<LowOp> Ops;
-  for (auto It = Insns.lower_bound(CurrentFuncEntry);
-       It != Insns.end() && It->first <= Rec.Addr; ++It)
-    for (auto &Op : It->second.Ops)
+  auto appendOps = [&](const std::vector<LowOp> &Source) {
+    for (const LowOp &Op : Source) {
+      // Capacity growth pays buffer/move work; each retained LowOp still owns
+      // one source visit plus its copy construction/future destruction.
+      if (!ensureAppendCapacity(Ops) || !consume(2))
+        return false;
       Ops.push_back(Op);
+    }
+    return true;
+  };
+  if (RequireCurrentBranchLoad) {
+    // Retain the lexical definitions needed to fold the current dispatch's
+    // table base, but do not let an earlier sibling LOAD become its model.
+    // LoadScanOrder below is restricted to Rec.Addr in this mode.
+    if (!consume(orderedLookupWork(Insns.size())))
+      return false;
+    for (auto It = Insns.lower_bound(CurrentFuncEntry);
+         It != Insns.end() && It->first <= Rec.Addr; ++It) {
+      if (!consume() || !appendOps(It->second.Ops))
+        return false;
+    }
+  } else {
+    if (!consume(orderedLookupWork(Insns.size())))
+      return false;
+    for (auto It = Insns.lower_bound(CurrentFuncEntry); It != Insns.end();
+         ++It) {
+      if ((ScanWholeFunction && It->first >= CurrentFuncRange->second) ||
+          (!ScanWholeFunction && It->first > Rec.Addr))
+        break;
+      if (!consume())
+        return false;
+      if (ScanWholeFunction) {
+        if (!consumeProducts({{It->second.Ops.size(), 2}}))
+          return false;
+        const bool HasIndirectBranch = std::any_of(
+            It->second.Ops.begin(), It->second.Ops.end(), [](const LowOp &Op) {
+              return Op.Opcode == NdOp::INDIR_BR && Op.NumInputs >= 1;
+            });
+        const bool HasPointerLoad = std::any_of(
+            It->second.Ops.begin(), It->second.Ops.end(), [](const LowOp &Op) {
+              return Op.Opcode == NdOp::LOAD &&
+                     (Op.Output.Size == 4 || Op.Output.Size == 8);
+            });
+        if (HasIndirectBranch && HasPointerLoad) {
+          if (!consume(orderedLookupWork(InstructionLocalBranchAddrs.size()) +
+                       5))
+            return false;
+          InstructionLocalBranchAddrs.insert(It->first);
+        }
+      }
+      if (!appendOps(It->second.Ops))
+        return false;
+    }
+  }
+
+  auto reachingDef = [&](int From, const NdVar &Value) -> std::optional<int> {
+    const size_t Scan =
+        From < 0 ? 0 : std::min(Ops.size(), static_cast<size_t>(From) + 1);
+    if (!consume(Scan))
+      return std::nullopt;
+    return reachingDefIdx(Ops, From, Value);
+  };
+  auto chargeScaledIndexTrace = [&]() {
+    // scaledIndexReg can walk one quasi-copy chain, inspect one widening
+    // definition, then walk a second chain to the source register.
+    return consumeProducts(
+        {{Ops.size(), size_t{2} * limits::kMaxQuasiCopyDepth + 1}});
+  };
+  auto chargeRegisterTrace = [&]() {
+    return consumeProducts({{Ops.size(), limits::kMaxQuasiCopyDepth}});
+  };
 
   // Recover the concrete scale of a scaled-index operand (INT_MULT const /
-  // INT_LEFT shift), traced through value-preserving reshapes.  Returns 0 when
-  // the operand is not a scaled index.
-  auto scaleOf = [&](NdVar V, int From) -> uint32_t {
+  // INT_LEFT shift), traced through value-preserving reshapes.  A null result
+  // is evidence exhaustion; zero is a completed non-scaled result.
+  auto scaleOf = [&](NdVar V, int From) -> std::optional<uint32_t> {
     for (int G = 0; G < limits::kMaxQuasiCopyDepth; ++G) {
       if (!V.isReg() && !V.isTemp())
-        return 0;
-      int D = reachingDefIdx(Ops, From, V);
+        return uint32_t{0};
+      const std::optional<int> Def = reachingDef(From, V);
+      if (!Def)
+        return std::nullopt;
+      const int D = *Def;
       if (D < 0)
-        return 0;
+        return uint32_t{0};
       const LowOp &O = Ops[D];
       if (O.Opcode == NdOp::INT_MULT && O.NumInputs >= 2 &&
           O.Inputs[1].isConst())
@@ -1338,9 +1520,9 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(const BinaryImage &Img,
         From = D - 1;
         continue;
       }
-      return 0;
+      return uint32_t{0};
     }
-    return 0;
+    return uint32_t{0};
   };
 
   // Scan backward for the table load: a LOAD of pointer width whose address is
@@ -1352,7 +1534,130 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(const BinaryImage &Img,
   va_t ModelBase = 0;
   uint16_t ModelWidth = 0;
   uint32_t ModelRun = 0;
-  for (int I = static_cast<int>(Ops.size()) - 1; I >= 0; --I) {
+  std::vector<int> LoadScanOrder;
+  if (!consumeProducts(
+          {{Ops.size(), ScanWholeFunction ? 2 : 1},
+           {Ops.size(),
+            ScanWholeFunction
+                ? orderedLookupWork(InstructionLocalBranchAddrs.size())
+                : 0}}))
+    return false;
+  if (ScanWholeFunction) {
+    // Anchor the model in the current branch before considering siblings.  A
+    // later, unrelated absolute table in the same function must not become the
+    // current branch's model merely because its address sorts last.
+    for (int I = static_cast<int>(Ops.size()) - 1; I >= 0; --I)
+      if (Ops[I].Addr == Rec.Addr) {
+        if (!ensureAppendCapacity(LoadScanOrder) || !consume())
+          return false;
+        LoadScanOrder.push_back(I);
+      }
+    for (int I = static_cast<int>(Ops.size()) - 1; I >= 0; --I)
+      if (Ops[I].Addr != Rec.Addr &&
+          InstructionLocalBranchAddrs.count(Ops[I].Addr)) {
+        if (!ensureAppendCapacity(LoadScanOrder) || !consume())
+          return false;
+        LoadScanOrder.push_back(I);
+      }
+  } else if (RequireCurrentBranchLoad) {
+    for (int I = static_cast<int>(Ops.size()) - 1; I >= 0; --I)
+      if (Ops[I].Addr == Rec.Addr) {
+        if (!ensureAppendCapacity(LoadScanOrder) || !consume())
+          return false;
+        LoadScanOrder.push_back(I);
+      }
+  } else {
+    for (int I = static_cast<int>(Ops.size()) - 1; I >= 0; --I) {
+      if (!ensureAppendCapacity(LoadScanOrder) || !consume())
+        return false;
+      LoadScanOrder.push_back(I);
+    }
+  }
+  std::optional<std::set<va_t>> DecodedAnchors;
+  auto ensureDecodedAnchors = [&]() {
+    if (DecodedAnchors)
+      return true;
+    const size_t AnchorOccurrenceCount =
+        RelocatedInstructionAddressOccurrences.size();
+    if (!consumeProducts({{AnchorOccurrenceCount, 4},
+                          {AnchorOccurrenceCount,
+                           orderedLookupWork(PublishedReachableInsns.size())},
+                          {AnchorOccurrenceCount,
+                           orderedLookupWork(Img.RelCodeRelocSlots.size())},
+                          {AnchorOccurrenceCount,
+                           orderedLookupWork(Img.CodePtrRelocSlots.size())},
+                          {AnchorOccurrenceCount,
+                           orderedLookupWork(AnchorOccurrenceCount)}}) ||
+        !consume(2))
+      return false;
+    DecodedAnchors.emplace(currentRelocatedInstructionTableAnchors(Img));
+    return true;
+  };
+  auto chargeRelocationRun = [&]() {
+    return consumeProducts({{size_t{limits::kMaxJumpTableEntries} + 1,
+                             orderedLookupWork(Img.CodePtrRelocSlots.size())}});
+  };
+  auto chargeNextAnchorBound = [&]() {
+    const size_t Max = std::numeric_limits<size_t>::max();
+    const size_t RelAnchorCount = Img.RelCodeTableAnchors.size();
+    const size_t DecodedAnchorCount = DecodedAnchors->size();
+    const size_t DataFieldCount = Img.DataAddressRelocOperands.size();
+    if (RelAnchorCount > Max - DecodedAnchorCount ||
+        RelAnchorCount + DecodedAnchorCount > Max - DataFieldCount)
+      return consume(Max);
+    const size_t AnchorUpper =
+        RelAnchorCount + DecodedAnchorCount + DataFieldCount;
+
+    auto accumulateProduct = [&](size_t &Total, size_t Count, size_t Cost) {
+      if (Count != 0 && Cost > Max / Count)
+        return false;
+      const size_t Product = Count * Cost;
+      if (Product > Max - Total)
+        return false;
+      Total += Product;
+      return true;
+    };
+
+    // hasExecutableCodeOwnerAt first resolves the segment/section owner, then
+    // checks both import spellings and every function-identity inventory.  On
+    // Mach-O, each failed import lookup may also scan Imports and repeat the
+    // code-address query.  Prepay that platform-wide worst case for every data
+    // relocation field before entering the helper.
+    size_t OwnerQueryWork = 1;
+    if (!accumulateProduct(OwnerQueryWork, 7, Img.Segments.size()) ||
+        !accumulateProduct(OwnerQueryWork, 6, Img.Sections.size()) ||
+        !accumulateProduct(OwnerQueryWork, 2,
+                           orderedLookupWork(Img.ImportStubIndices.size())) ||
+        !accumulateProduct(OwnerQueryWork, 2, Img.ImportStubRanges.size()) ||
+        !accumulateProduct(OwnerQueryWork, 2, Img.Imports.size()) ||
+        !accumulateProduct(
+            OwnerQueryWork, 3,
+            orderedLookupWork(Img.RuntimeFunctionAddrs.size())) ||
+        !accumulateProduct(
+            OwnerQueryWork, 1,
+            orderedLookupWork(Img.VerifiedFunctionEntries.size())) ||
+        !accumulateProduct(OwnerQueryWork, 1, Img.KnownCodeRanges.size()) ||
+        !accumulateProduct(OwnerQueryWork, 1, Img.Symbols.size()))
+      return consume(Max);
+
+    const size_t AnchorLookup = orderedLookupWork(AnchorUpper);
+    const size_t CodePtrLookup =
+        orderedLookupWork(Img.CodePtrRelocSlots.size());
+    // The helper copies both source sets into a new ordered set, probes the
+    // authenticated-source map and executable owner for every loader field,
+    // may retain each resulting anchor node, then performs upper_bound and a
+    // complete suffix walk with one code-pointer lookup per anchor.
+    return consumeProducts({{RelAnchorCount, AnchorLookup + 3},
+                            {DecodedAnchorCount, AnchorLookup + 3},
+                            {DataFieldCount, OwnerQueryWork},
+                            {DataFieldCount, AnchorLookup},
+                            {DataFieldCount, 4},
+                            {size_t{1}, AnchorLookup},
+                            {AnchorUpper, CodePtrLookup + 1}});
+  };
+  for (int I : LoadScanOrder) {
+    if (!consume())
+      return false;
     const LowOp &L = Ops[I];
     if (L.Opcode != NdOp::LOAD || L.NumInputs < 1)
       continue;
@@ -1362,7 +1667,10 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(const BinaryImage &Img,
     const NdVar &AddrV = (L.NumInputs >= 2) ? L.Inputs[1] : L.Inputs[0];
     if (!AddrV.isReg() && !AddrV.isTemp())
       continue;
-    int AddIdx = reachingDefIdx(Ops, I - 1, AddrV);
+    const std::optional<int> InitialAdd = reachingDef(I - 1, AddrV);
+    if (!InitialAdd)
+      return false;
+    int AddIdx = *InitialAdd;
     for (int G = 0;
          AddIdx >= 0 && Ops[AddIdx].NumInputs >= 1 &&
          (Ops[AddIdx].Opcode == NdOp::COPY ||
@@ -1371,13 +1679,20 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(const BinaryImage &Img,
            Ops[AddIdx].Inputs[0].Size == Img.getPointerSize())) &&
          (Ops[AddIdx].Inputs[0].isReg() || Ops[AddIdx].Inputs[0].isTemp()) &&
          G < limits::kMaxQuasiCopyDepth;
-         ++G)
-      AddIdx = reachingDefIdx(Ops, AddIdx - 1, Ops[AddIdx].Inputs[0]);
+         ++G) {
+      const std::optional<int> Next =
+          reachingDef(AddIdx - 1, Ops[AddIdx].Inputs[0]);
+      if (!Next)
+        return false;
+      AddIdx = *Next;
+    }
     if (AddIdx < 0 || Ops[AddIdx].Opcode != NdOp::INT_ADD ||
         Ops[AddIdx].NumInputs < 2)
       continue;
 
     for (int Side = 0; Side < 2; ++Side) {
+      if (!consume() || !chargeScaledIndexTrace())
+        return false;
       NdVar ExactIndex;
       va_t IndexUseAddr = InvalidVA;
       int IndexUseSeq = -1;
@@ -1385,28 +1700,76 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(const BinaryImage &Img,
                                     &ExactIndex, &IndexUseAddr, &IndexUseSeq);
       if (Idx == InvalidVA)
         continue;
-      if (scaleOf(Ops[AddIdx].Inputs[Side], AddIdx - 1) != W)
+      const std::optional<uint32_t> Scale =
+          scaleOf(Ops[AddIdx].Inputs[Side], AddIdx - 1);
+      if (!Scale)
+        return false;
+      if (*Scale != W)
         continue; // the scale must be the entry width for an absolute table
 
       // The other operand is the table base: a constant data VA, either a
       // literal (`disp(,idx,W)`) or a register folded to one (`lea tab,%rN`).
       const NdVar &BaseV = Ops[AddIdx].Inputs[1 - Side];
-      va_t Base = 0;
+      std::optional<va_t> Base;
       if (BaseV.isConst())
         Base = static_cast<va_t>(BaseV.Offset);
       else if (BaseV.isReg() || BaseV.isTemp()) {
+        if (!chargeRegisterTrace())
+          return false;
         uint64_t BReg = traceToRegister(Ops, AddIdx - 1, BaseV);
-        if (BReg != InvalidVA)
-          if (auto F = foldRegConstant(Img, Rec, BReg, L.Addr);
-              F && Img.getSegmentFor(*F))
+        if (BReg != InvalidVA) {
+          if (!consumeProducts(
+                  {{Img.Segments.size(), 4}, {Img.Sections.size(), 2}}))
+            return false;
+          auto F = foldRegConstant(Img, Rec, BReg, L.Addr, [&](size_t Amount) {
+            return consume(Amount);
+          });
+          if (BudgetExhausted)
+            return false;
+          if (F && Img.getSegmentFor(*F))
             Base = static_cast<va_t>(*F);
+        }
       }
-      const auto *Seg = Img.getSegmentFor(Base);
+      if (!Base)
+        continue;
+      const va_t ResolvedBase = *Base;
+      // The exact in-instruction base/scale plus the minimum contiguous run of
+      // loader-authenticated code-pointer relocations is already specific to
+      // an absolute jump table.  Record that branch-local shape before the
+      // full physical-run and whole-image next-anchor audits: either audit may
+      // exhaust on unrelated loader inventory, but that must not turn this
+      // table-shaped jump into a callback-shaped tail call.
+      const size_t PrefixLookup =
+          orderedLookupWork(Img.CodePtrRelocSlots.size());
+      if (!consumeProducts({{limits::kMinJumpTableEntries, PrefixLookup + 2}}))
+        return false;
+      bool HasMinimumRelocationPrefix = true;
+      for (size_t Slot = 0; Slot < limits::kMinJumpTableEntries; ++Slot) {
+        if (Slot > (std::numeric_limits<va_t>::max() - ResolvedBase) / W ||
+            !Img.CodePtrRelocSlots.count(ResolvedBase + Slot * W)) {
+          HasMinimumRelocationPrefix = false;
+          break;
+        }
+      }
+      if (!HasMinimumRelocationPrefix)
+        continue;
+      if (ShapeClaimed)
+        *ShapeClaimed = true;
+      if (!consumeProducts(
+              {{Img.Segments.size(), 2}, {Img.Sections.size(), 1}}))
+        return false;
+      const auto *Seg = Img.getSegmentFor(ResolvedBase);
       if (!Seg || Seg->Data.empty())
         continue;
-      uint32_t Run = countCodePtrRelocRun(Img, Base, W);
-      Run = boundCodePtrRunByNextAnchor(
-          Img, Base, W, Run, currentRelocatedInstructionTableAnchors(Img));
+      if (!chargeRelocationRun())
+        return false;
+      uint32_t Run = countCodePtrRelocRun(Img, ResolvedBase, W);
+      if (!ensureDecodedAnchors())
+        return false;
+      if (Run != 0 && !chargeNextAnchorBound())
+        return false;
+      Run = boundCodePtrRunByNextAnchor(Img, ResolvedBase, W, Run,
+                                        *DecodedAnchors);
       if (Run < limits::kMinJumpTableEntries)
         continue;
 
@@ -1418,16 +1781,18 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(const BinaryImage &Img,
       // adopted into the model and therefore makes an actual mixed merge fail
       // closed at the branch certificate.
       if (FoundModel &&
-          (Base != ModelBase || W != ModelWidth || Run != ModelRun))
+          (ResolvedBase != ModelBase || W != ModelWidth || Run != ModelRun))
         continue;
 
+      if (!chargeRegisterTrace())
+        return false;
       uint64_t IdxSrc = traceRegSource(Ops, AddIdx - 1, Idx);
       if (!FoundModel) {
         FoundModel = true;
-        ModelBase = Base;
+        ModelBase = ResolvedBase;
         ModelWidth = W;
         ModelRun = Run;
-        Info.setBaseAddr(Base);
+        Info.setBaseAddr(ResolvedBase);
         Info.EntrySize = W;
         Info.IsRelative = false;
         Info.IsSigned = false;
@@ -1448,22 +1813,39 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(const BinaryImage &Img,
                                                /*DefinedAtPoint=*/false};
       JumpTableValueOccurrence LoadOccurrence{L.Output, L.Addr, L.Seq,
                                               /*DefinedAtPoint=*/true};
+      if (ShapeClaimed)
+        *ShapeClaimed = true;
+      if (!ensureAppendCapacity(Info.IndexValueAlternatives) ||
+          !ensureAppendCapacity(Info.TargetLoads) ||
+          !ensureAppendCapacity(Info.LoadRoles) ||
+          (ScanWholeFunction && ExactConsumerGroup &&
+           (!ensureAppendCapacity(ExactConsumerGroup->IndexOccurrences) ||
+            !ensureAppendCapacity(ExactConsumerGroup->BranchAddrs))) ||
+          !consume(8))
+        return false;
       Info.IndexValueAlternatives.push_back(IndexOccurrence);
       Info.TargetLoads.push_back(LoadOccurrence);
       JumpTableLoadRole Role;
       Role.Load = LoadOccurrence;
       Role.LoadWidth = W;
-      Role.AllowedBases = {Base};
-      Role.Indices = {IndexOccurrence};
+      if (!ensureAppendCapacity(Role.AllowedBases) ||
+          !ensureAppendCapacity(Role.Indices) || !consume(4))
+        return false;
+      Role.AllowedBases.push_back(ResolvedBase);
+      Role.Indices.push_back(IndexOccurrence);
       Role.AddressScale = W;
       Info.LoadRoles.push_back(std::move(Role));
+      if (ScanWholeFunction && ExactConsumerGroup) {
+        ExactConsumerGroup->IndexOccurrences.push_back(IndexOccurrence);
+        ExactConsumerGroup->BranchAddrs.push_back(L.Addr);
+      }
       LLVM_DEBUG(llvm::dbgs() << "  const-base-abs: decoupled absolute table 0x"
-                              << llvm::utohexstr(Base) << " (W=" << W << ", "
-                              << Run << " entries)\n");
+                              << llvm::utohexstr(ResolvedBase) << " (W=" << W
+                              << ", " << Run << " entries)\n");
       break;
     }
   }
-  return FoundModel;
+  return completed(FoundModel);
 }
 
 } // namespace neverd

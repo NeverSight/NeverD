@@ -123,6 +123,47 @@ public:
   setMaskFixedPointEvidenceBudgetForTesting(std::optional<size_t> Limit) {
     MaskFixedPointEvidenceBudgetForTesting = Limit;
   }
+  /// Clamp the shared stage allowance exactly when a recursively discovered
+  /// candidate first enters mutation tracking.  This models earlier candidates
+  /// consuming the stage tail without shrinking the parent proof that discovers
+  /// the nested branch.
+  void setNestedMutationTrackingStageAllowanceForTesting(
+      std::optional<size_t> Limit) {
+    NestedMutationTrackingStageAllowanceForTesting = Limit;
+  }
+  /// Override only the local symbolic allowance for one exact finite-domain
+  /// query.  The enclosing candidate/stage account remains unchanged so tests
+  /// can distinguish local proof incompleteness from aggregate exhaustion.
+  void setFiniteSetSymbolEvidenceBudgetForTesting(std::optional<size_t> Limit) {
+    FiniteSetSymbolEvidenceBudgetForTesting = Limit;
+  }
+  /// Force the first recursively discovered (not stage-inventoried) jump-table
+  /// probe to exhaust its candidate account.  This generic transaction hook
+  /// verifies that nested resource failure aborts and rolls back its stage.
+  void setExhaustUntrackedJumpTableCandidateForTesting(bool Enable) {
+    ExhaustUntrackedJumpTableCandidateForTesting = Enable;
+  }
+  bool untrackedJumpTableCandidateRollbackObservedForTesting() const {
+    return UntrackedJumpTableCandidateRollbackObservedForTesting;
+  }
+  bool untrackedJumpTableCandidateProvisionalStateObservedForTesting() const {
+    return UntrackedJumpTableCandidateProvisionalStateObservedForTesting;
+  }
+  bool untrackedJumpTableCandidateStateClearedOnRollbackForTesting() const {
+    return UntrackedJumpTableCandidateStateClearedOnRollbackForTesting;
+  }
+  bool nestedMutationTrackingEvidenceExhaustedForTesting() const {
+    return NestedMutationTrackingEvidenceExhaustedForTesting;
+  }
+  va_t nestedMutationTrackingEvidenceExhaustedAddrForTesting() const {
+    return NestedMutationTrackingEvidenceExhaustedAddrForTesting;
+  }
+  bool constBaseLocalShapeClaimedForTesting() const {
+    return ConstBaseLocalShapeClaimedForTesting;
+  }
+  bool constBasePostShapeAnalysisIncompleteForTesting() const {
+    return ConstBasePostShapeAnalysisIncompleteForTesting;
+  }
   /// Expose only whether a failed candidate-local proof left provisional
   /// exploration state behind.  Budget exhaustion must be transactional:
   /// focused tests use this after build() to ensure an incomplete proof cannot
@@ -363,6 +404,20 @@ private:
     bool operator==(const JumpTableValueOccurrence &Other) const = default;
   };
 
+  /// Immutable occurrence inventory captured by the direct absolute-table
+  /// detector before address-role reachability pruning.  Consumers in label
+  /// blocks may be absent from the bootstrap graph and become reachable only
+  /// after an earlier table edge is decoded; the candidate-local fixed point
+  /// must replay that original inventory without rescanning the function.
+  struct JumpTableExactConsumerGroup {
+    std::vector<JumpTableValueOccurrence> IndexOccurrences;
+    /// Instruction-local indirect branch owning the corresponding index
+    /// occurrence.  Parallel to IndexOccurrences; duplicates are retained so
+    /// the proof can require distinct present branches rather than merely two
+    /// value occurrences from one branch.
+    std::vector<va_t> BranchAddrs;
+  };
+
   /// Exact proof that a bit-setting operation constrains the dynamic input of
   /// one authenticated mask occurrence.  This permits a following negative
   /// translation only when every feasible mask coordinate remains
@@ -390,8 +445,19 @@ private:
     /// below UnsignedUpperBound.  This is a complete bit-vector proof over the
     /// resolver's CFG/lane-aware expression, not a sampled range or a table
     /// storage-capacity inference.  UnsignedUpperBound also carries the exact
-    /// divisor for ExactUnsignedModuloRecipe queries.
+    /// divisor for ExactUnsignedModuloRecipe queries and the exclusive finite
+    /// envelope for UnsignedFeasibleSet queries.
     UnsignedLessThan,
+    /// The exact candidate occurrence is present in the current resolver
+    /// graph and resolves to a value.  A completed false result distinguishes
+    /// an unreachable sibling consumer from a reachable but out-of-domain
+    /// value when constructing a candidate-local finite-domain fixed point.
+    ResolvableValue,
+    /// Every feasible value is below UnsignedUpperBound (at most 64), and the
+    /// exact feasible coordinates are returned in the query's uint64_t result
+    /// mask.  One resolver DAG and symbolic context own the whole enumeration;
+    /// coordinates are never inferred from physical storage capacity.
+    UnsignedFeasibleSet,
     /// The candidate is the exact output occurrence of an unsigned remainder
     /// producer.  Resolve immediately after that definition and require the
     /// complete LLVM constant-division recipe for UnsignedUpperBound as the
@@ -421,7 +487,7 @@ private:
     bool AllowZeroExtension = false;
     bool AllowSignExtension = false;
     JumpTableValueRelation Relation = JumpTableValueRelation::MustEqual;
-    /// UnsignedLessThan's exclusive bound, or
+    /// UnsignedLessThan/UnsignedFeasibleSet's exclusive bound, or
     /// ExactUnsignedModuloRecipe's exact divisor.
     uint64_t UnsignedUpperBound = 0;
     /// Do not apply the role-neutral architectural-address owner wildcard.
@@ -816,9 +882,15 @@ private:
   // signed/offset) case labels while an unguarded computed goto is bounded by
   // the reloc run.  Handles both a single decoupled goto site (single-
   // predecessor relay) and a shared multi-site dispatch where several goto-site
-  // predecessors read one common table.
-  bool tryConstBaseAbsoluteTable(const BinaryImage &Img, const InsnRecord &Rec,
-                                 JumpTableInfo &Info);
+  // predecessors read one common table.  RequireCurrentBranchLoad retains
+  // lexical definitions through Rec but considers LOADs owned by Rec only, so
+  // an earlier materialized base is available without borrowing a sibling's
+  // table model.
+  bool tryConstBaseAbsoluteTable(
+      const BinaryImage &Img, const InsnRecord &Rec, JumpTableInfo &Info,
+      JumpTableExactConsumerGroup *ExactConsumerGroup, bool *ShapeClaimed,
+      size_t *EvidenceBudget, bool *AnalysisComplete,
+      bool ScanExactGroup = true, bool RequireCurrentBranchLoad = false) const;
   /// When the table index register is a reload of a stack-spilled value
   /// (`str rX,[sp,#k]; ... ldr rIdx,[sp,#k]`, the -O0 shape where the guarded
   /// switch variable is spilled before the dispatch block), trace it back to
@@ -995,7 +1067,8 @@ private:
       const std::set<va_t> *ReachableInstructions = nullptr,
       bool AllowFixedPointBootstrap = true, bool AllowRawDenseShortcut = true,
       size_t *AggregateEvidenceBudget = nullptr,
-      bool *SemanticIndexDomainAmbiguous = nullptr) const;
+      bool *SemanticIndexDomainAmbiguous = nullptr,
+      const JumpTableExactConsumerGroup *ExactConsumerGroup = nullptr) const;
   void detectNormalization(const InsnRecord &Rec, JumpTableInfo &Info);
   void detectStride(const InsnRecord &Rec, JumpTableInfo &Info);
   uint32_t pullBackBound(uint32_t RawBound, const JumpTableInfo &Info) const;
@@ -1079,8 +1152,9 @@ private:
       std::vector<bool> *QueryAnalysisComplete = nullptr,
       va_t CandidateBranchOverride = InvalidVA,
       const std::vector<va_t> *CandidateTargetsOverride = nullptr,
-      size_t *GraphWorkBudget = nullptr,
-      size_t LocalMatchEvidenceLimit = 0) const;
+      size_t *GraphWorkBudget = nullptr, size_t LocalMatchEvidenceLimit = 0,
+      const std::set<va_t> *CandidateBranchesSharingTargets = nullptr,
+      std::vector<uint64_t> *QueryUnsignedFeasibleMasks = nullptr) const;
   /// Prove that the actual INDIR_BR input is derived from the strategy's exact
   /// TargetLoad occurrence on every feasible path.  Mere address co-occurrence
   /// in static scans or emulation is not sufficient.
@@ -1193,6 +1267,11 @@ private:
       NextStrongJumpTableProposals;
   std::map<va_t, StrongJumpTableProposalOutcome>
       StrongJumpTableProposalOutcomes;
+  /// Complete mutation inventory for the active transactional stage.  It is
+  /// seeded from the immutable candidate batch and extended, with shared-
+  /// budget prepayment, before any recursively discovered resolver invocation
+  /// can erase or publish persistent candidate state.
+  std::set<va_t> CandidateProposalStageMutationAddrs;
   /// Once a previously proposed candidate loses its independent local proof,
   /// it cannot bootstrap itself back into the role universe in this build.
   /// Evidence exhaustion is not a proof loss and therefore never enters this
@@ -1203,6 +1282,11 @@ private:
   /// unsafe INDIR_BR instead of rewriting it as an indirect tail call.
   std::set<va_t> EverStrongJumpTableProposalBranches;
   bool CandidateProposalStageActive = false;
+  /// True only while multiStageResolve invokes a candidate from its immutable
+  /// stage-start inventory.  Recursive exploration may discover and probe a
+  /// new indirect branch in the same stage; that probe shares the stage budget
+  /// but does not own a preallocated proposal-outcome node yet.
+  bool CandidateProposalOutcomeTracked = false;
   size_t CandidateProposalStageEvidenceRemaining = 0;
   bool CandidateProposalStageEvidenceIncomplete = false;
   /// Bookkeeping for persistent incomplete-branch markers is independent of
@@ -1222,6 +1306,16 @@ private:
   bool ExhaustedProposalStageCommitTailForTesting = false;
   bool ProposalStageForcedCommitTailRollbackPreservedStateForTesting = false;
   bool ProposalStageRollbackMutatedQuarantineForTesting = false;
+  bool ExhaustUntrackedJumpTableCandidateForTesting = false;
+  bool UntrackedJumpTableCandidateExhaustedThisStageForTesting = false;
+  bool UntrackedJumpTableCandidateRollbackObservedForTesting = false;
+  va_t ForcedUntrackedJumpTableCandidateAddrForTesting = InvalidVA;
+  bool UntrackedJumpTableCandidateProvisionalStateObservedForTesting = false;
+  bool UntrackedJumpTableCandidateStateClearedOnRollbackForTesting = false;
+  bool NestedMutationTrackingEvidenceExhaustedForTesting = false;
+  va_t NestedMutationTrackingEvidenceExhaustedAddrForTesting = InvalidVA;
+  bool ConstBaseLocalShapeClaimedForTesting = false;
+  bool ConstBasePostShapeAnalysisIncompleteForTesting = false;
   ProposalCleanupEvidenceStateForTesting ProposalCleanupEvidenceForTesting;
   bool ProposalOldStateCleanupEvidenceExhaustionForTesting = false;
 
@@ -1308,6 +1402,8 @@ private:
   std::optional<size_t> I386GOTOFFProposalEvidenceBudgetForTesting;
   std::optional<size_t> StackTableEvidenceBudgetForTesting;
   std::optional<size_t> MaskFixedPointEvidenceBudgetForTesting;
+  std::optional<size_t> NestedMutationTrackingStageAllowanceForTesting;
+  std::optional<size_t> FiniteSetSymbolEvidenceBudgetForTesting;
   /// One candidate-local allowance for i386 GOTOFF reaching-value evidence.
   /// It is reset exactly once at resolver entry; its actual use is charged to
   /// the candidate/stage aggregate before the candidate outcome is committed.

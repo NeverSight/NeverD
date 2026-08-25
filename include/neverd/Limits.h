@@ -49,6 +49,12 @@ constexpr uint32_t kMaxJumpTableEntries = 4096;
 /// input-controlled, so every retained item and query allocation is prepaid.
 constexpr uint32_t kMaxJumpTableEvidenceWork = 4096;
 
+/// Local symbolization allowance for an exact finite-coordinate query.  Such
+/// a query may symbolize the expanded candidate graph before enumerating at
+/// most 64 coordinates.  Every visit also debits the candidate-wide aggregate
+/// account, so this allowance cannot multiply whole-CFG work across queries.
+constexpr uint32_t kMaxJumpTableFiniteSetSymbolEvidenceWork = 32768;
+
 /// Per-core proposal allowance inside one mask-domain fixed point.  Retained
 /// LowIR, coordinates and proposal batches also debit the aggregate account
 /// below; this smaller ceiling prevents one recursive core from monopolizing
