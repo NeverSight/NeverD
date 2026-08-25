@@ -157,6 +157,132 @@ jt_selector_twotable_relay:
         .quad   .Lselector_twotable_b2
         .quad   .Lselector_twotable_b3
 
+// A large unrelated prefix makes the exact selector query exceed the legacy
+// no-aggregate 4096-work fallback.  The composite detector must share the
+// candidate graph budget and report an incomplete query fail-closed instead
+// of treating resource exhaustion as a definitive non-table result.
+        .text
+        .globl  jt_selector_twotable_match_budget
+        .type   jt_selector_twotable_match_budget,@function
+jt_selector_twotable_match_budget:
+        .rept   384
+        movl    %ecx, %eax
+        andl    $7, %eax
+        .endr
+        movl    %edi, %r10d
+        shll    $3, %r10d
+        andl    $24, %r10d
+        leaq    .Lselector_twotable_budget_a(%rip), %r8
+        leaq    .Lselector_twotable_budget_b(%rip), %r9
+        testl   %esi, %esi
+        cmovneq %r9, %r8
+        movq    (%r8,%r10), %rax
+        jmpq    *%rax
+.Lselector_twotable_budget_a0:
+        movl    $6700, %eax
+        retq
+.Lselector_twotable_budget_a1:
+        movl    $6701, %eax
+        retq
+.Lselector_twotable_budget_a2:
+        movl    $6702, %eax
+        retq
+.Lselector_twotable_budget_a3:
+        movl    $6703, %eax
+        retq
+.Lselector_twotable_budget_b0:
+        movl    $6800, %eax
+        retq
+.Lselector_twotable_budget_b1:
+        movl    $6801, %eax
+        retq
+.Lselector_twotable_budget_b2:
+        movl    $6802, %eax
+        retq
+.Lselector_twotable_budget_b3:
+        movl    $6803, %eax
+        retq
+        .size   jt_selector_twotable_match_budget, .-jt_selector_twotable_match_budget
+
+        .section .data.rel.ro.jt_selector_occurrence,"aw",@progbits
+        .p2align 3
+.Lselector_twotable_budget_a:
+        .quad   .Lselector_twotable_budget_a0
+        .quad   .Lselector_twotable_budget_a1
+        .quad   .Lselector_twotable_budget_a2
+        .quad   .Lselector_twotable_budget_a3
+.Lselector_twotable_budget_b:
+        .quad   .Lselector_twotable_budget_b0
+        .quad   .Lselector_twotable_budget_b1
+        .quad   .Lselector_twotable_budget_b2
+        .quad   .Lselector_twotable_budget_b3
+
+// A two-table callback whose byte index is hidden behind more than the bounded
+// quasi-copy depth must retain the original JMP: the composite shape is known,
+// but its exact selector proof is incomplete.  The adjacent ordinary one-table
+// callback is the control: a complete all-callable envelope remains an
+// indirect tail call.
+        .text
+        .globl  jt_selector_budget_callback_a
+        .type   jt_selector_budget_callback_a,@function
+jt_selector_budget_callback_a:
+        movl    $6900, %eax
+        retq
+        .size   jt_selector_budget_callback_a, .-jt_selector_budget_callback_a
+
+        .globl  jt_selector_budget_callback_b
+        .type   jt_selector_budget_callback_b,@function
+jt_selector_budget_callback_b:
+        movl    $6901, %eax
+        retq
+        .size   jt_selector_budget_callback_b, .-jt_selector_budget_callback_b
+
+        .globl  jt_selector_twotable_callback_budget
+        .type   jt_selector_twotable_callback_budget,@function
+jt_selector_twotable_callback_budget:
+        movl    %edi, %r10d
+        shll    $3, %r10d
+        andl    $24, %r10d
+        .rept   9
+        movl    %r10d, %eax
+        movl    %eax, %r10d
+        .endr
+        leaq    .Lselector_twotable_callback_a(%rip), %r8
+        leaq    .Lselector_twotable_callback_b(%rip), %r9
+        testl   %esi, %esi
+        cmovneq %r9, %r8
+        jmpq    *(%r8,%r10)
+        .size   jt_selector_twotable_callback_budget, .-jt_selector_twotable_callback_budget
+
+        .globl  jt_selector_single_callback_budget_control
+        .type   jt_selector_single_callback_budget_control,@function
+jt_selector_single_callback_budget_control:
+        andl    $1, %edi
+        leaq    .Lselector_single_callback_budget(%rip), %rax
+        jmpq    *(%rax,%rdi,8)
+        .size   jt_selector_single_callback_budget_control, .-jt_selector_single_callback_budget_control
+
+        .section .data.rel.ro.jt_selector_occurrence,"aw",@progbits
+        .p2align 3
+.Lselector_twotable_callback_a:
+        .quad   jt_selector_budget_callback_a
+        .quad   jt_selector_budget_callback_b
+        .quad   jt_selector_budget_callback_a
+        .quad   jt_selector_budget_callback_b
+.Lselector_twotable_callback_b:
+        .quad   jt_selector_budget_callback_b
+        .quad   jt_selector_budget_callback_a
+        .quad   jt_selector_budget_callback_b
+        .quad   jt_selector_budget_callback_a
+
+        .section .data.rel.ro.jt_selector_single_callback_control,"aw",@progbits
+        .p2align 3
+        .type   .Lselector_single_callback_budget,@object
+.Lselector_single_callback_budget:
+        .quad   jt_selector_budget_callback_a
+        .quad   jt_selector_budget_callback_b
+        .size   .Lselector_single_callback_budget, .-.Lselector_single_callback_budget
+
 // Both paths compute the same authenticated selected-base+byte-index address,
 // but with different ADD occurrences.  A single MedVar from either arm does
 // not dominate the join.  Until the public plan grows an EdgeMerged recipe,

@@ -932,6 +932,45 @@ TEST_F(JTE_X86_32,
   }
 }
 
+TEST(TargetRoleProofContextKeyTest,
+     DistinguishesModeOptionalPresenceAndRootContents) {
+  const std::set<neverd::va_t> EmptyRoots;
+  const neverd::detail::TargetRoleProofContextKey Baseline{
+      /*ProofContextComplete=*/true,
+      /*HasActiveProofRoots=*/false,
+      /*ConsumerAuditMode=*/false,
+      {}};
+
+  EXPECT_TRUE(neverd::detail::targetRoleProofContextMatches(
+      Baseline, /*ProofContextComplete=*/true,
+      /*HasActiveProofRoots=*/false, /*ConsumerAuditMode=*/false,
+      EmptyRoots));
+  EXPECT_FALSE(neverd::detail::targetRoleProofContextMatches(
+      Baseline, /*ProofContextComplete=*/false,
+      /*HasActiveProofRoots=*/false, /*ConsumerAuditMode=*/false, EmptyRoots))
+      << "an incomplete proof context must not reuse a complete proof";
+  EXPECT_FALSE(neverd::detail::targetRoleProofContextMatches(
+      Baseline, /*ProofContextComplete=*/true,
+      /*HasActiveProofRoots=*/true, /*ConsumerAuditMode=*/false, EmptyRoots))
+      << "a present empty override must not reuse an absent-root proof";
+  EXPECT_FALSE(neverd::detail::targetRoleProofContextMatches(
+      Baseline, /*ProofContextComplete=*/true,
+      /*HasActiveProofRoots=*/false, /*ConsumerAuditMode=*/true, EmptyRoots))
+      << "consumer-audit replay must not reuse a non-audit proof";
+
+  const neverd::detail::TargetRoleProofContextKey Rooted{
+      /*ProofContextComplete=*/true,
+      /*HasActiveProofRoots=*/true,
+      /*ConsumerAuditMode=*/true,
+      {0x1000}};
+  const std::set<neverd::va_t> DifferentRoots{0x2000};
+  EXPECT_FALSE(neverd::detail::targetRoleProofContextMatches(
+      Rooted, /*ProofContextComplete=*/true,
+      /*HasActiveProofRoots=*/true, /*ConsumerAuditMode=*/true,
+      DifferentRoots))
+      << "equal-sized but different proof-root sets must not share a proof";
+}
+
 TEST_F(JTE_X86_32,
        AmbiguousI386GOTPCCarrySurvivesUnreplayedStableGraph) {
   auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
@@ -1686,6 +1725,81 @@ TEST_F(JTE_X86_64, TwoTableSelectorUsesExactCompositeOccurrences) {
   EXPECT_NE(HighBody.find("case 32:"), std::string::npos) << HighBody;
 }
 
+TEST_F(JTE_X86_64, TwoTableSelectorSharesCandidateGraphBudget) {
+  auto ImageOrErr = neverd::loadBinary(selectorOccurrenceX64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_selector_twotable_match_budget");
+  ASSERT_NE(Function, nullptr);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_EQ(Low.JumpTables.front().Targets.size(), 8u);
+  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
+TEST_F(JTE_X86_64, TwoTableSelectorBudgetExhaustionFailsClosed) {
+  auto ImageOrErr = neverd::loadBinary(selectorOccurrenceX64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_selector_twotable_match_budget");
+  ASSERT_NE(Function, nullptr);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  Builder.setMaskFixedPointEvidenceBudgetForTesting(size_t{1} << 20);
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  EXPECT_TRUE(Low.JumpTables.empty());
+  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.size(), 1u);
+  EXPECT_TRUE(Low.EverPublishedJumpTableBranchAddresses.empty());
+}
+
+TEST_F(JTE_X86_64, TwoTableSelectorQuasiCopyLimitFailsClosed) {
+  auto ImageOrErr = neverd::loadBinary(selectorOccurrenceX64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_selector_twotable_callback_budget");
+  const neverd::Symbol *CallbackControl =
+      Image.findSymbol("jt_selector_single_callback_budget_control");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(CallbackControl, nullptr);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  EXPECT_TRUE(Low.JumpTables.empty());
+  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.size(), 1u);
+  EXPECT_TRUE(Low.EverPublishedJumpTableBranchAddresses.empty());
+
+  neverd::CFGBuilder CallbackBuilder;
+  const neverd::LowFunc CallbackLow = CallbackBuilder.build(
+      Image, Decoder, CallbackControl->Addr, CallbackControl->Name);
+  EXPECT_TRUE(CallbackLow.JumpTables.empty());
+  EXPECT_FALSE(lowFunctionHasOpcode(CallbackLow, neverd::NdOp::INDIR_BR));
+  EXPECT_TRUE(lowFunctionHasOpcode(CallbackLow, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(CallbackLow.UnsafeIndirectBranchAddresses.empty());
+}
+
 TEST_F(JTE_X86_64, TwoTableDiamondNeedsAnEdgeMergedSelectorPlan) {
   auto Low = liftToLowIR(selectorOccurrenceX64Obj());
   ASSERT_EQ(Low.exitCode, 0) << Low.err;
@@ -2280,8 +2394,8 @@ TEST_F(JTE_X86_64, GuardEvidenceControlBatchBudgetFailsClosed) {
   const std::string Body =
       lowFunctionBody(R.out, "jt_identity_guard_control_budget");
   ASSERT_FALSE(Body.empty()) << R.out;
-  EXPECT_NE(Body.find("INDIR_CALL"), std::string::npos) << Body;
-  EXPECT_EQ(Body.find("INDIR_BR"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("INDIR_BR"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("INDIR_CALL"), std::string::npos) << Body;
 }
 
 TEST_F(JTE_X86_64, JumpTableRejectsNextFunctionInteriorTarget) {
@@ -3788,6 +3902,7 @@ TEST_F(JTE_X86_64, MaskRawDenseNestedPreciseReplayFailsClosed) {
   bool SawOpaque = false;
   bool SawExact = false;
   for (size_t Budget : Budgets) {
+    SCOPED_TRACE(::testing::Message() << "budget=" << Budget);
     const neverd::LowFunc Low = BuildWithBudget(Budget);
     if (Low.JumpTables.empty()) {
       SawOpaque = true;

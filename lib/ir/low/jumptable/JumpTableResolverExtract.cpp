@@ -36,6 +36,12 @@ namespace neverd {
 std::optional<bool> CFGBuilder::resolvedJumpTableOwnsStorageAddress(
     va_t Address, const std::set<va_t> *ReachableInsnFilter,
     size_t *EvidenceBudget) const {
+  auto orderedLookupWork = [](size_t Count) {
+    size_t Work = 1;
+    for (size_t N = Count; N > 1; N = N / 2 + N % 2)
+      ++Work;
+    return Work;
+  };
   auto consumeEvidence = [&](size_t Amount = 1) {
     if (!EvidenceBudget)
       return true;
@@ -47,17 +53,21 @@ std::optional<bool> CFGBuilder::resolvedJumpTableOwnsStorageAddress(
     return true;
   };
   for (const auto &[BranchAddr, Info] : ResolvedTableInfo) {
-    if (!consumeEvidence())
+    if (!consumeEvidence() || !consumeEvidence(orderedLookupWork(Insns.size())))
       return std::nullopt;
     auto Rec = Insns.find(BranchAddr);
     if (Rec == Insns.end() || Rec->second.JumpTableTargets.empty())
       continue;
     if (ReachableInsnFilter) {
+      if (!consumeEvidence(orderedLookupWork(ReachableInsnFilter->size())))
+        return std::nullopt;
       if (!ReachableInsnFilter->count(BranchAddr))
         continue;
-    } else if (!PublishedReachableInsns.empty() &&
-               !PublishedReachableInsns.count(BranchAddr)) {
-      continue;
+    } else if (!PublishedReachableInsns.empty()) {
+      if (!consumeEvidence(orderedLookupWork(PublishedReachableInsns.size())))
+        return std::nullopt;
+      if (!PublishedReachableInsns.count(BranchAddr))
+        continue;
     }
 
     if (!Info.StorageRanges.empty()) {

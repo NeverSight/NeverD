@@ -261,6 +261,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   bool CandidateEvidencePublished = false;
   bool CandidateEvidenceAnalysisIncomplete = false;
   bool CandidateEvidenceChargeFailed = false;
+  bool CandidateEvidenceExhaustedBeforeDedicatedRefund = false;
   bool IncompleteBranchInsertPrepaid = false;
   bool IncompleteBranchAlreadyInserted = false;
   bool CandidateTargetMaterializationStarted = false;
@@ -279,6 +280,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     const bool &I386GOTOFFIncomplete;
     const bool &I386GOTOFFSemanticAmbiguous;
     const bool &ChargeFailed;
+    const bool &ExhaustedBeforeDedicatedRefund;
     const bool &IncompleteInsertPrepaid;
     const bool &IncompleteAlreadyInserted;
     const bool &StrongProposalRecorded;
@@ -290,6 +292,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     ~CandidateEvidenceOutcome() {
       const bool ResourceIncomplete =
           I386GOTOFFIncomplete || ChargeFailed ||
+          ExhaustedBeforeDedicatedRefund ||
           (!Published && Remaining == 0);
       const bool EvidenceIncomplete = AnalysisIncomplete || ResourceIncomplete;
       // Resource exhaustion cannot distinguish a callback-shaped tail jump
@@ -340,6 +343,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       I386GOTOFFProposalEvidenceIncomplete,
       I386GOTOFFAmbiguousModelReach,
       CandidateEvidenceChargeFailed,
+      CandidateEvidenceExhaustedBeforeDedicatedRefund,
       IncompleteBranchInsertPrepaid,
       IncompleteBranchAlreadyInserted,
       CandidateStrongProposalRecorded,
@@ -426,8 +430,15 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     const size_t &Remaining;
     size_t &CandidateRemaining;
     bool &CandidateChargeFailed;
+    bool &CandidateExhaustedBeforeDedicatedRefund;
 
     ~CandidateI386GOTOFFEvidenceCharge() {
+      // The generic candidate account may be consumed exactly, without an
+      // overdraw, while this architecture-specific reservation remains
+      // unused.  Preserve that exhaustion fact before refunding the unused
+      // tail; CandidateEvidenceOutcome must not mistake the post-refund
+      // balance for a complete unpublished proof.
+      CandidateExhaustedBeforeDedicatedRefund |= CandidateRemaining == 0;
       if (Remaining > Initial ||
           Remaining >
               std::numeric_limits<size_t>::max() - CandidateRemaining) {
@@ -440,7 +451,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   } CandidateI386Charge{InitialI386GOTOFFEvidenceBudget,
                         I386GOTOFFProposalEvidenceRemaining,
                         CandidateEvidenceBudget,
-                        CandidateEvidenceChargeFailed};
+                        CandidateEvidenceChargeFailed,
+                        CandidateEvidenceExhaustedBeforeDedicatedRefund};
   if (CandidateProposalStageActive) {
     if (!consumeCandidateEvidence(PriorStrongJumpTableProposals.size()))
       return {};
@@ -804,7 +816,14 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // only one arm of the select and recover half the table.
   if (!Recovered) {
     Info = JumpTableInfo{};
-    Recovered = tryTwoTableSelect(Img, Rec, Info);
+    bool TwoTableAnalysisComplete = false;
+    Recovered = tryTwoTableSelect(Img, Rec, Info, &CandidateEvidenceBudget,
+                                  &TwoTableAnalysisComplete);
+    CandidateEvidenceShapeClaimed |=
+        Info.CompositeShapeClaimed || !TwoTableAnalysisComplete;
+    CandidateEvidenceAnalysisIncomplete |= !TwoTableAnalysisComplete;
+    if (!TwoTableAnalysisComplete)
+      return {};
     if (Info.CompositeShapeClaimed &&
         (!Recovered || !HasOccurrenceMetadata(Info)))
       return {};
@@ -1451,11 +1470,128 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // that the actual INDIR_BR input is derived from the exact authenticated
   // table LOAD occurrence(s) on every feasible path.  An unrelated prior LOAD
   // at the same addresses, or emulator address co-occurrence, is not evidence.
+  struct TargetRoleProofCertificate {
+    const InsnRecord *RecordIdentity = nullptr;
+    const BinaryImage *ImageIdentity = nullptr;
+    va_t BranchAddr = InvalidVA;
+    uint32_t PointerSize = 0;
+    detail::TargetRoleProofContextKey ProofContext;
+    bool HasBaseAddr = false;
+    va_t BaseAddr = InvalidVA;
+    uint16_t EntrySize = 0;
+    bool IsRelative = false;
+    bool IsSigned = false;
+    uint32_t EntryScale = 0;
+    bool HasTargetBase = false;
+    va_t TargetBase = InvalidVA;
+    std::vector<JumpTableValueOccurrence> TargetLoads;
+  };
+  auto EffectiveProofRoots = [&]() -> const std::set<va_t> & {
+    return ActiveJumpTableProofRoots ? *ActiveJumpTableProofRoots
+                                     : PersistentCFGRoots;
+  };
+  std::optional<TargetRoleProofCertificate> TargetRoleCertificate;
+  bool TargetRoleComplete = false;
   const bool TargetRole = branchTargetDependsOnTableLoad(
-      Rec, Info, &CandidateEvidenceBudget);
-  const bool AddressRole =
-      tableLoadAddressesMatchRole(Info, &CandidateEvidenceBudget);
-  if (!TargetRole || !AddressRole)
+      Rec, Info, &CandidateEvidenceBudget, &TargetRoleComplete);
+  CandidateEvidenceAnalysisIncomplete |= !TargetRoleComplete;
+  if (!TargetRole || !TargetRoleComplete)
+    return {};
+
+  // Cache only this complete, positive target-role certificate inside the
+  // current immutable resolveJumpTable invocation.  The address-role proof
+  // below may transactionally prune TargetLoads, so capture the exact target
+  // inputs before calling it.  Candidate storage/domain metadata is not read
+  // by the target proof; any storage effect is represented by the effective
+  // proof roots retained in this key.
+  auto CaptureTargetRoleCertificate = [&]() {
+    const std::set<va_t> &Roots = EffectiveProofRoots();
+    if (!consumeCandidateProducts(
+            {{1, 19},
+             {Info.TargetLoads.size(), 3},
+             {Roots.size(), 3}})) {
+      CandidateEvidenceAnalysisIncomplete = true;
+      return false;
+    }
+    TargetRoleCertificate.emplace(TargetRoleProofCertificate{
+        &Rec,
+        &Img,
+        Rec.Addr,
+        Img.getPointerSize(),
+        {JumpTableProofContextComplete,
+         ActiveJumpTableProofRoots.has_value(),
+         ActiveJumpTableConsumerAudit,
+         std::vector<va_t>(Roots.begin(), Roots.end())},
+        Info.HasBaseAddr,
+        Info.BaseAddr,
+        Info.EntrySize,
+        Info.IsRelative,
+        Info.IsSigned,
+        Info.EntryScale,
+        Info.HasTargetBase,
+        Info.TargetBase,
+        Info.TargetLoads});
+    return true;
+  };
+  if (!CaptureTargetRoleCertificate())
+    return {};
+  auto TargetRoleCertificateMatches = [&]() -> std::optional<bool> {
+    const TargetRoleProofCertificate &Certificate = *TargetRoleCertificate;
+    const std::set<va_t> &CurrentRoots = EffectiveProofRoots();
+    // Seventeen immutable scalar/context and container-size checks are
+    // prepaid before comparison.  Full occurrence comparison covers NdVar's
+    // five fields and Addr/Seq/DefinedAtPoint; roots are already ordered.
+    if (!consumeCandidateEvidence(17))
+      return std::nullopt;
+    const bool FixedInputsMatch =
+        Certificate.RecordIdentity == &Rec &&
+        Certificate.ImageIdentity == CurrentImg &&
+        Certificate.BranchAddr == Rec.Addr &&
+        Certificate.PointerSize == Img.getPointerSize() &&
+        Certificate.HasBaseAddr == Info.HasBaseAddr &&
+        Certificate.BaseAddr == Info.BaseAddr &&
+        Certificate.EntrySize == Info.EntrySize &&
+        Certificate.IsRelative == Info.IsRelative &&
+        Certificate.IsSigned == Info.IsSigned &&
+        Certificate.EntryScale == Info.EntryScale &&
+        Certificate.HasTargetBase == Info.HasTargetBase &&
+        Certificate.TargetBase == Info.TargetBase &&
+        Certificate.TargetLoads.size() == Info.TargetLoads.size();
+    if (!FixedInputsMatch)
+      return false;
+    if (!consumeCandidateProducts(
+            {{Certificate.TargetLoads.size(), 8},
+             {Certificate.ProofContext.ProofRoots.size(), 1}}))
+      return std::nullopt;
+    return Certificate.TargetLoads == Info.TargetLoads &&
+           detail::targetRoleProofContextMatches(
+               Certificate.ProofContext, JumpTableProofContextComplete,
+               ActiveJumpTableProofRoots.has_value(),
+               ActiveJumpTableConsumerAudit, CurrentRoots);
+  };
+  auto EnsureTargetRoleProofCurrent = [&]() {
+    const std::optional<bool> InputsUnchanged =
+        TargetRoleCertificateMatches();
+    if (!InputsUnchanged) {
+      CandidateEvidenceAnalysisIncomplete = true;
+      return false;
+    }
+    if (*InputsUnchanged)
+      return true;
+    bool Complete = false;
+    const bool Proven = branchTargetDependsOnTableLoad(
+        Rec, Info, &CandidateEvidenceBudget, &Complete);
+    CandidateEvidenceAnalysisIncomplete |= !Complete;
+    return Proven && Complete && CaptureTargetRoleCertificate();
+  };
+
+  bool AddressRoleComplete = false;
+  const bool AddressRole = tableLoadAddressesMatchRole(
+      Info, &CandidateEvidenceBudget, &AddressRoleComplete);
+  CandidateEvidenceAnalysisIncomplete |= !AddressRoleComplete;
+  if (!AddressRole || !AddressRoleComplete)
+    return {};
+  if (!EnsureTargetRoleProofCurrent())
     return {};
   Info.MutatedUnsafe |= ModuleMutationUnsafe;
 
@@ -1762,13 +1898,22 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     if (!PhysicalRoots)
       return false;
     ActiveJumpTableProofRoots = std::move(*PhysicalRoots);
-    const bool PhysicalTargetRole = branchTargetDependsOnTableLoad(
-        Rec, PhysicalProbe, &CandidateEvidenceBudget);
-    const bool PhysicalAddressRole =
-        PhysicalTargetRole &&
-        tableLoadAddressesMatchRole(PhysicalProbe, &CandidateEvidenceBudget);
+    bool PhysicalAddressRoleComplete = false;
+    const bool PhysicalAddressRole = tableLoadAddressesMatchRole(
+        PhysicalProbe, &CandidateEvidenceBudget,
+        &PhysicalAddressRoleComplete);
+    bool PhysicalTargetRoleComplete = true;
+    const bool PhysicalTargetRole =
+        PhysicalAddressRole && PhysicalAddressRoleComplete
+            ? branchTargetDependsOnTableLoad(
+                  Rec, PhysicalProbe, &CandidateEvidenceBudget,
+                  &PhysicalTargetRoleComplete)
+            : false;
+    CandidateEvidenceAnalysisIncomplete |=
+        !PhysicalAddressRoleComplete ||
+        (PhysicalAddressRole && !PhysicalTargetRoleComplete);
     const std::optional<bool> PhysicalIdentity =
-        PhysicalAddressRole &&
+        PhysicalAddressRole && PhysicalTargetRole &&
                 (!UsedRawRelocationClassification ||
                  RawClassificationComplete)
             ? ClassifyPhysicalBranchIdentity(PhysicalProbe)
@@ -1780,7 +1925,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     // before claiming identity; otherwise ordinary callback tail calls remain
     // eligible for CALL+RETURN lowering.
     const bool PreserveOpaqueIdentity =
-        PhysicalAddressRole &&
+        PhysicalAddressRole && PhysicalTargetRole &&
         ((PhysicalIdentity && *PhysicalIdentity) ||
          (!PhysicalIdentity &&
           (HasExactObjectBoundary || UsedRawRelocationClassification) &&
@@ -2264,6 +2409,17 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     // replayable full-domain witness.
     return Revalidated;
   };
+  bool PreReadAddressRoleComplete = false;
+  const bool PreReadAddressRole = tableLoadAddressesMatchRole(
+      Info, &CandidateEvidenceBudget, &PreReadAddressRoleComplete);
+  CandidateEvidenceAnalysisIncomplete |= !PreReadAddressRoleComplete;
+  if (!PreReadAddressRole) {
+    ClaimRejectedPhysicalTableIdentity();
+    return {};
+  }
+  // Address-role replay publishes its pruned occurrence/index inventory
+  // transactionally.  Revalidate the selector domain and target relation only
+  // after that mutation, so neither certificate can be reused for stale inputs.
   const bool DomainRevalidated = RevalidateIndexDomain();
   const std::optional<bool> RevalidationGraphGrowth =
       SuspendForPendingGraphGrowth();
@@ -2273,15 +2429,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     ClaimRejectedPhysicalTableIdentity();
     return {};
   }
-  const bool PreReadTargetRole = branchTargetDependsOnTableLoad(
-      Rec, Info, &CandidateEvidenceBudget);
-  if (!PreReadTargetRole) {
-    ClaimRejectedPhysicalTableIdentity();
-    return {};
-  }
-  const bool PreReadAddressRole =
-      tableLoadAddressesMatchRole(Info, &CandidateEvidenceBudget);
-  if (!PreReadAddressRole) {
+  if (!EnsureTargetRoleProofCurrent()) {
     ClaimRejectedPhysicalTableIdentity();
     return {};
   }
@@ -2487,9 +2635,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // fixed point handles a target root that becomes reachable only after another
   // slot loses suppression.  A lexical consumer in a pruned block is not
   // evidence; an entry-reachable LEA/LOAD of the slot is.
-  ActiveJumpTableConsumerAudit = true;
   if (!Info.StorageRanges.empty() && Img.getPointerSize() != 0 &&
       !Info.SuppressibleRelocationSlots.empty()) {
+    ActiveJumpTableConsumerAudit = true;
     std::vector<va_t> PhysicalCodePtrSlots;
     size_t SlotBudget = limits::kMaxJumpTableEntries;
     if (!consumeCandidateEvidence(Info.StorageRanges.size()))
@@ -3247,35 +3395,39 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
         budgetedJumpTableProofRoots(Info);
     if (!FinalRoots)
       return {};
-    const std::set<va_t> &FinalProofRoots = *FinalRoots;
+    ActiveJumpTableProofRoots = std::move(*FinalRoots);
+    const std::set<va_t> &FinalProofRoots = *ActiveJumpTableProofRoots;
+    // Address-role replay may prune TargetLoads when the final proof graph
+    // exposes a different reachable-role subset.  Run it before comparing or
+    // revalidating any certificate, because it also publishes the corresponding
+    // index occurrence metadata transactionally.
+    bool FinalAddressRoleComplete = false;
+    const bool FinalAddressRole = tableLoadAddressesMatchRole(
+        Info, &CandidateEvidenceBudget, &FinalAddressRoleComplete);
+    CandidateEvidenceAnalysisIncomplete |= !FinalAddressRoleComplete;
+    if (!FinalAddressRole || !FinalAddressRoleComplete)
+      return {};
     if (!consumeJumpTableInfoTraversal(Info) ||
         !consumeCandidateProducts(
             {{FinalProofRoots.size(), 1},
              {PreReadValidatedRoots.size(), 1}}))
       return {};
-    // JumpTableInfo's default equality covers every scalar and every nested
-    // occurrence/storage/frame/domain vector.  Combined with the exact root
-    // set, this cache is valid only for the unchanged proof state in this one
-    // invocation; Rec and Insns are immutable throughout resolveJumpTable.
-    const bool ProofInputsUnchanged =
+    // JumpTableInfo's default equality covers the domain inputs used by the
+    // revalidator.  Target-role reuse is narrower and goes through the exact
+    // certificate, which also distinguishes absent roots from present-empty
+    // roots and includes consumer-audit mode.
+    const bool DomainInputsUnchanged =
         Info == PreReadValidatedInfo &&
         FinalProofRoots == PreReadValidatedRoots;
-    ActiveJumpTableProofRoots = std::move(*FinalRoots);
     const bool FinalIndexDomain =
-        ProofInputsUnchanged || RevalidateIndexDomain();
+        DomainInputsUnchanged || RevalidateIndexDomain();
     const std::optional<bool> FinalRevalidationGraphGrowth =
         SuspendForPendingGraphGrowth();
     if (!FinalRevalidationGraphGrowth || *FinalRevalidationGraphGrowth)
       return {};
-    bool FinalTargetRole = ProofInputsUnchanged;
-    bool FinalAddressRole = ProofInputsUnchanged;
-    if (!ProofInputsUnchanged) {
-      FinalTargetRole = branchTargetDependsOnTableLoad(
-          Rec, Info, &CandidateEvidenceBudget);
-      FinalAddressRole =
-          tableLoadAddressesMatchRole(Info, &CandidateEvidenceBudget);
-    }
-    if (!FinalIndexDomain || !FinalTargetRole || !FinalAddressRole)
+    if (!FinalIndexDomain)
+      return {};
+    if (!EnsureTargetRoleProofCurrent())
       return {};
   } else {
     // This fixed point grants permission to suppress independent code-pointer

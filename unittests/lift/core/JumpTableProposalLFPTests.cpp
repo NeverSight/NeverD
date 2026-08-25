@@ -257,7 +257,8 @@ TEST_F(JumpTableProposalLFP,
   };
 
   constexpr size_t KnownFailingBudget = size_t{1} << 20;
-  constexpr size_t KnownPassingBudget = size_t{2} << 20;
+  constexpr size_t KnownPassingBudget =
+      neverd::limits::kMaxJumpTableProposalStageEvidenceWork;
   auto CompletesBatch = [&](size_t Budget) {
     bool HasPendingExploration = true;
     const neverd::LowFunc Low = BuildWithBudget(Budget, HasPendingExploration);

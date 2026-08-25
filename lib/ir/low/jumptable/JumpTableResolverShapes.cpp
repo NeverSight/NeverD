@@ -29,6 +29,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <array>
 #include <climits>
 #include <cstdint>
 #include <cstring>
@@ -54,26 +55,245 @@ static uint64_t truncateToByteWidth(uint64_t Value, uint16_t Bytes) {
 //===----------------------------------------------------------------------===//
 
 bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
-                                   const InsnRecord &Rec, JumpTableInfo &Info) {
-  if (!CurrentImg)
+                                   const InsnRecord &Rec, JumpTableInfo &Info,
+                                   size_t *CandidateEvidenceBudget,
+                                   bool *AnalysisComplete) {
+  if (AnalysisComplete)
+    *AnalysisComplete = false;
+  bool Complete = true;
+  struct CompletionPublisher {
+    bool *Output;
+    const bool &Complete;
+    ~CompletionPublisher() {
+      if (Output)
+        *Output = Complete;
+    }
+  } PublishCompletion{AnalysisComplete, Complete};
+  if (!CurrentImg || !CandidateEvidenceBudget) {
+    Complete = false;
     return false;
+  }
+  auto consumeWork = [&](size_t Amount = 1) {
+    if (Amount > *CandidateEvidenceBudget) {
+      *CandidateEvidenceBudget = 0;
+      Complete = false;
+      return false;
+    }
+    *CandidateEvidenceBudget -= Amount;
+    return true;
+  };
+  auto consumeProduct = [&](size_t Count, size_t Cost) {
+    if (Count != 0 &&
+        Cost > std::numeric_limits<size_t>::max() / Count) {
+      *CandidateEvidenceBudget = 0;
+      Complete = false;
+      return false;
+    }
+    return consumeWork(Count * Cost);
+  };
+  auto consumeFactorProduct = [&](std::initializer_list<size_t> Factors) {
+    size_t Product = 1;
+    for (size_t Factor : Factors) {
+      if (Factor != 0 &&
+          Product > std::numeric_limits<size_t>::max() / Factor) {
+        *CandidateEvidenceBudget = 0;
+        Complete = false;
+        return false;
+      }
+      Product *= Factor;
+    }
+    return consumeWork(Product);
+  };
+  auto orderedLookupWork = [](size_t Count) {
+    size_t Work = 1;
+    for (size_t N = Count; N > 1; N = N / 2 + N % 2)
+      ++Work;
+    return Work;
+  };
+  auto ensureAppendCapacity = [&](auto &Values, size_t Additional = 1) {
+    const size_t Max = std::numeric_limits<size_t>::max();
+    if (Additional > Max - Values.size()) {
+      *CandidateEvidenceBudget = 0;
+      Complete = false;
+      return false;
+    }
+    const size_t Required = Values.size() + Additional;
+    if (Required <= Values.capacity())
+      return true;
+    const size_t Doubled = Values.capacity() == 0
+                               ? size_t{1}
+                               : (Values.capacity() > Max / 2
+                                      ? Max
+                                      : Values.capacity() * 2);
+    const size_t NewCapacity = std::max(Required, Doubled);
+    if (NewCapacity == Max || !consumeProduct(NewCapacity, 2) ||
+        !consumeWork(Values.size())) {
+      if (NewCapacity == Max) {
+        *CandidateEvidenceBudget = 0;
+        Complete = false;
+      }
+      return false;
+    }
+    Values.reserve(NewCapacity);
+    return true;
+  };
+
   bool HasIndBranch = false;
-  for (auto &Op : Rec.Ops)
+  for (auto &Op : Rec.Ops) {
+    if (!consumeWork())
+      return false;
     if (Op.Opcode == NdOp::INDIR_BR && Op.NumInputs >= 1) {
       HasIndBranch = true;
       break;
     }
+  }
   if (!HasIndBranch)
     return false;
 
   // Flatten the whole function prefix so a table base materialised in a
   // dominating block (the `lea`/`adrp`/`leal GOTOFF`) and a spill store of one
   // table base (i386 `cmov (%esp),...`) are both in scope.
+  if (!consumeWork(2) || !consumeWork(orderedLookupWork(Insns.size())))
+    return false;
   std::vector<LowOp> Ops;
   for (auto It = Insns.lower_bound(CurrentFuncEntry);
-       It != Insns.end() && It->first <= Rec.Addr; ++It)
-    for (auto &Op : It->second.Ops)
+       It != Insns.end() && It->first <= Rec.Addr; ++It) {
+    if (!consumeWork())
+      return false;
+    for (auto &Op : It->second.Ops) {
+      if (!consumeWork() || !ensureAppendCapacity(Ops) || !consumeWork())
+        return false;
       Ops.push_back(Op);
+    }
+  }
+
+  auto budgetedReachingDefIdx = [&](int FromIdx, const NdVar &Value) {
+    const int Last = std::min(FromIdx, static_cast<int>(Ops.size()) - 1);
+    for (int I = Last; I >= 0; --I) {
+      if (!consumeWork())
+        return -1;
+      const NdVar &Output = Ops[I].Output;
+      if (Output.Space == Value.Space && Output.Offset == Value.Offset)
+        return I;
+    }
+    return -1;
+  };
+  auto budgetedTraceIndexToRegister = [&](int FromIdx, NdVar Value) {
+    for (int Depth = 0; Depth < limits::kMaxQuasiCopyDepth; ++Depth) {
+      if (!consumeWork())
+        return InvalidVA;
+      if (Value.isReg())
+        return Value.Offset;
+      if (!Value.isTemp())
+        return InvalidVA;
+      const int Def = budgetedReachingDefIdx(FromIdx, Value);
+      if (Def < 0)
+        return InvalidVA;
+      const LowOp &Op = Ops[Def];
+      if ((Op.Opcode == NdOp::COPY || Op.Opcode == NdOp::INT_ZEXT ||
+           Op.Opcode == NdOp::INT_SEXT) &&
+          Op.NumInputs >= 1) {
+        Value = Op.Inputs[0];
+      } else if (Op.Opcode == NdOp::SUBBYTES && Op.NumInputs >= 2 &&
+                 Op.Inputs[1].isConst() && Op.Inputs[1].Offset == 0) {
+        Value = Op.Inputs[0];
+      } else {
+        return InvalidVA;
+      }
+      FromIdx = Def - 1;
+    }
+    Complete = false;
+    return InvalidVA;
+  };
+  auto budgetedTraceToRegister = [&](int FromIdx, NdVar Value) {
+    for (int Depth = 0; Depth < limits::kMaxQuasiCopyDepth; ++Depth) {
+      if (!consumeWork())
+        return InvalidVA;
+      if (Value.isReg())
+        return Value.Offset;
+      if (!Value.isTemp())
+        return InvalidVA;
+      const int Def = budgetedReachingDefIdx(FromIdx, Value);
+      if (Def < 0 || Ops[Def].Opcode != NdOp::COPY ||
+          Ops[Def].NumInputs < 1)
+        return InvalidVA;
+      Value = Ops[Def].Inputs[0];
+      FromIdx = Def - 1;
+    }
+    Complete = false;
+    return InvalidVA;
+  };
+  auto budgetedScaledIndexReg = [&](int FromIdx, NdVar Value,
+                                    NdVar *IndexValue, va_t *IndexUseAddr,
+                                    int *IndexUseSeq) {
+    for (int Depth = 0; Depth < limits::kMaxQuasiCopyDepth; ++Depth) {
+      if (!consumeWork())
+        return InvalidVA;
+      if (!Value.isTemp() && !Value.isReg())
+        return InvalidVA;
+      const int Def = budgetedReachingDefIdx(FromIdx, Value);
+      if (Def < 0)
+        return InvalidVA;
+      const LowOp &Op = Ops[Def];
+      const bool Scaled =
+          (Op.Opcode == NdOp::INT_MULT && Op.NumInputs >= 2 &&
+           Op.Inputs[1].isConst() && Op.Inputs[1].Offset > 1) ||
+          (Op.Opcode == NdOp::INT_LEFT && Op.NumInputs >= 2 &&
+           Op.Inputs[1].isConst() && Op.Inputs[1].Offset >= 1);
+      if (Scaled) {
+        NdVar ExactIndex = Op.Inputs[0];
+        va_t ExactUseAddr = Op.Addr;
+        int ExactUseSeq = Op.Seq;
+        const int WidenDef = budgetedReachingDefIdx(Def - 1, Op.Inputs[0]);
+        if (WidenDef >= 0 && Ops[WidenDef].Opcode == NdOp::INT_ZEXT &&
+            Ops[WidenDef].NumInputs >= 1 &&
+            Ops[WidenDef].Inputs[0].Size != 0 &&
+            Ops[WidenDef].Inputs[0].Size < Ops[WidenDef].Output.Size) {
+          ExactIndex = Ops[WidenDef].Inputs[0];
+          ExactUseAddr = Ops[WidenDef].Addr;
+          ExactUseSeq = Ops[WidenDef].Seq;
+        }
+        if (IndexValue)
+          *IndexValue = ExactIndex;
+        if (IndexUseAddr)
+          *IndexUseAddr = ExactUseAddr;
+        if (IndexUseSeq)
+          *IndexUseSeq = ExactUseSeq;
+        return budgetedTraceIndexToRegister(Def - 1, Op.Inputs[0]);
+      }
+      if ((Op.Opcode != NdOp::COPY && Op.Opcode != NdOp::INT_ZEXT &&
+           Op.Opcode != NdOp::INT_SEXT) ||
+          Op.NumInputs < 1)
+        return InvalidVA;
+      Value = Op.Inputs[0];
+      FromIdx = Def - 1;
+    }
+    Complete = false;
+    return InvalidVA;
+  };
+  auto relocationSlotPresent = [&](va_t Address) -> std::optional<bool> {
+    if (!consumeWork(orderedLookupWork(Img.CodePtrRelocSlots.size())))
+      return std::nullopt;
+    return Img.CodePtrRelocSlots.count(Address) != 0;
+  };
+  auto hasRelocationPrefix = [&](va_t Base, uint16_t Width,
+                                 uint32_t Count) -> std::optional<bool> {
+    if (Width == 0)
+      return false;
+    for (uint32_t Index = 0; Index < Count; ++Index) {
+      if (!consumeWork())
+        return std::nullopt;
+      if (Index != 0 && Width > (InvalidVA - Base) / Index)
+        return false;
+      const std::optional<bool> Present =
+          relocationSlotPresent(Base + static_cast<va_t>(Index) * Width);
+      if (!Present)
+        return std::nullopt;
+      if (!*Present)
+        return false;
+    }
+    return true;
+  };
 
   const TargetRegInfo &TRI = getTargetRegInfo(CurrentImg->Arch);
 
@@ -91,14 +311,67 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
   // certificate remains authoritative for publication.
   auto twoTableFrameSlotKey = [&](NdVar Address, int From, uint64_t &Base,
                                   int64_t &Offset) {
+    auto signedFrameDelta = [](const NdVar &Value,
+                               uint16_t ArithmeticSize)
+        -> std::optional<int64_t> {
+      if (!Value.isConst() || Value.Size == 0 ||
+          Value.Size > sizeof(uint64_t) || ArithmeticSize == 0 ||
+          ArithmeticSize > sizeof(uint64_t) ||
+          Value.Provenance != ConstantAddressProvenance::Scalar)
+        return std::nullopt;
+      const unsigned SourceBits = static_cast<unsigned>(Value.Size) * CHAR_BIT;
+      const unsigned ArithmeticBits =
+          static_cast<unsigned>(ArithmeticSize) * CHAR_BIT;
+      const uint64_t SourceMask =
+          SourceBits == 64 ? std::numeric_limits<uint64_t>::max()
+                           : (uint64_t{1} << SourceBits) - 1;
+      const uint64_t ArithmeticMask =
+          ArithmeticBits == 64 ? std::numeric_limits<uint64_t>::max()
+                               : (uint64_t{1} << ArithmeticBits) - 1;
+      const uint64_t Raw = (Value.Offset & SourceMask) & ArithmeticMask;
+      const uint64_t Sign = uint64_t{1} << (ArithmeticBits - 1);
+      if ((Raw & Sign) == 0)
+        return static_cast<int64_t>(Raw);
+      return -1 - static_cast<int64_t>((~Raw) & ArithmeticMask);
+    };
+    auto checkedFrameOffset = [](int64_t Current, int64_t Delta,
+                                 bool Subtract) -> std::optional<int64_t> {
+      constexpr int64_t Min = std::numeric_limits<int64_t>::min();
+      constexpr int64_t Max = std::numeric_limits<int64_t>::max();
+      if (!Subtract) {
+        if ((Delta > 0 && Current > Max - Delta) ||
+            (Delta < 0 && Current < Min - Delta))
+          return std::nullopt;
+        return Current + Delta;
+      }
+      if ((Delta > 0 && Current < Min + Delta) ||
+          (Delta < 0 && Current > Max + Delta))
+        return std::nullopt;
+      return Current - Delta;
+    };
+
+    // Preserve the legacy two-phase contract: first peel the guest-address
+    // COPY/ZEXT envelope, then resolve the frame expression itself.  Each phase
+    // has its own bounded depth and charges the same candidate transaction.
+    bool PeelStopped = false;
     for (int Depth = 0; Depth < limits::kMaxQuasiCopyDepth; ++Depth) {
-      if (Address.isReg() && TRI.isFrameReg(Address.Offset))
+      if (!consumeWork())
+        return false;
+      if (Address.isReg() && TRI.isFrameReg(Address.Offset)) {
+        PeelStopped = true;
         break;
-      if (!Address.isReg() && !Address.isTemp())
+      }
+      if (!Address.isReg() && !Address.isTemp()) {
+        PeelStopped = true;
         break;
-      const int D = reachingDefIdx(Ops, From, Address);
-      if (D < 0)
+      }
+      const int D = budgetedReachingDefIdx(From, Address);
+      if (!Complete)
+        return false;
+      if (D < 0) {
+        PeelStopped = true;
         break;
+      }
       const LowOp &Def = Ops[D];
       if (Def.Opcode == NdOp::COPY && Def.NumInputs >= 1) {
         Address = Def.Inputs[0];
@@ -112,9 +385,80 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
         From = D - 1;
         continue;
       }
+      PeelStopped = true;
       break;
     }
-    return frameSlotKey(Ops, From, Address, TRI, Base, Offset);
+    if (!PeelStopped) {
+      Complete = false;
+      return false;
+    }
+
+    Offset = 0;
+    for (int Depth = 0; Depth < limits::kMaxQuasiCopyDepth; ++Depth) {
+      if (!consumeWork())
+        return false;
+      if (Address.isReg()) {
+        if (!TRI.isFrameReg(Address.Offset))
+          return false;
+        Base = Address.Offset;
+        return true;
+      }
+      if (!Address.isTemp())
+        return false;
+      const int D = budgetedReachingDefIdx(From, Address);
+      if (!Complete)
+        return false;
+      if (D < 0)
+        return false;
+      const LowOp &Def = Ops[D];
+      if (Def.Opcode == NdOp::COPY && Def.NumInputs >= 1) {
+        Address = Def.Inputs[0];
+        From = D - 1;
+        continue;
+      }
+      if (Def.Opcode == NdOp::INT_ADD && Def.NumInputs >= 2) {
+        const int ConstantSide = Def.Inputs[1].isConst()
+                                     ? 1
+                                     : (Def.Inputs[0].isConst() ? 0 : -1);
+        if (ConstantSide < 0)
+          return false;
+        if (budgetedScaledIndexReg(D - 1, Def.Inputs[1 - ConstantSide],
+                                   nullptr, nullptr, nullptr) != InvalidVA)
+          return false;
+        if (!Complete)
+          return false;
+        const std::optional<int64_t> Delta =
+            signedFrameDelta(Def.Inputs[ConstantSide], Def.Output.Size);
+        if (!Delta)
+          return false;
+        const std::optional<int64_t> Next =
+            checkedFrameOffset(Offset, *Delta, false);
+        if (!Next)
+          return false;
+        Offset = *Next;
+        Address = Def.Inputs[1 - ConstantSide];
+        From = D - 1;
+        continue;
+      }
+      if (Def.Opcode == NdOp::INT_SUB && Def.NumInputs >= 2 &&
+          Def.Inputs[1].isConst()) {
+        const std::optional<int64_t> Delta =
+            signedFrameDelta(Def.Inputs[1], Def.Output.Size);
+        if (!Delta)
+          return false;
+        const std::optional<int64_t> Next =
+            checkedFrameOffset(Offset, *Delta, true);
+        if (!Next)
+          return false;
+        Offset = *Next;
+        Address = Def.Inputs[0];
+        From = D - 1;
+        continue;
+      }
+      return false;
+    }
+    Complete = false;
+    return false;
   };
 
   // Fold a select arm (one of the two candidate table-base sub-expressions) to
@@ -124,8 +468,12 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
   std::function<std::optional<uint64_t>(NdVar, int, va_t, int)> foldArm =
       [&](NdVar V, int From, va_t Cutoff,
           int Depth) -> std::optional<uint64_t> {
-    if (Depth > limits::kMaxSliceDepth)
+    if (!consumeWork())
       return std::nullopt;
+    if (Depth > limits::kMaxSliceDepth) {
+      Complete = false;
+      return std::nullopt;
+    }
     if (V.isConst())
       return V.Offset;
     NdVar Cur = V;
@@ -138,7 +486,10 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
     // not a code-pointer table, keep following the def chain (the `mov` COPY to
     // the real base) and only fall back to it if the chain yields no table.
     std::optional<uint64_t> RegFallback;
-    for (int G = 0; G < limits::kMaxSliceDepth; ++G) {
+    int G = 0;
+    for (; G < limits::kMaxSliceDepth; ++G) {
+      if (!consumeWork())
+        return std::nullopt;
       if (Cur.isConst())
         return Cur.Offset;
       // A table base materialised in a dominator (`lea`/`adrp+add`/`leal
@@ -153,15 +504,24 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
         va_t FoldCutoff = Cutoff;
         if (CurFrom >= 0 && CurFrom < static_cast<int>(Ops.size()))
           FoldCutoff = std::min(FoldCutoff, Ops[CurFrom].Addr);
-        auto F = foldRegConstant(Img, Rec, Cur.Offset, FoldCutoff);
-        if (F && Img.getSegmentFor(*F)) {
-          if (TableEntW == 0 || countCodePtrRelocRun(Img, *F, TableEntW) > 0)
+        auto F = foldRegConstant(Img, Rec, Cur.Offset, FoldCutoff, consumeWork);
+        if (!Complete)
+          return std::nullopt;
+        if (F) {
+          const std::optional<bool> HasRelocation =
+              TableEntW == 0 ? std::optional<bool>(true)
+                             : relocationSlotPresent(*F);
+          if (!HasRelocation)
+            return std::nullopt;
+          if (*HasRelocation)
             return F;
           if (!RegFallback)
             RegFallback = F;
         }
       }
-      int D = reachingDefIdx(Ops, CurFrom, Cur);
+      int D = budgetedReachingDefIdx(CurFrom, Cur);
+      if (!Complete)
+        return std::nullopt;
       if (D < 0)
         break;
       const LowOp &O = Ops[D];
@@ -175,13 +535,19 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
       if (O.Opcode == NdOp::SUBBYTES && O.NumInputs >= 2 &&
           O.Inputs[1].isConst() && O.Inputs[1].Offset == 0) {
         auto F = foldArm(O.Inputs[0], D - 1, Cutoff, Depth + 1);
+        if (!Complete)
+          return std::nullopt;
         if (!F)
           break;
         return truncateToByteWidth(*F, O.Output.Size);
       }
       if (O.Opcode == NdOp::INT_ADD && O.NumInputs >= 2) {
         auto A = foldArm(O.Inputs[0], D - 1, Cutoff, Depth + 1);
+        if (!Complete)
+          return std::nullopt;
         auto B = foldArm(O.Inputs[1], D - 1, Cutoff, Depth + 1);
+        if (!Complete)
+          return std::nullopt;
         if (A && B) {
           return truncateToByteWidth(*A + *B, O.Output.Size);
         }
@@ -191,17 +557,29 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
         // GOTOFF addend here.  Accept that addend only when the image proves it
         // starts a code-pointer relocation run; this keeps an unrelated
         // partially-folded add from being mistaken for a table address.
-        if (!A && B && TableEntW != 0 &&
-            countCodePtrRelocRun(Img, *B, TableEntW) > 0)
-          return B;
-        if (A && !B && TableEntW != 0 &&
-            countCodePtrRelocRun(Img, *A, TableEntW) > 0)
-          return A;
+        if (!A && B && TableEntW != 0) {
+          const std::optional<bool> HasRelocation = relocationSlotPresent(*B);
+          if (!HasRelocation)
+            return std::nullopt;
+          if (*HasRelocation)
+            return B;
+        }
+        if (A && !B && TableEntW != 0) {
+          const std::optional<bool> HasRelocation = relocationSlotPresent(*A);
+          if (!HasRelocation)
+            return std::nullopt;
+          if (*HasRelocation)
+            return A;
+        }
         break;
       }
       if (O.Opcode == NdOp::INT_SUB && O.NumInputs >= 2) {
         auto A = foldArm(O.Inputs[0], D - 1, Cutoff, Depth + 1);
+        if (!Complete)
+          return std::nullopt;
         auto B = foldArm(O.Inputs[1], D - 1, Cutoff, Depth + 1);
+        if (!Complete)
+          return std::nullopt;
         if (A && B) {
           return truncateToByteWidth(*A - *B, O.Output.Size);
         }
@@ -215,6 +593,8 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
         if (!twoTableFrameSlotKey(AddrV, D - 1, LBase, LOff))
           break;
         for (int K = D - 1; K >= 0; --K) {
+          if (!consumeWork())
+            return std::nullopt;
           const LowOp &S = Ops[K];
           if (S.Opcode != NdOp::STORE || S.NumInputs < 2)
             continue;
@@ -225,11 +605,15 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
           if (twoTableFrameSlotKey(SAddr, K - 1, SB, SO) && SB == LBase &&
               SO == LOff)
             return foldArm(SVal, K - 1, Cutoff, Depth + 1);
+          if (!Complete)
+            return std::nullopt;
         }
         break;
       }
       break;
     }
+    if (G == limits::kMaxSliceDepth)
+      Complete = false;
     return RegFallback;
   };
 
@@ -243,7 +627,11 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
   };
   auto maskDefinition = [&](NdVar M, int From) -> MaskDefinition {
     for (int G = 0; G < limits::kMaxQuasiCopyDepth; ++G) {
-      int D = reachingDefIdx(Ops, From, M);
+      if (!consumeWork())
+        return {};
+      int D = budgetedReachingDefIdx(From, M);
+      if (!Complete)
+        return {};
       if (D < 0)
         return {};
       if (Ops[D].Opcode == NdOp::INT_NOT)
@@ -257,10 +645,13 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
       }
       return {};
     }
+    Complete = false;
     return {};
   };
 
   for (int I = static_cast<int>(Ops.size()) - 1; I >= 0; --I) {
+    if (!consumeWork())
+      return false;
     const LowOp &L = Ops[I];
     if (L.Opcode != NdOp::LOAD || L.NumInputs < 1)
       continue;
@@ -271,8 +662,14 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
     const NdVar &AddrV = (L.NumInputs >= 2) ? L.Inputs[1] : L.Inputs[0];
     if (!AddrV.isReg() && !AddrV.isTemp())
       continue;
-    int AddIdx = reachingDefIdx(Ops, I - 1, AddrV);
-    for (int G = 0; AddIdx >= 0 && G < limits::kMaxQuasiCopyDepth; ++G) {
+    int AddIdx = budgetedReachingDefIdx(I - 1, AddrV);
+    if (!Complete)
+      return false;
+    int AddressCopyDepth = 0;
+    for (; AddIdx >= 0 && AddressCopyDepth < limits::kMaxQuasiCopyDepth;
+         ++AddressCopyDepth) {
+      if (!consumeWork())
+        return false;
       const LowOp &Forwarder = Ops[AddIdx];
       if (Forwarder.NumInputs < 1 ||
           (!Forwarder.Inputs[0].isReg() && !Forwarder.Inputs[0].isTemp()))
@@ -284,7 +681,19 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
           Forwarder.Output.Size >= Forwarder.Inputs[0].Size;
       if (!IsCopy && !IsCanonicalGuestAddressWiden)
         break;
-      AddIdx = reachingDefIdx(Ops, AddIdx - 1, Forwarder.Inputs[0]);
+      AddIdx = budgetedReachingDefIdx(AddIdx - 1, Forwarder.Inputs[0]);
+      if (!Complete)
+        return false;
+    }
+    if (AddressCopyDepth == limits::kMaxQuasiCopyDepth && AddIdx >= 0 &&
+        Ops[AddIdx].NumInputs >= 1 &&
+        (Ops[AddIdx].Inputs[0].isReg() || Ops[AddIdx].Inputs[0].isTemp()) &&
+        (Ops[AddIdx].Opcode == NdOp::COPY ||
+         (Ops[AddIdx].Opcode == NdOp::INT_ZEXT &&
+          Ops[AddIdx].Inputs[0].Size == Img.getPointerSize() &&
+          Ops[AddIdx].Output.Size >= Ops[AddIdx].Inputs[0].Size))) {
+      Complete = false;
+      return false;
     }
     if (AddIdx < 0 || Ops[AddIdx].Opcode != NdOp::INT_ADD ||
         Ops[AddIdx].NumInputs < 2)
@@ -293,16 +702,32 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
     // The load address is `base + index`; the base is the runtime-selected
     // table pointer.  Try each operand as the base.
     for (int BaseW = 0; BaseW < 2; ++BaseW) {
+      if (!consumeWork())
+        return false;
       NdVar BaseV = Ops[AddIdx].Inputs[BaseW];
       NdVar IdxV = Ops[AddIdx].Inputs[1 - BaseW];
-      int BDef = reachingDefIdx(Ops, AddIdx - 1, BaseV);
-      for (int G = 0;
+      int BDef = budgetedReachingDefIdx(AddIdx - 1, BaseV);
+      if (!Complete)
+        return false;
+      int BaseCopyDepth = 0;
+      for (;
            BDef >= 0 && Ops[BDef].Opcode == NdOp::COPY &&
            Ops[BDef].NumInputs >= 1 &&
            (Ops[BDef].Inputs[0].isReg() || Ops[BDef].Inputs[0].isTemp()) &&
-           G < limits::kMaxQuasiCopyDepth;
-           ++G)
-        BDef = reachingDefIdx(Ops, BDef - 1, Ops[BDef].Inputs[0]);
+           BaseCopyDepth < limits::kMaxQuasiCopyDepth;
+           ++BaseCopyDepth) {
+        if (!consumeWork())
+          return false;
+        BDef = budgetedReachingDefIdx(BDef - 1, Ops[BDef].Inputs[0]);
+        if (!Complete)
+          return false;
+      }
+      if (BaseCopyDepth == limits::kMaxQuasiCopyDepth && BDef >= 0 &&
+          Ops[BDef].Opcode == NdOp::COPY && Ops[BDef].NumInputs >= 1 &&
+          (Ops[BDef].Inputs[0].isReg() || Ops[BDef].Inputs[0].isTemp())) {
+        Complete = false;
+        return false;
+      }
       if (BDef < 0)
         continue;
       const LowOp &BD = Ops[BDef];
@@ -330,12 +755,30 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
         NdVar Arms[2], Masks[2];
         bool BlendOk = true;
         for (int Side = 0; Side < 2 && BlendOk; ++Side) {
-          int AndD = reachingDefIdx(Ops, BDef - 1, BD.Inputs[Side]);
-          for (int G = 0;
+          if (!consumeWork())
+            return false;
+          int AndD = budgetedReachingDefIdx(BDef - 1, BD.Inputs[Side]);
+          if (!Complete)
+            return false;
+          int BlendCopyDepth = 0;
+          for (;
                AndD >= 0 && Ops[AndD].Opcode == NdOp::COPY &&
-               Ops[AndD].NumInputs >= 1 && G < limits::kMaxQuasiCopyDepth;
-               ++G)
-            AndD = reachingDefIdx(Ops, AndD - 1, Ops[AndD].Inputs[0]);
+               Ops[AndD].NumInputs >= 1 &&
+               BlendCopyDepth < limits::kMaxQuasiCopyDepth;
+               ++BlendCopyDepth) {
+            if (!consumeWork())
+              return false;
+            AndD = budgetedReachingDefIdx(AndD - 1, Ops[AndD].Inputs[0]);
+            if (!Complete)
+              return false;
+          }
+          if (BlendCopyDepth == limits::kMaxQuasiCopyDepth && AndD >= 0 &&
+              Ops[AndD].Opcode == NdOp::COPY && Ops[AndD].NumInputs >= 1 &&
+              (Ops[AndD].Inputs[0].isReg() ||
+               Ops[AndD].Inputs[0].isTemp())) {
+            Complete = false;
+            return false;
+          }
           if (AndD < 0 || Ops[AndD].Opcode != NdOp::INT_AND ||
               Ops[AndD].NumInputs < 2) {
             BlendOk = false;
@@ -345,8 +788,16 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
           // other is the select mask.
           int ArmWhich = -1;
           for (int W2 = 0; W2 < 2; ++W2) {
+            if (!consumeWork())
+              return false;
             auto Cand = foldArm(Ops[AndD].Inputs[W2], AndD - 1, Cutoff, 0);
-            if (Cand && countCodePtrRelocRun(Img, *Cand, W) > 0) {
+            if (!Complete)
+              return false;
+            const std::optional<bool> HasRelocation =
+                Cand ? relocationSlotPresent(*Cand) : std::optional<bool>(false);
+            if (!HasRelocation)
+              return false;
+            if (*HasRelocation) {
               ArmWhich = W2;
               break;
             }
@@ -362,7 +813,11 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
         }
         if (BlendOk) {
           BlendMaskDef[0] = maskDefinition(Masks[0], BDef - 1);
+          if (!Complete)
+            return false;
           BlendMaskDef[1] = maskDefinition(Masks[1], BDef - 1);
+          if (!Complete)
+            return false;
           if (BlendMaskDef[0].Kind >= 0 && BlendMaskDef[1].Kind >= 0 &&
               BlendMaskDef[0].Kind != BlendMaskDef[1].Kind) {
             // Positive arm uses M (the non-negated mask).
@@ -379,7 +834,11 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
         continue;
 
       auto CposOpt = foldArm(ArmPos, BDef - 1, Cutoff, 0);
+      if (!Complete)
+        return false;
       auto CnegOpt = foldArm(ArmNeg, BDef - 1, Cutoff, 0);
+      if (!Complete)
+        return false;
       if (!CposOpt || !CnegOpt || *CposOpt == *CnegOpt)
         continue;
       uint64_t Cpos = *CposOpt, Cneg = *CnegOpt;
@@ -388,10 +847,13 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
       if (Dbytes == 0 || Dbytes % W != 0)
         continue;
 
-      uint32_t RunLo = countCodePtrRelocRun(Img, Lo, W);
-      uint32_t RunHi = countCodePtrRelocRun(Img, Hi, W);
-      if (RunLo < limits::kMinJumpTableEntries ||
-          RunHi < limits::kMinJumpTableEntries)
+      const std::optional<bool> HasLoPrefix =
+          hasRelocationPrefix(Lo, W, limits::kMinJumpTableEntries);
+      const std::optional<bool> HasHiPrefix =
+          hasRelocationPrefix(Hi, W, limits::kMinJumpTableEntries);
+      if (!HasLoPrefix || !HasHiPrefix)
+        return false;
+      if (!*HasLoPrefix || !*HasHiPrefix)
         continue;
 
       // A SELECT/blend of two relocation-backed table bases is a
@@ -405,8 +867,11 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
       va_t IndexUseAddr = InvalidVA;
       int IndexUseSeq = -1;
       bool IndexIsPreScaled = false;
-      uint64_t IdxReg = scaledIndexReg(Ops, AddIdx - 1, IdxV, &ExactIndex,
-                                       &IndexUseAddr, &IndexUseSeq);
+      uint64_t IdxReg =
+          budgetedScaledIndexReg(AddIdx - 1, IdxV, &ExactIndex,
+                                 &IndexUseAddr, &IndexUseSeq);
+      if (!Complete)
+        return false;
       if (IdxReg == InvalidVA) {
         // Size optimizers commonly fold `slot * W` into one bit mask, e.g.
         // `(x >> 5) & 0x38` for an eight-entry pointer table.  There is then no
@@ -419,7 +884,9 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
         ExactIndex = IdxV;
         IndexUseAddr = Ops[AddIdx].Addr;
         IndexUseSeq = Ops[AddIdx].Seq;
-        IdxReg = traceToRegister(Ops, AddIdx - 1, IdxV);
+        IdxReg = budgetedTraceToRegister(AddIdx - 1, IdxV);
+        if (!Complete)
+          return false;
         IndexIsPreScaled = true;
       }
       if (IdxReg == InvalidVA || ExactIndex.Size == 0 ||
@@ -440,71 +907,223 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
       // the old finite-prefix evaluator.  Other domains remain fail-closed
       // until represented by the shared exact BoundEvidence lattice.
       RequestedCompleteJumpTableProof = true;
-      if (!JumpTableProofContextComplete)
+      if (!JumpTableProofContextComplete) {
+        Complete = false;
         return false;
-      std::map<uint32_t, std::vector<JumpTableValueOccurrence>> MaskGroups;
+      }
+      constexpr size_t MaskGroupCount = 13;
+      auto maskBound = [&](const LowOp &Mask) -> std::optional<uint32_t> {
+        if (Mask.Opcode != NdOp::INT_AND || Mask.NumInputs < 2 ||
+            (!Mask.Output.isReg() && !Mask.Output.isTemp()))
+          return std::nullopt;
+        const int ConstantSide = Mask.Inputs[0].isConst()
+                                     ? 0
+                                     : (Mask.Inputs[1].isConst() ? 1 : -1);
+        if (ConstantSide < 0)
+          return std::nullopt;
+        const uint64_t M = Mask.Inputs[ConstantSide].Offset;
+        uint64_t Bound = 0;
+        if (IndexIsPreScaled) {
+          // For an already-scaled byte coordinate the exact full domain is
+          // `{0,W,...,(N-1)W}`.  An AND mask proves that domain precisely
+          // when its low log2(W) bits are zero and the remaining quotient is
+          // a contiguous power-of-two mask.
+          if (W == 0 || M % W != 0 || M / W >= limits::kMaxJumpTableEntries)
+            return std::nullopt;
+          Bound = M / W + 1;
+        } else {
+          if (M >= limits::kMaxJumpTableEntries)
+            return std::nullopt;
+          Bound = M + 1;
+        }
+        if (!llvm::isPowerOf2_64(Bound) || Bound > limits::kMaxJumpTableEntries)
+          return std::nullopt;
+        return static_cast<uint32_t>(Bound);
+      };
+
+      // Power-of-two selector domains up to 4096 need only thirteen fixed
+      // buckets.  Count first, prepay exact container lifetimes, then fill in a
+      // second charged pass; no attacker-sized tree or reallocation is hidden.
+      std::array<size_t, MaskGroupCount> MaskCounts{};
       for (const auto &[Addr, Insn] : Insns) {
+        if (!consumeWork())
+          return false;
         if (Insn.IsInstructionGuard)
           continue;
         for (const LowOp &Mask : Insn.Ops) {
-          if (Mask.Opcode != NdOp::INT_AND || Mask.NumInputs < 2 ||
-              (!Mask.Output.isReg() && !Mask.Output.isTemp()))
+          if (!consumeWork())
+            return false;
+          const std::optional<uint32_t> Bound = maskBound(Mask);
+          if (!Bound)
             continue;
-          int ConstantSide = Mask.Inputs[0].isConst()
-                                 ? 0
-                                 : (Mask.Inputs[1].isConst() ? 1 : -1);
-          if (ConstantSide < 0)
-            continue;
-          const uint64_t M = Mask.Inputs[ConstantSide].Offset;
-          uint64_t Bound64 = 0;
-          if (IndexIsPreScaled) {
-            // For an already-scaled byte coordinate the exact full domain is
-            // `{0,W,...,(N-1)W}`.  An AND mask proves that domain precisely
-            // when its low log2(W) bits are zero and the remaining quotient is
-            // a contiguous power-of-two mask.  This is whole-bit-domain
-            // reasoning, so negative inputs and modular wrap cannot re-enter
-            // outside the stated set.
-            if (W == 0 || M % W != 0 || M / W >= limits::kMaxJumpTableEntries)
-              continue;
-            Bound64 = M / W + 1;
-          } else {
-            if (M >= limits::kMaxJumpTableEntries)
-              continue;
-            Bound64 = M + 1;
+          const size_t Group = llvm::Log2_64(*Bound);
+          if (Group >= MaskGroupCount || MaskCounts[Group] ==
+                                             std::numeric_limits<size_t>::max()) {
+            *CandidateEvidenceBudget = 0;
+            Complete = false;
+            return false;
           }
-          if (!llvm::isPowerOf2_64(Bound64))
-            continue;
-          MaskGroups[static_cast<uint32_t>(Bound64)].push_back(
-              {Mask.Output, Mask.Addr, Mask.Seq,
-               /*DefinedAtPoint=*/true});
+          ++MaskCounts[Group];
         }
       }
+      std::array<std::vector<JumpTableValueOccurrence>, MaskGroupCount>
+          MaskGroups;
+      size_t NonEmptyGroups = 0;
+      for (size_t Group = 0; Group < MaskGroupCount; ++Group) {
+        const size_t Count = MaskCounts[Group];
+        if (Count == 0)
+          continue;
+        if (!consumeProduct(Count, 3) || !consumeWork(2)) {
+          *CandidateEvidenceBudget = 0;
+          Complete = false;
+          return false;
+        }
+        ++NonEmptyGroups;
+        MaskGroups[Group].reserve(Count);
+      }
+      for (const auto &[Addr, Insn] : Insns) {
+        if (!consumeWork())
+          return false;
+        if (Insn.IsInstructionGuard)
+          continue;
+        for (const LowOp &Mask : Insn.Ops) {
+          if (!consumeWork())
+            return false;
+          const std::optional<uint32_t> Bound = maskBound(Mask);
+          if (!Bound)
+            continue;
+          const size_t Group = llvm::Log2_64(*Bound);
+          MaskGroups[Group].push_back({Mask.Output, Mask.Addr, Mask.Seq,
+                                      /*DefinedAtPoint=*/true});
+        }
+      }
+
+      if (NonEmptyGroups == 0)
+        return false;
+      // Queries and their bound mapping are retained until the single shared
+      // matcher batch returns.  Preserve the original cumulative alternatives:
+      // distinct reaching paths can use different mask bounds, so the query for
+      // a larger bound must cover every preceding group as well.
+      size_t RunningAlternatives = 0;
+      size_t TotalAlternativeCopies = 0;
+      for (size_t Group = 0; Group < MaskGroupCount; ++Group) {
+        if (MaskCounts[Group] == 0)
+          continue;
+        if (MaskCounts[Group] >
+                std::numeric_limits<size_t>::max() - RunningAlternatives ||
+            (RunningAlternatives += MaskCounts[Group]) >
+                std::numeric_limits<size_t>::max() - TotalAlternativeCopies) {
+          *CandidateEvidenceBudget = 0;
+          Complete = false;
+          return false;
+        }
+        TotalAlternativeCopies += RunningAlternatives;
+      }
+      if (!consumeProduct(NonEmptyGroups, 14) || !consumeWork(4) ||
+          !consumeProduct(TotalAlternativeCopies, 3))
+        return false;
+      std::vector<JumpTableValueQuery> Queries;
+      std::vector<uint32_t> QueryBounds;
+      Queries.reserve(NonEmptyGroups);
+      QueryBounds.reserve(NonEmptyGroups);
+      RunningAlternatives = 0;
+      for (size_t Group = 0; Group < MaskGroupCount; ++Group) {
+        if (MaskGroups[Group].empty())
+          continue;
+        RunningAlternatives += MaskGroups[Group].size();
+        JumpTableValueQuery Query;
+        Query.Candidate = ExactIndex;
+        Query.UseAddr = IndexUseAddr;
+        Query.UseSeq = IndexUseSeq;
+        Query.Alternatives.reserve(RunningAlternatives);
+        for (size_t PrefixGroup = 0; PrefixGroup <= Group; ++PrefixGroup)
+          Query.Alternatives.insert(Query.Alternatives.end(),
+                                    MaskGroups[PrefixGroup].begin(),
+                                    MaskGroups[PrefixGroup].end());
+        Query.AllowZeroExtension = true;
+        Query.AllowSignExtension = false;
+        Queries.push_back(std::move(Query));
+        QueryBounds.push_back(uint32_t{1} << Group);
+      }
+      bool MatchComplete = false;
+      const std::vector<bool> Matches = tableValuesMatchAtUses(
+          Queries, &MatchComplete, nullptr, InvalidVA, nullptr,
+          CandidateEvidenceBudget);
+      if (!MatchComplete || Matches.size() != QueryBounds.size()) {
+        Complete = false;
+        return false;
+      }
       uint32_t N = 0;
-      std::vector<JumpTableValueOccurrence> MaskAlternatives;
-      for (const auto &[Bound, Occurrences] : MaskGroups) {
-        MaskAlternatives.insert(MaskAlternatives.end(), Occurrences.begin(),
-                                Occurrences.end());
-        const std::vector<bool> Match = tableValuesMatchAtUses(
-            {{ExactIndex, IndexUseAddr, IndexUseSeq, MaskAlternatives,
-              /*AllowZeroExtension=*/true,
-              /*AllowSignExtension=*/false}});
-        if (!Match.empty() && Match.front()) {
-          N = Bound;
+      for (size_t MatchIndex = 0; MatchIndex < Matches.size(); ++MatchIndex) {
+        if (!consumeWork())
+          return false;
+        if (Matches[MatchIndex]) {
+          N = QueryBounds[MatchIndex];
           break;
         }
       }
-      if (N < limits::kMinJumpTableEntries ||
-          N > limits::kMaxJumpTableEntries || RunLo < N || RunHi < N ||
-          N > limits::kMaxJumpTableEntries / 2)
+      if (N < limits::kMinJumpTableEntries)
+        return false;
+      if (N > limits::kMaxJumpTableEntries / 2) {
+        Complete = false;
+        return false;
+      }
+      const std::optional<bool> HasLoRun = hasRelocationPrefix(Lo, W, N);
+      const std::optional<bool> HasHiRun = hasRelocationPrefix(Hi, W, N);
+      if (!HasLoRun || !HasHiRun)
+        return false;
+      if (!*HasLoRun || !*HasHiRun)
         return false;
 
       // Read exactly the proven N slots from each physical run.  Extra
       // relocations adjacent to either table are foreign data, not selector
       // domain evidence.  The logical selector concatenates the lower and
       // higher runs, regardless of their physical separation.
+      const size_t TargetCount = static_cast<size_t>(N) * 2;
+      const size_t KnownEntryLookup =
+          KnownFuncEntries ? orderedLookupWork(KnownFuncEntries->size()) : 0;
+      const size_t RuntimeEntryLookup =
+          orderedLookupWork(Img.RuntimeFunctionAddrs.size());
+      const size_t VerifiedEntryLookup =
+          orderedLookupWork(Img.VerifiedFunctionEntries.size());
+      const size_t ImportStubLookup =
+          orderedLookupWork(Img.ImportStubIndices.size());
+      const size_t FragmentLookup =
+          orderedLookupWork(Img.ExceptionMetadata.Functions.size());
+      if (FragmentLookup >
+          (std::numeric_limits<size_t>::max() - 3) / 2) {
+        *CandidateEvidenceBudget = 0;
+        Complete = false;
+        return false;
+      }
+      const size_t FragmentWorkPerEntry = FragmentLookup * 2 + 3;
+      // readVA, executable-owner/range validation, function-entry exclusion,
+      // and explicit fragment ownership all traverse loader inventories.  Pay
+      // their worst-case envelope before the first slot read so exhaustion
+      // cannot leave a partially decoded target vector.
+      if (!consumeFactorProduct({TargetCount, 16}) ||
+          !consumeFactorProduct({TargetCount, Img.Segments.size(), 19}) ||
+          !consumeFactorProduct({TargetCount, Img.Sections.size(), 12}) ||
+          !consumeFactorProduct(
+              {TargetCount, Img.ImportStubRanges.size(), 3}) ||
+          !consumeFactorProduct({TargetCount, Img.Imports.size(), 2}) ||
+          !consumeFactorProduct({TargetCount, Img.KnownCodeRanges.size(), 2}) ||
+          !consumeFactorProduct({TargetCount, Img.Symbols.size(), 2}) ||
+          !consumeFactorProduct({TargetCount, ImportStubLookup, 2}) ||
+          !consumeFactorProduct({TargetCount, RuntimeEntryLookup, 2}) ||
+          !consumeFactorProduct({TargetCount, VerifiedEntryLookup}) ||
+          !consumeFactorProduct({TargetCount, KnownEntryLookup}) ||
+          !consumeFactorProduct({TargetCount,
+                                 Img.ExceptionMetadata.Functions.size(),
+                                 FragmentWorkPerEntry}) ||
+          !consumeProduct(TargetCount, 3) || !consumeWork(2))
+        return false;
+
       auto readCodePtrRun = [&](va_t Base, uint32_t Count,
                                 std::vector<va_t> &Out) -> bool {
         for (uint32_t I = 0; I < Count; ++I) {
+          if (!consumeWork())
+            return false;
           uint64_t Offset = 0;
           va_t Slot = 0;
           if (I != 0 && static_cast<uint64_t>(W) >
@@ -514,6 +1133,12 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
           if (Offset > std::numeric_limits<va_t>::max() - Base)
             return false;
           Slot = Base + Offset;
+          const std::optional<bool> HasRelocation =
+              relocationSlotPresent(Slot);
+          if (!HasRelocation)
+            return false;
+          if (!*HasRelocation)
+            return false;
           const uint8_t *P = Img.readVA(Slot, W);
           if (!P)
             return false;
@@ -532,8 +1157,10 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
         return true;
       };
       std::vector<va_t> Union;
-      Union.reserve(2u * N);
+      Union.reserve(TargetCount);
       if (!readCodePtrRun(Lo, N, Union) || !readCodePtrRun(Hi, N, Union))
+        return false;
+      if (!Complete)
         return false;
 
       JumpTableValueOccurrence IndexOccurrence{ExactIndex, IndexUseAddr,
@@ -541,11 +1168,24 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
                                                /*DefinedAtPoint=*/false};
       JumpTableValueOccurrence LoadOccurrence{L.Output, L.Addr, L.Seq,
                                               /*DefinedAtPoint=*/true};
+      // Construct every retained vector only after its allocation, element, and
+      // future cleanup work is reserved.  Result remains local until all
+      // occurrence checks succeed, so no partial JumpTableInfo escapes.
+      if (!consumeWork(8) || !consumeWork(3 * 2 + 2) ||
+          !consumeWork(3 * 1 + 2) || !consumeWork(3 * 1 + 2) ||
+          !consumeWork(3 * 1 + 2) || !consumeWork(3 * 1 + 2) ||
+          !consumeWork(3 * 2 + 2))
+        return false;
+      JumpTableInfo Result;
+      Result.CompositeShapeClaimed = true;
       JumpTableLoadRole Role;
       Role.Load = LoadOccurrence;
       Role.LoadWidth = W;
-      Role.AllowedBases = {Lo, Hi};
-      Role.Indices = {IndexOccurrence};
+      Role.AllowedBases.reserve(2);
+      Role.AllowedBases.push_back(Lo);
+      Role.AllowedBases.push_back(Hi);
+      Role.Indices.reserve(1);
+      Role.Indices.push_back(IndexOccurrence);
       Role.AddressIndex = {IdxV, Ops[AddIdx].Addr, Ops[AddIdx].Seq,
                            /*DefinedAtPoint=*/false};
       Role.AddressScale = IndexIsPreScaled ? 1 : W;
@@ -601,32 +1241,37 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
         return false;
       }
 
-      Info.setBaseAddr(Lo);
-      Info.EntrySize = W;
-      Info.MaxEntries = 2u * N;
-      Info.PhysicalCapacity = 2u * N;
-      Info.IndexDomainAuthenticated = true;
-      Info.RelocAbsolute = true;
-      Info.RelocBounded = true;
-      Info.IsRelative = false;
-      Info.IsSigned = false;
-      Info.IndexReg = IdxReg;
-      Info.IndexValueAtUse = ExactIndex;
-      Info.IndexUseAddr = IndexUseAddr;
-      Info.IndexUseSeq = IndexUseSeq;
-      Info.IndexValueAlternatives = {IndexOccurrence};
-      Info.PreScaledIndex = true;
-      Info.Stride = W;
-      Info.TwoTableSelect = true;
-      Info.TwoTableOffset = N * W; // concatenated (lo-first) coordinate
-      Info.TwoTableHiPositive = (Cpos > Cneg);
-      Info.ExplicitTargets = std::move(Union);
-      Info.TargetLoads = {LoadOccurrence};
-      Info.LoadRoles = {std::move(Role)};
-      Info.TableLoadAddr = L.Addr;
-      Info.TableLoadSeq = L.Seq;
-      Info.StorageRanges = {JumpTableStorageRange{Lo, W, W, N},
-                            JumpTableStorageRange{Hi, W, W, N}};
+      Result.setBaseAddr(Lo);
+      Result.EntrySize = W;
+      Result.MaxEntries = static_cast<uint32_t>(TargetCount);
+      Result.PhysicalCapacity = static_cast<uint32_t>(TargetCount);
+      Result.IndexDomainAuthenticated = true;
+      Result.RelocAbsolute = true;
+      Result.RelocBounded = true;
+      Result.IsRelative = false;
+      Result.IsSigned = false;
+      Result.IndexReg = IdxReg;
+      Result.IndexValueAtUse = ExactIndex;
+      Result.IndexUseAddr = IndexUseAddr;
+      Result.IndexUseSeq = IndexUseSeq;
+      Result.IndexValueAlternatives.reserve(1);
+      Result.IndexValueAlternatives.push_back(IndexOccurrence);
+      Result.PreScaledIndex = true;
+      Result.Stride = W;
+      Result.TwoTableSelect = true;
+      Result.TwoTableOffset = N * W; // concatenated (lo-first) coordinate
+      Result.TwoTableHiPositive = (Cpos > Cneg);
+      Result.ExplicitTargets = std::move(Union);
+      Result.TargetLoads.reserve(1);
+      Result.TargetLoads.push_back(LoadOccurrence);
+      Result.LoadRoles.reserve(1);
+      Result.LoadRoles.push_back(std::move(Role));
+      Result.TableLoadAddr = L.Addr;
+      Result.TableLoadSeq = L.Seq;
+      Result.StorageRanges.reserve(2);
+      Result.StorageRanges.push_back(JumpTableStorageRange{Lo, W, W, N});
+      Result.StorageRanges.push_back(JumpTableStorageRange{Hi, W, W, N});
+      Info = std::move(Result);
       LLVM_DEBUG(llvm::dbgs()
                  << "  two-table: exact-domain tables 0x" << llvm::utohexstr(Lo)
                  << " + 0x" << llvm::utohexstr(Hi) << " (" << (2u * N)

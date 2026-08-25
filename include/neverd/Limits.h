@@ -60,6 +60,28 @@ constexpr uint32_t kMaxJumpTableMaskCoreEvidenceWork = 262144;
 /// keeps legacy non-fixed-point callers bounded as well.
 constexpr uint32_t kMaxJumpTableValueMatchEvidenceWork = 65536;
 
+/// Target- and address-role certificates batch every feasible transform and
+/// reaching-value alternative in one immutable candidate graph.  Exact
+/// accounting for the largest supported O0 large-switch role consumes about
+/// 323 Ki work in one batch, so retain the next power of two locally.  Every
+/// unit also debits the candidate-wide aggregate account below.
+constexpr uint32_t kMaxJumpTableRoleMatchEvidenceWork = 524288;
+
+/// Whole-object consumer audits can compare every byte occurrence in a
+/// physical pointer object against every candidate consumer.  Exact graph,
+/// memo, string and container-lifetime accounting makes the largest supported
+/// x64/AArch64 eight-entry initializer audit consume about 154 Ki work, so
+/// retain the next power of two locally.  The work still debits the same
+/// candidate-wide aggregate account.
+constexpr uint32_t kMaxJumpTableConsumerAuditMatchEvidenceWork = 262144;
+
+/// Aggregate allowance for completing one function's exact i386 GOT-base
+/// models.  Completion performs the same whole-graph value matching as a
+/// jump-table relation batch, so it uses the corresponding bounded ceiling;
+/// test overrides may still select a smaller fail-closed boundary.
+constexpr uint32_t kMaxI386GOTModelEvidenceWork =
+    kMaxJumpTableValueMatchEvidenceWork;
+
 /// Structural-symbolization allowance shared by the exact unsigned-modulo
 /// recipe queries for one candidate.  Expression visits also debit the
 /// candidate-wide aggregate account, so this local ceiling cannot multiply
@@ -69,17 +91,23 @@ constexpr uint32_t kMaxJumpTableModuloRecipeSymbolEvidenceWork = 131072;
 /// Aggregate allowance for one jump-table candidate in a resolver stage.
 /// Target/address roles, modulo/mask domains, every candidate-graph snapshot,
 /// recursive core proof, and precise-before-upper-bound replay all debit this
-/// one balance.  The larger explicit ceiling accommodates real multi-case
-/// computed gotos while preventing fresh per-phase or per-round allowances.
-constexpr uint32_t kMaxJumpTableMaskFixedPointEvidenceWork = 16777216;
+/// one balance.  Exact ordered-container and lifetime accounting for the
+/// largest supported O0 large-switch/jump-table transaction consumes about 63
+/// million units after exact target-role certificate reuse; the next
+/// power-of-two ceiling preserves bounded headroom without granting fresh
+/// per-phase or per-round allowances.
+constexpr uint32_t kMaxJumpTableMaskFixedPointEvidenceWork = 67108864;
 
 /// Aggregate allowance for one transactional multi-candidate resolver stage.
 /// A real function can contain several exact branch occurrences that consume
 /// the same physical table (peeled loops and computed-goto dispatch relays are
 /// common examples).  Each occurrence remains independently capped by
 /// kMaxJumpTableMaskFixedPointEvidenceWork; this larger, still finite account
-/// lets the stage validate the complete sibling batch before committing it.
-constexpr uint32_t kMaxJumpTableProposalStageEvidenceWork = 67108864;
+/// retains four-candidate headroom so the stage can validate a complete
+/// sibling batch before committing it.
+constexpr uint32_t kMaxJumpTableProposalStageEvidenceWork = 268435456;
+static_assert(uint64_t{kMaxJumpTableProposalStageEvidenceWork} >=
+              uint64_t{kMaxJumpTableMaskFixedPointEvidenceWork} * 4);
 
 /// Aggregate allowance for proving that one authenticated Med jump-table
 /// target load is consumed exclusively by its recovered terminal branch.

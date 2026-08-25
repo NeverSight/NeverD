@@ -37,6 +37,7 @@
 
 #include "llvm/ADT/ArrayRef.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -79,6 +80,37 @@ std::vector<uint64_t> callPreservedRegs(const BinaryImage &Img);
 /// the two paths cannot drift on out-of-line local fragments.
 bool isExplicitlyOwnedFunctionFragment(const BinaryImage &Img,
                                        va_t FunctionEntry, va_t Target);
+
+namespace detail {
+
+/// Immutable proof-context portion of a target-role certificate.  An absent
+/// active-root override is semantically distinct from a present empty set:
+/// the former falls back to persistent CFG roots, while the latter explicitly
+/// authorizes no roots.  Consumer-audit mode also changes the proof graph and
+/// therefore participates in exact cache identity even when the effective
+/// root addresses happen to match.
+struct TargetRoleProofContextKey {
+  bool ProofContextComplete = false;
+  bool HasActiveProofRoots = false;
+  bool ConsumerAuditMode = false;
+  std::vector<va_t> ProofRoots;
+
+  bool operator==(const TargetRoleProofContextKey &Other) const = default;
+};
+
+inline bool targetRoleProofContextMatches(
+    const TargetRoleProofContextKey &Key, bool ProofContextComplete,
+    bool HasActiveProofRoots, bool ConsumerAuditMode,
+    const std::set<va_t> &ProofRoots) {
+  return Key.ProofContextComplete == ProofContextComplete &&
+         Key.HasActiveProofRoots == HasActiveProofRoots &&
+         Key.ConsumerAuditMode == ConsumerAuditMode &&
+         Key.ProofRoots.size() == ProofRoots.size() &&
+         std::equal(Key.ProofRoots.begin(), Key.ProofRoots.end(),
+                    ProofRoots.begin());
+}
+
+} // namespace detail
 
 //===----------------------------------------------------------------------===//
 // Backward data-flow slicing

@@ -106,10 +106,10 @@ public:
   void setStackTableEvidenceBudgetForTesting(std::optional<size_t> Limit) {
     StackTableEvidenceBudgetForTesting = Limit;
   }
-  /// Override the aggregate candidate-local jump-table allowance in focused
-  /// tests.  Production callers leave this unset; target/address roles,
-  /// modulo/mask domains, recursive graph snapshots, and closure queries in
-  /// one resolver stage share the bounded balance.
+  /// Override jump-table evidence in focused tests.  The supplied value caps
+  /// both one candidate-local account and its enclosing transactional stage;
+  /// production leaves this unset so candidates retain the bounded four-way
+  /// stage headroom defined in Limits.h.
   void
   setMaskFixedPointEvidenceBudgetForTesting(std::optional<size_t> Limit) {
     MaskFixedPointEvidenceBudgetForTesting = Limit;
@@ -886,7 +886,9 @@ private:
   // one table at min(A,B).  The emitter rebuilds the runtime base select as a
   // single switch over the merged byte-offset index.
   bool tryTwoTableSelect(const BinaryImage &Img, const InsnRecord &Rec,
-                         JumpTableInfo &Info);
+                         JumpTableInfo &Info,
+                         size_t *CandidateEvidenceBudget,
+                         bool *AnalysisComplete);
   // Detect a two-level "index-byte" table (the classic MSVC sparse-switch
   // lowering): a compact byte/halfword index table maps the switch variable to
   // a small entry index, which then indexes the real address table
@@ -1068,19 +1070,22 @@ private:
       std::vector<bool> *QueryAnalysisComplete = nullptr,
       va_t CandidateBranchOverride = InvalidVA,
       const std::vector<va_t> *CandidateTargetsOverride = nullptr,
-      size_t *GraphWorkBudget = nullptr) const;
+      size_t *GraphWorkBudget = nullptr,
+      size_t LocalMatchEvidenceLimit = 0) const;
   /// Prove that the actual INDIR_BR input is derived from the strategy's exact
   /// TargetLoad occurrence on every feasible path.  Mere address co-occurrence
   /// in static scans or emulation is not sufficient.
   bool branchTargetDependsOnTableLoad(const InsnRecord &Rec,
                                       const JumpTableInfo &Info,
-                                      size_t *AggregateEvidenceBudget) const;
+                                      size_t *AggregateEvidenceBudget,
+                                      bool *AnalysisComplete) const;
   /// Prove that every authenticated target LOAD reads the declared table role
   /// at that exact occurrence: base + certified-index * physical stride.
   /// Output-to-branch dependence alone is insufficient when a sibling or
   /// ambiguous predecessor can supply a different LOAD address.
   bool tableLoadAddressesMatchRole(JumpTableInfo &Info,
-                                   size_t *AggregateEvidenceBudget) const;
+                                   size_t *AggregateEvidenceBudget,
+                                   bool *AnalysisComplete) const;
   /// Build the root set used while proving one candidate table.  A
   /// relocation-discovered interior label is not an independent entry when
   /// every relocation that names it is a physical slot owned by this exact

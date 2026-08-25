@@ -1245,9 +1245,9 @@ void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
     return;
 
   size_t EvidenceWork = std::min<size_t>(
-      limits::kMaxJumpTableEvidenceWork,
+      limits::kMaxI386GOTModelEvidenceWork,
       I386GOTModelEvidenceBudgetForTesting.value_or(
-          limits::kMaxJumpTableEvidenceWork));
+          limits::kMaxI386GOTModelEvidenceWork));
   auto Consume = [&](size_t Amount = 1) {
     if (Amount > EvidenceWork) {
       EvidenceWork = 0;
