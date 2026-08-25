@@ -1285,6 +1285,73 @@ static ResolverValue resolverSlice(
   return Slice(Input, Offset, 0);
 }
 
+/// Recognize the direct unsigned-remainder form without creating any theorem
+/// nodes in Ctx.  The normalized output is retained for the complete
+/// structural matcher below; merge-arm finite-set proofs use only the boolean
+/// result so one arm cannot seed another arm's proof context.
+static bool provesDirectUnsignedModuloRecipe(
+    symbolic::SymContext &Ctx, symbolic::SymRef Index, uint64_t Divisor,
+    const std::function<bool(size_t)> &ConsumeWork = {},
+    bool *AnalysisIncomplete = nullptr,
+    symbolic::SymRef *NormalizedRemainder = nullptr,
+    uint32_t *NormalizedWidth = nullptr) {
+  using symbolic::SymOp;
+  using symbolic::SymRef;
+
+  if (NormalizedRemainder)
+    *NormalizedRemainder = {};
+  if (NormalizedWidth)
+    *NormalizedWidth = 0;
+  auto consume = [&](size_t Amount = 1) {
+    if (!ConsumeWork || ConsumeWork(Amount))
+      return true;
+    if (AnalysisIncomplete)
+      *AnalysisIncomplete = true;
+    return false;
+  };
+  if (!Index || Divisor < limits::kMinJumpTableEntries)
+    return false;
+
+  SymRef Remainder = Index;
+  for (;;) {
+    if (!consume())
+      return false;
+    const SymOp Extension = Ctx.op(Remainder);
+    if (Extension != SymOp::ZExt && Extension != SymOp::SExt)
+      break;
+    if (Ctx.numOperands(Remainder) != 1)
+      return false;
+    const SymRef Narrow = Ctx.operand(Remainder, 0);
+    const uint32_t NarrowWidth = Ctx.width(Narrow);
+    // A sign extension also preserves an exact unsigned remainder when the
+    // divisor keeps every possible remainder below the source sign bit.
+    // Outside that theorem, retain the historical rejection: arbitrary sign
+    // extension does not establish an unsigned table domain.
+    if (Extension == SymOp::SExt &&
+        (NarrowWidth < 2 || NarrowWidth > 64 ||
+         Divisor > (uint64_t{1} << (NarrowWidth - 1))))
+      return false;
+    Remainder = Narrow;
+  }
+  const uint32_t Width = Ctx.width(Remainder);
+  if (Width < 2 || Width > 64)
+    return false;
+  if (Width < 64 && Divisor >= (uint64_t{1} << Width))
+    return false;
+  if (NormalizedRemainder)
+    *NormalizedRemainder = Remainder;
+  if (NormalizedWidth)
+    *NormalizedWidth = Width;
+
+  if (Ctx.op(Remainder) != SymOp::URem || Ctx.numOperands(Remainder) != 2)
+    return false;
+  const SymRef CandidateDivisor = Ctx.operand(Remainder, 1);
+  const std::optional<llvm::APInt> ExactDivisor = Ctx.asConst(CandidateDivisor);
+  return ExactDivisor && ExactDivisor->getBitWidth() == Width &&
+         ExactDivisor->getActiveBits() <= 64 &&
+         ExactDivisor->getZExtValue() == Divisor;
+}
+
 /// Prove the complete unsigned remainder recipe emitted for division by a
 /// constant.  This is deliberately a structural theorem over the expression
 /// produced by the point-sensitive resolver, not a lexical recognition of a
@@ -1296,7 +1363,8 @@ static ResolverValue resolverSlice(
 static bool provesExactUnsignedModuloRecipe(
     symbolic::SymContext &Ctx, symbolic::SymRef Index, uint64_t Divisor,
     const std::function<bool(size_t)> &ConsumeWork = {},
-    bool *AnalysisIncomplete = nullptr) {
+    bool *AnalysisIncomplete = nullptr,
+    std::optional<size_t> ExpressionNodeCountOverride = std::nullopt) {
   using symbolic::SymOp;
   using symbolic::SymRef;
 
@@ -1312,45 +1380,24 @@ static bool provesExactUnsignedModuloRecipe(
     return false;
 
   // Table selectors are commonly widened to the internal address container
-  // after the machine-width remainder.  Only zero extension preserves the
-  // unsigned domain theorem; sign extension and arbitrary truncation do not.
-  SymRef Remainder = Index;
-  for (;;) {
-    if (!consume())
-      return false;
-    if (Ctx.op(Remainder) != SymOp::ZExt)
-      break;
-    if (Ctx.numOperands(Remainder) != 1)
-      return false;
-    Remainder = Ctx.operand(Remainder, 0);
-  }
-  const uint32_t Width = Ctx.width(Remainder);
-  if (Width < 2 || Width > 64)
+  // after the machine-width remainder.  Zero extension always preserves the
+  // unsigned theorem; the shared direct inspector admits sign extension only
+  // when the divisor proves that the source sign bit is always clear.
+  SymRef Remainder;
+  uint32_t Width = 0;
+  if (provesDirectUnsignedModuloRecipe(Ctx, Index, Divisor, ConsumeWork,
+                                       AnalysisIncomplete, &Remainder, &Width))
+    return true;
+  if (!Remainder)
     return false;
-  if (Width < 64 && Divisor >= (uint64_t{1} << Width))
-    return false;
-
-  // At -O0 the exact machine operation can survive directly as urem.  It is
-  // the same occurrence-level theorem as the reciprocal lowering below: the
-  // divisor must be this scalar N in the current CFG snapshot, while the
-  // dividend remains an arbitrary bit-vector.  Never admit srem here; a
-  // negative signed remainder does not establish an unsigned table domain.
-  if (Ctx.op(Remainder) == SymOp::URem &&
-      Ctx.numOperands(Remainder) == 2) {
-    const SymRef CandidateDivisor = Ctx.operand(Remainder, 1);
-    const std::optional<llvm::APInt> ExactDivisor =
-        Ctx.asConst(CandidateDivisor);
-    if (ExactDivisor && ExactDivisor->getBitWidth() == Width &&
-        ExactDivisor->getActiveBits() <= 64 &&
-        ExactDivisor->getZExtValue() == Divisor)
-      return true;
-  }
 
   // Builders below intern comparison forms into the same context.  Restrict
   // structural searches to nodes that came from the resolved selector so a
   // failed candidate cannot seed a later proof with theorem-created nodes.
-  const size_t ExpressionNodeCount = Ctx.numNodes();
-  if (ExpressionNodeCount > std::numeric_limits<uint32_t>::max()) {
+  const size_t ExpressionNodeCount =
+      ExpressionNodeCountOverride.value_or(Ctx.numNodes());
+  if (ExpressionNodeCount > Ctx.numNodes() ||
+      ExpressionNodeCount > std::numeric_limits<uint32_t>::max()) {
     if (AnalysisIncomplete)
       *AnalysisIncomplete = true;
     return false;
@@ -5759,12 +5806,6 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       return Result;
     };
 
-    symbolic::SymRef Index = Symbolize(Value, 0);
-    if (!Index || Exhausted || Ctx.width(Index) != Width) {
-      if (ExactModuloRecipeOnly && !Exhausted)
-        ProofComplete = true;
-      return false;
-    }
     auto makeSolverOptions = [] {
       solver::SolverOptions Options;
       Options.BuildModel = false;
@@ -5778,6 +5819,133 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       Options.Blast.MaxGates = limits::kMaxJumpTableGuardSolverGates;
       return Options;
     };
+
+    if (FeasibleMask) {
+      enum class FeasibleProofOutcome : uint8_t {
+        Proven,
+        Counterexample,
+        Incomplete,
+      };
+      uint64_t Mask = 0;
+      // Symbolize the complete selector before proving any merge arm, then
+      // freeze the original-node prefix.  Full reciprocal-division recipe
+      // matching may intern theorem nodes; the fixed prefix prevents a failed
+      // earlier arm from supplying evidence to a later arm while still
+      // sharing one context and one symbolic-work account.
+      symbolic::SymRef Selector = Symbolize(Value, 0);
+      if (!Selector || Exhausted || Ctx.width(Selector) != Width ||
+          Ctx.numNodes() > std::numeric_limits<uint32_t>::max())
+        return false;
+      const size_t SelectorExpressionNodeCount = Ctx.numNodes();
+      // A non-merged feasible-set proof issues at most one envelope query and
+      // one equality query per coordinate.  Preserve that transaction-wide
+      // solver ceiling when a predecessor merge is proved arm by arm; each
+      // solver invocation also continues to debit the shared symbolic and
+      // candidate evidence accounts.
+      size_t RemainingSolverQueries = static_cast<size_t>(Bound) + 1;
+      std::function<FeasibleProofOutcome(const ResolverValue &, unsigned)>
+          ProveFeasible = [&](const ResolverValue &Node,
+                              unsigned Depth) -> FeasibleProofOutcome {
+        if (!Node || Depth > limits::kMaxJumpTableGuardExpressionDepth) {
+          Exhausted = true;
+          SymbolBudgetExhausted = true;
+          return FeasibleProofOutcome::Incomplete;
+        }
+        // A merge denotes the nondeterministic union of its incoming values.
+        // Prove each output arm in the same context and under the same local
+        // allowance instead of bit-blasting one large selector ITE.  This is
+        // exact for an output-layer merge, retains every late predecessor in
+        // the required replay, and avoids granting any coordinate that an arm
+        // cannot independently produce.
+        if (Node->K == ResolverValueExpr::Kind::Merge) {
+          if (Node->Inputs.empty() || !consumeSymbolWork(Node->Inputs.size()) ||
+              !consumeSymbolWork())
+            return FeasibleProofOutcome::Incomplete;
+          for (const ResolverValue &Arm : Node->Inputs) {
+            const FeasibleProofOutcome Outcome = ProveFeasible(Arm, Depth + 1);
+            if (Outcome != FeasibleProofOutcome::Proven)
+              return Outcome;
+          }
+          return FeasibleProofOutcome::Proven;
+        }
+
+        symbolic::SymRef Index = Symbolize(Node, Depth);
+        if (!Index || Exhausted || Ctx.width(Index) != Width)
+          return FeasibleProofOutcome::Incomplete;
+        if (const std::optional<llvm::APInt> Constant = Ctx.asConst(Index)) {
+          if (Constant->getActiveBits() > 64 ||
+              Constant->getZExtValue() >= Bound)
+            return FeasibleProofOutcome::Counterexample;
+          Mask |= uint64_t{1} << Constant->getZExtValue();
+          return FeasibleProofOutcome::Proven;
+        }
+        bool RecipeIncomplete = false;
+        symbolic::SymRef NormalizedRemainder;
+        bool ExactRecipe = provesDirectUnsignedModuloRecipe(
+            Ctx, Index, Bound, consumeSymbolWork, &RecipeIncomplete,
+            &NormalizedRemainder);
+        // Reciprocal and explicit-division remainder recipes canonicalize to
+        // x - q*N, whose symbolic root is Add.  Do not spend the bounded
+        // structural matcher on unrelated masks or arithmetic; those retain
+        // the finite SAT path and its shared solver-query ceiling.
+        if (!ExactRecipe && !RecipeIncomplete && NormalizedRemainder &&
+            Ctx.op(NormalizedRemainder) == symbolic::SymOp::Add)
+          ExactRecipe = provesExactUnsignedModuloRecipe(
+              Ctx, Index, Bound, consumeSymbolWork, &RecipeIncomplete,
+              SelectorExpressionNodeCount);
+        if (ExactRecipe) {
+          Mask |= Bound == 64 ? std::numeric_limits<uint64_t>::max()
+                              : (uint64_t{1} << Bound) - 1;
+          return FeasibleProofOutcome::Proven;
+        }
+        if (RecipeIncomplete)
+          return FeasibleProofOutcome::Incomplete;
+        const bool FullWidthEnvelope =
+            Width < 64 && Bound >= (uint64_t{1} << Width);
+        if (!FullWidthEnvelope) {
+          if (RemainingSolverQueries == 0 || !consumeSymbolWork(3))
+            return FeasibleProofOutcome::Incomplete;
+          --RemainingSolverQueries;
+          const solver::SatResult Result = solver::checkSat(
+              Ctx, Ctx.mkNot(Ctx.mkUlt(Index, Ctx.mkConst(Width, Bound))),
+              nullptr, makeSolverOptions());
+          if (Result == solver::SatResult::Sat)
+            return FeasibleProofOutcome::Counterexample;
+          if (Result != solver::SatResult::Unsat)
+            return FeasibleProofOutcome::Incomplete;
+        }
+        for (uint64_t Coordinate = 0; Coordinate < Bound; ++Coordinate) {
+          if (Width < 64 && Coordinate >= (uint64_t{1} << Width))
+            continue;
+          if (RemainingSolverQueries == 0 || !consumeSymbolWork(3))
+            return FeasibleProofOutcome::Incomplete;
+          --RemainingSolverQueries;
+          const solver::SatResult Result = solver::checkSat(
+              Ctx, Ctx.mkEq(Index, Ctx.mkConst(Width, Coordinate)), nullptr,
+              makeSolverOptions());
+          if (Result == solver::SatResult::Sat)
+            Mask |= uint64_t{1} << Coordinate;
+          else if (Result != solver::SatResult::Unsat)
+            return FeasibleProofOutcome::Incomplete;
+        }
+        return FeasibleProofOutcome::Proven;
+      };
+      const FeasibleProofOutcome Outcome = ProveFeasible(Value, 0);
+      if (Outcome == FeasibleProofOutcome::Incomplete)
+        return false;
+      ProofComplete = true;
+      if (Outcome == FeasibleProofOutcome::Counterexample)
+        return false;
+      *FeasibleMask = Mask;
+      return Mask != 0;
+    }
+
+    symbolic::SymRef Index = Symbolize(Value, 0);
+    if (!Index || Exhausted || Ctx.width(Index) != Width) {
+      if (ExactModuloRecipeOnly && !Exhausted)
+        ProofComplete = true;
+      return false;
+    }
     if (!FeasibleMask &&
         provesExactUnsignedModuloRecipe(Ctx, Index, Bound, consumeSymbolWork,
                                         &Exhausted)) {
@@ -5817,29 +5985,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       ProofComplete = true;
       return true;
     }
-    uint64_t Mask = 0;
-    for (uint64_t Coordinate = 0; Coordinate < Bound; ++Coordinate) {
-      if (Width < 64 && Coordinate >= (uint64_t{1} << Width))
-        continue;
-      if (!consumeSymbolWork(3))
-        return false;
-      const solver::SatResult Result =
-          solver::checkSat(Ctx, Ctx.mkEq(Index, Ctx.mkConst(Width, Coordinate)),
-                           nullptr, makeSolverOptions());
-      switch (Result) {
-      case solver::SatResult::Unknown:
-      case solver::SatResult::Invalid:
-        return false;
-      case solver::SatResult::Sat:
-        Mask |= uint64_t{1} << Coordinate;
-        break;
-      case solver::SatResult::Unsat:
-        break;
-      }
-    }
-    *FeasibleMask = Mask;
-    ProofComplete = true;
-    return Mask != 0;
+    llvm_unreachable("finite-set proofs return before scalar-bound proofs");
   };
 
   for (size_t QueryIndex = 0; QueryIndex < Queries.size(); ++QueryIndex) {

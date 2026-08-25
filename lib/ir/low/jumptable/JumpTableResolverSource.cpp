@@ -426,12 +426,18 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
     // reaches an architectural frame register.
     auto derivedFromFrameAtExactUse = [&]() {
       bool EvidenceComplete = true;
-      auto chargeEvidence = [&]() {
-        if (EvidenceComplete && consumeStackTableEvidence())
+      auto chargeEvidence = [&](size_t Amount = 1) {
+        if (EvidenceComplete && consumeStackTableEvidence(Amount))
           return true;
         EvidenceComplete = false;
         StackTableEvidenceIncompleteBranches.insert(Rec.Addr);
         return false;
+      };
+      auto orderedLookupWork = [](size_t Count) {
+        size_t Work = 1;
+        for (size_t N = Count; N > 1; N = N / 2 + N % 2)
+          ++Work;
+        return Work;
       };
 
       const JumpTableValueOccurrence &Use = FrameRuntimeBase.Use;
@@ -439,25 +445,33 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
           Use.DefinedAtPoint || (!Use.Value.isReg() && !Use.Value.isTemp()))
         return false;
 
-      int UseIdx = -1;
-      for (int I = 0; I < static_cast<int>(BlockOps.size()); ++I) {
+      if (!chargeEvidence(orderedLookupWork(Insns.size())))
+        return false;
+      const auto UseInsn = Insns.find(Use.Addr);
+      if (UseInsn == Insns.end())
+        return false;
+      const LowOp *UseOp = nullptr;
+      for (const LowOp &Op : UseInsn->second.Ops) {
         if (!chargeEvidence())
           return false;
-        const LowOp &Op = BlockOps[I];
         if (Op.Addr != Use.Addr || Op.Seq != Use.Seq)
           continue;
         unsigned ExactInputs = 0;
-        for (unsigned N = 0; N < Op.NumInputs; ++N)
+        for (unsigned N = 0; N < Op.NumInputs; ++N) {
+          if (!chargeEvidence())
+            return false;
           ExactInputs += Op.Inputs[N] == Use.Value;
-        if (UseIdx >= 0 || ExactInputs != 1)
+        }
+        if (UseOp || ExactInputs != 1)
           return false;
-        UseIdx = I;
+        UseOp = &Op;
       }
-      if (UseIdx < 0)
+      if (!UseOp)
         return false;
 
       NdVar Value = Use.Value;
-      int FromIdx = UseIdx - 1;
+      va_t BeforeAddr = UseOp->Addr;
+      int BeforeSeq = UseOp->Seq;
       for (int Depth = 0; Depth < limits::kMaxQuasiCopyDepth; ++Depth) {
         if (!chargeEvidence())
           return false;
@@ -466,51 +480,67 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
         if (!Value.isReg() && !Value.isTemp())
           return false;
 
-        int DefIdx = -1;
-        for (int I = FromIdx; I >= 0; --I) {
+        if (!chargeEvidence(orderedLookupWork(Insns.size())))
+          return false;
+        const LowOp *Def = nullptr;
+        auto It = Insns.upper_bound(BeforeAddr);
+        while (It != Insns.begin()) {
+          --It;
+          if (It->first < CurrentFuncEntry)
+            break;
           if (!chargeEvidence())
             return false;
-          if (BlockOps[I].Output == Value) {
-            DefIdx = I;
-            break;
+          for (auto OpIt = It->second.Ops.rbegin();
+               OpIt != It->second.Ops.rend(); ++OpIt) {
+            if (!chargeEvidence())
+              return false;
+            if (OpIt->Addr > BeforeAddr ||
+                (OpIt->Addr == BeforeAddr && OpIt->Seq >= BeforeSeq))
+              continue;
+            if (OpIt->Output == Value) {
+              Def = &*OpIt;
+              break;
+            }
           }
+          if (Def)
+            break;
         }
-        if (DefIdx < 0)
+        if (!Def)
           return false;
 
-        const LowOp &Def = BlockOps[DefIdx];
         NdVar Next;
-        if (Def.Opcode == NdOp::COPY && Def.NumInputs >= 1 &&
-            (Def.Inputs[0].isReg() || Def.Inputs[0].isTemp())) {
-          Next = Def.Inputs[0];
-        } else if (Def.Opcode == NdOp::INT_ZEXT && Def.NumInputs >= 1 &&
-                   Def.Inputs[0].Size == Img.getPointerSize() &&
-                   Def.Output.Size > Def.Inputs[0].Size &&
-                   (Def.Inputs[0].isReg() || Def.Inputs[0].isTemp())) {
-          Next = Def.Inputs[0];
-        } else if (Def.Opcode == NdOp::INT_ADD && Def.NumInputs >= 2) {
+        if (Def->Opcode == NdOp::COPY && Def->NumInputs >= 1 &&
+            (Def->Inputs[0].isReg() || Def->Inputs[0].isTemp())) {
+          Next = Def->Inputs[0];
+        } else if (Def->Opcode == NdOp::INT_ZEXT && Def->NumInputs >= 1 &&
+                   Def->Inputs[0].Size == Img.getPointerSize() &&
+                   Def->Output.Size > Def->Inputs[0].Size &&
+                   (Def->Inputs[0].isReg() || Def->Inputs[0].isTemp())) {
+          Next = Def->Inputs[0];
+        } else if (Def->Opcode == NdOp::INT_ADD && Def->NumInputs >= 2) {
           const bool LeftScalar =
-              Def.Inputs[0].isConst() &&
-              Def.Inputs[0].Provenance == ConstantAddressProvenance::Scalar;
+              Def->Inputs[0].isConst() &&
+              Def->Inputs[0].Provenance == ConstantAddressProvenance::Scalar;
           const bool RightScalar =
-              Def.Inputs[1].isConst() &&
-              Def.Inputs[1].Provenance == ConstantAddressProvenance::Scalar;
+              Def->Inputs[1].isConst() &&
+              Def->Inputs[1].Provenance == ConstantAddressProvenance::Scalar;
           if (LeftScalar == RightScalar)
             return false;
-          Next = Def.Inputs[LeftScalar ? 1 : 0];
+          Next = Def->Inputs[LeftScalar ? 1 : 0];
           if (!Next.isReg() && !Next.isTemp())
             return false;
-        } else if (Def.Opcode == NdOp::INT_SUB && Def.NumInputs >= 2 &&
-                   Def.Inputs[1].isConst() &&
-                   Def.Inputs[1].Provenance ==
+        } else if (Def->Opcode == NdOp::INT_SUB && Def->NumInputs >= 2 &&
+                   Def->Inputs[1].isConst() &&
+                   Def->Inputs[1].Provenance ==
                        ConstantAddressProvenance::Scalar &&
-                   (Def.Inputs[0].isReg() || Def.Inputs[0].isTemp())) {
-          Next = Def.Inputs[0];
+                   (Def->Inputs[0].isReg() || Def->Inputs[0].isTemp())) {
+          Next = Def->Inputs[0];
         } else {
           return false;
         }
         Value = Next;
-        FromIdx = DefIdx - 1;
+        BeforeAddr = Def->Addr;
+        BeforeSeq = Def->Seq;
       }
       return false;
     };

@@ -416,6 +416,12 @@ private:
     /// the proof can require distinct present branches rather than merely two
     /// value occurrences from one branch.
     std::vector<va_t> BranchAddrs;
+    /// Direct instruction-local consumer groups require two distinct branches
+    /// before they may seed an absolute-table fixed point.  A separately
+    /// authenticated load/spill relay into one shared indirect branch may use
+    /// one present branch because its target and address roles have already
+    /// been proved across every feasible path.
+    size_t MinimumPresentBranches = 2;
   };
 
   /// Exact proof that a bit-setting operation constrains the dynamic input of

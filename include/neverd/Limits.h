@@ -51,9 +51,11 @@ constexpr uint32_t kMaxJumpTableEvidenceWork = 4096;
 
 /// Local symbolization allowance for an exact finite-coordinate query.  Such
 /// a query may symbolize the expanded candidate graph before enumerating at
-/// most 64 coordinates.  Every visit also debits the candidate-wide aggregate
-/// account, so this allowance cannot multiply whole-CFG work across queries.
-constexpr uint32_t kMaxJumpTableFiniteSetSymbolEvidenceWork = 32768;
+/// most 64 coordinates.  The largest supported 64-way expanded selector uses
+/// about 68 Ki work; retain the next power of two.  Every visit also debits the
+/// candidate-wide aggregate account, so this allowance cannot multiply
+/// whole-CFG work across queries.
+constexpr uint32_t kMaxJumpTableFiniteSetSymbolEvidenceWork = 131072;
 
 /// Per-core proposal allowance inside one mask-domain fixed point.  Retained
 /// LowIR, coordinates and proposal batches also debit the aggregate account
@@ -66,6 +68,13 @@ constexpr uint32_t kMaxJumpTableMaskCoreEvidenceWork = 262144;
 /// keeps legacy non-fixed-point callers bounded as well.
 constexpr uint32_t kMaxJumpTableValueMatchEvidenceWork = 65536;
 
+/// Mask-domain proof batches run on the expanded candidate graph and can
+/// compare several selector occurrences in one transaction.  The largest
+/// supported 128-way expanded fixed-point replay uses about 291 Ki work in one
+/// batch; retain the next power of two.  Every unit continues to debit the
+/// same candidate-wide aggregate account.
+constexpr uint32_t kMaxJumpTableMaskMatchEvidenceWork = 524288;
+
 /// Target- and address-role certificates batch every feasible transform and
 /// reaching-value alternative in one immutable candidate graph.  Exact
 /// accounting for the largest supported O0 large-switch role consumes about
@@ -76,10 +85,11 @@ constexpr uint32_t kMaxJumpTableRoleMatchEvidenceWork = 524288;
 /// Whole-object consumer audits can compare every byte occurrence in a
 /// physical pointer object against every candidate consumer.  Exact graph,
 /// memo, string and container-lifetime accounting makes the largest supported
-/// x64/AArch64 eight-entry initializer audit consume about 154 Ki work, so
-/// retain the next power of two locally.  The work still debits the same
+/// x64/AArch64 initializer audit consume about 154 Ki work, while the largest
+/// supported O0 12-way expanded object-escape audit consumes about 539 Ki.
+/// Retain the next power of two locally.  The work still debits the same
 /// candidate-wide aggregate account.
-constexpr uint32_t kMaxJumpTableConsumerAuditMatchEvidenceWork = 262144;
+constexpr uint32_t kMaxJumpTableConsumerAuditMatchEvidenceWork = 1048576;
 
 /// Aggregate allowance for completing one function's exact i386 GOT-base
 /// models.  Completion performs the same whole-graph value matching as a

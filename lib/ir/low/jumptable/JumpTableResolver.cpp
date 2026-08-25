@@ -1820,6 +1820,53 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     return {};
   if (!EnsureTargetRoleProofCurrent())
     return {};
+  // Clang -O0 commonly decouples one absolute table LOAD from a shared
+  // indirect branch by spilling the loaded target to a frame slot.  The
+  // instruction-local group detector deliberately requires two distinct
+  // branches, so it cannot seed this single shared-dispatch shape.  Once both
+  // role proofs above have completed, and the whole physical object is an
+  // exact set of local basic-block targets, retain the already authenticated
+  // index occurrence as a one-branch relay group.  This is not available to a
+  // direct callback load (whose target LOAD is the branch instruction) or to a
+  // foreign/self-entry table.
+  const bool DecoupledAbsoluteRelay =
+      ExactConsumerGroup.IndexOccurrences.empty() && Info.RelocAbsolute &&
+      !Info.IsRelative && !Info.TargetLoads.empty() &&
+      std::all_of(Info.TargetLoads.begin(), Info.TargetLoads.end(),
+                  [&](const JumpTableValueOccurrence &Load) {
+                    return Load.Addr != InvalidVA && Load.Addr != Rec.Addr;
+                  });
+  bool WholePhysicalRelayTargetsAreLocal = false;
+  if (DecoupledAbsoluteRelay &&
+      Info.PhysicalCapacity >= limits::kMinJumpTableEntries) {
+    const uint32_t SavedMaxEntries = Info.MaxEntries;
+    Info.MaxEntries = Info.PhysicalCapacity;
+    WholePhysicalRelayTargetsAreLocal =
+        HasValidatedLocalPhysicalTargetOwnership(
+            Info, /*RequireWholePhysicalLocalSet=*/true);
+    Info.MaxEntries = SavedMaxEntries;
+  }
+  if (WholePhysicalRelayTargetsAreLocal) {
+    const size_t OccurrenceCount = Info.IndexValueAlternatives.empty()
+                                       ? size_t{1}
+                                       : Info.IndexValueAlternatives.size();
+    const bool HasFallbackOccurrence =
+        Info.IndexValueAtUse.Size != 0 && Info.IndexUseAddr != InvalidVA &&
+        Info.IndexUseSeq >= 0 && !Info.IndexValueDefinedAtUse;
+    if ((Info.IndexValueAlternatives.empty() && !HasFallbackOccurrence) ||
+        !consumeCandidateProducts({{OccurrenceCount, 7}, {1, 4}}))
+      return {};
+    ExactConsumerGroup.IndexOccurrences.reserve(OccurrenceCount);
+    ExactConsumerGroup.BranchAddrs.reserve(OccurrenceCount);
+    if (Info.IndexValueAlternatives.empty())
+      ExactConsumerGroup.IndexOccurrences.push_back(
+          {Info.IndexValueAtUse, Info.IndexUseAddr, Info.IndexUseSeq,
+           Info.IndexValueDefinedAtUse});
+    else
+      ExactConsumerGroup.IndexOccurrences = Info.IndexValueAlternatives;
+    ExactConsumerGroup.BranchAddrs.assign(OccurrenceCount, Rec.Addr);
+    ExactConsumerGroup.MinimumPresentBranches = 1;
+  }
   Info.MutatedUnsafe |= ModuleMutationUnsafe;
 
   // A runtime-selected dispatch over two non-adjacent code-pointer tables

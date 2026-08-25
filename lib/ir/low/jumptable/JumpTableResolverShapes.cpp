@@ -1299,6 +1299,7 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
   if (ExactConsumerGroup) {
     ExactConsumerGroup->IndexOccurrences.clear();
     ExactConsumerGroup->BranchAddrs.clear();
+    ExactConsumerGroup->MinimumPresentBranches = 2;
   }
   bool BudgetExhausted = false;
   auto orderedLookupWork = [](size_t Count) {

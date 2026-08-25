@@ -905,16 +905,15 @@ uint32_t CFGBuilder::inferBoundsFromMask(
                   }))
     return 0;
 
-  auto matchForTargets = [&](const std::vector<JumpTableValueQuery> &Queries,
-                             const std::vector<va_t> *Targets,
-                             size_t *SharedBudget,
-                             bool *AnalysisComplete = nullptr,
-                             std::vector<bool> *QueryAnalysisComplete =
-                                 nullptr) {
-    return tableValuesMatchAtUses(Queries, AnalysisComplete,
-                                  QueryAnalysisComplete, Rec.Addr, Targets,
-                                  SharedBudget);
-  };
+  auto matchForTargets =
+      [&](const std::vector<JumpTableValueQuery> &Queries,
+          const std::vector<va_t> *Targets, size_t *SharedBudget,
+          bool *AnalysisComplete = nullptr,
+          std::vector<bool> *QueryAnalysisComplete = nullptr) {
+        return tableValuesMatchAtUses(
+            Queries, AnalysisComplete, QueryAnalysisComplete, Rec.Addr, Targets,
+            SharedBudget, limits::kMaxJumpTableMaskMatchEvidenceWork);
+      };
   auto matchAtUses = [&](const std::vector<JumpTableValueQuery> &Queries,
                          bool *AnalysisComplete = nullptr,
                          std::vector<bool> *QueryAnalysisComplete = nullptr) {
@@ -935,7 +934,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
   bool FixedPointGateIncomplete = false;
   if (AllowFixedPointBootstrap && !CandidateTargetsOverride &&
       !ReachableInstructions && CurrentImg && Info.PhysicalCapacity >= 2 &&
-      Info.PhysicalCapacity <= 64 && [&] {
+      Info.PhysicalCapacity <= limits::kMaxJumpTableEntries && [&] {
         const uint64_t PhysicalStride =
             Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize;
         std::optional<uint64_t> AddressScale;
@@ -1182,6 +1181,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
                                           : PersistentCFGRoots;
         std::set<uint32_t> Authorized;
         std::set<va_t> ExactFiniteGroupBranches;
+        bool ExactFiniteSeedIncomplete = false;
         const bool HasExactGroupInventory =
             ExactConsumerGroup &&
             ExactConsumerGroup->IndexOccurrences.size() ==
@@ -1189,6 +1189,16 @@ uint32_t CFGBuilder::inferBoundsFromMask(
             !ExactConsumerGroup->IndexOccurrences.empty();
         if (ExactConsumerGroup && ExactConsumerGroup->IndexOccurrences.size() !=
                                       ExactConsumerGroup->BranchAddrs.size()) {
+          if (IncompleteIndexDomain)
+            *IncompleteIndexDomain = true;
+          return 0;
+        }
+        // A complete consumer inventory can legitimately contain fewer
+        // distinct branches than the exact-group authority threshold.  Such a
+        // group is simply ineligible for the exact seed below; it must not
+        // poison the ordinary literal/mask fixed point as incomplete evidence.
+        if (HasExactGroupInventory &&
+            ExactConsumerGroup->MinimumPresentBranches == 0) {
           if (IncompleteIndexDomain)
             *IncompleteIndexDomain = true;
           return 0;
@@ -1207,8 +1217,10 @@ uint32_t CFGBuilder::inferBoundsFromMask(
                 const std::vector<JumpTableValueOccurrence> &Occurrences,
                 const std::vector<va_t> *OccurrenceBranches,
                 const std::set<va_t> *SharedTargetBranches,
-                size_t MinimumPresentBranches)
+                size_t MinimumPresentBranches, bool *AnalysisIncomplete)
             -> std::optional<std::vector<uint32_t>> {
+          if (AnalysisIncomplete)
+            *AnalysisIncomplete = false;
           if (CandidateCapacity > 64)
             return std::vector<uint32_t>{};
           if (OccurrenceBranches &&
@@ -1279,8 +1291,8 @@ uint32_t CFGBuilder::inferBoundsFromMask(
             // explicitly marked incomplete means solver/depth/local evidence
             // ran out and must remain fail-closed for both the initial seed and
             // every required replay.
-            if (IncompleteIndexDomain)
-              *IncompleteIndexDomain = true;
+            if (AnalysisIncomplete)
+              *AnalysisIncomplete = true;
             return std::nullopt;
           }
           if (!consumeBudgetProducts(
@@ -1396,9 +1408,16 @@ uint32_t CFGBuilder::inferBoundsFromMask(
                 const std::set<va_t> *SharedTargetBranches,
                 size_t MinimumPresentBranches) {
               const std::optional<std::vector<uint32_t>> ExactCoordinates =
-                  exactFiniteCoordinatesForTargets(
-                      &NoTargets, Occurrences, OccurrenceBranches,
-                      SharedTargetBranches, MinimumPresentBranches);
+                  [&] {
+                    bool AnalysisIncomplete = false;
+                    std::optional<std::vector<uint32_t>> Coordinates =
+                        exactFiniteCoordinatesForTargets(
+                            &NoTargets, Occurrences, OccurrenceBranches,
+                            SharedTargetBranches, MinimumPresentBranches,
+                            &AnalysisIncomplete);
+                    ExactFiniteSeedIncomplete |= AnalysisIncomplete;
+                    return Coordinates;
+                  }();
               if (!ExactCoordinates || ExactCoordinates->empty())
                 return true;
               if (!consumeBudgetProducts(
@@ -1417,11 +1436,12 @@ uint32_t CFGBuilder::inferBoundsFromMask(
             };
         if (Authorized.size() < limits::kMinJumpTableEntries &&
             Info.RelocAbsolute && HasExactGroupInventory &&
-            ExactFiniteGroupBranches.size() >= 2 &&
+            ExactFiniteGroupBranches.size() >=
+                ExactConsumerGroup->MinimumPresentBranches &&
             !seedExactFiniteDomain(ExactConsumerGroup->IndexOccurrences,
                                    &ExactConsumerGroup->BranchAddrs,
                                    &ExactFiniteGroupBranches,
-                                   /*MinimumPresentBranches=*/2))
+                                   ExactConsumerGroup->MinimumPresentBranches))
           return 0;
         if (Authorized.size() < limits::kMinJumpTableEntries &&
             !ExactFiniteReplayOccurrences && Info.IsRelative &&
@@ -1462,12 +1482,20 @@ uint32_t CFGBuilder::inferBoundsFromMask(
           }
           if (!consumeBudget(*EvidenceBudget, EntryCoordinates.size()))
             return 0;
-          if (EntryBound != 0 && !EntryIncomplete &&
+          const bool CompleteEntryDomain =
+              EntryBound != 0 && !EntryIncomplete &&
               !EntryCoordinates.empty() &&
               std::all_of(EntryCoordinates.begin(), EntryCoordinates.end(),
                           [&](uint32_t Coordinate) {
                             return Coordinate < CandidateCapacity;
-                          })) {
+                          });
+          // A completed translated/intersection proof over a non-prefix
+          // coordinate set is independent of the raw dense finite-set
+          // bootstrap and may supersede an incomplete auxiliary query.  A
+          // prefix-shaped mask remains part of that bootstrap contract: local
+          // finite-set exhaustion must still preserve the branch fail-closed.
+          if (CompleteEntryDomain &&
+              (!ExactFiniteSeedIncomplete || EntryNonContiguous)) {
             // Empty-edge reachability proves an independent seed, not closure:
             // an admitted case can flow back to this dispatch after widening
             // the selector.  Replay the complete entry domain in the same
@@ -1490,6 +1518,16 @@ uint32_t CFGBuilder::inferBoundsFromMask(
               *KnownOneWitnesses = std::move(EntryKnownOneWitnesses);
           }
         }
+        // Exact-finite symbolization is an auxiliary bootstrap.  An incomplete
+        // attempt remains fail-closed only when neither a literal seed nor the
+        // complete empty-edge mask proof supplied independent authority.  Once
+        // either ordinary seed exists, its candidate-local replay is the sole
+        // domain proof and the unused auxiliary attempt cannot poison it.
+        if (Authorized.empty() && ExactFiniteSeedIncomplete) {
+          if (IncompleteIndexDomain)
+            *IncompleteIndexDomain = true;
+          return 0;
+        }
         if (!Authorized.empty()) {
           for (uint32_t Iteration = 0; Iteration <= CandidateCapacity;
                ++Iteration) {
@@ -1500,14 +1538,19 @@ uint32_t CFGBuilder::inferBoundsFromMask(
             const std::vector<va_t> &AuthorizedTargets = *AuthorizedTargetsOr;
 
             if (ExactFiniteReplayOccurrences) {
+              bool ExactReplayIncomplete = false;
               const std::optional<std::vector<uint32_t>> ExactCoordinates =
                   exactFiniteCoordinatesForTargets(
                       &AuthorizedTargets, *ExactFiniteReplayOccurrences,
                       ExactFiniteReplayOccurrenceBranches,
                       ExactFiniteReplaySharedTargetBranches,
-                      ExactFiniteReplayMinimumPresentBranches);
-              if (!ExactCoordinates || ExactCoordinates->empty())
+                      ExactFiniteReplayMinimumPresentBranches,
+                      &ExactReplayIncomplete);
+              if (!ExactCoordinates || ExactCoordinates->empty()) {
+                if (ExactReplayIncomplete && IncompleteIndexDomain)
+                  *IncompleteIndexDomain = true;
                 return 0;
+              }
               if (!consumeBudgetProducts(
                       {{Authorized.size(), 5},
                        {ExactCoordinates->size(),
@@ -4049,7 +4092,7 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
             // coordinates for graph exploration, but it does not publish the
             // table: every case is decoded and the full selector/producer proof
             // is replayed below before closure.
-            if (Authorized.empty() && AllowLiteralSeedBootstrap) {
+            if (Authorized.empty()) {
               if (!consumeFixedPointProducts({{SeedOccurrences.size(), 5}}))
                 return false;
               std::vector<JumpTableValueQuery> BoundQueries;
