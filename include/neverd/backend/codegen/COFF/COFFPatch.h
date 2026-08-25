@@ -22,6 +22,8 @@
 
 namespace neverd {
 
+struct COFFExceptionPatchPlan;
+
 struct COFFPatchOptions : PatchOptionsBase {
   uint32_t SectionCharacteristics = llvm::COFF::IMAGE_SCN_CNT_CODE |
                                     llvm::COFF::IMAGE_SCN_MEM_EXECUTE |
@@ -41,6 +43,15 @@ public:
   uint64_t appendExecSegment(std::vector<uint8_t> &Binary,
                              llvm::ArrayRef<uint8_t> Code,
                              llvm::StringRef SegName, Arch TargetArch) override;
+
+protected:
+  /// Replace a lifted source-frame cookie call with the compiler-owned check
+  /// required by the validated native FH4+GS rewrite contract.  Source
+  /// preparation must already have externalized the preserved runtime helper.
+  static bool normalizeCompilerOwnedGSSecurityCheck(
+      llvm::Module &Module, Arch TargetArch,
+      const COFFExceptionPatchPlan &ExceptionPlan,
+      const SourceFunctionPreparation &SourcePreparation, std::string &Detail);
 
 private:
   struct PatchLayout : PatchLayoutBase {

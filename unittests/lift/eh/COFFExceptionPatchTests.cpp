@@ -10,6 +10,7 @@
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/codegen/COFF/COFFExceptionPatch.h"
+#include "neverd/backend/codegen/COFF/COFFPatch.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/backend/llvm/WindowsEHMetadataEncoder.h"
@@ -134,6 +135,28 @@ public:
     return prepareSourceFunctionsForPatch(Module, Image, Preparation, Detail);
   }
 };
+
+class COFFPatcherProbe : public COFFPatcher {
+public:
+  static bool normalizeCompilerOwnedGS(
+      llvm::Module &Module, const COFFExceptionPatchPlan &ExceptionPlan,
+      const SourceFunctionPreparation &SourcePreparation, std::string &Detail) {
+    return normalizeCompilerOwnedGSSecurityCheck(
+        Module, Arch::X64, ExceptionPlan, SourcePreparation, Detail);
+  }
+};
+
+llvm::Function *makeCompilerOwnedGSFunction(llvm::Module &Module,
+                                            llvm::StringRef Name,
+                                            va_t OriginalVA) {
+  llvm::Function *Function = defineVoidFunction(Module, Name);
+  rewrite_source::setOriginalVA(*Function, OriginalVA);
+  Function->addFnAttr(llvm::mc_rewrite::RewriteWinCxxFH4Attribute);
+  Function->addFnAttr(llvm::mc_rewrite::RewriteWinGSHandlerAttribute,
+                      llvm::mc_rewrite::RewriteWinGSHandlerCxxFH4);
+  Function->addFnAttr(llvm::Attribute::StackProtectReq);
+  return Function;
+}
 
 CompletePatchInput makeCompletePatchInput(llvm::LLVMContext &Context) {
   MedFunc Func;
@@ -1556,6 +1579,81 @@ TEST(COFFExceptionPatch,
       RetainedTable->getOperand(0)->getOperand(0).get());
   ASSERT_NE(FunctionValue, nullptr);
   EXPECT_EQ(FunctionValue->getValue(), Replaceable);
+}
+
+TEST(COFFExceptionPatch, NormalizesLiftedSecurityCheckForCompilerOwnedGSFrame) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("coff-gs-runtime-normalization", Context);
+  constexpr va_t FunctionVA = 0x140001000;
+  constexpr va_t SecurityCheckVA = 0x140001100;
+  llvm::Function *GSFunction =
+      makeCompilerOwnedGSFunction(Module, "compiler_owned_gs", FunctionVA);
+
+  auto *WrongType =
+      llvm::FunctionType::get(llvm::Type::getInt64Ty(Context), false);
+  llvm::Function *WrongCheck =
+      llvm::Function::Create(WrongType, llvm::GlobalValue::ExternalLinkage,
+                             "__security_check_cookie", Module);
+  rewrite_source::setOriginalVA(*WrongCheck, SecurityCheckVA);
+  llvm::IRBuilder<> Builder(GSFunction->getEntryBlock().getTerminator());
+  Builder.CreateCall(WrongCheck);
+
+  COFFExceptionPatchPlan Plan;
+  Plan.LanguageExceptionFunctionEntries.push_back(FunctionVA);
+  SourceFunctionPreparation Preparation;
+  Preparation.PreservedOriginalVAs.emplace("__security_check_cookie",
+                                           SecurityCheckVA);
+  std::string Detail;
+  ASSERT_TRUE(COFFPatcherProbe::normalizeCompilerOwnedGS(Module, Plan,
+                                                         Preparation, Detail))
+      << Detail;
+
+  llvm::Function *Normalized = Module.getFunction("__security_check_cookie");
+  ASSERT_NE(Normalized, nullptr);
+  EXPECT_TRUE(Normalized->isDeclaration());
+  EXPECT_TRUE(Normalized->getReturnType()->isVoidTy());
+  ASSERT_EQ(Normalized->arg_size(), 1u);
+  EXPECT_TRUE(Normalized->getFunctionType()->getParamType(0)->isPointerTy());
+  EXPECT_EQ(Normalized->getCallingConv(), llvm::CallingConv::X86_FastCall);
+  EXPECT_TRUE(Normalized->hasParamAttribute(0, llvm::Attribute::InReg));
+  EXPECT_TRUE(Normalized->isDSOLocal());
+  for (const llvm::Instruction &Instruction : GSFunction->getEntryBlock())
+    EXPECT_FALSE(llvm::isa<llvm::CallBase>(Instruction));
+}
+
+TEST(COFFExceptionPatch,
+     RejectsIncompatibleSecurityCheckUsedOutsideCompilerOwnedGSFrame) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("coff-gs-runtime-non-gs-use", Context);
+  constexpr va_t FunctionVA = 0x140001000;
+  constexpr va_t SecurityCheckVA = 0x140001100;
+  llvm::Function *GSFunction =
+      makeCompilerOwnedGSFunction(Module, "compiler_owned_gs", FunctionVA);
+  llvm::Function *Ordinary = defineVoidFunction(Module, "ordinary");
+
+  auto *WrongType =
+      llvm::FunctionType::get(llvm::Type::getInt64Ty(Context), false);
+  llvm::Function *WrongCheck =
+      llvm::Function::Create(WrongType, llvm::GlobalValue::ExternalLinkage,
+                             "__security_check_cookie", Module);
+  rewrite_source::setOriginalVA(*WrongCheck, SecurityCheckVA);
+  llvm::IRBuilder<>(GSFunction->getEntryBlock().getTerminator())
+      .CreateCall(WrongCheck);
+  llvm::IRBuilder<>(Ordinary->getEntryBlock().getTerminator())
+      .CreateCall(WrongCheck);
+
+  COFFExceptionPatchPlan Plan;
+  Plan.LanguageExceptionFunctionEntries.push_back(FunctionVA);
+  SourceFunctionPreparation Preparation;
+  Preparation.PreservedOriginalVAs.emplace("__security_check_cookie",
+                                           SecurityCheckVA);
+  std::string Detail;
+  EXPECT_FALSE(COFFPatcherProbe::normalizeCompilerOwnedGS(Module, Plan,
+                                                          Preparation, Detail));
+  EXPECT_NE(Detail.find("non-GS use"), std::string::npos) << Detail;
+  EXPECT_EQ(Module.getFunction("__security_check_cookie"), WrongCheck);
+  EXPECT_EQ(WrongCheck->getReturnType(), llvm::Type::getInt64Ty(Context));
+  EXPECT_EQ(WrongCheck->getNumUses(), 2u);
 }
 
 TEST(COFFExceptionPatch,

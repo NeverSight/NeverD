@@ -14,12 +14,19 @@
 #include "neverd/backend/codegen/COFF/COFFPatch.h"
 
 #include "neverd/ArchSupport.h"
-#include "neverd/object/PELayout.h"
+#include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/codegen/BinaryUtils.h"
 #include "neverd/backend/codegen/COFF/COFFExceptionPatch.h"
 #include "neverd/backend/codegen/COFF/COFFReloc.h"
+#include "neverd/object/PELayout.h"
 
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Module.h"
 #include "llvm/Object/COFF.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/WithColor.h"
@@ -27,11 +34,151 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cstring>
 
 #define DEBUG_TYPE "neverd-coff-patch"
 
 namespace neverd {
+
+namespace {
+
+constexpr llvm::StringLiteral
+    SecurityCheckCookieName("__security_check_cookie");
+
+bool hasCompilerOwnedGSContract(const llvm::Function &Function) {
+  const llvm::Attribute GSWriter =
+      Function.getFnAttribute(llvm::mc_rewrite::RewriteWinGSHandlerAttribute);
+  return Function.hasFnAttribute(llvm::mc_rewrite::RewriteWinCxxFH4Attribute) &&
+         GSWriter.isStringAttribute() &&
+         GSWriter.getValueAsString() ==
+             llvm::mc_rewrite::RewriteWinGSHandlerCxxFH4 &&
+         Function.hasFnAttribute(llvm::Attribute::StackProtectReq);
+}
+
+bool hasExactSecurityCheckCookieABI(const llvm::Function &Function) {
+  const llvm::FunctionType *Type = Function.getFunctionType();
+  return Function.isDeclaration() && Function.hasExternalLinkage() &&
+         Type->getReturnType()->isVoidTy() && !Type->isVarArg() &&
+         Type->getNumParams() == 1 && Type->getParamType(0)->isPointerTy() &&
+         Function.getCallingConv() == llvm::CallingConv::X86_FastCall &&
+         Function.hasParamAttribute(0, llvm::Attribute::InReg);
+}
+
+llvm::Function *createSecurityCheckCookieDeclaration(llvm::Module &Module) {
+  llvm::LLVMContext &Context = Module.getContext();
+  auto *Type = llvm::FunctionType::get(llvm::Type::getVoidTy(Context),
+                                       llvm::PointerType::getUnqual(Context),
+                                       /*isVarArg=*/false);
+  llvm::Function *Function =
+      llvm::Function::Create(Type, llvm::GlobalValue::ExternalLinkage,
+                             SecurityCheckCookieName, Module);
+  Function->setCallingConv(llvm::CallingConv::X86_FastCall);
+  Function->addParamAttr(0, llvm::Attribute::InReg);
+  Function->setDSOLocal(true);
+  return Function;
+}
+
+} // namespace
+
+bool COFFPatcher::normalizeCompilerOwnedGSSecurityCheck(
+    llvm::Module &Module, Arch TargetArch,
+    const COFFExceptionPatchPlan &ExceptionPlan,
+    const SourceFunctionPreparation &SourcePreparation, std::string &Detail) {
+  Detail.clear();
+
+  llvm::SmallPtrSet<const llvm::Function *, 4> GSFunctions;
+  for (llvm::Function &Function : Module) {
+    if (Function.isDeclaration() ||
+        !Function.hasFnAttribute(
+            llvm::mc_rewrite::RewriteWinGSHandlerAttribute))
+      continue;
+    if (TargetArch != Arch::X64 || !hasCompilerOwnedGSContract(Function)) {
+      Detail = "a compiler-owned GS function has an invalid target contract";
+      return false;
+    }
+    auto OriginalVA = rewrite_source::getOriginalVA(Function);
+    if (!OriginalVA) {
+      Detail = llvm::toString(OriginalVA.takeError());
+      return false;
+    }
+    if (!*OriginalVA ||
+        !llvm::is_contained(ExceptionPlan.LanguageExceptionFunctionEntries,
+                            **OriginalVA)) {
+      Detail = "a compiler-owned GS function is outside the validated "
+               "exception plan";
+      return false;
+    }
+    GSFunctions.insert(&Function);
+  }
+  if (GSFunctions.empty())
+    return true;
+
+  llvm::GlobalValue *NamedSecurityCheck =
+      Module.getNamedValue(SecurityCheckCookieName);
+  llvm::Function *SecurityCheck =
+      llvm::dyn_cast_or_null<llvm::Function>(NamedSecurityCheck);
+  if (NamedSecurityCheck && !SecurityCheck) {
+    Detail = "the security-cookie runtime name has a non-function owner";
+    return false;
+  }
+  if (!SecurityCheck) {
+    createSecurityCheckCookieDeclaration(Module);
+    return true;
+  }
+  if (!SecurityCheck->isDeclaration()) {
+    Detail = "the preserved security-cookie runtime still has a body";
+    return false;
+  }
+
+  auto OriginalVA = rewrite_source::getOriginalVA(*SecurityCheck);
+  if (!OriginalVA) {
+    Detail = llvm::toString(OriginalVA.takeError());
+    return false;
+  }
+  if (*OriginalVA) {
+    const auto Preserved = SourcePreparation.PreservedOriginalVAs.find(
+        SecurityCheckCookieName.str());
+    if (Preserved == SourcePreparation.PreservedOriginalVAs.end() ||
+        Preserved->second != **OriginalVA) {
+      Detail = "the lifted security-cookie runtime was not preserved";
+      return false;
+    }
+  }
+
+  llvm::SmallVector<llvm::CallInst *, 4> SourceFrameChecks;
+  bool HasOtherUse = SecurityCheck->isUsedByMetadata();
+  for (llvm::User *User : SecurityCheck->users()) {
+    auto *Call = llvm::dyn_cast<llvm::CallInst>(User);
+    if (!Call || Call->getCalledFunction() != SecurityCheck ||
+        !GSFunctions.contains(Call->getFunction()) || !Call->use_empty()) {
+      HasOtherUse = true;
+      continue;
+    }
+    SourceFrameChecks.push_back(Call);
+  }
+
+  const bool ExactABI = hasExactSecurityCheckCookieABI(*SecurityCheck);
+  if (HasOtherUse && !ExactABI) {
+    Detail = "an incompatible security-cookie declaration has a non-GS use";
+    return false;
+  }
+
+  // The lifted call checks the source machine frame.  The final-image backend
+  // owns a different frame and StackProtectReq emits its fresh cookie check;
+  // retaining the old call would both duplicate the check and preserve the
+  // lifter's guessed runtime ABI.
+  for (llvm::CallInst *Call : SourceFrameChecks)
+    Call->eraseFromParent();
+
+  if (ExactABI)
+    return true;
+  assert(SecurityCheck->use_empty() &&
+         "all incompatible security-cookie uses were prevalidated");
+  SecurityCheck->eraseFromParent();
+  createSecurityCheckCookieDeclaration(Module);
+  return true;
+}
 
 bool COFFPatcher::parseLayout(const std::vector<uint8_t> &Data,
                               PatchLayout &Layout) {
@@ -255,6 +402,14 @@ PatchResult COFFPatcher::patch(const std::filesystem::path &InputPath,
         if (!EHPlanOrErr) {
           llvm::WithColor::error()
               << llvm::toString(EHPlanOrErr.takeError()) << "\n";
+          return false;
+        }
+        if (!normalizeCompilerOwnedGSSecurityCheck(
+                *CompileMod, TargetArch, *EHPlanOrErr, SourcePreparation,
+                SourceDetail)) {
+          llvm::WithColor::error()
+              << "coff_patch: GS runtime preparation failed: " << SourceDetail
+              << "\n";
           return false;
         }
 
