@@ -374,6 +374,31 @@ void LowToMedConverter::fixupSubRegisters(MedFunc &Func) {
       }
     }
 
+    // A wide write only needs a projected narrow value when that value can
+    // flow across at least one real CFG edge to an upward narrow read.  A
+    // function-wide read inventory alone is too broad: an exit block may
+    // write X0 after an earlier loop read W0, and projecting W0 at the exit
+    // would turn a signed 64-bit return into a zero-extended 32-bit return.
+    std::map<int, const MedBlock *> BlockById;
+    for (const auto &B : Func.Blocks)
+      BlockById.emplace(B.Id, &B);
+    std::map<RegKey, std::set<int>> BlocksReachingUpwardRead;
+    for (const auto &[Key, ReadBlocks] : UpwardReadBlocks) {
+      auto &Reachable = BlocksReachingUpwardRead[Key];
+      Reachable = ReadBlocks;
+      std::vector<int> Worklist(ReadBlocks.begin(), ReadBlocks.end());
+      while (!Worklist.empty()) {
+        const int BlockId = Worklist.back();
+        Worklist.pop_back();
+        auto BlockIt = BlockById.find(BlockId);
+        if (BlockIt == BlockById.end())
+          continue;
+        for (int Pred : BlockIt->second->Preds)
+          if (Reachable.insert(Pred).second)
+            Worklist.push_back(Pred);
+      }
+    }
+
     for (auto &MB : Func.Blocks) {
       // Find the LAST write index for each (RegOff, Size) pair, excluding
       // SUBBYTES (a sub-register extract) and INT_ZEXT (an implicit
@@ -407,19 +432,10 @@ void LowToMedConverter::fixupSubRegisters(MedFunc &Func) {
       // narrow registers (rather than over `Size/2` of each wide write) lets
       // us cross more than one sub-register level (EAX→AL), and also still
       // covers the RAX→EAX case used by c_gcd (bug #157e / #154).
-      const bool HasSelfEdge =
-          std::find(MB.Succs.begin(), MB.Succs.end(), MB.Id) != MB.Succs.end();
-      for (const auto &[NKey, ReadBlocks] : UpwardReadBlocks) {
-        // A same-block live-in is not a cross-block use.  Materializing it
-        // after a later wide write would create a new architectural narrow
-        // write at function exit (AArch64 X0 return after an incoming W0
-        // parameter is the minimal example).  Keep the projection only when
-        // another block consumes the narrow value, or when this block feeds
-        // itself over a real loop back-edge.
+      for (const auto &[NKey, Reachable] : BlocksReachingUpwardRead) {
         const bool NeededAcrossEdge =
-            (HasSelfEdge && ReadBlocks.count(MB.Id) != 0) ||
-            std::any_of(ReadBlocks.begin(), ReadBlocks.end(),
-                        [&](int ReadBlock) { return ReadBlock != MB.Id; });
+            std::any_of(MB.Succs.begin(), MB.Succs.end(),
+                        [&](int Succ) { return Reachable.count(Succ) != 0; });
         if (!NeededAcrossEdge)
           continue;
         uint64_t NarOff = NKey.first;
