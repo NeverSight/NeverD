@@ -357,7 +357,8 @@ void LowToMedConverter::fixupSubRegisters(MedFunc &Func) {
   // is read in a DIFFERENT block. This targets the case where a loop body
   // mixes 64-bit and 32-bit operations on the same register (e.g. c_gcd).
   {
-    std::set<std::pair<uint64_t, uint16_t>> ReadInOtherBlock;
+    using RegKey = std::pair<uint64_t, uint16_t>;
+    std::map<RegKey, std::set<int>> UpwardReadBlocks;
     for (size_t BI = 0; BI < Func.Blocks.size(); ++BI) {
       auto &B = Func.Blocks[BI];
       std::set<int> LocalDefs;
@@ -366,7 +367,7 @@ void LowToMedConverter::fixupSubRegisters(MedFunc &Func) {
           auto &Inp = Op.Inputs[I2];
           if (Inp.Kind == MedVar::Reg && Inp.Size > 0 &&
               !LocalDefs.count(Inp.Id))
-            ReadInOtherBlock.insert({Inp.RegOff, Inp.Size});
+            UpwardReadBlocks[{Inp.RegOff, Inp.Size}].insert(B.Id);
         }
         if (Op.Output.Kind == MedVar::Reg && Op.Output.Size > 0)
           LocalDefs.insert(Op.Output.Id);
@@ -406,7 +407,21 @@ void LowToMedConverter::fixupSubRegisters(MedFunc &Func) {
       // narrow registers (rather than over `Size/2` of each wide write) lets
       // us cross more than one sub-register level (EAX→AL), and also still
       // covers the RAX→EAX case used by c_gcd (bug #157e / #154).
-      for (const auto &NKey : ReadInOtherBlock) {
+      const bool HasSelfEdge =
+          std::find(MB.Succs.begin(), MB.Succs.end(), MB.Id) != MB.Succs.end();
+      for (const auto &[NKey, ReadBlocks] : UpwardReadBlocks) {
+        // A same-block live-in is not a cross-block use.  Materializing it
+        // after a later wide write would create a new architectural narrow
+        // write at function exit (AArch64 X0 return after an incoming W0
+        // parameter is the minimal example).  Keep the projection only when
+        // another block consumes the narrow value, or when this block feeds
+        // itself over a real loop back-edge.
+        const bool NeededAcrossEdge =
+            (HasSelfEdge && ReadBlocks.count(MB.Id) != 0) ||
+            std::any_of(ReadBlocks.begin(), ReadBlocks.end(),
+                        [&](int ReadBlock) { return ReadBlock != MB.Id; });
+        if (!NeededAcrossEdge)
+          continue;
         uint64_t NarOff = NKey.first;
         uint16_t NarSz = NKey.second;
         auto NIt = RegVarMap.find(NKey);
