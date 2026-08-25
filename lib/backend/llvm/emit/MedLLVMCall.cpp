@@ -475,6 +475,14 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                 FT, llvm::GlobalValue::ExternalLinkage, CalleeName, Mod);
             Callee->setCallingConv(llvm::CallingConv::C);
           }
+        } else if (Arity && libc::isVaListConsumer(
+                               stripLeadingUnderscores(CalleeName))) {
+          std::vector<llvm::Type *> ParamTys(
+              static_cast<size_t>(Arity->IntArgs), PtrTy);
+          auto *FT = llvm::FunctionType::get(DefaultRetTy, ParamTys, false);
+          Callee = llvm::Function::Create(
+              FT, llvm::GlobalValue::ExternalLinkage, CalleeName, Mod);
+          Callee->setCallingConv(llvm::CallingConv::C);
         }
       }
 

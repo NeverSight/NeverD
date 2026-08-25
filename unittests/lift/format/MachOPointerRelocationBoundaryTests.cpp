@@ -214,6 +214,8 @@ public:
       Emitter.FrameDerivedCache[{1, 1}] = true;
       Emitter.FrameAddressCacheFor = Emitter.CurMedFunc;
       Emitter.FrameAddressCache[{2, 2}] = true;
+      Emitter.FrameReloadCacheFor = Emitter.CurMedFunc;
+      Emitter.FrameReloadCache[MedLLVMEmitter::FrameReloadCacheKey{}] = {};
 
       const auto Result = Emitter.classifyPhiIncomingEdge(Phi, PredId);
       ObservedProvisionalQuery =
@@ -242,7 +244,9 @@ public:
            Emitter.FrameDerivedCacheFor == nullptr &&
            Emitter.FrameDerivedCache.empty() &&
            Emitter.FrameAddressCacheFor == nullptr &&
-           Emitter.FrameAddressCache.empty();
+           Emitter.FrameAddressCache.empty() &&
+           Emitter.FrameReloadCacheFor == nullptr &&
+           Emitter.FrameReloadCache.empty();
   }
 
   static bool stableOffset(MedLLVMEmitter &Emitter, const MedVar &Value,

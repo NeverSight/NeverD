@@ -679,7 +679,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
   for (const auto &[BranchAddr, BranchRec] : Insns) {
     if (!consumeCandidateEvidence())
       return failIncomplete();
-    if (BranchAddr == Rec.Addr || !BranchRec.IsCond || !BranchRec.IsBranch)
+    if (!BranchRec.IsCond || !BranchRec.IsBranch)
       continue;
     if (!consumeCandidateEvidence())
       return failIncomplete();

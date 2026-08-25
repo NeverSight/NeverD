@@ -17,29 +17,188 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/object/SectionNames.h"
+#include "../../../safety/StackSlotFlow.h"
 
 #include "llvm/ADT/StringExtras.h"
 
 #include <algorithm>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
 #include <string>
 #include <tuple>
 #include <vector>
-
 namespace neverd {
+
+namespace {
+using EntrySpKey = std::tuple<uint8_t, int, int, uint64_t, uint16_t>;
+
+EntrySpKey entrySpKey(const MedVar &V) {
+  return {static_cast<uint8_t>(V.Kind), V.Id, V.SSAVer,
+          V.Kind == MedVar::Reg ? V.RegOff : 0, V.Size};
+}
+
+std::optional<int64_t> exactEntrySpDelta(const MedFunc &Func, Arch TheArch,
+                                           const MedVar &Root) {
+  const auto &TRI = getTargetRegInfo(TheArch);
+  std::map<EntrySpKey, const MedOp *> Definitions;
+  std::set<EntrySpKey> Ambiguous;
+  std::map<EntrySpKey, const PhiNode *> Phis;
+  std::set<EntrySpKey> AmbiguousPhis;
+  for (const auto &Block : Func.Blocks) {
+    for (const auto &Op : Block.Ops) {
+      if (Op.Output.Kind != MedVar::Reg && Op.Output.Kind != MedVar::Temp)
+        continue;
+      const auto Key = entrySpKey(Op.Output);
+      auto [It, Inserted] = Definitions.emplace(Key, &Op);
+      if (!Inserted && It->second != &Op)
+        Ambiguous.insert(Key);
+    }
+    for (const auto &Phi : Block.Phis) {
+      const auto Key = entrySpKey(Phi.Output);
+      auto [It, Inserted] = Phis.emplace(Key, &Phi);
+      if (!Inserted && It->second != &Phi)
+        AmbiguousPhis.insert(Key);
+    }
+  }
+
+  std::set<EntrySpKey> Active;
+  std::function<std::optional<int64_t>(const MedVar &)> Eval =
+      [&](const MedVar &V) -> std::optional<int64_t> {
+    if (V.isConst()) {
+      if (V.Provenance != ConstantAddressProvenance::Unknown &&
+          V.Provenance != ConstantAddressProvenance::Scalar)
+        return std::nullopt;
+      return static_cast<int64_t>(V.ConstVal);
+    }
+    if (V.Kind != MedVar::Reg && V.Kind != MedVar::Temp)
+      return std::nullopt;
+    if (V.Kind == MedVar::Reg && V.RegOff == TRI.StackPointer &&
+        V.SSAVer == 0)
+      return int64_t{0};
+
+    const auto Key = entrySpKey(V);
+    if (Ambiguous.count(Key) || AmbiguousPhis.count(Key) ||
+        !Active.insert(Key).second)
+      return std::nullopt;
+    auto It = Definitions.find(Key);
+    if (It == Definitions.end()) {
+      Active.erase(Key);
+      return std::nullopt;
+    }
+    const MedOp &Op = *It->second;
+    std::optional<int64_t> Result;
+    switch (Op.Opcode) {
+    case NdOp::COPY:
+    case NdOp::INT_ZEXT:
+    case NdOp::INT_SEXT:
+      if (Op.NumInputs >= 1)
+        Result = Eval(Op.Inputs[0]);
+      break;
+    case NdOp::SUBBYTES:
+      if (Op.NumInputs >= 2 && Op.Inputs[1].isConst() &&
+          Op.Inputs[1].ConstVal == 0)
+        Result = Eval(Op.Inputs[0]);
+      break;
+    case NdOp::INT_ADD:
+    case NdOp::INT_SUB:
+      if (Op.NumInputs >= 2) {
+        const MedVar &A = Op.Inputs[0];
+        const MedVar &B = Op.Inputs[1];
+        if (A.isConst() && !B.isConst()) {
+          auto Base = Eval(B);
+          if (Base)
+            Result = Op.Opcode == NdOp::INT_ADD
+                         ? std::optional<int64_t>(*Base +
+                                                    static_cast<int64_t>(A.ConstVal))
+                         : std::nullopt;
+        } else if (!A.isConst() && B.isConst()) {
+          auto Base = Eval(A);
+          if (Base)
+            Result = Op.Opcode == NdOp::INT_ADD
+                         ? std::optional<int64_t>(*Base +
+                                                    static_cast<int64_t>(B.ConstVal))
+                         : std::optional<int64_t>(*Base -
+                                                    static_cast<int64_t>(B.ConstVal));
+        }
+      }
+      break;
+    case NdOp::LOAD: {
+      const MedVar *Address = safety::detail::memoryAddress(Op);
+      if (!Address || Op.Output.Size == 0)
+        break;
+      auto TargetOffset = Eval(*Address);
+      if (!TargetOffset)
+        break;
+      const MedBlock *LoadBlock = nullptr;
+      int LoadIndex = -1;
+      for (const auto &Block : Func.Blocks)
+        for (size_t I = 0; I < Block.Ops.size(); ++I)
+          if (&Block.Ops[I] == &Op) {
+            LoadBlock = &Block;
+            LoadIndex = static_cast<int>(I);
+          }
+      if (!LoadBlock)
+        break;
+
+      auto FindOp = [&](const MedVar &Value) -> const MedOp * {
+        auto DefIt = Definitions.find(entrySpKey(Value));
+        return DefIt == Definitions.end() || Ambiguous.count(entrySpKey(Value))
+                   ? nullptr
+                   : DefIt->second;
+      };
+      auto FindPhi = [&](const MedVar &Value) -> const PhiNode * {
+        auto PhiIt = Phis.find(entrySpKey(Value));
+        return PhiIt == Phis.end() || AmbiguousPhis.count(entrySpKey(Value))
+                   ? nullptr
+                   : PhiIt->second;
+      };
+      auto Resolve = [&](const MedVar &Value) { return Eval(Value); };
+      auto MayBeFrame = [&](const MedVar &Value) {
+        return safety::detail::aliasesWholeFrame(
+            Value, TRI.StackPointer, TRI.FramePointer, FindOp, FindPhi);
+      };
+      auto AliasesWholeFrame = [&](const MedVar &Value) {
+        return !Resolve(Value) && MayBeFrame(Value);
+      };
+      auto Reaching = safety::detail::reachingStackValues(
+          Func, LoadBlock->Id, LoadIndex, *TargetOffset, Op.Output.Size,
+          Resolve, MayBeFrame, AliasesWholeFrame);
+      if (!Reaching.Complete || Reaching.Values.empty())
+        break;
+      for (const MedVar &Source : Reaching.Values) {
+        auto Value = Eval(Source);
+        if (!Value || (Result && *Result != *Value)) {
+          Result.reset();
+          break;
+        }
+        Result = Value;
+      }
+      break;
+    }
+    default:
+      break;
+    }
+    Active.erase(Key);
+    return Result;
+  };
+
+  return Eval(Root);
+}
+} // namespace
 
 void recoverCallAbi(MedFunc &Func, Arch TheArch,
                     const std::map<va_t, std::string> &FuncNames,
                     const BinaryImage *Img,
-                    const std::map<va_t, int> *CalleeRegArity,
-                    const std::map<va_t, int> *CalleeTotalArity,
+                    std::map<va_t, int> *CalleeRegArity,
+                    std::map<va_t, int> *CalleeTotalArity,
                     const std::map<va_t, int> *CalleeFPArity,
                     const std::map<va_t, bool> *CalleeReturnsVec,
                     const std::map<va_t, std::vector<uint64_t>> *CalleeFPRegs,
                     const std::map<va_t, bool> *CalleeHasSret,
-                    const std::map<va_t, bool> *CalleeIsVariadic) {
+                    std::map<va_t, bool> *CalleeIsVariadic,
+                    const std::map<va_t, bool> *CalleeConsumesVaList) {
   Func.CallInfos.clear();
   (void)CalleeReturnsVec; // FP-return routing is modeled earlier (LowToMed)
 
@@ -929,7 +1088,97 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
           }
         }
       }
-
+      // Walk transparent predecessor blocks until the last outgoing store. A
+      // synthetic PHI is inserted at each join so recovered values dominate
+      // the eventual call without treating unrelated stack writes as args.
+      if (!CI.IsIndirect && DarwinVarArgBase >= 0 &&
+          Blk.Preds.size() > 1 && TRI.PointerSize > 0) {
+        for (int Slot = 0; Slot < MaxArgs - DarwinVarArgBase; ++Slot) {
+          const int ArgIdx = DarwinVarArgBase + Slot;
+          if (ArgIdx < 0 || ArgIdx >= MaxArgs || FoundMask[ArgIdx])
+            continue;
+          const int64_t TargetOffset =
+              CallSpDelta + static_cast<int64_t>(Slot) * TRI.PointerSize;
+          std::function<std::optional<MedVar>(int, std::set<int> &)> Resolve =
+              [&](int BlockId, std::set<int> &Active) -> std::optional<MedVar> {
+            if (!Active.insert(BlockId).second)
+              return std::nullopt;
+            MedBlock *Block = nullptr;
+            for (auto &Candidate : Func.Blocks)
+              if (Candidate.Id == BlockId) {
+                Block = &Candidate;
+                break;
+              }
+            if (!Block) {
+              Active.erase(BlockId);
+              return std::nullopt;
+            }
+            const int Boundary = BlockId == Blk.Id
+                                  ? static_cast<int>(OI)
+                                  : static_cast<int>(Block->Ops.size());
+            for (int J = Boundary - 1; J >= 0; --J) {
+              const MedOp &Candidate = Block->Ops[J];
+              if (Candidate.Opcode == NdOp::CALL ||
+                  Candidate.Opcode == NdOp::INDIR_CALL ||
+                  Candidate.Opcode == NdOp::INTRINSIC) {
+                Active.erase(BlockId);
+                return std::nullopt;
+              }
+              if (Candidate.Opcode != NdOp::STORE ||
+                  Candidate.NumInputs < 2)
+                continue;
+              auto D = stackPtrDelta(*Block, TRI, Candidate.Inputs[0]);
+              if (D && *D == TargetOffset) {
+                MedVar Value = Candidate.Inputs[1];
+                Active.erase(BlockId);
+                return Value;
+              }
+            }
+            if (Block->Preds.empty()) {
+              Active.erase(BlockId);
+              return std::nullopt;
+            }
+            std::vector<std::pair<int, MedVar>> Incoming;
+            for (int PredId : Block->Preds) {
+              auto Value = Resolve(PredId, Active);
+              if (!Value) {
+                Active.erase(BlockId);
+                return std::nullopt;
+              }
+              Incoming.emplace_back(PredId, *Value);
+            }
+            MedVar Merged = Incoming.front().second;
+            bool Same = true;
+            for (const auto &[PredId, Value] : Incoming) {
+              (void)PredId;
+              if (Value != Merged) {
+                Same = false;
+                break;
+              }
+            }
+            if (!Same) {
+              Merged.Kind = MedVar::Temp;
+              Merged.Id = FreshId++;
+              Merged.SSAVer = 0;
+              Merged.Size = static_cast<uint16_t>(TRI.PointerSize);
+              Merged.TheArch = TheArch;
+              PhiNode Merge;
+              Merge.Output = Merged;
+              Merge.Args = std::move(Incoming);
+              Block->Phis.push_back(std::move(Merge));
+            }
+            Active.erase(BlockId);
+            return Merged;
+          };
+          std::set<int> Active;
+          auto Value = Resolve(Blk.Id, Active);
+          if (!Value)
+            continue;
+          Found[ArgIdx] = *Value;
+          FoundMask[ArgIdx] = true;
+          FromStackScan[ArgIdx] = true;
+        }
+      }
       // Tail-call forwarder: the callee's stack arguments are passed straight
       // through from this function's own incoming stack frame (the original
       // `jmp callee`, rewritten to CALL+RETURN, reuses it), so no store exists
@@ -1346,6 +1595,50 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       for (auto &A : StackPart)
         CI.Args.push_back(A);
 
+      // A Darwin wrapper is variadic only when its exact recovered call argument
+      // to a known va_list consumer is a pointer-width value derived from the
+      // entry SP.  CI.Args is SSA-bound at this call site, so a later write to
+      // x2/x3 cannot be mistaken for the consumed va_list.  Ordinary variadic
+      // calls and ambiguous provenance remain unmarked.
+      if (!CI.IsIndirect && Img && Img->isMachO() &&
+          TheArch == Arch::AArch64 && !CI.Args.empty()) {
+        const llvm::StringRef Bare = stripLeadingUnderscores(CI.TargetName);
+        const bool InternalVaListConsumer =
+            CalleeConsumesVaList &&
+            CalleeConsumesVaList->count(CI.TargetAddr) != 0 &&
+            CalleeConsumesVaList->at(CI.TargetAddr);
+        if ((libc::isVaListConsumer(Bare) || InternalVaListConsumer) &&
+            (InternalVaListConsumer || ExternalArity) &&
+            (InternalVaListConsumer ||
+             static_cast<int>(CI.Args.size()) == ExternalArity->IntArgs)) {
+          const MedVar &VaListArg = CI.Args.back();
+          if ((VaListArg.Kind == MedVar::Reg ||
+               VaListArg.Kind == MedVar::Temp) &&
+              VaListArg.Size == TRI.PointerSize) {
+            if (auto Delta = exactEntrySpDelta(Func, TheArch, VaListArg);
+                Delta && *Delta >= 0 &&
+                *Delta <= limits::kVariadicOverflowBaseMax &&
+                TRI.PointerSize > 0 &&
+                (*Delta % TRI.PointerSize) == 0) {
+              Func.IsVariadic = true;
+              Func.VariadicOverflowBase = *Delta;
+              if (InternalVaListConsumer) {
+                const int FixedPrefix =
+                    std::max(0, static_cast<int>(CI.Args.size()) - 1);
+                if (CalleeRegArity &&
+                    (*CalleeRegArity)[Func.Entry] < FixedPrefix)
+                  (*CalleeRegArity)[Func.Entry] = FixedPrefix;
+                if (CalleeTotalArity &&
+                    (*CalleeTotalArity)[Func.Entry] < FixedPrefix)
+                  (*CalleeTotalArity)[Func.Entry] = FixedPrefix;
+                if (CalleeIsVariadic)
+                  (*CalleeIsVariadic)[Func.Entry] = true;
+              }
+            }
+          }
+        }
+      }
+
       // Darwin AArch64 indirect variadic: a function pointer call with a
       // partial register prefix and separate stack-scalar outgoing stores
       // (`fp(n, a, b, c, d)`).  Mark the fixed prefix so the emitter declares
@@ -1434,7 +1727,6 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
 
       if (!CI.IsIndirect && DarwinVarArgBase >= 0)
         CI.VarArgFixedCount = DarwinVarArgBase;
-
       Func.CallInfos.push_back(std::move(CI));
       if (!CallLaneOps.empty())
         Pending.push_back(
@@ -1492,20 +1784,20 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
   // `f(a){return g(a);}` never reads its argument register (it flows straight
   // into the call), so detectCc's live-in scan misses it and Func.Params lacks
   // it.  The live-in fallback above recovered exactly those registers into
-  // PromoteParams; surface them so the function signature preserves the
-  // incoming value and the emitter resolves the call argument to the real
-  // parameter rather than an uninitialised register (0).  Done only when no
-  // integer register parameter was already detected, to leave a function whose
-  // register parameters are known untouched.
-  bool HasIntRegParam = false;
-  for (const auto &P : Func.Params)
-    if (P.RegOff != kNoParamReg && regToIntArgIdx(P.RegOff) >= 0) {
-      HasIntRegParam = true;
-      break;
-    }
-  if (!HasIntRegParam && !PromoteParams.empty()) {
-    std::vector<MedVar> RegParams;
-    for (int I = 0; I <= PromoteParams.rbegin()->first; ++I) {
+  // PromoteParams; add only missing register parameters.  A forwarder can
+  // already have a lower-index parameter (B5B4 has x0) while higher-index
+  // arguments (x1/x2) remain implicit live-ins.
+  if (!PromoteParams.empty()) {
+    std::set<int> ExistingIntArgs;
+    for (const auto &P : Func.Params)
+      if (P.RegOff != kNoParamReg)
+        if (int ArgIdx = regToIntArgIdx(P.RegOff); ArgIdx >= 0)
+          ExistingIntArgs.insert(ArgIdx);
+    const int MaxPromoted = PromoteParams.rbegin()->first;
+    for (int I = 0; I <= MaxPromoted &&
+         I < static_cast<int>(IntParamRegs.size()); ++I) {
+      if (ExistingIntArgs.count(I))
+        continue;
       MedVar P;
       P.Kind = MedVar::Param;
       P.Id = -1;
@@ -1518,17 +1810,23 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         P.RegOff = IntParamRegs[I];
         P.Size = TRI.FullRegWidth;
       }
-      RegParams.push_back(P);
+      auto InsertAt = Func.Params.begin();
+      while (InsertAt != Func.Params.end()) {
+        if (InsertAt->RegOff == kNoParamReg)
+          break;
+        const int ExistingIdx = regToIntArgIdx(InsertAt->RegOff);
+        if (ExistingIdx < 0 || ExistingIdx >= I)
+          break;
+        ++InsertAt;
+      }
+      const int InsertIndex =
+          static_cast<int>(std::distance(Func.Params.begin(), InsertAt));
+      Func.Params.insert(InsertAt, P);
+      for (auto &Home : Func.MutableStackParamHomes)
+        if (Home.first >= InsertIndex)
+          ++Home.first;
+      ExistingIntArgs.insert(I);
     }
-    // MutableStackParamHomes stores positions in Func.Params, not the
-    // stack-parameter MedVar ids.  Promoting a forwarded register prefix shifts
-    // every existing stack parameter to the right; rebase the positional
-    // metadata before inserting that prefix so the emitter seeds each home
-    // from its original incoming stack argument.
-    const int ParamIndexShift = static_cast<int>(RegParams.size());
-    for (auto &Home : Func.MutableStackParamHomes)
-      Home.first += ParamIndexShift;
-    Func.Params.insert(Func.Params.begin(), RegParams.begin(), RegParams.end());
   }
 
   // Surface forwarded incoming FP/vector registers as parameters (the FP dual

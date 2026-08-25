@@ -93,6 +93,76 @@ TEST(AArch64FunctionDiscovery,
       0u);
 }
 
+TEST(AArch64FunctionDiscovery, VerifiesZeroSizedTypedFunctionStartInsideKnownRange) {
+  constexpr va_t ImageVA = 0x5000;
+  constexpr va_t TypedStartVA = ImageVA + 0x8;
+
+  BinaryImage Img;
+  Img.Arch = Arch::AArch64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::MachO;
+  Img.Base = ImageVA;
+  Img.Entry = ImageVA;
+
+  Segment Text;
+  Text.Name = "__TEXT";
+  Text.VA = ImageVA;
+  Text.Size = 0x10;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(Text.Size, 0);
+  writeLE<uint32_t>(Text.Data.data(), 0xD65F03C0u);
+  writeLE<uint32_t>(Text.Data.data() + (TypedStartVA - ImageVA),
+                    0xD65F03C0u);
+  Img.Segments.push_back(std::move(Text));
+  Img.Sections.push_back(
+      makeMachOSection("__text", ImageVA, 0x10, /*ContainsInstructions=*/true));
+  Img.KnownCodeRanges.emplace_back(ImageVA, ImageVA + 0x10);
+  Img.Symbols.push_back(Symbol::makeFunc(TypedStartVA));
+
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::AArch64));
+  FuncDetector Detector;
+  const auto Functions = Detector.detect(Img, Dec);
+
+  EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
+                          [](const auto &F) { return F.first == TypedStartVA; }),
+            1u);
+}
+
+TEST(AArch64FunctionDiscovery, RejectsZeroSizedTypedFunctionStartWithBadCode) {
+  constexpr va_t ImageVA = 0x6000;
+  constexpr va_t TypedStartVA = ImageVA + 0x8;
+
+  BinaryImage Img;
+  Img.Arch = Arch::AArch64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::MachO;
+  Img.Base = ImageVA;
+  Img.Entry = ImageVA;
+
+  Segment Text;
+  Text.Name = "__TEXT";
+  Text.VA = ImageVA;
+  Text.Size = 0x10;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(Text.Size, 0);
+  writeLE<uint32_t>(Text.Data.data(), 0xD65F03C0u);
+  Img.Segments.push_back(std::move(Text));
+  Img.Sections.push_back(
+      makeMachOSection("__text", ImageVA, 0x10, /*ContainsInstructions=*/true));
+  Img.KnownCodeRanges.emplace_back(ImageVA, ImageVA + 0x10);
+  Img.Symbols.push_back(Symbol::makeFunc(TypedStartVA));
+
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::AArch64));
+  FuncDetector Detector;
+  const auto Functions = Detector.detect(Img, Dec);
+
+  EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
+                          [](const auto &F) { return F.first == TypedStartVA; }),
+            0u);
+}
+
 TEST(AArch64FunctionDiscovery,
      X64CallScanRejectsDataAndCodeToDataBoundaryPatterns) {
   constexpr va_t ImageVA = 0x3000;

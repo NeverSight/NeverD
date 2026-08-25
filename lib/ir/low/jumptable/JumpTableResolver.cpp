@@ -1396,7 +1396,21 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   auto HasValidatedLocalPhysicalTargetOwnership =
       [&](const JumpTableInfo &Candidate,
           bool RequireWholePhysicalLocalSet) -> bool {
-    if (!AuthoritativeCurrentFuncRange)
+    const std::optional<std::pair<va_t, va_t>> *OwnershipRange =
+        &AuthoritativeCurrentFuncRange;
+    // Linked Mach-O function symbols do not carry sizes.  Once the detector
+    // has removed strict interior label rebases from the function inventory,
+    // two exact function-symbol endpoints bound this body.  Use that weaker
+    // range only for an immutable, fully authenticated frame-table
+    // initializer; ordinary relocation tables and runtime-mutated frame tables
+    // still require an authoritative sized/unwind range.
+    if (!*OwnershipRange && CurrentFuncRange &&
+        Img.hasFunctionSymbolAt(CurrentFuncEntry) &&
+        Img.hasFunctionSymbolAt(CurrentFuncRange->second) &&
+        !Candidate.MutatedUnsafe &&
+        !Candidate.AuthenticatedFrameStorage.Initializers.empty())
+      OwnershipRange = &CurrentFuncRange;
+    if (!*OwnershipRange)
       return false;
     if (!consumeCandidateEvidence(Candidate.StorageRanges.size()))
       return false;
@@ -1451,9 +1465,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
           (KnownFuncEntries && KnownFuncEntries->count(Target)) ||
           Img.hasFunctionSymbolAt(Target))
         return false;
-      const bool InAuthoritativeBody =
-          Target > AuthoritativeCurrentFuncRange->first &&
-          Target < AuthoritativeCurrentFuncRange->second;
+      const bool InAuthoritativeBody = Target > (*OwnershipRange)->first &&
+                                       Target < (*OwnershipRange)->second;
       if (!InAuthoritativeBody || !isOwnedInteriorTarget(Img, Target))
         return false;
     }

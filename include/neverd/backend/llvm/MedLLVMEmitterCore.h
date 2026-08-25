@@ -1594,6 +1594,23 @@ private:
 
   using AddressProvenanceVarKey =
       std::tuple<int, int, int, int, int, uint16_t, uint64_t, int, uint64_t>;
+  struct FrameReloadCacheKey {
+    va_t Addr = InvalidVA;
+    int OriginSeq = -1;
+    uint16_t Width = 0;
+    AddressProvenanceVarKey Address = {};
+    AddressProvenanceVarKey Output = {};
+
+    bool operator<(const FrameReloadCacheKey &Other) const {
+      return std::tie(Addr, OriginSeq, Width, Address, Output) <
+             std::tie(Other.Addr, Other.OriginSeq, Other.Width,
+                       Other.Address, Other.Output);
+    }
+  };
+  struct FrameReloadCacheEntry {
+    bool Proven = false;
+    std::vector<MedVar> Sources;
+  };
   struct IndexedGlobalBaseProof {
     bool Proven = false;
     uint64_t Base = 0;
@@ -1646,12 +1663,37 @@ private:
     bool Proven = false;
     std::vector<MedVar> Sources;
   };
+  struct FrameReloadWrite {
+    std::size_t Index = 0;
+    MedVar Address;
+    MedVar Value;
+    uint16_t Size = 0;
+    bool HasAddress = false;
+    bool HasValue = false;
+    bool IsStore = false;
+  };
+  struct FrameReloadBlock {
+    std::vector<int> Successors;
+    std::set<int> StructuralPreds;
+    std::vector<FrameReloadWrite> Writes;
+  };
+  struct FrameReloadLoadSite {
+    int BlockId = -1;
+    std::size_t Index = 0;
+  };
+  struct FrameReloadAnalysis {
+    bool Valid = false;
+    int EntryBlockId = -1;
+    std::map<int, FrameReloadBlock> Blocks;
+    std::map<FrameReloadOccurrenceKey, FrameReloadLoadSite> Loads;
+  };
   enum class FrameReloadCacheState { Empty, Building, Ready };
 
   static std::optional<FrameReloadOccurrenceKey>
   frameReloadOccurrenceKey(const MedOp &Load);
   void invalidateFrameReloadSourceCache() const;
   bool ensureFrameReloadOccurrenceIndex() const;
+  void ensureFrameReloadAnalysis() const;
 
   // Stable, exact-occurrence memoization for all-path frame reload proofs.
   // The cache never retains MedOp pointers: a key records the complete load
@@ -1670,6 +1712,12 @@ private:
   mutable bool FrameReloadBuildSawReentrantQuery = false;
   mutable std::map<FrameReloadOccurrenceKey, FrameReloadSourceResult>
       FrameReloadSourceCache;
+  // Immutable per-function write/CFG facts reused by every occurrence proof.
+  // Result cache identity remains the upstream stable occurrence key.
+  mutable bool FrameReloadAnalysisBuilt = false;
+  mutable FrameReloadAnalysis FrameReloadIndex;
+  mutable uint64_t FrameReloadAnalysisBuilds = 0;
+  mutable uint64_t FrameReloadSourceGeneration = 0;
 
   // Exact, cycle-safe propagation of incomplete architectural address
   // fragments for the function currently being emitted. Observable sinks and
@@ -1695,7 +1743,11 @@ private:
   mutable std::map<
       std::tuple<AddressProvenanceVarKey, bool, AddressProvenanceVarKey>, bool>
       StableOffsetCache;
-
+  // A failed select/PHI table audit has no LLVM value to cache, but its
+  // MedIR result is independent of the current IRBuilder.
+  mutable const MedFunc *SelectMergeFailureCacheFor = nullptr;
+  mutable std::set<std::tuple<AddressProvenanceVarKey, uint16_t, bool>>
+      SelectMergeFailureCache;
   // Cache of writable-segment base VAs that contain at least one already-
   // symbolized writable-reloc pointer constant (see
   // hasSymbolizedWritableSibling); keyed on the current function.  Mutable so
@@ -1763,6 +1815,12 @@ private:
   mutable llvm::DenseMap<std::pair<int64_t, int>, bool> FrameDerivedCache;
   mutable const MedFunc *FrameAddressCacheFor = nullptr;
   mutable llvm::DenseMap<std::pair<int64_t, int>, bool> FrameAddressCache;
+  mutable const MedFunc *FrameReloadCacheFor = nullptr;
+  mutable uint64_t FrameReloadCacheGeneration = 0;
+  mutable std::map<FrameReloadCacheKey, FrameReloadCacheEntry>
+      FrameReloadCache;
+  mutable uint64_t FrameReloadProofBuilds = 0;
+  mutable uint64_t FrameReloadProofHits = 0;
 
   // Per-function memoized results of the stack-slot address predicates, dropped
   // when CurMedFunc changes (see ensureAddrPredCache).  Each answer depends

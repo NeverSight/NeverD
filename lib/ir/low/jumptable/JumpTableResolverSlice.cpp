@@ -8869,8 +8869,9 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
               });
           std::optional<size_t> IndexQuery;
           if (!LocallyAuthenticatedIndex)
-            IndexQuery = pushQuery(AddressQueries, DynamicValue, Add,
-                                   State.DynamicAlternatives);
+            IndexQuery = pushQuery(
+                AddressQueries, DynamicValue, Add, State.DynamicAlternatives,
+                Role.AllowZeroExtension, Role.AllowSignExtension);
           if (!BaseQuery || (!LocallyAuthenticatedIndex && !IndexQuery))
             return false;
           if (!pushIndex(ProofQueries, *BaseQuery))
@@ -9310,7 +9311,6 @@ CFGBuilder::tableLoadConditionValues(llvm::ArrayRef<va_t> BranchAddrs,
     }
     return false;
   };
-
   const std::vector<int> &Roots = Graph.RootBlocks;
   bool BlockLookupComplete = true;
   auto blockFor = [&](va_t Addr) -> int {

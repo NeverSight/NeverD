@@ -306,14 +306,40 @@ MedLLVMEmitter::tryResolveReadOnlyDataPtr(const MedVar &AddrVar,
   // returns a clean non-match for a pure induction, but a mixed/malformed PHI
   // must stop here before a narrower resolver can select one convenient arm.
   bool SawAmbiguous = false;
-  if (auto *P = tryResolveSelectMergeTable(AddrVar, SizeHint, FailClosed,
-                                           Builder, &SawAmbiguous))
-    return P;
-  if (SawAmbiguous)
-    return nullptr;
-  if (auto *P =
-          tryResolveIndexedGlobalPtr(AddrVar, SizeHint, FailClosed, Builder))
-    return P;
+  const MedOp *Top = lookupDef(AddrVar);
+  auto isKnownReadOnlyBase = [&](const MedVar &Value) {
+    std::optional<uint64_t> VA =
+        Value.isConst() ? std::optional<uint64_t>(Value.ConstVal)
+                        : traceSSAConst(Value);
+    return VA && isMaterializableReadOnlyDataAddress(*VA);
+  };
+  const bool PreferIndexed =
+      Top && Top->Opcode == NdOp::INT_ADD && Top->NumInputs >= 2 &&
+      (isKnownReadOnlyBase(Top->Inputs[0]) ||
+       isKnownReadOnlyBase(Top->Inputs[1]));
+  if (PreferIndexed)
+    if (auto *P =
+        tryResolveIndexedGlobalPtr(AddrVar, SizeHint, FailClosed, Builder))
+      return P;
+  if (SelectMergeFailureCacheFor != CurMedFunc) {
+    SelectMergeFailureCacheFor = CurMedFunc;
+    SelectMergeFailureCache.clear();
+  }
+  const auto SelectMergeKey = std::make_tuple(
+      addressProvenanceVarKey(AddrVar), SizeHint, FailClosed);
+  if (!SelectMergeFailureCache.count(SelectMergeKey)) {
+    if (auto *P = tryResolveSelectMergeTable(AddrVar, SizeHint, FailClosed,
+                                             Builder, &SawAmbiguous))
+      return P;
+    if (SawAmbiguous)
+      return nullptr;
+    if (!FatalDataPointerResolution && !FatalCodePointerResolution)
+      SelectMergeFailureCache.insert(SelectMergeKey);
+  }
+  if (!PreferIndexed)
+    if (auto *P =
+        tryResolveIndexedGlobalPtr(AddrVar, SizeHint, FailClosed, Builder))
+      return P;
   if (auto *P = tryResolveLiteralPoolTable(AddrVar, SizeHint, Builder))
     return P;
   if (auto *P =
@@ -347,18 +373,36 @@ llvm::Value *MedLLVMEmitter::tryResolvePointerArg(const MedVar &AddrVar,
   // audits prevent a second base from being applied.
   if (Occurrence.Model == ConstantProvenanceSummary::ValueModel::Address) {
     bool SawAmbiguous = false;
-    if (llvm::Value *Merged = tryResolveSelectMergeTable(
-            AddrVar, /*SizeHint=*/0, FailClosed, Builder, &SawAmbiguous))
-      return Merged;
-    if (SawAmbiguous)
-      return nullptr;
+    if (SelectMergeFailureCacheFor != CurMedFunc) {
+      SelectMergeFailureCacheFor = CurMedFunc;
+      SelectMergeFailureCache.clear();
+    }
+    const auto SelectMergeKey = std::make_tuple(
+        addressProvenanceVarKey(AddrVar), uint16_t(0), FailClosed);
+    if (!SelectMergeFailureCache.count(SelectMergeKey)) {
+      if (llvm::Value *Merged = tryResolveSelectMergeTable(
+              AddrVar, /*SizeHint=*/0, FailClosed, Builder, &SawAmbiguous))
+        return Merged;
+      if (SawAmbiguous)
+        return nullptr;
+      if (!FatalDataPointerResolution && !FatalCodePointerResolution)
+        SelectMergeFailureCache.insert(SelectMergeKey);
+    }
   }
   // Scalar, fragment, and mixed explicit occurrences must never fall through
   // to value-global heuristics.  Unlike Address, they carry no complete data-
   // pointer relation for this consumer to own.
-  if (Occurrence.hasExplicitProvenance())
-    if (Occurrence.Model != ConstantProvenanceSummary::ValueModel::Address)
-      return nullptr;
+  if (Occurrence.hasExplicitProvenance() &&
+      Occurrence.Model != ConstantProvenanceSummary::ValueModel::Address) {
+    // A recurrent forwarding PHI can summarize as Mixed even when the
+    // read-only resolver proves one stable data owner.  Keep that exact
+    // certificate; scalar and fragment values remain rejected.
+    if (Occurrence.Model == ConstantProvenanceSummary::ValueModel::Mixed)
+      if (llvm::Value *P = tryResolveReadOnlyDataPtr(
+              AddrVar, /*SizeHint=*/0, FailClosed, Builder))
+        return P;
+    return nullptr;
+  }
   // A flat pointer-valued SELECT must be validated as one unit before creating
   // any globals: every non-null leaf has to be a mapped data address.  This
   // two-pass shape prevents a rejected code/scalar arm from leaving behind a
@@ -472,8 +516,23 @@ llvm::Value *MedLLVMEmitter::tryResolvePointerArg(const MedVar &AddrVar,
       // single data-looking leaf. In a known pointer context that resolver also
       // records the fail-closed diagnostic, while speculative integer arguments
       // simply retain their original ABI value.
-      return tryResolveSelectMergeTable(AddrVar, /*SizeHint=*/0, FailClosed,
-                                        Builder);
+      bool SawAmbiguous = false;
+      if (SelectMergeFailureCacheFor != CurMedFunc) {
+        SelectMergeFailureCacheFor = CurMedFunc;
+        SelectMergeFailureCache.clear();
+      }
+      const auto SelectMergeKey = std::make_tuple(
+          addressProvenanceVarKey(AddrVar), uint16_t(0), FailClosed);
+      if (SelectMergeFailureCache.count(SelectMergeKey))
+        return nullptr;
+      if (llvm::Value *Selected = tryResolveSelectMergeTable(
+              AddrVar, /*SizeHint=*/0, FailClosed, Builder, &SawAmbiguous))
+        return Selected;
+      if (SawAmbiguous)
+        return nullptr;
+      if (!FatalDataPointerResolution && !FatalCodePointerResolution)
+        SelectMergeFailureCache.insert(SelectMergeKey);
+      return nullptr;
     }
 
   // A direct &global (or COPY thereof) first uses exact occurrence ownership.
@@ -482,8 +541,10 @@ llvm::Value *MedLLVMEmitter::tryResolvePointerArg(const MedVar &AddrVar,
   // not acquire pointer meaning here.
   uint64_t OwnedVA = 0;
   uint64_t OwnerVA = InvalidVA;
-  if (resolveMaterializableDataAddress(AddrVar, OwnedVA, &OwnerVA) &&
-      OwnerVA != InvalidVA)
+  const bool HasOwnedData =
+      resolveMaterializableDataAddress(AddrVar, OwnedVA, &OwnerVA) &&
+      OwnerVA != InvalidVA;
+  if (HasOwnedData)
     return tryResolveOwnedGlobalData(OwnedVA, OwnerVA,
                                      /*DataSizeHint=*/0);
   std::optional<uint64_t> ConstAddr =
@@ -498,10 +559,12 @@ llvm::Value *MedLLVMEmitter::tryResolvePointerArg(const MedVar &AddrVar,
   // A computed `&global[index]`: same resolver sequence as a LOAD address, with
   // the writable-data path first since the callee may store through the
   // pointer.
-  if (auto *P = tryResolveWritableData(AddrVar, /*SizeHint=*/0, Builder))
+  if (auto *P = tryResolveWritableData(AddrVar, /*SizeHint=*/0, Builder)) {
     return P;
-  return tryResolveReadOnlyDataPtr(AddrVar, /*SizeHint=*/0, FailClosed,
-                                   Builder);
+  }
+  auto *ReadOnly =
+      tryResolveReadOnlyDataPtr(AddrVar, /*SizeHint=*/0, FailClosed, Builder);
+  return ReadOnly;
 }
 
 } // namespace neverd

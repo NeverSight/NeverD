@@ -977,9 +977,11 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
       if (Insns.count(Addr))
         Func.UnsafeIndirectBranchAddresses.insert(Addr);
   if (PreservePotentialJumpTableBranches)
-    for (va_t Addr : PotentialJumpTableBranches)
-      if (Insns.count(Addr))
+    for (va_t Addr : PotentialJumpTableBranches) {
+      auto It = Insns.find(Addr);
+      if (It != Insns.end() && It->second.JumpTableTargets.empty())
         Func.UnsafeIndirectBranchAddresses.insert(Addr);
+    }
   Func.EverPublishedJumpTableBranchAddresses.insert(
       EverPublishedJumpTableBranches.begin(),
       EverPublishedJumpTableBranches.end());

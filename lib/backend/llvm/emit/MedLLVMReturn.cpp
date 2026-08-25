@@ -236,6 +236,20 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     bool WantWide64 = !WantFloat && RetTy->isIntegerTy(64) &&
                       TRI.PointerSize == 4 && TRI.IntReturnReg2 != 0;
     uint64_t HiRetOff = TRI.IntReturnReg2;
+    const uint16_t IntegerReturnSize =
+        WantWide64 ? TRI.PointerSize
+                   : RetTy->isIntegerTy()
+                         ? static_cast<uint16_t>(
+                               (RetTy->getIntegerBitWidth() + 7) / 8)
+                         : 0;
+    auto isAuthoritativeIntegerReturnView = [&](const MedVar &V) {
+      if (WantFloat || V.RegOff != IntRetOff || IntegerReturnSize == 0)
+        return false;
+      if (V.Size >= IntegerReturnSize)
+        return true;
+      return TRI.writeZeroExtends(V.RegOff, V.Size) &&
+             TRI.isSubRegOf(V.RegOff, V.Size, IntRetOff, IntegerReturnSize);
+    };
 
     for (auto &Blk : CurMedFunc->Blocks) {
       bool HasThisRet = false;
@@ -249,22 +263,40 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
 
       const MedVar *RetVar = nullptr;
       const MedVar *HiVar = nullptr;
+      bool SawReturnView = false;
+      bool PassedReturn = false;
       for (auto RIt = Blk.Ops.rbegin(); RIt != Blk.Ops.rend(); ++RIt) {
-        if (&*RIt == &Op)
+        if (&*RIt == &Op) {
+          PassedReturn = true;
+          continue;
+        }
+        if (!PassedReturn)
           continue;
         if (RIt->Output.Kind != MedVar::Reg || RIt->Output.Size == 0)
           continue;
 
         if (WantX87 && TRI.isX87StackReg(RIt->Output.RegOff)) {
           // Reverse iteration sees the value at the current x87 top first.
-          if (!RetVar)
+          if (!SawReturnView) {
+            SawReturnView = true;
             RetVar = &RIt->Output;
-        } else if (WantFloat && !WantX87 && RIt->Output.RegOff == FloatRetOff) {
-          if (!RetVar || RIt->Output.Size > RetVar->Size)
+          }
+        } else if (WantFloat && !WantX87 &&
+                   RIt->Output.RegOff == FloatRetOff) {
+          // The newest physical XMM/V register view is authoritative.  Do not
+          // replace it with an older wider view merely to avoid coercion.
+          if (!SawReturnView) {
+            SawReturnView = true;
             RetVar = &RIt->Output;
-        }
-        if (!WantFloat && RIt->Output.RegOff == IntRetOff) {
-          if (!RetVar || RIt->Output.Size > RetVar->Size)
+          }
+        } else if (!WantFloat && RIt->Output.RegOff == IntRetOff &&
+                   !SawReturnView) {
+          // A partial integer view is authoritative only when its ABI write
+          // semantics define the requested return width.  If it does not,
+          // stop at that newest view and fail closed instead of using stale
+          // bits from an older full-width definition.
+          SawReturnView = true;
+          if (isAuthoritativeIntegerReturnView(RIt->Output))
             RetVar = &RIt->Output;
         }
         if (WantWide64 && RIt->Output.RegOff == HiRetOff) {
@@ -281,7 +313,7 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
             HiVar = &RIt->Output;
         }
       }
-      if (!RetVar) {
+      if (!RetVar && !SawReturnView) {
         // Pick the *widest* matching phi, not the first.  When a block has
         // both a narrow (EAX) and wide (RAX) phi for the return register,
         // the wide one carries the true 64-bit value (bug #157c).
@@ -296,10 +328,8 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
             if (!RetVar || Phi.Output.Size > RetVar->Size)
               RetVar = &Phi.Output;
           }
-          if (!WantFloat && Phi.Output.RegOff == IntRetOff) {
-            if (!RetVar || Phi.Output.Size > RetVar->Size)
-              RetVar = &Phi.Output;
-          }
+          if (isAuthoritativeIntegerReturnView(Phi.Output) && !RetVar)
+            RetVar = &Phi.Output;
         }
       }
       if (WantWide64 && !HiVar) {
@@ -390,16 +420,17 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         if (BId < 0 || BId >= static_cast<int>(CurMedFunc->Blocks.size()))
           continue;
         auto &Blk = CurMedFunc->Blocks[BId];
-        // Select the *widest* write to the return register, not the last
-        // one in program order.  A narrow sub-register SUBBYTES (e.g.
-        // EAX = SUBBYTES(RAX)) often follows the full-width write but does
-        // not represent the canonical return value (bug #152 extension).
+        // FP/vector return registers are live at the shared epilogue as the
+        // newest physical view.  Keep the legacy widest preference for integer
+        // predecessor recovery, where a narrow SUBBYTES may not define the
+        // canonical full-width value (bug #152 extension).
         const MedVar *RetVar = nullptr;
         for (auto BIt = Blk.Ops.rbegin(); BIt != Blk.Ops.rend(); ++BIt) {
           if (BIt->Output.Kind == MedVar::Reg && BIt->Output.Size > 0 &&
               (WantX87 ? TRI.isX87StackReg(BIt->Output.RegOff)
                        : BIt->Output.RegOff == RetRegOff)) {
-            if (!RetVar || BIt->Output.Size > RetVar->Size)
+            if (!RetVar ||
+                (!WantFloat && BIt->Output.Size > RetVar->Size))
               RetVar = &BIt->Output;
           }
         }

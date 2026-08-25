@@ -88,6 +88,12 @@ TEST(VarArgFixedCount, PosixWhitelist) {
   EXPECT_EQ(varArgFixedCount("sem_open"), 1u);
 }
 
+TEST(VarArgFixedParamKind, OpenPreservesPathAndFlags) {
+  EXPECT_EQ(varArgFixedParamKind("open", 0), VarArgFixedParamKind::Pointer);
+  EXPECT_EQ(varArgFixedParamKind("open", 1), VarArgFixedParamKind::Integer);
+  EXPECT_EQ(varArgFixedParamKind("open", 2), VarArgFixedParamKind::Unknown);
+}
+
 TEST(VarArgFixedCount, DarwinObjectiveCMessageStubs) {
   // The linker-specialized stub supplies _cmd in x1.  The external call still
   // models that register as part of the fixed prefix so method arguments start
@@ -252,6 +258,17 @@ TEST(LibCArity, ExceptionRuntimeFunctions) {
   ASSERT_TRUE(ObjCThrow.has_value());
   EXPECT_EQ(ObjCThrow->IntArgs, 1);
   EXPECT_EQ(ObjCThrow->FpArgs, 0);
+}
+
+TEST(LibCArity, VaListConsumersHaveFixedPrototypes) {
+  auto VPrintf = libcArity("vprintf");
+  ASSERT_TRUE(VPrintf.has_value());
+  EXPECT_EQ(VPrintf->IntArgs, 2);
+  EXPECT_EQ(VPrintf->FpArgs, 0);
+
+  auto Vsnprintf = libcArity("vsnprintf");
+  ASSERT_TRUE(Vsnprintf.has_value());
+  EXPECT_EQ(Vsnprintf->IntArgs, 3);
 }
 
 TEST(LibCArity, PreservesDarwinErrorSymbolSpelling) {

@@ -288,10 +288,12 @@ bool CFGBuilder::tryAArch64CompactTable(const BinaryImage &Img,
     NdVar Value;
     va_t UseAddr = InvalidVA;
     int UseSeq = -1;
+    std::vector<JumpTableValueOccurrence> Alternatives;
   };
   IndexCandidate CandA, CandB, IndexCandidateAtLoad;
   uint64_t IndexReg = InvalidVA;
   int TableLoadIdx = -1;
+  int AddressAddIdx = -1;
   {
     NdVar V = Ops[ShiftIdx].Inputs[0];
     int CurFrom = ShiftIdx - 1;
@@ -318,6 +320,7 @@ bool CFGBuilder::tryAArch64CompactTable(const BinaryImage &Img,
         const NdVar &AddrV = (O.NumInputs >= 2) ? O.Inputs[1] : O.Inputs[0];
         int A = reachingDefIdx(Ops, D - 1, AddrV);
         if (A >= 0 && Ops[A].Opcode == NdOp::INT_ADD && Ops[A].NumInputs >= 2) {
+          AddressAddIdx = A;
           // Each address operand is either a bare register (the table base, or
           // the index of a byte table `ldrb [base,idx]`) or a scaled index (the
           // index of a halfword table `ldrh [base,idx,lsl #1]`, whose
@@ -327,17 +330,14 @@ bool CFGBuilder::tryAArch64CompactTable(const BinaryImage &Img,
           // scaled-index trace when the operand is not a plain register.
           auto candReg = [&](const NdVar &In) -> IndexCandidate {
             IndexCandidate Candidate;
-            uint64_t R = traceToRegister(Ops, A - 1, In);
-            if (R != InvalidVA) {
-              Candidate.Reg = R;
-              Candidate.Value = In;
-              Candidate.UseAddr = Ops[A].Addr;
-              Candidate.UseSeq = Ops[A].Seq;
-              return Candidate;
-            }
-            Candidate.Reg =
-                scaledIndexReg(Ops, A - 1, In, &Candidate.Value,
-                               &Candidate.UseAddr, &Candidate.UseSeq);
+            Candidate.Value = In;
+            Candidate.UseAddr = Ops[A].Addr;
+            Candidate.UseSeq = Ops[A].Seq;
+            Candidate.Reg = traceToRegister(Ops, A - 1, In);
+            if (Candidate.Reg == InvalidVA)
+              Candidate.Reg =
+                  scaledIndexReg(Ops, A - 1, In, &Candidate.Value,
+                                 &Candidate.UseAddr, &Candidate.UseSeq);
             return Candidate;
           };
           CandA = candReg(Ops[A].Inputs[0]);
@@ -352,6 +352,64 @@ bool CFGBuilder::tryAArch64CompactTable(const BinaryImage &Img,
 
   // Whichever address operand folds to a non-empty data segment is the table
   // base; the other is the switch index register.
+  auto normalizeLogicalLane = [&](IndexCandidate &Candidate) {
+    if (Candidate.Reg == InvalidVA || Candidate.Value.Size == 0 ||
+        Candidate.UseAddr == InvalidVA || Candidate.UseSeq < 0)
+      return;
+    std::vector<JumpTableValueOccurrence> Alternatives;
+    for (const LowOp &Def : Ops)
+      if (Def.Opcode == NdOp::INT_ZEXT && Def.NumInputs >= 1 &&
+          Def.Output == Candidate.Value &&
+          Def.Inputs[0].Size != 0 &&
+          Def.Inputs[0].Size < Def.Output.Size &&
+          (Def.Inputs[0].isReg() || Def.Inputs[0].isTemp()) &&
+          (Def.Addr < Candidate.UseAddr ||
+           (Def.Addr == Candidate.UseAddr &&
+            Def.Seq < Candidate.UseSeq)))
+        Alternatives.push_back({Def.Inputs[0], Def.Addr, Def.Seq, false});
+    if (Alternatives.empty())
+      return;
+    auto matches = [&](const std::vector<JumpTableValueOccurrence> &Values) {
+      const std::vector<bool> Result = tableValuesMatchAtUses({
+          {Candidate.Value, Candidate.UseAddr, Candidate.UseSeq, Values,
+           /*AllowZeroExtension=*/true, /*AllowSignExtension=*/false}});
+      return !Result.empty() && Result.front();
+    };
+    if (!matches(Alternatives))
+      return;
+    // Remove alternatives in batches; each candidate set still needs a full
+    // occurrence proof before deletion.
+    std::sort(Alternatives.begin(), Alternatives.end(),
+              [](const auto &Left, const auto &Right) {
+                return std::tie(Left.Addr, Left.Seq) >
+                       std::tie(Right.Addr, Right.Seq);
+              });
+    for (size_t Chunk = Alternatives.size() / 2; Chunk > 0;
+         Chunk = Chunk == 1 ? 0 : (Chunk + 1) / 2) {
+      for (size_t I = 0; I + Chunk < Alternatives.size();) {
+        std::vector<JumpTableValueOccurrence> Trial = Alternatives;
+        Trial.erase(Trial.begin() + static_cast<ptrdiff_t>(I),
+                     Trial.begin() + static_cast<ptrdiff_t>(I + Chunk));
+        if (!Trial.empty() && matches(Trial))
+          Alternatives = std::move(Trial);
+        else
+          ++I;
+      }
+    }
+    const uint16_t Width = Alternatives.front().Value.Size;
+    if (Width == 0 ||
+        std::any_of(Alternatives.begin(), Alternatives.end(),
+                    [&](const auto &Occurrence) {
+                      return Occurrence.Value.Size != Width;
+                    }))
+      return;
+    Candidate.Alternatives = std::move(Alternatives);
+    Candidate.Value = Candidate.Alternatives.front().Value;
+    Candidate.UseAddr = Candidate.Alternatives.front().Addr;
+    Candidate.UseSeq = Candidate.Alternatives.front().Seq;
+    if (Candidate.Value.isReg())
+      Candidate.Reg = Candidate.Value.Offset;
+  };
   std::optional<uint64_t> TableBase;
   for (int Pick = 0; Pick < 2; ++Pick) {
     uint64_t BaseCand = Pick == 0 ? CandA.Reg : CandB.Reg;
@@ -368,11 +426,50 @@ bool CFGBuilder::tryAArch64CompactTable(const BinaryImage &Img,
       break;
     }
   }
-  if (!TableBase)
+  if (!TableBase) {
     return false;
+  }
   const auto *TSeg = Img.getSegmentFor(*TableBase);
   if (!TSeg || TSeg->Data.empty())
     return false;
+  // Compact tables use one scale for the table address and another for the
+  // loaded target entry.  Publish the unscaled selector occurrence, not the
+  // byte offset used by the LOAD address; otherwise MedIR treats the address
+  // arithmetic as the switch selector and the exact-use plan cannot recover
+  // the logical index.
+  if (LoadWidth > 1 && AddressAddIdx >= 0) {
+    int ScaleDef = reachingDefIdx(Ops, AddressAddIdx - 1,
+                                  IndexCandidateAtLoad.Value);
+    if (ScaleDef >= 0) {
+      const LowOp &Scale = Ops[ScaleDef];
+      int InputNo = -1;
+      for (int I = 0; I < Scale.NumInputs; ++I)
+        if (!Scale.Inputs[I].isConst() &&
+            ((Scale.Opcode == NdOp::INT_LEFT && I == 0 &&
+              Scale.NumInputs >= 2 && Scale.Inputs[1].isConst() &&
+              Scale.Inputs[1].Offset < 64 &&
+              (uint64_t{1} << Scale.Inputs[1].Offset) == LoadWidth) ||
+             (Scale.Opcode == NdOp::INT_MULT && I == 0 &&
+              Scale.NumInputs >= 2 && Scale.Inputs[1].isConst() &&
+              Scale.Inputs[1].Offset == LoadWidth))) {
+          if (InputNo >= 0) {
+            InputNo = -1;
+            break;
+          }
+          InputNo = I;
+        }
+      if (InputNo >= 0) {
+        IndexCandidateAtLoad.Value = Scale.Inputs[InputNo];
+        IndexCandidateAtLoad.UseAddr = Scale.Addr;
+        IndexCandidateAtLoad.UseSeq = Scale.Seq;
+        IndexCandidateAtLoad.Reg =
+            traceToRegister(Ops, ScaleDef - 1, Scale.Inputs[InputNo]);
+        IndexCandidateAtLoad.Alternatives.clear();
+      }
+    }
+  }
+  normalizeLogicalLane(IndexCandidateAtLoad);
+  IndexReg = IndexCandidateAtLoad.Reg;
 
   // Resolve the anchor operand to a code address (an `adr` lifts to a COPY of
   // the absolute target constant).
@@ -425,6 +522,7 @@ bool CFGBuilder::tryAArch64CompactTable(const BinaryImage &Img,
   Info.IndexValueAtUse = IndexCandidateAtLoad.Value;
   Info.IndexUseAddr = IndexCandidateAtLoad.UseAddr;
   Info.IndexUseSeq = IndexCandidateAtLoad.UseSeq;
+  Info.IndexValueAlternatives = IndexCandidateAtLoad.Alternatives;
   if (TableLoadIdx >= 0) {
     Info.TableLoadAddr = Ops[TableLoadIdx].Addr;
     Info.TableLoadSeq = Ops[TableLoadIdx].Seq;

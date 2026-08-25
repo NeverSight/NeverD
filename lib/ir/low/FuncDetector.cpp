@@ -31,6 +31,7 @@
 #include <mutex>
 #include <queue>
 #include <thread>
+#include <vector>
 
 #define DEBUG_TYPE "neverd-func-detector"
 
@@ -170,6 +171,36 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
     }
   }
 
+  // A linked Mach-O nlist symbol has no size field, but adjacent function
+  // symbols still delimit the compiler-emitted body between them.  Full-width
+  // rebases for GNU local-label tables point into that interval; treating each
+  // label as a standalone function candidate makes the interval end at its
+  // first case and prevents the owning CFG from recovering the table.  Keep an
+  // exact function-symbol target, but leave strict interior rebases to the
+  // owning function.  Stripped images and the unbounded final symbol retain
+  // the conservative relocation-candidate behavior below.
+  std::vector<va_t> MachOFunctionStarts;
+  if (Img.Format == BinaryFormat::MachO && !Img.IsRelocatable) {
+    for (const Symbol &Sym : Img.Symbols)
+      if (Sym.IsFunc && Img.hasExecutableCodeOwnerAt(Sym.Addr))
+        MachOFunctionStarts.push_back(
+            normalizeCodeAddress(Sym.Addr, Img.Arch, Img.Mode));
+    std::sort(MachOFunctionStarts.begin(), MachOFunctionStarts.end());
+    MachOFunctionStarts.erase(
+        std::unique(MachOFunctionStarts.begin(), MachOFunctionStarts.end()),
+        MachOFunctionStarts.end());
+  }
+  auto IsMachOLocalLabel = [&](va_t Target) {
+    if (MachOFunctionStarts.empty())
+      return false;
+    const auto Next = std::upper_bound(MachOFunctionStarts.begin(),
+                                       MachOFunctionStarts.end(), Target);
+    if (Next == MachOFunctionStarts.begin() ||
+        Next == MachOFunctionStarts.end())
+      return false;
+    return *std::prev(Next) < Target && Target < *Next;
+  };
+
   // A full-width relocation from data to executable bytes is structural
   // evidence for a callable candidate even when the target is a tiny leaf
   // with neither unwind metadata nor a conventional prologue.  Do not trust
@@ -185,7 +216,7 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
         continue;
       const va_t Target = normalizeCodeAddress(
           readPtr(Bytes, Img.is64Bit()), Img.Arch, Img.Mode);
-      if (Img.hasExecutableCodeOwnerAt(Target))
+      if (Img.hasExecutableCodeOwnerAt(Target) && !IsMachOLocalLabel(Target))
         Entries.insert(Target);
     }
 
@@ -247,7 +278,11 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
     // cover unsymbolized leaf callees on every supported architecture.
     // Untyped COFF exports are always verified because they can be either
     // callable aliases or data.  Only the remaining candidates need the
-    // expensive trial decode.
+    // The trial decode dominates only when the scan produced many untrusted
+    // candidates; each check is independent and reads only the immutable image,
+    // so spread that subset across worker threads with per-thread decoders. A
+    // symbol-rich binary (almost everything trusted) leaves NeedVerify small
+    // and stays single-threaded, avoiding pointless thread-spawn overhead.
     const size_t N = Results.size();
     std::vector<char> Keep(N, 0);
     std::vector<size_t> NeedVerify;

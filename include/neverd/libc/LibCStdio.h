@@ -97,6 +97,9 @@ inline constexpr auto kStdioArity = std::to_array<LibCArityEntry>({
     {"setbuf", {2, 0}},  {"setvbuf", {4, 0}},  {"ungetc", {2, 0}},
     {"tmpfile", {0, 0}}, {"popen", {2, 0}},    {"pclose", {1, 0}},
     {"putw", {2, 0}},    {"getw", {1, 0}},
+    {"vdprintf", {2, 0}}, {"vfprintf", {3, 0}}, {"vfscanf", {2, 0}},
+    {"vprintf", {2, 0}},  {"vscanf", {1, 0}},   {"vsnprintf", {3, 0}},
+    {"vsprintf", {2, 0}}, {"vsscanf", {2, 0}},
 });
 
 } // namespace neverd::libc

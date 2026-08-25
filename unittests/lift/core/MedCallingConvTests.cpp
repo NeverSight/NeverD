@@ -104,8 +104,8 @@ MedFunc recoverDirectCallWithArgumentPhis(Arch TheArch, int ArgIdx,
 
   const int Arity = ArgIdx + 1;
   const std::map<va_t, std::string> Names{{Callee, "callee"}};
-  const std::map<va_t, int> RegArity{{Callee, Arity}};
-  const std::map<va_t, int> TotalArity{{Callee, Arity}};
+  std::map<va_t, int> RegArity{{Callee, Arity}};
+  std::map<va_t, int> TotalArity{{Callee, Arity}};
   recoverCallAbi(Func, TheArch, Names, nullptr, &RegArity, &TotalArity);
   return Func;
 }
@@ -378,8 +378,8 @@ TEST(MedABIPass, ForwardedLiveInKeepsParameterProvenance) {
   Func.Blocks[0].Ops.push_back(Return);
 
   const std::map<va_t, std::string> Names{{Callee, "callee"}};
-  const std::map<va_t, int> RegArity{{Callee, 2}};
-  const std::map<va_t, int> TotalArity{{Callee, 2}};
+  std::map<va_t, int> RegArity{{Callee, 2}};
+  std::map<va_t, int> TotalArity{{Callee, 2}};
   recoverCallAbi(Func, TheArch, Names, nullptr, &RegArity, &TotalArity);
 
   ASSERT_EQ(Func.Params.size(), 2u);
@@ -423,8 +423,8 @@ TEST(MedABIPass, PromotedRegisterParamsRebaseMutableStackHomes) {
   Func.Blocks[0].Ops.push_back(Call);
 
   const std::map<va_t, std::string> Names{{Callee, "regparm_callee"}};
-  const std::map<va_t, int> RegArity{{Callee, 2}};
-  const std::map<va_t, int> TotalArity{{Callee, 5}};
+  std::map<va_t, int> RegArity{{Callee, 2}};
+  std::map<va_t, int> TotalArity{{Callee, 5}};
   recoverCallAbi(Func, TheArch, Names, nullptr, &RegArity, &TotalArity);
 
   ASSERT_EQ(Func.Params.size(), 5u);
@@ -509,6 +509,62 @@ TEST(MedABIPass, DirectCallPrefersSeededArgumentPhiOverWiderUndefPhi) {
   ASSERT_EQ(Func.CallInfos[0].Args.size(), 3u);
   EXPECT_EQ(Func.CallInfos[0].Args[2], NarrowPhi);
   EXPECT_EQ(Func.CallInfos[0].Args[2].Size, 4u);
+}
+
+TEST(LowToMedCallReturnFP, DoesNotCrossCallClobber) {
+  constexpr Arch TheArch = Arch::X64;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+  LowFunc Low;
+  Low.Entry = 0x1000;
+  Low.Name = "fp_return_call_barrier";
+
+  LowBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = Low.Entry;
+  Block.EndAddr = 0x1018;
+
+  const NdVar WideFP = NdVar::reg(x86reg::XMM0, 16);
+  LowOp Seed;
+  Seed.Opcode = NdOp::COPY;
+  Seed.Addr = 0x1000;
+  Seed.Output = WideFP;
+  Seed.addInput(WideFP);
+  Block.Ops.push_back(Seed);
+
+  auto makeCall = [](va_t Addr, va_t Target) {
+    LowOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.Addr = Addr;
+    Call.Output = NdVar::reg(x86reg::RAX, 8);
+    Call.addInput(NdVar::cst(Target, 8));
+    return Call;
+  };
+  Block.Ops.push_back(makeCall(0x1004, 0x2000));
+  Block.Ops.push_back(makeCall(0x1008, 0x3000));
+
+  LowOp ReadSecondResult;
+  ReadSecondResult.Opcode = NdOp::COPY;
+  ReadSecondResult.Addr = 0x100c;
+  ReadSecondResult.Output = NdVar::tmp(0x4000, 8);
+  ReadSecondResult.addInput(NdVar::reg(x86reg::XMM0, 8));
+  Block.Ops.push_back(ReadSecondResult);
+
+  LowOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = 0x1010;
+  Return.addInput(ReadSecondResult.Output);
+  Block.Ops.push_back(Return);
+  Low.Blocks.push_back(std::move(Block));
+
+  MedFunc Med = LowToMedConverter().convert(Low, TheArch);
+  ASSERT_EQ(Med.Blocks.size(), 1u);
+  std::vector<const MedOp *> Calls;
+  for (const MedOp &Op : Med.Blocks.front().Ops)
+    if (Op.Opcode == NdOp::CALL)
+      Calls.push_back(&Op);
+  ASSERT_EQ(Calls.size(), 2u);
+  EXPECT_EQ(Calls[0]->Output.RegOff, TRI.IntReturnReg);
+  EXPECT_EQ(Calls[1]->Output.RegOff, TRI.FPReturnReg);
 }
 
 TEST(MedVerifier, AcceptsImplicitCallClobberDefinition) {
@@ -1011,6 +1067,164 @@ llvm::Function *verifiedFunction(llvm::Module &Module, llvm::StringRef Name) {
   llvm::Function *Function = Module.getFunction(Name);
   EXPECT_NE(Function, nullptr);
   return Function;
+}
+
+TEST(MedLLVMReturn, UsesLatestAliasedDefinitionBeforeCoercion) {
+  constexpr Arch TheArch = Arch::X64;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+
+  MedFunc Func;
+  Func.Entry = 0x5000;
+  Func.Name = "latest_return_alias";
+  Func.ReturnType = NdType::makeInt(8, false);
+  MedBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = Func.Entry;
+  Block.EndAddr = Func.Entry + 12;
+
+  MedOp Older;
+  Older.Opcode = NdOp::COPY;
+  Older.Output = reg(1, 1, 8, TRI.IntReturnReg, TheArch);
+  Older.addInput(MedVar::makeConst(0x1122334455667788ULL, 8));
+  Block.Ops.push_back(Older);
+
+  MedOp Newer;
+  Newer.Opcode = NdOp::COPY;
+  Newer.Output = reg(2, 1, 4, TRI.IntReturnReg, TheArch);
+  Newer.addInput(MedVar::makeConst(0x55667788, 4));
+  Block.Ops.push_back(Newer);
+
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = Func.Entry + 8;
+  Block.Ops.push_back(Return);
+  Func.Blocks.push_back(std::move(Block));
+
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit({Func}, Context, Func.Name, TheArch);
+  ASSERT_NE(Module, nullptr);
+  llvm::Function *Function = verifiedFunction(*Module, Func.Name);
+  ASSERT_NE(Function, nullptr);
+
+  const llvm::ReturnInst *ReturnInst = nullptr;
+  bool HasZExt = false;
+  for (const llvm::BasicBlock &BB : *Function)
+    for (const llvm::Instruction &Instruction : BB) {
+      if (auto *Candidate = llvm::dyn_cast<llvm::ReturnInst>(&Instruction))
+        ReturnInst = Candidate;
+      HasZExt |= llvm::isa<llvm::ZExtInst>(&Instruction);
+    }
+  ASSERT_NE(ReturnInst, nullptr);
+  EXPECT_TRUE(HasZExt);
+}
+
+TEST(MedLLVMReturn, UsesLatestFloatDefinitionBeforeWidthPreference) {
+  constexpr Arch TheArch = Arch::X64;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+
+  MedFunc Func;
+  Func.Entry = 0x5100;
+  Func.Name = "latest_float_return_alias";
+  Func.ReturnType = NdType::makeFloat(4);
+  MedBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = Func.Entry;
+  Block.EndAddr = Func.Entry + 12;
+
+  MedOp Older;
+  Older.Opcode = NdOp::COPY;
+  Older.Output = reg(1, 1, 16, TRI.fpReturnModelReg(), TheArch);
+  Older.addInput(MedVar::makeConst(0x1122334455667788ULL, 16));
+  Block.Ops.push_back(Older);
+
+  MedOp Newer;
+  Newer.Opcode = NdOp::COPY;
+  Newer.Output = reg(2, 1, 4, TRI.fpReturnModelReg(), TheArch);
+  Newer.addInput(MedVar::makeConst(0x3f800000ULL, 4));
+  Block.Ops.push_back(Newer);
+
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = Func.Entry + 8;
+  Block.Ops.push_back(Return);
+  Func.Blocks.push_back(std::move(Block));
+
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit({Func}, Context, Func.Name, TheArch);
+  ASSERT_NE(Module, nullptr);
+  llvm::Function *Function = verifiedFunction(*Module, Func.Name);
+  ASSERT_NE(Function, nullptr);
+
+  const llvm::ReturnInst *ReturnInst = nullptr;
+  for (const llvm::BasicBlock &BB : *Function)
+    for (const llvm::Instruction &Instruction : BB)
+      if (auto *Candidate = llvm::dyn_cast<llvm::ReturnInst>(&Instruction))
+        ReturnInst = Candidate;
+  ASSERT_NE(ReturnInst, nullptr);
+
+  auto *ReturnBitCast =
+      llvm::dyn_cast<llvm::BitCastInst>(ReturnInst->getReturnValue());
+  ASSERT_NE(ReturnBitCast, nullptr);
+  auto *Widened = llvm::dyn_cast<llvm::ZExtInst>(ReturnBitCast->getOperand(0));
+  ASSERT_NE(Widened, nullptr);
+  EXPECT_EQ(Widened->getSrcTy()->getIntegerBitWidth(), 32u);
+}
+
+TEST(MedLLVMReturn, UsesLatestFloatPredecessorDefinitionBeforeWidthPreference) {
+  constexpr Arch TheArch = Arch::X64;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+
+  MedFunc Func;
+  Func.Entry = 0x5200;
+  Func.Name = "latest_float_predecessor_return_alias";
+  Func.ReturnType = NdType::makeFloat(4);
+
+  MedBlock Producer;
+  Producer.Id = 0;
+  Producer.StartAddr = Func.Entry;
+  Producer.EndAddr = Func.Entry + 8;
+  Producer.Succs = {1};
+  MedOp Older;
+  Older.Opcode = NdOp::COPY;
+  Older.Output = reg(1, 1, 16, TRI.fpReturnModelReg(), TheArch);
+  Older.addInput(MedVar::makeConst(0x1122334455667788ULL, 16));
+  Producer.Ops.push_back(Older);
+  MedOp Newer;
+  Newer.Opcode = NdOp::COPY;
+  Newer.Output = reg(2, 1, 4, TRI.fpReturnModelReg(), TheArch);
+  Newer.addInput(MedVar::makeConst(0x3f800000ULL, 4));
+  Producer.Ops.push_back(Newer);
+
+  MedBlock ReturnBlock;
+  ReturnBlock.Id = 1;
+  ReturnBlock.StartAddr = Func.Entry + 8;
+  ReturnBlock.EndAddr = Func.Entry + 12;
+  ReturnBlock.Preds = {0};
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = Func.Entry + 8;
+  ReturnBlock.Ops.push_back(Return);
+  Func.Blocks = {std::move(Producer), std::move(ReturnBlock)};
+
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit({Func}, Context, Func.Name, TheArch);
+  ASSERT_NE(Module, nullptr);
+  llvm::Function *Function = verifiedFunction(*Module, Func.Name);
+  ASSERT_NE(Function, nullptr);
+
+  const llvm::ReturnInst *ReturnInst = nullptr;
+  for (const llvm::BasicBlock &BB : *Function)
+    for (const llvm::Instruction &Instruction : BB)
+      if (auto *Candidate = llvm::dyn_cast<llvm::ReturnInst>(&Instruction))
+        ReturnInst = Candidate;
+  ASSERT_NE(ReturnInst, nullptr);
+
+  auto *ReturnBitCast =
+      llvm::dyn_cast<llvm::BitCastInst>(ReturnInst->getReturnValue());
+  ASSERT_NE(ReturnBitCast, nullptr);
+  auto *Widened = llvm::dyn_cast<llvm::ZExtInst>(ReturnBitCast->getOperand(0));
+  ASSERT_NE(Widened, nullptr);
+  EXPECT_EQ(Widened->getSrcTy()->getIntegerBitWidth(), 32u);
 }
 
 TEST(MedLLVMEmitterPredicatedControl,

@@ -671,6 +671,22 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
     return TRI.isSubRegOf(AV.RegOff, AV.Size, BV.RegOff, BV.Size) ||
            TRI.isSubRegOf(BV.RegOff, BV.Size, AV.RegOff, AV.Size);
   };
+  auto isSelectArmComponent = [&](const PhiNode &Phi,
+                                  const MedVar &Arm) {
+    if (Phi.Output == Arm)
+      return true;
+    const PhiNode *ArmPhi = findPhi(Arm);
+    return ArmPhi && inSameForwardingComponent(&Phi, ArmPhi);
+  };
+  auto isSelectArmPair = [&](const PhiNode &A, const PhiNode &B) {
+    return std::any_of(SelectBasePairs.begin(), SelectBasePairs.end(),
+                       [&](const auto &Pair) {
+                         return (isSelectArmComponent(A, Pair.first) &&
+                                 isSelectArmComponent(B, Pair.second)) ||
+                                (isSelectArmComponent(A, Pair.second) &&
+                                 isSelectArmComponent(B, Pair.first));
+                       });
+  };
 
   llvm::Constant *ProvenRun = nullptr;
   uint64_t ProvenRunStart = 0;
@@ -683,9 +699,11 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
     for (const PhiBaseEvidence &Item : Evidence) {
       // Multiple table-bearing recurrence candidates are only one pointer
       // component when their outputs are overlapping register aliases. Two
-      // independent pointer PHIs under ADD/SUB are not an address base+index.
+      // independent pointer PHIs under ADD/SUB are not a base+index. Exact
+      // SELECT arms are allowed only when both stay in one forwarding component.
       if (Item.Phi != PrimaryPhi && !isRegisterAlias(*PrimaryPhi, *Item.Phi) &&
-          !inSameForwardingComponent(PrimaryPhi, Item.Phi)) {
+          !inSameForwardingComponent(PrimaryPhi, Item.Phi) &&
+          !isSelectArmPair(*PrimaryPhi, *Item.Phi)) {
         failAmbiguousPhi(*Item.Phi);
         return nullptr;
       }
@@ -1033,7 +1051,58 @@ MedLLVMEmitter::tryResolveIndexedGlobalPtr(const MedVar &AddrVar,
   if (!Def || Def->NumInputs < 2 ||
       (Def->Opcode != NdOp::INT_ADD && Def->Opcode != NdOp::INT_SUB))
     return nullptr;
-
+  auto isBoundedScalarLookup = [&](const MedVar &Value) {
+    const MedOp *Load = lookupDef(Value);
+    if (!Load || Load->Opcode != NdOp::LOAD || Load->NumInputs < 1)
+      return false;
+    auto sameValue = [](const MedVar &A, const MedVar &B) {
+      return !A.isConst() && !B.isConst() && A.Kind == B.Kind &&
+             A.Id == B.Id && A.SSAVer == B.SSAVer;
+    };
+    bool HasSmallBound = false;
+    for (const MedBlock &Block : CurMedFunc->Blocks)
+      for (const MedOp &Use : Block.Ops)
+        for (uint8_t I = 0; I < Use.NumInputs; ++I) {
+          if (!sameValue(Use.Inputs[I], Value))
+            continue;
+          const uint8_t Other = I ^ 1u;
+          const bool IsCompare =
+              Use.Opcode == NdOp::INT_EQUAL ||
+              Use.Opcode == NdOp::INT_NOTEQUAL ||
+              Use.Opcode == NdOp::INT_LESS ||
+              Use.Opcode == NdOp::INT_SLESS ||
+              Use.Opcode == NdOp::INT_LESSEQUAL ||
+              Use.Opcode == NdOp::INT_SLESSEQUAL;
+          if (IsCompare) {
+            if (Use.NumInputs >= 2 && Use.Inputs[Other].isConst() &&
+                Use.Inputs[Other].ConstVal <= 0x100000)
+              HasSmallBound = true;
+            continue;
+          }
+          switch (Use.Opcode) {
+          case NdOp::COPY:
+          case NdOp::SUBBYTES:
+          case NdOp::INT_ZEXT:
+          case NdOp::INT_SEXT:
+          case NdOp::INT_ADD:
+          case NdOp::INT_SUB:
+          case NdOp::INT_AND:
+          case NdOp::INT_OR:
+          case NdOp::INT_XOR:
+          case NdOp::INT_LEFT:
+          case NdOp::INT_RIGHT:
+          case NdOp::INT_ASHR:
+          case NdOp::INT_CARRY:
+          case NdOp::INT_SOVF:
+          case NdOp::INT_SBOR:
+          case NdOp::BOOL_NOT:
+            continue;
+          default:
+            return false;
+          }
+        }
+    return HasSmallBound;
+  };
   // Decompose the address into one global base constant plus the runtime index
   // addends.  Handles both the one-level `INT_ADD(base,index)` form and a base
   // nested under multi-dimensional indexing (`base + row*stride + col`).
@@ -1049,7 +1118,8 @@ MedLLVMEmitter::tryResolveIndexedGlobalPtr(const MedVar &AddrVar,
   if (Def->Opcode == NdOp::INT_SUB && !traceSSAConst(Def->Inputs[1]) &&
       Def->Output.Size != 0 && Def->Inputs[0].Size != 0 &&
       Def->Output.Size >= Def->Inputs[0].Size &&
-      valueIsStableAddressOffset(Def->Inputs[1]) &&
+      (valueIsStableAddressOffset(Def->Inputs[1]) ||
+       isBoundedScalarLookup(Def->Inputs[1])) &&
       collectIndexedGlobalBase(Def->Inputs[0], Base, HaveBase, IdxTerms,
                                /*Depth=*/0, FailClosed) &&
       HaveBase)
@@ -1089,7 +1159,8 @@ MedLLVMEmitter::tryResolveIndexedGlobalPtr(const MedVar &AddrVar,
   for (const auto &T : IdxTerms) {
     if (varIsFrameDerived(T))
       return nullptr;
-    if (!valueIsStableAddressOffset(T)) {
+    if (!valueIsStableAddressOffset(T) &&
+        !isBoundedScalarLookup(T)) {
       if (FailClosed) {
         if (!FatalDataPointerResolution)
           syncError() << "med_llvm_emitter: read-only table address "

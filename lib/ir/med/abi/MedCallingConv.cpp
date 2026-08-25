@@ -594,22 +594,67 @@ void detectStackParams(MedFunc &Func, Arch TargetArch,
     ++Leading;
   }
 
+  using ValueKey = med_calling_conv_detail::ValueKey;
+  std::map<ValueKey, const MedOp *> UniqueDefs;
+  std::set<ValueKey> AmbiguousDefs;
+  for (const auto &Block : Func.Blocks)
+    for (const auto &Op : Block.Ops) {
+      if (Op.Output.isConst())
+        continue;
+      const ValueKey Key = med_calling_conv_detail::valueKey(Op.Output);
+      auto [It, Inserted] = UniqueDefs.emplace(Key, &Op);
+      if (!Inserted && It->second != &Op)
+        AmbiguousDefs.insert(Key);
+    }
+
   auto findDef = [&](const MedVar &V) -> const MedOp * {
-    for (const auto &Blk : Func.Blocks)
-      for (const auto &Op : Blk.Ops)
-        if (Op.Output.Kind == V.Kind && Op.Output.Id == V.Id &&
-            Op.Output.SSAVer == V.SSAVer)
-          return &Op;
-    return nullptr;
+    const ValueKey Key = med_calling_conv_detail::valueKey(V);
+    if (AmbiguousDefs.count(Key))
+      return nullptr;
+    auto It = UniqueDefs.find(Key);
+    return It == UniqueDefs.end() ? nullptr : It->second;
   };
+  std::map<ValueKey, const PhiNode *> UniquePhis;
+  std::set<ValueKey> AmbiguousPhis;
+  for (const auto &Block : Func.Blocks)
+    for (const auto &Phi : Block.Phis) {
+      const ValueKey Key = med_calling_conv_detail::valueKey(Phi.Output);
+      auto [It, Inserted] = UniquePhis.emplace(Key, &Phi);
+      if (!Inserted && It->second != &Phi)
+        AmbiguousPhis.insert(Key);
+    }
 
   // Offset of \p V relative to the entry stack pointer (folding the COPY /
   // zext / subpiece / push-sub chain detectCc sees before copy propagation),
   // or nullopt when V is not entry-SP-derived.
+  std::set<ValueKey> ActiveTrace;
   std::function<std::optional<int64_t>(const MedVar &, int)> traceOff =
       [&](const MedVar &V, int Depth) -> std::optional<int64_t> {
     if (Depth > 64)
       return std::nullopt;
+    const ValueKey Key = med_calling_conv_detail::valueKey(V);
+    if (!ActiveTrace.insert(Key).second)
+      return std::nullopt;
+    struct PopActive {
+      std::set<ValueKey> &Set;
+      ValueKey Key;
+      ~PopActive() { Set.erase(Key); }
+    } Guard{ActiveTrace, Key};
+
+    if (AmbiguousPhis.count(Key))
+      return std::nullopt;
+    if (auto It = UniquePhis.find(Key); It != UniquePhis.end()) {
+      std::optional<int64_t> Merged;
+      for (const auto &[Pred, Arg] : It->second->Args) {
+        (void)Pred;
+        auto Offset = traceOff(Arg, Depth + 1);
+        if (!Offset || (Merged && *Merged != *Offset))
+          return std::nullopt;
+        Merged = Offset;
+      }
+      return Merged;
+    }
+
     const MedOp *Def = findDef(V);
     if (!Def)
       return (V.Kind == MedVar::Reg && V.RegOff == SpOff)

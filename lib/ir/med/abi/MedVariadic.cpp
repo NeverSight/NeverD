@@ -30,8 +30,10 @@
 #include "llvm/ADT/SmallVector.h"
 
 #include <functional>
+#include <map>
 #include <optional>
 #include <set>
+#include <tuple>
 
 namespace neverd {
 
@@ -40,69 +42,112 @@ using med_calling_conv_detail::containsValue;
 
 namespace {
 
-// Byte offset of \p V relative to the entry stack pointer, following the SP
-// definition chain across the whole function.  Runs before copy propagation
-// (detectCc time), so the def may sit in any block; PHIs end the trace. nullopt
-// when V is not entry-SP-derived.
+// Byte offset of \p V relative to the entry stack pointer. Every SSA/PHI
+// definition must be unique and every PHI arm must prove the same offset.
 std::optional<int64_t> entrySpDelta(const MedFunc &Func, uint64_t SpOff,
-                                    const MedVar &V, int Depth) {
-  if (Depth > 64 || V.isConst())
-    return std::nullopt;
-  const MedOp *Def = nullptr;
-  for (const auto &Blk : Func.Blocks) {
-    for (const auto &Op : Blk.Ops)
-      if (Op.Output.Kind == V.Kind && Op.Output.Id == V.Id &&
-          Op.Output.SSAVer == V.SSAVer && Op.Output.RegOff == V.RegOff) {
-        Def = &Op;
-        break;
-      }
-    if (Def)
-      break;
-  }
-  if (!Def)
-    return (V.Kind == MedVar::Reg && V.RegOff == SpOff)
-               ? std::optional<int64_t>(0)
-               : std::nullopt;
-  auto constOf = [](const MedVar &X) -> std::optional<int64_t> {
-    return X.isConst()
-               ? std::optional<int64_t>(static_cast<int64_t>(X.ConstVal))
-               : std::nullopt;
+                                    const MedVar &Root, int Depth) {
+  using Key = std::tuple<uint8_t, int, int, uint64_t, uint16_t>;
+  auto keyOf = [](const MedVar &Value) -> Key {
+    return {static_cast<uint8_t>(Value.Kind), Value.Id, Value.SSAVer,
+            Value.Kind == MedVar::Reg ? Value.RegOff : 0, Value.Size};
   };
-  switch (Def->Opcode) {
-  case NdOp::COPY:
-    if (Def->NumInputs >= 1) {
-      const MedVar &In = Def->Inputs[0];
-      if (In.Kind == MedVar::Reg && In.RegOff == SpOff && In.Id == V.Id &&
-          In.SSAVer == V.SSAVer)
-        return 0;
-      return entrySpDelta(Func, SpOff, In, Depth + 1);
+  std::map<Key, const MedOp *> Definitions;
+  std::set<Key> AmbiguousDefinitions;
+  std::map<Key, const PhiNode *> Phis;
+  std::set<Key> AmbiguousPhis;
+  for (const auto &Block : Func.Blocks) {
+    for (const auto &Op : Block.Ops) {
+      if (Op.Output.isConst())
+        continue;
+      const Key K = keyOf(Op.Output);
+      auto [It, Inserted] = Definitions.emplace(K, &Op);
+      if (!Inserted && It->second != &Op)
+        AmbiguousDefinitions.insert(K);
     }
-    return std::nullopt;
-  case NdOp::INT_ZEXT:
-  case NdOp::INT_SEXT:
-  case NdOp::SUBBYTES:
-    return Def->NumInputs >= 1
-               ? entrySpDelta(Func, SpOff, Def->Inputs[0], Depth + 1)
-               : std::nullopt;
-  case NdOp::INT_ADD:
-    if (Def->NumInputs >= 2) {
-      if (auto C = constOf(Def->Inputs[1]))
-        if (auto B = entrySpDelta(Func, SpOff, Def->Inputs[0], Depth + 1))
-          return *B + *C;
-      if (auto C = constOf(Def->Inputs[0]))
-        if (auto B = entrySpDelta(Func, SpOff, Def->Inputs[1], Depth + 1))
-          return *B + *C;
+    for (const auto &Phi : Block.Phis) {
+      const Key K = keyOf(Phi.Output);
+      auto [It, Inserted] = Phis.emplace(K, &Phi);
+      if (!Inserted && It->second != &Phi)
+        AmbiguousPhis.insert(K);
     }
-    return std::nullopt;
-  case NdOp::INT_SUB:
-    if (Def->NumInputs >= 2)
-      if (auto C = constOf(Def->Inputs[1]))
-        if (auto B = entrySpDelta(Func, SpOff, Def->Inputs[0], Depth + 1))
-          return *B - *C;
-    return std::nullopt;
-  default:
-    return std::nullopt;
   }
+
+  std::set<Key> Active;
+  std::function<std::optional<int64_t>(const MedVar &, int)> Eval =
+      [&](const MedVar &V, int Remaining) -> std::optional<int64_t> {
+    if (Remaining <= 0 || V.isConst()) {
+      if (V.isConst() &&
+          (V.Provenance == ConstantAddressProvenance::Unknown ||
+           V.Provenance == ConstantAddressProvenance::Scalar))
+        return static_cast<int64_t>(V.ConstVal);
+      return std::nullopt;
+    }
+    if (V.Kind != MedVar::Reg && V.Kind != MedVar::Temp)
+      return std::nullopt;
+    if (V.Kind == MedVar::Reg && V.RegOff == SpOff && V.SSAVer == 0)
+      return int64_t{0};
+
+    const Key K = keyOf(V);
+    if (!Active.insert(K).second || AmbiguousDefinitions.count(K) ||
+        AmbiguousPhis.count(K))
+      return std::nullopt;
+    struct PopActive {
+      std::set<Key> &Set;
+      Key Value;
+      ~PopActive() { Set.erase(Value); }
+    } Guard{Active, K};
+
+    if (auto It = Phis.find(K); It != Phis.end()) {
+      std::optional<int64_t> Merged;
+      for (const auto &[Pred, Arg] : It->second->Args) {
+        (void)Pred;
+        auto Offset = Eval(Arg, Remaining - 1);
+        if (!Offset || (Merged && *Merged != *Offset))
+          return std::nullopt;
+        Merged = Offset;
+      }
+      return Merged;
+    }
+    auto It = Definitions.find(K);
+    if (It == Definitions.end())
+      return std::nullopt;
+    const MedOp &Op = *It->second;
+    auto constOf = [](const MedVar &Value) -> std::optional<int64_t> {
+      if (!Value.isConst() ||
+          (Value.Provenance != ConstantAddressProvenance::Unknown &&
+           Value.Provenance != ConstantAddressProvenance::Scalar))
+        return std::nullopt;
+      return static_cast<int64_t>(Value.ConstVal);
+    };
+    if (Op.NumInputs < 1)
+      return std::nullopt;
+    switch (Op.Opcode) {
+    case NdOp::COPY:
+    case NdOp::INT_ZEXT:
+    case NdOp::INT_SEXT:
+      return Eval(Op.Inputs[0], Remaining - 1);
+    case NdOp::SUBBYTES:
+      return Op.NumInputs >= 2 && Op.Inputs[1].isConst() &&
+                     Op.Inputs[1].ConstVal == 0
+                 ? Eval(Op.Inputs[0], Remaining - 1)
+                 : std::nullopt;
+    case NdOp::INT_ADD:
+    case NdOp::INT_SUB:
+      if (Op.NumInputs < 2)
+        return std::nullopt;
+      if (auto C = constOf(Op.Inputs[1]))
+        if (auto Base = Eval(Op.Inputs[0], Remaining - 1))
+          return Op.Opcode == NdOp::INT_ADD ? *Base + *C : *Base - *C;
+      if (Op.Opcode == NdOp::INT_ADD)
+        if (auto C = constOf(Op.Inputs[0]))
+          if (auto Base = Eval(Op.Inputs[1], Remaining - 1))
+            return *Base + *C;
+      return std::nullopt;
+    default:
+      return std::nullopt;
+    }
+  };
+  return Eval(Root, Depth > 0 ? 64 - Depth : 64);
 }
 
 // Whether \p V is the x86-64 SysV va_start word ((fp_offset << 32) | gp_offset)
@@ -206,7 +251,8 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
       std::set<int64_t> HomeSlots;
       for (const auto &Blk : Func.Blocks)
         for (const auto &Op : Blk.Ops)
-          if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2)
+          if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2 &&
+              !Op.Inputs[1].isConst())
             if (auto VD = entrySpDelta(Func, SpOff, Op.Inputs[1], 0))
               if (*VD >= 0 && *VD <= limits::kVariadicOverflowBaseMax &&
                   TRI.PointerSize > 0 && (*VD % TRI.PointerSize) == 0)
@@ -421,10 +467,8 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
           UsedAsLoad = true;
     Marked = !HomeSlots.empty() && (Reloaded || UsedAsLoad);
   }
-
   if (!Marked)
     return;
-
   // The overflow area base: the smallest non-negative entry-SP offset stored as
   // a pointer value (the va_list overflow/__stack pointer).  x86-64 places it
   // one slot past the return address (+8); AArch64 at the entry SP (+0).  The

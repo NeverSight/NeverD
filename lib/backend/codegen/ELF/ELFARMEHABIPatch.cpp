@@ -530,10 +530,11 @@ llvm::Error collectGeneratedRecords(const CompiledImage &Compiled,
       } else if ((Word1 & kCompactBit) != 0) {
         if ((Word1 & kCompactVendorMask) != 0 ||
             ((Word1 >> kCompactIndexShift) & 0xF) != 0 ||
-            !validateInlineOpcodeWord(Word1))
+            !validateInlineOpcodeWord(Word1)) {
           return patchError("a regenerated .ARM.exidx entry names a "
                             "personality routine or opcode program that "
                             "cannot be encoded inline");
+        }
         Record.Model = ELFARMEHABIModel::Inline;
         for (size_t Byte = kInlineOpcodeBytes; Byte-- > 0;)
           Record.Opcodes.push_back(static_cast<uint8_t>(Word1 >> (Byte * 8)));

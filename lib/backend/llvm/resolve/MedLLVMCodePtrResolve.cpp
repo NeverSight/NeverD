@@ -965,8 +965,9 @@ llvm::Value *MedLLVMEmitter::tryResolveCodePtrTablePtr(
   // a single constant base.  When every base-like constant in the address lands
   // in ONE pointer-table segment, the whole address provably indexes that
   // segment, so redirect by the address's own value: GEP(@seg, addr - segVA).
-  if (auto SelSegOpt =
-          ptrTableUniqueSegment(AddrVar, /*IncludeSymbolizedEvidence=*/true)) {
+  auto SelSegOpt =
+      ptrTableUniqueSegment(AddrVar, /*IncludeSymbolizedEvidence=*/true);
+  if (SelSegOpt) {
     const uint64_t SelSeg = *SelSegOpt;
     // Recovered switch metadata deliberately keeps ordinary, dead residual
     // jump-table loads out of generic constant symbolization.  A residual
@@ -1997,6 +1998,14 @@ MedLLVMEmitter::tryResolveIndirectCallTarget(const MedVar &V,
     const PointerTableLoadRoleSummary SlotRoles =
         classifyPointerTableLoadRoles(V);
     if (SlotRoles.Recognized) {
+      // A code-bearing mixed run may still have adjacent unknown/data slots.
+      // Preserve only an unadjusted value loaded through an architectural
+      // register address; getVar retains its relocation-safe runtime value.
+      if (SlotRoles.SawCode && SlotRoles.ValueAdjustment == 0 &&
+          SlotRoles.Load && SlotRoles.Load->NumInputs >= 1 &&
+          SlotRoles.Load->Inputs[0].Kind == MedVar::Reg)
+        if (llvm::Value *Target = getVar(V, Builder))
+          return Target;
       // The LOAD emitter has already routed this address through the mixed
       // relocation mirror. Reuse that relocation-safe runtime value only when
       // every reachable slot is a code/import field and no post-load pointer

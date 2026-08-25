@@ -91,6 +91,69 @@ TEST_F(AArch64_CallAbi, ExternalDarwinVarargsKeepOutgoingStackValues) {
       << F;
 }
 
+TEST_F(AArch64_CallAbi, DarwinVarargsAtJoinKeepAllOutgoingStackValues) {
+  if (!fs::exists(callAbiObj()))
+    GTEST_SKIP() << "AArch64 Mach-O ABI fixture is only built on Apple hosts";
+  auto R = liftToLLVMIRUnopt(callAbiObj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+
+  std::string F = callAbiFunctionText(R.out, "joined_external_varargs");
+  ASSERT_FALSE(F.empty()) << R.out;
+  size_t Call = F.find("@printf(");
+  ASSERT_NE(Call, std::string::npos) << F;
+  size_t LineBegin = F.rfind('\n', Call);
+  size_t LineEnd = F.find('\n', Call);
+  std::string CallLine = F.substr(LineBegin + 1, LineEnd - LineBegin - 1);
+  size_t FirstArg = CallLine.find("i64 %");
+  ASSERT_NE(FirstArg, std::string::npos) << CallLine;
+  EXPECT_NE(CallLine.find("i64 %", FirstArg + 6), std::string::npos)
+      << CallLine;
+}
+
+TEST_F(AArch64_CallAbi, DarwinVaListForwarderUsesExactConsumerCertificate) {
+  if (!fs::exists(callAbiObj()))
+    GTEST_SKIP() << "AArch64 Mach-O ABI fixture is only built on Apple hosts";
+  auto R = liftToLLVMIRUnopt(callAbiObj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+
+  std::string F = callAbiFunctionText(R.out, "forward_va_list");
+  ASSERT_FALSE(F.empty()) << R.out;
+  EXPECT_NE(F.find("@forward_va_list(i64"), std::string::npos) << F;
+  EXPECT_NE(F.find("..."), std::string::npos) << F;
+  EXPECT_NE(F.find("call i64 @vprintf(ptr"), std::string::npos) << F;
+}
+
+TEST_F(AArch64_CallAbi, DarwinVaListWrapperKeepsFixedRegisterPrefix) {
+  if (!fs::exists(callAbiObj()))
+    GTEST_SKIP() << "AArch64 Mach-O ABI fixture is only built on Apple hosts";
+  auto R = liftToLLVMIRUnopt(callAbiObj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+
+  std::string Wrapper =
+      callAbiFunctionText(R.out, "forward_va_list_with_context");
+  ASSERT_FALSE(Wrapper.empty()) << R.out;
+  EXPECT_NE(Wrapper.find("@forward_va_list_with_context(i32 %arg0, i64 %arg1"),
+            std::string::npos)
+      << Wrapper;
+
+  std::string Caller =
+      callAbiFunctionText(R.out, "call_forward_va_list_with_context");
+  ASSERT_FALSE(Caller.empty()) << R.out;
+  size_t Call = Caller.find("@forward_va_list_with_context(");
+  ASSERT_NE(Call, std::string::npos) << Caller;
+  size_t LineBegin = Caller.rfind('\n', Call);
+  size_t LineEnd = Caller.find('\n', Call);
+  std::string CallLine = Caller.substr(LineBegin + 1, LineEnd - LineBegin - 1);
+  EXPECT_NE(CallLine.find("call i64 (i32, i64, i64, ...)"), std::string::npos)
+      << CallLine;
+  size_t ContextArg = CallLine.find("i32 %");
+  ASSERT_NE(ContextArg, std::string::npos) << CallLine;
+  size_t FixedArg = CallLine.find("i64 ", ContextArg);
+  ASSERT_NE(FixedArg, std::string::npos) << CallLine;
+  EXPECT_NE(CallLine.find("i64 ", FixedArg + 4), std::string::npos)
+      << CallLine;
+}
+
 TEST_F(AArch64_CallAbi, FixedPointerArgumentUsesFullWidthPhiAlias) {
   if (!fs::exists(callArgPhiMachOObj()))
     GTEST_SKIP() << "AArch64 Mach-O ABI fixture is only built on Apple hosts";

@@ -213,8 +213,9 @@ bool MedLLVMEmitter::emitJumpTableSwitch(
       if (Selector.Size != Plan.ResultSize || Selector.isConst() ||
           !ExpectedPreds.count(Pred) || !PlannedPreds.insert(Pred).second)
         return nullptr;
-    if (PlannedPreds != ExpectedPreds)
+    if (PlannedPreds != ExpectedPreds) {
       return nullptr;
+    }
 
     auto *Ty = sizeToType(Plan.ResultSize);
     auto &Entry = CurFunc->getEntryBlock();
@@ -313,8 +314,9 @@ bool MedLLVMEmitter::emitJumpTableSwitch(
       const bool HasEdgeMergedPlan =
           PlanIt != CurMedFunc->SwitchSelectorPlans.end() &&
           PlanIt->second.PlanKind == MedSwitchSelectorPlan::Kind::EdgeMerged;
-      if (!IndexVar && !HasEdgeMergedPlan)
+      if (!IndexVar && !HasEdgeMergedPlan) {
         return false;
+      }
     }
     // A two-level (index-byte) table composes its per-case targets from
     // `jmptab[idxtab[switchvar]]`; the switch condition is the *real* switch
@@ -384,8 +386,9 @@ bool MedLLVMEmitter::emitJumpTableSwitch(
     // index) is recovered after target validation via
     // synthesizeSharedDispatchIndex; only bail here when there is no such
     // fallback (≤1 predecessor).
-    if (!IndexVar && Blk.Preds.size() < 2)
+    if (!IndexVar && Blk.Preds.size() < 2) {
       return false;
+    }
   }
 
   // Present the switch on the *source* variable and labels rather than the
@@ -438,15 +441,18 @@ bool MedLLVMEmitter::emitJumpTableSwitch(
   CaseBlocks.reserve(JT->Targets.size());
   for (va_t T : JT->Targets) {
     int BId = blockForTarget(T);
-    if (BId < 0)
+    if (BId < 0) {
       return false;
+    }
     auto BIt = BBMap.find(BId);
-    if (BIt == BBMap.end())
+    if (BIt == BBMap.end()) {
       return false;
+    }
     CaseBlocks.push_back(BIt->second);
   }
-  if (CaseBlocks.empty())
+  if (CaseBlocks.empty()) {
     return false;
+  }
 
   llvm::Value *Index =
       JT->TwoTableSelect ? synthesizeTwoTableSelector(*JT, Builder)
@@ -454,8 +460,9 @@ bool MedLLVMEmitter::emitJumpTableSwitch(
       : !JT->SelectorUseRefs.empty()
           ? edgeMergedIndexFromSelectorPlan()
           : synthesizeSharedDispatchIndex(Blk, BrOp, *JT, Builder);
-  if (!Index || !Index->getType()->isIntegerTy())
+  if (!Index || !Index->getType()->isIntegerTy()) {
     return false;
+  }
   auto *IdxTy = llvm::cast<llvm::IntegerType>(Index->getType());
 
   // The table address calculation wraps at the target's pointer width.  Some
@@ -473,8 +480,9 @@ bool MedLLVMEmitter::emitJumpTableSwitch(
 
   const unsigned IdxBits = IdxTy->getBitWidth();
   auto CaseBits = uniqueSwitchCaseBitPatterns(Labels, LabelDelta, IdxBits);
-  if (!CaseBits)
+  if (!CaseBits) {
     return false;
+  }
 
   // A recovered table describes only the selectors whose target mapping was
   // proved.  Routing any gap, truncated composite domain, or stale/out-of-

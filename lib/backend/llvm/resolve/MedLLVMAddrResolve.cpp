@@ -762,6 +762,9 @@ void MedLLVMEmitter::invalidateFeasibleEdgeDependentCaches() const {
   FrameDerivedCache.clear();
   FrameAddressCacheFor = nullptr;
   FrameAddressCache.clear();
+  FrameReloadCacheFor = nullptr;
+  FrameReloadCache.clear();
+  ++FrameReloadCacheGeneration;
 }
 
 void MedLLVMEmitter::ensureFeasibleEdgeCache() const {
@@ -1403,9 +1406,9 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
   // condition or shift/mask control does not anchor the selected scalar.
   // Exact frame reload sources are followed so an SSA PHI whose backedge is
   // carried through a spill slot remains one scalar SCC.
-  std::function<bool(const MedVar &, const Key &, int, std::set<Key>)>
+  std::function<bool(const MedVar &, const Key &, int, std::set<Key> &)>
       scalarValueReaches = [&](const MedVar &Start, const Key &Target,
-                               int Depth, std::set<Key> Seen) -> bool {
+                               int Depth, std::set<Key> &Seen) -> bool {
     if (Depth > 128 || Start.isConst())
       return false;
     const Key StartKey = keyOf(Start);
@@ -1413,6 +1416,11 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
       return true;
     if (!Seen.insert(StartKey).second)
       return false;
+    struct SeenScope {
+      std::set<Key> &Values;
+      Key Value;
+      ~SeenScope() { Values.erase(Value); }
+    } Scope{Seen, StartKey};
     if (const PhiNode *Phi = lookupPhi(Start)) {
       for (const auto &[Pred, Arg] : Phi->Args)
         if (classifyPhiIncomingEdge(*Phi, Pred) ==
@@ -1425,7 +1433,7 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
     if (!Def || Def->NumInputs < 1)
       return false;
     if (auto Forwarded = pointerPreservingInput(*Def))
-      return scalarValueReaches(*Forwarded, Target, Depth + 1, std::move(Seen));
+      return scalarValueReaches(*Forwarded, Target, Depth + 1, Seen);
     if (Def->Opcode == NdOp::LOAD) {
       std::vector<MedVar> Sources;
       if (!collectFrameReloadSources(*Def, Sources) || Sources.empty())
@@ -1438,12 +1446,12 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
     if (Def->Opcode == NdOp::SELECT && Def->NumInputs >= 3)
       return scalarValueReaches(Def->Inputs[1], Target, Depth + 1, Seen) ||
              scalarValueReaches(Def->Inputs[2], Target, Depth + 1,
-                                std::move(Seen));
+                                Seen);
     if (Def->Opcode == NdOp::INT_OR) {
       MedVar Cond, ArmT, ArmF;
       if (isMaskedSelectOr(*Def, Cond, ArmT, ArmF))
         return scalarValueReaches(ArmT, Target, Depth + 1, Seen) ||
-               scalarValueReaches(ArmF, Target, Depth + 1, std::move(Seen));
+               scalarValueReaches(ArmF, Target, Depth + 1, Seen);
     }
     switch (Def->Opcode) {
     case NdOp::COPY:
@@ -1477,9 +1485,11 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
   std::function<bool(const MedVar &, const std::set<Key> &)>
       reachesAnchoredPhi =
           [&](const MedVar &Start, const std::set<Key> &AnchoredPhis) {
-            for (const Key &Anchor : AnchoredPhis)
-              if (scalarValueReaches(Start, Anchor, 0, {}))
+            for (const Key &Anchor : AnchoredPhis) {
+              std::set<Key> Seen;
+              if (scalarValueReaches(Start, Anchor, 0, Seen))
                 return true;
+            }
             return false;
           };
 
@@ -1583,7 +1593,8 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
     std::set<Key> Seen;
     int Budget = 8192;
     auto reachesRoot = [&](const MedVar &Value) {
-      return scalarValueReaches(Value, RootKey, 0, {});
+      std::set<Key> Path;
+      return scalarValueReaches(Value, RootKey, 0, Path);
     };
     auto inspectValueArms = [&](const std::vector<MedVar> &Arms,
                                 bool &FoundInitializer) {
@@ -1798,7 +1809,10 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
         SawPotential = true;
         Arms.push_back(
             {NestedPred, NestedArg,
-             scalarValueReaches(NestedArg, keyOf(Start), 0, {}) ||
+             ([&] {
+               std::set<Key> Path;
+               return scalarValueReaches(NestedArg, keyOf(Start), 0, Path);
+             }()) ||
                  phiIncomingClosesFeasibleControlCycle(*Nested, NestedPred)});
       }
       if (!SawPotential)
