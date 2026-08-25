@@ -25,6 +25,7 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
+#include "llvm/MC/BinaryRewrite.h"
 
 #include <cstdint>
 #include <map>
@@ -82,6 +83,45 @@ inline llvm::Metadata *mdSInt(llvm::LLVMContext &Ctx, int64_t Value,
                               unsigned Bits = 64) {
   return llvm::ConstantAsMetadata::get(
       llvm::ConstantInt::getSigned(llvm::IntegerType::get(Ctx, Bits), Value));
+}
+
+/// Attach one source-issued Windows EH semantic token to a funclet pad for
+/// WinEH preparation.  Reject invalid tokens and pre-existing attachments so
+/// the producer cannot silently replace an earlier semantic identity.
+inline bool attachRewriteWinEHSemanticToken(
+    llvm::Instruction &Pad,
+    const llvm::mc_rewrite::RewriteWinEHSemanticToken &Token) {
+  if ((!llvm::isa<llvm::CatchPadInst>(&Pad) &&
+       !llvm::isa<llvm::CleanupPadInst>(&Pad)) ||
+      Pad.getMetadata(llvm::mc_rewrite::RewriteWinEHSemanticAttachment))
+    return false;
+
+  if (Token.Kind != llvm::mc_rewrite::RewriteWinEHSemanticKind::SEHScope &&
+      Token.Kind != llvm::mc_rewrite::RewriteWinEHSemanticKind::CxxCatch)
+    return false;
+
+  bool HasDigest = false;
+  for (uint64_t Word : Token.Digest)
+    HasDigest |= Word != 0;
+  if (!HasDigest)
+    return false;
+
+  llvm::LLVMContext &Context = Pad.getContext();
+  llvm::SmallVector<llvm::Metadata *,
+                    llvm::mc_rewrite::RewriteWinEHSemanticOperandCount>
+      Operands{
+          mdUInt(Context, llvm::mc_rewrite::RewriteWinEHSemanticSchemaVersion,
+                 32),
+          mdUInt(Context, static_cast<uint8_t>(Token.Kind), 8),
+          mdUInt(Context, Token.Region, 32),
+          mdUInt(Context, Token.Clause, 32),
+      };
+  for (uint64_t Word : Token.Digest)
+    Operands.push_back(mdUInt(Context, Word, 64));
+
+  Pad.setMetadata(llvm::mc_rewrite::RewriteWinEHSemanticAttachment,
+                  llvm::MDNode::get(Context, Operands));
+  return true;
 }
 
 inline std::string hexBytes(const std::vector<uint8_t> &Bytes) {
@@ -193,6 +233,7 @@ canMaterializeExternalFunctionDeclaration(const llvm::Module &Module,
          Function->getLinkage() == llvm::GlobalValue::ExternalLinkage &&
          Function->getVisibility() == llvm::GlobalValue::DefaultVisibility &&
          Function->getCallingConv() == llvm::CallingConv::C &&
+         Function->getAddressSpace() == 0 &&
          Function->getFunctionType() == Type;
 }
 

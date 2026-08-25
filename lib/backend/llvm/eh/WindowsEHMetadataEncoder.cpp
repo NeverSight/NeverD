@@ -22,6 +22,7 @@
 #include "llvm/IR/Metadata.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -80,6 +81,7 @@ llvm::MDNode *getCanonicalFunctionMetadata(llvm::LLVMContext &Context,
                 mdUInt(Context, Scope.GuardedRange.End),
                 mdUInt(Context, static_cast<uint8_t>(Scope.Kind), 8),
                 mdUInt(Context, Scope.FilterOrFinallyVA),
+                mdUInt(Context, Scope.NormalizedFilterVA),
                 mdUInt(Context, Scope.HandlerVA),
                 mdUInt(Context, Scope.ContinuationVA),
                 Str(getExceptionParseStatusName(Scope.ParseStatus))}));
@@ -107,7 +109,8 @@ llvm::MDNode *getCanonicalFunctionMetadata(llvm::LLVMContext &Context,
          mdUInt(Context, Cxx.IsSynchronous, 1),
          mdUInt(Context, Cxx.IsNoExcept, 1),
          mdUInt(Context, static_cast<uint8_t>(Cxx.Version), 8),
-         mdUInt(Context, Cxx.HasDynamicStackAlignment, 1), Node(CxxSpecTypes)});
+         mdUInt(Context, Cxx.HasDynamicStackAlignment, 1), Node(CxxSpecTypes),
+         mdUInt(Context, Cxx.NativeFuncInfoVA)});
     for (const CxxUnwindAction &Action : Cxx.UnwindMap)
       CxxUnwind.push_back(
           Node({mdSInt(Context, Action.ToState, 32),
@@ -149,6 +152,42 @@ llvm::MDNode *getCanonicalFunctionMetadata(llvm::LLVMContext &Context,
               mdUInt(Context, GS.HasAlignment, 1),
               mdSInt(Context, GS.AlignmentBaseOffset, 32),
               mdUInt(Context, GS.Alignment, 32), Str(hexBytes(GS.Payload))});
+  }
+
+  auto OptionalSInt = [&](const std::optional<int32_t> &Value) {
+    return Value ? Node({mdSInt(Context, *Value, 32)}) : Node({});
+  };
+  llvm::Metadata *Registration = Node({});
+  if (EH.Registration) {
+    const RegistrationChainInfo &Chain = *EH.Registration;
+    std::vector<llvm::Metadata *> TryLevelStores;
+    TryLevelStores.reserve(Chain.TryLevelStores.size());
+    for (const RegistrationTryLevelStore &Store : Chain.TryLevelStores)
+      TryLevelStores.push_back(
+          Node({mdUInt(Context, Store.StoreVA), mdUInt(Context, Store.EndVA),
+                mdSInt(Context, Store.Level, 32)}));
+
+    std::vector<llvm::Metadata *> Scopes;
+    Scopes.reserve(Chain.Scopes.size());
+    for (const RegistrationScopeRecord &Scope : Chain.Scopes)
+      Scopes.push_back(Node({mdSInt(Context, Scope.EnclosingLevel, 32),
+                             mdUInt(Context, Scope.FilterVA),
+                             mdUInt(Context, Scope.HandlerVA),
+                             mdUInt(Context, Scope.IsFinally, 1)}));
+
+    Registration = Node(
+        {mdUInt(Context, Chain.HandlerVA), mdUInt(Context, Chain.ScopeTableVA),
+         OptionalSInt(Chain.TryLevelOffset), Node(TryLevelStores),
+         OptionalSInt(Chain.SeededTryLevel),
+         OptionalSInt(Chain.RegistrationOffset),
+         mdUInt(Context, Chain.HasSecurityCookies, 1),
+         mdSInt(Context, Chain.GSCookieOffset, 32),
+         mdSInt(Context, Chain.GSCookieXOROffset, 32),
+         mdSInt(Context, Chain.EHCookieOffset, 32),
+         mdSInt(Context, Chain.EHCookieXOROffset, 32),
+         mdUInt(Context, Chain.ScopeTableMagic, 32), Node(Scopes),
+         mdUInt(Context, Chain.ChainInstallVA),
+         mdUInt(Context, Chain.ChainRemoveVA)});
   }
 
   std::vector<llvm::Metadata *> Diagnostics;
@@ -197,10 +236,12 @@ llvm::MDNode *getCanonicalFunctionMetadata(llvm::LLVMContext &Context,
                mdUInt(Context, EH.ChainedUnwindInfoRVA, 32),
                Node(Diagnostics),
                mdUInt(Context,
-                      classifyWindowsEHNativeSource(EH, TargetArch,
-                                                    TargetFormat)
-                          .canRegenerateLanguageMetadata(),
-                      1)});
+                      classifyWindowsEHNativeSource(
+                          EH, TargetArch, TargetFormat,
+                          WindowsEHNativeCapability::OutputPatch)
+                          .canPatchOutput(),
+                      1),
+               Registration});
 }
 
 llvm::MDNode *getCanonicalFunctionMetadata(llvm::LLVMContext &Context,

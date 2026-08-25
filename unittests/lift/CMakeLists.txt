@@ -102,6 +102,7 @@ add_neverd_unittest(NeverDLiftTests
   core/InstructionModeTests.cpp
   core/LowInstructionBoundaryTests.cpp
   core/LiftCommonTests.cpp
+  core/MedSSAMultiRootTests.cpp
   format/MachOARM64RelocationTests.cpp
   format/MachOI386RelocationTests.cpp
   format/MachOI386RelocationExternalTests.cpp
@@ -120,6 +121,7 @@ add_neverd_unittest(NeverDLiftTests
   eh/COFFExceptionDelphiTests.cpp
   eh/COFFExceptionFH3Tests.cpp
   eh/COFFExceptionFH4Tests.cpp
+  eh/COFFFH4EncodingTests.cpp
   eh/COFFExceptionGSTests.cpp
   eh/COFFExceptionIRTests.cpp
   eh/COFFExceptionNativeIRTests.cpp
@@ -428,6 +430,19 @@ target_include_directories(NeverDControlFlowRecoveryTests PRIVATE
   ${LLVM_INCLUDE_DIRS}
 )
 
+# Pins the LLVM emission scheduler's logical C++ EH group boundary without
+# relinking the aggregate lift suite during local RED/GREEN iterations.
+add_neverd_unittest(NeverDPipelineLLVMShardingTests
+  pipeline/PipelineLLVMShardingTests.cpp
+  LINK_COMPONENTS
+  Pipeline
+)
+target_include_directories(NeverDPipelineLLVMShardingTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${CMAKE_SOURCE_DIR}/lib/pipeline
+  ${LLVM_INCLUDE_DIRS}
+)
+
 find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
 set(NEVERD_SYNTHETIC_WINDOWS_EH_ROOT
   "${CMAKE_CURRENT_BINARY_DIR}/windows-eh-synthetic")
@@ -564,12 +579,23 @@ target_link_libraries(NeverDCxxItaniumEHCorpusManifestTests PRIVATE
 if(NEVERD_HAVE_WINDOWS_EH_CORPUS)
   add_neverd_unittest(NeverDWindowsEHCorpusTests
     corpus/windows/WindowsEHCorpusTests.cpp
+    corpus/windows/WindowsEHModesCorpusTests.cpp
     corpus/windows/WindowsEHCorpusManifest.cpp
     TIMEOUT 300
+
+    LINK_COMPONENTS
+    BackendLLVM
+    CodeGen
+    Decode
+    IRLow
+    LibC
+    Lift
   )
 
   target_compile_definitions(NeverDWindowsEHCorpusTests PRIVATE
     NEVERD_BINARY_CORPUS_ROOT="${NEVERD_BINARY_CORPUS_ROOT}"
+    NEVERD_BINARY="$<TARGET_FILE:neverd>"
+    NEVERD_CMAKE_COMMAND="${CMAKE_COMMAND}"
   )
 
   target_include_directories(NeverDWindowsEHCorpusTests PRIVATE
@@ -581,7 +607,10 @@ if(NEVERD_HAVE_WINDOWS_EH_CORPUS)
   target_link_libraries(NeverDWindowsEHCorpusTests PRIVATE
     NeverDLoader
     NeverDSupport
+    NeverDWindowsEHMetadata
   )
+
+  add_dependencies(NeverDWindowsEHCorpusTests neverd)
 endif()
 
 if(NEVERD_HAVE_RUST_EH_CORPUS)
@@ -901,6 +930,7 @@ set(ARM32_TEST_SOURCES
 )
 
 set(TEST_OBJECTS "")
+set(COFF_NATIVE_EH_TEST_OBJECTS "")
 
 # TBB/TBH are Thumb-2-only.  Build the focused identity fixture as ARMNT
 # COFF so the loader has an unambiguous image-wide Thumb mode; ELF relocatable
@@ -1463,6 +1493,77 @@ if(LLD_LINK_EXEC)
     COMMENT "Linking x64 FH3 reconstruction fixture")
   list(APPEND TEST_OBJECTS ${coff_cxx_fh3_obj} ${coff_cxx_fh3_exe})
 
+  set(coff_cxx_fh4_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_patch_coff_cxx_fh4.s")
+  set(coff_cxx_fh4_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff_cxx_fh4.obj")
+  set(coff_cxx_fh4_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff_cxx_fh4.exe")
+  add_custom_command(
+    OUTPUT ${coff_cxx_fh4_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-pc-windows-msvc -c
+            ${coff_cxx_fh4_src} -o ${coff_cxx_fh4_obj}
+    DEPENDS ${coff_cxx_fh4_src}
+    COMMENT "Compiling x64 FH4 reconstruction fixture")
+  add_custom_command(
+    OUTPUT ${coff_cxx_fh4_exe}
+    COMMAND ${LLD_LINK_EXEC} /entry:cxx_fh4_fixture_entry /subsystem:console
+            /nodefaultlib
+            /export:cxx_fh4_main /export:cxx_fh4_may_throw
+            /export:__CxxFrameHandler4 ${coff_cxx_fh4_obj}
+            /out:${coff_cxx_fh4_exe}
+    DEPENDS ${coff_cxx_fh4_obj}
+    COMMENT "Linking x64 FH4 reconstruction fixture")
+  list(APPEND TEST_OBJECTS ${coff_cxx_fh4_obj} ${coff_cxx_fh4_exe})
+
+  set(coff_cxx_fh4_typed_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_patch_coff_cxx_fh4_typed.s")
+  set(coff_cxx_fh4_typed_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff_cxx_fh4_typed.obj")
+  set(coff_cxx_fh4_typed_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff_cxx_fh4_typed.exe")
+  add_custom_command(
+    OUTPUT ${coff_cxx_fh4_typed_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-pc-windows-msvc -c
+            ${coff_cxx_fh4_typed_src} -o ${coff_cxx_fh4_typed_obj}
+    DEPENDS ${coff_cxx_fh4_typed_src}
+    COMMENT "Compiling x64 typed FH4 reconstruction fixture")
+  add_custom_command(
+    OUTPUT ${coff_cxx_fh4_typed_exe}
+    COMMAND ${LLD_LINK_EXEC} /entry:cxx_fh4_typed_fixture_entry
+            /subsystem:console /nodefaultlib
+            /export:cxx_fh4_typed_main /export:cxx_fh4_typed_may_throw
+            /export:__CxxFrameHandler4 ${coff_cxx_fh4_typed_obj}
+            /out:${coff_cxx_fh4_typed_exe}
+    DEPENDS ${coff_cxx_fh4_typed_obj}
+    COMMENT "Linking x64 typed FH4 reconstruction fixture")
+  list(APPEND TEST_OBJECTS ${coff_cxx_fh4_typed_obj}
+       ${coff_cxx_fh4_typed_exe})
+
+  set(coff_cxx_fh4_gs_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_patch_coff_cxx_fh4_gs.s")
+  set(coff_cxx_fh4_gs_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff_cxx_fh4_gs.obj")
+  set(coff_cxx_fh4_gs_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff_cxx_fh4_gs.exe")
+  add_custom_command(
+    OUTPUT ${coff_cxx_fh4_gs_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-pc-windows-msvc -c
+            ${coff_cxx_fh4_gs_src} -o ${coff_cxx_fh4_gs_obj}
+    DEPENDS ${coff_cxx_fh4_gs_src}
+    COMMENT "Compiling x64 GS-wrapped FH4 reconstruction fixture")
+  add_custom_command(
+    OUTPUT ${coff_cxx_fh4_gs_exe}
+    COMMAND ${LLD_LINK_EXEC} /entry:cxx_fh4_gs_fixture_entry
+            /subsystem:console /nodefaultlib
+            /export:cxx_fh4_gs_main /export:cxx_fh4_gs_may_throw
+            /export:__GSHandlerCheck_EH4
+            /export:__security_cookie /export:__security_check_cookie
+            ${coff_cxx_fh4_gs_obj} /out:${coff_cxx_fh4_gs_exe}
+    DEPENDS ${coff_cxx_fh4_gs_obj}
+    COMMENT "Linking x64 GS-wrapped FH4 reconstruction fixture")
+  list(APPEND TEST_OBJECTS ${coff_cxx_fh4_gs_obj} ${coff_cxx_fh4_gs_exe})
+
   set(coff_arm_src "${CMAKE_CURRENT_SOURCE_DIR}/format/test_pe_arm.c")
 
   set(coff_a64_obj "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff_a64.obj")
@@ -1482,7 +1583,56 @@ if(LLD_LINK_EXEC)
     DEPENDS ${coff_a64_obj}
     COMMENT "Linking test_patch_coff_a64.obj -> .exe (AArch64 PE)")
 
+  set(coff_a64_seh_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/format/test_patch_coff_a64_seh.s")
+  set(coff_a64_seh_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff_a64_seh.obj")
+  set(coff_a64_seh_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff_a64_seh.exe")
+  add_custom_command(
+    OUTPUT ${coff_a64_seh_obj}
+    COMMAND ${CLANG_EXEC} -target aarch64-pc-windows-msvc -c
+            ${coff_a64_seh_src} -o ${coff_a64_seh_obj}
+    DEPENDS ${coff_a64_seh_src}
+    COMMENT "Compiling AArch64 native SEH reconstruction fixture")
+  add_custom_command(
+    OUTPUT ${coff_a64_seh_exe}
+    COMMAND ${LLD_LINK_EXEC} /machine:arm64 /entry:a64_seh_fixture_entry
+            /subsystem:console /nodefaultlib /export:a64_seh_main
+            /export:a64_seh_may_throw /export:__C_specific_handler
+            ${coff_a64_seh_obj} /out:${coff_a64_seh_exe}
+    DEPENDS ${coff_a64_seh_obj}
+    COMMENT "Linking AArch64 native SEH reconstruction fixture")
+
+  set(coff_a64_cxx_fh3_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/format/test_patch_coff_a64_cxx_fh3.s")
+  set(coff_a64_cxx_fh3_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff_a64_cxx_fh3.obj")
+  set(coff_a64_cxx_fh3_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff_a64_cxx_fh3.exe")
+  add_custom_command(
+    OUTPUT ${coff_a64_cxx_fh3_obj}
+    COMMAND ${CLANG_EXEC} -target aarch64-pc-windows-msvc -c
+            ${coff_a64_cxx_fh3_src} -o ${coff_a64_cxx_fh3_obj}
+    DEPENDS ${coff_a64_cxx_fh3_src}
+    COMMENT "Compiling AArch64 FH3 reconstruction fixture")
+  add_custom_command(
+    OUTPUT ${coff_a64_cxx_fh3_exe}
+    COMMAND ${LLD_LINK_EXEC} /machine:arm64
+            /entry:a64_cxx_fh3_fixture_entry /subsystem:console /nodefaultlib
+            /export:a64_cxx_fh3_main /export:a64_cxx_fh3_may_throw
+            /export:__CxxFrameHandler3 ${coff_a64_cxx_fh3_obj}
+            /out:${coff_a64_cxx_fh3_exe}
+    DEPENDS ${coff_a64_cxx_fh3_obj}
+    COMMENT "Linking AArch64 FH3 reconstruction fixture")
+
   set(coff_arm_obj "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff_arm.obj")
+  set(coff_arm_seh_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/format/test_patch_coff_arm_seh.s")
+  set(coff_arm_seh_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff_arm_seh.obj")
+  set(coff_arm_seh_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff_arm_seh.exe")
   set(coff_arm_tiny_src
       "${CMAKE_CURRENT_SOURCE_DIR}/format/test_pe_tiny_thumb.s")
   set(coff_arm_tiny_obj
@@ -1502,6 +1652,21 @@ if(LLD_LINK_EXEC)
     DEPENDS ${coff_arm_tiny_src}
     COMMENT "Compiling test_pe_tiny_thumb.s -> .obj (ARM32 COFF)")
   add_custom_command(
+    OUTPUT ${coff_arm_seh_obj}
+    COMMAND ${CLANG_EXEC} -target thumbv7-pc-windows-msvc -c
+            ${coff_arm_seh_src} -o ${coff_arm_seh_obj}
+    DEPENDS ${coff_arm_seh_src}
+    COMMENT "Compiling ARM32 native SEH reconstruction fixture")
+  add_custom_command(
+    OUTPUT ${coff_arm_seh_exe}
+    COMMAND ${LLD_LINK_EXEC} /machine:arm
+            /entry:arm32_seh_fixture_entry /subsystem:console /nodefaultlib
+            /export:arm32_seh_main /export:arm32_seh_may_throw
+            /export:__C_specific_handler ${coff_arm_seh_obj}
+            /out:${coff_arm_seh_exe}
+    DEPENDS ${coff_arm_seh_obj}
+    COMMENT "Linking ARM32 native SEH reconstruction fixture")
+  add_custom_command(
     OUTPUT ${coff_arm_exe}
     COMMAND ${LLD_LINK_EXEC} /entry:mainCRTStartup /subsystem:console
             /nodefaultlib /export:pe_leaf /export:pe_stacky /export:pe_tiny
@@ -1512,7 +1677,12 @@ if(LLD_LINK_EXEC)
 
   list(APPEND TEST_OBJECTS
     ${coff_a64_obj} ${coff_a64_exe}
-    ${coff_arm_obj} ${coff_arm_tiny_obj} ${coff_arm_exe})
+    ${coff_arm_obj}
+    ${coff_arm_tiny_obj} ${coff_arm_exe})
+  list(APPEND COFF_NATIVE_EH_TEST_OBJECTS
+    ${coff_a64_seh_obj} ${coff_a64_seh_exe}
+    ${coff_a64_cxx_fh3_obj} ${coff_a64_cxx_fh3_exe}
+    ${coff_arm_seh_obj} ${coff_arm_seh_exe})
 endif()
 
 # --- Link into ELF executables for patch testing ---
@@ -1797,3 +1967,8 @@ endif()
 add_custom_target(lift-test-objects DEPENDS ${TEST_OBJECTS} ${ELF_EXECUTABLES})
 add_dependencies(NeverDLiftTests lift-test-objects)
 add_dependencies(NeverDNativePointerRelocationBoundaryTests lift-test-objects)
+if(COFF_NATIVE_EH_TEST_OBJECTS)
+  add_custom_target(lift-coff-native-eh-test-objects
+                    DEPENDS ${COFF_NATIVE_EH_TEST_OBJECTS})
+  add_dependencies(NeverDLiftTests lift-coff-native-eh-test-objects)
+endif()

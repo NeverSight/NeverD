@@ -18,6 +18,7 @@
 #include "llvm/ADT/ArrayRef.h"
 
 #include <cstddef>
+#include <map>
 #include <optional>
 #include <set>
 #include <vector>
@@ -40,6 +41,33 @@ struct ModuleJumpTableArbitrationTestResult {
 /// Focused test seam for the otherwise private module ownership fixed point.
 ModuleJumpTableArbitrationTestResult arbitrateModuleJumpTablesForTesting(
     const BinaryImage &Img, const std::vector<LowFunc> &Funcs,
+    std::optional<size_t> TestBudget = std::nullopt);
+
+struct ReturnedCodeEvidenceTestResult {
+  std::vector<std::set<va_t>> TargetsByFunction;
+  std::vector<bool> CompleteByFunction;
+  std::vector<std::vector<LowCxxContinuationExitEvidence>>
+      OccurrencesByFunction;
+  bool AnalysisComplete = false;
+};
+
+/// Focused seam for checking that an occurrence-authenticated code address,
+/// rather than a numerically equal scalar, reaches an ordinary return value.
+ReturnedCodeEvidenceTestResult collectReturnedCodeEvidenceForTesting(
+    const BinaryImage &Img, const std::vector<LowFunc> &Funcs,
+    const std::set<va_t> &CandidateTargets,
+    std::optional<size_t> TestBudget = std::nullopt);
+
+struct WindowsEHContinuationRootTestResult {
+  std::map<va_t, std::set<va_t>> RootsByOwner;
+  bool AnalysisComplete = false;
+};
+
+/// Focused seam for the exact ABI evidence used to attach disconnected
+/// Windows exception continuations to one physical LowIR owner.
+WindowsEHContinuationRootTestResult collectWindowsEHContinuationRootsForTesting(
+    const BinaryImage &Img, const std::vector<LowFunc> &Funcs,
+    const std::set<va_t> &FunctionEntries,
     std::optional<size_t> TestBudget = std::nullopt);
 
 } // namespace neverd::pipeline_detail

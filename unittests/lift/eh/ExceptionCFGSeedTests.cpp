@@ -303,6 +303,51 @@ edgesFrom(const LowFunc &Func, va_t BlockStart) {
   return Edges;
 }
 
+TEST(ExceptionCFGEdge,
+     NormalizesLegacyAArch64SEHEndBeforeSplittingProtectedBlocks) {
+  BinaryImage Img;
+  Img.Arch = Arch::AArch64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = kBase;
+
+  // Four protected NOPs, one unprotected RET, and a separately rooted handler
+  // RET.  The raw End at entry+0xd covers the NOP at entry+0xc and is
+  // semantically the aligned boundary at entry+0x10.
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = kEntry;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data = {
+      0x1f, 0x20, 0x03, 0xd5, 0x1f, 0x20, 0x03, 0xd5,
+      0x1f, 0x20, 0x03, 0xd5, 0x1f, 0x20, 0x03, 0xd5,
+      0xc0, 0x03, 0x5f, 0xd6, 0xc0, 0x03, 0x5f, 0xd6,
+  };
+  Text.Size = Text.Data.size();
+  Img.Segments.push_back(std::move(Text));
+
+  ExceptionFunction EH =
+      makeRecord(ExceptionEncoding::ARM64Unpacked,
+                 ExceptionPersonality::CSpecificHandler);
+  EH.CodeRange = {kEntry, kEntry + 0x18};
+  EH.PersonalityVA = kBase + 0x3000;
+  EH.SEH.emplace();
+  SEHScopeRecord Scope;
+  Scope.GuardedRange = {kEntry, kEntry + 0x0d};
+  Scope.Kind = SEHScopeKind::CatchAll;
+  Scope.HandlerVA = kEntry + 0x14;
+  Scope.ContinuationVA = Scope.HandlerVA;
+  EH.SEH->Scopes.push_back(Scope);
+
+  const LowFunc Func = buildWith(Img, std::move(EH), Arch::AArch64);
+  EXPECT_EQ(blockStarts(Func),
+            (std::vector<va_t>{kEntry, kEntry + 0x10, kEntry + 0x14}));
+  EXPECT_EQ(edgesFrom(Func, kEntry),
+            (std::vector<std::pair<ExceptionalEdgeKind, va_t>>{
+                {ExceptionalEdgeKind::SEHHandler, kEntry + 0x14}}));
+  EXPECT_TRUE(edgesFrom(Func, kEntry + 0x10).empty());
+}
+
 TEST(ExceptionCFGEdge, ReadsACallSiteWithNoActionAsAnUnconditionalCleanup) {
   BinaryImage Img = makeImage(Arch::X64, BinaryFormat::ELF);
   ExceptionFunction EH = makeRecord(ExceptionEncoding::DwarfFDE,

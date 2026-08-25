@@ -186,6 +186,8 @@ private:
       const std::vector<RelocatedInstructionScalarModelOccurrence> &Models);
   void resolveI386GetPcModels(
       MedFunc &Func, const std::vector<I386GetPcOccurrence> &Occurrences);
+  void resolveCxxContinuationExits(MedFunc &Func, const LowFunc &Low,
+                                   uint16_t PointerSize);
   void detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt);
   void simplifyCfg(MedFunc &Func);
   /// Split an ARM instruction-local predicate guard from the effects it

@@ -13,14 +13,215 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/MC/BinaryRewrite.h"
+#include "llvm/MC/MCAsmBackend.h"
+#include "llvm/MC/MCAsmInfo.h"
+#include "llvm/MC/MCAssembler.h"
+#include "llvm/MC/MCCodeEmitter.h"
+#include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCObjectWriter.h"
+#include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/MC/MCSymbol.h"
+#include "llvm/MC/MCTargetOptions.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
+#include <algorithm>
 #include <gtest/gtest.h>
 #include <limits>
 
 using namespace neverd;
 
 namespace {
+
+class ProvenanceTestMCAsmInfo final : public llvm::MCAsmInfo {
+public:
+  explicit ProvenanceTestMCAsmInfo(const llvm::MCTargetOptions &Options)
+      : MCAsmInfo(Options) {}
+};
+
+class SourceOwnerRegistrationFixture {
+  llvm::Triple TT;
+  llvm::MCTargetOptions Options;
+  ProvenanceTestMCAsmInfo MAI;
+  llvm::MCRegisterInfo MRI;
+  llvm::MCSubtargetInfo STI;
+  llvm::MCContext Context;
+
+public:
+  SourceOwnerRegistrationFixture()
+      : TT("x86_64-pc-windows-msvc"), MAI(Options),
+        STI(TT, "", "", "", {}, {}, {}, nullptr, nullptr, nullptr, nullptr,
+            nullptr, nullptr),
+        Context(TT, MAI, MRI, STI),
+        Assembler(Context, nullptr, nullptr, nullptr) {}
+
+  llvm::MCSymbol *symbol(llvm::StringRef Name) {
+    return Context.getOrCreateSymbol(Name);
+  }
+
+  llvm::MCAssembler Assembler;
+};
+
+enum class SourceOwnerRegistrationCase {
+  ExpectThenReceipt,
+  ReceiptThenExpect,
+  MissingReceipt,
+  ReceiptWithoutExpectation,
+  DuplicateExpectation,
+  DuplicateReceipt,
+};
+
+bool validateSourceOwnerRegistration(SourceOwnerRegistrationCase TestCase) {
+  using Kind = llvm::mc_rewrite::RewriteSourceFunctionOwnerKind;
+  SourceOwnerRegistrationFixture Fixture;
+  Fixture.Assembler.registerRewriteSourceFunctionOwner(
+      "parent", Fixture.symbol("parent$entry"), /*IsPrivate=*/false);
+  auto Expect = [&]() {
+    Fixture.Assembler.expectRewriteSourceFunctionOwner(
+        "source_catch", Kind::WinCxxCatchFunclet, "parent");
+  };
+  auto Receipt = [&](llvm::StringRef Symbol = "parent$catch") {
+    Fixture.Assembler.registerRewriteSourceFunctionOwner(
+        "source_catch", Fixture.symbol(Symbol), /*IsPrivate=*/true,
+        Kind::WinCxxCatchFunclet, "parent");
+  };
+
+  switch (TestCase) {
+  case SourceOwnerRegistrationCase::ExpectThenReceipt:
+    Expect();
+    Receipt();
+    break;
+  case SourceOwnerRegistrationCase::ReceiptThenExpect:
+    Receipt();
+    Expect();
+    break;
+  case SourceOwnerRegistrationCase::MissingReceipt:
+    Expect();
+    break;
+  case SourceOwnerRegistrationCase::ReceiptWithoutExpectation:
+    Receipt();
+    break;
+  case SourceOwnerRegistrationCase::DuplicateExpectation:
+    Expect();
+    Expect();
+    Receipt();
+    break;
+  case SourceOwnerRegistrationCase::DuplicateReceipt:
+    Expect();
+    Receipt();
+    Receipt("parent$catch.duplicate");
+    break;
+  }
+  return Fixture.Assembler.validateRewriteSourceFunctionOwnerRegistrations();
+}
+
+std::unique_ptr<llvm::Module>
+makeWinCxxCatchOwnerModule(llvm::LLVMContext &Context, bool MarkSourceCatch,
+                           llvm::StringRef SourceParent, bool AttachCatchPad) {
+  auto Module = std::make_unique<llvm::Module>("win-cxx-catch-owner", Context);
+  auto *VoidType =
+      llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false);
+  auto *PersonalityType = llvm::FunctionType::get(
+      llvm::Type::getInt32Ty(Context), /*isVarArg=*/true);
+  auto *Personality = llvm::Function::Create(PersonalityType,
+                                             llvm::GlobalValue::ExternalLinkage,
+                                             "__CxxFrameHandler3", *Module);
+  auto *MayThrow = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "may_throw", *Module);
+
+  // Deliberately emit the delegated source before its parent so this real
+  // CodeGen path exercises expectation-before-receipt ordering.
+  auto *SourceCatch = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "source_catch", *Module);
+  rewrite_source::setOriginalVA(*SourceCatch, 0x140002000);
+  if (MarkSourceCatch)
+    SourceCatch->addFnAttr(llvm::mc_rewrite::RewriteWinCxxCatchParentAttribute,
+                           SourceParent);
+  llvm::IRBuilder<>(llvm::BasicBlock::Create(Context, "entry", SourceCatch))
+      .CreateRetVoid();
+
+  auto *Parent = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "parent_frame", *Module);
+  rewrite_source::setOriginalVA(*Parent, 0x140001000);
+  Parent->setPersonalityFn(Personality);
+  Parent->setUWTableKind(llvm::UWTableKind::Default);
+
+  auto *Entry = llvm::BasicBlock::Create(Context, "entry", Parent);
+  auto *Exit = llvm::BasicBlock::Create(Context, "exit", Parent);
+  auto *Dispatch = llvm::BasicBlock::Create(Context, "catch.dispatch", Parent);
+  auto *Pad = llvm::BasicBlock::Create(Context, "catch.pad", Parent);
+  llvm::IRBuilder<>(Entry).CreateInvoke(MayThrow, Exit, Dispatch);
+  llvm::IRBuilder<>(Exit).CreateRetVoid();
+  llvm::IRBuilder<> DispatchBuilder(Dispatch);
+  auto *CatchSwitch = DispatchBuilder.CreateCatchSwitch(
+      llvm::ConstantTokenNone::get(Context), nullptr, 1);
+  CatchSwitch->addHandler(Pad);
+  llvm::IRBuilder<> PadBuilder(Pad);
+  auto *PtrType = llvm::PointerType::get(Context, 0);
+  auto *CatchPad = PadBuilder.CreateCatchPad(
+      CatchSwitch,
+      {llvm::ConstantPointerNull::get(PtrType), PadBuilder.getInt32(0),
+       llvm::ConstantPointerNull::get(PtrType)});
+  if (AttachCatchPad)
+    CatchPad->setMetadata(
+        llvm::mc_rewrite::RewriteWinCxxCatchSourceAttachment,
+        llvm::MDNode::get(Context,
+                          {llvm::MDString::get(Context, "source_catch")}));
+  PadBuilder.CreateCatchRet(CatchPad, Exit);
+  return Module;
+}
+
+CompiledImage compileWinCxxCatchOwnerModule(llvm::Module &Module) {
+  return compileImageForPatch(
+      Module, Arch::X64, BinaryFormat::COFF, 0x140004000,
+      [](llvm::StringRef Symbol, uint32_t) -> std::optional<uint64_t> {
+        if (Symbol == "may_throw")
+          return 0x140000800;
+        if (Symbol == "__CxxFrameHandler3")
+          return 0x140000900;
+        return std::nullopt;
+      },
+      0x140000000);
+}
+
+llvm::mc_rewrite::RewriteResult
+compileWinCxxCatchOwnerModuleRaw(llvm::Module &Module) {
+  llvm::mc_rewrite::RewriteOptions Options;
+  Options.DeferGlobalFunctionRangeOverlap = true;
+  Options.Model.TextVA = 0x140004000;
+  Options.Model.ImageBaseVA = 0x140000000;
+  Options.Model.getSectionVA = [](llvm::StringRef Section) {
+    if (Section.starts_with(".text"))
+      return 0x140004000ull;
+    if (Section.starts_with(".xdata"))
+      return 0x140014000ull;
+    if (Section.starts_with(".pdata"))
+      return 0x140024000ull;
+    return 0x140034000ull;
+  };
+  Options.Model.resolve = [](llvm::StringRef Symbol,
+                             uint32_t) -> std::optional<uint64_t> {
+    if (Symbol == "may_throw")
+      return 0x140000800;
+    if (Symbol == "__CxxFrameHandler3")
+      return 0x140000900;
+    return std::nullopt;
+  };
+  Codegen Compiler;
+  auto DirectModule = llvm::CloneModule(Module);
+  return Compiler.compileForRewrite(*DirectModule, Arch::X64, Options,
+                                    BinaryFormat::COFF);
+}
+
+void expectVerifierClean(const llvm::Module &Module) {
+  std::string Verification;
+  llvm::raw_string_ostream OS(Verification);
+  EXPECT_FALSE(llvm::verifyModule(Module, &OS)) << Verification;
+}
 
 TEST(RewriteFunctionProvenance, PreservesPrivateUnwindOwner) {
   llvm::LLVMContext Context;
@@ -107,6 +308,170 @@ TEST(RewriteFunctionProvenance,
   DuplicateOwner[1].OwnerSymbol = "_first";
   EXPECT_FALSE(
       llvm::mc_rewrite::validateRewriteSourceFunctionOwners(DuplicateOwner));
+}
+
+TEST(RewriteFunctionProvenance,
+     DelegatedOwnerRequiresExactlyOneExpectationAndReceipt) {
+  using Case = SourceOwnerRegistrationCase;
+  EXPECT_TRUE(validateSourceOwnerRegistration(Case::ExpectThenReceipt));
+  EXPECT_TRUE(validateSourceOwnerRegistration(Case::ReceiptThenExpect));
+  EXPECT_FALSE(validateSourceOwnerRegistration(Case::MissingReceipt));
+  EXPECT_FALSE(
+      validateSourceOwnerRegistration(Case::ReceiptWithoutExpectation));
+  EXPECT_FALSE(validateSourceOwnerRegistration(Case::DuplicateExpectation));
+  EXPECT_FALSE(validateSourceOwnerRegistration(Case::DuplicateReceipt));
+}
+
+TEST(RewriteFunctionProvenance,
+     BindsDelegatedCxxSourceToExactPrivateCatchFunclet) {
+  using Kind = llvm::mc_rewrite::RewriteSourceFunctionOwnerKind;
+  llvm::LLVMContext Context;
+  std::unique_ptr<llvm::Module> Module = makeWinCxxCatchOwnerModule(
+      Context, /*MarkSourceCatch=*/true, "parent_frame",
+      /*AttachCatchPad=*/true);
+  expectVerifierClean(*Module);
+
+  CompiledImage Image = compileWinCxxCatchOwnerModule(*Module);
+  ASSERT_TRUE(Image.Success);
+  ASSERT_TRUE(Image.FunctionRangesValid);
+  ASSERT_TRUE(Image.Unresolved.empty());
+  ASSERT_EQ(Image.SourceFunctionOwners.size(), 2u);
+  EXPECT_TRUE(llvm::mc_rewrite::validateRewriteSourceFunctionOwners(
+      Image.SourceFunctionOwners));
+
+  const llvm::mc_rewrite::RewriteSourceFunctionOwner *Parent = nullptr;
+  const llvm::mc_rewrite::RewriteSourceFunctionOwner *Catch = nullptr;
+  for (const auto &Owner : Image.SourceFunctionOwners) {
+    if (Owner.SourceFunction == "parent_frame")
+      Parent = &Owner;
+    if (Owner.SourceFunction == "source_catch")
+      Catch = &Owner;
+  }
+  ASSERT_NE(Parent, nullptr);
+  ASSERT_NE(Catch, nullptr);
+  EXPECT_EQ(Parent->Kind, Kind::FunctionEntry);
+  EXPECT_TRUE(Parent->ParentSourceFunction.empty());
+  EXPECT_EQ(Catch->Kind, Kind::WinCxxCatchFunclet);
+  EXPECT_EQ(Catch->ParentSourceFunction, "parent_frame");
+  EXPECT_TRUE(Catch->IsPrivate);
+  EXPECT_NE(Catch->OwnerSymbol, "source_catch");
+  EXPECT_NE(Catch->OwnerSymbol.find("?catch$"), std::string::npos);
+  EXPECT_EQ(Image.SymbolAddrs.count(Catch->OwnerSymbol), 0u);
+  const auto PhysicalOwner = Image.FunctionOwnerAddrs.find(Catch->OwnerSymbol);
+  ASSERT_NE(PhysicalOwner, Image.FunctionOwnerAddrs.end());
+  EXPECT_EQ(PhysicalOwner->second, Catch->OwnerVA);
+  ASSERT_EQ(Image.SourceFunctionOriginalVAs.size(), 2u);
+  EXPECT_EQ(Image.SourceFunctionOriginalVAs.at("source_catch"), 0x140002000u);
+}
+
+TEST(RewriteFunctionProvenance,
+     AuthenticatesCompilerCreatedWinCxxFuncletParent) {
+  llvm::LLVMContext Context;
+  std::unique_ptr<llvm::Module> Module = makeWinCxxCatchOwnerModule(
+      Context, /*MarkSourceCatch=*/false, /*SourceParent=*/"",
+      /*AttachCatchPad=*/false);
+  expectVerifierClean(*Module);
+
+  CompiledImage Image = compileWinCxxCatchOwnerModule(*Module);
+  ASSERT_TRUE(Image.Success);
+  ASSERT_TRUE(Image.FunctionRangesValid);
+  ASSERT_TRUE(Image.Unresolved.empty());
+
+  const llvm::mc_rewrite::RewriteSourceFunctionOwner *ParentOwner = nullptr;
+  for (const auto &Owner : Image.SourceFunctionOwners)
+    if (Owner.SourceFunction == "parent_frame") {
+      ASSERT_EQ(ParentOwner, nullptr);
+      ParentOwner = &Owner;
+    }
+  ASSERT_NE(ParentOwner, nullptr);
+
+  const CompiledFunctionRange *ParentRange = nullptr;
+  const CompiledFunctionRange *DerivedRange = nullptr;
+  for (const CompiledFunctionRange &Range : Image.FunctionRanges) {
+    if (Range.OwnerSymbol == ParentOwner->OwnerSymbol) {
+      ASSERT_EQ(ParentRange, nullptr);
+      ParentRange = &Range;
+    }
+    if (!Range.ParentOwnerSymbol.empty()) {
+      ASSERT_EQ(DerivedRange, nullptr);
+      DerivedRange = &Range;
+    }
+  }
+  ASSERT_NE(ParentRange, nullptr);
+  ASSERT_NE(DerivedRange, nullptr);
+  EXPECT_NE(DerivedRange->OwnerSymbol, ParentRange->OwnerSymbol);
+  EXPECT_EQ(DerivedRange->ParentOwnerSymbol, ParentRange->OwnerSymbol);
+  EXPECT_EQ(DerivedRange->ParentOwnerVA, ParentRange->OwnerVA);
+  EXPECT_TRUE(llvm::mc_rewrite::validateRewriteFunctionRanges(
+      Image.FunctionRanges, Image.FunctionOwnerAddrs));
+
+  auto RejectMutation = [&](auto Mutate) {
+    std::vector<CompiledFunctionRange> Corrupt = Image.FunctionRanges;
+    auto Child = std::find_if(Corrupt.begin(), Corrupt.end(),
+                              [](const CompiledFunctionRange &Range) {
+                                return !Range.ParentOwnerSymbol.empty();
+                              });
+    ASSERT_NE(Child, Corrupt.end());
+    Mutate(*Child);
+    EXPECT_FALSE(llvm::mc_rewrite::validateRewriteFunctionRanges(
+        Corrupt, Image.FunctionOwnerAddrs));
+  };
+  RejectMutation([](CompiledFunctionRange &Range) { ++Range.ParentOwnerVA; });
+  RejectMutation(
+      [](CompiledFunctionRange &Range) { Range.ParentOwnerSymbol.clear(); });
+  RejectMutation([](CompiledFunctionRange &Range) {
+    Range.ParentOwnerSymbol = Range.OwnerSymbol;
+    Range.ParentOwnerVA = Range.OwnerVA;
+  });
+  RejectMutation([](CompiledFunctionRange &Range) {
+    Range.ParentOwnerSymbol = "missing.parent";
+  });
+}
+
+TEST(RewriteFunctionProvenance,
+     RejectsIncompleteOrMismatchedCxxCatchOwnerProtocol) {
+  struct Case {
+    bool MarkSourceCatch;
+    const char *SourceParent;
+    bool AttachCatchPad;
+  };
+  const Case Cases[] = {
+      {/*MarkSourceCatch=*/true, "parent_frame", /*AttachCatchPad=*/false},
+      {/*MarkSourceCatch=*/false, "", /*AttachCatchPad=*/true},
+      {/*MarkSourceCatch=*/true, "wrong_parent", /*AttachCatchPad=*/true},
+      {/*MarkSourceCatch=*/true, "", /*AttachCatchPad=*/true},
+  };
+  for (const Case &TestCase : Cases) {
+    SCOPED_TRACE(TestCase.SourceParent);
+    SCOPED_TRACE(TestCase.MarkSourceCatch);
+    SCOPED_TRACE(TestCase.AttachCatchPad);
+    llvm::LLVMContext Context;
+    std::unique_ptr<llvm::Module> Module = makeWinCxxCatchOwnerModule(
+        Context, TestCase.MarkSourceCatch, TestCase.SourceParent,
+        TestCase.AttachCatchPad);
+    expectVerifierClean(*Module);
+
+    CompiledImage Image = compileWinCxxCatchOwnerModule(*Module);
+    EXPECT_FALSE(Image.Success);
+    EXPECT_FALSE(Image.FunctionRangesValid);
+    EXPECT_TRUE(Image.SymbolAddrs.empty());
+    EXPECT_TRUE(Image.SourceFunctionOwners.empty());
+    EXPECT_TRUE(Image.FunctionOwnerAddrs.empty());
+
+    // An expected delegated catch with no receipt still causes the Windows
+    // backend to create a private physical funclet.  Exercise the raw writer
+    // result so the upper-level CompiledImage fail-closed path cannot mask a
+    // leaked private symbol identity.
+    if (TestCase.MarkSourceCatch && !TestCase.AttachCatchPad) {
+      llvm::mc_rewrite::RewriteResult Raw =
+          compileWinCxxCatchOwnerModuleRaw(*Module);
+      EXPECT_TRUE(Raw.ImageValid);
+      EXPECT_FALSE(Raw.FunctionRangesValid);
+      EXPECT_TRUE(Raw.SymbolAddrs.empty());
+      EXPECT_TRUE(Raw.SourceFunctionOwners.empty());
+      EXPECT_TRUE(Raw.FunctionOwnerAddrs.empty());
+    }
+  }
 }
 
 TEST(RewriteFunctionProvenance, PreservesExactOriginalSourceEntry) {

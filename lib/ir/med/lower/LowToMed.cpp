@@ -437,11 +437,70 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
   resolveScalarAddressModels(Func,
                              Low.RelocatedInstructionScalarModelOccurrences);
   resolveI386GetPcModels(Func, Low.I386GetPcOccurrences);
+  resolveCxxContinuationExits(
+      Func, Low, static_cast<uint16_t>(getTargetRegInfo(TheArch).PointerSize));
 
   LLVM_DEBUG(llvm::dbgs() << "LowIR -> MedIR: " << Func.Blocks.size()
                           << " blocks, " << Func.Params.size() << " params, "
                           << Func.Locals.size() << " locals\n");
   return Func;
+}
+
+void LowToMedConverter::resolveCxxContinuationExits(MedFunc &Func,
+                                                    const LowFunc &Low,
+                                                    uint16_t PointerSize) {
+  Func.CxxContinuationExits.clear();
+  Func.CxxContinuationExitAnalysisComplete = false;
+  if (!Low.CxxContinuationExitAnalysisComplete || PointerSize == 0)
+    return;
+
+  using OccurrenceKey = std::pair<va_t, int>;
+  std::set<OccurrenceKey> SeenOccurrences;
+  std::vector<MedCxxContinuationExitEvidence> BoundExits;
+  BoundExits.reserve(Low.CxxContinuationExits.size());
+
+  for (const LowCxxContinuationExitEvidence &Evidence :
+       Low.CxxContinuationExits) {
+    const OccurrenceKey Key{Evidence.ReturnAddr, Evidence.ReturnSeq};
+    if (Evidence.ReturnAddr == InvalidVA || Evidence.ReturnSeq < 0 ||
+        !SeenOccurrences.insert(Key).second ||
+        !std::is_sorted(Evidence.Targets.begin(), Evidence.Targets.end()) ||
+        std::adjacent_find(Evidence.Targets.begin(), Evidence.Targets.end()) !=
+            Evidence.Targets.end() ||
+        std::find(Evidence.Targets.begin(), Evidence.Targets.end(),
+                  InvalidVA) != Evidence.Targets.end() ||
+        (!Evidence.Complete && !Evidence.Targets.empty()))
+      return;
+
+    const MedBlock *BoundBlock = nullptr;
+    const MedOp *BoundReturn = nullptr;
+    for (const MedBlock &Block : Func.Blocks) {
+      for (const MedOp &Op : Block.Ops) {
+        if (Op.Opcode != NdOp::RETURN || Op.Addr != Evidence.ReturnAddr ||
+            Op.OriginSeq != Evidence.ReturnSeq)
+          continue;
+        if (BoundReturn)
+          return;
+        BoundBlock = &Block;
+        BoundReturn = &Op;
+      }
+    }
+    if (!BoundBlock || !BoundReturn || BoundReturn->NumInputs != 1 ||
+        BoundReturn->Inputs[0].Size != PointerSize)
+      return;
+
+    MedCxxContinuationExitEvidence Bound;
+    Bound.ReturnAddr = Evidence.ReturnAddr;
+    Bound.ReturnSeq = Evidence.ReturnSeq;
+    Bound.BlockId = BoundBlock->Id;
+    Bound.ReturnValue = BoundReturn->Inputs[0];
+    Bound.Targets = Evidence.Targets;
+    Bound.Complete = Evidence.Complete;
+    BoundExits.push_back(std::move(Bound));
+  }
+
+  Func.CxxContinuationExits = std::move(BoundExits);
+  Func.CxxContinuationExitAnalysisComplete = true;
 }
 
 void LowToMedConverter::resolveScalarAddressModels(

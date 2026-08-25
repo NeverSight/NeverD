@@ -1041,16 +1041,25 @@ struct BinaryImage {
     return Result;
   }
 
-  /// Find an import by its format-native IAT address or an exact executable
-  /// veneer registered for it.
-  const Import *findImportAt(va_t Addr) const {
-    for (const auto &Imp : Imports)
-      if (Imp.IATAddr == Addr)
-        return &Imp;
+  /// Find the import owned by an exact executable veneer registration.  This
+  /// deliberately excludes coarse stub ranges and legacy IAT spellings: code
+  /// that needs a symbolic callable identity must not splice those independent
+  /// forms of evidence together.
+  const Import *findImportStubAt(va_t Addr) const {
     auto It = ImportStubIndices.find(Addr);
     if (It != ImportStubIndices.end() && It->second < Imports.size())
       return &Imports[It->second];
     return nullptr;
+  }
+
+  /// Find an import by its format-native IAT address or an exact executable
+  /// veneer registered for it.  IAT identity retains precedence for existing
+  /// data-slot callers; use findImportStubAt when executable identity matters.
+  const Import *findImportAt(va_t Addr) const {
+    for (const auto &Imp : Imports)
+      if (Imp.IATAddr == Addr)
+        return &Imp;
+    return findImportStubAt(Addr);
   }
 
   /// Return every address spelling that can identify an import.  Data slots

@@ -446,6 +446,9 @@ TEST(COFFExceptionParser, AcceptsFH3IPMapAcrossSharedFuncInfoGroup) {
   EXPECT_EQ(DecodedCatch.ParseStatus, ExceptionParseStatus::Complete);
   ASSERT_TRUE(DecodedParent.Cxx.has_value());
   ASSERT_TRUE(DecodedCatch.Cxx.has_value());
+  EXPECT_EQ(DecodedParent.Cxx->NativeFuncInfoVA, Img.Base + 0x3040);
+  EXPECT_EQ(DecodedCatch.Cxx->NativeFuncInfoVA,
+            DecodedParent.Cxx->NativeFuncInfoVA);
   EXPECT_TRUE(DecodedParent.Cxx->IsSeparated);
   EXPECT_FALSE(DecodedParent.Cxx->IsCatchFunclet);
   EXPECT_TRUE(DecodedCatch.Cxx->IsSeparated);

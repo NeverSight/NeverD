@@ -65,6 +65,7 @@ TEST(COFFExceptionParser, ReconstructsCompressedCxxFrameHandler4Graph) {
   EXPECT_EQ(Decoded.Personality, ExceptionPersonality::CxxFrameHandler4);
   ASSERT_TRUE(Decoded.Cxx.has_value());
   EXPECT_EQ(Decoded.Cxx->NativeEncoding, CxxExceptionInfo::Encoding::FH4);
+  EXPECT_EQ(Decoded.Cxx->NativeFuncInfoVA, Img.Base + 0x3040);
   EXPECT_TRUE(Decoded.Cxx->hasValidStateGraph());
   ASSERT_EQ(Decoded.Cxx->UnwindMap.size(), 2u);
   EXPECT_EQ(Decoded.Cxx->UnwindMap[1].ToState, 0);
@@ -214,6 +215,141 @@ TEST(COFFExceptionParser, RejectsNonCanonicalFH4CompressedInteger) {
   coff_loader::resolveExceptionHandlers(Img);
   EXPECT_EQ(Img.ExceptionMetadata.Functions[0].ParseStatus,
             ExceptionParseStatus::Malformed);
+}
+
+TEST(COFFExceptionParser,
+     RejectsFunctionRelativeFH4ContinuationOutsideDeclaringRange) {
+  BinaryImage Img = makeX64ExceptionImage(0x200);
+  addPersonalityImport(Img, Img.Base + 0x1100, "__CxxFrameHandler4");
+  uint8_t *X = Img.Segments[1].Data.data();
+  writeLE<uint32_t>(X, 0x3040);
+
+  X[0x40] = 0x10; // try map plus mandatory IP map
+  writeLE<uint32_t>(X + 0x41, 0x3080);
+  writeLE<uint32_t>(X + 0x45, 0x30e0);
+  X[0x80] = 2; // one try
+  X[0x81] = 0;
+  X[0x82] = 0;
+  X[0x83] = 2;
+  writeLE<uint32_t>(X + 0x84, 0x30a0);
+  X[0xa0] = 2;    // one handler
+  X[0xa1] = 0x10; // one function-relative continuation
+  writeLE<uint32_t>(X + 0xa2, 0x1150);
+  X[0xa6] = 0x01; // canonical two-byte encoding of 0x100
+  X[0xa7] = 0x04;
+  X[0xe0] = 2; // one IP-state entry
+  X[0xe1] = 0;
+  X[0xe2] = 0;
+
+  ExceptionFunction F;
+  F.CodeRange = {Img.Base + 0x1000, Img.Base + 0x1080};
+  F.PersonalityVA = Img.Base + 0x1100;
+  F.HandlerDataVA = Img.Base + 0x3000;
+  Img.ExceptionMetadata.Functions.push_back(std::move(F));
+
+  coff_loader::resolveExceptionHandlers(Img);
+  const ExceptionFunction &Decoded = Img.ExceptionMetadata.Functions[0];
+  EXPECT_EQ(Decoded.ParseStatus, ExceptionParseStatus::Malformed);
+  EXPECT_FALSE(Decoded.Cxx.has_value());
+  ASSERT_FALSE(Decoded.Diagnostics.empty());
+  EXPECT_NE(Decoded.Diagnostics.back().find("leaves its runtime function"),
+            std::string::npos);
+}
+
+TEST(COFFExceptionParser,
+     RejectsImageRelativeFH4ContinuationOutsideNonSeparatedRange) {
+  BinaryImage Img = makeX64ExceptionImage(0x200);
+  addPersonalityImport(Img, Img.Base + 0x1100, "__CxxFrameHandler4");
+  uint8_t *X = Img.Segments[1].Data.data();
+  writeLE<uint32_t>(X, 0x3040);
+
+  X[0x40] = 0x10;
+  writeLE<uint32_t>(X + 0x41, 0x3080);
+  writeLE<uint32_t>(X + 0x45, 0x30e0);
+  X[0x80] = 2;
+  X[0x81] = 0;
+  X[0x82] = 0;
+  X[0x83] = 2;
+  writeLE<uint32_t>(X + 0x84, 0x30a0);
+  X[0xa0] = 2;
+  X[0xa1] = 0x18; // one image-relative continuation
+  writeLE<uint32_t>(X + 0xa2, 0x1150);
+  writeLE<uint32_t>(X + 0xa6, 0x1180);
+  X[0xe0] = 2;
+  X[0xe1] = 0;
+  X[0xe2] = 0;
+
+  ExceptionFunction F;
+  F.CodeRange = {Img.Base + 0x1000, Img.Base + 0x1080};
+  F.PersonalityVA = Img.Base + 0x1100;
+  F.HandlerDataVA = Img.Base + 0x3000;
+  Img.ExceptionMetadata.Functions.push_back(std::move(F));
+
+  coff_loader::resolveExceptionHandlers(Img);
+  const ExceptionFunction &Decoded = Img.ExceptionMetadata.Functions[0];
+  EXPECT_EQ(Decoded.ParseStatus, ExceptionParseStatus::Malformed);
+  EXPECT_FALSE(Decoded.Cxx.has_value());
+  ASSERT_FALSE(Decoded.Diagnostics.empty());
+  EXPECT_NE(Decoded.Diagnostics.back().find("non-separated runtime function"),
+            std::string::npos);
+}
+
+TEST(COFFExceptionParser,
+     AcceptsSeparatedFH4ContinuationInUniqueFuncInfoContribution) {
+  BinaryImage Img = makeX64ExceptionImage(0x200);
+  addPersonalityImport(Img, Img.Base + 0x1100, "__CxxFrameHandler4");
+  addPersonalityImport(Img, Img.Base + 0x1110, "__CxxFrameHandler4");
+  uint8_t *X = Img.Segments[1].Data.data();
+  writeLE<uint32_t>(X, 0x3040);
+  writeLE<uint32_t>(X + 4, 0x3040);
+
+  X[0x40] = 0x1a; // separated + unwind map + try map
+  writeLE<uint32_t>(X + 0x41, 0x3070);
+  writeLE<uint32_t>(X + 0x45, 0x3080);
+  writeLE<uint32_t>(X + 0x49, 0x30e0);
+  X[0x70] = 4; // two empty unwind states
+  X[0x71] = 0;
+  X[0x72] = 0;
+  X[0x80] = 2;
+  X[0x81] = 0;
+  X[0x82] = 0;
+  X[0x83] = 2;
+  writeLE<uint32_t>(X + 0x84, 0x30a0);
+  X[0xa0] = 2;
+  X[0xa1] = 0x18;
+  writeLE<uint32_t>(X + 0xa2, 0x1150);
+  writeLE<uint32_t>(X + 0xa6, 0x10a0);
+  X[0xe0] = 4; // two stateless separated contributions
+  writeLE<uint32_t>(X + 0xe1, 0x1000);
+  writeLE<uint32_t>(X + 0xe5, 0);
+  writeLE<uint32_t>(X + 0xe9, 0x1080);
+  writeLE<uint32_t>(X + 0xed, 0);
+
+  ExceptionFunction First;
+  First.CodeRange = {Img.Base + 0x1000, Img.Base + 0x1080};
+  First.PersonalityVA = Img.Base + 0x1100;
+  First.HandlerDataVA = Img.Base + 0x3000;
+  Img.ExceptionMetadata.Functions.push_back(std::move(First));
+  ExceptionFunction Second;
+  Second.CodeRange = {Img.Base + 0x1080, Img.Base + 0x1100};
+  Second.PersonalityVA = Img.Base + 0x1110;
+  Second.HandlerDataVA = Img.Base + 0x3004;
+  Img.ExceptionMetadata.Functions.push_back(std::move(Second));
+
+  coff_loader::resolveExceptionHandlers(Img);
+  ASSERT_EQ(Img.ExceptionMetadata.Functions.size(), 2u);
+  for (const ExceptionFunction &Decoded : Img.ExceptionMetadata.Functions) {
+    EXPECT_EQ(Decoded.ParseStatus, ExceptionParseStatus::Complete);
+    ASSERT_TRUE(Decoded.Cxx.has_value());
+    EXPECT_TRUE(Decoded.Cxx->IsSeparated);
+    EXPECT_EQ(Decoded.Cxx->NativeFuncInfoVA, Img.Base + 0x3040);
+  }
+  const auto &Continuation = Img.ExceptionMetadata.Functions[0]
+                                 .Cxx->TryBlocks[0]
+                                 .Handlers[0]
+                                 .ContinuationVAs;
+  ASSERT_EQ(Continuation.size(), 1u);
+  EXPECT_EQ(Continuation[0], Img.Base + 0x10a0);
 }
 
 } // namespace

@@ -156,6 +156,10 @@ struct ExceptionFunction {
     // that would have to reproduce a contract NeverD cannot yet emit.
     if (model() != ExceptionModel::WindowsTable)
       return false;
+    if (SEH)
+      for (const SEHScopeRecord &Scope : SEH->Scopes)
+        if (Scope.NormalizedFilterVA != 0)
+          return false;
     return ParseStatus == ExceptionParseStatus::Complete &&
            !isGSWrappedPersonality(Personality) &&
            Personality != ExceptionPersonality::CxxFrameHandler4 &&

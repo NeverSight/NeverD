@@ -41,10 +41,17 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
   // landing pad just as surely as an ordinary branch carries SSA values.  Keep
   // that edge in the SSA-only graph while leaving MedBlock::Succs untouched:
   // the LLVM emitter will turn the protected call into an invoke later.
-  std::vector<std::vector<int>> FlowSuccs(N), FlowPreds(N);
+  // A real machine function may have several independently enterable code
+  // roots which later converge.  Model those sources under one synthetic
+  // entry for dominance only.  Treating each DFS tree as an unrelated
+  // component loses an edge when an earlier source has already visited the
+  // shared join, which in turn suppresses the PHI required at that join.
+  const int VirtualRoot = N;
+  const int GraphN = N + 1;
+  std::vector<std::vector<int>> FlowSuccs(GraphN), FlowPreds(GraphN);
   std::vector<bool> IsExceptionalTarget(N, false);
   auto AddFlowEdge = [&](int From, int To) {
-    if (From < 0 || From >= N || To < 0 || To >= N)
+    if (From < 0 || From >= GraphN || To < 0 || To >= GraphN)
       return;
     auto &Succs = FlowSuccs[From];
     if (std::find(Succs.begin(), Succs.end(), To) == Succs.end())
@@ -64,63 +71,123 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
     for (int S : FlowSuccs[B])
       FlowPreds[S].push_back(B);
 
+  // Root one representative of every source SCC in the real CFG, plus the
+  // architectural function entry even if malformed input gives it an incoming
+  // edge.  Choosing the first merely-unreached block is order-dependent: a
+  // downstream SCC can have a smaller block id than its true source and would
+  // then acquire a fictitious independent-entry role.
+  std::vector<int> FinishOrder;
+  std::vector<bool> VisitedForSCC(N, false);
+  for (int Start = 0; Start < N; ++Start) {
+    if (VisitedForSCC[Start])
+      continue;
+    std::vector<std::pair<int, size_t>> Worklist;
+    VisitedForSCC[Start] = true;
+    Worklist.push_back({Start, 0});
+    while (!Worklist.empty()) {
+      const int B = Worklist.back().first;
+      size_t &Next = Worklist.back().second;
+      if (Next < FlowSuccs[B].size()) {
+        const int S = FlowSuccs[B][Next++];
+        if (S >= 0 && S < N && !VisitedForSCC[S]) {
+          VisitedForSCC[S] = true;
+          Worklist.push_back({S, 0});
+        }
+        continue;
+      }
+      FinishOrder.push_back(B);
+      Worklist.pop_back();
+    }
+  }
+
+  std::vector<int> SccOf(N, -1);
+  std::vector<std::vector<int>> SccBlocks;
+  for (auto It = FinishOrder.rbegin(); It != FinishOrder.rend(); ++It) {
+    const int Start = *It;
+    if (SccOf[Start] != -1)
+      continue;
+    const int Scc = static_cast<int>(SccBlocks.size());
+    SccBlocks.emplace_back();
+    std::vector<int> Worklist{Start};
+    SccOf[Start] = Scc;
+    while (!Worklist.empty()) {
+      const int B = Worklist.back();
+      Worklist.pop_back();
+      SccBlocks[Scc].push_back(B);
+      for (int P : FlowPreds[B])
+        if (P >= 0 && P < N && SccOf[P] == -1) {
+          SccOf[P] = Scc;
+          Worklist.push_back(P);
+        }
+    }
+  }
+
+  std::vector<bool> SccHasIncoming(SccBlocks.size(), false);
+  for (int B = 0; B < N; ++B)
+    for (int S : FlowSuccs[B])
+      if (S >= 0 && S < N && SccOf[B] != SccOf[S])
+        SccHasIncoming[SccOf[S]] = true;
+
+  std::vector<int> Roots;
+  std::vector<bool> IsRoot(N, false);
+  auto AddRoot = [&](int Root) {
+    if (Root < 0 || Root >= N || IsRoot[Root])
+      return;
+    IsRoot[Root] = true;
+    Roots.push_back(Root);
+  };
+  AddRoot(0);
+  for (size_t Scc = 0; Scc < SccBlocks.size(); ++Scc) {
+    if (SccHasIncoming[Scc] || SccBlocks[Scc].empty())
+      continue;
+    AddRoot(*std::min_element(SccBlocks[Scc].begin(), SccBlocks[Scc].end()));
+  }
+
+  for (int Root : Roots)
+    AddFlowEdge(VirtualRoot, Root);
+  for (auto &Preds : FlowPreds)
+    Preds.clear();
+  for (int B = 0; B < GraphN; ++B)
+    for (int S : FlowSuccs[B])
+      FlowPreds[S].push_back(B);
+
   // Reverse post-order + immediate dominators (Cooper-Harvey-Kennedy), computed
   // up front because both the live-in analysis (Step 0) and the dominance
   // frontiers (Step 2) need them.
   std::vector<int> RPO;
-  std::vector<int> RPONum(N, -1);
-  std::vector<int> Roots;
-  std::vector<int> Component(N, -1);
+  std::vector<int> RPONum(GraphN, -1);
   {
-    std::vector<bool> Visited(N, false);
-    auto AppendComponent = [&](int Root) {
-      const int ComponentId = static_cast<int>(Roots.size());
-      Roots.push_back(Root);
-      const size_t RPOBegin = RPO.size();
-      std::vector<std::pair<int, size_t>> Stk;
-      Stk.reserve(N);
-      Visited[Root] = true;
-      Component[Root] = ComponentId;
-      Stk.push_back({Root, 0});
-      while (!Stk.empty()) {
-        int B = Stk.back().first;
-        size_t I = Stk.back().second;
-        auto &Succs = FlowSuccs[B];
-        if (I < Succs.size()) {
-          Stk.back().second = I + 1;
-          int S = Succs[I];
-          if (S < 0 || S >= N)
-            continue;
-          if (!Visited[S]) {
-            Visited[S] = true;
-            Component[S] = ComponentId;
-            Stk.push_back({S, 0});
-          }
-        } else {
-          RPO.push_back(B);
-          Stk.pop_back();
+    std::vector<bool> Visited(GraphN, false);
+    std::vector<std::pair<int, size_t>> Stk;
+    Stk.reserve(GraphN);
+    Visited[VirtualRoot] = true;
+    Stk.push_back({VirtualRoot, 0});
+    while (!Stk.empty()) {
+      int B = Stk.back().first;
+      size_t I = Stk.back().second;
+      auto &Succs = FlowSuccs[B];
+      if (I < Succs.size()) {
+        Stk.back().second = I + 1;
+        int S = Succs[I];
+        if (S < 0 || S >= GraphN)
+          continue;
+        if (!Visited[S]) {
+          Visited[S] = true;
+          Stk.push_back({S, 0});
         }
+      } else {
+        RPO.push_back(B);
+        Stk.pop_back();
       }
-      std::reverse(RPO.begin() + static_cast<long>(RPOBegin), RPO.end());
-    };
-
-    // Exception handlers and other address-discovered regions can be valid
-    // blocks without an ordinary edge from block zero.  Treat every such
-    // component as an additional SSA root so its definitions receive unique
-    // versions instead of retaining version zero and colliding with values in
-    // the entry component.
-    AppendComponent(0);
-    for (int B = 0; B < N; ++B)
-      if (!Visited[B])
-        AppendComponent(B);
+    }
+    std::reverse(RPO.begin(), RPO.end());
 
     for (int I = 0; I < static_cast<int>(RPO.size()); ++I)
       RPONum[RPO[I]] = I;
   }
 
-  std::vector<int> IDom(N, -1);
-  for (int Root : Roots)
-    IDom[Root] = Root;
+  std::vector<int> IDom(GraphN, -1);
+  IDom[VirtualRoot] = VirtualRoot;
 
   auto Intersect = [&](int B1, int B2) -> int {
     int F1 = B1, F2 = B2;
@@ -138,11 +205,11 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
     while (Changed) {
       Changed = false;
       for (int B : RPO) {
-        if (IDom[B] == B)
+        if (B == VirtualRoot)
           continue;
         int NewIDom = -1;
         for (int P : FlowPreds[B]) {
-          if (P < 0 || P >= N || Component[P] != Component[B])
+          if (P < 0 || P >= GraphN)
             continue;
           if (IDom[P] == -1)
             continue;
@@ -303,8 +370,10 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
       Changed = false;
       for (auto It = RPO.rbegin(); It != RPO.rend(); ++It) {
         int B = *It;
+        if (B == VirtualRoot)
+          continue;
         std::set<int> NewOut;
-        for (int S : Func.Blocks[B].Succs)
+        for (int S : FlowSuccs[B])
           if (S >= 0 && S < N)
             NewOut.insert(LiveIn[S].begin(), LiveIn[S].end());
         std::set<int> NewIn = UEVar[B];
@@ -359,12 +428,19 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
   }
 
   // Step 2: Compute dominance frontiers
-  std::vector<std::set<int>> DF(N);
+  std::vector<std::set<int>> DF(GraphN);
   for (int B = 0; B < N; ++B) {
+    // A root's implicit machine-entry edge has no MedBlock predecessor from
+    // which a PHI argument could be emitted.  Preserve the existing entry
+    // semantics for a root SCC with a real backedge instead of constructing a
+    // PHI that silently omits its initial value.  Ordinary multi-root joins are
+    // not roots and therefore still receive their complete frontier PHIs.
+    if (IsRoot[B])
+      continue;
     if (FlowPreds[B].size() < 2)
       continue;
     for (int P : FlowPreds[B]) {
-      if (P < 0 || P >= N || Component[P] != Component[B])
+      if (P < 0 || P >= GraphN)
         continue;
       int Runner = P;
       while (Runner != IDom[B] && Runner != -1) {
@@ -402,6 +478,8 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
       int B = Worklist.front();
       Worklist.pop();
       for (int D : DF[B]) {
+        if (D < 0 || D >= N)
+          continue;
         if (PhiBlocks.insert(D).second) {
           auto VIt = VarIdToVar.find(VarId);
           MedVar PhiVar = (VIt != VarIdToVar.end()) ? VIt->second : MedVar{};
@@ -409,7 +487,8 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
           PhiNode Phi;
           Phi.Output = PhiVar;
           for (int P : FlowPreds[D])
-            Phi.Args.push_back({P, PhiVar});
+            if (P != VirtualRoot)
+              Phi.Args.push_back({P, PhiVar});
           Func.Blocks[D].Phis.push_back(Phi);
 
           Worklist.push(D);
@@ -433,9 +512,9 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
     return V;
   };
 
-  std::vector<std::vector<int>> DomChildren(N);
-  for (int C = 0; C < N; ++C) {
-    if (C != 0 && IDom[C] != -1 && IDom[C] != C)
+  std::vector<std::vector<int>> DomChildren(GraphN);
+  for (int C = 0; C < GraphN; ++C) {
+    if (C != VirtualRoot && IDom[C] != -1 && IDom[C] != C)
       DomChildren[IDom[C]].push_back(C);
   }
 
@@ -448,6 +527,8 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
   Stk.reserve(N);
 
   auto ProcessBlock = [&](Frame &F) {
+    if (F.B == VirtualRoot)
+      return;
     if (F.B < 0 || F.B >= N)
       return;
     auto &Blk = Func.Blocks[F.B];
@@ -501,24 +582,21 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
     }
   };
 
-  for (int Root : Roots) {
-    Stk.push_back({Root, 0, {}});
-    ProcessBlock(Stk.back());
-
-    while (!Stk.empty()) {
-      auto &F = Stk.back();
-      auto &Children = DomChildren[F.B];
-      if (F.ChildIdx < Children.size()) {
-        int C = Children[F.ChildIdx++];
-        Stk.push_back({C, 0, {}});
-        ProcessBlock(Stk.back());
-      } else {
-        for (auto &[VId, Cnt] : F.SavedSizes) {
-          for (int I = 0; I < Cnt; ++I)
-            VarStack[VId].pop_back();
-        }
-        Stk.pop_back();
+  Stk.push_back({VirtualRoot, 0, {}});
+  ProcessBlock(Stk.back());
+  while (!Stk.empty()) {
+    auto &F = Stk.back();
+    auto &Children = DomChildren[F.B];
+    if (F.ChildIdx < Children.size()) {
+      int C = Children[F.ChildIdx++];
+      Stk.push_back({C, 0, {}});
+      ProcessBlock(Stk.back());
+    } else {
+      for (auto &[VId, Cnt] : F.SavedSizes) {
+        for (int I = 0; I < Cnt; ++I)
+          VarStack[VId].pop_back();
       }
+      Stk.pop_back();
     }
   }
 }

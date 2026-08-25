@@ -1,5 +1,6 @@
 add_neverd_component_library(NeverDCodeGen
   COFF/COFFExceptionPatch.cpp
+  COFF/COFFFH4Encoding.cpp
   COFF/COFFInplace.cpp
   COFF/COFFPatch.cpp
   COFF/COFFReloc.cpp

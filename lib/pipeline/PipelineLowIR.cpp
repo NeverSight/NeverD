@@ -432,6 +432,24 @@ struct ModuleAddressFacts {
 };
 using ModuleAddressState = std::map<LowValueKey, ModuleAddressFacts>;
 
+struct ReturnedCodeEvidence {
+  std::vector<std::set<va_t>> TargetsByFunction;
+  std::vector<bool> CompleteByFunction;
+  std::vector<std::vector<LowCxxContinuationExitEvidence>>
+      OccurrencesByFunction;
+};
+
+struct LocalUnwindContinuationEvidence {
+  std::vector<std::set<va_t>> TargetsByFunction;
+  std::vector<bool> CompleteByFunction;
+  std::vector<bool> SawCallByFunction;
+};
+
+enum class ModuleAddressEdgeTraversal : uint8_t {
+  OrdinaryAndExceptional,
+  OrdinaryOnly,
+};
+
 struct ModuleEvidenceBudget {
   explicit ModuleEvidenceBudget(std::optional<size_t> TestLimit)
       : Remaining(
@@ -513,12 +531,16 @@ bool adjustFrameOffsets(ModuleAddressFacts &Facts, uint64_t RawDelta,
 /// mirror field is harmless, while missing one can make a later function read
 /// a stale zero.  Exact address provenance is required at the root; scalar
 /// numeric coincidence never creates a use.
-bool collectLowAddressUses(const BinaryImage &Img,
-                           const std::vector<LowFunc> &Funcs,
-                           const std::vector<ModuleJumpTableOwner> &Owners,
-                           std::vector<ModuleAddressUse> &Uses,
-                           ModuleEvidenceBudget &Budget,
-                           std::optional<size_t> TestBudget) {
+bool collectLowAddressUses(
+    const BinaryImage &Img, const std::vector<LowFunc> &Funcs,
+    const std::vector<ModuleJumpTableOwner> &Owners,
+    std::vector<ModuleAddressUse> &Uses, ModuleEvidenceBudget &Budget,
+    std::optional<size_t> TestBudget,
+    const std::set<va_t> *AdditionalExactRoots = nullptr,
+    ReturnedCodeEvidence *ReturnedCode = nullptr,
+    ModuleAddressEdgeTraversal EdgeTraversal =
+        ModuleAddressEdgeTraversal::OrdinaryAndExceptional,
+    LocalUnwindContinuationEvidence *LocalUnwind = nullptr) {
   const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
   const std::vector<TargetRegisterRange> PreservedRanges =
       TRI.callPreservedRanges(Img.Format);
@@ -543,6 +565,16 @@ bool collectLowAddressUses(const BinaryImage &Img,
         return failCollect("scan-cap", 0, Block.StartAddr);
       ScanOps += Block.Ops.size();
     }
+  if (ReturnedCode) {
+    ReturnedCode->TargetsByFunction.assign(Funcs.size(), {});
+    ReturnedCode->CompleteByFunction.assign(Funcs.size(), true);
+    ReturnedCode->OccurrencesByFunction.assign(Funcs.size(), {});
+  }
+  if (LocalUnwind) {
+    LocalUnwind->TargetsByFunction.assign(Funcs.size(), {});
+    LocalUnwind->CompleteByFunction.assign(Funcs.size(), true);
+    LocalUnwind->SawCallByFunction.assign(Funcs.size(), false);
+  }
 
   std::map<va_t, std::vector<const ModuleJumpTableOwner *>> OwnersByContainer;
   for (const ModuleJumpTableOwner &Owner : Owners) {
@@ -558,8 +590,32 @@ bool collectLowAddressUses(const BinaryImage &Img,
     for (va_t ContainerVA : OwnerContainers)
       OwnersByContainer[ContainerVA].push_back(&Owner);
   }
+  std::set<va_t> AdditionalExactOwnerVAs;
+  if (AdditionalExactRoots)
+    for (va_t Address : *AdditionalExactRoots) {
+      if (const Section *Sec = Img.getSectionFor(Address))
+        AdditionalExactOwnerVAs.insert(Sec->VA);
+      else if (const Segment *Seg = Img.getSegmentFor(Address))
+        AdditionalExactOwnerVAs.insert(Seg->VA);
+    }
 
   auto exactCouldMatchAnyOwner = [&](const ModuleAddressAnchor &Exact) {
+    // Returned-code completeness is decided at the exact RETURN occurrence.
+    // Keep every authenticated alternative until then: filtering an address
+    // merely because its owner differs from every candidate owner would turn
+    // `{candidate, other-exact}` into a falsely complete singleton.
+    if (ReturnedCode && AdditionalExactRoots)
+      return true;
+    if (AdditionalExactRoots && AdditionalExactRoots->count(Exact.Address) != 0)
+      return true;
+    // PC-relative materialization commonly starts from the instruction-end
+    // address and reaches the published code target through a constant ADD.
+    // Retain intermediate exact values in the same authenticated container;
+    // only final RETURN values that exactly match AdditionalExactRoots are
+    // exported as continuation evidence.
+    if (Exact.OwnerVA != InvalidVA &&
+        AdditionalExactOwnerVAs.count(Exact.OwnerVA) != 0)
+      return true;
     switch (Exact.OwnerKind) {
     case ModuleAddressOwnerKind::Unknown:
       return true;
@@ -677,6 +733,31 @@ bool collectLowAddressUses(const BinaryImage &Img,
          Func.RelocatedInstructionAddressOccurrences) {
       if (!Occurrence.DefinesOutput)
         continue;
+      if (Occurrence.Authority ==
+          RelocatedInstructionAddressProofKind::X86PCRelativeCodeAddress) {
+        const va_t NormalizedTarget =
+            normalizeCodeAddress(Occurrence.TargetVA, Img.Arch, Img.Mode);
+        if ((Img.Arch != Arch::X86 && Img.Arch != Arch::X64) ||
+            Occurrence.FieldVA != InvalidVA ||
+            Occurrence.Width != Img.getPointerSize() ||
+            Occurrence.Provenance != ConstantAddressProvenance::CodeAddress ||
+            !Occurrence.PCRelativeFromInstructionEnd ||
+            Occurrence.OutputOpcode != NdOp::COPY ||
+            !Occurrence.OutputWitness.isReg() ||
+            Occurrence.SeedInstructionAddr != Occurrence.InstructionAddr ||
+            Occurrence.SeedOpSeq != Occurrence.OpSeq ||
+            Occurrence.SeedOpcode != Occurrence.OutputOpcode ||
+            !Occurrence.SeedInputWitness.isTemp() ||
+            Occurrence.SeedInputWitness.Size != Occurrence.Width ||
+            Occurrence.SeedOutputWitness != Occurrence.OutputWitness ||
+            !Img.hasExecutableCodeOwnerAt(NormalizedTarget) ||
+            !Img.relocatedTargetBelongsToOwner(NormalizedTarget,
+                                               Occurrence.TargetOwnerVA) ||
+            std::find(Func.CodeRefTargets.begin(), Func.CodeRefTargets.end(),
+                      NormalizedTarget) == Func.CodeRefTargets.end())
+          return failCollect("invalid-x86-code-address-materialization",
+                             FuncIndex, Occurrence.InstructionAddr);
+      }
       // A subset-path materialization does not describe the other reaching
       // values of the output.  Treating its relocation target as the complete
       // value set would lose another authenticated page (or an opaque live-in)
@@ -705,6 +786,8 @@ bool collectLowAddressUses(const BinaryImage &Img,
     }
     std::vector<ModuleAddressState> InStates(BlockCount);
     std::vector<ModuleAddressState> OutStates(BlockCount);
+    std::map<std::pair<va_t, int>, LowCxxContinuationExitEvidence>
+        ReturnedOccurrences;
 
     auto mergeFacts = [&](ModuleAddressFacts &Into,
                           const ModuleAddressFacts &From) {
@@ -732,8 +815,9 @@ bool collectLowAddressUses(const BinaryImage &Img,
     auto mergePredecessors = [&](const LowBlock &Block,
                                  ModuleAddressState &Merged) {
       std::vector<int> Preds = Block.Preds;
-      for (const ExceptionalEdge &Edge : Block.ExceptionalPreds)
-        Preds.push_back(Edge.BlockId);
+      if (EdgeTraversal == ModuleAddressEdgeTraversal::OrdinaryAndExceptional)
+        for (const ExceptionalEdge &Edge : Block.ExceptionalPreds)
+          Preds.push_back(Edge.BlockId);
       if (Preds.empty())
         return true;
       std::map<LowValueKey, size_t> Seen;
@@ -1307,6 +1391,45 @@ bool collectLowAddressUses(const BinaryImage &Img,
                   return false;
               }
             }
+            if (RecordedUses && ReturnedCode) {
+              std::set<va_t> &Targets =
+                  ReturnedCode->TargetsByFunction[FuncIndex];
+              LowCxxContinuationExitEvidence Occurrence;
+              Occurrence.ReturnAddr = Op.Addr;
+              Occurrence.ReturnSeq = Op.Seq;
+              Occurrence.Complete =
+                  !Returned.Imprecise && !Returned.ExactValuesWidened;
+              if (Occurrence.ReturnAddr == InvalidVA ||
+                  Occurrence.ReturnSeq < 0)
+                return false;
+              if (Occurrence.Complete && AdditionalExactRoots) {
+                for (const ModuleAddressAnchor &Exact : Returned.ExactValues) {
+                  if (AdditionalExactRoots->count(Exact.Address) == 0) {
+                    Occurrence.Complete = false;
+                    break;
+                  }
+                  Occurrence.Targets.push_back(Exact.Address);
+                }
+              }
+              if (!Occurrence.Complete) {
+                ReturnedCode->CompleteByFunction[FuncIndex] = false;
+                Targets.clear();
+                Occurrence.Targets.clear();
+              } else if (ReturnedCode->CompleteByFunction[FuncIndex]) {
+                Targets.insert(Occurrence.Targets.begin(),
+                               Occurrence.Targets.end());
+              }
+              std::sort(Occurrence.Targets.begin(), Occurrence.Targets.end());
+              Occurrence.Targets.erase(std::unique(Occurrence.Targets.begin(),
+                                                   Occurrence.Targets.end()),
+                                       Occurrence.Targets.end());
+              if (!ReturnedOccurrences
+                       .emplace(std::make_pair(Occurrence.ReturnAddr,
+                                               Occurrence.ReturnSeq),
+                                std::move(Occurrence))
+                       .second)
+                return false;
+            }
             if (!addUse(Op, ModuleAddressUse::Kind::PointerEscape, Returned))
               return false;
             for (const ModuleAddressFacts &Address : EscapedFrameAddresses)
@@ -1317,6 +1440,36 @@ bool collectLowAddressUses(const BinaryImage &Img,
           }
           if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
               Op.Opcode == NdOp::INTRINSIC) {
+            if (RecordedUses && LocalUnwind && Op.Opcode == NdOp::CALL &&
+                Op.NumInputs != 0 && Op.Inputs[0].isConst() &&
+                Img.Arch == Arch::X64 && Img.Format == BinaryFormat::COFF) {
+              const va_t CalleeVA = normalizeCodeAddress(
+                  static_cast<va_t>(Op.Inputs[0].Offset), Img.Arch, Img.Mode);
+              const Import *Imported = Img.findImportStubAt(CalleeVA);
+              if (Imported &&
+                  stripLeadingUnderscores(Imported->Name) == "local_unwind") {
+                LocalUnwind->SawCallByFunction[FuncIndex] = true;
+                if (TRI.Win64ParamRegs.size() < 2 || TRI.PointerSize == 0) {
+                  LocalUnwind->CompleteByFunction[FuncIndex] = false;
+                } else {
+                  const ModuleAddressFacts Continuation = factsFor(
+                      NdVar::reg(TRI.Win64ParamRegs[1], TRI.PointerSize));
+                  if (Continuation.Imprecise ||
+                      Continuation.ExactValuesWidened ||
+                      Continuation.ExactValues.size() != 1 ||
+                      !AdditionalExactRoots) {
+                    LocalUnwind->CompleteByFunction[FuncIndex] = false;
+                  } else {
+                    const va_t Target =
+                        Continuation.ExactValues.begin()->Address;
+                    if (AdditionalExactRoots->count(Target) == 0)
+                      LocalUnwind->CompleteByFunction[FuncIndex] = false;
+                    else
+                      LocalUnwind->TargetsByFunction[FuncIndex].insert(Target);
+                  }
+                }
+              }
+            }
             // LowIR calls do not enumerate ABI argument registers as explicit
             // operands.  Any authenticated address still live in the register
             // state can therefore be handed to an opaque callee; for writable
@@ -1788,8 +1941,12 @@ bool collectLowAddressUses(const BinaryImage &Img,
       }
       return true;
     };
-    if (!Func.ModuleAnalysisRoots.empty()) {
-      for (va_t Root : Func.ModuleAnalysisRoots)
+    const std::set<va_t> &AnalysisRoots =
+        EdgeTraversal == ModuleAddressEdgeTraversal::OrdinaryOnly
+            ? Func.OrdinaryModuleAnalysisRoots
+            : Func.ModuleAnalysisRoots;
+    if (!AnalysisRoots.empty()) {
+      for (va_t Root : AnalysisRoots)
         if (!queueRoot(Root))
           return false;
     } else {
@@ -1833,10 +1990,11 @@ bool collectLowAddressUses(const BinaryImage &Img,
       for (int Succ : Func.Blocks[BlockIndex].Succs)
         if (!queueSucc(Succ))
           return false;
-      for (const ExceptionalEdge &Edge :
-           Func.Blocks[BlockIndex].ExceptionalSuccs)
-        if (!queueSucc(Edge.BlockId))
-          return false;
+      if (EdgeTraversal == ModuleAddressEdgeTraversal::OrdinaryAndExceptional)
+        for (const ExceptionalEdge &Edge :
+             Func.Blocks[BlockIndex].ExceptionalSuccs)
+          if (!queueSucc(Edge.BlockId))
+            return false;
     }
     for (size_t I = 0; I < BlockCount; ++I) {
       if (!Reached[I])
@@ -1846,8 +2004,254 @@ bool collectLowAddressUses(const BinaryImage &Img,
         return failCollect("transfer-record", FuncIndex,
                            Func.Blocks[I].StartAddr);
     }
+    if (ReturnedCode) {
+      auto &Published = ReturnedCode->OccurrencesByFunction[FuncIndex];
+      Published.reserve(ReturnedOccurrences.size());
+      for (auto &[Key, Occurrence] : ReturnedOccurrences) {
+        (void)Key;
+        Published.push_back(std::move(Occurrence));
+      }
+    }
   }
   return true;
+}
+
+struct EHContinuationRootDiscovery {
+  std::map<va_t, std::set<va_t>> RootsByOwner;
+  std::vector<std::vector<LowCxxContinuationExitEvidence>>
+      CxxContinuationExitsByFunction;
+  std::vector<bool> CxxContinuationExitAnalysisCompleteByFunction;
+  bool AnalysisComplete = true;
+};
+
+/// Route explicit FH4 continuations and recover the continuation values
+/// returned by separated FH3 catch funclets.  A plain FH3 code reference is
+/// deliberately insufficient: the source must be a complete catch
+/// contribution declared by the target owner's try map, and bounded LowIR
+/// dataflow must prove that the referenced address reaches an ordinary return
+/// value.  The result stays pipeline-local so provisional evidence can be
+/// discarded and recomputed after module arbitration.
+EHContinuationRootDiscovery collectWindowsEHContinuationRoots(
+    const BinaryImage &Img, const std::vector<LowFunc> &Funcs,
+    const std::set<va_t> &FunctionEntries, std::optional<size_t> TestBudget) {
+  EHContinuationRootDiscovery Result;
+  Result.CxxContinuationExitsByFunction.assign(Funcs.size(), {});
+  Result.CxxContinuationExitAnalysisCompleteByFunction.assign(Funcs.size(),
+                                                              false);
+  if (Img.Format != BinaryFormat::COFF)
+    return Result;
+
+  for (const ExceptionFunction &Declaring : Img.ExceptionMetadata.Functions) {
+    if (Declaring.Kind != RuntimeFunctionKind::Primary ||
+        Declaring.ParseStatus != ExceptionParseStatus::Complete ||
+        !Declaring.Cxx ||
+        Declaring.Cxx->NativeEncoding != CxxExceptionInfo::Encoding::FH4 ||
+        Declaring.Cxx->NativeFuncInfoVA == 0)
+      continue;
+    for (const CxxTryBlock &Try : Declaring.Cxx->TryBlocks)
+      for (const CxxCatchHandler &Handler : Try.Handlers)
+        for (va_t Target : Handler.ContinuationVAs) {
+          Target = normalizeCodeAddress(Target, Img.Arch, Img.Mode);
+          if (Declaring.CodeRange.contains(Target))
+            continue;
+          const ExceptionFunction *Owner = nullptr;
+          for (const ExceptionFunction &Candidate :
+               Img.ExceptionMetadata.Functions) {
+            if (Candidate.Kind != RuntimeFunctionKind::Primary ||
+                Candidate.ParseStatus != ExceptionParseStatus::Complete ||
+                !Candidate.Cxx ||
+                Candidate.Cxx->NativeEncoding !=
+                    CxxExceptionInfo::Encoding::FH4 ||
+                Candidate.Cxx->NativeFuncInfoVA !=
+                    Declaring.Cxx->NativeFuncInfoVA ||
+                Target <= Candidate.CodeRange.Begin ||
+                Target >= Candidate.CodeRange.End)
+              continue;
+            if (Owner) {
+              Owner = nullptr;
+              break;
+            }
+            Owner = &Candidate;
+          }
+          if (Owner && FunctionEntries.count(Owner->CodeRange.Begin) != 0 &&
+              FunctionEntries.count(Target) == 0 &&
+              Img.hasExecutableCodeOwnerAt(Target))
+            Result.RootsByOwner[Owner->CodeRange.Begin].insert(Target);
+        }
+  }
+
+  // FH3 separated funclets return continuation addresses only in the x64
+  // table ABI.  Other Windows targets either use registration records or
+  // carry explicit continuation metadata handled above.
+  if (Img.Arch != Arch::X64)
+    return Result;
+
+  auto exactFH3Record = [&](va_t Entry) -> const ExceptionFunction * {
+    const ExceptionFunction *Match = nullptr;
+    for (const ExceptionFunction &F : Img.ExceptionMetadata.Functions) {
+      if (F.Kind != RuntimeFunctionKind::Primary ||
+          F.CodeRange.Begin != Entry ||
+          F.ParseStatus != ExceptionParseStatus::Complete || !F.Cxx ||
+          F.Cxx->NativeEncoding != CxxExceptionInfo::Encoding::FH3)
+        continue;
+      if (Match)
+        return nullptr;
+      Match = &F;
+    }
+    return Match;
+  };
+  std::vector<const ExceptionFunction *> FH3CatchSources(Funcs.size(), nullptr);
+  bool HasFH3CatchSource = false;
+  for (size_t FuncIndex = 0; FuncIndex < Funcs.size(); ++FuncIndex) {
+    const ExceptionFunction *Source = exactFH3Record(Funcs[FuncIndex].Entry);
+    if (!Source || !Source->Cxx->IsSeparated || !Source->Cxx->IsCatchFunclet)
+      continue;
+    FH3CatchSources[FuncIndex] = Source;
+    HasFH3CatchSource = true;
+  }
+  std::set<va_t> CandidateTargets;
+  for (const LowFunc &Func : Funcs)
+    for (va_t Target : Func.CodeRefTargets)
+      CandidateTargets.insert(normalizeCodeAddress(Target, Img.Arch, Img.Mode));
+  // A source-level local-unwind helper also consumes returned-code analysis,
+  // even when the module has no separated FH3 catch contribution.  Conversely,
+  // an FH3 catch with no address candidates must still publish a completed,
+  // exact-empty occurrence snapshot rather than looking unanalysed.
+  if (CandidateTargets.empty() && !HasFH3CatchSource)
+    return Result;
+
+  ReturnedCodeEvidence Returned;
+  LocalUnwindContinuationEvidence LocalUnwind;
+  std::vector<ModuleAddressUse> IgnoredUses;
+  const std::vector<ModuleJumpTableOwner> NoTableOwners;
+  ModuleEvidenceBudget Budget(TestBudget);
+  // An exceptional edge enters with personality-defined register/frame state;
+  // it is not a value-preserving predecessor of an ordinary machine RETURN.
+  // Catch funclets are independently rooted at their real entry, so following
+  // only ordinary edges proves the returned continuation without letting an
+  // unwind self-cycle grow a fictitious stack epoch until the budget expires.
+  if (!collectLowAddressUses(Img, Funcs, NoTableOwners, IgnoredUses, Budget,
+                             TestBudget, &CandidateTargets, &Returned,
+                             ModuleAddressEdgeTraversal::OrdinaryOnly,
+                             &LocalUnwind)) {
+    Result.AnalysisComplete = false;
+    return Result;
+  }
+
+  for (size_t FuncIndex = 0; FuncIndex < Funcs.size(); ++FuncIndex) {
+    if (FuncIndex >= LocalUnwind.SawCallByFunction.size() ||
+        !LocalUnwind.SawCallByFunction[FuncIndex])
+      continue;
+    if (FuncIndex >= LocalUnwind.CompleteByFunction.size() ||
+        !LocalUnwind.CompleteByFunction[FuncIndex]) {
+      Result.AnalysisComplete = false;
+      return Result;
+    }
+    const LowFunc &Source = Funcs[FuncIndex];
+    const ExceptionFunction *SourceRuntimeFunction = nullptr;
+    bool SourceRuntimeFunctionAmbiguous = false;
+    for (const ExceptionFunction &Candidate : Img.ExceptionMetadata.Functions) {
+      if (Candidate.ParseStatus != ExceptionParseStatus::Complete ||
+          Candidate.CodeRange.Begin != Source.Entry)
+        continue;
+      if (SourceRuntimeFunction) {
+        SourceRuntimeFunction = nullptr;
+        SourceRuntimeFunctionAmbiguous = true;
+        break;
+      }
+      SourceRuntimeFunction = &Candidate;
+    }
+    if (SourceRuntimeFunctionAmbiguous || !SourceRuntimeFunction)
+      continue;
+
+    std::set<va_t> PublishedBySource;
+    for (va_t Target : Source.CodeRefTargets)
+      PublishedBySource.insert(
+          normalizeCodeAddress(Target, Img.Arch, Img.Mode));
+    for (va_t Target : LocalUnwind.TargetsByFunction[FuncIndex]) {
+      Target = normalizeCodeAddress(Target, Img.Arch, Img.Mode);
+      if (PublishedBySource.count(Target) == 0 ||
+          FunctionEntries.count(Target) != 0 ||
+          !Img.hasExecutableCodeOwnerAt(Target))
+        continue;
+
+      const ExceptionFunction *Owner = nullptr;
+      bool OwnerAmbiguous = false;
+      for (const ExceptionFunction &Candidate :
+           Img.ExceptionMetadata.Functions) {
+        if (Candidate.Kind != RuntimeFunctionKind::Primary ||
+            Candidate.ParseStatus != ExceptionParseStatus::Complete ||
+            !Candidate.SEH || Target <= Candidate.CodeRange.Begin ||
+            Target >= Candidate.CodeRange.End)
+          continue;
+        if (Owner) {
+          Owner = nullptr;
+          OwnerAmbiguous = true;
+          break;
+        }
+        Owner = &Candidate;
+      }
+      if (!OwnerAmbiguous && Owner &&
+          FunctionEntries.count(Owner->CodeRange.Begin) != 0 &&
+          Owner->CodeRange.Begin != Source.Entry)
+        Result.RootsByOwner[Owner->CodeRange.Begin].insert(Target);
+    }
+  }
+
+  auto uniqueFH3Owner = [&](va_t Target) -> const ExceptionFunction * {
+    const ExceptionFunction *Match = nullptr;
+    for (const ExceptionFunction &F : Img.ExceptionMetadata.Functions) {
+      if (F.Kind != RuntimeFunctionKind::Primary ||
+          F.ParseStatus != ExceptionParseStatus::Complete || !F.Cxx ||
+          F.Cxx->NativeEncoding != CxxExceptionInfo::Encoding::FH3 ||
+          Target <= F.CodeRange.Begin || Target >= F.CodeRange.End)
+        continue;
+      if (Match)
+        return nullptr;
+      Match = &F;
+    }
+    return Match;
+  };
+
+  for (size_t FuncIndex = 0; FuncIndex < Funcs.size(); ++FuncIndex) {
+    if (!FH3CatchSources[FuncIndex])
+      continue;
+    Result.CxxContinuationExitAnalysisCompleteByFunction[FuncIndex] = true;
+    Result.CxxContinuationExitsByFunction[FuncIndex] =
+        Returned.OccurrencesByFunction[FuncIndex];
+    if (FuncIndex >= Returned.CompleteByFunction.size() ||
+        !Returned.CompleteByFunction[FuncIndex])
+      continue;
+    const LowFunc &SourceLow = Funcs[FuncIndex];
+
+    std::set<va_t> PublishedBySource;
+    for (va_t Target : SourceLow.CodeRefTargets)
+      PublishedBySource.insert(
+          normalizeCodeAddress(Target, Img.Arch, Img.Mode));
+    for (va_t Target : Returned.TargetsByFunction[FuncIndex]) {
+      Target = normalizeCodeAddress(Target, Img.Arch, Img.Mode);
+      if (PublishedBySource.count(Target) == 0 ||
+          FunctionEntries.count(Target) != 0 ||
+          !Img.hasExecutableCodeOwnerAt(Target))
+        continue;
+      const ExceptionFunction *Owner = uniqueFH3Owner(Target);
+      if (!Owner || FunctionEntries.count(Owner->CodeRange.Begin) == 0)
+        continue;
+      const bool DeclaresSource = std::any_of(
+          Owner->Cxx->TryBlocks.begin(), Owner->Cxx->TryBlocks.end(),
+          [&](const CxxTryBlock &Try) {
+            return std::any_of(Try.Handlers.begin(), Try.Handlers.end(),
+                               [&](const CxxCatchHandler &Handler) {
+                                 return normalizeCodeAddress(
+                                            Handler.HandlerVA, Img.Arch,
+                                            Img.Mode) == SourceLow.Entry;
+                               });
+          });
+      if (DeclaresSource)
+        Result.RootsByOwner[Owner->CodeRange.Begin].insert(Target);
+    }
+  }
+  return Result;
 }
 
 struct ModuleJumpTableArbitration {
@@ -2218,6 +2622,31 @@ arbitrateModuleJumpTablesForTesting(const BinaryImage &Img,
   return {std::move(Result.UnsafeBranches), Result.AnalysisComplete};
 }
 
+ReturnedCodeEvidenceTestResult collectReturnedCodeEvidenceForTesting(
+    const BinaryImage &Img, const std::vector<LowFunc> &Funcs,
+    const std::set<va_t> &CandidateTargets, std::optional<size_t> TestBudget) {
+  ModuleEvidenceBudget Budget(TestBudget);
+  ReturnedCodeEvidence Returned;
+  std::vector<ModuleAddressUse> IgnoredUses;
+  const std::vector<ModuleJumpTableOwner> NoTableOwners;
+  const bool AnalysisComplete = collectLowAddressUses(
+      Img, Funcs, NoTableOwners, IgnoredUses, Budget, TestBudget,
+      &CandidateTargets, &Returned, ModuleAddressEdgeTraversal::OrdinaryOnly);
+  if (!AnalysisComplete)
+    return {};
+  return {std::move(Returned.TargetsByFunction),
+          std::move(Returned.CompleteByFunction),
+          std::move(Returned.OccurrencesByFunction), AnalysisComplete};
+}
+
+WindowsEHContinuationRootTestResult collectWindowsEHContinuationRootsForTesting(
+    const BinaryImage &Img, const std::vector<LowFunc> &Funcs,
+    const std::set<va_t> &FunctionEntries, std::optional<size_t> TestBudget) {
+  EHContinuationRootDiscovery Result = collectWindowsEHContinuationRoots(
+      Img, Funcs, FunctionEntries, TestBudget);
+  return {std::move(Result.RootsByOwner), Result.AnalysisComplete};
+}
+
 } // namespace pipeline_detail
 
 //===----------------------------------------------------------------------===//
@@ -2283,6 +2712,16 @@ void Pipeline::buildLowIR(
   std::set<va_t> ProtectedRelocationSlots;
   std::set<va_t> UnsafeJumpTableBranches;
   bool PreservePotentialJumpTableBranches = false;
+  std::map<va_t, std::set<va_t>> ContinuationRootsByOwner;
+  std::vector<std::vector<LowCxxContinuationExitEvidence>>
+      StableCxxContinuationExitsByFunction;
+  std::vector<bool> StableCxxContinuationExitAnalysisCompleteByFunction;
+  bool HasStableCxxContinuationExitSnapshot = false;
+  auto clearStableCxxContinuationExitSnapshot = [&]() {
+    StableCxxContinuationExitsByFunction.clear();
+    StableCxxContinuationExitAnalysisCompleteByFunction.clear();
+    HasStableCxxContinuationExitSnapshot = false;
+  };
   auto rebuildFunctions = [&](const std::vector<bool> &Rebuild) {
     parallelForEachWeighted(Weight, [&](auto Claim, size_t N) {
       Decoder LocalDec;
@@ -2297,6 +2736,11 @@ void Pipeline::buildLowIR(
       for (size_t I; (I = Claim()) < N;) {
         if (!Rebuild[I])
           continue;
+        auto Continuations = ContinuationRootsByOwner.find(Candidates[I].first);
+        LocalCFG.setCrossFunctionContinuationRoots(
+            Continuations == ContinuationRootsByOwner.end()
+                ? nullptr
+                : &Continuations->second);
         LocalCFG.setPreviouslyPublishedJumpTableBranches(
             &EverPublishedJumpTableBranchHistory[I]);
         AllLow[I] = LocalCFG.build(Img, LocalDec, Candidates[I].first,
@@ -2308,6 +2752,8 @@ void Pipeline::buildLowIR(
       }
     });
   };
+
+  const std::vector<bool> RebuildAll(Total, true);
   bool ArbitrationStable = false;
   bool PreserveAllRelocationSlots = false;
   const size_t MaxArbitrationPasses = limits::kMaxJumpTableEvidenceWork + 1;
@@ -2369,7 +2815,6 @@ void Pipeline::buildLowIR(
     ProtectedRelocationSlots.insert(Img.CodePtrRelocSlots.begin(),
                                     Img.CodePtrRelocSlots.end());
     PreservePotentialJumpTableBranches = true;
-    const std::vector<bool> RebuildAll(Total, true);
     bool FallbackStable = false;
     for (size_t Pass = 0; Pass < limits::kMaxMultiStageRetries; ++Pass) {
       // Restoring every relocation root may expose functions/tables that were
@@ -2403,12 +2848,154 @@ void Pipeline::buildLowIR(
     }
   }
 
-  // Merge each function's relocation-free PC-relative code references (x86
-  // same-section `lea rip` function pointers) into the image so the emitter
-  // symbolizes them.  Done single-threaded after the parallel build to avoid a
-  // data race on the shared set.
-  for (const auto &LF : AllLow)
-    for (va_t Ref : LF.CodeRefTargets)
+  auto clearContinuationRoots = [&]() {
+    if (ContinuationRootsByOwner.empty())
+      return;
+    std::vector<bool> Rebuild(Total, false);
+    for (size_t I = 0; I < Total; ++I)
+      Rebuild[I] = ContinuationRootsByOwner.count(Candidates[I].first) != 0;
+    ContinuationRootsByOwner.clear();
+    rebuildFunctions(Rebuild);
+  };
+  auto closeEHContinuations = [&]() {
+    clearStableCxxContinuationExitSnapshot();
+    for (size_t Pass = 0; Pass < limits::kMaxMultiStageRetries; ++Pass) {
+      EHContinuationRootDiscovery Discovered =
+          collectWindowsEHContinuationRoots(
+              Img, AllLow, FuncEntries,
+              Opts.EHContinuationEvidenceBudgetForTesting);
+      if (!Discovered.AnalysisComplete) {
+        clearContinuationRoots();
+        return false;
+      }
+
+      // Recompute the complete owner map on every round.  Adding a disconnected
+      // root can expose an alternate return path or a conflicting address
+      // materialization, so previously accepted evidence is not intrinsically
+      // monotone.  Exact replacement makes the transaction retractable; an
+      // oscillation is bounded below and ultimately restores the root-free
+      // baseline rather than publishing a stale union.
+      if (Discovered.RootsByOwner == ContinuationRootsByOwner) {
+        if (Discovered.CxxContinuationExitsByFunction.size() != Total ||
+            Discovered.CxxContinuationExitAnalysisCompleteByFunction.size() !=
+                Total) {
+          clearContinuationRoots();
+          return false;
+        }
+        StableCxxContinuationExitsByFunction =
+            std::move(Discovered.CxxContinuationExitsByFunction);
+        StableCxxContinuationExitAnalysisCompleteByFunction =
+            std::move(Discovered.CxxContinuationExitAnalysisCompleteByFunction);
+        HasStableCxxContinuationExitSnapshot = true;
+        return true;
+      }
+
+      std::vector<bool> Rebuild(Total, false);
+      for (size_t I = 0; I < Total; ++I) {
+        const va_t Owner = Candidates[I].first;
+        const auto Old = ContinuationRootsByOwner.find(Owner);
+        const auto Next = Discovered.RootsByOwner.find(Owner);
+        if (Old == ContinuationRootsByOwner.end() &&
+            Next == Discovered.RootsByOwner.end())
+          continue;
+        if (Old == ContinuationRootsByOwner.end() ||
+            Next == Discovered.RootsByOwner.end() ||
+            Old->second != Next->second)
+          Rebuild[I] = true;
+      }
+      ContinuationRootsByOwner = std::move(Discovered.RootsByOwner);
+      rebuildFunctions(Rebuild);
+    }
+
+    // A bounded least-fixed-point that did not converge is not a partial
+    // certificate.  Withdraw every inferred root and restore the owners from
+    // their ordinary entry/EH metadata before later stages inspect them.
+    clearContinuationRoots();
+    clearStableCxxContinuationExitSnapshot();
+    return false;
+  };
+
+  // Continuation blocks can expose a table consumer that was absent from the
+  // entry-only baseline.  If that changes module arbitration, withdraw all EH
+  // roots, rebuild the baseline under the new monotone protection set, and
+  // compute the least fixed point again.  No provisional code reference is
+  // published to BinaryImage during these rounds.
+  bool ContinuationAndArbitrationStable = false;
+  for (size_t Pass = 0; Pass < limits::kMaxMultiStageRetries; ++Pass) {
+    if (!closeEHContinuations()) {
+      ContinuationAndArbitrationStable = true;
+      break;
+    }
+    ModuleJumpTableArbitration Discovered = collectModuleJumpTableArbitration(
+        Img, AllLow, Opts.JumpTableEvidenceBudgetForTesting);
+    if (!Discovered.AnalysisComplete) {
+      clearStableCxxContinuationExitSnapshot();
+      clearContinuationRoots();
+      ProtectedRelocationSlots.insert(Img.CodePtrRelocSlots.begin(),
+                                      Img.CodePtrRelocSlots.end());
+      UnsafeJumpTableBranches.insert(Discovered.UnsafeBranches.begin(),
+                                     Discovered.UnsafeBranches.end());
+      PreservePotentialJumpTableBranches = true;
+      rebuildFunctions(RebuildAll);
+      ContinuationAndArbitrationStable = true;
+      break;
+    }
+
+    std::vector<va_t> NewlyProtected;
+    std::set_difference(Discovered.ProtectedRelocationSlots.begin(),
+                        Discovered.ProtectedRelocationSlots.end(),
+                        ProtectedRelocationSlots.begin(),
+                        ProtectedRelocationSlots.end(),
+                        std::back_inserter(NewlyProtected));
+    std::vector<va_t> NewlyUnsafe;
+    std::set_difference(
+        Discovered.UnsafeBranches.begin(), Discovered.UnsafeBranches.end(),
+        UnsafeJumpTableBranches.begin(), UnsafeJumpTableBranches.end(),
+        std::back_inserter(NewlyUnsafe));
+    if (NewlyProtected.empty() && NewlyUnsafe.empty()) {
+      ContinuationAndArbitrationStable = true;
+      break;
+    }
+
+    ProtectedRelocationSlots.insert(NewlyProtected.begin(),
+                                    NewlyProtected.end());
+    UnsafeJumpTableBranches.insert(NewlyUnsafe.begin(), NewlyUnsafe.end());
+    clearStableCxxContinuationExitSnapshot();
+    ContinuationRootsByOwner.clear();
+    rebuildFunctions(RebuildAll);
+  }
+  if (!ContinuationAndArbitrationStable) {
+    clearStableCxxContinuationExitSnapshot();
+    clearContinuationRoots();
+  }
+
+  // Publish one immutable occurrence batch only after both the continuation
+  // closure and module table arbitration agree on this exact AllLow snapshot.
+  // Until this point every discovery result is pipeline-local and retractable;
+  // any failure above leaves every function visibly unanalysed.
+  for (LowFunc &Function : AllLow) {
+    Function.CxxContinuationExits.clear();
+    Function.CxxContinuationExitAnalysisComplete = false;
+  }
+  if (ContinuationAndArbitrationStable &&
+      HasStableCxxContinuationExitSnapshot &&
+      StableCxxContinuationExitsByFunction.size() == Total &&
+      StableCxxContinuationExitAnalysisCompleteByFunction.size() == Total) {
+    for (size_t I = 0; I < Total; ++I) {
+      if (!StableCxxContinuationExitAnalysisCompleteByFunction[I])
+        continue;
+      AllLow[I].CxxContinuationExits =
+          std::move(StableCxxContinuationExitsByFunction[I]);
+      AllLow[I].CxxContinuationExitAnalysisComplete = true;
+    }
+  }
+
+  // Only the final reachable functions publish relocation-free PC-relative
+  // code identities.  Keeping publication after both fixed points prevents a
+  // provisional producer or withdrawn continuation from becoming stale
+  // image-global evidence.
+  for (const LowFunc &Function : AllLow)
+    for (va_t Ref : Function.CodeRefTargets)
       Img.CodeRefTargets.insert(Ref);
 
   size_t FuncCount = 0;

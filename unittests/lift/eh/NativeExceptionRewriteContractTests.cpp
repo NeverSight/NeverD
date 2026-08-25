@@ -7,18 +7,23 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/ExceptionRewriteContract.h"
+#include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/codegen/ELF/ELFExceptionPatch.h"
 #include "neverd/backend/codegen/MachO/MachOExceptionPatch.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/loader/ExceptionInfo.h"
 
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Triple.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -119,6 +124,19 @@ std::unique_ptr<llvm::Module> makeVoidModule(llvm::LLVMContext &Context,
   return Module;
 }
 
+llvm::Function &addVoidFunction(llvm::Module &Module, llvm::StringRef Name,
+                                uint64_t SourceVA) {
+  llvm::LLVMContext &Context = Module.getContext();
+  auto *Type = llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false);
+  auto *Function = llvm::Function::Create(
+      Type, llvm::GlobalValue::ExternalLinkage, Name, Module);
+  rewrite_source::setOriginalVA(*Function, SourceVA);
+  llvm::IRBuilder<> Builder(
+      llvm::BasicBlock::Create(Context, "entry", Function));
+  Builder.CreateRetVoid();
+  return *Function;
+}
+
 void expectContractError(
     llvm::Expected<exception_rewrite::Requirements> Result,
     exception_rewrite::ContractErrorReason ExpectedReason) {
@@ -133,12 +151,405 @@ void expectContractError(
   EXPECT_TRUE(Seen);
 }
 
+void expectCxxGroupContractError(
+    llvm::Expected<std::vector<exception_rewrite::CxxGroupRewriteContract>>
+        Result,
+    exception_rewrite::CxxGroupContractErrorReason ExpectedReason) {
+  ASSERT_FALSE(static_cast<bool>(Result));
+  bool Seen = false;
+  llvm::handleAllErrors(
+      Result.takeError(),
+      [&](const exception_rewrite::CxxGroupRewriteContractError &Error) {
+        Seen = true;
+        EXPECT_EQ(Error.reason(), ExpectedReason);
+      });
+  EXPECT_TRUE(Seen);
+}
+
+void expectResolvedCxxGroupContractError(
+    llvm::Expected<
+        std::vector<exception_rewrite::ResolvedCxxGroupRewriteContract>>
+        Result,
+    exception_rewrite::CxxGroupContractErrorReason ExpectedReason) {
+  ASSERT_FALSE(static_cast<bool>(Result));
+  bool Seen = false;
+  llvm::handleAllErrors(
+      Result.takeError(),
+      [&](const exception_rewrite::CxxGroupRewriteContractError &Error) {
+        Seen = true;
+        EXPECT_EQ(Error.reason(), ExpectedReason);
+      });
+  EXPECT_TRUE(Seen);
+}
+
 std::string moduleIR(const llvm::Module &Module) {
   std::string Text;
   llvm::raw_string_ostream Stream(Text);
   Module.print(Stream, nullptr);
   Stream.flush();
   return Text;
+}
+
+TEST(CxxGroupRewriteContract, AcceptsCompleteAtomicGroup) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("cxx-group", Context);
+  llvm::Function &Primary = addVoidFunction(Module, "primary", 0x1000);
+  llvm::Function &Handler = addVoidFunction(Module, "handler", 0x1100);
+
+  exception_rewrite::CxxGroupRewriteContract Contract;
+  Contract.GroupIdentity = 0x5000;
+  Contract.CanonicalSourceOwnerVA = 0x1000;
+  Contract.Lowering = exception_rewrite::CxxGroupLoweringState::Complete;
+  Contract.Installation = exception_rewrite::CxxGroupInstallState::AllOrNone;
+  Contract.Members = {{0x1000, &Primary}, {0x1100, &Handler}};
+  ASSERT_FALSE(exception_rewrite::setCxxGroupRewriteContracts(
+      Module, llvm::ArrayRef(Contract)));
+
+  const exception_rewrite::CxxSourceGroup Source{
+      0x5000, 0x1000, {0x1000, 0x1100}};
+  auto Validated = exception_rewrite::validateCxxGroupRewriteContracts(
+      Module, llvm::ArrayRef(Source));
+  ASSERT_TRUE(static_cast<bool>(Validated))
+      << llvm::toString(Validated.takeError());
+  ASSERT_EQ(Validated->size(), 1u);
+  EXPECT_EQ(Validated->front().GroupIdentity, 0x5000u);
+  EXPECT_EQ(Validated->front().CanonicalSourceOwnerVA, 0x1000u);
+  ASSERT_EQ(Validated->front().Members.size(), 2u);
+  EXPECT_EQ(Validated->front().Members[0].IRFunction, &Primary);
+  EXPECT_EQ(Validated->front().Members[1].IRFunction, &Handler);
+}
+
+TEST(CxxGroupRewriteContract, RejectsDuplicateGroupsAndMembers) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("duplicate-cxx-group", Context);
+  llvm::Function &First = addVoidFunction(Module, "first", 0x1000);
+  llvm::Function &Second = addVoidFunction(Module, "second", 0x2000);
+
+  exception_rewrite::CxxGroupRewriteContract FirstGroup;
+  FirstGroup.GroupIdentity = 0x5000;
+  FirstGroup.CanonicalSourceOwnerVA = 0x1000;
+  FirstGroup.Lowering = exception_rewrite::CxxGroupLoweringState::Complete;
+  FirstGroup.Installation = exception_rewrite::CxxGroupInstallState::AllOrNone;
+  FirstGroup.Members = {{0x1000, &First}};
+  exception_rewrite::CxxGroupRewriteContract DuplicateGroup = FirstGroup;
+  DuplicateGroup.CanonicalSourceOwnerVA = 0x2000;
+  DuplicateGroup.Members = {{0x2000, &Second}};
+  const std::vector DuplicateGroups{FirstGroup, DuplicateGroup};
+  ASSERT_FALSE(
+      exception_rewrite::setCxxGroupRewriteContracts(Module, DuplicateGroups));
+  const std::vector<exception_rewrite::CxxSourceGroup> DistinctSources = {
+      {0x5000, 0x1000, {0x1000}}, {0x6000, 0x2000, {0x2000}}};
+  expectCxxGroupContractError(
+      exception_rewrite::validateCxxGroupRewriteContracts(Module,
+                                                          DistinctSources),
+      exception_rewrite::CxxGroupContractErrorReason::DuplicateGroup);
+
+  FirstGroup.Members.push_back({0x1000, &First});
+  ASSERT_FALSE(exception_rewrite::setCxxGroupRewriteContracts(
+      Module, llvm::ArrayRef(FirstGroup)));
+  const exception_rewrite::CxxSourceGroup Source{
+      0x5000, 0x1000, {0x1000, 0x2000}};
+  expectCxxGroupContractError(
+      exception_rewrite::validateCxxGroupRewriteContracts(
+          Module, llvm::ArrayRef(Source)),
+      exception_rewrite::CxxGroupContractErrorReason::DuplicateMember);
+}
+
+TEST(CxxGroupRewriteContract, RejectsAMemberSharedByDifferentGroups) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("cross-group-member", Context);
+  llvm::Function &Member = addVoidFunction(Module, "member", 0x1000);
+
+  auto MakeGroup = [&](uint64_t Identity) {
+    exception_rewrite::CxxGroupRewriteContract Group;
+    Group.GroupIdentity = Identity;
+    Group.CanonicalSourceOwnerVA = 0x1000;
+    Group.Lowering = exception_rewrite::CxxGroupLoweringState::Complete;
+    Group.Installation = exception_rewrite::CxxGroupInstallState::AllOrNone;
+    Group.Members = {{0x1000, &Member}};
+    return Group;
+  };
+  const std::vector Contracts{MakeGroup(0x5000), MakeGroup(0x6000)};
+  ASSERT_FALSE(
+      exception_rewrite::setCxxGroupRewriteContracts(Module, Contracts));
+  const std::vector<exception_rewrite::CxxSourceGroup> Sources = {
+      {0x5000, 0x1000, {0x1000}}, {0x6000, 0x1000, {0x1000}}};
+  expectCxxGroupContractError(
+      exception_rewrite::validateCxxGroupRewriteContracts(Module, Sources),
+      exception_rewrite::CxxGroupContractErrorReason::DuplicateMember);
+}
+
+TEST(CxxGroupRewriteContract, RejectsNonCanonicalGroupAndMemberOrder) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("unordered-cxx-group", Context);
+  llvm::Function &First = addVoidFunction(Module, "first", 0x1000);
+  llvm::Function &Second = addVoidFunction(Module, "second", 0x2000);
+
+  auto MakeGroup = [](uint64_t Identity, uint64_t SourceVA,
+                      llvm::Function &Function) {
+    exception_rewrite::CxxGroupRewriteContract Group;
+    Group.GroupIdentity = Identity;
+    Group.CanonicalSourceOwnerVA = SourceVA;
+    Group.Lowering = exception_rewrite::CxxGroupLoweringState::Complete;
+    Group.Installation = exception_rewrite::CxxGroupInstallState::AllOrNone;
+    Group.Members = {{SourceVA, &Function}};
+    return Group;
+  };
+  const std::vector Groups{MakeGroup(0x5000, 0x1000, First),
+                           MakeGroup(0x4000, 0x2000, Second)};
+  ASSERT_FALSE(exception_rewrite::setCxxGroupRewriteContracts(Module, Groups));
+  const std::vector<exception_rewrite::CxxSourceGroup> Sources = {
+      {0x5000, 0x1000, {0x1000}}, {0x6000, 0x2000, {0x2000}}};
+  expectCxxGroupContractError(
+      exception_rewrite::validateCxxGroupRewriteContracts(Module, Sources),
+      exception_rewrite::CxxGroupContractErrorReason::NonCanonicalOrder);
+
+  auto MemberGroup = MakeGroup(0x5000, 0x1000, First);
+  MemberGroup.Members = {{0x2000, &Second}, {0x1000, &First}};
+  ASSERT_FALSE(exception_rewrite::setCxxGroupRewriteContracts(
+      Module, llvm::ArrayRef(MemberGroup)));
+  const exception_rewrite::CxxSourceGroup Source{
+      0x5000, 0x1000, {0x1000, 0x2000}};
+  expectCxxGroupContractError(
+      exception_rewrite::validateCxxGroupRewriteContracts(
+          Module, llvm::ArrayRef(Source)),
+      exception_rewrite::CxxGroupContractErrorReason::NonCanonicalOrder);
+}
+
+TEST(CxxGroupRewriteContract, RejectsMissingAndExtraSourceMembers) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("cxx-group-closure", Context);
+  llvm::Function &Primary = addVoidFunction(Module, "primary", 0x1000);
+  llvm::Function &Handler = addVoidFunction(Module, "handler", 0x1100);
+
+  exception_rewrite::CxxGroupRewriteContract Contract;
+  Contract.GroupIdentity = 0x5000;
+  Contract.CanonicalSourceOwnerVA = 0x1000;
+  Contract.Lowering = exception_rewrite::CxxGroupLoweringState::Complete;
+  Contract.Installation = exception_rewrite::CxxGroupInstallState::AllOrNone;
+  Contract.Members = {{0x1000, &Primary}, {0x1100, &Handler}};
+  ASSERT_FALSE(exception_rewrite::setCxxGroupRewriteContracts(
+      Module, llvm::ArrayRef(Contract)));
+
+  for (const exception_rewrite::CxxSourceGroup &Source :
+       {exception_rewrite::CxxSourceGroup{0x5000, 0x1000, {0x1000}},
+        exception_rewrite::CxxSourceGroup{
+            0x5000, 0x1000, {0x1000, 0x1100, 0x1200}}}) {
+    expectCxxGroupContractError(
+        exception_rewrite::validateCxxGroupRewriteContracts(
+            Module, llvm::ArrayRef(Source)),
+        exception_rewrite::CxxGroupContractErrorReason::MembershipMismatch);
+  }
+}
+
+TEST(CxxGroupRewriteContract, RejectsDeclarationAndCrossModuleFunction) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("cxx-group-function", Context);
+  auto *Type = llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false);
+  auto *Declaration = llvm::Function::Create(
+      Type, llvm::GlobalValue::ExternalLinkage, "declaration", Module);
+  rewrite_source::setOriginalVA(*Declaration, 0x1000);
+
+  auto MakeContract = [](llvm::Function &Function) {
+    exception_rewrite::CxxGroupRewriteContract Contract;
+    Contract.GroupIdentity = 0x5000;
+    Contract.CanonicalSourceOwnerVA = 0x1000;
+    Contract.Lowering = exception_rewrite::CxxGroupLoweringState::Complete;
+    Contract.Installation = exception_rewrite::CxxGroupInstallState::AllOrNone;
+    Contract.Members = {{0x1000, &Function}};
+    return Contract;
+  };
+  const exception_rewrite::CxxSourceGroup Source{0x5000, 0x1000, {0x1000}};
+
+  auto Contract = MakeContract(*Declaration);
+  ASSERT_FALSE(exception_rewrite::setCxxGroupRewriteContracts(
+      Module, llvm::ArrayRef(Contract)));
+  expectCxxGroupContractError(
+      exception_rewrite::validateCxxGroupRewriteContracts(
+          Module, llvm::ArrayRef(Source)),
+      exception_rewrite::CxxGroupContractErrorReason::InvalidFunction);
+
+  llvm::Module ForeignModule("foreign", Context);
+  llvm::Function &Foreign =
+      addVoidFunction(ForeignModule, "foreign_function", 0x1000);
+  Contract = MakeContract(Foreign);
+  ASSERT_FALSE(exception_rewrite::setCxxGroupRewriteContracts(
+      Module, llvm::ArrayRef(Contract)));
+  expectCxxGroupContractError(
+      exception_rewrite::validateCxxGroupRewriteContracts(
+          Module, llvm::ArrayRef(Source)),
+      exception_rewrite::CxxGroupContractErrorReason::InvalidFunction);
+}
+
+TEST(CxxGroupRewriteContract, RejectsMismatchedSourceIdentity) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("cxx-group-source-identity", Context);
+  llvm::Function &Function = addVoidFunction(Module, "member", 0x1001);
+
+  exception_rewrite::CxxGroupRewriteContract Contract;
+  Contract.GroupIdentity = 0x5000;
+  Contract.CanonicalSourceOwnerVA = 0x1000;
+  Contract.Lowering = exception_rewrite::CxxGroupLoweringState::Complete;
+  Contract.Installation = exception_rewrite::CxxGroupInstallState::AllOrNone;
+  Contract.Members = {{0x1000, &Function}};
+  ASSERT_FALSE(exception_rewrite::setCxxGroupRewriteContracts(
+      Module, llvm::ArrayRef(Contract)));
+
+  const exception_rewrite::CxxSourceGroup Source{0x5000, 0x1000, {0x1000}};
+  expectCxxGroupContractError(
+      exception_rewrite::validateCxxGroupRewriteContracts(
+          Module, llvm::ArrayRef(Source)),
+      exception_rewrite::CxxGroupContractErrorReason::SourceIdentityMismatch);
+}
+
+TEST(CxxGroupRewriteContract, RejectsPartialLoweringAndUnattestedInstall) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("cxx-group-state", Context);
+  llvm::Function &Function = addVoidFunction(Module, "member", 0x1000);
+  const exception_rewrite::CxxSourceGroup Source{0x5000, 0x1000, {0x1000}};
+
+  exception_rewrite::CxxGroupRewriteContract Contract;
+  Contract.GroupIdentity = 0x5000;
+  Contract.CanonicalSourceOwnerVA = 0x1000;
+  Contract.Lowering = exception_rewrite::CxxGroupLoweringState::Incomplete;
+  Contract.Installation = exception_rewrite::CxxGroupInstallState::AllOrNone;
+  Contract.Members = {{0x1000, &Function}};
+  ASSERT_FALSE(exception_rewrite::setCxxGroupRewriteContracts(
+      Module, llvm::ArrayRef(Contract)));
+  expectCxxGroupContractError(
+      exception_rewrite::validateCxxGroupRewriteContracts(
+          Module, llvm::ArrayRef(Source)),
+      exception_rewrite::CxxGroupContractErrorReason::IncompleteLowering);
+
+  Contract.Lowering = exception_rewrite::CxxGroupLoweringState::Complete;
+  Contract.Installation = exception_rewrite::CxxGroupInstallState::Unattested;
+  ASSERT_FALSE(exception_rewrite::setCxxGroupRewriteContracts(
+      Module, llvm::ArrayRef(Contract)));
+  expectCxxGroupContractError(
+      exception_rewrite::validateCxxGroupRewriteContracts(
+          Module, llvm::ArrayRef(Source)),
+      exception_rewrite::CxxGroupContractErrorReason::UnattestedInstallation);
+}
+
+TEST(CxxGroupRewriteContract,
+     ResolvesEveryMemberToAuthenticatedGeneratedOwner) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("cxx-group-generated-owners", Context);
+  llvm::Function &Primary = addVoidFunction(Module, "primary", 0x1000);
+  llvm::Function &Handler = addVoidFunction(Module, "handler", 0x1100);
+
+  exception_rewrite::CxxGroupRewriteContract Contract;
+  Contract.GroupIdentity = 0x5000;
+  Contract.CanonicalSourceOwnerVA = 0x1000;
+  Contract.Lowering = exception_rewrite::CxxGroupLoweringState::Complete;
+  Contract.Installation = exception_rewrite::CxxGroupInstallState::AllOrNone;
+  Contract.Members = {{0x1000, &Primary}, {0x1100, &Handler}};
+  ASSERT_FALSE(exception_rewrite::setCxxGroupRewriteContracts(
+      Module, llvm::ArrayRef(Contract)));
+  const exception_rewrite::CxxSourceGroup Source{
+      0x5000, 0x1000, {0x1000, 0x1100}};
+
+  CompiledImage Compiled;
+  Compiled.SourceFunctionOriginalVAs = {{"handler", 0x1100},
+                                        {"primary", 0x1000}};
+  using OwnerKind = llvm::mc_rewrite::RewriteSourceFunctionOwnerKind;
+  Compiled.SourceFunctionOwners = {{"handler", "handler$owner", 0x8100, true,
+                                    OwnerKind::WinCxxCatchFunclet, "primary"},
+                                   {"primary",
+                                    "primary$owner",
+                                    0x8000,
+                                    false,
+                                    OwnerKind::FunctionEntry,
+                                    {}}};
+  Compiled.FunctionOwnerAddrs = {{"handler$owner", 0x8100},
+                                 {"primary$owner", 0x8000}};
+  CompiledSection Code;
+  Code.Kind = llvm::mc_rewrite::RewriteSectionKind::Code;
+  Code.VA = 0x8000;
+  Code.Size = 0x200;
+  Code.IsAllocated = true;
+  Compiled.Sections.push_back(std::move(Code));
+
+  auto Resolved = exception_rewrite::validateAndResolveCxxGroupRewriteContracts(
+      Module, llvm::ArrayRef(Source), Compiled);
+  ASSERT_TRUE(static_cast<bool>(Resolved))
+      << llvm::toString(Resolved.takeError());
+  ASSERT_EQ(Resolved->size(), 1u);
+  EXPECT_EQ(Resolved->front().GroupIdentity, 0x5000u);
+  EXPECT_EQ(Resolved->front().CanonicalSourceOwnerVA, 0x1000u);
+  ASSERT_EQ(Resolved->front().Members.size(), 2u);
+  EXPECT_EQ(Resolved->front().Members[0].SourceMemberVA, 0x1000u);
+  EXPECT_EQ(Resolved->front().Members[0].IRFunction, &Primary);
+  EXPECT_EQ(Resolved->front().Members[0].GeneratedOwnerSymbol, "primary$owner");
+  EXPECT_EQ(Resolved->front().Members[0].GeneratedOwnerVA, 0x8000u);
+  EXPECT_EQ(Resolved->front().Members[1].SourceMemberVA, 0x1100u);
+  EXPECT_EQ(Resolved->front().Members[1].IRFunction, &Handler);
+  EXPECT_EQ(Resolved->front().Members[1].GeneratedOwnerSymbol, "handler$owner");
+  EXPECT_EQ(Resolved->front().Members[1].GeneratedOwnerVA, 0x8100u);
+}
+
+TEST(CxxGroupRewriteContract,
+     RejectsGeneratedOwnersWithWrongParentOrCatchRole) {
+  using Owner = llvm::mc_rewrite::RewriteSourceFunctionOwner;
+  using OwnerKind = llvm::mc_rewrite::RewriteSourceFunctionOwnerKind;
+
+  llvm::LLVMContext Context;
+  llvm::Module Module("cxx-group-generated-owner-roles", Context);
+  llvm::Function &Primary = addVoidFunction(Module, "primary", 0x1000);
+  llvm::Function &Handler = addVoidFunction(Module, "handler", 0x1100);
+
+  exception_rewrite::CxxGroupRewriteContract Contract;
+  Contract.GroupIdentity = 0x5000;
+  Contract.CanonicalSourceOwnerVA = 0x1000;
+  Contract.Lowering = exception_rewrite::CxxGroupLoweringState::Complete;
+  Contract.Installation = exception_rewrite::CxxGroupInstallState::AllOrNone;
+  Contract.Members = {{0x1000, &Primary}, {0x1100, &Handler}};
+  ASSERT_FALSE(exception_rewrite::setCxxGroupRewriteContracts(
+      Module, llvm::ArrayRef(Contract)));
+  const exception_rewrite::CxxSourceGroup Source{
+      0x5000, 0x1000, {0x1000, 0x1100}};
+
+  auto MakeCompiled = [&] {
+    CompiledImage Compiled;
+    Compiled.SourceFunctionOriginalVAs = {{"handler", 0x1100},
+                                          {"primary", 0x1000}};
+    Compiled.FunctionOwnerAddrs = {{"handler$owner", 0x8100},
+                                   {"other$owner", 0x8200},
+                                   {"primary$owner", 0x8000}};
+    CompiledSection Code;
+    Code.Kind = llvm::mc_rewrite::RewriteSectionKind::Code;
+    Code.VA = 0x8000;
+    Code.Size = 0x300;
+    Code.IsAllocated = true;
+    Compiled.Sections.push_back(std::move(Code));
+    return Compiled;
+  };
+  auto ExpectRoleRejected = [&](std::vector<Owner> Owners) {
+    CompiledImage Compiled = MakeCompiled();
+    Compiled.SourceFunctionOwners = std::move(Owners);
+    expectResolvedCxxGroupContractError(
+        exception_rewrite::validateAndResolveCxxGroupRewriteContracts(
+            Module, llvm::ArrayRef(Source), Compiled),
+        exception_rewrite::CxxGroupContractErrorReason::
+            GeneratedOwnerRoleMismatch);
+  };
+
+  ExpectRoleRejected({
+      {"handler", "handler$owner", 0x8100, false, OwnerKind::FunctionEntry, {}},
+      {"primary", "primary$owner", 0x8000, false, OwnerKind::FunctionEntry, {}},
+  });
+  ExpectRoleRejected({
+      {"handler", "handler$owner", 0x8100, true, OwnerKind::WinCxxCatchFunclet,
+       "other"},
+      {"other", "other$owner", 0x8200, false, OwnerKind::FunctionEntry, {}},
+      {"primary", "primary$owner", 0x8000, false, OwnerKind::FunctionEntry, {}},
+  });
+  ExpectRoleRejected({
+      {"handler", "handler$owner", 0x8100, false, OwnerKind::FunctionEntry, {}},
+      {"other", "other$owner", 0x8200, false, OwnerKind::FunctionEntry, {}},
+      {"primary", "primary$owner", 0x8000, true, OwnerKind::WinCxxCatchFunclet,
+       "other"},
+  });
 }
 
 TEST(ExceptionRewriteContract, MarkedModuleRequiresEveryDefinedFunction) {
@@ -214,6 +625,44 @@ TEST(ExceptionRewriteContract,
         Current.Reason);
     EXPECT_EQ(moduleIR(*Module), Before);
   }
+}
+
+TEST(ExceptionRewriteContract, AcceptsCompleteAArch64NativeSEHContract) {
+  llvm::LLVMContext Context;
+  auto Module = makeVoidModule(Context, "aarch64_seh_native");
+  Module->setTargetTriple(llvm::Triple("aarch64-pc-windows-msvc"));
+  llvm::Function *Function = Module->getFunction("aarch64_seh_native");
+  ASSERT_NE(Function, nullptr);
+
+  auto *PersonalityType = llvm::FunctionType::get(
+      llvm::Type::getInt32Ty(Context), /*isVarArg=*/true);
+  llvm::Function *Personality = llvm::Function::Create(
+      PersonalityType, llvm::GlobalValue::ExternalLinkage,
+      "__C_specific_handler", Module.get());
+  Function->setPersonalityFn(Personality);
+  llvm::Metadata *NativeVersion = llvm::ConstantAsMetadata::get(
+      llvm::ConstantInt::get(llvm::Type::getInt1Ty(Context), 1));
+  Function->setMetadata(
+      windows_eh_md::NativeAttachment,
+      llvm::MDNode::get(
+          Context,
+          {NativeVersion, llvm::MDString::get(Context, "seh-aarch64-native")}));
+  exception_rewrite::setContract(
+      *Function, exception_rewrite::SourceState::Complete,
+      exception_rewrite::LoweringState::Complete,
+      /*RequiredProtectedCalls=*/0, /*LoweredProtectedCalls=*/0,
+      /*SkippedLandingPads=*/0);
+
+  const std::string Before = moduleIR(*Module);
+  auto Requirements =
+      exception_rewrite::validateExceptionRewriteContracts(*Module);
+  ASSERT_TRUE(static_cast<bool>(Requirements))
+      << llvm::toString(Requirements.takeError());
+  EXPECT_TRUE(Requirements->RequiresRegisteredUnwind);
+  ASSERT_EQ(Requirements->Functions.size(), 1u);
+  EXPECT_EQ(Requirements->Functions.front().Name, "aarch64_seh_native");
+  EXPECT_TRUE(Requirements->Functions.front().HasSourceContract);
+  EXPECT_EQ(moduleIR(*Module), Before);
 }
 
 TEST(ExceptionRewriteContract, UnmarkedExternalUWTableRequiresRegistration) {

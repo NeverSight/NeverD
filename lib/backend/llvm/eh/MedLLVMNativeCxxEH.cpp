@@ -16,6 +16,7 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
+#include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
 #include "neverd/loader/ExceptionInfo.h"
 
 #include "llvm/ADT/SmallVector.h"
@@ -27,6 +28,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Metadata.h"
+#include "llvm/Support/ErrorHandling.h"
 
 #include <algorithm>
 #include <cassert>
@@ -49,11 +51,22 @@ bool MedLLVMEmitter::emitNativeCxxEH(
     return false;
   const ExceptionFunction &EH = *Func.ExceptionMetadata;
   const WindowsEHNativeSourceClassification Source =
-      classifyWindowsEHNativeSource(EH, TargetArch, TargetFormat);
-  if (!Source.canRegenerateLanguageMetadata() ||
-      Source.Model != WindowsEHNativeSourceModel::CxxFH3)
+      classifyWindowsEHNativeSource(EH, TargetArch, TargetFormat,
+                                    WindowsEHNativeCapability::IRLowering);
+  if (!Source.canLowerNativeIR() ||
+      (Source.Model != WindowsEHNativeSourceModel::CxxFH3 &&
+       Source.Model != WindowsEHNativeSourceModel::CxxFH4))
     return false;
   const CxxExceptionInfo &Cxx = *EH.Cxx;
+  const bool IsFH4 = Source.Model == WindowsEHNativeSourceModel::CxxFH4;
+  const bool IsGSWrapped =
+      EH.Personality == ExceptionPersonality::GSHandlerCheckEH4;
+  const llvm::StringRef PersonalityName =
+      IsFH4 ? "__CxxFrameHandler4" : "__CxxFrameHandler3";
+  constexpr llvm::StringLiteral GSWrapperName("__GSHandlerCheck_EH4");
+  const windows_eh_md::NativeProvenanceModel ProvenanceModel =
+      IsFH4 ? windows_eh_md::NativeProvenanceModel::CxxFH4
+            : windows_eh_md::NativeProvenanceModel::CxxFH3;
 
   if (!med_llvm_eh::collectExactSourceCallAddresses(LLVMFunc, CallSiteAddrs))
     return false;
@@ -62,7 +75,10 @@ bool MedLLVMEmitter::emitNativeCxxEH(
   auto *PtrTy = llvm::PointerType::get(*Ctx, 0);
   auto *PersonalityTy = llvm::FunctionType::get(I32Ty, {}, true);
   if (!med_llvm_eh::canMaterializeExternalFunctionDeclaration(
-          *Mod, "__CxxFrameHandler3", PersonalityTy))
+          *Mod, PersonalityName, PersonalityTy))
+    return false;
+  if (IsGSWrapped && !med_llvm_eh::canMaterializeExternalFunctionDeclaration(
+                         *Mod, GSWrapperName, PersonalityTy))
     return false;
 
   // This native closure is intentionally exact and narrow.  Destructors,
@@ -81,7 +97,7 @@ bool MedLLVMEmitter::emitNativeCxxEH(
   if (!Cxx.hasValidStateGraph() || Cxx.TryBlocks.empty() || Cxx.IPMap.empty() ||
       Cxx.IsCatchFunclet || Cxx.IsSeparated || !Cxx.IsSynchronous ||
       Cxx.IsNoExcept || Cxx.hasExceptionSpecification() ||
-      (Cxx.Flags & ~uint32_t(1)) != 0)
+      (!IsFH4 && (Cxx.Flags & ~uint32_t(1)) != 0))
     return false;
   for (const CxxUnwindAction &Action : Cxx.UnwindMap)
     if (Action.ActionVA != 0 ||
@@ -92,6 +108,7 @@ bool MedLLVMEmitter::emitNativeCxxEH(
     const CxxCatchHandler *Catch = nullptr;
     llvm::BasicBlock *Target = nullptr;
     uint32_t SourceIndex = 0;
+    llvm::mc_rewrite::RewriteWinEHSemanticToken SemanticToken;
   };
   struct Region {
     const CxxTryBlock *Try = nullptr;
@@ -172,8 +189,13 @@ bool MedLLVMEmitter::emitNativeCxxEH(
       if (!Target || Target == &LLVMFunc.getEntryBlock() ||
           R.Blocks.count(Target) || !llvm::pred_empty(Target))
         return false;
+      const uint32_t SourceHandlerIndex = static_cast<uint32_t>(HandlerIndex);
+      const auto SemanticToken = windows_eh_semantics::getCxxCatchSemanticToken(
+          EH, TargetArch, R.SourceIndex, SourceHandlerIndex);
+      if (!SemanticToken)
+        return false;
       R.Handlers.push_back(
-          {&Catch, Target, static_cast<uint32_t>(HandlerIndex)});
+          {&Catch, Target, SourceHandlerIndex, *SemanticToken});
     }
     Regions.push_back(std::move(R));
   }
@@ -306,9 +328,22 @@ bool MedLLVMEmitter::emitNativeCxxEH(
       return false;
 
   llvm::FunctionCallee Personality =
-      Mod->getOrInsertFunction("__CxxFrameHandler3", PersonalityTy);
+      Mod->getOrInsertFunction(PersonalityName, PersonalityTy);
   LLVMFunc.setPersonalityFn(
       llvm::cast<llvm::Constant>(Personality.getCallee()));
+  if (IsFH4) {
+    LLVMFunc.addFnAttr(llvm::mc_rewrite::RewriteWinCxxFH4Attribute);
+    if (IsGSWrapped) {
+      // Keep LLVM's semantic personality as C++ EH. The authenticated writer
+      // attribute makes code generation allocate and check a fresh cookie in
+      // the final machine frame, then installs the runtime GS wrapper around
+      // the newly emitted FH4 payload.
+      Mod->getOrInsertFunction(GSWrapperName, PersonalityTy);
+      LLVMFunc.addFnAttr(llvm::mc_rewrite::RewriteWinGSHandlerAttribute,
+                         llvm::mc_rewrite::RewriteWinGSHandlerCxxFH4);
+      LLVMFunc.addFnAttr(llvm::Attribute::StackProtectReq);
+    }
+  }
 
   auto TypeDescriptor = [&](va_t Address) -> llvm::Constant * {
     if (Address == 0)
@@ -345,19 +380,19 @@ bool MedLLVMEmitter::emitNativeCxxEH(
           llvm::ConstantInt::get(I32Ty, H.Catch->Adjectives),
           llvm::ConstantPointerNull::get(PtrTy)};
       auto *Pad = PB.CreateCatchPad(Switch, Args, "cxx.catch.pad.token");
+      if (!med_llvm_eh::attachRewriteWinEHSemanticToken(*Pad, H.SemanticToken))
+        llvm_unreachable("prevalidated C++ EH semantic token was rejected");
       med_llvm_eh::emitWindowsEHProvenanceAnchor(
-          PB, windows_eh_md::NativeProvenanceModel::CxxFH3,
+          PB, ProvenanceModel,
           windows_eh_md::NativeProvenanceRole::RegionDispatch,
           EH.CodeRange.Begin, H.Catch->HandlerVA, R.SourceIndex, H.SourceIndex,
           Pad, H.Catch->TypeDescriptorVA, H.Catch->Adjectives);
       PB.CreateCatchRet(Pad, H.Target);
-      llvm::IRBuilder<> HandlerBuilder(
-          &*H.Target->getFirstInsertionPt());
+      llvm::IRBuilder<> HandlerBuilder(&*H.Target->getFirstInsertionPt());
       med_llvm_eh::emitWindowsEHProvenanceAnchor(
-          HandlerBuilder, windows_eh_md::NativeProvenanceModel::CxxFH3,
+          HandlerBuilder, ProvenanceModel,
           windows_eh_md::NativeProvenanceRole::HandlerTarget,
-          EH.CodeRange.Begin, H.Catch->HandlerVA, R.SourceIndex,
-          H.SourceIndex);
+          EH.CodeRange.Begin, H.Catch->HandlerVA, R.SourceIndex, H.SourceIndex);
     }
     R.UnwindDest = Dispatch;
   }
@@ -382,7 +417,7 @@ bool MedLLVMEmitter::emitNativeCxxEH(
         OldBranch->getIterator());
     llvm::IRBuilder<> ProvenanceBuilder(Invoke);
     med_llvm_eh::emitWindowsEHProvenanceAnchor(
-        ProvenanceBuilder, windows_eh_md::NativeProvenanceModel::CxxFH3,
+        ProvenanceBuilder, ProvenanceModel,
         windows_eh_md::NativeProvenanceRole::ProtectedInvoke,
         EH.CodeRange.Begin, Plan.SourceAddress,
         Regions[Plan.RegionIndex].SourceIndex, /*Clause=*/0);
@@ -402,7 +437,9 @@ bool MedLLVMEmitter::emitNativeCxxEH(
   LLVMFunc.setMetadata(
       windows_eh_md::NativeAttachment,
       llvm::MDNode::get(*Ctx, {mdUInt(*Ctx, 1, 1),
-                               llvm::MDString::get(*Ctx, "cxx-fh3-native")}));
+                               llvm::MDString::get(
+                                   *Ctx, IsFH4 ? "cxx-fh4-native"
+                                               : "cxx-fh3-native")}));
   exception_rewrite::setContract(
       LLVMFunc, exception_rewrite::SourceState::Complete,
       exception_rewrite::LoweringState::Complete, ProtectedCallCount,

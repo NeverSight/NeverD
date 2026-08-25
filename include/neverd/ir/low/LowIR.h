@@ -451,13 +451,18 @@ struct LowBlock {
 };
 
 /// How an exact address occurrence was authenticated.  Most occurrences bind
-/// a real loader field.  A linked AArch64 image can instead contain a fully
-/// resolved ADRP/add sequence with no surviving PAGE/PAGEOFF relocation; that
-/// form is admitted only when the final address is immediately and exactly
-/// dereferenced inside one immutable data owner.
+/// a real loader field.  Linked images can also retain an architecture-defined
+/// PC-relative address calculation after its relocation records are gone.  The
+/// relocation-free kinds below carry occurrence-local semantic witnesses so a
+/// numerically equal scalar cannot inherit their address identity.
 enum class RelocatedInstructionAddressProofKind : uint8_t {
   LoaderField,
   AArch64RelocationFreeDataDereference,
+  /// A decoded x86/x64 `lea reg,[rip/eip+disp]` with no surviving loader
+  /// relocation.  The CFG builder binds the architecture-defined target to
+  /// the exact final register-writing LowOp occurrence and republishes it only
+  /// while that source instruction remains in the final reachable CFG.
+  X86PCRelativeCodeAddress,
 };
 
 /// One exact full-width arithmetic step in a relocation-free AArch64 address
@@ -885,6 +890,26 @@ struct JumpTable {
   }
 };
 
+/// Exact LowIR RETURN occurrence carrying a recovered Windows C++ continuation
+/// value.  The source identity is the pair (ReturnAddr, ReturnSeq), not merely
+/// an address: one guest instruction may lower to several LowOps, while later
+/// IR rewrites may move the surviving operation to a different block.
+struct LowCxxContinuationExitEvidence {
+  va_t ReturnAddr = InvalidVA;
+  int ReturnSeq = -1;
+  /// Sorted, duplicate-free exact targets reaching this RETURN.  More than one
+  /// target is still complete may-evidence, but cannot authorize a unique
+  /// catch continuation.
+  std::vector<va_t> Targets;
+  bool Complete = false;
+
+  std::optional<va_t> uniqueTarget() const {
+    if (!Complete || Targets.size() != 1)
+      return std::nullopt;
+    return Targets.front();
+  }
+};
+
 struct LowFunc {
   va_t Entry = 0;
   uint64_t OriginalSize = 0;
@@ -901,6 +926,22 @@ struct LowFunc {
   /// independently executable; the latter lets unreachable table filler
   /// bootstrap its own relocation preservation.
   std::set<va_t> ModuleAnalysisRoots;
+  /// Final roots that can be entered with ordinary machine-state semantics:
+  /// the real function entry, unsuppressed relocation/address-taken labels,
+  /// and validated continuation points.  Exception-only handlers, cleanups,
+  /// and landing pads remain in ModuleAnalysisRoots but not here.  Keeping a
+  /// separate positive role set is intentional: one address may have both an
+  /// ordinary code-pointer/continuation role and an exceptional-entry role.
+  std::set<va_t> OrdinaryModuleAnalysisRoots;
+  /// Per-RETURN continuation evidence published atomically only after the
+  /// module EH/root and jump-table arbitration fixed points are both stable.
+  /// The function-level target union used during root closure is intentionally
+  /// not retained here: downstream reconstruction must bind exact exits.
+  std::vector<LowCxxContinuationExitEvidence> CxxContinuationExits;
+  /// Distinguishes a completed analysis whose exact occurrence set is empty
+  /// from a function for which no stable module-level certificate was
+  /// published.  False always requires CxxContinuationExits to be empty.
+  bool CxxContinuationExitAnalysisComplete = false;
   /// Exact relocation occurrences consumed by final published instructions.
   /// Speculatively decoded/pruned instructions are deliberately absent, as
   /// are fields that merely fall inside an instruction's byte envelope.

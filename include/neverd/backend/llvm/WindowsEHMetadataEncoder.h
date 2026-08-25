@@ -26,7 +26,8 @@ struct ExceptionFunction;
 
 namespace windows_eh_md {
 
-/// Return the uniqued schema-v5 metadata projection of \p EH in \p Context.
+/// Return the uniqued current-schema metadata projection of \p EH in
+/// \p Context.
 /// Re-encoding the same record in the same context returns the same node.
 llvm::MDNode *getCanonicalFunctionMetadata(llvm::LLVMContext &Context,
                                            const ExceptionFunction &EH,

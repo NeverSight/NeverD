@@ -118,7 +118,8 @@ bool readFH4ImageAddress(FH4Reader &Reader, va_t ImageBase, va_t &Address,
 }
 
 bool parseFH4HandlerMap(ExceptionFunction &F, const BinaryImage &Img,
-                        va_t HandlerMapVA, CxxTryBlock &Try,
+                        va_t HandlerMapVA, va_t FuncInfoVA, bool IsSeparated,
+                        CxxTryBlock &Try,
                         LanguageRecordBudget &Budget) {
   FH4Reader Reader(Img, HandlerMapVA);
   uint32_t Count = 0;
@@ -204,11 +205,46 @@ bool parseFH4HandlerMap(ExceptionFunction &F, const BinaryImage &Img,
           return false;
         }
         Continuation = F.CodeRange.Begin + Offset;
+        if (!F.CodeRange.contains(Continuation)) {
+          diagnose(F, ExceptionParseStatus::Malformed,
+                   "FH4 function-relative continuation leaves its runtime "
+                   "function");
+          return false;
+        }
       }
       if (!isExecutableAddress(Img, Continuation)) {
         diagnose(F, ExceptionParseStatus::Malformed,
                  "FH4 continuation is not executable");
         return false;
+      }
+      if (!F.CodeRange.contains(Continuation)) {
+        if (!IsSeparated) {
+          diagnose(F, ExceptionParseStatus::Malformed,
+                   "FH4 image-relative continuation leaves a non-separated "
+                   "runtime function");
+          return false;
+        }
+        size_t MatchingContributions = 0;
+        for (const ExceptionFunction &Candidate :
+             Img.ExceptionMetadata.Functions) {
+          if (Candidate.Kind != RuntimeFunctionKind::Primary ||
+              !Candidate.CodeRange.contains(Continuation) ||
+              Candidate.HandlerDataVA == 0)
+            continue;
+          auto CandidateRVA =
+              readScalar<uint32_t>(Img, Candidate.HandlerDataVA);
+          va_t CandidateFuncInfoVA = 0;
+          if (CandidateRVA && *CandidateRVA != 0 &&
+              addRVA(Img.Base, *CandidateRVA, CandidateFuncInfoVA) &&
+              CandidateFuncInfoVA == FuncInfoVA)
+            ++MatchingContributions;
+        }
+        if (MatchingContributions != 1) {
+          diagnose(F, ExceptionParseStatus::Malformed,
+                   "FH4 continuation has no unique contribution in its "
+                   "FuncInfo group");
+          return false;
+        }
       }
       Catch.ContinuationVAs.push_back(Continuation);
     }
@@ -239,6 +275,7 @@ bool parseFH4(ExceptionFunction &F, const BinaryImage &Img) {
   CxxExceptionInfo Info;
   LanguageRecordBudget Budget;
   Info.NativeEncoding = CxxExceptionInfo::Encoding::FH4;
+  Info.NativeFuncInfoVA = FuncInfoVA;
   Info.Flags = Header;
   Info.IsCatchFunclet = (Header & 1u) != 0;
   Info.IsSeparated = (Header & 2u) != 0;
@@ -455,7 +492,8 @@ bool parseFH4(ExceptionFunction &F, const BinaryImage &Img) {
       Try.TryLow = static_cast<int32_t>(TryLow);
       Try.TryHigh = static_cast<int32_t>(TryHigh);
       Try.CatchHigh = static_cast<int32_t>(CatchHigh);
-      if (!parseFH4HandlerMap(F, Img, HandlerMapVA, Try, Budget))
+      if (!parseFH4HandlerMap(F, Img, HandlerMapVA, FuncInfoVA,
+                              Info.IsSeparated, Try, Budget))
         return false;
       Info.TryBlocks.push_back(std::move(Try));
     }

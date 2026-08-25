@@ -29,6 +29,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <tuple>
 #include <utility>
 
 #define DEBUG_TYPE "neverd-rewriter"
@@ -66,6 +67,51 @@ struct PatchSymbolResolvers {
     }
   }
 };
+
+struct WinEHSemanticEmissionShape {
+  llvm::mc_rewrite::RewriteWinEHSemanticToken Token;
+  llvm::mc_rewrite::RewriteWinEHSemanticEncoding Encoding =
+      llvm::mc_rewrite::RewriteWinEHSemanticEncoding::SEH;
+  std::string SourceFunction;
+  std::string OwnerSymbol;
+  std::string ContainerSymbol;
+  std::string BeginSymbol;
+  std::string EndSymbol;
+  std::string HandlerSymbol;
+  uint32_t RecordSize = 0;
+  bool HasProtectedRange = false;
+
+  friend bool operator==(const WinEHSemanticEmissionShape &,
+                         const WinEHSemanticEmissionShape &) = default;
+};
+
+std::vector<WinEHSemanticEmissionShape> collectWinEHSemanticEmissionShape(
+    llvm::ArrayRef<llvm::mc_rewrite::RewriteWinEHSemanticRecord> Records) {
+  std::vector<WinEHSemanticEmissionShape> Shape;
+  Shape.reserve(Records.size());
+  for (const auto &Record : Records) {
+    const bool HasProtectedRange =
+        !Record.BeginSymbol.empty() || !Record.EndSymbol.empty();
+    Shape.push_back({Record.Token, Record.Encoding, Record.SourceFunction,
+                     Record.OwnerSymbol, Record.ContainerSymbol,
+                     Record.BeginSymbol, Record.EndSymbol, Record.HandlerSymbol,
+                     Record.RecordSize, HasProtectedRange});
+  }
+  llvm::sort(Shape, [](const WinEHSemanticEmissionShape &Left,
+                       const WinEHSemanticEmissionShape &Right) {
+    return std::tie(Left.SourceFunction, Left.OwnerSymbol, Left.ContainerSymbol,
+                    Left.BeginSymbol, Left.EndSymbol, Left.HandlerSymbol,
+                    Left.Token.Kind, Left.Token.Region, Left.Token.Clause,
+                    Left.Token.Digest, Left.Encoding, Left.RecordSize,
+                    Left.HasProtectedRange) <
+           std::tie(Right.SourceFunction, Right.OwnerSymbol,
+                    Right.ContainerSymbol, Right.BeginSymbol, Right.EndSymbol,
+                    Right.HandlerSymbol, Right.Token.Kind, Right.Token.Region,
+                    Right.Token.Clause, Right.Token.Digest, Right.Encoding,
+                    Right.RecordSize, Right.HasProtectedRange);
+  });
+  return Shape;
+}
 
 void captureFixupReference(std::vector<CapturedFixupReference> &Captured,
                            const llvm::mc_rewrite::FixupCtx &Context,
@@ -298,14 +344,32 @@ static CompiledImage compileImageForPatchImpl(
   auto Pass1Mod = llvm::CloneModule(Mod);
   auto Res1 =
       CG1.compileForRewrite(*Pass1Mod, TargetArch, Pass1, Fmt, TargetTriple);
-  if (!Res1.ImageValid)
+  if (!Res1.ImageValid) {
+    llvm::WithColor::error()
+        << "compileImageForPatch: sizing compile produced an invalid image\n";
     return Out;
+  }
   if (!Res1.FunctionRangesValid) {
+    llvm::WithColor::error()
+        << "compileImageForPatch: sizing compile produced invalid function "
+           "provenance\n";
     Out.FunctionRangesValid = false;
     return Out;
   }
-  if (Res1.Sections.empty())
+  if (!Res1.WinEHSemanticsValid) {
+    llvm::WithColor::error()
+        << "compileImageForPatch: sizing compile produced invalid Windows EH "
+           "semantic provenance\n";
+    Out.WinEHSemanticsValid = false;
     return Out;
+  }
+  if (Res1.Sections.empty()) {
+    llvm::WithColor::error()
+        << "compileImageForPatch: sizing compile emitted no sections\n";
+    return Out;
+  }
+  const std::vector<WinEHSemanticEmissionShape> Pass1WinEHSemanticShape =
+      collectWinEHSemanticEmissionShape(Res1.WinEHSemanticRecords);
 
   bool HasFixedSection = false;
   for (const auto &S : Res1.Sections)
@@ -318,6 +382,12 @@ static CompiledImage compileImageForPatchImpl(
     if (!llvm::mc_rewrite::validateRewriteFunctionRanges(
             Res1.FunctionRanges, Res1.FunctionOwnerAddrs)) {
       Out.FunctionRangesValid = false;
+      return Out;
+    }
+    if (!llvm::mc_rewrite::validateRewriteWinEHSemanticRecords(
+            Res1.WinEHSemanticRecords, Res1.SourceFunctionOwners,
+            Res1.FunctionRanges, Res1.FunctionOwnerAddrs)) {
+      Out.WinEHSemanticsValid = false;
       return Out;
     }
     auto &S = Res1.Sections.front();
@@ -350,6 +420,7 @@ static CompiledImage compileImageForPatchImpl(
     Out.FunctionOwnerAddrs = std::move(Res1.FunctionOwnerAddrs);
     Out.FunctionRanges = std::move(Res1.FunctionRanges);
     Out.SourceFunctionOwners = std::move(Res1.SourceFunctionOwners);
+    Out.WinEHSemanticRecords = std::move(Res1.WinEHSemanticRecords);
     if (!attachSourceFunctionOriginalVAs(Out, *OriginalVAs)) {
       Out.FunctionRangesValid = false;
       return Out;
@@ -475,14 +546,38 @@ static CompiledImage compileImageForPatchImpl(
     auto IterMod = llvm::CloneModule(Mod);
     auto ResN =
         CGn.compileForRewrite(*IterMod, TargetArch, PassN, Fmt, TargetTriple);
-    if (!ResN.ImageValid)
+    if (!ResN.ImageValid) {
+      llvm::WithColor::error()
+          << "compileImageForPatch: layout compile produced an invalid image\n";
       return Out;
+    }
     if (!ResN.FunctionRangesValid) {
+      llvm::WithColor::error()
+          << "compileImageForPatch: layout compile produced invalid function "
+             "provenance\n";
       Out.FunctionRangesValid = false;
       return Out;
     }
-    if (ResN.Sections.empty())
+    if (!ResN.WinEHSemanticsValid) {
+      llvm::WithColor::error()
+          << "compileImageForPatch: layout compile produced invalid Windows "
+             "EH semantic provenance\n";
+      Out.WinEHSemanticsValid = false;
       return Out;
+    }
+    if (collectWinEHSemanticEmissionShape(ResN.WinEHSemanticRecords) !=
+        Pass1WinEHSemanticShape) {
+      llvm::WithColor::error()
+          << "compileImageForPatch: Windows EH semantic emission shape "
+             "changed during layout\n";
+      Out.WinEHSemanticsValid = false;
+      return Out;
+    }
+    if (ResN.Sections.empty()) {
+      llvm::WithColor::error()
+          << "compileImageForPatch: layout compile emitted no sections\n";
+      return Out;
+    }
 
     // Grow the monotonic sizes from this compile, then re-plan from them.
     for (auto &S : ResN.Sections)
@@ -570,6 +665,7 @@ static CompiledImage compileImageForPatchImpl(
   Out.FunctionOwnerAddrs = std::move(Final.FunctionOwnerAddrs);
   Out.FunctionRanges = std::move(Final.FunctionRanges);
   Out.SourceFunctionOwners = std::move(Final.SourceFunctionOwners);
+  Out.WinEHSemanticRecords = std::move(Final.WinEHSemanticRecords);
   if (!attachSourceFunctionOriginalVAs(Out, *OriginalVAs)) {
     Out.FunctionRangesValid = false;
     return Out;

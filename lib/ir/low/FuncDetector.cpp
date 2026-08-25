@@ -18,6 +18,7 @@
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/lift/AArch64Lifter.h"
+#include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/Parallel.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -168,6 +169,25 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
       Results.push_back({Sym.Addr, Sym.Name});
     }
   }
+
+  // A full-width relocation from data to executable bytes is structural
+  // evidence for a callable candidate even when the target is a tiny leaf
+  // with neither unwind metadata nor a conventional prologue.  Do not trust
+  // the address here: the bounded decoder and the overlap filters below still
+  // decide whether it is a complete function entry.  In particular, a
+  // relocation-backed jump-table target inside a known function remains
+  // rejected as an interior block rather than being promoted to a function.
+  const uint32_t PointerSize = Img.getPointerSize();
+  if (PointerSize != 0)
+    for (va_t Slot : Img.CodePtrRelocSlots) {
+      const uint8_t *Bytes = Img.readVA(Slot, PointerSize);
+      if (!Bytes)
+        continue;
+      const va_t Target = normalizeCodeAddress(
+          readPtr(Bytes, Img.is64Bit()), Img.Arch, Img.Mode);
+      if (Img.hasExecutableCodeOwnerAt(Target))
+        Entries.insert(Target);
+    }
 
   std::set<va_t> DirectCallTargets;
   if (Img.Entry != 0) {

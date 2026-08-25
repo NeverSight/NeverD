@@ -78,6 +78,15 @@ public:
   void setKnownFuncEntries(const std::set<va_t> *Entries) {
     KnownFuncEntries = Entries;
   }
+  /// Provide exception-metadata-proven continuation addresses owned by the
+  /// function passed to build().  These are intentionally owner-scoped rather
+  /// than image-global: build() revalidates each address against an exact
+  /// function range, executable storage, alignment, known entries, and the
+  /// instruction boundaries already decoded from the ordinary entry walk.
+  /// The pointed-to set must outlive build().
+  void setCrossFunctionContinuationRoots(const std::set<va_t> *Roots) {
+    CrossFunctionContinuationRoots = Roots;
+  }
   /// Override the fixed i386 GOTPC model-completion work budget in focused
   /// tests.  Production callers leave this unset and use the global ceiling;
   /// exhaustion publishes no partial scalar-model batch.
@@ -1230,6 +1239,11 @@ private:
   /// DiscoveredCodeRefSources: they survive only while a reachable instruction
   /// still takes their address.
   std::set<va_t> PersistentCFGRoots;
+  /// Positive role inventory for roots entered with ordinary machine state.
+  /// Kept independently from exception roots because one address may have
+  /// both roles; deriving this by subtracting handler addresses would lose the
+  /// ordinary identity in that case.
+  std::set<va_t> OrdinaryCFGRoots;
   /// Roots whose reachability is independent of code-pointer table storage:
   /// the function entry and exception/runtime entries.  These may never be
   /// suppressed by a candidate table proof.
@@ -1453,6 +1467,7 @@ private:
   std::optional<std::pair<va_t, va_t>> AuthoritativeCurrentFuncRange;
   const BinaryImage *CurrentImg = nullptr;
   const std::set<va_t> *KnownFuncEntries = nullptr;
+  const std::set<va_t> *CrossFunctionContinuationRoots = nullptr;
   const std::set<va_t> *ProtectedJumpTableRelocationSlots = nullptr;
   /// Owned one-shot history for the next build, plus the snapshot active in
   /// the current build.  Keeping these separate makes builder reuse safe even

@@ -109,6 +109,7 @@ void CFGBuilder::exploreAddressTakenRoots(const BinaryImage &Img,
   for (;;) {
     std::set<va_t> Candidates;
     std::set<va_t> RelocationCandidates;
+    std::set<va_t> CrossFunctionContinuationCandidates;
     std::map<va_t, std::set<va_t>> RelocationSources;
     const uint32_t PtrSz = Img.getPointerSize();
     if (PtrSz != 0)
@@ -122,10 +123,26 @@ void CFGBuilder::exploreAddressTakenRoots(const BinaryImage &Img,
     Candidates.insert(RelocationCandidates.begin(), RelocationCandidates.end());
 
     // These references were observed by this builder while decoding this
-    // function.  Do not use Img.CodeRefTargets here: it is the image-global
-    // union and carries no current-function ownership provenance.
+    // function and therefore may identify an owned local label directly.  Do
+    // not substitute Img.CodeRefTargets: that image-global union carries no
+    // current-function ownership or EH provenance.
     for (va_t Target : DiscoveredCodeRefs)
       Candidates.insert(normalizeCodeAddress(Target, Img.Arch, Img.Mode));
+
+    // A separately emitted funclet can identify an otherwise unreachable
+    // continuation in its parent.  The module EH closure supplies only roots
+    // proven for this exact owner.  Recheck the authoritative body here; a
+    // weaker next-entry bound cannot turn padding or an undetected function
+    // into a disconnected local block.
+    if (CrossFunctionContinuationRoots && AuthoritativeCurrentFuncRange)
+      for (va_t Target : *CrossFunctionContinuationRoots) {
+        Target = normalizeCodeAddress(Target, Img.Arch, Img.Mode);
+        if (Target > AuthoritativeCurrentFuncRange->first &&
+            Target < AuthoritativeCurrentFuncRange->second) {
+          Candidates.insert(Target);
+          CrossFunctionContinuationCandidates.insert(Target);
+        }
+      }
 
     bool Added = false;
     for (va_t Target : Candidates) {
@@ -136,10 +153,20 @@ void CFGBuilder::exploreAddressTakenRoots(const BinaryImage &Img,
       BlockStarts.insert(Target);
       if (RelocationCandidates.count(Target)) {
         PersistentCFGRoots.insert(Target);
+        OrdinaryCFGRoots.insert(Target);
         const auto Sources = RelocationSources.find(Target);
         if (Sources != RelocationSources.end())
           RelocationCFGRootSources[Target].insert(Sources->second.begin(),
                                                   Sources->second.end());
+      }
+      if (CrossFunctionContinuationCandidates.count(Target)) {
+        // EH ownership and source-value proofs are established by the module
+        // closure.  Once the local range and decode-boundary checks above also
+        // pass, the continuation remains a disconnected root independently of
+        // relocation-table arbitration.
+        PersistentCFGRoots.insert(Target);
+        OrdinaryCFGRoots.insert(Target);
+        DurableCFGRoots.insert(Target);
       }
       if (!ExploredAddrs.count(Target))
         explore(Img, Dec, Target);

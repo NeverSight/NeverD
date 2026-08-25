@@ -80,6 +80,7 @@ bool parseFH3(ExceptionFunction &F, const BinaryImage &Img) {
 
   CxxExceptionInfo Info;
   const size_t HandlerTypeSize = fh3HandlerTypeSize(Img.Arch);
+  Info.NativeFuncInfoVA = FuncInfoVA;
   Info.Magic = Magic;
   Info.Version = Version;
   Info.BBTFlags = *MagicWord >> 29;

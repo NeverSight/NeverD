@@ -9,6 +9,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "PipelineLLVMDetail.h"
+
 #include "neverd/Limits.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/loader/BinaryImage.h"
@@ -53,6 +55,106 @@ bool isFatalOptimizationStop(OptimizationStopReason Stop) {
 
 } // namespace
 
+pipeline_detail::LLVMShardPlan
+pipeline_detail::planLLVMEmissionShards(const std::vector<MedFunc> &Funcs,
+                                        unsigned NumThreads) {
+  struct WorkUnit {
+    uint64_t Weight = 0;
+    size_t FirstFunction = 0;
+    std::vector<size_t> Functions;
+  };
+
+  const size_t N = Funcs.size();
+  LLVMShardPlan Plan;
+  Plan.ShardOf.assign(N, 0);
+
+  std::vector<WorkUnit> Units;
+  Units.reserve(N);
+  std::map<va_t, size_t> UnitForNativeFuncInfo;
+  uint64_t TotalWeight = 0;
+  for (size_t I = 0; I < N; ++I) {
+    uint64_t Weight = 1;
+    for (const auto &B : Funcs[I].Blocks)
+      Weight += B.Ops.size() + B.Phis.size();
+    TotalWeight += Weight;
+
+    va_t NativeFuncInfoVA = 0;
+    if (Funcs[I].ExceptionMetadata && Funcs[I].ExceptionMetadata->Cxx)
+      NativeFuncInfoVA = Funcs[I].ExceptionMetadata->Cxx->NativeFuncInfoVA;
+
+    size_t UnitIndex = Units.size();
+    if (NativeFuncInfoVA != 0) {
+      auto [It, Inserted] =
+          UnitForNativeFuncInfo.emplace(NativeFuncInfoVA, UnitIndex);
+      if (!Inserted)
+        UnitIndex = It->second;
+    }
+    if (UnitIndex == Units.size()) {
+      WorkUnit Unit;
+      Unit.FirstFunction = I;
+      Units.push_back(std::move(Unit));
+    }
+    Units[UnitIndex].Weight += Weight;
+    Units[UnitIndex].Functions.push_back(I);
+  }
+
+  const size_t NumUnits = Units.size();
+  NumThreads = std::max(
+      1u, std::min<unsigned>(NumThreads,
+                             static_cast<unsigned>(NumUnits ? NumUnits : 1)));
+
+  // Slice size, not core count, is what bounds peak memory here: a shard holds
+  // its own LLVMContext plus its slice in the emitter's pre-mem2reg form (an
+  // alloca + load/store per temp, several times the optimized IR), and every
+  // in-flight shard's module is live at once.  Pinning one shard per core --
+  // the original scheme -- therefore held the WHOLE program's unoptimized IR
+  // in memory simultaneously, which is what exhausts a 32-bit address space on
+  // a multi-megabyte input (issue #10).  Sizing shards to a work budget instead
+  // keeps every core busy while capping the concurrent set at threads x budget,
+  // and costs only a few more link steps: a shard's duplicated declarations
+  // and globals are negligible next to its function bodies.
+  const uint64_t PerShard =
+      std::max<uint64_t>(1, TotalWeight / std::max(1u, NumThreads));
+  uint64_t Budget = std::min<uint64_t>(PerShard, limits::kMaxShardOps);
+  // A 32-bit host has 2-4 GB of address space for everything, so keep the
+  // in-flight set far smaller there than on a 64-bit host.
+  if constexpr (sizeof(void *) == 4)
+    Budget = std::min<uint64_t>(Budget, limits::kMaxShardOps / 4);
+  unsigned NumShards = static_cast<unsigned>(
+      std::min<uint64_t>(NumUnits, (TotalWeight + Budget - 1) / Budget));
+  NumShards = std::max(NumShards, NumThreads);
+  NumShards = std::max(
+      1u, std::min<unsigned>(NumShards,
+                             static_cast<unsigned>(NumUnits ? NumUnits : 1)));
+  Plan.NumShards = NumShards;
+
+  // Longest-processing-time bin packing operates on indivisible work units.
+  // Ordinary functions are singleton units. Every C++ EH contribution sharing
+  // a nonzero native FuncInfo identity is accumulated before sorting, so no
+  // shard boundary can split one logical native function group.
+  std::vector<size_t> Order(NumUnits);
+  for (size_t I = 0; I < NumUnits; ++I)
+    Order[I] = I;
+  std::sort(Order.begin(), Order.end(), [&](size_t A, size_t B) {
+    return Units[A].Weight != Units[B].Weight
+               ? Units[A].Weight > Units[B].Weight
+               : Units[A].FirstFunction < Units[B].FirstFunction;
+  });
+
+  using Bin = std::pair<uint64_t, unsigned>;
+  std::priority_queue<Bin, std::vector<Bin>, std::greater<Bin>> Load;
+  for (unsigned S = 0; S < NumShards; ++S)
+    Load.emplace(0, S);
+  for (size_t UnitIndex : Order) {
+    auto [ShardWeight, Shard] = Load.top();
+    Load.pop();
+    for (size_t FunctionIndex : Units[UnitIndex].Functions)
+      Plan.ShardOf[FunctionIndex] = Shard;
+    Load.emplace(ShardWeight + Units[UnitIndex].Weight, Shard);
+  }
+  return Plan;
+}
+
 //===----------------------------------------------------------------------===//
 // Parallel LLVM emission + optimization
 //===----------------------------------------------------------------------===//
@@ -67,68 +169,11 @@ std::unique_ptr<llvm::Module> Pipeline::emitLLVMSharded(
   const size_t N = Funcs.size();
   NumThreads = std::max(
       1u, std::min<unsigned>(NumThreads, static_cast<unsigned>(N ? N : 1)));
-
-  std::vector<uint64_t> Weight(N, 0);
-  uint64_t TotalWeight = 0;
-  for (size_t I = 0; I < N; ++I) {
-    uint64_t W = 1;
-    for (const auto &B : Funcs[I].Blocks)
-      W += B.Ops.size() + B.Phis.size();
-    Weight[I] = W;
-    TotalWeight += W;
-  }
-
-  // Slice size, not core count, is what bounds peak memory here: a shard holds
-  // its own LLVMContext plus its slice in the emitter's pre-mem2reg form (an
-  // alloca + load/store per temp, several times the optimized IR), and every
-  // in-flight shard's module is live at once.  Pinning one shard per core --
-  // the original scheme -- therefore held the WHOLE program's unoptimized IR in
-  // memory simultaneously, which is what exhausts a 32-bit address space on a
-  // multi-megabyte input (issue #10).  Sizing shards to a work budget instead
-  // keeps every core busy while capping the concurrent set at
-  // threads x budget, and costs only a few more link steps: a shard's
-  // duplicated declarations/globals are negligible next to its function bodies.
-  const uint64_t PerShard =
-      std::max<uint64_t>(1, TotalWeight / std::max(1u, NumThreads));
-  uint64_t Budget = std::min<uint64_t>(PerShard, limits::kMaxShardOps);
-  // A 32-bit host has 2-4 GB of address space for everything, so keep the
-  // in-flight set far smaller there than on a 64-bit host.
-  if constexpr (sizeof(void *) == 4)
-    Budget = std::min<uint64_t>(Budget, limits::kMaxShardOps / 4);
-  unsigned NumShards = static_cast<unsigned>(
-      std::min<uint64_t>(N, (TotalWeight + Budget - 1) / Budget));
-  NumShards = std::max(NumShards, NumThreads);
-  NumShards = std::max(1u, std::min<unsigned>(NumShards, N ? N : 1));
-
-  // Assign each function to a shard by longest-processing-time bin packing:
-  // sort by emitted-work weight (op count is a good proxy for both emit and
-  // per-function optimization cost) descending, then greedily place each into
-  // the currently least-loaded shard.  A few very large functions otherwise
-  // dominate one shard's wall time and cap the speedup; LPT keeps shards even.
-  // The assignment is stored as one shard index per function (not a mask per
-  // shard) so the bookkeeping stays O(N) however finely the work is sliced.
-  std::vector<unsigned> ShardOf(N, 0);
-  {
-    std::vector<size_t> Order(N);
-    for (size_t I = 0; I < N; ++I)
-      Order[I] = I;
-    std::sort(Order.begin(), Order.end(), [&](size_t A, size_t B) {
-      return Weight[A] != Weight[B] ? Weight[A] > Weight[B] : A < B;
-    });
-    // Least-loaded-first via a min-heap keyed on (load, shard index); scanning
-    // every shard per function would be O(N * NumShards) now that shards are
-    // sized by work rather than capped at the core count.
-    using Bin = std::pair<uint64_t, unsigned>;
-    std::priority_queue<Bin, std::vector<Bin>, std::greater<Bin>> Load;
-    for (unsigned S = 0; S < NumShards; ++S)
-      Load.emplace(0, S);
-    for (size_t Idx : Order) {
-      auto [L, S] = Load.top();
-      Load.pop();
-      ShardOf[Idx] = S;
-      Load.emplace(L + Weight[Idx], S);
-    }
-  }
+  const pipeline_detail::LLVMShardPlan ShardPlan =
+      pipeline_detail::planLLVMEmissionShards(Funcs, NumThreads);
+  const unsigned NumShards = ShardPlan.NumShards;
+  const std::vector<unsigned> &ShardOf = ShardPlan.ShardOf;
+  NumThreads = std::min(NumThreads, NumShards);
 
   // Warm up LLVM's lazily-initialized global state (pass registries, managed
   // statics) single-threaded before the parallel region touches it from many

@@ -611,10 +611,13 @@ bool collectDirectCallTargets(const BinaryImage &Img, Arch A, va_t BodyVA,
     return false;
 
   // The structural pass above proves that every reachable instruction has a
-  // single bounded decode.  This second pass attaches the base-personality
-  // delegation to paths: a handler observed on one branch cannot justify a
-  // return or tail exit reached along another branch.  Terminal traps have no
-  // successor and are intentionally exempt from the normal-exit obligation.
+  // single bounded decode.  This second pass requires a unique base
+  // personality to be established on at least one normal exit.  A local
+  // return without delegation may be the flags-gated cookie-check bypass, but
+  // an undelegated external tail exit or conflicting personality still fails
+  // closed.  Terminal traps do not satisfy the delegated-exit obligation,
+  // although any personality reachable on a trap path still contributes to
+  // ambiguity detection.
   using FlowState = std::pair<size_t, DelegationState>;
   std::set<FlowState> SeenStates;
   std::vector<FlowState> FlowWorklist;
@@ -642,9 +645,18 @@ bool collectDirectCallTargets(const BinaryImage &Img, Arch A, va_t BodyVA,
     return DelegationState::Conflict;
   };
 
-  auto completeNormalExit = [&](DelegationState State) {
-    if (State == DelegationState::None || State == DelegationState::Conflict)
+  auto completeNormalExit = [&](DelegationState State,
+                                bool IsLocalReturn) {
+    if (State == DelegationState::Conflict)
       return false;
+    // The CRT wrapper first validates the cookie and then conditionally calls
+    // the base personality.  When the handler-data flags say that the current
+    // dispatch kind has no language work, the wrapper reaches its own RET
+    // without delegating.  That local bypass is not an alternative
+    // personality: keep looking for a delegated normal exit.  An external
+    // branch with no delegation remains unproven and fails closed.
+    if (State == DelegationState::None)
+      return IsLocalReturn;
     if (ExitDelegation && *ExitDelegation != State)
       return false;
     ExitDelegation = State;
@@ -673,11 +685,11 @@ bool collectDirectCallTargets(const BinaryImage &Img, Arch A, va_t BodyVA,
           return false;
         break;
       }
-      if (!completeNormalExit(State))
+      if (!completeNormalExit(State, /*IsLocalReturn=*/false))
         return false;
       break;
     case ControlKind::Return:
-      if (!completeNormalExit(State))
+      if (!completeNormalExit(State, /*IsLocalReturn=*/true))
         return false;
       break;
     case ControlKind::Trap:
@@ -685,7 +697,11 @@ bool collectDirectCallTargets(const BinaryImage &Img, Arch A, va_t BodyVA,
     }
   }
 
-  if (!ExitDelegation)
+  // Every reachable base-personality call contributes a name, including calls
+  // on terminal-trap paths.  Requiring the whole wrapper to name exactly one
+  // base prevents a conflicting trap arm from being hidden by the personality
+  // selected on the ordinary return path.
+  if (!ExitDelegation || DelegationNames.size() != 1)
     return false;
   auto Name = DelegationNames.find(*ExitDelegation);
   if (Name == DelegationNames.end())

@@ -177,7 +177,14 @@ private:
   void emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder, int BlockId,
                   int OpIdx);
   void defineCallClobbers(const MedOp &Op, llvm::IRBuilder<> &Builder);
-  void emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder);
+  void emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder, int BlockId);
+  void markCxxContinuationReturn(const MedOp &Op, int BlockId,
+                                 llvm::ReturnInst &Return);
+  void initializeCxxContinuationPlans(
+      const std::vector<MedFunc> &Funcs, const std::vector<char> *BodyMask);
+  void finalizeCxxContinuationPlans();
+  static bool sameCxxContinuationReturnValue(const MedVar &Left,
+                                             const MedVar &Right);
 
   llvm::Value *toVec(llvm::Value *V, llvm::Type *VTy,
                      llvm::IRBuilder<> &Builder);
@@ -1829,6 +1836,45 @@ private:
   // declarations.
   std::map<std::pair<va_t, int>, llvm::BasicBlock *> PreparedFuncBlocks;
   std::map<va_t, llvm::BasicBlock *> LiftedCodeBlocks;
+  /// A source VA must identify exactly one lifted block before it can become an
+  /// LLVM blockaddress. Keep duplicate skeleton claims explicit instead of
+  /// letting the first map insertion silently choose an owner.
+  std::set<va_t> ConflictingLiftedCodeBlocks;
+  struct CxxContinuationReturnBinding {
+    int BlockId = -1;
+    va_t ReturnAddr = InvalidVA;
+    int ReturnSeq = -1;
+    MedVar ReturnValue = {};
+    va_t TargetVA = InvalidVA;
+    llvm::ReturnInst *Return = nullptr;
+    llvm::BasicBlock *TargetBlock = nullptr;
+  };
+  struct CxxContinuationFunctionPlan {
+    va_t SourceVA = InvalidVA;
+    llvm::Function *SourceFunction = nullptr;
+    va_t CodeRangeBegin = InvalidVA;
+    va_t CodeRangeEnd = InvalidVA;
+    va_t NativeFuncInfoVA = InvalidVA;
+    bool IsFH3RangeOwnerCandidate = false;
+    bool HasFH3GroupIdentity = false;
+    bool IsSeparated = false;
+    bool IsCatchFunclet = false;
+    bool BodyEmitted = false;
+    bool PreconditionsComplete = false;
+    /// Proves only an exact continuation RETURN binding.  Group-level native
+    /// EH classification must still validate the complete FH3/decode/unwind/GS
+    /// contract before using this as authorization for a mutation.
+    bool Complete = false;
+    std::vector<CxxContinuationReturnBinding> Bindings;
+  };
+  /// Emitter-private module plan retained across every function body.  A later
+  /// separated-EH finalizer consumes only plans whose complete bit survived
+  /// exact RETURN binding and cross-function target validation.
+  std::vector<CxxContinuationFunctionPlan> CxxContinuationPlans;
+  /// Every MedFunc entry participates in continuation target arbitration,
+  /// including declarations, empty bodies, and BodyMask-omitted members.
+  std::set<va_t> CxxContinuationFunctionEntries;
+  std::optional<size_t> ActiveCxxContinuationPlan;
   // Sticky hard failure: a relocation-proven executable pointer must never
   // degrade to an embedded original VA.  emit() discards the module when set.
   bool FatalCodePointerResolution = false;

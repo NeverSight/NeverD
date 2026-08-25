@@ -131,6 +131,7 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   JumpTableProofContextComplete = false;
   RequestedCompleteJumpTableProof = false;
   PersistentCFGRoots.clear();
+  OrdinaryCFGRoots.clear();
   DurableCFGRoots.clear();
   RelocationCFGRootSources.clear();
   ActiveJumpTableProofRoots.reset();
@@ -188,6 +189,7 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   Dec.resetX86FpuState();
   BlockStarts.insert(EntryAddr);
   PersistentCFGRoots.insert(EntryAddr);
+  OrdinaryCFGRoots.insert(EntryAddr);
   DurableCFGRoots.insert(EntryAddr);
 
   const ExceptionFunction *Exception = nullptr;
@@ -202,6 +204,7 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
     Exception = Img.ExceptionMetadata.findFunction(EntryAddr);
   establishCurrentFuncRange(Img, Exception);
   std::vector<va_t> ExceptionalRoots;
+  std::vector<va_t> ContinuationRoots;
   if (Exception) {
     // Every one of these tables spells "this field names no address" as zero,
     // so a zero has to be dropped before the range test rather than left to it.
@@ -219,11 +222,20 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
       if (Address != EntryAddr)
         ExceptionalRoots.push_back(Address);
     };
+    auto AddContinuationRoot = [&](va_t Address) {
+      if (Address == 0 || !Exception->CodeRange.contains(Address))
+        return;
+      if (Address != EntryAddr)
+        ContinuationRoots.push_back(Address);
+    };
     if (Exception->SEH)
       for (const SEHScopeRecord &Scope : Exception->SEH->Scopes) {
-        AddBoundary(Scope.GuardedRange.Begin);
-        if (Scope.GuardedRange.End != Exception->CodeRange.End)
-          AddBoundary(Scope.GuardedRange.End);
+        if (const auto Range = getSemanticSEHGuardedRange(
+                Scope, Img.Arch, Exception->CodeRange)) {
+          AddBoundary(Range->Begin);
+          if (Range->End != Exception->CodeRange.End)
+            AddBoundary(Range->End);
+        }
         AddExceptionalRoot(Scope.FilterOrFinallyVA);
         AddExceptionalRoot(Scope.HandlerVA);
         AddBoundary(Scope.ContinuationVA);
@@ -237,7 +249,7 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
         for (const CxxCatchHandler &Catch : Try.Handlers) {
           AddExceptionalRoot(Catch.HandlerVA);
           for (va_t Continuation : Catch.ContinuationVAs)
-            AddBoundary(Continuation);
+            AddContinuationRoot(Continuation);
         }
     }
     if (Exception->Itanium)
@@ -297,6 +309,27 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   // roots only after the normal entry walk, so an invalid target cannot split a
   // real instruction that the entry traversal already established.
   exploreAddressTakenRoots(Img, Dec);
+  // FH4 handler maps name ordinary resume points explicitly.  They are
+  // disconnected control roots in the declaring runtime-function body, but
+  // they are not exceptional entries and therefore stay separate from the
+  // landing-pad inventory below.
+  std::sort(ContinuationRoots.begin(), ContinuationRoots.end());
+  ContinuationRoots.erase(
+      std::unique(ContinuationRoots.begin(), ContinuationRoots.end()),
+      ContinuationRoots.end());
+  for (va_t Root : ContinuationRoots) {
+    if (!AuthoritativeCurrentFuncRange ||
+        Root <= AuthoritativeCurrentFuncRange->first ||
+        Root >= AuthoritativeCurrentFuncRange->second ||
+        !isOwnedInteriorTarget(Img, Root))
+      continue;
+    BlockStarts.insert(Root);
+    PersistentCFGRoots.insert(Root);
+    OrdinaryCFGRoots.insert(Root);
+    DurableCFGRoots.insert(Root);
+    if (!ExploredAddrs.count(Root))
+      explore(Img, Dec, Root);
+  }
   // A handler or landing pad inside the owning range is a legal CFG root even
   // though no ordinary branch reaches it — only the unwinder or the dispatcher
   // enters one, so recursive descent alone would leave its body undecoded.
@@ -309,6 +342,14 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   for (va_t Root : ExceptionalRoots)
     if (!ExploredAddrs.count(Root))
       explore(Img, Dec, Root);
+  // An exceptional or continuation root can itself materialize an exact
+  // address-taken continuation (for example, a PC-relative epilogue address
+  // passed to a local-unwind helper).  The first address-root walk ran before
+  // those disconnected roots were decoded, so close the local discovery fixed
+  // point once more.  exploreAddressTakenRoots loops over any further roots it
+  // discovers and still applies the authoritative owner/instruction-boundary
+  // checks to every candidate.
+  exploreAddressTakenRoots(Img, Dec);
   completeExactAArch64PageBases(Img);
   splitBlocks();
 
@@ -363,7 +404,6 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
       ++It;
     }
   }
-
   auto exactProofOp = [&](va_t Addr, int Seq) -> const LowOp * {
     const auto Insn = Insns.find(Addr);
     if (Insn == Insns.end() || Insn->second.IsInstructionGuard)
@@ -391,6 +431,52 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   };
   auto relocationFreeProofStillMatches =
       [&](const RelocatedInstructionAddressOccurrence &Occurrence) {
+    if (Occurrence.Authority ==
+        RelocatedInstructionAddressProofKind::X86PCRelativeCodeAddress) {
+      const uint16_t PointerSize = Img.getPointerSize();
+      const auto Rec = Insns.find(Occurrence.InstructionAddr);
+      const LowOp *Output =
+          exactProofOp(Occurrence.InstructionAddr, Occurrence.OpSeq);
+      const auto Sources = DiscoveredCodeRefSources.find(Occurrence.TargetVA);
+      if ((Img.Arch != Arch::X86 && Img.Arch != Arch::X64) ||
+          PointerSize == 0 || Occurrence.FieldVA != InvalidVA ||
+          Occurrence.Width != PointerSize || !Occurrence.DefinesOutput ||
+          Occurrence.OutputMayDepend ||
+          Occurrence.Provenance != ConstantAddressProvenance::CodeAddress ||
+          !Occurrence.PCRelativeFromInstructionEnd ||
+          Occurrence.TargetVA == InvalidVA ||
+          Occurrence.TargetOwnerVA == InvalidVA ||
+          !Img.hasExecutableCodeOwnerAt(Occurrence.TargetVA) ||
+          !Img.relocatedTargetBelongsToOwner(Occurrence.TargetVA,
+                                             Occurrence.TargetOwnerVA) ||
+          Rec == Insns.end() || Rec->second.IsInstructionGuard ||
+          Rec->second.IsBranch || Rec->second.IsCall || Rec->second.IsRet ||
+          Rec->second.IsOpaqueTerminator ||
+          Rec->second.IsResumableTerminator || !Output ||
+          Output->Opcode != NdOp::COPY ||
+          Output->Opcode != Occurrence.OutputOpcode ||
+          Output->Output != Occurrence.OutputWitness ||
+          !Output->Output.isReg() || Output->Output.Size != PointerSize ||
+          Output->NumInputs != 1 || !Output->Inputs[0].isTemp() ||
+          Output->Inputs[0].Size != PointerSize ||
+          Occurrence.SeedInstructionAddr != Occurrence.InstructionAddr ||
+          Occurrence.SeedOpSeq != Occurrence.OpSeq ||
+          Occurrence.SeedOpcode != Occurrence.OutputOpcode ||
+          Occurrence.SeedInputWitness != Output->Inputs[0] ||
+          Occurrence.SeedOutputWitness != Occurrence.OutputWitness ||
+          Sources == DiscoveredCodeRefSources.end() ||
+          Sources->second.count(Occurrence.InstructionAddr) == 0)
+        return false;
+
+      unsigned MatchingOutputs = 0;
+      for (const LowOp &Op : Rec->second.Ops)
+        MatchingOutputs += Op.Addr == Occurrence.InstructionAddr &&
+                           Op.Opcode == NdOp::COPY && Op.Output.isReg() &&
+                           Op.Output.Size == PointerSize && Op.NumInputs == 1 &&
+                           Op.Inputs[0].isTemp() &&
+                           Op.Inputs[0].Size == PointerSize;
+      return MatchingOutputs == 1;
+    }
     if (Occurrence.Authority != RelocatedInstructionAddressProofKind::
                                     AArch64RelocationFreeDataDereference)
       return true;
@@ -781,6 +867,17 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
       ++It;
     }
   }
+  Func.RelocatedInstructionAddressOccurrences.erase(
+      std::remove_if(
+          Func.RelocatedInstructionAddressOccurrences.begin(),
+          Func.RelocatedInstructionAddressOccurrences.end(),
+          [&](const RelocatedInstructionAddressOccurrence &Occurrence) {
+            return Occurrence.Authority ==
+                       RelocatedInstructionAddressProofKind::
+                           X86PCRelativeCodeAddress &&
+                   DiscoveredCodeRefs.count(Occurrence.TargetVA) == 0;
+          }),
+      Func.RelocatedInstructionAddressOccurrences.end());
   Func.CodeRefTargets.assign(DiscoveredCodeRefs.begin(),
                              DiscoveredCodeRefs.end());
   // Recursive descent intentionally retains decoded provisional jump-table
@@ -1108,10 +1205,59 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       // loader saw no relocation).  Record the target so the emitter symbolizes
       // the folded constant to `ptrtoint @func` rather than the stale VA.
       if (va_t Ref = Dec.pcRelCodeRefTarget(DI); Ref != InvalidVA) {
-        if (Img.hasExecutableCodeOwnerAt(Ref))
+        if (Img.hasExecutableCodeOwnerAt(Ref)) {
           DiscoveredCodeRefs.insert(Ref);
-        if (Img.hasExecutableCodeOwnerAt(Ref))
           DiscoveredCodeRefSources[Ref].insert(Cur);
+
+          const LowOp *Output = nullptr;
+          bool AmbiguousOutput = false;
+          const uint16_t PointerSize = Img.getPointerSize();
+          for (const LowOp &Op : Rec.Ops) {
+            if (Op.Addr != Cur || Op.Opcode != NdOp::COPY ||
+                !Op.Output.isReg() || Op.Output.Size != PointerSize ||
+                Op.NumInputs != 1 || !Op.Inputs[0].isTemp() ||
+                Op.Inputs[0].Size != PointerSize)
+              continue;
+            if (Output) {
+              AmbiguousOutput = true;
+              break;
+            }
+            Output = &Op;
+          }
+
+          va_t TargetOwnerVA = InvalidVA;
+          if (const Section *Sec = Img.getSectionFor(Ref);
+              Sec && Sec->isExecutable())
+            TargetOwnerVA = Sec->VA;
+          else if (const Segment *TargetSeg = Img.getSegmentFor(Ref);
+                   TargetSeg && TargetSeg->isExecutable())
+            TargetOwnerVA = TargetSeg->VA;
+
+          if (!AmbiguousOutput && Output && RelocatedOperands.empty() &&
+              PointerSize != 0 && TargetOwnerVA != InvalidVA &&
+              Img.relocatedTargetBelongsToOwner(Ref, TargetOwnerVA)) {
+            RelocatedInstructionAddressOccurrence Occurrence;
+            Occurrence.InstructionAddr = Cur;
+            Occurrence.OpSeq = Output->Seq;
+            Occurrence.TargetVA = Ref;
+            Occurrence.TargetOwnerVA = TargetOwnerVA;
+            Occurrence.Width = PointerSize;
+            Occurrence.Provenance = ConstantAddressProvenance::CodeAddress;
+            Occurrence.PCRelativeFromInstructionEnd = true;
+            Occurrence.DefinesOutput = true;
+            Occurrence.OutputOpcode = Output->Opcode;
+            Occurrence.OutputWitness = Output->Output;
+            Occurrence.Authority =
+                RelocatedInstructionAddressProofKind::X86PCRelativeCodeAddress;
+            Occurrence.SeedInstructionAddr = Cur;
+            Occurrence.SeedOpSeq = Output->Seq;
+            Occurrence.SeedOpcode = Output->Opcode;
+            Occurrence.SeedInputWitness = Output->Inputs[0];
+            Occurrence.SeedOutputWitness = Output->Output;
+            RelocatedInstructionAddressOccurrences.push_back(
+                std::move(Occurrence));
+          }
+        }
       }
 
       classifyInsn(Rec);

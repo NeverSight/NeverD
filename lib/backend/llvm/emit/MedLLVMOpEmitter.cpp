@@ -1140,7 +1140,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     return;
   }
   case NdOp::RETURN:
-    emitReturnOp(Op, Builder);
+    emitReturnOp(Op, Builder, BlockId);
     return;
   case NdOp::NOP:
     return;

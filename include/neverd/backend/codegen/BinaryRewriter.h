@@ -191,6 +191,8 @@ struct CompiledSection {
 };
 
 using CompiledFunctionRange = llvm::mc_rewrite::RewriteFunctionRange;
+using CompiledWinEHSemanticRecord =
+    llvm::mc_rewrite::RewriteWinEHSemanticRecord;
 
 /// Result of compiling a module to a single placement image.  Allocated
 /// in-image sections are laid out contiguously from a chosen base VA; every
@@ -214,11 +216,15 @@ struct CompiledImage {
   /// Exact rewrite-only source IR definition -> MC owner associations.
   std::vector<llvm::mc_rewrite::RewriteSourceFunctionOwner>
       SourceFunctionOwners;
+  /// Exact compiler-emitted Windows language rows carrying source-issued
+  /// semantic identities.
+  std::vector<CompiledWinEHSemanticRecord> WinEHSemanticRecords;
   /// Exact lifted source-function identity -> original image entry.  These
   /// values come only from the validated IR attachment emitted by the lifter;
   /// patchers join them to SourceFunctionOwners by exact source identity.
   std::map<std::string, uint64_t> SourceFunctionOriginalVAs;
   bool FunctionRangesValid = true;
+  bool WinEHSemanticsValid = true;
   std::vector<std::string> Unresolved; ///< Symbols left unresolved.
   bool Success = false;
 };

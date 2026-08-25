@@ -486,6 +486,21 @@ bool BinaryPatcher::prepareSourceFunctionsForPatch(
     Candidates.push_back({&Function, Replaceable});
   }
 
+  std::vector<va_t> ReplaceableEntries;
+  ReplaceableEntries.reserve(Preparation.ReplaceableOriginalVAs.size());
+  for (const auto &[FunctionName, OriginalVA] :
+       Preparation.ReplaceableOriginalVAs) {
+    (void)FunctionName;
+    ReplaceableEntries.push_back(OriginalVA);
+  }
+  if (Image && Image->Format == BinaryFormat::COFF) {
+    if (llvm::Error Error = validateCOFFCxxGroupReplacementClosure(
+            Module, *Image, ReplaceableEntries)) {
+      Detail = llvm::toString(std::move(Error));
+      return false;
+    }
+  }
+
   // Nothing from an exact source plan needs recompilation. Keep the clone
   // intact and let the format patcher commit a true no-op, irrespective of
   // unrelated helper definitions or blockaddress constants in the module.
@@ -546,6 +561,14 @@ bool BinaryPatcher::prepareSourceFunctionsForPatch(
         Detail = "a preserved source has an escaping blockaddress";
         return false;
       }
+    }
+  }
+
+  if (Image && Image->Format == BinaryFormat::COFF) {
+    if (llvm::Error Error = retainCOFFCxxGroupRewriteContractsForReplacement(
+            Module, *Image, ReplaceableEntries)) {
+      Detail = llvm::toString(std::move(Error));
+      return false;
     }
   }
 

@@ -28,6 +28,16 @@ enum class WindowsEHNativeSourceModel : uint8_t {
   None,
   SEH,
   CxxFH3,
+  CxxFH4,
+};
+
+/// The operation for which a normalized Windows exception source is being
+/// classified.  Native IR lowering and output reconstruction intentionally
+/// have separate capability gates: verifier-clean analysis IR does not imply
+/// that a binary writer can reproduce the source encoding.
+enum class WindowsEHNativeCapability : uint8_t {
+  IRLowering,
+  OutputPatch,
 };
 
 /// Stable reason for accepting or rejecting a native Windows language source.
@@ -76,25 +86,45 @@ enum class WindowsEHNativeSourceReason : uint8_t {
   UnsupportedCxxHandlerFrameState,
   InvalidCxxHandler,
   UnsupportedCxxContinuation,
+  OutputReconstructionUnavailable,
+  UnsupportedSEHCallbackABI,
 };
 
 struct WindowsEHNativeSourceClassification {
   WindowsEHNativeSourceModel Model = WindowsEHNativeSourceModel::None;
   WindowsEHNativeSourceReason Reason =
       WindowsEHNativeSourceReason::NoLanguagePersonality;
+  WindowsEHNativeCapability RequestedCapability =
+      WindowsEHNativeCapability::OutputPatch;
 
-  bool canRegenerateLanguageMetadata() const {
+  bool isEligible() const {
     return Model != WindowsEHNativeSourceModel::None &&
            Reason == WindowsEHNativeSourceReason::Eligible;
   }
+
+  bool canLowerNativeIR() const {
+    return RequestedCapability == WindowsEHNativeCapability::IRLowering &&
+           isEligible();
+  }
+
+  bool canPatchOutput() const {
+    return RequestedCapability == WindowsEHNativeCapability::OutputPatch &&
+           isEligible();
+  }
+
+  /// Compatibility spelling for output-metadata regeneration callers.
+  bool canRegenerateLanguageMetadata() const { return canPatchOutput(); }
 };
 
-/// Classify whether \p EH can be regenerated as native LLVM WinEH language IR
-/// for \p TargetArch and \p TargetFormat.  The result says nothing about
-/// structural unwind-only regeneration.
+/// Classify whether \p EH supports \p Capability for \p TargetArch and
+/// \p TargetFormat.  The default remains the conservative output-patch query
+/// so existing writer callers cannot inherit newly added IR-only support.
+/// The result says nothing about structural unwind-only regeneration.
 WindowsEHNativeSourceClassification
 classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
-                              BinaryFormat TargetFormat);
+                              BinaryFormat TargetFormat,
+                              WindowsEHNativeCapability Capability =
+                                  WindowsEHNativeCapability::OutputPatch);
 
 /// Return the stable diagnostic spelling of \p Reason.
 const char *

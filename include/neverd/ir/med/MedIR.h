@@ -132,6 +132,24 @@ struct MedI386GetPcModel {
   uint32_t PCValue = 0;
 };
 
+/// Post-rewrite binding of one LowIR Windows C++ continuation RETURN.  The
+/// source pair survives for auditing, while BlockId and ReturnValue name the
+/// exact final MedIR occurrence after CFG simplification, SSA, and propagation.
+struct MedCxxContinuationExitEvidence {
+  va_t ReturnAddr = InvalidVA;
+  int ReturnSeq = -1;
+  int BlockId = -1;
+  MedVar ReturnValue = {};
+  std::vector<va_t> Targets;
+  bool Complete = false;
+
+  std::optional<va_t> uniqueTarget() const {
+    if (!Complete || Targets.size() != 1)
+      return std::nullopt;
+    return Targets.front();
+  }
+};
+
 struct PhiNode {
   MedVar Output;
   std::vector<std::pair<int, MedVar>> Args;
@@ -327,6 +345,11 @@ struct MedFunc {
   std::map<va_t, MedSwitchSelectorPlan> SwitchSelectorPlans;
   std::vector<MedScalarAddressModel> ScalarAddressModels;
   std::vector<MedI386GetPcModel> I386GetPcModels;
+  /// Exact continuation exits rebound after all MedIR rewrites.  Binding is a
+  /// transaction: any missing, duplicate, or ABI-width-invalid RETURN leaves
+  /// this vector empty and the completion flag false.
+  std::vector<MedCxxContinuationExitEvidence> CxxContinuationExits;
+  bool CxxContinuationExitAnalysisComplete = false;
   /// LowIR fail-closed identity for mutable/uncertain indirect branches.  Kept
   /// separately from JumpTables so HighIR never turns a rejected table back
   /// into an indirect call merely because the CFG has no static successors.

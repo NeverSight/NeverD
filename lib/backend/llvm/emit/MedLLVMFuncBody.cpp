@@ -940,18 +940,13 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
     }
   }
 
-  // The models are mutually exclusive by target: the two Windows lowerings
-  // need an x64 COFF frame with a Windows personality, and the Itanium one
-  // needs an LSDA, so the first that recognizes the function is the only one
-  // that can.
+  // The models are mutually exclusive by target: native SEH needs a Windows
+  // table-based COFF frame, native MSVC C++ EH needs x64 or AArch64 COFF, and
+  // Itanium EH needs an LSDA. The first lowering that recognizes the function
+  // is the only one that can apply.
   if (!emitNativeSEH(Func, *LLVMFunc, BBMap) &&
       !emitNativeCxxEH(Func, *LLVMFunc, BBMap))
     emitNativeItaniumEH(Func, *LLVMFunc, BBMap);
-
-  for (llvm::BasicBlock &Block : *LLVMFunc)
-    for (llvm::Instruction &Instruction : Block)
-      Instruction.setMetadata(language_eh_md::InternalSourceCallAttachment,
-                              nullptr);
 
   for (auto &BB : *CurFunc) {
     if (BB.empty() || !BB.back().isTerminator()) {

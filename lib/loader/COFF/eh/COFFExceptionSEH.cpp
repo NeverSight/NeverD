@@ -18,6 +18,34 @@
 
 namespace neverd::coff_loader::detail {
 
+namespace {
+
+/// MSVC may outline `__except(1)` as a tiny ARM64 filter thunk instead of
+/// placing the literal catch-all sentinel in the scope table. Recognize only
+/// exact constant-return bodies, optionally surrounded by the standard frame
+/// save/restore sequence. Anything with another load, store, branch, or call
+/// remains an ordinary filter. The caller retains the original thunk address
+/// so semantic normalization never becomes a claim of byte-exact provenance.
+bool isAArch64ConstantTrueFilter(const BinaryImage &Img, va_t FilterVA) {
+  if (Img.Arch != Arch::AArch64 || (FilterVA & 3u) != 0)
+    return false;
+
+  if (const uint8_t *Code = Img.readVA(FilterVA, 2 * sizeof(uint32_t))) {
+    if (readLE<uint32_t>(Code) == 0x52800020u &&
+        readLE<uint32_t>(Code + 4) == 0xd65f03c0u)
+      return true; // mov w0, #1; ret
+  }
+
+  const uint8_t *Code = Img.readVA(FilterVA, 5 * sizeof(uint32_t));
+  return Code && readLE<uint32_t>(Code) == 0xa9bf7bfdu &&
+         readLE<uint32_t>(Code + 4) == 0xaa0103fdu &&
+         readLE<uint32_t>(Code + 8) == 0x52800020u &&
+         readLE<uint32_t>(Code + 12) == 0xa8c17bfdu &&
+         readLE<uint32_t>(Code + 16) == 0xd65f03c0u;
+}
+
+} // namespace
+
 /// True when \p Range is wholly covered by some runtime function of the image.
 ///
 /// A `__C_specific_handler` scope table is emitted once per function *group*:
@@ -125,6 +153,12 @@ bool parseSEH(ExceptionFunction &F, const BinaryImage &Img) {
         diagnose(F, ExceptionParseStatus::Malformed,
                  "invalid SEH filter target");
         continue;
+      }
+      if (Scope.Kind == SEHScopeKind::Filter &&
+          isAArch64ConstantTrueFilter(Img, Scope.FilterOrFinallyVA)) {
+        Scope.NormalizedFilterVA = Scope.FilterOrFinallyVA;
+        Scope.Kind = SEHScopeKind::CatchAll;
+        Scope.FilterOrFinallyVA = 0;
       }
       if (!addCodeRVA(Img, JumpRVA, Scope.HandlerVA) ||
           !isExecutableAddress(Img, Scope.HandlerVA)) {

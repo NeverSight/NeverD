@@ -75,6 +75,7 @@ bool decodeX86FuncInfo(ExceptionFunction &F, const BinaryImage &Img,
 
   CxxExceptionInfo Info;
   Info.NativeEncoding = CxxExceptionInfo::Encoding::FH3;
+  Info.NativeFuncInfoVA = FuncInfoVA;
   Info.Magic = Magic;
   Info.Version = Version;
   Info.BBTFlags = MagicWord >> 29;

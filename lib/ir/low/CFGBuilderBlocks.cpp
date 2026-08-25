@@ -275,6 +275,59 @@ void CFGBuilder::rebuildBlocks(LowFunc &Func) {
   for (va_t Root : CurrentAnalysisRoots)
     if (PublishedReachableInsns.count(Root))
       Func.ModuleAnalysisRoots.insert(Root);
+
+  // Publish the positive ordinary-entry role independently from the complete
+  // root inventory.  A disconnected address-taken root inherits that role
+  // only when an ordinary-reachable instruction actually takes its address;
+  // an exception-only handler cannot bootstrap another handler's RETURN into
+  // ordinary returned-value evidence.
+  Func.OrdinaryModuleAnalysisRoots.clear();
+  std::vector<bool> OrdinaryReachable(Func.Blocks.size(), false);
+  std::queue<int> OrdinaryWorklist;
+  auto QueueOrdinaryRoot = [&](va_t Root) {
+    LowBlock *Block = Func.blockFor(Root);
+    if (!Block)
+      return false;
+    Func.OrdinaryModuleAnalysisRoots.insert(Root);
+    if (!OrdinaryReachable[Block->Id]) {
+      OrdinaryReachable[Block->Id] = true;
+      OrdinaryWorklist.push(Block->Id);
+    }
+    return true;
+  };
+  auto FloodOrdinary = [&]() {
+    while (!OrdinaryWorklist.empty()) {
+      const int BlockId = OrdinaryWorklist.front();
+      OrdinaryWorklist.pop();
+      for (int Succ : Func.Blocks[BlockId].Succs)
+        if (Succ >= 0 && Succ < static_cast<int>(Func.Blocks.size()) &&
+            !OrdinaryReachable[Succ]) {
+          OrdinaryReachable[Succ] = true;
+          OrdinaryWorklist.push(Succ);
+        }
+    }
+  };
+  for (va_t Root : Func.ModuleAnalysisRoots)
+    if (OrdinaryCFGRoots.count(Root))
+      QueueOrdinaryRoot(Root);
+  FloodOrdinary();
+  for (bool Added = true; Added;) {
+    Added = false;
+    for (const auto &[Target, Sources] : DiscoveredCodeRefSources) {
+      if (!Func.ModuleAnalysisRoots.count(Target) ||
+          Func.OrdinaryModuleAnalysisRoots.count(Target))
+        continue;
+      const bool HasOrdinarySource =
+          std::any_of(Sources.begin(), Sources.end(), [&](va_t Source) {
+            LowBlock *SourceBlock = Func.blockFor(Source);
+            return SourceBlock && OrdinaryReachable[SourceBlock->Id];
+          });
+      if (!HasOrdinarySource)
+        continue;
+      Added |= QueueOrdinaryRoot(Target);
+    }
+    FloodOrdinary();
+  }
   linkExceptionalSuccessors(Func);
   extractJumpTables(Func);
   fixupFpuStack(Func);

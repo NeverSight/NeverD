@@ -389,7 +389,7 @@ PatchResult COFFPatcher::patch(const std::filesystem::path &InputPath,
 
         auto EHUpdateOrErr = prepareCOFFExceptionDirectory(
             Binary, *CachedImage, Img, PatchedOriginalEntries,
-            PatchedEntryMappings, CodeVA, TargetArch);
+            PatchedEntryMappings, CodeVA, TargetArch, CompileMod.get());
         if (!EHUpdateOrErr) {
           llvm::WithColor::error()
               << llvm::toString(EHUpdateOrErr.takeError()) << "\n";
@@ -423,7 +423,10 @@ PatchResult COFFPatcher::patch(const std::filesystem::path &InputPath,
           llvm::WithColor::error() << llvm::toString(std::move(Err)) << "\n";
           return false;
         }
-        if (llvm::Error Err = validatePatchedCOFFImage(Binary, TargetArch)) {
+        if (llvm::Error Err = validatePatchedCOFFImage(
+                Binary, TargetArch,
+                EHUpdateOrErr->Apply && EHUpdateOrErr->Size != 0,
+                *EHUpdateOrErr)) {
           llvm::WithColor::error() << llvm::toString(std::move(Err)) << "\n";
           return false;
         }

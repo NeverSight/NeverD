@@ -320,6 +320,9 @@ void HighCWriter::writeExceptionAnnotation(const HighFunc &Func) {
       if (Scope.FilterOrFinallyVA)
         OS << " filter_or_finally=0x"
            << llvm::utohexstr(Scope.FilterOrFinallyVA);
+      if (Scope.NormalizedFilterVA)
+        OS << " normalized_filter=0x"
+           << llvm::utohexstr(Scope.NormalizedFilterVA);
       if (Scope.HandlerVA)
         OS << " handler=0x" << llvm::utohexstr(Scope.HandlerVA);
       OS << "\n";

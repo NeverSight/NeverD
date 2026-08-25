@@ -19,6 +19,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <optional>
 #include <vector>
 
 namespace neverd {
@@ -36,7 +38,48 @@ struct SEHScopeRecord {
   va_t HandlerVA = 0;
   va_t ContinuationVA = 0;
   ExceptionParseStatus ParseStatus = ExceptionParseStatus::Complete;
+  /// Original filter thunk when an exact ARM64 return-true body was normalized
+  /// to CatchAll for analysis.  A nonzero value is lossless provenance, not an
+  /// executable callback for the normalized scope, and therefore blocks exact
+  /// output regeneration until that source spelling can be reproduced.
+  /// Keep new aggregate fields at the end so positional initializers remain
+  /// source-compatible with the pre-provenance layout.
+  va_t NormalizedFilterVA = 0;
 };
+
+/// Return the instruction-domain range described by a native SEH scope while
+/// leaving its encoded range untouched for metadata and provenance.  LLVM
+/// through 20 emitted an ARM64 exclusive end one byte past the final aligned
+/// instruction address.  The legacy spelling `End % 4 == 1` therefore covers
+/// that instruction and is semantically equivalent to the next aligned
+/// boundary.  Current toolchains emit the aligned boundary directly.
+///
+/// Any other ARM64 low-bit spelling, arithmetic overflow, or normalization
+/// beyond the exact owner fails closed.
+inline std::optional<ExceptionAddressRange>
+getSemanticSEHGuardedRange(const SEHScopeRecord &Scope, Arch TargetArch,
+                           const ExceptionAddressRange &Owner) {
+  ExceptionAddressRange Range = Scope.GuardedRange;
+  if (!Range.isValid() || !Owner.contains(Range))
+    return std::nullopt;
+  if (TargetArch != Arch::AArch64)
+    return Range;
+
+  if ((Range.Begin & 3u) != 0)
+    return std::nullopt;
+  const va_t EndLowBits = Range.End & 3u;
+  if (EndLowBits == 1) {
+    constexpr va_t Adjustment = 3;
+    if (Range.End > std::numeric_limits<va_t>::max() - Adjustment)
+      return std::nullopt;
+    Range.End += Adjustment;
+  } else if (EndLowBits != 0) {
+    return std::nullopt;
+  }
+  if (!Owner.contains(Range))
+    return std::nullopt;
+  return Range;
+}
 
 struct SEHExceptionInfo {
   std::vector<SEHScopeRecord> Scopes;
@@ -118,6 +161,10 @@ struct CxxExceptionInfo {
     FH3,
     FH4,
   } NativeEncoding = Encoding::FH3;
+  /// Native FuncInfo address shared by the contributions of one logical
+  /// Microsoft C++ function.  It is retained as provenance for routing
+  /// separated continuation records and is never emitted as a program value.
+  va_t NativeFuncInfoVA = 0;
   /// The 29-bit `magicNumber` field, with the three `bbtFlags` bits that share
   /// its word already split out into \ref BBTFlags.
   uint32_t Magic = 0;

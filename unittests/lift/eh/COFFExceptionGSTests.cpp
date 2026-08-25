@@ -204,7 +204,7 @@ TEST(COFFExceptionParser, InfersStrippedX64GSWrapperWhenEveryReturnDelegates) {
 }
 
 TEST(COFFExceptionParser,
-     DoesNotInferStrippedX64GSWrapperWhenAPathBypassesDelegation) {
+     InfersStrippedX64GSWrapperWhenTheGuardSkipsDelegation) {
   BinaryImage Img = makeX64ExceptionImage();
   addPersonalityImport(Img, Img.Base + 0x1180, "__C_specific_handler");
 
@@ -220,9 +220,10 @@ TEST(COFFExceptionParser,
 
   coff_loader::resolveExceptionHandlers(Img);
   const ExceptionFunction &Decoded = Img.ExceptionMetadata.Functions[0];
-  EXPECT_EQ(Decoded.Personality, ExceptionPersonality::Unknown);
-  EXPECT_FALSE(Decoded.SEH.has_value());
-  EXPECT_FALSE(Decoded.GSCookie.has_value());
+  EXPECT_EQ(Decoded.Personality, ExceptionPersonality::GSHandlerCheckSEH);
+  ASSERT_TRUE(Decoded.SEH.has_value());
+  ASSERT_TRUE(Decoded.GSCookie.has_value());
+  EXPECT_EQ(Decoded.ParseStatus, ExceptionParseStatus::Complete);
 }
 
 TEST(COFFExceptionParser,
@@ -269,6 +270,38 @@ TEST(COFFExceptionParser,
     ASSERT_TRUE(Decoded.GSCookie.has_value());
     EXPECT_EQ(Decoded.ParseStatus, ExceptionParseStatus::Complete);
   }
+}
+
+TEST(COFFExceptionParser,
+     DoesNotInferStrippedX64GSWrapperWithAReachableConflictingTrapPath) {
+  BinaryImage Img = makeX64ExceptionImage();
+  addPersonalityImport(Img, Img.Base + 0x1180, "__C_specific_handler");
+
+  Symbol ConflictingPersonality;
+  ConflictingPersonality.Name = "__CxxFrameHandler3";
+  ConflictingPersonality.Addr = Img.Base + 0x1190;
+  ConflictingPersonality.IsFunc = true;
+  Img.Symbols.push_back(std::move(ConflictingPersonality));
+
+  uint8_t *Text = Img.Segments[0].Data.data();
+  Text[0x100] = 0x75;
+  Text[0x101] = 0x06; // jne 0x1108
+  Text[0x102] = 0xe8;
+  writeLE<int32_t>(Text + 0x103, 0x79); // call 0x1180
+  Text[0x107] = 0xc3;                   // ret
+  Text[0x108] = 0xe8;
+  writeLE<int32_t>(Text + 0x109, 0x83); // call 0x1190
+  Text[0x10d] = 0x0f;
+  Text[0x10e] = 0x0b; // ud2
+
+  addX64SEHGSPayload(Img);
+  addStrippedGSFrame(Img, {Img.Base + 0x1100, Img.Base + 0x110f});
+
+  coff_loader::resolveExceptionHandlers(Img);
+  const ExceptionFunction &Decoded = Img.ExceptionMetadata.Functions[0];
+  EXPECT_EQ(Decoded.Personality, ExceptionPersonality::Unknown);
+  EXPECT_FALSE(Decoded.SEH.has_value());
+  EXPECT_FALSE(Decoded.GSCookie.has_value());
 }
 
 TEST(COFFExceptionParser, InfersStrippedX64GSWrapperThroughExactIATCall) {
@@ -849,6 +882,30 @@ TEST(COFFExceptionParser,
   ExceptionFunction Wrapper;
   Wrapper.CodeRange = {Img.Base + 0x1100, Img.Base + 0x110a};
   Img.ExceptionMetadata.Functions.push_back(std::move(Wrapper));
+
+  coff_loader::resolveExceptionHandlers(Img);
+  const ExceptionFunction &Decoded = Img.ExceptionMetadata.Functions[0];
+  EXPECT_EQ(Decoded.Personality, ExceptionPersonality::Unknown);
+  EXPECT_FALSE(Decoded.SEH.has_value());
+  EXPECT_FALSE(Decoded.GSCookie.has_value());
+}
+
+TEST(COFFExceptionParser,
+     DoesNotInferStrippedX64GSWrapperWhenOneArmDelegatesAndOneTailsOut) {
+  BinaryImage Img = makeX64ExceptionImage();
+  addPersonalityImport(Img, Img.Base + 0x1180, "__C_specific_handler");
+
+  uint8_t *Text = Img.Segments[0].Data.data();
+  Text[0x100] = 0x75;
+  Text[0x101] = 0x06; // jne 0x1108
+  Text[0x102] = 0xe8;
+  writeLE<int32_t>(Text + 0x103, 0x79); // call 0x1180
+  Text[0x107] = 0xc3;                   // local delegated return
+  Text[0x108] = 0xe9;
+  writeLE<int32_t>(Text + 0x109, 0x63); // tail-jump to unnamed 0x1170
+
+  addX64SEHGSPayload(Img);
+  addStrippedGSFrame(Img, {Img.Base + 0x1100, Img.Base + 0x110d});
 
   coff_loader::resolveExceptionHandlers(Img);
   const ExceptionFunction &Decoded = Img.ExceptionMetadata.Functions[0];

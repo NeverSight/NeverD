@@ -12,6 +12,8 @@
 
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 
+#include "neverd/backend/llvm/LanguageEHMetadata.h"
+
 #define DEBUG_TYPE "neverd-med-llvm-return"
 #include "neverd/ir/TargetRegInfo.h"
 
@@ -27,7 +29,52 @@ namespace neverd {
 // RETURN -- return-value recovery and materialization
 //===----------------------------------------------------------------------===//
 
-void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
+void MedLLVMEmitter::markCxxContinuationReturn(const MedOp &Op, int BlockId,
+                                               llvm::ReturnInst &Return) {
+  if (!ActiveCxxContinuationPlan ||
+      *ActiveCxxContinuationPlan >= CxxContinuationPlans.size())
+    return;
+  CxxContinuationFunctionPlan &Plan =
+      CxxContinuationPlans[*ActiveCxxContinuationPlan];
+  if (!Plan.PreconditionsComplete || Op.NumInputs != 1)
+    return;
+
+  std::optional<size_t> Match;
+  for (size_t I = 0; I < Plan.Bindings.size(); ++I) {
+    const CxxContinuationReturnBinding &Binding = Plan.Bindings[I];
+    if (Binding.BlockId != BlockId || Binding.ReturnAddr != Op.Addr ||
+        Binding.ReturnSeq != Op.OriginSeq ||
+        !sameCxxContinuationReturnValue(Binding.ReturnValue, Op.Inputs[0]))
+      continue;
+    if (Match) {
+      Plan.PreconditionsComplete = false;
+      Return.setMetadata(
+          language_eh_md::InternalCxxContinuationReturnAttachment, nullptr);
+      return;
+    }
+    Match = I;
+  }
+  if (!Match)
+    return;
+  if (Return.getMetadata(
+          language_eh_md::InternalCxxContinuationReturnAttachment)) {
+    Plan.PreconditionsComplete = false;
+    Return.setMetadata(language_eh_md::InternalCxxContinuationReturnAttachment,
+                       nullptr);
+    return;
+  }
+
+  llvm::Metadata *Operands[] = {
+      llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
+          llvm::Type::getInt64Ty(*Ctx), *ActiveCxxContinuationPlan)),
+      llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
+          llvm::Type::getInt64Ty(*Ctx), *Match))};
+  Return.setMetadata(language_eh_md::InternalCxxContinuationReturnAttachment,
+                     llvm::MDNode::get(*Ctx, Operands));
+}
+
+void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
+                                  int BlockId) {
   auto GetReturnValue = [&](const MedVar &V) -> llvm::Value * {
     if (llvm::Value *Code =
             tryResolveCodeAddressValue(V, /*RequireCodeRole=*/false, Builder))
@@ -41,7 +88,8 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
   };
   auto *RetTy = CurFunc->getReturnType();
   if (RetTy->isVoidTy()) {
-    Builder.CreateRetVoid();
+    llvm::ReturnInst *Return = Builder.CreateRetVoid();
+    markCxxContinuationReturn(Op, BlockId, *Return);
     return;
   }
 
@@ -159,7 +207,8 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
       V = V ? coerce(V, FT) : llvm::Constant::getNullValue(FT);
       Agg = Builder.CreateInsertValue(Agg, V, I);
     }
-    Builder.CreateRet(Agg);
+    llvm::ReturnInst *Return = Builder.CreateRet(Agg);
+    markCxxContinuationReturn(Op, BlockId, *Return);
     return;
   }
 
@@ -461,7 +510,8 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
       RetVal = Builder.CreateBitCast(AsInt, RetTy);
     }
   }
-  Builder.CreateRet(RetVal);
+  llvm::ReturnInst *Return = Builder.CreateRet(RetVal);
+  markCxxContinuationReturn(Op, BlockId, *Return);
   return;
 }
 

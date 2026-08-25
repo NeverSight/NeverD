@@ -7,18 +7,31 @@
 #include "WindowsEHCorpusManifest.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/llvm/WindowsEHMetadata.h"
+#include "neverd/backend/llvm/WindowsEHMetadataEncoder.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/Metadata.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/IRReader/IRReader.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Program.h"
 #include "llvm/Support/SHA256.h"
+#include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -84,6 +97,76 @@ TEST(WindowsEHCorpus, DeclaresCompleteMultiToolchainMatrix) {
   EXPECT_EQ(Toolchains, (std::set<std::string>{"msvc", "clang-cl"}));
   EXPECT_EQ(Architectures,
             (std::set<Arch>{Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}));
+}
+
+TEST(WindowsEHCorpus, PreservesSharedFH3NativeFunctionGroupIdentity) {
+  auto ExpectationsOrErr = loadExpectations();
+  ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
+      << toString(ExpectationsOrErr.takeError());
+
+  const WindowsEHArtifactExpectation *Probe = nullptr;
+  for (const WindowsEHArtifactExpectation &Expectation : *ExpectationsOrErr) {
+    if (Expectation.Name != "cxx_eh_probe" ||
+        Expectation.Toolchain != "msvc" ||
+        Expectation.Architecture != "x86_64" ||
+        Expectation.CxxFormat != "fh3" || Expectation.SecurityCookie ||
+        Expectation.Optimization != "o0")
+      continue;
+    ASSERT_EQ(Probe, nullptr) << "duplicate focused ABI probe";
+    Probe = &Expectation;
+  }
+  ASSERT_NE(Probe, nullptr);
+
+  const std::filesystem::path Input =
+      std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) / Probe->Path;
+  std::unique_ptr<Loader> ImageLoader = Loader::create(Input);
+  ASSERT_NE(ImageLoader, nullptr);
+  auto ImageOrErr = ImageLoader->load(Input);
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << toString(ImageOrErr.takeError());
+
+  std::map<va_t, std::vector<const ExceptionFunction *>> Groups;
+  for (const ExceptionFunction &Function :
+       ImageOrErr->ExceptionMetadata.Functions) {
+    if (!Function.Cxx ||
+        Function.Cxx->NativeEncoding != CxxExceptionInfo::Encoding::FH3 ||
+        !Function.Cxx->IsSeparated)
+      continue;
+    ASSERT_NE(Function.Cxx->NativeFuncInfoVA, 0u);
+    Groups[Function.Cxx->NativeFuncInfoVA].push_back(&Function);
+  }
+
+  bool SawParentAndCatchGroup = false;
+  llvm::LLVMContext Context;
+  for (const auto &[GroupVA, Members] : Groups) {
+    bool SawParent = false;
+    bool SawCatch = false;
+    for (const ExceptionFunction *Member : Members) {
+      ASSERT_NE(Member, nullptr);
+      SawCatch |= Member->Cxx->IsCatchFunclet;
+      SawParent |= !Member->Cxx->IsCatchFunclet;
+
+      llvm::MDNode *Payload = windows_eh_md::getCanonicalFunctionMetadata(
+          Context, *Member, ImageOrErr->Arch, ImageOrErr->Format);
+      ASSERT_NE(Payload, nullptr);
+      const auto *Header = llvm::dyn_cast<llvm::MDNode>(
+          Payload->getOperand(windows_eh_md::CxxHeader).get());
+      ASSERT_NE(Header, nullptr);
+      ASSERT_EQ(Header->getNumOperands(),
+                windows_eh_md::CxxHeaderOperandCount);
+      const auto *GroupMetadata = llvm::dyn_cast<llvm::ConstantAsMetadata>(
+          Header->getOperand(windows_eh_md::CxxNativeFuncInfoVA).get());
+      const auto *EncodedGroup =
+          GroupMetadata
+              ? llvm::dyn_cast<llvm::ConstantInt>(GroupMetadata->getValue())
+              : nullptr;
+      ASSERT_NE(EncodedGroup, nullptr);
+      EXPECT_EQ(EncodedGroup->getZExtValue(), GroupVA);
+    }
+    SawParentAndCatchGroup |= Members.size() >= 2 && SawParent && SawCatch;
+  }
+  EXPECT_TRUE(SawParentAndCatchGroup)
+      << "focused FH3 image exposed no complete parent/catch function group";
 }
 
 // ARM32 spells every code pointer in a language table with the Thumb
@@ -170,11 +253,14 @@ TEST(WindowsEHCorpus, DecodesGSHandlerDataAtTheTargetsPointerWidth) {
   for (const WindowsEHArtifactExpectation &Expectation : *ExpectationsOrErr) {
     const std::filesystem::path ArtifactPath = CorpusRoot / Expectation.Path;
     std::unique_ptr<Loader> ImageLoader = Loader::create(ArtifactPath);
-    if (!ImageLoader)
+    if (!ImageLoader) {
+      ADD_FAILURE() << "NeverD did not recognize the GS corpus artifact";
       continue;
+    }
     auto ImageOrErr = ImageLoader->load(ArtifactPath);
     if (!ImageOrErr) {
-      consumeError(ImageOrErr.takeError());
+      ADD_FAILURE() << "NeverD failed to load the GS corpus artifact: "
+                    << toString(ImageOrErr.takeError());
       continue;
     }
     SCOPED_TRACE(Expectation.Path);
@@ -280,6 +366,8 @@ TEST(WindowsEHCorpus, RecoversX86RegistrationChains) {
       if (Function.Encoding == ExceptionEncoding::X86CxxFuncInfo) {
         ++CxxRecords;
         ASSERT_TRUE(Function.Cxx.has_value());
+        EXPECT_NE(Function.Cxx->NativeFuncInfoVA, 0u);
+        EXPECT_EQ(Function.Cxx->NativeFuncInfoVA, Chain.ScopeTableVA);
         EXPECT_TRUE(Function.Cxx->hasValidStateGraph());
         // x86 keeps the current state in the frame, never in a table.
         EXPECT_TRUE(Function.Cxx->IPMap.empty());
@@ -456,6 +544,15 @@ TEST(WindowsEHCorpus, ParsesDeclaredExceptionMetadata) {
     if (Expectation.ValidationLevel == CorpusValidationLevel::LoadOnly)
       continue;
 
+    EXPECT_NE(Info.ParseStatus, ExceptionParseStatus::Malformed) << Diagnostics;
+    EXPECT_TRUE(containsString(Expectation.AllowedParseStatuses,
+                               getExceptionParseStatusName(Info.ParseStatus)))
+        << "unexpected image exception parse status: "
+        << getExceptionParseStatusName(Info.ParseStatus) << "; " << Diagnostics;
+    for (const ExceptionFunction &Function : Info.Functions)
+      EXPECT_NE(Function.ParseStatus, ExceptionParseStatus::Malformed)
+          << Diagnostics;
+
     EXPECT_GE(Info.Functions.size(), Expectation.MinExceptionFunctions);
     if (Expectation.ValidationLevel == CorpusValidationLevel::UnwindOnly) {
       for (const ExceptionFunction &Function : Info.Functions) {
@@ -465,19 +562,11 @@ TEST(WindowsEHCorpus, ParsesDeclaredExceptionMetadata) {
       continue;
     }
 
-    EXPECT_NE(Info.ParseStatus, ExceptionParseStatus::Malformed) << Diagnostics;
-    EXPECT_TRUE(containsString(Expectation.AllowedParseStatuses,
-                               getExceptionParseStatusName(Info.ParseStatus)))
-        << "unexpected image exception parse status: "
-        << getExceptionParseStatusName(Info.ParseStatus) << "; " << Diagnostics;
-
     uint64_t CxxFunctions = 0;
     uint64_t TryBlocks = 0;
     uint64_t SEHScopes = 0;
     std::set<std::string> Personalities;
     for (const ExceptionFunction &Function : Info.Functions) {
-      EXPECT_NE(Function.ParseStatus, ExceptionParseStatus::Malformed)
-          << Diagnostics;
       if (Function.Personality != ExceptionPersonality::None &&
           Function.Personality != ExceptionPersonality::Unknown)
         Personalities.insert(getExceptionPersonalityName(Function.Personality));

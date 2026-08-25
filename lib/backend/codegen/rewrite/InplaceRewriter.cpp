@@ -506,7 +506,7 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
     if (Fmt == BinaryFormat::COFF) {
       auto EHUpdateOrErr = prepareCOFFExceptionDirectory(
           State.Binary, Image, ImageOut, PatchedOriginalEntries,
-          PatchedEntryMappings, NewSegVA, TargetArch);
+          PatchedEntryMappings, NewSegVA, TargetArch, GrowMod.get());
       if (!EHUpdateOrErr) {
         llvm::WithColor::error()
             << llvm::toString(EHUpdateOrErr.takeError()) << "\n";
@@ -541,8 +541,9 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
         llvm::WithColor::error() << llvm::toString(std::move(Err)) << "\n";
         return PatchResult{};
       }
-      if (llvm::Error Err =
-              validatePatchedCOFFImage(State.Binary, TargetArch)) {
+      if (llvm::Error Err = validatePatchedCOFFImage(
+              State.Binary, TargetArch, EHUpdate.Apply && EHUpdate.Size != 0,
+              EHUpdate)) {
         llvm::WithColor::error() << llvm::toString(std::move(Err)) << "\n";
         return PatchResult{};
       }

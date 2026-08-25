@@ -74,6 +74,10 @@ struct PipelineOptions {
   /// environment variable, ordinary process state cannot silently alter lift
   /// semantics.
   std::optional<size_t> JumpTableEvidenceBudgetForTesting;
+  /// Unit-test-only override for the bounded dataflow and fixed-point work
+  /// used to recover Windows catch-funclet continuation roots.  Production
+  /// callers always use the compiled safety limit.
+  std::optional<size_t> EHContinuationEvidenceBudgetForTesting;
 };
 
 enum class PipelineFunctionDisposition {
@@ -446,7 +450,11 @@ private:
   /// The shard count is derived from the total MedIR work rather than pinned to
   /// \p NumThreads: peak memory is (in-flight shards) x (slice size), so
   /// slicing finely keeps a large binary's unoptimized IR from all being
-  /// resident at once while still saturating every worker.
+  /// resident at once while still saturating every worker.  C++ exception
+  /// contributions carrying the same nonzero native FuncInfo identity are one
+  /// indivisible scheduling unit.  Such a group may exceed the soft slice
+  /// budget, because splitting it would make later group-level EH lowering
+  /// impossible to validate or commit atomically.
   static std::unique_ptr<llvm::Module> emitLLVMSharded(
       const std::vector<MedFunc> &Funcs, llvm::LLVMContext &Ctx, Arch TheArch,
       const std::vector<std::pair<va_t, std::string>> &Imports,

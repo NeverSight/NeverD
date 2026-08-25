@@ -26,13 +26,17 @@
 #include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/llvm/LLVMName.h"
+#include "neverd/backend/llvm/LanguageEHMetadata.h"
+#include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/ir/TargetRegInfo.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-emitter"
 #include "neverd/ArchSupport.h"
 #include "neverd/Limits.h"
+#include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/Diagnostic.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/IR/Constants.h"
@@ -41,6 +45,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/MC/BinaryRewrite.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -73,6 +78,338 @@ bool hasObjectFunctionNameAt(const BinaryImage *Img, BinaryFormat Format,
 }
 
 } // namespace
+
+bool MedLLVMEmitter::sameCxxContinuationReturnValue(const MedVar &Left,
+                                                    const MedVar &Right) {
+  if (Left.Kind != Right.Kind || Left.TheArch != Right.TheArch ||
+      Left.RenameTag != Right.RenameTag || Left.Id != Right.Id ||
+      Left.SSAVer != Right.SSAVer || Left.Size != Right.Size ||
+      Left.Provenance != Right.Provenance ||
+      Left.AddressOwnerVA != Right.AddressOwnerVA)
+    return false;
+  switch (Left.Kind) {
+  case MedVar::Reg:
+  case MedVar::Param:
+    return Left.RegOff == Right.RegOff;
+  case MedVar::Stack:
+    return Left.StackOff == Right.StackOff;
+  case MedVar::Const:
+    return Left.ConstVal == Right.ConstVal;
+  default:
+    return true;
+  }
+}
+
+void MedLLVMEmitter::initializeCxxContinuationPlans(
+    const std::vector<MedFunc> &Funcs, const std::vector<char> *BodyMask) {
+  CxxContinuationPlans.clear();
+  CxxContinuationPlans.resize(Funcs.size());
+  CxxContinuationFunctionEntries.clear();
+  ActiveCxxContinuationPlan.reset();
+
+  for (size_t I = 0; I < Funcs.size(); ++I) {
+    const MedFunc &Func = Funcs[I];
+    CxxContinuationFunctionPlan &Plan = CxxContinuationPlans[I];
+    Plan.SourceVA = Func.Entry;
+    CxxContinuationFunctionEntries.insert(Func.Entry);
+    if (Func.ExceptionMetadata && Func.ExceptionMetadata->Cxx) {
+      const ExceptionFunction &EH = *Func.ExceptionMetadata;
+      const CxxExceptionInfo &Cxx = *EH.Cxx;
+      Plan.CodeRangeBegin = EH.CodeRange.Begin;
+      Plan.CodeRangeEnd = EH.CodeRange.End;
+      Plan.NativeFuncInfoVA = Cxx.NativeFuncInfoVA;
+      Plan.IsFH3RangeOwnerCandidate =
+          EH.Kind == RuntimeFunctionKind::Primary &&
+          EH.ParseStatus == ExceptionParseStatus::Complete &&
+          Cxx.NativeEncoding == CxxExceptionInfo::Encoding::FH3;
+      Plan.HasFH3GroupIdentity =
+          EH.Kind == RuntimeFunctionKind::Primary &&
+          EH.ParseStatus == ExceptionParseStatus::Complete &&
+          EH.CodeRange.Begin < EH.CodeRange.End &&
+          EH.CodeRange.Begin == Func.Entry &&
+          EH.Personality == ExceptionPersonality::CxxFrameHandler3 &&
+          Cxx.NativeEncoding == CxxExceptionInfo::Encoding::FH3 &&
+          Cxx.NativeFuncInfoVA != 0 && Cxx.NativeFuncInfoVA != InvalidVA;
+      Plan.IsSeparated = Cxx.IsSeparated;
+      Plan.IsCatchFunclet = Cxx.IsCatchFunclet;
+    }
+    Plan.BodyEmitted = (!BodyMask || (*BodyMask)[I]) && !Func.Name.empty() &&
+                       !Func.Blocks.empty();
+    auto Name = EmittedFuncNames.find(Func.Entry);
+    if (Name != EmittedFuncNames.end())
+      Plan.SourceFunction = Mod->getFunction(Name->second);
+    Plan.PreconditionsComplete =
+        TargetArch == Arch::X64 && TargetFormat == BinaryFormat::COFF &&
+        Plan.BodyEmitted && Plan.SourceFunction &&
+        Plan.HasFH3GroupIdentity && Plan.IsSeparated && Plan.IsCatchFunclet &&
+        Func.CxxContinuationExitAnalysisComplete &&
+        !Func.CxxContinuationExits.empty();
+    Plan.Bindings.reserve(Func.CxxContinuationExits.size());
+
+    for (const MedCxxContinuationExitEvidence &Evidence :
+         Func.CxxContinuationExits) {
+      CxxContinuationReturnBinding Binding;
+      Binding.BlockId = Evidence.BlockId;
+      Binding.ReturnAddr = Evidence.ReturnAddr;
+      Binding.ReturnSeq = Evidence.ReturnSeq;
+      Binding.ReturnValue = Evidence.ReturnValue;
+      if (std::optional<va_t> Target = Evidence.uniqueTarget())
+        Binding.TargetVA = *Target;
+      else
+        Plan.PreconditionsComplete = false;
+      if (Binding.BlockId < 0 || Binding.ReturnAddr == InvalidVA ||
+          Binding.ReturnSeq < 0 || Binding.ReturnValue.Size == 0 ||
+          Binding.ReturnValue.Size !=
+              getTargetRegInfo(TargetArch).PointerSize ||
+          Binding.TargetVA == InvalidVA ||
+          Binding.ReturnAddr < Plan.CodeRangeBegin ||
+          Binding.ReturnAddr >= Plan.CodeRangeEnd)
+        Plan.PreconditionsComplete = false;
+
+      for (const CxxContinuationReturnBinding &Previous : Plan.Bindings)
+        if (Previous.BlockId == Binding.BlockId &&
+            Previous.ReturnAddr == Binding.ReturnAddr &&
+            Previous.ReturnSeq == Binding.ReturnSeq &&
+            sameCxxContinuationReturnValue(Previous.ReturnValue,
+                                           Binding.ReturnValue))
+          Plan.PreconditionsComplete = false;
+      Plan.Bindings.push_back(std::move(Binding));
+    }
+  }
+
+  // Two source records resolving to the same lifted function (or the same
+  // source VA) cannot independently own a RETURN occurrence.
+  std::map<va_t, size_t> SeenSourceVAs;
+  std::map<llvm::Function *, size_t> SeenSourceFunctions;
+  for (size_t I = 0; I < CxxContinuationPlans.size(); ++I) {
+    CxxContinuationFunctionPlan &Plan = CxxContinuationPlans[I];
+    auto [VAIt, InsertedVA] = SeenSourceVAs.try_emplace(Plan.SourceVA, I);
+    if (!InsertedVA) {
+      Plan.PreconditionsComplete = false;
+      CxxContinuationPlans[VAIt->second].PreconditionsComplete = false;
+    }
+    if (!Plan.SourceFunction)
+      continue;
+    auto [FunctionIt, InsertedFunction] =
+        SeenSourceFunctions.try_emplace(Plan.SourceFunction, I);
+    if (!InsertedFunction) {
+      Plan.PreconditionsComplete = false;
+      CxxContinuationPlans[FunctionIt->second].PreconditionsComplete = false;
+    }
+  }
+
+  // A separated catch contribution is authorized only by one parent record in
+  // the same native FuncInfo group, and that parent must declare this exact
+  // catch entry exactly once in its handler map.
+  for (size_t I = 0; I < CxxContinuationPlans.size(); ++I) {
+    CxxContinuationFunctionPlan &CatchPlan = CxxContinuationPlans[I];
+    if (!CatchPlan.HasFH3GroupIdentity || !CatchPlan.IsSeparated ||
+        !CatchPlan.IsCatchFunclet)
+      continue;
+    size_t ParentCount = 0;
+    size_t HandlerDeclarationCount = 0;
+    for (size_t J = 0; J < CxxContinuationPlans.size(); ++J) {
+      const CxxContinuationFunctionPlan &ParentPlan = CxxContinuationPlans[J];
+      if (!ParentPlan.HasFH3GroupIdentity || !ParentPlan.IsSeparated ||
+          ParentPlan.IsCatchFunclet ||
+          ParentPlan.NativeFuncInfoVA != CatchPlan.NativeFuncInfoVA)
+        continue;
+      ++ParentCount;
+      const MedFunc &Parent = Funcs[J];
+      if (!Parent.ExceptionMetadata || !Parent.ExceptionMetadata->Cxx)
+        continue;
+      for (const CxxTryBlock &Try : Parent.ExceptionMetadata->Cxx->TryBlocks)
+        for (const CxxCatchHandler &Handler : Try.Handlers)
+          if (Handler.HandlerVA == CatchPlan.SourceVA)
+            ++HandlerDeclarationCount;
+    }
+    if (ParentCount != 1 || HandlerDeclarationCount != 1)
+      CatchPlan.PreconditionsComplete = false;
+  }
+}
+
+void MedLLVMEmitter::finalizeCxxContinuationPlans() {
+  std::vector<bool> Invalid(CxxContinuationPlans.size(), false);
+  for (size_t I = 0; I < CxxContinuationPlans.size(); ++I) {
+    CxxContinuationFunctionPlan &Plan = CxxContinuationPlans[I];
+    Invalid[I] = !Plan.PreconditionsComplete;
+    Plan.Complete = false;
+    for (CxxContinuationReturnBinding &Binding : Plan.Bindings) {
+      Binding.Return = nullptr;
+      Binding.TargetBlock = nullptr;
+    }
+  }
+
+  auto MetadataIndex = [](const llvm::Metadata *Metadata)
+      -> std::optional<size_t> {
+    const auto *AsConstant =
+        llvm::dyn_cast_or_null<llvm::ConstantAsMetadata>(Metadata);
+    const auto *Integer =
+        AsConstant ? llvm::dyn_cast<llvm::ConstantInt>(AsConstant->getValue())
+                   : nullptr;
+    if (!Integer || Integer->getValue().getActiveBits() >
+                        std::numeric_limits<size_t>::digits)
+      return std::nullopt;
+    return static_cast<size_t>(Integer->getZExtValue());
+  };
+
+  bool UnknownMarker = false;
+  for (llvm::Function &Function : *Mod)
+    for (llvm::BasicBlock &Block : Function)
+      for (llvm::Instruction &Instruction : Block) {
+        llvm::MDNode *Marker = Instruction.getMetadata(
+            language_eh_md::InternalCxxContinuationReturnAttachment);
+        if (!Marker)
+          continue;
+        Instruction.setMetadata(
+            language_eh_md::InternalCxxContinuationReturnAttachment, nullptr);
+
+        if (Marker->getNumOperands() != 2) {
+          UnknownMarker = true;
+          continue;
+        }
+        std::optional<size_t> PlanIndex =
+            MetadataIndex(Marker->getOperand(0).get());
+        std::optional<size_t> BindingIndex =
+            MetadataIndex(Marker->getOperand(1).get());
+        if (!PlanIndex || !BindingIndex ||
+            *PlanIndex >= CxxContinuationPlans.size()) {
+          UnknownMarker = true;
+          continue;
+        }
+        CxxContinuationFunctionPlan &Plan = CxxContinuationPlans[*PlanIndex];
+        if (*BindingIndex >= Plan.Bindings.size()) {
+          Invalid[*PlanIndex] = true;
+          continue;
+        }
+        auto *Return = llvm::dyn_cast<llvm::ReturnInst>(&Instruction);
+        CxxContinuationReturnBinding &Binding =
+            Plan.Bindings[*BindingIndex];
+        if (!Return || Binding.Return) {
+          Invalid[*PlanIndex] = true;
+          continue;
+        }
+        Binding.Return = Return;
+      }
+  if (UnknownMarker)
+    std::fill(Invalid.begin(), Invalid.end(), true);
+
+  std::set<const llvm::Function *> PreparedLiftedFunctions;
+  for (const auto &[Key, Block] : PreparedFuncBlocks) {
+    (void)Key;
+    if (Block && Block->getParent())
+      PreparedLiftedFunctions.insert(Block->getParent());
+  }
+  auto IsPreparedLiftedFunction = [&](const llvm::Function *Function) {
+    return Function && !Function->isDeclaration() &&
+           PreparedLiftedFunctions.count(Function);
+  };
+  std::map<const llvm::Function *, const CxxContinuationFunctionPlan *>
+      FunctionPlanOwners;
+  std::set<const llvm::Function *> ConflictingFunctionPlanOwners;
+  for (const CxxContinuationFunctionPlan &Plan : CxxContinuationPlans) {
+    if (!Plan.SourceFunction)
+      continue;
+    auto [It, Inserted] =
+        FunctionPlanOwners.try_emplace(Plan.SourceFunction, &Plan);
+    if (!Inserted && It->second != &Plan)
+      ConflictingFunctionPlanOwners.insert(Plan.SourceFunction);
+  }
+  auto ReturnedBlockAddress = [](const llvm::Value *Value)
+      -> const llvm::BasicBlock * {
+    for (unsigned Depth = 0; Value && Depth != 4; ++Depth) {
+      if (const auto *Address = llvm::dyn_cast<llvm::BlockAddress>(Value))
+        return Address->getBasicBlock();
+
+      unsigned Opcode = 0;
+      const llvm::Value *Operand = nullptr;
+      if (const auto *Expression = llvm::dyn_cast<llvm::ConstantExpr>(Value)) {
+        Opcode = Expression->getOpcode();
+        if (Expression->getNumOperands() == 1)
+          Operand = Expression->getOperand(0);
+      } else if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(Value)) {
+        Opcode = Cast->getOpcode();
+        Operand = Cast->getOperand(0);
+      }
+      if (!Operand ||
+          (Opcode != llvm::Instruction::PtrToInt &&
+           Opcode != llvm::Instruction::BitCast &&
+           Opcode != llvm::Instruction::AddrSpaceCast))
+        return nullptr;
+      Value = Operand;
+    }
+    return nullptr;
+  };
+
+  for (size_t I = 0; I < CxxContinuationPlans.size(); ++I) {
+    CxxContinuationFunctionPlan &Plan = CxxContinuationPlans[I];
+    bool Complete = !Invalid[I] && Plan.BodyEmitted &&
+                    IsPreparedLiftedFunction(Plan.SourceFunction);
+    std::set<const llvm::ReturnInst *> BoundReturns;
+    for (const CxxContinuationReturnBinding &Binding : Plan.Bindings)
+      if (!Binding.Return || !BoundReturns.insert(Binding.Return).second)
+        Complete = false;
+    if (Plan.SourceFunction)
+      for (const llvm::BasicBlock &Block : *Plan.SourceFunction)
+        for (const llvm::Instruction &Instruction : Block)
+          if (const auto *Return = llvm::dyn_cast<llvm::ReturnInst>(&Instruction);
+              Return && !BoundReturns.count(Return))
+            Complete = false;
+    if (BoundReturns.size() != Plan.Bindings.size())
+      Complete = false;
+    for (CxxContinuationReturnBinding &Binding : Plan.Bindings) {
+      if (!Binding.Return ||
+          Binding.Return->getFunction() != Plan.SourceFunction ||
+          Binding.TargetVA == InvalidVA ||
+          ConflictingLiftedCodeBlocks.count(Binding.TargetVA)) {
+        Complete = false;
+        continue;
+      }
+      auto Target = LiftedCodeBlocks.find(Binding.TargetVA);
+      if (Target == LiftedCodeBlocks.end() || !Target->second) {
+        Complete = false;
+        continue;
+      }
+      llvm::BasicBlock *TargetBlock = Target->second;
+      llvm::Function *TargetFunction = TargetBlock->getParent();
+      auto TargetOwnerIt = FunctionPlanOwners.find(TargetFunction);
+      const CxxContinuationFunctionPlan *TargetOwner =
+          TargetOwnerIt != FunctionPlanOwners.end() ? TargetOwnerIt->second
+                                                    : nullptr;
+      const CxxContinuationFunctionPlan *UniqueFH3RangeOwner = nullptr;
+      size_t FH3RangeOwnerCount = 0;
+      for (const CxxContinuationFunctionPlan &Candidate :
+           CxxContinuationPlans) {
+        if (!Candidate.IsFH3RangeOwnerCandidate ||
+            Binding.TargetVA <= Candidate.CodeRangeBegin ||
+            Binding.TargetVA >= Candidate.CodeRangeEnd)
+          continue;
+        UniqueFH3RangeOwner = &Candidate;
+        ++FH3RangeOwnerCount;
+      }
+      if (TargetFunction == Plan.SourceFunction ||
+          CxxContinuationFunctionEntries.count(Binding.TargetVA) != 0 ||
+          !IsPreparedLiftedFunction(TargetFunction) ||
+          ConflictingFunctionPlanOwners.count(TargetFunction) || !TargetOwner ||
+          FH3RangeOwnerCount != 1 || UniqueFH3RangeOwner != TargetOwner ||
+          !TargetOwner->HasFH3GroupIdentity || !TargetOwner->IsSeparated ||
+          TargetOwner->IsCatchFunclet ||
+          TargetOwner->NativeFuncInfoVA != Plan.NativeFuncInfoVA ||
+          Binding.TargetVA <= TargetOwner->CodeRangeBegin ||
+          Binding.TargetVA >= TargetOwner->CodeRangeEnd ||
+          ReturnedBlockAddress(Binding.Return->getReturnValue()) !=
+              TargetBlock) {
+        Complete = false;
+        continue;
+      }
+      Binding.TargetBlock = TargetBlock;
+    }
+    if (!Complete)
+      for (CxxContinuationReturnBinding &Binding : Plan.Bindings)
+        Binding.TargetBlock = nullptr;
+    Plan.Complete = Complete;
+  }
+}
 
 //===----------------------------------------------------------------------===//
 // Type conversion helpers
@@ -331,6 +668,16 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
                      bool MergeableGlobals_,
                      const std::vector<char> *BodyMask) {
 
+  if (BodyMask && BodyMask->size() != Funcs.size()) {
+    // A rejected generation must not leave a reusable emitter exposing the
+    // previous module's transient RETURN bindings or entry arbitration set.
+    // Those pointers belong to the prior LLVMContext/module generation.
+    CxxContinuationPlans.clear();
+    CxxContinuationFunctionEntries.clear();
+    ActiveCxxContinuationPlan.reset();
+    return nullptr;
+  }
+
   Ctx = &LCtx;
   auto Mod_ = std::make_unique<llvm::Module>(ModName, LCtx);
   Mod = Mod_.get();
@@ -376,6 +723,9 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   CodePtrTableGlobals.clear();
   PreparedFuncBlocks.clear();
   LiftedCodeBlocks.clear();
+  ConflictingLiftedCodeBlocks.clear();
+  CxxContinuationPlans.clear();
+  ActiveCxxContinuationPlan.reset();
 
   // Every lazy analysis cache below is keyed by the current MedFunc pointer.
   // A caller may reuse one emitter and place a new function vector at the same
@@ -514,15 +864,31 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   // original runtime thunk authoritative, and resolves both spellings to it.
   std::map<va_t, std::string> NativePersonalityNames;
   std::set<va_t> ConflictingPersonalityAddresses;
-  if (TheArch == Arch::X64 && Fmt == BinaryFormat::COFF) {
+  if ((TheArch == Arch::X64 || TheArch == Arch::ARM ||
+       TheArch == Arch::AArch64) &&
+      Fmt == BinaryFormat::COFF) {
     for (const MedFunc &F : Funcs) {
       if (!F.ExceptionMetadata || F.ExceptionMetadata->PersonalityVA == 0)
         continue;
       const ExceptionPersonality Personality = F.ExceptionMetadata->Personality;
       if (Personality != ExceptionPersonality::CSpecificHandler &&
-          Personality != ExceptionPersonality::CxxFrameHandler3)
+          !((TheArch == Arch::X64 &&
+             (Personality == ExceptionPersonality::CxxFrameHandler3 ||
+              Personality == ExceptionPersonality::CxxFrameHandler4 ||
+              Personality == ExceptionPersonality::GSHandlerCheckEH4)) ||
+            (TheArch == Arch::AArch64 &&
+             Personality == ExceptionPersonality::CxxFrameHandler3)))
         continue;
-      const va_t Address = F.ExceptionMetadata->PersonalityVA;
+      if ((TheArch == Arch::ARM || TheArch == Arch::AArch64) &&
+          !classifyWindowsEHNativeSource(*F.ExceptionMetadata, TheArch, Fmt,
+                                         WindowsEHNativeCapability::IRLowering)
+               .canLowerNativeIR())
+        continue;
+      const va_t Address =
+          TheArch == Arch::ARM
+              ? normalizeCodeAddress(F.ExceptionMetadata->PersonalityVA,
+                                     TheArch, InstructionMode::Thumb)
+              : F.ExceptionMetadata->PersonalityVA;
       const std::string Name = getExceptionPersonalityName(Personality);
       auto [It, Inserted] = NativePersonalityNames.emplace(Address, Name);
       if (!Inserted && It->second != Name)
@@ -570,6 +936,7 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
       continue;
     declareFunc(Func);
   }
+  initializeCxxContinuationPlans(Funcs, BodyMask);
 
   // Build every ordinary block skeleton before emitting the first operation.
   // A code-pointer mirror requested by an early consumer can then name an
@@ -589,7 +956,9 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
       const va_t Address = Block.StartAddr != 0 || Block.Ops.empty()
                                ? Block.StartAddr
                                : Block.Ops.front().Addr;
-      LiftedCodeBlocks.try_emplace(Address, BB);
+      auto [It, Inserted] = LiftedCodeBlocks.try_emplace(Address, BB);
+      if (!Inserted && It->second != BB)
+        ConflictingLiftedCodeBlocks.insert(Address);
     }
   }
 
@@ -602,8 +971,89 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
     const auto &Func = Funcs[I];
     if (Func.Name.empty())
       continue;
+    ActiveCxxContinuationPlan = I;
     emitFunc(Func);
+    ActiveCxxContinuationPlan.reset();
   }
+  ActiveCxxContinuationPlan.reset();
+  finalizeCxxContinuationPlans();
+
+  // Personality bodies are renamed before body emission so an eligible native
+  // lowering can reserve the canonical ABI declaration. Eligibility is only
+  // the first half of the transaction: a missing handler block, conflicting
+  // module flag, or another atomic preflight may still reject every consumer.
+  // If no emitted function actually installed the canonical personality,
+  // restore the address-backed body's source name and remove an unused
+  // declaration instead of leaking a speculative auto-name into analysis IR.
+  for (const auto &[Address, CanonicalName] : NativePersonalityNames) {
+    if (ConflictingPersonalityAddresses.count(Address))
+      continue;
+    bool HasInstalledUse = false;
+    for (const llvm::Function &Function : *Mod_) {
+      const llvm::Attribute GSWriter = Function.getFnAttribute(
+          llvm::mc_rewrite::RewriteWinGSHandlerAttribute);
+      HasInstalledUse |= CanonicalName == "__GSHandlerCheck_EH4" &&
+                         GSWriter.isStringAttribute() &&
+                         GSWriter.getValueAsString() ==
+                             llvm::mc_rewrite::RewriteWinGSHandlerCxxFH4;
+      if (!Function.hasPersonalityFn())
+        continue;
+      const auto *Personality = llvm::dyn_cast<llvm::Function>(
+          Function.getPersonalityFn()->stripPointerCasts());
+      HasInstalledUse |= Personality && Personality->getName() == CanonicalName;
+    }
+    if (HasInstalledUse)
+      continue;
+
+    const auto Source = llvm::find_if(Funcs, [&](const MedFunc &Func) {
+      if (Func.Entry != Address)
+        return false;
+      llvm::StringRef Name(Func.Name);
+      Name.consume_front("\01");
+      return Name == CanonicalName;
+    });
+    auto Emitted = EmittedFuncNames.find(Address);
+    if (Source == Funcs.end() || Emitted == EmittedFuncNames.end())
+      continue;
+    llvm::Function *Body = Mod_->getFunction(Emitted->second);
+    if (!Body || Body->getName() == Source->Name ||
+        Mod_->getNamedValue(Source->Name))
+      continue;
+
+    llvm::GlobalValue *CanonicalValue = Mod_->getNamedValue(CanonicalName);
+    if (CanonicalValue && CanonicalValue != Body) {
+      // The SOH-prefixed source spelling and the ordinary canonical spelling
+      // lower to the same COFF object symbol.  A live declaration therefore
+      // makes restoration unsafe even though it is not installed as a
+      // personality.  Keep the address-backed body under its unique auto name
+      // unless the colliding value is exactly a disposable function
+      // declaration and is removed first.  Aliases and data objects share the
+      // module symbol namespace and are never safe to overwrite here.
+      auto *Canonical = llvm::dyn_cast<llvm::Function>(CanonicalValue);
+      if (!Canonical || !Canonical->isDeclaration() || !Canonical->use_empty())
+        continue;
+      Canonical->eraseFromParent();
+    }
+
+    Body->setName(Source->Name);
+    Emitted->second = Body->getName().str();
+    FuncNames[Address] = Emitted->second;
+  }
+
+  // Keep source-call identity alive across all body emissions.  A Windows C++
+  // function group can be split into a parent plus out-of-line catch/cleanup
+  // contributions, so its module-level finalizer must be able to authenticate
+  // calls from every member before committing any EH mutation.  The marker is
+  // nevertheless an emitter-private implementation detail and must not escape
+  // into optimized, serialized, or caller-visible IR.
+  for (llvm::Function &Function : *Mod_)
+    for (llvm::BasicBlock &Block : Function)
+      for (llvm::Instruction &Instruction : Block) {
+        Instruction.setMetadata(language_eh_md::InternalSourceCallAttachment,
+                                nullptr);
+        Instruction.setMetadata(
+            language_eh_md::InternalCxxContinuationReturnAttachment, nullptr);
+      }
 
   if (FatalCodePointerResolution || FatalDataPointerResolution)
     return nullptr;

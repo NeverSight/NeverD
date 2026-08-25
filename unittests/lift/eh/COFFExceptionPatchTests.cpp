@@ -26,6 +26,8 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <array>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <string>
@@ -93,6 +95,29 @@ void expectPatchError(llvm::Expected<COFFExceptionPatchPlan> Result,
                       llvm::StringRef ExpectedMessage) {
   ASSERT_FALSE(static_cast<bool>(Result));
   EXPECT_EQ(llvm::toString(Result.takeError()), ExpectedMessage);
+}
+
+template <typename T>
+void expectCxxGroupContractError(
+    llvm::Expected<T> Result,
+    exception_rewrite::CxxGroupContractErrorReason ExpectedReason,
+    va_t ExpectedGroup) {
+  ASSERT_FALSE(static_cast<bool>(Result));
+  bool SawContractError = false;
+  llvm::handleAllErrors(
+      Result.takeError(),
+      [&](const exception_rewrite::CxxGroupRewriteContractError &Error) {
+        SawContractError = true;
+        EXPECT_EQ(Error.reason(), ExpectedReason);
+        EXPECT_EQ(Error.groupIdentity(), ExpectedGroup);
+      },
+      [&](const llvm::ErrorInfoBase &Error) {
+        std::string Message;
+        llvm::raw_string_ostream Stream(Message);
+        Error.log(Stream);
+        ADD_FAILURE() << "unexpected wrapped error: " << Stream.str();
+      });
+  EXPECT_TRUE(SawContractError);
 }
 
 struct CompletePatchInput {
@@ -261,6 +286,45 @@ llvm::Function *addCompletePatchFunction(CompletePatchInput &Input,
   Input.Image.ExceptionMetadata.Functions.push_back(std::move(EH));
   Input.Image.ExceptionMetadata.rebuildIndex();
   return Function;
+}
+
+void markSeparatedCxxMember(ExceptionFunction &EH, va_t GroupIdentity,
+                            bool IsCatchFunclet) {
+  EH.Personality = ExceptionPersonality::CxxFrameHandler3;
+  EH.PersonalityVA = GroupIdentity - 0x40;
+  EH.Cxx.emplace();
+  EH.Cxx->NativeEncoding = CxxExceptionInfo::Encoding::FH3;
+  EH.Cxx->NativeFuncInfoVA = GroupIdentity;
+  EH.Cxx->IsCatchFunclet = IsCatchFunclet;
+  EH.Cxx->IsSeparated = true;
+}
+
+void rebuildPatchFunctionTable(
+    CompletePatchInput &Input, llvm::LLVMContext &Context,
+    llvm::ArrayRef<std::pair<llvm::Function *, size_t>> Contributions) {
+  Input.Image.ExceptionMetadata.rebuildIndex();
+  llvm::NamedMDNode *Table =
+      Input.Module->getOrInsertNamedMetadata(windows_eh_md::FunctionTable);
+  Table->clearOperands();
+  for (const auto &[Function, Index] : Contributions) {
+    llvm::MDNode *Payload = windows_eh_md::getCanonicalFunctionMetadata(
+        Context, Input.Image.ExceptionMetadata.Functions[Index], Arch::X64,
+        BinaryFormat::COFF);
+    Function->setMetadata(windows_eh_md::FunctionAttachment, Payload);
+    Table->addOperand(functionTableRow(Context, *Function, *Payload));
+  }
+}
+
+exception_rewrite::CxxGroupRewriteContract makeCompleteCxxGroupContract(
+    va_t GroupIdentity, va_t CanonicalOwner,
+    std::initializer_list<exception_rewrite::CxxGroupMemberBinding> Members) {
+  exception_rewrite::CxxGroupRewriteContract Contract;
+  Contract.GroupIdentity = GroupIdentity;
+  Contract.CanonicalSourceOwnerVA = CanonicalOwner;
+  Contract.Lowering = exception_rewrite::CxxGroupLoweringState::Complete;
+  Contract.Installation = exception_rewrite::CxxGroupInstallState::AllOrNone;
+  Contract.Members.assign(Members.begin(), Members.end());
+  return Contract;
 }
 
 void addMixedSourceLayout(CompletePatchInput &Input, va_t PreservedEntry,
@@ -455,6 +519,485 @@ TEST(COFFExceptionPatch, AcceptsTargetAwareCanonicalSourceReencoding) {
   llvm::Error Error =
       validateCOFFExceptionSourceIdentityClosure(Module, Image);
   EXPECT_FALSE(static_cast<bool>(Error)) << llvm::toString(std::move(Error));
+}
+
+TEST(COFFExceptionPatch,
+     RejectsSharedCxxFuncInfoGroupWithoutAtomicRewriteContract) {
+  llvm::LLVMContext Context;
+  CompletePatchInput Input = makeCompletePatchInput(Context);
+  ASSERT_NE(Input.Module, nullptr);
+  ASSERT_NE(Input.Function, nullptr);
+  llvm::Function *CatchContribution =
+      addCompletePatchFunction(Input, Context, "sub_140002000", 0x140002000);
+  ASSERT_NE(CatchContribution, nullptr);
+  ASSERT_EQ(Input.Image.ExceptionMetadata.Functions.size(), 2u);
+
+  constexpr va_t SharedFuncInfoVA = 0x140003040;
+  for (size_t I = 0; I < Input.Image.ExceptionMetadata.Functions.size(); ++I) {
+    ExceptionFunction &EH = Input.Image.ExceptionMetadata.Functions[I];
+    EH.Personality = ExceptionPersonality::CxxFrameHandler3;
+    EH.PersonalityVA = 0x140003000;
+    EH.Cxx.emplace();
+    EH.Cxx->NativeEncoding = CxxExceptionInfo::Encoding::FH3;
+    EH.Cxx->NativeFuncInfoVA = SharedFuncInfoVA;
+    EH.Cxx->IsCatchFunclet = I != 0;
+    EH.Cxx->IsSeparated = true;
+  }
+  Input.Image.ExceptionMetadata.rebuildIndex();
+
+  llvm::NamedMDNode *Table =
+      Input.Module->getNamedMetadata(windows_eh_md::FunctionTable);
+  ASSERT_NE(Table, nullptr);
+  Table->clearOperands();
+  const std::array<std::pair<llvm::Function *, size_t>, 2> Contributions{{
+      {Input.Function, 0},
+      {CatchContribution, 1},
+  }};
+  for (const auto &[Function, Index] : Contributions) {
+    llvm::MDNode *Payload = windows_eh_md::getCanonicalFunctionMetadata(
+        Context, Input.Image.ExceptionMetadata.Functions[Index], Arch::X64,
+        BinaryFormat::COFF);
+    Function->setMetadata(windows_eh_md::FunctionAttachment, Payload);
+    Table->addOperand(functionTableRow(Context, *Function, *Payload));
+  }
+
+  expectPatchError(
+      planCOFFExceptionPatch(*Input.Module, Input.Image, Arch::X64),
+      "C++ exception group rewrite contract 0x140003040: source group "
+      "membership does not match (replaced source group has no atomic "
+      "rewrite contract)");
+}
+
+TEST(COFFExceptionPatch, RejectsCxxGroupContractWithMissingSourceMember) {
+  llvm::LLVMContext Context;
+  CompletePatchInput Input = makeCompletePatchInput(Context);
+  ASSERT_NE(Input.Module, nullptr);
+  ASSERT_NE(Input.Function, nullptr);
+  llvm::Function *CatchContribution =
+      addCompletePatchFunction(Input, Context, "sub_140002000", 0x140002000);
+  ASSERT_NE(CatchContribution, nullptr);
+
+  constexpr va_t GroupIdentity = 0x140003040;
+  markSeparatedCxxMember(Input.Image.ExceptionMetadata.Functions[0],
+                         GroupIdentity, false);
+  markSeparatedCxxMember(Input.Image.ExceptionMetadata.Functions[1],
+                         GroupIdentity, true);
+  const std::array<std::pair<llvm::Function *, size_t>, 2> Contributions{{
+      {Input.Function, 0},
+      {CatchContribution, 1},
+  }};
+  rebuildPatchFunctionTable(Input, Context, Contributions);
+
+  const auto Contract = makeCompleteCxxGroupContract(
+      GroupIdentity, 0x140001000, {{0x140001000, Input.Function}});
+  ASSERT_FALSE(exception_rewrite::setCxxGroupRewriteContracts(
+      *Input.Module, llvm::ArrayRef(Contract)));
+
+  expectCxxGroupContractError(
+      planCOFFExceptionPatch(*Input.Module, Input.Image, Arch::X64),
+      exception_rewrite::CxxGroupContractErrorReason::MembershipMismatch,
+      GroupIdentity);
+}
+
+TEST(COFFExceptionPatch, RejectsCxxGroupContractForUnknownSourceGroup) {
+  llvm::LLVMContext Context;
+  CompletePatchInput Input = makeCompletePatchInput(Context);
+  ASSERT_NE(Input.Module, nullptr);
+  ASSERT_NE(Input.Function, nullptr);
+  llvm::Function *CatchContribution =
+      addCompletePatchFunction(Input, Context, "sub_140002000", 0x140002000);
+  ASSERT_NE(CatchContribution, nullptr);
+
+  constexpr va_t GroupIdentity = 0x140003040;
+  constexpr va_t UnknownGroupIdentity = 0x140003080;
+  markSeparatedCxxMember(Input.Image.ExceptionMetadata.Functions[0],
+                         GroupIdentity, false);
+  markSeparatedCxxMember(Input.Image.ExceptionMetadata.Functions[1],
+                         GroupIdentity, true);
+  const std::array<std::pair<llvm::Function *, size_t>, 2> Contributions{{
+      {Input.Function, 0},
+      {CatchContribution, 1},
+  }};
+  rebuildPatchFunctionTable(Input, Context, Contributions);
+
+  const std::array<exception_rewrite::CxxGroupRewriteContract, 2> Contracts{{
+      makeCompleteCxxGroupContract(
+          GroupIdentity, 0x140001000,
+          {{0x140001000, Input.Function}, {0x140002000, CatchContribution}}),
+      makeCompleteCxxGroupContract(UnknownGroupIdentity, 0x140001000,
+                                   {{0x140001000, Input.Function}}),
+  }};
+  ASSERT_FALSE(
+      exception_rewrite::setCxxGroupRewriteContracts(*Input.Module, Contracts));
+
+  expectPatchError(
+      planCOFFExceptionPatch(*Input.Module, Input.Image, Arch::X64),
+      "coff exception patch: C++ group contract 0x140003080 has no "
+      "loader-authenticated source group");
+}
+
+TEST(COFFExceptionPatch, RejectsCxxContractMemberBoundAcrossSourceGroups) {
+  llvm::LLVMContext Context;
+  CompletePatchInput Input = makeCompletePatchInput(Context);
+  ASSERT_NE(Input.Module, nullptr);
+  ASSERT_NE(Input.Function, nullptr);
+  llvm::Function *CatchA =
+      addCompletePatchFunction(Input, Context, "sub_140002000", 0x140002000);
+  llvm::Function *ParentB =
+      addCompletePatchFunction(Input, Context, "sub_140003000", 0x140003000);
+  llvm::Function *CatchB =
+      addCompletePatchFunction(Input, Context, "sub_140004000", 0x140004000);
+  ASSERT_NE(CatchA, nullptr);
+  ASSERT_NE(ParentB, nullptr);
+  ASSERT_NE(CatchB, nullptr);
+
+  constexpr va_t GroupA = 0x140005040;
+  constexpr va_t GroupB = 0x140005080;
+  markSeparatedCxxMember(Input.Image.ExceptionMetadata.Functions[0], GroupA,
+                         false);
+  markSeparatedCxxMember(Input.Image.ExceptionMetadata.Functions[1], GroupA,
+                         true);
+  markSeparatedCxxMember(Input.Image.ExceptionMetadata.Functions[2], GroupB,
+                         false);
+  markSeparatedCxxMember(Input.Image.ExceptionMetadata.Functions[3], GroupB,
+                         true);
+  const std::array<std::pair<llvm::Function *, size_t>, 4> Contributions{{
+      {Input.Function, 0},
+      {CatchA, 1},
+      {ParentB, 2},
+      {CatchB, 3},
+  }};
+  rebuildPatchFunctionTable(Input, Context, Contributions);
+
+  const std::array<exception_rewrite::CxxGroupRewriteContract, 2> Contracts{{
+      makeCompleteCxxGroupContract(
+          GroupA, 0x140001000,
+          {{0x140001000, Input.Function}, {0x140004000, CatchB}}),
+      makeCompleteCxxGroupContract(
+          GroupB, 0x140003000, {{0x140002000, CatchA}, {0x140003000, ParentB}}),
+  }};
+  ASSERT_FALSE(
+      exception_rewrite::setCxxGroupRewriteContracts(*Input.Module, Contracts));
+
+  expectCxxGroupContractError(
+      planCOFFExceptionPatch(*Input.Module, Input.Image, Arch::X64),
+      exception_rewrite::CxxGroupContractErrorReason::MembershipMismatch,
+      GroupA);
+}
+
+TEST(COFFExceptionPatch,
+     CompleteCxxGroupContractDoesNotBypassNativeSemanticGate) {
+  llvm::LLVMContext Context;
+  CompletePatchInput Input = makeCompletePatchInput(Context);
+  ASSERT_NE(Input.Module, nullptr);
+  ASSERT_NE(Input.Function, nullptr);
+  llvm::Function *CatchContribution =
+      addCompletePatchFunction(Input, Context, "sub_140002000", 0x140002000);
+  ASSERT_NE(CatchContribution, nullptr);
+
+  constexpr va_t GroupIdentity = 0x140003040;
+  markSeparatedCxxMember(Input.Image.ExceptionMetadata.Functions[0],
+                         GroupIdentity, false);
+  markSeparatedCxxMember(Input.Image.ExceptionMetadata.Functions[1],
+                         GroupIdentity, true);
+  const std::array<std::pair<llvm::Function *, size_t>, 2> Contributions{{
+      {Input.Function, 0},
+      {CatchContribution, 1},
+  }};
+  rebuildPatchFunctionTable(Input, Context, Contributions);
+  const auto Contract = makeCompleteCxxGroupContract(
+      GroupIdentity, 0x140001000,
+      {{0x140001000, Input.Function}, {0x140002000, CatchContribution}});
+  ASSERT_FALSE(exception_rewrite::setCxxGroupRewriteContracts(
+      *Input.Module, llvm::ArrayRef(Contract)));
+
+  auto Plan = planCOFFExceptionPatch(*Input.Module, Input.Image, Arch::X64);
+  ASSERT_FALSE(static_cast<bool>(Plan));
+  const std::string Message = llvm::toString(Plan.takeError());
+  EXPECT_NE(Message.find("target-aware regeneration checks"),
+            std::string::npos);
+  EXPECT_NE(Message.find("unsupported-cxx-version"), std::string::npos);
+  EXPECT_EQ(Message.find("atomic group rewrite contract"), std::string::npos);
+}
+
+TEST(COFFExceptionPatch,
+     DirectoryPreparationRejectsPartialSharedCxxFuncInfoIdentityConflict) {
+  constexpr va_t ImageBase = 0x140000000;
+  constexpr va_t SharedFuncInfoVA = ImageBase + 0x3040;
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Format = BinaryFormat::COFF;
+  Image.Base = ImageBase;
+
+  ExceptionFunction Parent;
+  Parent.CodeRange = {ImageBase + 0x1000, ImageBase + 0x1020};
+  Parent.Kind = RuntimeFunctionKind::Primary;
+  Parent.Cxx.emplace();
+  Parent.Cxx->NativeEncoding = CxxExceptionInfo::Encoding::FH3;
+  Parent.Cxx->NativeFuncInfoVA = SharedFuncInfoVA;
+  // Two records sharing the identity contradict a non-separated claim.  The
+  // conflict cannot downgrade the group into independently replaceable rows.
+  Parent.Cxx->IsSeparated = false;
+  ExceptionFunction CatchContribution = Parent;
+  CatchContribution.CodeRange = {ImageBase + 0x2000, ImageBase + 0x2020};
+  Image.ExceptionMetadata.Functions.push_back(std::move(Parent));
+  Image.ExceptionMetadata.Functions.push_back(std::move(CatchContribution));
+  Image.ExceptionMetadata.rebuildIndex();
+
+  CompiledImage Compiled;
+  const std::vector<uint8_t> InvalidPE{0};
+  const std::array<va_t, 1> PatchedEntries{{ImageBase + 0x1000}};
+  auto Update = prepareCOFFExceptionDirectory(
+      InvalidPE, Image, Compiled, PatchedEntries,
+      llvm::ArrayRef<std::pair<va_t, va_t>>(), ImageBase + 0x10000, Arch::X64);
+
+  ASSERT_FALSE(static_cast<bool>(Update));
+  EXPECT_EQ(llvm::toString(Update.takeError()),
+            "coff exception patch: shared C++ FuncInfo group 0x140003040 "
+            "has inconsistent separated-member flags");
+  EXPECT_TRUE(Compiled.Bytes.empty());
+  EXPECT_TRUE(Compiled.Sections.empty());
+}
+
+TEST(COFFExceptionPatch,
+     DirectoryPreparationRequiresModuleForSingletonSeparatedCxxGroup) {
+  constexpr va_t ImageBase = 0x140000000;
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Format = BinaryFormat::COFF;
+  Image.Base = ImageBase;
+
+  ExceptionFunction LoneContribution;
+  LoneContribution.CodeRange = {ImageBase + 0x1000, ImageBase + 0x1020};
+  LoneContribution.Kind = RuntimeFunctionKind::Primary;
+  LoneContribution.Cxx.emplace();
+  LoneContribution.Cxx->NativeEncoding = CxxExceptionInfo::Encoding::FH3;
+  LoneContribution.Cxx->NativeFuncInfoVA = ImageBase + 0x3040;
+  LoneContribution.Cxx->IsSeparated = true;
+  Image.ExceptionMetadata.Functions.push_back(std::move(LoneContribution));
+  Image.ExceptionMetadata.rebuildIndex();
+
+  CompiledImage Compiled;
+  const std::vector<uint8_t> InvalidPE{0};
+  const std::array<va_t, 1> PatchedEntries{{ImageBase + 0x1000}};
+  auto Update = prepareCOFFExceptionDirectory(
+      InvalidPE, Image, Compiled, PatchedEntries,
+      llvm::ArrayRef<std::pair<va_t, va_t>>(), ImageBase + 0x10000, Arch::X64);
+
+  ASSERT_FALSE(static_cast<bool>(Update));
+  EXPECT_EQ(llvm::toString(Update.takeError()),
+            "coff exception patch: C++ FuncInfo group installation requires "
+            "the rewrite module");
+  EXPECT_TRUE(Compiled.Bytes.empty());
+  EXPECT_TRUE(Compiled.Sections.empty());
+}
+
+TEST(COFFExceptionPatch,
+     DirectoryPreparationRejectsMalformedCxxGroupInventoriesBeforePEParsing) {
+  constexpr va_t ImageBase = 0x140000000;
+  const std::vector<uint8_t> InvalidPE{0};
+  auto MakeImage = [&] {
+    BinaryImage Image;
+    Image.Arch = Arch::X64;
+    Image.Format = BinaryFormat::COFF;
+    Image.Base = ImageBase;
+    return Image;
+  };
+  auto MakeMember = [&](va_t Begin, va_t End, va_t GroupIdentity, bool IsCatch,
+                        RuntimeFunctionKind Kind =
+                            RuntimeFunctionKind::Primary) {
+    ExceptionFunction EH;
+    EH.CodeRange = {Begin, End};
+    EH.Kind = Kind;
+    EH.Cxx.emplace();
+    EH.Cxx->NativeFuncInfoVA = GroupIdentity;
+    EH.Cxx->IsCatchFunclet = IsCatch;
+    EH.Cxx->IsSeparated = true;
+    return EH;
+  };
+  auto ErrorFor = [&](BinaryImage Image, llvm::ArrayRef<va_t> Entries) {
+    CompiledImage Compiled;
+    auto Update =
+        prepareCOFFExceptionDirectory(InvalidPE, Image, Compiled, Entries,
+                                      llvm::ArrayRef<std::pair<va_t, va_t>>(),
+                                      ImageBase + 0x10000, Arch::X64);
+    EXPECT_FALSE(static_cast<bool>(Update));
+    return Update ? std::string() : llvm::toString(Update.takeError());
+  };
+
+  {
+    BinaryImage Image = MakeImage();
+    Image.ExceptionMetadata.Functions.push_back(
+        MakeMember(ImageBase + 0x1000, ImageBase + 0x1020, 0, false));
+    const std::array<va_t, 1> Entries{{ImageBase + 0x1000}};
+    EXPECT_EQ(ErrorFor(std::move(Image), Entries),
+              "coff exception patch: separated C++ EH contribution lacks a "
+              "valid native FuncInfo group identity");
+  }
+  {
+    BinaryImage Image = MakeImage();
+    constexpr va_t GroupIdentity = ImageBase + 0x3040;
+    Image.ExceptionMetadata.Functions.push_back(MakeMember(
+        ImageBase + 0x1000, ImageBase + 0x1020, GroupIdentity, false));
+    Image.ExceptionMetadata.Functions.push_back(MakeMember(
+        ImageBase + 0x1000, ImageBase + 0x1020, GroupIdentity, true));
+    const std::array<va_t, 1> Entries{{ImageBase + 0x1000}};
+    EXPECT_EQ(ErrorFor(std::move(Image), Entries),
+              "coff exception patch: C++ FuncInfo group 0x140003040 contains "
+              "a duplicate primary member entry");
+  }
+  {
+    BinaryImage Image = MakeImage();
+    constexpr va_t GroupIdentity = ImageBase + 0x3040;
+    Image.ExceptionMetadata.Functions.push_back(MakeMember(
+        ImageBase + 0x1000, ImageBase + 0x1020, GroupIdentity, false));
+    Image.ExceptionMetadata.Functions.push_back(MakeMember(
+        ImageBase + 0x2000, ImageBase + 0x2020, GroupIdentity, false));
+    const std::array<va_t, 2> Entries{{ImageBase + 0x1000, ImageBase + 0x2000}};
+    EXPECT_EQ(ErrorFor(std::move(Image), Entries),
+              "coff exception patch: C++ FuncInfo group 0x140003040 does "
+              "not have exactly one canonical parent");
+  }
+  {
+    BinaryImage Image = MakeImage();
+    constexpr va_t GroupIdentity = ImageBase + 0x3040;
+    Image.ExceptionMetadata.Functions.push_back(MakeMember(
+        ImageBase + 0x1000, ImageBase + 0x1020, GroupIdentity, false));
+    Image.ExceptionMetadata.Functions.push_back(
+        MakeMember(ImageBase + 0x2000, ImageBase + 0x2020, GroupIdentity, true,
+                   RuntimeFunctionKind::Fragment));
+    const std::array<va_t, 1> Entries{{ImageBase + 0x1000}};
+    EXPECT_EQ(ErrorFor(std::move(Image), Entries),
+              "coff exception patch: C++ FuncInfo group 0x140003040 contains "
+              "a non-primary runtime-function record");
+  }
+  {
+    BinaryImage Image = MakeImage();
+    constexpr va_t GroupA = ImageBase + 0x3040;
+    constexpr va_t GroupB = ImageBase + 0x3080;
+    Image.ExceptionMetadata.Functions.push_back(
+        MakeMember(ImageBase + 0x1000, ImageBase + 0x1030, GroupA, false));
+    Image.ExceptionMetadata.Functions.push_back(
+        MakeMember(ImageBase + 0x2000, ImageBase + 0x2020, GroupA, true));
+    Image.ExceptionMetadata.Functions.push_back(
+        MakeMember(ImageBase + 0x1020, ImageBase + 0x1040, GroupB, false));
+    Image.ExceptionMetadata.Functions.push_back(
+        MakeMember(ImageBase + 0x3000, ImageBase + 0x3020, GroupB, true));
+    const std::array<va_t, 4> Entries{{
+        ImageBase + 0x1000,
+        ImageBase + 0x1020,
+        ImageBase + 0x2000,
+        ImageBase + 0x3000,
+    }};
+    EXPECT_EQ(ErrorFor(std::move(Image), Entries),
+              "coff exception patch: C++ FuncInfo group inventories overlap "
+              "at primary member entry 0x140001020");
+  }
+}
+
+TEST(COFFExceptionPatch,
+     DirectoryPreparationAcceptsCompleteResolvedCxxGroupPreflight) {
+  llvm::LLVMContext Context;
+  CompletePatchInput Input = makeCompletePatchInput(Context);
+  ASSERT_NE(Input.Module, nullptr);
+  ASSERT_NE(Input.Function, nullptr);
+  llvm::Function *CatchContribution =
+      addCompletePatchFunction(Input, Context, "sub_140002000", 0x140002000);
+  ASSERT_NE(CatchContribution, nullptr);
+
+  constexpr va_t SharedFuncInfoVA = 0x140003040;
+  ASSERT_EQ(Input.Image.ExceptionMetadata.Functions.size(), 2u);
+  for (size_t I = 0; I < Input.Image.ExceptionMetadata.Functions.size(); ++I) {
+    ExceptionFunction &EH = Input.Image.ExceptionMetadata.Functions[I];
+    EH.Personality = ExceptionPersonality::CxxFrameHandler3;
+    EH.PersonalityVA = 0x140003000;
+    EH.Cxx.emplace();
+    EH.Cxx->NativeEncoding = CxxExceptionInfo::Encoding::FH3;
+    EH.Cxx->NativeFuncInfoVA = SharedFuncInfoVA;
+    EH.Cxx->IsCatchFunclet = I != 0;
+    EH.Cxx->IsSeparated = true;
+  }
+  Input.Image.ExceptionMetadata.rebuildIndex();
+
+  llvm::NamedMDNode *Table =
+      Input.Module->getNamedMetadata(windows_eh_md::FunctionTable);
+  ASSERT_NE(Table, nullptr);
+  Table->clearOperands();
+  const std::array<std::pair<llvm::Function *, size_t>, 2> Contributions{{
+      {Input.Function, 0},
+      {CatchContribution, 1},
+  }};
+  for (const auto &[Function, Index] : Contributions) {
+    llvm::MDNode *Payload = windows_eh_md::getCanonicalFunctionMetadata(
+        Context, Input.Image.ExceptionMetadata.Functions[Index], Arch::X64,
+        BinaryFormat::COFF);
+    Function->setMetadata(windows_eh_md::FunctionAttachment, Payload);
+    Table->addOperand(functionTableRow(Context, *Function, *Payload));
+  }
+
+  exception_rewrite::CxxGroupRewriteContract Contract;
+  Contract.GroupIdentity = SharedFuncInfoVA;
+  Contract.CanonicalSourceOwnerVA = 0x140001000;
+  Contract.Lowering = exception_rewrite::CxxGroupLoweringState::Complete;
+  Contract.Installation = exception_rewrite::CxxGroupInstallState::AllOrNone;
+  Contract.Members = {{0x140001000, Input.Function},
+                      {0x140002000, CatchContribution}};
+  ASSERT_FALSE(exception_rewrite::setCxxGroupRewriteContracts(
+      *Input.Module, llvm::ArrayRef(Contract)));
+
+  constexpr va_t GeneratedBase = 0x140010000;
+  CompiledImage Compiled;
+  Compiled.SourceFunctionOriginalVAs = {
+      {Input.Function->getName().str(), 0x140001000},
+      {CatchContribution->getName().str(), 0x140002000},
+  };
+  using OwnerKind = llvm::mc_rewrite::RewriteSourceFunctionOwnerKind;
+  Compiled.SourceFunctionOwners = {
+      {Input.Function->getName().str(),
+       "parent.owner",
+       GeneratedBase,
+       false,
+       OwnerKind::FunctionEntry,
+       {}},
+      {CatchContribution->getName().str(), "catch.owner", GeneratedBase + 0x20,
+       true, OwnerKind::WinCxxCatchFunclet, Input.Function->getName().str()},
+  };
+  Compiled.FunctionOwnerAddrs = {{"parent.owner", GeneratedBase},
+                                 {"catch.owner", GeneratedBase + 0x20}};
+  Compiled.Sections.push_back({".text", 0, GeneratedBase, 0x40, 16,
+                               llvm::mc_rewrite::RewriteSectionKind::Code,
+                               true});
+
+  const std::vector<uint8_t> InvalidPE{0};
+  const std::array<va_t, 2> PatchedEntries{{0x140001000, 0x140002000}};
+  const std::array<std::pair<va_t, va_t>, 2> PatchedMappings{{
+      {0x140001000, GeneratedBase},
+      {0x140002000, GeneratedBase + 0x20},
+  }};
+  const std::array<std::pair<va_t, va_t>, 2> WrongMappings{{
+      {0x140001000, GeneratedBase + 0x20},
+      {0x140002000, GeneratedBase},
+  }};
+  auto Rejected = prepareCOFFExceptionDirectory(
+      InvalidPE, Input.Image, Compiled, PatchedEntries, WrongMappings,
+      GeneratedBase, Arch::X64, Input.Module.get());
+  ASSERT_FALSE(static_cast<bool>(Rejected));
+  EXPECT_EQ(llvm::toString(Rejected.takeError()),
+            "coff exception patch: C++ FuncInfo group 0x140003040 member "
+            "0x140001000 lacks its exact generated-owner mapping");
+  EXPECT_TRUE(Compiled.Bytes.empty());
+  ASSERT_EQ(Compiled.Sections.size(), 1u);
+
+  auto Update = prepareCOFFExceptionDirectory(
+      InvalidPE, Input.Image, Compiled, PatchedEntries, PatchedMappings,
+      GeneratedBase, Arch::X64, Input.Module.get());
+
+  ASSERT_FALSE(static_cast<bool>(Update));
+  EXPECT_EQ(llvm::toString(Update.takeError()),
+            "coff exception patch: invalid PE headers");
+  EXPECT_TRUE(Compiled.Bytes.empty());
+  ASSERT_EQ(Compiled.Sections.size(), 1u);
+  EXPECT_EQ(Compiled.Sections.front().Size, 0x40u);
 }
 
 TEST(COFFExceptionPatch,
@@ -871,6 +1414,148 @@ TEST(COFFExceptionPatch,
   EXPECT_EQ(moduleIR(*Input.Module), Before);
   EXPECT_FALSE(Input.Function->isDeclaration());
   EXPECT_FALSE(Replaceable->isDeclaration());
+}
+
+TEST(COFFExceptionPatch,
+     SourcePreparationRejectsMixedCxxGroupBeforeMutatingModule) {
+  llvm::LLVMContext Context;
+  CompletePatchInput Input = makeCompletePatchInput(Context);
+  ASSERT_NE(Input.Module, nullptr);
+  ASSERT_NE(Input.Function, nullptr);
+  llvm::Function *Replaceable =
+      addCompletePatchFunction(Input, Context, "sub_140002000", 0x140002000);
+  ASSERT_NE(Replaceable, nullptr);
+  addMixedSourceLayout(Input, 0x140001000, 0x140002000);
+
+  constexpr va_t SharedFuncInfoVA = 0x140003040;
+  ASSERT_EQ(Input.Image.ExceptionMetadata.Functions.size(), 2u);
+  for (size_t I = 0; I < Input.Image.ExceptionMetadata.Functions.size(); ++I) {
+    ExceptionFunction &EH = Input.Image.ExceptionMetadata.Functions[I];
+    EH.Personality = ExceptionPersonality::CxxFrameHandler3;
+    EH.PersonalityVA = 0x140003000;
+    EH.Cxx.emplace();
+    EH.Cxx->NativeEncoding = CxxExceptionInfo::Encoding::FH3;
+    EH.Cxx->NativeFuncInfoVA = SharedFuncInfoVA;
+    EH.Cxx->IsCatchFunclet = I != 0;
+    EH.Cxx->IsSeparated = true;
+  }
+  Input.Image.ExceptionMetadata.rebuildIndex();
+
+  llvm::NamedMDNode *Table =
+      Input.Module->getNamedMetadata(windows_eh_md::FunctionTable);
+  ASSERT_NE(Table, nullptr);
+  Table->clearOperands();
+  const std::array<std::pair<llvm::Function *, size_t>, 2> Contributions{{
+      {Input.Function, 0},
+      {Replaceable, 1},
+  }};
+  for (const auto &[Function, Index] : Contributions) {
+    llvm::MDNode *Payload = windows_eh_md::getCanonicalFunctionMetadata(
+        Context, Input.Image.ExceptionMetadata.Functions[Index], Arch::X64,
+        BinaryFormat::COFF);
+    Function->setMetadata(windows_eh_md::FunctionAttachment, Payload);
+    Table->addOperand(functionTableRow(Context, *Function, *Payload));
+  }
+
+  const std::string Before = moduleIR(*Input.Module);
+  SourceFunctionPreparation Preparation;
+  std::string Detail;
+  EXPECT_FALSE(SourcePreparationProbe::prepare(*Input.Module, &Input.Image,
+                                               Preparation, Detail));
+  EXPECT_EQ(Detail,
+            "coff exception patch: C++ FuncInfo group 0x140003040 cannot "
+            "mix replaced and preserved source members");
+  EXPECT_EQ(moduleIR(*Input.Module), Before);
+  EXPECT_FALSE(Input.Function->isDeclaration());
+  EXPECT_FALSE(Replaceable->isDeclaration());
+}
+
+TEST(COFFExceptionPatch,
+     SourcePreparationRemovesWhollyPreservedCxxGroupContract) {
+  llvm::LLVMContext Context;
+  CompletePatchInput Input = makeCompletePatchInput(Context);
+  ASSERT_NE(Input.Module, nullptr);
+  ASSERT_NE(Input.Function, nullptr);
+  llvm::Function *CatchContribution =
+      addCompletePatchFunction(Input, Context, "sub_140002000", 0x140002000);
+  llvm::Function *Replaceable =
+      addCompletePatchFunction(Input, Context, "sub_140003000", 0x140003000);
+  ASSERT_NE(CatchContribution, nullptr);
+  ASSERT_NE(Replaceable, nullptr);
+
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = 0x140001000;
+  Text.Size = 0x2040;
+  Text.FileSz = Text.Size;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(static_cast<size_t>(Text.Size));
+  Input.Image.Segments.push_back(std::move(Text));
+  Input.Image.Symbols.push_back(Symbol::makeFunc(0x140001000, 0x20));
+  Input.Image.Symbols.push_back(Symbol::makeFunc(0x140001001, 1));
+  Input.Image.Symbols.push_back(Symbol::makeFunc(0x140002000, 0x20));
+  Input.Image.Symbols.push_back(Symbol::makeFunc(0x140002001, 1));
+  Input.Image.Symbols.push_back(Symbol::makeFunc(0x140003000, 0x20));
+
+  constexpr va_t SharedFuncInfoVA = 0x140004040;
+  for (size_t I = 0; I < 2; ++I) {
+    ExceptionFunction &EH = Input.Image.ExceptionMetadata.Functions[I];
+    EH.Personality = ExceptionPersonality::CxxFrameHandler3;
+    EH.PersonalityVA = 0x140004000;
+    EH.Cxx.emplace();
+    EH.Cxx->NativeEncoding = CxxExceptionInfo::Encoding::FH3;
+    EH.Cxx->NativeFuncInfoVA = SharedFuncInfoVA;
+    EH.Cxx->IsCatchFunclet = I != 0;
+    EH.Cxx->IsSeparated = true;
+  }
+  Input.Image.ExceptionMetadata.rebuildIndex();
+
+  llvm::NamedMDNode *Table =
+      Input.Module->getNamedMetadata(windows_eh_md::FunctionTable);
+  ASSERT_NE(Table, nullptr);
+  Table->clearOperands();
+  const std::array<std::pair<llvm::Function *, size_t>, 3> Contributions{{
+      {Input.Function, 0},
+      {CatchContribution, 1},
+      {Replaceable, 2},
+  }};
+  for (const auto &[Function, Index] : Contributions) {
+    llvm::MDNode *Payload = windows_eh_md::getCanonicalFunctionMetadata(
+        Context, Input.Image.ExceptionMetadata.Functions[Index], Arch::X64,
+        BinaryFormat::COFF);
+    Function->setMetadata(windows_eh_md::FunctionAttachment, Payload);
+    Table->addOperand(functionTableRow(Context, *Function, *Payload));
+  }
+
+  exception_rewrite::CxxGroupRewriteContract Contract;
+  Contract.GroupIdentity = SharedFuncInfoVA;
+  Contract.CanonicalSourceOwnerVA = 0x140001000;
+  Contract.Lowering = exception_rewrite::CxxGroupLoweringState::Complete;
+  Contract.Installation = exception_rewrite::CxxGroupInstallState::AllOrNone;
+  Contract.Members = {{0x140001000, Input.Function},
+                      {0x140002000, CatchContribution}};
+  ASSERT_FALSE(exception_rewrite::setCxxGroupRewriteContracts(
+      *Input.Module, llvm::ArrayRef(Contract)));
+
+  SourceFunctionPreparation Preparation;
+  std::string Detail;
+  ASSERT_TRUE(SourcePreparationProbe::prepare(*Input.Module, &Input.Image,
+                                              Preparation, Detail))
+      << Detail;
+  EXPECT_TRUE(Input.Function->isDeclaration());
+  EXPECT_TRUE(CatchContribution->isDeclaration());
+  EXPECT_FALSE(Replaceable->isDeclaration());
+  EXPECT_EQ(
+      Input.Module->getNamedMetadata(exception_rewrite::CxxGroupTableMetadata),
+      nullptr);
+  llvm::NamedMDNode *RetainedTable =
+      Input.Module->getNamedMetadata(windows_eh_md::FunctionTable);
+  ASSERT_NE(RetainedTable, nullptr);
+  ASSERT_EQ(RetainedTable->getNumOperands(), 1u);
+  const auto *FunctionValue = llvm::dyn_cast<llvm::ValueAsMetadata>(
+      RetainedTable->getOperand(0)->getOperand(0).get());
+  ASSERT_NE(FunctionValue, nullptr);
+  EXPECT_EQ(FunctionValue->getValue(), Replaceable);
 }
 
 TEST(COFFExceptionPatch,

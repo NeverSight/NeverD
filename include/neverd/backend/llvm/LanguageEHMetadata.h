@@ -25,9 +25,16 @@ namespace neverd::language_eh_md {
 inline constexpr llvm::StringLiteral ItaniumAttachment("neverd.itanium.eh");
 
 /// Transient marker used only while an emitted source CALL is matched back to
-/// its native address.  emitFunc removes it before returning the module.
+/// its native address.  Module emission removes it after every function body
+/// and module-level EH finalizer have finished, before returning the module.
 inline constexpr llvm::StringLiteral
     InternalSourceCallAttachment("neverd.internal.source-call");
+
+/// Transient exact-occurrence marker for a MedIR RETURN carrying a recovered
+/// separated C++ continuation.  The module finalizer consumes and removes it
+/// before emit() returns; it is never part of the public LLVM IR contract.
+inline constexpr llvm::StringLiteral InternalCxxContinuationReturnAttachment(
+    "neverd.internal.cxx-continuation-return");
 
 enum ItaniumOperand : unsigned {
   /// Personality symbol the function was given.

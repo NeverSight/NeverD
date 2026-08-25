@@ -177,20 +177,21 @@ codeRangesForStates(const ExceptionFunction &EH, const CxxExceptionInfo &Cxx,
   return Ranges;
 }
 
-void addSEHCandidates(const ExceptionFunction &EH,
+void addSEHCandidates(const ExceptionFunction &EH, Arch TargetArch,
                       std::vector<RegionCandidate> &Candidates,
                       unsigned &Rejected) {
   if (!EH.SEH)
     return;
   std::map<std::pair<va_t, va_t>, size_t> ByRange;
   for (const SEHScopeRecord &Scope : EH.SEH->Scopes) {
+    const std::optional<ExceptionAddressRange> SemanticRange =
+        getSemanticSEHGuardedRange(Scope, TargetArch, EH.CodeRange);
     if (Scope.ParseStatus != ExceptionParseStatus::Complete ||
-        !Scope.GuardedRange.isValid() ||
-        !EH.CodeRange.contains(Scope.GuardedRange)) {
+        !SemanticRange) {
       ++Rejected;
       continue;
     }
-    auto Key = std::make_pair(Scope.GuardedRange.Begin, Scope.GuardedRange.End);
+    auto Key = std::make_pair(SemanticRange->Begin, SemanticRange->End);
     size_t Index = 0;
     if (auto It = ByRange.find(Key); It != ByRange.end()) {
       Index = It->second;
@@ -199,7 +200,7 @@ void addSEHCandidates(const ExceptionFunction &EH,
       ByRange.emplace(Key, Index);
       RegionCandidate Candidate;
       Candidate.Kind = StmtKind::SEHTry;
-      Candidate.Range = Scope.GuardedRange;
+      Candidate.Range = *SemanticRange;
       Candidates.push_back(std::move(Candidate));
     }
 
@@ -554,7 +555,7 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
   std::vector<RegionCandidate> Candidates;
   unsigned Rejected = 0;
   if (EH.ParseStatus == ExceptionParseStatus::Complete) {
-    addSEHCandidates(EH, Candidates, Rejected);
+    addSEHCandidates(EH, TargetArch, Candidates, Rejected);
     addCxxCandidates(EH, Candidates, Rejected);
     addItaniumCandidates(EH, Candidates, Rejected);
   } else {
