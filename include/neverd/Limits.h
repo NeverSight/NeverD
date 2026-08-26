@@ -99,11 +99,11 @@ constexpr uint32_t kMaxJumpTableConsumerAuditMatchEvidenceWork = 16777216;
 /// boundary.
 constexpr uint32_t kMaxI386GOTModelEvidenceWork = 1048576;
 
-/// Candidate-local exact GOTOFF reaching proof.  The same large expanded graph
-/// consumes about 581 Ki after occurrence and cache bookkeeping.  This
+/// Candidate-local exact GOTOFF reaching proof.  An O0 140-way i386 expanded
+/// graph consumes about 1.50 MiB after occurrence and cache bookkeeping.  This
 /// allowance is reserved from, and refunds its unused tail to, the candidate
 /// aggregate account; it is not a fresh per-query budget.
-constexpr uint32_t kMaxI386GOTOFFProposalEvidenceWork = 1048576;
+constexpr uint32_t kMaxI386GOTOFFProposalEvidenceWork = 2097152;
 
 /// Structural-symbolization allowance shared by the exact unsigned-modulo
 /// recipe queries for one candidate.  Expression visits also debit the
