@@ -3634,7 +3634,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     const std::vector<va_t> *CandidateTargetsOverride, size_t *GraphWorkBudget,
     size_t LocalMatchEvidenceLimit,
     const std::set<va_t> *CandidateBranchesSharingTargets,
-    std::vector<uint64_t> *QueryUnsignedFeasibleMasks) const {
+    std::vector<uint64_t> *QueryUnsignedFeasibleMasks,
+    uint32_t ResolverDepthLimit) const {
   if (AnalysisComplete)
     *AnalysisComplete = false;
   if (QueryAnalysisComplete)
@@ -3699,6 +3700,9 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       return Results;
   }
   bool Complete = true;
+  const uint32_t MaxResolverDepth =
+      ResolverDepthLimit != 0 ? ResolverDepthLimit
+                              : limits::kMaxJumpTableGuardExpressionDepth;
   if (QueryAnalysisComplete)
     std::fill(QueryAnalysisComplete->begin(), QueryAnalysisComplete->end(),
               true);
@@ -4061,7 +4065,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       sameResolverValueForEdge =
           [&](const ResolverValue &A, const ResolverValue &B,
               unsigned Depth) -> bool {
-    if (Depth > limits::kMaxJumpTableGuardExpressionDepth) {
+    if (Depth > MaxResolverDepth) {
       QueryResolverAnalysisIncomplete = true;
       return false;
     }
@@ -4263,10 +4267,6 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
 
   resolveFrameVar = [&](int Block, int Before, const NdVar &Value,
                         unsigned Depth) -> FrameResult {
-    if (Depth > limits::kMaxJumpTableGuardExpressionDepth) {
-      QueryResolverAnalysisIncomplete = true;
-      return frameInvalid();
-    }
     if (Block < 0 || Block >= static_cast<int>(Graph.Blocks.size()) ||
         Before < 0 || !CurrentImg ||
         Value.Size < CurrentImg->getPointerSize() ||
@@ -4277,6 +4277,10 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       return frameInvalid();
     if (Value.isReg())
       return resolveFrameBase(Block, Before, Value.Offset, Depth);
+    if (Depth > MaxResolverDepth) {
+      QueryResolverAnalysisIncomplete = true;
+      return frameInvalid();
+    }
     if (!Value.isTemp())
       return frameInvalid();
     const std::vector<LowOp> &Ops = Graph.Blocks[Block].Ops;
@@ -4336,10 +4340,6 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
 
   resolveFrameBase = [&](int Block, int Before, uint64_t BaseReg,
                          unsigned Depth) -> FrameResult {
-    if (Depth > limits::kMaxJumpTableGuardExpressionDepth) {
-      QueryResolverAnalysisIncomplete = true;
-      return frameInvalid();
-    }
     if (Block < 0 || Block >= static_cast<int>(Graph.Blocks.size()) ||
         Before < 0)
       return frameInvalid();
@@ -4350,6 +4350,10 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     auto MemoIt = FrameMemo.find(Key);
     if (MemoIt != FrameMemo.end())
       return MemoIt->second ? *MemoIt->second : frameCycle();
+    if (Depth > MaxResolverDepth) {
+      QueryResolverAnalysisIncomplete = true;
+      return frameInvalid();
+    }
     if (!consumeMemoInsert(FrameKeyWork, FrameMemo.size()))
       return frameInvalid();
     MemoIt = FrameMemo.try_emplace(Key, std::nullopt).first;
@@ -4640,10 +4644,6 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   resolveMemory = [&](int Block, int Before, uint64_t SlotBase,
                       int64_t SlotOffset, uint16_t Size,
                       unsigned Depth) -> ResolverResult {
-    if (Depth > limits::kMaxJumpTableGuardExpressionDepth) {
-      QueryResolverAnalysisIncomplete = true;
-      return resolverInvalid();
-    }
     if (Block < 0 || Block >= static_cast<int>(Graph.Blocks.size()) ||
         Before < 0 || Size == 0)
       return resolverInvalid();
@@ -4654,6 +4654,10 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     auto MemoIt = MemoryMemo.find(Key);
     if (MemoIt != MemoryMemo.end())
       return MemoIt->second ? *MemoIt->second : resolverCycle();
+    if (Depth > MaxResolverDepth) {
+      QueryResolverAnalysisIncomplete = true;
+      return resolverInvalid();
+    }
     if (!consumeMemoInsert(MemoryKeyWork, MemoryMemo.size()))
       return resolverInvalid();
     MemoIt = MemoryMemo.try_emplace(Key, std::nullopt).first;
@@ -4942,10 +4946,6 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
 
   resolveValue = [&](int Block, int Before, const NdVar &V,
                      unsigned Depth) -> ResolverResult {
-    if (Depth > limits::kMaxJumpTableGuardExpressionDepth) {
-      QueryResolverAnalysisIncomplete = true;
-      return resolverInvalid();
-    }
     if (Block < 0 || Block >= static_cast<int>(Graph.Blocks.size()) ||
         Before < 0 || V.Size == 0 || (!V.isReg() && !V.isTemp()))
       return resolverInvalid();
@@ -4956,6 +4956,13 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     auto MemoIt = ValueMemo.find(Key);
     if (MemoIt != ValueMemo.end())
       return MemoIt->second ? *MemoIt->second : resolverCycle();
+    // A bounded recursive walk may revisit an exact active state at the depth
+    // boundary.  Consult the prepaid memo first so that back edges close as a
+    // cycle; only a genuinely new state beyond the limit is incomplete.
+    if (Depth > MaxResolverDepth) {
+      QueryResolverAnalysisIncomplete = true;
+      return resolverInvalid();
+    }
     if (!consumeMemoInsert(ValueKeyWork, ValueMemo.size()))
       return resolverInvalid();
     MemoIt = ValueMemo.try_emplace(Key, std::nullopt).first;
@@ -5777,7 +5784,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       sameResolverValueBudgeted = [&](const ResolverValue &A,
                                       const ResolverValue &B,
                                       unsigned Depth) {
-        if (Depth > limits::kMaxJumpTableGuardExpressionDepth) {
+        if (Depth > MaxResolverDepth) {
           MatchBudgetExhausted = true;
           Complete = false;
           return false;
@@ -5961,7 +5968,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     std::function<symbolic::SymRef(const ResolverValue &, unsigned)> Symbolize =
         [&](const ResolverValue &Node, unsigned Depth) -> symbolic::SymRef {
       if (!Node || Node->Size == 0 || Node->Size > sizeof(uint64_t) ||
-          Depth > limits::kMaxJumpTableGuardExpressionDepth) {
+          Depth > MaxResolverDepth) {
         Exhausted = true;
         SymbolBudgetExhausted = true;
         return {};
@@ -6079,8 +6086,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             CollectUniformExtensionEnvelope =
                 [&](const ResolverValue &Arm, unsigned EnvelopeDepth) {
                   if (!Arm || Arm->Size != Node->Size ||
-                      EnvelopeDepth >
-                          limits::kMaxJumpTableGuardExpressionDepth ||
+                      EnvelopeDepth > MaxResolverDepth ||
                       !consumeSymbolWork())
                     return false;
                   if ((Arm->K == ResolverValueExpr::Kind::ZeroExtend ||
@@ -6343,7 +6349,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       std::function<FeasibleProofOutcome(const ResolverValue &, unsigned)>
           ProveFeasible = [&](const ResolverValue &Node,
                               unsigned Depth) -> FeasibleProofOutcome {
-        if (!Node || Depth > limits::kMaxJumpTableGuardExpressionDepth) {
+        if (!Node || Depth > MaxResolverDepth) {
           Exhausted = true;
           SymbolBudgetExhausted = true;
           return FeasibleProofOutcome::Incomplete;
@@ -6964,7 +6970,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         [&](const ResolverValue &Value, unsigned Depth) {
           if (!Value)
             return false;
-          if (Depth > limits::kMaxJumpTableGuardExpressionDepth) {
+          if (Depth > MaxResolverDepth) {
             QueryBudgetExhausted = true;
             return false;
           }
@@ -7557,7 +7563,8 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
     const std::vector<bool> QueryResults = tableValuesMatchAtUses(
         Queries, &TransformQueriesComplete, nullptr, InvalidVA, nullptr,
         AggregateEvidenceBudget,
-        limits::kMaxJumpTableRoleMatchEvidenceWork);
+        limits::kMaxJumpTableRoleMatchEvidenceWork, nullptr, nullptr,
+        limits::kMaxJumpTableExpandedResolverDepth);
     if (!TransformQueriesComplete || QueryResults.size() != Queries.size()) {
       Complete = false;
       return false;
@@ -7628,7 +7635,8 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
   bool FinalQueryComplete = true;
   const std::vector<bool> Final = tableValuesMatchAtUses(
       FinalQueries, &FinalQueryComplete, nullptr, InvalidVA, nullptr,
-      AggregateEvidenceBudget, limits::kMaxJumpTableRoleMatchEvidenceWork);
+      AggregateEvidenceBudget, limits::kMaxJumpTableRoleMatchEvidenceWork,
+      nullptr, nullptr, limits::kMaxJumpTableExpandedResolverDepth);
   if (!FinalQueryComplete || Final.size() != FinalQueries.size()) {
     Complete = false;
     return false;
@@ -8122,7 +8130,8 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
       Results = tableValuesMatchAtUses(
           Queries, &QueriesComplete, nullptr, InvalidVA, nullptr,
           AggregateEvidenceBudget,
-          limits::kMaxJumpTableRoleMatchEvidenceWork);
+          limits::kMaxJumpTableRoleMatchEvidenceWork, nullptr, nullptr,
+          limits::kMaxJumpTableExpandedResolverDepth);
       if (!QueriesComplete || Results.size() != Queries.size()) {
         Complete = false;
         return false;
@@ -8497,7 +8506,8 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
     const std::vector<bool> Results = tableValuesMatchAtUses(
         ScaleQueries, &ScaleQueriesComplete, nullptr, InvalidVA, nullptr,
         AggregateEvidenceBudget,
-        limits::kMaxJumpTableRoleMatchEvidenceWork);
+        limits::kMaxJumpTableRoleMatchEvidenceWork, nullptr, nullptr,
+        limits::kMaxJumpTableExpandedResolverDepth);
     if (!ScaleQueriesComplete || Results.size() != ScaleQueries.size()) {
       Complete = false;
       return false;
@@ -9703,7 +9713,8 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
     AddressResults = tableValuesMatchAtUses(
         AddressQueries, &AddressQueriesComplete, nullptr, InvalidVA, nullptr,
         AggregateEvidenceBudget,
-        limits::kMaxJumpTableRoleMatchEvidenceWork);
+        limits::kMaxJumpTableRoleMatchEvidenceWork, nullptr, nullptr,
+        limits::kMaxJumpTableExpandedResolverDepth);
     if (!AddressQueriesComplete ||
         AddressResults.size() != AddressQueries.size()) {
       Complete = false;
@@ -9827,7 +9838,8 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
     LoadResults = tableValuesMatchAtUses(
         LoadQueries, &LoadQueriesComplete, nullptr, InvalidVA, nullptr,
         AggregateEvidenceBudget,
-        limits::kMaxJumpTableRoleMatchEvidenceWork);
+        limits::kMaxJumpTableRoleMatchEvidenceWork, nullptr, nullptr,
+        limits::kMaxJumpTableExpandedResolverDepth);
     if (!LoadQueriesComplete || LoadResults.size() != LoadQueries.size()) {
       Complete = false;
       return false;

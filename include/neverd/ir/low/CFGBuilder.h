@@ -1186,7 +1186,8 @@ private:
       const std::vector<va_t> *CandidateTargetsOverride = nullptr,
       size_t *GraphWorkBudget = nullptr, size_t LocalMatchEvidenceLimit = 0,
       const std::set<va_t> *CandidateBranchesSharingTargets = nullptr,
-      std::vector<uint64_t> *QueryUnsignedFeasibleMasks = nullptr) const;
+      std::vector<uint64_t> *QueryUnsignedFeasibleMasks = nullptr,
+      uint32_t ResolverDepthLimit = 0) const;
   /// Prove that the actual INDIR_BR input is derived from the strategy's exact
   /// TargetLoad occurrence on every feasible path.  Mere address co-occurrence
   /// in static scans or emulation is not sufficient.

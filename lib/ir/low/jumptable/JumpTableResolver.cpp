@@ -2613,11 +2613,59 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // relays without letting an early semantic rejection suppress sibling table
   // discovery; the retry still shares the candidate aggregate account and the
   // separate address-role certificate remains mandatory.
-  if (HasExactRootedTargetRoleCertificate && Info.IncompleteGuardDomain &&
+  bool PriorOccurrenceCertificateMatches = false;
+  if (CandidateProposalStageActive && Info.IncompleteGuardDomain) {
+    if (!consumeCandidateEvidence(
+            orderedLookupWork(PriorStrongJumpTableProposals.size())))
+      return {};
+    const auto Prior = PriorStrongJumpTableProposals.find(Rec.Addr);
+    if (Prior != PriorStrongJumpTableProposals.end()) {
+      const StrongJumpTableRoleProposal &Proposal = Prior->second;
+      if (!consumeCandidateProducts({{Proposal.LoadRoles.size(), 8},
+                                     {Proposal.StorageRanges.size(), 5}}))
+        return {};
+      const uint64_t PhysicalStride =
+          Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize;
+      bool StorageMatches =
+          Info.HasBaseAddr && Info.EntrySize != 0 &&
+          PhysicalStride >= Info.EntrySize && Info.PhysicalCapacity != 0;
+      if (StorageMatches && Proposal.ExactPhysicalStorageRange) {
+        StorageMatches =
+            *Proposal.ExactPhysicalStorageRange ==
+            JumpTableStorageRange{Info.BaseAddr, Info.EntrySize,
+                                  PhysicalStride, Info.PhysicalCapacity};
+      } else if (StorageMatches &&
+                 Proposal.StorageRanges.size() == Info.PhysicalCapacity) {
+        for (size_t I = 0; I < Proposal.StorageRanges.size(); ++I) {
+          if (I != 0 &&
+              PhysicalStride > (InvalidVA - Info.BaseAddr) / I) {
+            StorageMatches = false;
+            break;
+          }
+          const JumpTableStorageRange Expected{
+              Info.BaseAddr + uint64_t(I) * PhysicalStride, Info.EntrySize,
+              Info.EntrySize, 1};
+          if (!(Proposal.StorageRanges[I] == Expected)) {
+            StorageMatches = false;
+            break;
+          }
+        }
+      } else {
+        StorageMatches = false;
+      }
+      PriorOccurrenceCertificateMatches =
+          StorageMatches && Proposal.LoadRoles == PrePruningLoadRoles;
+    }
+  }
+  if ((HasExactRootedTargetRoleCertificate ||
+       PriorOccurrenceCertificateMatches) &&
+      Info.IncompleteGuardDomain &&
       !Info.IndexDomainAuthenticated &&
       Info.AuthenticatedModuloBound == 0 &&
       Info.AuthenticatedMaskCoordinates.empty()) {
-    if (provePreciseGuard(Info, /*UseDefinedAlternativesAsRoots=*/true)) {
+    const bool RootedGuard =
+        provePreciseGuard(Info, /*UseDefinedAlternativesAsRoots=*/true);
+    if (RootedGuard) {
       Info.IndexDomainAuthenticated = true;
       Info.AuthenticatedGuardBound = Info.MaxEntries;
       AuthenticatedGuardUsesDefinedOccurrenceRoots = true;

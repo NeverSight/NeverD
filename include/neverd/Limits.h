@@ -158,6 +158,14 @@ constexpr uint32_t kMaxJumpTableTerminalUseEvidenceWork = 16777216;
 /// call stack before the work counter can fail the proof closed.
 constexpr uint32_t kMaxJumpTableGuardExpressionDepth = 64;
 
+/// Target/address-role and mask fixed-point value reconstruction can cross
+/// several independently authenticated loop back edges in one expanded O0
+/// dispatch graph.  A 3-machine x64 selector reaches 65 distinct exact states
+/// before closing its memoized cycles; retain the next power-of-two depth while
+/// every visit still debits the candidate-wide graph-work account.  Generic
+/// guard/domain expression proofs keep the stricter limit above.
+constexpr uint32_t kMaxJumpTableExpandedResolverDepth = 128;
+
 /// Deterministic resource ceilings for the exact bit-domain query used to
 /// validate a reconstructed jump-table guard.  Exhaustion means "no proof"
 /// and therefore rejects that guard; it never falls back to sampled values.
