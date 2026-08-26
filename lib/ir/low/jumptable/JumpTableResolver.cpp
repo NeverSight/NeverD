@@ -3575,7 +3575,11 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       bool Complete = true;
       const std::vector<bool> Results = tableValuesMatchAtUses(
           EscapeQueries, &Complete, nullptr, InvalidVA, nullptr,
-          &CandidateEvidenceBudget);
+          &CandidateEvidenceBudget,
+          /*LocalMatchEvidenceLimit=*/0,
+          /*CandidateBranchesSharingTargets=*/nullptr,
+          /*QueryUnsignedFeasibleMasks=*/nullptr,
+          limits::kMaxJumpTableExpandedResolverDepth);
       AnalysisComplete &= Complete;
       if (!consumeCandidateEvidence(Results.size())) {
         AnalysisComplete = false;
@@ -3690,7 +3694,11 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       bool Complete = true;
       const std::vector<bool> Results = tableValuesMatchAtUses(
           Queries, &Complete, nullptr, InvalidVA, nullptr,
-          &CandidateEvidenceBudget);
+          &CandidateEvidenceBudget,
+          /*LocalMatchEvidenceLimit=*/0,
+          /*CandidateBranchesSharingTargets=*/nullptr,
+          /*QueryUnsignedFeasibleMasks=*/nullptr,
+          limits::kMaxJumpTableExpandedResolverDepth);
       AnalysisComplete &= Complete;
       if (!AnalysisComplete)
         return;
