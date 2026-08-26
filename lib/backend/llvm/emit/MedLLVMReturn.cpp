@@ -328,7 +328,8 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
             if (!RetVar || Phi.Output.Size > RetVar->Size)
               RetVar = &Phi.Output;
           }
-          if (isAuthoritativeIntegerReturnView(Phi.Output) && !RetVar)
+          if (isAuthoritativeIntegerReturnView(Phi.Output) &&
+              (!RetVar || Phi.Output.Size > RetVar->Size))
             RetVar = &Phi.Output;
         }
       }

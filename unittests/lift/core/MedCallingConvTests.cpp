@@ -1222,6 +1222,88 @@ TEST(MedLLVMReturn, UsesLatestAliasedDefinitionBeforeCoercion) {
   EXPECT_TRUE(HasZExt);
 }
 
+TEST(MedLLVMReturn, UsesWidestAuthoritativeIntegerReturnPhi) {
+  constexpr Arch TheArch = Arch::X64;
+  constexpr va_t EntryAddress = 0x5080;
+  constexpr va_t LeftAddress = EntryAddress + 0x10;
+  constexpr va_t RightAddress = EntryAddress + 0x20;
+  constexpr va_t ReturnAddress = EntryAddress + 0x30;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+
+  MedFunc Func;
+  Func.Entry = EntryAddress;
+  Func.Name = "widest_integer_return_phi";
+  Func.ReturnType = NdType::makeInt(8, false);
+  MedVar Condition = reg(1, 0, 8, x86reg::RDI, TheArch);
+  Func.Params.push_back(Condition);
+
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = EntryAddress;
+  Entry.EndAddr = EntryAddress + 1;
+  Entry.Succs = {1, 2};
+  MedOp Split;
+  Split.Opcode = NdOp::COND_BR;
+  Split.addInput(MedVar::makeConst(LeftAddress, 8));
+  Split.addInput(Condition);
+  Entry.Ops.push_back(std::move(Split));
+
+  auto makePredecessor = [&](int Id, va_t Address) {
+    MedBlock Block;
+    Block.Id = Id;
+    Block.StartAddr = Address;
+    Block.EndAddr = Address + 1;
+    Block.Preds = {0};
+    Block.Succs = {3};
+    MedOp Branch;
+    Branch.Opcode = NdOp::BRANCH;
+    Branch.addInput(MedVar::makeConst(ReturnAddress, 8));
+    Block.Ops.push_back(std::move(Branch));
+    return Block;
+  };
+
+  MedBlock ReturnBlock;
+  ReturnBlock.Id = 3;
+  ReturnBlock.StartAddr = ReturnAddress;
+  ReturnBlock.EndAddr = ReturnAddress + 1;
+  ReturnBlock.Preds = {1, 2};
+
+  PhiNode Narrow;
+  Narrow.Output = reg(2, 1, 4, TRI.IntReturnReg, TheArch);
+  Narrow.Args = {{1, MedVar::makeConst(3, 4)}, {2, MedVar::makeConst(4, 4)}};
+  ReturnBlock.Phis.push_back(std::move(Narrow));
+
+  PhiNode Wide;
+  Wide.Output = reg(3, 1, 8, TRI.IntReturnReg, TheArch);
+  Wide.Args = {{1, MedVar::makeConst(UINT64_C(0x100000003), 8)},
+               {2, MedVar::makeConst(UINT64_C(0x200000004), 8)}};
+  ReturnBlock.Phis.push_back(std::move(Wide));
+
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = ReturnAddress;
+  ReturnBlock.Ops.push_back(Return);
+
+  Func.Blocks = {std::move(Entry), makePredecessor(1, LeftAddress),
+                 makePredecessor(2, RightAddress), std::move(ReturnBlock)};
+
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit({Func}, Context, Func.Name, TheArch);
+  ASSERT_NE(Module, nullptr);
+  llvm::Function *Function = verifiedFunction(*Module, Func.Name);
+  ASSERT_NE(Function, nullptr);
+
+  const llvm::ReturnInst *ReturnInst = nullptr;
+  for (const llvm::BasicBlock &BB : *Function)
+    for (const llvm::Instruction &Instruction : BB)
+      if (auto *Candidate = llvm::dyn_cast<llvm::ReturnInst>(&Instruction))
+        ReturnInst = Candidate;
+  ASSERT_NE(ReturnInst, nullptr);
+  ASSERT_NE(ReturnInst->getReturnValue(), nullptr);
+  EXPECT_FALSE(llvm::isa<llvm::ZExtInst>(ReturnInst->getReturnValue()))
+      << "a preceding EAX phi must not hide the loop-carried RAX value";
+}
+
 TEST(MedLLVMReturn, UsesLatestFloatDefinitionBeforeWidthPreference) {
   constexpr Arch TheArch = Arch::X64;
   const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
