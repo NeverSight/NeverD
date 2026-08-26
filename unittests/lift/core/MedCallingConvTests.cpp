@@ -567,6 +567,110 @@ TEST(LowToMedCallReturnFP, DoesNotCrossCallClobber) {
   EXPECT_EQ(Calls[1]->Output.RegOff, TRI.FPReturnReg);
 }
 
+TEST(MedCallAbi, ExactVectorReturnFeedsFollowingFPCall) {
+  constexpr Arch TheArch = Arch::X64;
+  constexpr va_t Callee = 0x2000;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+  ASSERT_GE(TRI.FPParamRegs.size(), 2u);
+
+  MedFunc Func;
+  Func.Entry = 0x1000;
+  Func.Name = "fp_return_chain";
+  Func.Blocks.resize(1);
+  MedBlock &Block = Func.Blocks[0];
+  Block.Id = 0;
+
+  const MedVar InitialFP0 = reg(10, 0, 16, TRI.FPParamRegs[0], TheArch);
+  const MedVar InitialFP1 = reg(11, 0, 16, TRI.FPParamRegs[1], TheArch);
+  addLiveIn(Block, InitialFP0);
+  addLiveIn(Block, InitialFP1);
+
+  MedOp FirstCall;
+  FirstCall.Opcode = NdOp::CALL;
+  FirstCall.Addr = 0x1004;
+  FirstCall.CallSiteId = 1;
+  FirstCall.Output = reg(20, 1, 8, TRI.IntReturnReg, TheArch);
+  FirstCall.addInput(MedVar::makeConst(Callee, TRI.PointerSize));
+  Block.Ops.push_back(FirstCall);
+  const MedVar FirstFPResult = reg(10, 1, 16, TRI.FPReturnReg, TheArch);
+  const MedVar FirstTooNarrow = reg(12, 1, 4, TRI.FPReturnReg, TheArch);
+  const MedVar FirstTooWide = reg(13, 1, 32, TRI.FPReturnReg, TheArch);
+  Func.CallClobbers.push_back({FirstTooNarrow, FirstCall.CallSiteId});
+  Func.CallClobbers.push_back({FirstTooWide, FirstCall.CallSiteId});
+  Func.CallClobbers.push_back({FirstFPResult, FirstCall.CallSiteId});
+
+  const MedVar SecondFP1 = reg(11, 1, 16, TRI.FPParamRegs[1], TheArch);
+  Block.Ops.push_back(unary(NdOp::COPY, SecondFP1, InitialFP1));
+
+  MedOp SecondCall;
+  SecondCall.Opcode = NdOp::CALL;
+  SecondCall.Addr = 0x1008;
+  SecondCall.CallSiteId = 2;
+  SecondCall.Output = reg(20, 2, 8, TRI.IntReturnReg, TheArch);
+  SecondCall.addInput(MedVar::makeConst(Callee, TRI.PointerSize));
+  Block.Ops.push_back(SecondCall);
+  const MedVar SecondFPResult = reg(10, 2, 16, TRI.FPReturnReg, TheArch);
+  Func.CallClobbers.push_back({SecondFPResult, SecondCall.CallSiteId});
+
+  const std::map<va_t, std::string> Names{{Callee, "fp_callee"}};
+  const std::map<va_t, int> FPArity{{Callee, 2}};
+  const std::map<va_t, uint16_t> FPReturnSize{{Callee, 8}};
+  const std::map<va_t, std::vector<uint64_t>> FPRegs{
+      {Callee, {TRI.FPParamRegs[0], TRI.FPParamRegs[1]}}};
+  recoverCallAbi(Func, TheArch, Names, nullptr, nullptr, nullptr, &FPArity,
+                 &FPReturnSize, &FPRegs);
+
+  ASSERT_EQ(Func.CallInfos.size(), 2u);
+  ASSERT_EQ(Func.CallInfos[1].Args.size(), 2u);
+  EXPECT_EQ(Func.CallInfos[1].Args[0], FirstFPResult);
+  EXPECT_EQ(Func.Blocks[0].Ops[2].Output, FirstFPResult);
+  EXPECT_EQ(Func.Blocks[0].Ops[4].Output, SecondFPResult);
+  ASSERT_EQ(Func.CallClobbers.size(), 2u);
+  EXPECT_NE(std::find_if(Func.CallClobbers.begin(), Func.CallClobbers.end(),
+                         [&](const MedCallClobber &C) {
+                           return C.Value == FirstTooNarrow;
+                         }),
+            Func.CallClobbers.end());
+  EXPECT_NE(std::find_if(Func.CallClobbers.begin(), Func.CallClobbers.end(),
+                         [&](const MedCallClobber &C) {
+                           return C.Value == FirstTooWide;
+                         }),
+            Func.CallClobbers.end());
+  EXPECT_TRUE(verifyMedFunc(Func, "test-exact-vector-return-chain"));
+}
+
+TEST(MedCallAbi, IntegerReturnKeepsFPCallClobber) {
+  constexpr Arch TheArch = Arch::X64;
+  constexpr va_t Callee = 0x3000;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+
+  MedFunc Func;
+  Func.Entry = 0x1000;
+  Func.Name = "integer_return_with_fp_clobber";
+  Func.Blocks.resize(1);
+  Func.Blocks[0].Id = 0;
+
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = 0x1000;
+  Call.CallSiteId = 1;
+  Call.Output = reg(20, 1, 8, TRI.IntReturnReg, TheArch);
+  Call.addInput(MedVar::makeConst(Callee, TRI.PointerSize));
+  Func.Blocks[0].Ops.push_back(Call);
+  const MedVar FPClobber = reg(10, 1, 16, TRI.FPReturnReg, TheArch);
+  Func.CallClobbers.push_back({FPClobber, Call.CallSiteId});
+
+  const std::map<va_t, std::string> Names{{Callee, "integer_callee"}};
+  const std::map<va_t, uint16_t> FPReturnSize{{Callee, 0}};
+  recoverCallAbi(Func, TheArch, Names, nullptr, nullptr, nullptr, nullptr,
+                 &FPReturnSize);
+
+  EXPECT_EQ(Func.Blocks[0].Ops[0].Output.RegOff, TRI.IntReturnReg);
+  ASSERT_EQ(Func.CallClobbers.size(), 1u);
+  EXPECT_EQ(Func.CallClobbers[0].Value, FPClobber);
+  EXPECT_TRUE(verifyMedFunc(Func, "test-integer-return-fp-clobber"));
+}
+
 TEST(MedVerifier, AcceptsImplicitCallClobberDefinition) {
   constexpr Arch TheArch = Arch::AArch64;
   const TargetRegInfo &TRI = getTargetRegInfo(TheArch);

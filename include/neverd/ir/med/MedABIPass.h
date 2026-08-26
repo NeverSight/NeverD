@@ -38,9 +38,11 @@ int regToArgIdx(uint64_t RegOff, Arch TheArch);
 // in ABI order; ARM `float` args land in the single-width S registers
 // (s0,s1,..) while `double` args land in the D registers (d0,d1,..), so the
 // caller must recover each FP argument at the register the callee truly reads.
-// \p CalleeReturnsVec marks callees whose result is returned in a vector
-// register (x86-64 scalar/vector FP in XMM0); such a call defines the FP return
-// register, so its result must flow to the post-call reads of that register.
+// \p CalleeFPReturnSize maps scalar-FP-returning callees to their logical
+// result width (4 for float, 8 for double); absent/zero entries are not scalar
+// FP. Such a call defines the FP return register, so its result must flow to
+// the post-call reads of that register.  ARM S0 and D0 share a register offset,
+// so the width is part of the authoritative call-clobber identity.
 // \p CalleeHasSret marks callees that take a hidden indirect-result (sret)
 // pointer in the dedicated indirect-result register (AArch64 x8); such a call
 // must pass the result-buffer pointer set up before it as a trailing argument.
@@ -56,7 +58,7 @@ void recoverCallAbi(
     std::map<va_t, int> *CalleeRegArity = nullptr,
     std::map<va_t, int> *CalleeTotalArity = nullptr,
     const std::map<va_t, int> *CalleeFPArity = nullptr,
-    const std::map<va_t, bool> *CalleeReturnsVec = nullptr,
+    const std::map<va_t, uint16_t> *CalleeFPReturnSize = nullptr,
     const std::map<va_t, std::vector<uint64_t>> *CalleeFPRegs = nullptr,
     const std::map<va_t, bool> *CalleeHasSret = nullptr,
     std::map<va_t, bool> *CalleeIsVariadic = nullptr,

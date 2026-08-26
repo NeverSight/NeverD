@@ -94,7 +94,7 @@ static void propagateForwardedCallArities(
     const std::map<va_t, std::string> &FuncNames, const BinaryImage &Img,
     std::map<va_t, int> &CalleeRegArity, std::map<va_t, int> &CalleeTotalArity,
     std::map<va_t, int> &CalleeFPArity,
-    const std::map<va_t, bool> &CalleeReturnsVec,
+    const std::map<va_t, uint16_t> &CalleeFPReturnSize,
     std::map<va_t, std::vector<uint64_t>> &CalleeFPRegs,
     const std::map<va_t, bool> &CalleeHasSret,
     std::map<va_t, bool> &CalleeIsVariadic,
@@ -131,7 +131,7 @@ static void propagateForwardedCallArities(
         CalleeIsVariadic.at(Funcs[I].Entry);
     MedFunc Probe = Funcs[I];
     recoverCallAbi(Probe, TheArch, FuncNames, &Img, &CalleeRegArity,
-                   &CalleeTotalArity, &CalleeFPArity, &CalleeReturnsVec,
+                   &CalleeTotalArity, &CalleeFPArity, &CalleeFPReturnSize,
                    &CalleeFPRegs, &CalleeHasSret, &CalleeIsVariadic,
                    &CalleeConsumesVaList);
     int MaxRegIdx = -1;
@@ -307,16 +307,20 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   std::map<va_t, int> CalleeTotalArity;
   std::map<va_t, int> CalleeFPArity;
   std::map<va_t, std::vector<uint64_t>> CalleeFPRegs;
-  std::map<va_t, bool> CalleeReturnsVec;
+  std::map<va_t, uint16_t> CalleeFPReturnSize;
   std::map<va_t, bool> CalleeHasSret;
   std::map<va_t, bool> CalleeIsVariadic;
   std::map<va_t, bool> CalleeConsumesVaList;
   {
     const auto &TRI = getTargetRegInfo(Img.Arch);
-    // On x86-64 a floating-point return lands in XMM0 (a vector register); on
-    // ARM/AArch64 the lifter models it in the integer return register, so only
-    // the former needs the call result routed to the FP return register.
-    const bool FPRetInVecReg = TRI.isVectorReg(TRI.fpReturnModelReg());
+    // Internal x86/x86-64 scalar float/double, AArch64, and ARM hard-float
+    // calls return through XMM0/V0/D0.  External i386 cdecl calls are excluded
+    // by recoverCallAbi's relocation/import gates; x86 long double uses x87.
+    auto modelsScalarFPReturnInVectorReg = [&](uint16_t Size) {
+      if ((Img.Arch == Arch::X86 || Img.Arch == Arch::X64) && Size > 8)
+        return false;
+      return TRI.isVectorReg(TRI.fpReturnModelReg());
+    };
     for (const auto &MF : Result.MedFuncs) {
       int MaxRegIdx = -1, MaxIdx = -1;
       // The exact FP-argument register offsets, in ABI order.  ARM `float` args
@@ -375,8 +379,12 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
       }
       CalleeFPArity[MF.Entry] = FpArity;
       CalleeFPRegs[MF.Entry] = std::move(FPRegs);
-      CalleeReturnsVec[MF.Entry] = FPRetInVecReg && MF.ReturnType &&
-                                   MF.ReturnType->Kind == NdTypeKind::Float;
+      const uint16_t ReturnSize =
+          MF.ReturnType && MF.ReturnType->Size ? MF.ReturnType->Size : 8;
+      const bool ReturnsScalarFP =
+          MF.ReturnType && MF.ReturnType->Kind == NdTypeKind::Float &&
+          MF.MultiReturn.empty() && modelsScalarFPReturnInVectorReg(ReturnSize);
+      CalleeFPReturnSize[MF.Entry] = ReturnsScalarFP ? ReturnSize : 0;
     }
   }
 
@@ -507,19 +515,24 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
         // result register to the FP return register.
         if (FpRetSize) {
           MF.ReturnType = NdType::makeFloat(FpRetSize);
-          CalleeReturnsVec[MF.Entry] = TRI.isVectorReg(TRI.fpReturnModelReg());
+          CalleeFPReturnSize[MF.Entry] =
+              !((Img.Arch == Arch::X86 || Img.Arch == Arch::X64) &&
+                FpRetSize > 8) &&
+                      TRI.isVectorReg(TRI.fpReturnModelReg())
+                  ? FpRetSize
+                  : 0;
         }
       }
   }
 
   propagateForwardedCallArities(Result.MedFuncs, Img.Arch, AllFuncNames, Img,
                                 CalleeRegArity, CalleeTotalArity, CalleeFPArity,
-                                CalleeReturnsVec, CalleeFPRegs, CalleeHasSret,
+                                CalleeFPReturnSize, CalleeFPRegs, CalleeHasSret,
                                 CalleeIsVariadic, CalleeConsumesVaList);
 
   for (auto &MF : Result.MedFuncs)
     recoverCallAbi(MF, Img.Arch, AllFuncNames, &Img, &CalleeRegArity,
-                   &CalleeTotalArity, &CalleeFPArity, &CalleeReturnsVec,
+                   &CalleeTotalArity, &CalleeFPArity, &CalleeFPReturnSize,
                    &CalleeFPRegs, &CalleeHasSret, &CalleeIsVariadic,
                    &CalleeConsumesVaList);
 
@@ -547,9 +560,8 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     }
     for (auto &MF : Result.MedFuncs)
       recoverCallAbi(MF, Img.Arch, AllFuncNames, &Img, &CRA2, &CTA2,
-                     &CalleeFPArity, &CalleeReturnsVec, &CalleeFPRegs,
-                     &CalleeHasSret, &CalleeIsVariadic,
-                     &CalleeConsumesVaList);
+                     &CalleeFPArity, &CalleeFPReturnSize, &CalleeFPRegs,
+                     &CalleeHasSret, &CalleeIsVariadic, &CalleeConsumesVaList);
   }
 
   // Variadic callees: size each one's overflow stack-parameter list from its

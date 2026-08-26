@@ -190,17 +190,15 @@ std::optional<int64_t> exactEntrySpDelta(const MedFunc &Func, Arch TheArch,
 
 void recoverCallAbi(MedFunc &Func, Arch TheArch,
                     const std::map<va_t, std::string> &FuncNames,
-                    const BinaryImage *Img,
-                    std::map<va_t, int> *CalleeRegArity,
+                    const BinaryImage *Img, std::map<va_t, int> *CalleeRegArity,
                     std::map<va_t, int> *CalleeTotalArity,
                     const std::map<va_t, int> *CalleeFPArity,
-                    const std::map<va_t, bool> *CalleeReturnsVec,
+                    const std::map<va_t, uint16_t> *CalleeFPReturnSize,
                     const std::map<va_t, std::vector<uint64_t>> *CalleeFPRegs,
                     const std::map<va_t, bool> *CalleeHasSret,
                     std::map<va_t, bool> *CalleeIsVariadic,
                     const std::map<va_t, bool> *CalleeConsumesVaList) {
   Func.CallInfos.clear();
-  (void)CalleeReturnsVec; // FP-return routing is modeled earlier (LowToMed)
 
   const auto &TRI = getTargetRegInfo(TheArch);
   const bool IsWin64 = TheArch == Arch::X64 && Func.CC == CallingConv::Win64;
@@ -345,6 +343,41 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
 
       const bool IsDirectImport =
           !CI.IsIndirect && Img && Img->findImportAt(CI.TargetAddr);
+
+      // LowToMed runs before whole-program return types are known.  It can
+      // therefore leave an intermediate scalar-FP call modeled as defining the
+      // integer return register when the only consumer is the next call's
+      // implicit XMM0/V0 argument.  Once the exact direct callee is known to
+      // return through the vector register, promote this call's authoritative
+      // FP-return clobber definition into the real call output.  Existing SSA
+      // reads already name that definition, and the following call's reverse
+      // argument scan can now see it.  An external placeholder collision,
+      // indirect call, integer-returning callee, aggregate return, or call
+      // already routed by modelCallFPReturn keeps its existing output.
+      if (!CI.IsIndirect && !IsRelocExtern && !IsDirectImport &&
+          CalleeFPReturnSize && Op.Output.Kind == MedVar::Reg &&
+          Op.Output.RegOff == TRI.IntReturnReg && Op.CallSiteId != 0) {
+        auto SizeIt = CalleeFPReturnSize->find(CI.TargetAddr);
+        if (SizeIt != CalleeFPReturnSize->end() && SizeIt->second != 0) {
+          auto ClobberIt = Func.CallClobbers.end();
+          for (auto It = Func.CallClobbers.begin();
+               It != Func.CallClobbers.end(); ++It) {
+            if (It->CallSiteId != Op.CallSiteId ||
+                It->Value.Kind != MedVar::Reg ||
+                It->Value.RegOff != TRI.FPReturnReg ||
+                It->Value.Size < SizeIt->second)
+              continue;
+            if (ClobberIt == Func.CallClobbers.end() ||
+                It->Value.Size < ClobberIt->Value.Size)
+              ClobberIt = It;
+          }
+          if (ClobberIt != Func.CallClobbers.end()) {
+            Op.Output = ClobberIt->Value;
+            Func.CallClobbers.erase(ClobberIt);
+          }
+        }
+      }
+
       const Section *TargetSection =
           !CI.IsIndirect && Img ? Img->getSectionFor(CI.TargetAddr) : nullptr;
       const bool IsObjCMessageStub =

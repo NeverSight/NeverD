@@ -754,6 +754,14 @@ TEST(SBFRustEmitter, PreservesTheOriginalRustAPIForDownstreamCrates) {
   if (!Rustc)
     GTEST_SKIP() << "rustc is not available";
 
+#ifdef _WIN32
+  // Git for Windows also ships a POSIX hard-link utility named link.exe.
+  // Select the unambiguous COFF linker explicitly for the downstream binary.
+  auto Linker = llvm::sys::findProgramByName("lld-link");
+  ASSERT_TRUE(static_cast<bool>(Linker)) << "lld-link is not available";
+  std::string LinkerArgument = "linker=" + *Linker;
+#endif
+
   auto Generated = emitRust(makeReturnProgram());
   ASSERT_TRUE(static_cast<bool>(Generated))
       << llvm::toString(Generated.takeError());
@@ -854,6 +862,9 @@ fn main() {
   llvm::SmallVector<llvm::StringRef, 16> HostArguments{
       *Rustc,   "--edition=2021", "-D", "warnings",      "--extern",
       External, HostFile.str(),   "-o", Executable.str()};
+#ifdef _WIN32
+  HostArguments.append({"-C", LinkerArgument});
+#endif
   ASSERT_EQ(llvm::sys::ExecuteAndWait(*Rustc, HostArguments, std::nullopt, {},
                                       0, 0, &Error),
             0)
