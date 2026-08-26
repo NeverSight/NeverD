@@ -1424,6 +1424,56 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
       const LowOp &Producer = BlockOps[Def];
       if (Producer.Opcode == NdOp::LOAD &&
           Producer.Output.Size == Img.getPointerSize()) {
+        const NdVar &Address = Producer.Inputs[Producer.NumInputs >= 2 ? 1 : 0];
+        // A spill relay loads one pointer from a fixed frame slot.  On a
+        // 32-bit guest the frame address is first widened to the common
+        // internal VA width; a native-width guest uses frame+constant
+        // directly.  Recognize only those exact value-preserving envelopes,
+        // with at most the instruction-local COPY that materializes the frame
+        // register.  A real table LOAD still carries a dynamic index and
+        // cannot enter this path.
+        if (Address.Size >= Img.getPointerSize()) {
+          if (!consumeProducts({{BlockOps.size(), 3}}))
+            return false;
+          NdVar FrameAddress = Address;
+          int BeforeAdd = Def - 1;
+          if (Address.Size > Img.getPointerSize()) {
+            const int WidenDef = reachingDefIdx(BlockOps, BeforeAdd, Address);
+            if (WidenDef < 0 || BlockOps[WidenDef].Opcode != NdOp::INT_ZEXT ||
+                BlockOps[WidenDef].NumInputs < 1 ||
+                BlockOps[WidenDef].Inputs[0].Size != Img.getPointerSize()) {
+              FrameAddress = {};
+            } else {
+              FrameAddress = BlockOps[WidenDef].Inputs[0];
+              BeforeAdd = WidenDef - 1;
+            }
+          }
+          const int AddDef =
+              FrameAddress.Size == Img.getPointerSize()
+                  ? reachingDefIdx(BlockOps, BeforeAdd, FrameAddress)
+                  : -1;
+          if (AddDef >= 0 && BlockOps[AddDef].Opcode == NdOp::INT_ADD &&
+              BlockOps[AddDef].NumInputs >= 2) {
+            const LowOp &Add = BlockOps[AddDef];
+            const int ConstantSide = Add.Inputs[1].isConst()
+                                         ? 1
+                                         : (Add.Inputs[0].isConst() ? 0 : -1);
+            if (ConstantSide >= 0) {
+              const NdVar Base = Add.Inputs[1 - ConstantSide];
+              uint64_t BaseRegister = Base.isReg() ? Base.Offset : InvalidVA;
+              if (Base.isTemp()) {
+                const int BaseDef = reachingDefIdx(BlockOps, AddDef - 1, Base);
+                if (BaseDef >= 0 && BlockOps[BaseDef].Opcode == NdOp::COPY &&
+                    BlockOps[BaseDef].NumInputs >= 1 &&
+                    BlockOps[BaseDef].Inputs[0].isReg())
+                  BaseRegister = BlockOps[BaseDef].Inputs[0].Offset;
+              }
+              if (BaseRegister != InvalidVA &&
+                  getTargetRegInfo(Img.Arch).isFrameReg(BaseRegister))
+                return true;
+            }
+          }
+        }
         BranchLocalPointerLoadAddr = Producer.Addr;
         return true;
       }

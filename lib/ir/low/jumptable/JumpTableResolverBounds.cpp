@@ -1787,6 +1787,50 @@ uint32_t CFGBuilder::inferBoundsFromMask(
         return 0;
       }
       if (EntryBound != 0 && !EntryIncomplete && !EntryCoordinates.empty()) {
+        // An inline relative table may carry no relocation-derived physical
+        // capacity even though the empty-edge graph independently proves a
+        // finite selector envelope.  Use that envelope only as the upper
+        // limit for a validated table read, then enter the existing
+        // candidate-local least fixed point.  This does not authorize every
+        // coordinate below EntryBound: readTableEntries validates the mapping,
+        // while EntryCoordinates remain the sole initial runtime authority.
+        if (Info.PhysicalCapacity == 0) {
+          if (!consumeInfoCopy(Info))
+            return 0;
+          JumpTableInfo BoundedInfo = Info;
+          BoundedInfo.PhysicalCapacity = EntryBound;
+          bool ReplayIncomplete = false;
+          bool ReplaySemanticAmbiguous = false;
+          bool ReplayNonContiguous = false;
+          std::vector<uint32_t> ReplayCoordinates;
+          std::vector<JumpTableMaskKnownOneWitness> ReplayKnownOneWitnesses;
+          const uint32_t ReplayBound = inferBoundsFromMask(
+              Rec, BoundedInfo, AllowNonContiguous, &ReplayIncomplete,
+              &ReplayNonContiguous, &ReplayCoordinates,
+              &ReplayKnownOneWitnesses,
+              /*RequireProducerReachability=*/false,
+              /*CandidateTargetsOverride=*/nullptr,
+              /*ReachableInstructions=*/nullptr,
+              /*AllowFixedPointBootstrap=*/true,
+              /*AllowRawDenseShortcut=*/true, EvidenceBudget,
+              &ReplaySemanticAmbiguous, ExactConsumerGroup);
+          if (ReplaySemanticAmbiguous) {
+            if (SemanticIndexDomainAmbiguous)
+              *SemanticIndexDomainAmbiguous = true;
+            return 0;
+          }
+          if (ReplayIncomplete)
+            return failGraphIncomplete();
+          if (ReplayBound != 0 && !ReplayCoordinates.empty()) {
+            if (UsedNonContiguous)
+              *UsedNonContiguous = ReplayNonContiguous;
+            if (FeasibleCoordinates)
+              *FeasibleCoordinates = std::move(ReplayCoordinates);
+            if (KnownOneWitnesses)
+              *KnownOneWitnesses = std::move(ReplayKnownOneWitnesses);
+            return ReplayBound;
+          }
+        }
         // Layouts that cannot use the coordinate-to-target fixed point above
         // may retain an empty-edge certificate only when every provisional
         // destination is one-shot: no ordinary path from a candidate target

@@ -47,7 +47,7 @@ TEST_P(ARM32SwXformRT, Verify) { roundTripARM32(GetParam()); }
 static std::vector<RoundTripTC> makeSwXformTC(const char *prefix, const char *T,
                                               int Opt) {
   std::string p = prefix, t = T;
-  return {
+  std::vector<RoundTripTC> Cases = {
     // Jump-table-to-return: every arm returns a distinct constant with no shared
     // epilogue.  Each case block is a single RETURN, so lowerSwitchFromJumpTable
     // must recover the RETURN arm (not the assign-to-r0 arm) for every entry.
@@ -152,6 +152,11 @@ static std::vector<RoundTripTC> makeSwXformTC(const char *prefix, const char *T,
      "  return ("+t+")(unsigned long)acc; }\n",
      {0x424242ULL}, "SwXform", Opt},
   };
+  if (p == "armswx" && Opt == 2)
+    for (RoundTripTC &TC : Cases)
+      if (TC.Name == "armswx_twoswitch")
+        TC.RecoveredSwitch = RecoveredSwitchExpectation::Required;
+  return Cases;
 }
 
 // Second batch: shapes that stress table-vs-branch selection, deep nesting, and
