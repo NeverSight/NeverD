@@ -3785,6 +3785,69 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     }
     return consumeEvidence(Count * Cost);
   };
+  // Defined-at-point roots change how a reaching expression is reconstructed,
+  // so their identity must be immutable for the lifetime of any shared memo
+  // entry.  Build one conservative union for the whole rooted query batch: a
+  // query can match only its own AllowedValues below, while encountering any
+  // other exact producer merely stops expansion at a distinct named SSA root.
+  // Index the fixed seven-field occurrence identity once instead of rescanning
+  // every producer at every definition.  Each ordered lookup, retained key,
+  // tree node and eventual destruction is charged before insertion.
+  using DefinedOccurrenceRootKey =
+      std::tuple<va_t, int, VnodeSpace, uint64_t, uint16_t,
+                 ConstantAddressProvenance, va_t>;
+  constexpr size_t DefinedOccurrenceRootKeyWork = 7;
+  auto definedOccurrenceRootKey = [](va_t Addr, int Seq, const NdVar &Value) {
+    return DefinedOccurrenceRootKey{Addr,
+                                    Seq,
+                                    Value.Space,
+                                    Value.Offset,
+                                    Value.Size,
+                                    Value.Provenance,
+                                    Value.AddressOwnerVA};
+  };
+  std::set<DefinedOccurrenceRootKey> DefinedOccurrenceRoots;
+  bool DefinedOccurrenceRootsPrepared = false;
+  auto prepareDefinedOccurrenceRoots = [&] {
+    if (DefinedOccurrenceRootsPrepared)
+      return true;
+    size_t UpperBound = 0;
+    if (!consumeEvidence(Queries.size()))
+      return false;
+    for (const JumpTableValueQuery &Query : Queries) {
+      if (!Query.UseDefinedAlternativesAsOccurrenceRoots)
+        continue;
+      if (Query.Alternatives.size() >
+          std::numeric_limits<size_t>::max() - UpperBound) {
+        if (GraphWorkBudget)
+          *GraphWorkBudget = 0;
+        EvidenceBudgetExhausted = true;
+        Complete = false;
+        return false;
+      }
+      UpperBound += Query.Alternatives.size();
+    }
+    if (!consumeEvidenceSum({Queries.size(), UpperBound, 2}))
+      return false;
+    for (const JumpTableValueQuery &Query : Queries) {
+      if (!Query.UseDefinedAlternativesAsOccurrenceRoots)
+        continue;
+      for (const JumpTableValueOccurrence &Alternative : Query.Alternatives) {
+        if (!Alternative.DefinedAtPoint)
+          continue;
+        const size_t Lookup =
+            orderedSetLookupWork(DefinedOccurrenceRoots.size());
+        if (!consumeEvidenceProduct(DefinedOccurrenceRootKeyWork, Lookup) ||
+            !consumeEvidenceProduct(DefinedOccurrenceRootKeyWork, 2) ||
+            !consumeEvidence())
+          return false;
+        DefinedOccurrenceRoots.insert(definedOccurrenceRootKey(
+            Alternative.Addr, Alternative.Seq, Alternative.Value));
+      }
+    }
+    DefinedOccurrenceRootsPrepared = true;
+    return true;
+  };
   auto namedResolverRoot =
       [&](uint16_t Size, std::string_view Prefix,
           std::initializer_list<uint64_t> Fields) -> ResolverValue {
@@ -3965,6 +4028,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   std::function<ResolverResult(int, int, uint64_t, int64_t, uint16_t, unsigned)>
       resolveMemory;
   const JumpTableValueQuery *ActiveFrameMemoryQuery = nullptr;
+  const JumpTableValueQuery *ActiveValueQuery = nullptr;
+  std::optional<bool> MemoOccurrenceRootMode;
 
   auto constantValue = [&](const NdVar &V) -> ResolverResult {
     if (!V.isConst() || V.Size == 0)
@@ -4973,10 +5038,36 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       Found = true;
 
       ResolverValue Full;
+      bool MatchedDefinedAlternative = false;
+      if (ActiveValueQuery &&
+          ActiveValueQuery->UseDefinedAlternativesAsOccurrenceRoots) {
+        const size_t Lookup =
+            orderedSetLookupWork(DefinedOccurrenceRoots.size());
+        if (!consumeEvidenceProduct(DefinedOccurrenceRootKeyWork, Lookup)) {
+          Result = resolverInvalid();
+          break;
+        }
+        MatchedDefinedAlternative = DefinedOccurrenceRoots.count(
+            definedOccurrenceRootKey(Def.Addr, Def.Seq, Def.Output));
+        if (MatchedDefinedAlternative) {
+          Full = namedResolverRoot(Def.Output.Size, "D",
+                                   {Def.Addr, static_cast<uint64_t>(Def.Seq),
+                                    static_cast<unsigned>(Def.Output.Space),
+                                    Def.Output.Offset, Def.Output.Size});
+          if (!Full) {
+            Result = resolverInvalid();
+            break;
+          }
+        }
+      }
       bool PreserveExactGuestPointerLane = false;
-      if ((Def.Opcode == NdOp::COPY || Def.Opcode == NdOp::INT_ZEXT ||
-           Def.Opcode == NdOp::INT_SEXT) &&
-          Def.NumInputs >= 1) {
+      if (MatchedDefinedAlternative) {
+        // The exact producer occurrence is the complete target-role value.
+        // Its input expression belongs to the separately authenticated
+        // address/transform role and is deliberately not traversed here.
+      } else if ((Def.Opcode == NdOp::COPY || Def.Opcode == NdOp::INT_ZEXT ||
+                  Def.Opcode == NdOp::INT_SEXT) &&
+                 Def.NumInputs >= 1) {
         ResolverResult Input = applyNumericOperandRole(
             Def, 0, resolveOperand(Block, I, Def.Inputs[0], Depth + 1));
         if (Input.Kind == ResolverResultKind::Value) {
@@ -5767,7 +5858,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                   limits::kMaxJumpTableFiniteSetSymbolEvidenceWork,
                   FiniteSetSymbolEvidenceBudgetForTesting.value_or(
                       limits::kMaxJumpTableFiniteSetSymbolEvidenceWork))
-            : limits::kMaxJumpTableEvidenceWork;
+            : limits::kMaxJumpTableBoundSymbolEvidenceWork;
     size_t &Work =
         ExactModuloRecipeOnly ? ExactModuloRecipeWork : LocalWork;
     std::map<const ResolverValueExpr *, symbolic::SymRef> Memo;
@@ -6553,6 +6644,20 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       continue;
     }
     const JumpTableValueQuery &Query = Queries[QueryIndex];
+    ActiveValueQuery = &Query;
+    const bool OccurrenceRootMode =
+        Query.UseDefinedAlternativesAsOccurrenceRoots;
+    if (OccurrenceRootMode && !prepareDefinedOccurrenceRoots()) {
+      markIncomplete(QueryIndex);
+      continue;
+    }
+    if (MemoOccurrenceRootMode &&
+        *MemoOccurrenceRootMode != OccurrenceRootMode) {
+      ValueMemo.clear();
+      MemoryMemo.clear();
+      FrameMemo.clear();
+    }
+    MemoOccurrenceRootMode = OccurrenceRootMode;
     if (Query.Candidate.Size == 0 ||
         (Query.Relation != JumpTableValueRelation::UnsignedLessThan &&
          Query.Relation != JumpTableValueRelation::ResolvableValue &&
@@ -7023,7 +7128,8 @@ bool relativeTargetTransformUsesPointerWidth(NdOp Opcode,
 
 bool CFGBuilder::branchTargetDependsOnTableLoad(
     const InsnRecord &Rec, const JumpTableInfo &Info,
-    size_t *AggregateEvidenceBudget, bool *AnalysisComplete) const {
+    size_t *AggregateEvidenceBudget, bool *AnalysisComplete,
+    bool UseDefinedAlternativesAsRoots) const {
   if (AnalysisComplete)
     *AnalysisComplete = false;
   RequestedCompleteJumpTableProof = true;
@@ -7233,6 +7339,8 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
       Query.Candidate = Candidate;
       Query.UseAddr = Use.Addr;
       Query.UseSeq = Use.Seq;
+      Query.UseDefinedAlternativesAsOccurrenceRoots =
+          UseDefinedAlternativesAsRoots;
       Query.Alternatives.reserve(Alternatives.size());
       Query.Alternatives.insert(Query.Alternatives.end(), Alternatives.begin(),
                                 Alternatives.end());
@@ -7513,6 +7621,8 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
   FinalQuery.Candidate = IndirectBranch->Inputs[0];
   FinalQuery.UseAddr = IndirectBranch->Addr;
   FinalQuery.UseSeq = IndirectBranch->Seq;
+  FinalQuery.UseDefinedAlternativesAsOccurrenceRoots =
+      UseDefinedAlternativesAsRoots;
   FinalQuery.Alternatives = std::move(*FinalAlternatives);
   FinalQueries.push_back(std::move(FinalQuery));
   bool FinalQueryComplete = true;
@@ -7528,7 +7638,7 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
 
 bool CFGBuilder::tableLoadAddressesMatchRole(
     JumpTableInfo &Info, size_t *AggregateEvidenceBudget,
-    bool *AnalysisComplete) const {
+    bool *AnalysisComplete, bool UseDefinedAlternativesAsRoots) const {
   if (AnalysisComplete)
     *AnalysisComplete = false;
   RequestedCompleteJumpTableProof = true;
@@ -7936,6 +8046,8 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
     Query.Candidate = Candidate;
     Query.UseAddr = Use.Addr;
     Query.UseSeq = Use.Seq;
+    Query.UseDefinedAlternativesAsOccurrenceRoots =
+        UseDefinedAlternativesAsRoots;
     Query.Alternatives.reserve(Alternatives.size());
     Query.Alternatives.insert(Query.Alternatives.end(), Alternatives.begin(),
                               Alternatives.end());
@@ -8261,6 +8373,23 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
     const LowOp *Scale = nullptr;
     size_t QueryIndex = 0;
   };
+  auto scaleIndexSide = [](const LowOp &Scale, uint64_t AddressScale) -> int {
+    if ((!Scale.Output.isReg() && !Scale.Output.isTemp()) ||
+        Scale.NumInputs < 2 ||
+        (Scale.Opcode != NdOp::INT_MULT && Scale.Opcode != NdOp::INT_LEFT))
+      return -1;
+    if (Scale.Opcode == NdOp::INT_MULT) {
+      if (Scale.Inputs[0].isConst() && Scale.Inputs[0].Offset == AddressScale)
+        return 1;
+      if (Scale.Inputs[1].isConst() && Scale.Inputs[1].Offset == AddressScale)
+        return 0;
+      return -1;
+    }
+    if (Scale.Inputs[1].isConst() && Scale.Inputs[1].Offset < 64 &&
+        (uint64_t{1} << Scale.Inputs[1].Offset) == AddressScale)
+      return 0;
+    return -1;
+  };
   std::vector<JumpTableValueQuery> ScaleQueries;
   std::vector<ScaleProof> ScaleProofs;
   if (!consumeWork(4))
@@ -8279,6 +8408,50 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
                                        Role.Indices.end());
       continue;
     }
+
+    // Prefer the role's own exact index-use occurrences.  They identify the
+    // scale feeding this LOAD without asking whether unrelated scale
+    // instructions elsewhere in the function happen to carry the same
+    // loop-carried value.  Only roles lacking a direct occurrence need the
+    // broader point-sensitive discovery batch below.
+    for (const JumpTableValueOccurrence &Index : Role.Indices) {
+      if (!consumeWork())
+        return false;
+      if (Index.DefinedAtPoint || Index.Addr == InvalidVA || Index.Seq < 0)
+        continue;
+      if (!consumeWork(orderedSetLookupWork(Insns.size())))
+        return false;
+      const auto InsnIt = Insns.find(Index.Addr);
+      if (InsnIt == Insns.end() || InsnIt->second.IsInstructionGuard)
+        continue;
+      if (!consumeWork(InsnIt->second.Ops.size()))
+        return false;
+      const LowOp *ExactScale = nullptr;
+      for (const LowOp &Op : InsnIt->second.Ops) {
+        if (Op.Addr != Index.Addr || Op.Seq != Index.Seq)
+          continue;
+        if (ExactScale) {
+          ExactScale = nullptr;
+          break;
+        }
+        ExactScale = &Op;
+      }
+      if (!ExactScale)
+        continue;
+      const int IndexSide = scaleIndexSide(*ExactScale, Role.AddressScale);
+      if (IndexSide < 0 ||
+          !sameVar(guestAddressView(ExactScale->Inputs[IndexSide]),
+                   guestAddressView(Index.Value)))
+        continue;
+      if (!ensureAppendCapacity(State.DynamicAlternatives) || !consumeWork())
+        return false;
+      State.DynamicAlternatives.push_back({guestAddressView(ExactScale->Output),
+                                           ExactScale->Addr, ExactScale->Seq,
+                                           /*DefinedAtPoint=*/true});
+    }
+    if (!State.DynamicAlternatives.empty())
+      continue;
+
     if (!chargeInsnInventoryScan())
       return false;
     for (const auto &[Addr, Insn] : Insns) {
@@ -8286,23 +8459,7 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
       if (Insn.IsInstructionGuard)
         continue;
       for (const LowOp &Scale : Insn.Ops) {
-        if ((!Scale.Output.isReg() && !Scale.Output.isTemp()) ||
-            Scale.NumInputs < 2 ||
-            (Scale.Opcode != NdOp::INT_MULT && Scale.Opcode != NdOp::INT_LEFT))
-          continue;
-        int IndexSide = -1;
-        if (Scale.Opcode == NdOp::INT_MULT) {
-          if (Scale.Inputs[0].isConst() &&
-              Scale.Inputs[0].Offset == Role.AddressScale)
-            IndexSide = 1;
-          else if (Scale.Inputs[1].isConst() &&
-                   Scale.Inputs[1].Offset == Role.AddressScale)
-            IndexSide = 0;
-        } else if (Scale.Inputs[1].isConst() && Scale.Inputs[1].Offset < 64 &&
-                   (uint64_t{1} << Scale.Inputs[1].Offset) ==
-                       Role.AddressScale) {
-          IndexSide = 0;
-        }
+        const int IndexSide = scaleIndexSide(Scale, Role.AddressScale);
         if (IndexSide < 0)
           continue;
         const NdVar IndexValue = guestAddressView(Scale.Inputs[IndexSide]);

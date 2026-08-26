@@ -49,6 +49,18 @@ constexpr uint32_t kMaxJumpTableEntries = 4096;
 /// input-controlled, so every retained item and query allocation is prepaid.
 constexpr uint32_t kMaxJumpTableEvidenceWork = 4096;
 
+/// Local syntax allowance while correlating path-qualified guard aliases.
+/// A later O0 state-machine dispatch exceeds eight KiB while every visit
+/// continues to debit the candidate-wide aggregate account.  Sixteen KiB is
+/// the next power-of-two boundary that completes the supported case.
+constexpr uint32_t kMaxJumpTableGuardAliasEvidenceWork = 16384;
+
+/// Local symbolization allowance for an ordinary unsigned-bound query.  The
+/// largest supported later O0 state-machine dispatch exceeds the generic
+/// occurrence allowance while remaining well below one complete value-match
+/// batch.  Every visit also debits the candidate-wide aggregate account.
+constexpr uint32_t kMaxJumpTableBoundSymbolEvidenceWork = 65536;
+
 /// Local symbolization allowance for an exact finite-coordinate query.  Such
 /// a query may symbolize the expanded candidate graph before enumerating at
 /// most 64 coordinates.  The largest supported 64-way expanded selector uses
@@ -61,7 +73,7 @@ constexpr uint32_t kMaxJumpTableFiniteSetSymbolEvidenceWork = 131072;
 /// LowIR, coordinates and proposal batches also debit the aggregate account
 /// below; this smaller ceiling prevents one recursive core from monopolizing
 /// it while accommodating the largest supported real computed-goto core.
-constexpr uint32_t kMaxJumpTableMaskCoreEvidenceWork = 262144;
+constexpr uint32_t kMaxJumpTableMaskCoreEvidenceWork = 524288;
 
 /// Per-query-batch structural match allowance.  Every node/comparison also
 /// debits the caller's aggregate account when one is supplied; this local cap
@@ -106,10 +118,11 @@ constexpr uint32_t kMaxI386GOTModelEvidenceWork = 1048576;
 constexpr uint32_t kMaxI386GOTOFFProposalEvidenceWork = 2097152;
 
 /// Structural-symbolization allowance shared by the exact unsigned-modulo
-/// recipe queries for one candidate.  Expression visits also debit the
-/// candidate-wide aggregate account, so this local ceiling cannot multiply
-/// whole-CFG work across query batches.
-constexpr uint32_t kMaxJumpTableModuloRecipeSymbolEvidenceWork = 131072;
+/// recipe queries for one candidate.  The largest supported O0 five-way frame
+/// relay consumes about 140 Ki work; retain the next power of two.  Expression
+/// visits also debit the candidate-wide aggregate account, so this local
+/// ceiling cannot multiply whole-CFG work across query batches.
+constexpr uint32_t kMaxJumpTableModuloRecipeSymbolEvidenceWork = 262144;
 
 /// Aggregate allowance for one jump-table candidate in a resolver stage.
 /// Target/address roles, modulo/mask domains, every candidate-graph snapshot,

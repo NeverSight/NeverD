@@ -548,9 +548,9 @@ std::optional<uint64_t> evaluateGuardExpr(const GuardExprPtr &Expr,
 // inferBoundsFromPreciseGuards — shared CFG/value/polarity bound evidence
 //===----------------------------------------------------------------------===//
 
-bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
-                                              JumpTableInfo &Info,
-                                              size_t *CandidateEvidenceBudget) {
+bool CFGBuilder::inferBoundsFromPreciseGuards(
+    const InsnRecord &Rec, JumpTableInfo &Info, size_t *CandidateEvidenceBudget,
+    bool UseDefinedAlternativesAsRoots) {
   Info.IncompleteGuardDomain = false;
   Info.SemanticGuardDomainAmbiguous = false;
   if ((!Info.IndexValueAtUse.isReg() && !Info.IndexValueAtUse.isTemp()) ||
@@ -756,7 +756,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
     }
   };
   bool AliasEvidenceExhausted = false;
-  size_t AliasSyntaxWork = limits::kMaxJumpTableEvidenceWork;
+  size_t AliasSyntaxWork = limits::kMaxJumpTableGuardAliasEvidenceWork;
   auto consumeAliasSyntaxWork = [&](size_t Amount = 1) {
     if (Amount > AliasSyntaxWork) {
       AliasSyntaxWork = 0;
@@ -1171,6 +1171,8 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
       ProofQueries.push_back({V, UseAddr, UseSeq, IndexAlternatives,
                               /*AllowZeroExtension=*/true,
                               /*AllowSignExtension=*/true});
+      if (UseDefinedAlternativesAsRoots)
+        ProofQueries.back().UseDefinedAlternativesAsOccurrenceRoots = true;
 
       int DefIndex = -1;
       for (int I = std::min(Before, static_cast<int>(Ops.size()) - 1); I >= 0;
@@ -1217,6 +1219,8 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
           /*AllowZeroExtension=*/false,
           /*AllowSignExtension=*/false,
       });
+      if (UseDefinedAlternativesAsRoots)
+        ProofQueries.back().UseDefinedAlternativesAsOccurrenceRoots = true;
       for (int I = 0; I < Def.NumInputs; ++I) {
         // Charge the input scan independently from recursive collection.
         if (!consumeGuardBuildWork())
@@ -1272,7 +1276,6 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
       Info.IncompleteGuardDomain = true;
     return false;
   }
-
   std::map<const GuardSyntaxNode *, GuardExprPtr> ExprMemo;
   std::set<const GuardSyntaxNode *> ActiveExprs;
   bool SawIncompleteProofQuery = false;

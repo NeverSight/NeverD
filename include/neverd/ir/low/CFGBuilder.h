@@ -492,6 +492,11 @@ private:
     std::vector<JumpTableValueOccurrence> Alternatives;
     bool AllowZeroExtension = false;
     bool AllowSignExtension = false;
+    /// The query's DefinedAtPoint alternatives are exact producer
+    /// occurrences.  Compare those definitions as occurrence-local SSA roots
+    /// without re-resolving their inputs.  Callers must separately
+    /// authenticate the relation that grants each producer.
+    bool UseDefinedAlternativesAsOccurrenceRoots = false;
     JumpTableValueRelation Relation = JumpTableValueRelation::MustEqual;
     /// UnsignedLessThan/UnsignedFeasibleSet's exclusive bound, or
     /// ExactUnsignedModuloRecipe's exact divisor.
@@ -1159,7 +1164,8 @@ private:
   /// revalidation; no graph, alias, or value query may restart a private
   /// aggregate allowance.
   bool inferBoundsFromPreciseGuards(const InsnRecord &Rec, JumpTableInfo &Info,
-                                    size_t *CandidateEvidenceBudget);
+                                    size_t *CandidateEvidenceBudget,
+                                    bool UseDefinedAlternativesAsRoots = false);
   bool guardUsesInclusiveCompare(const InsnRecord &Rec,
                                  const JumpTableInfo &Info,
                                  uint64_t Bound) const;
@@ -1184,17 +1190,17 @@ private:
   /// Prove that the actual INDIR_BR input is derived from the strategy's exact
   /// TargetLoad occurrence on every feasible path.  Mere address co-occurrence
   /// in static scans or emulation is not sufficient.
-  bool branchTargetDependsOnTableLoad(const InsnRecord &Rec,
-                                      const JumpTableInfo &Info,
-                                      size_t *AggregateEvidenceBudget,
-                                      bool *AnalysisComplete) const;
+  bool branchTargetDependsOnTableLoad(
+      const InsnRecord &Rec, const JumpTableInfo &Info,
+      size_t *AggregateEvidenceBudget, bool *AnalysisComplete,
+      bool UseDefinedAlternativesAsRoots = false) const;
   /// Prove that every authenticated target LOAD reads the declared table role
   /// at that exact occurrence: base + certified-index * physical stride.
   /// Output-to-branch dependence alone is insufficient when a sibling or
   /// ambiguous predecessor can supply a different LOAD address.
-  bool tableLoadAddressesMatchRole(JumpTableInfo &Info,
-                                   size_t *AggregateEvidenceBudget,
-                                   bool *AnalysisComplete) const;
+  bool tableLoadAddressesMatchRole(
+      JumpTableInfo &Info, size_t *AggregateEvidenceBudget,
+      bool *AnalysisComplete, bool UseDefinedAlternativesAsRoots = false) const;
   /// Build the root set used while proving one candidate table.  A
   /// relocation-discovered interior label is not an independent entry when
   /// every relocation that names it is a physical slot owned by this exact

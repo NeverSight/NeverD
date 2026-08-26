@@ -844,6 +844,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     va_t TableLoadAddr = InvalidVA;
     int TableLoadSeq = -1;
     bool ProofContextComplete = false;
+    bool UseDefinedAlternativesAsRoots = false;
     std::set<va_t> ProofRoots;
   };
   struct PreciseGuardProofCache {
@@ -854,8 +855,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     bool SemanticGuardDomainAmbiguous = false;
     bool Valid = false;
   } PreciseGuardCache;
-  auto capturePreciseGuardKey =
-      [&](const JumpTableInfo &State)
+  auto capturePreciseGuardKey = [&](const JumpTableInfo &State,
+                                    bool UseDefinedAlternativesAsRoots)
       -> std::optional<PreciseGuardProofKey> {
     const std::set<va_t> &Roots = ActiveJumpTableProofRoots
                                       ? *ActiveJumpTableProofRoots
@@ -875,6 +876,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     Key.TableLoadAddr = State.TableLoadAddr;
     Key.TableLoadSeq = State.TableLoadSeq;
     Key.ProofContextComplete = JumpTableProofContextComplete;
+    Key.UseDefinedAlternativesAsRoots = UseDefinedAlternativesAsRoots;
     Key.ProofRoots = Roots;
     return Key;
   };
@@ -888,18 +890,19 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       return false;
     return A.BranchAddr == B.BranchAddr &&
            A.IndexValueAtUse == B.IndexValueAtUse &&
-           A.IndexUseAddr == B.IndexUseAddr &&
-           A.IndexUseSeq == B.IndexUseSeq &&
+           A.IndexUseAddr == B.IndexUseAddr && A.IndexUseSeq == B.IndexUseSeq &&
            A.IndexValueDefinedAtUse == B.IndexValueDefinedAtUse &&
            A.IndexValueAlternatives == B.IndexValueAlternatives &&
            A.TableLoadAddr == B.TableLoadAddr &&
            A.TableLoadSeq == B.TableLoadSeq &&
            A.ProofContextComplete == B.ProofContextComplete &&
+           A.UseDefinedAlternativesAsRoots == B.UseDefinedAlternativesAsRoots &&
            A.ProofRoots == B.ProofRoots;
   };
-  auto provePreciseGuard = [&](JumpTableInfo &State) {
+  auto provePreciseGuard = [&](JumpTableInfo &State,
+                               bool UseDefinedAlternativesAsRoots = false) {
     std::optional<PreciseGuardProofKey> Key =
-        capturePreciseGuardKey(State);
+        capturePreciseGuardKey(State, UseDefinedAlternativesAsRoots);
     if (!Key) {
       State.IncompleteGuardDomain = true;
       return false;
@@ -919,7 +922,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     }
     const uint32_t InputMaxEntries = State.MaxEntries;
     const bool Result = inferBoundsFromPreciseGuards(
-        Rec, State, &CandidateEvidenceBudget);
+        Rec, State, &CandidateEvidenceBudget, UseDefinedAlternativesAsRoots);
     // Preserve an incomplete guard attempt on State, but do not poison the
     // candidate transaction yet.  A later exact mask or modulo occurrence is
     // an independent complete selector-domain certificate.  The common gate
@@ -1053,8 +1056,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   if (Recovered && !HasOccurrenceMetadata(Info))
     return {};
   if (!Recovered && RequestedCompleteJumpTableProof &&
-      !JumpTableProofContextComplete)
+      !JumpTableProofContextComplete) {
     return {};
+  }
 
   // Strategy 2: PIC-relative table (architecture-neutral; common on x64).
   if (!Recovered)
@@ -1068,11 +1072,10 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // instructions by emulating the dominating prefix.
   if (!Recovered)
     Recovered = tryCrossInstrRelativeTable(Img, Rec, Info);
-  if (StackTableEvidenceIncompleteBranches.count(Rec.Addr))
-    {
-      CandidateEvidenceAnalysisIncomplete = true;
-      return {};
-    }
+  if (StackTableEvidenceIncompleteBranches.count(Rec.Addr)) {
+    CandidateEvidenceAnalysisIncomplete = true;
+    return {};
+  }
   if (Recovered && !HasOccurrenceMetadata(Info))
     Recovered = RejectIncompleteCandidate();
 
@@ -1117,17 +1120,27 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
         /*ScanExactGroup=*/true, /*RequireCurrentBranchLoad=*/false,
         /*RequireExactGroupAnchor=*/true);
     CandidateEvidenceShapeClaimed |= GroupShapeClaimed;
-    CandidateEvidenceAnalysisIncomplete |= !GroupAnalysisComplete;
-    if (!GroupAnalysisComplete)
-      return {};
+    if (!GroupAnalysisComplete) {
+      ExactConsumerGroup.IndexOccurrences.clear();
+      ExactConsumerGroup.BranchAddrs.clear();
+      // This pass enriches an independently recovered candidate; it is not a
+      // prerequisite for that candidate's original role/domain proof.  Only a
+      // partially recognized group shape is evidence that must fail closed.
+      // A complete scan that finds no group, or an incomplete scan before any
+      // group shape exists, simply leaves the optional metadata absent.
+      if (GroupShapeClaimed) {
+        CandidateEvidenceAnalysisIncomplete = true;
+        return {};
+      }
+    }
     const uint64_t PhysicalStride =
         Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize;
     const uint64_t GroupPhysicalStride = GroupInfo.EntryStride != 0
                                              ? GroupInfo.EntryStride
                                              : GroupInfo.EntrySize;
     const bool SamePhysicalTable =
-        GroupRecovered && Info.HasBaseAddr && GroupInfo.HasBaseAddr &&
-        Info.BaseAddr == GroupInfo.BaseAddr &&
+        GroupAnalysisComplete && GroupRecovered && Info.HasBaseAddr &&
+        GroupInfo.HasBaseAddr && Info.BaseAddr == GroupInfo.BaseAddr &&
         Info.EntrySize == GroupInfo.EntrySize &&
         PhysicalStride == GroupPhysicalStride &&
         Info.PhysicalCapacity == GroupInfo.PhysicalCapacity &&
@@ -1748,6 +1761,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     uint32_t EntryScale = 0;
     bool HasTargetBase = false;
     va_t TargetBase = InvalidVA;
+    bool UsesDefinedOccurrenceRoots = false;
     std::vector<JumpTableValueOccurrence> TargetLoads;
   };
   auto EffectiveProofRoots = [&]() -> const std::set<va_t> & {
@@ -1755,9 +1769,36 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
                                      : PersistentCFGRoots;
   };
   std::optional<TargetRoleProofCertificate> TargetRoleCertificate;
+  bool TargetRoleUsesDefinedOccurrenceRoots = false;
   bool TargetRoleComplete = false;
-  const bool TargetRole = branchTargetDependsOnTableLoad(
+  bool TargetRole = branchTargetDependsOnTableLoad(
       Rec, Info, &CandidateEvidenceBudget, &TargetRoleComplete);
+  // Occurrence roots are an alternate proof mode, not a generic escape hatch
+  // after any failed target query.  Enable them only when an independent
+  // strategy has already authenticated the composite shape, or when the
+  // absolute-table detector retained a complete parallel consumer inventory.
+  // A plain indirect candidate therefore cannot acquire table authority just
+  // because its ordinary value proof was incomplete or semantically false.
+  const bool HasExactRootedTargetRoleCertificate =
+      Info.CompositeShapeClaimed ||
+      (Info.RelocAbsolute && !ExactConsumerGroup.IndexOccurrences.empty() &&
+       ExactConsumerGroup.IndexOccurrences.size() ==
+           ExactConsumerGroup.BranchAddrs.size());
+  if ((!TargetRole || !TargetRoleComplete) &&
+      HasExactRootedTargetRoleCertificate) {
+    bool RootedTargetRoleComplete = false;
+    const bool RootedTargetRole = branchTargetDependsOnTableLoad(
+        Rec, Info, &CandidateEvidenceBudget, &RootedTargetRoleComplete,
+        /*UseDefinedAlternativesAsRoots=*/true);
+    if (RootedTargetRole && RootedTargetRoleComplete) {
+      TargetRole = true;
+      TargetRoleComplete = true;
+      TargetRoleUsesDefinedOccurrenceRoots = true;
+    } else {
+      TargetRole = false;
+      TargetRoleComplete &= RootedTargetRoleComplete;
+    }
+  }
   CandidateEvidenceAnalysisIncomplete |= !TargetRoleComplete;
   if (!TargetRole || !TargetRoleComplete)
     return {};
@@ -1771,9 +1812,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   auto CaptureTargetRoleCertificate = [&]() {
     const std::set<va_t> &Roots = EffectiveProofRoots();
     if (!consumeCandidateProducts(
-            {{1, 19},
-             {Info.TargetLoads.size(), 3},
-             {Roots.size(), 3}})) {
+            {{1, 20}, {Info.TargetLoads.size(), 3}, {Roots.size(), 3}})) {
       CandidateEvidenceAnalysisIncomplete = true;
       return false;
     }
@@ -1782,8 +1821,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
         &Img,
         Rec.Addr,
         Img.getPointerSize(),
-        {JumpTableProofContextComplete,
-         ActiveJumpTableProofRoots.has_value(),
+        {JumpTableProofContextComplete, ActiveJumpTableProofRoots.has_value(),
          ActiveJumpTableConsumerAudit,
          std::vector<va_t>(Roots.begin(), Roots.end())},
         Info.HasBaseAddr,
@@ -1794,6 +1832,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
         Info.EntryScale,
         Info.HasTargetBase,
         Info.TargetBase,
+        TargetRoleUsesDefinedOccurrenceRoots,
         Info.TargetLoads});
     return true;
   };
@@ -1802,10 +1841,10 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   auto TargetRoleCertificateMatches = [&]() -> std::optional<bool> {
     const TargetRoleProofCertificate &Certificate = *TargetRoleCertificate;
     const std::set<va_t> &CurrentRoots = EffectiveProofRoots();
-    // Seventeen immutable scalar/context and container-size checks are
+    // Eighteen immutable scalar/context and container-size checks are
     // prepaid before comparison.  Full occurrence comparison covers NdVar's
     // five fields and Addr/Seq/DefinedAtPoint; roots are already ordered.
-    if (!consumeCandidateEvidence(17))
+    if (!consumeCandidateEvidence(18))
       return std::nullopt;
     const bool FixedInputsMatch =
         Certificate.RecordIdentity == &Rec &&
@@ -1820,6 +1859,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
         Certificate.EntryScale == Info.EntryScale &&
         Certificate.HasTargetBase == Info.HasTargetBase &&
         Certificate.TargetBase == Info.TargetBase &&
+        Certificate.UsesDefinedOccurrenceRoots ==
+            TargetRoleUsesDefinedOccurrenceRoots &&
         Certificate.TargetLoads.size() == Info.TargetLoads.size();
     if (!FixedInputsMatch)
       return false;
@@ -1844,7 +1885,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       return true;
     bool Complete = false;
     const bool Proven = branchTargetDependsOnTableLoad(
-        Rec, Info, &CandidateEvidenceBudget, &Complete);
+        Rec, Info, &CandidateEvidenceBudget, &Complete,
+        TargetRoleUsesDefinedOccurrenceRoots);
     CandidateEvidenceAnalysisIncomplete |= !Complete;
     return Proven && Complete && CaptureTargetRoleCertificate();
   };
@@ -1867,7 +1909,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
 
   bool AddressRoleComplete = false;
   const bool AddressRole = tableLoadAddressesMatchRole(
-      Info, &CandidateEvidenceBudget, &AddressRoleComplete);
+      Info, &CandidateEvidenceBudget, &AddressRoleComplete,
+      TargetRoleUsesDefinedOccurrenceRoots);
   CandidateEvidenceAnalysisIncomplete |= !AddressRoleComplete;
   if (!AddressRole || !AddressRoleComplete)
     return {};
@@ -1990,6 +2033,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // relocation run by itself is only physical storage capacity and never
   // skips this search.
   bool GuardFound = Info.IndexDomainAuthenticated;
+  bool AuthenticatedGuardUsesDefinedOccurrenceRoots = false;
   if (!GuardFound) {
     GuardFound = provePreciseGuard(Info);
     if (GuardFound) {
@@ -2227,14 +2271,15 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     ActiveJumpTableProofRoots = std::move(*PhysicalRoots);
     bool PhysicalAddressRoleComplete = false;
     const bool PhysicalAddressRole = tableLoadAddressesMatchRole(
-        PhysicalProbe, &CandidateEvidenceBudget,
-        &PhysicalAddressRoleComplete);
+        PhysicalProbe, &CandidateEvidenceBudget, &PhysicalAddressRoleComplete,
+        TargetRoleUsesDefinedOccurrenceRoots);
     bool PhysicalTargetRoleComplete = true;
     const bool PhysicalTargetRole =
         PhysicalAddressRole && PhysicalAddressRoleComplete
             ? branchTargetDependsOnTableLoad(
                   Rec, PhysicalProbe, &CandidateEvidenceBudget,
-                  &PhysicalTargetRoleComplete)
+                  &PhysicalTargetRoleComplete,
+                  TargetRoleUsesDefinedOccurrenceRoots)
             : false;
     CandidateEvidenceAnalysisIncomplete |=
         !PhysicalAddressRoleComplete ||
@@ -2560,6 +2605,24 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     if (Adj >= limits::kMinJumpTableEntries)
       Info.MaxEntries = Adj;
   }
+  // The first guard pass resolves complete values so that an incomplete
+  // candidate graph still drives the outer fixed point.  Once independent
+  // modulo and mask proofs have both failed to authenticate this occurrence,
+  // retry the same guard syntax with its already authenticated DefinedAtPoint
+  // alternatives as occurrence-local SSA roots.  This bounds cyclic state
+  // relays without letting an early semantic rejection suppress sibling table
+  // discovery; the retry still shares the candidate aggregate account and the
+  // separate address-role certificate remains mandatory.
+  if (HasExactRootedTargetRoleCertificate && Info.IncompleteGuardDomain &&
+      !Info.IndexDomainAuthenticated &&
+      Info.AuthenticatedModuloBound == 0 &&
+      Info.AuthenticatedMaskCoordinates.empty()) {
+    if (provePreciseGuard(Info, /*UseDefinedAlternativesAsRoots=*/true)) {
+      Info.IndexDomainAuthenticated = true;
+      Info.AuthenticatedGuardBound = Info.MaxEntries;
+      AuthenticatedGuardUsesDefinedOccurrenceRoots = true;
+    }
+  }
   // An unmodelled mask-dependent transform cannot be rescued by readable
   // relocation capacity.  It also must not erase an independent complete
   // proof over this exact final index occurrence: a full-domain guard or the
@@ -2690,7 +2753,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       Check.IndexDomainAuthenticated = false;
       Check.IncompleteGuardDomain = false;
       Check.SemanticGuardDomainAmbiguous = false;
-      const bool GuardRevalidated = provePreciseGuard(Check);
+      const bool GuardRevalidated = provePreciseGuard(
+          Check, AuthenticatedGuardUsesDefinedOccurrenceRoots);
       CandidateEvidenceAnalysisIncomplete |= Check.IncompleteGuardDomain;
       if (!GuardRevalidated ||
           Check.MaxEntries != Info.AuthenticatedGuardBound)
@@ -2749,7 +2813,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   };
   bool PreReadAddressRoleComplete = false;
   const bool PreReadAddressRole = tableLoadAddressesMatchRole(
-      Info, &CandidateEvidenceBudget, &PreReadAddressRoleComplete);
+      Info, &CandidateEvidenceBudget, &PreReadAddressRoleComplete,
+      TargetRoleUsesDefinedOccurrenceRoots);
   CandidateEvidenceAnalysisIncomplete |= !PreReadAddressRoleComplete;
   if (!PreReadAddressRole) {
     ClaimRejectedPhysicalTableIdentity();
@@ -3852,7 +3917,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     // index occurrence metadata transactionally.
     bool FinalAddressRoleComplete = false;
     const bool FinalAddressRole = tableLoadAddressesMatchRole(
-        Info, &CandidateEvidenceBudget, &FinalAddressRoleComplete);
+        Info, &CandidateEvidenceBudget, &FinalAddressRoleComplete,
+        TargetRoleUsesDefinedOccurrenceRoots);
     CandidateEvidenceAnalysisIncomplete |= !FinalAddressRoleComplete;
     if (!FinalAddressRole || !FinalAddressRoleComplete)
       return {};
@@ -3916,10 +3982,19 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       [](const JumpTableLoadRole &Role) { return Role.IsLiteralCoordinate; });
   Info.UseSharedDispatchSelector = HasLiteralDispatchRole;
   Info.RequiresCompleteCFGProof = RequestedCompleteJumpTableProof;
-  if (!reserveResolvedInfoMaterialization(Info) ||
-      !consumeCandidateEvidence(
-          orderedLookupWork(ResolvedTableInfo.size()) + 1))
+  if (!consumeCandidateEvidence(
+          orderedLookupWork(StackTableEvidenceIncompleteBranches.size())) ||
+      !reserveResolvedInfoMaterialization(Info) ||
+      !consumeCandidateEvidence(orderedLookupWork(ResolvedTableInfo.size()) +
+                                1))
     return {};
+  // An alternate stack-materialized-table probe can exhaust while this same
+  // branch is independently authenticated and published by an exact
+  // relocation/role/domain proof.  The marker is stage-local safety state:
+  // retire it only at the final mutation boundary, after every later failure
+  // path has been prepaid.  Proposal rollback still restores any previously
+  // committed marker from the saved transaction snapshot.
+  StackTableEvidenceIncompleteBranches.erase(Rec.Addr);
   ResolvedTableInfo[Rec.Addr] = Info;
 
   LLVM_DEBUG({
