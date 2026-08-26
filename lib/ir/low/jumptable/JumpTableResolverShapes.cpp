@@ -23,6 +23,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/lift/AArch64Regs.h"
 
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
@@ -1291,7 +1292,7 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
     const BinaryImage &Img, const InsnRecord &Rec, JumpTableInfo &Info,
     JumpTableExactConsumerGroup *ExactConsumerGroup, bool *ShapeClaimed,
     size_t *EvidenceBudget, bool *AnalysisComplete, bool ScanExactGroup,
-    bool RequireCurrentBranchLoad) const {
+    bool RequireCurrentBranchLoad, bool RequireExactGroupAnchor) const {
   if (AnalysisComplete)
     *AnalysisComplete = false;
   if (ShapeClaimed)
@@ -1375,9 +1376,74 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
   if (!HasIndBranch)
     return completed(false);
 
+  // RISC targets commonly lower one memory dispatch as `LOAD; BR`, with both
+  // instructions in the same basic block but in separate InsnRecords.  Trace
+  // the branch input through value-preserving copies inside that block and
+  // retain only the exact pointer LOAD that defines it.  This is deliberately
+  // narrower than adopting an arbitrary earlier LOAD in the function.
+  std::optional<va_t> BranchLocalPointerLoadAddr;
+  auto findBranchLocalPointerLoad = [&](va_t BranchAddr) {
+    if (!consume(2) || !consume(orderedLookupWork(BlockStarts.size())))
+      return false;
+    auto Block = BlockStarts.upper_bound(BranchAddr);
+    if (Block == BlockStarts.begin())
+      return true;
+    --Block;
+    if (!consume(orderedLookupWork(Insns.size())))
+      return false;
+    std::vector<LowOp> BlockOps;
+    for (auto It = Insns.lower_bound(*Block);
+         It != Insns.end() && It->first <= BranchAddr; ++It) {
+      if (!consume())
+        return false;
+      for (const LowOp &Op : It->second.Ops) {
+        if (!ensureAppendCapacity(BlockOps) || !consume(2))
+          return false;
+        BlockOps.push_back(Op);
+      }
+    }
+    if (!consume(BlockOps.size()))
+      return false;
+    int BranchIndex = -1;
+    for (int I = static_cast<int>(BlockOps.size()) - 1; I >= 0; --I)
+      if (BlockOps[I].Addr == BranchAddr &&
+          BlockOps[I].Opcode == NdOp::INDIR_BR && BlockOps[I].NumInputs >= 1) {
+        BranchIndex = I;
+        break;
+      }
+    if (BranchIndex < 0)
+      return true;
+    NdVar Value = BlockOps[BranchIndex].Inputs[0];
+    int From = BranchIndex - 1;
+    for (int Depth = 0; Depth < limits::kMaxQuasiCopyDepth; ++Depth) {
+      if (!consume(BlockOps.size()))
+        return false;
+      const int Def = reachingDefIdx(BlockOps, From, Value);
+      if (Def < 0 || BlockOps[Def].Addr < *Block)
+        return true;
+      const LowOp &Producer = BlockOps[Def];
+      if (Producer.Opcode == NdOp::LOAD &&
+          Producer.Output.Size == Img.getPointerSize()) {
+        BranchLocalPointerLoadAddr = Producer.Addr;
+        return true;
+      }
+      if (Producer.Opcode != NdOp::COPY || Producer.NumInputs < 1)
+        return true;
+      Value = Producer.Inputs[0];
+      From = Def - 1;
+    }
+    // A chain that continues beyond the bounded trace is not a completed
+    // semantic rejection; preserve the branch opaquely.
+    return false;
+  };
+  if ((ScanExactGroup || RequireCurrentBranchLoad) &&
+      !findBranchLocalPointerLoad(Rec.Addr))
+    return false;
+
   std::vector<va_t> DecoupledPredecessorLoadAddrs;
   bool HasDecoupledPredecessorGroup = false;
-  if (ScanExactGroup && !HasInstructionLocalPointerLoad && CurrentFuncRange &&
+  bool HasSinglePredecessorRelay = false;
+  if (ScanExactGroup && CurrentFuncRange &&
       CurrentFuncRange->first == CurrentFuncEntry) {
     // A shared -O0 local computed-goto dispatch reloads its target from a
     // frame slot in the branch block.  Its scaled table LOADs live in two or
@@ -1446,22 +1512,28 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
         }
         LoadBearingPredecessors += HasPointerLoad ? 1 : 0;
       }
-      HasDecoupledPredecessorGroup = LoadBearingPredecessors >= 2;
-      if (!HasDecoupledPredecessorGroup)
+      HasDecoupledPredecessorGroup =
+          !BranchLocalPointerLoadAddr && LoadBearingPredecessors >= 2;
+      HasSinglePredecessorRelay =
+          BranchLocalPointerLoadAddr && LoadBearingPredecessors == 1;
+      if (!HasDecoupledPredecessorGroup && !HasSinglePredecessorRelay)
         DecoupledPredecessorLoadAddrs.clear();
     }
   }
 
-  const bool WantsExactGroupInventory =
+  bool WantsExactGroupInventory =
       ScanExactGroup &&
-      (HasInstructionLocalPointerLoad || HasDecoupledPredecessorGroup) &&
+      (BranchLocalPointerLoadAddr || HasDecoupledPredecessorGroup) &&
       CurrentFuncRange && CurrentFuncRange->first == CurrentFuncEntry;
+  if (RequireExactGroupAnchor && !WantsExactGroupInventory)
+    return completed(false);
   if (WantsExactGroupInventory) {
     // Establish the current branch's exact local absolute-table model before
     // copying/scanning the rest of an attacker-sized function.  The recursive
     // local phase retains lexical definitions through Rec but considers only
-    // Rec's own LOADs, and disables group recursion; all of its work debits the
-    // same candidate account.  Once it has authenticated the base/width/
+    // the exact same-block LOAD feeding Rec's branch, and disables group
+    // recursion; all of its work debits the same candidate account.  Once it
+    // has authenticated the base/width/
     // relocation run and exact load/index occurrence, later group inventory
     // exhaustion is evidence-incomplete for a claimed table shape, never
     // ordinary callback evidence.
@@ -1479,8 +1551,16 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
     // Exact-group authority is anchored in the current branch.  A generic
     // memory callback in the same function must never borrow a later sibling's
     // absolute relocation model.
-    if (!LocalRecovered && !HasDecoupledPredecessorGroup)
-      return completed(false);
+    if (!LocalRecovered && !HasDecoupledPredecessorGroup) {
+      if (RequireExactGroupAnchor || !HasSinglePredecessorRelay)
+        return completed(false);
+      // A single computed-goto site may load its table target in the sole
+      // predecessor, spill it, and reload it immediately before the branch.
+      // Keep this as a single-consumer candidate, restricted below to pointer
+      // LOADs in that exact predecessor.  An arbitrary callback LOAD therefore
+      // cannot borrow a table model from an unrelated sibling block.
+      WantsExactGroupInventory = false;
+    }
   }
 
   // This occurrence-backed strategy handles both an in-instruction memory
@@ -1497,7 +1577,7 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
   // instructions remain excluded from that group.
   const bool ScanWholeFunction =
       WantsExactGroupInventory;
-  std::set<va_t> InstructionLocalBranchAddrs;
+  std::vector<std::pair<va_t, va_t>> InstructionLocalConsumers;
   std::vector<LowOp> Ops;
   auto appendOps = [&](const std::vector<LowOp> &Source) {
     for (const LowOp &Op : Source) {
@@ -1512,7 +1592,8 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
   if (RequireCurrentBranchLoad) {
     // Retain the lexical definitions needed to fold the current dispatch's
     // table base, but do not let an earlier sibling LOAD become its model.
-    // LoadScanOrder below is restricted to Rec.Addr in this mode.
+    // LoadScanOrder below is restricted to the exact same-block producer in
+    // this mode.
     if (!consume(orderedLookupWork(Insns.size())))
       return false;
     for (auto It = Insns.lower_bound(CurrentFuncEntry);
@@ -1530,25 +1611,6 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
         break;
       if (!consume())
         return false;
-      if (ScanWholeFunction) {
-        if (!consumeProducts({{It->second.Ops.size(), 2}}))
-          return false;
-        const bool HasIndirectBranch = std::any_of(
-            It->second.Ops.begin(), It->second.Ops.end(), [](const LowOp &Op) {
-              return Op.Opcode == NdOp::INDIR_BR && Op.NumInputs >= 1;
-            });
-        const bool HasPointerLoad = std::any_of(
-            It->second.Ops.begin(), It->second.Ops.end(), [](const LowOp &Op) {
-              return Op.Opcode == NdOp::LOAD &&
-                     (Op.Output.Size == 4 || Op.Output.Size == 8);
-            });
-        if (HasIndirectBranch && HasPointerLoad) {
-          if (!consume(orderedLookupWork(InstructionLocalBranchAddrs.size()) +
-                       5))
-            return false;
-          InstructionLocalBranchAddrs.insert(It->first);
-        }
-      }
       if (!appendOps(It->second.Ops))
         return false;
     }
@@ -1561,6 +1623,52 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
       return std::nullopt;
     return reachingDefIdx(Ops, From, Value);
   };
+  if (ScanWholeFunction) {
+    if (!consume(2))
+      return false;
+    for (int I = 0; I < static_cast<int>(Ops.size()); ++I) {
+      const LowOp &Branch = Ops[I];
+      if (!consume())
+        return false;
+      if (Branch.Opcode != NdOp::INDIR_BR || Branch.NumInputs < 1)
+        continue;
+      if (!consume(orderedLookupWork(BlockStarts.size())))
+        return false;
+      auto Block = BlockStarts.upper_bound(Branch.Addr);
+      if (Block == BlockStarts.begin())
+        continue;
+      --Block;
+      NdVar Value = Branch.Inputs[0];
+      int From = I - 1;
+      bool TraceCompleted = false;
+      for (int Depth = 0; Depth < limits::kMaxQuasiCopyDepth; ++Depth) {
+        const std::optional<int> Def = reachingDef(From, Value);
+        if (!Def)
+          return false;
+        if (*Def < 0 || Ops[*Def].Addr < *Block) {
+          TraceCompleted = true;
+          break;
+        }
+        const LowOp &Producer = Ops[*Def];
+        if (Producer.Opcode == NdOp::LOAD &&
+            Producer.Output.Size == Img.getPointerSize()) {
+          if (!ensureAppendCapacity(InstructionLocalConsumers) || !consume(2))
+            return false;
+          InstructionLocalConsumers.emplace_back(Producer.Addr, Branch.Addr);
+          TraceCompleted = true;
+          break;
+        }
+        if (Producer.Opcode != NdOp::COPY || Producer.NumInputs < 1) {
+          TraceCompleted = true;
+          break;
+        }
+        Value = Producer.Inputs[0];
+        From = *Def - 1;
+      }
+      if (!TraceCompleted)
+        return false;
+    }
+  }
   auto chargeScaledIndexTrace = [&]() {
     // scaledIndexReg can walk one quasi-copy chain, inspect one widening
     // definition, then walk a second chain to the source register.
@@ -1711,17 +1819,12 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
   }
   std::vector<int> LoadScanOrder;
   if (!consumeProducts(
-          {{Ops.size(), ScanWholeFunction
-                            ? (AllowI386GOTOFFRelay ? 4 : 2)
-                            : (AllowI386GOTOFFRelay ? 2 : 1)},
+          {{Ops.size(), ScanWholeFunction ? (AllowI386GOTOFFRelay ? 4 : 2)
+                                          : (AllowI386GOTOFFRelay ? 2 : 1)},
            {Ops.size(),
-            ScanWholeFunction
-                ? orderedLookupWork(InstructionLocalBranchAddrs.size())
-                : 0},
+            ScanWholeFunction ? InstructionLocalConsumers.size() : 0},
            {Ops.size(),
-            ScanWholeFunction
-                ? orderedLookupWork(InstructionLocalBranchAddrs.size())
-                : 0},
+            ScanWholeFunction ? InstructionLocalConsumers.size() : 0},
            {Ops.size(), DecoupledPredecessorLoadAddrs.empty() ? 0 : 1},
            {Ops.size(), DecoupledPredecessorLoadAddrs.size()}}))
     return false;
@@ -1741,21 +1844,31 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
     // later, unrelated absolute table in the same function must not become the
     // current branch's model merely because its address sorts last.
     for (int I = static_cast<int>(Ops.size()) - 1; I >= 0; --I)
-      if (Ops[I].Addr == Rec.Addr) {
+      if (BranchLocalPointerLoadAddr &&
+          Ops[I].Addr == *BranchLocalPointerLoadAddr) {
         if (!ensureAppendCapacity(LoadScanOrder) || !consume())
           return false;
         LoadScanOrder.push_back(I);
       }
     for (int I = static_cast<int>(Ops.size()) - 1; I >= 0; --I)
-      if (Ops[I].Addr != Rec.Addr &&
-          InstructionLocalBranchAddrs.count(Ops[I].Addr)) {
+      if ((!BranchLocalPointerLoadAddr ||
+           Ops[I].Addr != *BranchLocalPointerLoadAddr) &&
+          std::any_of(InstructionLocalConsumers.begin(),
+                      InstructionLocalConsumers.end(), [&](const auto &Entry) {
+                        return Entry.first == Ops[I].Addr &&
+                               Entry.second != Rec.Addr;
+                      })) {
         if (!ensureAppendCapacity(LoadScanOrder) || !consume())
           return false;
         LoadScanOrder.push_back(I);
       }
     for (int I = static_cast<int>(Ops.size()) - 1; I >= 0; --I)
-      if (Ops[I].Addr != Rec.Addr &&
-          !InstructionLocalBranchAddrs.count(Ops[I].Addr) &&
+      if ((!BranchLocalPointerLoadAddr ||
+           Ops[I].Addr != *BranchLocalPointerLoadAddr) &&
+          std::none_of(
+              InstructionLocalConsumers.begin(),
+              InstructionLocalConsumers.end(),
+              [&](const auto &Entry) { return Entry.first == Ops[I].Addr; }) &&
           llvm::is_contained(DecoupledPredecessorLoadAddrs, Ops[I].Addr)) {
         if (!ensureAppendCapacity(LoadScanOrder) || !consume())
           return false;
@@ -1763,7 +1876,15 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
       }
   } else if (RequireCurrentBranchLoad) {
     for (int I = static_cast<int>(Ops.size()) - 1; I >= 0; --I)
-      if (Ops[I].Addr == Rec.Addr) {
+      if (BranchLocalPointerLoadAddr &&
+          Ops[I].Addr == *BranchLocalPointerLoadAddr) {
+        if (!ensureAppendCapacity(LoadScanOrder) || !consume())
+          return false;
+        LoadScanOrder.push_back(I);
+      }
+  } else if (HasSinglePredecessorRelay) {
+    for (int I = static_cast<int>(Ops.size()) - 1; I >= 0; --I)
+      if (llvm::is_contained(DecoupledPredecessorLoadAddrs, Ops[I].Addr)) {
         if (!ensureAppendCapacity(LoadScanOrder) || !consume())
           return false;
         LoadScanOrder.push_back(I);
@@ -1896,13 +2017,24 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
     uint16_t W = L.Output.Size;
     if (W != 4 && W != 8)
       continue;
-    auto appendOccurrence =
-        [&](va_t ResolvedBase, const NdVar &ExactIndex, va_t IndexUseAddr,
-            int IndexUseSeq, va_t RoleBase, const NdVar &RoleIndex,
-            va_t RoleIndexUseAddr, int RoleIndexUseSeq,
-            uint64_t RoleAddressScale,
-            std::optional<uint32_t> LiteralCoordinate,
-            JumpTableFrameStorageRole FrameStorage = {}) {
+    auto appendOccurrence = [&](va_t ResolvedBase, const NdVar &ExactIndex,
+                                va_t IndexUseAddr, int IndexUseSeq,
+                                va_t RoleBase, const NdVar &RoleIndex,
+                                va_t RoleIndexUseAddr, int RoleIndexUseSeq,
+                                uint64_t RoleAddressScale,
+                                std::optional<uint32_t> LiteralCoordinate,
+                                JumpTableFrameStorageRole FrameStorage = {}) {
+      va_t ConsumerBranchAddr = L.Addr;
+      if (ScanWholeFunction && ExactConsumerGroup && !LiteralCoordinate &&
+          !AllowI386GOTOFFRelay) {
+        if (!consume(InstructionLocalConsumers.size()))
+          return false;
+        for (const auto &[LoadAddr, BranchAddr] : InstructionLocalConsumers)
+          if (LoadAddr == L.Addr) {
+            ConsumerBranchAddr = BranchAddr;
+            break;
+          }
+      }
       JumpTableValueOccurrence IndexOccurrence{ExactIndex, IndexUseAddr,
                                                IndexUseSeq,
                                                /*DefinedAtPoint=*/false};
@@ -1942,7 +2074,7 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
       if (ScanWholeFunction && ExactConsumerGroup && !LiteralCoordinate &&
           !AllowI386GOTOFFRelay) {
         ExactConsumerGroup->IndexOccurrences.push_back(IndexOccurrence);
-        ExactConsumerGroup->BranchAddrs.push_back(L.Addr);
+        ExactConsumerGroup->BranchAddrs.push_back(ConsumerBranchAddr);
       }
       return true;
     };
@@ -2048,6 +2180,14 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
                          &IndexUseAddr, &IndexUseSeq);
       if (Idx == InvalidVA)
         continue;
+      // AArch64 permits XZR as the register-offset operand of a memory access.
+      // The lifter retains the architectural register identity in this address
+      // expression, but the selector-domain proof must use its exact numeric
+      // meaning.  Canonicalize only this occurrence-local table index; ordinary
+      // registers still require their complete reaching definition.
+      if (Img.Arch == Arch::AArch64 && ExactIndex.isReg() &&
+          ExactIndex.Offset == a64reg::XZR)
+        ExactIndex = NdVar::scalar(0, ExactIndex.Size);
       const std::optional<uint32_t> Scale =
           scaleOf(Ops[AddressAddIdx].Inputs[Side], AddressAddIdx - 1);
       if (!Scale)

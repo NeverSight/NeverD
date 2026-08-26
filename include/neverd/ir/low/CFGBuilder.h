@@ -906,14 +906,17 @@ private:
   // the reloc run.  Handles both a single decoupled goto site (single-
   // predecessor relay) and a shared multi-site dispatch where several goto-site
   // predecessors read one common table.  RequireCurrentBranchLoad retains
-  // lexical definitions through Rec but considers LOADs owned by Rec only, so
-  // an earlier materialized base is available without borrowing a sibling's
-  // table model.
+  // lexical definitions through Rec but considers only the exact pointer LOAD
+  // that feeds Rec's branch in the same basic block, so an earlier materialized
+  // base is available without borrowing a sibling's table model.
+  // RequireExactGroupAnchor makes enrichment of an already recovered candidate
+  // a no-op unless that exact local or predecessor relay exists.
   bool tryConstBaseAbsoluteTable(
       const BinaryImage &Img, const InsnRecord &Rec, JumpTableInfo &Info,
       JumpTableExactConsumerGroup *ExactConsumerGroup, bool *ShapeClaimed,
       size_t *EvidenceBudget, bool *AnalysisComplete,
-      bool ScanExactGroup = true, bool RequireCurrentBranchLoad = false) const;
+      bool ScanExactGroup = true, bool RequireCurrentBranchLoad = false,
+      bool RequireExactGroupAnchor = false) const;
   /// When the table index register is a reload of a stack-spilled value
   /// (`str rX,[sp,#k]; ... ldr rIdx,[sp,#k]`, the -O0 shape where the guarded
   /// switch variable is spilled before the dispatch block), trace it back to

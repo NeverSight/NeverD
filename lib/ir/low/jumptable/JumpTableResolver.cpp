@@ -972,8 +972,41 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // Strategy 1b: AArch64 compact byte/halfword table (separate entry base and
   // code anchor, scaled entries) — must precede the generic relative resolver,
   // which would otherwise latch onto the entry base as the (wrong) target base.
-  if (!Recovered)
+  bool RecoveredAArch64Compact = false;
+  if (!Recovered) {
     Recovered = tryAArch64CompactTable(Img, Rec, Info);
+    RecoveredAArch64Compact = Recovered;
+  }
+  // Compact byte/halfword tables have no per-entry relocations, so the generic
+  // relocation-run inventory below cannot establish their readable storage
+  // ceiling.  Retain the remaining bytes of the exact mapped owner as a
+  // capacity only; selector authority still comes exclusively from the guard,
+  // mask, or modulo fixed point.  This lets a loop-carried compact selector
+  // decode already-authorized targets and monotonically discover the rest
+  // without treating adjacent data as a feasible runtime coordinate.
+  if (RecoveredAArch64Compact && Info.HasBaseAddr && Info.EntrySize != 0 &&
+      Info.PhysicalCapacity == 0) {
+    if (!consumeCandidateProducts(
+            {{Img.Segments.size(), 2}, {Img.Sections.size(), 4}, {1, 2}}))
+      return {};
+    // Inline executable bytes are not an authenticated data-table owner.  In
+    // particular, a mismatched X-register selector must not turn the following
+    // case code into a capacity simply because byte decoding stays in .text.
+    if (!Img.isCodeAddress(Info.BaseAddr)) {
+      const std::optional<va_t> OwnerEnd =
+          Img.mappedObjectOwnerEnd(Info.BaseAddr);
+      const uint64_t PhysicalStride =
+          Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize;
+      if (OwnerEnd && Info.EntrySize <= InvalidVA - Info.BaseAddr &&
+          *OwnerEnd >= Info.BaseAddr + Info.EntrySize &&
+          PhysicalStride >= Info.EntrySize) {
+        const uint64_t Span = *OwnerEnd - Info.BaseAddr;
+        const uint64_t Slots = 1 + (Span - Info.EntrySize) / PhysicalStride;
+        if (Slots <= limits::kMaxJumpTableEntries)
+          Info.PhysicalCapacity = static_cast<uint32_t>(Slots);
+      }
+    }
+  }
   if (Recovered && !HasOccurrenceMetadata(Info))
     Recovered = RejectIncompleteCandidate();
 
@@ -1073,25 +1106,16 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // only when the independent detector names the exact same physical object.
   // This is metadata enrichment, not a second source of table authority: the
   // original strategy remains responsible for the candidate shape itself.
-  bool HasInstructionLocalPointerLoad = false;
   if (Recovered && Info.RelocAbsolute &&
       ExactConsumerGroup.IndexOccurrences.empty()) {
-    if (!consumeCandidateEvidence(Rec.Ops.size()))
-      return {};
-    for (const LowOp &Op : Rec.Ops)
-      if (Op.Opcode == NdOp::LOAD &&
-          (Op.Output.Size == 4 || Op.Output.Size == 8)) {
-        HasInstructionLocalPointerLoad = true;
-        break;
-      }
-  }
-  if (HasInstructionLocalPointerLoad) {
     JumpTableInfo GroupInfo;
     bool GroupShapeClaimed = false;
     bool GroupAnalysisComplete = false;
     const bool GroupRecovered = tryConstBaseAbsoluteTable(
         Img, Rec, GroupInfo, &ExactConsumerGroup, &GroupShapeClaimed,
-        &CandidateEvidenceBudget, &GroupAnalysisComplete);
+        &CandidateEvidenceBudget, &GroupAnalysisComplete,
+        /*ScanExactGroup=*/true, /*RequireCurrentBranchLoad=*/false,
+        /*RequireExactGroupAnchor=*/true);
     CandidateEvidenceShapeClaimed |= GroupShapeClaimed;
     CandidateEvidenceAnalysisIncomplete |= !GroupAnalysisComplete;
     if (!GroupAnalysisComplete)
