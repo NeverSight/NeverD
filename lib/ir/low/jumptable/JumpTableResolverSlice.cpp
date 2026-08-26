@@ -8531,6 +8531,7 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
   struct AddressProof {
     size_t RoleIndex = 0;
     const LowOp *Add = nullptr;
+    JumpTableValueOccurrence Address;
     JumpTableValueOccurrence DynamicIndex;
     std::vector<size_t> QueryIndices;
   };
@@ -9514,9 +9515,33 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
       AddressProofs.push_back(
           {RoleIndex,
            CompleteAdd,
+           {guestAddressView(CompleteAdd->Output), CompleteAdd->Addr,
+            CompleteAdd->Seq, /*DefinedAtPoint=*/true},
            {DynamicValue, RuntimeAdd->Addr, RuntimeAdd->Seq,
             /*DefinedAtPoint=*/false},
            std::move(ProofQueries)});
+      continue;
+    }
+    if (Role.IsLiteralCoordinate) {
+      const uint64_t PhysicalStride =
+          Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize;
+      if (PhysicalStride == 0 ||
+          Role.LiteralCoordinate >= Info.PhysicalCapacity ||
+          (Role.LiteralCoordinate != 0 &&
+           PhysicalStride >
+               (InvalidVA - Info.BaseAddr) / Role.LiteralCoordinate))
+        return false;
+      const va_t SlotAddress =
+          Info.BaseAddr + uint64_t{Role.LiteralCoordinate} * PhysicalStride;
+      if (!ensureAppendCapacity(AddressProofs) || !consumeWork(3))
+        return false;
+      AddressProofs.push_back(
+          {RoleIndex,
+           State.Load,
+           {NdVar::address(SlotAddress, GuestPointerSize), InvalidVA, -1,
+            /*DefinedAtPoint=*/false},
+           Role.Indices.front(),
+           {}});
       continue;
     }
     if (Role.HasBaseSelect) {
@@ -9656,6 +9681,8 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
             return false;
           AddressProofs.push_back({RoleIndex,
                                    &Add,
+                                   {guestAddressView(Add.Output), Add.Addr,
+                                    Add.Seq, /*DefinedAtPoint=*/true},
                                    {DynamicValue, Add.Addr, Add.Seq,
                                     /*DefinedAtPoint=*/false},
                                    std::move(ProofQueries)});
@@ -9698,9 +9725,7 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
     }
     if (!AllQueriesMatch)
       continue;
-    JumpTableValueOccurrence Occurrence{guestAddressView(Proof.Add->Output),
-                                        Proof.Add->Addr, Proof.Add->Seq,
-                                        /*DefinedAtPoint=*/true};
+    const JumpTableValueOccurrence &Occurrence = Proof.Address;
     auto &Alternatives = AddressAlternatives[Proof.RoleIndex];
     if (!consumeWork(Alternatives.size()))
       return false;

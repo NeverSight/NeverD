@@ -2242,6 +2242,86 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
       continue;
     }
 
+    // A shared absolute-table dispatch may also contain compile-time arms
+    // such as `goto *table[2]`.  Those LOADs have no scaled selector, but they
+    // are still necessary target producers once the corresponding label block
+    // becomes reachable.  Retain one only after an earlier dynamic occurrence
+    // has authenticated this exact table and the complete LOAD address folds
+    // to one aligned slot inside that same relocation run.  The address-role
+    // proof later revalidates the static slot at the exact LOAD use; this does
+    // not add the literal to the dynamic selector group or grant authority to
+    // the rest of the physical table.
+    bool HasScaledAddressInput = false;
+    if (!ExactI386GOTOFFBase && FoundModel) {
+      for (int Side = 0; Side < 2; ++Side) {
+        if (!chargeScaledIndexTrace())
+          return false;
+        if (scaledIndexReg(Ops, AddressAddIdx - 1,
+                           Ops[AddressAddIdx].Inputs[Side]) != InvalidVA) {
+          HasScaledAddressInput = true;
+          break;
+        }
+      }
+    }
+    if (!ExactI386GOTOFFBase && FoundModel && !HasScaledAddressInput) {
+      std::optional<va_t> LiteralAddress;
+      auto foldRegisterAt = [&](uint64_t Register,
+                                va_t At) -> std::optional<va_t> {
+        if (!consumeProducts(
+                {{Img.Segments.size(), 4}, {Img.Sections.size(), 2}}))
+          return std::nullopt;
+        return foldRegConstant(Img, Rec, Register, At, [&](size_t Amount) {
+          return consume(Amount);
+        });
+      };
+
+      if (Ops[AddressAddIdx].Output.isReg())
+        LiteralAddress =
+            foldRegisterAt(Ops[AddressAddIdx].Output.Offset, L.Addr);
+
+      if (!LiteralAddress && Ops[AddressAddIdx].Opcode == NdOp::INT_ADD &&
+          Ops[AddressAddIdx].NumInputs >= 2) {
+        if (!consume(2))
+          return false;
+        for (int ConstantSide = 0; ConstantSide < 2 && !LiteralAddress;
+             ++ConstantSide) {
+          const NdVar &Delta = Ops[AddressAddIdx].Inputs[ConstantSide];
+          if (!Delta.isConst() ||
+              (Delta.Provenance != ConstantAddressProvenance::Unknown &&
+               Delta.Provenance != ConstantAddressProvenance::Scalar))
+            continue;
+          if (!chargeRegisterTrace())
+            return false;
+          const uint64_t BaseRegister = traceToRegister(
+              Ops, AddressAddIdx - 1,
+              Ops[AddressAddIdx].Inputs[1 - ConstantSide]);
+          if (BaseRegister == InvalidVA)
+            continue;
+          const std::optional<va_t> FoldedBase =
+              foldRegisterAt(BaseRegister, Ops[AddressAddIdx].Addr);
+          if (!FoldedBase || *FoldedBase > InvalidVA - Delta.Offset)
+            continue;
+          LiteralAddress = *FoldedBase + Delta.Offset;
+        }
+      }
+      if (BudgetExhausted)
+        return false;
+
+      const uint64_t ModelSpan = uint64_t(ModelRun) * ModelWidth;
+      if (LiteralAddress && *LiteralAddress >= ModelBase &&
+          *LiteralAddress - ModelBase < ModelSpan &&
+          (*LiteralAddress - ModelBase) % ModelWidth == 0) {
+        const uint64_t ByteOffset = *LiteralAddress - ModelBase;
+        const uint64_t Slot = ByteOffset / ModelWidth;
+        if (!appendOccurrence(
+                ModelBase, NdVar::scalar(Slot, W), InvalidVA, -1, ModelBase,
+                NdVar::scalar(ByteOffset, AddrV.Size), InvalidVA, -1, 1,
+                static_cast<uint32_t>(Slot), {}))
+          return false;
+        continue;
+      }
+    }
+
     for (int Side = 0; Side < 2; ++Side) {
       if (!consume() || !chargeScaledIndexTrace())
         return false;
