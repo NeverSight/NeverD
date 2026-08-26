@@ -1711,8 +1711,9 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
   }
   std::vector<int> LoadScanOrder;
   if (!consumeProducts(
-          {{Ops.size(), ScanWholeFunction ? 2
-                                         : (AllowI386GOTOFFRelay ? 2 : 1)},
+          {{Ops.size(), ScanWholeFunction
+                            ? (AllowI386GOTOFFRelay ? 4 : 2)
+                            : (AllowI386GOTOFFRelay ? 2 : 1)},
            {Ops.size(),
             ScanWholeFunction
                 ? orderedLookupWork(InstructionLocalBranchAddrs.size())
@@ -1725,6 +1726,17 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
            {Ops.size(), DecoupledPredecessorLoadAddrs.size()}}))
     return false;
   if (ScanWholeFunction) {
+    // A grouped i386 relay still needs its earliest call/POP-backed GOTOFF
+    // occurrence to establish the model before later spill/reload arms can be
+    // authenticated.  This first pass is positive-only; once it finds the
+    // model, the loop below skips directly to the exact predecessor inventory
+    // instead of granting unrelated lexical LOADs group membership.
+    if (AllowI386GOTOFFRelay)
+      for (int I = 0; I < static_cast<int>(Ops.size()); ++I) {
+        if (!ensureAppendCapacity(LoadScanOrder) || !consume())
+          return false;
+        LoadScanOrder.push_back(I);
+      }
     // Anchor the model in the current branch before considering siblings.  A
     // later, unrelated absolute table in the same function must not become the
     // current branch's model merely because its address sorts last.
@@ -1865,7 +1877,13 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
   const size_t I386GOTOFFPriorityCount =
       AllowI386GOTOFFRelay ? Ops.size() : 0;
   for (size_t OrderIndex = 0; OrderIndex < LoadScanOrder.size(); ++OrderIndex) {
-    if (OrderIndex == I386GOTOFFPriorityCount && FoundModel)
+    if (ScanWholeFunction && OrderIndex < I386GOTOFFPriorityCount &&
+        FoundModel) {
+      OrderIndex = I386GOTOFFPriorityCount - 1;
+      continue;
+    }
+    if (OrderIndex == I386GOTOFFPriorityCount && FoundModel &&
+        !ScanWholeFunction)
       break;
     const bool ExactI386GOTOFFOnly =
         OrderIndex < I386GOTOFFPriorityCount;
