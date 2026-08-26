@@ -17,6 +17,8 @@ class AArch64CompactJumpTableRT
 TEST_P(AArch64CompactJumpTableRT, Verify) { roundTripAArch64(GetParam()); }
 
 static std::string makeCompactGuarded32Source(const std::string &Name) {
+  // Keep the address coordinate equal to the guarded W-register value.  A
+  // plain X-register index would leave its upper half unconstrained.
   std::ostringstream Src;
   Src << "long " << Name << "(long selector) {\n"
       << "  long result;\n"
@@ -26,7 +28,7 @@ static std::string makeCompactGuarded32Source(const std::string &Name) {
       << "    \"adrp x9, .Lcompact_table%=\\n\\t\"\n"
       << "    \"add x9, x9, :lo12:.Lcompact_table%=\\n\\t\"\n"
       << "    \"adr x10, .Lcompact_anchor%=\\n\\t\"\n"
-      << "    \"ldrb w11, [x9, %x1]\\n\\t\"\n"
+      << "    \"ldrb w11, [x9, %w1, uxtw]\\n\\t\"\n"
       << "    \"add x10, x10, x11, lsl #2\\n\\t\"\n"
       << "    \"br x10\\n\\t\"\n"
       << "    \".Lcompact_anchor%=:\\n\\t\"\n";
