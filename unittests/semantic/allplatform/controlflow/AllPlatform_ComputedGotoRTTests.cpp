@@ -139,6 +139,10 @@ static std::vector<RoundTripTC> makeCGotoTC(const char *prefix, const char *T,
     for (RoundTripTC &TC : Cases)
       if (TC.Name == "x86cgo0_thread")
         TC.RecoveredSwitch = RecoveredSwitchExpectation::Required;
+  if (p == "armcgo0")
+    for (RoundTripTC &TC : Cases)
+      if (TC.Name == "armcgo0_state" || TC.Name == "armcgo0_thread")
+        TC.RecoveredSwitch = RecoveredSwitchExpectation::Required;
   return Cases;
 }
 

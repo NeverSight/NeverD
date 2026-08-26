@@ -1254,14 +1254,20 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
   // Resolve every syntax leaf and def edge in one CFG/lane query session.
   // Its ResolverFlowGraph, memo tables, and MatchBudget are shared across the
   // entire guard DAG; the outer evidence budget bounds collection and result
-  // materialisation, so no node can restart a whole-function proof.
+  // materialisation, so no node can restart a whole-function proof.  Preserve
+  // per-query completeness as well: an unrelated controlling condition may
+  // exceed the recursive value depth after fixed-point graph growth, while a
+  // separate guard still proves a complete (and therefore conservative)
+  // selector domain.
   bool ProofComplete = false;
+  std::vector<bool> ProofQueryComplete;
   std::vector<bool> ProofResults;
   if (!ProofQueries.empty())
     ProofResults = tableValuesMatchAtUses(
-        ProofQueries, &ProofComplete, nullptr, InvalidVA, nullptr,
+        ProofQueries, &ProofComplete, &ProofQueryComplete, InvalidVA, nullptr,
         CandidateEvidenceBudget);
-  if (!ProofComplete || ProofResults.size() != ProofQueries.size()) {
+  if (ProofResults.size() != ProofQueries.size() ||
+      ProofQueryComplete.size() != ProofQueries.size()) {
     if (SawControllingGuard)
       Info.IncompleteGuardDomain = true;
     return false;
@@ -1269,6 +1275,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
 
   std::map<const GuardSyntaxNode *, GuardExprPtr> ExprMemo;
   std::set<const GuardSyntaxNode *> ActiveExprs;
+  bool SawIncompleteProofQuery = false;
   if (!consumeGuardBuildWork())
     return failIncomplete();
   std::function<GuardExprPtr(const GuardSyntaxPtr &, uint32_t)> Materialize =
@@ -1302,17 +1309,35 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
       Expr->Constant = Node->Value.Offset;
       return Finish(Expr);
     }
-    if (Node->IndexQuery < ProofResults.size() &&
-        ProofResults[Node->IndexQuery]) {
+    const bool IndexQueryPresent =
+        Node->IndexQuery < ProofResults.size() &&
+        Node->IndexQuery < ProofQueryComplete.size();
+    const bool IndexQueryComplete =
+        IndexQueryPresent && ProofQueryComplete[Node->IndexQuery];
+    if (IndexQueryComplete && ProofResults[Node->IndexQuery]) {
       Expr->K = GuardExpr::Kind::Index;
       Expr->ContainsIndex = true;
       return Finish(Expr);
     }
     // The lexical def is only syntax.  Its exact output must be the value
     // reaching this exact use in the shared lane-aware resolver; an EAX/W
-    // write therefore blocks a stale older RAX/X definition here.
-    if (!Node->HasDef || Node->DefQuery >= ProofResults.size() ||
-        !ProofResults[Node->DefQuery])
+    // write therefore blocks a stale older RAX/X definition here.  When only
+    // the optional "is this whole subtree the index?" query is incomplete, a
+    // complete def query still permits exact expansion into its children.  No
+    // incomplete result is reinterpreted as false or as an index identity.
+    if (!Node->HasDef) {
+      if (!IndexQueryComplete)
+        SawIncompleteProofQuery = true;
+      return Finish({});
+    }
+    const bool DefQueryPresent =
+        Node->DefQuery < ProofResults.size() &&
+        Node->DefQuery < ProofQueryComplete.size();
+    if (!DefQueryPresent || !ProofQueryComplete[Node->DefQuery]) {
+      SawIncompleteProofQuery = true;
+      return Finish({});
+    }
+    if (!ProofResults[Node->DefQuery])
       return Finish({});
     Expr->K = GuardExpr::Kind::Operation;
     Expr->Size = Node->Def.Output.Size;
@@ -1424,7 +1449,14 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(const InsnRecord &Rec,
   }
 
   if (IndexGuards.empty()) {
-    if (SawControllingGuard)
+    // Dropping an unrelated guard only enlarges the candidate domain and is
+    // conservative when another complete guard was materialized.  With no
+    // complete index guard, however, an incomplete leaf/def query must remain
+    // a resource/analysis failure rather than a semantic rejection that could
+    // later be lowered to a callback tail call.
+    if (SawControllingGuard && (SawIncompleteProofQuery || !ProofComplete))
+      Info.IncompleteGuardDomain = true;
+    else if (SawControllingGuard)
       Info.SemanticGuardDomainAmbiguous = true;
     return false;
   }

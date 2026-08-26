@@ -1382,6 +1382,7 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
   // retain only the exact pointer LOAD that defines it.  This is deliberately
   // narrower than adopting an arbitrary earlier LOAD in the function.
   std::optional<va_t> BranchLocalPointerLoadAddr;
+  bool HasBranchLocalFrameRelay = false;
   auto findBranchLocalPointerLoad = [&](va_t BranchAddr) {
     if (!consume(2) || !consume(orderedLookupWork(BlockStarts.size())))
       return false;
@@ -1448,10 +1449,21 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
               BeforeAdd = WidenDef - 1;
             }
           }
-          const int AddDef =
-              FrameAddress.Size == Img.getPointerSize()
-                  ? reachingDefIdx(BlockOps, BeforeAdd, FrameAddress)
-                  : -1;
+          uint64_t FrameRegister =
+              FrameAddress.isReg() ? FrameAddress.Offset : InvalidVA;
+          const int AddDef = FrameAddress.Size == Img.getPointerSize()
+                                 ? reachingDefIdx(BlockOps, BeforeAdd,
+                                                  FrameAddress)
+                                 : -1;
+          if (AddDef >= 0 && BlockOps[AddDef].Opcode == NdOp::COPY &&
+              BlockOps[AddDef].NumInputs >= 1 &&
+              BlockOps[AddDef].Inputs[0].isReg())
+            FrameRegister = BlockOps[AddDef].Inputs[0].Offset;
+          if (FrameRegister != InvalidVA &&
+              getTargetRegInfo(Img.Arch).isFrameReg(FrameRegister)) {
+            HasBranchLocalFrameRelay = true;
+            return true;
+          }
           if (AddDef >= 0 && BlockOps[AddDef].Opcode == NdOp::INT_ADD &&
               BlockOps[AddDef].NumInputs >= 2) {
             const LowOp &Add = BlockOps[AddDef];
@@ -1469,8 +1481,10 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
                   BaseRegister = BlockOps[BaseDef].Inputs[0].Offset;
               }
               if (BaseRegister != InvalidVA &&
-                  getTargetRegInfo(Img.Arch).isFrameReg(BaseRegister))
+                  getTargetRegInfo(Img.Arch).isFrameReg(BaseRegister)) {
+                HasBranchLocalFrameRelay = true;
                 return true;
+              }
             }
           }
         }
@@ -1565,7 +1579,8 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
       HasDecoupledPredecessorGroup =
           !BranchLocalPointerLoadAddr && LoadBearingPredecessors >= 2;
       HasSinglePredecessorRelay =
-          BranchLocalPointerLoadAddr && LoadBearingPredecessors == 1;
+          (BranchLocalPointerLoadAddr || HasBranchLocalFrameRelay) &&
+          LoadBearingPredecessors == 1;
       if (!HasDecoupledPredecessorGroup && !HasSinglePredecessorRelay)
         DecoupledPredecessorLoadAddrs.clear();
     }
@@ -1573,8 +1588,12 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
 
   bool WantsExactGroupInventory =
       ScanExactGroup &&
-      (BranchLocalPointerLoadAddr || HasDecoupledPredecessorGroup) &&
+      (BranchLocalPointerLoadAddr || HasBranchLocalFrameRelay ||
+       HasDecoupledPredecessorGroup) &&
       CurrentFuncRange && CurrentFuncRange->first == CurrentFuncEntry;
+  if (WantsExactGroupInventory && HasBranchLocalFrameRelay &&
+      ExactConsumerGroup)
+    ExactConsumerGroup->MinimumPresentBranches = 1;
   if (RequireExactGroupAnchor && !WantsExactGroupInventory)
     return completed(false);
   if (WantsExactGroupInventory) {
@@ -1602,7 +1621,7 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
     // memory callback in the same function must never borrow a later sibling's
     // absolute relocation model.
     if (!LocalRecovered && !HasDecoupledPredecessorGroup) {
-      if (RequireExactGroupAnchor || !HasSinglePredecessorRelay)
+      if (!HasSinglePredecessorRelay)
         return completed(false);
       // A single computed-goto site may load its table target in the sole
       // predecessor, spill it, and reload it immediately before the branch.
@@ -2074,7 +2093,12 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
                                 uint64_t RoleAddressScale,
                                 std::optional<uint32_t> LiteralCoordinate,
                                 JumpTableFrameStorageRole FrameStorage = {}) {
-      va_t ConsumerBranchAddr = L.Addr;
+      // A frame relay has several predecessor table loads but one exact
+      // branch consumer.  Keep every selector occurrence in the atomic group
+      // while projecting presence onto that authenticated branch; the direct
+      // multi-consumer path below retains its two-distinct-branch threshold.
+      va_t ConsumerBranchAddr =
+          HasBranchLocalFrameRelay ? Rec.Addr : L.Addr;
       if (ScanWholeFunction && ExactConsumerGroup && !LiteralCoordinate &&
           !AllowI386GOTOFFRelay) {
         if (!consume(InstructionLocalConsumers.size()))
@@ -2281,9 +2305,11 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
           if (!consumeProducts(
                   {{Img.Segments.size(), 4}, {Img.Sections.size(), 2}}))
             return false;
-          auto F = foldRegConstant(Img, Rec, BReg, L.Addr, [&](size_t Amount) {
-            return consume(Amount);
-          });
+          auto F = foldRegConstant(Img, Rec, BReg,
+                                   Ops[AddressAddIdx].Addr,
+                                   [&](size_t Amount) {
+                                     return consume(Amount);
+                                   });
           if (BudgetExhausted)
             return false;
           if (F && Img.getSegmentFor(*F))
