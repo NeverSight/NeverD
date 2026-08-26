@@ -1494,7 +1494,14 @@ static bool provesExactUnsignedModuloRecipe(
     DependencyWorklist.push_back(Value);
     return true;
   };
-  if (!enqueueDependency(Index))
+  // The direct inspector above has already proved that stripping the accepted
+  // zero/sign-extension envelope preserves this unsigned remainder.  Seed the
+  // structural dependency closure from that normalized remainder: uniform
+  // merge extensions may be hoisted while symbolizing the frozen selector,
+  // so an arm-local replay can materialize only the equivalent outer wrapper
+  // after the frozen prefix.  Its normalized remainder and every dividend it
+  // may authorize must still belong to the original selector graph.
+  if (!enqueueDependency(Remainder))
     return false;
   for (size_t I = 0; I < DependencyWorklist.size(); ++I) {
     if (!consume())
