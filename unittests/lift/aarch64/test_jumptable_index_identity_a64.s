@@ -759,3 +759,102 @@ a64_ineligible_sdiv_old_target_escape_table:
   .xword .La64_ineligible_sdiv_escape_case0
   .endr
 .size a64_ineligible_sdiv_old_target_escape_table, .-a64_ineligible_sdiv_old_target_escape_table
+
+.text
+.p2align 2
+// clang's compact-table lowering reuses X10 for the quotient and the final
+// remainder.  Both W writes materialize an architectural X-register zero
+// extension, but only the later remainder reaches the table LOAD.  Logical
+// lane minimization must therefore try removing the older, last-sorted
+// alternative instead of requiring both values to satisfy the modulo proof.
+.globl a64_compact_mod17_reused_zext
+.type a64_compact_mod17_reused_zext, %function
+a64_compact_mod17_reused_zext:
+  movz w9, #0xf0f1
+  movk w9, #0xf0f0, lsl #16
+  umull x10, w0, w9
+  lsr x10, x10, #36
+  add w10, w10, w10, lsl #4
+  sub w10, w0, w10
+  adrp x11, a64_compact_mod17_reused_zext_table
+  add x11, x11, :lo12:a64_compact_mod17_reused_zext_table
+  ldrb w12, [x11, x10]
+  adr x13, .La64_compact_mod17_anchor
+  add x13, x13, x12, lsl #2
+  br x13
+.La64_compact_mod17_anchor:
+.La64_compact_mod17_case0:
+  mov w0, #0
+  ret
+.La64_compact_mod17_case1:
+  mov w0, #1
+  ret
+.La64_compact_mod17_case2:
+  mov w0, #2
+  ret
+.La64_compact_mod17_case3:
+  mov w0, #3
+  ret
+.La64_compact_mod17_case4:
+  mov w0, #4
+  ret
+.La64_compact_mod17_case5:
+  mov w0, #5
+  ret
+.La64_compact_mod17_case6:
+  mov w0, #6
+  ret
+.La64_compact_mod17_case7:
+  mov w0, #7
+  ret
+.La64_compact_mod17_case8:
+  mov w0, #8
+  ret
+.La64_compact_mod17_case9:
+  mov w0, #9
+  ret
+.La64_compact_mod17_case10:
+  mov w0, #10
+  ret
+.La64_compact_mod17_case11:
+  mov w0, #11
+  ret
+.La64_compact_mod17_case12:
+  mov w0, #12
+  ret
+.La64_compact_mod17_case13:
+  mov w0, #13
+  ret
+.La64_compact_mod17_case14:
+  mov w0, #14
+  ret
+.La64_compact_mod17_case15:
+  mov w0, #15
+  ret
+.La64_compact_mod17_case16:
+  mov w0, #16
+  ret
+.size a64_compact_mod17_reused_zext, .-a64_compact_mod17_reused_zext
+
+.section .rodata.jt_a64_compact_mod17_reused_zext,"a",%progbits
+.globl a64_compact_mod17_reused_zext_table
+.type a64_compact_mod17_reused_zext_table, %object
+a64_compact_mod17_reused_zext_table:
+  .byte (.La64_compact_mod17_case0 - .La64_compact_mod17_anchor) / 4
+  .byte (.La64_compact_mod17_case1 - .La64_compact_mod17_anchor) / 4
+  .byte (.La64_compact_mod17_case2 - .La64_compact_mod17_anchor) / 4
+  .byte (.La64_compact_mod17_case3 - .La64_compact_mod17_anchor) / 4
+  .byte (.La64_compact_mod17_case4 - .La64_compact_mod17_anchor) / 4
+  .byte (.La64_compact_mod17_case5 - .La64_compact_mod17_anchor) / 4
+  .byte (.La64_compact_mod17_case6 - .La64_compact_mod17_anchor) / 4
+  .byte (.La64_compact_mod17_case7 - .La64_compact_mod17_anchor) / 4
+  .byte (.La64_compact_mod17_case8 - .La64_compact_mod17_anchor) / 4
+  .byte (.La64_compact_mod17_case9 - .La64_compact_mod17_anchor) / 4
+  .byte (.La64_compact_mod17_case10 - .La64_compact_mod17_anchor) / 4
+  .byte (.La64_compact_mod17_case11 - .La64_compact_mod17_anchor) / 4
+  .byte (.La64_compact_mod17_case12 - .La64_compact_mod17_anchor) / 4
+  .byte (.La64_compact_mod17_case13 - .La64_compact_mod17_anchor) / 4
+  .byte (.La64_compact_mod17_case14 - .La64_compact_mod17_anchor) / 4
+  .byte (.La64_compact_mod17_case15 - .La64_compact_mod17_anchor) / 4
+  .byte (.La64_compact_mod17_case16 - .La64_compact_mod17_anchor) / 4
+.size a64_compact_mod17_reused_zext_table, .-a64_compact_mod17_reused_zext_table

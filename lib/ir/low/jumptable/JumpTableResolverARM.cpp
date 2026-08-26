@@ -386,7 +386,7 @@ bool CFGBuilder::tryAArch64CompactTable(const BinaryImage &Img,
               });
     for (size_t Chunk = Alternatives.size() / 2; Chunk > 0;
          Chunk = Chunk == 1 ? 0 : (Chunk + 1) / 2) {
-      for (size_t I = 0; I + Chunk < Alternatives.size();) {
+      for (size_t I = 0; I + Chunk <= Alternatives.size();) {
         std::vector<JumpTableValueOccurrence> Trial = Alternatives;
         Trial.erase(Trial.begin() + static_cast<ptrdiff_t>(I),
                      Trial.begin() + static_cast<ptrdiff_t>(I + Chunk));

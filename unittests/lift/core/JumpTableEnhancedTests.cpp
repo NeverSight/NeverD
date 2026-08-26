@@ -6027,6 +6027,41 @@ TEST_F(JTE_AArch64, CompactIndexAcceptsExplicitWToXZeroExtension) {
       }));
 }
 
+TEST_F(JTE_AArch64, CompactModuloDropsOlderReusedZeroExtension) {
+  auto ImageOrErr = neverd::loadBinary(indexIdentityA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("a64_compact_mod17_reused_zext");
+  const neverd::Symbol *Table =
+      Image.findSymbol("a64_compact_mod17_reused_zext_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Table->Size, 17u);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+
+  size_t ReusedLaneExtensions = 0;
+  for (const neverd::LowBlock &Block : Low.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops)
+      if (Op.Opcode == neverd::NdOp::INT_ZEXT && Op.Output.isReg() &&
+          Op.Output.Offset == 0x50 && Op.Output.Size == 8 &&
+          Op.NumInputs >= 1 && Op.Inputs[0].isReg() &&
+          Op.Inputs[0].Offset == 0x50 && Op.Inputs[0].Size == 4)
+        ++ReusedLaneExtensions;
+  ASSERT_GE(ReusedLaneExtensions, 2u)
+      << "the fixture must retain both the stale quotient extension and the "
+         "reaching remainder extension";
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_EQ(Low.JumpTables.front().Targets.size(), 17u);
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
 TEST_F(JTE_AArch64, CompactIndexFollowsExactFrameSpillReload) {
   auto R = liftToLLVMIRUnopt(indexIdentityA64Obj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
