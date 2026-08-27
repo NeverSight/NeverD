@@ -7584,6 +7584,7 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
     return false;
   std::vector<DerivedOccurrence> Derived;
   const uint16_t PointerSize = CurrentImg->getPointerSize();
+  va_t LexicalTransformBegin = Rec.Addr;
   if (PointerSize == 0)
     return false;
   for (const JumpTableValueOccurrence &Occurrence : Info.TargetLoads) {
@@ -7619,6 +7620,7 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
       return false;
     if (!consumeWork())
       return false;
+    LexicalTransformBegin = std::min(LexicalTransformBegin, TargetLoad->Addr);
     Derived.push_back({{TargetLoad->Output, TargetLoad->Addr, TargetLoad->Seq,
                         /*DefinedAtPoint=*/true},
                        TargetRaw});
@@ -7634,6 +7636,7 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
   }
   const va_t ExpectedAnchor =
       Info.HasTargetBase ? Info.TargetBase : Info.BaseAddr;
+  const size_t InitialDerivedCount = Derived.size();
 
   auto alternativesFor = [&](uint8_t State)
       -> std::optional<std::vector<JumpTableValueOccurrence>> {
@@ -7676,6 +7679,9 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
   // entries must perform the declared extension, optional scale, and exactly
   // one target-anchor add before they can reach INDIR_BR.
   bool TransformFixedPoint = false;
+  bool RestrictToLexicalTargetRegion =
+      RequiredState != TargetRaw && LexicalTransformBegin <= Rec.Addr;
+  bool UsedLexicalTargetRegion = false;
   for (int Pass = 0; Pass < limits::kMaxSliceDepth; ++Pass) {
     if (!consumeWork(4))
       return false;
@@ -7700,7 +7706,7 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
       Query.UseAddr = Use.Addr;
       Query.UseSeq = Use.Seq;
       Query.UseDefinedAlternativesAsOccurrenceRoots =
-          UseDefinedAlternativesAsRoots;
+          RestrictToLexicalTargetRegion || UseDefinedAlternativesAsRoots;
       Query.AllowPrivateFrameMemoryAcrossCalls =
           I386GOTOFFPrivateFrameModelAuthenticated;
       Query.Alternatives.reserve(Alternatives.size());
@@ -7733,9 +7739,17 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
     };
 
     for (const auto &[Addr, Insn] : Insns) {
-      (void)Addr;
       if (!consumeWork())
         return false;
+      // First search the lexical region from the authenticated table load to
+      // the indirect branch.  Compilers normally keep the sign/zero extend,
+      // scale and target-base add in this short region; proving it first
+      // avoids resolving every unrelated vector operation in a large loop.
+      // If it does not contain a complete target chain, the next pass drops
+      // this search-only filter and retains the original whole-graph proof.
+      if (RestrictToLexicalTargetRegion &&
+          (Addr < LexicalTransformBegin || Addr > Rec.Addr))
+        continue;
       if (Insn.IsInstructionGuard)
         continue; // a predicated write is not a necessary target source
       for (const LowOp &Op : Insn.Ops) {
@@ -7912,15 +7926,22 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
     }
 
     if (Queries.empty()) {
+      if (RestrictToLexicalTargetRegion) {
+        Derived.resize(InitialDerivedCount);
+        RestrictToLexicalTargetRegion = false;
+        continue;
+      }
       TransformFixedPoint = true;
       break;
     }
     bool TransformQueriesComplete = true;
     const std::vector<bool> QueryResults = tableValuesMatchAtUses(
         Queries, &TransformQueriesComplete, nullptr, InvalidVA, nullptr,
-        AggregateEvidenceBudget,
-        limits::kMaxJumpTableRoleMatchEvidenceWork, nullptr, nullptr,
-        limits::kMaxJumpTableExpandedResolverDepth);
+        AggregateEvidenceBudget, limits::kMaxJumpTableRoleMatchEvidenceWork,
+        nullptr, nullptr,
+        RestrictToLexicalTargetRegion
+            ? limits::kMaxJumpTableLargeExpressionRoleResolverDepth
+            : limits::kMaxJumpTableExpandedResolverDepth);
     if (!TransformQueriesComplete || QueryResults.size() != Queries.size()) {
       Complete = false;
       return false;
@@ -7953,7 +7974,26 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
       Changed = true;
     }
     if (!Changed) {
+      if (RestrictToLexicalTargetRegion) {
+        Derived.resize(InitialDerivedCount);
+        RestrictToLexicalTargetRegion = false;
+        continue;
+      }
       TransformFixedPoint = true;
+      break;
+    }
+    bool HasRequiredState = false;
+    for (const DerivedOccurrence &D : Derived) {
+      if (!consumeWork())
+        return false;
+      HasRequiredState |= D.State == RequiredState;
+    }
+    if (HasRequiredState) {
+      // The final point-sensitive query below still proves that every path to
+      // INDIR_BR comes from one of these exact occurrences.  Additional
+      // speculative transforms cannot strengthen that universal proof.
+      TransformFixedPoint = true;
+      UsedLexicalTargetRegion = RestrictToLexicalTargetRegion;
       break;
     }
   }
@@ -7963,8 +8003,9 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
   }
 
   auto FinalAlternatives = alternativesFor(RequiredState);
-  if (!FinalAlternatives || FinalAlternatives->empty() ||
-      IndirectBranch->Inputs[0].Size != PointerSize)
+  if (!FinalAlternatives || FinalAlternatives->empty())
+    return false;
+  if (IndirectBranch->Inputs[0].Size != PointerSize)
     return false;
   for (const JumpTableValueOccurrence &Alternative : *FinalAlternatives) {
     if (!consumeWork())
@@ -7985,7 +8026,7 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
   FinalQuery.UseAddr = IndirectBranch->Addr;
   FinalQuery.UseSeq = IndirectBranch->Seq;
   FinalQuery.UseDefinedAlternativesAsOccurrenceRoots =
-      UseDefinedAlternativesAsRoots;
+      UsedLexicalTargetRegion || UseDefinedAlternativesAsRoots;
   FinalQuery.AllowPrivateFrameMemoryAcrossCalls =
       I386GOTOFFPrivateFrameModelAuthenticated;
   FinalQuery.Alternatives = std::move(*FinalAlternatives);
@@ -8865,9 +8906,9 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
     bool ScaleQueriesComplete = true;
     const std::vector<bool> Results = tableValuesMatchAtUses(
         ScaleQueries, &ScaleQueriesComplete, nullptr, InvalidVA, nullptr,
-        AggregateEvidenceBudget,
-        limits::kMaxJumpTableRoleMatchEvidenceWork, nullptr, nullptr,
-        limits::kMaxJumpTableExpandedResolverDepth);
+        AggregateEvidenceBudget, limits::kMaxJumpTableRoleMatchEvidenceWork,
+        nullptr, nullptr,
+        limits::kMaxJumpTableLargeExpressionRoleResolverDepth);
     if (!ScaleQueriesComplete || Results.size() != ScaleQueries.size()) {
       Complete = false;
       return false;
@@ -10072,9 +10113,9 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
   if (!AddressQueries.empty()) {
     AddressResults = tableValuesMatchAtUses(
         AddressQueries, &AddressQueriesComplete, nullptr, InvalidVA, nullptr,
-        AggregateEvidenceBudget,
-        limits::kMaxJumpTableRoleMatchEvidenceWork, nullptr, nullptr,
-        limits::kMaxJumpTableExpandedResolverDepth);
+        AggregateEvidenceBudget, limits::kMaxJumpTableRoleMatchEvidenceWork,
+        nullptr, nullptr,
+        limits::kMaxJumpTableLargeExpressionRoleResolverDepth);
     if (!AddressQueriesComplete ||
         AddressResults.size() != AddressQueries.size()) {
       Complete = false;
@@ -10197,9 +10238,9 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
   if (!LoadQueries.empty()) {
     LoadResults = tableValuesMatchAtUses(
         LoadQueries, &LoadQueriesComplete, nullptr, InvalidVA, nullptr,
-        AggregateEvidenceBudget,
-        limits::kMaxJumpTableRoleMatchEvidenceWork, nullptr, nullptr,
-        limits::kMaxJumpTableExpandedResolverDepth);
+        AggregateEvidenceBudget, limits::kMaxJumpTableRoleMatchEvidenceWork,
+        nullptr, nullptr,
+        limits::kMaxJumpTableLargeExpressionRoleResolverDepth);
     if (!LoadQueriesComplete || LoadResults.size() != LoadQueries.size()) {
       Complete = false;
       return false;

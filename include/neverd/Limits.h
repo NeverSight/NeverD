@@ -180,6 +180,17 @@ constexpr uint32_t kMaxJumpTableGuardExpressionDepth = 64;
 /// guard/domain expression proofs keep the stricter limit above.
 constexpr uint32_t kMaxJumpTableExpandedResolverDepth = 128;
 
+/// Exact target/address-role proofs for vector-reduction switches can cross
+/// 129 nested value states before memoized loop aliases close.  The lexical
+/// target-chain search and authenticated address-role replay use the next
+/// power-of-two depth while continuing to debit the same candidate-wide work
+/// account.  Whole-function speculative transform discovery retains the
+/// stricter expanded limit above so unrelated vector operations cannot consume
+/// the candidate budget before the local target chain is considered.
+constexpr uint32_t kMaxJumpTableLargeExpressionRoleResolverDepth = 256;
+static_assert(kMaxJumpTableLargeExpressionRoleResolverDepth >=
+              kMaxJumpTableExpandedResolverDepth);
+
 /// Deterministic resource ceilings for the exact bit-domain query used to
 /// validate a reconstructed jump-table guard.  Exhaustion means "no proof"
 /// and therefore rejects that guard; it never falls back to sampled values.
