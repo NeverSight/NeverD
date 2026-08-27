@@ -617,6 +617,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
     bool IsConstant = false;
     LowOp Def = {};
     bool HasDef = false;
+    bool InputsComplete = true;
     std::vector<GuardSyntaxPtr> Inputs;
     size_t IndexQuery = std::numeric_limits<size_t>::max();
     size_t DefQuery = std::numeric_limits<size_t>::max();
@@ -1227,8 +1228,17 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
           return Finish({});
         GuardSyntaxPtr Input =
             Collect(Def.Inputs[I], DefIndex - 1, Def.Addr, Def.Seq, Depth + 1);
-        if (!Input)
-          return Finish({});
+        if (!Input) {
+          if (GuardBuildExhausted)
+            return Finish({});
+          // The current narrow value may itself be the exact table-index
+          // occurrence.  Preserve that query even when expanding an unrelated
+          // upstream lane would require an unsupported wide expression; if the
+          // exact query does not match, Materialize still refuses this partial
+          // syntax node instead of treating the missing input as evidence.
+          Node->InputsComplete = false;
+          break;
+        }
         if (!consumeGuardBuildWork())
           return Finish({});
         Node->Inputs.push_back(std::move(Input));
@@ -1328,7 +1338,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
     // the optional "is this whole subtree the index?" query is incomplete, a
     // complete def query still permits exact expansion into its children.  No
     // incomplete result is reinterpreted as false or as an index identity.
-    if (!Node->HasDef) {
+    if (!Node->HasDef || !Node->InputsComplete) {
       if (!IndexQueryComplete)
         SawIncompleteProofQuery = true;
       return Finish({});

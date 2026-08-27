@@ -2582,6 +2582,27 @@ TEST_F(JTE_X86_64, GuardEvidenceMemoizesSharedExpressionDag) {
   EXPECT_NE(Body.find("cst:0xFA3:4"), std::string::npos) << Body;
 }
 
+TEST_F(JTE_X86_64, GuardEvidenceStopsAtMatchedIndexBeforeWideAncestor) {
+  auto ImageOrErr = neverd::loadBinary(identityCfgLaneObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_identity_guard_wide_ancestor");
+  ASSERT_NE(Function, nullptr);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_EQ(Low.JumpTables.front().Targets.size(), 7u);
+  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
 TEST_F(JTE_X86_64, GuardEvidenceDepthBudgetFailsClosed) {
   auto R = liftToLowIR(identityCfgLaneObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;

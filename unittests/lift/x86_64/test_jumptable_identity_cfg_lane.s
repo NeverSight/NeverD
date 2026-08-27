@@ -1469,6 +1469,48 @@ jt_identity_guard_shared_dag_budget:
         retq
         .size   jt_identity_guard_shared_dag_budget, .-jt_identity_guard_shared_dag_budget
 
+// The range guard consumes the exact narrow table index, but that index was
+// originally extracted from a 128-bit SIMD value.  Guard syntax collection
+// must stop once the narrow occurrence is proven equal to the dispatch index;
+// it must not discard the guard merely because expanding the now-irrelevant
+// upstream SIMD lane is unsupported by the scalar guard expression builder.
+        .globl  jt_identity_guard_wide_ancestor
+        .type   jt_identity_guard_wide_ancestor,@function
+jt_identity_guard_wide_ancestor:
+        movd    %xmm0, %r10d
+        andl    $7, %r10d
+        cmpl    $6, %r10d
+        ja      .Lguard_wide_default
+        leaq    .Lguard_wide_table(%rip), %rax
+        movslq  (%rax,%r10,4), %rcx
+        addq    %rax, %rcx
+        jmpq    *%rcx
+.Lguard_wide_case0:
+        movl    $4300, %eax
+        retq
+.Lguard_wide_case1:
+        movl    $4301, %eax
+        retq
+.Lguard_wide_case2:
+        movl    $4302, %eax
+        retq
+.Lguard_wide_case3:
+        movl    $4303, %eax
+        retq
+.Lguard_wide_case4:
+        movl    $4304, %eax
+        retq
+.Lguard_wide_case5:
+        movl    $4305, %eax
+        retq
+.Lguard_wide_case6:
+        movl    $4306, %eax
+        retq
+.Lguard_wide_default:
+        movl    $4399, %eax
+        retq
+        .size   jt_identity_guard_wide_ancestor, .-jt_identity_guard_wide_ancestor
+
 // A long non-value-preserving syntax chain exceeds the explicit expression
 // depth ceiling before SAT construction.  Exhaustion is a failed certificate,
 // so the relocation run must not rescue the table and the analysis must not
@@ -1511,6 +1553,15 @@ jt_identity_guard_depth_budget:
         .long .Lguard_shared_dag_case1-.Lguard_shared_dag_table
         .long .Lguard_shared_dag_case2-.Lguard_shared_dag_table
         .long .Lguard_shared_dag_case3-.Lguard_shared_dag_table
+        .long 0
+.Lguard_wide_table:
+        .long .Lguard_wide_case0-.Lguard_wide_table
+        .long .Lguard_wide_case1-.Lguard_wide_table
+        .long .Lguard_wide_case2-.Lguard_wide_table
+        .long .Lguard_wide_case3-.Lguard_wide_table
+        .long .Lguard_wide_case4-.Lguard_wide_table
+        .long .Lguard_wide_case5-.Lguard_wide_table
+        .long .Lguard_wide_case6-.Lguard_wide_table
         .long 0
 .Lguard_depth_table:
         .long .Lguard_depth_case0-.Lguard_depth_table
