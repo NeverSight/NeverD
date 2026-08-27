@@ -330,6 +330,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   I386GOTOFFProposalShapeClaimed = false;
   I386GOTOFFProposalEvidenceIncomplete = false;
   I386GOTOFFAmbiguousModelReach = false;
+  I386GOTOFFPrivateFrameModelAuthenticated = false;
   CurrentI386GOTOFFAmbiguityKeys.clear();
   const size_t CandidateEvidenceLimit = std::min<size_t>(
       limits::kMaxJumpTableMaskFixedPointEvidenceWork,

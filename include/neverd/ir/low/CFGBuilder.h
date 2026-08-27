@@ -506,6 +506,14 @@ private:
     /// without re-resolving their inputs.  Callers must separately
     /// authenticate the relation that grants each producer.
     bool UseDefinedAlternativesAsOccurrenceRoots = false;
+    /// The candidate is an exact i386 GOT-base model use whose reaching value
+    /// may be reloaded from a caller-frame spill.  Calls are transparent to
+    /// that reload only after the value resolver proves that no current-frame
+    /// address reaches a STORE, call argument, return, or side-effecting
+    /// intrinsic anywhere in the candidate graph.  This is deliberately
+    /// query-local: ordinary frame-memory queries retain the opaque call
+    /// barrier.
+    bool AllowPrivateFrameMemoryAcrossCalls = false;
     JumpTableValueRelation Relation = JumpTableValueRelation::MustEqual;
     /// UnsignedLessThan/UnsignedFeasibleSet's exclusive bound, or
     /// ExactUnsignedModuloRecipe's exact divisor.
@@ -1478,6 +1486,11 @@ private:
   /// writers.  Kept separate from the general proposal-budget flag so missing
   /// model metadata elsewhere cannot preserve an unrelated i386 branch.
   mutable bool I386GOTOFFAmbiguousModelReach = false;
+  /// The current candidate has completed an exact, non-ambiguous i386 GOT-base
+  /// model proof.  Its subsequent target/address role queries may reuse the
+  /// same query-local private-frame escape audit; unrelated candidates and
+  /// ordinary value queries retain the opaque call barrier.
+  mutable bool I386GOTOFFPrivateFrameModelAuthenticated = false;
   mutable bool I386GOTOFFGraphQueryIssuedForTesting = false;
   mutable bool I386GOTOFFGraphQueryBudgetExhaustedForTesting = false;
   /// One transactional allowance for stack-materialized table evidence in the

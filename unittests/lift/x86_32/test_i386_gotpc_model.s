@@ -619,6 +619,119 @@ jt_i386_gotoff_prescaled_literal_zero:
   ret
 .size jt_i386_gotoff_prescaled_literal_zero, .-jt_i386_gotoff_prescaled_literal_zero
 
+// A call/pop GOT base is spilled to a private caller-frame cell.  One table
+// arm calls an ordinary scalar helper and then re-enters the dispatch, so the
+// expanded proof graph must trace the exact GOTOFF model through a CALL before
+// reloading the spill.  The helper never observes the spill address.
+.p2align 2
+.globl jt_i386_gotoff_private_spill_calls
+.type jt_i386_gotoff_private_spill_calls, @function
+jt_i386_gotoff_private_spill_calls:
+  pushl %ebp
+  movl %esp, %ebp
+  subl $8, %esp
+  call .Lprivate_spill_pc
+.Lprivate_spill_pc:
+  popl %eax
+  .byte 0x05                       // addl imm32, %eax
+.Lprivate_spill_gotpc:
+  .long .Lprivate_spill_gotpc - .Lprivate_spill_pc
+  .reloc .Lprivate_spill_gotpc, R_386_GOTPC, _GLOBAL_OFFSET_TABLE_
+  movl %eax, -4(%ebp)
+  movl 8(%ebp), %ecx
+  andl $1, %ecx
+.Lprivate_spill_dispatch:
+  cmpl $1, %ecx
+  ja .Lprivate_spill_default
+  movl -4(%ebp), %ebx
+  movl .Lprivate_spill_table@GOTOFF(%ebx,%ecx,4), %eax
+  addl %ebx, %eax
+.globl jt_i386_gotoff_private_spill_calls_branch
+jt_i386_gotoff_private_spill_calls_branch:
+  jmp *%eax
+.Lprivate_spill_case0:
+  pushl %ecx
+  call jt_i386_gotoff_private_spill_scalar
+  addl $4, %esp
+  movl $1, %ecx
+  jmp .Lprivate_spill_dispatch
+.Lprivate_spill_case1:
+  movl $5901, %eax
+  leave
+  ret
+.Lprivate_spill_default:
+  movl $-1, %eax
+  leave
+  ret
+.size jt_i386_gotoff_private_spill_calls, .-jt_i386_gotoff_private_spill_calls
+
+// The same shape becomes unsafe when a case passes the GOT-base spill address
+// to a callee.  A byte spill/reload leaves the pointer unchanged but must not
+// hide its untouched frame-derived bytes; the callee can then alias the spill
+// before the next dispatch, so the audit must not reuse the older STORE.
+.p2align 2
+.globl jt_i386_gotoff_escaped_spill_call
+.type jt_i386_gotoff_escaped_spill_call, @function
+jt_i386_gotoff_escaped_spill_call:
+  pushl %ebp
+  movl %esp, %ebp
+  subl $8, %esp
+  call .Lesescaped_spill_pc
+.Lesescaped_spill_pc:
+  popl %eax
+  .byte 0x05                       // addl imm32, %eax
+.Lesescaped_spill_gotpc:
+  .long .Lesescaped_spill_gotpc - .Lesescaped_spill_pc
+  .reloc .Lesescaped_spill_gotpc, R_386_GOTPC, _GLOBAL_OFFSET_TABLE_
+  movl %eax, -4(%ebp)
+  movl 8(%ebp), %ecx
+  andl $1, %ecx
+.Lesescaped_spill_dispatch:
+  cmpl $1, %ecx
+  ja .Lesescaped_spill_default
+  movl -4(%ebp), %ebx
+  movl .Lesescaped_spill_table@GOTOFF(%ebx,%ecx,4), %eax
+  addl %ebx, %eax
+.globl jt_i386_gotoff_escaped_spill_call_branch
+jt_i386_gotoff_escaped_spill_call_branch:
+  jmp *%eax
+.Lesescaped_spill_case0:
+  leal -4(%ebp), %eax
+  movb %al, -8(%ebp)
+  movb -8(%ebp), %al
+  pushl %eax
+  call jt_i386_gotoff_private_spill_mutator
+  addl $4, %esp
+  movl $1, %ecx
+  jmp .Lesescaped_spill_dispatch
+.Lesescaped_spill_case1:
+  movl $5911, %eax
+  leave
+  ret
+.Lesescaped_spill_default:
+  movl $-1, %eax
+  leave
+  ret
+.size jt_i386_gotoff_escaped_spill_call, .-jt_i386_gotoff_escaped_spill_call
+
+.p2align 2
+.globl jt_i386_gotoff_private_spill_scalar
+.type jt_i386_gotoff_private_spill_scalar, @function
+jt_i386_gotoff_private_spill_scalar:
+  movl 4(%esp), %eax
+  addl $1, %eax
+  ret
+.size jt_i386_gotoff_private_spill_scalar, .-jt_i386_gotoff_private_spill_scalar
+
+.p2align 2
+.globl jt_i386_gotoff_private_spill_mutator
+.type jt_i386_gotoff_private_spill_mutator, @function
+jt_i386_gotoff_private_spill_mutator:
+  movl 4(%esp), %eax
+  movl $0, (%eax)
+  ret
+.size jt_i386_gotoff_private_spill_mutator, .-jt_i386_gotoff_private_spill_mutator
+
 .section .rodata,"a",@progbits
 .p2align 2
 .globl jt_i386_gotpc_rooted_pop_pointer
@@ -764,5 +877,23 @@ jt_i386_gotoff_prescaled_literal_table:
   .long .Lprescaled_literal_case2@GOTOFF
   .long .Lprescaled_literal_case3@GOTOFF
 .size jt_i386_gotoff_prescaled_literal_table, .-jt_i386_gotoff_prescaled_literal_table
+
+.p2align 2
+.globl jt_i386_gotoff_private_spill_table
+.type jt_i386_gotoff_private_spill_table, @object
+jt_i386_gotoff_private_spill_table:
+.Lprivate_spill_table:
+  .long .Lprivate_spill_case0 - .Lgotpc_text_base
+  .long .Lprivate_spill_case1 - .Lgotpc_text_base
+.size jt_i386_gotoff_private_spill_table, .-jt_i386_gotoff_private_spill_table
+
+.p2align 2
+.globl jt_i386_gotoff_escaped_spill_table
+.type jt_i386_gotoff_escaped_spill_table, @object
+jt_i386_gotoff_escaped_spill_table:
+.Lesescaped_spill_table:
+  .long .Lesescaped_spill_case0 - .Lgotpc_text_base
+  .long .Lesescaped_spill_case1 - .Lgotpc_text_base
+.size jt_i386_gotoff_escaped_spill_table, .-jt_i386_gotoff_escaped_spill_table
 
 .section .note.GNU-stack,"",@progbits

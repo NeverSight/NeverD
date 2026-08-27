@@ -3374,6 +3374,8 @@ bool CFGBuilder::exactI386ModelZeroReaches(const LowOp &Use, int BaseSide,
     }
     if (Cached->second.AmbiguousReach)
       I386GOTOFFAmbiguousModelReach = true;
+    I386GOTOFFPrivateFrameModelAuthenticated |=
+        Cached->second.Authenticated && !Cached->second.AmbiguousReach;
     RestoreProofRoots();
     return Cached->second.Authenticated && !Cached->second.AmbiguousReach;
   }
@@ -3393,6 +3395,7 @@ bool CFGBuilder::exactI386ModelZeroReaches(const LowOp &Use, int BaseSide,
     Query.UseAddr = Use.Addr;
     Query.UseSeq = Use.Seq;
     Query.Alternatives = std::move(Alternatives);
+    Query.AllowPrivateFrameMemoryAcrossCalls = true;
     Queries.push_back(std::move(Query));
   }
   if (!AmbiguousAlternatives.empty()) {
@@ -3402,6 +3405,7 @@ bool CFGBuilder::exactI386ModelZeroReaches(const LowOp &Use, int BaseSide,
     Query.UseAddr = Use.Addr;
     Query.UseSeq = Use.Seq;
     Query.Alternatives = std::move(AmbiguousAlternatives);
+    Query.AllowPrivateFrameMemoryAcrossCalls = true;
     Query.Relation = JumpTableValueRelation::MayDepend;
     Queries.push_back(std::move(Query));
   }
@@ -3465,6 +3469,8 @@ bool CFGBuilder::exactI386ModelZeroReaches(const LowOp &Use, int BaseSide,
     CurrentI386GOTOFFAmbiguityKeys.insert(ReplayKey);
   if (Result.AmbiguousReach)
     I386GOTOFFAmbiguousModelReach = true;
+  I386GOTOFFPrivateFrameModelAuthenticated |=
+      Result.Authenticated && !Result.AmbiguousReach;
   I386GOTOFFModelReachCache.emplace(std::move(CacheKey), Result);
   RestoreProofRoots();
   return Result.Authenticated && !Result.AmbiguousReach;
@@ -4026,6 +4032,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   // and then a second memo node after the shared allowance has been consumed.
   std::map<ValueKey, std::optional<ResolverResult>> ValueMemo;
   std::map<MemoryKey, std::optional<ResolverResult>> MemoryMemo;
+  std::map<ValueKey, std::optional<bool>> FrameAddressTaintMemo;
   bool QueryResolverAnalysisIncomplete = false;
 
   std::function<ResolverResult(int, int, const NdVar &, unsigned)> resolveValue;
@@ -4034,6 +4041,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   const JumpTableValueQuery *ActiveFrameMemoryQuery = nullptr;
   const JumpTableValueQuery *ActiveValueQuery = nullptr;
   std::optional<bool> MemoOccurrenceRootMode;
+  std::optional<bool> MemoPrivateFrameCallMode;
 
   auto constantValue = [&](const NdVar &V) -> ResolverResult {
     if (!V.isConst() || V.Size == 0)
@@ -4598,6 +4606,301 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     return Walk(Address, Before, 0);
   };
 
+  // Calls obey the platform ABI: without a current-frame-derived argument,
+  // stored pointer, or returned pointer, an ordinary callee cannot name a
+  // private caller-frame cell.  Track that narrow provenance fact directly in
+  // the immutable resolver graph.  This is a may-taint walk rather than an
+  // equality proof so SELECT/arithmetic/subregister reshapes cannot hide an
+  // escaping frame address.  LOAD and CALL results start new values; a frame
+  // pointer first written to memory is caught at that STORE before any later
+  // reload could obscure its origin.
+  std::function<std::optional<bool>(int, int, const NdVar &, unsigned)>
+      mayDependOnCurrentFrameAddress;
+  mayDependOnCurrentFrameAddress = [&](int Block, int Before,
+                                       const NdVar &Value,
+                                       unsigned Depth) -> std::optional<bool> {
+    if (Value.isConst() || Value.Size == 0)
+      return false;
+    if (!Value.isReg() && !Value.isTemp())
+      return false;
+    if (Block < 0 || Block >= static_cast<int>(Graph.Blocks.size()) ||
+        Before < 0) {
+      QueryResolverAnalysisIncomplete = true;
+      return std::nullopt;
+    }
+    if (Value.isReg() && TRI.isFrameReg(Value.Offset)) {
+      const bool WasIncomplete = QueryResolverAnalysisIncomplete;
+      const FrameResult Frame =
+          resolveFrameBase(Block, Before, Value.Offset, Depth + 1);
+      if (!WasIncomplete && QueryResolverAnalysisIncomplete)
+        return std::nullopt;
+      if (Frame.Kind == FrameResultKind::Value)
+        return true;
+      // An incoming caller FP or another non-affine scalar is not thereby a
+      // current-frame address.  Only the canonical frame proof grants taint;
+      // an actual resolver resource/depth failure was handled above.
+      return false;
+    }
+    if (Depth > MaxResolverDepth) {
+      QueryResolverAnalysisIncomplete = true;
+      return std::nullopt;
+    }
+
+    ValueKey Key{Block, Before, static_cast<uint8_t>(Value.Space), Value.Offset,
+                 Value.Size};
+    if (!consumeMemoLookup(ValueKeyWork, FrameAddressTaintMemo.size()))
+      return std::nullopt;
+    auto MemoIt = FrameAddressTaintMemo.find(Key);
+    if (MemoIt != FrameAddressTaintMemo.end())
+      // A recursive exact state with no discovered frame seed contributes no
+      // new taint.  Completed false states are deliberately not cached below:
+      // an ancestor may still discover a frame seed on another incoming arm.
+      return MemoIt->second.value_or(false);
+    if (!consumeMemoInsert(ValueKeyWork, FrameAddressTaintMemo.size()))
+      return std::nullopt;
+    MemoIt = FrameAddressTaintMemo.try_emplace(Key, std::nullopt).first;
+
+    const ResolverFlowBlock &B = Graph.Blocks[Block];
+    const LaneView Query = viewOf(Value);
+    if (!Query.Valid) {
+      FrameAddressTaintMemo.erase(MemoIt);
+      QueryResolverAnalysisIncomplete = true;
+      return std::nullopt;
+    }
+    for (int I = std::min(Before, static_cast<int>(B.Ops.size())) - 1; I >= 0;
+         --I) {
+      if (!consumeEvidence()) {
+        FrameAddressTaintMemo.erase(MemoIt);
+        return std::nullopt;
+      }
+      const LowOp &Def = B.Ops[I];
+      if ((Def.Opcode == NdOp::CALL || Def.Opcode == NdOp::INDIR_CALL) &&
+          Value.isReg()) {
+        bool Preserved = false;
+        if (Query.Valid && Query.Begin <= InvalidVA - Query.Container) {
+          const uint64_t Begin = Query.Container + Query.Begin;
+          if (Query.Size <= InvalidVA - Begin) {
+            const uint64_t End = Begin + Query.Size;
+            if (!consumeEvidence(CallPreservedRanges.size())) {
+              FrameAddressTaintMemo.erase(MemoIt);
+              return std::nullopt;
+            }
+            Preserved = std::any_of(
+                CallPreservedRanges.begin(), CallPreservedRanges.end(),
+                [&](const TargetRegisterRange &Range) {
+                  return Range.Bytes <= InvalidVA - Range.Offset &&
+                         Begin >= Range.Offset &&
+                         End <= Range.Offset + Range.Bytes;
+                });
+          }
+        }
+        if (!Preserved) {
+          MemoIt->second = false;
+          return false;
+        }
+      }
+
+      const LaneView Output = viewOf(Def.Output);
+      if (!sameContainer(Output, Query))
+        continue;
+      const uint32_t OEnd = Output.Begin + Output.Size;
+      const uint32_t QEnd = Query.Begin + Query.Size;
+      if (!(Output.Begin < QEnd && Query.Begin < OEnd))
+        continue;
+
+      const bool PartialOverwrite = Output.Begin > Query.Begin || OEnd < QEnd;
+      const bool FreshValue =
+          Def.Opcode == NdOp::LOAD || Def.Opcode == NdOp::CALL ||
+          Def.Opcode == NdOp::INDIR_CALL || Def.Opcode == NdOp::ATOMIC_XCHG ||
+          Def.Opcode == NdOp::ATOMIC_ADD || Def.Opcode == NdOp::ATOMIC_CMPXCHG;
+      bool Tainted = false;
+      if (!FreshValue) {
+        for (int Input = 0; Input < Def.NumInputs; ++Input) {
+          if (!consumeEvidence()) {
+            FrameAddressTaintMemo.erase(MemoIt);
+            return std::nullopt;
+          }
+          const std::optional<bool> InputTaint = mayDependOnCurrentFrameAddress(
+              Block, I, Def.Inputs[Input], Depth + 1);
+          if (!InputTaint) {
+            FrameAddressTaintMemo.erase(MemoIt);
+            return std::nullopt;
+          }
+          Tainted |= *InputTaint;
+        }
+      }
+      const std::optional<bool> Guarded = instructionIsGuarded(Def.Addr);
+      if (!Guarded) {
+        FrameAddressTaintMemo.erase(MemoIt);
+        return std::nullopt;
+      }
+      // A partial lane write leaves the untouched bytes of the queried
+      // pointer live even when the instruction is unconditional.  Merge that
+      // prior value just as a predicated full-width definition does; otherwise
+      // a byte/halfword clobber could hide an escaped frame address.
+      if (*Guarded || PartialOverwrite) {
+        const std::optional<bool> Old =
+            mayDependOnCurrentFrameAddress(Block, I, Value, Depth + 1);
+        if (!Old) {
+          FrameAddressTaintMemo.erase(MemoIt);
+          return std::nullopt;
+        }
+        Tainted |= *Old;
+      }
+      if (Tainted)
+        MemoIt->second = true;
+      else
+        FrameAddressTaintMemo.erase(MemoIt);
+      return Tainted;
+    }
+
+    bool Tainted = false;
+    for (int Pred : B.Preds) {
+      if (!consumeEvidence()) {
+        FrameAddressTaintMemo.erase(MemoIt);
+        return std::nullopt;
+      }
+      if (Pred < 0 || Pred >= static_cast<int>(Graph.Blocks.size())) {
+        FrameAddressTaintMemo.erase(MemoIt);
+        QueryResolverAnalysisIncomplete = true;
+        return std::nullopt;
+      }
+      const std::optional<bool> Incoming = mayDependOnCurrentFrameAddress(
+          Pred, static_cast<int>(Graph.Blocks[Pred].Ops.size()), Value,
+          Depth + 1);
+      if (!Incoming) {
+        FrameAddressTaintMemo.erase(MemoIt);
+        return std::nullopt;
+      }
+      Tainted |= *Incoming;
+    }
+    if (Tainted)
+      MemoIt->second = true;
+    else
+      FrameAddressTaintMemo.erase(MemoIt);
+    return Tainted;
+  };
+
+  using PrivateFrameSlotKey = std::tuple<uint64_t, int64_t, uint16_t>;
+  constexpr size_t PrivateFrameSlotKeyWork = 3;
+  std::map<PrivateFrameSlotKey, bool> PrivateFrameAuditMemo;
+  auto currentFrameAddressesRemainPrivate =
+      [&](uint64_t SlotBase, int64_t SlotOffset,
+          uint16_t SlotSize) -> std::optional<bool> {
+    const PrivateFrameSlotKey Key{SlotBase, SlotOffset, SlotSize};
+    if (!consumeMemoLookup(PrivateFrameSlotKeyWork,
+                           PrivateFrameAuditMemo.size()))
+      return std::nullopt;
+    const auto Cached = PrivateFrameAuditMemo.find(Key);
+    if (Cached != PrivateFrameAuditMemo.end())
+      return Cached->second;
+    FrameAddressTaintMemo.clear();
+    auto publishResult = [&](bool Result) -> std::optional<bool> {
+      if (!consumeMemoInsert(PrivateFrameSlotKeyWork,
+                             PrivateFrameAuditMemo.size()))
+        return std::nullopt;
+      PrivateFrameAuditMemo.try_emplace(Key, Result);
+      return Result;
+    };
+
+    auto Escapes = [&](int Block, int Before,
+                       const NdVar &Value) -> std::optional<bool> {
+      if (Value.Size < CurrentImg->getPointerSize())
+        return false;
+      const bool WasIncomplete = QueryResolverAnalysisIncomplete;
+      FrameResult Address = resolveFrameVar(Block, Before, Value, 0);
+      if (!WasIncomplete && QueryResolverAnalysisIncomplete)
+        return std::nullopt;
+      if (Address.Kind == FrameResultKind::Value) {
+        const uint16_t PointerSize = CurrentImg->getPointerSize();
+        if (SlotOffset > std::numeric_limits<int64_t>::max() -
+                             static_cast<int64_t>(SlotSize) ||
+            Address.Offset > std::numeric_limits<int64_t>::max() -
+                                 static_cast<int64_t>(PointerSize))
+          return std::nullopt;
+        const int64_t SlotEnd = SlotOffset + static_cast<int64_t>(SlotSize);
+        const int64_t AddressEnd =
+            Address.Offset + static_cast<int64_t>(PointerSize);
+        return SlotBase == TRI.StackPointer && Address.Offset < SlotEnd &&
+               SlotOffset < AddressEnd;
+      }
+      return mayDependOnCurrentFrameAddress(Block, Before, Value, 0);
+    };
+    if (!consumeEvidence(Graph.Blocks.size()))
+      return std::nullopt;
+    for (int Block = 0; Block < static_cast<int>(Graph.Blocks.size());
+         ++Block) {
+      const ResolverFlowBlock &B = Graph.Blocks[Block];
+      for (int I = 0; I < static_cast<int>(B.Ops.size()); ++I) {
+        if (!consumeEvidence())
+          return std::nullopt;
+        const LowOp &Op = B.Ops[I];
+        auto RejectIfEscaped = [&](const NdVar &Value) {
+          const std::optional<bool> Tainted = Escapes(Block, I, Value);
+          if (!Tainted)
+            return std::optional<bool>{};
+          return std::optional<bool>{!*Tainted};
+        };
+
+        if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2) {
+          const NdVar &Stored = Op.NumInputs >= 3 ? Op.Inputs[2] : Op.Inputs[1];
+          const std::optional<bool> Safe = RejectIfEscaped(Stored);
+          if (!Safe)
+            return std::nullopt;
+          if (!*Safe)
+            return publishResult(false);
+        }
+        if ((Op.Opcode == NdOp::ATOMIC_XCHG || Op.Opcode == NdOp::ATOMIC_ADD ||
+             Op.Opcode == NdOp::ATOMIC_CMPXCHG) &&
+            Op.NumInputs >= 2) {
+          for (int Input = 1; Input < Op.NumInputs; ++Input) {
+            if (!consumeEvidence())
+              return std::nullopt;
+            const std::optional<bool> Safe = RejectIfEscaped(Op.Inputs[Input]);
+            if (!Safe)
+              return std::nullopt;
+            if (!*Safe)
+              return publishResult(false);
+          }
+        }
+        if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+          for (int Input = 0; Input < Op.NumInputs; ++Input) {
+            if (!consumeEvidence())
+              return std::nullopt;
+            const std::optional<bool> Safe = RejectIfEscaped(Op.Inputs[Input]);
+            if (!Safe)
+              return std::nullopt;
+            if (!*Safe)
+              return publishResult(false);
+          }
+          if (!consumeEvidence(IntParamRegs.size()))
+            return std::nullopt;
+          for (uint64_t Register : IntParamRegs) {
+            const std::optional<bool> Safe = RejectIfEscaped(NdVar::reg(
+                Register, static_cast<uint16_t>(CurrentImg->getPointerSize())));
+            if (!Safe)
+              return std::nullopt;
+            if (!*Safe)
+              return publishResult(false);
+          }
+        }
+        if (Op.Opcode == NdOp::RETURN || (Op.Opcode == NdOp::INTRINSIC &&
+                                          intrinsicMayClobberFrameMemory(Op))) {
+          for (int Input = 0; Input < Op.NumInputs; ++Input) {
+            if (!consumeEvidence())
+              return std::nullopt;
+            const std::optional<bool> Safe = RejectIfEscaped(Op.Inputs[Input]);
+            if (!Safe)
+              return std::nullopt;
+            if (!*Safe)
+              return publishResult(false);
+          }
+        }
+      }
+    }
+    return publishResult(true);
+  };
+
   auto isKnownMemsetCall = [&](const LowOp &Op) {
     if (Op.Opcode != NdOp::CALL || Op.NumInputs < 1 ||
         !Op.Inputs[0].isConst())
@@ -4780,6 +5083,20 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         }
       }
       if (ExactDisjointMemset)
+        continue;
+      bool PrivateFrameCall = false;
+      if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
+          ActiveValueQuery &&
+          ActiveValueQuery->AllowPrivateFrameMemoryAcrossCalls) {
+        const std::optional<bool> Private =
+            currentFrameAddressesRemainPrivate(SlotBase, SlotOffset, Size);
+        if (!Private) {
+          Found = true;
+          break;
+        }
+        PrivateFrameCall = *Private;
+      }
+      if (PrivateFrameCall)
         continue;
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
           intrinsicMayClobberFrameMemory(Op)) {
@@ -6651,6 +6968,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     }
     const JumpTableValueQuery &Query = Queries[QueryIndex];
     ActiveValueQuery = &Query;
+    PrivateFrameAuditMemo.clear();
+    FrameAddressTaintMemo.clear();
     const bool OccurrenceRootMode =
         Query.UseDefinedAlternativesAsOccurrenceRoots;
     if (OccurrenceRootMode && !prepareDefinedOccurrenceRoots()) {
@@ -6664,6 +6983,13 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       FrameMemo.clear();
     }
     MemoOccurrenceRootMode = OccurrenceRootMode;
+    if (MemoPrivateFrameCallMode &&
+        *MemoPrivateFrameCallMode != Query.AllowPrivateFrameMemoryAcrossCalls) {
+      ValueMemo.clear();
+      MemoryMemo.clear();
+      FrameMemo.clear();
+    }
+    MemoPrivateFrameCallMode = Query.AllowPrivateFrameMemoryAcrossCalls;
     if (Query.Candidate.Size == 0 ||
         (Query.Relation != JumpTableValueRelation::UnsignedLessThan &&
          Query.Relation != JumpTableValueRelation::ResolvableValue &&
@@ -7347,6 +7673,8 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
       Query.UseSeq = Use.Seq;
       Query.UseDefinedAlternativesAsOccurrenceRoots =
           UseDefinedAlternativesAsRoots;
+      Query.AllowPrivateFrameMemoryAcrossCalls =
+          I386GOTOFFPrivateFrameModelAuthenticated;
       Query.Alternatives.reserve(Alternatives.size());
       Query.Alternatives.insert(Query.Alternatives.end(), Alternatives.begin(),
                                 Alternatives.end());
@@ -7630,6 +7958,8 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
   FinalQuery.UseSeq = IndirectBranch->Seq;
   FinalQuery.UseDefinedAlternativesAsOccurrenceRoots =
       UseDefinedAlternativesAsRoots;
+  FinalQuery.AllowPrivateFrameMemoryAcrossCalls =
+      I386GOTOFFPrivateFrameModelAuthenticated;
   FinalQuery.Alternatives = std::move(*FinalAlternatives);
   FinalQueries.push_back(std::move(FinalQuery));
   bool FinalQueryComplete = true;
@@ -8056,6 +8386,8 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
     Query.UseSeq = Use.Seq;
     Query.UseDefinedAlternativesAsOccurrenceRoots =
         UseDefinedAlternativesAsRoots;
+    Query.AllowPrivateFrameMemoryAcrossCalls =
+        I386GOTOFFPrivateFrameModelAuthenticated;
     Query.Alternatives.reserve(Alternatives.size());
     Query.Alternatives.insert(Query.Alternatives.end(), Alternatives.begin(),
                               Alternatives.end());

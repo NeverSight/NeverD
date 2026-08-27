@@ -519,6 +519,66 @@ TEST_F(JTE_X86_32, GOTOFFSwitchRequiresExactCallPopAndDataFieldOccurrences) {
          "not borrow GOTOFF semantics";
 }
 
+TEST_F(JTE_X86_32, GOTOFFPrivateFrameSpillSurvivesOnlyNonEscapingCalls) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Private =
+      Image.findSymbol("jt_i386_gotoff_private_spill_calls");
+  const neverd::Symbol *PrivateBranch =
+      Image.findSymbol("jt_i386_gotoff_private_spill_calls_branch");
+  const neverd::Symbol *Escaped =
+      Image.findSymbol("jt_i386_gotoff_escaped_spill_call");
+  const neverd::Symbol *EscapedBranch =
+      Image.findSymbol("jt_i386_gotoff_escaped_spill_call_branch");
+  ASSERT_NE(Private, nullptr);
+  ASSERT_NE(PrivateBranch, nullptr);
+  ASSERT_NE(Escaped, nullptr);
+  ASSERT_NE(EscapedBranch, nullptr);
+
+  auto Build = [&](const neverd::Symbol &Function) {
+    neverd::Decoder Decoder;
+    EXPECT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    return Builder.build(Image, Decoder, Function.Addr, Function.Name);
+  };
+  auto HasOpcodeAt = [](const neverd::LowFunc &Low, neverd::va_t Address,
+                        neverd::NdOp Opcode) {
+    for (const neverd::LowBlock &Block : Low.Blocks)
+      for (const neverd::LowOp &Op : Block.Ops)
+        if (Op.Addr == Address && Op.Opcode == Opcode)
+          return true;
+    return false;
+  };
+
+  const neverd::LowFunc PrivateLow = Build(*Private);
+  ASSERT_EQ(PrivateLow.JumpTables.size(), 1u);
+  EXPECT_EQ(PrivateLow.JumpTables.front().InsnAddr, PrivateBranch->Addr);
+  EXPECT_EQ(PrivateLow.JumpTables.front().Targets.size(), 2u);
+  EXPECT_TRUE(
+      HasOpcodeAt(PrivateLow, PrivateBranch->Addr, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(
+      HasOpcodeAt(PrivateLow, PrivateBranch->Addr, neverd::NdOp::INDIR_CALL));
+  EXPECT_EQ(PrivateLow.UnsafeIndirectBranchAddresses.count(PrivateBranch->Addr),
+            0u);
+
+  const neverd::LowFunc EscapedLow = Build(*Escaped);
+  EXPECT_TRUE(EscapedLow.JumpTables.empty());
+  EXPECT_TRUE(
+      HasOpcodeAt(EscapedLow, EscapedBranch->Addr, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(
+      HasOpcodeAt(EscapedLow, EscapedBranch->Addr, neverd::NdOp::INDIR_CALL));
+  EXPECT_EQ(EscapedLow.UnsafeIndirectBranchAddresses.count(EscapedBranch->Addr),
+            1u)
+      << "an escaped GOT-base spill remains an opaque indirect branch";
+  EXPECT_EQ(EscapedLow.EverPublishedJumpTableBranchAddresses.count(
+                EscapedBranch->Addr),
+            1u)
+      << "the negative must fail during expanded-graph replay, not before the "
+         "table shape is exercised";
+}
+
 TEST_F(JTE_X86_32, TLSDescWriterFootprintInvalidatesOnlyOverlappingGOTPCField) {
   auto ImageOrErr = neverd::loadBinary(i386RelocationWriterFootprintObj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
@@ -1482,7 +1542,7 @@ TEST_F(JTE_X86_32, GOTOFFProposalBudgetExhaustionFailsClosed) {
   // propagation.  Passing a null GraphWorkBudget makes that query unbounded
   // and incorrectly publishes the table (with EverPublished set and no unsafe
   // identity), so the semantic assertions below are a true wiring mutation.
-  constexpr size_t QueryBudget = 2816;
+  constexpr size_t QueryBudget = 3840;
   const BudgetedBuild GraphBoundary = BuildWithBudget(QueryBudget);
   EXPECT_TRUE(GraphBoundary.GraphQueryIssued);
   EXPECT_TRUE(GraphBoundary.GraphBudgetExhausted)
