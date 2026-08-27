@@ -353,10 +353,35 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       // reads already name that definition, and the following call's reverse
       // argument scan can now see it.  An external placeholder collision,
       // indirect call, integer-returning callee, aggregate return, or call
-      // already routed by modelCallFPReturn keeps its existing output.
+      // already routed by modelCallFPReturn keeps its existing output; the
+      // exact synthetic EDX:EAX/R1:R0 split below is the one false aggregate
+      // representation this scalar-FP certificate can replace.
+      const bool HasIntegerResult =
+          Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == TRI.IntReturnReg;
+      const MedVar ExistingOutput = Op.Output;
+      const bool HasSyntheticWideResult =
+          TRI.PointerSize == 4 && TRI.IntReturnReg2 != 0 &&
+          ExistingOutput.Kind == MedVar::Temp &&
+          ExistingOutput.Size == 2 * TRI.PointerSize &&
+          OI + 2 < Blk.Ops.size() && Blk.Ops[OI + 1].Opcode == NdOp::SUBBYTES &&
+          Blk.Ops[OI + 1].Addr == Op.Addr && Blk.Ops[OI + 1].NumInputs >= 2 &&
+          Blk.Ops[OI + 1].Inputs[0] == ExistingOutput &&
+          Blk.Ops[OI + 1].Inputs[1].isConst() &&
+          Blk.Ops[OI + 1].Inputs[1].ConstVal == 0 &&
+          Blk.Ops[OI + 1].Output.Kind == MedVar::Reg &&
+          Blk.Ops[OI + 1].Output.RegOff == TRI.IntReturnReg &&
+          Blk.Ops[OI + 1].Output.Size == TRI.PointerSize &&
+          Blk.Ops[OI + 2].Opcode == NdOp::SUBBYTES &&
+          Blk.Ops[OI + 2].Addr == Op.Addr && Blk.Ops[OI + 2].NumInputs >= 2 &&
+          Blk.Ops[OI + 2].Inputs[0] == ExistingOutput &&
+          Blk.Ops[OI + 2].Inputs[1].isConst() &&
+          Blk.Ops[OI + 2].Inputs[1].ConstVal == TRI.PointerSize &&
+          Blk.Ops[OI + 2].Output.Kind == MedVar::Reg &&
+          Blk.Ops[OI + 2].Output.RegOff == TRI.IntReturnReg2 &&
+          Blk.Ops[OI + 2].Output.Size == TRI.PointerSize;
       if (!CI.IsIndirect && !IsRelocExtern && !IsDirectImport &&
-          CalleeFPReturnSize && Op.Output.Kind == MedVar::Reg &&
-          Op.Output.RegOff == TRI.IntReturnReg && Op.CallSiteId != 0) {
+          CalleeFPReturnSize && (HasIntegerResult || HasSyntheticWideResult) &&
+          Op.CallSiteId != 0) {
         auto SizeIt = CalleeFPReturnSize->find(CI.TargetAddr);
         if (SizeIt != CalleeFPReturnSize->end() && SizeIt->second != 0) {
           auto ClobberIt = Func.CallClobbers.end();
@@ -374,6 +399,8 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
           if (ClobberIt != Func.CallClobbers.end()) {
             Op.Output = ClobberIt->Value;
             Func.CallClobbers.erase(ClobberIt);
+            if (HasSyntheticWideResult)
+              Blk.Ops.erase(Blk.Ops.begin() + OI + 1, Blk.Ops.begin() + OI + 3);
           }
         }
       }

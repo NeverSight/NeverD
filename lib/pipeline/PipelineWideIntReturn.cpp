@@ -400,6 +400,16 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result) {
       }
     }
 
+    // An exact intra-module callee already inferred as a scalar floating-point
+    // return cannot also be an integer register-pair return.  Caller-side
+    // EAX/EDX (or R0/R1) liveness is ambiguous across a following call and may
+    // otherwise manufacture a false wide-return candidate for a genuine
+    // XMM0/D0 result.
+    for (const auto &MF : Result.MedFuncs)
+      if (MF.ReturnType && MF.ReturnType->Kind == NdTypeKind::Float &&
+          MF.MultiReturn.empty())
+        WideRetCallees.erase(MF.Entry);
+
     // Once any call proves that an indirectly reached callee returns i64,
     // apply that signature to every resolvable call of the same callee.  In a
     // back-to-back `acc = fp(fp(acc))` chain only the final call reaches the

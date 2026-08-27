@@ -639,6 +639,52 @@ TEST(MedCallAbi, ExactVectorReturnFeedsFollowingFPCall) {
   EXPECT_TRUE(verifyMedFunc(Func, "test-exact-vector-return-chain"));
 }
 
+TEST(MedCallAbi, ExactVectorReturnReplacesFalseWideIntegerPair) {
+  constexpr Arch TheArch = Arch::X86;
+  constexpr va_t Callee = 0x2000;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+
+  MedFunc Func;
+  Func.Entry = 0x1000;
+  Func.Name = "fp_return_over_false_wide_pair";
+  Func.Blocks.resize(1);
+  MedBlock &Block = Func.Blocks[0];
+  Block.Id = 0;
+
+  const MedVar FalseWide = temp(20, 1, 8, TheArch);
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = 0x1004;
+  Call.CallSiteId = 1;
+  Call.Output = FalseWide;
+  Call.addInput(MedVar::makeConst(Callee, TRI.PointerSize));
+  Block.Ops.push_back(Call);
+
+  MedOp Low = binary(NdOp::SUBBYTES,
+                     reg(21, 1, TRI.PointerSize, TRI.IntReturnReg, TheArch),
+                     FalseWide, MedVar::makeConst(0, TRI.PointerSize));
+  Low.Addr = Call.Addr;
+  Block.Ops.push_back(Low);
+  MedOp High = binary(
+      NdOp::SUBBYTES, reg(22, 1, TRI.PointerSize, TRI.IntReturnReg2, TheArch),
+      FalseWide, MedVar::makeConst(TRI.PointerSize, TRI.PointerSize));
+  High.Addr = Call.Addr;
+  Block.Ops.push_back(High);
+
+  const MedVar FPResult = reg(10, 1, 16, TRI.FPReturnReg, TheArch);
+  Func.CallClobbers.push_back({FPResult, Call.CallSiteId});
+
+  const std::map<va_t, std::string> Names{{Callee, "fp_callee"}};
+  const std::map<va_t, uint16_t> FPReturnSize{{Callee, 8}};
+  recoverCallAbi(Func, TheArch, Names, nullptr, nullptr, nullptr, nullptr,
+                 &FPReturnSize);
+
+  ASSERT_EQ(Block.Ops.size(), 1u);
+  EXPECT_EQ(Block.Ops[0].Output, FPResult);
+  EXPECT_TRUE(Func.CallClobbers.empty());
+  EXPECT_TRUE(verifyMedFunc(Func, "test-exact-vector-over-false-wide-pair"));
+}
+
 TEST(MedCallAbi, IntegerReturnKeepsFPCallClobber) {
   constexpr Arch TheArch = Arch::X64;
   constexpr va_t Callee = 0x3000;
