@@ -2036,7 +2036,7 @@ jt_identity_mask_fp_entry_bound_late_escape:
 
 // Same closure hazard through a pre-scaled byte selector.  Its address scale
 // intentionally differs from the physical entry stride, exercising the
-// generic provisional-graph fallback rather than the dense 1:1 mapper.
+// candidate-local byte-coordinate-to-slot mapper and its final closure check.
         .globl  jt_identity_mask_fp_prescaled_late_escape
         .type   jt_identity_mask_fp_prescaled_late_escape,@function
 jt_identity_mask_fp_prescaled_late_escape:

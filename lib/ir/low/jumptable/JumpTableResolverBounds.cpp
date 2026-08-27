@@ -932,6 +932,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
   // before admitting another domain.  The bounded physical run supplies the
   // coordinate-to-target map only; it never supplies selector authority.
   bool FixedPointGateIncomplete = false;
+  std::optional<uint64_t> FixedPointAddressScale;
   if (AllowFixedPointBootstrap && !CandidateTargetsOverride &&
       !ReachableInstructions && CurrentImg && Info.PhysicalCapacity >= 2 &&
       Info.PhysicalCapacity <= limits::kMaxJumpTableEntries && [&] {
@@ -954,11 +955,19 @@ uint32_t CFGBuilder::inferBoundsFromMask(
             return false;
           AddressScale = Role.AddressScale;
         }
-        // The fixed-point target vector is indexed directly by selector
-        // coordinate.  Folded/pre-scaled layouts require the caller's separate
-        // byte-coordinate mapping and stay on the ordinary proof path.
-        return AddressScale && PhysicalStride != 0 &&
-               *AddressScale == PhysicalStride;
+        // The fixed-point target vector is indexed by physical slot.  Most
+        // selectors name that slot directly; a pre-scaled selector instead
+        // names its byte offset and is mapped through the independently
+        // authenticated address scale below.
+        const bool DirectCoordinates =
+            AddressScale && PhysicalStride != 0 &&
+            *AddressScale == PhysicalStride;
+        const bool PreScaledCoordinates =
+            AddressScale && PhysicalStride != 0 && Info.PreScaledIndex &&
+            *AddressScale == 1 && Info.Stride == PhysicalStride;
+        if (DirectCoordinates || PreScaledCoordinates)
+          FixedPointAddressScale = AddressScale;
+        return FixedPointAddressScale.has_value();
       }()) {
     // One top-level candidate owns one aggregate allowance.  All seed
     // queries, graph snapshots, iterations, recursive core proofs, and precise
@@ -1087,20 +1096,71 @@ uint32_t CFGBuilder::inferBoundsFromMask(
           return 0;
         JumpTableInfo FixedPointInfo = Info;
         FixedPointInfo.PhysicalCapacity = CandidateCapacity;
+        const uint64_t PhysicalStride =
+            Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize;
+        auto coordinateForSlot = [&](uint32_t Slot)
+            -> std::optional<uint32_t> {
+          if (!Info.PreScaledIndex || !FixedPointAddressScale ||
+              *FixedPointAddressScale == 0 ||
+              PhysicalStride == 0 ||
+              (Slot != 0 && PhysicalStride >
+                                std::numeric_limits<uint64_t>::max() / Slot))
+            return std::nullopt;
+          const uint64_t ByteOffset = uint64_t(Slot) * PhysicalStride;
+          if (ByteOffset % *FixedPointAddressScale != 0)
+            return std::nullopt;
+          const uint64_t Coordinate = ByteOffset / *FixedPointAddressScale;
+          // The published bound is one past the largest coordinate, so the
+          // largest uint32_t value cannot be represented even though the
+          // coordinate itself fits.
+          if (Coordinate >= std::numeric_limits<uint32_t>::max())
+            return std::nullopt;
+          return static_cast<uint32_t>(Coordinate);
+        };
+        auto slotForCoordinate = [&](uint32_t Coordinate)
+            -> std::optional<uint32_t> {
+          if (!Info.PreScaledIndex || !FixedPointAddressScale ||
+              *FixedPointAddressScale == 0 ||
+              PhysicalStride == 0 ||
+              (Coordinate != 0 && *FixedPointAddressScale >
+                                      std::numeric_limits<uint64_t>::max() /
+                                          Coordinate))
+            return std::nullopt;
+          const uint64_t ByteOffset =
+              uint64_t(Coordinate) * *FixedPointAddressScale;
+          if (ByteOffset % PhysicalStride != 0)
+            return std::nullopt;
+          const uint64_t Slot = ByteOffset / PhysicalStride;
+          if (Slot >= PhysicalTargets.size() ||
+              Slot > std::numeric_limits<uint32_t>::max())
+            return std::nullopt;
+          return static_cast<uint32_t>(Slot);
+        };
         auto targetsFor = [&](const std::set<uint32_t> &Coordinates)
             -> std::optional<std::vector<va_t>> {
-          // ExactDenseSlots proved that physical slot I is coordinate I, so an
-          // ordered coordinate traversal can project targets directly without
-          // rescanning the whole physical vector or performing set lookups.
-          // Pay source traversal, retained results, and future cleanup first.
-          if (!consumeBudgetProducts({{Coordinates.size(), 3}}))
+          // ExactDenseSlots proved that physical slot I belongs to target I.
+          // Runtime coordinates may still be byte offsets (pre-scaled tables),
+          // so map each coordinate through the authenticated address scale
+          // instead of treating it as a physical slot number.  Pay source
+          // traversal, retained results, and future cleanup first.
+          const size_t WorkPerCoordinate = Info.PreScaledIndex ? 4 : 3;
+          if (!consumeBudgetProducts(
+                  {{Coordinates.size(), WorkPerCoordinate}}))
             return std::nullopt;
           std::vector<va_t> Targets;
           Targets.reserve(Coordinates.size());
           for (uint32_t Coordinate : Coordinates) {
-            if (Coordinate >= PhysicalTargets.size())
+            if (!Info.PreScaledIndex) {
+              if (Coordinate >= PhysicalTargets.size())
+                return std::nullopt;
+              Targets.push_back(PhysicalTargets[Coordinate]);
+              continue;
+            }
+            const std::optional<uint32_t> Slot =
+                slotForCoordinate(Coordinate);
+            if (!Slot)
               return std::nullopt;
-            Targets.push_back(PhysicalTargets[Coordinate]);
+            Targets.push_back(PhysicalTargets[*Slot]);
           }
           return Targets;
         };
@@ -1357,9 +1417,22 @@ uint32_t CFGBuilder::inferBoundsFromMask(
         if (!consumeBudget(*EvidenceBudget,
                            SeedQueryCount * SeedWorkPerQuery))
           return 0;
+        // A pre-scaled layout performs one checked slot-to-coordinate mapping
+        // while constructing the seed batch and one more while consuming its
+        // result.  Direct-coordinate layouts retain the old constant-time path.
+        if (Info.PreScaledIndex &&
+            !consumeBudgetProducts({{CandidateCapacity, 2}}))
+          return 0;
         SeedQueries.reserve(SeedQueryCount);
-        for (uint32_t Coordinate = 0; Coordinate < CandidateCapacity;
-             ++Coordinate)
+        for (uint32_t Slot = 0; Slot < CandidateCapacity; ++Slot) {
+          uint32_t Coordinate = Slot;
+          if (Info.PreScaledIndex) {
+            const std::optional<uint32_t> MappedCoordinate =
+                coordinateForSlot(Slot);
+            if (!MappedCoordinate)
+              return 0;
+            Coordinate = *MappedCoordinate;
+          }
           for (const JumpTableValueOccurrence &Index : IndexOccurrences) {
             JumpTableValueQuery Query;
             Query.Candidate = Index.Value;
@@ -1372,16 +1445,16 @@ uint32_t CFGBuilder::inferBoundsFromMask(
             Query.AllowZeroExtension = true;
             SeedQueries.push_back(std::move(Query));
           }
+        }
         std::vector<bool> SeedComplete;
         const std::vector<bool> SeedMatches = matchForTargets(
             SeedQueries, &NoTargets, EvidenceBudget, nullptr, &SeedComplete);
         bool SeedAnalysisIncomplete =
             SeedMatches.size() != SeedQueries.size() ||
             SeedComplete.size() != SeedQueries.size();
-        for (uint32_t Coordinate = 0;
-             !SeedAnalysisIncomplete && Coordinate < CandidateCapacity;
-             ++Coordinate) {
-          const size_t Begin = size_t(Coordinate) * IndexOccurrences.size();
+        for (uint32_t Slot = 0;
+             !SeedAnalysisIncomplete && Slot < CandidateCapacity; ++Slot) {
+          const size_t Begin = size_t(Slot) * IndexOccurrences.size();
           const size_t End = Begin + IndexOccurrences.size();
           if (!std::all_of(SeedComplete.begin() + Begin,
                            SeedComplete.begin() + End,
@@ -1392,6 +1465,14 @@ uint32_t CFGBuilder::inferBoundsFromMask(
           if (std::all_of(SeedMatches.begin() + Begin,
                           SeedMatches.begin() + End,
                           [](bool Match) { return Match; })) {
+            uint32_t Coordinate = Slot;
+            if (Info.PreScaledIndex) {
+              const std::optional<uint32_t> MappedCoordinate =
+                  coordinateForSlot(Slot);
+              if (!MappedCoordinate)
+                return 0;
+              Coordinate = *MappedCoordinate;
+            }
             if (!consumeBudgetProducts(
                     {{1, orderedEvidenceLookupWork(Authorized.size()) + 3}}))
               return 0;
@@ -1436,7 +1517,8 @@ uint32_t CFGBuilder::inferBoundsFromMask(
               ExactFiniteReplayMinimumPresentBranches = MinimumPresentBranches;
               return true;
             };
-        if (Authorized.size() < limits::kMinJumpTableEntries &&
+        if (!Info.PreScaledIndex &&
+            Authorized.size() < limits::kMinJumpTableEntries &&
             Info.RelocAbsolute && HasExactGroupInventory &&
             ExactFiniteGroupBranches.size() >=
                 ExactConsumerGroup->MinimumPresentBranches &&
@@ -1445,7 +1527,8 @@ uint32_t CFGBuilder::inferBoundsFromMask(
                                    &ExactFiniteGroupBranches,
                                    ExactConsumerGroup->MinimumPresentBranches))
           return 0;
-        if (Authorized.size() < limits::kMinJumpTableEntries &&
+        if (!Info.PreScaledIndex &&
+            Authorized.size() < limits::kMinJumpTableEntries &&
             !ExactFiniteReplayOccurrences && Info.IsRelative &&
             !Info.RelocAbsolute &&
             !seedExactFiniteDomain(IndexOccurrences,
@@ -1482,14 +1565,18 @@ uint32_t CFGBuilder::inferBoundsFromMask(
               *SemanticIndexDomainAmbiguous = true;
             return 0;
           }
-          if (!consumeBudget(*EvidenceBudget, EntryCoordinates.size()))
+          const size_t EntryCoordinateWork = Info.PreScaledIndex ? 2 : 1;
+          if (!consumeBudgetProducts(
+                  {{EntryCoordinates.size(), EntryCoordinateWork}}))
             return 0;
           const bool CompleteEntryDomain =
               EntryBound != 0 && !EntryIncomplete &&
               !EntryCoordinates.empty() &&
               std::all_of(EntryCoordinates.begin(), EntryCoordinates.end(),
                           [&](uint32_t Coordinate) {
-                            return Coordinate < CandidateCapacity;
+                            if (!Info.PreScaledIndex)
+                              return Coordinate < CandidateCapacity;
+                            return slotForCoordinate(Coordinate).has_value();
                           });
           // A completed translated/intersection proof over a non-prefix
           // coordinate set is independent of the raw dense finite-set
@@ -1635,13 +1722,17 @@ uint32_t CFGBuilder::inferBoundsFromMask(
               return 0;
             }
 
-            if (!consumeBudget(*EvidenceBudget, CoreCoordinates.size()))
+            const size_t CoreCoordinateWork = Info.PreScaledIndex ? 2 : 1;
+            if (!consumeBudgetProducts(
+                    {{CoreCoordinates.size(), CoreCoordinateWork}}))
               return 0;
             const bool ValidCoreCoordinates =
                 CoreBound != 0 && !CoreCoordinates.empty() &&
                 std::all_of(CoreCoordinates.begin(), CoreCoordinates.end(),
                             [&](uint32_t Coordinate) {
-                              return Coordinate < CandidateCapacity;
+                              if (!Info.PreScaledIndex)
+                                return Coordinate < CandidateCapacity;
+                              return slotForCoordinate(Coordinate).has_value();
                             });
             const size_t CoreInsertCount =
                 ValidCoreCoordinates ? CoreCoordinates.size() : 0;
