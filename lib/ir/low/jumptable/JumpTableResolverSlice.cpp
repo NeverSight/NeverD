@@ -829,6 +829,7 @@ struct ResolverValueExpr {
   NdOp Opcode = NdOp::NOP;
   bool HasOpcode = false;
   bool ConstraintEqual = false;
+  bool ContainsMerge = false;
   std::optional<ResolverScalarModelOrigin> ScalarModelOrigin;
   ResolverValue Input;
   std::vector<ResolverValue> Inputs;
@@ -883,6 +884,7 @@ static ResolverValue resolverConstraint(const ResolverValue &Input,
   E->Size = Input->Size;
   E->Constant = Constant & resolverWidthMask(Input->Size);
   E->ConstraintEqual = Equal;
+  E->ContainsMerge = Input->ContainsMerge;
   E->Input = Input;
   return E;
 }
@@ -893,6 +895,7 @@ static ResolverValue resolverMerge(uint16_t Size, std::string Root,
     return {};
   auto E = std::make_shared<ResolverValueExpr>();
   E->K = ResolverValueExpr::Kind::Merge;
+  E->ContainsMerge = true;
   E->Size = Size;
   E->Root = std::move(Root);
   E->Inputs = std::move(Inputs);
@@ -907,6 +910,10 @@ resolverTransform(uint16_t Size, std::string Root,
     return {};
   auto E = std::make_shared<ResolverValueExpr>();
   E->K = ResolverValueExpr::Kind::Transform;
+  E->ContainsMerge = std::any_of(
+      Inputs.begin(), Inputs.end(), [](const ResolverValue &Input) {
+        return Input && Input->ContainsMerge;
+      });
   E->Size = Size;
   E->Root = std::move(Root);
   if (Opcode) {
@@ -982,7 +989,11 @@ template <typename ConsumeWorkFn>
 static ResolverValue budgetedResolverTransform(
     uint16_t Size, std::string_view Root, std::vector<ResolverValue> &&Inputs,
     std::optional<NdOp> Opcode, ConsumeWorkFn &&ConsumeWork) {
-  if (!consumeResolverProduct(Root.size(), 2, ConsumeWork) ||
+  // The retained node caches whether any nested input is a merge so exact
+  // query replay can remain O(1).  Charge that source scan before allocating
+  // the transform node.
+  if (!ConsumeWork(Inputs.size()) ||
+      !consumeResolverProduct(Root.size(), 2, ConsumeWork) ||
       !ConsumeWork(5))
     return {};
   return resolverTransform(Size, std::string(Root), std::move(Inputs),
@@ -1154,6 +1165,7 @@ static ResolverValue resolverExtend(
     E->K = Signed ? ResolverValueExpr::Kind::SignExtend
                   : ResolverValueExpr::Kind::ZeroExtend;
     E->Size = Size;
+    E->ContainsMerge = Node->ContainsMerge;
     E->Input = Node;
     return remember(Node, std::move(E));
   };
@@ -1340,6 +1352,7 @@ static ResolverValue resolverSlice(
     E->K = ResolverValueExpr::Kind::Slice;
     E->Size = Size;
     E->SliceOffset = CurrentOffset;
+    E->ContainsMerge = Node->ContainsMerge;
     E->Input = Node;
     return remember(Node, CurrentOffset, std::move(E));
   };
@@ -7384,11 +7397,10 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     Results[QueryIndex] = MatchesAllowed(CandidateValue.Value, /*Depth=*/0);
     const bool AnchorCompletedLoopMerge =
         CandidateValue.Value &&
-        CandidateValue.Value->K != ResolverValueExpr::Kind::Merge &&
+        !CandidateValue.Value->ContainsMerge &&
         std::any_of(AllowedValues.begin(), AllowedValues.end(),
                     [](const ResolverValue &Allowed) {
-                      return Allowed &&
-                             Allowed->K == ResolverValueExpr::Kind::Merge;
+                      return Allowed && Allowed->ContainsMerge;
                     });
     if (!Results[QueryIndex] && !QueryBudgetExhausted &&
         !MatchBudgetExhausted && !EvidenceBudgetExhausted &&
