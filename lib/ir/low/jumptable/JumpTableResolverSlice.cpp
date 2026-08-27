@@ -3425,11 +3425,19 @@ bool CFGBuilder::exactI386ModelZeroReaches(const LowOp &Use, int BaseSide,
   bool AnalysisComplete = false;
   std::vector<bool> QueryAnalysisComplete;
   I386GOTOFFGraphQueryIssuedForTesting = true;
+  // A previously published sibling GOTOFF table can make this exact model
+  // query cross the expanded dispatch graph before its memoized cycle closes.
+  // Keep the stricter generic limit elsewhere; this proposal proof continues
+  // to debit the same dedicated and candidate-wide evidence accounts.
   const std::vector<bool> Matches = tableValuesMatchAtUses(
       Queries, &AnalysisComplete, &QueryAnalysisComplete,
       /*CandidateBranchOverride=*/InvalidVA,
       /*CandidateTargetsOverride=*/nullptr,
-      &I386GOTOFFProposalEvidenceRemaining);
+      &I386GOTOFFProposalEvidenceRemaining,
+      /*LocalMatchEvidenceLimit=*/0,
+      /*CandidateBranchesSharingTargets=*/nullptr,
+      /*QueryUnsignedFeasibleMasks=*/nullptr,
+      limits::kMaxJumpTableExpandedResolverDepth);
   auto QueryComplete = [&](size_t Index) {
     return Index < Matches.size() && Index < QueryAnalysisComplete.size() &&
            QueryAnalysisComplete[Index];
