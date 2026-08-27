@@ -569,6 +569,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
 
   bool SawControllingGuard = false;
   bool GuardBuildExhausted = false;
+  bool GuardExpressionAllowanceExtended = false;
   size_t GuardBuildWork = limits::kMaxJumpTableEvidenceWork;
   auto consumeCandidateEvidence = [&](size_t Amount = 1) {
     if (Amount > *CandidateEvidenceBudget) {
@@ -621,6 +622,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
     std::vector<GuardSyntaxPtr> Inputs;
     size_t IndexQuery = std::numeric_limits<size_t>::max();
     size_t DefQuery = std::numeric_limits<size_t>::max();
+    bool IndexQueryUsesDefinition = false;
   };
   using BuildKey = std::tuple<uint8_t, uint64_t, uint16_t, va_t, int>;
   std::map<BuildKey, GuardSyntaxPtr> SyntaxMemo;
@@ -1078,14 +1080,14 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
     std::vector<LowOp> Ops;
     for (auto It = Insns.lower_bound(BlockStart);
          It != Insns.end() && It->first <= BranchAddr; ++It) {
-      if (!consumeGuardBuildWork())
+      if (!consumeCandidateEvidence())
         break;
       auto NextBlock = BlockStarts.upper_bound(It->first);
       if (NextBlock == BlockStarts.begin() ||
           *std::prev(NextBlock) != BlockStart)
         break;
       for (const LowOp &Op : It->second.Ops) {
-        if (!consumeGuardBuildWork(/*scan + retention=*/2))
+        if (!consumeCandidateEvidence(/*scan + retention=*/2))
           break;
         Ops.push_back(Op);
       }
@@ -1095,6 +1097,19 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
     if (GuardBuildExhausted) {
       Info.IncompleteGuardDomain = true;
       return false;
+    }
+    // Retaining a large compiler-generated block is candidate-wide inventory,
+    // not guard-expression complexity.  Once that separately charged
+    // inventory establishes a genuinely large guard block, allow its one
+    // syntax batch to use the dedicated ceiling without raising the ordinary
+    // allowance for every speculative candidate.
+    if (!GuardExpressionAllowanceExtended &&
+        Ops.size() > limits::kMaxJumpTableEvidenceWork / 4) {
+      static_assert(limits::kMaxJumpTableGuardExpressionEvidenceWork >=
+                    limits::kMaxJumpTableEvidenceWork);
+      GuardBuildWork += limits::kMaxJumpTableGuardExpressionEvidenceWork -
+                        limits::kMaxJumpTableEvidenceWork;
+      GuardExpressionAllowanceExtended = true;
     }
     int CondIndex = -1;
     for (int I = static_cast<int>(Ops.size()) - 1; I >= 0; --I) {
@@ -1222,6 +1237,26 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
       });
       if (UseDefinedAlternativesAsRoots)
         ProofQueries.back().UseDefinedAlternativesAsOccurrenceRoots = true;
+
+      // Prove index identity through the same immutable definition from both
+      // ends.  This avoids recursively expanding unrelated wide inputs merely
+      // to establish that the narrow value produced here is the table index:
+      // one query proves the canonical table use reaches Def, and DefQuery
+      // proves the guard use reaches Def.  The initial query already owns at
+      // least one alternative, so narrowing it in place allocates nothing.
+      JumpTableValueQuery &IndexQuery = ProofQueries[Node->IndexQuery];
+      IndexQuery.Candidate = Info.IndexValueAtUse;
+      IndexQuery.UseAddr = Info.IndexUseAddr;
+      IndexQuery.UseSeq = Info.IndexUseSeq;
+      IndexQuery.Alternatives.resize(1);
+      IndexQuery.Alternatives.front() = {Def.Output, Def.Addr, Def.Seq,
+                                         /*DefinedAtPoint=*/true};
+      IndexQuery.AllowZeroExtension = true;
+      IndexQuery.AllowSignExtension = true;
+      IndexQuery.UseDefinedAlternativesAsOccurrenceRoots = true;
+      ProofQueries[Node->DefQuery].UseDefinedAlternativesAsOccurrenceRoots =
+          true;
+      Node->IndexQueryUsesDefinition = true;
       for (int I = 0; I < Def.NumInputs; ++I) {
         // Charge the input scan independently from recursive collection.
         if (!consumeGuardBuildWork())
@@ -1327,7 +1362,15 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
         Node->IndexQuery < ProofQueryComplete.size();
     const bool IndexQueryComplete =
         IndexQueryPresent && ProofQueryComplete[Node->IndexQuery];
-    if (IndexQueryComplete && ProofResults[Node->IndexQuery]) {
+    const bool DefQueryPresent = Node->DefQuery < ProofResults.size() &&
+                                 Node->DefQuery < ProofQueryComplete.size();
+    const bool DefQueryComplete =
+        DefQueryPresent && ProofQueryComplete[Node->DefQuery];
+    const bool IndexMatches =
+        IndexQueryComplete && ProofResults[Node->IndexQuery] &&
+        (!Node->IndexQueryUsesDefinition ||
+         (DefQueryComplete && ProofResults[Node->DefQuery]));
+    if (IndexMatches) {
       Expr->K = GuardExpr::Kind::Index;
       Expr->ContainsIndex = true;
       return Finish(Expr);
@@ -1339,14 +1382,12 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
     // complete def query still permits exact expansion into its children.  No
     // incomplete result is reinterpreted as false or as an index identity.
     if (!Node->HasDef || !Node->InputsComplete) {
-      if (!IndexQueryComplete)
+      if (!IndexQueryComplete ||
+          (Node->IndexQueryUsesDefinition && !DefQueryComplete))
         SawIncompleteProofQuery = true;
       return Finish({});
     }
-    const bool DefQueryPresent =
-        Node->DefQuery < ProofResults.size() &&
-        Node->DefQuery < ProofQueryComplete.size();
-    if (!DefQueryPresent || !ProofQueryComplete[Node->DefQuery]) {
+    if (!DefQueryPresent || !DefQueryComplete) {
       SawIncompleteProofQuery = true;
       return Finish({});
     }

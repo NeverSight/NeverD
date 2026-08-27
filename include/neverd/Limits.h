@@ -62,6 +62,13 @@ constexpr uint32_t kMaxJumpTableStackEvidenceWork = 16384;
 /// the next power-of-two boundary that completes the supported case.
 constexpr uint32_t kMaxJumpTableGuardAliasEvidenceWork = 16384;
 
+/// Local allowance for constructing and replaying one precise guard expression
+/// batch.  An ARM32 auto-vectorized reduction followed by an eight-way switch
+/// uses about 13.3 KiB after exact syntax, query, and replay accounting;
+/// sixteen KiB is the next power-of-two boundary.  Every visit also debits the
+/// candidate-wide aggregate account.
+constexpr uint32_t kMaxJumpTableGuardExpressionEvidenceWork = 16384;
+
 /// Local symbolization allowance for an ordinary unsigned-bound query.  The
 /// largest supported later O0 state-machine dispatch exceeds the generic
 /// occurrence allowance while remaining well below one complete value-match
