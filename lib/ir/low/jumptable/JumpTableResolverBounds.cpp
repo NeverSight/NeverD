@@ -2188,6 +2188,17 @@ uint32_t CFGBuilder::inferBoundsFromMask(
       ConstantProof.Candidate = MaskOperand;
       ConstantProof.UseAddr = Op.Addr;
       ConstantProof.UseSeq = Op.Seq;
+      // A literal transported through a register COPY remains an unclassified
+      // constant, while arithmetic occurrences are classified as scalar.
+      // Match both integer forms without admitting address-owned constants.
+      if (!ensureAppendCapacity(ConstantProof.Alternatives) ||
+          !consumeWork(1))
+        return FailIncomplete();
+      ConstantProof.Alternatives.push_back(
+          {NdVar::cst(static_cast<uint64_t>(Proposed.Value) &
+                          *ConstantWidthMask,
+                      MaskOperand.Size),
+           InvalidVA, -1, false});
       if (!ensureAppendCapacity(ConstantProof.Alternatives) ||
           !consumeWork(1))
         return FailIncomplete();
@@ -2223,8 +2234,8 @@ uint32_t CFGBuilder::inferBoundsFromMask(
     return 0;
 
   std::vector<JumpTableValueQuery> ConstantQueries;
-  // Each retained constant-proof query owns one scalar alternative.
-  if (!consumeWorkProducts({{Candidates.size(), 2}}))
+  // Each retained constant-proof query owns unclassified and scalar forms.
+  if (!consumeWorkProducts({{Candidates.size(), 3}}))
     return FailIncomplete();
   ConstantQueries.reserve(Candidates.size());
   for (const MaskCandidate &Candidate : Candidates)
