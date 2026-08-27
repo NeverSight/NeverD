@@ -7927,7 +7927,7 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
 
     if (Queries.empty()) {
       if (RestrictToLexicalTargetRegion) {
-        Derived.resize(InitialDerivedCount);
+        Derived.erase(Derived.begin() + InitialDerivedCount, Derived.end());
         RestrictToLexicalTargetRegion = false;
         continue;
       }
@@ -7975,7 +7975,7 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
     }
     if (!Changed) {
       if (RestrictToLexicalTargetRegion) {
-        Derived.resize(InitialDerivedCount);
+        Derived.erase(Derived.begin() + InitialDerivedCount, Derived.end());
         RestrictToLexicalTargetRegion = false;
         continue;
       }
