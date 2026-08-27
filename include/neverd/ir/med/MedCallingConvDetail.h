@@ -31,6 +31,8 @@ ValueSet computeForwardValueClosure(
 uint16_t findFirstUseSize(const MedFunc &Func, uint64_t ParamRegOff,
                           const TargetRegInfo &TRI);
 
+bool liveInOnlyFeedsScratch(const MedFunc &Func, uint64_t ParamRegOff);
+
 } // namespace neverd::med_calling_conv_detail
 
 #endif // NEVERD_IR_MED_MEDCALLINGCONVDETAIL_H

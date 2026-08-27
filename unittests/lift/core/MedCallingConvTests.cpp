@@ -27,6 +27,7 @@ using namespace neverd;
 using med_calling_conv_detail::computeForwardValueClosure;
 using med_calling_conv_detail::containsValue;
 using med_calling_conv_detail::findFirstUseSize;
+using med_calling_conv_detail::liveInOnlyFeedsScratch;
 
 MedVar reg(int Id, int SSAVer, uint16_t Size, uint64_t RegOff, Arch TheArch) {
   MedVar V;
@@ -864,6 +865,171 @@ TEST(LowToMedX86CallingConv,
     }
   EXPECT_TRUE(SawParameterCopy);
   EXPECT_TRUE(verifyMedFunc(Med, "test-extended-stack-parameter-address"));
+}
+
+MedFunc convertX86PartialLaneStackArgument() {
+  constexpr Arch TheArch = Arch::X86;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+
+  LowFunc Low;
+  Low.Entry = 0x1000;
+  Low.Name = "partial_lane_cdecl_scratch";
+  Low.Blocks.resize(1);
+  LowBlock &Block = Low.Blocks[0];
+  Block.Id = 0;
+  Block.StartAddr = 0x1000;
+  Block.EndAddr = 0x1007;
+
+  LowOp LiveIn;
+  LiveIn.Opcode = NdOp::COPY;
+  LiveIn.Addr = 0x1000;
+  LiveIn.Output = NdVar::reg(x86reg::RCX, TRI.PointerSize);
+  LiveIn.addInput(NdVar::reg(x86reg::RCX, TRI.PointerSize));
+  Block.Ops.push_back(LiveIn);
+
+  NdVar Address = NdVar::tmp(1, TRI.PointerSize);
+  LowOp AddAddress;
+  AddAddress.Opcode = NdOp::INT_ADD;
+  AddAddress.Addr = 0x1001;
+  AddAddress.Output = Address;
+  AddAddress.addInput(NdVar::reg(TRI.StackPointer, TRI.PointerSize));
+  AddAddress.addInput(NdVar::cst(TRI.PointerSize, TRI.PointerSize));
+  Block.Ops.push_back(AddAddress);
+
+  NdVar StackArgument = NdVar::tmp(2, TRI.PointerSize);
+  LowOp LoadArgument;
+  LoadArgument.Opcode = NdOp::LOAD;
+  LoadArgument.Addr = 0x1002;
+  LoadArgument.Output = StackArgument;
+  LoadArgument.addInput(Address);
+  Block.Ops.push_back(LoadArgument);
+
+  // The low lane comes from the real stack argument, keeping the partial
+  // register reconstruction live without making its preserved upper lanes
+  // semantically observable.
+  LowOp SetCH;
+  SetCH.Opcode = NdOp::COPY;
+  SetCH.Addr = 0x1003;
+  SetCH.Output = NdVar::reg(x86reg::RCX + 1, 1);
+  SetCH.addInput(NdVar::cst(5, 1));
+  Block.Ops.push_back(SetCH);
+
+  LowOp SetCL;
+  SetCL.Opcode = NdOp::SUBBYTES;
+  SetCL.Addr = 0x1004;
+  SetCL.Output = NdVar::reg(x86reg::RCX, 1);
+  SetCL.addInput(StackArgument);
+  SetCL.addInput(NdVar::cst(0, TRI.PointerSize));
+  Block.Ops.push_back(SetCL);
+
+  NdVar Sum = NdVar::tmp(4, TRI.PointerSize);
+  LowOp Add;
+  Add.Opcode = NdOp::INT_ADD;
+  Add.Addr = 0x1005;
+  Add.Output = Sum;
+  Add.addInput(StackArgument);
+  Add.addInput(NdVar::reg(x86reg::RCX, 1));
+  Block.Ops.push_back(Add);
+
+  LowOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = 0x1006;
+  Return.addInput(Sum);
+  Block.Ops.push_back(Return);
+
+  return LowToMedConverter().convert(Low, TheArch);
+}
+
+TEST(LowToMedX86CallingConv,
+     PartialLaneScratchDoesNotShiftFirstCdeclStackArgument) {
+  MedFunc Med = convertX86PartialLaneStackArgument();
+
+  ASSERT_EQ(Med.Params.size(), 1u);
+  EXPECT_EQ(Med.Params[0].Kind, MedVar::Param);
+  EXPECT_EQ(Med.Params[0].Id, 0);
+  EXPECT_EQ(Med.Params[0].RegOff, kNoParamReg);
+  EXPECT_TRUE(verifyMedFunc(Med, "test-partial-lane-cdecl-scratch"));
+}
+
+MedFunc makeX86PartialWriteScratchFlow(bool UseMaskMerge, bool ConsumeFullValue,
+                                       bool CopyThroughScratch = false) {
+  constexpr Arch TheArch = Arch::X86;
+  MedFunc Func;
+  Func.Name = "partial_write_scratch_flow";
+  Func.Blocks.resize(1);
+  MedBlock &Block = Func.Blocks[0];
+  Block.Id = 0;
+
+  const MedVar LiveECX = reg(1, 0, 4, x86reg::RCX, TheArch);
+  addLiveIn(Block, LiveECX);
+
+  MedVar Reconstructed;
+  if (UseMaskMerge) {
+    const MedVar Preserved = temp(10, 0, 4, TheArch);
+    Block.Ops.push_back(binary(NdOp::INT_AND, Preserved, LiveECX,
+                               MedVar::makeConst(0xFFFFFF00u, 4)));
+    Reconstructed = temp(11, 0, 4, TheArch);
+    Block.Ops.push_back(binary(NdOp::INT_OR, Reconstructed, Preserved,
+                               MedVar::makeConst(7, 4)));
+  } else {
+    const MedVar OldLow = temp(12, 0, 1, TheArch);
+    Block.Ops.push_back(
+        binary(NdOp::SUBBYTES, OldLow, LiveECX, MedVar::makeConst(0, 4)));
+    const MedVar LowWithCH = temp(13, 0, 2, TheArch);
+    Block.Ops.push_back(
+        binary(NdOp::CONCAT, LowWithCH, MedVar::makeConst(5, 1), OldLow));
+    const MedVar OldHigh = temp(14, 0, 2, TheArch);
+    Block.Ops.push_back(
+        binary(NdOp::SUBBYTES, OldHigh, LiveECX, MedVar::makeConst(2, 4)));
+    const MedVar WithCH = temp(15, 0, 4, TheArch);
+    Block.Ops.push_back(binary(NdOp::CONCAT, WithCH, OldHigh, LowWithCH));
+    const MedVar UpperThree = temp(16, 0, 3, TheArch);
+    Block.Ops.push_back(
+        binary(NdOp::SUBBYTES, UpperThree, WithCH, MedVar::makeConst(1, 4)));
+    Reconstructed = temp(17, 0, 4, TheArch);
+    Block.Ops.push_back(binary(NdOp::CONCAT, Reconstructed, UpperThree,
+                               MedVar::makeConst(7, 1)));
+  }
+
+  const MedVar FullECX = reg(1, 1, 4, x86reg::RCX, TheArch);
+  Block.Ops.push_back(unary(NdOp::COPY, FullECX, Reconstructed));
+  MedVar Value = FullECX;
+  if (CopyThroughScratch) {
+    Value = reg(2, 0, 4, x86reg::RDI, TheArch);
+    Block.Ops.push_back(unary(NdOp::COPY, Value, FullECX));
+  }
+  if (ConsumeFullValue) {
+    Block.Ops.push_back(binary(NdOp::INT_ADD, temp(20, 0, 4, TheArch), Value,
+                               MedVar::makeConst(1, 4)));
+  } else {
+    const MedVar LowLane = temp(21, 0, 1, TheArch);
+    Block.Ops.push_back(
+        binary(NdOp::SUBBYTES, LowLane, Value, MedVar::makeConst(0, 4)));
+    Block.Ops.push_back(binary(NdOp::INT_ADD, temp(22, 0, 1, TheArch), LowLane,
+                               MedVar::makeConst(1, 1)));
+  }
+  return Func;
+}
+
+TEST(MedCallingConvValueFlow, DistinguishesConcatLaneScratchFromFullUse) {
+  EXPECT_TRUE(liveInOnlyFeedsScratch(
+      makeX86PartialWriteScratchFlow(false, false), x86reg::RCX));
+  EXPECT_FALSE(liveInOnlyFeedsScratch(
+      makeX86PartialWriteScratchFlow(false, true), x86reg::RCX));
+}
+
+TEST(MedCallingConvValueFlow, DistinguishesMaskMergeScratchFromFullUse) {
+  EXPECT_TRUE(liveInOnlyFeedsScratch(
+      makeX86PartialWriteScratchFlow(true, false), x86reg::RCX));
+  EXPECT_FALSE(liveInOnlyFeedsScratch(
+      makeX86PartialWriteScratchFlow(true, true), x86reg::RCX));
+}
+
+TEST(MedCallingConvValueFlow, TracksPreservedBitsThroughScratchRegisters) {
+  EXPECT_TRUE(liveInOnlyFeedsScratch(
+      makeX86PartialWriteScratchFlow(false, false, true), x86reg::RCX));
+  EXPECT_FALSE(liveInOnlyFeedsScratch(
+      makeX86PartialWriteScratchFlow(false, true, true), x86reg::RCX));
 }
 
 MedFunc convertTwoCallFPFlow(NdOp SecondOpcode, bool ReadInSuccessor,
