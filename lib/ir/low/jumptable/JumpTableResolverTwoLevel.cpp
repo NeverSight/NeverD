@@ -953,11 +953,21 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
     bool HasLocalClampedIndex = false;
     // The suffix probe may ask analyzeTableLoadAddr about each pointer-width
     // LOAD.  That helper performs several depth-bounded reaching-definition
-    // and register traces; reserve their full N-by-N search envelope before
-    // entering the first raw scan.
-    if (!consumeEvidence(LocalCount) ||
-        !consumeFactorProduct(
-            {LocalCount, LocalCount, size_t(limits::kMaxQuasiCopyDepth), 16}))
+    // and register traces; inventory the eligible loads and reserve their full
+    // per-candidate search envelope before entering the first raw scan.
+    // Count the pointer-width LOAD candidates before reserving their nested
+    // address-analysis work.  Charging LocalCount candidates would turn an
+    // unrelated vector-heavy block into a quadratic false exhaustion even
+    // when only a handful of operations can enter analyzeTableLoadAddr.
+    if (!consumeProduct(LocalCount, 2))
+      return false;
+    size_t LocalPointerLoads = 0;
+    for (const LowOp &Op : LocalOps)
+      LocalPointerLoads +=
+          Op.Opcode == NdOp::LOAD &&
+          Op.Output.Size == Img.getPointerSize() && Op.NumInputs >= 1;
+    if (!consumeFactorProduct({LocalPointerLoads, LocalCount,
+                               size_t(limits::kMaxQuasiCopyDepth), 16}))
       return false;
     for (int I = static_cast<int>(LocalOps.size()) - 1;
          I >= 0 && !HasLocalClampedIndex; --I) {
@@ -1013,8 +1023,18 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   uint16_t W2 = 0;
   int JmpLoadIdx = -1;
   {
-    if (!consumeFactorProduct(
-            {Ops.size(), Ops.size(), size_t(limits::kMaxQuasiCopyDepth), 16}))
+    // The full path can contain thousands of SIMD/arithmetic operations but
+    // only 4/8-byte LOADs can be the address-table access.  Inventory that
+    // exact candidate count first, then reserve one bounded address-analysis
+    // envelope per candidate before the first analysis call.
+    if (!consumeProduct(Ops.size(), 2))
+      return false;
+    size_t AddressTableLoads = 0;
+    for (const LowOp &Op : Ops)
+      AddressTableLoads += Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
+                           (Op.Output.Size == 4 || Op.Output.Size == 8);
+    if (!consumeFactorProduct({AddressTableLoads, Ops.size(),
+                               size_t(limits::kMaxQuasiCopyDepth), 16}))
       return false;
     uint64_t Disp = 0;
     bool Scaled = false;

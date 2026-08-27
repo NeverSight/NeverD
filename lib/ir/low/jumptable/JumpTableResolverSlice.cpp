@@ -6297,8 +6297,24 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
 
     std::function<symbolic::SymRef(const ResolverValue &, unsigned)> Symbolize =
         [&](const ResolverValue &Node, unsigned Depth) -> symbolic::SymRef {
-      if (!Node || Node->Size == 0 || Node->Size > sizeof(uint64_t) ||
-          Depth > MaxResolverDepth) {
+      if (!Node || Node->Size == 0) {
+        Exhausted = true;
+        SymbolBudgetExhausted = true;
+        return {};
+      }
+      if (Node->Size > sizeof(uint64_t)) {
+        // Finite-set symbolization may encounter an unsupported wide value
+        // below a later narrow slice/mask.  Returning no child lets that
+        // enclosing narrow expression fall back to a fresh unconstrained
+        // value, which is a safe over-approximation; invalid top-level values
+        // and structural theorem queries remain incomplete.
+        if (FeasibleMask && Depth != 0)
+          return {};
+        Exhausted = true;
+        SymbolBudgetExhausted = true;
+        return {};
+      }
+      if (Depth > MaxResolverDepth) {
         Exhausted = true;
         SymbolBudgetExhausted = true;
         return {};
