@@ -402,13 +402,14 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   // temporary identifiers cannot be captured from a predecessor added by a
   // later fixed-point stage.  Its compiler-materialized bitmap and fallback
   // constants can, however, be live-in registers.  Recover only a strict
-  // lexical scalar candidate for such a register: the final definition before
-  // this block must be a constant transported by COPY/ZEXT/SUBBYTES within one
-  // instruction.  This candidate is never authority by itself; the completed
-  // proof-context replay below proves the exact value at the actual use.
-  auto prefixScalarConstant = [&](const NdVar &Requested,
-                                  JumpTableValueOccurrence *Source)
-      -> std::optional<uint64_t> {
+  // lexical scalar candidate for such a register.  Simple transports are
+  // resolved directly; split-immediate expressions such as ARM MOVW/MOVT use
+  // the bounded prefix emulator.  This candidate is never authority by itself;
+  // the completed proof-context replay below proves the exact value at the
+  // actual use.
+  auto prefixScalarConstant =
+      [&](const NdVar &Requested, va_t Cutoff,
+          JumpTableValueOccurrence *Source) -> std::optional<uint64_t> {
     if (!Requested.isReg() || Requested.Size == 0 ||
         Requested.Size > sizeof(uint64_t))
       return std::nullopt;
@@ -419,8 +420,8 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
     for (const auto &[Addr, Insn] : Insns) {
       if (Addr >= BlkStart)
         continue;
-      if (Insn.Ops.size() > std::numeric_limits<size_t>::max() -
-                                PrefixOpCount) {
+      if (Insn.Ops.size() >
+          std::numeric_limits<size_t>::max() - PrefixOpCount) {
         consumeEvidence(std::numeric_limits<size_t>::max());
         return std::nullopt;
       }
@@ -428,6 +429,33 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
     }
     if (!consumeProducts({{Insns.size(), 1}, {PrefixOpCount, 1}}))
       return std::nullopt;
+
+    // ARM materialises a 32-bit scalar bitmap as MOVW/MOVT, which LowIR
+    // represents as a constant expression across two instructions rather than
+    // a single COPY.  Reuse the fully budgeted prefix emulator to evaluate
+    // that scalar, but keep it as a candidate only: the immutable proof-graph
+    // query below must still prove the exact value at the real use.
+    const std::optional<uint64_t> Emulated = foldRegConstant(
+        Img, Rec, Requested.Offset, Cutoff,
+        [&](size_t Amount) { return consumeEvidence(Amount); },
+        /*RequireMappedValue=*/false);
+    if (Emulated) {
+      if (Source) {
+        for (auto It = Insns.rbegin(); It != Insns.rend(); ++It) {
+          if (It->first >= BlkStart || It->first >= Cutoff)
+            continue;
+          const std::vector<LowOp> &RecordOps = It->second.Ops;
+          for (int I = static_cast<int>(RecordOps.size()) - 1; I >= 0; --I)
+            if (sameValue(RecordOps[I].Output, Requested)) {
+              *Source = {RecordOps[I].Output, RecordOps[I].Addr,
+                         RecordOps[I].Seq, /*DefinedAtPoint=*/true};
+              return maskToSize(*Emulated, Requested.Size);
+            }
+        }
+        *Source = {};
+      }
+      return maskToSize(*Emulated, Requested.Size);
+    }
 
     for (auto It = Insns.rbegin(); It != Insns.rend(); ++It) {
       if (It->first >= BlkStart)
@@ -439,8 +467,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
 
         NdVar Value = Requested;
         int Def = I;
-        for (size_t Depth = 0; Depth < limits::kMaxQuasiCopyDepth;
-             ++Depth) {
+        for (size_t Depth = 0; Depth < limits::kMaxQuasiCopyDepth; ++Depth) {
           if (!consumeEvidence(RecordOps.size()))
             return std::nullopt;
           const LowOp &Op = RecordOps[Def];
@@ -481,9 +508,9 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
     }
     return std::nullopt;
   };
-  auto localConstant = [&](NdVar Value, int From, va_t Cutoff,
-                           JumpTableValueOccurrence *Source)
-      -> std::optional<uint64_t> {
+  auto localConstant =
+      [&](NdVar Value, int From, va_t Cutoff,
+          JumpTableValueOccurrence *Source) -> std::optional<uint64_t> {
     if (Source)
       *Source = {};
     for (size_t Depth = 0; Depth < limits::kMaxQuasiCopyDepth; ++Depth) {
@@ -497,8 +524,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
       if (!Def) {
         if (ClampAnalysisIncomplete || !Value.isReg())
           return std::nullopt;
-        (void)Cutoff;
-        return prefixScalarConstant(Value, Source);
+        return prefixScalarConstant(Value, Cutoff, Source);
       }
       const LowOp &Op = Ops[*Def];
       if ((Op.Opcode == NdOp::COPY || Op.Opcode == NdOp::INT_ZEXT) &&
@@ -554,9 +580,32 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
     LoadWidth = Width;
     return true;
   };
+  auto structurallyReachesNarrowLoad = [&](NdVar Value, int From) {
+    for (size_t Step = 0; Step < Ops.size(); ++Step) {
+      const std::optional<int> Def = reachingDef(Value, From);
+      if (!Def)
+        return false;
+      const LowOp &Producer = Ops[*Def];
+      if (Producer.Opcode == NdOp::LOAD)
+        return Producer.Output.Size == 1 || Producer.Output.Size == 2;
+      if ((Producer.Opcode != NdOp::COPY && Producer.Opcode != NdOp::INT_ZEXT &&
+           Producer.Opcode != NdOp::INT_SEXT &&
+           Producer.Opcode != NdOp::SUBBYTES) ||
+          Producer.NumInputs < 1)
+        return false;
+      if (Producer.Opcode == NdOp::SUBBYTES &&
+          (Producer.NumInputs < 2 || !Producer.Inputs[1].isConst() ||
+           Producer.Inputs[1].Offset != 0))
+        return false;
+      Value = Producer.Inputs[0];
+      From = *Def - 1;
+    }
+    return false;
+  };
 
   struct ClampedIndexSelect {
     bool Present = false;
+    bool DirectSelect = false;
     uint64_t FallbackSlot = 0;
     uint64_t Bitmap = 0;
     uint16_t BitmapBits = 0;
@@ -577,9 +626,187 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   } Clamp;
   bool SawClampedIndexSkeleton = false;
 
+  auto completeClampedIndex =
+      [&](int CandidateLoad, uint16_t CandidateWidth, bool FallbackOnPredicate,
+          uint64_t Fallback, const NdVar &FallbackValue, va_t FallbackUseAddr,
+          int FallbackUseSeq, const JumpTableValueOccurrence &FallbackSource,
+          NdVar ConditionValue, int ConditionBefore, int &LoadIndex,
+          uint16_t &LoadWidth) {
+        bool Negated = false;
+        bool FoundComparison = false;
+        std::optional<int> Condition;
+        for (size_t Depth = 0; Depth < limits::kMaxQuasiCopyDepth; ++Depth) {
+          Condition = operationDef(ConditionValue, ConditionBefore);
+          if (!Condition)
+            return false;
+          const LowOp &Producer = Ops[*Condition];
+          if (Producer.Opcode != NdOp::BOOL_NOT) {
+            FoundComparison = true;
+            break;
+          }
+          if (Producer.NumInputs < 1)
+            return false;
+          Negated = !Negated;
+          ConditionValue = Producer.Inputs[0];
+          ConditionBefore = *Condition - 1;
+        }
+        if (!Condition || !FoundComparison) {
+          ClampAnalysisIncomplete = true;
+          return false;
+        }
+        const LowOp &Compare = Ops[*Condition];
+        if ((Compare.Opcode != NdOp::INT_NOTEQUAL &&
+             Compare.Opcode != NdOp::INT_EQUAL) ||
+            Compare.NumInputs < 2)
+          return false;
+        int ZeroSide = -1;
+        for (int Side = 0; Side < 2; ++Side) {
+          const std::optional<uint64_t> Constant = localConstant(
+              Compare.Inputs[Side], *Condition - 1, Compare.Addr, nullptr);
+          if (Constant && *Constant == 0) {
+            ZeroSide = Side;
+            break;
+          }
+        }
+        if (ZeroSide < 0)
+          return false;
+        const bool PredicateWhenBitSet =
+            (Compare.Opcode == NdOp::INT_NOTEQUAL) != Negated;
+
+        const std::optional<int> BitAnd =
+            operationDef(Compare.Inputs[1 - ZeroSide], *Condition - 1);
+        if (!BitAnd || Ops[*BitAnd].Opcode != NdOp::INT_AND ||
+            Ops[*BitAnd].NumInputs < 2)
+          return false;
+        int OneSide = -1;
+        for (int Side = 0; Side < 2; ++Side) {
+          const std::optional<uint64_t> Constant =
+              localConstant(Ops[*BitAnd].Inputs[Side], *BitAnd - 1,
+                            Ops[*BitAnd].Addr, nullptr);
+          if (Constant && *Constant == 1) {
+            OneSide = Side;
+            break;
+          }
+        }
+        if (OneSide < 0)
+          return false;
+
+        const std::optional<int> Shift =
+            operationDef(Ops[*BitAnd].Inputs[1 - OneSide], *BitAnd - 1);
+        if (!Shift || Ops[*Shift].Opcode != NdOp::INT_RIGHT ||
+            Ops[*Shift].NumInputs < 2 || Ops[*Shift].Inputs[0].Size == 0 ||
+            Ops[*Shift].Inputs[0].Size > sizeof(uint64_t))
+          return false;
+        const uint16_t BitmapBits = Ops[*Shift].Inputs[0].Size * CHAR_BIT;
+        JumpTableValueOccurrence BitmapSource;
+        const std::optional<uint64_t> Bitmap = localConstant(
+            Ops[*Shift].Inputs[0], *Shift - 1, Ops[*Shift].Addr, &BitmapSource);
+        const std::optional<int> ShiftMask =
+            operationDef(Ops[*Shift].Inputs[1], *Shift - 1);
+        if (!Bitmap || !ShiftMask || Ops[*ShiftMask].Opcode != NdOp::INT_AND ||
+            Ops[*ShiftMask].NumInputs < 2)
+          return false;
+        int ModuloMaskSide = -1;
+        for (int Side = 0; Side < 2; ++Side) {
+          const std::optional<uint64_t> Constant =
+              localConstant(Ops[*ShiftMask].Inputs[Side], *ShiftMask - 1,
+                            Ops[*ShiftMask].Addr, nullptr);
+          // x86 variable shifts expose the architectural low-bit mask (31 or
+          // 63), while ARM exposes its low-byte register-shift mask (255).
+          // Either is identity on the exact outer object domain proved below;
+          // require every bitmap-index bit to survive rather than accepting an
+          // arbitrary wider mask.
+          if (Constant &&
+              (*Constant & uint64_t(BitmapBits - 1)) == BitmapBits - 1) {
+            ModuloMaskSide = Side;
+            break;
+          }
+        }
+        if (ModuloMaskSide < 0)
+          return false;
+        const NdVar PredicateIndex = Ops[*ShiftMask].Inputs[1 - ModuloMaskSide];
+        if (!consumeProduct(Ops.size(), limits::kMaxQuasiCopyDepth))
+          return false;
+        const uint64_t PredicateIndexReg =
+            traceToRegister(Ops, *ShiftMask - 1, PredicateIndex);
+        if (PredicateIndexReg == InvalidVA)
+          return false;
+
+        LoadIndex = CandidateLoad;
+        LoadWidth = CandidateWidth;
+        Clamp.Present = true;
+        Clamp.FallbackSlot = Fallback;
+        Clamp.Bitmap = *Bitmap;
+        Clamp.BitmapBits = BitmapBits;
+        Clamp.FallbackWhenBitSet = FallbackOnPredicate == PredicateWhenBitSet;
+        Clamp.PredicateIndexReg = PredicateIndexReg;
+        Clamp.PredicateIndexBefore = *ShiftMask - 1;
+        Clamp.PredicateIndexValue = PredicateIndex;
+        Clamp.PredicateIndexUseAddr = Ops[*ShiftMask].Addr;
+        Clamp.PredicateIndexUseSeq = Ops[*ShiftMask].Seq;
+        Clamp.FallbackValue = FallbackValue;
+        Clamp.FallbackUseAddr = FallbackUseAddr;
+        Clamp.FallbackUseSeq = FallbackUseSeq;
+        Clamp.FallbackSource = FallbackSource;
+        Clamp.BitmapValue = Ops[*Shift].Inputs[0];
+        Clamp.BitmapUseAddr = Ops[*Shift].Addr;
+        Clamp.BitmapUseSeq = Ops[*Shift].Seq;
+        Clamp.BitmapSource = BitmapSource;
+        return true;
+      };
+
   auto parseClampedIndex = [&](int OrIndex, int &LoadIndex,
                                uint16_t &LoadWidth) {
     const LowOp &Or = Ops[OrIndex];
+    if (Or.Opcode == NdOp::SELECT && Or.NumInputs >= 3) {
+      int TrueLoad = -1;
+      int FalseLoad = -1;
+      uint16_t TrueWidth = 0;
+      uint16_t FalseWidth = 0;
+      const bool TrueIsLoad =
+          narrowLoadDef(Or.Inputs[1], OrIndex - 1, TrueLoad, TrueWidth);
+      const bool FalseIsLoad =
+          narrowLoadDef(Or.Inputs[2], OrIndex - 1, FalseLoad, FalseWidth);
+      if (ClampAnalysisIncomplete) {
+        const bool TrueReachesLoad =
+            structurallyReachesNarrowLoad(Or.Inputs[1], OrIndex - 1);
+        const bool FalseReachesLoad =
+            structurallyReachesNarrowLoad(Or.Inputs[2], OrIndex - 1);
+        SawClampedIndexSkeleton = TrueReachesLoad != FalseReachesLoad;
+        return false;
+      }
+      if (TrueIsLoad == FalseIsLoad)
+        return false;
+      SawClampedIndexSkeleton = true;
+
+      JumpTableValueOccurrence TrueSource;
+      JumpTableValueOccurrence FalseSource;
+      const std::optional<uint64_t> TrueConstant =
+          TrueIsLoad
+              ? std::nullopt
+              : localConstant(Or.Inputs[1], OrIndex - 1, Or.Addr, &TrueSource);
+      const std::optional<uint64_t> FalseConstant =
+          FalseIsLoad
+              ? std::nullopt
+              : localConstant(Or.Inputs[2], OrIndex - 1, Or.Addr, &FalseSource);
+      if (TrueConstant && FalseIsLoad) {
+        const bool Complete = completeClampedIndex(
+            FalseLoad, FalseWidth, /*FallbackOnPredicate=*/true, *TrueConstant,
+            Or.Inputs[1], Or.Addr, Or.Seq, TrueSource, Or.Inputs[0],
+            OrIndex - 1, LoadIndex, LoadWidth);
+        Clamp.DirectSelect = Complete;
+        return Complete;
+      }
+      if (FalseConstant && TrueIsLoad) {
+        const bool Complete = completeClampedIndex(
+            TrueLoad, TrueWidth, /*FallbackOnPredicate=*/false, *FalseConstant,
+            Or.Inputs[2], Or.Addr, Or.Seq, FalseSource, Or.Inputs[0],
+            OrIndex - 1, LoadIndex, LoadWidth);
+        Clamp.DirectSelect = Complete;
+        return Complete;
+      }
+      return false;
+    }
     if (Or.Opcode != NdOp::INT_OR || Or.NumInputs < 2)
       return false;
     for (int PositiveArm = 0; PositiveArm < 2; ++PositiveArm) {
@@ -590,14 +817,11 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
       if (!PositiveAnd || !NegativeAnd ||
           Ops[*PositiveAnd].Opcode != NdOp::INT_AND ||
           Ops[*NegativeAnd].Opcode != NdOp::INT_AND ||
-          Ops[*PositiveAnd].NumInputs < 2 ||
-          Ops[*NegativeAnd].NumInputs < 2)
+          Ops[*PositiveAnd].NumInputs < 2 || Ops[*NegativeAnd].NumInputs < 2)
         continue;
 
-      for (int PositiveMaskSide = 0; PositiveMaskSide < 2;
-           ++PositiveMaskSide) {
-        const NdVar PositiveMask =
-            Ops[*PositiveAnd].Inputs[PositiveMaskSide];
+      for (int PositiveMaskSide = 0; PositiveMaskSide < 2; ++PositiveMaskSide) {
+        const NdVar PositiveMask = Ops[*PositiveAnd].Inputs[PositiveMaskSide];
         const std::optional<int> Negate =
             reachingDef(PositiveMask, *PositiveAnd - 1);
         if (!Negate || Ops[*Negate].Opcode != NdOp::INT_NEG2 ||
@@ -606,8 +830,8 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
 
         int NegativeMaskSide = -1;
         for (int Side = 0; Side < 2; ++Side) {
-          const std::optional<int> Not = reachingDef(
-              Ops[*NegativeAnd].Inputs[Side], *NegativeAnd - 1);
+          const std::optional<int> Not =
+              reachingDef(Ops[*NegativeAnd].Inputs[Side], *NegativeAnd - 1);
           if (Not && Ops[*Not].Opcode == NdOp::INT_NOT &&
               Ops[*Not].NumInputs >= 1 &&
               sameValue(Ops[*Not].Inputs[0], PositiveMask)) {
@@ -625,48 +849,21 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
         int NegativeLoad = -1;
         uint16_t PositiveWidth = 0;
         uint16_t NegativeWidth = 0;
-        const bool PositiveIsLoad =
-            narrowLoadDef(PositiveData, *PositiveAnd - 1, PositiveLoad,
-                          PositiveWidth);
-        const bool NegativeIsLoad =
-            narrowLoadDef(NegativeData, *NegativeAnd - 1, NegativeLoad,
-                          NegativeWidth);
+        const bool PositiveIsLoad = narrowLoadDef(
+            PositiveData, *PositiveAnd - 1, PositiveLoad, PositiveWidth);
+        const bool NegativeIsLoad = narrowLoadDef(
+            NegativeData, *NegativeAnd - 1, NegativeLoad, NegativeWidth);
         if (ClampAnalysisIncomplete) {
           // The bounded semantic trace may stop before reaching a genuine
           // narrow LOAD.  Continue only as a budgeted structural inventory so
           // a later relocation-identity probe can distinguish an incomplete
           // composite from an ordinary masked callback.  This scan grants no
           // table authority and accepts exactly one narrow arm.
-          auto reachesNarrowLoad = [&](NdVar Value, int From) {
-            for (size_t Step = 0; Step < Ops.size(); ++Step) {
-              const std::optional<int> Def = reachingDef(Value, From);
-              if (!Def)
-                return false;
-              const LowOp &Producer = Ops[*Def];
-              if (Producer.Opcode == NdOp::LOAD)
-                return Producer.Output.Size == 1 || Producer.Output.Size == 2;
-              if ((Producer.Opcode != NdOp::COPY &&
-                   Producer.Opcode != NdOp::INT_ZEXT &&
-                   Producer.Opcode != NdOp::INT_SEXT &&
-                   Producer.Opcode != NdOp::SUBBYTES) ||
-                  Producer.NumInputs < 1)
-                return false;
-              if (Producer.Opcode == NdOp::SUBBYTES &&
-                  (Producer.NumInputs < 2 ||
-                   !Producer.Inputs[1].isConst() ||
-                   Producer.Inputs[1].Offset != 0))
-                return false;
-              Value = Producer.Inputs[0];
-              From = *Def - 1;
-            }
-            return false;
-          };
           const bool PositiveReachesLoad =
-              reachesNarrowLoad(PositiveData, *PositiveAnd - 1);
+              structurallyReachesNarrowLoad(PositiveData, *PositiveAnd - 1);
           const bool NegativeReachesLoad =
-              reachesNarrowLoad(NegativeData, *NegativeAnd - 1);
-          SawClampedIndexSkeleton =
-              PositiveReachesLoad != NegativeReachesLoad;
+              structurallyReachesNarrowLoad(NegativeData, *NegativeAnd - 1);
+          SawClampedIndexSkeleton = PositiveReachesLoad != NegativeReachesLoad;
           return false;
         }
         if (PositiveIsLoad == NegativeIsLoad)
@@ -716,104 +913,12 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
           continue;
         }
 
-        const std::optional<int> Condition =
-            operationDef(Ops[*Negate].Inputs[0], *Negate - 1);
-        if (!Condition ||
-            (Ops[*Condition].Opcode != NdOp::INT_NOTEQUAL &&
-             Ops[*Condition].Opcode != NdOp::INT_EQUAL) ||
-            Ops[*Condition].NumInputs < 2)
-          continue;
-        int ZeroSide = -1;
-        for (int Side = 0; Side < 2; ++Side) {
-          const std::optional<uint64_t> Constant = localConstant(
-              Ops[*Condition].Inputs[Side], *Condition - 1,
-              Ops[*Condition].Addr, nullptr);
-          if (Constant && *Constant == 0) {
-            ZeroSide = Side;
-            break;
-          }
-        }
-        if (ZeroSide < 0)
-          continue;
-        const bool PredicateWhenBitSet =
-            Ops[*Condition].Opcode == NdOp::INT_NOTEQUAL;
-
-        const std::optional<int> BitAnd = operationDef(
-            Ops[*Condition].Inputs[1 - ZeroSide], *Condition - 1);
-        if (!BitAnd || Ops[*BitAnd].Opcode != NdOp::INT_AND ||
-            Ops[*BitAnd].NumInputs < 2)
-          continue;
-        int OneSide = -1;
-        for (int Side = 0; Side < 2; ++Side) {
-          const std::optional<uint64_t> Constant = localConstant(
-              Ops[*BitAnd].Inputs[Side], *BitAnd - 1, Ops[*BitAnd].Addr,
-              nullptr);
-          if (Constant && *Constant == 1) {
-            OneSide = Side;
-            break;
-          }
-        }
-        if (OneSide < 0)
-          continue;
-
-        const std::optional<int> Shift = operationDef(
-            Ops[*BitAnd].Inputs[1 - OneSide], *BitAnd - 1);
-        if (!Shift || Ops[*Shift].Opcode != NdOp::INT_RIGHT ||
-            Ops[*Shift].NumInputs < 2 || Ops[*Shift].Inputs[0].Size == 0 ||
-            Ops[*Shift].Inputs[0].Size > sizeof(uint64_t))
-          continue;
-        const uint16_t BitmapBits =
-            Ops[*Shift].Inputs[0].Size * CHAR_BIT;
-        JumpTableValueOccurrence BitmapSource;
-        const std::optional<uint64_t> Bitmap = localConstant(
-            Ops[*Shift].Inputs[0], *Shift - 1, Ops[*Shift].Addr,
-            &BitmapSource);
-        const std::optional<int> ShiftMask =
-            operationDef(Ops[*Shift].Inputs[1], *Shift - 1);
-        if (!Bitmap || !ShiftMask ||
-            Ops[*ShiftMask].Opcode != NdOp::INT_AND ||
-            Ops[*ShiftMask].NumInputs < 2)
-          continue;
-        int ModuloMaskSide = -1;
-        for (int Side = 0; Side < 2; ++Side) {
-          const std::optional<uint64_t> Constant = localConstant(
-              Ops[*ShiftMask].Inputs[Side], *ShiftMask - 1,
-              Ops[*ShiftMask].Addr, nullptr);
-          if (Constant && *Constant == BitmapBits - 1) {
-            ModuloMaskSide = Side;
-            break;
-          }
-        }
-        if (ModuloMaskSide < 0)
-          continue;
-        const NdVar PredicateIndex =
-            Ops[*ShiftMask].Inputs[1 - ModuloMaskSide];
-        const uint64_t PredicateIndexReg =
-            traceToRegister(Ops, *ShiftMask - 1, PredicateIndex);
-        if (PredicateIndexReg == InvalidVA)
-          continue;
-
-        LoadIndex = CandidateLoad;
-        LoadWidth = CandidateWidth;
-        Clamp.Present = true;
-        Clamp.FallbackSlot = Fallback;
-        Clamp.Bitmap = *Bitmap;
-        Clamp.BitmapBits = BitmapBits;
-        Clamp.FallbackWhenBitSet =
-            FallbackOnPredicate == PredicateWhenBitSet;
-        Clamp.PredicateIndexReg = PredicateIndexReg;
-        Clamp.PredicateIndexBefore = *ShiftMask - 1;
-        Clamp.PredicateIndexValue = PredicateIndex;
-        Clamp.PredicateIndexUseAddr = Ops[*ShiftMask].Addr;
-        Clamp.PredicateIndexUseSeq = Ops[*ShiftMask].Seq;
-        Clamp.FallbackValue = FallbackValue;
-        Clamp.FallbackUseAddr = FallbackUseAddr;
-        Clamp.FallbackUseSeq = FallbackUseSeq;
-        Clamp.BitmapValue = Ops[*Shift].Inputs[0];
-        Clamp.BitmapUseAddr = Ops[*Shift].Addr;
-        Clamp.BitmapUseSeq = Ops[*Shift].Seq;
-        Clamp.BitmapSource = BitmapSource;
-        return true;
+        if (completeClampedIndex(
+                CandidateLoad, CandidateWidth, FallbackOnPredicate, Fallback,
+                FallbackValue, FallbackUseAddr, FallbackUseSeq,
+                PositiveIsLoad ? NegativeSource : PositiveSource,
+                Ops[*Negate].Inputs[0], *Negate - 1, LoadIndex, LoadWidth))
+          return true;
       }
     }
     return false;
@@ -822,7 +927,8 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   // collectPathOps deliberately follows a single-predecessor chain so the
   // classic two-level shape may place its narrow LOAD before the dispatch
   // block.  A clamped index is different: the narrow LOAD, membership test,
-  // mask blend, and address-table LOAD form one instruction-local dataflow.
+  // SELECT/mask blend, and address-table LOAD form one instruction-local
+  // dataflow.
   // Parse that suffix in isolation so a newly decoded predecessor cannot
   // contribute an unrelated definition of an architecturally reused register
   // or per-instruction temporary on the next fixed-point replay.
@@ -850,18 +956,16 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
     // and register traces; reserve their full N-by-N search envelope before
     // entering the first raw scan.
     if (!consumeEvidence(LocalCount) ||
-        !consumeFactorProduct({LocalCount, LocalCount,
-                               size_t(limits::kMaxQuasiCopyDepth), 16}))
+        !consumeFactorProduct(
+            {LocalCount, LocalCount, size_t(limits::kMaxQuasiCopyDepth), 16}))
       return false;
-    for (int I = static_cast<int>(LocalOps.size()) - 1; I >= 0 &&
-         !HasLocalClampedIndex;
-         --I) {
+    for (int I = static_cast<int>(LocalOps.size()) - 1;
+         I >= 0 && !HasLocalClampedIndex; --I) {
       const LowOp &Load = LocalOps[I];
       if (Load.Opcode != NdOp::LOAD ||
           Load.Output.Size != Img.getPointerSize() || Load.NumInputs < 1)
         continue;
-      const NdVar &Address =
-          Load.Inputs[Load.NumInputs >= 2 ? 1 : 0];
+      const NdVar &Address = Load.Inputs[Load.NumInputs >= 2 ? 1 : 0];
       uint64_t BaseReg = InvalidVA;
       uint64_t IndexReg = InvalidVA;
       uint64_t Disp = 0;
@@ -877,7 +981,8 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
         if (Def < 0)
           break;
         const LowOp &Producer = LocalOps[Def];
-        if (Producer.Opcode == NdOp::INT_OR) {
+        if (Producer.Opcode == NdOp::INT_OR ||
+            Producer.Opcode == NdOp::SELECT) {
           HasLocalClampedIndex = true;
           break;
         }
@@ -890,8 +995,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
           continue;
         }
         if (Producer.Opcode == NdOp::SUBBYTES && Producer.NumInputs >= 2 &&
-            Producer.Inputs[1].isConst() &&
-            Producer.Inputs[1].Offset == 0) {
+            Producer.Inputs[1].isConst() && Producer.Inputs[1].Offset == 0) {
           Value = Producer.Inputs[0];
           From = Def - 1;
           continue;
@@ -909,8 +1013,8 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   uint16_t W2 = 0;
   int JmpLoadIdx = -1;
   {
-    if (!consumeFactorProduct({Ops.size(), Ops.size(),
-                               size_t(limits::kMaxQuasiCopyDepth), 16}))
+    if (!consumeFactorProduct(
+            {Ops.size(), Ops.size(), size_t(limits::kMaxQuasiCopyDepth), 16}))
       return false;
     uint64_t Disp = 0;
     bool Scaled = false;
@@ -949,14 +1053,15 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
     if (Def && Ops[*Def].Opcode == NdOp::LOAD) {
       W1 = Ops[*Def].Output.Size;
       IdxLoadIdx = *Def;
-    } else if (Def && Ops[*Def].Opcode == NdOp::INT_OR) {
+    } else if (Def && (Ops[*Def].Opcode == NdOp::INT_OR ||
+                       Ops[*Def].Opcode == NdOp::SELECT)) {
       parseClampedIndex(*Def, IdxLoadIdx, W1);
     }
   }
   // A byte/halfword index table is the hallmark of the compaction; a wider
   // "index" is indistinguishable from an ordinary single-level table entry.
   if (IdxLoadIdx < 0 || (W1 != 1 && W1 != 2)) {
-    // A depth-limited complementary blend is not yet a composite certificate.
+    // A depth-limited clamped selection is not yet a composite certificate.
     // Before preserving it as incomplete, authenticate the already-located
     // inner pointer LOAD against an actual code-relocation prefix.  Raw masked
     // callback tables without relocation identity therefore retain ordinary
@@ -965,9 +1070,10 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
     if (SawClampedIndexSkeleton && ClampAnalysisIncomplete && JmpLoadIdx >= 0 &&
         JmpBaseReg != InvalidVA && W2 != 0) {
       const va_t FoldAt = Ops[JmpLoadIdx].Addr;
-      const std::optional<uint64_t> Folded = foldRegConstant(
-          Img, Rec, JmpBaseReg, FoldAt,
-          [&](size_t Amount) { return consumeEvidence(Amount); });
+      const std::optional<uint64_t> Folded =
+          foldRegConstant(Img, Rec, JmpBaseReg, FoldAt, [&](size_t Amount) {
+            return consumeEvidence(Amount);
+          });
       if (Folded && consumeEvidence(Img.Segments.size()) &&
           Img.getSegmentFor(*Folded)) {
         auto hasRelocationPrefix = [&](const std::set<uint64_t> &Slots) {
@@ -1199,7 +1305,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
     }
   }
 
-  // Once the complementary blend, narrow outer LOAD, and both physical table
+  // Once the clamped selection, narrow outer LOAD, and both physical table
   // identities are known, unsupported or depth-limited clamp semantics are a
   // claimed-but-incomplete composite candidate.  Do not fall through to a
   // generic inner-table resolver that could convert the machine jump to CALL.
@@ -1763,17 +1869,25 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
 
     uint64_t EntryDomainMask = FeasibleMasks[1];
     if (OrdinaryGuardProven)
-      EntryDomainMask =
-          OrdinaryGuardBound >= 64
-              ? std::numeric_limits<uint64_t>::max()
-              : (uint64_t{1} << OrdinaryGuardBound) - 1;
+      EntryDomainMask = OrdinaryGuardBound >= 64
+                            ? std::numeric_limits<uint64_t>::max()
+                            : (uint64_t{1} << OrdinaryGuardBound) - 1;
     // A guard proved on the pre-expansion graph only contributes the entry
     // domain.  Every decoded inner target must still participate in the
     // candidate-local closure, otherwise a newly introduced case could jump
     // back into the dispatch after clobbering the selector or constants.
     std::optional<bool> Closure;
-    if (EntryProven)
-      Closure = clampedSelectorClosure(EntryDomainMask);
+    if (EntryProven) {
+      // A direct SELECT retains the selector as a first-class value, so the
+      // final candidate-graph replay below can prove selector equality and the
+      // complete unsigned domain on every entry/re-entry.  The x86 mask-blend
+      // form loses that structural identity across Merge(ZExt) normalization;
+      // keep its stricter lane/re-entry closure instead.
+      if (Clamp.DirectSelect)
+        Closure = true;
+      else
+        Closure = clampedSelectorClosure(EntryDomainMask);
+    }
     // Replay the immutable fallback/bitmap certificates on the final graph,
     // after every physical inner-table target has been added.  Case bodies may
     // redefine those live-in registers; an entry-only proof must never be
@@ -1793,17 +1907,27 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
           Queries, &FinalComplete, &FinalQueryComplete, Rec.Addr,
           &Info.ExplicitTargets, CandidateEvidenceBudget, 0, nullptr,
           &FinalFeasibleMasks);
-    const bool FinalSemanticsComplete =
+    const bool FinalConstantSemanticsComplete =
         FinalComplete && FinalQueryComplete.size() == Queries.size() &&
-        FinalResults.size() == Queries.size() &&
-        FinalQueryComplete[2] && FinalQueryComplete[3];
+        FinalResults.size() == Queries.size() && FinalQueryComplete[2] &&
+        FinalQueryComplete[3];
+    const bool FinalSelectorSemanticsComplete =
+        !Clamp.DirectSelect ||
+        (FinalConstantSemanticsComplete && FinalQueryComplete[0] &&
+         FinalQueryComplete[1] && FinalFeasibleMasks.size() == Queries.size());
+    const bool FinalSemanticsComplete =
+        FinalConstantSemanticsComplete && FinalSelectorSemanticsComplete;
+    const bool FinalConstantSemanticsProven =
+        FinalConstantSemanticsComplete && FinalResults[2] && FinalResults[3];
+    const bool FinalSelectorSemanticsProven =
+        !Clamp.DirectSelect ||
+        (FinalSelectorSemanticsComplete && FinalResults[0] && FinalResults[1] &&
+         FinalFeasibleMasks[1] != 0);
     const bool FinalSemanticsProven =
-        FinalSemanticsComplete && FinalResults[2] && FinalResults[3];
-    GuardProven =
-        EntryProven && Closure && *Closure && FinalSemanticsProven;
+        FinalConstantSemanticsProven && FinalSelectorSemanticsProven;
+    GuardProven = EntryProven && Closure && *Closure && FinalSemanticsProven;
     if (GuardProven) {
-      Info.MaxEntries =
-          OrdinaryGuardProven ? OrdinaryGuardBound : IdxCap;
+      Info.MaxEntries = OrdinaryGuardProven ? OrdinaryGuardBound : IdxCap;
       Info.IncompleteGuardDomain = false;
       Info.SemanticGuardDomainAmbiguous = false;
     } else if (!EntryProofComplete || (EntryProven && !Closure) ||

@@ -52,11 +52,14 @@ std::vector<uint64_t> callPreservedRegs(const BinaryImage &Img) {
 /// Fold a register to a constant by emulating the linear prefix up to the
 /// branch.  The emulator halts at the first control-flow op, so for a
 /// loop-body branch this still executes the dominating block where a PIC
-/// table base is materialised.
+/// table base is materialised.  Address callers retain the default mapped-value
+/// requirement; scalar-proof callers may request an unmapped result only as a
+/// candidate for a separate point-sensitive proof.
 std::optional<uint64_t>
 CFGBuilder::foldRegConstant(const BinaryImage &Img, const InsnRecord &Rec,
                             uint64_t Reg, va_t CutoffAddr,
-                            std::function<bool(size_t)> ConsumeWork) const {
+                            std::function<bool(size_t)> ConsumeWork,
+                            bool RequireMappedValue) const {
   bool WorkComplete = true;
   auto consume = [&](size_t Amount = 1) {
     if (!WorkComplete)
@@ -323,7 +326,9 @@ CFGBuilder::foldRegConstant(const BinaryImage &Img, const InsnRecord &Rec,
     // stale value may coincidentally fall inside .text (for example RCX == 1),
     // so accept it only when the defining op itself was actually executed.
     if (LastRegDef >= 0 && Executed > static_cast<size_t>(LastRegDef) && V &&
-        *V) {
+        (!RequireMappedValue || *V)) {
+      if (!RequireMappedValue)
+        return V;
       if (!consume(Img.Segments.size()))
         return std::nullopt;
       if (Img.getSegmentFor(*V))
@@ -427,7 +432,9 @@ CFGBuilder::foldRegConstant(const BinaryImage &Img, const InsnRecord &Rec,
     if (!consume(orderedLookupWork(Slice.size())))
       return std::nullopt;
     auto LocalV = LocalEmu.getRegister(Reg);
-    if (LocalV && *LocalV) {
+    if (LocalV && (!RequireMappedValue || *LocalV)) {
+      if (!RequireMappedValue)
+        return LocalV;
       if (!consume(Img.Segments.size()))
         return std::nullopt;
       if (Img.getSegmentFor(*LocalV))

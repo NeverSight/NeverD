@@ -1039,7 +1039,8 @@ private:
   std::optional<uint64_t>
   foldRegConstant(const BinaryImage &Img, const InsnRecord &Rec, uint64_t Reg,
                   va_t CutoffAddr = InvalidVA,
-                  std::function<bool(size_t)> ConsumeWork = {}) const;
+                  std::function<bool(size_t)> ConsumeWork = {},
+                  bool RequireMappedValue = true) const;
   bool tryARMTableBranch(const BinaryImage &Img, const InsnRecord &Rec,
                          JumpTableInfo &Info);
   bool tryDualPathRecovery(const InsnRecord &Rec, JumpTableInfo &Info);
