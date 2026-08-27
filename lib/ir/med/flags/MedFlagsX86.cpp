@@ -81,7 +81,12 @@ bool carryFlagMatchesCmpX86(const std::vector<MedOp> &Ops, int ConsumerIdx,
       CC == CondCode::UGE) {
     FlagOff = TRI.FlagCF;
     BorrowOp = NdOp::INT_LESS;
-  } else if (CC == CondCode::VS) {
+    // Signed relations consume SF^OF (plus ZF for LE/GT), so their fold is only
+    // valid when the nearest OF came directly from this CMP's subtraction.  SBB
+    // composes OF from two INT_SBOR terms through BOOL_XOR; collapsing that
+    // chain to A <s (B + borrow) is wrong when the addition itself overflows.
+  } else if (CC == CondCode::VS || CC == CondCode::SLT || CC == CondCode::SGE ||
+             CC == CondCode::SLE || CC == CondCode::SGT) {
     FlagOff = TRI.FlagVF;
     BorrowOp = NdOp::INT_SBOR;
   } else {
