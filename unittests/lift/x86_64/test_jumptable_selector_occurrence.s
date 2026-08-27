@@ -5,6 +5,7 @@
 // masked byte offset.
 
         .text
+.Lselector_occurrence_text_base:
         .globl  jt_selector_prescaled_postload_reuse
         .type   jt_selector_prescaled_postload_reuse,@function
 jt_selector_prescaled_postload_reuse:
@@ -262,6 +263,60 @@ jt_selector_single_callback_budget_control:
         jmpq    *(%rax,%rdi,8)
         .size   jt_selector_single_callback_budget_control, .-jt_selector_single_callback_budget_control
 
+// Two mapped table loads alone are not a composite jump-table certificate.
+// The inner object deliberately contains no code-pointer relocation slots, so
+// evidence before relocation identity must not create persistent composite
+// authority; genuine resource exhaustion remains transactionally fail-closed.
+        .globl  jt_selector_twotable_raw_callback_control
+        .type   jt_selector_twotable_raw_callback_control,@function
+jt_selector_twotable_raw_callback_control:
+        andl    $1, %edi
+        movabsq $2, %r10
+        movl    $1, %r11d
+        jmp     .Lselector_twotable_raw_dispatch
+.Lselector_twotable_raw_dispatch:
+        leaq    .Lselector_twotable_raw_index(%rip), %rax
+        movzbl  (%rax,%rdi), %r15d
+        .rept   10
+        movl    %r15d, %eax
+        movl    %eax, %r15d
+        .endr
+        btq     %rdi, %r10
+        cmovcq  %r11, %r15
+        leaq    jt_selector_twotable_raw_inner(%rip), %rax
+        .globl  jt_selector_twotable_raw_callback_branch
+        .type   jt_selector_twotable_raw_callback_branch,@notype
+jt_selector_twotable_raw_callback_branch:
+        jmpq    *(%rax,%r15,8)
+        .size   jt_selector_twotable_raw_callback_control, .-jt_selector_twotable_raw_callback_control
+
+// A real relocation-backed inner table whose complementary-mask outer arm is
+// deliberately transported through more than kMaxQuasiCopyDepth COPYs.  The
+// partial clamp must never fall through to publishing the inner table on its
+// intermediate index.
+        .globl  jt_selector_clamped_depth_limit
+        .type   jt_selector_clamped_depth_limit,@function
+jt_selector_clamped_depth_limit:
+        andl    $1, %edi
+        movabsq $2, %r10
+        movl    $1, %r11d
+        jmp     .Lselector_clamped_depth_dispatch
+.Lselector_clamped_depth_dispatch:
+        leaq    jt_selector_clamped_depth_outer(%rip), %rax
+        movzbl  (%rax,%rdi), %r15d
+        .rept   10
+        movl    %r15d, %eax
+        movl    %eax, %r15d
+        .endr
+        btq     %rdi, %r10
+        cmovcq  %r11, %r15
+        leaq    jt_selector_clamped_depth_inner(%rip), %rax
+        .globl  jt_selector_clamped_depth_branch
+        .type   jt_selector_clamped_depth_branch,@notype
+jt_selector_clamped_depth_branch:
+        jmpq    *(%rax,%r15,8)
+        .size   jt_selector_clamped_depth_limit, .-jt_selector_clamped_depth_limit
+
         .section .data.rel.ro.jt_selector_occurrence,"aw",@progbits
         .p2align 3
 .Lselector_twotable_callback_a:
@@ -282,6 +337,35 @@ jt_selector_single_callback_budget_control:
         .quad   jt_selector_budget_callback_a
         .quad   jt_selector_budget_callback_b
         .size   .Lselector_single_callback_budget, .-.Lselector_single_callback_budget
+
+        .section .rodata.jt_selector_twotable_raw_callback,"a",@progbits
+        .p2align 3
+        .type   .Lselector_twotable_raw_index,@object
+.Lselector_twotable_raw_index:
+        .byte   0, 1
+        .size   .Lselector_twotable_raw_index, .-.Lselector_twotable_raw_index
+        .p2align 3
+        .globl  jt_selector_twotable_raw_inner
+        .type   jt_selector_twotable_raw_inner,@object
+jt_selector_twotable_raw_inner:
+        .quad   jt_selector_budget_callback_a - .Lselector_occurrence_text_base
+        .quad   jt_selector_budget_callback_b - .Lselector_occurrence_text_base
+        .size   jt_selector_twotable_raw_inner, .-jt_selector_twotable_raw_inner
+
+        .section .rodata.jt_selector_clamped_depth,"a",@progbits
+        .p2align 3
+        .globl  jt_selector_clamped_depth_outer
+        .type   jt_selector_clamped_depth_outer,@object
+jt_selector_clamped_depth_outer:
+        .byte   0, 1
+        .size   jt_selector_clamped_depth_outer, .-jt_selector_clamped_depth_outer
+        .p2align 3
+        .globl  jt_selector_clamped_depth_inner
+        .type   jt_selector_clamped_depth_inner,@object
+jt_selector_clamped_depth_inner:
+        .quad   jt_selector_budget_callback_a
+        .quad   jt_selector_budget_callback_b
+        .size   jt_selector_clamped_depth_inner, .-jt_selector_clamped_depth_inner
 
 // Both paths compute the same authenticated selected-base+byte-index address,
 // but with different ADD occurrences.  A single MedVar from either arm does

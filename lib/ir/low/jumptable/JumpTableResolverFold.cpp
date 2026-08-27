@@ -26,6 +26,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
+#include <limits>
 #include <optional>
 #include <set>
 #include <vector>
@@ -64,6 +66,181 @@ CFGBuilder::foldRegConstant(const BinaryImage &Img, const InsnRecord &Rec,
     WorkComplete = false;
     return false;
   };
+  auto consumeProduct = [&](size_t Count, size_t Factor) {
+    if (Factor != 0 &&
+        Count > std::numeric_limits<size_t>::max() / Factor) {
+      consume(std::numeric_limits<size_t>::max());
+      WorkComplete = false;
+      return false;
+    }
+    return consume(Count * Factor);
+  };
+  auto orderedLookupWork = [](size_t Count) {
+    size_t Work = 1;
+    for (size_t N = Count; N > 1; N = N / 2 + N % 2)
+      ++Work;
+    return Work;
+  };
+  auto consumeFactors = [&](std::initializer_list<size_t> Factors) {
+    size_t Product = 1;
+    for (size_t Factor : Factors) {
+      if (Factor != 0 &&
+          Product > std::numeric_limits<size_t>::max() / Factor) {
+        consume(std::numeric_limits<size_t>::max());
+        WorkComplete = false;
+        return false;
+      }
+      Product *= Factor;
+    }
+    return consume(Product);
+  };
+  auto prepayEmulatorRun = [&](const std::vector<LowOp> &OpsToRun,
+                               size_t PreservedCount, bool StepOverCalls) {
+    // Find the structural upper bound of the linear path before inventorying
+    // its dynamic state.  The vector emulator stops at the first ordinary
+    // control op.  A legacy same-address ARM predicate guard is different: it
+    // may skip the rest of that instruction and continue, so retain its whole
+    // short address run and everything after it.  Two allocation-free source
+    // passes cover address grouping and control classification.
+    if (!consumeProduct(OpsToRun.size(), 2))
+      return false;
+    auto isInstructionControl = [](NdOp Opcode) {
+      return Opcode == NdOp::BRANCH || Opcode == NdOp::INDIR_BR ||
+             Opcode == NdOp::CALL || Opcode == NdOp::INDIR_CALL ||
+             Opcode == NdOp::RETURN;
+    };
+    size_t ExecutableCount = OpsToRun.size();
+    for (size_t Begin = 0; Begin < OpsToRun.size();) {
+      size_t End = Begin + 1;
+      while (End < OpsToRun.size() &&
+             OpsToRun[End].Addr == OpsToRun[Begin].Addr)
+        ++End;
+      bool HasPredicatedGuard = false;
+      bool SawCondBr = false;
+      size_t FirstTerminatingControl = End;
+      for (size_t I = Begin; I < End; ++I) {
+        const LowOp &Op = OpsToRun[I];
+        const NdOp Opcode = Op.Opcode;
+        if (FirstTerminatingControl == End &&
+            (Opcode == NdOp::BRANCH || Opcode == NdOp::COND_BR ||
+             Opcode == NdOp::RETURN || Opcode == NdOp::INDIR_BR ||
+             (!StepOverCalls &&
+              (Opcode == NdOp::CALL || Opcode == NdOp::INDIR_CALL))))
+          FirstTerminatingControl = I;
+        if (SawCondBr && isInstructionControl(Opcode))
+          HasPredicatedGuard = true;
+        if (Opcode == NdOp::COND_BR && Op.Addr != 0)
+          SawCondBr = true;
+      }
+      if (!HasPredicatedGuard && FirstTerminatingControl != End) {
+        const NdOp Opcode = OpsToRun[FirstTerminatingControl].Opcode;
+        // Even an ordinary COND_BR makes predicatedInstructionEnd inspect the
+        // rest of its original same-address run twice before it decides that
+        // no legacy instruction control follows.  Those ops are not
+        // executable, so retain only their scan work here.
+        if (Opcode == NdOp::COND_BR &&
+            !consumeProduct(End - FirstTerminatingControl - 1, 2))
+          return false;
+        ExecutableCount = FirstTerminatingControl + 1;
+        break;
+      }
+      Begin = End;
+    }
+    // Pay the grouped opcode inventory and the emulator's actual linear walk
+    // before either observes or mutates emulator state.
+    if (!consumeProduct(ExecutableCount, 3))
+      return false;
+    size_t RegisterAccesses = 0;
+    size_t RegisterMutations = 0;
+    size_t MemoryReads = 0;
+    size_t MemoryWrites = 0;
+    size_t Calls = 0;
+    size_t PredicatedBranchWork = 0;
+    auto addCount = [&](size_t &Total, size_t Amount = 1) {
+      if (Amount > std::numeric_limits<size_t>::max() - Total) {
+        consume(std::numeric_limits<size_t>::max());
+        WorkComplete = false;
+        return false;
+      }
+      Total += Amount;
+      return true;
+    };
+    for (size_t Begin = 0; Begin < ExecutableCount;) {
+      size_t End = Begin + 1;
+      while (End < ExecutableCount &&
+             OpsToRun[End].Addr == OpsToRun[Begin].Addr)
+        ++End;
+      for (size_t I = Begin; I < End; ++I) {
+        const LowOp &Op = OpsToRun[I];
+        if (!addCount(RegisterAccesses, Op.NumInputs))
+          return false;
+        if ((Op.Output.isReg() || Op.Output.isTemp()) &&
+            !addCount(RegisterMutations))
+          return false;
+        switch (Op.Opcode) {
+        case NdOp::CALL:
+        case NdOp::INDIR_CALL:
+          if (!addCount(Calls))
+            return false;
+          break;
+        case NdOp::COND_BR: {
+          // NdOpEmulator's legacy vector API scans only the suffix of this
+          // machine instruction, then scans that same short suffix for a
+          // control op.  Charge that exact interval instead of pessimistically
+          // multiplying every block-level branch by the whole function.
+          const size_t Suffix = Op.Addr == 0 ? 0 : End - I - 1;
+          if (!addCount(PredicatedBranchWork, Suffix) ||
+              !addCount(PredicatedBranchWork, Suffix) ||
+              !addCount(PredicatedBranchWork))
+            return false;
+          break;
+        }
+        case NdOp::LOAD:
+          if (!addCount(MemoryReads))
+            return false;
+          break;
+        case NdOp::STORE:
+          if (!addCount(MemoryWrites))
+            return false;
+          break;
+        case NdOp::ATOMIC_ADD:
+        case NdOp::ATOMIC_CMPXCHG:
+          if (!addCount(MemoryReads) || !addCount(MemoryWrites))
+            return false;
+          break;
+        default:
+          break;
+        }
+      }
+      Begin = End;
+    }
+
+    const size_t RegisterUpper = RegisterMutations;
+    const size_t StoreUpper = std::min(
+        MemoryWrites, size_t(limits::kMaxEmulatorStoreEntries));
+    const size_t RegisterLookup = orderedLookupWork(RegisterUpper);
+    const size_t StoreLookup = orderedLookupWork(StoreUpper);
+    const size_t PreservedLookup = orderedLookupWork(PreservedCount);
+
+    // NdOpEmulator owns two ordered maps and two vectors.  Before constructing
+    // it, reserve a conservative execution envelope from an allocation-free
+    // opcode inventory.  Every actual operand and output pays its ordered-map
+    // query; memory ops pay overlay lookup, node lifetime, and image-owner
+    // scanning; each call that can be stepped over pays a full register-state
+    // walk plus ABI-preserved lookup.  All work debits the same caller account.
+    return consume(8) &&
+           consumeFactors({RegisterAccesses, RegisterLookup}) &&
+           consumeFactors({RegisterMutations, RegisterLookup}) &&
+           consumeProduct(RegisterMutations, 3) &&
+           consumeFactors({MemoryReads, StoreLookup}) &&
+           consumeFactors({MemoryWrites, StoreLookup}) &&
+           consumeProduct(MemoryWrites, 3) &&
+           consumeFactors({MemoryReads, Img.Segments.size()}) &&
+           consume(PredicatedBranchWork) &&
+           (!StepOverCalls ||
+            (consumeFactors({Calls, RegisterUpper, PreservedLookup}) &&
+             consumeFactors({Calls, RegisterUpper, 2})));
+  };
 
   // Emulate up to (exclusive) the cutoff instruction.  The default cutoff is
   // the branch itself, but a table-base register may be reused (clobbered)
@@ -72,20 +249,61 @@ CFGBuilder::foldRegConstant(const BinaryImage &Img, const InsnRecord &Rec,
   // jmp *%r10` — so callers fold it at the table load, before the clobber.
   va_t Cutoff = (CutoffAddr != InvalidVA) ? CutoffAddr : Rec.Addr;
   auto emulateFrom = [&](va_t Start) -> std::optional<uint64_t> {
+    if (ConsumeWork && !consume(2))
+      return std::nullopt;
     std::vector<LowOp> Prefix;
-    for (auto It = Insns.lower_bound(Start);
-         It != Insns.end() && It->first < Cutoff; ++It) {
-      if (!consume())
+    if (ConsumeWork) {
+      // Inventory the prefix without allocating, then prepay its exact vector
+      // buffer, retained elements, future destruction, and the second source
+      // traversal before reserve/push_back can mutate local state.
+      if (!consume(orderedLookupWork(Insns.size())))
         return std::nullopt;
-      for (auto &Op : It->second.Ops) {
-        if (!consume())
+      size_t RecordCount = 0;
+      size_t OpCount = 0;
+      for (auto It = Insns.lower_bound(Start);
+           It != Insns.end() && It->first < Cutoff; ++It) {
+        if (!consume() || !consume(It->second.Ops.size()))
           return std::nullopt;
-        Prefix.push_back(Op);
+        if (RecordCount == std::numeric_limits<size_t>::max() ||
+            It->second.Ops.size() >
+                std::numeric_limits<size_t>::max() - OpCount) {
+          consume(std::numeric_limits<size_t>::max());
+          WorkComplete = false;
+          return std::nullopt;
+        }
+        ++RecordCount;
+        OpCount += It->second.Ops.size();
       }
+      if (!consume(orderedLookupWork(Insns.size())) ||
+          !consume(RecordCount) || !consumeProduct(OpCount, 4))
+        return std::nullopt;
+      Prefix.reserve(OpCount);
+      for (auto It = Insns.lower_bound(Start);
+           It != Insns.end() && It->first < Cutoff; ++It)
+        Prefix.insert(Prefix.end(), It->second.Ops.begin(),
+                      It->second.Ops.end());
+    } else {
+      for (auto It = Insns.lower_bound(Start);
+           It != Insns.end() && It->first < Cutoff; ++It)
+        Prefix.insert(Prefix.end(), It->second.Ops.begin(),
+                      It->second.Ops.end());
     }
-    if (!consume(Prefix.size()))
+    const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
+    if (TRI.CalleeSaveRegs.size() >
+        std::numeric_limits<size_t>::max() - size_t{2}) {
+      consume(std::numeric_limits<size_t>::max());
+      WorkComplete = false;
+      return std::nullopt;
+    }
+    const size_t PreservedCount = TRI.CalleeSaveRegs.size() + 2;
+    if (!prepayEmulatorRun(Prefix, PreservedCount, true))
       return std::nullopt;
     NdOpEmulator Emu(Img);
+    // callPreservedRegs returns an owned vector.  Include its fixed object,
+    // buffer, retained values, source traversal, and future destruction before
+    // construction; setCallPreservedRegisters then takes that storage by move.
+    if (!consumeProduct(PreservedCount, 4) || !consume(2))
+      return std::nullopt;
     Emu.setCallPreservedRegisters(callPreservedRegs(Img));
     size_t Executed = Emu.run(Prefix);
     int LastRegDef = -1;
@@ -97,14 +315,20 @@ CFGBuilder::foldRegConstant(const BinaryImage &Img, const InsnRecord &Rec,
         break;
       }
     }
+    if (!consume(orderedLookupWork(Prefix.size())))
+      return std::nullopt;
     auto V = Emu.getRegister(Reg);
     // A failed load or unsupported operation can stop emulation before the
     // table-base LEA while leaving an older value in the same register.  That
     // stale value may coincidentally fall inside .text (for example RCX == 1),
     // so accept it only when the defining op itself was actually executed.
     if (LastRegDef >= 0 && Executed > static_cast<size_t>(LastRegDef) && V &&
-        *V && Img.getSegmentFor(*V))
-      return V;
+        *V) {
+      if (!consume(Img.Segments.size()))
+        return std::nullopt;
+      if (Img.getSegmentFor(*V))
+        return V;
+    }
 
     // The linear emulator may stop at an unrelated operation it cannot model
     // (notably an x87 80-bit LOAD) before a later LEA/ADR materialises the
@@ -144,6 +368,8 @@ CFGBuilder::foldRegConstant(const BinaryImage &Img, const InsnRecord &Rec,
     if (RegDef < 0)
       return std::nullopt;
 
+    if (!consume(2))
+      return std::nullopt;
     std::set<int> SliceIdx;
     std::function<bool(const NdVar &, int)> addConstantDef =
         [&](const NdVar &Var, int Before) -> bool {
@@ -166,6 +392,8 @@ CFGBuilder::foldRegConstant(const BinaryImage &Img, const InsnRecord &Rec,
       }
       if (Def < 0)
         return false;
+      if (!consume(orderedLookupWork(SliceIdx.size())) || !consume(3))
+        return false;
       if (!SliceIdx.insert(Def).second)
         return true;
       for (uint8_t I = 0; I < Prefix[Def].NumInputs; ++I) {
@@ -179,6 +407,11 @@ CFGBuilder::foldRegConstant(const BinaryImage &Img, const InsnRecord &Rec,
 
     if (!addConstantDef(Prefix[RegDef].Output, RegDef))
       return std::nullopt;
+    // Prepay the Slice vector object, exact buffer, retained elements, and
+    // future destruction.  The loop's existing debit remains the source-set
+    // traversal; the post-loop debit pays emulator work.
+    if (!consumeProduct(SliceIdx.size(), 3) || !consume(2))
+      return std::nullopt;
     std::vector<LowOp> Slice;
     Slice.reserve(SliceIdx.size());
     for (int I : SliceIdx) {
@@ -186,14 +419,20 @@ CFGBuilder::foldRegConstant(const BinaryImage &Img, const InsnRecord &Rec,
         return std::nullopt;
       Slice.push_back(Prefix[I]);
     }
-    if (!consume(Slice.size()))
+    if (!prepayEmulatorRun(Slice, 0, false))
       return std::nullopt;
     NdOpEmulator LocalEmu(Img);
     if (LocalEmu.run(Slice) != Slice.size())
       return std::nullopt;
+    if (!consume(orderedLookupWork(Slice.size())))
+      return std::nullopt;
     auto LocalV = LocalEmu.getRegister(Reg);
-    if (LocalV && *LocalV && Img.getSegmentFor(*LocalV))
-      return LocalV;
+    if (LocalV && *LocalV) {
+      if (!consume(Img.Segments.size()))
+        return std::nullopt;
+      if (Img.getSegmentFor(*LocalV))
+        return LocalV;
+    }
     return std::nullopt;
   };
 
@@ -202,6 +441,8 @@ CFGBuilder::foldRegConstant(const BinaryImage &Img, const InsnRecord &Rec,
   // loop-invariant base set in a dominator (x86 `lea table(%rip)`); run()
   // halts at the first branch, so the dominating block is still covered.
   va_t BlkStart = CurrentFuncEntry;
+  if (!consume(orderedLookupWork(BlockStarts.size())))
+    return std::nullopt;
   auto BIt = BlockStarts.upper_bound(Rec.Addr);
   if (BIt != BlockStarts.begin()) {
     --BIt;
@@ -220,6 +461,8 @@ CFGBuilder::foldRegConstant(const BinaryImage &Img, const InsnRecord &Rec,
   // there and any caller-saved clobber is irrelevant to a base computed after
   // the call.
   va_t AfterLastTerm = InvalidVA;
+  if (!consume(orderedLookupWork(Insns.size())))
+    return std::nullopt;
   for (auto It = Insns.lower_bound(BlkStart);
        It != Insns.end() && It->first < Cutoff; ++It) {
     if (!consume())
@@ -260,6 +503,8 @@ CFGBuilder::foldRegConstant(const BinaryImage &Img, const InsnRecord &Rec,
   // preceding block starts (nearest first) and emulate each block's own prefix;
   // the preheader resolves the base where the entry-prefix emulation stalls.
   int Tries = 0;
+  if (!consume(orderedLookupWork(BlockStarts.size())))
+    return std::nullopt;
   for (auto It = BlockStarts.lower_bound(BlkStart);
        It != BlockStarts.begin() && Tries < limits::kMaxQuasiCopyDepth;) {
     if (!consume())

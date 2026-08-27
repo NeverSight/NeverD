@@ -164,6 +164,15 @@ public:
   bool constBasePostShapeAnalysisIncompleteForTesting() const {
     return ConstBasePostShapeAnalysisIncompleteForTesting;
   }
+  va_t constBaseFirstLocalShapeClaimedAddrForTesting() const {
+    return ConstBaseFirstLocalShapeClaimedAddrForTesting;
+  }
+  va_t constBaseSecondLocalShapeClaimedAddrForTesting() const {
+    return ConstBaseSecondLocalShapeClaimedAddrForTesting;
+  }
+  bool constBaseLocalShapeClaimedAddrOverflowForTesting() const {
+    return ConstBaseLocalShapeClaimedAddrOverflowForTesting;
+  }
   /// Expose only whether a failed candidate-local proof left provisional
   /// exploration state behind.  Budget exhaustion must be transactional:
   /// focused tests use this after build() to ensure an incomplete proof cannot
@@ -1024,7 +1033,9 @@ private:
                                    uint64_t &IndexReg, uint32_t &Scale,
                                    NdVar *IndexValue = nullptr,
                                    va_t *IndexUseAddr = nullptr,
-                                   int *IndexUseSeq = nullptr) const;
+                                   int *IndexUseSeq = nullptr,
+                                   std::function<bool(size_t)> ConsumeWork =
+                                       {}) const;
   std::optional<uint64_t>
   foldRegConstant(const BinaryImage &Img, const InsnRecord &Rec, uint64_t Reg,
                   va_t CutoffAddr = InvalidVA,
@@ -1354,6 +1365,9 @@ private:
   va_t NestedMutationTrackingEvidenceExhaustedAddrForTesting = InvalidVA;
   bool ConstBaseLocalShapeClaimedForTesting = false;
   bool ConstBasePostShapeAnalysisIncompleteForTesting = false;
+  va_t ConstBaseFirstLocalShapeClaimedAddrForTesting = InvalidVA;
+  va_t ConstBaseSecondLocalShapeClaimedAddrForTesting = InvalidVA;
+  bool ConstBaseLocalShapeClaimedAddrOverflowForTesting = false;
   ProposalCleanupEvidenceStateForTesting ProposalCleanupEvidenceForTesting;
   bool ProposalOldStateCleanupEvidenceExhaustionForTesting = false;
 

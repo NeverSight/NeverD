@@ -137,6 +137,9 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   NestedMutationTrackingEvidenceExhaustedAddrForTesting = InvalidVA;
   ConstBaseLocalShapeClaimedForTesting = false;
   ConstBasePostShapeAnalysisIncompleteForTesting = false;
+  ConstBaseFirstLocalShapeClaimedAddrForTesting = InvalidVA;
+  ConstBaseSecondLocalShapeClaimedAddrForTesting = InvalidVA;
+  ConstBaseLocalShapeClaimedAddrOverflowForTesting = false;
   ProposalCleanupEvidenceForTesting = {};
   JumpTableProofContextComplete = false;
   RequestedCompleteJumpTableProof = false;
@@ -183,9 +186,9 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   I386GOTOFFGraphQueryIssuedForTesting = false;
   I386GOTOFFGraphQueryBudgetExhaustedForTesting = false;
   StackTableEvidenceRemaining = std::min<size_t>(
-      limits::kMaxJumpTableEvidenceWork,
+      limits::kMaxJumpTableStackEvidenceWork,
       StackTableEvidenceBudgetForTesting.value_or(
-          limits::kMaxJumpTableEvidenceWork));
+          limits::kMaxJumpTableStackEvidenceWork));
   PreviouslyPublishedJumpTableBranches =
       std::move(PendingPreviouslyPublishedJumpTableBranches);
   PendingPreviouslyPublishedJumpTableBranches.clear();
@@ -2863,9 +2866,9 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
     // candidates in that stage.  Do not let a provisional graph consume the
     // final revalidation graph's proof budget.
     StackTableEvidenceRemaining =
-        std::min<size_t>(limits::kMaxJumpTableEvidenceWork,
+        std::min<size_t>(limits::kMaxJumpTableStackEvidenceWork,
                          StackTableEvidenceBudgetForTesting.value_or(
-                             limits::kMaxJumpTableEvidenceWork));
+                             limits::kMaxJumpTableStackEvidenceWork));
     CandidateFixedPointExplorationTargets.clear();
     StageAmbiguousI386GOTPCBranches.clear();
     StageReplayedI386GOTPCKeys.clear();

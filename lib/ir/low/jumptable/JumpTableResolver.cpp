@@ -1047,6 +1047,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     Info = JumpTableInfo{};
     Recovered =
         tryTwoLevelIndexTable(Img, Rec, Info, &CandidateEvidenceBudget);
+    CandidateEvidenceShapeClaimed |= Info.CompositeShapeClaimed;
+    CandidateEvidenceAnalysisIncomplete |= Info.IncompleteGuardDomain;
     if (Info.CompositeShapeClaimed &&
         (!Recovered || !HasOccurrenceMetadata(Info)))
       return {};
@@ -1096,6 +1098,17 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
         &CandidateEvidenceBudget, &ConstBaseAnalysisComplete);
     CandidateEvidenceShapeClaimed |= ConstBaseShapeClaimed;
     ConstBaseLocalShapeClaimedForTesting |= ConstBaseShapeClaimed;
+    if (ConstBaseShapeClaimed && MaskFixedPointEvidenceBudgetForTesting) {
+      if (ConstBaseFirstLocalShapeClaimedAddrForTesting == InvalidVA) {
+        ConstBaseFirstLocalShapeClaimedAddrForTesting = Rec.Addr;
+      } else if (ConstBaseFirstLocalShapeClaimedAddrForTesting != Rec.Addr &&
+                 ConstBaseSecondLocalShapeClaimedAddrForTesting == InvalidVA) {
+        ConstBaseSecondLocalShapeClaimedAddrForTesting = Rec.Addr;
+      } else if (ConstBaseFirstLocalShapeClaimedAddrForTesting != Rec.Addr &&
+                 ConstBaseSecondLocalShapeClaimedAddrForTesting != Rec.Addr) {
+        ConstBaseLocalShapeClaimedAddrOverflowForTesting = true;
+      }
+    }
     ConstBasePostShapeAnalysisIncompleteForTesting |=
         ConstBaseShapeClaimed && !ConstBaseAnalysisComplete;
     CandidateEvidenceAnalysisIncomplete |= !ConstBaseAnalysisComplete;

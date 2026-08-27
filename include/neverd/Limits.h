@@ -49,6 +49,13 @@ constexpr uint32_t kMaxJumpTableEntries = 4096;
 /// input-controlled, so every retained item and query allocation is prepaid.
 constexpr uint32_t kMaxJumpTableEvidenceWork = 4096;
 
+/// Stage-local allowance for authenticating a stack-materialized jump table.
+/// Exact Fold/emulator accounting for PIC relocatable O0 local-table functions
+/// exceeds the generic four-KiB allowance; sixteen KiB is the next power-of-two
+/// bound.
+/// Every stack-table candidate in one immutable resolver graph shares it.
+constexpr uint32_t kMaxJumpTableStackEvidenceWork = 16384;
+
 /// Local syntax allowance while correlating path-qualified guard aliases.
 /// A later O0 state-machine dispatch exceeds eight KiB while every visit
 /// continues to debit the candidate-wide aggregate account.  Sixteen KiB is

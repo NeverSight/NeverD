@@ -1129,6 +1129,20 @@ foreach(src ${X86_32_TEST_SOURCES})
   list(APPEND TEST_OBJECTS ${obj})
 endforeach()
 
+set(stack_cgoto_i386_pic_src
+    "${CMAKE_CURRENT_SOURCE_DIR}/x86_32/test_jumptable_stack_loc8_pic.c")
+set(stack_cgoto_i386_pic_obj
+    "${CMAKE_CURRENT_BINARY_DIR}/test_jumptable_stack_loc8_pic.o")
+add_custom_command(
+  OUTPUT ${stack_cgoto_i386_pic_obj}
+  COMMAND ${CLANG_EXEC} -target i386-linux-gnu -nostdlib -c -O0
+          -fno-stack-protector -fno-exceptions -fno-unwind-tables
+          -fno-asynchronous-unwind-tables -march=pentium4
+          ${stack_cgoto_i386_pic_src} -o ${stack_cgoto_i386_pic_obj}
+  DEPENDS ${stack_cgoto_i386_pic_src}
+  COMMENT "Compiling PIC i386 stack-materialized jump-table fixture")
+list(APPEND TEST_OBJECTS ${stack_cgoto_i386_pic_obj})
+
 foreach(src ${AARCH64_TEST_SOURCES})
   get_filename_component(base ${src} NAME_WE)
   set(obj "${CMAKE_CURRENT_BINARY_DIR}/${base}.o")

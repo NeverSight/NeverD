@@ -562,6 +562,9 @@ TEST_F(JumpTableProposalLFP,
     neverd::LowFunc Low;
     bool LocalShapeClaimed = false;
     bool PostShapeIncomplete = false;
+    neverd::va_t FirstClaimedAddr = neverd::InvalidVA;
+    neverd::va_t SecondClaimedAddr = neverd::InvalidVA;
+    bool ClaimedAddrOverflow = false;
   };
   auto BuildWithBudget = [&](const neverd::Symbol &Function, size_t Budget) {
     neverd::Decoder Decoder;
@@ -573,6 +576,12 @@ TEST_F(JumpTableProposalLFP,
     Result.LocalShapeClaimed = Builder.constBaseLocalShapeClaimedForTesting();
     Result.PostShapeIncomplete =
         Builder.constBasePostShapeAnalysisIncompleteForTesting();
+    Result.FirstClaimedAddr =
+        Builder.constBaseFirstLocalShapeClaimedAddrForTesting();
+    Result.SecondClaimedAddr =
+        Builder.constBaseSecondLocalShapeClaimedAddrForTesting();
+    Result.ClaimedAddrOverflow =
+        Builder.constBaseLocalShapeClaimedAddrOverflowForTesting();
     return Result;
   };
 
@@ -612,26 +621,38 @@ TEST_F(JumpTableProposalLFP,
          "budget="
       << *ExhaustingBudget;
   EXPECT_TRUE(Exhausted.Low.JumpTables.empty());
-  EXPECT_NE(findOpcodeAtAddress(Exhausted.Low, ClaimedBranch->Addr,
+  ASSERT_NE(Exhausted.FirstClaimedAddr, neverd::InvalidVA);
+  EXPECT_EQ(Exhausted.SecondClaimedAddr, neverd::InvalidVA);
+  EXPECT_FALSE(Exhausted.ClaimedAddrOverflow);
+  const neverd::Symbol *LocallyClaimed = nullptr;
+  const neverd::Symbol *Other = nullptr;
+  if (Exhausted.FirstClaimedAddr == ClaimedBranch->Addr) {
+    LocallyClaimed = ClaimedBranch;
+    Other = UnclaimedSibling;
+  } else if (Exhausted.FirstClaimedAddr == UnclaimedSibling->Addr) {
+    LocallyClaimed = UnclaimedSibling;
+    Other = ClaimedBranch;
+  }
+  ASSERT_NE(LocallyClaimed, nullptr);
+  ASSERT_NE(Other, nullptr);
+  EXPECT_NE(findOpcodeAtAddress(Exhausted.Low, LocallyClaimed->Addr,
                                 neverd::NdOp::INDIR_BR),
             nullptr);
-  EXPECT_EQ(findOpcodeAtAddress(Exhausted.Low, ClaimedBranch->Addr,
+  EXPECT_EQ(findOpcodeAtAddress(Exhausted.Low, LocallyClaimed->Addr,
                                 neverd::NdOp::INDIR_CALL),
             nullptr);
-  EXPECT_TRUE(
-      Exhausted.Low.UnsafeIndirectBranchAddresses.count(ClaimedBranch->Addr))
-      << "the exact branch whose local relocation model was claimed must stay "
-         "fail-closed when its group inventory runs out";
-  EXPECT_NE(findOpcodeAtAddress(Exhausted.Low, UnclaimedSibling->Addr,
+  EXPECT_TRUE(Exhausted.Low.UnsafeIndirectBranchAddresses.count(
+      LocallyClaimed->Addr));
+  EXPECT_NE(findOpcodeAtAddress(Exhausted.Low, Other->Addr,
                                 neverd::NdOp::INDIR_CALL),
             nullptr);
-  EXPECT_EQ(findOpcodeAtAddress(Exhausted.Low, UnclaimedSibling->Addr,
+  EXPECT_EQ(findOpcodeAtAddress(Exhausted.Low, Other->Addr,
                                 neverd::NdOp::INDIR_BR),
             nullptr);
   EXPECT_FALSE(
-      Exhausted.Low.UnsafeIndirectBranchAddresses.count(UnclaimedSibling->Addr))
-      << "a sibling not reached by the bounded inventory owns no borrowed "
-         "shape certificate and remains eligible for callback lowering";
+      Exhausted.Low.UnsafeIndirectBranchAddresses.count(Other->Addr))
+      << "the sibling that did not reach its local certificate must remain "
+         "eligible for callback lowering";
 
   const BudgetedBuild Callback =
       BuildWithBudget(*CallbackFunction, *ExhaustingBudget);
