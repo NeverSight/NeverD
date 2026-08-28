@@ -573,6 +573,91 @@ TEST(AllocLifetime, NullCheckedConditionalFreeIsNotAHeapLeakWithoutReturnType) {
                    VulnClass::HeapLeak));
 }
 
+TEST(AllocLifetime, CatalogSourceResultCanCorroborateConditionalLeakPath) {
+  constexpr va_t MallocVA = 0x108;
+  constexpr va_t SourceVA = 0x110;
+  constexpr va_t FreeVA = 0x120;
+  FB B("leak_on_one_path", 0x100);
+  const int Entry = B.block();
+  const int Leak = B.block();
+  const int Release = B.block();
+  B.call(Entry, "malloc", temp(1), {MedVar::makeConst(32, 8)}, 0x9000,
+         MallocVA);
+  B.call(Entry, "getenv", temp(2), {MedVar::makeConst(0x8000, 8)}, 0x9010,
+         SourceVA);
+  B.op(Entry, NdOp::INT_NOTEQUAL, temp(3, 1),
+       {temp(2), MedVar::makeConst(0, 8)}, 0x114);
+  B.op(Entry, NdOp::COND_BR, MedVar{},
+       {MedVar::makeConst(0x130, 8), temp(3, 1)}, 0x118);
+  B.succ(Entry, Release);
+  B.succ(Entry, Leak);
+  B.ret(Leak, {});
+  B.call(Release, "free", MedVar{}, {temp(1)}, 0x9020, FreeVA);
+  B.ret(Release, {});
+
+  LowFunc LF;
+  LF.Entry = B.F.Entry;
+  LF.DecodedInstructionCount = 7;
+  LF.LiftedInstructionCount = 7;
+  LF.Blocks.resize(3);
+
+  LowBlock &LowEntry = LF.Blocks[Entry];
+  LowEntry.Id = Entry;
+  LowEntry.StartAddr = B.F.Entry;
+  LowEntry.EndAddr = 0x120;
+  LowEntry.Succs = {Release, Leak};
+  LowEntry.Ops.push_back(
+      lowOp(NdOp::CALL, NdVar::reg(0, 8), {NdVar::cst(0x9000, 8)}, MallocVA));
+  LowEntry.Ops.push_back(
+      lowOp(NdOp::CALL, NdVar::reg(1, 8), {NdVar::cst(0x9010, 8)}, SourceVA));
+  LowEntry.Ops.push_back(lowOp(NdOp::INT_NOTEQUAL, NdVar::reg(2, 1),
+                               {NdVar::reg(1, 8), NdVar::cst(0, 8)}, 0x114));
+  LowEntry.Ops.push_back(lowOp(
+      NdOp::COND_BR, NdVar{}, {NdVar::cst(0x130, 8), NdVar::reg(2, 1)}, 0x118));
+
+  LowBlock &LowLeak = LF.Blocks[Leak];
+  LowLeak.Id = Leak;
+  LowLeak.StartAddr = 0x130;
+  LowLeak.EndAddr = 0x138;
+  LowLeak.Preds = {Entry};
+  LowLeak.Ops.push_back(lowOp(NdOp::RETURN, NdVar{}, {}, 0x130));
+
+  LowBlock &LowRelease = LF.Blocks[Release];
+  LowRelease.Id = Release;
+  LowRelease.StartAddr = 0x120;
+  LowRelease.EndAddr = 0x130;
+  LowRelease.Preds = {Entry};
+  LowRelease.Ops.push_back(
+      lowOp(NdOp::CALL, NdVar::reg(0, 8), {NdVar::cst(0x9020, 8)}, FreeVA));
+  LowRelease.Ops.push_back(lowOp(NdOp::RETURN, NdVar{}, {}, 0x128));
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  std::vector<MedFunc> MedFuncs{B.F};
+  std::vector<LowFunc> LowFuncs{std::move(LF)};
+  AnalysisInput In;
+  In.Img = &Img;
+  In.MedFuncs = &MedFuncs;
+  In.LowFuncs = &LowFuncs;
+
+  const std::vector<Finding> Findings =
+      auditHeap(In, SinkCatalog::defaults(), SafetyBudgets{});
+  const Finding *LeakFinding = find(Findings, VulnClass::HeapLeak);
+  ASSERT_NE(LeakFinding, nullptr);
+  EXPECT_EQ(LeakFinding->TheVerdict, Verdict::Unsafe)
+      << LeakFinding->Corroboration << ": " << LeakFinding->Detail;
+  EXPECT_EQ(LeakFinding->TheConfidence, Confidence::High);
+
+  MedFuncs.front().CallInfos[1].TargetName = "scanf";
+  const std::vector<Finding> OutputOnlyFindings =
+      auditHeap(In, SinkCatalog::defaults(), SafetyBudgets{});
+  const Finding *OutputOnlyLeak =
+      find(OutputOnlyFindings, VulnClass::HeapLeak);
+  ASSERT_NE(OutputOnlyLeak, nullptr);
+  EXPECT_EQ(OutputOnlyLeak->TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(OutputOnlyLeak->TheConfidence, Confidence::Low);
+}
+
 TEST(AllocLifetime, AdjustedPointerFreeDoesNotReleaseAllocation) {
   FB B("f", 0x100);
   int b0 = B.block();

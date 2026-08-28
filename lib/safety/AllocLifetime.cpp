@@ -1435,8 +1435,12 @@ private:
   }
 
   unsigned summarizedCallsOnPath(const MedFunc &F, const LowFunc &LF,
-                                 const symbolic::SymPath &Path) const {
+                                 const symbolic::SymPath &Path,
+                                 symbolic::SymContext &Ctx,
+                                 llvm::SmallVectorImpl<uint32_t>
+                                     &AllowedFreshVars) const {
     unsigned Count = 0;
+    size_t CallResultIndex = 0;
     for (const symbolic::SymExecutedOp &Executed : Path.ExecutedOps) {
       const LowBlock *Block = nullptr;
       for (const LowBlock &Candidate : LF.Blocks)
@@ -1449,6 +1453,17 @@ private:
       const LowOp &Op = Block->Ops[Executed.OpIndex];
       if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
         continue;
+      const symbolic::SymCallResult *ExecutedResult = nullptr;
+      if (CallResultIndex < Path.CallResults.size()) {
+        const symbolic::SymCallResult &Candidate =
+            Path.CallResults[CallResultIndex];
+        if (Candidate.BlockId == Executed.BlockId &&
+            Candidate.OpIndex == Executed.OpIndex &&
+            Candidate.CallVA == Executed.VA) {
+          ExecutedResult = &Candidate;
+          ++CallResultIndex;
+        }
+      }
       const MedCallInfo *Call = nullptr;
       for (const MedCallInfo &CI : F.CallInfos)
         if (const MedOp *Med = opAt(F, CI.BlockId, CI.OpIdx);
@@ -1460,9 +1475,16 @@ private:
       if (!Call)
         continue;
       const std::string Name = callName(*Call);
-      if (catalogSink(*Call) || Cat.matchSource(Name) ||
-          isStringLengthCall(Name))
+      const SourceEntry *Source = Cat.matchSource(Name);
+      if (catalogSink(*Call) || Source || isStringLengthCall(Name)) {
         ++Count;
+        // A return-only source explicitly models its result as external
+        // input.  An output-only source summarizes memory effects, not its
+        // scalar return, so that return must remain fail-closed.
+        if (ExecutedResult && ExecutedResult->Value.isValid() && Source &&
+            Source->OutArg < 0 && Source->returnCarriesInput())
+          Ctx.collectVars(ExecutedResult->Value, AllowedFreshVars);
+      }
     }
     return Count;
   }
@@ -1530,14 +1552,14 @@ private:
         continue;
       if (containsForbiddenAfter(P, Fn.ForbiddenPathEvents, Cursor))
         continue;
+      llvm::SmallVector<uint32_t, 8> AllowedFreshVars;
       const unsigned SummarizedCalls =
-          Med ? summarizedCallsOnPath(*Med, *LF, P) : 0;
+          Med ? summarizedCallsOnPath(*Med, *LF, P, Ctx, AllowedFreshVars) : 0;
       if (P.OpaqueOps != 0 || P.CallHavocs > SummarizedCalls) {
         SawUnmodelled = true;
         continue;
       }
       symbolic::SymRef Pred = P.predicate(Ctx);
-      llvm::SmallVector<uint32_t, 8> AllowedFreshVars;
       if (Fn.RequireNonNullCallVA) {
         symbolic::SymRef CallResult;
         unsigned Matches = 0;
