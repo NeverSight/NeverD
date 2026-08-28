@@ -99,6 +99,8 @@ LowFunc solverHeavyReturnedPath(va_t EntryVA) {
   Read.StartAddr = EntryVA + 0x10;
   Read.EndAddr = EntryVA + 0x20;
   Read.Preds = {0};
+  Read.Ops.push_back(lowOp(NdOp::LOAD, NdVar::tmp(209, 8),
+                           {NdVar::reg(kSP, 8)}, EntryVA + 0x18));
   Read.Ops.push_back(lowOp(NdOp::RETURN, NdVar{}, {}));
 
   LowBlock &Exit = F.Blocks[2];

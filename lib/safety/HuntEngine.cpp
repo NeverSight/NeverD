@@ -1384,7 +1384,8 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
           bool Summarized = LengthCall || DeferredSinkCall;
           if (CalleeSource) {
             const bool HasSourceSummary =
-                CountedReturnRecognized || CountedOutputApplies ||
+                !NewSourceEvents.empty() || CountedReturnRecognized ||
+                CountedOutputApplies ||
                 BoundedString.BufferArg >= 0 || ReturnedString.BufferArg >= 0 ||
                 HasFormattedSourceOutput ||
                 safety::detail::isUnboundedCStringSource(CalleeName);

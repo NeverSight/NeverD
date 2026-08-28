@@ -726,12 +726,17 @@ TEST(SafetyReport, AuditScannedCountsAllocationSitesNotOnlyFindings) {
   Freed.Size = 8;
   FreeCI.Args = {Freed};
   F.CallInfos.push_back(std::move(FreeCI));
+  neverd::MedOp Ret;
+  Ret.Opcode = neverd::NdOp::RETURN;
+  Ret.Addr = 0x418;
+  Ret.OriginSeq = 0;
+  B.Ops.push_back(std::move(Ret));
   F.Blocks.push_back(std::move(B));
 
   neverd::LowFunc LF;
   LF.Entry = F.Entry;
-  LF.DecodedInstructionCount = 3;
-  LF.LiftedInstructionCount = 3;
+  LF.DecodedInstructionCount = 4;
+  LF.LiftedInstructionCount = 4;
   neverd::LowBlock LB;
   LB.Id = 0;
   auto addLowCall = [&](neverd::va_t Address, neverd::va_t Target) {
@@ -745,6 +750,11 @@ TEST(SafetyReport, AuditScannedCountsAllocationSitesNotOnlyFindings) {
   addLowCall(0x400, 0x9400);
   addLowCall(0x408, 0x9408);
   addLowCall(0x410, 0xA000);
+  neverd::LowOp LowRet;
+  LowRet.Opcode = neverd::NdOp::RETURN;
+  LowRet.Addr = 0x418;
+  LowRet.Seq = 0;
+  LB.Ops.push_back(std::move(LowRet));
   LF.Blocks.push_back(std::move(LB));
 
   neverd::PipelineResult Pipeline;
@@ -755,7 +765,8 @@ TEST(SafetyReport, AuditScannedCountsAllocationSitesNotOnlyFindings) {
   EXPECT_EQ(Report.Scanned, 2u);
   ASSERT_EQ(Report.Findings.size(), 1u);
   EXPECT_EQ(Report.Findings[0].Class, VulnClass::HeapLeak);
-  EXPECT_EQ(Report.Findings[0].TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(Report.Findings[0].TheVerdict, Verdict::Unsafe);
+  EXPECT_FALSE(Report.Findings[0].Corroboration.empty());
 }
 
 TEST(SafetyReport, ReachableAuditCandidateIsSymbolicallyCorroborated) {
