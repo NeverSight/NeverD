@@ -254,7 +254,7 @@ neverd patch --subst --flatten --mba -o patched binary
 | `disasm` | Désassemblage (`--func` nom ou hex) |
 | `sym-explore` | Exploration bornée des chemins LowIR natifs (`--func` ; sortie JSON) |
 | `audit` | Défauts de durée de vie du tas : fuite, double libération, utilisation après libération (JSON) |
-| `hunt` | Débordements de copies dangereuses avec un témoin concret (JSON) |
+| `hunt` | Débordements de copies dangereuses avec preuves symboliques et valeurs candidates (JSON) |
 | `hex` | Dump hexadécimal à une adresse |
 | `cfg` / `callgraph` | CFG / graphe d’appels (JSON ; DOT/SVG optionnel) |
 | `xrefs` | Références croisées |

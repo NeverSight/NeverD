@@ -253,7 +253,7 @@ neverd patch --subst --flatten --mba -o patched binary
 | `disasm` | 디스어셈블(`--func` 이름 또는 hex) |
 | `sym-explore` | 제한된 네이티브 LowIR 경로 탐색(`--func`, JSON 출력) |
 | `audit` | 힙 수명 결함: 누수, 이중 해제, 해제 후 사용(JSON) |
-| `hunt` | 위험한 복사 오버플로와 구체적 증거(JSON) |
+| `hunt` | 위험한 복사 오버플로의 기호 증거와 후보 값(JSON) |
 | `hex` | 주소의 hex dump |
 | `cfg` / `callgraph` | CFG / 호출 그래프(JSON; DOT/SVG 선택) |
 | `xrefs` | 교차 참조 |

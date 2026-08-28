@@ -251,7 +251,9 @@ SymRef SymContext::mkFreshVar(uint32_t Width, llvm::StringRef Prefix) {
   do {
     Name = (Prefix + llvm::Twine(FreshCounter++)).str();
   } while (VarByName.count(Name));
-  return mkVar(Name, Width);
+  SymRef Result = mkVar(Name, Width);
+  Vars[varId(Result)].Fresh = true;
+  return Result;
 }
 
 } // namespace neverd::symbolic

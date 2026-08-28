@@ -23,6 +23,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringSwitch.h"
 
@@ -46,7 +47,7 @@ void stampSite(Finding &F, const AnalysisInput &In, const MedFunc &Fn,
   F.Class = Site.Class;
   F.Function = Fn.Name;
   F.FuncEntry = Site.FuncEntry;
-  F.Name = Site.Sink;
+  F.Name = Site.StatedName;
   F.Source = Site.Source;
   F.CallVA = Site.CallVA;
   F.Sink = Site.Sink;
@@ -60,8 +61,9 @@ void stampSite(Finding &F, const AnalysisInput &In, const MedFunc &Fn,
 
 solver::SolverOptions solverOpts(const SafetyBudgets &Budgets) {
   solver::SolverOptions Opts;
-  if (Budgets.SolverConflicts)
-    Opts.Sat.MaxConflicts = Budgets.SolverConflicts;
+  Opts.Sat.MaxConflicts = Budgets.SolverConflicts
+                              ? Budgets.SolverConflicts
+                              : kDefaultSafetySolverConflicts;
   return Opts;
 }
 
@@ -113,7 +115,10 @@ void addWitness(Finding &F, const SinkEntry &E, uint64_t Length,
       !TaintSource.empty() ? (TaintSource == "argv" ? "argv[1]" : TaintSource)
                            : (ImplicitLen ? "source" : "length");
   if (ImplicitLen || !TaintSource.empty())
-    F.Witness.push_back({InputName, std::to_string(Length) + " bytes"});
+    F.Witness.push_back(
+        {InputName,
+         std::to_string(ImplicitLen && Length != 0 ? Length - 1 : Length) +
+             " bytes"});
 }
 
 const LowBlock *blockById(const LowFunc &LF, int Id) {
@@ -706,6 +711,7 @@ struct ExploreHit {
   bool MissingLength = false;
   bool Reached = false;
   bool SourceEvidence = false;
+  std::vector<SolverAssignment> SymbolicModel;
 };
 
 void considerSink(ExploreHit &Best, SymContext &Ctx, SymRef Pred, SymRef Len,
@@ -747,6 +753,17 @@ void considerSink(ExploreHit &Best, SymContext &Ctx, SymRef Pred, SymRef Len,
     else {
       std::vector<llvm::APInt> Vals = Model.asVarValues(Ctx);
       Best.WitnessLen = Ctx.eval(WideLen, Vals).getZExtValue();
+    }
+    Best.SymbolicModel.clear();
+    for (uint32_t Id : Model.vars()) {
+      std::optional<llvm::APInt> Value = Model.value(Id);
+      if (!Value)
+        continue;
+      const SymVarInfo &Info = Ctx.varInfo(Id);
+      llvm::SmallString<48> Digits;
+      Value->toString(Digits, 16, /*Signed=*/false);
+      Best.SymbolicModel.push_back(
+          {Id, Info.Name, Info.Width, "0x" + Digits.str().str(), Info.Fresh});
     }
     return;
   }
@@ -1365,8 +1382,14 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
         size_t FirstNewSourceEvent = Cur.SourceEvents.size();
         if (IsCall) {
           bool Summarized = LengthCall || DeferredSinkCall;
-          if (Callee && Cat.matchSource(CalleeName))
-            Summarized = true;
+          if (CalleeSource) {
+            const bool HasSourceSummary =
+                CountedReturnRecognized || CountedOutputApplies ||
+                BoundedString.BufferArg >= 0 || ReturnedString.BufferArg >= 0 ||
+                HasFormattedSourceOutput ||
+                safety::detail::isUnboundedCStringSource(CalleeName);
+            Summarized = Summarized || HasSourceSummary;
+          }
           if (Callee)
             if (const SinkEntry *Known = Cat.matchSink(CalleeName))
               if (!debugSinkSummaryConflicts(In, *Callee, *Known))
@@ -2059,6 +2082,13 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
           Out.Detail = "fortified destination bound was not recovered";
           return Out;
         }
+        if (ObjectBound->RequiresPathValidation) {
+          Out.TheVerdict = Verdict::Unknown;
+          Out.TheConfidence = Confidence::Low;
+          Out.Detail = "fortified destination bound depends on unresolved path "
+                       "semantics";
+          return Out;
+        }
         if (Dst.Capacity && Dst.CapacityExact && ObjectBound->UpperBound &&
             *ObjectBound->UpperBound <= *Dst.Capacity) {
           Out.TheVerdict = Verdict::Safe;
@@ -2085,6 +2115,13 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
           Out.TheVerdict = Verdict::Unknown;
           Out.TheConfidence = Confidence::Low;
           Out.Detail = "formatted write limit was not recovered";
+          return Out;
+        }
+        if (WriteLimit->RequiresPathValidation) {
+          Out.TheVerdict = Verdict::Unknown;
+          Out.TheConfidence = Confidence::Low;
+          Out.Detail =
+              "formatted write limit depends on unresolved path semantics";
           return Out;
         }
         if (WriteLimit->ConstValue) {
@@ -2270,6 +2307,9 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     }
     RuntimeBound = classifyArgument(In, Cat, F, Site.CallInfoIndex, E->CapArg);
   }
+  const bool RequiresPathValidation =
+      Arg.RequiresPathValidation ||
+      (RuntimeBound && RuntimeBound->RequiresPathValidation);
 
   DestObject Dst =
       resolveDestination(In, Cat, F, Site.CallInfoIndex, E->DstArg);
@@ -2278,8 +2318,9 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     Out.CapacityExact = Dst.CapacityExact;
   }
 
-  if (Fortified && E->LenArg >= 0 && Arg.ConstValue &&
-      RuntimeBound->UpperBound && *Arg.ConstValue > *RuntimeBound->UpperBound) {
+  if (!RequiresPathValidation && Fortified && E->LenArg >= 0 &&
+      Arg.ConstValue && RuntimeBound->UpperBound &&
+      *Arg.ConstValue > *RuntimeBound->UpperBound) {
     Out.TheVerdict = Verdict::Safe;
     Out.TheConfidence = Confidence::High;
     Out.SkipReason = "fortified runtime bound rejects the constant length";
@@ -2287,8 +2328,8 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     return Out;
   }
 
-  if (Fortified && Dst.CapacityExact && RuntimeBound->UpperBound &&
-      *RuntimeBound->UpperBound <= *Dst.Capacity) {
+  if (!RequiresPathValidation && Fortified && Dst.CapacityExact &&
+      RuntimeBound->UpperBound && *RuntimeBound->UpperBound <= *Dst.Capacity) {
     Out.TheVerdict = Verdict::Safe;
     Out.TheConfidence = Confidence::High;
     Out.SkipReason = "fortified runtime bound fits the destination";
@@ -2296,7 +2337,8 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     return Out;
   }
 
-  if (safety::detail::usesTotalDestinationBound(Site.Sink) && Dst.Capacity &&
+  if (!RequiresPathValidation &&
+      safety::detail::usesTotalDestinationBound(Site.Sink) && Dst.Capacity &&
       Dst.CapacityExact && Arg.UpperBound && *Arg.UpperBound <= *Dst.Capacity) {
     Out.TheVerdict = Verdict::Safe;
     Out.TheConfidence = Confidence::High;
@@ -2309,7 +2351,8 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
   const std::optional<uint64_t> WideElementBytes =
       safety::detail::countedWideElementBytes(
           Site.Sink, In.Img ? In.Img->Format : BinaryFormat::Unknown);
-  if (WideElementBytes && Dst.Capacity && Dst.CapacityExact && Arg.UpperBound &&
+  if (!RequiresPathValidation && WideElementBytes && Dst.Capacity &&
+      Dst.CapacityExact && Arg.UpperBound &&
       *Arg.UpperBound <= *Dst.Capacity / *WideElementBytes) {
     Out.TheVerdict = Verdict::Safe;
     Out.TheConfidence = Confidence::High;
@@ -2323,6 +2366,18 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     FixedExploreLength = safety::detail::exactCountedMemoryBytes(
         Site.Sink, In.Img ? In.Img->Format : BinaryFormat::Unknown,
         *Arg.ConstValue);
+  if (!FixedExploreLength && !WideElements && !NeedsStringExtents &&
+      E->LenArg < 0 && E->SrcArg >= 0 &&
+      E->SrcArg < static_cast<int>(SinkCall.Args.size()) && In.Img) {
+    const MedVar &Source = SinkCall.Args[E->SrcArg];
+    const std::optional<uint64_t> Address =
+        safety::detail::canonicalConstantValue(Source);
+    const Segment *Seg = Address ? In.Img->getSegmentFor(*Address) : nullptr;
+    if (Seg && Seg->isReadable() && !Seg->isWritable())
+      if (std::optional<std::string> Literal =
+              safety::detail::readMappedCString(In.Img, Source))
+        FixedExploreLength = Literal->size() + 1;
+  }
   if ((WideElements && !FixedExploreLength) || NeedsStringExtents) {
     Out.TheVerdict = Verdict::Unknown;
     Out.TheConfidence = Confidence::Low;
@@ -2332,7 +2387,8 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     return Out;
   }
 
-  if (!FixedExploreLength && E->LenArg >= 0 && Arg.ConstValue && Dst.Capacity) {
+  if (!RequiresPathValidation && !FixedExploreLength && E->LenArg >= 0 &&
+      Arg.ConstValue && Dst.Capacity) {
     if (*Arg.ConstValue <= *Dst.Capacity && Dst.CapacityExact) {
       Out.TheVerdict = Verdict::Safe;
       Out.TheConfidence = Confidence::High;
@@ -2357,8 +2413,9 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     return Out;
   }
 
-  if (!FixedExploreLength && E->LenArg >= 0 && Arg.Flow == ArgFlow::Bounded &&
-      Arg.UpperBound && *Arg.UpperBound <= *Dst.Capacity) {
+  if (!RequiresPathValidation && !FixedExploreLength && E->LenArg >= 0 &&
+      Arg.Flow == ArgFlow::Bounded && Arg.UpperBound &&
+      *Arg.UpperBound <= *Dst.Capacity) {
     Out.TheVerdict = Dst.CapacityExact ? Verdict::Safe : Verdict::Unknown;
     Out.TheConfidence =
         Dst.CapacityExact ? Confidence::Medium : Confidence::High;
@@ -2389,6 +2446,7 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
         "copy length can exceed destination capacity on a reachable path";
     Out.Constraints = Hit.PredText;
     addWitness(Out, *E, Hit.WitnessLen, Arg.TaintSource);
+    Out.SymbolicModel = std::move(Hit.SymbolicModel);
     Out.Corroboration = "path predicate and overflow are jointly satisfiable";
     Out.BudgetHit = Hit.Budget || Hit.SolverUnknown;
     return Out;

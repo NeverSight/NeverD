@@ -449,11 +449,9 @@ cl::opt<bool> SymbolicExpressions(
 // Safety options (audit / hunt)
 //===----------------------------------------------------------------------===//
 
-cl::opt<std::string>
-    SafetySinks("sinks",
-                cl::desc("Extend the sink catalog from a specification file"),
-                cl::init(""), cl::value_desc("file"), cl::sub(AuditCmd),
-                cl::sub(HuntCmd));
+cl::opt<std::string> SafetySinks(
+    "sinks", cl::desc("Extend the sink catalog from a specification file"),
+    cl::init(""), cl::value_desc("file"), cl::sub(AuditCmd), cl::sub(HuntCmd));
 
 cl::opt<std::string> SafetySources(
     "sources", cl::desc("Extend the input-source catalog from a file"),
@@ -469,31 +467,31 @@ cl::opt<unsigned> SafetyMaxSteps("max-steps",
                                  cl::init(0), cl::sub(HuntCmd),
                                  cl::sub(AuditCmd));
 
-cl::opt<unsigned> SafetyMaxLoop("max-loop",
-                                cl::desc("Maximum iterations of one loop header"),
-                                cl::init(0), cl::sub(HuntCmd),
-                                cl::sub(AuditCmd));
+cl::opt<unsigned>
+    SafetyMaxLoop("max-loop", cl::desc("Maximum iterations of one loop header"),
+                  cl::init(0), cl::sub(HuntCmd), cl::sub(AuditCmd));
 
 cl::opt<unsigned long long>
     SafetySolverConflicts("solver-conflicts",
-                          cl::desc("Solver conflict budget (0 = unbounded)"),
+                          cl::desc("Solver conflict budget (0 = default)"),
                           cl::init(0), cl::sub(HuntCmd), cl::sub(AuditCmd));
 
 //===----------------------------------------------------------------------===//
 // JSON output option (shared)
 //===----------------------------------------------------------------------===//
 
-cl::opt<bool>
-    JsonOutput("json", cl::desc("Output as JSON"), cl::sub(InfoCmd),
-               cl::sub(FuncsCmd), cl::sub(DisasmCmd), cl::sub(CfgCmd),
-               cl::sub(HexCmd), cl::sub(StringsCmd), cl::sub(XrefsCmd),
-               cl::sub(ImportsCmd), cl::sub(ExportsCmd), cl::sub(SegmentsCmd),
-               cl::sub(PluginsCmd), cl::sub(BookmarksCmd), cl::sub(AnnotateCmd),
-               cl::sub(CallGraphCmd), cl::sub(RenameCmd), cl::sub(SearchCmd),
-               cl::sub(SectionsCmd), cl::sub(SymbolsCmd), cl::sub(RelocsCmd),
-               cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
-               cl::sub(DashboardCmd), cl::sub(SigsCmd), cl::sub(AuditCmd),
-               cl::sub(HuntCmd));
+cl::opt<bool> JsonOutput("json", cl::desc("Output as JSON"), cl::sub(InfoCmd),
+                         cl::sub(FuncsCmd), cl::sub(DisasmCmd), cl::sub(CfgCmd),
+                         cl::sub(HexCmd), cl::sub(StringsCmd),
+                         cl::sub(XrefsCmd), cl::sub(ImportsCmd),
+                         cl::sub(ExportsCmd), cl::sub(SegmentsCmd),
+                         cl::sub(PluginsCmd), cl::sub(BookmarksCmd),
+                         cl::sub(AnnotateCmd), cl::sub(CallGraphCmd),
+                         cl::sub(RenameCmd), cl::sub(SearchCmd),
+                         cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
+                         cl::sub(RelocsCmd), cl::sub(HeadersCmd),
+                         cl::sub(EntryPointsCmd), cl::sub(DashboardCmd),
+                         cl::sub(SigsCmd), cl::sub(AuditCmd), cl::sub(HuntCmd));
 
 //===----------------------------------------------------------------------===//
 // Plugins-specific options

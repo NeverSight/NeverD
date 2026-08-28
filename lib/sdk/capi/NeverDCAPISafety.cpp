@@ -11,8 +11,6 @@
 #include "neverd/safety/Safety.h"
 #include "neverd/sdk/NeverDCAPI.h"
 
-#include "llvm/Support/JSON.h"
-
 #include <cstddef>
 using namespace neverd;
 using namespace neverd::sdk;
@@ -53,33 +51,31 @@ const char *readPath(const neverd_safety_options *In, size_t End,
   return (Value && Value[0]) ? Value : nullptr;
 }
 
-std::string errorReport(const std::string &Message) {
-  llvm::json::Object O{{"schema_version", 1},
-                       {"ok", false},
-                       {"verdict", "UNKNOWN"},
-                       {"confidence", "LOW"},
-                       {"error", Message}};
-  return jsonToString(llvm::json::Value(std::move(O)));
+std::string errorReport(safety::Track Track, const std::string &Message) {
+  safety::SafetyReport Report;
+  Report.Origin = Track;
+  Report.Error = Message;
+  return safety::toJson(Report);
 }
 
 std::string runSafety(Session *S, const neverd_safety_options *Options,
                       safety::Track Track) {
   if (!S->Loaded)
-    return errorReport("no binary loaded");
+    return errorReport(Track, "no binary loaded");
   if (S->Img.Arch == Arch::EVM || S->Img.Arch == Arch::SBF)
-    return errorReport("safety analysis supports native binaries only");
+    return errorReport(Track, "safety analysis supports native binaries only");
 
   safety::SinkCatalog Cat = safety::SinkCatalog::defaults();
   if (const char *P =
           readPath(Options, FIELD_END(neverd_safety_options, sinks_path),
                    &neverd_safety_options::sinks_path))
     if (llvm::Error E = Cat.mergeSinksFromFile(P))
-      return errorReport(llvm::toString(std::move(E)));
+      return errorReport(Track, llvm::toString(std::move(E)));
   if (const char *P =
           readPath(Options, FIELD_END(neverd_safety_options, sources_path),
                    &neverd_safety_options::sources_path))
     if (llvm::Error E = Cat.mergeSourcesFromFile(P))
-      return errorReport(llvm::toString(std::move(E)));
+      return errorReport(Track, llvm::toString(std::move(E)));
 
   // The analyses read recovered call arguments, which only the lift pipeline
   // fills, so run one here regardless of the session's default mode.
@@ -93,19 +89,21 @@ std::string runSafety(Session *S, const neverd_safety_options *Options,
   // MedIR/LowIR, so a CRT emission failure must not hide recovered program
   // functions.  MedIR verification, or no functions at all, still fail closed.
   if (Res.MedIRVerifierFailures != 0)
-    return errorReport(Res.Error.empty() ? "MedIR verification failed"
-                                         : Res.Error);
+    return errorReport(Track, Res.Error.empty() ? "MedIR verification failed"
+                                                : Res.Error);
   if (Res.MedFuncs.empty())
-    return errorReport(Res.Error.empty() ? "lifting failed for this binary"
-                                         : Res.Error);
+    return errorReport(Track, Res.Error.empty()
+                                  ? "lifting failed for this binary"
+                                  : Res.Error);
   if (std::optional<std::string> CoverageError =
           safety::validatePipelineCoverage(Res, &S->Img))
-    return errorReport(*CoverageError);
+    return errorReport(Track, *CoverageError);
 
   safety::AnalysisInput In;
   In.Img = &S->Img;
   In.MedFuncs = &Res.MedFuncs;
   In.LowFuncs = &Res.LowFuncs;
+  In.ValidatedPipeline = &Res;
   In.Dbg = S->Dbg.get();
   In.DebugKind = S->DbgKind;
   In.Renames = &S->Renames;
@@ -131,7 +129,7 @@ const char *neverd_session_audit_json(neverd_session_t Sess,
                                       const neverd_safety_options *Options) {
   auto *S = toSession(Sess);
   if (!S)
-    return dupStr(errorReport("invalid session"));
+    return dupStr(errorReport(safety::Track::Audit, "invalid session"));
   S->clearError();
   return dupStr(runSafety(S, Options, safety::Track::Audit));
 }
@@ -140,7 +138,7 @@ const char *neverd_session_hunt_json(neverd_session_t Sess,
                                      const neverd_safety_options *Options) {
   auto *S = toSession(Sess);
   if (!S)
-    return dupStr(errorReport("invalid session"));
+    return dupStr(errorReport(safety::Track::Hunt, "invalid session"));
   S->clearError();
   return dupStr(runSafety(S, Options, safety::Track::Hunt));
 }

@@ -81,7 +81,7 @@ EIP-3540 為 Stagnant，兩者都不冒充已定案 mainnet 行為。host ABI �
 
 ## 4. 記憶體安全稽核與獵取
 
-對已提升的二進位做堆積生命週期缺陷（洩漏、重複釋放、釋放後使用）與危險拷貝越界分析，並以結構化 JSON 報告；對已證明的越界給出具體見證。分析跑在格式無關的 IR 與共享身分檢視上，因此 **PE、ELF、Mach-O 是同等目標**，並複用自研符號執行與位向量求解器——不依賴外部求解器或容器。
+對已提升的二進位做堆積生命週期缺陷（洩漏、重複釋放、釋放後使用）與危險拷貝越界分析，並以結構化 JSON 報告；對已證明的越界給出有界求解器模型。分析跑在格式無關的 IR 與共享身分檢視上，因此 **PE、ELF、Mach-O 是同等目標**，並複用自研符號執行與位向量求解器——不依賴外部求解器或容器。
 
 | 項目 | 說明 |
 |------|------|
@@ -89,7 +89,7 @@ EIP-3540 為 Stagnant，兩者都不冒充已定案 mainnet 行為。host ABI �
 | `hunt` 軌道 | 匯目錄 + 參數預過濾 + 目標容量 + 求解器見證 |
 | 身分契約 | 依格式解析匯（PE IAT、ELF PLT、Mach-O dyld bind）以及 PDB / DWARF / MAP 名稱來源 |
 
-**狀態：** PE、ELF、Mach-O 的 P0 已完成。判定與身分覆蓋由 [`unittests/safety`](../../unittests/safety) 以及在每個主機強制執行 PE/ELF/Mach-O × x86-64/AArch64 六單元 fixture 矩陣的端到端 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) 鎖定。詳見 [記憶體安全稽核與獵取](../memory-safety.zh-TW.md)。P1 將擴展到堆疊／全域越界、未初始化讀取與格式字串。
+**狀態：** PE、ELF、Mach-O 的 P0 實作已存在，但關閉仍需處理程序輸入重播轉接器和完整的呼叫效果摘要。判定與身分覆蓋由 [`unittests/safety`](../../unittests/safety) 以及在每個主機強制執行 PE/ELF/Mach-O × x86-64/AArch64 六單元 fixture 矩陣的端到端 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) 鎖定。詳見 [記憶體安全稽核與獵取](../memory-safety.zh-TW.md)。P1 將擴展到堆疊／全域越界、未初始化讀取與格式字串。
 
 ---
 
@@ -115,5 +115,5 @@ P0 已有迴歸覆蓋；保守 EVM 原始碼重建仍在進行。不承諾具體
 | EVM 傳統 decode/lifting | 至 Fusaka 已完成；有迴歸測試覆蓋 |
 | EVM 原始碼重建 | 持續進行 — 只回報有證據的保守結果 |
 | Solana eBPF（SBF）反編譯 | 已完成 — v0-v4、C、Rust 與 LLVM；有迴歸測試覆蓋 |
-| 記憶體安全稽核與獵取 | 已完成 — PE、ELF、Mach-O 的 P0；有迴歸測試覆蓋 |
+| 記憶體安全稽核與獵取 | 進行中 — P0 實作已存在；重播／呼叫摘要收尾待完成 |
 | 引擎與產品加固 | 持續進行 |

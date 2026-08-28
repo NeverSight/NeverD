@@ -253,7 +253,7 @@ neverd patch --subst --flatten --mba -o patched binary
 | `disasm` | Desensamblar (`--func` nombre o hex) |
 | `sym-explore` | Exploración acotada de rutas LowIR nativas (`--func`; salida JSON) |
 | `audit` | Defectos de vida del montón: fuga, doble liberación, uso después de liberar (JSON) |
-| `hunt` | Desbordamientos de copias peligrosas con un testigo concreto (JSON) |
+| `hunt` | Desbordamientos de copias peligrosas con evidencia simbólica y valores candidatos (JSON) |
 | `hex` | Volcado hex en una dirección |
 | `cfg` / `callgraph` | CFG / grafo de llamadas (JSON; DOT/SVG opcional) |
 | `xrefs` | Referencias cruzadas |

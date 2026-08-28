@@ -9,7 +9,7 @@ NeverD는 적재된 바이너리에 대해 두 계열의 메모리 안전성 분
 | 트랙 | 명령 | 보고 내용 |
 |------|------|-----------|
 | **감사(Audit)** | `neverd audit <binary>` | 힙 객체 수명 결함: 누수, 이중 해제, 해제 후 사용 |
-| **헌트(Hunt)** | `neverd hunt <binary>` | 위험한 복사 오버플로와 재현 가능한 구체적 증거 |
+| **헌트(Hunt)** | `neverd hunt <binary>` | 위험한 복사 오버플로의 기호 증거와 입력 후보(`replayable=false`; 프로세스 입력 어댑터가 실제 바이트로 매핑할 때까지 재생 불가) |
 
 엔진은 NeverD 자체 기호 실행과 비트벡터 솔버를 증거와 도달 가능성에 재사용합니다. 외부 솔버, VM, 컨테이너 의존은 없습니다.
 
@@ -79,7 +79,7 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 - **상수 길이**가 정확한 용량 안에 있으면 SAFE입니다. 상수 오버플로는 입증된 경로에서 싱크에 도달할 수 있을 때만 UNSAFE이며, 그렇지 않으면 UNKNOWN입니다.
 - **강화** `_chk` 복사는 런타임 목적지 상한을 가집니다. 요청이 거부되거나 그 상한이 복구된 객체 안에 들어간다고 증명되면 SAFE, 객체 밖 쓰기가 가능하면 UNSAFE, 상한을 복구하지 못했거나 결론이 나지 않으면 UNKNOWN입니다.
 - **증명 가능하게 유계인 길이**(길이를 반환하는 호출, 마스크, 클램프)는 풀이 전에 제외하고 이유를 기록합니다. 목적지 크기가 정확할 때만 SAFE이며, 포함 영역 상한만 있으면 UNKNOWN을 유지합니다.
-- **공격자 영향을 받는 길이**이고 용량이 알려지면 비트벡터 솔버로 검사합니다. 용량보다 큰 길이가 충족 가능하면 UNSAFE이고 솔버 모델이 구체적 증거입니다.
+- **공격자 영향을 받는 길이**이고 용량이 알려지면 비트벡터 솔버로 검사합니다. 용량보다 큰 길이가 충족 가능하면 UNSAFE이며, 솔버 모델은 기호 증거와 입력 후보로 보고됩니다. 프로세스 입력 어댑터가 제공될 때까지 재생 불가(`replayable=false`)입니다.
 - 그 외(알 수 없는 길이 또는 알 수 없는 용량)는 UNKNOWN.
 
 복구된 용량은 항상 실제 객체 크기의 **상한**이므로 증명된 오버플로는 거짓 양성이 아닙니다.
@@ -102,7 +102,7 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 
 ## 예산, 출력, 바인딩
 
-헌트 탐색과 솔버는 예산으로 제한됩니다(`--max-paths`, `--max-steps`, `--max-loop`, `--solver-conflicts`). 예산 소진은 UNKNOWN입니다. 두 명령은 JSON을 출력하고 `-o`를 존중합니다. 종료 코드는 깨끗한 실행이 `0`, UNSAFE 발견이 있으면 `2`, 오류는 `1`입니다.
+헌트 탐색과 솔버는 예산으로 제한됩니다(`--max-paths`, `--max-steps`, `--max-loop`, `--solver-conflicts`). 예산 소진은 UNKNOWN입니다. 두 명령은 JSON을 출력하고 `-o`를 존중합니다. 종료 코드는 SAFE가 `0`, UNSAFE가 `2`, UNKNOWN 또는 오류가 `1`입니다.
 
 같은 분석은 C API(`neverd_session_audit_json` / `neverd_session_hunt_json`, 버전 있는 `neverd_safety_options`)와 Python SDK(`Session.audit()` / `Session.hunt()`)로도 사용할 수 있습니다.
 
@@ -124,7 +124,7 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
   "capacity": 16,
   "capacity_kind": "exact",
   "corroboration": "path predicate and overflow are jointly satisfiable",
-  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "17 bytes" } }
+  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" }, "candidate_values": [{ "name": "copy_length", "value": "17" }, { "name": "argv[1]", "value": "16 bytes" }], "replayable": false, "symbolic_model": [{ "id": 0, "name": "copy_len", "width": 64, "value_hex": "0x11", "origin": "input" }] }
 }
 ```
 

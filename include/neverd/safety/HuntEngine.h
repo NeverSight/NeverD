@@ -10,8 +10,10 @@
 /// compared to the recovered capacity.  Otherwise the engine walks the LowIR
 /// CFG toward the sink, prunes infeasible branches with the bitvector solver,
 /// and asks whether any reachable path predicate together with
-/// \c copy_len > capacity is satisfiable.  A model of that query is the
-/// concrete witness.  A destination whose capacity is unknown, a sink the
+/// \c copy_len > capacity is satisfiable.  A model of that query is retained
+/// as symbolic evidence; it is marked replayable only after an external-input
+/// adapter maps the model back to process bytes.  A destination whose capacity
+/// is unknown, a sink the
 /// pipeline could not fully recover, or an exhausted budget stays UNKNOWN —
 /// never SAFE.
 ///

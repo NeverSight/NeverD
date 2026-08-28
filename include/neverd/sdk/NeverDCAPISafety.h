@@ -7,9 +7,10 @@
 /// \file
 /// Memory-safety analysis over a loaded binary: an audit track that reports
 /// heap-lifetime defects (leak, double free, use after free) and a hunt track
-/// that reports dangerous-copy overflows with a concrete witness.  Both run on
-/// the format-neutral lifted IR, so PE, ELF, and Mach-O are analysed the same
-/// way.
+/// that reports dangerous-copy overflows with symbolic evidence and candidate
+/// input values. Evidence is marked replayable only when a process-input
+/// adapter has reconstructed the actual bytes. Both tracks run on the
+/// format-neutral lifted IR, so PE, ELF, and Mach-O are analysed the same way.
 ///
 /// All returned strings are heap-allocated via strdup(); callers must free them
 /// with neverd_free_string().
@@ -59,9 +60,11 @@ neverd_session_audit_json(neverd_session_t Sess,
                           const neverd_safety_options *Options);
 
 /// Hunt dangerous-copy overflows and return an owned JSON report.  Each finding
-/// carries a verdict (SAFE / UNSAFE / UNKNOWN), a confidence, and — for a proven
-/// overflow — the concrete witness that drives it.  Caller frees the returned
-/// string with neverd_free_string().
+/// carries a verdict (SAFE / UNSAFE / UNKNOWN), a confidence, and — for a
+/// proven overflow — a solver model plus candidate witness values. The
+/// evidence's `replayable` field states whether those values have been mapped
+/// to concrete process input. Caller frees the returned string with
+/// neverd_free_string().
 NEVERD_API const char *
 neverd_session_hunt_json(neverd_session_t Sess,
                          const neverd_safety_options *Options);

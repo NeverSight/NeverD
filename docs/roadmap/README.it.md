@@ -69,7 +69,7 @@ Programmi **Solana eBPF / SBF** con la stessa semantica strict.
 
 ## 4. Audit e hunt di sicurezza della memoria
 
-Analizzare un binario sollevato per difetti di vita dell’heap (leak, doppia free, use-after-free) e overflow di copie pericolose, in JSON strutturato, con un testimone concreto per un overflow dimostrato. L’analisi gira sull’IR indipendente dal formato e sulla vista di identità condivisa, quindi **PE, ELF e Mach-O sono bersagli paritari**, e riutilizza l’esecuzione simbolica e il solver bitvector interni — nessun solver esterno né contenitore.
+Analizzare un binario sollevato per difetti di vita dell’heap (leak, doppia free, use-after-free) e overflow di copie pericolose, in JSON strutturato, con un modello limitato del solver per un overflow dimostrato. L’analisi gira sull’IR indipendente dal formato e sulla vista di identità condivisa, quindi **PE, ELF e Mach-O sono bersagli paritari**, e riutilizza l’esecuzione simbolica e il solver bitvector interni — nessun solver esterno né contenitore.
 
 | Voce | Note |
 |------|------|
@@ -77,7 +77,7 @@ Analizzare un binario sollevato per difetti di vita dell’heap (leak, doppia fr
 | Pista `hunt` | Catalogo di sink + prefiltro degli argomenti + capacità di destinazione + testimone del solver |
 | Contratto di identità | Risoluzione dei sink per formato (IAT PE, PLT ELF, bind dyld Mach-O) e fonti di nomi PDB / DWARF / MAP |
 
-**Stato:** P0 completo per PE, ELF e Mach-O. La copertura di verdetti e identità è bloccata da [`unittests/safety`](../../unittests/safety) e dal test end-to-end [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp), che esegue su ogni host la matrice obbligatoria PE/ELF/Mach-O × x86-64/AArch64. Vedi [Audit e hunt di sicurezza della memoria](../memory-safety.it.md). P1 si allarga a overflow di stack/globale, letture non inizializzate e stringhe di formato.
+**Stato:** L’implementazione P0 è presente per PE, ELF e Mach-O, ma la chiusura attende un adapter di replay dell’input di processo e riepiloghi completi degli effetti delle chiamate. La copertura di verdetti e identità è bloccata da [`unittests/safety`](../../unittests/safety) e dal test end-to-end [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp), che esegue su ogni host la matrice obbligatoria PE/ELF/Mach-O × x86-64/AArch64. Vedi [Audit e hunt di sicurezza della memoria](../memory-safety.it.md). P1 si allarga a overflow di stack/globale, letture non inizializzate e stringhe di formato.
 
 ---
 
@@ -104,5 +104,5 @@ conservativa resta in corso. Nessuna data impegnativa.
 | Decode/lifting EVM legacy | Completato fino a Fusaka; coperto da regressione |
 | Ricostruzione sorgente EVM | In corso — evidence-backed e conservativa |
 | Decompilazione Solana eBPF (SBF) | Completata — v0-v4, C, Rust e LLVM; coperta da regressione |
-| Audit e hunt di sicurezza della memoria | Completata — P0 per PE, ELF e Mach-O; coperta da regressione |
+| Audit e hunt di sicurezza della memoria | In corso — implementazione P0 presente; chiusura replay/riepiloghi chiamate in sospeso |
 | Rafforzamento motore e prodotto | Continuo |

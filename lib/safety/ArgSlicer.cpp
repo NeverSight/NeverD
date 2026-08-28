@@ -79,11 +79,59 @@ bool isMainLike(llvm::StringRef Name) {
       .Default(false);
 }
 
+bool hasSymbolicPathSemantics(const MedOp &Op) {
+  const auto inputsHaveWidth = [&](unsigned Count) {
+    if (Op.NumInputs != Count || Op.Output.Size == 0)
+      return false;
+    for (unsigned I = 0; I < Count; ++I)
+      if (Op.Inputs[I].Size == 0)
+        return false;
+    return true;
+  };
+
+  switch (Op.Opcode) {
+  case NdOp::COPY:
+  case NdOp::INT_ZEXT:
+  case NdOp::INT_SEXT:
+    return inputsHaveWidth(1);
+  case NdOp::SUBBYTES: {
+    if ((Op.NumInputs != 1 && Op.NumInputs != 2) || Op.Output.Size == 0 ||
+        Op.Inputs[0].Size == 0)
+      return false;
+    const uint64_t ByteOffset =
+        Op.NumInputs == 1 ? 0
+                          : (isNumericConstant(Op.Inputs[1])
+                                 ? numericConstantValue(Op.Inputs[1])
+                                 : std::numeric_limits<uint64_t>::max());
+    return ByteOffset <= Op.Inputs[0].Size &&
+           Op.Output.Size <= Op.Inputs[0].Size - ByteOffset;
+  }
+  case NdOp::INT_ADD:
+  case NdOp::INT_SUB:
+  case NdOp::INT_MULT:
+  case NdOp::INT_AND:
+  case NdOp::INT_OR:
+  case NdOp::INT_XOR:
+  case NdOp::INT_LEFT:
+  case NdOp::INT_RIGHT:
+  case NdOp::INT_ASHR:
+  case NdOp::INT_DIV:
+  case NdOp::INT_SDIV:
+  case NdOp::CONCAT:
+    return inputsHaveWidth(2);
+  case NdOp::SELECT:
+    return inputsHaveWidth(3);
+  default:
+    return false;
+  }
+}
+
 // Locates the op or phi that defines each SSA value, so a use can be walked
 // back to its definition in one hop.
 struct DefIndex {
   llvm::DenseMap<ValueKey, std::pair<int, int>> OpDef;  ///< value -> (blk,op).
   llvm::DenseMap<ValueKey, std::pair<int, int>> PhiDef; ///< value -> (blk,phi).
+  llvm::DenseSet<ValueKey> CallDefined; ///< implicit caller-saved definitions.
 
   explicit DefIndex(const MedFunc &F) {
     for (int Bi = 0; Bi < static_cast<int>(F.Blocks.size()); ++Bi) {
@@ -97,6 +145,9 @@ struct DefIndex {
           OpDef[keyOf(O.Output)] = {Bi, Oi};
       }
     }
+    for (const MedCallClobber &Clobber : F.CallClobbers)
+      if (!Clobber.Value.isConst() && Clobber.Value.Size > 0)
+        CallDefined.insert(keyOf(Clobber.Value));
   }
 };
 
@@ -126,6 +177,7 @@ public:
       R.UpperBound = R.ConstValue;
     if (R.Flow == ArgFlow::Bounded && !R.UpperBound)
       R.Flow = ArgFlow::Unknown;
+    R.RequiresPathValidation = requiresPathValidation(Arg);
     return R;
   }
 
@@ -154,6 +206,69 @@ private:
   std::vector<IndexedSourceOutput> IndexedPointeeOutputs;
 
   static constexpr unsigned MaxProofSteps = 4096;
+
+  bool requiresPathValidationImpl(const MedVar &V, unsigned Depth,
+                                  llvm::DenseSet<ValueKey> &Active,
+                                  unsigned &Remaining) const {
+    if (V.isConst())
+      return false;
+    const ValueKey Key = keyOf(V);
+    if (Depth > 64 || Remaining == 0 || !Active.insert(Key).second)
+      return true;
+    struct PopActive {
+      llvm::DenseSet<ValueKey> &Set;
+      ValueKey Key;
+      ~PopActive() { Set.erase(Key); }
+    } Guard{Active, Key};
+    --Remaining;
+
+    if (Defs.CallDefined.contains(Key))
+      return true;
+
+    if (auto It = Defs.PhiDef.find(Key); It != Defs.PhiDef.end()) {
+      const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];
+      return std::any_of(Phi.Args.begin(), Phi.Args.end(),
+                         [&](const auto &Incoming) {
+                           return requiresPathValidationImpl(
+                               Incoming.second, Depth + 1, Active, Remaining);
+                         });
+    }
+
+    auto It = Defs.OpDef.find(Key);
+    if (It == Defs.OpDef.end())
+      return false;
+    const MedBlock &B = F.Blocks[It->second.first];
+    const MedOp &Op = B.Ops[It->second.second];
+    if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+      return true;
+    if (Op.Opcode == NdOp::LOAD) {
+      detail::ReachingStackValues Reaching =
+          reachingLoad(B, It->second.second, Op);
+      if (!Reaching.Complete)
+        return true;
+      return std::any_of(Reaching.Values.begin(), Reaching.Values.end(),
+                         [&](const MedVar &Value) {
+                           return requiresPathValidationImpl(Value, Depth + 1,
+                                                             Active, Remaining);
+                         });
+    }
+    if (!hasSymbolicPathSemantics(Op))
+      // A bounded outer operation must not hide a producer whose LowIR
+      // semantics the prefilter has not proved.  Exploration will either
+      // model it or mark the path UNKNOWN.
+      return true;
+    for (unsigned I = 0; I < Op.NumInputs; ++I)
+      if (requiresPathValidationImpl(Op.Inputs[I], Depth + 1, Active,
+                                     Remaining))
+        return true;
+    return false;
+  }
+
+  bool requiresPathValidation(const MedVar &V) const {
+    llvm::DenseSet<ValueKey> Active;
+    unsigned Remaining = MaxProofSteps;
+    return requiresPathValidationImpl(V, 0, Active, Remaining);
+  }
 
   void resetClassificationProof() {
     ClassificationCache.clear();
@@ -671,10 +786,25 @@ private:
                    : std::nullopt;
       break;
     case NdOp::SUBBYTES:
-      Result = Op->NumInputs == 1 && Op->Output.Size > 0 &&
-                       Op->Output.Size <= Op->Inputs[0].Size
-                   ? upperBound(Op->Inputs[0], Depth + 1)
-                   : std::nullopt;
+      if ((Op->NumInputs == 1 ||
+           (Op->NumInputs == 2 && isNumericConstant(Op->Inputs[1]))) &&
+          Op->Output.Size > 0) {
+        const uint64_t ByteOffset =
+            Op->NumInputs == 1 ? 0 : numericConstantValue(Op->Inputs[1]);
+        if (ByteOffset <= Op->Inputs[0].Size &&
+            Op->Output.Size <= Op->Inputs[0].Size - ByteOffset)
+          if (std::optional<uint64_t> InputBound =
+                  upperBound(Op->Inputs[0], Depth + 1)) {
+            const uint64_t Shifted = ByteOffset < sizeof(uint64_t)
+                                         ? *InputBound >> (ByteOffset * 8)
+                                         : 0;
+            const uint64_t OutputMax =
+                Op->Output.Size >= sizeof(uint64_t)
+                    ? std::numeric_limits<uint64_t>::max()
+                    : (uint64_t(1) << (Op->Output.Size * 8)) - 1;
+            Result = std::min(Shifted, OutputMax);
+          }
+      }
       break;
     case NdOp::INT_AND:
       if (Op->NumInputs != 2 || Op->Output.Size == 0)

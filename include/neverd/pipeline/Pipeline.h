@@ -134,6 +134,11 @@ struct PipelineFunctionAudit {
 };
 
 struct PipelineResult {
+  /// Non-owning identity of the image from which this result was produced. The
+  /// image must outlive any safety analysis that consumes this result. Safety
+  /// entry points use the identity to prevent mixing IR with a different
+  /// image's segment, symbol, and object metadata.
+  const BinaryImage *SourceImage = nullptr;
   std::vector<LowFunc> LowFuncs;
   std::vector<MedFunc> MedFuncs;
   std::vector<HighFunc> HighFuncs;

@@ -7,9 +7,9 @@
 /// \file
 /// Drives the memory-safety analyses over a loaded session and prints the JSON
 /// report.  The audit track reports heap-lifetime defects; the hunt track
-/// reports dangerous-copy overflows with a witness.  Both always emit JSON, so
-/// the exit code carries the verdict summary: a clean run returns 0, a run that
-/// found an unsafe finding returns 2, and a failure returns 1.
+/// reports dangerous-copy overflows with symbolic witness evidence.  Both
+/// always emit JSON, so the exit code carries the verdict summary: SAFE returns
+/// 0, UNSAFE returns 2, and UNKNOWN or a malformed/error report returns 1.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -22,7 +22,7 @@
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include <fstream>
+#include <optional>
 
 using namespace llvm;
 
@@ -44,7 +44,7 @@ neverd_safety_options makeOptions() {
 }
 
 // Print the report to -o or stdout, and derive the exit code from its verdict
-// tally.  A malformed report (no "ok") is treated as a failure.
+// field.  A malformed report is treated as a failure.
 int emit(const char *Report) {
   if (!Report) {
     WithColor::error() << "safety analysis produced no report\n";
@@ -55,24 +55,33 @@ int emit(const char *Report) {
   if (Expected<json::Value> Parsed = json::parse(Report)) {
     if (const json::Object *Root = Parsed->getAsObject()) {
       const bool Ok = Root->getBoolean("ok").value_or(false);
-      const int64_t Unsafe = Root->getInteger("unsafe").value_or(0);
-      Code = !Ok ? 1 : (Unsafe > 0 ? 2 : 0);
+      const std::optional<StringRef> Verdict = Root->getString("verdict");
+      if (Ok && Verdict) {
+        if (*Verdict == "SAFE")
+          Code = 0;
+        else if (*Verdict == "UNSAFE")
+          Code = 2;
+        else if (*Verdict == "UNKNOWN")
+          Code = 1;
+      }
     }
   } else {
     consumeError(Parsed.takeError());
   }
 
   if (!OutputFile.empty()) {
-    std::ofstream OS(OutputFile);
-    if (!OS) {
+    std::error_code EC;
+    raw_fd_ostream OS(OutputFile.getValue(), EC);
+    if (EC) {
       WithColor::error() << "cannot open safety output file: "
-                         << OutputFile.getValue() << "\n";
+                         << OutputFile.getValue() << ": " << EC.message()
+                         << "\n";
       neverd_free_string(Report);
       return 1;
     }
     OS << Report << "\n";
-    OS.close();
-    if (!OS) {
+    OS.flush();
+    if (OS.has_error()) {
       WithColor::error() << "cannot write safety output file: "
                          << OutputFile.getValue() << "\n";
       neverd_free_string(Report);

@@ -145,6 +145,43 @@ TEST(ArgSlicer, RelocationAddressIsNotANumericCopyBound) {
   EXPECT_FALSE(C.UpperBound.has_value());
 }
 
+TEST(ArgSlicer, CanonicalSingleInputSubbytesKeepsTheLowLaneBound) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+  MedFunc F = newFunc();
+  defOp(F, NdOp::SUBBYTES, temp(1, 4), MedVar::makeConst(0x1234, 8));
+  const size_t Idx = addSink(F, "memcpy", {temp(9), temp(8), temp(1, 4)});
+
+  const ArgClassification C =
+      classifyArgument(In, SinkCatalog::defaults(), F, Idx, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Bounded);
+  ASSERT_TRUE(C.UpperBound.has_value());
+  EXPECT_EQ(*C.UpperBound, 0x1234u);
+  EXPECT_FALSE(C.RequiresPathValidation);
+}
+
+TEST(ArgSlicer, NonzeroSubbytesOffsetShiftsTheProvenBound) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+  MedFunc F = newFunc();
+  MedOp Extract;
+  Extract.Opcode = NdOp::SUBBYTES;
+  Extract.Output = temp(1, 1);
+  Extract.addInput(MedVar::makeConst(0x3400, 8));
+  Extract.addInput(MedVar::makeConst(1, 1));
+  F.Blocks.front().Ops.push_back(Extract);
+  const size_t Idx = addSink(F, "memcpy", {temp(9), temp(8), temp(1, 1)});
+
+  const ArgClassification C =
+      classifyArgument(In, SinkCatalog::defaults(), F, Idx, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Bounded);
+  ASSERT_TRUE(C.UpperBound.has_value());
+  EXPECT_EQ(*C.UpperBound, 0x34u);
+  EXPECT_FALSE(C.RequiresPathValidation);
+}
+
 TEST(ArgSlicer, StrlenWithoutDestinationGuardIsNotBounded) {
   BinaryImage Img;
   AnalysisInput In;
@@ -469,6 +506,103 @@ TEST(ArgSlicer, MaskedValueIsBounded) {
   EXPECT_EQ(C.Flow, ArgFlow::Bounded);
   ASSERT_TRUE(C.UpperBound.has_value());
   EXPECT_EQ(*C.UpperBound, 0x0fu);
+  EXPECT_TRUE(C.RequiresPathValidation);
+}
+
+TEST(ArgSlicer, MaskedCallClobberRequiresPathValidation) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc();
+  const MedVar Clobber = mkReg(0x20, 1);
+  F.CallClobbers.push_back({Clobber, 1});
+  MedOp And;
+  And.Opcode = NdOp::INT_AND;
+  And.Output = temp(2);
+  And.addInput(Clobber);
+  And.addInput(MedVar::makeConst(0x0f, 8));
+  F.Blocks[0].Ops.push_back(And);
+  const size_t Idx = addSink(F, "memcpy", {temp(9), temp(8), temp(2)});
+
+  const ArgClassification C = classifyArgument(In, Cat, F, Idx, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Bounded);
+  ASSERT_TRUE(C.UpperBound.has_value());
+  EXPECT_EQ(*C.UpperBound, 0x0fu);
+  EXPECT_TRUE(C.RequiresPathValidation);
+}
+
+TEST(ArgSlicer, MaskedOpaqueValueRequiresPathValidation) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc();
+  defOp(F, NdOp::INTRINSIC, temp(1), param(1));
+  MedOp And;
+  And.Opcode = NdOp::INT_AND;
+  And.Output = temp(2);
+  And.addInput(temp(1));
+  And.addInput(MedVar::makeConst(0x0f, 8));
+  F.Blocks[0].Ops.push_back(And);
+  const size_t Idx = addSink(F, "memcpy", {temp(9), temp(8), temp(2)});
+
+  const ArgClassification C = classifyArgument(In, Cat, F, Idx, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Bounded);
+  ASSERT_TRUE(C.UpperBound.has_value());
+  EXPECT_EQ(*C.UpperBound, 0x0fu);
+  EXPECT_TRUE(C.RequiresPathValidation);
+}
+
+TEST(ArgSlicer, MaskedMalformedProducerRequiresPathValidation) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc();
+  MedOp Copy;
+  Copy.Opcode = NdOp::COPY;
+  Copy.Output = temp(1);
+  F.Blocks[0].Ops.push_back(Copy);
+  MedOp And;
+  And.Opcode = NdOp::INT_AND;
+  And.Output = temp(2);
+  And.addInput(temp(1));
+  And.addInput(MedVar::makeConst(0x0f, 8));
+  F.Blocks[0].Ops.push_back(And);
+  const size_t Idx = addSink(F, "memcpy", {temp(9), temp(8), temp(2)});
+
+  const ArgClassification C = classifyArgument(In, Cat, F, Idx, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Bounded);
+  ASSERT_TRUE(C.UpperBound.has_value());
+  EXPECT_EQ(*C.UpperBound, 0x0fu);
+  EXPECT_TRUE(C.RequiresPathValidation);
+}
+
+TEST(ArgSlicer, MaskedCastRequiresPathValidation) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc();
+  defOp(F, NdOp::CAST, temp(1), param(1));
+  MedOp And;
+  And.Opcode = NdOp::INT_AND;
+  And.Output = temp(2);
+  And.addInput(temp(1));
+  And.addInput(MedVar::makeConst(0x0f, 8));
+  F.Blocks[0].Ops.push_back(And);
+  const size_t Idx = addSink(F, "memcpy", {temp(9), temp(8), temp(2)});
+
+  const ArgClassification C = classifyArgument(In, Cat, F, Idx, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Bounded);
+  ASSERT_TRUE(C.UpperBound.has_value());
+  EXPECT_EQ(*C.UpperBound, 0x0fu);
+  EXPECT_TRUE(C.RequiresPathValidation);
 }
 
 TEST(ArgSlicer, RelocationAddressMaskDoesNotBoundCopyLength) {

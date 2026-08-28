@@ -146,8 +146,8 @@ bool aliasesWholeFrame(const MedVar &Root, uint64_t StackPointerReg,
     case NdOp::INT_SEXT:
       return Op->NumInputs == 1 && sameSize(0) && Prove(Op->Inputs[0]);
     case NdOp::SUBBYTES:
-      return Op->NumInputs == 2 && sameSize(0) && scalarZero(1) &&
-             Prove(Op->Inputs[0]);
+      return (Op->NumInputs == 1 || (Op->NumInputs == 2 && scalarZero(1))) &&
+             sameSize(0) && Prove(Op->Inputs[0]);
     case NdOp::INT_ADD:
       return Op->NumInputs == 2 &&
              ((sameSize(0) && scalarZero(1) && Prove(Op->Inputs[0])) ||

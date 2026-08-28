@@ -609,6 +609,27 @@ TEST(SymExplore, StepBudgetsApplyIndependentlyToEachPath) {
   EXPECT_EQ(Paths[1].Outcome, PathOutcome::Returned);
 }
 
+TEST(SymExplore, ExecutedOperationTraceStopsAtTheStepBudget) {
+  SymContext Ctx;
+  FunctionBuilder B;
+  B.block({op(NdOp::COPY, NdVar::reg(kRax, 8), {NdVar::cst(1, 8)}),
+           op(NdOp::COPY, NdVar::reg(kRbx, 8), {NdVar::cst(2, 8)}),
+           op(NdOp::RETURN, NdVar{}, {})},
+          {});
+  ExploreOptions Opts;
+  Opts.MaxSteps = 1;
+
+  SymExploration Exploration = explorePathsDetailed(Ctx, B.function(), Opts);
+  ASSERT_EQ(Exploration.Paths.size(), 1u);
+  const SymPath &Path = Exploration.Paths.front();
+  EXPECT_EQ(Path.Outcome, PathOutcome::StepBudget);
+  ASSERT_EQ(Path.ExecutedOps.size(), 1u);
+  EXPECT_EQ(Path.ExecutedOps.front().BlockId, 0);
+  EXPECT_EQ(Path.ExecutedOps.front().OpIndex, 0u);
+  EXPECT_EQ(Path.ExecutedOps.front().Seq, 0);
+  EXPECT_EQ(Path.ExecutedOps.front().Opcode, NdOp::COPY);
+}
+
 TEST(SymExplore, APredicateTheCodeAlreadyDecidedDoesNotFork) {
   // `(x | ~x) != 0` holds for every x.  Nothing in the walk knows that; the
   // expression builders fold the condition to a constant and there is then

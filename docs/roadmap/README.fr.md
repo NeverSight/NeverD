@@ -70,7 +70,7 @@ Programmes **Solana eBPF / SBF** avec la même sémantique strict.
 
 ## 4. Audit et chasse de sûreté mémoire
 
-Analyser un binaire levé pour les défauts de durée de vie du tas (fuite, double libération, utilisation après libération) et les débordements de copies dangereuses, en JSON structuré, avec un témoin concret pour un débordement prouvé. L’analyse s’exécute sur l’IR indépendant du format et la vue d’identité partagée, donc **PE, ELF et Mach-O sont des cibles à égalité**, et réutilise l’exécution symbolique et le solveur bitvector internes — pas de solveur externe ni de conteneur.
+Analyser un binaire levé pour les défauts de durée de vie du tas (fuite, double libération, utilisation après libération) et les débordements de copies dangereuses, en JSON structuré, avec un modèle borné du solveur pour un débordement prouvé. L’analyse s’exécute sur l’IR indépendant du format et la vue d’identité partagée, donc **PE, ELF et Mach-O sont des cibles à égalité**, et réutilise l’exécution symbolique et le solveur bitvector internes — pas de solveur externe ni de conteneur.
 
 | Élément | Notes |
 |---------|--------|
@@ -78,7 +78,7 @@ Analyser un binaire levé pour les défauts de durée de vie du tas (fuite, doub
 | Piste `hunt` | Catalogue de puits + préfiltre d’arguments + capacité de destination + témoin du solveur |
 | Contrat d’identité | Résolution des puits par format (IAT PE, PLT ELF, bind dyld Mach-O) et sources de noms PDB / DWARF / MAP |
 
-**État :** P0 terminé pour PE, ELF et Mach-O. La couverture des verdicts et de l’identité est verrouillée par [`unittests/safety`](../../unittests/safety) et le bout-en-bout [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp), qui exécute sur chaque hôte la matrice obligatoire PE/ELF/Mach-O × x86-64/AArch64. Voir [Audit et chasse de sûreté mémoire](../memory-safety.fr.md). P1 s’étend aux débordements pile/global, lectures non initialisées et chaînes de format.
+**État :** L’implémentation P0 est présente pour PE, ELF et Mach-O, mais la clôture attend un adaptateur de rejeu des entrées de processus et des résumés complets des effets d’appel. La couverture des verdicts et de l’identité est verrouillée par [`unittests/safety`](../../unittests/safety) et le bout-en-bout [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp), qui exécute sur chaque hôte la matrice obligatoire PE/ELF/Mach-O × x86-64/AArch64. Voir [Audit et chasse de sûreté mémoire](../memory-safety.fr.md). P1 s’étend aux débordements pile/global, lectures non initialisées et chaînes de format.
 
 ---
 
@@ -105,5 +105,5 @@ prudente reste en cours. Pas de dates promises.
 | Décodage/lifting EVM legacy | Terminé jusqu’à Fusaka ; couvert par régression |
 | Reconstruction source EVM | En cours — étayée et prudente |
 | Décompilation Solana eBPF (SBF) | Terminée — v0-v4, C, Rust et LLVM ; couverte par régression |
-| Audit et chasse de sûreté mémoire | Terminée — P0 pour PE, ELF et Mach-O ; couverte par régression |
+| Audit et chasse de sûreté mémoire | En cours — implémentation P0 présente ; clôture par rejeu/résumés d’appels en attente |
 | Renforcement moteur & produit | Continu |

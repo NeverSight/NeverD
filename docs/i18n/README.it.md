@@ -254,7 +254,7 @@ neverd patch --subst --flatten --mba -o patched binary
 | `disasm` | Disassembla (`--func` nome o hex) |
 | `sym-explore` | Esplorazione limitata dei percorsi LowIR nativi (`--func`; output JSON) |
 | `audit` | Difetti di vita dell’heap: leak, doppia free, use-after-free (JSON) |
-| `hunt` | Overflow di copie pericolose con un testimone concreto (JSON) |
+| `hunt` | Overflow di copie pericolose con evidenza simbolica e valori candidati (JSON) |
 | `hex` | Hex dump a un indirizzo |
 | `cfg` / `callgraph` | CFG / call graph (JSON; DOT/SVG opzionale) |
 | `xrefs` | Cross-reference |

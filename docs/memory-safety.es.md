@@ -9,7 +9,7 @@ NeverD analiza un binario cargado en busca de dos familias de defectos de seguri
 | Pista | Comando | Informa |
 |-------|---------|---------|
 | **Audit** | `neverd audit <binary>` | Defectos de vida del montón: fuga, doble liberación, uso después de liberar |
-| **Hunt** | `neverd hunt <binary>` | Desbordamientos de copias peligrosas con un testigo concreto reproducible |
+| **Hunt** | `neverd hunt <binary>` | Desbordamientos de copias peligrosas con evidencia simbólica y valores de entrada candidatos; `replayable=false` hasta que un adaptador de entrada del proceso los asocie a bytes reales |
 
 El motor reutiliza la ejecución simbólica y el solver de vectores de bits internos de NeverD para testigos y alcanzabilidad. No hay solver externo, VM ni contenedor.
 
@@ -79,7 +79,7 @@ Para cada sumidero de copia, la caza recupera la capacidad de destino — tamañ
 - Una **longitud constante** dentro de una capacidad exacta es SAFE. Un desbordamiento constante solo es UNSAFE si el sumidero es alcanzable en una ruta corroborada; en otro caso permanece UNKNOWN.
 - Las copias **fortificadas** `_chk` llevan un límite de destino en tiempo de ejecución. Un rechazo o un límite que cabe de forma demostrable es SAFE; una escritura factible más allá del objeto es UNSAFE; un límite no recuperado o inconcluso es UNKNOWN.
 - Longitud **demostrablemente acotada** (llamada que devuelve longitud, máscara, clamp) se retira antes del solver, registrando el motivo. Solo es SAFE con un tamaño de destino exacto; una cota de región permanece UNKNOWN.
-- Longitud **influida por el atacante** con capacidad conocida: el solver de vectores de bits. Si una longitud mayor que la capacidad es factible, el veredicto es UNSAFE y el modelo del solver es el testigo concreto.
+- Longitud **influida por el atacante** con capacidad conocida: el solver de vectores de bits. Si una longitud mayor que la capacidad es factible, el veredicto es UNSAFE; el modelo se informa como evidencia simbólica con valores candidatos no reproducibles (`replayable=false`) hasta disponer de un adaptador de entrada del proceso.
 - Cualquier otra cosa — longitud o capacidad desconocidas — es UNKNOWN.
 
 Toda capacidad recuperada es una **cota superior** del tamaño real, así que un desbordamiento demostrado nunca es un falso positivo.
@@ -102,7 +102,7 @@ La máquina de estados del montón emite primero una secuencia de eventos candid
 
 ## Presupuestos, salida y enlaces
 
-La exploración de caza y el solver están acotados (`--max-paths`, `--max-steps`, `--max-loop`, `--solver-conflicts`); agotar el presupuesto produce UNKNOWN. Ambos comandos imprimen JSON y respetan `-o`. El código de salida es `0` en una ejecución limpia, `2` si hay un hallazgo UNSAFE y `1` ante error.
+La exploración de caza y el solver están acotados (`--max-paths`, `--max-steps`, `--max-loop`, `--solver-conflicts`); agotar el presupuesto produce UNKNOWN. Ambos comandos imprimen JSON y respetan `-o`. El código de salida es `0` para SAFE, `2` para UNSAFE y `1` para UNKNOWN o un error.
 
 Los mismos análisis están disponibles por la API C (`neverd_session_audit_json` / `neverd_session_hunt_json` con `neverd_safety_options` versionado) y el SDK de Python (`Session.audit()` / `Session.hunt()`).
 
@@ -124,7 +124,7 @@ Los mismos análisis están disponibles por la API C (`neverd_session_audit_json
   "capacity": 16,
   "capacity_kind": "exact",
   "corroboration": "path predicate and overflow are jointly satisfiable",
-  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "17 bytes" } }
+  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" }, "candidate_values": [{ "name": "copy_length", "value": "17" }, { "name": "argv[1]", "value": "16 bytes" }], "replayable": false, "symbolic_model": [{ "id": 0, "name": "copy_len", "width": 64, "value_hex": "0x11", "origin": "input" }] }
 }
 ```
 

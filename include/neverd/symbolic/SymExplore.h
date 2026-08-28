@@ -165,6 +165,20 @@ struct SymCallResult {
   SymRef Value;
 };
 
+/// One LowIR operation actually executed on a symbolic path.
+///
+/// Keeping this separate from \c SymPath::Blocks matters when exploration
+/// stops in the middle of a block or a control transfer skips the remaining
+/// operations in that block.  Consumers must not infer execution merely from
+/// block membership.
+struct SymExecutedOp {
+  int BlockId = -1;
+  size_t OpIndex = 0;
+  va_t VA = 0;
+  int Seq = -1;
+  NdOp Opcode = NdOp::_COUNT;
+};
+
 /// One finished path.
 struct SymPath {
   PathOutcome Outcome = PathOutcome::StepBudget;
@@ -177,6 +191,8 @@ struct SymPath {
   /// The blocks entered, in order.  What the path *is* — or, when
   /// \c MergedPaths is not zero, one of the routes it stands for.
   std::vector<int> Blocks;
+  /// Operations actually executed, in order.
+  std::vector<SymExecutedOp> ExecutedOps;
   /// The machine state where it stopped.
   SymState State;
   /// Call results captured before a later call can clobber the return register.

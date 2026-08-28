@@ -9,7 +9,7 @@
 | المسار | الأمر | يبلّغ عن |
 |--------|--------|----------|
 | **التدقيق (Audit)** | `neverd audit <binary>` | عيوب عمر كائنات الكومة: تسرّب، تحرير مزدوج، استخدام بعد التحرير |
-| **الصيد (Hunt)** | `neverd hunt <binary>` | فيضانات النسخ الخطرة مع شاهد ملموس قابل لإعادة الإنتاج |
+| **الصيد (Hunt)** | `neverd hunt <binary>` | فيضانات النسخ الخطرة مع أدلة رمزية وقيم إدخال مرشحة؛ تبقى `replayable=false` حتى يربطها محوّل إدخال العملية بالبايتات الفعلية |
 
 يعيد المحرّك استخدام التنفيذ الرمزي ومحلّل المتجهات البتية الداخليين في NeverD للشواهد والقابلية للوصول. لا محلّل خارجي ولا آلة افتراضية ولا حاوية.
 
@@ -79,7 +79,7 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 - **الطول الثابت** داخل سعة دقيقة هو SAFE. لا يكون الفيضان الثابت UNSAFE إلا إذا كان المصرف قابلًا للوصول على مسار مُثبت؛ وإلا يبقى UNKNOWN.
 - تحمل نسخ `_chk` **المحصَّنة** حدّ وجهة وقت التشغيل. الرفض أو ثبوت ملاءمة الحدّ يعطي SAFE؛ والكتابة الممكنة خارج الكائن تعطي UNSAFE؛ والحدّ غير المستعاد أو غير الحاسم يعطي UNKNOWN.
 - طول **محدود إثباتًا** (استدعاء يعيد طولًا، قناع، clamp) يُسحب قبل المحلّل مع تسجيل السبب. يكون SAFE فقط مع حجم وجهة دقيق؛ أما حدّ المنطقة الأعلى وحده فيبقى UNKNOWN.
-- طول **متأثر بالمهاجم** وسعة معروفة: محلّل المتجهات البتية. إن كان طول أكبر من السعة قابلًا للإرضاء فالحكم UNSAFE ونموذج المحلّل هو الشاهد الملموس.
+- طول **متأثر بالمهاجم** وسعة معروفة: محلّل المتجهات البتية. إن كان طول أكبر من السعة قابلًا للإرضاء فالحكم UNSAFE، ويُبلّغ نموذج المحلّل كدليل رمزي مع قيم مرشحة غير قابلة لإعادة التشغيل (`replayable=false`) حتى يتوفر محوّل إدخال العملية.
 - أي شيء آخر — طول أو سعة مجهولان — UNKNOWN.
 
 كل سعة مستعادة **حدّ أعلى** لحجم الكائن الحقيقي، لذا الفيضان المُثبَت ليس إيجابيًا كاذبًا أبدًا.
@@ -102,7 +102,7 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 
 ## الميزانيات والخرج والارتباطات
 
-استكشاف الصيد والمحلّل محدودان (`--max-paths` و`--max-steps` و`--max-loop` و`--solver-conflicts`)؛ استنفاد الميزانية يعطي UNKNOWN. يطبع الأمران JSON ويحترمان `-o`. رمز الخروج `0` لتشغيل نظيف، و`2` عند اكتشاف UNSAFE، و`1` عند الخطأ.
+استكشاف الصيد والمحلّل محدودان (`--max-paths` و`--max-steps` و`--max-loop` و`--solver-conflicts`)؛ استنفاد الميزانية يعطي UNKNOWN. يطبع الأمران JSON ويحترمان `-o`. رمز الخروج هو `0` لـ SAFE و`2` لـ UNSAFE و`1` لـ UNKNOWN أو الخطأ.
 
 التحليلان نفسهما متاحان عبر واجهة C (`neverd_session_audit_json` / `neverd_session_hunt_json` مع `neverd_safety_options` ذي إصدار) وSDK بايثون (`Session.audit()` / `Session.hunt()`).
 
@@ -124,7 +124,7 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
   "capacity": 16,
   "capacity_kind": "exact",
   "corroboration": "path predicate and overflow are jointly satisfiable",
-  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "17 bytes" } }
+  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" }, "candidate_values": [{ "name": "copy_length", "value": "17" }, { "name": "argv[1]", "value": "16 bytes" }], "replayable": false, "symbolic_model": [{ "id": 0, "name": "copy_len", "width": 64, "value_hex": "0x11", "origin": "input" }] }
 }
 ```
 

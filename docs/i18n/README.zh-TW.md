@@ -253,7 +253,7 @@ neverd patch --subst --flatten --mba -o patched binary
 | `disasm` | 反組譯（`--func` 名稱或十六進位） |
 | `sym-explore` | 有界原生 LowIR 路徑探索（`--func`；JSON 輸出） |
 | `audit` | 堆積生命週期缺陷：洩漏、重複釋放、釋放後使用（JSON） |
-| `hunt` | 危險拷貝越界，附具體見證（JSON） |
+| `hunt` | 危險拷貝越界，附符號證據與候選值（JSON） |
 | `hex` | 依位址十六進位傾印 |
 | `cfg` / `callgraph` | CFG / 呼叫圖（JSON；可選 DOT/SVG） |
 | `xrefs` | 交叉參照 |

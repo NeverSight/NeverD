@@ -72,6 +72,7 @@ struct Frontier {
   SymState State;
   std::vector<SymRef> Constraints;
   std::vector<int> Blocks;
+  std::vector<SymExecutedOp> ExecutedOps;
   std::vector<SymCallResult> CallResults;
   /// How often this path has entered each block, which is what the loop bound
   /// is counted against.  Per path, because two paths through a loop have
@@ -515,6 +516,7 @@ SymPath finish(Frontier &&F, PathOutcome Outcome, SymRef Target = SymRef(),
                  F.BlockId,
                  std::move(F.Constraints),
                  std::move(F.Blocks),
+                 std::move(F.ExecutedOps),
                  std::move(F.State),
                  std::move(F.CallResults),
                  Target,
@@ -677,6 +679,8 @@ SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,
         }
         ++ExecutedSteps;
         Result = Exec.step(Op);
+        Current.ExecutedOps.push_back(
+            {Current.BlockId, OpIndex, Op.Addr, Op.Seq, Op.Opcode});
         if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
             Opts.TrackedCallResultRegister) {
           auto Snapshot = [&](SymSpace Space, uint64_t Offset, uint16_t Bytes) {

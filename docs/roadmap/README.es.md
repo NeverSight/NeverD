@@ -70,7 +70,7 @@ Programas **Solana eBPF / SBF** con la misma semántica strict.
 
 ## 4. Auditoría y caza de seguridad de memoria
 
-Analizar un binario levantado en busca de defectos de vida del montón (fuga, doble liberación, uso después de liberar) y desbordamientos de copias peligrosas, en JSON estructurado, con un testigo concreto para un desbordamiento demostrado. El análisis corre sobre el IR independiente del formato y la vista de identidad compartida, de modo que **PE, ELF y Mach-O son objetivos equivalentes**, y reutiliza la ejecución simbólica y el solver de vectores de bits internos — sin solver externo ni contenedor.
+Analizar un binario levantado en busca de defectos de vida del montón (fuga, doble liberación, uso después de liberar) y desbordamientos de copias peligrosas, en JSON estructurado, con un modelo acotado del solver para un desbordamiento demostrado. El análisis corre sobre el IR independiente del formato y la vista de identidad compartida, de modo que **PE, ELF y Mach-O son objetivos equivalentes**, y reutiliza la ejecución simbólica y el solver de vectores de bits internos — sin solver externo ni contenedor.
 
 | Elemento | Notas |
 |----------|--------|
@@ -78,7 +78,7 @@ Analizar un binario levantado en busca de defectos de vida del montón (fuga, do
 | Pista `hunt` | Catálogo de sumideros + prefiltro de argumentos + capacidad de destino + testigo del solver |
 | Contrato de identidad | Resolución de sumideros por formato (IAT PE, PLT ELF, bind dyld Mach-O) y fuentes de nombres PDB / DWARF / MAP |
 
-**Estado:** P0 completo para PE, ELF y Mach-O. La cobertura de veredictos e identidad queda fijada por [`unittests/safety`](../../unittests/safety) y el extremo a extremo [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp), que ejecuta en cada host la matriz obligatoria PE/ELF/Mach-O × x86-64/AArch64. Véase [Auditoría y caza de seguridad de memoria](../memory-safety.es.md). P1 se amplía a desbordamiento de pila/global, lecturas no inicializadas y cadenas de formato.
+**Estado:** La implementación de P0 está presente para PE, ELF y Mach-O, pero el cierre está pendiente de un adaptador de reproducción de entrada del proceso y resúmenes completos de efectos de llamada. La cobertura de veredictos e identidad queda fijada por [`unittests/safety`](../../unittests/safety) y el extremo a extremo [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp), que ejecuta en cada host la matriz obligatoria PE/ELF/Mach-O × x86-64/AArch64. Véase [Auditoría y caza de seguridad de memoria](../memory-safety.es.md). P1 se amplía a desbordamiento de pila/global, lecturas no inicializadas y cadenas de formato.
 
 ---
 
@@ -105,5 +105,5 @@ EVM conservadora sigue en curso. Sin fechas comprometidas.
 | Decode/lifting EVM legacy | Completo hasta Fusaka; cubierto por regresión |
 | Reconstrucción fuente EVM | En curso — basada en evidencia y conservadora |
 | Descompilación Solana eBPF (SBF) | Completa — v0-v4, C, Rust y LLVM; cubierta por regresión |
-| Auditoría y caza de seguridad de memoria | Completa — P0 para PE, ELF y Mach-O; cubierta por regresión |
+| Auditoría y caza de seguridad de memoria | En curso — implementación de P0 presente; cierre de reproducción/resúmenes de llamadas pendiente |
 | Endurecimiento motor y producto | Continuo |

@@ -253,7 +253,7 @@ neverd patch --subst --flatten --mba -o patched binary
 | `disasm` | تفكيك (`--func` اسم أو hex) |
 | `sym-explore` | استكشاف محدود لمسارات LowIR الأصلية (`--func`؛ خرج JSON) |
 | `audit` | عيوب عمر الكومة: تسرّب، تحرير مزدوج، استخدام بعد التحرير (JSON) |
-| `hunt` | فيضانات النسخ الخطرة مع شاهد ملموس (JSON) |
+| `hunt` | فيضانات النسخ الخطرة مع أدلة رمزية وقيم مرشحة (JSON) |
 | `hex` | تفريغ hex عند عنوان |
 | `cfg` / `callgraph` | CFG / رسم استدعاء (JSON؛ DOT/SVG اختياري) |
 | `xrefs` | مراجع متقاطعة |

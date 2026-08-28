@@ -377,10 +377,16 @@ private:
         }
       break;
     case NdOp::SUBBYTES:
-      if (Op->NumInputs == 2 && Op->Inputs[0].Size >= Op->Output.Size)
-        if (auto A = input(0))
-          if (auto Offset = input(1); Offset && *Offset < sizeof(uint64_t))
+      if ((Op->NumInputs == 1 || Op->NumInputs == 2) &&
+          Op->Inputs[0].Size >= Op->Output.Size)
+        if (auto A = input(0)) {
+          const std::optional<uint64_t> Offset =
+              Op->NumInputs == 1 ? std::optional<uint64_t>(0) : input(1);
+          if (Offset && *Offset < sizeof(uint64_t) &&
+              *Offset <= Op->Inputs[0].Size &&
+              Op->Output.Size <= Op->Inputs[0].Size - *Offset)
             Result = finish(*A >> (*Offset * 8));
+        }
       break;
     case NdOp::INT_ADD:
     case NdOp::INT_SUB:
@@ -615,10 +621,14 @@ private:
           }
         break;
       case NdOp::SUBBYTES:
-        if (Op->NumInputs == 2 && Op->Inputs[0].Size >= Op->Output.Size)
+        if ((Op->NumInputs == 1 || Op->NumInputs == 2) &&
+            Op->Inputs[0].Size >= Op->Output.Size)
           if (auto A = input(0)) {
-            auto Offset = input(1);
-            if (Offset && *Offset < sizeof(uint64_t))
+            const std::optional<uint64_t> Offset =
+                Op->NumInputs == 1 ? std::optional<uint64_t>(0) : input(1);
+            if (Offset && *Offset < sizeof(uint64_t) &&
+                *Offset <= Op->Inputs[0].Size &&
+                Op->Output.Size <= Op->Inputs[0].Size - *Offset)
               Result = finish(*A >> (*Offset * 8));
           }
         break;

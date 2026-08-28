@@ -139,7 +139,9 @@ spill/reload through stack slots):
   size is exact; against a containing-region upper bound it remains UNKNOWN.
 - **Attacker-influenced** length with a known capacity is checked with the
   bitvector solver: if a length greater than the capacity is feasible the
-  verdict is UNSAFE and the solver's model is reported as the concrete witness.
+  verdict is UNSAFE and the full solver model is reported. Candidate input
+  values are explicitly marked non-replayable until an argv/stdin/file adapter
+  maps the symbolic state back to process-level bytes.
 - Anything else — unknown length or unknown capacity — is UNKNOWN.
 
 Every recovered capacity is an **upper bound** on the true object size, so a
@@ -214,8 +216,8 @@ the entry stack pointer are excluded from this check.
 
 Hunt exploration and the solver are bounded (`--max-paths`, `--max-steps`,
 `--max-loop`, `--solver-conflicts`); budget exhaustion yields UNKNOWN. Both
-commands print JSON and honour `-o`. The exit code is `0` for a clean run, `2`
-when an unsafe finding is present, and `1` on error.
+commands print JSON and honour `-o`. The exit code is `0` for SAFE, `2` for
+UNSAFE, and `1` for UNKNOWN or an error.
 
 The same analyses are available through the C API
 (`neverd_session_audit_json` / `neverd_session_hunt_json` with a versioned
@@ -240,7 +242,18 @@ The same analyses are available through the C API
   "capacity": 16,
   "capacity_kind": "exact",
   "corroboration": "path predicate and overflow are jointly satisfiable",
-  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "17 bytes" } }
+  "evidence": {
+    "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" },
+    "candidate_values": [
+      { "name": "copy_length", "value": "17" },
+      { "name": "argv[1]", "value": "16 bytes" }
+    ],
+    "replayable": false,
+    "symbolic_model": [
+      { "id": 0, "name": "copy_len", "width": 64,
+        "value_hex": "0x11", "origin": "input" }
+    ]
+  }
 }
 ```
 

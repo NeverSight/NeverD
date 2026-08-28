@@ -9,7 +9,7 @@ NeverD 對已載入二進位做兩類記憶體安全分析，並以結構化 JSO
 | 軌道 | 命令 | 報告內容 |
 |------|------|----------|
 | **稽核（Audit）** | `neverd audit <binary>` | 堆積物件生命週期缺陷：洩漏、重複釋放、釋放後使用 |
-| **獵取（Hunt）** | `neverd hunt <binary>` | 危險拷貝越界，並給出可重現的具體見證 |
+| **獵取（Hunt）** | `neverd hunt <binary>` | 危險拷貝越界，並給出符號證據與候選輸入值；在處理程序輸入轉接器映射至實際位元組前為 `replayable=false` |
 
 引擎重用 NeverD 自研符號執行與位向量求解器產生見證並確認可達性；不依賴外部求解器、虛擬機或容器。
 
@@ -79,7 +79,7 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 - **常數長度** 在精確容量內時為 SAFE。常數越界只有在已佐證路徑上可達 sink 時才為 UNSAFE；否則保持 UNKNOWN。
 - **加固** `_chk` 拷貝帶執行階段目的上界。請求被拒絕，或該上界已證明不超過恢復出的物件容量時為 SAFE；存在越過物件的可行寫入時為 UNSAFE；上界未恢復或結論不足時為 UNKNOWN。
 - **可證明有界** 的長度（回傳長度的呼叫、遮罩、鉗位）在求解前退出並記錄原因。只有目的大小精確時才是 SAFE；若只有包含區域上界，則仍為 UNKNOWN。
-- **受攻擊者影響** 且容量已知的長度交給位向量求解器：若存在大於容量的可行長度，裁決為 UNSAFE，求解器模型作為具體見證。
+- **受攻擊者影響** 且容量已知的長度交給位向量求解器：若存在大於容量的可行長度，裁決為 UNSAFE，並將求解器模型報告為符號證據與候選值；在處理程序輸入轉接器可用前不可重播（`replayable=false`）。
 - 其餘情況——未知長度或未知容量——為 UNKNOWN。
 
 每一項恢復出的容量都是真實物件大小的 **上界**，因此被證明的越界不會是誤報。
@@ -102,7 +102,7 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 
 ## 預算、輸出與繫結
 
-獵取探索與求解器受預算約束（`--max-paths`、`--max-steps`、`--max-loop`、`--solver-conflicts`）；預算耗盡給出 UNKNOWN。兩條命令都列印 JSON，並尊重 `-o`。結束碼：乾淨執行為 `0`，存在 UNSAFE 發現為 `2`，出錯為 `1`。
+獵取探索與求解器受預算約束（`--max-paths`、`--max-steps`、`--max-loop`、`--solver-conflicts`）；預算耗盡給出 UNKNOWN。兩條命令都列印 JSON，並尊重 `-o`。結束碼：SAFE 為 `0`，UNSAFE 為 `2`，UNKNOWN 或出錯為 `1`。
 
 同一分析也可透過 C API（`neverd_session_audit_json` / `neverd_session_hunt_json`，帶版本化 `neverd_safety_options`）和 Python SDK（`Session.audit()` / `Session.hunt()`）使用。
 
@@ -124,7 +124,7 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
   "capacity": 16,
   "capacity_kind": "exact",
   "corroboration": "path predicate and overflow are jointly satisfiable",
-  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "17 bytes" } }
+  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" }, "candidate_values": [{ "name": "copy_length", "value": "17" }, { "name": "argv[1]", "value": "16 bytes" }], "replayable": false, "symbolic_model": [{ "id": 0, "name": "copy_len", "width": 64, "value_hex": "0x11", "origin": "input" }] }
 }
 ```
 

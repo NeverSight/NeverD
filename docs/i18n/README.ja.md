@@ -253,7 +253,7 @@ neverd patch --subst --flatten --mba -o patched binary
 | `disasm` | 逆アセンブル（`--func` 名または hex） |
 | `sym-explore` | ネイティブ LowIR の有界パス探索（`--func`、JSON 出力） |
 | `audit` | ヒープ寿命の欠陥：リーク、二重解放、解放後使用（JSON） |
-| `hunt` | 危険なコピー越境と具体的証人（JSON） |
+| `hunt` | 危険なコピー越境と記号的証拠／候補値（JSON） |
 | `hex` | アドレスの hex dump |
 | `cfg` / `callgraph` | CFG / コールグラフ（JSON；DOT/SVG 任意） |
 | `xrefs` | クロスリファレンス |

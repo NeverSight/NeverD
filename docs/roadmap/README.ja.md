@@ -83,7 +83,7 @@ EIP-3540 は Stagnant であり、確定 mainnet behavior として扱いませ�
 
 ## 4. メモリ安全性の監査とハント
 
-リフト済みバイナリに対してヒープ寿命の欠陥（リーク、二重解放、解放後使用）と危険なコピー越境を解析し、構造化 JSON で報告します。証明された越境には具体的証人を付けます。解析は形式に依存しない IR と共有の識別ビュー上で動くため **PE、ELF、Mach-O は同等の対象**であり、自前の記号実行とビットベクトルソルバを再利用します。外部ソルバやコンテナはありません。
+リフト済みバイナリに対してヒープ寿命の欠陥（リーク、二重解放、解放後使用）と危険なコピー越境を解析し、構造化 JSON で報告します。証明された越境には有界なソルバモデルを付けます。解析は形式に依存しない IR と共有の識別ビュー上で動くため **PE、ELF、Mach-O は同等の対象**であり、自前の記号実行とビットベクトルソルバを再利用します。外部ソルバやコンテナはありません。
 
 | 項目 | 説明 |
 |------|------|
@@ -91,7 +91,7 @@ EIP-3540 は Stagnant であり、確定 mainnet behavior として扱いませ�
 | `hunt` トラック | シンクカタログ + 引数事前フィルタ + 宛先容量 + ソルバ証人 |
 | 識別契約 | 形式ごとのシンク解決（PE IAT、ELF PLT、Mach-O dyld bind）と PDB / DWARF / MAP の名前出所 |
 
-**状態：** PE、ELF、Mach-O の P0 は完了。判定と識別の被覆は [`unittests/safety`](../../unittests/safety) と、全ホストで必須の PE/ELF/Mach-O × x86-64/AArch64 6 セル fixture 行列を実行するエンドツーエンド [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) で固定。詳細は [メモリ安全性の監査とハント](../memory-safety.ja.md)。P1 はスタック／グローバル越境、未初期化読み、書式文字列へ広がります。
+**状態：** PE、ELF、Mach-O の P0 実装は存在しますが、完了にはプロセス入力再生アダプタと完全な呼び出し効果サマリが必要です。判定と識別の被覆は [`unittests/safety`](../../unittests/safety) と、全ホストで必須の PE/ELF/Mach-O × x86-64/AArch64 6 セル fixture 行列を実行するエンドツーエンド [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) で固定。詳細は [メモリ安全性の監査とハント](../memory-safety.ja.md)。P1 はスタック／グローバル越境、未初期化読み、書式文字列へ広がります。
 
 ---
 
@@ -118,5 +118,5 @@ native format、Fusaka までの legacy EVM decode/lifting、Solana SBF、メモ
 | EVM legacy decode/lifting | Fusaka まで完了；回帰試験済み |
 | EVM source reconstruction | 継続 — evidence-backed かつ保守的 |
 | Solana eBPF（SBF）逆コンパイル | 完了 — v0-v4、C、Rust、LLVM；回帰試験済み |
-| メモリ安全性の監査とハント | 完了 — PE、ELF、Mach-O の P0；回帰試験済み |
+| メモリ安全性の監査とハント | 進行中 — P0 実装あり；再生／呼び出しサマリによる完了待ち |
 | エンジンとプロダクト強化 | 継続 |

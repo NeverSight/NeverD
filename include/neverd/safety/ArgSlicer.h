@@ -41,6 +41,10 @@ struct ArgClassification {
   /// concrete upper bound is not sufficient to retire a sink: the caller must
   /// still compare this value with the recovered destination capacity.
   std::optional<uint64_t> UpperBound;
+  /// True when retiring the sink from the slice alone would bypass a call on
+  /// which this value depends.  The caller must validate the full path before
+  /// reporting SAFE, because the call may not have a symbolic summary.
+  bool RequiresPathValidation = false;
   std::string Reason;      ///< why it was classed as it was.
   std::string TaintSource; ///< the reaching input, when TAINTED.
 };

@@ -196,6 +196,15 @@ TEST(SymExpr, FindVarSeesDeclarationsAndNothingElse) {
   EXPECT_FALSE(Ctx.findVar("nope").has_value());
 }
 
+TEST(SymExpr, FreshVariablesCarryExplicitOrigin) {
+  SymContext Ctx;
+  SymRef Input = Ctx.mkVar("reg$0", W32);
+  SymRef Havoc = Ctx.mkFreshVar(W32, "reg$0$");
+
+  EXPECT_FALSE(Ctx.varInfo(Ctx.varId(Input)).Fresh);
+  EXPECT_TRUE(Ctx.varInfo(Ctx.varId(Havoc)).Fresh);
+}
+
 TEST(SymExpr, SubstitutionRebuildsThroughTheCanonicalisingBuilders) {
   SymContext Ctx;
   SymRef X = Ctx.mkVar("x", W32);

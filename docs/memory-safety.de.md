@@ -9,7 +9,7 @@ NeverD analysiert ein geladenes Binärfile auf zwei Familien von Speichersicherh
 | Spur | Befehl | Berichtet |
 |------|--------|-----------|
 | **Audit** | `neverd audit <binary>` | Heap-Lebensdauerfehler: Leak, Double-Free, Use-after-Free |
-| **Hunt** | `neverd hunt <binary>` | Gefährliche Copy-Überläufe mit einem konkreten, reproduzierbaren Zeugen |
+| **Hunt** | `neverd hunt <binary>` | Gefährliche Copy-Überläufe mit symbolischer Evidenz und Eingabekandidaten; `replayable=false` bis ein Prozess-Eingabeadapter sie auf tatsächliche Bytes abbildet |
 
 Die Engine nutzt NeverDs eigene symbolische Ausführung und den Bitvektor-Solver für Zeugen und Erreichbarkeit. Kein externer Solver, keine VM, kein Container.
 
@@ -79,7 +79,7 @@ Für jede Copy-Senke ermittelt der Hunt die Zielkapazität — debug-deklarierte
 - **Konstante Länge** innerhalb einer exakten Kapazität ist SAFE. Ein konstanter Überlauf ist nur UNSAFE, wenn die Senke auf einem bestätigten Pfad erreichbar ist; andernfalls bleibt er UNKNOWN.
 - **Gehärtete** `_chk`-Kopien tragen eine Laufzeit-Zielschranke. Eine Zurückweisung oder eine nachweislich passende Schranke ist SAFE; ein möglicher Schreibzugriff über das Objekt hinaus ist UNSAFE; eine nicht rekonstruierte oder nicht entscheidende Schranke ist UNKNOWN.
 - **Beweisbar beschränkte** Länge (längenrückgebender Aufruf, Maske, Clamp) wird vor dem Solver mit Begründung zurückgezogen. SAFE gilt nur bei exakter Zielgröße; eine reine Regionsobergrenze bleibt UNKNOWN.
-- **Angreiferbeeinflusste** Länge bei bekannter Kapazität: Bitvektor-Solver. Ist eine Länge größer als die Kapazität erfüllbar, ist das Urteil UNSAFE und das Solver-Modell der konkrete Zeuge.
+- **Angreiferbeeinflusste** Länge bei bekannter Kapazität: Bitvektor-Solver. Ist eine Länge größer als die Kapazität erfüllbar, ist das Urteil UNSAFE; das Solver-Modell wird als symbolische Evidenz mit nicht abspielbaren Kandidaten (`replayable=false`) gemeldet, bis ein Prozess-Eingabeadapter verfügbar ist.
 - Alles andere — unbekannte Länge oder unbekannte Kapazität — ist UNKNOWN.
 
 Jede zurückgewonnene Kapazität ist eine **obere Schranke** der wahren Objektgröße, daher ist ein bewiesener Überlauf niemals ein False Positive.
@@ -102,7 +102,7 @@ Der Heap-Automat gibt zunächst eine Kandidaten-Ereignisfolge aus (Allokation, F
 
 ## Budgets, Ausgabe und Bindings
 
-Hunt-Exploration und Solver sind begrenzt (`--max-paths`, `--max-steps`, `--max-loop`, `--solver-conflicts`); Budgeterschöpfung ergibt UNKNOWN. Beide Befehle drucken JSON und respektieren `-o`. Exit-Code `0` bei sauberem Lauf, `2` bei einem UNSAFE-Fund, `1` bei Fehler.
+Hunt-Exploration und Solver sind begrenzt (`--max-paths`, `--max-steps`, `--max-loop`, `--solver-conflicts`); Budgeterschöpfung ergibt UNKNOWN. Beide Befehle drucken JSON und respektieren `-o`. Der Exit-Code ist `0` für SAFE, `2` für UNSAFE und `1` für UNKNOWN oder einen Fehler.
 
 Dieselben Analysen stehen über die C-API (`neverd_session_audit_json` / `neverd_session_hunt_json` mit versioniertem `neverd_safety_options`) und das Python-SDK (`Session.audit()` / `Session.hunt()`) zur Verfügung.
 
@@ -124,7 +124,7 @@ Dieselben Analysen stehen über die C-API (`neverd_session_audit_json` / `neverd
   "capacity": 16,
   "capacity_kind": "exact",
   "corroboration": "path predicate and overflow are jointly satisfiable",
-  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "17 bytes" } }
+  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" }, "candidate_values": [{ "name": "copy_length", "value": "17" }, { "name": "argv[1]", "value": "16 bytes" }], "replayable": false, "symbolic_model": [{ "id": 0, "name": "copy_len", "width": 64, "value_hex": "0x11", "origin": "input" }] }
 }
 ```
 

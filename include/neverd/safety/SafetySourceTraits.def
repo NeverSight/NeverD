@@ -1,0 +1,25 @@
+//===- SafetySourceTraits.def - Source semantic traits --------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SAFETY_UNBOUNDED_CSTRING_SOURCE(NAME)
+//
+// Calls whose successful result exposes a narrow, attacker-controlled C
+// string without a caller-provided bound.  Counted and formatted sources are
+// described by their richer semantic summaries instead.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SAFETY_UNBOUNDED_CSTRING_SOURCE
+#define SAFETY_UNBOUNDED_CSTRING_SOURCE(NAME)
+#endif
+
+SAFETY_UNBOUNDED_CSTRING_SOURCE(getenv)
+SAFETY_UNBOUNDED_CSTRING_SOURCE(secure_getenv)
+SAFETY_UNBOUNDED_CSTRING_SOURCE(gets)
+SAFETY_UNBOUNDED_CSTRING_SOURCE(GetCommandLineA)
+SAFETY_UNBOUNDED_CSTRING_SOURCE(argv)
+
+#undef SAFETY_UNBOUNDED_CSTRING_SOURCE

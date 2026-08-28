@@ -17,6 +17,7 @@
 #define NEVERD_SAFETY_SAFETYTYPES_H
 
 #include "neverd/Common.h"
+#include "neverd/ir/NdOps.h"
 
 #include <cstdint>
 #include <optional>
@@ -40,9 +41,9 @@ enum class Verdict : uint8_t {
 #include "neverd/safety/SafetyEnums.def"
 };
 
-/// How much weight the evidence carries.  A concrete witness or a proof over
-/// every reachable path is HIGH; a prefilter decision is a definite SAFE-skip;
-/// a budget or modelling limit is LOW.
+/// How much weight the evidence carries.  A satisfying symbolic model or a
+/// proof over every reachable path is HIGH; a prefilter decision is a definite
+/// SAFE-skip; a budget or modelling limit is LOW.
 enum class Confidence : uint8_t {
 #define SAFETY_CONFIDENCE(ID, SPELLING) ID,
 #include "neverd/safety/SafetyEnums.def"
@@ -106,6 +107,20 @@ struct SinkSite {
 struct FindingEvent {
   int BlockId = -1;
   int OpIdx = -1;
+  va_t VA = 0;
+  int Seq = -1;
+  NdOp Opcode = NdOp::_COUNT;
+};
+
+/// One free-variable assignment from the solver model that establishes a
+/// finding.  This is symbolic evidence, not necessarily a process-level input
+/// until an argv/stdin/file adapter maps it back to bytes.
+struct SolverAssignment {
+  uint32_t Id = 0;
+  std::string Name;
+  uint32_t Width = 0;
+  std::string ValueHex;
+  bool Fresh = false;
 };
 
 /// One evidence-carrying record in a report.
@@ -132,7 +147,9 @@ struct Finding {
   std::string SkipReason;  ///< why a bounded sink was filtered before solving.
   std::string Constraints; ///< the path predicate, rendered.
   std::vector<std::pair<std::string, std::string>>
-      Witness;               ///< concrete inputs that drive the violation.
+      Witness; ///< candidate input/derived values for the violation.
+  std::vector<SolverAssignment> SymbolicModel;
+  bool WitnessReplayable = false;
   std::string Corroboration; ///< how a symbolic pass confirmed a candidate.
   std::string Detail;        ///< a short human-readable note.
   bool BudgetHit = false;    ///< exploration or the solver ran out of budget.
@@ -152,6 +169,11 @@ struct SafetyReport {
   unsigned Scanned = 0;   ///< matched call sites considered.
   unsigned Skipped = 0;   ///< prefilter-bounded call sites.
   bool BudgetHit = false; ///< a budget cut at least one exploration short.
+  /// False when the public C++ entry point did not receive a complete,
+  /// matching image/MedIR/LowIR inventory.  Such a report aggregates to
+  /// UNKNOWN even when no call site could be scanned.
+  bool AnalysisComplete = false;
+  std::string Error;
 };
 
 /// Resource limits, mirroring the exploration-budget style used elsewhere in
@@ -162,6 +184,11 @@ struct SafetyBudgets {
   unsigned MaxLoop = 0;
   uint64_t SolverConflicts = 0;
 };
+
+/// Default SAT-search ceiling used when a caller leaves SolverConflicts at
+/// zero.  Safety analysis must remain bounded unless a future API exposes an
+/// explicit unbounded mode.
+inline constexpr uint64_t kDefaultSafetySolverConflicts = uint64_t(1) << 18;
 
 } // namespace neverd::safety
 

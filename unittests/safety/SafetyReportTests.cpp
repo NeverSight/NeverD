@@ -14,9 +14,45 @@
 
 #include "llvm/Support/JSON.h"
 
+#include <algorithm>
 #include <limits>
 
 using namespace neverd::safety;
+
+namespace {
+
+AnalysisInput validatedInput(neverd::BinaryImage &Img,
+                             neverd::PipelineResult &Result) {
+  Result.SourceImage = &Img;
+  Result.FunctionAudits.clear();
+  for (const neverd::MedFunc &Med : Result.MedFuncs) {
+    const auto Low =
+        std::find_if(Result.LowFuncs.begin(), Result.LowFuncs.end(),
+                     [&](const neverd::LowFunc &Candidate) {
+                       return Candidate.Entry == Med.Entry;
+                     });
+    neverd::PipelineFunctionAudit Audit;
+    Audit.Entry = Med.Entry;
+    Audit.Disposition = neverd::PipelineFunctionDisposition::Accepted;
+    Audit.HasLowIR = Low != Result.LowFuncs.end();
+    Audit.HasMedIR = true;
+    Audit.MedIRVerified = true;
+    if (Low != Result.LowFuncs.end()) {
+      Audit.DecodedInstructions = Low->DecodedInstructionCount;
+      Audit.LiftedInstructions = Low->LiftedInstructionCount;
+    }
+    Result.FunctionAudits.push_back(std::move(Audit));
+  }
+
+  AnalysisInput In;
+  In.Img = &Img;
+  In.MedFuncs = &Result.MedFuncs;
+  In.LowFuncs = &Result.LowFuncs;
+  In.ValidatedPipeline = &Result;
+  return In;
+}
+
+} // namespace
 
 TEST(SafetyReport, PipelineCoverageRejectsPartialFunctionLifts) {
   neverd::PipelineResult Result;
@@ -91,6 +127,39 @@ TEST(SafetyReport, PipelineCoverageMatchesAcceptedFunctionIdentities) {
   EXPECT_TRUE(validatePipelineCoverage(CrossedInventories).has_value());
 }
 
+TEST(SafetyReport, PipelineCoverageRejectsDuplicateBlockIdentities) {
+  neverd::PipelineResult Result;
+  neverd::PipelineFunctionAudit Accepted;
+  Accepted.Entry = 0x1000;
+  Accepted.Disposition = neverd::PipelineFunctionDisposition::Accepted;
+  Accepted.HasLowIR = true;
+  Accepted.HasMedIR = true;
+  Accepted.MedIRVerified = true;
+  Result.FunctionAudits.push_back(Accepted);
+  Result.LowFuncs.resize(1);
+  Result.LowFuncs.front().Entry = Accepted.Entry;
+  Result.LowFuncs.front().Blocks.emplace_back();
+  Result.LowFuncs.front().Blocks.front().Id = 0;
+  Result.MedFuncs.resize(1);
+  Result.MedFuncs.front().Entry = Accepted.Entry;
+  Result.MedFuncs.front().Blocks.emplace_back();
+  Result.MedFuncs.front().Blocks.front().Id = 0;
+  EXPECT_FALSE(validatePipelineCoverage(Result).has_value());
+
+  Result.MedFuncs.front().Blocks.push_back(
+      Result.MedFuncs.front().Blocks.front());
+  std::optional<std::string> Error = validatePipelineCoverage(Result);
+  ASSERT_TRUE(Error.has_value());
+  EXPECT_NE(Error->find("duplicate-block-identity"), std::string::npos);
+  Result.MedFuncs.front().Blocks.pop_back();
+
+  Result.LowFuncs.front().Blocks.push_back(
+      Result.LowFuncs.front().Blocks.front());
+  Error = validatePipelineCoverage(Result);
+  ASSERT_TRUE(Error.has_value());
+  EXPECT_NE(Error->find("duplicate-block-identity"), std::string::npos);
+}
+
 TEST(SafetyReport, PipelineCoverageAuthenticatesRemovedJumpTableTargets) {
   neverd::PipelineResult Result;
 
@@ -143,6 +212,7 @@ TEST(SafetyReport, PipelineCoverageAuthenticatesRemovedJumpTableTargets) {
       neverd::SegmentFlags::Readable | neverd::SegmentFlags::Executable;
   Img.Segments.push_back(std::move(Text));
   Img.Symbols.push_back(neverd::Symbol::makeFunc(Removed.Entry, 4));
+  Result.SourceImage = &Img;
   EXPECT_TRUE(validatePipelineCoverage(Result, &Img).has_value());
 }
 
@@ -191,6 +261,7 @@ TEST(SafetyReport, PipelineCoverageRejectsUnresolvedIndirectBranches) {
   neverd::MedOp IndirectCall;
   IndirectCall.Opcode = neverd::NdOp::INDIR_CALL;
   IndirectCall.Addr = 0x1018;
+  IndirectCall.OriginSeq = 0;
   MedBlock.Ops.push_back(IndirectCall);
   Result.MedFuncs.front().Blocks.push_back(std::move(MedBlock));
   neverd::MedCallInfo Call;
@@ -201,6 +272,7 @@ TEST(SafetyReport, PipelineCoverageRejectsUnresolvedIndirectBranches) {
   neverd::LowOp IndirectCallLow;
   IndirectCallLow.Opcode = neverd::NdOp::INDIR_CALL;
   IndirectCallLow.Addr = 0x1018;
+  IndirectCallLow.Seq = 0;
   Result.LowFuncs.front().Blocks.front().Ops.push_back(IndirectCallLow);
 
   Error = validatePipelineCoverage(Result);
@@ -229,6 +301,7 @@ TEST(SafetyReport, PipelineCoverageRejectsUnliftedResolvedIndirectCallee) {
   neverd::LowOp LowCall;
   LowCall.Opcode = neverd::NdOp::INDIR_CALL;
   LowCall.Addr = 0x1010;
+  LowCall.Seq = 0;
   LowBlock.Ops.push_back(LowCall);
   Low.Blocks.push_back(std::move(LowBlock));
   Result.LowFuncs.push_back(std::move(Low));
@@ -240,6 +313,7 @@ TEST(SafetyReport, PipelineCoverageRejectsUnliftedResolvedIndirectCallee) {
   neverd::MedOp CallOp;
   CallOp.Opcode = neverd::NdOp::INDIR_CALL;
   CallOp.Addr = 0x1010;
+  CallOp.OriginSeq = 0;
   Block.Ops.push_back(CallOp);
   Med.Blocks.push_back(std::move(Block));
   neverd::MedCallInfo Call;
@@ -258,6 +332,7 @@ TEST(SafetyReport, PipelineCoverageRejectsUnliftedResolvedIndirectCallee) {
   Text.Flags =
       neverd::SegmentFlags::Readable | neverd::SegmentFlags::Executable;
   Img.Segments.push_back(std::move(Text));
+  Result.SourceImage = &Img;
 
   std::optional<std::string> Error = validatePipelineCoverage(Result, &Img);
   ASSERT_TRUE(Error.has_value());
@@ -299,6 +374,7 @@ TEST(SafetyReport, PipelineCoverageRejectsUnliftedResolvedDirectCallee) {
   neverd::LowOp LowCall;
   LowCall.Opcode = neverd::NdOp::CALL;
   LowCall.Addr = 0x1010;
+  LowCall.Seq = 0;
   LowCall.addInput(neverd::NdVar::cst(kTarget, 8));
   LowBlock.Ops.push_back(LowCall);
   Low.Blocks.push_back(std::move(LowBlock));
@@ -311,6 +387,7 @@ TEST(SafetyReport, PipelineCoverageRejectsUnliftedResolvedDirectCallee) {
   neverd::MedOp CallOp;
   CallOp.Opcode = neverd::NdOp::CALL;
   CallOp.Addr = 0x1010;
+  CallOp.OriginSeq = 0;
   CallOp.addInput(neverd::MedVar::makeConst(kTarget, 8));
   Block.Ops.push_back(CallOp);
   Med.Blocks.push_back(std::move(Block));
@@ -329,6 +406,7 @@ TEST(SafetyReport, PipelineCoverageRejectsUnliftedResolvedDirectCallee) {
   Text.Flags =
       neverd::SegmentFlags::Readable | neverd::SegmentFlags::Executable;
   Img.Segments.push_back(std::move(Text));
+  Result.SourceImage = &Img;
 
   const std::optional<std::string> Error =
       validatePipelineCoverage(Result, &Img);
@@ -354,6 +432,7 @@ TEST(SafetyReport, PipelineCoverageRequiresExactCallInventory) {
   neverd::LowOp LowCall;
   LowCall.Opcode = neverd::NdOp::CALL;
   LowCall.Addr = 0x1010;
+  LowCall.Seq = 0;
   LowBlock.Ops.push_back(LowCall);
   Low.Blocks.push_back(std::move(LowBlock));
   Result.LowFuncs.push_back(std::move(Low));
@@ -365,6 +444,7 @@ TEST(SafetyReport, PipelineCoverageRequiresExactCallInventory) {
   neverd::MedOp MedCall;
   MedCall.Opcode = neverd::NdOp::CALL;
   MedCall.Addr = 0x1010;
+  MedCall.OriginSeq = 0;
   MedBlock.Ops.push_back(MedCall);
   Med.Blocks.push_back(std::move(MedBlock));
   Result.MedFuncs.push_back(std::move(Med));
@@ -389,6 +469,36 @@ TEST(SafetyReport, PipelineCoverageRequiresExactCallInventory) {
       neverd::MedVar::makeConst(kTarget, 8));
   Result.MedFuncs.front().CallInfos.front().TargetAddr = kTarget;
   EXPECT_FALSE(validatePipelineCoverage(Result).has_value());
+
+  Result.LowFuncs.front().Blocks.front().Ops.push_back(
+      Result.LowFuncs.front().Blocks.front().Ops.front());
+  Error = validatePipelineCoverage(Result);
+  ASSERT_TRUE(Error.has_value());
+  EXPECT_NE(Error->find("duplicate-call-provenance"), std::string::npos);
+  Result.LowFuncs.front().Blocks.front().Ops.pop_back();
+
+  Result.MedFuncs.front().Blocks.front().Ops.push_back(
+      Result.MedFuncs.front().Blocks.front().Ops.front());
+  neverd::MedCallInfo DuplicateCall = Result.MedFuncs.front().CallInfos.front();
+  DuplicateCall.OpIdx = 1;
+  Result.MedFuncs.front().CallInfos.push_back(DuplicateCall);
+  Error = validatePipelineCoverage(Result);
+  ASSERT_TRUE(Error.has_value());
+  EXPECT_NE(Error->find("duplicate-call-provenance"), std::string::npos);
+  Result.MedFuncs.front().Blocks.front().Ops.pop_back();
+  Result.MedFuncs.front().CallInfos.pop_back();
+
+  Result.LowFuncs.front().Blocks.front().Ops.front().Seq = -1;
+  Error = validatePipelineCoverage(Result);
+  ASSERT_TRUE(Error.has_value());
+  EXPECT_NE(Error->find("missing-call-provenance"), std::string::npos);
+  Result.LowFuncs.front().Blocks.front().Ops.front().Seq = 0;
+
+  Result.MedFuncs.front().Blocks.front().Ops.front().OriginSeq = 1;
+  Error = validatePipelineCoverage(Result);
+  ASSERT_TRUE(Error.has_value());
+  EXPECT_NE(Error->find("incomplete-call-inventory"), std::string::npos);
+  Result.MedFuncs.front().Blocks.front().Ops.front().OriginSeq = 0;
 
   Result.MedFuncs.front().CallInfos.front().TargetAddr = kTarget + 0x10;
   Error = validatePipelineCoverage(Result);
@@ -419,6 +529,7 @@ TEST(SafetyReport, PipelineCoverageRequiresExactCallInventory) {
 
 TEST(SafetyReport, JsonCarriesSchemaAndAggregateVerdict) {
   SafetyReport Report;
+  Report.AnalysisComplete = true;
   Report.Origin = Track::Hunt;
   Report.Format = "ELF";
   Report.Arch = "x86_64";
@@ -444,6 +555,7 @@ TEST(SafetyReport, JsonCarriesSchemaAndAggregateVerdict) {
 
 TEST(SafetyReport, UnknownDominatesSafeAtTheRoot) {
   SafetyReport Report;
+  Report.AnalysisComplete = true;
   Finding Safe;
   Safe.TheVerdict = Verdict::Safe;
   Safe.TheConfidence = Confidence::High;
@@ -459,6 +571,91 @@ TEST(SafetyReport, UnknownDominatesSafeAtTheRoot) {
   ASSERT_NE(Root, nullptr);
   EXPECT_EQ(Root->getString("verdict"), "UNKNOWN");
   EXPECT_EQ(Root->getString("confidence"), "LOW");
+}
+
+TEST(SafetyReport, DefaultReportFailsClosed) {
+  llvm::Expected<llvm::json::Value> Parsed =
+      llvm::json::parse(toJson(SafetyReport{}));
+  ASSERT_TRUE(static_cast<bool>(Parsed));
+  const llvm::json::Object *Root = Parsed->getAsObject();
+  ASSERT_NE(Root, nullptr);
+  EXPECT_FALSE(Root->getBoolean("ok").value_or(true));
+  EXPECT_EQ(Root->getString("verdict"), "UNKNOWN");
+  EXPECT_EQ(Root->getString("confidence"), "LOW");
+}
+
+TEST(SafetyReport, MissingAnalysisInputCannotAggregateToSafe) {
+  AnalysisInput In;
+  SafetyReport Report = runHunt(In, SinkCatalog::defaults(), SafetyBudgets{});
+  EXPECT_FALSE(Report.AnalysisComplete);
+
+  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Report));
+  ASSERT_TRUE(static_cast<bool>(Parsed));
+  const llvm::json::Object *Root = Parsed->getAsObject();
+  ASSERT_NE(Root, nullptr);
+  EXPECT_FALSE(Root->getBoolean("ok").value_or(true));
+  EXPECT_EQ(Root->getString("verdict"), "UNKNOWN");
+  EXPECT_EQ(Root->getString("confidence"), "LOW");
+  EXPECT_FALSE(Root->getString("error").value_or("").empty());
+}
+
+TEST(SafetyReport, CoverageProofCannotBeReusedForDetachedArtifacts) {
+  neverd::BinaryImage Img;
+  neverd::PipelineResult Pipeline;
+  Pipeline.MedFuncs.resize(1);
+  Pipeline.MedFuncs.front().Entry = 0x100;
+  Pipeline.LowFuncs.resize(1);
+  Pipeline.LowFuncs.front().Entry = 0x100;
+  AnalysisInput In = validatedInput(Img, Pipeline);
+  std::vector<neverd::MedFunc> Detached = Pipeline.MedFuncs;
+  In.MedFuncs = &Detached;
+
+  const SafetyReport Report =
+      runHunt(In, SinkCatalog::defaults(), SafetyBudgets{});
+  EXPECT_FALSE(Report.AnalysisComplete);
+  EXPECT_NE(Report.Error.find("detached"), std::string::npos);
+}
+
+TEST(SafetyReport, CoverageProofCannotBeReusedForAnotherImage) {
+  neverd::BinaryImage SourceImage;
+  neverd::BinaryImage OtherImage;
+  neverd::PipelineResult Pipeline;
+  Pipeline.MedFuncs.resize(1);
+  Pipeline.MedFuncs.front().Entry = 0x100;
+  Pipeline.LowFuncs.resize(1);
+  Pipeline.LowFuncs.front().Entry = 0x100;
+  AnalysisInput In = validatedInput(SourceImage, Pipeline);
+  In.Img = &OtherImage;
+
+  const SafetyReport Report =
+      runHunt(In, SinkCatalog::defaults(), SafetyBudgets{});
+  EXPECT_FALSE(Report.AnalysisComplete);
+  EXPECT_NE(Report.Error.find("another image"), std::string::npos);
+}
+
+TEST(SafetyReport, SymbolicWitnessStatesWhetherItIsReplayable) {
+  SafetyReport Report;
+  Report.AnalysisComplete = true;
+  Finding F;
+  F.TheVerdict = Verdict::Unsafe;
+  F.TheConfidence = Confidence::High;
+  F.Witness.push_back({"copy_length", "17"});
+  F.SymbolicModel.push_back({0, "copy_len", 64, "0x11"});
+  Report.Findings.push_back(std::move(F));
+
+  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Report));
+  ASSERT_TRUE(static_cast<bool>(Parsed));
+  const llvm::json::Object *Root = Parsed->getAsObject();
+  ASSERT_NE(Root, nullptr);
+  const llvm::json::Array *Findings = Root->getArray("findings");
+  ASSERT_NE(Findings, nullptr);
+  const llvm::json::Object *FindingObject = Findings->front().getAsObject();
+  ASSERT_NE(FindingObject, nullptr);
+  const llvm::json::Object *Evidence = FindingObject->getObject("evidence");
+  ASSERT_NE(Evidence, nullptr);
+  EXPECT_FALSE(Evidence->getBoolean("replayable").value_or(true));
+  ASSERT_NE(Evidence->getArray("candidate_values"), nullptr);
+  ASSERT_NE(Evidence->getArray("symbolic_model"), nullptr);
 }
 
 TEST(SafetyReport, PreservesUnsignedCapacityRange) {
@@ -499,6 +696,7 @@ TEST(SafetyReport, AuditScannedCountsAllocationSitesNotOnlyFindings) {
       Op.Output.Size = 8;
     }
     Op.Addr = Addr;
+    Op.OriginSeq = 0;
     Op.addInput(neverd::MedVar::makeConst(0x9000 + Addr, 8));
     B.Ops.push_back(Op);
     neverd::MedCallInfo CI;
@@ -514,6 +712,7 @@ TEST(SafetyReport, AuditScannedCountsAllocationSitesNotOnlyFindings) {
   neverd::MedOp Free;
   Free.Opcode = neverd::NdOp::CALL;
   Free.Addr = 0x410;
+  Free.OriginSeq = 0;
   Free.addInput(neverd::MedVar::makeConst(0xA000, 8));
   B.Ops.push_back(Free);
   neverd::MedCallInfo FreeCI;
@@ -529,10 +728,29 @@ TEST(SafetyReport, AuditScannedCountsAllocationSitesNotOnlyFindings) {
   F.CallInfos.push_back(std::move(FreeCI));
   F.Blocks.push_back(std::move(B));
 
-  std::vector<neverd::MedFunc> Funcs{std::move(F)};
-  AnalysisInput In;
-  In.Img = &Img;
-  In.MedFuncs = &Funcs;
+  neverd::LowFunc LF;
+  LF.Entry = F.Entry;
+  LF.DecodedInstructionCount = 3;
+  LF.LiftedInstructionCount = 3;
+  neverd::LowBlock LB;
+  LB.Id = 0;
+  auto addLowCall = [&](neverd::va_t Address, neverd::va_t Target) {
+    neverd::LowOp Op;
+    Op.Opcode = neverd::NdOp::CALL;
+    Op.Addr = Address;
+    Op.Seq = 0;
+    Op.addInput(neverd::NdVar::cst(Target, 8));
+    LB.Ops.push_back(std::move(Op));
+  };
+  addLowCall(0x400, 0x9400);
+  addLowCall(0x408, 0x9408);
+  addLowCall(0x410, 0xA000);
+  LF.Blocks.push_back(std::move(LB));
+
+  neverd::PipelineResult Pipeline;
+  Pipeline.MedFuncs.push_back(std::move(F));
+  Pipeline.LowFuncs.push_back(std::move(LF));
+  AnalysisInput In = validatedInput(Img, Pipeline);
   SafetyReport Report = runAudit(In, SinkCatalog::defaults(), SafetyBudgets{});
   EXPECT_EQ(Report.Scanned, 2u);
   ASSERT_EQ(Report.Findings.size(), 1u);
@@ -553,6 +771,7 @@ TEST(SafetyReport, ReachableAuditCandidateIsSymbolicallyCorroborated) {
   Alloc.Output.Id = 1;
   Alloc.Output.Size = 8;
   Alloc.Addr = 0x400;
+  Alloc.OriginSeq = 0;
   Alloc.addInput(neverd::MedVar::makeConst(0x9000, 8));
   MB.Ops.push_back(Alloc);
   neverd::MedCallInfo CI;
@@ -585,6 +804,7 @@ TEST(SafetyReport, ReachableAuditCandidateIsSymbolicallyCorroborated) {
   neverd::LowOp LCall;
   LCall.Opcode = neverd::NdOp::CALL;
   LCall.Addr = 0x400;
+  LCall.Seq = 0;
   LCall.addInput(neverd::NdVar::cst(0x9000, 8));
   LB.Ops.push_back(LCall);
   neverd::LowOp LRet;
@@ -593,12 +813,10 @@ TEST(SafetyReport, ReachableAuditCandidateIsSymbolicallyCorroborated) {
   LB.Ops.push_back(LRet);
   LF.Blocks.push_back(std::move(LB));
 
-  std::vector<neverd::MedFunc> Med{std::move(F)};
-  std::vector<neverd::LowFunc> Low{std::move(LF)};
-  AnalysisInput In;
-  In.Img = &Img;
-  In.MedFuncs = &Med;
-  In.LowFuncs = &Low;
+  neverd::PipelineResult Pipeline;
+  Pipeline.MedFuncs.push_back(std::move(F));
+  Pipeline.LowFuncs.push_back(std::move(LF));
+  AnalysisInput In = validatedInput(Img, Pipeline);
   SafetyReport Report = runAudit(In, SinkCatalog::defaults(), SafetyBudgets{});
   ASSERT_EQ(Report.Findings.size(), 1u);
   EXPECT_EQ(Report.Findings[0].TheVerdict, Verdict::Unsafe)
@@ -619,6 +837,7 @@ TEST(SafetyReport, UnmodelledAuditPathFailsClosed) {
   Alloc.Output.Id = 1;
   Alloc.Output.Size = 8;
   Alloc.Addr = 0x504;
+  Alloc.OriginSeq = 0;
   Alloc.addInput(neverd::MedVar::makeConst(0x9000, 8));
   MB.Ops.push_back(Alloc);
   neverd::MedCallInfo CI;
@@ -649,6 +868,7 @@ TEST(SafetyReport, UnmodelledAuditPathFailsClosed) {
   neverd::LowOp LCall;
   LCall.Opcode = neverd::NdOp::CALL;
   LCall.Addr = 0x504;
+  LCall.Seq = 0;
   LCall.addInput(neverd::NdVar::cst(0x9000, 8));
   LB.Ops.push_back(LCall);
   neverd::LowOp LRet;
@@ -657,12 +877,10 @@ TEST(SafetyReport, UnmodelledAuditPathFailsClosed) {
   LB.Ops.push_back(LRet);
   LF.Blocks.push_back(std::move(LB));
 
-  std::vector<neverd::MedFunc> Med{std::move(F)};
-  std::vector<neverd::LowFunc> Low{std::move(LF)};
-  AnalysisInput In;
-  In.Img = &Img;
-  In.MedFuncs = &Med;
-  In.LowFuncs = &Low;
+  neverd::PipelineResult Pipeline;
+  Pipeline.MedFuncs.push_back(std::move(F));
+  Pipeline.LowFuncs.push_back(std::move(LF));
+  AnalysisInput In = validatedInput(Img, Pipeline);
   SafetyReport Report = runAudit(In, SinkCatalog::defaults(), SafetyBudgets{});
   ASSERT_EQ(Report.Findings.size(), 1u);
   EXPECT_EQ(Report.Findings[0].TheVerdict, Verdict::Unknown);
@@ -694,6 +912,7 @@ TEST(SafetyReport, NonNullLeakPathSurvivesANullComparison) {
   Alloc.Opcode = neverd::NdOp::CALL;
   Alloc.Output = Handle;
   Alloc.Addr = 0x400;
+  Alloc.OriginSeq = 0;
   Alloc.addInput(neverd::MedVar::makeConst(0x9000, 8));
   Entry.Ops.push_back(Alloc);
   neverd::MedCallInfo AllocCI;
@@ -727,6 +946,7 @@ TEST(SafetyReport, NonNullLeakPathSurvivesANullComparison) {
   neverd::MedOp Free;
   Free.Opcode = neverd::NdOp::CALL;
   Free.Addr = 0x420;
+  Free.OriginSeq = 0;
   Free.addInput(neverd::MedVar::makeConst(0x9100, 8));
   Release.Ops.push_back(Free);
   neverd::MedCallInfo FreeCI;
@@ -753,6 +973,7 @@ TEST(SafetyReport, NonNullLeakPathSurvivesANullComparison) {
   neverd::LowOp LAlloc;
   LAlloc.Opcode = neverd::NdOp::CALL;
   LAlloc.Addr = 0x400;
+  LAlloc.Seq = 0;
   LAlloc.addInput(neverd::NdVar::cst(0x9000, 8));
   LEntry.Ops.push_back(LAlloc);
   neverd::LowOp LCompare;
@@ -785,6 +1006,7 @@ TEST(SafetyReport, NonNullLeakPathSurvivesANullComparison) {
   neverd::LowOp LFree;
   LFree.Opcode = neverd::NdOp::CALL;
   LFree.Addr = 0x420;
+  LFree.Seq = 0;
   LFree.addInput(neverd::NdVar::cst(0x9100, 8));
   LRelease.Ops.push_back(LFree);
   neverd::LowOp LReleaseRet;
@@ -792,12 +1014,10 @@ TEST(SafetyReport, NonNullLeakPathSurvivesANullComparison) {
   LRelease.Ops.push_back(LReleaseRet);
   LF.Blocks = {LEntry, LLeak, LRelease};
 
-  std::vector<neverd::MedFunc> Med{std::move(F)};
-  std::vector<neverd::LowFunc> Low{std::move(LF)};
-  AnalysisInput In;
-  In.Img = &Img;
-  In.MedFuncs = &Med;
-  In.LowFuncs = &Low;
+  neverd::PipelineResult Pipeline;
+  Pipeline.MedFuncs.push_back(std::move(F));
+  Pipeline.LowFuncs.push_back(std::move(LF));
+  AnalysisInput In = validatedInput(Img, Pipeline);
   SafetyReport Report = runAudit(In, SinkCatalog::defaults(), SafetyBudgets{});
   ASSERT_EQ(Report.Findings.size(), 1u);
   EXPECT_EQ(Report.Findings[0].Class, VulnClass::HeapLeak);
@@ -828,6 +1048,7 @@ TEST(SafetyReport, NullOnlyDoubleFreeIsInfeasibleForAnAllocation) {
     Op.Opcode = neverd::NdOp::CALL;
     Op.Output = Output;
     Op.Addr = Address;
+    Op.OriginSeq = 0;
     Op.addInput(neverd::MedVar::makeConst(Target, 8));
     Block.Ops.push_back(Op);
     neverd::MedCallInfo CI;
@@ -879,6 +1100,7 @@ TEST(SafetyReport, NullOnlyDoubleFreeIsInfeasibleForAnAllocation) {
     neverd::LowOp Op;
     Op.Opcode = neverd::NdOp::CALL;
     Op.Addr = Address;
+    Op.Seq = 0;
     Op.addInput(neverd::NdVar::cst(Target, 8));
     return Op;
   };
@@ -929,12 +1151,10 @@ TEST(SafetyReport, NullOnlyDoubleFreeIsInfeasibleForAnAllocation) {
   LNonNullPath.Ops.push_back(LowReturn());
   LF.Blocks = {LEntry, LNullPath, LNonNullPath};
 
-  std::vector<neverd::MedFunc> Med{std::move(F)};
-  std::vector<neverd::LowFunc> Low{std::move(LF)};
-  AnalysisInput In;
-  In.Img = &Img;
-  In.MedFuncs = &Med;
-  In.LowFuncs = &Low;
+  neverd::PipelineResult Pipeline;
+  Pipeline.MedFuncs.push_back(std::move(F));
+  Pipeline.LowFuncs.push_back(std::move(LF));
+  AnalysisInput In = validatedInput(Img, Pipeline);
   SafetyReport Report = runAudit(In, SinkCatalog::defaults(), SafetyBudgets{});
   EXPECT_TRUE(Report.Findings.empty());
 }

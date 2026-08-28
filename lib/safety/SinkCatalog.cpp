@@ -48,7 +48,19 @@ std::string SinkCatalog::normalize(llvm::StringRef StatedName) {
 }
 
 static std::string demangledKey(llvm::StringRef StatedName) {
-  if (char *Dem = llvm::itaniumDemangle(StatedName.str())) {
+  llvm::StringRef Candidate = StatedName;
+  if (auto Bang = Candidate.rfind('!'); Bang != llvm::StringRef::npos)
+    Candidate = Candidate.drop_front(Bang + 1);
+  // A platform underscore may precede MinGW's import decoration.
+  while (Candidate.starts_with("___imp_"))
+    Candidate = Candidate.drop_front();
+  while (Candidate.starts_with("__imp_"))
+    Candidate = Candidate.drop_front(6);
+  // Mach-O and MinGW may add another platform underscore in front of the
+  // Itanium `_Z` introducer.  Remove only decoration, preserving `_Z` itself.
+  while (Candidate.starts_with("__") && !Candidate.starts_with("_Z"))
+    Candidate = Candidate.drop_front();
+  if (char *Dem = llvm::itaniumDemangle(Candidate.str())) {
     std::string Owned(Dem);
     std::free(Dem);
     llvm::StringRef Name(Owned);

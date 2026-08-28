@@ -657,7 +657,9 @@ class Session:
         """Hunt dangerous-copy overflows and return the parsed JSON report.
 
         Each finding carries a verdict (SAFE / UNSAFE / UNKNOWN), a confidence,
-        and — for a proven overflow — the concrete witness that drives it."""
+        and — for a proven overflow — a solver model plus candidate witness
+        values whose ``replayable`` field states whether they map to concrete
+        process input."""
 
         options = self._safety_options(
             max_paths=max_paths,

@@ -70,7 +70,7 @@ Mainnet-Semantik. Siehe [EVM-Dekompilation](../evm.de.md).
 
 ## 4. Speicher-Audit und Hunt
 
-Ein geliftetes Binärfile auf Heap-Lebensdauerfehler (Leak, Double-Free, Use-after-Free) und gefährliche Copy-Überläufe analysieren, als strukturiertes JSON, mit einem konkreten Zeugen für einen bewiesenen Überlauf. Die Analyse läuft auf dem formatneutralen IR und der gemeinsamen Identitätsansicht, daher sind **PE, ELF und Mach-O gleichrangige Ziele**, und sie nutzt die eigene symbolische Ausführung und den Bitvektor-Solver — kein externer Solver, kein Container.
+Ein geliftetes Binärfile auf Heap-Lebensdauerfehler (Leak, Double-Free, Use-after-Free) und gefährliche Copy-Überläufe analysieren, als strukturiertes JSON, mit einem begrenzten Solver-Modell für einen bewiesenen Überlauf. Die Analyse läuft auf dem formatneutralen IR und der gemeinsamen Identitätsansicht, daher sind **PE, ELF und Mach-O gleichrangige Ziele**, und sie nutzt die eigene symbolische Ausführung und den Bitvektor-Solver — kein externer Solver, kein Container.
 
 | Punkt | Hinweise |
 |-------|----------|
@@ -78,7 +78,7 @@ Ein geliftetes Binärfile auf Heap-Lebensdauerfehler (Leak, Double-Free, Use-aft
 | Spur `hunt` | Senkenkatalog + Argument-Vorfilter + Zielkapazität + Solver-Zeuge |
 | Identitätsvertrag | Senkenauflösung je Format (PE-IAT, ELF-PLT, Mach-O-dyld-Bind) und PDB-/DWARF-/MAP-Namensquellen |
 
-**Status:** P0 für PE, ELF und Mach-O abgeschlossen. Urteils- und Identitätsabdeckung ist durch [`unittests/safety`](../../unittests/safety) und den End-to-End-[`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) festgeschrieben, der auf jedem Host die verpflichtende PE/ELF/Mach-O × x86-64/AArch64-Matrix ausführt. Siehe [Speicher-Audit und Hunt](../memory-safety.de.md). P1 erweitert auf Stack-/Global-Überlauf, uninitialisierte Reads und Formatstrings.
+**Status:** Die P0-Implementierung für PE, ELF und Mach-O ist vorhanden, der Abschluss wartet jedoch auf einen Prozess-Eingabe-Replay-Adapter und vollständige Zusammenfassungen der Aufrufeffekte. Urteils- und Identitätsabdeckung ist durch [`unittests/safety`](../../unittests/safety) und den End-to-End-[`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) festgeschrieben, der auf jedem Host die verpflichtende PE/ELF/Mach-O × x86-64/AArch64-Matrix ausführt. Siehe [Speicher-Audit und Hunt](../memory-safety.de.md). P1 erweitert auf Stack-/Global-Überlauf, uninitialisierte Reads und Formatstrings.
 
 ---
 
@@ -105,5 +105,5 @@ Rekonstruktion läuft weiter. Keine Termine zugesagt.
 | Legacy-EVM-Decoding/Lifting | Bis Fusaka abgeschlossen; regressionstestgedeckt |
 | EVM-Source-Rekonstruktion | Laufend — evidenzgestützt und konservativ |
 | Solana-eBPF-(SBF)-Dekompilation | Abgeschlossen — v0-v4, C, Rust und LLVM; regressionstestgedeckt |
-| Speicher-Audit und Hunt | Abgeschlossen — P0 für PE, ELF und Mach-O; regressionstestgedeckt |
+| Speicher-Audit und Hunt | In Arbeit — P0-Implementierung vorhanden; Abschluss durch Replay-/Aufrufzusammenfassungen ausstehend |
 | Engine- & Produkt-Härtung | Laufend |

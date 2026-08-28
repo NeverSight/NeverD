@@ -30,11 +30,54 @@ void describeImage(const AnalysisInput &In, SafetyReport &R) {
   R.Arch = getArchName(In.Img->Arch);
 }
 
+std::optional<std::string> validateAnalysisInput(const AnalysisInput &In) {
+  if (!In.Img)
+    return "safety analysis requires a loaded image";
+  if (!In.MedFuncs || In.MedFuncs->empty())
+    return "safety analysis requires recovered MedIR";
+  if (!In.LowFuncs || In.LowFuncs->empty())
+    return "safety analysis requires recovered LowIR";
+  if (!In.ValidatedPipeline)
+    return "safety analysis requires validated pipeline coverage";
+  if (In.ValidatedPipeline->SourceImage != In.Img)
+    return "safety analysis received pipeline artifacts from another image";
+  if (&In.ValidatedPipeline->MedFuncs != In.MedFuncs ||
+      &In.ValidatedPipeline->LowFuncs != In.LowFuncs)
+    return "safety analysis received detached pipeline artifacts";
+  if (std::optional<std::string> Error =
+          validatePipelineCoverage(*In.ValidatedPipeline, In.Img))
+    return Error;
+  std::set<va_t> MedEntries;
+  for (const MedFunc &F : *In.MedFuncs)
+    if (!MedEntries.insert(F.Entry).second)
+      return "safety analysis received duplicate MedIR functions";
+  std::set<va_t> LowEntries;
+  for (const LowFunc &F : *In.LowFuncs)
+    if (!F.hasCompleteLiftCoverage())
+      return "safety analysis received incomplete LowIR coverage";
+    else if (!LowEntries.insert(F.Entry).second)
+      return "safety analysis received duplicate LowIR functions";
+  if (MedEntries != LowEntries)
+    return "safety analysis received mismatched MedIR/LowIR inventories";
+  return std::nullopt;
+}
+
+void recordInputStatus(const AnalysisInput &In, SafetyReport &R) {
+  if (std::optional<std::string> Error = validateAnalysisInput(In)) {
+    R.AnalysisComplete = false;
+    R.Error = std::move(*Error);
+    return;
+  }
+  R.AnalysisComplete = true;
+}
+
 } // namespace
 
 std::optional<std::string>
 neverd::safety::validatePipelineCoverage(const PipelineResult &Result,
                                          const BinaryImage *Img) {
+  if (Img && Result.SourceImage != Img)
+    return "safety pipeline artifacts do not belong to the supplied image";
   using Disposition = PipelineFunctionDisposition;
   std::set<va_t> AcceptedEntries;
   std::set<va_t> RemovedJumpTableEntries;
@@ -71,13 +114,25 @@ neverd::safety::validatePipelineCoverage(const PipelineResult &Result,
            " (" + pipelineFunctionDispositionName(Audit.Disposition) + ")";
   }
   std::set<va_t> LowEntries;
-  for (const LowFunc &F : Result.LowFuncs)
+  for (const LowFunc &F : Result.LowFuncs) {
     if (!LowEntries.insert(F.Entry).second)
       return "incomplete safety lift inventory";
+    std::set<int> BlockIds;
+    for (const LowBlock &Block : F.Blocks)
+      if (!BlockIds.insert(Block.Id).second)
+        return "incomplete safety lift at 0x" + llvm::utohexstr(F.Entry) +
+               " (duplicate-block-identity)";
+  }
   std::set<va_t> MedEntries;
-  for (const MedFunc &F : Result.MedFuncs)
+  for (const MedFunc &F : Result.MedFuncs) {
     if (!MedEntries.insert(F.Entry).second)
       return "incomplete safety lift inventory";
+    std::set<int> BlockIds;
+    for (const MedBlock &Block : F.Blocks)
+      if (!BlockIds.insert(Block.Id).second)
+        return "incomplete safety lift at 0x" + llvm::utohexstr(F.Entry) +
+               " (duplicate-block-identity)";
+  }
   if (AcceptedEntries.empty() || AcceptedEntries != LowEntries ||
       AcceptedEntries != MedEntries)
     return "incomplete safety lift inventory";
@@ -160,31 +215,45 @@ neverd::safety::validatePipelineCoverage(const PipelineResult &Result,
         [&](const MedFunc &Med) { return Med.Entry == Low.Entry; });
     if (MedIt == Result.MedFuncs.end())
       return "incomplete safety lift inventory";
-    using CallIdentity = std::tuple<va_t, unsigned, va_t>;
+    using CallIdentity = std::tuple<va_t, int, unsigned, va_t>;
     std::vector<CallIdentity> LowCalls;
     std::vector<CallIdentity> MedCalls;
+    std::set<std::pair<va_t, int>> LowCallOccurrences;
+    std::set<std::pair<va_t, int>> MedCallOccurrences;
     for (const LowBlock &Block : Low.Blocks)
       for (const LowOp &Op : Block.Ops)
         if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+          if (Op.Seq < 0)
+            return "incomplete safety lift at 0x" + llvm::utohexstr(Op.Addr) +
+                   " (missing-call-provenance)";
+          if (!LowCallOccurrences.insert({Op.Addr, Op.Seq}).second)
+            return "incomplete safety lift at 0x" + llvm::utohexstr(Op.Addr) +
+                   " (duplicate-call-provenance)";
           if (Op.Opcode == NdOp::CALL &&
               (Op.NumInputs == 0 || !Op.Inputs[0].isConst()))
             return "incomplete safety lift at 0x" + llvm::utohexstr(Op.Addr) +
                    " (incomplete-call-inventory)";
           const va_t Target = Op.Opcode == NdOp::CALL ? Op.Inputs[0].Offset : 0;
-          LowCalls.emplace_back(Op.Addr, static_cast<unsigned>(Op.Opcode),
-                                Target);
+          LowCalls.emplace_back(Op.Addr, Op.Seq,
+                                static_cast<unsigned>(Op.Opcode), Target);
         }
     for (const MedBlock &Block : MedIt->Blocks)
       for (const MedOp &Op : Block.Ops)
         if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+          if (Op.OriginSeq < 0)
+            return "incomplete safety lift at 0x" + llvm::utohexstr(Op.Addr) +
+                   " (missing-call-provenance)";
+          if (!MedCallOccurrences.insert({Op.Addr, Op.OriginSeq}).second)
+            return "incomplete safety lift at 0x" + llvm::utohexstr(Op.Addr) +
+                   " (duplicate-call-provenance)";
           if (Op.Opcode == NdOp::CALL &&
               (Op.NumInputs == 0 || !Op.Inputs[0].isConst()))
             return "incomplete safety lift at 0x" + llvm::utohexstr(Op.Addr) +
                    " (incomplete-call-inventory)";
           const va_t Target =
               Op.Opcode == NdOp::CALL ? Op.Inputs[0].ConstVal : 0;
-          MedCalls.emplace_back(Op.Addr, static_cast<unsigned>(Op.Opcode),
-                                Target);
+          MedCalls.emplace_back(Op.Addr, Op.OriginSeq,
+                                static_cast<unsigned>(Op.Opcode), Target);
         }
     std::sort(LowCalls.begin(), LowCalls.end());
     std::sort(MedCalls.begin(), MedCalls.end());
@@ -257,7 +326,8 @@ SafetyReport neverd::safety::runHunt(const AnalysisInput &In,
   SafetyReport R;
   R.Origin = Track::Hunt;
   describeImage(In, R);
-  if (!In.MedFuncs)
+  recordInputStatus(In, R);
+  if (!R.AnalysisComplete)
     return R;
 
   for (const SinkSite &Site : scanSinks(In, Cat)) {
@@ -283,6 +353,9 @@ SafetyReport neverd::safety::runAudit(const AnalysisInput &In,
   SafetyReport R;
   R.Origin = Track::Audit;
   describeImage(In, R);
+  recordInputStatus(In, R);
+  if (!R.AnalysisComplete)
+    return R;
   for (const SinkSite &Site : scanSinks(In, Cat))
     if (Site.Kind == SinkKind::Alloc || Site.Kind == SinkKind::Realloc)
       ++R.Scanned;
@@ -307,9 +380,29 @@ std::string neverd::safety::toJson(const SafetyReport &Report, bool Pretty) {
       Ev["constraints"] = F.Constraints;
     if (!F.Witness.empty()) {
       json::Object Concrete;
-      for (const auto &[K, V] : F.Witness)
-        Concrete[K] = V;
+      json::Array CandidateValues;
+      for (const auto &[K, V] : F.Witness) {
+        // Preserve the legacy object without allowing a custom source name to
+        // overwrite a derived key such as copy_length.  The array is the
+        // lossless representation and also preserves duplicate source names.
+        if (Concrete.find(K) == Concrete.end())
+          Concrete[K] = V;
+        CandidateValues.push_back(json::Object{{"name", K}, {"value", V}});
+      }
       Ev["concrete_input"] = std::move(Concrete);
+      Ev["candidate_values"] = std::move(CandidateValues);
+      Ev["replayable"] = F.WitnessReplayable;
+    }
+    if (!F.SymbolicModel.empty()) {
+      json::Array Model;
+      for (const SolverAssignment &Assignment : F.SymbolicModel)
+        Model.push_back(
+            json::Object{{"id", int64_t(Assignment.Id)},
+                         {"name", Assignment.Name},
+                         {"width", int64_t(Assignment.Width)},
+                         {"value_hex", Assignment.ValueHex},
+                         {"origin", Assignment.Fresh ? "fresh" : "input"}});
+      Ev["symbolic_model"] = std::move(Model);
     }
 
     json::Object O;
@@ -355,9 +448,10 @@ std::string neverd::safety::toJson(const SafetyReport &Report, bool Pretty) {
     }
   }
 
-  const Verdict Aggregate = Unsafe > 0    ? Verdict::Unsafe
-                            : Unknown > 0 ? Verdict::Unknown
-                                          : Verdict::Safe;
+  const Verdict Aggregate = !Report.AnalysisComplete ? Verdict::Unknown
+                            : Unsafe > 0             ? Verdict::Unsafe
+                            : Unknown > 0            ? Verdict::Unknown
+                                                     : Verdict::Safe;
   Confidence AggregateConfidence = Confidence::High;
   bool HaveAggregateConfidence = false;
   for (const Finding &F : Report.Findings) {
@@ -376,10 +470,14 @@ std::string neverd::safety::toJson(const SafetyReport &Report, bool Pretty) {
         Aggregate == Verdict::Unsafe ? std::min(Current, Candidate)
                                      : std::max(Current, Candidate));
   }
+  if (!Report.AnalysisComplete && Aggregate == Verdict::Unknown)
+    AggregateConfidence = Confidence::Low;
 
   json::Object Root;
   Root["schema_version"] = 1;
-  Root["ok"] = true;
+  Root["ok"] = Report.AnalysisComplete;
+  if (!Report.Error.empty())
+    Root["error"] = Report.Error;
   Root["track"] = toString(Report.Origin);
   Root["verdict"] = toString(Aggregate);
   Root["confidence"] = toString(AggregateConfidence);

@@ -1661,7 +1661,7 @@ TEST(HuntEngine, CustomSourceSinkIsNotImplicitlyUnbounded) {
   EXPECT_TRUE(Fnd->Witness.empty());
 }
 
-TEST(HuntEngine, CustomReturnSourceDrivesReachableCopyLength) {
+TEST(HuntEngine, CustomReturnSourceWithoutSemanticsFailsClosed) {
   constexpr va_t SourceVA = 0x400004;
   constexpr va_t SinkVA = 0x400010;
   SinkCatalog Cat = SinkCatalog::defaults();
@@ -1681,12 +1681,9 @@ TEST(HuntEngine, CustomReturnSourceDrivesReachableCopyLength) {
   auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
                   BinaryFormat::Unknown, /*Image=*/nullptr, &Cat);
   ASSERT_TRUE(Fnd.has_value());
-  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
-  EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
-  ASSERT_FALSE(Fnd->Witness.empty());
-  EXPECT_TRUE(std::any_of(
-      Fnd->Witness.begin(), Fnd->Witness.end(),
-      [](const auto &Item) { return Item.first == "custom_input"; }));
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::Low);
+  EXPECT_TRUE(Fnd->Witness.empty());
 }
 
 TEST(HuntEngine, ConstantCopyFitsSizedGlobalDestination) {
@@ -1942,6 +1939,23 @@ TEST(HuntEngine, ConstantSnprintfLimitFitsRecoveredDestination) {
   EXPECT_EQ(Fnd->Class, VulnClass::BufferOverflow);
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe) << Fnd->Detail;
   EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
+}
+
+TEST(HuntEngine, CallDerivedSnprintfLimitCannotSkipPathValidation) {
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "abcdef");
+  Builder B("main");
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call("custom_limit", temp(4), {});
+  B.op(NdOp::INT_AND, temp(5), {temp(4), MedVar::makeConst(0x0f, 8)});
+  B.call("snprintf", temp(0),
+         {temp(1), temp(5), MedVar::makeConst(FormatVA, 8)});
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, /*LF=*/nullptr, Arch::X64, {},
+                  BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+  EXPECT_TRUE(Fnd->SkipReason.empty());
 }
 
 TEST(HuntEngine, NarrowSnprintfLimitFailsClosed) {
@@ -5408,6 +5422,23 @@ TEST(HuntEngine, MaskBoundWithinDestinationIsSafeSkip) {
   EXPECT_FALSE(Fnd->SkipReason.empty());
 }
 
+TEST(HuntEngine, MaskedCustomCallStillRequiresPathValidation) {
+  SinkCatalog Cat = SinkCatalog::defaults();
+  Cat.addSource(SourceEntry{"custom_input", -1});
+
+  Builder B;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call("custom_input", temp(4), {});
+  B.op(NdOp::INT_AND, temp(5), {temp(4), MedVar::makeConst(0x0f, 8)});
+  B.call("memcpy", temp(0), {temp(1), temp(2), temp(5)});
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, /*LF=*/nullptr, Arch::X64, {},
+                  BinaryFormat::Unknown, /*Image=*/nullptr, &Cat);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+  EXPECT_TRUE(Fnd->SkipReason.empty());
+}
+
 TEST(HuntEngine, FortifiedCopyIsSafe) {
   Builder B;
   B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
@@ -5484,6 +5515,26 @@ TEST(HuntEngine, ConstantStringPointerIsNotAConstantStringLength) {
   EXPECT_TRUE(Fnd->Witness.empty());
 }
 
+TEST(HuntEngine, ReadOnlyStringLiteralProvidesExactStrcpyLength) {
+  constexpr va_t SinkVA = 0x400010;
+  BinaryImage Img;
+  const va_t SourceVA = addCString(Img, "123456");
+
+  Builder B;
+  B.call("malloc", temp(1), {MedVar::makeConst(4, 8)});
+  B.call("strcpy", temp(0), {temp(1), MedVar::makeConst(SourceVA, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = reachableSinkLow(SinkVA);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                  BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
+  ASSERT_FALSE(Fnd->Witness.empty());
+  EXPECT_EQ(Fnd->Witness.front().second, "7");
+}
+
 TEST(HuntEngine, AppendRequiresDestinationStringState) {
   Builder B;
   B.F.Entry = 0x400000;
@@ -5499,6 +5550,21 @@ TEST(HuntEngine, AppendRequiresDestinationStringState) {
   auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
   ASSERT_TRUE(Fnd.has_value());
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+}
+
+TEST(HuntEngine, ReadOnlyLiteralDoesNotAuthenticateAppendExtent) {
+  BinaryImage Img;
+  const va_t SourceVA = addCString(Img, "x");
+
+  Builder B;
+  B.call("malloc", temp(1), {MedVar::makeConst(8, 8)});
+  B.call("strcat", temp(0), {temp(1), MedVar::makeConst(SourceVA, 8)});
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, /*Low=*/nullptr, Arch::X64, {},
+                  BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+  EXPECT_TRUE(Fnd->Witness.empty());
 }
 
 TEST(HuntEngine, SizeLimitedStringCopyRequiresSourceLength) {

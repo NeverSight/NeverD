@@ -9,7 +9,7 @@ NeverD は読み込んだバイナリに対して二系統のメモリ安全性�
 | トラック | コマンド | 報告内容 |
 |----------|----------|----------|
 | **監査（Audit）** | `neverd audit <binary>` | ヒープ寿命の欠陥：リーク、二重解放、解放後使用 |
-| **ハント（Hunt）** | `neverd hunt <binary>` | 危険なコピー越境と、再現可能な具体的証人 |
+| **ハント（Hunt）** | `neverd hunt <binary>` | 危険なコピー越境と記号的証拠／入力候補（プロセス入力アダプタが実バイトへ対応付けるまでは `replayable=false`） |
 
 エンジンは NeverD 内蔵の記号実行とビットベクトルソルバを証人生成と到達可能性に再利用します。外部ソルバ、VM、コンテナ依存はありません。
 
@@ -79,7 +79,7 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 - **定数長** が正確な容量内なら SAFE です。定数越境は、裏付けられた経路でシンクへ到達できる場合だけ UNSAFE となり、それ以外は UNKNOWN のままです。
 - **強化** `_chk` コピーは実行時の宛先上界を持ちます。要求が拒否されるか、その上界が復元済みオブジェクト内に収まると証明できれば SAFE、オブジェクト外への書き込みが実行可能なら UNSAFE、上界が未復元または結論不能なら UNKNOWN です。
 - **証明可能な有界長**（長さを返す呼び出し、マスク、クランプ）は解法前に退き、理由を記録します。宛先サイズが正確な場合だけ SAFE で、包含領域の上界しかない場合は UNKNOWN のままです。
-- **攻撃者の影響を受ける長さ** で容量が既知ならビットベクトルソルバに渡します。容量を超える長さが充足可能なら UNSAFE とし、ソルバのモデルを具体的証人にします。
+- **攻撃者の影響を受ける長さ** で容量が既知ならビットベクトルソルバに渡します。容量を超える長さが充足可能なら UNSAFE とし、ソルバモデルを記号的証拠と入力候補として報告します。プロセス入力アダプタが利用可能になるまでは再生不能（`replayable=false`）です。
 - それ以外（未知の長さまたは未知の容量）は UNKNOWN。
 
 復元された容量は常に実オブジェクトサイズの **上界** なので、証明された越境は偽陽性になりません。
@@ -102,7 +102,7 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 
 ## 予算、出力、バインディング
 
-ハントの探索とソルバは予算で制限します（`--max-paths`、`--max-steps`、`--max-loop`、`--solver-conflicts`）。予算切れは UNKNOWN です。両コマンドは JSON を出力し、`-o` を尊重します。終了コードは、問題なしが `0`、UNSAFE 発見ありが `2`、失敗が `1` です。
+ハントの探索とソルバは予算で制限します（`--max-paths`、`--max-steps`、`--max-loop`、`--solver-conflicts`）。予算切れは UNKNOWN です。両コマンドは JSON を出力し、`-o` を尊重します。終了コードは SAFE が `0`、UNSAFE が `2`、UNKNOWN またはエラーが `1` です。
 
 同じ解析は C API（`neverd_session_audit_json` / `neverd_session_hunt_json`、版付き `neverd_safety_options`）と Python SDK（`Session.audit()` / `Session.hunt()`）でも使えます。
 
@@ -124,7 +124,7 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
   "capacity": 16,
   "capacity_kind": "exact",
   "corroboration": "path predicate and overflow are jointly satisfiable",
-  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "17 bytes" } }
+  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" }, "candidate_values": [{ "name": "copy_length", "value": "17" }, { "name": "argv[1]", "value": "16 bytes" }], "replayable": false, "symbolic_model": [{ "id": 0, "name": "copy_len", "width": 64, "value_hex": "0x11", "origin": "input" }] }
 }
 ```
 

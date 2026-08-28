@@ -51,6 +51,10 @@ TEST(SinkCatalog, MatchesItaniumDemangledMemcpy) {
   SinkCatalog C = SinkCatalog::defaults();
   ASSERT_NE(C.matchSink("_Z6memcpyPvS_m"), nullptr);
   EXPECT_EQ(C.matchSink("_Z6memcpyPvS_m"), C.matchSink("memcpy"));
+  EXPECT_EQ(C.matchSink("__Z6memcpyPvS_m"), C.matchSink("memcpy"));
+  EXPECT_EQ(C.matchSink("__imp__Z6memcpyPvS_m"), C.matchSink("memcpy"));
+  EXPECT_EQ(C.matchSink("libc.dylib!__Z6memcpyPvS_m"), C.matchSink("memcpy"));
+  EXPECT_EQ(C.matchSink("libc!___imp__Z6memcpyPvS_m"), C.matchSink("memcpy"));
 }
 
 TEST(SinkCatalog, MatchesAllocaAliases) {

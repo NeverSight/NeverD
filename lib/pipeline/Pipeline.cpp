@@ -43,6 +43,7 @@ namespace neverd {
 PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
                              const PipelineOptions &Opts, DebugContext *Dbg) {
   PipelineResult Result;
+  Result.SourceImage = &Img;
 
   if (Img.Arch == Arch::EVM) {
     // The loader kept the container rather than the executable remainder,

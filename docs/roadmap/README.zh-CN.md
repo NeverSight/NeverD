@@ -83,7 +83,7 @@ Review/development 的显式 opt-in target；`latest` 仍为 Fusaka。EOFv1/EIP-
 
 ## 4. 内存安全审计与猎取
 
-对已提升的二进制做堆对象生命周期缺陷（泄漏、重复释放、释放后使用）与危险拷贝越界分析，并以结构化 JSON 报告；对已证明的越界给出具体见证。分析跑在格式无关的 IR 与共享身份视图上，因此 **PE、ELF、Mach-O 是同等目标**，并复用自研符号执行与位向量求解器——不依赖外部求解器或容器。
+对已提升的二进制做堆对象生命周期缺陷（泄漏、重复释放、释放后使用）与危险拷贝越界分析，并以结构化 JSON 报告；对已证明的越界给出有界求解器模型。分析跑在格式无关的 IR 与共享身份视图上，因此 **PE、ELF、Mach-O 是同等目标**，并复用自研符号执行与位向量求解器——不依赖外部求解器或容器。
 
 | 项目 | 说明 |
 |------|------|
@@ -91,7 +91,7 @@ Review/development 的显式 opt-in target；`latest` 仍为 Fusaka。EOFv1/EIP-
 | `hunt` 轨道 | 汇目录 + 参数预过滤 + 目标容量 + 求解器见证 |
 | 身份契约 | 按格式解析汇（PE IAT、ELF PLT、Mach-O dyld bind）以及 PDB / DWARF / MAP 名称来源 |
 
-**状态：** PE、ELF、Mach-O 的 P0 已完成。判定与身份覆盖由 [`unittests/safety`](../../unittests/safety)（目录、扫描器、参数预过滤、对象模型、hunt、audit）以及在每个主机上强制运行 PE/ELF/Mach-O × x86-64/AArch64 六单元 fixture 矩阵的端到端 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) 锁定。详见 [内存安全审计与猎取](../memory-safety.zh-CN.md)。P1 将扩展到栈/全局越界、未初始化读取与格式串。
+**状态：** PE、ELF、Mach-O 的 P0 实现已存在，但关闭仍需进程输入重放适配器和完整的调用效果摘要。判定与身份覆盖由 [`unittests/safety`](../../unittests/safety)（目录、扫描器、参数预过滤、对象模型、hunt、audit）以及在每个主机上强制运行 PE/ELF/Mach-O × x86-64/AArch64 六单元 fixture 矩阵的端到端 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) 锁定。详见 [内存安全审计与猎取](../memory-safety.zh-CN.md)。P1 将扩展到栈/全局越界、未初始化读取与格式串。
 
 ---
 
@@ -122,5 +122,5 @@ Review/development 的显式 opt-in target；`latest` 仍为 Fusaka。EOFv1/EIP-
 | EVM 传统解码/lifting              | 到 Fusaka 已完成；有回归测试覆盖 |
 | EVM 源码重建                      | 持续进行 — 有证据才报告，保持保守 |
 | Solana eBPF（SBF）反编译         | 已完成 — v0-v4、C、Rust 与 LLVM；有回归测试覆盖 |
-| 内存安全审计与猎取                   | 已完成 — PE、ELF、Mach-O 的 P0；有回归测试覆盖 |
+| 内存安全审计与猎取                   | 进行中 — P0 实现已存在；重放/调用摘要收尾待完成 |
 | 引擎与产品加固                     | 持续进行      |

@@ -106,11 +106,11 @@ on that cluster's feature activation. See [Solana SBF decompilation](../sbf.md).
 ## 4. Memory-safety audit & hunt
 
 Analyse a lifted binary for heap-lifetime defects (leak, double free, use after
-free) and dangerous-copy overflows, reporting structured JSON with a concrete
-witness for a proven overflow. The analysis runs on the format-neutral IR and
-the shared identity view, so **PE, ELF, and Mach-O are co-equal targets**, and
-it reuses the in-house symbolic execution and bitvector solver — no external
-solver or container.
+free) and dangerous-copy overflows, reporting structured JSON with a bounded
+solver model for a proven overflow. The analysis runs on the format-neutral IR
+and the shared identity view, so **PE, ELF, and Mach-O are co-equal targets**,
+and it reuses the in-house symbolic execution and bitvector solver — no
+external solver or container.
 
 | Item | Notes |
 |------|--------|
@@ -118,8 +118,9 @@ solver or container.
 | `hunt` track | Sink catalog + argument prefilter + destination capacity + solver witness |
 | Identity contract | Per-format sink resolution (PE IAT, ELF PLT, Mach-O dyld bind) and PDB / DWARF / MAP name sources |
 
-**Status:** P0 complete for PE, ELF, and Mach-O. Verdict and identity coverage
-is locked by
+**Status:** P0 implementation is present for PE, ELF, and Mach-O, but closure
+is pending a process-input replay adapter and complete call-effect summaries.
+Verdict and identity coverage is locked by
 [`unittests/safety`](../../unittests/safety) (catalog, scanner, argument
 prefilter, object model, hunt, audit) and an end-to-end
 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp)
@@ -156,5 +157,5 @@ be tracked here.
 | EVM legacy decoding/lifting | Complete through Fusaka — regression-covered |
 | EVM source reconstruction | Ongoing — evidence-backed and conservative |
 | Solana eBPF (SBF) decompilation | Complete — v0-v4, C, Rust, and LLVM; regression-covered |
-| Memory-safety audit & hunt | Complete — P0 for PE, ELF, and Mach-O; regression-covered |
+| Memory-safety audit & hunt | In progress — P0 implementation present; replay/call-summary closure pending |
 | Engine & product hardening | Ongoing |

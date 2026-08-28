@@ -68,7 +68,7 @@ EIP-3540은 Stagnant라 확정 mainnet behavior로 다루지 않습니다. 자�
 
 ## 4. 메모리 안전성 감사와 헌트
 
-리프트된 바이너리에서 힙 수명 결함(누수, 이중 해제, 해제 후 사용)과 위험한 복사 오버플로를 분석하고 구조화된 JSON으로 보고합니다. 증명된 오버플로에는 구체적 증거를 붙입니다. 분석은 형식에 의존하지 않는 IR과 공유 신원 뷰에서 동작하므로 **PE, ELF, Mach-O는 동등한 대상**이며, 자체 기호 실행과 비트벡터 솔버를 재사용합니다. 외부 솔버나 컨테이너는 없습니다.
+리프트된 바이너리에서 힙 수명 결함(누수, 이중 해제, 해제 후 사용)과 위험한 복사 오버플로를 분석하고 구조화된 JSON으로 보고합니다. 증명된 오버플로에는 유계 솔버 모델을 붙입니다. 분석은 형식에 의존하지 않는 IR과 공유 신원 뷰에서 동작하므로 **PE, ELF, Mach-O는 동등한 대상**이며, 자체 기호 실행과 비트벡터 솔버를 재사용합니다. 외부 솔버나 컨테이너는 없습니다.
 
 | 항목 | 설명 |
 |------|------|
@@ -76,7 +76,7 @@ EIP-3540은 Stagnant라 확정 mainnet behavior로 다루지 않습니다. 자�
 | `hunt` 트랙 | 싱크 카탈로그 + 인수 사전 필터 + 목적지 용량 + 솔버 증거 |
 | 신원 계약 | 형식별 싱크 해석(PE IAT, ELF PLT, Mach-O dyld bind)과 PDB / DWARF / MAP 이름 출처 |
 
-**상태:** PE, ELF, Mach-O의 P0 완료. 판정과 신원 커버리지는 [`unittests/safety`](../../unittests/safety)와 모든 호스트에서 필수 PE/ELF/Mach-O × x86-64/AArch64 6셀 fixture 매트릭스를 실행하는 종단 간 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp)로 고정됩니다. 자세한 내용은 [메모리 안전성 감사와 헌트](../memory-safety.ko.md). P1은 스택/전역 오버플로, 미초기화 읽기, 형식 문자열로 확장합니다.
+**상태:** PE, ELF, Mach-O의 P0 구현은 존재하지만, 완료하려면 프로세스 입력 재생 어댑터와 완전한 호출 효과 요약이 필요합니다. 판정과 신원 커버리지는 [`unittests/safety`](../../unittests/safety)와 모든 호스트에서 필수 PE/ELF/Mach-O × x86-64/AArch64 6셀 fixture 매트릭스를 실행하는 종단 간 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp)로 고정됩니다. 자세한 내용은 [메모리 안전성 감사와 헌트](../memory-safety.ko.md). P1은 스택/전역 오버플로, 미초기화 읽기, 형식 문자열로 확장합니다.
 
 ---
 
@@ -103,5 +103,5 @@ EIP-3540은 Stagnant라 확정 mainnet behavior로 다루지 않습니다. 자�
 | EVM legacy decode/lifting | Fusaka까지 완료; 회귀 테스트 적용 |
 | EVM source reconstruction | 진행 중 — evidence-backed, 보수적 |
 | Solana eBPF (SBF) 디컴파일 | 완료 — v0-v4, C, Rust, LLVM; 회귀 테스트 완료 |
-| 메모리 안전성 감사와 헌트 | 완료 — PE, ELF, Mach-O의 P0; 회귀 테스트 완료 |
+| 메모리 안전성 감사와 헌트 | 진행 중 — P0 구현 존재; 재생/호출 요약 완료 대기 |
 | 엔진·제품 강화 | 지속 |

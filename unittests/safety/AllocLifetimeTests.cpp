@@ -43,6 +43,8 @@ LowOp lowOp(NdOp Opcode, NdVar Output, std::vector<NdVar> Inputs,
   Op.Opcode = Opcode;
   Op.Output = Output;
   Op.Addr = Address;
+  if (Address != 0)
+    Op.Seq = 0;
   for (NdVar &Input : Inputs)
     Op.addInput(Input);
   return Op;
@@ -129,6 +131,8 @@ struct FB {
     O.Opcode = Op;
     O.Output = Out;
     O.Addr = Addr;
+    if (Addr != 0)
+      O.OriginSeq = 0;
     for (auto &I : Ins)
       O.addInput(I);
     F.Blocks[Blk].Ops.push_back(O);
@@ -140,6 +144,8 @@ struct FB {
     O.Opcode = NdOp::CALL;
     O.Output = Ret;
     O.Addr = Addr;
+    if (Addr != 0)
+      O.OriginSeq = 0;
     O.addInput(MedVar::makeConst(Target, 8));
     F.Blocks[Blk].Ops.push_back(O);
     MedCallInfo CI;
@@ -2708,6 +2714,13 @@ TEST(AllocLifetime, ReachableUninitializedStackReadIsCorroborated) {
   LB.Id = b0;
   LB.StartAddr = B.F.Entry;
   LB.EndAddr = B.F.Entry + 0x10;
+  LowOp Load;
+  Load.Opcode = NdOp::LOAD;
+  Load.Output = NdVar::tmp(0, 8);
+  Load.Addr = 0x408;
+  Load.Seq = 0;
+  Load.addInput(NdVar::reg(kSP, 8));
+  LB.Ops.push_back(Load);
   LowOp Ret;
   Ret.Opcode = NdOp::RETURN;
   Ret.Addr = 0x410;

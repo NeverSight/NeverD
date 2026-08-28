@@ -186,6 +186,9 @@ struct SymNode {
 struct SymVarInfo {
   std::string Name;
   uint32_t Width = 0;
+  /// True for a generated stand-in (havoc, undefined value, or solver
+  /// placeholder); false for a named input declared by the caller.
+  bool Fresh = false;
 };
 
 /// Owner of a set of interned expressions.

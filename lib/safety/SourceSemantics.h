@@ -27,6 +27,15 @@
 
 namespace neverd::safety::detail {
 
+inline bool isUnboundedCStringSource(llvm::StringRef Name) {
+  const std::string Normalized = SinkCatalog::normalize(Name);
+#define SAFETY_UNBOUNDED_CSTRING_SOURCE(NAME)                                  \
+  if (Normalized == #NAME)                                                     \
+    return true;
+#include "neverd/safety/SafetySourceTraits.def"
+  return false;
+}
+
 inline uint16_t targetPointerBytes(const BinaryImage *Img) {
   return Img ? getTargetRegInfo(Img->Arch).PointerSize : 0;
 }

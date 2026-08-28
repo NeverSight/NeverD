@@ -132,7 +132,8 @@ bool mustForwardPointerValue(const MedOp &Op,
   case NdOp::INT_SEXT:
     return Op.NumInputs == 1 && aliases(0) && sameSize(0);
   case NdOp::SUBBYTES:
-    return Op.NumInputs == 2 && aliases(0) && sameSize(0) && isZero(1);
+    return (Op.NumInputs == 1 || (Op.NumInputs == 2 && isZero(1))) &&
+           aliases(0) && sameSize(0);
   case NdOp::INT_ADD:
     return Op.NumInputs == 2 && ((aliases(0) && sameSize(0) && isZero(1)) ||
                                  (isZero(0) && aliases(1) && sameSize(1)));
@@ -265,7 +266,8 @@ struct MemModel {
           Result = Resolve(Op.Inputs[0]);
         break;
       case NdOp::SUBBYTES:
-        if (Op.NumInputs == 2 && sameSize(0) && isZero(1))
+        if ((Op.NumInputs == 1 || (Op.NumInputs == 2 && isZero(1))) &&
+            sameSize(0))
           Result = Resolve(Op.Inputs[0]);
         break;
       case NdOp::INT_ADD:
@@ -717,6 +719,15 @@ va_t callVA(const MedFunc &F, const MedCallInfo &CI) {
   return 0;
 }
 
+FindingEvent findingEvent(const MedFunc &F, int BlockId, int OpIdx, va_t VA) {
+  FindingEvent Event{BlockId, OpIdx, VA};
+  if (const MedOp *Op = opAt(F, BlockId, OpIdx)) {
+    Event.Seq = Op->OriginSeq;
+    Event.Opcode = Op->Opcode;
+  }
+  return Event;
+}
+
 struct Summary {
   bool ReturnsHeap = false;
   llvm::DenseSet<int> FreesParam;
@@ -752,8 +763,6 @@ struct CollectedUses {
 
 struct EventCursor {
   size_t PathIndex = 0;
-  int BlockId = -1;
-  int OpIdx = -1;
   bool Valid = false;
 };
 
@@ -764,13 +773,21 @@ bool containsEventsInOrder(const symbolic::SymPath &Path,
   for (const FindingEvent &Event : Events) {
     bool Found = false;
     const size_t Start = Cursor.Valid ? Cursor.PathIndex : 0;
-    for (size_t I = Start; I < Path.Blocks.size(); ++I) {
-      if (Path.Blocks[I] != Event.BlockId)
+    for (size_t I = Start; I < Path.ExecutedOps.size(); ++I) {
+      const symbolic::SymExecutedOp &Executed = Path.ExecutedOps[I];
+      if (Event.Seq < 0)
         continue;
-      if (Cursor.Valid && I == Cursor.PathIndex &&
-          Event.BlockId == Cursor.BlockId && Event.OpIdx <= Cursor.OpIdx)
+      // MedIR CFG simplification may renumber blocks after OriginSeq is
+      // copied.  LowIR defines (Addr, Seq) as the stable operation-occurrence
+      // identity, so a MedIR block id must not participate in the proof.
+      const bool MatchesLocation =
+          Executed.VA == Event.VA && Executed.Seq == Event.Seq;
+      if (!MatchesLocation ||
+          (Event.Opcode != NdOp::_COUNT && Executed.Opcode != Event.Opcode))
         continue;
-      Cursor = {I, Event.BlockId, Event.OpIdx, true};
+      if (Cursor.Valid && I <= Cursor.PathIndex)
+        continue;
+      Cursor = {I, true};
       Found = true;
       break;
     }
@@ -783,13 +800,19 @@ bool containsEventsInOrder(const symbolic::SymPath &Path,
 bool containsForbiddenAfter(const symbolic::SymPath &Path,
                             llvm::ArrayRef<FindingEvent> Events,
                             const EventCursor &Cursor) {
+  if (std::any_of(Events.begin(), Events.end(),
+                  [](const FindingEvent &Event) { return Event.Seq < 0; }))
+    return true;
   const size_t Start = Cursor.Valid ? Cursor.PathIndex : 0;
   for (const FindingEvent &Event : Events)
-    for (size_t I = Start; I < Path.Blocks.size(); ++I)
-      if (Path.Blocks[I] == Event.BlockId &&
-          (!Cursor.Valid || I > Cursor.PathIndex ||
-           Event.BlockId != Cursor.BlockId || Event.OpIdx > Cursor.OpIdx))
+    for (size_t I = Start; I < Path.ExecutedOps.size(); ++I) {
+      const symbolic::SymExecutedOp &Executed = Path.ExecutedOps[I];
+      const bool Matches =
+          Executed.VA == Event.VA && Executed.Seq == Event.Seq &&
+          (Event.Opcode == NdOp::_COUNT || Executed.Opcode == Event.Opcode);
+      if (Matches && (!Cursor.Valid || I > Cursor.PathIndex))
         return true;
+    }
   return false;
 }
 
@@ -1414,31 +1437,32 @@ private:
   unsigned summarizedCallsOnPath(const MedFunc &F, const LowFunc &LF,
                                  const symbolic::SymPath &Path) const {
     unsigned Count = 0;
-    for (int BlockId : Path.Blocks) {
+    for (const symbolic::SymExecutedOp &Executed : Path.ExecutedOps) {
       const LowBlock *Block = nullptr;
       for (const LowBlock &Candidate : LF.Blocks)
-        if (Candidate.Id == BlockId) {
+        if (Candidate.Id == Executed.BlockId) {
           Block = &Candidate;
           break;
         }
-      if (!Block)
+      if (!Block || Executed.OpIndex >= Block->Ops.size())
         continue;
-      for (const LowOp &Op : Block->Ops) {
-        if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
-          continue;
-        const MedCallInfo *Call = nullptr;
-        for (const MedCallInfo &CI : F.CallInfos)
-          if (callVA(F, CI) == Op.Addr) {
-            Call = &CI;
-            break;
-          }
-        if (!Call)
-          continue;
-        const std::string Name = callName(*Call);
-        if (catalogSink(*Call) || Cat.matchSource(Name) ||
-            isStringLengthCall(Name) || internalCallee(*Call))
-          ++Count;
-      }
+      const LowOp &Op = Block->Ops[Executed.OpIndex];
+      if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
+        continue;
+      const MedCallInfo *Call = nullptr;
+      for (const MedCallInfo &CI : F.CallInfos)
+        if (const MedOp *Med = opAt(F, CI.BlockId, CI.OpIdx);
+            Med && Executed.Seq >= 0 && Med->Addr == Executed.VA &&
+            Med->OriginSeq == Executed.Seq && Med->Opcode == Executed.Opcode) {
+          Call = &CI;
+          break;
+        }
+      if (!Call)
+        continue;
+      const std::string Name = callName(*Call);
+      if (catalogSink(*Call) || Cat.matchSource(Name) ||
+          isStringLengthCall(Name))
+        ++Count;
     }
     return Count;
   }
@@ -1476,11 +1500,24 @@ private:
     if (In.Img) {
       const TargetRegInfo &TRI = getTargetRegInfo(In.Img->Arch);
       const uint16_t Bytes = TRI.PointerSize ? TRI.PointerSize : 8;
+      for (const TargetRegisterRange &R :
+           TRI.callPreservedRanges(In.Img->Format))
+        Opts.CallPreservedRegisters.push_back({R.Offset, R.Bytes});
       Opts.TrackedCallResultRegister =
           symbolic::SymRegisterRange{TRI.IntReturnReg, Bytes};
     }
     symbolic::SymExploration Ex =
         symbolic::explorePathsDetailed(Ctx, *LF, Opts);
+    const auto MissingSequence = [](llvm::ArrayRef<FindingEvent> Events) {
+      return std::any_of(
+          Events.begin(), Events.end(),
+          [](const FindingEvent &Event) { return Event.Seq < 0; });
+    };
+    if (MissingSequence(Fn.RequiredPathEvents) ||
+        MissingSequence(Fn.ForbiddenPathEvents)) {
+      failClosed("candidate event lacks exact LowIR provenance");
+      return true;
+    }
     const MedFunc *Med = In.findMedFunc(Fn.FuncEntry);
     bool SawUnmodelled = false;
     bool SolverUnknown = false;
@@ -1500,6 +1537,7 @@ private:
         continue;
       }
       symbolic::SymRef Pred = P.predicate(Ctx);
+      llvm::SmallVector<uint32_t, 8> AllowedFreshVars;
       if (Fn.RequireNonNullCallVA) {
         symbolic::SymRef CallResult;
         unsigned Matches = 0;
@@ -1516,10 +1554,25 @@ private:
             Ctx.mkNe(CallResult, Ctx.mkZero(Ctx.width(CallResult)));
         symbolic::SymRef Parts[] = {Pred, NonNull};
         Pred = Ctx.mkAnd(Parts);
+        Ctx.collectVars(CallResult, AllowedFreshVars);
+      }
+      llvm::DenseSet<uint32_t> AllowedFresh;
+      for (uint32_t Id : AllowedFreshVars)
+        AllowedFresh.insert(Id);
+      llvm::SmallVector<uint32_t, 16> PredicateVars;
+      Ctx.collectVars(Pred, PredicateVars);
+      const bool DependsOnHavoc = std::any_of(
+          PredicateVars.begin(), PredicateVars.end(), [&](uint32_t Id) {
+            return Ctx.varInfo(Id).Fresh && !AllowedFresh.contains(Id);
+          });
+      if (DependsOnHavoc) {
+        SawUnmodelled = true;
+        continue;
       }
       solver::SolverOptions SolverOpts;
-      if (Budgets.SolverConflicts)
-        SolverOpts.Sat.MaxConflicts = Budgets.SolverConflicts;
+      SolverOpts.Sat.MaxConflicts = Budgets.SolverConflicts
+                                        ? Budgets.SolverConflicts
+                                        : kDefaultSafetySolverConflicts;
       const solver::SatResult Sat =
           solver::checkSat(Ctx, Pred, nullptr, SolverOpts);
       if (Sat == solver::SatResult::Unsat)
@@ -1559,7 +1612,10 @@ private:
     Fn.Function = F.Name;
     Fn.FuncEntry = F.Entry;
     Fn.Name = Name;
-    Fn.Sink = Name;
+    if (const SinkEntry *Entry = Cat.matchSink(Name))
+      Fn.Sink = Entry->Name;
+    else
+      Fn.Sink = SinkCatalog::normalize(Name);
     Fn.CallVA = VA;
     Fn.Source = classifyNameSource(In, CalleeAddr, Name, IsIndirect);
     if (In.Dbg)
@@ -1684,9 +1740,11 @@ private:
               Fn.TheConfidence = Confidence::High;
               Fn.Detail = "handle released twice on a path";
               Fn.RequiredPathEvents = {
-                  {CI.BlockId, CI.OpIdx},
-                  {Frees[A].BlockId, Frees[A].OpIdx},
-                  {Frees[B].BlockId, Frees[B].OpIdx},
+                  findingEvent(F, CI.BlockId, CI.OpIdx, callVA(F, CI)),
+                  findingEvent(F, Frees[A].BlockId, Frees[A].OpIdx,
+                               Frees[A].VA),
+                  findingEvent(F, Frees[B].BlockId, Frees[B].OpIdx,
+                               Frees[B].VA),
               };
               Fn.RequireNonNullCallVA = AllocVA;
             }
@@ -1759,9 +1817,9 @@ private:
               Fn.TheConfidence = Confidence::High;
               Fn.Detail = "handle used after it was released";
               Fn.RequiredPathEvents = {
-                  {CI.BlockId, CI.OpIdx},
-                  {Fr.BlockId, Fr.OpIdx},
-                  {U.BlockId, U.OpIdx},
+                  findingEvent(F, CI.BlockId, CI.OpIdx, callVA(F, CI)),
+                  findingEvent(F, Fr.BlockId, Fr.OpIdx, Fr.VA),
+                  findingEvent(F, U.BlockId, U.OpIdx, U.VA),
               };
               Fn.RequireNonNullCallVA = AllocVA;
             }
@@ -1847,9 +1905,11 @@ private:
                          "arguments")
                 : "heap handle reaches a call without a retention summary";
         if (MayLeakOnNormalPath) {
-          Fn.RequiredPathEvents = {{CI.BlockId, CI.OpIdx}};
+          Fn.RequiredPathEvents = {
+              findingEvent(F, CI.BlockId, CI.OpIdx, callVA(F, CI))};
           for (const FreeEvent &Fr : Frees)
-            Fn.ForbiddenPathEvents.push_back({Fr.BlockId, Fr.OpIdx});
+            Fn.ForbiddenPathEvents.push_back(
+                findingEvent(F, Fr.BlockId, Fr.OpIdx, Fr.VA));
           Fn.RequireReturnedPath = true;
           Fn.RequireNonNullCallVA = AllocVA;
         }
@@ -1865,9 +1925,11 @@ private:
         } else {
           Fn.TheConfidence = Confidence::Medium;
           Fn.Detail = "allocation neither released nor escaped on every path";
-          Fn.RequiredPathEvents = {{CI.BlockId, CI.OpIdx}};
+          Fn.RequiredPathEvents = {
+              findingEvent(F, CI.BlockId, CI.OpIdx, callVA(F, CI))};
           for (const FreeEvent &Fr : Frees)
-            Fn.ForbiddenPathEvents.push_back({Fr.BlockId, Fr.OpIdx});
+            Fn.ForbiddenPathEvents.push_back(
+                findingEvent(F, Fr.BlockId, Fr.OpIdx, Fr.VA));
           Fn.RequireReturnedPath = true;
           Fn.RequireNonNullCallVA = AllocVA;
         }
@@ -1938,7 +2000,7 @@ private:
                              : "local stack slot may be read before "
                                "initialization on a control-flow path";
         if (Definite)
-          Fn.RequiredPathEvents = {{B.Id, Oi}};
+          Fn.RequiredPathEvents = {findingEvent(F, B.Id, Oi, Op.Addr)};
         if (In.Dbg)
           if (auto Loc = In.Dbg->sourceLocation(Op.Addr);
               Loc && !Loc->File.empty())
@@ -2008,7 +2070,8 @@ private:
       Fn.TheConfidence = Definite ? Confidence::Medium : Confidence::Low;
       Fn.Detail = (Definite ? DefiniteDetail : PossibleDetail).str();
       if (Definite)
-        Fn.RequiredPathEvents = {{CI.BlockId, CI.OpIdx}};
+        Fn.RequiredPathEvents = {
+            findingEvent(F, CI.BlockId, CI.OpIdx, callVA(F, CI))};
       Out.push_back(std::move(Fn));
     };
 

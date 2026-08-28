@@ -9,7 +9,7 @@ NeverD analyse un binaire chargé selon deux familles de défauts de sûreté m�
 | Piste | Commande | Rapporte |
 |-------|----------|----------|
 | **Audit** | `neverd audit <binary>` | Défauts de durée de vie du tas : fuite, double libération, utilisation après libération |
-| **Hunt** | `neverd hunt <binary>` | Débordements de copies dangereuses, avec un témoin concret reproductible |
+| **Hunt** | `neverd hunt <binary>` | Débordements de copies dangereuses avec preuves symboliques et valeurs d’entrée candidates ; `replayable=false` jusqu’à leur conversion en octets réels par un adaptateur d’entrée de processus |
 
 Le moteur réutilise l’exécution symbolique et le solveur bitvector internes de NeverD pour les témoins et l’atteignabilité. Aucun solveur externe, VM ou conteneur.
 
@@ -79,7 +79,7 @@ Pour chaque puits de copie, la chasse recouvre la capacité de destination — t
 - Une **longueur constante** dans une capacité exacte est SAFE. Un débordement constant n’est UNSAFE que si le puits est atteignable sur un chemin corroboré ; sinon il reste UNKNOWN.
 - Les copies **fortifiées** `_chk` portent une borne de destination runtime. Un rejet ou une borne prouvée compatible est SAFE ; une écriture réalisable au-delà de l’objet est UNSAFE ; une borne non recouvrée ou non concluante est UNKNOWN.
 - Longueur **prouvablement bornée** (appel renvoyant une longueur, masque, clamp) retirée avant résolution, avec la raison. Elle n’est SAFE que si la taille de destination est exacte ; une simple borne de région reste UNKNOWN.
-- Longueur **influencée par un attaquant** et capacité connue : le solveur bitvector est consulté. Si une longueur supérieure à la capacité est satisfaisable, le verdict est UNSAFE et le modèle du solveur devient le témoin concret.
+- Longueur **influencée par un attaquant** et capacité connue : le solveur bitvector est consulté. Si une longueur supérieure à la capacité est satisfaisable, le verdict est UNSAFE ; le modèle est rapporté comme preuve symbolique avec des valeurs candidates non rejouables (`replayable=false`) jusqu’à la disponibilité d’un adaptateur d’entrée de processus.
 - Tout le reste — longueur ou capacité inconnue — est UNKNOWN.
 
 Toute capacité recouvrée est une **borne supérieure** de la taille réelle, donc un débordement prouvé n’est jamais un faux positif.
@@ -102,7 +102,7 @@ La machine à états du tas produit d’abord une séquence d’événements can
 
 ## Budgets, sortie et liaisons
 
-L’exploration de chasse et le solveur sont bornés (`--max-paths`, `--max-steps`, `--max-loop`, `--solver-conflicts`) ; l’épuisement du budget donne UNKNOWN. Les deux commandes impriment du JSON et honorent `-o`. Le code de sortie est `0` pour une exécution propre, `2` s’il y a une découverte UNSAFE, `1` en cas d’erreur.
+L’exploration de chasse et le solveur sont bornés (`--max-paths`, `--max-steps`, `--max-loop`, `--solver-conflicts`) ; l’épuisement du budget donne UNKNOWN. Les deux commandes impriment du JSON et honorent `-o`. Le code de sortie est `0` pour SAFE, `2` pour UNSAFE et `1` pour UNKNOWN ou une erreur.
 
 Les mêmes analyses sont disponibles via l’API C (`neverd_session_audit_json` / `neverd_session_hunt_json`, `neverd_safety_options` versionnées) et le SDK Python (`Session.audit()` / `Session.hunt()`).
 
@@ -124,7 +124,7 @@ Les mêmes analyses sont disponibles via l’API C (`neverd_session_audit_json` 
   "capacity": 16,
   "capacity_kind": "exact",
   "corroboration": "path predicate and overflow are jointly satisfiable",
-  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "17 bytes" } }
+  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" }, "candidate_values": [{ "name": "copy_length", "value": "17" }, { "name": "argv[1]", "value": "16 bytes" }], "replayable": false, "symbolic_model": [{ "id": 0, "name": "copy_len", "width": 64, "value_hex": "0x11", "origin": "input" }] }
 }
 ```
 

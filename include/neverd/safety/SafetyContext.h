@@ -7,10 +7,10 @@
 /// \file
 /// The bundle of already-produced analysis artifacts the audit and hunt tracks
 /// read: the loaded image, the lifted MedIR and LowIR, and the identity view
-/// (debug context, its origin, and caller renames).  Gathering these behind one
-/// pointer keeps the engine free of any dependency on the session or pipeline
-/// that produced them, so the same analysis runs on any format the loaders
-/// already understand.
+/// (debug context, its origin, and caller renames).  The owning PipelineResult
+/// binds coverage validation to the exact IR inventories without coupling the
+/// engine to a session, so the same analysis runs on any native format the
+/// loaders already understand.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -30,6 +30,7 @@ namespace neverd {
 struct BinaryImage;
 struct MedFunc;
 struct LowFunc;
+struct PipelineResult;
 class DebugContext;
 
 namespace safety {
@@ -40,6 +41,10 @@ struct AnalysisInput {
   const BinaryImage *Img = nullptr;
   const std::vector<MedFunc> *MedFuncs = nullptr;
   const std::vector<LowFunc> *LowFuncs = nullptr;
+  /// The PipelineResult that owns MedFuncs and LowFuncs. Public safety entry
+  /// points revalidate this exact object; a detached inventory cannot claim
+  /// decode, lift, verifier, and call-inventory completeness.
+  const PipelineResult *ValidatedPipeline = nullptr;
 
   const DebugContext *Dbg = nullptr;
   DebugInfoKind DebugKind = DebugInfoKind::None;
