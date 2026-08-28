@@ -43,8 +43,10 @@ void symbolizeImageAbsolutePointers(llvm::Module &Mod, const BinaryImage &Img) {
   // the (slid) original function VAs carry trampolines into the rewritten code.
   // This is exactly how `@__nd_data_*` data-pointer tables already stay ASLR-
   // correct.  Valid only in the patch path (original layout + trampolines
-  // preserved); the lift/round-trip path never runs this pass, so its mirror
-  // (fixed VA, no slide) is untouched.
+  // preserved).  The lift/round-trip path never runs this pass.  Ordinary
+  // mirrors therefore remain self-contained; a run containing runtime-owned
+  // callable storage is already an external declaration, so the loop below
+  // deliberately leaves it unchanged.
   for (auto &GV : llvm::make_early_inc_range(Mod.globals())) {
     if (!GV.hasInitializer())
       continue;

@@ -12,6 +12,7 @@
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
 #include "neverd/loader/ELF/ELFLoaderUtils.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
+#include "neverd/loader/PointerRelocation.h"
 
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/BinaryFormat/MachO.h"
@@ -165,6 +166,119 @@ TEST(RuntimeMetadata, KeepsNativeIATAddressWhenRecordingStub) {
   auto Names = Img.getImportAddressNames();
   EXPECT_EQ(Names[0x3020], "imported");
   EXPECT_EQ(Names[0x1010], "imported");
+}
+
+TEST(RuntimeMetadata, RecordsOnlyExactMappedImportStorageSlots) {
+  BinaryImage Img;
+  Img.Bits = Bitness::Bits64;
+  Img.Segments.push_back(makeSegment(0x1000, 0x100, true));
+  Img.Segments.push_back(makeSegment(0x3000, 0x100, false));
+  Img.Segments.push_back(makeSegment(0x5000, 0x100, false));
+  Img.Segments.back().Data.resize(4);
+
+  EXPECT_TRUE(Img.recordImportStorageSlot(
+      0x3020, "imported", 0,
+      ImportStorageEvidence::ImportDirectory));
+  ASSERT_EQ(Img.ImportStorageSlots.size(), 1u);
+  EXPECT_EQ(Img.ImportStorageSlots.at(0x3020).Name, "imported");
+  EXPECT_EQ(Img.ImportStorageSlots.at(0x3020).Addend, 0);
+  EXPECT_TRUE(Img.hasRelocationProvenanceAt(0x3020));
+  EXPECT_FALSE(recordAbsolutePointerRelocation(Img, 0x3020, 0x1010));
+  EXPECT_TRUE(Img.CodePtrRelocSlots.empty());
+
+  EXPECT_FALSE(Img.recordImportStorageSlot(
+      0x3021, "unaligned", 0,
+      ImportStorageEvidence::ImportDirectory));
+  EXPECT_FALSE(Img.recordImportStorageSlot(
+      0x1010, "executable", 0,
+      ImportStorageEvidence::ImportDirectory));
+  EXPECT_FALSE(Img.recordImportStorageSlot(
+      0x4000, "unmapped", 0,
+      ImportStorageEvidence::ImportDirectory));
+  EXPECT_FALSE(Img.recordImportStorageSlot(
+      0x5000, "truncated", 0,
+      ImportStorageEvidence::ImportDirectory));
+  EXPECT_FALSE(Img.recordImportStorageSlot(
+      0x3028, "", 0, ImportStorageEvidence::ImportDirectory));
+  EXPECT_EQ(Img.ImportStorageSlots.size(), 1u);
+
+  Import Imp;
+  Imp.Name = "imported";
+  Imp.IATAddr = 0x3020;
+  Img.Imports.push_back(std::move(Imp));
+  ASSERT_TRUE(Img.recordImportStub(0x1010, 0));
+  EXPECT_TRUE(Img.isImportStubAt(0x1010));
+  EXPECT_EQ(Img.ImportStorageSlots.count(0x1010), 0u)
+      << "an executable import veneer must not become pointer storage";
+
+  // Legacy format-native maps are normalized through the same validator; a
+  // direct-map fixture cannot turn an executable stub into storage either.
+  Img.ImportPtrSlots[0x1010] = "legacy_veneer";
+  const ImportStorageSlotCollection Collected =
+      Img.collectImportStorageSlots();
+  EXPECT_EQ(Collected.Slots.count(0x1010), 0u);
+  EXPECT_FALSE(Img.hasRelocationProvenanceAt(0x1010));
+}
+
+TEST(RuntimeMetadata, ConflictingImportStorageIdentityFailsClosed) {
+  BinaryImage Img;
+  Img.Bits = Bitness::Bits64;
+  Img.Segments.push_back(makeSegment(0x3000, 0x100, false));
+
+  ASSERT_TRUE(Img.recordImportStorageSlot(
+      0x3020, "first", 0, ImportStorageEvidence::ImportDirectory));
+  EXPECT_TRUE(Img.recordImportStorageSlot(
+      0x3020, "first", 0, ImportStorageEvidence::ImportDirectory));
+  EXPECT_FALSE(Img.recordImportStorageSlot(
+      0x3020, "second", 0, ImportStorageEvidence::ImportDirectory));
+  EXPECT_EQ(Img.ImportStorageSlots.count(0x3020), 0u);
+  EXPECT_TRUE(Img.ConflictingImportStorageSlots.count(0x3020));
+  EXPECT_TRUE(Img.hasPointerStorageProvenanceAt(0x3020));
+}
+
+TEST(RuntimeMetadata, NormalizesNativeImportStorageWithoutFirstWins) {
+  BinaryImage Img;
+  Img.Bits = Bitness::Bits64;
+  Img.Segments.push_back(makeSegment(0x3000, 0x100, false));
+
+  Img.ImportPtrSlots[0x3020] = "same";
+  Img.DyldBindSlots[0x3020] = {"same", 0};
+  ImportStorageSlotCollection Collected = Img.collectImportStorageSlots();
+  ASSERT_EQ(Collected.Slots.count(0x3020), 1u);
+  EXPECT_EQ(Collected.Slots.at(0x3020).Name, "same");
+  EXPECT_EQ(Collected.Slots.at(0x3020).Addend, 0);
+  EXPECT_EQ(Collected.Slots.at(0x3020).Evidence,
+            ImportStorageEvidence::LoaderBind);
+  EXPECT_TRUE(Collected.Conflicts.empty());
+
+  Img.DyldBindSlots[0x3020] = {"same", 12};
+  Collected = Img.collectImportStorageSlots();
+  ASSERT_EQ(Collected.Slots.count(0x3020), 1u);
+  EXPECT_EQ(Collected.Slots.at(0x3020).Addend, 12);
+
+  Img.DyldBindSlots[0x3020] = {"different", 12};
+  Collected = Img.collectImportStorageSlots();
+  EXPECT_EQ(Collected.Slots.count(0x3020), 0u);
+  EXPECT_TRUE(Collected.Conflicts.count(0x3020));
+}
+
+TEST(RuntimeMetadata, TextNormalizationKeepsImportStorageViewsConsistent) {
+  BinaryImage Img;
+  Img.Bits = Bitness::Bits64;
+  Img.Segments.push_back(makeSegment(0x3000, 0x100, false));
+  const std::string InvalidName(1, static_cast<char>(0xff));
+  ASSERT_TRUE(Img.recordImportStorageSlot(
+      0x3020, InvalidName, 0, ImportStorageEvidence::PointerTable));
+  Img.ImportPtrSlots[0x3020] = InvalidName;
+
+  normalizeBinaryMetadata(Img);
+  ASSERT_EQ(Img.ImportStorageSlots.count(0x3020), 1u);
+  EXPECT_EQ(Img.ImportStorageSlots.at(0x3020).Name,
+            Img.ImportPtrSlots.at(0x3020));
+  const ImportStorageSlotCollection Collected =
+      Img.collectImportStorageSlots();
+  EXPECT_EQ(Collected.Slots.count(0x3020), 1u);
+  EXPECT_TRUE(Collected.Conflicts.empty());
 }
 
 TEST(RuntimeMetadata, LegacyMachOIATStubFallbackRespectsSectionCodeAuthority) {
@@ -418,6 +532,9 @@ TEST(RuntimeMetadata, ParsesRVADelayImportWithExactIATSlot) {
   EXPECT_EQ(Fixture.Img.Imports[0].Module, "example.dll [delay]");
   EXPECT_EQ(Fixture.Img.Imports[0].Name, "delayed_function");
   EXPECT_EQ(Fixture.Img.Imports[0].IATAddr, 0x401100u);
+  ASSERT_EQ(Fixture.Img.ImportStorageSlots.count(0x401100u), 1u);
+  EXPECT_EQ(Fixture.Img.ImportStorageSlots.at(0x401100u).Name,
+            "delayed_function");
 }
 
 TEST(RuntimeMetadata, ParsesLegacyVADelayImportAnd64BitOrdinal) {
@@ -431,6 +548,8 @@ TEST(RuntimeMetadata, ParsesLegacyVADelayImportAnd64BitOrdinal) {
   EXPECT_EQ(Fixture.Img.Imports[0].Name, "ord_37");
   EXPECT_EQ(Fixture.Img.Imports[0].Ordinal, 37u);
   EXPECT_EQ(Fixture.Img.Imports[0].IATAddr, 0x401100u);
+  ASSERT_EQ(Fixture.Img.ImportStorageSlots.count(0x401100u), 1u);
+  EXPECT_EQ(Fixture.Img.ImportStorageSlots.at(0x401100u).Name, "ord_37");
 }
 
 TEST(RuntimeMetadata, Uses64BitStrideForEachDelayIATSlot) {
@@ -451,6 +570,9 @@ TEST(RuntimeMetadata, Uses64BitStrideForEachDelayIATSlot) {
   EXPECT_EQ(Fixture.Img.Imports[0].IATAddr, 0x401100u);
   EXPECT_EQ(Fixture.Img.Imports[1].IATAddr, 0x401108u);
   EXPECT_EQ(Fixture.Img.Imports[1].Ordinal, 38u);
+  EXPECT_EQ(Fixture.Img.ImportStorageSlots.size(), 2u);
+  EXPECT_EQ(Fixture.Img.ImportStorageSlots.at(0x401100u).Name, "ord_37");
+  EXPECT_EQ(Fixture.Img.ImportStorageSlots.at(0x401108u).Name, "ord_38");
 }
 
 TEST(RuntimeMetadata, RejectsMalformedDelayImportDescriptor) {
@@ -462,6 +584,7 @@ TEST(RuntimeMetadata, RejectsMalformedDelayImportDescriptor) {
   EXPECT_EQ(coff_loader::parseDelayImportDescriptor(Fixture.Desc, Fixture.Img),
             0u);
   EXPECT_TRUE(Fixture.Img.Imports.empty());
+  EXPECT_TRUE(Fixture.Img.ImportStorageSlots.empty());
 }
 
 TEST(RuntimeMetadata, CollectsELFLifecycleSectionsWithoutDuplicates) {

@@ -181,6 +181,8 @@ void parseNonLazyPtrImports(const llvm::object::MachOObjectFile &Obj,
         break;
       va_t SlotAddr = Sect.Addr + SI * PtrSize;
       Img.ImportPtrSlots[SlotAddr] = SymName;
+      Img.recordImportStorageSlot(SlotAddr, SymName, 0,
+                                  ImportStorageEvidence::PointerTable);
 
       LLVM_DEBUG(llvm::dbgs()
                  << "macho: ptr-slot 0x" << llvm::utohexstr(SlotAddr) << " -> "

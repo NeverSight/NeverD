@@ -130,15 +130,11 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       TargetAddr = CI->TargetAddr;
     bool IsObjectName = false;
     if (TargetAddr != 0) {
-      if (const Import *Imp = Img->findImportAt(TargetAddr))
+      if (const Import *Imp = Img->findImportStubAt(TargetAddr))
         IsObjectName = Imp->Name == Name;
       if (!IsObjectName)
-        if (auto It = Img->ImportPtrSlots.find(TargetAddr);
-            It != Img->ImportPtrSlots.end())
-          IsObjectName = It->second == Name;
-      if (!IsObjectName)
-        if (auto It = Img->DyldBindSlots.find(TargetAddr);
-            It != Img->DyldBindSlots.end())
+        if (auto It = EffectiveImportStorageSlots.find(TargetAddr);
+            It != EffectiveImportStorageSlots.end())
           IsObjectName = It->second.Name == Name;
       if (!IsObjectName)
         for (const Symbol &Sym : Img->Symbols)

@@ -59,7 +59,8 @@ std::optional<uint64_t>
 CFGBuilder::foldRegConstant(const BinaryImage &Img, const InsnRecord &Rec,
                             uint64_t Reg, va_t CutoffAddr,
                             std::function<bool(size_t)> ConsumeWork,
-                            bool RequireMappedValue) const {
+                            bool RequireMappedValue,
+                            bool AllowUnmappedCOFFImageBase) const {
   bool WorkComplete = true;
   auto consume = [&](size_t Amount = 1) {
     if (!WorkComplete)
@@ -331,7 +332,8 @@ CFGBuilder::foldRegConstant(const BinaryImage &Img, const InsnRecord &Rec,
         return V;
       if (!consume(Img.Segments.size()))
         return std::nullopt;
-      if (Img.getSegmentFor(*V))
+      if (Img.getSegmentFor(*V) ||
+          (AllowUnmappedCOFFImageBase && Img.isCOFF() && *V == Img.Base))
         return V;
     }
 
@@ -437,7 +439,9 @@ CFGBuilder::foldRegConstant(const BinaryImage &Img, const InsnRecord &Rec,
         return LocalV;
       if (!consume(Img.Segments.size()))
         return std::nullopt;
-      if (Img.getSegmentFor(*LocalV))
+      if (Img.getSegmentFor(*LocalV) ||
+          (AllowUnmappedCOFFImageBase && Img.isCOFF() &&
+           *LocalV == Img.Base))
         return LocalV;
     }
     return std::nullopt;

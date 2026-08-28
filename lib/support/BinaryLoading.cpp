@@ -45,6 +45,14 @@ void normalizeBinaryMetadata(BinaryImage &Img) {
     (void)Address;
     Normalize(Name);
   }
+  for (auto &[Address, Slot] : Img.ImportStorageSlots) {
+    (void)Address;
+    Normalize(Slot.Name);
+  }
+  for (auto &[Address, Binding] : Img.DyldBindSlots) {
+    (void)Address;
+    Normalize(Binding.Name);
+  }
 
   Normalize(Img.DynInfo.SOName);
   for (auto &Name : Img.DynInfo.NeededLibs)

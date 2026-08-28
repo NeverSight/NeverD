@@ -448,12 +448,9 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
         break;
       }
     if (!IsObjectName && Entry.TypeInfoSlotVA != 0) {
-      if (const Import *Imp = Img->findImportAt(Entry.TypeInfoSlotVA))
-        IsObjectName = Imp->Name == Name;
-      if (!IsObjectName)
-        if (auto It = Img->ImportPtrSlots.find(Entry.TypeInfoSlotVA);
-            It != Img->ImportPtrSlots.end())
-          IsObjectName = It->second == Name;
+      if (auto It = EffectiveImportStorageSlots.find(Entry.TypeInfoSlotVA);
+          It != EffectiveImportStorageSlots.end())
+        IsObjectName = It->second.Name == Name;
     }
     if (!IsObjectName)
       for (const RelocationEntry &Rel : Img->Relocations)

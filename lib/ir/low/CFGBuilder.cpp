@@ -1112,8 +1112,7 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
                   TargetVA = static_cast<uint32_t>(TargetVA);
               }
               const bool OwnerMatches =
-                  It->second.Kind ==
-                          RelocatedAddressFieldKind::I386ELFGOTOFF
+                  It->second.Kind == RelocatedAddressFieldKind::I386ELFGOTOFF
                       ? Img.relocatedI386GOTOFFTargetBelongsToOwner(
                             TargetVA, It->second.TargetOwnerVA)
                       : Img.relocatedTargetBelongsToOwner(
@@ -1131,8 +1130,7 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       selectRelocatedOperand(Img.CodeAddressRelocOperands,
                              ConstantAddressProvenance::CodeAddress);
       std::vector<RelocatedScalarOperand> RelocatedScalarOperands;
-      if (Img.Arch == Arch::X86 && Img.isELF() &&
-          Img.getPointerSize() == 4) {
+      if (Img.Arch == Arch::X86 && Img.isELF() && Img.getPointerSize() == 4) {
         auto Field = Img.I386GOTPCFields.lower_bound(Cur);
         for (; Field != Img.I386GOTPCFields.end() && Field->first < Next;
              ++Field)
@@ -1167,8 +1165,7 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
         }
       }
       try {
-        Dec.liftToLow(DI, Rec.Ops, RelocatedOperands,
-                      RelocatedScalarOperands);
+        Dec.liftToLow(DI, Rec.Ops, RelocatedOperands, RelocatedScalarOperands);
       } catch (const UnliftedInstruction &Failure) {
         UnsupportedInstructionAddresses.insert(Failure.getAddr());
         break;
@@ -1200,8 +1197,13 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
           if (!ConsumedOutput && MatchingInputs == 0)
             continue;
           RelocatedInstructionAddressOccurrence Occurrence{
-              Reloc.FieldVA, Rec.Addr, Op.Seq, Reloc.TargetVA,
-              Reloc.TargetOwnerVA, Reloc.Width, Reloc.Provenance,
+              Reloc.FieldVA,
+              Rec.Addr,
+              Op.Seq,
+              Reloc.TargetVA,
+              Reloc.TargetOwnerVA,
+              Reloc.Width,
+              Reloc.Provenance,
               Reloc.PCRelativeFromInstructionEnd};
           if (!ConsumedOutput && MatchingInputs == 1)
             Occurrence.InputIndex = MatchingInput;
@@ -1224,6 +1226,12 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
           DiscoveredCodeRefs.insert(Ref);
           DiscoveredCodeRefSources[Ref].insert(Cur);
 
+          // Preserve the decoded address-of as an occurrence certificate, not
+          // merely as a module-wide target number.  A pure RIP/EIP-relative
+          // LEA has exactly one architectural pointer-width COPY from its
+          // effective-address temporary.  Binding that exact output prevents a
+          // later scalar with the same numeric value (or a LEA into a different
+          // register) from acquiring code-address provenance.
           const LowOp *Output = nullptr;
           bool AmbiguousOutput = false;
           const uint16_t PointerSize = Img.getPointerSize();
@@ -1537,8 +1545,7 @@ void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
       if ((Rec.BranchTarget == GetPc.InstructionAddr) ||
           (Rec.IsCall && Rec.Immediate &&
            *Rec.Immediate == GetPc.InstructionAddr) ||
-          llvm::is_contained(Rec.JumpTableTargets,
-                             GetPc.InstructionAddr))
+          llvm::is_contained(Rec.JumpTableTargets, GetPc.InstructionAddr))
         HasAlternateEntry = true;
     }
     if (HasAlternateEntry)
@@ -1595,8 +1602,7 @@ void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
         PopAdjust = &Op;
       }
     }
-    if (!PopLoad || !PopAdjust ||
-        PopLoad->Inputs[0] != PushStore->Inputs[0] ||
+    if (!PopLoad || !PopAdjust || PopLoad->Inputs[0] != PushStore->Inputs[0] ||
         PopAdjust->Output != PopLoad->Inputs[0] ||
         PopLoad->Seq >= Producer->Seq || Producer->Seq >= PopAdjust->Seq)
       continue;
@@ -1643,13 +1649,11 @@ void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
              {1, OrderedLookupWork(Insns.size())},
              {1, OrderedLookupWork(SeedsByPC.size())}}))
       return;
-    if (Operand.Kind !=
-            RelocatedInstructionScalarOperandOccurrence::OperandKind::
-                I386ELFGOTPC ||
+    if (Operand.Kind != RelocatedInstructionScalarOperandOccurrence::
+                            OperandKind::I386ELFGOTPC ||
         Operand.Width != 4 || Operand.InputIndex >= 2 ||
         Operand.Opcode != NdOp::INT_ADD || Operand.OutputWitness.Size != 4 ||
-        (!Operand.OutputWitness.isReg() &&
-         !Operand.OutputWitness.isTemp()) ||
+        (!Operand.OutputWitness.isReg() && !Operand.OutputWitness.isTemp()) ||
         !PublishedReachableInsns.count(Operand.InstructionAddr) ||
         !SeenOperandPoints
              .insert({Operand.FieldVA, Operand.InstructionAddr, Operand.OpSeq})
@@ -1940,8 +1944,7 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
         Op.Output.Size != Img.getPointerSize() || !Op.Inputs[0].isConst() ||
         (Op.Inputs[0].Provenance !=
              ConstantAddressProvenance::AddressFragment &&
-         Op.Inputs[0].Provenance !=
-             ConstantAddressProvenance::DataAddress) ||
+         Op.Inputs[0].Provenance != ConstantAddressProvenance::DataAddress) ||
         Op.Inputs[0].Offset != PageBase)
       continue;
     PageDefinitions.push_back(
@@ -2033,8 +2036,7 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
       const bool IsExact = Complete && HasExactQuery &&
                            Candidate.ExactQuery < Matches.size() &&
                            Matches[Candidate.ExactQuery];
-      const bool MayDepend = Complete &&
-                             Candidate.MayQuery < Matches.size() &&
+      const bool MayDepend = Complete && Candidate.MayQuery < Matches.size() &&
                              Matches[Candidate.MayQuery];
       // A complete query that proves no authenticated page reaches this ADD is
       // not address evidence: an unrelated/sibling ADRP must not poison module
@@ -2063,8 +2065,7 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
       Occurrence.OutputWitness = Op.Output;
       if (!llvm::is_contained(RelocatedInstructionAddressOccurrences,
                               Occurrence))
-        RelocatedInstructionAddressOccurrences.push_back(
-            std::move(Occurrence));
+        RelocatedInstructionAddressOccurrences.push_back(std::move(Occurrence));
     }
   }
 
@@ -2081,15 +2082,13 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
 
   const uint16_t PointerSize = Img.getPointerSize();
   const unsigned PointerBits = static_cast<unsigned>(PointerSize) * 8;
-  const uint64_t PointerMask =
-      PointerBits == 64 ? std::numeric_limits<uint64_t>::max()
-                        : (uint64_t{1} << PointerBits) - 1;
+  const uint64_t PointerMask = PointerBits == 64
+                                   ? std::numeric_limits<uint64_t>::max()
+                                   : (uint64_t{1} << PointerBits) - 1;
   auto canonicalArithmeticScalar =
       [&](const LowOp &Op, int BaseSide) -> std::optional<uint64_t> {
-    if (BaseSide < 0 || BaseSide > 1 ||
-        !Op.Inputs[1 - BaseSide].isConst() ||
-        Op.Inputs[1 - BaseSide].Provenance !=
-            ConstantAddressProvenance::Scalar)
+    if (BaseSide < 0 || BaseSide > 1 || !Op.Inputs[1 - BaseSide].isConst() ||
+        Op.Inputs[1 - BaseSide].Provenance != ConstantAddressProvenance::Scalar)
       return std::nullopt;
     const NdVar &Scalar = Op.Inputs[1 - BaseSide];
     if (Scalar.Size == PointerSize)
@@ -2107,12 +2106,12 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
     if (!Bytes)
       return std::nullopt;
     const uint32_t Word = readLE<uint32_t>(Bytes);
-    if ((Word & 0x1f000000u) != 0x11000000u ||
-        (Word & 0x80000000u) == 0 || (Word & 0x20000000u) != 0 ||
+    if ((Word & 0x1f000000u) != 0x11000000u || (Word & 0x80000000u) == 0 ||
+        (Word & 0x20000000u) != 0 ||
         (((Word & 0x40000000u) != 0) != (Op.Opcode == NdOp::INT_SUB)))
       return std::nullopt;
-    const uint64_t Encoded =
-        uint64_t((Word >> 10) & 0xfffu) << (((Word >> 22) & 1u) ? 12 : 0);
+    const uint64_t Encoded = uint64_t((Word >> 10) & 0xfffu)
+                             << (((Word >> 22) & 1u) ? 12 : 0);
     if (Encoded != Scalar.Offset)
       return std::nullopt;
     return Encoded;
@@ -2123,8 +2122,7 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
         Op.NumInputs != 2 || BaseSide < 0 || BaseSide > 1 ||
         (Op.Opcode == NdOp::INT_SUB && BaseSide != 0) ||
         Op.Output.Size != PointerSize ||
-        Op.Inputs[BaseSide].Size != PointerSize ||
-        Base > PointerMask)
+        Op.Inputs[BaseSide].Size != PointerSize || Base > PointerMask)
       return std::nullopt;
     const std::optional<uint64_t> Delta =
         canonicalArithmeticScalar(Op, BaseSide);
@@ -2204,22 +2202,20 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
 
     NdVar CurrentValue = Root.Output;
     va_t CurrentAddress = Root.Inputs[0].Offset;
-    JumpTableValueOccurrence CurrentDefinition{
-        Root.Output, Root.Addr, Root.Seq, /*DefinedAtPoint=*/true};
+    JumpTableValueOccurrence CurrentDefinition{Root.Output, Root.Addr, Root.Seq,
+                                               /*DefinedAtPoint=*/true};
     std::vector<RelocatedInstructionAddressArithmeticStep> Steps;
     std::vector<JumpTableValueQuery> CandidateQueries;
     va_t ExpectedAddress = RootRec.Addr + RootRec.Size;
 
     for (auto UseIt = std::next(RootIt);
-         UseIt != Insns.end() &&
-         Steps.size() < MaxLookaheadInstructions;
+         UseIt != Insns.end() && Steps.size() < MaxLookaheadInstructions;
          ++UseIt) {
       const InsnRecord &UseRec = UseIt->second;
       if (UseRec.Addr != ExpectedAddress || UseRec.Size == 0 ||
-          UseRec.Size > InvalidVA - UseRec.Addr ||
-          UseRec.IsInstructionGuard || UseRec.IsBranch || UseRec.IsCall ||
-          UseRec.IsRet || UseRec.IsOpaqueTerminator ||
-          UseRec.IsResumableTerminator)
+          UseRec.Size > InvalidVA - UseRec.Addr || UseRec.IsInstructionGuard ||
+          UseRec.IsBranch || UseRec.IsCall || UseRec.IsRet ||
+          UseRec.IsOpaqueTerminator || UseRec.IsResumableTerminator)
         break;
 
       // AArch64 unsigned-offset LDR/STR folds the address calculation into the
@@ -2436,17 +2432,16 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
             checkedArithmetic(CurrentAddress, *Arithmetic, BaseSide);
         if (!NextAddress)
           break;
-        CandidateQueries.push_back(
-            {Arithmetic->Inputs[BaseSide], Arithmetic->Addr, Arithmetic->Seq,
-             {CurrentDefinition}, /*AllowZeroExtension=*/false,
-             /*AllowSignExtension=*/false});
-        Steps.push_back({Arithmetic->Addr,
-                         Arithmetic->Seq,
-                         Arithmetic->Opcode,
+        CandidateQueries.push_back({Arithmetic->Inputs[BaseSide],
+                                    Arithmetic->Addr,
+                                    Arithmetic->Seq,
+                                    {CurrentDefinition},
+                                    /*AllowZeroExtension=*/false,
+                                    /*AllowSignExtension=*/false});
+        Steps.push_back({Arithmetic->Addr, Arithmetic->Seq, Arithmetic->Opcode,
                          static_cast<uint8_t>(BaseSide),
                          Arithmetic->Inputs[BaseSide],
-                         Arithmetic->Inputs[1 - BaseSide],
-                         Arithmetic->Output});
+                         Arithmetic->Inputs[1 - BaseSide], Arithmetic->Output});
         CurrentValue = Arithmetic->Output;
         CurrentAddress = *NextAddress;
         CurrentDefinition = {Arithmetic->Output, Arithmetic->Addr,
@@ -2500,21 +2495,21 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
         break;
       const std::optional<va_t> Owner = uniqueImmutableDataOwner(
           CurrentAddress, DereferenceMemory.AccessSize);
-      if (!Owner ||
-          !Img.relocatedTargetBelongsToOwner(CurrentAddress, *Owner))
+      if (!Owner || !Img.relocatedTargetBelongsToOwner(CurrentAddress, *Owner))
         break;
 
-      CandidateQueries.push_back(
-          {DereferenceAddress, Dereference->Addr, Dereference->Seq,
-           {CurrentDefinition}, /*AllowZeroExtension=*/false,
-           /*AllowSignExtension=*/false});
+      CandidateQueries.push_back({DereferenceAddress,
+                                  Dereference->Addr,
+                                  Dereference->Seq,
+                                  {CurrentDefinition},
+                                  /*AllowZeroExtension=*/false,
+                                  /*AllowSignExtension=*/false});
       RelocationFreeCandidate Candidate;
       for (JumpTableValueQuery &Query : CandidateQueries) {
         Candidate.QueryIndices.push_back(RelocationFreeQueries.size());
         RelocationFreeQueries.push_back(std::move(Query));
       }
-      RelocatedInstructionAddressOccurrence &Occurrence =
-          Candidate.Occurrence;
+      RelocatedInstructionAddressOccurrence &Occurrence = Candidate.Occurrence;
       Occurrence.FieldVA = InvalidVA;
       Occurrence.InstructionAddr = Steps.back().InstructionAddr;
       Occurrence.OpSeq = Steps.back().OpSeq;
@@ -2985,9 +2980,9 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
     const bool RefreshAArch64Addresses = Img.Arch == Arch::AArch64;
     const bool RefreshARMAddresses =
         Img.Arch == Arch::ARM && Img.isELF() && Img.getPointerSize() == 4;
-    const bool RefreshI386Addresses =
-        Img.Arch == Arch::X86 && Img.isELF() && Img.getPointerSize() == 4 &&
-        !Img.I386GOTPCFields.empty();
+    const bool RefreshI386Addresses = Img.Arch == Arch::X86 && Img.isELF() &&
+                                      Img.getPointerSize() == 4 &&
+                                      !Img.I386GOTPCFields.empty();
     if (RefreshAArch64Addresses || RefreshARMAddresses ||
         RefreshI386Addresses) {
       ActiveJumpTableProofRoots.reset();
@@ -3175,8 +3170,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       const bool WasProofDependent = PriorInfo != ResolvedTableInfo.end() &&
                                      PriorInfo->second.RequiresCompleteCFGProof;
 
-      if (It->second.JumpTableTargets.empty() &&
-          !PrepayTargetSetOperations(1))
+      if (It->second.JumpTableTargets.empty() && !PrepayTargetSetOperations(1))
         break;
       if (It->second.JumpTableTargets.empty() &&
           resolveRelocatedInteriorBranch(Img, It->second)) {
@@ -3233,15 +3227,13 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       // the element-wise equality walk here, still before comparing or moving
       // either target vector.
       if (!ConsumeProposalStageProducts(
-              {{It->second.JumpTableTargets.size(), 1},
-               {Targets.size(), 1}}))
+              {{It->second.JumpTableTargets.size(), 1}, {Targets.size(), 1}}))
         break;
       if (Targets != It->second.JumpTableTargets) {
         It->second.JumpTableTargets = std::move(Targets);
         MadeProgress = true;
       }
-      const std::vector<va_t> &PublishedTargets =
-          It->second.JumpTableTargets;
+      const std::vector<va_t> &PublishedTargets = It->second.JumpTableTargets;
       if (!PublishedTargets.empty()) {
         if (!ConsumeProposalStageEvidence(
                 OrderedLookupWork(EverPublishedJumpTableBranches.size()) + 1))
@@ -3392,9 +3384,8 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
           PriorClearWork += Proposal.SuppressibleRelocationSlots.size();
           return true;
         };
-    bool ProposalUniverseChanged =
-        PriorStrongJumpTableProposals.size() !=
-        NextStrongJumpTableProposals.size();
+    bool ProposalUniverseChanged = PriorStrongJumpTableProposals.size() !=
+                                   NextStrongJumpTableProposals.size();
     auto PriorIt = PriorStrongJumpTableProposals.begin();
     auto NextIt = NextStrongJumpTableProposals.begin();
     while (PriorIt != PriorStrongJumpTableProposals.end() ||
@@ -3409,8 +3400,8 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
           break;
         }
         const va_t LostAddr = PriorIt->first;
-        if (!ConsumeProposalStageEvidence(OrderedLookupWork(
-                StrongJumpTableProposalOutcomes.size())))
+        if (!ConsumeProposalStageEvidence(
+                OrderedLookupWork(StrongJumpTableProposalOutcomes.size())))
           break;
         auto OutcomeIt = StrongJumpTableProposalOutcomes.find(LostAddr);
         if (OutcomeIt == StrongJumpTableProposalOutcomes.end() ||

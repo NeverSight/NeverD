@@ -856,6 +856,57 @@ bool constantContainsBlockAddress(const llvm::Constant *Root) {
   return false;
 }
 
+void collectBlockAddresses(const llvm::Value *Root,
+                           std::set<const llvm::Value *> &Seen,
+                           std::set<const llvm::BlockAddress *> &Addresses) {
+  if (!Root || !Seen.insert(Root).second)
+    return;
+  if (const auto *Address = llvm::dyn_cast<llvm::BlockAddress>(Root)) {
+    Addresses.insert(Address);
+    return;
+  }
+  if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(Root))
+    if (const auto *Slot = llvm::dyn_cast<llvm::AllocaInst>(
+            Load->getPointerOperand()->stripPointerCasts()))
+      for (const llvm::User *User : Slot->users())
+        if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(User);
+            Store && Store->getPointerOperand()->stripPointerCasts() == Slot)
+          collectBlockAddresses(Store->getValueOperand(), Seen, Addresses);
+  const auto *User = llvm::dyn_cast<llvm::User>(Root);
+  if (!User)
+    return;
+  for (const llvm::Use &Operand : User->operands())
+    collectBlockAddresses(Operand.get(), Seen, Addresses);
+}
+
+bool observableValueReferencesInteger(const llvm::Value *Root, uint64_t Value,
+                                      std::set<const llvm::Value *> &Seen) {
+  if (!Root || !Seen.insert(Root).second)
+    return false;
+  // A blockaddress is the relocatable terminal we are proving. Its internal
+  // LLVM operands are ownership objects, not source integer-value flow.
+  if (llvm::isa<llvm::BlockAddress>(Root))
+    return false;
+  if (const auto *Int = llvm::dyn_cast<llvm::ConstantInt>(Root))
+    return Int->getZExtValue() == Value;
+  if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(Root))
+    if (const auto *Slot = llvm::dyn_cast<llvm::AllocaInst>(
+            Load->getPointerOperand()->stripPointerCasts()))
+      for (const llvm::User *User : Slot->users())
+        if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(User);
+            Store && Store->getPointerOperand()->stripPointerCasts() == Slot &&
+            observableValueReferencesInteger(Store->getValueOperand(), Value,
+                                             Seen))
+          return true;
+  const auto *User = llvm::dyn_cast<llvm::User>(Root);
+  if (!User)
+    return false;
+  for (const llvm::Use &Operand : User->operands())
+    if (observableValueReferencesInteger(Operand.get(), Value, Seen))
+      return true;
+  return false;
+}
+
 bool constantContainsIntegerImpl(const llvm::Constant *Root, uint64_t Value,
                                  std::set<const llvm::Constant *> &Seen) {
   if (!Root || !Seen.insert(Root).second)
@@ -975,6 +1026,11 @@ void addImport(BinaryImage &Image, llvm::StringRef Name, va_t Address) {
   Image.Imports.push_back(std::move(Imported));
 }
 
+void addImportStub(BinaryImage &Image, llvm::StringRef Name, va_t Address) {
+  addImport(Image, Name, Address);
+  ASSERT_TRUE(Image.recordImportStub(Address, Image.Imports.size() - 1));
+}
+
 BinaryImage makeLLVMImage() {
   BinaryImage Image = makeChainedImage();
   Segment &Data = Image.Segments[1];
@@ -989,7 +1045,7 @@ BinaryImage makeLLVMImage() {
   Image.DataPtrRelocSlots.insert(DataVA + 16);
   Image.DataPtrRelocSlots.insert(DataVA + 24);
   addImport(Image, "___stdoutp", DataVA);
-  addImport(Image, "_getopt_long", ImportStubVA);
+  addImportStub(Image, "_getopt_long", ImportStubVA);
   return Image;
 }
 
@@ -8163,9 +8219,10 @@ TEST(MachOLLVMImportPointerBoundary, SymbolizesImportOnlyRun) {
   Image.DyldBindSlots.clear();
   Image.ImportPtrSlots.clear();
   Image.Imports.clear();
+  Image.ImportStubIndices.clear();
   Image.DyldBindSlots[DataVA] = {"___stderrp", 0};
   Image.ImportPtrSlots[DataVA + 8] = "___stdoutp";
-  addImport(Image, "_getopt_long", ImportStubVA);
+  addImportStub(Image, "_getopt_long", ImportStubVA);
 
   MedFunc Caller = makePointerCall("import_only_caller", ImportStubVA,
                                    {MedVar::makeConst(DataVA, 8)});
@@ -8416,7 +8473,7 @@ TEST(MachOLLVMDataPointerBoundary, SymbolizesDirectAndAllDataSelect) {
 
 TEST(MachOLLVMDataPointerBoundary, SymbolizesExecutableCStringPhi) {
   BinaryImage Image = makeLLVMImage();
-  addImport(Image, "_printf", ImportStubVA + 4);
+  addImportStub(Image, "_printf", ImportStubVA + 4);
   MedFunc Caller = makePhiPointerCaller();
   llvm::LLVMContext Context;
   testing::internal::CaptureStderr();
@@ -11064,6 +11121,179 @@ TEST(LLVMCodePointerInvariantBoundary,
     EXPECT_TRUE(valueReferencesSpecificGlobal(Calls.front()->getCalledOperand(),
                                               Mirror, Seen));
   }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     RuntimeCallableNullSlotUsesExternalOriginalRun) {
+  constexpr uint64_t SlotOffset = 8;
+  constexpr va_t SlotVA = DataVA + SlotOffset;
+  BinaryImage Image =
+      makeMixedPointerRecordImage(Arch::X64, BinaryFormat::COFF);
+  Image.CodePtrRelocSlots.clear();
+  Image.DataPtrRelocSlots.clear();
+  writeObject(Image.Segments[1].Data, SlotOffset, uint64_t{0});
+  ASSERT_TRUE(Image.recordRuntimeCallablePointerSlot(
+      SlotVA,
+      RuntimeCallablePointerSlotKind::CastGuardOsDeterminedFailureMode));
+  MedFunc Caller =
+      makeExactMixedPointerSlotIndirectCaller(Arch::X64, SlotOffset);
+
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit(
+      {Caller}, Context, "runtime-callable-null-slot", Arch::X64, {}, &Image,
+      BinaryFormat::COFF);
+  ASSERT_NE(Module, nullptr);
+  expectValidModule(*Module);
+
+  llvm::GlobalVariable *OriginalRun = Module->getNamedGlobal(
+      (kNdCodePtrPrefix + llvm::utohexstr(DataVA)).str());
+  ASSERT_NE(OriginalRun, nullptr);
+  EXPECT_TRUE(OriginalRun->isDeclaration());
+  EXPECT_FALSE(OriginalRun->hasInitializer());
+  EXPECT_TRUE(OriginalRun->hasExternalLinkage());
+  EXPECT_FALSE(OriginalRun->isConstant());
+  EXPECT_TRUE(OriginalRun->isDSOLocal());
+
+  llvm::Function *EmittedCaller = Module->getFunction(Caller.Name);
+  ASSERT_NE(EmittedCaller, nullptr);
+  std::vector<llvm::CallInst *> Calls = callsIn(*EmittedCaller);
+  ASSERT_EQ(Calls.size(), 1u);
+  std::set<const llvm::Value *> Seen;
+  EXPECT_TRUE(valueReferencesSpecificGlobal(Calls.front()->getCalledOperand(),
+                                            OriginalRun, Seen));
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     RuntimeCallableCodeFallbackUsesExternalOriginalRun) {
+  constexpr uint64_t SlotOffset = 8;
+  constexpr va_t SlotVA = DataVA + SlotOffset;
+  BinaryImage Image =
+      makeMixedPointerRecordImage(Arch::X64, BinaryFormat::COFF);
+  Image.CodePtrRelocSlots.clear();
+  Image.DataPtrRelocSlots.clear();
+  writeObject(Image.Segments[1].Data, SlotOffset, CodeVA);
+  Image.CodePtrRelocSlots.insert(SlotVA);
+  ASSERT_TRUE(Image.recordRuntimeCallablePointerSlot(
+      SlotVA, RuntimeCallablePointerSlotKind::GuardMemcpy));
+  MedFunc Caller =
+      makeExactMixedPointerSlotIndirectCaller(Arch::X64, SlotOffset);
+  MedFunc Callee =
+      makeReturnFunction("runtime_callable_code_fallback", CodeVA);
+
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit(
+      {Caller, Callee}, Context, "runtime-callable-code-fallback", Arch::X64,
+      {}, &Image, BinaryFormat::COFF);
+  ASSERT_NE(Module, nullptr);
+  expectValidModule(*Module);
+
+  llvm::GlobalVariable *OriginalRun = Module->getNamedGlobal(
+      (kNdCodePtrPrefix + llvm::utohexstr(DataVA)).str());
+  ASSERT_NE(OriginalRun, nullptr);
+  EXPECT_TRUE(OriginalRun->isDeclaration());
+  EXPECT_FALSE(OriginalRun->hasInitializer());
+  EXPECT_TRUE(OriginalRun->hasExternalLinkage());
+  EXPECT_FALSE(OriginalRun->isConstant());
+  EXPECT_TRUE(OriginalRun->isDSOLocal());
+
+  llvm::Function *EmittedCaller = Module->getFunction(Caller.Name);
+  ASSERT_NE(EmittedCaller, nullptr);
+  std::vector<llvm::CallInst *> Calls = callsIn(*EmittedCaller);
+  ASSERT_EQ(Calls.size(), 1u);
+  std::set<const llvm::Value *> Seen;
+  EXPECT_TRUE(valueReferencesSpecificGlobal(Calls.front()->getCalledOperand(),
+                                            OriginalRun, Seen));
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     RuntimeCallableDataOverlapFailsClosed) {
+  constexpr uint64_t SlotOffset = 8;
+  constexpr va_t SlotVA = DataVA + SlotOffset;
+  BinaryImage Image =
+      makeMixedPointerRecordImage(Arch::X64, BinaryFormat::COFF);
+  Image.CodePtrRelocSlots.clear();
+  Image.DataPtrRelocSlots.clear();
+  writeObject(Image.Segments[1].Data, SlotOffset, CStringVA);
+  Image.DataPtrRelocSlots.insert(SlotVA);
+  ASSERT_TRUE(Image.recordRuntimeCallablePointerSlot(
+      SlotVA, RuntimeCallablePointerSlotKind::GuardMemcpy));
+  MedFunc Caller =
+      makeExactMixedPointerSlotIndirectCaller(Arch::X64, SlotOffset);
+
+  llvm::LLVMContext Context;
+  testing::internal::CaptureStderr();
+  auto Module = MedLLVMEmitter().emit(
+      {Caller}, Context, "runtime-callable-data-overlap", Arch::X64, {}, &Image,
+      BinaryFormat::COFF);
+  std::string Diagnostic = testing::internal::GetCapturedStderr();
+  EXPECT_EQ(Module, nullptr);
+  EXPECT_NE(Diagnostic.find("runtime-callable pointer slot"), std::string::npos)
+      << Diagnostic;
+  EXPECT_NE(Diagnostic.find("conflicts with its static pointer role"),
+            std::string::npos)
+      << Diagnostic;
+  EXPECT_NE(Diagnostic.find("refusing ambiguous storage contract"),
+            std::string::npos)
+      << Diagnostic;
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     UnmarkedNullPointerTableSlotFailsClosed) {
+  constexpr uint64_t NullSlotOffset = 0;
+  constexpr uint64_t CodeSlotOffset = 8;
+  BinaryImage Image =
+      makeMixedPointerRecordImage(Arch::X64, BinaryFormat::COFF);
+  Image.CodePtrRelocSlots.clear();
+  Image.DataPtrRelocSlots.clear();
+  writeObject(Image.Segments[1].Data, NullSlotOffset, uint64_t{0});
+  writeObject(Image.Segments[1].Data, CodeSlotOffset, CodeVA);
+  Image.CodePtrRelocSlots.insert(DataVA + CodeSlotOffset);
+  MedFunc Caller =
+      makeExactMixedPointerSlotIndirectCaller(Arch::X64, NullSlotOffset);
+  MedFunc Callee = makeReturnFunction("unmarked_null_neighbor", CodeVA);
+
+  llvm::LLVMContext Context;
+  testing::internal::CaptureStderr();
+  auto Module = MedLLVMEmitter().emit(
+      {Caller, Callee}, Context, "unmarked-null-pointer-table-slot", Arch::X64,
+      {}, &Image, BinaryFormat::COFF);
+  std::string Diagnostic = testing::internal::GetCapturedStderr();
+  EXPECT_EQ(Module, nullptr);
+  EXPECT_NE(Diagnostic.find("has no complete code-slot role"),
+            std::string::npos)
+      << Diagnostic;
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     RuntimeCallableCodeFallbackStillRequiresLiftedOwner) {
+  constexpr uint64_t SlotOffset = 8;
+  constexpr va_t SlotVA = DataVA + SlotOffset;
+  BinaryImage Image =
+      makeMixedPointerRecordImage(Arch::X64, BinaryFormat::COFF);
+  Image.CodePtrRelocSlots.clear();
+  Image.DataPtrRelocSlots.clear();
+  writeObject(Image.Segments[1].Data, SlotOffset, CodeVA);
+  Image.CodePtrRelocSlots.insert(SlotVA);
+  ASSERT_TRUE(Image.recordRuntimeCallablePointerSlot(
+      SlotVA, RuntimeCallablePointerSlotKind::GuardMemcpy));
+  MedFunc Caller =
+      makeExactMixedPointerSlotIndirectCaller(Arch::X64, SlotOffset);
+
+  llvm::LLVMContext Context;
+  testing::internal::CaptureStderr();
+  auto Module = MedLLVMEmitter().emit(
+      {Caller}, Context, "runtime-callable-unresolved-code-fallback", Arch::X64,
+      {}, &Image, BinaryFormat::COFF);
+  std::string Diagnostic = testing::internal::GetCapturedStderr();
+  EXPECT_EQ(Module, nullptr);
+  EXPECT_NE(Diagnostic.find("relocation-proven code pointer"),
+            std::string::npos)
+      << Diagnostic;
+  EXPECT_NE(Diagnostic.find("targets unresolved address"), std::string::npos)
+      << Diagnostic;
+  EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+            std::string::npos)
+      << Diagnostic;
 }
 
 TEST(LLVMCodePointerInvariantBoundary,
@@ -14348,8 +14578,8 @@ enum class ExactAddressMergeKind { Phi, Select };
 
 MedFunc makeMergedExactAddressIndirectCaller(ExactAddressMergeKind Kind,
                                              va_t FirstTarget,
-                                             va_t SecondTarget) {
-  constexpr Arch TargetArch = Arch::AArch64;
+                                             va_t SecondTarget,
+                                             Arch TargetArch = Arch::AArch64) {
   const uint16_t PointerSize =
       static_cast<uint16_t>(getTargetRegInfo(TargetArch).PointerSize);
   auto temp = [&](int Id) {
@@ -14473,6 +14703,84 @@ MedFunc makeMergedExactAddressIndirectCaller(ExactAddressMergeKind Kind,
 
   Func.Blocks = {std::move(Entry), std::move(FirstBlock),
                  std::move(SecondBlock), std::move(MergeBlock)};
+  return Func;
+}
+
+MedFunc makeMergedExactAddressReturn(ExactAddressMergeKind Kind,
+                                     Arch TargetArch, va_t FirstTarget,
+                                     va_t SecondTarget) {
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  const uint16_t PointerSize = static_cast<uint16_t>(TRI.PointerSize);
+  MedFunc Func = makeMergedExactAddressIndirectCaller(
+      Kind, FirstTarget, SecondTarget, TargetArch);
+  Func.Name = Kind == ExactAddressMergeKind::Phi
+                  ? "merged_exact_address_phi_return"
+                  : "merged_exact_address_select_return";
+  Func.ReturnType = NdType::makeInt(PointerSize);
+
+  MedVar ReturnReg;
+  ReturnReg.Kind = MedVar::Reg;
+  ReturnReg.TheArch = TargetArch;
+  ReturnReg.Id = 13;
+  ReturnReg.SSAVer = 1;
+  ReturnReg.Size = PointerSize;
+  ReturnReg.RegOff = TRI.IntReturnReg;
+  for (MedBlock &Block : Func.Blocks)
+    for (MedOp &Op : Block.Ops)
+      if (Op.Opcode == NdOp::INDIR_CALL) {
+        const MedVar Merged = Op.Inputs[0];
+        MedOp WriteReturn;
+        WriteReturn.Opcode = NdOp::COPY;
+        WriteReturn.Addr = Op.Addr;
+        WriteReturn.Output = ReturnReg;
+        WriteReturn.addInput(Merged);
+        Op = std::move(WriteReturn);
+      }
+  return Func;
+}
+
+void replaceSecondMergedAddressArm(MedFunc &Func, ExactAddressMergeKind Kind,
+                                   const MedVar &Replacement) {
+  if (Kind == ExactAddressMergeKind::Select) {
+    ASSERT_FALSE(Func.Blocks.empty());
+    ASSERT_FALSE(Func.Blocks.front().Ops.empty());
+    MedOp &Select = Func.Blocks.front().Ops.front();
+    ASSERT_EQ(Select.Opcode, NdOp::SELECT);
+    ASSERT_GE(Select.NumInputs, 3u);
+    Select.Inputs[2] = Replacement;
+    return;
+  }
+
+  ASSERT_GE(Func.Blocks.size(), 3u);
+  ASSERT_FALSE(Func.Blocks[2].Ops.empty());
+  MedOp &Copy = Func.Blocks[2].Ops.front();
+  ASSERT_EQ(Copy.Opcode, NdOp::COPY);
+  ASSERT_GE(Copy.NumInputs, 1u);
+  Copy.Inputs[0] = Replacement;
+}
+
+MedFunc makeInteriorCodeIdentityOwner(llvm::StringRef Name, va_t EntryVA,
+                                      va_t FirstInteriorVA,
+                                      va_t SecondInteriorVA) {
+  MedFunc Func;
+  Func.Entry = EntryVA;
+  Func.Name = Name.str();
+  Func.ReturnType = NdType::makeVoid();
+
+  auto AddBlock = [&](int Id, va_t Address) {
+    MedBlock Block;
+    Block.Id = Id;
+    Block.StartAddr = Address;
+    Block.EndAddr = Address + 4;
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Return.Addr = Address;
+    Block.Ops.push_back(std::move(Return));
+    Func.Blocks.push_back(std::move(Block));
+  };
+  AddBlock(0, EntryVA);
+  AddBlock(1, FirstInteriorVA);
+  AddBlock(2, SecondInteriorVA);
   return Func;
 }
 
@@ -16202,6 +16510,193 @@ TEST(LLVMCodePointerInvariantBoundary,
       std::string Diagnostic = testing::internal::GetCapturedStderr();
       EXPECT_EQ(Module, nullptr);
       EXPECT_NE(Diagnostic.find("no unique lifted function entry"),
+                std::string::npos)
+          << Diagnostic;
+    }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     PreservesDistinctSameOwnerBlockAddressesAcrossValueMerges) {
+  constexpr Arch TargetArch = Arch::X64;
+  constexpr va_t FirstInteriorVA = CodeVA + 0x10;
+  constexpr va_t SecondInteriorVA = CodeVA + 0x20;
+  for (BinaryFormat Format :
+       {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+    for (ExactAddressMergeKind Kind :
+         {ExactAddressMergeKind::Phi, ExactAddressMergeKind::Select}) {
+      SCOPED_TRACE(formatTraceName(Format));
+      SCOPED_TRACE(Kind == ExactAddressMergeKind::Phi ? "phi" : "select");
+      BinaryImage Image = makeSpilledConstTableImage(TargetArch, Format);
+      ASSERT_TRUE(Image.isCodeAddress(FirstInteriorVA));
+      ASSERT_TRUE(Image.isCodeAddress(SecondInteriorVA));
+
+      MedFunc Caller = makeMergedExactAddressReturn(
+          Kind, TargetArch, FirstInteriorVA, SecondInteriorVA);
+      MedFunc Owner = makeInteriorCodeIdentityOwner(
+          "same_owner_blockaddress_target", CodeVA, FirstInteriorVA,
+          SecondInteriorVA);
+      llvm::LLVMContext Context;
+      auto Module = MedLLVMEmitter().emit(
+          {Caller, Owner}, Context, "same-owner-blockaddress-value-merge",
+          TargetArch, {}, &Image, Format);
+      ASSERT_NE(Module, nullptr);
+      expectValidModule(*Module);
+
+      llvm::Function *EmittedCaller = Module->getFunction(Caller.Name);
+      llvm::Function *EmittedOwner = Module->getFunction(Owner.Name);
+      ASSERT_NE(EmittedCaller, nullptr);
+      ASSERT_NE(EmittedOwner, nullptr);
+      const llvm::ReturnInst *ObservedReturn = nullptr;
+      for (const llvm::BasicBlock &Block : *EmittedCaller)
+        if (const auto *Return =
+                llvm::dyn_cast<llvm::ReturnInst>(Block.getTerminator())) {
+          ASSERT_EQ(ObservedReturn, nullptr);
+          ObservedReturn = Return;
+        }
+      ASSERT_NE(ObservedReturn, nullptr);
+      ASSERT_NE(ObservedReturn->getReturnValue(), nullptr);
+
+      std::set<const llvm::Value *> Seen;
+      std::set<const llvm::BlockAddress *> BlockAddresses;
+      collectBlockAddresses(ObservedReturn->getReturnValue(), Seen,
+                            BlockAddresses);
+      ASSERT_EQ(BlockAddresses.size(), 2u);
+      for (const llvm::BlockAddress *Address : BlockAddresses)
+        EXPECT_EQ(Address->getFunction(), EmittedOwner);
+      std::set<const llvm::Value *> FirstIntegers;
+      EXPECT_FALSE(observableValueReferencesInteger(
+          ObservedReturn->getReturnValue(), FirstInteriorVA, FirstIntegers));
+      std::set<const llvm::Value *> SecondIntegers;
+      EXPECT_FALSE(observableValueReferencesInteger(
+          ObservedReturn->getReturnValue(), SecondInteriorVA, SecondIntegers));
+    }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     RejectsUnmaterializableOrDataArmAcrossBlockAddressValueMerges) {
+  constexpr Arch TargetArch = Arch::X64;
+  constexpr va_t FirstInteriorVA = CodeVA + 0x10;
+  constexpr va_t SecondInteriorVA = CodeVA + 0x20;
+  const uint16_t PointerSize =
+      static_cast<uint16_t>(getTargetRegInfo(TargetArch).PointerSize);
+  struct Case {
+    const char *Name;
+    MedVar Replacement;
+    const char *PhiDiagnostic;
+    const char *SelectDiagnostic;
+  };
+  const Case Cases[] = {
+      {"unlifted-code",
+       MedVar::makeConst(ExecutableLayoutOnlyVA, PointerSize,
+                         ConstantAddressProvenance::CodeAddress),
+       "has no lifted code identity", "has no unique lifted code identity"},
+      {"data-address",
+       MedVar::makeConst(SpilledConstTableVA, PointerSize,
+                         ConstantAddressProvenance::DataAddress),
+       "has no unique lifted code identity",
+       "has no unique lifted code identity"},
+  };
+
+  for (BinaryFormat Format :
+       {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+    for (ExactAddressMergeKind Kind :
+         {ExactAddressMergeKind::Phi, ExactAddressMergeKind::Select})
+      for (const Case &Current : Cases) {
+        SCOPED_TRACE(formatTraceName(Format));
+        SCOPED_TRACE(Kind == ExactAddressMergeKind::Phi ? "phi" : "select");
+        SCOPED_TRACE(Current.Name);
+        BinaryImage Image = makeSpilledConstTableImage(TargetArch, Format);
+        ASSERT_TRUE(Image.isCodeAddress(FirstInteriorVA));
+        ASSERT_TRUE(Image.hasExecutableCodeOwnerAt(ExecutableLayoutOnlyVA));
+
+        MedFunc Caller = makeMergedExactAddressReturn(
+            Kind, TargetArch, FirstInteriorVA, SecondInteriorVA);
+        replaceSecondMergedAddressArm(Caller, Kind, Current.Replacement);
+        MedFunc Owner = makeInteriorCodeIdentityOwner(
+            "invalid_arm_blockaddress_target", CodeVA, FirstInteriorVA,
+            SecondInteriorVA);
+        llvm::LLVMContext Context;
+        testing::internal::CaptureStderr();
+        auto Module = MedLLVMEmitter().emit(
+            {Caller, Owner}, Context, "invalid-blockaddress-value-merge",
+            TargetArch, {}, &Image, Format);
+        std::string Diagnostic = testing::internal::GetCapturedStderr();
+        EXPECT_EQ(Module, nullptr);
+        const char *ExpectedDiagnostic =
+            Kind == ExactAddressMergeKind::Phi ? Current.PhiDiagnostic
+                                                : Current.SelectDiagnostic;
+        EXPECT_NE(Diagnostic.find(ExpectedDiagnostic), std::string::npos)
+            << Diagnostic;
+      }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     RejectsCrossOwnerBlockAddressesAcrossValueMerges) {
+  constexpr Arch TargetArch = Arch::X64;
+  constexpr va_t FirstInteriorVA = CodeVA + 0x10;
+  constexpr va_t SecondOwnerEntryVA = CodeVA + 0x40;
+  constexpr va_t SecondInteriorVA = CodeVA + 0x50;
+  for (BinaryFormat Format :
+       {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+    for (ExactAddressMergeKind Kind :
+         {ExactAddressMergeKind::Phi, ExactAddressMergeKind::Select}) {
+      SCOPED_TRACE(formatTraceName(Format));
+      SCOPED_TRACE(Kind == ExactAddressMergeKind::Phi ? "phi" : "select");
+      BinaryImage Image = makeSpilledConstTableImage(TargetArch, Format);
+      ASSERT_TRUE(Image.isCodeAddress(FirstInteriorVA));
+      ASSERT_TRUE(Image.isCodeAddress(SecondInteriorVA));
+
+      MedFunc Caller = makeMergedExactAddressReturn(
+          Kind, TargetArch, FirstInteriorVA, SecondInteriorVA);
+      MedFunc FirstOwner = makeInteriorCodeIdentityOwner(
+          "first_blockaddress_owner", CodeVA, FirstInteriorVA, CodeVA + 0x20);
+      MedFunc SecondOwner = makeInteriorCodeIdentityOwner(
+          "second_blockaddress_owner", SecondOwnerEntryVA, SecondInteriorVA,
+          CodeVA + 0x60);
+      llvm::LLVMContext Context;
+      testing::internal::CaptureStderr();
+      auto Module = MedLLVMEmitter().emit(
+          {Caller, FirstOwner, SecondOwner}, Context,
+          "cross-owner-blockaddress-value-merge", TargetArch, {}, &Image,
+          Format);
+      std::string Diagnostic = testing::internal::GetCapturedStderr();
+      EXPECT_EQ(Module, nullptr);
+      EXPECT_NE(Diagnostic.find("no unique lifted code identity"),
+                std::string::npos)
+          << Diagnostic;
+    }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     RejectsConflictingLiftedBlockOwnerAcrossValueMerges) {
+  constexpr Arch TargetArch = Arch::X64;
+  constexpr va_t ConflictingInteriorVA = CodeVA + 0x10;
+  for (BinaryFormat Format :
+       {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+    for (ExactAddressMergeKind Kind :
+         {ExactAddressMergeKind::Phi, ExactAddressMergeKind::Select}) {
+      SCOPED_TRACE(formatTraceName(Format));
+      SCOPED_TRACE(Kind == ExactAddressMergeKind::Phi ? "phi" : "select");
+      BinaryImage Image = makeSpilledConstTableImage(TargetArch, Format);
+      ASSERT_TRUE(Image.isCodeAddress(ConflictingInteriorVA));
+
+      MedFunc Caller = makeMergedExactAddressReturn(
+          Kind, TargetArch, ConflictingInteriorVA, ConflictingInteriorVA);
+      MedFunc FirstOwner = makeInteriorCodeIdentityOwner(
+          "first_conflicting_block_owner", CodeVA, ConflictingInteriorVA,
+          CodeVA + 0x20);
+      MedFunc SecondOwner = makeInteriorCodeIdentityOwner(
+          "second_conflicting_block_owner", CodeVA + 0x40,
+          ConflictingInteriorVA, CodeVA + 0x60);
+      llvm::LLVMContext Context;
+      testing::internal::CaptureStderr();
+      auto Module = MedLLVMEmitter().emit(
+          {Caller, FirstOwner, SecondOwner}, Context,
+          "conflicting-block-owner-value-merge", TargetArch, {}, &Image,
+          Format);
+      std::string Diagnostic = testing::internal::GetCapturedStderr();
+      EXPECT_EQ(Module, nullptr);
+      EXPECT_NE(Diagnostic.find("no unique lifted code identity"),
                 std::string::npos)
           << Diagnostic;
     }

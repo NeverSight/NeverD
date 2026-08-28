@@ -111,6 +111,8 @@ add_neverd_unittest(NeverDLiftTests
   format/MachOI386RelocationScatteredTests.cpp
   format/MachOFunctionListingTests.cpp
   format/MachOLLVMNameBoundaryTests.cpp
+  format/COFFImportStorageBoundaryTests.cpp
+  format/LLVMImportVeneerBoundaryTests.cpp
   format/MachOPointerRelocationBoundaryTests.cpp
   format/COFFRelocatableAbsoluteRelocationTests.cpp
   format/NativePointerRelocationBoundaryTests.cpp
@@ -246,6 +248,20 @@ target_include_directories(NeverDLLVMCVoidAnalysisTests PRIVATE
   ${LLVM_INCLUDE_DIRS}
 )
 
+# Keeps HighIR store-to-load forwarding resource bounds independently runnable
+# without relinking the aggregate lift suite during local RED/GREEN iterations.
+add_neverd_unittest(NeverDHighCStoreForwardingTests
+  core/HighCStoreForwardingTests.cpp
+
+  LINK_COMPONENTS
+  BackendC
+)
+
+target_include_directories(NeverDHighCStoreForwardingTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
 # Keeps the COFF exception-metadata authentication contract independently
 # runnable during RED/GREEN iterations of the patch planner.
 add_neverd_unittest(NeverDCOFFExceptionPatchTests
@@ -335,6 +351,24 @@ add_neverd_unittest(NeverDMachOLLVMNameBoundaryTests
 )
 
 target_include_directories(NeverDMachOLLVMNameBoundaryTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Pins exact import-veneer identity at the loader-to-LLVM code-pointer
+# boundary without relinking the aggregate lift suite during local iterations.
+add_neverd_unittest(NeverDLLVMImportVeneerBoundaryTests
+  format/COFFImportStorageBoundaryTests.cpp
+  format/LLVMImportVeneerBoundaryTests.cpp
+
+  LINK_COMPONENTS
+  BackendLLVM
+  LibC
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDLLVMImportVeneerBoundaryTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include
   ${LLVM_INCLUDE_DIRS}
 )

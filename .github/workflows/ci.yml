@@ -133,6 +133,8 @@ jobs:
         run: |
           "$PYTHON" -m unittest \
             scripts.tests.test_debug_build_configuration \
+            scripts.tests.test_ci_configuration \
+            scripts.tests.test_neverd_bench_harness \
             scripts.tests.test_audit_evm_opcode_metadata \
             scripts.tests.test_eh_signature_generation \
             -v

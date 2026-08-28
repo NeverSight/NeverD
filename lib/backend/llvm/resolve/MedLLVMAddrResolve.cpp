@@ -2155,7 +2155,7 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
         const uint64_t LoadEnd = *SlotVA + Def->Output.Size;
         for (uint64_t Candidate = FirstCandidate; Candidate < LoadEnd;
              ++Candidate) {
-          if (!Img->hasRelocationProvenanceAt(Candidate))
+          if (!Img->hasPointerStorageProvenanceAt(Candidate))
             continue;
           if (Candidate <= InvalidVA - PointerSize &&
               Candidate + PointerSize > *SlotVA)
@@ -2277,7 +2277,7 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
           if (!SlotSegment || SlotSegment->isExecutable() ||
               (SlotSegment->isWritable() &&
                !isReadOnlyAfterReloc(SlotSegment)) ||
-              Img->hasRelocationProvenanceAt(Slot)) {
+              Img->hasPointerStorageProvenanceAt(Slot)) {
             ScalarOnly = false;
             break;
           }
@@ -3139,6 +3139,7 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V,
   PointerTableLoadRoleSummary Result;
   if (!CurMedFunc || !Img || V.isConst())
     return Result;
+  ensureImportStorageSnapshot();
 
   const unsigned PtrSize = getTargetRegInfo(TargetArch).PointerSize;
   if (PtrSize == 0 || PtrSize > 8)
@@ -3893,16 +3894,23 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V,
   for (uint64_t Slot : Result.Slots) {
     const bool IsCode = Img->CodePtrRelocSlots.count(Slot) != 0;
     const bool IsData = Img->DataPtrRelocSlots.count(Slot) != 0;
-    const bool IsImport = Img->ImportPtrSlots.count(Slot) != 0 ||
-                          Img->DyldBindSlots.count(Slot) != 0;
-    const unsigned Kinds = static_cast<unsigned>(IsCode) +
-                           static_cast<unsigned>(IsData) +
-                           static_cast<unsigned>(IsImport);
-    Result.SawConflict |= Kinds > 1;
+    const bool IsImport = EffectiveImportStorageSlots.count(Slot) != 0;
+    const bool IsRuntimeCallable =
+        Img->hasRuntimeCallablePointerSlotAt(Slot);
+    const unsigned StaticKinds = static_cast<unsigned>(IsCode) +
+                                 static_cast<unsigned>(IsData) +
+                                 static_cast<unsigned>(IsImport);
+    // A runtime contract can deliberately overlay a static callable fallback
+    // (for example a loader-replaceable helper pointer).  It remains callable.
+    // Static role disagreement, or any runtime-callable/data overlap, is an
+    // ambiguous storage contract and must fail closed.
+    Result.SawConflict |= StaticKinds > 1 || (IsRuntimeCallable && IsData) ||
+                          ConflictingImportStorageSlots.count(Slot) != 0;
     Result.SawCode |= IsCode;
     Result.SawData |= IsData;
     Result.SawImport |= IsImport;
-    Result.SawUnknown |= Kinds == 0;
+    Result.SawRuntimeCallable |= IsRuntimeCallable;
+    Result.SawUnknown |= StaticKinds == 0 && !IsRuntimeCallable;
   }
   Result.Complete = true;
   return finish(Result);

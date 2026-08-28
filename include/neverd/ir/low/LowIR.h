@@ -562,8 +562,7 @@ struct RelocatedInstructionScalarOperandOccurrence {
   NdVar OutputWitness = {};
 
   bool operator==(
-      const RelocatedInstructionScalarOperandOccurrence &Other) const =
-      default;
+      const RelocatedInstructionScalarOperandOccurrence &Other) const = default;
 };
 
 /// Exact ordinary POP LOAD/COPY producer observed for the i386 PIC get-PC
@@ -770,13 +769,16 @@ struct JumpTable {
   bool IsRelative = false;
   bool IsSigned = false;
 
-  /// Set for the AArch64 compact byte/halfword table form, where targets are
-  /// `TargetBase + entry*scale` and the switch dispatches on a table index
-  /// distinct from the loaded entry — switch recovery must use IndexRegOff
-  /// rather than the blind backward scan.  The separate presence bit is
-  /// required because relocatable objects may place the target anchor at VA 0.
+  /// Set when table storage and target anchor differ, including AArch64 compact
+  /// tables and PE tables of unsigned RVAs based at the image base.  Targets
+  /// are `TargetBase + entry*scale`.  Compact tables dispatch on a table index
+  /// distinct from the loaded entry; the separate presence bit is also needed
+  /// because relocatable objects may place a valid target anchor at VA zero.
   va_t TargetBase = 0;
   bool HasTargetBase = false;
+  /// True only for the linked x64 PE u32-RVA encoding.  HasTargetBase alone
+  /// also describes compact target-relative tables on other architectures.
+  bool IsPEImageRelativeRVA = false;
 
   /// Exact machine-instruction address of the LOAD that reads the compact
   /// table entry.  Low-to-Med copy propagation may replace the resolver's

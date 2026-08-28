@@ -43,13 +43,61 @@
 
 namespace neverd {
 
-/// One concrete pointer slot bound by Mach-O dyld metadata.  This is kept
-/// separate from ImportPtrSlots: that map is indirect-symbol-table provenance
-/// used by the patcher, while this record comes from the classic/chained bind
-/// programs and also preserves the runtime relocation's signed addend.
+/// One concrete pointer slot bound by Mach-O dyld metadata.  This native view
+/// is retained for patch provenance; collectImportStorageSlots() combines it
+/// with the format-neutral identity while preserving the signed addend.
 struct ImportBindSlot {
   std::string Name;
   int64_t Addend = 0;
+};
+
+/// Strength of the format metadata that identifies one imported pointer
+/// storage slot.  The ordering is intentional: a concrete loader binding may
+/// refine the zero addend supplied by an indirect-symbol table, while an
+/// import-directory entry is already a complete exact-slot identity.
+enum class ImportStorageEvidence : uint8_t {
+  PointerTable = 0,
+  ImportDirectory = 1,
+  LoaderBind = 2,
+};
+
+/// Format-neutral identity of one non-executable, pointer-width storage slot
+/// whose contents are supplied by the platform loader.
+struct ImportStorageSlot {
+  std::string Name;
+  int64_t Addend = 0;
+  ImportStorageEvidence Evidence = ImportStorageEvidence::PointerTable;
+};
+
+/// Canonical import-storage view consumed by format-neutral pipeline stages.
+/// Conflicts remain explicit and are never represented by a first-wins slot.
+struct ImportStorageSlotCollection {
+  std::map<va_t, ImportStorageSlot> Slots;
+  std::set<va_t> Conflicts;
+};
+
+/// Runtime contract that owns the contents of one callable pointer storage
+/// slot.  Unlike a code-pointer relocation, this provenance remains meaningful
+/// when the on-disk value is null because the platform loader or runtime may
+/// populate the slot before user code calls through it.
+enum class RuntimeCallablePointerSlotKind : uint8_t {
+  GuardCFCheck,
+  GuardCFDispatch,
+  GuardRFFailureRoutine,
+  GuardRFVerifyStackPointer,
+  GuardXFGCheck,
+  GuardXFGDispatch,
+  GuardXFGTableDispatch,
+  CastGuardOsDeterminedFailureMode,
+  GuardMemcpy,
+};
+
+struct RuntimeCallablePointerSlot {
+  va_t SlotVA = InvalidVA;
+  RuntimeCallablePointerSlotKind Kind =
+      RuntimeCallablePointerSlotKind::GuardCFCheck;
+
+  bool operator==(const RuntimeCallablePointerSlot &Other) const = default;
 };
 
 /// Exact encoded relocation field that materializes a complete address
@@ -307,11 +355,23 @@ struct BinaryImage {
   /// __stubs trampoline (recorded as an Import with the stub address), but a
   /// routine with a non-AAPCS ABI — notably Darwin's `____chkstk_darwin` stack
   /// probe — is called GOT-indirect (`ldr xN,[got]; blr xN`) with no call-site
-  /// relocation, so its symbol is otherwise unrecoverable.  The rewriter
-  /// consults this to identify (and elide) such a probe call, whose implicit
-  /// size argument it cannot model and whose stack allocation it already lowers
-  /// via a real alloca.
+  /// relocation, so its symbol is otherwise unrecoverable.  This native map is
+  /// retained for Mach-O patch provenance and compatibility; format-neutral
+  /// consumers use collectImportStorageSlots().
   std::map<va_t, std::string> ImportPtrSlots;
+  /// Canonical exact-slot import storage identities, independent of object
+  /// format.  Loaders retain their native maps below for patch provenance, but
+  /// classifier and mirror consumers use collectImportStorageSlots().
+  std::map<va_t, ImportStorageSlot> ImportStorageSlots;
+  /// Slots for which format metadata supplied contradictory identities.  A
+  /// conflict is sticky: later duplicate records cannot silently resurrect a
+  /// first-wins interpretation.
+  std::set<va_t> ConflictingImportStorageSlots;
+  /// Exact callable pointer storage slots owned by a platform loader/runtime
+  /// contract rather than by an ordinary static relocation.  Kept separate
+  /// from ImportPtrSlots and CodePtrRelocSlots so a null on-disk value never
+  /// masquerades as either an imported symbol or a resolved code identity.
+  std::vector<RuntimeCallablePointerSlot> RuntimeCallablePointerSlots;
   /// Concrete Mach-O pointer bindings decoded from LC_DYLD_INFO bind bytecode
   /// or LC_DYLD_CHAINED_FIXUPS chains.  Kept separate from ImportPtrSlots so
   /// patch provenance remains an exact view of the indirect symbol table.
@@ -551,7 +611,8 @@ struct BinaryImage {
   /// instead fold a negative selector bias into the relocation, placing S+A
   /// before the symbol's rodata load segment.  The ELF loader records that
   /// exceptional relation in RodataAnchorSeg; accept it only when the exact
-  /// folded VA names the same read-only data segment as the exact section owner.
+  /// folded VA names the same read-only data segment as the exact section
+  /// owner.
   bool relocatedI386GOTOFFTargetBelongsToOwner(va_t TargetVA,
                                                va_t OwnerVA) const {
     if (Arch != Arch::X86 || !isELF() || getPointerSize() != 4 ||
@@ -568,8 +629,7 @@ struct BinaryImage {
         !OwnerSeg->isReadable() || OwnerSeg->isWritable() ||
         TargetVA > std::numeric_limits<uint32_t>::max() ||
         OwnerSeg->VA > std::numeric_limits<uint32_t>::max() ||
-        hasExecutableCodeOwnerAt(OwnerVA) ||
-        !hasObjectDataProvenance(OwnerVA))
+        hasExecutableCodeOwnerAt(OwnerVA) || !hasObjectDataProvenance(OwnerVA))
       return false;
 
     // GOTOFF arithmetic is performed in the i386 guest's 32-bit address
@@ -577,8 +637,8 @@ struct BinaryImage {
     // segment at VA zero to (for example) 0xfffffff0.  Authenticate only the
     // exact loader-recorded anchor and a small, non-zero modular backward
     // distance; ordinary absolute relocations never populate this relation.
-    const uint32_t BackDistance = static_cast<uint32_t>(OwnerSeg->VA) -
-                                  static_cast<uint32_t>(TargetVA);
+    const uint32_t BackDistance =
+        static_cast<uint32_t>(OwnerSeg->VA) - static_cast<uint32_t>(TargetVA);
     if (BackDistance == 0 ||
         BackDistance > limits::kMaxRodataAnchorBackDistance)
       return false;
@@ -800,8 +860,19 @@ struct BinaryImage {
   bool hasRelocationProvenanceAt(va_t Address) const {
     if (CodePtrRelocSlots.count(Address) || DataPtrRelocSlots.count(Address) ||
         RelDataPtrRelocSlots.count(Address) ||
-        RelCodeRelocSlots.count(Address) || ImportPtrSlots.count(Address) ||
-        DyldBindSlots.count(Address))
+        RelCodeRelocSlots.count(Address))
+      return true;
+    if (auto It = ImportStorageSlots.find(Address);
+        It != ImportStorageSlots.end() &&
+        isValidImportStorageSlot(Address, It->second.Name))
+      return true;
+    if (auto It = ImportPtrSlots.find(Address);
+        It != ImportPtrSlots.end() &&
+        isValidImportStorageSlot(Address, It->second))
+      return true;
+    if (auto It = DyldBindSlots.find(Address);
+        It != DyldBindSlots.end() &&
+        isValidImportStorageSlot(Address, It->second.Name))
       return true;
     if (std::any_of(BaseRelocations.begin(), BaseRelocations.end(),
                     [&](const BaseRelocation &Reloc) {
@@ -1246,6 +1317,147 @@ struct BinaryImage {
 
   bool isRuntimeFunctionAt(va_t Addr) const {
     return RuntimeFunctionAddrs.count(Addr) != 0;
+  }
+
+  /// True only for a complete pointer-width slot in a mapped, non-executable
+  /// segment.  Exact storage identity deliberately does not accept executable
+  /// import veneers or a coarse stub range.
+  bool isValidImportStorageSlot(va_t SlotVA, llvm::StringRef Name) const {
+    const uint32_t PointerSize = getPointerSize();
+    if (PointerSize == 0 || SlotVA % PointerSize != 0 || Name.empty())
+      return false;
+    const Segment *Seg = getSegmentFor(SlotVA);
+    return Seg && !Seg->isExecutable() && readVA(SlotVA, PointerSize);
+  }
+
+  /// Merge one already-validated record into an import-storage view.  Keeping
+  /// this policy shared by loader mutation and compatibility collection makes
+  /// the result independent of parser and consumer order.
+  static bool mergeImportStorageSlot(
+      std::map<va_t, ImportStorageSlot> &Slots, std::set<va_t> &Conflicts,
+      va_t SlotVA, llvm::StringRef Name, int64_t Addend,
+      ImportStorageEvidence Evidence) {
+    if (Conflicts.count(SlotVA))
+      return false;
+
+    ImportStorageSlot Incoming{Name.str(), Addend, Evidence};
+    auto [It, Inserted] = Slots.try_emplace(SlotVA, Incoming);
+    if (Inserted)
+      return true;
+
+    ImportStorageSlot &Existing = It->second;
+    if (Existing.Name != Incoming.Name) {
+      Slots.erase(It);
+      Conflicts.insert(SlotVA);
+      return false;
+    }
+
+    const unsigned ExistingStrength =
+        static_cast<unsigned>(Existing.Evidence);
+    const unsigned IncomingStrength =
+        static_cast<unsigned>(Incoming.Evidence);
+    if (Existing.Addend == Incoming.Addend) {
+      if (IncomingStrength > ExistingStrength)
+        Existing.Evidence = Incoming.Evidence;
+      return true;
+    }
+    if (IncomingStrength > ExistingStrength) {
+      Existing = std::move(Incoming);
+      return true;
+    }
+    if (IncomingStrength < ExistingStrength)
+      return true;
+
+    Slots.erase(It);
+    Conflicts.insert(SlotVA);
+    return false;
+  }
+
+  /// Record one exact imported pointer-storage identity.  Compatible duplicate
+  /// evidence is idempotent; stronger evidence may refine the addend.  A name
+  /// disagreement or equal-strength addend disagreement permanently poisons
+  /// the slot so downstream code fails closed instead of choosing by order.
+  bool recordImportStorageSlot(va_t SlotVA, llvm::StringRef Name,
+                               int64_t Addend,
+                               ImportStorageEvidence Evidence) {
+    if (!isValidImportStorageSlot(SlotVA, Name) ||
+        ConflictingImportStorageSlots.count(SlotVA))
+      return false;
+    return mergeImportStorageSlot(ImportStorageSlots,
+                                  ConflictingImportStorageSlots, SlotVA, Name,
+                                  Addend, Evidence);
+  }
+
+  /// Build the single import-storage evidence surface used after loading.
+  /// Native maps are merged for compatibility with format-specific patch
+  /// metadata and synthetic fixtures, but undergo the same exact-slot checks
+  /// and conflict rules as canonical loader records.
+  ImportStorageSlotCollection collectImportStorageSlots() const {
+    ImportStorageSlotCollection Result;
+    Result.Conflicts = ConflictingImportStorageSlots;
+
+    auto Merge = [&](va_t SlotVA, llvm::StringRef Name, int64_t Addend,
+                     ImportStorageEvidence Evidence) {
+      if (Result.Conflicts.count(SlotVA) ||
+          !isValidImportStorageSlot(SlotVA, Name))
+        return;
+      mergeImportStorageSlot(Result.Slots, Result.Conflicts, SlotVA, Name,
+                             Addend, Evidence);
+    };
+
+    for (const auto &[SlotVA, Slot] : ImportStorageSlots)
+      Merge(SlotVA, Slot.Name, Slot.Addend, Slot.Evidence);
+    for (const auto &[SlotVA, Name] : ImportPtrSlots)
+      Merge(SlotVA, Name, 0, ImportStorageEvidence::PointerTable);
+    for (const auto &[SlotVA, Binding] : DyldBindSlots)
+      Merge(SlotVA, Binding.Name, Binding.Addend,
+            ImportStorageEvidence::LoaderBind);
+    return Result;
+  }
+
+  /// Record one mapped data slot whose callable role comes from a runtime
+  /// contract.  Multiple contracts may intentionally name the same storage,
+  /// so uniqueness is by (address, kind), not address alone.
+  bool recordRuntimeCallablePointerSlot(va_t SlotVA,
+                                        RuntimeCallablePointerSlotKind Kind) {
+    const uint32_t PointerSize = getPointerSize();
+    if (SlotVA == 0 || PointerSize == 0 || SlotVA % PointerSize != 0 ||
+        !isDataAddress(SlotVA) || !readVA(SlotVA, PointerSize))
+      return false;
+    const RuntimeCallablePointerSlot Record{SlotVA, Kind};
+    if (std::find(RuntimeCallablePointerSlots.begin(),
+                  RuntimeCallablePointerSlots.end(),
+                  Record) == RuntimeCallablePointerSlots.end())
+      RuntimeCallablePointerSlots.push_back(Record);
+    return true;
+  }
+
+  bool hasRuntimeCallablePointerSlotAt(va_t SlotVA) const {
+    return std::any_of(RuntimeCallablePointerSlots.begin(),
+                       RuntimeCallablePointerSlots.end(),
+                       [&](const RuntimeCallablePointerSlot &Slot) {
+                         return Slot.SlotVA == SlotVA;
+                       });
+  }
+
+  bool
+  hasRuntimeCallablePointerSlotAt(va_t SlotVA,
+                                  RuntimeCallablePointerSlotKind Kind) const {
+    return std::find(RuntimeCallablePointerSlots.begin(),
+                     RuntimeCallablePointerSlots.end(),
+                     RuntimeCallablePointerSlot{SlotVA, Kind}) !=
+           RuntimeCallablePointerSlots.end();
+  }
+
+  /// True when one exact storage slot carries either a static relocation or a
+  /// runtime-owned pointer contract.  Keep this broader storage query separate
+  /// from hasRelocationProvenanceAt(): a null runtime slot has pointer meaning,
+  /// but it is not a relocation/fixup and must never become evidence for a
+  /// static code or data target.
+  bool hasPointerStorageProvenanceAt(va_t SlotVA) const {
+    return hasRelocationProvenanceAt(SlotVA) ||
+           hasRuntimeCallablePointerSlotAt(SlotVA) ||
+           ConflictingImportStorageSlots.count(SlotVA) != 0;
   }
 
   /// Get imports for a specific module/library.

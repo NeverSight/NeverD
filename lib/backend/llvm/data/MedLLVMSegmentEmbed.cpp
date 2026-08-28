@@ -194,20 +194,25 @@ bool MedLLVMEmitter::segHasPtrRelocSlots(const Segment *S) const {
     return false;
   };
   auto overlapsImports = [&]() {
-    for (const auto &[VA, Name] : Img->ImportPtrSlots) {
-      (void)Name;
-      if (S->contains(VA))
-        return true;
-    }
-    for (const auto &[VA, Binding] : Img->DyldBindSlots) {
+    for (const auto &[VA, Binding] : EffectiveImportStorageSlots) {
       (void)Binding;
       if (S->contains(VA))
         return true;
     }
+    for (va_t VA : ConflictingImportStorageSlots)
+      if (S->contains(VA))
+        return true;
+    return false;
+  };
+  auto overlapsRuntimeCallableSlots = [&]() {
+    for (const RuntimeCallablePointerSlot &Slot :
+         Img->RuntimeCallablePointerSlots)
+      if (S->contains(Slot.SlotVA))
+        return true;
     return false;
   };
   return overlaps(Img->CodePtrRelocSlots) || overlaps(Img->DataPtrRelocSlots) ||
-         overlapsImports();
+         overlapsImports() || overlapsRuntimeCallableSlots();
 }
 
 bool MedLLVMEmitter::isReadOnlyAfterReloc(const Segment *S) const {
@@ -381,21 +386,26 @@ bool MedLLVMEmitter::addrInCodePtrMirrorRun(uint64_t VA) const {
     return false;
   };
   auto importInRun = [&]() {
-    for (const auto &[S, Name] : Img->ImportPtrSlots) {
-      (void)Name;
-      if (S >= RunStart && S < RunEnd)
-        return true;
-    }
-    for (const auto &[S, Binding] : Img->DyldBindSlots) {
+    for (const auto &[S, Binding] : EffectiveImportStorageSlots) {
       (void)Binding;
       if (S >= RunStart && S < RunEnd)
         return true;
     }
+    for (va_t S : ConflictingImportStorageSlots)
+      if (S >= RunStart && S < RunEnd)
+        return true;
+    return false;
+  };
+  auto runtimeCallableInRun = [&]() {
+    for (const RuntimeCallablePointerSlot &Slot :
+         Img->RuntimeCallablePointerSlots)
+      if (Slot.SlotVA >= RunStart && Slot.SlotVA < RunEnd)
+        return true;
     return false;
   };
   return inRun(Img->CodePtrRelocSlots, /*ExcludeJumpTables=*/true) ||
          inRun(Img->DataPtrRelocSlots, /*ExcludeJumpTables=*/false) ||
-         importInRun();
+         importInRun() || runtimeCallableInRun();
 }
 
 std::pair<llvm::GlobalVariable *, uint64_t>

@@ -314,6 +314,7 @@ void CFGBuilder::extractJumpTables(LowFunc &Func) {
       JT.IsSigned = Info.IsSigned;
       JT.TargetBase = Info.TargetBase;
       JT.HasTargetBase = Info.HasTargetBase;
+      JT.IsPEImageRelativeRVA = Info.IsPEImageRelativeRVA;
       JT.TableLoadAddr = Info.TableLoadAddr;
       JT.PreScaledIndex = Info.PreScaledIndex;
       JT.TwoTableSelect = Info.TwoTableSelect;

@@ -60,6 +60,8 @@ llvm::Function *MedLLVMEmitter::resolveLiftedFunctionEntry(va_t Address) const {
 }
 
 llvm::Constant *MedLLVMEmitter::resolveLiftedCodeAddress(va_t Address) {
+  if (ConflictingLiftedCodeBlocks.count(Address))
+    return nullptr;
   if (llvm::Function *Function = resolveLiftedFunctionEntry(Address))
     return Function;
   if (auto BlockIt = LiftedCodeBlocks.find(Address);
@@ -72,9 +74,10 @@ llvm::Constant *MedLLVMEmitter::resolveLiftedCodeAddress(va_t Address) {
 }
 
 llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
-                                                          uint64_t &OutSegVA) {
+                                                           uint64_t &OutSegVA) {
   if (!Img)
     return nullptr;
+  ensureImportStorageSnapshot();
   const unsigned PtrSz = Img->getPointerSize();
   if (PtrSz == 0)
     return nullptr;
@@ -106,7 +109,13 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
   // pure data segments with no relocated pointers keep their existing handling.
   // Slots from both sets, anywhere in the run, are merged in address order
   // below.
-  enum class PtrSlotKind : uint8_t { Code, SuppressedCode, Data, Import };
+  enum class PtrSlotKind : uint8_t {
+    Code,
+    SuppressedCode,
+    Data,
+    Import,
+    RuntimeCallable,
+  };
   struct PtrSlot {
     uint64_t VA;
     PtrSlotKind Kind;
@@ -115,6 +124,7 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
     uint64_t TargetOwnerVA = InvalidVA;
   };
   std::map<uint64_t, PtrSlot> SlotsByVA;
+  bool HasRuntimeCallableStorage = false;
   auto slotInRun = [&](uint64_t S) {
     return S >= RunStart && S <= RunEnd && PtrSz <= RunEnd - S;
   };
@@ -133,16 +143,51 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
         OwnerVA = It->second;
       SlotsByVA.emplace(S, PtrSlot{S, PtrSlotKind::Data, {}, 0, OwnerVA});
     }
-  // The indirect-symbol view supplies slots on older images even when no bind
-  // stream is present.  A decoded dyld binding is authoritative when both
-  // views name the same address because it also carries the effective addend.
-  for (const auto &[S, Name] : Img->ImportPtrSlots)
-    if (slotInRun(S))
-      SlotsByVA[S] = PtrSlot{S, PtrSlotKind::Import, Name, 0};
-  for (const auto &[S, Binding] : Img->DyldBindSlots)
+  for (uint64_t S : ConflictingImportStorageSlots)
+    if (slotInRun(S)) {
+      if (!FatalCodePointerResolution && !FatalDataPointerResolution)
+        llvm::WithColor::error()
+            << "med_llvm_emitter: imported pointer storage at 0x"
+            << llvm::utohexstr(S)
+            << " has conflicting exact identities; refusing pointer mirror\n";
+      FatalCodePointerResolution = true;
+      return nullptr;
+    }
+  for (const auto &[S, Binding] : EffectiveImportStorageSlots)
     if (slotInRun(S))
       SlotsByVA[S] =
           PtrSlot{S, PtrSlotKind::Import, Binding.Name, Binding.Addend};
+  for (const RuntimeCallablePointerSlot &RuntimeSlot :
+       Img->RuntimeCallablePointerSlots) {
+    const uint64_t S = RuntimeSlot.SlotVA;
+    if (!slotInRun(S))
+      continue;
+    HasRuntimeCallableStorage = true;
+    const bool IsCode = Img->CodePtrRelocSlots.count(S) != 0;
+    const bool IsData = Img->DataPtrRelocSlots.count(S) != 0;
+    const bool IsImport = EffectiveImportStorageSlots.count(S) != 0;
+    const unsigned StaticKinds = static_cast<unsigned>(IsCode) +
+                                 static_cast<unsigned>(IsData) +
+                                 static_cast<unsigned>(IsImport);
+    const auto Existing = SlotsByVA.find(S);
+    const bool IsSuppressedCode =
+        Existing != SlotsByVA.end() &&
+        Existing->second.Kind == PtrSlotKind::SuppressedCode;
+    if (StaticKinds > 1 || IsData || IsSuppressedCode) {
+      if (!FatalCodePointerResolution && !FatalDataPointerResolution)
+        llvm::WithColor::error()
+            << "med_llvm_emitter: runtime-callable pointer slot at 0x"
+            << llvm::utohexstr(S)
+            << " conflicts with its static pointer role; refusing ambiguous "
+               "storage contract\n";
+      FatalCodePointerResolution = true;
+      return nullptr;
+    }
+    // Runtime ownership is orthogonal to a static callable fallback.  Preserve
+    // an existing Code/Import kind so its target is still authenticated below;
+    // a runtime-only null slot gets an addressable pointer-width field.
+    SlotsByVA.try_emplace(S, PtrSlot{S, PtrSlotKind::RuntimeCallable, {}});
+  }
   if (SlotsByVA.empty())
     return nullptr;
   std::vector<PtrSlot> Slots;
@@ -204,9 +249,21 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
       continue; // overlapping/duplicate slot — skip
     uint64_t TargetVA = 0;
     std::memcpy(&TargetVA, Data + Off, PtrSz);
-    if (Slot.Kind == PtrSlotKind::Code) {
+    PtrSlotKind Kind = Slot.Kind;
+    std::string ImportName = Slot.ImportName;
+    if (Kind == PtrSlotKind::Code) {
       TargetVA = normalizeCodeAddress(TargetVA, Img->Arch, Img->Mode);
-      if (!resolveLiftedCodeAddress(TargetVA)) {
+      // PE base relocations also cover loader-authenticated IAT veneers.  The
+      // veneer is deliberately absent from MedIR, so giving it an accidental
+      // containing-block identity makes success depend on linker layout.
+      // Canonicalize only an exact registered veneer with a named import to
+      // the same symbolic lane used by import-pointer storage.  Ordinary
+      // executable targets still require a unique lifted owner below.
+      const Import *Imported = Img->findImportStubAt(TargetVA);
+      if (Imported && !Imported->Name.empty()) {
+        Kind = PtrSlotKind::Import;
+        ImportName = Imported->Name;
+      } else if (!resolveLiftedCodeAddress(TargetVA)) {
         if (!FatalCodePointerResolution)
           llvm::WithColor::error()
               << "med_llvm_emitter: relocation-proven code pointer at 0x"
@@ -217,7 +274,7 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
         return nullptr;
       }
     }
-    Kept.push_back({Off, TargetVA, Slot.Kind, Slot.ImportName,
+    Kept.push_back({Off, TargetVA, Kind, std::move(ImportName),
                     Slot.ImportAddend, Slot.TargetOwnerVA});
     Cur = Off + PtrSz;
   }
@@ -239,6 +296,26 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
     FieldTys.push_back(llvm::ArrayType::get(I8Ty, Size - Cursor));
 
   auto *StructTy = llvm::StructType::get(*Ctx, FieldTys, /*isPacked=*/true);
+  const std::string GlobalName =
+      (kNdCodePtrPrefix + llvm::utohexstr(RunStart)).str();
+
+  // A runtime-owned slot can be populated or replaced after the image is
+  // mapped.  Defining a private mirror from its on-disk bytes would freeze a
+  // null/default value and change the indirect-call contract.  Represent the
+  // whole address-preserving run as a mutable external declaration instead:
+  // patch mode binds this canonical name to the original run, while standalone
+  // lift output must receive the storage contract from its environment.  Code
+  // fallback targets were still authenticated in the pass above.
+  if (HasRuntimeCallableStorage) {
+    auto *GV = new llvm::GlobalVariable(*Mod, StructTy, /*isConstant=*/false,
+                                        llvm::GlobalValue::ExternalLinkage,
+                                        /*Initializer=*/nullptr, GlobalName);
+    GV->setAlignment(llvm::Align(16));
+    GV->setDSOLocal(true);
+    CodePtrTableGlobals[RunStart] = GV;
+    return GV;
+  }
+
   // A plain writable .data segment holding a function-pointer global (mutable,
   // reassigned at runtime) must be a writable global so stores into a slot are
   // legal; read-only-after-relocation and rodata pointer tables stay constant
@@ -247,8 +324,7 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
                      !section_names::isReadOnlyAfterRelocSectionName(Seg->Name);
   auto *GV = new llvm::GlobalVariable(
       *Mod, StructTy, /*isConstant=*/!SegWritable, dataLinkage(),
-      llvm::ConstantAggregateZero::get(StructTy),
-      (kNdCodePtrPrefix + llvm::utohexstr(RunStart)).str());
+      llvm::ConstantAggregateZero::get(StructTy), GlobalName);
   GV->setAlignment(llvm::Align(16));
   markSharedLocal(GV);
   // Memoize BEFORE resolving data-pointer targets so a self-referential or
@@ -309,7 +385,46 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
     } else {
       const std::string Name =
           llvm_name::fromObjectSymbol(K.ImportName, TargetFormat).str();
+      bool CollidesWithLiftedSymbol = false;
+      for (const auto &[Address, EmittedName] : EmittedFuncNames) {
+        (void)Address;
+        if (EmittedName == Name) {
+          CollidesWithLiftedSymbol = true;
+          break;
+        }
+      }
+      if (CollidesWithLiftedSymbol) {
+        if (!FatalCodePointerResolution)
+          llvm::WithColor::error()
+              << "med_llvm_emitter: import " << Name
+              << " collides with a lifted symbol; refusing ambiguous "
+                 "code-pointer identity\n";
+        FatalCodePointerResolution = true;
+        return nullptr;
+      }
       llvm::GlobalValue *Symbol = Mod->getNamedValue(Name);
+      const auto Placeholder = ImportedSymbolPlaceholders.find(Name);
+      const bool IsTrackedPlaceholder =
+          Placeholder != ImportedSymbolPlaceholders.end() &&
+          Placeholder->second == Symbol;
+      const auto *ExternalFunction =
+          llvm::dyn_cast_or_null<llvm::Function>(Symbol);
+      const bool IsCompatibleExternalFunction =
+          ExternalFunction && ExternalFunction->isDeclaration() &&
+          ExternalFunction->getLinkage() ==
+              llvm::GlobalValue::ExternalLinkage &&
+          ExternalFunction->getVisibility() ==
+              llvm::GlobalValue::DefaultVisibility &&
+          !ExternalFunction->isDSOLocal();
+      if (Symbol && !IsTrackedPlaceholder && !IsCompatibleExternalFunction) {
+        if (!FatalCodePointerResolution)
+          llvm::WithColor::error()
+              << "med_llvm_emitter: import " << Name
+              << " collides with a non-import symbol; refusing ambiguous "
+                 "code-pointer identity\n";
+        FatalCodePointerResolution = true;
+        return nullptr;
+      }
       if (!Symbol) {
         auto *Placeholder = new llvm::GlobalVariable(
             *Mod, llvm::Type::getInt8Ty(*Ctx), /*isConstant=*/false,
@@ -363,16 +478,18 @@ MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V,
     for (uint64_t S : Img->DataPtrRelocSlots)
       if (S >= Lo && S < Hi)
         return true;
-    for (const auto &[S, Name] : Img->ImportPtrSlots) {
-      (void)Name;
-      if (S >= Lo && S < Hi)
-        return true;
-    }
-    for (const auto &[S, Binding] : Img->DyldBindSlots) {
+    for (const auto &[S, Binding] : EffectiveImportStorageSlots) {
       (void)Binding;
       if (S >= Lo && S < Hi)
         return true;
     }
+    for (uint64_t S : ConflictingImportStorageSlots)
+      if (S >= Lo && S < Hi)
+        return true;
+    for (const RuntimeCallablePointerSlot &Slot :
+         Img->RuntimeCallablePointerSlots)
+      if (Slot.SlotVA >= Lo && Slot.SlotVA < Hi)
+        return true;
     return false;
   };
   auto findDef = [&](const MedVar &X) { return lookupDef(X); };
@@ -897,7 +1014,7 @@ llvm::Value *MedLLVMEmitter::tryResolveCodePtrTablePtr(
     const Segment *ZeroSeg = Img->getSegmentFor(0);
     const bool PointerSlotAtZero =
         Img->CodePtrRelocSlots.count(0) || Img->DataPtrRelocSlots.count(0) ||
-        Img->ImportPtrSlots.count(0) || Img->DyldBindSlots.count(0);
+        EffectiveImportStorageSlots.count(0);
     if (ZeroSeg && !ZeroSeg->isExecutable() && PointerSlotAtZero) {
       Base = 0;
       HaveBase = true;
@@ -1568,11 +1685,16 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
 
   struct CodeProof {
     std::optional<va_t> CommonTarget;
+    llvm::Function *CommonBlockOwner = nullptr;
     bool SawCode = false;
     bool SawNonCode = false;
     bool SawNull = false;
     bool SawUnresolved = false;
     bool SawConflict = false;
+    bool SawBlockIdentity = false;
+    bool SawNonBlockIdentity = false;
+    bool SawOwnerConflict = false;
+    bool SawUnmaterializableCodeIdentity = false;
     bool SawExplicit = false;
     bool SawCodeDependency = false;
     bool SawFunctionIdentity = false;
@@ -1586,6 +1708,10 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
     A.SawNull |= B.SawNull;
     A.SawUnresolved |= B.SawUnresolved;
     A.SawConflict |= B.SawConflict;
+    A.SawBlockIdentity |= B.SawBlockIdentity;
+    A.SawNonBlockIdentity |= B.SawNonBlockIdentity;
+    A.SawOwnerConflict |= B.SawOwnerConflict;
+    A.SawUnmaterializableCodeIdentity |= B.SawUnmaterializableCodeIdentity;
     A.SawExplicit |= B.SawExplicit;
     A.SawCodeDependency |= B.SawCodeDependency;
     A.SawFunctionIdentity |= B.SawFunctionIdentity;
@@ -1596,6 +1722,11 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
       A.SawConflict = true;
     else if (!A.CommonTarget)
       A.CommonTarget = B.CommonTarget;
+    if (A.CommonBlockOwner && B.CommonBlockOwner &&
+        A.CommonBlockOwner != B.CommonBlockOwner)
+      A.SawOwnerConflict = true;
+    else if (!A.CommonBlockOwner)
+      A.CommonBlockOwner = B.CommonBlockOwner;
     return A;
   };
 
@@ -1630,12 +1761,25 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
     // dependency arm was produced by an operation that materializes its code
     // leaves.  The merged value is therefore relocation-aware but no longer a
     // single identity that may be replaced with its initializer.
-    if (Result.SawCode && (Result.SawCodeDependency || Result.SawNull) &&
-        !Result.SawNonCode && !Result.SawConflict &&
+    // Multiple exact identities are admitted only for blockaddresses owned by
+    // one LLVM function. Function-entry alternatives and cross-owner labels
+    // remain ambiguous here and must use an explicit higher-level contract.
+    const bool SameOwnerBlockAlternatives =
+        Result.SawConflict && Result.SawBlockIdentity &&
+        !Result.SawNonBlockIdentity && Result.CommonBlockOwner &&
+        !Result.SawOwnerConflict;
+    const bool ConflictIsMaterializable =
+        !Result.SawConflict || SameOwnerBlockAlternatives;
+    if (Result.SawCode &&
+        (Result.SawCodeDependency || Result.SawNull ||
+         SameOwnerBlockAlternatives) &&
+        !Result.SawNonCode && ConflictIsMaterializable &&
+        !Result.SawOwnerConflict && !Result.SawUnmaterializableCodeIdentity &&
         !Result.SawUnsafeCodeDependency) {
       Result.SawCodeDependency = true;
       Result.SawCode = false;
       Result.SawUnresolved = false;
+      Result.SawConflict = false;
       Result.CommonTarget.reset();
     }
     return Result;
@@ -1663,18 +1807,24 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
     if (Current.Provenance == ConstantAddressProvenance::Unknown &&
         !HasLoaderCodeProvenance)
       return {.SawUnresolved = true};
-    const bool HasFunctionIdentity =
-        resolveLiftedFunctionEntry(Normalized) != nullptr;
+    llvm::Function *LiftedFunction =
+        ConflictingLiftedCodeBlocks.count(Normalized)
+            ? nullptr
+            : resolveLiftedFunctionEntry(Normalized);
+    const bool HasFunctionIdentity = LiftedFunction != nullptr;
     const bool HasAuthenticatedFunctionEntry =
         hasAuthenticatedFunctionEntryVA(Normalized);
-    bool HasLiftedCodeIdentity = HasFunctionIdentity;
+    llvm::Constant *LiftedCodeIdentity = LiftedFunction;
     const bool AllowExactLiftedBlock =
         IncludeLayoutCodeOwners || TargetArch == Arch::X86 ||
         TargetArch == Arch::X64 || TargetArch == Arch::AArch64;
-    if (AllowExactLiftedBlock)
-      if (auto It = LiftedCodeBlocks.find(Normalized);
-          !HasLiftedCodeIdentity && It != LiftedCodeBlocks.end())
-        HasLiftedCodeIdentity = It->second && It->second->getParent();
+    if (AllowExactLiftedBlock && !LiftedCodeIdentity)
+      LiftedCodeIdentity = resolveLiftedCodeAddress(Normalized);
+    const bool HasLiftedCodeIdentity = LiftedCodeIdentity != nullptr;
+    llvm::Function *BlockOwner = nullptr;
+    if (auto *BlockAddress =
+            llvm::dyn_cast_or_null<llvm::BlockAddress>(LiftedCodeIdentity))
+      BlockOwner = BlockAddress->getFunction();
     const bool HasLayoutCodeOwner =
         IncludeLayoutCodeOwners &&
         Current.Provenance == ConstantAddressProvenance::Address &&
@@ -1690,7 +1840,11 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
     if (Current.Size != 0 && PointerSize != 0 && Current.Size < PointerSize)
       return {.SawCode = true, .SawUnresolved = true, .SawExplicit = true};
     return {.CommonTarget = Normalized,
+            .CommonBlockOwner = BlockOwner,
             .SawCode = true,
+            .SawBlockIdentity = BlockOwner != nullptr,
+            .SawNonBlockIdentity = BlockOwner == nullptr,
+            .SawUnmaterializableCodeIdentity = !HasLiftedCodeIdentity,
             .SawExplicit = true,
             .SawFunctionIdentity = HasFunctionIdentity,
             .SawLiftedCodeIdentity = HasLiftedCodeIdentity,
@@ -1967,7 +2121,9 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
           RequireCodeRole ? "icall.target" : "code.value");
   }
 
-  if (!Proof.SawCode && !Proof.SawUnsafeCodeDependency &&
+  if (!Proof.SawCode && !Proof.SawOwnerConflict &&
+      !Proof.SawUnmaterializableCodeIdentity &&
+      !Proof.SawUnsafeCodeDependency &&
       !(RequireCodeRole && (Proof.SawExplicit || Proof.SawCodeDependency)))
     return nullptr;
 
@@ -1989,6 +2145,80 @@ MedLLVMEmitter::tryResolveIndirectCallTarget(const MedVar &V,
                                              llvm::IRBuilder<> &Builder) {
   if (!Img || !CurMedFunc)
     return nullptr;
+  ensureImportStorageSnapshot();
+
+  // x86 memory-indirect calls encode `call [rip + disp]` directly as an
+  // INDIR_CALL whose constant input is the exact IAT storage address.  The
+  // callable value is the slot's contents, never the address of the rebuilt
+  // slot itself.  Admit only an exact callable storage identity: a loader-bound
+  // import, a static code-pointer relocation, or a load-configuration/runtime
+  // contract.  Perform the missing pointer-width load here; stub/range and
+  // neighbouring-slot evidence cannot enter this lane.
+  if (V.isConst()) {
+    const va_t SlotVA = V.ConstVal;
+    if (ConflictingImportStorageSlots.count(SlotVA)) {
+      if (!FatalCodePointerResolution && !FatalDataPointerResolution)
+        syncError() << "med_llvm_emitter: imported indirect-call storage at 0x"
+                    << llvm::utohexstr(SlotVA)
+                    << " has conflicting exact identities; refusing "
+                       "code-identity fallback\n";
+      FatalCodePointerResolution = true;
+      return nullptr;
+    }
+    const bool IsImportStorage =
+        EffectiveImportStorageSlots.count(SlotVA) != 0;
+    const bool IsStaticCodeStorage =
+        Img->CodePtrRelocSlots.count(SlotVA) != 0;
+    const bool IsRuntimeCallableStorage =
+        Img->hasRuntimeCallablePointerSlotAt(SlotVA);
+    const bool IsDataStorage = Img->DataPtrRelocSlots.count(SlotVA) != 0;
+    if (IsImportStorage || IsStaticCodeStorage ||
+        IsRuntimeCallableStorage) {
+      if (IsDataStorage) {
+        if (!FatalCodePointerResolution && !FatalDataPointerResolution)
+          syncError() << "med_llvm_emitter: callable pointer storage at 0x"
+                      << llvm::utohexstr(SlotVA)
+                      << " conflicts with an exact data-pointer identity; "
+                         "refusing code-identity fallback\n";
+        FatalCodePointerResolution = true;
+        return nullptr;
+      }
+      const uint16_t PointerSize = Img->getPointerSize();
+      if (PointerSize == 0 || (V.Size != 0 && V.Size != PointerSize)) {
+        if (!FatalCodePointerResolution && !FatalDataPointerResolution)
+          syncError() << "med_llvm_emitter: callable indirect-call storage at "
+                         "0x"
+                      << llvm::utohexstr(SlotVA)
+                      << " is not consumed at pointer width; refusing "
+                         "code-identity fallback\n";
+        FatalCodePointerResolution = true;
+        return nullptr;
+      }
+      llvm::Constant *Slot = tryResolveGlobalData(SlotVA, PointerSize);
+      if (!Slot) {
+        if (!FatalCodePointerResolution && !FatalDataPointerResolution)
+          syncError() << "med_llvm_emitter: exact callable pointer storage at "
+                         "0x"
+                      << llvm::utohexstr(SlotVA)
+                      << " cannot be materialized; refusing stale-address "
+                         "fallback\n";
+        FatalCodePointerResolution = true;
+        return nullptr;
+      }
+      return Builder.CreateLoad(sizeToType(PointerSize), Slot,
+                                "icall.import.target");
+    }
+    const Segment *Segment = Img->getSegmentFor(SlotVA);
+    if (Segment && !Segment->isExecutable() && segHasPtrRelocSlots(Segment)) {
+      if (!FatalCodePointerResolution && !FatalDataPointerResolution)
+        syncError() << "med_llvm_emitter: memory-indirect call storage at 0x"
+                    << llvm::utohexstr(SlotVA)
+                    << " has no exact callable slot identity; refusing "
+                       "code-identity fallback\n";
+      FatalCodePointerResolution = true;
+      return nullptr;
+    }
+  }
 
   // A literal-pool-derived target is a CALL only when it names an emitted
   // function entry.  resolveLiftedCodeAddress also accepts BlockAddress for

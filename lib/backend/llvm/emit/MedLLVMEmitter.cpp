@@ -79,6 +79,20 @@ bool hasObjectFunctionNameAt(const BinaryImage *Img, BinaryFormat Format,
 
 } // namespace
 
+void MedLLVMEmitter::ensureImportStorageSnapshot() const {
+  if (ImportStorageSnapshotImage == Img)
+    return;
+  ImportStorageSnapshotImage = Img;
+  EffectiveImportStorageSlots.clear();
+  ConflictingImportStorageSlots.clear();
+  if (!Img)
+    return;
+  ImportStorageSlotCollection ImportStorage =
+      Img->collectImportStorageSlots();
+  EffectiveImportStorageSlots = std::move(ImportStorage.Slots);
+  ConflictingImportStorageSlots = std::move(ImportStorage.Conflicts);
+}
+
 bool MedLLVMEmitter::sameCxxContinuationReturnValue(const MedVar &Left,
                                                     const MedVar &Right) {
   if (Left.Kind != Right.Kind || Left.TheArch != Right.TheArch ||
@@ -682,6 +696,10 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   auto Mod_ = std::make_unique<llvm::Module>(ModName, LCtx);
   Mod = Mod_.get();
   Img = Img_;
+  ImportStorageSnapshotImage = nullptr;
+  EffectiveImportStorageSlots.clear();
+  ConflictingImportStorageSlots.clear();
+  ensureImportStorageSnapshot();
   TargetArch = TheArch;
   TargetFormat = Fmt;
   MergeableGlobals = MergeableGlobals_;

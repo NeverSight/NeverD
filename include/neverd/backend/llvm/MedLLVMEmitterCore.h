@@ -958,16 +958,17 @@ private:
     bool SawCode = false;
     bool SawData = false;
     bool SawImport = false;
+    bool SawRuntimeCallable = false;
     bool SawUnknown = false;
     bool SawConflict = false;
 
     bool isCallableOnly() const {
-      return Complete && (SawCode || SawImport) && !SawData && !SawUnknown &&
-             !SawConflict;
+      return Complete && (SawCode || SawImport || SawRuntimeCallable) &&
+             !SawData && !SawUnknown && !SawConflict;
     }
     bool isDataOnly() const {
-      return Complete && SawData && !SawCode && !SawImport && !SawUnknown &&
-             !SawConflict;
+      return Complete && SawData && !SawCode && !SawImport &&
+             !SawRuntimeCallable && !SawUnknown && !SawConflict;
     }
   };
 
@@ -1534,8 +1535,9 @@ private:
   /// stack allocation it guards is independently lowered to a real `alloca`
   /// (tryEmitDynamicStackAlloc).  Re-emitting the call with the recovered
   /// (wrong) argument registers makes the probe walk off the stack, so the
-  /// emitter elides it. Resolves the GOT slot the call target is loaded from
-  /// via Img.ImportPtrSlots or Img.DyldBindSlots.
+  /// emitter elides it. Resolves a loaded GOT slot only through the normalized
+  /// exact import-storage identity; direct executable callees retain their
+  /// separate import-stub identity.
   bool isStackProbeCall(const MedOp &Op) const;
 
   /// Canonical identity of a runtime size value, looking through the width and
@@ -1865,6 +1867,16 @@ private:
   llvm::LLVMContext *Ctx = nullptr;
   llvm::Module *Mod = nullptr;
   const BinaryImage *Img = nullptr;
+  /// Refresh the normalized exact import-storage view when a test peer or a
+  /// fresh emission installs a different image.  Production emitters snapshot
+  /// once; direct provenance tests still observe the same loader contract.
+  void ensureImportStorageSnapshot() const;
+  /// Per-emission normalized import pointer-storage identity.  Snapshotting the
+  /// loader's canonical/native evidence once keeps every classifier and mirror
+  /// consumer deterministic in serial and sharded emission.
+  mutable const BinaryImage *ImportStorageSnapshotImage = nullptr;
+  mutable std::map<va_t, ImportStorageSlot> EffectiveImportStorageSlots;
+  mutable std::set<va_t> ConflictingImportStorageSlots;
   std::vector<JumpTableStorageRange> ModuleJumpTableStorageRanges;
   std::set<va_t> ModuleSuppressibleJumpTableRelocationSlots;
   Arch TargetArch = Arch::X64;

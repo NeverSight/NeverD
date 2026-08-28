@@ -32,6 +32,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -97,6 +98,213 @@ TEST(WindowsEHCorpus, DeclaresCompleteMultiToolchainMatrix) {
   EXPECT_EQ(Toolchains, (std::set<std::string>{"msvc", "clang-cl"}));
   EXPECT_EQ(Architectures,
             (std::set<Arch>{Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}));
+}
+
+TEST(WindowsEHCorpus, RecordsLoadConfigRuntimeCallableSlots) {
+  auto ExpectationsOrErr = loadExpectations();
+  ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
+      << toString(ExpectationsOrErr.takeError());
+
+  const WindowsEHArtifactExpectation *Probe = nullptr;
+  for (const WindowsEHArtifactExpectation &Expectation : *ExpectationsOrErr) {
+    if (Expectation.Name != "cxx_eh_probe" || Expectation.Toolchain != "msvc" ||
+        Expectation.Architecture != "x86_64" ||
+        Expectation.CxxFormat != "fh3" || Expectation.SecurityCookie ||
+        Expectation.Optimization != "o0")
+      continue;
+    ASSERT_EQ(Probe, nullptr) << "duplicate focused ABI probe";
+    Probe = &Expectation;
+  }
+  ASSERT_NE(Probe, nullptr);
+
+  const std::filesystem::path ArtifactPath =
+      std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) / Probe->Path;
+  std::unique_ptr<Loader> ImageLoader = Loader::create(ArtifactPath);
+  ASSERT_NE(ImageLoader, nullptr);
+  auto ImageOrErr = ImageLoader->load(ArtifactPath);
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << toString(ImageOrErr.takeError());
+
+  // This immutable artifact's modern load-configuration directory names the
+  // CastGuard and guarded-memcpy runtime-owned callable slots at these RVAs.
+  // CastGuard starts null and therefore has no relocation; guarded memcpy is
+  // statically initialized as well as runtime-owned.  Those two facts must
+  // remain distinct in the image model.
+  const va_t CastGuardSlot = ImageOrErr->Base + 0x3200;
+  const va_t GuardMemcpySlot = ImageOrErr->Base + 0x3208;
+  EXPECT_TRUE(ImageOrErr->hasRuntimeCallablePointerSlotAt(
+      CastGuardSlot,
+      RuntimeCallablePointerSlotKind::CastGuardOsDeterminedFailureMode));
+  EXPECT_TRUE(ImageOrErr->hasRuntimeCallablePointerSlotAt(
+      GuardMemcpySlot, RuntimeCallablePointerSlotKind::GuardMemcpy));
+  EXPECT_FALSE(ImageOrErr->hasRelocationProvenanceAt(CastGuardSlot));
+  EXPECT_TRUE(ImageOrErr->hasRelocationProvenanceAt(GuardMemcpySlot));
+  EXPECT_EQ(ImageOrErr->CodePtrRelocSlots.count(CastGuardSlot), 0u);
+  EXPECT_EQ(ImageOrErr->CodePtrRelocSlots.count(GuardMemcpySlot), 1u);
+
+  const std::vector<va_t> CastGuardValues =
+      ImageOrErr->readPtrArray(CastGuardSlot, 1);
+  const std::vector<va_t> GuardMemcpyValues =
+      ImageOrErr->readPtrArray(GuardMemcpySlot, 1);
+  ASSERT_EQ(CastGuardValues.size(), 1u);
+  ASSERT_EQ(GuardMemcpyValues.size(), 1u);
+  EXPECT_EQ(CastGuardValues.front(), 0u);
+  EXPECT_EQ(GuardMemcpyValues.front(), ImageOrErr->Base + 0x278b);
+}
+
+void expectFocusedX64FH3ProbeLift(StringRef ProbeName, StringRef Toolchain,
+                                  bool SingleThread = false) {
+  const std::string Trace = ProbeName.str() + "/" + Toolchain.str() +
+                            (SingleThread ? "/single-thread" : "/default");
+  SCOPED_TRACE(Trace);
+  auto ExpectationsOrErr = loadExpectations();
+  ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
+      << toString(ExpectationsOrErr.takeError());
+
+  const WindowsEHArtifactExpectation *Probe = nullptr;
+  for (const WindowsEHArtifactExpectation &Expectation : *ExpectationsOrErr) {
+    if (Expectation.Name == ProbeName && Expectation.Toolchain == Toolchain &&
+        Expectation.Architecture == "x86_64" &&
+        Expectation.CxxFormat == "fh3" && !Expectation.SecurityCookie &&
+        Expectation.Optimization == "o0") {
+      ASSERT_EQ(Probe, nullptr) << "duplicate focused ABI probe";
+      Probe = &Expectation;
+    }
+  }
+  ASSERT_NE(Probe, nullptr);
+
+  const std::filesystem::path Input =
+      std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) / Probe->Path;
+  ASSERT_TRUE(std::filesystem::exists(Input));
+
+  if (ProbeName == "seh_probe") {
+    std::unique_ptr<Loader> ImageLoader = Loader::create(Input);
+    ASSERT_NE(ImageLoader, nullptr);
+    auto ImageOrErr = ImageLoader->load(Input);
+    ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+        << toString(ImageOrErr.takeError());
+    const auto RaiseException =
+        llvm::find_if(ImageOrErr->Imports, [](const Import &Imported) {
+          return Imported.Name == "RaiseException";
+        });
+    ASSERT_NE(RaiseException, ImageOrErr->Imports.end());
+    const ImportStorageSlotCollection ImportStorage =
+        ImageOrErr->collectImportStorageSlots();
+    const auto ExactSlot = ImportStorage.Slots.find(RaiseException->IATAddr);
+    ASSERT_NE(ExactSlot, ImportStorage.Slots.end());
+    EXPECT_EQ(ExactSlot->second.Name, "RaiseException");
+    EXPECT_EQ(ExactSlot->second.Evidence,
+              ImportStorageEvidence::ImportDirectory);
+    EXPECT_EQ(ImportStorage.Conflicts.count(RaiseException->IATAddr), 0u);
+  }
+
+  SmallString<128> OutputPath;
+  ASSERT_FALSE(
+      sys::fs::createTemporaryFile("neverd-windows-eh", "ll", OutputPath));
+  FileRemover RemoveOutput(OutputPath);
+  SmallString<128> DiagnosticPath;
+  ASSERT_FALSE(sys::fs::createTemporaryFile("neverd-windows-eh", "stderr",
+                                            DiagnosticPath));
+  FileRemover RemoveDiagnostic(DiagnosticPath);
+  SmallString<128> StdoutPath;
+  ASSERT_FALSE(
+      sys::fs::createTemporaryFile("neverd-windows-eh", "stdout", StdoutPath));
+  FileRemover RemoveStdout(StdoutPath);
+
+  const std::string InputString = Input.string();
+  const std::string OutputString = OutputPath.str().str();
+  StringRef Program = NEVERD_BINARY;
+  SmallVector<StringRef, 12> Args;
+  if (SingleThread) {
+    Program = NEVERD_CMAKE_COMMAND;
+    Args.push_back(Program);
+    Args.push_back("-E");
+    Args.push_back("env");
+    Args.push_back("NEVERD_THREADS=1");
+    Args.push_back(NEVERD_BINARY);
+  } else {
+    Args.push_back(Program);
+  }
+  Args.push_back("lift");
+  Args.push_back("--no-debug");
+  Args.push_back("--no-opt");
+  Args.push_back("-o");
+  Args.push_back(OutputString);
+  Args.push_back(InputString);
+  std::optional<StringRef> Redirects[] = {std::nullopt, StdoutPath.str(),
+                                          DiagnosticPath.str()};
+  std::string Error;
+  const int Exit = sys::ExecuteAndWait(Program, Args, std::nullopt, Redirects,
+                                       120, 0, &Error);
+  auto DiagnosticOrErr = MemoryBuffer::getFile(DiagnosticPath.str());
+  ASSERT_TRUE(static_cast<bool>(DiagnosticOrErr))
+      << DiagnosticOrErr.getError().message();
+  ASSERT_EQ(Exit, 0) << Error << '\n' << (*DiagnosticOrErr)->getBuffer().str();
+
+  auto OutputOrErr = MemoryBuffer::getFile(OutputPath.str());
+  ASSERT_TRUE(static_cast<bool>(OutputOrErr))
+      << OutputOrErr.getError().message();
+
+  LLVMContext Context;
+  SMDiagnostic ParseDiagnostic;
+  std::unique_ptr<Module> Module =
+      parseIRFile(OutputPath.str(), ParseDiagnostic, Context);
+  if (!Module) {
+    std::string Message;
+    raw_string_ostream OS(Message);
+    ParseDiagnostic.print("NeverDWindowsEHCorpusTests", OS);
+    FAIL() << OS.str();
+  }
+  std::string Verification;
+  raw_string_ostream VerificationOS(Verification);
+  EXPECT_FALSE(verifyModule(*Module, &VerificationOS)) << VerificationOS.str();
+
+  NamedMDNode *EHFunctions =
+      Module->getNamedMetadata("neverd.windows.eh.functions");
+  ASSERT_NE(EHFunctions, nullptr);
+  ASSERT_GT(EHFunctions->getNumOperands(), 0u);
+  for (unsigned I = 0; I < EHFunctions->getNumOperands(); ++I) {
+    MDNode *Record = EHFunctions->getOperand(I);
+    ASSERT_NE(Record, nullptr);
+    ASSERT_EQ(Record->getNumOperands(), 2u);
+    const auto *FunctionMetadata =
+        dyn_cast<ValueAsMetadata>(Record->getOperand(0).get());
+    const auto *Function =
+        FunctionMetadata
+            ? dyn_cast<llvm::Function>(FunctionMetadata->getValue())
+            : nullptr;
+    const auto *Payload = dyn_cast<MDNode>(Record->getOperand(1).get());
+    ASSERT_NE(Function, nullptr);
+    ASSERT_NE(Payload, nullptr);
+    EXPECT_EQ(Function->getMetadata("neverd.windows.eh"), Payload);
+    ASSERT_EQ(Payload->getNumOperands(), windows_eh_md::OperandCount);
+    const auto *VersionMetadata = dyn_cast<ConstantAsMetadata>(
+        Payload->getOperand(windows_eh_md::Version));
+    const auto *Version =
+        VersionMetadata ? dyn_cast<ConstantInt>(VersionMetadata->getValue())
+                        : nullptr;
+    ASSERT_NE(Version, nullptr);
+    EXPECT_EQ(Version->getZExtValue(), windows_eh_md::SchemaVersion);
+  }
+
+  bool SawRuntimeOwnedExternalRun = false;
+  SmallVector<StringRef, 0> Lines;
+  (*OutputOrErr)->getBuffer().split(Lines, '\n');
+  for (StringRef Line : Lines) {
+    if (!Line.starts_with("@__nd_codeptr_") || !Line.contains(" = external "))
+      continue;
+    SawRuntimeOwnedExternalRun = true;
+    EXPECT_TRUE(Line.contains(" global ")) << Line.str();
+    EXPECT_TRUE(Line.contains("dso_local")) << Line.str();
+    EXPECT_FALSE(Line.contains(" constant ")) << Line.str();
+    EXPECT_FALSE(Line.contains("zeroinitializer")) << Line.str();
+  }
+  EXPECT_TRUE(SawRuntimeOwnedExternalRun)
+      << "runtime-owned pointer storage was not emitted as an external run";
+}
+
+TEST(WindowsEHCorpus, LiftsFocusedMSVCX64FH3Probe) {
+  expectFocusedX64FH3ProbeLift("cxx_eh_probe", "msvc");
 }
 
 TEST(WindowsEHCorpus, PreservesSharedFH3NativeFunctionGroupIdentity) {
@@ -167,6 +375,19 @@ TEST(WindowsEHCorpus, PreservesSharedFH3NativeFunctionGroupIdentity) {
   }
   EXPECT_TRUE(SawParentAndCatchGroup)
       << "focused FH3 image exposed no complete parent/catch function group";
+}
+
+TEST(WindowsEHCorpus, LiftsFocusedClangCLX64FH3Probe) {
+  expectFocusedX64FH3ProbeLift("cxx_eh_probe", "clang-cl");
+}
+
+TEST(WindowsEHCorpus, LiftsFocusedClangCLX64FH3SEHProbe) {
+  expectFocusedX64FH3ProbeLift("seh_probe", "clang-cl");
+}
+
+TEST(WindowsEHCorpus, LiftsFocusedClangCLX64FH3SEHProbeSingleThread) {
+  expectFocusedX64FH3ProbeLift("seh_probe", "clang-cl",
+                               /*SingleThread=*/true);
 }
 
 // ARM32 spells every code pointer in a language table with the Thumb

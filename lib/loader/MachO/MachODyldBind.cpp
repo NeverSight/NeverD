@@ -190,6 +190,8 @@ void parseBindStreams(const uint8_t *BasePtr, size_t FileSize,
           if (BindType == BIND_TYPE_POINTER) {
             detail::clearLocalPointerClassification(Img, BindAddr);
             Img.DyldBindSlots[BindAddr] = ImportBindSlot{SymName, Addend};
+            Img.recordImportStorageSlot(BindAddr, SymName, Addend,
+                                        ImportStorageEvidence::LoaderBind);
           }
         };
 

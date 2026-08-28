@@ -1692,6 +1692,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     if (Info.AuthenticatedFrameStorage.RuntimeBase.Use.Value.Size != 0 &&
         Info.TargetLoads.size() != 1)
       return {};
+    if (Info.AuthenticatedDisplacedAddress.RuntimeBaseUse.Value.Size != 0 &&
+        Info.TargetLoads.size() != 1)
+      return {};
     if (!consumeCandidateProducts(
             {{Info.IndexValueAlternatives.size(), 2}}))
       return {};
@@ -1726,6 +1729,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
         Role.LoadWidth = Info.EntrySize;
         Role.AllowedBases = {Info.BaseAddr};
         Role.FrameStorage = Info.AuthenticatedFrameStorage;
+        Role.DisplacedAddress = Info.AuthenticatedDisplacedAddress;
         Role.Indices = Indices;
         Role.AddressScale = Info.PreScaledIndex ? 1 : PhysicalStride;
         // A logical selector is commonly narrower than the address
@@ -2053,6 +2057,30 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     if (GuardFound) {
       Info.IndexDomainAuthenticated = true;
       Info.AuthenticatedGuardBound = Info.MaxEntries;
+    }
+  }
+  // Linked x64 PE RVA switches have no per-entry relocation run: the exact
+  // unsigned range guard is their only slot-domain certificate.  Keep this
+  // encoding separate from generic compact relative tables, reject mixed
+  // relocation storage, and never fall through to readable-prefix inference.
+  if (Info.IsPEImageRelativeRVA) {
+    if (Img.IsRelocatable || !Img.isCOFF() || Img.Arch != Arch::X64 ||
+        Img.getPointerSize() != 8 || !Info.IsRelative || Info.IsSigned ||
+        Info.EntrySize != sizeof(uint32_t) || !Info.HasTargetBase ||
+        Info.TargetBase != Img.Base || Info.EntryScale != 1 ||
+        Info.RelocAbsolute || !GuardFound || !Info.IndexDomainAuthenticated ||
+        Info.AuthenticatedGuardBound != Info.MaxEntries ||
+        Info.MaxEntries < limits::kMinJumpTableEntries ||
+        Info.MaxEntries > limits::kMaxJumpTableEntries)
+      return {};
+    if (!consumeCandidateEvidence(Info.MaxEntries))
+      return {};
+    for (uint32_t Slot = 0; Slot < Info.MaxEntries; ++Slot) {
+      if (Slot > (InvalidVA - Info.BaseAddr) / Info.EntrySize)
+        return {};
+      const va_t SlotVA = Info.BaseAddr + uint64_t{Slot} * Info.EntrySize;
+      if (Img.hasRelocationProvenanceAt(SlotVA))
+        return {};
     }
   }
 

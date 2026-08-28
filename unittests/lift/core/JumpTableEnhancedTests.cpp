@@ -14,9 +14,9 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/ir/low/jumptable/JumpTableResolverDetail.h"
 #include "NeverDLiftFixture.h"
 #include "PipelineLowIRDetail.h"
-#include "../../../lib/ir/low/jumptable/JumpTableResolverDetail.h"
 
 #include "neverd/Limits.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
@@ -32,6 +32,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <array>
 #include <cctype>
 #include <cstring>
 #include <functional>
@@ -93,14 +94,13 @@ static bool lowFunctionHasOpcode(const neverd::LowFunc &Function,
   return false;
 }
 
-static const neverd::LowOp *
-findExactLowOp(const neverd::LowFunc &Function, neverd::va_t Address,
-               int Sequence, neverd::NdOp Opcode) {
+static const neverd::LowOp *findExactLowOp(const neverd::LowFunc &Function,
+                                           neverd::va_t Address, int Sequence,
+                                           neverd::NdOp Opcode) {
   const neverd::LowOp *Match = nullptr;
   for (const neverd::LowBlock &Block : Function.Blocks)
     for (const neverd::LowOp &Op : Block.Ops)
-      if (Op.Addr == Address && Op.Seq == Sequence &&
-          Op.Opcode == Opcode) {
+      if (Op.Addr == Address && Op.Seq == Sequence && Op.Opcode == Opcode) {
         if (Match)
           return nullptr;
         Match = &Op;
@@ -366,9 +366,8 @@ TEST_F(JTE_X86_32, GOTPCModelRequiresLifterAuthenticatedCallPopSeed) {
   EXPECT_EQ(GetPc.CallInstructionAddr, 0u);
   EXPECT_EQ(GetPc.InstructionAddr, 5u);
   EXPECT_EQ(GetPc.OutputOpcode, neverd::NdOp::COPY);
-  const neverd::LowOp *SeedCopy =
-      findExactLowOp(Low, GetPc.InstructionAddr, GetPc.OpSeq,
-                     GetPc.OutputOpcode);
+  const neverd::LowOp *SeedCopy = findExactLowOp(
+      Low, GetPc.InstructionAddr, GetPc.OpSeq, GetPc.OutputOpcode);
   ASSERT_NE(SeedCopy, nullptr);
   ASSERT_EQ(SeedCopy->NumInputs, 1u);
   EXPECT_EQ(GetPc.InputWitness, SeedCopy->Inputs[0]);
@@ -422,8 +421,7 @@ TEST_F(JTE_X86_32, GOTPCModelRejectsAddressTakenPopEntry) {
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
       << llvm::toString(ImageOrErr.takeError());
   neverd::BinaryImage &Image = *ImageOrErr;
-  const neverd::Symbol *Function =
-      Image.findSymbol("jt_i386_gotpc_rooted_pop");
+  const neverd::Symbol *Function = Image.findSymbol("jt_i386_gotpc_rooted_pop");
   const neverd::Symbol *Pointer =
       Image.findSymbol("jt_i386_gotpc_rooted_pop_pointer");
   ASSERT_NE(Function, nullptr);
@@ -433,14 +431,13 @@ TEST_F(JTE_X86_32, GOTPCModelRejectsAddressTakenPopEntry) {
   neverd::Decoder Decoder;
   ASSERT_TRUE(Decoder.init(neverd::Arch::X86));
   neverd::CFGBuilder Builder;
-  const neverd::LowFunc Low = Builder.build(
-      Image, Decoder, Function->Addr, "jt_i386_gotpc_rooted_pop");
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, "jt_i386_gotpc_rooted_pop");
 
   ASSERT_EQ(Low.I386GetPcOccurrences.size(), 1u);
   const auto &GetPc = Low.I386GetPcOccurrences.front();
-  const neverd::LowOp *SeedCopy =
-      findExactLowOp(Low, GetPc.InstructionAddr, GetPc.OpSeq,
-                     GetPc.OutputOpcode);
+  const neverd::LowOp *SeedCopy = findExactLowOp(
+      Low, GetPc.InstructionAddr, GetPc.OpSeq, GetPc.OutputOpcode);
   ASSERT_NE(SeedCopy, nullptr);
   ASSERT_EQ(SeedCopy->NumInputs, 1u);
   EXPECT_EQ(GetPc.InputWitness, SeedCopy->Inputs[0]);
@@ -461,8 +458,7 @@ TEST_F(JTE_X86_32, GOTOFFSwitchRequiresExactCallPopAndDataFieldOccurrences) {
       Image.findSymbol("jt_i386_gotoff_switch_call_pop");
   const neverd::Symbol *Negative =
       Image.findSymbol("jt_i386_gotoff_switch_absolute_seed");
-  const neverd::Symbol *Table =
-      Image.findSymbol("jt_i386_gotoff_switch_table");
+  const neverd::Symbol *Table = Image.findSymbol("jt_i386_gotoff_switch_table");
   ASSERT_NE(Positive, nullptr);
   ASSERT_NE(Negative, nullptr);
   ASSERT_NE(Table, nullptr);
@@ -492,8 +488,7 @@ TEST_F(JTE_X86_32, GOTOFFSwitchRequiresExactCallPopAndDataFieldOccurrences) {
   for (const auto &[FieldVA, Field] : Image.DataAddressRelocOperands)
     if (FieldVA >= Positive->Addr &&
         FieldVA < Positive->Addr + Positive->Size &&
-        Field.Width == Image.getPointerSize() &&
-        Field.TargetVA == Table->Addr)
+        Field.Width == Image.getPointerSize() && Field.TargetVA == Table->Addr)
       MatchingFields.push_back(FieldVA);
   ASSERT_EQ(MatchingFields.size(), 1u);
   const neverd::va_t FieldVA = MatchingFields.front();
@@ -507,11 +502,11 @@ TEST_F(JTE_X86_32, GOTOFFSwitchRequiresExactCallPopAndDataFieldOccurrences) {
   Image.DataAddressRelocOperands.emplace(FieldVA, SavedField);
   Image.DataAddressRelocOperands.at(FieldVA).TargetOwnerVA = neverd::InvalidVA;
   EXPECT_TRUE(Recover(*Positive).JumpTables.empty())
-      << "a GOTOFF field without an authenticated target owner must fail closed";
+      << "a GOTOFF field without an authenticated target owner must fail "
+         "closed";
 
   Image.DataAddressRelocOperands.at(FieldVA) = SavedField;
-  ASSERT_EQ(SavedField.Kind,
-            neverd::RelocatedAddressFieldKind::I386ELFGOTOFF);
+  ASSERT_EQ(SavedField.Kind, neverd::RelocatedAddressFieldKind::I386ELFGOTOFF);
   Image.DataAddressRelocOperands.at(FieldVA).Kind =
       neverd::RelocatedAddressFieldKind::Generic;
   EXPECT_TRUE(Recover(*Positive).JumpTables.empty())
@@ -1309,8 +1304,8 @@ TEST_F(JTE_X86_32, GOTPCOperandBindingRejectsDisplacementImmediateCollision) {
   neverd::Decoder Decoder;
   ASSERT_TRUE(Decoder.init(neverd::Arch::X86));
   neverd::CFGBuilder Builder;
-  const neverd::LowFunc Low = Builder.build(
-      Image, Decoder, Function->Addr, "jt_i386_gotpc_operand_collision");
+  const neverd::LowFunc Low = Builder.build(Image, Decoder, Function->Addr,
+                                            "jt_i386_gotpc_operand_collision");
 
   ASSERT_EQ(Low.I386GetPcOccurrences.size(), 1u);
   EXPECT_TRUE(Low.RelocatedInstructionScalarModelOccurrences.empty())
@@ -1325,8 +1320,7 @@ TEST_F(JTE_X86_32, AbsoluteDataRelocationCannotMasqueradeAsGOTOFF) {
   neverd::BinaryImage &Image = *ImageOrErr;
   const neverd::Symbol *Function =
       Image.findSymbol("jt_i386_abs32_displacement_switch");
-  const neverd::Symbol *Table =
-      Image.findSymbol("jt_i386_abs32_switch_table");
+  const neverd::Symbol *Table = Image.findSymbol("jt_i386_abs32_switch_table");
   ASSERT_NE(Function, nullptr);
   ASSERT_NE(Table, nullptr);
 
@@ -1337,8 +1331,7 @@ TEST_F(JTE_X86_32, AbsoluteDataRelocationCannotMasqueradeAsGOTOFF) {
         Field.TargetVA == Table->Addr)
       Fields.push_back(Field);
   ASSERT_EQ(Fields.size(), 1u);
-  EXPECT_EQ(Fields.front().Kind,
-            neverd::RelocatedAddressFieldKind::Generic);
+  EXPECT_EQ(Fields.front().Kind, neverd::RelocatedAddressFieldKind::Generic);
 
   neverd::Decoder Decoder;
   ASSERT_TRUE(Decoder.init(neverd::Arch::X86));
@@ -1367,8 +1360,7 @@ TEST_F(JTE_X86_32, GOTOFFSwitchRequiresTheExactScalarModelOrigin) {
     return Builder.build(Image, Decoder, Function->Addr, Function->Name);
   };
 
-  const neverd::LowFunc Computed =
-      Recover("jt_i386_gotoff_literal_zero_base");
+  const neverd::LowFunc Computed = Recover("jt_i386_gotoff_literal_zero_base");
   ASSERT_EQ(Computed.RelocatedInstructionScalarModelOccurrences.size(), 1u);
   EXPECT_TRUE(Computed.JumpTables.empty())
       << "an independently computed zero cannot borrow another register's "
@@ -1579,6 +1571,166 @@ protected:
 
 static fs::path jteX64Obj() {
   return fs::path(TEST_OBJ_DIR) / "test_jumptable_enhanced.o";
+}
+
+struct COFFImageRelativeRVASwitchOptions {
+  bool ScalarStorageBase = false;
+  bool ScalarTargetBase = false;
+  bool UseNonParameterIndex = false;
+  bool RelocatedTableSlot = false;
+};
+
+static neverd::BinaryImage makeCOFFImageRelativeRVASwitch(
+    COFFImageRelativeRVASwitchOptions Options = {}) {
+  constexpr neverd::va_t ImageBase = 0x140000000;
+  constexpr neverd::va_t FunctionVA = ImageBase + 0x1000;
+  constexpr neverd::va_t TableVA = ImageBase + 0x1100;
+  constexpr size_t TableOffset = TableVA - FunctionVA;
+
+  neverd::BinaryImage Image;
+  Image.Arch = neverd::Arch::X64;
+  Image.Bits = neverd::Bitness::Bits64;
+  Image.Format = neverd::BinaryFormat::COFF;
+  Image.Base = ImageBase;
+  Image.Entry = FunctionVA;
+
+  neverd::Segment Text;
+  Text.Name = ".text";
+  Text.VA = FunctionVA;
+  Text.Size = TableOffset + 6 * sizeof(uint32_t);
+  Text.Flags =
+      neverd::SegmentFlags::Readable | neverd::SegmentFlags::Executable;
+  Text.Data.assign(Text.Size, 0x90);
+  std::vector<uint8_t> DispatchBytes;
+  auto AppendU32 = [&](uint32_t Value) {
+    for (unsigned Byte = 0; Byte < sizeof(Value); ++Byte)
+      DispatchBytes.push_back(static_cast<uint8_t>(Value >> (Byte * 8)));
+  };
+  auto AppendU64 = [&](uint64_t Value) {
+    for (unsigned Byte = 0; Byte < sizeof(Value); ++Byte)
+      DispatchBytes.push_back(static_cast<uint8_t>(Value >> (Byte * 8)));
+  };
+  auto AppendImageBaseLEA = [&](uint8_t REX, uint8_t ModRM) {
+    const neverd::va_t NextInstruction =
+        FunctionVA + DispatchBytes.size() + 7;
+    const int64_t Displacement =
+        static_cast<int64_t>(ImageBase) -
+        static_cast<int64_t>(NextInstruction);
+    EXPECT_GE(Displacement, std::numeric_limits<int32_t>::min());
+    EXPECT_LE(Displacement, std::numeric_limits<int32_t>::max());
+    DispatchBytes.insert(DispatchBytes.end(), {REX, 0x8d, ModRM});
+    AppendU32(static_cast<uint32_t>(Displacement));
+  };
+
+  if (!Options.UseNonParameterIndex)
+    DispatchBytes.insert(DispatchBytes.end(),
+                         {0x89, 0xc9}); // mov ecx, ecx; defines all of rcx
+  DispatchBytes.insert(
+      DispatchBytes.end(),
+      {0x83, Options.UseNonParameterIndex ? uint8_t{0xf8} : uint8_t{0xf9},
+       0x05}); // cmp eax/ecx, 5
+  const size_t BranchNextOffset = DispatchBytes.size() + 6;
+  EXPECT_LE(BranchNextOffset, size_t{0x40});
+  DispatchBytes.insert(DispatchBytes.end(), {0x0f, 0x87});
+  AppendU32(static_cast<uint32_t>(0x40 - BranchNextOffset)); // ja default
+  if (Options.ScalarStorageBase) {
+    DispatchBytes.insert(DispatchBytes.end(), {0x48, 0xba});
+    AppendU64(ImageBase);      // movabs rdx, image base
+  } else {
+    AppendImageBaseLEA(0x48, 0x15); // lea rdx, image base
+  }
+  DispatchBytes.insert(
+      DispatchBytes.end(),
+      {0x8b, 0x8c,
+       Options.UseNonParameterIndex ? uint8_t{0x82} : uint8_t{0x8a}, 0x00,
+       0x11, 0x00, 0x00}); // mov ecx,[rdx+rax/rcx*4+1100h]
+  if (Options.ScalarTargetBase) {
+    DispatchBytes.insert(DispatchBytes.end(), {0x49, 0xb8});
+    AppendU64(ImageBase);      // movabs r8, image base
+  } else {
+    AppendImageBaseLEA(0x4c, 0x05); // lea r8, image base
+  }
+  DispatchBytes.insert(DispatchBytes.end(),
+                       {0x49, 0x03, 0xc8, // add rcx, r8
+                        0xff, 0xe1});     // jmp rcx
+  EXPECT_LE(DispatchBytes.size(), size_t{0x30});
+  std::copy(DispatchBytes.begin(), DispatchBytes.end(), Text.Data.begin());
+
+  const std::array<uint32_t, 6> TargetRVAs{0x1030, 0x1032, 0x1034,
+                                           0x1036, 0x1038, 0x103a};
+  for (size_t I = 0; I < TargetRVAs.size(); ++I) {
+    Text.Data[0x30 + I * 2] = 0xc3;
+    const uint32_t RVA = TargetRVAs[I];
+    for (unsigned Byte = 0; Byte < sizeof(RVA); ++Byte)
+      Text.Data[TableOffset + I * sizeof(RVA) + Byte] =
+          static_cast<uint8_t>(RVA >> (Byte * 8));
+  }
+  Text.Data[0x40] = 0xc3;
+  Image.Segments.push_back(std::move(Text));
+
+  neverd::Section TextSection;
+  TextSection.Name = ".text";
+  TextSection.VA = FunctionVA;
+  TextSection.Size = TableOffset + 6 * sizeof(uint32_t);
+  TextSection.Flags =
+      neverd::SegmentFlags::Readable | neverd::SegmentFlags::Executable;
+  Image.Sections.push_back(std::move(TextSection));
+  if (Options.RelocatedTableSlot)
+    Image.Relocations.push_back(neverd::RelocationEntry{.Address = TableVA});
+
+  neverd::Symbol Function = neverd::Symbol::makeFunc(FunctionVA, 0x41);
+  Function.Name = "coff_image_relative_rva_switch";
+  Image.Symbols.push_back(std::move(Function));
+  Image.KnownCodeRanges.emplace_back(FunctionVA, FunctionVA + 0x41);
+  return Image;
+}
+
+TEST_F(JTE_X86_64, RecoversExactCOFFImageRelativeRVASwitch) {
+  constexpr neverd::va_t ImageBase = 0x140000000;
+  constexpr neverd::va_t FunctionVA = ImageBase + 0x1000;
+  constexpr neverd::va_t TableVA = ImageBase + 0x1100;
+  const std::vector<neverd::va_t> ExpectedTargets{
+      ImageBase + 0x1030, ImageBase + 0x1032, ImageBase + 0x1034,
+      ImageBase + 0x1036, ImageBase + 0x1038, ImageBase + 0x103a};
+
+  auto Recover = [&](COFFImageRelativeRVASwitchOptions Options = {}) {
+    neverd::BinaryImage Image = makeCOFFImageRelativeRVASwitch(Options);
+    neverd::Decoder Decoder;
+    EXPECT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    const std::set<neverd::va_t> FunctionEntries{FunctionVA};
+    Builder.setKnownFuncEntries(&FunctionEntries);
+    return Builder.build(Image, Decoder, FunctionVA,
+                         "coff_image_relative_rva_switch");
+  };
+
+  const neverd::LowFunc Exact = Recover();
+  ASSERT_EQ(Exact.JumpTables.size(), 1u);
+  const neverd::JumpTable &Table = Exact.JumpTables.front();
+  EXPECT_EQ(Table.BaseAddr, TableVA);
+  EXPECT_TRUE(Table.HasBaseAddr);
+  EXPECT_EQ(Table.EntrySize, sizeof(uint32_t));
+  EXPECT_TRUE(Table.IsRelative);
+  EXPECT_FALSE(Table.IsSigned);
+  EXPECT_TRUE(Table.HasTargetBase);
+  EXPECT_EQ(Table.TargetBase, ImageBase);
+  EXPECT_TRUE(Table.IsPEImageRelativeRVA);
+  EXPECT_EQ(Table.Targets, ExpectedTargets);
+  EXPECT_FALSE(lowFunctionHasOpcode(Exact, neverd::NdOp::INDIR_CALL));
+
+  auto ExpectRejected = [&](COFFImageRelativeRVASwitchOptions Options,
+                            const char *Reason) {
+    SCOPED_TRACE(Reason);
+    EXPECT_TRUE(Recover(Options).JumpTables.empty());
+  };
+  ExpectRejected({.ScalarStorageBase = true},
+                 "scalar storage base cannot borrow address provenance");
+  ExpectRejected({.ScalarTargetBase = true},
+                 "scalar target base cannot borrow address provenance");
+  ExpectRejected({.UseNonParameterIndex = true},
+                 "non-parameter high bits have no Win64 ABI certificate");
+  ExpectRejected({.RelocatedTableSlot = true},
+                 "PE RVA slots cannot carry mixed relocation provenance");
 }
 
 TEST_F(JTE_X86_64, AllStagesSucceed) { verifyAllStages(jteX64Obj()); }
@@ -2273,8 +2425,7 @@ TEST_F(JTE_X86_64,
   EXPECT_EQ(LLVMBody.find("switch i"), std::string::npos) << LLVMBody;
 }
 
-TEST_F(JTE_X86_64,
-       FreshBuilderRetainsPreviouslyPublishedOpaqueBranchIdentity) {
+TEST_F(JTE_X86_64, FreshBuilderRetainsPreviouslyPublishedOpaqueBranchIdentity) {
   auto ImageOrErr = neverd::loadBinary(lostPublishedX64Obj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
       << llvm::toString(ImageOrErr.takeError());
@@ -2298,15 +2449,16 @@ TEST_F(JTE_X86_64,
   ASSERT_TRUE(FirstDecoder.init(neverd::Arch::X64));
   neverd::CFGBuilder FirstBuilder;
   FirstBuilder.setKnownFuncEntries(&Entries);
-  const neverd::LowFunc First = FirstBuilder.build(
-      Image, FirstDecoder, Function->Addr, Function->Name);
+  const neverd::LowFunc First =
+      FirstBuilder.build(Image, FirstDecoder, Function->Addr, Function->Name);
   ASSERT_EQ(First.JumpTables.size(), 1u);
   const neverd::va_t Branch = First.JumpTables.front().InsnAddr;
   ASSERT_EQ(First.JumpTables.front().Targets.size(), 2u);
-  ASSERT_NE(std::find(First.JumpTables.front().SuppressibleRelocationSlots.begin(),
-                      First.JumpTables.front().SuppressibleRelocationSlots.end(),
-                      Storage->Addr),
-            First.JumpTables.front().SuppressibleRelocationSlots.end());
+  ASSERT_NE(
+      std::find(First.JumpTables.front().SuppressibleRelocationSlots.begin(),
+                First.JumpTables.front().SuppressibleRelocationSlots.end(),
+                Storage->Addr),
+      First.JumpTables.front().SuppressibleRelocationSlots.end());
   ASSERT_EQ(First.EverPublishedJumpTableBranchAddresses.count(Branch), 1u);
 
   // Protecting slot zero makes case 0 an independent proof root.  Even without
@@ -2319,8 +2471,8 @@ TEST_F(JTE_X86_64,
   neverd::CFGBuilder NoSeedBuilder;
   NoSeedBuilder.setKnownFuncEntries(&Entries);
   NoSeedBuilder.setProtectedJumpTableRelocationSlots(&ProtectedSlots);
-  const neverd::LowFunc NoSeed = NoSeedBuilder.build(
-      Image, NoSeedDecoder, Function->Addr, Function->Name);
+  const neverd::LowFunc NoSeed =
+      NoSeedBuilder.build(Image, NoSeedDecoder, Function->Addr, Function->Name);
   ASSERT_TRUE(NoSeed.JumpTables.empty());
   EXPECT_TRUE(lowFunctionHasOpcode(NoSeed, neverd::NdOp::INDIR_BR));
   EXPECT_FALSE(lowFunctionHasOpcode(NoSeed, neverd::NdOp::INDIR_CALL));
@@ -2337,8 +2489,8 @@ TEST_F(JTE_X86_64,
   SeedHistory.insert(Function->Addr); // current, but not an indirect branch
   SeedHistory.insert(Storage->Addr);  // data, not a current instruction
   SeededBuilder.setPreviouslyPublishedJumpTableBranches(&SeedHistory);
-  const neverd::LowFunc Seeded = SeededBuilder.build(
-      Image, SeededDecoder, Function->Addr, Function->Name);
+  const neverd::LowFunc Seeded =
+      SeededBuilder.build(Image, SeededDecoder, Function->Addr, Function->Name);
   ASSERT_TRUE(Seeded.JumpTables.empty());
   EXPECT_TRUE(lowFunctionHasOpcode(Seeded, neverd::NdOp::INDIR_BR));
   EXPECT_FALSE(lowFunctionHasOpcode(Seeded, neverd::NdOp::INDIR_CALL));
@@ -2351,8 +2503,8 @@ TEST_F(JTE_X86_64,
   // old set nor inject the previous function/build's branch identities.
   neverd::Decoder ReusedDecoder;
   ASSERT_TRUE(ReusedDecoder.init(neverd::Arch::X64));
-  const neverd::LowFunc Reused = SeededBuilder.build(
-      Image, ReusedDecoder, Function->Addr, Function->Name);
+  const neverd::LowFunc Reused =
+      SeededBuilder.build(Image, ReusedDecoder, Function->Addr, Function->Name);
   ASSERT_TRUE(Reused.JumpTables.empty());
   EXPECT_TRUE(lowFunctionHasOpcode(Reused, neverd::NdOp::INDIR_BR));
   EXPECT_FALSE(lowFunctionHasOpcode(Reused, neverd::NdOp::INDIR_CALL));
@@ -2395,8 +2547,8 @@ TEST_F(JTE_X86_64,
       findLowFunction(PipelineRun.Result, Function->Name);
   ASSERT_NE(PipelineLow, nullptr);
   EXPECT_TRUE(PipelineLow->JumpTables.empty());
-  EXPECT_EQ(
-      PipelineLow->EverPublishedJumpTableBranchAddresses.count(Branch), 1u);
+  EXPECT_EQ(PipelineLow->EverPublishedJumpTableBranchAddresses.count(Branch),
+            1u);
   EXPECT_EQ(PipelineLow->UnsafeIndirectBranchAddresses.count(Branch), 1u);
   EXPECT_TRUE(lowFunctionHasOpcode(*PipelineLow, neverd::NdOp::INDIR_BR));
   EXPECT_FALSE(lowFunctionHasOpcode(*PipelineLow, neverd::NdOp::INDIR_CALL));
@@ -3691,8 +3843,7 @@ TEST_F(JTE_X86_64, ModuloBoundSharedDAGStaysWithinEvidenceBudget) {
   neverd::BinaryImage &Image = *ImageOrErr;
   const neverd::Symbol *Function =
       Image.findSymbol("jt_modulo_shared_dag_budget");
-  const neverd::Symbol *Table =
-      Image.findSymbol("jt_modulo_shared_dag_table");
+  const neverd::Symbol *Table = Image.findSymbol("jt_modulo_shared_dag_table");
   ASSERT_NE(Function, nullptr);
   ASSERT_NE(Table, nullptr);
   ASSERT_EQ(Table->Size, 5u * 8u);
@@ -3949,8 +4100,7 @@ TEST_F(JTE_X86_64, DeadMaskDependencyDoesNotOverrideModuloDomain) {
         return false;
       };
       SawMask31 |= Op.Opcode == neverd::NdOp::INT_AND && HasScalar(31);
-      SawMultiplyByZero |=
-          Op.Opcode == neverd::NdOp::INT_MULT && HasScalar(0);
+      SawMultiplyByZero |= Op.Opcode == neverd::NdOp::INT_MULT && HasScalar(0);
       SawRemainder |= Op.Opcode == neverd::NdOp::INT_REM;
     }
   ASSERT_TRUE(SawMask31);
@@ -4087,8 +4237,7 @@ TEST_F(JTE_X86_64, MaskBoundIntersectsTranslatedNestedMergeDomains) {
 
   ASSERT_EQ(Low.JumpTables.size(), 1u);
   ASSERT_EQ(Low.JumpTables.front().Targets.size(), 2u);
-  EXPECT_EQ(Low.JumpTables.front().CaseLabels,
-            (std::vector<int64_t>{1, 2}));
+  EXPECT_EQ(Low.JumpTables.front().CaseLabels, (std::vector<int64_t>{1, 2}));
 }
 
 TEST_F(JTE_X86_64, MaskRawDenseNestedPreciseReplayFailsClosed) {
@@ -4121,8 +4270,12 @@ TEST_F(JTE_X86_64, MaskRawDenseNestedPreciseReplayFailsClosed) {
   // Bounds.cpp fallthrough after a failed/incomplete precise replay makes an
   // intermediate allowance publish eight targets and turns this test RED.
   constexpr size_t Budgets[] = {
-      8192,  16384, 32768, 65536,
-      131072, 262144,
+      8192,
+      16384,
+      32768,
+      65536,
+      131072,
+      262144,
       neverd::limits::kMaxJumpTableMaskFixedPointEvidenceWork};
   bool SawOpaque = false;
   bool SawExact = false;
@@ -4140,8 +4293,7 @@ TEST_F(JTE_X86_64, MaskRawDenseNestedPreciseReplayFailsClosed) {
     ASSERT_EQ(Low.JumpTables.size(), 1u) << "budget=" << Budget;
     EXPECT_EQ(Low.JumpTables.front().Targets.size(), 2u)
         << "raw capacity widened a failed precise replay; budget=" << Budget;
-    EXPECT_EQ(Low.JumpTables.front().CaseLabels,
-              (std::vector<int64_t>{1, 2}))
+    EXPECT_EQ(Low.JumpTables.front().CaseLabels, (std::vector<int64_t>{1, 2}))
         << "budget=" << Budget;
     SawExact = true;
   }
@@ -4288,8 +4440,7 @@ TEST_F(JTE_X86_64, MaskFixedPointRejectsLateOutOfDomainSelector) {
         DispatchAddr = Op.Addr;
       }
     }
-  ASSERT_TRUE(SawMask7)
-      << "case zero must expose the eight-value mask domain";
+  ASSERT_TRUE(SawMask7) << "case zero must expose the eight-value mask domain";
   ASSERT_TRUE(SawLiteral15)
       << "case seven must expose the late out-of-domain selector";
   ASSERT_NE(Dispatch, nullptr);
@@ -4306,8 +4457,8 @@ TEST_F(JTE_X86_64, MaskFixedPointReplaysCompleteEntryDomain) {
   neverd::BinaryImage &Image = *ImageOrErr;
   const neverd::Symbol *Function =
       Image.findSymbol("jt_identity_mask_fp_entry_bound_late_escape");
-  const neverd::Symbol *Table = Image.findSymbol(
-      "jt_identity_mask_fp_entry_bound_late_escape_table");
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_identity_mask_fp_entry_bound_late_escape_table");
   ASSERT_NE(Function, nullptr);
   ASSERT_NE(Table, nullptr);
   ASSERT_EQ(Table->Size, 8u * 8u);
@@ -4480,8 +4631,7 @@ TEST_F(JTE_X86_64,
         << "every cyclic sibling has a complete four-value domain";
 
     auto FindIn = [&](const neverd::Symbol &Begin,
-                      const neverd::Symbol &End)
-        -> const neverd::JumpTable * {
+                      const neverd::Symbol &End) -> const neverd::JumpTable * {
       const neverd::JumpTable *Found = nullptr;
       for (const neverd::JumpTable &JT : Low.JumpTables) {
         if (JT.InsnAddr < Begin.Addr || JT.InsnAddr >= End.Addr)
@@ -4510,9 +4660,8 @@ TEST_F(JTE_X86_64,
       ASSERT_EQ(JT->Targets.size(), Targets.size())
           << "every sibling must publish its own complete four-value domain";
       for (const neverd::Symbol *Target : Targets)
-        EXPECT_EQ(std::count(JT->Targets.begin(), JT->Targets.end(),
-                             Target->Addr),
-                  1)
+        EXPECT_EQ(
+            std::count(JT->Targets.begin(), JT->Targets.end(), Target->Addr), 1)
             << "the candidate graph must retain every sibling consumer";
 
       ASSERT_EQ(JT->SelectorUseRefs.size(), 1u)
@@ -4537,9 +4686,8 @@ TEST_F(JTE_X86_64,
       EXPECT_GE(Load.Addr, Begin.Addr);
       EXPECT_LT(Load.Addr, End.Addr)
           << "authenticated LOAD occurrence escaped its owning sibling";
-      EXPECT_NE(
-          findExactLowOp(Low, Load.Addr, Load.Seq, neverd::NdOp::LOAD),
-          nullptr);
+      EXPECT_NE(findExactLowOp(Low, Load.Addr, Load.Seq, neverd::NdOp::LOAD),
+                nullptr);
       EXPECT_TRUE(LoadOccurrences.insert({Load.Addr, Load.Seq}).second)
           << "shared storage does not make sibling LOAD occurrences aliases";
     }
@@ -4548,10 +4696,8 @@ TEST_F(JTE_X86_64,
   CheckLayout(
       "jt_identity_sibling_snapshot_narrow_first",
       "jt_identity_sibling_nf_table",
-      {"jt_identity_sibling_nf_t0_begin",
-       "jt_identity_sibling_nf_t1_begin",
-       "jt_identity_sibling_nf_t2_begin",
-       "jt_identity_sibling_nf_t3_begin"},
+      {"jt_identity_sibling_nf_t0_begin", "jt_identity_sibling_nf_t1_begin",
+       "jt_identity_sibling_nf_t2_begin", "jt_identity_sibling_nf_t3_begin"},
       {{"jt_identity_sibling_nf_entry_begin",
         "jt_identity_sibling_nf_entry_end"},
        {"jt_identity_sibling_nf_t0_begin", "jt_identity_sibling_nf_t0_end"},
@@ -4559,12 +4705,9 @@ TEST_F(JTE_X86_64,
        {"jt_identity_sibling_nf_t2_begin", "jt_identity_sibling_nf_t2_end"},
        {"jt_identity_sibling_nf_t3_begin", "jt_identity_sibling_nf_t3_end"}});
   CheckLayout(
-      "jt_identity_sibling_snapshot_wide_first",
-      "jt_identity_sibling_wf_table",
-      {"jt_identity_sibling_wf_t0_begin",
-       "jt_identity_sibling_wf_t1_begin",
-       "jt_identity_sibling_wf_t2_begin",
-       "jt_identity_sibling_wf_t3_begin"},
+      "jt_identity_sibling_snapshot_wide_first", "jt_identity_sibling_wf_table",
+      {"jt_identity_sibling_wf_t0_begin", "jt_identity_sibling_wf_t1_begin",
+       "jt_identity_sibling_wf_t2_begin", "jt_identity_sibling_wf_t3_begin"},
       {{"jt_identity_sibling_wf_entry_begin",
         "jt_identity_sibling_wf_entry_end"},
        {"jt_identity_sibling_wf_t3_begin", "jt_identity_sibling_wf_t3_end"},
@@ -5297,8 +5440,7 @@ TEST_F(JTE_X86_64, EvidenceBudgetDoesNotCaptureIndexedCallbackTailCall) {
   EXPECT_EQ(LLVMBody.find("switch i"), std::string::npos) << LLVMBody;
 }
 
-TEST_F(JTE_X86_64,
-       IncompleteMaskDomainDoesNotCaptureIndexedCallbackTailCall) {
+TEST_F(JTE_X86_64, IncompleteMaskDomainDoesNotCaptureIndexedCallbackTailCall) {
   auto ImageOrErr = neverd::loadBinary(maskEqualBoundObj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
       << llvm::toString(ImageOrErr.takeError());
@@ -5336,16 +5478,15 @@ TEST_F(JTE_X86_64,
   EXPECT_EQ(LLVMBody.find("switch i"), std::string::npos) << LLVMBody;
 }
 
-TEST_F(JTE_X86_64,
-       IncompleteMaskDomainValidatesWholeSizedCallbackObject) {
+TEST_F(JTE_X86_64, IncompleteMaskDomainValidatesWholeSizedCallbackObject) {
   auto ImageOrErr = neverd::loadBinary(maskEqualBoundObj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
       << llvm::toString(ImageOrErr.takeError());
   neverd::BinaryImage &Image = *ImageOrErr;
-  const neverd::Symbol *Function = Image.findSymbol(
-      "jt_identity_incomplete_mask_prefix_callback_tailcall");
-  const neverd::Symbol *Table = Image.findSymbol(
-      "jt_identity_incomplete_mask_prefix_callback_table");
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_identity_incomplete_mask_prefix_callback_tailcall");
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_identity_incomplete_mask_prefix_callback_table");
   ASSERT_NE(Function, nullptr);
   ASSERT_NE(Table, nullptr);
   ASSERT_EQ(Table->Size, 4u * 8u);
@@ -5375,10 +5516,10 @@ TEST_F(JTE_X86_64,
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
       << llvm::toString(ImageOrErr.takeError());
   neverd::BinaryImage &Image = *ImageOrErr;
-  const neverd::Symbol *Function = Image.findSymbol(
-      "jt_identity_incomplete_mask_nested_function_tailcall");
-  const neverd::Symbol *Table = Image.findSymbol(
-      "jt_identity_incomplete_mask_nested_function_table");
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_identity_incomplete_mask_nested_function_tailcall");
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_identity_incomplete_mask_nested_function_table");
   const neverd::Symbol *CallbackA =
       Image.findSymbol("jt_identity_nested_callback_a");
   const neverd::Symbol *CallbackB =
@@ -5730,8 +5871,7 @@ TEST_F(JTE_X86_64, ComputedGotoRecoversDispatch) {
       << R.out;
 }
 
-TEST_F(JTE_X86_64,
-       StackTableEvidenceBudgetExhaustionIsTransactionalAndOpaque) {
+TEST_F(JTE_X86_64, StackTableEvidenceBudgetExhaustionIsTransactionalAndOpaque) {
   auto ImageOrErr = neverd::loadBinary(cgotoObj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
       << llvm::toString(ImageOrErr.takeError());
@@ -5815,7 +5955,8 @@ static fs::path pageoffNominalMissA64Obj() {
   return fs::path(TEST_OBJ_DIR) / "test_pageoff_nominal_miss_a64.o";
 }
 
-static neverd::BinaryImage a64StrictSourceSpanImage(bool RightWritable = false) {
+static neverd::BinaryImage
+a64StrictSourceSpanImage(bool RightWritable = false) {
   neverd::BinaryImage Image;
   Image.Arch = neverd::Arch::AArch64;
   Image.Format = neverd::BinaryFormat::ELF;
@@ -5855,8 +5996,7 @@ TEST_F(JTE_AArch64, RelocationFreeLoadCannotCrossSourceOwner) {
   const neverd::BinaryImage Image = a64StrictSourceSpanImage();
   ASSERT_EQ(neverd::exactImmutableDataSpanOwner(Image, 0x1008, 8, 0x1000),
             std::optional<neverd::va_t>{0x1000});
-  EXPECT_FALSE(
-      neverd::exactImmutableDataSpanOwner(Image, 0x100c, 8, 0x1000))
+  EXPECT_FALSE(neverd::exactImmutableDataSpanOwner(Image, 0x100c, 8, 0x1000))
       << "an authenticated ADRP/ADD address does not authorize LOAD bytes "
          "owned by the adjacent object";
 }
@@ -5865,8 +6005,7 @@ TEST_F(JTE_AArch64, RelocationFreeLoadCannotDereferenceOwnerOnePast) {
   const neverd::BinaryImage Image = a64StrictSourceSpanImage();
   ASSERT_EQ(neverd::exactImmutableDataSpanOwner(Image, 0x1010, 8, 0x1010),
             std::optional<neverd::va_t>{0x1010});
-  EXPECT_FALSE(
-      neverd::exactImmutableDataSpanOwner(Image, 0x1010, 8, 0x1000))
+  EXPECT_FALSE(neverd::exactImmutableDataSpanOwner(Image, 0x1010, 8, 0x1000))
       << "the left object's legal one-past pointer is not authority to read "
          "the adjacent right object";
 }
@@ -5875,8 +6014,7 @@ TEST_F(JTE_AArch64, RelocationFreeMemcpyRejectsRuntimeWritableSourceSpan) {
   const neverd::BinaryImage Image = a64StrictSourceSpanImage(true);
   ASSERT_EQ(neverd::exactImmutableDataSpanOwner(Image, 0x1000, 0x10, 0x1000),
             std::optional<neverd::va_t>{0x1000});
-  EXPECT_FALSE(
-      neverd::exactImmutableDataSpanOwner(Image, 0x1010, 0x10, 0x1010))
+  EXPECT_FALSE(neverd::exactImmutableDataSpanOwner(Image, 0x1010, 0x10, 0x1010))
       << "the exact memcpy length must remain inside immutable source bytes";
 }
 
@@ -5931,8 +6069,7 @@ TEST_F(JTE_AArch64, MaskBoundRejectsConstantSelectorWithUnreachableProducer) {
   neverd::BinaryImage &Image = *ImageOrErr;
   const neverd::Symbol *Function =
       Image.findSymbol("a64_constant_selector_unreachable_mask");
-  const neverd::Symbol *Table =
-      Image.findSymbol("a64_constant_selector_table");
+  const neverd::Symbol *Table = Image.findSymbol("a64_constant_selector_table");
   ASSERT_NE(Function, nullptr);
   ASSERT_NE(Table, nullptr);
   ASSERT_EQ(Table->Size, 4u * 8u);
@@ -5972,8 +6109,7 @@ TEST_F(JTE_AArch64, ModuloBoundRejectsDestructiveDivisionNumerator) {
   neverd::BinaryImage &Image = *ImageOrErr;
   const neverd::Symbol *Function =
       Image.findSymbol("a64_destructive_udiv_is_not_remainder");
-  const neverd::Symbol *Table =
-      Image.findSymbol("a64_destructive_udiv_table");
+  const neverd::Symbol *Table = Image.findSymbol("a64_destructive_udiv_table");
   ASSERT_NE(Function, nullptr);
   ASSERT_NE(Table, nullptr);
   ASSERT_EQ(Table->Size, 5u * 8u);
@@ -7060,8 +7196,7 @@ TEST_F(JTE_X86_64, MaskBoundAcceptsBitSetBeforeNegativeOffset) {
         << "an adjacent odd poison slot was published";
 }
 
-TEST_F(JTE_X86_64,
-       MaskKnownOneWitnessDoesNotLeakFromUnrelatedSiblingPath) {
+TEST_F(JTE_X86_64, MaskKnownOneWitnessDoesNotLeakFromUnrelatedSiblingPath) {
   auto ImageOrErr = neverd::loadBinary(identityCfgLaneObj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
       << llvm::toString(ImageOrErr.takeError());
@@ -7116,8 +7251,7 @@ TEST_F(JTE_X86_64,
   EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
 }
 
-TEST_F(JTE_X86_64,
-       MaskKnownOneFixedPointRejectsSelfBootstrappedProducer) {
+TEST_F(JTE_X86_64, MaskKnownOneFixedPointRejectsSelfBootstrappedProducer) {
   auto ImageOrErr = neverd::loadBinary(identityCfgLaneObj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
       << llvm::toString(ImageOrErr.takeError());

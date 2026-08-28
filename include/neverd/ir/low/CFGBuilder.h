@@ -611,6 +611,19 @@ private:
     bool operator==(const JumpTableFrameStorageRole &Other) const = default;
   };
 
+  /// Exact two-add address form `runtime_base + index*scale + displacement`.
+  /// ExpectedRuntimeBase is candidate evidence only; publication separately
+  /// proves the base value at RuntimeBaseUse, the dynamic index, the scalar
+  /// displacement, the complete-address definition, and the final LOAD use.
+  struct JumpTableDisplacedAddressRole {
+    JumpTableValueOccurrence RuntimeBaseUse;
+    JumpTableValueOccurrence CompleteAddress;
+    va_t ExpectedRuntimeBase = InvalidVA;
+    int64_t ByteAddend = 0;
+
+    bool operator==(const JumpTableDisplacedAddressRole &Other) const = default;
+  };
+
   /// Occurrence-level certificate for one physical LOAD in a recovered table
   /// shape.  Composite tables carry one role per layer/run (for example the
   /// outer byte-index LOAD and inner address LOAD of a two-level dispatch).
@@ -622,6 +635,7 @@ private:
     uint16_t LoadWidth = 0;
     std::vector<va_t> AllowedBases;
     JumpTableFrameStorageRole FrameStorage;
+    JumpTableDisplacedAddressRole DisplacedAddress;
     std::vector<JumpTableValueOccurrence> Indices;
     /// Exact dynamic operand of the final table-address ADD.  For a scaled
     /// table this is the MULT/LEFT output; for a pre-scaled table it is the
@@ -716,14 +730,20 @@ private:
     /// recorded only in PhysicalCapacity and must never set this flag.
     bool RelocBounded = false;
 
-    /// Compact/separate-anchor relative-table form (AArch64 `ldrb`/`ldrh` +
-    /// `adr anchor` + `add anchor, entry, lsl #k` + `br`): entries are read
-    /// from BaseAddr but each target is `TargetBase + entry * EntryScale`
-    /// rather than `BaseAddr + entry`.  HasTargetBase distinguishes this form
-    /// from an ordinary table even when a relocatable image maps the anchor at
-    /// the valid address zero.
+    /// Separate-anchor relative-table form.  This covers compact AArch64
+    /// tables (`ldrb`/`ldrh` plus an ADR anchor) and PE tables of unsigned RVAs
+    /// added to the exact image base.  Entries are read from BaseAddr but each
+    /// target is `TargetBase + entry * EntryScale` rather than
+    /// `BaseAddr + entry`.  HasTargetBase distinguishes this form from an
+    /// ordinary table even when a relocatable image maps the anchor at the
+    /// valid address zero.
     va_t TargetBase = 0;
     bool HasTargetBase = false;
+    /// Linked x64 PE switch whose 32-bit unsigned entries are RVAs relative to
+    /// the exact image base.  Kept distinct from generic compact relative
+    /// tables so storage and relocation checks cannot infer this encoding from
+    /// width alone.
+    bool IsPEImageRelativeRVA = false;
     void setTargetBase(va_t Address) {
       TargetBase = Address;
       HasTargetBase = true;
@@ -831,6 +851,11 @@ private:
     /// this role authorizes the different LOAD base only after point-sensitive
     /// frame-root/epoch equality, index, displacement, and LOAD-use proofs.
     JumpTableFrameStorageRole AuthenticatedFrameStorage;
+
+    /// Non-frame counterpart for a displaced indexed LOAD.  BaseAddr remains
+    /// the final physical table owner; this role preserves the exact inner
+    /// runtime-base use and outer displacement needed to prove that address.
+    JumpTableDisplacedAddressRole AuthenticatedDisplacedAddress;
 
     /// Exact reads of BaseAddr's static storage that were proven to initialize
     /// an authenticated runtime mirror.  Relocation-suppression arbitration
@@ -1044,11 +1069,16 @@ private:
                                    int *IndexUseSeq = nullptr,
                                    std::function<bool(size_t)> ConsumeWork =
                                        {}) const;
+  /// Fold a register to a loader-mapped address.  Callers may explicitly admit
+  /// an unmapped scalar candidate, while the narrower COFF exception admits
+  /// only the exact PE image base.  Both exceptions still require
+  /// point-sensitive address authentication before publication.
   std::optional<uint64_t>
   foldRegConstant(const BinaryImage &Img, const InsnRecord &Rec, uint64_t Reg,
                   va_t CutoffAddr = InvalidVA,
                   std::function<bool(size_t)> ConsumeWork = {},
-                  bool RequireMappedValue = true) const;
+                  bool RequireMappedValue = true,
+                  bool AllowUnmappedCOFFImageBase = false) const;
   bool tryARMTableBranch(const BinaryImage &Img, const InsnRecord &Rec,
                          JumpTableInfo &Info);
   bool tryDualPathRecovery(const InsnRecord &Rec, JumpTableInfo &Info);
@@ -1241,9 +1271,8 @@ private:
   /// LOAD: it dominates the LOAD and only one of its outgoing CFG edges can
   /// reach the access.  A comparison in a sibling/case-body block is not a
   /// dispatch guard even when it happens to consume the same register.
-  bool branchControlsTableLoad(
-      va_t BranchAddr, const JumpTableInfo &Info,
-      size_t *GraphWorkBudget = nullptr) const;
+  bool branchControlsTableLoad(va_t BranchAddr, const JumpTableInfo &Info,
+                               size_t *GraphWorkBudget = nullptr) const;
   /// Return the boolean value of a COND_BR condition on the unique edge that
   /// reaches the table LOAD.  nullopt means the branch does not dominate/gate
   /// the access or its successor polarity cannot be proved.  A supplied graph
@@ -1319,10 +1348,8 @@ private:
   /// Selector/domain/target metadata remains entirely candidate-local.  A
   /// separate next-round map prevents branch iteration order from changing
   /// the certificate universe visible to arbitration.
-  std::map<va_t, StrongJumpTableRoleProposal>
-      PriorStrongJumpTableProposals;
-  std::map<va_t, StrongJumpTableRoleProposal>
-      NextStrongJumpTableProposals;
+  std::map<va_t, StrongJumpTableRoleProposal> PriorStrongJumpTableProposals;
+  std::map<va_t, StrongJumpTableRoleProposal> NextStrongJumpTableProposals;
   std::map<va_t, StrongJumpTableProposalOutcome>
       StrongJumpTableProposalOutcomes;
   /// Complete mutation inventory for the active transactional stage.  It is

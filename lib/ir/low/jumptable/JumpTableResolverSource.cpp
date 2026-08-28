@@ -24,6 +24,8 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
 
+#include "llvm/ADT/APInt.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <optional>
@@ -280,6 +282,7 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
   uint16_t LoadWidth = 0;
   bool HasScaledIndex = false;
   bool SawSext = false;
+  bool SawZext = false;
   bool Unscaled = false;
   bool CrossBlockReloc = false;
   int LoadIdx = -1;
@@ -287,6 +290,42 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
   va_t CrossBlockAddVA = InvalidVA;
   JumpTableValueOccurrence AddressOccurrence;
   JumpTableFrameAddressUse FrameRuntimeBase;
+  auto RecordLoadedEntryExtensions = [&](const std::vector<LowOp> &Ops,
+                                         int ExactLoadIdx) {
+    auto ReachesExactLoad = [&](NdVar Value, int Before) {
+      for (int Depth = 0; Depth < limits::kMaxQuasiCopyDepth; ++Depth) {
+        if (!Value.isReg() && !Value.isTemp())
+          return false;
+        const int DefIdx = reachingDefIdx(Ops, Before, Value);
+        if (DefIdx < ExactLoadIdx)
+          return false;
+        const LowOp &Def = Ops[DefIdx];
+        if (DefIdx == ExactLoadIdx)
+          return Def.Opcode == NdOp::LOAD && Def.Output == Value;
+        if (Def.Opcode == NdOp::COPY && Def.NumInputs >= 1) {
+          Value = Def.Inputs[0];
+          Before = DefIdx - 1;
+          continue;
+        }
+        if (Def.Opcode == NdOp::SUBBYTES && Def.NumInputs >= 2 &&
+            Def.Inputs[1].isConst() && Def.Inputs[1].Offset == 0) {
+          Value = Def.Inputs[0];
+          Before = DefIdx - 1;
+          continue;
+        }
+        return false;
+      }
+      return false;
+    };
+    for (int K = ExactLoadIdx + 1; K < static_cast<int>(Ops.size()); ++K) {
+      const LowOp &Op = Ops[K];
+      if ((Op.Opcode != NdOp::INT_SEXT && Op.Opcode != NdOp::INT_ZEXT) ||
+          Op.NumInputs < 1 || !ReachesExactLoad(Op.Inputs[0], K - 1))
+        continue;
+      SawSext |= Op.Opcode == NdOp::INT_SEXT;
+      SawZext |= Op.Opcode == NdOp::INT_ZEXT;
+    }
+  };
 
   for (int I = static_cast<int>(BlockOps.size()) - 1; I >= 0; --I) {
     auto &L = BlockOps[I];
@@ -304,9 +343,7 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
                              &FrameRuntimeBase)) {
       LoadWidth = W;
       LoadIdx = I;
-      for (int K = I + 1; K < static_cast<int>(BlockOps.size()); ++K)
-        if (BlockOps[K].Opcode == NdOp::INT_SEXT)
-          SawSext = true;
+      RecordLoadedEntryExtensions(BlockOps, I);
       break;
     }
   }
@@ -339,9 +376,7 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
                                  &AddressOccurrence, &FrameRuntimeBase)) {
           LoadWidth = W;
           LoadIdx = I;
-          for (int K = I + 1; K < static_cast<int>(PathOps.size()); ++K)
-            if (PathOps[K].Opcode == NdOp::INT_SEXT)
-              SawSext = true;
+          RecordLoadedEntryExtensions(PathOps, I);
           BlockOps = std::move(PathOps);
           CrossBlockReloc = true;
           break;
@@ -556,7 +591,12 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
   const bool FrameMayBeI386GOT = BaseIsFrame && Img.Arch == Arch::X86 &&
                                  Img.isELF() && Img.getPointerSize() == 4 &&
                                  DispIsDataVA;
-  const bool GotOff = Disp != 0 && (!BaseIsFrame || FrameMayBeI386GOT);
+  // A loader-normalized relocation may place the complete table VA directly
+  // in the displacement field.  Accept that interpretation only when the
+  // displacement itself names mapped data; an unmapped PE RVA must instead be
+  // added to its authenticated image-base occurrence below.
+  const bool GotOff = Disp != 0 && DispIsDataVA &&
+                      (!BaseIsFrame || FrameMayBeI386GOT);
   if (Unscaled) {
     TableAddr = UnscaledTableAddr;
   } else if (GotOff) {
@@ -617,10 +657,40 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
       Info.MutatedUnsafe = StackTableMutated;
     } else {
       std::optional<uint64_t> RelBaseOpt =
-          foldRegConstant(Img, Rec, BaseReg, FoldAt);
-      if (!RelBaseOpt || !Img.getSegmentFor(*RelBaseOpt))
+          foldRegConstant(Img, Rec, BaseReg, FoldAt, {},
+                          /*RequireMappedValue=*/true,
+                          /*AllowUnmappedCOFFImageBase=*/
+                              Disp != 0 && Img.isCOFF());
+      if (!RelBaseOpt)
         return false;
       TableAddr = *RelBaseOpt;
+      if (Disp != 0) {
+        const unsigned PointerBits =
+            static_cast<unsigned>(Img.getPointerSize()) * 8u;
+        if (PointerBits == 0 || PointerBits > 64)
+          return false;
+        const int64_t SignedDisp =
+            llvm::APInt(PointerBits, Disp).sextOrTrunc(64).getSExtValue();
+        if (FrameRuntimeBase.ByteAddend != SignedDisp ||
+            FrameRuntimeBase.Use.Value.Size != Img.getPointerSize() ||
+            FrameRuntimeBase.Use.Addr == InvalidVA ||
+            FrameRuntimeBase.Use.Seq < 0 ||
+            FrameRuntimeBase.Use.DefinedAtPoint ||
+            AddressOccurrence.Value.Size != Img.getPointerSize() ||
+            AddressOccurrence.Addr == InvalidVA || AddressOccurrence.Seq < 0 ||
+            !AddressOccurrence.DefinedAtPoint)
+          return false;
+        const std::optional<va_t> WithDisp =
+            checkedVAOffset(TableAddr, SignedDisp);
+        if (!WithDisp)
+          return false;
+        Info.AuthenticatedDisplacedAddress = {
+            FrameRuntimeBase.Use, AddressOccurrence,
+            static_cast<va_t>(*RelBaseOpt), SignedDisp};
+        TableAddr = *WithDisp;
+      }
+      if (!Img.getSegmentFor(TableAddr))
+        return false;
     }
   }
 
@@ -986,7 +1056,9 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
     Info.IsSigned = false;
   } else {
     Info.IsRelative = (LoadWidth < limits::kMaxEntryBytes);
-    Info.IsSigned = SawSext || (LoadWidth < limits::kMaxEntryBytes);
+    if (SawSext && SawZext)
+      return false;
+    Info.IsSigned = SawSext || (!SawZext && LoadWidth < limits::kMaxEntryBytes);
   }
 
   // AArch64 -O0 word tables add the signed entry to a separate `adr` anchor
@@ -1016,20 +1088,84 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
         }
     if (AddD >= 0) {
       va_t AddAddr = BlockOps[AddD].Addr;
+      // foldRegConstant can evaluate a concrete LOAD along the current path.
+      // Such a value is not an independent target anchor: for an inline ARM
+      // table the first loaded relative offset may itself name executable
+      // code and would otherwise be mistaken for a separate base.  Admit only
+      // bounded, load-free arithmetic rooted in constants before consulting
+      // the fold.  Unsupported or over-deep expressions fail closed here and
+      // simply retain the ordinary table-relative anchor.
+      auto isLoadFreeAnchor = [&](NdVar Root,
+                                  int Before) -> std::optional<bool> {
+        size_t WorkRemaining = limits::kMaxSliceDepth * 4;
+        std::function<std::optional<bool>(NdVar, int, int)> Visit =
+            [&](NdVar Value, int From,
+                int Depth) -> std::optional<bool> {
+          if (WorkRemaining == 0 || Depth > limits::kMaxSliceDepth)
+            return std::nullopt;
+          --WorkRemaining;
+          if (Value.isConst())
+            return true;
+          if (!Value.isReg() && !Value.isTemp())
+            return false;
+          const int DefIdx = reachingDefIdx(BlockOps, From, Value);
+          if (DefIdx < 0)
+            return std::nullopt;
+          const LowOp &Def = BlockOps[DefIdx];
+          if (Def.Opcode == NdOp::LOAD)
+            return false;
+          switch (Def.Opcode) {
+          case NdOp::COPY:
+          case NdOp::INT_ZEXT:
+          case NdOp::INT_SEXT:
+          case NdOp::SUBBYTES:
+            if (Def.NumInputs < 1)
+              return std::nullopt;
+            return Visit(Def.Inputs[0], DefIdx - 1, Depth + 1);
+          case NdOp::INT_ADD:
+          case NdOp::INT_SUB:
+            if (Def.NumInputs < 2)
+              return std::nullopt;
+            for (int Input = 0; Input < 2; ++Input) {
+              const std::optional<bool> LoadFree =
+                  Visit(Def.Inputs[Input], DefIdx - 1, Depth + 1);
+              if (!LoadFree || !*LoadFree)
+                return LoadFree;
+            }
+            return true;
+          default:
+            return false;
+          }
+        };
+        return Visit(Root, Before, /*Depth=*/0);
+      };
       auto traceConstAnchor = [&](NdVar V,
                                   int From) -> std::optional<uint64_t> {
+        const std::optional<bool> LoadFree = isLoadFreeAnchor(V, From);
+        if (!LoadFree || !*LoadFree)
+          return std::nullopt;
         for (int G = 0; G < limits::kMaxSliceDepth; ++G) {
           if (V.isConst())
             return V.Offset;
           if (!V.isReg() && !V.isTemp())
             return std::nullopt;
+          // A PC-relative LEA commonly reaches the final target ADD through a
+          // named register.  Fold that register at this exact use before the
+          // structural COPY-only walk: the LEA itself is represented as an
+          // address plus a scalar INT_ADD, which is intentionally not a plain
+          // transport.  Publication still requires the point-sensitive
+          // anchor occurrence in branchTargetDependsOnTableLoad below.
+          if (V.isReg()) {
+            auto Folded = foldRegConstant(
+                Img, Rec, V.Offset, AddAddr, {},
+                /*RequireMappedValue=*/true,
+                /*AllowUnmappedCOFFImageBase=*/
+                    Disp != 0 && Img.isCOFF());
+            if (Folded)
+              return *Folded;
+          }
           int D = reachingDefIdx(BlockOps, From, V);
           if (D < 0) {
-            if (V.isReg()) {
-              auto F = foldRegConstant(Img, Rec, V.Offset, AddAddr);
-              if (F && Img.getSegmentFor(*F))
-                return *F;
-            }
             return std::nullopt;
           }
           const LowOp &O = BlockOps[D];
@@ -1046,9 +1182,15 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
         auto Anchor = traceConstAnchor(BlockOps[AddD].Inputs[W], AddD - 1);
         if (!Anchor || *Anchor == TableAddr)
           continue;
-        if (Img.hasExecutableCodeOwnerAt(*Anchor)) {
+        const bool IsCOFFImageBaseRVA =
+            !Img.IsRelocatable && Img.isCOFF() && Img.Arch == Arch::X64 &&
+            Img.getPointerSize() == 8 && Info.EntrySize == sizeof(uint32_t) &&
+            SawZext && !SawSext && !Info.IsSigned && *Anchor == Img.Base &&
+            Info.EntryScale == 1;
+        if (Img.hasExecutableCodeOwnerAt(*Anchor) || IsCOFFImageBaseRVA) {
           Info.setTargetBase(*Anchor);
           Info.EntryScale = 1;
+          Info.IsPEImageRelativeRVA = IsCOFFImageBaseRVA;
           break;
         }
       }

@@ -767,8 +767,7 @@ MedLLVMEmitter::tryResolveDynVlaAddr(const MedOp &Op,
 }
 
 bool MedLLVMEmitter::isStackProbeCall(const MedOp &Op) const {
-  if (!Img || !CurMedFunc ||
-      (Img->ImportPtrSlots.empty() && Img->DyldBindSlots.empty()))
+  if (!Img || !CurMedFunc)
     return false;
   if ((Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL) ||
       Op.NumInputs < 1)
@@ -817,6 +816,7 @@ bool MedLLVMEmitter::isStackProbeCall(const MedOp &Op) const {
   // target is `LOAD <slot>` (possibly threaded through copies).
   uint64_t SlotAddr = 0;
   bool HaveSlot = false;
+  bool LoadedFromStorage = false;
   const MedVar &Tgt = Op.Inputs[0];
   const MedOp *D = findDef(Tgt);
   for (int Guard = 0; D && Guard <= limits::kMaxStackPtrTraceDepth; ++Guard) {
@@ -824,8 +824,10 @@ bool MedLLVMEmitter::isStackProbeCall(const MedOp &Op) const {
       D = findDef(D->Inputs[0]);
       continue;
     }
-    if (D->Opcode == NdOp::LOAD && D->NumInputs >= 1)
+    if (D->Opcode == NdOp::LOAD && D->NumInputs >= 1) {
       HaveSlot = constAddr(D->Inputs[0], SlotAddr, 0);
+      LoadedFromStorage = HaveSlot;
+    }
     break;
   }
   // A direct call to the routine's own address (no GOT indirection).
@@ -837,14 +839,13 @@ bool MedLLVMEmitter::isStackProbeCall(const MedOp &Op) const {
     return false;
 
   std::string Name;
-  if (auto It = Img->ImportPtrSlots.find(SlotAddr);
-      It != Img->ImportPtrSlots.end())
-    Name = It->second;
-  else if (auto It = Img->DyldBindSlots.find(SlotAddr);
-           It != Img->DyldBindSlots.end())
-    Name = It->second.Name;
-  else if (const Import *Imp = Img->findImportAt(SlotAddr))
+  if (LoadedFromStorage) {
+    if (auto It = EffectiveImportStorageSlots.find(SlotAddr);
+        It != EffectiveImportStorageSlots.end())
+      Name = It->second.Name;
+  } else if (const Import *Imp = Img->findImportAt(SlotAddr)) {
     Name = Imp->Name;
+  }
   if (Name.empty())
     return false;
   return isDarwinStackProbeName(Name);

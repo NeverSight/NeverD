@@ -38,6 +38,38 @@ class CiConfigurationTests(unittest.TestCase):
         )[1].split("\n)", 1)[0]
         self.assertIn("  TIMEOUT 1800\n", f"{patch_invocation}\n")
 
+    def test_computed_goto_structure_gate_is_small_and_never_profile_excluded(self):
+        semantic = SEMANTIC_CMAKE.read_text(encoding="utf-8")
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+
+        marker = "add_neverd_unittest(NeverDComputedGotoTests\n"
+        self.assertEqual(semantic.count(marker), 1)
+        invocation = semantic.split(marker, 1)[1].split("\n)", 1)[0]
+        self.assertEqual(
+            invocation.count(
+                "  allplatform/controlflow/AllPlatform_ComputedGotoRTTests.cpp\n"
+            ),
+            1,
+        )
+        self.assertIn("NEVERD_COMPUTED_GOTO_STRUCTURAL_ONLY=1", semantic)
+        self.assertNotIn("ComputedGoto", "\n".join(
+            line for line in workflow.splitlines() if "exclude_labels:" in line
+        ))
+
+    def test_workflow_executes_this_configuration_contract(self):
+        source = WORKFLOW.read_text(encoding="utf-8")
+        step_marker = "      - name: Verify Debug and Release target flags\n"
+        self.assertEqual(source.count(step_marker), 1)
+        verify_step = source.split(step_marker, 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        self.assertEqual(
+            verify_step.count("scripts.tests.test_ci_configuration"), 1
+        )
+        self.assertEqual(
+            verify_step.count("scripts.tests.test_neverd_bench_harness"), 1
+        )
+
     def test_workflow_declares_all_three_test_profiles(self):
         source = WORKFLOW.read_text(encoding="utf-8")
         matrix_source = source.split("        include:\n", 1)[1].split(

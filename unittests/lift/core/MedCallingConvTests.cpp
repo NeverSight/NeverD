@@ -1158,13 +1158,13 @@ TEST(LowToMedCallReturnFP, CallerSavedPreservingCallKeepsPriorFPResult) {
   EXPECT_EQ(Calls[0]->Output.RegOff, TRI.FPReturnReg);
   EXPECT_TRUE(Calls[1]->PreservesCallerSaved);
   EXPECT_EQ(Calls[1]->Output.Size, 0u);
-  EXPECT_FALSE(std::any_of(
-      Med.CallClobbers.begin(), Med.CallClobbers.end(),
-      [&](const MedCallClobber &Clobber) {
-        return Clobber.CallSiteId == Calls[1]->CallSiteId &&
-               Clobber.Value.Kind == MedVar::Reg &&
-               Clobber.Value.RegOff == TRI.FPReturnReg;
-      }));
+  EXPECT_FALSE(std::any_of(Med.CallClobbers.begin(), Med.CallClobbers.end(),
+                           [&](const MedCallClobber &Clobber) {
+                             return Clobber.CallSiteId ==
+                                        Calls[1]->CallSiteId &&
+                                    Clobber.Value.Kind == MedVar::Reg &&
+                                    Clobber.Value.RegOff == TRI.FPReturnReg;
+                           }));
   EXPECT_TRUE(verifyMedFunc(Med, "test-preserved-fp-result"));
 }
 

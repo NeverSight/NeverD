@@ -254,8 +254,10 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
   // resolved pointer. A recurrent PHI must continue into recoverBase below:
   // its step arithmetic needs the explicit Symbolized address model or the
   // later iterations fall back to stale integer addresses.
-  if (Img && (!Img->DataPtrRelocSlots.empty() || !Img->ImportPtrSlots.empty() ||
-              !Img->DyldBindSlots.empty())) {
+  if (Img && (!Img->DataPtrRelocSlots.empty() ||
+              !EffectiveImportStorageSlots.empty() ||
+              !ConflictingImportStorageSlots.empty() ||
+              !Img->RuntimeCallablePointerSlots.empty())) {
     auto loadsFromDataPtrTable = [&](const MedVar &Start) {
       MedVar Cur = Start;
       for (int D = 0; D < 8; ++D) {
@@ -286,16 +288,19 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
         for (uint64_t S : Img->DataPtrRelocSlots)
           if (S >= LSeg->VA && S < LSeg->VA + LSeg->Data.size())
             return true;
-        for (const auto &[S, Name] : Img->ImportPtrSlots) {
-          (void)Name;
-          if (S >= LSeg->VA && S < LSeg->VA + LSeg->Data.size())
-            return true;
-        }
-        for (const auto &[S, Binding] : Img->DyldBindSlots) {
+        for (const auto &[S, Binding] : EffectiveImportStorageSlots) {
           (void)Binding;
           if (S >= LSeg->VA && S < LSeg->VA + LSeg->Data.size())
             return true;
         }
+        for (va_t S : ConflictingImportStorageSlots)
+          if (S >= LSeg->VA && S < LSeg->VA + LSeg->Data.size())
+            return true;
+        for (const RuntimeCallablePointerSlot &Slot :
+             Img->RuntimeCallablePointerSlots)
+          if (Slot.SlotVA >= LSeg->VA &&
+              Slot.SlotVA < LSeg->VA + LSeg->Data.size())
+            return true;
         return false;
       }
       return false;

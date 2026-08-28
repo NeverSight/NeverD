@@ -43,7 +43,9 @@ inline bool isRuntimeWritableAddress(const BinaryImage &Img, va_t Address) {
 inline bool recordAbsolutePointerRelocation(BinaryImage &Img, va_t SlotVA,
                                             va_t TargetVA,
                                             va_t TargetOwnerVA = InvalidVA) {
-  if (Img.ImportPtrSlots.count(SlotVA) || Img.DyldBindSlots.count(SlotVA))
+  if (Img.ImportStorageSlots.count(SlotVA) ||
+      Img.ConflictingImportStorageSlots.count(SlotVA) ||
+      Img.ImportPtrSlots.count(SlotVA) || Img.DyldBindSlots.count(SlotVA))
     return false;
 
   if (TargetOwnerVA == InvalidVA)

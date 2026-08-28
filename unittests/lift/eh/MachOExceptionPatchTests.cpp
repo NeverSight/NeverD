@@ -576,6 +576,49 @@ TEST(RewriteFunctionRange, ValidatesIdentityAndExactGlobalRanges) {
                                        0x1000, "Lend_dup", 0x1010};
   EXPECT_FALSE(llvm::mc_rewrite::validateRewriteFunctionRanges(
       {First, Duplicate}, Symbols));
+
+  RewriteFunctionRange Derived = Second;
+  Derived.ParentOwnerSymbol = First.OwnerSymbol;
+  Derived.ParentOwnerVA = First.OwnerVA;
+  EXPECT_TRUE(llvm::mc_rewrite::validateRewriteFunctionRanges({First, Derived},
+                                                              Symbols));
+
+  Invalid = Derived;
+  Invalid.ParentOwnerVA = First.OwnerVA + 1;
+  EXPECT_FALSE(llvm::mc_rewrite::validateRewriteFunctionRanges({First, Invalid},
+                                                               Symbols));
+  Invalid = Derived;
+  Invalid.ParentOwnerSymbol.clear();
+  EXPECT_FALSE(llvm::mc_rewrite::validateRewriteFunctionRanges({First, Invalid},
+                                                               Symbols));
+  Invalid = Derived;
+  Invalid.ParentOwnerSymbol = Invalid.OwnerSymbol;
+  Invalid.ParentOwnerVA = Invalid.OwnerVA;
+  EXPECT_FALSE(llvm::mc_rewrite::validateRewriteFunctionRanges({First, Invalid},
+                                                               Symbols));
+  EXPECT_FALSE(
+      llvm::mc_rewrite::validateRewriteFunctionRanges({Derived}, Symbols));
+
+  const std::map<std::string, uint64_t> ThreeSymbols = {
+      {"_f", 0x1000}, {"_g", 0x3000}, {"_h", 0x5000}};
+  const RewriteFunctionRange Third{15,     "_h",     0x5000, "Lbegin_h",
+                                   0x5000, "Lend_h", 0x5020};
+  RewriteFunctionRange ConflictingParent = Derived;
+  ConflictingParent.Id = 16;
+  ConflictingParent.BeginSymbol = "Lbegin_g_second";
+  ConflictingParent.BeginVA = 0x3020;
+  ConflictingParent.EndSymbol = "Lend_g_second";
+  ConflictingParent.EndVA = 0x3030;
+  ConflictingParent.ParentOwnerSymbol = Third.OwnerSymbol;
+  ConflictingParent.ParentOwnerVA = Third.OwnerVA;
+  EXPECT_FALSE(llvm::mc_rewrite::validateRewriteFunctionRanges(
+      {First, Derived, ConflictingParent, Third}, ThreeSymbols));
+
+  RewriteFunctionRange Chained = Third;
+  Chained.ParentOwnerSymbol = Derived.OwnerSymbol;
+  Chained.ParentOwnerVA = Derived.OwnerVA;
+  EXPECT_FALSE(llvm::mc_rewrite::validateRewriteFunctionRanges(
+      {First, Derived, Chained}, ThreeSymbols));
 }
 
 TEST(CompiledImage, AuthenticatesEveryGeneratedCFIFragment) {

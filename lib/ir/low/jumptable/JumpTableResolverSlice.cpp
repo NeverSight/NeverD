@@ -57,8 +57,8 @@ namespace neverd {
 
 bool detail::recordUniqueJumpTableProofPoint(
     std::map<JumpTableProofPoint, JumpTableProofLocation> &UniquePoints,
-    std::set<JumpTableProofPoint> &AmbiguousPoints,
-    JumpTableProofPoint Point, JumpTableProofLocation Location) {
+    std::set<JumpTableProofPoint> &AmbiguousPoints, JumpTableProofPoint Point,
+    JumpTableProofLocation Location) {
   if (AmbiguousPoints.count(Point))
     return false;
   auto [It, Inserted] = UniquePoints.try_emplace(Point, Location);
@@ -489,8 +489,7 @@ static ResolverFlowGraph buildResolverFlowGraph(
       if (!addEdge(B, Rec->BranchTarget, true))
         return failIncomplete();
     } else if (!Rec->IsBranch || Rec->IsCall) {
-      if ((!Rec->IsNoReturnCall || Rec->IsCond) &&
-          !addEdge(B, Fall, false))
+      if ((!Rec->IsNoReturnCall || Rec->IsCond) && !addEdge(B, Fall, false))
         return failIncomplete();
     }
   }
@@ -798,8 +797,7 @@ using ResolverValue = std::shared_ptr<const ResolverValueExpr>;
 
 struct ResolverScalarModelOrigin {
   RelocatedInstructionScalarModelOccurrence::ModelKind Model =
-      RelocatedInstructionScalarModelOccurrence::ModelKind::
-          I386ELFGOTBaseZero;
+      RelocatedInstructionScalarModelOccurrence::ModelKind::I386ELFGOTBaseZero;
   va_t FieldVA = InvalidVA;
   va_t InstructionAddr = InvalidVA;
   int OpSeq = -1;
@@ -851,11 +849,10 @@ static uint64_t resolverWidthMask(uint16_t Size) {
   return (uint64_t{1} << (Size * 8)) - 1;
 }
 
-static ResolverValue resolverConstant(uint64_t Value, uint16_t Size,
-                                      ConstantAddressProvenance Provenance,
-                                      uint64_t AddressOwnerVA = InvalidVA,
-                                      std::optional<ResolverScalarModelOrigin>
-                                          ScalarModelOrigin = std::nullopt) {
+static ResolverValue resolverConstant(
+    uint64_t Value, uint16_t Size, ConstantAddressProvenance Provenance,
+    uint64_t AddressOwnerVA = InvalidVA,
+    std::optional<ResolverScalarModelOrigin> ScalarModelOrigin = std::nullopt) {
   if (Size == 0 || Size > sizeof(uint64_t))
     return {};
   auto E = std::make_shared<ResolverValueExpr>();
@@ -1151,8 +1148,8 @@ static ResolverValue resolverExtend(
     // machine value of zext(zext(x, A), B) is zext(x, B), and likewise for two
     // sign extensions.  Keeping the redundant middle width in the symbolic
     // identity made an explicit `movzbl %al,%eax` followed by the architectural
-    // EAX-to-RAX zero extension differ from a guard on AL even though an AH write
-    // between them is provably non-overlapping.
+    // EAX-to-RAX zero extension differ from a guard on AL even though an AH
+    // write between them is provably non-overlapping.
     if (Node->Input &&
         ((!Signed && Node->K == ResolverValueExpr::Kind::ZeroExtend) ||
          (Signed && Node->K == ResolverValueExpr::Kind::SignExtend))) {
@@ -1257,15 +1254,14 @@ static ResolverValue resolverSlice(
     Memo.emplace(SliceMemoKey{Source.get(), CurrentOffset}, Result);
     return Result;
   };
-  std::function<ResolverValue(const ResolverValue &, uint16_t, unsigned)> Slice =
-      [&](const ResolverValue &Node, uint16_t CurrentOffset,
-          unsigned Depth) -> ResolverValue {
+  std::function<ResolverValue(const ResolverValue &, uint16_t, unsigned)>
+      Slice = [&](const ResolverValue &Node, uint16_t CurrentOffset,
+                  unsigned Depth) -> ResolverValue {
     if (Depth > limits::kMaxJumpTableGuardExpressionDepth)
       return incomplete();
     if (!consume())
       return {};
-    if (!Node || Size == 0 ||
-        uint32_t(CurrentOffset) + Size > Node->Size)
+    if (!Node || Size == 0 || uint32_t(CurrentOffset) + Size > Node->Size)
       return {};
     if (CurrentOffset == 0 && Size == Node->Size)
       return Node;
@@ -1340,9 +1336,8 @@ static ResolverValue resolverSlice(
           uint32_t(Node->SliceOffset) + CurrentOffset;
       if (CombinedOffset > std::numeric_limits<uint16_t>::max())
         return incomplete();
-      ResolverValue Result = Slice(Node->Input,
-                                   static_cast<uint16_t>(CombinedOffset),
-                                   Depth + 1);
+      ResolverValue Result =
+          Slice(Node->Input, static_cast<uint16_t>(CombinedOffset), Depth + 1);
       return Result ? remember(Node, CurrentOffset, std::move(Result))
                     : ResolverValue{};
     }
@@ -3576,9 +3571,11 @@ bool CFGBuilder::analyzeTableLoadAddr(
     }
   }
 
-  // i386 PIC GOTOFF form: addr = (base + index*scale) + disp, where the GOTOFF
-  // displacement is folded into the load.  Peel the outer constant and recurse
-  // into the inner `base + index*scale`.
+  // Displaced indexed form: addr = (base + index*scale) + disp.  Peel the
+  // outer constant and recurse into the inner `base + index*scale`.  The
+  // caller separately authenticates i386 ELF GOTOFF semantics; on other
+  // targets this is an ordinary signed address displacement (for example a PE
+  // image base plus a table RVA).
   for (int Which = 0; Which < 2; ++Which) {
     if (!Ops[AddIdx].Inputs[Which].isConst())
       continue;
@@ -3672,8 +3669,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   RequestedCompleteJumpTableProof = true;
   size_t ResultStorage = Queries.size();
   if (QueryAnalysisComplete) {
-    if (Queries.size() >
-        std::numeric_limits<size_t>::max() - ResultStorage) {
+    if (Queries.size() > std::numeric_limits<size_t>::max() - ResultStorage) {
       if (GraphWorkBudget)
         *GraphWorkBudget = 0;
       return {};
@@ -3790,8 +3786,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     }
     return true;
   };
-  auto consumeEvidenceSum =
-      [&](std::initializer_list<size_t> Terms) -> bool {
+  auto consumeEvidenceSum = [&](std::initializer_list<size_t> Terms) -> bool {
     const size_t Max = std::numeric_limits<size_t>::max();
     size_t Total = 0;
     for (size_t Term : Terms) {
@@ -3990,8 +3985,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     }
     IsRootBlock[Root] = true;
   }
-  auto budgetedReachingDefIdx = [&](const std::vector<LowOp> &Ops,
-                                    int FromIdx, const NdVar &Value) {
+  auto budgetedReachingDefIdx = [&](const std::vector<LowOp> &Ops, int FromIdx,
+                                    const NdVar &Value) {
     for (int I = FromIdx; I >= 0; --I) {
       if (!consumeEvidence())
         return -1;
@@ -4201,9 +4196,9 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     const uint32_t QBegin = Query.Begin;
     const uint32_t QEnd = QBegin + Query.Size;
     if (OBegin <= QBegin && QEnd <= OEnd)
-      return resolverValue(resolverSlice(
-          Full, static_cast<uint16_t>(QBegin - OBegin), Query.Size,
-          consumeEvidence, &EvidenceBudgetExhausted));
+      return resolverValue(
+          resolverSlice(Full, static_cast<uint16_t>(QBegin - OBegin),
+                        Query.Size, consumeEvidence, &EvidenceBudgetExhausted));
     if (!ZeroExtendingWrite)
       return resolverInvalid();
     // A W/E-register write defines the full X/R register.  Bytes above the
@@ -4213,9 +4208,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     if (QBegin >= OEnd && QEnd <= Output.ContainerSize)
       return resolverValue(budgetedResolverZero(Query.Size, consumeEvidence));
     if (OBegin == 0 && QBegin == 0 && QEnd == Output.ContainerSize)
-      return resolverValue(resolverExtend(Full, Query.Size, false,
-                                          consumeEvidence,
-                                          &EvidenceBudgetExhausted));
+      return resolverValue(resolverExtend(
+          Full, Query.Size, false, consumeEvidence, &EvidenceBudgetExhausted));
     return resolverInvalid();
   };
 
@@ -4327,8 +4321,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                Def.Output.Size > Def.Inputs[0].Size) {
       Result = resolveFrameVar(Block, DefIndex, Def.Inputs[0], Depth + 1);
     } else if (Def.Opcode == NdOp::SUBBYTES && Def.NumInputs >= 2 &&
-               CurrentImg &&
-               Def.Output.Size == CurrentImg->getPointerSize() &&
+               CurrentImg && Def.Output.Size == CurrentImg->getPointerSize() &&
                Def.Inputs[0].Size > Def.Output.Size &&
                Def.Inputs[1].isConst() && Def.Inputs[1].Offset == 0) {
       const int WidenIndex =
@@ -4342,20 +4335,16 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
           Result =
               resolveFrameVar(Block, WidenIndex, Widen.Inputs[0], Depth + 1);
       }
-    } else if ((Def.Opcode == NdOp::INT_ADD ||
-                Def.Opcode == NdOp::INT_SUB) &&
+    } else if ((Def.Opcode == NdOp::INT_ADD || Def.Opcode == NdOp::INT_SUB) &&
                Def.NumInputs >= 2) {
       if (Def.Inputs[1].isConst())
         Result = adjustFrame(
-                             resolveFrameVar(Block, DefIndex, Def.Inputs[0],
-                                             Depth + 1),
-                             Def.Inputs[1], Def.Output.Size,
-                             Def.Opcode == NdOp::INT_SUB);
+            resolveFrameVar(Block, DefIndex, Def.Inputs[0], Depth + 1),
+            Def.Inputs[1], Def.Output.Size, Def.Opcode == NdOp::INT_SUB);
       else if (Def.Opcode == NdOp::INT_ADD && Def.Inputs[0].isConst())
         Result = adjustFrame(
-                             resolveFrameVar(Block, DefIndex, Def.Inputs[1],
-                                             Depth + 1),
-                             Def.Inputs[0], Def.Output.Size, false);
+            resolveFrameVar(Block, DefIndex, Def.Inputs[1], Depth + 1),
+            Def.Inputs[0], Def.Output.Size, false);
     }
     const std::optional<bool> Guarded = instructionIsGuarded(Def.Addr);
     if (!Guarded)
@@ -4468,15 +4457,12 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                  Def.NumInputs >= 2) {
         if (Def.Inputs[1].isConst())
           Result = adjustFrame(
-                               resolveFrameVar(Block, I, Def.Inputs[0],
-                                               Depth + 1),
-                               Def.Inputs[1], Def.Output.Size,
-                               Def.Opcode == NdOp::INT_SUB);
+              resolveFrameVar(Block, I, Def.Inputs[0], Depth + 1),
+              Def.Inputs[1], Def.Output.Size, Def.Opcode == NdOp::INT_SUB);
         else if (Def.Opcode == NdOp::INT_ADD && Def.Inputs[0].isConst())
-          Result = adjustFrame(
-                               resolveFrameVar(Block, I, Def.Inputs[1],
-                                               Depth + 1),
-                               Def.Inputs[0], Def.Output.Size, false);
+          Result =
+              adjustFrame(resolveFrameVar(Block, I, Def.Inputs[1], Depth + 1),
+                          Def.Inputs[0], Def.Output.Size, false);
       }
       const std::optional<bool> Guarded = instructionIsGuarded(Def.Addr);
       if (!Guarded) {
@@ -4487,11 +4473,9 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         // A predicated frame-register write is a merge of the old and new
         // epochs.  Unless both paths prove the same canonical offset, the
         // frame identity is ambiguous and must fail closed.
-        Result =
-            mergeFrameResults(
-                              {resolveFrameBase(Block, I, BaseReg, Depth + 1),
-                               Result},
-                              /*IgnoreTransparentCycles=*/false);
+        Result = mergeFrameResults(
+            {resolveFrameBase(Block, I, BaseReg, Depth + 1), Result},
+            /*IgnoreTransparentCycles=*/false);
       }
       break;
     }
@@ -4923,8 +4907,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   };
 
   auto isKnownMemsetCall = [&](const LowOp &Op) {
-    if (Op.Opcode != NdOp::CALL || Op.NumInputs < 1 ||
-        !Op.Inputs[0].isConst())
+    if (Op.Opcode != NdOp::CALL || Op.NumInputs < 1 || !Op.Inputs[0].isConst())
       return false;
     const va_t Target = static_cast<va_t>(Op.Inputs[0].Offset);
     if (!consumeEvidence(CurrentImg->Imports.size()) ||
@@ -5002,9 +4985,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       // contract.  Do not trace a reload through either to an older STORE.
       bool AuthenticatedMemcpy = false;
       if (ActiveFrameMemoryQuery) {
-        if (!consumeEvidence(
-                ActiveFrameMemoryQuery->AuthenticatedFrameMemcpyWriters
-                    .size())) {
+        if (!consumeEvidence(ActiveFrameMemoryQuery
+                                 ->AuthenticatedFrameMemcpyWriters.size())) {
           Found = true;
           break;
         }
@@ -5086,9 +5068,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
              (LengthValue.Value->Provenance ==
                   ConstantAddressProvenance::Unknown &&
               LengthValue.Value->AddressOwnerVA == InvalidVA));
-        if (HasDestination &&
-            DestinationBase == SlotBase &&
-            NumericLength &&
+        if (HasDestination && DestinationBase == SlotBase && NumericLength &&
             LengthValue.Value->Size == PointerSize &&
             LengthValue.Value->Constant <=
                 static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
@@ -5194,9 +5174,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         break;
       }
       if (ActiveFrameMemoryQuery) {
-        if (!consumeEvidence(
-                ActiveFrameMemoryQuery->AuthenticatedFrameStoreWriters
-                    .size())) {
+        if (!consumeEvidence(ActiveFrameMemoryQuery
+                                 ->AuthenticatedFrameStoreWriters.size())) {
           Result = resolverInvalid();
           break;
         }
@@ -5210,8 +5189,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
           break;
         }
       }
-      ResolverResult StoredValue =
-          resolveOperand(Block, I, Stored, Depth + 1);
+      ResolverResult StoredValue = resolveOperand(Block, I, Stored, Depth + 1);
       if (StoredValue.Kind != ResolverResultKind::Value) {
         // A cycle propagated through an actual STORE is a loop-carried memory
         // definition, not a transparent CFG back-edge.  Treating it as a raw
@@ -5431,22 +5409,18 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             Full = Input.Value;
           else if (Def.Opcode == NdOp::INT_ZEXT)
             Full = resolverExtend(Input.Value, Def.Output.Size, false,
-                                  consumeEvidence,
-                                  &EvidenceBudgetExhausted);
+                                  consumeEvidence, &EvidenceBudgetExhausted);
           else if (Def.Opcode == NdOp::INT_SEXT)
             Full = resolverExtend(Input.Value, Def.Output.Size, true,
-                                  consumeEvidence,
-                                  &EvidenceBudgetExhausted);
+                                  consumeEvidence, &EvidenceBudgetExhausted);
           else if (Def.Inputs[0].Size == Def.Output.Size)
             Full = Input.Value;
           else if (Def.Inputs[0].Size < Def.Output.Size)
             Full = resolverExtend(Input.Value, Def.Output.Size, false,
-                                  consumeEvidence,
-                                  &EvidenceBudgetExhausted);
+                                  consumeEvidence, &EvidenceBudgetExhausted);
           else
             Full = resolverSlice(Input.Value, 0, Def.Output.Size,
-                                 consumeEvidence,
-                                 &EvidenceBudgetExhausted);
+                                 consumeEvidence, &EvidenceBudgetExhausted);
         } else if (Input.Kind == ResolverResultKind::Cycle &&
                    Def.Opcode == NdOp::COPY && Def.NumInputs >= 1 &&
                    Def.Inputs[0].Space == Def.Output.Space &&
@@ -5472,14 +5446,13 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
           // relocation occurrence.
           if (IsGuestPointerLane)
             InputView.Size = Def.Output.Size;
-          ResolverResult Input =
-              resolveOperand(Block, I, InputView, Depth + 1);
+          ResolverResult Input = resolveOperand(Block, I, InputView, Depth + 1);
           if (Input.Kind == ResolverResultKind::Value)
-            Full = IsGuestPointerLane
-                       ? Input.Value
-                       : resolverSlice(Input.Value, SliceOffset,
-                                       Def.Output.Size, consumeEvidence,
-                                       &EvidenceBudgetExhausted);
+            Full =
+                IsGuestPointerLane
+                    ? Input.Value
+                    : resolverSlice(Input.Value, SliceOffset, Def.Output.Size,
+                                    consumeEvidence, &EvidenceBudgetExhausted);
         }
       } else if ((Def.Opcode == NdOp::INT_ADD || Def.Opcode == NdOp::INT_SUB) &&
                  Def.NumInputs >= 2 && Def.Output.Size <= sizeof(uint64_t)) {
@@ -5546,8 +5519,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                 Left.Value->Provenance == ConstantAddressProvenance::Scalar;
             const bool RightScalar =
                 Right.Value->Provenance == ConstantAddressProvenance::Scalar;
-            auto ExactI386ModelZeroOccurrence = [&]()
-                -> const RelocatedInstructionScalarModelOccurrence * {
+            auto ExactI386ModelZeroOccurrence =
+                [&]() -> const RelocatedInstructionScalarModelOccurrence * {
               if (!CurrentImg || !CurrentImg->isELF() ||
                   CurrentImg->Arch != Arch::X86 ||
                   CurrentImg->getPointerSize() != 4)
@@ -5564,11 +5537,11 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                    RelocatedInstructionScalarModelOccurrences) {
                 if (!consumeEvidence())
                   return nullptr;
-                if (Model.Model !=
-                        RelocatedInstructionScalarModelOccurrence::ModelKind::
-                            I386ELFGOTBaseZero ||
+                if (Model.Model != RelocatedInstructionScalarModelOccurrence::
+                                       ModelKind::I386ELFGOTBaseZero ||
                     Model.InstructionAddr != Def.Addr ||
-                    Model.OpSeq != Def.Seq || Model.OutputOpcode != Def.Opcode ||
+                    Model.OpSeq != Def.Seq ||
+                    Model.OutputOpcode != Def.Opcode ||
                     Model.OutputWitness != Def.Output ||
                     Model.Width != EvalSize ||
                     Model.OutputWitness.Size != EvalSize ||
@@ -5616,8 +5589,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             };
             const RelocatedInstructionScalarModelOccurrence *I386Model =
                 ExactI386ModelZeroOccurrence();
-            auto ExactAddressOutputOccurrence = [&]()
-                -> const RelocatedInstructionAddressOccurrence * {
+            auto ExactAddressOutputOccurrence =
+                [&]() -> const RelocatedInstructionAddressOccurrence * {
               const RelocatedInstructionAddressOccurrence *Exact = nullptr;
               for (const RelocatedInstructionAddressOccurrence &Occurrence :
                    RelocatedInstructionAddressOccurrences) {
@@ -5654,7 +5627,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
               Provenance = ExactAddressOutput->Provenance;
               Owner = ExactAddressOutput->TargetOwnerVA;
             } else if (I386ModelZero && ((LeftAddress && RightScalar) ||
-                                  (RightAddress && LeftScalar))) {
+                                         (RightAddress && LeftScalar))) {
               // ET_REL i386 models _GLOBAL_OFFSET_TABLE_ at zero.  The exact
               // GOTPC relocation occurrence proves this cancellation; a
               // numerically identical address+scalar expression without that
@@ -5707,8 +5680,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
               Provenance = ConstantAddressProvenance::AddressFragment;
             }
             std::optional<ResolverScalarModelOrigin> ScalarModelOrigin;
-            if (I386ModelZero && Provenance ==
-                                     ConstantAddressProvenance::Scalar)
+            if (I386ModelZero &&
+                Provenance == ConstantAddressProvenance::Scalar)
               ScalarModelOrigin = ResolverScalarModelOrigin{
                   I386Model->Model, I386Model->FieldVA,
                   I386Model->InstructionAddr, I386Model->OpSeq,
@@ -5763,9 +5736,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             !Full &&
             canonicalFrameSlotKey(Block, I - 1, Address, SlotBase, SlotOffset);
         if (HasFrameSlot) {
-          ResolverResult Loaded =
-              resolveMemory(Block, I, SlotBase, SlotOffset, Def.Output.Size,
-                            Depth + 1);
+          ResolverResult Loaded = resolveMemory(Block, I, SlotBase, SlotOffset,
+                                                Def.Output.Size, Depth + 1);
           if (Loaded.Kind == ResolverResultKind::Value)
             Full = Loaded.Value;
           else
@@ -6147,8 +6119,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         if (!sameResolverValueBudgeted(A->Input, B->Input, Depth + 1))
           return false;
         for (size_t I = 0; I < A->Inputs.size(); ++I)
-          if (!sameResolverValueBudgeted(A->Inputs[I], B->Inputs[I],
-                                         Depth + 1))
+          if (!sameResolverValueBudgeted(A->Inputs[I], B->Inputs[I], Depth + 1))
             return false;
         return true;
       };
@@ -6616,8 +6587,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         }
         if (!Inputs.empty()) {
           const size_t InputCount = Node->Inputs.size();
-          if (InputCount >
-                  (std::numeric_limits<size_t>::max() - 10) / 5 ||
+          if (InputCount > (std::numeric_limits<size_t>::max() - 10) / 5 ||
               !consumeSymbolWork(InputCount * 5 + 10))
             break;
           std::optional<symbolic::SymRef> Operation =
@@ -6644,12 +6614,10 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     auto makeSolverOptions = [] {
       solver::SolverOptions Options;
       Options.BuildModel = false;
-      Options.Sat.MaxConflicts =
-          limits::kMaxJumpTableGuardSolverConflicts;
+      Options.Sat.MaxConflicts = limits::kMaxJumpTableGuardSolverConflicts;
       Options.Sat.MaxPropagations =
           limits::kMaxJumpTableGuardSolverPropagations;
-      Options.Sat.MaxWatchVisits =
-          limits::kMaxJumpTableGuardSolverWatchVisits;
+      Options.Sat.MaxWatchVisits = limits::kMaxJumpTableGuardSolverWatchVisits;
       Options.Blast.MaxWidth = 64;
       Options.Blast.MaxGates = limits::kMaxJumpTableGuardSolverGates;
       return Options;
@@ -7036,8 +7004,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
          Query.Alternatives.empty()))
       continue;
 
-    if (Query.Relation ==
-        JumpTableValueRelation::SameCanonicalFrameAddress) {
+    if (Query.Relation == JumpTableValueRelation::SameCanonicalFrameAddress) {
       if (Query.Alternatives.size() != 1 ||
           Query.Alternatives.front().DefinedAtPoint)
         continue;
@@ -7173,8 +7140,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         if (CandidateBlock < 0 ||
             CandidateBlock >= static_cast<int>(Graph.Blocks.size()) ||
             CandidateBefore < 0 ||
-            CandidateBefore >= static_cast<int>(
-                                   Graph.Blocks[CandidateBlock].Ops.size()))
+            CandidateBefore >=
+                static_cast<int>(Graph.Blocks[CandidateBlock].Ops.size()))
           continue;
         const LowOp &Definition =
             Graph.Blocks[CandidateBlock].Ops[CandidateBefore];
@@ -7213,7 +7180,6 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       }
       continue;
     }
-
     if (Query.Relation == JumpTableValueRelation::ResolvableValue) {
       Results[QueryIndex] = true;
       continue;
@@ -7298,13 +7264,12 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             static_cast<size_t>(&Anchor - Query.Alternatives.data());
         const uint16_t SliceOffset =
             Query.AlternativeFrameValueOffsets[AlternativeIndex];
-        if (!IndexValue.Value ||
-            SliceOffset > IndexValue.Value->Size ||
+        if (!IndexValue.Value || SliceOffset > IndexValue.Value->Size ||
             Query.FrameMemorySize > IndexValue.Value->Size - SliceOffset)
           continue;
-        IndexValue = resolverValue(resolverSlice(
-            IndexValue.Value, SliceOffset, Query.FrameMemorySize,
-            consumeEvidence, &EvidenceBudgetExhausted));
+        IndexValue = resolverValue(
+            resolverSlice(IndexValue.Value, SliceOffset, Query.FrameMemorySize,
+                          consumeEvidence, &EvidenceBudgetExhausted));
       }
       if (!consumeEvidence())
         break;
@@ -7365,8 +7330,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                                  Query.RequireExactAddressOwner) ||
                 (Query.AllowZeroExtension && Value->Size < Allowed->Size &&
                  sameAllowedValue(resolverExtend(Value, Allowed->Size, false,
-                                                  consumeMatchWork,
-                                                  &MatchBudgetExhausted),
+                                                 consumeMatchWork,
+                                                 &MatchBudgetExhausted),
                                   Allowed, Query.RequireExactAddressOwner)) ||
                 (Query.AllowZeroExtension && Allowed->Size < Value->Size &&
                  sameAllowedValue(Value,
@@ -7376,8 +7341,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                                   Query.RequireExactAddressOwner)) ||
                 (Query.AllowSignExtension && Value->Size < Allowed->Size &&
                  sameAllowedValue(resolverExtend(Value, Allowed->Size, true,
-                                                  consumeMatchWork,
-                                                  &MatchBudgetExhausted),
+                                                 consumeMatchWork,
+                                                 &MatchBudgetExhausted),
                                   Allowed, Query.RequireExactAddressOwner)) ||
                 (Query.AllowSignExtension && Allowed->Size < Value->Size &&
                  sameAllowedValue(Value,
@@ -7409,11 +7374,10 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                                     });
           } else if (!Matches && Value->K == ResolverValueExpr::Kind::Merge &&
                      !Value->Inputs.empty()) {
-            Matches = std::all_of(
-                Value->Inputs.begin(), Value->Inputs.end(),
-                [&](const ResolverValue &Arm) {
-                  return MatchesAllowed(Arm, Depth + 1);
-                });
+            Matches = std::all_of(Value->Inputs.begin(), Value->Inputs.end(),
+                                  [&](const ResolverValue &Arm) {
+                                    return MatchesAllowed(Arm, Depth + 1);
+                                  });
           }
           MemoIt->second = Matches ? MatchState::Yes : MatchState::No;
           return Matches;
@@ -7462,8 +7426,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       SymbolBudgetExhausted) {
     std::fill(Results.begin(), Results.end(), false);
     if (QueryAnalysisComplete)
-      std::fill(QueryAnalysisComplete->begin(),
-                QueryAnalysisComplete->end(), false);
+      std::fill(QueryAnalysisComplete->begin(), QueryAnalysisComplete->end(),
+                false);
     Complete = false;
   }
   if (AnalysisComplete)
@@ -7668,8 +7632,7 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
       if (!consumeWork())
         return std::nullopt;
       if (D.State == State && D.Occurrence.Addr == Op.Addr &&
-          D.Occurrence.Seq == Op.Seq &&
-          sameVar(D.Occurrence.Value, Op.Output))
+          D.Occurrence.Seq == Op.Seq && sameVar(D.Occurrence.Value, Op.Output))
         return true;
     }
     return false;
@@ -7809,20 +7772,18 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
                 Op.Inputs[0].Size < Op.Output.Size &&
                 Op.Output.Size <= PointerSize &&
                 ((Info.IsSigned && Op.Opcode == NdOp::INT_SEXT) ||
-                 (!Info.IsSigned && Op.Opcode == NdOp::INT_ZEXT)))
-              {
-                auto Query = addQuery(Op.Inputs[0], Op, *Alternatives);
-                if (!Query ||
-                    !addPending(
-                        Op,
-                        State | (relativeTargetTransformUsesPointerWidth(
-                                     Op.Opcode, Op.Inputs[0].Size, 0,
-                                     Op.Output.Size, PointerSize)
-                                     ? TargetExtended
-                                     : TargetRaw),
-                        llvm::ArrayRef<size_t>(&*Query, 1)))
-                  return false;
-              }
+                 (!Info.IsSigned && Op.Opcode == NdOp::INT_ZEXT))) {
+              auto Query = addQuery(Op.Inputs[0], Op, *Alternatives);
+              if (!Query ||
+                  !addPending(Op,
+                              State | (relativeTargetTransformUsesPointerWidth(
+                                           Op.Opcode, Op.Inputs[0].Size, 0,
+                                           Op.Output.Size, PointerSize)
+                                           ? TargetExtended
+                                           : TargetRaw),
+                              llvm::ArrayRef<size_t>(&*Query, 1)))
+                return false;
+            }
             break;
           case NdOp::SUBBYTES:
             if (Op.NumInputs >= 2 && Op.Inputs[1].isConst() &&
@@ -7843,15 +7804,13 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
                     Op.Inputs[1 - Side].Offset == Info.EntryScale &&
                     relativeTargetTransformUsesPointerWidth(
                         Op.Opcode, Op.Inputs[Side].Size,
-                        Op.Inputs[1 - Side].Size, Op.Output.Size, PointerSize))
-                  {
-                    auto Query =
-                        addQuery(Op.Inputs[Side], Op, *Alternatives);
-                    if (!Query ||
-                        !addPending(Op, State | TargetScaled,
-                                    llvm::ArrayRef<size_t>(&*Query, 1)))
-                      return false;
-                  }
+                        Op.Inputs[1 - Side].Size, Op.Output.Size,
+                        PointerSize)) {
+                  auto Query = addQuery(Op.Inputs[Side], Op, *Alternatives);
+                  if (!Query || !addPending(Op, State | TargetScaled,
+                                            llvm::ArrayRef<size_t>(&*Query, 1)))
+                    return false;
+                }
             break;
           case NdOp::INT_LEFT:
             if (Op.NumInputs >= 2 && Info.IsRelative && Info.EntryScale > 1 &&
@@ -7862,14 +7821,12 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
                 (uint64_t{1} << Op.Inputs[1].Offset) == Info.EntryScale &&
                 relativeTargetTransformUsesPointerWidth(
                     Op.Opcode, Op.Inputs[0].Size, Op.Inputs[1].Size,
-                    Op.Output.Size, PointerSize))
-              {
-                auto Query = addQuery(Op.Inputs[0], Op, *Alternatives);
-                if (!Query ||
-                    !addPending(Op, State | TargetScaled,
-                                llvm::ArrayRef<size_t>(&*Query, 1)))
-                  return false;
-              }
+                    Op.Output.Size, PointerSize)) {
+              auto Query = addQuery(Op.Inputs[0], Op, *Alternatives);
+              if (!Query || !addPending(Op, State | TargetScaled,
+                                        llvm::ArrayRef<size_t>(&*Query, 1)))
+                return false;
+            }
             break;
           case NdOp::INT_ADD:
             if (Op.NumInputs >= 2 && Info.IsRelative &&
@@ -7884,8 +7841,7 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
                   continue;
                 std::array<size_t, 2> QueryIndices{};
                 size_t QueryCount = 0;
-                auto Dynamic =
-                    addQuery(Op.Inputs[Side], Op, *Alternatives);
+                auto Dynamic = addQuery(Op.Inputs[Side], Op, *Alternatives);
                 if (!Dynamic)
                   return false;
                 QueryIndices[QueryCount++] = *Dynamic;
@@ -7896,10 +7852,9 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
                     continue;
                 } else if (Anchor.isReg() || Anchor.isTemp()) {
                   const std::array<JumpTableValueOccurrence, 1>
-                      AnchorAlternative = {
-                          JumpTableValueOccurrence{
-                              NdVar::address(ExpectedAnchor, Anchor.Size),
-                              InvalidVA, -1, /*DefinedAtPoint=*/false}};
+                      AnchorAlternative = {JumpTableValueOccurrence{
+                          NdVar::address(ExpectedAnchor, Anchor.Size),
+                          InvalidVA, -1, /*DefinedAtPoint=*/false}};
                   auto AnchorQuery = addQuery(Anchor, Op, AnchorAlternative);
                   if (!AnchorQuery)
                     return false;
@@ -8021,6 +7976,7 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
     if (Alternative.Value.Size != PointerSize)
       return false;
   }
+
   // FinalQueries and its one JumpTableValueQuery own five vector objects in
   // total.  The alternatives buffer transfers from FinalAlternatives, so only
   // fixed lifetimes, the retained query element, and outer capacity are new.
@@ -8243,8 +8199,8 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
     const ResolverFlowGraph Graph = buildResolverFlowGraph(
         Snapshot, BlockStarts, ProofRoots, DiscoveredCodeRefSources,
         [&](va_t Address, const std::set<va_t> *ActiveOwners) {
-          return resolvedJumpTableOwnsStorageAddress(
-              Address, ActiveOwners, AggregateEvidenceBudget);
+          return resolvedJumpTableOwnsStorageAddress(Address, ActiveOwners,
+                                                     AggregateEvidenceBudget);
         },
         AggregateEvidenceBudget, &GraphComplete);
     if (!GraphComplete) {
@@ -8654,11 +8610,13 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
     }
     if (!Load || Load->NumInputs < 1 || Load->Output.Size != Role.LoadWidth)
       return false;
-    const NdVar &LoadAddress =
-        Load->Inputs[Load->NumInputs >= 2 ? 1 : 0];
+    const NdVar &LoadAddress = Load->Inputs[Load->NumInputs >= 2 ? 1 : 0];
     const JumpTableFrameStorageRole &FrameStorage = Role.FrameStorage;
-    const bool HasFrameStorage =
-        FrameStorage.RuntimeBase.Use.Value.Size != 0;
+    const bool HasFrameStorage = FrameStorage.RuntimeBase.Use.Value.Size != 0;
+    const JumpTableDisplacedAddressRole &Displaced = Role.DisplacedAddress;
+    const bool HasDisplacedAddress = Displaced.RuntimeBaseUse.Value.Size != 0;
+    if (HasFrameStorage && HasDisplacedAddress)
+      return false;
     if (HasFrameStorage) {
       if (FrameStorage.RuntimeBase.Use.DefinedAtPoint ||
           FrameStorage.RuntimeBase.Use.Addr == InvalidVA ||
@@ -8684,6 +8642,25 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
       }
     } else if (FrameStorage.CompleteAddress.Value.Size != 0 ||
                !FrameStorage.Initializers.empty()) {
+      return false;
+    }
+    if (HasDisplacedAddress) {
+      if (Displaced.RuntimeBaseUse.DefinedAtPoint ||
+          Displaced.RuntimeBaseUse.Addr == InvalidVA ||
+          Displaced.RuntimeBaseUse.Seq < 0 ||
+          Displaced.RuntimeBaseUse.Value.Size != CurrentImg->getPointerSize() ||
+          !Displaced.CompleteAddress.DefinedAtPoint ||
+          Displaced.CompleteAddress.Addr == InvalidVA ||
+          Displaced.CompleteAddress.Seq < 0 ||
+          guestAddressView(Displaced.CompleteAddress.Value).Size !=
+              guestAddressView(LoadAddress).Size ||
+          Displaced.ExpectedRuntimeBase == InvalidVA ||
+          Displaced.ByteAddend == 0 || Role.AllowedBases.size() != 1 ||
+          Role.HasBaseSelect || Role.HasBaseMaskBlend)
+        return false;
+    } else if (Displaced.CompleteAddress.Value.Size != 0 ||
+               Displaced.ExpectedRuntimeBase != InvalidVA ||
+               Displaced.ByteAddend != 0) {
       return false;
     }
     if (Role.HasBaseSelect && Role.HasBaseMaskBlend)
@@ -8760,18 +8737,17 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
     auto Alternatives = baseAlternatives(Bases, Size);
     if (!Alternatives)
       return std::nullopt;
-    return pushQuery(Queries, Candidate, Use, *Alternatives,
-                     AllowZeroExtension, AllowSignExtension);
+    return pushQuery(Queries, Candidate, Use, *Alternatives, AllowZeroExtension,
+                     AllowSignExtension);
   };
-  auto pushSingleBaseQuery =
-      [&](std::vector<JumpTableValueQuery> &Queries, const NdVar &Candidate,
-          const LowOp &Use, va_t Base, uint16_t Size) {
-    const JumpTableValueOccurrence Alternative{
-        NdVar::address(Base, Size), InvalidVA, -1,
-        /*DefinedAtPoint=*/false};
-    return pushQuery(
-        Queries, Candidate, Use,
-        llvm::ArrayRef<JumpTableValueOccurrence>(Alternative));
+  auto pushSingleBaseQuery = [&](std::vector<JumpTableValueQuery> &Queries,
+                                 const NdVar &Candidate, const LowOp &Use,
+                                 va_t Base, uint16_t Size) {
+    const JumpTableValueOccurrence Alternative{NdVar::address(Base, Size),
+                                               InvalidVA, -1,
+                                               /*DefinedAtPoint=*/false};
+    return pushQuery(Queries, Candidate, Use,
+                     llvm::ArrayRef<JumpTableValueOccurrence>(Alternative));
   };
   auto pushIndex = [&](std::vector<size_t> &Indices, size_t Index) {
     if (!ensureAppendCapacity(Indices) || !consumeWork())
@@ -9345,69 +9321,62 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
     return StartSegment && StartSegment == LastSegment &&
            StartSegment->VA == Occurrence.TargetOwnerVA;
   };
-  auto exactAddressProducer =
-      [&](const JumpTableValueOccurrence &Producer, va_t FieldVA,
-          va_t ProducerTargetVA, va_t StaticAddress,
-          ConstantAddressProvenance Provenance, va_t OwnerVA) {
-        if (Provenance != ConstantAddressProvenance::DataAddress ||
-            OwnerVA == InvalidVA ||
-            ProducerTargetVA == InvalidVA || StaticAddress == InvalidVA ||
-            Producer.Addr == InvalidVA ||
-            Producer.Seq < 0)
-          return false;
-        if (!consumeRelocatedOwnerQuery() ||
-            !CurrentImg->relocatedTargetBelongsToOwner(ProducerTargetVA,
-                                                       OwnerVA) ||
-            !consumeRelocatedOwnerQuery() ||
-            !CurrentImg->relocatedTargetBelongsToOwner(StaticAddress, OwnerVA))
-          return false;
-        const LowOp *Op = exactOpAt(Producer.Addr, Producer.Seq);
-        if (!Op)
-          return false;
-        const RelocatedInstructionAddressOccurrence *Exact = nullptr;
-        if (!consumeWork(RelocatedInstructionAddressOccurrences.size()))
-          return false;
-        for (const RelocatedInstructionAddressOccurrence &Occurrence :
-             RelocatedInstructionAddressOccurrences) {
-          if (Occurrence.InstructionAddr != Producer.Addr ||
-              Occurrence.OpSeq != Producer.Seq ||
-              Occurrence.FieldVA != FieldVA ||
-              Occurrence.TargetVA != ProducerTargetVA ||
-              Occurrence.TargetOwnerVA != OwnerVA ||
-              Occurrence.Provenance != Provenance ||
-              Occurrence.OutputMayDepend)
-            continue;
-          const bool LoaderAuthority =
-              Occurrence.Authority ==
-                  RelocatedInstructionAddressProofKind::LoaderField &&
-              FieldVA != InvalidVA;
-          const bool RelocationFreeAuthority =
-              FieldVA == InvalidVA && exactRelocationFreeAddressProof(Occurrence);
-          if (!LoaderAuthority && !RelocationFreeAuthority)
-            continue;
-          bool Matches = false;
-          if (Occurrence.DefinesOutput) {
-            Matches = Producer.DefinedAtPoint &&
-                      Op->Opcode == Occurrence.OutputOpcode &&
-                      Op->Output == Occurrence.OutputWitness &&
-                      Producer.Value == Op->Output;
-          } else if (!Producer.DefinedAtPoint &&
-                     Occurrence.InputIndex >= 0 &&
-                     Occurrence.InputIndex < Op->NumInputs) {
-            Matches = Op->Inputs[Occurrence.InputIndex] == Producer.Value &&
-                      Producer.Value.isConst() &&
-                      Producer.Value.Offset == ProducerTargetVA &&
-                      Producer.Value.Provenance == Provenance &&
-                      Producer.Value.AddressOwnerVA == OwnerVA;
-          }
-          if (!Matches)
-            continue;
-          if (Exact)
-            return false;
-          Exact = &Occurrence;
-        }
-        return Exact != nullptr;
-      };
+  auto exactAddressProducer = [&](const JumpTableValueOccurrence &Producer,
+                                  va_t FieldVA, va_t ProducerTargetVA,
+                                  va_t StaticAddress,
+                                  ConstantAddressProvenance Provenance,
+                                  va_t OwnerVA) {
+    if (Provenance != ConstantAddressProvenance::DataAddress ||
+        OwnerVA == InvalidVA || ProducerTargetVA == InvalidVA ||
+        StaticAddress == InvalidVA || Producer.Addr == InvalidVA ||
+        Producer.Seq < 0 ||
+        !CurrentImg->relocatedTargetBelongsToOwner(ProducerTargetVA, OwnerVA) ||
+        !CurrentImg->relocatedTargetBelongsToOwner(StaticAddress, OwnerVA))
+      return false;
+    const LowOp *Op = exactOpAt(Producer.Addr, Producer.Seq);
+    if (!Op)
+      return false;
+    const RelocatedInstructionAddressOccurrence *Exact = nullptr;
+    if (!consumeWork(RelocatedInstructionAddressOccurrences.size()))
+      return false;
+    for (const RelocatedInstructionAddressOccurrence &Occurrence :
+         RelocatedInstructionAddressOccurrences) {
+      if (Occurrence.InstructionAddr != Producer.Addr ||
+          Occurrence.OpSeq != Producer.Seq || Occurrence.FieldVA != FieldVA ||
+          Occurrence.TargetVA != ProducerTargetVA ||
+          Occurrence.TargetOwnerVA != OwnerVA ||
+          Occurrence.Provenance != Provenance || Occurrence.OutputMayDepend)
+        continue;
+      const bool LoaderAuthority =
+          Occurrence.Authority ==
+              RelocatedInstructionAddressProofKind::LoaderField &&
+          FieldVA != InvalidVA;
+      const bool RelocationFreeAuthority =
+          FieldVA == InvalidVA && exactRelocationFreeAddressProof(Occurrence);
+      if (!LoaderAuthority && !RelocationFreeAuthority)
+        continue;
+      bool Matches = false;
+      if (Occurrence.DefinesOutput) {
+        Matches = Producer.DefinedAtPoint &&
+                  Op->Opcode == Occurrence.OutputOpcode &&
+                  Op->Output == Occurrence.OutputWitness &&
+                  Producer.Value == Op->Output;
+      } else if (!Producer.DefinedAtPoint && Occurrence.InputIndex >= 0 &&
+                 Occurrence.InputIndex < Op->NumInputs) {
+        Matches = Op->Inputs[Occurrence.InputIndex] == Producer.Value &&
+                  Producer.Value.isConst() &&
+                  Producer.Value.Offset == ProducerTargetVA &&
+                  Producer.Value.Provenance == Provenance &&
+                  Producer.Value.AddressOwnerVA == OwnerVA;
+      }
+      if (!Matches)
+        continue;
+      if (Exact)
+        return false;
+      Exact = &Occurrence;
+    }
+    return Exact != nullptr;
+  };
   auto exactScalarProducer = [&](const JumpTableValueOccurrence &Producer,
                                  uint64_t Expected) {
     if (Producer.Addr == InvalidVA || Producer.Seq < 0)
@@ -9457,8 +9426,7 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
         });
   };
   auto isAuthenticatedMemcpyCall = [&](const LowOp &Op) {
-    if (Op.Opcode != NdOp::CALL || Op.NumInputs < 1 ||
-        !Op.Inputs[0].isConst())
+    if (Op.Opcode != NdOp::CALL || Op.NumInputs < 1 || !Op.Inputs[0].isConst())
       return false;
     const va_t Target = static_cast<va_t>(Op.Inputs[0].Offset);
     if (!consumeWork(CurrentImg->Imports.size()) ||
@@ -9499,16 +9467,117 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
     RoleState &State = Roles[RoleIndex];
     const JumpTableLoadRole &Role = *State.Role;
     const JumpTableFrameStorageRole &FrameStorage = Role.FrameStorage;
+    const JumpTableDisplacedAddressRole &Displaced = Role.DisplacedAddress;
+    if (Displaced.RuntimeBaseUse.Value.Size != 0) {
+      const LowOp *RuntimeAdd =
+          exactOpAt(Displaced.RuntimeBaseUse.Addr,
+                    Displaced.RuntimeBaseUse.Seq);
+      const LowOp *CompleteAdd =
+          exactOpAt(Displaced.CompleteAddress.Addr,
+                    Displaced.CompleteAddress.Seq);
+      const uint16_t PointerSize = CurrentImg->getPointerSize();
+      if (!RuntimeAdd || !CompleteAdd || RuntimeAdd == CompleteAdd ||
+          RuntimeAdd->Opcode != NdOp::INT_ADD || RuntimeAdd->NumInputs < 2 ||
+          RuntimeAdd->Output.Size != PointerSize ||
+          CompleteAdd->Opcode != NdOp::INT_ADD || CompleteAdd->NumInputs < 2 ||
+          CompleteAdd->Output.Size != PointerSize ||
+          !sameVar(guestAddressView(CompleteAdd->Output),
+                   guestAddressView(Displaced.CompleteAddress.Value)))
+        return false;
+
+      int BaseSide = -1;
+      for (int Side = 0; Side < 2; ++Side)
+        if (sameVar(guestAddressView(RuntimeAdd->Inputs[Side]),
+                    guestAddressView(Displaced.RuntimeBaseUse.Value))) {
+          if (BaseSide >= 0)
+            return false;
+          BaseSide = Side;
+        }
+      if (BaseSide < 0)
+        return false;
+
+      const NdVar BaseValue =
+          guestAddressView(RuntimeAdd->Inputs[BaseSide]);
+      const NdVar DynamicValue =
+          guestAddressView(RuntimeAdd->Inputs[1 - BaseSide]);
+      std::vector<size_t> ProofQueries;
+      auto BaseQuery = pushSingleBaseQuery(
+          AddressQueries, BaseValue, *RuntimeAdd,
+          Displaced.ExpectedRuntimeBase, BaseValue.Size);
+      if (!BaseQuery || !pushIndex(ProofQueries, *BaseQuery))
+        return false;
+
+      if (!consumeWork(State.DynamicAlternatives.size()))
+        return false;
+      const bool LocallyAuthenticatedIndex = std::any_of(
+          State.DynamicAlternatives.begin(), State.DynamicAlternatives.end(),
+          [&](const JumpTableValueOccurrence &Alternative) {
+            return localCopyChainMatchesUse(Alternative, DynamicValue,
+                                            *RuntimeAdd);
+          });
+      if (!LocallyAuthenticatedIndex) {
+        auto IndexQuery = pushQuery(AddressQueries, DynamicValue, *RuntimeAdd,
+                                    State.DynamicAlternatives);
+        if (!IndexQuery || !pushIndex(ProofQueries, *IndexQuery))
+          return false;
+      }
+
+      int ValueSide = -1;
+      int ConstantSide = -1;
+      for (int Side = 0; Side < 2; ++Side)
+        if (CompleteAdd->Inputs[Side].isConst()) {
+          if (ConstantSide >= 0)
+            return false;
+          ConstantSide = Side;
+          ValueSide = 1 - Side;
+        }
+      if (ValueSide < 0 || ConstantSide < 0 ||
+          CompleteAdd->Inputs[ConstantSide].Provenance !=
+              ConstantAddressProvenance::Scalar)
+        return false;
+      const std::optional<int64_t> Delta = signedFrameDelta(
+          CompleteAdd->Inputs[ConstantSide], CompleteAdd->Output.Size);
+      const std::optional<va_t> ExpectedTable =
+          checkedVAOffset(Displaced.ExpectedRuntimeBase,
+                          Displaced.ByteAddend);
+      if (!Delta || *Delta != Displaced.ByteAddend || !ExpectedTable ||
+          Role.AllowedBases.size() != 1 ||
+          Role.AllowedBases.front() != *ExpectedTable)
+        return false;
+
+      const JumpTableValueOccurrence InnerAddress{
+          guestAddressView(RuntimeAdd->Output), RuntimeAdd->Addr,
+          RuntimeAdd->Seq, /*DefinedAtPoint=*/true};
+      const NdVar FinalBase =
+          guestAddressView(CompleteAdd->Inputs[ValueSide]);
+      if (!localCopyChainMatchesUse(InnerAddress, FinalBase, *CompleteAdd)) {
+        auto FinalBaseQuery =
+            pushQuery(AddressQueries, FinalBase, *CompleteAdd,
+                      llvm::ArrayRef<JumpTableValueOccurrence>(InnerAddress));
+        if (!FinalBaseQuery || !pushIndex(ProofQueries, *FinalBaseQuery))
+          return false;
+      }
+      if (!ensureAppendCapacity(AddressProofs) || !consumeWork(3))
+        return false;
+      AddressProofs.push_back(
+          {RoleIndex,
+           CompleteAdd,
+           {guestAddressView(CompleteAdd->Output), CompleteAdd->Addr,
+            CompleteAdd->Seq, /*DefinedAtPoint=*/true},
+           {DynamicValue, RuntimeAdd->Addr, RuntimeAdd->Seq,
+            /*DefinedAtPoint=*/false},
+           std::move(ProofQueries)});
+      continue;
+    }
     if (FrameStorage.RuntimeBase.Use.Value.Size != 0) {
-      const JumpTableValueOccurrence &RuntimeUse =
-          FrameStorage.RuntimeBase.Use;
+      const JumpTableValueOccurrence &RuntimeUse = FrameStorage.RuntimeBase.Use;
       const LowOp *RuntimeAdd = exactOpAt(RuntimeUse.Addr, RuntimeUse.Seq);
       const JumpTableValueOccurrence &CompleteAddress =
           FrameStorage.CompleteAddress;
       const LowOp *CompleteAdd =
           exactOpAt(CompleteAddress.Addr, CompleteAddress.Seq);
-      if (!RuntimeAdd || !CompleteAdd ||
-          RuntimeAdd->Opcode != NdOp::INT_ADD || RuntimeAdd->NumInputs < 2 ||
+      if (!RuntimeAdd || !CompleteAdd || RuntimeAdd->Opcode != NdOp::INT_ADD ||
+          RuntimeAdd->NumInputs < 2 ||
           !sameVar(guestAddressView(CompleteAdd->Output),
                    guestAddressView(CompleteAddress.Value)))
         return false;
@@ -9537,9 +9606,8 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
       if (!consumeWork(2))
         return false;
       if (!LocallyAuthenticatedIndex) {
-        auto IndexQuery =
-            pushQuery(AddressQueries, DynamicValue, *RuntimeAdd,
-                      State.DynamicAlternatives);
+        auto IndexQuery = pushQuery(AddressQueries, DynamicValue, *RuntimeAdd,
+                                    State.DynamicAlternatives);
         if (!IndexQuery)
           return false;
         if (!pushIndex(ProofQueries, *IndexQuery))
@@ -9559,8 +9627,7 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
            FrameStorage.Initializers) {
         if (!consumeWork())
           return false;
-        const JumpTableFrameAddressUse &Destination =
-            Initializer.Destination;
+        const JumpTableFrameAddressUse &Destination = Initializer.Destination;
         const LowOp *DestinationUse =
             exactOpAt(Destination.Use.Addr, Destination.Use.Seq);
         if (!DestinationUse)
@@ -9568,11 +9635,11 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
         bool ExplicitUse = false;
         if (!consumeWork(DestinationUse->NumInputs))
           return false;
-        for (int InputIndex = 0;
-             InputIndex < DestinationUse->NumInputs; ++InputIndex)
-          ExplicitUse |= sameVar(
-              guestAddressView(DestinationUse->Inputs[InputIndex]),
-              guestAddressView(Destination.Use.Value));
+        for (int InputIndex = 0; InputIndex < DestinationUse->NumInputs;
+             ++InputIndex)
+          ExplicitUse |=
+              sameVar(guestAddressView(DestinationUse->Inputs[InputIndex]),
+                      guestAddressView(Destination.Use.Value));
         const bool ImplicitFirstCallArgument =
             DestinationUse->Opcode == NdOp::CALL &&
             Destination.Use.Value.isReg() && !IntParamRegs.empty() &&
@@ -9585,8 +9652,7 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
         if (!FrameQuery)
           return false;
         JumpTableValueQuery &Query = AddressQueries[*FrameQuery];
-        Query.Relation =
-            JumpTableValueRelation::SameCanonicalFrameAddress;
+        Query.Relation = JumpTableValueRelation::SameCanonicalFrameAddress;
         Query.FrameByteAddend = FrameStorage.RuntimeBase.ByteAddend;
         Query.AlternativeFrameByteAddend = Destination.ByteAddend;
         if (!pushIndex(ProofQueries, *FrameQuery))
@@ -9624,9 +9690,8 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
           if (LengthBits < 64 &&
               Initializer.ByteCount >= (uint64_t{1} << LengthBits))
             return false;
-          const LowOp *SourceUse = exactOpAt(
-              Initializer.SourceAddress.Addr,
-              Initializer.SourceAddress.Seq);
+          const LowOp *SourceUse = exactOpAt(Initializer.SourceAddress.Addr,
+                                             Initializer.SourceAddress.Seq);
           const LowOp *LengthUse =
               exactOpAt(Initializer.Length.Addr, Initializer.Length.Seq);
           if (!SourceUse || !LengthUse)
@@ -9639,11 +9704,11 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
           auto SourceQuery = pushQuery(
               AddressQueries, Initializer.SourceAddress.Value, *SourceUse,
               llvm::ArrayRef<JumpTableValueOccurrence>(SourceAlternative));
-          auto LengthQuery = pushQuery(
-              AddressQueries, Initializer.Length.Value, *LengthUse,
-              llvm::ArrayRef<JumpTableValueOccurrence>(
-                  Initializer.LengthProducer),
-              /*AllowZeroExtension=*/true);
+          auto LengthQuery =
+              pushQuery(AddressQueries, Initializer.Length.Value, *LengthUse,
+                        llvm::ArrayRef<JumpTableValueOccurrence>(
+                            Initializer.LengthProducer),
+                        /*AllowZeroExtension=*/true);
           if (!SourceQuery || !LengthQuery)
             return false;
           AddressQueries[*SourceQuery].RequireExactAddressOwner = true;
@@ -9676,26 +9741,24 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
                 !TRI.isStackPointer(TRI.StackPointer))
               return false;
             const std::array<JumpTableValueOccurrence, 3> Arguments = {
-                Destination.Use, Initializer.SourceAddress,
-                Initializer.Length};
-            for (size_t ArgumentIndex = 0;
-                 ArgumentIndex < Arguments.size(); ++ArgumentIndex) {
+                Destination.Use, Initializer.SourceAddress, Initializer.Length};
+            for (size_t ArgumentIndex = 0; ArgumentIndex < Arguments.size();
+                 ++ArgumentIndex) {
               if (ArgumentIndex >
-                  static_cast<size_t>(
-                      std::numeric_limits<int64_t>::max()) /
+                  static_cast<size_t>(std::numeric_limits<int64_t>::max()) /
                       PointerSize)
                 return false;
-              auto ArgumentQuery = pushQuery(
-                  AddressQueries,
-                  NdVar::reg(TRI.StackPointer, PointerSize), *Writer,
-                  llvm::ArrayRef<JumpTableValueOccurrence>(
-                      Arguments[ArgumentIndex]));
+              auto ArgumentQuery =
+                  pushQuery(AddressQueries,
+                            NdVar::reg(TRI.StackPointer, PointerSize), *Writer,
+                            llvm::ArrayRef<JumpTableValueOccurrence>(
+                                Arguments[ArgumentIndex]));
               if (!ArgumentQuery)
                 return false;
               JumpTableValueQuery &Arg = AddressQueries[*ArgumentQuery];
               Arg.Relation = JumpTableValueRelation::FrameMemoryMatches;
               Arg.FrameByteAddend = static_cast<int64_t>(ArgumentIndex) *
-                                     static_cast<int64_t>(PointerSize);
+                                    static_cast<int64_t>(PointerSize);
               Arg.FrameMemorySize = PointerSize;
               if (!consumeWork(5))
                 return false;
@@ -9734,13 +9797,12 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
         for (const auto &Source : Initializer.StaticSources) {
           if (!consumeWork())
             return false;
-          const LowOp *SourceLoad = exactOpAt(Source.Value.Addr,
-                                              Source.Value.Seq);
+          const LowOp *SourceLoad =
+              exactOpAt(Source.Value.Addr, Source.Value.Seq);
           const bool ExactSourceProducer = exactAddressProducer(
               Source.StaticAddressProducer, Source.StaticAddressFieldVA,
               Source.StaticAddressProducerTargetVA, Source.StaticAddress,
-              Source.StaticAddressProvenance,
-              Source.StaticAddressOwnerVA);
+              Source.StaticAddressProvenance, Source.StaticAddressOwnerVA);
           if (!SourceLoad || SourceLoad->Opcode != NdOp::LOAD ||
               SourceLoad->NumInputs < 1 ||
               !sameVar(SourceLoad->Output, Source.Value.Value) ||
@@ -9772,13 +9834,13 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
               NdVar::dataAddress(Source.StaticAddress, SourceAddress.Size,
                                  Source.StaticAddressOwnerVA),
               InvalidVA, -1, /*DefinedAtPoint=*/false};
-          auto AddressQuery = pushQuery(
-              AddressQueries, SourceAddress, *SourceLoad,
-              llvm::ArrayRef<JumpTableValueOccurrence>(
-                  SourceAddressAlternative));
-          auto DependencyQuery = pushQuery(
-              AddressQueries, Initializer.StoredValue.Value, *Writer,
-              llvm::ArrayRef<JumpTableValueOccurrence>(Source.Value));
+          auto AddressQuery =
+              pushQuery(AddressQueries, SourceAddress, *SourceLoad,
+                        llvm::ArrayRef<JumpTableValueOccurrence>(
+                            SourceAddressAlternative));
+          auto DependencyQuery =
+              pushQuery(AddressQueries, Initializer.StoredValue.Value, *Writer,
+                        llvm::ArrayRef<JumpTableValueOccurrence>(Source.Value));
           if (!AddressQuery || !DependencyQuery)
             return false;
           AddressQueries[*AddressQuery].RequireExactAddressOwner = true;
@@ -9818,16 +9880,14 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
         return false;
       }
       const size_t WriterCount = StoreWriters.size() + MemcpyWriters.size();
-      if (Info.PhysicalCapacity == 0 || Info.EntrySize == 0 ||
-          WriterCount == 0)
+      if (Info.PhysicalCapacity == 0 || Info.EntrySize == 0 || WriterCount == 0)
         return false;
       const uint64_t PhysicalStride =
           Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize;
       if (PhysicalStride < Info.EntrySize)
         return false;
       if (WriterCount > MaxProofQueries ||
-          Info.PhysicalCapacity >
-              MaxProofQueries / WriterCount ||
+          Info.PhysicalCapacity > MaxProofQueries / WriterCount ||
           Info.PhysicalCapacity > MaxProofQueries ||
           AddressQueries.size() > MaxProofQueries - Info.PhysicalCapacity) {
         Complete = false;
@@ -9836,10 +9896,10 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
       for (uint32_t Slot = 0; Slot < Info.PhysicalCapacity; ++Slot) {
         if (!consumeWork())
           return false;
-        if (Slot != 0 && PhysicalStride >
-                             static_cast<uint64_t>(
-                                 std::numeric_limits<int64_t>::max()) /
-                                 Slot)
+        if (Slot != 0 &&
+            PhysicalStride >
+                static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) /
+                    Slot)
           return false;
         const uint64_t SlotDelta = uint64_t{Slot} * PhysicalStride;
         if (SlotDelta >
@@ -9850,14 +9910,13 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
             static_cast<int64_t>(SlotDelta), /*Subtract=*/false);
         if (!FrameDelta)
           return false;
-        auto MemoryQuery = pushQuery(
-            AddressQueries, guestAddressView(RuntimeUse.Value), *State.Load,
-            llvm::ArrayRef<JumpTableValueOccurrence>());
+        auto MemoryQuery =
+            pushQuery(AddressQueries, guestAddressView(RuntimeUse.Value),
+                      *State.Load, llvm::ArrayRef<JumpTableValueOccurrence>());
         if (!MemoryQuery)
           return false;
         JumpTableValueQuery &Memory = AddressQueries[*MemoryQuery];
-        Memory.Relation =
-            JumpTableValueRelation::AuthenticatedFrameMemory;
+        Memory.Relation = JumpTableValueRelation::AuthenticatedFrameMemory;
         Memory.FrameByteAddend = *FrameDelta;
         Memory.FrameAddressUseAddr = RuntimeUse.Addr;
         Memory.FrameAddressUseSeq = RuntimeUse.Seq;
@@ -9876,8 +9935,7 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
           RuntimeAdd->Seq, /*DefinedAtPoint=*/true};
       const bool CompleteIsInner =
           CompleteAdd == RuntimeAdd &&
-          sameVar(guestAddressView(CompleteAdd->Output),
-                  InnerAddress.Value);
+          sameVar(guestAddressView(CompleteAdd->Output), InnerAddress.Value);
       if (CompleteIsInner) {
         if (FrameStorage.RuntimeBase.ByteAddend != 0)
           return false;
@@ -9918,11 +9976,9 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
         const NdVar FinalBase =
             guestAddressView(CompleteAdd->Inputs[ValueSide]);
         if (!localCopyChainMatchesUse(InnerAddress, FinalBase, *CompleteAdd)) {
-          auto FinalBaseQuery = pushQuery(AddressQueries, FinalBase,
-                                          *CompleteAdd,
-                                          llvm::ArrayRef<
-                                              JumpTableValueOccurrence>(
-                                              InnerAddress));
+          auto FinalBaseQuery =
+              pushQuery(AddressQueries, FinalBase, *CompleteAdd,
+                        llvm::ArrayRef<JumpTableValueOccurrence>(InnerAddress));
           if (!FinalBaseQuery)
             return false;
           if (!pushIndex(ProofQueries, *FinalBaseQuery))
@@ -9965,8 +10021,8 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
     }
     if (Role.HasBaseSelect) {
       auto TrueQuery = pushSingleBaseQuery(
-          AddressQueries, State.Select->Inputs[1], *State.Select,
-          Role.TrueBase, State.Select->Inputs[1].Size);
+          AddressQueries, State.Select->Inputs[1], *State.Select, Role.TrueBase,
+          State.Select->Inputs[1].Size);
       auto FalseQuery = pushSingleBaseQuery(
           AddressQueries, State.Select->Inputs[2], *State.Select,
           Role.FalseBase, State.Select->Inputs[2].Size);
@@ -9980,16 +10036,12 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
       const int NegativeOrSide = 1 - PositiveOrSide;
       const int PositiveBaseSide = Role.PositiveBaseInputSide;
       const int NegativeBaseSide = Role.NegativeBaseInputSide;
-      auto PositiveOr =
-          pushQuery(AddressQueries, State.Blend->Inputs[PositiveOrSide],
-                    *State.Blend,
-                    llvm::ArrayRef<JumpTableValueOccurrence>(
-                        Role.PositiveBlendArm));
-      auto NegativeOr =
-          pushQuery(AddressQueries, State.Blend->Inputs[NegativeOrSide],
-                    *State.Blend,
-                    llvm::ArrayRef<JumpTableValueOccurrence>(
-                        Role.NegativeBlendArm));
+      auto PositiveOr = pushQuery(
+          AddressQueries, State.Blend->Inputs[PositiveOrSide], *State.Blend,
+          llvm::ArrayRef<JumpTableValueOccurrence>(Role.PositiveBlendArm));
+      auto NegativeOr = pushQuery(
+          AddressQueries, State.Blend->Inputs[NegativeOrSide], *State.Blend,
+          llvm::ArrayRef<JumpTableValueOccurrence>(Role.NegativeBlendArm));
       auto PositiveBase = pushSingleBaseQuery(
           AddressQueries, State.PositiveAnd->Inputs[PositiveBaseSide],
           *State.PositiveAnd, Role.TrueBase,
@@ -10006,10 +10058,9 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
           AddressQueries, State.NegativeAnd->Inputs[1 - NegativeBaseSide],
           *State.NegativeAnd,
           llvm::ArrayRef<JumpTableValueOccurrence>(Role.NegativeMask));
-      auto Complement = pushQuery(AddressQueries, State.NegativeMask->Inputs[0],
-                                  *State.NegativeMask,
-                                  llvm::ArrayRef<JumpTableValueOccurrence>(
-                                      Role.PositiveMask));
+      auto Complement = pushQuery(
+          AddressQueries, State.NegativeMask->Inputs[0], *State.NegativeMask,
+          llvm::ArrayRef<JumpTableValueOccurrence>(Role.PositiveMask));
       auto BooleanCondition =
           BooleanAlternatives.empty()
               ? std::optional<size_t>{}
@@ -10067,14 +10118,12 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
           ProofQueries.insert(ProofQueries.end(), State.SelectQueries.begin(),
                               State.SelectQueries.end());
           const bool HasBaseMerge = Role.HasBaseSelect || Role.HasBaseMaskBlend;
-          auto BaseQuery = HasBaseMerge
-                               ? pushQuery(AddressQueries, BaseValue, Add,
-                                           llvm::ArrayRef<
-                                               JumpTableValueOccurrence>(
-                                               Role.SelectedBase))
-                               : pushBaseQuery(AddressQueries, BaseValue, Add,
-                                               Role.AllowedBases,
-                                               BaseValue.Size);
+          auto BaseQuery =
+              HasBaseMerge ? pushQuery(AddressQueries, BaseValue, Add,
+                                       llvm::ArrayRef<JumpTableValueOccurrence>(
+                                           Role.SelectedBase))
+                           : pushBaseQuery(AddressQueries, BaseValue, Add,
+                                           Role.AllowedBases, BaseValue.Size);
           if (!consumeWork(State.DynamicAlternatives.size()))
             return false;
           const bool LocallyAuthenticatedIndex = std::any_of(
@@ -10304,14 +10353,13 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
   }
   if (!consumeSortWork(StorageConsumers.size()))
     return false;
-  std::sort(StorageConsumers.begin(), StorageConsumers.end(),
-            [](const JumpTableValueOccurrence &A,
-               const JumpTableValueOccurrence &B) {
-              return std::tie(A.Addr, A.Seq, A.Value.Space, A.Value.Offset,
-                              A.Value.Size) <
-                     std::tie(B.Addr, B.Seq, B.Value.Space, B.Value.Offset,
-                              B.Value.Size);
-            });
+  std::sort(
+      StorageConsumers.begin(), StorageConsumers.end(),
+      [](const JumpTableValueOccurrence &A, const JumpTableValueOccurrence &B) {
+        return std::tie(A.Addr, A.Seq, A.Value.Space, A.Value.Offset,
+                        A.Value.Size) < std::tie(B.Addr, B.Seq, B.Value.Space,
+                                                 B.Value.Offset, B.Value.Size);
+      });
   if (!consumeWork(StorageConsumers.size()))
     return false;
   StorageConsumers.erase(
@@ -10400,11 +10448,9 @@ std::set<va_t> CFGBuilder::candidateReachableInstructions(
   return Reachable;
 }
 
-std::vector<std::optional<bool>>
-CFGBuilder::tableLoadConditionValues(llvm::ArrayRef<va_t> BranchAddrs,
-                                     const JumpTableInfo &Info,
-                                     bool *AnalysisComplete,
-                                     size_t *GraphWorkBudget) const {
+std::vector<std::optional<bool>> CFGBuilder::tableLoadConditionValues(
+    llvm::ArrayRef<va_t> BranchAddrs, const JumpTableInfo &Info,
+    bool *AnalysisComplete, size_t *GraphWorkBudget) const {
   if (AnalysisComplete)
     *AnalysisComplete = false;
   RequestedCompleteJumpTableProof = true;
@@ -10540,9 +10586,9 @@ CFGBuilder::tableLoadConditionValues(llvm::ArrayRef<va_t> BranchAddrs,
     return It == Graph.InsnToBlock.end() ? -1 : It->second;
   };
 
-  const std::optional<bool> RootReaches =
-      Roots.empty() ? std::optional<bool>{false}
-                    : reachable(Roots, LoadBlock, -1);
+  const std::optional<bool> RootReaches = Roots.empty()
+                                              ? std::optional<bool>{false}
+                                              : reachable(Roots, LoadBlock, -1);
   if (!RootReaches) {
     Complete = false;
     return Results;
@@ -10569,9 +10615,8 @@ CFGBuilder::tableLoadConditionValues(llvm::ArrayRef<va_t> BranchAddrs,
       continue;
     const int GuardBlock = BI->second;
     const std::optional<bool> ReachesWithoutGuard =
-        GuardBlock == LoadBlock
-            ? std::optional<bool>{true}
-            : reachable(Roots, LoadBlock, GuardBlock);
+        GuardBlock == LoadBlock ? std::optional<bool>{true}
+                                : reachable(Roots, LoadBlock, GuardBlock);
     if (!ReachesWithoutGuard) {
       Complete = false;
       return Results;
@@ -10655,21 +10700,18 @@ CFGBuilder::tableLoadConditionValues(llvm::ArrayRef<va_t> BranchAddrs,
 }
 
 std::optional<bool>
-CFGBuilder::tableLoadConditionValue(va_t BranchAddr,
-                                    const JumpTableInfo &Info,
+CFGBuilder::tableLoadConditionValue(va_t BranchAddr, const JumpTableInfo &Info,
                                     size_t *GraphWorkBudget) const {
   bool Complete = false;
   const std::vector<std::optional<bool>> Results =
-      tableLoadConditionValues({BranchAddr}, Info, &Complete,
-                               GraphWorkBudget);
+      tableLoadConditionValues({BranchAddr}, Info, &Complete, GraphWorkBudget);
   return Complete && Results.size() == 1 ? Results.front() : std::nullopt;
 }
 
 bool CFGBuilder::branchControlsTableLoad(va_t BranchAddr,
                                          const JumpTableInfo &Info,
                                          size_t *GraphWorkBudget) const {
-  return tableLoadConditionValue(BranchAddr, Info, GraphWorkBudget)
-      .has_value();
+  return tableLoadConditionValue(BranchAddr, Info, GraphWorkBudget).has_value();
 }
 
 /// Resolve an address nd-var to a stack/frame slot key (base = SP/FP register

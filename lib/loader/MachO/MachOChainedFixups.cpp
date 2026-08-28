@@ -314,6 +314,9 @@ void parseChainedFixupsRebases(const uint8_t *BasePtr, size_t FileSize,
               detail::clearLocalPointerClassification(Img, ChainVA);
               Img.DyldBindSlots[ChainVA] =
                   ImportBindSlot{Record.Name, EffectiveAddend};
+              Img.recordImportStorageSlot(ChainVA, Record.Name,
+                                          EffectiveAddend,
+                                          ImportStorageEvidence::LoaderBind);
               joinImportSlot(Img, Record.Name, Record.Module, ChainVA);
               ++NumRecorded;
             }

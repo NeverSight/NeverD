@@ -144,6 +144,8 @@ void addImportedSymbol(const llvm::object::imported_symbol_iterator &SI,
       Imp.Name = SymName.str();
   }
 
+  Img.recordImportStorageSlot(IATAddr, Imp.Name, 0,
+                              ImportStorageEvidence::ImportDirectory);
   Img.Imports.push_back(std::move(Imp));
 }
 
@@ -193,6 +195,8 @@ parseDelayImportDescriptor(const delay_import_directory_table_entry &Desc,
       Imp.Name = std::move(*Name);
     }
 
+    Img.recordImportStorageSlot(IATSlot, Imp.Name, 0,
+                                ImportStorageEvidence::ImportDirectory);
     Img.Imports.push_back(std::move(Imp));
     ++Added;
   }
@@ -462,6 +466,14 @@ void extractLoadCfgFields(uintptr_t CfgPtr, size_t AvailableSize,
   auto ToRVA = [&](uint64_t VA) -> va_t {
     return VA >= ImageBase ? VA - ImageBase : 0;
   };
+  auto RecordRuntimeCallableSlot =
+      [&](size_t Offset, size_t Width, uint64_t SlotVA,
+          RuntimeCallablePointerSlotKind Kind) {
+        if (!Has(Offset, Width) || SlotVA < ImageBase ||
+            SlotVA > std::numeric_limits<va_t>::max())
+          return;
+        Img.recordRuntimeCallablePointerSlot(static_cast<va_t>(SlotVA), Kind);
+      };
 
   if (Has(offsetof(LoadCfgT, SecurityCookie), sizeof(Cfg.SecurityCookie)) &&
       Cfg.SecurityCookie >= ImageBase)
@@ -485,6 +497,66 @@ void extractLoadCfgFields(uintptr_t CfgPtr, size_t AvailableSize,
   if (Has(offsetof(LoadCfgT, GuardEHContinuationCount),
           sizeof(Cfg.GuardEHContinuationCount)))
     Img.DynInfo.GuardEHContinuationCount = Cfg.GuardEHContinuationCount;
+
+  RecordRuntimeCallableSlot(
+      offsetof(LoadCfgT, GuardCFCheckFunction),
+      sizeof(Cfg.GuardCFCheckFunction), Cfg.GuardCFCheckFunction,
+      RuntimeCallablePointerSlotKind::GuardCFCheck);
+  RecordRuntimeCallableSlot(
+      offsetof(LoadCfgT, GuardCFCheckDispatch),
+      sizeof(Cfg.GuardCFCheckDispatch), Cfg.GuardCFCheckDispatch,
+      RuntimeCallablePointerSlotKind::GuardCFDispatch);
+  RecordRuntimeCallableSlot(
+      offsetof(LoadCfgT, GuardRFFailureRoutineFunctionPointer),
+      sizeof(Cfg.GuardRFFailureRoutineFunctionPointer),
+      Cfg.GuardRFFailureRoutineFunctionPointer,
+      RuntimeCallablePointerSlotKind::GuardRFFailureRoutine);
+  RecordRuntimeCallableSlot(
+      offsetof(LoadCfgT, GuardRFVerifyStackPointerFunctionPointer),
+      sizeof(Cfg.GuardRFVerifyStackPointerFunctionPointer),
+      Cfg.GuardRFVerifyStackPointerFunctionPointer,
+      RuntimeCallablePointerSlotKind::GuardRFVerifyStackPointer);
+  RecordRuntimeCallableSlot(
+      offsetof(LoadCfgT, GuardXFGCheckFunctionPointer),
+      sizeof(Cfg.GuardXFGCheckFunctionPointer), Cfg.GuardXFGCheckFunctionPointer,
+      RuntimeCallablePointerSlotKind::GuardXFGCheck);
+  RecordRuntimeCallableSlot(
+      offsetof(LoadCfgT, GuardXFGDispatchFunctionPointer),
+      sizeof(Cfg.GuardXFGDispatchFunctionPointer),
+      Cfg.GuardXFGDispatchFunctionPointer,
+      RuntimeCallablePointerSlotKind::GuardXFGDispatch);
+  RecordRuntimeCallableSlot(
+      offsetof(LoadCfgT, GuardXFGTableDispatchFunctionPointer),
+      sizeof(Cfg.GuardXFGTableDispatchFunctionPointer),
+      Cfg.GuardXFGTableDispatchFunctionPointer,
+      RuntimeCallablePointerSlotKind::GuardXFGTableDispatch);
+  RecordRuntimeCallableSlot(
+      offsetof(LoadCfgT, CastGuardOsDeterminedFailureMode),
+      sizeof(Cfg.CastGuardOsDeterminedFailureMode),
+      Cfg.CastGuardOsDeterminedFailureMode,
+      RuntimeCallablePointerSlotKind::CastGuardOsDeterminedFailureMode);
+
+  // GuardMemcpyFunctionPointer immediately follows CastGuard in the
+  // append-only IMAGE_LOAD_CONFIG_DIRECTORY ABI.  LLVM releases predating the
+  // SDK field intentionally end their typed structure at CastGuard, so decode
+  // this tail by its versioned byte offset instead of changing LLVM's sizeof
+  // contract locally.  The structure's declared Size has already bounded
+  // AvailableSize above.
+  constexpr size_t GuardMemcpyOffset =
+      offsetof(LoadCfgT, CastGuardOsDeterminedFailureMode) +
+      sizeof(Cfg.CastGuardOsDeterminedFailureMode);
+  constexpr size_t PointerWidth =
+      sizeof(Cfg.CastGuardOsDeterminedFailureMode);
+  if (Has(GuardMemcpyOffset, PointerWidth)) {
+    const auto *Field =
+        reinterpret_cast<const uint8_t *>(CfgPtr) + GuardMemcpyOffset;
+    const uint64_t SlotVA = PointerWidth == sizeof(uint64_t)
+                                ? readLE<uint64_t>(Field)
+                                : readLE<uint32_t>(Field);
+    RecordRuntimeCallableSlot(
+        GuardMemcpyOffset, PointerWidth, SlotVA,
+        RuntimeCallablePointerSlotKind::GuardMemcpy);
+  }
 }
 } // anonymous namespace
 

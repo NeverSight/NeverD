@@ -536,8 +536,9 @@ llvm::Constant *MedLLVMEmitter::tryResolveGlobalData(uint64_t Addr,
   // leaves patched code pointing at copied, unrebased pointer bytes.
   bool IsRelocatedPointerSlot = Img->CodePtrRelocSlots.count(Addr) != 0 ||
                                 Img->DataPtrRelocSlots.count(Addr) != 0 ||
-                                Img->ImportPtrSlots.count(Addr) != 0 ||
-                                Img->DyldBindSlots.count(Addr) != 0;
+                                EffectiveImportStorageSlots.count(Addr) != 0 ||
+                                ConflictingImportStorageSlots.count(Addr) != 0 ||
+                                Img->hasRuntimeCallablePointerSlotAt(Addr);
   bool IsInductionStringBase = isInductionRodataStringBase(Addr);
   if (IsString && StrLen > 0 && AtStringStart && !SizedObjectBeyondString &&
       !IsRelocatedPointerSlot && !IsInductionStringBase &&
