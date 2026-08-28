@@ -6,10 +6,11 @@
 ///
 /// \file
 /// Drives the memory-safety analyses over a loaded session and prints the JSON
-/// report.  The audit track reports heap-lifetime defects; the hunt track
-/// reports dangerous-copy overflows with symbolic witness evidence.  Both
-/// always emit JSON, so the exit code carries the verdict summary: SAFE returns
-/// 0, UNSAFE returns 2, and UNKNOWN or a malformed/error report returns 1.
+/// report.  The audit track reports heap-lifetime defects and uninitialized
+/// local stack reads; the hunt track reports dangerous-copy overflows with
+/// symbolic witness evidence.  Both always emit JSON, so the exit code carries
+/// the verdict summary: SAFE returns 0, UNSAFE returns 2, and UNKNOWN or a
+/// malformed/error report returns 1.
 ///
 //===----------------------------------------------------------------------===//
 

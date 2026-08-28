@@ -25,6 +25,11 @@ std::string SinkCatalog::normalize(llvm::StringRef StatedName) {
   llvm::StringRef S = StatedName;
   if (auto Bang = S.rfind('!'); Bang != llvm::StringRef::npos)
     S = S.drop_front(Bang + 1);
+  // A platform decoration can precede MinGW's `__imp_` marker.  Remove only
+  // that extra underscore before consuming the import prefix; stripping every
+  // underscore first would leave the non-canonical `imp_foo` spelling.
+  while (S.starts_with("___imp_"))
+    S = S.drop_front();
   while (S.starts_with("__imp_"))
     S = S.drop_front(6);
   S = stripLeadingUnderscores(S);
@@ -108,18 +113,37 @@ void SinkCatalog::addSink(SinkEntry E) {
       if (!NormalizedAlias.empty())
         SinkIndex[NormalizedAlias] = Idx;
     }
+    // A programmatic replacement carries discovery metadata only.  Shadow the
+    // old executable contract until a typed JSON effect is published by the
+    // transactional merge path below.
+    setConfiguredSinkEffect(SinkList[Idx], {});
     return;
   }
 
   unsigned Idx = static_cast<unsigned>(SinkList.size());
   std::vector<std::string> Keys = E.Aliases;
   Keys.push_back(E.Name);
+  const bool RebindsKnownIdentity =
+      std::any_of(Keys.begin(), Keys.end(), [&](const std::string &Key) {
+        const std::string Normalized = normalize(Key);
+        return !Normalized.empty() &&
+               (SinkIndex.find(Normalized) != SinkIndex.end() ||
+                SourceIndex.find(Normalized) != SourceIndex.end() ||
+                ConfiguredEffectIndex.find(Normalized) !=
+                    ConfiguredEffectIndex.end() ||
+                ConfiguredSourceEffectShadows.contains(Normalized));
+      });
   SinkList.push_back(std::move(E));
   for (const std::string &K : Keys) {
     std::string Norm = normalize(K);
     if (!Norm.empty())
       SinkIndex[Norm] = Idx; // later entries win: overrides replace defaults.
   }
+  if (RebindsKnownIdentity)
+    // Discovery-only programmatic aliases must not borrow an executable
+    // contract from the identity they displaced.  A JSON merge publishes its
+    // validated typed effect immediately after addSink returns.
+    setConfiguredSinkEffect(SinkList[Idx], {});
 }
 
 void SinkCatalog::addSource(SourceEntry E) {
@@ -127,9 +151,13 @@ void SinkCatalog::addSource(SourceEntry E) {
     return;
   unsigned Idx = static_cast<unsigned>(SourceList.size());
   std::string Norm = normalize(E.Name);
+  const bool ReplacesExisting = SourceIndex.find(Norm) != SourceIndex.end();
   SourceList.push_back(std::move(E));
-  if (!Norm.empty())
+  if (!Norm.empty()) {
     SourceIndex[Norm] = Idx;
+    if (ReplacesExisting)
+      ConfiguredSourceEffectShadows[Norm] = true;
+  }
 }
 
 const SourceEntry *SinkCatalog::matchSource(llvm::StringRef StatedName) const {
@@ -137,6 +165,44 @@ const SourceEntry *SinkCatalog::matchSource(llvm::StringRef StatedName) const {
   if (It == SourceIndex.end())
     return nullptr;
   return &SourceList[It->second];
+}
+
+const ConfiguredCallEffect *
+SinkCatalog::matchConfiguredCallEffect(llvm::StringRef StatedName) const {
+  auto Find = [&](llvm::StringRef Key) -> const ConfiguredCallEffect * {
+    auto It = ConfiguredEffectIndex.find(normalize(Key));
+    return It == ConfiguredEffectIndex.end()
+               ? nullptr
+               : &ConfiguredEffectList[It->second];
+  };
+  if (const ConfiguredCallEffect *Exact = Find(StatedName))
+    return Exact;
+  if (const SinkEntry *Entry = matchSink(StatedName)) {
+    // Canonical fallback is valid only while that canonical spelling still
+    // resolves to this entry.  A later entry may deliberately claim the old
+    // canonical as an alias; retained aliases of the displaced entry must not
+    // borrow the replacement's typed effect.
+    if (matchSink(Entry->Name) == Entry)
+      if (const ConfiguredCallEffect *Canonical = Find(Entry->Name))
+        return Canonical;
+  }
+  if (ConfiguredSourceEffectShadows.contains(normalize(StatedName)))
+    return &ConfiguredNoEffect;
+  return nullptr;
+}
+
+void SinkCatalog::setConfiguredSinkEffect(const SinkEntry &Entry,
+                                          ConfiguredCallEffect Effect) {
+  const unsigned Idx = static_cast<unsigned>(ConfiguredEffectList.size());
+  ConfiguredEffectList.push_back(Effect);
+  auto Publish = [&](llvm::StringRef Key) {
+    const std::string Normalized = normalize(Key);
+    if (!Normalized.empty())
+      ConfiguredEffectIndex[Normalized] = Idx;
+  };
+  Publish(Entry.Name);
+  for (const std::string &Alias : Entry.Aliases)
+    Publish(Alias);
 }
 
 void SinkCatalog::addSinkAlias(llvm::StringRef Canonical,
@@ -147,8 +213,40 @@ void SinkCatalog::addSinkAlias(llvm::StringRef Canonical,
   const unsigned Idx = It->second;
   SinkList[Idx].Aliases.emplace_back(Alias.str());
   std::string Norm = normalize(Alias);
-  if (!Norm.empty())
-    SinkIndex[Norm] = Idx;
+  if (Norm.empty())
+    return;
+  const auto PreviousSink = SinkIndex.find(Norm);
+  const bool RebindsKnownIdentity =
+      (PreviousSink != SinkIndex.end() && PreviousSink->second != Idx) ||
+      SourceIndex.find(Norm) != SourceIndex.end() ||
+      ConfiguredEffectIndex.find(Norm) != ConfiguredEffectIndex.end() ||
+      ConfiguredSourceEffectShadows.contains(Norm);
+  SinkIndex[Norm] = Idx;
+
+  const std::string CanonicalNorm = normalize(SinkList[Idx].Name);
+  if (Norm == CanonicalNorm)
+    return;
+  std::optional<unsigned> CanonicalEffect;
+  if (auto It = ConfiguredEffectIndex.find(CanonicalNorm);
+      It != ConfiguredEffectIndex.end())
+    CanonicalEffect = It->second;
+  if (auto It = ConfiguredEffectIndex.find(Norm);
+      It != ConfiguredEffectIndex.end())
+    ConfiguredEffectIndex.erase(It);
+  if (CanonicalEffect) {
+    ConfiguredEffectIndex[Norm] = *CanonicalEffect;
+    return;
+  }
+  if (!RebindsKnownIdentity)
+    return;
+
+  // A newly rebound alias must not retain its old dynamic effect or borrow a
+  // same-spelled static descriptor.  Without a typed canonical effect, fail
+  // closed for this alias only.
+  const unsigned NoEffectIdx =
+      static_cast<unsigned>(ConfiguredEffectList.size());
+  ConfiguredEffectList.push_back({});
+  ConfiguredEffectIndex[Norm] = NoEffectIdx;
 }
 
 namespace {
@@ -300,6 +398,155 @@ std::optional<SinkKind> parseSinkKind(llvm::StringRef Kind) {
       .Default(std::nullopt);
 }
 
+llvm::Expected<unsigned> arityFieldOr(const llvm::json::Object &O,
+                                      llvm::StringRef Key, unsigned Default,
+                                      bool AllowVariadic) {
+  const llvm::json::Value *Raw = O.get(Key);
+  if (!Raw)
+    return Default;
+  if (AllowVariadic)
+    if (auto Value = Raw->getAsString()) {
+      if (*Value == "variadic")
+        return ConfiguredCallEffect::VariadicArity;
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "sink effect field '%s' must be an arity or 'variadic'",
+          Key.str().c_str());
+    }
+  auto Value = Raw->getAsInteger();
+  if (!Value || *Value < 0 ||
+      static_cast<uint64_t>(*Value) > std::numeric_limits<unsigned>::max())
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "sink effect field '%s' is out of range",
+                                   Key.str().c_str());
+  return static_cast<unsigned>(*Value);
+}
+
+llvm::Expected<ConfiguredCallEffect::Format>
+formatMaskFieldOr(const llvm::json::Object &O,
+                  ConfiguredCallEffect::Format Default) {
+  const llvm::json::Value *Raw = O.get("formats");
+  if (!Raw)
+    return Default;
+  const llvm::json::Array *Items = Raw->getAsArray();
+  if (!Items || Items->empty())
+    return llvm::createStringError(
+        llvm::inconvertibleErrorCode(),
+        "sink effect field 'formats' must be a non-empty array");
+  uint8_t Mask = 0;
+  for (const llvm::json::Value &Item : *Items) {
+    auto Spelling = Item.getAsString();
+    if (!Spelling)
+      return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                     "sink effect format must be a string");
+    const uint8_t Bit = llvm::StringSwitch<uint8_t>(*Spelling)
+                            .Case("elf", uint8_t{1} << 0)
+                            .Case("coff", uint8_t{1} << 1)
+                            .Case("macho", uint8_t{1} << 2)
+                            .Default(0);
+    if (!Bit)
+      return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                     "unknown sink effect format '%s'",
+                                     Spelling->str().c_str());
+    Mask |= Bit;
+  }
+  return static_cast<ConfiguredCallEffect::Format>(Mask);
+}
+
+llvm::Expected<ConfiguredCallEffect::ABI>
+abiMaskFieldOr(const llvm::json::Object &O, ConfiguredCallEffect::ABI Default) {
+  const llvm::json::Value *Raw = O.get("abis");
+  if (!Raw)
+    return Default;
+  const llvm::json::Array *Items = Raw->getAsArray();
+  if (!Items || Items->empty())
+    return llvm::createStringError(
+        llvm::inconvertibleErrorCode(),
+        "sink effect field 'abis' must be a non-empty array");
+  uint8_t Mask = 0;
+  for (const llvm::json::Value &Item : *Items) {
+    auto Spelling = Item.getAsString();
+    if (!Spelling)
+      return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                     "sink effect ABI must be a string");
+    const uint8_t Bit = llvm::StringSwitch<uint8_t>(*Spelling)
+                            .Case("sysv", uint8_t{1} << 0)
+                            .Case("microsoft", uint8_t{1} << 1)
+                            .Case("darwin", uint8_t{1} << 2)
+                            .Case("aapcs", uint8_t{1} << 3)
+                            .Default(0);
+    if (!Bit)
+      return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                     "unknown sink effect ABI '%s'",
+                                     Spelling->str().c_str());
+    Mask |= Bit;
+  }
+  return static_cast<ConfiguredCallEffect::ABI>(Mask);
+}
+
+llvm::Expected<ConfiguredCallEffect>
+configuredEffectFor(const llvm::json::Object &O, const SinkEntry &Entry) {
+  ConfiguredCallEffect Effect;
+  if (Entry.Kind == SinkKind::Copy && Entry.DstArg >= 0 &&
+      (Entry.UnboundedWrite || Entry.SrcArg >= 0 || Entry.LenArg >= 0))
+    Effect.TheFamily = ConfiguredCallEffect::Family::Copy;
+  else if (Entry.Kind == SinkKind::Format && Entry.FmtArg >= 0)
+    Effect.TheFamily = ConfiguredCallEffect::Family::Format;
+
+  const int HighestArg =
+      std::max({Entry.DstArg, Entry.SrcArg, Entry.LenArg, Entry.CapArg,
+                Entry.FmtArg, Entry.HandleArg});
+  const unsigned RequiredArity =
+      HighestArg < 0 ? 0u : static_cast<unsigned>(HighestArg) + 1;
+  Effect.MinArity = RequiredArity;
+  Effect.MaxArity = Entry.Kind == SinkKind::Format
+                        ? ConfiguredCallEffect::VariadicArity
+                        : RequiredArity;
+
+  const llvm::json::Value *Raw = O.get("effect");
+  if (!Raw)
+    return Effect;
+  const llvm::json::Object *EffectObject = Raw->getAsObject();
+  if (!EffectObject)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "sink field 'effect' is not an object");
+  if (Effect.TheFamily == ConfiguredCallEffect::Family::None)
+    return llvm::createStringError(
+        llvm::inconvertibleErrorCode(),
+        "sink effect requires a complete copy or format layout");
+
+  llvm::Expected<unsigned> MinArity =
+      arityFieldOr(*EffectObject, "min_arity", Effect.MinArity, false);
+  if (!MinArity)
+    return MinArity.takeError();
+  llvm::Expected<unsigned> MaxArity =
+      arityFieldOr(*EffectObject, "max_arity", Effect.MaxArity, true);
+  if (!MaxArity)
+    return MaxArity.takeError();
+  if (*MinArity < RequiredArity)
+    return llvm::createStringError(
+        llvm::inconvertibleErrorCode(),
+        "sink effect minimum arity does not cover its argument layout");
+  if (*MaxArity < *MinArity)
+    return llvm::createStringError(
+        llvm::inconvertibleErrorCode(),
+        "sink effect maximum arity is less than its minimum arity");
+  Effect.MinArity = *MinArity;
+  Effect.MaxArity = *MaxArity;
+
+  llvm::Expected<ConfiguredCallEffect::Format> Formats =
+      formatMaskFieldOr(*EffectObject, Effect.Formats);
+  if (!Formats)
+    return Formats.takeError();
+  Effect.Formats = *Formats;
+  llvm::Expected<ConfiguredCallEffect::ABI> ABIs =
+      abiMaskFieldOr(*EffectObject, Effect.ABIs);
+  if (!ABIs)
+    return ABIs.takeError();
+  Effect.ABIs = *ABIs;
+  return Effect;
+}
+
 } // namespace
 
 llvm::Error SinkCatalog::mergeSinksFromFile(llvm::StringRef Path) {
@@ -320,7 +567,7 @@ llvm::Error SinkCatalog::mergeSinksFromFile(llvm::StringRef Path) {
   if (!Items)
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "sink specification has no sink list");
-  std::vector<SinkEntry> Pending;
+  std::vector<std::pair<SinkEntry, ConfiguredCallEffect>> Pending;
   Pending.reserve(Items->size());
   for (const llvm::json::Value &V : *Items) {
     const llvm::json::Object *O = V.getAsObject();
@@ -402,10 +649,17 @@ llvm::Error SinkCatalog::mergeSinksFromFile(llvm::StringRef Path) {
     if (!Severity)
       return Severity.takeError();
     E.Severity = *Severity;
-    Pending.push_back(std::move(E));
+    llvm::Expected<ConfiguredCallEffect> Effect = configuredEffectFor(*O, E);
+    if (!Effect)
+      return Effect.takeError();
+    Pending.emplace_back(std::move(E), *Effect);
   }
-  for (SinkEntry &E : Pending)
-    addSink(std::move(E));
+  for (auto &[Entry, Effect] : Pending) {
+    const std::string Canonical = normalize(Entry.Name);
+    addSink(std::move(Entry));
+    if (const SinkEntry *Published = matchSink(Canonical))
+      setConfiguredSinkEffect(*Published, Effect);
+  }
   return llvm::Error::success();
 }
 
@@ -454,7 +708,15 @@ llvm::Error SinkCatalog::mergeSourcesFromFile(llvm::StringRef Path) {
     }
     Pending.push_back(std::move(E));
   }
-  for (SourceEntry &E : Pending)
+  for (SourceEntry &E : Pending) {
+    const std::string Name = E.Name;
     addSource(std::move(E));
+    // Configurable source discovery does not yet carry enough semantics to
+    // execute a taint summary.  Publish an explicit NoEffect marker so an
+    // override cannot accidentally inherit a same-named built-in contract.
+    const std::string Normalized = normalize(Name);
+    if (!Normalized.empty())
+      ConfiguredSourceEffectShadows[Normalized] = true;
+  }
   return llvm::Error::success();
 }

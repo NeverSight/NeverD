@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "ProcessInputReplay.h"
 #include "gtest/gtest.h"
 
 #include "neverd/ir/low/LowIR.h"
@@ -654,8 +655,226 @@ TEST(SafetyReport, SymbolicWitnessStatesWhetherItIsReplayable) {
   const llvm::json::Object *Evidence = FindingObject->getObject("evidence");
   ASSERT_NE(Evidence, nullptr);
   EXPECT_FALSE(Evidence->getBoolean("replayable").value_or(true));
+  const llvm::json::Object *Replay = Evidence->getObject("replay");
+  ASSERT_NE(Replay, nullptr);
+  EXPECT_EQ(Replay->getString("adapter"), "process-input-v1");
+  EXPECT_EQ(Replay->getString("reason"),
+            "symbolic query variables lack explicit process-input bindings");
   ASSERT_NE(Evidence->getArray("candidate_values"), nullptr);
   ASSERT_NE(Evidence->getArray("symbolic_model"), nullptr);
+}
+
+TEST(SafetyReport, SerializesValidatedLiteralProcessInputReplay) {
+  ReplayPlan Candidate;
+  Candidate.QueryVariables = {10, 11, 12};
+
+  ReplayInput Environment;
+  Environment.Kind = ReplayInputKind::Environment;
+  Environment.CallVA = 0x401000;
+  Environment.Seq = 3;
+  Environment.Invocation = 2;
+  Environment.Name = "PAYLOAD";
+  Environment.Bytes = {'A', 'B'};
+  Environment.TerminatorImplicit = true;
+  Environment.Bindings = {
+      {10, ReplayBindingRole::Byte, 0},
+      {11, ReplayBindingRole::Success},
+  };
+  Candidate.Inputs.push_back(std::move(Environment));
+
+  ReplayInput StandardInput;
+  StandardInput.Kind = ReplayInputKind::StandardInput;
+  StandardInput.CallVA = 0x401020;
+  StandardInput.Seq = 4;
+  StandardInput.Invocation = 0;
+  StandardInput.Offset = 0;
+  StandardInput.Bytes = {0x00, 0xff};
+  StandardInput.EOFAfter = true;
+  StandardInput.Bindings = {{12, ReplayBindingRole::Extent}};
+  Candidate.Inputs.push_back(std::move(StandardInput));
+
+  std::vector<SolverAssignment> Model = {
+      {10, "env_byte", 8, "0x41", true},
+      {11, "env_success", 1, "0x1", false},
+      {12, "stdin_extent", 64, "0x2", true},
+      // A model variable is not a query variable merely because it is fresh.
+      {99, "internal_fresh", 8, "0x0", true},
+  };
+  ProcessInputReplayResult Built =
+      buildProcessInputReplay(std::move(Candidate), Model);
+  ASSERT_TRUE(Built.Plan.has_value()) << Built.Reason;
+
+  SafetyReport Report;
+  Report.AnalysisComplete = true;
+  Finding F;
+  F.TheVerdict = Verdict::Unsafe;
+  F.TheConfidence = Confidence::High;
+  F.Witness.push_back({"source", "PAYLOAD/stdin"});
+  F.SymbolicModel = std::move(Model);
+  F.Replay = std::move(Built.Plan);
+  Report.Findings.push_back(std::move(F));
+
+  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Report));
+  ASSERT_TRUE(static_cast<bool>(Parsed));
+  const llvm::json::Object *Root = Parsed->getAsObject();
+  ASSERT_NE(Root, nullptr);
+  EXPECT_EQ(Root->getInteger("schema_version"), 1);
+  const llvm::json::Array *Findings = Root->getArray("findings");
+  ASSERT_NE(Findings, nullptr);
+  const llvm::json::Object *FindingObject = Findings->front().getAsObject();
+  ASSERT_NE(FindingObject, nullptr);
+  const llvm::json::Object *Evidence = FindingObject->getObject("evidence");
+  ASSERT_NE(Evidence, nullptr);
+  EXPECT_TRUE(Evidence->getBoolean("replayable").value_or(false));
+  const llvm::json::Object *Replay = Evidence->getObject("replay");
+  ASSERT_NE(Replay, nullptr);
+  EXPECT_EQ(Replay->getString("adapter"), "process-input-v1");
+  EXPECT_EQ(Replay->get("reason"), nullptr);
+  const llvm::json::Array *Inputs = Replay->getArray("inputs");
+  ASSERT_NE(Inputs, nullptr);
+  ASSERT_EQ(Inputs->size(), 2u);
+
+  const llvm::json::Object *Env = (*Inputs)[0].getAsObject();
+  ASSERT_NE(Env, nullptr);
+  EXPECT_EQ(Env->getString("kind"), "environment");
+  EXPECT_EQ(Env->getString("call_va"), "0x401000");
+  EXPECT_EQ(Env->getInteger("seq"), 3);
+  EXPECT_EQ(Env->getInteger("invocation"), 2);
+  EXPECT_EQ(Env->getInteger("offset"), 0);
+  EXPECT_EQ(Env->getString("name"), "PAYLOAD");
+  EXPECT_EQ(Env->getString("bytes_hex"), "0x4142");
+  EXPECT_FALSE(Env->getBoolean("eof_after").value_or(true));
+  EXPECT_TRUE(Env->getBoolean("terminator_implicit").value_or(false));
+  const llvm::json::Array *EnvBindings = Env->getArray("bindings");
+  ASSERT_NE(EnvBindings, nullptr);
+  ASSERT_EQ(EnvBindings->size(), 2u);
+  EXPECT_EQ((*EnvBindings)[0].getAsObject()->getString("role"), "byte");
+  EXPECT_EQ((*EnvBindings)[1].getAsObject()->getString("role"), "success");
+
+  const llvm::json::Object *Stdin = (*Inputs)[1].getAsObject();
+  ASSERT_NE(Stdin, nullptr);
+  EXPECT_EQ(Stdin->getString("kind"), "stdin");
+  EXPECT_EQ(Stdin->getInteger("invocation"), 0);
+  EXPECT_EQ(Stdin->getInteger("offset"), 0);
+  EXPECT_EQ(Stdin->getString("bytes_hex"), "0x00ff");
+  EXPECT_EQ(Stdin->get("name"), nullptr);
+  EXPECT_TRUE(Stdin->getBoolean("eof_after").value_or(false));
+  EXPECT_FALSE(Stdin->getBoolean("terminator_implicit").value_or(true));
+}
+
+TEST(SafetyReport, ReplayBindingDoesNotInferProvenanceFromFreshness) {
+  auto candidate = [](bool WithBinding) {
+    ReplayPlan Plan;
+    Plan.QueryVariables = {7};
+    ReplayInput Input;
+    Input.Kind = ReplayInputKind::StandardInput;
+    Input.CallVA = 0x401000;
+    Input.Seq = 0;
+    Input.Bytes = {'x'};
+    Input.EOFAfter = true;
+    if (WithBinding)
+      Input.Bindings.push_back({7, ReplayBindingRole::Byte});
+    Plan.Inputs.push_back(std::move(Input));
+    return Plan;
+  };
+
+  for (bool Fresh : {false, true}) {
+    const std::vector<SolverAssignment> Model = {
+        {7, "stdin_byte", 8, "0x78", Fresh}};
+    ProcessInputReplayResult Bound =
+        buildProcessInputReplay(candidate(true), Model);
+    EXPECT_TRUE(Bound.Plan.has_value()) << Bound.Reason;
+
+    ProcessInputReplayResult Unbound =
+        buildProcessInputReplay(candidate(false), Model);
+    EXPECT_FALSE(Unbound.Plan.has_value());
+    EXPECT_EQ(Unbound.Reason,
+              "process-input replay query variable lacks a typed binding");
+  }
+}
+
+TEST(SafetyReport, ReplayValidationChecksByteBudgetsAndSourceArithmetic) {
+  ReplayPlan OverBudget;
+  ReplayInput Bytes;
+  Bytes.Kind = ReplayInputKind::StandardInput;
+  Bytes.CallVA = 0x401000;
+  Bytes.Seq = 0;
+  Bytes.Bytes = {1, 2, 3, 4};
+  Bytes.EOFAfter = true;
+  OverBudget.Inputs.push_back(Bytes);
+  ProcessInputReplayResult BudgetResult =
+      buildProcessInputReplay(OverBudget, {}, 3);
+  EXPECT_FALSE(BudgetResult.Plan.has_value());
+  EXPECT_EQ(BudgetResult.Reason, "process-input replay byte budget exceeded");
+
+  ReplayPlan Overflow;
+  Bytes.Kind = ReplayInputKind::Environment;
+  Bytes.Name = "PAYLOAD";
+  Bytes.TerminatorImplicit = true;
+  Bytes.EOFAfter = false;
+  Bytes.Offset = std::numeric_limits<uint64_t>::max() - 1;
+  Overflow.Inputs.push_back(std::move(Bytes));
+  ProcessInputReplayResult OverflowResult =
+      buildProcessInputReplay(std::move(Overflow), {});
+  EXPECT_FALSE(OverflowResult.Plan.has_value());
+  EXPECT_EQ(OverflowResult.Reason,
+            "process-input replay source range overflows");
+}
+
+TEST(SafetyReport, RejectsMutatedReplayPlanAtSerialization) {
+  SafetyReport Report;
+  Report.AnalysisComplete = true;
+  Finding F;
+  F.Witness.push_back({"source", "unsupported"});
+  F.Replay.emplace();
+  F.Replay->Version = 2;
+  Report.Findings.push_back(std::move(F));
+
+  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Report));
+  ASSERT_TRUE(static_cast<bool>(Parsed));
+  const llvm::json::Object *Root = Parsed->getAsObject();
+  ASSERT_NE(Root, nullptr);
+  const llvm::json::Object *FindingObject =
+      Root->getArray("findings")->front().getAsObject();
+  ASSERT_NE(FindingObject, nullptr);
+  const llvm::json::Object *Evidence = FindingObject->getObject("evidence");
+  ASSERT_NE(Evidence, nullptr);
+  EXPECT_FALSE(Evidence->getBoolean("replayable").value_or(true));
+  const llvm::json::Object *Replay = Evidence->getObject("replay");
+  ASSERT_NE(Replay, nullptr);
+  EXPECT_EQ(Replay->getString("adapter"), "process-input-v1");
+  EXPECT_EQ(Replay->getString("reason"),
+            "unsupported process-input replay version");
+}
+
+TEST(SafetyReport, UnsupportedProcessSourcesRemainExplicitlyNonReplayable) {
+  for (const char *Reason : {
+           "argv input is not supported by process-input-v1",
+           "file input is not supported by process-input-v1",
+           "network input is not supported by process-input-v1",
+           "custom or ambiguous input is not supported by process-input-v1",
+       }) {
+    SafetyReport Report;
+    Finding F;
+    F.Witness.push_back({"source", "candidate"});
+    F.ReplayReason = Reason;
+    Report.Findings.push_back(std::move(F));
+
+    llvm::Expected<llvm::json::Value> Parsed =
+        llvm::json::parse(toJson(Report));
+    ASSERT_TRUE(static_cast<bool>(Parsed));
+    const llvm::json::Object *Root = Parsed->getAsObject();
+    ASSERT_NE(Root, nullptr);
+    const llvm::json::Object *FindingObject =
+        Root->getArray("findings")->front().getAsObject();
+    ASSERT_NE(FindingObject, nullptr);
+    const llvm::json::Object *Evidence = FindingObject->getObject("evidence");
+    ASSERT_NE(Evidence, nullptr);
+    EXPECT_FALSE(Evidence->getBoolean("replayable").value_or(true));
+    const llvm::json::Object *Replay = Evidence->getObject("replay");
+    ASSERT_NE(Replay, nullptr);
+    EXPECT_EQ(Replay->getString("reason"), Reason);
+  }
 }
 
 TEST(SafetyReport, PreservesUnsignedCapacityRange) {

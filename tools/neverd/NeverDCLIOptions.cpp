@@ -68,8 +68,8 @@ cl::SubCommand SigsCmd("sigs", "Apply FLIRT signatures to binary");
 cl::SubCommand SymbolicCmd("sym-explore",
                            "Explore bounded symbolic paths through a function");
 cl::SubCommand AuditCmd("audit",
-                        "Audit heap object lifetimes for leaks, double frees, "
-                        "and use-after-free");
+                        "Audit heap object lifetimes and uninitialized local "
+                        "stack reads");
 cl::SubCommand HuntCmd("hunt",
                        "Hunt dangerous-copy overflows and report a witness");
 // Takes text rather than a binary, so it is not among the subcommands that

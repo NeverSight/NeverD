@@ -76,6 +76,20 @@ enum class ArgFlow : uint8_t {
 #include "neverd/safety/SafetyEnums.def"
 };
 
+/// The two process inputs for which the report can currently carry an exact,
+/// literal replay.  argv, files, network data, and custom sources are excluded
+/// until an adapter can give them equally precise occurrence semantics.
+enum class ReplayInputKind : uint8_t {
+#define SAFETY_REPLAY_INPUT_KIND(ID, SPELLING) ID,
+#include "neverd/safety/SafetyEnums.def"
+};
+
+/// What a symbolic query variable means at one exact input occurrence.
+enum class ReplayBindingRole : uint8_t {
+#define SAFETY_REPLAY_BINDING_ROLE(ID, SPELLING) ID,
+#include "neverd/safety/SafetyEnums.def"
+};
+
 const char *toString(Track T);
 const char *toString(Verdict V);
 const char *toString(Confidence C);
@@ -83,6 +97,8 @@ const char *toString(VulnClass C);
 const char *toString(SinkKind K);
 const char *toString(NameSource S);
 const char *toString(ArgFlow F);
+const char *toString(ReplayInputKind K);
+const char *toString(ReplayBindingRole R);
 
 /// A call site that matched a catalog entry, before any property is checked.
 struct SinkSite {
@@ -123,6 +139,42 @@ struct SolverAssignment {
   bool Fresh = false;
 };
 
+/// A typed association between a solver query variable and an exact input
+/// occurrence.  The enclosing ReplayInput supplies the occurrence identity and
+/// literal bytes; Role prevents an extent or success predicate from being
+/// mistaken for a byte value merely because their numeric models coincide.
+struct ReplayBinding {
+  uint32_t AssignmentId = 0;
+  ReplayBindingRole Role = ReplayBindingRole::Byte;
+  /// Byte index within ReplayInput::Bytes when Role is Byte; zero otherwise.
+  uint64_t ByteOffset = 0;
+};
+
+/// Literal data returned by one environment or standard-input occurrence.
+/// CallVA/Seq identify the source call, Invocation disambiguates repeated calls
+/// at that occurrence, and Offset locates the bytes in the logical source.
+struct ReplayInput {
+  ReplayInputKind Kind = ReplayInputKind::Environment;
+  va_t CallVA = 0;
+  int Seq = -1;
+  uint64_t Invocation = 0;
+  uint64_t Offset = 0;
+  std::string Name; ///< environment name; empty for standard input.
+  std::vector<uint8_t> Bytes;
+  bool EOFAfter = false;
+  bool TerminatorImplicit = false;
+  std::vector<ReplayBinding> Bindings;
+};
+
+/// Versioned, exact process-input recipe for one finding.  QueryVariables is
+/// the complete symbolic query set and is validation metadata rather than JSON
+/// payload: every listed ID must have exactly one typed input binding.
+struct ReplayPlan {
+  uint32_t Version = 1;
+  std::vector<uint32_t> QueryVariables;
+  std::vector<ReplayInput> Inputs;
+};
+
 /// One evidence-carrying record in a report.
 struct Finding {
   Track Origin = Track::Hunt;
@@ -149,7 +201,9 @@ struct Finding {
   std::vector<std::pair<std::string, std::string>>
       Witness; ///< candidate input/derived values for the violation.
   std::vector<SolverAssignment> SymbolicModel;
-  bool WitnessReplayable = false;
+  std::optional<ReplayPlan> Replay;
+  /// Fail-closed explanation when no validated replay plan is available.
+  std::string ReplayReason;
   std::string Corroboration; ///< how a symbolic pass confirmed a candidate.
   std::string Detail;        ///< a short human-readable note.
   bool BudgetHit = false;    ///< exploration or the solver ran out of budget.

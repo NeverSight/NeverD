@@ -6,6 +6,7 @@
 
 #include "neverd/safety/ObjectModel.h"
 
+#include "CallEffects.h"
 #include "SourceSemantics.h"
 #include "StackSlotFlow.h"
 
@@ -774,19 +775,26 @@ private:
       const SinkEntry *E = Cat.matchSink(Name);
       if (!E || debugSinkSummaryConflicts(In, *CI, *E))
         return std::nullopt;
+      const CallEffects Effects = resolveCallEffects(In, Cat, *CI);
+      if (!Effects.has(CallEffectCapability::Allocation))
+        return std::nullopt;
       ObjectRegion Region = ObjectRegion::Unknown;
       switch (E->Kind) {
       case SinkKind::Alloc:
-        if (E->HandleArg >= 0)
+        if (Effects.family() != CallEffectFamily::Allocation ||
+            E->HandleArg >= 0)
           return std::nullopt;
         Region = ObjectRegion::Heap;
         break;
       case SinkKind::StackAlloc:
-        if (E->HandleArg >= 0)
+        if (Effects.family() != CallEffectFamily::StackAllocation ||
+            E->HandleArg >= 0)
           return std::nullopt;
         Region = ObjectRegion::Stack;
         break;
       case SinkKind::Realloc:
+        if (Effects.family() != CallEffectFamily::Reallocation)
+          return std::nullopt;
         Region = ObjectRegion::Heap;
         break;
       default:
@@ -798,7 +806,6 @@ private:
       const uint64_t MaxObjectSize = PointerBits == 64
                                          ? std::numeric_limits<uint64_t>::max()
                                          : (uint64_t{1} << PointerBits) - 1;
-      std::string Norm = SinkCatalog::normalize(Name);
       auto constArg = [&](int Idx) -> std::optional<uint64_t> {
         if (Idx < 0 || Idx >= static_cast<int>(CI->Args.size()))
           return std::nullopt;
@@ -806,7 +813,10 @@ private:
           return std::nullopt;
         return constantValue(CI->Args[Idx], 0);
       };
-      if (Norm == "calloc") {
+      // Match calloc by the catalog entry's canonical identity.  Looking at
+      // the stated callee name loses calloc's two-factor size semantics when
+      // a configured alias was used to reach this entry.
+      if (SinkCatalog::normalize(E->Name) == "calloc") {
         auto Count = constArg(E->SrcArg);
         auto Size = constArg(E->LenArg);
         if (Count && Size && (*Count == 0 || *Size <= MaxObjectSize / *Count))

@@ -8,8 +8,8 @@ NeverD 對已載入二進位做兩類記憶體安全分析，並以結構化 JSO
 
 | 軌道 | 命令 | 報告內容 |
 |------|------|----------|
-| **稽核（Audit）** | `neverd audit <binary>` | 堆積物件生命週期缺陷：洩漏、重複釋放、釋放後使用 |
-| **獵取（Hunt）** | `neverd hunt <binary>` | 危險拷貝越界，並給出符號證據與候選輸入值；在處理程序輸入轉接器映射至實際位元組前為 `replayable=false` |
+| **稽核（Audit）** | `neverd audit <binary>` | 堆積物件生命週期缺陷及未初始化區域堆疊讀取 |
+| **獵取（Hunt）** | `neverd hunt <binary>` | 危險拷貝越界，並給出符號證據與候選輸入值；僅在存在完整 `process-input-v1` 計畫時為 `replayable=true` |
 
 引擎重用 NeverD 自研符號執行與位向量求解器產生見證並確認可達性；不依賴外部求解器、虛擬機或容器。
 
@@ -18,6 +18,8 @@ NeverD 對已載入二進位做兩類記憶體安全分析，並以結構化 JSO
 ## 核心不變量：失敗即閉合
 
 未提升的操作、ABI 未能恢復參數的呼叫、未解析的間接目標，或預算耗盡，一律給出 **UNKNOWN**，從不給出 SAFE。無法恢復容量的目的緩衝區也是 UNKNOWN。嚴格提升保持原樣；安全層只在其上疊加保守裁決。
+
+呼叫效果採用封閉世界語意：只有前置條件與所有相關效果均已知時才套用摘要。未知效果或只能部分套用的摘要保持 UNKNOWN；分析不會把缺口假定為無效果或呼叫成功。
 
 ---
 
@@ -52,11 +54,13 @@ PDB 程序簽章用來區分有回傳值的配置函式與 `void` 釋放函式�
 
 ## Sink 與 source 目錄
 
-目錄是可設定表，不是寫死的集合。每個 **sink** 條目宣告弱點類別、角色（copy、format、alloc、free、realloc）以及相關參數槽（目的、來源、長度、容量）。每個 **source** 條目命名一個受攻擊者影響的輸入提供者。
+目錄是可設定表，不是寫死的集合。每個 **sink** 條目宣告弱點類別、角色（copy、format、alloc、free、realloc）以及相關參數槽（目的、來源、長度、容量）。JSON 中的 copy 或 format sink 還會提供可執行的呼叫 effect。每個 **source** 條目命名一個受攻擊者影響的輸入提供者。
 
 內建條目位於 [`SafetySinks.def`](../include/neverd/safety/SafetySinks.def) 與 [`SafetySources.def`](../include/neverd/safety/SafetySources.def)，涵蓋常見 C 執行階段拷貝族（`memcpy`/`memmove`/`strcpy`/`strcat`/`strncpy`/`gets`/…）、帶明確目的容量的加固 `_chk` 變體、配置與釋放族（`malloc`/`calloc`/`realloc`/`free`、operator `new`/`delete`），以及可選的 Win32 堆積 API。輸入來源包括 POSIX（`getenv`、`read`、`recv`、`fgets`、`fread`、`scanf`、程式引數）**以及** Win32（`GetCommandLineA/W`、`ReadFile`、`GetEnvironmentVariable*`），因此 PE 獵取不限於 POSIX 輸入。
 
 各格式拼寫摺疊到同一條目：去掉前導底線（`_malloc`、`___strcpy_chk`），透過別名匹配重整後的 operator new/delete。
+
+若 JSON copy 或 format sink 省略 `effect`，則依所引用的最高參數槽推導適用性：copy 要求精確的參數個數，format sink 接受從該最小參數個數到可變參數上限的呼叫。可選的 `effect` 物件可用 `min_arity` 與 `max_arity`（或 `"variadic"`）明確設定可接受的參數個數範圍，包括超出所推導 copy 精確參數個數的額外 wrapper 參數；`min_arity` 必須至少為最高被引用角色槽加一，而 `formats` 與 `abis` 用於限制適用性。若呼叫的參數個數、目標格式或 ABI 不相符，就不套用摘要，並依封閉世界規則保持 UNKNOWN。
 
 可用規格檔擴充或覆蓋目錄：
 
@@ -66,9 +70,20 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 
 ```json
 { "sinks": [
-    { "name": "my_copy", "kind": "copy", "dst": 0, "src": 1, "len": 2 }
-] }
+    { "name": "my_copy", "kind": "copy", "dst": 0, "src": 1, "len": 2 },
+    { "name": "my_format", "kind": "format", "dst": 0, "fmt": 2,
+      "effect": { "min_arity": 3, "max_arity": "variadic",
+                  "formats": ["elf"], "abis": ["sysv"] } }
+  ],
+  "sources": [
+    { "name": "my_read", "out": 1, "return_tainted": true }
+  ]
+}
 ```
+
+對於自訂 source，`out` 與 `return_tainted` 僅是發現中繼資料，並不建立可執行的記憶體、回傳值或 taint effect。目前的 source schema 缺少這些語意所需的型別化成功條件、記憶體修改、目標格式與 ABI 契約，因此依賴自訂 source effect 的分析必須保持 UNKNOWN。內建 source 不受影響：其經過適用性檢查的型別化描述符會繼續提供可執行 effect。
+
+不會因存在同名 source 條目就推導出無界的僅目的參數自訂 sink。類似 `gets` 的自訂 sink 必須明確設定 `"unbounded": true`；將同名函式加入 source 目錄不會賦予它可執行 effect，互相矛盾的來源/長度欄位會以交易方式拒絕。
 
 ---
 
@@ -79,10 +94,14 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 - **常數長度** 在精確容量內時為 SAFE。常數越界只有在已佐證路徑上可達 sink 時才為 UNSAFE；否則保持 UNKNOWN。
 - **加固** `_chk` 拷貝帶執行階段目的上界。請求被拒絕，或該上界已證明不超過恢復出的物件容量時為 SAFE；存在越過物件的可行寫入時為 UNSAFE；上界未恢復或結論不足時為 UNKNOWN。
 - **可證明有界** 的長度（回傳長度的呼叫、遮罩、鉗位）在求解前退出並記錄原因。只有目的大小精確時才是 SAFE；若只有包含區域上界，則仍為 UNKNOWN。
-- **受攻擊者影響** 且容量已知的長度交給位向量求解器：若存在大於容量的可行長度，裁決為 UNSAFE，並將求解器模型報告為符號證據與候選值；在處理程序輸入轉接器可用前不可重播（`replayable=false`）。
+- **受攻擊者影響** 且容量已知的長度交給位向量求解器：若存在大於容量的可行長度，裁決為 UNSAFE。只有能建立完整 `process-input-v1` 計畫時，候選值才可重播。初始範圍僅包括精確的字面環境值，以及至多第一次受支援的 `read(0)` 系列標準輸入消耗所回傳的位元組。argv、檔案、網路、自訂或有歧義的輸入保持不可重播並附帶原因。
 - 其餘情況——未知長度或未知容量——為 UNKNOWN。
 
 每一項恢復出的容量都是真實物件大小的 **上界**，因此被證明的越界不會是誤報。
+
+### 格式化輸入
+
+對於 `scanf`/`fscanf` 及其帶版本拼寫，可讀的常數格式會把每個未抑制轉換映射到其實際的可變參數輸出參數。無界 `%s`/`%[` 輸出會把 taint 傳播到後續字串使用；數值與字元輸出會污染從被寫物件載入的值，但不污染輸出指標值本身。`sscanf` 僅在其輸入字串已受攻擊者影響時傳播這些 effect。`%Ns`/`%N[` 等有界文字輸出會連同包含終止符的 `MaxBytes` extent 一起傳播 taint；寬字元變體使用平台的 `wchar_t` 寬度計算該位元組 extent。被抑制的轉換、多餘參數、位置相依或不受支援的格式以及 `%n` 保持 UNKNOWN，不作猜測。
 
 ---
 
@@ -124,9 +143,11 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
   "capacity": 16,
   "capacity_kind": "exact",
   "corroboration": "path predicate and overflow are jointly satisfiable",
-  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" }, "candidate_values": [{ "name": "copy_length", "value": "17" }, { "name": "argv[1]", "value": "16 bytes" }], "replayable": false, "symbolic_model": [{ "id": 0, "name": "copy_len", "width": 64, "value_hex": "0x11", "origin": "input" }] }
+  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" }, "candidate_values": [{ "name": "copy_length", "value": "17" }, { "name": "argv[1]", "value": "16 bytes" }], "replayable": false, "replay": { "adapter": "process-input-v1", "reason": "argv input is not supported by process-input-v1" }, "symbolic_model": [{ "id": 0, "name": "copy_len", "width": 64, "value_hex": "0x11", "origin": "input" }] }
 }
 ```
+
+`replayable` 是衍生證據，而非獨立承諾：僅當 `replay` 包含供 `process-input-v1` 轉接器使用的完整輸入計畫時才為真。計畫記錄精確的環境位元組、使用時第一次受支援的 `read(0)` 系列標準輸入位元組序列，以及從求解器賦值 ID 到這些輸入的綁定；無法建立時由 `replay.reason` 說明原因。這些欄位以增量方式加入；頂層 `schema_version` 仍為 `1`。
 
 ---
 
@@ -136,5 +157,5 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 - 長度受限的拷貝在求解前退出並計入 `skipped`；精確容量可證明 SAFE，只有上界時仍為 UNKNOWN。
 - 已入目錄的寬字元與追加拷貝，在元素位元組寬度或目的字串既有長度未恢復時保持 UNKNOWN。出參配置器與條件 `realloc` 的所有權轉移無法證明時也保持 UNKNOWN。
 - **P0**（本發行，三種格式）：sink 目錄、參數預過濾、拷貝越界獵取、堆積生命週期稽核。每個測試主機都執行 PE、ELF、Mach-O × x86-64、AArch64 六個已檢入樣例。
-- **P1**：堆疊/全域越界、未初始化讀、格式字串、更豐富的 PDB 堆疊型別、更多平台配置器。
+- **P1**：堆疊/全域越界、未初始化區域讀取與格式字串檢查已提供；更豐富的 PDB 堆疊型別和更多平台配置器仍是增量覆蓋項，缺少精確摘要時保持 UNKNOWN。
 - **P2**：patch 插入的執行階段檢查、程序間攻擊者可達性。

@@ -1,5 +1,7 @@
 add_neverd_component_library(NeverDSafety
   SafetyTypes.cpp
+  ProcessInputReplay.cpp
+  CallEffects.cpp
   SinkCatalog.cpp
   SinkScanner.cpp
   ArgSlicer.cpp

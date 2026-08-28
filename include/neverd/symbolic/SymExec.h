@@ -65,12 +65,44 @@ enum class StepResult : uint8_t {
   Unmodelled,
 };
 
+/// What a complete call contract says about memory not named by an explicit
+/// write.  This vocabulary is deliberately independent of any analysis that
+/// supplies the contract, so Symbolic never depends on a higher-level client.
+enum class SymCallMemoryEffect : uint8_t {
+  Preserve,
+  Havoc,
+};
+
+/// One exact memory write performed by a summarized call.
+struct SymCallMemoryWrite {
+  SymRef Address;
+  SymRef Value;
+};
+
+/// Analysis-neutral effects for one exact call occurrence.
+///
+/// A provider may return this only when it covers the complete contract needed
+/// by symbolic execution.  An invalid ReturnValue means an unconstrained
+/// return, which is still a known contract; an absent effect retains the
+/// ordinary conservative call havoc.
+struct SymCallEffect {
+  SymCallMemoryEffect Memory = SymCallMemoryEffect::Havoc;
+  SymRef ReturnValue;
+  std::vector<SymCallMemoryWrite> Writes;
+  std::vector<SymRef> Constraints;
+};
+
 class SymExec {
 public:
   SymExec(SymContext &Ctx, SymState &State) : Ctx(Ctx), State(State) {}
 
   /// Execute one operation against the state.
   StepResult step(const LowOp &Op);
+
+  /// Execute one operation, applying \p CallEffect when \p Op is a call.  The
+  /// effect is ignored for every other opcode.  A null effect preserves the
+  /// fail-closed default used by \c step(const LowOp&).
+  StepResult step(const LowOp &Op, const SymCallEffect *CallEffect);
 
   /// Execute operations in order, stopping when one changes control flow.
   /// An unmodelled operation has already written a named unknown and therefore
@@ -139,7 +171,7 @@ private:
   StepResult stepBoolean(const LowOp &Op);
   StepResult stepBits(const LowOp &Op);
   StepResult stepMemory(const LowOp &Op);
-  StepResult stepControl(const LowOp &Op);
+  StepResult stepControl(const LowOp &Op, const SymCallEffect *CallEffect);
   StepResult unmodelled(const LowOp &Op);
 
   SymContext &Ctx;

@@ -427,6 +427,9 @@ TEST(AllocLifetime, ConflictingDebugAllocatorSignatureFailsClosed) {
 }
 
 TEST(AllocLifetime, FallibleWindowsReleasesRemainConditional) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Format = BinaryFormat::COFF;
   for (const char *Name : {"HeapFree", "LocalFree", "GlobalFree"}) {
     SCOPED_TRACE(Name);
     FB B("f", 0x100);
@@ -441,7 +444,7 @@ TEST(AllocLifetime, FallibleWindowsReleasesRemainConditional) {
     B.call(b0, "free", MedVar{}, {temp(1)}, 0x9200, 0x418);
     B.ret(b0, {});
 
-    const auto Fs = audit({B.F});
+    const auto Fs = audit({B.F}, &Img);
     const Finding *UAF = find(Fs, VulnClass::UseAfterFree);
     ASSERT_NE(UAF, nullptr);
     EXPECT_EQ(UAF->TheVerdict, Verdict::Unknown) << UAF->Detail;
@@ -457,6 +460,9 @@ TEST(AllocLifetime, FallibleWindowsReleasesRemainConditional) {
 }
 
 TEST(AllocLifetime, FallibleWindowsReleaseDoesNotHidePossibleLeak) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Format = BinaryFormat::COFF;
   for (const char *Name : {"HeapFree", "LocalFree", "GlobalFree"}) {
     SCOPED_TRACE(Name);
     FB B("f", 0x100);
@@ -469,7 +475,7 @@ TEST(AllocLifetime, FallibleWindowsReleaseDoesNotHidePossibleLeak) {
       B.call(b0, Name, temp(2), {temp(1)}, 0x9100, 0x408);
     B.ret(b0, {});
 
-    const auto Fs = audit({B.F});
+    const auto Fs = audit({B.F}, &Img);
     const Finding *Leak = find(Fs, VulnClass::HeapLeak);
     ASSERT_NE(Leak, nullptr);
     EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown) << Leak->Detail;
@@ -1823,7 +1829,13 @@ TEST(AllocLifetime, ZeroLengthInputSourcesDoNotUseFreedOutputBuffer) {
     B.call(b0, C.Name, temp(2), C.Args);
     B.ret(b0, {});
 
-    EXPECT_FALSE(has(audit({B.F}), VulnClass::UseAfterFree));
+    BinaryImage Img;
+    Img.Arch = Arch::X64;
+    Img.Format = llvm::StringRef(C.Name).starts_with("ReadFile") ||
+                         llvm::StringRef(C.Name).starts_with("GetEnvironment")
+                     ? BinaryFormat::COFF
+                     : BinaryFormat::ELF;
+    EXPECT_FALSE(has(audit({B.F}, &Img), VulnClass::UseAfterFree));
   }
 }
 

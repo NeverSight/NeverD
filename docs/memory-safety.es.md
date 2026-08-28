@@ -8,8 +8,8 @@ NeverD analiza un binario cargado en busca de dos familias de defectos de seguri
 
 | Pista | Comando | Informa |
 |-------|---------|---------|
-| **Audit** | `neverd audit <binary>` | Defectos de vida del montón: fuga, doble liberación, uso después de liberar |
-| **Hunt** | `neverd hunt <binary>` | Desbordamientos de copias peligrosas con evidencia simbólica y valores de entrada candidatos; `replayable=false` hasta que un adaptador de entrada del proceso los asocie a bytes reales |
+| **Audit** | `neverd audit <binary>` | Defectos de vida del montón y lecturas locales de pila sin inicializar |
+| **Hunt** | `neverd hunt <binary>` | Desbordamientos de copias peligrosas con evidencia simbólica y valores candidatos; `replayable=true` solo con un plan `process-input-v1` completo |
 
 El motor reutiliza la ejecución simbólica y el solver de vectores de bits internos de NeverD para testigos y alcanzabilidad. No hay solver externo, VM ni contenedor.
 
@@ -18,6 +18,8 @@ El motor reutiliza la ejecución simbólica y el solver de vectores de bits inte
 ## Invariante central: fallar cerrado
 
 Una operación no levantada, una llamada cuyos argumentos el paso ABI no pudo recuperar, un destino indirecto sin resolver o un presupuesto agotado producen **UNKNOWN**, nunca SAFE. Un destino cuya capacidad no se puede recuperar es UNKNOWN. El lifting estricto no cambia; la capa de seguridad solo añade veredictos conservadores encima.
+
+Los efectos de llamada usan semántica de mundo cerrado: un resumen solo se aplica cuando se conocen sus precondiciones y todos los efectos pertinentes. Un efecto desconocido o un resumen aplicable solo en parte conserva UNKNOWN; nunca se rellena el hueco suponiendo que no hay efecto o que la llamada tuvo éxito.
 
 ---
 
@@ -52,11 +54,13 @@ Un `memcpy` enlazado estáticamente nombrado por DWARF informa `dwarf`; un `memc
 
 ## Catálogo de sumideros y fuentes
 
-El catálogo es una tabla configurable, no un conjunto fijo. Cada **sumidero** declara su clase de debilidad, su rol (copy, format, alloc, free, realloc) y las ranuras de argumentos que importan (destino, origen, longitud, capacidad). Cada **fuente** nombra un proveedor de entrada influida por el atacante.
+El catálogo es una tabla configurable, no un conjunto fijo. Cada **sumidero** declara su clase de debilidad, su rol (copy, format, alloc, free, realloc) y las ranuras de argumentos que importan (destino, origen, longitud, capacidad). Un sumidero JSON de tipo copy o format también proporciona un efecto de llamada ejecutable. Cada **fuente** nombra un proveedor de entrada influida por el atacante.
 
 Las entradas integradas viven en [`SafetySinks.def`](../include/neverd/safety/SafetySinks.def) y [`SafetySources.def`](../include/neverd/safety/SafetySources.def); cubren la familia de copias habitual del runtime C (`memcpy`/`memmove`/`strcpy`/`strcat`/`strncpy`/`gets`/…), las variantes fortificadas `_chk` (límite explícito de destino), la familia de asignación y liberación (`malloc`/`calloc`/`realloc`/`free`, operadores `new`/`delete`) y APIs de montón Win32 opcionales. Las fuentes de entrada incluyen POSIX (`getenv`, `read`, `recv`, `fgets`, `fread`, `scanf`, argumentos del programa) **y** Win32 (`GetCommandLineA/W`, `ReadFile`, `GetEnvironmentVariable*`), de modo que una caza PE no queda restringida a entradas POSIX.
 
 Las grafías por formato se pliegan a una sola entrada: se quitan los guiones bajos iniciales (`_malloc`, `___strcpy_chk`) y los operadores `new`/`delete` mangled coinciden por alias.
+
+Cuando un sumidero JSON de tipo copy o format omite `effect`, su aplicabilidad se deduce de la ranura de argumento referenciada más alta. Una copia exige entonces esa aridad exacta; un sumidero de formato acepta llamadas desde esa aridad mínima hasta el máximo variádico. Un objeto `effect` opcional puede establecer explícitamente mediante `min_arity` y `max_arity` (o `"variadic"`) un intervalo de aridad aceptado, incluidos argumentos adicionales de wrapper más allá de la aridad exacta de copy deducida; `min_arity` debe ser al menos la ranura de rol referenciada más alta más uno, mientras que `formats` y `abis` restringen la aplicabilidad. Si la aridad, el formato de objeto o la ABI de la llamada no coinciden, no se aplica ningún resumen y el resultado de mundo cerrado permanece UNKNOWN.
 
 Amplíe o reemplace el catálogo con un archivo de especificación:
 
@@ -66,9 +70,20 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 
 ```json
 { "sinks": [
-    { "name": "my_copy", "kind": "copy", "dst": 0, "src": 1, "len": 2 }
-] }
+    { "name": "my_copy", "kind": "copy", "dst": 0, "src": 1, "len": 2 },
+    { "name": "my_format", "kind": "format", "dst": 0, "fmt": 2,
+      "effect": { "min_arity": 3, "max_arity": "variadic",
+                  "formats": ["elf"], "abis": ["sysv"] } }
+  ],
+  "sources": [
+    { "name": "my_read", "out": 1, "return_tainted": true }
+  ]
+}
 ```
+
+En una fuente personalizada, `out` y `return_tainted` son solo metadatos de descubrimiento. No establecen efectos ejecutables de memoria, valor de retorno ni taint. El esquema de fuentes actual carece de los contratos tipados de éxito, mutación, formato y ABI necesarios para esas semánticas, por lo que un análisis que dependa del efecto de una fuente personalizada permanece UNKNOWN. Las fuentes integradas no se ven afectadas: sus descriptores tipados y comprobados por aplicabilidad siguen proporcionando efectos ejecutables.
+
+Un sumidero personalizado no acotado que solo tiene destino no se deduce de una entrada de fuente con el mismo nombre. Un sumidero personalizado similar a `gets` debe activar explícitamente `"unbounded": true`; añadir el mismo nombre al catálogo de fuentes no le concede un efecto ejecutable, y los campos de origen/longitud contradictorios se rechazan transaccionalmente.
 
 ---
 
@@ -79,10 +94,14 @@ Para cada sumidero de copia, la caza recupera la capacidad de destino — tamañ
 - Una **longitud constante** dentro de una capacidad exacta es SAFE. Un desbordamiento constante solo es UNSAFE si el sumidero es alcanzable en una ruta corroborada; en otro caso permanece UNKNOWN.
 - Las copias **fortificadas** `_chk` llevan un límite de destino en tiempo de ejecución. Un rechazo o un límite que cabe de forma demostrable es SAFE; una escritura factible más allá del objeto es UNSAFE; un límite no recuperado o inconcluso es UNKNOWN.
 - Longitud **demostrablemente acotada** (llamada que devuelve longitud, máscara, clamp) se retira antes del solver, registrando el motivo. Solo es SAFE con un tamaño de destino exacto; una cota de región permanece UNKNOWN.
-- Longitud **influida por el atacante** con capacidad conocida: el solver de vectores de bits. Si una longitud mayor que la capacidad es factible, el veredicto es UNSAFE; el modelo se informa como evidencia simbólica con valores candidatos no reproducibles (`replayable=false`) hasta disponer de un adaptador de entrada del proceso.
+- Longitud **influida por el atacante** con capacidad conocida: el solver de vectores de bits. Si una longitud mayor que la capacidad es factible, el veredicto es UNSAFE. Los candidatos solo son reproducibles con un plan `process-input-v1` completo: inicialmente valores literales exactos del entorno y, como máximo, los bytes devueltos por el primer consumo de entrada estándar. argv, archivos, red, fuentes personalizadas o ambiguas siguen sin ser reproducibles e incluyen el motivo.
 - Cualquier otra cosa — longitud o capacidad desconocidas — es UNKNOWN.
 
 Toda capacidad recuperada es una **cota superior** del tamaño real, así que un desbordamiento demostrado nunca es un falso positivo.
+
+### Entrada con formato
+
+Para `scanf`/`fscanf` y sus grafías versionadas, un formato constante legible asigna cada conversión no suprimida a su argumento variádico de salida real. Las salidas `%s`/`%[` no acotadas contaminan los usos posteriores de cadenas; las salidas numéricas y de caracteres contaminan los valores cargados desde el objeto escrito, pero no el valor del puntero de salida. `sscanf` solo propaga esos efectos cuando su cadena de entrada ya está influida por el atacante. Las salidas de texto acotadas como `%Ns`/`%N[` propagan taint junto con una extensión `MaxBytes` que incluye el terminador; las variantes de caracteres anchos calculan esa extensión en bytes con el ancho de `wchar_t` de la plataforma. Las conversiones suprimidas, los argumentos sobrantes, los formatos dependientes de posición o no admitidos y `%n` permanecen UNKNOWN en lugar de adivinarse.
 
 ---
 
@@ -124,9 +143,11 @@ Los mismos análisis están disponibles por la API C (`neverd_session_audit_json
   "capacity": 16,
   "capacity_kind": "exact",
   "corroboration": "path predicate and overflow are jointly satisfiable",
-  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" }, "candidate_values": [{ "name": "copy_length", "value": "17" }, { "name": "argv[1]", "value": "16 bytes" }], "replayable": false, "symbolic_model": [{ "id": 0, "name": "copy_len", "width": 64, "value_hex": "0x11", "origin": "input" }] }
+  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" }, "candidate_values": [{ "name": "copy_length", "value": "17" }, { "name": "argv[1]", "value": "16 bytes" }], "replayable": false, "replay": { "adapter": "process-input-v1", "reason": "argv input is not supported by process-input-v1" }, "symbolic_model": [{ "id": 0, "name": "copy_len", "width": 64, "value_hex": "0x11", "origin": "input" }] }
 }
 ```
+
+`replayable` es evidencia derivada, no una promesa independiente: solo es verdadero si `replay` contiene un plan de entrada completo para el adaptador `process-input-v1`. El plan registra los bytes exactos del entorno, la primera secuencia de entrada estándar si se usa y los enlaces desde los identificadores de asignación del solver; si no existe, `replay.reason` explica el motivo. Los campos son aditivos; el `schema_version` superior sigue siendo `1`.
 
 ---
 
@@ -136,5 +157,5 @@ Los mismos análisis están disponibles por la API C (`neverd_session_audit_json
 - Una copia acotada se retira antes del solver y cuenta en `skipped`; una capacidad exacta puede probar SAFE, mientras una cota sola permanece UNKNOWN.
 - Las copias de caracteres anchos y de anexado catalogadas permanecen UNKNOWN hasta recuperar el ancho de elemento y la extensión actual del destino. Los asignadores por parámetro de salida y la propiedad condicional de `realloc` también permanecen UNKNOWN si no puede probarse la transición del manejador.
 - **P0** (esta versión, los tres formatos): catálogo de sumideros, prefiltro de argumentos, caza de desbordamiento de copia, auditoría de vida del montón. Cada host ejecuta seis fixtures PE, ELF y Mach-O para x86-64 y AArch64.
-- **P1**: desbordamiento de pila/global, lecturas no inicializadas, cadenas de formato, tipos de pila PDB más ricos, más asignadores de plataforma.
+- **P1**: ya están disponibles los desbordamientos de pila/global, las lecturas locales no inicializadas y las comprobaciones de cadenas de formato; los tipos de pila PDB más ricos y más asignadores de plataforma siguen siendo cobertura incremental, y la ausencia de un resumen exacto permanece UNKNOWN.
 - **P2**: comprobaciones de tiempo de ejecución insertadas por patch, alcanzabilidad interprocedural del atacante.

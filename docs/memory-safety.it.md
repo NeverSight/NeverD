@@ -8,8 +8,8 @@ NeverD analizza un binario caricato per due famiglie di difetti di sicurezza del
 
 | Pista | Comando | Riporta |
 |-------|---------|---------|
-| **Audit** | `neverd audit <binary>` | Difetti di vita dell’heap: leak, doppia free, use-after-free |
-| **Hunt** | `neverd hunt <binary>` | Overflow di copie pericolose con evidenza simbolica e valori di input candidati; `replayable=false` finché un adapter dell’input di processo non li associa ai byte reali |
+| **Audit** | `neverd audit <binary>` | Difetti di vita dell’heap e letture locali dello stack non inizializzate |
+| **Hunt** | `neverd hunt <binary>` | Overflow di copie pericolose con evidenza simbolica e valori candidati; `replayable=true` solo con un piano `process-input-v1` completo |
 
 Il motore riutilizza l’esecuzione simbolica e il solver bitvector interni di NeverD per testimoni e raggiungibilità. Nessun solver esterno, VM o contenitore.
 
@@ -18,6 +18,8 @@ Il motore riutilizza l’esecuzione simbolica e il solver bitvector interni di N
 ## Invariante centrale: fallire chiuso
 
 Un’operazione non sollevata, una chiamata i cui argomenti il passo ABI non ha recuperato, un bersaglio indiretto non risolto o un budget esaurito producono **UNKNOWN**, mai SAFE. Una destinazione la cui capacità non è recuperabile è UNKNOWN. Il lifting strict resta invariato; lo strato di sicurezza aggiunge solo verdetti conservativi sopra di esso.
+
+Gli effetti delle chiamate usano semantica closed-world: un riepilogo si applica solo quando sono note le sue precondizioni e tutti gli effetti pertinenti. Un effetto sconosciuto o un riepilogo applicabile solo in parte resta UNKNOWN; la lacuna non viene mai trattata come nessun effetto o come una chiamata riuscita.
 
 ---
 
@@ -52,11 +54,13 @@ Un `memcpy` linkato staticamente nominato da DWARF riporta `dwarf`; un `memcpy` 
 
 ## Catalogo di sink e source
 
-Il catalogo è una tabella configurabile, non un insieme cablato. Ogni **sink** dichiara la classe di debolezza, il ruolo (copy, format, alloc, free, realloc) e gli slot di argomento rilevanti (destinazione, origine, lunghezza, capacità). Ogni **source** nomina un fornitore di input influenzato dall’attaccante.
+Il catalogo è una tabella configurabile, non un insieme cablato. Ogni **sink** dichiara la classe di debolezza, il ruolo (copy, format, alloc, free, realloc) e gli slot di argomento rilevanti (destinazione, origine, lunghezza, capacità). Un sink JSON di tipo copy o format fornisce anche un effetto di chiamata eseguibile. Ogni **source** nomina un fornitore di input influenzato dall’attaccante.
 
 Le voci integrate risiedono in [`SafetySinks.def`](../include/neverd/safety/SafetySinks.def) e [`SafetySources.def`](../include/neverd/safety/SafetySources.def); coprono la famiglia di copie C comune (`memcpy`/`memmove`/`strcpy`/`strcat`/`strncpy`/`gets`/…), le varianti fortificate `_chk` (limite esplicito di destinazione), la famiglia di allocazione e rilascio (`malloc`/`calloc`/`realloc`/`free`, operator `new`/`delete`) e API heap Win32 opzionali. Le sorgenti di input includono POSIX (`getenv`, `read`, `recv`, `fgets`, `fread`, `scanf`, argomenti del programma) **e** Win32 (`GetCommandLineA/W`, `ReadFile`, `GetEnvironmentVariable*`), così un hunt PE non è limitato agli input POSIX.
 
 Le grafie per formato si piegano su una sola voce: gli underscore iniziali vengono rimossi (`_malloc`, `___strcpy_chk`) e gli operator `new`/`delete` mangled coincidono tramite alias.
+
+Quando un sink JSON di tipo copy o format omette `effect`, l’applicabilità viene dedotta dallo slot di argomento referenziato più alto. Una copia richiede quindi quell’arità esatta; un sink di formato accetta chiamate da tale arità minima fino al massimo variadico. Un oggetto `effect` opzionale può impostare esplicitamente con `min_arity` e `max_arity` (o `"variadic"`) un intervallo di arità accettato, inclusi argomenti wrapper aggiuntivi oltre l’arità copy esatta dedotta; `min_arity` deve essere almeno lo slot di ruolo referenziato più alto più uno, mentre `formats` e `abis` limitano l’applicabilità. Se l’arità, il formato oggetto o l’ABI della chiamata non corrispondono, non si applica alcun riepilogo e il risultato closed-world resta UNKNOWN.
 
 Estendi o sostituisci il catalogo con un file di specifica:
 
@@ -66,9 +70,20 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 
 ```json
 { "sinks": [
-    { "name": "my_copy", "kind": "copy", "dst": 0, "src": 1, "len": 2 }
-] }
+    { "name": "my_copy", "kind": "copy", "dst": 0, "src": 1, "len": 2 },
+    { "name": "my_format", "kind": "format", "dst": 0, "fmt": 2,
+      "effect": { "min_arity": 3, "max_arity": "variadic",
+                  "formats": ["elf"], "abis": ["sysv"] } }
+  ],
+  "sources": [
+    { "name": "my_read", "out": 1, "return_tainted": true }
+  ]
+}
 ```
+
+Per una source personalizzata, `out` e `return_tainted` sono solo metadati di discovery. Non stabiliscono effetti eseguibili sulla memoria, sul valore restituito o sul taint. Lo schema source attuale non dispone dei contratti tipizzati di successo, mutazione, formato e ABI necessari per tali semantiche; un’analisi che dipende dall’effetto di una source personalizzata resta quindi UNKNOWN. Le source integrate non sono interessate: i loro descrittori tipizzati e verificati per applicabilità continuano a fornire effetti eseguibili.
+
+Un sink personalizzato non limitato con il solo argomento di destinazione non viene dedotto da una voce source omonima. Un sink personalizzato simile a `gets` deve attivare esplicitamente `"unbounded": true`; aggiungere lo stesso nome al catalogo source non gli conferisce un effetto eseguibile e i campi origine/lunghezza contraddittori vengono rifiutati in modo transazionale.
 
 ---
 
@@ -79,10 +94,14 @@ Per ogni sink di copia il hunt recupera la capacità di destinazione — dimensi
 - Una **lunghezza costante** entro una capacità esatta è SAFE. Un overflow costante è UNSAFE solo se il sink è raggiungibile su un percorso corroborato; altrimenti resta UNKNOWN.
 - Le copie **fortificate** `_chk` portano un bound di destinazione a runtime. Un rifiuto o un bound dimostrato compatibile è SAFE; una scrittura possibile oltre l’oggetto è UNSAFE; un bound non recuperato o inconcludente è UNKNOWN.
 - Lunghezza **dimostrabilmente limitata** (chiamata che restituisce una lunghezza, maschera, clamp) ritirata prima del solver, con il motivo. È SAFE solo con una dimensione di destinazione esatta; un solo upper bound di regione resta UNKNOWN.
-- Lunghezza **influenzata dall’attaccante** con capacità nota: solver bitvector. Se una lunghezza maggiore della capacità è soddisfacibile, il verdetto è UNSAFE; il modello è riportato come evidenza simbolica con valori candidati non riproducibili (`replayable=false`) finché non è disponibile un adapter dell’input di processo.
+- Lunghezza **influenzata dall’attaccante** con capacità nota: solver bitvector. Se una lunghezza maggiore della capacità è soddisfacibile, il verdetto è UNSAFE. I candidati sono riproducibili solo con un piano `process-input-v1` completo: inizialmente valori letterali esatti dell’ambiente e, al massimo, i byte restituiti dal primo consumo dello standard input. argv, file, rete, fonti personalizzate o ambigue restano non riproducibili con una motivazione.
 - Qualsiasi altra cosa — lunghezza o capacità sconosciuta — è UNKNOWN.
 
 Ogni capacità recuperata è un **upper bound** sulla dimensione reale, quindi un overflow dimostrato non è mai un falso positivo.
+
+### Input formattato
+
+Per `scanf`/`fscanf` e le relative grafie versionate, un formato costante leggibile associa ogni conversione non soppressa al suo effettivo argomento di output variadico. Gli output `%s`/`%[` non limitati propagano il taint agli usi successivi della stringa; gli output numerici e di carattere propagano il taint ai valori caricati dall’oggetto scritto, ma non al valore del puntatore di output stesso. `sscanf` propaga tali effetti solo quando la stringa di input è già influenzata dall’attaccante. Gli output di testo limitati come `%Ns`/`%N[` propagano il taint insieme a un’estensione `MaxBytes` che include il terminatore; le varianti wide-character calcolano tale estensione in byte usando la larghezza di `wchar_t` della piattaforma. Le conversioni soppresse, gli argomenti in eccesso, i formati dipendenti dalla posizione o non supportati e `%n` restano UNKNOWN invece di essere ipotizzati.
 
 ---
 
@@ -124,9 +143,11 @@ Le stesse analisi sono disponibili tramite l’API C (`neverd_session_audit_json
   "capacity": 16,
   "capacity_kind": "exact",
   "corroboration": "path predicate and overflow are jointly satisfiable",
-  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" }, "candidate_values": [{ "name": "copy_length", "value": "17" }, { "name": "argv[1]", "value": "16 bytes" }], "replayable": false, "symbolic_model": [{ "id": 0, "name": "copy_len", "width": 64, "value_hex": "0x11", "origin": "input" }] }
+  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" }, "candidate_values": [{ "name": "copy_length", "value": "17" }, { "name": "argv[1]", "value": "16 bytes" }], "replayable": false, "replay": { "adapter": "process-input-v1", "reason": "argv input is not supported by process-input-v1" }, "symbolic_model": [{ "id": 0, "name": "copy_len", "width": 64, "value_hex": "0x11", "origin": "input" }] }
 }
 ```
+
+`replayable` è evidenza derivata, non una promessa indipendente: è vero solo se `replay` contiene un piano di input completo per l’adapter `process-input-v1`. Il piano registra i byte esatti dell’ambiente, la prima sequenza dello standard input se usata e i binding dagli ID delle assegnazioni del solver; altrimenti `replay.reason` ne spiega il motivo. I campi sono additivi; lo `schema_version` principale resta `1`.
 
 ---
 
@@ -136,5 +157,5 @@ Le stesse analisi sono disponibili tramite l’API C (`neverd_session_audit_json
 - Una copia limitata è ritirata prima del solver e conta in `skipped`; una capacità esatta può provare SAFE, mentre un solo upper bound resta UNKNOWN.
 - Le copie catalogate wide-character e append restano UNKNOWN finché non sono recuperati la larghezza dell’elemento e l’estensione esistente della destinazione. Gli allocator con parametro di uscita e la proprietà condizionale di `realloc` restano UNKNOWN quando la transizione dell’handle non può essere provata.
 - **P0** (questa versione, tutti e tre i formati): catalogo di sink, prefiltro degli argomenti, hunt di overflow di copia, audit di vita dell’heap. Ogni host esegue sei fixture PE, ELF e Mach-O per x86-64 e AArch64.
-- **P1**: overflow di stack/globale, letture non inizializzate, stringhe di formato, tipi di stack PDB più ricchi, ulteriori allocator di piattaforma.
+- **P1**: overflow di stack/globale, letture locali non inizializzate e controlli delle stringhe di formato sono disponibili; tipi di stack PDB più ricchi e ulteriori allocator di piattaforma restano copertura incrementale, mentre l’assenza di un sommario esatto resta UNKNOWN.
 - **P2**: controlli runtime inseriti da patch, raggiungibilità interprocedurale dell’attaccante.

@@ -1,4 +1,5 @@
 add_neverd_unittest(NeverDSafetyTests
+  CallEffectsTests.cpp
   SinkCatalogTests.cpp
   SinkScannerTests.cpp
   ArgSlicerTests.cpp
@@ -13,6 +14,7 @@ add_neverd_unittest(NeverDSafetyTests
 
 target_include_directories(NeverDSafetyTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include
+  ${CMAKE_SOURCE_DIR}/lib/safety
 )
 
 # End-to-end coverage over checked-in PE, ELF, and Mach-O binaries for both

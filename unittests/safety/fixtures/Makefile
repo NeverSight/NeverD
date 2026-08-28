@@ -47,23 +47,21 @@ $(BUILD)/safety_cases_elf_x64.o: $(SRC) | $(BUILD)
 	$(CLANG) --target=x86_64-unknown-linux-gnu $(CFLAGS) -fPIC \
 	  $(REPRO_DEBUG) -c $(SRC) -o $@
 
-elf-x64: $(OUT)/safety_cases_elf_x64
-$(OUT)/safety_cases_elf_x64: $(BUILD)/safety_cases_elf_x64.o | $(OUT)
+elf-x64: $(BUILD)/safety_cases_elf_x64.o | $(OUT)
 	$(CLANG) --target=x86_64-unknown-linux-gnu \
 	  -nostdlib -shared -fuse-ld=lld -Wl,--unresolved-symbols=ignore-all \
-	  -Wl,-Map,$@.map \
-	  $< -o $@
+	  -Wl,-Map,$(OUT)/safety_cases_elf_x64.map \
+	  $< -o $(OUT)/safety_cases_elf_x64
 
 $(BUILD)/safety_cases_elf_arm64.o: $(SRC) | $(BUILD)
 	$(CLANG) --target=aarch64-unknown-linux-gnu $(CFLAGS) -fPIC \
 	  $(REPRO_DEBUG) -c $(SRC) -o $@
 
-elf-arm64: $(OUT)/safety_cases_elf_arm64
-$(OUT)/safety_cases_elf_arm64: $(BUILD)/safety_cases_elf_arm64.o | $(OUT)
+elf-arm64: $(BUILD)/safety_cases_elf_arm64.o | $(OUT)
 	$(CLANG) --target=aarch64-unknown-linux-gnu \
 	  -nostdlib -shared -fuse-ld=lld -Wl,--unresolved-symbols=ignore-all \
-	  -Wl,-Map,$@.map \
-	  $< -o $@
+	  -Wl,-Map,$(OUT)/safety_cases_elf_arm64.map \
+	  $< -o $(OUT)/safety_cases_elf_arm64
 
 # Mach-O (macOS host).  Each phony target rebuilds the executable and its
 # companion together so a missing or stale dSYM cannot survive unnoticed.

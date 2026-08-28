@@ -18,6 +18,7 @@
 ///   - NeverDCAPIDisasm.h   -- functions, bytes, disassembly, decompile, IR
 ///   - NeverDCAPIQuery.h    -- info panels, graphs, search, diff
 ///   - NeverDCAPISymbolic.h -- symbolic path exploration
+///   - NeverDCAPISafety.h   -- memory-safety audit and vulnerability hunt
 ///   - NeverDCAPIPatch.h    -- patching, pipeline, target config, benchmarks
 ///   - NeverDCAPIPersist.h  -- annotations and renames (JSON sidecar)
 ///   - NeverDCAPISigs.h     -- FLIRT signature matching and CRC16

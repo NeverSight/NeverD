@@ -489,6 +489,75 @@ TEST(SafetyCAPI, SessionRenameDrivesSafetySinkIdentity) {
   EXPECT_EQ(Renamed->getString("sink"), "memcpy");
 }
 
+TEST(SafetyCAPI, MapOnlyStrippedImageDrivesSafetySinkIdentity) {
+  const FixtureSpec Spec = fixtureSpecs()[4];
+  TemporaryFixture Temp(Spec.Path);
+  ASSERT_TRUE(Temp.valid()) << Temp.error();
+
+  const std::filesystem::path MapPath =
+      Temp.path().parent_path() / "identity.map";
+  std::ifstream Input(Spec.Path + ".map", std::ios::binary);
+  std::ofstream Output(MapPath, std::ios::binary);
+  ASSERT_TRUE(Input.good());
+  ASSERT_TRUE(Output.good());
+  bool Replaced = false;
+  for (std::string Line; std::getline(Input, Line);) {
+    if (const size_t Pos = Line.find("tainted_stack_overflow");
+        Pos != std::string::npos) {
+      Line.replace(Pos, std::string("tainted_stack_overflow").size(), "memcpy");
+      Replaced = true;
+    }
+    Output << Line << '\n';
+  }
+  Output.close();
+  ASSERT_TRUE(Replaced);
+  ASSERT_TRUE(Output.good());
+
+  neverd_session_t Sess = neverd_session_create();
+  neverd_session_set_map_path(Sess, MapPath.string().c_str());
+  ASSERT_TRUE(neverd_session_load(Sess, Temp.path().string().c_str()))
+      << takeOwned(neverd_last_error(Sess));
+  EXPECT_EQ(takeOwned(neverd_session_debug_info_kind(Sess)), "map");
+  const int MappedIndex = neverd_func_find_by_name(Sess, "memcpy");
+  ASSERT_GE(MappedIndex, 0);
+
+  const neverd_va_t Entry = neverd_func_entry(Sess, MappedIndex);
+  unsigned char Bytes[16]{};
+  ASSERT_EQ(neverd_read_bytes(Sess, Entry, Bytes, sizeof(Bytes)),
+            static_cast<int>(sizeof(Bytes)));
+  std::string Pattern;
+  for (unsigned char Byte : Bytes)
+    Pattern += llvm::utohexstr(Byte, /*LowerCase=*/false, 2);
+  Pattern += " 00 0000 0010 :0000 strcpy\n";
+  const std::filesystem::path SignaturePath =
+      Temp.path().parent_path() / "stated-name.pat";
+  {
+    std::ofstream Signature(SignaturePath, std::ios::binary);
+    ASSERT_TRUE(Signature.good());
+    Signature << Pattern;
+    ASSERT_TRUE(Signature.good());
+  }
+  ASSERT_GT(neverd_apply_signature_file(Sess, SignaturePath.string().c_str()),
+            0)
+      << takeOwned(neverd_last_error(Sess));
+  EXPECT_EQ(takeOwned(neverd_func_name(Sess, MappedIndex)), "memcpy");
+
+  neverd_safety_options Options{};
+  Options.struct_size = sizeof(Options);
+  const std::string Json = takeOwned(neverd_session_hunt_json(Sess, &Options));
+  neverd_session_destroy(Sess);
+
+  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(Json);
+  ASSERT_TRUE(static_cast<bool>(Parsed));
+  const llvm::json::Object *Root = Parsed->getAsObject();
+  ASSERT_NE(Root, nullptr);
+  ASSERT_TRUE(Root->getBoolean("ok").value_or(false));
+  const llvm::json::Object *Mapped = findingWithNameSource(*Root, "map");
+  ASSERT_NE(Mapped, nullptr);
+  EXPECT_EQ(Mapped->getString("name"), "memcpy");
+  EXPECT_EQ(Mapped->getString("sink"), "memcpy");
+}
+
 TEST(SafetyCAPI, SignatureOnlyNameDrivesSafetySinkIdentity) {
   const FixtureSpec Spec = fixtureSpecs()[4];
   TemporaryFixture Temp(Spec.Path);

@@ -78,7 +78,7 @@ Ein geliftetes Binärfile auf Heap-Lebensdauerfehler (Leak, Double-Free, Use-aft
 | Spur `hunt` | Senkenkatalog + Argument-Vorfilter + Zielkapazität + Solver-Zeuge |
 | Identitätsvertrag | Senkenauflösung je Format (PE-IAT, ELF-PLT, Mach-O-dyld-Bind) und PDB-/DWARF-/MAP-Namensquellen |
 
-**Status:** Die P0-Implementierung für PE, ELF und Mach-O ist vorhanden, der Abschluss wartet jedoch auf einen Prozess-Eingabe-Replay-Adapter und vollständige Zusammenfassungen der Aufrufeffekte. Urteils- und Identitätsabdeckung ist durch [`unittests/safety`](../../unittests/safety) und den End-to-End-[`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) festgeschrieben, der auf jedem Host die verpflichtende PE/ELF/Mach-O × x86-64/AArch64-Matrix ausführt. Siehe [Speicher-Audit und Hunt](../memory-safety.de.md). P1 erweitert auf Stack-/Global-Überlauf, uninitialisierte Reads und Formatstrings.
+**Status:** Phase 1 ist für PE, ELF und Mach-O implementiert. P0 umfasst Closed-World-Analysen für Heap-Lebensdauer und gefährliche Kopien sowie additive Schema-v1-Evidenz mit `process-input-v1`-Replay für exakte literale Umgebungswerte und den ersten unterstützten `read(0)`-Familienaufruf auf der Standardeingabe; andere Eingabearten bleiben mit Begründung nicht abspielbar. P1 deckt Stack-/Global-Überläufe, uninitialisierte lokale Reads und Formatstrings ab. Unbekannte oder nur teilweise anwendbare Aufrufeffekte bleiben UNKNOWN. Urteils- und Identitätsabdeckung ist durch [`unittests/safety`](../../unittests/safety) und den End-to-End-[`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) festgeschrieben, der auf jedem Host die verpflichtende PE/ELF/Mach-O × x86-64/AArch64-Matrix ausführt. Siehe [Speicher-Audit und Hunt](../memory-safety.de.md). P2-Binärprüfungen, hybrides Fuzzing und breitere interprozedurale Erreichbarkeit bleiben nachgelagerte Roadmap-Arbeiten außerhalb der Phase-1-Abnahme.
 
 ---
 
@@ -105,5 +105,5 @@ Rekonstruktion läuft weiter. Keine Termine zugesagt.
 | Legacy-EVM-Decoding/Lifting | Bis Fusaka abgeschlossen; regressionstestgedeckt |
 | EVM-Source-Rekonstruktion | Laufend — evidenzgestützt und konservativ |
 | Solana-eBPF-(SBF)-Dekompilation | Abgeschlossen — v0-v4, C, Rust und LLVM; regressionstestgedeckt |
-| Speicher-Audit und Hunt | In Arbeit — P0-Implementierung vorhanden; Abschluss durch Replay-/Aufrufzusammenfassungen ausstehend |
+| Speicher-Audit und Hunt | Phase 1 abgeschlossen — P0/P1-Analyse, Replay-Evidenz und native Format-/Architekturmatrix vorhanden; P2-Folgearbeiten geplant |
 | Engine- & Produkt-Härtung | Laufend |

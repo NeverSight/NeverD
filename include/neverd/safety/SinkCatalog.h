@@ -23,6 +23,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
 
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -66,18 +67,51 @@ struct SinkEntry {
   }
 };
 
-/// One external-input provider whose return value and/or output buffer can be
-/// treated as attacker-controlled by the argument prefilter.
+/// Discovery metadata for one external-input provider.  These fields describe
+/// the intended source roles but do not by themselves grant executable taint
+/// or memory effects; consumers must also resolve a matching closed-world call
+/// effect.
 struct SourceEntry {
   std::string Name;
   /// The argument index that receives tainted bytes, or -1 when there is no
   /// output-buffer argument.
   int OutArg = -1;
-  /// Explicit return-value semantics.  An absent value preserves the catalog's
-  /// legacy contract: a source without an output argument taints its return.
+  /// Declared return-value role.  An absent value preserves the catalog's
+  /// legacy convention that a source without an output argument describes its
+  /// return.  A matching call effect is still required before analysis may
+  /// execute that role.
   std::optional<bool> TaintedReturn;
 
   bool returnCarriesInput() const { return TaintedReturn.value_or(OutArg < 0); }
+};
+
+/// Executable semantics supplied by a configured sink.  The semantic family
+/// is deliberately closed: catalog JSON may make a copy or printf-style
+/// formatting contract executable, but cannot assemble arbitrary effects.
+struct ConfiguredCallEffect {
+  static constexpr unsigned VariadicArity =
+      std::numeric_limits<unsigned>::max();
+
+  enum class Family : uint8_t { None, Copy, Format };
+  enum class Format : uint8_t {
+    Unconstrained = 0,
+    ELF = uint8_t{1} << 0,
+    COFF = uint8_t{1} << 1,
+    MachO = uint8_t{1} << 2,
+  };
+  enum class ABI : uint8_t {
+    Unconstrained = 0,
+    SysV = uint8_t{1} << 0,
+    Microsoft = uint8_t{1} << 1,
+    Darwin = uint8_t{1} << 2,
+    AAPCS = uint8_t{1} << 3,
+  };
+
+  Family TheFamily = Family::None;
+  Format Formats = Format::Unconstrained;
+  ABI ABIs = ABI::Unconstrained;
+  unsigned MinArity = 0;
+  unsigned MaxArity = 0;
 };
 
 /// A folded view of the catalog with normalized lookup.
@@ -95,6 +129,10 @@ public:
   /// the name is not a known sink.
   const SinkEntry *matchSink(llvm::StringRef StatedName) const;
   const SourceEntry *matchSource(llvm::StringRef StatedName) const;
+  /// Return a configured executable-effect override.  A returned entry whose
+  /// family is None explicitly shadows any built-in effect for that spelling.
+  const ConfiguredCallEffect *
+  matchConfiguredCallEffect(llvm::StringRef StatedName) const;
 
   void addSink(SinkEntry E);
   void addSource(SourceEntry E);
@@ -115,6 +153,13 @@ private:
   llvm::StringMap<unsigned> SinkIndex; ///< normalized name/alias -> SinkList.
   std::vector<SourceEntry> SourceList;
   llvm::StringMap<unsigned> SourceIndex; ///< normalized name -> SourceList.
+  std::vector<ConfiguredCallEffect> ConfiguredEffectList;
+  llvm::StringMap<unsigned> ConfiguredEffectIndex;
+  llvm::StringMap<bool> ConfiguredSourceEffectShadows;
+  ConfiguredCallEffect ConfiguredNoEffect;
+
+  void setConfiguredSinkEffect(const SinkEntry &Entry,
+                               ConfiguredCallEffect Effect);
 };
 
 } // namespace neverd::safety

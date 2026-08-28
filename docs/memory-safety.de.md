@@ -8,8 +8,8 @@ NeverD analysiert ein geladenes Binärfile auf zwei Familien von Speichersicherh
 
 | Spur | Befehl | Berichtet |
 |------|--------|-----------|
-| **Audit** | `neverd audit <binary>` | Heap-Lebensdauerfehler: Leak, Double-Free, Use-after-Free |
-| **Hunt** | `neverd hunt <binary>` | Gefährliche Copy-Überläufe mit symbolischer Evidenz und Eingabekandidaten; `replayable=false` bis ein Prozess-Eingabeadapter sie auf tatsächliche Bytes abbildet |
+| **Audit** | `neverd audit <binary>` | Heap-Lebensdauerfehler und uninitialisierte lokale Stack-Reads |
+| **Hunt** | `neverd hunt <binary>` | Gefährliche Copy-Überläufe mit symbolischer Evidenz und Eingabekandidaten; `replayable=true` nur mit einem vollständigen `process-input-v1`-Plan |
 
 Die Engine nutzt NeverDs eigene symbolische Ausführung und den Bitvektor-Solver für Zeugen und Erreichbarkeit. Kein externer Solver, keine VM, kein Container.
 
@@ -18,6 +18,8 @@ Die Engine nutzt NeverDs eigene symbolische Ausführung und den Bitvektor-Solver
 ## Kerninvariante: geschlossen fehlschlagen
 
 Eine nicht geliftete Operation, ein Aufruf, dessen Argumente die ABI-Passage nicht zurückgewinnen konnte, ein unaufgelöstes indirektes Ziel oder ein erschöpftes Budget ergeben **UNKNOWN**, niemals SAFE. Ein Zielpuffer, dessen Kapazität nicht zurückgewonnen werden kann, ist UNKNOWN. Striktes Lifting bleibt unverändert; die Sicherheitsschicht legt nur konservative Urteile darauf.
+
+Aufrufeffekte folgen einer Closed-World-Semantik: Eine Zusammenfassung gilt nur, wenn ihre Vorbedingungen und alle relevanten Effekte bekannt sind. Ein unbekannter Effekt oder eine nur teilweise anwendbare Zusammenfassung bleibt UNKNOWN; die Lücke wird weder als wirkungslos noch als erfolgreicher Aufruf angenommen.
 
 ---
 
@@ -52,11 +54,13 @@ Ein statisch gelinktes, von DWARF benanntes `memcpy` berichtet `dwarf`; ein impo
 
 ## Senken- und Quellenkatalog
 
-Der Katalog ist eine konfigurierbare Tabelle, keine fest verdrahtete Menge. Jede **Senke** deklariert ihre Schwachstellenklasse, ihre Rolle (copy, format, alloc, free, realloc) und die relevanten Argumentslots (Ziel, Quelle, Länge, Kapazität). Jede **Quelle** benennt einen Anbieter angreiferbeeinflusster Eingabe.
+Der Katalog ist eine konfigurierbare Tabelle, keine fest verdrahtete Menge. Jede **Senke** deklariert ihre Schwachstellenklasse, ihre Rolle (copy, format, alloc, free, realloc) und die relevanten Argumentslots (Ziel, Quelle, Länge, Kapazität). Eine JSON-Senke der Art copy oder format liefert zusätzlich einen ausführbaren Aufrufeffekt. Jede **Quelle** benennt einen Anbieter angreiferbeeinflusster Eingabe.
 
 Die eingebauten Einträge stehen in [`SafetySinks.def`](../include/neverd/safety/SafetySinks.def) und [`SafetySources.def`](../include/neverd/safety/SafetySources.def); sie decken die übliche C-Laufzeit-Copy-Familie (`memcpy`/`memmove`/`strcpy`/`strcat`/`strncpy`/`gets`/…), gehärtete `_chk`-Varianten (explizite Zielschranke), Allokation und Freigabe (`malloc`/`calloc`/`realloc`/`free`, Operator `new`/`delete`) sowie optionale Win32-Heap-APIs. Eingabequellen umfassen POSIX (`getenv`, `read`, `recv`, `fgets`, `fread`, `scanf`, Programargumente) **und** Win32 (`GetCommandLineA/W`, `ReadFile`, `GetEnvironmentVariable*`). Ein PE-Hunt ist nicht auf POSIX-Eingaben beschränkt.
 
 Format-spezifische Schreibweisen fallen auf einen Eintrag: führende Unterstriche werden entfernt (`_malloc`, `___strcpy_chk`), gemangled `new`/`delete` über Aliase.
+
+Fehlt `effect` bei einer JSON-Senke der Art copy oder format, wird ihre Anwendbarkeit aus dem höchsten referenzierten Argumentslot abgeleitet. Eine copy-Senke verlangt dann genau diese Argumentzahl; eine format-Senke akzeptiert Aufrufe von dieser Mindestzahl bis zur variadischen Obergrenze. Ein optionales `effect`-Objekt kann mit `min_arity` und `max_arity` (oder `"variadic"`) ausdrücklich einen akzeptierten Argumentbereich festlegen, einschließlich zusätzlicher Wrapper-Argumente über die abgeleitete exakte copy-Arity hinaus; `min_arity` muss mindestens dem höchsten referenzierten Rollenslot plus eins entsprechen, während `formats` und `abis` die Anwendbarkeit einschränken. Stimmen Argumentzahl, Objektformat oder ABI des Aufrufs nicht überein, gilt keine Zusammenfassung und das Closed-World-Ergebnis bleibt UNKNOWN.
 
 Katalog per Spezifikationsdatei erweitern oder überschreiben:
 
@@ -66,9 +70,20 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 
 ```json
 { "sinks": [
-    { "name": "my_copy", "kind": "copy", "dst": 0, "src": 1, "len": 2 }
-] }
+    { "name": "my_copy", "kind": "copy", "dst": 0, "src": 1, "len": 2 },
+    { "name": "my_format", "kind": "format", "dst": 0, "fmt": 2,
+      "effect": { "min_arity": 3, "max_arity": "variadic",
+                  "formats": ["elf"], "abis": ["sysv"] } }
+  ],
+  "sources": [
+    { "name": "my_read", "out": 1, "return_tainted": true }
+  ]
+}
 ```
+
+Bei einer benutzerdefinierten Quelle sind `out` und `return_tainted` ausschließlich Metadaten für die Erkennung. Sie begründen keine ausführbaren Speicher-, Rückgabewert- oder Taint-Effekte. Dem aktuellen Quellschema fehlen die dafür nötigen typisierten Erfolgs-, Mutations-, Format- und ABI-Verträge; eine Analyse, die von einem solchen benutzerdefinierten Quelleffekt abhängt, bleibt daher UNKNOWN. Eingebaute Quellen sind davon nicht betroffen: Ihre typisierten, auf Anwendbarkeit geprüften Deskriptoren liefern weiterhin ausführbare Effekte.
+
+Eine unbegrenzte benutzerdefinierte Senke nur mit Zielargument wird nicht aus einem gleichnamigen Quelleintrag abgeleitet. Eine `gets`-artige benutzerdefinierte Senke muss `"unbounded": true` ausdrücklich setzen; derselbe Name im Quellenkatalog verleiht ihr keinen ausführbaren Effekt, und widersprüchliche Quell-/Längenfelder werden transaktional abgewiesen.
 
 ---
 
@@ -79,10 +94,14 @@ Für jede Copy-Senke ermittelt der Hunt die Zielkapazität — debug-deklarierte
 - **Konstante Länge** innerhalb einer exakten Kapazität ist SAFE. Ein konstanter Überlauf ist nur UNSAFE, wenn die Senke auf einem bestätigten Pfad erreichbar ist; andernfalls bleibt er UNKNOWN.
 - **Gehärtete** `_chk`-Kopien tragen eine Laufzeit-Zielschranke. Eine Zurückweisung oder eine nachweislich passende Schranke ist SAFE; ein möglicher Schreibzugriff über das Objekt hinaus ist UNSAFE; eine nicht rekonstruierte oder nicht entscheidende Schranke ist UNKNOWN.
 - **Beweisbar beschränkte** Länge (längenrückgebender Aufruf, Maske, Clamp) wird vor dem Solver mit Begründung zurückgezogen. SAFE gilt nur bei exakter Zielgröße; eine reine Regionsobergrenze bleibt UNKNOWN.
-- **Angreiferbeeinflusste** Länge bei bekannter Kapazität: Bitvektor-Solver. Ist eine Länge größer als die Kapazität erfüllbar, ist das Urteil UNSAFE; das Solver-Modell wird als symbolische Evidenz mit nicht abspielbaren Kandidaten (`replayable=false`) gemeldet, bis ein Prozess-Eingabeadapter verfügbar ist.
+- **Angreiferbeeinflusste** Länge bei bekannter Kapazität: Bitvektor-Solver. Ist eine Länge größer als die Kapazität erfüllbar, ist das Urteil UNSAFE. Kandidaten sind nur mit einem vollständigen `process-input-v1`-Plan abspielbar: zunächst exakte literale Umgebungswerte und höchstens die vom ersten unterstützten `read(0)`-Familienaufruf zurückgegebenen Standardeingabe-Bytes. argv-, Datei-, Netzwerk-, benutzerdefinierte oder mehrdeutige Eingaben bleiben mit Begründung nicht abspielbar.
 - Alles andere — unbekannte Länge oder unbekannte Kapazität — ist UNKNOWN.
 
 Jede zurückgewonnene Kapazität ist eine **obere Schranke** der wahren Objektgröße, daher ist ein bewiesener Überlauf niemals ein False Positive.
+
+### Formatierte Eingabe
+
+Für `scanf`/`fscanf` und ihre versionierten Schreibweisen ordnet ein lesbares konstantes Format jede nicht unterdrückte Konvertierung ihrem tatsächlichen variadischen Ausgabeargument zu. Unbegrenzte `%s`/`%[`-Ausgaben markieren spätere Stringverwendungen als Taint; numerische und Zeichenausgaben markieren Werte als Taint, die aus dem geschriebenen Objekt geladen werden, nicht aber den Wert des Ausgabezeigers selbst. `sscanf` propagiert diese Effekte nur, wenn seine Eingabezeichenfolge bereits vom Angreifer beeinflusst ist. Begrenzte Textausgaben wie `%Ns`/`%N[` propagieren Taint zusammen mit einer `MaxBytes`-Ausdehnung einschließlich Terminator; Wide-Character-Varianten berechnen diese Byteausdehnung mit der plattformspezifischen `wchar_t`-Breite. Unterdrückte Konvertierungen, überzählige Argumente, positionsabhängige oder nicht unterstützte Formate und `%n` bleiben UNKNOWN, statt erraten zu werden.
 
 ---
 
@@ -124,9 +143,11 @@ Dieselben Analysen stehen über die C-API (`neverd_session_audit_json` / `neverd
   "capacity": 16,
   "capacity_kind": "exact",
   "corroboration": "path predicate and overflow are jointly satisfiable",
-  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" }, "candidate_values": [{ "name": "copy_length", "value": "17" }, { "name": "argv[1]", "value": "16 bytes" }], "replayable": false, "symbolic_model": [{ "id": 0, "name": "copy_len", "width": 64, "value_hex": "0x11", "origin": "input" }] }
+  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" }, "candidate_values": [{ "name": "copy_length", "value": "17" }, { "name": "argv[1]", "value": "16 bytes" }], "replayable": false, "replay": { "adapter": "process-input-v1", "reason": "argv input is not supported by process-input-v1" }, "symbolic_model": [{ "id": 0, "name": "copy_len", "width": 64, "value_hex": "0x11", "origin": "input" }] }
 }
 ```
+
+`replayable` ist abgeleitete Evidenz, kein eigenständiges Versprechen: Es ist nur wahr, wenn `replay` einen vollständigen Eingabeplan für den Adapter `process-input-v1` enthält. Der Plan hält exakte Umgebungsbytes, gegebenenfalls die Bytefolge des ersten unterstützten `read(0)`-Familienaufrufs sowie Bindungen von Solver-Zuweisungs-IDs an diese Eingaben fest; andernfalls erklärt `replay.reason` den Grund. Die Felder sind additiv; die oberste `schema_version` bleibt `1`.
 
 ---
 
@@ -136,5 +157,5 @@ Dieselben Analysen stehen über die C-API (`neverd_session_audit_json` / `neverd
 - Eine längenbeschränkte Kopie wird vor dem Solver zurückgezogen und in `skipped` gezählt; exakte Kapazität kann SAFE beweisen, eine Obergrenze allein bleibt UNKNOWN.
 - Katalogisierte Wide-Character- und Append-Kopien bleiben UNKNOWN, bis Elementbreite und vorhandene Ziellänge rekonstruiert sind. Out-Parameter-Allokatoren und bedingter `realloc`-Besitz bleiben ebenfalls UNKNOWN, wenn der Handle-Übergang nicht beweisbar ist.
 - **P0** (diese Version, alle drei Formate): Senkenkatalog, Argument-Vorfilter, Copy-Überlauf-Hunt, Heap-Lebensdauer-Audit. Jeder Testhost führt sechs eingecheckte PE-, ELF- und Mach-O-Fixtures für x86-64 und AArch64 aus.
-- **P1**: Stack-/Global-Überlauf, uninitialisierte Reads, Formatstrings, reichere PDB-Stacktypen, weitere Plattform-Allokatoren.
+- **P1**: Stack-/Global-Überlauf, uninitialisierte lokale Reads und Formatstring-Prüfungen sind verfügbar; reichere PDB-Stacktypen und weitere Plattform-Allokatoren bleiben inkrementelle Abdeckung, fehlende exakte Zusammenfassungen bleiben UNKNOWN.
 - **P2**: per Patch eingefügte Laufzeitprüfungen, interprozedurale Angreifererreichbarkeit.

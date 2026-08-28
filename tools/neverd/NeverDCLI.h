@@ -28,6 +28,7 @@
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Error.h"
 
 #include <cstdint>
 #include <optional>
@@ -100,6 +101,11 @@ outputLanguageDisplayName(neverd_output_language_t Language) {
 /// forms are interpreted as hexadecimal, the convention shared by every
 /// neverd subcommand.
 std::optional<uint64_t> parseAddrArg(llvm::StringRef Ref);
+
+/// Apply the signature source selected by --auto, --sig-file, or --sig-dir.
+/// Returns an error when no source was selected or matching failed.
+llvm::Expected<int> applyRequestedSignatures(neverd_session_t Sess,
+                                             const char *Argv0);
 
 //===----------------------------------------------------------------------===//
 // Subcommands (defined in NeverDCLIOptions.cpp)

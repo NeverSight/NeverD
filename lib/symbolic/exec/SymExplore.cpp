@@ -74,6 +74,8 @@ struct Frontier {
   std::vector<int> Blocks;
   std::vector<SymExecutedOp> ExecutedOps;
   std::vector<SymCallResult> CallResults;
+  /// Number of times each exact LowIR call has executed on this path.
+  llvm::DenseMap<uint64_t, unsigned> CallInvocations;
   /// How often this path has entered each block, which is what the loop bound
   /// is counted against.  Per path, because two paths through a loop have
   /// nothing to say about each other.
@@ -102,6 +104,18 @@ struct Frontier {
   unsigned ConcreteBranches = 0;
   unsigned MergedPaths = 0;
 };
+
+bool sameCallInvocations(const llvm::DenseMap<uint64_t, unsigned> &Left,
+                         const llvm::DenseMap<uint64_t, unsigned> &Right) {
+  if (Left.size() != Right.size())
+    return false;
+  for (const auto &Entry : Left) {
+    auto It = Right.find(Entry.first);
+    if (It == Right.end() || It->second != Entry.second)
+      return false;
+  }
+  return true;
+}
 
 bool changesControlFlow(NdOp Opcode) {
   switch (Opcode) {
@@ -581,6 +595,7 @@ SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,
   auto pauseAtJoin = [&](Frontier &&F) {
     for (Frontier &Waiter : Waiting) {
       if (Waiter.BlockId != F.BlockId || Waiter.NextOp != F.NextOp ||
+          !sameCallInvocations(Waiter.CallInvocations, F.CallInvocations) ||
           !Waiter.State.mergeIdentical(F.State))
         continue;
       Waiter.Constraints =
@@ -678,7 +693,26 @@ SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,
           break;
         }
         ++ExecutedSteps;
-        Result = Exec.step(Op);
+        const size_t FirstEffectConstraint = Exec.pathConstraints().size();
+        std::optional<SymCallEffect> CallEffect;
+        if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
+            Opts.CallEffects) {
+          const uint64_t OccurrenceKey =
+              (uint64_t(uint32_t(Current.BlockId)) << 32) |
+              uint64_t(uint32_t(OpIndex));
+          const unsigned Invocation = Current.CallInvocations[OccurrenceKey]++;
+          CallEffect = Opts.CallEffects(
+              Ctx, Current.State, Op,
+              {Op.Addr, Op.Seq, Current.BlockId, OpIndex, Invocation});
+        }
+        Result = Exec.step(Op, CallEffect ? &*CallEffect : nullptr);
+        for (size_t ConstraintIndex = FirstEffectConstraint;
+             ConstraintIndex < Exec.pathConstraints().size(); ++ConstraintIndex)
+          if (!addConstraint(Ctx, Current,
+                             Exec.pathConstraints()[ConstraintIndex])) {
+            Current.Infeasible = true;
+            break;
+          }
         Current.ExecutedOps.push_back(
             {Current.BlockId, OpIndex, Op.Addr, Op.Seq, Op.Opcode});
         if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
@@ -736,6 +770,10 @@ SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,
       Current.CallHavocs += Exec.callHavocCount();
       Current.MemoryHavocs += Exec.memoryHavocCount();
       UnmodelledOps += Exec.unmodelledCount();
+      if (Current.Infeasible) {
+        Record(std::move(Current), PathOutcome::Infeasible);
+        break;
+      }
       if (OutOfSteps) {
         Record(std::move(Current), PathOutcome::StepBudget);
         break;

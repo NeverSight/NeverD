@@ -6,6 +6,8 @@
 
 #include "neverd/safety/Safety.h"
 
+#include "ProcessInputReplay.h"
+
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImageModel.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -370,6 +372,17 @@ std::string neverd::safety::toJson(const SafetyReport &Report, bool Pretty) {
   using namespace llvm;
 
   auto vaHex = [](va_t Addr) { return "0x" + utohexstr(Addr); };
+  auto bytesHex = [](const std::vector<uint8_t> &Bytes) {
+    static constexpr char Digits[] = "0123456789abcdef";
+    std::string Result;
+    Result.reserve(2 + Bytes.size() * 2);
+    Result = "0x";
+    for (uint8_t Byte : Bytes) {
+      Result.push_back(Digits[Byte >> 4]);
+      Result.push_back(Digits[Byte & 0x0f]);
+    }
+    return Result;
+  };
 
   json::Array Findings;
   for (const Finding &F : Report.Findings) {
@@ -391,7 +404,6 @@ std::string neverd::safety::toJson(const SafetyReport &Report, bool Pretty) {
       }
       Ev["concrete_input"] = std::move(Concrete);
       Ev["candidate_values"] = std::move(CandidateValues);
-      Ev["replayable"] = F.WitnessReplayable;
     }
     if (!F.SymbolicModel.empty()) {
       json::Array Model;
@@ -403,6 +415,53 @@ std::string neverd::safety::toJson(const SafetyReport &Report, bool Pretty) {
                          {"value_hex", Assignment.ValueHex},
                          {"origin", Assignment.Fresh ? "fresh" : "input"}});
       Ev["symbolic_model"] = std::move(Model);
+    }
+    if (!F.Witness.empty() || !F.SymbolicModel.empty() || F.Replay ||
+        !F.ReplayReason.empty()) {
+      std::optional<std::string> ReplayError;
+      if (F.Replay)
+        ReplayError = validateProcessInputReplay(*F.Replay, F.SymbolicModel);
+      const bool Replayable = F.Replay.has_value() && !ReplayError;
+      Ev["replayable"] = Replayable;
+
+      json::Object Replay{{"adapter", "process-input-v1"}};
+      if (Replayable) {
+        json::Array Inputs;
+        for (const ReplayInput &Input : F.Replay->Inputs) {
+          json::Object Serialized{
+              {"kind", toString(Input.Kind)},
+              {"call_va", vaHex(Input.CallVA)},
+              {"seq", Input.Seq},
+              {"invocation", int64_t(Input.Invocation)},
+              {"offset", int64_t(Input.Offset)},
+              {"bytes_hex", bytesHex(Input.Bytes)},
+              {"eof_after", Input.EOFAfter},
+              {"terminator_implicit", Input.TerminatorImplicit}};
+          if (Input.Kind == ReplayInputKind::Environment)
+            Serialized["name"] = Input.Name;
+          if (!Input.Bindings.empty()) {
+            json::Array Bindings;
+            for (const ReplayBinding &Binding : Input.Bindings)
+              Bindings.push_back(
+                  json::Object{{"assignment_id", int64_t(Binding.AssignmentId)},
+                               {"role", toString(Binding.Role)},
+                               {"offset", int64_t(Binding.ByteOffset)}});
+            Serialized["bindings"] = std::move(Bindings);
+          }
+          Inputs.push_back(std::move(Serialized));
+        }
+        Replay["inputs"] = std::move(Inputs);
+      } else if (ReplayError) {
+        Replay["reason"] = *ReplayError;
+      } else if (!F.ReplayReason.empty()) {
+        Replay["reason"] = F.ReplayReason;
+      } else if (!F.SymbolicModel.empty()) {
+        Replay["reason"] =
+            "symbolic query variables lack explicit process-input bindings";
+      } else {
+        Replay["reason"] = "no exact process-input replay plan";
+      }
+      Ev["replay"] = std::move(Replay);
     }
 
     json::Object O;

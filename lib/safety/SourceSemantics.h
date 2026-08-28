@@ -88,7 +88,10 @@ struct FormattedOutput {
 struct BoundedTextOutput {
   int ArgIndex = -1;
   uint32_t RequiredAssignments = 0;
+  /// Maximum number of converted characters, excluding the terminator.
   uint64_t MaxChars = 0;
+  /// Maximum destination bytes written, including the complete terminator.
+  uint64_t MaxBytes = 0;
 };
 
 struct FormattedSourceOutputs {
@@ -331,16 +334,30 @@ parseScanfOutputs(llvm::StringRef Format, unsigned FixedCount, size_t ArgCount,
         Outputs.ScalarArgs.push_back(
             {NextArg, AssignmentCount,
              static_cast<uint16_t>(Characters * UnitBytes)});
-    } else if ((Conversion == 's' || IsScanSet) && Length != LengthKind::None)
-      Outputs.UnboundedTextArgs.push_back({NextArg, AssignmentCount});
-    else if ((Conversion == 's' || IsScanSet) && !HasWidth &&
-             Length == LengthKind::None)
+    } else if ((Conversion == 's' || IsScanSet) && Length != LengthKind::None) {
+      if (!HasWidth) {
+        Outputs.UnboundedTextArgs.push_back({NextArg, AssignmentCount});
+      } else {
+        if (Length != LengthKind::Long || WideCharBytes == 0 ||
+            Width == std::numeric_limits<uint64_t>::max())
+          return std::nullopt;
+        const uint64_t CharactersWithTerminator = Width + 1;
+        if (CharactersWithTerminator >
+            std::numeric_limits<uint64_t>::max() / WideCharBytes)
+          return std::nullopt;
+        Outputs.BoundedTextArgs.push_back(
+            {NextArg, AssignmentCount, Width,
+             CharactersWithTerminator * WideCharBytes});
+      }
+    } else if ((Conversion == 's' || IsScanSet) && !HasWidth &&
+               Length == LengthKind::None)
       Outputs.UnboundedTextArgs.push_back({NextArg, AssignmentCount});
     else if ((Conversion == 's' || IsScanSet) && HasWidth &&
              Length == LengthKind::None) {
       if (Width == std::numeric_limits<uint64_t>::max())
         return std::nullopt;
-      Outputs.BoundedTextArgs.push_back({NextArg, AssignmentCount, Width});
+      Outputs.BoundedTextArgs.push_back(
+          {NextArg, AssignmentCount, Width, Width + 1});
     } else if (Conversion != 's' && Conversion != 'n' && !IsScanSet)
       Outputs.ScalarArgs.push_back({NextArg, AssignmentCount, scalarBytes()});
     ++NextArg;

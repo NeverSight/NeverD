@@ -1,0 +1,406 @@
+//===- SafetyCallEffects.def - Exact external-call summaries -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SAFETY_CALL_EFFECT(NAME, FAMILY, CAPABILITIES, FORMATS, ABIS, MIN, MAX)
+//
+// NAME is a string literal in SinkCatalog-normalized form. MAX may be
+// CallEffectDescriptor::VariadicArity. Unconstrained format/ABI fields mean
+// that the property is platform-independent. A configured discovery entry
+// absent from this table has NoEffect.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SAFETY_CALL_EFFECT
+#define SAFETY_CALL_EFFECT(NAME, FAMILY, CAPABILITIES, FORMATS, ABIS, MIN, MAX)
+#endif
+
+#define SAFETY_STRING_EFFECT(NAME, FAMILY, ARITY)                              \
+  SAFETY_CALL_EFFECT(                                                         \
+      NAME, FAMILY,                                                           \
+      CallEffectCapability::Return | CallEffectCapability::ModRef |           \
+          CallEffectCapability::StringExtent | CallEffectCapability::Capture, \
+      CallEffectFormat::Unconstrained, CallEffectABI::Unconstrained, ARITY,   \
+      ARITY)
+
+SAFETY_STRING_EFFECT("strlen", StringLength, 1)
+SAFETY_STRING_EFFECT("wcslen", StringLength, 1)
+SAFETY_STRING_EFFECT("strnlen", BoundedStringLength, 2)
+SAFETY_STRING_EFFECT("strnlen_s", BoundedStringLength, 2)
+SAFETY_STRING_EFFECT("wcsnlen", BoundedStringLength, 2)
+
+#undef SAFETY_STRING_EFFECT
+
+#define SAFETY_INPUT_RETURN(NAME, MIN, MAX)                                    \
+  SAFETY_CALL_EFFECT(                                                         \
+      NAME, Input,                                                            \
+      CallEffectCapability::Return | CallEffectCapability::Taint |            \
+          CallEffectCapability::Capture,                                      \
+      CallEffectFormat::Unconstrained, CallEffectABI::Unconstrained, MIN, MAX)
+#define SAFETY_ENVIRONMENT_RETURN(NAME, MIN, MAX)                              \
+  SAFETY_CALL_EFFECT(                                                         \
+      NAME, Input,                                                            \
+      CallEffectCapability::Return | CallEffectCapability::Taint |            \
+          CallEffectCapability::Capture |                                     \
+          CallEffectCapability::LiteralEnvironmentReplay,                     \
+      CallEffectFormat::Unconstrained, CallEffectABI::Unconstrained, MIN, MAX)
+#define SAFETY_DESCRIPTOR_INPUT_BUFFER(NAME, MIN, MAX)                         \
+  SAFETY_CALL_EFFECT(                                                         \
+      NAME, Input,                                                            \
+      CallEffectCapability::Return | CallEffectCapability::ModRef |           \
+          CallEffectCapability::Taint | CallEffectCapability::Capture |       \
+          CallEffectCapability::MayConsumeStandardInput |                     \
+          CallEffectCapability::DescriptorZeroIsStandardInput,                \
+      CallEffectFormat::Unconstrained, CallEffectABI::Unconstrained, MIN, MAX)
+#define SAFETY_REPLAYABLE_DESCRIPTOR_INPUT_BUFFER(NAME, MIN, MAX)              \
+  SAFETY_CALL_EFFECT(                                                         \
+      NAME, Input,                                                            \
+      CallEffectCapability::Return | CallEffectCapability::ModRef |           \
+          CallEffectCapability::Taint | CallEffectCapability::Capture |       \
+          CallEffectCapability::MayConsumeStandardInput |                     \
+          CallEffectCapability::DescriptorZeroIsStandardInput |               \
+          CallEffectCapability::ExactStandardInputReplay,                     \
+      CallEffectFormat::Unconstrained, CallEffectABI::Unconstrained, MIN, MAX)
+#define SAFETY_STANDARD_INPUT_BUFFER(NAME, MIN, MAX)                           \
+  SAFETY_CALL_EFFECT(                                                         \
+      NAME, Input,                                                            \
+      CallEffectCapability::Return | CallEffectCapability::ModRef |           \
+          CallEffectCapability::Taint | CallEffectCapability::Capture |       \
+          CallEffectCapability::MayConsumeStandardInput,                      \
+      CallEffectFormat::Unconstrained, CallEffectABI::Unconstrained, MIN, MAX)
+#define SAFETY_FORMATTED_INPUT(NAME, MIN)                                      \
+  SAFETY_CALL_EFFECT(                                                         \
+      NAME, FormattedInput,                                                   \
+      CallEffectCapability::Return | CallEffectCapability::ModRef |           \
+          CallEffectCapability::Taint | CallEffectCapability::Capture,        \
+      CallEffectFormat::Unconstrained, CallEffectABI::Unconstrained, MIN,     \
+      CallEffectDescriptor::VariadicArity)
+#define SAFETY_STANDARD_FORMATTED_INPUT(NAME, MIN)                             \
+  SAFETY_CALL_EFFECT(                                                         \
+      NAME, FormattedInput,                                                   \
+      CallEffectCapability::Return | CallEffectCapability::ModRef |           \
+          CallEffectCapability::Taint | CallEffectCapability::Capture |       \
+          CallEffectCapability::MayConsumeStandardInput,                      \
+      CallEffectFormat::Unconstrained, CallEffectABI::Unconstrained, MIN,     \
+      CallEffectDescriptor::VariadicArity)
+
+SAFETY_ENVIRONMENT_RETURN("getenv", 1, 1)
+SAFETY_ENVIRONMENT_RETURN("secure_getenv", 1, 1)
+SAFETY_REPLAYABLE_DESCRIPTOR_INPUT_BUFFER("read", 3, 3)
+SAFETY_DESCRIPTOR_INPUT_BUFFER("pread", 4, 4)
+SAFETY_REPLAYABLE_DESCRIPTOR_INPUT_BUFFER("read_chk", 4, 4)
+SAFETY_DESCRIPTOR_INPUT_BUFFER("pread_chk", 5, 5)
+SAFETY_DESCRIPTOR_INPUT_BUFFER("recv", 4, 4)
+SAFETY_DESCRIPTOR_INPUT_BUFFER("recvfrom", 6, 6)
+SAFETY_DESCRIPTOR_INPUT_BUFFER("recv_chk", 5, 5)
+SAFETY_DESCRIPTOR_INPUT_BUFFER("recvfrom_chk", 7, 7)
+SAFETY_STANDARD_INPUT_BUFFER("fgets", 3, 3)
+SAFETY_STANDARD_INPUT_BUFFER("fread", 4, 4)
+SAFETY_STANDARD_INPUT_BUFFER("fgets_unlocked", 3, 3)
+SAFETY_STANDARD_INPUT_BUFFER("fread_unlocked", 4, 4)
+SAFETY_STANDARD_INPUT_BUFFER("fgets_chk", 4, 4)
+SAFETY_STANDARD_INPUT_BUFFER("fread_chk", 5, 5)
+SAFETY_STANDARD_INPUT_BUFFER("fgets_unlocked_chk", 4, 4)
+SAFETY_STANDARD_INPUT_BUFFER("fread_unlocked_chk", 5, 5)
+SAFETY_STANDARD_INPUT_BUFFER("gets", 1, 1)
+SAFETY_STANDARD_FORMATTED_INPUT("scanf", 1)
+SAFETY_STANDARD_FORMATTED_INPUT("fscanf", 2)
+SAFETY_FORMATTED_INPUT("sscanf", 2)
+SAFETY_STANDARD_FORMATTED_INPUT("isoc99_scanf", 1)
+SAFETY_STANDARD_FORMATTED_INPUT("isoc99_fscanf", 2)
+SAFETY_FORMATTED_INPUT("isoc99_sscanf", 2)
+SAFETY_STANDARD_FORMATTED_INPUT("isoc23_scanf", 1)
+SAFETY_STANDARD_FORMATTED_INPUT("isoc23_fscanf", 2)
+SAFETY_FORMATTED_INPUT("isoc23_sscanf", 2)
+SAFETY_INPUT_RETURN("argv", 0, 0)
+
+#undef SAFETY_STANDARD_FORMATTED_INPUT
+#undef SAFETY_FORMATTED_INPUT
+#undef SAFETY_STANDARD_INPUT_BUFFER
+#undef SAFETY_REPLAYABLE_DESCRIPTOR_INPUT_BUFFER
+#undef SAFETY_DESCRIPTOR_INPUT_BUFFER
+#undef SAFETY_ENVIRONMENT_RETURN
+#undef SAFETY_INPUT_RETURN
+
+#define SAFETY_WINDOWS_INPUT(NAME, CAPS, ARITY)                               \
+  SAFETY_CALL_EFFECT(NAME, Input, CAPS, CallEffectFormat::COFF,               \
+                     CallEffectABI::Microsoft, ARITY, ARITY)
+
+SAFETY_WINDOWS_INPUT("GetCommandLineA",
+                     CallEffectCapability::Return |
+                         CallEffectCapability::Taint |
+                         CallEffectCapability::Capture,
+                     0)
+SAFETY_WINDOWS_INPUT("GetCommandLineW",
+                     CallEffectCapability::Return |
+                         CallEffectCapability::Taint |
+                         CallEffectCapability::Capture,
+                     0)
+SAFETY_WINDOWS_INPUT("ReadFile",
+                     CallEffectCapability::Return |
+                         CallEffectCapability::ModRef |
+                         CallEffectCapability::Taint |
+                         CallEffectCapability::Capture |
+                         CallEffectCapability::MayConsumeStandardInput,
+                     5)
+SAFETY_WINDOWS_INPUT("GetEnvironmentVariableA",
+                     CallEffectCapability::Return |
+                         CallEffectCapability::ModRef |
+                         CallEffectCapability::Taint |
+                         CallEffectCapability::Capture,
+                     3)
+SAFETY_WINDOWS_INPUT("GetEnvironmentVariableW",
+                     CallEffectCapability::Return |
+                         CallEffectCapability::ModRef |
+                         CallEffectCapability::Taint |
+                         CallEffectCapability::Capture,
+                     3)
+
+#undef SAFETY_WINDOWS_INPUT
+
+#define SAFETY_COPY_EFFECT(NAME, MIN, MAX)                                     \
+  SAFETY_CALL_EFFECT(                                                         \
+      NAME, Copy,                                                             \
+      CallEffectCapability::Return | CallEffectCapability::ModRef |           \
+          CallEffectCapability::Capture,                                      \
+      CallEffectFormat::Unconstrained, CallEffectABI::Unconstrained, MIN, MAX)
+#define SAFETY_FORMAT_EFFECT(NAME, MIN)                                        \
+  SAFETY_CALL_EFFECT(                                                         \
+      NAME, Format,                                                           \
+      CallEffectCapability::Return | CallEffectCapability::ModRef |           \
+          CallEffectCapability::Capture,                                      \
+      CallEffectFormat::Unconstrained, CallEffectABI::Unconstrained, MIN,     \
+      CallEffectDescriptor::VariadicArity)
+
+SAFETY_COPY_EFFECT("memcpy", 3, 3)
+SAFETY_COPY_EFFECT("aeabi_memcpy", 3, 3)
+SAFETY_COPY_EFFECT("aeabi_memcpy4", 3, 3)
+SAFETY_COPY_EFFECT("aeabi_memcpy8", 3, 3)
+SAFETY_COPY_EFFECT("memmove", 3, 3)
+SAFETY_COPY_EFFECT("aeabi_memmove", 3, 3)
+SAFETY_COPY_EFFECT("aeabi_memmove4", 3, 3)
+SAFETY_COPY_EFFECT("aeabi_memmove8", 3, 3)
+SAFETY_COPY_EFFECT("wmemcpy", 3, 3)
+SAFETY_COPY_EFFECT("wmemmove", 3, 3)
+SAFETY_COPY_EFFECT("memset", 3, 3)
+SAFETY_COPY_EFFECT("bzero", 2, 2)
+SAFETY_COPY_EFFECT("aeabi_memset", 3, 3)
+SAFETY_COPY_EFFECT("aeabi_memset4", 3, 3)
+SAFETY_COPY_EFFECT("aeabi_memset8", 3, 3)
+SAFETY_COPY_EFFECT("aeabi_memclr", 2, 2)
+SAFETY_COPY_EFFECT("aeabi_memclr4", 2, 2)
+SAFETY_COPY_EFFECT("aeabi_memclr8", 2, 2)
+SAFETY_COPY_EFFECT("bcopy", 3, 3)
+SAFETY_COPY_EFFECT("strcpy", 2, 2)
+SAFETY_COPY_EFFECT("stpcpy", 2, 2)
+SAFETY_COPY_EFFECT("strcat", 2, 2)
+SAFETY_COPY_EFFECT("wcscpy", 2, 2)
+SAFETY_COPY_EFFECT("wcscat", 2, 2)
+SAFETY_COPY_EFFECT("strncpy", 3, 3)
+SAFETY_COPY_EFFECT("strncat", 3, 3)
+SAFETY_COPY_EFFECT("strlcpy", 3, 3)
+SAFETY_COPY_EFFECT("strlcat", 3, 3)
+SAFETY_COPY_EFFECT("memcpy_chk", 4, 4)
+SAFETY_COPY_EFFECT("memmove_chk", 4, 4)
+SAFETY_COPY_EFFECT("memset_chk", 4, 4)
+SAFETY_COPY_EFFECT("strcpy_chk", 3, 3)
+SAFETY_COPY_EFFECT("stpcpy_chk", 3, 3)
+SAFETY_COPY_EFFECT("strcat_chk", 3, 3)
+SAFETY_COPY_EFFECT("strncpy_chk", 4, 4)
+SAFETY_COPY_EFFECT("strncat_chk", 4, 4)
+
+SAFETY_FORMAT_EFFECT("printf", 1)
+SAFETY_FORMAT_EFFECT("wprintf", 1)
+SAFETY_FORMAT_EFFECT("fprintf", 2)
+SAFETY_FORMAT_EFFECT("dprintf", 2)
+SAFETY_FORMAT_EFFECT("sprintf", 2)
+SAFETY_FORMAT_EFFECT("vsprintf", 3)
+SAFETY_FORMAT_EFFECT("syslog", 2)
+SAFETY_FORMAT_EFFECT("snprintf", 3)
+SAFETY_FORMAT_EFFECT("vsnprintf", 4)
+SAFETY_FORMAT_EFFECT("sprintf_chk", 4)
+SAFETY_FORMAT_EFFECT("snprintf_chk", 5)
+
+#undef SAFETY_FORMAT_EFFECT
+#undef SAFETY_COPY_EFFECT
+
+#define SAFETY_ALLOC_EFFECT(NAME, MIN, MAX)                                    \
+  SAFETY_CALL_EFFECT(                                                         \
+      NAME, Allocation,                                                       \
+      CallEffectCapability::Return | CallEffectCapability::Allocation |       \
+          CallEffectCapability::Capture,                                      \
+      CallEffectFormat::Unconstrained, CallEffectABI::Unconstrained, MIN, MAX)
+#define SAFETY_RELEASE_EFFECT(NAME, MIN, MAX)                                  \
+  SAFETY_CALL_EFFECT(                                                         \
+      NAME, Release,                                                          \
+      CallEffectCapability::ModRef | CallEffectCapability::Release |          \
+          CallEffectCapability::Capture,                                      \
+      CallEffectFormat::Unconstrained, CallEffectABI::Unconstrained, MIN, MAX)
+
+SAFETY_ALLOC_EFFECT("malloc", 1, 1)
+SAFETY_ALLOC_EFFECT("valloc", 1, 1)
+SAFETY_ALLOC_EFFECT("aligned_alloc", 2, 2)
+SAFETY_ALLOC_EFFECT("calloc", 2, 2)
+SAFETY_ALLOC_EFFECT("strdup", 1, 1)
+SAFETY_ALLOC_EFFECT("strndup", 2, 2)
+SAFETY_ALLOC_EFFECT("wcsdup", 1, 1)
+SAFETY_ALLOC_EFFECT("Znwm", 1, 1)
+SAFETY_ALLOC_EFFECT("Znwj", 1, 1)
+SAFETY_ALLOC_EFFECT("ZnwmSt11align_val_t", 2, 2)
+SAFETY_ALLOC_EFFECT("ZnwjSt11align_val_t", 2, 2)
+SAFETY_ALLOC_EFFECT("ZnwmRKSt9nothrow_t", 2, 2)
+SAFETY_ALLOC_EFFECT("ZnwjRKSt9nothrow_t", 2, 2)
+SAFETY_ALLOC_EFFECT("ZnwmSt11align_val_tRKSt9nothrow_t", 3, 3)
+SAFETY_ALLOC_EFFECT("ZnwjSt11align_val_tRKSt9nothrow_t", 3, 3)
+SAFETY_ALLOC_EFFECT("Znam", 1, 1)
+SAFETY_ALLOC_EFFECT("Znaj", 1, 1)
+SAFETY_ALLOC_EFFECT("ZnamSt11align_val_t", 2, 2)
+SAFETY_ALLOC_EFFECT("ZnajSt11align_val_t", 2, 2)
+SAFETY_ALLOC_EFFECT("ZnamRKSt9nothrow_t", 2, 2)
+SAFETY_ALLOC_EFFECT("ZnajRKSt9nothrow_t", 2, 2)
+SAFETY_ALLOC_EFFECT("ZnamSt11align_val_tRKSt9nothrow_t", 3, 3)
+SAFETY_ALLOC_EFFECT("ZnajSt11align_val_tRKSt9nothrow_t", 3, 3)
+SAFETY_ALLOC_EFFECT("??2@YAPEAX_K@Z", 1, 1)
+SAFETY_ALLOC_EFFECT("??2@YAPEAX_KW4align_val_t@std@@@Z", 2, 2)
+SAFETY_ALLOC_EFFECT("??2@YAPEAX_KAEBUnothrow_t@std@@@Z", 2, 2)
+SAFETY_ALLOC_EFFECT("??2@YAPEAX_KW4align_val_t@std@@AEBUnothrow_t@1@@Z", 3,
+                    3)
+SAFETY_ALLOC_EFFECT("??2@YAPAXI@Z", 1, 1)
+SAFETY_ALLOC_EFFECT("??2@YAPAXIW4align_val_t@std@@@Z", 2, 2)
+SAFETY_ALLOC_EFFECT("??2@YAPAXIABUnothrow_t@std@@@Z", 2, 2)
+SAFETY_ALLOC_EFFECT("??2@YAPAXIW4align_val_t@std@@ABUnothrow_t@1@@Z", 3, 3)
+SAFETY_ALLOC_EFFECT("??_U@YAPEAX_K@Z", 1, 1)
+SAFETY_ALLOC_EFFECT("??_U@YAPEAX_KW4align_val_t@std@@@Z", 2, 2)
+SAFETY_ALLOC_EFFECT("??_U@YAPEAX_KAEBUnothrow_t@std@@@Z", 2, 2)
+SAFETY_ALLOC_EFFECT("??_U@YAPEAX_KW4align_val_t@std@@AEBUnothrow_t@1@@Z", 3,
+                    3)
+SAFETY_ALLOC_EFFECT("??_U@YAPAXI@Z", 1, 1)
+SAFETY_ALLOC_EFFECT("??_U@YAPAXIW4align_val_t@std@@@Z", 2, 2)
+SAFETY_ALLOC_EFFECT("??_U@YAPAXIABUnothrow_t@std@@@Z", 2, 2)
+SAFETY_ALLOC_EFFECT("??_U@YAPAXIW4align_val_t@std@@ABUnothrow_t@1@@Z", 3, 3)
+SAFETY_CALL_EFFECT("posix_memalign", Allocation,
+                   CallEffectCapability::Return |
+                       CallEffectCapability::ModRef |
+                       CallEffectCapability::Allocation |
+                       CallEffectCapability::Capture,
+                   CallEffectFormat::Unconstrained,
+                   CallEffectABI::Unconstrained, 3, 3)
+SAFETY_CALL_EFFECT("realloc", Reallocation,
+                   CallEffectCapability::Return |
+                       CallEffectCapability::ModRef |
+                       CallEffectCapability::Allocation |
+                       CallEffectCapability::Release |
+                       CallEffectCapability::Capture,
+                   CallEffectFormat::Unconstrained,
+                   CallEffectABI::Unconstrained, 2, 2)
+SAFETY_CALL_EFFECT("reallocf", Reallocation,
+                   CallEffectCapability::Return |
+                       CallEffectCapability::ModRef |
+                       CallEffectCapability::Allocation |
+                       CallEffectCapability::Release |
+                       CallEffectCapability::Capture,
+                   CallEffectFormat::Unconstrained,
+                   CallEffectABI::Unconstrained, 2, 2)
+SAFETY_RELEASE_EFFECT("free", 1, 1)
+SAFETY_RELEASE_EFFECT("ZdlPv", 1, 1)
+SAFETY_RELEASE_EFFECT("ZdlPvm", 2, 2)
+SAFETY_RELEASE_EFFECT("ZdlPvj", 2, 2)
+SAFETY_RELEASE_EFFECT("ZdlPvSt11align_val_t", 2, 2)
+SAFETY_RELEASE_EFFECT("ZdlPvmSt11align_val_t", 3, 3)
+SAFETY_RELEASE_EFFECT("ZdlPvjSt11align_val_t", 3, 3)
+SAFETY_RELEASE_EFFECT("ZdlPvRKSt9nothrow_t", 2, 2)
+SAFETY_RELEASE_EFFECT("ZdlPvSt11align_val_tRKSt9nothrow_t", 3, 3)
+SAFETY_RELEASE_EFFECT("ZdaPv", 1, 1)
+SAFETY_RELEASE_EFFECT("ZdaPvm", 2, 2)
+SAFETY_RELEASE_EFFECT("ZdaPvj", 2, 2)
+SAFETY_RELEASE_EFFECT("ZdaPvSt11align_val_t", 2, 2)
+SAFETY_RELEASE_EFFECT("ZdaPvmSt11align_val_t", 3, 3)
+SAFETY_RELEASE_EFFECT("ZdaPvjSt11align_val_t", 3, 3)
+SAFETY_RELEASE_EFFECT("ZdaPvRKSt9nothrow_t", 2, 2)
+SAFETY_RELEASE_EFFECT("ZdaPvSt11align_val_tRKSt9nothrow_t", 3, 3)
+SAFETY_RELEASE_EFFECT("??3@YAXPEAX@Z", 1, 1)
+SAFETY_RELEASE_EFFECT("??3@YAXPEAX_K@Z", 2, 2)
+SAFETY_RELEASE_EFFECT("??3@YAXPEAXW4align_val_t@std@@@Z", 2, 2)
+SAFETY_RELEASE_EFFECT("??3@YAXPEAX_KW4align_val_t@std@@@Z", 3, 3)
+SAFETY_RELEASE_EFFECT("??3@YAXPEAXAEBUnothrow_t@std@@@Z", 2, 2)
+SAFETY_RELEASE_EFFECT("??3@YAXPEAXW4align_val_t@std@@AEBUnothrow_t@1@@Z", 3,
+                      3)
+SAFETY_RELEASE_EFFECT("??3@YAXPAX@Z", 1, 1)
+SAFETY_RELEASE_EFFECT("??3@YAXPAXI@Z", 2, 2)
+SAFETY_RELEASE_EFFECT("??3@YAXPAXW4align_val_t@std@@@Z", 2, 2)
+SAFETY_RELEASE_EFFECT("??3@YAXPAXIW4align_val_t@std@@@Z", 3, 3)
+SAFETY_RELEASE_EFFECT("??3@YAXPAXABUnothrow_t@std@@@Z", 2, 2)
+SAFETY_RELEASE_EFFECT("??3@YAXPAXW4align_val_t@std@@ABUnothrow_t@1@@Z", 3, 3)
+SAFETY_RELEASE_EFFECT("??_V@YAXPEAX@Z", 1, 1)
+SAFETY_RELEASE_EFFECT("??_V@YAXPEAX_K@Z", 2, 2)
+SAFETY_RELEASE_EFFECT("??_V@YAXPEAXW4align_val_t@std@@@Z", 2, 2)
+SAFETY_RELEASE_EFFECT("??_V@YAXPEAX_KW4align_val_t@std@@@Z", 3, 3)
+SAFETY_RELEASE_EFFECT("??_V@YAXPEAXAEBUnothrow_t@std@@@Z", 2, 2)
+SAFETY_RELEASE_EFFECT("??_V@YAXPEAXW4align_val_t@std@@AEBUnothrow_t@1@@Z", 3,
+                      3)
+SAFETY_RELEASE_EFFECT("??_V@YAXPAX@Z", 1, 1)
+SAFETY_RELEASE_EFFECT("??_V@YAXPAXI@Z", 2, 2)
+SAFETY_RELEASE_EFFECT("??_V@YAXPAXW4align_val_t@std@@@Z", 2, 2)
+SAFETY_RELEASE_EFFECT("??_V@YAXPAXIW4align_val_t@std@@@Z", 3, 3)
+SAFETY_RELEASE_EFFECT("??_V@YAXPAXABUnothrow_t@std@@@Z", 2, 2)
+SAFETY_RELEASE_EFFECT("??_V@YAXPAXW4align_val_t@std@@ABUnothrow_t@1@@Z", 3,
+                      3)
+SAFETY_CALL_EFFECT("alloca", StackAllocation,
+                   CallEffectCapability::Return |
+                       CallEffectCapability::Allocation |
+                       CallEffectCapability::Capture,
+                   CallEffectFormat::Unconstrained,
+                   CallEffectABI::Unconstrained, 1, 1)
+SAFETY_CALL_EFFECT("builtin_alloca", StackAllocation,
+                   CallEffectCapability::Return |
+                       CallEffectCapability::Allocation |
+                       CallEffectCapability::Capture,
+                   CallEffectFormat::Unconstrained,
+                   CallEffectABI::Unconstrained, 1, 1)
+
+#define SAFETY_WINDOWS_LIFETIME(NAME, FAMILY, CAPS, ARITY)                     \
+  SAFETY_CALL_EFFECT(NAME, FAMILY, CAPS, CallEffectFormat::COFF,              \
+                     CallEffectABI::Microsoft, ARITY, ARITY)
+
+SAFETY_WINDOWS_LIFETIME("HeapAlloc", Allocation,
+                        CallEffectCapability::Return |
+                            CallEffectCapability::Allocation |
+                            CallEffectCapability::Capture,
+                        3)
+SAFETY_WINDOWS_LIFETIME("HeapFree", Release,
+                        CallEffectCapability::Control |
+                            CallEffectCapability::Return |
+                            CallEffectCapability::ModRef |
+                            CallEffectCapability::Release |
+                            CallEffectCapability::Capture,
+                        3)
+SAFETY_WINDOWS_LIFETIME("LocalAlloc", Allocation,
+                        CallEffectCapability::Return |
+                            CallEffectCapability::Allocation |
+                            CallEffectCapability::Capture,
+                        2)
+SAFETY_WINDOWS_LIFETIME("LocalFree", Release,
+                        CallEffectCapability::Return |
+                            CallEffectCapability::ModRef |
+                            CallEffectCapability::Release |
+                            CallEffectCapability::Capture,
+                        1)
+SAFETY_WINDOWS_LIFETIME("GlobalAlloc", Allocation,
+                        CallEffectCapability::Return |
+                            CallEffectCapability::Allocation |
+                            CallEffectCapability::Capture,
+                        2)
+SAFETY_WINDOWS_LIFETIME("GlobalFree", Release,
+                        CallEffectCapability::Return |
+                            CallEffectCapability::ModRef |
+                            CallEffectCapability::Release |
+                            CallEffectCapability::Capture,
+                        1)
+
+#undef SAFETY_WINDOWS_LIFETIME
+#undef SAFETY_RELEASE_EFFECT
+#undef SAFETY_ALLOC_EFFECT
+
+#undef SAFETY_CALL_EFFECT

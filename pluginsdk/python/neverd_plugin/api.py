@@ -621,8 +621,8 @@ class Session:
         sinks: str | None = None,
         sources: str | None = None,
     ) -> Mapping[str, object]:
-        """Audit heap-object lifetimes for leaks, double frees, and use after
-        free, and return the parsed JSON report."""
+        """Audit heap-object lifetimes and uninitialized local stack reads,
+        and return the parsed JSON report."""
 
         options = self._safety_options(
             max_paths=max_paths,
@@ -658,8 +658,14 @@ class Session:
 
         Each finding carries a verdict (SAFE / UNSAFE / UNKNOWN), a confidence,
         and — for a proven overflow — a solver model plus candidate witness
-        values whose ``replayable`` field states whether they map to concrete
-        process input."""
+        values. ``replayable`` is derived from complete ``inputs`` in the
+        ``replay`` object for the ``process-input-v1`` adapter. Initially those
+        plans cover exact literal environment values and the first supported
+        ``read(0)``-family standard-input consumption; argv, file, network,
+        custom, and ambiguous inputs remain non-replayable with
+        ``replay.reason``. These evidence
+        fields are additive to report schema version 1. Unknown or partially
+        applicable call effects remain UNKNOWN."""
 
         options = self._safety_options(
             max_paths=max_paths,

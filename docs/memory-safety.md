@@ -11,7 +11,7 @@ never gated behind one format's scanner or import table.
 
 | Track | Command | Reports |
 |-------|---------|---------|
-| **Audit** | `neverd audit <binary>` | Heap-object lifetime defects: leak, double free, use after free |
+| **Audit** | `neverd audit <binary>` | Heap-object lifetime defects and uninitialized local stack reads |
 | **Hunt** | `neverd hunt <binary>` | Copy/formatting overflows and uncontrolled format strings |
 
 The engine reuses NeverD's in-house symbolic execution and bitvector solver for
@@ -27,6 +27,11 @@ could not recover, an unresolved indirect target, or an exhausted budget yields
 **UNKNOWN**, never SAFE. A destination whose capacity cannot be recovered is
 UNKNOWN. Strict lifting stays as-is; the safety layer only ever adds
 conservative verdicts on top of it.
+
+Call effects use closed-world semantics: a summary applies only when its
+preconditions and all relevant effects are known. An unknown effect or a
+summary that is only partially applicable keeps the result UNKNOWN; the
+analysis never fills the gap with an assumed no-op or successful call.
 
 ---
 
@@ -76,9 +81,10 @@ match never displaces any stated identity.
 
 The catalog is a configurable table, not a hard-coded set. Each **sink** entry
 declares its weakness class, its role (copy, format, alloc, free, realloc), and
-the argument slots that matter (destination, source, length, capacity). Each
-**source** entry names a provider of attacker-influenced input. The built-in
-rows live in [`SafetySinks.def`](../include/neverd/safety/SafetySinks.def) and
+the argument slots that matter (destination, source, length, capacity). A JSON
+copy or format sink also supplies an executable call effect. Each **source**
+entry names a provider of attacker-influenced input. The built-in rows live in
+[`SafetySinks.def`](../include/neverd/safety/SafetySinks.def) and
 [`SafetySources.def`](../include/neverd/safety/SafetySources.def): the C runtime
 copy family (`memcpy`/`memmove`/`strcpy`/`strcat`/`strncpy`/`gets`/…), their
 fortified `_chk` variants, the allocation/release family
@@ -91,6 +97,17 @@ Per-format spellings fold onto one entry: leading underscores are stripped
 (`_malloc`, `___strcpy_chk`) and mangled operator new/delete are matched through
 aliases.
 
+When `effect` is omitted from a JSON copy or format sink, applicability is
+derived from the highest referenced argument slot. A copy then requires that
+exact arity; a format sink accepts calls from that minimum arity through the
+variadic maximum. An optional `effect` object may explicitly set an accepted
+arity range with `min_arity` and `max_arity` (or `"variadic"`), including extra
+wrapper arguments beyond the inferred exact copy arity; `min_arity` must be at
+least the highest referenced role slot plus one, while `formats` and `abis`
+restrict applicability. If the call's
+arity, object format, or ABI does not match, no summary applies and the
+closed-world result remains UNKNOWN.
+
 Extend or override the catalog with a specification file:
 
 ```bash
@@ -99,24 +116,29 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 
 ```json
 { "sinks": [
-    { "name": "my_copy", "kind": "copy", "dst": 0, "src": 1, "len": 2 }
+    { "name": "my_copy", "kind": "copy", "dst": 0, "src": 1, "len": 2 },
+    { "name": "my_format", "kind": "format", "dst": 0, "fmt": 2,
+      "effect": { "min_arity": 3, "max_arity": "variadic",
+                  "formats": ["elf"], "abis": ["sysv"] } }
   ],
   "sources": [
-    { "name": "my_read", "out": 1, "return_tainted": true },
-    { "name": "my_scan", "out": -1, "return_tainted": false }
+    { "name": "my_read", "out": 1, "return_tainted": true }
   ]
 }
 ```
 
-`out` identifies a buffer written by the source. `return_tainted` separately
-states whether the returned pointer or scalar carries attacker-controlled
-input; when omitted, the legacy `out == -1` return-source convention applies.
-This keeps status/count returns distinct from buffer content.
+For a custom source, `out` and `return_tainted` are discovery metadata only.
+They do not establish executable memory, return-value, or taint effects. The
+current source schema lacks the typed success, mutation, format, and ABI
+contracts needed for those semantics, so analysis that depends on a custom
+source effect remains UNKNOWN. Built-in sources are unaffected: their typed,
+applicability-checked descriptors continue to provide executable effects.
 
-Destination-only input routines are not inferred to be unbounded merely
-because they also appear in the source catalog. A `gets`-like custom routine
-must opt in explicitly with `"unbounded": true`; contradictory source/length
-fields are rejected transactionally.
+An unbounded destination-only custom sink is not inferred from a matching
+source entry. A `gets`-like custom sink must opt in explicitly with
+`"unbounded": true`; adding the same name to the source catalog does not grant
+an executable effect, and contradictory source/length fields are rejected
+transactionally.
 
 ---
 
@@ -140,8 +162,12 @@ spill/reload through stack slots):
 - **Attacker-influenced** length with a known capacity is checked with the
   bitvector solver: if a length greater than the capacity is feasible the
   verdict is UNSAFE and the full solver model is reported. Candidate input
-  values are explicitly marked non-replayable until an argv/stdin/file adapter
-  maps the symbolic state back to process-level bytes.
+  values are replayable only when the whole witness maps to a complete
+  `process-input-v1` plan. Initially that means exact literal environment
+  values and, at most, the bytes returned by the first supported
+  `read(0)`-family standard-input consumption. argv, file, network, custom, or
+  ambiguous input remains
+  non-replayable and carries the reason no complete plan could be formed.
 - Anything else — unknown length or unknown capacity — is UNKNOWN.
 
 Every recovered capacity is an **upper bound** on the true object size, so a
@@ -154,9 +180,11 @@ maps each non-suppressed conversion to its actual variadic output argument.
 Unbounded `%s`/`%[` outputs taint later string uses; numeric and character
 outputs taint values loaded from the written object, but not the output-pointer
 value itself. `sscanf` propagates those effects only when its input string is
-already attacker-influenced. Suppressed conversions, excess arguments,
-position-dependent or unsupported formats, bounded text fields, and `%n`
-remain UNKNOWN instead of being guessed.
+already attacker-influenced. Bounded text outputs such as `%Ns`/`%N[` propagate
+taint together with a `MaxBytes` extent that includes the terminator;
+wide-character variants compute that byte extent using the platform's
+`wchar_t` width. Suppressed conversions, excess arguments, position-dependent
+or unsupported formats, and `%n` remain UNKNOWN instead of being guessed.
 
 ### Formatted output
 
@@ -249,6 +277,10 @@ The same analyses are available through the C API
       { "name": "argv[1]", "value": "16 bytes" }
     ],
     "replayable": false,
+    "replay": {
+      "adapter": "process-input-v1",
+      "reason": "argv input is not supported by process-input-v1"
+    },
     "symbolic_model": [
       { "id": 0, "name": "copy_len", "width": 64,
         "value_hex": "0x11", "origin": "input" }
@@ -256,6 +288,19 @@ The same analyses are available through the C API
   }
 }
 ```
+
+`replayable` is derived evidence, not an independent promise: it is `true` if
+and only if `replay` contains a complete input plan for the
+`process-input-v1` adapter. The plan records exact environment bytes, the first
+supported `read(0)`-family standard-input byte sequence when used, and bindings
+from solver assignment IDs to those inputs. Unsupported argv, file, network,
+custom, and ambiguous origins
+leave `replayable=false`; `replay.reason` explains why no exact plan exists.
+Candidate values remain useful symbolic evidence but are not a runnable
+reproducer.
+
+The replay fields are additive. The top-level `schema_version` remains `1`, so
+schema-v1 consumers must continue to ignore fields they do not understand.
 
 ---
 
@@ -271,11 +316,12 @@ The same analyses are available through the C API
   width and the existing destination extent are recovered. Out-parameter
   allocators and conditional `realloc` ownership also remain UNKNOWN when the
   handle transition cannot be proved.
-- **P0** (this release, all three formats): the sink catalog, the argument
-  prefilter, copy-overflow hunt, and the heap-lifetime audit. Mandatory
-  checked-in fixtures cover PE, ELF, and Mach-O on both x86-64 and AArch64 on
-  every test host.
-- **P1**: local-stack uninitialised-read and format-string checks are available;
-  stack/global overflow, richer PDB stack types, and more platform allocators
-  remain incremental coverage areas.
-- **P2**: patch-inserted runtime checks, interprocedural attacker-reachability.
+- **Phase 1** (this release, all three formats): the sink catalog, argument
+  prefilter, stack/global copy-overflow hunt, heap-lifetime audit, local-stack
+  uninitialised-read checks, and format-string checks. Mandatory checked-in
+  fixtures cover PE, ELF, and Mach-O on both x86-64 and AArch64 on every test
+  host.
+- Richer PDB stack types and additional platform allocators remain incremental
+  coverage areas; absence of an exact summary stays UNKNOWN.
+- **P2**: patch-inserted runtime checks, hybrid fuzzing, and broader
+  interprocedural attacker reachability.

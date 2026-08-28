@@ -8,8 +8,8 @@ NeverD は読み込んだバイナリに対して二系統のメモリ安全性�
 
 | トラック | コマンド | 報告内容 |
 |----------|----------|----------|
-| **監査（Audit）** | `neverd audit <binary>` | ヒープ寿命の欠陥：リーク、二重解放、解放後使用 |
-| **ハント（Hunt）** | `neverd hunt <binary>` | 危険なコピー越境と記号的証拠／入力候補（プロセス入力アダプタが実バイトへ対応付けるまでは `replayable=false`） |
+| **監査（Audit）** | `neverd audit <binary>` | ヒープ寿命の欠陥と未初期化ローカルスタック読み取り |
+| **ハント（Hunt）** | `neverd hunt <binary>` | 危険なコピー越境と記号的証拠／入力候補（完全な `process-input-v1` プランがある場合のみ `replayable=true`） |
 
 エンジンは NeverD 内蔵の記号実行とビットベクトルソルバを証人生成と到達可能性に再利用します。外部ソルバ、VM、コンテナ依存はありません。
 
@@ -18,6 +18,8 @@ NeverD は読み込んだバイナリに対して二系統のメモリ安全性�
 ## 核心不変条件：失敗は閉じる
 
 リフトされていない操作、ABI が引数を復元できなかった呼び出し、未解決の間接対象、または予算切れはすべて **UNKNOWN** であり、SAFE にはしません。容量を復元できない書き込み先も UNKNOWN です。strict lifting はそのままです。安全性層は、その上に保守的な判定だけを足します。
+
+呼び出し効果は閉世界の意味論に従います。要約は前提条件と関連するすべての効果が既知の場合だけ適用されます。未知の効果や部分的にしか適用できない要約は UNKNOWN のままで、隙間を「効果なし」または「呼び出し成功」と仮定しません。
 
 ---
 
@@ -52,11 +54,13 @@ DWARF が付けた静的リンクの `memcpy` は `dwarf`、インポートさ�
 
 ## シンクとソースのカタログ
 
-カタログは設定可能な表であり、ハードコードされた集合ではありません。各 **シンク** は弱点クラス、役割（copy / format / alloc / free / realloc）、関係する引数スロット（宛先、送信元、長さ、容量）を宣言します。各 **ソース** は攻撃者の影響を受ける入力提供者です。
+カタログは設定可能な表であり、ハードコードされた集合ではありません。各 **シンク** は弱点クラス、役割（copy / format / alloc / free / realloc）、関係する引数スロット（宛先、送信元、長さ、容量）を宣言します。JSON の copy または format シンクは、実行可能な呼び出し effect も提供します。各 **ソース** は攻撃者の影響を受ける入力提供者です。
 
 組み込みの行は [`SafetySinks.def`](../include/neverd/safety/SafetySinks.def) と [`SafetySources.def`](../include/neverd/safety/SafetySources.def) にあり、一般的な C ランタイムのコピー族（`memcpy`/`memmove`/`strcpy`/`strcat`/`strncpy`/`gets`/…）、明示的な宛先上限を持つ強化 `_chk` 変種、確保と解放族（`malloc`/`calloc`/`realloc`/`free`、operator `new`/`delete`）、任意の Win32 ヒープ API を覆います。入力源は POSIX（`getenv`、`read`、`recv`、`fgets`、`fread`、`scanf`、プログラム引数）**および** Win32（`GetCommandLineA/W`、`ReadFile`、`GetEnvironmentVariable*`）です。PE のハントが POSIX 入力だけに縛られることはありません。
 
 形式ごとの綴りは同一エントリに折り畳みます。先頭のアンダースコアを剥がし（`_malloc`、`___strcpy_chk`）、mangling された operator new/delete は別名で照合します。
+
+JSON の copy または format シンクで `effect` を省略した場合、適用条件は参照される最大の引数スロットから導出されます。copy はその正確な引数数を要求し、format シンクはその最小引数数から可変引数の上限までの呼び出しを受け入れます。省略可能な `effect` オブジェクトでは、`min_arity` と `max_arity`（または `"variadic"`）を使って、推論された copy の正確な引数数を超える追加 wrapper 引数を含む許容 arity 範囲を明示的に設定できます。`min_arity` は参照される最大の役割スロットに 1 を加えた値以上でなければならず、`formats` と `abis` は適用条件を制限します。呼び出しの引数数、オブジェクト形式、ABI のいずれかが一致しなければ要約は適用されず、閉世界規則により結果は UNKNOWN のままです。
 
 仕様ファイルでカタログを拡張または上書きできます。
 
@@ -66,9 +70,20 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 
 ```json
 { "sinks": [
-    { "name": "my_copy", "kind": "copy", "dst": 0, "src": 1, "len": 2 }
-] }
+    { "name": "my_copy", "kind": "copy", "dst": 0, "src": 1, "len": 2 },
+    { "name": "my_format", "kind": "format", "dst": 0, "fmt": 2,
+      "effect": { "min_arity": 3, "max_arity": "variadic",
+                  "formats": ["elf"], "abis": ["sysv"] } }
+  ],
+  "sources": [
+    { "name": "my_read", "out": 1, "return_tainted": true }
+  ]
+}
 ```
+
+カスタムソースの `out` と `return_tainted` は発見用メタデータにすぎません。これらは、実行可能なメモリ、戻り値、taint の effect を確立しません。現在のソーススキーマには、その意味論に必要な型付きの成功条件、変更、形式、ABI の契約がないため、カスタムソースの effect に依存する解析は UNKNOWN のままです。組み込みソースは影響を受けず、適用条件を検査した型付き記述子が引き続き実行可能な effect を提供します。
+
+宛先引数だけを持つ境界なしのカスタムシンクは、同名のソースエントリから推論されません。`gets` に似たカスタムシンクは `"unbounded": true` を明示的に有効化する必要があります。同名をソースカタログに追加しても実行可能な effect は付与されず、矛盾する送信元/長さフィールドはトランザクション単位で拒否されます。
 
 ---
 
@@ -79,10 +94,14 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 - **定数長** が正確な容量内なら SAFE です。定数越境は、裏付けられた経路でシンクへ到達できる場合だけ UNSAFE となり、それ以外は UNKNOWN のままです。
 - **強化** `_chk` コピーは実行時の宛先上界を持ちます。要求が拒否されるか、その上界が復元済みオブジェクト内に収まると証明できれば SAFE、オブジェクト外への書き込みが実行可能なら UNSAFE、上界が未復元または結論不能なら UNKNOWN です。
 - **証明可能な有界長**（長さを返す呼び出し、マスク、クランプ）は解法前に退き、理由を記録します。宛先サイズが正確な場合だけ SAFE で、包含領域の上界しかない場合は UNKNOWN のままです。
-- **攻撃者の影響を受ける長さ** で容量が既知ならビットベクトルソルバに渡します。容量を超える長さが充足可能なら UNSAFE とし、ソルバモデルを記号的証拠と入力候補として報告します。プロセス入力アダプタが利用可能になるまでは再生不能（`replayable=false`）です。
+- **攻撃者の影響を受ける長さ** で容量が既知ならビットベクトルソルバに渡します。容量を超える長さが充足可能なら UNSAFE です。候補を再生できるのは完全な `process-input-v1` プランを作れる場合だけです。当初の対象は正確なリテラル環境値と、最初の標準入力消費が返すバイト列までです。argv、ファイル、ネットワーク、カスタム、または曖昧な入力は理由付きで再生不能のままです。
 - それ以外（未知の長さまたは未知の容量）は UNKNOWN。
 
 復元された容量は常に実オブジェクトサイズの **上界** なので、証明された越境は偽陽性になりません。
+
+### 書式付き入力
+
+`scanf`/`fscanf` とそのバージョン付き表記では、読み取り可能な定数書式が、抑制されていない各変換を実際の可変引数出力引数へ対応付けます。境界なしの `%s`/`%[` 出力は後続の文字列使用へ taint を伝播し、数値および文字出力は、出力ポインタ値そのものではなく、書き込まれたオブジェクトからロードされる値へ taint を伝播します。`sscanf` がこれらの effect を伝播するのは、入力文字列がすでに攻撃者の影響を受けている場合だけです。`%Ns`/`%N[` のような有界テキスト出力は、終端文字を含む `MaxBytes` extent とともに taint を伝播し、ワイド文字の変種はプラットフォームの `wchar_t` 幅を使ってそのバイト extent を計算します。抑制された変換、余分な引数、位置依存または未対応の書式、および `%n` は、推測せず UNKNOWN のままにします。
 
 ---
 
@@ -124,9 +143,11 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
   "capacity": 16,
   "capacity_kind": "exact",
   "corroboration": "path predicate and overflow are jointly satisfiable",
-  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" }, "candidate_values": [{ "name": "copy_length", "value": "17" }, { "name": "argv[1]", "value": "16 bytes" }], "replayable": false, "symbolic_model": [{ "id": 0, "name": "copy_len", "width": 64, "value_hex": "0x11", "origin": "input" }] }
+  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" }, "candidate_values": [{ "name": "copy_length", "value": "17" }, { "name": "argv[1]", "value": "16 bytes" }], "replayable": false, "replay": { "adapter": "process-input-v1", "reason": "argv input is not supported by process-input-v1" }, "symbolic_model": [{ "id": 0, "name": "copy_len", "width": 64, "value_hex": "0x11", "origin": "input" }] }
 }
 ```
+
+`replayable` は独立した約束ではなく導出された証拠です。`replay` に `process-input-v1` アダプタ向けの完全な入力プランがある場合に限り真です。プランには正確な環境バイト、使用する場合は最初の標準入力バイト列、ソルバ割り当て ID から各入力への対応を記録し、作れない場合は `replay.reason` が理由を示します。これらのフィールドは追加的で、トップレベルの `schema_version` は `1` のままです。
 
 ---
 
@@ -136,5 +157,5 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 - 長さ制限付きコピーは解法前に退き `skipped` に数えられます。正確な容量なら SAFE を証明でき、上界だけなら UNKNOWN のままです。
 - カタログ済みのワイド文字コピーと追加コピーは、要素幅と既存の宛先長を復元できるまで UNKNOWN です。出力引数型アロケータと条件付き `realloc` の所有権も、ハンドル遷移を証明できなければ UNKNOWN のままです。
 - **P0**（本リリース、三形式すべて）：シンクカタログ、引数事前フィルタ、コピー越境ハント、ヒープ寿命監査。全テストホストで PE、ELF、Mach-O × x86-64、AArch64 の 6 fixture を実行します。
-- **P1**：スタック/グローバル越境、未初期化読み、書式文字列、より豊かな PDB スタック型、追加のプラットフォーム確保 API。
+- **P1**：スタック/グローバル越境、未初期化ローカル読み、書式文字列検査は利用可能です。より豊かな PDB スタック型と追加のプラットフォーム確保 API は段階的なカバレッジであり、正確な要約がなければ UNKNOWN のままです。
 - **P2**：patch で挿入する実行時検査、手続き間の攻撃者到達可能性。

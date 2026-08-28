@@ -46,7 +46,8 @@ validatePipelineCoverage(const PipelineResult &Result,
 SafetyReport runHunt(const AnalysisInput &In, const SinkCatalog &Cat,
                      const SafetyBudgets &Budgets);
 
-/// Audit every heap handle for a lifetime defect.
+/// Audit heap handles for lifetime defects and local stack reads for missing
+/// initialization.
 SafetyReport runAudit(const AnalysisInput &In, const SinkCatalog &Cat,
                       const SafetyBudgets &Budgets);
 

@@ -212,13 +212,77 @@ class _SafetyHost:
         if not self.ok:
             return json.dumps({"ok": False, "error": "analysis failed"})
         track = "audit" if "audit" in name else "hunt"
+        findings: list[dict[str, object]] = []
+        if track == "hunt":
+            findings.append(
+                {
+                    "verdict": "UNSAFE",
+                    "evidence": {
+                        "replayable": True,
+                        "replay": {
+                            "adapter": "process-input-v1",
+                            "inputs": [
+                                {
+                                    "kind": "environment",
+                                    "call_va": "0x401000",
+                                    "seq": 0,
+                                    "invocation": 0,
+                                    "offset": 0,
+                                    "name": "NEVERD_TOKEN",
+                                    "bytes_hex": "0x41",
+                                    "eof_after": False,
+                                    "terminator_implicit": True,
+                                    "bindings": [
+                                        {
+                                            "assignment_id": 0,
+                                            "role": "byte",
+                                            "offset": 0,
+                                        }
+                                    ],
+                                },
+                                {
+                                    "kind": "stdin",
+                                    "call_va": "0x401020",
+                                    "seq": 1,
+                                    "invocation": 0,
+                                    "offset": 0,
+                                    "bytes_hex": "0x42",
+                                    "eof_after": True,
+                                    "terminator_implicit": False,
+                                    "bindings": [
+                                        {
+                                            "assignment_id": 1,
+                                            "role": "byte",
+                                            "offset": 0,
+                                        }
+                                    ],
+                                },
+                            ],
+                        },
+                    },
+                }
+            )
+            findings.append(
+                {
+                    "verdict": "UNSAFE",
+                    "evidence": {
+                        "replayable": False,
+                        "replay": {
+                            "adapter": "process-input-v1",
+                            "reason": (
+                                "file input is not supported by process-input-v1"
+                            ),
+                        },
+                    },
+                }
+            )
         return json.dumps(
             {
                 "schema_version": 1,
                 "ok": True,
                 "track": track,
                 "verdict": "UNSAFE",
-                "findings": [],
+                "findings": findings,
             }
         )
 
@@ -357,6 +421,14 @@ class SessionTests(unittest.TestCase):
 
         self.assertEqual(audit["track"], "audit")
         self.assertEqual(hunt["track"], "hunt")
+        self.assertEqual(hunt["schema_version"], 1)
+        hunt_evidence = hunt["findings"][0]["evidence"]
+        self.assertTrue(hunt_evidence["replayable"])
+        self.assertEqual(hunt_evidence["replay"]["adapter"], "process-input-v1")
+        self.assertEqual(hunt_evidence["replay"]["inputs"][0]["kind"], "environment")
+        unavailable_replay = hunt["findings"][1]["evidence"]
+        self.assertFalse(unavailable_replay["replayable"])
+        self.assertIn("file input", unavailable_replay["replay"]["reason"])
         audit_options = host.options["neverd_session_audit_json"]
         self.assertEqual(audit_options.struct_size, ctypes.sizeof(type(audit_options)))
         self.assertEqual(audit_options.max_paths, 7)

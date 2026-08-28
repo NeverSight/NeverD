@@ -80,4 +80,24 @@ const char *toString(ArgFlow F) {
   llvm_unreachable("unknown safety argument flow");
 }
 
+const char *toString(ReplayInputKind K) {
+  switch (K) {
+#define SAFETY_REPLAY_INPUT_KIND(ID, SPELLING)                                 \
+  case ReplayInputKind::ID:                                                    \
+    return SPELLING;
+#include "neverd/safety/SafetyEnums.def"
+  }
+  llvm_unreachable("unknown replay input kind");
+}
+
+const char *toString(ReplayBindingRole R) {
+  switch (R) {
+#define SAFETY_REPLAY_BINDING_ROLE(ID, SPELLING)                               \
+  case ReplayBindingRole::ID:                                                  \
+    return SPELLING;
+#include "neverd/safety/SafetyEnums.def"
+  }
+  llvm_unreachable("unknown replay binding role");
+}
+
 } // namespace neverd::safety

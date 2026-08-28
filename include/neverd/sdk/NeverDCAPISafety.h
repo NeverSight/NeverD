@@ -6,11 +6,17 @@
 ///
 /// \file
 /// Memory-safety analysis over a loaded binary: an audit track that reports
-/// heap-lifetime defects (leak, double free, use after free) and a hunt track
-/// that reports dangerous-copy overflows with symbolic evidence and candidate
-/// input values. Evidence is marked replayable only when a process-input
-/// adapter has reconstructed the actual bytes. Both tracks run on the
-/// format-neutral lifted IR, so PE, ELF, and Mach-O are analysed the same way.
+/// heap-lifetime defects (leak, double free, use after free) and uninitialized
+/// local stack reads, and a hunt track that reports dangerous-copy overflows
+/// with symbolic evidence and candidate input values. Evidence is replayable
+/// only when it carries a complete `process-input-v1` plan. The initial plan
+/// covers exact literal environment values and the first supported
+/// `read(0)`-family standard-input consumption; argv, file, network, custom,
+/// and ambiguous inputs remain
+/// non-replayable with a reason. Safety call effects are closed-world: unknown
+/// or only partially applicable effects produce UNKNOWN. Both tracks run on
+/// the format-neutral lifted IR, so PE, ELF, and Mach-O are analysed the same
+/// way.
 ///
 /// All returned strings are heap-allocated via strdup(); callers must free them
 /// with neverd_free_string().
@@ -51,10 +57,10 @@ typedef struct neverd_safety_options {
   const char *sources_path;
 } neverd_safety_options;
 
-/// Audit heap-object lifetimes and return an owned JSON report.  The report
-/// lists one finding per detected leak, double free, or use after free, each
-/// with the callee name, its identity origin, and the call address.  Caller
-/// frees the returned string with neverd_free_string().
+/// Audit heap-object lifetimes and local stack initialization, returning an
+/// owned JSON report.  Heap findings carry the callee name, its identity
+/// origin, and the call address.  Caller frees the returned string with
+/// neverd_free_string().
 NEVERD_API const char *
 neverd_session_audit_json(neverd_session_t Sess,
                           const neverd_safety_options *Options);
@@ -62,8 +68,10 @@ neverd_session_audit_json(neverd_session_t Sess,
 /// Hunt dangerous-copy overflows and return an owned JSON report.  Each finding
 /// carries a verdict (SAFE / UNSAFE / UNKNOWN), a confidence, and — for a
 /// proven overflow — a solver model plus candidate witness values. The
-/// evidence's `replayable` field states whether those values have been mapped
-/// to concrete process input. Caller frees the returned string with
+/// evidence's `replayable` field is derived from a complete plan in `replay`;
+/// a non-replayable witness includes the adapter and the reason no plan could
+/// be formed. Replay fields are additive and the report's
+/// `schema_version` remains 1. Caller frees the returned string with
 /// neverd_free_string().
 NEVERD_API const char *
 neverd_session_hunt_json(neverd_session_t Sess,

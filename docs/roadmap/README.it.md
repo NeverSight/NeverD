@@ -77,7 +77,7 @@ Analizzare un binario sollevato per difetti di vita dell’heap (leak, doppia fr
 | Pista `hunt` | Catalogo di sink + prefiltro degli argomenti + capacità di destinazione + testimone del solver |
 | Contratto di identità | Risoluzione dei sink per formato (IAT PE, PLT ELF, bind dyld Mach-O) e fonti di nomi PDB / DWARF / MAP |
 
-**Stato:** L’implementazione P0 è presente per PE, ELF e Mach-O, ma la chiusura attende un adapter di replay dell’input di processo e riepiloghi completi degli effetti delle chiamate. La copertura di verdetti e identità è bloccata da [`unittests/safety`](../../unittests/safety) e dal test end-to-end [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp), che esegue su ogni host la matrice obbligatoria PE/ELF/Mach-O × x86-64/AArch64. Vedi [Audit e hunt di sicurezza della memoria](../memory-safety.it.md). P1 si allarga a overflow di stack/globale, letture non inizializzate e stringhe di formato.
+**Stato:** La Phase 1 è implementata per PE, ELF e Mach-O. P0 comprende analisi closed-world del ciclo di vita heap e delle copie pericolose, oltre all’evidenza additiva dello schema v1 con replay `process-input-v1` per valori letterali esatti dell’ambiente e il primo consumo dello standard input; gli altri tipi restano non riproducibili con una motivazione. P1 copre overflow di stack/globale, letture locali non inizializzate e stringhe di formato. Gli effetti delle chiamate sconosciuti o applicabili solo in parte restano UNKNOWN. La copertura di verdetti e identità è bloccata da [`unittests/safety`](../../unittests/safety) e dal test end-to-end [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp), che esegue su ogni host la matrice obbligatoria PE/ELF/Mach-O × x86-64/AArch64. Vedi [Audit e hunt di sicurezza della memoria](../memory-safety.it.md). I controlli binari, il fuzzing ibrido e la raggiungibilità interprocedurale più ampia di P2 restano attività successive della roadmap, fuori dall’accettazione della Phase 1.
 
 ---
 
@@ -104,5 +104,5 @@ conservativa resta in corso. Nessuna data impegnativa.
 | Decode/lifting EVM legacy | Completato fino a Fusaka; coperto da regressione |
 | Ricostruzione sorgente EVM | In corso — evidence-backed e conservativa |
 | Decompilazione Solana eBPF (SBF) | Completata — v0-v4, C, Rust e LLVM; coperta da regressione |
-| Audit e hunt di sicurezza della memoria | In corso — implementazione P0 presente; chiusura replay/riepiloghi chiamate in sospeso |
+| Audit e hunt di sicurezza della memoria | Phase 1 completa — analisi P0/P1, evidenza di replay e matrice nativa formati/architetture presenti; attività P2 pianificate |
 | Rafforzamento motore e prodotto | Continuo |

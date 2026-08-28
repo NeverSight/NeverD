@@ -114,20 +114,25 @@ external solver or container.
 
 | Item | Notes |
 |------|--------|
-| `audit` track | Heap state machine over IR + escape summaries: leak, double free, use after free |
+| `audit` track | Heap lifetime defects plus local-stack initialization analysis |
 | `hunt` track | Sink catalog + argument prefilter + destination capacity + solver witness |
 | Identity contract | Per-format sink resolution (PE IAT, ELF PLT, Mach-O dyld bind) and PDB / DWARF / MAP name sources |
 
-**Status:** P0 implementation is present for PE, ELF, and Mach-O, but closure
-is pending a process-input replay adapter and complete call-effect summaries.
+**Status:** Phase 1 is implemented for PE, ELF, and Mach-O. P0 includes
+closed-world heap-lifetime and dangerous-copy analysis plus additive schema-v1
+`process-input-v1` replay for exact literal environment values and the first
+supported `read(0)`-family standard-input consumption; other input kinds remain
+non-replayable with a reason. P1 covers stack/global overflow, uninitialised local reads, and format
+strings. Unknown or partially applicable call effects remain UNKNOWN.
 Verdict and identity coverage is locked by
 [`unittests/safety`](../../unittests/safety) (catalog, scanner, argument
 prefilter, object model, hunt, audit) and an end-to-end
 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp)
 that runs the mandatory PE/ELF/Mach-O × x86-64/AArch64 fixture matrix on every
 host. See
-[Memory-safety audit & hunt](../memory-safety.md). P1 widens to stack/global
-overflow, uninitialised reads, and format strings.
+[Memory-safety audit & hunt](../memory-safety.md). P2 binary checks, hybrid
+fuzzing, and broader interprocedural reachability remain follow-on roadmap work,
+not part of the Phase-1 acceptance contract.
 
 ---
 
@@ -157,5 +162,5 @@ be tracked here.
 | EVM legacy decoding/lifting | Complete through Fusaka — regression-covered |
 | EVM source reconstruction | Ongoing — evidence-backed and conservative |
 | Solana eBPF (SBF) decompilation | Complete — v0-v4, C, Rust, and LLVM; regression-covered |
-| Memory-safety audit & hunt | In progress — P0 implementation present; replay/call-summary closure pending |
+| Memory-safety audit & hunt | Phase 1 complete — P0/P1 analysis, replay evidence, and native format/architecture matrix present; P2 follow-ons planned |
 | Engine & product hardening | Ongoing |

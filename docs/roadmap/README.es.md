@@ -78,7 +78,7 @@ Analizar un binario levantado en busca de defectos de vida del montón (fuga, do
 | Pista `hunt` | Catálogo de sumideros + prefiltro de argumentos + capacidad de destino + testigo del solver |
 | Contrato de identidad | Resolución de sumideros por formato (IAT PE, PLT ELF, bind dyld Mach-O) y fuentes de nombres PDB / DWARF / MAP |
 
-**Estado:** La implementación de P0 está presente para PE, ELF y Mach-O, pero el cierre está pendiente de un adaptador de reproducción de entrada del proceso y resúmenes completos de efectos de llamada. La cobertura de veredictos e identidad queda fijada por [`unittests/safety`](../../unittests/safety) y el extremo a extremo [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp), que ejecuta en cada host la matriz obligatoria PE/ELF/Mach-O × x86-64/AArch64. Véase [Auditoría y caza de seguridad de memoria](../memory-safety.es.md). P1 se amplía a desbordamiento de pila/global, lecturas no inicializadas y cadenas de formato.
+**Estado:** Phase 1 está implementada para PE, ELF y Mach-O. P0 incluye análisis de mundo cerrado para el ciclo de vida del heap y copias peligrosas, además de evidencia aditiva del esquema v1 con reproducción `process-input-v1` para valores literales exactos del entorno y el primer consumo de entrada estándar; los demás tipos siguen sin ser reproducibles e incluyen el motivo. P1 cubre desbordamientos de pila/global, lecturas locales no inicializadas y cadenas de formato. Los efectos de llamada desconocidos o parcialmente aplicables permanecen UNKNOWN. La cobertura de veredictos e identidad queda fijada por [`unittests/safety`](../../unittests/safety) y el extremo a extremo [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp), que ejecuta en cada host la matriz obligatoria PE/ELF/Mach-O × x86-64/AArch64. Véase [Auditoría y caza de seguridad de memoria](../memory-safety.es.md). Las comprobaciones binarias, el fuzzing híbrido y la alcanzabilidad interprocedimental más amplia de P2 quedan como trabajo posterior de la hoja de ruta, fuera de la aceptación de Phase 1.
 
 ---
 
@@ -96,7 +96,7 @@ Analizar un binario levantado en busca de defectos de vida del montón (fuga, do
 ## Calendario
 
 Los formatos nativos, el decode/lifting EVM legacy hasta Fusaka, Solana SBF y la
-seguridad de memoria P0 están cubiertos por regresión. La reconstrucción fuente
+seguridad de memoria Phase 1 están cubiertos por regresión. La reconstrucción fuente
 EVM conservadora sigue en curso. Sin fechas comprometidas.
 
 | Función | Estado |
@@ -105,5 +105,5 @@ EVM conservadora sigue en curso. Sin fechas comprometidas.
 | Decode/lifting EVM legacy | Completo hasta Fusaka; cubierto por regresión |
 | Reconstrucción fuente EVM | En curso — basada en evidencia y conservadora |
 | Descompilación Solana eBPF (SBF) | Completa — v0-v4, C, Rust y LLVM; cubierta por regresión |
-| Auditoría y caza de seguridad de memoria | En curso — implementación de P0 presente; cierre de reproducción/resúmenes de llamadas pendiente |
+| Auditoría y caza de seguridad de memoria | Phase 1 completa — análisis P0/P1, evidencia de reproducción y matriz nativa de formatos/arquitecturas presentes; P2 planificada |
 | Endurecimiento motor y producto | Continuo |

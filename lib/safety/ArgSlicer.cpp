@@ -6,6 +6,7 @@
 
 #include "neverd/safety/ArgSlicer.h"
 
+#include "CallEffects.h"
 #include "SourceSemantics.h"
 #include "StackSlotFlow.h"
 
@@ -54,21 +55,6 @@ uint64_t numericConstantValue(const MedVar &V) {
 bool isExactValue(const MedVar &A, const MedVar &B) {
   return A == B && A.Size == B.Size && A.TheArch == B.TheArch &&
          A.RenameTag == B.RenameTag;
-}
-
-bool isLengthReturn(llvm::StringRef Name) {
-  return llvm::StringSwitch<bool>(stripLeadingUnderscores(Name))
-#define SAFETY_CALL_TRAIT(NAME, IS_LENGTH, IS_BOUNDED)                         \
-  .Case(NAME, IS_LENGTH != 0)
-#include "neverd/safety/SafetyCallTraits.inc"
-#undef SAFETY_CALL_TRAIT
-      .Default(false);
-}
-
-bool isCappedLengthReturn(llvm::StringRef Name) {
-  return llvm::StringSwitch<bool>(stripLeadingUnderscores(Name))
-      .Cases({"strnlen", "strnlen_s", "wcsnlen"}, true)
-      .Default(false);
 }
 
 bool isMainLike(llvm::StringRef Name) {
@@ -633,8 +619,11 @@ private:
     for (size_t I = 0; I < F.CallInfos.size(); ++I) {
       const MedCallInfo &CI = F.CallInfos[I];
       const std::string Name = resolveCallName(In, CI);
+      const CallEffects Effects = resolveCallEffects(In, Cat, CI);
       const SourceEntry *Source = Cat.matchSource(Name);
-      if (Source && Source->OutArg >= 0) {
+      if (Source && Source->OutArg >= 0 &&
+          Effects.has(CallEffectCapability::Taint) &&
+          Effects.has(CallEffectCapability::ModRef)) {
         addIndexedSourceOutput(I, Source->OutArg, Name);
         addIndexedPointeeOutput(I, Source->OutArg, Name);
       }
@@ -643,7 +632,11 @@ private:
     for (size_t I = 0; I < F.CallInfos.size(); ++I) {
       const MedCallInfo &CI = F.CallInfos[I];
       const std::string Name = resolveCallName(In, CI);
-      if (!Cat.matchSource(Name))
+      const CallEffects Effects = resolveCallEffects(In, Cat, CI);
+      if (!Cat.matchSource(Name) ||
+          Effects.family() != CallEffectFamily::FormattedInput ||
+          !Effects.has(CallEffectCapability::Taint) ||
+          !Effects.has(CallEffectCapability::ModRef))
         continue;
       std::optional<detail::FormattedSourceOutputs> Outputs =
           detail::recoverFormattedSourceOutputs(In.Img, Name, CI.Args);
@@ -667,7 +660,11 @@ private:
       for (size_t I = 0; I < F.CallInfos.size(); ++I) {
         const MedCallInfo &CI = F.CallInfos[I];
         const std::string Name = resolveCallName(In, CI);
-        if (!Cat.matchSource(Name))
+        const CallEffects Effects = resolveCallEffects(In, Cat, CI);
+        if (!Cat.matchSource(Name) ||
+            Effects.family() != CallEffectFamily::FormattedInput ||
+            !Effects.has(CallEffectCapability::Taint) ||
+            !Effects.has(CallEffectCapability::ModRef))
           continue;
         std::optional<detail::FormattedSourceOutputs> Outputs =
             detail::recoverFormattedSourceOutputs(In.Img, Name, CI.Args);
@@ -855,8 +852,8 @@ private:
       const MedCallInfo *CI = F.findCall(B.Id, It->second.second);
       if (!CI)
         break;
-      const std::string Name = resolveCallName(In, *CI);
-      if (!isCappedLengthReturn(Name) || CI->Args.size() < 2 ||
+      const CallEffects Effects = resolveCallEffects(In, Cat, *CI);
+      if (Effects.family() != CallEffectFamily::BoundedStringLength ||
           !isNumericConstant(CI->Args[1]) ||
           CI->Args[1].Size != Op->Output.Size)
         break;
@@ -988,23 +985,24 @@ private:
       const MedCallInfo *CI = F.findCall(B.Id, OpIdx);
       const std::string ResolvedName = CI ? resolveCallName(In, *CI) : "";
       llvm::StringRef Name = ResolvedName;
-      if (CI && isCappedLengthReturn(Name) && CI->Args.size() >= 2 &&
+      const CallEffects Effects =
+          CI ? resolveCallEffects(In, Cat, *CI) : CallEffects{};
+      if (Effects.family() == CallEffectFamily::BoundedStringLength &&
           isNumericConstant(CI->Args[1]) &&
           CI->Args[1].Size == Op.Output.Size) {
         if (Top.Reason.empty())
           Top.Reason = ("bounded by " + stripLeadingUnderscores(Name)).str();
         return ArgFlow::Bounded;
       }
-      if (CI && isLengthReturn(Name)) {
-        if (!CI->Args.empty()) {
-          ArgFlow Source = classify(CI->Args[0], Depth + 1, Top);
-          return Source == ArgFlow::Tainted ? ArgFlow::Tainted
-                                            : ArgFlow::Unknown;
-        }
-        return ArgFlow::Unknown;
+      if (Effects.family() == CallEffectFamily::StringLength ||
+          Effects.family() == CallEffectFamily::BoundedStringLength) {
+        ArgFlow Source = classify(CI->Args[0], Depth + 1, Top);
+        return Source == ArgFlow::Tainted ? ArgFlow::Tainted : ArgFlow::Unknown;
       }
       const SourceEntry *Source = CI ? Cat.matchSource(Name) : nullptr;
-      if (Source && Source->returnCarriesInput()) {
+      if (Source && Source->returnCarriesInput() &&
+          Effects.has(CallEffectCapability::Taint) &&
+          Effects.has(CallEffectCapability::Return)) {
         if (Top.TaintSource.empty()) {
           Top.TaintSource = stripLeadingUnderscores(Name).str();
           Top.Reason = "reaches external input " + Top.TaintSource;

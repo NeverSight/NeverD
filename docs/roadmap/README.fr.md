@@ -78,7 +78,7 @@ Analyser un binaire levé pour les défauts de durée de vie du tas (fuite, doub
 | Piste `hunt` | Catalogue de puits + préfiltre d’arguments + capacité de destination + témoin du solveur |
 | Contrat d’identité | Résolution des puits par format (IAT PE, PLT ELF, bind dyld Mach-O) et sources de noms PDB / DWARF / MAP |
 
-**État :** L’implémentation P0 est présente pour PE, ELF et Mach-O, mais la clôture attend un adaptateur de rejeu des entrées de processus et des résumés complets des effets d’appel. La couverture des verdicts et de l’identité est verrouillée par [`unittests/safety`](../../unittests/safety) et le bout-en-bout [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp), qui exécute sur chaque hôte la matrice obligatoire PE/ELF/Mach-O × x86-64/AArch64. Voir [Audit et chasse de sûreté mémoire](../memory-safety.fr.md). P1 s’étend aux débordements pile/global, lectures non initialisées et chaînes de format.
+**État :** La Phase 1 est implémentée pour PE, ELF et Mach-O. P0 comprend les analyses en monde fermé du cycle de vie du tas et des copies dangereuses, ainsi que la preuve additive du schéma v1 avec rejeu `process-input-v1` des valeurs littérales exactes de l’environnement et de la première consommation de l’entrée standard ; les autres types restent non rejouables avec une raison. P1 couvre les débordements pile/global, les lectures locales non initialisées et les chaînes de format. Les effets d’appel inconnus ou partiellement applicables restent UNKNOWN. La couverture des verdicts et de l’identité est verrouillée par [`unittests/safety`](../../unittests/safety) et le bout-en-bout [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp), qui exécute sur chaque hôte la matrice obligatoire PE/ELF/Mach-O × x86-64/AArch64. Voir [Audit et chasse de sûreté mémoire](../memory-safety.fr.md). Les contrôles binaires, le fuzzing hybride et la portée interprocédurale élargie de P2 restent des travaux ultérieurs de la feuille de route, hors acceptation de la Phase 1.
 
 ---
 
@@ -96,7 +96,7 @@ Analyser un binaire levé pour les défauts de durée de vie du tas (fuite, doub
 ## Calendrier
 
 Les formats natifs, le décodage/lifting EVM legacy jusqu’à Fusaka, Solana SBF et
-la sûreté mémoire P0 sont couverts par régression. La reconstruction source EVM
+la sûreté mémoire Phase 1 sont couverts par régression. La reconstruction source EVM
 prudente reste en cours. Pas de dates promises.
 
 | Fonctionnalité | Statut |
@@ -105,5 +105,5 @@ prudente reste en cours. Pas de dates promises.
 | Décodage/lifting EVM legacy | Terminé jusqu’à Fusaka ; couvert par régression |
 | Reconstruction source EVM | En cours — étayée et prudente |
 | Décompilation Solana eBPF (SBF) | Terminée — v0-v4, C, Rust et LLVM ; couverte par régression |
-| Audit et chasse de sûreté mémoire | En cours — implémentation P0 présente ; clôture par rejeu/résumés d’appels en attente |
+| Audit et chasse de sûreté mémoire | Phase 1 terminée — analyses P0/P1, preuve de rejeu et matrice native formats/architectures présentes ; suites P2 planifiées |
 | Renforcement moteur & produit | Continu |

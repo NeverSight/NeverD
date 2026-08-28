@@ -128,14 +128,14 @@ int runSearch(neverd_session_t Sess) {
   return 0;
 }
 
-int runSigs(neverd_session_t Sess, const char *Argv0) {
+Expected<int> applyRequestedSignatures(neverd_session_t Sess,
+                                       const char *Argv0) {
   int MatchCount = -1;
   if (SigAuto) {
     // Look for signatures/ next to the neverd executable, then cwd.
     std::error_code EC;
-    auto ExeDir =
-        std::filesystem::canonical(std::filesystem::path(Argv0), EC)
-            .parent_path();
+    auto ExeDir = std::filesystem::canonical(std::filesystem::path(Argv0), EC)
+                      .parent_path();
     auto SigBase = ExeDir / "signatures";
     if (!std::filesystem::exists(SigBase))
       SigBase = std::filesystem::current_path() / "signatures";
@@ -145,14 +145,22 @@ int runSigs(neverd_session_t Sess, const char *Argv0) {
   } else if (!SigDir.getValue().empty()) {
     MatchCount = neverd_apply_signatures(Sess, SigDir.getValue().c_str());
   } else {
-    WithColor::error()
-        << "specify --auto, --sig-dir <directory>, or --sig-file <file>\n";
-    return 1;
+    return createStringError(inconvertibleErrorCode(),
+                             "specify --auto, --sig-dir <directory>, or "
+                             "--sig-file <file>");
   }
 
-  if (MatchCount < 0) {
-    WithColor::error()
-        << "signature matching failed: " << takeLastError(Sess) << "\n";
+  if (MatchCount < 0)
+    return createStringError(inconvertibleErrorCode(),
+                             "signature matching failed: %s",
+                             takeLastError(Sess).c_str());
+  return MatchCount;
+}
+
+int runSigs(neverd_session_t Sess, const char *Argv0) {
+  Expected<int> MatchCount = applyRequestedSignatures(Sess, Argv0);
+  if (!MatchCount) {
+    WithColor::error() << toString(MatchCount.takeError()) << "\n";
     return 1;
   }
 
@@ -160,7 +168,7 @@ int runSigs(neverd_session_t Sess, const char *Argv0) {
   if (JsonOutput) {
     outs() << (Json ? Json : "[]") << "\n";
   } else {
-    outs() << format("Found %d signature matches:\n\n", MatchCount);
+    outs() << format("Found %d signature matches:\n\n", *MatchCount);
     auto Parsed = json::parse(Json ? Json : "[]");
     if (Parsed) {
       if (auto *Arr = Parsed->getAsArray()) {

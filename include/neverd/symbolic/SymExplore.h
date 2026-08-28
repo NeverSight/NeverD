@@ -32,9 +32,10 @@
 #define NEVERD_SYMBOLIC_SYMEXPLORE_H
 
 #include "neverd/ir/low/LowIR.h"
-#include "neverd/symbolic/SymState.h"
+#include "neverd/symbolic/SymExec.h"
 
 #include <cstddef>
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -78,6 +79,24 @@ struct SymConcreteRegister {
   uint64_t Offset = 0;
   uint64_t Value = 0;
 };
+
+/// Identity of one executed call, including its zero-based repetition on this
+/// path.  Address plus sequence distinguishes multiple LowIR calls emitted for
+/// one machine instruction; Invocation distinguishes loop iterations.
+struct SymCallOccurrence {
+  va_t VA = 0;
+  int Seq = -1;
+  int BlockId = -1;
+  size_t OpIndex = 0;
+  unsigned Invocation = 0;
+};
+
+/// Supplies a complete, analysis-neutral effect for an exact call occurrence.
+/// Returning no value preserves conservative call havoc.  The provider may
+/// read \p State to recover arguments, but must express every state mutation in
+/// the returned effect.
+using SymCallEffectProvider = std::function<std::optional<SymCallEffect>(
+    SymContext &, SymState &, const LowOp &, const SymCallOccurrence &)>;
 
 /// The concrete half of a concolic walk.
 ///
@@ -139,6 +158,10 @@ struct ExploreOptions {
   std::vector<SymRegisterRange> CallPreservedRegisters;
   /// Optional ABI return register to snapshot immediately after every call.
   std::optional<SymRegisterRange> TrackedCallResultRegister;
+  /// Optional complete call contracts.  This callback lives in Symbolic's
+  /// neutral vocabulary so higher-level analyses can adapt their own catalogs
+  /// without creating a dependency from Symbolic back to them.
+  SymCallEffectProvider CallEffects;
   /// The concrete engine of a concolic walk, or null for a purely symbolic
   /// one.
   ///

@@ -15,6 +15,8 @@
 #include "neverd/safety/HuntEngine.h"
 #include "neverd/safety/SinkScanner.h"
 
+#include <fstream>
+
 using namespace neverd;
 using namespace neverd::safety;
 
@@ -928,7 +930,8 @@ LowFunc repeatedReadFileThenFormatLow(va_t FirstSourceVA, va_t SecondSourceVA,
 
 LowFunc returnSourceThenFormatLow(va_t SourceVA, va_t SinkVA,
                                   std::optional<uint64_t> RequiredReturn,
-                                  uint16_t ReturnBytes = 8) {
+                                  uint16_t ReturnBytes = 8,
+                                  bool RequireNotEqual = false) {
   constexpr uint64_t kRax = 0;
   constexpr uint64_t kFlag = 200;
   constexpr va_t kEntry = 0x400000;
@@ -945,10 +948,12 @@ LowFunc returnSourceThenFormatLow(va_t SourceVA, va_t SinkVA,
       Entry.Ops.push_back(lop(NdOp::SUBBYTES, NdVar::reg(kRax, ReturnBytes),
                               {NdVar::reg(kRax, 8), NdVar::cst(0, ReturnBytes)},
                               SourceVA + 2));
-    Entry.Ops.push_back(lop(NdOp::INT_EQUAL, NdVar::reg(kFlag, 1),
-                            {NdVar::reg(kRax, ReturnBytes),
-                             NdVar::cst(*RequiredReturn, ReturnBytes)},
-                            SourceVA + 4));
+    Entry.Ops.push_back(
+        lop(RequireNotEqual ? NdOp::INT_NOTEQUAL : NdOp::INT_EQUAL,
+            NdVar::reg(kFlag, 1),
+            {NdVar::reg(kRax, ReturnBytes),
+             NdVar::cst(*RequiredReturn, ReturnBytes)},
+            SourceVA + 4));
     Entry.Ops.push_back(lop(NdOp::COND_BR, NdVar{},
                             {NdVar::cst(SinkVA, 8), NdVar::reg(kFlag, 1)},
                             SourceVA + 8));
@@ -1658,6 +1663,61 @@ TEST(HuntEngine, CustomSourceSinkIsNotImplicitlyUnbounded) {
                   BinaryFormat::Unknown, /*Image=*/nullptr, &Cat);
   ASSERT_TRUE(Fnd.has_value());
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, ConfiguredCopySinkExecutesItsInferredEffect) {
+  const std::string Path =
+      std::string(::testing::TempDir()) + "/neverd_hunt_custom_copy.json";
+  {
+    std::ofstream OS(Path);
+    OS << R"({"sinks":[{"name":"my_copy","kind":"copy",)"
+       << R"("dst":0,"src":1,"len":2}]})";
+  }
+  SinkCatalog Cat = SinkCatalog::defaults();
+  ASSERT_FALSE(static_cast<bool>(Cat.mergeSinksFromFile(Path)));
+
+  for (const auto &[Length, Expected] :
+       {std::pair<uint64_t, Verdict>{8, Verdict::Safe},
+        std::pair<uint64_t, Verdict>{32, Verdict::Unsafe}}) {
+    SCOPED_TRACE(Length);
+    Builder B("main");
+    B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+    B.call("my_copy", temp(0),
+           {temp(1), param(2), MedVar::makeConst(Length, 8)});
+    B.F.Blocks[0].Ops.back().Addr = 0x400010;
+    LowFunc LF = reachableSinkLow(0x400010);
+
+    const auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                          BinaryFormat::ELF, /*Image=*/nullptr, &Cat);
+    ASSERT_TRUE(Fnd.has_value());
+    EXPECT_EQ(Fnd->TheVerdict, Expected) << Fnd->Detail;
+    EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
+  }
+}
+
+TEST(HuntEngine, ConfiguredCopySinkWrongArityFailsClosed) {
+  const std::string Path =
+      std::string(::testing::TempDir()) + "/neverd_hunt_custom_arity.json";
+  {
+    std::ofstream OS(Path);
+    OS << R"({"sinks":[{"name":"my_copy","kind":"copy",)"
+       << R"("dst":0,"src":1,"len":2}]})";
+  }
+  SinkCatalog Cat = SinkCatalog::defaults();
+  ASSERT_FALSE(static_cast<bool>(Cat.mergeSinksFromFile(Path)));
+
+  Builder B("main");
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call("my_copy", temp(0), {temp(1), param(2)});
+  B.F.Blocks[0].Ops.back().Addr = 0x400010;
+  LowFunc LF = reachableSinkLow(0x400010);
+
+  const auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                        BinaryFormat::ELF, /*Image=*/nullptr, &Cat);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::Low) << Fnd->Detail;
   EXPECT_TRUE(Fnd->Witness.empty());
 }
 
@@ -2637,7 +2697,8 @@ TEST(HuntEngine, MissingCallAddressDoesNotGuessFirstCallAsSink) {
 TEST(HuntEngine, TaintedMemcpyWithoutPathSourceIsUnknown) {
   Builder B;
   B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
-  B.call("read", temp(5), {});
+  B.call("read", temp(5),
+         {MedVar::makeConst(0, 8), temp(2), MedVar::makeConst(32, 8)});
   B.call("memcpy", temp(0), {temp(1), temp(2), temp(5)});
   B.F.Blocks[0].Ops.back().Addr = 0x400010;
   B.F.CC = CallingConv::SysV_AMD64;
@@ -2648,6 +2709,23 @@ TEST(HuntEngine, TaintedMemcpyWithoutPathSourceIsUnknown) {
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
   ASSERT_TRUE(Fnd->Capacity.has_value());
   EXPECT_EQ(*Fnd->Capacity, 16u);
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, WrongArityInputNameCannotPromoteUnknownLengthToUnsafe) {
+  Builder B;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call("read", temp(5), {});
+  B.call("memcpy", temp(0), {temp(1), temp(2), temp(5)});
+  B.F.Blocks[0].Ops.back().Addr = 0x400010;
+  B.F.CC = CallingConv::SysV_AMD64;
+  LowFunc LF = reachableSinkLow(0x400010);
+
+  const auto Fnd =
+      hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {}, BinaryFormat::ELF);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::Low) << Fnd->Detail;
   EXPECT_TRUE(Fnd->Witness.empty());
 }
 
@@ -2703,6 +2781,84 @@ TEST(HuntEngine, ExplicitLengthSourceAndSinkMustShareFeasiblePath) {
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
   EXPECT_TRUE(Fnd->Witness.empty());
   EXPECT_EQ(Fnd->Detail, "length provenance unresolved");
+}
+
+TEST(HuntEngine, MixedSourceAndBypassPathsCannotClaimSafe) {
+  constexpr va_t MallocVA = 0x400000;
+  constexpr va_t SourceVA = 0x400010;
+  constexpr va_t SinkVA = 0x400050;
+
+  MedFunc F;
+  F.Name = "f";
+  F.Entry = MallocVA;
+  F.CC = CallingConv::SysV_AMD64;
+  F.Blocks.resize(6);
+  for (int I = 0; I < 6; ++I)
+    F.Blocks[I].Id = I;
+  F.Blocks[0].Succs = {1, 2};
+  F.Blocks[1].Preds = {0};
+  F.Blocks[1].Succs = {3};
+  F.Blocks[2].Preds = {0};
+  F.Blocks[2].Succs = {3};
+  F.Blocks[3].Preds = {1, 2};
+  F.Blocks[3].Succs = {5};
+  F.Blocks[5].Preds = {3};
+  PhiNode Length;
+  Length.Output = temp(7);
+  Length.Args = {{1, temp(5)}, {2, param(9)}};
+  F.Blocks[3].Phis.push_back(std::move(Length));
+
+  auto addBlockCall = [&](int BlockId, llvm::StringRef Name, MedVar Ret,
+                          std::vector<MedVar> Args, va_t Addr) {
+    MedBlock &Block = F.Blocks[BlockId];
+    const int OpIdx = static_cast<int>(Block.Ops.size());
+    MedOp Op;
+    Op.Opcode = NdOp::CALL;
+    Op.Output = Ret;
+    Op.Addr = Addr;
+    Op.addInput(MedVar::makeConst(0x9000, 8));
+    Block.Ops.push_back(std::move(Op));
+    MedCallInfo CI;
+    CI.BlockId = BlockId;
+    CI.OpIdx = OpIdx;
+    CI.TargetName = Name.str();
+    CI.Args = std::move(Args);
+    F.CallInfos.push_back(std::move(CI));
+  };
+
+  addBlockCall(0, "malloc", temp(1), {MedVar::makeConst(16, 8)}, MallocVA);
+  addBlockCall(
+      1, "fread", temp(5),
+      {temp(2), MedVar::makeConst(1, 8), MedVar::makeConst(8, 8), temp(6)},
+      SourceVA);
+  addBlockCall(5, "memcpy", temp(0), {temp(1), temp(2), temp(7)}, SinkVA);
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  AnalysisInput In;
+  In.Img = &Img;
+  const ArgClassification Slice = classifyArgument(
+      In, SinkCatalog::defaults(), F, /*CallInfoIndex=*/2, /*ArgIndex=*/2);
+  ASSERT_EQ(Slice.Flow, ArgFlow::Tainted);
+  ASSERT_EQ(Slice.TaintSource, "fread");
+
+  LowFunc LF = mutuallyExclusiveSourceAndSinkLow(MallocVA, SourceVA, SinkVA);
+  LF.Blocks[1].Ops.insert(
+      std::next(LF.Blocks[1].Ops.begin()),
+      lop(NdOp::COPY, NdVar::reg(16, 8), {NdVar::reg(0, 8)}, SourceVA + 2));
+  LowBlock &Join = LF.Blocks[3];
+  Join.Ops.clear();
+  Join.Ops.push_back(
+      lop(NdOp::BRANCH, NdVar{}, {NdVar::cst(SinkVA, 8)}, Join.StartAddr));
+  Join.Succs = {5};
+  LF.Blocks[4].Preds.clear();
+  LF.Blocks[5].Preds = {3};
+
+  const auto Fnd = hunt(F, /*StackRegs=*/false, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::Low) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
 }
 
 TEST(HuntEngine, SourceAndSinkMustShareFeasiblePath) {
@@ -2913,6 +3069,69 @@ TEST(HuntEngine, ReturnSourceOnSinkPathCorroboratesImplicitCopy) {
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
   EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
   EXPECT_FALSE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, LiteralEnvironmentSourceProducesExactReplayPlan) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400020;
+  BinaryImage Img;
+  const va_t KeyVA = addCString(Img, "PAYLOAD");
+  const MedVar SourceResult = mkReg(0, 1);
+
+  Builder B("main");
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call("getenv", SourceResult, {MedVar::makeConst(KeyVA, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("strcpy", temp(0), {temp(1), SourceResult});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = returnSourceThenFormatLow(SourceVA, SinkVA,
+                                         /*RequiredReturn=*/0,
+                                         /*ReturnBytes=*/8,
+                                         /*RequireNotEqual=*/true);
+
+  const auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                        BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  ASSERT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
+  ASSERT_TRUE(Fnd->Replay.has_value()) << Fnd->ReplayReason;
+  ASSERT_EQ(Fnd->Replay->Inputs.size(), 1u);
+  const ReplayInput &Input = Fnd->Replay->Inputs.front();
+  EXPECT_EQ(Input.Kind, ReplayInputKind::Environment);
+  EXPECT_EQ(Input.Name, "PAYLOAD");
+  EXPECT_EQ(Input.Bytes.size(), 16u);
+  EXPECT_TRUE(Input.TerminatorImplicit);
+  ASSERT_EQ(Input.Bindings.size(), 1u);
+  EXPECT_EQ(Input.Bindings.front().Role, ReplayBindingRole::Success);
+}
+
+TEST(HuntEngine, LiteralEnvironmentReplayRejectsValueSensitiveReturn) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400020;
+  BinaryImage Img;
+  const va_t KeyVA = addCString(Img, "PAYLOAD");
+  const MedVar SourceResult = mkReg(0, 1);
+
+  Builder B("main");
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call("getenv", SourceResult, {MedVar::makeConst(KeyVA, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("strcpy", temp(0), {temp(1), SourceResult});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = returnSourceThenFormatLow(SourceVA, SinkVA,
+                                         /*RequiredReturn=*/1);
+
+  const auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                        BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
+  EXPECT_FALSE(Fnd->Replay.has_value());
+  EXPECT_EQ(Fnd->ReplayReason,
+            "success-only replay cannot reproduce value-sensitive source "
+            "constraints");
 }
 
 TEST(HuntEngine, ScanfOutputAndSinkMustShareFeasiblePath) {
@@ -4235,7 +4454,7 @@ TEST(HuntEngine, I386CdeclSourceBoundUsesOutgoingStackArgument) {
   EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
 }
 
-TEST(HuntEngine, StackPassedSourceOutputUsesPlatformAbiLayout) {
+TEST(HuntEngine, CustomStackPassedSourceWithoutTypedEffectFailsClosed) {
   constexpr va_t SourceVA = 0x400004;
   constexpr va_t SinkVA = 0x400010;
   constexpr uint64_t CallSP = 0x7000;
@@ -4305,12 +4524,9 @@ TEST(HuntEngine, StackPassedSourceOutputUsesPlatformAbiLayout) {
     const auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, C.TheArch, {},
                           C.Format, /*Image=*/nullptr, &Cat);
     ASSERT_TRUE(Fnd.has_value());
-    EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
-    EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
-    EXPECT_TRUE(std::any_of(
-        Fnd->Witness.begin(), Fnd->Witness.end(), [](const auto &Item) {
-          return Item.first == "source" && Item.second == "custom_stack_input";
-        }));
+    EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+    EXPECT_EQ(Fnd->TheConfidence, Confidence::Low) << Fnd->Detail;
+    EXPECT_TRUE(Fnd->Witness.empty());
   }
 }
 
@@ -4860,10 +5076,12 @@ TEST(HuntEngine, ReadFileByteCountUsesCOFFOutputContract) {
     uint64_t Requested;
     BinaryFormat Format;
     Verdict Expected;
+    Confidence ExpectedConfidence;
   };
-  for (const Case C : {Case{8, BinaryFormat::COFF, Verdict::Safe},
-                       Case{32, BinaryFormat::COFF, Verdict::Unsafe},
-                       Case{8, BinaryFormat::ELF, Verdict::Unsafe}}) {
+  for (const Case C :
+       {Case{8, BinaryFormat::COFF, Verdict::Safe, Confidence::High},
+        Case{32, BinaryFormat::COFF, Verdict::Unsafe, Confidence::High},
+        Case{8, BinaryFormat::ELF, Verdict::Unknown, Confidence::Low}}) {
     SCOPED_TRACE(static_cast<int>(C.Format));
     SCOPED_TRACE(C.Requested);
     Builder B;
@@ -4885,7 +5103,7 @@ TEST(HuntEngine, ReadFileByteCountUsesCOFFOutputContract) {
     auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {}, C.Format);
     ASSERT_TRUE(Fnd.has_value());
     EXPECT_EQ(Fnd->TheVerdict, C.Expected) << Fnd->Detail;
-    EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
+    EXPECT_EQ(Fnd->TheConfidence, C.ExpectedConfidence) << Fnd->Detail;
   }
 }
 

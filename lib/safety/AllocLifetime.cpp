@@ -6,6 +6,7 @@
 
 #include "neverd/safety/AllocLifetime.h"
 
+#include "CallEffects.h"
 #include "CopySemantics.h"
 #include "SourceSemantics.h"
 #include "StackSlotFlow.h"
@@ -40,15 +41,6 @@ using ValueKey = std::tuple<uint8_t, int, int>;
 
 ValueKey keyOf(const MedVar &V) {
   return {static_cast<uint8_t>(V.Kind), V.Id, V.SSAVer};
-}
-
-bool isStringLengthCall(llvm::StringRef Name) {
-  return llvm::StringSwitch<bool>(stripLeadingUnderscores(Name))
-#define SAFETY_CALL_TRAIT(NAME, IS_LENGTH, IS_BOUNDED)                         \
-  .Case(NAME, IS_LENGTH != 0)
-#include "neverd/safety/SafetyCallTraits.inc"
-#undef SAFETY_CALL_TRAIT
-      .Default(false);
 }
 
 enum class StringDuplicationKind : uint8_t {
@@ -911,8 +903,11 @@ private:
 
   const SinkEntry *catalogSink(const MedCallInfo &CI) const {
     const SinkEntry *Entry = matchedCatalogSink(CI);
-    return Entry && !debugSinkSummaryConflicts(In, CI, *Entry) ? Entry
-                                                               : nullptr;
+    if (!Entry || debugSinkSummaryConflicts(In, CI, *Entry))
+      return nullptr;
+    if (!resolveCallEffects(In, Cat, CI).supports(*Entry))
+      return nullptr;
+    return Entry;
   }
 
   bool argumentHasPointerWidth(const MedCallInfo &CI, int ArgIndex) const {
@@ -1048,9 +1043,19 @@ private:
       return EscapeState::No;
     }
 
-    // Catalogued runtime operations have a bounded, non-retaining contract.
-    // Unknown and indirect callees remain explicitly unresolved.
-    return catalogSink(CI) ? EscapeState::No : EscapeState::Unknown;
+    // A matching spelling is not an executable non-retention contract when
+    // the exact external declaration contradicts the catalog roles.  The
+    // audit reports that conflict separately, but must also keep this argument
+    // unresolved so an accompanying leak candidate cannot override UNKNOWN.
+    if (const SinkEntry *Matched = matchedCatalogSink(CI);
+        Matched && debugSinkSummaryConflicts(In, CI, *Matched))
+      return EscapeState::Unknown;
+
+    // Only the executable semantics catalog can establish a non-retaining
+    // contract. A custom discovery sink has NoEffect and remains unresolved.
+    const CallEffects Effects = resolveCallEffects(In, Cat, CI);
+    return Effects.has(CallEffectCapability::Capture) ? EscapeState::No
+                                                      : EscapeState::Unknown;
   }
 
   Summary summarize(const MedFunc &F) const {
@@ -1434,11 +1439,10 @@ private:
     return false;
   }
 
-  unsigned summarizedCallsOnPath(const MedFunc &F, const LowFunc &LF,
-                                 const symbolic::SymPath &Path,
-                                 symbolic::SymContext &Ctx,
-                                 llvm::SmallVectorImpl<uint32_t>
-                                     &AllowedFreshVars) const {
+  unsigned summarizedCallsOnPath(
+      const MedFunc &F, const LowFunc &LF, const symbolic::SymPath &Path,
+      symbolic::SymContext &Ctx,
+      llvm::SmallVectorImpl<uint32_t> &AllowedFreshVars) const {
     unsigned Count = 0;
     size_t CallResultIndex = 0;
     for (const symbolic::SymExecutedOp &Executed : Path.ExecutedOps) {
@@ -1474,15 +1478,16 @@ private:
         }
       if (!Call)
         continue;
-      const std::string Name = callName(*Call);
-      const SourceEntry *Source = Cat.matchSource(Name);
-      if (catalogSink(*Call) || Source || isStringLengthCall(Name)) {
+      const CallEffects Effects = resolveCallEffects(In, Cat, *Call);
+      if (Effects) {
         ++Count;
-        // A return-only source explicitly models its result as external
-        // input.  An output-only source summarizes memory effects, not its
-        // scalar return, so that return must remain fail-closed.
+        const SourceEntry *Source = Cat.matchSource(callName(*Call));
+        // A return-only source explicitly models its result as external input.
+        // Output sources summarize memory effects, not their scalar return.
         if (ExecutedResult && ExecutedResult->Value.isValid() && Source &&
-            Source->OutArg < 0 && Source->returnCarriesInput())
+            Source->OutArg < 0 && Source->returnCarriesInput() &&
+            Effects.has(CallEffectCapability::Return) &&
+            Effects.has(CallEffectCapability::Taint))
           Ctx.collectVars(ExecutedResult->Value, AllowedFreshVars);
       }
     }
@@ -1650,16 +1655,25 @@ private:
     CFG G(F);
     MemModel Mem(F, In);
 
-    for (const MedCallInfo &CI : F.CallInfos)
-      if (const SinkEntry *Entry = matchedCatalogSink(CI);
-          Entry && debugSinkSummaryConflicts(In, CI, *Entry)) {
+    for (const MedCallInfo &CI : F.CallInfos) {
+      const SinkEntry *Entry = matchedCatalogSink(CI);
+      if (!Entry)
+        continue;
+      const bool DebugConflict = debugSinkSummaryConflicts(In, CI, *Entry);
+      const bool MissingEffects =
+          !DebugConflict && !internalCallee(CI) &&
+          !resolveCallEffects(In, Cat, CI).supports(*Entry);
+      if (DebugConflict || MissingEffects) {
         Finding Fn = baseFinding(F, Entry->Class, callVA(F, CI), callName(CI),
                                  CI.TargetAddr, CI.IsIndirect);
         Fn.TheVerdict = Verdict::Unknown;
         Fn.TheConfidence = Confidence::Low;
-        Fn.Detail = "debug function signature conflicts with sink summary";
+        Fn.Detail = DebugConflict
+                        ? "debug function signature conflicts with sink summary"
+                        : "no exact external-call effect summary applies";
         Out.push_back(std::move(Fn));
       }
+    }
 
     if (IncludeStackReads)
       auditUninitializedStackReads(F, Mem, Out);
@@ -2170,6 +2184,7 @@ private:
   CallUse callUse(const MedCallInfo &CI, int ArgIndex) const {
     if (ArgIndex < 0 || ArgIndex >= static_cast<int>(CI.Args.size()))
       return CallUse::Possible;
+    const CallEffects Effects = resolveCallEffects(In, Cat, CI);
     if (const SinkEntry *E = catalogSink(CI)) {
       switch (E->Kind) {
       case SinkKind::Copy:
@@ -2178,7 +2193,8 @@ private:
         if (!argumentHasPointerWidth(CI, ArgIndex))
           return CallUse::Possible;
         if (E->UnboundedWrite && ArgIndex == E->DstArg &&
-            Cat.matchSource(callName(CI)))
+            Cat.matchSource(callName(CI)) &&
+            Effects.has(CallEffectCapability::Taint))
           return CallUse::Possible;
         if (E->LenArg >= 0 && E->LenArg < static_cast<int>(CI.Args.size()) &&
             E->CapArg >= 0 && E->CapArg < static_cast<int>(CI.Args.size())) {
@@ -2275,14 +2291,18 @@ private:
     const std::string Name = callName(CI);
     if (std::optional<
             std::pair<std::string, safety::detail::FormattedSourceKind>>
-            Formatted = safety::detail::formattedSourceName(Name)) {
+            Formatted = Effects.family() == CallEffectFamily::FormattedInput
+                            ? safety::detail::formattedSourceName(Name)
+                            : std::nullopt) {
       const unsigned FixedCount = libc::varArgFixedCount(Formatted->first);
       return ArgIndex < static_cast<int>(FixedCount)
                  ? (argumentHasPointerWidth(CI, ArgIndex) ? CallUse::Definite
                                                           : CallUse::Possible)
                  : CallUse::Possible;
     }
-    if (const SourceEntry *Source = Cat.matchSource(Name)) {
+    if (const SourceEntry *Source = Cat.matchSource(Name);
+        Source && Effects.has(CallEffectCapability::Taint) &&
+        Effects.has(CallEffectCapability::ModRef)) {
       if (ArgIndex != Source->OutArg)
         return CallUse::Possible;
       const std::string Normalized = SinkCatalog::normalize(Name);
@@ -2328,7 +2348,8 @@ private:
       // result predicate, reaching the call proves only a possible access.
       return CallUse::Possible;
     }
-    if (isStringLengthCall(Name))
+    if (Effects.family() == CallEffectFamily::StringLength ||
+        Effects.family() == CallEffectFamily::BoundedStringLength)
       return ArgIndex == 0
                  ? (argumentHasPointerWidth(CI, ArgIndex) ? CallUse::Definite
                                                           : CallUse::Possible)

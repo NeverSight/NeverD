@@ -461,7 +461,8 @@ StepResult SymExec::stepMemory(const LowOp &Op) {
   return StepResult::Continue;
 }
 
-StepResult SymExec::stepControl(const LowOp &Op) {
+StepResult SymExec::stepControl(const LowOp &Op,
+                                const SymCallEffect *CallEffect) {
   switch (Op.Opcode) {
   case NdOp::BRANCH:
     Target = Op.NumInputs >= 1 ? read(Op.Inputs[0]) : Ctx.mkConst(64, 0);
@@ -501,6 +502,32 @@ StepResult SymExec::stepControl(const LowOp &Op) {
     // SymExplore consumes it when instruction-boundary metadata proves that the
     // call does not return.
     Target = Op.NumInputs >= 1 ? read(Op.Inputs[0]) : SymRef();
+    if (CallEffect) {
+      State.clobberRegistersExcept(CallPreserved);
+      if (CallEffect->Memory == SymCallMemoryEffect::Havoc)
+        State.clobberMemory();
+      for (const SymCallMemoryWrite &Write : CallEffect->Writes) {
+        if (!Write.Address.isValid() || !Write.Value.isValid()) {
+          // A malformed explicit write cannot preserve memory soundly.  Keep
+          // the summary fail-closed even when its provider made a mistake.
+          State.clobberMemory();
+          ++MemoryHavocs;
+          continue;
+        }
+        if (!State.store(Write.Address, Write.Value))
+          ++MemoryHavocs;
+      }
+      if (widthOf(Op.Output) != 0) {
+        SymRef Return = CallEffect->ReturnValue;
+        if (!Return.isValid())
+          Return = State.freshInput("call_summary", widthOf(Op.Output));
+        writeResult(Op.Output, Return);
+      }
+      for (SymRef Constraint : CallEffect->Constraints)
+        if (Constraint.isValid())
+          assume(Constraint);
+      return StepResult::Continue;
+    }
     ++Unmodelled;
     ++CallHavocs;
     State.clobberRegistersExcept(CallPreserved);
@@ -521,7 +548,9 @@ StepResult SymExec::stepControl(const LowOp &Op) {
 // Dispatch
 //===----------------------------------------------------------------------===//
 
-StepResult SymExec::step(const LowOp &Op) {
+StepResult SymExec::step(const LowOp &Op) { return step(Op, nullptr); }
+
+StepResult SymExec::step(const LowOp &Op, const SymCallEffect *CallEffect) {
   switch (Op.Opcode) {
   case NdOp::INT_ADD:
   case NdOp::INT_SUB:
@@ -597,7 +626,7 @@ StepResult SymExec::step(const LowOp &Op) {
   case NdOp::RETURN:
   case NdOp::CALL:
   case NdOp::INDIR_CALL:
-    return stepControl(Op);
+    return stepControl(Op, CallEffect);
 
   case NdOp::NOP:
     return StepResult::Continue;

@@ -29,6 +29,12 @@
 #ifndef SAFETY_ARG_FLOW
 #define SAFETY_ARG_FLOW(ID, SPELLING)
 #endif
+#ifndef SAFETY_REPLAY_INPUT_KIND
+#define SAFETY_REPLAY_INPUT_KIND(ID, SPELLING)
+#endif
+#ifndef SAFETY_REPLAY_BINDING_ROLE
+#define SAFETY_REPLAY_BINDING_ROLE(ID, SPELLING)
+#endif
 
 //===----------------------------------------------------------------------===//
 // Tracks
@@ -101,6 +107,19 @@ SAFETY_ARG_FLOW(Bounded, "BOUNDED")
 SAFETY_ARG_FLOW(Tainted, "TAINTED")
 SAFETY_ARG_FLOW(Unknown, "UNKNOWN")
 
+//===----------------------------------------------------------------------===//
+// Exact process-input replay
+//===----------------------------------------------------------------------===//
+
+SAFETY_REPLAY_INPUT_KIND(Environment, "environment")
+SAFETY_REPLAY_INPUT_KIND(StandardInput, "stdin")
+
+SAFETY_REPLAY_BINDING_ROLE(Extent, "extent")
+SAFETY_REPLAY_BINDING_ROLE(Success, "success")
+SAFETY_REPLAY_BINDING_ROLE(Byte, "byte")
+
+#undef SAFETY_REPLAY_BINDING_ROLE
+#undef SAFETY_REPLAY_INPUT_KIND
 #undef SAFETY_ARG_FLOW
 #undef SAFETY_NAME_SOURCE
 #undef SAFETY_SINK_KIND

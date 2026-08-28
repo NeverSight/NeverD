@@ -450,6 +450,41 @@ TEST(SinkCatalog, CanonicalOverridePreservesBuiltInFormatAliases) {
   EXPECT_EQ(ArmEabi->Severity, 91u);
 }
 
+TEST(SinkCatalog, RejectsInvalidConfiguredEffectsTransactionally) {
+  struct InvalidEffectCase {
+    const char *Suffix;
+    const char *Effect;
+    const char *Message;
+  };
+  const InvalidEffectCase Cases[] = {
+      {"layout", R"({"min_arity":2})", "minimum arity"},
+      {"range", R"({"min_arity":3,"max_arity":2})", "maximum arity"},
+      {"format", R"({"formats":["pe"]})", "unknown sink effect format"},
+      {"abi", R"({"abis":["cdecl"]})", "unknown sink effect ABI"},
+  };
+
+  for (const InvalidEffectCase &Case : Cases) {
+    SCOPED_TRACE(Case.Suffix);
+    const std::string Path = std::string(::testing::TempDir()) +
+                             "/neverd_bad_effect_" + Case.Suffix + ".json";
+    {
+      std::ofstream OS(Path);
+      OS << R"({"sinks":[{"name":"would_publish","kind":"copy",)"
+         << R"("dst":0,"src":1,"len":2},{"name":"bad",)"
+         << R"("kind":"copy","dst":0,"src":1,"len":2,"effect":)" << Case.Effect
+         << R"(}]})";
+    }
+
+    SinkCatalog C = SinkCatalog::defaults();
+    llvm::Error Error = C.mergeSinksFromFile(Path);
+    ASSERT_TRUE(static_cast<bool>(Error));
+    EXPECT_NE(llvm::toString(std::move(Error)).find(Case.Message),
+              std::string::npos);
+    EXPECT_EQ(C.matchSink("would_publish"), nullptr);
+    EXPECT_EQ(C.matchConfiguredCallEffect("would_publish"), nullptr);
+  }
+}
+
 TEST(SinkCatalog, RejectsUnknownSinkKind) {
   std::string Path =
       std::string(::testing::TempDir()) + "/neverd_bad_sink_kind.json";

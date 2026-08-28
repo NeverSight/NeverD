@@ -278,8 +278,8 @@ neverd patch --subst --flatten --mba -o patched binary
 | `funcs` | Discovered functions |
 | `disasm` | Disassemble (`--func` name or hex) |
 | `sym-explore` | Bounded native LowIR path exploration (`--func`; JSON output) |
-| `audit` | Heap-lifetime defects: leak, double free, use after free (JSON) |
-| `hunt` | Dangerous-copy overflows with symbolic/candidate witness evidence (JSON) |
+| `audit` | Heap-lifetime defects and uninitialized local stack reads (JSON) |
+| `hunt` | Dangerous-copy overflows with symbolic witnesses and additive `process-input-v1` replay evidence when a complete plan is available (JSON schema v1) |
 | `hex` | Hex dump at an address |
 | `cfg` / `callgraph` | CFG / call graph (JSON; DOT/SVG optional) |
 | `xrefs` | Cross-references |

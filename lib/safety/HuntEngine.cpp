@@ -6,7 +6,9 @@
 
 #include "neverd/safety/HuntEngine.h"
 
+#include "CallEffects.h"
 #include "CopySemantics.h"
+#include "ProcessInputReplay.h"
 #include "SourceSemantics.h"
 
 #include "neverd/debug/DebugContext.h"
@@ -30,6 +32,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <optional>
 #include <string>
 #include <utility>
@@ -302,6 +305,60 @@ bool sourceReturnRequiresPointerWidth(llvm::StringRef Name) {
               "argv"},
              true)
       .Default(false);
+}
+
+std::optional<uint64_t> exactScalarConstant(const MedVar &Value) {
+  if (Value.Size == 0 || Value.Size > sizeof(uint64_t) ||
+      isAddressProvenance(Value.Provenance))
+    return std::nullopt;
+  return safety::detail::canonicalConstantValue(Value);
+}
+
+std::optional<ReplayInput>
+replayInputForSource(const AnalysisInput &In, const SinkCatalog &Cat,
+                     const MedCallInfo &Call, const LowOp &Op,
+                     uint64_t Invocation, bool StandardInputAvailable) {
+  const CallEffects Effects = resolveCallEffects(In, Cat, Call);
+  ReplayInput Input;
+  Input.CallVA = Op.Addr;
+  Input.Seq = Op.Seq;
+  Input.Invocation = Invocation;
+
+  if (Effects.has(CallEffectCapability::LiteralEnvironmentReplay)) {
+    std::optional<std::string> Key =
+        safety::detail::readMappedCString(In.Img, Call.Args[0]);
+    if (!Key || Key->empty() || Key->find('=') != std::string::npos)
+      return std::nullopt;
+    Input.Kind = ReplayInputKind::Environment;
+    Input.Name = std::move(*Key);
+    Input.TerminatorImplicit = true;
+    return Input;
+  }
+
+  if (Effects.has(CallEffectCapability::ExactStandardInputReplay) &&
+      StandardInputAvailable) {
+    const std::optional<uint64_t> Descriptor =
+        exactScalarConstant(Call.Args[0]);
+    if (!Descriptor || *Descriptor != 0)
+      return std::nullopt;
+    Input.Kind = ReplayInputKind::StandardInput;
+    Input.EOFAfter = true;
+    return Input;
+  }
+  return std::nullopt;
+}
+
+bool mayConsumeStandardInput(const AnalysisInput &In, const SinkCatalog &Cat,
+                             const MedCallInfo &Call) {
+  const CallEffects Effects = resolveCallEffects(In, Cat, Call);
+  if (!Effects.has(CallEffectCapability::MayConsumeStandardInput))
+    return false;
+  if (!Effects.has(CallEffectCapability::DescriptorZeroIsStandardInput))
+    return true;
+  if (Call.Args.empty())
+    return true;
+  const std::optional<uint64_t> Descriptor = exactScalarConstant(Call.Args[0]);
+  return !Descriptor || *Descriptor == 0;
 }
 
 bool mayWriteMemory(NdOp Opcode) {
@@ -711,16 +768,155 @@ struct ExploreHit {
   bool MissingLength = false;
   bool Reached = false;
   bool SourceEvidence = false;
+  bool MissingRequiredSourceEvidence = false;
   std::vector<SolverAssignment> SymbolicModel;
+  std::optional<ReplayPlan> Replay;
+  std::string ReplayReason;
 };
+
+struct ReplaySeed {
+  ReplayInput Input;
+  ReplayBindingRole Role = ReplayBindingRole::Extent;
+  llvm::SmallVector<uint32_t, 4> BoundVariables;
+  bool LengthIncludesTerminator = false;
+  bool RequiresStringTerminator = false;
+};
+
+std::vector<SolverAssignment> modelAssignments(SymContext &Ctx,
+                                               const BitVectorModel &Model) {
+  std::vector<SolverAssignment> Assignments;
+  for (uint32_t Id : Model.vars()) {
+    std::optional<llvm::APInt> Value = Model.value(Id);
+    if (!Value)
+      continue;
+    const SymVarInfo &Info = Ctx.varInfo(Id);
+    llvm::SmallString<48> Digits;
+    Value->toString(Digits, 16, /*Signed=*/false);
+    Assignments.push_back(
+        {Id, Info.Name, Info.Width, "0x" + Digits.str().str(), Info.Fresh});
+  }
+  return Assignments;
+}
+
+std::optional<ReplayPlan>
+materializeReplay(SymContext &Ctx, SymRef Query, const ReplaySeed &Seed,
+                  llvm::ArrayRef<uint32_t> QueryVars,
+                  const std::vector<SolverAssignment> &Model,
+                  uint64_t WitnessLen, const SafetyBudgets &Budgets,
+                  std::string &Reason) {
+  if (Seed.RequiresStringTerminator && !Seed.LengthIncludesTerminator) {
+    Reason = "process-input replay does not establish a string terminator";
+    return std::nullopt;
+  }
+
+  if (Seed.Role == ReplayBindingRole::Success) {
+    if (Seed.BoundVariables.empty()) {
+      Reason = "success-only replay has no source variable";
+      return std::nullopt;
+    }
+    llvm::SmallVector<SymRef, 4> SuccessParts;
+    for (uint32_t Id : Seed.BoundVariables) {
+      const SymVarInfo &Info = Ctx.varInfo(Id);
+      const SymRef Var = Ctx.mkVar(Info.Name, Info.Width);
+      SuccessParts.push_back(Ctx.mkNe(Var, Ctx.mkZero(Info.Width)));
+    }
+    const SymRef Success = SuccessParts.size() == 1 ? SuccessParts.front()
+                                                    : Ctx.mkAnd(SuccessParts);
+    SymRef CounterexampleParts[] = {Success, Ctx.mkNot(Query)};
+    switch (checkSat(Ctx, Ctx.mkAnd(CounterexampleParts), nullptr,
+                     solverOpts(Budgets))) {
+    case SatResult::Unsat:
+      break;
+    case SatResult::Sat:
+      Reason = "success-only replay cannot reproduce value-sensitive source "
+               "constraints";
+      return std::nullopt;
+    case SatResult::Unknown:
+      Reason = "solver could not validate success-only replay projection";
+      return std::nullopt;
+    case SatResult::Invalid:
+      Reason = "success-only replay projection is malformed";
+      return std::nullopt;
+    }
+  }
+
+  uint64_t InputBytes = WitnessLen;
+  if (Seed.LengthIncludesTerminator) {
+    if (InputBytes == 0) {
+      Reason = "implicit string replay length has no terminator";
+      return std::nullopt;
+    }
+    --InputBytes;
+  }
+  if (InputBytes > kProcessInputReplayByteBudget) {
+    Reason = "process-input replay byte budget exceeded";
+    return std::nullopt;
+  }
+
+  ReplayPlan Candidate;
+  Candidate.QueryVariables.assign(QueryVars.begin(), QueryVars.end());
+  ReplayInput Input = Seed.Input;
+  Input.Bytes.assign(static_cast<size_t>(InputBytes), uint8_t{'A'});
+  for (uint32_t Id : QueryVars)
+    if (std::find(Seed.BoundVariables.begin(), Seed.BoundVariables.end(), Id) !=
+        Seed.BoundVariables.end())
+      Input.Bindings.push_back({Id, Seed.Role, 0});
+  Candidate.Inputs.push_back(std::move(Input));
+
+  ProcessInputReplayResult Built =
+      buildProcessInputReplay(std::move(Candidate), Model);
+  if (!Built.Plan) {
+    Reason = std::move(Built.Reason);
+    return std::nullopt;
+  }
+  return std::move(Built.Plan);
+}
 
 void considerSink(ExploreHit &Best, SymContext &Ctx, SymRef Pred, SymRef Len,
                   SymRef RuntimeCap, uint64_t Capacity,
-                  const SafetyBudgets &Budgets) {
+                  const SafetyBudgets &Budgets,
+                  const std::optional<ReplaySeed> &Replay = std::nullopt,
+                  llvm::StringRef ReplayUnavailableReason = {}) {
   if (!Len.isValid()) {
     Best.MissingLength = true;
+    if (Best.Kind == ExploreHit::Overflow)
+      return;
     if (Best.Kind == ExploreHit::Miss)
       Best.Kind = ExploreHit::Unresolved;
+    if (Replay) {
+      llvm::SmallVector<uint32_t, 8> QueryVars;
+      Ctx.collectVars(Pred, QueryVars);
+      BitVectorModel Model;
+      const SatResult ReplaySat =
+          checkSat(Ctx, Pred, &Model, solverOpts(Budgets));
+      if (ReplaySat == SatResult::Sat && Capacity != UINT64_MAX) {
+        std::vector<SolverAssignment> Assignments =
+            modelAssignments(Ctx, Model);
+        std::string Reason;
+        std::optional<ReplayPlan> Plan =
+            materializeReplay(Ctx, Pred, *Replay, QueryVars, Assignments,
+                              Capacity + 1, Budgets, Reason);
+        if (Plan) {
+          Best.SymbolicModel = std::move(Assignments);
+          Best.Replay = std::move(Plan);
+          Best.ReplayReason.clear();
+        } else if (!Best.Replay) {
+          Best.SymbolicModel = std::move(Assignments);
+          Best.ReplayReason = std::move(Reason);
+        }
+      } else if (ReplaySat == SatResult::Sat) {
+        if (!Best.Replay)
+          Best.ReplayReason = "process-input replay length overflows";
+      } else if (ReplaySat == SatResult::Unknown) {
+        if (!Best.Replay)
+          Best.ReplayReason =
+              "solver could not validate process-input replay dependencies";
+      } else if (ReplaySat == SatResult::Invalid && !Best.Replay) {
+        Best.ReplayReason = "process-input replay query is malformed";
+      }
+    } else if (!Best.Replay && !ReplayUnavailableReason.empty()) {
+      Best.ReplayReason = ReplayUnavailableReason.str();
+    }
     return;
   }
 
@@ -744,27 +940,32 @@ void considerSink(ExploreHit &Best, SymContext &Ctx, SymRef Pred, SymRef Len,
 
   SatResult R = checkSat(Ctx, Query, &Model, solverOpts(Budgets));
   if (R == SatResult::Sat) {
-    Best.Kind = ExploreHit::Overflow;
-    Best.PredText = Ctx.toString(Pred);
+    uint64_t WitnessLen = 0;
     if (auto C = Ctx.asConst(WideLen))
-      Best.WitnessLen = C->getZExtValue();
+      WitnessLen = C->getZExtValue();
     else if (auto V = Model.value(Ctx, WideLen))
-      Best.WitnessLen = V->getZExtValue();
+      WitnessLen = V->getZExtValue();
     else {
       std::vector<llvm::APInt> Vals = Model.asVarValues(Ctx);
-      Best.WitnessLen = Ctx.eval(WideLen, Vals).getZExtValue();
+      WitnessLen = Ctx.eval(WideLen, Vals).getZExtValue();
     }
-    Best.SymbolicModel.clear();
-    for (uint32_t Id : Model.vars()) {
-      std::optional<llvm::APInt> Value = Model.value(Id);
-      if (!Value)
-        continue;
-      const SymVarInfo &Info = Ctx.varInfo(Id);
-      llvm::SmallString<48> Digits;
-      Value->toString(Digits, 16, /*Signed=*/false);
-      Best.SymbolicModel.push_back(
-          {Id, Info.Name, Info.Width, "0x" + Digits.str().str(), Info.Fresh});
+    std::vector<SolverAssignment> Assignments = modelAssignments(Ctx, Model);
+    std::optional<ReplayPlan> Plan;
+    std::string Reason = ReplayUnavailableReason.str();
+    if (Replay) {
+      llvm::SmallVector<uint32_t, 8> QueryVars;
+      Ctx.collectVars(Query, QueryVars);
+      Plan = materializeReplay(Ctx, Query, *Replay, QueryVars, Assignments,
+                               WitnessLen, Budgets, Reason);
     }
+    if (Best.Kind == ExploreHit::Overflow && Best.Replay && !Plan)
+      return;
+    Best.Kind = ExploreHit::Overflow;
+    Best.PredText = Ctx.toString(Pred);
+    Best.WitnessLen = WitnessLen;
+    Best.SymbolicModel = std::move(Assignments);
+    Best.Replay = std::move(Plan);
+    Best.ReplayReason = std::move(Reason);
     return;
   }
   if (R == SatResult::Unsat) {
@@ -831,6 +1032,8 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
     uint16_t ScalarOutputBytes = 0;
     SymRef PriorScalarValue;
     SymRef WrittenBytes;
+    std::optional<ReplayInput> Replay;
+    ReplayBindingRole ReplayRole = ReplayBindingRole::Extent;
   };
 
   struct Frontier {
@@ -843,6 +1046,8 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
     SymRef ImplicitSource;
     SymRef ImplicitSuccess;
     std::vector<SourceEvent> SourceEvents;
+    std::map<std::pair<va_t, int>, uint64_t> CallInvocations;
+    bool StandardInputConsumed = false;
     bool ImplicitFromLength = false;
     bool ImplicitLenIncludesTerminator = false;
     bool SemanticUnknown = false;
@@ -904,6 +1109,10 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
         }
         const bool IsCall =
             Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL;
+        uint64_t CallInvocation = 0;
+        const bool StandardInputAvailable = !Cur.StandardInputConsumed;
+        if (IsCall)
+          CallInvocation = Cur.CallInvocations[{Op.Addr, Op.Seq}]++;
         if (++Cur.Steps > MaxSteps) {
           Best.Budget = true;
           Stopped = true;
@@ -963,6 +1172,8 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
           bool HasRequiredSourceEvidence = RequiredSource.empty();
           bool SourceEvidenceUnconditional = false;
           SymRef SourceEvidenceSuccess;
+          std::optional<ReplaySeed> Replay;
+          bool ReplayConflict = false;
           const bool SameImplicitSource =
               expressionsMustEqual(Ctx, Cur.ImplicitSource, SinkSource,
                                    Cur.Constraints, Budgets) ||
@@ -1037,6 +1248,27 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                             SameWrittenLoad);
             if (!SameSource)
               continue;
+            if (Event.Replay) {
+              ReplaySeed Candidate;
+              Candidate.Input = *Event.Replay;
+              Candidate.Role = Event.ReplayRole;
+              Candidate.RequiresStringTerminator = Implicit;
+              Candidate.LengthIncludesTerminator =
+                  Implicit ? (Event.ImplicitLen.isValid()
+                                  ? Event.ImplicitLenIncludesTerminator
+                                  : Event.Replay->TerminatorImplicit)
+                           : (SameDerivedLength &&
+                              Cur.ImplicitLenIncludesTerminator);
+              const SymRef BoundValue = Event.ProducedValue.isValid()
+                                            ? Event.ProducedValue
+                                            : Event.Success;
+              if (BoundValue.isValid())
+                Ctx.collectVars(BoundValue, Candidate.BoundVariables);
+              if (Replay)
+                ReplayConflict = true;
+              else
+                Replay = std::move(Candidate);
+            }
             SymRef EvidenceSuccess;
             bool EvidenceUnconditional = false;
             auto MergeEvidenceSuccess = [&](SymRef Success) {
@@ -1060,18 +1292,21 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                 MergeEvidenceSuccess(WrittenLoadSuccess);
             }
             if (predicateMayHold(Ctx, EvidenceSuccess, Cur.Constraints,
-                                 Budgets) &&
-                !RequiredSource.empty() && Event.Name == RequiredSource) {
-              Best.SourceEvidence = true;
-              HasRequiredSourceEvidence = true;
-              if (EvidenceUnconditional) {
-                SourceEvidenceUnconditional = true;
-                SourceEvidenceSuccess = SymRef();
-              } else if (!SourceEvidenceUnconditional) {
-                SourceEvidenceSuccess =
-                    SourceEvidenceSuccess.isValid()
-                        ? Ctx.mkOr(SourceEvidenceSuccess, EvidenceSuccess)
-                        : EvidenceSuccess;
+                                 Budgets)) {
+              if (RequiredSource.empty())
+                Best.SourceEvidence = true;
+              else if (Event.Name == RequiredSource) {
+                Best.SourceEvidence = true;
+                HasRequiredSourceEvidence = true;
+                if (EvidenceUnconditional) {
+                  SourceEvidenceUnconditional = true;
+                  SourceEvidenceSuccess = SymRef();
+                } else if (!SourceEvidenceUnconditional) {
+                  SourceEvidenceSuccess =
+                      SourceEvidenceSuccess.isValid()
+                          ? Ctx.mkOr(SourceEvidenceSuccess, EvidenceSuccess)
+                          : EvidenceSuccess;
+                }
               }
             }
             if (!UseImplicitLength || !Event.ImplicitLen.isValid() ||
@@ -1104,6 +1339,7 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
           }
           if (!HasRequiredSourceEvidence) {
             Best.Reached = true;
+            Best.MissingRequiredSourceEvidence = true;
             DeferredSinkCall = true;
           } else {
             bool ConditionalBoundNotProven = false;
@@ -1146,7 +1382,15 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
               }
             }
             Best.Reached = true;
-            considerSink(Best, Ctx, Pred, Len, RuntimeCap, Capacity, Budgets);
+            const llvm::StringRef ReplayUnavailableReason =
+                ReplayConflict
+                    ? "multiple process-input sources contribute to the "
+                      "witness"
+                    : llvm::StringRef();
+            const std::optional<ReplaySeed> SelectedReplay =
+                ReplayConflict ? std::optional<ReplaySeed>{} : Replay;
+            considerSink(Best, Ctx, Pred, Len, RuntimeCap, Capacity, Budgets,
+                         SelectedReplay, ReplayUnavailableReason);
             if (ConditionalBoundNotProven)
               Best.SemanticUnknown = true;
             ++Finished;
@@ -1159,24 +1403,40 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
         const MedCallInfo *Callee = IsCall ? medCallAt(Fn, Op.Addr) : nullptr;
         const std::string CalleeName =
             Callee ? resolveCallName(In, *Callee) : "";
-        const bool LengthCall = Callee && isStringLengthCall(CalleeName);
+        const CallEffects CalleeEffects =
+            Callee ? resolveCallEffects(In, Cat, *Callee) : CallEffects{};
+        const bool HasInputSummary =
+            CalleeEffects.has(CallEffectCapability::Taint) &&
+            (CalleeEffects.family() == CallEffectFamily::Input ||
+             CalleeEffects.family() == CallEffectFamily::FormattedInput);
+        const bool HasInputBufferSummary =
+            HasInputSummary && CalleeEffects.has(CallEffectCapability::ModRef);
+        const bool LengthCall =
+            Callee && CalleeEffects.has(CallEffectCapability::StringExtent) &&
+            (CalleeEffects.family() == CallEffectFamily::StringLength ||
+             CalleeEffects.family() == CallEffectFamily::BoundedStringLength) &&
+            isStringLengthCall(CalleeName);
         const CountedSourceReturn CountedReturn =
-            Callee ? countedSourceReturn(CalleeName,
-                                         In.Img ? In.Img->Format
-                                                : BinaryFormat::Unknown)
-                   : CountedSourceReturn{};
+            HasInputBufferSummary
+                ? countedSourceReturn(CalleeName, In.Img
+                                                      ? In.Img->Format
+                                                      : BinaryFormat::Unknown)
+                : CountedSourceReturn{};
         const CountedSourceOutput CountedOutput =
-            Callee ? countedSourceOutput(CalleeName,
-                                         In.Img ? In.Img->Format
-                                                : BinaryFormat::Unknown)
-                   : CountedSourceOutput{};
+            HasInputBufferSummary
+                ? countedSourceOutput(CalleeName, In.Img
+                                                      ? In.Img->Format
+                                                      : BinaryFormat::Unknown)
+                : CountedSourceOutput{};
         const BoundedStringOutput BoundedString =
-            Callee ? boundedStringOutput(CalleeName) : BoundedStringOutput{};
+            HasInputBufferSummary ? boundedStringOutput(CalleeName)
+                                  : BoundedStringOutput{};
         const ReturnedStringOutput ReturnedString =
-            Callee ? returnedStringOutput(CalleeName,
-                                          In.Img ? In.Img->Format
-                                                 : BinaryFormat::Unknown)
-                   : ReturnedStringOutput{};
+            HasInputBufferSummary
+                ? returnedStringOutput(CalleeName, In.Img
+                                                       ? In.Img->Format
+                                                       : BinaryFormat::Unknown)
+                : ReturnedStringOutput{};
         const bool CountedReturnRecognized =
             Callee && CountedReturn.BoundArg >= 0;
         bool CountedReturnApplies = CountedReturnRecognized;
@@ -1204,7 +1464,7 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                 ? Cat.matchSource(CalleeName)
                 : nullptr;
         const SourceEntry *CalleeSource =
-            Callee ? Cat.matchSource(CalleeName) : nullptr;
+            HasInputSummary ? Cat.matchSource(CalleeName) : nullptr;
         std::vector<SourceEvent> NewSourceEvents;
         bool HasFormattedSourceOutput = false;
         if (Callee && CalleeSource && CalleeSource->OutArg >= 0 &&
@@ -1284,7 +1544,7 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                 if (Output.isValid()) {
                   NewSourceEvents.push_back(
                       {SinkCatalog::normalize(CalleeName), Output, InputSuccess,
-                       Ctx.mkConst(64, Bounded.MaxChars + 1), true,
+                       Ctx.mkConst(64, Bounded.MaxBytes), true,
                        Bounded.RequiredAssignments});
                   NewSourceEvents.back().WritesBuffer = true;
                 }
@@ -1385,15 +1645,15 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
           if (CalleeSource) {
             const bool HasSourceSummary =
                 !NewSourceEvents.empty() || CountedReturnRecognized ||
-                CountedOutputApplies ||
-                BoundedString.BufferArg >= 0 || ReturnedString.BufferArg >= 0 ||
-                HasFormattedSourceOutput ||
+                CountedOutputApplies || BoundedString.BufferArg >= 0 ||
+                ReturnedString.BufferArg >= 0 || HasFormattedSourceOutput ||
                 safety::detail::isUnboundedCStringSource(CalleeName);
             Summarized = Summarized || HasSourceSummary;
           }
           if (Callee)
             if (const SinkEntry *Known = Cat.matchSink(CalleeName))
-              if (!debugSinkSummaryConflicts(In, *Callee, *Known))
+              if (CalleeEffects.supports(*Known) &&
+                  !debugSinkSummaryConflicts(In, *Callee, *Known))
                 Summarized = Summarized || Known->Kind == SinkKind::Alloc ||
                              Known->Kind == SinkKind::StackAlloc ||
                              Known->Kind == SinkKind::Realloc;
@@ -1685,6 +1945,22 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                  Ctx.mkNe(Ret, Ctx.mkZero(Ctx.width(Ret)))});
             NewSourceEvents.back().ProducedValue = Ret;
           }
+        }
+        if (Callee) {
+          if (std::optional<ReplayInput> Input =
+                  replayInputForSource(In, Cat, *Callee, Op, CallInvocation,
+                                       StandardInputAvailable)) {
+            const ReplayBindingRole Role =
+                Input->Kind == ReplayInputKind::Environment
+                    ? ReplayBindingRole::Success
+                    : ReplayBindingRole::Extent;
+            for (SourceEvent &Event : NewSourceEvents) {
+              Event.Replay = *Input;
+              Event.ReplayRole = Role;
+            }
+          }
+          if (mayConsumeStandardInput(In, Cat, *Callee))
+            Cur.StandardInputConsumed = true;
         }
         if (IsCall) {
           for (const SourceEvent &NewEvent : NewSourceEvents) {
@@ -1985,8 +2261,27 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
   if (!E)
     return std::nullopt;
 
+  if (E->Kind == SinkKind::Copy || E->Kind == SinkKind::Format) {
+    if (Site.CallInfoIndex >= F.CallInfos.size()) {
+      Finding Out;
+      stampSite(Out, In, F, Site);
+      Out.TheVerdict = Verdict::Unknown;
+      Out.TheConfidence = Confidence::Low;
+      Out.Detail = "call occurrence was not recovered";
+      return Out;
+    }
+    const MedCallInfo &SinkCall = F.CallInfos[Site.CallInfoIndex];
+    if (!resolveCallEffects(In, Cat, SinkCall).supports(*E)) {
+      Finding Out;
+      stampSite(Out, In, F, Site);
+      Out.TheVerdict = Verdict::Unknown;
+      Out.TheConfidence = Confidence::Low;
+      Out.Detail = "exact external-call semantics are unavailable";
+      return Out;
+    }
+  }
+
   if ((E->Kind == SinkKind::Copy || E->Kind == SinkKind::Format) &&
-      Site.CallInfoIndex < F.CallInfos.size() &&
       debugSinkSummaryConflicts(In, F.CallInfos[Site.CallInfoIndex], *E)) {
     Finding Out;
     stampSite(Out, In, F, Site);
@@ -2440,7 +2735,11 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     }
   ExploreHit Hit = exploreSink(In, Cat, F, Site, *E, *Dst.Capacity, Budgets,
                                RequiredSource, FixedExploreLength);
-  if (Hit.Kind == ExploreHit::Overflow) {
+  const bool HasTrustedLengthProvenance =
+      FixedExploreLength.has_value() || Arg.Flow != ArgFlow::Unknown ||
+      !Arg.RequiresPathValidation || Hit.SourceEvidence;
+  if (Hit.Kind == ExploreHit::Overflow && HasTrustedLengthProvenance &&
+      (RequiredSource.empty() || Hit.SourceEvidence)) {
     Out.TheVerdict = Verdict::Unsafe;
     Out.TheConfidence = Confidence::High;
     Out.Detail =
@@ -2448,12 +2747,15 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     Out.Constraints = Hit.PredText;
     addWitness(Out, *E, Hit.WitnessLen, Arg.TaintSource);
     Out.SymbolicModel = std::move(Hit.SymbolicModel);
+    Out.Replay = std::move(Hit.Replay);
+    Out.ReplayReason = std::move(Hit.ReplayReason);
     Out.Corroboration = "path predicate and overflow are jointly satisfiable";
     Out.BudgetHit = Hit.Budget || Hit.SolverUnknown;
     return Out;
   }
   if (Hit.Kind == ExploreHit::InBound && Hit.Reached && !Hit.Budget &&
-      !Hit.SolverUnknown && !Hit.SemanticUnknown && !Hit.MissingLength) {
+      !Hit.SolverUnknown && !Hit.SemanticUnknown && !Hit.MissingLength &&
+      !Hit.MissingRequiredSourceEvidence) {
     Out.TheVerdict = Dst.CapacityExact ? Verdict::Safe : Verdict::Unknown;
     Out.TheConfidence = Confidence::High;
     Out.Detail = Dst.CapacityExact
@@ -2478,6 +2780,9 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
         Out.Detail =
             "attacker-controlled length can exceed destination capacity";
         addWitness(Out, *E, *Len, Arg.TaintSource);
+        Out.SymbolicModel = std::move(Hit.SymbolicModel);
+        Out.Replay = std::move(Hit.Replay);
+        Out.ReplayReason = std::move(Hit.ReplayReason);
         Out.Corroboration = "sink reachable on a summarized symbolic path";
         return Out;
       }

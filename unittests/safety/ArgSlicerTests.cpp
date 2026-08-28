@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "SourceSemantics.h"
 #include "gtest/gtest.h"
 
 #include "neverd/ir/med/MedIR.h"
@@ -205,14 +206,14 @@ TEST(ArgSlicer, ReadReturnIsTainted) {
 
   // n = read(...); memcpy(dst, src, n)
   MedFunc F = newFunc();
-  addCall(F, "read", temp(5));
+  addCall(F, "read", temp(5), {temp(90), temp(91), temp(92)});
   size_t Idx = addSink(F, "memcpy", {temp(1), temp(2), temp(5)});
   ArgClassification C = classifyArgument(In, Cat, F, Idx, 2);
   EXPECT_EQ(C.Flow, ArgFlow::Tainted);
   EXPECT_EQ(C.TaintSource, "read");
 }
 
-TEST(ArgSlicer, CustomReturnSourceUsesCatalogSemantics) {
+TEST(ArgSlicer, CustomReturnSourceDiscoveryDoesNotImplySemantics) {
   BinaryImage Img;
   AnalysisInput In;
   In.Img = &Img;
@@ -223,8 +224,8 @@ TEST(ArgSlicer, CustomReturnSourceUsesCatalogSemantics) {
   addCall(F, "custom_input", temp(5));
   size_t Idx = addSink(F, "memcpy", {temp(1), temp(2), temp(5)});
   ArgClassification C = classifyArgument(In, Cat, F, Idx, 2);
-  EXPECT_EQ(C.Flow, ArgFlow::Tainted);
-  EXPECT_EQ(C.TaintSource, "custom_input");
+  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+  EXPECT_TRUE(C.TaintSource.empty());
 }
 
 TEST(ArgSlicer, ScanfReturnCountIsNotInputContent) {
@@ -443,7 +444,7 @@ TEST(ArgSlicer, FutureTaintedStoreDoesNotTaintAnEarlierLoad) {
     F.Blocks[0].Ops.push_back(Add);
   }
   defOp(F, NdOp::LOAD, temp(5), temp(10));
-  addCall(F, "read", temp(6));
+  addCall(F, "read", temp(6), {temp(90), temp(91), temp(92)});
   {
     MedOp Store;
     Store.Opcode = NdOp::STORE;
@@ -653,7 +654,7 @@ TEST(ArgSlicer, SelectClampIsBounded) {
 
   // n = read(); t = n <= 8 ? n : 8; memcpy(dst, src, t)
   MedFunc F = newFunc();
-  addCall(F, "read", temp(5));
+  addCall(F, "read", temp(5), {temp(90), temp(91), temp(92)});
   {
     MedOp Cmp;
     Cmp.Opcode = NdOp::INT_LESSEQUAL;
@@ -711,7 +712,7 @@ TEST(ArgSlicer, SharedSelectDiamondPreservesTaintEvidence) {
   SinkCatalog Cat = SinkCatalog::defaults();
 
   MedFunc F = newFunc();
-  addCall(F, "read", temp(50));
+  addCall(F, "read", temp(50), {temp(90), temp(91), temp(92)});
   MedVar Value = temp(50);
   for (int I = 0; I < 28; ++I) {
     MedOp Sel;
@@ -757,7 +758,7 @@ TEST(ArgSlicer, RelocationAddressDoesNotProveASelectClamp) {
   SinkCatalog Cat = SinkCatalog::defaults();
 
   MedFunc F = newFunc();
-  addCall(F, "read", temp(5));
+  addCall(F, "read", temp(5), {temp(90), temp(91), temp(92)});
   const MedVar RelocatedBound =
       MedVar::makeConst(8, 8, ConstantAddressProvenance::DataAddress, 0);
   {
@@ -810,7 +811,7 @@ TEST(ArgSlicer, SelectMaximumIsNotAClamp) {
   SinkCatalog Cat = SinkCatalog::defaults();
 
   MedFunc F = newFunc();
-  addCall(F, "read", temp(5));
+  addCall(F, "read", temp(5), {temp(90), temp(91), temp(92)});
   {
     MedOp Cmp;
     Cmp.Opcode = NdOp::INT_LESSEQUAL;
@@ -841,7 +842,7 @@ TEST(ArgSlicer, SignedClampDoesNotBoundAnUnsignedCopyLength) {
   SinkCatalog Cat = SinkCatalog::defaults();
 
   MedFunc F = newFunc();
-  addCall(F, "read", temp(5));
+  addCall(F, "read", temp(5), {temp(90), temp(91), temp(92)});
   {
     MedOp Cmp;
     Cmp.Opcode = NdOp::INT_SLESSEQUAL;
@@ -1167,21 +1168,86 @@ TEST(ArgSlicer, ScanfCharacterBufferRemainsAttackerControlled) {
 }
 
 TEST(ArgSlicer, ScanfWideTextOutputRemainsAttackerControlled) {
-  for (const char *Format : {"%ls", "%7ls", "%lc"}) {
-    SCOPED_TRACE(Format);
+  for (const BinaryFormat ImageFormat :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+    for (const char *Format : {"%ls", "%7ls", "%lc"}) {
+      SCOPED_TRACE(static_cast<int>(ImageFormat));
+      SCOPED_TRACE(Format);
+      BinaryImage Img;
+      Img.Arch = Arch::X64;
+      Img.Format = ImageFormat;
+      const va_t FormatVA = addCString(Img, Format);
+      AnalysisInput In;
+      In.Img = &Img;
+      SinkCatalog Cat = SinkCatalog::defaults();
+
+      MedFunc F = newFunc();
+      addCall(F, "scanf", temp(5), {MedVar::makeConst(FormatVA, 8), temp(4)});
+      size_t Idx = addSink(F, "wprintf", {temp(4)});
+
+      ArgClassification C = classifyArgument(In, Cat, F, Idx, 0);
+      EXPECT_EQ(C.Flow, ArgFlow::Tainted);
+      EXPECT_EQ(C.TaintSource, "scanf");
+    }
+}
+
+TEST(ArgSlicer, BoundedScanfTextReportsPlatformByteExtent) {
+  struct Case {
+    const char *Format;
+    BinaryFormat ImageFormat;
+    uint64_t ExpectedBytes;
+  };
+  for (const Case C : {
+           Case{"%7s", BinaryFormat::COFF, 8},
+           Case{"%7ls", BinaryFormat::COFF, 16},
+           Case{"%7ls", BinaryFormat::ELF, 32},
+           Case{"%7ls", BinaryFormat::MachO, 32},
+       }) {
+    SCOPED_TRACE(static_cast<int>(C.ImageFormat));
+    SCOPED_TRACE(C.Format);
     BinaryImage Img;
-    const va_t FormatVA = addCString(Img, Format);
+    Img.Arch = Arch::X64;
+    Img.Format = C.ImageFormat;
+    const va_t FormatVA = addCString(Img, C.Format);
+    const std::vector<MedVar> Args = {MedVar::makeConst(FormatVA, 8), temp(4)};
+
+    const std::optional<detail::FormattedSourceOutputs> Outputs =
+        detail::recoverFormattedSourceOutputs(&Img, "scanf", Args);
+    ASSERT_TRUE(Outputs.has_value());
+    ASSERT_EQ(Outputs->BoundedTextArgs.size(), 1u);
+    EXPECT_EQ(Outputs->BoundedTextArgs.front().MaxChars, 7u);
+    EXPECT_EQ(Outputs->BoundedTextArgs.front().MaxBytes, C.ExpectedBytes);
+  }
+}
+
+TEST(ArgSlicer, OverflowingScanfWideTextExtentFailsClosed) {
+  struct Case {
+    const char *Format;
+    BinaryFormat ImageFormat;
+  };
+  for (const Case C : {
+           Case{"%9223372036854775807ls", BinaryFormat::COFF},
+           Case{"%4611686018427387903ls", BinaryFormat::ELF},
+           Case{"%4611686018427387903ls", BinaryFormat::MachO},
+       }) {
+    SCOPED_TRACE(static_cast<int>(C.ImageFormat));
+    BinaryImage Img;
+    Img.Arch = Arch::X64;
+    Img.Format = C.ImageFormat;
+    const va_t FormatVA = addCString(Img, C.Format);
+    const std::vector<MedVar> Args = {MedVar::makeConst(FormatVA, 8), temp(4)};
+    EXPECT_FALSE(
+        detail::recoverFormattedSourceOutputs(&Img, "scanf", Args).has_value());
+
     AnalysisInput In;
     In.Img = &Img;
-    SinkCatalog Cat = SinkCatalog::defaults();
-
     MedFunc F = newFunc();
-    addCall(F, "scanf", temp(5), {MedVar::makeConst(FormatVA, 8), temp(4)});
-    size_t Idx = addSink(F, "wprintf", {temp(4)});
-
-    ArgClassification C = classifyArgument(In, Cat, F, Idx, 0);
-    EXPECT_EQ(C.Flow, ArgFlow::Tainted);
-    EXPECT_EQ(C.TaintSource, "scanf");
+    addCall(F, "scanf", temp(5), Args);
+    const size_t Idx = addSink(F, "wprintf", {temp(4)});
+    const ArgClassification Classification =
+        classifyArgument(In, SinkCatalog::defaults(), F, Idx, 0);
+    EXPECT_EQ(Classification.Flow, ArgFlow::Unknown);
+    EXPECT_TRUE(Classification.TaintSource.empty());
   }
 }
 
