@@ -209,7 +209,7 @@ def write_report(rows: list[dict], out: Path) -> None:
         lines.append(f"| Speed (NeverD < Ref) | speedup={r['speedup']:.1f}x | {'✅' if r['speed_pass'] else '❌'} |")
         lines.append("")
 
-    out.write_text("\n".join(lines))
+    out.write_text("\n".join(lines), encoding="utf-8")
 
 
 def main():
