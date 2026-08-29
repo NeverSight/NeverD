@@ -4,11 +4,24 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CMAKE_HELPERS = ROOT / "cmake" / "AddNeverD.cmake"
+EXAMPLE_PLUGIN_CMAKE = ROOT / "plugins" / "example" / "CMakeLists.txt"
+EXAMPLE_PLUGIN_SOURCE = ROOT / "plugins" / "example" / "example_plugin.c"
+SDK_CMAKE = ROOT / "lib" / "sdk" / "CMakeLists.txt"
 SEMANTIC_CMAKE = ROOT / "unittests" / "semantic" / "CMakeLists.txt"
+SEMANTIC_PLUGIN_CMAKE = ROOT / "plugins" / "semantic" / "CMakeLists.txt"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
 
 class CiConfigurationTests(unittest.TestCase):
+    def workflow_step_containing(self, source: str, needle: str) -> str:
+        command_index = source.index(needle)
+        step_start = source.rfind("      - name:", 0, command_index)
+        self.assertNotEqual(step_start, -1, f"no workflow step owns {needle!r}")
+        step_end = source.find("\n      - name:", command_index)
+        if step_end == -1:
+            step_end = len(source)
+        return source[step_start:step_end]
+
     def test_google_test_discovery_is_serial_configurable_and_bounded(self):
         source = CMAKE_HELPERS.read_text(encoding="utf-8")
         self.assertIn('"TIMEOUT;DISCOVERY_TIMEOUT"', source)
@@ -190,6 +203,82 @@ class CiConfigurationTests(unittest.TestCase):
         self.assertLess(
             source.index(verify_marker), source.index(configure_marker)
         )
+
+    def test_workflow_configures_and_explicitly_smokes_the_native_example_plugin(self):
+        source = WORKFLOW.read_text(encoding="utf-8")
+        configure_step = self.workflow_step_containing(
+            source, "cmake -S . -B build-ci -G Ninja"
+        )
+        self.assertIn("-DNEVERD_BUILD_PLUGINS=ON", configure_step)
+
+        plugin_step = self.workflow_step_containing(
+            source, "build-ci/bin/neverd plugins"
+        )
+        required_contract = (
+            "plugins --list --json",
+            "json.load(sys.stdin)",
+            'plugin.get("name") == "Example Plugin"',
+            'plugin.get("kind") == "native"',
+            'plugins --run "Example Plugin"',
+        )
+        for expected in required_contract:
+            with self.subTest(expected=expected):
+                self.assertIn(expected, plugin_step)
+
+    def test_workflow_does_not_rescan_the_automatic_native_plugin_directory(self):
+        source = WORKFLOW.read_text(encoding="utf-8")
+        plugin_step = self.workflow_step_containing(
+            source, "build-ci/bin/neverd plugins"
+        )
+        self.assertNotIn("--plugin-dir build-ci/bin/plugins", plugin_step)
+
+    def test_example_plugins_share_the_cross_generator_output_contract(self):
+        helper_source = CMAKE_HELPERS.read_text(encoding="utf-8")
+        helper_contract = (
+            "function(set_neverd_plugin_output_directories target)",
+            "if(CMAKE_CONFIGURATION_TYPES)",
+            '${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>/plugins',
+            '${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/$<CONFIG>/plugins',
+            '${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins',
+            '${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/plugins',
+            'LIBRARY_OUTPUT_DIRECTORY "${_library_dir}"',
+            'RUNTIME_OUTPUT_DIRECTORY "${_runtime_dir}"',
+        )
+        for expected in helper_contract:
+            with self.subTest(expected=expected):
+                self.assertIn(expected, helper_source)
+
+        for target, path in (
+            ("example_plugin", EXAMPLE_PLUGIN_CMAKE),
+            ("semantic_plugin", SEMANTIC_PLUGIN_CMAKE),
+        ):
+            source = path.read_text(encoding="utf-8")
+            with self.subTest(target=target):
+                self.assertEqual(
+                    source.count(f"set_neverd_plugin_output_directories({target})"),
+                    1,
+                )
+                self.assertNotIn("LIBRARY_OUTPUT_DIRECTORY", source)
+                self.assertNotIn("RUNTIME_OUTPUT_DIRECTORY", source)
+
+    def test_shared_plugin_runtime_links_the_platform_dynamic_loader(self):
+        source = SDK_CMAKE.read_text(encoding="utf-8")
+        marker = "target_link_libraries(neverd_shared PRIVATE\n"
+        self.assertIn(marker, source)
+        link_contract = source.split(marker, 1)[1].split(")\n", 1)[0]
+        self.assertIn("${CMAKE_DL_LIBS}", link_contract)
+
+    def test_native_example_documents_and_registers_its_event_handler(self):
+        source = EXAMPLE_PLUGIN_SOURCE.read_text(encoding="utf-8")
+        for expected in (
+            "neverd_plugins_dispatch_event()",
+            "pointers in its payload are borrowed",
+            "NEVERD_EVT_BINARY_LOADED",
+            "Evt->Data.BinaryLoaded.Path",
+            ".Event = exampleEvent",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, source)
 
     def test_workflow_still_builds_the_unfiltered_default_target(self):
         source = WORKFLOW.read_text(encoding="utf-8")

@@ -72,6 +72,7 @@ target_link_libraries(neverd_shared PRIVATE
     NeverDTranslate
     NeverDSigs
     NeverDSBF
+    ${CMAKE_DL_LIBS}
     ${NEVERD_COMMON_LIBS})
 
 if(NEVERD_PYTHON_PLUGIN_HOST_ENABLED)

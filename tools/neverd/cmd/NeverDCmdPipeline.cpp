@@ -14,17 +14,20 @@
 
 #include "../NeverDCLI.h"
 
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstdint>
 #include <cstdlib>
-#include <filesystem>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -38,6 +41,8 @@ using namespace llvm;
 namespace neverd::cli {
 
 namespace {
+
+int PluginExecutableAnchor;
 
 const char *hardforkSpelling(evm::Hardfork Fork) {
   switch (Fork) {
@@ -159,11 +164,83 @@ int runPlugins(const char *Argv0) {
   neverd_session_t Sess = neverd_session_create();
   SessionGuard SessGuard(Sess);
 
-  auto BinDir = std::filesystem::path(Argv0).parent_path().string();
-  neverd_plugins_load_dir(Sess, (BinDir + "/plugins").c_str());
-  if (const char *Home = getenv("HOME"))
-    neverd_plugins_load_dir(Sess,
-                            (std::string(Home) + "/.neverd/plugins").c_str());
+  std::map<std::string, std::string> ScannedDirectories;
+  const auto LoadPluginDirectory = [&](StringRef Directory,
+                                       bool Required) -> bool {
+    if (Directory.empty())
+      return true;
+
+    SmallString<256> CanonicalDirectory;
+    if (std::error_code EC =
+            sys::fs::real_path(Directory, CanonicalDirectory)) {
+      if (Required)
+        WithColor::error() << "cannot resolve plugin directory '" << Directory
+                           << "': " << EC.message() << "\n";
+      return !Required;
+    }
+
+    bool IsDirectory = false;
+    std::error_code EC = sys::fs::is_directory(CanonicalDirectory, IsDirectory);
+    if (EC) {
+      if (Required)
+        WithColor::error() << "cannot inspect plugin directory '" << Directory
+                           << "': " << EC.message() << "\n";
+      return !Required;
+    }
+    if (!IsDirectory) {
+      if (Required)
+        WithColor::error() << "plugin path '" << Directory
+                           << "' is not a directory\n";
+      return !Required;
+    }
+
+    const std::string Canonical = CanonicalDirectory.str().str();
+    if (auto It = ScannedDirectories.find(Canonical);
+        It != ScannedDirectories.end()) {
+      if (Required && !It->second.empty()) {
+        WithColor::error() << "failed to load plugin directory '" << Directory
+                           << "': " << It->second << "\n";
+        return false;
+      }
+      return true;
+    }
+
+    neverd_plugins_load_dir(Sess, Canonical.c_str());
+    std::string LoadError = takeLastError(Sess);
+    ScannedDirectories.emplace(Canonical, LoadError);
+    if (LoadError.empty())
+      return true;
+
+    if (Required) {
+      WithColor::error() << "failed to load plugin directory '" << Directory
+                         << "': " << LoadError << "\n";
+      return false;
+    }
+    WithColor::warning() << "failed to load plugin directory '" << Directory
+                         << "': " << LoadError << "\n";
+    return true;
+  };
+
+  std::string Executable =
+      sys::fs::getMainExecutable(Argv0, &PluginExecutableAnchor);
+  SmallString<256> SiblingPlugins(Executable.empty() ? Argv0 : Executable);
+  sys::path::remove_filename(SiblingPlugins);
+  sys::path::append(SiblingPlugins, "plugins");
+  LoadPluginDirectory(SiblingPlugins, false);
+
+  SmallString<256> HomePlugins;
+  bool HasHomeDirectory = false;
+  if (const char *Home = getenv("HOME"); Home && Home[0] != '\0') {
+    HomePlugins = Home;
+    HasHomeDirectory = true;
+  } else {
+    HasHomeDirectory = sys::path::home_directory(HomePlugins);
+  }
+  if (HasHomeDirectory) {
+    sys::path::append(HomePlugins, ".neverd", "plugins");
+    LoadPluginDirectory(HomePlugins, false);
+  }
+
   if (const char *Env = getenv("NEVERD_PLUGIN_PATH")) {
     std::string EnvStr(Env);
     size_t Pos = 0;
@@ -171,12 +248,14 @@ int runPlugins(const char *Argv0) {
       size_t Sep = EnvStr.find(llvm::sys::EnvPathSeparator, Pos);
       if (Sep == std::string::npos)
         Sep = EnvStr.size();
-      neverd_plugins_load_dir(Sess, EnvStr.substr(Pos, Sep - Pos).c_str());
+      const std::string Directory = EnvStr.substr(Pos, Sep - Pos);
+      if (!Directory.empty() && !LoadPluginDirectory(Directory, true))
+        return 1;
       Pos = Sep + 1;
     }
   }
-  if (!PluginDir.empty())
-    neverd_plugins_load_dir(Sess, PluginDir.getValue().c_str());
+  if (!PluginDir.empty() && !LoadPluginDirectory(PluginDir.getValue(), true))
+    return 1;
 
   if (PluginList || PluginRun.empty()) {
     const char *Json = neverd_plugins_list_json(Sess);
@@ -210,12 +289,28 @@ int runPlugins(const char *Argv0) {
     if (!PluginBinary.empty()) {
       if (!neverd_session_load(Sess, PluginBinary.getValue().c_str())) {
         WithColor::error() << "failed to load binary: "
-                           << PluginBinary.getValue() << "\n";
+                           << PluginBinary.getValue() << ": "
+                           << takeLastError(Sess) << "\n";
         return 1;
       }
     }
     neverd_plugins_init(Sess);
+    if (std::string InitError = takeLastError(Sess); !InitError.empty()) {
+      WithColor::error() << "failed to initialize plugins: " << InitError
+                         << "\n";
+      neverd_plugins_term(Sess);
+      return 1;
+    }
+
     int Ret = neverd_plugins_run(Sess, PluginRun.getValue().c_str(), 0);
+    std::string RunError = takeLastError(Sess);
+    if (Ret == -1) {
+      WithColor::error() << (RunError.empty() ? "plugin run failed" : RunError)
+                         << "\n";
+      neverd_plugins_term(Sess);
+      return 1;
+    }
+
     if (!JsonOutput)
       outs() << "Plugin '" << PluginRun.getValue() << "' returned " << Ret
              << "\n";
@@ -226,6 +321,11 @@ int runPlugins(const char *Argv0) {
       outs() << json::Value(std::move(Result)) << "\n";
     }
     neverd_plugins_term(Sess);
+    if (std::string TermError = takeLastError(Sess); !TermError.empty()) {
+      WithColor::error() << "failed to terminate plugins: " << TermError
+                         << "\n";
+      return 1;
+    }
     return (Ret == 0) ? 0 : 1;
   }
 

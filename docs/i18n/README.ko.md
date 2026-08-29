@@ -293,7 +293,14 @@ EVM은 `neverd_decompile_all_ex(..., NEVERD_OUTPUT_SOLIDITY, ...)`로 Solidity�
 명시적으로 선택합니다. 기존 `neverd_decompile_all`은 C를 출력합니다.
 [EVM C API 예시](../evm.ko.md#c-api)를 참고하세요.
 
-`-DNEVERD_BUILD_PLUGINS=ON`으로 예제 플러그인을 빌드합니다. 로드 경로: `<neverd-dir>/plugins`, `~/.neverd/plugins`, `$NEVERD_PLUGIN_PATH`.
+네이티브 공유 라이브러리와 Python `.py` file은 같은 플러그인 lifecycle을 사용합니다.
+`-DNEVERD_BUILD_PLUGINS=ON`으로 네이티브 예제를 빌드합니다. 순수 C descriptor,
+callback, build/link, discovery, CLI workflow 및 ABI 제약은
+[네이티브 플러그인 가이드](../plugins.ko.md)를 참고하십시오. Python 지원은 default로
+활성화되며 `-DNEVERD_ENABLE_PYTHON_PLUGINS=OFF`로 완전히 제외할 수 있습니다.
+typed SDK와 package workflow는 [Python 플러그인 가이드](../python-plugins.ko.md)에
+설명되어 있습니다. 두 종류 모두 `<neverd-dir>/plugins`, `~/.neverd/plugins`,
+`$NEVERD_PLUGIN_PATH`를 사용합니다.
 
 ## 의존성
 

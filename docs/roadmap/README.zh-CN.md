@@ -104,7 +104,7 @@ Review/development 的显式 opt-in target；`latest` 仍为 Fusaka。EOFv1/EIP-
 | --------- | ---------------------------------- |
 | Lifter 覆盖 | 在不放松 strict 的前提下缩小原生操作码缺口          |
 | 语义测试      | 新 ISA 落地时扩展 Unicorn / roundtrip 覆盖 |
-| 插件 ABI    | 适合时用插件承载新格式的 loader / 分析 pass      |
+| 插件 ABI    | 维护[原生插件 ABI](../plugins.zh-CN.md)这一进程内扩展契约；在出现明确的宿主 API 前，Loader 与 UI 值仍仅是元数据 |
 | 文档 / 矩阵   | 仅在测试落地后更新 README 支持表               |
 
 

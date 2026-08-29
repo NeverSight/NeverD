@@ -102,6 +102,8 @@ TEST_F(PythonPluginTest, DispatchesCompleteLifecycleThroughPublicCAPI) {
 TEST_F(PythonPluginTest, ReportsTerminationTracebackThroughPublicCAPI) {
   ASSERT_EQ(neverd_plugins_load_file(Session, NEVERD_PYTHON_RAISING_FIXTURE), 1)
       << takeString(neverd_last_error(Session));
+  neverd_plugins_init(Session);
+  ASSERT_TRUE(takeString(neverd_last_error(Session)).empty());
   neverd_plugins_term(Session);
   const std::string Error = takeString(neverd_last_error(Session));
   EXPECT_NE(Error.find("termination failed"), std::string::npos) << Error;

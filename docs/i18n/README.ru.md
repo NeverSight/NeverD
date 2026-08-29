@@ -294,7 +294,14 @@ neverd_session_destroy(s);
 Solidity; `neverd_decompile_all` по-прежнему выводит C. См.
 [примеры API C для EVM](../evm.ru.md#api-c).
 
-Соберите пример плагина с `-DNEVERD_BUILD_PLUGINS=ON`. Пути загрузки: `<neverd-dir>/plugins`, `~/.neverd/plugins`, `$NEVERD_PLUGIN_PATH`.
+Нативные разделяемые библиотеки и файлы Python `.py` используют один жизненный
+цикл плагинов. Нативный пример собирается с `-DNEVERD_BUILD_PLUGINS=ON`;
+[руководство по нативным плагинам](../plugins.ru.md) описывает чистый дескриптор
+C, callbacks, сборку и линковку, обнаружение, работу CLI и ограничения ABI.
+Поддержка Python включена по умолчанию и полностью удаляется параметром
+`-DNEVERD_ENABLE_PYTHON_PLUGINS=OFF`; typed SDK и package workflow описаны в
+[руководстве по плагинам Python](../python-plugins.ru.md). Оба вида используют
+`<neverd-dir>/plugins`, `~/.neverd/plugins` и `$NEVERD_PLUGIN_PATH`.
 
 ## Зависимости
 

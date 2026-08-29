@@ -99,7 +99,7 @@ EIP-3540 為 Stagnant，兩者都不冒充已定案 mainnet 行為。host ABI �
 |------|------|
 | Lifter 覆蓋 | 在不放鬆 strict 的前提下縮小原生操作碼缺口 |
 | 語意測試 | 新 ISA 落地時擴展 Unicorn / roundtrip 覆蓋 |
-| 外掛 ABI | 適合時用外掛承載新格式 |
+| 外掛 ABI | 維護[原生外掛 ABI](../plugins.zh-TW.md)這項處理程序內擴充契約；在出現明確的宿主 API 前，Loader 與 UI 值仍僅是中繼資料 |
 | 文件 / 矩陣 | 僅在測試落地後更新 README 支援表 |
 
 ---

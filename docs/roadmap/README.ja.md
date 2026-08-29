@@ -101,7 +101,7 @@ EIP-3540 は Stagnant であり、確定 mainnet behavior として扱いませ�
 |------|------|
 | Lifter カバレッジ | strict を緩めずネイティブ缺口を縮める |
 | セマンティック試験 | 新 ISA とともに Unicorn / roundtrip を拡大 |
-| プラグイン ABI | 新形式の loader / 解析をプラグイン化できる箇所 |
+| プラグイン ABI | [ネイティブプラグイン ABI](../plugins.ja.md) をプロセス内 extension contract として維持する。Loader と UI の値は明示的な host API ができるまで metadata のみ |
 | 文書 / 行列 | 試験通過後にのみ README を更新 |
 
 ---

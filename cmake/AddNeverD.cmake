@@ -19,6 +19,23 @@ set(NEVERD_COMMON_LIBS
   ${LLVM_LIBS}
   capstone_static)
 
+# Place native plugins below the executable directory on every generator.  A
+# multi-configuration generator otherwise appends the configuration after the
+# generic `plugins` directory, which does not match the CLI's sibling lookup.
+function(set_neverd_plugin_output_directories target)
+  if(CMAKE_CONFIGURATION_TYPES)
+    set(_runtime_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>/plugins")
+    set(_library_dir "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/$<CONFIG>/plugins")
+  else()
+    set(_runtime_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
+    set(_library_dir "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/plugins")
+  endif()
+
+  set_target_properties(${target} PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY "${_library_dir}"
+    RUNTIME_OUTPUT_DIRECTORY "${_runtime_dir}")
+endfunction()
+
 function(add_neverd_component_library name)
   cmake_parse_arguments(ARG
     ""

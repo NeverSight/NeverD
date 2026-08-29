@@ -293,7 +293,17 @@ Para EVM, `neverd_decompile_all_ex(..., NEVERD_OUTPUT_SOLIDITY, ...)` selecciona
 Solidity explícitamente; `neverd_decompile_all` sigue emitiendo C. Consulte los
 [ejemplos de API C EVM](../evm.es.md#api-c).
 
-Compile el plugin de ejemplo con `-DNEVERD_BUILD_PLUGINS=ON`. Rutas de carga: `<neverd-dir>/plugins`, `~/.neverd/plugins`, `$NEVERD_PLUGIN_PATH`.
+Las bibliotecas compartidas nativas y los archivos `.py` de Python usan el
+mismo ciclo de vida de plugins. Compile el ejemplo nativo con
+`-DNEVERD_BUILD_PLUGINS=ON`; consulte la
+[guía de plugins nativos](../plugins.es.md) para conocer el descriptor en C
+puro, los callbacks, los pasos de compilación/enlace, el descubrimiento, el
+flujo de la CLI y las restricciones de ABI. Python está habilitado de forma
+predeterminada y puede eliminarse por completo con
+`-DNEVERD_ENABLE_PYTHON_PLUGINS=OFF`; la
+[guía de plugins de Python](../python-plugins.es.md) cubre su SDK tipado y el
+flujo de empaquetado. Ambos tipos usan `<neverd-dir>/plugins`,
+`~/.neverd/plugins` y `$NEVERD_PLUGIN_PATH`.
 
 ## Dependencias
 

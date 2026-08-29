@@ -320,12 +320,14 @@ select Solidity explicitly; legacy `neverd_decompile_all` continues to emit C.
 See the [EVM C API examples](docs/evm.md#c-api).
 
 Native shared libraries and Python `.py` files use the same plugin lifecycle.
-Build the native example with `-DNEVERD_BUILD_PLUGINS=ON`; Python support is on
-by default and can be removed completely with
-`-DNEVERD_ENABLE_PYTHON_PLUGINS=OFF`. See the
-[Python plugin guide](docs/python-plugins.md) for the typed SDK, lifecycle,
-loading API, examples, safety model, and package workflow. Load paths:
-`<neverd-dir>/plugins`, `~/.neverd/plugins`, `$NEVERD_PLUGIN_PATH`.
+Build the native example with `-DNEVERD_BUILD_PLUGINS=ON`; see the
+[native plugin guide](docs/plugins.md) for the pure-C descriptor, callbacks,
+build/link steps, discovery, CLI workflow, and ABI constraints. Python support
+is on by default and can be removed completely with
+`-DNEVERD_ENABLE_PYTHON_PLUGINS=OFF`; the
+[Python plugin guide](docs/python-plugins.md) covers its typed SDK and package
+workflow. Both kinds use `<neverd-dir>/plugins`, `~/.neverd/plugins`, and
+`$NEVERD_PLUGIN_PATH`.
 
 ## Dependencies
 

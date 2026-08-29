@@ -11,7 +11,7 @@ target_link_libraries(semantic_plugin PRIVATE neverd_shared)
 set_target_properties(semantic_plugin PROPERTIES
   PREFIX ""
   OUTPUT_NAME "semantic_plugin"
-  LIBRARY_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/plugins"
-  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins"
   FOLDER "NeverD/Plugins"
 )
+
+set_neverd_plugin_output_directories(semantic_plugin)

@@ -4,9 +4,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include <stdio.h>
-
 #include "neverd/sdk/NeverDPlugin.h"
+
+#include <stdio.h>
 
 static int exampleInit(neverd_session_t Session) {
   const char *Version = neverd_version();
@@ -32,8 +32,15 @@ static int exampleRun(neverd_session_t Session, int Arg) {
 }
 
 static int exampleEvent(const neverd_event_t *Evt) {
-  if (Evt->Type == NEVERD_EVT_BINARY_LOADED)
-    printf("[ExamplePlugin] binary loaded: %s\n", Evt->Data.BinaryLoaded.Path);
+  // The host invokes this callback through neverd_plugins_dispatch_event().
+  // Evt and pointers in its payload are borrowed until this call returns.
+  if (!Evt)
+    return 0;
+
+  if (Evt->Type == NEVERD_EVT_BINARY_LOADED) {
+    const char *Path = Evt->Data.BinaryLoaded.Path;
+    printf("[ExamplePlugin] binary loaded: %s\n", Path ? Path : "<unknown>");
+  }
   return 0;
 }
 

@@ -86,7 +86,7 @@ EIP-3540은 Stagnant라 확정 mainnet behavior로 다루지 않습니다. 자�
 |------|------|
 | Lifter 커버리지 | strict 유지하며 네이티브 공백 축소 |
 | 시맨틱 테스트 | 새 ISA와 함께 확장 |
-| 플러그인 ABI | 새 포맷에 적합하면 플러그인화 |
+| 플러그인 ABI | [네이티브 플러그인 ABI](../plugins.ko.md)를 프로세스 내 extension contract로 유지. Loader와 UI 값은 명시적 host API가 생길 때까지 metadata일 뿐임 |
 | 문서/행렬 | 테스트 통과 후에만 README 갱신 |
 
 ---

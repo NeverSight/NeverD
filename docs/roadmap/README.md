@@ -144,7 +144,7 @@ Cross-cutting work that unblocks the items above and improves today’s native e
 |------|-----------|
 | Lifter coverage | Close remaining native opcode gaps without relaxing strict mode |
 | Semantic tests | Expand Unicorn / roundtrip coverage as new ISAs land |
-| Plugin ABI | Loaders or analysis passes for new formats as plugins where it fits |
+| Plugin ABI | Maintain the [native plugin ABI](../plugins.md) as an in-process extension contract; Loader and UI values remain metadata until explicit host APIs exist |
 | Docs / matrix | Update README support tables only after tests land |
 
 ---

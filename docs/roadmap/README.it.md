@@ -87,7 +87,7 @@ Analizzare un binario sollevato per difetti di vita dell’heap (leak, doppia fr
 |------|-----------|
 | Copertura lifter | Chiudere gap nativi senza allentare strict |
 | Test semantici | Espandere Unicorn / roundtrip |
-| ABI plugin | Nuovi formati come plugin se ha senso |
+| ABI plugin | Mantenere l’[ABI dei plugin nativi](../plugins.it.md) come contratto di estensione nel processo; i valori Loader e UI restano metadati finché non esistono API host esplicite |
 | Docs / matrice | Aggiornare README solo dopo i test |
 
 ---

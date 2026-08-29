@@ -65,6 +65,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                 Path("docs/README.md"),
                 Path("docs/architecture.md"),
                 Path("docs/memory-safety.md"),
+                Path("docs/plugins.md"),
                 Path("docs/python-plugins.md"),
                 Path("docs/roadmap/README.md"),
                 Path("docs/testing.md"),

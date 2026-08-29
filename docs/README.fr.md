@@ -14,6 +14,7 @@ L’aperçu du projet, la compilation et le CLI se trouvent dans le README du d�
 | [Tests](testing.fr.md) | Suites, fixtures générées, allers-retours Unicorn et commandes incrémentales |
 | [Reconstruction des exceptions Windows](windows-exception-reconstruction.fr.md) | Matrice de support SEH/C++, contrat IR, règles de patch natif et validation PE |
 | [Audit et chasse de sûreté mémoire](memory-safety.fr.md) | Analyse de durée de vie du tas et de débordement de copie : contrat d’identité par format, catalogue puits/sources, verdicts, budgets et schéma JSON |
+| [Plugins natifs](plugins.fr.md) | ABI de descripteur en C pur, callbacks et événements, procédure de compilation/liaison, découverte et règles de compatibilité |
 | [Plugins Python](python-plugins.fr.md) | Création, API de session et d’événements, isolation, tests et publication |
 | [Décompilation EVM](evm.fr.md) | Entrées, hardforks, IR par étapes, ABI host C/LLVM, reconstruction Solidity et limites |
 | [Décompilation Solana SBF](sbf.fr.md) | SBF v0-v4, LLVM IR, sorties C/Rust, vérification et limites connues |

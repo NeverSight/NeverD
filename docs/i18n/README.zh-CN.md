@@ -293,7 +293,12 @@ neverd_session_destroy(s);
 选择 Solidity；旧的 `neverd_decompile_all` 仍输出 C。参见
 [EVM C API 示例](../evm.zh-CN.md#c-api)。
 
-`-DNEVERD_BUILD_PLUGINS=ON` 构建示例插件。加载路径：`<neverd-dir>/plugins`、`~/.neverd/plugins`、`$NEVERD_PLUGIN_PATH`。
+原生共享库与 Python `.py` 文件使用相同的插件生命周期。通过
+`-DNEVERD_BUILD_PLUGINS=ON` 构建原生示例；纯 C 描述符、回调、构建/链接步骤、
+发现顺序、CLI 工作流与 ABI 限制请参阅[原生插件指南](../plugins.zh-CN.md)。Python
+支持默认启用，可用 `-DNEVERD_ENABLE_PYTHON_PLUGINS=OFF` 完全移除；typed SDK 与
+package 工作流见 [Python 插件指南](../python-plugins.zh-CN.md)。两者都使用
+`<neverd-dir>/plugins`、`~/.neverd/plugins` 和 `$NEVERD_PLUGIN_PATH`。
 
 ## 依赖
 

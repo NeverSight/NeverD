@@ -10,7 +10,9 @@
 // separately distributed `neverd-plugin` authoring package and participate in
 // the same metadata and lifecycle contract.
 //
-// Pure C API — safe across any compiler/CRT combination.
+// Pure C ABI. Host and plugin must use ABI-compatible toolchains for the target
+// platform. Memory returned by NeverD must be released through NeverD APIs such
+// as neverd_free_string(), not by the plugin's C runtime.
 //
 //===----------------------------------------------------------------------===//
 

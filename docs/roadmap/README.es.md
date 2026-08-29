@@ -88,7 +88,7 @@ Analizar un binario levantado en busca de defectos de vida del montón (fuga, do
 |------|-----------|
 | Cobertura del lifter | Cerrar huecos nativos sin relajar strict |
 | Pruebas semánticas | Ampliar Unicorn / roundtrip |
-| ABI de plugins | Nuevos formatos como plugins si encaja |
+| ABI de plugins | Mantener la [ABI de plugins nativos](../plugins.es.md) como contrato de extensión dentro del proceso; los valores Loader y UI siguen siendo metadatos hasta que existan API de host explícitas |
 | Docs / matriz | Actualizar README solo tras tests |
 
 ---

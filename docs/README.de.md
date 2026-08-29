@@ -14,6 +14,7 @@ Projektüberblick, Build und CLI stehen in der Repository-README. Architektur- u
 | [Tests](testing.de.md) | Testsuiten, generierte Fixtures, Unicorn-Roundtrips und inkrementelle Befehle |
 | [Windows-Ausnahmerekonstruktion](windows-exception-reconstruction.de.md) | SEH/C++-Supportmatrix, IR-Vertrag, native Patch-Regeln und PE-Validierung |
 | [Speicher-Audit und Hunt](memory-safety.de.md) | Heap-Lebensdauer- und Copy-Überlaufanalyse: Identitätsvertrag je Format, Senken-/Quellenkatalog, Urteile, Budgets und JSON-Schema |
+| [Native Plugins](plugins.de.md) | Reine C-Deskriptor-ABI, Callbacks und Ereignisse, Build-/Link-Ablauf, Erkennung und Kompatibilitätsregeln |
 | [Python-Plugins](python-plugins.de.md) | Plugin-Entwicklung, Session-/Event-API, Isolation, Tests und Veröffentlichung |
 | [EVM-Dekompilation](evm.de.md) | Eingaben, Hardforks, IR-Stufen, C-/LLVM-Host-ABI, Solidity-Rekonstruktion und Grenzen |
 | [Solana-SBF-Dekompilation](sbf.de.md) | SBF v0-v4, LLVM IR, C-/Rust-Ausgabe, Verifikation und bekannte Grenzen |

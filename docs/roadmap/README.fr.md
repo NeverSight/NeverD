@@ -88,7 +88,7 @@ Analyser un binaire levé pour les défauts de durée de vie du tas (fuite, doub
 |---------|-----------|
 | Couverture lifter | Combler les trous natifs sans relâcher strict |
 | Tests sémantiques | Étendre Unicorn / roundtrip |
-| ABI plugins | Nouveaux formats en plugins si pertinent |
+| ABI plugins | Maintenir l’[ABI des plugins natifs](../plugins.fr.md) comme contrat d’extension dans le processus ; les valeurs Loader et UI restent des métadonnées jusqu’à ce que des API hôte explicites existent |
 | Docs / matrice | Mettre à jour le README seulement après tests |
 
 ---

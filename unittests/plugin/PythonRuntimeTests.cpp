@@ -154,6 +154,8 @@ TEST_F(PythonRuntimeTest, CapturesFullTracebackAtTheNativeBoundary) {
 TEST_F(PythonRuntimeTest, PropagatesTerminationTraceback) {
   ASSERT_TRUE(Manager.loadPluginFile(NEVERD_PYTHON_RAISING_FIXTURE))
       << Manager.lastError();
+  Manager.initAll(session());
+  ASSERT_TRUE(Manager.lastError().empty()) << Manager.lastError();
   Manager.termAll();
   EXPECT_NE(Manager.lastError().find("termination failed"), std::string::npos)
       << Manager.lastError();

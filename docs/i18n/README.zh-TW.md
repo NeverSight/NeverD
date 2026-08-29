@@ -293,7 +293,12 @@ EVM 使用 `neverd_decompile_all_ex(..., NEVERD_OUTPUT_SOLIDITY, ...)` 明確選
 Solidity；舊 `neverd_decompile_all` 仍輸出 C。參見
 [EVM C API 範例](../evm.zh-TW.md#c-api)。
 
-`-DNEVERD_BUILD_PLUGINS=ON` 建置範例外掛。載入路徑：`<neverd-dir>/plugins`、`~/.neverd/plugins`、`$NEVERD_PLUGIN_PATH`。
+原生共享函式庫與 Python `.py` 檔案使用相同的外掛生命週期。透過
+`-DNEVERD_BUILD_PLUGINS=ON` 建置原生範例；純 C 描述元、回呼、建置/連結步驟、
+探索順序、CLI 工作流程與 ABI 限制請參閱[原生外掛指南](../plugins.zh-TW.md)。Python
+支援預設啟用，可用 `-DNEVERD_ENABLE_PYTHON_PLUGINS=OFF` 完全移除；typed SDK 與
+package 工作流程見 [Python 外掛指南](../python-plugins.zh-TW.md)。兩者都使用
+`<neverd-dir>/plugins`、`~/.neverd/plugins` 和 `$NEVERD_PLUGIN_PATH`。
 
 ## 相依元件
 

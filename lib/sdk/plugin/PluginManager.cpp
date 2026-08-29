@@ -146,8 +146,18 @@ int PluginManager::loadPluginsFromDir(const std::string &Dir) {
 #ifdef NEVERD_ENABLE_PYTHON_PLUGINS
           || isPythonPluginExtension(It->path())
 #endif
-      )
-        Candidates.push_back(pathToUTF8(It->path()));
+      ) {
+        const std::string CandidatePath = pathToUTF8(It->path());
+        std::error_code CanonicalEC;
+        std::string CanonicalPath =
+            canonicalPluginPath(CandidatePath, CanonicalEC);
+        if (CanonicalEC) {
+          setError("cannot canonicalize plugin candidate '" + CandidatePath +
+                   "': " + CanonicalEC.message());
+          return 0;
+        }
+        Candidates.push_back(std::move(CanonicalPath));
+      }
     }
     if (EC) {
       setError("cannot scan plugin directory '" + Dir + "': " + EC.message());
@@ -317,7 +327,7 @@ void PluginManager::initAll(neverd_session_t Session) {
 void PluginManager::termAll() {
   LastError.clear();
   for (auto &P : Plugins) {
-    if (!P.Terminated) {
+    if (P.Initialized && !P.Terminated) {
       P.Runtime->term();
       const std::string Detail = P.Runtime->lastError();
       if (!Detail.empty())

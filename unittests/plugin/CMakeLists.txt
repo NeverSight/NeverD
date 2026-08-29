@@ -10,10 +10,15 @@ add_library(neverd-null-name-plugin-fixture SHARED
   Inputs/null_name_plugin.c
 )
 
+add_library(neverd-lifecycle-probe-plugin-fixture SHARED
+  Inputs/lifecycle_probe_plugin.c
+)
+
 foreach(_fixture_target IN ITEMS
     neverd-native-plugin-fixture
     neverd-no-export-plugin-fixture
-    neverd-null-name-plugin-fixture)
+    neverd-null-name-plugin-fixture
+    neverd-lifecycle-probe-plugin-fixture)
   target_include_directories(${_fixture_target} PRIVATE
     ${CMAKE_SOURCE_DIR}/include
   )
@@ -30,6 +35,11 @@ set_target_properties(neverd-no-export-plugin-fixture PROPERTIES
   OUTPUT_NAME "neverd_no_export_plugin_fixture")
 set_target_properties(neverd-null-name-plugin-fixture PROPERTIES
   OUTPUT_NAME "neverd_null_name_plugin_fixture")
+set_target_properties(neverd-lifecycle-probe-plugin-fixture PROPERTIES
+  OUTPUT_NAME "neverd_lifecycle_probe_plugin_fixture"
+  C_STANDARD 11
+  C_STANDARD_REQUIRED YES
+  C_EXTENSIONS NO)
 
 set(_neverd_plugin_runtime_test_sources
   ${CMAKE_SOURCE_DIR}/lib/sdk/plugin/PluginManager.cpp)
@@ -68,13 +78,34 @@ add_neverd_unittest(NeverDPluginRuntimeTests
 add_dependencies(NeverDPluginRuntimeTests
   neverd-native-plugin-fixture
   neverd-no-export-plugin-fixture
-  neverd-null-name-plugin-fixture)
+  neverd-null-name-plugin-fixture
+  neverd-lifecycle-probe-plugin-fixture)
 target_compile_definitions(NeverDPluginRuntimeTests PRIVATE
   NEVERD_NATIVE_PLUGIN_FIXTURE="$<TARGET_FILE:neverd-native-plugin-fixture>"
   NEVERD_NO_EXPORT_PLUGIN_FIXTURE="$<TARGET_FILE:neverd-no-export-plugin-fixture>"
   NEVERD_NULL_NAME_PLUGIN_FIXTURE="$<TARGET_FILE:neverd-null-name-plugin-fixture>"
+  NEVERD_LIFECYCLE_PROBE_FIXTURE="$<TARGET_FILE:neverd-lifecycle-probe-plugin-fixture>"
   NEVERD_PYTHON_FILE_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/Inputs/RuntimeLifecyclePlugin.py"
   NEVERD_TEST_PYTHON_PLUGINS_ENABLED=$<BOOL:${NEVERD_PYTHON_PLUGIN_HOST_ENABLED}>)
+
+if(NEVERD_BUILD_PLUGINS AND TARGET neverd AND TARGET example_plugin)
+  add_test(
+    NAME NeverDExamplePluginTests
+    COMMAND "${CMAKE_COMMAND}" -E env
+            "NEVERD_TEST_CLI=$<TARGET_FILE:neverd>"
+            "NEVERD_TEST_EXAMPLE_PLUGIN=$<TARGET_FILE:example_plugin>"
+            "NEVERD_TEST_LIFECYCLE_PLUGIN=$<TARGET_FILE:neverd-lifecycle-probe-plugin-fixture>"
+            "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/test_plugin_cli.py" -v
+  )
+  set_tests_properties(NeverDExamplePluginTests PROPERTIES
+    LABELS NeverDExamplePluginTests
+    TIMEOUT 120)
+  add_dependencies(NeverDUnitTests
+    neverd
+    example_plugin
+    neverd-lifecycle-probe-plugin-fixture)
+endif()
 
 if(NEVERD_BUILD_SHARED)
   add_neverd_unittest(NeverDPluginTests

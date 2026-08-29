@@ -88,7 +88,7 @@ Ein geliftetes Binärfile auf Heap-Lebensdauerfehler (Leak, Double-Free, Use-aft
 |---------|----------|
 | Lifter-Abdeckung | Native Lücken schließen ohne Strict zu lockern |
 | Semantiktests | Unicorn / Roundtrip ausbauen |
-| Plugin-ABI | Neue Formate als Plugins wo sinnvoll |
+| Plugin-ABI | Die [native Plugin-ABI](../plugins.de.md) als In-Process-Erweiterungsvertrag pflegen; Loader- und UI-Werte bleiben Metadaten, bis explizite Host-APIs existieren |
 | Docs / Matrix | README erst nach Tests aktualisieren |
 
 ---

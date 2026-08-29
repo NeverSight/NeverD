@@ -12,7 +12,7 @@ target_link_libraries(example_plugin PRIVATE neverd_shared)
 set_target_properties(example_plugin PROPERTIES
   PREFIX ""
   OUTPUT_NAME "example_plugin"
-  LIBRARY_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/plugins"
-  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins"
   FOLDER "NeverD/Plugins"
 )
+
+set_neverd_plugin_output_directories(example_plugin)

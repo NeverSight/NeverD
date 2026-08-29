@@ -34,6 +34,10 @@ SAFETY_LABELS = (
     "NeverDSafetyTests",
     "NeverDSafetyIntegrationTests",
 )
+# The in-tree native example is the public plugin walkthrough.  Its CLI test is
+# required on every host so a build cannot retain generic loader fixtures while
+# silently dropping the artifact and discovery path promised to SDK users.
+PLUGIN_LABELS = ("NeverDExamplePluginTests",)
 PROFILE_EXCLUSIONS = {
     "linux-semantic": r"^NeverDPatchFullTests$",
     "macos-patch": r"^NeverDSemanticTests$",
@@ -173,6 +177,17 @@ def audit_inventory(
             "built on every CI host (host-native ELF, Mach-O, or PE fixture)"
         )
 
+    absent_plugins = [
+        label for label in PLUGIN_LABELS if label not in present_labels
+    ]
+    if absent_plugins:
+        raise InventoryError(
+            "native example plugin tests are not under test: "
+            + ", ".join(absent_plugins)
+            + "; configure with -DNEVERD_BUILD_PLUGINS=ON and register the "
+            "example-plugin CLI smoke test"
+        )
+
     semantic_names = {
         record.name for record in records if SEMANTIC_LABEL in record.labels
     }
@@ -203,6 +218,16 @@ def audit_inventory(
     selected_names = tuple(sorted(record.name for record in selected))
     if not selected:
         raise InventoryError(f"profile {profile!r} selected zero tests")
+
+    selected_labels = {label for record in selected for label in record.labels}
+    unselected_plugins = [
+        label for label in PLUGIN_LABELS if label not in selected_labels
+    ]
+    if unselected_plugins:
+        raise InventoryError(
+            f"profile {profile!r} does not select required native plugin tests: "
+            + ", ".join(unselected_plugins)
+        )
 
     heavy_sets = {
         SEMANTIC_LABEL: semantic_names,

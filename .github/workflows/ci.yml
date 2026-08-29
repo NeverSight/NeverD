@@ -276,15 +276,19 @@ jobs:
         env:
           PYTHON: ${{ matrix.python }}
 
-      - name: Run native and Python semantic plugin examples
+      - name: Run native and Python plugin examples
         shell: bash
         run: |
-          build-ci/bin/neverd plugins \
-            --plugin-dir build-ci/bin/plugins \
-            --run "Semantic Optimizer"
+          set -o pipefail
+          build-ci/bin/neverd plugins --list --json |
+            "$PYTHON" -c 'import json, sys; plugins = json.load(sys.stdin); assert any(plugin.get("name") == "Example Plugin" and plugin.get("kind") == "native" for plugin in plugins), plugins'
+          build-ci/bin/neverd plugins --run "Example Plugin"
+          build-ci/bin/neverd plugins --run "Semantic Optimizer"
           build-ci/bin/neverd plugins \
             --plugin-dir build-ci/bin/sdk/python/examples \
             --run "Python Semantic Optimizer"
+        env:
+          PYTHON: ${{ matrix.python }}
 
       - name: Audit and select test profile
         id: inventory

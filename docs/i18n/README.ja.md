@@ -293,7 +293,14 @@ EVM では `neverd_decompile_all_ex(..., NEVERD_OUTPUT_SOLIDITY, ...)` で Solid
 を明示選択します。従来の `neverd_decompile_all` は C を出力します。詳細は
 [EVM C API 例](../evm.ja.md#c-api)を参照してください。
 
-`-DNEVERD_BUILD_PLUGINS=ON` でサンプルプラグインをビルド。読み込みパス：`<neverd-dir>/plugins`、`~/.neverd/plugins`、`$NEVERD_PLUGIN_PATH`。
+ネイティブ共有ライブラリと Python `.py` file は同じプラグイン lifecycle を使います。
+`-DNEVERD_BUILD_PLUGINS=ON` でネイティブ example をビルドします。純粋 C descriptor、
+callback、build/link、discovery、CLI workflow、ABI 制約は
+[ネイティブプラグインガイド](../plugins.ja.md)を参照してください。Python 対応は
+default で有効で、`-DNEVERD_ENABLE_PYTHON_PLUGINS=OFF` で完全に除外できます。
+typed SDK と package workflow は [Python プラグインガイド](../python-plugins.ja.md)
+にあります。両方とも `<neverd-dir>/plugins`、`~/.neverd/plugins`、
+`$NEVERD_PLUGIN_PATH` を使用します。
 
 ## 依存関係
 

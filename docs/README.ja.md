@@ -14,6 +14,7 @@
 | [テスト](testing.ja.md) | テストスイート、生成 fixture、Unicorn ラウンドトリップ、増分コマンド |
 | [Windows 例外再構築](windows-exception-reconstruction.ja.md) | SEH/C++ サポート表、IR 契約、ネイティブ patch 規則、PE 検証 |
 | [メモリ安全性の監査とハント](memory-safety.ja.md) | ヒープ寿命とコピー越境解析：形式ごとの識別契約、シンク／ソースカタログ、判定、予算、JSON スキーマ |
+| [ネイティブプラグイン](plugins.ja.md) | 純粋 C descriptor ABI、callback と event、build/link workflow、discovery、互換性規則 |
 | [Python プラグイン](python-plugins.ja.md) | プラグイン作成、セッション／イベント API、分離、テスト、公開 |
 | [EVM 逆コンパイル](evm.ja.md) | 入力、hardfork、段階 IR、C/LLVM host ABI、Solidity 復元、制限 |
 | [Solana SBF 逆コンパイル](sbf.ja.md) | SBF v0-v4、LLVM IR、C/Rust 出力、検証、既知の制限 |

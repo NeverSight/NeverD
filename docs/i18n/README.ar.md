@@ -293,7 +293,15 @@ neverd_session_destroy(s);
 لـEVM، بينما يواصل `neverd_decompile_all` إخراج C. راجع
 [أمثلة C API لـEVM](../evm.ar.md#c-api).
 
-ابنِ إضافة المثال بـ`-DNEVERD_BUILD_PLUGINS=ON`. مسارات التحميل: `<neverd-dir>/plugins`، `~/.neverd/plugins`، `$NEVERD_PLUGIN_PATH`.
+تستخدم المكتبات المشتركة الأصلية وملفات Python ذات اللاحقة `.py` دورة حياة
+الإضافات نفسها. ابنِ المثال الأصلي بـ`-DNEVERD_BUILD_PLUGINS=ON`؛ وراجع
+[دليل الإضافات الأصلية](../plugins.ar.md) للاطلاع على واصف C الخالص،
+والاستدعاءات، وخطوات البناء/الربط، والاكتشاف، وسير عمل CLI، وقيود ABI. دعم
+Python مفعّل افتراضيًا ويمكن إزالته بالكامل بواسطة
+`-DNEVERD_ENABLE_PYTHON_PLUGINS=OFF`؛ ويغطي
+[دليل إضافات Python](../python-plugins.ar.md) حزمة SDK المعرّفة بأنواع وسير عمل
+الحزمة. يستخدم النوعان `<neverd-dir>/plugins` و`~/.neverd/plugins`
+و`$NEVERD_PLUGIN_PATH`.
 
 ## الاعتماديات
 
