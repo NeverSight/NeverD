@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 class PluginCLITests(unittest.TestCase):
@@ -53,16 +54,28 @@ class PluginCLITests(unittest.TestCase):
         cwd: Path | None = None,
     ) -> subprocess.CompletedProcess[str]:
         executable = self.neverd.name if bare_name else str(self.neverd)
-        return subprocess.run(
-            (executable, *arguments),
-            cwd=cwd or self.root,
-            env=environment or self.clean_environment(),
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
+        child_environment = environment or self.clean_environment()
+
+        def invoke() -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                (executable, *arguments),
+                cwd=cwd or self.root,
+                env=child_environment,
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+        if bare_name and os.name == "nt":
+            # CreateProcess resolves a bare executable with the parent PATH,
+            # not the replacement environment supplied for the child.
+            with mock.patch.dict(
+                os.environ, {"PATH": child_environment.get("PATH", "")}
+            ):
+                return invoke()
+        return invoke()
 
     def assert_success(
         self, result: subprocess.CompletedProcess[str]
