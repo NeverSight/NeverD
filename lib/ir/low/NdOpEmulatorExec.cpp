@@ -15,9 +15,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/Limits.h"
+#include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 
 #include <bit>
+#include <cstring>
 
 namespace neverd {
 
@@ -105,13 +107,15 @@ bool NdOpEmulator::executeLoad(const LowOp &Op) {
   const LowMemoryOperandView Memory = lowMemoryOperands(Op);
   if (!Memory.Complete)
     return false;
-  const uint64_t Addr = readOperand(*Memory.Address);
+  const auto Addr = resolveMemoryAddress(Op, readOperand(*Memory.Address));
+  if (!Addr)
+    return false;
 
   if (CollectLoads &&
       static_cast<int>(LoadLog.size()) < limits::kMaxLoadRecords)
-    LoadLog.push_back({Addr, Op.Output.Size});
+    LoadLog.push_back({*Addr, Op.Output.Size});
 
-  auto Val = loadMemory(Addr, Op.Output.Size);
+  auto Val = loadMemory(*Addr, Op.Output.Size);
   if (!Val)
     return false;
   writeOutput(Op.Output, *Val);
@@ -122,19 +126,175 @@ bool NdOpEmulator::executeStore(const LowOp &Op) {
   const LowMemoryOperandView Memory = lowMemoryOperands(Op);
   if (!Memory.Complete)
     return false;
-  const uint64_t Addr = readOperand(*Memory.Address);
+  const auto Addr = resolveMemoryAddress(Op, readOperand(*Memory.Address));
+  if (!Addr)
+    return false;
   const uint64_t Val = readOperand(*Memory.StoredValue);
   const uint16_t Size = Memory.AccessSize;
   if (Size != 1 && Size != 2 && Size != 4 && Size != 8)
     return false;
-  if (!storeMemory(Addr, Size, Val))
+  if (!storeMemory(*Addr, Size, Val))
     return !strictMode();
+  return true;
+}
+
+bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
+  if (Op.NumInputs < 1 || !Op.Inputs[0].isConst())
+    return false;
+  const Intrinsic Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+  const bool IsCacheFlush = Id == Intrinsic::Clflush ||
+                            Id == Intrinsic::Clflushopt ||
+                            Id == Intrinsic::Clwb;
+  const bool IsPrefetch =
+      Id == Intrinsic::Prefetch || Id == Intrinsic::PrefetchT0 ||
+      Id == Intrinsic::PrefetchT1 || Id == Intrinsic::PrefetchT2 ||
+      Id == Intrinsic::PrefetchNta || Id == Intrinsic::PrefetchW ||
+      Id == Intrinsic::PrefetchWT1;
+  const bool IsMXCSR =
+      Id == Intrinsic::Ldmxcsr || Id == Intrinsic::Stmxcsr;
+  const bool IsLoad = Id == Intrinsic::MaskedLoadD ||
+                      Id == Intrinsic::MaskedLoadQ;
+  const bool IsStore = Id == Intrinsic::MaskedStoreD ||
+                       Id == Intrinsic::MaskedStoreQ ||
+                       Id == Intrinsic::MaskedStoreB;
+  if (!IsLoad && !IsStore && !IsCacheFlush && !IsPrefetch && !IsMXCSR)
+    return false;
+  if (!intrinsicMemoryAddressSpaceShapeIsValid(
+          Id, Op.NumInputs, Op.Output.Size,
+          Op.NumInputs > 1 ? Op.Inputs[1].Size : 0,
+          Op.NumInputs > 2 ? Op.Inputs[2].Size : 0,
+          Op.NumInputs > 3 ? Op.Inputs[3].Size : 0))
+    return false;
+
+  const auto Base = resolveMemoryAddress(Op, readOperand(Op.Inputs[1]));
+  if (!Base)
+    return false;
+
+  if (IsPrefetch)
+    return true; // architecturally a non-faulting hint with no data result
+  if (IsCacheFlush) {
+    if (!loadMemory(*Base, 1))
+      return false;
+    return true;
+  }
+  if (Id == Intrinsic::Ldmxcsr) {
+    auto Value = loadMemory(*Base, 4);
+    if (!Value)
+      return false;
+    // Bits 31:16 are reserved on every implementation.  The CPU-specific
+    // low-bit mask is unavailable here, but this universal fault must occur
+    // before the architectural control state changes.
+    if ((*Value & UINT64_C(0xffff0000)) != 0)
+      return false;
+    MXCSR = static_cast<uint32_t>(*Value);
+    return true;
+  }
+  if (Id == Intrinsic::Stmxcsr)
+    return storeMemory(*Base, 4, MXCSR) || !strictMode();
+
+  const unsigned ElementBytes =
+      Id == Intrinsic::MaskedStoreB ? 1
+      : (Id == Intrinsic::MaskedLoadQ || Id == Intrinsic::MaskedStoreQ) ? 8
+                                                                          : 4;
+  const uint16_t VectorBytes =
+      IsLoad ? Op.Output.Size : Op.Inputs[3].Size;
+  const std::vector<uint8_t> Mask = readOperandBytes(Op.Inputs[2]);
+  if (Mask.size() < VectorBytes || VectorBytes % ElementBytes != 0)
+    return false;
+  auto elementAddress = [&](uint16_t Offset) {
+    uint64_t Address = *Base + Offset;
+    if (Img.Arch == Arch::X86)
+      Address &= UINT64_C(0xffffffff);
+    return Address;
+  };
+
+  if (IsLoad) {
+    std::vector<uint8_t> Result(VectorBytes, 0);
+    std::vector<LoadRecord> Records;
+    for (uint16_t Offset = 0; Offset < VectorBytes;
+         Offset += ElementBytes) {
+      if ((Mask[Offset + ElementBytes - 1] & 0x80) == 0)
+        continue;
+      const uint64_t Address = elementAddress(Offset);
+      auto Value = loadMemory(Address, ElementBytes);
+      if (!Value)
+        return false;
+      std::memcpy(Result.data() + Offset, &*Value, ElementBytes);
+      Records.push_back({Address, static_cast<uint16_t>(ElementBytes)});
+    }
+    if (CollectLoads)
+      for (const LoadRecord &Record : Records)
+        if (static_cast<int>(LoadLog.size()) < limits::kMaxLoadRecords)
+          LoadLog.push_back(Record);
+    writeOutputBytes(Op.Output, Result);
+    return true;
+  }
+
+  const std::vector<uint8_t> Data = readOperandBytes(Op.Inputs[3]);
+  if (Data.size() < VectorBytes)
+    return false;
+  for (uint16_t Offset = 0; Offset < VectorBytes; Offset += ElementBytes) {
+    if ((Mask[Offset + ElementBytes - 1] & 0x80) == 0)
+      continue;
+    uint64_t Value = 0;
+    std::memcpy(&Value, Data.data() + Offset, ElementBytes);
+    if (!storeMemory(elementAddress(Offset), ElementBytes, Value))
+      return !strictMode();
+  }
   return true;
 }
 
 bool NdOpEmulator::executeCopy(const LowOp &Op) {
   if (Op.NumInputs < 1)
     return false;
+
+  if (Op.Output.Size > 8 || Op.Inputs[0].Size > 8 ||
+      (Op.Opcode == NdOp::CONCAT && Op.NumInputs >= 2 &&
+       Op.Inputs[1].Size > 8)) {
+    switch (Op.Opcode) {
+    case NdOp::COPY:
+    case NdOp::INT_ZEXT: {
+      std::vector<uint8_t> Bytes = readOperandBytes(Op.Inputs[0]);
+      Bytes.resize(Op.Output.Size, 0);
+      writeOutputBytes(Op.Output, Bytes);
+      return true;
+    }
+    case NdOp::INT_SEXT: {
+      std::vector<uint8_t> Bytes = readOperandBytes(Op.Inputs[0]);
+      const uint8_t Fill = !Bytes.empty() && (Bytes.back() & 0x80) ? 0xff : 0;
+      Bytes.resize(Op.Output.Size, Fill);
+      writeOutputBytes(Op.Output, Bytes);
+      return true;
+    }
+    case NdOp::SUBBYTES: {
+      if (Op.NumInputs < 2)
+        return false;
+      const uint64_t Off = readOperand(Op.Inputs[1]);
+      const std::vector<uint8_t> Input = readOperandBytes(Op.Inputs[0]);
+      if (Off > Input.size() || Op.Output.Size > Input.size() - Off)
+        return false;
+      writeOutputBytes(Op.Output,
+                       llvm::ArrayRef<uint8_t>(Input).slice(Off,
+                                                             Op.Output.Size));
+      return true;
+    }
+    case NdOp::CONCAT: {
+      if (Op.NumInputs < 2)
+        return false;
+      const std::vector<uint8_t> Hi = readOperandBytes(Op.Inputs[0]);
+      const std::vector<uint8_t> Lo = readOperandBytes(Op.Inputs[1]);
+      std::vector<uint8_t> Bytes;
+      Bytes.reserve(Lo.size() + Hi.size());
+      Bytes.insert(Bytes.end(), Lo.begin(), Lo.end());
+      Bytes.insert(Bytes.end(), Hi.begin(), Hi.end());
+      Bytes.resize(Op.Output.Size, 0);
+      writeOutputBytes(Op.Output, Bytes);
+      return true;
+    }
+    default:
+      return false;
+    }
+  }
   uint64_t Val = readOperand(Op.Inputs[0]);
 
   switch (Op.Opcode) {
@@ -192,6 +352,16 @@ bool NdOpEmulator::executeCompare(const LowOp &Op) {
   uint64_t A = readOperand(Op.Inputs[0]);
   uint64_t B = readOperand(Op.Inputs[1]);
   uint64_t Result = 0;
+  auto signedAtWidth = [](uint64_t Value, uint16_t Size) {
+    if (Size == 0 || Size >= 8)
+      return static_cast<int64_t>(Value);
+    const unsigned Bits = Size * 8;
+    const uint64_t Mask = (uint64_t{1} << Bits) - 1;
+    Value &= Mask;
+    if ((Value & (uint64_t{1} << (Bits - 1))) != 0)
+      Value |= ~Mask;
+    return static_cast<int64_t>(Value);
+  };
 
   switch (Op.Opcode) {
   case NdOp::INT_EQUAL:
@@ -204,13 +374,19 @@ bool NdOpEmulator::executeCompare(const LowOp &Op) {
     Result = (A < B) ? 1 : 0;
     break;
   case NdOp::INT_SLESS:
-    Result = (static_cast<int64_t>(A) < static_cast<int64_t>(B)) ? 1 : 0;
+    Result = (signedAtWidth(A, Op.Inputs[0].Size) <
+              signedAtWidth(B, Op.Inputs[1].Size))
+                 ? 1
+                 : 0;
     break;
   case NdOp::INT_LESSEQUAL:
     Result = (A <= B) ? 1 : 0;
     break;
   case NdOp::INT_SLESSEQUAL:
-    Result = (static_cast<int64_t>(A) <= static_cast<int64_t>(B)) ? 1 : 0;
+    Result = (signedAtWidth(A, Op.Inputs[0].Size) <=
+              signedAtWidth(B, Op.Inputs[1].Size))
+                 ? 1
+                 : 0;
     break;
   case NdOp::INT_CARRY:
     Result = (A + B < A) ? 1 : 0;

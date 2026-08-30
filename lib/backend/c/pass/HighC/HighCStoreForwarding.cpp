@@ -21,11 +21,25 @@ void analyzeStoreForwarding(HighCAnalysisState &State, const HighFunc &Func,
 
   bool HasOrderedMemory = false;
   walkStmts(Func.Body, [&](const HighStmt &S) {
-    if (S.MemoryOrdering != NdMemoryOrdering::None)
+    if (S.MemoryOrdering != NdMemoryOrdering::None ||
+        S.MemoryAddressSpace != NdMemoryAddressSpace::Default)
       HasOrderedMemory = true;
     forEachExpr(S, [&](const ExprPtr &E) {
-      if (E && E->hasOrderedMemoryAccess())
-        HasOrderedMemory = true;
+      if (!E)
+        return;
+      std::set<const HighExpr *> Seen;
+      std::vector<const HighExpr *> Work{E.get()};
+      while (!Work.empty()) {
+        const HighExpr *Node = Work.back();
+        Work.pop_back();
+        if (!Node || !Seen.insert(Node).second)
+          continue;
+        if (Node->MemoryOrdering != NdMemoryOrdering::None ||
+            Node->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+          HasOrderedMemory = true;
+        for (const ExprPtr &Operand : Node->Operands)
+          Work.push_back(Operand.get());
+      }
     });
   });
   if (HasOrderedMemory)

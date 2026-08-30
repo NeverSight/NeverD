@@ -41,7 +41,8 @@ inline bool isStackMemoryWrite(NdOp Opcode) {
 }
 
 inline const MedVar *memoryAddress(const MedOp &Op) {
-  if (Op.NumInputs == 0)
+  if (Op.NumInputs == 0 ||
+      Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
     return nullptr;
   if (Op.Opcode == NdOp::LOAD)
     return &Op.Inputs[Op.NumInputs >= 2 ? 1 : 0];
@@ -183,6 +184,8 @@ ReachingStackValues reachingStackValues(
   auto LoadIt = Blocks.find(LoadBlockId);
   if (LoadIt == Blocks.end() ||
       LoadOpIdx >= static_cast<int>(LoadIt->second->Ops.size()) ||
+      LoadIt->second->Ops[LoadOpIdx].MemoryAddressSpace !=
+          NdMemoryAddressSpace::Default ||
       (RequireMemoryRead &&
        !isStackMemoryRead(LoadIt->second->Ops[LoadOpIdx].Opcode)))
     return Result;
@@ -291,6 +294,18 @@ ReachingStackValues reachingStackValues(
     }
     if (!isStackMemoryWrite(Op.Opcode))
       return;
+    if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default) {
+      const MedVar *EscapedValue = storedValue(Op);
+      if (EscapedValue && InvalidateEscapedAddresses) {
+        const std::optional<int64_t> Escaped = Resolve(*EscapedValue);
+        if (Escaped
+                ? (stackRangesOverlap(*Escaped, 1, TargetOffset, LoadSize) ||
+                   AliasesWholeFrame(*EscapedValue))
+                : MayBeFrame(*EscapedValue))
+          invalidate(S);
+      }
+      return;
+    }
     const MedVar *Addr = memoryAddress(Op);
     if (!Addr) {
       invalidate(S);

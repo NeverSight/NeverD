@@ -51,7 +51,8 @@ static bool tryResolveLoadTarget(const MedOp &CurOp, const MedBlock &CurBlock,
   auto &TVar = CurOp.Inputs[0];
   for (auto &BOp : CurBlock.Ops) {
     if (BOp.Opcode != NdOp::LOAD || BOp.Output.Id != TVar.Id ||
-        BOp.Output.SSAVer != TVar.SSAVer || BOp.NumInputs < 1)
+        BOp.Output.SSAVer != TVar.SSAVer || BOp.NumInputs < 1 ||
+        BOp.MemoryAddressSpace != NdMemoryAddressSpace::Default)
       continue;
 
     // Direct constant load address.
@@ -112,7 +113,8 @@ static bool tryResolveStackSlotTarget(const MedOp &CurOp,
   int64_t LoadSpOff = INT64_MIN;
   for (auto &BOp : CurBlock.Ops) {
     if (BOp.Opcode == NdOp::LOAD && BOp.Output.Id == TVar.Id &&
-        BOp.Output.SSAVer == TVar.SSAVer && BOp.NumInputs >= 1) {
+        BOp.Output.SSAVer == TVar.SSAVer && BOp.NumInputs >= 1 &&
+        BOp.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
       auto &LA = BOp.Inputs[0];
       for (auto &ROp : CurBlock.Ops) {
         if (ROp.Opcode == NdOp::INT_ADD && ROp.Output.Id == LA.Id &&
@@ -130,7 +132,8 @@ static bool tryResolveStackSlotTarget(const MedOp &CurOp,
 
   const auto &TRI = getTargetRegInfo(TargetArch);
   for (auto &BOp : CurBlock.Ops) {
-    if (BOp.Opcode != NdOp::STORE || BOp.NumInputs < 2)
+    if (BOp.Opcode != NdOp::STORE || BOp.NumInputs < 2 ||
+        BOp.MemoryAddressSpace != NdMemoryAddressSpace::Default)
       continue;
     if (BOp.Inputs[1].Kind != MedVar::Reg)
       continue;

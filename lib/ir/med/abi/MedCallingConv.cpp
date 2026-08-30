@@ -884,7 +884,8 @@ void detectStackParams(MedFunc &Func, Arch TargetArch,
   std::set<int64_t> Offsets;
   for (const auto &Blk : Func.Blocks)
     for (const auto &Op : Blk.Ops)
-      if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1)
+      if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
+          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
         if (auto Off = rawStackOff(Op.Inputs[0])) {
           auto [SlotBase, ByteOff] = slotOf(*Off);
           Offsets.insert(SlotBase);
@@ -971,7 +972,8 @@ void detectStackParams(MedFunc &Func, Arch TargetArch,
   std::set<int64_t> MutableSlots;
   for (const auto &Blk : Func.Blocks)
     for (const auto &Op : Blk.Ops) {
-      if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 1)
+      if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 1 &&
+          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
         if (auto Off = rawStackOff(Op.Inputs[0]))
           MutableSlots.insert(slotOf(*Off).first); // direct write
       // SP and any stack-slot address thread through copies, extends and
@@ -1018,6 +1020,8 @@ void detectStackParams(MedFunc &Func, Arch TargetArch,
       if (Op.Opcode != NdOp::LOAD || Op.NumInputs < 1)
         continue;
       if (Op.MemoryOrdering != NdMemoryOrdering::None)
+        continue;
+      if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
         continue;
       auto Off = rawStackOff(Op.Inputs[0]);
       if (!Off)

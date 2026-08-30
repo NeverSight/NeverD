@@ -96,6 +96,62 @@ void validateAtomicStoreOrdering(NdMemoryOrdering Ordering) {
     llvm::report_fatal_error("acquire ordering is invalid on a store");
 }
 
+const char *memoryAddressSpaceName(NdMemoryAddressSpace AddressSpace) {
+  switch (AddressSpace) {
+  case NdMemoryAddressSpace::Default:
+    return "default";
+  case NdMemoryAddressSpace::X86FS:
+    return "fs";
+  case NdMemoryAddressSpace::X86GS:
+    return "gs";
+  }
+  llvm::report_fatal_error("unknown NeverD memory address space");
+}
+
+unsigned cMemoryAddressSpace(NdMemoryAddressSpace AddressSpace) {
+  switch (AddressSpace) {
+  case NdMemoryAddressSpace::X86FS:
+    return 257;
+  case NdMemoryAddressSpace::X86GS:
+    return 256;
+  case NdMemoryAddressSpace::Default:
+    break;
+  }
+  llvm::report_fatal_error(
+      "default memory does not have a target address-space attribute");
+}
+
+void validateMemoryAddressSpaceForC(NdMemoryAddressSpace AddressSpace,
+                                    Arch TargetArch) {
+  if (!isKnownMemoryAddressSpace(AddressSpace))
+    llvm::report_fatal_error("unknown NeverD memory address space");
+  if (AddressSpace != NdMemoryAddressSpace::Default &&
+      TargetArch != Arch::X86 && TargetArch != Arch::X64)
+    llvm::report_fatal_error(
+        "FS/GS memory address spaces require an x86 C target");
+}
+
+std::string memoryHelperName(llvm::StringRef Operation, unsigned TypeIndex,
+                             NdMemoryOrdering Ordering,
+                             NdMemoryAddressSpace AddressSpace) {
+  std::string Name = "neverd_mem_" + Operation.str() + "_";
+  if (AddressSpace != NdMemoryAddressSpace::Default)
+    Name += std::string(memoryAddressSpaceName(AddressSpace)) + "_";
+  if (Ordering != NdMemoryOrdering::None)
+    Name += std::string(memoryOrderingName(Ordering)) + "_";
+  return Name + std::to_string(TypeIndex);
+}
+
+std::string memoryPointerCast(llvm::StringRef Type, llvm::StringRef Address,
+                              NdMemoryAddressSpace AddressSpace, bool IsConst) {
+  std::string Qualified = IsConst ? "const " : "";
+  Qualified += Type.str();
+  if (AddressSpace != NdMemoryAddressSpace::Default)
+    Qualified += " __attribute__((address_space(" +
+                 std::to_string(cMemoryAddressSpace(AddressSpace)) + ")))";
+  return "(" + Qualified + " *)(uintptr_t)(" + Address.str() + ")";
+}
+
 } // anonymous namespace
 
 void HighCWriter::prepareFunctionIdentifiers(
@@ -146,23 +202,50 @@ std::string HighCWriter::memoryTypeName(const TypeRef &Ty) const {
 
 void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
   std::set<std::string> Names;
+  SegmentedMemoryTypes.clear();
   AtomicLoadTypes.clear();
   AtomicStoreTypes.clear();
+  HasSegmentedMemory = false;
+  Has256BitInteger = false;
+  auto CollectWideType = [&](const TypeRef &Type) {
+    Has256BitInteger |= Type && Type->Kind == NdTypeKind::Int &&
+                        Type->Size == 32;
+  };
   std::set<const HighExpr *> Seen;
   std::function<void(const HighExpr &)> Visit = [&](const HighExpr &E) {
     if (!Seen.insert(&E).second)
       return;
+    CollectWideType(E.Type);
+    if (E.MemoryAddressSpace != NdMemoryAddressSpace::Default) {
+      validateMemoryAddressSpaceForC(E.MemoryAddressSpace, Opts.TheArch);
+      HasSegmentedMemory = true;
+      const bool IsMemoryExpr =
+          E.Kind == ExprKind::Load || E.Kind == ExprKind::Store ||
+          (E.Kind == ExprKind::BinOp &&
+           (E.Op == NdOp::ATOMIC_XCHG || E.Op == NdOp::ATOMIC_ADD ||
+            E.Op == NdOp::ATOMIC_CMPXCHG)) ||
+          E.Kind == ExprKind::Call;
+      if (!IsMemoryExpr)
+        llvm::report_fatal_error(
+            "HighIR address space is attached to a non-memory expression");
+    }
     if (E.Kind == ExprKind::Load) {
       std::string Type = memoryTypeName(E.Type);
       Names.insert(Type);
+      validateMemoryAddressSpaceForC(E.MemoryAddressSpace, Opts.TheArch);
+      if (E.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+        SegmentedMemoryTypes.insert({Type, E.MemoryAddressSpace});
       if (E.MemoryOrdering != NdMemoryOrdering::None)
-        AtomicLoadTypes.insert({Type, E.MemoryOrdering});
+        AtomicLoadTypes.insert({Type, E.MemoryOrdering, E.MemoryAddressSpace});
     }
     if (E.Kind == ExprKind::Store && E.Operands.size() >= 2) {
       std::string Type = memoryTypeName(E.Operands[1]->Type);
       Names.insert(Type);
+      validateMemoryAddressSpaceForC(E.MemoryAddressSpace, Opts.TheArch);
+      if (E.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+        SegmentedMemoryTypes.insert({Type, E.MemoryAddressSpace});
       if (E.MemoryOrdering != NdMemoryOrdering::None)
-        AtomicStoreTypes.insert({Type, E.MemoryOrdering});
+        AtomicStoreTypes.insert({Type, E.MemoryOrdering, E.MemoryAddressSpace});
     }
     for (const ExprPtr &Operand : E.Operands)
       if (Operand)
@@ -172,18 +255,40 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
   for (const HighFunc &Func : Funcs) {
     if (GuardAnalysisOnlyFunctions && isAnalysisOnlyFunction(Func))
       continue;
+    CollectWideType(Func.ReturnType);
+    for (const HighParam &Param : Func.Params)
+      CollectWideType(Param.Type);
+    for (const HighLocal &Local : Func.Locals)
+      CollectWideType(Local.Type);
     walkStmts(Func.Body, [&](const HighStmt &Stmt) {
+      if (Stmt.MemoryAddressSpace != NdMemoryAddressSpace::Default) {
+        validateMemoryAddressSpaceForC(Stmt.MemoryAddressSpace, Opts.TheArch);
+        HasSegmentedMemory = true;
+        if (Stmt.Kind != StmtKind::Store)
+          llvm::report_fatal_error(
+              "HighIR address space is attached to a non-memory statement");
+      }
       if (Stmt.Kind == StmtKind::Store && Stmt.StoreVal) {
         std::string Type = memoryTypeName(Stmt.StoreVal->Type);
         Names.insert(Type);
+        validateMemoryAddressSpaceForC(Stmt.MemoryAddressSpace, Opts.TheArch);
+        if (Stmt.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+          SegmentedMemoryTypes.insert({Type, Stmt.MemoryAddressSpace});
         if (Stmt.MemoryOrdering != NdMemoryOrdering::None)
-          AtomicStoreTypes.insert({Type, Stmt.MemoryOrdering});
+          AtomicStoreTypes.insert(
+              {Type, Stmt.MemoryOrdering, Stmt.MemoryAddressSpace});
       }
       if (Stmt.Kind == StmtKind::Assign && Stmt.Dst &&
-          Stmt.Dst->Kind == ExprKind::Load &&
-          Stmt.Dst->MemoryOrdering != NdMemoryOrdering::None)
-        AtomicStoreTypes.insert(
-            {memoryTypeName(Stmt.Dst->Type), Stmt.Dst->MemoryOrdering});
+          Stmt.Dst->Kind == ExprKind::Load) {
+        const std::string Type = memoryTypeName(Stmt.Dst->Type);
+        validateMemoryAddressSpaceForC(Stmt.Dst->MemoryAddressSpace,
+                                       Opts.TheArch);
+        if (Stmt.Dst->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+          SegmentedMemoryTypes.insert({Type, Stmt.Dst->MemoryAddressSpace});
+        if (Stmt.Dst->MemoryOrdering != NdMemoryOrdering::None)
+          AtomicStoreTypes.insert(
+              {Type, Stmt.Dst->MemoryOrdering, Stmt.Dst->MemoryAddressSpace});
+      }
       forEachExpr(Stmt, [&](const ExprPtr &E) {
         if (E)
           Visit(*E);
@@ -198,6 +303,12 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
 }
 
 void HighCWriter::writeMemoryHelpers() {
+  if (HasSegmentedMemory)
+    OS << "#if !defined(__clang__)\n"
+          "#error \"segmented-memory output requires Clang target address "
+          "spaces\"\n"
+          "#endif\n\n";
+
   for (const auto &[Type, Index] : MemoryTypes) {
     OS << "static inline " << Type << " neverd_mem_load_" << Index
        << "(uintptr_t address) {\n"
@@ -212,98 +323,130 @@ void HighCWriter::writeMemoryHelpers() {
        << "}\n\n";
   }
 
-  for (const auto &[Type, Ordering] : AtomicLoadTypes) {
-    validateAtomicLoadOrdering(Ordering);
-    unsigned Index = MemoryTypes.at(Type);
-    OS << "static inline " << Type << " neverd_mem_load_"
-       << memoryOrderingName(Ordering) << "_" << Index
+  for (const auto &[Type, AddressSpace] : SegmentedMemoryTypes) {
+    validateMemoryAddressSpaceForC(AddressSpace, Opts.TheArch);
+    const unsigned Index = MemoryTypes.at(Type);
+    const std::string LoadName =
+        memoryHelperName("load", Index, NdMemoryOrdering::None, AddressSpace);
+    const std::string StoreName =
+        memoryHelperName("store", Index, NdMemoryOrdering::None, AddressSpace);
+    const std::string ReadPtr =
+        memoryPointerCast(Type, "address", AddressSpace, true);
+    const std::string WritePtr =
+        memoryPointerCast(Type, "address", AddressSpace, false);
+    OS << "static inline " << Type << " " << LoadName
        << "(uintptr_t address) {\n"
-       << "    return __atomic_load_n((const " << Type << " *)address, "
+       << "    " << Type << " value;\n"
+       << "    __builtin_memcpy(&value, " << ReadPtr << ", sizeof(value));\n"
+       << "    return value;\n"
+       << "}\n\n"
+       << "static inline " << Type << " " << StoreName << "(uintptr_t address, "
+       << Type << " value) {\n"
+       << "    __builtin_memcpy(" << WritePtr << ", &value, sizeof(value));\n"
+       << "    return value;\n"
+       << "}\n\n";
+  }
+
+  for (const auto &[Type, Ordering, AddressSpace] : AtomicLoadTypes) {
+    validateAtomicLoadOrdering(Ordering);
+    validateMemoryAddressSpaceForC(AddressSpace, Opts.TheArch);
+    unsigned Index = MemoryTypes.at(Type);
+    OS << "static inline " << Type << " "
+       << memoryHelperName("load", Index, Ordering, AddressSpace)
+       << "(uintptr_t address) {\n"
+       << "    return __atomic_load_n("
+       << memoryPointerCast(Type, "address", AddressSpace, true) << ", "
        << atomicOrderingToken(Ordering) << ");\n"
        << "}\n\n";
   }
 
-  for (const auto &[Type, Ordering] : AtomicStoreTypes) {
+  for (const auto &[Type, Ordering, AddressSpace] : AtomicStoreTypes) {
     validateAtomicStoreOrdering(Ordering);
+    validateMemoryAddressSpaceForC(AddressSpace, Opts.TheArch);
     unsigned Index = MemoryTypes.at(Type);
-    OS << "static inline " << Type << " neverd_mem_store_"
-       << memoryOrderingName(Ordering) << "_" << Index << "(uintptr_t address, "
-       << Type << " value) {\n"
-       << "    __atomic_store_n((" << Type << " *)address, value, "
+    OS << "static inline " << Type << " "
+       << memoryHelperName("store", Index, Ordering, AddressSpace)
+       << "(uintptr_t address, " << Type << " value) {\n"
+       << "    __atomic_store_n("
+       << memoryPointerCast(Type, "address", AddressSpace, false) << ", value, "
        << atomicOrderingToken(Ordering) << ");\n"
        << "    return value;\n"
        << "}\n\n";
   }
 }
 
-std::string HighCWriter::memoryLoadExpr(const TypeRef &Ty, llvm::StringRef Addr,
-                                        NdMemoryOrdering Ordering) const {
+std::string
+HighCWriter::memoryLoadExpr(const TypeRef &Ty, llvm::StringRef Addr,
+                            NdMemoryOrdering Ordering,
+                            NdMemoryAddressSpace AddressSpace) const {
+  validateMemoryAddressSpaceForC(AddressSpace, Opts.TheArch);
   std::string Type = memoryTypeName(Ty);
   auto It = MemoryTypes.find(Type);
   if (It == MemoryTypes.end())
     llvm::report_fatal_error("HighC memory load type was not collected");
   unsigned Index = It->second;
-  std::string Name = "neverd_mem_load_";
-  if (Ordering != NdMemoryOrdering::None) {
+  if (Ordering != NdMemoryOrdering::None)
     validateAtomicLoadOrdering(Ordering);
-    Name += std::string(memoryOrderingName(Ordering)) + "_";
-  }
-  return Name + std::to_string(Index) + "((uintptr_t)(" + Addr.str() + "))";
+  return memoryHelperName("load", Index, Ordering, AddressSpace) +
+         "((uintptr_t)(" + Addr.str() + "))";
 }
 
-std::string HighCWriter::memoryStoreExpr(const TypeRef &Ty,
-                                         llvm::StringRef Addr,
-                                         llvm::StringRef Val,
-                                         NdMemoryOrdering Ordering) const {
+std::string
+HighCWriter::memoryStoreExpr(const TypeRef &Ty, llvm::StringRef Addr,
+                             llvm::StringRef Val, NdMemoryOrdering Ordering,
+                             NdMemoryAddressSpace AddressSpace) const {
+  validateMemoryAddressSpaceForC(AddressSpace, Opts.TheArch);
   std::string Type = memoryTypeName(Ty);
   auto It = MemoryTypes.find(Type);
   if (It == MemoryTypes.end())
     llvm::report_fatal_error("HighC memory store type was not collected");
   unsigned Index = It->second;
-  std::string Name = "neverd_mem_store_";
-  if (Ordering != NdMemoryOrdering::None) {
+  if (Ordering != NdMemoryOrdering::None)
     validateAtomicStoreOrdering(Ordering);
-    Name += std::string(memoryOrderingName(Ordering)) + "_";
-  }
-  return Name + std::to_string(Index) + "((uintptr_t)(" + Addr.str() + "), " +
-         Val.str() + ")";
+  return memoryHelperName("store", Index, Ordering, AddressSpace) +
+         "((uintptr_t)(" + Addr.str() + "), " + Val.str() + ")";
 }
 
-std::string HighCWriter::atomicExchangeExpr(const TypeRef &Ty,
-                                            llvm::StringRef Addr,
-                                            llvm::StringRef Val,
-                                            NdMemoryOrdering Ordering) const {
+std::string
+HighCWriter::atomicExchangeExpr(const TypeRef &Ty, llvm::StringRef Addr,
+                                llvm::StringRef Val, NdMemoryOrdering Ordering,
+                                NdMemoryAddressSpace AddressSpace) const {
   if (Ordering == NdMemoryOrdering::None)
     llvm::report_fatal_error("atomic exchange requires memory ordering");
+  validateMemoryAddressSpaceForC(AddressSpace, Opts.TheArch);
   std::string Type = memoryTypeName(Ty);
-  return "__atomic_exchange_n((" + Type + " *)(uintptr_t)(" + Addr.str() +
-         "), (" + Type + ")(" + Val.str() + "), " +
-         atomicOrderingToken(Ordering) + ")";
+  return "__atomic_exchange_n(" +
+         memoryPointerCast(Type, Addr, AddressSpace, false) + ", (" + Type +
+         ")(" + Val.str() + "), " + atomicOrderingToken(Ordering) + ")";
 }
 
-std::string HighCWriter::atomicFetchAddExpr(const TypeRef &Ty,
-                                            llvm::StringRef Addr,
-                                            llvm::StringRef Val,
-                                            NdMemoryOrdering Ordering) const {
+std::string
+HighCWriter::atomicFetchAddExpr(const TypeRef &Ty, llvm::StringRef Addr,
+                                llvm::StringRef Val, NdMemoryOrdering Ordering,
+                                NdMemoryAddressSpace AddressSpace) const {
   if (Ordering == NdMemoryOrdering::None)
     llvm::report_fatal_error("atomic fetch-add requires memory ordering");
+  validateMemoryAddressSpaceForC(AddressSpace, Opts.TheArch);
   std::string Type = memoryTypeName(Ty);
-  return "__atomic_fetch_add((" + Type + " *)(uintptr_t)(" + Addr.str() +
-         "), (" + Type + ")(" + Val.str() + "), " +
-         atomicOrderingToken(Ordering) + ")";
+  return "__atomic_fetch_add(" +
+         memoryPointerCast(Type, Addr, AddressSpace, false) + ", (" + Type +
+         ")(" + Val.str() + "), " + atomicOrderingToken(Ordering) + ")";
 }
 
 std::string HighCWriter::atomicCompareExchangeExpr(
     const TypeRef &Ty, llvm::StringRef Addr, llvm::StringRef Expected,
-    llvm::StringRef Desired, NdMemoryOrdering Ordering) const {
+    llvm::StringRef Desired, NdMemoryOrdering Ordering,
+    NdMemoryAddressSpace AddressSpace) const {
   if (Ordering == NdMemoryOrdering::None)
     llvm::report_fatal_error(
         "atomic compare-exchange requires memory ordering");
+  validateMemoryAddressSpaceForC(AddressSpace, Opts.TheArch);
   std::string Type = memoryTypeName(Ty);
   return "({ " + Type + " neverd_expected = (" + Type + ")(" + Expected.str() +
-         "); (void)__atomic_compare_exchange_n((" + Type + " *)(uintptr_t)(" +
-         Addr.str() + "), &neverd_expected, (" + Type + ")(" + Desired.str() +
-         "), 0, " + atomicOrderingToken(Ordering) + ", " +
+         "); (void)__atomic_compare_exchange_n(" +
+         memoryPointerCast(Type, Addr, AddressSpace, false) +
+         ", &neverd_expected, (" + Type + ")(" + Desired.str() + "), 0, " +
+         atomicOrderingToken(Ordering) + ", " +
          atomicCmpXchgFailureOrderingToken(Ordering) + "); neverd_expected; })";
 }
 
@@ -353,8 +496,12 @@ void HighCWriter::collectCallTargets(const std::vector<HighStmt> &Stmts,
 }
 
 void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
-  if (!Opts.EmitIncludes)
+  if (!Opts.EmitIncludes) {
+    if (Has256BitInteger)
+      OS << "typedef unsigned _BitInt(256) uint256_t;\n"
+            "typedef _BitInt(256) int256_t;\n\n";
     return;
+  }
 
   std::set<std::string> Headers;
   Headers.insert("stdint.h");
@@ -382,6 +529,9 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
   if (NeedsFEnvAccess)
     OS << "#pragma STDC FENV_ACCESS ON\n";
   OS << "\n";
+  if (Has256BitInteger)
+    OS << "typedef unsigned _BitInt(256) uint256_t;\n"
+          "typedef _BitInt(256) int256_t;\n\n";
 }
 
 void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {

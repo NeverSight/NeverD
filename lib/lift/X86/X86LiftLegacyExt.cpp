@@ -333,23 +333,38 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   // xsave 64-bit variants.
   // ========================================================================
   case X86_INS_XSAVE64:
-    S.emitIntrinsic(Intrinsic::Xsave64);
-    break;
   case X86_INS_XRSTOR64:
-    S.emitIntrinsic(Intrinsic::Xrstor64);
-    break;
   case X86_INS_XSAVES64:
-    S.emitIntrinsic(Intrinsic::Xsaves64);
-    break;
   case X86_INS_XRSTORS64:
-    S.emitIntrinsic(Intrinsic::Xrstors64);
-    break;
   case X86_INS_XSAVEC64:
-    S.emitIntrinsic(Intrinsic::Xsavec64);
+  case X86_INS_XSAVEOPT64: {
+    Intrinsic Id = Intrinsic::Xsave64;
+    switch (InsnId) {
+    case X86_INS_XRSTOR64:
+      Id = Intrinsic::Xrstor64;
+      break;
+    case X86_INS_XSAVES64:
+      Id = Intrinsic::Xsaves64;
+      break;
+    case X86_INS_XRSTORS64:
+      Id = Intrinsic::Xrstors64;
+      break;
+    case X86_INS_XSAVEC64:
+      Id = Intrinsic::Xsavec64;
+      break;
+    case X86_INS_XSAVEOPT64:
+      Id = Intrinsic::Xsaveopt64;
+      break;
+    default:
+      break;
+    }
+    if (X86.op_count < 1 ||
+        !S.emitMemoryIntrinsic(
+            Id, X86.operands[0],
+            {NdVar::reg(x86reg::RAX, 4), NdVar::reg(x86reg::RDX, 4)}))
+      return false;
     break;
-  case X86_INS_XSAVEOPT64:
-    S.emitIntrinsic(Intrinsic::Xsaveopt64);
-    break;
+  }
 
   // x87 misc — FNINIT/FNCLEX already handled above in x87 block.
 
@@ -518,10 +533,13 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   // AVX/AVX-512 control: VLDMXCSR / VSTMXCSR.
   // ========================================================================
   case X86_INS_VLDMXCSR:
-    S.emitIntrinsic(Intrinsic::Ldmxcsr);
-    break;
   case X86_INS_VSTMXCSR:
-    S.emitIntrinsic(Intrinsic::Stmxcsr);
+    if (X86.op_count < 1 ||
+        !S.emitMemoryIntrinsic(InsnId == X86_INS_VLDMXCSR
+                                   ? Intrinsic::Ldmxcsr
+                                   : Intrinsic::Stmxcsr,
+                               X86.operands[0]))
+      return false;
     break;
 
   default:

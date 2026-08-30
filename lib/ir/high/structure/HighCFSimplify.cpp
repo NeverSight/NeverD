@@ -154,7 +154,8 @@ static void convertStoreGotoToReturn(std::vector<HighStmt> &Stmts,
     if (Body[Body.size() - 2].Kind != StmtKind::Store)
       return;
     auto &StoreStmt = Body[Body.size() - 2];
-    if (StoreStmt.MemoryOrdering != NdMemoryOrdering::None)
+    if (StoreStmt.MemoryOrdering != NdMemoryOrdering::None ||
+        StoreStmt.MemoryAddressSpace != NdMemoryAddressSpace::Default)
       return;
     HighStmt RetStmt;
     RetStmt.Kind = StmtKind::Return;
@@ -271,7 +272,8 @@ static void foldStoreGotoAfterIf(HighFunc &Func) {
     auto &Go = Func.Body[I + 2];
     if (Store.Kind != StmtKind::Store || Go.Kind != StmtKind::Goto)
       continue;
-    if (Store.MemoryOrdering != NdMemoryOrdering::None)
+    if (Store.MemoryOrdering != NdMemoryOrdering::None ||
+        Store.MemoryAddressSpace != NdMemoryAddressSpace::Default)
       continue;
     if (Stmt.Kind == StmtKind::If)
       Stmt.Kind = StmtKind::IfElse;
@@ -345,7 +347,9 @@ static void mergeConsecutiveCondBlocks(std::vector<HighStmt> &Stmts) {
     auto &Cur = Stmts[I];
     auto &Next = Stmts[I + 1];
 
-    if (Cur.Kind == StmtKind::If && Next.Kind == StmtKind::If &&
+    if (Cur.Kind == StmtKind::If && Next.Kind == StmtKind::If && Cur.Cond &&
+        Next.Cond && !Cur.Cond->hasOrderedMemoryAccess() &&
+        !Next.Cond->hasOrderedMemoryAccess() &&
         exprEquivalent(Cur.Cond, Next.Cond)) {
       for (auto &S : Next.Body)
         Cur.Body.push_back(std::move(S));
@@ -354,6 +358,8 @@ static void mergeConsecutiveCondBlocks(std::vector<HighStmt> &Stmts) {
     }
 
     if (Cur.Kind == StmtKind::IfElse && Next.Kind == StmtKind::IfElse &&
+        Cur.Cond && Next.Cond && !Cur.Cond->hasOrderedMemoryAccess() &&
+        !Next.Cond->hasOrderedMemoryAccess() &&
         exprEquivalent(Cur.Cond, Next.Cond)) {
       for (auto &S : Next.Body)
         Cur.Body.push_back(std::move(S));

@@ -34,6 +34,24 @@ namespace neverd {
 
 namespace {
 
+// LLVM's X86 backend assigns these target address spaces to segment-relative
+// pointers.  Keeping the mapping at the final target-specific boundary avoids
+// pretending that FS/GS bases are ordinary live-in GPRs.
+constexpr unsigned kLLVMX86GSAddressSpace = 256;
+constexpr unsigned kLLVMX86FSAddressSpace = 257;
+
+unsigned llvmMemoryAddressSpace(NdMemoryAddressSpace AddressSpace) {
+  switch (AddressSpace) {
+  case NdMemoryAddressSpace::Default:
+    return 0;
+  case NdMemoryAddressSpace::X86FS:
+    return kLLVMX86FSAddressSpace;
+  case NdMemoryAddressSpace::X86GS:
+    return kLLVMX86GSAddressSpace;
+  }
+  llvm_unreachable("unknown NeverD memory address space");
+}
+
 llvm::AtomicOrdering toLLVMAtomicOrdering(NdMemoryOrdering Ordering) {
   switch (Ordering) {
   case NdMemoryOrdering::None:
@@ -73,16 +91,26 @@ toLLVMAtomicCmpXchgFailureOrdering(NdMemoryOrdering Ordering) {
 
 llvm::Value *MedLLVMEmitter::resolveAtomicMemoryPtr(
     const MedVar &AddressVar, uint16_t AccessBytes, llvm::Type *AccessTy,
-    llvm::IRBuilder<> &Builder) {
+    llvm::IRBuilder<> &Builder, NdMemoryAddressSpace AddressSpace) {
   llvm::Value *Address = nullptr;
-  if (Img)
+  if (AddressSpace == NdMemoryAddressSpace::Default && Img)
     Address = tryResolveDirectGlobalDataAddress(AddressVar, AccessBytes);
-  if (!Address && Img)
+  if (!Address && AddressSpace == NdMemoryAddressSpace::Default && Img)
     Address = tryResolveWritableData(AddressVar, AccessBytes, Builder);
   if (!Address) {
     rejectEscapingAddressFragment(AddressVar,
                                   "an unresolved atomic memory address");
-    Address = getMemoryPtr(getVar(AddressVar, Builder), AccessTy, Builder);
+    llvm::Value *NumericAddress =
+        AddressSpace == NdMemoryAddressSpace::Default
+            ? getVar(AddressVar, Builder)
+            : getRawSegmentOffset(AddressVar, Builder);
+    if (AddressSpace == NdMemoryAddressSpace::Default)
+      Address = getMemoryPtr(NumericAddress, AccessTy, Builder);
+    else
+      Address = Builder.CreateIntToPtr(
+          NumericAddress,
+          llvm::PointerType::get(*Ctx, llvmMemoryAddressSpace(AddressSpace)),
+          "segment_atomic_ptr");
   }
   return Address;
 }
@@ -91,6 +119,17 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                             int BlockId, int OpIdx) {
   if (Op.Dead)
     return;
+
+  if (!isKnownMemoryAddressSpace(Op.MemoryAddressSpace))
+    llvm::report_fatal_error("MedIR contains an unknown memory address space");
+  if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default) {
+    if (TargetArch != Arch::X86 && TargetArch != Arch::X64)
+      llvm::report_fatal_error(
+          "FS/GS memory address spaces require an x86 target");
+    if (!opcodeSupportsMemoryAddressSpace(Op.Opcode))
+      llvm::report_fatal_error(
+          "memory address space is attached to a non-memory operation");
+  }
 
   auto GetInput = [&](uint8_t Idx) -> llvm::Value * {
     if (Idx >= Op.NumInputs)
@@ -775,16 +814,19 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     // rebuilt IR would instead demand a global relocation mirror for slots the
     // same JT deliberately and exclusively owns.  The helper requires exact
     // Addr+OriginSeq+width, storage-role, and all-use certificates.
-    if (recoveredJumpTableForLoad(Op)) {
+    if (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+        recoveredJumpTableForLoad(Op)) {
       Result = llvm::ConstantInt::get(ValTy, 0);
       break;
     }
     llvm::Value *Ptr = nullptr;
     const MedVar &AddrVar = Op.Inputs[0];
-    if (Op.NumInputs >= 1 && Img)
+    const bool IsSegmentRelative =
+        Op.MemoryAddressSpace != NdMemoryAddressSpace::Default;
+    if (!IsSegmentRelative && Op.NumInputs >= 1 && Img)
       Ptr = tryResolveDirectGlobalDataAddress(AddrVar, Op.Output.Size);
     bool IsGlobalData = (Ptr != nullptr);
-    if (!Ptr && Img && Op.NumInputs >= 1) {
+    if (!IsSegmentRelative && !Ptr && Img && Op.NumInputs >= 1) {
       // Runtime-indexed access into a writable .data / .bss segment: redirect
       // into the cohesive mutable global so it aliases the direct (constant)
       // loads/stores of the same global.  Checked first as it is the only path
@@ -818,8 +860,15 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     }
     if (!Ptr) {
       rejectEscapingAddressFragment(AddrVar, "an unresolved load address");
-      auto *Addr = GetInput(0);
-      Ptr = getMemoryPtr(Addr, ValTy, Builder);
+      auto *Addr = IsSegmentRelative ? getRawSegmentOffset(AddrVar, Builder)
+                                     : GetInput(0);
+      const unsigned LLVMAddressSpace =
+          llvmMemoryAddressSpace(Op.MemoryAddressSpace);
+      Ptr = LLVMAddressSpace == 0
+                ? getMemoryPtr(Addr, ValTy, Builder)
+                : Builder.CreateIntToPtr(
+                      Addr, llvm::PointerType::get(*Ctx, LLVMAddressSpace),
+                      "segmentptr");
     }
     auto *LI = Builder.CreateLoad(ValTy, Ptr, "ld");
     if (Op.MemoryOrdering != NdMemoryOrdering::None) {
@@ -840,7 +889,9 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     auto *Val = GetInput(1);
     llvm::Value *Ptr = nullptr;
     const MedVar &AddrVar = Op.Inputs[0];
-    if (Op.NumInputs >= 1 && Img) {
+    const bool IsSegmentRelative =
+        Op.MemoryAddressSpace != NdMemoryAddressSpace::Default;
+    if (!IsSegmentRelative && Op.NumInputs >= 1 && Img) {
       uint16_t Hint = 0;
       if (Val->getType()->isSized()) {
         uint64_t Bits = Mod->getDataLayout().getTypeSizeInBits(Val->getType());
@@ -850,7 +901,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       Ptr = tryResolveDirectGlobalDataAddress(AddrVar, Hint);
     }
     bool IsGlobalData = (Ptr != nullptr);
-    if (!Ptr && Img && Op.NumInputs >= 1) {
+    if (!IsSegmentRelative && !Ptr && Img && Op.NumInputs >= 1) {
       // Runtime-indexed store into a writable .data / .bss segment: redirect
       // into the cohesive mutable global so it aliases that global's loads.
       Ptr = tryResolveWritableData(AddrVar, AddrVar.Size, Builder);
@@ -873,8 +924,15 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     }
     if (!Ptr) {
       rejectEscapingAddressFragment(AddrVar, "an unresolved store address");
-      auto *Addr = GetInput(0);
-      Ptr = getMemoryPtr(Addr, Val->getType(), Builder);
+      auto *Addr = IsSegmentRelative ? getRawSegmentOffset(AddrVar, Builder)
+                                     : GetInput(0);
+      const unsigned LLVMAddressSpace =
+          llvmMemoryAddressSpace(Op.MemoryAddressSpace);
+      Ptr = LLVMAddressSpace == 0
+                ? getMemoryPtr(Addr, Val->getType(), Builder)
+                : Builder.CreateIntToPtr(
+                      Addr, llvm::PointerType::get(*Ctx, LLVMAddressSpace),
+                      "segmentptr");
     }
     // A stored VALUE that is itself a writable-global address (`*pp = &g`, a
     // global pointer array `gp[i] = A`, a global function pointer) must be
@@ -1041,8 +1099,8 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     llvm::Type *ValTy = sizeToType(Op.Output.Size);
     if (Val->getType() != ValTy)
       Val = Builder.CreateIntCast(Val, ValTy, false, "atomic_rmw_val");
-    llvm::Value *Ptr =
-        resolveAtomicMemoryPtr(Op.Inputs[0], Op.Output.Size, ValTy, Builder);
+    llvm::Value *Ptr = resolveAtomicMemoryPtr(
+        Op.Inputs[0], Op.Output.Size, ValTy, Builder, Op.MemoryAddressSpace);
     llvm::AtomicRMWInst::BinOp RMWOp = Op.Opcode == NdOp::ATOMIC_ADD
                                            ? llvm::AtomicRMWInst::Add
                                            : llvm::AtomicRMWInst::Xchg;
@@ -1073,8 +1131,8 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     if (Desired->getType() != ValTy)
       Desired =
           Builder.CreateIntCast(Desired, ValTy, false, "atomic_cmp_desired");
-    llvm::Value *Ptr =
-        resolveAtomicMemoryPtr(Op.Inputs[0], Op.Output.Size, ValTy, Builder);
+    llvm::Value *Ptr = resolveAtomicMemoryPtr(
+        Op.Inputs[0], Op.Output.Size, ValTy, Builder, Op.MemoryAddressSpace);
     auto *CmpXchg = Builder.CreateAtomicCmpXchg(
         Ptr, Expected, Desired, llvm::MaybeAlign(Op.Output.Size),
         toLLVMAtomicOrdering(Op.MemoryOrdering),

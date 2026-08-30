@@ -146,13 +146,15 @@ va_t resolveIndirectTargetAddr(const MedBlock &Blk, int FromIdx,
                                            Depth + 1)
                : 0;
   case NdOp::LOAD: {
-    if (Def.NumInputs < 1)
+    if (Def.NumInputs < 1 ||
+        Def.MemoryAddressSpace != NdMemoryAddressSpace::Default)
       return 0;
     auto LoadAddr = reduceAddr(Blk, Def.Inputs[0], 0, 0);
     // Nearest prior store to the same slot (memory is not SSA; scan backward).
     for (int J = DefIdx - 1; J >= 0; --J) {
       const auto &O = Blk.Ops[J];
-      if (O.Opcode != NdOp::STORE || O.NumInputs < 2)
+      if (O.Opcode != NdOp::STORE || O.NumInputs < 2 ||
+          O.MemoryAddressSpace != NdMemoryAddressSpace::Default)
         continue;
       if (sameReducedAddr(LoadAddr, reduceAddr(Blk, O.Inputs[0], 0, 0)))
         return resolveIndirectTargetAddr(Blk, J, O.Inputs[1], Depth + 1);
@@ -210,12 +212,14 @@ std::optional<int> resolveIndirectTargetArgIdx(const MedBlock &Blk, int FromIdx,
                                              IsWin64, Depth + 1)
                : std::nullopt;
   case NdOp::LOAD: {
-    if (Def.NumInputs < 1)
+    if (Def.NumInputs < 1 ||
+        Def.MemoryAddressSpace != NdMemoryAddressSpace::Default)
       return std::nullopt;
     auto LoadAddr = reduceAddr(Blk, Def.Inputs[0], 0, 0);
     for (int J = DefIdx - 1; J >= 0; --J) {
       const auto &O = Blk.Ops[J];
-      if (O.Opcode != NdOp::STORE || O.NumInputs < 2)
+      if (O.Opcode != NdOp::STORE || O.NumInputs < 2 ||
+          O.MemoryAddressSpace != NdMemoryAddressSpace::Default)
         continue;
       if (sameReducedAddr(LoadAddr, reduceAddr(Blk, O.Inputs[0], 0, 0)))
         return resolveIndirectTargetArgIdx(Blk, J, TRI, O.Inputs[1], IsWin64,
@@ -304,13 +308,15 @@ std::optional<int64_t> stackPtrDelta(const MedBlock &Blk,
     // structurally, so a frame-pointer-relative spill slot resolves without
     // tracing the cross-block frame pointer to an entry-SP offset) and forward
     // that store's value, yielding the spilled SP delta.
-    if (Def->NumInputs < 1)
+    if (Def->NumInputs < 1 ||
+        Def->MemoryAddressSpace != NdMemoryAddressSpace::Default)
       return std::nullopt;
     auto LoadAddr = reduceAddr(Blk, Def->Inputs[0], 0, 0);
     size_t DefIdx = static_cast<size_t>(Def - Blk.Ops.data());
     for (size_t I = DefIdx; I-- > 0;) {
       const MedOp &S = Blk.Ops[I];
-      if (S.Opcode != NdOp::STORE || S.NumInputs < 2)
+      if (S.Opcode != NdOp::STORE || S.NumInputs < 2 ||
+          S.MemoryAddressSpace != NdMemoryAddressSpace::Default)
         continue;
       if (!sameReducedAddr(reduceAddr(Blk, S.Inputs[0], 0, 0), LoadAddr))
         continue; // a store to a different slot does not define this load

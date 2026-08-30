@@ -134,7 +134,9 @@ llvm::Value *MedLLVMEmitter::tryResolveLiteralPoolTable(
     StoredConstBases.clear();
     for (const auto &Blk : CurMedFunc->Blocks)
       for (const auto &Op : Blk.Ops)
-        if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 1)
+        if (Op.Opcode == NdOp::STORE &&
+            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+            Op.NumInputs >= 1)
           if (auto SB = indexedConstBase(Op.Inputs[0]))
             StoredConstBases.insert(*SB);
   }
@@ -241,7 +243,9 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectBaseLitTable(
     StoredConstBases.clear();
     for (const auto &Blk : CurMedFunc->Blocks)
       for (const auto &Op : Blk.Ops)
-        if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 1)
+        if (Op.Opcode == NdOp::STORE &&
+            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+            Op.NumInputs >= 1)
           if (auto SB = indexedConstBase(Op.Inputs[0]))
             StoredConstBases.insert(*SB);
   }
@@ -1656,7 +1660,9 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
     StoredConstBases.clear();
     for (const auto &Blk : CurMedFunc->Blocks)
       for (const auto &Op : Blk.Ops)
-        if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 1)
+        if (Op.Opcode == NdOp::STORE &&
+            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+            Op.NumInputs >= 1)
           if (auto SB = indexedConstBase(Op.Inputs[0]))
             StoredConstBases.insert(*SB);
   }
@@ -1766,7 +1772,9 @@ llvm::Value *MedLLVMEmitter::tryResolveLiteralPoolBase(
     StoredConstBases.clear();
     for (const auto &Blk : CurMedFunc->Blocks)
       for (const auto &Op : Blk.Ops)
-        if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 1)
+        if (Op.Opcode == NdOp::STORE &&
+            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+            Op.NumInputs >= 1)
           if (auto SB = indexedConstBase(Op.Inputs[0]))
             StoredConstBases.insert(*SB);
   }

@@ -384,7 +384,8 @@ void detectCdeclStackParams(MedFunc &Func, Arch TargetArch) {
   int MaxIdx = -1;
   for (const auto &Blk : Func.Blocks)
     for (const auto &Op : Blk.Ops)
-      if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1)
+      if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
+          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
         if (auto Off = stackArgOffset(Op.Inputs[0])) {
           Offsets.insert(*Off);
           int W = Op.Output.Size > 0 ? Op.Output.Size : 4;
@@ -419,7 +420,8 @@ void detectCdeclStackParams(MedFunc &Func, Arch TargetArch) {
   std::set<int64_t> MutableArgOffsets;
   for (const auto &Blk : Func.Blocks)
     for (const auto &Op : Blk.Ops) {
-      if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 1)
+      if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 1 &&
+          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
         if (auto Off = stackArgOffset(Op.Inputs[0]))
           MutableArgOffsets.insert(*Off); // direct write to the home slot
       // The stack address can thread through these value-preserving operations
@@ -468,6 +470,8 @@ void detectCdeclStackParams(MedFunc &Func, Arch TargetArch) {
       if (Op.Opcode != NdOp::LOAD || Op.NumInputs < 1)
         continue;
       if (Op.MemoryOrdering != NdMemoryOrdering::None)
+        continue;
+      if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
         continue;
       auto Off = stackArgOffset(Op.Inputs[0]);
       if (Off) {

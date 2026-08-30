@@ -48,6 +48,7 @@ bool liftSystem(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     Intrinsic Id = Intrinsic::None;
     std::vector<std::pair<uint64_t, uint16_t>> Writes;
     std::vector<NdVar> ExtraInputs;
+    NdMemoryAddressSpace MemoryAddressSpace = NdMemoryAddressSpace::Default;
     switch (InsnId) {
     case X86_INS_INT3:
       Id = Intrinsic::Int3;
@@ -90,20 +91,41 @@ bool liftSystem(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       break;
     case X86_INS_CLFLUSH:
       Id = Intrinsic::Clflush;
-      if (X86.op_count >= 1 && X86.operands[0].type == X86_OP_MEM &&
-          X86.operands[0].mem.base != X86_REG_INVALID) {
-        auto RI =
-            mapCapstoneReg(static_cast<x86_reg>(X86.operands[0].mem.base));
-        ExtraInputs = {NdVar::reg(RI.Offset, 8)};
-      }
+      if (X86.op_count >= 1 && X86.operands[0].type == X86_OP_MEM) {
+        MemoryAddressSpace = S.memoryAddressSpace(X86.operands[0]);
+        ExtraInputs = {S.computeEA(X86.operands[0])};
+      } else
+        return false;
       break;
     default:
-      Id = Intrinsic::Prefetch;
+      switch (InsnId) {
+      case X86_INS_PREFETCHT0:
+        Id = Intrinsic::PrefetchT0;
+        break;
+      case X86_INS_PREFETCHT1:
+        Id = Intrinsic::PrefetchT1;
+        break;
+      case X86_INS_PREFETCHT2:
+        Id = Intrinsic::PrefetchT2;
+        break;
+      case X86_INS_PREFETCHNTA:
+        Id = Intrinsic::PrefetchNta;
+        break;
+      default:
+        Id = Intrinsic::Prefetch;
+        break;
+      }
+      if (X86.op_count >= 1 && X86.operands[0].type == X86_OP_MEM) {
+        MemoryAddressSpace = S.memoryAddressSpace(X86.operands[0]);
+        ExtraInputs = {S.computeEA(X86.operands[0])};
+      } else
+        return false;
       break;
     }
     {
       LowOp LOp;
       LOp.Opcode = NdOp::INTRINSIC;
+      LOp.MemoryAddressSpace = MemoryAddressSpace;
       LOp.Addr = S.Addr;
       LOp.Seq = S.Seq++;
       // A value-producing intrinsic (CPUID/RDTSC/XGETBV) carries its primary

@@ -121,6 +121,43 @@ enum class NdMemoryOrdering : uint8_t {
   SequentiallyConsistent,
 };
 
+/// Architecture-defined address space for a memory effect.  This is separate
+/// from the numeric effective-address expression: on x86, LEA ignores segment
+/// bases while a LOAD/STORE with the same base/index/displacement must retain
+/// an FS/GS override all the way to code generation.
+enum class NdMemoryAddressSpace : uint8_t {
+  Default,
+  X86FS,
+  X86GS,
+};
+
+constexpr bool isKnownMemoryAddressSpace(NdMemoryAddressSpace AddressSpace) {
+  switch (AddressSpace) {
+  case NdMemoryAddressSpace::Default:
+  case NdMemoryAddressSpace::X86FS:
+  case NdMemoryAddressSpace::X86GS:
+    return true;
+  }
+  return false;
+}
+
+/// Return whether an opcode owns an architectural memory address.  Validation
+/// uses this to keep an FS/GS tag from being silently carried by arithmetic or
+/// control-flow operations that have no address-space semantics.
+constexpr bool opcodeSupportsMemoryAddressSpace(NdOp Opcode) {
+  switch (Opcode) {
+  case NdOp::LOAD:
+  case NdOp::STORE:
+  case NdOp::ATOMIC_XCHG:
+  case NdOp::ATOMIC_ADD:
+  case NdOp::ATOMIC_CMPXCHG:
+  case NdOp::INTRINSIC:
+    return true;
+  default:
+    return false;
+  }
+}
+
 const char *ndOpName(NdOp Op);
 
 } // namespace neverd

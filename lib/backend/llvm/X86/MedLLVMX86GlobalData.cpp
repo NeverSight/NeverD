@@ -47,7 +47,9 @@ bool MedLLVMEmitter::i386WalkedPointerDeref(const MedVar &AddrVar) const {
   // Segment-relative stack spill only (StoreSymbolized), not raw-VA rebase
   // slots.
   auto reloadIsSegmentRelative = [&](const MedOp *Def) -> bool {
-    if (Def->Opcode != NdOp::LOAD || Def->NumInputs < 1)
+    if (Def->Opcode != NdOp::LOAD ||
+        Def->MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+        Def->NumInputs < 1)
       return false;
     std::vector<MedVar> Sources;
     if (!collectFrameReloadSources(*Def, Sources))
@@ -117,7 +119,9 @@ bool MedLLVMEmitter::funcUsesI386WalkedPointerDeref() const {
     return false;
   for (const auto &Blk : CurMedFunc->Blocks)
     for (const auto &Op : Blk.Ops)
-      if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
+      if (Op.Opcode == NdOp::LOAD &&
+          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+          Op.NumInputs >= 1 &&
           i386WalkedPointerDeref(Op.Inputs[0]))
         return true;
   return false;

@@ -208,6 +208,7 @@ struct NdVar {
 struct LowOp {
   NdOp Opcode = NdOp::NOP;
   NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None;
+  NdMemoryAddressSpace MemoryAddressSpace = NdMemoryAddressSpace::Default;
   NdVar Output = {};
   NdVar Inputs[6] = {};
   uint8_t NumInputs = 0;

@@ -192,6 +192,7 @@ void hashTranslationBlockDescriptor(
   for (const LowOp &Op : Descriptor.Ops) {
     Hash.addByte(static_cast<uint8_t>(Op.Opcode));
     Hash.addByte(static_cast<uint8_t>(Op.MemoryOrdering));
+    Hash.addByte(static_cast<uint8_t>(Op.MemoryAddressSpace));
     hashVariable(Hash, Op.Output);
     for (const NdVar &Input : Op.Inputs)
       hashVariable(Hash, Input);

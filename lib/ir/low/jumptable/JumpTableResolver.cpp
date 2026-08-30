@@ -85,6 +85,16 @@
 
 namespace neverd {
 
+bool jumpTableTargetLoadUsesDefaultAddressSpace(
+    llvm::ArrayRef<LowOp> Ops, va_t Address, int Sequence,
+    const NdVar &Output) {
+  for (const LowOp &Op : Ops)
+    if (Op.Addr == Address && Op.Seq == Sequence && Op.Opcode == NdOp::LOAD &&
+        Op.Output == Output)
+      return Op.MemoryAddressSpace == NdMemoryAddressSpace::Default;
+  return false;
+}
+
 //===----------------------------------------------------------------------===//
 // ARM-family target detectors (tryARMTableBranch, tryAArch64CompactTable) live
 // in JumpTableResolverARM.cpp.  They are the only architecture-gated table
@@ -1760,6 +1770,40 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
                       }))
         Role.AllowZeroExtension = true;
   }
+
+  // FS/GS addresses are offsets in a target segment, not process-image VAs.
+  // Reject them at the common publication gate after every strategy has
+  // materialized its exact physical LOAD inventory.  Shape-specific filters
+  // are insufficient: branch-local, symbolic, stack and composite strategies
+  // can all produce a superficially ordinary LOAD -> INDIR_BR certificate.
+  auto IsDefaultAddressSpaceLoad =
+      [&](const JumpTableValueOccurrence &Occurrence)
+      -> std::optional<bool> {
+    if (Occurrence.Addr == InvalidVA || Occurrence.Seq < 0 ||
+        !consumeCandidateEvidence(orderedLookupWork(Insns.size())))
+      return std::nullopt;
+    auto Insn = Insns.find(Occurrence.Addr);
+    if (Insn == Insns.end() ||
+        !consumeCandidateEvidence(Insn->second.Ops.size()))
+      return std::nullopt;
+    return jumpTableTargetLoadUsesDefaultAddressSpace(
+        Insn->second.Ops, Occurrence.Addr, Occurrence.Seq, Occurrence.Value);
+  };
+  auto RejectSegmentedLoad = [&](const JumpTableValueOccurrence &Occurrence) {
+    const std::optional<bool> IsDefault =
+        IsDefaultAddressSpaceLoad(Occurrence);
+    if (!IsDefault)
+      CandidateEvidenceAnalysisIncomplete = true;
+    return !IsDefault || !*IsDefault;
+  };
+  if (std::any_of(Info.TargetLoads.begin(), Info.TargetLoads.end(),
+                  RejectSegmentedLoad) ||
+      std::any_of(Info.LoadRoles.begin(), Info.LoadRoles.end(),
+                  [&](const JumpTableLoadRole &Role) {
+                    return RejectSegmentedLoad(Role.Load);
+                  }))
+    return {};
+
   // Shape detection is only a candidate generator.  Before any static,
   // explicit, relocation-bounded, or emulated result can be published, prove
   // that the actual INDIR_BR input is derived from the exact authenticated

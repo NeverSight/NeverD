@@ -670,7 +670,9 @@ MedLLVMEmitter::jumpTableForLoad(const MedOp &Load,
                                  bool RequireTerminalExclusive) const {
   if (!CurMedFunc || !Img || Load.Opcode != NdOp::LOAD || Load.NumInputs < 1 ||
       Load.Output.isConst() || Load.Output.Size == 0 ||
-      Load.MemoryOrdering != NdMemoryOrdering::None || Load.OriginSeq < 0)
+      Load.MemoryOrdering != NdMemoryOrdering::None ||
+      Load.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+      Load.OriginSeq < 0)
     return nullptr;
 
   // One call may inspect several input-controlled table records claiming the

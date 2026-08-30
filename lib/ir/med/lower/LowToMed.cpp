@@ -14,9 +14,11 @@
 #include "neverd/ir/med/LowToMed.h"
 
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
@@ -117,7 +119,8 @@ void LowToMedConverter::neutralizeStackProbeCalls(MedFunc &Func) {
           DIdx = Next.second;
           continue;
         }
-        if (D->Opcode == NdOp::LOAD && D->NumInputs >= 1)
+        if (D->Opcode == NdOp::LOAD && D->NumInputs >= 1 &&
+            D->MemoryAddressSpace == NdMemoryAddressSpace::Default)
           HaveSlot = constAddr(D->Inputs[0], SlotAddr, 0, DIdx);
         break;
       }
@@ -144,6 +147,57 @@ void LowToMedConverter::neutralizeStackProbeCalls(MedFunc &Func) {
 MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
                                    BinaryFormat Fmt) {
   TargetArch = TheArch;
+  for (const LowBlock &Block : Low.Blocks)
+    for (const LowOp &Op : Block.Ops) {
+      if (!isKnownMemoryAddressSpace(Op.MemoryAddressSpace))
+        llvm::report_fatal_error(
+            "LowIR contains an unknown memory address space");
+      if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default &&
+          TheArch != Arch::X86 && TheArch != Arch::X64)
+        llvm::report_fatal_error(
+            "FS/GS memory address spaces require an x86 target");
+      if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default &&
+          !opcodeSupportsMemoryAddressSpace(Op.Opcode))
+        llvm::report_fatal_error(
+            "memory address space is attached to a non-memory operation");
+      if (Op.Opcode == NdOp::INTRINSIC) {
+        const bool HasExplicitAddressSpace =
+            Op.MemoryAddressSpace != NdMemoryAddressSpace::Default;
+        if (Op.NumInputs == 0 || !Op.Inputs[0].isConst()) {
+          if (HasExplicitAddressSpace)
+            llvm::report_fatal_error(
+                "intrinsic does not support a memory address space");
+          continue;
+        }
+        const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+        const bool IsDefaultString =
+            !HasExplicitAddressSpace && isX86StringIntrinsic(Id);
+        if (IsDefaultString &&
+            !intrinsicStringShapeIsValid(
+                Id, Op.NumInputs, Op.Output.Size,
+                Op.NumInputs > 1 ? Op.Inputs[1].Size : 0))
+          llvm::report_fatal_error(
+              "x86 string intrinsic has an invalid operand/output shape");
+        const bool IsMemoryIntrinsic =
+            intrinsicSupportsMemoryAddressSpace(Id);
+        if (HasExplicitAddressSpace && !IsMemoryIntrinsic)
+          llvm::report_fatal_error(
+              "intrinsic does not support a memory address space");
+        const bool IsDefaultRegisterForm =
+            !HasExplicitAddressSpace &&
+            intrinsicDefaultRegisterShapeIsValid(
+                Id, Op.NumInputs, Op.Output.Size,
+                Op.NumInputs > 1 ? Op.Inputs[1].Size : 0);
+        if (IsMemoryIntrinsic && !IsDefaultString && !IsDefaultRegisterForm &&
+            !intrinsicMemoryAddressSpaceShapeIsValid(
+                Id, Op.NumInputs, Op.Output.Size,
+                Op.NumInputs > 1 ? Op.Inputs[1].Size : 0,
+                Op.NumInputs > 2 ? Op.Inputs[2].Size : 0,
+                Op.NumInputs > 3 ? Op.Inputs[3].Size : 0))
+          llvm::report_fatal_error(
+              "memory intrinsic has an invalid operand/output shape");
+      }
+    }
   NextVarId = 0;
   NextTempId = 0;
   NextCallSiteId = 1;
@@ -185,6 +239,7 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
       MedOp MOp;
       MOp.Opcode = LOp.Opcode;
       MOp.MemoryOrdering = LOp.MemoryOrdering;
+      MOp.MemoryAddressSpace = LOp.MemoryAddressSpace;
       MOp.Addr = LOp.Addr;
       MOp.OriginSeq = LOp.Seq;
       if (MOp.Opcode == NdOp::CALL || MOp.Opcode == NdOp::INDIR_CALL) {

@@ -16,6 +16,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/ErrorHandling.h"
 
 namespace neverd {
 
@@ -133,6 +134,9 @@ std::string HighCWriter::renderUnaryOp(const HighExpr &E, int ParentPrec) {
 }
 
 std::string HighCWriter::renderCallExpr(const HighExpr &E) {
+  if (E.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+    llvm::report_fatal_error(
+        "HighC cannot safely render a segmented-memory intrinsic");
   std::string Name = E.CallTarget;
   if (Name.empty())
     Name = (kAutoFuncPrefix + llvm::utohexstr(E.CallAddr)).str();
@@ -211,19 +215,21 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec) {
     if (E.Operands.empty())
       return "/* bad load */";
     std::string Addr = exprStr(*E.Operands[0]);
-    if (E.MemoryOrdering == NdMemoryOrdering::None) {
+    if (E.MemoryOrdering == NdMemoryOrdering::None &&
+        E.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
       auto Fwd = Analysis.StoreFwd.find(Addr);
       if (Fwd != Analysis.StoreFwd.end())
         return Fwd->second;
     }
-    return memoryLoadExpr(E.Type, Addr, E.MemoryOrdering);
+    return memoryLoadExpr(E.Type, Addr, E.MemoryOrdering, E.MemoryAddressSpace);
   }
   case ExprKind::Store: {
     if (E.Operands.size() < 2)
       return "/* bad store */";
     std::string Addr = exprStr(*E.Operands[0]);
     std::string Val = exprStr(*E.Operands[1]);
-    return memoryStoreExpr(E.Operands[1]->Type, Addr, Val, E.MemoryOrdering);
+    return memoryStoreExpr(E.Operands[1]->Type, Addr, Val, E.MemoryOrdering,
+                           E.MemoryAddressSpace);
   }
   case ExprKind::Call:
     return renderCallExpr(E);
@@ -261,6 +267,8 @@ std::string HighCWriter::unwrapCastVar(const HighExpr &E) {
   if (E.Kind == ExprKind::Var)
     return varName(E.Var);
   if (E.Kind == ExprKind::Load && !E.Operands.empty()) {
+    if (E.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+      return {};
     std::string Addr = exprStr(*E.Operands[0]);
     auto Fwd = Analysis.StoreFwd.find(Addr);
     if (Fwd != Analysis.StoreFwd.end())

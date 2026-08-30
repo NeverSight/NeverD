@@ -415,7 +415,8 @@ private:
 
   detail::ReachingStackValues reachingLoad(const MedBlock &B, int OpIdx,
                                            const MedOp &Op) const {
-    if (Op.Opcode != NdOp::LOAD || Op.NumInputs == 0)
+    if (Op.Opcode != NdOp::LOAD || Op.NumInputs == 0 ||
+        Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
       return {};
     const MedVar &Addr = Op.Inputs[Op.NumInputs >= 2 ? 1 : 0];
     llvm::DenseSet<ValueKey> Seen;
@@ -1069,6 +1070,8 @@ private:
       return ArgFlow::Unknown;
 
     case NdOp::LOAD: {
+      if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+        return ArgFlow::Unknown;
       if (Op.NumInputs > 0) {
         const MedVar &Addr = Op.Inputs[Op.NumInputs >= 2 ? 1 : 0];
         if (std::optional<std::string> Source =

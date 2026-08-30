@@ -35,6 +35,8 @@ void recoverSwitchStatements(HighFunc &Func) {
       continue;
     if (!Func.Body[I].Cond)
       continue;
+    if (Func.Body[I].Cond->hasOrderedMemoryAccess())
+      continue;
 
     auto ExtractCaseVal = [](const ExprPtr &Cond)
         -> std::optional<std::pair<std::string, uint64_t>> {
@@ -80,7 +82,8 @@ void recoverSwitchStatements(HighFunc &Func) {
           S.Body[0].Kind != StmtKind::Goto)
         break;
       auto CaseVal = ExtractCaseVal(S.Cond);
-      if (!CaseVal)
+      if (!CaseVal || S.Cond->hasOrderedMemoryAccess() ||
+          CaseVal->first != FirstCase->first)
         break;
       if (SeenValues.count(CaseVal->second))
         break;

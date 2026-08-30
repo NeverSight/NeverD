@@ -162,8 +162,11 @@ bool X86Lifter::liftVectorGather(LiftState &S, const cs_x86 &X86,
   if (NumElems == 0 || ValLanes > 8)
     return false;
 
-  // baseAddr = base + disp (index is per-lane, added below).
-  NdVar BaseAddr = S.makeTemp(8);
+  // Build the effective offset in the instruction's address-size domain.
+  // addr32 gathers on x86-64 wrap base/index/scale/disp at 32 bits before the
+  // final zero-extension used by LowIR's common 64-bit memory-address carrier.
+  const uint16_t AddrSz = S.AddressSize;
+  NdVar BaseAddr = S.makeTemp(AddrSz);
   bool First = true;
   auto Acc = [&](NdVar V) {
     if (First) {
@@ -175,73 +178,142 @@ bool X86Lifter::liftVectorGather(LiftState &S, const cs_x86 &X86,
   };
   if (Mem->mem.base != X86_REG_INVALID) {
     RegInfo BaseRI = mapCapstoneReg(static_cast<x86_reg>(Mem->mem.base));
-    Acc(NdVar::reg(BaseRI.Offset, 8));
+    Acc(NdVar::reg(BaseRI.Offset, AddrSz));
   }
-  if (S.RelocatedDisplacement)
-    Acc(*S.RelocatedDisplacement);
-  else if (Mem->mem.disp != 0)
-    Acc(NdVar::scalar(static_cast<uint64_t>(Mem->mem.disp), 8));
+  if (S.RelocatedDisplacement) {
+    NdVar Displacement = *S.RelocatedDisplacement;
+    const uint64_t Original = Displacement.Offset;
+    if (AddrSz < 8) {
+      const unsigned Bits = AddrSz * 8;
+      Displacement.Offset &= (uint64_t{1} << Bits) - 1;
+    }
+    Displacement.Size = AddrSz;
+    if (LiftState::memoryAddressSpace(*Mem) != NdMemoryAddressSpace::Default) {
+      Displacement.Provenance = ConstantAddressProvenance::Scalar;
+      Displacement.AddressOwnerVA = InvalidVA;
+    } else if (Displacement.Offset != Original &&
+               Displacement.Provenance !=
+                   ConstantAddressProvenance::Unknown &&
+               Displacement.Provenance !=
+                   ConstantAddressProvenance::Scalar) {
+      Displacement.Provenance = ConstantAddressProvenance::Address;
+      Displacement.AddressOwnerVA = InvalidVA;
+    }
+    Acc(Displacement);
+  } else if (Mem->mem.disp != 0)
+    Acc(NdVar::scalar(static_cast<uint64_t>(Mem->mem.disp), AddrSz));
   if (First)
-    Acc(NdVar::scalar(0, 8));
+    Acc(NdVar::scalar(0, AddrSz));
   unsigned Scale = Mem->mem.scale ? Mem->mem.scale : 1;
 
-  NdVar Lanes[8];
+  NdVar MaskOut = operandWrite(X86.operands[MaskIdx]);
+  NdVar WorkingDst = DstOld;
+  NdVar WorkingMask = MaskVec;
+  auto ReplaceLane = [&](NdVar Vector, uint16_t Lane, NdVar Replacement) {
+    NdVar Parts[8];
+    for (uint16_t J = 0; J < ValLanes; ++J) {
+      if (J == Lane) {
+        Parts[J] = Replacement;
+        continue;
+      }
+      Parts[J] = S.makeTemp(ValSz);
+      S.emit(NdOp::SUBBYTES, Parts[J],
+             {Vector, NdVar::scalar(static_cast<uint64_t>(J) * ValSz, 4)});
+    }
+    uint16_t Count = ValLanes;
+    uint16_t Sz = ValSz;
+    while (Count > 1) {
+      const uint16_t Half = Count / 2;
+      const uint16_t NewSz = static_cast<uint16_t>(Sz * 2);
+      for (uint16_t K = 0; K < Half; ++K) {
+        NdVar Out = S.makeTemp(NewSz);
+        S.emit(NdOp::CONCAT, Out, {Parts[2 * K + 1], Parts[2 * K]});
+        Parts[K] = Out;
+      }
+      Count = Half;
+      Sz = NewSz;
+    }
+    return Parts[0];
+  };
+
   for (uint16_t I = 0; I < ValLanes; ++I) {
     if (I >= NumElems) {
-      Lanes[I] =
-          NdVar::scalar(0, ValSz); // SDM: lanes past the gather count = 0
+      // SDM: lanes past the gather count are zero on successful completion.
+      WorkingDst =
+          ReplaceLane(WorkingDst, I, NdVar::scalar(0, ValSz));
+      WorkingMask =
+          ReplaceLane(WorkingMask, I, NdVar::scalar(0, ValSz));
+      S.emit(NdOp::COPY, Dst, {WorkingDst});
+      S.emit(NdOp::COPY, MaskOut, {WorkingMask});
+      WorkingDst = Dst;
+      WorkingMask = MaskOut;
       continue;
     }
     // addr = baseAddr + sext(index[I]) * scale.
     NdVar IdxElem = S.makeTemp(IdxSz);
     S.emit(NdOp::SUBBYTES, IdxElem,
            {IdxVec, NdVar::scalar(static_cast<uint64_t>(I) * IdxSz, 4)});
-    NdVar Idx64 = IdxElem;
-    if (IdxSz < 8) {
-      Idx64 = S.makeTemp(8);
-      S.emit(NdOp::INT_SEXT, Idx64, {IdxElem});
+    NdVar AddressIndex = IdxElem;
+    if (IdxSz < AddrSz) {
+      AddressIndex = S.makeTemp(AddrSz);
+      S.emit(NdOp::INT_SEXT, AddressIndex, {IdxElem});
+    } else if (IdxSz > AddrSz) {
+      AddressIndex = S.makeTemp(AddrSz);
+      S.emit(NdOp::SUBBYTES, AddressIndex,
+             {IdxElem, NdVar::scalar(0, 4)});
     }
-    NdVar Off = Idx64;
+    NdVar Off = AddressIndex;
     if (Scale > 1) {
-      Off = S.makeTemp(8);
-      S.emit(NdOp::INT_MULT, Off, {Idx64, NdVar::scalar(Scale, 8)});
+      Off = S.makeTemp(AddrSz);
+      S.emit(NdOp::INT_MULT, Off,
+             {AddressIndex, NdVar::scalar(Scale, AddrSz)});
     }
-    NdVar Addr = S.makeTemp(8);
-    S.emit(NdOp::INT_ADD, Addr, {BaseAddr, Off});
-    NdVar Loaded = S.makeTemp(ValSz);
-    S.emit(NdOp::LOAD, Loaded, {Addr});
+    NdVar Offset = S.makeTemp(AddrSz);
+    S.emit(NdOp::INT_ADD, Offset, {BaseAddr, Off});
+    NdVar Addr = Offset;
+    if (AddrSz < 8) {
+      Addr = S.makeTemp(8);
+      S.emit(NdOp::INT_ZEXT, Addr, {Offset});
+    }
     // The mask element's sign bit gates the load; a clear sign keeps the source
     // lane (operands[0] is also the merge source for masked-off elements).
     NdVar MaskElem = S.makeTemp(ValSz);
     S.emit(NdOp::SUBBYTES, MaskElem,
-           {MaskVec, NdVar::scalar(static_cast<uint64_t>(I) * ValSz, 4)});
+           {WorkingMask,
+            NdVar::scalar(static_cast<uint64_t>(I) * ValSz, 4)});
     NdVar SignSet = S.makeTemp(1);
     S.emit(NdOp::INT_SLESS, SignSet, {MaskElem, NdVar::scalar(0, ValSz)});
+    // Reuse the fault-suppressing masked-load intrinsic for one lane.  The low
+    // lane carries this gather element's mask and every other lane is zero, so
+    // a clear sign bit performs no memory access at all (unlike LOAD+SELECT).
+    NdVar LaneMask = S.makeTemp(16);
+    S.emit(NdOp::INT_ZEXT, LaneMask, {MaskElem});
+    NdVar LoadedVector = S.makeTemp(16);
+    S.emitIntrinsic(ValSz == 8 ? Intrinsic::MaskedLoadQ
+                              : Intrinsic::MaskedLoadD,
+                    LoadedVector, {Addr, LaneMask}, NdMemoryOrdering::None,
+                    LiftState::memoryAddressSpace(*Mem));
+    NdVar Loaded = S.makeTemp(ValSz);
+    S.emit(NdOp::SUBBYTES, Loaded,
+           {LoadedVector, NdVar::scalar(0, 4)});
     NdVar OldLane = S.makeTemp(ValSz);
     S.emit(NdOp::SUBBYTES, OldLane,
-           {DstOld, NdVar::scalar(static_cast<uint64_t>(I) * ValSz, 4)});
+           {WorkingDst,
+            NdVar::scalar(static_cast<uint64_t>(I) * ValSz, 4)});
     NdVar Res = S.makeTemp(ValSz);
     S.emit(NdOp::SELECT, Res, {SignSet, Loaded, OldLane});
-    Lanes[I] = Res;
+    // Commit each completed lane before the next possible faulting access.
+    // Intel permits implementation-defined gather order; choosing low-to-high
+    // makes partial progress deterministic.  If a later lane faults, every
+    // prior destination update and mask clear remains architecturally visible.
+    WorkingDst = ReplaceLane(WorkingDst, I, Res);
+    WorkingMask =
+        ReplaceLane(WorkingMask, I, NdVar::scalar(0, ValSz));
+    S.emit(NdOp::COPY, Dst, {WorkingDst});
+    S.emit(NdOp::COPY, MaskOut, {WorkingMask});
+    WorkingDst = Dst;
+    WorkingMask = MaskOut;
   }
-
-  // Power-of-two CONCAT tree merges the lanes low->high into the destination.
-  uint16_t Count = ValLanes, Sz = ValSz;
-  while (Count > 1) {
-    uint16_t Half = Count / 2;
-    uint16_t NewSz = static_cast<uint16_t>(Sz * 2);
-    for (uint16_t K = 0; K < Half; ++K) {
-      NdVar Out = (Half == 1) ? Dst : S.makeTemp(NewSz);
-      S.emit(NdOp::CONCAT, Out, {Lanes[2 * K + 1], Lanes[2 * K]});
-      Lanes[K] = Out;
-    }
-    Count = Half;
-    Sz = NewSz;
-  }
-
-  // The gather clears the entire mask register on completion.
-  NdVar MaskOut = operandWrite(X86.operands[MaskIdx]);
-  S.emit(NdOp::COPY, MaskOut, {NdVar::scalar(0, MaskVec.Size)});
   return true;
 }
 

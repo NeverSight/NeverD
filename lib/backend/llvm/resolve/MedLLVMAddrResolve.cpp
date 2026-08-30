@@ -1157,6 +1157,8 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
     if (auto Forwarded = pointerPreservingInput(*Def))
       return frameRootProof(*Forwarded, Depth + 1, Seen);
     if (Def->Opcode == NdOp::LOAD) {
+      if (Def->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+        return {};
       std::vector<MedVar> Sources;
       if (!collectFrameReloadSources(*Def, Sources) || Sources.empty())
         return {};
@@ -1319,6 +1321,8 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
     if (!Def)
       return {.HasIndependentAlternative = true};
     if (Def->Opcode == NdOp::LOAD && Def->NumInputs >= 1) {
+      if (Def->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+        return {.HasIndependentAlternative = true};
       const auto Root = frameRoot(Def->Inputs[0], 0, {});
       if (Root)
         return *Root == TargetRoot
@@ -1435,6 +1439,8 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
     if (auto Forwarded = pointerPreservingInput(*Def))
       return scalarValueReaches(*Forwarded, Target, Depth + 1, Seen);
     if (Def->Opcode == NdOp::LOAD) {
+      if (Def->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+        return false;
       std::vector<MedVar> Sources;
       if (!collectFrameReloadSources(*Def, Sources) || Sources.empty())
         return false;
@@ -1643,6 +1649,8 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
         continue;
       }
       if (Def->Opcode == NdOp::LOAD) {
+        if (Def->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+          return true;
         std::vector<MedVar> Sources;
         if (!collectFrameReloadSources(*Def, Sources) || Sources.empty())
           return false;
@@ -1731,6 +1739,7 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
       }
       const MedOp *CycleDef = lookupDef(Start);
       if (CycleDef && CycleDef->Opcode == NdOp::LOAD &&
+          CycleDef->MemoryAddressSpace == NdMemoryAddressSpace::Default &&
           CycleDef->NumInputs >= 1) {
         if (auto Slot = canonicalFrameSlotKey(CycleDef->Inputs[0]);
             Slot && ActiveFrameSlots.count(*Slot))
@@ -1919,6 +1928,12 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
       if (Def->Opcode != NdOp::LOAD)
         return true;
 
+      // Segment-relative reads are runtime numeric inputs, never frame
+      // reloads or flat-image scalar-table reads, even when their offset is
+      // SP/FP-derived or numerically collides with an image slot.
+      if (Def->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+        return true;
+
       // A frame reload transports the exact stored bit pattern even when it is
       // narrower than the target pointer and later widened.  Audit its
       // all-path reaching definitions first: a truncated ptrtoint(@table)
@@ -2055,7 +2070,9 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
         std::vector<MedVar> DomainSources;
         for (const MedBlock &Block : CurMedFunc->Blocks) {
           for (const MedOp &Write : Block.Ops) {
-            if (Write.Opcode == NdOp::STORE && Write.NumInputs >= 2) {
+            if (Write.Opcode == NdOp::STORE &&
+                Write.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+                Write.NumInputs >= 2) {
               // Storing the frame address outside its own root lets an alias
               // re-enter through a call or an otherwise untracked load.
               if (sameOrUnknownFrameRoot(Write.Inputs[1])) {
@@ -2079,7 +2096,9 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
             const bool IsAtomicWrite = Write.Opcode == NdOp::ATOMIC_XCHG ||
                                        Write.Opcode == NdOp::ATOMIC_ADD ||
                                        Write.Opcode == NdOp::ATOMIC_CMPXCHG;
-            if (IsAtomicWrite && Write.NumInputs >= 1 &&
+            if (IsAtomicWrite &&
+                Write.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+                Write.NumInputs >= 1 &&
                 sameOrUnknownFrameRoot(Write.Inputs[0])) {
               if (frameAccessesProvenDisjoint(Write.Inputs[0],
                                               Write.Output.Size, Def->Inputs[0],
@@ -2191,6 +2210,8 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
         if (!ValueDef || ValueDef->NumInputs < 1)
           return std::nullopt;
         if (ValueDef->Opcode == NdOp::LOAD) {
+          if (ValueDef->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+            return std::nullopt;
           std::vector<MedVar> Sources;
           const bool CompleteSources =
               collectFrameReloadSources(*ValueDef, Sources);
@@ -3100,6 +3121,11 @@ MedLLVMEmitter::traceTableBaseConst(const MedVar &V, int Depth, bool *SawLoad,
     return std::nullopt;
   }
   case NdOp::LOAD: {
+    // FS/GS operands are segment-relative numeric offsets, not flat image
+    // addresses.  Never inspect the backing image for a non-default load even
+    // when its offset happens to equal a literal-pool or relocation slot VA.
+    if (Def->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+      return std::nullopt;
     // Literal-pool load: the table base word lives in a read-only segment and
     // the loader has already applied its relocation, so read it directly.
     if (Def->NumInputs < 1 || !Img)
@@ -3238,6 +3264,8 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V,
     if (!Def)
       return finish(Result);
     if (Def->Opcode == NdOp::LOAD) {
+      if (Def->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+        return finish(Result);
       Result.Load = Def;
       break;
     }
@@ -3960,6 +3988,8 @@ bool MedLLVMEmitter::recoverAbsoluteDataPointerLoadIdentities(
     if (!Def)
       return false;
     if (Def->Opcode == NdOp::LOAD) {
+      if (Def->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+        return false;
       Load = Def;
       break;
     }
@@ -3999,7 +4029,9 @@ bool MedLLVMEmitter::recoverAbsoluteDataPointerLoadIdentities(
     }
     return false;
   }
-  if (!Load || Load->NumInputs < 1 || PtrSize == 0 || PtrSize > 8 ||
+  if (!Load ||
+      Load->MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+      Load->NumInputs < 1 || PtrSize == 0 || PtrSize > 8 ||
       Load->Output.Size != PtrSize)
     return false;
 
@@ -4145,7 +4177,8 @@ bool MedLLVMEmitter::recoverRelativeDataPointerTargets(
     return false;
 
   auto recoverLoadBase = [&](const MedOp &Load, uint64_t &Base) -> bool {
-    if (Load.NumInputs < 1 || Load.Output.Size != 4)
+    if (Load.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+        Load.NumInputs < 1 || Load.Output.Size != 4)
       return false;
     bool HaveBase = false;
     std::vector<MedVar> Terms;
@@ -4175,6 +4208,8 @@ bool MedLLVMEmitter::recoverRelativeDataPointerTargets(
       if (!Def)
         return false;
       if (Def->Opcode == NdOp::LOAD) {
+        if (Def->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+          return false;
         unsigned PointerSize = getTargetRegInfo(TargetArch).PointerSize;
         if (PointerSize > 4 && !SawSignedExtension)
           return false;

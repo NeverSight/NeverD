@@ -25,9 +25,9 @@
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/IntrinsicsX86.h"
+#include "llvm/Support/ErrorHandling.h"
 
 #include <cassert>
-#include <map>
 
 namespace neverd {
 
@@ -190,6 +190,7 @@ llvm::Value *MedLLVMEmitter::emitRepString(const MedOp &Op, Intrinsic IC,
   switch (IC) {
   case I::Movsb:
   case I::Stosb:
+  case I::Lodsb:
   case I::Cmpsb:
   case I::Scasb:
     ElemSz = 1;
@@ -197,6 +198,7 @@ llvm::Value *MedLLVMEmitter::emitRepString(const MedOp &Op, Intrinsic IC,
     break;
   case I::Movsw:
   case I::Stosw:
+  case I::Lodsw:
   case I::Cmpsw:
   case I::Scasw:
     ElemSz = 2;
@@ -204,6 +206,7 @@ llvm::Value *MedLLVMEmitter::emitRepString(const MedOp &Op, Intrinsic IC,
     break;
   case I::Movsd:
   case I::Stosd:
+  case I::Lodsd:
   case I::Cmpsd_str:
   case I::Scasd:
     ElemSz = 4;
@@ -211,6 +214,7 @@ llvm::Value *MedLLVMEmitter::emitRepString(const MedOp &Op, Intrinsic IC,
     break;
   case I::Movsq:
   case I::Stosq:
+  case I::Lodsq:
   case I::Cmpsq:
   case I::Scasq:
     ElemSz = 8;
@@ -223,10 +227,39 @@ llvm::Value *MedLLVMEmitter::emitRepString(const MedOp &Op, Intrinsic IC,
       (IC == I::Stosb || IC == I::Stosw || IC == I::Stosd || IC == I::Stosq);
   bool IsMovs =
       (IC == I::Movsb || IC == I::Movsw || IC == I::Movsd || IC == I::Movsq);
+  bool IsLods =
+      (IC == I::Lodsb || IC == I::Lodsw || IC == I::Lodsd || IC == I::Lodsq);
   bool IsCmps = (IC == I::Cmpsb || IC == I::Cmpsw || IC == I::Cmpsd_str ||
                  IC == I::Cmpsq);
   bool IsScas =
       (IC == I::Scasb || IC == I::Scasw || IC == I::Scasd || IC == I::Scasq);
+
+  auto withSourceSegment = [&](std::string Mnemonic) -> std::string {
+    if (!IsMovs && !IsLods && !IsCmps)
+      return Mnemonic;
+    switch (Op.MemoryAddressSpace) {
+    case NdMemoryAddressSpace::Default:
+      return Mnemonic;
+    case NdMemoryAddressSpace::X86FS:
+      return "fs " + Mnemonic;
+    case NdMemoryAddressSpace::X86GS:
+      return "gs " + Mnemonic;
+    }
+    llvm_unreachable("unknown x86 string source address space");
+  };
+
+  const unsigned NativeAddressBytes = AddrRegBits / 8;
+  const unsigned StringAddressBytes =
+      Op.NumInputs > 1 ? Op.Inputs[1].Size : NativeAddressBytes;
+  auto withAddressSize = [&](std::string Mnemonic) -> std::string {
+    if (StringAddressBytes == NativeAddressBytes)
+      return Mnemonic;
+    if (StringAddressBytes == 4 && NativeAddressBytes == 8)
+      return "addr32 " + Mnemonic;
+    if (StringAddressBytes == 2 && NativeAddressBytes == 4)
+      return "addr16 " + Mnemonic;
+    llvm::report_fatal_error("unsupported x86 string address size");
+  };
 
   auto Coerce = [&](llvm::Value *V, llvm::Type *T) -> llvm::Value * {
     return (V->getType() == T) ? V : Builder.CreateZExtOrTrunc(V, T);
@@ -242,20 +275,20 @@ llvm::Value *MedLLVMEmitter::emitRepString(const MedOp &Op, Intrinsic IC,
   };
 
   // Direction flag: the lifter threads the modelled DF as the final input
-  // (index 4 for both STOS and MOVS; absent on legacy stubs => forward).  A
-  // known constant bakes the direction in with no runtime branch; a dynamic DF
-  // is tested before the rep.  Either way a trailing `cld` restores the SysV
-  // forward invariant.  The hardware `rep` honours the live DF, so this is the
-  // recompiled counterpart of `std; rep ...` over overlapping/backward buffers.
+  // (index 4 for STOS/MOVS/LODS/CMPS/SCAS; absent on legacy stubs => forward).
+  // A known constant bakes the direction in with no runtime branch; a dynamic
+  // DF is tested before the rep.  Either way a trailing `cld` restores the
+  // SysV forward invariant.  The hardware `rep` honours the live DF, so this
+  // is the recompiled counterpart of `std; rep ...` over overlapping/backward
+  // buffers.
   enum DfKind { DfFwd, DfBwd, DfDyn };
   DfKind DfK = DfFwd;
   if (Op.NumInputs > 4) {
     const auto &DfV = Op.Inputs[4];
     DfK = DfV.isConst() ? (DfV.ConstVal != 0 ? DfBwd : DfFwd) : DfDyn;
   }
-  // Operand index of the dynamic DF GPR in the inline-asm template: STOS has
-  // outputs di/cx (%0,%1) + tied/{ax} inputs %2..%4, MOVS has si/di/cx (%0..%2)
-  // + tied inputs %3..%5, so the appended `r` DF lands at %5 / %6 respectively.
+  // Operand index of the dynamic DF GPR is supplied per template below because
+  // each string family has a different number of tied in/out registers.
   auto dirWrap = [&](const std::string &Rep,
                      unsigned DfOperand) -> std::string {
     if (DfK == DfBwd)
@@ -271,12 +304,13 @@ llvm::Value *MedLLVMEmitter::emitRepString(const MedOp &Op, Intrinsic IC,
   // hardware (captured as tied in-out outputs so LLVM models the clobber); the
   // values are discarded because the lifter already updates the register slots
   // in MedIR.
-  if (IsStos && Op.NumInputs >= 4) {
+  if (IsStos && Op.NumInputs >= 5) {
     auto *RDI = Coerce(getVar(Op.Inputs[1], Builder), AddrRegTy);
     auto *RCX = Coerce(getVar(Op.Inputs[2], Builder), AddrRegTy);
     auto *ValTy = llvm::Type::getIntNTy(*Ctx, ElemSz * 8);
     auto *Val = Coerce(getVar(Op.Inputs[3], Builder), ValTy);
-    std::string Mn = dirWrap(std::string("rep stos") + Suffix, 5);
+    std::string Mn =
+        dirWrap(withAddressSize(std::string("rep stos") + Suffix), 5);
     auto *RetTy = llvm::StructType::get(*Ctx, {AddrRegTy, AddrRegTy});
     if (DfK == DfDyn) {
       auto *Df = Coerce(getVar(Op.Inputs[4], Builder), AddrRegTy);
@@ -298,47 +332,26 @@ llvm::Value *MedLLVMEmitter::emitRepString(const MedOp &Op, Intrinsic IC,
   // CMPS / SCAS: unlike MOVS/STOS these stop on a data-dependent ZF transition,
   // so the trip count is only known at run time.  The hardware's leftover RCX
   // is the intrinsic's result and the lifter derives the advanced pointers from
-  // it (see liftRepCmpScas); the pointer outputs are still declared so the
-  // register allocator models the clobber.  REPE (`repz`) repeats while the
-  // elements match, REPNE (`repnz`) while they differ; the lifter passes which
-  // one as the trailing constant input.
-  if ((IsCmps || IsScas) && Op.NumInputs >= 5) {
+  // it (see liftRepCmpScas).  LAHF + SETO capture all six arithmetic flags in
+  // AX without a post-loop memory probe; this also preserves the architectural
+  // no-operand-access behavior when the entry count is zero.  REPE (`repz`)
+  // repeats while the elements match, REPNE (`repnz`) while they differ; the
+  // lifter passes which one as the trailing constant input.
+  if ((IsCmps || IsScas) && Op.NumInputs >= 6) {
     const bool RepNE = Op.NumInputs > 5 && Op.Inputs[5].isConst() &&
                        Op.Inputs[5].ConstVal != 0;
     const std::string RepPfx = RepNE ? "repnz " : "repz ";
     llvm::Value *LeftCount = nullptr;
+    llvm::Value *PackedFlags = nullptr;
     if (IsScas) {
-      // Inputs [RDI, RCX, AL/AX/EAX/RAX]: RDI/RCX are tied in-out, the
-      // accumulator is a plain {ax} input (SCAS never writes it).
+      // Inputs [RDI, RCX, AL/AX/EAX/RAX]: RDI/RCX/RAX are tied in-out.  SCAS
+      // consumes the incoming accumulator before LAHF/SETO reuse AX for the
+      // returned flag snapshot.
       auto *RDI = Coerce(getVar(Op.Inputs[1], Builder), AddrRegTy);
       auto *RCX = Coerce(getVar(Op.Inputs[2], Builder), AddrRegTy);
-      auto *ValTy = llvm::Type::getIntNTy(*Ctx, ElemSz * 8);
-      auto *Val = Coerce(getVar(Op.Inputs[3], Builder), ValTy);
-      std::string Mn = dirWrap(RepPfx + "scas" + Suffix, 5);
-      auto *RetTy = llvm::StructType::get(*Ctx, {AddrRegTy, AddrRegTy});
-      llvm::CallInst *Call = nullptr;
-      if (DfK == DfDyn) {
-        auto *Df = Coerce(getVar(Op.Inputs[4], Builder), AddrRegTy);
-        auto *FnTy = llvm::FunctionType::get(
-            RetTy, {AddrRegTy, AddrRegTy, ValTy, AddrRegTy}, false);
-        auto *IA = llvm::InlineAsm::get(
-            FnTy, Mn, "={di},={cx},0,1,{ax},r,~{memory},~{dirflag},~{cc}",
-            true);
-        Call = Builder.CreateCall(IA, {RDI, RCX, Val, Df}, "rep_scas");
-      } else {
-        auto *FnTy = llvm::FunctionType::get(
-            RetTy, {AddrRegTy, AddrRegTy, ValTy}, false);
-        auto *IA = llvm::InlineAsm::get(
-            FnTy, Mn, "={di},={cx},0,1,{ax},~{memory},~{dirflag},~{cc}", true);
-        Call = Builder.CreateCall(IA, {RDI, RCX, Val}, "rep_scas");
-      }
-      LeftCount = Builder.CreateExtractValue(Call, {1}, "scas_cx");
-    } else {
-      // Inputs [RSI, RDI, RCX], all three tied in-out.
-      auto *RSI = Coerce(getVar(Op.Inputs[1], Builder), AddrRegTy);
-      auto *RDI = Coerce(getVar(Op.Inputs[2], Builder), AddrRegTy);
-      auto *RCX = Coerce(getVar(Op.Inputs[3], Builder), AddrRegTy);
-      std::string Mn = dirWrap(RepPfx + "cmps" + Suffix, 6);
+      auto *Val = Coerce(getVar(Op.Inputs[3], Builder), AddrRegTy);
+      std::string Mn = dirWrap(withAddressSize(RepPfx + "scas" + Suffix), 6) +
+                       "\n\tlahf\n\tseto %al";
       auto *RetTy =
           llvm::StructType::get(*Ctx, {AddrRegTy, AddrRegTy, AddrRegTy});
       llvm::CallInst *Call = nullptr;
@@ -347,30 +360,102 @@ llvm::Value *MedLLVMEmitter::emitRepString(const MedOp &Op, Intrinsic IC,
         auto *FnTy = llvm::FunctionType::get(
             RetTy, {AddrRegTy, AddrRegTy, AddrRegTy, AddrRegTy}, false);
         auto *IA = llvm::InlineAsm::get(
-            FnTy, Mn, "={si},={di},={cx},0,1,2,r,~{memory},~{dirflag},~{cc}",
+            FnTy, Mn, "={di},={cx},={ax},0,1,2,r,~{memory},~{dirflag},~{cc}",
             true);
-        Call = Builder.CreateCall(IA, {RSI, RDI, RCX, Df}, "rep_cmps");
+        Call = Builder.CreateCall(IA, {RDI, RCX, Val, Df}, "rep_scas");
       } else {
         auto *FnTy = llvm::FunctionType::get(
             RetTy, {AddrRegTy, AddrRegTy, AddrRegTy}, false);
         auto *IA = llvm::InlineAsm::get(
-            FnTy, Mn, "={si},={di},={cx},0,1,2,~{memory},~{dirflag},~{cc}",
+            FnTy, Mn, "={di},={cx},={ax},0,1,2,~{memory},~{dirflag},~{cc}",
             true);
+        Call = Builder.CreateCall(IA, {RDI, RCX, Val}, "rep_scas");
+      }
+      LeftCount = Builder.CreateExtractValue(Call, {1}, "scas_cx");
+      PackedFlags = Builder.CreateExtractValue(Call, {2}, "scas_flags");
+    } else {
+      // Inputs [RSI, RDI, RCX], all three tied in-out; AX is a flag-snapshot
+      // output and does not represent an architectural RAX write.
+      auto *RSI = Coerce(getVar(Op.Inputs[1], Builder), AddrRegTy);
+      auto *RDI = Coerce(getVar(Op.Inputs[2], Builder), AddrRegTy);
+      auto *RCX = Coerce(getVar(Op.Inputs[3], Builder), AddrRegTy);
+      std::string Mn =
+          dirWrap(withAddressSize(withSourceSegment(RepPfx + "cmps" + Suffix)),
+                  7) +
+          "\n\tlahf\n\tseto %al";
+      auto *RetTy = llvm::StructType::get(
+          *Ctx, {AddrRegTy, AddrRegTy, AddrRegTy, AddrRegTy});
+      llvm::CallInst *Call = nullptr;
+      if (DfK == DfDyn) {
+        auto *Df = Coerce(getVar(Op.Inputs[4], Builder), AddrRegTy);
+        auto *FnTy = llvm::FunctionType::get(
+            RetTy, {AddrRegTy, AddrRegTy, AddrRegTy, AddrRegTy}, false);
+        auto *IA = llvm::InlineAsm::get(FnTy, Mn,
+                                        "={si},={di},={cx},={ax},0,1,2,r,"
+                                        "~{memory},~{dirflag},~{cc}",
+                                        true);
+        Call = Builder.CreateCall(IA, {RSI, RDI, RCX, Df}, "rep_cmps");
+      } else {
+        auto *FnTy = llvm::FunctionType::get(
+            RetTy, {AddrRegTy, AddrRegTy, AddrRegTy}, false);
+        auto *IA = llvm::InlineAsm::get(FnTy, Mn,
+                                        "={si},={di},={cx},={ax},0,1,2,"
+                                        "~{memory},~{dirflag},~{cc}",
+                                        true);
         Call = Builder.CreateCall(IA, {RSI, RDI, RCX}, "rep_cmps");
       }
       LeftCount = Builder.CreateExtractValue(Call, {2}, "cmps_cx");
+      PackedFlags = Builder.CreateExtractValue(Call, {3}, "cmps_flags");
     }
+    auto *I16Ty = llvm::Type::getInt16Ty(*Ctx);
+    PendingIntrinsicOutputs[0] = Builder.CreateTrunc(PackedFlags, I16Ty);
+    PendingIntrinsicCount = 1;
     if (Op.Output.Size == 0)
       return nullptr;
     return Coerce(LeftCount, sizeToType(Op.Output.Size));
   }
 
+  // LODS: RSI/RCX/RAX are tied in-out.  Returning the full accumulator keeps
+  // every partial-register rule exact (including EAX zero-extension) while a
+  // zero entry count naturally returns the unchanged incoming RAX.
+  if (IsLods && Op.NumInputs >= 5) {
+    auto *RSI = Coerce(getVar(Op.Inputs[1], Builder), AddrRegTy);
+    auto *RCX = Coerce(getVar(Op.Inputs[2], Builder), AddrRegTy);
+    auto *RAX = Coerce(getVar(Op.Inputs[3], Builder), AddrRegTy);
+    std::string Mn = dirWrap(
+        withAddressSize(withSourceSegment(std::string("rep lods") + Suffix)),
+        6);
+    auto *RetTy =
+        llvm::StructType::get(*Ctx, {AddrRegTy, AddrRegTy, AddrRegTy});
+    llvm::CallInst *Call = nullptr;
+    if (DfK == DfDyn) {
+      auto *Df = Coerce(getVar(Op.Inputs[4], Builder), AddrRegTy);
+      auto *FnTy = llvm::FunctionType::get(
+          RetTy, {AddrRegTy, AddrRegTy, AddrRegTy, AddrRegTy}, false);
+      auto *IA = llvm::InlineAsm::get(
+          FnTy, Mn, "={si},={cx},={ax},0,1,2,r,~{memory},~{dirflag},~{cc}",
+          true);
+      Call = Builder.CreateCall(IA, {RSI, RCX, RAX, Df}, "rep_lods");
+    } else {
+      auto *FnTy = llvm::FunctionType::get(
+          RetTy, {AddrRegTy, AddrRegTy, AddrRegTy}, false);
+      auto *IA = llvm::InlineAsm::get(
+          FnTy, Mn, "={si},={cx},={ax},0,1,2,~{memory},~{dirflag},~{cc}", true);
+      Call = Builder.CreateCall(IA, {RSI, RCX, RAX}, "rep_lods");
+    }
+    auto *Accumulator = Builder.CreateExtractValue(Call, {2}, "lods_ax");
+    return Op.Output.Size > 0 ? Coerce(Accumulator, sizeToType(Op.Output.Size))
+                              : nullptr;
+  }
+
   // MOVS: inputs [RSI, RDI, RCX], all written by the hardware (discarded).
-  if (IsMovs && Op.NumInputs >= 4) {
+  if (IsMovs && Op.NumInputs >= 5) {
     auto *RSI = Coerce(getVar(Op.Inputs[1], Builder), AddrRegTy);
     auto *RDI = Coerce(getVar(Op.Inputs[2], Builder), AddrRegTy);
     auto *RCX = Coerce(getVar(Op.Inputs[3], Builder), AddrRegTy);
-    std::string Mn = dirWrap(std::string("rep movs") + Suffix, 6);
+    std::string Mn = dirWrap(
+        withAddressSize(withSourceSegment(std::string("rep movs") + Suffix)),
+        6);
     auto *RetTy =
         llvm::StructType::get(*Ctx, {AddrRegTy, AddrRegTy, AddrRegTy});
     if (DfK == DfDyn) {
@@ -391,31 +476,12 @@ llvm::Value *MedLLVMEmitter::emitRepString(const MedOp &Op, Intrinsic IC,
     return Handled();
   }
 
-  // Fallback for a stub that did not capture the full register inputs: emit the
-  // bare rep with whatever inputs were provided.
-  static const std::map<Intrinsic, const char *> RepAsmTable = {
-      {I::Movsb, "rep movsb"}, {I::Movsw, "rep movsw"}, {I::Movsd, "rep movsl"},
-      {I::Movsq, "rep movsq"}, {I::Stosb, "rep stosb"}, {I::Stosw, "rep stosw"},
-      {I::Stosd, "rep stosl"}, {I::Stosq, "rep stosq"},
-  };
-  auto It = RepAsmTable.find(IC);
-  if (It == RepAsmTable.end())
-    return nullptr;
-  std::vector<llvm::Type *> ParamTys;
-  std::vector<llvm::Value *> ParamVals;
-  for (uint16_t Idx = 1; Idx < Op.NumInputs; ++Idx) {
-    auto *V = getVar(Op.Inputs[Idx], Builder);
-    ParamTys.push_back(V->getType());
-    ParamVals.push_back(V);
-  }
-  std::string Cstr;
-  for (size_t Idx = 0; Idx < ParamVals.size(); ++Idx)
-    Cstr += (Cstr.empty() ? "r" : ",r");
-  Cstr += (Cstr.empty() ? "~{memory},~{dirflag}" : ",~{memory},~{dirflag}");
-  auto *AsmFnTy = llvm::FunctionType::get(VoidTy, ParamTys, false);
-  auto *IA = llvm::InlineAsm::get(AsmFnTy, It->second, Cstr, true);
-  Builder.CreateCall(IA, ParamVals);
-  return Handled();
+  // REP string instructions use implicit architectural registers.  Emitting a
+  // bare mnemonic for malformed IR would silently consume the host RSI/RDI/RCX
+  // instead of the lifted values, so an incomplete shape must never reach
+  // native code generation.
+  llvm::report_fatal_error(
+      "x86 REP string intrinsic is missing architectural operands");
 }
 
 //===----------------------------------------------------------------------===//
@@ -572,6 +638,7 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
 
   if (IC == I::Movsb || IC == I::Movsw || IC == I::Movsd || IC == I::Movsq ||
       IC == I::Stosb || IC == I::Stosw || IC == I::Stosd || IC == I::Stosq ||
+      IC == I::Lodsb || IC == I::Lodsw || IC == I::Lodsd || IC == I::Lodsq ||
       IC == I::Cmpsb || IC == I::Cmpsw || IC == I::Cmpsd_str ||
       IC == I::Cmpsq || IC == I::Scasb || IC == I::Scasw || IC == I::Scasd ||
       IC == I::Scasq)

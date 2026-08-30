@@ -112,7 +112,9 @@ void Pipeline::detectThunkStubs(const std::vector<LowFunc> &LowFuncs,
           AllFuncNames[LF.Entry] = It->second;
         break;
       }
-      if (Ops[I].Opcode == NdOp::LOAD && I + 1 < Ops.size() &&
+      if (Ops[I].Opcode == NdOp::LOAD &&
+          Ops[I].MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+          I + 1 < Ops.size() &&
           Ops[I + 1].Opcode == NdOp::INDIR_BR && Ops[I].NumInputs >= 1 &&
           Ops[I].Inputs[0].isConst()) {
         auto It = AllFuncNames.find(Ops[I].Inputs[0].Offset);

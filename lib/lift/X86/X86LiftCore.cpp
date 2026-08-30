@@ -178,6 +178,10 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     uint16_t Bits = Sz * 8;
     uint64_t LogSz = (Sz == 8) ? 3 : (Sz == 4) ? 2 : (Sz == 2) ? 1 : 0;
     uint16_t PtrSz = (TargetArch == Arch::X64) ? 8 : 4;
+    uint16_t AddrSz = S.AddressSize == 2 || S.AddressSize == 4 ||
+                              S.AddressSize == 8
+                          ? S.AddressSize
+                          : PtrSz;
     bool MemBase = (X86.operands[0].type == X86_OP_MEM);
     bool RegOffset = (X86.operands[1].type == X86_OP_REG);
 
@@ -190,20 +194,43 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     if (MemBase) {
       ByteAddr = S.computeEA(X86.operands[0]);
       if (RegOffset) {
-        NdVar IdxExt = S.makeTemp(PtrSz);
-        S.emit(NdOp::INT_SEXT, IdxExt, {IdxRaw});
-        NdVar ChunkOff = S.makeTemp(PtrSz);
+        if (ByteAddr.Size != AddrSz) {
+          NdVar Wrapped = S.makeTemp(AddrSz);
+          S.emit(NdOp::SUBBYTES, Wrapped,
+                 {ByteAddr, NdVar::scalar(0, AddrSz)});
+          ByteAddr = Wrapped;
+        }
+        const uint16_t IndexArithmeticSize =
+            std::max<uint16_t>(IdxRaw.Size, AddrSz);
+        NdVar IdxExt = S.makeTemp(IndexArithmeticSize);
+        if (IdxRaw.Size < IndexArithmeticSize)
+          S.emit(NdOp::INT_SEXT, IdxExt, {IdxRaw});
+        else
+          S.emit(NdOp::COPY, IdxExt, {IdxRaw});
+        NdVar ChunkOff = S.makeTemp(IndexArithmeticSize);
         S.emit(NdOp::INT_ASHR, ChunkOff,
-               {IdxExt, NdVar::scalar(LogSz + 3, PtrSz)});
-        NdVar ByteOff = S.makeTemp(PtrSz);
-        S.emit(NdOp::INT_LEFT, ByteOff,
-               {ChunkOff, NdVar::scalar(LogSz, PtrSz)});
-        NdVar Adj = S.makeTemp(PtrSz);
+               {IdxExt, NdVar::scalar(LogSz + 3, IndexArithmeticSize)});
+        NdVar WideByteOff = S.makeTemp(IndexArithmeticSize);
+        S.emit(NdOp::INT_LEFT, WideByteOff,
+               {ChunkOff, NdVar::scalar(LogSz, IndexArithmeticSize)});
+        NdVar ByteOff = WideByteOff;
+        if (IndexArithmeticSize > AddrSz) {
+          ByteOff = S.makeTemp(AddrSz);
+          S.emit(NdOp::SUBBYTES, ByteOff,
+                 {WideByteOff, NdVar::scalar(0, AddrSz)});
+        }
+        NdVar Adj = S.makeTemp(AddrSz);
         S.emit(NdOp::INT_ADD, Adj, {ByteAddr, ByteOff});
         ByteAddr = Adj;
+        if (AddrSz < 8) {
+          NdVar Extended = S.makeTemp(8);
+          S.emit(NdOp::INT_ZEXT, Extended, {ByteAddr});
+          ByteAddr = Extended;
+        }
       }
       Base = S.makeTemp(Sz);
-      S.emit(NdOp::LOAD, Base, {ByteAddr});
+      S.emit(NdOp::LOAD, Base, {ByteAddr}, NdMemoryOrdering::None,
+             LiftState::memoryAddressSpace(X86.operands[0]));
     } else {
       Base = operandRead(S, X86.operands[0]);
     }
@@ -236,7 +263,8 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
         S.emit(NdOp::INT_XOR, Result, {Base, Mask});
       }
       if (MemBase)
-        S.emit(NdOp::STORE, {}, {ByteAddr, Result});
+        S.emit(NdOp::STORE, {}, {ByteAddr, Result}, NdMemoryOrdering::None,
+               LiftState::memoryAddressSpace(X86.operands[0]));
     }
     break;
   }

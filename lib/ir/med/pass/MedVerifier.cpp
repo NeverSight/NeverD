@@ -16,6 +16,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/med/LowToMed.h"
 
 #include "llvm/Support/Debug.h"
@@ -44,6 +45,51 @@ bool verifyMedFunc(const MedFunc &Func, const char *PassName) {
   // 1. Check operand size consistency
   for (const auto &Blk : Func.Blocks) {
     for (const auto &Op : Blk.Ops) {
+      if (!isKnownMemoryAddressSpace(Op.MemoryAddressSpace))
+        Err("operation has an unknown memory address space", Blk.Id, Op.Addr);
+      else {
+        const bool HasExplicitAddressSpace =
+            Op.MemoryAddressSpace != NdMemoryAddressSpace::Default;
+        if (HasExplicitAddressSpace &&
+            !opcodeSupportsMemoryAddressSpace(Op.Opcode))
+          Err("memory address space is attached to a non-memory operation",
+              Blk.Id, Op.Addr);
+        else if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs > 0 &&
+                 Op.Inputs[0].isConst()) {
+          const auto Id = static_cast<Intrinsic>(Op.Inputs[0].ConstVal);
+          const bool IsDefaultString =
+              !HasExplicitAddressSpace && isX86StringIntrinsic(Id);
+          if (IsDefaultString &&
+              !intrinsicStringShapeIsValid(
+                  Id, Op.NumInputs, Op.Output.Size,
+                  Op.NumInputs > 1 ? Op.Inputs[1].Size : 0))
+            Err("x86 string intrinsic has an invalid operand/output shape",
+                Blk.Id, Op.Addr);
+          const bool IsMemoryIntrinsic =
+              intrinsicSupportsMemoryAddressSpace(Id);
+          if (HasExplicitAddressSpace && !IsMemoryIntrinsic)
+            Err("intrinsic does not support a memory address space", Blk.Id,
+                Op.Addr);
+          const bool IsDefaultRegisterForm =
+              !HasExplicitAddressSpace &&
+              intrinsicDefaultRegisterShapeIsValid(
+                  Id, Op.NumInputs, Op.Output.Size,
+                  Op.NumInputs > 1 ? Op.Inputs[1].Size : 0);
+          if (IsMemoryIntrinsic && !IsDefaultString &&
+              !IsDefaultRegisterForm &&
+              !intrinsicMemoryAddressSpaceShapeIsValid(
+                  Id, Op.NumInputs, Op.Output.Size,
+                  Op.NumInputs > 1 ? Op.Inputs[1].Size : 0,
+                  Op.NumInputs > 2 ? Op.Inputs[2].Size : 0,
+                  Op.NumInputs > 3 ? Op.Inputs[3].Size : 0))
+            Err("memory intrinsic has an invalid operand/output shape", Blk.Id,
+                Op.Addr);
+        } else if (HasExplicitAddressSpace &&
+                   Op.Opcode == NdOp::INTRINSIC) {
+          Err("intrinsic does not support a memory address space", Blk.Id,
+              Op.Addr);
+        }
+      }
       if (Op.DoesNotReturn && Op.Opcode != NdOp::CALL &&
           Op.Opcode != NdOp::INDIR_CALL)
         Err("no-return marker is attached to a non-call operation", Blk.Id,

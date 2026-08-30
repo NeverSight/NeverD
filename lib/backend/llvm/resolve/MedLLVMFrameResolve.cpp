@@ -685,6 +685,8 @@ bool MedLLVMEmitter::varIsReloadedStackPtr(const MedVar &V, int Depth) const {
       return varIsReloadedStackPtr(Def->Inputs[0], Depth + 1);
     return false;
   case NdOp::LOAD: {
+    if (Def->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+      return false;
     std::vector<MedVar> Sources;
     if (!collectFrameReloadSources(*Def, Sources) || Sources.empty())
       return false;
@@ -824,7 +826,8 @@ bool MedLLVMEmitter::isStackProbeCall(const MedOp &Op) const {
       D = findDef(D->Inputs[0]);
       continue;
     }
-    if (D->Opcode == NdOp::LOAD && D->NumInputs >= 1) {
+    if (D->Opcode == NdOp::LOAD && D->NumInputs >= 1 &&
+        D->MemoryAddressSpace == NdMemoryAddressSpace::Default) {
       HaveSlot = constAddr(D->Inputs[0], SlotAddr, 0);
       LoadedFromStorage = HaveSlot;
     }

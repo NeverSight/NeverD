@@ -241,7 +241,9 @@ llvm::Value *MedLLVMEmitter::emitMaskedMemOp(const MedOp &Op, Intrinsic IC,
 
   //--- Masked load ---
   if (Op.NumInputs >= 3 && (IC == I::MaskedLoadD || IC == I::MaskedLoadQ)) {
-    auto *Addr = getVar(Op.Inputs[1], Builder);
+    auto *Addr = Op.MemoryAddressSpace == NdMemoryAddressSpace::Default
+                     ? getVar(Op.Inputs[1], Builder)
+                     : getRawSegmentOffset(Op.Inputs[1], Builder);
     auto *MaskVal = getVar(Op.Inputs[2], Builder);
     bool IsQ = (IC == I::MaskedLoadQ);
     unsigned Elem = IsQ ? 64 : 32;
@@ -252,7 +254,13 @@ llvm::Value *MedLLVMEmitter::emitMaskedMemOp(const MedOp &Op, Intrinsic IC,
     auto *ZV = llvm::ConstantVector::getSplat(llvm::ElementCount::getFixed(N),
                                               llvm::ConstantInt::get(ETy, 0));
     auto *Cmp = Builder.CreateICmpSLT(MV, ZV, "msb");
-    auto *Ptr = Builder.CreateIntToPtr(Addr, llvm::PointerType::get(*Ctx, 0));
+    unsigned AddressSpace = 0;
+    if (Op.MemoryAddressSpace == NdMemoryAddressSpace::X86FS)
+      AddressSpace = 257;
+    else if (Op.MemoryAddressSpace == NdMemoryAddressSpace::X86GS)
+      AddressSpace = 256;
+    auto *Ptr = Builder.CreateIntToPtr(
+        Addr, llvm::PointerType::get(*Ctx, AddressSpace));
     return fromVec(Builder.CreateMaskedLoad(VTy, Ptr, llvm::Align(1), Cmp,
                                             llvm::Constant::getNullValue(VTy),
                                             "mload"),
@@ -260,12 +268,15 @@ llvm::Value *MedLLVMEmitter::emitMaskedMemOp(const MedOp &Op, Intrinsic IC,
   }
 
   //--- Masked store ---
-  if (Op.NumInputs >= 4 && (IC == I::MaskedStoreD || IC == I::MaskedStoreQ)) {
-    auto *Addr = getVar(Op.Inputs[1], Builder);
+  if (Op.NumInputs >= 4 && (IC == I::MaskedStoreD || IC == I::MaskedStoreQ ||
+                            IC == I::MaskedStoreB)) {
+    auto *Addr = Op.MemoryAddressSpace == NdMemoryAddressSpace::Default
+                     ? getVar(Op.Inputs[1], Builder)
+                     : getRawSegmentOffset(Op.Inputs[1], Builder);
     auto *MaskVal = getVar(Op.Inputs[2], Builder);
     auto *StoreData = getVar(Op.Inputs[3], Builder);
     bool IsQ = (IC == I::MaskedStoreQ);
-    unsigned Elem = IsQ ? 64 : 32;
+    unsigned Elem = IC == I::MaskedStoreB ? 8 : (IsQ ? 64 : 32);
     unsigned Bits = StoreData->getType()->isIntegerTy()
                         ? StoreData->getType()->getIntegerBitWidth()
                         : 128;
@@ -275,7 +286,13 @@ llvm::Value *MedLLVMEmitter::emitMaskedMemOp(const MedOp &Op, Intrinsic IC,
     auto *ZV = llvm::ConstantVector::getSplat(llvm::ElementCount::getFixed(N),
                                               llvm::ConstantInt::get(ETy, 0));
     auto *Cmp = Builder.CreateICmpSLT(toVec(MaskVal, VTy, Builder), ZV, "msb");
-    auto *Ptr = Builder.CreateIntToPtr(Addr, llvm::PointerType::get(*Ctx, 0));
+    unsigned AddressSpace = 0;
+    if (Op.MemoryAddressSpace == NdMemoryAddressSpace::X86FS)
+      AddressSpace = 257;
+    else if (Op.MemoryAddressSpace == NdMemoryAddressSpace::X86GS)
+      AddressSpace = 256;
+    auto *Ptr = Builder.CreateIntToPtr(
+        Addr, llvm::PointerType::get(*Ctx, AddressSpace));
     Builder.CreateMaskedStore(toVec(StoreData, VTy, Builder), Ptr,
                               llvm::Align(1), Cmp);
     return nullptr;
@@ -556,7 +573,7 @@ llvm::Value *MedLLVMEmitter::emitMiscSimd(const MedOp &Op, Intrinsic IC,
       return R;
 
   if (IC == I::MaskedLoadD || IC == I::MaskedLoadQ || IC == I::MaskedStoreD ||
-      IC == I::MaskedStoreQ)
+      IC == I::MaskedStoreQ || IC == I::MaskedStoreB)
     return emitMaskedMemOp(Op, IC, Builder);
 
   if (IC == I::Pcmpistri || IC == I::Pcmpistrm || IC == I::Pcmpestri ||

@@ -34,10 +34,14 @@ X86Lifter::X86Lifter(Arch A) : TargetArch(A) {}
 // LiftState helpers
 // ===----------------------------------------------------------------------===//
 
-NdVar X86Lifter::LiftState::computeEA(const cs_x86_op &MemOp) {
+NdVar X86Lifter::LiftState::computeEA(const cs_x86_op &MemOp,
+                                      bool ForMemoryAccess) {
   const uint16_t ArithmeticSize =
       AddressSize == 2 || AddressSize == 4 || AddressSize == 8 ? AddressSize
                                                                : uint16_t{8};
+  const bool SegmentRelative =
+      ForMemoryAccess &&
+      memoryAddressSpace(MemOp) != NdMemoryAddressSpace::Default;
   NdVar EA = makeTemp(ArithmeticSize);
   bool First = true;
   bool ConsumedDisplacement = false;
@@ -72,6 +76,13 @@ NdVar X86Lifter::LiftState::computeEA(const cs_x86_op &MemOp) {
     return Converted;
   };
   auto Acc = [&](NdVar V) {
+    // An FS/GS memory operand consumes this number as an offset inside the
+    // selected segment address space.  Even when its bits equal an image VA,
+    // it is not an ordinary process address and must not be symbolized as one.
+    if (SegmentRelative && V.isConst()) {
+      V.Provenance = ConstantAddressProvenance::Scalar;
+      V.AddressOwnerVA = InvalidVA;
+    }
     V = AtAddressWidth(V);
     if (First) {
       emit(NdOp::COPY, EA, {V});
@@ -122,8 +133,9 @@ NdVar X86Lifter::LiftState::computeEA(const cs_x86_op &MemOp) {
   if ((MemOp.mem.disp != 0 || RelocatedDisplacement ||
        HasAmbiguousI386GOTOFFDisplacement) &&
       !ConsumedDisplacement) {
-    const bool IsCompleteAbsoluteAddress =
-        MemOp.mem.base == X86_REG_INVALID && MemOp.mem.index == X86_REG_INVALID;
+    const bool IsCompleteAbsoluteAddress = !SegmentRelative &&
+                                           MemOp.mem.base == X86_REG_INVALID &&
+                                           MemOp.mem.index == X86_REG_INVALID;
     NdVar Displacement =
         RelocatedDisplacement ? *RelocatedDisplacement
         : IsCompleteAbsoluteAddress
@@ -177,7 +189,8 @@ NdVar X86Lifter::LiftState::computeEA(const cs_x86_op &MemOp) {
     }
   }
   if (First)
-    Acc(NdVar::address(0, ArithmeticSize));
+    Acc(SegmentRelative ? NdVar::scalar(0, ArithmeticSize)
+                        : NdVar::address(0, ArithmeticSize));
   if (ArithmeticSize == 8)
     return EA;
   NdVar ExtendedEA = makeTemp(8);
@@ -185,9 +198,22 @@ NdVar X86Lifter::LiftState::computeEA(const cs_x86_op &MemOp) {
   return ExtendedEA;
 }
 
+NdMemoryAddressSpace
+X86Lifter::LiftState::memoryAddressSpace(const cs_x86_op &MemOp) {
+  switch (MemOp.mem.segment) {
+  case X86_REG_FS:
+    return NdMemoryAddressSpace::X86FS;
+  case X86_REG_GS:
+    return NdMemoryAddressSpace::X86GS;
+  default:
+    return NdMemoryAddressSpace::Default;
+  }
+}
+
 void X86Lifter::LiftState::storeToMem(const cs_x86_op &MemOp, NdVar Val) {
   NdVar EA = computeEA(MemOp);
-  emit(NdOp::STORE, {}, {EA, Val});
+  emit(NdOp::STORE, {}, {EA, Val}, NdMemoryOrdering::None,
+       memoryAddressSpace(MemOp));
 }
 
 NdVar X86Lifter::LiftState::emitByteSwap(NdVar Src) {
@@ -282,7 +308,8 @@ NdVar X86Lifter::operandRead(LiftState &S, const cs_x86_op &Op) {
   case X86_OP_MEM: {
     NdVar EA = S.computeEA(Op);
     NdVar Result = S.makeTemp(Sz);
-    S.emit(NdOp::LOAD, Result, {EA});
+    S.emit(NdOp::LOAD, Result, {EA}, NdMemoryOrdering::None,
+           LiftState::memoryAddressSpace(Op));
     return Result;
   }
   default:

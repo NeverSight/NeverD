@@ -453,27 +453,47 @@ static void inferParamTypes(MedFunc &Func, const TargetRegInfo &TRI) {
     return V.Kind == MedVar::Reg && V.Id >= 0 && V.SSAVer == 0;
   };
   std::set<uint64_t> PtrParamRegOffs;
+  std::set<uint64_t> SegmentOffsetParamRegOffs;
+  auto recordAddressLiveIns = [&](const MedVar &AddrVar,
+                                  std::set<uint64_t> &Roles) {
+    if (isLiveInReg(AddrVar))
+      Roles.insert(AddrVar.RegOff);
+    if (AddrVar.Kind != MedVar::Temp || AddrVar.Id < 0)
+      return;
+    auto Dit = DefMap.find({AddrVar.Id, AddrVar.SSAVer});
+    if (Dit == DefMap.end() || Dit->second->Opcode != NdOp::INT_ADD ||
+        Dit->second->NumInputs < 2)
+      return;
+    for (uint8_t I = 0; I < Dit->second->NumInputs; ++I)
+      if (isLiveInReg(Dit->second->Inputs[I]))
+        Roles.insert(Dit->second->Inputs[I].RegOff);
+  };
   for (const auto &Blk : Func.Blocks) {
     for (const auto &Op : Blk.Ops) {
       if (Op.Opcode == NdOp::INDIR_BR || Op.Opcode == NdOp::INDIR_CALL) {
         if (Op.NumInputs >= 1 && isLiveInReg(Op.Inputs[0]))
           PtrParamRegOffs.insert(Op.Inputs[0].RegOff);
       }
-      if ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) &&
-          Op.NumInputs >= 1) {
-        const auto &AddrVar = Op.Inputs[0];
-        if (isLiveInReg(AddrVar))
-          PtrParamRegOffs.insert(AddrVar.RegOff);
-        if (AddrVar.Kind == MedVar::Temp && AddrVar.Id >= 0) {
-          auto Dit = DefMap.find({AddrVar.Id, AddrVar.SSAVer});
-          if (Dit != DefMap.end() && Dit->second->Opcode == NdOp::INT_ADD &&
-              Dit->second->NumInputs >= 2) {
-            for (uint8_t KI = 0; KI < Dit->second->NumInputs; ++KI) {
-              if (isLiveInReg(Dit->second->Inputs[KI]))
-                PtrParamRegOffs.insert(Dit->second->Inputs[KI].RegOff);
-            }
-          }
-        }
+      const MedVar *MemoryAddress = nullptr;
+      if ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE ||
+           Op.Opcode == NdOp::ATOMIC_XCHG ||
+           Op.Opcode == NdOp::ATOMIC_ADD ||
+           Op.Opcode == NdOp::ATOMIC_CMPXCHG) &&
+          Op.NumInputs >= 1)
+        MemoryAddress = &Op.Inputs[0];
+      else if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs >= 2 &&
+               Op.Inputs[0].isConst() &&
+               intrinsicSupportsMemoryAddressSpace(
+                   static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) &&
+               !isX86StringIntrinsic(
+                   static_cast<Intrinsic>(Op.Inputs[0].ConstVal)))
+        MemoryAddress = &Op.Inputs[1];
+      if (MemoryAddress) {
+        recordAddressLiveIns(
+            *MemoryAddress,
+            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default
+                ? PtrParamRegOffs
+                : SegmentOffsetParamRegOffs);
       }
     }
   }
@@ -483,7 +503,9 @@ static void inferParamTypes(MedFunc &Func, const TargetRegInfo &TRI) {
     const auto &MP = Func.Params[PI];
     MedTypedParam TP;
     TP.Name = "arg" + std::to_string(PI);
-    if (PtrParamRegOffs.count(MP.RegOff) && !TRI.isFrameOrLinkReg(MP.RegOff))
+    if (PtrParamRegOffs.count(MP.RegOff) &&
+        !SegmentOffsetParamRegOffs.count(MP.RegOff) &&
+        !TRI.isFrameOrLinkReg(MP.RegOff))
       TP.Type = NdType::makePtr();
     else
       TP.Type = NdType::makeInt(MP.Size);

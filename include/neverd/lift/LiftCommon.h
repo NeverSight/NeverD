@@ -48,8 +48,10 @@ struct LiftStateBase {
     return NdVar::tmp(TmpBase + (TmpId++) * TmpStride, Sz);
   }
 
-  void emit(NdOp Opc, NdVar Out, std::initializer_list<NdVar> Ins,
-            NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None) {
+  void emit(
+      NdOp Opc, NdVar Out, std::initializer_list<NdVar> Ins,
+      NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None,
+      NdMemoryAddressSpace MemoryAddressSpace = NdMemoryAddressSpace::Default) {
     if ((Opc == NdOp::INT_ZEXT || Opc == NdOp::INT_SEXT) && Ins.size() == 1) {
       const NdVar &In = *Ins.begin();
       if (In.Size > Out.Size)
@@ -71,6 +73,7 @@ struct LiftStateBase {
     LowOp Op;
     Op.Opcode = Opc;
     Op.MemoryOrdering = MemoryOrdering;
+    Op.MemoryAddressSpace = MemoryAddressSpace;
     Op.Addr = Addr;
     Op.Seq = Seq++;
     Op.Output = Out;
@@ -85,12 +88,14 @@ struct LiftStateBase {
     Ops.push_back(Op);
   }
 
-  void emitIntrinsic(Intrinsic Id, NdVar Out,
-                     std::initializer_list<NdVar> Extra = {},
-                     NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None) {
+  void emitIntrinsic(
+      Intrinsic Id, NdVar Out, std::initializer_list<NdVar> Extra = {},
+      NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None,
+      NdMemoryAddressSpace MemoryAddressSpace = NdMemoryAddressSpace::Default) {
     LowOp Op;
     Op.Opcode = NdOp::INTRINSIC;
     Op.MemoryOrdering = MemoryOrdering;
+    Op.MemoryAddressSpace = MemoryAddressSpace;
     Op.Addr = Addr;
     Op.Seq = Seq++;
     Op.Output = Out;

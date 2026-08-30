@@ -442,7 +442,9 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
         }
         uint64_t AddrVal = 0;
         uint16_t DataWidth = 0;
-        if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1) {
+        if (Op.Opcode == NdOp::LOAD &&
+            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+            Op.NumInputs >= 1) {
           DataWidth = Op.Output.Size;
           if (Op.Inputs[0].isConst() && Op.Inputs[0].ConstVal > kMin)
             AddrVal = Op.Inputs[0].ConstVal;
@@ -451,7 +453,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
             if (It != ConstMap.end())
               AddrVal = It->second;
           }
-        } else if ((Op.Opcode == NdOp::STORE ||
+        } else if (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+                   (Op.Opcode == NdOp::STORE ||
                     Op.Opcode == NdOp::ATOMIC_XCHG ||
                     Op.Opcode == NdOp::ATOMIC_ADD ||
                     Op.Opcode == NdOp::ATOMIC_CMPXCHG) &&

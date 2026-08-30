@@ -68,6 +68,19 @@ static const char *binopSymbol(NdOp Op) {
   }
 }
 
+static const char *memoryAddressSpaceQualifier(
+    NdMemoryAddressSpace AddressSpace) {
+  switch (AddressSpace) {
+  case NdMemoryAddressSpace::Default:
+    return "";
+  case NdMemoryAddressSpace::X86FS:
+    return "fs:";
+  case NdMemoryAddressSpace::X86GS:
+    return "gs:";
+  }
+  return "unknown-as:";
+}
+
 std::string HighExpr::str() const {
   switch (Kind) {
   case ExprKind::Var:
@@ -110,8 +123,9 @@ std::string HighExpr::str() const {
     return "?unary?";
   case ExprKind::Load:
     if (!Operands.empty())
-      return "*" + Operands[0]->str();
-    return "*?";
+      return std::string(memoryAddressSpaceQualifier(MemoryAddressSpace)) +
+             "*" + Operands[0]->str();
+    return std::string(memoryAddressSpaceQualifier(MemoryAddressSpace)) + "*?";
   case ExprKind::Call: {
     std::string S = CallTarget.empty()
                         ? (kAutoFuncPrefix + llvm::utohexstr(CallAddr)).str()
@@ -144,6 +158,8 @@ bool HighExpr::structuralEq(const HighExpr &Other) const {
   if (Op != Other.Op)
     return false;
   if (MemoryOrdering != Other.MemoryOrdering)
+    return false;
+  if (MemoryAddressSpace != Other.MemoryAddressSpace)
     return false;
   switch (Kind) {
   case ExprKind::Var:
@@ -191,7 +207,8 @@ std::string HighStmt::str(int Indent) const {
     return Pad + (Dst ? Dst->str() : "?") + " = " + (Val ? Val->str() : "?") +
            ";";
   case StmtKind::Store:
-    return Pad + "*" + (StoreAddr ? StoreAddr->str() : "?") + " = " +
+    return Pad + memoryAddressSpaceQualifier(MemoryAddressSpace) + "*" +
+           (StoreAddr ? StoreAddr->str() : "?") + " = " +
            (StoreVal ? StoreVal->str() : "?") + ";";
   case StmtKind::Return:
     return Pad + "return " + (RetVal ? RetVal->str() : "") + ";";

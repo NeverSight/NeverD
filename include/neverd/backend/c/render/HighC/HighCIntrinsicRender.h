@@ -56,6 +56,14 @@ std::string renderX86IntrinsicCall(Intrinsic Id,
                                    const std::vector<std::string> &Ops,
                                    bool &HasCIntrinsics);
 
+/// Render an x86 intrinsic whose implicit memory operand is relative to FS/GS.
+/// Returns an empty string for an unsupported intrinsic.  Recognized string
+/// intrinsics with malformed architectural operands fail closed.
+std::string renderX86SegmentedIntrinsicStatement(
+    Arch TheArch, const HighExpr &Call, const HighExpr *PrimaryDst,
+    std::function<std::string(const HighExpr &)> ExprFn,
+    std::function<std::string(const MedVar &)> VarFn, IsAliveFn IsAlive = {});
+
 const char *hiloCollapseExpr(Intrinsic Id);
 
 /// Format a raw mnemonic + operands as an MSVC `__asm { ... }` statement.

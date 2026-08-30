@@ -41,6 +41,11 @@ namespace neverd {
 /// Defined in X86LiftString.cpp.
 unsigned stringElemSize(unsigned InsnId);
 
+/// Address space selected for an implicit x86 string source.  Capstone exposes
+/// the source as a memory operand for MOVS/LODS/CMPS, but XLAT has no explicit
+/// operands, so the legacy-prefix bytes are the authoritative fallback.
+NdMemoryAddressSpace stringSourceAddressSpace(const cs_x86 &X86);
+
 /// Snapshot the incoming carry flag widened to \p Size bytes.  ADC/SBB and
 /// RCL/RCR still consume the incoming carry while computing the flags they
 /// have already overwritten, so they take this copy first.  Defined in

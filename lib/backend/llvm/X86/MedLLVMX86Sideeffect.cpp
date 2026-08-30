@@ -121,25 +121,70 @@ bool MedLLVMEmitter::emitX86CacheOp(const MedOp &Op, Intrinsic IC,
                                     llvm::IRBuilder<> &Builder) {
   using I = Intrinsic;
 
-  if (IC == I::Clflush || IC == I::Clflushopt || IC == I::Clwb) {
-    const char *Mn = (IC == I::Clflush)      ? "clflush"
-                     : (IC == I::Clflushopt) ? "clflushopt"
-                                             : "clwb";
-    emitX86MemPtrAsm(Mn, Op, Builder);
-    return true;
+  const char *Mnemonic = nullptr;
+  switch (IC) {
+  case I::Clflush:
+    Mnemonic = "clflush";
+    break;
+  case I::Clflushopt:
+    Mnemonic = "clflushopt";
+    break;
+  case I::Clwb:
+    Mnemonic = "clwb";
+    break;
+  case I::Prefetch:
+  case I::PrefetchT0:
+    Mnemonic = "prefetcht0";
+    break;
+  case I::PrefetchT1:
+    Mnemonic = "prefetcht1";
+    break;
+  case I::PrefetchT2:
+    Mnemonic = "prefetcht2";
+    break;
+  case I::PrefetchNta:
+    Mnemonic = "prefetchnta";
+    break;
+  case I::PrefetchW:
+    Mnemonic = "prefetchw";
+    break;
+  case I::PrefetchWT1:
+    Mnemonic = "prefetchwt1";
+    break;
+  case I::Ldmxcsr:
+    Mnemonic = "ldmxcsr";
+    break;
+  case I::Stmxcsr:
+    Mnemonic = "stmxcsr";
+    break;
+  case I::Fxsave:
+  case I::Fxrstor:
+  case I::Fxsave64Mem:
+  case I::Fxrstor64Mem:
+  case I::X87Fldenv:
+  case I::X87Fnstenv:
+  case I::X87Frstor:
+  case I::X87Fnsave:
+  case I::Xsave:
+  case I::Xsavec:
+  case I::Xsaves:
+  case I::Xsaveopt:
+  case I::Xrstor:
+  case I::Xrstors:
+  case I::Xsave64:
+  case I::Xsavec64:
+  case I::Xsaves64:
+  case I::Xsaveopt64:
+  case I::Xrstor64:
+  case I::Xrstors64:
+    llvm::report_fatal_error(
+        "x86 state save/restore requires an explicit architectural state "
+        "layout; host inline asm is not a sound lowering");
+  default:
+    break;
   }
-
-  if (IC == I::Prefetch) {
-    if (Op.NumInputs >= 2) {
-      auto *Addr = getVar(Op.Inputs[1], Builder);
-      auto *Ptr = Builder.CreateIntToPtr(Addr, llvm::PointerType::get(*Ctx, 0));
-      auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
-          Mod, llvm::Intrinsic::prefetch, {llvm::PointerType::get(*Ctx, 0)});
-      Builder.CreateCall(
-          Fn, {Ptr, llvm::ConstantInt::get(llvm::Type::getInt32Ty(*Ctx), 0),
-               llvm::ConstantInt::get(llvm::Type::getInt32Ty(*Ctx), 3),
-               llvm::ConstantInt::get(llvm::Type::getInt32Ty(*Ctx), 1)});
-    }
+  if (Mnemonic) {
+    emitX86MemPtrAsm(Mnemonic, Op, Builder);
     return true;
   }
 
@@ -153,19 +198,40 @@ bool MedLLVMEmitter::emitX86CacheOp(const MedOp &Op, Intrinsic IC,
 void MedLLVMEmitter::emitX86MemPtrAsm(const char *Mn, const MedOp &Op,
                                       llvm::IRBuilder<> &Builder) {
   auto *VoidTy = llvm::Type::getVoidTy(*Ctx);
-  if (Op.NumInputs > 1) {
-    auto *PtrVal = getVar(Op.Inputs[1], Builder);
-    auto *PtrTy = llvm::PointerType::get(*Ctx, 0);
-    auto *AsmFnTy = llvm::FunctionType::get(VoidTy, {PtrTy}, false);
-    auto *IA = llvm::InlineAsm::get(AsmFnTy, std::string(Mn) + " ($0)",
-                                    "r,~{memory}", true);
-    auto *P = Builder.CreateIntToPtr(PtrVal, PtrTy, "sys_ptr");
-    Builder.CreateCall(IA, {P});
-  } else {
-    auto *AsmFnTy = llvm::FunctionType::get(VoidTy, {}, false);
-    auto *IA = llvm::InlineAsm::get(AsmFnTy, Mn, "~{memory}", true);
-    Builder.CreateCall(IA, {});
-  }
+  if (Op.NumInputs <= 1)
+    llvm::report_fatal_error("x86 memory intrinsic has no address operand");
+
+  llvm::Value *Addr =
+      Op.MemoryAddressSpace == NdMemoryAddressSpace::Default
+          ? getVar(Op.Inputs[1], Builder)
+          : getRawSegmentOffset(Op.Inputs[1], Builder);
+  auto *NativeAddrTy = llvm::Type::getIntNTy(
+      *Ctx, TargetArch == Arch::X86 ? 32 : 64);
+  if (Addr->getType()->isPointerTy())
+    Addr = Builder.CreatePtrToInt(Addr, NativeAddrTy, "memory_offset");
+  if (!Addr->getType()->isIntegerTy())
+    llvm::report_fatal_error("x86 memory intrinsic address is not integral");
+  if (Addr->getType() != NativeAddrTy)
+    Addr = Builder.CreateZExtOrTrunc(Addr, NativeAddrTy,
+                                    "native_memory_offset");
+
+  const char *Segment = "";
+  if (Op.MemoryAddressSpace == NdMemoryAddressSpace::X86FS)
+    Segment = "%fs:";
+  else if (Op.MemoryAddressSpace == NdMemoryAddressSpace::X86GS)
+    Segment = "%gs:";
+  else if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+    llvm::report_fatal_error("unknown x86 memory intrinsic address space");
+
+  std::vector<llvm::Type *> ParamTys{Addr->getType()};
+  std::vector<llvm::Value *> ParamVals{Addr};
+  std::string Constraints = "r";
+  Constraints += ",~{memory}";
+  auto *AsmFnTy = llvm::FunctionType::get(VoidTy, ParamTys, false);
+  auto *IA = llvm::InlineAsm::get(
+      AsmFnTy, std::string(Mn) + " " + Segment + "($0)", Constraints,
+      /*hasSideEffects=*/true);
+  Builder.CreateCall(IA, ParamVals);
 }
 
 bool MedLLVMEmitter::emitX86SystemAsm(const MedOp &Op, Intrinsic IC,
@@ -385,6 +451,130 @@ static bool isX86MpxOrTransactional(Intrinsic IC) {
 bool MedLLVMEmitter::emitX86Privileged(const MedOp &Op, Intrinsic IC,
                                        llvm::IRBuilder<> &Builder) {
   using I = Intrinsic;
+  if (IC == I::Insb || IC == I::Insw || IC == I::Insd) {
+    if (Op.NumInputs < 5 || Op.Output.Size != 0 ||
+        Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+      llvm::report_fatal_error(
+          "INS intrinsic has an invalid operand/output shape");
+
+    const unsigned NativeAddressBytes = TargetArch == Arch::X64 ? 8 : 4;
+    const unsigned StringAddressBytes = Op.Inputs[1].Size;
+    std::string Mnemonic = "rep ";
+    Mnemonic += intrinsicAsmMnemonic(IC);
+    if (StringAddressBytes != NativeAddressBytes) {
+      if (StringAddressBytes == 4 && NativeAddressBytes == 8)
+        Mnemonic = "addr32 " + Mnemonic;
+      else if (StringAddressBytes == 2 && NativeAddressBytes == 4)
+        Mnemonic = "addr16 " + Mnemonic;
+      else
+        llvm::report_fatal_error("unsupported INS address size");
+    }
+
+    auto *AddrTy = llvm::Type::getIntNTy(*Ctx, NativeAddressBytes * 8);
+    auto *I16Ty = llvm::Type::getInt16Ty(*Ctx);
+    auto Coerce = [&](llvm::Value *Value, llvm::Type *Ty) {
+      return Value->getType() == Ty ? Value
+                                    : Builder.CreateZExtOrTrunc(Value, Ty);
+    };
+    auto *RDI = Coerce(getVar(Op.Inputs[1], Builder), AddrTy);
+    auto *RCX = Coerce(getVar(Op.Inputs[2], Builder), AddrTy);
+    auto *RDX = Coerce(getVar(Op.Inputs[3], Builder), I16Ty);
+    const MedVar &DfVar = Op.Inputs[4];
+    const bool DynamicDf = !DfVar.isConst();
+    if (DfVar.isConst() && DfVar.ConstVal != 0)
+      Mnemonic = "std\n\t" + Mnemonic + "\n\tcld";
+    else if (DynamicDf)
+      Mnemonic = "test $5,$5\n\tje 1f\n\tstd\n\t1:\n\t" + Mnemonic +
+                 "\n\tcld";
+
+    auto *RetTy = llvm::StructType::get(*Ctx, {AddrTy, AddrTy});
+    llvm::CallInst *Call = nullptr;
+    if (DynamicDf) {
+      auto *DF = Coerce(getVar(DfVar, Builder), AddrTy);
+      auto *FnTy = llvm::FunctionType::get(
+          RetTy, {AddrTy, AddrTy, I16Ty, AddrTy}, false);
+      auto *IA = llvm::InlineAsm::get(
+          FnTy, Mnemonic, "={di},={cx},0,1,{dx},r,~{memory},~{dirflag},~{cc}",
+          true);
+      Call = Builder.CreateCall(IA, {RDI, RCX, RDX, DF}, "rep_ins");
+    } else {
+      auto *FnTy =
+          llvm::FunctionType::get(RetTy, {AddrTy, AddrTy, I16Ty}, false);
+      auto *IA = llvm::InlineAsm::get(
+          FnTy, Mnemonic, "={di},={cx},0,1,{dx},~{memory},~{dirflag},~{cc}",
+          true);
+      Call = Builder.CreateCall(IA, {RDI, RCX, RDX}, "rep_ins");
+    }
+    (void)Call;
+    return true;
+  }
+
+  if (IC == I::Outsb || IC == I::Outsw || IC == I::Outsd) {
+    if (Op.NumInputs < 5 || Op.Output.Size != 0)
+      llvm::report_fatal_error(
+          "OUTS intrinsic has an invalid operand/output shape");
+
+    const unsigned NativeAddressBytes = TargetArch == Arch::X64 ? 8 : 4;
+    const unsigned StringAddressBytes = Op.Inputs[1].Size;
+    std::string Mnemonic = "rep ";
+    Mnemonic += intrinsicAsmMnemonic(IC);
+    switch (Op.MemoryAddressSpace) {
+    case NdMemoryAddressSpace::Default:
+      break;
+    case NdMemoryAddressSpace::X86FS:
+      Mnemonic = "fs " + Mnemonic;
+      break;
+    case NdMemoryAddressSpace::X86GS:
+      Mnemonic = "gs " + Mnemonic;
+      break;
+    }
+    if (StringAddressBytes != NativeAddressBytes) {
+      if (StringAddressBytes == 4 && NativeAddressBytes == 8)
+        Mnemonic = "addr32 " + Mnemonic;
+      else if (StringAddressBytes == 2 && NativeAddressBytes == 4)
+        Mnemonic = "addr16 " + Mnemonic;
+      else
+        llvm::report_fatal_error("unsupported OUTS address size");
+    }
+
+    auto *AddrTy = llvm::Type::getIntNTy(*Ctx, NativeAddressBytes * 8);
+    auto *I16Ty = llvm::Type::getInt16Ty(*Ctx);
+    auto Coerce = [&](llvm::Value *Value, llvm::Type *Ty) {
+      return Value->getType() == Ty ? Value
+                                    : Builder.CreateZExtOrTrunc(Value, Ty);
+    };
+    auto *RSI = Coerce(getVar(Op.Inputs[1], Builder), AddrTy);
+    auto *RCX = Coerce(getVar(Op.Inputs[2], Builder), AddrTy);
+    auto *RDX = Coerce(getVar(Op.Inputs[3], Builder), I16Ty);
+    const MedVar &DfVar = Op.Inputs[4];
+    const bool DynamicDf = !DfVar.isConst();
+    if (DfVar.isConst() && DfVar.ConstVal != 0)
+      Mnemonic = "std\n\t" + Mnemonic + "\n\tcld";
+    else if (DynamicDf)
+      Mnemonic = "test $5,$5\n\tje 1f\n\tstd\n\t1:\n\t" + Mnemonic + "\n\tcld";
+
+    auto *RetTy = llvm::StructType::get(*Ctx, {AddrTy, AddrTy});
+    llvm::CallInst *Call = nullptr;
+    if (DynamicDf) {
+      auto *DF = Coerce(getVar(DfVar, Builder), AddrTy);
+      auto *FnTy = llvm::FunctionType::get(
+          RetTy, {AddrTy, AddrTy, I16Ty, AddrTy}, false);
+      auto *IA = llvm::InlineAsm::get(
+          FnTy, Mnemonic, "={si},={cx},0,1,{dx},r,~{memory},~{dirflag},~{cc}",
+          true);
+      Call = Builder.CreateCall(IA, {RSI, RCX, RDX, DF}, "rep_outs");
+    } else {
+      auto *FnTy =
+          llvm::FunctionType::get(RetTy, {AddrTy, AddrTy, I16Ty}, false);
+      auto *IA = llvm::InlineAsm::get(
+          FnTy, Mnemonic, "={si},={cx},0,1,{dx},~{memory},~{dirflag},~{cc}",
+          true);
+      Call = Builder.CreateCall(IA, {RSI, RCX, RDX}, "rep_outs");
+    }
+    (void)Call;
+    return true;
+  }
+
   switch (IC) {
   case I::Cli:
   case I::Sti:
@@ -392,11 +582,6 @@ bool MedLLVMEmitter::emitX86Privileged(const MedOp &Op, Intrinsic IC,
   case I::Wrpkru:
   case I::Swapgs:
   case I::Wbinvd:
-  case I::Fxsave:
-  case I::Fxrstor:
-  case I::Outsb:
-  case I::Outsw:
-  case I::Outsd:
   case I::Vmcall:
   case I::Vmmcall:
   case I::X87Fninit:

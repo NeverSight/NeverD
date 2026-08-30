@@ -390,8 +390,10 @@ bool liftSIMDShuffle(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       NdVar DataVn = L.operandRead(S, X86.operands[2]);
       Intrinsic IId =
           IsQword ? Intrinsic::MaskedStoreQ : Intrinsic::MaskedStoreD;
-      S.emitIntrinsic(IId, NdVar::reg(x86reg::RAX, 0),
-                      {AddrVn, MaskVn, DataVn});
+      S.emitIntrinsic(
+          IId, NdVar::reg(x86reg::RAX, 0), {AddrVn, MaskVn, DataVn},
+          NdMemoryOrdering::None,
+          X86Lifter::LiftState::memoryAddressSpace(X86.operands[0]));
     } else {
       NdVar Dst = L.operandWrite(X86.operands[0]);
       NdVar MaskVn = L.operandRead(S, X86.operands[1]);
@@ -399,7 +401,9 @@ bool liftSIMDShuffle(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       // L.operandRead() (the loaded value) caused a double dereference.
       NdVar AddrVn = S.computeEA(X86.operands[2]);
       Intrinsic IId = IsQword ? Intrinsic::MaskedLoadQ : Intrinsic::MaskedLoadD;
-      S.emitIntrinsic(IId, Dst, {AddrVn, MaskVn});
+      S.emitIntrinsic(
+          IId, Dst, {AddrVn, MaskVn}, NdMemoryOrdering::None,
+          X86Lifter::LiftState::memoryAddressSpace(X86.operands[2]));
     }
     break;
   }

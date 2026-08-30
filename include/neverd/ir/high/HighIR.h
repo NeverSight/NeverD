@@ -77,6 +77,7 @@ struct HighExpr {
   ExprKind Kind = ExprKind::Const;
   NdOp Op = NdOp::NOP;
   NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None;
+  NdMemoryAddressSpace MemoryAddressSpace = NdMemoryAddressSpace::Default;
   TypeRef Type;
 
   /// For Var
@@ -110,9 +111,10 @@ struct HighExpr {
   makeBinop(NdOp Op, std::shared_ptr<HighExpr> L, std::shared_ptr<HighExpr> R);
   static std::shared_ptr<HighExpr> makeUnary(NdOp Op,
                                              std::shared_ptr<HighExpr> Operand);
-  static std::shared_ptr<HighExpr>
-  makeLoad(std::shared_ptr<HighExpr> Addr, TypeRef Ty,
-           NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None);
+  static std::shared_ptr<HighExpr> makeLoad(
+      std::shared_ptr<HighExpr> Addr, TypeRef Ty,
+      NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None,
+      NdMemoryAddressSpace MemoryAddressSpace = NdMemoryAddressSpace::Default);
   static std::shared_ptr<HighExpr>
   makeCall(const std::string &Target, va_t Addr,
            std::vector<std::shared_ptr<HighExpr>> Args);
@@ -219,6 +221,7 @@ struct HighStmt {
   StmtKind Kind = StmtKind::Nop;
   va_t Addr = 0;
   NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None;
+  NdMemoryAddressSpace MemoryAddressSpace = NdMemoryAddressSpace::Default;
 
   /// For Assign
   ExprPtr Dst;

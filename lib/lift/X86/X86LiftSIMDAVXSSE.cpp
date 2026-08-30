@@ -416,8 +416,18 @@ bool liftSIMDAVXSSE(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     if (X86.op_count < 2)
       break;
     NdVar Src = L.operandRead(S, X86.operands[0]);
-    NdVar Rdi = NdVar::reg(x86reg::RDI, 8);
-    S.emit(NdOp::STORE, {}, {Rdi, Src});
+    NdVar Mask = L.operandRead(S, X86.operands[1]);
+    if ((Src.Size != 8 && Src.Size != 16) || Mask.Size != Src.Size)
+      break;
+    NdVar Offset = NdVar::reg(x86reg::RDI, S.AddressSize);
+    NdVar Address = Offset;
+    if (S.AddressSize < 8) {
+      Address = S.makeTemp(8);
+      S.emit(NdOp::INT_ZEXT, Address, {Offset});
+    }
+    S.emitIntrinsic(Intrinsic::MaskedStoreB, {}, {Address, Mask, Src},
+                    NdMemoryOrdering::None,
+                    stringSourceAddressSpace(X86));
     break;
   }
 
@@ -454,16 +464,26 @@ bool liftSIMDAVXSSE(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
 
   // CLFLUSHOPT / CLWB — cache-line flush/write-back extensions.
   case X86_INS_CLFLUSHOPT:
-    S.emitIntrinsic(Intrinsic::Clflushopt);
+    if (X86.op_count < 1 ||
+        !S.emitMemoryIntrinsic(Intrinsic::Clflushopt, X86.operands[0]))
+      return false;
     break;
   case X86_INS_CLWB:
-    S.emitIntrinsic(Intrinsic::Clwb);
+    if (X86.op_count < 1 ||
+        !S.emitMemoryIntrinsic(Intrinsic::Clwb, X86.operands[0]))
+      return false;
     break;
 
   // PREFETCHW / PREFETCHWT1 — prefetch with write intent.
   case X86_INS_PREFETCHW:
+    if (X86.op_count < 1 ||
+        !S.emitMemoryIntrinsic(Intrinsic::PrefetchW, X86.operands[0]))
+      return false;
+    break;
   case X86_INS_PREFETCHWT1:
-    S.emitIntrinsic(Intrinsic::Prefetch);
+    if (X86.op_count < 1 ||
+        !S.emitMemoryIntrinsic(Intrinsic::PrefetchWT1, X86.operands[0]))
+      return false;
     break;
 
   default:

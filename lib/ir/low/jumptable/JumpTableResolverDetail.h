@@ -50,6 +50,14 @@ struct BinaryImage;
 struct RelocatedAddressField;
 struct TargetRegInfo;
 
+/// True only when one exact LOAD occurrence eligible to provide a jump-table
+/// target belongs to the ordinary process-image address space.  Segment
+/// offsets may numerically collide with image VAs but can never authenticate
+/// image jump-table storage.
+bool jumpTableTargetLoadUsesDefaultAddressSpace(
+    llvm::ArrayRef<LowOp> Ops, va_t Address, int Sequence,
+    const NdVar &Output);
+
 /// Checked signed frame-offset arithmetic used by stack-table proofs.  A
 /// failure is evidence incompleteness, never a wrapping offset.
 std::optional<int64_t> stackCheckedOffset(int64_t Base, int64_t Delta,

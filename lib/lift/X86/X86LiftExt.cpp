@@ -25,6 +25,57 @@ namespace neverd {
 
 bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
   unsigned InsnId = Insn->id;
+  auto LiftOuts = [&](Intrinsic Id, unsigned ElemSz) {
+    const uint16_t AddrSz = S.AddressSize;
+    bool Repeat = false;
+    for (uint8_t Prefix : X86.prefix)
+      Repeat |= Prefix == X86_PREFIX_REP || Prefix == X86_PREFIX_REPNE;
+    NdVar Count =
+        Repeat ? NdVar::reg(x86reg::RCX, AddrSz) : NdVar::scalar(1, AddrSz);
+    NdVar Df = NdVar::reg(x86reg::DF, 1);
+    S.emitIntrinsic(Id, NdVar(),
+                    {NdVar::reg(x86reg::RSI, AddrSz), Count,
+                     NdVar::reg(x86reg::RDX, 2), Df},
+                    NdMemoryOrdering::None, stringSourceAddressSpace(X86));
+
+    NdVar Bytes = S.makeTemp(AddrSz);
+    S.emit(NdOp::INT_MULT, Bytes, {Count, NdVar::scalar(ElemSz, AddrSz)});
+    NdVar NegBytes = S.makeTemp(AddrSz);
+    S.emit(NdOp::INT_SUB, NegBytes, {NdVar::scalar(0, AddrSz), Bytes});
+    NdVar Delta = S.makeTemp(AddrSz);
+    S.emit(NdOp::SELECT, Delta, {Df, NegBytes, Bytes});
+    NdVar NewSi = S.makeTemp(AddrSz);
+    S.emit(NdOp::INT_ADD, NewSi, {NdVar::reg(x86reg::RSI, AddrSz), Delta});
+    S.emit(NdOp::COPY, NdVar::reg(x86reg::RSI, AddrSz), {NewSi});
+    if (Repeat)
+      S.emit(NdOp::COPY, NdVar::reg(x86reg::RCX, AddrSz),
+             {NdVar::scalar(0, AddrSz)});
+  };
+  auto LiftIns = [&](Intrinsic Id, unsigned ElemSz) {
+    const uint16_t AddrSz = S.AddressSize;
+    bool Repeat = false;
+    for (uint8_t Prefix : X86.prefix)
+      Repeat |= Prefix == X86_PREFIX_REP || Prefix == X86_PREFIX_REPNE;
+    NdVar Count =
+        Repeat ? NdVar::reg(x86reg::RCX, AddrSz) : NdVar::scalar(1, AddrSz);
+    NdVar Df = NdVar::reg(x86reg::DF, 1);
+    S.emitIntrinsic(Id, NdVar(),
+                    {NdVar::reg(x86reg::RDI, AddrSz), Count,
+                     NdVar::reg(x86reg::RDX, 2), Df});
+
+    NdVar Bytes = S.makeTemp(AddrSz);
+    S.emit(NdOp::INT_MULT, Bytes, {Count, NdVar::scalar(ElemSz, AddrSz)});
+    NdVar NegBytes = S.makeTemp(AddrSz);
+    S.emit(NdOp::INT_SUB, NegBytes, {NdVar::scalar(0, AddrSz), Bytes});
+    NdVar Delta = S.makeTemp(AddrSz);
+    S.emit(NdOp::SELECT, Delta, {Df, NegBytes, Bytes});
+    NdVar NewDi = S.makeTemp(AddrSz);
+    S.emit(NdOp::INT_ADD, NewDi, {NdVar::reg(x86reg::RDI, AddrSz), Delta});
+    S.emit(NdOp::COPY, NdVar::reg(x86reg::RDI, AddrSz), {NewDi});
+    if (Repeat)
+      S.emit(NdOp::COPY, NdVar::reg(x86reg::RCX, AddrSz),
+             {NdVar::scalar(0, AddrSz)});
+  };
   switch (InsnId) {
 
   // --- SYSENTER / SYSEXIT / SYSRET ---
@@ -60,9 +111,10 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
 
   // --- INSD / OUTSD ---
   case X86_INS_INSD:
+    LiftIns(Intrinsic::Insd, 4);
+    break;
   case X86_INS_OUTSD:
-    S.emitIntrinsic(InsnId == X86_INS_INSD ? Intrinsic::Insd
-                                           : Intrinsic::Outsd);
+    LiftOuts(Intrinsic::Outsd, 4);
     break;
 
   // ========================================================================
@@ -95,7 +147,7 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
         (X86.op_count >= 1 && X86.operands[0].type == X86_OP_IMM)
             ? NdVar::cst(static_cast<uint64_t>(X86.operands[0].imm) & 0xFF, 1)
             : NdVar::reg(x86reg::RDX, 2);
-    S.emitIntrinsic(Intrinsic::Out, NdVar::reg(x86reg::RAX, 8),
+    S.emitIntrinsic(Intrinsic::Out, NdVar(),
                     {Port, NdVar::reg(x86reg::RAX, Sz)});
     break;
   }
@@ -129,14 +181,9 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
       Id = Intrinsic::Invlpg;
       break;
     }
-    if (X86.op_count >= 1 && X86.operands[0].type == X86_OP_MEM &&
-        X86.operands[0].mem.base != X86_REG_INVALID) {
-      auto RI = mapCapstoneReg(static_cast<x86_reg>(X86.operands[0].mem.base));
-      S.emitIntrinsic(Id, NdVar::reg(x86reg::RAX, 8),
-                      {NdVar::reg(RI.Offset, 8)});
-    } else {
-      S.emitIntrinsic(Id);
-    }
+    if (X86.op_count < 1 ||
+        !S.emitMemoryIntrinsic(Id, X86.operands[0]))
+      return false;
     break;
   }
 
@@ -177,20 +224,17 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     }
     bool IsStore = (InsnId == X86_INS_SLDT || InsnId == X86_INS_STR ||
                     InsnId == X86_INS_SMSW);
-    if (X86.op_count >= 1 && X86.operands[0].type == X86_OP_MEM &&
-        X86.operands[0].mem.base != X86_REG_INVALID) {
-      auto RI = mapCapstoneReg(static_cast<x86_reg>(X86.operands[0].mem.base));
-      S.emitIntrinsic(Id, NdVar::reg(x86reg::RAX, 8),
-                      {NdVar::reg(RI.Offset, 8)});
+    if (X86.op_count >= 1 && X86.operands[0].type == X86_OP_MEM) {
+      if (!S.emitMemoryIntrinsic(Id, X86.operands[0]))
+        return false;
     } else if (X86.op_count >= 1 && X86.operands[0].type == X86_OP_REG) {
       auto RI = mapCapstoneReg(static_cast<x86_reg>(X86.operands[0].reg));
       if (IsStore)
         S.emitIntrinsic(Id, NdVar::reg(RI.Offset, RI.Size), {});
       else
-        S.emitIntrinsic(Id, NdVar::reg(x86reg::RAX, 8),
-                        {NdVar::reg(RI.Offset, 2)});
+        S.emitIntrinsic(Id, NdVar(), {NdVar::reg(RI.Offset, 2)});
     } else {
-      S.emitIntrinsic(Id);
+      return false;
     }
     break;
   }
@@ -198,10 +242,18 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
   // ========================================================================
   // Privileged / system instructions — I/O, MSRs, virtualization, etc.
   // ========================================================================
-  case X86_INS_INSB:
-  case X86_INS_INSW:
   case X86_INS_OUTSB:
+    LiftOuts(Intrinsic::Outsb, 1);
+    break;
   case X86_INS_OUTSW:
+    LiftOuts(Intrinsic::Outsw, 2);
+    break;
+  case X86_INS_INSB:
+    LiftIns(Intrinsic::Insb, 1);
+    break;
+  case X86_INS_INSW:
+    LiftIns(Intrinsic::Insw, 2);
+    break;
   case X86_INS_RDMSR:
   case X86_INS_WRMSR:
   case X86_INS_RDPMC:
@@ -244,12 +296,6 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
   case X86_INS_ARPL:
   case X86_INS_CLTS:
   case X86_INS_XSETBV:
-  case X86_INS_XSAVE:
-  case X86_INS_XSAVEC:
-  case X86_INS_XSAVES:
-  case X86_INS_XSAVEOPT:
-  case X86_INS_XRSTOR:
-  case X86_INS_XRSTORS:
   case X86_INS_MONITOR:
   case X86_INS_MWAIT:
   case X86_INS_MONITORX:
@@ -263,18 +309,6 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
   case X86_INS_UMWAIT: {
     Intrinsic Id;
     switch (InsnId) {
-    case X86_INS_INSB:
-      Id = Intrinsic::Insb;
-      break;
-    case X86_INS_INSW:
-      Id = Intrinsic::Insw;
-      break;
-    case X86_INS_OUTSB:
-      Id = Intrinsic::Outsb;
-      break;
-    case X86_INS_OUTSW:
-      Id = Intrinsic::Outsw;
-      break;
     case X86_INS_RDMSR:
       Id = Intrinsic::Rdmsr;
       break;
@@ -307,6 +341,40 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
       break;
     }
     S.emitIntrinsic(Id);
+    break;
+  }
+
+  case X86_INS_XSAVE:
+  case X86_INS_XSAVEC:
+  case X86_INS_XSAVES:
+  case X86_INS_XSAVEOPT:
+  case X86_INS_XRSTOR:
+  case X86_INS_XRSTORS: {
+    Intrinsic Id = Intrinsic::Xsave;
+    switch (InsnId) {
+    case X86_INS_XSAVEC:
+      Id = Intrinsic::Xsavec;
+      break;
+    case X86_INS_XSAVES:
+      Id = Intrinsic::Xsaves;
+      break;
+    case X86_INS_XSAVEOPT:
+      Id = Intrinsic::Xsaveopt;
+      break;
+    case X86_INS_XRSTOR:
+      Id = Intrinsic::Xrstor;
+      break;
+    case X86_INS_XRSTORS:
+      Id = Intrinsic::Xrstors;
+      break;
+    default:
+      break;
+    }
+    if (X86.op_count < 1 ||
+        !S.emitMemoryIntrinsic(
+            Id, X86.operands[0],
+            {NdVar::reg(x86reg::RAX, 4), NdVar::reg(x86reg::RDX, 4)}))
+      return false;
     break;
   }
 

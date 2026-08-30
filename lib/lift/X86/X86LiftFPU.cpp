@@ -688,7 +688,37 @@ bool X86Lifter::liftFPU(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
   case X86_INS_FXSAVE:
   case X86_INS_FXRSTOR:
   case X86_INS_FXSAVE64:
-  case X86_INS_FXRSTOR64:
+  case X86_INS_FXRSTOR64: {
+    Intrinsic Id = Intrinsic::X87Fnstenv;
+    switch (InsnId) {
+    case X86_INS_FLDENV:
+      Id = Intrinsic::X87Fldenv;
+      break;
+    case X86_INS_FNSAVE:
+      Id = Intrinsic::X87Fnsave;
+      break;
+    case X86_INS_FRSTOR:
+      Id = Intrinsic::X87Frstor;
+      break;
+    case X86_INS_FXSAVE:
+      Id = Intrinsic::Fxsave;
+      break;
+    case X86_INS_FXRSTOR:
+      Id = Intrinsic::Fxrstor;
+      break;
+    case X86_INS_FXSAVE64:
+      Id = Intrinsic::Fxsave64Mem;
+      break;
+    case X86_INS_FXRSTOR64:
+      Id = Intrinsic::Fxrstor64Mem;
+      break;
+    default:
+      break;
+    }
+    if (X86.op_count < 1 || !S.emitMemoryIntrinsic(Id, X86.operands[0]))
+      return false;
+    break;
+  }
   case X86_INS_WAIT:
   case X86_INS_FFREE:
   case X86_INS_FFREEP:

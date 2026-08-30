@@ -65,18 +65,20 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
            " : " + exprStr(*E.Operands[2]) + ")";
   }
   if (E.Op == NdOp::ATOMIC_CMPXCHG && E.Operands.size() == 3)
-    return atomicCompareExchangeExpr(E.Type, exprStr(*E.Operands[0]),
-                                     exprStr(*E.Operands[1]),
-                                     exprStr(*E.Operands[2]), E.MemoryOrdering);
+    return atomicCompareExchangeExpr(
+        E.Type, exprStr(*E.Operands[0]), exprStr(*E.Operands[1]),
+        exprStr(*E.Operands[2]), E.MemoryOrdering, E.MemoryAddressSpace);
   if (E.Operands.size() != 2)
     return "/* bad binop */";
 
   if (E.Op == NdOp::ATOMIC_XCHG)
     return atomicExchangeExpr(E.Type, exprStr(*E.Operands[0]),
-                              exprStr(*E.Operands[1]), E.MemoryOrdering);
+                              exprStr(*E.Operands[1]), E.MemoryOrdering,
+                              E.MemoryAddressSpace);
   if (E.Op == NdOp::ATOMIC_ADD)
     return atomicFetchAddExpr(E.Type, exprStr(*E.Operands[0]),
-                              exprStr(*E.Operands[1]), E.MemoryOrdering);
+                              exprStr(*E.Operands[1]), E.MemoryOrdering,
+                              E.MemoryAddressSpace);
 
   // FJCVTZS exactness compares the original double bit pattern with the
   // signed i32 result converted back to double.  High-C otherwise represents

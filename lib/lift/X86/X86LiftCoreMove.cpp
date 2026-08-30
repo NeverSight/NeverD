@@ -284,7 +284,9 @@ bool liftCoreMove(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     if (X86.op_count < 2)
       break;
     NdVar DstV = L.operandWrite(X86.operands[0]);
-    NdVar EA = S.computeEA(X86.operands[1]);
+    // LEA computes only the offset expression; segment overrides never add a
+    // segment base and therefore do not select a segmented memory space.
+    NdVar EA = S.computeEA(X86.operands[1], /*ForMemoryAccess=*/false);
     if (EA.Size > DstV.Size) {
       NdVar Trunc = S.makeTemp(DstV.Size);
       S.emit(NdOp::SUBBYTES, Trunc, {EA, NdVar::cst(0, 4)});

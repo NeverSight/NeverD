@@ -109,7 +109,8 @@ void LowToMedConverter::analyzeStack(const LowFunc &Low) {
       // function, so a post-pass lookup in the final AddrMap state loses the
       // data width (or, worse, attributes it to the wrong displacement).
       if ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) &&
-          Op.NumInputs >= 1) {
+          Op.NumInputs >= 1 &&
+          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
         int64_t Offset = 0;
         if (FrameOffset(Op.Inputs[0], Offset)) {
           uint16_t DataSz = 0;

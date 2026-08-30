@@ -219,3 +219,16 @@ X87ReadStatus,
 Gf2p8MulB,                  // (V)GF2P8MULB
 Gf2p8AffineQb,              // (V)GF2P8AFFINEQB
 Gf2p8AffineInvQb,           // (V)GF2P8AFFINEINVQB
+
+// Append-only: implicit byte-masked store used by MASKMOVDQU/MASKMOVQ.
+MaskedStoreB,
+
+// Append-only: operand-carrying cache/state memory instructions.  Distinct
+// prefetch IDs preserve the architectural hint instead of collapsing every
+// encoding to PREFETCHT0.  State save/restore variants remain separate because
+// their assembler mnemonic (including the 64-bit form) is semantically owned
+// by the decoded instruction.
+PrefetchT0, PrefetchT1, PrefetchT2, PrefetchNta, PrefetchW, PrefetchWT1,
+Xsave, Xsavec, Xsaves, Xsaveopt, Xrstor, Xrstors,
+Fxsave64Mem, Fxrstor64Mem,
+X87Fldenv, X87Fnstenv, X87Frstor, X87Fnsave,

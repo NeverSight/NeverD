@@ -159,16 +159,17 @@ bool liftLegacyBCD(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   // `bound idx, (base)`.
   case X86_INS_BOUND:
     if (X86.op_count >= 2 && X86.operands[0].type == X86_OP_REG &&
-        X86.operands[1].type == X86_OP_MEM &&
-        X86.operands[1].mem.base != X86_REG_INVALID) {
+        X86.operands[1].type == X86_OP_MEM) {
+      if (S.memoryAddressSpace(X86.operands[1]) !=
+          NdMemoryAddressSpace::Default)
+        return false;
       auto Idx = mapCapstoneReg(static_cast<x86_reg>(X86.operands[0].reg));
-      auto Base =
-          mapCapstoneReg(static_cast<x86_reg>(X86.operands[1].mem.base));
       uint16_t Sz = static_cast<uint16_t>(X86.operands[0].size);
       if (Sz != 2 && Sz != 4)
         Sz = 4;
-      S.emitIntrinsic(Intrinsic::Bound, NdVar::reg(x86reg::RAX, 8),
-                      {NdVar::reg(Idx.Offset, Sz), NdVar::reg(Base.Offset, 4)});
+      S.emitIntrinsic(Intrinsic::Bound, NdVar(),
+                      {NdVar::reg(Idx.Offset, Sz),
+                       S.computeEA(X86.operands[1])});
     } else {
       S.emitIntrinsic(Intrinsic::Bound);
     }

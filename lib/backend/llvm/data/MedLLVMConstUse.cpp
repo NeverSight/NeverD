@@ -128,6 +128,7 @@ bool MedLLVMEmitter::constUsedAsPointerImpl(uint64_t Val) const {
     for (const auto &Blk : CurMedFunc->Blocks)
       for (const auto &Op : Blk.Ops) {
         if ((Op.Opcode != NdOp::LOAD && Op.Opcode != NdOp::STORE) ||
+            Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
             Op.NumInputs < 1)
           continue;
         std::vector<MedVar> Work{Op.Inputs[0]};
@@ -271,6 +272,7 @@ bool MedLLVMEmitter::constValueUsedAsIntegerImpl(uint64_t Val) const {
     for (const auto &Blk : CurMedFunc->Blocks)
       for (const auto &Op : Blk.Ops) {
         if ((Op.Opcode != NdOp::LOAD && Op.Opcode != NdOp::STORE) ||
+            Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
             Op.NumInputs < 1)
           continue;
         std::vector<MedVar> Work{Op.Inputs[0]};

@@ -3,21 +3,40 @@
 #include "../../../lib/ir/low/jumptable/JumpTableResolverDetail.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MedTypePass.h"
 #include "neverd/lift/ARMRegs.h"
 #include "neverd/lift/LiftCommon.h"
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 
+#include "llvm/IR/InlineAsm.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/FileUtilities.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Path.h"
+#include "llvm/Support/Program.h"
+#include "llvm/ADT/SmallString.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstring>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <set>
@@ -30,6 +49,93 @@ using namespace neverd;
 namespace {
 
 constexpr va_t kEntry = 0x1000;
+
+testing::AssertionResult validLLVMModule(llvm::Module &Module) {
+  std::string Error;
+  llvm::raw_string_ostream OS(Error);
+  if (llvm::verifyModule(Module, &OS)) {
+    OS.flush();
+    return testing::AssertionFailure() << Error;
+  }
+  return testing::AssertionSuccess();
+}
+
+testing::AssertionResult validHighC(llvm::StringRef Source) {
+#ifdef NEVERD_TEST_CLANG
+  std::string CompilerPath = NEVERD_TEST_CLANG;
+#else
+  std::string CompilerPath;
+#endif
+  if (CompilerPath.empty()) {
+    auto Compiler = llvm::sys::findProgramByName("clang");
+    if (!Compiler)
+      return testing::AssertionFailure() << Compiler.getError().message();
+    CompilerPath = *Compiler;
+  }
+  llvm::SmallString<128> IncludeDir;
+  std::error_code EC =
+      llvm::sys::fs::createUniqueDirectory("neverd-segment-include", IncludeDir);
+  if (EC)
+    return testing::AssertionFailure() << EC.message();
+  llvm::FileRemover RemoveIncludeDir(IncludeDir);
+  llvm::SmallString<128> StringHeader = IncludeDir;
+  llvm::sys::path::append(StringHeader, "string.h");
+  {
+    llvm::raw_fd_ostream Header(StringHeader, EC);
+    if (EC)
+      return testing::AssertionFailure() << EC.message();
+    Header << "void *memcpy(void *, const void *, __SIZE_TYPE__);\n"
+              "void *memset(void *, int, __SIZE_TYPE__);\n"
+              "int memcmp(const void *, const void *, __SIZE_TYPE__);\n";
+  }
+  llvm::FileRemover RemoveStringHeader(StringHeader);
+  llvm::SmallString<128> SourcePath;
+  llvm::SmallString<128> StdoutPath;
+  llvm::SmallString<128> StderrPath;
+  llvm::SmallString<128> ObjectPath;
+  EC = llvm::sys::fs::createTemporaryFile("neverd-segment-memory", "c",
+                                          SourcePath);
+  if (EC)
+    return testing::AssertionFailure() << EC.message();
+  llvm::FileRemover RemoveSource(SourcePath);
+  EC = llvm::sys::fs::createTemporaryFile("neverd-segment-memory", "out",
+                                          StdoutPath);
+  if (EC)
+    return testing::AssertionFailure() << EC.message();
+  llvm::FileRemover RemoveStdout(StdoutPath);
+  EC = llvm::sys::fs::createTemporaryFile("neverd-segment-memory", "err",
+                                          StderrPath);
+  if (EC)
+    return testing::AssertionFailure() << EC.message();
+  llvm::FileRemover RemoveStderr(StderrPath);
+  EC = llvm::sys::fs::createTemporaryFile("neverd-segment-memory", "o",
+                                          ObjectPath);
+  if (EC)
+    return testing::AssertionFailure() << EC.message();
+  llvm::FileRemover RemoveObject(ObjectPath);
+  {
+    llvm::raw_fd_ostream Out(SourcePath, EC);
+    if (EC)
+      return testing::AssertionFailure() << EC.message();
+    Out << Source;
+  }
+  llvm::SmallVector<llvm::StringRef, 14> Args{
+      CompilerPath, "-target", "x86_64-none-elf", "-ffreestanding",
+      "-std=gnu11", "-mavx2",  "-I",              IncludeDir,
+      "-c",         SourcePath, "-o",              ObjectPath};
+  std::optional<llvm::StringRef> Redirects[] = {std::nullopt, StdoutPath.str(),
+                                                StderrPath.str()};
+  std::string ExecuteError;
+  const int RC = llvm::sys::ExecuteAndWait(
+      CompilerPath, Args, std::nullopt, Redirects,
+      /*SecondsToWait=*/30, /*MemoryLimit=*/0, &ExecuteError);
+  if (RC == 0)
+    return testing::AssertionSuccess();
+  auto ErrorBuffer = llvm::MemoryBuffer::getFile(StderrPath);
+  return testing::AssertionFailure()
+         << ExecuteError
+         << (ErrorBuffer ? (*ErrorBuffer)->getBuffer().str() : std::string{});
+}
 
 TEST(LowInstructionBoundary, JumpTableCaseLabelsUseModularArithmetic) {
   EXPECT_EQ(recoverCaseLabelBitPattern(/*EntryIndex=*/0,
@@ -550,6 +656,2361 @@ const LowBlock *findBlock(const LowFunc &Function, va_t Address) {
   return nullptr;
 }
 
+TEST(LowInstructionBoundary,
+     X86FSGSOverridesSurviveLiftingAsTargetMemoryAddressSpaces) {
+  // mov rax, qword ptr fs:[0x28]
+  // mov qword ptr gs:[0x30], rdx
+  // mov r8, qword ptr gs:[0x30]
+  // lea rcx, qword ptr fs:[rbx + 0x20]  (the segment prefix is ignored)
+  // xor rax, r8
+  // ret
+  const std::vector<uint8_t> Bytes = {
+      0x64, 0x48, 0x8b, 0x04, 0x25, 0x28, 0x00, 0x00, 0x00, 0x65, 0x48, 0x89,
+      0x14, 0x25, 0x30, 0x00, 0x00, 0x00, 0x65, 0x4c, 0x8b, 0x04, 0x25, 0x30,
+      0x00, 0x00, 0x00, 0x64, 0x48, 0x8d, 0x4b, 0x20, 0x4c, 0x31, 0xc0, 0xc3,
+  };
+  LowFunc Low = buildFunction(Arch::X64, InstructionMode::Default, Bytes);
+  ASSERT_EQ(Low.Blocks.size(), 1u);
+
+  const LowOp *FSLoad = nullptr;
+  const LowOp *GSStore = nullptr;
+  bool FSOffsetIsScalar = false;
+  bool GSOffsetIsScalar = false;
+  for (const LowOp &Op : Low.Blocks.front().Ops) {
+    if (Op.Addr == kEntry && Op.Opcode == NdOp::LOAD)
+      FSLoad = &Op;
+    if (Op.Addr == kEntry + 9 && Op.Opcode == NdOp::STORE)
+      GSStore = &Op;
+    if (Op.Addr == kEntry && Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+        Op.Inputs[0].isConst() && Op.Inputs[0].Offset == 0x28)
+      FSOffsetIsScalar =
+          Op.Inputs[0].Provenance == ConstantAddressProvenance::Scalar;
+    if (Op.Addr == kEntry + 9 && Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+        Op.Inputs[0].isConst() && Op.Inputs[0].Offset == 0x30)
+      GSOffsetIsScalar =
+          Op.Inputs[0].Provenance == ConstantAddressProvenance::Scalar;
+    if (Op.Addr == kEntry + 27)
+      EXPECT_EQ(Op.MemoryAddressSpace, NdMemoryAddressSpace::Default)
+          << "LEA must ignore FS/GS segment bases";
+  }
+  ASSERT_NE(FSLoad, nullptr);
+  ASSERT_NE(GSStore, nullptr);
+  EXPECT_EQ(FSLoad->MemoryAddressSpace, NdMemoryAddressSpace::X86FS);
+  EXPECT_EQ(GSStore->MemoryAddressSpace, NdMemoryAddressSpace::X86GS);
+  EXPECT_TRUE(FSOffsetIsScalar);
+  EXPECT_TRUE(GSOffsetIsScalar);
+
+  constexpr uint64_t FSBase = 0x2000;
+  constexpr uint64_t GSBase = 0x3000;
+  constexpr uint64_t FSValue = UINT64_C(0x1122334455667788);
+  constexpr uint64_t StoredValue = UINT64_C(0x8877665544332211);
+  BinaryImage SemanticImage;
+  SemanticImage.Arch = Arch::X64;
+  SemanticImage.Bits = Bitness::Bits64;
+  SemanticImage.Format = BinaryFormat::ELF;
+  Segment FSData;
+  FSData.VA = FSBase;
+  FSData.Size = 0x100;
+  FSData.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  FSData.Data.resize(FSData.Size);
+  for (unsigned I = 0; I != sizeof(FSValue); ++I)
+    FSData.Data[0x28 + I] = static_cast<uint8_t>(FSValue >> (I * 8));
+  SemanticImage.Segments.push_back(std::move(FSData));
+  Segment GSData;
+  GSData.VA = GSBase;
+  GSData.Size = 0x100;
+  GSData.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  GSData.Data.resize(GSData.Size);
+  SemanticImage.Segments.push_back(std::move(GSData));
+
+  NdOpEmulator MissingBases(SemanticImage);
+  EXPECT_LT(MissingBases.run(Low.Blocks.front()),
+            Low.Blocks.front().Ops.size());
+  EXPECT_FALSE(MissingBases.getRegister(x86reg::RAX));
+
+  NdOpEmulator Emulator(SemanticImage);
+  ASSERT_TRUE(
+      Emulator.setMemoryAddressSpaceBase(NdMemoryAddressSpace::X86FS, FSBase));
+  ASSERT_TRUE(
+      Emulator.setMemoryAddressSpaceBase(NdMemoryAddressSpace::X86GS, GSBase));
+  Emulator.setRegister(x86reg::RDX, StoredValue);
+  Emulator.setRegister(x86reg::RBX, 0);
+  Emulator.run(Low.Blocks.front());
+  ASSERT_TRUE(Emulator.getRegister(x86reg::RAX));
+  ASSERT_TRUE(Emulator.getRegister(x86reg::R8));
+  ASSERT_TRUE(Emulator.getRegister(x86reg::RCX));
+  EXPECT_EQ(*Emulator.getRegister(x86reg::RAX), FSValue ^ StoredValue);
+  EXPECT_EQ(*Emulator.getRegister(x86reg::R8), StoredValue);
+  EXPECT_EQ(*Emulator.getRegister(x86reg::RCX), 0x20u);
+
+  MedFunc Med = LowToMedConverter().convert(Low, Arch::X64, BinaryFormat::ELF);
+  const MedOp *MedFSLoad = nullptr;
+  const MedOp *MedGSStore = nullptr;
+  const MedOp *MedGSLoad = nullptr;
+  for (const MedBlock &Block : Med.Blocks)
+    for (const MedOp &Op : Block.Ops) {
+      if (Op.Addr == kEntry && Op.Opcode == NdOp::LOAD)
+        MedFSLoad = &Op;
+      if (Op.Addr == kEntry + 9 && Op.Opcode == NdOp::STORE)
+        MedGSStore = &Op;
+      if (Op.Addr == kEntry + 18 && Op.Opcode == NdOp::LOAD)
+        MedGSLoad = &Op;
+    }
+  ASSERT_NE(MedFSLoad, nullptr);
+  ASSERT_NE(MedGSStore, nullptr);
+  ASSERT_NE(MedGSLoad, nullptr);
+  EXPECT_EQ(MedFSLoad->MemoryAddressSpace, NdMemoryAddressSpace::X86FS);
+  EXPECT_EQ(MedGSStore->MemoryAddressSpace, NdMemoryAddressSpace::X86GS);
+  EXPECT_EQ(MedGSLoad->MemoryAddressSpace, NdMemoryAddressSpace::X86GS);
+
+  // OUT consumes AL/AX/EAX but never defines the accumulator.  Treating RAX
+  // as an intrinsic result creates a false architectural register version
+  // that can hide its real value from subsequent instructions.
+  LowFunc OutLow = buildFunction(Arch::X64, InstructionMode::Default,
+                                 {0xee, 0x48, 0x89, 0xc3, 0xc3});
+  const LowOp *Out = nullptr;
+  for (const LowOp &Op : OutLow.Blocks.front().Ops)
+    if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs != 0 &&
+        Op.Inputs[0].isConst() &&
+        static_cast<Intrinsic>(Op.Inputs[0].Offset) == Intrinsic::Out)
+      Out = &Op;
+  ASSERT_NE(Out, nullptr);
+  EXPECT_EQ(Out->Output.Size, 0u);
+  ASSERT_GE(Out->NumInputs, 3u);
+  EXPECT_EQ(Out->Inputs[2], NdVar::reg(x86reg::RAX, 1));
+
+  LowFunc CrossDomainFrameLow = buildFunction(
+      Arch::X64, InstructionMode::Default,
+      {0x64, 0x48, 0x89, 0x44, 0x24, 0x08, // mov fs:[rsp+8], rax
+       0x48, 0x8b, 0x44, 0x24, 0x08,       // mov rax, [rsp+8]
+       0x48, 0x89, 0x03,                   // mov [rbx], rax
+       0xc3});
+  MedFunc CrossDomainFrameMed = LowToMedConverter().convert(
+      CrossDomainFrameLow, Arch::X64, BinaryFormat::ELF);
+  unsigned CrossDomainFSStores = 0;
+  const MedOp *CrossDomainFSStore = nullptr;
+  const MedOp *CrossDomainDefaultSink = nullptr;
+  for (const MedBlock &Block : CrossDomainFrameMed.Blocks)
+    for (const MedOp &Op : Block.Ops) {
+      if (Op.Opcode == NdOp::STORE &&
+          Op.MemoryAddressSpace == NdMemoryAddressSpace::X86FS) {
+        ++CrossDomainFSStores;
+        CrossDomainFSStore = &Op;
+      }
+      if (Op.Addr == kEntry + 11 && Op.Opcode == NdOp::STORE &&
+          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
+        CrossDomainDefaultSink = &Op;
+    }
+  EXPECT_EQ(CrossDomainFSStores, 1u);
+  ASSERT_NE(CrossDomainFSStore, nullptr);
+  ASSERT_NE(CrossDomainDefaultSink, nullptr);
+  ASSERT_GE(CrossDomainFSStore->NumInputs, 2u);
+  ASSERT_GE(CrossDomainDefaultSink->NumInputs, 2u);
+  EXPECT_NE(CrossDomainDefaultSink->Inputs[1],
+            CrossDomainFSStore->Inputs[1])
+      << "an FS frame store cannot define a default stack reload";
+  EXPECT_EQ(CrossDomainDefaultSink->Inputs[1].Kind, MedVar::Param)
+      << "the default stack value remains the incoming stack parameter";
+
+  llvm::LLVMContext Context;
+  auto Module =
+      MedLLVMEmitter().emit({Med}, Context, "segment-memory", Arch::X64);
+  ASSERT_NE(Module, nullptr);
+  EXPECT_TRUE(validLLVMModule(*Module));
+  unsigned FSLoads = 0;
+  unsigned GSLoads = 0;
+  unsigned GSStores = 0;
+  for (const llvm::Function &Function : *Module)
+    for (const llvm::BasicBlock &Block : Function)
+      for (const llvm::Instruction &Instruction : Block) {
+        if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction))
+          if (unsigned AddressSpace = Load->getPointerOperand()
+                                          ->getType()
+                                          ->getPointerAddressSpace();
+              AddressSpace == 257)
+            ++FSLoads;
+          else if (AddressSpace == 256)
+            ++GSLoads;
+        if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&Instruction))
+          GSStores +=
+              Store->getPointerOperand()->getType()->getPointerAddressSpace() ==
+              256;
+      }
+  EXPECT_EQ(FSLoads, 1u);
+  EXPECT_EQ(GSLoads, 1u);
+  EXPECT_EQ(GSStores, 1u);
+
+  auto LiftStringInstruction = [](std::initializer_list<uint8_t> Bytes) {
+    Decoder Dec;
+    std::vector<LowOp> Ops;
+    if (!Dec.init(Arch::X64)) {
+      ADD_FAILURE() << "string decoder initialization failed";
+      return Ops;
+    }
+    DecodedInsn Insn{};
+    if (Dec.decodeOneForLift(Bytes.begin(), Bytes.size(), kEntry, Insn) !=
+        static_cast<int>(Bytes.size())) {
+      ADD_FAILURE() << "string instruction decode failed";
+      return Ops;
+    }
+    Dec.liftToLow(Insn, Ops);
+    return Ops;
+  };
+  auto CountOps = [](const std::vector<LowOp> &Ops, NdOp Opcode,
+                     NdMemoryAddressSpace AddressSpace) {
+    return std::count_if(Ops.begin(), Ops.end(), [&](const LowOp &Op) {
+      return Op.Opcode == Opcode && Op.MemoryAddressSpace == AddressSpace;
+    });
+  };
+  auto FindIntrinsic = [](const std::vector<LowOp> &Ops, Intrinsic Id) {
+    return std::find_if(Ops.begin(), Ops.end(), [&](const LowOp &Op) {
+      return Op.Opcode == NdOp::INTRINSIC && Op.NumInputs >= 1 &&
+             Op.Inputs[0].isConst() &&
+             Op.Inputs[0].Offset == static_cast<uint64_t>(Id);
+    });
+  };
+
+  // Real instruction bytes cover the implicit byte-masked store path.  The
+  // address-size override selects EDI, the FS/GS prefix survives on the
+  // intrinsic, and no unconditional STORE may remain.
+  const std::vector<LowOp> FSMaskMov =
+      LiftStringInstruction({0x64, 0x67, 0x66, 0x0f, 0xf7, 0xc1});
+  auto FSMaskMovOp = FindIntrinsic(FSMaskMov, Intrinsic::MaskedStoreB);
+  ASSERT_NE(FSMaskMovOp, FSMaskMov.end());
+  ASSERT_GE(FSMaskMovOp->NumInputs, 4u);
+  EXPECT_EQ(FSMaskMovOp->MemoryAddressSpace, NdMemoryAddressSpace::X86FS);
+  EXPECT_EQ(FSMaskMovOp->Inputs[1].Size, 8u);
+  EXPECT_EQ(FSMaskMovOp->Inputs[2].Size, 16u);
+  EXPECT_EQ(FSMaskMovOp->Inputs[3].Size, 16u);
+  EXPECT_EQ(std::count_if(FSMaskMov.begin(), FSMaskMov.end(),
+                          [](const LowOp &Op) {
+                            return Op.Opcode == NdOp::STORE;
+                          }),
+            0);
+  EXPECT_TRUE(std::any_of(FSMaskMov.begin(), FSMaskMov.end(),
+                          [](const LowOp &Op) {
+                            return Op.Opcode == NdOp::INT_ZEXT &&
+                                   Op.Output.Size == 8 && Op.NumInputs == 1 &&
+                                   Op.Inputs[0].Size == 4;
+                          }));
+
+  const std::vector<LowOp> GSVMASKMov =
+      LiftStringInstruction({0x65, 0x67, 0xc5, 0xf9, 0xf7, 0xc1});
+  auto GSVMASKMovOp = FindIntrinsic(GSVMASKMov, Intrinsic::MaskedStoreB);
+  ASSERT_NE(GSVMASKMovOp, GSVMASKMov.end());
+  EXPECT_EQ(GSVMASKMovOp->MemoryAddressSpace, NdMemoryAddressSpace::X86GS);
+
+  // addr32 VSIB gather performs every address calculation at 32 bits, then
+  // zero-extends the wrapped offset.  Each lane uses MaskedLoadD, so a clear
+  // mask cannot fault and the old destination lane is selected as passthrough.
+  const std::vector<LowOp> GSGather = LiftStringInstruction(
+      {0x65, 0x67, 0xc4, 0xe2, 0x6d, 0x92, 0x44, 0x88, 0x20});
+  unsigned GatherMaskedLoads = 0;
+  unsigned GatherPlainLoads = 0;
+  unsigned GatherSelects = 0;
+  unsigned GatherRawMasks = 0;
+  for (const LowOp &Op : GSGather) {
+    GatherPlainLoads += Op.Opcode == NdOp::LOAD;
+    GatherSelects += Op.Opcode == NdOp::SELECT;
+    if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs >= 3 &&
+        Op.Inputs[0].isConst() &&
+        Op.Inputs[0].Offset ==
+            static_cast<uint64_t>(Intrinsic::MaskedLoadD)) {
+      ++GatherMaskedLoads;
+      EXPECT_EQ(Op.MemoryAddressSpace, NdMemoryAddressSpace::X86GS);
+      EXPECT_EQ(Op.Inputs[1].Size, 8u);
+      EXPECT_EQ(Op.Inputs[2].Size, 16u);
+      const NdVar Mask = Op.Inputs[2];
+      GatherRawMasks += std::any_of(
+          GSGather.begin(), GSGather.end(), [&](const LowOp &Def) {
+            return Def.Opcode == NdOp::INT_ZEXT && Def.Output == Mask &&
+                   Def.Output.Size == 16 && Def.NumInputs == 1 &&
+                   Def.Inputs[0].Size == 4;
+          });
+    }
+  }
+  EXPECT_EQ(GatherPlainLoads, 0u);
+  EXPECT_EQ(GatherMaskedLoads, 8u);
+  EXPECT_EQ(GatherRawMasks, 8u);
+  EXPECT_GE(GatherSelects, 8u);
+  EXPECT_TRUE(std::any_of(GSGather.begin(), GSGather.end(),
+                          [](const LowOp &Op) {
+                            return Op.Opcode == NdOp::INT_ADD &&
+                                   Op.Output.Size == 4;
+                          }));
+  EXPECT_TRUE(std::any_of(GSGather.begin(), GSGather.end(),
+                          [](const LowOp &Op) {
+                            return Op.Opcode == NdOp::INT_ZEXT &&
+                                   Op.Output.Size == 8 && Op.NumInputs == 1 &&
+                                   Op.Inputs[0].Size == 4;
+                          }));
+
+  auto DwordVector = [](const std::array<uint32_t, 8> &Values) {
+    std::vector<uint8_t> Bytes(32);
+    std::memcpy(Bytes.data(), Values.data(), Bytes.size());
+    return Bytes;
+  };
+  std::vector<uint64_t> GatherVectorRegs;
+  for (const LowOp &Op : GSGather)
+    if (Op.Opcode == NdOp::SUBBYTES && Op.Output.Size == 4 &&
+        Op.NumInputs >= 1 && Op.Inputs[0].isReg() &&
+        Op.Inputs[0].Size == 32 &&
+        std::find(GatherVectorRegs.begin(), GatherVectorRegs.end(),
+                  Op.Inputs[0].Offset) == GatherVectorRegs.end())
+      GatherVectorRegs.push_back(Op.Inputs[0].Offset);
+  ASSERT_EQ(GatherVectorRegs.size(), 3u);
+  const uint64_t GatherIndexReg = GatherVectorRegs[0];
+  const uint64_t GatherMaskReg = GatherVectorRegs[1];
+  const uint64_t GatherDestReg = GatherVectorRegs[2];
+  const std::array<uint32_t, 8> GatherIndices{0, 1, 2, 3, 4, 5, 6, 7};
+  const std::array<uint32_t, 8> GatherMasks{
+      UINT32_C(0x80000000), 0, UINT32_C(0x80000000), 0,
+      0, 0, 0, UINT32_C(0x80000000)};
+  const std::array<uint32_t, 8> GatherOld{
+      0xaaaa0000, 0xaaaa0001, 0xaaaa0002, 0xaaaa0003,
+      0xaaaa0004, 0xaaaa0005, 0xaaaa0006, 0xaaaa0007};
+  const std::array<uint32_t, 8> GatherMemory{
+      0x12340000, 0x12340001, 0x12340002, 0x12340003,
+      0x12340004, 0x12340005, 0x12340006, 0x12340007};
+  BinaryImage GatherSemanticImage = SemanticImage;
+  auto GatherGSSegment = std::find_if(
+      GatherSemanticImage.Segments.begin(), GatherSemanticImage.Segments.end(),
+      [&](const Segment &Segment) { return Segment.VA == GSBase; });
+  ASSERT_NE(GatherGSSegment, GatherSemanticImage.Segments.end());
+  std::memcpy(GatherGSSegment->Data.data() + 0x20, GatherMemory.data(),
+              sizeof(GatherMemory));
+
+  NdOpEmulator GatherEmulator(GatherSemanticImage);
+  ASSERT_TRUE(GatherEmulator.setMemoryAddressSpaceBase(
+      NdMemoryAddressSpace::X86GS, GSBase));
+  GatherEmulator.setLoadCollect(true);
+  GatherEmulator.setRegister(x86reg::RAX, 0);
+  GatherEmulator.setRegisterBytes(GatherIndexReg, DwordVector(GatherIndices));
+  GatherEmulator.setRegisterBytes(GatherMaskReg, DwordVector(GatherMasks));
+  GatherEmulator.setRegisterBytes(GatherDestReg, DwordVector(GatherOld));
+  EXPECT_EQ(GatherEmulator.run(GSGather), GSGather.size());
+  const auto GatherResult = GatherEmulator.getRegisterBytes(GatherDestReg);
+  ASSERT_TRUE(GatherResult);
+  ASSERT_EQ(GatherResult->size(), 32u);
+  std::array<uint32_t, 8> GatherResultWords{};
+  std::memcpy(GatherResultWords.data(), GatherResult->data(),
+              GatherResult->size());
+  for (size_t I = 0; I < GatherResultWords.size(); ++I)
+    EXPECT_EQ(GatherResultWords[I],
+              (GatherMasks[I] & UINT32_C(0x80000000)) ? GatherMemory[I]
+                                                       : GatherOld[I]);
+  const auto ClearedGatherMask =
+      GatherEmulator.getRegisterBytes(GatherMaskReg);
+  ASSERT_TRUE(ClearedGatherMask);
+  EXPECT_TRUE(std::all_of(ClearedGatherMask->begin(), ClearedGatherMask->end(),
+                          [](uint8_t Byte) { return Byte == 0; }));
+  ASSERT_EQ(GatherEmulator.getLoadRecords().size(), 3u);
+  EXPECT_EQ(GatherEmulator.getLoadRecords()[0].Addr, GSBase + 0x20);
+  EXPECT_EQ(GatherEmulator.getLoadRecords()[1].Addr, GSBase + 0x28);
+  EXPECT_EQ(GatherEmulator.getLoadRecords()[2].Addr, GSBase + 0x3c);
+
+  // All mask sign bits clear: no lane may touch even an unmapped address, the
+  // destination is preserved, and the architectural mask is still cleared.
+  NdOpEmulator SuppressedGather(GatherSemanticImage);
+  ASSERT_TRUE(SuppressedGather.setMemoryAddressSpaceBase(
+      NdMemoryAddressSpace::X86GS, GSBase));
+  SuppressedGather.setLoadCollect(true);
+  SuppressedGather.setRegister(x86reg::RAX, UINT32_C(0x100000));
+  SuppressedGather.setRegisterBytes(GatherIndexReg,
+                                    DwordVector(GatherIndices));
+  SuppressedGather.setRegisterBytes(
+      GatherMaskReg, DwordVector(std::array<uint32_t, 8>{}));
+  SuppressedGather.setRegisterBytes(GatherDestReg, DwordVector(GatherOld));
+  EXPECT_EQ(SuppressedGather.run(GSGather), GSGather.size());
+  EXPECT_TRUE(SuppressedGather.getLoadRecords().empty());
+  const auto SuppressedResult =
+      SuppressedGather.getRegisterBytes(GatherDestReg);
+  ASSERT_TRUE(SuppressedResult);
+  EXPECT_EQ(*SuppressedResult, DwordVector(GatherOld));
+
+  // Gather faults preserve completed architectural progress.  This model uses
+  // the permitted deterministic low-to-high order: lane 0 succeeds and is
+  // committed/cleared, lane 1 faults on an unmapped address, and all later
+  // destination/mask lanes retain their pre-instruction values.
+  BinaryImage PartialGatherImage;
+  PartialGatherImage.Arch = Arch::X64;
+  PartialGatherImage.Bits = Bitness::Bits64;
+  PartialGatherImage.Format = BinaryFormat::ELF;
+  Segment PartialGatherData;
+  PartialGatherData.VA = GSBase + 0x20;
+  PartialGatherData.Size = sizeof(uint32_t);
+  PartialGatherData.Flags = SegmentFlags::Readable;
+  PartialGatherData.Data.resize(sizeof(uint32_t));
+  const uint32_t PartialLane0 = UINT32_C(0xdec0ad01);
+  std::memcpy(PartialGatherData.Data.data(), &PartialLane0,
+              sizeof(PartialLane0));
+  PartialGatherImage.Segments.push_back(std::move(PartialGatherData));
+  std::array<uint32_t, 8> PartialMasks{};
+  PartialMasks[0] = UINT32_C(0x80000000);
+  PartialMasks[1] = UINT32_C(0x80000000);
+  NdOpEmulator PartialGather(PartialGatherImage);
+  ASSERT_TRUE(PartialGather.setMemoryAddressSpaceBase(
+      NdMemoryAddressSpace::X86GS, GSBase));
+  PartialGather.setLoadCollect(true);
+  PartialGather.setRegister(x86reg::RAX, 0);
+  PartialGather.setRegisterBytes(GatherIndexReg,
+                                 DwordVector(GatherIndices));
+  PartialGather.setRegisterBytes(GatherMaskReg,
+                                 DwordVector(PartialMasks));
+  PartialGather.setRegisterBytes(GatherDestReg, DwordVector(GatherOld));
+  EXPECT_LT(PartialGather.run(GSGather), GSGather.size());
+  const auto PartialResult = PartialGather.getRegisterBytes(GatherDestReg);
+  const auto PartialMaskResult =
+      PartialGather.getRegisterBytes(GatherMaskReg);
+  ASSERT_TRUE(PartialResult);
+  ASSERT_TRUE(PartialMaskResult);
+  std::array<uint32_t, 8> PartialResultWords{};
+  std::array<uint32_t, 8> PartialMaskWords{};
+  std::memcpy(PartialResultWords.data(), PartialResult->data(),
+              PartialResult->size());
+  std::memcpy(PartialMaskWords.data(), PartialMaskResult->data(),
+              PartialMaskResult->size());
+  EXPECT_EQ(PartialResultWords[0], PartialLane0);
+  EXPECT_EQ(PartialMaskWords[0], 0u);
+  EXPECT_EQ(PartialResultWords[1], GatherOld[1]);
+  EXPECT_EQ(PartialMaskWords[1], UINT32_C(0x80000000));
+  for (size_t I = 2; I < PartialResultWords.size(); ++I) {
+    EXPECT_EQ(PartialResultWords[I], GatherOld[I]);
+    EXPECT_EQ(PartialMaskWords[I], 0u);
+  }
+  ASSERT_EQ(PartialGather.getLoadRecords().size(), 1u);
+  EXPECT_EQ(PartialGather.getLoadRecords().front().Addr, GSBase + 0x20);
+
+  std::vector<uint8_t> MaskMovData(16);
+  std::vector<uint8_t> MaskMovMask(16, 0);
+  for (size_t I = 0; I < MaskMovData.size(); ++I)
+    MaskMovData[I] = static_cast<uint8_t>(0x40 + I);
+  MaskMovMask[0] = 0x80;
+  MaskMovMask[3] = 0x80;
+  MaskMovMask[15] = 0x80;
+  NdOpEmulator MaskMovEmulator(SemanticImage);
+  ASSERT_TRUE(MaskMovEmulator.setMemoryAddressSpaceBase(
+      NdMemoryAddressSpace::X86FS, FSBase));
+  MaskMovEmulator.setRegister(x86reg::RDI, 0x60);
+  MaskMovEmulator.setRegisterBytes(FSMaskMovOp->Inputs[2].Offset,
+                                   MaskMovMask);
+  MaskMovEmulator.setRegisterBytes(FSMaskMovOp->Inputs[3].Offset,
+                                   MaskMovData);
+  EXPECT_EQ(MaskMovEmulator.run(FSMaskMov), FSMaskMov.size());
+  for (size_t I = 0; I < MaskMovData.size(); ++I) {
+    LowOp Probe;
+    Probe.Opcode = NdOp::LOAD;
+    Probe.Output = NdVar::tmp(0x700 + I, 1);
+    Probe.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+    Probe.addInput(NdVar::scalar(0x60 + I, 8));
+    ASSERT_TRUE(MaskMovEmulator.step(Probe));
+    ASSERT_TRUE(MaskMovEmulator.getRegister(Probe.Output.Offset));
+    EXPECT_EQ(*MaskMovEmulator.getRegister(Probe.Output.Offset),
+              (MaskMovMask[I] & 0x80) ? MaskMovData[I] : 0u);
+  }
+
+  LowFunc GatherLow = buildFunction(
+      Arch::X64, InstructionMode::Default,
+      {0x65, 0x67, 0xc4, 0xe2, 0x6d, 0x92, 0x44, 0x88, 0x20, 0xc3});
+  MedFunc GatherMed =
+      LowToMedConverter().convert(GatherLow, Arch::X64, BinaryFormat::ELF);
+  unsigned LiveGatherDstCommits = 0;
+  unsigned LiveGatherMaskCommits = 0;
+  for (const MedBlock &Block : GatherMed.Blocks)
+    for (const MedOp &Op : Block.Ops) {
+      if (Op.Dead || Op.Opcode != NdOp::COPY ||
+          Op.Output.Kind != MedVar::Reg)
+        continue;
+      LiveGatherDstCommits += Op.Output.RegOff == GatherDestReg;
+      LiveGatherMaskCommits += Op.Output.RegOff == GatherMaskReg;
+    }
+  EXPECT_GE(LiveGatherDstCommits, 7u);
+  EXPECT_GE(LiveGatherMaskCommits, 7u)
+      << "each pre-final lane commit must feed the next faulting lane after "
+         "Low-to-Med DCE";
+  llvm::LLVMContext GatherContext;
+  auto GatherModule = MedLLVMEmitter().emit({GatherMed}, GatherContext,
+                                            "segment-gather", Arch::X64);
+  ASSERT_NE(GatherModule, nullptr);
+  EXPECT_TRUE(validLLVMModule(*GatherModule));
+  unsigned LLVMGatherMaskedLoads = 0;
+  for (const llvm::Function &Function : *GatherModule)
+    for (const llvm::BasicBlock &Block : Function)
+      for (const llvm::Instruction &Instruction : Block)
+        if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction))
+          if (Call->getCalledFunction() &&
+              Call->getCalledFunction()->getName().starts_with(
+                  "llvm.masked.load") &&
+              Call->getArgOperand(0)->getType()->getPointerAddressSpace() ==
+                  256)
+            ++LLVMGatherMaskedLoads;
+  EXPECT_EQ(LLVMGatherMaskedLoads, 8u);
+  HighFunc GatherHigh = MedToHighConverter().convert(GatherMed, Arch::X64);
+  std::string GatherHighC;
+  llvm::raw_string_ostream GatherHighCOS(GatherHighC);
+  CEmitterOptions GatherCOptions;
+  GatherCOptions.TheArch = Arch::X64;
+  ASSERT_TRUE(
+      HighCEmitter().emit({GatherHigh}, GatherHighCOS, GatherCOptions));
+  GatherHighCOS.flush();
+  EXPECT_NE(GatherHighC.find("vmaskmovps %%gs:(%[address])"),
+            std::string::npos);
+  EXPECT_TRUE(validHighC(GatherHighC));
+
+  // The full 64-bit bit index selects a chunk before the byte offset is
+  // truncated into addr32 and added to the wrapped FS-relative base.
+  const std::vector<LowOp> FSAddr32BT = LiftStringInstruction(
+      {0x64, 0x67, 0x48, 0x0f, 0xa3, 0x48, 0x10});
+  EXPECT_EQ(CountOps(FSAddr32BT, NdOp::LOAD, NdMemoryAddressSpace::X86FS), 1);
+  EXPECT_TRUE(std::any_of(FSAddr32BT.begin(), FSAddr32BT.end(),
+                          [](const LowOp &Op) {
+                            return Op.Opcode == NdOp::INT_ASHR &&
+                                   Op.Output.Size == 8;
+                          }));
+  EXPECT_TRUE(std::any_of(FSAddr32BT.begin(), FSAddr32BT.end(),
+                          [](const LowOp &Op) {
+                            return Op.Opcode == NdOp::SUBBYTES &&
+                                   Op.Output.Size == 4 && Op.NumInputs >= 1 &&
+                                   Op.Inputs[0].Size == 8;
+                          }));
+
+  const std::vector<LowOp> FSRipCall = LiftStringInstruction(
+      {0x64, 0xff, 0x15, 0x00, 0x00, 0x00, 0x00});
+  const LowOp *FSCallLoad = nullptr;
+  const LowOp *FSIndirectCall = nullptr;
+  for (const LowOp &Op : FSRipCall) {
+    if (Op.Opcode == NdOp::LOAD &&
+        Op.MemoryAddressSpace == NdMemoryAddressSpace::X86FS)
+      FSCallLoad = &Op;
+    if (Op.Opcode == NdOp::INDIR_CALL)
+      FSIndirectCall = &Op;
+  }
+  ASSERT_NE(FSCallLoad, nullptr);
+  ASSERT_NE(FSIndirectCall, nullptr);
+  ASSERT_GE(FSIndirectCall->NumInputs, 1u);
+  EXPECT_TRUE(FSIndirectCall->Inputs[0] == FSCallLoad->Output);
+
+  const std::vector<LowOp> GSRipJump = LiftStringInstruction(
+      {0x65, 0xff, 0x25, 0x00, 0x00, 0x00, 0x00});
+  EXPECT_EQ(CountOps(GSRipJump, NdOp::LOAD, NdMemoryAddressSpace::X86GS), 1);
+  EXPECT_TRUE(std::any_of(GSRipJump.begin(), GSRipJump.end(),
+                          [](const LowOp &Op) {
+                            return Op.Opcode == NdOp::INDIR_BR;
+                          }));
+
+  LowOp SegmentTableLoad;
+  SegmentTableLoad.Addr = 0x1400;
+  SegmentTableLoad.Seq = 3;
+  SegmentTableLoad.Opcode = NdOp::LOAD;
+  SegmentTableLoad.Output = NdVar::tmp(77, 8);
+  SegmentTableLoad.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+  SegmentTableLoad.addInput(NdVar::scalar(0x4000, 8));
+  LowOp SegmentTableBranch;
+  SegmentTableBranch.Addr = 0x1400;
+  SegmentTableBranch.Seq = 4;
+  SegmentTableBranch.Opcode = NdOp::INDIR_BR;
+  SegmentTableBranch.addInput(SegmentTableLoad.Output);
+  const std::array<LowOp, 2> SegmentTableOps{SegmentTableLoad,
+                                             SegmentTableBranch};
+  EXPECT_FALSE(jumpTableTargetLoadUsesDefaultAddressSpace(
+      SegmentTableOps, SegmentTableLoad.Addr, SegmentTableLoad.Seq,
+      SegmentTableLoad.Output))
+      << "an FS offset equal to an image table VA must publish no targets";
+  SegmentTableLoad.MemoryAddressSpace = NdMemoryAddressSpace::Default;
+  const std::array<LowOp, 2> DefaultTableOps{SegmentTableLoad,
+                                             SegmentTableBranch};
+  EXPECT_TRUE(jumpTableTargetLoadUsesDefaultAddressSpace(
+      DefaultTableOps, SegmentTableLoad.Addr, SegmentTableLoad.Seq,
+      SegmentTableLoad.Output));
+
+  // Exercise the real resolver publication path as well.  The default form is
+  // a valid six-way COFF image-relative table; adding FS or GS to the exact
+  // target LOAD changes its address domain and must suppress the entire table,
+  // even though the numeric offset still points into the flat image bytes.
+  constexpr va_t ResolverImageBase = UINT64_C(0x140000000);
+  constexpr va_t ResolverFunctionVA = ResolverImageBase + 0x1000;
+  constexpr va_t ResolverTableVA = ResolverImageBase + 0x1100;
+  auto MakeResolverImage = [&](uint8_t SegmentPrefix) {
+    BinaryImage Image;
+    Image.Arch = Arch::X64;
+    Image.Bits = Bitness::Bits64;
+    Image.Format = BinaryFormat::COFF;
+    Image.Base = ResolverImageBase;
+    Image.Entry = ResolverFunctionVA;
+
+    Segment Text;
+    Text.Name = ".text";
+    Text.VA = ResolverFunctionVA;
+    Text.Size = (ResolverTableVA - ResolverFunctionVA) +
+                6 * sizeof(uint32_t);
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Data.assign(Text.Size, 0x90);
+    std::vector<uint8_t> Dispatch;
+    auto AppendU32 = [&](uint32_t Value) {
+      for (unsigned Byte = 0; Byte < sizeof(Value); ++Byte)
+        Dispatch.push_back(static_cast<uint8_t>(Value >> (Byte * 8)));
+    };
+    auto AppendImageBaseLEA = [&](uint8_t REX, uint8_t ModRM) {
+      const va_t NextInstruction =
+          ResolverFunctionVA + Dispatch.size() + 7;
+      const int64_t Displacement =
+          static_cast<int64_t>(ResolverImageBase) -
+          static_cast<int64_t>(NextInstruction);
+      Dispatch.insert(Dispatch.end(), {REX, 0x8d, ModRM});
+      AppendU32(static_cast<uint32_t>(Displacement));
+    };
+
+    Dispatch.insert(Dispatch.end(), {0x89, 0xc9,       // mov ecx, ecx
+                                     0x83, 0xf9, 0x05, // cmp ecx, 5
+                                     0x0f, 0x87});     // ja default
+    const size_t GuardNext = Dispatch.size() + sizeof(uint32_t);
+    AppendU32(static_cast<uint32_t>(0x40 - GuardNext));
+    AppendImageBaseLEA(0x48, 0x15); // lea rdx, image base
+    if (SegmentPrefix != 0)
+      Dispatch.push_back(SegmentPrefix);
+    Dispatch.insert(Dispatch.end(),
+                    {0x8b, 0x8c, 0x8a, 0x00, 0x11, 0x00,
+                     0x00}); // mov ecx,[rdx+rcx*4+1100h]
+    AppendImageBaseLEA(0x4c, 0x05); // lea r8, image base
+    Dispatch.insert(Dispatch.end(), {0x49, 0x03, 0xc8, // add rcx, r8
+                                     0xff, 0xe1});     // jmp rcx
+    EXPECT_LE(Dispatch.size(), size_t{0x30});
+    std::copy(Dispatch.begin(), Dispatch.end(), Text.Data.begin());
+
+    const std::array<uint32_t, 6> TargetRVAs{
+        0x1030, 0x1032, 0x1034, 0x1036, 0x1038, 0x103a};
+    for (size_t I = 0; I < TargetRVAs.size(); ++I) {
+      Text.Data[0x30 + I * 2] = 0xc3;
+      for (unsigned Byte = 0; Byte < sizeof(uint32_t); ++Byte)
+        Text.Data[(ResolverTableVA - ResolverFunctionVA) +
+                  I * sizeof(uint32_t) + Byte] =
+            static_cast<uint8_t>(TargetRVAs[I] >> (Byte * 8));
+    }
+    Text.Data[0x40] = 0xc3;
+    Image.Segments.push_back(std::move(Text));
+
+    Section TextSection;
+    TextSection.Name = ".text";
+    TextSection.VA = ResolverFunctionVA;
+    TextSection.Size = (ResolverTableVA - ResolverFunctionVA) +
+                       6 * sizeof(uint32_t);
+    TextSection.Flags =
+        SegmentFlags::Readable | SegmentFlags::Executable;
+    Image.Sections.push_back(std::move(TextSection));
+    Symbol Function = Symbol::makeFunc(ResolverFunctionVA, 0x41);
+    Function.Name = "segment_table_publication";
+    Image.Symbols.push_back(std::move(Function));
+    Image.KnownCodeRanges.emplace_back(ResolverFunctionVA,
+                                       ResolverFunctionVA + 0x41);
+    return Image;
+  };
+  auto ResolveTable = [&](uint8_t SegmentPrefix) {
+    BinaryImage Image = MakeResolverImage(SegmentPrefix);
+    Decoder TableDecoder;
+    EXPECT_TRUE(TableDecoder.init(Image.Arch, Image.Mode));
+    CFGBuilder TableBuilder;
+    const std::set<va_t> FunctionEntries{ResolverFunctionVA};
+    TableBuilder.setKnownFuncEntries(&FunctionEntries);
+    return TableBuilder.build(Image, TableDecoder, ResolverFunctionVA,
+                              "segment_table_publication");
+  };
+  const LowFunc DefaultResolvedTable = ResolveTable(/*SegmentPrefix=*/0);
+  ASSERT_EQ(DefaultResolvedTable.JumpTables.size(), 1u);
+  EXPECT_EQ(DefaultResolvedTable.JumpTables.front().Targets.size(), 6u);
+  for (uint8_t SegmentPrefix : {uint8_t{0x64}, uint8_t{0x65}}) {
+    SCOPED_TRACE(SegmentPrefix == 0x64 ? "FS table load" : "GS table load");
+    const LowFunc SegmentedResolvedTable = ResolveTable(SegmentPrefix);
+    EXPECT_TRUE(SegmentedResolvedTable.JumpTables.empty());
+    EXPECT_TRUE(std::any_of(
+        SegmentedResolvedTable.Blocks.begin(),
+        SegmentedResolvedTable.Blocks.end(), [&](const LowBlock &Block) {
+          return std::any_of(Block.Ops.begin(), Block.Ops.end(),
+                             [&](const LowOp &Op) {
+                               return Op.Opcode == NdOp::LOAD &&
+                                      Op.MemoryAddressSpace ==
+                                          (SegmentPrefix == 0x64
+                                               ? NdMemoryAddressSpace::X86FS
+                                               : NdMemoryAddressSpace::X86GS);
+                             });
+        }));
+  }
+
+  const std::vector<LowOp> FSMovs = LiftStringInstruction({0x64, 0xa4});
+  EXPECT_EQ(CountOps(FSMovs, NdOp::LOAD, NdMemoryAddressSpace::X86FS), 1);
+  EXPECT_EQ(CountOps(FSMovs, NdOp::STORE, NdMemoryAddressSpace::Default), 1)
+      << "MOVS destination remains fixed ES/default";
+
+  const std::vector<LowOp> GSRepMovs =
+      LiftStringInstruction({0xf3, 0x65, 0xa4});
+  auto RepMovs = FindIntrinsic(GSRepMovs, Intrinsic::Movsb);
+  ASSERT_NE(RepMovs, GSRepMovs.end());
+  EXPECT_EQ(RepMovs->MemoryAddressSpace, NdMemoryAddressSpace::X86GS);
+
+  const std::vector<LowOp> FSLods = LiftStringInstruction({0x64, 0xac});
+  EXPECT_EQ(CountOps(FSLods, NdOp::LOAD, NdMemoryAddressSpace::X86FS), 1);
+
+  const std::vector<LowOp> GSRepLods =
+      LiftStringInstruction({0xf3, 0x65, 0xac});
+  auto RepLods = FindIntrinsic(GSRepLods, Intrinsic::Lodsb);
+  ASSERT_NE(RepLods, GSRepLods.end());
+  EXPECT_EQ(RepLods->MemoryAddressSpace, NdMemoryAddressSpace::X86GS);
+  EXPECT_EQ(CountOps(GSRepLods, NdOp::LOAD, NdMemoryAddressSpace::Default), 0);
+  EXPECT_EQ(CountOps(GSRepLods, NdOp::LOAD, NdMemoryAddressSpace::X86GS), 0)
+      << "REP LODS must not speculate a load when RCX is zero";
+
+  Decoder X86StringDecoder;
+  ASSERT_TRUE(X86StringDecoder.init(Arch::X86));
+  const std::array<uint8_t, 2> X86RepLodsBytes{0xf3, 0xac};
+  DecodedInsn X86RepLodsInsn{};
+  ASSERT_EQ(X86StringDecoder.decodeOneForLift(
+                X86RepLodsBytes.data(), X86RepLodsBytes.size(), kEntry,
+                X86RepLodsInsn),
+            static_cast<int>(X86RepLodsBytes.size()));
+  std::vector<LowOp> X86RepLods;
+  X86StringDecoder.liftToLow(X86RepLodsInsn, X86RepLods);
+  auto X86RepLodsOp = FindIntrinsic(X86RepLods, Intrinsic::Lodsb);
+  ASSERT_NE(X86RepLodsOp, X86RepLods.end());
+  ASSERT_GE(X86RepLodsOp->NumInputs, 4u);
+  EXPECT_EQ(X86RepLodsOp->Output.Size, 4u);
+  EXPECT_EQ(X86RepLodsOp->Inputs[3].Size, 4u)
+      << "i386 REP LODS must carry EAX, not an eight-byte accumulator";
+
+  const std::vector<LowOp> FSCmps = LiftStringInstruction({0x64, 0xa6});
+  EXPECT_EQ(CountOps(FSCmps, NdOp::LOAD, NdMemoryAddressSpace::X86FS), 1);
+  EXPECT_EQ(CountOps(FSCmps, NdOp::LOAD, NdMemoryAddressSpace::Default), 1)
+      << "CMPS destination remains fixed ES/default";
+
+  const std::vector<LowOp> GSRepCmps =
+      LiftStringInstruction({0xf3, 0x65, 0xa6});
+  auto RepCmps = FindIntrinsic(GSRepCmps, Intrinsic::Cmpsb);
+  ASSERT_NE(RepCmps, GSRepCmps.end());
+  EXPECT_EQ(RepCmps->MemoryAddressSpace, NdMemoryAddressSpace::X86GS);
+  EXPECT_EQ(
+      std::count_if(GSRepCmps.begin(), GSRepCmps.end(),
+                    [](const LowOp &Op) { return Op.Opcode == NdOp::LOAD; }),
+      0)
+      << "zero-count REP CMPS must have no unconditional reconstruction load";
+
+  const std::vector<LowOp> GSXlat = LiftStringInstruction({0x65, 0xd7});
+  EXPECT_EQ(CountOps(GSXlat, NdOp::LOAD, NdMemoryAddressSpace::X86GS), 1);
+
+  // The REP instructions execute in hardware, so the segment override must be
+  // present in LLVM inline asm rather than represented only as metadata.
+  LowFunc StringLow = buildFunction(Arch::X64, InstructionMode::Default,
+                                    {0xf3, 0x64, 0xa4, 0xf3, 0x65, 0xac, 0xf3,
+                                     0x65, 0xa6, 0x0f, 0x94, 0xc0, 0xc3});
+  MedFunc StringMed =
+      LowToMedConverter().convert(StringLow, Arch::X64, BinaryFormat::ELF);
+  llvm::LLVMContext StringContext;
+  auto StringModule = MedLLVMEmitter().emit({StringMed}, StringContext,
+                                            "segment-strings", Arch::X64);
+  ASSERT_NE(StringModule, nullptr);
+  EXPECT_TRUE(validLLVMModule(*StringModule));
+  bool SawFSMovs = false;
+  bool SawGSLods = false;
+  bool SawGSCmpsWithFlags = false;
+  for (const llvm::Function &Function : *StringModule)
+    for (const llvm::BasicBlock &Block : Function)
+      for (const llvm::Instruction &Instruction : Block) {
+        const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction);
+        if (!Call)
+          continue;
+        const auto *Asm =
+            llvm::dyn_cast<llvm::InlineAsm>(Call->getCalledOperand());
+        if (!Asm)
+          continue;
+        llvm::StringRef Text = Asm->getAsmString();
+        SawFSMovs |= Text.contains("fs rep movsb");
+        SawGSLods |= Text.contains("gs rep lodsb");
+        SawGSCmpsWithFlags |= Text.contains("gs repz cmpsb") &&
+                              Text.contains("lahf") &&
+                              Text.contains("seto %al");
+      }
+  EXPECT_TRUE(SawFSMovs);
+  EXPECT_TRUE(SawGSLods);
+  EXPECT_TRUE(SawGSCmpsWithFlags);
+
+  // Address-size overrides select ESI/EDI/ECX (or SI/DI/CX on i386), not the
+  // full native registers.  This is observable even when RCX's low 32 bits
+  // are zero: addr32 REP must perform no access regardless of RCX's high half.
+  // OUTS is another implicit string source and follows the same FS/GS policy.
+  LowFunc Addr32StringLow =
+      buildFunction(Arch::X64, InstructionMode::Default,
+                    {0x67, 0xf3, 0x65, 0xa6, 0x67, 0xf3, 0x64, 0x6e, 0xc3});
+  const LowOp *Addr32Cmps = nullptr;
+  const LowOp *Addr32Outs = nullptr;
+  for (const LowOp &Op : Addr32StringLow.Blocks.front().Ops) {
+    if (Op.Opcode != NdOp::INTRINSIC || Op.NumInputs == 0 ||
+        !Op.Inputs[0].isConst())
+      continue;
+    const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+    if (Id == Intrinsic::Cmpsb)
+      Addr32Cmps = &Op;
+    if (Id == Intrinsic::Outsb)
+      Addr32Outs = &Op;
+  }
+  ASSERT_NE(Addr32Cmps, nullptr);
+  ASSERT_GE(Addr32Cmps->NumInputs, 4u);
+  EXPECT_EQ(Addr32Cmps->Output.Size, 4u);
+  EXPECT_EQ(Addr32Cmps->Inputs[1].Size, 4u);
+  EXPECT_EQ(Addr32Cmps->Inputs[2].Size, 4u);
+  EXPECT_EQ(Addr32Cmps->Inputs[3].Size, 4u);
+  EXPECT_EQ(Addr32Cmps->MemoryAddressSpace, NdMemoryAddressSpace::X86GS);
+  ASSERT_NE(Addr32Outs, nullptr);
+  ASSERT_GE(Addr32Outs->NumInputs, 5u);
+  EXPECT_EQ(Addr32Outs->Output.Size, 0u);
+  EXPECT_EQ(Addr32Outs->Inputs[1].Size, 4u);
+  EXPECT_EQ(Addr32Outs->Inputs[2].Size, 4u);
+  EXPECT_EQ(Addr32Outs->MemoryAddressSpace, NdMemoryAddressSpace::X86FS);
+
+  MedFunc Addr32StringMed = LowToMedConverter().convert(
+      Addr32StringLow, Arch::X64, BinaryFormat::ELF);
+  llvm::LLVMContext Addr32StringContext;
+  auto Addr32StringModule =
+      MedLLVMEmitter().emit({Addr32StringMed}, Addr32StringContext,
+                            "segment-addr32-strings", Arch::X64);
+  ASSERT_NE(Addr32StringModule, nullptr);
+  EXPECT_TRUE(validLLVMModule(*Addr32StringModule));
+  bool SawAddr32GSCmps = false;
+  bool SawAddr32FSOuts = false;
+  for (const llvm::Function &Function : *Addr32StringModule)
+    for (const llvm::BasicBlock &Block : Function)
+      for (const llvm::Instruction &Instruction : Block) {
+        const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction);
+        if (!Call)
+          continue;
+        const auto *Asm =
+            llvm::dyn_cast<llvm::InlineAsm>(Call->getCalledOperand());
+        if (!Asm)
+          continue;
+        SawAddr32GSCmps |= Asm->getAsmString().contains("addr32 gs repz cmpsb");
+        SawAddr32FSOuts |= Asm->getAsmString().contains("addr32 fs rep outsb");
+      }
+  EXPECT_TRUE(SawAddr32GSCmps);
+  EXPECT_TRUE(SawAddr32FSOuts);
+
+  // Med -> High must preserve the address space on both ordinary memory and
+  // memory-effect expressions.  High-C renders scalar accesses through
+  // target address-space-qualified helpers instead of flattening them into
+  // ordinary process pointers.
+  HighFunc High = MedToHighConverter().convert(Med, Arch::X64);
+  unsigned HighFSLoads = 0;
+  unsigned HighGSLoads = 0;
+  unsigned HighGSStores = 0;
+  bool SawFSQualifierInHighIR = false;
+  std::set<const HighExpr *> SeenHighExprs;
+  std::function<void(const ExprPtr &)> VisitHighExpr =
+      [&](const ExprPtr &Expr) {
+        if (!Expr || !SeenHighExprs.insert(Expr.get()).second)
+          return;
+        if (Expr->Kind == ExprKind::Load &&
+            Expr->MemoryAddressSpace == NdMemoryAddressSpace::X86FS) {
+          ++HighFSLoads;
+          SawFSQualifierInHighIR |= Expr->str().starts_with("fs:*");
+        }
+        if (Expr->Kind == ExprKind::Load &&
+            Expr->MemoryAddressSpace == NdMemoryAddressSpace::X86GS)
+          ++HighGSLoads;
+        for (const ExprPtr &Operand : Expr->Operands)
+          VisitHighExpr(Operand);
+      };
+  walkStmts(High.Body, [&](const HighStmt &Stmt) {
+    if (Stmt.Kind == StmtKind::Store &&
+        Stmt.MemoryAddressSpace == NdMemoryAddressSpace::X86GS)
+      ++HighGSStores;
+    forEachExpr(Stmt, VisitHighExpr);
+  });
+  EXPECT_GE(HighFSLoads, 1u);
+  EXPECT_GE(HighGSLoads, 1u);
+  EXPECT_GE(HighGSStores, 1u);
+  EXPECT_TRUE(SawFSQualifierInHighIR);
+
+  std::string HighC;
+  llvm::raw_string_ostream HighCOS(HighC);
+  CEmitterOptions HighCOptions;
+  HighCOptions.TheArch = Arch::X64;
+  ASSERT_TRUE(HighCEmitter().emit({High}, HighCOS, HighCOptions));
+  HighCOS.flush();
+  EXPECT_NE(HighC.find("neverd_mem_load_fs_"), std::string::npos);
+  EXPECT_NE(HighC.find("neverd_mem_load_gs_"), std::string::npos);
+  EXPECT_NE(HighC.find("neverd_mem_store_gs_"), std::string::npos);
+  EXPECT_NE(HighC.find("address_space(257)"), std::string::npos);
+  EXPECT_NE(HighC.find("address_space(256)"), std::string::npos);
+
+  HighFunc StringHigh = MedToHighConverter().convert(StringMed, Arch::X64);
+  bool SawHighSegmentedString = false;
+  bool SawHighCmpsFlags = false;
+  walkStmts(StringHigh.Body, [&](const HighStmt &Stmt) {
+    forEachExpr(Stmt, [&](const ExprPtr &Expr) {
+      if (Expr && Expr->Kind == ExprKind::Call &&
+          Expr->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+        SawHighSegmentedString = true;
+      if (Expr && Expr->IntrinsicId == Intrinsic::Cmpsb &&
+          Expr->MemoryAddressSpace == NdMemoryAddressSpace::X86GS)
+        SawHighCmpsFlags = Expr->IntrinsicOutputs.size() == 1;
+    });
+  });
+  EXPECT_TRUE(SawHighSegmentedString);
+  EXPECT_TRUE(SawHighCmpsFlags);
+
+  std::string StringHighC;
+  llvm::raw_string_ostream StringHighCOS(StringHighC);
+  ASSERT_TRUE(HighCEmitter().emit({StringHigh}, StringHighCOS, HighCOptions));
+  StringHighCOS.flush();
+  EXPECT_NE(StringHighC.find("__asm__ volatile"), std::string::npos);
+  EXPECT_NE(StringHighC.find("fs rep movsb"), std::string::npos);
+  EXPECT_NE(StringHighC.find("gs rep lodsb"), std::string::npos);
+  EXPECT_NE(StringHighC.find("gs repz cmpsb"), std::string::npos);
+  EXPECT_NE(StringHighC.find("lahf"), std::string::npos);
+  EXPECT_NE(StringHighC.find("seto %%al"), std::string::npos);
+  EXPECT_EQ(StringHighC.find("__movsb("), std::string::npos);
+  EXPECT_TRUE(validHighC(StringHighC));
+
+  // Keep one reconstructed flag observably live so the High-C renderer must
+  // bind CMPS's auxiliary LAHF/SETO output, rather than legitimately deleting
+  // it after a zero-count/unused-flags sequence.
+  LowFunc LiveFlagsLow = buildFunction(
+      Arch::X64, InstructionMode::Default,
+      {0xf3, 0x65, 0xa6,             // repe gs:cmpsb
+       0x0f, 0x94, 0xc0,             // sete al
+       0x0f, 0xb6, 0xc0,             // movzx eax, al
+       0xc3});
+  MedFunc LiveFlagsMed =
+      LowToMedConverter().convert(LiveFlagsLow, Arch::X64, BinaryFormat::ELF);
+  HighFunc LiveFlagsHigh =
+      MedToHighConverter().convert(LiveFlagsMed, Arch::X64);
+  std::optional<VarKey> LiveFlagsOutputKey;
+  unsigned LiveFlagsOutputCount = 0;
+  walkStmts(LiveFlagsHigh.Body, [&](const HighStmt &Stmt) {
+    forEachExpr(Stmt, [&](const ExprPtr &Expr) {
+      if (!Expr || Expr->Kind != ExprKind::Call ||
+          Expr->IntrinsicId != Intrinsic::Cmpsb)
+        return;
+      ASSERT_EQ(Expr->IntrinsicOutputs.size(), 1u);
+      if (Expr->IntrinsicOutputs.size() == 1) {
+        LiveFlagsOutputKey = varKey(Expr->IntrinsicOutputs.front());
+        ++LiveFlagsOutputCount;
+      }
+    });
+  });
+  ASSERT_EQ(LiveFlagsOutputCount, 1u);
+  ASSERT_TRUE(LiveFlagsOutputKey.has_value());
+  bool LiveFlagsReturnUsesOutput = false;
+  std::set<const HighExpr *> SeenLiveFlagsExprs;
+  std::function<void(const HighExpr &)> FindLiveFlagsOutput =
+      [&](const HighExpr &Expr) {
+        if (!SeenLiveFlagsExprs.insert(&Expr).second)
+          return;
+        if (Expr.Kind == ExprKind::Var &&
+            varKey(Expr.Var) == *LiveFlagsOutputKey)
+          LiveFlagsReturnUsesOutput = true;
+        for (const ExprPtr &Operand : Expr.Operands)
+          if (Operand)
+            FindLiveFlagsOutput(*Operand);
+      };
+  walkStmts(LiveFlagsHigh.Body, [&](const HighStmt &Stmt) {
+    if (Stmt.Kind == StmtKind::Return && Stmt.RetVal)
+      FindLiveFlagsOutput(*Stmt.RetVal);
+  });
+  EXPECT_TRUE(LiveFlagsReturnUsesOutput);
+  std::string LiveFlagsHighC;
+  llvm::raw_string_ostream LiveFlagsHighCOS(LiveFlagsHighC);
+  ASSERT_TRUE(
+      HighCEmitter().emit({LiveFlagsHigh}, LiveFlagsHighCOS, HighCOptions));
+  LiveFlagsHighCOS.flush();
+  EXPECT_NE(LiveFlagsHighC.find("gs repz cmpsb"), std::string::npos);
+  EXPECT_NE(LiveFlagsHighC.find("= (uint16_t)neverd_flags"), std::string::npos)
+      << LiveFlagsHighC;
+
+  HighFunc Addr32StringHigh =
+      MedToHighConverter().convert(Addr32StringMed, Arch::X64);
+  std::string Addr32StringHighC;
+  llvm::raw_string_ostream Addr32StringHighCOS(Addr32StringHighC);
+  ASSERT_TRUE(HighCEmitter().emit({Addr32StringHigh}, Addr32StringHighCOS,
+                                  HighCOptions));
+  Addr32StringHighCOS.flush();
+  EXPECT_NE(Addr32StringHighC.find("addr32 gs repz cmpsb"), std::string::npos);
+  EXPECT_NE(Addr32StringHighC.find("addr32 fs rep outsb"), std::string::npos);
+  EXPECT_TRUE(validHighC(Addr32StringHighC));
+
+  // The same statement renderer owns the default-address-space REP families.
+  // This keeps DF, address-size and auxiliary flags explicit instead of
+  // falling back to C intrinsics with incompatible calling conventions.
+  LowFunc DefaultStringLow = buildFunction(
+      Arch::X64, InstructionMode::Default,
+      {0xfd,                         // std
+       0xf3, 0xa4,                   // rep movsb
+       0xf3, 0xaa,                   // rep stosb
+       0xf3, 0xac,                   // rep lodsb
+       0xf3, 0xa6, 0x31, 0xc0,       // unused-flags rep cmpsb; xor eax,eax
+       0xf3, 0xa6, 0x0f, 0x94, 0xc0, // live-flags rep cmpsb; sete al
+       0xf2, 0xae, 0x0f, 0x94, 0xc3, // live-flags repne scasb; sete bl
+       0xf3, 0x6e,                   // rep outsb
+       0xfc,                         // cld
+       0x67, 0xf3, 0x6c,             // addr32 rep insb
+       0x67, 0xf3, 0x6d,             // addr32 rep insd
+       0xc3});
+
+  // Default-address-space memory intrinsics obey the same operand contract as
+  // FS/GS forms.  Incomplete REP state is rejected at both public IR layers;
+  // it must never become a bare host REP instruction using ambient registers.
+  LowFunc MalformedDefaultStringLow = DefaultStringLow;
+  bool TruncatedDefaultMovs = false;
+  for (LowOp &Op : MalformedDefaultStringLow.Blocks.front().Ops)
+    if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs > 0 &&
+        Op.Inputs[0].isConst() &&
+        Op.Inputs[0].Offset == static_cast<uint64_t>(Intrinsic::Movsb)) {
+      Op.NumInputs = 4;
+      TruncatedDefaultMovs = true;
+      break;
+    }
+  ASSERT_TRUE(TruncatedDefaultMovs);
+  const std::string MalformedDefaultLowError = llvm::toString(
+      validateLowInstructionBoundaries(MalformedDefaultStringLow));
+  EXPECT_NE(MalformedDefaultLowError.find("invalid operand/output shape"),
+            std::string::npos);
+
+  auto TruncatedDefaultStringError = [&](Intrinsic Id,
+                                         uint8_t TruncatedInputs) {
+    LowFunc BadShape = DefaultStringLow;
+    bool Truncated = false;
+    for (LowOp &Op : BadShape.Blocks.front().Ops)
+      if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs > 0 &&
+          Op.Inputs[0].isConst() &&
+          Op.Inputs[0].Offset == static_cast<uint64_t>(Id)) {
+        Op.NumInputs = TruncatedInputs;
+        Truncated = true;
+        break;
+      }
+    EXPECT_TRUE(Truncated);
+    return Truncated
+               ? llvm::toString(validateLowInstructionBoundaries(BadShape))
+               : std::string{};
+  };
+  const std::array<std::pair<Intrinsic, uint8_t>, 3> FixedSegmentStrings{{
+      {Intrinsic::Stosb, 4},
+      {Intrinsic::Scasb, 5},
+      {Intrinsic::Insb, 4},
+  }};
+  for (const auto &[Id, TruncatedInputs] : FixedSegmentStrings)
+    EXPECT_NE(TruncatedDefaultStringError(Id, TruncatedInputs)
+                  .find("invalid operand/output shape"),
+              std::string::npos);
+
+  MedFunc DefaultStringMed = LowToMedConverter().convert(
+      DefaultStringLow, Arch::X64, BinaryFormat::ELF);
+  MedFunc MalformedDefaultStringMed = DefaultStringMed;
+  bool TruncatedDefaultMedMovs = false;
+  for (MedOp &Op : MalformedDefaultStringMed.Blocks.front().Ops)
+    if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs > 0 &&
+        Op.Inputs[0].isConst() &&
+        Op.Inputs[0].ConstVal == static_cast<uint64_t>(Intrinsic::Movsb)) {
+      Op.NumInputs = 4;
+      TruncatedDefaultMedMovs = true;
+      break;
+    }
+  ASSERT_TRUE(TruncatedDefaultMedMovs);
+  EXPECT_FALSE(verifyMedFunc(MalformedDefaultStringMed,
+                             "malformed-default-rep"));
+
+  llvm::LLVMContext DefaultStringContext;
+  auto DefaultStringModule = MedLLVMEmitter().emit(
+      {DefaultStringMed}, DefaultStringContext, "default-string-semantics",
+      Arch::X64);
+  ASSERT_NE(DefaultStringModule, nullptr);
+  EXPECT_TRUE(validLLVMModule(*DefaultStringModule));
+  bool SawDefaultMovs = false;
+  bool SawDefaultStos = false;
+  bool SawDefaultLods = false;
+  bool SawDefaultCmps = false;
+  bool SawDefaultScas = false;
+  bool SawDefaultOuts = false;
+  bool SawAddr32Insb = false;
+  bool SawAddr32Insd = false;
+  for (const llvm::Function &Function : *DefaultStringModule)
+    for (const llvm::BasicBlock &Block : Function)
+      for (const llvm::Instruction &Instruction : Block) {
+        const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction);
+        const auto *Asm =
+            Call ? llvm::dyn_cast<llvm::InlineAsm>(Call->getCalledOperand())
+                 : nullptr;
+        if (!Asm)
+          continue;
+        const llvm::StringRef Text = Asm->getAsmString();
+        SawDefaultMovs |= Text.contains("rep movsb");
+        SawDefaultStos |= Text.contains("rep stosb");
+        SawDefaultLods |= Text.contains("rep lodsb");
+        SawDefaultCmps |= Text.contains("repz cmpsb") &&
+                          Text.contains("lahf");
+        SawDefaultScas |= Text.contains("repnz scasb") &&
+                          Text.contains("lahf");
+        SawDefaultOuts |= Text.contains("rep outsb");
+        SawAddr32Insb |= Text.contains("addr32 rep insb");
+        SawAddr32Insd |= Text.contains("addr32 rep insd");
+      }
+  EXPECT_TRUE(SawDefaultMovs);
+  EXPECT_TRUE(SawDefaultStos);
+  EXPECT_TRUE(SawDefaultLods);
+  EXPECT_TRUE(SawDefaultCmps);
+  EXPECT_TRUE(SawDefaultScas);
+  EXPECT_TRUE(SawDefaultOuts);
+  EXPECT_TRUE(SawAddr32Insb);
+  EXPECT_TRUE(SawAddr32Insd);
+
+  HighFunc DefaultStringHigh =
+      MedToHighConverter().convert(DefaultStringMed, Arch::X64);
+  std::string DefaultStringHighC;
+  llvm::raw_string_ostream DefaultStringHighCOS(DefaultStringHighC);
+  ASSERT_TRUE(HighCEmitter().emit({DefaultStringHigh}, DefaultStringHighCOS,
+                                  HighCOptions));
+  DefaultStringHighCOS.flush();
+  EXPECT_NE(DefaultStringHighC.find("rep movsb"), std::string::npos);
+  EXPECT_NE(DefaultStringHighC.find("rep stosb"), std::string::npos);
+  EXPECT_NE(DefaultStringHighC.find("rep lodsb"), std::string::npos);
+  EXPECT_NE(DefaultStringHighC.find("repz cmpsb"), std::string::npos);
+  EXPECT_NE(DefaultStringHighC.find("repnz scasb"), std::string::npos);
+  EXPECT_NE(DefaultStringHighC.find("rep outsb"), std::string::npos);
+  EXPECT_NE(DefaultStringHighC.find("addr32 rep insb"), std::string::npos);
+  EXPECT_NE(DefaultStringHighC.find("addr32 rep insl"), std::string::npos);
+  EXPECT_EQ(DefaultStringHighC.find("%%:("), std::string::npos);
+  EXPECT_TRUE(validHighC(DefaultStringHighC));
+
+  // Cache and architectural-state instructions own a real memory operand.
+  // Their effective-address offset is input 1, FS/GS stays on the intrinsic,
+  // and side-effect-only forms never manufacture an integer result.
+  auto CheckMemoryIntrinsic =
+      [&](std::initializer_list<uint8_t> Bytes, Intrinsic Id,
+          NdMemoryAddressSpace AddressSpace) {
+        std::vector<LowOp> Ops = LiftStringInstruction(Bytes);
+        auto It = FindIntrinsic(Ops, Id);
+        EXPECT_NE(It, Ops.end());
+        if (It != Ops.end()) {
+          EXPECT_EQ(It->MemoryAddressSpace, AddressSpace);
+          EXPECT_EQ(It->Output.Size, 0u);
+          EXPECT_GE(It->NumInputs, 2u);
+          if (It->NumInputs >= 2)
+            EXPECT_EQ(It->Inputs[1].Size, 8u);
+        }
+        return Ops;
+      };
+  const std::vector<LowOp> FSLdmxcsr = CheckMemoryIntrinsic(
+      {0x64, 0x0f, 0xae, 0x50, 0x20}, Intrinsic::Ldmxcsr,
+      NdMemoryAddressSpace::X86FS);
+  const std::vector<LowOp> GSStmxcsr = CheckMemoryIntrinsic(
+      {0x65, 0x0f, 0xae, 0x58, 0x24}, Intrinsic::Stmxcsr,
+      NdMemoryAddressSpace::X86GS);
+  const std::vector<LowOp> GSLdmxcsr = CheckMemoryIntrinsic(
+      {0x65, 0x0f, 0xae, 0x50, 0x24}, Intrinsic::Ldmxcsr,
+      NdMemoryAddressSpace::X86GS);
+  const std::vector<LowOp> FSClflush = CheckMemoryIntrinsic(
+      {0x64, 0x0f, 0xae, 0x78, 0x28}, Intrinsic::Clflush,
+      NdMemoryAddressSpace::X86FS);
+  CheckMemoryIntrinsic({0x65, 0x66, 0x0f, 0xae, 0x78, 0x30},
+                       Intrinsic::Clflushopt,
+                       NdMemoryAddressSpace::X86GS);
+  CheckMemoryIntrinsic({0x64, 0x66, 0x0f, 0xae, 0x70, 0x38},
+                       Intrinsic::Clwb, NdMemoryAddressSpace::X86FS);
+  CheckMemoryIntrinsic({0x64, 0x0f, 0x18, 0x48, 0x40},
+                       Intrinsic::PrefetchT0,
+                       NdMemoryAddressSpace::X86FS);
+  const std::vector<LowOp> GSPrefetchW = CheckMemoryIntrinsic(
+      {0x65, 0x0f, 0x0d, 0x48, 0x48}, Intrinsic::PrefetchW,
+      NdMemoryAddressSpace::X86GS);
+  CheckMemoryIntrinsic({0x64, 0x0f, 0x0d, 0x50, 0x50},
+                       Intrinsic::PrefetchWT1,
+                       NdMemoryAddressSpace::X86FS);
+  CheckMemoryIntrinsic({0x64, 0x0f, 0xae, 0x40, 0x58}, Intrinsic::Fxsave,
+                       NdMemoryAddressSpace::X86FS);
+  CheckMemoryIntrinsic({0x65, 0x0f, 0xae, 0x48, 0x60}, Intrinsic::Fxrstor,
+                       NdMemoryAddressSpace::X86GS);
+  CheckMemoryIntrinsic({0x64, 0xd9, 0x70, 0x68}, Intrinsic::X87Fnstenv,
+                       NdMemoryAddressSpace::X86FS);
+  CheckMemoryIntrinsic({0x65, 0xd9, 0x60, 0x70}, Intrinsic::X87Fldenv,
+                       NdMemoryAddressSpace::X86GS);
+  CheckMemoryIntrinsic({0x64, 0xdd, 0x70, 0x78}, Intrinsic::X87Fnsave,
+                       NdMemoryAddressSpace::X86FS);
+  CheckMemoryIntrinsic({0x65, 0xdd, 0x60, 0x7c}, Intrinsic::X87Frstor,
+                       NdMemoryAddressSpace::X86GS);
+  const std::vector<LowOp> FSXsave = CheckMemoryIntrinsic(
+      {0x64, 0x0f, 0xae, 0x60, 0x20}, Intrinsic::Xsave,
+      NdMemoryAddressSpace::X86FS);
+  auto FSXsaveOp = FindIntrinsic(FSXsave, Intrinsic::Xsave);
+  ASSERT_NE(FSXsaveOp, FSXsave.end());
+  ASSERT_GE(FSXsaveOp->NumInputs, 4u);
+  EXPECT_EQ(FSXsaveOp->Inputs[2].Size, 4u);
+  EXPECT_EQ(FSXsaveOp->Inputs[3].Size, 4u);
+  CheckMemoryIntrinsic({0x65, 0x0f, 0xae, 0x68, 0x28}, Intrinsic::Xrstor,
+                       NdMemoryAddressSpace::X86GS);
+
+  // State snapshots need an explicit bridge between the lifted XMM/x87/MXCSR
+  // variables and the architectural memory layout.  Until that representation
+  // exists, every consumer fails closed instead of reading/writing incidental
+  // host registers through raw inline asm.
+  NdOpEmulator UnsupportedStateEmulator(SemanticImage);
+  UnsupportedStateEmulator.setStrictMode(true);
+  ASSERT_TRUE(UnsupportedStateEmulator.setMemoryAddressSpaceBase(
+      NdMemoryAddressSpace::X86FS, FSBase));
+  UnsupportedStateEmulator.setRegister(x86reg::RAX, 0);
+  UnsupportedStateEmulator.setRegister(x86reg::RDX, 0);
+  EXPECT_EQ(UnsupportedStateEmulator.run(FSXsave),
+            static_cast<size_t>(std::distance(FSXsave.begin(), FSXsaveOp)));
+
+  LowFunc UnsupportedStateLow = buildFunction(
+      Arch::X64, InstructionMode::Default,
+      {0x64, 0x0f, 0xae, 0x60, 0x20, 0xc3});
+  MedFunc UnsupportedStateMed = LowToMedConverter().convert(
+      UnsupportedStateLow, Arch::X64, BinaryFormat::ELF);
+  ASSERT_TRUE(verifyMedFunc(UnsupportedStateMed, "state-snapshot-shape"));
+
+  // The lightweight emulator models the exact observable state for MXCSR and
+  // cache hints.  A prefetched unmapped offset is non-faulting; a cache flush
+  // validates the resolved target; STMXCSR followed by LDMXCSR round-trips the
+  // architectural value through target memory.
+  BinaryImage StateSemanticImage = SemanticImage;
+  auto StateFSSegment = std::find_if(
+      StateSemanticImage.Segments.begin(), StateSemanticImage.Segments.end(),
+      [&](const Segment &S) { return S.VA == FSBase; });
+  ASSERT_NE(StateFSSegment, StateSemanticImage.Segments.end());
+  const uint32_t LoadedMXCSR = 0x5f80;
+  std::memcpy(StateFSSegment->Data.data() + 0x20, &LoadedMXCSR,
+              sizeof(LoadedMXCSR));
+  NdOpEmulator StateEmulator(StateSemanticImage);
+  ASSERT_TRUE(StateEmulator.setMemoryAddressSpaceBase(
+      NdMemoryAddressSpace::X86FS, FSBase));
+  ASSERT_TRUE(StateEmulator.setMemoryAddressSpaceBase(
+      NdMemoryAddressSpace::X86GS, GSBase));
+  StateEmulator.setRegister(x86reg::RAX, 0);
+  EXPECT_EQ(StateEmulator.run(FSLdmxcsr), FSLdmxcsr.size());
+  EXPECT_EQ(StateEmulator.getMXCSR(), LoadedMXCSR);
+  BinaryImage InvalidMXCSRImage = StateSemanticImage;
+  auto InvalidMXCSRSegment = std::find_if(
+      InvalidMXCSRImage.Segments.begin(), InvalidMXCSRImage.Segments.end(),
+      [&](const Segment &S) { return S.VA == FSBase; });
+  ASSERT_NE(InvalidMXCSRSegment, InvalidMXCSRImage.Segments.end());
+  const uint32_t InvalidMXCSR = UINT32_C(0x00010000);
+  std::memcpy(InvalidMXCSRSegment->Data.data() + 0x20, &InvalidMXCSR,
+              sizeof(InvalidMXCSR));
+  NdOpEmulator InvalidMXCSREmulator(InvalidMXCSRImage);
+  ASSERT_TRUE(InvalidMXCSREmulator.setMemoryAddressSpaceBase(
+      NdMemoryAddressSpace::X86FS, FSBase));
+  InvalidMXCSREmulator.setRegister(x86reg::RAX, 0);
+  InvalidMXCSREmulator.setMXCSR(0x1f80);
+  EXPECT_LT(InvalidMXCSREmulator.run(FSLdmxcsr), FSLdmxcsr.size());
+  EXPECT_EQ(InvalidMXCSREmulator.getMXCSR(), 0x1f80u);
+  constexpr uint32_t StoredMXCSR = 0x1f40;
+  StateEmulator.setMXCSR(StoredMXCSR);
+  EXPECT_EQ(StateEmulator.run(GSStmxcsr), GSStmxcsr.size());
+  StateEmulator.setMXCSR(0);
+  EXPECT_EQ(StateEmulator.run(GSLdmxcsr), GSLdmxcsr.size());
+  EXPECT_EQ(StateEmulator.getMXCSR(), StoredMXCSR);
+  StateEmulator.setLoadCollect(true);
+  EXPECT_EQ(StateEmulator.run(FSClflush), FSClflush.size());
+  EXPECT_TRUE(StateEmulator.getLoadRecords().empty())
+      << "cache maintenance must not masquerade as jump-table data evidence";
+  const size_t CacheLoads = StateEmulator.getLoadRecords().size();
+  StateEmulator.setRegister(x86reg::RAX, UINT64_C(0x100000));
+  EXPECT_EQ(StateEmulator.run(GSPrefetchW), GSPrefetchW.size());
+  EXPECT_EQ(StateEmulator.getLoadRecords().size(), CacheLoads)
+      << "prefetch remains a non-faulting hint and performs no data read";
+
+  LowFunc MemoryStateLow = buildFunction(
+      Arch::X64, InstructionMode::Default,
+      {0x64, 0x0f, 0xae, 0x50, 0x20,       // ldmxcsr fs:[rax+20h]
+       0x65, 0x0f, 0xae, 0x58, 0x24,       // stmxcsr gs:[rax+24h]
+       0x65, 0x66, 0x0f, 0xae, 0x78, 0x30, // clflushopt gs:[rax+30h]
+       0x64, 0x0f, 0x0d, 0x48, 0x40,       // prefetchw fs:[rax+40h]
+       0xc3});
+  MedFunc MemoryStateMed = LowToMedConverter().convert(
+      MemoryStateLow, Arch::X64, BinaryFormat::ELF);
+  ASSERT_TRUE(verifyMedFunc(MemoryStateMed, "segment-memory-state"));
+  llvm::LLVMContext MemoryStateContext;
+  auto MemoryStateModule = MedLLVMEmitter().emit(
+      {MemoryStateMed}, MemoryStateContext, "segment-memory-state", Arch::X64);
+  ASSERT_NE(MemoryStateModule, nullptr);
+  EXPECT_TRUE(validLLVMModule(*MemoryStateModule));
+  bool SawLLVMFSLdmxcsr = false;
+  bool SawLLVMGSStmxcsr = false;
+  bool SawLLVMGSClflushopt = false;
+  bool SawLLVMFSPrefetchW = false;
+  for (const llvm::Function &Function : *MemoryStateModule)
+    for (const llvm::BasicBlock &Block : Function)
+      for (const llvm::Instruction &Instruction : Block) {
+        const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction);
+        const auto *Asm =
+            Call ? llvm::dyn_cast<llvm::InlineAsm>(Call->getCalledOperand())
+                 : nullptr;
+        if (!Asm)
+          continue;
+        const llvm::StringRef Text = Asm->getAsmString();
+        SawLLVMFSLdmxcsr |= Text.contains("ldmxcsr %fs:($0)");
+        SawLLVMGSStmxcsr |= Text.contains("stmxcsr %gs:($0)");
+        SawLLVMGSClflushopt |= Text.contains("clflushopt %gs:($0)");
+        SawLLVMFSPrefetchW |= Text.contains("prefetchw %fs:($0)");
+      }
+  EXPECT_TRUE(SawLLVMFSLdmxcsr);
+  EXPECT_TRUE(SawLLVMGSStmxcsr);
+  EXPECT_TRUE(SawLLVMGSClflushopt);
+  EXPECT_TRUE(SawLLVMFSPrefetchW);
+
+  HighFunc MemoryStateHigh =
+      MedToHighConverter().convert(MemoryStateMed, Arch::X64);
+  std::string MemoryStateHighC;
+  llvm::raw_string_ostream MemoryStateHighCOS(MemoryStateHighC);
+  ASSERT_TRUE(HighCEmitter().emit({MemoryStateHigh}, MemoryStateHighCOS,
+                                  HighCOptions));
+  MemoryStateHighCOS.flush();
+  EXPECT_NE(MemoryStateHighC.find("ldmxcsr %%fs:(%[address])"),
+            std::string::npos);
+  EXPECT_NE(MemoryStateHighC.find("stmxcsr %%gs:(%[address])"),
+            std::string::npos);
+  EXPECT_NE(MemoryStateHighC.find("clflushopt %%gs:(%[address])"),
+            std::string::npos);
+  EXPECT_NE(MemoryStateHighC.find("prefetchw %%fs:(%[address])"),
+            std::string::npos);
+  EXPECT_TRUE(validHighC(MemoryStateHighC));
+
+  // System-register memory stores are observable even with no SSA result;
+  // the converter's DCE must retain them.  Conversely LLDT's register form
+  // only reads r/m16 and must not manufacture an RAX definition.
+  const std::vector<LowOp> FSSldt = CheckMemoryIntrinsic(
+      {0x64, 0x0f, 0x00, 0x00}, Intrinsic::Sldt,
+      NdMemoryAddressSpace::X86FS);
+  LowFunc FSSldtLow = buildFunction(
+      Arch::X64, InstructionMode::Default,
+      {0x64, 0x0f, 0x00, 0x00, 0xc3});
+  MedFunc FSSldtMed = LowToMedConverter().convert(
+      FSSldtLow, Arch::X64, BinaryFormat::ELF);
+  EXPECT_TRUE(std::any_of(
+      FSSldtMed.Blocks.begin(), FSSldtMed.Blocks.end(),
+      [](const MedBlock &Block) {
+        return std::any_of(Block.Ops.begin(), Block.Ops.end(),
+                           [](const MedOp &Op) {
+                             return Op.Opcode == NdOp::INTRINSIC &&
+                                    Op.NumInputs >= 1 &&
+                                    Op.Inputs[0].isConst() &&
+                                    Op.Inputs[0].ConstVal ==
+                                        static_cast<uint64_t>(Intrinsic::Sldt);
+                           });
+      }));
+  const std::vector<LowOp> RegisterLldt =
+      LiftStringInstruction({0x0f, 0x00, 0xd0});
+  auto RegisterLldtOp = FindIntrinsic(RegisterLldt, Intrinsic::Lldt);
+  ASSERT_NE(RegisterLldtOp, RegisterLldt.end());
+  EXPECT_EQ(RegisterLldtOp->Output.Size, 0u);
+  ASSERT_GE(RegisterLldtOp->NumInputs, 2u);
+  EXPECT_EQ(RegisterLldtOp->Inputs[1].Size, 2u);
+
+  LowFunc RegisterSystemLow = buildFunction(
+      Arch::X64, InstructionMode::Default,
+      {0x0f, 0x00, 0xd0,             // lldt ax
+       0x48, 0x0f, 0x00, 0xc0,       // sldt rax
+       0xc3});
+  EXPECT_TRUE(
+      llvm::toString(validateLowInstructionBoundaries(RegisterSystemLow))
+          .empty());
+  MedFunc RegisterSystemMed = LowToMedConverter().convert(
+      RegisterSystemLow, Arch::X64, BinaryFormat::ELF);
+  EXPECT_TRUE(verifyMedFunc(RegisterSystemMed, "register-system-forms"));
+
+  LowFunc I386SldtLow = buildFunction(
+      Arch::X86, InstructionMode::Default,
+      {0x0f, 0x00, 0x00, 0xc3});
+  MedFunc I386SldtMed = LowToMedConverter().convert(
+      I386SldtLow, Arch::X86, BinaryFormat::ELF);
+  HighFunc I386SldtHigh =
+      MedToHighConverter().convert(I386SldtMed, Arch::X86);
+  CEmitterOptions I386COptions;
+  I386COptions.TheArch = Arch::X86;
+  std::string I386SldtHighC;
+  llvm::raw_string_ostream I386SldtHighCOS(I386SldtHighC);
+  ASSERT_TRUE(
+      HighCEmitter().emit({I386SldtHigh}, I386SldtHighCOS, I386COptions));
+  I386SldtHighCOS.flush();
+  EXPECT_NE(I386SldtHighC.find("sldt (%[address])"), std::string::npos);
+  llvm::LLVMContext I386SldtContext;
+  auto I386SldtModule = MedLLVMEmitter().emit(
+      {I386SldtMed}, I386SldtContext, "i386-system-memory", Arch::X86);
+  ASSERT_NE(I386SldtModule, nullptr);
+  EXPECT_TRUE(validLLVMModule(*I386SldtModule));
+  bool SawI386NativeAddressOperand = false;
+  for (const llvm::Function &Function : *I386SldtModule)
+    for (const llvm::BasicBlock &Block : Function)
+      for (const llvm::Instruction &Instruction : Block) {
+        const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction);
+        const auto *Asm =
+            Call ? llvm::dyn_cast<llvm::InlineAsm>(Call->getCalledOperand())
+                 : nullptr;
+        if (Asm && Asm->getAsmString().contains("sldt ($0)")) {
+          ASSERT_GE(Call->arg_size(), 1u);
+          SawI386NativeAddressOperand =
+              Call->getArgOperand(0)->getType()->isIntegerTy(32);
+        }
+      }
+  EXPECT_TRUE(SawI386NativeAddressOperand)
+      << "i386 inline asm must receive one native-width address register";
+
+  // Fault-suppressing masked memory operations cannot be flattened to the
+  // ordinary intrinsics: their implicit memory operand must retain FS/GS in
+  // the actual instruction emitted by High-C.
+  auto MaskedTemp = [](int Id, uint16_t Size) {
+    MedVar Var;
+    Var.Kind = MedVar::Temp;
+    Var.TheArch = Arch::X64;
+    Var.Id = Id;
+    Var.SSAVer = 1;
+    Var.Size = Size;
+    return Var;
+  };
+  MedFunc MaskedMed;
+  MaskedMed.Entry = 0x1800;
+  MaskedMed.Name = "segment_masked_memory_semantics";
+  MaskedMed.ReturnType = NdType::makeVoid();
+  MedBlock MaskedBlock;
+  MaskedBlock.Id = 0;
+  MaskedBlock.StartAddr = MaskedMed.Entry;
+  MaskedBlock.EndAddr = MaskedMed.Entry + 12;
+  MedOp MaskedLoad;
+  MaskedLoad.Opcode = NdOp::INTRINSIC;
+  MaskedLoad.Addr = MaskedMed.Entry;
+  MaskedLoad.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+  MaskedLoad.Output = MaskedTemp(1, 16);
+  MaskedLoad.addInput(
+      MedVar::makeConst(static_cast<uint64_t>(Intrinsic::MaskedLoadD), 2,
+                        ConstantAddressProvenance::Scalar));
+  MaskedLoad.addInput(
+      MedVar::makeConst(0x60, 8, ConstantAddressProvenance::Scalar));
+  MaskedLoad.addInput(MedVar::makeConst(UINT64_C(0x8000000080000000), 16,
+                                        ConstantAddressProvenance::Scalar));
+  MaskedBlock.Ops.push_back(MaskedLoad);
+  MedOp WideMaskedLoad = MaskedLoad;
+  WideMaskedLoad.Addr = MaskedMed.Entry + 1;
+  WideMaskedLoad.Output = MaskedTemp(2, 32);
+  WideMaskedLoad.Inputs[1] =
+      MedVar::makeConst(0x80, 8, ConstantAddressProvenance::Scalar);
+  WideMaskedLoad.Inputs[2] = MedVar::makeConst(
+      UINT64_C(0x8000000080000000), 32,
+      ConstantAddressProvenance::Scalar);
+  MaskedBlock.Ops.push_back(WideMaskedLoad);
+  MedOp DefaultMaskedLoad = MaskedLoad;
+  DefaultMaskedLoad.Addr = MaskedMed.Entry + 2;
+  DefaultMaskedLoad.Output = MaskedTemp(3, 16);
+  DefaultMaskedLoad.MemoryAddressSpace = NdMemoryAddressSpace::Default;
+  DefaultMaskedLoad.Inputs[1] =
+      MedVar::makeConst(0x88, 8, ConstantAddressProvenance::Scalar);
+  MaskedBlock.Ops.push_back(DefaultMaskedLoad);
+  MedOp MaskedStore;
+  MaskedStore.Opcode = NdOp::INTRINSIC;
+  MaskedStore.Addr = MaskedMed.Entry + 4;
+  MaskedStore.MemoryAddressSpace = NdMemoryAddressSpace::X86GS;
+  MaskedStore.addInput(
+      MedVar::makeConst(static_cast<uint64_t>(Intrinsic::MaskedStoreQ), 2,
+                        ConstantAddressProvenance::Scalar));
+  MaskedStore.addInput(
+      MedVar::makeConst(0x70, 8, ConstantAddressProvenance::Scalar));
+  MaskedStore.addInput(MedVar::makeConst(UINT64_C(0x8000000000000000), 16,
+                                         ConstantAddressProvenance::Scalar));
+  MaskedStore.addInput(MaskedLoad.Output);
+  MaskedBlock.Ops.push_back(MaskedStore);
+  MedOp WideMaskedStore;
+  WideMaskedStore.Opcode = NdOp::INTRINSIC;
+  WideMaskedStore.Addr = MaskedMed.Entry + 5;
+  WideMaskedStore.MemoryAddressSpace = NdMemoryAddressSpace::X86GS;
+  WideMaskedStore.addInput(MedVar::makeConst(
+      static_cast<uint64_t>(Intrinsic::MaskedStoreQ), 2,
+      ConstantAddressProvenance::Scalar));
+  WideMaskedStore.addInput(
+      MedVar::makeConst(0x90, 8, ConstantAddressProvenance::Scalar));
+  WideMaskedStore.addInput(MedVar::makeConst(
+      UINT64_C(0x8000000000000000), 32,
+      ConstantAddressProvenance::Scalar));
+  WideMaskedStore.addInput(WideMaskedLoad.Output);
+  MaskedBlock.Ops.push_back(WideMaskedStore);
+  MedOp DefaultMaskedStore;
+  DefaultMaskedStore.Opcode = NdOp::INTRINSIC;
+  DefaultMaskedStore.Addr = MaskedMed.Entry + 5;
+  DefaultMaskedStore.addInput(MedVar::makeConst(
+      static_cast<uint64_t>(Intrinsic::MaskedStoreD), 2,
+      ConstantAddressProvenance::Scalar));
+  DefaultMaskedStore.addInput(
+      MedVar::makeConst(0x98, 8, ConstantAddressProvenance::Scalar));
+  DefaultMaskedStore.addInput(MedVar::makeConst(
+      UINT64_C(0x8000000080000000), 16,
+      ConstantAddressProvenance::Scalar));
+  DefaultMaskedStore.addInput(DefaultMaskedLoad.Output);
+  MaskedBlock.Ops.push_back(DefaultMaskedStore);
+  MedOp ByteMaskedStore;
+  ByteMaskedStore.Opcode = NdOp::INTRINSIC;
+  ByteMaskedStore.Addr = MaskedMed.Entry + 6;
+  ByteMaskedStore.addInput(MedVar::makeConst(
+      static_cast<uint64_t>(Intrinsic::MaskedStoreB), 2,
+      ConstantAddressProvenance::Scalar));
+  ByteMaskedStore.addInput(
+      MedVar::makeConst(0xa0, 8, ConstantAddressProvenance::Scalar));
+  ByteMaskedStore.addInput(MedVar::makeConst(
+      UINT64_C(0x8000000000000080), 8,
+      ConstantAddressProvenance::Scalar));
+  ByteMaskedStore.addInput(MedVar::makeConst(
+      UINT64_C(0x8877665544332211), 8,
+      ConstantAddressProvenance::Scalar));
+  MaskedBlock.Ops.push_back(ByteMaskedStore);
+  MedOp FSByteMaskedStore = ByteMaskedStore;
+  FSByteMaskedStore.Addr = MaskedMed.Entry + 7;
+  FSByteMaskedStore.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+  FSByteMaskedStore.Inputs[1] =
+      MedVar::makeConst(0xb0, 8, ConstantAddressProvenance::Scalar);
+  FSByteMaskedStore.Inputs[2] = MedVar::makeConst(
+      UINT64_C(0x8000000000000080), 16,
+      ConstantAddressProvenance::Scalar);
+  FSByteMaskedStore.Inputs[3] = MedVar::makeConst(
+      UINT64_C(0x8877665544332211), 16,
+      ConstantAddressProvenance::Scalar);
+  MaskedBlock.Ops.push_back(FSByteMaskedStore);
+  MedOp MaskedReturn;
+  MaskedReturn.Opcode = NdOp::RETURN;
+  MaskedReturn.Addr = MaskedMed.Entry + 8;
+  MaskedBlock.Ops.push_back(MaskedReturn);
+  MaskedMed.Blocks.push_back(std::move(MaskedBlock));
+  ASSERT_TRUE(verifyMedFunc(MaskedMed, "segment-masked-memory"));
+
+  llvm::LLVMContext MaskedContext;
+  auto MaskedModule = MedLLVMEmitter().emit({MaskedMed}, MaskedContext,
+                                            "segment-masked-memory", Arch::X64);
+  ASSERT_NE(MaskedModule, nullptr);
+  EXPECT_TRUE(validLLVMModule(*MaskedModule));
+  unsigned FSMaskedLoads = 0;
+  unsigned GSMaskedStores = 0;
+  unsigned WideMaskedLoads = 0;
+  unsigned WideMaskedStores = 0;
+  unsigned DefaultDwordMaskedLoads = 0;
+  unsigned DefaultDwordMaskedStores = 0;
+  unsigned DefaultByteMaskedStores = 0;
+  unsigned FSByteMaskedStores = 0;
+  for (const llvm::Function &Function : *MaskedModule)
+    for (const llvm::BasicBlock &Block : Function)
+      for (const llvm::Instruction &Instruction : Block) {
+        const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction);
+        if (!Call || !Call->getCalledFunction())
+          continue;
+        const llvm::StringRef Name = Call->getCalledFunction()->getName();
+        if (Name.starts_with("llvm.masked.load")) {
+          ASSERT_GE(Call->arg_size(), 1u);
+          FSMaskedLoads +=
+              Call->getArgOperand(0)->getType()->getPointerAddressSpace() ==
+              257;
+          WideMaskedLoads +=
+              Call->getType()->getPrimitiveSizeInBits() == 256;
+          auto *ResultVector =
+              llvm::dyn_cast<llvm::FixedVectorType>(Call->getType());
+          ASSERT_NE(ResultVector, nullptr);
+          DefaultDwordMaskedLoads +=
+              Call->getArgOperand(0)->getType()->getPointerAddressSpace() == 0 &&
+              ResultVector->getElementType()->isIntegerTy(32);
+        }
+        if (Name.starts_with("llvm.masked.store")) {
+          ASSERT_GE(Call->arg_size(), 2u);
+          const unsigned AS =
+              Call->getArgOperand(1)->getType()->getPointerAddressSpace();
+          GSMaskedStores += AS == 256;
+          auto *VectorTy = llvm::dyn_cast<llvm::FixedVectorType>(
+              Call->getArgOperand(0)->getType());
+          ASSERT_NE(VectorTy, nullptr);
+          WideMaskedStores +=
+              VectorTy->getPrimitiveSizeInBits() == 256;
+          if (VectorTy->getElementType()->isIntegerTy(8)) {
+            DefaultByteMaskedStores += AS == 0;
+            FSByteMaskedStores += AS == 257;
+          }
+          DefaultDwordMaskedStores +=
+              AS == 0 && VectorTy->getElementType()->isIntegerTy(32);
+        }
+      }
+  EXPECT_EQ(FSMaskedLoads, 2u);
+  EXPECT_EQ(GSMaskedStores, 2u)
+      << "void segmented masked stores must not be dropped before SIMD "
+         "dispatch";
+  EXPECT_EQ(WideMaskedLoads, 1u);
+  EXPECT_EQ(WideMaskedStores, 1u);
+  EXPECT_EQ(DefaultDwordMaskedLoads, 1u);
+  EXPECT_EQ(DefaultDwordMaskedStores, 1u);
+  EXPECT_EQ(DefaultByteMaskedStores, 1u);
+  EXPECT_EQ(FSByteMaskedStores, 1u);
+
+  HighFunc MaskedHigh = MedToHighConverter().convert(MaskedMed, Arch::X64);
+  std::string MaskedHighC;
+  llvm::raw_string_ostream MaskedHighCOS(MaskedHighC);
+  ASSERT_TRUE(HighCEmitter().emit({MaskedHigh}, MaskedHighCOS, HighCOptions));
+  MaskedHighCOS.flush();
+  EXPECT_NE(MaskedHighC.find("vmaskmovps %%fs:(%[address])"),
+            std::string::npos);
+  EXPECT_NE(MaskedHighC.find("vmaskmovpd %[data], %[mask], "
+                             "%%gs:(%[address])"),
+            std::string::npos);
+  EXPECT_NE(MaskedHighC.find("vmaskmovps (%[address])"), std::string::npos);
+  EXPECT_NE(MaskedHighC.find(
+                "vmaskmovps %[data], %[mask], (%[address])"),
+            std::string::npos);
+  EXPECT_EQ(MaskedHighC.find("_mm_maskload"), std::string::npos);
+  EXPECT_EQ(MaskedHighC.find("_mm_maskstore"), std::string::npos);
+  EXPECT_NE(MaskedHighC.find("typedef unsigned _BitInt(256) uint256_t;"),
+            std::string::npos);
+  EXPECT_NE(MaskedHighC.find("__m256i"), std::string::npos);
+  EXPECT_NE(MaskedHighC.find("__builtin_memcpy"), std::string::npos);
+  EXPECT_NE(MaskedHighC.find(
+                "if (((neverd_mask >> (neverd_i * 8)) & 0x80u) != 0)"),
+            std::string::npos);
+  EXPECT_NE(MaskedHighC.find("address_space(257)"), std::string::npos);
+  EXPECT_TRUE(validHighC(MaskedHighC));
+
+  // Generic atomic opcodes share the same pointer-resolution owner as scalar
+  // loads/stores.  A segmented atomic must bypass image-global resolution and
+  // reach LLVM and High-C with its target address space intact.
+  auto AtomicTemp = [](int Id) {
+    MedVar Var;
+    Var.Kind = MedVar::Temp;
+    Var.TheArch = Arch::X64;
+    Var.Id = Id;
+    Var.SSAVer = 1;
+    Var.Size = 8;
+    return Var;
+  };
+  MedFunc AtomicMed;
+  AtomicMed.Entry = 0x2000;
+  AtomicMed.Name = "segment_atomic_semantics";
+  AtomicMed.ReturnType = NdType::makeVoid();
+  MedBlock AtomicBlock;
+  AtomicBlock.Id = 0;
+  AtomicBlock.StartAddr = AtomicMed.Entry;
+  AtomicBlock.EndAddr = AtomicMed.Entry + 12;
+  MedOp AtomicAdd;
+  AtomicAdd.Opcode = NdOp::ATOMIC_ADD;
+  AtomicAdd.Addr = AtomicMed.Entry;
+  AtomicAdd.MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+  AtomicAdd.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+  AtomicAdd.Output = AtomicTemp(1);
+  AtomicAdd.addInput(
+      MedVar::makeConst(0x40, 8, ConstantAddressProvenance::Scalar));
+  AtomicAdd.addInput(
+      MedVar::makeConst(3, 8, ConstantAddressProvenance::Scalar));
+  AtomicBlock.Ops.push_back(AtomicAdd);
+  MedOp AtomicCmpXchg;
+  AtomicCmpXchg.Opcode = NdOp::ATOMIC_CMPXCHG;
+  AtomicCmpXchg.Addr = AtomicMed.Entry + 4;
+  AtomicCmpXchg.MemoryOrdering = NdMemoryOrdering::AcquireRelease;
+  AtomicCmpXchg.MemoryAddressSpace = NdMemoryAddressSpace::X86GS;
+  AtomicCmpXchg.Output = AtomicTemp(2);
+  AtomicCmpXchg.addInput(
+      MedVar::makeConst(0x48, 8, ConstantAddressProvenance::Scalar));
+  AtomicCmpXchg.addInput(
+      MedVar::makeConst(1, 8, ConstantAddressProvenance::Scalar));
+  AtomicCmpXchg.addInput(
+      MedVar::makeConst(2, 8, ConstantAddressProvenance::Scalar));
+  AtomicBlock.Ops.push_back(AtomicCmpXchg);
+  MedOp AtomicReturn;
+  AtomicReturn.Opcode = NdOp::RETURN;
+  AtomicReturn.Addr = AtomicMed.Entry + 8;
+  AtomicBlock.Ops.push_back(AtomicReturn);
+  AtomicMed.Blocks.push_back(std::move(AtomicBlock));
+  ASSERT_TRUE(verifyMedFunc(AtomicMed, "segment-atomics"));
+
+  llvm::LLVMContext AtomicContext;
+  auto AtomicModule = MedLLVMEmitter().emit({AtomicMed}, AtomicContext,
+                                            "segment-atomics", Arch::X64);
+  ASSERT_NE(AtomicModule, nullptr);
+  EXPECT_TRUE(validLLVMModule(*AtomicModule));
+  unsigned FSAtomicRMW = 0;
+  unsigned GSAtomicCmpXchg = 0;
+  for (const llvm::Function &Function : *AtomicModule)
+    for (const llvm::BasicBlock &Block : Function)
+      for (const llvm::Instruction &Instruction : Block) {
+        if (const auto *RMW = llvm::dyn_cast<llvm::AtomicRMWInst>(&Instruction))
+          FSAtomicRMW +=
+              RMW->getPointerOperand()->getType()->getPointerAddressSpace() ==
+              257;
+        if (const auto *CmpXchg =
+                llvm::dyn_cast<llvm::AtomicCmpXchgInst>(&Instruction))
+          GSAtomicCmpXchg += CmpXchg->getPointerOperand()
+                                 ->getType()
+                                 ->getPointerAddressSpace() == 256;
+      }
+  EXPECT_EQ(FSAtomicRMW, 1u);
+  EXPECT_EQ(GSAtomicCmpXchg, 1u);
+
+  HighFunc AtomicHigh = MedToHighConverter().convert(AtomicMed, Arch::X64);
+  bool HighFSAtomic = false;
+  bool HighGSAtomic = false;
+  walkStmts(AtomicHigh.Body, [&](const HighStmt &Stmt) {
+    forEachExpr(Stmt, [&](const ExprPtr &Expr) {
+      if (!Expr)
+        return;
+      HighFSAtomic |= Expr->Op == NdOp::ATOMIC_ADD &&
+                      Expr->MemoryAddressSpace == NdMemoryAddressSpace::X86FS;
+      HighGSAtomic |= Expr->Op == NdOp::ATOMIC_CMPXCHG &&
+                      Expr->MemoryAddressSpace == NdMemoryAddressSpace::X86GS;
+    });
+  });
+  EXPECT_TRUE(HighFSAtomic);
+  EXPECT_TRUE(HighGSAtomic);
+
+  std::string AtomicHighC;
+  llvm::raw_string_ostream AtomicHighCOS(AtomicHighC);
+  ASSERT_TRUE(HighCEmitter().emit({AtomicHigh}, AtomicHighCOS, HighCOptions));
+  AtomicHighCOS.flush();
+  EXPECT_NE(AtomicHighC.find("__atomic_fetch_add"), std::string::npos);
+  EXPECT_NE(AtomicHighC.find("__atomic_compare_exchange_n"), std::string::npos);
+  EXPECT_NE(AtomicHighC.find("address_space(257)"), std::string::npos);
+  EXPECT_NE(AtomicHighC.find("address_space(256)"), std::string::npos);
+  EXPECT_TRUE(validHighC(AtomicHighC));
+
+  // A segment offset remains a raw integer even when its bit pattern and
+  // provenance collide with a mapped image object.  Exercise the scalar,
+  // generic-atomic and masked-memory pointer owners through one shared
+  // arithmetic definition and verify their actual LLVM pointer operands.
+  constexpr uint64_t CollisionVA = UINT64_C(0x100000);
+  constexpr uint64_t CollisionOffset = CollisionVA + 0x20;
+  constexpr uint64_t CollisionAbsoluteSlot = CollisionVA + 0x40;
+  constexpr uint64_t CollisionRelativeSlot = CollisionVA + 0x48;
+  constexpr uint64_t CollisionTarget = CollisionVA + 0x80;
+  BinaryImage CollisionImage;
+  CollisionImage.Arch = Arch::X64;
+  CollisionImage.Bits = Bitness::Bits64;
+  CollisionImage.Format = BinaryFormat::ELF;
+  Segment CollisionData;
+  CollisionData.VA = CollisionVA;
+  CollisionData.Size = 0x100;
+  CollisionData.Flags = SegmentFlags::Readable;
+  CollisionData.Data.resize(CollisionData.Size);
+  std::memcpy(CollisionData.Data.data() +
+                  (CollisionAbsoluteSlot - CollisionVA),
+              &CollisionTarget, sizeof(CollisionTarget));
+  const int32_t RelativeTarget =
+      static_cast<int32_t>(CollisionTarget - CollisionRelativeSlot);
+  std::memcpy(CollisionData.Data.data() +
+                  (CollisionRelativeSlot - CollisionVA),
+              &RelativeTarget, sizeof(RelativeTarget));
+  CollisionImage.Segments.push_back(std::move(CollisionData));
+  CollisionImage.RelocDataAddrs.insert(CollisionVA);
+  CollisionImage.RelocDataAddrs.insert(CollisionTarget);
+  CollisionImage.DataPtrRelocSlots.insert(CollisionAbsoluteSlot);
+  CollisionImage.DataPtrRelocTargetOwners[CollisionAbsoluteSlot] =
+      CollisionTarget;
+  CollisionImage.RelDataPtrRelocSlots.insert(CollisionRelativeSlot);
+
+  MedFunc RawOffsetMed;
+  RawOffsetMed.Entry = 0x2800;
+  RawOffsetMed.Name = "segment_raw_numeric_offsets";
+  RawOffsetMed.ReturnType = NdType::makeVoid();
+  MedBlock RawOffsetBlock;
+  RawOffsetBlock.Id = 0;
+  RawOffsetBlock.StartAddr = RawOffsetMed.Entry;
+  RawOffsetBlock.EndAddr = RawOffsetMed.Entry + 20;
+  MedVar RawAddress = MaskedTemp(40, 8);
+  MedOp RawAddressAdd;
+  RawAddressAdd.Opcode = NdOp::INT_ADD;
+  RawAddressAdd.Addr = RawOffsetMed.Entry;
+  RawAddressAdd.Output = RawAddress;
+  RawAddressAdd.addInput(MedVar::makeConst(
+      CollisionVA, 8, ConstantAddressProvenance::DataAddress));
+  RawAddressAdd.addInput(
+      MedVar::makeConst(0x20, 8, ConstantAddressProvenance::Scalar));
+  RawOffsetBlock.Ops.push_back(RawAddressAdd);
+  MedOp RawFSLoad;
+  RawFSLoad.Opcode = NdOp::LOAD;
+  RawFSLoad.Addr = RawOffsetMed.Entry + 4;
+  RawFSLoad.Output = MaskedTemp(41, 8);
+  RawFSLoad.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+  RawFSLoad.addInput(RawAddress);
+  RawOffsetBlock.Ops.push_back(RawFSLoad);
+  MedOp RawGSAtomic;
+  RawGSAtomic.Opcode = NdOp::ATOMIC_ADD;
+  RawGSAtomic.Addr = RawOffsetMed.Entry + 8;
+  RawGSAtomic.Output = MaskedTemp(42, 8);
+  RawGSAtomic.MemoryAddressSpace = NdMemoryAddressSpace::X86GS;
+  RawGSAtomic.MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+  RawGSAtomic.addInput(RawAddress);
+  RawGSAtomic.addInput(
+      MedVar::makeConst(1, 8, ConstantAddressProvenance::Scalar));
+  RawOffsetBlock.Ops.push_back(RawGSAtomic);
+  MedOp RawFSMasked;
+  RawFSMasked.Opcode = NdOp::INTRINSIC;
+  RawFSMasked.Addr = RawOffsetMed.Entry + 12;
+  RawFSMasked.Output = MaskedTemp(43, 16);
+  RawFSMasked.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+  RawFSMasked.addInput(MedVar::makeConst(
+      static_cast<uint64_t>(Intrinsic::MaskedLoadD), 2,
+      ConstantAddressProvenance::Scalar));
+  RawFSMasked.addInput(RawAddress);
+  RawFSMasked.addInput(MedVar::makeConst(
+      UINT64_C(0x8000000080000000), 16,
+      ConstantAddressProvenance::Scalar));
+  RawOffsetBlock.Ops.push_back(RawFSMasked);
+  MedOp RawReturn;
+  RawReturn.Opcode = NdOp::RETURN;
+  RawReturn.Addr = RawOffsetMed.Entry + 16;
+  RawOffsetBlock.Ops.push_back(RawReturn);
+  RawOffsetMed.Blocks.push_back(std::move(RawOffsetBlock));
+  ASSERT_TRUE(verifyMedFunc(RawOffsetMed, "segment-raw-offsets"));
+
+  llvm::LLVMContext RawOffsetContext;
+  auto RawOffsetModule = MedLLVMEmitter().emit(
+      {RawOffsetMed}, RawOffsetContext, "segment-raw-offsets", Arch::X64, {},
+      &CollisionImage);
+  ASSERT_NE(RawOffsetModule, nullptr);
+  EXPECT_TRUE(validLLVMModule(*RawOffsetModule));
+  auto IsRawSegmentPointer = [&](const llvm::Value *Pointer) {
+    const llvm::Value *Numeric = nullptr;
+    if (const auto *Cast = llvm::dyn_cast<llvm::IntToPtrInst>(Pointer))
+      Numeric = Cast->getOperand(0);
+    else if (const auto *CE = llvm::dyn_cast<llvm::ConstantExpr>(Pointer);
+             CE && CE->getOpcode() == llvm::Instruction::IntToPtr)
+      Numeric = CE->getOperand(0);
+    const auto *CI = llvm::dyn_cast_or_null<llvm::ConstantInt>(Numeric);
+    return CI && CI->getZExtValue() == CollisionOffset;
+  };
+  unsigned RawScalarPointers = 0;
+  unsigned RawAtomicPointers = 0;
+  unsigned RawMaskedPointers = 0;
+  for (const llvm::Function &Function : *RawOffsetModule)
+    for (const llvm::BasicBlock &Block : Function)
+      for (const llvm::Instruction &Instruction : Block) {
+        if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction))
+          if (Load->getPointerAddressSpace() == 257)
+            RawScalarPointers += IsRawSegmentPointer(Load->getPointerOperand());
+        if (const auto *RMW =
+                llvm::dyn_cast<llvm::AtomicRMWInst>(&Instruction))
+          if (RMW->getPointerOperand()->getType()->getPointerAddressSpace() ==
+              256)
+            RawAtomicPointers += IsRawSegmentPointer(RMW->getPointerOperand());
+        if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction))
+          if (Call->getCalledFunction() &&
+              Call->getCalledFunction()->getName().starts_with(
+                  "llvm.masked.load") &&
+              Call->getArgOperand(0)->getType()->getPointerAddressSpace() ==
+                  257)
+            RawMaskedPointers += IsRawSegmentPointer(Call->getArgOperand(0));
+      }
+  EXPECT_EQ(RawScalarPointers, 1u);
+  EXPECT_EQ(RawAtomicPointers, 1u);
+  EXPECT_EQ(RawMaskedPointers, 1u);
+
+  // A segmented LOAD whose numeric offset collides with an absolute or
+  // relative image pointer-table slot remains a runtime segment read.  Its
+  // result must feed the following ordinary dereference instead of being
+  // reconstructed from the flat image bytes.
+  MedFunc CollisionLoadMed;
+  CollisionLoadMed.Entry = 0x2900;
+  CollisionLoadMed.Name = "segment_pointer_table_collision";
+  CollisionLoadMed.ReturnType = NdType::makeVoid();
+  MedBlock CollisionLoadBlock;
+  CollisionLoadBlock.Id = 0;
+  CollisionLoadBlock.StartAddr = CollisionLoadMed.Entry;
+  CollisionLoadBlock.EndAddr = CollisionLoadMed.Entry + 28;
+
+  MedOp CollisionAbsoluteLoad;
+  CollisionAbsoluteLoad.Opcode = NdOp::LOAD;
+  CollisionAbsoluteLoad.Addr = CollisionLoadMed.Entry;
+  CollisionAbsoluteLoad.Output = MaskedTemp(44, 8);
+  CollisionAbsoluteLoad.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+  CollisionAbsoluteLoad.addInput(MedVar::makeConst(
+      CollisionAbsoluteSlot, 8, ConstantAddressProvenance::Scalar));
+  CollisionLoadBlock.Ops.push_back(CollisionAbsoluteLoad);
+  MedOp CollisionAbsoluteDeref;
+  CollisionAbsoluteDeref.Opcode = NdOp::LOAD;
+  CollisionAbsoluteDeref.Addr = CollisionLoadMed.Entry + 4;
+  CollisionAbsoluteDeref.Output = MaskedTemp(45, 8);
+  CollisionAbsoluteDeref.addInput(CollisionAbsoluteLoad.Output);
+  CollisionLoadBlock.Ops.push_back(CollisionAbsoluteDeref);
+
+  MedOp CollisionRelativeLoad;
+  CollisionRelativeLoad.Opcode = NdOp::LOAD;
+  CollisionRelativeLoad.Addr = CollisionLoadMed.Entry + 8;
+  CollisionRelativeLoad.Output = MaskedTemp(46, 4);
+  CollisionRelativeLoad.MemoryAddressSpace = NdMemoryAddressSpace::X86GS;
+  CollisionRelativeLoad.addInput(MedVar::makeConst(
+      CollisionRelativeSlot, 8, ConstantAddressProvenance::Scalar));
+  CollisionLoadBlock.Ops.push_back(CollisionRelativeLoad);
+  MedOp CollisionRelativeSext;
+  CollisionRelativeSext.Opcode = NdOp::INT_SEXT;
+  CollisionRelativeSext.Addr = CollisionLoadMed.Entry + 12;
+  CollisionRelativeSext.Output = MaskedTemp(47, 8);
+  CollisionRelativeSext.addInput(CollisionRelativeLoad.Output);
+  CollisionLoadBlock.Ops.push_back(CollisionRelativeSext);
+  MedOp CollisionRelativeAddress;
+  CollisionRelativeAddress.Opcode = NdOp::INT_ADD;
+  CollisionRelativeAddress.Addr = CollisionLoadMed.Entry + 16;
+  CollisionRelativeAddress.Output = MaskedTemp(48, 8);
+  CollisionRelativeAddress.addInput(MedVar::makeConst(
+      CollisionRelativeSlot, 8,
+      ConstantAddressProvenance::DataAddress));
+  CollisionRelativeAddress.addInput(CollisionRelativeSext.Output);
+  CollisionLoadBlock.Ops.push_back(CollisionRelativeAddress);
+  MedOp CollisionRelativeDeref;
+  CollisionRelativeDeref.Opcode = NdOp::LOAD;
+  CollisionRelativeDeref.Addr = CollisionLoadMed.Entry + 20;
+  CollisionRelativeDeref.Output = MaskedTemp(49, 8);
+  CollisionRelativeDeref.addInput(CollisionRelativeAddress.Output);
+  CollisionLoadBlock.Ops.push_back(CollisionRelativeDeref);
+  MedOp CollisionLoadReturn;
+  CollisionLoadReturn.Opcode = NdOp::RETURN;
+  CollisionLoadReturn.Addr = CollisionLoadMed.Entry + 24;
+  CollisionLoadBlock.Ops.push_back(CollisionLoadReturn);
+  CollisionLoadMed.Blocks.push_back(std::move(CollisionLoadBlock));
+  ASSERT_TRUE(verifyMedFunc(CollisionLoadMed,
+                            "segment-pointer-table-collision"));
+
+  llvm::LLVMContext CollisionLoadContext;
+  auto CollisionLoadModule = MedLLVMEmitter().emit(
+      {CollisionLoadMed}, CollisionLoadContext,
+      "segment-pointer-table-collision", Arch::X64, {}, &CollisionImage);
+  ASSERT_NE(CollisionLoadModule, nullptr);
+  EXPECT_TRUE(validLLVMModule(*CollisionLoadModule));
+  std::vector<const llvm::LoadInst *> RuntimeAbsoluteLoads;
+  std::vector<const llvm::LoadInst *> RuntimeRelativeLoads;
+  std::vector<const llvm::LoadInst *> FlatDereferences;
+  auto IsAllocaBackedLoad = [](const llvm::LoadInst *Load) {
+    return llvm::isa<llvm::AllocaInst>(
+        Load->getPointerOperand()->stripPointerCasts());
+  };
+  for (const llvm::Function &Function : *CollisionLoadModule)
+    for (const llvm::BasicBlock &Block : Function)
+      for (const llvm::Instruction &Instruction : Block)
+        if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction)) {
+          if (Load->getPointerAddressSpace() == 257 &&
+              Load->getType()->isIntegerTy(64))
+            RuntimeAbsoluteLoads.push_back(Load);
+          else if (Load->getPointerAddressSpace() == 256 &&
+                   Load->getType()->isIntegerTy(32))
+            RuntimeRelativeLoads.push_back(Load);
+          else if (Load->getPointerAddressSpace() == 0 &&
+                   !IsAllocaBackedLoad(Load))
+            FlatDereferences.push_back(Load);
+        }
+  ASSERT_EQ(RuntimeAbsoluteLoads.size(), 1u);
+  ASSERT_EQ(RuntimeRelativeLoads.size(), 1u);
+  ASSERT_EQ(FlatDereferences.size(), 2u);
+  const llvm::LoadInst *RuntimeAbsoluteLoad = RuntimeAbsoluteLoads.front();
+  const llvm::LoadInst *RuntimeRelativeLoad = RuntimeRelativeLoads.front();
+  auto DependsOn = [](const llvm::Value *Root,
+                      const llvm::Value *Needle) {
+    std::vector<const llvm::Value *> Work{Root};
+    std::set<const llvm::Value *> Seen;
+    while (!Work.empty()) {
+      const llvm::Value *Value = Work.back();
+      Work.pop_back();
+      if (Value == Needle)
+        return true;
+      if (!Seen.insert(Value).second)
+        continue;
+      // Med variables are deliberately materialized through allocas before
+      // mem2reg.  Recover the local SSA dependency through the nearest store
+      // that precedes this load in the same basic block; later stores and
+      // stores on other control-flow paths are not reaching definitions here.
+      if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(Value)) {
+        const llvm::Value *Pointer =
+            Load->getPointerOperand()->stripPointerCasts();
+        if (llvm::isa<llvm::AllocaInst>(Pointer)) {
+          const llvm::StoreInst *ReachingStore = nullptr;
+          for (const llvm::Instruction &Candidate : *Load->getParent()) {
+            if (&Candidate == Load)
+              break;
+            const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&Candidate);
+            if (Store &&
+                Store->getPointerOperand()->stripPointerCasts() == Pointer)
+              ReachingStore = Store;
+          }
+          if (ReachingStore)
+            Work.push_back(ReachingStore->getValueOperand());
+        }
+      }
+      if (const auto *User = llvm::dyn_cast<llvm::User>(Value))
+        for (const llvm::Use &Operand : User->operands())
+          Work.push_back(Operand.get());
+    }
+    return false;
+  };
+  EXPECT_TRUE(std::any_of(
+      FlatDereferences.begin(), FlatDereferences.end(),
+      [&](const llvm::LoadInst *Load) {
+        return DependsOn(Load->getPointerOperand(), RuntimeAbsoluteLoad);
+      }));
+  EXPECT_TRUE(std::any_of(
+      FlatDereferences.begin(), FlatDereferences.end(),
+      [&](const llvm::LoadInst *Load) {
+        return DependsOn(Load->getPointerOperand(), RuntimeRelativeLoad);
+      }));
+
+  // A runtime segmented pointer-table read can merge with an already
+  // symbolized writable-data address.  The merged pointer is Mixed: only the
+  // flat-image arm may be rebased into the writable global, while the FS arm
+  // must remain the value produced by the runtime segment load.
+  constexpr uint64_t WritableTableVA = UINT64_C(0x300000);
+  constexpr uint64_t WritableTableSlot = WritableTableVA + 0x20;
+  constexpr uint64_t WritableRunVA = UINT64_C(0x400000);
+  constexpr uint64_t WritableTarget = WritableRunVA + 0x20;
+  BinaryImage WritableCollisionImage;
+  WritableCollisionImage.Arch = Arch::X64;
+  WritableCollisionImage.Bits = Bitness::Bits64;
+  WritableCollisionImage.Format = BinaryFormat::ELF;
+  WritableCollisionImage.Base = WritableTableVA;
+  Segment WritablePointerTable;
+  WritablePointerTable.Name = ".rodata.ptr";
+  WritablePointerTable.VA = WritableTableVA;
+  WritablePointerTable.Size = 0x100;
+  WritablePointerTable.Flags = SegmentFlags::Readable;
+  WritablePointerTable.Data.resize(WritablePointerTable.Size);
+  std::memcpy(WritablePointerTable.Data.data() +
+                  (WritableTableSlot - WritableTableVA),
+              &WritableTarget, sizeof(WritableTarget));
+  WritableCollisionImage.Segments.push_back(std::move(WritablePointerTable));
+  Segment WritableRun;
+  WritableRun.Name = ".data";
+  WritableRun.VA = WritableRunVA;
+  WritableRun.Size = 0x100;
+  WritableRun.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  WritableRun.Data.resize(WritableRun.Size);
+  WritableCollisionImage.Segments.push_back(std::move(WritableRun));
+  Section WritableSection;
+  WritableSection.Name = ".data";
+  WritableSection.VA = WritableRunVA;
+  WritableSection.Size = 0x100;
+  WritableSection.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  WritableCollisionImage.Sections.push_back(std::move(WritableSection));
+  WritableCollisionImage.DataPtrRelocSlots.insert(WritableTableSlot);
+  WritableCollisionImage.DataPtrRelocTargetOwners[WritableTableSlot] =
+      WritableTarget;
+  WritableCollisionImage.RelocDataAddrs.insert(WritableTarget);
+  WritableCollisionImage.WritableRelocDataAddrs.insert(WritableTarget);
+
+  MedFunc WritableMergeMed;
+  WritableMergeMed.Entry = 0x2980;
+  WritableMergeMed.Name = "segment_writable_pointer_merge";
+  WritableMergeMed.ReturnType = NdType::makeVoid();
+  MedVar WritableCondition;
+  WritableCondition.Kind = MedVar::Reg;
+  WritableCondition.TheArch = Arch::X64;
+  WritableCondition.Id = 70;
+  WritableCondition.SSAVer = 0;
+  WritableCondition.RegOff = x86reg::RCX;
+  WritableCondition.Size = 1;
+  WritableMergeMed.Params.push_back(WritableCondition);
+  MedBlock WritableMergeBlock;
+  WritableMergeBlock.Id = 0;
+  WritableMergeBlock.StartAddr = WritableMergeMed.Entry;
+  WritableMergeBlock.EndAddr = WritableMergeMed.Entry + 20;
+  MedOp WritableSlotAddress;
+  WritableSlotAddress.Opcode = NdOp::INT_ADD;
+  WritableSlotAddress.Addr = WritableMergeMed.Entry;
+  WritableSlotAddress.Output = MaskedTemp(71, 8);
+  WritableSlotAddress.addInput(MedVar::makeConst(
+      WritableTableVA, 8, ConstantAddressProvenance::DataAddress,
+      WritableTableVA));
+  WritableSlotAddress.addInput(MedVar::makeConst(
+      WritableTableSlot - WritableTableVA, 8,
+      ConstantAddressProvenance::Scalar));
+  WritableMergeBlock.Ops.push_back(WritableSlotAddress);
+  MedOp WritableSegmentLoad;
+  WritableSegmentLoad.Opcode = NdOp::LOAD;
+  WritableSegmentLoad.Addr = WritableMergeMed.Entry + 4;
+  WritableSegmentLoad.Output = MaskedTemp(72, 8);
+  WritableSegmentLoad.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+  WritableSegmentLoad.addInput(WritableSlotAddress.Output);
+  WritableMergeBlock.Ops.push_back(WritableSegmentLoad);
+  MedOp WritableSelect;
+  WritableSelect.Opcode = NdOp::SELECT;
+  WritableSelect.Addr = WritableMergeMed.Entry + 8;
+  WritableSelect.Output = MaskedTemp(73, 8);
+  WritableSelect.addInput(WritableCondition);
+  WritableSelect.addInput(WritableSegmentLoad.Output);
+  WritableSelect.addInput(MedVar::makeConst(
+      WritableTarget, 8, ConstantAddressProvenance::DataAddress,
+      WritableTarget));
+  WritableMergeBlock.Ops.push_back(WritableSelect);
+  MedOp WritableMergedDeref;
+  WritableMergedDeref.Opcode = NdOp::LOAD;
+  WritableMergedDeref.Addr = WritableMergeMed.Entry + 12;
+  WritableMergedDeref.Output = MaskedTemp(74, 8);
+  WritableMergedDeref.addInput(WritableSelect.Output);
+  WritableMergeBlock.Ops.push_back(WritableMergedDeref);
+  MedOp WritableMergeReturn;
+  WritableMergeReturn.Opcode = NdOp::RETURN;
+  WritableMergeReturn.Addr = WritableMergeMed.Entry + 16;
+  WritableMergeBlock.Ops.push_back(WritableMergeReturn);
+  WritableMergeMed.Blocks.push_back(std::move(WritableMergeBlock));
+  ASSERT_TRUE(
+      verifyMedFunc(WritableMergeMed, "segment-writable-pointer-merge"));
+
+  llvm::LLVMContext WritableMergeContext;
+  auto WritableMergeModule = MedLLVMEmitter().emit(
+      {WritableMergeMed}, WritableMergeContext,
+      "segment-writable-pointer-merge", Arch::X64, {},
+      &WritableCollisionImage);
+  ASSERT_NE(WritableMergeModule, nullptr);
+  EXPECT_TRUE(validLLVMModule(*WritableMergeModule));
+  std::vector<const llvm::LoadInst *> WritableRuntimeSegmentLoads;
+  std::vector<const llvm::SelectInst *> WritableMixedPointers;
+  std::vector<const llvm::LoadInst *> WritableFlatDerefs;
+  for (const llvm::Function &Function : *WritableMergeModule)
+    for (const llvm::BasicBlock &Block : Function)
+      for (const llvm::Instruction &Instruction : Block) {
+        if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction)) {
+          if (Load->getPointerAddressSpace() == 257)
+            WritableRuntimeSegmentLoads.push_back(Load);
+          else if (Load->getPointerAddressSpace() == 0 &&
+                   Load->getType()->isIntegerTy(64) &&
+                   !IsAllocaBackedLoad(Load))
+            WritableFlatDerefs.push_back(Load);
+        }
+        if (const auto *Select =
+                llvm::dyn_cast<llvm::SelectInst>(&Instruction))
+          if (Select->getName() == "wrptr.mixed")
+            WritableMixedPointers.push_back(Select);
+      }
+  ASSERT_EQ(WritableRuntimeSegmentLoads.size(), 1u);
+  ASSERT_EQ(WritableMixedPointers.size(), 1u);
+  ASSERT_EQ(WritableFlatDerefs.size(), 1u);
+  const llvm::LoadInst *WritableRuntimeSegmentLoad =
+      WritableRuntimeSegmentLoads.front();
+  const llvm::SelectInst *WritableMixedPointer =
+      WritableMixedPointers.front();
+  const llvm::LoadInst *WritableFlatDeref = WritableFlatDerefs.front();
+  EXPECT_TRUE(DependsOn(WritableMixedPointer, WritableRuntimeSegmentLoad));
+  EXPECT_TRUE(
+      DependsOn(WritableFlatDeref->getPointerOperand(), WritableMixedPointer));
+
+  // FS/GS offsets are integer ABI values, not ordinary host-process pointers.
+  MedFunc OffsetParamMed;
+  OffsetParamMed.Entry = 0x2a00;
+  OffsetParamMed.Name = "segment_offset_parameter";
+  OffsetParamMed.ReturnType = NdType::makeVoid();
+  MedVar OffsetParam;
+  OffsetParam.Kind = MedVar::Reg;
+  OffsetParam.TheArch = Arch::X64;
+  OffsetParam.Id = 1;
+  OffsetParam.SSAVer = 0;
+  OffsetParam.RegOff = x86reg::RBX;
+  OffsetParam.Size = 8;
+  OffsetParamMed.Params.push_back(OffsetParam);
+  MedBlock OffsetParamBlock;
+  OffsetParamBlock.Id = 0;
+  OffsetParamBlock.StartAddr = OffsetParamMed.Entry;
+  OffsetParamBlock.EndAddr = OffsetParamMed.Entry + 8;
+  MedOp OffsetParamLoad;
+  OffsetParamLoad.Opcode = NdOp::LOAD;
+  OffsetParamLoad.Addr = OffsetParamMed.Entry;
+  OffsetParamLoad.Output = MaskedTemp(50, 8);
+  OffsetParamLoad.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+  OffsetParamLoad.addInput(OffsetParam);
+  OffsetParamBlock.Ops.push_back(OffsetParamLoad);
+  MedOp OffsetParamReturn;
+  OffsetParamReturn.Opcode = NdOp::RETURN;
+  OffsetParamReturn.Addr = OffsetParamMed.Entry + 4;
+  OffsetParamBlock.Ops.push_back(OffsetParamReturn);
+  OffsetParamMed.Blocks.push_back(std::move(OffsetParamBlock));
+  inferMedTypes(OffsetParamMed, Arch::X64);
+  ASSERT_EQ(OffsetParamMed.TypedParams.size(), 1u);
+  ASSERT_TRUE(OffsetParamMed.TypedParams.front().Type);
+  EXPECT_EQ(OffsetParamMed.TypedParams.front().Type->Kind, NdTypeKind::Int);
+  HighFunc OffsetParamHigh =
+      MedToHighConverter().convert(OffsetParamMed, Arch::X64);
+  ASSERT_EQ(OffsetParamHigh.Params.size(), 1u);
+  ASSERT_TRUE(OffsetParamHigh.Params.front().Type);
+  EXPECT_EQ(OffsetParamHigh.Params.front().Type->Kind, NdTypeKind::Int);
+  unsigned ObservableSegmentLoads = 0;
+  walkStmts(OffsetParamHigh.Body, [&](const HighStmt &Stmt) {
+    forEachExpr(Stmt, [&](const ExprPtr &Expr) {
+      ObservableSegmentLoads +=
+          Expr && Expr->Kind == ExprKind::Load &&
+          Expr->MemoryAddressSpace == NdMemoryAddressSpace::X86FS;
+    });
+  });
+  EXPECT_EQ(ObservableSegmentLoads, 1u)
+      << "nondefault loads remain observable even when their value is unused";
+
+  // A single live-in may be both a flat pointer and an FS/GS numeric offset.
+  // Its ABI representation must remain an integer so neither backend casts the
+  // segmented use through a host pointer or rejects raw-offset reconstruction.
+  MedFunc MixedRoleMed;
+  MixedRoleMed.Entry = 0x2b00;
+  MixedRoleMed.Name = "mixed_memory_address_parameter";
+  MixedRoleMed.ReturnType = NdType::makeInt(8, false);
+  MedVar MixedRoleParam = OffsetParam;
+  MixedRoleParam.RegOff = x86reg::RCX;
+  MixedRoleMed.Params.push_back(MixedRoleParam);
+  MedBlock MixedRoleBlock;
+  MixedRoleBlock.Id = 0;
+  MixedRoleBlock.StartAddr = MixedRoleMed.Entry;
+  MixedRoleBlock.EndAddr = MixedRoleMed.Entry + 16;
+  MedOp MixedDefaultLoad;
+  MixedDefaultLoad.Opcode = NdOp::LOAD;
+  MixedDefaultLoad.Addr = MixedRoleMed.Entry;
+  MixedDefaultLoad.Output = MaskedTemp(60, 8);
+  MixedDefaultLoad.addInput(MixedRoleParam);
+  MixedRoleBlock.Ops.push_back(MixedDefaultLoad);
+  MedOp MixedSegmentLoad = MixedDefaultLoad;
+  MixedSegmentLoad.Addr = MixedRoleMed.Entry + 4;
+  MixedSegmentLoad.Output = MaskedTemp(61, 8);
+  MixedSegmentLoad.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+  MixedRoleBlock.Ops.push_back(MixedSegmentLoad);
+  MedOp MixedSum;
+  MixedSum.Opcode = NdOp::INT_XOR;
+  MixedSum.Addr = MixedRoleMed.Entry + 8;
+  MixedSum.Output = MaskedTemp(62, 8);
+  MixedSum.addInput(MixedDefaultLoad.Output);
+  MixedSum.addInput(MixedSegmentLoad.Output);
+  MixedRoleBlock.Ops.push_back(MixedSum);
+  MedOp MixedReturn;
+  MixedReturn.Opcode = NdOp::RETURN;
+  MixedReturn.Addr = MixedRoleMed.Entry + 12;
+  MixedReturn.addInput(MixedSum.Output);
+  MixedRoleBlock.Ops.push_back(MixedReturn);
+  MixedRoleMed.Blocks.push_back(std::move(MixedRoleBlock));
+  inferMedTypes(MixedRoleMed, Arch::X64);
+  ASSERT_EQ(MixedRoleMed.TypedParams.size(), 1u);
+  ASSERT_TRUE(MixedRoleMed.TypedParams.front().Type);
+  EXPECT_EQ(MixedRoleMed.TypedParams.front().Type->Kind, NdTypeKind::Int);
+
+  llvm::LLVMContext MixedRoleContext;
+  auto MixedRoleModule = MedLLVMEmitter().emit(
+      {MixedRoleMed}, MixedRoleContext, "mixed-memory-address-parameter",
+      Arch::X64);
+  ASSERT_NE(MixedRoleModule, nullptr);
+  EXPECT_TRUE(validLLVMModule(*MixedRoleModule));
+  const llvm::Function *MixedRoleFunction = nullptr;
+  for (const llvm::Function &Function : *MixedRoleModule)
+    if (!Function.isDeclaration())
+      MixedRoleFunction = &Function;
+  ASSERT_NE(MixedRoleFunction, nullptr);
+  ASSERT_EQ(MixedRoleFunction->arg_size(), 1u);
+  const llvm::Argument *MixedRoleArgument =
+      MixedRoleFunction->arg_begin();
+  EXPECT_TRUE(MixedRoleArgument->getType()->isIntegerTy(64));
+  std::vector<const llvm::LoadInst *> MixedDefaultLoads;
+  std::vector<const llvm::LoadInst *> MixedSegmentLoads;
+  for (const llvm::BasicBlock &Block : *MixedRoleFunction)
+    for (const llvm::Instruction &Instruction : Block)
+      if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction)) {
+        if (Load->getPointerAddressSpace() == 0 &&
+            !IsAllocaBackedLoad(Load))
+          MixedDefaultLoads.push_back(Load);
+        if (Load->getPointerAddressSpace() == 257)
+          MixedSegmentLoads.push_back(Load);
+      }
+  ASSERT_EQ(MixedDefaultLoads.size(), 1u);
+  ASSERT_EQ(MixedSegmentLoads.size(), 1u);
+  const llvm::LoadInst *MixedDefaultLLVM = MixedDefaultLoads.front();
+  const llvm::LoadInst *MixedSegmentLLVM = MixedSegmentLoads.front();
+  EXPECT_TRUE(
+      DependsOn(MixedDefaultLLVM->getPointerOperand(), MixedRoleArgument));
+  EXPECT_TRUE(
+      DependsOn(MixedSegmentLLVM->getPointerOperand(), MixedRoleArgument));
+
+  HighFunc MixedRoleHigh =
+      MedToHighConverter().convert(MixedRoleMed, Arch::X64);
+  ASSERT_EQ(MixedRoleHigh.Params.size(), 1u);
+  ASSERT_TRUE(MixedRoleHigh.Params.front().Type);
+  EXPECT_EQ(MixedRoleHigh.Params.front().Type->Kind, NdTypeKind::Int);
+  std::string MixedRoleHighC;
+  llvm::raw_string_ostream MixedRoleHighCOS(MixedRoleHighC);
+  ASSERT_TRUE(HighCEmitter().emit({MixedRoleHigh}, MixedRoleHighCOS,
+                                  HighCOptions));
+  MixedRoleHighCOS.flush();
+  EXPECT_NE(MixedRoleHighC.find("neverd_mem_load_fs_"), std::string::npos);
+  EXPECT_TRUE(validHighC(MixedRoleHighC));
+
+  // Invalid enum values, non-memory opcodes, and intrinsic IDs without an
+  // address-space-aware implementation are rejected at the public IR
+  // boundaries rather than being silently treated as ordinary memory.
+  LowFunc BadLowOpcode = Low;
+  auto BadCopy =
+      std::find_if(BadLowOpcode.Blocks.front().Ops.begin(),
+                   BadLowOpcode.Blocks.front().Ops.end(),
+                   [](const LowOp &Op) { return Op.Opcode == NdOp::COPY; });
+  ASSERT_NE(BadCopy, BadLowOpcode.Blocks.front().Ops.end());
+  BadCopy->MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+  std::string BadOpcodeError =
+      llvm::toString(validateLowInstructionBoundaries(BadLowOpcode));
+  EXPECT_NE(BadOpcodeError.find("non-memory opcode"), std::string::npos);
+
+  LowFunc BadLowEnum = Low;
+  auto BadEnumLoad =
+      std::find_if(BadLowEnum.Blocks.front().Ops.begin(),
+                   BadLowEnum.Blocks.front().Ops.end(),
+                   [](const LowOp &Op) { return Op.Opcode == NdOp::LOAD; });
+  ASSERT_NE(BadEnumLoad, BadLowEnum.Blocks.front().Ops.end());
+  BadEnumLoad->MemoryAddressSpace = static_cast<NdMemoryAddressSpace>(0xff);
+  std::string BadEnumError =
+      llvm::toString(validateLowInstructionBoundaries(BadLowEnum));
+  EXPECT_NE(BadEnumError.find("unknown memory address space"),
+            std::string::npos);
+
+  auto MalformedSegmentedString = [&](Intrinsic ID,
+                                      uint8_t TruncatedInputs) {
+    LowFunc BadShape = StringLow;
+    bool Truncated = false;
+    for (LowOp &Op : BadShape.Blocks.front().Ops)
+      if (Op.Opcode == NdOp::INTRINSIC &&
+          Op.MemoryAddressSpace != NdMemoryAddressSpace::Default &&
+          Op.NumInputs >= 1 && Op.Inputs[0].isConst() &&
+          Op.Inputs[0].Offset == static_cast<uint64_t>(ID)) {
+        Op.NumInputs = TruncatedInputs;
+        Truncated = true;
+        break;
+      }
+    EXPECT_TRUE(Truncated);
+    if (!Truncated)
+      return std::string{};
+    return llvm::toString(validateLowInstructionBoundaries(BadShape));
+  };
+  const std::string BadMovsShape =
+      MalformedSegmentedString(Intrinsic::Movsb, /*TruncatedInputs=*/4);
+  EXPECT_NE(BadMovsShape.find("invalid operand/output shape"),
+            std::string::npos);
+  const std::string BadCmpsShape =
+      MalformedSegmentedString(Intrinsic::Cmpsb, /*TruncatedInputs=*/5);
+  EXPECT_NE(BadCmpsShape.find("invalid operand/output shape"),
+            std::string::npos);
+
+  LowOp InvalidConsumerOp;
+  InvalidConsumerOp.Opcode = NdOp::COPY;
+  InvalidConsumerOp.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+  InvalidConsumerOp.Output = NdVar::reg(x86reg::RAX, 8);
+  InvalidConsumerOp.addInput(NdVar::scalar(7, 8));
+  NdOpEmulator InvalidConsumer(SemanticImage);
+  EXPECT_FALSE(InvalidConsumer.step(InvalidConsumerOp));
+  EXPECT_FALSE(InvalidConsumer.getRegister(x86reg::RAX));
+
+  LowFunc BadLowIntrinsic = StringLow;
+  bool ReplacedIntrinsic = false;
+  for (LowOp &Op : BadLowIntrinsic.Blocks.front().Ops)
+    if (Op.Opcode == NdOp::INTRINSIC &&
+        Op.MemoryAddressSpace != NdMemoryAddressSpace::Default &&
+        Op.NumInputs >= 1 && Op.Inputs[0].isConst()) {
+      Op.Inputs[0] = NdVar::scalar(static_cast<uint64_t>(Intrinsic::Stosb), 2);
+      ReplacedIntrinsic = true;
+      break;
+    }
+  ASSERT_TRUE(ReplacedIntrinsic);
+  std::string BadIntrinsicError =
+      llvm::toString(validateLowInstructionBoundaries(BadLowIntrinsic));
+  EXPECT_NE(BadIntrinsicError.find("does not support"), std::string::npos);
+
+  MedFunc BadMedOpcode = AtomicMed;
+  BadMedOpcode.Blocks.front().Ops.front().Opcode = NdOp::COPY;
+  EXPECT_FALSE(verifyMedFunc(BadMedOpcode, "bad-segment-opcode"));
+  MedFunc BadMedIntrinsic = StringMed;
+  bool ReplacedMedIntrinsic = false;
+  for (MedOp &Op : BadMedIntrinsic.Blocks.front().Ops)
+    if (Op.Opcode == NdOp::INTRINSIC &&
+        Op.MemoryAddressSpace != NdMemoryAddressSpace::Default &&
+        Op.NumInputs >= 1 && Op.Inputs[0].isConst()) {
+      Op.Inputs[0] = MedVar::makeConst(static_cast<uint64_t>(Intrinsic::Stosb),
+                                       2, ConstantAddressProvenance::Scalar);
+      ReplacedMedIntrinsic = true;
+      break;
+    }
+  ASSERT_TRUE(ReplacedMedIntrinsic);
+  EXPECT_FALSE(verifyMedFunc(BadMedIntrinsic, "bad-segment-intrinsic"));
+}
+
 std::string errorText(llvm::Error Error) {
   return llvm::toString(std::move(Error));
 }
@@ -815,9 +3276,9 @@ TEST(LowInstructionBoundary,
         EXPECT_EQ(Ops.front().Opcode, NdOp::NOP);
 
         DecodedInsn LightInsn{};
-        ASSERT_EQ(Light.decodeOneLight(Bytes.data(), Bytes.size(), kEntry,
-                                       LightInsn),
-                  Tail.InstructionSize);
+        ASSERT_EQ(
+            Light.decodeOneLight(Bytes.data(), Bytes.size(), kEntry, LightInsn),
+            Tail.InstructionSize);
         EXPECT_EQ(LightInsn.Id, X86_INS_NOP);
         EXPECT_EQ(LightInsn.Size, Tail.InstructionSize);
       }
@@ -848,9 +3309,9 @@ TEST(LowInstructionBoundary, MandatoryMpxPrefixesRemainDistinct) {
                    << "arch=" << static_cast<unsigned>(Architecture) << " "
                    << Test.Name);
       DecodedInsn Insn{};
-      ASSERT_EQ(Dec.decodeOne(Test.Bytes.data(), Test.Bytes.size(), kEntry,
-                              Insn),
-                static_cast<int>(Test.Bytes.size()));
+      ASSERT_EQ(
+          Dec.decodeOne(Test.Bytes.data(), Test.Bytes.size(), kEntry, Insn),
+          static_cast<int>(Test.Bytes.size()));
       EXPECT_EQ(Insn.Id, Test.ExpectedId);
     }
   }
@@ -858,9 +3319,7 @@ TEST(LowInstructionBoundary, MandatoryMpxPrefixesRemainDistinct) {
 
 TEST(LowInstructionBoundary, ReachableMpxHintNopsPreserveCfgBoundaries) {
   const std::vector<uint8_t> Bytes = {
-      0x0f, 0x1a, 0x84, 0x08, 0x78, 0x56, 0x34, 0x12,
-      0x0f, 0x1b, 0xde,
-      0xc3,
+      0x0f, 0x1a, 0x84, 0x08, 0x78, 0x56, 0x34, 0x12, 0x0f, 0x1b, 0xde, 0xc3,
   };
 
   for (Arch Architecture : {Arch::X86, Arch::X64}) {
@@ -883,8 +3342,7 @@ TEST(LowInstructionBoundary, ReachableMpxHintNopsPreserveCfgBoundaries) {
     EXPECT_EQ(Entry->InstructionBoundaries[2].Size, 1u);
 
     for (size_t I = 0; I < 2; ++I) {
-      const LowInstructionBoundary &Boundary =
-          Entry->InstructionBoundaries[I];
+      const LowInstructionBoundary &Boundary = Entry->InstructionBoundaries[I];
       ASSERT_EQ(Boundary.OpCount, 1u);
       ASSERT_LT(Boundary.FirstOp, Entry->Ops.size());
       EXPECT_EQ(Entry->Ops[Boundary.FirstOp].Opcode, NdOp::NOP);

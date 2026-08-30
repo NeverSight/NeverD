@@ -151,11 +151,41 @@ public:
     uint16_t AddressSize = 8;
 
     void emitIntrinsic(Intrinsic Id, NdVar Out = NdVar::reg(x86reg::RAX, 8),
-                       std::initializer_list<NdVar> Extra = {}) {
-      LiftStateBase::emitIntrinsic(Id, Out, Extra);
+                       std::initializer_list<NdVar> Extra = {},
+                       NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None,
+                       NdMemoryAddressSpace MemoryAddressSpace =
+                           NdMemoryAddressSpace::Default) {
+      LiftStateBase::emitIntrinsic(Id, Out, Extra, MemoryOrdering,
+                                   MemoryAddressSpace);
     }
 
-    NdVar computeEA(const cs_x86_op &MemOp);
+    /// Emit an intrinsic that owns one decoded x86 memory operand.  The
+    /// effective-address offset is always input 1 (immediately after the
+    /// intrinsic ID) and its architectural address space travels on the op.
+    /// Keeping this construction in one place prevents cache/state/system
+    /// instructions from degrading to an operandless mnemonic or losing an
+    /// FS/GS override in one of the legacy dispatchers.
+    bool emitMemoryIntrinsic(Intrinsic Id, const cs_x86_op &MemOp,
+                             std::initializer_list<NdVar> Extra = {},
+                             NdVar Out = NdVar()) {
+      if (MemOp.type != X86_OP_MEM)
+        return false;
+      LowOp Op;
+      Op.Opcode = NdOp::INTRINSIC;
+      Op.MemoryAddressSpace = memoryAddressSpace(MemOp);
+      Op.Addr = Addr;
+      Op.Seq = Seq++;
+      Op.Output = Out;
+      Op.addInput(NdVar::cst(static_cast<uint64_t>(Id), 2));
+      Op.addInput(computeEA(MemOp));
+      for (const NdVar &V : Extra)
+        Op.addInput(V);
+      Ops.push_back(Op);
+      return true;
+    }
+
+    NdVar computeEA(const cs_x86_op &MemOp, bool ForMemoryAccess = true);
+    static NdMemoryAddressSpace memoryAddressSpace(const cs_x86_op &MemOp);
     void storeToMem(const cs_x86_op &MemOp, NdVar Val);
     NdVar emitByteSwap(NdVar Src);
   };
@@ -197,10 +227,11 @@ private:
   /// Lift a REP/REPE/REPNE-prefixed CMPS or SCAS.  The loop terminates on a
   /// data-dependent ZF transition, so the hardware instruction the backend
   /// emits for the intrinsic returns its leftover count.  The lifter derives
-  /// the pointer advances from that count and recomputes the status flags in
-  /// MedIR from the last element pair the loop compared.
-  void liftRepCmpScas(LiftState &S, Intrinsic Id, unsigned ElemSz, bool IsScas,
-                      bool IsRepne);
+  /// the pointer advances from that count and unpacks the hardware status-flag
+  /// snapshot without issuing a post-loop memory access.
+  void liftRepCmpScas(
+      LiftState &S, Intrinsic Id, unsigned ElemSz, bool IsScas, bool IsRepne,
+      NdMemoryAddressSpace SourceAddressSpace = NdMemoryAddressSpace::Default);
   bool liftFPU(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);
   bool liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);
   bool liftSIMD(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);

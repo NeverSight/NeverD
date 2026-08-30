@@ -106,12 +106,14 @@ ExprPtr MedToHighConverter::medOpToExpr(const MedOp &Op) {
         auto AddrKey = varKey(AddrVar);
         auto DefIt = DefExpr.find(AddrKey);
         if (DefIt != DefExpr.end() && DefIt->second->Kind != ExprKind::Call &&
-            DefIt->second->MemoryOrdering == NdMemoryOrdering::None)
+            DefIt->second->MemoryOrdering == NdMemoryOrdering::None &&
+            DefIt->second->MemoryAddressSpace ==
+                NdMemoryAddressSpace::Default)
           AddrExpr = DefIt->second;
       }
       return HighExpr::makeLoad(AddrExpr ? AddrExpr : medvarToExpr(AddrVar),
                                 NdType::makeInt(Op.Output.Size),
-                                Op.MemoryOrdering);
+                                Op.MemoryOrdering, Op.MemoryAddressSpace);
     }
     break;
   }
@@ -123,6 +125,7 @@ ExprPtr MedToHighConverter::medOpToExpr(const MedOp &Op) {
                                       medvarToExpr(Op.Inputs[1]));
       Expr->Type = NdType::makeInt(Op.Output.Size, false);
       Expr->MemoryOrdering = Op.MemoryOrdering;
+      Expr->MemoryAddressSpace = Op.MemoryAddressSpace;
       return Expr;
     }
     break;
@@ -135,6 +138,7 @@ ExprPtr MedToHighConverter::medOpToExpr(const MedOp &Op) {
       Expr->Operands.push_back(medvarToExpr(Op.Inputs[2]));
       Expr->Type = NdType::makeInt(Op.Output.Size, false);
       Expr->MemoryOrdering = Op.MemoryOrdering;
+      Expr->MemoryAddressSpace = Op.MemoryAddressSpace;
       return Expr;
     }
     break;
@@ -214,6 +218,7 @@ ExprPtr MedToHighConverter::medOpToExpr(const MedOp &Op) {
     auto Expr = HighExpr::makeCall(intrinsicName(IID), 0, std::move(Args));
     Expr->IntrinsicId = IID;
     Expr->MemoryOrdering = Op.MemoryOrdering;
+    Expr->MemoryAddressSpace = Op.MemoryAddressSpace;
     if (Op.Output.Size > 0)
       Expr->Type = NdType::makeInt(Op.Output.Size, false);
     return Expr;

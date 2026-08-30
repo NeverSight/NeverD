@@ -602,7 +602,8 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL ||
             Prev.Opcode == NdOp::INTRINSIC)
           break;
-        if (Prev.Opcode == NdOp::STORE && Prev.NumInputs >= 2)
+        if (Prev.Opcode == NdOp::STORE && Prev.NumInputs >= 2 &&
+            Prev.MemoryAddressSpace == NdMemoryAddressSpace::Default)
           if (auto D = stackPtrDelta(Blk, TRI, Prev.Inputs[0]))
             if (int64_t Rel = *D - CallSpDelta; Rel >= 0) {
               if (IsWin64 && Rel < static_cast<int64_t>(IntParamRegs.size() *
@@ -864,7 +865,8 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL ||
             Prev.Opcode == NdOp::INTRINSIC)
           break;
-        if (Prev.Opcode != NdOp::STORE || Prev.NumInputs < 2)
+        if (Prev.Opcode != NdOp::STORE || Prev.NumInputs < 2 ||
+            Prev.MemoryAddressSpace != NdMemoryAddressSpace::Default)
           continue;
 
         const auto &AddrVar = Prev.Inputs[0];
@@ -1185,7 +1187,9 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
                 return std::nullopt;
               }
               if (Candidate.Opcode != NdOp::STORE ||
-                  Candidate.NumInputs < 2)
+                  Candidate.NumInputs < 2 ||
+                  Candidate.MemoryAddressSpace !=
+                      NdMemoryAddressSpace::Default)
                 continue;
               auto D = stackPtrDelta(*Block, TRI, Candidate.Inputs[0]);
               if (D && *D == TargetOffset) {

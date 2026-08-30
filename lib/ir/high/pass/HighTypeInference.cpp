@@ -126,30 +126,54 @@ std::set<uint64_t> detectPtrParamRegs(const MedFunc &Med) {
         DefMap[{Op.Output.Id, Op.Output.SSAVer}] = &Op;
 
   std::set<uint64_t> PtrRegs;
+  std::set<uint64_t> SegmentOffsetRegs;
+  auto recordAddressRegs = [&](const MedVar &AddrVar,
+                               std::set<uint64_t> &Roles) {
+    if (AddrVar.Kind == MedVar::Reg && AddrVar.Id >= 0 &&
+        AddrVar.SSAVer == 0)
+      Roles.insert(AddrVar.RegOff);
+    if (AddrVar.Kind != MedVar::Temp || AddrVar.Id < 0)
+      return;
+    auto DIt = DefMap.find({AddrVar.Id, AddrVar.SSAVer});
+    if (DIt == DefMap.end() || DIt->second->Opcode != NdOp::INT_ADD ||
+        DIt->second->NumInputs < 2)
+      return;
+    for (uint8_t I = 0; I < DIt->second->NumInputs; ++I)
+      if (DIt->second->Inputs[I].Kind == MedVar::Reg &&
+          DIt->second->Inputs[I].SSAVer == 0)
+        Roles.insert(DIt->second->Inputs[I].RegOff);
+  };
   for (auto &Blk : Med.Blocks) {
     for (auto &Op : Blk.Ops) {
       if (Op.Opcode == NdOp::INDIR_BR || Op.Opcode == NdOp::INDIR_CALL) {
         if (Op.NumInputs >= 1 && Op.Inputs[0].Kind == MedVar::Reg)
           PtrRegs.insert(Op.Inputs[0].RegOff);
       }
-      if ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) &&
-          Op.NumInputs >= 1) {
-        auto &AddrVar = Op.Inputs[0];
-        if (AddrVar.Kind == MedVar::Reg && AddrVar.Id >= 0)
-          PtrRegs.insert(AddrVar.RegOff);
-        if (AddrVar.Kind == MedVar::Temp && AddrVar.Id >= 0) {
-          auto DIt = DefMap.find({AddrVar.Id, AddrVar.SSAVer});
-          if (DIt != DefMap.end() && DIt->second->Opcode == NdOp::INT_ADD &&
-              DIt->second->NumInputs >= 2) {
-            for (uint8_t KI = 0; KI < DIt->second->NumInputs; ++KI) {
-              if (DIt->second->Inputs[KI].Kind == MedVar::Reg)
-                PtrRegs.insert(DIt->second->Inputs[KI].RegOff);
-            }
-          }
-        }
+      const MedVar *MemoryAddress = nullptr;
+      if ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE ||
+           Op.Opcode == NdOp::ATOMIC_XCHG ||
+           Op.Opcode == NdOp::ATOMIC_ADD ||
+           Op.Opcode == NdOp::ATOMIC_CMPXCHG) &&
+          Op.NumInputs >= 1)
+        MemoryAddress = &Op.Inputs[0];
+      else if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs >= 2 &&
+               Op.Inputs[0].isConst() &&
+               intrinsicSupportsMemoryAddressSpace(
+                   static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) &&
+               !isX86StringIntrinsic(
+                   static_cast<Intrinsic>(Op.Inputs[0].ConstVal)))
+        MemoryAddress = &Op.Inputs[1];
+      if (MemoryAddress) {
+        recordAddressRegs(
+            *MemoryAddress,
+            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default
+                ? PtrRegs
+                : SegmentOffsetRegs);
       }
     }
   }
+  for (uint64_t Reg : SegmentOffsetRegs)
+    PtrRegs.erase(Reg);
   return PtrRegs;
 }
 

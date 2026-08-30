@@ -145,7 +145,8 @@ void eliminateRedundantStackStores(HighFunc &Func, Arch TargetArch) {
     auto &NextStmt = Func.Body[I + 1];
     if (StoreStmt.Kind != StmtKind::Store)
       continue;
-    if (StoreStmt.MemoryOrdering != NdMemoryOrdering::None)
+    if (StoreStmt.MemoryOrdering != NdMemoryOrdering::None ||
+        StoreStmt.MemoryAddressSpace != NdMemoryAddressSpace::Default)
       continue;
     if (NextStmt.Kind != StmtKind::Assign && NextStmt.Kind != StmtKind::Call)
       continue;

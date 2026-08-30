@@ -84,10 +84,12 @@ ExprPtr HighExpr::makeUnary(NdOp Op, ExprPtr Operand) {
 }
 
 ExprPtr HighExpr::makeLoad(ExprPtr Addr, TypeRef Ty,
-                           NdMemoryOrdering MemoryOrdering) {
+                           NdMemoryOrdering MemoryOrdering,
+                           NdMemoryAddressSpace MemoryAddressSpace) {
   auto E = std::make_shared<HighExpr>();
   E->Kind = ExprKind::Load;
   E->MemoryOrdering = MemoryOrdering;
+  E->MemoryAddressSpace = MemoryAddressSpace;
   E->Operands.push_back(Addr);
   E->Type = Ty;
   return E;
@@ -101,7 +103,13 @@ bool HighExpr::hasOrderedMemoryAccess() const {
     Work.pop_back();
     if (!Expr || !Seen.insert(Expr).second)
       continue;
-    if (Expr->MemoryOrdering != NdMemoryOrdering::None)
+    // A target address space is not itself an atomic ordering, but the HighIR
+    // cleanup passes use this query as their general "must preserve the memory
+    // boundary" gate.  Treat FS/GS accesses conservatively here so an
+    // optimization keyed only by the numeric offset cannot merge or discard
+    // them as ordinary address-space-zero memory.
+    if (Expr->MemoryOrdering != NdMemoryOrdering::None ||
+        Expr->MemoryAddressSpace != NdMemoryAddressSpace::Default)
       return true;
     for (const ExprPtr &Operand : Expr->Operands)
       Work.push_back(Operand.get());

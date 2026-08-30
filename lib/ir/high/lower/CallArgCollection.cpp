@@ -104,7 +104,8 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx) {
     if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL ||
         Prev.Opcode == NdOp::INTRINSIC)
       break;
-    if (Prev.Opcode != NdOp::STORE || Prev.NumInputs < 2)
+    if (Prev.Opcode != NdOp::STORE || Prev.NumInputs < 2 ||
+        Prev.MemoryAddressSpace != NdMemoryAddressSpace::Default)
       continue;
     if (IsCalleeSave(Prev.Inputs[1]))
       continue;

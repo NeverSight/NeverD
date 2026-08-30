@@ -517,7 +517,8 @@ struct MemModel {
   detail::ReachingStackValues reachingLoad(const MedBlock &B, int OpIdx,
                                            const MedOp &Op) const {
     if (!detail::isStackMemoryRead(Op.Opcode) || Op.NumInputs == 0 ||
-        Op.Output.Size == 0)
+        Op.Output.Size == 0 ||
+        Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
       return {};
     const MedVar *Addr = detail::memoryAddress(Op);
     if (!Addr)
@@ -1126,7 +1127,9 @@ private:
           } else if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2) {
             const MedVar &Addr = Op.Inputs[Op.NumInputs >= 3 ? 1 : 0];
             const MedVar &Val = Op.Inputs[Op.NumInputs >= 3 ? 2 : 1];
-            if (Val.isConst() || Mem.stackOffset(Addr))
+            if (Val.isConst() ||
+                (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+                 Mem.stackOffset(Addr)))
               continue;
             const ValueKey StoredKey = keyOf(Val);
             if (MustAlias.count(StoredKey)) {
@@ -2443,7 +2446,9 @@ private:
           const MedVar &Val = Op.Inputs[Op.NumInputs >= 3 ? 2 : 1];
           // Spilling the handle into its own stack frame is not an escape; only
           // a write through a non-stack address publishes it.
-          if (Val.isConst() || Mem.stackOffset(Addr))
+          if (Val.isConst() ||
+              (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+               Mem.stackOffset(Addr)))
             continue;
           const ValueKey StoredKey = keyOf(Val);
           if (!Alias.count(StoredKey))

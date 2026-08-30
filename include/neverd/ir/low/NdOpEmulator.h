@@ -83,6 +83,21 @@ public:
 
   void setRegister(uint64_t RegOff, uint64_t Value);
   std::optional<uint64_t> getRegister(uint64_t RegOff) const;
+  /// Seed/read an exact vector register value for lifted SIMD semantics.  The
+  /// scalar API remains the low-64-bit view used by jump-table emulation.
+  void setRegisterBytes(uint64_t RegOff, llvm::ArrayRef<uint8_t> Value);
+  std::optional<std::vector<uint8_t>>
+  getRegisterBytes(uint64_t RegOff) const;
+  void setMXCSR(uint32_t Value) { MXCSR = Value; }
+  uint32_t getMXCSR() const { return MXCSR; }
+
+  /// Configure an architecture-defined memory address-space base.  FS/GS
+  /// memory operations fail closed until their base is supplied; treating a
+  /// segment offset as an ordinary image VA would produce a plausible but
+  /// incorrect emulation result.  This is emulator configuration and, like
+  /// call-preserved registers and strict mode, survives reset().
+  bool setMemoryAddressSpaceBase(NdMemoryAddressSpace AddressSpace,
+                                 uint64_t Base);
 
   /// Declare the registers that survive a call by ABI (the stack pointer, frame
   /// pointer, and callee-saved registers) and, by doing so, allow the emulator
@@ -160,9 +175,12 @@ public:
 private:
   const BinaryImage &Img;
   std::map<uint64_t, uint64_t> Registers;
+  std::map<uint64_t, std::vector<uint8_t>> WideRegisters;
   std::map<uint64_t, uint64_t> MemStore;
+  uint32_t MXCSR = 0x1f80;
   bool CollectLoads = false;
   std::vector<LoadRecord> LoadLog;
+  std::map<NdMemoryAddressSpace, uint64_t> MemoryAddressSpaceBases;
   bool StepOverCalls = false;
   bool StrictMode = false;
   std::optional<NdVar> ReachedIndirectBranchTarget;
@@ -172,7 +190,11 @@ private:
   std::vector<uint64_t> CallPreservedRegs;
 
   uint64_t readOperand(const NdVar &Operand) const;
+  std::vector<uint8_t> readOperandBytes(const NdVar &Operand) const;
+  std::optional<uint64_t> resolveMemoryAddress(const LowOp &Op,
+                                               uint64_t Offset) const;
   void writeOutput(const NdVar &Output, uint64_t Value);
+  void writeOutputBytes(const NdVar &Output, llvm::ArrayRef<uint8_t> Value);
   std::optional<uint64_t> loadMemory(uint64_t Addr, uint16_t Size) const;
   /// Returns false when the write-back store had no room, which is recorded
   /// either way and only ends the path in strict mode.
@@ -185,6 +207,7 @@ private:
   bool executeCompare(const LowOp &Op);
   bool executeBool(const LowOp &Op);
   bool executeMisc(const LowOp &Op);
+  bool executeIntrinsic(const LowOp &Op);
 
   size_t runImpl(llvm::ArrayRef<LowOp> Ops,
                  llvm::ArrayRef<LowInstructionBoundary> Boundaries);

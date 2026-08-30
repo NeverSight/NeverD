@@ -93,7 +93,9 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
       }
     } else if (X86.operands[0].type == X86_OP_MEM &&
                X86.operands[0].mem.base == X86_REG_RIP &&
-               X86.operands[0].mem.index == X86_REG_INVALID) {
+               X86.operands[0].mem.index == X86_REG_INVALID &&
+               LiftState::memoryAddressSpace(X86.operands[0]) ==
+                   NdMemoryAddressSpace::Default) {
       // RIP-relative indirect call: call [rip + disp].
       // Compute the absolute address of the IAT/GOT slot. Using a
       // constant input lets MedABIPass resolve the import name.
@@ -243,7 +245,9 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
              {NdVar::cst(static_cast<uint64_t>(X86.operands[0].imm), 8)});
     } else if (X86.operands[0].type == X86_OP_MEM &&
                X86.operands[0].mem.base == X86_REG_RIP &&
-               X86.operands[0].mem.index == X86_REG_INVALID) {
+               X86.operands[0].mem.index == X86_REG_INVALID &&
+               LiftState::memoryAddressSpace(X86.operands[0]) ==
+                   NdMemoryAddressSpace::Default) {
       uint64_t SlotAddr =
           S.Addr + S.InsnSize + static_cast<uint64_t>(X86.operands[0].mem.disp);
       S.emit(NdOp::INDIR_BR, {}, {NdVar::cst(SlotAddr, 8)});

@@ -347,6 +347,11 @@ llvm::Value *MedLLVMEmitter::tryResolveWritableData(const MedVar &AddrVar,
     if (!Def)
       return finish(PointerAddressModel::Raw);
     if (Def->Opcode == NdOp::LOAD) {
+      // A segment-relative LOAD returns a runtime FS/GS value.  Its numeric
+      // offset can coincide with a flat-image pointer-table slot, but that is
+      // not authority to classify the loaded value as already symbolized.
+      if (Def->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+        return finish(PointerAddressModel::Raw);
       if (Def->NumInputs >= 1 &&
           ptrTableUniqueSegment(Def->Inputs[0]).has_value())
         return finish(PointerAddressModel::Symbolized);

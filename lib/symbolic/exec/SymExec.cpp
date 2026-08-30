@@ -410,6 +410,19 @@ StepResult SymExec::stepBits(const LowOp &Op) {
 }
 
 StepResult SymExec::stepMemory(const LowOp &Op) {
+  // A segment offset is not a process address.  Symbolic state has no
+  // architecture register for an FS/GS base, so fail closed instead of
+  // manufacturing a load/store at the unbased numeric offset.  Concrete
+  // LowIR emulation can execute these operations when its caller explicitly
+  // supplies the corresponding address-space base.
+  if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default) {
+    if (Op.Opcode == NdOp::STORE || Op.Opcode == NdOp::ATOMIC_XCHG ||
+        Op.Opcode == NdOp::ATOMIC_ADD || Op.Opcode == NdOp::ATOMIC_CMPXCHG) {
+      State.clobberMemory();
+      ++MemoryHavocs;
+    }
+    return unmodelled(Op);
+  }
   const LowMemoryOperandView Memory = lowMemoryOperands(Op);
   if (Op.Opcode == NdOp::LOAD) {
     if (!Memory.Complete || widthOf(Op.Output) == 0)

@@ -28,6 +28,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace neverd {
@@ -53,22 +54,29 @@ public:
   std::string memoryTypeName(const TypeRef &Ty) const;
   void writeIncludes(const std::vector<HighFunc> &Funcs);
   void writeMemoryHelpers();
-  std::string memoryLoadExpr(
-      const TypeRef &Ty, llvm::StringRef Addr,
-      NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None) const;
-  std::string memoryStoreExpr(
-      const TypeRef &Ty, llvm::StringRef Addr, llvm::StringRef Val,
-      NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None) const;
+  std::string
+  memoryLoadExpr(const TypeRef &Ty, llvm::StringRef Addr,
+                 NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None,
+                 NdMemoryAddressSpace MemoryAddressSpace =
+                     NdMemoryAddressSpace::Default) const;
+  std::string
+  memoryStoreExpr(const TypeRef &Ty, llvm::StringRef Addr, llvm::StringRef Val,
+                  NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None,
+                  NdMemoryAddressSpace MemoryAddressSpace =
+                      NdMemoryAddressSpace::Default) const;
   std::string atomicExchangeExpr(const TypeRef &Ty, llvm::StringRef Addr,
                                  llvm::StringRef Val,
-                                 NdMemoryOrdering MemoryOrdering) const;
+                                 NdMemoryOrdering MemoryOrdering,
+                                 NdMemoryAddressSpace MemoryAddressSpace) const;
   std::string atomicFetchAddExpr(const TypeRef &Ty, llvm::StringRef Addr,
                                  llvm::StringRef Val,
-                                 NdMemoryOrdering MemoryOrdering) const;
-  std::string atomicCompareExchangeExpr(const TypeRef &Ty, llvm::StringRef Addr,
-                                        llvm::StringRef Expected,
-                                        llvm::StringRef Desired,
-                                        NdMemoryOrdering MemoryOrdering) const;
+                                 NdMemoryOrdering MemoryOrdering,
+                                 NdMemoryAddressSpace MemoryAddressSpace) const;
+  std::string
+  atomicCompareExchangeExpr(const TypeRef &Ty, llvm::StringRef Addr,
+                            llvm::StringRef Expected, llvm::StringRef Desired,
+                            NdMemoryOrdering MemoryOrdering,
+                            NdMemoryAddressSpace MemoryAddressSpace) const;
   void writeForwardDecls(const std::vector<HighFunc> &Funcs);
   void collectCallTargets(const std::vector<HighStmt> &Stmts,
                           std::set<std::string> &Targets);
@@ -121,8 +129,13 @@ public:
   bool NeedsFEnvAccess = false;
   std::set<std::string> CIntrinsicNames;
   std::map<std::string, unsigned> MemoryTypes;
-  std::set<std::pair<std::string, NdMemoryOrdering>> AtomicLoadTypes;
-  std::set<std::pair<std::string, NdMemoryOrdering>> AtomicStoreTypes;
+  std::set<std::pair<std::string, NdMemoryAddressSpace>> SegmentedMemoryTypes;
+  std::set<std::tuple<std::string, NdMemoryOrdering, NdMemoryAddressSpace>>
+      AtomicLoadTypes;
+  std::set<std::tuple<std::string, NdMemoryOrdering, NdMemoryAddressSpace>>
+      AtomicStoreTypes;
+  bool HasSegmentedMemory = false;
+  bool Has256BitInteger = false;
 
   HighCAnalysisState Analysis;
   bool InferredVoid = false;

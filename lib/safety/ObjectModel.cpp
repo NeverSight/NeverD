@@ -830,7 +830,8 @@ private:
                  : std::nullopt;
     }
     case NdOp::LOAD: {
-      if (Op->NumInputs == 0)
+      if (Op->NumInputs == 0 ||
+          Op->MemoryAddressSpace != NdMemoryAddressSpace::Default)
         return std::nullopt;
       const MedVar &Addr = Op->Inputs[Op->NumInputs >= 2 ? 1 : 0];
       Active.clear();

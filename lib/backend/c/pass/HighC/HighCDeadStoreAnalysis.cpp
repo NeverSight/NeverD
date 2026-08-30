@@ -176,11 +176,17 @@ void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
 
   bool HasOrderedMemory = false;
   walkStmts(Func.Body, [&](const HighStmt &S) {
-    if (S.MemoryOrdering != NdMemoryOrdering::None)
+    if (S.MemoryOrdering != NdMemoryOrdering::None ||
+        S.MemoryAddressSpace != NdMemoryAddressSpace::Default)
       HasOrderedMemory = true;
     forEachExpr(S, [&](const ExprPtr &E) {
-      if (E && E->hasOrderedMemoryAccess())
-        HasOrderedMemory = true;
+      if (!E)
+        return;
+      walkExprNodes(*E, [&](const HighExpr &Node) {
+        if (Node.MemoryOrdering != NdMemoryOrdering::None ||
+            Node.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+          HasOrderedMemory = true;
+      });
     });
   });
 

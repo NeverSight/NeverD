@@ -127,7 +127,8 @@ bool MedLLVMEmitter::frameSlotHasMatchingKeyLoad(
   bool Result = false;
   for (const auto &Blk : CurMedFunc->Blocks) {
     for (const auto &Op : Blk.Ops)
-      if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1)
+      if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
+          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
         if (auto LK = keyOf(Op.Inputs[0]); LK && *LK == *SK) {
           Result = true;
           break;
@@ -646,7 +647,8 @@ bool MedLLVMEmitter::frameAccessesProvenDisjoint(const MedVar &A,
 std::optional<MedLLVMEmitter::FrameReloadOccurrenceKey>
 MedLLVMEmitter::frameReloadOccurrenceKey(const MedOp &Load) {
   if (Load.Opcode != NdOp::LOAD || Load.NumInputs < 1 || Load.NumInputs > 6 ||
-      Load.Output.Size == 0)
+      Load.Output.Size == 0 ||
+      Load.MemoryAddressSpace != NdMemoryAddressSpace::Default)
     return std::nullopt;
   std::array<AddressProvenanceVarKey, 6> Inputs{};
   for (uint8_t I = 0; I < Load.NumInputs; ++I)
@@ -746,7 +748,8 @@ void MedLLVMEmitter::ensureFrameReloadAnalysis() const {
         Declared.insert(Edge.BlockId);
     for (std::size_t I = 0; I < Block.Ops.size(); ++I) {
       const MedOp &Op = Block.Ops[I];
-      if (isMemoryWrite(Op.Opcode)) {
+      if (isMemoryWrite(Op.Opcode) &&
+          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
         FrameReloadWrite Write;
         Write.Index = I;
         Write.HasAddress = Op.NumInputs >= 1;
@@ -891,7 +894,8 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
                        Load.NumInputs >= 1 &&
                        stackSlotAddressEscapes(Load.Inputs[0]);
   if (!CurMedFunc || Load.Opcode != NdOp::LOAD || Load.NumInputs < 1 ||
-      Load.Output.Size == 0 || Escapes)
+      Load.Output.Size == 0 ||
+      Load.MemoryAddressSpace != NdMemoryAddressSpace::Default || Escapes)
     return false;
 
   const auto Target = canonicalFrameSlotKey(Load.Inputs[0]);
@@ -1149,7 +1153,8 @@ bool MedLLVMEmitter::frameSlotReloadUsedLocally(const MedVar &StoreAddr) const {
     std::vector<MedVar> ReloadVals;
     for (const auto &Blk : CurMedFunc->Blocks)
       for (const auto &Op : Blk.Ops)
-        if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1)
+        if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
+            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
           if (auto LK = keyOf(Op.Inputs[0]); LK && *LK == *SK)
             ReloadVals.push_back(Op.Output);
     if (ReloadVals.empty())

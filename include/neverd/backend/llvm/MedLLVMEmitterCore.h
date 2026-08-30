@@ -300,10 +300,10 @@ private:
   /// Shared memory owner for generic and AArch64 intrinsic atomics.  It tries
   /// exact/global and writable-run models before allowing a numeric fallback;
   /// an incomplete address fragment may never cross that fallback.
-  llvm::Value *resolveAtomicMemoryPtr(const MedVar &AddressVar,
-                                      uint16_t AccessBytes,
-                                      llvm::Type *AccessTy,
-                                      llvm::IRBuilder<> &Builder);
+  llvm::Value *resolveAtomicMemoryPtr(
+      const MedVar &AddressVar, uint16_t AccessBytes, llvm::Type *AccessTy,
+      llvm::IRBuilder<> &Builder,
+      NdMemoryAddressSpace AddressSpace = NdMemoryAddressSpace::Default);
   void emitVoidInlineAsm(const char *Mnemonic, const MedOp &Op,
                          llvm::IRBuilder<> &Builder);
 
@@ -315,6 +315,13 @@ private:
   llvm::Type *sizeToType(uint16_t Size);
   llvm::Type *mapNdtype(const TypeRef &Ty);
   llvm::Value *getVar(const MedVar &V, llvm::IRBuilder<> &Builder);
+  /// Materialize an x86 FS/GS offset as an integer expression.  Segment
+  /// offsets occupy a distinct address domain: constants whose bit pattern
+  /// happens to equal an image VA must not be rewritten to ptrtoint(@global)
+  /// or ptrtoint(@function).  Rebuild the pure integer dependency chain with
+  /// raw constants instead of reusing a potentially symbolized SSA value.
+  llvm::Value *getRawSegmentOffset(const MedVar &V,
+                                   llvm::IRBuilder<> &Builder);
   /// Materialize a constant copied along a PHI edge. Ordinary and exceptional
   /// edges must share this policy: untagged legacy constants remain raw,
   /// while an occurrence carrying architectural address origin goes through

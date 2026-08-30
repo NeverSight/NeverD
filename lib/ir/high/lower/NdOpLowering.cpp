@@ -64,7 +64,9 @@ void MedToHighConverter::lowerGenericAssign(HighFunc &Func, const MedOp &CurOp,
   bool MultiUse = UIt != UseCount.end() && UIt->second > 1;
   bool IsCallResult = CallOutputs.count(Key) > 0;
   bool FeedsPhi = PhiArgVars.count(Key) > 0;
-  bool HasMemoryEffect = CurOp.MemoryOrdering != NdMemoryOrdering::None;
+  bool HasMemoryEffect =
+      CurOp.MemoryOrdering != NdMemoryOrdering::None ||
+      CurOp.MemoryAddressSpace != NdMemoryAddressSpace::Default;
   if (!MultiUse && !IsCallResult && !FeedsPhi && !HasMemoryEffect)
     return;
   HighStmt S;
@@ -84,6 +86,7 @@ void MedToHighConverter::lowerStore(HighFunc &Func, const MedOp &CurOp) {
   S.Kind = StmtKind::Store;
   S.Addr = CurOp.Addr;
   S.MemoryOrdering = CurOp.MemoryOrdering;
+  S.MemoryAddressSpace = CurOp.MemoryAddressSpace;
   if (CurOp.NumInputs >= 2) {
     auto &AddrVar = CurOp.Inputs[0];
     ExprPtr AddrExpr;
@@ -91,7 +94,8 @@ void MedToHighConverter::lowerStore(HighFunc &Func, const MedOp &CurOp) {
       auto AKey = std::make_pair(AddrVar.Id, AddrVar.SSAVer);
       auto DIt = DefExpr.find(AKey);
       if (DIt != DefExpr.end() && DIt->second->Kind != ExprKind::Call &&
-          DIt->second->MemoryOrdering == NdMemoryOrdering::None)
+          DIt->second->MemoryOrdering == NdMemoryOrdering::None &&
+          DIt->second->MemoryAddressSpace == NdMemoryAddressSpace::Default)
         AddrExpr = DIt->second;
     }
     S.StoreAddr = AddrExpr ? AddrExpr : medvarToExpr(AddrVar);
@@ -173,6 +177,7 @@ void MedToHighConverter::lowerIntrinsic(HighFunc &Func,
   auto CallExpr = HighExpr::makeCall(Name, 0, std::move(CoArgs));
   CallExpr->IntrinsicId = IID;
   CallExpr->MemoryOrdering = CurOp.MemoryOrdering;
+  CallExpr->MemoryAddressSpace = CurOp.MemoryAddressSpace;
   if (CurOp.Output.Size > 0)
     CallExpr->Type = NdType::makeInt(CurOp.Output.Size, false);
 
@@ -184,8 +189,9 @@ void MedToHighConverter::lowerIntrinsic(HighFunc &Func,
       auto &NextOp = CurBlock.Ops[CI];
       if (NextOp.Opcode == NdOp::COPY && NextOp.NumInputs >= 1) {
         CoOutputs.push_back(NextOp.Inputs[0]);
-        // The output copy is folded into IntrinsicOutputs; skip lowering it
-        // as a standalone assignment.
+        // The pending-result convention binds the auxiliary value to the COPY
+        // input.  Expression building also inlines uses of the COPY output back
+        // to that input, so IntrinsicOutputs must keep the same identity.
         IntrinsicSkip.insert(CI);
         continue;
       }

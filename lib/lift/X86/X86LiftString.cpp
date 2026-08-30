@@ -51,6 +51,29 @@ unsigned stringElemSize(unsigned InsnId) {
   }
 }
 
+NdMemoryAddressSpace stringSourceAddressSpace(const cs_x86 &X86) {
+  for (uint8_t I = 0; I < X86.op_count; ++I) {
+    const cs_x86_op &Op = X86.operands[I];
+    if (Op.type != X86_OP_MEM)
+      continue;
+    NdMemoryAddressSpace AddressSpace =
+        X86Lifter::LiftState::memoryAddressSpace(Op);
+    if (AddressSpace != NdMemoryAddressSpace::Default)
+      return AddressSpace;
+  }
+
+  // Capstone does not materialize XLAT's implicit [RBX + AL] operand.  Keep
+  // the prefix fallback here as part of the same source-segment policy rather
+  // than duplicating instruction-byte tests in the individual handlers.
+  for (uint8_t Prefix : X86.prefix) {
+    if (Prefix == X86_PREFIX_FS)
+      return NdMemoryAddressSpace::X86FS;
+    if (Prefix == X86_PREFIX_GS)
+      return NdMemoryAddressSpace::X86GS;
+  }
+  return NdMemoryAddressSpace::Default;
+}
+
 namespace {
 
 // True when a REPNE/REPNZ prefix (0xF2) is attached.  On CMPS/SCAS this selects
@@ -80,12 +103,13 @@ bool hasRepOrRepnePrefix(const cs_x86 &X86) {
 // direction flag is statically known (e.g. after CLD/STD), so the common
 // forward case keeps its original zero-cost lowering.
 NdVar X86Lifter::dirStep(LiftState &S, unsigned ElemSz) {
-  NdVar Step = S.makeTemp(8);
-  S.emit(
-      NdOp::SELECT, Step,
-      {NdVar::reg(x86reg::DF, 1),
-       NdVar::scalar(static_cast<uint64_t>(-static_cast<int64_t>(ElemSz)), 8),
-       NdVar::scalar(ElemSz, 8)});
+  const uint16_t AddrSz = S.AddressSize;
+  NdVar Step = S.makeTemp(AddrSz);
+  S.emit(NdOp::SELECT, Step,
+         {NdVar::reg(x86reg::DF, 1),
+          NdVar::scalar(static_cast<uint64_t>(-static_cast<int64_t>(ElemSz)),
+                        AddrSz),
+          NdVar::scalar(ElemSz, AddrSz)});
   return Step;
 }
 
@@ -100,96 +124,78 @@ NdVar X86Lifter::dirStep(LiftState &S, unsigned ElemSz) {
 // Everything else follows from that one value.  The loop decrements RCX and
 // advances the pointer(s) by one direction step in lockstep, so
 //   iterations = RCX_in - RCX_out,  RSI/RDI += iterations * step,
-// and the flags are those of the LAST element pair compared, which sits one
-// step back from the final pointers.  Recomputing them as an ordinary CMP keeps
-// the flags real MedIR values that condition recovery and flag elimination can
-// still reason about, instead of opaque asm outputs.  A loop that never ran
-// (RCX == 0 on entry) compares nothing and leaves the flags untouched: the
-// flag-reconstruction loads are redirected to the live stack frame, and each
-// flag falls back to its incoming value.
+// and the flags come back from the same hardware loop as a compact LAHF/SETO
+// snapshot.  A loop that never ran (RCX == 0 on entry) compares nothing and
+// leaves the flags untouched, so each modelled flag falls back to its incoming
+// value without issuing a speculative reconstruction load.
 void X86Lifter::liftRepCmpScas(LiftState &S, Intrinsic Id, unsigned ElemSz,
-                               bool IsScas, bool IsRepne) {
-  NdVar Rsi = NdVar::reg(x86reg::RSI, 8);
-  NdVar Rdi = NdVar::reg(x86reg::RDI, 8);
-  NdVar Rcx = NdVar::reg(x86reg::RCX, 8);
+                               bool IsScas, bool IsRepne,
+                               NdMemoryAddressSpace SourceAddressSpace) {
+  const uint16_t AddrSz = S.AddressSize;
+  NdVar Rsi = NdVar::reg(x86reg::RSI, AddrSz);
+  NdVar Rdi = NdVar::reg(x86reg::RDI, AddrSz);
+  NdVar Rcx = NdVar::reg(x86reg::RCX, AddrSz);
   NdVar Df = NdVar::reg(x86reg::DF, 1);
   NdVar RepKind = NdVar::scalar(IsRepne ? 1 : 0, 1);
 
   // Snapshot the entry count and "the loop body ran at least once" before the
   // count is overwritten.
-  NdVar RcxIn = S.makeTemp(8);
+  NdVar RcxIn = S.makeTemp(AddrSz);
   S.emit(NdOp::COPY, RcxIn, {Rcx});
   NdVar RcxNZ = S.makeTemp(1);
-  S.emit(NdOp::INT_NOTEQUAL, RcxNZ, {RcxIn, NdVar::scalar(0, 8)});
+  S.emit(NdOp::INT_NOTEQUAL, RcxNZ, {RcxIn, NdVar::scalar(0, AddrSz)});
   NdVar Step = dirStep(S, ElemSz);
 
   // The intrinsic yields the leftover count.  Note the destination is NOT the
   // default RAX: SCAS reads the accumulator but never writes it, so an RAX
   // destination would clobber a live accumulator.
-  NdVar RcxOut = S.makeTemp(8);
+  NdVar RcxOut = S.makeTemp(AddrSz);
   if (IsScas)
     S.emitIntrinsic(Id, RcxOut,
                     {Rdi, Rcx, NdVar::reg(x86reg::RAX, ElemSz), Df, RepKind});
   else
-    S.emitIntrinsic(Id, RcxOut, {Rsi, Rdi, Rcx, Df, RepKind});
+    S.emitIntrinsic(Id, RcxOut, {Rsi, Rdi, Rcx, Df, RepKind},
+                    NdMemoryOrdering::None, SourceAddressSpace);
 
-  NdVar Iters = S.makeTemp(8);
+  // REP CMPS/SCAS returns a LAHF/SETO flag snapshot as its one auxiliary
+  // output.  Keeping the flags in the hardware intrinsic is essential for the
+  // RCX==0 case: a flat LowIR LOAD would execute even behind a later SELECT,
+  // whereas hardware REP performs no operand access when the entry count is
+  // zero.  The COPY-input convention binds the auxiliary result in both the
+  // LLVM and HighIR lowering paths.
+  NdVar PackedFlagsResult = S.makeTemp(2);
+  NdVar PackedFlags = S.makeTemp(2);
+  S.emit(NdOp::COPY, PackedFlags, {PackedFlagsResult});
+
+  NdVar Iters = S.makeTemp(AddrSz);
   S.emit(NdOp::INT_SUB, Iters, {RcxIn, RcxOut});
-  NdVar Delta = S.makeTemp(8);
+  NdVar Delta = S.makeTemp(AddrSz);
   S.emit(NdOp::INT_MULT, Delta, {Iters, Step});
 
   NdVar NewSi;
   if (!IsScas) {
-    NewSi = S.makeTemp(8);
+    NewSi = S.makeTemp(AddrSz);
     S.emit(NdOp::INT_ADD, NewSi, {Rsi, Delta});
   }
-  NdVar NewDi = S.makeTemp(8);
+  NdVar NewDi = S.makeTemp(AddrSz);
   S.emit(NdOp::INT_ADD, NewDi, {Rdi, Delta});
   if (!IsScas)
     S.emit(NdOp::COPY, Rsi, {NewSi});
   S.emit(NdOp::COPY, Rdi, {NewDi});
   S.emit(NdOp::COPY, Rcx, {RcxOut});
 
-  // Re-read the last compared pair through the final pointers.
-  NdVar Back = S.makeTemp(8);
-  S.emit(NdOp::SELECT, Back, {RcxNZ, Step, NdVar::scalar(0, 8)});
-  NdVar DiLast = S.makeTemp(8);
-  S.emit(NdOp::INT_SUB, DiLast, {NewDi, Back});
-  // A MedIR LOAD is unconditional even when its value later feeds the false
-  // arm of a SELECT.  REP with an entry count of zero must not touch RSI/RDI,
-  // so route that otherwise-dead probe through the live stack frame instead.
-  NdVar SafeProbe = NdVar::reg(x86reg::RSP, 8);
-  NdVar DiProbe = S.makeTemp(8);
-  S.emit(NdOp::SELECT, DiProbe, {RcxNZ, DiLast, SafeProbe});
-  NdVar B = S.makeTemp(ElemSz);
-  S.emit(NdOp::LOAD, B, {DiProbe});
-  NdVar A;
-  if (IsScas) {
-    A = NdVar::reg(x86reg::RAX, ElemSz);
-  } else {
-    NdVar SiLast = S.makeTemp(8);
-    S.emit(NdOp::INT_SUB, SiLast, {NewSi, Back});
-    NdVar SiProbe = S.makeTemp(8);
-    S.emit(NdOp::SELECT, SiProbe, {RcxNZ, SiLast, SafeProbe});
-    A = S.makeTemp(ElemSz);
-    S.emit(NdOp::LOAD, A, {SiProbe});
-  }
-
   static constexpr uint64_t FlagRegs[] = {x86reg::CF, x86reg::PF, x86reg::AF,
                                           x86reg::ZF, x86reg::SF, x86reg::OF};
+  // LAHF stores SF:ZF:0:AF:0:PF:1:CF in AH; SETO stores OF in AL bit 0.
+  static constexpr unsigned PackedFlagBits[] = {8, 10, 12, 14, 15, 0};
   NdVar Old[std::size(FlagRegs)];
   for (size_t I = 0; I < std::size(FlagRegs); ++I) {
     Old[I] = S.makeTemp(1);
     S.emit(NdOp::COPY, Old[I], {NdVar::reg(FlagRegs[I], 1)});
   }
 
-  NdVar Res = S.makeTemp(ElemSz);
-  S.emit(NdOp::INT_SUB, Res, {A, B});
-  emitFlagsArith(S, Res, A, B, /*IsSub=*/true);
-
   for (size_t I = 0; I < std::size(FlagRegs); ++I) {
-    NdVar New = S.makeTemp(1);
-    S.emit(NdOp::COPY, New, {NdVar::reg(FlagRegs[I], 1)});
+    NdVar New = extractBit(S, PackedFlags, PackedFlagBits[I]);
     NdVar Sel = S.makeTemp(1);
     S.emit(NdOp::SELECT, Sel, {RcxNZ, New, Old[I]});
     S.emit(NdOp::COPY, NdVar::reg(FlagRegs[I], 1), {Sel});
@@ -314,26 +320,28 @@ bool X86Lifter::liftString(LiftState &S, const cs_insn *Insn,
       // ES:[RDI] as a 4-byte CMP and step both pointers per DF.
       // Single form only; the REP form falls to the placeholder below.
       unsigned ElemSz = 4;
+      const uint16_t AddrSz = S.AddressSize;
       NdVar SiVal = S.makeTemp(ElemSz);
-      S.emit(NdOp::LOAD, SiVal, {NdVar::reg(x86reg::RSI, 8)});
+      S.emit(NdOp::LOAD, SiVal, {NdVar::reg(x86reg::RSI, AddrSz)},
+             NdMemoryOrdering::None, stringSourceAddressSpace(X86));
       NdVar DiVal = S.makeTemp(ElemSz);
-      S.emit(NdOp::LOAD, DiVal, {NdVar::reg(x86reg::RDI, 8)});
+      S.emit(NdOp::LOAD, DiVal, {NdVar::reg(x86reg::RDI, AddrSz)});
       NdVar Res = S.makeTemp(ElemSz);
       S.emit(NdOp::INT_SUB, Res, {SiVal, DiVal});
       emitFlagsArith(S, Res, SiVal, DiVal, /*IsSub=*/true);
       NdVar Step = dirStep(S, ElemSz);
-      NdVar NewSi = S.makeTemp(8);
-      S.emit(NdOp::INT_ADD, NewSi, {NdVar::reg(x86reg::RSI, 8), Step});
-      S.emit(NdOp::COPY, NdVar::reg(x86reg::RSI, 8), {NewSi});
-      NdVar NewDi = S.makeTemp(8);
-      S.emit(NdOp::INT_ADD, NewDi, {NdVar::reg(x86reg::RDI, 8), Step});
-      S.emit(NdOp::COPY, NdVar::reg(x86reg::RDI, 8), {NewDi});
+      NdVar NewSi = S.makeTemp(AddrSz);
+      S.emit(NdOp::INT_ADD, NewSi, {NdVar::reg(x86reg::RSI, AddrSz), Step});
+      S.emit(NdOp::COPY, NdVar::reg(x86reg::RSI, AddrSz), {NewSi});
+      NdVar NewDi = S.makeTemp(AddrSz);
+      S.emit(NdOp::INT_ADD, NewDi, {NdVar::reg(x86reg::RDI, AddrSz), Step});
+      S.emit(NdOp::COPY, NdVar::reg(x86reg::RDI, AddrSz), {NewDi});
     } else {
       // String CMPSD (`cmpsl`) under REP/REPE/REPNE.  stringElemSize cannot
       // classify X86_INS_CMPSD (it doubles as the SSE scalar compare), so the
       // 4-byte element size is passed explicitly.
       liftRepCmpScas(S, Intrinsic::Cmpsd_str, /*ElemSz=*/4, /*IsScas=*/false,
-                     hasRepnePrefix(X86));
+                     hasRepnePrefix(X86), stringSourceAddressSpace(X86));
     }
     break;
   }
@@ -363,8 +371,9 @@ bool X86Lifter::liftString(LiftState &S, const cs_insn *Insn,
                    InsnId == X86_INS_SCASD || InsnId == X86_INS_SCASQ);
     if (!hasRepOrRepnePrefix(X86)) {
       unsigned ElemSz = stringElemSize(InsnId);
+      const uint16_t AddrSz = S.AddressSize;
       NdVar DiVal = S.makeTemp(ElemSz);
-      S.emit(NdOp::LOAD, DiVal, {NdVar::reg(x86reg::RDI, 8)});
+      S.emit(NdOp::LOAD, DiVal, {NdVar::reg(x86reg::RDI, AddrSz)});
       NdVar CmpA, CmpB = DiVal;
       if (IsScas) {
         // result = AL/AX/EAX/RAX - ES:[RDI]
@@ -372,7 +381,8 @@ bool X86Lifter::liftString(LiftState &S, const cs_insn *Insn,
       } else {
         // result = DS:[RSI] - ES:[RDI]
         NdVar SiVal = S.makeTemp(ElemSz);
-        S.emit(NdOp::LOAD, SiVal, {NdVar::reg(x86reg::RSI, 8)});
+        S.emit(NdOp::LOAD, SiVal, {NdVar::reg(x86reg::RSI, AddrSz)},
+               NdMemoryOrdering::None, stringSourceAddressSpace(X86));
         CmpA = SiVal;
       }
       NdVar Res = S.makeTemp(ElemSz);
@@ -381,13 +391,13 @@ bool X86Lifter::liftString(LiftState &S, const cs_insn *Insn,
       // Step the pointer(s) by the element size per DF (forward/backward).
       NdVar Step = dirStep(S, ElemSz);
       if (!IsScas) {
-        NdVar NewSi = S.makeTemp(8);
-        S.emit(NdOp::INT_ADD, NewSi, {NdVar::reg(x86reg::RSI, 8), Step});
-        S.emit(NdOp::COPY, NdVar::reg(x86reg::RSI, 8), {NewSi});
+        NdVar NewSi = S.makeTemp(AddrSz);
+        S.emit(NdOp::INT_ADD, NewSi, {NdVar::reg(x86reg::RSI, AddrSz), Step});
+        S.emit(NdOp::COPY, NdVar::reg(x86reg::RSI, AddrSz), {NewSi});
       }
-      NdVar NewDi = S.makeTemp(8);
-      S.emit(NdOp::INT_ADD, NewDi, {NdVar::reg(x86reg::RDI, 8), Step});
-      S.emit(NdOp::COPY, NdVar::reg(x86reg::RDI, 8), {NewDi});
+      NdVar NewDi = S.makeTemp(AddrSz);
+      S.emit(NdOp::INT_ADD, NewDi, {NdVar::reg(x86reg::RDI, AddrSz), Step});
+      S.emit(NdOp::COPY, NdVar::reg(x86reg::RDI, AddrSz), {NewDi});
       break;
     }
     // REP/REPE/REPNE form: data-dependent loop, lowered to the hardware
@@ -416,7 +426,8 @@ bool X86Lifter::liftString(LiftState &S, const cs_insn *Insn,
       Id = Intrinsic::Scasq;
       break;
     }
-    liftRepCmpScas(S, Id, stringElemSize(InsnId), IsScas, hasRepnePrefix(X86));
+    liftRepCmpScas(S, Id, stringElemSize(InsnId), IsScas, hasRepnePrefix(X86),
+                   stringSourceAddressSpace(X86));
     break;
   }
 

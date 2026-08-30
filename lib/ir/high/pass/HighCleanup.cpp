@@ -60,6 +60,8 @@ void MedToHighConverter::stripStackCanary(HighFunc &Func) {
                                      return false;
                                    if (S.MemoryOrdering !=
                                            NdMemoryOrdering::None ||
+                                       S.MemoryAddressSpace !=
+                                           NdMemoryAddressSpace::Default ||
                                        S.StoreVal->hasOrderedMemoryAccess())
                                      return false;
                                    if (S.StoreVal->Kind != ExprKind::Load)
@@ -118,6 +120,7 @@ void MedToHighConverter::stripPrologueEpilogue(HighFunc &Func) {
     if (S.Kind != StmtKind::Store || !S.StoreVal)
       return false;
     if (S.MemoryOrdering != NdMemoryOrdering::None ||
+        S.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
         S.StoreVal->hasOrderedMemoryAccess())
       return false;
     if (S.StoreVal->Kind != ExprKind::Var)
@@ -194,7 +197,8 @@ void MedToHighConverter::stripPrologueEpilogue(HighFunc &Func) {
     }
     if (S.Kind == StmtKind::Store && S.StoreVal && S.StoreAddr &&
         S.StoreVal->Kind == ExprKind::Var) {
-      if (S.MemoryOrdering != NdMemoryOrdering::None)
+      if (S.MemoryOrdering != NdMemoryOrdering::None ||
+          S.MemoryAddressSpace != NdMemoryAddressSpace::Default)
         return false;
       auto &V = S.StoreVal->Var;
       if (IsFPReg(V) || IsLRReg(V))

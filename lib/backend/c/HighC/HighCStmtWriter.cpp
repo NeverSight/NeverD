@@ -26,6 +26,20 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
   case StmtKind::Assign: {
     if (!Stmt.Dst || !Stmt.Val)
       return;
+    if (Stmt.Val->Kind == ExprKind::Call) {
+      auto Rendered = renderX86SegmentedIntrinsicStatement(
+          Opts.TheArch, *Stmt.Val, Stmt.Dst.get(),
+          [this](const HighExpr &E) { return exprStr(E); },
+          [this](const MedVar &V) { return varName(V); },
+          [this](const MedVar &V) {
+            return !Analysis.DeadVars.count(varName(V));
+          });
+      if (!Rendered.empty()) {
+        emitIndent(Indent);
+        OS << Rendered;
+        break;
+      }
+    }
     if (Stmt.Val->Kind == ExprKind::Call &&
         !Stmt.Val->IntrinsicOutputs.empty()) {
       auto Rendered = MultiOutputRender{}(
@@ -55,7 +69,8 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
     if (Stmt.Dst->Kind == ExprKind::Load && !Stmt.Dst->Operands.empty()) {
       emitIndent(Indent);
       OS << memoryStoreExpr(Stmt.Dst->Type, exprStr(*Stmt.Dst->Operands[0]),
-                            exprStr(*Stmt.Val), Stmt.Dst->MemoryOrdering)
+                            exprStr(*Stmt.Val), Stmt.Dst->MemoryOrdering,
+                            Stmt.Dst->MemoryAddressSpace)
          << ";\n";
       break;
     }
@@ -69,13 +84,28 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
       return;
     emitIndent(Indent);
     OS << memoryStoreExpr(Stmt.StoreVal->Type, exprStr(*Stmt.StoreAddr),
-                          exprStr(*Stmt.StoreVal), Stmt.MemoryOrdering)
+                          exprStr(*Stmt.StoreVal), Stmt.MemoryOrdering,
+                          Stmt.MemoryAddressSpace)
        << ";\n";
     break;
 
   case StmtKind::Call:
     if (!Stmt.CallExpr)
       return;
+    {
+      auto Rendered = renderX86SegmentedIntrinsicStatement(
+          Opts.TheArch, *Stmt.CallExpr, nullptr,
+          [this](const HighExpr &E) { return exprStr(E); },
+          [this](const MedVar &V) { return varName(V); },
+          [this](const MedVar &V) {
+            return !Analysis.DeadVars.count(varName(V));
+          });
+      if (!Rendered.empty()) {
+        emitIndent(Indent);
+        OS << Rendered;
+        break;
+      }
+    }
     if (!Stmt.CallExpr->IntrinsicOutputs.empty()) {
       auto Rendered = MultiOutputRender{}(
           Opts.TheArch, Stmt.CallExpr->IntrinsicId,

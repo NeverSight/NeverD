@@ -2,6 +2,8 @@
 
 #include "neverd/ir/low/LowIR.h"
 
+#include "neverd/ir/intrinsics/Intrinsics.h"
+
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/Errc.h"
@@ -36,6 +38,56 @@ bool isKnownTargetMode(LowInstructionTargetMode Mode) {
     return true;
   }
   return false;
+}
+
+llvm::Error validateMemoryAddressSpace(const LowOp &Op) {
+  if (!isKnownMemoryAddressSpace(Op.MemoryAddressSpace))
+    return invalid("LowOp has an unknown memory address space");
+  const bool HasExplicitAddressSpace =
+      Op.MemoryAddressSpace != NdMemoryAddressSpace::Default;
+  if (HasExplicitAddressSpace &&
+      !opcodeSupportsMemoryAddressSpace(Op.Opcode))
+    return invalid("LowOp attaches a memory address space to a non-memory "
+                   "opcode");
+  if (Op.Opcode != NdOp::INTRINSIC)
+    return llvm::Error::success();
+  if (Op.NumInputs == 0 || !Op.Inputs[0].isConst()) {
+    if (HasExplicitAddressSpace)
+      return invalid(
+          "segmented-memory intrinsic has no constant intrinsic ID");
+    return llvm::Error::success();
+  }
+  const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+  if (!HasExplicitAddressSpace && isX86StringIntrinsic(Id)) {
+    if (!intrinsicStringShapeIsValid(
+            Id, Op.NumInputs, Op.Output.Size,
+            Op.NumInputs > 1 ? Op.Inputs[1].Size : 0))
+      return invalid("x86 string intrinsic has an invalid operand/output "
+                     "shape");
+    return llvm::Error::success();
+  }
+  if (!intrinsicSupportsMemoryAddressSpace(Id)) {
+    if (HasExplicitAddressSpace)
+      return invalid("intrinsic does not support a memory address space");
+    return llvm::Error::success();
+  }
+  if (!HasExplicitAddressSpace && intrinsicDefaultRegisterShapeIsValid(
+                                      Id, Op.NumInputs, Op.Output.Size,
+                                      Op.NumInputs > 1 ? Op.Inputs[1].Size : 0))
+    return llvm::Error::success();
+  if (!intrinsicMemoryAddressSpaceShapeIsValid(Id, Op.NumInputs,
+                                               Op.Output.Size,
+                                               Op.NumInputs > 1
+                                                   ? Op.Inputs[1].Size
+                                                   : 0,
+                                               Op.NumInputs > 2
+                                                   ? Op.Inputs[2].Size
+                                                   : 0,
+                                               Op.NumInputs > 3
+                                                   ? Op.Inputs[3].Size
+                                                   : 0))
+    return invalid("memory intrinsic has an invalid operand/output shape");
+  return llvm::Error::success();
 }
 
 struct DerivedControl {
@@ -349,10 +401,14 @@ llvm::Error validateLowInstructionBoundaries(
     if (Boundary.OpCount > NumOps - ExpectedFirstOp)
       return invalid("instruction boundary op slice is out of range");
     const uint64_t OpEnd = ExpectedFirstOp + Boundary.OpCount;
-    for (uint64_t I = ExpectedFirstOp; I < OpEnd; ++I)
-      if (Block.Ops[static_cast<size_t>(I)].Addr != Boundary.Address)
+    for (uint64_t I = ExpectedFirstOp; I < OpEnd; ++I) {
+      const LowOp &Op = Block.Ops[static_cast<size_t>(I)];
+      if (Op.Addr != Boundary.Address)
         return invalid(
             "instruction boundary covers an op from another address");
+      if (llvm::Error Error = validateMemoryAddressSpace(Op))
+        return Error;
+    }
 
     if (llvm::Error Error = validateControl(Block, Boundary))
       return Error;

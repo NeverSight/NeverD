@@ -25,6 +25,7 @@
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace neverd {
@@ -92,8 +93,44 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
   using I = Intrinsic;
   auto IC = static_cast<I>(IntrCode);
 
+  if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default) {
+    if (TargetArch != Arch::X86 && TargetArch != Arch::X64)
+      llvm::report_fatal_error(
+          "FS/GS memory address spaces require an x86 target");
+    if (!intrinsicSupportsMemoryAddressSpace(IC))
+      llvm::report_fatal_error(
+          "intrinsic does not support a memory address space");
+    if (!intrinsicMemoryAddressSpaceShapeIsValid(IC, Op.NumInputs,
+                                                 Op.Output.Size,
+                                                 Op.NumInputs > 1
+                                                     ? Op.Inputs[1].Size
+                                                     : 0,
+                                                 Op.NumInputs > 2
+                                                     ? Op.Inputs[2].Size
+                                                     : 0,
+                                                 Op.NumInputs > 3
+                                                     ? Op.Inputs[3].Size
+                                                     : 0))
+      llvm::report_fatal_error(
+          "segmented-memory intrinsic has an invalid operand/output shape");
+  }
+
   if (emitSideeffectIntrinsic(Op, IC, Builder))
     return nullptr;
+
+  // Masked stores are value-dispatch intrinsics with a void result.  They must
+  // be dispatched before the generic zero-output early return; otherwise the
+  // observable store is silently dropped.  The arity check also makes the
+  // handler's nullptr-success convention unambiguous.
+  if ((TargetArch == Arch::X86 || TargetArch == Arch::X64) &&
+      (IC == I::MaskedStoreD || IC == I::MaskedStoreQ ||
+       IC == I::MaskedStoreB)) {
+    if (Op.NumInputs < 4 || Op.Output.Size != 0)
+      llvm::report_fatal_error(
+          "masked-store intrinsic has an invalid operand/output shape");
+    (void)emitMaskedMemOp(Op, IC, Builder);
+    return nullptr;
+  }
 
   if (Op.Output.Size == 0)
     return nullptr;
@@ -131,6 +168,10 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
   default:
     break;
   }
+
+  if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+    llvm::report_fatal_error(
+        "segmented-memory intrinsic was not handled by the target backend");
 
   if (IC == I::Hlt) {
     auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(

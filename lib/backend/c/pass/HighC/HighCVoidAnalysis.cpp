@@ -150,10 +150,33 @@ bool analyzeVoidReturn(const HighCAnalysisState &State, const HighFunc &Func,
 
 void analyzeVoidDeadChain(HighCAnalysisState &State, const HighFunc &Func,
                           VarNameFn VarFn) {
-  std::function<void(const HighExpr &)> Collect = [&](const HighExpr &E) {
+  std::set<std::string> NonReturnUses;
+  std::set<const HighExpr *> SeenUses;
+  std::function<void(const HighExpr &)> CollectUse = [&](const HighExpr &E) {
+    if (!SeenUses.insert(&E).second)
+      return;
     if (E.Kind == ExprKind::Var)
-      State.DeadVars.insert(VarFn(E.Var));
-    for (auto &Op : E.Operands)
+      NonReturnUses.insert(VarFn(E.Var));
+    for (const ExprPtr &Op : E.Operands)
+      if (Op)
+        CollectUse(*Op);
+  };
+  walkStmts(Func.Body, [&](const HighStmt &S) {
+    if (S.Kind == StmtKind::Return || State.DeadStmts.count(&S))
+      return;
+    forEachRhsExpr(S, [&](const ExprPtr &E) {
+      if (E)
+        CollectUse(*E);
+    });
+  });
+
+  std::function<void(const HighExpr &)> Collect = [&](const HighExpr &E) {
+    if (E.Kind == ExprKind::Var) {
+      const std::string Name = VarFn(E.Var);
+      if (!NonReturnUses.count(Name))
+        State.DeadVars.insert(Name);
+    }
+    for (const ExprPtr &Op : E.Operands)
       if (Op)
         Collect(*Op);
   };

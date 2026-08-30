@@ -641,6 +641,193 @@ llvm::Value *MedLLVMEmitter::getPhiIncomingValue(const MedVar &V,
   return getVar(V, Builder);
 }
 
+llvm::Value *MedLLVMEmitter::getRawSegmentOffset(
+    const MedVar &V, llvm::IRBuilder<> &Builder) {
+  using Key = std::tuple<int, int, int, uint16_t>;
+  std::set<Key> Active;
+  int Budget = 256;
+
+  auto rawConstant = [&](const MedVar &C) -> llvm::Value * {
+    return rawIntegerConstant(*Ctx, sizeToType(C.Size), C.ConstVal);
+  };
+  auto asInteger = [&](llvm::Value *Value, llvm::IntegerType *Ty,
+                       bool Signed) -> llvm::Value * {
+    if (!Value || !Value->getType()->isIntegerTy())
+      llvm::report_fatal_error(
+          "FS/GS offset depends on a non-integer process pointer");
+    if (Value->getType() == Ty)
+      return Value;
+    return Builder.CreateIntCast(Value, Ty, Signed, "segment_offset_cast");
+  };
+
+  std::function<llvm::Value *(const MedVar &)> materialize =
+      [&](const MedVar &Cur) -> llvm::Value * {
+    if (--Budget < 0)
+      llvm::report_fatal_error("FS/GS offset expression is too deep");
+    if (Cur.isConst())
+      return rawConstant(Cur);
+
+    Key K = std::make_tuple(static_cast<int>(Cur.Kind), Cur.Id, Cur.SSAVer,
+                            Cur.Size);
+    if (!Active.insert(K).second)
+      llvm::report_fatal_error(
+          "cyclic FS/GS offset cannot be materialized as a raw integer");
+    struct EraseOnExit {
+      std::set<Key> &Set;
+      Key Value;
+      ~EraseOnExit() { Set.erase(Value); }
+    } Guard{Active, K};
+
+    if (const PhiNode *Phi = lookupPhi(Cur)) {
+      using Model = ConstantProvenanceSummary::ValueModel;
+      for (const auto &[Pred, Arg] : Phi->Args) {
+        (void)Pred;
+        const ConstantProvenanceSummary Summary =
+            summarizeConstantProvenance(Arg);
+        if ((Summary.Model != Model::Scalar &&
+             Summary.Model != Model::Unknown) ||
+            Summary.SawAddressFragment ||
+            constantOccurrenceMayRelocate(
+                Arg, /*DirectPhiConstantBypassesGetVar=*/true))
+          llvm::report_fatal_error(
+              "FS/GS offset PHI has an unproven or relocatable incoming arm");
+      }
+      llvm::Value *Value = getVar(Cur, Builder);
+      if (!Value || !Value->getType()->isIntegerTy())
+        llvm::report_fatal_error(
+            "FS/GS offset PHI was not materialized as an integer");
+      return Value;
+    }
+
+    const MedOp *Def = lookupDef(Cur);
+    if (!Def) {
+      llvm::Value *Value = getVar(Cur, Builder);
+      if (!Value || !Value->getType()->isIntegerTy() ||
+          llvm::isa<llvm::PtrToIntInst>(Value))
+        llvm::report_fatal_error(
+            "FS/GS live-in offset was inferred as a process pointer");
+      return Value;
+    }
+
+    // SSA construction represents an architectural live-in with a canonical
+    // self COPY.  It is a source value, not a recursive expression; following
+    // that edge would manufacture a cycle for register-based FS/GS offsets.
+    if (Def->Opcode == NdOp::COPY && Def->NumInputs >= 1) {
+      const MedVar &Input = Def->Inputs[0];
+      const Key InputKey =
+          std::make_tuple(static_cast<int>(Input.Kind), Input.Id, Input.SSAVer,
+                          Input.Size);
+      if (InputKey == K) {
+        llvm::Value *Value = getVar(Cur, Builder);
+        if (!Value || !Value->getType()->isIntegerTy() ||
+            llvm::isa<llvm::PtrToIntInst>(Value))
+          llvm::report_fatal_error(
+              "FS/GS live-in offset was inferred as a process pointer");
+        return Value;
+      }
+    }
+
+    auto *OutTy = llvm::cast<llvm::IntegerType>(sizeToType(Cur.Size));
+    auto unary = [&](bool Signed) -> llvm::Value * {
+      if (Def->NumInputs < 1)
+        llvm::report_fatal_error("malformed unary FS/GS offset expression");
+      return asInteger(materialize(Def->Inputs[0]), OutTy, Signed);
+    };
+    auto binary = [&](auto Emit) -> llvm::Value * {
+      if (Def->NumInputs < 2)
+        llvm::report_fatal_error("malformed binary FS/GS offset expression");
+      llvm::Value *L = asInteger(materialize(Def->Inputs[0]), OutTy, false);
+      llvm::Value *R = asInteger(materialize(Def->Inputs[1]), OutTy, false);
+      return Emit(L, R);
+    };
+
+    switch (Def->Opcode) {
+    case NdOp::COPY:
+    case NdOp::INT_ZEXT:
+      return unary(false);
+    case NdOp::INT_SEXT:
+      return unary(true);
+    case NdOp::INT_ADD:
+      return binary([&](llvm::Value *L, llvm::Value *R) {
+        return Builder.CreateAdd(L, R, "segment_offset_add");
+      });
+    case NdOp::INT_SUB:
+      return binary([&](llvm::Value *L, llvm::Value *R) {
+        return Builder.CreateSub(L, R, "segment_offset_sub");
+      });
+    case NdOp::INT_MULT:
+      return binary([&](llvm::Value *L, llvm::Value *R) {
+        return Builder.CreateMul(L, R, "segment_offset_mul");
+      });
+    case NdOp::INT_AND:
+      return binary([&](llvm::Value *L, llvm::Value *R) {
+        return Builder.CreateAnd(L, R, "segment_offset_and");
+      });
+    case NdOp::INT_OR:
+      return binary([&](llvm::Value *L, llvm::Value *R) {
+        return Builder.CreateOr(L, R, "segment_offset_or");
+      });
+    case NdOp::INT_XOR:
+      return binary([&](llvm::Value *L, llvm::Value *R) {
+        return Builder.CreateXor(L, R, "segment_offset_xor");
+      });
+    case NdOp::INT_LEFT:
+      return binary([&](llvm::Value *L, llvm::Value *R) {
+        return Builder.CreateShl(L, R, "segment_offset_shl");
+      });
+    case NdOp::INT_RIGHT:
+      return binary([&](llvm::Value *L, llvm::Value *R) {
+        return Builder.CreateLShr(L, R, "segment_offset_lshr");
+      });
+    case NdOp::INT_ASHR:
+      return binary([&](llvm::Value *L, llvm::Value *R) {
+        return Builder.CreateAShr(L, R, "segment_offset_ashr");
+      });
+    case NdOp::SUBBYTES: {
+      if (Def->NumInputs < 2 || !Def->Inputs[1].isConst())
+        llvm::report_fatal_error(
+            "dynamic byte extraction in an FS/GS offset is unsupported");
+      llvm::Value *Source = materialize(Def->Inputs[0]);
+      if (!Source->getType()->isIntegerTy())
+        llvm::report_fatal_error("invalid FS/GS byte-extraction source");
+      const uint64_t Shift = Def->Inputs[1].ConstVal * 8;
+      if (Shift >= Source->getType()->getIntegerBitWidth())
+        llvm::report_fatal_error("FS/GS byte extraction is out of range");
+      if (Shift)
+        Source = Builder.CreateLShr(Source, Shift, "segment_offset_extract");
+      return asInteger(Source, OutTy, false);
+    }
+    case NdOp::SELECT: {
+      if (Def->NumInputs < 3)
+        llvm::report_fatal_error("malformed SELECT in an FS/GS offset");
+      llvm::Value *Cond = getVar(Def->Inputs[0], Builder);
+      if (!Cond->getType()->isIntegerTy(1))
+        Cond = Builder.CreateICmpNE(
+            Cond, llvm::ConstantInt::get(Cond->getType(), 0),
+            "segment_offset_cond");
+      llvm::Value *T = asInteger(materialize(Def->Inputs[1]), OutTy, false);
+      llvm::Value *F = asInteger(materialize(Def->Inputs[2]), OutTy, false);
+      return Builder.CreateSelect(Cond, T, F, "segment_offset_select");
+    }
+    default:
+      // Loads, calls and other value producers already yield runtime integer
+      // bits.  They are safe only when their occurrence is not itself a
+      // relocation-aware constant forwarder.
+      if (constantOccurrenceMayRelocate(Cur))
+        llvm::report_fatal_error(
+            "FS/GS offset depends on a relocatable process address");
+      llvm::Value *Value = getVar(Cur, Builder);
+      if (!Value || !Value->getType()->isIntegerTy() ||
+          llvm::isa<llvm::PtrToIntInst>(Value))
+        llvm::report_fatal_error(
+            "FS/GS offset cannot be represented as a raw integer");
+      return asInteger(Value, OutTy, false);
+    }
+  };
+
+  return materialize(V);
+}
+
 llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
                                     llvm::IRBuilder<> &Builder) {
   if (V.Kind == MedVar::EHException || V.Kind == MedVar::EHSelector) {

@@ -171,6 +171,7 @@ int countParamRegSpills(const MedFunc &Func, llvm::ArrayRef<uint64_t> Regs) {
   for (const auto &Blk : Func.Blocks)
     for (const auto &Op : Blk.Ops)
       if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2 &&
+          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
           Op.Inputs[1].Kind == MedVar::Reg && Op.Inputs[1].SSAVer == 0)
         for (uint64_t R : Regs)
           if (Op.Inputs[1].RegOff == R) {
@@ -209,10 +210,13 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
     // with a parameter-register spill keeps a stray constant from qualifying.
     bool HasVaWord = false;
     for (const auto &Blk : Func.Blocks)
-      for (const auto &Op : Blk.Ops)
+      for (const auto &Op : Blk.Ops) {
+        if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+          continue;
         for (uint8_t I = 0; I < Op.NumInputs; ++I)
           if (Op.Inputs[I].isConst() && isX64VaStartWord(Op.Inputs[I].ConstVal))
             HasVaWord = true;
+      }
     Marked = HasVaWord && countParamRegSpills(Func, TRI.IntParamRegs) >= 1;
   } else if (TargetArch == Arch::AArch64) {
     // AArch64 saves both the GP (x0-x7) and FP (q0-q7) argument registers to a
@@ -253,6 +257,7 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
       for (const auto &Blk : Func.Blocks)
         for (const auto &Op : Blk.Ops)
           if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2 &&
+              Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
               !Op.Inputs[1].isConst())
             if (auto VD = entrySpDelta(Func, SpOff, Op.Inputs[1], 0))
               if (*VD >= 0 && *VD <= limits::kVariadicOverflowBaseMax &&
@@ -262,7 +267,8 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
       bool Reloaded = false;
       for (const auto &Blk : Func.Blocks)
         for (const auto &Op : Blk.Ops)
-          if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1)
+          if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
+              Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
             if (auto AD = entrySpDelta(Func, SpOff, Op.Inputs[0], 0))
               if (HomeSlots.count(*AD))
                 Reloaded = true;
@@ -324,7 +330,8 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
       auto regIsLoadAddr = [&](uint64_t RegOff) {
         for (const auto &Blk : Func.Blocks)
           for (const auto &Op : Blk.Ops)
-            if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1) {
+            if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
+                Op.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
               MedVar A = thruCopy(Op.Inputs[0], 0);
               if (A.Kind == MedVar::Reg && A.RegOff == RegOff)
                 return true;
@@ -373,6 +380,7 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
     for (const auto &Blk : Func.Blocks)
       for (const auto &Op : Blk.Ops)
         if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2 &&
+            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
             Op.Inputs[1].Kind == MedVar::Reg && Op.Inputs[1].SSAVer == 0 &&
             LastArgIdx >= 0 &&
             TRI.regToArgIdx(Op.Inputs[1].RegOff) == LastArgIdx)
@@ -397,7 +405,8 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
     llvm::SmallVector<MedVar, 2> DirectSeeds;
     for (const auto &Blk : Func.Blocks)
       for (const auto &Op : Blk.Ops)
-        if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2)
+        if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2 &&
+            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
           if (auto VD = entrySpDelta(Func, SpOff, Op.Inputs[1], 0))
             if (*VD >= MinPtrDelta && *VD <= limits::kVariadicOverflowBaseMax &&
                 TRI.PointerSize > 0 && (*VD % TRI.PointerSize) == 0)
@@ -408,7 +417,8 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
     bool Reloaded = false;
     for (const auto &Blk : Func.Blocks)
       for (const auto &Op : Blk.Ops)
-        if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1)
+        if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
+            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
           if (auto AD = entrySpDelta(Func, SpOff, Op.Inputs[0], 0))
             if (HomeSlots.count(*AD))
               Reloaded = true;
@@ -464,6 +474,7 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
     for (const auto &Blk : Func.Blocks)
       for (const auto &Op : Blk.Ops)
         if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
+            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
             containsValue(AdvancedWalkPtrs, Op.Inputs[0]))
           UsedAsLoad = true;
     Marked = !HomeSlots.empty() && (Reloaded || UsedAsLoad);
@@ -477,7 +488,8 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
   std::optional<int64_t> Base;
   for (const auto &Blk : Func.Blocks)
     for (const auto &Op : Blk.Ops)
-      if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2)
+      if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2 &&
+          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
         if (auto D = entrySpDelta(Func, SpOff, Op.Inputs[1], 0))
           if (*D >= 0 && *D <= limits::kVariadicOverflowBaseMax)
             if (!Base || *D < *Base)

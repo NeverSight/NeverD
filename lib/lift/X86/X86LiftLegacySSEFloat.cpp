@@ -289,10 +289,15 @@ bool liftLegacySSEFloat(X86Lifter &L, X86Lifter::LiftState &S,
   // MXCSR (SSE control/status register)
   // ========================================================================
   case X86_INS_LDMXCSR:
-  case X86_INS_STMXCSR:
-    S.emitIntrinsic(InsnId == X86_INS_LDMXCSR ? Intrinsic::Ldmxcsr
-                                              : Intrinsic::Stmxcsr);
+  case X86_INS_STMXCSR: {
+    if (X86.op_count < 1 ||
+        !S.emitMemoryIntrinsic(InsnId == X86_INS_LDMXCSR
+                                   ? Intrinsic::Ldmxcsr
+                                   : Intrinsic::Stmxcsr,
+                               X86.operands[0]))
+      return false;
     break;
+  }
 
   default:
     return false;
