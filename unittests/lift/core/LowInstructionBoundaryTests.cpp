@@ -658,6 +658,16 @@ const LowBlock *findBlock(const LowFunc &Function, va_t Address) {
 
 TEST(LowInstructionBoundary,
      X86FSGSOverridesSurviveLiftingAsTargetMemoryAddressSpaces) {
+#ifdef NEVERD_TEST_CLANG
+  if (llvm::StringRef(NEVERD_TEST_CLANG).empty()) {
+#else
+  {
+#endif
+    auto Compiler = llvm::sys::findProgramByName("clang");
+    if (!Compiler)
+      GTEST_SKIP() << "clang is unavailable for High C syntax checks";
+  }
+
   // mov rax, qword ptr fs:[0x28]
   // mov qword ptr gs:[0x30], rdx
   // mov r8, qword ptr gs:[0x30]
