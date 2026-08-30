@@ -148,4 +148,63 @@ TEST(MedSSAMultiRoot, DoesNotInventADownstreamRootFromBlockOrder) {
   EXPECT_TRUE(verifyMedFunc(Med, "source-scc-order"));
 }
 
+TEST(MedTempIdentity, SeparatesReusedLowTempSlotsByWidth) {
+  constexpr va_t EntryVA = 0x3000;
+
+  LowFunc Low;
+  Low.Entry = EntryVA;
+  Low.Name = "temp_width_identity";
+  Low.Blocks.resize(1);
+
+  LowBlock &Block = Low.Blocks.front();
+  Block.Id = 0;
+  Block.StartAddr = EntryVA;
+  Block.EndAddr = EntryVA + 4;
+
+  LowOp ByteDef;
+  ByteDef.Opcode = NdOp::POPCOUNT;
+  ByteDef.Addr = EntryVA;
+  ByteDef.Output = NdVar::tmp(TmpBase, 1);
+  ByteDef.addInput(NdVar::scalar(0x5a, 1));
+  Block.Ops.push_back(ByteDef);
+
+  LowOp WideDef;
+  WideDef.Opcode = NdOp::POPCOUNT;
+  WideDef.Addr = EntryVA + 1;
+  WideDef.Output = NdVar::tmp(TmpBase, 2);
+  WideDef.addInput(NdVar::scalar(0x1234, 2));
+  Block.Ops.push_back(WideDef);
+
+  LowOp WideUpdate;
+  WideUpdate.Opcode = NdOp::POPCOUNT;
+  WideUpdate.Addr = EntryVA + 2;
+  WideUpdate.Output = NdVar::tmp(TmpBase, 2);
+  WideUpdate.addInput(NdVar::scalar(0xabcd, 2));
+  Block.Ops.push_back(WideUpdate);
+
+  LowOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = EntryVA + 3;
+  Block.Ops.push_back(Return);
+
+  MedFunc Med = LowToMedConverter().convert(Low, Arch::X64);
+  ASSERT_EQ(Med.Blocks.size(), 1u);
+  auto FindOp = [&](va_t Addr, NdOp Opcode) -> const MedOp * {
+    for (const MedOp &Op : Med.Blocks.front().Ops)
+      if (Op.Addr == Addr && Op.Opcode == Opcode)
+        return &Op;
+    return nullptr;
+  };
+  const MedOp *MedByteDef = FindOp(EntryVA, NdOp::POPCOUNT);
+  const MedOp *MedWideDef = FindOp(EntryVA + 1, NdOp::POPCOUNT);
+  const MedOp *MedWideUpdate = FindOp(EntryVA + 2, NdOp::POPCOUNT);
+  ASSERT_NE(MedByteDef, nullptr);
+  ASSERT_NE(MedWideDef, nullptr);
+  ASSERT_NE(MedWideUpdate, nullptr);
+  EXPECT_NE(MedByteDef->Output.Id, MedWideDef->Output.Id)
+      << "a Med SSA identity must have exactly one value width";
+  EXPECT_EQ(MedWideDef->Output.Id, MedWideUpdate->Output.Id);
+  EXPECT_NE(MedWideDef->Output.SSAVer, MedWideUpdate->Output.SSAVer);
+}
+
 } // namespace

@@ -831,14 +831,15 @@ MedVar LowToMedConverter::ndVarToMedVar(const NdVar &VN) {
     break;
   }
   case VnodeSpace::TEMP: {
-    auto It = TempVarMap.find(VN.Offset);
+    auto Key = std::make_pair(VN.Offset, VN.Size);
+    auto It = TempVarMap.find(Key);
     if (It != TempVarMap.end()) {
       MV.Kind = MedVar::Temp;
       MV.Id = It->second;
     } else {
       MV.Kind = MedVar::Temp;
       MV.Id = allocVarId();
-      TempVarMap[VN.Offset] = MV.Id;
+      TempVarMap[Key] = MV.Id;
     }
     break;
   }

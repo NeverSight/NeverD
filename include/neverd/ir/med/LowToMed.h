@@ -209,7 +209,10 @@ private:
   std::vector<StackSlot> StackSlots;
 
   std::map<std::pair<uint64_t, uint16_t>, int> RegVarMap;
-  std::map<uint64_t, int> TempVarMap;
+  /// LowIR temporary offsets are reused by each instruction.  Width is part of
+  /// an NdVar's identity, so two reused slots with different widths must enter
+  /// distinct MedIR SSA lanes just like register views do.
+  std::map<std::pair<uint64_t, uint16_t>, int> TempVarMap;
 
   /// Per-callee callee-cleanup pop (entry VA -> bytes); see setCalleePopMap.
   const std::map<va_t, int> *CalleePopMap = nullptr;
