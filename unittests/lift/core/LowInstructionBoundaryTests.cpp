@@ -4155,8 +4155,9 @@ TEST(LowInstructionBoundary, X86GeneratedStringAndLoopConstantsAreScalar) {
     uint64_t Value;
   };
   const std::vector<Case> Cases = {
-      // rep lodsq: RCX-1 selects the final load and RCX*8 advances RSI.
-      {"rep-lods", {0xf3, 0x48, 0xad}, NdOp::INT_SUB, 1},
+      // rep lodsq: the hardware intrinsic owns the final load; RCX*8 advances
+      // RSI and its generated element-size scale must remain scalar.
+      {"rep-lods", {0xf3, 0x48, 0xad}, NdOp::INT_MULT, 8},
       // loop $-2: the encoded branch target remains a control-flow address,
       // but the lifter-generated RCX decrement must be a scalar occurrence.
       {"loop", {0xe2, 0xfe}, NdOp::INT_SUB, 1},
