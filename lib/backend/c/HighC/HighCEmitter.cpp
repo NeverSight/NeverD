@@ -207,9 +207,13 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
   AtomicStoreTypes.clear();
   HasSegmentedMemory = false;
   Has256BitInteger = false;
+  // Native AArch64 vector carriers are projected to SVE ACLE types.  Only the
+  // x86 masked-memory renderer currently emits scalar uint256_t/int256_t C.
+  const bool ProjectsScalar256BitIntegers =
+      Opts.TheArch == Arch::X86 || Opts.TheArch == Arch::X64;
   auto CollectWideType = [&](const TypeRef &Type) {
-    Has256BitInteger |= Type && Type->Kind == NdTypeKind::Int &&
-                        Type->Size == 32;
+    Has256BitInteger |= ProjectsScalar256BitIntegers && Type &&
+                        Type->Kind == NdTypeKind::Int && Type->Size == 32;
   };
   std::set<const HighExpr *> Seen;
   std::function<void(const HighExpr &)> Visit = [&](const HighExpr &E) {
