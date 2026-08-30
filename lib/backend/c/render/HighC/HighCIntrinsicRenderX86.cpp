@@ -531,6 +531,16 @@ renderMemoryIntrinsic(Arch TheArch, const HighExpr &Call,
     llvm::report_fatal_error(
         "x86 state save/restore requires an explicit architectural state "
         "layout; host inline asm is not a sound High-C lowering");
+
+  // Flat cache-maintenance operands already have portable C intrinsic
+  // spellings.  Leave those to the ordinary call renderer; this path is only
+  // needed when an FS/GS override must remain attached to the memory operand.
+  if (Call.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+      (Call.IntrinsicId == Intrinsic::Clflush ||
+       Call.IntrinsicId == Intrinsic::Clflushopt ||
+       Call.IntrinsicId == Intrinsic::Clwb))
+    return {};
+
   const char *Mnemonic = memoryIntrinsicMnemonic(Call.IntrinsicId);
   const char *Segment = segmentPrefix(Call.MemoryAddressSpace);
   if (!Mnemonic || !Segment || Call.Operands.empty() || !Call.Operands[0] ||
