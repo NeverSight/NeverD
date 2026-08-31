@@ -452,6 +452,91 @@ renderSegmentedMaskedMemory(const HighExpr &Call, const HighExpr *PrimaryDst,
   return Result;
 }
 
+std::string
+renderDivPrecondition(Arch TheArch, const HighExpr &Call,
+                      std::function<std::string(const HighExpr &)> ExprFn) {
+  const HighExpr *Dividend =
+      Call.Operands.size() > 0 ? Call.Operands[0].get() : nullptr;
+  const HighExpr *Divisor =
+      Call.Operands.size() > 1 ? Call.Operands[1].get() : nullptr;
+  const HighExpr *Kind =
+      Call.Operands.size() > 2 ? Call.Operands[2].get() : nullptr;
+  const auto IsScalarInteger = [](const HighExpr *Expr) {
+    return Expr && Expr->Type && Expr->Type->Kind == NdTypeKind::Int;
+  };
+
+  const X86DivPreconditionIntrinsicShape Shape{
+      .TargetArch = TheArch,
+      .MemoryOrdering = Call.MemoryOrdering,
+      .MemoryAddressSpace = Call.MemoryAddressSpace,
+      .NumInputs = Call.Operands.size() == 3 ? uint8_t{4} : uint8_t{0},
+      .IntrinsicIdIsConst = true,
+      .IntrinsicIdSize = 2,
+      .OutputSize = 0,
+      .DividendIsScalar = IsScalarInteger(Dividend),
+      .DividendSize = static_cast<uint16_t>(
+          Dividend && Dividend->Type ? Dividend->Type->Size : 0),
+      .DivisorIsScalar = IsScalarInteger(Divisor),
+      .DivisorSize = static_cast<uint16_t>(
+          Divisor && Divisor->Type ? Divisor->Type->Size : 0),
+      .KindIsConst = Kind && Kind->Kind == ExprKind::Const,
+      .Kind = Kind ? Kind->ConstVal : 0,
+      .KindSize = static_cast<uint16_t>(
+          Kind && Kind->Type ? Kind->Type->Size : 0),
+  };
+  if (!intrinsicX86DivPreconditionShapeIsValid(
+          Intrinsic::X86RequireDivPrecondition, Shape))
+    llvm::report_fatal_error("invalid x86 division precondition intrinsic");
+
+  const uint16_t FullBytes = Dividend->Type->Size;
+  const uint16_t HalfBytes = Divisor->Type->Size;
+  const unsigned FullBits = FullBytes * 8;
+  const unsigned HalfBits = HalfBytes * 8;
+  const std::string FullTy = typeToC(NdType::makeInt(FullBytes, false));
+  const std::string HalfTy = typeToC(NdType::makeInt(HalfBytes, false));
+
+  std::string Result = "do {\n";
+  Result += "    " + FullTy + " neverd_dividend = (" + FullTy + ")(" +
+            ExprFn(*Dividend) + ");\n";
+  Result += "    " + HalfTy + " neverd_divisor = (" + HalfTy + ")(" +
+            ExprFn(*Divisor) + ");\n";
+
+  // Decide quotient representability without executing C division: the
+  // exceptional divisor-zero and signed-min/-1 cases would otherwise be UB.
+  if (Kind->ConstVal == static_cast<uint64_t>(X86DivKind::Unsigned)) {
+    Result += "    " + HalfTy + " neverd_dividend_high = (" + HalfTy +
+              ")(neverd_dividend >> " + std::to_string(HalfBits) + ");\n";
+    Result += "    if (neverd_divisor == 0 || "
+              "neverd_dividend_high >= neverd_divisor)\n"
+              "        __builtin_trap();\n";
+  } else {
+    Result += "    " + FullTy +
+              " neverd_dividend_magnitude = "
+              "(neverd_dividend >> " +
+              std::to_string(FullBits - 1) + ") != 0 ? (" + FullTy +
+              ")(0 - neverd_dividend) : neverd_dividend;\n";
+    Result += "    " + HalfTy +
+              " neverd_divisor_magnitude_half = "
+              "(neverd_divisor >> " +
+              std::to_string(HalfBits - 1) + ") != 0 ? (" + HalfTy +
+              ")(0 - neverd_divisor) : neverd_divisor;\n";
+    Result += "    " + FullTy + " neverd_divisor_magnitude = (" + FullTy +
+              ")neverd_divisor_magnitude_half;\n";
+    Result += "    " + FullTy + " neverd_quotient_limit = ((" + FullTy +
+              ")1 << " + std::to_string(HalfBits - 1) +
+              ") + (((neverd_dividend >> " +
+              std::to_string(FullBits - 1) +
+              ") ^ (neverd_divisor >> " +
+              std::to_string(HalfBits - 1) + ")) & 1);\n";
+    Result += "    if (neverd_divisor == 0 || "
+              "neverd_dividend_magnitude >= "
+              "neverd_divisor_magnitude * neverd_quotient_limit)\n"
+              "        __builtin_trap();\n";
+  }
+  Result += "} while (0);\n";
+  return Result;
+}
+
 const char *memoryIntrinsicMnemonic(Intrinsic Id) {
   using I = Intrinsic;
   switch (Id) {
@@ -658,6 +743,8 @@ std::string renderX86SegmentedIntrinsicStatement(
   if (Call.Kind != ExprKind::Call ||
       (TheArch != Arch::X86 && TheArch != Arch::X64))
     return {};
+  if (Call.IntrinsicId == Intrinsic::X86RequireDivPrecondition)
+    return renderDivPrecondition(TheArch, Call, std::move(ExprFn));
   if (auto Rendered =
           renderMemoryIntrinsic(TheArch, Call, ExprFn);
       !Rendered.empty())

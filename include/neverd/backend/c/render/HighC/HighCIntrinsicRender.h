@@ -61,9 +61,10 @@ std::string renderX86IntrinsicCall(Intrinsic Id,
 /// may proceed. renderX86IntrinsicCall uses this same policy.
 const char *x86HighCIntrinsicFatalReason(Intrinsic Id);
 
-/// Render an x86 intrinsic whose implicit memory operand is relative to FS/GS.
-/// Returns an empty string for an unsupported intrinsic.  Recognized string
-/// intrinsics with malformed architectural operands fail closed.
+/// Render an x86 intrinsic that needs full typed-statement context, including
+/// architectural preconditions and implicit memory relative to FS/GS. Returns
+/// an empty string for an unsupported intrinsic. Recognized intrinsics with
+/// malformed architectural operands fail closed.
 std::string renderX86SegmentedIntrinsicStatement(
     Arch TheArch, const HighExpr &Call, const HighExpr *PrimaryDst,
     std::function<std::string(const HighExpr &)> ExprFn,

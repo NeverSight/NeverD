@@ -124,6 +124,18 @@ TEST_F(X86_64_PipelineE2E, DecompileHighC_ControlFlow) {
 TEST_F(X86_64_PipelineE2E, DecompileHighC_MulDiv) {
   auto r = decompileToHighC(obj("test_muldiv.o"));
   ASSERT_EQ(r.exitCode, 0) << "HighC decompile failed: " << r.err;
+
+  std::ifstream Input(tmpFile("decompiled_high.c"));
+  const std::string Content((std::istreambuf_iterator<char>(Input)),
+                            std::istreambuf_iterator<char>());
+  EXPECT_NE(Content.find("neverd_divisor == 0"), std::string::npos)
+      << Content;
+  EXPECT_NE(Content.find("neverd_dividend_high >= neverd_divisor"),
+            std::string::npos)
+      << Content;
+  EXPECT_NE(Content.find("neverd_quotient_limit"), std::string::npos)
+      << Content;
+  EXPECT_NE(Content.find("__builtin_trap()"), std::string::npos) << Content;
 }
 
 TEST_F(X86_64_PipelineE2E, DecompileHighC_BitOps) {
