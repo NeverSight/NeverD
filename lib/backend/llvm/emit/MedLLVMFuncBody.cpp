@@ -593,6 +593,11 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
   for (auto &Blk : Func.Blocks) {
     auto *BB = BBMap[Blk.Id];
     llvm::IRBuilder<> Builder(BB);
+    auto builderHasTerminator = [&]() {
+      llvm::BasicBlock *InsertBB = Builder.GetInsertBlock();
+      return InsertBB && !InsertBB->empty() &&
+             InsertBB->back().isTerminator();
+    };
 
     for (size_t OI = 0; OI < Blk.Ops.size(); ++OI) {
       auto &Op = Blk.Ops[OI];
@@ -742,13 +747,14 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
       }
       emitOp(Op, Builder, Blk.Id, static_cast<int>(OI));
       // Architecture side-effect emitters may terminate the block themselves
-      // (for example AArch64 BRK/HLT).  Do not append later lifted operations
-      // or the CFG's conservative fallthrough branch after an LLVM terminator.
-      if (!BB->empty() && BB->back().isTerminator())
+      // (for example AArch64 BRK/HLT), or split it and move the builder to a
+      // continuation (for example an x86 divide precondition). Follow the
+      // builder so a terminated predecessor does not hide a live continuation.
+      if (builderHasTerminator())
         break;
     }
 
-    if (BB->empty() || !BB->back().isTerminator()) {
+    if (!builderHasTerminator()) {
       auto EmitDefaultRet = [&]() {
         if (CurFunc->getReturnType()->isVoidTy())
           Builder.CreateRetVoid();
@@ -776,6 +782,12 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
           EmitDefaultRet();
       }
     }
+
+    // A side-effect emitter may have introduced a micro-CFG and left the
+    // builder in its final continuation. That continuation, rather than the
+    // original Med block skeleton, owns the outgoing CFG edge and phi copies.
+    if (llvm::BasicBlock *ExitBB = Builder.GetInsertBlock(); ExitBB != BB)
+      ConceptualExits[Blk.Id].push_back(ExitBB);
   }
 
   // Emit the deferred per-predecessor index stores for shared -O0 computed-goto
