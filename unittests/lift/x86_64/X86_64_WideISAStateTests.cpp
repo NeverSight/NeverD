@@ -3346,9 +3346,9 @@ TEST(X86WideISAState, EvexPunpckHonorsMasksMemoryFaultsAndUpperState) {
   constexpr uint64_t MaskValue = UINT64_C(0xb6db6db6db6db6db);
   constexpr uint64_t K0Value = UINT64_C(0x13579bdf2468ace0);
 
-  // Capstone exposes the broadcast memory width but not the decorator in its
-  // structured operand field. Keep those otherwise-legal D/Q forms
-  // fail-closed until that boundary is modeled explicitly.
+  // Capstone exposes both the scalar tuple width and broadcast decorator for
+  // the legal D/Q forms. They must use the masked tuple-load path rather than
+  // an eager vector load.
   for (unsigned FamilyIndex : {4u, 5u, 6u, 7u}) {
     const Family &Current = Families[FamilyIndex];
     const std::vector<uint8_t> Bytes =
@@ -3365,8 +3365,16 @@ TEST(X86WideISAState, EvexPunpckHonorsMasksMemoryFaultsAndUpperState) {
     EXPECT_EQ(X86.operands[3].type, X86_OP_MEM);
     EXPECT_EQ(X86.operands[3].size, Current.ElementBytes);
     std::vector<LowOp> Ops;
-    EXPECT_THROW(Dec.liftToLow(Insn, Ops), UnliftedInstruction);
-    EXPECT_TRUE(Ops.empty());
+    EXPECT_NO_THROW(Dec.liftToLow(Insn, Ops));
+    EXPECT_FALSE(Ops.empty());
+    EXPECT_TRUE(hasOnlyMappedRegisters(Ops));
+    EXPECT_FALSE(std::any_of(Ops.begin(), Ops.end(), [](const LowOp &Op) {
+      return Op.Opcode == NdOp::LOAD;
+    }));
+    EXPECT_EQ(std::count_if(
+                  Ops.begin(), Ops.end(),
+                  [](const LowOp &Op) { return Op.Opcode == NdOp::INTRINSIC; }),
+              1u);
   }
 
   // Register forms: all eight families, all EVEX vector lengths, aaa=0 and

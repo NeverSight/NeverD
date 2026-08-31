@@ -2387,7 +2387,7 @@ bool validateEvexVnni(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
       !parseCanonicalEvexEncodingInfo(Insn, X86, L.targetArch(),
                                       Info.Encoding) ||
       (Info.Encoding.P0 & 0x07) != 0x02 ||
-      (Info.Encoding.P1 & 0x87) != 0x05 ||
+      ((Info.Encoding.P1 | 0x04) & 0x87) != 0x05 ||
       Info.Encoding.Opcode != Info.Spec.Opcode ||
       X86.encoding.imm_offset != 0 || X86.encoding.imm_size != 0 ||
       X86.avx_sae || X86.avx_rm != X86_AVX_RM_INVALID)

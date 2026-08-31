@@ -86,6 +86,27 @@ bool beginsWithPotentialEvexPrefix(const cs_insn *Insn) {
   return false;
 }
 
+bool parseCanonicalEvexLligEncodingInfo(const cs_insn *Insn, const cs_x86 &X86,
+                                        Arch TargetArch,
+                                        CanonicalEvexEncodingInfo &Encoding) {
+  if (!Insn || X86.encoding.modrm_offset < 2 ||
+      X86.encoding.modrm_offset >= Insn->size)
+    return false;
+
+  // Capstone canonicalizes the architecturally ignored L'L bits to zero in
+  // opcode[] for scalar LLIG forms. Preserve exact validation of every other
+  // decoded bit while recovering L'L from the immutable instruction bytes.
+  const size_t P2Offset = X86.encoding.modrm_offset - 2;
+  const uint8_t RawP2 = Insn->bytes[P2Offset];
+  if (((X86.opcode[3] ^ RawP2) & static_cast<uint8_t>(~0x60U)) != 0)
+    return false;
+
+  cs_x86 CanonicalDetail = X86;
+  CanonicalDetail.opcode[3] = RawP2;
+  return parseCanonicalEvexEncodingInfo(Insn, CanonicalDetail, TargetArch,
+                                        Encoding);
+}
+
 bool getFPControlSpec(unsigned InsnId, FPControlSpec &Spec) {
   switch (InsnId) {
   case X86_INS_VRANGEPS:
@@ -1939,14 +1960,17 @@ bool liftApproxFloat(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     return false;
 
   CanonicalEvexEncodingInfo Encoding;
-  if (!parseCanonicalEvexEncodingInfo(Insn, X86, L.targetArch(), Encoding) ||
-      X86.encoding.imm_offset != 0 || X86.encoding.imm_size != 0 ||
+  const bool Parsed =
+      Spec.Scalar
+          ? parseCanonicalEvexLligEncodingInfo(Insn, X86, L.targetArch(),
+                                               Encoding)
+          : parseCanonicalEvexEncodingInfo(Insn, X86, L.targetArch(), Encoding);
+  if (!Parsed || X86.encoding.imm_offset != 0 || X86.encoding.imm_size != 0 ||
       Encoding.Opcode != Spec.Opcode)
     return false;
 
   const bool MemoryForm = (Encoding.ModRM & 0xc0) != 0xc0;
-  if ((Encoding.P0 & 0x07) != 0x02 ||
-      X86.avx_rm != X86_AVX_RM_INVALID)
+  if ((Encoding.P0 & 0x07) != 0x02 || X86.avx_rm != X86_AVX_RM_INVALID)
     return false;
 
   const unsigned BaseOperandCount = Spec.Scalar ? 3 : 2;
@@ -2127,22 +2151,24 @@ bool liftFPClass(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   const uint16_t ElementSize = F64 ? 8 : 4;
 
   CanonicalEvexEncodingInfo Encoding;
-  if (!parseCanonicalEvexEncodingInfo(Insn, X86, L.targetArch(), Encoding) ||
-      X86.encoding.imm_size != 1 ||
-      X86.encoding.imm_offset != Insn->size - 1 ||
-      Encoding.Opcode != Opcode)
+  const bool Parsed =
+      Scalar
+          ? parseCanonicalEvexLligEncodingInfo(Insn, X86, L.targetArch(),
+                                               Encoding)
+          : parseCanonicalEvexEncodingInfo(Insn, X86, L.targetArch(), Encoding);
+  if (!Parsed || X86.encoding.imm_size != 1 ||
+      X86.encoding.imm_offset != Insn->size - 1 || Encoding.Opcode != Opcode)
     return false;
 
   const bool MemoryForm = (Encoding.ModRM & 0xc0) != 0xc0;
   const bool EncodedB = (Encoding.P2 & 0x10) != 0;
   const bool Broadcast = MemoryForm && EncodedB;
   const uint8_t EncodedLength = Encoding.P2 & 0x60;
-  if ((Encoding.P0 & 0x07) != 0x03 ||
-      (Encoding.P0 & 0x90) != 0x90 ||
+  if ((Encoding.P0 & 0x07) != 0x03 || (Encoding.P0 & 0x90) != 0x90 ||
       (Encoding.P1 | 0x04) != static_cast<uint8_t>(F64 ? 0xfd : 0x7d) ||
-      (Encoding.P2 & 0x88) != 0x08 ||
-      EncodedLength == 0x60 || (EncodedB && (!MemoryForm || Scalar)) ||
-      X86.avx_sae || X86.avx_rm != X86_AVX_RM_INVALID)
+      (Encoding.P2 & 0x88) != 0x08 || EncodedLength == 0x60 ||
+      (EncodedB && (!MemoryForm || Scalar)) || X86.avx_sae ||
+      X86.avx_rm != X86_AVX_RM_INVALID)
     return false;
 
   const uint16_t VectorSize =

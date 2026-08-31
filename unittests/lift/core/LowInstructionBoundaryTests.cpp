@@ -991,16 +991,18 @@ TEST(LowInstructionBoundary,
   EXPECT_EQ(GatherEmulator.run(GSGather), GSGather.size());
   const auto GatherResult = GatherEmulator.getRegisterBytes(GatherDestReg);
   ASSERT_TRUE(GatherResult);
-  ASSERT_EQ(GatherResult->size(), 32u);
+  ASSERT_EQ(GatherResult->size(), 64u);
   std::array<uint32_t, 8> GatherResultWords{};
   std::memcpy(GatherResultWords.data(), GatherResult->data(),
-              GatherResult->size());
+              sizeof(GatherResultWords));
   for (size_t I = 0; I < GatherResultWords.size(); ++I)
-    EXPECT_EQ(GatherResultWords[I],
-              (GatherMasks[I] & UINT32_C(0x80000000)) ? GatherMemory[I]
-                                                       : GatherOld[I]);
-  const auto ClearedGatherMask =
-      GatherEmulator.getRegisterBytes(GatherMaskReg);
+    EXPECT_EQ(GatherResultWords[I], (GatherMasks[I] & UINT32_C(0x80000000))
+                                        ? GatherMemory[I]
+                                        : GatherOld[I]);
+  EXPECT_TRUE(std::all_of(GatherResult->begin() + sizeof(GatherResultWords),
+                          GatherResult->end(),
+                          [](uint8_t Byte) { return Byte == 0; }));
+  const auto ClearedGatherMask = GatherEmulator.getRegisterBytes(GatherMaskReg);
   ASSERT_TRUE(ClearedGatherMask);
   EXPECT_TRUE(std::all_of(ClearedGatherMask->begin(), ClearedGatherMask->end(),
                           [](uint8_t Byte) { return Byte == 0; }));
@@ -1018,15 +1020,21 @@ TEST(LowInstructionBoundary,
   SuppressedGather.setRegister(x86reg::RAX, UINT32_C(0x100000));
   SuppressedGather.setRegisterBytes(GatherIndexReg,
                                     DwordVector(GatherIndices));
-  SuppressedGather.setRegisterBytes(
-      GatherMaskReg, DwordVector(std::array<uint32_t, 8>{}));
+  SuppressedGather.setRegisterBytes(GatherMaskReg,
+                                    DwordVector(std::array<uint32_t, 8>{}));
   SuppressedGather.setRegisterBytes(GatherDestReg, DwordVector(GatherOld));
   EXPECT_EQ(SuppressedGather.run(GSGather), GSGather.size());
   EXPECT_TRUE(SuppressedGather.getLoadRecords().empty());
   const auto SuppressedResult =
       SuppressedGather.getRegisterBytes(GatherDestReg);
   ASSERT_TRUE(SuppressedResult);
-  EXPECT_EQ(*SuppressedResult, DwordVector(GatherOld));
+  ASSERT_EQ(SuppressedResult->size(), 64u);
+  const std::vector<uint8_t> GatherOldBytes = DwordVector(GatherOld);
+  EXPECT_TRUE(std::equal(GatherOldBytes.begin(), GatherOldBytes.end(),
+                         SuppressedResult->begin()));
+  EXPECT_TRUE(std::all_of(SuppressedResult->begin() + GatherOldBytes.size(),
+                          SuppressedResult->end(),
+                          [](uint8_t Byte) { return Byte == 0; }));
 
   // Gather faults preserve completed architectural progress.  This model uses
   // the permitted deterministic low-to-high order: lane 0 succeeds and is
@@ -1055,21 +1063,21 @@ TEST(LowInstructionBoundary,
   PartialGather.setRegister(x86reg::RAX, 0);
   PartialGather.setRegisterBytes(GatherIndexReg,
                                  DwordVector(GatherIndices));
-  PartialGather.setRegisterBytes(GatherMaskReg,
-                                 DwordVector(PartialMasks));
+  PartialGather.setRegisterBytes(GatherMaskReg, DwordVector(PartialMasks));
   PartialGather.setRegisterBytes(GatherDestReg, DwordVector(GatherOld));
   EXPECT_LT(PartialGather.run(GSGather), GSGather.size());
   const auto PartialResult = PartialGather.getRegisterBytes(GatherDestReg);
-  const auto PartialMaskResult =
-      PartialGather.getRegisterBytes(GatherMaskReg);
+  const auto PartialMaskResult = PartialGather.getRegisterBytes(GatherMaskReg);
   ASSERT_TRUE(PartialResult);
   ASSERT_TRUE(PartialMaskResult);
+  ASSERT_EQ(PartialResult->size(), 32u);
+  ASSERT_EQ(PartialMaskResult->size(), 32u);
   std::array<uint32_t, 8> PartialResultWords{};
   std::array<uint32_t, 8> PartialMaskWords{};
   std::memcpy(PartialResultWords.data(), PartialResult->data(),
-              PartialResult->size());
+              sizeof(PartialResultWords));
   std::memcpy(PartialMaskWords.data(), PartialMaskResult->data(),
-              PartialMaskResult->size());
+              sizeof(PartialMaskWords));
   EXPECT_EQ(PartialResultWords[0], PartialLane0);
   EXPECT_EQ(PartialMaskWords[0], 0u);
   EXPECT_EQ(PartialResultWords[1], GatherOld[1]);

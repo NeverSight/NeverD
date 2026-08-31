@@ -350,10 +350,11 @@ TEST(TargetRegInfo, X86DoesNotInventX64GPRContainers) {
   EXPECT_EQ(TRI.findWideReg(x86reg::RSP, 4),
             std::make_pair(x86reg::RSP, uint16_t{4}));
 
-  // SIMD registers retain their architecture-independent XMM/YMM container
-  // hierarchy even though an i386 integer register is only four bytes wide.
+  // SIMD registers retain their architecture-independent XMM/YMM/ZMM
+  // container hierarchy even though an i386 integer register is only four
+  // bytes wide.
   EXPECT_EQ(TRI.findWideReg(x86reg::XMM0, 16),
-            std::make_pair(x86reg::XMM0, uint16_t{32}));
+            std::make_pair(x86reg::XMM0, uint16_t{64}));
 }
 
 TEST(MedABIPass, ForwardedLiveInKeepsParameterProvenance) {
