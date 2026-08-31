@@ -40,5 +40,5 @@ TEST_F(X86_32_MulDiv, ModLifts) {
 }
 
 TEST_F(X86_32_MulDiv, NoUnreachableInFunctions) {
-    verifyLLVMIRNotContains(testObj(), "", "unreachable");
+    verifyLLVMIRNoUnreachable(testObj());
 }

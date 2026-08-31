@@ -295,8 +295,31 @@ protected:
   void verifyLLVMIRNoUnreachable(const fs::path &Binary) {
     auto R = liftToLLVMIR(Binary);
     ASSERT_EQ(R.exitCode, 0) << "LLVM IR lift failed: " << R.err;
-    EXPECT_TRUE(R.out.find("unreachable") == std::string::npos)
-        << "Found 'unreachable' in LLVM IR — possible missing terminator:\n"
+    std::istringstream Lines(R.out);
+    std::string Line;
+    std::string PreviousNonEmptyLine;
+    bool HasUnexpectedUnreachable = false;
+    while (std::getline(Lines, Line)) {
+      const auto First = Line.find_first_not_of(" \t\r");
+      const auto Last = Line.find_last_not_of(" \t\r");
+      const std::string Trimmed =
+          First == std::string::npos ? "" : Line.substr(First, Last - First + 1);
+
+      // Architectural exception paths terminate with llvm.trap followed by
+      // unreachable. Reject every other unreachable as a missing terminator.
+      if (Trimmed == "unreachable" &&
+          PreviousNonEmptyLine.find("call void @llvm.trap()") ==
+              std::string::npos) {
+        HasUnexpectedUnreachable = true;
+        break;
+      }
+      if (!Trimmed.empty())
+        PreviousNonEmptyLine = Trimmed;
+    }
+
+    EXPECT_FALSE(HasUnexpectedUnreachable)
+        << "Found unexpected 'unreachable' in LLVM IR — possible missing "
+           "terminator:\n"
         << R.out.substr(0, 2000);
   }
 

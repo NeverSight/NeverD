@@ -69,10 +69,7 @@ TEST_F(X86_64_MulDiv, Mul1OpWritesRdx) {
 }
 
 TEST_F(X86_64_MulDiv, NoUnreachableInFunctions) {
-    auto r = liftToLLVMIR(testObj());
-    ASSERT_EQ(r.exitCode, 0);
-    EXPECT_TRUE(r.out.find("unreachable") == std::string::npos)
-        << "Found 'unreachable' in LLVM IR — semantic loss:\n" << r.out;
+    verifyLLVMIRNoUnreachable(testObj());
 }
 
 TEST_F(X86_64_MulDiv, DivPreservesInLLVMIR) {
