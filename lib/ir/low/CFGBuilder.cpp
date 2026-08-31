@@ -1582,29 +1582,59 @@ void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
         Producer->Inputs[0] != GetPc.InputWitness)
       continue;
     const LowOp *PopLoad = nullptr;
-    const LowOp *PopAdjust = nullptr;
+    const LowOp *LegacyPopAdjust = nullptr;
+    const LowOp *StagedPopAdjust = nullptr;
+    const LowOp *StagedStackCommit = nullptr;
     for (const LowOp &Op : RecIt->second.Ops) {
       if (!Consume())
         return;
-      if (Op.Opcode == NdOp::LOAD && Op.NumInputs == 1 &&
-          Op.Output == Producer->Inputs[0] && Op.Inputs[0].isReg() &&
+      if (Op.Addr == GetPc.InstructionAddr && Op.Opcode == NdOp::LOAD &&
+          Op.NumInputs == 1 && Op.Output == Producer->Inputs[0] &&
+          Op.Inputs[0].isReg() && Op.Output.isTemp() && Op.Output.Size == 4 &&
           Op.Inputs[0].Size == 4) {
         if (PopLoad)
           return;
         PopLoad = &Op;
       }
-      if (Op.Opcode == NdOp::INT_ADD && Op.NumInputs == 2 &&
-          Op.Output.isReg() && Op.Output.Size == 4 &&
-          Op.Inputs[0] == Op.Output && Op.Inputs[1].isConst() &&
-          Op.Inputs[1].Size == 4 && Op.Inputs[1].Offset == 4) {
-        if (PopAdjust)
+      const bool IsStackAdjust =
+          Op.Addr == GetPc.InstructionAddr && Op.Opcode == NdOp::INT_ADD &&
+          Op.NumInputs == 2 && Op.Output.Size == 4 && Op.Inputs[0].isReg() &&
+          Op.Inputs[0].Size == 4 && Op.Inputs[1].isConst() &&
+          Op.Inputs[1].Size == 4 && Op.Inputs[1].Offset == 4;
+      if (IsStackAdjust) {
+        if (Op.Output.isReg() && Op.Inputs[0] == Op.Output) {
+          if (LegacyPopAdjust)
+            return;
+          LegacyPopAdjust = &Op;
+        } else if (Op.Output.isTemp()) {
+          if (StagedPopAdjust)
+            return;
+          StagedPopAdjust = &Op;
+        }
+      }
+      if (&Op != Producer && Op.Addr == GetPc.InstructionAddr &&
+          Op.Opcode == NdOp::COPY && Op.NumInputs == 1 && Op.Output.isReg() &&
+          Op.Output.Size == 4 && Op.Inputs[0].isTemp() &&
+          Op.Inputs[0].Size == 4) {
+        if (StagedStackCommit)
           return;
-        PopAdjust = &Op;
+        StagedStackCommit = &Op;
       }
     }
-    if (!PopLoad || !PopAdjust || PopLoad->Inputs[0] != PushStore->Inputs[0] ||
-        PopAdjust->Output != PopLoad->Inputs[0] ||
-        PopLoad->Seq >= Producer->Seq || Producer->Seq >= PopAdjust->Seq)
+    if (!PopLoad || PopLoad->Inputs[0] != PushStore->Inputs[0])
+      continue;
+    const bool LegacyShape =
+        LegacyPopAdjust && LegacyPopAdjust->Output == PopLoad->Inputs[0] &&
+        PopLoad->Seq < Producer->Seq && Producer->Seq < LegacyPopAdjust->Seq;
+    const bool StagedShape =
+        StagedPopAdjust && StagedStackCommit &&
+        StagedPopAdjust->Inputs[0] == PopLoad->Inputs[0] &&
+        StagedStackCommit->Output == PopLoad->Inputs[0] &&
+        StagedStackCommit->Inputs[0] == StagedPopAdjust->Output &&
+        PopLoad->Seq < StagedPopAdjust->Seq &&
+        StagedPopAdjust->Seq < StagedStackCommit->Seq &&
+        StagedStackCommit->Seq < Producer->Seq;
+    if (LegacyShape == StagedShape)
       continue;
     if (!ConsumeProducts(
             {{1, OrderedLookupWork(SeedsByPC.size())},

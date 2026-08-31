@@ -7,6 +7,21 @@ protected:
     }
 };
 
+namespace {
+
+std::string llvmFunction(const std::string &IR, const std::string &Name) {
+    const size_t Symbol = IR.find("@" + Name + "(");
+    if (Symbol == std::string::npos)
+        return {};
+    const size_t Begin = IR.rfind("define ", Symbol);
+    const size_t End = IR.find("\n}", Symbol);
+    if (Begin == std::string::npos || End == std::string::npos)
+        return {};
+    return IR.substr(Begin, End + 2 - Begin);
+}
+
+} // namespace
+
 TEST_F(X86_32_Arith, AllStagesPass) {
     verifyAllStages(testObj());
 }
@@ -70,11 +85,20 @@ TEST_F(X86_32_Arith, Lea32HasIntMult) {
     verifyLowIRContains(testObj(), "test_lea32", "INT_MULT");
 }
 
-TEST_F(X86_32_Arith, NoUnreachableInFunctions) {
+TEST_F(X86_32_Arith, OnlyDiv32HasArchitecturalExceptionUnreachable) {
     auto r = liftToLLVMIR(testObj());
     ASSERT_EQ(r.exitCode, 0);
-    EXPECT_TRUE(r.out.find("unreachable") == std::string::npos)
-        << "Found 'unreachable' in LLVM IR:\n" << r.out;
+
+    const std::string Div32 = llvmFunction(r.out, "test_div32");
+    ASSERT_FALSE(Div32.empty()) << r.out;
+    EXPECT_NE(Div32.find("call void @llvm.trap()"), std::string::npos)
+        << Div32;
+    EXPECT_NE(Div32.find("unreachable"), std::string::npos) << Div32;
+
+    std::string OtherFunctions = r.out;
+    OtherFunctions.erase(OtherFunctions.find(Div32), Div32.size());
+    EXPECT_EQ(OtherFunctions.find("unreachable"), std::string::npos)
+        << "Found unexpected 'unreachable' outside test_div32:\n" << r.out;
 }
 
 TEST_F(X86_32_Arith, NoPoisonInFunctions) {

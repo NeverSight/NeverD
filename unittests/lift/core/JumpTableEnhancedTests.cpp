@@ -387,6 +387,34 @@ TEST_F(JTE_X86_32, GOTPCModelRequiresLifterAuthenticatedCallPopSeed) {
   ASSERT_NE(SeedLoad, nullptr);
   ASSERT_EQ(SeedLoad->NumInputs, 1u);
   EXPECT_TRUE(SeedLoad->Inputs[0].isReg());
+  const neverd::LowOp *StackAdvance = nullptr;
+  for (const neverd::LowBlock &Block : Low.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops)
+      if (Op.Addr == GetPc.InstructionAddr &&
+          Op.Opcode == neverd::NdOp::INT_ADD && Op.NumInputs == 2 &&
+          Op.Output.isTemp() && Op.Output.Size == 4 &&
+          Op.Inputs[0] == SeedLoad->Inputs[0] && Op.Inputs[1].isConst() &&
+          Op.Inputs[1].Size == 4 && Op.Inputs[1].Offset == 4) {
+        ASSERT_EQ(StackAdvance, nullptr);
+        StackAdvance = &Op;
+      }
+  ASSERT_NE(StackAdvance, nullptr)
+      << "POP must stage its architectural stack update before writing the "
+         "destination";
+  const neverd::LowOp *StackCommit = nullptr;
+  for (const neverd::LowBlock &Block : Low.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops)
+      if (Op.Addr == GetPc.InstructionAddr && Op.Opcode == neverd::NdOp::COPY &&
+          Op.NumInputs == 1 && Op.Output == SeedLoad->Inputs[0] &&
+          Op.Inputs[0] == StackAdvance->Output) {
+        ASSERT_EQ(StackCommit, nullptr);
+        StackCommit = &Op;
+      }
+  ASSERT_NE(StackCommit, nullptr);
+  EXPECT_LT(SeedLoad->Seq, StackAdvance->Seq);
+  EXPECT_LT(StackAdvance->Seq, StackCommit->Seq);
+  EXPECT_LT(StackCommit->Seq, SeedCopy->Seq)
+      << "the POP destination write must remain last for POP ESP correctness";
   EXPECT_EQ(Model.Model, neverd::RelocatedInstructionScalarModelOccurrence::
                              ModelKind::I386ELFGOTBaseZero);
   EXPECT_EQ(Model.SeedInstructionAddr, GetPc.InstructionAddr);
