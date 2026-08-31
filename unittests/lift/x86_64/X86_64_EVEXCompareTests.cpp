@@ -39,7 +39,7 @@ std::vector<LowOp> liftX64(const std::vector<uint8_t> &Bytes) {
   return Ops;
 }
 
-void expectStrictlyUnlifted(const std::vector<uint8_t> &Bytes) {
+void expectStrictlyLifted(const std::vector<uint8_t> &Bytes) {
   Decoder Dec;
   ASSERT_TRUE(Dec.init(Arch::X64));
 
@@ -48,8 +48,8 @@ void expectStrictlyUnlifted(const std::vector<uint8_t> &Bytes) {
             static_cast<int>(Bytes.size()));
 
   std::vector<LowOp> Ops;
-  EXPECT_THROW(Dec.liftToLow(Insn, Ops), UnliftedInstruction);
-  EXPECT_TRUE(Ops.empty());
+  EXPECT_NO_THROW(Dec.liftToLow(Insn, Ops));
+  EXPECT_FALSE(Ops.empty());
 }
 
 template <size_t N>
@@ -245,25 +245,25 @@ TEST(X86EVEXCompare, VpcmpdImplementsEveryIntegerPredicateCode) {
   }
 }
 
-TEST(X86EVEXCompare, VpcmpMemoryFormsFailClosedBeforeReadingMemory) {
+TEST(X86EVEXCompare, VpcmpMemoryFormsLiftAfterCanonicalValidation) {
   // vpcmpeqb k1, zmm2, zmmword ptr [rax]
-  expectStrictlyUnlifted({0x62, 0xf3, 0x6d, 0x48, 0x3f, 0x08, 0x00});
+  expectStrictlyLifted({0x62, 0xf3, 0x6d, 0x48, 0x3f, 0x08, 0x00});
   // vpcmpequb k1, zmm2, zmmword ptr [rax]
-  expectStrictlyUnlifted({0x62, 0xf3, 0x6d, 0x48, 0x3e, 0x08, 0x00});
+  expectStrictlyLifted({0x62, 0xf3, 0x6d, 0x48, 0x3e, 0x08, 0x00});
   // vpcmpeqw k1, zmm2, zmmword ptr [rax]
-  expectStrictlyUnlifted({0x62, 0xf3, 0xed, 0x48, 0x3f, 0x08, 0x00});
+  expectStrictlyLifted({0x62, 0xf3, 0xed, 0x48, 0x3f, 0x08, 0x00});
   // vpcmpequw k1, zmm2, zmmword ptr [rax]
-  expectStrictlyUnlifted({0x62, 0xf3, 0xed, 0x48, 0x3e, 0x08, 0x00});
+  expectStrictlyLifted({0x62, 0xf3, 0xed, 0x48, 0x3e, 0x08, 0x00});
   // vpcmpeqd k1, zmm2, zmmword ptr [rax]
-  expectStrictlyUnlifted({0x62, 0xf3, 0x6d, 0x48, 0x1f, 0x08, 0x00});
+  expectStrictlyLifted({0x62, 0xf3, 0x6d, 0x48, 0x1f, 0x08, 0x00});
   // vpcmpequd k1, zmm2, zmmword ptr [rax]
-  expectStrictlyUnlifted({0x62, 0xf3, 0x6d, 0x48, 0x1e, 0x08, 0x00});
+  expectStrictlyLifted({0x62, 0xf3, 0x6d, 0x48, 0x1e, 0x08, 0x00});
   // vpcmpeqq k1, zmm2, zmmword ptr [rax]
-  expectStrictlyUnlifted({0x62, 0xf3, 0xed, 0x48, 0x1f, 0x08, 0x00});
+  expectStrictlyLifted({0x62, 0xf3, 0xed, 0x48, 0x1f, 0x08, 0x00});
   // vpcmpequq k1, zmm2, zmmword ptr [rax]
-  expectStrictlyUnlifted({0x62, 0xf3, 0xed, 0x48, 0x1e, 0x08, 0x00});
+  expectStrictlyLifted({0x62, 0xf3, 0xed, 0x48, 0x1e, 0x08, 0x00});
   // vpcmpeqd k1, zmm2, dword ptr [rax]{1to16}
-  expectStrictlyUnlifted({0x62, 0xf3, 0x6d, 0x58, 0x1f, 0x08, 0x00});
+  expectStrictlyLifted({0x62, 0xf3, 0x6d, 0x58, 0x1f, 0x08, 0x00});
 }
 
 TEST(X86EVEXCompare, VpcmpdRejectsReservedEvexZeroingBit) {
