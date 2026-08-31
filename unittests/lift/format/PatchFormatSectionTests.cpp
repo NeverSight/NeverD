@@ -226,6 +226,9 @@ TEST_F(RenamedSectionPatch, MachOSectionModeExplicitOverride) {
 // name.  MachOLoader recovers the image base from whichever segment maps file
 // offset 0, so the entry point, LC_FUNCTION_STARTS deltas and export VAs stay
 // correct; the code section is then reachable cross-segment via --text-section.
+// Keep these fixtures free of unwind metadata: renaming __TEXT also renames an
+// __eh_frame owner, which is intentionally not a dyld-registrable
+// __TEXT,__eh_frame and exercises a separate fail-closed contract.
 // (Before the image-base recovery this produced zero trampolines because every
 // symbol VA was wrong upstream — Entry came back as 0x340 instead of
 // 0x100000340.)
@@ -239,8 +242,9 @@ TEST_F(RenamedSectionPatch, MachORenamedTextSegmentExplicitOverride) {
          "int main(){return a(b(c(7)));}\n";
   }
   auto Bin = tmpFile("ms");
-  auto CR = exec("clang", {"-O1", "-Wl,-no_compact_unwind", "-o", Bin.string(),
-                           Src.string()});
+  auto CR = exec("clang", {"-O1", "-fno-asynchronous-unwind-tables",
+                           "-fno-unwind-tables", "-Wl,-no_compact_unwind", "-o",
+                           Bin.string(), Src.string()});
   if (CR.exitCode != 0)
     GTEST_SKIP() << "host clang could not build Mach-O test: " << CR.err;
 
@@ -270,8 +274,9 @@ TEST_F(RenamedSectionPatch, MachORenamedTextSegmentAutoRecovers) {
          "int main(){return a(b(c(7)));}\n";
   }
   auto Bin = tmpFile("ma");
-  auto CR = exec("clang", {"-O1", "-Wl,-no_compact_unwind", "-o", Bin.string(),
-                           Src.string()});
+  auto CR = exec("clang", {"-O1", "-fno-asynchronous-unwind-tables",
+                           "-fno-unwind-tables", "-Wl,-no_compact_unwind", "-o",
+                           Bin.string(), Src.string()});
   if (CR.exitCode != 0)
     GTEST_SKIP() << "host clang could not build Mach-O test: " << CR.err;
 
