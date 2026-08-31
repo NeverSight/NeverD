@@ -370,6 +370,35 @@ MedFunc makeMedPdepPextIntrinsic(Intrinsic Id, unsigned Width = 8) {
   return Function;
 }
 
+MedFunc makeMedDivPreconditionWithParameterDivisor() {
+  MedOp Op;
+  Op.Addr = kInstructionAddress;
+  Op.Opcode = NdOp::INTRINSIC;
+  Op.addInput(MedVar::makeConst(
+      static_cast<uint64_t>(Intrinsic::X86RequireDivPrecondition), 2));
+  Op.addInput(medTemp(1, 8, Arch::X86));
+  MedVar Divisor;
+  Divisor.Kind = MedVar::Param;
+  Divisor.TheArch = Arch::X86;
+  Divisor.Id = 1;
+  Divisor.Size = 4;
+  Divisor.RegOff = kNoParamReg;
+  Op.addInput(Divisor);
+  Op.addInput(MedVar::makeConst(
+      static_cast<uint64_t>(X86DivKind::Unsigned), 1));
+
+  MedBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = kInstructionAddress;
+  Block.EndAddr = kInstructionAddress + 1;
+  Block.Ops.push_back(std::move(Op));
+  MedFunc Function;
+  Function.Entry = kInstructionAddress;
+  Function.Params.push_back(Divisor);
+  Function.Blocks.push_back(std::move(Block));
+  return Function;
+}
+
 LowOp makeStore(uint64_t Address, uint64_t Value, unsigned Width) {
   LowOp Op;
   Op.Addr = kInstructionAddress;
@@ -799,6 +828,15 @@ TEST(X86APXAtomic, MedVerifierRejectsMalformedAtomicContracts) {
   MedFunc NonX64 = Valid;
   NonX64.Blocks.front().Ops.front().Output.TheArch = Arch::AArch64;
   EXPECT_FALSE(verifyMedFunc(NonX64, "bad-apx-target"));
+}
+
+TEST(X86APXAtomic, DividePreconditionAcceptsRecoveredParameterDivisor) {
+  const MedFunc Valid = makeMedDivPreconditionWithParameterDivisor();
+  EXPECT_TRUE(verifyMedFunc(Valid, "valid-div-parameter"));
+
+  MedFunc StackDivisor = Valid;
+  StackDivisor.Blocks.front().Ops.front().Inputs[2].Kind = MedVar::Stack;
+  EXPECT_FALSE(verifyMedFunc(StackDivisor, "bad-div-stack"));
 }
 
 TEST(X86APXAtomic, PdepPextCrossLayerContractsRejectMalformedIR) {

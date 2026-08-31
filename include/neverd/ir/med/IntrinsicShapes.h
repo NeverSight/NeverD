@@ -146,6 +146,14 @@ inline X86MsrAccessIntrinsicShape x86MsrAccessMedShape(const MedOp &Op) {
 
 inline X86DivPreconditionIntrinsicShape
 x86DivPreconditionMedShape(const MedOp &Op) {
+  // i386 calling-convention recovery rewrites immutable stack-argument loads
+  // to Param values before the final pipeline verification.  Parameters are
+  // readable scalar operands for this side-effect-only guard even though the
+  // stricter generic intrinsic classifier excludes them from raw instruction
+  // contracts.
+  const auto IsReadableScalar = [](const MedVar &Value) {
+    return isMedIntrinsicScalarInput(Value) || Value.Kind == MedVar::Param;
+  };
   Arch TargetArch = Arch::Unknown;
   if (Op.NumInputs > 1 && !Op.Inputs[1].isConst())
     TargetArch = Op.Inputs[1].TheArch;
@@ -157,11 +165,9 @@ x86DivPreconditionMedShape(const MedOp &Op) {
       .IntrinsicIdIsConst = Op.NumInputs > 0 && Op.Inputs[0].isConst(),
       .IntrinsicIdSize = Op.NumInputs > 0 ? Op.Inputs[0].Size : uint16_t{0},
       .OutputSize = Op.Output.Size,
-      .DividendIsScalar =
-          Op.NumInputs > 1 && isMedIntrinsicScalarInput(Op.Inputs[1]),
+      .DividendIsScalar = Op.NumInputs > 1 && IsReadableScalar(Op.Inputs[1]),
       .DividendSize = Op.NumInputs > 1 ? Op.Inputs[1].Size : uint16_t{0},
-      .DivisorIsScalar =
-          Op.NumInputs > 2 && isMedIntrinsicScalarInput(Op.Inputs[2]),
+      .DivisorIsScalar = Op.NumInputs > 2 && IsReadableScalar(Op.Inputs[2]),
       .DivisorSize = Op.NumInputs > 2 ? Op.Inputs[2].Size : uint16_t{0},
       .KindIsConst = Op.NumInputs > 3 && Op.Inputs[3].isConst(),
       .Kind = Op.NumInputs > 3 ? Op.Inputs[3].ConstVal : UINT64_C(0),
