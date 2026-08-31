@@ -336,8 +336,8 @@ TEST(X86EVEXFPCompare, PackedSaeIgnoresLengthAndReadsOldDestinationMask) {
     Image.Bits = Bitness::Bits64;
     NdOpEmulator Emulator(Image);
     Emulator.setStrictMode(true);
-    Emulator.setRegisterBytes(x86reg::ZMM2, Zeroes);
-    Emulator.setRegisterBytes(x86reg::ZMM3, Zeroes);
+    Emulator.setRegisterBytes(registerOffsetForVector(64, 2), Zeroes);
+    Emulator.setRegisterBytes(registerOffsetForVector(64, 3), Zeroes);
     Emulator.setRegister(x86reg::K1, OldDestination);
     ASSERT_EQ(Emulator.run(Ops), Ops.size());
     EXPECT_EQ(Emulator.getRegister(x86reg::K1), UINT64_C(0x8421));
@@ -616,7 +616,7 @@ TEST(X86EVEXFPCompare, PackedMemoryBIsBroadcastAndZeroMaskSkipsLoad) {
   ZeroMask.setStrictMode(true);
   ZeroMask.setLoadCollect(true);
   ZeroMask.setRegister(x86reg::RAX, Address);
-  ZeroMask.setRegisterBytes(x86reg::ZMM2, Left);
+  ZeroMask.setRegisterBytes(registerOffsetForVector(64, 2), Left);
   ZeroMask.setRegister(x86reg::K2, 0);
   ZeroMask.setRegister(x86reg::K1, UINT64_MAX);
   ASSERT_EQ(ZeroMask.run(Ops), Ops.size());
@@ -631,7 +631,7 @@ TEST(X86EVEXFPCompare, PackedMemoryBIsBroadcastAndZeroMaskSkipsLoad) {
   Active.setStrictMode(true);
   Active.setLoadCollect(true);
   Active.setRegister(x86reg::RAX, Address);
-  Active.setRegisterBytes(x86reg::ZMM2, Left);
+  Active.setRegisterBytes(registerOffsetForVector(64, 2), Left);
   Active.setRegister(x86reg::K2, UINT64_C(0xffff));
   Active.setRegister(x86reg::K1, UINT64_MAX);
   ASSERT_EQ(Active.run(Ops), Ops.size());
@@ -660,7 +660,7 @@ TEST(X86EVEXFPCompare, FullMemoryLoadsOnlyActiveLanesAndFaultIsAtomic) {
   OneLane.setStrictMode(true);
   OneLane.setLoadCollect(true);
   OneLane.setRegister(x86reg::RAX, Address);
-  OneLane.setRegisterBytes(x86reg::ZMM2, First);
+  OneLane.setRegisterBytes(registerOffsetForVector(64, 2), First);
   OneLane.setRegister(x86reg::K2, 1);
   OneLane.setRegister(x86reg::K1, UINT64_MAX);
   ASSERT_EQ(OneLane.run(Ops), Ops.size());
@@ -672,7 +672,7 @@ TEST(X86EVEXFPCompare, FullMemoryLoadsOnlyActiveLanesAndFaultIsAtomic) {
   NdOpEmulator Crossing(Image);
   Crossing.setStrictMode(true);
   Crossing.setRegister(x86reg::RAX, Address);
-  Crossing.setRegisterBytes(x86reg::ZMM2, First);
+  Crossing.setRegisterBytes(registerOffsetForVector(64, 2), First);
   Crossing.setRegister(x86reg::K2, 3);
   Crossing.setRegister(x86reg::K1, OldDestination);
   EXPECT_LT(Crossing.run(Ops), Ops.size());
