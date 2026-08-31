@@ -20,10 +20,207 @@
 
 namespace neverd {
 
+namespace {
+
+int movrsGprIndex(x86_reg Reg, unsigned Width) {
+  static const x86_reg Low8[] = {X86_REG_AL, X86_REG_CL, X86_REG_DL,
+                                 X86_REG_BL, X86_REG_SPL, X86_REG_BPL,
+                                 X86_REG_SIL, X86_REG_DIL};
+  static const x86_reg Low16[] = {X86_REG_AX, X86_REG_CX, X86_REG_DX,
+                                  X86_REG_BX, X86_REG_SP, X86_REG_BP,
+                                  X86_REG_SI, X86_REG_DI};
+  static const x86_reg Low32[] = {X86_REG_EAX, X86_REG_ECX, X86_REG_EDX,
+                                  X86_REG_EBX, X86_REG_ESP, X86_REG_EBP,
+                                  X86_REG_ESI, X86_REG_EDI};
+  static const x86_reg Low64[] = {X86_REG_RAX, X86_REG_RCX, X86_REG_RDX,
+                                  X86_REG_RBX, X86_REG_RSP, X86_REG_RBP,
+                                  X86_REG_RSI, X86_REG_RDI};
+  const x86_reg *Low = Width == 1 ? Low8 : Width == 2 ? Low16
+                                      : Width == 4   ? Low32
+                                                     : Low64;
+  for (unsigned I = 0; I != 8; ++I)
+    if (Reg == Low[I])
+      return static_cast<int>(I);
+  if (Width == 1) {
+    if (Reg >= X86_REG_R8B && Reg <= X86_REG_R15B)
+      return 8 + static_cast<int>(Reg - X86_REG_R8B);
+    if (Reg >= X86_REG_R16B && Reg <= X86_REG_R31B)
+      return 16 + static_cast<int>(Reg - X86_REG_R16B);
+  } else if (Width == 2) {
+    if (Reg >= X86_REG_R8W && Reg <= X86_REG_R15W)
+      return 8 + static_cast<int>(Reg - X86_REG_R8W);
+    if (Reg >= X86_REG_R16W && Reg <= X86_REG_R31W)
+      return 16 + static_cast<int>(Reg - X86_REG_R16W);
+  } else if (Width == 4) {
+    if (Reg >= X86_REG_R8D && Reg <= X86_REG_R15D)
+      return 8 + static_cast<int>(Reg - X86_REG_R8D);
+    if (Reg >= X86_REG_R16D && Reg <= X86_REG_R31D)
+      return 16 + static_cast<int>(Reg - X86_REG_R16D);
+  } else if (Width == 8) {
+    if (Reg >= X86_REG_R8 && Reg <= X86_REG_R15)
+      return 8 + static_cast<int>(Reg - X86_REG_R8);
+    if (Reg >= X86_REG_R16 && Reg <= X86_REG_R31)
+      return 16 + static_cast<int>(Reg - X86_REG_R16);
+  }
+  return -1;
+}
+
+x86_reg movrsSegment(uint8_t Prefix) {
+  switch (Prefix) {
+  case 0x26: return X86_REG_ES;
+  case 0x2e: return X86_REG_CS;
+  case 0x36: return X86_REG_SS;
+  case 0x3e: return X86_REG_DS;
+  case 0x64: return X86_REG_FS;
+  case 0x65: return X86_REG_GS;
+  default: return X86_REG_INVALID;
+  }
+}
+
+bool movrsAddressRegMatches(x86_reg Reg, unsigned Number, unsigned Width) {
+  return movrsGprIndex(Reg, Width) == static_cast<int>(Number);
+}
+
+bool validateApxMovrs(const cs_insn *Insn, const cs_x86 &X86) {
+  if (!Insn || X86.op_count != 2 || X86.operands[0].type != X86_OP_REG ||
+      X86.operands[1].type != X86_OP_MEM ||
+      X86.operands[0].access != CS_AC_WRITE ||
+      X86.operands[1].access != CS_AC_READ ||
+      X86.operands[0].size != X86.operands[1].size)
+    return false;
+  const unsigned Width = X86.operands[0].size;
+  if (Width != 1 && Width != 2 && Width != 4 && Width != 8)
+    return false;
+
+  size_t E = 0;
+  uint8_t SegmentPrefix = 0;
+  bool Address32 = false;
+  while (E < Insn->size && Insn->bytes[E] != 0x62) {
+    const uint8_t P = Insn->bytes[E++];
+    if (P == 0x67) {
+      if (Address32)
+        return false;
+      Address32 = true;
+    } else if (movrsSegment(P) != X86_REG_INVALID) {
+      if (SegmentPrefix != 0)
+        return false;
+      SegmentPrefix = P;
+    } else {
+      return false;
+    }
+  }
+  if (E + 6 > Insn->size || Insn->bytes[E] != 0x62 ||
+      X86.encoding.modrm_offset != E + 5 || X86.encoding.imm_size != 0 ||
+      X86.modrm != Insn->bytes[E + 5] || (X86.modrm & 0xc0) == 0xc0 ||
+      X86.addr_size != (Address32 ? 4 : 8) ||
+      X86.prefix[1] != SegmentPrefix ||
+      X86.prefix[3] != (Address32 ? 0x67 : 0) ||
+      X86.operands[1].mem.segment != movrsSegment(SegmentPrefix))
+    return false;
+  const uint8_t P0 = Insn->bytes[E + 1], P1 = Insn->bytes[E + 2];
+  const uint8_t P2 = Insn->bytes[E + 3], Opcode = Insn->bytes[E + 4];
+  if ((P0 & 7) != 4 || (P1 & 0x78) != 0x78 || P2 != 8 ||
+      (Opcode != 0x8a && Opcode != 0x8b))
+    return false;
+  unsigned EncodedWidth = 0;
+  if (Opcode == 0x8a && (P1 & 0x83) == 0)
+    EncodedWidth = 1;
+  else if (Opcode == 0x8b && (P1 & 3) == 1 && !(P1 & 0x80))
+    EncodedWidth = 2;
+  else if (Opcode == 0x8b && (P1 & 3) == 0)
+    EncodedWidth = (P1 & 0x80) ? 8 : 4;
+  if (EncodedWidth != Width)
+    return false;
+  const unsigned EncodedReg = ((~P0 & 0x80) >> 4) | (~P0 & 0x10) |
+                              ((X86.modrm >> 3) & 7);
+  if (movrsGprIndex(static_cast<x86_reg>(X86.operands[0].reg), Width) !=
+      static_cast<int>(EncodedReg))
+    return false;
+
+  const unsigned AddressWidth = Address32 ? 4 : 8;
+  const unsigned BaseExtension = ((~P0 & 0x20) >> 2) | ((P0 & 0x08) << 1);
+  const unsigned IndexExtension = ((~P0 & 0x40) >> 3) |
+                                  ((~P1 & 0x04) << 2);
+  const unsigned Mod = X86.modrm >> 6, Rm = X86.modrm & 7;
+  size_t Cursor = E + 6;
+  x86_reg ExpectedBase = X86_REG_INVALID;
+  x86_reg ExpectedIndex = X86_REG_INVALID;
+  unsigned ExpectedScale = 1;
+  uint8_t DispSize = 0;
+  if (Rm == 4) {
+    if (Cursor >= Insn->size || X86.sib != Insn->bytes[Cursor])
+      return false;
+    const uint8_t Sib = Insn->bytes[Cursor++];
+    ExpectedScale = 1u << (Sib >> 6);
+    const unsigned Index = (Sib >> 3) & 7, Base = Sib & 7;
+    if (Index != 4 || IndexExtension != 0) {
+      ExpectedIndex = static_cast<x86_reg>(X86.operands[1].mem.index);
+      if (!movrsAddressRegMatches(ExpectedIndex, Index + IndexExtension,
+                                  AddressWidth))
+        return false;
+    }
+    if (Mod == 0 && Base == 5)
+      DispSize = 4;
+    else {
+      ExpectedBase = static_cast<x86_reg>(X86.operands[1].mem.base);
+      if (!movrsAddressRegMatches(ExpectedBase, Base + BaseExtension,
+                                  AddressWidth))
+        return false;
+    }
+  } else if (Mod == 0 && Rm == 5) {
+    ExpectedBase = Address32 ? X86_REG_EIP : X86_REG_RIP;
+    DispSize = 4;
+  } else {
+    ExpectedBase = static_cast<x86_reg>(X86.operands[1].mem.base);
+    if (!movrsAddressRegMatches(ExpectedBase, Rm + BaseExtension,
+                                AddressWidth))
+      return false;
+  }
+  if (Mod == 1)
+    DispSize = 1;
+  else if (Mod == 2)
+    DispSize = 4;
+  int64_t Disp = 0;
+  const size_t DispOffset = Cursor;
+  if (DispSize == 1) {
+    if (Cursor >= Insn->size)
+      return false;
+    Disp = static_cast<int8_t>(Insn->bytes[Cursor++]);
+  } else if (DispSize == 4) {
+    if (Cursor + 4 > Insn->size)
+      return false;
+    uint32_t Raw = 0;
+    for (unsigned I = 0; I != 4; ++I)
+      Raw |= static_cast<uint32_t>(Insn->bytes[Cursor++]) << (I * 8);
+    Disp = static_cast<int32_t>(Raw);
+  }
+  const auto &Mem = X86.operands[1].mem;
+  if (Cursor != Insn->size || Mem.base != ExpectedBase ||
+      Mem.index != ExpectedIndex || Mem.scale != static_cast<int>(ExpectedScale) ||
+      Mem.disp != Disp || X86.encoding.disp_size != DispSize ||
+      X86.encoding.disp_offset != (DispSize ? DispOffset : 0))
+    return false;
+  return true;
+}
+
+} // namespace
+
 bool liftCoreMove(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
                   const cs_x86 &X86) {
   unsigned InsnId = Insn->id;
   switch (InsnId) {
+
+  case X86_INS_MOVRS: {
+    if (!validateApxMovrs(Insn, X86))
+      return false;
+    // MOVRS is a restricted-speculation hint, not a different architectural
+    // load.  It returns the same bytes and raises the same memory faults as an
+    // ordinary load.  Emitting LOAD before COPY preserves fault atomicity: a
+    // failing memory read cannot write the destination register.
+    NdVar Value = L.operandRead(S, X86.operands[1]);
+    S.emit(NdOp::COPY, L.operandWrite(X86.operands[0]), {Value});
+    break;
+  }
 
   // --- NOP ---
   case X86_INS_NOP:

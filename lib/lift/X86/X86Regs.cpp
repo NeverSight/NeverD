@@ -14,6 +14,41 @@
 namespace neverd {
 
 RegInfo mapCapstoneReg(x86_reg Reg) {
+  // MMX names the low 64 bits of the corresponding modeled x87 data slot.
+  // Keep the alias narrow so a read never erases the x87 value's high 16 bits.
+  if (Reg >= X86_REG_MM0 && Reg <= X86_REG_MM7)
+    return {x86reg::ST0 +
+                static_cast<unsigned>(Reg - X86_REG_MM0) *
+                    x86reg::FPURegStride,
+            8};
+  if (Reg >= X86_REG_XMM0 && Reg <= X86_REG_XMM31)
+    return {x86reg::vectorReg(static_cast<unsigned>(Reg - X86_REG_XMM0)), 16};
+  if (Reg >= X86_REG_YMM0 && Reg <= X86_REG_YMM31)
+    return {x86reg::vectorReg(static_cast<unsigned>(Reg - X86_REG_YMM0)), 32};
+  if (Reg >= X86_REG_ZMM0 && Reg <= X86_REG_ZMM31)
+    return {x86reg::vectorReg(static_cast<unsigned>(Reg - X86_REG_ZMM0)), 64};
+  if (Reg >= X86_REG_K0 && Reg <= X86_REG_K7)
+    return {x86reg::opmaskReg(static_cast<unsigned>(Reg - X86_REG_K0)), 8};
+  if (Reg >= X86_REG_R16 && Reg <= X86_REG_R31)
+    return {
+        x86reg::extendedGeneralReg(static_cast<unsigned>(Reg - X86_REG_R16)),
+        8};
+  if (Reg >= X86_REG_R16D && Reg <= X86_REG_R31D)
+    return {
+        x86reg::extendedGeneralReg(static_cast<unsigned>(Reg - X86_REG_R16D)),
+        4};
+  if (Reg >= X86_REG_R16W && Reg <= X86_REG_R31W)
+    return {
+        x86reg::extendedGeneralReg(static_cast<unsigned>(Reg - X86_REG_R16W)),
+        2};
+  if (Reg >= X86_REG_R16B && Reg <= X86_REG_R31B)
+    return {
+        x86reg::extendedGeneralReg(static_cast<unsigned>(Reg - X86_REG_R16B)),
+        1};
+  if (Reg >= X86_REG_TMM0 && Reg <= X86_REG_TMM7)
+    return {x86reg::tileReg(static_cast<unsigned>(Reg - X86_REG_TMM0)),
+            x86reg::TileRegStride};
+
   switch (Reg) {
   // 64-bit
   case X86_REG_RAX:
@@ -255,6 +290,79 @@ RegInfo mapCapstoneReg(x86_reg Reg) {
 }
 
 const char *getX86RegName(uint64_t Offset, uint16_t Size) {
+#define X86_VECTOR_REGISTER_NAMES(Prefix)                                      \
+  Prefix "0", Prefix "1", Prefix "2", Prefix "3", Prefix "4", Prefix "5",      \
+      Prefix "6", Prefix "7", Prefix "8", Prefix "9", Prefix "10",             \
+      Prefix "11", Prefix "12", Prefix "13", Prefix "14", Prefix "15",         \
+      Prefix "16", Prefix "17", Prefix "18", Prefix "19", Prefix "20",         \
+      Prefix "21", Prefix "22", Prefix "23", Prefix "24", Prefix "25",         \
+      Prefix "26", Prefix "27", Prefix "28", Prefix "29", Prefix "30",         \
+      Prefix "31"
+  static constexpr const char *XmmNames[] = {X86_VECTOR_REGISTER_NAMES("XMM")};
+  static constexpr const char *YmmNames[] = {X86_VECTOR_REGISTER_NAMES("YMM")};
+  static constexpr const char *ZmmNames[] = {X86_VECTOR_REGISTER_NAMES("ZMM")};
+#undef X86_VECTOR_REGISTER_NAMES
+  static constexpr const char *KNames[] = {"K0", "K1", "K2", "K3",
+                                           "K4", "K5", "K6", "K7"};
+#define X86_EXTENDED_GPR_NAMES(Suffix)                                         \
+  "R16" Suffix, "R17" Suffix, "R18" Suffix, "R19" Suffix, "R20" Suffix,        \
+      "R21" Suffix, "R22" Suffix, "R23" Suffix, "R24" Suffix, "R25" Suffix,    \
+      "R26" Suffix, "R27" Suffix, "R28" Suffix, "R29" Suffix, "R30" Suffix,    \
+      "R31" Suffix
+  static constexpr const char *Extended64Names[] = {X86_EXTENDED_GPR_NAMES("")};
+  static constexpr const char *Extended32Names[] = {
+      X86_EXTENDED_GPR_NAMES("D")};
+  static constexpr const char *Extended16Names[] = {
+      X86_EXTENDED_GPR_NAMES("W")};
+  static constexpr const char *Extended8Names[] = {X86_EXTENDED_GPR_NAMES("B")};
+#undef X86_EXTENDED_GPR_NAMES
+  static constexpr const char *TileNames[] = {"TMM0", "TMM1", "TMM2", "TMM3",
+                                              "TMM4", "TMM5", "TMM6", "TMM7"};
+  static constexpr const char *MmxNames[] = {"MM0", "MM1", "MM2", "MM3",
+                                             "MM4", "MM5", "MM6", "MM7"};
+
+  if (Offset >= x86reg::VectorBase &&
+      Offset < x86reg::vectorReg(x86reg::VectorRegCount) &&
+      (Offset - x86reg::VectorBase) % x86reg::VectorRegStride == 0) {
+    const unsigned Index = static_cast<unsigned>((Offset - x86reg::VectorBase) /
+                                                 x86reg::VectorRegStride);
+    if (Size == 16)
+      return XmmNames[Index];
+    if (Size == 32)
+      return YmmNames[Index];
+    if (Size == 64)
+      return ZmmNames[Index];
+  }
+  if (Offset >= x86reg::OpmaskBase &&
+      Offset < x86reg::opmaskReg(x86reg::OpmaskRegCount) &&
+      (Offset - x86reg::OpmaskBase) % x86reg::OpmaskRegStride == 0 &&
+      (Size == 1 || Size == 2 || Size == 4 || Size == 8))
+    return KNames[(Offset - x86reg::OpmaskBase) / x86reg::OpmaskRegStride];
+  if (Offset >= x86reg::ExtendedGPRBase &&
+      Offset < x86reg::extendedGeneralReg(x86reg::ExtendedGPRCount) &&
+      (Offset - x86reg::ExtendedGPRBase) % x86reg::ExtendedGPRStride == 0) {
+    const unsigned Index = static_cast<unsigned>(
+        (Offset - x86reg::ExtendedGPRBase) / x86reg::ExtendedGPRStride);
+    if (Size == 8)
+      return Extended64Names[Index];
+    if (Size == 4)
+      return Extended32Names[Index];
+    if (Size == 2)
+      return Extended16Names[Index];
+    if (Size == 1)
+      return Extended8Names[Index];
+  }
+  if (Offset >= x86reg::TileBase &&
+      Offset < x86reg::tileReg(x86reg::TileRegCount) &&
+      (Offset - x86reg::TileBase) % x86reg::TileRegStride == 0 &&
+      Size == x86reg::TileRegStride)
+    return TileNames[(Offset - x86reg::TileBase) / x86reg::TileRegStride];
+  if (Offset == x86reg::TileConfig && Size == x86reg::TileConfigSize)
+    return "TILECFG";
+  if (Offset >= x86reg::ST0 && Offset <= x86reg::ST7 &&
+      (Offset - x86reg::ST0) % x86reg::FPURegStride == 0 && Size == 8)
+    return MmxNames[(Offset - x86reg::ST0) / x86reg::FPURegStride];
+
   if (Size == 8) {
     switch (Offset) {
     case x86reg::RAX:

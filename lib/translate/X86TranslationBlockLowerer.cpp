@@ -1455,6 +1455,27 @@ validatePublishedScalarSlice(const TranslationBlockDescriptorV1 &Block) {
               Block.Header.StaticTargetPC)
         return Reject("v1 JMP LowIR and descriptor targets are not exact");
       break;
+    case X86_INS_JMPABS:
+      if (BoundaryIndex + 1 != Block.InstructionBoundaries.size() ||
+          X86.rex != 0 || X86.op_count != 1 ||
+          X86.operands[0].type != X86_OP_IMM)
+        return Reject("v1 JMPABS must be the final absolute instruction");
+      if (InstructionBytes.size() != 11 || InstructionBytes[0] != 0xd5 ||
+          (InstructionBytes[1] & 0x88) != 0 ||
+          InstructionBytes[2] != 0xa1)
+        return Reject("v1 JMPABS requires canonical REX2 A1 iq encoding");
+      if (InstructionOps.size() != 1 ||
+          InstructionOps.front().Opcode != NdOp::BRANCH ||
+          InstructionOps.front().Output.Size != 0 ||
+          InstructionOps.front().NumInputs != 1 ||
+          !InstructionOps.front().Inputs[0].isConst() ||
+          InstructionOps.front().Inputs[0].Size != sizeof(uint64_t) ||
+          InstructionOps.front().Inputs[0].Offset !=
+              Block.Header.StaticTargetPC ||
+          static_cast<uint64_t>(X86.operands[0].imm) !=
+              Block.Header.StaticTargetPC)
+        return Reject("v1 JMPABS LowIR and descriptor targets are not exact");
+      break;
     case X86_INS_JO:
     case X86_INS_JNO:
     case X86_INS_JB:

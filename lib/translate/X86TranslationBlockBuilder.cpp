@@ -196,6 +196,7 @@ classifyDecodedControl(const Decoder &TheDecoder,
   Control.IsCall = IsCall;
   Control.IsReturn = IsReturn;
   Control.IsConditional = IsBranch && Instruction.Id != X86_INS_JMP &&
+                          Instruction.Id != X86_INS_JMPABS &&
                           Instruction.Id != X86_INS_LJMP;
 
   if (IsCall) {

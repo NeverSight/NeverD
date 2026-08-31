@@ -163,23 +163,85 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
       if (Op.Opcode == NdOp::INTRINSIC) {
         const bool HasExplicitAddressSpace =
             Op.MemoryAddressSpace != NdMemoryAddressSpace::Default;
-        if (Op.NumInputs == 0 || !Op.Inputs[0].isConst()) {
+        if (Op.NumInputs == 0 || !Op.Inputs[0].isConst())
+          llvm::report_fatal_error("intrinsic has no constant intrinsic ID");
+        const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+        if (isApxAtomicIntrinsic(Id)) {
+          if (!intrinsicApxAtomicShapeIsValid(Id,
+                                              apxAtomicLowShape(Op, TheArch)))
+            llvm::report_fatal_error(
+                "APX atomic intrinsic has an invalid operand/output contract");
+          continue;
+        }
+        if (Id == Intrinsic::X86Invalidate) {
+          if (!intrinsicX86InvalidateShapeIsValid(
+                  Id, x86InvalidateLowShape(Op, TheArch)))
+            llvm::report_fatal_error(
+                "x86 invalidation intrinsic has an invalid operand/output "
+                "contract");
+          continue;
+        }
+        if (Id == Intrinsic::X86MsrAccess) {
+          if (!intrinsicX86MsrAccessShapeIsValid(
+                  Id, x86MsrAccessLowShape(Op, TheArch)))
+            llvm::report_fatal_error(
+                "x86 MSR access intrinsic has an invalid operand/output "
+                "contract");
+          continue;
+        }
+        if (Id == Intrinsic::X86RequireDivPrecondition) {
+          if (!intrinsicX86DivPreconditionShapeIsValid(
+                  Id, x86DivPreconditionLowShape(Op, TheArch)))
+            llvm::report_fatal_error(
+                "x86 divide precondition has an invalid operand/output "
+                "contract");
+          continue;
+        }
+        if (isPdepPextIntrinsic(Id)) {
+          if (!intrinsicPdepPextShapeIsValid(Id, pdepPextLowShape(Op)))
+            llvm::report_fatal_error(
+                "PDEP/PEXT intrinsic has an invalid operand/output contract");
+          continue;
+        }
+        if (Id == Intrinsic::X86FPClass) {
           if (HasExplicitAddressSpace)
             llvm::report_fatal_error(
                 "intrinsic does not support a memory address space");
+          if (Op.NumInputs != 5 || !Op.Inputs[1].isConst() ||
+              !Op.Inputs[4].isConst() ||
+              (Op.Inputs[1].Offset & ~UINT64_C(0x03)) != 0 ||
+              !intrinsicX86FPClassShapeIsValid(
+                  Op.NumInputs, Op.Output.Size,
+                  static_cast<uint8_t>(Op.Inputs[1].Offset), Op.Inputs[1].Size,
+                  Op.Inputs[2].Size, Op.Inputs[3].Size, Op.Inputs[4].Size))
+            llvm::report_fatal_error(
+                "x86 FPClass intrinsic has an invalid operand/output shape");
           continue;
         }
-        const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+        if (isX86VP4DPIntrinsic(Id)) {
+          if (!intrinsicX86VP4DPShapeIsValid(
+                  Id, Op.NumInputs, Op.Output.Size,
+                  Op.NumInputs > 1 ? Op.Inputs[1].Size : 0,
+                  Op.NumInputs > 2 ? Op.Inputs[2].Size : 0,
+                  Op.NumInputs > 3 ? Op.Inputs[3].Size : 0,
+                  Op.NumInputs > 4 ? Op.Inputs[4].Size : 0,
+                  Op.NumInputs > 5 ? Op.Inputs[5].Size : 0) ||
+              !Op.Inputs[3].isConst() ||
+              (!Op.Inputs[4].isReg() && !Op.Inputs[4].isConst()) ||
+              !Op.Inputs[5].isConst() || Op.Inputs[3].Offset > 28 ||
+              (Op.Inputs[3].Offset & 3) != 0 || Op.Inputs[5].Offset > 1)
+            llvm::report_fatal_error(
+                "x86 VP4DP intrinsic has an invalid operand/output shape");
+          continue;
+        }
         const bool IsDefaultString =
             !HasExplicitAddressSpace && isX86StringIntrinsic(Id);
-        if (IsDefaultString &&
-            !intrinsicStringShapeIsValid(
-                Id, Op.NumInputs, Op.Output.Size,
-                Op.NumInputs > 1 ? Op.Inputs[1].Size : 0))
+        if (IsDefaultString && !intrinsicStringShapeIsValid(
+                                   Id, Op.NumInputs, Op.Output.Size,
+                                   Op.NumInputs > 1 ? Op.Inputs[1].Size : 0))
           llvm::report_fatal_error(
               "x86 string intrinsic has an invalid operand/output shape");
-        const bool IsMemoryIntrinsic =
-            intrinsicSupportsMemoryAddressSpace(Id);
+        const bool IsMemoryIntrinsic = intrinsicSupportsMemoryAddressSpace(Id);
         if (HasExplicitAddressSpace && !IsMemoryIntrinsic)
           llvm::report_fatal_error(
               "intrinsic does not support a memory address space");

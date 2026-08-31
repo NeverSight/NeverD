@@ -11,12 +11,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/backend/llvm/MedLLVMFloatConvertLowering.h"
 
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/InlineAsm.h"
-
-#include <cmath>
 
 namespace neverd {
 
@@ -109,37 +108,6 @@ llvm::Value *emitBinaryFPIntrinsic(llvm::IRBuilder<> &Builder,
   return Builder.CreateCall(Fn, {FL, FR}, Name);
 }
 
-// FP->int conversion with architecture-correct out-of-range / NaN behavior.
-// Raw fptosi/fptoui is UB (poison) when the value does not fit or is NaN; a
-// compile-time-constant over-range operand then folds to `poison`, which the
-// optimizer miscompiles.  Hardware is well-defined: AArch64 fcvtz{s,u} / ARM
-// vcvt saturate (NaN->0); x86 cvtts{s,d}2si returns the "integer indefinite"
-// INT_MIN for any out-of-range / NaN.  Both are modeled poison-free via
-// llvm.fptosi.sat / llvm.fptoui.sat (which lower to the native fcvtz on ARM).
-llvm::Value *emitFPToInt(llvm::IRBuilder<> &Builder, llvm::Module *Mod,
-                         llvm::Value *FV, llvm::Type *DstTy, bool IsUnsigned,
-                         Arch TargetArch) {
-  llvm::Intrinsic::ID SatID =
-      IsUnsigned ? llvm::Intrinsic::fptoui_sat : llvm::Intrinsic::fptosi_sat;
-  auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(Mod, SatID,
-                                                     {DstTy, FV->getType()});
-  llvm::Value *Sat = Builder.CreateCall(Fn, {FV}, "fptoint_sat");
-  // ARM/AArch64 saturate exactly; x86 has no defined unsigned FP->int convert.
-  if ((TargetArch != Arch::X86 && TargetArch != Arch::X64) || IsUnsigned)
-    return Sat;
-  // x86 signed: positive overflow and NaN -> INT_MIN (negative overflow already
-  // saturates to INT_MIN, matching).  `fcmp uge x, 2^(B-1)` is true for both
-  // positive overflow and NaN (unordered); the bound is +Inf if it overflows
-  // the source float type, so only +Inf/NaN trigger it there.
-  unsigned Bits = DstTy->getIntegerBitWidth();
-  llvm::Value *IntMin =
-      llvm::ConstantInt::get(DstTy, llvm::APInt::getSignedMinValue(Bits));
-  llvm::Value *Bound =
-      llvm::ConstantFP::get(FV->getType(), std::ldexp(1.0, (int)Bits - 1));
-  llvm::Value *Overflow = Builder.CreateFCmpUGE(FV, Bound, "x86_cvt_ovf");
-  return Builder.CreateSelect(Overflow, IntMin, Sat, "x86_cvt");
-}
-
 } // anonymous namespace
 
 llvm::Value *MedLLVMEmitter::emitFloatOp(const MedOp &Op,
@@ -156,13 +124,13 @@ llvm::Value *MedLLVMEmitter::emitFloatOp(const MedOp &Op,
     auto *DstTy = sizeToType(Op.Output.Size);
     if (Operand->getType()->isIntegerTy() && DstTy->isIntegerTy()) {
       auto *FV = bitcastToFloat(Builder, *Ctx, Operand);
-      return emitFPToInt(Builder, Mod, FV, DstTy, /*IsUnsigned=*/false,
-                         TargetArch);
+      return llvm_detail::emitFPToInt(Builder, *Mod, FV, DstTy,
+                                      /*IsUnsigned=*/false, TargetArch);
     }
     if (Operand->getType()->isFloatingPointTy()) {
       if (DstTy->isIntegerTy())
-        return emitFPToInt(Builder, Mod, Operand, DstTy, /*IsUnsigned=*/false,
-                           TargetArch);
+        return llvm_detail::emitFPToInt(Builder, *Mod, Operand, DstTy,
+                                        /*IsUnsigned=*/false, TargetArch);
       auto *FloatDst = scalarFPTypeForSize(*Ctx, Op.Output.Size);
       if (Operand->getType() == FloatDst)
         return Operand;
@@ -327,26 +295,28 @@ llvm::Value *MedLLVMEmitter::emitFloatOp(const MedOp &Op,
     auto *Raw = GetInput(0);
     auto *DstTy = sizeToType(Op.Output.Size);
     auto *FV = bitcastToFloat(Builder, *Ctx, Raw);
-    return emitFPToInt(Builder, Mod, FV, DstTy, /*IsUnsigned=*/false,
-                       TargetArch);
+    return llvm_detail::emitFPToInt(Builder, *Mod, FV, DstTy,
+                                    /*IsUnsigned=*/false, TargetArch);
   }
 
   case NdOp::FLOAT_FLOAT2UINT: {
     auto *Raw = GetInput(0);
     auto *DstTy = sizeToType(Op.Output.Size);
     auto *FV = bitcastToFloat(Builder, *Ctx, Raw);
-    return emitFPToInt(Builder, Mod, FV, DstTy, /*IsUnsigned=*/true,
-                       TargetArch);
+    return llvm_detail::emitFPToInt(Builder, *Mod, FV, DstTy,
+                                    /*IsUnsigned=*/true, TargetArch);
   }
 
   case NdOp::FLOAT_INT2FLOAT: {
     auto *DstFTy = scalarFPTypeForSize(*Ctx, Op.Output.Size);
-    return Builder.CreateSIToFP(GetInput(0), DstFTy, "sitofp");
+    return llvm_detail::emitIntToFP(Builder, GetInput(0), DstFTy,
+                                    /*IsUnsigned=*/false, TargetArch);
   }
 
   case NdOp::FLOAT_UINT2FLOAT: {
     auto *DstFTy = scalarFPTypeForSize(*Ctx, Op.Output.Size);
-    return Builder.CreateUIToFP(GetInput(0), DstFTy, "uitofp");
+    return llvm_detail::emitIntToFP(Builder, GetInput(0), DstFTy,
+                                    /*IsUnsigned=*/true, TargetArch);
   }
 
   case NdOp::FLOAT_FLOAT2FLOAT: {

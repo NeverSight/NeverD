@@ -499,7 +499,7 @@ TEST_F(NdOpEmulatorTest, AnOpcodeWithNoModelIsCountedAndSteppedOverByDefault) {
   NdOpEmulator Emu(Img);
 
   LowOp NoModel;
-  NoModel.Opcode = NdOp::FLOAT_ADD;
+  NoModel.Opcode = NdOp::FLOAT_MINNUM;
   NoModel.Output = NdVar::reg(8, 8);
   NoModel.addInput(NdVar::reg(0, 8));
   NoModel.addInput(NdVar::reg(0, 8));

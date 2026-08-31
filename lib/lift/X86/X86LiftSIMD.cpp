@@ -25,7 +25,8 @@
 namespace neverd {
 
 bool X86Lifter::liftSIMD(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
-  return liftSIMDMove(*this, S, Insn, X86) ||
+  return liftAMX(*this, S, Insn, X86) ||
+         liftSIMDMove(*this, S, Insn, X86) ||
          liftSIMDShuffle(*this, S, Insn, X86) ||
          liftSIMDCompare(*this, S, Insn, X86) ||
          liftSIMDIntArith(*this, S, Insn, X86) ||

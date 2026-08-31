@@ -695,9 +695,29 @@ renderX86MultiOutput(Intrinsic IID, const std::vector<MedVar> &Outputs,
   }
 }
 
+const char *x86HighCIntrinsicFatalReason(Intrinsic Id) {
+  using I = Intrinsic;
+  switch (Id) {
+  case I::X86MsrAccess:
+    return "x86 MSR access requires an authenticated architectural execution "
+           "environment";
+  case I::X86Invalidate:
+    return "x86 address-translation invalidation requires an authenticated "
+           "architectural execution environment";
+  case I::X86RequireDivPrecondition:
+    return "x86 division precondition requires an architectural fault "
+           "environment";
+  default:
+    return nullptr;
+  }
+}
+
 std::string renderX86IntrinsicCall(Intrinsic Id,
                                    const std::vector<std::string> &Ops,
                                    bool &HasCIntrinsics) {
+  if (const char *Reason = x86HighCIntrinsicFatalReason(Id))
+    llvm::report_fatal_error(Reason);
+
   using I = Intrinsic;
   switch (Id) {
   case I::Cpuid: {

@@ -137,6 +137,23 @@ struct TargetRegInfo {
   llvm::ArrayRef<uint64_t> IntReturnRegs = {};
   llvm::ArrayRef<uint64_t> FPReturnRegs = {};
 
+  /// Maximum byte width of one architectural vector container.  This is
+  /// deliberately separate from FPABIRegWidth: x86 ZMM state is 64 bytes,
+  /// while ordinary ABI floating-point values still travel in low XMM views.
+  uint16_t VecRegWidth = 0;
+  uint16_t FPABIRegWidth = 0;
+
+  /// Exact scalar-register bank.  Register offsets are not assumed to remain
+  /// contiguous because APX adds a separately allocated R16-R31 bank.
+  llvm::ArrayRef<uint64_t> GeneralRegs = {};
+
+  /// AVX-512 predicate-register bank.  A K register is a 64-bit container;
+  /// byte/word/dword instruction forms are zero-extending sub-register writes.
+  uint64_t OpmaskRegBase = 0;
+  uint64_t OpmaskRegStride = 0;
+  unsigned OpmaskRegCount = 0;
+  uint16_t OpmaskRegWidth = 0;
+
   /// Check if (NarrowOff, NarrowSz) is a sub-register of (WideOff, WideSz).
   bool isSubRegOf(uint64_t NarrowOff, uint16_t NarrowSz, uint64_t WideOff,
                   uint16_t WideSz) const;
@@ -215,6 +232,30 @@ struct TargetRegInfo {
            (RegOff - VecRegBase) % VecRegStride == 0;
   }
 
+  bool isGeneralReg(uint64_t RegOff) const {
+    for (uint64_t Reg : GeneralRegs)
+      if (Reg == RegOff)
+        return true;
+    return false;
+  }
+
+  bool isOpmaskReg(uint64_t RegOff) const {
+    if (OpmaskRegCount == 0 || OpmaskRegStride == 0)
+      return false;
+    return RegOff >= OpmaskRegBase &&
+           RegOff < OpmaskRegBase + OpmaskRegStride * OpmaskRegCount &&
+           (RegOff - OpmaskRegBase) % OpmaskRegStride == 0;
+  }
+
+  uint16_t maxRegisterWidth(uint64_t RegOff) const {
+    if (isVectorReg(RegOff))
+      return VecRegWidth != 0 ? VecRegWidth
+                              : static_cast<uint16_t>(VecRegStride);
+    if (isOpmaskReg(RegOff))
+      return OpmaskRegWidth;
+    return FullRegWidth;
+  }
+
   /// Whether \p RegOff names a register that can carry a floating-point
   /// argument.  Identical to isVectorReg on most targets, but ARM AAPCS-VFP
   /// also passes `float` arguments in the single-width S registers (s0,s1,...),
@@ -222,8 +263,9 @@ struct TargetRegInfo {
   /// stride is 8 yet each S lane is 4 bytes, so those high-half lanes are not
   /// isVectorReg even though they are valid FP-argument registers.
   bool isFPArgReg(uint64_t RegOff) const {
-    if (isVectorReg(RegOff))
-      return true;
+    for (uint64_t Reg : FPParamRegs)
+      if (Reg == RegOff)
+        return true;
     if (TheArch == Arch::ARM && VecRegStride == 8 && !FPParamRegs.empty())
       return RegOff >= VecRegBase &&
              RegOff < VecRegBase + 4 * (2 * FPParamRegs.size()) &&

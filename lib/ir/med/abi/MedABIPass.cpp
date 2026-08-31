@@ -11,13 +11,13 @@
 
 #include "neverd/ir/med/MedABIPass.h"
 
+#include "../../../safety/StackSlotFlow.h"
 #include "MedABIPassDetail.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/object/SectionNames.h"
-#include "../../../safety/StackSlotFlow.h"
 
 #include "llvm/ADT/StringExtras.h"
 
@@ -40,7 +40,7 @@ EntrySpKey entrySpKey(const MedVar &V) {
 }
 
 std::optional<int64_t> exactEntrySpDelta(const MedFunc &Func, Arch TheArch,
-                                           const MedVar &Root) {
+                                         const MedVar &Root) {
   const auto &TRI = getTargetRegInfo(TheArch);
   std::map<EntrySpKey, const MedOp *> Definitions;
   std::set<EntrySpKey> Ambiguous;
@@ -74,8 +74,7 @@ std::optional<int64_t> exactEntrySpDelta(const MedFunc &Func, Arch TheArch,
     }
     if (V.Kind != MedVar::Reg && V.Kind != MedVar::Temp)
       return std::nullopt;
-    if (V.Kind == MedVar::Reg && V.RegOff == TRI.StackPointer &&
-        V.SSAVer == 0)
+    if (V.Kind == MedVar::Reg && V.RegOff == TRI.StackPointer && V.SSAVer == 0)
       return int64_t{0};
 
     const auto Key = entrySpKey(V);
@@ -110,17 +109,17 @@ std::optional<int64_t> exactEntrySpDelta(const MedFunc &Func, Arch TheArch,
           auto Base = Eval(B);
           if (Base)
             Result = Op.Opcode == NdOp::INT_ADD
-                         ? std::optional<int64_t>(*Base +
-                                                    static_cast<int64_t>(A.ConstVal))
+                         ? std::optional<int64_t>(
+                               *Base + static_cast<int64_t>(A.ConstVal))
                          : std::nullopt;
         } else if (!A.isConst() && B.isConst()) {
           auto Base = Eval(A);
           if (Base)
             Result = Op.Opcode == NdOp::INT_ADD
-                         ? std::optional<int64_t>(*Base +
-                                                    static_cast<int64_t>(B.ConstVal))
-                         : std::optional<int64_t>(*Base -
-                                                    static_cast<int64_t>(B.ConstVal));
+                         ? std::optional<int64_t>(
+                               *Base + static_cast<int64_t>(B.ConstVal))
+                         : std::optional<int64_t>(
+                               *Base - static_cast<int64_t>(B.ConstVal));
         }
       }
       break;
@@ -1153,8 +1152,8 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       // Walk transparent predecessor blocks until the last outgoing store. A
       // synthetic PHI is inserted at each join so recovered values dominate
       // the eventual call without treating unrelated stack writes as args.
-      if (!CI.IsIndirect && DarwinVarArgBase >= 0 &&
-          Blk.Preds.size() > 1 && TRI.PointerSize > 0) {
+      if (!CI.IsIndirect && DarwinVarArgBase >= 0 && Blk.Preds.size() > 1 &&
+          TRI.PointerSize > 0) {
         for (int Slot = 0; Slot < MaxArgs - DarwinVarArgBase; ++Slot) {
           const int ArgIdx = DarwinVarArgBase + Slot;
           if (ArgIdx < 0 || ArgIdx >= MaxArgs || FoundMask[ArgIdx])
@@ -1176,8 +1175,8 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
               return std::nullopt;
             }
             const int Boundary = BlockId == Blk.Id
-                                  ? static_cast<int>(OI)
-                                  : static_cast<int>(Block->Ops.size());
+                                     ? static_cast<int>(OI)
+                                     : static_cast<int>(Block->Ops.size());
             for (int J = Boundary - 1; J >= 0; --J) {
               const MedOp &Candidate = Block->Ops[J];
               if (Candidate.Opcode == NdOp::CALL ||
@@ -1186,10 +1185,8 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
                 Active.erase(BlockId);
                 return std::nullopt;
               }
-              if (Candidate.Opcode != NdOp::STORE ||
-                  Candidate.NumInputs < 2 ||
-                  Candidate.MemoryAddressSpace !=
-                      NdMemoryAddressSpace::Default)
+              if (Candidate.Opcode != NdOp::STORE || Candidate.NumInputs < 2 ||
+                  Candidate.MemoryAddressSpace != NdMemoryAddressSpace::Default)
                 continue;
               auto D = stackPtrDelta(*Block, TRI, Candidate.Inputs[0]);
               if (D && *D == TargetOffset) {
@@ -1659,13 +1656,13 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       for (auto &A : StackPart)
         CI.Args.push_back(A);
 
-      // A Darwin wrapper is variadic only when its exact recovered call argument
-      // to a known va_list consumer is a pointer-width value derived from the
-      // entry SP.  CI.Args is SSA-bound at this call site, so a later write to
-      // x2/x3 cannot be mistaken for the consumed va_list.  Ordinary variadic
-      // calls and ambiguous provenance remain unmarked.
-      if (!CI.IsIndirect && Img && Img->isMachO() &&
-          TheArch == Arch::AArch64 && !CI.Args.empty()) {
+      // A Darwin wrapper is variadic only when its exact recovered call
+      // argument to a known va_list consumer is a pointer-width value derived
+      // from the entry SP.  CI.Args is SSA-bound at this call site, so a later
+      // write to x2/x3 cannot be mistaken for the consumed va_list.  Ordinary
+      // variadic calls and ambiguous provenance remain unmarked.
+      if (!CI.IsIndirect && Img && Img->isMachO() && TheArch == Arch::AArch64 &&
+          !CI.Args.empty()) {
         const llvm::StringRef Bare = stripLeadingUnderscores(CI.TargetName);
         const bool InternalVaListConsumer =
             CalleeConsumesVaList &&
@@ -1682,8 +1679,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
             if (auto Delta = exactEntrySpDelta(Func, TheArch, VaListArg);
                 Delta && *Delta >= 0 &&
                 *Delta <= limits::kVariadicOverflowBaseMax &&
-                TRI.PointerSize > 0 &&
-                (*Delta % TRI.PointerSize) == 0) {
+                TRI.PointerSize > 0 && (*Delta % TRI.PointerSize) == 0) {
               Func.IsVariadic = true;
               Func.VariadicOverflowBase = *Delta;
               if (InternalVaListConsumer) {
@@ -1858,8 +1854,8 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         if (int ArgIdx = regToIntArgIdx(P.RegOff); ArgIdx >= 0)
           ExistingIntArgs.insert(ArgIdx);
     const int MaxPromoted = PromoteParams.rbegin()->first;
-    for (int I = 0; I <= MaxPromoted &&
-         I < static_cast<int>(IntParamRegs.size()); ++I) {
+    for (int I = 0;
+         I <= MaxPromoted && I < static_cast<int>(IntParamRegs.size()); ++I) {
       if (ExistingIntArgs.count(I))
         continue;
       MedVar P;
@@ -1947,7 +1943,9 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         // that canonical width so return-value selection does not prefer an
         // older pre-call Q0/XMM0 write merely because it is wider.
         O.Output.Size = TRI.isVectorReg(TRI.FPReturnReg)
-                            ? static_cast<uint16_t>(TRI.VecRegStride)
+                            ? (TRI.FPABIRegWidth != 0
+                                   ? TRI.FPABIRegWidth
+                                   : static_cast<uint16_t>(TRI.VecRegStride))
                             : ForwarderFPRetSize;
         if (I + 1 < Blk.Ops.size() && Blk.Ops[I + 1].Opcode == NdOp::RETURN &&
             Blk.Ops[I + 1].NumInputs >= 1 &&

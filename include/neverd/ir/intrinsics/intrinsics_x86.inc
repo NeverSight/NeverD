@@ -134,7 +134,7 @@ Pmovmskb,
 Movddup, Movshdup, Movsldup,
 Phminposuw, Vpmultishiftqb,
 Vrange, Vgetexp, Vgetmant, Vfixupimm, Vfpclass,
-Dpps, Mpsadbw, Vscalef, Vexp2, Vreduce, Vdbpsadbw,
+Dpps, Mpsadbw, Vscalef, Vexp2, Vreduce, Vdbpsadbw, X86FourFMA,
 Vpshufbitqmb,
 
 // AES — one code per instruction for correct LLVM intrinsic mapping.
@@ -232,3 +232,106 @@ PrefetchT0, PrefetchT1, PrefetchT2, PrefetchNta, PrefetchW, PrefetchWT1,
 Xsave, Xsavec, Xsaves, Xsaveopt, Xrstor, Xrstors,
 Fxsave64Mem, Fxrstor64Mem,
 X87Fldenv, X87Fnstenv, X87Frstor, X87Fnsave,
+
+// Append-only: byte/word masked memory primitives used by EVEX VMOVDQU8/16.
+// D/Q reuse the older VPMASKMOV primitives; every width has identical
+// fault-suppressing semantics and carries FS/GS in LowIR.
+MaskedLoadB, MaskedLoadW, MaskedStoreW,
+
+// Append-only: fail-closed architectural precondition used when an x86
+// instruction requires a power-of-two alignment before any of its effects.
+RequireAligned,
+
+// Append-only: architectural AMX-TILE state operations.  The restartable
+// load/store forms carry the exact 64-byte TILECFG image and full 1 KiB
+// tile container so strict emulation can preserve completed rows across a
+// fault.
+AMXLoadConfig, AMXStoreConfig, AMXTileLoad, AMXTileStore, AMXTileZero,
+AMXClearStartRow, AMXTileCompute, AMXTileRow,
+
+// Append-only: exact F16C conversion.  This remains an intrinsic because
+// the operation updates MXCSR exception state in addition to producing a
+// value.
+F16CConvert,
+
+// Append-only: exact, reference-defined x86 approximation operations.  The
+// active-lane mask is an input so inactive elements suppress all evaluation.
+X86ApproxFloat,
+
+// Append-only: contiguous packed memory forms of EVEX compress/expand.  The
+// control byte stores the element width in its low nibble and expand {z} in
+// bit 7.  These are distinct from ordinary masked loads/stores: active lanes
+// consume consecutive memory elements rather than lane-strided addresses.
+EVEXCompressStore, EVEXExpandLoad,
+
+// Append-only: exact VFPCLASS classification.  The control byte selects float
+// width/scalar topology; the operation reads MXCSR.DAZ but raises no
+// floating-point exceptions.
+X86FPClass,
+
+// Append-only: APX atomic read-modify-write instructions.  The RAO family has
+// no register result; CMPccXADD returns the old memory value so the lifter can
+// commit the compare-register and arithmetic flags only after the atomic
+// memory operation succeeds.
+ApxRaoAdd, ApxRaoAnd, ApxRaoOr, ApxRaoXor, ApxCmpccXadd,
+
+// Append-only: opaque architectural memory effects.  CET writes retain their
+// effective address and scalar source; enqueue retains the portal address,
+// command-source address, complete 64-byte command and one-bit ZF result.
+Enqcmd, Enqcmds,
+
+// Append-only: exact x86 SIMD floating-point arithmetic.  The packed control
+// word selects operation, topology, rounding, SAE, and FMA sign behavior;
+// the final input is the compact active-lane mask.
+X86FPArith,
+
+// Append-only: exact x86 packed integer/float conversion.  The control word
+// retains lane widths/count, rounding, truncation, and SAE; the final input is
+// the compact active-lane mask.
+X86FPConvert,
+
+// Append-only: exact immediate-controlled x86 rounding transformations.
+// The control byte selects RNDSCALE versus REDUCE, element width, scalar
+// topology, and SAE; imm8 and the compact active-lane mask remain operands.
+X86FPRoundTransform,
+
+// Append-only: exact VGETEXP/VGETMANT extraction with architectural
+// exception, DAZ, scalar, and active-lane behavior.
+X86FPExtract,
+
+// Append-only: exact VRANGE comparison and sign-selection semantics.
+X86FPRange,
+
+// Append-only: exact VFIXUPIMM classification-table responses and requested
+// masked exception-status reporting.
+X86FPFixup,
+
+// Append-only: exact VSCALEF power-of-two scaling, special values, rounding,
+// MXCSR exceptions, DAZ, FTZ, and inactive-lane behavior.
+X86FPScale,
+
+// Append-only: AVX-512 4VNNIW signed word dot-product/accumulate.  The
+// memory operand is the architectural 16-byte Tuple1_4X and the source is a
+// four-register ZMM block selected from EVEX.vvvv.  The two IDs keep wrapping
+// and per-iteration signed saturation unambiguous to every consumer.
+X86VP4DPWSSD, X86VP4DPWSSDS,
+
+// Append-only: exact EVEX VCMPPS/PD/SS/SD predicate evaluation.  The control
+// byte retains lane width, scalar topology and SAE; the remaining inputs carry
+// both sources, the compact active-lane mask and the full imm8 predicate.
+X86FPCompare,
+
+// Append-only: opaque architectural translation-cache invalidation.  The
+// effect retains the descriptor effective address and invalidation type but
+// never pretends that an ordinary host memory operation flushes guest state.
+X86Invalidate,
+
+// Append-only: validate the x86 DIV/IDIV divisor and double-width dividend
+// before target-independent division.  Keeping this as an ordered side effect
+// prevents all architectural writes on a #DE path.
+X86RequireDivPrecondition,
+
+// Append-only: explicit-operand RDMSR/WRMSRNS/URDMSR/UWRMSR.  The kind,
+// selector and optional write value are retained for an authenticated
+// architectural execution environment; ordinary backends fail closed.
+X86MsrAccess,

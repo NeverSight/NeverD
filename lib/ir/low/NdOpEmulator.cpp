@@ -19,6 +19,7 @@
 #include "neverd/ir/intrinsics/Intrinsics.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <utility>
 
@@ -103,11 +104,13 @@ void NdOpEmulator::reset() {
   Registers.clear();
   WideRegisters.clear();
   MemStore.clear();
+  MemStoreBytes.clear();
   MXCSR = 0x1f80;
   LoadLog.clear();
   ReachedIndirectBranchTarget.reset();
   ReachedSourceMode.reset();
   ReachedTargetMode.reset();
+  resetX87State();
 }
 
 void NdOpEmulator::setRegister(uint64_t RegOff, uint64_t Value) {
@@ -159,19 +162,37 @@ bool NdOpEmulator::setMemoryAddressSpaceBase(NdMemoryAddressSpace AddressSpace,
   return false;
 }
 
+bool NdOpEmulator::setX86EnqueueContext(uint8_t CurrentPrivilegeLevel,
+                                        uint32_t IA32Pasid,
+                                        uint8_t LinearAddressBits) {
+  if (Img.Arch != Arch::X64 || CurrentPrivilegeLevel > 3 ||
+      (IA32Pasid & UINT32_C(0x7ff00000)) != 0 ||
+      (LinearAddressBits != 48 && LinearAddressBits != 57))
+    return false;
+  X86CurrentPrivilegeLevel = CurrentPrivilegeLevel;
+  X86IA32Pasid = IA32Pasid;
+  X86LinearAddressBits = LinearAddressBits;
+  return true;
+}
+
 uint64_t NdOpEmulator::readOperand(const NdVar &Op) const {
+  auto Truncate = [&](uint64_t Value) {
+    if (Op.Size == 0 || Op.Size >= sizeof(Value))
+      return Value;
+    const unsigned Bits = Op.Size * 8;
+    return Value & ((UINT64_C(1) << Bits) - 1);
+  };
   if (Op.isConst())
-    return Op.Offset;
+    return Truncate(Op.Offset);
   if (Op.isReg() || Op.isTemp()) {
     auto It = Registers.find(Op.Offset);
     if (It != Registers.end())
-      return It->second;
+      return Truncate(It->second);
   }
   return 0;
 }
 
-std::vector<uint8_t>
-NdOpEmulator::readOperandBytes(const NdVar &Op) const {
+std::vector<uint8_t> NdOpEmulator::readOperandBytes(const NdVar &Op) const {
   std::vector<uint8_t> Bytes(Op.Size, 0);
   if (Op.isConst()) {
     if (!Bytes.empty())
@@ -189,8 +210,7 @@ NdOpEmulator::readOperandBytes(const NdVar &Op) const {
   }
   const uint64_t Scalar = readOperand(Op);
   if (!Bytes.empty())
-    std::memcpy(Bytes.data(), &Scalar,
-                std::min(Bytes.size(), sizeof(Scalar)));
+    std::memcpy(Bytes.data(), &Scalar, std::min(Bytes.size(), sizeof(Scalar)));
   return Bytes;
 }
 
@@ -201,21 +221,40 @@ NdOpEmulator::resolveMemoryAddress(const LowOp &Op, uint64_t Offset) const {
   auto It = MemoryAddressSpaceBases.find(Op.MemoryAddressSpace);
   if (It == MemoryAddressSpaceBases.end())
     return std::nullopt;
-  uint64_t Address = It->second + Offset;
   if (Img.Arch == Arch::X86)
-    Address &= UINT64_C(0xffffffff);
-  return Address;
+    return (It->second + Offset) & UINT64_C(0xffffffff);
+  if (Offset > UINT64_MAX - It->second)
+    return std::nullopt;
+  return It->second + Offset;
 }
 
 void NdOpEmulator::writeOutput(const NdVar &Output, uint64_t Value) {
   if (!Output.isReg() && !Output.isTemp())
     return;
   uint64_t Mask = Output.Size < 8 ? (1ULL << (Output.Size * 8)) - 1 : ~0ULL;
-  Registers[Output.Offset] = Value & Mask;
+  uint64_t Result = Value & Mask;
+  if (Output.isReg() && Output.Size < 8) {
+    auto Existing = Registers.find(Output.Offset);
+    if (Existing != Registers.end())
+      Result = (Existing->second & ~Mask) | Result;
+  }
+  Registers[Output.Offset] = Result;
   if (Output.Size > sizeof(Value)) {
     std::vector<uint8_t> Bytes(Output.Size, 0);
     std::memcpy(Bytes.data(), &Value, sizeof(Value));
     WideRegisters[Output.Offset] = std::move(Bytes);
+  } else if (Output.isReg()) {
+    auto Existing = WideRegisters.find(Output.Offset);
+    if (Existing != WideRegisters.end() &&
+        Existing->second.size() > Output.Size) {
+      std::memcpy(Existing->second.data(), &Result, Output.Size);
+      uint64_t Low = 0;
+      std::memcpy(&Low, Existing->second.data(),
+                  std::min(Existing->second.size(), sizeof(Low)));
+      Registers[Output.Offset] = Low;
+      return;
+    }
+    WideRegisters.erase(Output.Offset);
   } else {
     WideRegisters.erase(Output.Offset);
   }
@@ -225,6 +264,30 @@ void NdOpEmulator::writeOutputBytes(const NdVar &Output,
                                     llvm::ArrayRef<uint8_t> Value) {
   if (!Output.isReg() && !Output.isTemp())
     return;
+  if (Output.isReg()) {
+    auto Existing = WideRegisters.find(Output.Offset);
+    if (Existing != WideRegisters.end() &&
+        Existing->second.size() > Output.Size) {
+      std::copy_n(Value.begin(), std::min<size_t>(Output.Size, Value.size()),
+                  Existing->second.begin());
+      if (Value.size() < Output.Size)
+        std::fill(Existing->second.begin() + Value.size(),
+                  Existing->second.begin() + Output.Size, 0);
+      uint64_t Low = 0;
+      std::memcpy(&Low, Existing->second.data(),
+                  std::min(Existing->second.size(), sizeof(Low)));
+      Registers[Output.Offset] = Low;
+      return;
+    }
+    if (Output.Size <= sizeof(uint64_t)) {
+      uint64_t Low = 0;
+      if (!Value.empty())
+        std::memcpy(&Low, Value.data(),
+                    std::min<size_t>(Output.Size, Value.size()));
+      writeOutput(Output, Low);
+      return;
+    }
+  }
   std::vector<uint8_t> Bytes(Output.Size, 0);
   std::copy_n(Value.begin(), std::min(Bytes.size(), Value.size()),
               Bytes.begin());
@@ -238,55 +301,65 @@ void NdOpEmulator::writeOutputBytes(const NdVar &Output,
     WideRegisters.erase(Output.Offset);
 }
 
+std::optional<std::vector<uint8_t>>
+NdOpEmulator::loadMemoryBytes(uint64_t Addr, uint16_t Size) const {
+  if (Size == 0 || Size - 1 > UINT64_MAX - Addr)
+    return std::nullopt;
+  std::vector<uint8_t> Bytes(Size);
+  for (uint16_t I = 0; I < Size; ++I) {
+    const uint64_t ByteAddress = Addr + I;
+    if (const auto Stored = MemStoreBytes.find(ByteAddress);
+        Stored != MemStoreBytes.end()) {
+      Bytes[I] = Stored->second;
+    } else {
+      const Segment *Mapped = Img.getSegmentFor(ByteAddress);
+      if (!Mapped || !Mapped->isReadable() || ByteAddress < Mapped->VA)
+        return std::nullopt;
+      const uint64_t Offset = ByteAddress - Mapped->VA;
+      if (Offset >= Mapped->Data.size())
+        return std::nullopt;
+      Bytes[I] = Mapped->Data[static_cast<size_t>(Offset)];
+    }
+  }
+  return Bytes;
+}
+
 std::optional<uint64_t> NdOpEmulator::loadMemory(uint64_t Addr,
                                                  uint16_t Size) const {
   if (Size != 1 && Size != 2 && Size != 4 && Size != 8)
     return std::nullopt;
-
-  // Check write-back store first (overlay semantics).
-  auto StIt = MemStore.find(Addr);
-  if (StIt != MemStore.end()) {
-    uint64_t Mask = Size < 8 ? (1ULL << (Size * 8)) - 1 : ~0ULL;
-    return StIt->second & Mask;
-  }
-
-  const auto *Seg = Img.getSegmentFor(Addr);
-  if (!Seg || Seg->Data.empty())
+  const auto Bytes = loadMemoryBytes(Addr, Size);
+  if (!Bytes)
     return std::nullopt;
-
-  size_t Off = static_cast<size_t>(Addr - Seg->VA);
-  if (!rangeInBounds(Off, Size, Seg->Data.size()))
-    return std::nullopt;
-
-  const uint8_t *P = Seg->Data.data() + Off;
   uint64_t Val = 0;
-  switch (Size) {
-  case 1:
-    Val = *P;
-    break;
-  case 2: {
-    uint16_t V;
-    std::memcpy(&V, P, 2);
-    Val = V;
-    break;
-  }
-  case 4: {
-    uint32_t V;
-    std::memcpy(&V, P, 4);
-    Val = V;
-    break;
-  }
-  case 8:
-    std::memcpy(&Val, P, 8);
-    break;
-  default:
-    return std::nullopt;
-  }
+  std::memcpy(&Val, Bytes->data(), Size);
   return Val;
 }
 
-bool NdOpEmulator::storeMemory(uint64_t Addr, uint16_t Size, uint64_t Value) {
-  if (static_cast<int>(MemStore.size()) >= limits::kMaxEmulatorStoreEntries) {
+bool NdOpEmulator::canWriteMemoryBytes(uint64_t Addr, uint16_t Size) const {
+  if (Size == 0 || Size - 1 > UINT64_MAX - Addr)
+    return false;
+  if (!StrictMode)
+    return true;
+  for (uint16_t I = 0; I < Size; ++I) {
+    const uint64_t ByteAddress = Addr + I;
+    const Segment *Mapped = Img.getSegmentFor(ByteAddress);
+    if (!Mapped || !Mapped->isWritable() || ByteAddress < Mapped->VA ||
+        ByteAddress - Mapped->VA >= Mapped->Size)
+      return false;
+  }
+  return true;
+}
+
+bool NdOpEmulator::storeMemoryBytes(uint64_t Addr,
+                                    llvm::ArrayRef<uint8_t> Value) {
+  if (Value.empty() || Value.size() > UINT16_MAX)
+    return false;
+  const uint16_t Size = static_cast<uint16_t>(Value.size());
+  if (!canWriteMemoryBytes(Addr, Size))
+    return false;
+  if (!MemStore.contains(Addr) &&
+      static_cast<int>(MemStore.size()) >= limits::kMaxEmulatorStoreEntries) {
     // A dropped store leaves whatever was underneath it visible to the next
     // load of the same address, so it is not a missing write but a wrong read
     // waiting to happen.  The bound stays; what changes is that a caller can
@@ -294,9 +367,20 @@ bool NdOpEmulator::storeMemory(uint64_t Addr, uint16_t Size, uint64_t Value) {
     ++Skips.DroppedStores;
     return false;
   }
-  uint64_t Mask = Size < 8 ? (1ULL << (Size * 8)) - 1 : ~0ULL;
-  MemStore[Addr] = Value & Mask;
+  uint64_t Low = 0;
+  std::memcpy(&Low, Value.data(), std::min<size_t>(Value.size(), sizeof(Low)));
+  MemStore[Addr] = Low;
+  for (uint16_t I = 0; I < Size; ++I)
+    MemStoreBytes[Addr + I] = Value[I];
   return true;
+}
+
+bool NdOpEmulator::storeMemory(uint64_t Addr, uint16_t Size, uint64_t Value) {
+  if (Size != 1 && Size != 2 && Size != 4 && Size != 8)
+    return false;
+  std::array<uint8_t, sizeof(Value)> Bytes{};
+  std::memcpy(Bytes.data(), &Value, Size);
+  return storeMemoryBytes(Addr, llvm::ArrayRef(Bytes).take_front(Size));
 }
 
 void NdOpEmulator::setCallPreservedRegisters(std::vector<uint64_t> Regs) {
@@ -332,6 +416,17 @@ bool NdOpEmulator::step(const LowOp &Op) {
   // Never approximate an invalid address-space tag as ordinary memory.
   if (!isKnownMemoryAddressSpace(Op.MemoryAddressSpace))
     return false;
+  if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs > 0 &&
+      Op.Inputs[0].isConst() &&
+      (static_cast<Intrinsic>(Op.Inputs[0].Offset) ==
+           Intrinsic::X86Invalidate ||
+       static_cast<Intrinsic>(Op.Inputs[0].Offset) ==
+           Intrinsic::X86MsrAccess)) {
+    // A scalar tracer has neither CPL/CR4/CPUID state nor a guest TLB.  Even a
+    // structurally valid invalidation or MSR access must therefore stop here
+    // rather than pretending the architectural state transition succeeded.
+    return false;
+  }
   if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default) {
     if (!opcodeSupportsMemoryAddressSpace(Op.Opcode))
       return false;
@@ -340,21 +435,18 @@ bool NdOpEmulator::step(const LowOp &Op) {
         return false;
       const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
       if (!intrinsicSupportsMemoryAddressSpace(Id) ||
-          !intrinsicMemoryAddressSpaceShapeIsValid(Id, Op.NumInputs,
-                                                   Op.Output.Size,
-                                                   Op.NumInputs > 1
-                                                       ? Op.Inputs[1].Size
-                                                       : 0,
-                                                   Op.NumInputs > 2
-                                                       ? Op.Inputs[2].Size
-                                                       : 0,
-                                                   Op.NumInputs > 3
-                                                       ? Op.Inputs[3].Size
-                                                       : 0))
+          !intrinsicMemoryAddressSpaceShapeIsValid(
+              Id, Op.NumInputs, Op.Output.Size,
+              Op.NumInputs > 1 ? Op.Inputs[1].Size : 0,
+              Op.NumInputs > 2 ? Op.Inputs[2].Size : 0,
+              Op.NumInputs > 3 ? Op.Inputs[3].Size : 0))
         return false;
       switch (Id) {
+      case Intrinsic::MaskedLoadB:
+      case Intrinsic::MaskedLoadW:
       case Intrinsic::MaskedLoadD:
       case Intrinsic::MaskedLoadQ:
+      case Intrinsic::MaskedStoreW:
       case Intrinsic::MaskedStoreD:
       case Intrinsic::MaskedStoreQ:
       case Intrinsic::MaskedStoreB:
@@ -370,6 +462,21 @@ bool NdOpEmulator::step(const LowOp &Op) {
       case Intrinsic::PrefetchWT1:
       case Intrinsic::Ldmxcsr:
       case Intrinsic::Stmxcsr:
+      case Intrinsic::AMXLoadConfig:
+      case Intrinsic::AMXStoreConfig:
+      case Intrinsic::AMXTileLoad:
+      case Intrinsic::AMXTileStore:
+      case Intrinsic::X86FourFMA:
+      case Intrinsic::X86VP4DPWSSD:
+      case Intrinsic::X86VP4DPWSSDS:
+      case Intrinsic::RequireAligned:
+      case Intrinsic::ApxRaoAdd:
+      case Intrinsic::ApxRaoAnd:
+      case Intrinsic::ApxRaoOr:
+      case Intrinsic::ApxRaoXor:
+      case Intrinsic::ApxCmpccXadd:
+      case Intrinsic::Enqcmd:
+      case Intrinsic::Enqcmds:
         return executeIntrinsic(Op);
       default:
         // Segmented strings still require architectural REP/DF/flags state
@@ -414,15 +521,46 @@ bool NdOpEmulator::step(const LowOp &Op) {
   case NdOp::INTRINSIC:
     if (Op.NumInputs >= 1 && Op.Inputs[0].isConst()) {
       const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
-      if (Id == Intrinsic::MaskedLoadD || Id == Intrinsic::MaskedLoadQ ||
-          Id == Intrinsic::MaskedStoreD || Id == Intrinsic::MaskedStoreQ ||
-          Id == Intrinsic::MaskedStoreB || Id == Intrinsic::Clflush ||
-          Id == Intrinsic::Clflushopt || Id == Intrinsic::Clwb ||
-          Id == Intrinsic::Prefetch || Id == Intrinsic::PrefetchT0 ||
-          Id == Intrinsic::PrefetchT1 || Id == Intrinsic::PrefetchT2 ||
-          Id == Intrinsic::PrefetchNta || Id == Intrinsic::PrefetchW ||
-          Id == Intrinsic::PrefetchWT1 || Id == Intrinsic::Ldmxcsr ||
-          Id == Intrinsic::Stmxcsr)
+      if (Id == Intrinsic::X87Fprem || Id == Intrinsic::X87Fprem1 ||
+          Id == Intrinsic::X87ReadStatus || Id == Intrinsic::X87Fninit ||
+          Id == Intrinsic::X87Fnclex)
+        return executeX87(Op);
+      if (Id == Intrinsic::MaskedLoadB || Id == Intrinsic::MaskedLoadW ||
+          Id == Intrinsic::MaskedLoadD || Id == Intrinsic::MaskedLoadQ ||
+          Id == Intrinsic::MaskedStoreW || Id == Intrinsic::MaskedStoreD ||
+          Id == Intrinsic::MaskedStoreQ || Id == Intrinsic::MaskedStoreB ||
+          Id == Intrinsic::Clflush || Id == Intrinsic::Clflushopt ||
+          Id == Intrinsic::Clwb || Id == Intrinsic::Prefetch ||
+          Id == Intrinsic::PrefetchT0 || Id == Intrinsic::PrefetchT1 ||
+          Id == Intrinsic::PrefetchT2 || Id == Intrinsic::PrefetchNta ||
+          Id == Intrinsic::PrefetchW || Id == Intrinsic::PrefetchWT1 ||
+          Id == Intrinsic::Ldmxcsr || Id == Intrinsic::Stmxcsr ||
+          Id == Intrinsic::X86RequireDivPrecondition ||
+          Id == Intrinsic::RequireAligned || Id == Intrinsic::AMXLoadConfig ||
+          Id == Intrinsic::AMXStoreConfig || Id == Intrinsic::AMXTileLoad ||
+          Id == Intrinsic::AMXTileStore || Id == Intrinsic::AMXTileZero ||
+          Id == Intrinsic::AMXClearStartRow ||
+          Id == Intrinsic::AMXTileCompute || Id == Intrinsic::AMXTileRow ||
+          Id == Intrinsic::Pdep || Id == Intrinsic::Pext ||
+          Id == Intrinsic::Mpsadbw || Id == Intrinsic::Vdbpsadbw ||
+          Id == Intrinsic::X86FourFMA || Id == Intrinsic::F16CConvert ||
+          Id == Intrinsic::X86VP4DPWSSD || Id == Intrinsic::X86VP4DPWSSDS ||
+          Id == Intrinsic::X86ApproxFloat || Id == Intrinsic::X86FPClass ||
+          Id == Intrinsic::X86FPArith || Id == Intrinsic::X86FPConvert ||
+          Id == Intrinsic::X86FPRoundTransform ||
+          Id == Intrinsic::X86FPExtract ||
+          Id == Intrinsic::X86FPRange ||
+          Id == Intrinsic::X86FPFixup ||
+          Id == Intrinsic::X86FPScale ||
+          Id == Intrinsic::X86FPCompare ||
+          Id == Intrinsic::EVEXCompressStore ||
+          Id == Intrinsic::EVEXExpandLoad || Id == Intrinsic::AesEnc ||
+          Id == Intrinsic::AesEncLast || Id == Intrinsic::AesDec ||
+          Id == Intrinsic::AesDecLast || Id == Intrinsic::Pclmulqdq ||
+          Id == Intrinsic::ApxRaoAdd || Id == Intrinsic::ApxRaoAnd ||
+          Id == Intrinsic::ApxRaoOr || Id == Intrinsic::ApxRaoXor ||
+          Id == Intrinsic::ApxCmpccXadd || Id == Intrinsic::Enqcmd ||
+          Id == Intrinsic::Enqcmds)
         return executeIntrinsic(Op);
     }
     // Opaque intrinsic (SSE/NEON vector op, etc.): it cannot alter control
@@ -430,6 +568,8 @@ bool NdOpEmulator::step(const LowOp &Op) {
     // unknown — invalidate the output register so dependents do not fold a
     // stale value; registers it does not write (e.g. a loop-invariant table
     // base in a GP register materialised by a later `lea`) are preserved.
+    if (StrictMode)
+      return false;
     ++Skips.ApproximatedOps;
     if (Op.Output.isReg() || Op.Output.isTemp()) {
       Registers.erase(Op.Output.Offset);
@@ -463,6 +603,22 @@ bool NdOpEmulator::step(const LowOp &Op) {
   case NdOp::INT_RIGHT:
   case NdOp::INT_ASHR:
     return executeArith(Op);
+
+  case NdOp::FLOAT_ADD:
+  case NdOp::FLOAT_SUB:
+  case NdOp::FLOAT_MULT:
+  case NdOp::FLOAT_DIV:
+  case NdOp::FLOAT_FMA:
+  case NdOp::FLOAT_NEG:
+  case NdOp::FLOAT_SQRT:
+  case NdOp::FLOAT_LESS:
+    return executeFloatArith(Op);
+
+  case NdOp::FLOAT_INT2FLOAT:
+  case NdOp::FLOAT_UINT2FLOAT:
+  case NdOp::FLOAT_FLOAT2INT:
+  case NdOp::FLOAT_FLOAT2UINT:
+    return executeFloatConvert(Op);
 
   case NdOp::INT_EQUAL:
   case NdOp::INT_NOTEQUAL:
@@ -513,36 +669,48 @@ bool NdOpEmulator::step(const LowOp &Op) {
     auto Old = loadMemory(*Addr, Memory.AccessSize);
     if (!Old)
       return false;
+    if (!storeMemory(*Addr, Memory.AccessSize,
+                     *Old + readOperand(*Memory.StoredValue)))
+      return false;
     writeOutput(Op.Output, *Old);
-    return storeMemory(*Addr, Memory.AccessSize,
-                       *Old + readOperand(*Memory.StoredValue));
+    return true;
   }
 
   case NdOp::ATOMIC_CMPXCHG: {
     const LowMemoryOperandView Memory = lowMemoryOperands(Op);
     if (!Memory.Complete)
       return false;
+    auto Addr = resolveMemoryAddress(Op, readOperand(*Memory.Address));
+    if (!Addr || !canWriteMemoryBytes(*Addr, Memory.AccessSize))
+      return false;
+    if (Memory.AccessSize == 16) {
+      const auto Old = loadMemoryBytes(*Addr, 16);
+      const std::vector<uint8_t> Expected =
+          readOperandBytes(*Memory.ExpectedValue);
+      const std::vector<uint8_t> Desired =
+          readOperandBytes(*Memory.StoredValue);
+      if (!Old || Expected.size() != 16 || Desired.size() != 16)
+        return false;
+      if (*Old == Expected && !storeMemoryBytes(*Addr, Desired))
+        return false;
+      writeOutputBytes(Op.Output, *Old);
+      return true;
+    }
     if (Memory.AccessSize > 8) {
       ++Skips.UnsupportedOps;
-      if (Op.Output.isReg() || Op.Output.isTemp()) {
-        Registers.erase(Op.Output.Offset);
-        WideRegisters.erase(Op.Output.Offset);
-      }
       return false;
     }
-    auto Addr = resolveMemoryAddress(Op, readOperand(*Memory.Address));
-    if (!Addr)
-      return false;
     auto Old = loadMemory(*Addr, Memory.AccessSize);
     if (!Old)
       return false;
-    writeOutput(Op.Output, *Old);
     uint64_t Mask =
         Memory.AccessSize < 8 ? (1ULL << (Memory.AccessSize * 8)) - 1 : ~0ULL;
-    if (*Old != (readOperand(*Memory.ExpectedValue) & Mask))
-      return true;
-    return storeMemory(*Addr, Memory.AccessSize,
-                       readOperand(*Memory.StoredValue) & Mask);
+    if (*Old == (readOperand(*Memory.ExpectedValue) & Mask) &&
+        !storeMemory(*Addr, Memory.AccessSize,
+                     readOperand(*Memory.StoredValue) & Mask))
+      return false;
+    writeOutput(Op.Output, *Old);
+    return true;
   }
 
   case NdOp::NOP:

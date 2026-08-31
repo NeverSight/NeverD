@@ -10,9 +10,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/backend/llvm/MedLLVMEmitter.h"
-
 #include "neverd/backend/llvm/LanguageEHMetadata.h"
+#include "neverd/backend/llvm/MedLLVMEmitter.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-return"
 #include "neverd/ir/TargetRegInfo.h"
@@ -67,8 +66,8 @@ void MedLLVMEmitter::markCxxContinuationReturn(const MedOp &Op, int BlockId,
   llvm::Metadata *Operands[] = {
       llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
           llvm::Type::getInt64Ty(*Ctx), *ActiveCxxContinuationPlan)),
-      llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
-          llvm::Type::getInt64Ty(*Ctx), *Match))};
+      llvm::ConstantAsMetadata::get(
+          llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx), *Match))};
   Return.setMetadata(language_eh_md::InternalCxxContinuationReturnAttachment,
                      llvm::MDNode::get(*Ctx, Operands));
 }
@@ -238,10 +237,9 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     uint64_t HiRetOff = TRI.IntReturnReg2;
     const uint16_t IntegerReturnSize =
         WantWide64 ? TRI.PointerSize
-                   : RetTy->isIntegerTy()
-                         ? static_cast<uint16_t>(
-                               (RetTy->getIntegerBitWidth() + 7) / 8)
-                         : 0;
+        : RetTy->isIntegerTy()
+            ? static_cast<uint16_t>((RetTy->getIntegerBitWidth() + 7) / 8)
+            : 0;
     auto isAuthoritativeIntegerReturnView = [&](const MedVar &V) {
       if (WantFloat || V.RegOff != IntRetOff || IntegerReturnSize == 0)
         return false;
@@ -281,8 +279,7 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
             SawReturnView = true;
             RetVar = &RIt->Output;
           }
-        } else if (WantFloat && !WantX87 &&
-                   RIt->Output.RegOff == FloatRetOff) {
+        } else if (WantFloat && !WantX87 && RIt->Output.RegOff == FloatRetOff) {
           // The newest physical XMM/V register view is authoritative.  Do not
           // replace it with an older wider view merely to avoid coercion.
           if (!SawReturnView) {
@@ -430,8 +427,7 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           if (BIt->Output.Kind == MedVar::Reg && BIt->Output.Size > 0 &&
               (WantX87 ? TRI.isX87StackReg(BIt->Output.RegOff)
                        : BIt->Output.RegOff == RetRegOff)) {
-            if (!RetVar ||
-                (!WantFloat && BIt->Output.Size > RetVar->Size))
+            if (!RetVar || (!WantFloat && BIt->Output.Size > RetVar->Size))
               RetVar = &BIt->Output;
           }
         }
@@ -464,7 +460,10 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       MedVar FpLiveIn;
       FpLiveIn.Kind = MedVar::Reg;
       FpLiveIn.RegOff = RetRegOff;
-      FpLiveIn.Size = TRI.VecRegStride >= 16 ? 16 : 8;
+      const uint16_t ABIWidth = TRI.FPABIRegWidth != 0
+                                    ? TRI.FPABIRegWidth
+                                    : static_cast<uint16_t>(TRI.VecRegStride);
+      FpLiveIn.Size = ABIWidth >= 16 ? 16 : 8;
       FpLiveIn.SSAVer = 0;
       FpLiveIn.Id = -1;
       FpLiveIn.TheArch = TargetArch;

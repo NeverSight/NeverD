@@ -18,9 +18,306 @@
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/lift/X86Lifter.h"
 
+#include <algorithm>
+
 #define DEBUG_TYPE "neverd-lift-x86"
 
 namespace neverd {
+
+namespace {
+
+struct EvexPackedCompareSpec {
+  uint8_t Opcode = 0;
+  uint16_t ElementSize = 0;
+  bool W = false;
+  bool Signed = false;
+};
+
+bool getEvexPackedCompareSpec(unsigned InsnId, EvexPackedCompareSpec &Spec) {
+  switch (InsnId) {
+  case X86_INS_VPCMPB:
+    Spec = {0x3f, 1, false, true};
+    return true;
+  case X86_INS_VPCMPUB:
+    Spec = {0x3e, 1, false, false};
+    return true;
+  case X86_INS_VPCMPW:
+    Spec = {0x3f, 2, true, true};
+    return true;
+  case X86_INS_VPCMPUW:
+    Spec = {0x3e, 2, true, false};
+    return true;
+  case X86_INS_VPCMPD:
+    Spec = {0x1f, 4, false, true};
+    return true;
+  case X86_INS_VPCMPUD:
+    Spec = {0x1e, 4, false, false};
+    return true;
+  case X86_INS_VPCMPQ:
+    Spec = {0x1f, 8, true, true};
+    return true;
+  case X86_INS_VPCMPUQ:
+    Spec = {0x1e, 8, true, false};
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool isVectorRegisterOfSize(const cs_x86_op &Operand, uint16_t Size) {
+  if (Operand.type != X86_OP_REG || Operand.size != Size)
+    return false;
+  if (Size == 16)
+    return Operand.reg >= X86_REG_XMM0 && Operand.reg <= X86_REG_XMM31;
+  if (Size == 32)
+    return Operand.reg >= X86_REG_YMM0 && Operand.reg <= X86_REG_YMM31;
+  if (Size == 64)
+    return Operand.reg >= X86_REG_ZMM0 && Operand.reg <= X86_REG_ZMM31;
+  return false;
+}
+
+unsigned vectorRegisterIndex(const cs_x86_op &Operand) {
+  if (Operand.size == 16)
+    return static_cast<unsigned>(Operand.reg - X86_REG_XMM0);
+  if (Operand.size == 32)
+    return static_cast<unsigned>(Operand.reg - X86_REG_YMM0);
+  return static_cast<unsigned>(Operand.reg - X86_REG_ZMM0);
+}
+
+x86_avx_bcast broadcastForLaneCount(unsigned LaneCount) {
+  switch (LaneCount) {
+  case 2:
+    return X86_AVX_BCAST_2;
+  case 4:
+    return X86_AVX_BCAST_4;
+  case 8:
+    return X86_AVX_BCAST_8;
+  case 16:
+    return X86_AVX_BCAST_16;
+  default:
+    return X86_AVX_BCAST_INVALID;
+  }
+}
+
+bool beginsWithPotentialEvexPrefix(const cs_insn *Insn) {
+  if (!Insn)
+    return false;
+  size_t Offset = 0;
+  while (Offset < Insn->size) {
+    switch (Insn->bytes[Offset]) {
+    case 0xf0:
+    case 0xf2:
+    case 0xf3:
+    case 0x2e:
+    case 0x36:
+    case 0x3e:
+    case 0x26:
+    case 0x64:
+    case 0x65:
+    case 0x66:
+    case 0x67:
+      ++Offset;
+      continue;
+    default:
+      return Insn->bytes[Offset] == 0x62;
+    }
+  }
+  return false;
+}
+
+struct EvexFPCompareSpec {
+  uint8_t Prefix = 0;
+  uint16_t ElementSize = 0;
+  bool W = false;
+  bool Scalar = false;
+};
+
+bool getEvexFPCompareSpec(unsigned InsnId, EvexFPCompareSpec &Spec) {
+  switch (InsnId) {
+  case X86_INS_VCMPPS:
+    Spec = {0, 4, false, false};
+    return true;
+  case X86_INS_VCMPPD:
+    Spec = {1, 8, true, false};
+    return true;
+  case X86_INS_VCMPSS:
+    Spec = {2, 4, false, true};
+    return true;
+  case X86_INS_VCMPSD:
+    Spec = {3, 8, true, true};
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool liftEvexFPCompare(X86Lifter &L, X86Lifter::LiftState &S,
+                       const cs_insn *Insn, const cs_x86 &X86) {
+  EvexFPCompareSpec Spec;
+  if (!Insn || !getEvexFPCompareSpec(Insn->id, Spec))
+    return false;
+
+  CanonicalEvexEncodingInfo Encoding;
+  if (!parseCanonicalEvexEncodingInfo(Insn, X86, L.targetArch(), Encoding) ||
+      (Encoding.P0 & 0x07) != 0x01 || (Encoding.P0 & 0x90) != 0x90 ||
+      (Encoding.P1 & 0x87) !=
+          static_cast<uint8_t>((Spec.W ? 0x80 : 0) | 0x04 | Spec.Prefix) ||
+      Encoding.Opcode != 0xc2 || X86.encoding.imm_size != 1 ||
+      X86.encoding.imm_offset != Insn->size - 1 || (Encoding.P2 & 0x80) != 0 ||
+      X86.avx_rm != X86_AVX_RM_INVALID)
+    return false;
+
+  const bool HasWriteMask =
+      X86.op_count >= 4 && isX86OpmaskOperand(X86.operands[1]);
+  const unsigned BaseOperandCount = HasWriteMask ? 4 : 3;
+  const bool HasImmediate = X86.op_count == BaseOperandCount + 1 &&
+                            X86.operands[X86.op_count - 1].type == X86_OP_IMM;
+  if ((X86.op_count != BaseOperandCount && !HasImmediate) ||
+      X86.op_count > BaseOperandCount + 1)
+    return false;
+
+  const unsigned FirstSourceIndex = HasWriteMask ? 2 : 1;
+  const unsigned SecondSourceIndex = FirstSourceIndex + 1;
+  const cs_x86_op &DestinationOperand = X86.operands[0];
+  const cs_x86_op &FirstSourceOperand = X86.operands[FirstSourceIndex];
+  const cs_x86_op &SecondSourceOperand = X86.operands[SecondSourceIndex];
+  const uint8_t RawImmediate = Insn->bytes[Insn->size - 1];
+  if (HasImmediate) {
+    const cs_x86_op &ImmediateOperand = X86.operands[X86.op_count - 1];
+    if (ImmediateOperand.size != 1 ||
+        static_cast<uint8_t>(ImmediateOperand.imm) != RawImmediate)
+      return false;
+  }
+
+  const bool MemoryForm = SecondSourceOperand.type == X86_OP_MEM;
+  if (MemoryForm != ((Encoding.ModRM & 0xc0) != 0xc0))
+    return false;
+  // EVEX.P0.B4 extends an APX memory base, but cannot name a vector register
+  // beyond ZMM31 in a ModRM register form.
+  if (!MemoryForm && (Encoding.P0 & 0x08) != 0)
+    return false;
+  const bool EncodedB = (Encoding.P2 & 0x10) != 0;
+  const bool Broadcast = MemoryForm && EncodedB;
+  const bool SuppressExceptions = !MemoryForm && EncodedB;
+  const uint8_t EncodedLength = Encoding.P2 & 0x60;
+  if ((MemoryForm && Spec.Scalar && EncodedB) ||
+      (!Spec.Scalar && !SuppressExceptions && EncodedLength == 0x60) ||
+      X86.avx_sae != SuppressExceptions)
+    return false;
+
+  // Packed register SAE has fixed 512-bit semantics and ignores encoded L'L.
+  // Scalar forms always use XMM inputs and likewise ignore L'L.
+  const uint16_t VectorSize =
+      Spec.Scalar || SuppressExceptions
+          ? static_cast<uint16_t>(Spec.Scalar ? 16 : 64)
+          : static_cast<uint16_t>(EncodedLength == 0      ? 16
+                                  : EncodedLength == 0x20 ? 32
+                                                          : 64);
+  const unsigned LaneCount = Spec.Scalar ? 1 : VectorSize / Spec.ElementSize;
+  const uint16_t MaskSize =
+      static_cast<uint16_t>(std::max(1u, (LaneCount + 7u) / 8u));
+  const uint16_t MemoryTupleSize =
+      Spec.Scalar || Broadcast ? Spec.ElementSize : VectorSize;
+
+  if (!isX86OpmaskOperand(DestinationOperand) ||
+      DestinationOperand.size != MaskSize ||
+      !isVectorRegisterOfSize(FirstSourceOperand, VectorSize) ||
+      ((Encoding.ModRM >> 3) & 7) !=
+          static_cast<unsigned>(DestinationOperand.reg - X86_REG_K0) ||
+      decodeEvexVectorVvvvIndex(Encoding.P1, Encoding.P2) !=
+          vectorRegisterIndex(FirstSourceOperand))
+    return false;
+
+  if (MemoryForm) {
+    if (SecondSourceOperand.size != MemoryTupleSize ||
+        !validateCanonicalEvexMemoryTail(Insn, X86, Encoding,
+                                         SecondSourceOperand, MemoryTupleSize,
+                                         1))
+      return false;
+  } else if (!isVectorRegisterOfSize(SecondSourceOperand, VectorSize) ||
+             decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) !=
+                 vectorRegisterIndex(SecondSourceOperand) ||
+             !validateCanonicalEvexRegisterTail(Insn, X86, Encoding, 1)) {
+    return false;
+  }
+
+  if (L.targetArch() == Arch::X86 &&
+      (vectorRegisterIndex(FirstSourceOperand) >= 8 ||
+       (!MemoryForm && vectorRegisterIndex(SecondSourceOperand) >= 8)))
+    return false;
+
+  const uint8_t EncodedMask = Encoding.P2 & 7;
+  if (HasWriteMask) {
+    const cs_x86_op &MaskOperand = X86.operands[1];
+    const RegInfo MaskInfo =
+        mapCapstoneReg(static_cast<x86_reg>(MaskOperand.reg));
+    if (MaskOperand.reg == X86_REG_K0 || MaskOperand.size != MaskSize ||
+        EncodedMask != MaskOperand.reg - X86_REG_K0 ||
+        MaskInfo.Offset == UINT64_C(0xffff) || MaskInfo.Size < MaskSize)
+      return false;
+  } else if (EncodedMask != 0) {
+    return false;
+  }
+
+  const x86_avx_bcast ExpectedBroadcast =
+      Broadcast ? broadcastForLaneCount(LaneCount) : X86_AVX_BCAST_INVALID;
+  for (unsigned Index = 0; Index < X86.op_count; ++Index) {
+    const cs_x86_op &Operand = X86.operands[Index];
+    if (&Operand == &SecondSourceOperand) {
+      if (Operand.avx_bcast != ExpectedBroadcast)
+        return false;
+    } else if (Operand.avx_bcast != X86_AVX_BCAST_INVALID) {
+      return false;
+    }
+    // A K-result compare always zeros masked destination bits; EVEX.z has no
+    // independent architectural meaning for this instruction family.
+    if (Operand.avx_zero_opmask)
+      return false;
+  }
+
+  NdVar ActiveMask = NdVar::cst(
+      LaneCount == 64 ? UINT64_MAX : ((UINT64_C(1) << LaneCount) - 1),
+      MaskSize);
+  if (HasWriteMask) {
+    const RegInfo MaskInfo = mapCapstoneReg(
+        static_cast<x86_reg>(X86.operands[1].reg));
+    ActiveMask = NdVar::reg(MaskInfo.Offset, MaskSize);
+  }
+  if (Spec.Scalar && HasWriteMask) {
+    NdVar LowBit = S.makeTemp(1);
+    S.emit(NdOp::INT_AND, LowBit,
+           {ActiveMask, NdVar::cst(1, ActiveMask.Size)});
+    ActiveMask = LowBit;
+  }
+
+  const NdVar FirstSource = L.operandRead(S, FirstSourceOperand);
+  const NdVar SecondSource =
+      MemoryForm
+          ? emitEvexMaskedMemoryLoad(S, SecondSourceOperand, ActiveMask,
+                                     VectorSize, Spec.ElementSize,
+                                     MemoryTupleSize, Broadcast)
+          : L.operandRead(S, SecondSourceOperand);
+  if (FirstSource.Size != VectorSize || SecondSource.Size != VectorSize ||
+      ActiveMask.Size != MaskSize)
+    return false;
+
+  const uint8_t Control = makeX86FPCompareControl(
+      Spec.ElementSize == 8, Spec.Scalar, SuppressExceptions);
+  NdVar Compared = S.makeTemp(MaskSize);
+  S.emitIntrinsic(Intrinsic::X86FPCompare, Compared,
+                  {NdVar::cst(Control, 1), FirstSource, SecondSource, ActiveMask,
+                   NdVar::cst(RawImmediate, 1)});
+
+  const RegInfo DestinationInfo =
+      mapCapstoneReg(static_cast<x86_reg>(DestinationOperand.reg));
+  if (DestinationInfo.Offset == UINT64_C(0xffff) || DestinationInfo.Size != 8)
+    return false;
+  S.emit(NdOp::INT_ZEXT,
+         NdVar::reg(DestinationInfo.Offset, DestinationInfo.Size), {Compared});
+  return true;
+}
+
+} // namespace
 
 bool liftSIMDCompare(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
                      const cs_x86 &X86) {
@@ -345,6 +642,8 @@ bool liftSIMDCompare(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   case X86_INS_VCMPSD:
   case X86_INS_VCMPPS:
   case X86_INS_VCMPPD: {
+    if (beginsWithPotentialEvexPrefix(Insn))
+      return liftEvexFPCompare(L, S, Insn, X86);
     if (X86.op_count < 3)
       break;
     bool IsWide = (InsnId == X86_INS_VCMPPD || InsnId == X86_INS_VCMPSD);
@@ -443,26 +742,206 @@ bool liftSIMDCompare(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     break;
   }
 
-  // Generic VPCMP with predicate (AVX-512). Capstone 6 maps predicate-
-  // suffixed vpcmp* mnemonics to X86_INS_VPCMP /
-  // X86_INS_VPCMPB/D/Q/W/UB/UD/UQ/UW.
+  // AVX-512 packed integer compare into an opmask. Validate the complete EVEX
+  // shape before emitting IR: the writemask controls both destination bits and
+  // memory fault suppression, while a broadcast source performs at most one
+  // scalar access when any selected lane is active.
   case X86_INS_VPCMP:
+    return false;
   case X86_INS_VPCMPB:
   case X86_INS_VPCMPD:
   case X86_INS_VPCMPQ:
-  case X86_INS_VPCMPW:
   case X86_INS_VPCMPUB:
   case X86_INS_VPCMPUD:
   case X86_INS_VPCMPUQ:
+  case X86_INS_VPCMPW:
   case X86_INS_VPCMPUW: {
-    if (X86.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar A = (X86.op_count >= 3) ? L.operandRead(S, X86.operands[1])
-                                  : L.operandRead(S, X86.operands[0]);
-    NdVar B = L.operandRead(
-        S, X86.operands[X86.op_count >= 4 ? 2 : X86.op_count - 1]);
-    S.emit(NdOp::INT_EQUAL, Dst, {A, B});
+    EvexPackedCompareSpec Spec;
+    if (!getEvexPackedCompareSpec(InsnId, Spec))
+      return false;
+
+    const bool HasWriteMask =
+        X86.op_count >= 4 && isX86OpmaskOperand(X86.operands[1]);
+    const unsigned BaseOperandCount = HasWriteMask ? 4 : 3;
+    const bool HasImmediate = X86.op_count == BaseOperandCount + 1 &&
+                              X86.operands[X86.op_count - 1].type == X86_OP_IMM;
+    if ((X86.op_count != BaseOperandCount && !HasImmediate) || X86.avx_sae ||
+        X86.avx_rm != X86_AVX_RM_INVALID)
+      return false;
+
+    CanonicalEvexEncodingInfo Encoding;
+    if (!parseCanonicalEvexEncodingInfo(Insn, X86, L.targetArch(), Encoding) ||
+        (Encoding.P0 & 0x07) != 0x03 || (Encoding.P0 & 0x90) != 0x90 ||
+        ((Encoding.P1 | 0x04) & 0x87) != (Spec.W ? 0x85 : 0x05) ||
+        Encoding.Opcode != Spec.Opcode ||
+        X86.encoding.imm_offset != Insn->size - 1 ||
+        X86.encoding.imm_size != 1 || (Encoding.P2 & 0x80) != 0)
+      return false;
+
+    const uint8_t RawImmediate = Insn->bytes[Insn->size - 1];
+    unsigned Predicate = 8;
+    if (X86.avx_cc >= X86_AVX_CC_EQ && X86.avx_cc <= X86_AVX_CC_ORD)
+      Predicate = static_cast<unsigned>(X86.avx_cc - X86_AVX_CC_EQ);
+    else if (X86.avx_cc != X86_AVX_CC_INVALID)
+      return false;
+    if (HasImmediate) {
+      const cs_x86_op &Immediate = X86.operands[X86.op_count - 1];
+      if (Immediate.size != 1 ||
+          static_cast<uint8_t>(Immediate.imm) != RawImmediate)
+        return false;
+      const unsigned ImmediatePredicate = RawImmediate & 7;
+      if (Predicate != 8 && Predicate != ImmediatePredicate)
+        return false;
+      Predicate = ImmediatePredicate;
+    }
+    if (Predicate >= 8 || (RawImmediate & 7) != Predicate)
+      return false;
+
+    const cs_x86_op &DstOp = X86.operands[0];
+    const cs_x86_op &AOp = X86.operands[HasWriteMask ? 2 : 1];
+    const cs_x86_op &BOp = X86.operands[HasWriteMask ? 3 : 2];
+    const uint8_t EncodedLength = Encoding.P2 & 0x60;
+    if (EncodedLength == 0x60)
+      return false;
+    const uint16_t VectorSize = EncodedLength == 0      ? 16
+                                : EncodedLength == 0x20 ? 32
+                                                        : 64;
+    const bool MemoryForm = BOp.type == X86_OP_MEM;
+    const bool Broadcast = (Encoding.P2 & 0x10) != 0;
+    if (!isX86OpmaskOperand(DstOp) ||
+        !isVectorRegisterOfSize(AOp, VectorSize) ||
+        ((Encoding.ModRM >> 3) & 7) !=
+            static_cast<unsigned>(DstOp.reg - X86_REG_K0) ||
+        decodeEvexVectorVvvvIndex(Encoding.P1, Encoding.P2) !=
+            vectorRegisterIndex(AOp))
+      return false;
+
+    if (MemoryForm) {
+      if ((Encoding.ModRM & 0xc0) == 0xc0 ||
+          (Broadcast && Spec.ElementSize < 4) ||
+          BOp.size != (Broadcast ? Spec.ElementSize : VectorSize) ||
+          !validateCanonicalEvexMemoryTail(
+              Insn, X86, Encoding, BOp,
+              Broadcast ? Spec.ElementSize : VectorSize, 1))
+        return false;
+    } else if (!isVectorRegisterOfSize(BOp, VectorSize) || Broadcast ||
+               decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) !=
+                   vectorRegisterIndex(BOp) ||
+               !validateCanonicalEvexRegisterTail(Insn, X86, Encoding, 1)) {
+      return false;
+    }
+
+    const unsigned Lanes = VectorSize / Spec.ElementSize;
+    const uint16_t MaskSize = static_cast<uint16_t>((Lanes + 7) / 8);
+    if (DstOp.size != MaskSize ||
+        (HasWriteMask && X86.operands[1].size != MaskSize))
+      return false;
+
+    const uint8_t EncodedMask = Encoding.P2 & 7;
+    if (HasWriteMask) {
+      const cs_x86_op &Mask = X86.operands[1];
+      if (!isX86OpmaskOperand(Mask) || Mask.reg == X86_REG_K0 ||
+          EncodedMask != static_cast<uint8_t>(Mask.reg - X86_REG_K0))
+        return false;
+    } else if (EncodedMask != 0) {
+      return false;
+    }
+
+    const x86_avx_bcast ExpectedBroadcast =
+        Broadcast ? broadcastForLaneCount(Lanes) : X86_AVX_BCAST_INVALID;
+    if (BOp.avx_bcast != ExpectedBroadcast)
+      return false;
+    for (uint8_t Index = 0; Index < X86.op_count; ++Index) {
+      const cs_x86_op &Operand = X86.operands[Index];
+      if (&Operand != &BOp && Operand.avx_bcast != X86_AVX_BCAST_INVALID)
+        return false;
+      if (Operand.avx_zero_opmask)
+        return false;
+    }
+
+    const RegInfo DestinationInfo =
+        mapCapstoneReg(static_cast<x86_reg>(DstOp.reg));
+    if (DestinationInfo.Size != 8)
+      return false;
+    const NdVar Dst = NdVar::reg(DestinationInfo.Offset, DestinationInfo.Size);
+    NdVar A = L.operandRead(S, AOp);
+    NdVar ActiveMask = NdVar::cst(
+        Lanes == 64 ? UINT64_MAX : ((UINT64_C(1) << Lanes) - 1), MaskSize);
+    if (HasWriteMask)
+      ActiveMask = L.operandRead(S, X86.operands[1]);
+    NdVar B = MemoryForm
+                  ? emitEvexMaskedMemoryLoad(
+                        S, BOp, ActiveMask, VectorSize, Spec.ElementSize,
+                        Broadcast ? Spec.ElementSize : VectorSize, Broadcast)
+                  : L.operandRead(S, BOp);
+    if (A.Size != VectorSize || B.Size != VectorSize ||
+        ActiveMask.Size != MaskSize)
+      return false;
+
+    NdVar Packed = NdVar::cst(0, MaskSize);
+    for (unsigned Lane = 0; Lane < Lanes; ++Lane) {
+      NdVar LaneA = S.makeTemp(Spec.ElementSize);
+      NdVar LaneB = S.makeTemp(Spec.ElementSize);
+      S.emit(NdOp::SUBBYTES, LaneA,
+             {A, NdVar::cst(Lane * Spec.ElementSize, 4)});
+      S.emit(NdOp::SUBBYTES, LaneB,
+             {B, NdVar::cst(Lane * Spec.ElementSize, 4)});
+      NdVar Matches = S.makeTemp(1);
+      switch (Predicate) {
+      case 0: // EQ
+        S.emit(NdOp::INT_EQUAL, Matches, {LaneA, LaneB});
+        break;
+      case 1: // LT
+        S.emit(Spec.Signed ? NdOp::INT_SLESS : NdOp::INT_LESS, Matches,
+               {LaneA, LaneB});
+        break;
+      case 2: // LE
+        S.emit(Spec.Signed ? NdOp::INT_SLESSEQUAL : NdOp::INT_LESSEQUAL,
+               Matches, {LaneA, LaneB});
+        break;
+      case 3: // FALSE
+        S.emit(NdOp::COPY, Matches, {NdVar::cst(0, 1)});
+        break;
+      case 4: // NEQ
+        S.emit(NdOp::INT_NOTEQUAL, Matches, {LaneA, LaneB});
+        break;
+      case 5: // NLT
+        S.emit(Spec.Signed ? NdOp::INT_SLESSEQUAL : NdOp::INT_LESSEQUAL,
+               Matches, {LaneB, LaneA});
+        break;
+      case 6: // NLE
+        S.emit(Spec.Signed ? NdOp::INT_SLESS : NdOp::INT_LESS, Matches,
+               {LaneB, LaneA});
+        break;
+      case 7: // TRUE
+        S.emit(NdOp::COPY, Matches, {NdVar::cst(1, 1)});
+        break;
+      default:
+        return false;
+      }
+      NdVar Bit = S.makeTemp(MaskSize);
+      S.emit(NdOp::INT_ZEXT, Bit, {Matches});
+      if (Lane != 0) {
+        NdVar Shifted = S.makeTemp(MaskSize);
+        S.emit(NdOp::INT_LEFT, Shifted, {Bit, NdVar::cst(Lane, MaskSize)});
+        Bit = Shifted;
+      }
+      NdVar Next = S.makeTemp(MaskSize);
+      S.emit(NdOp::INT_OR, Next, {Packed, Bit});
+      Packed = Next;
+    }
+    if (HasWriteMask) {
+      NdVar Masked = S.makeTemp(MaskSize);
+      S.emit(NdOp::INT_AND, Masked, {Packed, ActiveMask});
+      Packed = Masked;
+    }
+    if (Packed.Size == Dst.Size) {
+      S.emit(NdOp::COPY, Dst, {Packed});
+    } else {
+      NdVar Cleared = S.makeTemp(Dst.Size);
+      S.emit(NdOp::INT_ZEXT, Cleared, {Packed});
+      S.emit(NdOp::COPY, Dst, {Cleared});
+    }
     break;
   }
 
@@ -470,19 +949,42 @@ bool liftSIMDCompare(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   case X86_INS_PTEST:
   case X86_INS_VPTEST: {
     if (X86.op_count < 2)
-      break;
+      return false;
     NdVar A = L.operandRead(S, X86.operands[0]);
     NdVar B = L.operandRead(S, X86.operands[1]);
-    NdVar Masked = S.makeTemp(A.Size);
-    S.emit(NdOp::INT_AND, Masked, {A, B});
-    S.emit(NdOp::INT_EQUAL, NdVar::reg(x86reg::ZF, 1),
-           {Masked, NdVar::cst(0, A.Size)});
-    NdVar AndNot = S.makeTemp(A.Size);
-    NdVar NegA = S.makeTemp(A.Size);
-    S.emit(NdOp::INT_NOT, NegA, {A});
-    S.emit(NdOp::INT_AND, AndNot, {NegA, B});
-    S.emit(NdOp::INT_EQUAL, NdVar::reg(x86reg::CF, 1),
-           {AndNot, NdVar::cst(0, A.Size)});
+    if (A.Size == 0 || A.Size != B.Size || A.Size % 8 != 0)
+      return false;
+
+    NdVar AllMaskedZero = NdVar::cst(1, 1);
+    NdVar AllAndNotZero = NdVar::cst(1, 1);
+    for (unsigned Offset = 0; Offset < A.Size; Offset += 8) {
+      NdVar APart = S.makeTemp(8);
+      NdVar BPart = S.makeTemp(8);
+      S.emit(NdOp::SUBBYTES, APart, {A, NdVar::cst(Offset, 4)});
+      S.emit(NdOp::SUBBYTES, BPart, {B, NdVar::cst(Offset, 4)});
+
+      NdVar Masked = S.makeTemp(8);
+      S.emit(NdOp::INT_AND, Masked, {APart, BPart});
+      NdVar MaskedZero = S.makeTemp(1);
+      S.emit(NdOp::INT_EQUAL, MaskedZero, {Masked, NdVar::cst(0, 8)});
+      NdVar NextMaskedZero = S.makeTemp(1);
+      S.emit(NdOp::BOOL_AND, NextMaskedZero, {AllMaskedZero, MaskedZero});
+      AllMaskedZero = NextMaskedZero;
+
+      NdVar NegA = S.makeTemp(8);
+      S.emit(NdOp::INT_NOT, NegA, {APart});
+      NdVar AndNot = S.makeTemp(8);
+      S.emit(NdOp::INT_AND, AndNot, {NegA, BPart});
+      NdVar AndNotZero = S.makeTemp(1);
+      S.emit(NdOp::INT_EQUAL, AndNotZero, {AndNot, NdVar::cst(0, 8)});
+      NdVar NextAndNotZero = S.makeTemp(1);
+      S.emit(NdOp::BOOL_AND, NextAndNotZero, {AllAndNotZero, AndNotZero});
+      AllAndNotZero = NextAndNotZero;
+    }
+    S.emit(NdOp::COPY, NdVar::reg(x86reg::ZF, 1), {AllMaskedZero});
+    S.emit(NdOp::COPY, NdVar::reg(x86reg::CF, 1), {AllAndNotZero});
+    for (uint64_t Flag : {x86reg::OF, x86reg::SF, x86reg::AF, x86reg::PF})
+      S.emit(NdOp::COPY, NdVar::reg(Flag, 1), {NdVar::cst(0, 1)});
     break;
   }
 

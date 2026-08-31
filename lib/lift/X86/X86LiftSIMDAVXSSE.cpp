@@ -454,11 +454,39 @@ bool liftSIMDAVXSSE(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   // PHMINPOSUW — packed horizontal unsigned word minimum + index.
   case X86_INS_PHMINPOSUW:
   case X86_INS_VPHMINPOSUW: {
-    if (X86.op_count < 2)
-      break;
+    if (X86.op_count != 2 || X86.operands[0].type != X86_OP_REG ||
+        (X86.operands[1].type != X86_OP_REG &&
+         X86.operands[1].type != X86_OP_MEM))
+      return false;
     NdVar Dst = L.operandWrite(X86.operands[0]);
     NdVar Src = L.operandRead(S, X86.operands[1]);
-    S.emitIntrinsic(Intrinsic::Phminposuw, Dst, {Src});
+    if (Dst.Size != 16 || Src.Size != 16)
+      return false;
+
+    NdVar Minimum = S.makeTemp(2);
+    S.emit(NdOp::SUBBYTES, Minimum, {Src, NdVar::cst(0, 4)});
+    NdVar FirstIndex = NdVar::cst(0, 2);
+    for (unsigned I = 1; I < 8; ++I) {
+      NdVar Candidate = S.makeTemp(2);
+      S.emit(NdOp::SUBBYTES, Candidate,
+             {Src, NdVar::cst(I * 2, 4)});
+      NdVar IsLess = S.makeTemp(1);
+      S.emit(NdOp::INT_LESS, IsLess, {Candidate, Minimum});
+
+      NdVar NextMinimum = S.makeTemp(2);
+      S.emit(NdOp::SELECT, NextMinimum, {IsLess, Candidate, Minimum});
+      Minimum = NextMinimum;
+      NdVar NextIndex = S.makeTemp(2);
+      S.emit(NdOp::SELECT, NextIndex,
+             {IsLess, NdVar::cst(I, 2), FirstIndex});
+      FirstIndex = NextIndex;
+    }
+
+    // A strict unsigned-less update preserves the first index on ties.
+    // Result words are {minimum, index, 0, 0, 0, 0, 0, 0}.
+    NdVar LowWords = S.makeTemp(4);
+    S.emit(NdOp::CONCAT, LowWords, {FirstIndex, Minimum});
+    S.emit(NdOp::INT_ZEXT, Dst, {LowWords});
     break;
   }
 

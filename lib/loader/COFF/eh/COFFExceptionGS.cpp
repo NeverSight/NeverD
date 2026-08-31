@@ -209,13 +209,14 @@ bool classifyX86Control(const BinaryImage &Img, Arch A, csh Handle,
     return false;
 
   Control.Kind = IsCall ? ControlKind::Call : ControlKind::Branch;
-  Control.Conditional = IsBranch && Insn.id != X86_INS_JMP;
+  Control.Conditional =
+      IsBranch && Insn.id != X86_INS_JMP && Insn.id != X86_INS_JMPABS;
   const cs_x86 &X = Insn.detail->x86;
   if (X.op_count != 1)
     return false;
   const cs_x86_op &Op = X.operands[0];
   if (Op.type == X86_OP_IMM) {
-    if (A == Arch::X64 && Op.imm < 0)
+    if (A == Arch::X64 && Op.imm < 0 && Insn.id != X86_INS_JMPABS)
       return false;
     Control.Target = A == Arch::X86
                          ? static_cast<va_t>(static_cast<uint32_t>(Op.imm))

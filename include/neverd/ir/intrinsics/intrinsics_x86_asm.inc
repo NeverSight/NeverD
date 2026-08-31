@@ -109,6 +109,8 @@ A(Intrinsic::CetWrss,      "wrssq");
 A(Intrinsic::CetWruss,     "wrussq");
 A(Intrinsic::CetSetssbsy,  "setssbsy");
 A(Intrinsic::CetClrssbsy,  "clrssbsy");
+A(Intrinsic::Enqcmd,       "enqcmd");
+A(Intrinsic::Enqcmds,      "enqcmds");
 
 // LWP
 A(Intrinsic::Llwpcb,       "llwpcb");

@@ -20,6 +20,133 @@
 
 namespace neverd {
 
+namespace {
+
+struct EvexPairwiseMulSpec {
+  uint8_t Map;
+  uint8_t Opcode;
+  uint16_t OutputElementSize;
+};
+
+bool beginsWithCanonicalEvexPrefix(const cs_insn *Insn) {
+  if (!Insn)
+    return false;
+  size_t Offset = 0;
+  while (Offset < Insn->size) {
+    const uint8_t Byte = Insn->bytes[Offset];
+    if (Byte == 0x62)
+      return true;
+    if (Byte != 0x26 && Byte != 0x2e && Byte != 0x36 && Byte != 0x3e &&
+        Byte != 0x64 && Byte != 0x65 && Byte != 0x67)
+      return false;
+    ++Offset;
+  }
+  return false;
+}
+
+bool isVectorRegisterOfSize(const cs_x86_op &Operand, uint16_t Size) {
+  if (Operand.type != X86_OP_REG || Operand.size != Size)
+    return false;
+  if (Size == 16)
+    return Operand.reg >= X86_REG_XMM0 && Operand.reg <= X86_REG_XMM31;
+  if (Size == 32)
+    return Operand.reg >= X86_REG_YMM0 && Operand.reg <= X86_REG_YMM31;
+  if (Size == 64)
+    return Operand.reg >= X86_REG_ZMM0 && Operand.reg <= X86_REG_ZMM31;
+  return false;
+}
+
+unsigned vectorRegisterIndex(const cs_x86_op &Operand) {
+  if (Operand.size == 16)
+    return static_cast<unsigned>(Operand.reg - X86_REG_XMM0);
+  if (Operand.size == 32)
+    return static_cast<unsigned>(Operand.reg - X86_REG_YMM0);
+  return static_cast<unsigned>(Operand.reg - X86_REG_ZMM0);
+}
+
+bool isEvexCandidate(const cs_insn *Insn, const cs_x86 &X86) {
+  return beginsWithCanonicalEvexPrefix(Insn) || X86.opcode[0] == 0x62 ||
+         (X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]));
+}
+
+bool validateEvexPairwiseMul(X86Lifter &L, const cs_insn *Insn,
+                             const cs_x86 &X86, const EvexPairwiseMulSpec &Spec,
+                             bool HasWriteMask, const cs_x86_op &Destination,
+                             const cs_x86_op *Mask, const cs_x86_op &Left,
+                             const cs_x86_op &Right,
+                             CanonicalEvexEncodingInfo &Encoding) {
+  if (!parseCanonicalEvexEncodingInfo(Insn, X86, L.targetArch(), Encoding) ||
+      (Encoding.P0 & 0x07) != Spec.Map ||
+      ((Encoding.P1 | 0x04) & 0x07) != 0x05 ||
+      Encoding.Opcode != Spec.Opcode || (Encoding.P2 & 0x10) != 0 ||
+      X86.encoding.imm_offset != 0 || X86.encoding.imm_size != 0 ||
+      X86.avx_sae || X86.avx_rm != X86_AVX_RM_INVALID)
+    return false;
+
+  const uint8_t EncodedLength = Encoding.P2 & 0x60;
+  if (EncodedLength == 0x60)
+    return false;
+  const uint16_t VectorSize = EncodedLength == 0      ? 16
+                              : EncodedLength == 0x20 ? 32
+                                                      : 64;
+  const bool MemoryForm = Right.type == X86_OP_MEM;
+  if (!isVectorRegisterOfSize(Destination, VectorSize) ||
+      !isVectorRegisterOfSize(Left, VectorSize) ||
+      (!MemoryForm && !isVectorRegisterOfSize(Right, VectorSize)) ||
+      (MemoryForm && Right.size != VectorSize) ||
+      ((Encoding.ModRM & 0xc0) != 0xc0) != MemoryForm ||
+      decodeEvexVectorRegIndex(Encoding.P0, Encoding.ModRM) !=
+          vectorRegisterIndex(Destination) ||
+      decodeEvexVectorVvvvIndex(Encoding.P1, Encoding.P2) !=
+          vectorRegisterIndex(Left) ||
+      (!MemoryForm && decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) !=
+                          vectorRegisterIndex(Right)))
+    return false;
+
+  const unsigned LaneCount = VectorSize / Spec.OutputElementSize;
+  const uint16_t MaskSize = static_cast<uint16_t>((LaneCount + 7u) / 8u);
+  const uint8_t EncodedMask = Encoding.P2 & 7;
+  const bool EncodedZero = (Encoding.P2 & 0x80) != 0;
+  if (HasWriteMask) {
+    if (!Mask || !isX86OpmaskOperand(*Mask) || Mask->reg == X86_REG_K0 ||
+        Mask->size != MaskSize ||
+        EncodedMask != static_cast<uint8_t>(Mask->reg - X86_REG_K0) ||
+        EncodedZero != static_cast<bool>(Mask->avx_zero_opmask))
+      return false;
+  } else if (Mask || EncodedMask != 0 || EncodedZero) {
+    return false;
+  }
+
+  for (unsigned Index = 0; Index < X86.op_count; ++Index) {
+    const cs_x86_op &Operand = X86.operands[Index];
+    if (Operand.avx_bcast != X86_AVX_BCAST_INVALID ||
+        (Operand.avx_zero_opmask && (!Mask || &Operand != Mask)))
+      return false;
+  }
+
+  if (MemoryForm)
+    return validateCanonicalEvexMemoryTail(Insn, X86, Encoding, Right,
+                                           VectorSize);
+  return validateCanonicalEvexRegisterTail(Insn, X86, Encoding);
+}
+
+NdVar evexActiveMask(const cs_x86_op *Mask, uint16_t VectorSize,
+                     uint16_t OutputElementSize) {
+  const unsigned LaneCount = VectorSize / OutputElementSize;
+  const uint16_t MaskSize = static_cast<uint16_t>((LaneCount + 7u) / 8u);
+  if (!Mask) {
+    const uint64_t RelevantBits =
+        LaneCount == 64 ? UINT64_MAX : ((UINT64_C(1) << LaneCount) - 1);
+    return NdVar::cst(RelevantBits, MaskSize);
+  }
+  const RegInfo MaskInfo = mapCapstoneReg(static_cast<x86_reg>(Mask->reg));
+  if (MaskInfo.Offset == UINT64_C(0xffff) || MaskInfo.Size < MaskSize)
+    return {};
+  return NdVar::reg(MaskInfo.Offset, MaskSize);
+}
+
+} // namespace
+
 bool liftSIMDIntMul(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
                     const cs_x86 &X86) {
   unsigned InsnId = Insn->id;
@@ -151,11 +278,46 @@ bool liftSIMDIntMul(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   case X86_INS_VPMADDWD: {
     if (X86.op_count < 2)
       break;
+    const bool IsEvex =
+        InsnId == X86_INS_VPMADDWD && isEvexCandidate(Insn, X86);
+    const bool HasWriteMask =
+        X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
+    const unsigned LeftIndex = HasWriteMask ? 2 : 1;
+    const unsigned RightIndex = HasWriteMask ? 3 : X86.op_count - 1;
+    const cs_x86_op *MaskOperand = HasWriteMask ? &X86.operands[1] : nullptr;
+    CanonicalEvexEncodingInfo Encoding;
+    if (IsEvex) {
+      const EvexPairwiseMulSpec Spec{0x01, 0xf5, 4};
+      if ((!HasWriteMask && X86.op_count != 3) ||
+          (HasWriteMask && X86.op_count != 4) ||
+          !validateEvexPairwiseMul(
+              L, Insn, X86, Spec, HasWriteMask, X86.operands[0], MaskOperand,
+              X86.operands[LeftIndex], X86.operands[RightIndex], Encoding))
+        return false;
+    } else if (HasWriteMask) {
+      return false;
+    }
+
     NdVar Dst = L.operandWrite(X86.operands[0]);
     bool IsVex = (X86.op_count >= 3);
-    NdVar A = IsVex ? L.operandRead(S, X86.operands[1])
+    NdVar A = IsVex ? L.operandRead(S, X86.operands[LeftIndex])
                     : L.operandRead(S, X86.operands[0]);
-    NdVar B = L.operandRead(S, X86.operands[X86.op_count - 1]);
+    NdVar ActiveMask;
+    NdVar B;
+    if (IsEvex) {
+      ActiveMask = evexActiveMask(MaskOperand, Dst.Size, 4);
+      if (ActiveMask.Size == 0)
+        return false;
+      B = X86.operands[RightIndex].type == X86_OP_MEM
+              ? emitEvexMaskedMemoryLoad(S, X86.operands[RightIndex],
+                                         ActiveMask, Dst.Size, 4, Dst.Size,
+                                         false)
+              : L.operandRead(S, X86.operands[RightIndex]);
+    } else {
+      B = L.operandRead(S, X86.operands[RightIndex]);
+    }
+    if (Dst.Size == 0 || A.Size != Dst.Size || B.Size != Dst.Size)
+      return false;
     unsigned HalfSz = Dst.Size / 2;
     unsigned DwordsPerHalf = HalfSz / 4;
     auto BuildHalf = [&](unsigned BaseOff) -> NdVar {
@@ -193,7 +355,12 @@ bool liftSIMDIntMul(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     NdVar HiHalf = BuildHalf(HalfSz);
     NdVar Full = S.makeTemp(Dst.Size);
     S.emit(NdOp::CONCAT, Full, {HiHalf, LoHalf});
-    S.emit(NdOp::COPY, Dst, {Full});
+    if (HasWriteMask) {
+      if (!emitMaskedVectorResult(L, S, X86.operands[0], *MaskOperand, Full, 4))
+        return false;
+    } else {
+      S.emit(NdOp::COPY, Dst, {Full});
+    }
     break;
   }
 
@@ -202,11 +369,46 @@ bool liftSIMDIntMul(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   case X86_INS_VPMADDUBSW: {
     if (X86.op_count < 2)
       break;
+    const bool IsEvex =
+        InsnId == X86_INS_VPMADDUBSW && isEvexCandidate(Insn, X86);
+    const bool HasWriteMask =
+        X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
+    const unsigned LeftIndex = HasWriteMask ? 2 : 1;
+    const unsigned RightIndex = HasWriteMask ? 3 : X86.op_count - 1;
+    const cs_x86_op *MaskOperand = HasWriteMask ? &X86.operands[1] : nullptr;
+    CanonicalEvexEncodingInfo Encoding;
+    if (IsEvex) {
+      const EvexPairwiseMulSpec Spec{0x02, 0x04, 2};
+      if ((!HasWriteMask && X86.op_count != 3) ||
+          (HasWriteMask && X86.op_count != 4) ||
+          !validateEvexPairwiseMul(
+              L, Insn, X86, Spec, HasWriteMask, X86.operands[0], MaskOperand,
+              X86.operands[LeftIndex], X86.operands[RightIndex], Encoding))
+        return false;
+    } else if (HasWriteMask) {
+      return false;
+    }
+
     NdVar Dst = L.operandWrite(X86.operands[0]);
     bool IsVex = (X86.op_count >= 3);
-    NdVar A = IsVex ? L.operandRead(S, X86.operands[1])
+    NdVar A = IsVex ? L.operandRead(S, X86.operands[LeftIndex])
                     : L.operandRead(S, X86.operands[0]);
-    NdVar B = L.operandRead(S, X86.operands[X86.op_count - 1]);
+    NdVar ActiveMask;
+    NdVar B;
+    if (IsEvex) {
+      ActiveMask = evexActiveMask(MaskOperand, Dst.Size, 2);
+      if (ActiveMask.Size == 0)
+        return false;
+      B = X86.operands[RightIndex].type == X86_OP_MEM
+              ? emitEvexMaskedMemoryLoad(S, X86.operands[RightIndex],
+                                         ActiveMask, Dst.Size, 2, Dst.Size,
+                                         false)
+              : L.operandRead(S, X86.operands[RightIndex]);
+    } else {
+      B = L.operandRead(S, X86.operands[RightIndex]);
+    }
+    if (Dst.Size == 0 || A.Size != Dst.Size || B.Size != Dst.Size)
+      return false;
     unsigned HalfSz = Dst.Size / 2;
     unsigned WordsPerHalf = HalfSz / 2;
     auto BuildHalf = [&](unsigned BaseOff) -> NdVar {
@@ -254,7 +456,12 @@ bool liftSIMDIntMul(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     NdVar HiHalf = BuildHalf(HalfSz);
     NdVar Full = S.makeTemp(Dst.Size);
     S.emit(NdOp::CONCAT, Full, {HiHalf, LoHalf});
-    S.emit(NdOp::COPY, Dst, {Full});
+    if (HasWriteMask) {
+      if (!emitMaskedVectorResult(L, S, X86.operands[0], *MaskOperand, Full, 2))
+        return false;
+    } else {
+      S.emit(NdOp::COPY, Dst, {Full});
+    }
     break;
   }
 
@@ -264,11 +471,46 @@ bool liftSIMDIntMul(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   case X86_INS_VPMULHRSW: {
     if (X86.op_count < 2)
       break;
+    const bool IsEvex =
+        InsnId == X86_INS_VPMULHRSW && isEvexCandidate(Insn, X86);
+    const bool HasWriteMask =
+        X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
+    const unsigned LeftIndex = HasWriteMask ? 2 : 1;
+    const unsigned RightIndex = HasWriteMask ? 3 : X86.op_count - 1;
+    const cs_x86_op *MaskOperand = HasWriteMask ? &X86.operands[1] : nullptr;
+    CanonicalEvexEncodingInfo Encoding;
+    if (IsEvex) {
+      const EvexPairwiseMulSpec Spec{0x02, 0x0b, 2};
+      if ((!HasWriteMask && X86.op_count != 3) ||
+          (HasWriteMask && X86.op_count != 4) ||
+          !validateEvexPairwiseMul(
+              L, Insn, X86, Spec, HasWriteMask, X86.operands[0], MaskOperand,
+              X86.operands[LeftIndex], X86.operands[RightIndex], Encoding))
+        return false;
+    } else if (HasWriteMask) {
+      return false;
+    }
+
     NdVar Dst = L.operandWrite(X86.operands[0]);
     bool IsVex = (X86.op_count >= 3);
-    NdVar A = IsVex ? L.operandRead(S, X86.operands[1])
+    NdVar A = IsVex ? L.operandRead(S, X86.operands[LeftIndex])
                     : L.operandRead(S, X86.operands[0]);
-    NdVar B = L.operandRead(S, X86.operands[X86.op_count - 1]);
+    NdVar ActiveMask;
+    NdVar B;
+    if (IsEvex) {
+      ActiveMask = evexActiveMask(MaskOperand, Dst.Size, 2);
+      if (ActiveMask.Size == 0)
+        return false;
+      B = X86.operands[RightIndex].type == X86_OP_MEM
+              ? emitEvexMaskedMemoryLoad(S, X86.operands[RightIndex],
+                                         ActiveMask, Dst.Size, 2, Dst.Size,
+                                         false)
+              : L.operandRead(S, X86.operands[RightIndex]);
+    } else {
+      B = L.operandRead(S, X86.operands[RightIndex]);
+    }
+    if (Dst.Size == 0 || A.Size != Dst.Size || B.Size != Dst.Size)
+      return false;
     unsigned HalfSz = Dst.Size / 2;
     unsigned WordsPerHalf = HalfSz / 2;
     auto BuildHalf = [&](unsigned BaseOff) -> NdVar {
@@ -303,7 +545,12 @@ bool liftSIMDIntMul(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     NdVar HiHalf = BuildHalf(HalfSz);
     NdVar Full = S.makeTemp(Dst.Size);
     S.emit(NdOp::CONCAT, Full, {HiHalf, LoHalf});
-    S.emit(NdOp::COPY, Dst, {Full});
+    if (HasWriteMask) {
+      if (!emitMaskedVectorResult(L, S, X86.operands[0], *MaskOperand, Full, 2))
+        return false;
+    } else {
+      S.emit(NdOp::COPY, Dst, {Full});
+    }
     break;
   }
 

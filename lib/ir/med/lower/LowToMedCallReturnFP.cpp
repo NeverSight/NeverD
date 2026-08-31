@@ -53,6 +53,14 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
   if (VecId < 0)
     return; // the FP return register is never referenced anywhere
 
+  // The architectural container may be wider than the ABI carrier.  In
+  // particular, x86 AVX-512 aliases XMM0 with a 64-byte ZMM0 container, but a
+  // scalar/vector function result still arrives in the low 128-bit XMM view.
+  // Publishing a full ZMM call output would turn ordinary calls into an
+  // invented i512 return convention.
+  const uint16_t FPReturnWidth =
+      TRI.FPABIRegWidth != 0 ? std::min(VecSize, TRI.FPABIRegWidth) : VecSize;
+
   int MaxVer = 0;
   for (const auto &B : Func.Blocks) {
     for (const auto &Op : B.Ops)
@@ -118,8 +126,7 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
   // before applying this boundary.
   std::set<uint32_t> FPRetClobberSites;
   for (const MedCallClobber &Clobber : Func.CallClobbers)
-    if (Clobber.Value.Kind == MedVar::Reg &&
-        Clobber.Value.RegOff == FPRet)
+    if (Clobber.Value.Kind == MedVar::Reg && Clobber.Value.RegOff == FPRet)
       FPRetClobberSites.insert(Clobber.CallSiteId);
   auto clobbersFPRet = [&](const MedOp &Op) -> bool {
     return !Op.PreservesCallerSaved && Op.CallSiteId != 0 &&
@@ -289,7 +296,7 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
       MedVar Out;
       Out.Kind = MedVar::Reg;
       Out.Id = VecId;
-      Out.Size = VecSize;
+      Out.Size = FPReturnWidth;
       Out.RegOff = FPRet;
       Out.SSAVer = NewVer;
       Out.TheArch = TargetArch;

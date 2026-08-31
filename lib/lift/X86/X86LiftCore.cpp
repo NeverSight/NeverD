@@ -38,6 +38,13 @@ NdVar snapshotCarryAtWidth(X86Lifter::LiftState &S, uint16_t Size) {
 
 bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
   unsigned InsnId = Insn->id;
+  const auto RequireDivPrecondition = [&](NdVar Dividend, NdVar Divisor,
+                                          X86DivKind Kind) {
+    S.emitIntrinsic(
+        Intrinsic::X86RequireDivPrecondition, {},
+        {Dividend, Divisor,
+         NdVar::scalar(static_cast<uint64_t>(Kind), 1)});
+  };
   switch (InsnId) {
 
   case X86_INS_DIV: {
@@ -51,12 +58,16 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
       S.emit(NdOp::INT_ZEXT, ExtSrc, {Src});
       NdVar Quot = S.makeTemp(2);
       NdVar Rem = S.makeTemp(2);
+      RequireDivPrecondition(Ax, Src, X86DivKind::Unsigned);
       S.emit(NdOp::INT_DIV, Quot, {Ax, ExtSrc});
       S.emit(NdOp::INT_REM, Rem, {Ax, ExtSrc});
-      S.emit(NdOp::SUBBYTES, NdVar::reg(x86reg::RAX, 1),
-             {Quot, NdVar::scalar(0, 4)});
-      S.emit(NdOp::SUBBYTES, NdVar::reg(x86reg::RAX + 1, 1),
-             {Rem, NdVar::scalar(0, 4)});
+      NdVar QuotByte = S.makeTemp(1);
+      NdVar RemByte = S.makeTemp(1);
+      S.emit(NdOp::SUBBYTES, QuotByte, {Quot, NdVar::scalar(0, 4)});
+      S.emit(NdOp::SUBBYTES, RemByte, {Rem, NdVar::scalar(0, 4)});
+      NdVar AxResult = S.makeTemp(2);
+      S.emit(NdOp::CONCAT, AxResult, {RemByte, QuotByte});
+      S.emit(NdOp::COPY, NdVar::reg(x86reg::RAX, 2), {AxResult});
     } else {
       NdVar Rax = NdVar::reg(x86reg::RAX, Sz);
       NdVar Rdx = NdVar::reg(x86reg::RDX, Sz);
@@ -66,6 +77,9 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
       if (IsZeroRdx) {
         NdVar OrigRax = S.makeTemp(Sz);
         S.emit(NdOp::COPY, OrigRax, {Rax});
+        NdVar Dividend = S.makeTemp(Sz * 2);
+        S.emit(NdOp::INT_ZEXT, Dividend, {OrigRax});
+        RequireDivPrecondition(Dividend, Src, X86DivKind::Unsigned);
         S.emit(NdOp::INT_DIV, Rax, {OrigRax, Src});
         S.emit(NdOp::INT_REM, Rdx, {OrigRax, Src});
       } else {
@@ -90,6 +104,7 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
         S.emit(NdOp::INT_ZEXT, ExtSrc, {Src});
         NdVar Quot = S.makeTemp(Sz * 2);
         NdVar Rem = S.makeTemp(Sz * 2);
+        RequireDivPrecondition(Dividend, Src, X86DivKind::Unsigned);
         S.emit(NdOp::INT_DIV, Quot, {Dividend, ExtSrc});
         S.emit(NdOp::INT_REM, Rem, {Dividend, ExtSrc});
         S.emit(NdOp::SUBBYTES, Rax, {Quot, NdVar::scalar(0, 4)});
@@ -109,12 +124,16 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
       S.emit(NdOp::INT_SEXT, ExtSrc, {Src});
       NdVar Quot = S.makeTemp(2);
       NdVar Rem = S.makeTemp(2);
+      RequireDivPrecondition(Ax, Src, X86DivKind::Signed);
       S.emit(NdOp::INT_SDIV, Quot, {Ax, ExtSrc});
       S.emit(NdOp::INT_SREM, Rem, {Ax, ExtSrc});
-      S.emit(NdOp::SUBBYTES, NdVar::reg(x86reg::RAX, 1),
-             {Quot, NdVar::scalar(0, 4)});
-      S.emit(NdOp::SUBBYTES, NdVar::reg(x86reg::RAX + 1, 1),
-             {Rem, NdVar::scalar(0, 4)});
+      NdVar QuotByte = S.makeTemp(1);
+      NdVar RemByte = S.makeTemp(1);
+      S.emit(NdOp::SUBBYTES, QuotByte, {Quot, NdVar::scalar(0, 4)});
+      S.emit(NdOp::SUBBYTES, RemByte, {Rem, NdVar::scalar(0, 4)});
+      NdVar AxResult = S.makeTemp(2);
+      S.emit(NdOp::CONCAT, AxResult, {RemByte, QuotByte});
+      S.emit(NdOp::COPY, NdVar::reg(x86reg::RAX, 2), {AxResult});
     } else {
       NdVar Rax = NdVar::reg(x86reg::RAX, Sz);
       NdVar Rdx = NdVar::reg(x86reg::RDX, Sz);
@@ -125,6 +144,9 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
       if (IsCqoIdiom) {
         NdVar OrigRax = S.makeTemp(Sz);
         S.emit(NdOp::COPY, OrigRax, {Rax});
+        NdVar Dividend = S.makeTemp(Sz * 2);
+        S.emit(NdOp::INT_SEXT, Dividend, {OrigRax});
+        RequireDivPrecondition(Dividend, Src, X86DivKind::Signed);
         S.emit(NdOp::INT_SDIV, Rax, {OrigRax, Src});
         S.emit(NdOp::INT_SREM, Rdx, {OrigRax, Src});
       } else {
@@ -149,6 +171,7 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
         S.emit(NdOp::INT_SEXT, ExtSrc, {Src});
         NdVar Quot = S.makeTemp(Sz * 2);
         NdVar Rem = S.makeTemp(Sz * 2);
+        RequireDivPrecondition(Dividend, Src, X86DivKind::Signed);
         S.emit(NdOp::INT_SDIV, Quot, {Dividend, ExtSrc});
         S.emit(NdOp::INT_SREM, Rem, {Dividend, ExtSrc});
         S.emit(NdOp::SUBBYTES, Rax, {Quot, NdVar::scalar(0, 4)});

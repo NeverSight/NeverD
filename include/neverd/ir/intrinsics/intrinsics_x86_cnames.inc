@@ -182,3 +182,28 @@ C(Intrinsic::Movsldup,         "_mm_moveldup_ps");
 
 // MMX legacy
 C(Intrinsic::Pshufw,           "_mm_shuffle_pi16");
+
+C(Intrinsic::RequireAligned, "neverd_require_aligned");
+C(Intrinsic::AMXLoadConfig, "neverd_amx_load_config");
+C(Intrinsic::AMXStoreConfig, "neverd_amx_store_config");
+C(Intrinsic::AMXTileLoad, "neverd_amx_tile_load");
+C(Intrinsic::AMXTileStore, "neverd_amx_tile_store");
+C(Intrinsic::AMXTileZero, "neverd_amx_tile_zero");
+C(Intrinsic::AMXClearStartRow, "neverd_amx_clear_start_row");
+C(Intrinsic::AMXTileCompute, "neverd_amx_tile_compute");
+C(Intrinsic::AMXTileRow, "neverd_amx_tile_row");
+C(Intrinsic::F16CConvert, "neverd_f16c_convert");
+C(Intrinsic::X86ApproxFloat, "neverd_x86_approx_float");
+C(Intrinsic::EVEXCompressStore, "neverd_evex_compress_store");
+C(Intrinsic::EVEXExpandLoad, "neverd_evex_expand_load");
+C(Intrinsic::X86FPClass, "neverd_x86_fpclass");
+C(Intrinsic::X86FPArith, "neverd_x86_fp_arith");
+C(Intrinsic::X86FPConvert, "neverd_x86_fp_convert");
+C(Intrinsic::X86FPRoundTransform, "neverd_x86_fp_round_transform");
+C(Intrinsic::X86FPExtract, "neverd_x86_fp_extract");
+C(Intrinsic::X86FPRange, "neverd_x86_fp_range");
+C(Intrinsic::X86FPFixup, "neverd_x86_fp_fixup");
+C(Intrinsic::X86FPScale, "neverd_x86_fp_scale");
+C(Intrinsic::X86VP4DPWSSD, "neverd_x86_vp4dpwssd");
+C(Intrinsic::X86VP4DPWSSDS, "neverd_x86_vp4dpwssds");
+C(Intrinsic::X86FPCompare, "neverd_x86_fp_compare");

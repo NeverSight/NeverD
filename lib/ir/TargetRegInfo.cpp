@@ -110,11 +110,10 @@ bool TargetRegInfo::isSubRegOf(uint64_t NarrowOff, uint16_t NarrowSz,
 }
 
 bool TargetRegInfo::writeZeroExtends(uint64_t RegOff, uint16_t Size) const {
-  const bool HasWideVectorContainer = isVectorReg(RegOff) || isFPArgReg(RegOff);
+  const uint16_t MaxWidth = maxRegisterWidth(RegOff);
   for (const auto &E : SubRegs) {
     if (E.NarrowRegOff == RegOff && E.NarrowSize == Size &&
-        (E.WideSize <= FullRegWidth || HasWideVectorContainer) &&
-        E.WriteZeroExtends)
+        E.WideSize <= MaxWidth && E.WriteZeroExtends)
       return true;
   }
   return false;
@@ -136,16 +135,18 @@ std::pair<uint64_t, uint16_t> TargetRegInfo::findWideReg(uint64_t RegOff,
                                                          uint16_t Size) const {
   uint64_t BestOff = RegOff;
   uint16_t BestSz = Size;
-  const bool HasWideVectorContainer = isVectorReg(RegOff) || isFPArgReg(RegOff);
+  const uint16_t MaxWidth = maxRegisterWidth(RegOff);
   for (const auto &E : SubRegs) {
     if (E.NarrowRegOff == RegOff && E.NarrowSize == Size &&
-        (E.WideSize <= FullRegWidth || HasWideVectorContainer) &&
-        E.WideSize > BestSz) {
+        E.WideSize <= MaxWidth && E.WideSize > BestSz) {
       BestOff = E.WideRegOff;
       BestSz = E.WideSize;
     }
   }
-  if (BestSz == Size && Size < FullRegWidth && RegOff % FullRegWidth == 0) {
+  const bool MayUseLegacyFallback =
+      GeneralRegs.empty() && RegOff % FullRegWidth == 0;
+  if (BestSz == Size && Size < FullRegWidth &&
+      (isGeneralReg(RegOff) || MayUseLegacyFallback)) {
     BestOff = RegOff;
     BestSz = FullRegWidth;
   }

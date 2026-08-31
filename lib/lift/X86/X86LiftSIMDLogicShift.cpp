@@ -23,6 +23,30 @@ namespace neverd {
 
 bool liftSIMDLogicShift(X86Lifter &L, X86Lifter::LiftState &S,
                         const cs_insn *Insn, const cs_x86 &X86) {
+  const bool IsEvexFloatLogic =
+      X86.opcode[0] == 0x62 &&
+      (Insn->id == X86_INS_VANDPS || Insn->id == X86_INS_VANDPD ||
+       Insn->id == X86_INS_VORPS || Insn->id == X86_INS_VORPD ||
+       Insn->id == X86_INS_VXORPS || Insn->id == X86_INS_VXORPD);
+  const bool IsEvexVariableShift =
+      X86.opcode[0] == 0x62 &&
+      (Insn->id == X86_INS_VPSLLVW || Insn->id == X86_INS_VPSLLVD ||
+       Insn->id == X86_INS_VPSLLVQ || Insn->id == X86_INS_VPSRLVW ||
+       Insn->id == X86_INS_VPSRLVD || Insn->id == X86_INS_VPSRLVQ ||
+       Insn->id == X86_INS_VPSRAVW || Insn->id == X86_INS_VPSRAVD ||
+       Insn->id == X86_INS_VPSRAVQ);
+  const bool IsEvexUniformShift =
+      X86.opcode[0] == 0x62 &&
+      (Insn->id == X86_INS_VPSLLW || Insn->id == X86_INS_VPSLLD ||
+       Insn->id == X86_INS_VPSLLQ || Insn->id == X86_INS_VPSRLW ||
+       Insn->id == X86_INS_VPSRLD || Insn->id == X86_INS_VPSRLQ ||
+       Insn->id == X86_INS_VPSRAW || Insn->id == X86_INS_VPSRAD ||
+       Insn->id == X86_INS_VPSRAQ);
+  if (IsEvexFloatLogic || IsEvexVariableShift || IsEvexUniformShift)
+    return false;
+  if (hasUnsupportedEvexValueModifier(X86))
+    return false;
+
   unsigned InsnId = Insn->id;
   switch (InsnId) {
 
@@ -37,11 +61,21 @@ bool liftSIMDLogicShift(X86Lifter &L, X86Lifter::LiftState &S,
   case X86_INS_VPOR: {
     if (X86.op_count < 2)
       break;
+    const bool HasWriteMask =
+        X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
+    if (HasWriteMask &&
+        (X86.op_count != 4 || X86.operands[0].type != X86_OP_REG ||
+         X86.operands[2].type != X86_OP_REG ||
+         X86.operands[3].type != X86_OP_REG))
+      return false;
     NdVar Dst = L.operandWrite(X86.operands[0]);
     uint8_t SrcCount = X86.op_count;
-    NdVar A = (SrcCount >= 3) ? L.operandRead(S, X86.operands[1])
+    const unsigned LeftIndex = HasWriteMask ? 2 : 1;
+    NdVar A = (SrcCount >= 3) ? L.operandRead(S, X86.operands[LeftIndex])
                               : L.operandRead(S, X86.operands[0]);
     NdVar B = L.operandRead(S, X86.operands[SrcCount - 1]);
+    if (Dst.Size == 0 || A.Size != Dst.Size || B.Size != Dst.Size)
+      return false;
     NdOp Opc;
     switch (InsnId) {
     case X86_INS_VXORPS:
@@ -57,7 +91,18 @@ bool liftSIMDLogicShift(X86Lifter &L, X86Lifter::LiftState &S,
     default:
       Opc = NdOp::INT_OR;
     }
-    S.emit(Opc, Dst, {A, B});
+    NdVar Raw = HasWriteMask ? S.makeTemp(Dst.Size) : Dst;
+    S.emit(Opc, Raw, {A, B});
+    if (HasWriteMask) {
+      const uint16_t ElementSize =
+          (InsnId == X86_INS_VXORPD || InsnId == X86_INS_VANDPD ||
+           InsnId == X86_INS_VORPD)
+              ? 8
+              : 4;
+      if (!emitMaskedVectorResult(L, S, X86.operands[0], X86.operands[1], Raw,
+                                  ElementSize))
+        return false;
+    }
     break;
   }
 
@@ -72,11 +117,22 @@ bool liftSIMDLogicShift(X86Lifter &L, X86Lifter::LiftState &S,
   case X86_INS_VPSRAVD: {
     if (X86.op_count < 3)
       break;
+    const bool HasWriteMask = isX86OpmaskOperand(X86.operands[1]);
+    const unsigned SourceIndex = HasWriteMask ? 2 : 1;
+    const unsigned CountIndex = HasWriteMask ? 3 : 2;
+    if (HasWriteMask &&
+        (X86.op_count != 4 || X86.operands[0].type != X86_OP_REG ||
+         X86.operands[SourceIndex].type != X86_OP_REG ||
+         X86.operands[CountIndex].type != X86_OP_REG))
+      return false;
     NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar A = L.operandRead(S, X86.operands[1]);
-    NdVar B = L.operandRead(S, X86.operands[2]);
+    NdVar A = L.operandRead(S, X86.operands[SourceIndex]);
+    NdVar B = L.operandRead(S, X86.operands[CountIndex]);
     unsigned LaneSz =
         (InsnId == X86_INS_VPSLLVQ || InsnId == X86_INS_VPSRLVQ) ? 8 : 4;
+    if (Dst.Size == 0 || A.Size != Dst.Size || B.Size != Dst.Size ||
+        Dst.Size % LaneSz != 0)
+      return false;
     unsigned LaneBits = LaneSz * 8;
     NdOp ShiftOp =
         (InsnId == X86_INS_VPSLLVD || InsnId == X86_INS_VPSLLVQ)
@@ -113,7 +169,13 @@ bool liftSIMDLogicShift(X86Lifter &L, X86Lifter::LiftState &S,
         Acc = Next;
       }
     }
-    S.emit(NdOp::COPY, Dst, {Acc});
+    if (HasWriteMask) {
+      if (!emitMaskedVectorResult(L, S, X86.operands[0], X86.operands[1], Acc,
+                                  LaneSz))
+        return false;
+    } else {
+      S.emit(NdOp::COPY, Dst, {Acc});
+    }
     break;
   }
 
@@ -170,9 +232,20 @@ bool liftSIMDLogicShift(X86Lifter &L, X86Lifter::LiftState &S,
   case X86_INS_VPSRAQ: {
     if (X86.op_count < 2)
       break;
+    const bool HasWriteMask =
+        X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
+    const unsigned SourceIndex = HasWriteMask ? 2 : 1;
+    if (HasWriteMask &&
+        (X86.op_count != 4 || X86.operands[0].type != X86_OP_REG ||
+         X86.operands[SourceIndex].type != X86_OP_REG ||
+         (X86.operands[3].type != X86_OP_IMM &&
+          X86.operands[3].type != X86_OP_REG)))
+      return false;
     NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar A = (X86.op_count >= 3) ? L.operandRead(S, X86.operands[1])
+    NdVar A = (X86.op_count >= 3) ? L.operandRead(S, X86.operands[SourceIndex])
                                   : L.operandRead(S, X86.operands[0]);
+    if (Dst.Size == 0 || A.Size != Dst.Size)
+      return false;
     unsigned LaneSz = 0;
     NdOp ShiftOp = NdOp::INT_LEFT;
     switch (InsnId) {
@@ -257,7 +330,13 @@ bool liftSIMDLogicShift(X86Lifter &L, X86Lifter::LiftState &S,
         Acc = Next;
       }
     }
-    S.emit(NdOp::COPY, Dst, {Acc});
+    if (HasWriteMask) {
+      if (!emitMaskedVectorResult(L, S, X86.operands[0], X86.operands[1], Acc,
+                                  LaneSz))
+        return false;
+    } else {
+      S.emit(NdOp::COPY, Dst, {Acc});
+    }
     break;
   }
 

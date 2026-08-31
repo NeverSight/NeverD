@@ -24,6 +24,46 @@ namespace neverd {
 bool liftLegacySSEInt(X86Lifter &L, X86Lifter::LiftState &S,
                       const cs_insn *Insn, const cs_x86 &X86) {
   unsigned InsnId = Insn->id;
+  auto EmitImmediateLaneShuffle = [&](NdVar Dst, NdVar Src, uint8_t Imm,
+                                      unsigned ElementSize,
+                                      unsigned FirstShuffledElement) {
+    if (Dst.Size == 0 || Dst.Size != Src.Size || Dst.Size % 16 != 0)
+      return false;
+    const unsigned ElementsPerLane = 16 / ElementSize;
+    const unsigned NumElements = Dst.Size / ElementSize;
+    if (NumElements > 32)
+      return false;
+
+    NdVar Elements[32];
+    for (unsigned I = 0; I < NumElements; ++I) {
+      const unsigned LaneBase = (I / ElementsPerLane) * ElementsPerLane;
+      const unsigned InLane = I % ElementsPerLane;
+      unsigned Selected = InLane;
+      if (InLane >= FirstShuffledElement &&
+          InLane < FirstShuffledElement + 4) {
+        const unsigned ControlIndex = InLane - FirstShuffledElement;
+        Selected = FirstShuffledElement +
+                   ((Imm >> (ControlIndex * 2)) & 3);
+      }
+      Elements[I] = S.makeTemp(ElementSize);
+      S.emit(NdOp::SUBBYTES, Elements[I],
+             {Src, NdVar::cst((LaneBase + Selected) * ElementSize, 4)});
+    }
+    unsigned Count = NumElements;
+    unsigned Width = ElementSize;
+    while (Count > 1) {
+      for (unsigned I = 0; I < Count / 2; ++I) {
+        NdVar Pair = S.makeTemp(Width * 2);
+        S.emit(NdOp::CONCAT, Pair,
+               {Elements[I * 2 + 1], Elements[I * 2]});
+        Elements[I] = Pair;
+      }
+      Count /= 2;
+      Width *= 2;
+    }
+    S.emit(NdOp::COPY, Dst, {Elements[0]});
+    return true;
+  };
   switch (InsnId) {
 
   // ========================================================================
@@ -161,14 +201,42 @@ bool liftLegacySSEInt(X86Lifter &L, X86Lifter::LiftState &S,
   // ========================================================================
   case X86_INS_PSLLDQ:
   case X86_INS_PSRLDQ: {
-    if (X86.op_count < 2)
-      break;
+    if (X86.op_count < 2 || X86.operands[0].type != X86_OP_REG ||
+        X86.operands[1].type != X86_OP_IMM)
+      return false;
     NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    NdVar Bits = S.makeTemp(Dst.Size);
-    S.emit(NdOp::INT_LEFT, Bits, {Src, NdVar::cst(3, Dst.Size)});
-    NdOp Opc = (InsnId == X86_INS_PSLLDQ) ? NdOp::INT_LEFT : NdOp::INT_RIGHT;
-    S.emit(Opc, Dst, {Dst, Bits});
+    NdVar Src = L.operandRead(S, X86.operands[0]);
+    if (Dst.Size != 16 || Src.Size != 16)
+      return false;
+
+    const int Shift = static_cast<uint8_t>(X86.operands[1].imm);
+    NdVar Bytes[16];
+    for (unsigned I = 0; I < 16; ++I) {
+      const int Byte = static_cast<int>(I);
+      const int SourceByte =
+          InsnId == X86_INS_PSLLDQ ? Byte - Shift : Byte + Shift;
+      if (SourceByte < 0 || SourceByte >= 16) {
+        Bytes[I] = NdVar::cst(0, 1);
+        continue;
+      }
+      Bytes[I] = S.makeTemp(1);
+      S.emit(NdOp::SUBBYTES, Bytes[I],
+             {Src, NdVar::cst(static_cast<unsigned>(SourceByte), 4)});
+    }
+
+    // Assemble low-to-high through power-of-two widths accepted by LowIR.
+    unsigned Count = 16;
+    unsigned Width = 1;
+    while (Count > 1) {
+      for (unsigned I = 0; I < Count / 2; ++I) {
+        NdVar Pair = S.makeTemp(Width * 2);
+        S.emit(NdOp::CONCAT, Pair, {Bytes[I * 2 + 1], Bytes[I * 2]});
+        Bytes[I] = Pair;
+      }
+      Count /= 2;
+      Width *= 2;
+    }
+    S.emit(NdOp::COPY, Dst, {Bytes[0]});
     break;
   }
   case X86_INS_PSLLD:
@@ -273,13 +341,20 @@ bool liftLegacySSEInt(X86Lifter &L, X86Lifter::LiftState &S,
   // ========================================================================
   // SIMD shuffles / unpacks
   // ========================================================================
-  case X86_INS_PSHUFD: {
-    if (X86.op_count < 3)
-      break;
+  case X86_INS_PSHUFD:
+  case X86_INS_PSHUFLW:
+  case X86_INS_PSHUFHW: {
+    if (X86.op_count < 3 || X86.operands[2].type != X86_OP_IMM)
+      return false;
     NdVar Dst = L.operandWrite(X86.operands[0]);
     NdVar Src = L.operandRead(S, X86.operands[1]);
-    uint8_t Imm = static_cast<uint8_t>(X86.operands[2].imm);
-    S.emitIntrinsic(Intrinsic::Pshufd, Dst, {Src, NdVar::cst(Imm, 1)});
+    const uint8_t Imm = static_cast<uint8_t>(X86.operands[2].imm);
+    const unsigned ElementSize = InsnId == X86_INS_PSHUFD ? 4 : 2;
+    const unsigned FirstShuffledElement =
+        InsnId == X86_INS_PSHUFHW ? 4 : 0;
+    if (!EmitImmediateLaneShuffle(Dst, Src, Imm, ElementSize,
+                                  FirstShuffledElement))
+      return false;
     break;
   }
   case X86_INS_PSHUFB: {
@@ -288,24 +363,6 @@ bool liftLegacySSEInt(X86Lifter &L, X86Lifter::LiftState &S,
     NdVar Dst = L.operandWrite(X86.operands[0]);
     NdVar Src = L.operandRead(S, X86.operands[1]);
     S.emitIntrinsic(Intrinsic::Pshufb, Dst, {Dst, Src});
-    break;
-  }
-  case X86_INS_PSHUFLW: {
-    if (X86.op_count < 3)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    uint8_t Imm = static_cast<uint8_t>(X86.operands[2].imm);
-    S.emitIntrinsic(Intrinsic::Pshuflw, Dst, {Src, NdVar::cst(Imm, 1)});
-    break;
-  }
-  case X86_INS_PSHUFHW: {
-    if (X86.op_count < 3)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    uint8_t Imm = static_cast<uint8_t>(X86.operands[2].imm);
-    S.emitIntrinsic(Intrinsic::Pshufhw, Dst, {Src, NdVar::cst(Imm, 1)});
     break;
   }
   case X86_INS_SHUFPS: {
@@ -333,7 +390,47 @@ bool liftLegacySSEInt(X86Lifter &L, X86Lifter::LiftState &S,
   case X86_INS_PUNPCKLDQ:
   case X86_INS_PUNPCKHDQ:
   case X86_INS_PUNPCKLQDQ:
-  case X86_INS_PUNPCKHQDQ:
+  case X86_INS_PUNPCKHQDQ: {
+    if (X86.op_count < 2)
+      break;
+    NdVar Dst = L.operandWrite(X86.operands[0]);
+    NdVar Src = L.operandRead(S, X86.operands[1]);
+    uint16_t ElementSize = 0;
+    bool HighHalf = false;
+    switch (InsnId) {
+    case X86_INS_PUNPCKLBW:
+      ElementSize = 1;
+      break;
+    case X86_INS_PUNPCKHBW:
+      ElementSize = 1;
+      HighHalf = true;
+      break;
+    case X86_INS_PUNPCKLWD:
+      ElementSize = 2;
+      break;
+    case X86_INS_PUNPCKHWD:
+      ElementSize = 2;
+      HighHalf = true;
+      break;
+    case X86_INS_PUNPCKLDQ:
+      ElementSize = 4;
+      break;
+    case X86_INS_PUNPCKHDQ:
+      ElementSize = 4;
+      HighHalf = true;
+      break;
+    case X86_INS_PUNPCKLQDQ:
+      ElementSize = 8;
+      break;
+    default:
+      ElementSize = 8;
+      HighHalf = true;
+      break;
+    }
+    if (!emitPackedUnpack(S, Dst, Dst, Src, ElementSize, HighHalf))
+      return false;
+    break;
+  }
   case X86_INS_UNPCKLPS:
   case X86_INS_UNPCKHPS:
   case X86_INS_UNPCKLPD:
@@ -344,30 +441,6 @@ bool liftLegacySSEInt(X86Lifter &L, X86Lifter::LiftState &S,
     NdVar Src = L.operandRead(S, X86.operands[1]);
     Intrinsic Id;
     switch (InsnId) {
-    case X86_INS_PUNPCKLBW:
-      Id = Intrinsic::Punpcklbw;
-      break;
-    case X86_INS_PUNPCKHBW:
-      Id = Intrinsic::Punpckhbw;
-      break;
-    case X86_INS_PUNPCKLWD:
-      Id = Intrinsic::Punpcklwd;
-      break;
-    case X86_INS_PUNPCKHWD:
-      Id = Intrinsic::Punpckhwd;
-      break;
-    case X86_INS_PUNPCKLDQ:
-      Id = Intrinsic::Punpckldq;
-      break;
-    case X86_INS_PUNPCKHDQ:
-      Id = Intrinsic::Punpckhdq;
-      break;
-    case X86_INS_PUNPCKLQDQ:
-      Id = Intrinsic::Punpcklqdq;
-      break;
-    case X86_INS_PUNPCKHQDQ:
-      Id = Intrinsic::Punpckhqdq;
-      break;
     case X86_INS_UNPCKLPS:
       Id = Intrinsic::Unpcklps;
       break;

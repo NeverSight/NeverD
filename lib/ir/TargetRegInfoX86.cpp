@@ -40,52 +40,125 @@ namespace neverd {
 
 #define X64_GPR_SUBREGS_NO_H(WIDE) X64_GPR_SUBREGS(WIDE, false)
 
-#define X64_XMM_SUBREGS(N)                                                     \
-  {                                                                            \
-      x86reg::XMM##N, 32, x86reg::XMM##N, 16, 0,                               \
-      false}, /* XMM (low 128) of YMM */                                       \
-      {x86reg::XMM##N, 32, x86reg::XMM##N, 8, 0, false}, /* low 64 of YMM */   \
-      {x86reg::XMM##N, 32, x86reg::XMM##N, 4, 0, false}, /* low 32 of YMM */   \
-      {x86reg::XMM##N, 16, x86reg::XMM##N, 8, 0, false}, /* low 64 of XMM */   \
-      {x86reg::XMM##N, 16, x86reg::XMM##N, 4, 0, false}, /* low 32 of XMM */   \
-  {                                                                            \
+#define X64_VECTOR_SUBREGS(N)                                                  \
+  {x86reg::XMM##N, 64, x86reg::XMM##N, 32, 0, false},                          \
+      {x86reg::XMM##N, 64, x86reg::XMM##N, 16, 0, false},                      \
+      {x86reg::XMM##N, 64, x86reg::XMM##N, 8, 0, false},                       \
+      {x86reg::XMM##N, 64, x86reg::XMM##N, 4, 0, false},                       \
+      {x86reg::XMM##N, 32, x86reg::XMM##N, 16, 0, false},                      \
+      {x86reg::XMM##N, 32, x86reg::XMM##N, 8, 0, false},                       \
+      {x86reg::XMM##N, 32, x86reg::XMM##N, 4, 0, false},                       \
+      {x86reg::XMM##N, 16, x86reg::XMM##N, 8, 0, false},                       \
+      {x86reg::XMM##N, 16, x86reg::XMM##N, 4, 0, false}, {                     \
     x86reg::XMM##N, 8, x86reg::XMM##N, 4, 0, false                             \
-  } /* low 32 of low 64 */
+  }
+
+#define X64_OPMASK_SUBREGS(N)                                                  \
+  {x86reg::K##N, 8, x86reg::K##N, 4, 0, true},                                 \
+      {x86reg::K##N, 8, x86reg::K##N, 2, 0, true},                             \
+      {x86reg::K##N, 8, x86reg::K##N, 1, 0, true},                             \
+      {x86reg::K##N, 4, x86reg::K##N, 2, 0, true},                             \
+      {x86reg::K##N, 4, x86reg::K##N, 1, 0, true}, {                           \
+    x86reg::K##N, 2, x86reg::K##N, 1, 0, true                                  \
+  }
 
 static const SubRegEntry X64SubRegs[] = {
-    X64_GPR_SUBREGS_H(x86reg::RAX) X64_GPR_SUBREGS_H(x86reg::RCX)
-        X64_GPR_SUBREGS_H(x86reg::RDX) X64_GPR_SUBREGS_H(x86reg::RBX)
-            X64_GPR_SUBREGS_NO_H(x86reg::RSP) X64_GPR_SUBREGS_NO_H(x86reg::RBP)
-                X64_GPR_SUBREGS_NO_H(x86reg::RSI) X64_GPR_SUBREGS_NO_H(
-                    x86reg::RDI) X64_GPR_SUBREGS_NO_H(x86reg::R8)
-                    X64_GPR_SUBREGS_NO_H(x86reg::R9)
-                        X64_GPR_SUBREGS_NO_H(x86reg::R10)
-                            X64_GPR_SUBREGS_NO_H(x86reg::R11)
-                                X64_GPR_SUBREGS_NO_H(x86reg::R12)
-                                    X64_GPR_SUBREGS_NO_H(x86reg::R13)
-                                        X64_GPR_SUBREGS_NO_H(x86reg::R14)
-                                            X64_GPR_SUBREGS_NO_H(x86reg::R15)
-                                                X64_XMM_SUBREGS(0),
-    X64_XMM_SUBREGS(1),
-    X64_XMM_SUBREGS(2),
-    X64_XMM_SUBREGS(3),
-    X64_XMM_SUBREGS(4),
-    X64_XMM_SUBREGS(5),
-    X64_XMM_SUBREGS(6),
-    X64_XMM_SUBREGS(7),
-    X64_XMM_SUBREGS(8),
-    X64_XMM_SUBREGS(9),
-    X64_XMM_SUBREGS(10),
-    X64_XMM_SUBREGS(11),
-    X64_XMM_SUBREGS(12),
-    X64_XMM_SUBREGS(13),
-    X64_XMM_SUBREGS(14),
-    X64_XMM_SUBREGS(15),
+    // clang-format off
+    X64_GPR_SUBREGS_H(x86reg::RAX)
+    X64_GPR_SUBREGS_H(x86reg::RCX)
+    X64_GPR_SUBREGS_H(x86reg::RDX)
+    X64_GPR_SUBREGS_H(x86reg::RBX)
+    X64_GPR_SUBREGS_NO_H(x86reg::RSP)
+    X64_GPR_SUBREGS_NO_H(x86reg::RBP)
+    X64_GPR_SUBREGS_NO_H(x86reg::RSI)
+    X64_GPR_SUBREGS_NO_H(x86reg::RDI)
+    X64_GPR_SUBREGS_NO_H(x86reg::R8)
+    X64_GPR_SUBREGS_NO_H(x86reg::R9)
+    X64_GPR_SUBREGS_NO_H(x86reg::R10)
+    X64_GPR_SUBREGS_NO_H(x86reg::R11)
+    X64_GPR_SUBREGS_NO_H(x86reg::R12)
+    X64_GPR_SUBREGS_NO_H(x86reg::R13)
+    X64_GPR_SUBREGS_NO_H(x86reg::R14)
+    X64_GPR_SUBREGS_NO_H(x86reg::R15)
+    X64_GPR_SUBREGS_NO_H(x86reg::R16)
+    X64_GPR_SUBREGS_NO_H(x86reg::R17)
+    X64_GPR_SUBREGS_NO_H(x86reg::R18)
+    X64_GPR_SUBREGS_NO_H(x86reg::R19)
+    X64_GPR_SUBREGS_NO_H(x86reg::R20)
+    X64_GPR_SUBREGS_NO_H(x86reg::R21)
+    X64_GPR_SUBREGS_NO_H(x86reg::R22)
+    X64_GPR_SUBREGS_NO_H(x86reg::R23)
+    X64_GPR_SUBREGS_NO_H(x86reg::R24)
+    X64_GPR_SUBREGS_NO_H(x86reg::R25)
+    X64_GPR_SUBREGS_NO_H(x86reg::R26)
+    X64_GPR_SUBREGS_NO_H(x86reg::R27)
+    X64_GPR_SUBREGS_NO_H(x86reg::R28)
+    X64_GPR_SUBREGS_NO_H(x86reg::R29)
+    X64_GPR_SUBREGS_NO_H(x86reg::R30)
+    X64_GPR_SUBREGS_NO_H(x86reg::R31)
+    X64_VECTOR_SUBREGS(0),
+    // clang-format on
+    X64_VECTOR_SUBREGS(1),
+    X64_VECTOR_SUBREGS(2),
+    X64_VECTOR_SUBREGS(3),
+    X64_VECTOR_SUBREGS(4),
+    X64_VECTOR_SUBREGS(5),
+    X64_VECTOR_SUBREGS(6),
+    X64_VECTOR_SUBREGS(7),
+    X64_VECTOR_SUBREGS(8),
+    X64_VECTOR_SUBREGS(9),
+    X64_VECTOR_SUBREGS(10),
+    X64_VECTOR_SUBREGS(11),
+    X64_VECTOR_SUBREGS(12),
+    X64_VECTOR_SUBREGS(13),
+    X64_VECTOR_SUBREGS(14),
+    X64_VECTOR_SUBREGS(15),
+    X64_VECTOR_SUBREGS(16),
+    X64_VECTOR_SUBREGS(17),
+    X64_VECTOR_SUBREGS(18),
+    X64_VECTOR_SUBREGS(19),
+    X64_VECTOR_SUBREGS(20),
+    X64_VECTOR_SUBREGS(21),
+    X64_VECTOR_SUBREGS(22),
+    X64_VECTOR_SUBREGS(23),
+    X64_VECTOR_SUBREGS(24),
+    X64_VECTOR_SUBREGS(25),
+    X64_VECTOR_SUBREGS(26),
+    X64_VECTOR_SUBREGS(27),
+    X64_VECTOR_SUBREGS(28),
+    X64_VECTOR_SUBREGS(29),
+    X64_VECTOR_SUBREGS(30),
+    X64_VECTOR_SUBREGS(31),
+    X64_OPMASK_SUBREGS(0),
+    X64_OPMASK_SUBREGS(1),
+    X64_OPMASK_SUBREGS(2),
+    X64_OPMASK_SUBREGS(3),
+    X64_OPMASK_SUBREGS(4),
+    X64_OPMASK_SUBREGS(5),
+    X64_OPMASK_SUBREGS(6),
+    X64_OPMASK_SUBREGS(7),
 };
 
 #undef X64_GPR_SUBREGS
 #undef X64_GPR_SUBREGS_H
 #undef X64_GPR_SUBREGS_NO_H
+#undef X64_VECTOR_SUBREGS
+#undef X64_OPMASK_SUBREGS
+
+static const uint64_t X64GeneralRegs[] = {
+    x86reg::RAX, x86reg::RCX, x86reg::RDX, x86reg::RBX, x86reg::RSP,
+    x86reg::RBP, x86reg::RSI, x86reg::RDI, x86reg::R8,  x86reg::R9,
+    x86reg::R10, x86reg::R11, x86reg::R12, x86reg::R13, x86reg::R14,
+    x86reg::R15, x86reg::R16, x86reg::R17, x86reg::R18, x86reg::R19,
+    x86reg::R20, x86reg::R21, x86reg::R22, x86reg::R23, x86reg::R24,
+    x86reg::R25, x86reg::R26, x86reg::R27, x86reg::R28, x86reg::R29,
+    x86reg::R30, x86reg::R31,
+};
+
+static const uint64_t X86GeneralRegs[] = {
+    x86reg::RAX, x86reg::RCX, x86reg::RDX, x86reg::RBX,
+    x86reg::RSP, x86reg::RBP, x86reg::RSI, x86reg::RDI,
+};
 
 static const uint64_t X64SysVParams[] = {
     x86reg::RDI, x86reg::RSI, x86reg::RDX, x86reg::RCX, x86reg::R8, x86reg::R9,
@@ -131,8 +204,8 @@ TargetRegInfo X64RegInfo = {
     x86reg::CF,
     x86reg::DF,
     x86reg::XMM0,
-    32,
-    16,
+    x86reg::VectorRegStride,
+    x86reg::VectorRegCount,
     CondCode::ULT,
     getX86RegName,
 };
@@ -178,7 +251,7 @@ TargetRegInfo X86RegInfo = {
     x86reg::CF,
     x86reg::DF,
     x86reg::XMM0,
-    32,
+    x86reg::VectorRegStride,
     8,
     CondCode::ULT,
     getX86RegName,
@@ -202,6 +275,22 @@ void initX86RegInfoTables() {
   X64RegInfo.IntReturnRegs = X64IntReturnRegs;
   X64RegInfo.FPReturnRegs = X64FPReturnRegs;
   X86RegInfo.IntReturnRegs = X64IntReturnRegs;
+
+  X64RegInfo.VecRegWidth = 64;
+  X64RegInfo.FPABIRegWidth = 16;
+  X64RegInfo.GeneralRegs = X64GeneralRegs;
+  X64RegInfo.OpmaskRegBase = x86reg::OpmaskBase;
+  X64RegInfo.OpmaskRegStride = x86reg::OpmaskRegStride;
+  X64RegInfo.OpmaskRegCount = x86reg::OpmaskRegCount;
+  X64RegInfo.OpmaskRegWidth = 8;
+
+  X86RegInfo.VecRegWidth = 64;
+  X86RegInfo.FPABIRegWidth = 16;
+  X86RegInfo.GeneralRegs = X86GeneralRegs;
+  X86RegInfo.OpmaskRegBase = x86reg::OpmaskBase;
+  X86RegInfo.OpmaskRegStride = x86reg::OpmaskRegStride;
+  X86RegInfo.OpmaskRegCount = x86reg::OpmaskRegCount;
+  X86RegInfo.OpmaskRegWidth = 8;
 }
 
 } // namespace neverd

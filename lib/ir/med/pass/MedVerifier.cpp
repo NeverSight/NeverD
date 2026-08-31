@@ -17,6 +17,7 @@
 
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/LowToMed.h"
 
 #include "llvm/Support/Debug.h"
@@ -57,12 +58,51 @@ bool verifyMedFunc(const MedFunc &Func, const char *PassName) {
         else if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs > 0 &&
                  Op.Inputs[0].isConst()) {
           const auto Id = static_cast<Intrinsic>(Op.Inputs[0].ConstVal);
+          const bool IsApxAtomic = isApxAtomicIntrinsic(Id);
+          if (IsApxAtomic &&
+              !intrinsicApxAtomicShapeIsValid(Id, apxAtomicMedShape(Op)))
+            Err("APX atomic intrinsic has an invalid operand/output contract",
+                Blk.Id, Op.Addr);
+          const bool IsX86Invalidate = Id == Intrinsic::X86Invalidate;
+          if (IsX86Invalidate && !intrinsicX86InvalidateShapeIsValid(
+                                     Id, x86InvalidateMedShape(Op)))
+            Err("x86 invalidation intrinsic has an invalid operand/output "
+                "contract",
+                Blk.Id, Op.Addr);
+          const bool IsX86MsrAccess = Id == Intrinsic::X86MsrAccess;
+          if (IsX86MsrAccess && !intrinsicX86MsrAccessShapeIsValid(
+                                    Id, x86MsrAccessMedShape(Op)))
+            Err("x86 MSR access intrinsic has an invalid operand/output "
+                "contract",
+                Blk.Id, Op.Addr);
+          const bool IsX86DivPrecondition =
+              Id == Intrinsic::X86RequireDivPrecondition;
+          if (IsX86DivPrecondition &&
+              !intrinsicX86DivPreconditionShapeIsValid(
+                  Id, x86DivPreconditionMedShape(Op)))
+            Err("x86 divide precondition has an invalid operand/output "
+                "contract",
+                Blk.Id, Op.Addr);
+          if (isPdepPextIntrinsic(Id) &&
+              !intrinsicPdepPextShapeIsValid(Id, pdepPextMedShape(Op)))
+            Err("PDEP/PEXT intrinsic has an invalid operand/output contract",
+                Blk.Id, Op.Addr);
+          if (Id == Intrinsic::X86FPClass && !HasExplicitAddressSpace &&
+              (Op.NumInputs != 5 || !Op.Inputs[1].isConst() ||
+               !Op.Inputs[4].isConst() ||
+               (Op.Inputs[1].ConstVal & ~UINT64_C(0x03)) != 0 ||
+               !intrinsicX86FPClassShapeIsValid(
+                   Op.NumInputs, Op.Output.Size,
+                   static_cast<uint8_t>(Op.Inputs[1].ConstVal),
+                   Op.Inputs[1].Size, Op.Inputs[2].Size, Op.Inputs[3].Size,
+                   Op.Inputs[4].Size)))
+            Err("x86 FPClass intrinsic has an invalid operand/output shape",
+                Blk.Id, Op.Addr);
           const bool IsDefaultString =
               !HasExplicitAddressSpace && isX86StringIntrinsic(Id);
-          if (IsDefaultString &&
-              !intrinsicStringShapeIsValid(
-                  Id, Op.NumInputs, Op.Output.Size,
-                  Op.NumInputs > 1 ? Op.Inputs[1].Size : 0))
+          if (IsDefaultString && !intrinsicStringShapeIsValid(
+                                     Id, Op.NumInputs, Op.Output.Size,
+                                     Op.NumInputs > 1 ? Op.Inputs[1].Size : 0))
             Err("x86 string intrinsic has an invalid operand/output shape",
                 Blk.Id, Op.Addr);
           const bool IsMemoryIntrinsic =
@@ -75,8 +115,8 @@ bool verifyMedFunc(const MedFunc &Func, const char *PassName) {
               intrinsicDefaultRegisterShapeIsValid(
                   Id, Op.NumInputs, Op.Output.Size,
                   Op.NumInputs > 1 ? Op.Inputs[1].Size : 0);
-          if (IsMemoryIntrinsic && !IsDefaultString &&
-              !IsDefaultRegisterForm &&
+          if (IsMemoryIntrinsic && !IsDefaultString && !IsDefaultRegisterForm &&
+              !IsApxAtomic && !IsX86Invalidate &&
               !intrinsicMemoryAddressSpaceShapeIsValid(
                   Id, Op.NumInputs, Op.Output.Size,
                   Op.NumInputs > 1 ? Op.Inputs[1].Size : 0,
@@ -84,10 +124,8 @@ bool verifyMedFunc(const MedFunc &Func, const char *PassName) {
                   Op.NumInputs > 3 ? Op.Inputs[3].Size : 0))
             Err("memory intrinsic has an invalid operand/output shape", Blk.Id,
                 Op.Addr);
-        } else if (HasExplicitAddressSpace &&
-                   Op.Opcode == NdOp::INTRINSIC) {
-          Err("intrinsic does not support a memory address space", Blk.Id,
-              Op.Addr);
+        } else if (Op.Opcode == NdOp::INTRINSIC) {
+          Err("intrinsic has no constant intrinsic ID", Blk.Id, Op.Addr);
         }
       }
       if (Op.DoesNotReturn && Op.Opcode != NdOp::CALL &&

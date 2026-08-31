@@ -22,6 +22,19 @@
 
 namespace neverd {
 
+namespace {
+
+bool isZmm64(const cs_x86_op &Operand) {
+  return Operand.type == X86_OP_REG && Operand.size == 64 &&
+         Operand.reg >= X86_REG_ZMM0 && Operand.reg <= X86_REG_ZMM31;
+}
+
+unsigned zmmIndex(const cs_x86_op &Operand) {
+  return static_cast<unsigned>(Operand.reg - X86_REG_ZMM0);
+}
+
+} // namespace
+
 bool liftLegacyXOP(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
                    const cs_x86 &X86) {
   unsigned InsnId = Insn->id;
@@ -98,15 +111,83 @@ bool liftLegacyXOP(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   }
 
   // ========================================================================
-  // AVX-512 VP4DPWSSD / VP4DPWSSDS — dot product accumulate.
+  // AVX-512 VP4DPWSSD / VP4DPWSSDS — exact four-register dot product.  The
+  // memory operand is m128 (Tuple1_4X), while EVEX.vvvv names the first
+  // member of a four-ZMM block.  Keep the entire effect in one intrinsic so
+  // a fault cannot expose a partial memory read or destination update.
   // ========================================================================
   case X86_INS_VP4DPWSSD:
   case X86_INS_VP4DPWSSDS: {
-    if (X86.op_count < 3)
+    CanonicalEvexEncodingInfo Encoding;
+    if (!parseCanonicalEvexEncodingInfo(Insn, X86, L.targetArch(), Encoding) ||
+        X86.op_count < 3 || X86.op_count > 4 || X86.encoding.imm_offset != 0 ||
+        X86.encoding.imm_size != 0 || (Encoding.P0 & 0x07) != 2 ||
+        ((Encoding.P1 | 0x04) & 0x87) != 0x07 || (Encoding.P2 & 0x60) != 0x40 ||
+        (Encoding.P2 & 0x10) != 0 ||
+        Encoding.Opcode !=
+            static_cast<uint8_t>(InsnId == X86_INS_VP4DPWSSD ? 0x52 : 0x53) ||
+        (Encoding.ModRM & 0xc0) == 0xc0 || X86.avx_sae ||
+        X86.avx_rm != X86_AVX_RM_INVALID)
       break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    S.emit(NdOp::INT_ADD, Dst, {Dst, Src});
+
+    const bool HasMask = X86.op_count == 4;
+    const unsigned SourceIndex = HasMask ? 2 : 1;
+    const unsigned MemoryIndex = HasMask ? 3 : 2;
+    const cs_x86_op &Destination = X86.operands[0];
+    const cs_x86_op &Source = X86.operands[SourceIndex];
+    const cs_x86_op &Memory = X86.operands[MemoryIndex];
+    if (!isZmm64(Destination) || !isZmm64(Source) ||
+        Memory.type != X86_OP_MEM || Memory.size != 16 ||
+        decodeEvexVectorRegIndex(Encoding.P0, Encoding.ModRM) !=
+            zmmIndex(Destination) ||
+        decodeEvexVectorVvvvIndex(Encoding.P1, Encoding.P2) !=
+            zmmIndex(Source) ||
+        !validateCanonicalEvexMemoryTail(Insn, X86, Encoding, Memory, 16))
+      break;
+
+    for (unsigned I = 0; I < X86.op_count; ++I)
+      if (X86.operands[I].avx_bcast != X86_AVX_BCAST_INVALID ||
+          (X86.operands[I].avx_zero_opmask && (!HasMask || I != 1)))
+        return false;
+
+    const unsigned SourceBase = zmmIndex(Source) & ~3u;
+    if (SourceBase + 3 >= 32 ||
+        (L.targetArch() == Arch::X86 &&
+         (zmmIndex(Destination) >= 8 || SourceBase + 3 >= 8)))
+      break;
+    for (unsigned I = 0; I < 4; ++I) {
+      const RegInfo Info =
+          mapCapstoneReg(static_cast<x86_reg>(X86_REG_ZMM0 + SourceBase + I));
+      if (Info.Offset == UINT64_C(0xffff) || Info.Size < 64)
+        return false;
+    }
+
+    const uint8_t EncodedMask = Encoding.P2 & 7;
+    const bool ZeroMask = (Encoding.P2 & 0x80) != 0;
+    NdVar Mask = NdVar::cst(UINT64_C(0xffff), 2);
+    if (HasMask) {
+      const cs_x86_op &MaskOperand = X86.operands[1];
+      const RegInfo MaskInfo =
+          mapCapstoneReg(static_cast<x86_reg>(MaskOperand.reg));
+      if (!isX86OpmaskOperand(MaskOperand) || MaskOperand.reg == X86_REG_K0 ||
+          MaskOperand.size != 2 ||
+          EncodedMask != static_cast<unsigned>(MaskOperand.reg - X86_REG_K0) ||
+          MaskInfo.Offset == UINT64_C(0xffff) || MaskInfo.Size < 2 ||
+          static_cast<bool>(MaskOperand.avx_zero_opmask) != ZeroMask)
+        break;
+      Mask = NdVar::reg(MaskInfo.Offset, 2);
+    } else if (EncodedMask != 0 || ZeroMask) {
+      break;
+    }
+
+    const Intrinsic Id = InsnId == X86_INS_VP4DPWSSD ? Intrinsic::X86VP4DPWSSD
+                                                     : Intrinsic::X86VP4DPWSSDS;
+    const NdVar OldDestination = L.operandRead(S, Destination);
+    if (!S.emitMemoryIntrinsic(Id, Memory,
+                               {OldDestination, NdVar::cst(SourceBase, 1), Mask,
+                                NdVar::cst(ZeroMask ? 1 : 0, 1)},
+                               L.operandWrite(Destination)))
+      break;
     break;
   }
 

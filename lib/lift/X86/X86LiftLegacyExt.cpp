@@ -243,12 +243,31 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     break;
   case X86_INS_WRSSD:
   case X86_INS_WRSSQ:
-    S.emitIntrinsic(Intrinsic::CetWrss);
-    break;
   case X86_INS_WRUSSD:
-  case X86_INS_WRUSSQ:
-    S.emitIntrinsic(Intrinsic::CetWruss);
+  case X86_INS_WRUSSQ: {
+    const bool Is64 = InsnId == X86_INS_WRSSQ || InsnId == X86_INS_WRUSSQ;
+    const uint16_t Width = Is64 ? 8 : 4;
+    if (X86.op_count != 2 || X86.operands[0].type != X86_OP_MEM ||
+        X86.operands[1].type != X86_OP_REG || X86.operands[0].size != Width ||
+        X86.operands[1].size != Width)
+      return false;
+
+    const NdVar Address = S.computeEA(X86.operands[0]);
+    const NdVar Source = L.operandRead(S, X86.operands[1]);
+    if (Address.Size != 8 || Source.Size != Width)
+      return false;
+    const NdMemoryAddressSpace AddressSpace =
+        S.memoryAddressSpace(X86.operands[0]);
+    // The opaque CET effect owns enablement, privilege, page type and
+    // alignment checks in architectural order.  Moving alignment ahead of it
+    // would expose #GP before the higher-priority #UD/CPL checks.
+    S.emitIntrinsic(InsnId == X86_INS_WRSSD || InsnId == X86_INS_WRSSQ
+                        ? Intrinsic::CetWrss
+                        : Intrinsic::CetWruss,
+                    NdVar(), {Address, Source}, NdMemoryOrdering::None,
+                    AddressSpace);
     break;
+  }
   case X86_INS_SETSSBSY:
     S.emitIntrinsic(Intrinsic::CetSetssbsy);
     break;
@@ -256,9 +275,8 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     S.emitIntrinsic(Intrinsic::CetClrssbsy);
     break;
 
-  // MOVDIRI / MOVDIR64B — direct store.
-  case X86_INS_MOVDIRI:
-  case X86_INS_MOVDIR64B: {
+  // MOVDIRI — scalar direct store.
+  case X86_INS_MOVDIRI: {
     if (X86.op_count < 2)
       break;
     NdVar Dst = L.operandWrite(X86.operands[0]);
@@ -268,6 +286,82 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     } else {
       S.emit(NdOp::COPY, Dst, {Src});
     }
+    break;
+  }
+
+  // MOVDIR64B reads the complete m512 source before issuing one aligned,
+  // 64-byte-atomic direct store to the address held in the register operand.
+  // The register is an address source, not a destination register.
+  case X86_INS_MOVDIR64B: {
+    // In 64-bit mode ES has architectural base zero.  The 32-bit form needs
+    // explicit ES-base and segment-limit state that LowIR does not model, so
+    // keep that form fail-closed instead of silently treating ES as flat.
+    if (L.targetArch() != Arch::X64 || X86.op_count != 2 ||
+        X86.operands[0].type != X86_OP_REG ||
+        X86.operands[1].type != X86_OP_MEM || X86.operands[1].size != 64)
+      return false;
+
+    NdVar Address = L.operandRead(S, X86.operands[0]);
+    if (Address.Size != 4 && Address.Size != 8)
+      return false;
+    if (Address.Size != 8) {
+      NdVar ExtendedAddress = S.makeTemp(8);
+      S.emit(NdOp::INT_ZEXT, ExtendedAddress, {Address});
+      Address = ExtendedAddress;
+    }
+
+    // Intel specifies that the ordinary source read precedes the direct
+    // store.  Keeping the load first also snapshots overlapping sources.
+    const NdVar Source = L.operandRead(S, X86.operands[1]);
+    if (Source.Size != 64)
+      return false;
+    S.emitIntrinsic(Intrinsic::RequireAligned, {},
+                    {Address, NdVar::cst(64, 8)});
+
+    const NdVar FullMask = expandCompactLaneMask(S, NdVar::cst(0xff, 1), 64, 8);
+    if (FullMask.Size != 64)
+      return false;
+    S.emitIntrinsic(Intrinsic::MaskedStoreQ, {}, {Address, FullMask, Source});
+    break;
+  }
+
+  // ENQCMD/ENQCMDS own their complete ordered system-memory transaction.
+  // Keeping the source as an address (rather than an eager LOAD plus a byte
+  // snapshot) lets an authenticated concrete executor enforce the
+  // PASID/CPL check before the 64-byte source read, then validate the command
+  // header and portal before returning the enqueue completion in ZF.
+  case X86_INS_ENQCMD:
+  case X86_INS_ENQCMDS: {
+    // The portal register is an offset in ES.  ES has architectural base zero
+    // in 64-bit mode; the 32-bit modes need explicit ES base/limit state that
+    // LowIR does not carry, so those modes remain fail-closed.
+    if (L.targetArch() != Arch::X64 ||
+        (S.AddressSize != 4 && S.AddressSize != 8) || X86.op_count != 2 ||
+        X86.operands[0].type != X86_OP_REG ||
+        X86.operands[1].type != X86_OP_MEM || X86.operands[1].size != 64)
+      return false;
+
+    NdVar PortalAddress = L.operandRead(S, X86.operands[0]);
+    if (X86.operands[0].size != S.AddressSize ||
+        PortalAddress.Size != S.AddressSize)
+      return false;
+    if (S.AddressSize == 4) {
+      const NdVar ExtendedPortal = S.makeTemp(8);
+      S.emit(NdOp::INT_ZEXT, ExtendedPortal, {PortalAddress});
+      PortalAddress = ExtendedPortal;
+    }
+    const NdVar CommandAddress = S.computeEA(X86.operands[1]);
+    if (PortalAddress.Size != 8 || CommandAddress.Size != 8)
+      return false;
+    const NdMemoryAddressSpace SourceAddressSpace =
+        S.memoryAddressSpace(X86.operands[1]);
+    S.emitIntrinsic(
+        InsnId == X86_INS_ENQCMD ? Intrinsic::Enqcmd : Intrinsic::Enqcmds,
+        NdVar::reg(x86reg::ZF, 1), {CommandAddress, PortalAddress},
+        NdMemoryOrdering::None, SourceAddressSpace);
+    for (uint64_t Flag :
+         {x86reg::CF, x86reg::PF, x86reg::AF, x86reg::SF, x86reg::OF})
+      S.emit(NdOp::COPY, NdVar::reg(Flag, 1), {NdVar::scalar(0, 1)});
     break;
   }
 
@@ -535,9 +629,8 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   case X86_INS_VLDMXCSR:
   case X86_INS_VSTMXCSR:
     if (X86.op_count < 1 ||
-        !S.emitMemoryIntrinsic(InsnId == X86_INS_VLDMXCSR
-                                   ? Intrinsic::Ldmxcsr
-                                   : Intrinsic::Stmxcsr,
+        !S.emitMemoryIntrinsic(InsnId == X86_INS_VLDMXCSR ? Intrinsic::Ldmxcsr
+                                                          : Intrinsic::Stmxcsr,
                                X86.operands[0]))
       return false;
     break;

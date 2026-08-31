@@ -77,7 +77,7 @@ struct EmulatorSkips {
 /// \endcode
 class NdOpEmulator {
 public:
-  explicit NdOpEmulator(const BinaryImage &Img) : Img(Img) {}
+  explicit NdOpEmulator(const BinaryImage &Img);
 
   void reset();
 
@@ -86,8 +86,7 @@ public:
   /// Seed/read an exact vector register value for lifted SIMD semantics.  The
   /// scalar API remains the low-64-bit view used by jump-table emulation.
   void setRegisterBytes(uint64_t RegOff, llvm::ArrayRef<uint8_t> Value);
-  std::optional<std::vector<uint8_t>>
-  getRegisterBytes(uint64_t RegOff) const;
+  std::optional<std::vector<uint8_t>> getRegisterBytes(uint64_t RegOff) const;
   void setMXCSR(uint32_t Value) { MXCSR = Value; }
   uint32_t getMXCSR() const { return MXCSR; }
 
@@ -98,6 +97,16 @@ public:
   /// call-preserved registers and strict mode, survives reset().
   bool setMemoryAddressSpaceBase(NdMemoryAddressSpace AddressSpace,
                                  uint64_t Base);
+
+  /// Configure the architectural state required before ENQCMD/ENQCMDS may
+  /// read their 64-byte source.  Without an explicit context those
+  /// instructions fail closed: a BinaryImage cannot authenticate a current
+  /// privilege level or an IA32_PASID value on its own.  LinearAddressBits is
+  /// 48 or 57, matching the two x86-64 canonical-address widths.  Like other
+  /// emulator configuration, this survives reset().
+  bool setX86EnqueueContext(uint8_t CurrentPrivilegeLevel,
+                            uint32_t IA32Pasid,
+                            uint8_t LinearAddressBits);
 
   /// Declare the registers that survive a call by ABI (the stack pointer, frame
   /// pointer, and callee-saved registers) and, by doing so, allow the emulator
@@ -176,11 +185,18 @@ private:
   const BinaryImage &Img;
   std::map<uint64_t, uint64_t> Registers;
   std::map<uint64_t, std::vector<uint8_t>> WideRegisters;
+  /// Distinct store starting addresses retain the bounded write-entry
+  /// accounting contract.  Bytes are kept separately so differently sized
+  /// and overlapping stores compose exactly when a later load spans them.
   std::map<uint64_t, uint64_t> MemStore;
+  std::map<uint64_t, uint8_t> MemStoreBytes;
   uint32_t MXCSR = 0x1f80;
   bool CollectLoads = false;
   std::vector<LoadRecord> LoadLog;
   std::map<NdMemoryAddressSpace, uint64_t> MemoryAddressSpaceBases;
+  std::optional<uint8_t> X86CurrentPrivilegeLevel;
+  std::optional<uint32_t> X86IA32Pasid;
+  std::optional<uint8_t> X86LinearAddressBits;
   bool StepOverCalls = false;
   bool StrictMode = false;
   std::optional<NdVar> ReachedIndirectBranchTarget;
@@ -195,12 +211,18 @@ private:
                                                uint64_t Offset) const;
   void writeOutput(const NdVar &Output, uint64_t Value);
   void writeOutputBytes(const NdVar &Output, llvm::ArrayRef<uint8_t> Value);
+  std::optional<std::vector<uint8_t>>
+  loadMemoryBytes(uint64_t Addr, uint16_t Size) const;
   std::optional<uint64_t> loadMemory(uint64_t Addr, uint16_t Size) const;
+  bool canWriteMemoryBytes(uint64_t Addr, uint16_t Size) const;
   /// Returns false when the write-back store had no room, which is recorded
   /// either way and only ends the path in strict mode.
+  bool storeMemoryBytes(uint64_t Addr, llvm::ArrayRef<uint8_t> Value);
   bool storeMemory(uint64_t Addr, uint16_t Size, uint64_t Value);
 
   bool executeArith(const LowOp &Op);
+  bool executeFloatArith(const LowOp &Op);
+  bool executeFloatConvert(const LowOp &Op);
   bool executeLoad(const LowOp &Op);
   bool executeStore(const LowOp &Op);
   bool executeCopy(const LowOp &Op);
@@ -208,6 +230,17 @@ private:
   bool executeBool(const LowOp &Op);
   bool executeMisc(const LowOp &Op);
   bool executeIntrinsic(const LowOp &Op);
+  bool executeX86Crypto(const LowOp &Op);
+  bool executeX86FPArith(const LowOp &Op);
+  bool executeX86FPConvert(const LowOp &Op);
+  bool executeX86FPRoundTransform(const LowOp &Op);
+  bool executeX86FPExtract(const LowOp &Op);
+  bool executeX86FPRange(const LowOp &Op);
+  bool executeX86FPFixup(const LowOp &Op);
+  bool executeX86FPScale(const LowOp &Op);
+  bool executeX86FPCompare(const LowOp &Op);
+  bool executeX87(const LowOp &Op);
+  void resetX87State();
 
   size_t runImpl(llvm::ArrayRef<LowOp> Ops,
                  llvm::ArrayRef<LowInstructionBoundary> Boundaries);

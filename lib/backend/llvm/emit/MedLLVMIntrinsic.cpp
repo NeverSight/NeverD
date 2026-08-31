@@ -18,6 +18,7 @@
 
 #define DEBUG_TYPE "neverd-med-llvm-intrinsic"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/support/Diagnostic.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -86,12 +87,59 @@ MedLLVMEmitter::atomicIntrinsicAddressInput(const MedOp &Op) const {
 
 llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
                                            llvm::IRBuilder<> &Builder) {
-  uint16_t IntrCode = 0;
-  if (Op.NumInputs > 0 && Op.Inputs[0].isConst())
-    IntrCode = static_cast<uint16_t>(Op.Inputs[0].ConstVal);
+  if (Op.NumInputs == 0 || !Op.Inputs[0].isConst())
+    llvm::report_fatal_error("intrinsic has no constant intrinsic ID");
+  const auto IntrCode = static_cast<uint16_t>(Op.Inputs[0].ConstVal);
 
   using I = Intrinsic;
   auto IC = static_cast<I>(IntrCode);
+
+  if (IC == I::X86RequireDivPrecondition && TargetArch != Arch::X86 &&
+      TargetArch != Arch::X64)
+    llvm::report_fatal_error(
+        "x86 divide precondition requires an x86 target");
+
+  // LowIR carries AMX as exact 64-byte TILECFG and 1-KiB tile values.  A
+  // faithful compiled lowering additionally needs checked strided bulk memory,
+  // restart progress in TILECFG.start_row, and an exception continuation that
+  // publishes partially completed architectural state.  The sealed runtime
+  // ABI currently exposes only scalar memory helpers and no tile-state slots;
+  // declaring an ambient helper here would bypass that ABI and turn faults or
+  // cross-function tile state into guesses.  Reject the complete family before
+  // any target handler can emit an observable instruction.  Once a versioned
+  // runtime contract owns those facilities, this single guard is the handoff
+  // point for an exact AMX value/side-effect emitter.
+  if (isAMXIntrinsic(IC))
+    llvm::report_fatal_error(
+        "AMX LLVM lowering requires a versioned tile-state, "
+        "restartable-memory, and fault-continuation runtime ABI");
+
+  if (isPdepPextIntrinsic(IC) &&
+      !intrinsicPdepPextShapeIsValid(IC, pdepPextMedShape(Op)))
+    llvm::report_fatal_error(
+        "PDEP/PEXT intrinsic has an invalid operand/output contract");
+
+  // LLVM has no stable target-independent representation for the contiguous
+  // packed-address fault contract used by EVEX compress/expand in the LLVM
+  // version supported by this tree.  Never turn a memory effect into zero.
+  if (IC == I::EVEXCompressStore || IC == I::EVEXExpandLoad)
+    llvm::report_fatal_error(
+        "EVEX compress/expand memory lowering is not available");
+
+  // The supported LLVM fork has no stable intrinsic for VDBPSADBW's four
+  // independent immediate selectors.  Returning the generic zero fallback
+  // would silently change program semantics, so keep this exact lift closed
+  // until a target-independent lowering is provided.
+  if (IC == I::Vdbpsadbw)
+    llvm::report_fatal_error("VDBPSADBW LLVM lowering is not available");
+  if (IC == I::X86FourFMA)
+    llvm::report_fatal_error("x86 four-iteration FMA lowering is not available");
+  if (isX86VP4DPIntrinsic(IC))
+    llvm::report_fatal_error(
+        "x86 VP4DP word dot-product lowering is not available");
+  if (IC == I::ApxRaoAdd || IC == I::ApxRaoAnd || IC == I::ApxRaoOr ||
+      IC == I::ApxRaoXor || IC == I::ApxCmpccXadd)
+    llvm::report_fatal_error("APX atomic LLVM lowering is not available");
 
   if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default) {
     if (TargetArch != Arch::X86 && TargetArch != Arch::X64)
@@ -123,8 +171,8 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
   // observable store is silently dropped.  The arity check also makes the
   // handler's nullptr-success convention unambiguous.
   if ((TargetArch == Arch::X86 || TargetArch == Arch::X64) &&
-      (IC == I::MaskedStoreD || IC == I::MaskedStoreQ ||
-       IC == I::MaskedStoreB)) {
+      (IC == I::MaskedStoreB || IC == I::MaskedStoreW ||
+       IC == I::MaskedStoreD || IC == I::MaskedStoreQ)) {
     if (Op.NumInputs < 4 || Op.Output.Size != 0)
       llvm::report_fatal_error(
           "masked-store intrinsic has an invalid operand/output shape");

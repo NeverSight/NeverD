@@ -15,6 +15,7 @@
 #define NEVERD_IR_LOW_LOWIR_H
 
 #include "neverd/ir/NdOps.h"
+#include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/loader/ExceptionInfo.h"
 
 #include "llvm/Support/Errc.h"
@@ -220,6 +221,121 @@ struct LowOp {
       Inputs[NumInputs++] = V;
   }
 };
+
+inline ApxAtomicIntrinsicShape apxAtomicLowShape(const LowOp &Op,
+                                                 Arch TargetArch) {
+  const auto IsScalar = [](const NdVar &Value) {
+    return Value.isConst() || Value.isReg() || Value.isTemp();
+  };
+  return {
+      .TargetArch = TargetArch,
+      .MemoryOrdering = Op.MemoryOrdering,
+      .NumInputs = Op.NumInputs,
+      .IntrinsicIdIsConst = Op.NumInputs > 0 && Op.Inputs[0].isConst(),
+      .IntrinsicIdSize = Op.NumInputs > 0 ? Op.Inputs[0].Size : uint16_t{0},
+      .OutputIsWritableScalar = Op.Output.isReg() || Op.Output.isTemp(),
+      .OutputSize = Op.Output.Size,
+      .AddressIsScalar = Op.NumInputs > 1 && IsScalar(Op.Inputs[1]),
+      .AddressSize = Op.NumInputs > 1 ? Op.Inputs[1].Size : uint16_t{0},
+      .SourceIsScalar = Op.NumInputs > 2 && IsScalar(Op.Inputs[2]),
+      .SourceSize = Op.NumInputs > 2 ? Op.Inputs[2].Size : uint16_t{0},
+      .CompareIsScalar = Op.NumInputs > 3 && IsScalar(Op.Inputs[3]),
+      .CompareSize = Op.NumInputs > 3 ? Op.Inputs[3].Size : uint16_t{0},
+      .ConditionIsConst = Op.NumInputs > 4 && Op.Inputs[4].isConst(),
+      .Condition = Op.NumInputs > 4 ? Op.Inputs[4].Offset : 0,
+      .ConditionSize = Op.NumInputs > 4 ? Op.Inputs[4].Size : uint16_t{0},
+  };
+}
+
+inline X86InvalidateIntrinsicShape x86InvalidateLowShape(const LowOp &Op,
+                                                         Arch TargetArch) {
+  const auto IsScalar = [](const NdVar &Value) {
+    return Value.isConst() || Value.isReg() || Value.isTemp();
+  };
+  return {
+      .TargetArch = TargetArch,
+      .MemoryOrdering = Op.MemoryOrdering,
+      .MemoryAddressSpace = Op.MemoryAddressSpace,
+      .NumInputs = Op.NumInputs,
+      .IntrinsicIdIsConst = Op.NumInputs > 0 && Op.Inputs[0].isConst(),
+      .IntrinsicIdSize = Op.NumInputs > 0 ? Op.Inputs[0].Size : uint16_t{0},
+      .OutputSize = Op.Output.Size,
+      .DescriptorAddressIsScalar = Op.NumInputs > 1 && IsScalar(Op.Inputs[1]),
+      .DescriptorAddressSize =
+          Op.NumInputs > 1 ? Op.Inputs[1].Size : uint16_t{0},
+      .KindIsConst = Op.NumInputs > 2 && Op.Inputs[2].isConst(),
+      .Kind = Op.NumInputs > 2 ? Op.Inputs[2].Offset : UINT64_C(0),
+      .KindSize = Op.NumInputs > 2 ? Op.Inputs[2].Size : uint16_t{0},
+      .TypeIsScalar = Op.NumInputs > 3 && IsScalar(Op.Inputs[3]),
+      .TypeSize = Op.NumInputs > 3 ? Op.Inputs[3].Size : uint16_t{0},
+  };
+}
+
+inline X86MsrAccessIntrinsicShape x86MsrAccessLowShape(const LowOp &Op,
+                                                       Arch TargetArch) {
+  const auto IsScalar = [](const NdVar &Value) {
+    return Value.isConst() || Value.isReg() || Value.isTemp();
+  };
+  return {
+      .TargetArch = TargetArch,
+      .MemoryOrdering = Op.MemoryOrdering,
+      .MemoryAddressSpace = Op.MemoryAddressSpace,
+      .NumInputs = Op.NumInputs,
+      .IntrinsicIdIsConst = Op.NumInputs > 0 && Op.Inputs[0].isConst(),
+      .IntrinsicIdSize = Op.NumInputs > 0 ? Op.Inputs[0].Size : uint16_t{0},
+      .OutputIsWritableScalar = Op.Output.isReg() || Op.Output.isTemp(),
+      .OutputSize = Op.Output.Size,
+      .KindIsConst = Op.NumInputs > 1 && Op.Inputs[1].isConst(),
+      .Kind = Op.NumInputs > 1 ? Op.Inputs[1].Offset : UINT64_C(0),
+      .KindSize = Op.NumInputs > 1 ? Op.Inputs[1].Size : uint16_t{0},
+      .SelectorIsScalar = Op.NumInputs > 2 && IsScalar(Op.Inputs[2]),
+      .SelectorSize = Op.NumInputs > 2 ? Op.Inputs[2].Size : uint16_t{0},
+      .ValueIsScalar = Op.NumInputs > 3 && IsScalar(Op.Inputs[3]),
+      .ValueSize = Op.NumInputs > 3 ? Op.Inputs[3].Size : uint16_t{0},
+  };
+}
+
+inline X86DivPreconditionIntrinsicShape
+x86DivPreconditionLowShape(const LowOp &Op, Arch TargetArch) {
+  const auto IsScalar = [](const NdVar &Value) {
+    return Value.isConst() || Value.isReg() || Value.isTemp();
+  };
+  return {
+      .TargetArch = TargetArch,
+      .MemoryOrdering = Op.MemoryOrdering,
+      .MemoryAddressSpace = Op.MemoryAddressSpace,
+      .NumInputs = Op.NumInputs,
+      .IntrinsicIdIsConst = Op.NumInputs > 0 && Op.Inputs[0].isConst(),
+      .IntrinsicIdSize = Op.NumInputs > 0 ? Op.Inputs[0].Size : uint16_t{0},
+      .OutputSize = Op.Output.Size,
+      .DividendIsScalar = Op.NumInputs > 1 && IsScalar(Op.Inputs[1]),
+      .DividendSize = Op.NumInputs > 1 ? Op.Inputs[1].Size : uint16_t{0},
+      .DivisorIsScalar = Op.NumInputs > 2 && IsScalar(Op.Inputs[2]),
+      .DivisorSize = Op.NumInputs > 2 ? Op.Inputs[2].Size : uint16_t{0},
+      .KindIsConst = Op.NumInputs > 3 && Op.Inputs[3].isConst(),
+      .Kind = Op.NumInputs > 3 ? Op.Inputs[3].Offset : UINT64_C(0),
+      .KindSize = Op.NumInputs > 3 ? Op.Inputs[3].Size : uint16_t{0},
+  };
+}
+
+inline PdepPextIntrinsicShape pdepPextLowShape(const LowOp &Op) {
+  const auto IsScalar = [](const NdVar &Value) {
+    return Value.isConst() || Value.isReg() || Value.isTemp();
+  };
+  return {
+      .MemoryOrdering = Op.MemoryOrdering,
+      .MemoryAddressSpace = Op.MemoryAddressSpace,
+      .NumInputs = Op.NumInputs,
+      .IntrinsicIdIsConst = Op.NumInputs > 0 && Op.Inputs[0].isConst(),
+      .IntrinsicIdSize = Op.NumInputs > 0 ? Op.Inputs[0].Size : uint16_t{0},
+      .OutputIsWritableScalar = Op.Output.isReg() || Op.Output.isTemp(),
+      .OutputSize = Op.Output.Size,
+      .SourceIsScalar = Op.NumInputs > 1 && IsScalar(Op.Inputs[1]),
+      .SourceSize = Op.NumInputs > 1 ? Op.Inputs[1].Size : uint16_t{0},
+      .MaskIsScalar = Op.NumInputs > 2 && IsScalar(Op.Inputs[2]),
+      .MaskSize = Op.NumInputs > 2 ? Op.Inputs[2].Size : uint16_t{0},
+  };
+}
 
 /// Canonical operand roles for LowIR memory effects.  LOAD/STORE may carry an
 /// explicit address-space operand in input 0; atomics do not.  Keeping this

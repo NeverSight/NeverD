@@ -87,8 +87,7 @@ void MedLLVMEmitter::ensureImportStorageSnapshot() const {
   ConflictingImportStorageSlots.clear();
   if (!Img)
     return;
-  ImportStorageSlotCollection ImportStorage =
-      Img->collectImportStorageSlots();
+  ImportStorageSlotCollection ImportStorage = Img->collectImportStorageSlots();
   EffectiveImportStorageSlots = std::move(ImportStorage.Slots);
   ConflictingImportStorageSlots = std::move(ImportStorage.Conflicts);
 }
@@ -154,8 +153,8 @@ void MedLLVMEmitter::initializeCxxContinuationPlans(
       Plan.SourceFunction = Mod->getFunction(Name->second);
     Plan.PreconditionsComplete =
         TargetArch == Arch::X64 && TargetFormat == BinaryFormat::COFF &&
-        Plan.BodyEmitted && Plan.SourceFunction &&
-        Plan.HasFH3GroupIdentity && Plan.IsSeparated && Plan.IsCatchFunclet &&
+        Plan.BodyEmitted && Plan.SourceFunction && Plan.HasFH3GroupIdentity &&
+        Plan.IsSeparated && Plan.IsCatchFunclet &&
         Func.CxxContinuationExitAnalysisComplete &&
         !Func.CxxContinuationExits.empty();
     Plan.Bindings.reserve(Func.CxxContinuationExits.size());
@@ -254,8 +253,8 @@ void MedLLVMEmitter::finalizeCxxContinuationPlans() {
     }
   }
 
-  auto MetadataIndex = [](const llvm::Metadata *Metadata)
-      -> std::optional<size_t> {
+  auto MetadataIndex =
+      [](const llvm::Metadata *Metadata) -> std::optional<size_t> {
     const auto *AsConstant =
         llvm::dyn_cast_or_null<llvm::ConstantAsMetadata>(Metadata);
     const auto *Integer =
@@ -297,8 +296,7 @@ void MedLLVMEmitter::finalizeCxxContinuationPlans() {
           continue;
         }
         auto *Return = llvm::dyn_cast<llvm::ReturnInst>(&Instruction);
-        CxxContinuationReturnBinding &Binding =
-            Plan.Bindings[*BindingIndex];
+        CxxContinuationReturnBinding &Binding = Plan.Bindings[*BindingIndex];
         if (!Return || Binding.Return) {
           Invalid[*PlanIndex] = true;
           continue;
@@ -329,8 +327,8 @@ void MedLLVMEmitter::finalizeCxxContinuationPlans() {
     if (!Inserted && It->second != &Plan)
       ConflictingFunctionPlanOwners.insert(Plan.SourceFunction);
   }
-  auto ReturnedBlockAddress = [](const llvm::Value *Value)
-      -> const llvm::BasicBlock * {
+  auto ReturnedBlockAddress =
+      [](const llvm::Value *Value) -> const llvm::BasicBlock * {
     for (unsigned Depth = 0; Value && Depth != 4; ++Depth) {
       if (const auto *Address = llvm::dyn_cast<llvm::BlockAddress>(Value))
         return Address->getBasicBlock();
@@ -345,10 +343,9 @@ void MedLLVMEmitter::finalizeCxxContinuationPlans() {
         Opcode = Cast->getOpcode();
         Operand = Cast->getOperand(0);
       }
-      if (!Operand ||
-          (Opcode != llvm::Instruction::PtrToInt &&
-           Opcode != llvm::Instruction::BitCast &&
-           Opcode != llvm::Instruction::AddrSpaceCast))
+      if (!Operand || (Opcode != llvm::Instruction::PtrToInt &&
+                       Opcode != llvm::Instruction::BitCast &&
+                       Opcode != llvm::Instruction::AddrSpaceCast))
         return nullptr;
       Value = Operand;
     }
@@ -366,7 +363,8 @@ void MedLLVMEmitter::finalizeCxxContinuationPlans() {
     if (Plan.SourceFunction)
       for (const llvm::BasicBlock &Block : *Plan.SourceFunction)
         for (const llvm::Instruction &Instruction : Block)
-          if (const auto *Return = llvm::dyn_cast<llvm::ReturnInst>(&Instruction);
+          if (const auto *Return =
+                  llvm::dyn_cast<llvm::ReturnInst>(&Instruction);
               Return && !BoundReturns.count(Return))
             Complete = false;
     if (BoundReturns.size() != Plan.Bindings.size())
@@ -569,7 +567,10 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
   // assigns it to the FP register file; an 8/4-byte register (ARM D/S) takes a
   // scalar double/float so the AAPCS-VFP lowering assigns it to D/S.
   auto fpAbiType = [&](uint16_t ElemSize) -> llvm::Type * {
-    if (TRI.VecRegStride >= 16)
+    const uint16_t ABIWidth = TRI.FPABIRegWidth != 0
+                                  ? TRI.FPABIRegWidth
+                                  : static_cast<uint16_t>(TRI.VecRegStride);
+    if (ABIWidth >= 16)
       return Vec2I64;
     return ElemSize <= 4 ? llvm::Type::getFloatTy(*Ctx)
                          : llvm::Type::getDoubleTy(*Ctx);

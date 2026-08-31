@@ -19,11 +19,13 @@
 
 #define DEBUG_TYPE "neverd-med-llvm-simd"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/med/IntrinsicShapes.h"
 
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/IntrinsicsX86.h"
+#include "llvm/Support/ErrorHandling.h"
 
 namespace neverd {
 
@@ -179,11 +181,14 @@ llvm::Value *MedLLVMEmitter::emitPackedShift(const MedOp &Op, Intrinsic IC,
 llvm::Value *MedLLVMEmitter::emitBitManipSimd(const MedOp &Op, Intrinsic IC,
                                               llvm::IRBuilder<> &Builder) {
   using I = Intrinsic;
+  if (isPdepPextIntrinsic(IC) &&
+      !intrinsicPdepPextShapeIsValid(IC, pdepPextMedShape(Op)))
+    llvm::report_fatal_error(
+        "PDEP/PEXT intrinsic has an invalid operand/output contract");
   auto *OutTy = sizeToType(Op.Output.Size);
 
   //--- PDEP / PEXT (BMI2) ---
-  if ((IC == I::Pdep || IC == I::Pext) && Op.NumInputs >= 3 &&
-      Op.Output.Size > 0) {
+  if (IC == I::Pdep || IC == I::Pext) {
     auto *S = getVar(Op.Inputs[1], Builder);
     auto *M = getVar(Op.Inputs[2], Builder);
     bool Is64 = (Op.Output.Size == 8);
@@ -239,14 +244,33 @@ llvm::Value *MedLLVMEmitter::emitMaskedMemOp(const MedOp &Op, Intrinsic IC,
                                              llvm::IRBuilder<> &Builder) {
   using I = Intrinsic;
 
+  const auto ElementBits = [](Intrinsic Id) -> unsigned {
+    switch (Id) {
+    case I::MaskedLoadB:
+    case I::MaskedStoreB:
+      return 8;
+    case I::MaskedLoadW:
+    case I::MaskedStoreW:
+      return 16;
+    case I::MaskedLoadD:
+    case I::MaskedStoreD:
+      return 32;
+    case I::MaskedLoadQ:
+    case I::MaskedStoreQ:
+      return 64;
+    default:
+      return 0;
+    }
+  };
+
   //--- Masked load ---
-  if (Op.NumInputs >= 3 && (IC == I::MaskedLoadD || IC == I::MaskedLoadQ)) {
+  if (Op.NumInputs >= 3 && (IC == I::MaskedLoadB || IC == I::MaskedLoadW ||
+                            IC == I::MaskedLoadD || IC == I::MaskedLoadQ)) {
     auto *Addr = Op.MemoryAddressSpace == NdMemoryAddressSpace::Default
                      ? getVar(Op.Inputs[1], Builder)
                      : getRawSegmentOffset(Op.Inputs[1], Builder);
     auto *MaskVal = getVar(Op.Inputs[2], Builder);
-    bool IsQ = (IC == I::MaskedLoadQ);
-    unsigned Elem = IsQ ? 64 : 32;
+    unsigned Elem = ElementBits(IC);
     unsigned N = (Op.Output.Size * 8) / Elem;
     auto *ETy = llvm::IntegerType::get(*Ctx, Elem);
     auto *VTy = llvm::FixedVectorType::get(ETy, N);
@@ -268,15 +292,14 @@ llvm::Value *MedLLVMEmitter::emitMaskedMemOp(const MedOp &Op, Intrinsic IC,
   }
 
   //--- Masked store ---
-  if (Op.NumInputs >= 4 && (IC == I::MaskedStoreD || IC == I::MaskedStoreQ ||
-                            IC == I::MaskedStoreB)) {
+  if (Op.NumInputs >= 4 && (IC == I::MaskedStoreB || IC == I::MaskedStoreW ||
+                            IC == I::MaskedStoreD || IC == I::MaskedStoreQ)) {
     auto *Addr = Op.MemoryAddressSpace == NdMemoryAddressSpace::Default
                      ? getVar(Op.Inputs[1], Builder)
                      : getRawSegmentOffset(Op.Inputs[1], Builder);
     auto *MaskVal = getVar(Op.Inputs[2], Builder);
     auto *StoreData = getVar(Op.Inputs[3], Builder);
-    bool IsQ = (IC == I::MaskedStoreQ);
-    unsigned Elem = IC == I::MaskedStoreB ? 8 : (IsQ ? 64 : 32);
+    unsigned Elem = ElementBits(IC);
     unsigned Bits = StoreData->getType()->isIntegerTy()
                         ? StoreData->getType()->getIntegerBitWidth()
                         : 128;
@@ -572,8 +595,9 @@ llvm::Value *MedLLVMEmitter::emitMiscSimd(const MedOp &Op, Intrinsic IC,
     if (auto *R = emitBitManipSimd(Op, IC, Builder))
       return R;
 
-  if (IC == I::MaskedLoadD || IC == I::MaskedLoadQ || IC == I::MaskedStoreD ||
-      IC == I::MaskedStoreQ || IC == I::MaskedStoreB)
+  if (IC == I::MaskedLoadB || IC == I::MaskedLoadW || IC == I::MaskedLoadD ||
+      IC == I::MaskedLoadQ || IC == I::MaskedStoreB || IC == I::MaskedStoreW ||
+      IC == I::MaskedStoreD || IC == I::MaskedStoreQ)
     return emitMaskedMemOp(Op, IC, Builder);
 
   if (IC == I::Pcmpistri || IC == I::Pcmpistrm || IC == I::Pcmpestri ||

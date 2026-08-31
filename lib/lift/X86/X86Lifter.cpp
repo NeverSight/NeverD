@@ -17,6 +17,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <cstring>
 #include <limits>
 
@@ -148,29 +149,25 @@ NdVar X86Lifter::LiftState::computeEA(const cs_x86_op &MemOp,
     if (HasAmbiguousI386GOTOFFDisplacement &&
         static_cast<uint32_t>(MemOp.mem.disp) ==
             static_cast<uint32_t>(AmbiguousI386GOTOFFEncodedValue)) {
-      const LowOp *ExactAdd =
-          Ops.size() == DisplacementOpStart + 1
-              ? &Ops[DisplacementOpStart]
-              : nullptr;
+      const LowOp *ExactAdd = Ops.size() == DisplacementOpStart + 1
+                                  ? &Ops[DisplacementOpStart]
+                                  : nullptr;
       uint8_t ExactInput = 0;
       unsigned MatchingInputs = 0;
       if (ExactAdd && ExactAdd->Addr == Addr &&
           ExactAdd->Opcode == NdOp::INT_ADD) {
         for (uint8_t Input = 0; Input < ExactAdd->NumInputs; ++Input)
           if (ExactAdd->Inputs[Input].isConst() &&
-              ExactAdd->Inputs[Input].Size ==
-                  AmbiguousI386GOTOFFWidth &&
+              ExactAdd->Inputs[Input].Size == AmbiguousI386GOTOFFWidth &&
               ExactAdd->Inputs[Input].Provenance ==
                   ConstantAddressProvenance::Scalar &&
               static_cast<uint32_t>(ExactAdd->Inputs[Input].Offset) ==
-                  static_cast<uint32_t>(
-                      AmbiguousI386GOTOFFEncodedValue)) {
+                  static_cast<uint32_t>(AmbiguousI386GOTOFFEncodedValue)) {
             ++MatchingInputs;
             ExactInput = Input;
           }
       }
-      if (!ExactAdd || MatchingInputs != 1 ||
-          AmbiguousI386GOTOFFOccurrence) {
+      if (!ExactAdd || MatchingInputs != 1 || AmbiguousI386GOTOFFOccurrence) {
         ConflictingAmbiguousI386GOTOFFUses = true;
         AmbiguousI386GOTOFFOccurrence.reset();
       } else {
@@ -293,6 +290,9 @@ NdVar X86Lifter::operandRead(LiftState &S, const cs_x86_op &Op) {
   switch (Op.type) {
   case X86_OP_REG: {
     auto RI = mapCapstoneReg(static_cast<x86_reg>(Op.reg));
+    if (Op.reg >= X86_REG_K0 && Op.reg <= X86_REG_K7 &&
+        (Op.size == 1 || Op.size == 2 || Op.size == 4 || Op.size == 8))
+      RI.Size = static_cast<uint16_t>(Op.size);
     return NdVar::reg(RI.Offset, RI.Size);
   }
   case X86_OP_IMM:
@@ -322,6 +322,9 @@ NdVar X86Lifter::operandWrite(const cs_x86_op &Op) {
   switch (Op.type) {
   case X86_OP_REG: {
     auto RI = mapCapstoneReg(static_cast<x86_reg>(Op.reg));
+    if (Op.reg >= X86_REG_K0 && Op.reg <= X86_REG_K7 &&
+        (Op.size == 1 || Op.size == 2 || Op.size == 4 || Op.size == 8))
+      RI.Size = static_cast<uint16_t>(Op.size);
     return NdVar::reg(RI.Offset, RI.Size);
   }
   case X86_OP_MEM:
@@ -450,20 +453,16 @@ bool isLegacyEncodingPrefix(uint8_t Byte, bool Is64Bit) {
 // vector length, so read L/LL directly from the prefix bytes. Legacy prefixes
 // are skipped to keep address-size and segment overrides from changing this
 // encoding decision.
-bool isEncodedVex128(const cs_insn *Insn, bool Is64Bit) {
+bool hasVexOrEvexEncoding(const cs_insn *Insn, bool Is64Bit) {
   size_t I = 0;
   while (I < Insn->size && isLegacyEncodingPrefix(Insn->bytes[I], Is64Bit))
     ++I;
   if (I >= Insn->size)
     return false;
 
-  if (Insn->bytes[I] == 0xC5 && I + 1 < Insn->size)
-    return (Insn->bytes[I + 1] & 0x04) == 0;
-  if (Insn->bytes[I] == 0xC4 && I + 2 < Insn->size)
-    return (Insn->bytes[I + 2] & 0x04) == 0;
-  if (Insn->bytes[I] == 0x62 && I + 3 < Insn->size)
-    return (Insn->bytes[I + 3] & 0x60) == 0;
-  return false;
+  return (Insn->bytes[I] == 0xC5 && I + 1 < Insn->size) ||
+         (Insn->bytes[I] == 0xC4 && I + 2 < Insn->size) ||
+         (Insn->bytes[I] == 0x62 && I + 3 < Insn->size);
 }
 
 } // namespace
@@ -536,12 +535,11 @@ void X86Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
   // instruction membership plus numeric equality is therefore insufficient.
   std::optional<RelocatedScalarOperand> ExactGOTPC;
   bool AmbiguousGOTPC = false;
-  if (TargetArch == Arch::X86 && Insn->id == X86_INS_ADD &&
-      X86.op_count == 2 && X86.operands[0].type == X86_OP_REG &&
+  if (TargetArch == Arch::X86 && Insn->id == X86_INS_ADD && X86.op_count == 2 &&
+      X86.operands[0].type == X86_OP_REG &&
       X86.operands[1].type == X86_OP_IMM && X86.encoding.imm_size == 4) {
     for (const RelocatedScalarOperand &Reloc : ScalarRelocs) {
-      if (Reloc.Semantics !=
-              RelocatedScalarOperand::Kind::I386ELFGOTPC ||
+      if (Reloc.Semantics != RelocatedScalarOperand::Kind::I386ELFGOTPC ||
           Reloc.Width != X86.encoding.imm_size ||
           Reloc.FieldVA != Insn->address + X86.encoding.imm_offset ||
           static_cast<uint32_t>(Reloc.EncodedValue) !=
@@ -651,6 +649,29 @@ void X86Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
                << Insn->op_str << " @ 0x" << llvm::utohexstr(S.Addr) << "\n");
   }
 
+  // A decoder can know a register that the architectural state model has not
+  // learned yet.  Never let its invalid sentinel become a real LowIR location:
+  // erase the entire instruction transaction and use the same fail-closed
+  // contract as an instruction with no semantic handler.
+  auto IsUnmappedRegister = [](const NdVar &Var) {
+    return Var.Space == VnodeSpace::REG &&
+           (Var.Offset == UINT64_C(0xffff) || Var.Size == 0);
+  };
+  bool HasUnmappedRegister = false;
+  for (size_t I = S.OpsStart; I < Ops.size() && !HasUnmappedRegister; ++I) {
+    HasUnmappedRegister = IsUnmappedRegister(Ops[I].Output);
+    for (uint8_t Input = 0; Input < Ops[I].NumInputs && !HasUnmappedRegister;
+         ++Input)
+      HasUnmappedRegister = IsUnmappedRegister(Ops[I].Inputs[Input]);
+  }
+  if (HasUnmappedRegister) {
+    Ops.resize(S.OpsStart);
+    if (Strict)
+      throw UnliftedInstruction(S.Addr, Insn->mnemonic, Insn->op_str);
+    S.emit(NdOp::NOP, {}, {});
+    return;
+  }
+
   if (ExactGOTPC) {
     const RegInfo Destination =
         mapCapstoneReg(static_cast<x86_reg>(X86.operands[0].reg));
@@ -667,8 +688,7 @@ void X86Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
       uint8_t MatchingInput = 0;
       for (uint8_t Input = 0; Input < Op.NumInputs; ++Input)
         if (Op.Inputs[Input].isConst() && Op.Inputs[Input].Size == 4 &&
-            Op.Inputs[Input].Provenance ==
-                ConstantAddressProvenance::Scalar &&
+            Op.Inputs[Input].Provenance == ConstantAddressProvenance::Scalar &&
             static_cast<uint32_t>(Op.Inputs[Input].Offset) ==
                 static_cast<uint32_t>(ExactGOTPC->EncodedValue)) {
           ++MatchingInputs;
@@ -704,33 +724,62 @@ void X86Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
       LastScalarOperandOccurrence = S.AmbiguousI386GOTOFFOccurrence;
   }
 
-  // A VEX/EVEX 128-bit *destination* write also defines the corresponding YMM
-  // high half as zero. Detect writes from emitted LowIR rather than operand
+  // A VEX/EVEX 128- or 256-bit *destination* write also defines the remainder
+  // of the corresponding ZMM register as zero. Detect writes from emitted
+  // LowIR rather than operand
   // position: this excludes memory destinations and read-only vector operands
   // such as VUCOMISS/VTEST, and remains correct for handlers with implicit or
   // unusual operand layouts. Legacy SSE reaches the same XMM offsets without a
   // VEX/EVEX prefix and therefore keeps the prior high half.
-  if (isEncodedVex128(Insn, TargetArch == Arch::X64)) {
-    bool ClearUpper[16] = {};
+  if (hasVexOrEvexEncoding(Insn, TargetArch == Arch::X64)) {
+    uint16_t ClearUpper[x86reg::VectorRegCount] = {};
     const size_t End = Ops.size();
     for (size_t I = S.OpsStart; I < End; ++I) {
       const NdVar &Out = Ops[I].Output;
-      if (Out.Space != VnodeSpace::REG || Out.Size != 16 ||
+      if (Out.Space != VnodeSpace::REG || (Out.Size != 16 && Out.Size != 32) ||
           Out.Offset < x86reg::XMM0)
         continue;
       uint64_t Delta = Out.Offset - x86reg::XMM0;
-      if (Delta % 32 != 0)
+      if (Delta % x86reg::VectorRegStride != 0)
         continue;
-      unsigned Index = static_cast<unsigned>(Delta / 32);
-      if (Index < 16)
-        ClearUpper[Index] = true;
+      unsigned Index = static_cast<unsigned>(Delta / x86reg::VectorRegStride);
+      if (Index < x86reg::VectorRegCount)
+        ClearUpper[Index] = std::max(ClearUpper[Index], Out.Size);
     }
-    for (unsigned Index = 0; Index < 16; ++Index) {
+    for (unsigned Index = 0; Index < x86reg::VectorRegCount; ++Index) {
       if (!ClearUpper[Index])
         continue;
-      uint64_t Offset = x86reg::XMM0 + static_cast<uint64_t>(Index) * 32;
-      S.emit(NdOp::INT_ZEXT, NdVar::reg(Offset, 32),
-             {NdVar::reg(Offset, 16)});
+      const uint64_t Offset = x86reg::vectorReg(Index);
+      S.emit(NdOp::INT_ZEXT, NdVar::reg(Offset, 64),
+             {NdVar::reg(Offset, ClearUpper[Index])});
+    }
+  }
+
+  // KANDB/W/D and the other narrow opmask forms clear every bit above their
+  // encoded width.  Keep K registers as 64-bit state containers while letting
+  // each handler operate at its instruction-defined width.
+  {
+    uint16_t ClearUpper[x86reg::OpmaskRegCount] = {};
+    const size_t End = Ops.size();
+    for (size_t I = S.OpsStart; I < End; ++I) {
+      const NdVar &Out = Ops[I].Output;
+      if (Out.Space != VnodeSpace::REG || Out.Size >= 8 || Out.Size == 0 ||
+          Out.Offset < x86reg::OpmaskBase)
+        continue;
+      const uint64_t Delta = Out.Offset - x86reg::OpmaskBase;
+      if (Delta % x86reg::OpmaskRegStride != 0)
+        continue;
+      const unsigned Index =
+          static_cast<unsigned>(Delta / x86reg::OpmaskRegStride);
+      if (Index < x86reg::OpmaskRegCount)
+        ClearUpper[Index] = std::max(ClearUpper[Index], Out.Size);
+    }
+    for (unsigned Index = 0; Index < x86reg::OpmaskRegCount; ++Index) {
+      if (!ClearUpper[Index])
+        continue;
+      const uint64_t Offset = x86reg::opmaskReg(Index);
+      S.emit(NdOp::INT_ZEXT, NdVar::reg(Offset, 8),
+             {NdVar::reg(Offset, ClearUpper[Index])});
     }
   }
 
@@ -744,7 +793,7 @@ void X86Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
       if (Op.Output.Size != 4)
         continue;
       uint64_t ROffs = Op.Output.Offset;
-      if (ROffs >= x86reg::GPRSpaceEnd)
+      if (!x86reg::isGeneralRegOffset(ROffs))
         continue;
       if (ROffs == x86reg::RSP || ROffs == x86reg::RBP)
         continue;
@@ -828,6 +877,7 @@ bool X86Lifter::isFunctionTerminator(const cs_insn *I) {
   case X86_INS_RET:
   case X86_INS_RETF:
   case X86_INS_JMP:
+  case X86_INS_JMPABS:
   case X86_INS_INT3:
   case X86_INS_UD2:
   case X86_INS_IRET:

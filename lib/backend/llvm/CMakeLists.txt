@@ -4,6 +4,10 @@ add_neverd_component_library(NeverDWindowsEHMetadata
   eh/WindowsEHSemanticDigest.cpp
 )
 
+add_neverd_component_library(NeverDLLVMFloatConvertLowering
+  emit/MedLLVMFloatConvertLowering.cpp
+)
+
 add_neverd_component_library(NeverDBackendLLVM
   AArch64/MedLLVMAArch64Sideeffect.cpp
   AArch64/MedLLVMAArch64ValueEmitter.cpp
@@ -44,6 +48,7 @@ add_neverd_component_library(NeverDBackendLLVM
   resolve/MedLLVMVarAccess.cpp
 
   LINK_COMPONENTS
+  LLVMFloatConvertLowering
   IR
   WindowsEHMetadata
 )

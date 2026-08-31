@@ -30,6 +30,7 @@
 #include "neverd/lift/X86Lifter.h"
 
 #include <capstone/capstone.h>
+#include <cstddef>
 
 namespace neverd {
 
@@ -51,6 +52,147 @@ NdMemoryAddressSpace stringSourceAddressSpace(const cs_x86 &X86);
 /// have already overwritten, so they take this copy first.  Defined in
 /// X86LiftCore.cpp.
 NdVar snapshotCarryAtWidth(X86Lifter::LiftState &S, uint16_t Size);
+
+/// True when \p Operand is an AVX-512 opmask register operand.
+bool isX86OpmaskOperand(const cs_x86_op &Operand);
+
+/// Reject EVEX modifiers whose value or memory semantics require dedicated
+/// handling. Ordinary vector writemasks are intentionally not rejected here.
+bool hasUnsupportedEvexValueModifier(const cs_x86 &X86);
+
+/// Decode the EVEX ModRM.reg vector-register number. EVEX P0 bit 7 extends
+/// register bit 3 and P0 bit 4 extends register bit 4; both are inverted.
+unsigned decodeEvexVectorRegIndex(uint8_t P0, uint8_t ModRM);
+
+/// Decode the EVEX register-form ModRM.rm vector-register number. P0 bits 5
+/// and 6 provide the inverted bit-3 and bit-4 extensions respectively.
+unsigned decodeEvexVectorRMIndex(uint8_t P0, uint8_t ModRM);
+
+/// Decode the inverted EVEX vvvv/V' vector-register number.
+unsigned decodeEvexVectorVvvvIndex(uint8_t P1, uint8_t P2);
+
+/// Expand one compact bit per vector lane into the sign-bit mask consumed by
+/// the x86 masked-load/store intrinsics.  The compact value may be a K-register
+/// view or an all-active constant; callers retain ownership of writemask
+/// merge/zero policy.
+NdVar expandCompactLaneMask(X86Lifter::LiftState &S, NdVar CompactMask,
+                            uint16_t VectorSize, uint16_t ElementSize);
+
+/// Select the exact lane-granular masked-load intrinsic for an x86 element
+/// width. Returns Intrinsic::None for unsupported widths.
+Intrinsic maskedVectorLoadIntrinsic(uint16_t ElementSize);
+
+/// Canonical raw EVEX prefix and addressing metadata.  Parsing this structure
+/// is validation-only: callers must still check their family-specific map,
+/// opcode, W/PP, vector length, mask, broadcast, and immediate contracts.
+struct CanonicalEvexEncodingInfo {
+  size_t Offset = 0;
+  uint8_t SegmentPrefix = 0;
+  bool AddressOverride = false;
+  bool Is64Bit = false;
+  uint16_t AddressSize = 0;
+  uint8_t P0 = 0;
+  uint8_t P1 = 0;
+  uint8_t P2 = 0;
+  uint8_t Opcode = 0;
+  uint8_t ModRM = 0;
+};
+
+/// Canonical three-byte VEX prefix and addressing metadata. FMA4 uses this
+/// encoding exclusively and owns one trailing is4 byte after the ordinary
+/// ModRM/SIB/displacement tail.
+struct CanonicalVex3EncodingInfo {
+  size_t Offset = 0;
+  uint8_t SegmentPrefix = 0;
+  bool AddressOverride = false;
+  bool Is64Bit = false;
+  uint16_t AddressSize = 0;
+  uint8_t P0 = 0;
+  uint8_t P1 = 0;
+  uint8_t Opcode = 0;
+  uint8_t ModRM = 0;
+};
+
+/// Parse the only legacy prefixes accepted before an EVEX instruction and
+/// prove that Capstone's prefix/opcode/ModRM/address-size detail matches the
+/// raw bytes exactly.  Duplicate and unrelated prefixes fail closed.
+bool parseCanonicalEvexEncodingInfo(const cs_insn *Insn, const cs_x86 &X86,
+                                    Arch TargetArch,
+                                    CanonicalEvexEncodingInfo &Encoding);
+
+/// Three-byte VEX counterpart of parseCanonicalEvexEncodingInfo. Only segment
+/// and address-size prefixes may precede C4; family-specific map, W/L/pp,
+/// opcode, register and immediate rules remain the caller's responsibility.
+bool parseCanonicalVex3EncodingInfo(const cs_insn *Insn, const cs_x86 &X86,
+                                    Arch TargetArch,
+                                    CanonicalVex3EncodingInfo &Encoding);
+
+/// Prove that an EVEX memory tail and Capstone's structured address detail are
+/// identical. TupleScale applies the architectural disp8*N compression;
+/// TrailingBytes reserves family-owned immediate bytes at the end.
+bool validateCanonicalEvexMemoryTail(const cs_insn *Insn, const cs_x86 &X86,
+                                     const CanonicalEvexEncodingInfo &Encoding,
+                                     const cs_x86_op &Operand,
+                                     uint16_t TupleScale,
+                                     size_t TrailingBytes = 0);
+
+/// Register-form counterpart of validateCanonicalEvexMemoryTail.
+bool validateCanonicalEvexRegisterTail(
+    const cs_insn *Insn, const cs_x86 &X86,
+    const CanonicalEvexEncodingInfo &Encoding, size_t TrailingBytes = 0);
+
+/// Validate an ordinary (uncompressed) VEX3 memory tail against Capstone's
+/// structured address detail. TrailingBytes reserves family-owned bytes such
+/// as FMA4's is4 register selector.
+bool validateCanonicalVex3MemoryTail(
+    const cs_insn *Insn, const cs_x86 &X86,
+    const CanonicalVex3EncodingInfo &Encoding, const cs_x86_op &Operand,
+    size_t TrailingBytes = 0);
+
+/// Register-form counterpart of validateCanonicalVex3MemoryTail.
+bool validateCanonicalVex3RegisterTail(
+    const cs_insn *Insn, const cs_x86 &X86,
+    const CanonicalVex3EncodingInfo &Encoding, size_t TrailingBytes = 0);
+
+/// Load an EVEX vector memory source under a compact K-register mask.  Full
+/// tuples fault-suppress each inactive lane.  Broadcast tuples perform at most
+/// one scalar load when any destination lane is active and then replicate it.
+/// A scalar tuple can be represented by passing a mask whose only possible set
+/// bit is bit zero, ResultSize == 16 and Broadcast == false.
+NdVar emitEvexMaskedMemoryLoad(X86Lifter::LiftState &S,
+                               const cs_x86_op &MemoryOperand,
+                               NdVar CompactMask, uint16_t ResultSize,
+                               uint16_t ElementSize, uint16_t MemoryTupleSize,
+                               bool Broadcast);
+
+/// Apply an ordinary EVEX vector writemask to a fully computed register
+/// result. K destinations, masked memory and topology-changing operations need
+/// dedicated implementations instead.
+bool emitMaskedVectorResult(X86Lifter &L, X86Lifter::LiftState &S,
+                            const cs_x86_op &DestinationOperand,
+                            const cs_x86_op &MaskOperand, NdVar RawResult,
+                            uint16_t ElementSize);
+
+/// Lift a register-only EVEX compress/expand operation.  The helper owns the
+/// topology-changing writemask semantics; masked memory forms require a
+/// separate fault-suppressing implementation and are rejected by its caller.
+bool liftEvexCompressExpandRegister(X86Lifter &L, X86Lifter::LiftState &S,
+                                    const cs_insn *Insn, const cs_x86 &X86,
+                                    uint16_t ElementSize, bool Compress,
+                                    uint8_t Opcode, bool W);
+
+/// Interleave the selected half of two packed inputs independently within each
+/// architectural 64-bit MMX or 128-bit vector lane.
+bool emitPackedUnpack(X86Lifter::LiftState &S, NdVar Destination, NdVar Left,
+                      NdVar Right, uint16_t ElementSize, bool HighHalf);
+
+/// Translate an unpack destination writemask into the expanded source-element
+/// mask needed to fault-suppress a full-tuple memory input. Only the odd
+/// interleaved result elements consume the right-hand source.
+NdVar emitPackedUnpackMemoryMask(X86Lifter::LiftState &S,
+                                 const cs_x86_op *MaskOperand,
+                                 uint16_t VectorSize, uint16_t ElementSize,
+                                 bool HighHalf);
 
 //===----------------------------------------------------------------------===//
 // X86Lifter::liftCore handlers
@@ -95,6 +237,10 @@ bool liftExtBMI(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
 //===----------------------------------------------------------------------===//
 // X86Lifter::liftSIMD handlers
 //===----------------------------------------------------------------------===//
+
+/// AMX tile matrix compute operations.
+bool liftAMX(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
+             const cs_x86 &X86);
 
 /// Vector data movement, lane extract/insert, broadcast and vector state.
 bool liftSIMDMove(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
@@ -153,6 +299,10 @@ bool liftSIMDAVXSSE(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
 /// AVX-512 opmask (k0-k7) register operations.
 bool liftSIMDAVXMask(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
                      const cs_x86 &X86);
+
+/// EVEX packed integer narrowing with register destinations.
+bool liftSIMDAVXNarrow(X86Lifter &L, X86Lifter::LiftState &S,
+                       const cs_insn *Insn, const cs_x86 &X86);
 
 /// AVX-512 packed integer (EVEX VP*) instructions.
 bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,

@@ -108,12 +108,14 @@ add_neverd_component_library(NeverDLift
   X86/X86LiftLegacySSEInt.cpp
   X86/X86LiftLegacyXOP.cpp
   X86/X86LiftSIMD.cpp
+  X86/X86LiftAMX.cpp
   X86/X86LiftSIMDAVX.cpp
   X86/X86LiftSIMDAVXConvert.cpp
   X86/X86LiftSIMDAVXFMA.cpp
   X86/X86LiftSIMDAVXFloat.cpp
   X86/X86LiftSIMDAVXInt.cpp
   X86/X86LiftSIMDAVXMask.cpp
+  X86/X86LiftSIMDAVXNarrow.cpp
   X86/X86LiftSIMDAVXSSE.cpp
   X86/X86LiftSIMDCompare.cpp
   X86/X86LiftSIMDConvert.cpp
@@ -124,6 +126,8 @@ add_neverd_component_library(NeverDLift
   X86/X86LiftSIMDIntMul.cpp
   X86/X86LiftSIMDLegacy.cpp
   X86/X86LiftSIMDLogicShift.cpp
+  X86/X86LiftSIMDMask.cpp
+  X86/X86LiftSIMDMemory.cpp
   X86/X86LiftSIMDMove.cpp
   X86/X86LiftSIMDShuffle.cpp
   X86/X86LiftString.cpp

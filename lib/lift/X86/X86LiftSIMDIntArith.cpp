@@ -21,9 +21,165 @@
 
 namespace neverd {
 
+namespace {
+
+struct EvexWrappingArithSpec {
+  uint8_t Opcode = 0;
+  uint16_t ElementSize = 0;
+  bool W = false;
+};
+
+bool getEvexWrappingArithSpec(unsigned InsnId, EvexWrappingArithSpec &Spec) {
+  switch (InsnId) {
+  case X86_INS_VPADDB:
+    Spec = {0xfc, 1, false};
+    return true;
+  case X86_INS_VPADDW:
+    Spec = {0xfd, 2, false};
+    return true;
+  case X86_INS_VPADDD:
+    Spec = {0xfe, 4, false};
+    return true;
+  case X86_INS_VPADDQ:
+    Spec = {0xd4, 8, true};
+    return true;
+  case X86_INS_VPSUBB:
+    Spec = {0xf8, 1, false};
+    return true;
+  case X86_INS_VPSUBW:
+    Spec = {0xf9, 2, false};
+    return true;
+  case X86_INS_VPSUBD:
+    Spec = {0xfa, 4, false};
+    return true;
+  case X86_INS_VPSUBQ:
+    Spec = {0xfb, 8, true};
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool isVectorRegisterOfSize(const cs_x86_op &Operand, uint16_t Size) {
+  if (Operand.type != X86_OP_REG || Operand.size != Size)
+    return false;
+  if (Size == 16)
+    return Operand.reg >= X86_REG_XMM0 && Operand.reg <= X86_REG_XMM31;
+  if (Size == 32)
+    return Operand.reg >= X86_REG_YMM0 && Operand.reg <= X86_REG_YMM31;
+  if (Size == 64)
+    return Operand.reg >= X86_REG_ZMM0 && Operand.reg <= X86_REG_ZMM31;
+  return false;
+}
+
+unsigned vectorRegisterIndex(const cs_x86_op &Operand) {
+  if (Operand.size == 16)
+    return static_cast<unsigned>(Operand.reg - X86_REG_XMM0);
+  if (Operand.size == 32)
+    return static_cast<unsigned>(Operand.reg - X86_REG_YMM0);
+  return static_cast<unsigned>(Operand.reg - X86_REG_ZMM0);
+}
+
+x86_avx_bcast broadcastForLaneCount(unsigned LaneCount) {
+  switch (LaneCount) {
+  case 2:
+    return X86_AVX_BCAST_2;
+  case 4:
+    return X86_AVX_BCAST_4;
+  case 8:
+    return X86_AVX_BCAST_8;
+  case 16:
+    return X86_AVX_BCAST_16;
+  default:
+    return X86_AVX_BCAST_INVALID;
+  }
+}
+
+bool beginsWithCanonicalEvexPrefix(const cs_insn *Insn) {
+  if (!Insn)
+    return false;
+  size_t Offset = 0;
+  while (Offset < Insn->size) {
+    const uint8_t Byte = Insn->bytes[Offset];
+    if (Byte == 0x62)
+      return true;
+    if (Byte != 0x26 && Byte != 0x2e && Byte != 0x36 && Byte != 0x3e &&
+        Byte != 0x64 && Byte != 0x65 && Byte != 0x67)
+      return false;
+    ++Offset;
+  }
+  return false;
+}
+
+bool validateEvexWrappingArithMemory(
+    X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
+    const EvexWrappingArithSpec &Spec, bool HasWriteMask,
+    const cs_x86_op &Destination, const cs_x86_op *Mask, const cs_x86_op &Left,
+    const cs_x86_op &Memory, CanonicalEvexEncodingInfo &Encoding,
+    bool &Broadcast) {
+  if (!parseCanonicalEvexEncodingInfo(Insn, X86, L.targetArch(), Encoding) ||
+      (Encoding.P0 & 0x07) != 0x01 ||
+      ((Encoding.P1 | 0x04) & 0x87) != (Spec.W ? 0x85 : 0x05) ||
+      Encoding.Opcode != Spec.Opcode || (Encoding.ModRM & 0xc0) == 0xc0 ||
+      X86.encoding.imm_offset != 0 || X86.encoding.imm_size != 0 ||
+      X86.avx_sae || X86.avx_rm != X86_AVX_RM_INVALID)
+    return false;
+
+  const uint8_t EncodedLength = Encoding.P2 & 0x60;
+  if (EncodedLength == 0x60)
+    return false;
+  const uint16_t VectorSize = EncodedLength == 0      ? 16
+                              : EncodedLength == 0x20 ? 32
+                                                      : 64;
+  Broadcast = (Encoding.P2 & 0x10) != 0;
+  if ((Broadcast && Spec.ElementSize < 4) ||
+      !isVectorRegisterOfSize(Destination, VectorSize) ||
+      !isVectorRegisterOfSize(Left, VectorSize) || Memory.type != X86_OP_MEM ||
+      Memory.size != (Broadcast ? Spec.ElementSize : VectorSize) ||
+      decodeEvexVectorRegIndex(Encoding.P0, Encoding.ModRM) !=
+          vectorRegisterIndex(Destination) ||
+      decodeEvexVectorVvvvIndex(Encoding.P1, Encoding.P2) !=
+          vectorRegisterIndex(Left))
+    return false;
+
+  const unsigned LaneCount = VectorSize / Spec.ElementSize;
+  const uint16_t MaskSize = static_cast<uint16_t>((LaneCount + 7u) / 8u);
+  const uint8_t EncodedMask = Encoding.P2 & 7;
+  const bool EncodedZero = (Encoding.P2 & 0x80) != 0;
+  if (HasWriteMask) {
+    if (!Mask || !isX86OpmaskOperand(*Mask) || Mask->reg == X86_REG_K0 ||
+        Mask->size != MaskSize ||
+        EncodedMask != static_cast<uint8_t>(Mask->reg - X86_REG_K0) ||
+        EncodedZero != static_cast<bool>(Mask->avx_zero_opmask))
+      return false;
+  } else if (Mask || EncodedMask != 0 || EncodedZero) {
+    return false;
+  }
+
+  const x86_avx_bcast ExpectedBroadcast =
+      Broadcast ? broadcastForLaneCount(LaneCount) : X86_AVX_BCAST_INVALID;
+  if (Memory.avx_bcast != ExpectedBroadcast)
+    return false;
+  for (unsigned Index = 0; Index < X86.op_count; ++Index) {
+    const cs_x86_op &Operand = X86.operands[Index];
+    if (&Operand != &Memory && Operand.avx_bcast != X86_AVX_BCAST_INVALID)
+      return false;
+    if (Operand.avx_zero_opmask && (!Mask || &Operand != Mask))
+      return false;
+  }
+  return validateCanonicalEvexMemoryTail(
+      Insn, X86, Encoding, Memory, Broadcast ? Spec.ElementSize : VectorSize);
+}
+
+} // namespace
+
 bool liftSIMDIntArith(X86Lifter &L, X86Lifter::LiftState &S,
                       const cs_insn *Insn, const cs_x86 &X86) {
   unsigned InsnId = Insn->id;
+  EvexWrappingArithSpec WrappingSpec;
+  const bool IsWrappingArith = getEvexWrappingArithSpec(InsnId, WrappingSpec);
+  if (hasUnsupportedEvexValueModifier(X86) && !IsWrappingArith)
+    return false;
   switch (InsnId) {
 
   // SIMD saturating add/sub — per-lane with saturation.
@@ -120,8 +276,16 @@ bool liftSIMDIntArith(X86Lifter &L, X86Lifter::LiftState &S,
     // and not lane-isolated (carries crossed byte/word boundaries).
     if (X86.op_count < 2)
       break;
+    const bool HasWriteMask =
+        X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
+    if (HasWriteMask &&
+        (X86.op_count != 4 || X86.operands[0].type != X86_OP_REG ||
+         X86.operands[2].type != X86_OP_REG ||
+         X86.operands[3].type != X86_OP_REG))
+      return false;
     NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar A = (X86.op_count >= 3) ? L.operandRead(S, X86.operands[1])
+    const unsigned LeftIndex = HasWriteMask ? 2 : 1;
+    NdVar A = (X86.op_count >= 3) ? L.operandRead(S, X86.operands[LeftIndex])
                                   : L.operandRead(S, X86.operands[0]);
     NdVar B = L.operandRead(S, X86.operands[X86.op_count - 1]);
     unsigned LaneSz =
@@ -161,7 +325,13 @@ bool liftSIMDIntArith(X86Lifter &L, X86Lifter::LiftState &S,
     NdVar HiHalf = BuildHalf(HalfSz);
     NdVar Full = S.makeTemp(Dst.Size);
     S.emit(NdOp::CONCAT, Full, {HiHalf, LoHalf});
-    S.emit(NdOp::COPY, Dst, {Full});
+    if (HasWriteMask) {
+      if (!emitMaskedVectorResult(L, S, X86.operands[0], X86.operands[1], Full,
+                                  LaneSz))
+        return false;
+    } else {
+      S.emit(NdOp::COPY, Dst, {Full});
+    }
     break;
   }
 
@@ -196,9 +366,17 @@ bool liftSIMDIntArith(X86Lifter &L, X86Lifter::LiftState &S,
   case X86_INS_VPMAXUQ: {
     if (X86.op_count < 2)
       break;
+    const bool HasWriteMask =
+        X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
+    if (HasWriteMask &&
+        (X86.op_count != 4 || X86.operands[0].type != X86_OP_REG ||
+         X86.operands[2].type != X86_OP_REG ||
+         X86.operands[3].type != X86_OP_REG))
+      return false;
     NdVar Dst = L.operandWrite(X86.operands[0]);
     bool IsVex = (X86.op_count >= 3);
-    NdVar A = IsVex ? L.operandRead(S, X86.operands[1])
+    const unsigned LeftIndex = HasWriteMask ? 2 : 1;
+    NdVar A = IsVex ? L.operandRead(S, X86.operands[LeftIndex])
                     : L.operandRead(S, X86.operands[0]);
     NdVar B = L.operandRead(S, X86.operands[X86.op_count - 1]);
     unsigned LaneSz = 1;
@@ -305,7 +483,13 @@ bool liftSIMDIntArith(X86Lifter &L, X86Lifter::LiftState &S,
     NdVar HiHalf = BuildHalf(HalfSz);
     NdVar Full = S.makeTemp(Dst.Size);
     S.emit(NdOp::CONCAT, Full, {HiHalf, LoHalf});
-    S.emit(NdOp::COPY, Dst, {Full});
+    if (HasWriteMask) {
+      if (!emitMaskedVectorResult(L, S, X86.operands[0], X86.operands[1], Full,
+                                  LaneSz))
+        return false;
+    } else {
+      S.emit(NdOp::COPY, Dst, {Full});
+    }
     break;
   }
 
@@ -320,10 +504,44 @@ bool liftSIMDIntArith(X86Lifter &L, X86Lifter::LiftState &S,
   case X86_INS_VPSUBQ: {
     if (X86.op_count < 2)
       break;
+    const bool HasWriteMask =
+        X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
+    const unsigned LeftIndex = HasWriteMask ? 2 : 1;
+    const unsigned RightIndex = HasWriteMask ? 3 : 2;
+    if ((!HasWriteMask && X86.op_count != 3) ||
+        (HasWriteMask && X86.op_count != 4) ||
+        X86.operands[0].type != X86_OP_REG ||
+        X86.operands[LeftIndex].type != X86_OP_REG ||
+        (X86.operands[RightIndex].type != X86_OP_REG &&
+         X86.operands[RightIndex].type != X86_OP_MEM))
+      return false;
+    const cs_x86_op &DestinationOperand = X86.operands[0];
+    const cs_x86_op *MaskOperand = HasWriteMask ? &X86.operands[1] : nullptr;
+    const cs_x86_op &LeftOperand = X86.operands[LeftIndex];
+    const cs_x86_op &RightOperand = X86.operands[RightIndex];
+    const bool MemoryForm = RightOperand.type == X86_OP_MEM;
+    const bool RawEvex = beginsWithCanonicalEvexPrefix(Insn);
+    CanonicalEvexEncodingInfo Encoding;
+    bool Broadcast = false;
+    if (RawEvex) {
+      if (!parseCanonicalEvexEncodingInfo(Insn, X86, L.targetArch(),
+                                          Encoding) ||
+          ((Encoding.ModRM & 0xc0) != 0xc0) != MemoryForm)
+        return false;
+      if (MemoryForm &&
+          !validateEvexWrappingArithMemory(
+              L, Insn, X86, WrappingSpec, HasWriteMask, DestinationOperand,
+              MaskOperand, LeftOperand, RightOperand, Encoding, Broadcast))
+        return false;
+      if (!MemoryForm && hasUnsupportedEvexValueModifier(X86))
+        return false;
+    } else if (hasUnsupportedEvexValueModifier(X86)) {
+      return false;
+    }
+
     NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar A = (X86.op_count >= 3) ? L.operandRead(S, X86.operands[1])
+    NdVar A = (X86.op_count >= 3) ? L.operandRead(S, X86.operands[LeftIndex])
                                   : L.operandRead(S, X86.operands[0]);
-    NdVar B = L.operandRead(S, X86.operands[X86.op_count - 1]);
     unsigned LaneSz = 0;
     switch (InsnId) {
     case X86_INS_VPADDB:
@@ -345,6 +563,24 @@ bool liftSIMDIntArith(X86Lifter &L, X86Lifter::LiftState &S,
     default:
       break;
     }
+    NdVar ActiveMask = NdVar::cst(UINT64_MAX, 8);
+    if (HasWriteMask) {
+      const RegInfo MaskInfo =
+          mapCapstoneReg(static_cast<x86_reg>(X86.operands[1].reg));
+      const uint16_t RequiredMaskSize =
+          static_cast<uint16_t>((Dst.Size / LaneSz + 7u) / 8u);
+      if (MaskInfo.Offset == UINT64_C(0xffff) ||
+          MaskInfo.Size < RequiredMaskSize)
+        return false;
+      ActiveMask = NdVar::reg(MaskInfo.Offset, RequiredMaskSize);
+    }
+    NdVar B = RawEvex && MemoryForm
+                  ? emitEvexMaskedMemoryLoad(
+                        S, RightOperand, ActiveMask, Dst.Size, LaneSz,
+                        Broadcast ? LaneSz : Dst.Size, Broadcast)
+                  : L.operandRead(S, RightOperand);
+    if (Dst.Size == 0 || A.Size != Dst.Size || B.Size != Dst.Size)
+      return false;
     // NOTE: even qword (LaneSz==8) lanes must be added/subtracted
     // independently — a full-width INT_ADD/INT_SUB would propagate the carry
     // from lane 0 into lane 1 (wrong for VPADDQ/VPSUBQ).
@@ -376,7 +612,13 @@ bool liftSIMDIntArith(X86Lifter &L, X86Lifter::LiftState &S,
     NdVar HiHalf = BuildHalf(HalfSz);
     NdVar Full = S.makeTemp(Dst.Size);
     S.emit(NdOp::CONCAT, Full, {HiHalf, LoHalf});
-    S.emit(NdOp::COPY, Dst, {Full});
+    if (HasWriteMask) {
+      if (!emitMaskedVectorResult(L, S, X86.operands[0], X86.operands[1], Full,
+                                  LaneSz))
+        return false;
+    } else {
+      S.emit(NdOp::COPY, Dst, {Full});
+    }
     break;
   }
   // AVX saturating add/sub — per-lane with saturation.
@@ -390,8 +632,16 @@ bool liftSIMDIntArith(X86Lifter &L, X86Lifter::LiftState &S,
   case X86_INS_VPSUBUSW: {
     if (X86.op_count < 2)
       break;
+    const bool HasWriteMask =
+        X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
+    if (HasWriteMask &&
+        (X86.op_count != 4 || X86.operands[0].type != X86_OP_REG ||
+         X86.operands[2].type != X86_OP_REG ||
+         X86.operands[3].type != X86_OP_REG))
+      return false;
     NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar A = (X86.op_count >= 3) ? L.operandRead(S, X86.operands[1])
+    const unsigned LeftIndex = HasWriteMask ? 2 : 1;
+    NdVar A = (X86.op_count >= 3) ? L.operandRead(S, X86.operands[LeftIndex])
                                   : L.operandRead(S, X86.operands[0]);
     NdVar B = L.operandRead(S, X86.operands[X86.op_count - 1]);
     unsigned LaneSz = 1;
@@ -483,7 +733,13 @@ bool liftSIMDIntArith(X86Lifter &L, X86Lifter::LiftState &S,
     NdVar HiHalf = BuildHalf(HalfSz);
     NdVar Full = S.makeTemp(Dst.Size);
     S.emit(NdOp::CONCAT, Full, {HiHalf, LoHalf});
-    S.emit(NdOp::COPY, Dst, {Full});
+    if (HasWriteMask) {
+      if (!emitMaskedVectorResult(L, S, X86.operands[0], X86.operands[1], Full,
+                                  LaneSz))
+        return false;
+    } else {
+      S.emit(NdOp::COPY, Dst, {Full});
+    }
     break;
   }
 

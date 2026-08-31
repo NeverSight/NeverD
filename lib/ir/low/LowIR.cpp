@@ -45,23 +45,80 @@ llvm::Error validateMemoryAddressSpace(const LowOp &Op) {
     return invalid("LowOp has an unknown memory address space");
   const bool HasExplicitAddressSpace =
       Op.MemoryAddressSpace != NdMemoryAddressSpace::Default;
-  if (HasExplicitAddressSpace &&
-      !opcodeSupportsMemoryAddressSpace(Op.Opcode))
+  if (HasExplicitAddressSpace && !opcodeSupportsMemoryAddressSpace(Op.Opcode))
     return invalid("LowOp attaches a memory address space to a non-memory "
                    "opcode");
   if (Op.Opcode != NdOp::INTRINSIC)
     return llvm::Error::success();
-  if (Op.NumInputs == 0 || !Op.Inputs[0].isConst()) {
-    if (HasExplicitAddressSpace)
+  if (Op.NumInputs == 0 || !Op.Inputs[0].isConst())
+    return invalid("intrinsic has no constant intrinsic ID");
+  const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+  if (isApxAtomicIntrinsic(Id)) {
+    if (!intrinsicApxAtomicShapeIsValid(Id,
+                                        apxAtomicLowShape(Op, Arch::Unknown)))
       return invalid(
-          "segmented-memory intrinsic has no constant intrinsic ID");
+          "APX atomic intrinsic has an invalid operand/output contract");
     return llvm::Error::success();
   }
-  const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
-  if (!HasExplicitAddressSpace && isX86StringIntrinsic(Id)) {
-    if (!intrinsicStringShapeIsValid(
+  if (Id == Intrinsic::X86Invalidate) {
+    if (!intrinsicX86InvalidateShapeIsValid(
+            Id, x86InvalidateLowShape(Op, Arch::Unknown)))
+      return invalid(
+          "x86 invalidation intrinsic has an invalid operand/output contract");
+    return llvm::Error::success();
+  }
+  if (Id == Intrinsic::X86MsrAccess) {
+    if (!intrinsicX86MsrAccessShapeIsValid(
+            Id, x86MsrAccessLowShape(Op, Arch::Unknown)))
+      return invalid(
+          "x86 MSR access intrinsic has an invalid operand/output contract");
+    return llvm::Error::success();
+  }
+  if (Id == Intrinsic::X86RequireDivPrecondition) {
+    if (!intrinsicX86DivPreconditionShapeIsValid(
+            Id, x86DivPreconditionLowShape(Op, Arch::Unknown)))
+      return invalid(
+          "x86 divide precondition has an invalid operand/output contract");
+    return llvm::Error::success();
+  }
+  if (isPdepPextIntrinsic(Id)) {
+    if (!intrinsicPdepPextShapeIsValid(Id, pdepPextLowShape(Op)))
+      return invalid(
+          "PDEP/PEXT intrinsic has an invalid operand/output contract");
+    return llvm::Error::success();
+  }
+  if (Id == Intrinsic::X86FPClass) {
+    if (HasExplicitAddressSpace)
+      return invalid("intrinsic does not support a memory address space");
+    if (Op.NumInputs != 5 || !Op.Inputs[1].isConst() ||
+        !Op.Inputs[4].isConst() ||
+        (Op.Inputs[1].Offset & ~UINT64_C(0x03)) != 0 ||
+        !intrinsicX86FPClassShapeIsValid(
+            Op.NumInputs, Op.Output.Size,
+            static_cast<uint8_t>(Op.Inputs[1].Offset), Op.Inputs[1].Size,
+            Op.Inputs[2].Size, Op.Inputs[3].Size, Op.Inputs[4].Size))
+      return invalid(
+          "x86 FPClass intrinsic has an invalid operand/output shape");
+    return llvm::Error::success();
+  }
+  if (isX86VP4DPIntrinsic(Id)) {
+    if (!intrinsicX86VP4DPShapeIsValid(
             Id, Op.NumInputs, Op.Output.Size,
-            Op.NumInputs > 1 ? Op.Inputs[1].Size : 0))
+            Op.NumInputs > 1 ? Op.Inputs[1].Size : 0,
+            Op.NumInputs > 2 ? Op.Inputs[2].Size : 0,
+            Op.NumInputs > 3 ? Op.Inputs[3].Size : 0,
+            Op.NumInputs > 4 ? Op.Inputs[4].Size : 0,
+            Op.NumInputs > 5 ? Op.Inputs[5].Size : 0) ||
+        !Op.Inputs[3].isConst() ||
+        (!Op.Inputs[4].isReg() && !Op.Inputs[4].isConst()) ||
+        !Op.Inputs[5].isConst() || Op.Inputs[3].Offset > 28 ||
+        (Op.Inputs[3].Offset & 3) != 0 || Op.Inputs[5].Offset > 1)
+      return invalid("x86 VP4DP intrinsic has an invalid operand/output shape");
+    return llvm::Error::success();
+  }
+  if (!HasExplicitAddressSpace && isX86StringIntrinsic(Id)) {
+    if (!intrinsicStringShapeIsValid(Id, Op.NumInputs, Op.Output.Size,
+                                     Op.NumInputs > 1 ? Op.Inputs[1].Size : 0))
       return invalid("x86 string intrinsic has an invalid operand/output "
                      "shape");
     return llvm::Error::success();
@@ -75,17 +132,11 @@ llvm::Error validateMemoryAddressSpace(const LowOp &Op) {
                                       Id, Op.NumInputs, Op.Output.Size,
                                       Op.NumInputs > 1 ? Op.Inputs[1].Size : 0))
     return llvm::Error::success();
-  if (!intrinsicMemoryAddressSpaceShapeIsValid(Id, Op.NumInputs,
-                                               Op.Output.Size,
-                                               Op.NumInputs > 1
-                                                   ? Op.Inputs[1].Size
-                                                   : 0,
-                                               Op.NumInputs > 2
-                                                   ? Op.Inputs[2].Size
-                                                   : 0,
-                                               Op.NumInputs > 3
-                                                   ? Op.Inputs[3].Size
-                                                   : 0))
+  if (!intrinsicMemoryAddressSpaceShapeIsValid(
+          Id, Op.NumInputs, Op.Output.Size,
+          Op.NumInputs > 1 ? Op.Inputs[1].Size : 0,
+          Op.NumInputs > 2 ? Op.Inputs[2].Size : 0,
+          Op.NumInputs > 3 ? Op.Inputs[3].Size : 0))
     return invalid("memory intrinsic has an invalid operand/output shape");
   return llvm::Error::success();
 }

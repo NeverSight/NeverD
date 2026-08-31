@@ -18,13 +18,329 @@
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/lift/X86Lifter.h"
 
+#include <algorithm>
+#include <cstdint>
+#include <vector>
+
 #define DEBUG_TYPE "neverd-lift-x86"
 
 namespace neverd {
 
+namespace {
+
+struct TablePermuteSpec {
+  uint8_t Opcode = 0;
+  uint16_t ElementSize = 0;
+  bool IndexInDestination = false;
+  bool W = false;
+};
+
+bool getTablePermuteSpec(unsigned InsnId, TablePermuteSpec &Spec) {
+  switch (InsnId) {
+  case X86_INS_VPERMI2B:
+    Spec = {0x75, 1, true, false};
+    return true;
+  case X86_INS_VPERMI2W:
+    Spec = {0x75, 2, true, true};
+    return true;
+  case X86_INS_VPERMI2D:
+    Spec = {0x76, 4, true, false};
+    return true;
+  case X86_INS_VPERMI2Q:
+    Spec = {0x76, 8, true, true};
+    return true;
+  case X86_INS_VPERMI2PS:
+    Spec = {0x77, 4, true, false};
+    return true;
+  case X86_INS_VPERMI2PD:
+    Spec = {0x77, 8, true, true};
+    return true;
+  case X86_INS_VPERMT2B:
+    Spec = {0x7d, 1, false, false};
+    return true;
+  case X86_INS_VPERMT2W:
+    Spec = {0x7d, 2, false, true};
+    return true;
+  case X86_INS_VPERMT2D:
+    Spec = {0x7e, 4, false, false};
+    return true;
+  case X86_INS_VPERMT2Q:
+    Spec = {0x7e, 8, false, true};
+    return true;
+  case X86_INS_VPERMT2PS:
+    Spec = {0x7f, 4, false, false};
+    return true;
+  case X86_INS_VPERMT2PD:
+    Spec = {0x7f, 8, false, true};
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool isVectorRegisterOfSize(const cs_x86_op &Operand, uint16_t Size) {
+  if (Operand.type != X86_OP_REG || Operand.size != Size)
+    return false;
+  if (Size == 16)
+    return Operand.reg >= X86_REG_XMM0 && Operand.reg <= X86_REG_XMM31;
+  if (Size == 32)
+    return Operand.reg >= X86_REG_YMM0 && Operand.reg <= X86_REG_YMM31;
+  if (Size == 64)
+    return Operand.reg >= X86_REG_ZMM0 && Operand.reg <= X86_REG_ZMM31;
+  return false;
+}
+
+unsigned vectorRegisterIndex(const cs_x86_op &Operand) {
+  if (Operand.size == 16)
+    return static_cast<unsigned>(Operand.reg - X86_REG_XMM0);
+  if (Operand.size == 32)
+    return static_cast<unsigned>(Operand.reg - X86_REG_YMM0);
+  return static_cast<unsigned>(Operand.reg - X86_REG_ZMM0);
+}
+
+x86_avx_bcast broadcastForLaneCount(unsigned LaneCount) {
+  switch (LaneCount) {
+  case 2:
+    return X86_AVX_BCAST_2;
+  case 4:
+    return X86_AVX_BCAST_4;
+  case 8:
+    return X86_AVX_BCAST_8;
+  case 16:
+    return X86_AVX_BCAST_16;
+  default:
+    return X86_AVX_BCAST_INVALID;
+  }
+}
+
+bool hasCanonicalTablePermuteEncoding(const cs_insn *Insn, const cs_x86 &X86,
+                                      Arch TargetArch,
+                                      const TablePermuteSpec &Spec,
+                                      const cs_x86_op &Destination,
+                                      const cs_x86_op &Source1,
+                                      const cs_x86_op &Source2,
+                                      const cs_x86_op *Mask, bool &Broadcast) {
+  CanonicalEvexEncodingInfo Encoding;
+  if (!parseCanonicalEvexEncodingInfo(Insn, X86, TargetArch, Encoding) ||
+      (Encoding.P0 & 0x07) != 0x02 ||
+      ((Encoding.P1 | 0x04) & 0x87) != (Spec.W ? 0x85 : 0x05) ||
+      Encoding.Opcode != Spec.Opcode || X86.encoding.imm_offset != 0 ||
+      X86.encoding.imm_size != 0 || X86.avx_sae ||
+      X86.avx_rm != X86_AVX_RM_INVALID)
+    return false;
+
+  const uint8_t EncodedLength = Encoding.P2 & 0x60;
+  if (EncodedLength == 0x60)
+    return false;
+  const uint16_t VectorSize =
+      EncodedLength == 0 ? 16 : (EncodedLength == 0x20 ? 32 : 64);
+  if (!isVectorRegisterOfSize(Destination, VectorSize) ||
+      !isVectorRegisterOfSize(Source1, VectorSize))
+    return false;
+
+  const uint8_t EncodedMask = Encoding.P2 & 0x07;
+  const bool ZeroMask = (Encoding.P2 & 0x80) != 0;
+  if (Mask) {
+    const unsigned LaneCount = VectorSize / Spec.ElementSize;
+    const uint16_t MaskSize =
+        static_cast<uint16_t>(std::max(1u, (LaneCount + 7) / 8));
+    if (!isX86OpmaskOperand(*Mask) || Mask->reg == X86_REG_K0 ||
+        Mask->size != MaskSize ||
+        EncodedMask != static_cast<uint8_t>(Mask->reg - X86_REG_K0) ||
+        ZeroMask != Mask->avx_zero_opmask)
+      return false;
+  } else if (EncodedMask != 0 || ZeroMask) {
+    return false;
+  }
+
+  const unsigned EncodedDestination =
+      decodeEvexVectorRegIndex(Encoding.P0, Encoding.ModRM);
+  const unsigned EncodedSource1 =
+      decodeEvexVectorVvvvIndex(Encoding.P1, Encoding.P2);
+  if (EncodedDestination != vectorRegisterIndex(Destination) ||
+      EncodedSource1 != vectorRegisterIndex(Source1))
+    return false;
+
+  Broadcast = (Encoding.P2 & 0x10) != 0;
+  const bool MemoryForm = Source2.type == X86_OP_MEM;
+  if (MemoryForm) {
+    const unsigned LaneCount = VectorSize / Spec.ElementSize;
+    const x86_avx_bcast ExpectedBroadcast =
+        Broadcast ? broadcastForLaneCount(LaneCount) : X86_AVX_BCAST_INVALID;
+    if ((Encoding.ModRM & 0xc0) == 0xc0 ||
+        (Broadcast && Spec.ElementSize < 4) ||
+        Source2.size != (Broadcast ? Spec.ElementSize : VectorSize) ||
+        Source2.avx_bcast != ExpectedBroadcast ||
+        !validateCanonicalEvexMemoryTail(Insn, X86, Encoding, Source2,
+                                         Broadcast ? Spec.ElementSize
+                                                   : VectorSize))
+      return false;
+  } else if (!isVectorRegisterOfSize(Source2, VectorSize) || Broadcast ||
+             Source2.avx_bcast != X86_AVX_BCAST_INVALID ||
+             decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) !=
+                 vectorRegisterIndex(Source2) ||
+             !validateCanonicalEvexRegisterTail(Insn, X86, Encoding)) {
+    return false;
+  }
+
+  for (unsigned Index = 0; Index < X86.op_count; ++Index) {
+    const cs_x86_op &Operand = X86.operands[Index];
+    if (&Operand != &Source2 && Operand.avx_bcast != X86_AVX_BCAST_INVALID)
+      return false;
+    if (Operand.avx_zero_opmask && (!Mask || &Operand != Mask))
+      return false;
+  }
+  return true;
+}
+
+std::vector<NdVar> extractTableLanes(X86Lifter::LiftState &S, NdVar Table,
+                                     unsigned LaneCount, uint16_t ElementSize) {
+  std::vector<NdVar> Lanes;
+  Lanes.reserve(LaneCount);
+  for (unsigned Lane = 0; Lane < LaneCount; ++Lane) {
+    NdVar Value = S.makeTemp(ElementSize);
+    S.emit(NdOp::SUBBYTES, Value,
+           {Table, NdVar::cst(static_cast<uint64_t>(Lane) * ElementSize, 4)});
+    Lanes.push_back(Value);
+  }
+  return Lanes;
+}
+
+NdVar selectTableLane(X86Lifter::LiftState &S,
+                      const std::vector<NdVar> &TableLanes, NdVar Index,
+                      uint16_t ElementSize) {
+  std::vector<NdVar> Candidates = TableLanes;
+  const unsigned LaneCount = static_cast<unsigned>(Candidates.size());
+  for (unsigned Bit = 1, Count = LaneCount; Count > 1; Bit <<= 1, Count >>= 1) {
+    NdVar MaskedBit = S.makeTemp(ElementSize);
+    S.emit(NdOp::INT_AND, MaskedBit, {Index, NdVar::cst(Bit, ElementSize)});
+    NdVar BitSet = S.makeTemp(1);
+    S.emit(NdOp::INT_NOTEQUAL, BitSet, {MaskedBit, NdVar::cst(0, ElementSize)});
+    for (unsigned Pair = 0; Pair < Count / 2; ++Pair) {
+      NdVar Selected = S.makeTemp(ElementSize);
+      S.emit(NdOp::SELECT, Selected,
+             {BitSet, Candidates[Pair * 2 + 1], Candidates[Pair * 2]});
+      Candidates[Pair] = Selected;
+    }
+  }
+  return Candidates.front();
+}
+
+NdVar extractCompactMaskBit(X86Lifter::LiftState &S, NdVar Mask,
+                            unsigned Lane) {
+  NdVar Shifted = Mask;
+  if (Lane != 0) {
+    Shifted = S.makeTemp(Mask.Size);
+    S.emit(NdOp::INT_RIGHT, Shifted, {Mask, NdVar::cst(Lane, Mask.Size)});
+  }
+  NdVar WideBit = S.makeTemp(Mask.Size);
+  S.emit(NdOp::INT_AND, WideBit, {Shifted, NdVar::cst(1, Mask.Size)});
+  if (Mask.Size == 1)
+    return WideBit;
+  NdVar Bit = S.makeTemp(1);
+  S.emit(NdOp::SUBBYTES, Bit, {WideBit, NdVar::cst(0, 4)});
+  return Bit;
+}
+
+NdVar resizeUnsigned(X86Lifter::LiftState &S, NdVar Value,
+                     uint16_t ResultSize) {
+  if (Value.Size == ResultSize)
+    return Value;
+  NdVar Result = S.makeTemp(ResultSize);
+  if (Value.Size < ResultSize)
+    S.emit(NdOp::INT_ZEXT, Result, {Value});
+  else
+    S.emit(NdOp::SUBBYTES, Result, {Value, NdVar::cst(0, 4)});
+  return Result;
+}
+
+NdVar buildTable2MemoryMask(X86Lifter::LiftState &S,
+                            const std::vector<NdVar> &Indices,
+                            const cs_x86_op *MaskOperand, unsigned LaneCount,
+                            uint16_t ElementSize) {
+  const uint16_t MaskSize =
+      static_cast<uint16_t>(std::max(1u, (LaneCount + 7u) / 8u));
+  NdVar OutputMask;
+  if (MaskOperand) {
+    const RegInfo MaskInfo =
+        mapCapstoneReg(static_cast<x86_reg>(MaskOperand->reg));
+    if (!isX86OpmaskOperand(*MaskOperand) || MaskInfo.Size < MaskSize)
+      return {};
+    OutputMask = NdVar::reg(MaskInfo.Offset, MaskSize);
+  }
+
+  NdVar MemoryMask = NdVar::cst(0, MaskSize);
+  for (unsigned Lane = 0; Lane < LaneCount; ++Lane) {
+    NdVar TableBit = S.makeTemp(ElementSize);
+    S.emit(NdOp::INT_AND, TableBit,
+           {Indices[Lane], NdVar::cst(LaneCount, ElementSize)});
+    NdVar SelectsTable2 = S.makeTemp(1);
+    S.emit(NdOp::INT_NOTEQUAL, SelectsTable2,
+           {TableBit, NdVar::cst(0, ElementSize)});
+    NdVar NeedsMemory = SelectsTable2;
+    if (MaskOperand) {
+      NeedsMemory = S.makeTemp(1);
+      S.emit(NdOp::BOOL_AND, NeedsMemory,
+             {SelectsTable2, extractCompactMaskBit(S, OutputMask, Lane)});
+    }
+
+    NdVar SourceLane = S.makeTemp(ElementSize);
+    S.emit(NdOp::INT_AND, SourceLane,
+           {Indices[Lane], NdVar::cst(LaneCount - 1, ElementSize)});
+    SourceLane = resizeUnsigned(S, SourceLane, MaskSize);
+    NdVar OneHot = S.makeTemp(MaskSize);
+    S.emit(NdOp::INT_LEFT, OneHot, {NdVar::cst(1, MaskSize), SourceLane});
+    NdVar Gated = S.makeTemp(MaskSize);
+    S.emit(NdOp::SELECT, Gated, {NeedsMemory, OneHot, NdVar::cst(0, MaskSize)});
+    NdVar NextMask = S.makeTemp(MaskSize);
+    S.emit(NdOp::INT_OR, NextMask, {MemoryMask, Gated});
+    MemoryMask = NextMask;
+  }
+  return MemoryMask;
+}
+
+} // namespace
+
 bool liftSIMDShuffle(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
                      const cs_x86 &X86) {
   unsigned InsnId = Insn->id;
+  auto EmitImmediateLaneShuffle = [&](NdVar Dst, NdVar Src, uint8_t Imm,
+                                      unsigned ElementSize,
+                                      unsigned FirstShuffledElement) {
+    if (Dst.Size == 0 || Dst.Size != Src.Size || Dst.Size % 16 != 0)
+      return false;
+    const unsigned ElementsPerLane = 16 / ElementSize;
+    const unsigned NumElements = Dst.Size / ElementSize;
+    if (NumElements > 32)
+      return false;
+
+    NdVar Elements[32];
+    for (unsigned I = 0; I < NumElements; ++I) {
+      const unsigned LaneBase = (I / ElementsPerLane) * ElementsPerLane;
+      const unsigned InLane = I % ElementsPerLane;
+      unsigned Selected = InLane;
+      if (InLane >= FirstShuffledElement && InLane < FirstShuffledElement + 4) {
+        const unsigned ControlIndex = InLane - FirstShuffledElement;
+        Selected = FirstShuffledElement + ((Imm >> (ControlIndex * 2)) & 3);
+      }
+      Elements[I] = S.makeTemp(ElementSize);
+      S.emit(NdOp::SUBBYTES, Elements[I],
+             {Src, NdVar::cst((LaneBase + Selected) * ElementSize, 4)});
+    }
+    unsigned Count = NumElements;
+    unsigned Width = ElementSize;
+    while (Count > 1) {
+      for (unsigned I = 0; I < Count / 2; ++I) {
+        NdVar Pair = S.makeTemp(Width * 2);
+        S.emit(NdOp::CONCAT, Pair, {Elements[I * 2 + 1], Elements[I * 2]});
+        Elements[I] = Pair;
+      }
+      Count /= 2;
+      Width *= 2;
+    }
+    S.emit(NdOp::COPY, Dst, {Elements[0]});
+    return true;
+  };
   switch (InsnId) {
 
   case X86_INS_PBLENDW:
@@ -232,9 +548,8 @@ bool liftSIMDShuffle(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     break;
   }
 
-  // VPERMI2*/VPERMT2* — AVX-512 two-source table permutes (the destination is
-  // also a source).  Unicorn does not implement AVX-512, so these cannot be
-  // roundtrip-verified; keep a non-crashing COPY placeholder (control ignored).
+  // VPERMI2*/VPERMT2* — full-width two-table permutation. VPERMI2 uses the old
+  // destination as its index vector, while VPERMT2 uses it as table 1.
   case X86_INS_VPERMI2D:
   case X86_INS_VPERMI2Q:
   case X86_INS_VPERMI2PS:
@@ -247,11 +562,86 @@ bool liftSIMDShuffle(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   case X86_INS_VPERMT2PD:
   case X86_INS_VPERMT2W:
   case X86_INS_VPERMT2B: {
-    if (X86.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[X86.op_count - 1]);
-    S.emit(NdOp::COPY, Dst, {Src});
+    TablePermuteSpec Spec;
+    if (!getTablePermuteSpec(InsnId, Spec) ||
+        (X86.op_count != 3 && X86.op_count != 4) || X86.avx_sae ||
+        X86.avx_rm != X86_AVX_RM_INVALID)
+      return false;
+    const bool HasMask = X86.op_count == 4;
+    const cs_x86_op &DestinationOperand = X86.operands[0];
+    const cs_x86_op *MaskOperand = HasMask ? &X86.operands[1] : nullptr;
+    const cs_x86_op &Source1Operand = X86.operands[HasMask ? 2 : 1];
+    const cs_x86_op &Source2Operand = X86.operands[HasMask ? 3 : 2];
+    bool Broadcast = false;
+    if (!hasCanonicalTablePermuteEncoding(
+            Insn, X86, L.targetArch(), Spec, DestinationOperand, Source1Operand,
+            Source2Operand, MaskOperand, Broadcast))
+      return false;
+
+    const uint16_t VectorSize = DestinationOperand.size;
+    const unsigned LaneCount = VectorSize / Spec.ElementSize;
+    NdVar OldDestination = L.operandRead(S, DestinationOperand);
+    NdVar Source1 = L.operandRead(S, Source1Operand);
+    NdVar Indices = Spec.IndexInDestination ? OldDestination : Source1;
+    NdVar Table1 = Spec.IndexInDestination ? Source1 : OldDestination;
+    const std::vector<NdVar> IndexLanes =
+        extractTableLanes(S, Indices, LaneCount, Spec.ElementSize);
+    NdVar Source2;
+    if (Source2Operand.type == X86_OP_MEM) {
+      const NdVar MemoryMask = buildTable2MemoryMask(
+          S, IndexLanes, MaskOperand, LaneCount, Spec.ElementSize);
+      if (MemoryMask.Size == 0)
+        return false;
+      Source2 = emitEvexMaskedMemoryLoad(
+          S, Source2Operand, MemoryMask, VectorSize, Spec.ElementSize,
+          Broadcast ? Spec.ElementSize : VectorSize, Broadcast);
+    } else {
+      Source2 = L.operandRead(S, Source2Operand);
+    }
+    if (Source2.Size != VectorSize)
+      return false;
+    const std::vector<NdVar> Table1Lanes =
+        extractTableLanes(S, Table1, LaneCount, Spec.ElementSize);
+    const std::vector<NdVar> Table2Lanes =
+        extractTableLanes(S, Source2, LaneCount, Spec.ElementSize);
+
+    std::vector<NdVar> ResultLanes;
+    ResultLanes.reserve(LaneCount);
+    for (unsigned Lane = 0; Lane < LaneCount; ++Lane) {
+      const NdVar Index = IndexLanes[Lane];
+      NdVar FromTable1 =
+          selectTableLane(S, Table1Lanes, Index, Spec.ElementSize);
+      NdVar FromTable2 =
+          selectTableLane(S, Table2Lanes, Index, Spec.ElementSize);
+      NdVar TableBit = S.makeTemp(Spec.ElementSize);
+      S.emit(NdOp::INT_AND, TableBit,
+             {Index, NdVar::cst(LaneCount, Spec.ElementSize)});
+      NdVar SelectTable2 = S.makeTemp(1);
+      S.emit(NdOp::INT_NOTEQUAL, SelectTable2,
+             {TableBit, NdVar::cst(0, Spec.ElementSize)});
+      NdVar ResultLane = S.makeTemp(Spec.ElementSize);
+      S.emit(NdOp::SELECT, ResultLane, {SelectTable2, FromTable2, FromTable1});
+      ResultLanes.push_back(ResultLane);
+    }
+
+    for (unsigned Count = LaneCount, Width = Spec.ElementSize; Count > 1;
+         Count >>= 1, Width <<= 1) {
+      for (unsigned Pair = 0; Pair < Count / 2; ++Pair) {
+        NdVar Joined = S.makeTemp(Width * 2);
+        S.emit(NdOp::CONCAT, Joined,
+               {ResultLanes[Pair * 2 + 1], ResultLanes[Pair * 2]});
+        ResultLanes[Pair] = Joined;
+      }
+    }
+
+    NdVar RawResult = ResultLanes.front();
+    if (HasMask) {
+      if (!emitMaskedVectorResult(L, S, DestinationOperand, *MaskOperand,
+                                  RawResult, Spec.ElementSize))
+        return false;
+    } else {
+      S.emit(NdOp::COPY, L.operandWrite(DestinationOperand), {RawResult});
+    }
     break;
   }
 
@@ -265,31 +655,19 @@ bool liftSIMDShuffle(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     S.emitIntrinsic(Intrinsic::Pshufb, Dst, {A, B});
     break;
   }
-  case X86_INS_VPSHUFD: {
-    if (X86.op_count < 3)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    uint8_t Imm = static_cast<uint8_t>(X86.operands[2].imm);
-    S.emitIntrinsic(Intrinsic::Pshufd, Dst, {Src, NdVar::cst(Imm, 1)});
-    break;
-  }
-  case X86_INS_VPSHUFLW: {
-    if (X86.op_count < 3)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    uint8_t Imm = static_cast<uint8_t>(X86.operands[2].imm);
-    S.emitIntrinsic(Intrinsic::Pshuflw, Dst, {Src, NdVar::cst(Imm, 1)});
-    break;
-  }
+  case X86_INS_VPSHUFD:
+  case X86_INS_VPSHUFLW:
   case X86_INS_VPSHUFHW: {
-    if (X86.op_count < 3)
-      break;
+    if (X86.op_count < 3 || X86.operands[2].type != X86_OP_IMM)
+      return false;
     NdVar Dst = L.operandWrite(X86.operands[0]);
     NdVar Src = L.operandRead(S, X86.operands[1]);
-    uint8_t Imm = static_cast<uint8_t>(X86.operands[2].imm);
-    S.emitIntrinsic(Intrinsic::Pshufhw, Dst, {Src, NdVar::cst(Imm, 1)});
+    const uint8_t Imm = static_cast<uint8_t>(X86.operands[2].imm);
+    const unsigned ElementSize = InsnId == X86_INS_VPSHUFD ? 4 : 2;
+    const unsigned FirstShuffledElement = InsnId == X86_INS_VPSHUFHW ? 4 : 0;
+    if (!EmitImmediateLaneShuffle(Dst, Src, Imm, ElementSize,
+                                  FirstShuffledElement))
+      return false;
     break;
   }
   case X86_INS_VSHUFPS: {

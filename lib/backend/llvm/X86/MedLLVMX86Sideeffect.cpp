@@ -18,7 +18,9 @@
 
 #define DEBUG_TYPE "neverd-med-llvm-x86-sideeffect"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/med/IntrinsicShapes.h"
 
+#include "llvm/ADT/APInt.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/InlineAsm.h"
@@ -201,19 +203,18 @@ void MedLLVMEmitter::emitX86MemPtrAsm(const char *Mn, const MedOp &Op,
   if (Op.NumInputs <= 1)
     llvm::report_fatal_error("x86 memory intrinsic has no address operand");
 
-  llvm::Value *Addr =
-      Op.MemoryAddressSpace == NdMemoryAddressSpace::Default
-          ? getVar(Op.Inputs[1], Builder)
-          : getRawSegmentOffset(Op.Inputs[1], Builder);
-  auto *NativeAddrTy = llvm::Type::getIntNTy(
-      *Ctx, TargetArch == Arch::X86 ? 32 : 64);
+  llvm::Value *Addr = Op.MemoryAddressSpace == NdMemoryAddressSpace::Default
+                          ? getVar(Op.Inputs[1], Builder)
+                          : getRawSegmentOffset(Op.Inputs[1], Builder);
+  auto *NativeAddrTy =
+      llvm::Type::getIntNTy(*Ctx, TargetArch == Arch::X86 ? 32 : 64);
   if (Addr->getType()->isPointerTy())
     Addr = Builder.CreatePtrToInt(Addr, NativeAddrTy, "memory_offset");
   if (!Addr->getType()->isIntegerTy())
     llvm::report_fatal_error("x86 memory intrinsic address is not integral");
   if (Addr->getType() != NativeAddrTy)
-    Addr = Builder.CreateZExtOrTrunc(Addr, NativeAddrTy,
-                                    "native_memory_offset");
+    Addr =
+        Builder.CreateZExtOrTrunc(Addr, NativeAddrTy, "native_memory_offset");
 
   const char *Segment = "";
   if (Op.MemoryAddressSpace == NdMemoryAddressSpace::X86FS)
@@ -484,8 +485,7 @@ bool MedLLVMEmitter::emitX86Privileged(const MedOp &Op, Intrinsic IC,
     if (DfVar.isConst() && DfVar.ConstVal != 0)
       Mnemonic = "std\n\t" + Mnemonic + "\n\tcld";
     else if (DynamicDf)
-      Mnemonic = "test $5,$5\n\tje 1f\n\tstd\n\t1:\n\t" + Mnemonic +
-                 "\n\tcld";
+      Mnemonic = "test $5,$5\n\tje 1f\n\tstd\n\t1:\n\t" + Mnemonic + "\n\tcld";
 
     auto *RetTy = llvm::StructType::get(*Ctx, {AddrTy, AddrTy});
     llvm::CallInst *Call = nullptr;
@@ -603,6 +603,193 @@ bool MedLLVMEmitter::emitX86Privileged(const MedOp &Op, Intrinsic IC,
 
 bool MedLLVMEmitter::emitX86Sideeffect(const MedOp &Op, Intrinsic IC,
                                        llvm::IRBuilder<> &Builder) {
+  if (IC == Intrinsic::X86RequireDivPrecondition) {
+    if (!intrinsicX86DivPreconditionShapeIsValid(
+            IC, x86DivPreconditionMedShape(Op)))
+      llvm::report_fatal_error("invalid x86 divide precondition intrinsic");
+
+    llvm::Value *Dividend = getVar(Op.Inputs[1], Builder);
+    llvm::Value *Divisor = getVar(Op.Inputs[2], Builder);
+    auto *FullTy = llvm::dyn_cast<llvm::IntegerType>(Dividend->getType());
+    auto *HalfTy = llvm::dyn_cast<llvm::IntegerType>(Divisor->getType());
+    if (!FullTy || !HalfTy ||
+        FullTy->getBitWidth() != Op.Inputs[1].Size * 8 ||
+        HalfTy->getBitWidth() != Op.Inputs[2].Size * 8 ||
+        FullTy->getBitWidth() != HalfTy->getBitWidth() * 2)
+      llvm::report_fatal_error(
+          "x86 divide precondition operands are not matching integers");
+
+    const unsigned FullBits = FullTy->getBitWidth();
+    const unsigned HalfBits = HalfTy->getBitWidth();
+    llvm::Value *DivisorZero = Builder.CreateICmpEQ(
+        Divisor, llvm::ConstantInt::get(HalfTy, 0), "divisor.zero");
+    const bool IsSigned =
+        Op.Inputs[3].ConstVal == static_cast<uint64_t>(X86DivKind::Signed);
+    llvm::Value *Overflow = nullptr;
+    if (!IsSigned) {
+      llvm::Value *High = Builder.CreateTrunc(
+          Builder.CreateLShr(Dividend,
+                             llvm::ConstantInt::get(FullTy, HalfBits)),
+          HalfTy, "dividend.high");
+      Overflow = Builder.CreateOr(
+          DivisorZero,
+          Builder.CreateICmpUGE(High, Divisor, "quotient.overflow"),
+          "divide.error");
+    } else {
+      llvm::Value *DividendNegative = Builder.CreateICmpSLT(
+          Dividend, llvm::ConstantInt::get(FullTy, 0), "dividend.negative");
+      llvm::Value *DivisorNegative = Builder.CreateICmpSLT(
+          Divisor, llvm::ConstantInt::get(HalfTy, 0), "divisor.negative");
+      llvm::Value *DividendMagnitude = Builder.CreateSelect(
+          DividendNegative, Builder.CreateNeg(Dividend), Dividend,
+          "dividend.magnitude");
+      llvm::Value *ExtendedDivisor =
+          Builder.CreateSExt(Divisor, FullTy, "divisor.extended");
+      llvm::Value *DivisorMagnitude = Builder.CreateSelect(
+          DivisorNegative, Builder.CreateNeg(ExtendedDivisor),
+          ExtendedDivisor, "divisor.magnitude");
+      llvm::Value *NegativeQuotient = Builder.CreateXor(
+          DividendNegative, DivisorNegative, "quotient.negative");
+      llvm::APInt PositiveLimit =
+          llvm::APInt::getOneBitSet(FullBits, HalfBits - 1);
+      llvm::Value *Limit = Builder.CreateSelect(
+          NegativeQuotient,
+          llvm::ConstantInt::get(FullTy, PositiveLimit + 1),
+          llvm::ConstantInt::get(FullTy, PositiveLimit), "quotient.limit");
+      llvm::Value *Threshold =
+          Builder.CreateMul(DivisorMagnitude, Limit, "quotient.threshold");
+      Overflow = Builder.CreateOr(
+          DivisorZero,
+          Builder.CreateICmpUGE(DividendMagnitude, Threshold,
+                                "quotient.overflow"),
+          "divide.error");
+    }
+
+    llvm::Function *Function = Builder.GetInsertBlock()->getParent();
+    llvm::BasicBlock *Trap =
+        llvm::BasicBlock::Create(*Ctx, "div.overflow", Function);
+    llvm::BasicBlock *Continue =
+        llvm::BasicBlock::Create(*Ctx, "div.precondition.ok", Function);
+    Builder.CreateCondBr(Overflow, Trap, Continue);
+    Builder.SetInsertPoint(Trap);
+    llvm::Function *TrapFn =
+        llvm::Intrinsic::getOrInsertDeclaration(Mod, llvm::Intrinsic::trap);
+    Builder.CreateCall(TrapFn, {});
+    Builder.CreateUnreachable();
+    Builder.SetInsertPoint(Continue);
+    return true;
+  }
+  if (IC == Intrinsic::X86Invalidate)
+    llvm::report_fatal_error(
+        "x86 address-translation invalidation requires an authenticated "
+        "architectural execution environment");
+  if (IC == Intrinsic::X86MsrAccess) {
+    if (!intrinsicX86MsrAccessShapeIsValid(IC, x86MsrAccessMedShape(Op)))
+      llvm::report_fatal_error(
+          "x86 MSR access intrinsic has an invalid operand/output contract");
+    llvm::report_fatal_error(
+        "x86 MSR access requires an authenticated architectural execution "
+        "environment");
+  }
+  if (IC == Intrinsic::CetWrss || IC == Intrinsic::CetWruss ||
+      IC == Intrinsic::Enqcmd || IC == Intrinsic::Enqcmds)
+    llvm::report_fatal_error(
+        "x86 system-memory effect requires an authenticated architectural "
+        "execution environment");
+  if (IC == Intrinsic::AMXLoadConfig || IC == Intrinsic::AMXStoreConfig ||
+      IC == Intrinsic::AMXTileLoad || IC == Intrinsic::AMXTileStore ||
+      IC == Intrinsic::AMXTileZero || IC == Intrinsic::AMXClearStartRow ||
+      IC == Intrinsic::AMXTileCompute || IC == Intrinsic::AMXTileRow)
+    llvm::report_fatal_error(
+        "AMX architectural-state intrinsic requires exact concrete "
+        "emulation");
+  if (IC == Intrinsic::F16CConvert)
+    llvm::report_fatal_error(
+        "F16C conversion intrinsic requires exact concrete emulation");
+  if (IC == Intrinsic::X86ApproxFloat)
+    llvm::report_fatal_error(
+        "x86 approximation intrinsic requires exact concrete emulation");
+  if (IC == Intrinsic::X86FPClass)
+    llvm::report_fatal_error(
+        "x86 floating-point classification intrinsic requires exact "
+        "concrete emulation");
+  if (IC == Intrinsic::X86FPArith)
+    llvm::report_fatal_error(
+        "x86 floating-point arithmetic intrinsic requires exact concrete "
+        "emulation");
+  if (IC == Intrinsic::X86FPConvert)
+    llvm::report_fatal_error(
+        "x86 floating-point conversion intrinsic requires exact concrete "
+        "emulation");
+  if (IC == Intrinsic::X86FPRoundTransform)
+    llvm::report_fatal_error(
+        "x86 floating-point round transformation intrinsic requires exact "
+        "concrete emulation");
+  if (IC == Intrinsic::X86FPExtract)
+    llvm::report_fatal_error(
+        "x86 floating-point extraction intrinsic requires exact concrete "
+        "emulation");
+  if (IC == Intrinsic::X86FPRange)
+    llvm::report_fatal_error(
+        "x86 floating-point range intrinsic requires exact concrete "
+        "emulation");
+  if (IC == Intrinsic::X86FPFixup)
+    llvm::report_fatal_error(
+        "x86 floating-point fixup intrinsic requires exact concrete "
+        "emulation");
+  if (IC == Intrinsic::X86FPScale)
+    llvm::report_fatal_error(
+        "x86 floating-point scale intrinsic requires exact concrete "
+        "emulation");
+  if (IC == Intrinsic::X86FPCompare)
+    llvm::report_fatal_error(
+        "x86 floating-point comparison intrinsic requires exact concrete "
+        "emulation");
+  if (IC == Intrinsic::RequireAligned) {
+    if ((Op.NumInputs != 3 && Op.NumInputs != 4) || Op.Output.Size != 0 ||
+        Op.Inputs[1].Size != 8 || Op.Inputs[2].Size != 8 ||
+        !Op.Inputs[2].isConst() ||
+        (Op.NumInputs == 4 && Op.Inputs[3].Size != 1))
+      llvm::report_fatal_error("invalid alignment precondition intrinsic");
+    if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+      llvm::report_fatal_error(
+          "segmented alignment precondition requires an architectural "
+          "FS/GS base");
+    const uint64_t Alignment = Op.Inputs[2].ConstVal;
+    if (Alignment == 0 || (Alignment & (Alignment - 1)) != 0)
+      llvm::report_fatal_error("alignment precondition is not a power of two");
+    llvm::Value *Value = getVar(Op.Inputs[1], Builder);
+    if (!Value->getType()->isIntegerTy())
+      llvm::report_fatal_error("alignment precondition value is not integer");
+    llvm::Value *Misaligned = Builder.CreateICmpNE(
+        Builder.CreateAnd(
+            Value, llvm::ConstantInt::get(Value->getType(), Alignment - 1)),
+        llvm::ConstantInt::get(Value->getType(), 0), "misaligned");
+    if (Op.NumInputs == 4) {
+      llvm::Value *Guard = getVar(Op.Inputs[3], Builder);
+      if (!Guard->getType()->isIntegerTy(8))
+        llvm::report_fatal_error(
+            "alignment precondition guard is not an i8 predicate");
+      llvm::Value *Active = Builder.CreateICmpNE(
+          Guard, llvm::ConstantInt::get(Guard->getType(), 0),
+          "alignment.active");
+      Misaligned = Builder.CreateAnd(Active, Misaligned,
+                                     "active.and.misaligned");
+    }
+    llvm::Function *Function = Builder.GetInsertBlock()->getParent();
+    llvm::BasicBlock *Trap =
+        llvm::BasicBlock::Create(*Ctx, "alignment.trap", Function);
+    llvm::BasicBlock *Continue =
+        llvm::BasicBlock::Create(*Ctx, "alignment.ok", Function);
+    Builder.CreateCondBr(Misaligned, Trap, Continue);
+    Builder.SetInsertPoint(Trap);
+    llvm::Function *TrapFn =
+        llvm::Intrinsic::getOrInsertDeclaration(Mod, llvm::Intrinsic::trap);
+    Builder.CreateCall(TrapFn, {});
+    Builder.CreateUnreachable();
+    Builder.SetInsertPoint(Continue);
+    return true;
+  }
   if (emitX86DebugTrap(Op, IC, Builder))
     return true;
   if (emitX86Fence(Op, IC, Builder))

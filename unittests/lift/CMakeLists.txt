@@ -93,6 +93,8 @@ add_neverd_unittest(NeverDLiftTests
   x86_64/X86_64_StackMovTests.cpp
   x86_64/X86_64_StringOpsTests.cpp
   x86_64/X86_64_X87FPUTests.cpp
+  x86_64/X86_64_EVEXCompareTests.cpp
+  x86_64/X86_64_WideISAStateTests.cpp
   x86_64/X86_64_SwitchTests.cpp
   x86_64/X86_64_RoundTripTests.cpp
   aarch64/AArch64_SwitchTests.cpp
@@ -160,6 +162,683 @@ add_neverd_unittest(NeverDLiftTests
   format/RuntimeMetadataTests.cpp
   format/TextSectionDetectionTests.cpp
 )
+
+# Keeps wide x86 architectural-state regressions independently runnable while
+# AVX-512, AMX, and APX support is expanded in focused vertical slices.
+add_neverd_unittest(NeverDX86WideISAStateTests
+  x86_64/X86_64_WideISAStateTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86WideISAStateTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps APX MOVRS decode validation and architectural load semantics focused.
+add_neverd_unittest(NeverDX86ApxMovrsTests
+  x86_64/X86_64_APXMovrsTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86ApxMovrsTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps APX-EVEX KMOV raw/detail validation, extended addressing and concrete
+# mask-register memory semantics independently runnable while preserving VEX.
+add_neverd_unittest(NeverDX86APXKmovTests
+  x86_64/X86_64_APXKmovTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86APXKmovTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps MPSADBW's lane-local immediate selection independently runnable
+# through decode, lift, and strict concrete emulation.
+add_neverd_unittest(NeverDX86MPSADBWStrictTests
+  x86_64/X86_64_MPSADBWStrictTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86MPSADBWStrictTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Exact EVEX VDBPSADBW decode, lift, immediate, lane and writemask semantics.
+add_neverd_unittest(NeverDX86VDBPSADBWStrictTests
+  x86_64/X86_64_VDBPSADBWStrictTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86VDBPSADBWStrictTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Safety boundary for AVX-512 floating-point control instructions whose
+# immediate, masking, scalar merge, broadcast, or SAE semantics are not yet
+# representable exactly in LowIR.
+add_neverd_unittest(NeverDX86EVEXFPControlGuardTests
+  x86_64/X86_64_EVEXFPControlGuardTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86EVEXFPControlGuardTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+add_neverd_unittest(NeverDX86FourFMAExactTests
+  x86_64/X86_64_FourFMAExactTests.cpp
+  LINK_COMPONENTS Decode Lift Loader
+)
+target_include_directories(NeverDX86FourFMAExactTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS}
+)
+
+# Exact AVX-512 4VNNIW VP4DPWSSD/SSDS tuple, source-block, mask and
+# per-iteration integer accumulation semantics.
+add_neverd_unittest(NeverDX86VP4DPWTests
+  x86_64/X86_64_VP4DPWTests.cpp
+  LINK_COMPONENTS Decode Lift Loader
+)
+target_include_directories(NeverDX86VP4DPWTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS}
+)
+
+# Runs MOVDIR64B through decode, lift, and strict memory-state emulation,
+# including its read-before-write, alignment and 64-byte atomicity contract.
+add_neverd_unittest(NeverDX86MOVDIR64BStateTests
+  x86_64/X86_64_MOVDIR64BStateTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86MOVDIR64BStateTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps opaque system-memory side effects independently runnable through
+# decode, lift and strict fail-closed emulation without executing host state.
+add_neverd_unittest(NeverDX86SystemSideeffectTests
+  x86_64/X86_64_SystemSideeffectTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86SystemSideeffectTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps restartable AMX tile-state semantics independently runnable through
+# decode, lift, and strict concrete emulation.
+add_neverd_unittest(NeverDX86AMXStateTests
+  x86_64/X86_64_AMXStateTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86AMXStateTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Pins the LLVM boundary independently from concrete AMX emulation.  Until the
+# versioned runtime owns tile state, restartable strided memory and fault
+# continuation, every exact AMX MedIR shape must fail before emitting effects.
+add_neverd_unittest(NeverDX86AMXLLVMGuardTests
+  x86_64/X86_64_AMXLLVMGuardTests.cpp
+
+  LINK_COMPONENTS
+  BackendLLVM
+  LibC
+  Lift
+)
+
+target_include_directories(NeverDX86AMXLLVMGuardTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Pins exact 128/256/512-bit memory transfer behavior independently of the
+# aggregate lift suite, including fault atomicity and address wrap rejection.
+add_neverd_unittest(NeverDNdOpEmulatorWideMemoryTests
+  core/NdOpEmulatorWideMemoryTests.cpp
+
+  LINK_COMPONENTS
+  IRLow
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDNdOpEmulatorWideMemoryTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps legacy x86 memory RMW instructions fault-atomic through decode, lift,
+# and strict concrete emulation, including the 128-bit CMPXCHG16B contract.
+add_neverd_unittest(NeverDX86LegacyAtomicSemanticTests
+  x86_64/X86_64_LegacyAtomicSemanticTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  IRLow
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86LegacyAtomicSemanticTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps EVEX compare semantics independently runnable while each predicate and
+# masking rule is validated end to end through decode, lift, and emulation.
+add_neverd_unittest(NeverDX86EVEXCompareTests
+  x86_64/X86_64_EVEXCompareTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86EVEXCompareTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Exact EVEX floating-point compare predicate, K-result, masking, scalar and
+# exception-state semantics, plus the compiled-backend safety boundary.
+add_neverd_unittest(NeverDX86EVEXFPCompareTests
+  x86_64/X86_64_EVEXFPCompareTests.cpp
+
+  LINK_COMPONENTS
+  BackendLLVM
+  Decode
+  LibC
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86EVEXFPCompareTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps EVEX two-table permutation semantics independently runnable through
+# decode, lift, and strict concrete emulation.
+add_neverd_unittest(NeverDX86EVEXTablePermuteTests
+  x86_64/X86_64_EVEXTablePermuteTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86EVEXTablePermuteTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps legal EVEX masked-memory and broadcast forms independently runnable
+# through decode, lift, and strict concrete emulation.
+add_neverd_unittest(NeverDX86EVEXMemoryBroadcastTests
+  x86_64/X86_64_EVEXMemoryBroadcastTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86EVEXMemoryBroadcastTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps EVEX pairwise integer multiply memory and writemask semantics
+# independently runnable through decode, lift, and strict concrete emulation.
+add_neverd_unittest(NeverDX86EVEXPairwiseMulMemoryTests
+  x86_64/X86_64_EVEXPairwiseMulMemoryTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86EVEXPairwiseMulMemoryTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps scalar EVEX broadcast mask, memory-suppression, and register-source
+# semantics independently runnable through decode, lift, and strict emulation.
+add_neverd_unittest(NeverDX86EVEXScalarBroadcastTests
+  x86_64/X86_64_EVEXScalarBroadcastTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86EVEXScalarBroadcastTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps APX extensions of existing EVEX GPR and ordinary address operands
+# independently runnable through decode, lift, and strict concrete emulation.
+add_neverd_unittest(NeverDX86APXEVEXExistingGprTests
+  x86_64/X86_64_APXEVEXExistingGprTests.cpp
+
+  LINK_COMPONENTS
+  BackendC
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86APXEVEXExistingGprTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps EVEX mask-producing test instructions independently runnable across
+# register, fault-suppressed memory, and scalar-broadcast forms.
+add_neverd_unittest(NeverDX86EVEXMaskTestMemoryTests
+  x86_64/X86_64_EVEXMaskTestMemoryTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  IRLow
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86EVEXMaskTestMemoryTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Runs EVEX packed floating-point arithmetic through decode, lift, and concrete
+# LowIR emulation without coupling the coverage to the broad lift test binary.
+add_neverd_unittest(NeverDX86EVEXFloatArithTests
+  x86_64/X86_64_EVEXFloatArithTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86EVEXFloatArithTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps legal EVEX packed floating-point memory and broadcast forms
+# independently runnable through decode, lift, and strict concrete emulation.
+add_neverd_unittest(NeverDX86EVEXFloatMemoryTests
+  x86_64/X86_64_EVEXFloatMemoryTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86EVEXFloatMemoryTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Runs the FMA3 family through decode, lift, and concrete LowIR emulation so
+# operand ordering, fused rounding, and EVEX destination rules stay observable.
+add_neverd_unittest(NeverDX86EVEXFMATests
+  x86_64/X86_64_EVEXFMATests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86EVEXFMATests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps mask/vector conversion semantics independently runnable across every
+# AVX-512 vector length and element width.
+add_neverd_unittest(NeverDX86EVEXMaskConversionTests
+  x86_64/X86_64_EVEXMaskConversionTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86EVEXMaskConversionTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Runs every EVEX narrowing family through decode, lift, and concrete LowIR
+# emulation across all legal source widths and register writemask modes.
+add_neverd_unittest(NeverDX86EVEXNarrowTests
+  x86_64/X86_64_EVEXNarrowTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86EVEXNarrowTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Runs EVEX VSIB gather/scatter through decode, lift, and concrete masked
+# memory emulation, including suppression and restartable partial progress.
+add_neverd_unittest(NeverDX86EVEXVSIBTests
+  x86_64/X86_64_EVEXVSIBTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86EVEXVSIBTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Runs EVEX masked unaligned vector moves through decode, lift, and strict
+# memory emulation without coupling fault-suppression coverage to broad tests.
+add_neverd_unittest(NeverDX86EVEXMaskedMoveTests
+  x86_64/X86_64_EVEXMaskedMoveTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86EVEXMaskedMoveTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps EVEX tuple broadcasts and lane insert/extract semantics independently
+# runnable through decode, lift, and strict concrete emulation.
+add_neverd_unittest(NeverDX86EVEXLaneMoveTests
+  x86_64/X86_64_EVEXLaneMoveTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86EVEXLaneMoveTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps APX stack encodings independently runnable through decode, lift, and
+# strict concrete memory emulation.
+add_neverd_unittest(NeverDX86APXStackTests
+  x86_64/X86_64_APXStackTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86APXStackTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps APX SETcc/SETZUcc register-width and byte-memory semantics independently
+# runnable through decode, lift, and strict concrete emulation.
+add_neverd_unittest(NeverDX86APXSetccTests
+  x86_64/X86_64_APXSetccTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86APXSetccTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps APX conditional-faulting move semantics independently runnable through
+# decode, lift, and strict concrete memory emulation.
+add_neverd_unittest(NeverDX86APXCFCmovTests
+  x86_64/X86_64_APXCFCmovTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86APXCFCmovTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps APX NDD CMOV's three-operand selection and ordinary faulting-load
+# behavior independently runnable through decode, lift, and strict emulation.
+add_neverd_unittest(NeverDX86APXNddCMovTests
+  x86_64/X86_64_APXNddCMovTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86APXNddCMovTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps APX conditional TEST source-condition, default-flag, width and
+# ordinary faulting-load semantics independently runnable through strict
+# concrete emulation.
+add_neverd_unittest(NeverDX86APXCTestTests
+  x86_64/X86_64_APXCTestTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86APXCTestTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps APX conditional CMP source-condition, full subtraction flags, default
+# flags, operand-order and ordinary faulting-load semantics independently
+# runnable through strict concrete emulation.
+add_neverd_unittest(NeverDX86APXCCmpTests
+  x86_64/X86_64_APXCCmpTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86APXCCmpTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps APX-promoted BMI/BMI2/ADX operand roles, NF/NDD flags and ordinary
+# memory-fault ordering independently runnable through strict emulation.
+add_neverd_unittest(NeverDX86APXBMISemanticTests
+  x86_64/X86_64_APXBMISemanticTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86APXBMISemanticTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps APX RAO and CMPccXADD atomic memory, condition, flag and fault-commit
+# semantics independently runnable through decode, lift and strict emulation.
+add_neverd_unittest(NeverDX86APXAtomicSemanticTests
+  x86_64/X86_64_APXAtomicSemanticTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  IRMed
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86APXAtomicSemanticTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps APX promoted NDD dataflow and NF flag suppression independently
+# runnable through decode, lift, and strict concrete emulation.
+add_neverd_unittest(NeverDX86APXNddNfSemanticTests
+  x86_64/X86_64_APXNddNfSemanticTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86APXNddNfSemanticTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps EVEX packed integer/float conversions independently runnable through
+# decode, lift, and strict concrete emulation.
+add_neverd_unittest(NeverDX86EVEXPackedConvertTests
+  x86_64/X86_64_EVEXPackedConvertTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86EVEXPackedConvertTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps same-width EVEX dword conversion memory and broadcast semantics
+# independently runnable through decode, lift, and strict concrete emulation.
+add_neverd_unittest(NeverDX86EVEXDwordConvertMemoryTests
+  x86_64/X86_64_EVEXDwordConvertMemoryTests.cpp
+
+  LINK_COMPONENTS
+  Decode
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDX86EVEXDwordConvertMemoryTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps LLVM lowering of packed conversion scalar lanes independently runnable.
+add_neverd_unittest(NeverDX86EVEXPackedConvertEmitterTests
+  x86_64/X86_64_EVEXPackedConvertEmitterTests.cpp
+
+  LINK_COMPONENTS
+  LLVMFloatConvertLowering
+)
+
+target_include_directories(NeverDX86EVEXPackedConvertEmitterTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+add_neverd_unittest(NeverDX86EVEXCompressExpandMemoryTests
+  x86_64/X86_64_EVEXCompressExpandMemoryTests.cpp
+  LINK_COMPONENTS Decode Lift Loader
+)
+target_include_directories(NeverDX86EVEXCompressExpandMemoryTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
+
+add_neverd_unittest(NeverDX86EVEXCryptoTests
+  x86_64/X86_64_EVEXCryptoTests.cpp
+  LINK_COMPONENTS Decode Lift Loader
+)
+target_include_directories(NeverDX86EVEXCryptoTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
 
 # Prebuilt LLVM packages ship libraries only.  Point HighC syntax checks at
 # that tree's clang when it exists; otherwise use the host compiler that
