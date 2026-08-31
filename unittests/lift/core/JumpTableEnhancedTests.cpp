@@ -1067,6 +1067,50 @@ TEST_F(JTE_X86_32,
   }
 }
 
+TEST(JumpTableMaskClassification,
+     ConstantOnlyScalarMaskRequiresTwoUnownedNonAddressConstants) {
+  neverd::LowOp Mask;
+  Mask.Opcode = neverd::NdOp::INT_AND;
+  Mask.Output = neverd::NdVar::tmp(0x100, 4);
+  Mask.addInput(neverd::NdVar::scalar(2, 4));
+  Mask.addInput(neverd::NdVar::scalar(31, 4));
+  ASSERT_TRUE(neverd::detail::isConstantOnlyScalarMask(Mask));
+
+  auto ExpectRelevant = [&](neverd::NdVar Left, neverd::NdVar Right) {
+    neverd::LowOp Candidate = Mask;
+    Candidate.Inputs[0] = Left;
+    Candidate.Inputs[1] = Right;
+    EXPECT_FALSE(neverd::detail::isConstantOnlyScalarMask(Candidate));
+  };
+
+  ExpectRelevant(neverd::NdVar::dataAddress(2, 4, 0x1000), Mask.Inputs[1]);
+  ExpectRelevant(Mask.Inputs[0], neverd::NdVar::codeAddress(31, 4, 0x2000));
+  ExpectRelevant(neverd::NdVar::addressFragment(2, 4), Mask.Inputs[1]);
+  ExpectRelevant(Mask.Inputs[0], neverd::NdVar::addressFragment(31, 4));
+
+  neverd::NdVar OwnedLeft = Mask.Inputs[0];
+  OwnedLeft.AddressOwnerVA = 0x3000;
+  ExpectRelevant(OwnedLeft, Mask.Inputs[1]);
+  neverd::NdVar OwnedRight = Mask.Inputs[1];
+  OwnedRight.AddressOwnerVA = 0x4000;
+  ExpectRelevant(Mask.Inputs[0], OwnedRight);
+
+  ExpectRelevant(neverd::NdVar::reg(8, 4), Mask.Inputs[1]);
+  ExpectRelevant(Mask.Inputs[0], neverd::NdVar::reg(12, 4));
+}
+
+TEST(JumpTableFixedPointTargetQueue, CanonicalizesRepeatedDiscoveryHistory) {
+  std::vector<neverd::va_t> Targets{0x3000, 0x1000, 0x2000,
+                                    0x1000, 0x3000, 0x2000};
+  neverd::detail::canonicalizeFixedPointExplorationTargets(Targets);
+  EXPECT_EQ(Targets, (std::vector<neverd::va_t>{0x1000, 0x2000, 0x3000}));
+
+  Targets.insert(Targets.end(), {0x3000, 0x1000, 0x2000});
+  neverd::detail::canonicalizeFixedPointExplorationTargets(Targets);
+  EXPECT_EQ(Targets, (std::vector<neverd::va_t>{0x1000, 0x2000, 0x3000}))
+      << "stable replay must not retain a second copy of the same edges";
+}
+
 TEST(TargetRoleProofContextKeyTest,
      DistinguishesModeOptionalPresenceAndRootContents) {
   const std::set<neverd::va_t> EmptyRoots;
@@ -2435,6 +2479,421 @@ TEST_F(JTE_X86_64, CoverageInventoryExcludesPrunedProvisionalCases) {
 }
 
 TEST_F(JTE_X86_64,
+       PublishedRelativeTableDropsRelocationOnlyInteriorDecodeRoot) {
+  auto ImageOrErr = neverd::loadBinary(identityCfgLaneObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_identity_relative_reloc_root_cleanup");
+  const neverd::Symbol *Case3 =
+      Image.findSymbol("jt_identity_relative_reloc_root_cleanup_case3");
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_identity_relative_reloc_root_cleanup_table");
+  const neverd::Symbol *PeeledTable =
+      Image.findSymbol("jt_identity_relative_reloc_root_cleanup_peeled_table");
+  const neverd::Symbol *PeeledBranch =
+      Image.findSymbol("jt_identity_relative_reloc_root_cleanup_peeled_branch");
+  const neverd::Symbol *SeedBranch =
+      Image.findSymbol("jt_identity_relative_reloc_root_cleanup_seed_branch");
+  const neverd::Symbol *LoopBranch =
+      Image.findSymbol("jt_identity_relative_reloc_root_cleanup_loop_branch");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Case3, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_NE(PeeledTable, nullptr);
+  ASSERT_NE(PeeledBranch, nullptr);
+  ASSERT_NE(SeedBranch, nullptr);
+  ASSERT_NE(LoopBranch, nullptr);
+
+  const neverd::va_t RelocationSlot = Table->Addr + 12;
+  ASSERT_EQ(Image.RelCodeRelocSlots.count(RelocationSlot), 1u);
+  const uint8_t *Encoded = Image.readVA(RelocationSlot, sizeof(int32_t));
+  ASSERT_NE(Encoded, nullptr);
+  int32_t Displacement = 0;
+  std::memcpy(&Displacement, Encoded, sizeof(Displacement));
+  const neverd::va_t RelocationOnlyRoot = static_cast<neverd::va_t>(
+      static_cast<int64_t>(RelocationSlot) + Displacement);
+  ASSERT_EQ(RelocationOnlyRoot, Case3->Addr + 12);
+  size_t MatchingRelativeSources = 0;
+  for (neverd::va_t Slot : Image.RelCodeRelocSlots) {
+    const uint8_t *Bytes = Image.readVA(Slot, sizeof(int32_t));
+    if (!Bytes)
+      continue;
+    int32_t Relative = 0;
+    std::memcpy(&Relative, Bytes, sizeof(Relative));
+    MatchingRelativeSources +=
+        static_cast<neverd::va_t>(static_cast<int64_t>(Slot) + Relative) ==
+        RelocationOnlyRoot;
+  }
+  ASSERT_EQ(MatchingRelativeSources, 1u);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+
+  auto FindPublished = [&](const neverd::Symbol *Branch,
+                           const neverd::Symbol *Base) {
+    return std::find_if(Low.JumpTables.begin(), Low.JumpTables.end(),
+                        [&](const neverd::JumpTable &Candidate) {
+                          return Candidate.InsnAddr == Branch->Addr &&
+                                 Candidate.HasBaseAddr &&
+                                 Candidate.BaseAddr == Base->Addr;
+                        });
+  };
+  const auto PublishedPeeledTable = FindPublished(PeeledBranch, PeeledTable);
+  const auto PublishedSeedTable = FindPublished(SeedBranch, Table);
+  const auto PublishedTable = FindPublished(LoopBranch, Table);
+  ASSERT_NE(PublishedPeeledTable, Low.JumpTables.end());
+  ASSERT_NE(PublishedSeedTable, Low.JumpTables.end());
+  ASSERT_NE(PublishedTable, Low.JumpTables.end());
+  EXPECT_EQ(PublishedPeeledTable->SlotIndices,
+            (std::vector<uint32_t>{0, 2, 4, 6}));
+  EXPECT_EQ(PublishedSeedTable->SlotIndices,
+            (std::vector<uint32_t>{0, 2, 4, 6}));
+  EXPECT_EQ(PublishedTable->SlotIndices,
+            (std::vector<uint32_t>{0, 1, 2, 3, 4, 5, 6, 7}));
+  const auto Case3Target =
+      std::find(PublishedTable->Targets.begin(), PublishedTable->Targets.end(),
+                Case3->Addr);
+  ASSERT_NE(Case3Target, PublishedTable->Targets.end());
+  const size_t Case3Position = static_cast<size_t>(
+      std::distance(PublishedTable->Targets.begin(), Case3Target));
+  ASSERT_EQ(PublishedTable->SlotIndices.size(), PublishedTable->Targets.size());
+  EXPECT_EQ(PublishedTable->SlotIndices[Case3Position], 3u);
+  auto IsStrictlyInsidePublishedInsn = [&](neverd::va_t Root) {
+    return std::any_of(
+        Low.Blocks.begin(), Low.Blocks.end(),
+        [&](const neverd::LowBlock &Block) {
+          return std::any_of(
+              Block.InstructionBoundaries.begin(),
+              Block.InstructionBoundaries.end(),
+              [&](const neverd::LowInstructionBoundary &Boundary) {
+                return Boundary.Address < Root &&
+                       Root < Boundary.Address + Boundary.Size;
+              });
+        });
+  };
+  std::set<neverd::va_t> InteriorRelocationOnlyRoots;
+  for (const neverd::JumpTable &Published : Low.JumpTables) {
+    ASSERT_TRUE(Published.HasBaseAddr);
+    ASSERT_TRUE(Published.IsRelative);
+    ASSERT_EQ(Published.EntrySize, sizeof(int32_t));
+    ASSERT_EQ(Published.SlotIndices.size(), Published.Targets.size());
+    const uint64_t Stride = Published.EntryStride != 0 ? Published.EntryStride
+                                                       : Published.EntrySize;
+    for (size_t I = 0; I < Published.Targets.size(); ++I) {
+      const neverd::va_t Slot =
+          Published.BaseAddr + uint64_t(Published.SlotIndices[I]) * Stride;
+      ASSERT_EQ(Image.RelCodeRelocSlots.count(Slot), 1u);
+      const uint8_t *Bytes = Image.readVA(Slot, sizeof(int32_t));
+      ASSERT_NE(Bytes, nullptr);
+      int32_t Relative = 0;
+      std::memcpy(&Relative, Bytes, sizeof(Relative));
+      const neverd::va_t Root =
+          static_cast<neverd::va_t>(static_cast<int64_t>(Slot) + Relative);
+      if (IsStrictlyInsidePublishedInsn(Root))
+        InteriorRelocationOnlyRoots.insert(Root);
+      EXPECT_NE(std::find_if(Low.Blocks.begin(), Low.Blocks.end(),
+                             [&](const neverd::LowBlock &Block) {
+                               return Block.StartAddr == Published.Targets[I];
+                             }),
+                Low.Blocks.end());
+    }
+  }
+  ASSERT_GE(InteriorRelocationOnlyRoots.size(), 4u);
+  EXPECT_EQ(InteriorRelocationOnlyRoots.count(RelocationOnlyRoot), 1u);
+  for (neverd::va_t Root : InteriorRelocationOnlyRoots) {
+    EXPECT_EQ(std::count_if(Low.Blocks.begin(), Low.Blocks.end(),
+                            [&](const neverd::LowBlock &Block) {
+                              return Block.StartAddr == Root;
+                            }),
+              0);
+    EXPECT_EQ(std::count_if(
+                  Low.Blocks.begin(), Low.Blocks.end(),
+                  [&](const neverd::LowBlock &Block) {
+                    return std::any_of(
+                        Block.InstructionBoundaries.begin(),
+                        Block.InstructionBoundaries.end(),
+                        [&](const neverd::LowInstructionBoundary &Boundary) {
+                          return Boundary.Address == Root;
+                        });
+                  }),
+              0);
+  }
+}
+
+TEST_F(JTE_X86_64,
+       RelativeRelocationRootSourceCacheIsBuildLocalAndStageReusable) {
+  auto ImageOrErr = neverd::loadBinary(identityCfgLaneObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *MultiStage =
+      Image.findSymbol("jt_identity_relative_reloc_root_cleanup");
+  const neverd::Symbol *Small =
+      Image.findSymbol("jt_identity_relative_reloc_direct_edge");
+  ASSERT_NE(MultiStage, nullptr);
+  ASSERT_NE(Small, nullptr);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  (void)Builder.build(Image, Decoder, MultiStage->Addr, MultiStage->Name);
+  EXPECT_EQ(Builder.relativeRelocationRootSourceCacheBuildCountForTesting(),
+            1u);
+  EXPECT_GT(Builder.relativeRelocationRootSourceCacheLookupCountForTesting(),
+            1u)
+      << "multi-stage block rebuilds must reuse one image-slot scan";
+
+  (void)Builder.build(Image, Decoder, Small->Addr, Small->Name);
+  EXPECT_EQ(Builder.relativeRelocationRootSourceCacheBuildCountForTesting(), 2u)
+      << "a new build must invalidate even an unchanged BinaryImage";
+  EXPECT_GE(Builder.relativeRelocationRootSourceCacheLookupCountForTesting(),
+            1u);
+
+  auto OtherOrErr = neverd::loadBinary(identityCfgLaneObj());
+  ASSERT_TRUE(static_cast<bool>(OtherOrErr))
+      << llvm::toString(OtherOrErr.takeError());
+  neverd::BinaryImage &Other = *OtherOrErr;
+  const neverd::Symbol *OtherSmall =
+      Other.findSymbol("jt_identity_relative_reloc_direct_edge");
+  ASSERT_NE(OtherSmall, nullptr);
+  ASSERT_NE(&Other, &Image);
+  (void)Builder.build(Other, Decoder, OtherSmall->Addr, OtherSmall->Name);
+  EXPECT_EQ(Builder.relativeRelocationRootSourceCacheBuildCountForTesting(), 3u)
+      << "switching images must rebuild the reverse source index";
+}
+
+TEST_F(JTE_X86_64, RelativeRelocationRootRetainsProtectedSlot) {
+  auto ImageOrErr = neverd::loadBinary(identityCfgLaneObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_identity_relative_reloc_root_cleanup");
+  const neverd::Symbol *ProtectedTable =
+      Image.findSymbol("jt_identity_relative_reloc_root_cleanup_table");
+  const neverd::Symbol *ProtectedCase =
+      Image.findSymbol("jt_identity_relative_reloc_root_cleanup_case3");
+  const neverd::Symbol *LoopBranch =
+      Image.findSymbol("jt_identity_relative_reloc_root_cleanup_loop_branch");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(ProtectedTable, nullptr);
+  ASSERT_NE(ProtectedCase, nullptr);
+  ASSERT_NE(LoopBranch, nullptr);
+  const neverd::va_t ProtectedSlot = ProtectedTable->Addr + 12;
+  const neverd::va_t ProtectedRoot = ProtectedCase->Addr + 12;
+  const std::set<neverd::va_t> ProtectedSlots{ProtectedSlot};
+  ASSERT_EQ(Image.RelCodeRelocSlots.count(ProtectedSlot), 1u);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  Builder.setProtectedJumpTableRelocationSlots(&ProtectedSlots);
+  const neverd::LowFunc Protected =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  const auto PublishedLoop =
+      std::find_if(Protected.JumpTables.begin(), Protected.JumpTables.end(),
+                   [&](const neverd::JumpTable &Candidate) {
+                     return Candidate.InsnAddr == LoopBranch->Addr &&
+                            Candidate.HasBaseAddr &&
+                            Candidate.BaseAddr == ProtectedTable->Addr;
+                   });
+  ASSERT_NE(PublishedLoop, Protected.JumpTables.end());
+  EXPECT_FALSE(PublishedLoop->suppressesRelocationSlot(ProtectedSlot));
+  ASSERT_EQ(PublishedLoop->Targets.size(), 8u);
+  EXPECT_NE(std::find(PublishedLoop->Targets.begin(),
+                      PublishedLoop->Targets.end(), ProtectedCase->Addr),
+            PublishedLoop->Targets.end());
+  EXPECT_EQ(std::count(PublishedLoop->Targets.begin(),
+                       PublishedLoop->Targets.end(), ProtectedRoot),
+            0u)
+      << "ordinary root role must not become a selector target";
+  EXPECT_NE(std::find_if(Protected.Blocks.begin(), Protected.Blocks.end(),
+                         [&](const neverd::LowBlock &Block) {
+                           return Block.StartAddr == ProtectedRoot;
+                         }),
+            Protected.Blocks.end());
+  EXPECT_EQ(Protected.ModuleAnalysisRoots.count(ProtectedRoot), 1u);
+  EXPECT_EQ(Protected.OrdinaryModuleAnalysisRoots.count(ProtectedRoot), 1u)
+      << "an unsuppressed code relocation is an ordinary address-taken root";
+
+  const auto RootBlock =
+      std::find_if(Protected.Blocks.begin(), Protected.Blocks.end(),
+                   [&](const neverd::LowBlock &Block) {
+                     return Block.StartAddr == ProtectedRoot;
+                   });
+  ASSERT_NE(RootBlock, Protected.Blocks.end());
+  neverd::LowFunc OrdinaryProbe = Protected;
+  neverd::LowBlock ProbeBlock = *RootBlock;
+  ProbeBlock.Id = 0;
+  ProbeBlock.Preds.clear();
+  ProbeBlock.Succs.clear();
+  ProbeBlock.Ops.clear();
+  ProbeBlock.InstructionBoundaries.clear();
+  neverd::LowOp ReturnAddress;
+  ReturnAddress.Opcode = neverd::NdOp::RETURN;
+  ReturnAddress.Addr = ProtectedRoot;
+  ReturnAddress.Seq = 0;
+  ReturnAddress.addInput(
+      neverd::NdVar::codeAddress(Function->Addr, Image.getPointerSize()));
+  ProbeBlock.Ops.push_back(ReturnAddress);
+  OrdinaryProbe.Blocks = {std::move(ProbeBlock)};
+  OrdinaryProbe.JumpTables.clear();
+
+  const neverd::pipeline_detail::ReturnedCodeEvidenceTestResult Returned =
+      neverd::pipeline_detail::collectReturnedCodeEvidenceForTesting(
+          Image, {OrdinaryProbe}, {Function->Addr});
+  ASSERT_TRUE(Returned.AnalysisComplete);
+  ASSERT_EQ(Returned.TargetsByFunction.size(), 1u);
+  ASSERT_EQ(Returned.CompleteByFunction.size(), 1u);
+  EXPECT_TRUE(Returned.CompleteByFunction.front());
+  EXPECT_EQ(Returned.TargetsByFunction.front(),
+            (std::set<neverd::va_t>{Function->Addr}))
+      << "OrdinaryOnly traversal must seed the protected relocation root";
+}
+
+TEST_F(JTE_X86_64, RelativeRelocationRootRetainsIndependentDirectEdge) {
+  auto ImageOrErr = neverd::loadBinary(identityCfgLaneObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_identity_relative_reloc_direct_edge");
+  const neverd::Symbol *DirectRoot =
+      Image.findSymbol("jt_identity_relative_reloc_direct_edge_root");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(DirectRoot, nullptr);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Direct =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Direct.JumpTables.size(), 1u);
+  EXPECT_NE(std::find_if(Direct.Blocks.begin(), Direct.Blocks.end(),
+                         [&](const neverd::LowBlock &Block) {
+                           return Block.StartAddr == DirectRoot->Addr;
+                         }),
+            Direct.Blocks.end());
+}
+
+TEST_F(JTE_X86_64,
+       RelativeRelocationRootKeepsPartiallySuppressedMultiSourceBoundary) {
+  auto ImageOrErr = neverd::loadBinary(identityCfgLaneObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_identity_relative_reloc_multi_source");
+  const neverd::Symbol *Case1 =
+      Image.findSymbol("jt_identity_relative_reloc_multi_source_case1");
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_identity_relative_reloc_multi_source_table");
+  const neverd::Symbol *Pointer =
+      Image.findSymbol("jt_identity_relative_reloc_multi_source_pointer");
+  const neverd::Symbol *SeedPointer =
+      Image.findSymbol("jt_identity_relative_reloc_multi_source_seed_pointer");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Case1, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_NE(Pointer, nullptr);
+  ASSERT_NE(SeedPointer, nullptr);
+  ASSERT_EQ(Image.RelCodeRelocSlots.count(Pointer->Addr), 1u);
+  ASSERT_EQ(Image.RelCodeRelocSlots.count(Table->Addr + 4), 1u);
+  ASSERT_EQ(Image.CodePtrRelocSlots.count(SeedPointer->Addr), 1u);
+
+  const neverd::va_t MultiSourceRoot = Case1->Addr + 4;
+  size_t MatchingRelativeSources = 0;
+  for (neverd::va_t Slot : Image.RelCodeRelocSlots) {
+    const uint8_t *Bytes = Image.readVA(Slot, sizeof(int32_t));
+    if (!Bytes)
+      continue;
+    int32_t Relative = 0;
+    std::memcpy(&Relative, Bytes, sizeof(Relative));
+    MatchingRelativeSources +=
+        static_cast<neverd::va_t>(static_cast<int64_t>(Slot) + Relative) ==
+        MultiSourceRoot;
+  }
+  ASSERT_EQ(MatchingRelativeSources, 2u);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_EQ(
+      Builder.relativeRelocationRootSourceCountForTesting(MultiSourceRoot), 2u);
+  EXPECT_EQ(Low.JumpTables[0].SlotIndices, (std::vector<uint32_t>{0, 1}));
+  EXPECT_NE(std::find_if(Low.Blocks.begin(), Low.Blocks.end(),
+                         [&](const neverd::LowBlock &Block) {
+                           return Block.StartAddr == MultiSourceRoot;
+                         }),
+            Low.Blocks.end());
+}
+
+TEST(RelocationRootSuppressionOwners,
+     RootReturnsWhenItsOnlyOwnerLosesReachability) {
+  const neverd::va_t Owner = 0x1010;
+  std::vector<std::set<neverd::va_t>> QueriedOwners;
+  bool RootRestored = false;
+  const std::set<neverd::va_t> FinalOwners =
+      neverd::detail::refineRelocationRootSuppressionOwners(
+          {Owner}, [&](const std::set<neverd::va_t> &Owners) {
+            QueriedOwners.push_back(Owners);
+            if (Owners.count(Owner)) {
+              // The branch is reachable only through the overlap root that
+              // its own table authority hides in this candidate graph.
+              return std::set<neverd::va_t>{};
+            }
+            RootRestored = true;
+            return std::set<neverd::va_t>{};
+          });
+  EXPECT_TRUE(FinalOwners.empty());
+  EXPECT_TRUE(RootRestored);
+  ASSERT_EQ(QueriedOwners.size(), 2u);
+  EXPECT_EQ(QueriedOwners[0], (std::set<neverd::va_t>{Owner}));
+  EXPECT_TRUE(QueriedOwners[1].empty());
+}
+
+TEST(RelocationRootSuppressionOwners,
+     RefinementLimitRevokesAllAuthorityAndRebuildsFailClosed) {
+  std::vector<std::set<neverd::va_t>> QueriedOwners;
+  const std::set<neverd::va_t> FinalOwners =
+      neverd::detail::refineRelocationRootSuppressionOwners(
+          {1, 2, 3},
+          [&](const std::set<neverd::va_t> &Owners) {
+            QueriedOwners.push_back(Owners);
+            if (Owners.empty())
+              return Owners;
+            std::set<neverd::va_t> Reachable = Owners;
+            Reachable.erase(*Reachable.rbegin());
+            return Reachable;
+          },
+          2);
+  EXPECT_TRUE(FinalOwners.empty());
+  ASSERT_EQ(QueriedOwners.size(), 3u);
+  EXPECT_EQ(QueriedOwners[0], (std::set<neverd::va_t>{1, 2, 3}));
+  EXPECT_EQ(QueriedOwners[1], (std::set<neverd::va_t>{1, 2}));
+  EXPECT_TRUE(QueriedOwners[2].empty())
+      << "cap exhaustion must rebuild once with no suppression authority";
+}
+
+TEST(RelocationRootSourceCache, EqualRangeMergesEveryRelativeSource) {
+  const neverd::va_t Root = 0x2000;
+  const std::vector<std::pair<neverd::va_t, neverd::va_t>> SortedSources{
+      {0x1000, 0x40}, {Root, 0x80}, {Root, 0x84}, {0x3000, 0xc0}};
+  std::map<neverd::va_t, std::set<neverd::va_t>> RootSources;
+  neverd::detail::mergeRelativeRelocationRootSources(SortedSources, {Root},
+                                                     RootSources);
+  ASSERT_EQ(RootSources.size(), 1u);
+  EXPECT_EQ(RootSources.at(Root), (std::set<neverd::va_t>{0x80, 0x84}));
+}
+
+TEST_F(JTE_X86_64,
        LostPublishedTableRemainsOpaqueBranchAfterNormalRevalidation) {
   auto Low = liftToLowIR(lostPublishedX64Obj());
   ASSERT_EQ(Low.exitCode, 0) << Low.err;
@@ -3793,8 +4252,52 @@ TEST_F(JTE_X86_64, ModuloBoundGrowsRelativeTargetsBeforePublication) {
   neverd::CFGBuilder Builder;
   const neverd::LowFunc Low =
       Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  EXPECT_EQ(Builder.maxCandidateFixedPointExplorationTargetCountForTesting(),
+            5u)
+      << "stable modulo replay must retain one canonical edge per target";
   ASSERT_EQ(Low.JumpTables.size(), 1u);
   EXPECT_EQ(Low.JumpTables.front().Targets.size(), 5u);
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
+TEST_F(JTE_X86_64, ModuloProvisionalQueueCanonicalizesDuplicateDestinations) {
+  auto ImageOrErr = neverd::loadBinary(moduloDomainObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_modulo_lfp_relative_duplicate_targets");
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_modulo_lfp_relative_duplicate_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Table->Size, 5u * 4u);
+  ASSERT_EQ(std::count_if(Image.RelCodeRelocSlots.begin(),
+                          Image.RelCodeRelocSlots.end(),
+                          [&](neverd::va_t Slot) {
+                            return Slot >= Table->Addr &&
+                                   Slot < Table->Addr + Table->Size;
+                          }),
+            5u);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  EXPECT_EQ(Builder.maxCandidateFixedPointExplorationTargetCountForTesting(),
+            3u)
+      << "five physical coordinates name only three provisional CFG edges";
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  const std::vector<neverd::va_t> &PublishedTargets =
+      Low.JumpTables.front().Targets;
+  ASSERT_EQ(PublishedTargets.size(), 5u)
+      << "edge canonicalization must not collapse runtime coordinates";
+  EXPECT_NE(PublishedTargets[0], PublishedTargets[1]);
+  EXPECT_EQ(PublishedTargets[1], PublishedTargets[2]);
+  EXPECT_NE(PublishedTargets[1], PublishedTargets[3]);
+  EXPECT_EQ(PublishedTargets[3], PublishedTargets[4]);
+  EXPECT_NE(PublishedTargets[0], PublishedTargets[3]);
   EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
 }
 
@@ -4649,6 +5152,15 @@ TEST_F(JTE_X86_64,
     neverd::CFGBuilder Builder;
     const neverd::LowFunc Low =
         Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    size_t ConstantOnlyMaskCount = 0;
+    for (const neverd::LowBlock &Block : Low.Blocks)
+      for (const neverd::LowOp &Op : Block.Ops)
+        ConstantOnlyMaskCount +=
+            neverd::detail::isConstantOnlyScalarMask(Op) ? 1u : 0u;
+    EXPECT_GE(ConstantOnlyMaskCount, 3u)
+        << FunctionName
+        << " must exercise the lifter-generated shift-count masks that are "
+           "irrelevant to selector-domain evidence";
     ASSERT_EQ(Low.JumpTables.size(), AddressOrder.size())
         << FunctionName
         << " must publish the entry and all four cyclic siblings as one "
@@ -5859,6 +6371,21 @@ TEST_F(JTE_X86_64, StackMemcpyLengthClobberFailsClosed) {
   ASSERT_TRUE(Saw56 && Saw64)
       << "fixture must keep both feasible CALL-time length definitions";
   EXPECT_TRUE(Low.JumpTables.empty());
+}
+
+TEST_F(JTE_X86_64, RegisterABIMemcpyRejectsCdeclStackDecoys) {
+  auto ImageOrErr = neverd::loadBinary(stackMemcpyObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::LowFunc Low = buildNamedLowFunction(
+      *ImageOrErr, "jt_stack_memcpy_register_abi_cdecl_decoys");
+
+  EXPECT_TRUE(Low.JumpTables.empty());
+  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR))
+      << "cdecl-shaped decoys must not promote a register-ABI tail transfer "
+         "to a local-table candidate";
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
 }
 
 TEST_F(JTE_X86_64, ComputedGotoAllStagesSucceed) {

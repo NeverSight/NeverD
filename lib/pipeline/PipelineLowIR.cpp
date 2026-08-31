@@ -135,6 +135,7 @@ struct ModuleJumpTableOwner {
   va_t BranchAddr = InvalidVA;
   va_t StorageIdentityVA = InvalidVA;
   std::vector<JumpTableStorageRange> StorageRanges;
+  std::vector<JumpTableStorageRange> PhysicalIdentityRanges;
   std::set<va_t> RequestedSlots;
 };
 
@@ -200,17 +201,35 @@ bool addressOwnerMatches(const BinaryImage &Img,
   return false;
 }
 
-bool storageEnvelopeContainsOrOnePast(const BinaryImage &Img,
-                                      const ModuleJumpTableOwner &Owner,
-                                      const ModuleAddressAnchor &Anchor) {
-  return std::any_of(Owner.StorageRanges.begin(), Owner.StorageRanges.end(),
-                     [&](const JumpTableStorageRange &Range) {
-                       if (!addressOwnerMatches(Img, Owner, Range, Anchor))
-                         return false;
-                       const std::optional<va_t> End = Range.storageEnd();
-                       return End && Anchor.Address >= Range.BaseAddr &&
-                              Anchor.Address <= *End;
-                     });
+bool isExactRelativeTableAnchor(
+    const BinaryImage &Img,
+    const std::set<va_t> *OccurrenceRelativeTableAnchors, va_t Address) {
+  return Img.RelCodeTableAnchors.count(Address) != 0 ||
+         (OccurrenceRelativeTableAnchors &&
+          OccurrenceRelativeTableAnchors->count(Address) != 0);
+}
+
+bool storageEnvelopeContainsOrOnePast(
+    const BinaryImage &Img, const ModuleJumpTableOwner &Owner,
+    const ModuleAddressAnchor &Anchor,
+    const std::set<va_t> *OccurrenceRelativeTableAnchors) {
+  return std::any_of(
+      Owner.PhysicalIdentityRanges.begin(), Owner.PhysicalIdentityRanges.end(),
+      [&](const JumpTableStorageRange &Range) {
+        if (!addressOwnerMatches(Img, Owner, Range, Anchor))
+          return false;
+        const std::optional<va_t> End = Range.storageEnd();
+        if (!End || Anchor.Address < Range.BaseAddr || Anchor.Address > *End)
+          return false;
+        // A loader-authenticated relative-table anchor at the
+        // exact end starts a new physical object.  Prefer that
+        // identity over treating the address as one-past this
+        // owner; ordinary unclaimed one-past pointers retain
+        // their conservative object association.
+        return Anchor.Address != *End ||
+               !isExactRelativeTableAnchor(Img, OccurrenceRelativeTableAnchors,
+                                           Anchor.Address);
+      });
 }
 
 bool moduleAddressSummaryMayAliasOwner(
@@ -222,7 +241,8 @@ bool moduleAddressSummaryMayAliasOwner(
     return true;
   case ModuleAddressOwnerKind::Container:
     return Root.OwnerVA != InvalidVA &&
-           std::any_of(Owner.StorageRanges.begin(), Owner.StorageRanges.end(),
+           std::any_of(Owner.PhysicalIdentityRanges.begin(),
+                       Owner.PhysicalIdentityRanges.end(),
                        [&](const JumpTableStorageRange &Range) {
                          return storageRangeOwnerVA(Img, Range) == Root.OwnerVA;
                        });
@@ -255,7 +275,7 @@ StorageAccessIntersection storageAccessIntersection(
   }
   const va_t AccessEnd = Address + AccessSize;
   size_t Work = 0;
-  for (const JumpTableStorageRange &Range : Owner.StorageRanges) {
+  for (const JumpTableStorageRange &Range : Owner.PhysicalIdentityRanges) {
     if (!addressOwnerMatches(Img, Owner, Range, Anchor))
       continue;
     if (Range.EntrySize == 0 || Range.EntryStride < Range.EntrySize ||
@@ -299,7 +319,7 @@ StorageAccessIntersection storageAccessIntersection(
 bool storageMayBeWritable(const BinaryImage &Img,
                           const ModuleJumpTableOwner &Owner) {
   size_t Work = 0;
-  for (const JumpTableStorageRange &Range : Owner.StorageRanges) {
+  for (const JumpTableStorageRange &Range : Owner.PhysicalIdentityRanges) {
     if (Range.EntrySize == 0 || Range.EntryStride < Range.EntrySize ||
         Range.PhysicalSlotCount == 0 ||
         Range.PhysicalSlotCount > limits::kMaxJumpTableEntries - Work)
@@ -540,7 +560,8 @@ bool collectLowAddressUses(
     ReturnedCodeEvidence *ReturnedCode = nullptr,
     ModuleAddressEdgeTraversal EdgeTraversal =
         ModuleAddressEdgeTraversal::OrdinaryAndExceptional,
-    LocalUnwindContinuationEvidence *LocalUnwind = nullptr) {
+    LocalUnwindContinuationEvidence *LocalUnwind = nullptr,
+    const std::set<va_t> *OccurrenceTableAnchors = nullptr) {
   const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
   const std::vector<TargetRegisterRange> PreservedRanges =
       TRI.callPreservedRanges(Img.Format);
@@ -581,7 +602,7 @@ bool collectLowAddressUses(
     if (Owner.StorageIdentityVA == InvalidVA)
       return failCollect("invalid-owner-identity");
     std::set<va_t> OwnerContainers;
-    for (const JumpTableStorageRange &Range : Owner.StorageRanges) {
+    for (const JumpTableStorageRange &Range : Owner.PhysicalIdentityRanges) {
       const va_t ContainerVA = storageRangeOwnerVA(Img, Range);
       if (ContainerVA == InvalidVA || !Range.storageEnd())
         return failCollect("invalid-owner-range");
@@ -646,21 +667,38 @@ bool collectLowAddressUses(
       return true;
     }
 
-    bool MatchedTable = false;
+    // A final public exact DataAddress occurrence for a relocation-backed
+    // table slot supplies the same logical-object identity used by the local
+    // CFG builder.  Loader-authenticated relative anchors carry that identity
+    // directly.  In both cases keep every containing owner for an interior
+    // anchor, but at an exact end prefer the adjacent object over the previous
+    // table's one-past envelope.
+    const bool IsExactTableAnchor =
+        Img.RelCodeTableAnchors.count(Exact.Address) != 0 ||
+        (OccurrenceTableAnchors &&
+         OccurrenceTableAnchors->count(Exact.Address) != 0);
+    bool MatchedTable = IsExactTableAnchor;
+    if (IsExactTableAnchor)
+      Roots.insert({Exact.Address, ModuleAddressOwnerKind::TableObject});
     if (auto It = OwnersByContainer.find(Exact.OwnerVA);
         It != OwnersByContainer.end()) {
       for (const ModuleJumpTableOwner *Owner : It->second) {
         if (Owner->StorageIdentityVA == InvalidVA)
           continue;
-        const bool Contains = std::any_of(
-            Owner->StorageRanges.begin(), Owner->StorageRanges.end(),
-            [&](const JumpTableStorageRange &Range) {
-              if (storageRangeOwnerVA(Img, Range) != Exact.OwnerVA)
-                return false;
-              const std::optional<va_t> End = Range.storageEnd();
-              return End && Exact.Address >= Range.BaseAddr &&
-                     Exact.Address <= *End;
-            });
+        const bool Contains =
+            std::any_of(Owner->PhysicalIdentityRanges.begin(),
+                        Owner->PhysicalIdentityRanges.end(),
+                        [&](const JumpTableStorageRange &Range) {
+                          if (storageRangeOwnerVA(Img, Range) != Exact.OwnerVA)
+                            return false;
+                          const std::optional<va_t> End = Range.storageEnd();
+                          if (!End || Exact.Address < Range.BaseAddr ||
+                              Exact.Address > *End)
+                            return false;
+                          if (IsExactTableAnchor && Exact.Address == *End)
+                            return false;
+                          return true;
+                        });
         if (!Contains)
           continue;
         Roots.insert(
@@ -2289,6 +2327,11 @@ collectModuleJumpTableArbitration(const BinaryImage &Img,
               : (JT.StorageRanges.empty() ? InvalidVA
                                           : JT.StorageRanges.front().BaseAddr);
       Owner.StorageRanges = JT.StorageRanges;
+      Owner.PhysicalIdentityRanges =
+          JT.ExactPhysicalStorageRange
+              ? std::vector<
+                    JumpTableStorageRange>{*JT.ExactPhysicalStorageRange}
+              : JT.StorageRanges;
       Owner.RequestedSlots.insert(JT.SuppressibleRelocationSlots.begin(),
                                   JT.SuppressibleRelocationSlots.end());
       Requested.insert(Owner.RequestedSlots.begin(),
@@ -2308,6 +2351,84 @@ collectModuleJumpTableArbitration(const BinaryImage &Img,
   if (!Budget.consume(Owners.size()) || !Budget.consume(Requested.size()))
     return abandonAnalysis();
 
+  // Loader table-anchor metadata is format-dependent and may not name the
+  // first relocation slot of an adjacent relative table.  A final public
+  // occurrence can supply that missing identity, but only when the final
+  // public inventory exactly consumes or defines a data address and the target
+  // itself is a relative-code or code-pointer relocation slot.  This mirrors
+  // CFGBuilder::currentRelocatedInstructionTableAnchors: CFG publication has
+  // already revalidated every retained occurrence against its final
+  // Boundary/Op.  Prepay every attacker-controlled field check and ordered-
+  // container operation; on exhaustion the local set is discarded and
+  // arbitration protects every requested slot.
+  std::set<va_t> OccurrenceTableAnchors;
+  std::set<va_t> OccurrenceRelativeTableAnchors;
+  const size_t RelCodeRelocationLookupWork =
+      detail::orderedContainerLookupWork(Img.RelCodeRelocSlots.size());
+  const size_t CodePointerRelocationLookupWork =
+      detail::orderedContainerLookupWork(Img.CodePtrRelocSlots.size());
+  for (const LowFunc &Func : Funcs)
+    for (const RelocatedInstructionAddressOccurrence &Occurrence :
+         Func.RelocatedInstructionAddressOccurrences) {
+      constexpr size_t PredicateFixedWork = 4;
+      if (!Budget.consume(PredicateFixedWork + RelCodeRelocationLookupWork))
+        return abandonAnalysis();
+      if (Occurrence.OutputMayDepend || Occurrence.TargetVA == InvalidVA ||
+          Occurrence.Provenance != ConstantAddressProvenance::DataAddress)
+        continue;
+      const bool IsRelativeAnchor =
+          Img.RelCodeRelocSlots.count(Occurrence.TargetVA) != 0;
+      bool IsCodePointerAnchor = false;
+      if (!IsRelativeAnchor) {
+        if (!Budget.consume(CodePointerRelocationLookupWork))
+          return abandonAnalysis();
+        IsCodePointerAnchor =
+            Img.CodePtrRelocSlots.count(Occurrence.TargetVA) != 0;
+      }
+      if (!IsRelativeAnchor && !IsCodePointerAnchor)
+        continue;
+      const size_t AnchorInsertWork =
+          detail::orderedContainerLookupWork(OccurrenceTableAnchors.size()) + 2;
+      if (!Budget.consume(AnchorInsertWork))
+        return abandonAnalysis();
+      OccurrenceTableAnchors.insert(Occurrence.TargetVA);
+      if (IsRelativeAnchor) {
+        const size_t RelativeAnchorInsertWork =
+            detail::orderedContainerLookupWork(
+                OccurrenceRelativeTableAnchors.size()) +
+            2;
+        if (!Budget.consume(RelativeAnchorInsertWork))
+          return abandonAnalysis();
+        OccurrenceRelativeTableAnchors.insert(Occurrence.TargetVA);
+      }
+    }
+
+  struct CompletePhysicalEnvelope {
+    va_t Begin = InvalidVA;
+    va_t End = InvalidVA;
+    bool Complete = false;
+  };
+  std::vector<CompletePhysicalEnvelope> PhysicalEnvelopes(Owners.size());
+  for (size_t OwnerIndex = 0; OwnerIndex < Owners.size(); ++OwnerIndex) {
+    const ModuleJumpTableOwner &Owner = Owners[OwnerIndex];
+    if (!Budget.consume(Owner.PhysicalIdentityRanges.size()))
+      return abandonAnalysis();
+    CompletePhysicalEnvelope Envelope;
+    Envelope.Complete = !Owner.PhysicalIdentityRanges.empty();
+    for (const JumpTableStorageRange &Range : Owner.PhysicalIdentityRanges) {
+      const std::optional<va_t> End = Range.storageEnd();
+      if (!End) {
+        Envelope.Complete = false;
+        break;
+      }
+      if (Envelope.Begin == InvalidVA || Range.BaseAddr < Envelope.Begin)
+        Envelope.Begin = Range.BaseAddr;
+      if (Envelope.End == InvalidVA || *End > Envelope.End)
+        Envelope.End = *End;
+    }
+    PhysicalEnvelopes[OwnerIndex] = Envelope;
+  }
+
   std::map<va_t, std::set<va_t>> TableObjectAliases;
   size_t TableAliasWorkRemaining = limits::kMaxJumpTableEvidenceWork;
   for (const ModuleJumpTableOwner &Owner : Owners)
@@ -2316,10 +2437,17 @@ collectModuleJumpTableArbitration(const BinaryImage &Img,
     for (size_t Right = Left + 1; Right < Owners.size(); ++Right) {
       if (!scanPair())
         return abandonAnalysis();
+      const CompletePhysicalEnvelope &LeftEnvelope = PhysicalEnvelopes[Left];
+      const CompletePhysicalEnvelope &RightEnvelope = PhysicalEnvelopes[Right];
+      if (LeftEnvelope.Complete && RightEnvelope.Complete &&
+          (LeftEnvelope.End <= RightEnvelope.Begin ||
+           RightEnvelope.End <= LeftEnvelope.Begin))
+        continue;
       if (!pipeline_detail::tableObjectSummaryMayAlias(
-              Img, Owners[Left].StorageIdentityVA, Owners[Left].StorageRanges,
-              Owners[Right].StorageIdentityVA, Owners[Right].StorageRanges,
-              &TableAliasWorkRemaining))
+              Img, Owners[Left].StorageIdentityVA,
+              Owners[Left].PhysicalIdentityRanges,
+              Owners[Right].StorageIdentityVA,
+              Owners[Right].PhysicalIdentityRanges, &TableAliasWorkRemaining))
         continue;
       TableObjectAliases[Owners[Left].StorageIdentityVA].insert(
           Owners[Right].StorageIdentityVA);
@@ -2336,10 +2464,13 @@ collectModuleJumpTableArbitration(const BinaryImage &Img,
       for (const JumpTable &JT : Funcs[FuncIndex].JumpTables) {
         if (!scanPair())
           return abandonAnalysis();
-        if (!std::any_of(JT.StorageRanges.begin(), JT.StorageRanges.end(),
-                         [&](const JumpTableStorageRange &Range) {
-                           return Range.ownsStorageAddress(Slot);
-                         }))
+        const auto OwnsRequestedSlot = [&](const JumpTableStorageRange &Range) {
+          return Range.ownsStorageAddress(Slot);
+        };
+        if (!(JT.ExactPhysicalStorageRange
+                  ? OwnsRequestedSlot(*JT.ExactPhysicalStorageRange)
+                  : std::any_of(JT.StorageRanges.begin(),
+                                JT.StorageRanges.end(), OwnsRequestedSlot)))
           continue;
         if (!Budget.consume())
           return abandonAnalysis();
@@ -2351,7 +2482,10 @@ collectModuleJumpTableArbitration(const BinaryImage &Img,
     Protected.insert(Owner.RequestedSlots.begin(), Owner.RequestedSlots.end());
   };
   std::vector<ModuleAddressUse> Uses;
-  if (!collectLowAddressUses(Img, Funcs, Owners, Uses, Budget, TestBudget))
+  if (!collectLowAddressUses(Img, Funcs, Owners, Uses, Budget, TestBudget,
+                             nullptr, nullptr,
+                             ModuleAddressEdgeTraversal::OrdinaryAndExceptional,
+                             nullptr, &OccurrenceTableAnchors))
     return abandonAnalysis();
   auto summaryRootMayCoverField = [&](const ModuleAddressRootScope &Root,
                                       va_t FieldVA, uint8_t FieldWidth) {
@@ -2370,7 +2504,8 @@ collectModuleJumpTableArbitration(const BinaryImage &Img,
       for (const ModuleJumpTableOwner &Candidate : Owners) {
         if (Candidate.StorageIdentityVA != Root.OwnerVA)
           continue;
-        for (const JumpTableStorageRange &Range : Candidate.StorageRanges) {
+        for (const JumpTableStorageRange &Range :
+             Candidate.PhysicalIdentityRanges) {
           const std::optional<va_t> End = Range.storageEnd();
           if (!End)
             return true;
@@ -2418,7 +2553,8 @@ collectModuleJumpTableArbitration(const BinaryImage &Img,
                                        va_t TargetOwnerVA) {
     if (TargetOwnerVA == InvalidVA)
       return true;
-    return std::any_of(Owner.StorageRanges.begin(), Owner.StorageRanges.end(),
+    return std::any_of(Owner.PhysicalIdentityRanges.begin(),
+                       Owner.PhysicalIdentityRanges.end(),
                        [&](const JumpTableStorageRange &Range) {
                          return storageRangeOwnerVA(Img, Range) ==
                                 TargetOwnerVA;
@@ -2455,7 +2591,8 @@ collectModuleJumpTableArbitration(const BinaryImage &Img,
             Field.TargetOwnerVA == InvalidVA
                 ? ModuleAddressOwnerKind::Unknown
                 : ModuleAddressOwnerKind::Container};
-        TargetsOwner = storageEnvelopeContainsOrOnePast(Img, Owner, Target);
+        TargetsOwner = storageEnvelopeContainsOrOnePast(
+            Img, Owner, Target, &OccurrenceRelativeTableAnchors);
       } else {
         for (const ExactSource &Source : ExactSources) {
           const RelocatedInstructionAddressOccurrence &Occurrence =
@@ -2465,7 +2602,8 @@ collectModuleJumpTableArbitration(const BinaryImage &Img,
               Occurrence.TargetOwnerVA == InvalidVA
                   ? ModuleAddressOwnerKind::Unknown
                   : ModuleAddressOwnerKind::Container};
-          if (storageEnvelopeContainsOrOnePast(Img, Owner, Target)) {
+          if (storageEnvelopeContainsOrOnePast(
+                  Img, Owner, Target, &OccurrenceRelativeTableAnchors)) {
             TargetsOwner = true;
             break;
           }
@@ -2535,7 +2673,8 @@ collectModuleJumpTableArbitration(const BinaryImage &Img,
               ModuleAddressAnchor{Target, TargetOwnerVA,
                                   TargetOwnerVA == InvalidVA
                                       ? ModuleAddressOwnerKind::Unknown
-                                      : ModuleAddressOwnerKind::Container})) {
+                                      : ModuleAddressOwnerKind::Container},
+              &OccurrenceRelativeTableAnchors)) {
         if (!Budget.consume())
           return abandonAnalysis();
         protectWholeOwner(Owner);
@@ -2574,8 +2713,8 @@ collectModuleJumpTableArbitration(const BinaryImage &Img,
       for (const ModuleAddressAnchor &Address : Use.ExactAddresses) {
         if (Use.Imprecise ||
             Use.UseKind == ModuleAddressUse::Kind::PointerEscape) {
-          TouchesObject |=
-              storageEnvelopeContainsOrOnePast(Img, Owner, Address);
+          TouchesObject |= storageEnvelopeContainsOrOnePast(
+              Img, Owner, Address, &OccurrenceRelativeTableAnchors);
           continue;
         }
         StorageAccessIntersection Intersection =
@@ -2827,6 +2966,11 @@ void Pipeline::buildLowIR(
         for (const JumpTable &JT : Func.JumpTables) {
           ModuleJumpTableOwner Owner;
           Owner.StorageRanges = JT.StorageRanges;
+          Owner.PhysicalIdentityRanges =
+              JT.ExactPhysicalStorageRange
+                  ? std::vector<
+                        JumpTableStorageRange>{*JT.ExactPhysicalStorageRange}
+                  : JT.StorageRanges;
           if (storageMayBeWritable(Img, Owner) &&
               !UnsafeJumpTableBranches.count(JT.InsnAddr))
             NewlyUnsafe.push_back(JT.InsnAddr);

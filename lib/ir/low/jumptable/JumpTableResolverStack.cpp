@@ -1734,7 +1734,7 @@ va_t CFGBuilder::resolveStackMaterializedTableSource(
       // Stack-passed args (i386 cdecl): dst=[sp+0], src=[sp+ptr], recovered
       // from the stores that fill the outgoing argument slots just before the
       // call.
-      if (!ArgsOk) {
+      if (!ArgsOk && Img.Arch == Arch::X86) {
         NdVar DstVal, SrcVal, LenVal;
         int DstFrom = -1, SrcFrom = -1, LenFrom = -1;
         JumpTableValueOccurrence StackDestinationUse;
@@ -1747,6 +1747,15 @@ va_t CFGBuilder::resolveStackMaterializedTableSource(
           for (int Depth = 0; Depth < limits::kMaxQuasiCopyDepth; ++Depth) {
             if (!chargeEvidence())
               return false;
+            // COPY/ZEXT stripping may expose the architectural SP directly.
+            // That value names the current call epoch's outgoing argument
+            // area; tracing its reaching definition through the function
+            // prologue would incorrectly add the frame-allocation delta and
+            // turn [sp+0] into a negative frame slot.  Preserve the current SP
+            // here so the shared slot canonicalizer reports offsets 0, ptr,
+            // and 2*ptr for the cdecl destination, source, and length cells.
+            if (Address.isReg() && TRI.isStackPointer(Address.Offset))
+              break;
             if (!Address.isReg() && !Address.isTemp())
               break;
             const int D = budgetedReachingDefIdx(FuncOps, From, Address);

@@ -16,6 +16,8 @@
 
 #include <algorithm>
 #include <functional>
+#include <limits>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -27,6 +29,10 @@ class JumpTableProposalLFP : public NeverDLiftTest {};
 
 fs::path proposalLFPObj() {
   return fs::path(TEST_OBJ_DIR) / "test_jumptable_proposal_lfp.o";
+}
+
+fs::path singletonClosedWorldObj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_singleton_closed_world.o";
 }
 
 fs::path lostPublishedLFPObj() {
@@ -127,7 +133,11 @@ void expectCompleteSiblingBatch(const neverd::BinaryImage &Image,
   }
   ASSERT_EQ(ExpectedTargets.size(), 4u);
 
-  const neverd::LowFunc Low = buildLow(Image, *Function);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
   ASSERT_EQ(Low.JumpTables.size(), Ranges.size())
       << FunctionName
       << " must publish every same-storage sibling in one least fixed point";
@@ -461,10 +471,619 @@ TEST_F(JumpTableProposalLFP,
       Builder.untrackedJumpTableCandidateStateClearedOnRollbackForTesting())
       << "the same rollback must clear the exact nested address before any "
          "later retry can hide leaked provisional state";
+  EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
   EXPECT_FALSE(Builder.hasMaskFixedPointExplorationTargetsForTesting());
   EXPECT_EQ(Low.JumpTables.size(), 2u)
       << "the one-shot failed stage must be retryable from clean state";
   EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
+TEST_F(JumpTableProposalLFP, ProvisionalRelativeEdgesCloseExactSameTableCycle) {
+  auto ImageOrErr = neverd::loadBinary(proposalLFPObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_lfp_relative_occurrence_cycle");
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_lfp_relative_occurrence_cycle_table");
+  const neverd::Symbol *EntryBranch =
+      Image.findSymbol("jt_lfp_relative_occurrence_entry_branch");
+  const neverd::Symbol *LoopBranch =
+      Image.findSymbol("jt_lfp_relative_occurrence_loop_branch");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_NE(EntryBranch, nullptr);
+  ASSERT_NE(LoopBranch, nullptr);
+  ASSERT_EQ(Table->Size, 4u * sizeof(uint32_t));
+  ASSERT_EQ(std::count_if(Image.RelCodeRelocSlots.begin(),
+                          Image.RelCodeRelocSlots.end(),
+                          [&](neverd::va_t Slot) {
+                            return Slot >= Table->Addr &&
+                                   Slot < Table->Addr + Table->Size;
+                          }),
+            4)
+      << "the provisional-edge certificate requires one complete relative "
+         "relocation run";
+
+  std::set<neverd::va_t> ExpectedTargets;
+  neverd::va_t EntryTarget = neverd::InvalidVA;
+  for (const char *Name :
+       {"jt_lfp_relative_occurrence_t0", "jt_lfp_relative_occurrence_t1",
+        "jt_lfp_relative_occurrence_t2", "jt_lfp_relative_occurrence_t3"}) {
+    const neverd::Symbol *Target = Image.findSymbol(Name);
+    ASSERT_NE(Target, nullptr) << Name;
+    if (EntryTarget == neverd::InvalidVA)
+      EntryTarget = Target->Addr;
+    ExpectedTargets.insert(Target->Addr);
+  }
+  ASSERT_EQ(ExpectedTargets.size(), 4u);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Low.JumpTables.size(), 2u)
+      << "the loop dispatch must be published in the same proposal fixed "
+         "point as the literal entry dispatch";
+  std::set<neverd::va_t> MissingBranches = {EntryBranch->Addr,
+                                            LoopBranch->Addr};
+  std::set<std::pair<neverd::va_t, int>> LoadOccurrences;
+  for (const neverd::JumpTable &Recovered : Low.JumpTables) {
+    EXPECT_EQ(MissingBranches.erase(Recovered.InsnAddr), 1u);
+    EXPECT_TRUE(Recovered.HasBaseAddr);
+    EXPECT_EQ(Recovered.BaseAddr, Table->Addr);
+    EXPECT_TRUE(Recovered.IsRelative);
+    EXPECT_EQ(Recovered.EntrySize, sizeof(uint32_t));
+    if (Recovered.InsnAddr == EntryBranch->Addr) {
+      EXPECT_EQ(Recovered.Targets, std::vector<neverd::va_t>{EntryTarget});
+      EXPECT_EQ(Recovered.CaseLabels, std::vector<int64_t>{0});
+      EXPECT_EQ(Recovered.SlotIndices, std::vector<uint32_t>{0});
+      ASSERT_EQ(Recovered.StorageRanges.size(), 1u);
+      EXPECT_EQ(Recovered.StorageRanges.front(),
+                (neverd::JumpTableStorageRange{Table->Addr, sizeof(uint32_t),
+                                               sizeof(uint32_t), 1}));
+      EXPECT_EQ(Recovered.SelectorUseRefs.size(), 1u)
+          << "the exact finite selector occurrence must survive lowering";
+    } else {
+      EXPECT_EQ(std::set<neverd::va_t>(Recovered.Targets.begin(),
+                                       Recovered.Targets.end()),
+                ExpectedTargets);
+      EXPECT_EQ(Recovered.CaseLabels, (std::vector<int64_t>{0, 1, 2, 3}));
+      EXPECT_EQ(Recovered.SlotIndices, (std::vector<uint32_t>{0, 1, 2, 3}));
+    }
+    ASSERT_EQ(Recovered.AuthenticatedTableLoads.size(), 1u);
+    const neverd::JumpTableOpOccurrence &Load =
+        Recovered.AuthenticatedTableLoads.front();
+    EXPECT_EQ(Load.Size, sizeof(uint32_t));
+    EXPECT_TRUE(LoadOccurrences.insert({Load.Addr, Load.Seq}).second)
+        << "each branch must retain its own exact table LOAD occurrence";
+  }
+  EXPECT_TRUE(MissingBranches.empty());
+  EXPECT_EQ(LoadOccurrences.size(), 2u);
+  const std::optional<bool> RequiresCompleteCFG =
+      Builder.resolvedJumpTableRequiresCompleteCFGProofForTesting(
+          EntryBranch->Addr);
+  ASSERT_TRUE(RequiresCompleteCFG.has_value());
+  EXPECT_TRUE(*RequiresCompleteCFG)
+      << "the singleton consumer borrowed its sibling's runtime certificate "
+         "without persisting complete-CFG replay";
+  EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+  EXPECT_FALSE(hasOpcode(Low, neverd::NdOp::INDIR_CALL));
+
+  struct BudgetedCycleBuild {
+    neverd::LowFunc Low;
+    bool RecordedCompleteRuntimeStorageCertificate = false;
+    bool HasProvisionalEdges = false;
+    bool HasPendingExploration = false;
+  };
+  auto BuildWithBudget = [&](size_t Budget) {
+    neverd::Decoder BudgetDecoder;
+    EXPECT_TRUE(BudgetDecoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder BudgetBuilder;
+    BudgetBuilder.setMaskFixedPointEvidenceBudgetForTesting(Budget);
+    BudgetedCycleBuild Result;
+    Result.Low = BudgetBuilder.build(Image, BudgetDecoder, Function->Addr,
+                                     Function->Name);
+    Result.RecordedCompleteRuntimeStorageCertificate =
+        BudgetBuilder.recordedCompleteRuntimeStorageCertificateForTesting();
+    Result.HasProvisionalEdges =
+        BudgetBuilder.hasProvisionalRelativeEdgesForTesting();
+    Result.HasPendingExploration =
+        BudgetBuilder.hasMaskFixedPointExplorationTargetsForTesting();
+    return Result;
+  };
+  auto CompletesCycle = [&](const BudgetedCycleBuild &Result) {
+    return Result.Low.JumpTables.size() == 2u &&
+           Result.Low.UnsafeIndirectBranchAddresses.empty() &&
+           !Result.HasProvisionalEdges && !Result.HasPendingExploration;
+  };
+
+  size_t FailingBudget = 0;
+  size_t PassingBudget = neverd::limits::kMaxJumpTableProposalStageEvidenceWork;
+  ASSERT_TRUE(CompletesCycle(BuildWithBudget(PassingBudget)))
+      << "the production proposal-stage cap must close the certified cycle";
+  while (FailingBudget + 1 < PassingBudget) {
+    const size_t Midpoint = FailingBudget + (PassingBudget - FailingBudget) / 2;
+    if (CompletesCycle(BuildWithBudget(Midpoint)))
+      PassingBudget = Midpoint;
+    else
+      FailingBudget = Midpoint;
+  }
+  ASSERT_EQ(FailingBudget + 1, PassingBudget);
+  const BudgetedCycleBuild BoundaryFailure = BuildWithBudget(FailingBudget);
+  EXPECT_TRUE(BoundaryFailure.RecordedCompleteRuntimeStorageCertificate)
+      << "the failing boundary must retire a certificate that was actually "
+         "recorded earlier in this build";
+  EXPECT_TRUE(BoundaryFailure.Low.JumpTables.empty())
+      << "one unit below the first complete budget must publish no partial "
+         "same-table cycle";
+  EXPECT_TRUE(hasOpcode(BoundaryFailure.Low, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(hasOpcode(BoundaryFailure.Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_FALSE(BoundaryFailure.Low.UnsafeIndirectBranchAddresses.empty());
+  EXPECT_FALSE(BoundaryFailure.HasProvisionalEdges);
+  EXPECT_FALSE(BoundaryFailure.HasPendingExploration);
+}
+
+TEST_F(JumpTableProposalLFP, OpenConsumerCannotBorrowSiblingRuntimeDomain) {
+  auto ImageOrErr = neverd::loadBinary(proposalLFPObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_lfp_relative_open_sibling");
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_lfp_relative_open_sibling_table");
+  const neverd::Symbol *EntryBranch =
+      Image.findSymbol("jt_lfp_relative_open_sibling_entry_branch");
+  const neverd::Symbol *LoopBranch =
+      Image.findSymbol("jt_lfp_relative_open_sibling_loop_branch");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_NE(EntryBranch, nullptr);
+  ASSERT_NE(LoopBranch, nullptr);
+  ASSERT_EQ(Table->Size, 4u * sizeof(uint32_t));
+  ASSERT_EQ(std::count_if(Image.RelCodeRelocSlots.begin(),
+                          Image.RelCodeRelocSlots.end(),
+                          [&](neverd::va_t Slot) {
+                            return Slot >= Table->Addr &&
+                                   Slot < Table->Addr + Table->Size;
+                          }),
+            4)
+      << "the negative must contain a real complete sibling certificate";
+
+  std::set<neverd::va_t> ExpectedTargets;
+  for (const char *Name :
+       {"jt_lfp_relative_open_sibling_t0", "jt_lfp_relative_open_sibling_t1",
+        "jt_lfp_relative_open_sibling_t2", "jt_lfp_relative_open_sibling_t3"}) {
+    const neverd::Symbol *Target = Image.findSymbol(Name);
+    ASSERT_NE(Target, nullptr) << Name;
+    ExpectedTargets.insert(Target->Addr);
+  }
+  ASSERT_EQ(ExpectedTargets.size(), 4u);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+
+  EXPECT_TRUE(Low.JumpTables.empty())
+      << "same-storage publication is transactional: an open singleton must "
+         "not borrow its sibling's dense selector domain or leave that sibling "
+         "published from the rejected batch";
+  EXPECT_TRUE(Builder.recordedCompleteRuntimeStorageCertificateForTesting())
+      << "the producer certificate must exist or this negative missed its seam";
+  EXPECT_FALSE(Builder
+                   .resolvedJumpTableRequiresCompleteCFGProofForTesting(
+                       EntryBranch->Addr)
+                   .has_value());
+  EXPECT_FALSE(
+      Builder
+          .resolvedJumpTableRequiresCompleteCFGProofForTesting(LoopBranch->Addr)
+          .has_value());
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(EntryBranch->Addr), 1u);
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(LoopBranch->Addr), 1u);
+  EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
+}
+
+TEST_F(JumpTableProposalLFP, LowerRankRelativeEdgeClosesPreciseGuardSuccessor) {
+  auto ImageOrErr = neverd::loadBinary(proposalLFPObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_lfp_relative_guard_cycle");
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_lfp_relative_guard_cycle_table");
+  const neverd::Symbol *EntryBranch =
+      Image.findSymbol("jt_lfp_relative_guard_entry_branch");
+  const neverd::Symbol *LoopBranch =
+      Image.findSymbol("jt_lfp_relative_guard_loop_branch");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_NE(EntryBranch, nullptr);
+  ASSERT_NE(LoopBranch, nullptr);
+  ASSERT_EQ(Table->Size, 4u * sizeof(uint32_t));
+  ASSERT_EQ(std::count_if(Image.RelCodeRelocSlots.begin(),
+                          Image.RelCodeRelocSlots.end(),
+                          [&](neverd::va_t Slot) {
+                            return Slot >= Table->Addr &&
+                                   Slot < Table->Addr + Table->Size;
+                          }),
+            4)
+      << "the lower-rank certificate requires one exact relative object";
+
+  std::set<neverd::va_t> ExpectedTargets;
+  neverd::va_t EntryTarget = neverd::InvalidVA;
+  for (const char *Name :
+       {"jt_lfp_relative_guard_t0", "jt_lfp_relative_guard_t1",
+        "jt_lfp_relative_guard_t2", "jt_lfp_relative_guard_t3"}) {
+    const neverd::Symbol *Target = Image.findSymbol(Name);
+    ASSERT_NE(Target, nullptr) << Name;
+    if (EntryTarget == neverd::InvalidVA)
+      EntryTarget = Target->Addr;
+    ExpectedTargets.insert(Target->Addr);
+  }
+  ASSERT_EQ(ExpectedTargets.size(), 4u);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+
+  ASSERT_EQ(Low.JumpTables.size(), 2u)
+      << "the cmp/ja successor must consume the lower-rank edge overlay";
+  const neverd::JumpTable *Entry = nullptr;
+  const neverd::JumpTable *Loop = nullptr;
+  for (const neverd::JumpTable &Recovered : Low.JumpTables) {
+    if (Recovered.InsnAddr == EntryBranch->Addr)
+      Entry = &Recovered;
+    if (Recovered.InsnAddr == LoopBranch->Addr)
+      Loop = &Recovered;
+  }
+  ASSERT_NE(Entry, nullptr);
+  ASSERT_NE(Loop, nullptr);
+  EXPECT_EQ(Entry->Targets, std::vector<neverd::va_t>{EntryTarget});
+  EXPECT_EQ(std::set<neverd::va_t>(Loop->Targets.begin(), Loop->Targets.end()),
+            ExpectedTargets);
+  EXPECT_EQ(Loop->BaseAddr, Table->Addr);
+  EXPECT_TRUE(Loop->IsRelative);
+  EXPECT_EQ(Loop->EntrySize, sizeof(uint32_t));
+  EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting())
+      << "stable publication must replay after retiring the overlay";
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+  EXPECT_FALSE(hasOpcode(Low, neverd::NdOp::INDIR_CALL));
+}
+
+TEST_F(JumpTableProposalLFP,
+       PreciseGuardOverlayRejectsEqualAndHigherRankEdges) {
+  constexpr neverd::va_t Candidate = 0x4000;
+  constexpr neverd::va_t Proposal = 0x5000;
+  EXPECT_TRUE(neverd::detail::canBorrowProvisionalRelativeEdge(
+      Candidate, /*CandidateProofRank=*/4, Proposal,
+      /*ProposalProofRank=*/3));
+  EXPECT_FALSE(neverd::detail::canBorrowProvisionalRelativeEdge(
+      Candidate, /*CandidateProofRank=*/4, Proposal,
+      /*ProposalProofRank=*/4));
+  EXPECT_FALSE(neverd::detail::canBorrowProvisionalRelativeEdge(
+      Candidate, /*CandidateProofRank=*/4, Proposal,
+      /*ProposalProofRank=*/5));
+  EXPECT_FALSE(neverd::detail::canBorrowProvisionalRelativeEdge(
+      Candidate, /*CandidateProofRank=*/4, Candidate,
+      /*ProposalProofRank=*/3));
+}
+
+TEST_F(JumpTableProposalLFP,
+       RuntimeCertificateRejectsSelfShapeRangeAndPartialPayloads) {
+  using Match = neverd::detail::ProvisionalRelativeRuntimeCertificateMatch;
+  using Shape = neverd::detail::ProvisionalRelativeRuntimeCertificateShape;
+  const Shape Candidate{0x4000, neverd::JumpTableStorageRange{0x8000, 4, 4, 0},
+                        0x8000,
+                        /*EntryScale=*/1, /*IsSigned=*/true};
+  Shape Proposal{0x5000, neverd::JumpTableStorageRange{0x8000, 4, 4, 1}, 0x8000,
+                 /*EntryScale=*/1, /*IsSigned=*/true};
+  const neverd::JumpTableStorageRange DenseRange{0x8000, 4, 4, 4};
+  const std::vector<neverd::va_t> Targets{0x1000, 0x1010, 0x1020, 0x1030};
+  EXPECT_EQ(neverd::detail::matchProvisionalRelativeRuntimeCertificate(
+                Candidate, Proposal, &DenseRange, Targets),
+            Match::Match);
+  EXPECT_TRUE(
+      neverd::detail::
+          provisionalRelativeRuntimeCertificateRequiresCompleteCFGReplay(
+              Match::Match));
+  EXPECT_FALSE(
+      neverd::detail::
+          provisionalRelativeRuntimeCertificateRequiresCompleteCFGReplay(
+              Match::Malformed));
+  EXPECT_FALSE(
+      neverd::detail::
+          provisionalRelativeRuntimeCertificateRequiresCompleteCFGReplay(
+              Match::NotApplicable));
+
+  Shape Self = Proposal;
+  Self.BranchAddr = Candidate.BranchAddr;
+  EXPECT_EQ(neverd::detail::matchProvisionalRelativeRuntimeCertificate(
+                Candidate, Self, &DenseRange, Targets),
+            Match::NotApplicable);
+  EXPECT_EQ(neverd::detail::matchProvisionalRelativeRuntimeCertificate(
+                Candidate, Proposal, nullptr, Targets),
+            Match::NotApplicable);
+
+  Shape WrongShape = Proposal;
+  WrongShape.TargetAnchor += 4;
+  EXPECT_EQ(neverd::detail::matchProvisionalRelativeRuntimeCertificate(
+                Candidate, WrongShape, &DenseRange, Targets),
+            Match::NotApplicable);
+  WrongShape = Proposal;
+  WrongShape.Storage.EntryStride = 8;
+  EXPECT_EQ(neverd::detail::matchProvisionalRelativeRuntimeCertificate(
+                Candidate, WrongShape, &DenseRange, Targets),
+            Match::NotApplicable);
+
+  neverd::JumpTableStorageRange WrongRange = DenseRange;
+  WrongRange.BaseAddr += 4;
+  EXPECT_EQ(neverd::detail::matchProvisionalRelativeRuntimeCertificate(
+                Candidate, Proposal, &WrongRange, Targets),
+            Match::Malformed);
+  WrongRange = DenseRange;
+  WrongRange.PhysicalSlotCount = 3;
+  EXPECT_EQ(neverd::detail::matchProvisionalRelativeRuntimeCertificate(
+                Candidate, Proposal, &WrongRange, Targets),
+            Match::Malformed);
+  EXPECT_EQ(neverd::detail::matchProvisionalRelativeRuntimeCertificate(
+                Candidate, Proposal, &DenseRange,
+                llvm::ArrayRef(Targets).drop_back()),
+            Match::Malformed);
+  WrongRange = DenseRange;
+  WrongRange.BaseAddr = neverd::InvalidVA - 4;
+  Shape OverflowCandidate = Candidate;
+  Shape OverflowProposal = Proposal;
+  OverflowCandidate.Storage.BaseAddr = WrongRange.BaseAddr;
+  OverflowProposal.Storage.BaseAddr = WrongRange.BaseAddr;
+  OverflowCandidate.TargetAnchor = WrongRange.BaseAddr;
+  OverflowProposal.TargetAnchor = WrongRange.BaseAddr;
+  EXPECT_EQ(neverd::detail::matchProvisionalRelativeRuntimeCertificate(
+                OverflowCandidate, OverflowProposal, &WrongRange, Targets),
+            Match::Malformed);
+
+  const std::vector<uint32_t> DenseSlots{0, 1, 2, 3};
+  const std::vector<uint32_t> SparseSlots{0, 1, 3, 4};
+  EXPECT_TRUE(neverd::detail::isDenseRelativeRuntimeCertificatePayload(
+      DenseRange, DenseSlots, Targets));
+  EXPECT_FALSE(neverd::detail::isDenseRelativeRuntimeCertificatePayload(
+      DenseRange, SparseSlots, Targets));
+  EXPECT_FALSE(neverd::detail::isDenseRelativeRuntimeCertificatePayload(
+      DenseRange, llvm::ArrayRef(DenseSlots).drop_back(), Targets));
+}
+
+TEST_F(JumpTableProposalLFP,
+       StableRuntimeCertificateRequiresExactPublishedTargets) {
+  const neverd::JumpTableStorageRange Range{0x8000, 4, 4, 4};
+  const std::vector<neverd::va_t> Targets{0x1000, 0x1010, 0x1020, 0x1030};
+  std::vector<neverd::va_t> DifferentTargets = Targets;
+  DifferentTargets.back() += 4;
+  EXPECT_TRUE(neverd::detail::isStableProvisionalRelativeRuntimeCertificate(
+      &Range, Targets, Targets));
+  EXPECT_FALSE(neverd::detail::isStableProvisionalRelativeRuntimeCertificate(
+      &Range, Targets, llvm::ArrayRef<neverd::va_t>()));
+  EXPECT_FALSE(neverd::detail::isStableProvisionalRelativeRuntimeCertificate(
+      &Range, Targets, DifferentTargets));
+  EXPECT_FALSE(neverd::detail::sameProvisionalRelativeRuntimeCertificatePayload(
+      Range, Targets, Range, DifferentTargets));
+}
+
+TEST_F(JumpTableProposalLFP,
+       ProvisionalProposalComparisonPreflightChargesDualRuntimeRanges) {
+  // Primary range (4) + flags (3) + optional presence (1) + runtime range
+  // (4) + anchor/scale/sign, vector sizes, and proof rank (6) = 18.
+  constexpr size_t DualRuntimeFixedWork = 18;
+  const auto Work =
+      neverd::detail::provisionalRelativeProposalComparisonWork(0, 0, 0, 0);
+  ASSERT_EQ(Work, std::optional<size_t>{DualRuntimeFixedWork});
+  EXPECT_FALSE(
+      neverd::detail::comparisonWorkFitsBudget(Work, DualRuntimeFixedWork - 1));
+  EXPECT_TRUE(
+      neverd::detail::comparisonWorkFitsBudget(Work, DualRuntimeFixedWork));
+}
+
+TEST_F(JumpTableProposalLFP,
+       ProposalComparisonPreflightRejectsExactBudgetMinusOne) {
+  auto ExpectExactBoundary = [](std::optional<size_t> Work, size_t Expected) {
+    ASSERT_TRUE(Work.has_value());
+    ASSERT_EQ(*Work, Expected);
+    ASSERT_GT(Expected, 0u);
+    EXPECT_FALSE(neverd::detail::comparisonWorkFitsBudget(Work, Expected - 1));
+    EXPECT_TRUE(neverd::detail::comparisonWorkFitsBudget(Work, Expected));
+  };
+
+  ExpectExactBoundary(
+      neverd::detail::strongJumpTableLoadRoleVectorComparisonWork(2, 3), 28);
+  ExpectExactBoundary(
+      neverd::detail::strongJumpTableLoadRoleScanComparisonWork(3), 27);
+  ExpectExactBoundary(neverd::detail::strongJumpTableProposalComparisonWork(
+                          /*LeftStorageCount=*/2, /*RightStorageCount=*/3,
+                          /*LeftRoleCount=*/2, /*RightRoleCount=*/3,
+                          /*LeftRelocationCount=*/4,
+                          /*RightRelocationCount=*/1),
+                      52);
+  ExpectExactBoundary(neverd::detail::provisionalRelativeProposalComparisonWork(
+                          /*LeftRoleCount=*/2, /*RightRoleCount=*/3,
+                          /*LeftTargetCount=*/4, /*RightTargetCount=*/1),
+                      49);
+  ExpectExactBoundary(neverd::detail::priorOccurrenceCertificateComparisonWork(
+                          /*StorageCount=*/3, /*RoleCount=*/2),
+                      52);
+  ExpectExactBoundary(neverd::detail::siblingStorageIdentityComparisonWork(
+                          /*LeftStorageCount=*/2, /*RightStorageCount=*/3),
+                      20);
+  ExpectExactBoundary(neverd::detail::disjointStorageRangeComparisonWork(
+                          /*LeftStorageCount=*/2, /*RightStorageCount=*/3),
+                      87);
+  ExpectExactBoundary(neverd::detail::preciseGuardKeyComparisonWork(
+                          /*LeftAlternativeCount=*/2,
+                          /*RightAlternativeCount=*/3, /*LeftRootCount=*/4,
+                          /*RightRootCount=*/1),
+                      43);
+  ExpectExactBoundary(neverd::detail::proofRootSetComparisonWork(4, 1), 5);
+  ExpectExactBoundary(neverd::detail::indexExtensionComparisonWork(3), 6);
+  ExpectExactBoundary(neverd::detail::decoupledRelayTargetLoadComparisonWork(3),
+                      6);
+  ExpectExactBoundary(neverd::detail::storageOwnershipComparisonWork(3), 30);
+  ExpectExactBoundary(
+      neverd::detail::authenticatedStorageConsumerComparisonWork(3), 24);
+  ExpectExactBoundary(neverd::detail::storageEndComparisonWork(3), 27);
+  ExpectExactBoundary(neverd::detail::defaultAddressSpaceLoadComparisonWork(4),
+                      35);
+  ExpectExactBoundary(
+      neverd::detail::orderedProposalMapMergeComparisonWork(2, 3), 16);
+  ExpectExactBoundary(
+      neverd::detail::orderedProposalMapMergeComparisonWork(0, 0), 1);
+  ExpectExactBoundary(neverd::detail::physicalCodePointerSlotScanWork(
+                          /*StorageRangeCount=*/2, /*PhysicalSlotCount=*/3,
+                          /*RelocationLookupWork=*/4),
+                      26);
+  ExpectExactBoundary(neverd::detail::staticSourceRelocationComparisonWork(
+                          /*InitializerCount=*/2, /*StaticSourceCount=*/3),
+                      37);
+  ExpectExactBoundary(
+      neverd::detail::staticSourceLowOccurrenceComparisonWork(
+          /*InitializerCount=*/2, /*StaticSourceCount=*/3, /*InputCount=*/4),
+      162);
+  ExpectExactBoundary(neverd::detail::relocationAllowlistRefinementWork(
+                          /*AllowlistCount=*/3,
+                          /*DirectReadLookupWork=*/4),
+                      34);
+  ExpectExactBoundary(neverd::detail::scalarVectorComparisonWork(2, 3), 4);
+  ExpectExactBoundary(neverd::detail::denseSlotIndexComparisonWork(
+                          /*SlotCount=*/3, /*FixedWork=*/2),
+                      5);
+  ExpectExactBoundary(neverd::detail::maskDomainComparisonWork(
+                          /*LeftCoordinateCount=*/2,
+                          /*RightCoordinateCount=*/3,
+                          /*LeftWitnessCount=*/2,
+                          /*RightWitnessCount=*/1),
+                      49);
+  ExpectExactBoundary(neverd::detail::maskSuppressionSlotMaterializationWork(
+                          /*RuntimeSlotCount=*/3, /*RelocationLookupWork=*/4,
+                          /*ProtectedLookupWork=*/5),
+                      40);
+  ExpectExactBoundary(
+      neverd::detail::denseSuppressionSlotMaterializationWork(
+          /*RuntimeSlotCount=*/2, /*SegmentCount=*/3, /*SectionCount=*/4,
+          /*RelocationLookupWork=*/5, /*ProtectedLookupWork=*/6),
+      164);
+  ExpectExactBoundary(neverd::detail::protectedRelocationFilterWork(
+                          /*SlotCount=*/3, /*ProtectedLookupWork=*/4),
+                      15);
+  ExpectExactBoundary(neverd::detail::jumpTableProofRootConstructionWork(
+                          /*PersistentRootCount=*/2,
+                          /*PriorProposalCount=*/1,
+                          /*StorageRangeCount=*/3,
+                          /*ExplicitTargetCount=*/2,
+                          /*SuppressibleSlotCount=*/4,
+                          /*ProtectedSlotCount=*/1, /*SegmentCount=*/2,
+                          /*CodePointerRelocationCount=*/5,
+                          /*RelocationTargetCount=*/3,
+                          /*RelocationSourceCount=*/6,
+                          /*DurableRootCount=*/2),
+                      418);
+  ExpectExactBoundary(
+      std::optional<size_t>{
+          neverd::detail::kTargetRoleCertificateFixedComparisonWork},
+      19);
+  ExpectExactBoundary(
+      neverd::detail::provisionalRelativeProposalComparisonWork(0, 0, 0, 0),
+      18);
+
+  EXPECT_FALSE(neverd::detail::provisionalRelativeProposalComparisonWork(
+                   std::numeric_limits<size_t>::max(), 0, 0, 0)
+                   .has_value());
+  EXPECT_FALSE(neverd::detail::disjointStorageRangeComparisonWork(
+                   std::numeric_limits<size_t>::max(), 2)
+                   .has_value());
+  EXPECT_FALSE(neverd::detail::denseSuppressionSlotMaterializationWork(
+                   std::numeric_limits<size_t>::max(), 1, 1, 1, 1)
+                   .has_value());
+  EXPECT_FALSE(neverd::detail::maskSuppressionSlotMaterializationWork(
+                   std::numeric_limits<size_t>::max(), 1, 1)
+                   .has_value());
+  EXPECT_FALSE(neverd::detail::protectedRelocationFilterWork(
+                   1, std::numeric_limits<size_t>::max())
+                   .has_value());
+  EXPECT_FALSE(
+      neverd::detail::jumpTableProofRootConstructionWork(
+          0, 0, 0, std::numeric_limits<size_t>::max(), 1, 0, 0, 0, 0, 0, 0)
+          .has_value());
+}
+
+TEST_F(JumpTableProposalLFP, UnclosedReentryKeepsRelativeSingletonUnpublished) {
+  auto ImageOrErr = neverd::loadBinary(singletonClosedWorldObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  struct UnclosedFixture {
+    const char *Name;
+    const char *Function;
+    const char *Table;
+    const char *Dispatch;
+  };
+  for (const UnclosedFixture &Fixture :
+       {UnclosedFixture{"opaque indirect reentry",
+                        "jt_lfp_relative_singleton_opaque_reentry",
+                        "jt_lfp_relative_singleton_opaque_reentry_table",
+                        "jt_lfp_relative_singleton_opaque_reentry_dispatch"},
+        UnclosedFixture{"owner-boundary fallthrough",
+                        "jt_lfp_relative_singleton_owner_gap",
+                        "jt_lfp_relative_singleton_owner_gap_table",
+                        "jt_lfp_relative_singleton_owner_gap_dispatch"},
+        UnclosedFixture{"direct-call callback reentry",
+                        "jt_lfp_relative_singleton_call_reentry",
+                        "jt_lfp_relative_singleton_call_reentry_table",
+                        "jt_lfp_relative_singleton_call_reentry_dispatch"}}) {
+    SCOPED_TRACE(Fixture.Name);
+    const neverd::Symbol *Function = Image.findSymbol(Fixture.Function);
+    const neverd::Symbol *Table = Image.findSymbol(Fixture.Table);
+    const neverd::Symbol *Dispatch = Image.findSymbol(Fixture.Dispatch);
+    ASSERT_NE(Function, nullptr);
+    ASSERT_NE(Table, nullptr);
+    ASSERT_NE(Dispatch, nullptr);
+    ASSERT_EQ(Table->Size, 2u * sizeof(uint32_t));
+    ASSERT_EQ(std::count_if(Image.RelCodeRelocSlots.begin(),
+                            Image.RelCodeRelocSlots.end(),
+                            [&](neverd::va_t Slot) {
+                              return Slot >= Table->Addr &&
+                                     Slot < Table->Addr + Table->Size;
+                            }),
+              2)
+        << "the negative requires a complete authenticated relative object";
+
+    neverd::Decoder Decoder;
+    ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    const neverd::LowFunc Low =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+
+    EXPECT_TRUE(std::none_of(Low.JumpTables.begin(), Low.JumpTables.end(),
+                             [&](const neverd::JumpTable &Recovered) {
+                               return Recovered.InsnAddr == Dispatch->Addr;
+                             }))
+        << "an unmodeled transfer may re-enter with selector one";
+    size_t CallOps = 0;
+    for (const neverd::LowBlock &Block : Low.Blocks)
+      for (const neverd::LowOp &Op : Block.Ops)
+        if (Op.Addr == Dispatch->Addr) {
+          CallOps += Op.Opcode == neverd::NdOp::INDIR_CALL;
+        }
+    EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(Dispatch->Addr), 1u)
+        << "the unclosed singleton must remain classified as an unsafe "
+           "indirect branch even when final block pruning removes its op";
+    EXPECT_EQ(CallOps, 0u);
+    EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
+  }
 }
 
 TEST_F(JumpTableProposalLFP,
@@ -537,6 +1156,7 @@ TEST_F(JumpTableProposalLFP,
       << "local finite-symbol exhaustion must remain evidence-incomplete, "
          "not a definitive proof loss eligible for tail-call rewriting";
   EXPECT_FALSE(Builder.hasMaskFixedPointExplorationTargetsForTesting());
+  EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
 }
 
 TEST_F(JumpTableProposalLFP,
@@ -641,16 +1261,15 @@ TEST_F(JumpTableProposalLFP,
   EXPECT_EQ(findOpcodeAtAddress(Exhausted.Low, LocallyClaimed->Addr,
                                 neverd::NdOp::INDIR_CALL),
             nullptr);
-  EXPECT_TRUE(Exhausted.Low.UnsafeIndirectBranchAddresses.count(
-      LocallyClaimed->Addr));
-  EXPECT_NE(findOpcodeAtAddress(Exhausted.Low, Other->Addr,
-                                neverd::NdOp::INDIR_CALL),
-            nullptr);
-  EXPECT_EQ(findOpcodeAtAddress(Exhausted.Low, Other->Addr,
-                                neverd::NdOp::INDIR_BR),
-            nullptr);
-  EXPECT_FALSE(
-      Exhausted.Low.UnsafeIndirectBranchAddresses.count(Other->Addr))
+  EXPECT_TRUE(
+      Exhausted.Low.UnsafeIndirectBranchAddresses.count(LocallyClaimed->Addr));
+  EXPECT_NE(
+      findOpcodeAtAddress(Exhausted.Low, Other->Addr, neverd::NdOp::INDIR_CALL),
+      nullptr);
+  EXPECT_EQ(
+      findOpcodeAtAddress(Exhausted.Low, Other->Addr, neverd::NdOp::INDIR_BR),
+      nullptr);
+  EXPECT_FALSE(Exhausted.Low.UnsafeIndirectBranchAddresses.count(Other->Addr))
       << "the sibling that did not reach its local certificate must remain "
          "eligible for callback lowering";
 
@@ -762,8 +1381,7 @@ TEST_F(JumpTableProposalLFP,
     Result.HasPendingExploration =
         Builder.hasMaskFixedPointExplorationTargetsForTesting();
     Result.ForcedRollbackPreservedState =
-        Builder
-            .proposalStageForcedCommitTailRollbackPreservedStateForTesting();
+        Builder.proposalStageForcedCommitTailRollbackPreservedStateForTesting();
     return Result;
   };
 

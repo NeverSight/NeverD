@@ -115,6 +115,11 @@ struct RoundTripTC {
   /// IR assertion rather than executing the deliberately unsafe branch shape.
   RecoveredSwitchExpectation RecoveredSwitch =
       RecoveredSwitchExpectation::Unspecified;
+
+  /// Minimum number of switch instructions required in the exact target
+  /// function when RecoveredSwitch is Required.  Multi-consumer regressions
+  /// use this to prevent one recovered dispatch from hiding a lost sibling.
+  uint32_t MinimumRecoveredSwitchCount = 1;
 };
 
 inline std::ostream &operator<<(std::ostream &OS, const RoundTripTC &TC) {
@@ -126,8 +131,8 @@ inline std::ostream &operator<<(std::ostream &OS, const RoundTripTC &TC) {
 // ============================================================================
 class SemanticRoundTripFixture : public ::testing::Test {
 protected:
-  static bool functionBodyContainsSwitch(std::string_view IR,
-                                         std::string_view FunctionName) {
+  static size_t functionBodySwitchCount(std::string_view IR,
+                                        std::string_view FunctionName) {
     const std::string DefinitionName = "@" + std::string(FunctionName) + "(";
     size_t SearchFrom = 0;
     while (true) {
@@ -144,16 +149,23 @@ protected:
       if (DefinitionLine.find("define ") != std::string_view::npos) {
         const size_t BodyBegin = IR.find('{', NameAt + DefinitionName.size());
         if (BodyBegin == std::string_view::npos)
-          return false;
+          return 0;
         const size_t BodyEnd = IR.find("\n}", BodyBegin + 1);
         if (BodyEnd == std::string_view::npos)
-          return false;
-        const size_t SwitchAt = IR.find("switch i", BodyBegin + 1);
-        return SwitchAt != std::string_view::npos && SwitchAt < BodyEnd;
+          return 0;
+        size_t Count = 0;
+        size_t SwitchAt = BodyBegin + 1;
+        while ((SwitchAt = IR.find("switch i", SwitchAt)) !=
+                   std::string_view::npos &&
+               SwitchAt < BodyEnd) {
+          ++Count;
+          SwitchAt += std::string_view("switch i").size();
+        }
+        return Count;
       }
       SearchFrom = NameAt + DefinitionName.size();
     }
-    return false;
+    return 0;
   }
 
   static void SetUpTestSuite() {
@@ -415,14 +427,18 @@ private:
       ASSERT_NE(RawIR, nullptr) << "No roundtrip IR for " << TC.Name;
       const std::string RoundTripIR(RawIR);
       neverd_free_string(RawIR);
-      const bool HasSwitch = functionBodyContainsSwitch(RoundTripIR, TC.Name);
+      const size_t SwitchCount = functionBodySwitchCount(RoundTripIR, TC.Name);
       if (TC.RecoveredSwitch == RecoveredSwitchExpectation::Required) {
-        ASSERT_TRUE(HasSwitch)
-            << "computed-goto dispatch was not recovered as a switch in the "
-               "target function"
+        ASSERT_GT(TC.MinimumRecoveredSwitchCount, 0u)
+            << "required switch count must be positive"
+            << "\n  Test: " << TC.Name;
+        ASSERT_GE(SwitchCount,
+                  static_cast<size_t>(TC.MinimumRecoveredSwitchCount))
+            << "not every required computed-goto dispatch was recovered as a "
+               "switch in the target function"
             << "\n  Test: " << TC.Name;
       } else {
-        ASSERT_FALSE(HasSwitch)
+        ASSERT_EQ(SwitchCount, 0u)
             << "unauthenticated computed-goto frame storage was recovered as "
                "a switch in the target function"
             << "\n  Test: " << TC.Name;

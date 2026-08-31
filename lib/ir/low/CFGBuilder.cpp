@@ -100,6 +100,13 @@ InstructionMode effectiveInstructionMode(Arch Architecture,
 
 LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
                           const std::string &FuncName) {
+  RelativeRelocationRootSourceCachePrepared = false;
+  RelativeRelocationRootSourceCacheImage = nullptr;
+  RelativeRelocationRootSourceCacheArch = Arch::Unknown;
+  RelativeRelocationRootSourceCacheMode = InstructionMode::Default;
+  RelativeRelocationRootSourceCacheSlotCount = 0;
+  RelativeRelocationRootSourceCache.clear();
+  RelativeRelocationRootSourceCacheLookupCountForTesting = 0;
   Insns.clear();
   BlockStarts.clear();
   ExploredAddrs.clear();
@@ -109,6 +116,8 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   ResolvedTableInfo.clear();
   PriorStrongJumpTableProposals.clear();
   NextStrongJumpTableProposals.clear();
+  PriorProvisionalRelativeEdges.clear();
+  NextProvisionalRelativeEdges.clear();
   StrongJumpTableProposalOutcomes.clear();
   CandidateProposalStageMutationAddrs.clear();
   QuarantinedJumpTableProposals.clear();
@@ -116,10 +125,10 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   CandidateProposalStageActive = false;
   CandidateProposalStageEvidenceRemaining = 0;
   CandidateProposalStageEvidenceIncomplete = false;
-  IncompleteBranchMarkerEvidenceRemaining = std::min<size_t>(
-      limits::kMaxJumpTableProposalStageEvidenceWork,
-      IncompleteBranchMarkerEvidenceBudgetForTesting.value_or(
-          limits::kMaxJumpTableProposalStageEvidenceWork));
+  IncompleteBranchMarkerEvidenceRemaining =
+      std::min<size_t>(limits::kMaxJumpTableProposalStageEvidenceWork,
+                       IncompleteBranchMarkerEvidenceBudgetForTesting.value_or(
+                           limits::kMaxJumpTableProposalStageEvidenceWork));
   IncompleteBranchMarkerEvidenceIncomplete = false;
   I386GOTOFFTombstoneLookupCountForTesting = 0;
   ProposalStageCommitTailEvidenceExhaustedForTesting = false;
@@ -133,6 +142,7 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   ForcedUntrackedJumpTableCandidateAddrForTesting = InvalidVA;
   UntrackedJumpTableCandidateProvisionalStateObservedForTesting = false;
   UntrackedJumpTableCandidateStateClearedOnRollbackForTesting = false;
+  RecordedCompleteRuntimeStorageCertificateForTesting = false;
   NestedMutationTrackingEvidenceExhaustedForTesting = false;
   NestedMutationTrackingEvidenceExhaustedAddrForTesting = InvalidVA;
   ConstBaseLocalShapeClaimedForTesting = false;
@@ -150,6 +160,7 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   ActiveJumpTableProofRoots.reset();
   ActiveJumpTableCandidateAddr = InvalidVA;
   ActiveJumpTableCandidateProofRank = 0;
+  ActiveJumpTableCandidateDependencyRank = 0;
   ActiveJumpTableConsumerAudit = false;
   PotentialJumpTableBranches.clear();
   EverPublishedJumpTableBranches.clear();
@@ -158,6 +169,7 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   IndexDomainEvidenceIncompleteBranches.clear();
   ValidatedPhysicalJumpTableBranches.clear();
   CandidateFixedPointExplorationTargets.clear();
+  MaxCandidateFixedPointExplorationTargetCountForTesting = 0;
   AmbiguousI386GOTPCBranches.clear();
   PendingAmbiguousI386GOTPCBranches.clear();
   PendingAmbiguousI386GOTPCKeys.clear();
@@ -165,6 +177,7 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   StageReplayedI386GOTPCKeys.clear();
   CurrentI386GOTOFFAmbiguityKeys.clear();
   PublishedReachableInsns.clear();
+  PublishedBlockStarts.clear();
   DecodedInstructionCount = 0;
   LiftedInstructionCount = 0;
   DecodedInstructionAddresses.clear();
@@ -185,10 +198,10 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   I386GOTOFFAmbiguousModelReach = false;
   I386GOTOFFGraphQueryIssuedForTesting = false;
   I386GOTOFFGraphQueryBudgetExhaustedForTesting = false;
-  StackTableEvidenceRemaining = std::min<size_t>(
-      limits::kMaxJumpTableStackEvidenceWork,
-      StackTableEvidenceBudgetForTesting.value_or(
-          limits::kMaxJumpTableStackEvidenceWork));
+  StackTableEvidenceRemaining =
+      std::min<size_t>(limits::kMaxJumpTableStackEvidenceWork,
+                       StackTableEvidenceBudgetForTesting.value_or(
+                           limits::kMaxJumpTableStackEvidenceWork));
   PreviouslyPublishedJumpTableBranches =
       std::move(PendingPreviouslyPublishedJumpTableBranches);
   PendingPreviouslyPublishedJumpTableBranches.clear();
@@ -514,18 +527,19 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
         RootIt->second.IsRet || RootIt->second.IsOpaqueTerminator ||
         RootIt->second.IsResumableTerminator ||
         Root->Opcode != Occurrence.SeedOpcode || Root->Opcode != NdOp::COPY ||
-        Root->NumInputs != 1 || Root->Inputs[0] != Occurrence.SeedInputWitness ||
-        Root->Output != Occurrence.SeedOutputWitness ||
-        !Root->Output.isReg() || Root->Output.Size != PointerSize ||
-        !Root->Inputs[0].isConst() || Root->Inputs[0].Size != PointerSize ||
+        Root->NumInputs != 1 ||
+        Root->Inputs[0] != Occurrence.SeedInputWitness ||
+        Root->Output != Occurrence.SeedOutputWitness || !Root->Output.isReg() ||
+        Root->Output.Size != PointerSize || !Root->Inputs[0].isConst() ||
+        Root->Inputs[0].Size != PointerSize ||
         Root->Inputs[0].Provenance !=
             ConstantAddressProvenance::AddressFragment)
       return false;
 
     const unsigned PointerBits = static_cast<unsigned>(PointerSize) * 8;
-    const uint64_t PointerMask =
-        PointerBits == 64 ? std::numeric_limits<uint64_t>::max()
-                          : (uint64_t{1} << PointerBits) - 1;
+    const uint64_t PointerMask = PointerBits == 64
+                                     ? std::numeric_limits<uint64_t>::max()
+                                     : (uint64_t{1} << PointerBits) - 1;
     auto canonicalScalar =
         [&](const LowOp &Op,
             const RelocatedInstructionAddressArithmeticStep &Step)
@@ -543,10 +557,9 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
       if (!Bytes)
         return std::nullopt;
       const uint32_t Word = readLE<uint32_t>(Bytes);
-      if ((Word & 0x1f000000u) != 0x11000000u ||
-          (Word & 0x80000000u) == 0 || (Word & 0x20000000u) != 0 ||
-          (((Word & 0x40000000u) != 0) !=
-           (Op.Opcode == NdOp::INT_SUB)))
+      if ((Word & 0x1f000000u) != 0x11000000u || (Word & 0x80000000u) == 0 ||
+          (Word & 0x20000000u) != 0 ||
+          (((Word & 0x40000000u) != 0) != (Op.Opcode == NdOp::INT_SUB)))
         return std::nullopt;
       const uint64_t Encoded = uint64_t((Word >> 10) & 0xfffu)
                                << (((Word >> 22) & 1u) ? 12 : 0);
@@ -565,8 +578,7 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
           Rec->second.Size == 0 ||
           Rec->second.Size > InvalidVA - Rec->second.Addr ||
           Rec->second.IsBranch || Rec->second.IsCall || Rec->second.IsRet ||
-          Rec->second.IsOpaqueTerminator ||
-          Rec->second.IsResumableTerminator ||
+          Rec->second.IsOpaqueTerminator || Rec->second.IsResumableTerminator ||
           (Step.Opcode != NdOp::INT_ADD && Step.Opcode != NdOp::INT_SUB) ||
           Op->Opcode != Step.Opcode || Op->NumInputs != 2 ||
           Step.BaseInputIndex > 1 ||
@@ -581,11 +593,12 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
         return false;
 
       // Some AArch64 memory encodings lower their unsigned offset into the
-      // same instruction record as an instruction-local COPY/ADD/LOAD chain.
-      // Reconstruct only exact, full-width COPY aliases from the previous
-      // address value to this arithmetic input. P-code may retain both the
-      // architectural register and a bookkeeping temporary in one record; a
-      // COPY to the temporary does not invalidate the still-live register.
+      // same instruction record as an instruction-local COPY/ADD/LOAD
+      // chain. Reconstruct only exact, full-width COPY aliases from the
+      // previous address value to this arithmetic input. P-code may retain
+      // both the architectural register and a bookkeeping temporary in one
+      // record; a COPY to the temporary does not invalidate the still-live
+      // register.
       std::vector<NdVar> BaseAliases{Current};
       bool SawArithmetic = false;
       for (const LowOp &Other : Rec->second.Ops) {
@@ -636,8 +649,8 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
           (Op->Opcode == NdOp::INT_ADD && *Delta > PointerMask - Address) ||
           (Op->Opcode == NdOp::INT_SUB && *Delta > Address))
         return false;
-      Address = Op->Opcode == NdOp::INT_ADD ? Address + *Delta
-                                            : Address - *Delta;
+      Address =
+          Op->Opcode == NdOp::INT_ADD ? Address + *Delta : Address - *Delta;
       Current = Op->Output;
       ExpectedAddress =
           (&Step == &Occurrence.ArithmeticProof.back() &&
@@ -1412,10 +1425,10 @@ void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
       !JumpTableProofContextComplete)
     return;
 
-  size_t EvidenceWork = std::min<size_t>(
-      limits::kMaxI386GOTModelEvidenceWork,
-      I386GOTModelEvidenceBudgetForTesting.value_or(
-          limits::kMaxI386GOTModelEvidenceWork));
+  size_t EvidenceWork =
+      std::min<size_t>(limits::kMaxI386GOTModelEvidenceWork,
+                       I386GOTModelEvidenceBudgetForTesting.value_or(
+                           limits::kMaxI386GOTModelEvidenceWork));
   auto Consume = [&](size_t Amount = 1) {
     if (Amount > EvidenceWork) {
       EvidenceWork = 0;
@@ -1550,12 +1563,12 @@ void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
     }
     if (HasAlternateEntry)
       continue;
-    const SeedIdentity Identity = std::make_tuple(
-        GetPc.InstructionAddr, GetPc.OpSeq,
-        static_cast<uint8_t>(GetPc.OutputWitness.Space),
-        GetPc.OutputWitness.Offset, GetPc.OutputWitness.Size,
-        static_cast<uint8_t>(GetPc.OutputWitness.Provenance),
-        GetPc.OutputWitness.AddressOwnerVA);
+    const SeedIdentity Identity =
+        std::make_tuple(GetPc.InstructionAddr, GetPc.OpSeq,
+                        static_cast<uint8_t>(GetPc.OutputWitness.Space),
+                        GetPc.OutputWitness.Offset, GetPc.OutputWitness.Size,
+                        static_cast<uint8_t>(GetPc.OutputWitness.Provenance),
+                        GetPc.OutputWitness.AddressOwnerVA);
     if (!ConsumeProducts(
             {{SeedIdentityWork, OrderedLookupWork(SeenSeedPoints.size())},
              {SeedIdentityWork, 2},
@@ -1670,8 +1683,7 @@ void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
     if (!Consume(3) ||
         !ConsumeProducts(
             {{1, OrderedLookupWork(PublishedReachableInsns.size())},
-             {OperandPointKeyWork,
-              OrderedLookupWork(SeenOperandPoints.size())},
+             {OperandPointKeyWork, OrderedLookupWork(SeenOperandPoints.size())},
              {OperandPointKeyWork, 2},
              // Set-node allocation and its eventual destruction.
              {1, 2},
@@ -1751,8 +1763,7 @@ void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
     Query.Alternatives.push_back({Seed.OutputWitness, Seed.InstructionAddr,
                                   Seed.OpSeq, /*DefinedAtPoint=*/true});
     Query.RequireExactAddressOwner = true;
-    Pending.push_back(
-        {Operand.FieldVA, Candidate, &Seed, Queries.size()});
+    Pending.push_back({Operand.FieldVA, Candidate, &Seed, Queries.size()});
     Queries.push_back(std::move(Query));
   }
 
@@ -2900,11 +2911,12 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
     I386GOTOFFProposalRootCache.clear();
     I386GOTOFFModelReachCache.clear();
     NextStrongJumpTableProposals.clear();
+    NextProvisionalRelativeEdges.clear();
     StrongJumpTableProposalOutcomes.clear();
-    CandidateProposalStageEvidenceRemaining = std::min<size_t>(
-        limits::kMaxJumpTableProposalStageEvidenceWork,
-        MaskFixedPointEvidenceBudgetForTesting.value_or(
-            limits::kMaxJumpTableProposalStageEvidenceWork));
+    CandidateProposalStageEvidenceRemaining =
+        std::min<size_t>(limits::kMaxJumpTableProposalStageEvidenceWork,
+                         MaskFixedPointEvidenceBudgetForTesting.value_or(
+                             limits::kMaxJumpTableProposalStageEvidenceWork));
     // The nested-tracking boundary hook models a persistent attacker-sized
     // stage after the first recursively discovered candidate reaches that
     // boundary.  Do not clamp the initial parent stage: it must first decode
@@ -2968,7 +2980,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       const size_t PerTarget = BlockWork + 1 + ExploreWork;
       return ConsumeProposalStageProducts({{TargetCount, PerTarget}});
     };
-    auto ConsumeJumpTableInfoComparison = [&](const JumpTableInfo &Candidate) {
+    auto ConsumeJumpTableInfoLifecycle = [&](const JumpTableInfo &Candidate) {
       if (!ConsumeProposalStageProducts(
               {{Candidate.AuthenticatedMaskCoordinates.size(), 1},
                {Candidate.AuthenticatedMaskKnownOneWitnesses.size(), 1},
@@ -3000,6 +3012,595 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
             return false;
       }
       return ConsumeProposalStageEvidence(1);
+    };
+    auto SameNdVarNoShortCircuit =
+        [&](const NdVar *Left, const NdVar *Right) -> std::optional<bool> {
+      if (!ConsumeProposalStageEvidence(5))
+        return std::nullopt;
+      if (!Left || !Right)
+        return false;
+      bool Same = true;
+      Same &= Left->Space == Right->Space;
+      Same &= Left->Offset == Right->Offset;
+      Same &= Left->Size == Right->Size;
+      Same &= Left->Provenance == Right->Provenance;
+      Same &= Left->AddressOwnerVA == Right->AddressOwnerVA;
+      return Same;
+    };
+    auto SameOccurrenceNoShortCircuit =
+        [&](const JumpTableValueOccurrence *Left,
+            const JumpTableValueOccurrence *Right) -> std::optional<bool> {
+      if (!ConsumeProposalStageEvidence(3))
+        return std::nullopt;
+      const std::optional<bool> SameValue = SameNdVarNoShortCircuit(
+          Left ? &Left->Value : nullptr, Right ? &Right->Value : nullptr);
+      if (!SameValue)
+        return std::nullopt;
+      if (!Left || !Right)
+        return false;
+      bool Same = *SameValue;
+      Same &= Left->Addr == Right->Addr;
+      Same &= Left->Seq == Right->Seq;
+      Same &= Left->DefinedAtPoint == Right->DefinedAtPoint;
+      return Same;
+    };
+    auto SameStorageRangeNoShortCircuit =
+        [&](const JumpTableStorageRange *Left,
+            const JumpTableStorageRange *Right) -> std::optional<bool> {
+      if (!ConsumeProposalStageEvidence(4))
+        return std::nullopt;
+      if (!Left || !Right)
+        return false;
+      bool Same = true;
+      Same &= Left->BaseAddr == Right->BaseAddr;
+      Same &= Left->EntrySize == Right->EntrySize;
+      Same &= Left->EntryStride == Right->EntryStride;
+      Same &= Left->PhysicalSlotCount == Right->PhysicalSlotCount;
+      return Same;
+    };
+    auto SameMaskWitnessNoShortCircuit =
+        [&](const JumpTableMaskKnownOneWitness *Left,
+            const JumpTableMaskKnownOneWitness *Right) -> std::optional<bool> {
+      if (!ConsumeProposalStageEvidence(1))
+        return std::nullopt;
+      const std::optional<bool> SameOr = SameOccurrenceNoShortCircuit(
+          Left ? &Left->OrOutput : nullptr, Right ? &Right->OrOutput : nullptr);
+      if (!SameOr)
+        return std::nullopt;
+      const std::optional<bool> SameMask =
+          SameOccurrenceNoShortCircuit(Left ? &Left->MaskOutput : nullptr,
+                                       Right ? &Right->MaskOutput : nullptr);
+      if (!SameMask)
+        return std::nullopt;
+      const std::optional<bool> SameConstant =
+          SameNdVarNoShortCircuit(Left ? &Left->ConstantOperand : nullptr,
+                                  Right ? &Right->ConstantOperand : nullptr);
+      if (!SameConstant)
+        return std::nullopt;
+      if (!Left || !Right)
+        return false;
+      bool Same = *SameOr & *SameMask & *SameConstant;
+      Same &= Left->KnownOneBits == Right->KnownOneBits;
+      return Same;
+    };
+    auto SameFrameAddressUseNoShortCircuit =
+        [&](const JumpTableFrameAddressUse *Left,
+            const JumpTableFrameAddressUse *Right) -> std::optional<bool> {
+      if (!ConsumeProposalStageEvidence(1))
+        return std::nullopt;
+      const std::optional<bool> SameUse = SameOccurrenceNoShortCircuit(
+          Left ? &Left->Use : nullptr, Right ? &Right->Use : nullptr);
+      if (!SameUse)
+        return std::nullopt;
+      if (!Left || !Right)
+        return false;
+      bool Same = *SameUse;
+      Same &= Left->ByteAddend == Right->ByteAddend;
+      return Same;
+    };
+    auto SameStaticSourcePieceNoShortCircuit =
+        [&](const JumpTableFrameInitializerChunk::StaticSourcePiece *Left,
+            const JumpTableFrameInitializerChunk::StaticSourcePiece *Right)
+        -> std::optional<bool> {
+      if (!ConsumeProposalStageEvidence(6))
+        return std::nullopt;
+      const std::optional<bool> SameValue = SameOccurrenceNoShortCircuit(
+          Left ? &Left->Value : nullptr, Right ? &Right->Value : nullptr);
+      if (!SameValue)
+        return std::nullopt;
+      const std::optional<bool> SameAddress = SameOccurrenceNoShortCircuit(
+          Left ? &Left->Address : nullptr, Right ? &Right->Address : nullptr);
+      if (!SameAddress)
+        return std::nullopt;
+      const std::optional<bool> SameProducer = SameOccurrenceNoShortCircuit(
+          Left ? &Left->StaticAddressProducer : nullptr,
+          Right ? &Right->StaticAddressProducer : nullptr);
+      if (!SameProducer)
+        return std::nullopt;
+      if (!Left || !Right)
+        return false;
+      bool Same = *SameValue & *SameAddress & *SameProducer;
+      Same &= Left->StaticAddressFieldVA == Right->StaticAddressFieldVA;
+      Same &= Left->StaticAddressProducerTargetVA ==
+              Right->StaticAddressProducerTargetVA;
+      Same &= Left->StaticAddress == Right->StaticAddress;
+      Same &= Left->ByteCount == Right->ByteCount;
+      Same &= Left->StaticAddressProvenance == Right->StaticAddressProvenance;
+      Same &= Left->StaticAddressOwnerVA == Right->StaticAddressOwnerVA;
+      return Same;
+    };
+    auto SameInitializerNoShortCircuit =
+        [&](const JumpTableFrameInitializerChunk *Left,
+            const JumpTableFrameInitializerChunk *Right)
+        -> std::optional<bool> {
+      // Seven direct scalar fields plus the StaticSources vector size.
+      if (!ConsumeProposalStageEvidence(8))
+        return std::nullopt;
+      bool Same = Left && Right;
+      if (Left && Right) {
+        Same &= Left->ByteCount == Right->ByteCount;
+        Same &= Left->StaticSourceAddress == Right->StaticSourceAddress;
+        Same &= Left->StaticSourceProvenance == Right->StaticSourceProvenance;
+        Same &= Left->StaticSourceOwnerVA == Right->StaticSourceOwnerVA;
+        Same &= Left->StaticSourceFieldVA == Right->StaticSourceFieldVA;
+        Same &= Left->StaticSourceProducerTargetVA ==
+                Right->StaticSourceProducerTargetVA;
+        Same &= Left->IsMemcpy == Right->IsMemcpy;
+        Same &= Left->StaticSources.size() == Right->StaticSources.size();
+      }
+      const std::optional<bool> SameWriter = SameOccurrenceNoShortCircuit(
+          Left ? &Left->Writer : nullptr, Right ? &Right->Writer : nullptr);
+      if (!SameWriter)
+        return std::nullopt;
+      Same &= *SameWriter;
+      const std::optional<bool> SameDestination =
+          SameFrameAddressUseNoShortCircuit(Left ? &Left->Destination : nullptr,
+                                            Right ? &Right->Destination
+                                                  : nullptr);
+      if (!SameDestination)
+        return std::nullopt;
+      Same &= *SameDestination;
+      const std::optional<bool> SameStored =
+          SameOccurrenceNoShortCircuit(Left ? &Left->StoredValue : nullptr,
+                                       Right ? &Right->StoredValue : nullptr);
+      if (!SameStored)
+        return std::nullopt;
+      Same &= *SameStored;
+      const std::optional<bool> SameSource =
+          SameOccurrenceNoShortCircuit(Left ? &Left->SourceAddress : nullptr,
+                                       Right ? &Right->SourceAddress : nullptr);
+      if (!SameSource)
+        return std::nullopt;
+      Same &= *SameSource;
+      const std::optional<bool> SameLength = SameOccurrenceNoShortCircuit(
+          Left ? &Left->Length : nullptr, Right ? &Right->Length : nullptr);
+      if (!SameLength)
+        return std::nullopt;
+      Same &= *SameLength;
+      const std::optional<bool> SameLengthProducer =
+          SameOccurrenceNoShortCircuit(Left ? &Left->LengthProducer : nullptr,
+                                       Right ? &Right->LengthProducer
+                                             : nullptr);
+      if (!SameLengthProducer)
+        return std::nullopt;
+      Same &= *SameLengthProducer;
+      const std::optional<bool> SameStaticProducer =
+          SameOccurrenceNoShortCircuit(
+              Left ? &Left->StaticSourceProducer : nullptr,
+              Right ? &Right->StaticSourceProducer : nullptr);
+      if (!SameStaticProducer)
+        return std::nullopt;
+      Same &= *SameStaticProducer;
+      const size_t LeftSourceCount = Left ? Left->StaticSources.size() : 0;
+      const size_t RightSourceCount = Right ? Right->StaticSources.size() : 0;
+      for (size_t I = 0; I < std::max(LeftSourceCount, RightSourceCount); ++I) {
+        const auto *LeftSource =
+            Left && I < LeftSourceCount ? &Left->StaticSources[I] : nullptr;
+        const auto *RightSource =
+            Right && I < RightSourceCount ? &Right->StaticSources[I] : nullptr;
+        const std::optional<bool> SameSourcePiece =
+            SameStaticSourcePieceNoShortCircuit(LeftSource, RightSource);
+        if (!SameSourcePiece)
+          return std::nullopt;
+        Same &= *SameSourcePiece;
+      }
+      return Same;
+    };
+    auto SameFrameStorageNoShortCircuit =
+        [&](const JumpTableFrameStorageRole *Left,
+            const JumpTableFrameStorageRole *Right) -> std::optional<bool> {
+      if (!ConsumeProposalStageEvidence(1))
+        return std::nullopt;
+      bool Same = Left && Right;
+      if (Left && Right)
+        Same &= Left->Initializers.size() == Right->Initializers.size();
+      const std::optional<bool> SameRuntimeBase =
+          SameFrameAddressUseNoShortCircuit(Left ? &Left->RuntimeBase : nullptr,
+                                            Right ? &Right->RuntimeBase
+                                                  : nullptr);
+      if (!SameRuntimeBase)
+        return std::nullopt;
+      Same &= *SameRuntimeBase;
+      const std::optional<bool> SameCompleteAddress =
+          SameOccurrenceNoShortCircuit(Left ? &Left->CompleteAddress : nullptr,
+                                       Right ? &Right->CompleteAddress
+                                             : nullptr);
+      if (!SameCompleteAddress)
+        return std::nullopt;
+      Same &= *SameCompleteAddress;
+      const size_t LeftInitializerCount = Left ? Left->Initializers.size() : 0;
+      const size_t RightInitializerCount =
+          Right ? Right->Initializers.size() : 0;
+      for (size_t I = 0;
+           I < std::max(LeftInitializerCount, RightInitializerCount); ++I) {
+        const auto *LeftInitializer =
+            Left && I < LeftInitializerCount ? &Left->Initializers[I] : nullptr;
+        const auto *RightInitializer = Right && I < RightInitializerCount
+                                           ? &Right->Initializers[I]
+                                           : nullptr;
+        const std::optional<bool> SameInitializer =
+            SameInitializerNoShortCircuit(LeftInitializer, RightInitializer);
+        if (!SameInitializer)
+          return std::nullopt;
+        Same &= *SameInitializer;
+      }
+      return Same;
+    };
+    auto SameDisplacedAddressNoShortCircuit =
+        [&](const JumpTableDisplacedAddressRole *Left,
+            const JumpTableDisplacedAddressRole *Right) -> std::optional<bool> {
+      if (!ConsumeProposalStageEvidence(2))
+        return std::nullopt;
+      const std::optional<bool> SameRuntimeBase = SameOccurrenceNoShortCircuit(
+          Left ? &Left->RuntimeBaseUse : nullptr,
+          Right ? &Right->RuntimeBaseUse : nullptr);
+      if (!SameRuntimeBase)
+        return std::nullopt;
+      const std::optional<bool> SameCompleteAddress =
+          SameOccurrenceNoShortCircuit(Left ? &Left->CompleteAddress : nullptr,
+                                       Right ? &Right->CompleteAddress
+                                             : nullptr);
+      if (!SameCompleteAddress)
+        return std::nullopt;
+      if (!Left || !Right)
+        return false;
+      bool Same = *SameRuntimeBase & *SameCompleteAddress;
+      Same &= Left->ExpectedRuntimeBase == Right->ExpectedRuntimeBase;
+      Same &= Left->ByteAddend == Right->ByteAddend;
+      return Same;
+    };
+    auto SameScalarVectorNoShortCircuit =
+        [&](const auto &Left, const auto &Right) -> std::optional<bool> {
+      const std::optional<size_t> Work =
+          detail::scalarVectorComparisonWork(Left.size(), Right.size());
+      if (!Work || !ConsumeProposalStageEvidence(*Work))
+        return std::nullopt;
+      bool Same = Left.size() == Right.size();
+      for (size_t I = 0; I < std::min(Left.size(), Right.size()); ++I)
+        Same &= Left[I] == Right[I];
+      return Same;
+    };
+    auto SameOccurrenceVectorNoShortCircuit =
+        [&](const auto &Left, const auto &Right) -> std::optional<bool> {
+      if (!ConsumeProposalStageEvidence(1))
+        return std::nullopt;
+      bool Same = Left.size() == Right.size();
+      for (size_t I = 0; I < std::max(Left.size(), Right.size()); ++I) {
+        const auto *LeftOccurrence = I < Left.size() ? &Left[I] : nullptr;
+        const auto *RightOccurrence = I < Right.size() ? &Right[I] : nullptr;
+        const std::optional<bool> SameOccurrence =
+            SameOccurrenceNoShortCircuit(LeftOccurrence, RightOccurrence);
+        if (!SameOccurrence)
+          return std::nullopt;
+        Same &= *SameOccurrence;
+      }
+      return Same;
+    };
+    auto SameStorageRangeVectorNoShortCircuit =
+        [&](const auto &Left, const auto &Right) -> std::optional<bool> {
+      if (!ConsumeProposalStageEvidence(1))
+        return std::nullopt;
+      bool Same = Left.size() == Right.size();
+      for (size_t I = 0; I < std::max(Left.size(), Right.size()); ++I) {
+        const auto *LeftRange = I < Left.size() ? &Left[I] : nullptr;
+        const auto *RightRange = I < Right.size() ? &Right[I] : nullptr;
+        const std::optional<bool> SameRange =
+            SameStorageRangeNoShortCircuit(LeftRange, RightRange);
+        if (!SameRange)
+          return std::nullopt;
+        Same &= *SameRange;
+      }
+      return Same;
+    };
+    auto SameWitnessVectorNoShortCircuit =
+        [&](const auto &Left, const auto &Right) -> std::optional<bool> {
+      if (!ConsumeProposalStageEvidence(1))
+        return std::nullopt;
+      bool Same = Left.size() == Right.size();
+      for (size_t I = 0; I < std::max(Left.size(), Right.size()); ++I) {
+        const auto *LeftWitness = I < Left.size() ? &Left[I] : nullptr;
+        const auto *RightWitness = I < Right.size() ? &Right[I] : nullptr;
+        const std::optional<bool> SameWitness =
+            SameMaskWitnessNoShortCircuit(LeftWitness, RightWitness);
+        if (!SameWitness)
+          return std::nullopt;
+        Same &= *SameWitness;
+      }
+      return Same;
+    };
+    auto SameLoadRoleNoShortCircuit =
+        [&](const JumpTableLoadRole *Left,
+            const JumpTableLoadRole *Right) -> std::optional<bool> {
+      // Direct scalars excluding the two vector sizes and nested certificates.
+      if (!ConsumeProposalStageEvidence(13))
+        return std::nullopt;
+      bool Same = Left && Right;
+      if (Left && Right) {
+        Same &= Left->LoadWidth == Right->LoadWidth;
+        Same &= Left->AddressScale == Right->AddressScale;
+        Same &= Left->IsLiteralCoordinate == Right->IsLiteralCoordinate;
+        Same &= Left->LiteralCoordinate == Right->LiteralCoordinate;
+        Same &= Left->AllowZeroExtension == Right->AllowZeroExtension;
+        Same &= Left->AllowSignExtension == Right->AllowSignExtension;
+        Same &= Left->HasBaseSelect == Right->HasBaseSelect;
+        Same &= Left->HasBaseMaskBlend == Right->HasBaseMaskBlend;
+        Same &= Left->TrueBase == Right->TrueBase;
+        Same &= Left->FalseBase == Right->FalseBase;
+        Same &= Left->PositiveBlendInputSide == Right->PositiveBlendInputSide;
+        Same &= Left->PositiveBaseInputSide == Right->PositiveBaseInputSide;
+        Same &= Left->NegativeBaseInputSide == Right->NegativeBaseInputSide;
+      }
+      const std::optional<bool> SameLoad = SameOccurrenceNoShortCircuit(
+          Left ? &Left->Load : nullptr, Right ? &Right->Load : nullptr);
+      if (!SameLoad)
+        return std::nullopt;
+      Same &= *SameLoad;
+      static const std::vector<va_t> EmptyBases;
+      const std::optional<bool> SameBases = SameScalarVectorNoShortCircuit(
+          Left ? Left->AllowedBases : EmptyBases,
+          Right ? Right->AllowedBases : EmptyBases);
+      if (!SameBases)
+        return std::nullopt;
+      Same &= *SameBases;
+      const std::optional<bool> SameFrame = SameFrameStorageNoShortCircuit(
+          Left ? &Left->FrameStorage : nullptr,
+          Right ? &Right->FrameStorage : nullptr);
+      if (!SameFrame)
+        return std::nullopt;
+      Same &= *SameFrame;
+      const std::optional<bool> SameDisplaced =
+          SameDisplacedAddressNoShortCircuit(
+              Left ? &Left->DisplacedAddress : nullptr,
+              Right ? &Right->DisplacedAddress : nullptr);
+      if (!SameDisplaced)
+        return std::nullopt;
+      Same &= *SameDisplaced;
+      static const std::vector<JumpTableValueOccurrence> EmptyOccurrences;
+      const std::optional<bool> SameIndices =
+          SameOccurrenceVectorNoShortCircuit(
+              Left ? Left->Indices : EmptyOccurrences,
+              Right ? Right->Indices : EmptyOccurrences);
+      if (!SameIndices)
+        return std::nullopt;
+      Same &= *SameIndices;
+      const std::optional<bool> SameAddressIndex =
+          SameOccurrenceNoShortCircuit(Left ? &Left->AddressIndex : nullptr,
+                                       Right ? &Right->AddressIndex : nullptr);
+      if (!SameAddressIndex)
+        return std::nullopt;
+      Same &= *SameAddressIndex;
+      const JumpTableValueOccurrence *LeftOccurrences[] = {
+          Left ? &Left->SelectedBase : nullptr,
+          Left ? &Left->SelectCondition : nullptr,
+          Left ? &Left->PositiveBlendArm : nullptr,
+          Left ? &Left->NegativeBlendArm : nullptr,
+          Left ? &Left->PositiveMask : nullptr,
+          Left ? &Left->NegativeMask : nullptr};
+      const JumpTableValueOccurrence *RightOccurrences[] = {
+          Right ? &Right->SelectedBase : nullptr,
+          Right ? &Right->SelectCondition : nullptr,
+          Right ? &Right->PositiveBlendArm : nullptr,
+          Right ? &Right->NegativeBlendArm : nullptr,
+          Right ? &Right->PositiveMask : nullptr,
+          Right ? &Right->NegativeMask : nullptr};
+      for (size_t I = 0; I < std::size(LeftOccurrences); ++I) {
+        const std::optional<bool> SameOccurrence = SameOccurrenceNoShortCircuit(
+            LeftOccurrences[I], RightOccurrences[I]);
+        if (!SameOccurrence)
+          return std::nullopt;
+        Same &= *SameOccurrence;
+      }
+      return Same;
+    };
+    auto SameLoadRoleVectorNoShortCircuit =
+        [&](const auto &Left, const auto &Right) -> std::optional<bool> {
+      if (!ConsumeProposalStageEvidence(1))
+        return std::nullopt;
+      bool Same = Left.size() == Right.size();
+      for (size_t I = 0; I < std::max(Left.size(), Right.size()); ++I) {
+        const auto *LeftRole = I < Left.size() ? &Left[I] : nullptr;
+        const auto *RightRole = I < Right.size() ? &Right[I] : nullptr;
+        const std::optional<bool> SameRole =
+            SameLoadRoleNoShortCircuit(LeftRole, RightRole);
+        if (!SameRole)
+          return std::nullopt;
+        Same &= *SameRole;
+      }
+      return Same;
+    };
+    auto SameJumpTableInfoNoShortCircuit =
+        [&](const JumpTableInfo &Left,
+            const JumpTableInfo &Right) -> std::optional<bool> {
+      // Thirty-nine direct scalar fields plus optional-storage presence.  Each
+      // dynamic container pays its size and maximum element traversal below.
+      if (!ConsumeProposalStageEvidence(40))
+        return std::nullopt;
+      bool Same = true;
+      Same &= Left.BaseAddr == Right.BaseAddr;
+      Same &= Left.HasBaseAddr == Right.HasBaseAddr;
+      Same &= Left.EntrySize == Right.EntrySize;
+      Same &= Left.EntryStride == Right.EntryStride;
+      Same &= Left.MaxEntries == Right.MaxEntries;
+      Same &= Left.PhysicalCapacity == Right.PhysicalCapacity;
+      Same &= Left.ExactBoundedRelativeRelocationSlots ==
+              Right.ExactBoundedRelativeRelocationSlots;
+      Same &= Left.IndexDomainAuthenticated == Right.IndexDomainAuthenticated;
+      Same &= Left.AuthenticatedGuardBound == Right.AuthenticatedGuardBound;
+      Same &= Left.AuthenticatedModuloBound == Right.AuthenticatedModuloBound;
+      Same &= Left.ExactPhysicalStorageRange.has_value() ==
+              Right.ExactPhysicalStorageRange.has_value();
+      Same &= Left.IsRelative == Right.IsRelative;
+      Same &= Left.IsSigned == Right.IsSigned;
+      Same &= Left.RelocAbsolute == Right.RelocAbsolute;
+      Same &= Left.RelocBounded == Right.RelocBounded;
+      Same &= Left.TargetBase == Right.TargetBase;
+      Same &= Left.HasTargetBase == Right.HasTargetBase;
+      Same &= Left.IsPEImageRelativeRVA == Right.IsPEImageRelativeRVA;
+      Same &= Left.EntryScale == Right.EntryScale;
+      Same &= Left.NormBase == Right.NormBase;
+      Same &= Left.NormShift == Right.NormShift;
+      Same &= Left.Stride == Right.Stride;
+      Same &= Left.PreScaledIndex == Right.PreScaledIndex;
+      Same &= Left.UseSharedDispatchSelector == Right.UseSharedDispatchSelector;
+      Same &= Left.TwoTableSelect == Right.TwoTableSelect;
+      Same &= Left.CompositeShapeClaimed == Right.CompositeShapeClaimed;
+      Same &= Left.TwoLevelIndex == Right.TwoLevelIndex;
+      Same &= Left.TwoTableOffset == Right.TwoTableOffset;
+      Same &= Left.TwoTableHiPositive == Right.TwoTableHiPositive;
+      Same &= Left.MutatedUnsafe == Right.MutatedUnsafe;
+      Same &= Left.IndexReg == Right.IndexReg;
+      Same &= Left.IndexUseAddr == Right.IndexUseAddr;
+      Same &= Left.IndexUseSeq == Right.IndexUseSeq;
+      Same &= Left.IndexValueDefinedAtUse == Right.IndexValueDefinedAtUse;
+      Same &= Left.TableLoadAddr == Right.TableLoadAddr;
+      Same &= Left.TableLoadSeq == Right.TableLoadSeq;
+      Same &= Left.RequiresCompleteCFGProof == Right.RequiresCompleteCFGProof;
+      Same &= Left.HasControllingGuard == Right.HasControllingGuard;
+      Same &= Left.IncompleteGuardDomain == Right.IncompleteGuardDomain;
+      Same &= Left.SemanticGuardDomainAmbiguous ==
+              Right.SemanticGuardDomainAmbiguous;
+
+      const std::optional<bool> SameIndexValue = SameNdVarNoShortCircuit(
+          &Left.IndexValueAtUse, &Right.IndexValueAtUse);
+      if (!SameIndexValue)
+        return std::nullopt;
+      Same &= *SameIndexValue;
+      const std::optional<bool> SameCoordinates =
+          SameScalarVectorNoShortCircuit(Left.AuthenticatedMaskCoordinates,
+                                         Right.AuthenticatedMaskCoordinates);
+      if (!SameCoordinates)
+        return std::nullopt;
+      Same &= *SameCoordinates;
+      const std::optional<bool> SameWitnesses = SameWitnessVectorNoShortCircuit(
+          Left.AuthenticatedMaskKnownOneWitnesses,
+          Right.AuthenticatedMaskKnownOneWitnesses);
+      if (!SameWitnesses)
+        return std::nullopt;
+      Same &= *SameWitnesses;
+      const std::optional<bool> SameStorageRanges =
+          SameStorageRangeVectorNoShortCircuit(Left.StorageRanges,
+                                               Right.StorageRanges);
+      if (!SameStorageRanges)
+        return std::nullopt;
+      Same &= *SameStorageRanges;
+      if (Left.ExactPhysicalStorageRange || Right.ExactPhysicalStorageRange) {
+        const std::optional<bool> SameExactStorage =
+            SameStorageRangeNoShortCircuit(
+                Left.ExactPhysicalStorageRange
+                    ? &*Left.ExactPhysicalStorageRange
+                    : nullptr,
+                Right.ExactPhysicalStorageRange
+                    ? &*Right.ExactPhysicalStorageRange
+                    : nullptr);
+        if (!SameExactStorage)
+          return std::nullopt;
+        Same &= *SameExactStorage;
+      }
+      const std::optional<bool> SameSuppression =
+          SameScalarVectorNoShortCircuit(Left.SuppressibleRelocationSlots,
+                                         Right.SuppressibleRelocationSlots);
+      if (!SameSuppression)
+        return std::nullopt;
+      Same &= *SameSuppression;
+      const std::optional<bool> SameAlternatives =
+          SameOccurrenceVectorNoShortCircuit(Left.IndexValueAlternatives,
+                                             Right.IndexValueAlternatives);
+      if (!SameAlternatives)
+        return std::nullopt;
+      Same &= *SameAlternatives;
+      const std::optional<bool> SameTargetLoads =
+          SameOccurrenceVectorNoShortCircuit(Left.TargetLoads,
+                                             Right.TargetLoads);
+      if (!SameTargetLoads)
+        return std::nullopt;
+      Same &= *SameTargetLoads;
+      const std::optional<bool> SameFrameStorage =
+          SameFrameStorageNoShortCircuit(&Left.AuthenticatedFrameStorage,
+                                         &Right.AuthenticatedFrameStorage);
+      if (!SameFrameStorage)
+        return std::nullopt;
+      Same &= *SameFrameStorage;
+      const std::optional<bool> SameDisplacedAddress =
+          SameDisplacedAddressNoShortCircuit(
+              &Left.AuthenticatedDisplacedAddress,
+              &Right.AuthenticatedDisplacedAddress);
+      if (!SameDisplacedAddress)
+        return std::nullopt;
+      Same &= *SameDisplacedAddress;
+      const std::optional<bool> SameConsumers =
+          SameOccurrenceVectorNoShortCircuit(
+              Left.AuthenticatedStorageConsumers,
+              Right.AuthenticatedStorageConsumers);
+      if (!SameConsumers)
+        return std::nullopt;
+      Same &= *SameConsumers;
+      const std::optional<bool> SameLoadRoles =
+          SameLoadRoleVectorNoShortCircuit(Left.LoadRoles, Right.LoadRoles);
+      if (!SameLoadRoles)
+        return std::nullopt;
+      Same &= *SameLoadRoles;
+      const std::optional<bool> SameEntryIndices =
+          SameScalarVectorNoShortCircuit(Left.EntryIndices, Right.EntryIndices);
+      if (!SameEntryIndices)
+        return std::nullopt;
+      Same &= *SameEntryIndices;
+      const std::optional<bool> SameRuntimeLabels =
+          SameScalarVectorNoShortCircuit(Left.RuntimeCaseLabels,
+                                         Right.RuntimeCaseLabels);
+      if (!SameRuntimeLabels)
+        return std::nullopt;
+      Same &= *SameRuntimeLabels;
+      const std::optional<bool> SameRuntimeSlots =
+          SameScalarVectorNoShortCircuit(Left.RuntimeSlotIndices,
+                                         Right.RuntimeSlotIndices);
+      if (!SameRuntimeSlots)
+        return std::nullopt;
+      Same &= *SameRuntimeSlots;
+      const std::optional<bool> SameExplicitTargets =
+          SameScalarVectorNoShortCircuit(Left.ExplicitTargets,
+                                         Right.ExplicitTargets);
+      if (!SameExplicitTargets)
+        return std::nullopt;
+      Same &= *SameExplicitTargets;
+
+      // CircleRange equality treats all empty ranges as equal, independent of
+      // their inactive payload.  Evaluate every public field after reserving
+      // the full five-comparison upper bound, then preserve that semantics.
+      if (!ConsumeProposalStageEvidence(5))
+        return std::nullopt;
+      const bool LeftEmpty = Left.GuardRange.isEmpty();
+      const bool RightEmpty = Right.GuardRange.isEmpty();
+      bool SameActiveRange = true;
+      SameActiveRange &= Left.GuardRange.getMin() == Right.GuardRange.getMin();
+      SameActiveRange &= Left.GuardRange.getEnd() == Right.GuardRange.getEnd();
+      SameActiveRange &=
+          Left.GuardRange.getMask() == Right.GuardRange.getMask();
+      SameActiveRange &=
+          Left.GuardRange.getStep() == Right.GuardRange.getStep();
+      Same &= LeftEmpty == RightEmpty;
+      Same &= (LeftEmpty && RightEmpty) ||
+              (!LeftEmpty && !RightEmpty && SameActiveRange);
+      return Same;
     };
     // Architecture address models are CFG proofs, not decoder-time numeric
     // facts.  Recompute them from the currently rebuilt graph before every
@@ -3036,6 +3637,8 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
         OrderedLookupWork(std::max(Insns.size(), ResolvedTableInfo.size()));
     const size_t PriorLookupWork =
         OrderedLookupWork(PriorStrongJumpTableProposals.size());
+    const size_t PriorProvisionalLookupWork =
+        OrderedLookupWork(PriorProvisionalRelativeEdges.size());
     const size_t RollbackLookupCeiling =
         OrderedLookupWork(std::numeric_limits<size_t>::max());
     const size_t MarkerRollbackLookupWork = RollbackLookupCeiling + 1;
@@ -3046,10 +3649,12 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
              // paid separately below.
              {Insns.size(), 4},
              {Insns.size(), ResolvedLookupWork},
-             {Insns.size(), PriorLookupWork}}) ||
+             {Insns.size(), PriorLookupWork},
+             {Insns.size(), PriorProvisionalLookupWork}}) ||
         !ConsumeProposalStageEvidence(2)) {
       CandidateProposalStageActive = false;
       NextStrongJumpTableProposals.clear();
+      NextProvisionalRelativeEdges.clear();
       RestoreIncompleteBranchMarkers();
       continue;
     }
@@ -3061,7 +3666,8 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       const bool NeedsRevalidation = Info != ResolvedTableInfo.end() &&
                                      Info->second.RequiresCompleteCFGProof;
       if (Rec.JumpTableTargets.empty() || NeedsRevalidation ||
-          PriorStrongJumpTableProposals.count(Addr)) {
+          PriorStrongJumpTableProposals.count(Addr) ||
+          PriorProvisionalRelativeEdges.count(Addr)) {
         CandidateAddrs.push_back(Addr);
       }
     }
@@ -3074,6 +3680,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
             {{CandidateAddrs.size(), size_t{1} + 2 * RollbackLookupCeiling}})) {
       CandidateProposalStageActive = false;
       NextStrongJumpTableProposals.clear();
+      NextProvisionalRelativeEdges.clear();
       RestoreIncompleteBranchMarkers();
       continue;
     }
@@ -3103,7 +3710,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       }
       if (!ConsumeProposalStageEvidence(OldTargetCount) ||
           (Info != ResolvedTableInfo.end() &&
-           !ConsumeJumpTableInfoComparison(Info->second))) {
+           !ConsumeJumpTableInfoLifecycle(Info->second))) {
         if (HasOldPersistentState)
           ProposalCleanupEvidenceForTesting.OldStateExhausted = true;
         StageStartRollbackStateReserved = false;
@@ -3116,6 +3723,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       CandidateProposalStageActive = false;
       CandidateProposalStageMutationAddrs.clear();
       NextStrongJumpTableProposals.clear();
+      NextProvisionalRelativeEdges.clear();
       StrongJumpTableProposalOutcomes.clear();
       RestoreIncompleteBranchMarkers();
       continue;
@@ -3151,6 +3759,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       CandidateProposalStageActive = false;
       CandidateProposalStageMutationAddrs.clear();
       NextStrongJumpTableProposals.clear();
+      NextProvisionalRelativeEdges.clear();
       StrongJumpTableProposalOutcomes.clear();
       RestoreIncompleteBranchMarkers();
       continue;
@@ -3173,24 +3782,24 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
           OrderedLookupWork(std::max(Insns.size(), ResolvedTableInfo.size()));
       const size_t CurrentMaskLookupWork = OrderedLookupWork(
           std::max(Insns.size(), CandidateFixedPointExplorationTargets.size()));
-      if (!ConsumeProposalStageProducts(
-              {// Insns lookup plus the resolver's erase and the three outer
-               // before/after comparison lookups.  Resolver writes debit the
-               // nested candidate account and flow back as its used delta.
-               {1, OrderedLookupWork(Insns.size())},
-               {4, CurrentResolvedLookupWork},
-               // Outer erase/find of the exploration record.
-               {2, CurrentMaskLookupWork},
-               // Quarantine and incomplete-domain set lookups.
-               {1, OrderedLookupWork(QuarantinedJumpTableProposals.size())},
-               {2, OrderedLookupWork(
-                       IndexDomainEvidenceIncompleteBranches.size())},
-               {1, 1},
-               // CandidateOutcome lookup.  Proposal/strong-set insertions
-               // occur inside the candidate-local account and their exact
-               // delta is debited from this same stage balance on return.
-               {1, OrderedLookupWork(StrongJumpTableProposalOutcomes.size())},
-              }))
+      if (!ConsumeProposalStageProducts({
+              // Insns lookup plus the resolver's erase and the three outer
+              // before/after comparison lookups.  Resolver writes debit the
+              // nested candidate account and flow back as its used delta.
+              {1, OrderedLookupWork(Insns.size())},
+              {4, CurrentResolvedLookupWork},
+              // Outer erase/find of the exploration record.
+              {2, CurrentMaskLookupWork},
+              // Quarantine and incomplete-domain set lookups.
+              {1, OrderedLookupWork(QuarantinedJumpTableProposals.size())},
+              {2,
+               OrderedLookupWork(IndexDomainEvidenceIncompleteBranches.size())},
+              {1, 1},
+              // CandidateOutcome lookup.  Proposal/strong-set insertions
+              // occur inside the candidate-local account and their exact
+              // delta is debited from this same stage balance on return.
+              {1, OrderedLookupWork(StrongJumpTableProposalOutcomes.size())},
+          }))
         break;
       auto It = Insns.find(UA);
       if (It == Insns.end())
@@ -3247,19 +3856,28 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       bool MetadataChanged =
           OldInfo.has_value() != (NewInfo != ResolvedTableInfo.end());
       if (OldInfo && NewInfo != ResolvedTableInfo.end()) {
-        if (!ConsumeJumpTableInfoComparison(*OldInfo) ||
-            !ConsumeJumpTableInfoComparison(NewInfo->second))
+        const std::optional<bool> SameMetadata =
+            SameJumpTableInfoNoShortCircuit(*OldInfo, NewInfo->second);
+        if (!SameMetadata)
           break;
-        MetadataChanged = *OldInfo != NewInfo->second;
+        MetadataChanged = !*SameMetadata;
       }
       RefreshedProofMetadata |= WasProofDependent && MetadataChanged;
       // Old/new destruction was reserved before materialization.  Charge only
       // the element-wise equality walk here, still before comparing or moving
       // either target vector.
-      if (!ConsumeProposalStageProducts(
-              {{It->second.JumpTableTargets.size(), 1}, {Targets.size(), 1}}))
+      const std::optional<size_t> TargetComparisonWork =
+          detail::scalarVectorComparisonWork(It->second.JumpTableTargets.size(),
+                                             Targets.size());
+      if (!TargetComparisonWork ||
+          !ConsumeProposalStageEvidence(*TargetComparisonWork))
         break;
-      if (Targets != It->second.JumpTableTargets) {
+      bool SameTargets = Targets.size() == It->second.JumpTableTargets.size();
+      for (size_t I = 0;
+           I < std::min(Targets.size(), It->second.JumpTableTargets.size());
+           ++I)
+        SameTargets &= Targets[I] == It->second.JumpTableTargets[I];
+      if (!SameTargets) {
         It->second.JumpTableTargets = std::move(Targets);
         MadeProgress = true;
       }
@@ -3277,9 +3895,9 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       auto Exploration = CandidateFixedPointExplorationTargets.find(UA);
       if (PublishedTargets.empty() &&
           Exploration != CandidateFixedPointExplorationTargets.end()) {
-        if (!PrepayTargetSetOperations(Exploration->second.size()))
+        if (!PrepayTargetSetOperations(Exploration->second.Targets.size()))
           break;
-        for (va_t T : Exploration->second) {
+        for (va_t T : Exploration->second.Targets) {
           MadeProgress |= BlockStarts.insert(T).second;
           if (!ExploredAddrs.count(T)) {
             explore(Img, Dec, T);
@@ -3331,6 +3949,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
         }
       }
       CandidateFixedPointExplorationTargets.clear();
+      NextProvisionalRelativeEdges.clear();
       bool ForcedUntrackedCandidateResolvedCleared = false;
       bool ForcedUntrackedCandidateExplorationCleared = false;
       if (SawForcedUntrackedCandidate) {
@@ -3385,13 +4004,45 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       continue;
     }
 
-    if (!ConsumeProposalStageEvidence(PriorStrongJumpTableProposals.size())) {
+    if (PriorProvisionalRelativeEdges.size() >
+            std::numeric_limits<size_t>::max() -
+                PriorStrongJumpTableProposals.size() ||
+        !ConsumeProposalStageEvidence(PriorStrongJumpTableProposals.size() +
+                                      PriorProvisionalRelativeEdges.size())) {
       RollBackIncompleteProposalStage();
       continue;
     }
     std::vector<va_t> DefinitiveLosses;
-    DefinitiveLosses.reserve(PriorStrongJumpTableProposals.size());
+    DefinitiveLosses.reserve(PriorStrongJumpTableProposals.size() +
+                             PriorProvisionalRelativeEdges.size());
     size_t QuarantineTailWork = 0;
+    auto RecordDefinitiveLoss = [&](va_t LostAddr) {
+      // A self-replay token may also have a strong proposal at the same
+      // address.  Prepay the duplicate scan and append only one quarantine
+      // record, independent of which ordered proposal map observes the loss
+      // first.
+      if (!ConsumeProposalStageEvidence(DefinitiveLosses.size() + 2))
+        return false;
+      if (std::find(DefinitiveLosses.begin(), DefinitiveLosses.end(),
+                    LostAddr) != DefinitiveLosses.end())
+        return true;
+      if (DefinitiveLosses.size() > std::numeric_limits<size_t>::max() -
+                                        QuarantinedJumpTableProposals.size()) {
+        CandidateProposalStageEvidenceIncomplete = true;
+        return false;
+      }
+      const size_t Lookup = OrderedLookupWork(
+          QuarantinedJumpTableProposals.size() + DefinitiveLosses.size());
+      if (Lookup > std::numeric_limits<size_t>::max() - 1 ||
+          QuarantineTailWork >
+              std::numeric_limits<size_t>::max() - (Lookup + 1)) {
+        CandidateProposalStageEvidenceIncomplete = true;
+        return false;
+      }
+      QuarantineTailWork += Lookup + 1;
+      DefinitiveLosses.push_back(LostAddr);
+      return true;
+    };
     size_t PriorClearWork = PriorStrongJumpTableProposals.size();
     auto AccumulatePriorClearWork =
         [&](const StrongJumpTableRoleProposal &Proposal) {
@@ -3414,14 +4065,118 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
           PriorClearWork += Proposal.SuppressibleRelocationSlots.size();
           return true;
         };
+    auto PreflightComparisonWork = [&](std::optional<size_t> Work) {
+      return ConsumeProposalStageEvidence(
+          Work.value_or(std::numeric_limits<size_t>::max()));
+    };
+    auto SameStorageRange = [](const JumpTableStorageRange &Left,
+                               const JumpTableStorageRange &Right) {
+      bool Same = true;
+      Same &= Left.BaseAddr == Right.BaseAddr;
+      Same &= Left.EntrySize == Right.EntrySize;
+      Same &= Left.EntryStride == Right.EntryStride;
+      Same &= Left.PhysicalSlotCount == Right.PhysicalSlotCount;
+      return Same;
+    };
+    auto SameLoadRole = [&](const StrongJumpTableLoadRole &Left,
+                            const StrongJumpTableLoadRole &Right) {
+      bool Same = true;
+      Same &= Left.Load.Value.Space == Right.Load.Value.Space;
+      Same &= Left.Load.Value.Offset == Right.Load.Value.Offset;
+      Same &= Left.Load.Value.Size == Right.Load.Value.Size;
+      Same &= Left.Load.Value.Provenance == Right.Load.Value.Provenance;
+      Same &= Left.Load.Value.AddressOwnerVA == Right.Load.Value.AddressOwnerVA;
+      Same &= Left.Load.Addr == Right.Load.Addr;
+      Same &= Left.Load.Seq == Right.Load.Seq;
+      Same &= Left.Load.DefinedAtPoint == Right.Load.DefinedAtPoint;
+      Same &= Left.LoadWidth == Right.LoadWidth;
+      return Same;
+    };
+    auto SameStrongProposal =
+        [&](const StrongJumpTableRoleProposal &Left,
+            const StrongJumpTableRoleProposal &Right) -> std::optional<bool> {
+      if (!PreflightComparisonWork(
+              detail::strongJumpTableProposalComparisonWork(
+                  Left.StorageRanges.size(), Right.StorageRanges.size(),
+                  Left.LoadRoles.size(), Right.LoadRoles.size(),
+                  Left.SuppressibleRelocationSlots.size(),
+                  Right.SuppressibleRelocationSlots.size())))
+        return std::nullopt;
+      bool Same = true;
+      Same &= Left.StorageRanges.size() == Right.StorageRanges.size();
+      for (size_t I = 0;
+           I < std::min(Left.StorageRanges.size(), Right.StorageRanges.size());
+           ++I)
+        Same &= SameStorageRange(Left.StorageRanges[I], Right.StorageRanges[I]);
+      const bool LeftHasExact = Left.ExactPhysicalStorageRange.has_value();
+      const bool RightHasExact = Right.ExactPhysicalStorageRange.has_value();
+      Same &= LeftHasExact == RightHasExact;
+      if (LeftHasExact && RightHasExact)
+        Same &= SameStorageRange(*Left.ExactPhysicalStorageRange,
+                                 *Right.ExactPhysicalStorageRange);
+      Same &= Left.LoadRoles.size() == Right.LoadRoles.size();
+      for (size_t I = 0;
+           I < std::min(Left.LoadRoles.size(), Right.LoadRoles.size()); ++I)
+        Same &= SameLoadRole(Left.LoadRoles[I], Right.LoadRoles[I]);
+      Same &= Left.SuppressibleRelocationSlots.size() ==
+              Right.SuppressibleRelocationSlots.size();
+      for (size_t I = 0; I < std::min(Left.SuppressibleRelocationSlots.size(),
+                                      Right.SuppressibleRelocationSlots.size());
+           ++I)
+        Same &= Left.SuppressibleRelocationSlots[I] ==
+                Right.SuppressibleRelocationSlots[I];
+      Same &= Left.ProofRank == Right.ProofRank;
+      return Same;
+    };
+    auto SameProvisionalProposal =
+        [&](const ProvisionalRelativeEdgeProposal &Left,
+            const ProvisionalRelativeEdgeProposal &Right)
+        -> std::optional<bool> {
+      if (!PreflightComparisonWork(
+              detail::provisionalRelativeProposalComparisonWork(
+                  Left.LoadRoles.size(), Right.LoadRoles.size(),
+                  Left.Targets.size(), Right.Targets.size())))
+        return std::nullopt;
+      bool Same = SameStorageRange(Left.Storage, Right.Storage);
+      Same &= Left.AuthenticatesPhysicalStorage ==
+              Right.AuthenticatesPhysicalStorage;
+      Same &= Left.CompleteDenseRuntimeCoordinates ==
+              Right.CompleteDenseRuntimeCoordinates;
+      Same &=
+          Left.StablePublishedTargetReplay == Right.StablePublishedTargetReplay;
+      const bool LeftHasRuntime = Left.CompleteRuntimeStorageRange.has_value();
+      const bool RightHasRuntime =
+          Right.CompleteRuntimeStorageRange.has_value();
+      Same &= LeftHasRuntime == RightHasRuntime;
+      if (LeftHasRuntime && RightHasRuntime)
+        Same &= SameStorageRange(*Left.CompleteRuntimeStorageRange,
+                                 *Right.CompleteRuntimeStorageRange);
+      Same &= Left.TargetAnchor == Right.TargetAnchor;
+      Same &= Left.EntryScale == Right.EntryScale;
+      Same &= Left.IsSigned == Right.IsSigned;
+      Same &= Left.LoadRoles.size() == Right.LoadRoles.size();
+      for (size_t I = 0;
+           I < std::min(Left.LoadRoles.size(), Right.LoadRoles.size()); ++I)
+        Same &= SameLoadRole(Left.LoadRoles[I], Right.LoadRoles[I]);
+      Same &= Left.Targets.size() == Right.Targets.size();
+      for (size_t I = 0;
+           I < std::min(Left.Targets.size(), Right.Targets.size()); ++I)
+        Same &= Left.Targets[I] == Right.Targets[I];
+      Same &= Left.ProofRank == Right.ProofRank;
+      return Same;
+    };
     bool ProposalUniverseChanged = PriorStrongJumpTableProposals.size() !=
                                    NextStrongJumpTableProposals.size();
+    if (!PreflightComparisonWork(detail::orderedProposalMapMergeComparisonWork(
+            PriorStrongJumpTableProposals.size(),
+            NextStrongJumpTableProposals.size()))) {
+      RollBackIncompleteProposalStage();
+      continue;
+    }
     auto PriorIt = PriorStrongJumpTableProposals.begin();
     auto NextIt = NextStrongJumpTableProposals.begin();
     while (PriorIt != PriorStrongJumpTableProposals.end() ||
            NextIt != NextStrongJumpTableProposals.end()) {
-      if (!ConsumeProposalStageEvidence(1))
-        break;
       if (NextIt == NextStrongJumpTableProposals.end() ||
           (PriorIt != PriorStrongJumpTableProposals.end() &&
            PriorIt->first < NextIt->first)) {
@@ -3442,6 +4197,10 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
         }
         if (OutcomeIt->second !=
                 StrongJumpTableProposalOutcome::DefinitiveLocalProofLoss &&
+            OutcomeIt->second != StrongJumpTableProposalOutcome::
+                                     SelfReplayDefinitiveLocalProofLoss &&
+            OutcomeIt->second != StrongJumpTableProposalOutcome::
+                                     AwaitingSiblingRuntimeCertificate &&
             OutcomeIt->second !=
                 StrongJumpTableProposalOutcome::SemanticOpaque) {
           CandidateProposalStageEvidenceIncomplete = true;
@@ -3456,26 +4215,24 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
           ++PriorIt;
           continue;
         }
-        // One retained vector slot and one future set node are both charged
-        // before recording the loss.
-        if (!ConsumeProposalStageEvidence(2))
-          break;
-        if (DefinitiveLosses.size() >
-            std::numeric_limits<size_t>::max() -
-                QuarantinedJumpTableProposals.size()) {
-          CandidateProposalStageEvidenceIncomplete = true;
-          break;
+        if (OutcomeIt->second ==
+            StrongJumpTableProposalOutcome::AwaitingSiblingRuntimeCertificate) {
+          // The candidate saw a distinct raw sibling in the frozen prior
+          // universe.  Defer quarantine only if it also retained its own edge
+          // for the next immutable replay; this carries no strong authority.
+          // An ordinary self-edge has the definitive outcome above and cannot
+          // spin until the global retry limit.
+          if (!ConsumeProposalStageEvidence(
+                  OrderedLookupWork(NextProvisionalRelativeEdges.size())))
+            break;
+          if (NextProvisionalRelativeEdges.count(LostAddr)) {
+            ProposalUniverseChanged = true;
+            ++PriorIt;
+            continue;
+          }
         }
-        const size_t Lookup = OrderedLookupWork(
-            QuarantinedJumpTableProposals.size() + DefinitiveLosses.size());
-        if (Lookup > std::numeric_limits<size_t>::max() - 1 ||
-            QuarantineTailWork >
-                std::numeric_limits<size_t>::max() - (Lookup + 1)) {
-          CandidateProposalStageEvidenceIncomplete = true;
+        if (!RecordDefinitiveLoss(LostAddr))
           break;
-        }
-        QuarantineTailWork += Lookup + 1;
-        DefinitiveLosses.push_back(LostAddr);
         ProposalUniverseChanged = true;
         ++PriorIt;
         continue;
@@ -3489,17 +4246,10 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
 
       const StrongJumpTableRoleProposal &Prior = PriorIt->second;
       const StrongJumpTableRoleProposal &Next = NextIt->second;
-      if (!ConsumeProposalStageEvidence(Prior.StorageRanges.size()) ||
-          !ConsumeProposalStageEvidence(Next.StorageRanges.size()) ||
-          !ConsumeProposalStageEvidence(Prior.LoadRoles.size()) ||
-          !ConsumeProposalStageEvidence(Next.LoadRoles.size()) ||
-          !ConsumeProposalStageEvidence(
-              Prior.SuppressibleRelocationSlots.size()) ||
-          !ConsumeProposalStageEvidence(
-              Next.SuppressibleRelocationSlots.size()) ||
-          !ConsumeProposalStageEvidence(1) || !AccumulatePriorClearWork(Prior))
+      const std::optional<bool> Same = SameStrongProposal(Prior, Next);
+      if (!Same || !AccumulatePriorClearWork(Prior))
         break;
-      ProposalUniverseChanged |= Prior != Next;
+      ProposalUniverseChanged |= !*Same;
       ++PriorIt;
       ++NextIt;
     }
@@ -3507,8 +4257,140 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       RollBackIncompleteProposalStage();
       continue;
     }
-    const bool StableStage = !MadeProgress && !RefreshedProofMetadata &&
-                             !ProposalUniverseChanged;
+
+    // Provisional relative edges form a second immutable universe.  They are
+    // compared and swapped transactionally like strong role proposals, but a
+    // lost edge is never quarantined: it grants only a temporary resolver-graph
+    // overlay and must disappear before the final fixed point can commit.
+    bool ProvisionalEdgeUniverseChanged =
+        PriorProvisionalRelativeEdges.size() !=
+        NextProvisionalRelativeEdges.size();
+    if (!PreflightComparisonWork(detail::orderedProposalMapMergeComparisonWork(
+            PriorProvisionalRelativeEdges.size(),
+            NextProvisionalRelativeEdges.size()))) {
+      RollBackIncompleteProposalStage();
+      continue;
+    }
+    size_t PriorProvisionalClearWork = PriorProvisionalRelativeEdges.size();
+    auto AccumulateProvisionalClearWork =
+        [&](const ProvisionalRelativeEdgeProposal &Proposal) {
+          const size_t Max = std::numeric_limits<size_t>::max();
+          if (Proposal.LoadRoles.size() > Max - PriorProvisionalClearWork ||
+              Proposal.Targets.size() >
+                  Max - PriorProvisionalClearWork - Proposal.LoadRoles.size()) {
+            CandidateProposalStageEvidenceIncomplete = true;
+            return false;
+          }
+          PriorProvisionalClearWork +=
+              Proposal.LoadRoles.size() + Proposal.Targets.size();
+          return true;
+        };
+    auto PriorEdgeIt = PriorProvisionalRelativeEdges.begin();
+    auto NextEdgeIt = NextProvisionalRelativeEdges.begin();
+    while (PriorEdgeIt != PriorProvisionalRelativeEdges.end() ||
+           NextEdgeIt != NextProvisionalRelativeEdges.end()) {
+      if (NextEdgeIt == NextProvisionalRelativeEdges.end() ||
+          (PriorEdgeIt != PriorProvisionalRelativeEdges.end() &&
+           PriorEdgeIt->first < NextEdgeIt->first)) {
+        ProvisionalEdgeUniverseChanged = true;
+        if (!AccumulateProvisionalClearWork(PriorEdgeIt->second))
+          break;
+        const va_t LostAddr = PriorEdgeIt->first;
+        if (!ConsumeProposalStageEvidence(
+                OrderedLookupWork(StrongJumpTableProposalOutcomes.size())))
+          break;
+        const auto Outcome = StrongJumpTableProposalOutcomes.find(LostAddr);
+        if (Outcome == StrongJumpTableProposalOutcomes.end()) {
+          CandidateProposalStageEvidenceIncomplete = true;
+          break;
+        }
+        if (Outcome->second == StrongJumpTableProposalOutcome::
+                                   SelfReplayDefinitiveLocalProofLoss &&
+            !RecordDefinitiveLoss(LostAddr))
+          break;
+        ++PriorEdgeIt;
+        continue;
+      }
+      if (PriorEdgeIt == PriorProvisionalRelativeEdges.end() ||
+          NextEdgeIt->first < PriorEdgeIt->first) {
+        ProvisionalEdgeUniverseChanged = true;
+        ++NextEdgeIt;
+        continue;
+      }
+      const ProvisionalRelativeEdgeProposal &Prior = PriorEdgeIt->second;
+      const ProvisionalRelativeEdgeProposal &Next = NextEdgeIt->second;
+      const std::optional<bool> Same = SameProvisionalProposal(Prior, Next);
+      if (!Same || !AccumulateProvisionalClearWork(Prior))
+        break;
+      ProvisionalEdgeUniverseChanged |= !*Same;
+      ++PriorEdgeIt;
+      ++NextEdgeIt;
+    }
+    if (CandidateProposalStageEvidenceIncomplete) {
+      RollBackIncompleteProposalStage();
+      continue;
+    }
+    // A producer may retain either its exact complete runtime range or, for a
+    // sparse domain, only its exact ordinary published target vector.  Both
+    // forms are durable candidate-local evidence rather than resolver edge
+    // overlays; neither grants physical ownership.  Any raw edge proposal
+    // still prevents stability and must retire in a later immutable stage.
+    bool StableDurableCertificatesOnly = true;
+    size_t StableRuntimeCertificateRetireWork =
+        PriorProvisionalRelativeEdges.size();
+    for (const auto &[Addr, Proposal] : PriorProvisionalRelativeEdges) {
+      const size_t Max = std::numeric_limits<size_t>::max();
+      if (!ConsumeProposalStageEvidence(
+              OrderedLookupWork(Insns.size()) +
+              detail::kStableRelativeRuntimeCertificateFixedWork) ||
+          !ConsumeProposalStageEvidence(Proposal.Targets.size()))
+        break;
+      const auto Producer = Insns.find(Addr);
+      const JumpTableStorageRange *RuntimeRange =
+          Proposal.CompleteRuntimeStorageRange
+              ? &*Proposal.CompleteRuntimeStorageRange
+              : nullptr;
+      bool StableCertificate = false;
+      if (Producer != Insns.end()) {
+        if (Proposal.StablePublishedTargetReplay) {
+          StableCertificate =
+              !Proposal.AuthenticatesPhysicalStorage &&
+              !Proposal.CompleteDenseRuntimeCoordinates && !RuntimeRange &&
+              !Proposal.Targets.empty() &&
+              Proposal.Targets == Producer->second.JumpTableTargets;
+        } else {
+          StableCertificate =
+              !Proposal.AuthenticatesPhysicalStorage &&
+              !Proposal.CompleteDenseRuntimeCoordinates &&
+              detail::isStableProvisionalRelativeRuntimeCertificate(
+                  RuntimeRange, Proposal.Targets,
+                  Producer->second.JumpTableTargets);
+        }
+      }
+      if (!StableCertificate) {
+        StableDurableCertificatesOnly = false;
+        continue;
+      }
+      if (Proposal.LoadRoles.size() >
+              Max - StableRuntimeCertificateRetireWork ||
+          Proposal.Targets.size() > Max - StableRuntimeCertificateRetireWork -
+                                        Proposal.LoadRoles.size()) {
+        CandidateProposalStageEvidenceIncomplete = true;
+        break;
+      }
+      StableRuntimeCertificateRetireWork +=
+          Proposal.LoadRoles.size() + Proposal.Targets.size();
+    }
+    if (CandidateProposalStageEvidenceIncomplete) {
+      RollBackIncompleteProposalStage();
+      continue;
+    }
+    const bool StableProvisionalUniverse =
+        PriorProvisionalRelativeEdges.empty() ||
+        (!ProvisionalEdgeUniverseChanged && StableDurableCertificatesOnly);
+    const bool StableStage =
+        !MadeProgress && !RefreshedProofMetadata && !ProposalUniverseChanged &&
+        !ProvisionalEdgeUniverseChanged && StableProvisionalUniverse;
     std::set<va_t> StableSafelyPublishedI386GOTPCBranches;
     if (StableStage) {
       const size_t InsnLookup = OrderedLookupWork(Insns.size());
@@ -3522,8 +4404,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       if (!CandidateProposalStageEvidenceIncomplete) {
         for (va_t BranchAddr : PendingAmbiguousI386GOTPCBranches) {
           const auto Branch = Insns.find(BranchAddr);
-          if (Branch != Insns.end() &&
-              !Branch->second.JumpTableTargets.empty())
+          if (Branch != Insns.end() && !Branch->second.JumpTableTargets.empty())
             StableSafelyPublishedI386GOTPCBranches.insert(BranchAddr);
         }
       }
@@ -3532,8 +4413,8 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
         constexpr size_t KeyWork = 5;
         const size_t ReplayLookup =
             OrderedLookupWork(StageReplayedI386GOTPCKeys.size());
-        const size_t StablePublishedLookup = OrderedLookupWork(
-            StableSafelyPublishedI386GOTPCBranches.size());
+        const size_t StablePublishedLookup =
+            OrderedLookupWork(StableSafelyPublishedI386GOTPCBranches.size());
         if (!ConsumeProposalStageProducts(
                 {// Preflight plus commit each perform the exact ordered
                  // replay/safe-publication membership checks.
@@ -3589,6 +4470,9 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
             {{1, QuarantineTailWork},
              {1, 1}, // Prior/Next swap.
              {1, PriorClearWork},
+             {1, 1}, // Provisional-edge Prior/Next swap.
+             {1, PriorProvisionalClearWork},
+             {1, StableStage ? StableRuntimeCertificateRetireWork : 0},
              {1, StrongJumpTableProposalOutcomes.size()}})) {
       ProposalStageCommitTailEvidenceExhaustedForTesting = true;
       RollBackIncompleteProposalStage();
@@ -3601,6 +4485,10 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       QuarantinedJumpTableProposals.insert(Addr);
     PriorStrongJumpTableProposals.swap(NextStrongJumpTableProposals);
     NextStrongJumpTableProposals.clear();
+    PriorProvisionalRelativeEdges.swap(NextProvisionalRelativeEdges);
+    NextProvisionalRelativeEdges.clear();
+    if (StableStage && StableDurableCertificatesOnly)
+      PriorProvisionalRelativeEdges.clear();
     StrongJumpTableProposalOutcomes.clear();
     CandidateProposalStageMutationAddrs.clear();
     CandidateProposalStageActive = false;
@@ -3631,19 +4519,18 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       for (auto It = PendingAmbiguousI386GOTPCBranches.begin();
            It != PendingAmbiguousI386GOTPCBranches.end();) {
         const va_t BranchAddr = *It;
-        const bool HasPendingKey = std::any_of(
-            PendingAmbiguousI386GOTPCKeys.begin(),
-            PendingAmbiguousI386GOTPCKeys.end(),
-            [&](const I386GOTOFFAmbiguityReplayKey &Key) {
-              return std::get<0>(Key) == BranchAddr;
-            });
+        const bool HasPendingKey =
+            std::any_of(PendingAmbiguousI386GOTPCKeys.begin(),
+                        PendingAmbiguousI386GOTPCKeys.end(),
+                        [&](const I386GOTOFFAmbiguityReplayKey &Key) {
+                          return std::get<0>(Key) == BranchAddr;
+                        });
         if (!HasPendingKey)
           It = PendingAmbiguousI386GOTPCBranches.erase(It);
         else
           ++It;
       }
-      AmbiguousI386GOTPCBranches.swap(
-          StageAmbiguousI386GOTPCBranches);
+      AmbiguousI386GOTPCBranches.swap(StageAmbiguousI386GOTPCBranches);
       StageAmbiguousI386GOTPCBranches.clear();
       break;
     }
@@ -3684,6 +4571,9 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
     }
     if (Changed)
       rebuildBlocks(Func);
+    PriorProvisionalRelativeEdges.clear();
+    NextProvisionalRelativeEdges.clear();
+    CandidateFixedPointExplorationTargets.clear();
   }
   StageAmbiguousI386GOTPCBranches.clear();
   StageReplayedI386GOTPCKeys.clear();

@@ -10451,6 +10451,66 @@ TEST(MachOLLVMDataPointerBoundary,
 }
 
 TEST(LLVMDataPointerInvariantBoundary,
+     SmallScalarAndMaskDoesNotEraseUnstableAddressOffsetLineage) {
+  BinaryImage Image = makeSpilledConstTableImage(Arch::X64, BinaryFormat::ELF);
+  auto StableAnd = [&](const MedVar &Left, const MedVar &Right) {
+    MedFunc Func;
+    Func.Entry = CallerVA;
+    Func.Name = "small_scalar_mask_offset_barrier";
+    Func.ReturnType = NdType::makeVoid();
+
+    MedVar Output;
+    Output.Kind = MedVar::Temp;
+    Output.TheArch = Arch::X64;
+    Output.Id = 1;
+    Output.SSAVer = 1;
+    Output.Size = 8;
+
+    MedOp And;
+    And.Opcode = NdOp::INT_AND;
+    And.Output = Output;
+    And.addInput(Left);
+    And.addInput(Right);
+
+    MedBlock Block;
+    Block.Id = 0;
+    Block.StartAddr = CallerVA;
+    Block.EndAddr = CallerVA + 4;
+    Block.Ops.push_back(std::move(And));
+    Func.Blocks.push_back(std::move(Block));
+
+    MedLLVMEmitter Emitter;
+    MedLLVMProvenanceTestPeer::prepareFreshAnalysis(
+        Emitter, Func, Image, Arch::X64, BinaryFormat::ELF);
+    return MedLLVMProvenanceTestPeer::stableOffset(Emitter, Output, nullptr);
+  };
+
+  const MedVar SmallScalarMask =
+      MedVar::makeConst(7, 8, ConstantAddressProvenance::Scalar);
+  const MedVar DataAddress = MedVar::makeConst(
+      SpilledConstTableVA, 8, ConstantAddressProvenance::DataAddress);
+  EXPECT_TRUE(
+      StableAnd(MedVar::makeConst(42, 8, ConstantAddressProvenance::Scalar),
+                SmallScalarMask));
+  EXPECT_FALSE(StableAnd(DataAddress, SmallScalarMask));
+  EXPECT_FALSE(StableAnd(SmallScalarMask, DataAddress));
+  EXPECT_FALSE(StableAnd(DataAddress,
+                         MedVar::makeConst(limits::kMinGlobalDataAddr, 8,
+                                           ConstantAddressProvenance::Scalar)));
+  EXPECT_FALSE(StableAnd(
+      DataAddress,
+      MedVar::makeConst(7, 8, ConstantAddressProvenance::DataAddress)));
+
+  MedVar VariableMask;
+  VariableMask.Kind = MedVar::Param;
+  VariableMask.TheArch = Arch::X64;
+  VariableMask.Id = 0;
+  VariableMask.SSAVer = 0;
+  VariableMask.Size = 8;
+  EXPECT_FALSE(StableAnd(DataAddress, VariableMask));
+}
+
+TEST(LLVMDataPointerInvariantBoundary,
      StableOffsetRequiresAnInitializerAcrossNestedPhiComponents) {
   for (BinaryFormat Format :
        {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})

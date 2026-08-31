@@ -54,9 +54,9 @@ struct TargetRegInfo;
 /// target belongs to the ordinary process-image address space.  Segment
 /// offsets may numerically collide with image VAs but can never authenticate
 /// image jump-table storage.
-bool jumpTableTargetLoadUsesDefaultAddressSpace(
-    llvm::ArrayRef<LowOp> Ops, va_t Address, int Sequence,
-    const NdVar &Output);
+bool jumpTableTargetLoadUsesDefaultAddressSpace(llvm::ArrayRef<LowOp> Ops,
+                                                va_t Address, int Sequence,
+                                                const NdVar &Output);
 
 /// Checked signed frame-offset arithmetic used by stack-table proofs.  A
 /// failure is evidence incompleteness, never a wrapping offset.
@@ -73,9 +73,9 @@ std::optional<va_t> checkedVAOffset(va_t Base, int64_t Delta);
 /// or does not match \p ExpectedOwner.  Unlike
 /// BinaryImage::relocatedTargetBelongsToOwner, this is a memory-access proof:
 /// a data owner's legal one-past address is deliberately not dereferenceable.
-std::optional<va_t>
-exactImmutableDataSpanOwner(const BinaryImage &Img, va_t Start, uint64_t Size,
-                            va_t ExpectedOwner = InvalidVA);
+std::optional<va_t> exactImmutableDataSpanOwner(const BinaryImage &Img,
+                                                va_t Start, uint64_t Size,
+                                                va_t ExpectedOwner = InvalidVA);
 
 /// Registers that survive a call under \p Img's target ABI.  Shared by
 /// constant-folding and path-emulation fallbacks.  Defined in
@@ -90,6 +90,16 @@ bool isExplicitlyOwnedFunctionFragment(const BinaryImage &Img,
                                        va_t FunctionEntry, va_t Target);
 
 namespace detail {
+
+/// True only for an integer mask whose two operands are unowned scalar
+/// constants.  Such lifter-generated shift-count masks cannot authenticate a
+/// jump-table selector domain; address-provenance constants remain relevant.
+bool isConstantOnlyScalarMask(const LowOp &Op);
+
+/// Canonicalize provisional CFG destinations after appending a newly proved
+/// batch.  Fixed-point replay may rediscover the same edges; proposal identity
+/// must depend on the edge set, not on discovery history.
+void canonicalizeFixedPointExplorationTargets(std::vector<va_t> &Targets);
 
 /// Immutable proof-context portion of a target-role certificate.  An absent
 /// active-root override is semantically distinct from a present empty set:
@@ -106,10 +116,11 @@ struct TargetRoleProofContextKey {
   bool operator==(const TargetRoleProofContextKey &Other) const = default;
 };
 
-inline bool targetRoleProofContextMatches(
-    const TargetRoleProofContextKey &Key, bool ProofContextComplete,
-    bool HasActiveProofRoots, bool ConsumerAuditMode,
-    const std::set<va_t> &ProofRoots) {
+inline bool targetRoleProofContextMatches(const TargetRoleProofContextKey &Key,
+                                          bool ProofContextComplete,
+                                          bool HasActiveProofRoots,
+                                          bool ConsumerAuditMode,
+                                          const std::set<va_t> &ProofRoots) {
   return Key.ProofContextComplete == ProofContextComplete &&
          Key.HasActiveProofRoots == HasActiveProofRoots &&
          Key.ConsumerAuditMode == ConsumerAuditMode &&

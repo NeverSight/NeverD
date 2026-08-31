@@ -339,7 +339,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
     for (const auto &[Addr, Proposal] : PriorStrongJumpTableProposals) {
       if (Addr == ActiveJumpTableCandidateAddr ||
           (!ActiveJumpTableConsumerAudit &&
-           Proposal.ProofRank >= ActiveJumpTableCandidateProofRank))
+           Proposal.ProofRank >= ActiveJumpTableCandidateDependencyRank))
         continue;
       if (Proposal.StorageRanges.size() >
               std::numeric_limits<size_t>::max() - StorageCount ||

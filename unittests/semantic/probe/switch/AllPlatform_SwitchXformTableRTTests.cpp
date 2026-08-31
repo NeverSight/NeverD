@@ -81,7 +81,7 @@ static std::vector<RoundTripTC> makeSwXform4TC(const char *prefix, const char *T
   big += "  }\n";
   big += "  return (" + t + ")(unsigned long)acc; }\n";
 
-  return {
+  std::vector<RoundTripTC> Cases{
     // Three levels of switch nested in a single arm, each dispatching on a
     // different bit-slice of the same accumulator — all three table indices
     // alias one value live across the dispatch block.
@@ -138,6 +138,21 @@ static std::vector<RoundTripTC> makeSwXform4TC(const char *prefix, const char *T
      "  return ("+t+")(unsigned long)acc; }\n",
      {0x77E1ULL}, "SwXform4", Opt},
   };
+  // The i386 -O0 shape previously exhausted the consumer-audit budget.
+  // The x86-64 O2 shape has two dispatches over the same 140-slot table and
+  // previously oscillated their proposal ranks; the O0 source object has one.
+  // Keep the round-trip checks and require every physical consumer so an
+  // opaque branch cannot become an accidental semantic pass.
+  const bool RequireBigLUTSwitch =
+      (p == "x86sww0" && Opt == 0) || (p == "x64sww" && Opt == 2) ||
+      (p == "x64sww0" && Opt == 0);
+  if (RequireBigLUTSwitch)
+    for (RoundTripTC &TC : Cases)
+      if (TC.Name == p + "_biglut") {
+        TC.RecoveredSwitch = RecoveredSwitchExpectation::Required;
+        TC.MinimumRecoveredSwitchCount = p == "x64sww" ? 2 : 1;
+      }
+  return Cases;
 }
 
 // Fifth batch: shapes complementary to biglut — a mid-size dense table (~64

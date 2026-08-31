@@ -13,6 +13,7 @@
 #ifndef NEVERD_IR_LOW_CFGBUILDER_H
 #define NEVERD_IR_LOW_CFGBUILDER_H
 
+#include "neverd/Limits.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/CircleRange.h"
 #include "neverd/ir/low/FuncDetector.h"
@@ -22,7 +23,9 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseSet.h"
 
+#include <algorithm>
 #include <functional>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -34,18 +37,531 @@ namespace neverd {
 namespace detail {
 using JumpTableProofPoint = std::pair<va_t, int>;
 using JumpTableProofLocation = std::pair<int, int>;
-using I386GOTOFFAmbiguityReplayKey =
-    std::tuple<va_t, va_t, int, int, va_t>;
+using I386GOTOFFAmbiguityReplayKey = std::tuple<va_t, va_t, int, int, va_t>;
 /// Stage-local root-cache identity.  Consumer audits exclude the current
 /// branch's own frozen proposal, so sibling candidates sharing every other
 /// dimension must still receive distinct root sets.
-using I386GOTOFFProposalRootCacheKey =
-    std::tuple<va_t, va_t, uint32_t, bool>;
+using I386GOTOFFProposalRootCacheKey = std::tuple<va_t, va_t, uint32_t, bool>;
 
-constexpr I386GOTOFFProposalRootCacheKey makeI386GOTOFFProposalRootCacheKey(
-    va_t CandidateAddr, va_t TableBase, uint32_t ProofRank,
-    bool ConsumerAudit) {
+constexpr I386GOTOFFProposalRootCacheKey
+makeI386GOTOFFProposalRootCacheKey(va_t CandidateAddr, va_t TableBase,
+                                   uint32_t ProofRank, bool ConsumerAudit) {
   return std::make_tuple(CandidateAddr, TableBase, ProofRank, ConsumerAudit);
+}
+
+/// A provisional relative edge is immutable evidence only for a distinct
+/// consumer at a strictly higher least-fixed-point dependency rank.  Equal or
+/// higher-rank proposals would make the proof circular rather than closing a
+/// previously established CFG fact.
+constexpr bool canBorrowProvisionalRelativeEdge(va_t CandidateAddr,
+                                                uint32_t CandidateProofRank,
+                                                va_t ProposalAddr,
+                                                uint32_t ProposalProofRank) {
+  return CandidateAddr != ProposalAddr &&
+         ProposalProofRank < CandidateProofRank;
+}
+
+struct ProvisionalRelativeRuntimeCertificateShape {
+  va_t BranchAddr = InvalidVA;
+  JumpTableStorageRange Storage;
+  va_t TargetAnchor = InvalidVA;
+  uint32_t EntryScale = 0;
+  bool IsSigned = false;
+};
+
+enum class ProvisionalRelativeRuntimeCertificateMatch : uint8_t {
+  NotApplicable,
+  Malformed,
+  Match,
+};
+
+/// A borrowed runtime certificate is immutable-graph evidence from another
+/// producer.  Only an actual match creates the dependency, and every such
+/// dependency must survive into complete-CFG replay metadata.
+constexpr bool provisionalRelativeRuntimeCertificateRequiresCompleteCFGReplay(
+    ProvisionalRelativeRuntimeCertificateMatch Match) {
+  return Match == ProvisionalRelativeRuntimeCertificateMatch::Match;
+}
+
+/// Conservative fixed-work charges for provisional relative proposal and
+/// runtime-certificate comparisons.  Variable target-vector passes and
+/// ordered-container lookups are charged separately at their call sites.
+inline constexpr size_t kProvisionalRelativeProposalFixedComparisonWork = 18;
+inline constexpr size_t kStableRelativeRuntimeCertificateFixedWork = 17;
+inline constexpr size_t kSiblingRelativeRuntimeCertificateFixedWork = 37;
+inline constexpr size_t kSiblingRelativeRuntimeCertificateTargetPasses = 2;
+inline constexpr size_t kStrongJumpTableLoadRoleComparisonWork = 9;
+inline constexpr size_t kStrongJumpTableProposalFixedComparisonWork = 9;
+inline constexpr size_t kPriorOccurrenceCertificateFixedComparisonWork = 13;
+inline constexpr size_t kTargetRoleCertificateFixedComparisonWork = 19;
+inline constexpr size_t kDefaultAddressSpaceLoadFixedComparisonWork = 3;
+
+constexpr bool addLinearComparisonWork(size_t &Total, size_t Count,
+                                       size_t PerElement) {
+  const size_t Max = std::numeric_limits<size_t>::max();
+  if (Count != 0 && PerElement > Max / Count)
+    return false;
+  const size_t Product = Count * PerElement;
+  if (Product > Max - Total)
+    return false;
+  Total += Product;
+  return true;
+}
+
+constexpr std::optional<size_t>
+strongJumpTableLoadRoleVectorComparisonWork(size_t LeftCount,
+                                            size_t RightCount) {
+  size_t Work = 1; // vector size
+  if (!addLinearComparisonWork(Work, std::max(LeftCount, RightCount),
+                               kStrongJumpTableLoadRoleComparisonWork))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr std::optional<size_t>
+strongJumpTableLoadRoleScanComparisonWork(size_t Count) {
+  size_t Work = 0;
+  if (!addLinearComparisonWork(Work, Count,
+                               kStrongJumpTableLoadRoleComparisonWork))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr std::optional<size_t> strongJumpTableProposalComparisonWork(
+    size_t LeftStorageCount, size_t RightStorageCount, size_t LeftRoleCount,
+    size_t RightRoleCount, size_t LeftRelocationCount,
+    size_t RightRelocationCount) {
+  size_t Work = kStrongJumpTableProposalFixedComparisonWork;
+  if (!addLinearComparisonWork(Work,
+                               std::max(LeftStorageCount, RightStorageCount),
+                               /*PerElement=*/4) ||
+      !addLinearComparisonWork(Work, std::max(LeftRoleCount, RightRoleCount),
+                               kStrongJumpTableLoadRoleComparisonWork) ||
+      !addLinearComparisonWork(
+          Work, std::max(LeftRelocationCount, RightRelocationCount),
+          /*PerElement=*/1))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr std::optional<size_t> provisionalRelativeProposalComparisonWork(
+    size_t LeftRoleCount, size_t RightRoleCount, size_t LeftTargetCount,
+    size_t RightTargetCount) {
+  size_t Work = kProvisionalRelativeProposalFixedComparisonWork;
+  if (!addLinearComparisonWork(Work, std::max(LeftRoleCount, RightRoleCount),
+                               kStrongJumpTableLoadRoleComparisonWork) ||
+      !addLinearComparisonWork(Work,
+                               std::max(LeftTargetCount, RightTargetCount),
+                               /*PerElement=*/1))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr std::optional<size_t>
+priorOccurrenceCertificateComparisonWork(size_t StorageCount,
+                                         size_t RoleCount) {
+  size_t Work = kPriorOccurrenceCertificateFixedComparisonWork;
+  if (!addLinearComparisonWork(Work, StorageCount, /*PerElement=*/7) ||
+      !addLinearComparisonWork(Work, RoleCount,
+                               kStrongJumpTableLoadRoleComparisonWork))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr std::optional<size_t>
+siblingStorageIdentityComparisonWork(size_t LeftStorageCount,
+                                     size_t RightStorageCount) {
+  size_t Work = 8;
+  if (!addLinearComparisonWork(Work,
+                               std::max(LeftStorageCount, RightStorageCount),
+                               /*PerElement=*/4))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr std::optional<size_t>
+disjointStorageRangeComparisonWork(size_t LeftStorageCount,
+                                   size_t RightStorageCount) {
+  const size_t Max = std::numeric_limits<size_t>::max();
+  if (LeftStorageCount != 0 && RightStorageCount > Max / LeftStorageCount)
+    return std::nullopt;
+  size_t Work = 3;
+  if (!addLinearComparisonWork(Work, LeftStorageCount * RightStorageCount,
+                               /*PerElement=*/14))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr std::optional<size_t>
+preciseGuardKeyComparisonWork(size_t LeftAlternativeCount,
+                              size_t RightAlternativeCount,
+                              size_t LeftRootCount, size_t RightRootCount) {
+  size_t Work = 15;
+  if (!addLinearComparisonWork(
+          Work, std::max(LeftAlternativeCount, RightAlternativeCount),
+          /*PerElement=*/8) ||
+      !addLinearComparisonWork(Work, std::max(LeftRootCount, RightRootCount),
+                               /*PerElement=*/1))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr std::optional<size_t> proofRootSetComparisonWork(size_t LeftCount,
+                                                           size_t RightCount) {
+  size_t Work = 1; // set size
+  if (!addLinearComparisonWork(Work, std::max(LeftCount, RightCount),
+                               /*PerElement=*/1))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr std::optional<size_t>
+indexExtensionComparisonWork(size_t OccurrenceCount) {
+  size_t Work = 0;
+  if (!addLinearComparisonWork(Work, OccurrenceCount, /*PerElement=*/2))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr std::optional<size_t>
+decoupledRelayTargetLoadComparisonWork(size_t TargetLoadCount) {
+  size_t Work = 0;
+  if (!addLinearComparisonWork(Work, TargetLoadCount, /*PerElement=*/2))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr std::optional<size_t>
+storageOwnershipComparisonWork(size_t StorageRangeCount) {
+  size_t Work = 0;
+  if (!addLinearComparisonWork(Work, StorageRangeCount, /*PerElement=*/10))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr std::optional<size_t>
+authenticatedStorageConsumerComparisonWork(size_t ConsumerCount) {
+  size_t Work = 0;
+  if (!addLinearComparisonWork(Work, ConsumerCount, /*PerElement=*/8))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr std::optional<size_t>
+storageEndComparisonWork(size_t StorageRangeCount) {
+  size_t Work = 0;
+  if (!addLinearComparisonWork(Work, StorageRangeCount, /*PerElement=*/9))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr std::optional<size_t>
+defaultAddressSpaceLoadComparisonWork(size_t OperationCount) {
+  size_t Work = kDefaultAddressSpaceLoadFixedComparisonWork;
+  if (!addLinearComparisonWork(Work, OperationCount, /*PerElement=*/8))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr std::optional<size_t>
+orderedProposalMapMergeComparisonWork(size_t LeftCount, size_t RightCount) {
+  const size_t Max = std::numeric_limits<size_t>::max();
+  if (RightCount > Max - LeftCount)
+    return std::nullopt;
+  size_t Work = 1; // map size
+  if (!addLinearComparisonWork(Work, LeftCount + RightCount,
+                               /*PerElement=*/3))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr std::optional<size_t>
+physicalCodePointerSlotScanWork(size_t StorageRangeCount,
+                                size_t PhysicalSlotCount,
+                                size_t RelocationLookupWork) {
+  size_t Work = 0;
+  if (!addLinearComparisonWork(Work, StorageRangeCount, /*PerElement=*/4) ||
+      RelocationLookupWork > std::numeric_limits<size_t>::max() - 2 ||
+      !addLinearComparisonWork(Work, PhysicalSlotCount,
+                               RelocationLookupWork + 2))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr std::optional<size_t>
+staticSourceRelocationComparisonWork(size_t InitializerCount,
+                                     size_t StaticSourceCount) {
+  size_t Work = 0;
+  if (!addLinearComparisonWork(Work, InitializerCount, /*PerElement=*/8) ||
+      !addLinearComparisonWork(Work, StaticSourceCount, /*PerElement=*/7))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr std::optional<size_t> staticSourceLowOccurrenceComparisonWork(
+    size_t InitializerCount, size_t StaticSourceCount, size_t InputCount) {
+  const size_t Max = std::numeric_limits<size_t>::max();
+  if (InputCount > (Max - 13) / 5)
+    return std::nullopt;
+  const size_t InitializerWork = std::max<size_t>(18, 13 + 5 * InputCount);
+  const size_t SourceWork = std::max<size_t>(17, 12 + 5 * InputCount);
+  size_t Work = 0;
+  if (!addLinearComparisonWork(Work, InitializerCount, InitializerWork) ||
+      !addLinearComparisonWork(Work, StaticSourceCount, SourceWork))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr std::optional<size_t>
+relocationAllowlistRefinementWork(size_t AllowlistCount,
+                                  size_t DirectReadLookupWork) {
+  const size_t Max = std::numeric_limits<size_t>::max();
+  if (DirectReadLookupWork > (Max - 3) / 2)
+    return std::nullopt;
+  size_t Work = 1; // final vector-size equality
+  if (!addLinearComparisonWork(Work, AllowlistCount,
+                               3 + 2 * DirectReadLookupWork))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr std::optional<size_t> scalarVectorComparisonWork(size_t LeftCount,
+                                                           size_t RightCount) {
+  size_t Work = 1; // vector size
+  if (!addLinearComparisonWork(Work, std::max(LeftCount, RightCount),
+                               /*PerElement=*/1))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr std::optional<size_t>
+denseSlotIndexComparisonWork(size_t SlotCount, size_t FixedWork = 1) {
+  size_t Work = FixedWork;
+  if (!addLinearComparisonWork(Work, SlotCount, /*PerElement=*/1))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr std::optional<size_t>
+maskDomainComparisonWork(size_t LeftCoordinateCount,
+                         size_t RightCoordinateCount, size_t LeftWitnessCount,
+                         size_t RightWitnessCount) {
+  size_t Work = 2; // both vector sizes
+  if (!addLinearComparisonWork(
+          Work, std::max(LeftCoordinateCount, RightCoordinateCount),
+          /*PerElement=*/1) ||
+      !addLinearComparisonWork(Work,
+                               std::max(LeftWitnessCount, RightWitnessCount),
+                               /*PerElement=*/22))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr std::optional<size_t>
+maskSuppressionSlotMaterializationWork(size_t RuntimeSlotCount,
+                                       size_t RelocationLookupWork,
+                                       size_t ProtectedLookupWork) {
+  const size_t Max = std::numeric_limits<size_t>::max();
+  if (RelocationLookupWork > Max - 4 ||
+      ProtectedLookupWork > Max - (4 + RelocationLookupWork))
+    return std::nullopt;
+  size_t Work = 1; // destination-vector lifetime
+  if (!addLinearComparisonWork(Work, RuntimeSlotCount,
+                               4 + RelocationLookupWork + ProtectedLookupWork))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr std::optional<size_t> denseSuppressionSlotMaterializationWork(
+    size_t RuntimeSlotCount, size_t SegmentCount, size_t SectionCount,
+    size_t RelocationLookupWork, size_t ProtectedLookupWork) {
+  const size_t Max = std::numeric_limits<size_t>::max();
+  size_t PerSlot = 20;
+  if (!addLinearComparisonWork(PerSlot, SegmentCount, /*PerElement=*/6) ||
+      !addLinearComparisonWork(PerSlot, SectionCount, /*PerElement=*/8) ||
+      RelocationLookupWork > Max - PerSlot ||
+      ProtectedLookupWork > Max - (PerSlot + RelocationLookupWork))
+    return std::nullopt;
+  PerSlot += RelocationLookupWork + ProtectedLookupWork;
+  size_t Work = 2; // both destination-vector lifetimes
+  if (!addLinearComparisonWork(Work, RuntimeSlotCount, PerSlot))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr std::optional<size_t>
+protectedRelocationFilterWork(size_t SlotCount, size_t ProtectedLookupWork) {
+  if (ProtectedLookupWork == std::numeric_limits<size_t>::max())
+    return std::nullopt;
+  size_t Work = 0;
+  if (!addLinearComparisonWork(Work, SlotCount, ProtectedLookupWork + 1))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr size_t orderedContainerLookupWork(size_t Count) {
+  size_t Work = 1;
+  for (size_t N = Count; N > 1; N = N / 2 + N % 2)
+    ++Work;
+  return Work;
+}
+
+constexpr std::optional<size_t> jumpTableProofRootConstructionWork(
+    size_t PersistentRootCount, size_t PriorProposalCount,
+    size_t StorageRangeCount, size_t ExplicitTargetCount,
+    size_t SuppressibleSlotCount, size_t ProtectedSlotCount,
+    size_t SegmentCount, size_t CodePointerRelocationCount,
+    size_t RelocationTargetCount, size_t RelocationSourceCount,
+    size_t DurableRootCount) {
+  const size_t Max = std::numeric_limits<size_t>::max();
+  if (SuppressibleSlotCount > Max - ExplicitTargetCount)
+    return std::nullopt;
+  const size_t CandidateTargetCount =
+      ExplicitTargetCount + SuppressibleSlotCount;
+  const size_t RootLookup = orderedContainerLookupWork(PersistentRootCount);
+  const size_t CandidateTargetLookup =
+      orderedContainerLookupWork(CandidateTargetCount);
+  const size_t SuppressibleLookup =
+      orderedContainerLookupWork(SuppressibleSlotCount);
+  const size_t CodePointerLookup =
+      orderedContainerLookupWork(CodePointerRelocationCount);
+  const size_t DurableRootLookup = orderedContainerLookupWork(DurableRootCount);
+
+  size_t Work = 24; // fixed wrapper/helper early-exit and shape checks
+  if (!addLinearComparisonWork(Work, PriorProposalCount,
+                               /*PerElement=*/4) ||
+      RootLookup > Max - 2 ||
+      !addLinearComparisonWork(Work, PersistentRootCount, RootLookup + 2) ||
+      !addLinearComparisonWork(Work, StorageRangeCount, /*PerElement=*/2) ||
+      CandidateTargetLookup > Max - 2 ||
+      !addLinearComparisonWork(Work, ExplicitTargetCount,
+                               CandidateTargetLookup + 2) ||
+      SuppressibleLookup > Max - 2 ||
+      !addLinearComparisonWork(Work, SuppressibleSlotCount,
+                               SuppressibleLookup + 2) ||
+      SuppressibleLookup == Max ||
+      !addLinearComparisonWork(Work, ProtectedSlotCount,
+                               SuppressibleLookup + 1))
+    return std::nullopt;
+
+  // Each allowed slot replays relocation membership, whole-slot ownership,
+  // loader read inventory, normalization, and ordered target insertion.
+  size_t PerSlot = 8;
+  if (CodePointerLookup > Max - PerSlot)
+    return std::nullopt;
+  PerSlot += CodePointerLookup;
+  if (!addLinearComparisonWork(PerSlot, SegmentCount, /*PerElement=*/2) ||
+      PerSlot > Max - 3)
+    return std::nullopt;
+  PerSlot += 3;
+  if (!addLinearComparisonWork(PerSlot, StorageRangeCount,
+                               /*PerElement=*/6) ||
+      CandidateTargetLookup > Max - 2 ||
+      CandidateTargetLookup + 2 > Max - PerSlot)
+    return std::nullopt;
+  PerSlot += CandidateTargetLookup + 2;
+  if (!addLinearComparisonWork(Work, SuppressibleSlotCount, PerSlot))
+    return std::nullopt;
+
+  size_t PerTarget = 4;
+  if (DurableRootLookup > Max - PerTarget)
+    return std::nullopt;
+  PerTarget += DurableRootLookup;
+  if (CandidateTargetLookup > Max - PerTarget)
+    return std::nullopt;
+  PerTarget += CandidateTargetLookup;
+  if (RootLookup > Max - PerTarget)
+    return std::nullopt;
+  PerTarget += RootLookup;
+  if (!addLinearComparisonWork(Work, RelocationTargetCount, PerTarget))
+    return std::nullopt;
+
+  size_t PerSource = 1;
+  if (SuppressibleLookup > Max - PerSource)
+    return std::nullopt;
+  PerSource += SuppressibleLookup;
+  if (!addLinearComparisonWork(PerSource, StorageRangeCount,
+                               /*PerElement=*/6) ||
+      !addLinearComparisonWork(Work, RelocationSourceCount, PerSource))
+    return std::nullopt;
+  return Work;
+}
+
+constexpr bool comparisonWorkFitsBudget(std::optional<size_t> Work,
+                                        size_t Budget) {
+  return Work && *Work <= Budget;
+}
+
+inline bool isCompleteRelativeRuntimeCertificatePayload(
+    const JumpTableStorageRange &RuntimeRange, llvm::ArrayRef<va_t> Targets) {
+  return RuntimeRange.EntrySize != 0 &&
+         RuntimeRange.EntryStride >= RuntimeRange.EntrySize &&
+         RuntimeRange.PhysicalSlotCount >= limits::kMinJumpTableEntries &&
+         RuntimeRange.PhysicalSlotCount <= limits::kMaxJumpTableEntries &&
+         RuntimeRange.PhysicalSlotCount == Targets.size() &&
+         RuntimeRange.storageEnd().has_value();
+}
+
+inline bool isDenseRelativeRuntimeCertificatePayload(
+    const JumpTableStorageRange &RuntimeRange,
+    llvm::ArrayRef<uint32_t> RuntimeSlotIndices, llvm::ArrayRef<va_t> Targets) {
+  if (!isCompleteRelativeRuntimeCertificatePayload(RuntimeRange, Targets) ||
+      RuntimeSlotIndices.size() != Targets.size())
+    return false;
+  for (size_t I = 0; I < RuntimeSlotIndices.size(); ++I)
+    if (RuntimeSlotIndices[I] != I)
+      return false;
+  return true;
+}
+
+/// Classify a prior complete-runtime certificate for one distinct sibling.
+/// Storage.PhysicalSlotCount is intentionally excluded from the shape: edge-
+/// only templates carry no physical capacity, and the exact runtime range is
+/// checked independently below.
+inline ProvisionalRelativeRuntimeCertificateMatch
+matchProvisionalRelativeRuntimeCertificate(
+    const ProvisionalRelativeRuntimeCertificateShape &Candidate,
+    const ProvisionalRelativeRuntimeCertificateShape &Proposal,
+    const JumpTableStorageRange *RuntimeRange, llvm::ArrayRef<va_t> Targets) {
+  if (Candidate.BranchAddr == Proposal.BranchAddr || !RuntimeRange)
+    return ProvisionalRelativeRuntimeCertificateMatch::NotApplicable;
+  if (Candidate.Storage.BaseAddr != Proposal.Storage.BaseAddr ||
+      Candidate.Storage.EntrySize != Proposal.Storage.EntrySize ||
+      Candidate.Storage.EntryStride != Proposal.Storage.EntryStride ||
+      Candidate.TargetAnchor != Proposal.TargetAnchor ||
+      Candidate.EntryScale != Proposal.EntryScale ||
+      Candidate.IsSigned != Proposal.IsSigned)
+    return ProvisionalRelativeRuntimeCertificateMatch::NotApplicable;
+  if (RuntimeRange->BaseAddr != Candidate.Storage.BaseAddr ||
+      RuntimeRange->EntrySize != Candidate.Storage.EntrySize ||
+      RuntimeRange->EntryStride != Candidate.Storage.EntryStride ||
+      !isCompleteRelativeRuntimeCertificatePayload(*RuntimeRange, Targets))
+    return ProvisionalRelativeRuntimeCertificateMatch::Malformed;
+  return ProvisionalRelativeRuntimeCertificateMatch::Match;
+}
+
+inline bool sameProvisionalRelativeRuntimeCertificatePayload(
+    const JumpTableStorageRange &LeftRange, llvm::ArrayRef<va_t> LeftTargets,
+    const JumpTableStorageRange &RightRange,
+    llvm::ArrayRef<va_t> RightTargets) {
+  return LeftRange == RightRange && LeftTargets.size() == RightTargets.size() &&
+         std::equal(LeftTargets.begin(), LeftTargets.end(),
+                    RightTargets.begin());
+}
+
+/// A complete-range proposal is durable only while its producer has already
+/// published the exact same ordinary CFG edges.  It remains separate from
+/// physical ownership, strong-role arbitration, and relocation suppression.
+inline bool isStableProvisionalRelativeRuntimeCertificate(
+    const JumpTableStorageRange *RuntimeRange,
+    llvm::ArrayRef<va_t> CertifiedTargets,
+    llvm::ArrayRef<va_t> PublishedTargets) {
+  return RuntimeRange && !PublishedTargets.empty() &&
+         isCompleteRelativeRuntimeCertificatePayload(*RuntimeRange,
+                                                     CertifiedTargets) &&
+         CertifiedTargets.size() == PublishedTargets.size() &&
+         std::equal(CertifiedTargets.begin(), CertifiedTargets.end(),
+                    PublishedTargets.begin());
 }
 
 /// Record one exact LowIR occurrence point.  A second operation carrying the
@@ -65,6 +581,26 @@ void retireReplayedI386GOTPCAmbiguities(
     std::set<I386GOTOFFAmbiguityReplayKey> &Pending,
     const std::set<I386GOTOFFAmbiguityReplayKey> &Replayed,
     const std::set<va_t> *SafelyPublishedBranches = nullptr);
+
+using SuppressionOwnerReachabilityQuery =
+    std::function<std::set<va_t>(const std::set<va_t> &)>;
+
+/// Revoke table-root suppression authority until every remaining owner is
+/// reachable in the graph produced with that exact authority set.  The
+/// sequence is decreasing; an adversarial chain that exceeds MaxRounds loses
+/// all authority and receives one final empty-owner query so callers publish a
+/// fail-closed graph rather than stale suppression.
+std::set<va_t> refineRelocationRootSuppressionOwners(
+    std::set<va_t> Owners, const SuppressionOwnerReachabilityQuery &Query,
+    size_t MaxRounds = 8);
+
+/// Merge every cached source slot for the requested roots.  The cache is
+/// sorted by (root, slot); equal roots deliberately retain all slots so one
+/// owned table entry cannot hide an independent relocation with the same
+/// numeric S+A coordinate.
+void mergeRelativeRelocationRootSources(
+    const std::vector<std::pair<va_t, va_t>> &SortedSources,
+    const std::set<va_t> &Roots, std::map<va_t, std::set<va_t>> &RootSources);
 } // namespace detail
 
 class CFGBuilder {
@@ -72,6 +608,21 @@ public:
   /// Build CFG for a single function starting at EntryAddr.
   LowFunc build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
                 const std::string &FuncName = "");
+
+  size_t relativeRelocationRootSourceCacheBuildCountForTesting() const {
+    return RelativeRelocationRootSourceCacheBuildCountForTesting;
+  }
+  size_t relativeRelocationRootSourceCacheLookupCountForTesting() const {
+    return RelativeRelocationRootSourceCacheLookupCountForTesting;
+  }
+  size_t relativeRelocationRootSourceCountForTesting(va_t Root) const {
+    return static_cast<size_t>(
+        std::count_if(RelativeRelocationRootSourceCache.begin(),
+                      RelativeRelocationRootSourceCache.end(),
+                      [&](const std::pair<va_t, va_t> &Source) {
+                        return Source.first == Root;
+                      }));
+  }
 
   /// Provide the set of known function entry addresses so that
   /// sanity checking can reject targets that overlap other functions.
@@ -119,8 +670,7 @@ public:
   /// both one candidate-local account and its enclosing transactional stage;
   /// production leaves this unset so candidates retain the bounded four-way
   /// stage headroom defined in Limits.h.
-  void
-  setMaskFixedPointEvidenceBudgetForTesting(std::optional<size_t> Limit) {
+  void setMaskFixedPointEvidenceBudgetForTesting(std::optional<size_t> Limit) {
     MaskFixedPointEvidenceBudgetForTesting = Limit;
   }
   /// Clamp the shared stage allowance exactly when a recursively discovered
@@ -179,6 +729,32 @@ public:
   /// schedule a case target for a later resolver stage.
   bool hasMaskFixedPointExplorationTargetsForTesting() const {
     return !CandidateFixedPointExplorationTargets.empty();
+  }
+  size_t maxCandidateFixedPointExplorationTargetCountForTesting() const {
+    return MaxCandidateFixedPointExplorationTargetCountForTesting;
+  }
+  /// Stable publication and every rollback/ bounded-exit path must retire both
+  /// immutable-stage relative-edge universes.  Expose only their emptiness so
+  /// tests can lock that transaction invariant without observing certificates.
+  bool hasProvisionalRelativeEdgesForTesting() const {
+    return !PriorProvisionalRelativeEdges.empty() ||
+           !NextProvisionalRelativeEdges.empty();
+  }
+  /// Report only whether this build ever recorded a fully revalidated runtime
+  /// storage certificate.  Transaction tests use this witness to prove a later
+  /// rollback retired real durable evidence rather than an empty proposal map.
+  bool recordedCompleteRuntimeStorageCertificateForTesting() const {
+    return RecordedCompleteRuntimeStorageCertificateForTesting;
+  }
+  /// Expose only the final complete-CFG dependency bit for one published table.
+  /// Focused tests use this to ensure borrowed immutable-graph certificates are
+  /// not lost between proof discovery and persistent JumpTableInfo state.
+  std::optional<bool>
+  resolvedJumpTableRequiresCompleteCFGProofForTesting(va_t BranchAddr) const {
+    const auto It = ResolvedTableInfo.find(BranchAddr);
+    if (It == ResolvedTableInfo.end())
+      return std::nullopt;
+    return It->second.RequiresCompleteCFGProof;
   }
   /// Report only whether stable replay could not retire a previously complete
   /// i386 GOTPC ambiguity proof.  Focused graph-growth tests use this to
@@ -385,6 +961,7 @@ private:
   /// successors and extract jump tables.  Shared by the initial build, the
   /// multi-stage re-resolution, and the indirect-tail-call conversion.
   void rebuildBlocks(LowFunc &Func);
+  void prepareRelativeRelocationRootSourceCache();
   void extractJumpTables(LowFunc &Func);
   std::vector<va_t> resolveJumpTable(const BinaryImage &Img,
                                      const InsnRecord &Rec);
@@ -692,6 +1269,12 @@ private:
     /// range.  MaxEntries is published only after an independent exact index
     /// domain (guard, mask, modulo, or composite recipe) is established.
     uint32_t PhysicalCapacity = 0;
+    /// Exact anchor-bounded run of relative-code relocations at BaseAddr.
+    /// This authenticates physical storage identity only; it never supplies a
+    /// selector domain.  Proposal fixed-point code may use it to identify
+    /// immutable sibling-edge certificates, while publication must still
+    /// replay the complete target/address/domain proof on the final CFG.
+    uint32_t ExactBoundedRelativeRelocationSlots = 0;
     bool IndexDomainAuthenticated = false;
     /// Exact proof witnesses retained so a provisional relocation-root
     /// suppression can be revalidated after final runtime slots shrink the
@@ -707,10 +1290,11 @@ private:
     /// one range from BaseAddr/MaxEntries/EntryIndices.  Composite strategies
     /// must populate every disjoint run explicitly.
     std::vector<JumpTableStorageRange> StorageRanges;
-    /// Exact whole-object identity of an absolute relocation table.  Runtime
+    /// Exact whole-object identity of a relocation-backed table.  Runtime
     /// StorageRanges remain selector-domain-specific, so sparse and full
     /// dispatches over the same object can differ without losing this
-    /// immutable physical identity.
+    /// immutable physical identity.  Identity alone never authorizes
+    /// relocation-root suppression; the final reachable-consumer audit does.
     std::optional<JumpTableStorageRange> ExactPhysicalStorageRange;
     /// Exact code-pointer relocation slots consumed exclusively by this
     /// dispatch.  Unlike StorageRanges, this is an occurrence-level permission
@@ -1040,8 +1624,7 @@ private:
   // one table at min(A,B).  The emitter rebuilds the runtime base select as a
   // single switch over the merged byte-offset index.
   bool tryTwoTableSelect(const BinaryImage &Img, const InsnRecord &Rec,
-                         JumpTableInfo &Info,
-                         size_t *CandidateEvidenceBudget,
+                         JumpTableInfo &Info, size_t *CandidateEvidenceBudget,
                          bool *AnalysisComplete);
   // Detect a two-level "index-byte" table (the classic MSVC sparse-switch
   // lowering): a compact byte/halfword index table maps the switch variable to
@@ -1059,16 +1642,13 @@ private:
   // (1 for a byte index table, the entry width for a halfword one).  Tolerates
   // an unscaled index, which analyzeTableLoadAddr rejects.  Used by
   // tryTwoLevelIndexTable.
-  bool decomposeIndexTableLoadAddr(const BinaryImage &Img,
-                                   const InsnRecord &Rec,
-                                   const std::vector<LowOp> &Ops, int LoadIdx,
-                                   uint16_t EntryWidth, va_t &TableAddr,
-                                   uint64_t &IndexReg, uint32_t &Scale,
-                                   NdVar *IndexValue = nullptr,
-                                   va_t *IndexUseAddr = nullptr,
-                                   int *IndexUseSeq = nullptr,
-                                   std::function<bool(size_t)> ConsumeWork =
-                                       {}) const;
+  bool decomposeIndexTableLoadAddr(
+      const BinaryImage &Img, const InsnRecord &Rec,
+      const std::vector<LowOp> &Ops, int LoadIdx, uint16_t EntryWidth,
+      va_t &TableAddr, uint64_t &IndexReg, uint32_t &Scale,
+      NdVar *IndexValue = nullptr, va_t *IndexUseAddr = nullptr,
+      int *IndexUseSeq = nullptr,
+      std::function<bool(size_t)> ConsumeWork = {}) const;
   /// Fold a register to a loader-mapped address.  Callers may explicitly admit
   /// an unmapped scalar candidate, while the narrower COFF exception admits
   /// only the exact PE image base.  Both exceptions still require
@@ -1109,22 +1689,19 @@ private:
   /// and a check that the comparison actually reaches a conditional branch.
   bool inferBoundsFromLoadAliasGuard(const InsnRecord &Rec,
                                      JumpTableInfo &Info);
-  bool inferBoundsFromModulo(const BinaryImage &Img, const InsnRecord &Rec,
-                             JumpTableInfo &Info,
-                             size_t *AggregateEvidenceBudget,
-                             bool *EvidenceIncomplete = nullptr,
-                             bool RequireProducerReachability = false,
-                             const std::vector<va_t> *CandidateTargetsOverride =
-                                 nullptr,
-                             const std::set<va_t> *ReachableInstructions =
-                                 nullptr,
-                             bool AllowFixedPointBootstrap = true,
-                             std::vector<JumpTableValueOccurrence>
-                                 *AuthenticatedProducers = nullptr,
-                             uint32_t RequiredProducerBound = 0,
-                             const std::vector<JumpTableValueOccurrence>
-                                 *RequiredProducers = nullptr,
-                             bool RestrictProducerDiscovery = false);
+  bool inferBoundsFromModulo(
+      const BinaryImage &Img, const InsnRecord &Rec, JumpTableInfo &Info,
+      size_t *AggregateEvidenceBudget, bool *EvidenceIncomplete = nullptr,
+      bool RequireProducerReachability = false,
+      const std::vector<va_t> *CandidateTargetsOverride = nullptr,
+      const std::set<va_t> *ReachableInstructions = nullptr,
+      bool AllowFixedPointBootstrap = true,
+      std::vector<JumpTableValueOccurrence> *AuthenticatedProducers = nullptr,
+      uint32_t RequiredProducerBound = 0,
+      const std::vector<JumpTableValueOccurrence> *RequiredProducers = nullptr,
+      bool RestrictProducerDiscovery = false,
+      const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides = nullptr,
+      bool RetainProvisionalRelativeEdges = false);
   /// Recover the entry count from an AND mask that confines the table index.
   /// By default only a clean contiguous low-bit mask (`2^k - 1`) is accepted,
   /// since it exactly bounds the index to [0, 2^k).  With \p AllowNonContiguous
@@ -1136,7 +1713,18 @@ private:
   /// pass may bootstrap a cyclic dispatch from a dense constant selector arm;
   /// replay after provisional table edges exist sets
   /// \p RequireProducerReachability so at least one feasible reaching value
-  /// must contain the authenticated mask occurrence.
+  /// must contain the authenticated mask occurrence.  A non-null
+  /// \p CertifiedSiblingRuntimeStorage may replace only the exact physical-
+  /// boundary qualification for the singleton gate.  It never grants storage
+  /// ownership, strong-role arbitration, or relocation-root suppression.  A
+  /// non-null
+  /// \p ExactFiniteRelativeSingletonTarget additionally authorizes returning a
+  /// one-shot relative dispatch's exact finite singleton target, but only
+  /// after its destination graph is closed and proves it cannot return to the
+  /// same branch.  ExactFiniteRelativeClosureUnknown distinguishes a
+  /// sound bootstrap edge whose destination graph is not yet closed from an
+  /// exhausted or disproved domain; callers may retain that edge only in the
+  /// next immutable proposal universe and must not publish a partial domain.
   uint32_t inferBoundsFromMask(
       const InsnRecord &Rec, const JumpTableInfo &Info,
       bool AllowNonContiguous = false, bool *IncompleteIndexDomain = nullptr,
@@ -1149,7 +1737,13 @@ private:
       bool AllowFixedPointBootstrap = true, bool AllowRawDenseShortcut = true,
       size_t *AggregateEvidenceBudget = nullptr,
       bool *SemanticIndexDomainAmbiguous = nullptr,
-      const JumpTableExactConsumerGroup *ExactConsumerGroup = nullptr) const;
+      const JumpTableExactConsumerGroup *ExactConsumerGroup = nullptr,
+      const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides = nullptr,
+      const JumpTableStorageRange *CertifiedSiblingRuntimeStorage = nullptr,
+      std::optional<va_t> *ExactFiniteRelativeSingletonTarget = nullptr,
+      bool *ExactFiniteRelativeClosureUnknown = nullptr,
+      bool RetainProvisionalRelativeEdges = false,
+      bool AllowInlineZeroCapacityBoundedReplay = false) const;
   void detectNormalization(const InsnRecord &Rec, JumpTableInfo &Info);
   void detectStride(const InsnRecord &Rec, JumpTableInfo &Info);
   uint32_t pullBackBound(uint32_t RawBound, const JumpTableInfo &Info) const;
@@ -1215,7 +1809,9 @@ private:
   /// aggregate allowance.
   bool inferBoundsFromPreciseGuards(const InsnRecord &Rec, JumpTableInfo &Info,
                                     size_t *CandidateEvidenceBudget,
-                                    bool UseDefinedAlternativesAsRoots = false);
+                                    bool UseDefinedAlternativesAsRoots = false,
+                                    const std::map<va_t, std::vector<va_t>>
+                                        *CertifiedEdgeOverrides = nullptr);
   bool guardUsesInclusiveCompare(const InsnRecord &Rec,
                                  const JumpTableInfo &Info,
                                  uint64_t Bound) const;
@@ -1237,21 +1833,27 @@ private:
       size_t *GraphWorkBudget = nullptr, size_t LocalMatchEvidenceLimit = 0,
       const std::set<va_t> *CandidateBranchesSharingTargets = nullptr,
       std::vector<uint64_t> *QueryUnsignedFeasibleMasks = nullptr,
-      uint32_t ResolverDepthLimit = 0) const;
+      uint32_t ResolverDepthLimit = 0,
+      const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides =
+          nullptr) const;
   /// Prove that the actual INDIR_BR input is derived from the strategy's exact
   /// TargetLoad occurrence on every feasible path.  Mere address co-occurrence
   /// in static scans or emulation is not sufficient.
   bool branchTargetDependsOnTableLoad(
       const InsnRecord &Rec, const JumpTableInfo &Info,
       size_t *AggregateEvidenceBudget, bool *AnalysisComplete,
-      bool UseDefinedAlternativesAsRoots = false) const;
+      bool UseDefinedAlternativesAsRoots = false,
+      const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides =
+          nullptr) const;
   /// Prove that every authenticated target LOAD reads the declared table role
   /// at that exact occurrence: base + certified-index * physical stride.
   /// Output-to-branch dependence alone is insufficient when a sibling or
   /// ambiguous predecessor can supply a different LOAD address.
   bool tableLoadAddressesMatchRole(
       JumpTableInfo &Info, size_t *AggregateEvidenceBudget,
-      bool *AnalysisComplete, bool UseDefinedAlternativesAsRoots = false) const;
+      bool *AnalysisComplete, bool UseDefinedAlternativesAsRoots = false,
+      const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides = nullptr,
+      bool *DomainInputsChanged = nullptr) const;
   /// Build the root set used while proving one candidate table.  A
   /// relocation-discovered interior label is not an independent entry when
   /// every relocation that names it is a physical slot owned by this exact
@@ -1261,12 +1863,17 @@ private:
   std::set<va_t> jumpTableProofRoots(
       const JumpTableInfo &Info,
       const std::set<va_t> *DecodedTableAnchors = nullptr) const;
+  /// Return the candidate-local reachable instruction set.  When requested,
+  /// ClosedWorldControlFlow is true only if every reachable exit is modeled.
+  /// Calls, opaque/resumable terminators, external successors, unresolved
+  /// transfers, and a required fallthrough with no successor make it false.
   std::set<va_t> candidateReachableInstructions(
       const InsnRecord &Candidate, const std::vector<va_t> &CandidateTargets,
       const std::set<va_t> &Roots,
       const std::vector<JumpTableStorageRange> &CandidateStorage,
-      size_t *GraphWorkBudget = nullptr,
-      bool *AnalysisComplete = nullptr) const;
+      size_t *GraphWorkBudget = nullptr, bool *AnalysisComplete = nullptr,
+      const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides = nullptr,
+      bool *ClosedWorldControlFlow = nullptr) const;
   /// Prove that the conditional branch at BranchAddr actually gates the table
   /// LOAD: it dominates the LOAD and only one of its outgoing CFG edges can
   /// reach the access.  A comparison in a sibling/case-body block is not a
@@ -1278,11 +1885,11 @@ private:
   /// the access or its successor polarity cannot be proved.  A supplied graph
   /// budget is consumed by snapshot construction, reachability, and ownership
   /// checks; exhaustion leaves AnalysisComplete false.
-  std::vector<std::optional<bool>>
-  tableLoadConditionValues(llvm::ArrayRef<va_t> BranchAddrs,
-                           const JumpTableInfo &Info,
-                           bool *AnalysisComplete = nullptr,
-                           size_t *GraphWorkBudget = nullptr) const;
+  std::vector<std::optional<bool>> tableLoadConditionValues(
+      llvm::ArrayRef<va_t> BranchAddrs, const JumpTableInfo &Info,
+      bool *AnalysisComplete = nullptr, size_t *GraphWorkBudget = nullptr,
+      const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides =
+          nullptr) const;
   std::optional<bool>
   tableLoadConditionValue(va_t BranchAddr, const JumpTableInfo &Info,
                           size_t *GraphWorkBudget = nullptr) const;
@@ -1318,7 +1925,7 @@ private:
   };
   struct StrongJumpTableRoleProposal {
     std::vector<JumpTableStorageRange> StorageRanges;
-    /// Exact whole-object identity for an absolute relocation table.  This is
+    /// Exact whole-object identity for a relocation-backed table.  This is
     /// separate from StorageRanges: two dispatches may use different runtime
     /// subsets of the same physical table while still authenticating one
     /// another's exact target LOAD occurrence during consumer arbitration.
@@ -1334,8 +1941,48 @@ private:
 
     bool operator==(const StrongJumpTableRoleProposal &Other) const = default;
   };
+  struct ProvisionalRelativeEdgeProposal {
+    JumpTableStorageRange Storage;
+    /// True only when Storage names a complete, independently bounded local
+    /// object.  Edge-only inline-table certificates leave this false and may
+    /// never be promoted into strong ownership arbitration.
+    bool AuthenticatesPhysicalStorage = false;
+    /// The preceding immutable stage proved every direct runtime coordinate
+    /// in Storage, independently of target-vector cardinality (several slots
+    /// may legitimately share one destination).  This is a one-shot CFG
+    /// replay token only; it grants no selector domain or storage authority.
+    bool CompleteDenseRuntimeCoordinates = false;
+    /// A sparse table that successfully consumed its one-shot complete-
+    /// coordinate token may retain its exact ordinary published edge vector
+    /// for final candidate-local replay.  This is never an edge overlay and is
+    /// invisible to sibling runtime certificates.
+    bool StablePublishedTargetReplay = false;
+    /// Exact dense runtime slots independently proven by this dispatch after
+    /// its final domain, target, address and CFG replay.  This certificate may
+    /// close a distinct sibling's exact singleton in the next immutable LFP
+    /// stage.  It is never strong/physical ownership and grants neither
+    /// relocation-root suppression nor storage outside this runtime range.
+    std::optional<JumpTableStorageRange> CompleteRuntimeStorageRange;
+    va_t TargetAnchor = InvalidVA;
+    uint32_t EntryScale = 0;
+    bool IsSigned = false;
+    std::vector<StrongJumpTableLoadRole> LoadRoles;
+    std::vector<va_t> Targets;
+    uint32_t ProofRank = 0;
+
+    bool
+    operator==(const ProvisionalRelativeEdgeProposal &Other) const = default;
+  };
   enum class StrongJumpTableProposalOutcome : uint8_t {
     DefinitiveLocalProofLoss,
+    /// A complete immutable self-edge replay reached a semantic rejection.
+    /// The commit consumes that one-shot token monotonically; resource
+    /// exhaustion uses EvidenceIncomplete instead and rolls the stage back.
+    SelfReplayDefinitiveLocalProofLoss,
+    /// A distinct raw sibling may publish a complete runtime certificate later
+    /// in the same frozen candidate batch.  The current strong role is still
+    /// withdrawn, but quarantine must wait for the next immutable universe.
+    AwaitingSiblingRuntimeCertificate,
     SemanticOpaque,
     EvidenceIncomplete,
     StrongProposed,
@@ -1350,6 +1997,12 @@ private:
   /// the certificate universe visible to arbitration.
   std::map<va_t, StrongJumpTableRoleProposal> PriorStrongJumpTableProposals;
   std::map<va_t, StrongJumpTableRoleProposal> NextStrongJumpTableProposals;
+  /// Immutable, lower-rank CFG edges used only by reaching-definition proofs
+  /// while a relative table closes its proposal fixed point.  Unlike strong
+  /// role proposals, these edges grant no storage ownership, relocation-root
+  /// suppression, selector domain, or publication authority.
+  std::map<va_t, ProvisionalRelativeEdgeProposal> PriorProvisionalRelativeEdges;
+  std::map<va_t, ProvisionalRelativeEdgeProposal> NextProvisionalRelativeEdges;
   std::map<va_t, StrongJumpTableProposalOutcome>
       StrongJumpTableProposalOutcomes;
   /// Complete mutation inventory for the active transactional stage.  It is
@@ -1397,6 +2050,7 @@ private:
   va_t ForcedUntrackedJumpTableCandidateAddrForTesting = InvalidVA;
   bool UntrackedJumpTableCandidateProvisionalStateObservedForTesting = false;
   bool UntrackedJumpTableCandidateStateClearedOnRollbackForTesting = false;
+  bool RecordedCompleteRuntimeStorageCertificateForTesting = false;
   bool NestedMutationTrackingEvidenceExhaustedForTesting = false;
   va_t NestedMutationTrackingEvidenceExhaustedAddrForTesting = InvalidVA;
   bool ConstBaseLocalShapeClaimedForTesting = false;
@@ -1442,6 +2096,10 @@ private:
   /// replay.  resolveJumpTable scopes both fields transactionally.
   va_t ActiveJumpTableCandidateAddr = InvalidVA;
   uint32_t ActiveJumpTableCandidateProofRank = 0;
+  /// Highest dependency rank the current proof may borrow from.  A one-shot
+  /// replay publishes at ProofRank+1 while keeping this ceiling at the prior
+  /// rank, so same-rank siblings never become accidental lower-rank evidence.
+  uint32_t ActiveJumpTableCandidateDependencyRank = 0;
   /// Local core replay borrows only lower ranks.  Once that core is complete,
   /// the transactional consumer audit may hide synthetic roots from every
   /// other frozen proposal; a lost proposal forces another resolver round.
@@ -1451,6 +2109,11 @@ private:
   /// revalidation, but it must not arbitrate table storage or conditional code
   /// roots until its branch is reachable again.
   std::set<va_t> PublishedReachableInsns;
+  /// Block starts in that same effective CFG.  Raw BlockStarts intentionally
+  /// retains decoded provisional/interior roots for later revalidation; path
+  /// queries must use this filtered boundary inventory so a retired speculative
+  /// root cannot split a real producer from its consumer.
+  std::vector<va_t> PublishedBlockStarts;
 
   std::map<va_t, InsnRecord> Insns;
   std::set<va_t> BlockStarts;
@@ -1530,8 +2193,14 @@ private:
   /// used only to continue recursive descent in the next bounded resolver
   /// stage; they are never published as a jump table until the complete least
   /// fixed point closes.
-  mutable std::map<va_t, std::vector<va_t>>
+  struct CandidateFixedPointExploration {
+    std::vector<va_t> Targets;
+    bool RequiresGraphGrowth = false;
+    bool CompleteDenseRuntimeCoordinates = false;
+  };
+  mutable std::map<va_t, CandidateFixedPointExploration>
       CandidateFixedPointExplorationTargets;
+  mutable size_t MaxCandidateFixedPointExplorationTargetCountForTesting = 0;
   /// Branches whose stack-table proof stopped because the current stage's
   /// allowance was exhausted.  They are neither failed table proofs nor
   /// tail-call evidence: retain their original opaque indirect-branch identity
@@ -1552,8 +2221,7 @@ private:
   /// generation-local representations.  The branch/use occurrence, selected
   /// input side and table base are immutable and therefore suitable for exact
   /// pending/replay retirement.
-  using I386GOTOFFAmbiguityReplayKey =
-      detail::I386GOTOFFAmbiguityReplayKey;
+  using I386GOTOFFAmbiguityReplayKey = detail::I386GOTOFFAmbiguityReplayKey;
   /// Same-stage memoization additionally includes the concrete LowIR input
   /// and candidate proof roots, because those affect the actual graph query
   /// even though they must not leak into the cross-generation replay key.
@@ -1571,8 +2239,7 @@ private:
   /// growth may therefore preserve the branch identity without publishing the
   /// provisional proof.
   std::set<va_t> PendingAmbiguousI386GOTPCBranches;
-  std::set<I386GOTOFFAmbiguityReplayKey>
-      PendingAmbiguousI386GOTPCKeys;
+  std::set<I386GOTOFFAmbiguityReplayKey> PendingAmbiguousI386GOTPCKeys;
   /// Generation-local shadow for AmbiguousI386GOTPCBranches.  A resolver
   /// stage may discover new case edges after proving MayDepend, so only the
   /// stable no-progress graph is allowed to commit this semantic certificate.
@@ -1582,13 +2249,11 @@ private:
   /// retire a pending fail-closed carry only with this per-branch replay marker
   /// merely reaching a global fixed point does not prove that a changed slice
   /// revisited the proof seam.
-  mutable std::set<I386GOTOFFAmbiguityReplayKey>
-      StageReplayedI386GOTPCKeys;
+  mutable std::set<I386GOTOFFAmbiguityReplayKey> StageReplayedI386GOTPCKeys;
   /// Positive ambiguity query keys accumulated by the current candidate.  The
   /// top-level resolver moves them into stage/pending state only after the
   /// candidate-local account has prepaid all persistent set work.
-  mutable std::set<I386GOTOFFAmbiguityReplayKey>
-      CurrentI386GOTOFFAmbiguityKeys;
+  mutable std::set<I386GOTOFFAmbiguityReplayKey> CurrentI386GOTOFFAmbiguityKeys;
   /// Candidate root sets are stable only within one resolver graph.  The
   /// current branch is part of the key because a consumer audit excludes that
   /// branch's own frozen proposal while retaining its siblings.  Cache
@@ -1606,8 +2271,7 @@ private:
     bool AmbiguousQueryIssued = false;
     bool AmbiguousReach = false;
   };
-  mutable std::map<I386GOTOFFModelReachCacheKey,
-                   I386GOTOFFModelReachResult>
+  mutable std::map<I386GOTOFFModelReachCacheKey, I386GOTOFFModelReachResult>
       I386GOTOFFModelReachCache;
   bool consumeI386GOTOFFProposalEvidence(size_t Amount = 1) const {
     if (Amount > I386GOTOFFProposalEvidenceRemaining) {
@@ -1618,8 +2282,7 @@ private:
     I386GOTOFFProposalEvidenceRemaining -= Amount;
     return true;
   }
-  bool consumeIncompleteBranchMarkerEvidence(
-      size_t Amount = 1) const {
+  bool consumeIncompleteBranchMarkerEvidence(size_t Amount = 1) const {
     if (Amount > IncompleteBranchMarkerEvidenceRemaining) {
       IncompleteBranchMarkerEvidenceRemaining = 0;
       IncompleteBranchMarkerEvidenceIncomplete = true;
@@ -1655,6 +2318,21 @@ private:
   /// next-entry boundary must never populate this range.
   std::optional<std::pair<va_t, va_t>> AuthoritativeCurrentFuncRange;
   const BinaryImage *CurrentImg = nullptr;
+  /// One-build reverse index for image-global 32-bit relative-code
+  /// relocations.  rebuildBlocks may run many times during resolver fixed-point
+  /// replay; scanning every image slot on every stage multiplies unrelated
+  /// module size into per-function work.  build() invalidates this cache even
+  /// when the BinaryImage pointer and slot count are unchanged, because callers
+  /// may reuse a mutable image object between builds.
+  bool RelativeRelocationRootSourceCachePrepared = false;
+  const BinaryImage *RelativeRelocationRootSourceCacheImage = nullptr;
+  Arch RelativeRelocationRootSourceCacheArch = Arch::Unknown;
+  InstructionMode RelativeRelocationRootSourceCacheMode =
+      InstructionMode::Default;
+  size_t RelativeRelocationRootSourceCacheSlotCount = 0;
+  std::vector<std::pair<va_t, va_t>> RelativeRelocationRootSourceCache;
+  size_t RelativeRelocationRootSourceCacheBuildCountForTesting = 0;
+  size_t RelativeRelocationRootSourceCacheLookupCountForTesting = 0;
   const std::set<va_t> *KnownFuncEntries = nullptr;
   const std::set<va_t> *CrossFunctionContinuationRoots = nullptr;
   const std::set<va_t> *ProtectedJumpTableRelocationSlots = nullptr;

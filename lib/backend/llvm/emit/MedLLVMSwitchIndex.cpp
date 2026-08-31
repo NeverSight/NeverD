@@ -161,9 +161,18 @@ std::optional<MedVar> MedLLVMEmitter::tracePredSwitchIndex(
 std::optional<MedVar> MedLLVMEmitter::constIndexFromTableLoad(
     const MedVar &Val,
     const std::function<const MedOp *(const MedVar &)> &defOf,
-    const JumpTable &JT) const {
+    const JumpTable &JT, bool RequireAuthenticatedLoad) const {
   if (JT.EntrySize == 0 || !JT.HasBaseAddr || JT.Targets.empty() ||
-      Val.isConst())
+      Val.isConst() || !JT.HasDispatchSlotMap ||
+      JT.SlotIndices.size() != JT.Targets.size())
+    return std::nullopt;
+  const std::set<uint32_t> UniqueSlots(JT.SlotIndices.begin(),
+                                       JT.SlotIndices.end());
+  if (UniqueSlots.size() != JT.SlotIndices.size())
+    return std::nullopt;
+  const uint64_t PhysicalStride =
+      JT.EntryStride != 0 ? JT.EntryStride : JT.EntrySize;
+  if (PhysicalStride < JT.EntrySize)
     return std::nullopt;
 
   // Trace the value to the LOAD that read the table entry.
@@ -185,8 +194,35 @@ std::optional<MedVar> MedLLVMEmitter::constIndexFromTableLoad(
       break;
     }
   }
-  if (!Load || Load->NumInputs < 1)
+  if (!Load || Load->NumInputs < 1 || Load->Output.Size != JT.EntrySize)
     return std::nullopt;
+
+  if (RequireAuthenticatedLoad) {
+    // A missing exact selector may be replaced only by the one surviving
+    // resolver-authenticated table read. Addr alone is not an occurrence
+    // identity, and duplicated Med occurrences are deliberately ambiguous.
+    const auto AuthenticatedMatches = std::count_if(
+        JT.AuthenticatedTableLoads.begin(), JT.AuthenticatedTableLoads.end(),
+        [&](const JumpTableOpOccurrence &Occurrence) {
+          return Occurrence.Addr == Load->Addr &&
+                 Occurrence.Seq == Load->OriginSeq &&
+                 Occurrence.Size == Load->Output.Size;
+        });
+    if (AuthenticatedMatches != 1 || !CurMedFunc)
+      return std::nullopt;
+    size_t SurvivingMatches = 0;
+    bool CurrentLoadIsUniqueMatch = false;
+    for (const MedBlock &Block : CurMedFunc->Blocks)
+      for (const MedOp &Op : Block.Ops)
+        if (Op.Opcode == NdOp::LOAD && Op.Addr == Load->Addr &&
+            Op.OriginSeq == Load->OriginSeq &&
+            Op.Output.Size == Load->Output.Size) {
+          ++SurvivingMatches;
+          CurrentLoadIsUniqueMatch = &Op == Load;
+        }
+    if (SurvivingMatches != 1 || !CurrentLoadIsUniqueMatch)
+      return std::nullopt;
+  }
 
   // Decompose the load address into an optional single opaque base subtree plus
   // a sum of constant addends, rejecting any scaled variable index.  Pure
@@ -238,7 +274,15 @@ std::optional<MedVar> MedLLVMEmitter::constIndexFromTableLoad(
       TooDeep = true;
       return;
     }
+    // An exact LowIR GOTOFF certificate models the selected i386 GOT base as
+    // zero in relocatable-object coordinates.  Preserve that authoritative
+    // model while folding a constant table slot; descending into the raw
+    // call/pop arithmetic would instead reintroduce its architectural PC.
+    if (valueIsAuthenticatedModelZero(V))
+      return;
     V = skipPassThrough(V);
+    if (valueIsAuthenticatedModelZero(V))
+      return;
     if (V.isConst()) {
       accumulate(V.ConstVal & AddressMask, Sign);
       return;
@@ -316,8 +360,6 @@ std::optional<MedVar> MedLLVMEmitter::constIndexFromTableLoad(
   //   * B == *litpool    — the opaque base is a LOAD of a PC-relative table
   //                        displacement from a constant literal-pool VA
   //                        (ARM32): offset = ConstSum + *litpool - JT.BaseAddr.
-  const uint64_t PhysicalStride =
-      JT.EntryStride != 0 ? JT.EntryStride : JT.EntrySize;
   auto tryOffset = [&](uint64_t Off) -> std::optional<uint64_t> {
     Off &= AddressMask;
     if (PhysicalStride == 0 || Off % PhysicalStride != 0)
@@ -405,29 +447,21 @@ std::optional<MedVar> MedLLVMEmitter::tracePredConstDispatchIndex(
       }
   if (!Found)
     return std::nullopt;
-  return constIndexFromTableLoad(Stored, defOf, JT);
+  return constIndexFromTableLoad(Stored, defOf, JT,
+                                 /*RequireAuthenticatedLoad=*/false);
 }
 
 std::optional<MedVar>
-MedLLVMEmitter::traceConstBranchIndex(const MedOp &BrOp,
-                                      const JumpTable &JT) const {
+MedLLVMEmitter::traceConstBranchIndex(const MedOp &BrOp, const JumpTable &JT,
+                                      bool RequireAuthenticatedLoad) const {
   if (!CurMedFunc || BrOp.NumInputs < 1 || BrOp.Inputs[0].isConst())
     return std::nullopt;
-  // The table read may sit in a dominating block (a hoisted load), so the def
-  // map spans the whole function; the in-block tracers only see the dispatch
-  // block.
-  std::map<std::pair<int, int>, const MedOp *> Defs;
-  for (auto &B : CurMedFunc->Blocks)
-    for (auto &Op : B.Ops)
-      if (!Op.Output.isConst() && Op.Output.Size > 0)
-        Defs[{Op.Output.Id, Op.Output.SSAVer}] = &Op;
-  auto defOf = [&](const MedVar &V) -> const MedOp * {
-    if (V.isConst())
-      return nullptr;
-    auto It = Defs.find({V.Id, V.SSAVer});
-    return It == Defs.end() ? nullptr : It->second;
-  };
-  return constIndexFromTableLoad(BrOp.Inputs[0], defOf, JT);
+  // The table read may sit in a dominating block (a hoisted load), so use the
+  // canonical function-wide definition index. Its identity includes Kind;
+  // register/temp Id collisions must not select another value's LOAD.
+  auto defOf = [&](const MedVar &V) -> const MedOp * { return lookupDef(V); };
+  return constIndexFromTableLoad(BrOp.Inputs[0], defOf, JT,
+                                 RequireAuthenticatedLoad);
 }
 
 std::optional<uint64_t> MedLLVMEmitter::predTableBaseVA(

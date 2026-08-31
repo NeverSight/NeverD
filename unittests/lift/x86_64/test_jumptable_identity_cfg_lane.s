@@ -2575,4 +2575,250 @@ jt_identity_mask_or_pruned_sibling_clean_table:
         .long jt_identity_mask_or_pruned_sibling_poison7-jt_identity_mask_or_pruned_sibling_clean_table
         .size jt_identity_mask_or_pruned_sibling_clean_table, .-jt_identity_mask_or_pruned_sibling_clean_table
 
+// This is the two-stage dispatch shape from x64o40_peel8.  A PC-relative
+// relocation records S+A-P at each physical slot, so treating S+A as an
+// independent code root points past the real case by the slot byte offset.
+// Slot three of the final table consequently seeds case3+12 inside canonical
+// code.  Once both exact tables are published, that relocation-only decode
+// stream must not split or enter the public CFG; the decoded cache may retain
+// it for replay.
+        .text
+        .globl  jt_identity_relative_reloc_root_cleanup
+        .type   jt_identity_relative_reloc_root_cleanup,@function
+jt_identity_relative_reloc_root_cleanup:
+        orl     $1, %edi
+        imulq   $891408307, %rdi, %rax
+        shrq    $32, %rax
+        movl    %edi, %ecx
+        subl    %eax, %ecx
+        shrl    %ecx
+        addl    %eax, %ecx
+        shrl    $5, %ecx
+        imull   $53, %ecx, %eax
+        movl    %edi, %ecx
+        subl    %eax, %ecx
+        movl    %edi, %edx
+        andl    $7, %edx
+        movl    $2, %eax
+        decl    %edx
+        leaq    jt_identity_relative_reloc_root_cleanup_peeled_table(%rip), %rsi
+        movslq  (%rsi,%rdx,4), %rdx
+        addq    %rsi, %rdx
+        .globl  jt_identity_relative_reloc_root_cleanup_peeled_branch
+jt_identity_relative_reloc_root_cleanup_peeled_branch:
+        jmpq    *%rdx
+.Lrrc_peeled_case3:
+        movl    $2, %eax
+        jmp     .Lrrc_peeled_join1
+.Lrrc_peeled_default:
+        movl    $8, %ecx
+        jmp     .Lrrc_peeled_join2
+.Lrrc_peeled_case2:
+        movl    $14, %eax
+.Lrrc_peeled_join1:
+        subl    %ecx, %eax
+        movl    $6, %ecx
+        jmp     .Lrrc_peeled_join2
+.Lrrc_peeled_case1:
+        movl    $4, %ecx
+.Lrrc_peeled_join2:
+        xorl    %edx, %edx
+        cmpl    %eax, %ecx
+        seta    %dl
+        movl    $239, %esi
+        imull   $1103515245, %edi, %edi
+        addl    $12345, %edi
+        imulq   $891408307, %rdi, %r8
+        shrq    $32, %r8
+        movl    %edi, %r9d
+        subl    %r8d, %r9d
+        shrl    %r9d
+        addl    %r8d, %r9d
+        shrl    $5, %r9d
+        imull   $53, %r9d, %r8d
+        movl    %edi, %r9d
+        subl    %r8d, %r9d
+        movl    %edi, %r10d
+        andl    $7, %r10d
+        leaq    jt_identity_relative_reloc_root_cleanup_table(%rip), %r8
+        movslq  (%r8,%r10,4), %r10
+        addq    %r8, %r10
+        .globl  jt_identity_relative_reloc_root_cleanup_seed_branch
+jt_identity_relative_reloc_root_cleanup_seed_branch:
+        jmpq    *%r10
+.Lrrc_loop:
+.Lrrc_case0:
+        imull   $1103515245, %edi, %edi
+        addl    $12345, %edi
+        imulq   $891408307, %rdi, %r9
+        shrq    $32, %r9
+        movl    %edi, %r10d
+        subl    %r9d, %r10d
+        shrl    %r10d
+        addl    %r9d, %r10d
+        shrl    $5, %r10d
+        imull   $53, %r10d, %r10d
+        movl    %edi, %r9d
+        subl    %r10d, %r9d
+        movl    %edi, %r10d
+        andl    $7, %r10d
+        movslq  (%r8,%r10,4), %r10
+        addq    %r8, %r10
+        .globl  jt_identity_relative_reloc_root_cleanup_loop_branch
+jt_identity_relative_reloc_root_cleanup_loop_branch:
+        jmpq    *%r10
+.Lrrc_case1:
+        leal    (%rcx,%rcx,2), %ecx
+        addl    %r9d, %ecx
+        jmp     .Lrrc_join
+.Lrrc_case7:
+        addl    %eax, %ecx
+        jmp     .Lrrc_join
+        .globl  jt_identity_relative_reloc_root_cleanup_case3
+jt_identity_relative_reloc_root_cleanup_case3:
+        leal    (,%rax,8), %r10d
+        subl    %eax, %r10d
+        subl    %r9d, %r10d
+        movl    %r10d, %eax
+        jmp     .Lrrc_join
+.Lrrc_case5:
+        shrl    %ecx
+        movl    %eax, %r9d
+        shrl    %r9d
+.Lrrc_case4:
+        addl    %ecx, %r9d
+        movl    %r9d, %ecx
+        jmp     .Lrrc_join
+.Lrrc_case2:
+        subl    %r9d, %eax
+        jmp     .Lrrc_join
+.Lrrc_case6:
+        leal    (%rcx,%rax,4), %ecx
+        jmp     .Lrrc_join
+.Lrrc_case8:
+        movl    %ecx, %r9d
+        shrl    $3, %r9d
+        addl    %eax, %r9d
+        movl    %r9d, %eax
+.Lrrc_join:
+        imull   $131, %edx, %edx
+        cmpl    %ecx, %eax
+        adcl    $0, %edx
+        decl    %esi
+        jne     .Lrrc_loop
+        addl    %eax, %eax
+        xorl    %ecx, %eax
+        xorl    %edx, %eax
+        retq
+        .size jt_identity_relative_reloc_root_cleanup, .-jt_identity_relative_reloc_root_cleanup
+
+        .section .rodata,"a",@progbits
+        .p2align 2
+        .globl  jt_identity_relative_reloc_root_cleanup_peeled_table
+        .type   jt_identity_relative_reloc_root_cleanup_peeled_table,@object
+jt_identity_relative_reloc_root_cleanup_peeled_table:
+        .long .Lrrc_peeled_case3-jt_identity_relative_reloc_root_cleanup_peeled_table
+        .long .Lrrc_loop-jt_identity_relative_reloc_root_cleanup_peeled_table
+        .long .Lrrc_peeled_case2-jt_identity_relative_reloc_root_cleanup_peeled_table
+        .long .Lrrc_loop-jt_identity_relative_reloc_root_cleanup_peeled_table
+        .long .Lrrc_peeled_case1-jt_identity_relative_reloc_root_cleanup_peeled_table
+        .long .Lrrc_loop-jt_identity_relative_reloc_root_cleanup_peeled_table
+        .long .Lrrc_peeled_default-jt_identity_relative_reloc_root_cleanup_peeled_table
+        .size jt_identity_relative_reloc_root_cleanup_peeled_table, .-jt_identity_relative_reloc_root_cleanup_peeled_table
+        .globl  jt_identity_relative_reloc_root_cleanup_table
+        .type   jt_identity_relative_reloc_root_cleanup_table,@object
+jt_identity_relative_reloc_root_cleanup_table:
+        .long .Lrrc_case1-jt_identity_relative_reloc_root_cleanup_table
+        .long .Lrrc_case2-jt_identity_relative_reloc_root_cleanup_table
+        .long .Lrrc_case6-jt_identity_relative_reloc_root_cleanup_table
+        .long jt_identity_relative_reloc_root_cleanup_case3-jt_identity_relative_reloc_root_cleanup_table
+        .long .Lrrc_case4-jt_identity_relative_reloc_root_cleanup_table
+        .long .Lrrc_case5-jt_identity_relative_reloc_root_cleanup_table
+        .long .Lrrc_case8-jt_identity_relative_reloc_root_cleanup_table
+        .long .Lrrc_case7-jt_identity_relative_reloc_root_cleanup_table
+        .size jt_identity_relative_reloc_root_cleanup_table, .-jt_identity_relative_reloc_root_cleanup_table
+
+// The same relocation-derived coordinate is also the target of an ordinary
+// direct edge.  That independent control-flow owner keeps it as a real block
+// boundary even though the table consumes the relocation slot.
+        .text
+        .globl  jt_identity_relative_reloc_direct_edge
+        .type   jt_identity_relative_reloc_direct_edge,@function
+jt_identity_relative_reloc_direct_edge:
+        testl   %esi, %esi
+        jne     jt_identity_relative_reloc_direct_edge_root
+        andl    $1, %edi
+        leaq    jt_identity_relative_reloc_direct_edge_table(%rip), %rax
+        movslq  (%rax,%rdi,4), %rcx
+        addq    %rax, %rcx
+        jmpq    *%rcx
+        .globl  jt_identity_relative_reloc_direct_edge_case0
+jt_identity_relative_reloc_direct_edge_case0:
+        movl    $6700, %eax
+        retq
+        .globl  jt_identity_relative_reloc_direct_edge_case1
+jt_identity_relative_reloc_direct_edge_case1:
+        .byte   0x0f, 0x1f, 0x40, 0x00
+        .globl  jt_identity_relative_reloc_direct_edge_root
+jt_identity_relative_reloc_direct_edge_root:
+        movl    $6701, %eax
+        retq
+        .size jt_identity_relative_reloc_direct_edge, .-jt_identity_relative_reloc_direct_edge
+
+        .section .rodata,"a",@progbits
+        .p2align 2
+        .globl  jt_identity_relative_reloc_direct_edge_table
+        .type   jt_identity_relative_reloc_direct_edge_table,@object
+jt_identity_relative_reloc_direct_edge_table:
+        .long jt_identity_relative_reloc_direct_edge_case0-jt_identity_relative_reloc_direct_edge_table
+        .long jt_identity_relative_reloc_direct_edge_case1-jt_identity_relative_reloc_direct_edge_table
+        .size jt_identity_relative_reloc_direct_edge_table, .-jt_identity_relative_reloc_direct_edge_table
+
+// A separate relative relocation names the same S+A coordinate as slot one.
+// The table owns only its own relative slot, so the partially owned
+// multi-source root must remain independently reachable and keep its boundary.
+        .text
+        .globl  jt_identity_relative_reloc_multi_source
+        .type   jt_identity_relative_reloc_multi_source,@function
+jt_identity_relative_reloc_multi_source:
+        andl    $1, %edi
+        leaq    jt_identity_relative_reloc_multi_source_table(%rip), %rax
+        movslq  (%rax,%rdi,4), %rcx
+        addq    %rax, %rcx
+        jmpq    *%rcx
+        .globl  jt_identity_relative_reloc_multi_source_case0
+jt_identity_relative_reloc_multi_source_case0:
+        movl    $6800, %eax
+        retq
+        .globl  jt_identity_relative_reloc_multi_source_case1
+jt_identity_relative_reloc_multi_source_case1:
+        movl    $6801, %eax
+        retq
+        .size jt_identity_relative_reloc_multi_source, .-jt_identity_relative_reloc_multi_source
+
+        .section .rodata,"a",@progbits
+        .p2align 2
+        .globl  jt_identity_relative_reloc_multi_source_table
+        .type   jt_identity_relative_reloc_multi_source_table,@object
+jt_identity_relative_reloc_multi_source_table:
+        .long jt_identity_relative_reloc_multi_source_case0-jt_identity_relative_reloc_multi_source_table
+        .long jt_identity_relative_reloc_multi_source_case1-jt_identity_relative_reloc_multi_source_table
+        .size jt_identity_relative_reloc_multi_source_table, .-jt_identity_relative_reloc_multi_source_table
+
+        .section .rodata,"a",@progbits
+        .p2align 2
+        .globl  jt_identity_relative_reloc_multi_source_pointer
+        .type   jt_identity_relative_reloc_multi_source_pointer,@object
+jt_identity_relative_reloc_multi_source_pointer:
+        .long jt_identity_relative_reloc_multi_source_case1+4-.
+        .size jt_identity_relative_reloc_multi_source_pointer, 4
+
+        .data
+        .p2align 3
+        .globl  jt_identity_relative_reloc_multi_source_seed_pointer
+        .type   jt_identity_relative_reloc_multi_source_seed_pointer,@object
+jt_identity_relative_reloc_multi_source_seed_pointer:
+        .quad jt_identity_relative_reloc_multi_source_case1+4
+        .size jt_identity_relative_reloc_multi_source_seed_pointer, 8
+
         .section .note.GNU-stack,"",@progbits

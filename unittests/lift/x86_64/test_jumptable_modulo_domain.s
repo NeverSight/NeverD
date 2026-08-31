@@ -1998,6 +1998,38 @@ jt_modulo_lfp_relative_positive_table:
         .long .Lmodulo_lfp_rel_positive_case4-jt_modulo_lfp_relative_positive_table
         .size jt_modulo_lfp_relative_positive_table, .-jt_modulo_lfp_relative_positive_table
 
+// Five runtime coordinates intentionally share three CFG destinations.  The
+// provisional graph-growth queue must retain edges, not physical-slot history.
+        .text
+        .globl  jt_modulo_lfp_relative_duplicate_targets
+        .type   jt_modulo_lfp_relative_duplicate_targets,@function
+jt_modulo_lfp_relative_duplicate_targets:
+        movl    %edi, %eax
+        xorl    %edx, %edx
+        movl    $5, %ecx
+        divl    %ecx
+        movl    %edx, %r10d
+        leaq    jt_modulo_lfp_relative_duplicate_table(%rip), %rax
+        movslq  (%rax,%r10,4), %rdx
+        addq    %rax, %rdx
+        jmpq    *%rdx
+.Lmodulo_lfp_rel_duplicate_case0: movl $4990, %eax; retq
+.Lmodulo_lfp_rel_duplicate_case1: movl $4991, %eax; retq
+.Lmodulo_lfp_rel_duplicate_case2: movl $4992, %eax; retq
+        .size jt_modulo_lfp_relative_duplicate_targets, .-jt_modulo_lfp_relative_duplicate_targets
+
+        .section .rodata.jt_modulo_lfp_relative_duplicate,"a",@progbits
+        .p2align 2
+        .globl  jt_modulo_lfp_relative_duplicate_table
+        .type   jt_modulo_lfp_relative_duplicate_table,@object
+jt_modulo_lfp_relative_duplicate_table:
+        .long .Lmodulo_lfp_rel_duplicate_case0-jt_modulo_lfp_relative_duplicate_table
+        .long .Lmodulo_lfp_rel_duplicate_case1-jt_modulo_lfp_relative_duplicate_table
+        .long .Lmodulo_lfp_rel_duplicate_case1-jt_modulo_lfp_relative_duplicate_table
+        .long .Lmodulo_lfp_rel_duplicate_case2-jt_modulo_lfp_relative_duplicate_table
+        .long .Lmodulo_lfp_rel_duplicate_case2-jt_modulo_lfp_relative_duplicate_table
+        .size jt_modulo_lfp_relative_duplicate_table, .-jt_modulo_lfp_relative_duplicate_table
+
         .text
         .globl  jt_modulo_factorized_six_wrong_factor
         .type   jt_modulo_factorized_six_wrong_factor,@function

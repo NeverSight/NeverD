@@ -109,6 +109,7 @@ void CFGBuilder::exploreAddressTakenRoots(const BinaryImage &Img,
   for (;;) {
     std::set<va_t> Candidates;
     std::set<va_t> RelocationCandidates;
+    std::set<va_t> ProtectedRelativeRelocationCandidates;
     std::set<va_t> CrossFunctionContinuationCandidates;
     std::map<va_t, std::set<va_t>> RelocationSources;
     const uint32_t PtrSz = Img.getPointerSize();
@@ -120,7 +121,27 @@ void CFGBuilder::exploreAddressTakenRoots(const BinaryImage &Img,
           RelocationCandidates.insert(Target);
           RelocationSources[Target].insert(Slot);
         }
+
+    // Relative table entries are normally admitted only through their
+    // authenticated selector coordinates.  Module arbitration can explicitly
+    // protect a different physical slot, however; that slot must remain an
+    // independent CFG root even when an exact sparse selector excludes it.
+    // Decode only those protected sources through the width/format-qualified
+    // cache.  Do not add them to PersistentCFGRoots here: doing so would let an
+    // excluded physical slot participate in the selector proof.  Final block
+    // formation joins the decoded boundary back to its protected source and
+    // preserves it independently.  The ordinary owner and instruction-boundary
+    // checks below still decide whether the target belongs to this function.
+    if (ProtectedJumpTableRelocationSlots &&
+        !ProtectedJumpTableRelocationSlots->empty()) {
+      prepareRelativeRelocationRootSourceCache();
+      for (const auto &[Target, Slot] : RelativeRelocationRootSourceCache)
+        if (ProtectedJumpTableRelocationSlots->count(Slot))
+          ProtectedRelativeRelocationCandidates.insert(Target);
+    }
     Candidates.insert(RelocationCandidates.begin(), RelocationCandidates.end());
+    Candidates.insert(ProtectedRelativeRelocationCandidates.begin(),
+                      ProtectedRelativeRelocationCandidates.end());
 
     // These references were observed by this builder while decoding this
     // function and therefore may identify an owned local label directly.  Do

@@ -314,9 +314,19 @@ bool MedLLVMEmitter::emitJumpTableSwitch(
       const bool HasEdgeMergedPlan =
           PlanIt != CurMedFunc->SwitchSelectorPlans.end() &&
           PlanIt->second.PlanKind == MedSwitchSelectorPlan::Kind::EdgeMerged;
-      if (!IndexVar && !HasEdgeMergedPlan) {
-        return false;
+      if (!IndexVar && PlanIt == CurMedFunc->SwitchSelectorPlans.end()) {
+        // A source selector can disappear only because MedIR folded the exact
+        // table-address occurrence to one constant slot (for example the
+        // peeled first iteration of an i386 PIC switch).  Recover that slot
+        // from the authenticated branch-target LOAD itself; every other
+        // missing, duplicated, or role-changed occurrence still fails closed.
+        IndexVar =
+            traceConstBranchIndex(BrOp, *JT, /*RequireAuthenticatedLoad=*/true);
+        if (!IndexVar)
+          return false;
       }
+      if (!IndexVar && !HasEdgeMergedPlan)
+        return false;
     }
     // A two-level (index-byte) table composes its per-case targets from
     // `jmptab[idxtab[switchvar]]`; the switch condition is the *real* switch
@@ -381,7 +391,8 @@ bool MedLLVMEmitter::emitJumpTableSwitch(
     // resulting single-value switch to a direct branch).  Tried before the
     // bail/shared paths so single-predecessor constant branches resolve too.
     if (!IndexVar)
-      IndexVar = traceConstBranchIndex(BrOp, *JT);
+      IndexVar =
+          traceConstBranchIndex(BrOp, *JT, /*RequireAuthenticatedLoad=*/false);
     // A shared multi-site -O0 dispatch (≥2 predecessors, each with its own
     // index) is recovered after target validation via
     // synthesizeSharedDispatchIndex; only bail here when there is no such

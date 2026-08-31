@@ -7,8 +7,8 @@
 // Follow-up to OptStress29's #442 (a jump-table case computing an 8-bit
 // accumulator in a scratch register, transferred to the accumulator register by
 // a full-width move across the loop latch, lost its update because the cross-
-// block partial-write merge skipped loop blocks).  These probe sibling shapes of
-// that class: a 16-bit scratch-transfer accumulator, one register written at
+// block partial-write merge skipped loop blocks).  These probe sibling shapes
+// of that class: a 16-bit scratch-transfer accumulator, one register written at
 // different widths across cases, a memory-resident accumulator touched at mixed
 // widths in a switch, an accumulator that must survive a call inside a case, a
 // nested switch, and a switch picking a narrow return value.
@@ -134,12 +134,24 @@ static std::vector<RoundTripTC> makeOptStress30TC(const char *prefix, const char
 }
 // clang-format on
 
-static const std::vector<RoundTripTC> kX64 = makeOptStress30TC("x64o30", "long");
+static const std::vector<RoundTripTC> kX64 = [] {
+  auto Cases = makeOptStress30TC("x64o30", "long");
+  for (RoundTripTC &TC : Cases)
+    if (TC.Name == "x64o30_swcallacc") {
+      TC.RecoveredSwitch = RecoveredSwitchExpectation::Required;
+    }
+  return Cases;
+}();
 static const std::vector<RoundTripTC> kX86 = makeOptStress30TC("x86o30", "int");
-static const std::vector<RoundTripTC> kA64 = makeOptStress30TC("a64o30", "long");
+static const std::vector<RoundTripTC> kA64 =
+    makeOptStress30TC("a64o30", "long");
 static const std::vector<RoundTripTC> kARM = makeOptStress30TC("armo30", "int");
 
-INSTANTIATE_TEST_SUITE_P(OptStress30, X64OptStress30RT, ::testing::ValuesIn(kX64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress30, X86OptStress30RT, ::testing::ValuesIn(kX86), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress30, A64OptStress30RT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress30, ARM32OptStress30RT, ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress30, X64OptStress30RT,
+                         ::testing::ValuesIn(kX64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress30, X86OptStress30RT,
+                         ::testing::ValuesIn(kX86), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress30, A64OptStress30RT,
+                         ::testing::ValuesIn(kA64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress30, ARM32OptStress30RT,
+                         ::testing::ValuesIn(kARM), rtTCName);

@@ -549,7 +549,8 @@ std::optional<uint64_t> evaluateGuardExpr(const GuardExprPtr &Expr,
 
 bool CFGBuilder::inferBoundsFromPreciseGuards(
     const InsnRecord &Rec, JumpTableInfo &Info, size_t *CandidateEvidenceBudget,
-    bool UseDefinedAlternativesAsRoots) {
+    bool UseDefinedAlternativesAsRoots,
+    const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides) {
   Info.IncompleteGuardDomain = false;
   Info.SemanticGuardDomainAmbiguous = false;
   if ((!Info.IndexValueAtUse.isReg() && !Info.IndexValueAtUse.isTemp()) ||
@@ -689,9 +690,8 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
   }
   bool ControlAnalysisComplete = false;
   const std::vector<std::optional<bool>> TableConditions =
-      tableLoadConditionValues(GuardBranchAddrs, Info,
-                               &ControlAnalysisComplete,
-                               CandidateEvidenceBudget);
+      tableLoadConditionValues(GuardBranchAddrs, Info, &ControlAnalysisComplete,
+                               CandidateEvidenceBudget, CertifiedEdgeOverrides);
   if (!ControlAnalysisComplete ||
       TableConditions.size() != GuardBranchAddrs.size()) {
     if (!GuardBranchAddrs.empty()) {
@@ -1024,7 +1024,10 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
     bool AliasProofComplete = false;
     const std::vector<bool> AliasResults = tableValuesMatchAtUses(
         AliasQueries, &AliasProofComplete, nullptr, InvalidVA, nullptr,
-        CandidateEvidenceBudget);
+        CandidateEvidenceBudget, /*LocalMatchEvidenceLimit=*/0,
+        /*CandidateBranchesSharingTargets=*/nullptr,
+        /*QueryUnsignedFeasibleMasks=*/nullptr,
+        /*ResolverDepthLimit=*/0, CertifiedEdgeOverrides);
     if (!AliasProofComplete || AliasResults.size() != AliasQueries.size()) {
       Info.IncompleteGuardDomain = true;
       return false;
@@ -1313,7 +1316,10 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
   if (!ProofQueries.empty())
     ProofResults = tableValuesMatchAtUses(
         ProofQueries, &ProofComplete, &ProofQueryComplete, InvalidVA, nullptr,
-        CandidateEvidenceBudget);
+        CandidateEvidenceBudget, /*LocalMatchEvidenceLimit=*/0,
+        /*CandidateBranchesSharingTargets=*/nullptr,
+        /*QueryUnsignedFeasibleMasks=*/nullptr,
+        /*ResolverDepthLimit=*/0, CertifiedEdgeOverrides);
   if (ProofResults.size() != ProofQueries.size() ||
       ProofQueryComplete.size() != ProofQueries.size()) {
     if (SawControllingGuard)

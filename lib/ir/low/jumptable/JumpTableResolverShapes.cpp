@@ -1692,6 +1692,46 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
       return std::nullopt;
     return reachingDefIdx(Ops, From, Value);
   };
+  // Discover a literal arm from its use-local expression without invoking the
+  // function-prefix register folder.  This is only a candidate hint: the
+  // address-role solver below must still replay the exact LOAD use across all
+  // feasible paths before the occurrence can survive publication.
+  std::function<std::optional<uint64_t>(NdVar, int, int)>
+      foldPointLocalConstant =
+          [&](NdVar Value, int From, int Depth) -> std::optional<uint64_t> {
+    if (!consume() || Depth >= limits::kMaxSliceDepth)
+      return std::nullopt;
+    if (Value.isConst())
+      return truncateToByteWidth(Value.Offset, Value.Size);
+    if (!Value.isReg() && !Value.isTemp())
+      return std::nullopt;
+    const std::optional<int> Def = reachingDef(From, Value);
+    if (!Def || *Def < 0)
+      return std::nullopt;
+    const LowOp &Producer = Ops[*Def];
+    if ((Producer.Opcode == NdOp::COPY || Producer.Opcode == NdOp::INT_ZEXT) &&
+        Producer.NumInputs >= 1) {
+      const std::optional<uint64_t> Input =
+          foldPointLocalConstant(Producer.Inputs[0], *Def - 1, Depth + 1);
+      if (!Input)
+        return std::nullopt;
+      return truncateToByteWidth(*Input, Producer.Output.Size);
+    }
+    if ((Producer.Opcode == NdOp::INT_ADD ||
+         Producer.Opcode == NdOp::INT_SUB) &&
+        Producer.NumInputs >= 2) {
+      const std::optional<uint64_t> Left =
+          foldPointLocalConstant(Producer.Inputs[0], *Def - 1, Depth + 1);
+      const std::optional<uint64_t> Right =
+          foldPointLocalConstant(Producer.Inputs[1], *Def - 1, Depth + 1);
+      if (!Left || !Right)
+        return std::nullopt;
+      const uint64_t Result =
+          Producer.Opcode == NdOp::INT_ADD ? *Left + *Right : *Left - *Right;
+      return truncateToByteWidth(Result, Producer.Output.Size);
+    }
+    return std::nullopt;
+  };
   if (ScanWholeFunction) {
     if (!consume(2))
       return false;
@@ -2155,6 +2195,23 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
     const NdVar &AddrV = (L.NumInputs >= 2) ? L.Inputs[1] : L.Inputs[0];
     if (!AddrV.isReg() && !AddrV.isTemp())
       continue;
+    if (FoundModel) {
+      const std::optional<uint64_t> LiteralAddress =
+          foldPointLocalConstant(AddrV, I - 1, 0);
+      const uint64_t ModelSpan = uint64_t(ModelRun) * ModelWidth;
+      if (LiteralAddress && W == ModelWidth && *LiteralAddress >= ModelBase &&
+          *LiteralAddress - ModelBase < ModelSpan &&
+          (*LiteralAddress - ModelBase) % ModelWidth == 0) {
+        const uint64_t ByteOffset = *LiteralAddress - ModelBase;
+        const uint64_t Slot = ByteOffset / ModelWidth;
+        if (!appendOccurrence(ModelBase, NdVar::scalar(Slot, W), InvalidVA, -1,
+                              ModelBase, NdVar::scalar(ByteOffset, AddrV.Size),
+                              InvalidVA, -1, 1, static_cast<uint32_t>(Slot),
+                              {}))
+          return false;
+        continue;
+      }
+    }
     const std::optional<int> InitialAdd = reachingDef(I - 1, AddrV);
     if (!InitialAdd)
       return false;
@@ -2462,12 +2519,16 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
         return false;
       uint32_t Run = countCodePtrRelocRun(Img, ResolvedBase, W);
       bool HasExactSizedObject = false;
-      if (ExactI386GOTOFFBase && ExactI386GOTOFFOwner &&
-          *ExactI386GOTOFFOwner == ResolvedBase) {
-        // An exact data symbol owns the whole table even when another GOTOFF
-        // field names an interior constant arm.  Validate that complete object
-        // against its mapped owner and the already authenticated relocation
-        // run before ignoring such an interior consumer anchor.
+      const bool ExactBaseOwnerAuthenticated =
+          !ExactI386GOTOFFBase ||
+          (ExactI386GOTOFFOwner && *ExactI386GOTOFFOwner == ResolvedBase);
+      if (ExactBaseOwnerAuthenticated) {
+        // An exact data symbol owns the whole table even when another
+        // relocation names an interior constant arm.  For i386 GOTOFF, first
+        // require that the relocation owner names this exact base.  Validate
+        // the complete object against its mapped owner and the already
+        // authenticated relocation run before ignoring an interior consumer
+        // anchor.
         if (!consumeProducts({{Img.Symbols.size(), 2},
                               {Img.Segments.size(), 2},
                               {Img.Sections.size(), 2}}))

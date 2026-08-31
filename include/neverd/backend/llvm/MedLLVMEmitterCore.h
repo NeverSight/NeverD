@@ -180,8 +180,8 @@ private:
   void emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder, int BlockId);
   void markCxxContinuationReturn(const MedOp &Op, int BlockId,
                                  llvm::ReturnInst &Return);
-  void initializeCxxContinuationPlans(
-      const std::vector<MedFunc> &Funcs, const std::vector<char> *BodyMask);
+  void initializeCxxContinuationPlans(const std::vector<MedFunc> &Funcs,
+                                      const std::vector<char> *BodyMask);
   void finalizeCxxContinuationPlans();
   static bool sameCxxContinuationReturnValue(const MedVar &Left,
                                              const MedVar &Right);
@@ -320,8 +320,7 @@ private:
   /// happens to equal an image VA must not be rewritten to ptrtoint(@global)
   /// or ptrtoint(@function).  Rebuild the pure integer dependency chain with
   /// raw constants instead of reusing a potentially symbolized SSA value.
-  llvm::Value *getRawSegmentOffset(const MedVar &V,
-                                   llvm::IRBuilder<> &Builder);
+  llvm::Value *getRawSegmentOffset(const MedVar &V, llvm::IRBuilder<> &Builder);
   /// Materialize a constant copied along a PHI edge. Ordinary and exceptional
   /// edges must share this policy: untagged legacy constants remain raw,
   /// while an occurrence carrying architectural address origin goes through
@@ -459,7 +458,7 @@ private:
   std::optional<MedVar> constIndexFromTableLoad(
       const MedVar &Val,
       const std::function<const MedOp *(const MedVar &)> &defOf,
-      const JumpTable &JT) const;
+      const JumpTable &JT, bool RequireAuthenticatedLoad) const;
 
   /// A CONSTANT-index goto-site (`goto *tab[k]` with literal k) is folded by
   /// clang -O0 to a load from a constant table-slot address, leaving no scaled
@@ -480,8 +479,9 @@ private:
   /// indirect branch rather than funneling into a shared dispatch (e.g. 32-bit
   /// x86/ARM -O0).  Returns nullopt unless the target folds to a pure constant
   /// entry of \p JT.
-  std::optional<MedVar> traceConstBranchIndex(const MedOp &BrOp,
-                                              const JumpTable &JT) const;
+  std::optional<MedVar>
+  traceConstBranchIndex(const MedOp &BrOp, const JumpTable &JT,
+                        bool RequireAuthenticatedLoad) const;
 
   /// The table base VA a predecessor goto-site's stored value is loaded from
   /// (the
@@ -1612,8 +1612,8 @@ private:
 
     bool operator<(const FrameReloadCacheKey &Other) const {
       return std::tie(Addr, OriginSeq, Width, Address, Output) <
-             std::tie(Other.Addr, Other.OriginSeq, Other.Width,
-                       Other.Address, Other.Output);
+             std::tie(Other.Addr, Other.OriginSeq, Other.Width, Other.Address,
+                      Other.Output);
     }
   };
   struct FrameReloadCacheEntry {
@@ -1826,8 +1826,7 @@ private:
   mutable llvm::DenseMap<std::pair<int64_t, int>, bool> FrameAddressCache;
   mutable const MedFunc *FrameReloadCacheFor = nullptr;
   mutable uint64_t FrameReloadCacheGeneration = 0;
-  mutable std::map<FrameReloadCacheKey, FrameReloadCacheEntry>
-      FrameReloadCache;
+  mutable std::map<FrameReloadCacheKey, FrameReloadCacheEntry> FrameReloadCache;
   mutable uint64_t FrameReloadProofBuilds = 0;
   mutable uint64_t FrameReloadProofHits = 0;
 

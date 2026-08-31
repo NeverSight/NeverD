@@ -861,6 +861,12 @@ struct JumpTable {
   /// infer these ranges from Targets.size(): logical cases and physical slots
   /// are different domains for composite and sparse layouts.
   std::vector<JumpTableStorageRange> StorageRanges;
+  /// Exact whole-object identity when independently authenticated by the
+  /// loader and resolver.  Runtime StorageRanges may cover only the selector
+  /// coordinates used by this dispatch; module arbitration uses this separate
+  /// identity to classify aliases across functions.  Identity alone never
+  /// grants relocation suppression.
+  std::optional<JumpTableStorageRange> ExactPhysicalStorageRange;
   /// Exact relocation slots whose stored code-pointer identity is fully
   /// consumed by this recovered dispatch and may therefore be omitted from
   /// independent CFG-root discovery and the LLVM code-pointer mirror.

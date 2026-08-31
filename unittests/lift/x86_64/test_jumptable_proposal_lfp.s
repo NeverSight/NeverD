@@ -197,6 +197,155 @@ jt_lfp_nested_relative_leaf1:
         retq
         .size   jt_lfp_nested_relative, .-jt_lfp_nested_relative
 
+// Both indirect branches consume the same PIC-relative table.  The entry
+// branch has an exact scalar selector and is the only initially reachable
+// consumer; its first proposal decodes the case blocks without publishing the
+// surrounding physical table as its runtime domain.  The loop dispatch becomes
+// reachable only through that immutable provisional edge, so its exact LOAD
+// and address roles must replay against the lower-rank edge certificate without
+// treating the relocation run as an index-domain proof.
+        .globl  jt_lfp_relative_occurrence_cycle
+        .type   jt_lfp_relative_occurrence_cycle,@function
+jt_lfp_relative_occurrence_cycle:
+        xorl    %ecx, %ecx
+        xorl    %esi, %esi
+        leaq    jt_lfp_relative_occurrence_cycle_table(%rip), %rdx
+        movslq  (%rdx,%rsi,4), %r8
+        addq    %rdx, %r8
+        .globl  jt_lfp_relative_occurrence_entry_branch
+jt_lfp_relative_occurrence_entry_branch:
+        jmpq    *%r8
+jt_lfp_relative_occurrence_loop:
+        movl    %ecx, %esi
+        andl    $3, %esi
+        movslq  (%rdx,%rsi,4), %r8
+        addq    %rdx, %r8
+        .globl  jt_lfp_relative_occurrence_loop_branch
+jt_lfp_relative_occurrence_loop_branch:
+        jmpq    *%r8
+        .globl  jt_lfp_relative_occurrence_t0
+jt_lfp_relative_occurrence_t0:
+        addl    $1, %eax
+        jmp     jt_lfp_relative_occurrence_join
+        .globl  jt_lfp_relative_occurrence_t1
+jt_lfp_relative_occurrence_t1:
+        addl    $2, %eax
+        jmp     jt_lfp_relative_occurrence_join
+        .globl  jt_lfp_relative_occurrence_t2
+jt_lfp_relative_occurrence_t2:
+        addl    $3, %eax
+        jmp     jt_lfp_relative_occurrence_join
+        .globl  jt_lfp_relative_occurrence_t3
+jt_lfp_relative_occurrence_t3:
+        addl    $4, %eax
+jt_lfp_relative_occurrence_join:
+        incl    %ecx
+        cmpl    $4, %ecx
+        jne     jt_lfp_relative_occurrence_loop
+        retq
+        .size   jt_lfp_relative_occurrence_cycle, .-jt_lfp_relative_occurrence_cycle
+
+// The loop consumer has its own x&3 proof and publishes all four slots.  The
+// entry consumer sees only slot zero, whose target executes a direct call
+// before reaching the loop.  That call leaves the entry consumer's destination
+// graph open: the loop's sibling runtime certificate may qualify singleton
+// storage, but it must never be transferred as the entry selector's [0,4)
+// runtime domain.  A direct entry-to-loop arm keeps the certified producer in
+// the final ordinary CFG after the unsafe singleton is withheld.
+        .globl  jt_lfp_relative_open_sibling
+        .type   jt_lfp_relative_open_sibling,@function
+jt_lfp_relative_open_sibling:
+        xorl    %r13d, %r13d
+        xorl    %esi, %esi
+        leaq    jt_lfp_relative_open_sibling_table(%rip), %r12
+        testl   %edi, %edi
+        js      jt_lfp_relative_open_sibling_loop
+        // A redundant local mask must not turn the exact singleton entry
+        // selector into the sibling loop's four-way runtime domain.
+        andl    $3, %esi
+        movslq  (%r12,%rsi,4), %r8
+        addq    %r12, %r8
+        .globl  jt_lfp_relative_open_sibling_entry_branch
+jt_lfp_relative_open_sibling_entry_branch:
+        jmpq    *%r8
+jt_lfp_relative_open_sibling_loop:
+        movl    %r13d, %esi
+        andl    $3, %esi
+        movslq  (%r12,%rsi,4), %r8
+        addq    %r12, %r8
+        .globl  jt_lfp_relative_open_sibling_loop_branch
+jt_lfp_relative_open_sibling_loop_branch:
+        jmpq    *%r8
+        .globl  jt_lfp_relative_open_sibling_t0
+jt_lfp_relative_open_sibling_t0:
+        callq   jt_lfp_relative_open_sibling_callback
+        addl    $1, %eax
+        jmp     jt_lfp_relative_open_sibling_join
+        .globl  jt_lfp_relative_open_sibling_t1
+jt_lfp_relative_open_sibling_t1:
+        addl    $2, %eax
+        jmp     jt_lfp_relative_open_sibling_join
+        .globl  jt_lfp_relative_open_sibling_t2
+jt_lfp_relative_open_sibling_t2:
+        addl    $3, %eax
+        jmp     jt_lfp_relative_open_sibling_join
+        .globl  jt_lfp_relative_open_sibling_t3
+jt_lfp_relative_open_sibling_t3:
+        addl    $4, %eax
+jt_lfp_relative_open_sibling_join:
+        incl    %r13d
+        cmpl    $4, %r13d
+        jne     jt_lfp_relative_open_sibling_loop
+        retq
+jt_lfp_relative_open_sibling_callback:
+        retq
+        .size   jt_lfp_relative_open_sibling, .-jt_lfp_relative_open_sibling
+
+// The entry dispatch exposes only slot zero.  Its provisional edge is the sole
+// path to the second dispatch, whose selector is bounded by a cmp/ja guard
+// rather than a mask or modulo.  Recovering the loop table therefore requires
+// the precise-guard proof to consume the same lower-rank edge overlay as the
+// target and address role proofs.  Once the loop table is published, the entry
+// singleton must replay on the ordinary CFG and both provisional edges retire.
+        .globl  jt_lfp_relative_guard_cycle
+        .type   jt_lfp_relative_guard_cycle,@function
+jt_lfp_relative_guard_cycle:
+        xorl    %esi, %esi
+        leaq    jt_lfp_relative_guard_cycle_table(%rip), %rdx
+        movslq  (%rdx,%rsi,4), %r8
+        addq    %rdx, %r8
+        .globl  jt_lfp_relative_guard_entry_branch
+jt_lfp_relative_guard_entry_branch:
+        jmpq    *%r8
+jt_lfp_relative_guard_loop:
+        cmpl    $3, %ecx
+        ja      jt_lfp_relative_guard_exit
+        movl    %ecx, %esi
+        movslq  (%rdx,%rsi,4), %r8
+        addq    %rdx, %r8
+        .globl  jt_lfp_relative_guard_loop_branch
+jt_lfp_relative_guard_loop_branch:
+        jmpq    *%r8
+        .globl  jt_lfp_relative_guard_t0
+jt_lfp_relative_guard_t0:
+        movl    %edi, %ecx
+        jmp     jt_lfp_relative_guard_loop
+        .globl  jt_lfp_relative_guard_t1
+jt_lfp_relative_guard_t1:
+        movl    $1, %eax
+        retq
+        .globl  jt_lfp_relative_guard_t2
+jt_lfp_relative_guard_t2:
+        movl    $2, %eax
+        retq
+        .globl  jt_lfp_relative_guard_t3
+jt_lfp_relative_guard_t3:
+        movl    $3, %eax
+        retq
+jt_lfp_relative_guard_exit:
+        retq
+        .size   jt_lfp_relative_guard_cycle, .-jt_lfp_relative_guard_cycle
+
 // Direct constant-base consumers isolate the const-base detector's early
 // shape certificate.  The long unrelated prefix is cheap for Rec.Ops-only
 // parsing but expensive for the later whole-function group inventory.
@@ -273,6 +422,36 @@ jt_lfp_nested_relative_table1:
         .quad   jt_lfp_nested_relative_leaf0
         .quad   jt_lfp_nested_relative_leaf1
         .size   jt_lfp_nested_relative_table1, .-jt_lfp_nested_relative_table1
+
+        .p2align 2
+        .globl  jt_lfp_relative_occurrence_cycle_table
+        .type   jt_lfp_relative_occurrence_cycle_table,@object
+jt_lfp_relative_occurrence_cycle_table:
+        .long   jt_lfp_relative_occurrence_t0-jt_lfp_relative_occurrence_cycle_table
+        .long   jt_lfp_relative_occurrence_t1-jt_lfp_relative_occurrence_cycle_table
+        .long   jt_lfp_relative_occurrence_t2-jt_lfp_relative_occurrence_cycle_table
+        .long   jt_lfp_relative_occurrence_t3-jt_lfp_relative_occurrence_cycle_table
+        .size   jt_lfp_relative_occurrence_cycle_table, .-jt_lfp_relative_occurrence_cycle_table
+
+        .p2align 2
+        .globl  jt_lfp_relative_open_sibling_table
+        .type   jt_lfp_relative_open_sibling_table,@object
+jt_lfp_relative_open_sibling_table:
+        .long   jt_lfp_relative_open_sibling_t0-jt_lfp_relative_open_sibling_table
+        .long   jt_lfp_relative_open_sibling_t1-jt_lfp_relative_open_sibling_table
+        .long   jt_lfp_relative_open_sibling_t2-jt_lfp_relative_open_sibling_table
+        .long   jt_lfp_relative_open_sibling_t3-jt_lfp_relative_open_sibling_table
+        .size   jt_lfp_relative_open_sibling_table, .-jt_lfp_relative_open_sibling_table
+
+        .p2align 2
+        .globl  jt_lfp_relative_guard_cycle_table
+        .type   jt_lfp_relative_guard_cycle_table,@object
+jt_lfp_relative_guard_cycle_table:
+        .long   jt_lfp_relative_guard_t0-jt_lfp_relative_guard_cycle_table
+        .long   jt_lfp_relative_guard_t1-jt_lfp_relative_guard_cycle_table
+        .long   jt_lfp_relative_guard_t2-jt_lfp_relative_guard_cycle_table
+        .long   jt_lfp_relative_guard_t3-jt_lfp_relative_guard_cycle_table
+        .size   jt_lfp_relative_guard_cycle_table, .-jt_lfp_relative_guard_cycle_table
 
         .section .rodata.jt_lfp_constbase_budget,"a",@progbits
         .p2align 3

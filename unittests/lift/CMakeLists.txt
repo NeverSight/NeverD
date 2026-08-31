@@ -1546,6 +1546,7 @@ set(X86_64_TEST_SOURCES
   x86_64/test_jumptable_relative_identity.s
   x86_64/test_jumptable_modulo_dead_producer.s
   x86_64/test_jumptable_proposal_lfp.s
+  x86_64/test_jumptable_singleton_closed_world.s
   x86_64/test_jumptable_raw_relative_domain.s
   x86_64/test_jumptable_lost_published.s
   x86_64/test_jumptable_target_ownership.s

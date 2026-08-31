@@ -280,6 +280,7 @@ void CFGBuilder::extractJumpTables(LowFunc &Func) {
       JT.EntryStride =
           Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize;
       JT.StorageRanges = Info.StorageRanges;
+      JT.ExactPhysicalStorageRange = Info.ExactPhysicalStorageRange;
       JT.SuppressibleRelocationSlots = Info.SuppressibleRelocationSlots;
       for (const auto &Role : Info.LoadRoles)
         JT.AuthenticatedTableLoads.push_back(

@@ -26,13 +26,14 @@
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/MathExtras.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <initializer_list>
 #include <iterator>
-#include <list>
 #include <limits>
+#include <list>
 #include <map>
 #include <optional>
 #include <set>
@@ -64,6 +65,22 @@ static constexpr bool moduloDomainFitsSignedWidth(uint32_t Bound,
 static_assert(!moduloDomainFitsSignedWidth(140, 1));
 static_assert(moduloDomainFitsSignedWidth(140, 2));
 
+bool detail::isConstantOnlyScalarMask(const LowOp &Op) {
+  if (Op.Opcode != NdOp::INT_AND || Op.NumInputs < 2)
+    return false;
+  return Op.Inputs[0].isConst() && Op.Inputs[1].isConst() &&
+         !isAddressProvenance(Op.Inputs[0].Provenance) &&
+         !isAddressProvenance(Op.Inputs[1].Provenance) &&
+         Op.Inputs[0].AddressOwnerVA == InvalidVA &&
+         Op.Inputs[1].AddressOwnerVA == InvalidVA;
+}
+
+void detail::canonicalizeFixedPointExplorationTargets(
+    std::vector<va_t> &Targets) {
+  std::sort(Targets.begin(), Targets.end());
+  Targets.erase(std::unique(Targets.begin(), Targets.end()), Targets.end());
+}
+
 class ModuloEvidenceBudget {
 public:
   constexpr explicit ModuloEvidenceBudget(size_t Limit,
@@ -73,8 +90,7 @@ public:
         OuterAggregate(OuterAggregate) {}
 
   constexpr bool consume(size_t Amount = 1) {
-    if (Amount > Remaining ||
-        (LocalAggregate && Amount > *LocalAggregate) ||
+    if (Amount > Remaining || (LocalAggregate && Amount > *LocalAggregate) ||
         (OuterAggregate && Amount > *OuterAggregate)) {
       Exhausted = true;
       // A failed shared charge is candidate-wide evidence exhaustion.  Zero
@@ -103,8 +119,7 @@ public:
     return Available;
   }
   constexpr bool canConsume(size_t Amount = 1) {
-    if (Amount <= Remaining &&
-        (!LocalAggregate || Amount <= *LocalAggregate) &&
+    if (Amount <= Remaining && (!LocalAggregate || Amount <= *LocalAggregate) &&
         (!OuterAggregate || Amount <= *OuterAggregate))
       return true;
     Exhausted = true;
@@ -203,8 +218,7 @@ static_assert(Modulo140ReplayWork &&
 constexpr std::optional<size_t> Modulo2048BootstrapWork =
     moduloDomainEvidenceWork(2048, 1, 1, false);
 static_assert(Modulo2048BootstrapWork &&
-              *Modulo2048BootstrapWork >
-                  limits::kMaxJumpTableEvidenceWork);
+              *Modulo2048BootstrapWork > limits::kMaxJumpTableEvidenceWork);
 
 std::optional<uint64_t> effectiveIntegerAndMask(uint64_t EncodedMask,
                                                 uint16_t MaskSize,
@@ -569,8 +583,7 @@ private:
       const uint64_t Result =
           (static_cast<uint64_t>(*Left) & static_cast<uint64_t>(*Right)) &
           *Mask;
-      if (Result >
-          static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+      if (Result > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
         It->second.State = MemoState::Failed;
         return std::nullopt;
       }
@@ -687,18 +700,16 @@ private:
     }
     case NdOp::INT_ADD:
     case NdOp::INT_SUB:
-      if (Op.NumInputs >= 2 && isVar(Op.Inputs[0]) &&
-          isVar(Op.Inputs[1])) {
+      if (Op.NumInputs >= 2 && isVar(Op.Inputs[0]) && isVar(Op.Inputs[1])) {
         int64_t Left = 0;
         int64_t Right = 0;
         int64_t Result = 0;
         if (!evaluateImpl(D - 1, Op.Inputs[0], Depth + 1, Left) ||
             !evaluateImpl(D - 1, Op.Inputs[1], Depth + 1, Right))
           return fail();
-        const llvm::APInt Combined =
-            Op.Opcode == NdOp::INT_ADD
-                ? wideSigned(Left) + wideSigned(Right)
-                : wideSigned(Left) - wideSigned(Right);
+        const llvm::APInt Combined = Op.Opcode == NdOp::INT_ADD
+                                         ? wideSigned(Left) + wideSigned(Right)
+                                         : wideSigned(Left) - wideSigned(Right);
         if (!checkedCoefficient(Combined, Result))
           return fail();
         return finish(Result);
@@ -741,7 +752,13 @@ uint32_t CFGBuilder::inferBoundsFromMask(
     const std::set<va_t> *ReachableInstructions, bool AllowFixedPointBootstrap,
     bool AllowRawDenseShortcut, size_t *AggregateEvidenceBudget,
     bool *SemanticIndexDomainAmbiguous,
-    const JumpTableExactConsumerGroup *ExactConsumerGroup) const {
+    const JumpTableExactConsumerGroup *ExactConsumerGroup,
+    const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides,
+    const JumpTableStorageRange *CertifiedSiblingRuntimeStorage,
+    std::optional<va_t> *ExactFiniteRelativeSingletonTarget,
+    bool *ExactFiniteRelativeClosureUnknown,
+    bool RetainProvisionalRelativeEdges,
+    bool AllowInlineZeroCapacityBoundedReplay) const {
   if (IncompleteIndexDomain)
     *IncompleteIndexDomain = false;
   if (SemanticIndexDomainAmbiguous)
@@ -752,11 +769,15 @@ uint32_t CFGBuilder::inferBoundsFromMask(
     FeasibleCoordinates->clear();
   if (KnownOneWitnesses)
     KnownOneWitnesses->clear();
+  if (ExactFiniteRelativeSingletonTarget)
+    ExactFiniteRelativeSingletonTarget->reset();
+  if (ExactFiniteRelativeClosureUnknown)
+    *ExactFiniteRelativeClosureUnknown = false;
   size_t LocalWorkBudget = limits::kMaxJumpTableMaskCoreEvidenceWork;
-  size_t OwnedEvidenceBudget = std::min<size_t>(
-      limits::kMaxJumpTableMaskFixedPointEvidenceWork,
-      MaskFixedPointEvidenceBudgetForTesting.value_or(
-          limits::kMaxJumpTableMaskFixedPointEvidenceWork));
+  size_t OwnedEvidenceBudget =
+      std::min<size_t>(limits::kMaxJumpTableMaskFixedPointEvidenceWork,
+                       MaskFixedPointEvidenceBudgetForTesting.value_or(
+                           limits::kMaxJumpTableMaskFixedPointEvidenceWork));
   size_t *EvidenceBudget =
       AggregateEvidenceBudget ? AggregateEvidenceBudget : &OwnedEvidenceBudget;
   auto consumeBudget = [&](size_t &Budget, size_t Amount) {
@@ -783,17 +804,16 @@ uint32_t CFGBuilder::inferBoundsFromMask(
         }
         return consumeBudget(*EvidenceBudget, Total);
       };
-  auto consumeBudgetFactorProduct =
-      [&](std::initializer_list<size_t> Factors) {
-        const size_t Max = std::numeric_limits<size_t>::max();
-        size_t Product = 1;
-        for (size_t Factor : Factors) {
-          if (Factor != 0 && Product > Max / Factor)
-            return consumeBudget(*EvidenceBudget, Max);
-          Product *= Factor;
-        }
-        return consumeBudget(*EvidenceBudget, Product);
-      };
+  auto consumeBudgetFactorProduct = [&](std::initializer_list<size_t> Factors) {
+    const size_t Max = std::numeric_limits<size_t>::max();
+    size_t Product = 1;
+    for (size_t Factor : Factors) {
+      if (Factor != 0 && Product > Max / Factor)
+        return consumeBudget(*EvidenceBudget, Max);
+      Product *= Factor;
+    }
+    return consumeBudget(*EvidenceBudget, Product);
+  };
   // Mirror the canonical JumpTableInfo traversal charge before a fixed-point
   // snapshot copies any attacker-shaped dynamic field.  Each retained element
   // and its later destruction are paid before the copy is constructed.
@@ -818,10 +838,9 @@ uint32_t CFGBuilder::inferBoundsFromMask(
       if (!consumeBudgetProducts({{Initializer.StaticSources.size(), 2}}))
         return false;
     for (const JumpTableLoadRole &Role : Candidate.LoadRoles) {
-      if (!consumeBudgetProducts(
-              {{Role.AllowedBases.size(), 2},
-               {Role.Indices.size(), 2},
-               {Role.FrameStorage.Initializers.size(), 2}}))
+      if (!consumeBudgetProducts({{Role.AllowedBases.size(), 2},
+                                  {Role.Indices.size(), 2},
+                                  {Role.FrameStorage.Initializers.size(), 2}}))
         return false;
       for (const JumpTableFrameInitializerChunk &Initializer :
            Role.FrameStorage.Initializers)
@@ -905,6 +924,8 @@ uint32_t CFGBuilder::inferBoundsFromMask(
                   }))
     return 0;
 
+  constexpr uint32_t kMaskDomainResolverDepthLimit =
+      limits::kMaxJumpTableLargeExpressionRoleResolverDepth;
   auto matchForTargets =
       [&](const std::vector<JumpTableValueQuery> &Queries,
           const std::vector<va_t> *Targets, size_t *SharedBudget,
@@ -912,14 +933,16 @@ uint32_t CFGBuilder::inferBoundsFromMask(
           std::vector<bool> *QueryAnalysisComplete = nullptr) {
         return tableValuesMatchAtUses(
             Queries, AnalysisComplete, QueryAnalysisComplete, Rec.Addr, Targets,
-            SharedBudget, limits::kMaxJumpTableMaskMatchEvidenceWork);
+            SharedBudget, limits::kMaxJumpTableMaskMatchEvidenceWork,
+            /*CandidateBranchesSharingTargets=*/nullptr,
+            /*QueryUnsignedFeasibleMasks=*/nullptr,
+            kMaskDomainResolverDepthLimit, CertifiedEdgeOverrides);
       };
   auto matchAtUses = [&](const std::vector<JumpTableValueQuery> &Queries,
                          bool *AnalysisComplete = nullptr,
                          std::vector<bool> *QueryAnalysisComplete = nullptr) {
     return matchForTargets(Queries, CandidateTargetsOverride, EvidenceBudget,
-                           AnalysisComplete,
-                           QueryAnalysisComplete);
+                           AnalysisComplete, QueryAnalysisComplete);
   };
 
   // A shared computed-goto dispatch may start from one literal selector and
@@ -927,7 +950,11 @@ uint32_t CFGBuilder::inferBoundsFromMask(
   // case block.  Proving against the final provisional edge set in one pass is
   // circular: an otherwise unreachable case could donate the mask that makes
   // its own edge appear valid.  Compute the least candidate-local fixed point
-  // instead.  Each iteration resolves values in a graph containing only the
+  // instead.  Vector-reduction selectors can carry the same deep expression
+  // through the direct, raw-dense, reachability, and final dependency batches;
+  // every batch therefore shares the large-expression resolver-depth ceiling
+  // above while continuing to debit this invocation's unchanged evidence
+  // accounts.  Each iteration resolves values in a graph containing only the
   // coordinates authorized by earlier iterations, then rebuilds reachability
   // before admitting another domain.  The bounded physical run supplies the
   // coordinate-to-target map only; it never supplies selector authority.
@@ -940,8 +967,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
             Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize;
         std::optional<uint64_t> AddressScale;
         for (const JumpTableLoadRole &Role : Info.LoadRoles) {
-          if (!consumeWorkProducts(
-                  {{1, 1}, {Role.AllowedBases.size(), 1}})) {
+          if (!consumeWorkProducts({{1, 1}, {Role.AllowedBases.size(), 1}})) {
             FixedPointGateIncomplete = true;
             return false;
           }
@@ -959,9 +985,8 @@ uint32_t CFGBuilder::inferBoundsFromMask(
         // selectors name that slot directly; a pre-scaled selector instead
         // names its byte offset and is mapped through the independently
         // authenticated address scale below.
-        const bool DirectCoordinates =
-            AddressScale && PhysicalStride != 0 &&
-            *AddressScale == PhysicalStride;
+        const bool DirectCoordinates = AddressScale && PhysicalStride != 0 &&
+                                       *AddressScale == PhysicalStride;
         const bool PreScaledCoordinates =
             AddressScale && PhysicalStride != 0 && Info.PreScaledIndex &&
             *AddressScale == 1 && Info.Stride == PhysicalStride;
@@ -1002,13 +1027,12 @@ uint32_t CFGBuilder::inferBoundsFromMask(
     for (uint32_t Width = Upper - Lower + 1; Width != 0; Width >>= 1)
       ++SearchPasses;
     const size_t KnownEntryLookup =
-        KnownFuncEntries
-            ? orderedEvidenceLookupWork(KnownFuncEntries->size())
-            : 0;
+        KnownFuncEntries ? orderedEvidenceLookupWork(KnownFuncEntries->size())
+                         : 0;
     const size_t RuntimeEntryLookup =
         orderedEvidenceLookupWork(CurrentImg->RuntimeFunctionAddrs.size());
-    const size_t VerifiedEntryLookup = orderedEvidenceLookupWork(
-        CurrentImg->VerifiedFunctionEntries.size());
+    const size_t VerifiedEntryLookup =
+        orderedEvidenceLookupWork(CurrentImg->VerifiedFunctionEntries.size());
     const size_t ImportStubLookup =
         orderedEvidenceLookupWork(CurrentImg->ImportStubIndices.size());
     const size_t FragmentLookup = orderedEvidenceLookupWork(
@@ -1040,20 +1064,19 @@ uint32_t CFGBuilder::inferBoundsFromMask(
             {TargetReadUpperBound, CurrentImg->Imports.size(), 2}) ||
         !consumeBudgetFactorProduct(
             {TargetReadUpperBound, CurrentImg->KnownCodeRanges.size(), 2}) ||
-        !consumeBudgetFactorProduct(
-            {TargetReadUpperBound, CurrentImg->Imports.size(),
-             CurrentImg->Segments.size(), 4}) ||
-        !consumeBudgetFactorProduct(
-            {TargetReadUpperBound, CurrentImg->Imports.size(),
-             CurrentImg->Sections.size(), 4}) ||
+        !consumeBudgetFactorProduct({TargetReadUpperBound,
+                                     CurrentImg->Imports.size(),
+                                     CurrentImg->Segments.size(), 4}) ||
+        !consumeBudgetFactorProduct({TargetReadUpperBound,
+                                     CurrentImg->Imports.size(),
+                                     CurrentImg->Sections.size(), 4}) ||
         !consumeBudgetFactorProduct(
             {TargetReadUpperBound, RuntimeEntryLookup, 2}) ||
         !consumeBudgetFactorProduct(
             {TargetReadUpperBound, VerifiedEntryLookup, 2}) ||
         !consumeBudgetFactorProduct(
             {TargetReadUpperBound, ImportStubLookup, 2}) ||
-        !consumeBudgetFactorProduct(
-            {TargetReadUpperBound, KnownEntryLookup}))
+        !consumeBudgetFactorProduct({TargetReadUpperBound, KnownEntryLookup}))
       return 0;
     while (Lower <= Upper) {
       const uint32_t Count = Lower + (Upper - Lower) / 2;
@@ -1087,8 +1110,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
       }
       if (!consumeBudget(*EvidenceBudget, PhysicalSlots.size()))
         return 0;
-      bool ExactDenseSlots =
-          PhysicalSlots.size() == PhysicalTargets.size();
+      bool ExactDenseSlots = PhysicalSlots.size() == PhysicalTargets.size();
       for (uint32_t I = 0; ExactDenseSlots && I < PhysicalSlots.size(); ++I)
         ExactDenseSlots = PhysicalSlots[I] == I;
       if (ExactDenseSlots) {
@@ -1098,13 +1120,11 @@ uint32_t CFGBuilder::inferBoundsFromMask(
         FixedPointInfo.PhysicalCapacity = CandidateCapacity;
         const uint64_t PhysicalStride =
             Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize;
-        auto coordinateForSlot = [&](uint32_t Slot)
-            -> std::optional<uint32_t> {
+        auto coordinateForSlot = [&](uint32_t Slot) -> std::optional<uint32_t> {
           if (!Info.PreScaledIndex || !FixedPointAddressScale ||
-              *FixedPointAddressScale == 0 ||
-              PhysicalStride == 0 ||
-              (Slot != 0 && PhysicalStride >
-                                std::numeric_limits<uint64_t>::max() / Slot))
+              *FixedPointAddressScale == 0 || PhysicalStride == 0 ||
+              (Slot != 0 &&
+               PhysicalStride > std::numeric_limits<uint64_t>::max() / Slot))
             return std::nullopt;
           const uint64_t ByteOffset = uint64_t(Slot) * PhysicalStride;
           if (ByteOffset % *FixedPointAddressScale != 0)
@@ -1117,14 +1137,13 @@ uint32_t CFGBuilder::inferBoundsFromMask(
             return std::nullopt;
           return static_cast<uint32_t>(Coordinate);
         };
-        auto slotForCoordinate = [&](uint32_t Coordinate)
-            -> std::optional<uint32_t> {
+        auto slotForCoordinate =
+            [&](uint32_t Coordinate) -> std::optional<uint32_t> {
           if (!Info.PreScaledIndex || !FixedPointAddressScale ||
-              *FixedPointAddressScale == 0 ||
-              PhysicalStride == 0 ||
-              (Coordinate != 0 && *FixedPointAddressScale >
-                                      std::numeric_limits<uint64_t>::max() /
-                                          Coordinate))
+              *FixedPointAddressScale == 0 || PhysicalStride == 0 ||
+              (Coordinate != 0 &&
+               *FixedPointAddressScale >
+                   std::numeric_limits<uint64_t>::max() / Coordinate))
             return std::nullopt;
           const uint64_t ByteOffset =
               uint64_t(Coordinate) * *FixedPointAddressScale;
@@ -1136,6 +1155,60 @@ uint32_t CFGBuilder::inferBoundsFromMask(
             return std::nullopt;
           return static_cast<uint32_t>(Slot);
         };
+        // Guard/modulo proofs may already have authenticated a tighter domain
+        // than the mask.  Apply that independent ceiling before graph growth,
+        // not only after mask recovery: decoding an excluded adjacent slot can
+        // create a false block boundary that poisons a sibling's reaching-def
+        // proof.  This limits only speculative exploration; the original mask
+        // coordinates remain intact for final witness revalidation.
+        uint64_t GraphGrowthCoordinateLimit = 0;
+        auto intersectIndependentBound = [&](uint32_t Bound) {
+          if (Bound == 0)
+            return true;
+          uint64_t CoordinateLimit = Bound;
+          if (Info.PreScaledIndex && Info.Stride > 1) {
+            if (CoordinateLimit >
+                std::numeric_limits<uint64_t>::max() / Info.Stride)
+              return false;
+            CoordinateLimit *= Info.Stride;
+          }
+          if (GraphGrowthCoordinateLimit == 0 ||
+              CoordinateLimit < GraphGrowthCoordinateLimit)
+            GraphGrowthCoordinateLimit = CoordinateLimit;
+          return true;
+        };
+        if (Info.IndexDomainAuthenticated &&
+            (!intersectIndependentBound(Info.AuthenticatedGuardBound) ||
+             !intersectIndependentBound(Info.AuthenticatedModuloBound)))
+          return 0;
+        auto isGraphGrowthCoordinate = [&](uint32_t Coordinate) {
+          return GraphGrowthCoordinateLimit == 0 ||
+                 Coordinate < GraphGrowthCoordinateLimit;
+        };
+        auto intersectGraphGrowthCoordinates =
+            [&](std::set<uint32_t> &Coordinates) {
+              if (GraphGrowthCoordinateLimit == 0 || Coordinates.empty())
+                return true;
+              // The ordered endpoint proves that no filtering traversal is
+              // needed in the common case.  If a suffix is rejected, prepay
+              // the lower_bound search and worst-case suffix destruction.
+              if (!consumeBudget(*EvidenceBudget, 1))
+                return false;
+              if (*Coordinates.rbegin() < GraphGrowthCoordinateLimit)
+                return true;
+              if (!consumeBudgetProducts(
+                      {{1, orderedEvidenceLookupWork(Coordinates.size())},
+                       {Coordinates.size(), 1}}))
+                return false;
+              const uint32_t FirstRejected =
+                  GraphGrowthCoordinateLimit >
+                          std::numeric_limits<uint32_t>::max()
+                      ? std::numeric_limits<uint32_t>::max()
+                      : static_cast<uint32_t>(GraphGrowthCoordinateLimit);
+              Coordinates.erase(Coordinates.lower_bound(FirstRejected),
+                                Coordinates.end());
+              return true;
+            };
         auto targetsFor = [&](const std::set<uint32_t> &Coordinates)
             -> std::optional<std::vector<va_t>> {
           // ExactDenseSlots proved that physical slot I belongs to target I.
@@ -1144,8 +1217,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
           // instead of treating it as a physical slot number.  Pay source
           // traversal, retained results, and future cleanup first.
           const size_t WorkPerCoordinate = Info.PreScaledIndex ? 4 : 3;
-          if (!consumeBudgetProducts(
-                  {{Coordinates.size(), WorkPerCoordinate}}))
+          if (!consumeBudgetProducts({{Coordinates.size(), WorkPerCoordinate}}))
             return std::nullopt;
           std::vector<va_t> Targets;
           Targets.reserve(Coordinates.size());
@@ -1156,16 +1228,26 @@ uint32_t CFGBuilder::inferBoundsFromMask(
               Targets.push_back(PhysicalTargets[Coordinate]);
               continue;
             }
-            const std::optional<uint32_t> Slot =
-                slotForCoordinate(Coordinate);
+            const std::optional<uint32_t> Slot = slotForCoordinate(Coordinate);
             if (!Slot)
               return std::nullopt;
             Targets.push_back(PhysicalTargets[*Slot]);
           }
           return Targets;
         };
-        auto queueGraphGrowth = [&](const std::vector<va_t> &Targets)
-            -> std::optional<bool> {
+        auto hasCompleteDenseRuntimeCoordinates =
+            [&](const std::set<uint32_t> &Coordinates) {
+              // std::set is unique and ordered: capacity elements bounded by
+              // these endpoints are exactly the dense interval, without an
+              // additional attacker-sized traversal.
+              return !Info.PreScaledIndex &&
+                     Coordinates.size() == CandidateCapacity &&
+                     !Coordinates.empty() && *Coordinates.begin() == 0 &&
+                     *Coordinates.rbegin() == CandidateCapacity - 1;
+            };
+        auto queueGraphGrowth =
+            [&](const std::vector<va_t> &Targets,
+                bool CompleteDenseRuntimeCoordinates) -> std::optional<bool> {
           if (!consumeBudgetProducts(
                   {{Targets.size(),
                     orderedEvidenceLookupWork(ExploredAddrs.size())},
@@ -1193,14 +1275,16 @@ uint32_t CFGBuilder::inferBoundsFromMask(
                 return !ExploredAddrs.count(Target) ||
                        !BlockStarts.count(Target);
               });
-          if (!NeedsGraphGrowth)
+          const bool RetainForProvisionalRelativeProof =
+              CandidateProposalStageActive && Rec.JumpTableTargets.empty() &&
+              RetainProvisionalRelativeEdges;
+          if (!NeedsGraphGrowth && !RetainForProvisionalRelativeProof)
             return false;
           if (!consumeBudgetProducts(
                   {{1, orderedEvidenceLookupWork(
                            CandidateFixedPointExplorationTargets.size())}}))
             return std::nullopt;
-          auto Existing =
-              CandidateFixedPointExplorationTargets.find(Rec.Addr);
+          auto Existing = CandidateFixedPointExplorationTargets.find(Rec.Addr);
           if (Existing == CandidateFixedPointExplorationTargets.end() &&
               !consumeBudgetProducts(
                   {{1, orderedEvidenceLookupWork(
@@ -1209,33 +1293,294 @@ uint32_t CFGBuilder::inferBoundsFromMask(
           const size_t ExistingTargets =
               Existing == CandidateFixedPointExplorationTargets.end()
                   ? 0
-                  : Existing->second.size();
+                  : Existing->second.Targets.size();
           if (Targets.size() >
               std::numeric_limits<size_t>::max() - ExistingTargets)
             return std::nullopt;
           const size_t RequiredTargets = ExistingTargets + Targets.size();
           if (!consumeBudgetProducts(
-                  {{Existing == CandidateFixedPointExplorationTargets.end()
-                        ? 1
-                        : 0,
+                  {{Existing == CandidateFixedPointExplorationTargets.end() ? 1
+                                                                            : 0,
                     5},
-                   {RequiredTargets, 3},
+                   {RequiredTargets,
+                    orderedEvidenceLookupWork(RequiredTargets) + 5},
                    {1, 2}}))
             return std::nullopt;
           std::vector<va_t> CombinedTargets;
           CombinedTargets.reserve(RequiredTargets);
           if (Existing != CandidateFixedPointExplorationTargets.end())
             CombinedTargets.insert(CombinedTargets.end(),
-                                   Existing->second.begin(),
-                                   Existing->second.end());
+                                   Existing->second.Targets.begin(),
+                                   Existing->second.Targets.end());
           CombinedTargets.insert(CombinedTargets.end(), Targets.begin(),
                                  Targets.end());
+          // These are CFG edges, not coordinate slots.  Keep one canonical
+          // edge per destination so repeated fixed-point replays cannot grow
+          // 1 -> 2 or 4 -> 8 -> 16 copies of the same proposal.  Numeric sort
+          // makes the retained certificate independent of discovery order;
+          // the full comparison/sort/unique and buffer lifetime were prepaid
+          // above before this vector was allocated.
+          detail::canonicalizeFixedPointExplorationTargets(CombinedTargets);
+          MaxCandidateFixedPointExplorationTargetCountForTesting =
+              std::max(MaxCandidateFixedPointExplorationTargetCountForTesting,
+                       CombinedTargets.size());
           if (Existing == CandidateFixedPointExplorationTargets.end())
             CandidateFixedPointExplorationTargets.emplace(
-                Rec.Addr, std::move(CombinedTargets));
-          else
-            Existing->second = std::move(CombinedTargets);
-          return true;
+                Rec.Addr, CandidateFixedPointExploration{
+                              std::move(CombinedTargets), NeedsGraphGrowth,
+                              CompleteDenseRuntimeCoordinates});
+          else {
+            Existing->second.Targets = std::move(CombinedTargets);
+            Existing->second.RequiresGraphGrowth |= NeedsGraphGrowth;
+            Existing->second.CompleteDenseRuntimeCoordinates |=
+                CompleteDenseRuntimeCoordinates;
+          }
+          return NeedsGraphGrowth;
+        };
+        // An exact finite seed may expose two or more real case destinations
+        // before the candidate graph is closed.  If this same consumer's
+        // exact selector use is locally dominated by an unconditional dense
+        // AND mask, that mask is an independent hard upper bound: it is safe
+        // to over-approximate the already-proven subset to [0, M] without
+        // borrowing a sibling selector or treating physical capacity as
+        // runtime authority.  Keep this proof deliberately block-local and
+        // syntax-small.  The full occurrence resolver remains authoritative
+        // for every other shape.
+        bool DirectDenseMaskProofIncomplete = false;
+        auto currentOccurrenceDenseMaskBound =
+            [&]() -> std::optional<uint32_t> {
+          const TargetRegInfo &TRI =
+              getTargetRegInfo(CurrentImg ? CurrentImg->Arch : Arch::Unknown);
+          auto sameVar = [](const NdVar &A, const NdVar &B) {
+            return A.Space == B.Space && A.Offset == B.Offset &&
+                   A.Size == B.Size;
+          };
+          struct RegisterLane {
+            uint64_t Container = 0;
+            uint16_t ContainerSize = 0;
+            uint16_t ByteOffset = 0;
+            uint16_t Size = 0;
+          };
+          auto registerLane =
+              [&](const NdVar &Value) -> std::optional<RegisterLane> {
+            if (!Value.isReg() || Value.Size == 0)
+              return std::nullopt;
+            const auto [WideOffset, WideSize] =
+                TRI.findWideReg(Value.Offset, Value.Size);
+            int ByteOffset = 0;
+            if (WideOffset != Value.Offset || WideSize != Value.Size) {
+              ByteOffset = TRI.subRegByteOffset(Value.Offset, Value.Size,
+                                                WideOffset, WideSize);
+              if (ByteOffset < 0 ||
+                  static_cast<unsigned>(ByteOffset) + Value.Size > WideSize)
+                return std::nullopt;
+            }
+            return RegisterLane{WideOffset, WideSize,
+                                static_cast<uint16_t>(ByteOffset), Value.Size};
+          };
+          auto overlaps = [&](const NdVar &A, const NdVar &B) {
+            if (A.Space != B.Space || A.Size == 0 || B.Size == 0)
+              return false;
+            if (A.isReg()) {
+              const std::optional<RegisterLane> Left = registerLane(A);
+              const std::optional<RegisterLane> Right = registerLane(B);
+              if (!Left || !Right || Left->Container != Right->Container ||
+                  Left->ContainerSize != Right->ContainerSize)
+                return false;
+              return Left->ByteOffset < Right->ByteOffset + Right->Size &&
+                     Right->ByteOffset < Left->ByteOffset + Left->Size;
+            }
+            if (A.Offset > InvalidVA - A.Size || B.Offset > InvalidVA - B.Size)
+              return true;
+            return A.Offset < B.Offset + B.Size && B.Offset < A.Offset + A.Size;
+          };
+          auto consumeProofWork = [&](size_t Amount = 1) {
+            // This is a local value slice, so charge both the per-core ceiling
+            // and the invocation-wide candidate account.  The latter alone is
+            // intentionally much larger for physical reads and graph replay.
+            if (consumeWork(Amount))
+              return true;
+            DirectDenseMaskProofIncomplete = true;
+            return false;
+          };
+          auto proofBlockStart = [&](va_t UseAddr) -> std::optional<va_t> {
+            if (!consumeProofWork(
+                    orderedEvidenceLookupWork(BlockStarts.size())))
+              return std::nullopt;
+            va_t Start = CurrentFuncEntry;
+            if (auto It = BlockStarts.upper_bound(UseAddr);
+                It != BlockStarts.begin()) {
+              --It;
+              Start = std::max(Start, *It);
+            }
+            if (ActiveJumpTableProofRoots) {
+              const auto &ProofRoots = *ActiveJumpTableProofRoots;
+              if (!consumeProofWork(
+                      orderedEvidenceLookupWork(ProofRoots.size())))
+                return std::nullopt;
+              if (auto It = ProofRoots.upper_bound(UseAddr);
+                  It != ProofRoots.begin()) {
+                --It;
+                Start = std::max(Start, *It);
+              }
+            }
+            return Start;
+          };
+          struct LocalDefinition {
+            const LowOp *Op = nullptr;
+            const InsnRecord *Insn = nullptr;
+          };
+          auto localDefinition =
+              [&](va_t FromAddr, int FromSeq, const NdVar &Value,
+                  va_t BlockStart) -> std::optional<LocalDefinition> {
+            if (!consumeProofWork(orderedEvidenceLookupWork(Insns.size())))
+              return std::nullopt;
+            auto It = Insns.upper_bound(FromAddr);
+            while (It != Insns.begin()) {
+              --It;
+              if (!consumeProofWork())
+                return std::nullopt;
+              if (It->first < BlockStart)
+                break;
+              const auto &Ops = It->second.Ops;
+              if (!consumeProofWork(Ops.size()))
+                return std::nullopt;
+              for (auto OpIt = Ops.rbegin(); OpIt != Ops.rend(); ++OpIt) {
+                const LowOp &Op = *OpIt;
+                if (Op.Addr > FromAddr ||
+                    (Op.Addr == FromAddr && Op.Seq >= FromSeq))
+                  continue;
+                if ((Op.Opcode == NdOp::CALL ||
+                     Op.Opcode == NdOp::INDIR_CALL) &&
+                    Value.isReg())
+                  return std::nullopt;
+                if (!overlaps(Op.Output, Value))
+                  continue;
+                const bool PreservesQueriedLowLane =
+                    Op.Opcode == NdOp::INT_ZEXT && Op.NumInputs >= 1 &&
+                    sameVar(Op.Inputs[0], Value) &&
+                    Op.Output.Space == Value.Space &&
+                    Op.Output.Offset == Value.Offset &&
+                    Op.Output.Size > Value.Size;
+                if (It->second.IsInstructionGuard ||
+                    (!sameVar(Op.Output, Value) && !PreservesQueriedLowLane))
+                  return std::nullopt;
+                return LocalDefinition{&Op, &It->second};
+              }
+              if (It->first == BlockStart)
+                break;
+            }
+            return std::nullopt;
+          };
+
+          std::optional<uint32_t> SharedBound;
+          for (const JumpTableValueOccurrence &Index : IndexOccurrences) {
+            if (Index.DefinedAtPoint || Index.Addr == InvalidVA ||
+                Index.Seq < 0 ||
+                (!Index.Value.isReg() && !Index.Value.isTemp()))
+              return std::nullopt;
+            if (!consumeProofWork(orderedEvidenceLookupWork(Insns.size())))
+              return std::nullopt;
+            const auto UseIt = Insns.find(Index.Addr);
+            if (UseIt == Insns.end() || UseIt->second.IsInstructionGuard)
+              return std::nullopt;
+            if (!consumeProofWork(UseIt->second.Ops.size()))
+              return std::nullopt;
+            const LowOp *UseOp = nullptr;
+            for (const LowOp &Op : UseIt->second.Ops) {
+              if (Op.Seq != Index.Seq)
+                continue;
+              const bool ExactInput = std::any_of(
+                  Op.Inputs, Op.Inputs + Op.NumInputs, [&](const NdVar &Input) {
+                    return sameVar(Input, Index.Value);
+                  });
+              if (!ExactInput || UseOp)
+                return std::nullopt;
+              UseOp = &Op;
+            }
+            if (!UseOp)
+              return std::nullopt;
+            const std::optional<va_t> BlockStart = proofBlockStart(Index.Addr);
+            if (!BlockStart)
+              return std::nullopt;
+
+            NdVar Value = Index.Value;
+            va_t FromAddr = UseOp->Addr;
+            int FromSeq = UseOp->Seq;
+            std::optional<uint32_t> OccurrenceBound;
+            for (unsigned Depth = 0; Depth <= limits::kMaxQuasiCopyDepth;
+                 ++Depth) {
+              const std::optional<LocalDefinition> Definition =
+                  localDefinition(FromAddr, FromSeq, Value, *BlockStart);
+              if (!Definition)
+                break;
+              const LowOp &Producer = *Definition->Op;
+              if (Producer.Opcode == NdOp::INT_AND && Producer.NumInputs >= 2 &&
+                  sameVar(Producer.Output, Value)) {
+                if (!consumeProofWork(Definition->Insn->Ops.size()))
+                  return std::nullopt;
+                const bool ConditionalMerge = std::any_of(
+                    Definition->Insn->Ops.begin(), Definition->Insn->Ops.end(),
+                    [&](const LowOp &Merge) {
+                      if (Merge.Opcode != NdOp::SELECT || Merge.NumInputs < 3)
+                        return false;
+                      return std::any_of(Merge.Inputs + 1,
+                                         Merge.Inputs +
+                                             std::min<int>(Merge.NumInputs, 3),
+                                         [&](const NdVar &Arm) {
+                                           return sameVar(Arm, Producer.Output);
+                                         });
+                    });
+                if (ConditionalMerge)
+                  return std::nullopt;
+                const bool LeftConstant = Producer.Inputs[0].isConst();
+                const bool RightConstant = Producer.Inputs[1].isConst();
+                if (LeftConstant == RightConstant)
+                  return std::nullopt;
+                const NdVar &MaskOperand =
+                    Producer.Inputs[LeftConstant ? 0 : 1];
+                const NdVar &DynamicOperand =
+                    Producer.Inputs[LeftConstant ? 1 : 0];
+                if (isAddressProvenance(MaskOperand.Provenance) ||
+                    MaskOperand.AddressOwnerVA != InvalidVA)
+                  return std::nullopt;
+                const std::optional<uint64_t> EffectiveMask =
+                    effectiveIntegerAndMask(
+                        MaskOperand.Offset, MaskOperand.Size,
+                        DynamicOperand.Size, Producer.Output.Size);
+                if (!EffectiveMask || *EffectiveMask == 0 ||
+                    *EffectiveMask == std::numeric_limits<uint64_t>::max() ||
+                    (*EffectiveMask & (*EffectiveMask + 1)) != 0)
+                  return std::nullopt;
+                const uint64_t WideBound = *EffectiveMask + 1;
+                if (WideBound < limits::kMinJumpTableEntries ||
+                    WideBound > CandidateCapacity ||
+                    WideBound > limits::kMaxJumpTableEntries)
+                  return std::nullopt;
+                OccurrenceBound = static_cast<uint32_t>(WideBound);
+                break;
+              }
+              if (Producer.NumInputs < 1 ||
+                  (Producer.Opcode != NdOp::COPY &&
+                   Producer.Opcode != NdOp::INT_ZEXT) ||
+                  (!Producer.Inputs[0].isReg() &&
+                   !Producer.Inputs[0].isTemp()) ||
+                  (Producer.Opcode == NdOp::COPY &&
+                   Producer.Inputs[0].Size != Producer.Output.Size) ||
+                  (Producer.Opcode == NdOp::INT_ZEXT &&
+                   Producer.Inputs[0].Size >= Producer.Output.Size))
+                return std::nullopt;
+              Value = Producer.Inputs[0];
+              FromAddr = Producer.Addr;
+              FromSeq = Producer.Seq;
+            }
+            if (!OccurrenceBound)
+              return std::nullopt;
+            if (SharedBound && *SharedBound != *OccurrenceBound)
+              return std::nullopt;
+            SharedBound = OccurrenceBound;
+          }
+          return SharedBound;
         };
         const std::vector<va_t> NoTargets;
         const std::set<va_t> &Roots = ActiveJumpTableProofRoots
@@ -1244,6 +1589,46 @@ uint32_t CFGBuilder::inferBoundsFromMask(
         std::set<uint32_t> Authorized;
         std::set<va_t> ExactFiniteGroupBranches;
         bool ExactFiniteSeedIncomplete = false;
+        bool AllowRelativeSingletonPublication = false;
+        if (ExactFiniteRelativeSingletonTarget) {
+          if (!consumeBudgetProducts(
+                  {{Info.LoadRoles.size(), 3},
+                   {Info.LoadRoles.empty()
+                        ? 0
+                        : Info.LoadRoles.front().AllowedBases.size(),
+                    1},
+                   {Info.LoadRoles.empty()
+                        ? 0
+                        : Info.LoadRoles.front().Indices.size(),
+                    2}}))
+            return 0;
+          const uint64_t PhysicalStride =
+              Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize;
+          const bool AllowCertifiedSiblingRuntimeSingleton =
+              CertifiedSiblingRuntimeStorage &&
+              CertifiedSiblingRuntimeStorage->BaseAddr == Info.BaseAddr &&
+              CertifiedSiblingRuntimeStorage->EntrySize == Info.EntrySize &&
+              CertifiedSiblingRuntimeStorage->EntryStride == PhysicalStride &&
+              CertifiedSiblingRuntimeStorage->PhysicalSlotCount ==
+                  CandidateCapacity;
+          AllowRelativeSingletonPublication =
+              CandidateProposalStageActive && Info.IsRelative &&
+              !Info.RelocAbsolute && !Info.PreScaledIndex &&
+              !Info.TwoTableSelect && !Info.TwoLevelIndex && Info.HasBaseAddr &&
+              Info.EntrySize != 0 && PhysicalStride >= Info.EntrySize &&
+              (Info.ExactBoundedRelativeRelocationSlots == CandidateCapacity ||
+               AllowCertifiedSiblingRuntimeSingleton) &&
+              Info.LoadRoles.size() == 1 && IndexOccurrences.size() == 1 &&
+              Info.LoadRoles.front().LoadWidth == Info.EntrySize &&
+              Info.LoadRoles.front().AddressScale == PhysicalStride &&
+              Info.LoadRoles.front().Indices.size() == 1 &&
+              Info.LoadRoles.front().Indices.front() ==
+                  IndexOccurrences.front() &&
+              std::find(Info.LoadRoles.front().AllowedBases.begin(),
+                        Info.LoadRoles.front().AllowedBases.end(),
+                        Info.BaseAddr) !=
+                  Info.LoadRoles.front().AllowedBases.end();
+        }
         const bool HasExactGroupInventory =
             ExactConsumerGroup &&
             ExactConsumerGroup->IndexOccurrences.size() ==
@@ -1341,7 +1726,8 @@ uint32_t CFGBuilder::inferBoundsFromMask(
           const std::vector<bool> Matches = tableValuesMatchAtUses(
               Queries, nullptr, &QueryComplete, Rec.Addr, Targets,
               EvidenceBudget, /*LocalMatchEvidenceLimit=*/0,
-              SharedTargetBranches, &FeasibleMasks);
+              SharedTargetBranches, &FeasibleMasks,
+              kMaskDomainResolverDepthLimit, CertifiedEdgeOverrides);
           if (!consumeBudgetProducts({{QueryCount, 2}}))
             return std::nullopt;
           if (Matches.size() != Queries.size() ||
@@ -1414,8 +1800,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
             *IncompleteIndexDomain = true;
           return 0;
         }
-        if (!consumeBudget(*EvidenceBudget,
-                           SeedQueryCount * SeedWorkPerQuery))
+        if (!consumeBudget(*EvidenceBudget, SeedQueryCount * SeedWorkPerQuery))
           return 0;
         // A pre-scaled layout performs one checked slot-to-coordinate mapping
         // while constructing the seed batch and one more while consuming its
@@ -1530,21 +1915,53 @@ uint32_t CFGBuilder::inferBoundsFromMask(
         if (!Info.PreScaledIndex &&
             Authorized.size() < limits::kMinJumpTableEntries &&
             !ExactFiniteReplayOccurrences && Info.IsRelative &&
-            !Info.RelocAbsolute &&
-            !seedExactFiniteDomain(IndexOccurrences,
-                                   /*OccurrenceBranches=*/nullptr,
-                                   /*SharedTargetBranches=*/nullptr,
-                                   /*MinimumPresentBranches=*/1))
-          return 0;
+            !Info.RelocAbsolute) {
+          if (!seedExactFiniteDomain(IndexOccurrences,
+                                     /*OccurrenceBranches=*/nullptr,
+                                     /*SharedTargetBranches=*/nullptr,
+                                     /*MinimumPresentBranches=*/1))
+            return 0;
+          // A concrete relative-table selector can authorize the first edge.
+          // Ordinarily, fewer than kMinJumpTableEntries coordinates remain a
+          // bootstrap seed and the enclosing mask/intersection proof must
+          // close a real table domain.  One exact finite selector occurrence
+          // is different only when the caller has already authenticated an
+          // independent physical object or an immutable sibling's complete
+          // runtime range, plus local-target ownership and the exact
+          // LOAD/address/target role: replay that singleton after its
+          // destination is decoded so the entry edge can be published without
+          // treating the rest of the physical object as selector authority.
+          if (Authorized.size() < limits::kMinJumpTableEntries &&
+              !AllowRelativeSingletonPublication &&
+              !ExactFiniteRelativeClosureUnknown &&
+              !Info.IndexDomainAuthenticated) {
+            // Initial discovery must not promote one relative selector value
+            // into a cyclic table without independent singleton authority.
+            // Final revalidation is different: it receives an already
+            // authenticated domain and must rerun this exact finite-set solver
+            // before comparing every recovered coordinate with that domain.
+            // Keeping the solver enabled here grants no coordinate by itself;
+            // the replay below still has to close monotonically and the caller
+            // performs the authoritative equality check.
+            ExactFiniteReplayOccurrences = nullptr;
+            ExactFiniteReplayOccurrenceBranches = nullptr;
+            ExactFiniteReplaySharedTargetBranches = nullptr;
+            ExactFiniteReplayMinimumPresentBranches = 0;
+          }
+        }
         // A selector may already be bounded before the first indirect edge
         // (for example `arg & 7`).  Run the ordinary proof once in the empty-
         // edge graph so that dynamic, but independently authenticated, entry
-        // domains can seed the same monotone iteration.
-        if (Authorized.empty()) {
+        // domains can seed the same monotone iteration.  A non-empty exact
+        // finite seed is extended only for loader-normalized absolute
+        // relocation tables: a relative sparse selector is already a precise
+        // coordinate set and must not be widened by a less precise dense mask.
+        if (Authorized.empty() || (Authorized.size() < CandidateCapacity &&
+                                   Info.RelocAbsolute && !Info.IsRelative)) {
           bool EntryReachabilityComplete = false;
           const std::set<va_t> EntryReachable = candidateReachableInstructions(
               Rec, NoTargets, Roots, Info.StorageRanges, EvidenceBudget,
-              &EntryReachabilityComplete);
+              &EntryReachabilityComplete, CertifiedEdgeOverrides);
           if (!EntryReachabilityComplete)
             return failGraphIncomplete();
           bool EntryIncomplete = false;
@@ -1554,12 +1971,16 @@ uint32_t CFGBuilder::inferBoundsFromMask(
           std::vector<JumpTableMaskKnownOneWitness> EntryKnownOneWitnesses;
           const uint32_t EntryBound = inferBoundsFromMask(
               Rec, FixedPointInfo, AllowNonContiguous, &EntryIncomplete,
-              &EntryNonContiguous, &EntryCoordinates,
-              &EntryKnownOneWitnesses,
+              &EntryNonContiguous, &EntryCoordinates, &EntryKnownOneWitnesses,
               /*RequireProducerReachability=*/true, &NoTargets, &EntryReachable,
               /*AllowFixedPointBootstrap=*/false,
               /*AllowRawDenseShortcut=*/true, EvidenceBudget,
-              &EntrySemanticAmbiguous);
+              &EntrySemanticAmbiguous,
+              /*ExactConsumerGroup=*/nullptr, CertifiedEdgeOverrides,
+              CertifiedSiblingRuntimeStorage,
+              /*ExactFiniteRelativeSingletonTarget=*/nullptr,
+              /*ExactFiniteRelativeClosureUnknown=*/nullptr,
+              RetainProvisionalRelativeEdges);
           if (EntrySemanticAmbiguous) {
             if (SemanticIndexDomainAmbiguous)
               *SemanticIndexDomainAmbiguous = true;
@@ -1617,6 +2038,8 @@ uint32_t CFGBuilder::inferBoundsFromMask(
             *IncompleteIndexDomain = true;
           return 0;
         }
+        if (!intersectGraphGrowthCoordinates(Authorized))
+          return 0;
         if (!Authorized.empty()) {
           for (uint32_t Iteration = 0; Iteration <= CandidateCapacity;
                ++Iteration) {
@@ -1653,16 +2076,147 @@ uint32_t CFGBuilder::inferBoundsFromMask(
                   return 0;
                 Next.insert(Coordinate);
               }
+              if (!intersectGraphGrowthCoordinates(Next))
+                return 0;
               if (Next == Authorized) {
-                const std::optional<bool> Growth =
-                    queueGraphGrowth(AuthorizedTargets);
+                const std::optional<bool> Growth = queueGraphGrowth(
+                    AuthorizedTargets,
+                    hasCompleteDenseRuntimeCoordinates(Authorized));
                 if (!Growth)
                   return 0;
                 if (*Growth)
                   return 0;
-                if (Authorized.size() < limits::kMinJumpTableEntries)
-                  return 0;
+                // An exact finite subset is complete only for a one-shot
+                // dispatch.  If any admitted case reaches this branch again,
+                // retire the auxiliary subset and let the ordinary mask/
+                // intersection fixed point prove the cyclic domain.  An
+                // unmodeled exit is not evidence exhaustion: a relative
+                // proposal may carry the authenticated edge into the next
+                // immutable graph, but no partial switch may be published.
+                if (Authorized.size() < CandidateCapacity) {
+                  const size_t RootLookup =
+                      orderedEvidenceLookupWork(AuthorizedTargets.size());
+                  if (!consumeBudgetProducts(
+                          {{AuthorizedTargets.size(), RootLookup + 4}}))
+                    return 0;
+                  const std::set<va_t> PartialRoots(AuthorizedTargets.begin(),
+                                                    AuthorizedTargets.end());
+                  bool PartialReachabilityComplete = false;
+                  bool PartialControlFlowClosed = false;
+                  const std::set<va_t> FromPartialTargets =
+                      candidateReachableInstructions(
+                          Rec, NoTargets, PartialRoots, Info.StorageRanges,
+                          EvidenceBudget, &PartialReachabilityComplete,
+                          CertifiedEdgeOverrides, &PartialControlFlowClosed);
+                  if (!PartialReachabilityComplete)
+                    return failGraphIncomplete();
+                  if (!consumeBudgetProducts(
+                          {{1, orderedEvidenceLookupWork(
+                                   FromPartialTargets.size())}}))
+                    return 0;
+                  if (FromPartialTargets.count(Rec.Addr)) {
+                    ExactFiniteReplayOccurrences = nullptr;
+                    ExactFiniteReplayOccurrenceBranches = nullptr;
+                    ExactFiniteReplaySharedTargetBranches = nullptr;
+                    ExactFiniteReplayMinimumPresentBranches = 0;
+                    continue;
+                  }
+                  if (!PartialControlFlowClosed) {
+                    if (ExactFiniteReplayOccurrences == &IndexOccurrences &&
+                        Authorized.size() >= limits::kMinJumpTableEntries &&
+                        !Info.PreScaledIndex) {
+                      const std::optional<uint32_t> DirectBound =
+                          currentOccurrenceDenseMaskBound();
+                      if (DirectDenseMaskProofIncomplete)
+                        return failGraphIncomplete();
+                      if (DirectBound) {
+                        if (!consumeBudgetProducts({{Authorized.size(), 1}}))
+                          return 0;
+                        const bool AuthorizedWithinBound =
+                            std::all_of(Authorized.begin(), Authorized.end(),
+                                        [&](uint32_t Coordinate) {
+                                          return Coordinate < *DirectBound;
+                                        });
+                        if (AuthorizedWithinBound) {
+                          if (!consumeBudgetProducts(
+                                  {{*DirectBound,
+                                    orderedEvidenceLookupWork(*DirectBound) +
+                                        4}}))
+                            return 0;
+                          std::set<uint32_t> DenseCoordinates;
+                          for (uint32_t Coordinate = 0;
+                               Coordinate < *DirectBound; ++Coordinate)
+                            DenseCoordinates.insert(Coordinate);
+                          if (!intersectGraphGrowthCoordinates(
+                                  DenseCoordinates))
+                            return 0;
+                          if (DenseCoordinates.size() >=
+                              limits::kMinJumpTableEntries) {
+                            if (!consumeBudgetProducts(
+                                    {{Authorized.size(),
+                                      orderedEvidenceLookupWork(
+                                          DenseCoordinates.size())}}))
+                              return 0;
+                            const bool SeedStillAuthorized = std::all_of(
+                                Authorized.begin(), Authorized.end(),
+                                [&](uint32_t Coordinate) {
+                                  return DenseCoordinates.count(Coordinate);
+                                });
+                            if (SeedStillAuthorized) {
+                              const uint32_t PublishedBound =
+                                  *DenseCoordinates.rbegin() + 1;
+                              const std::optional<std::vector<va_t>>
+                                  DenseTargets = targetsFor(DenseCoordinates);
+                              if (!DenseTargets)
+                                return 0;
+                              // queueGraphGrowth may retain proposal state.
+                              // Prepay the only remaining output allocation
+                              // before that transactional mutation boundary.
+                              if (FeasibleCoordinates &&
+                                  !consumeBudgetProducts(
+                                      {{DenseCoordinates.size(), 3}}))
+                                return 0;
+                              const std::optional<bool> Growth =
+                                  queueGraphGrowth(
+                                      *DenseTargets,
+                                      hasCompleteDenseRuntimeCoordinates(
+                                          DenseCoordinates));
+                              if (!Growth || *Growth)
+                                return 0;
+                              if (UsedNonContiguous)
+                                *UsedNonContiguous = false;
+                              if (FeasibleCoordinates)
+                                FeasibleCoordinates->assign(
+                                    DenseCoordinates.begin(),
+                                    DenseCoordinates.end());
+                              return PublishedBound;
+                            }
+                          }
+                        }
+                      }
+                    }
+                    if (ExactFiniteRelativeClosureUnknown)
+                      *ExactFiniteRelativeClosureUnknown = true;
+                    return 0;
+                  }
+                }
                 const uint32_t Bound = *Authorized.rbegin() + 1;
+                if (Authorized.size() < limits::kMinJumpTableEntries) {
+                  if (!AllowRelativeSingletonPublication ||
+                      Authorized.size() != 1 || AuthorizedTargets.size() != 1)
+                    return 0;
+                  if (FeasibleCoordinates &&
+                      !consumeBudgetProducts({{Authorized.size(), 3}}))
+                    return 0;
+                  if (UsedNonContiguous)
+                    *UsedNonContiguous = Authorized.size() != Bound;
+                  if (FeasibleCoordinates)
+                    FeasibleCoordinates->assign(Authorized.begin(),
+                                                Authorized.end());
+                  *ExactFiniteRelativeSingletonTarget =
+                      AuthorizedTargets.front();
+                  return Bound;
+                }
                 if (FeasibleCoordinates &&
                     !consumeBudgetProducts({{Authorized.size(), 3}}))
                   return 0;
@@ -1676,7 +2230,8 @@ uint32_t CFGBuilder::inferBoundsFromMask(
               std::optional<std::vector<va_t>> NextTargets = targetsFor(Next);
               if (!NextTargets)
                 return 0;
-              const std::optional<bool> Growth = queueGraphGrowth(*NextTargets);
+              const std::optional<bool> Growth = queueGraphGrowth(
+                  *NextTargets, hasCompleteDenseRuntimeCoordinates(Next));
               if (!Growth)
                 return 0;
               if (*Growth)
@@ -1688,7 +2243,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
             bool ReachabilityComplete = false;
             const std::set<va_t> Reachable = candidateReachableInstructions(
                 Rec, AuthorizedTargets, Roots, Info.StorageRanges,
-                EvidenceBudget, &ReachabilityComplete);
+                EvidenceBudget, &ReachabilityComplete, CertifiedEdgeOverrides);
             if (!ReachabilityComplete)
               return failGraphIncomplete();
             if (!consumeBudgetProducts(
@@ -1704,13 +2259,17 @@ uint32_t CFGBuilder::inferBoundsFromMask(
             std::vector<JumpTableMaskKnownOneWitness> CoreKnownOneWitnesses;
             const uint32_t CoreBound = inferBoundsFromMask(
                 Rec, FixedPointInfo, AllowNonContiguous, &CoreIncomplete,
-                &CoreNonContiguous, &CoreCoordinates,
-                &CoreKnownOneWitnesses,
+                &CoreNonContiguous, &CoreCoordinates, &CoreKnownOneWitnesses,
                 /*RequireProducerReachability=*/!AuthorizedTargets.empty(),
                 &AuthorizedTargets, &Reachable,
                 /*AllowFixedPointBootstrap=*/false,
                 /*AllowRawDenseShortcut=*/true, EvidenceBudget,
-                &CoreSemanticAmbiguous);
+                &CoreSemanticAmbiguous,
+                /*ExactConsumerGroup=*/nullptr, CertifiedEdgeOverrides,
+                CertifiedSiblingRuntimeStorage,
+                /*ExactFiniteRelativeSingletonTarget=*/nullptr,
+                /*ExactFiniteRelativeClosureUnknown=*/nullptr,
+                RetainProvisionalRelativeEdges);
             if (CoreSemanticAmbiguous) {
               if (SemanticIndexDomainAmbiguous)
                 *SemanticIndexDomainAmbiguous = true;
@@ -1742,8 +2301,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
                             std::numeric_limits<size_t>::max());
               return 0;
             }
-            const size_t NextUpperBound =
-                Authorized.size() + CoreInsertCount;
+            const size_t NextUpperBound = Authorized.size() + CoreInsertCount;
             // Copy traversal, destination nodes and cleanup, equality scans,
             // per-coordinate validation, ordered closure lookups, and every
             // possible insertion are all paid before constructing Next.
@@ -1760,12 +2318,15 @@ uint32_t CFGBuilder::inferBoundsFromMask(
             if (ValidCoreCoordinates)
               for (uint32_t Coordinate : CoreCoordinates)
                 Next.insert(Coordinate);
+            if (!intersectGraphGrowthCoordinates(Next))
+              return 0;
 
             const bool CoreClosed =
                 CoreBound != 0 && !CoreCoordinates.empty() &&
                 std::all_of(CoreCoordinates.begin(), CoreCoordinates.end(),
                             [&](uint32_t Coordinate) {
-                              return Authorized.count(Coordinate);
+                              return !isGraphGrowthCoordinate(Coordinate) ||
+                                     Authorized.count(Coordinate);
                             });
             if (Next == Authorized) {
               // The seed edge is exact but its destination may not have been
@@ -1773,8 +2334,9 @@ uint32_t CFGBuilder::inferBoundsFromMask(
               // only the already-authorized targets for recursive descent;
               // do not publish a partial table or admit any additional
               // coordinate until a later graph proves the closed domain.
-              const std::optional<bool> Growth =
-                  queueGraphGrowth(AuthorizedTargets);
+              const std::optional<bool> Growth = queueGraphGrowth(
+                  AuthorizedTargets,
+                  hasCompleteDenseRuntimeCoordinates(Authorized));
               if (!Growth)
                 return 0;
               const bool NeedsGraphGrowth = *Growth;
@@ -1812,7 +2374,8 @@ uint32_t CFGBuilder::inferBoundsFromMask(
             std::optional<std::vector<va_t>> NextTargets = targetsFor(Next);
             if (!NextTargets)
               return 0;
-            const std::optional<bool> Growth = queueGraphGrowth(*NextTargets);
+            const std::optional<bool> Growth = queueGraphGrowth(
+                *NextTargets, hasCompleteDenseRuntimeCoordinates(Next));
             if (!Growth)
               return 0;
             if (*Growth)
@@ -1840,11 +2403,17 @@ uint32_t CFGBuilder::inferBoundsFromMask(
   // Layout-specific fixed-point mapping is unnecessary when the runtime
   // domain is already provable without any candidate edge.  Revalidate every
   // provisional graph once with an empty target vector before the strict
-  // fallback below.  This preserves independently bounded pre-scaled,
-  // compact, large, and otherwise non-1:1 layouts while preventing their
-  // current successors from making a case-local mask reachable.
+  // fallback below.  An authenticated edge-only template may enter this path
+  // before Rec publishes successors: its empty-graph selector proof supplies
+  // only the capacity used by the bounded replay, whose exact targets are then
+  // queued transactionally.  This preserves independently bounded pre-scaled,
+  // compact, large, and otherwise non-1:1 layouts while preventing current
+  // successors from making a case-local mask reachable.
   if (AllowFixedPointBootstrap && !CandidateTargetsOverride &&
-      !ReachableInstructions && !Rec.JumpTableTargets.empty()) {
+      !ReachableInstructions &&
+      (!Rec.JumpTableTargets.empty() || RetainProvisionalRelativeEdges ||
+       CertifiedEdgeOverrides != nullptr ||
+       AllowInlineZeroCapacityBoundedReplay)) {
     const std::vector<va_t> NoTargets;
     const std::set<va_t> &Roots = ActiveJumpTableProofRoots
                                       ? *ActiveJumpTableProofRoots
@@ -1852,7 +2421,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
     bool EntryReachabilityComplete = false;
     const std::set<va_t> EntryReachable = candidateReachableInstructions(
         Rec, NoTargets, Roots, Info.StorageRanges, EvidenceBudget,
-        &EntryReachabilityComplete);
+        &EntryReachabilityComplete, CertifiedEdgeOverrides);
     if (!EntryReachabilityComplete)
       return failGraphIncomplete();
     if (!consumeBudgetProducts(
@@ -1865,13 +2434,17 @@ uint32_t CFGBuilder::inferBoundsFromMask(
       std::vector<uint32_t> EntryCoordinates;
       std::vector<JumpTableMaskKnownOneWitness> EntryKnownOneWitnesses;
       const uint32_t EntryBound = inferBoundsFromMask(
-          Rec, Info, AllowNonContiguous, &EntryIncomplete,
-          &EntryNonContiguous, &EntryCoordinates,
-          &EntryKnownOneWitnesses,
+          Rec, Info, AllowNonContiguous, &EntryIncomplete, &EntryNonContiguous,
+          &EntryCoordinates, &EntryKnownOneWitnesses,
           /*RequireProducerReachability=*/true, &NoTargets, &EntryReachable,
           /*AllowFixedPointBootstrap=*/false,
           /*AllowRawDenseShortcut=*/true, EvidenceBudget,
-          &EntrySemanticAmbiguous);
+          &EntrySemanticAmbiguous,
+          /*ExactConsumerGroup=*/nullptr, CertifiedEdgeOverrides,
+          CertifiedSiblingRuntimeStorage,
+          /*ExactFiniteRelativeSingletonTarget=*/nullptr,
+          /*ExactFiniteRelativeClosureUnknown=*/nullptr,
+          RetainProvisionalRelativeEdges);
       if (EntrySemanticAmbiguous) {
         if (SemanticIndexDomainAmbiguous)
           *SemanticIndexDomainAmbiguous = true;
@@ -1904,7 +2477,11 @@ uint32_t CFGBuilder::inferBoundsFromMask(
               /*ReachableInstructions=*/nullptr,
               /*AllowFixedPointBootstrap=*/true,
               /*AllowRawDenseShortcut=*/true, EvidenceBudget,
-              &ReplaySemanticAmbiguous, ExactConsumerGroup);
+              &ReplaySemanticAmbiguous, ExactConsumerGroup,
+              CertifiedEdgeOverrides, CertifiedSiblingRuntimeStorage,
+              ExactFiniteRelativeSingletonTarget,
+              ExactFiniteRelativeClosureUnknown,
+              RetainProvisionalRelativeEdges);
           if (ReplaySemanticAmbiguous) {
             if (SemanticIndexDomainAmbiguous)
               *SemanticIndexDomainAmbiguous = true;
@@ -1938,23 +2515,19 @@ uint32_t CFGBuilder::inferBoundsFromMask(
         const std::set<va_t> FromCandidateTargets =
             candidateReachableInstructions(Rec, NoTargets, CandidateRoots,
                                            Info.StorageRanges, EvidenceBudget,
-                                           &CandidateReachabilityComplete);
+                                           &CandidateReachabilityComplete,
+                                           CertifiedEdgeOverrides);
         if (!CandidateReachabilityComplete)
           return failGraphIncomplete();
         if (!consumeBudgetProducts(
                 {{CandidateRoots.size(),
-                  orderedEvidenceLookupWork(FromCandidateTargets.size()) +
-                      1},
-                 {1, orderedEvidenceLookupWork(
-                         FromCandidateTargets.size())}}))
+                  orderedEvidenceLookupWork(FromCandidateTargets.size()) + 1},
+                 {1, orderedEvidenceLookupWork(FromCandidateTargets.size())}}))
           return 0;
-        const bool AllCandidateRootsDecoded =
-            std::all_of(CandidateRoots.begin(), CandidateRoots.end(),
-                        [&](va_t Target) {
-                          return FromCandidateTargets.count(Target);
-                        });
-        if (AllCandidateRootsDecoded &&
-            !FromCandidateTargets.count(Rec.Addr)) {
+        const bool AllCandidateRootsDecoded = std::all_of(
+            CandidateRoots.begin(), CandidateRoots.end(),
+            [&](va_t Target) { return FromCandidateTargets.count(Target); });
+        if (AllCandidateRootsDecoded && !FromCandidateTargets.count(Rec.Addr)) {
           if (UsedNonContiguous)
             *UsedNonContiguous = EntryNonContiguous;
           if (FeasibleCoordinates)
@@ -1986,8 +2559,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
     if (!consumeWork(1))
       return failGraphIncomplete();
     if (ReachableInstructions &&
-        !consumeWork(
-            orderedEvidenceLookupWork(ReachableInstructions->size())))
+        !consumeWork(orderedEvidenceLookupWork(ReachableInstructions->size())))
       return failGraphIncomplete();
     if (!ReachableInstructions || ReachableInstructions->count(It->first)) {
       if (It->second.Ops.size() >
@@ -2009,8 +2581,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
     if (!consumeWork(1))
       return failGraphIncomplete();
     if (ReachableInstructions &&
-        !consumeWork(
-            orderedEvidenceLookupWork(ReachableInstructions->size())))
+        !consumeWork(orderedEvidenceLookupWork(ReachableInstructions->size())))
       return failGraphIncomplete();
     if (!ReachableInstructions || ReachableInstructions->count(It->first))
       Ops.insert(Ops.end(), It->second.Ops.begin(), It->second.Ops.end());
@@ -2040,17 +2611,15 @@ uint32_t CFGBuilder::inferBoundsFromMask(
     if (Values.size() == Max)
       return consumeWork(Max);
     const size_t Required = Values.size() + 1;
-    const size_t Doubled = Values.capacity() == 0
-                               ? size_t{1}
-                               : (Values.capacity() > Max / 2
-                                      ? Max
-                                      : Values.capacity() * 2);
+    const size_t Doubled =
+        Values.capacity() == 0
+            ? size_t{1}
+            : (Values.capacity() > Max / 2 ? Max : Values.capacity() * 2);
     const size_t NewCapacity = std::max(Required, Doubled);
     // Pay new storage construction and eventual cleanup plus every retained
     // element moved during the capacity transition before reserve allocates.
     if (NewCapacity == Max ||
-        !consumeWorkProducts(
-            {{NewCapacity, 2}, {Values.size(), 1}}))
+        !consumeWorkProducts({{NewCapacity, 2}, {Values.size(), 1}}))
       return false;
     Values.reserve(NewCapacity);
     return true;
@@ -2066,13 +2635,11 @@ uint32_t CFGBuilder::inferBoundsFromMask(
     if (V.isConst()) {
       // Constants are proposal syntax only.  Reject an unsigned high-bit
       // pattern that cannot be represented as the signed transform addend.
-      if (V.Offset >
-          static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+      if (V.Offset > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
         return {};
       return {ConstantLookupKind::Value, static_cast<int64_t>(V.Offset)};
     }
-    if ((!V.isReg() && !V.isTemp()) ||
-        Depth > limits::kMaxQuasiCopyDepth)
+    if ((!V.isReg() && !V.isTemp()) || Depth > limits::kMaxQuasiCopyDepth)
       return {};
     int Definition = -1;
     for (int I = FromIdx; I >= 0; --I) {
@@ -2122,6 +2689,8 @@ uint32_t CFGBuilder::inferBoundsFromMask(
     const LowOp &Op = Ops[I];
     if (Op.Opcode != NdOp::INT_AND || Op.NumInputs < 2 || Op.Output.Size == 0)
       continue;
+    if (detail::isConstantOnlyScalarMask(Op))
+      continue;
     if (!ensureAppendCapacity(RelevantMaskRoots) || !consumeWork(1))
       return FailIncomplete();
     RelevantMaskRoots.push_back(
@@ -2136,8 +2705,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
         return FailIncomplete();
       const NdVar &MaskOperand = Op.Inputs[ConstantSide];
       const NdVar &DynamicOperand = Op.Inputs[1 - ConstantSide];
-      const ConstantLookupResult Proposed =
-          constValueOf(I - 1, MaskOperand, 0);
+      const ConstantLookupResult Proposed = constValueOf(I - 1, MaskOperand, 0);
       if (Proposed.Kind == ConstantLookupKind::Exhausted)
         return FailIncomplete();
       const std::optional<uint64_t> ConstantWidthMask =
@@ -2191,16 +2759,14 @@ uint32_t CFGBuilder::inferBoundsFromMask(
       // A literal transported through a register COPY remains an unclassified
       // constant, while arithmetic occurrences are classified as scalar.
       // Match both integer forms without admitting address-owned constants.
-      if (!ensureAppendCapacity(ConstantProof.Alternatives) ||
-          !consumeWork(1))
+      if (!ensureAppendCapacity(ConstantProof.Alternatives) || !consumeWork(1))
         return FailIncomplete();
       ConstantProof.Alternatives.push_back(
           {NdVar::cst(static_cast<uint64_t>(Proposed.Value) &
                           *ConstantWidthMask,
                       MaskOperand.Size),
            InvalidVA, -1, false});
-      if (!ensureAppendCapacity(ConstantProof.Alternatives) ||
-          !consumeWork(1))
+      if (!ensureAppendCapacity(ConstantProof.Alternatives) || !consumeWork(1))
         return FailIncomplete();
       ConstantProof.Alternatives.push_back(
           {NdVar::scalar(static_cast<uint64_t>(Proposed.Value) &
@@ -2296,7 +2862,9 @@ uint32_t CFGBuilder::inferBoundsFromMask(
         return FailIncomplete();
       KnownOneProducers.push_back(
           {{Op.Output, Op.Addr, Op.Seq, /*DefinedAtPoint=*/true},
-           ConstantOperand, KnownOneBits, std::move(ConstantProof)});
+           ConstantOperand,
+           KnownOneBits,
+           std::move(ConstantProof)});
       break;
     }
   }
@@ -2328,8 +2896,8 @@ uint32_t CFGBuilder::inferBoundsFromMask(
     MaskCandidate &Candidate = Candidates[CandidateIndex];
     if (!Candidate.CompleteDomain)
       continue;
-    for (size_t ProducerIndex = 0;
-         ProducerIndex < KnownOneProducers.size(); ++ProducerIndex) {
+    for (size_t ProducerIndex = 0; ProducerIndex < KnownOneProducers.size();
+         ++ProducerIndex) {
       if (!consumeWork(1))
         return FailIncomplete();
       const KnownOneProducer &Producer = KnownOneProducers[ProducerIndex];
@@ -2590,10 +3158,9 @@ uint32_t CFGBuilder::inferBoundsFromMask(
     std::vector<JumpTableMaskKnownOneWitness> Witnesses;
     for (size_t ProducerIndex : MatchedKnownOneProducers[CandidateIndex]) {
       const KnownOneProducer &Producer = KnownOneProducers[ProducerIndex];
-      if (!appendUniqueWitness(
-              Witnesses,
-              {Producer.Output, Candidate.Output, Producer.ConstantOperand,
-               Producer.KnownOneBits}))
+      if (!appendUniqueWitness(Witnesses, {Producer.Output, Candidate.Output,
+                                           Producer.ConstantOperand,
+                                           Producer.KnownOneBits}))
         return FailIncomplete();
     }
     if (!appendLineage(Candidate.Output, Witnesses))
@@ -2617,8 +3184,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
     if (!consumeWork(orderedEvidenceLookupWork(EvidenceByBound.size())))
       return std::nullopt;
     auto It = EvidenceByBound.lower_bound(Bound);
-    const bool NewBound =
-        It == EvidenceByBound.end() || It->first != Bound;
+    const bool NewBound = It == EvidenceByBound.end() || It->first != Bound;
     // A hinted map insertion retains one scalar key, the mapped aggregate and
     // its node.  Each list/set insertion separately owns its retained value,
     // node and future cleanup before allocation.
@@ -2657,14 +3223,13 @@ uint32_t CFGBuilder::inferBoundsFromMask(
       return FailIncomplete();
     if (ConstantsMatch[I]) {
       if (Candidates[I].CompleteDomain) {
-        if (!appendBoundEvidence(
-                Candidates[I].Bound, &Candidates[I].Output,
-                Candidates[I].Coordinates, Candidates[I].NonContiguous))
+        if (!appendBoundEvidence(Candidates[I].Bound, &Candidates[I].Output,
+                                 Candidates[I].Coordinates,
+                                 Candidates[I].NonContiguous))
           return FailIncomplete();
       }
     }
   }
-
   // Most selectors consume one root mask directly (possibly through a
   // width-preserving copy/extension).  Prove that exact occurrence before
   // exploring translated-domain proposals.  Besides being the strongest
@@ -2715,6 +3280,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
         Query.Alternatives.assign(Producers.begin(), Producers.end());
         Query.AllowZeroExtension = true;
         Query.AllowSignExtension = AllowsSignExtension;
+        Query.UseDefinedAlternativesAsOccurrenceRoots = true;
         Queries.push_back(std::move(Query));
       }
       bool AnalysisComplete = false;
@@ -2738,8 +3304,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
             continue;
           // This query owns a copy of every relevant root.  Charge it before
           // constructing the alternatives vector, not after the batch exists.
-          if (!consumeWorkProducts(
-                  {{1, 1}, {RelevantMaskRoots.size(), 1}})) {
+          if (!consumeWorkProducts({{1, 1}, {RelevantMaskRoots.size(), 1}})) {
             DirectIndexAnalysisIncomplete = true;
             return std::nullopt;
           }
@@ -2750,6 +3315,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
           Query.Alternatives = RelevantMaskRoots;
           Query.AllowZeroExtension = true;
           Query.Relation = JumpTableValueRelation::MayDepend;
+          Query.UseDefinedAlternativesAsOccurrenceRoots = true;
           UpstreamMaskQueries.push_back(std::move(Query));
         }
         bool UpstreamMaskAnalysisComplete = false;
@@ -2823,8 +3389,8 @@ uint32_t CFGBuilder::inferBoundsFromMask(
       const std::set<uint32_t> &CoordinateSet = Evidence.Coordinates;
       // Scan and retain both dense-domain components, plus the batch record,
       // before the density/width checks or batch vectors allocate.
-      if (!consumeWorkProducts({{CoordinateSet.size(), 2},
-                                {Producers.size(), 2}, {1, 1}}))
+      if (!consumeWorkProducts(
+              {{CoordinateSet.size(), 2}, {Producers.size(), 2}, {1, 1}}))
         return FailIncomplete();
       bool IsDenseZeroBased = !Evidence.UsesNonContiguous && Bound != 0 &&
                               CoordinateSet.size() == Bound;
@@ -2954,9 +3520,8 @@ uint32_t CFGBuilder::inferBoundsFromMask(
         const size_t ReachingProducerCount =
             std::count(ProducerReaches.begin(), ProducerReaches.end(), true);
 
-        if (!consumeWorkProducts(
-                {{Batch.Producers.size(), 1},
-                 {ReachingProducerCount, Candidates.size()}}))
+        if (!consumeWorkProducts({{Batch.Producers.size(), 1},
+                                  {ReachingProducerCount, Candidates.size()}}))
           return FailIncomplete();
         std::vector<size_t> UpstreamCandidateIndices;
         for (size_t ProducerIndex = 0; ProducerIndex < Batch.Producers.size();
@@ -3001,6 +3566,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
           Upstream.Alternatives = RelevantMaskRoots;
           Upstream.AllowZeroExtension = true;
           Upstream.Relation = JumpTableValueRelation::MayDepend;
+          Upstream.UseDefinedAlternativesAsOccurrenceRoots = true;
           UpstreamQueries.push_back(std::move(Upstream));
         }
         if (!UpstreamQueries.empty()) {
@@ -3017,17 +3583,20 @@ uint32_t CFGBuilder::inferBoundsFromMask(
             bool PreciseSemanticAmbiguous = false;
             bool PreciseNonContiguous = false;
             std::vector<uint32_t> PreciseCoordinates;
-            std::vector<JumpTableMaskKnownOneWitness>
-                PreciseKnownOneWitnesses;
+            std::vector<JumpTableMaskKnownOneWitness> PreciseKnownOneWitnesses;
             const uint32_t PreciseBound = inferBoundsFromMask(
                 Rec, Info, AllowNonContiguous, &PreciseIncomplete,
                 &PreciseNonContiguous, &PreciseCoordinates,
-                &PreciseKnownOneWitnesses,
-                RequireProducerReachability, CandidateTargetsOverride,
-                ReachableInstructions,
+                &PreciseKnownOneWitnesses, RequireProducerReachability,
+                CandidateTargetsOverride, ReachableInstructions,
                 /*AllowFixedPointBootstrap=*/false,
                 /*AllowRawDenseShortcut=*/false, EvidenceBudget,
-                &PreciseSemanticAmbiguous);
+                &PreciseSemanticAmbiguous,
+                /*ExactConsumerGroup=*/nullptr, CertifiedEdgeOverrides,
+                CertifiedSiblingRuntimeStorage,
+                /*ExactFiniteRelativeSingletonTarget=*/nullptr,
+                /*ExactFiniteRelativeClosureUnknown=*/nullptr,
+                RetainProvisionalRelativeEdges);
             if (PreciseSemanticAmbiguous) {
               if (SemanticIndexDomainAmbiguous)
                 *SemanticIndexDomainAmbiguous = true;
@@ -3052,8 +3621,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
           }
         }
 
-        if (FeasibleCoordinates &&
-            !consumeWork(Batch.Coordinates.size()))
+        if (FeasibleCoordinates && !consumeWork(Batch.Coordinates.size()))
           return FailIncomplete();
         if (UsedNonContiguous)
           *UsedNonContiguous = false;
@@ -3123,9 +3691,8 @@ uint32_t CFGBuilder::inferBoundsFromMask(
   // before constructing the closure's persistent identity set.
   if (!consumeWorkProducts(
           {{SafeProducerCount, 1},
-           {SafeProducerCount,
-            SafeOutputKeyWork * InitialSafeOutputLookup +
-                SafeOutputKeyWork * 2 + 2}}))
+           {SafeProducerCount, SafeOutputKeyWork * InitialSafeOutputLookup +
+                                   SafeOutputKeyWork * 2 + 2}}))
     return FailIncomplete();
   if (!consumeWork(EvidenceByBound.size()))
     return FailIncomplete();
@@ -3165,8 +3732,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
         if (!consumeWork(1))
           return FailIncomplete();
         const auto &Producers = InputEvidence.Producers;
-        const std::set<uint32_t> &InputCoordinates =
-            InputEvidence.Coordinates;
+        const std::set<uint32_t> &InputCoordinates = InputEvidence.Coordinates;
         // The transformed coordinate walk can retain at most one element per
         // input coordinate.  AND is not monotone, so sorting that vector adds
         // ceil(log2 N) comparison levels plus the final unique scan.  Pay the
@@ -3177,7 +3743,8 @@ uint32_t CFGBuilder::inferBoundsFromMask(
                       static_cast<uint64_t>(InputCoordinates.size()))
                 : 0;
         if (!consumeWorkProducts({{InputCoordinates.size(), SortLevels + 3},
-                                  {Producers.size(), 1}, {1, 1}}))
+                                  {Producers.size(), 1},
+                                  {1, 1}}))
           return FailIncomplete();
         std::vector<uint32_t> OutputCoordinates;
         OutputCoordinates.reserve(InputCoordinates.size());
@@ -3214,10 +3781,10 @@ uint32_t CFGBuilder::inferBoundsFromMask(
         if (!collectLineages(Producers, KnownOneLineage) ||
             !collectOneLineage(Candidate.Output, KnownOneLineage))
           return FailIncomplete();
-        AndCandidates.push_back(
-            {Candidate.Output, OutputBound, std::move(OutputCoordinates),
-             UsesNonContiguous, std::move(InputProof),
-             std::move(KnownOneLineage)});
+        AndCandidates.push_back({Candidate.Output, OutputBound,
+                                 std::move(OutputCoordinates),
+                                 UsesNonContiguous, std::move(InputProof),
+                                 std::move(KnownOneLineage)});
       }
     }
     if (!AndCandidates.empty()) {
@@ -3333,13 +3900,12 @@ uint32_t CFGBuilder::inferBoundsFromMask(
             integerWidthMask(Op.Output.Size);
         if (!OutputMask)
           continue;
-        const std::set<uint32_t> &InputCoordinates =
-            InputEvidence.Coordinates;
+        const std::set<uint32_t> &InputCoordinates = InputEvidence.Coordinates;
         // Prepay the coordinate walk and its worst-case retained output, the
         // copied producer alternatives, the scalar proof alternative, and the
         // retained candidate before allocating any of them.
-        if (!consumeWorkProducts({{InputCoordinates.size(), 2},
-                                  {Producers.size(), 1}, {1, 2}}))
+        if (!consumeWorkProducts(
+                {{InputCoordinates.size(), 2}, {Producers.size(), 1}, {1, 2}}))
           return FailIncomplete();
         std::vector<uint32_t> OutputCoordinates;
         OutputCoordinates.reserve(InputCoordinates.size());
@@ -3347,8 +3913,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
         for (uint32_t Value : InputCoordinates) {
           uint64_t Result = 0;
           if (*Delta < 0) {
-            const uint64_t Magnitude =
-                static_cast<uint64_t>(-(*Delta + 1)) + 1;
+            const uint64_t Magnitude = static_cast<uint64_t>(-(*Delta + 1)) + 1;
             if (Value < Magnitude) {
               DomainComplete = false;
               break;
@@ -3416,8 +3981,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
       std::vector<JumpTableValueQuery> OffsetQueries;
       if (!consumeWorkProducts({{OffsetCandidates.size(), 2}}))
         return FailIncomplete();
-      if (OffsetCandidates.size() >
-          std::numeric_limits<size_t>::max() / 2)
+      if (OffsetCandidates.size() > std::numeric_limits<size_t>::max() / 2)
         return FailIncomplete();
       OffsetQueries.reserve(OffsetCandidates.size() * 2);
       for (OffsetCandidate &Candidate : OffsetCandidates) {
@@ -3453,8 +4017,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
           if (!DomainChanged)
             return FailIncomplete();
           if (NewOutput) {
-            if (!appendLineage(Candidate.Output,
-                               Candidate.KnownOneWitnesses))
+            if (!appendLineage(Candidate.Output, Candidate.KnownOneWitnesses))
               return FailIncomplete();
           }
           Added |= NewOutput || *DomainChanged;
@@ -3484,7 +4047,8 @@ uint32_t CFGBuilder::inferBoundsFromMask(
     if (!consumeWorkProducts({{Producers.size(), 1},
                               {IndexOccurrences.size(), 1},
                               {IndexOccurrences.size(), Producers.size()},
-                              {1, 1}, {Coordinates.size(), 1}}))
+                              {1, 1},
+                              {Coordinates.size(), 1}}))
       return FailIncomplete();
     const size_t Begin = IndexQueries.size();
     const uint32_t MaxCoordinate = Coordinates.empty()
@@ -3511,14 +4075,13 @@ uint32_t CFGBuilder::inferBoundsFromMask(
       Query.AllowSignExtension = AllowsSignExtension;
       IndexQueries.push_back(std::move(Query));
     }
-    Batches.push_back(
-        {Bound,
-         &Evidence,
-         Begin,
-         IndexQueries.size(),
-         Evidence.UsesNonContiguous,
-         AllowsSignExtension,
-         {Coordinates.begin(), Coordinates.end()}});
+    Batches.push_back({Bound,
+                       &Evidence,
+                       Begin,
+                       IndexQueries.size(),
+                       Evidence.UsesNonContiguous,
+                       AllowsSignExtension,
+                       {Coordinates.begin(), Coordinates.end()}});
   }
   bool IndexAnalysisComplete = false;
   const std::vector<bool> Matches =
@@ -3536,8 +4099,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
         *UsedNonContiguous = Batch.UsesNonContiguous;
       if (FeasibleCoordinates)
         *FeasibleCoordinates = Batch.Coordinates;
-      if (!Batch.Evidence ||
-          !publishLineages(Batch.Evidence->Producers))
+      if (!Batch.Evidence || !publishLineages(Batch.Evidence->Producers))
         return FailIncomplete();
       return Batch.Bound;
     }
@@ -3604,8 +4166,8 @@ uint32_t CFGBuilder::inferBoundsFromMask(
       ExactDomainQuery.Candidate = Index.Value;
       ExactDomainQuery.UseAddr = Index.Addr;
       ExactDomainQuery.UseSeq = Index.Seq;
-      ExactDomainQuery.Alternatives.assign(
-          Batch.Evidence->Producers.begin(), Batch.Evidence->Producers.end());
+      ExactDomainQuery.Alternatives.assign(Batch.Evidence->Producers.begin(),
+                                           Batch.Evidence->Producers.end());
       for (uint32_t Coordinate : Batch.Coordinates) {
         // LowIR emitted before occurrence-role classification can still carry
         // Unknown provenance for an integer immediate, while propagated
@@ -3627,8 +4189,8 @@ uint32_t CFGBuilder::inferBoundsFromMask(
         DependencyQuery.Candidate = Index.Value;
         DependencyQuery.UseAddr = Index.Addr;
         DependencyQuery.UseSeq = Index.Seq;
-        DependencyQuery.Alternatives.assign(
-            Batch.Evidence->Producers.begin(), Batch.Evidence->Producers.end());
+        DependencyQuery.Alternatives.assign(Batch.Evidence->Producers.begin(),
+                                            Batch.Evidence->Producers.end());
         DependencyQuery.AllowZeroExtension = true;
         DependencyQuery.AllowSignExtension = Batch.AllowsSignExtension;
         DependencyQuery.Relation = JumpTableValueRelation::MayDepend;
@@ -3680,9 +4242,9 @@ uint32_t CFGBuilder::inferBoundsFromMask(
   if (!RelevantMaskRoots.empty()) {
     // Every dependency query owns the complete root set.  Pay the retained
     // occurrence x root product before reserve/construction.
-    if (!consumeWorkProducts({{IndexOccurrences.size(), 1},
-                              {IndexOccurrences.size(),
-                               RelevantMaskRoots.size()}}))
+    if (!consumeWorkProducts(
+            {{IndexOccurrences.size(), 1},
+             {IndexOccurrences.size(), RelevantMaskRoots.size()}}))
       return FailIncomplete();
     std::vector<JumpTableValueQuery> DependencyQueries;
     DependencyQueries.reserve(IndexOccurrences.size());
@@ -3694,6 +4256,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
                                 /*AllowZeroExtension=*/true,
                                 /*AllowSignExtension=*/false};
       Query.Relation = JumpTableValueRelation::MayDepend;
+      Query.UseDefinedAlternativesAsOccurrenceRoots = true;
       DependencyQueries.push_back(std::move(Query));
     }
     bool DependencyAnalysisComplete = false;
@@ -3726,24 +4289,18 @@ uint32_t CFGBuilder::inferBoundsFromMask(
 /// relocations (AArch64 byte/halfword compact tables, ARM32 inline `.text` word
 /// tables) and so cannot use the relocation-run count (#403).  Returns true and
 /// sets Info.MaxEntries when a magic-division remainder yields a sane modulus.
-bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
-                                       const InsnRecord &Rec,
-                                       JumpTableInfo &Info,
-                                       size_t *AggregateEvidenceBudget,
-                                       bool *EvidenceIncomplete,
-                                       bool RequireProducerReachability,
-                                       const std::vector<va_t>
-                                           *CandidateTargetsOverride,
-                                       const std::set<va_t>
-                                           *ReachableInstructions,
-                                       bool AllowFixedPointBootstrap,
-                                       std::vector<JumpTableValueOccurrence>
-                                           *AuthenticatedProducers,
-                                       uint32_t RequiredProducerBound,
-                                       const std::vector<
-                                           JumpTableValueOccurrence>
-                                           *RequiredProducers,
-                                       bool RestrictProducerDiscovery) {
+bool CFGBuilder::inferBoundsFromModulo(
+    const BinaryImage &Img, const InsnRecord &Rec, JumpTableInfo &Info,
+    size_t *AggregateEvidenceBudget, bool *EvidenceIncomplete,
+    bool RequireProducerReachability,
+    const std::vector<va_t> *CandidateTargetsOverride,
+    const std::set<va_t> *ReachableInstructions, bool AllowFixedPointBootstrap,
+    std::vector<JumpTableValueOccurrence> *AuthenticatedProducers,
+    uint32_t RequiredProducerBound,
+    const std::vector<JumpTableValueOccurrence> *RequiredProducers,
+    bool RestrictProducerDiscovery,
+    const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides,
+    bool RetainProvisionalRelativeEdges) {
   if (EvidenceIncomplete)
     *EvidenceIncomplete = false;
   if (AuthenticatedProducers)
@@ -3827,8 +4384,7 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
       return false;
     for (const JumpTableFrameInitializerChunk &Initializer :
          Candidate.AuthenticatedFrameStorage.Initializers)
-      if (!consumeFixedPointProducts(
-              {{Initializer.StaticSources.size(), 2}}))
+      if (!consumeFixedPointProducts({{Initializer.StaticSources.size(), 2}}))
         return false;
     for (const JumpTableLoadRole &Role : Candidate.LoadRoles) {
       if (!consumeFixedPointProducts(
@@ -3838,16 +4394,15 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
         return false;
       for (const JumpTableFrameInitializerChunk &Initializer :
            Role.FrameStorage.Initializers)
-        if (!consumeFixedPointProducts(
-                {{Initializer.StaticSources.size(), 2}}))
+        if (!consumeFixedPointProducts({{Initializer.StaticSources.size(), 2}}))
           return false;
     }
     return consumeFixedPointEvidence();
   };
 
-  const bool TopLevelFixedPointAttempt =
-      AllowFixedPointBootstrap && !CandidateTargetsOverride &&
-      !ReachableInstructions;
+  const bool TopLevelFixedPointAttempt = AllowFixedPointBootstrap &&
+                                         !CandidateTargetsOverride &&
+                                         !ReachableInstructions;
   if (TopLevelFixedPointAttempt && CurrentImg &&
       Info.PhysicalCapacity >= limits::kMinJumpTableEntries &&
       Info.PhysicalCapacity <= limits::kMaxJumpTableEntries) {
@@ -3900,13 +4455,12 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
       for (uint32_t Width = Upper - Lower + 1; Width != 0; Width >>= 1)
         ++SearchPasses;
       const size_t KnownEntryLookup =
-          KnownFuncEntries
-              ? orderedEvidenceLookupWork(KnownFuncEntries->size())
-              : 0;
+          KnownFuncEntries ? orderedEvidenceLookupWork(KnownFuncEntries->size())
+                           : 0;
       const size_t RuntimeEntryLookup =
           orderedEvidenceLookupWork(CurrentImg->RuntimeFunctionAddrs.size());
-      const size_t VerifiedEntryLookup = orderedEvidenceLookupWork(
-          CurrentImg->VerifiedFunctionEntries.size());
+      const size_t VerifiedEntryLookup =
+          orderedEvidenceLookupWork(CurrentImg->VerifiedFunctionEntries.size());
       const size_t ImportStubLookup =
           orderedEvidenceLookupWork(CurrentImg->ImportStubIndices.size());
       const size_t FragmentLookup = orderedEvidenceLookupWork(
@@ -3915,9 +4469,8 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
           FragmentLookup <= (std::numeric_limits<size_t>::max() - 3) / 2
               ? FragmentLookup * 2 + 3
               : std::numeric_limits<size_t>::max();
-      if (SearchPasses != 0 && Upper >
-                                   std::numeric_limits<size_t>::max() /
-                                       SearchPasses) {
+      if (SearchPasses != 0 &&
+          Upper > std::numeric_limits<size_t>::max() / SearchPasses) {
         consumeFixedPointEvidence(std::numeric_limits<size_t>::max());
         return false;
       }
@@ -3939,12 +4492,12 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
               {TargetReadUpperBound, CurrentImg->Imports.size(), 2}) ||
           !consumeFixedPointFactorProduct(
               {TargetReadUpperBound, CurrentImg->KnownCodeRanges.size(), 2}) ||
-          !consumeFixedPointFactorProduct(
-              {TargetReadUpperBound, CurrentImg->Imports.size(),
-               CurrentImg->Segments.size(), 4}) ||
-          !consumeFixedPointFactorProduct(
-              {TargetReadUpperBound, CurrentImg->Imports.size(),
-               CurrentImg->Sections.size(), 4}) ||
+          !consumeFixedPointFactorProduct({TargetReadUpperBound,
+                                           CurrentImg->Imports.size(),
+                                           CurrentImg->Segments.size(), 4}) ||
+          !consumeFixedPointFactorProduct({TargetReadUpperBound,
+                                           CurrentImg->Imports.size(),
+                                           CurrentImg->Sections.size(), 4}) ||
           !consumeFixedPointFactorProduct(
               {TargetReadUpperBound, RuntimeEntryLookup, 2}) ||
           !consumeFixedPointFactorProduct(
@@ -3976,8 +4529,7 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
             static_cast<uint32_t>(PhysicalTargets.size());
         if (!consumeFixedPointEvidence(PhysicalSlots.size()))
           return false;
-        bool ExactDenseSlots =
-            PhysicalSlots.size() == PhysicalTargets.size();
+        bool ExactDenseSlots = PhysicalSlots.size() == PhysicalTargets.size();
         for (uint32_t I = 0; ExactDenseSlots && I < PhysicalSlots.size(); ++I)
           ExactDenseSlots = PhysicalSlots[I] == I;
         if (ExactDenseSlots) {
@@ -3988,11 +4540,9 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
               Info.IndexUseAddr != InvalidVA && Info.IndexUseSeq >= 0) {
             if (!consumeFixedPointEvidence())
               return false;
-            OwnedSeedOccurrence.emplace(
-                JumpTableValueOccurrence{Info.IndexValueAtUse,
-                                         Info.IndexUseAddr,
-                                         Info.IndexUseSeq,
-                                         Info.IndexValueDefinedAtUse});
+            OwnedSeedOccurrence.emplace(JumpTableValueOccurrence{
+                Info.IndexValueAtUse, Info.IndexUseAddr, Info.IndexUseSeq,
+                Info.IndexValueDefinedAtUse});
             SeedOccurrences = llvm::ArrayRef<JumpTableValueOccurrence>(
                 &*OwnedSeedOccurrence, 1);
           }
@@ -4026,8 +4576,18 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
                   Targets.push_back(PhysicalTargets[I]);
               return Targets;
             };
-            auto queueGraphGrowth =
-                [&](const std::vector<va_t> &Targets)
+            auto hasCompleteDenseRuntimeCoordinates =
+                [&](const std::set<uint32_t> &Coordinates) {
+                  // std::set is unique and ordered: capacity elements bounded
+                  // by these endpoints are exactly the dense interval,
+                  // without an additional attacker-sized traversal.
+                  return !Info.PreScaledIndex &&
+                         Coordinates.size() == CandidateCapacity &&
+                         !Coordinates.empty() && *Coordinates.begin() == 0 &&
+                         *Coordinates.rbegin() == CandidateCapacity - 1;
+                };
+            auto queueGraphGrowth = [&](const std::vector<va_t> &Targets,
+                                        bool CompleteDenseRuntimeCoordinates)
                 -> std::optional<bool> {
               if (!consumeFixedPointProducts(
                       {{Targets.size(),
@@ -4057,7 +4617,11 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
                     return !ExploredAddrs.count(Target) ||
                            !BlockStarts.count(Target);
                   });
-              if (!NeedsGraphGrowth)
+              const bool RetainForProvisionalRelativeProof =
+                  CandidateProposalStageActive &&
+                  Rec.JumpTableTargets.empty() &&
+                  RetainProvisionalRelativeEdges;
+              if (!NeedsGraphGrowth && !RetainForProvisionalRelativeProof)
                 return false;
               if (!consumeFixedPointProducts(
                       {{1, orderedEvidenceLookupWork(
@@ -4073,40 +4637,53 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
               const size_t ExistingTargets =
                   Existing == CandidateFixedPointExplorationTargets.end()
                       ? 0
-                      : Existing->second.size();
+                      : Existing->second.Targets.size();
               if (Targets.size() >
                   std::numeric_limits<size_t>::max() - ExistingTargets)
                 return std::nullopt;
               const size_t RequiredTargets = ExistingTargets + Targets.size();
               if (!consumeFixedPointProducts(
-                      {{Existing ==
-                                CandidateFixedPointExplorationTargets.end()
+                      {{Existing == CandidateFixedPointExplorationTargets.end()
                             ? 1
                             : 0,
                         5},
-                       {RequiredTargets, 3},
+                       {RequiredTargets,
+                        orderedEvidenceLookupWork(RequiredTargets) + 5},
                        {1, 2}}))
                 return std::nullopt;
               std::vector<va_t> CombinedTargets;
               CombinedTargets.reserve(RequiredTargets);
               if (Existing != CandidateFixedPointExplorationTargets.end())
                 CombinedTargets.insert(CombinedTargets.end(),
-                                       Existing->second.begin(),
-                                       Existing->second.end());
+                                       Existing->second.Targets.begin(),
+                                       Existing->second.Targets.end());
               CombinedTargets.insert(CombinedTargets.end(), Targets.begin(),
                                      Targets.end());
+              // These are graph edges, not physical table coordinates.  A
+              // switch may send several coordinates to the same block, and a
+              // stable replay may rediscover an existing edge batch.
+              detail::canonicalizeFixedPointExplorationTargets(CombinedTargets);
+              MaxCandidateFixedPointExplorationTargetCountForTesting = std::max(
+                  MaxCandidateFixedPointExplorationTargetCountForTesting,
+                  CombinedTargets.size());
               if (Existing == CandidateFixedPointExplorationTargets.end())
                 CandidateFixedPointExplorationTargets.emplace(
-                    Rec.Addr, std::move(CombinedTargets));
-              else
-                Existing->second = std::move(CombinedTargets);
-              return true;
+                    Rec.Addr, CandidateFixedPointExploration{
+                                  std::move(CombinedTargets), NeedsGraphGrowth,
+                                  CompleteDenseRuntimeCoordinates});
+              else {
+                Existing->second.Targets = std::move(CombinedTargets);
+                Existing->second.RequiresGraphGrowth |= NeedsGraphGrowth;
+                Existing->second.CompleteDenseRuntimeCoordinates |=
+                    CompleteDenseRuntimeCoordinates;
+              }
+              return NeedsGraphGrowth;
             };
 
             const std::vector<va_t> NoTargets;
-            const std::set<va_t> &Roots =
-                ActiveJumpTableProofRoots ? *ActiveJumpTableProofRoots
-                                          : PersistentCFGRoots;
+            const std::set<va_t> &Roots = ActiveJumpTableProofRoots
+                                              ? *ActiveJumpTableProofRoots
+                                              : PersistentCFGRoots;
             std::set<uint32_t> Authorized;
             const size_t Capacity = CandidateCapacity;
             // Literal-coordinate discovery is intentionally small: it issues
@@ -4119,8 +4696,7 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
               if (SeedOccurrences.size() >
                   std::numeric_limits<size_t>::max() / Capacity)
                 return false;
-              const size_t SeedQueryCount =
-                  Capacity * SeedOccurrences.size();
+              const size_t SeedQueryCount = Capacity * SeedOccurrences.size();
               constexpr size_t SeedWorkPerQuery = 7;
               if (SeedQueryCount >
                       std::numeric_limits<size_t>::max() / SeedWorkPerQuery ||
@@ -4146,7 +4722,11 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
               std::vector<bool> SeedComplete;
               const std::vector<bool> SeedMatches = tableValuesMatchAtUses(
                   SeedQueries, nullptr, &SeedComplete, Rec.Addr, &NoTargets,
-                  AggregateEvidenceBudget);
+                  AggregateEvidenceBudget,
+                  /*LocalMatchEvidenceLimit=*/0,
+                  /*CandidateBranchesSharingTargets=*/nullptr,
+                  /*QueryUnsignedFeasibleMasks=*/nullptr,
+                  /*ResolverDepthLimit=*/0, CertifiedEdgeOverrides);
               if (SeedMatches.size() != SeedQueries.size() ||
                   SeedComplete.size() != SeedQueries.size() ||
                   std::any_of(SeedComplete.begin(), SeedComplete.end(),
@@ -4176,7 +4756,8 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
             const std::set<va_t> EntryReachable =
                 candidateReachableInstructions(
                     Rec, NoTargets, Roots, Info.StorageRanges,
-                    AggregateEvidenceBudget, &EntryReachabilityComplete);
+                    AggregateEvidenceBudget, &EntryReachabilityComplete,
+                    CertifiedEdgeOverrides);
             if (!EntryReachabilityComplete) {
               if (EvidenceIncomplete)
                 *EvidenceIncomplete = true;
@@ -4195,7 +4776,10 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
                 Img, Rec, EntryInfo, AggregateEvidenceBudget, &EntryIncomplete,
                 /*RequireProducerReachability=*/true, &NoTargets,
                 &EntryReachable, /*AllowFixedPointBootstrap=*/false,
-                &RetainedProducers);
+                &RetainedProducers,
+                /*RequiredProducerBound=*/0,
+                /*RequiredProducers=*/nullptr,
+                /*RestrictProducerDiscovery=*/false, CertifiedEdgeOverrides);
             if (EntryIncomplete) {
               if (EvidenceIncomplete)
                 *EvidenceIncomplete = true;
@@ -4204,8 +4788,7 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
             if (EntryModulo && EntryInfo.MaxEntries <= CandidateCapacity) {
               if (EntryInfo.MaxEntries >
                   std::numeric_limits<size_t>::max() - Authorized.size()) {
-                consumeFixedPointEvidence(
-                    std::numeric_limits<size_t>::max());
+                consumeFixedPointEvidence(std::numeric_limits<size_t>::max());
                 return false;
               }
               const size_t AuthorizedUpperBound =
@@ -4215,8 +4798,8 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
               if (!consumeFixedPointProducts(
                       {{EntryInfo.MaxEntries, InsertWork}}))
                 return false;
-              for (uint32_t Coordinate = 0;
-                   Coordinate < EntryInfo.MaxEntries; ++Coordinate)
+              for (uint32_t Coordinate = 0; Coordinate < EntryInfo.MaxEntries;
+                   ++Coordinate)
                 Authorized.insert(Coordinate);
             }
 
@@ -4227,9 +4810,8 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
             // the next graph rerun bounded discovery instead of manufacturing
             // a nonzero required bound with a null witness set.
             uint32_t RetainedProducerBound =
-                EntryModulo && !RetainedProducers.empty()
-                    ? EntryInfo.MaxEntries
-                    : 0;
+                EntryModulo && !RetainedProducers.empty() ? EntryInfo.MaxEntries
+                                                          : 0;
             if (!EntryModulo)
               RetainedProducers.clear();
 
@@ -4242,7 +4824,7 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
             // coordinates for graph exploration, but it does not publish the
             // table: every case is decoded and the full selector/producer proof
             // is replayed below before closure.
-            if (Authorized.empty()) {
+            if (Authorized.empty() && CandidateCapacity <= 64) {
               if (!consumeFixedPointProducts({{SeedOccurrences.size(), 5}}))
                 return false;
               std::vector<JumpTableValueQuery> BoundQueries;
@@ -4252,16 +4834,23 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
                 Query.Candidate = Index.Value;
                 Query.UseAddr = Index.Addr;
                 Query.UseSeq = Index.Seq;
-                Query.Relation = JumpTableValueRelation::UnsignedLessThan;
+                Query.Relation = JumpTableValueRelation::UnsignedFeasibleSet;
                 Query.UnsignedUpperBound = CandidateCapacity;
                 BoundQueries.push_back(std::move(Query));
               }
               std::vector<bool> BoundComplete;
+              std::vector<uint64_t> BoundFeasibleMasks;
               const std::vector<bool> BoundMatches = tableValuesMatchAtUses(
                   BoundQueries, nullptr, &BoundComplete, Rec.Addr, &NoTargets,
-                  AggregateEvidenceBudget);
+                  AggregateEvidenceBudget,
+                  /*LocalMatchEvidenceLimit=*/0,
+                  /*CandidateBranchesSharingTargets=*/nullptr,
+                  &BoundFeasibleMasks,
+                  limits::kMaxJumpTableLargeExpressionRoleResolverDepth,
+                  CertifiedEdgeOverrides);
               if (BoundMatches.size() != BoundQueries.size() ||
                   BoundComplete.size() != BoundQueries.size() ||
+                  BoundFeasibleMasks.size() != BoundQueries.size() ||
                   std::any_of(BoundComplete.begin(), BoundComplete.end(),
                               [](bool Complete) { return !Complete; })) {
                 if (EvidenceIncomplete)
@@ -4270,6 +4859,16 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
               }
               if (std::all_of(BoundMatches.begin(), BoundMatches.end(),
                               [](bool Match) { return Match; })) {
+                if (!consumeFixedPointProducts(
+                        {{BoundFeasibleMasks.size(), 2}}))
+                  return false;
+                uint64_t FeasibleMask = 0;
+                for (uint64_t Mask : BoundFeasibleMasks) {
+                  if (Mask == 0 || (CandidateCapacity < 64 &&
+                                    (Mask >> CandidateCapacity) != 0))
+                    return false;
+                  FeasibleMask |= Mask;
+                }
                 const size_t InsertWork =
                     orderedEvidenceLookupWork(CandidateCapacity) + 3;
                 if (!consumeFixedPointProducts(
@@ -4277,7 +4876,8 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
                   return false;
                 for (uint32_t Coordinate = 0; Coordinate < CandidateCapacity;
                      ++Coordinate)
-                  Authorized.insert(Coordinate);
+                  if ((FeasibleMask & (uint64_t{1} << Coordinate)) != 0)
+                    Authorized.insert(Coordinate);
               }
             }
 
@@ -4289,12 +4889,12 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
                   targetsFor(Authorized);
               if (!AuthorizedTargetsOr)
                 return false;
-              const std::vector<va_t> &AuthorizedTargets =
-                  *AuthorizedTargetsOr;
+              const std::vector<va_t> &AuthorizedTargets = *AuthorizedTargetsOr;
               bool ReachabilityComplete = false;
               const std::set<va_t> Reachable = candidateReachableInstructions(
                   Rec, AuthorizedTargets, Roots, Info.StorageRanges,
-                  AggregateEvidenceBudget, &ReachabilityComplete);
+                  AggregateEvidenceBudget, &ReachabilityComplete,
+                  CertifiedEdgeOverrides);
               if (!ReachabilityComplete) {
                 if (EvidenceIncomplete)
                   *EvidenceIncomplete = true;
@@ -4321,7 +4921,8 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
                   &Reachable, /*AllowFixedPointBootstrap=*/false,
                   &CoreProducers, RetainedProducerBound,
                   RetainedProducers.empty() ? nullptr : &RetainedProducers,
-                  /*RestrictProducerDiscovery=*/!RetainedProducers.empty());
+                  /*RestrictProducerDiscovery=*/!RetainedProducers.empty(),
+                  CertifiedEdgeOverrides);
               if (CoreIncomplete) {
                 if (EvidenceIncomplete)
                   *EvidenceIncomplete = true;
@@ -4334,12 +4935,10 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
                 CoreInsertCount = CoreInfo.MaxEntries;
               if (CoreInsertCount >
                   std::numeric_limits<size_t>::max() - Authorized.size()) {
-                consumeFixedPointEvidence(
-                    std::numeric_limits<size_t>::max());
+                consumeFixedPointEvidence(std::numeric_limits<size_t>::max());
                 return false;
               }
-              const size_t NextUpperBound =
-                  Authorized.size() + CoreInsertCount;
+              const size_t NextUpperBound = Authorized.size() + CoreInsertCount;
               // Copy traversal, destination nodes and their cleanup, plus the
               // CoreClosed and equality scans, are all paid before Next is
               // constructed.  Every possible insert separately prepays its
@@ -4351,12 +4950,11 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
                 return false;
               std::set<uint32_t> Next = Authorized;
               if (CoreInsertCount != 0) {
-                RetainedProducerBound = CoreProducers.empty()
-                                            ? 0
-                                            : CoreInfo.MaxEntries;
+                RetainedProducerBound =
+                    CoreProducers.empty() ? 0 : CoreInfo.MaxEntries;
                 RetainedProducers = std::move(CoreProducers);
-                for (uint32_t Coordinate = 0;
-                     Coordinate < CoreInsertCount; ++Coordinate)
+                for (uint32_t Coordinate = 0; Coordinate < CoreInsertCount;
+                     ++Coordinate)
                   Next.insert(Coordinate);
               }
 
@@ -4367,8 +4965,9 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
                                 return Coordinate < CoreInfo.MaxEntries;
                               });
               if (Next == Authorized) {
-                const std::optional<bool> Growth =
-                    queueGraphGrowth(AuthorizedTargets);
+                const std::optional<bool> Growth = queueGraphGrowth(
+                    AuthorizedTargets,
+                    hasCompleteDenseRuntimeCoordinates(Authorized));
                 if (!Growth)
                   return false;
                 if (*Growth) {
@@ -4394,8 +4993,8 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
               std::optional<std::vector<va_t>> NextTargets = targetsFor(Next);
               if (!NextTargets)
                 return false;
-              const std::optional<bool> Growth =
-                  queueGraphGrowth(*NextTargets);
+              const std::optional<bool> Growth = queueGraphGrowth(
+                  *NextTargets, hasCompleteDenseRuntimeCoordinates(Next));
               if (!Growth)
                 return false;
               if (*Growth)
@@ -4428,7 +5027,7 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
     bool EntryReachabilityComplete = false;
     const std::set<va_t> EntryReachable = candidateReachableInstructions(
         Rec, NoTargets, Roots, Info.StorageRanges, AggregateEvidenceBudget,
-        &EntryReachabilityComplete);
+        &EntryReachabilityComplete, CertifiedEdgeOverrides);
     if (!EntryReachabilityComplete) {
       if (EvidenceIncomplete)
         *EvidenceIncomplete = true;
@@ -4445,7 +5044,10 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
     const bool EntryModulo = inferBoundsFromModulo(
         Img, Rec, EntryInfo, AggregateEvidenceBudget, &EntryIncomplete,
         /*RequireProducerReachability=*/true, &NoTargets, &EntryReachable,
-        /*AllowFixedPointBootstrap=*/false, &EntryProducers);
+        /*AllowFixedPointBootstrap=*/false, &EntryProducers,
+        /*RequiredProducerBound=*/0,
+        /*RequiredProducers=*/nullptr,
+        /*RestrictProducerDiscovery=*/false, CertifiedEdgeOverrides);
     if (EntryIncomplete) {
       if (EvidenceIncomplete)
         *EvidenceIncomplete = true;
@@ -4457,7 +5059,8 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
     bool FullReachabilityComplete = false;
     const std::set<va_t> FullReachable = candidateReachableInstructions(
         Rec, Rec.JumpTableTargets, Roots, Info.StorageRanges,
-        AggregateEvidenceBudget, &FullReachabilityComplete);
+        AggregateEvidenceBudget, &FullReachabilityComplete,
+        CertifiedEdgeOverrides);
     if (!FullReachabilityComplete) {
       if (EvidenceIncomplete)
         *EvidenceIncomplete = true;
@@ -4473,8 +5076,8 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
               orderedEvidenceLookupWork(BlockStarts.size())}}))
       return false;
     const bool FullTargetsDecoded =
-        std::all_of(Rec.JumpTableTargets.begin(),
-                    Rec.JumpTableTargets.end(), [&](va_t Target) {
+        std::all_of(Rec.JumpTableTargets.begin(), Rec.JumpTableTargets.end(),
+                    [&](va_t Target) {
                       return FullReachable.count(Target) &&
                              Insns.count(Target) && BlockStarts.count(Target);
                     });
@@ -4498,7 +5101,8 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
         /*AuthenticatedProducers=*/nullptr,
         HasReplayableEntryProducer ? EntryInfo.MaxEntries : 0,
         HasReplayableEntryProducer ? &EntryProducers : nullptr,
-        /*RestrictProducerDiscovery=*/HasReplayableEntryProducer);
+        /*RestrictProducerDiscovery=*/HasReplayableEntryProducer,
+        CertifiedEdgeOverrides);
     if (FullIncomplete) {
       if (EvidenceIncomplete)
         *EvidenceIncomplete = true;
@@ -4522,7 +5126,7 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
     bool ReachabilityComplete = false;
     OwnedReachableInstructions = candidateReachableInstructions(
         Rec, *CandidateTargetsOverride, Roots, Info.StorageRanges,
-        AggregateEvidenceBudget, &ReachabilityComplete);
+        AggregateEvidenceBudget, &ReachabilityComplete, CertifiedEdgeOverrides);
     if (!ReachabilityComplete) {
       if (EvidenceIncomplete)
         *EvidenceIncomplete = true;
@@ -4545,8 +5149,7 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
                              Occurrence.Value.Size == 0 ||
                              (!Occurrence.Value.isReg() &&
                               !Occurrence.Value.isTemp()) ||
-                             Occurrence.Addr == InvalidVA ||
-                             Occurrence.Seq < 0;
+                             Occurrence.Addr == InvalidVA || Occurrence.Seq < 0;
                     }))))
     return false;
   if (RestrictProducerDiscovery && !RequiredProducers)
@@ -4562,10 +5165,8 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
     for (size_t I = 0; I < RequiredProducers->size(); ++I) {
       if (!consumeFixedPointEvidence(I))
         return false;
-      if (std::find(RequiredProducers->begin(),
-                    RequiredProducers->begin() + I,
-                    (*RequiredProducers)[I]) !=
-          RequiredProducers->begin() + I)
+      if (std::find(RequiredProducers->begin(), RequiredProducers->begin() + I,
+                    (*RequiredProducers)[I]) != RequiredProducers->begin() + I)
         return false;
     }
     if (!consumeFixedPointProducts({{RequiredProducers->size(), 5}}))
@@ -4585,7 +5186,11 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
     const std::vector<bool> RequiredResults = tableValuesMatchAtUses(
         RequiredQueries, nullptr, &RequiredComplete,
         CandidateTargetsOverride ? Rec.Addr : InvalidVA,
-        CandidateTargetsOverride, AggregateEvidenceBudget);
+        CandidateTargetsOverride, AggregateEvidenceBudget,
+        /*LocalMatchEvidenceLimit=*/0,
+        /*CandidateBranchesSharingTargets=*/nullptr,
+        /*QueryUnsignedFeasibleMasks=*/nullptr,
+        /*ResolverDepthLimit=*/0, CertifiedEdgeOverrides);
     if (RequiredResults.size() != RequiredQueries.size() ||
         RequiredComplete.size() != RequiredQueries.size() ||
         std::any_of(RequiredComplete.begin(), RequiredComplete.end(),
@@ -4604,9 +5209,9 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
   // candidate-wide account.  Replaying modulo evidence across candidates or
   // final-root stages therefore cannot refresh four unmetered 4096-unit pools.
   size_t LocalAggregateEvidenceBudget = limits::kMaxJumpTableEvidenceWork;
-  ModuloEvidenceBudget ProposalBudget(
-      kModuloProposalWork, &LocalAggregateEvidenceBudget,
-      AggregateEvidenceBudget);
+  ModuloEvidenceBudget ProposalBudget(kModuloProposalWork,
+                                      &LocalAggregateEvidenceBudget,
+                                      AggregateEvidenceBudget);
   ModuloEvidenceBudget StructuralBudget(kModuloStructuralRetentionWork,
                                         &LocalAggregateEvidenceBudget,
                                         AggregateEvidenceBudget);
@@ -4632,12 +5237,8 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
           (ExplicitlyIncomplete || Direct.exhausted() || Replay.exhausted()))
         *Output = true;
     }
-  } IncompleteOnExit{EvidenceIncomplete,
-                     Succeeded,
-                     ExplicitlyIncomplete,
-                     ProposalBudget,
-                     StructuralBudget,
-                     DirectBudget,
+  } IncompleteOnExit{EvidenceIncomplete, Succeeded,        ExplicitlyIncomplete,
+                     ProposalBudget,     StructuralBudget, DirectBudget,
                      ReplayBudget};
   auto consumeProducts =
       [](ModuloEvidenceBudget &Budget,
@@ -4699,12 +5300,11 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
   // avoids rescanning up to 512 LowOps for every bound.  Unique/ambiguous
   // locations are charged at their actual insertion site below.
   constexpr size_t ProofPointKeyWork = 2;
-  if (!consumeProducts(
-          ProposalBudget,
-          {{IndexOccurrences.size(),
-            ProofPointKeyWork *
-                    orderedEvidenceLookupWork(IndexOccurrences.size()) +
-                ProofPointKeyWork * 2 + 2}})) {
+  if (!consumeProducts(ProposalBudget,
+                       {{IndexOccurrences.size(),
+                         ProofPointKeyWork * orderedEvidenceLookupWork(
+                                                 IndexOccurrences.size()) +
+                             ProofPointKeyWork * 2 + 2}})) {
     ExplicitlyIncomplete = true;
     return false;
   }
@@ -4989,18 +5589,16 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
     if (Info.PhysicalCapacity != 0 && Bound > Info.PhysicalCapacity)
       return;
     const uint32_t NarrowBound = static_cast<uint32_t>(Bound);
-    if (!Budget.consume(
-            orderedEvidenceLookupWork(ProducerCandidates.size())))
+    if (!Budget.consume(orderedEvidenceLookupWork(ProducerCandidates.size())))
       return;
     auto KnownIt = ProducerCandidates.find(NarrowBound);
     if (KnownIt == ProducerCandidates.end()) {
       // try_emplace performs a second ordered lookup.  Prepay it together
       // with the scalar key, mapped-list and map-node lifetimes before any
       // persistent allocation.
-      if (!consumeProducts(
-              Budget,
-              {{1, orderedEvidenceLookupWork(ProducerCandidates.size() + 1)},
-               {1, 5}}))
+      if (!consumeProducts(Budget, {{1, orderedEvidenceLookupWork(
+                                            ProducerCandidates.size() + 1)},
+                                    {1, 5}}))
         return;
       KnownIt = ProducerCandidates.try_emplace(NarrowBound).first;
     }
@@ -5080,8 +5678,8 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
           if (RetainedInstructionThrough != InvalidVA &&
               Addr <= RetainedInstructionThrough)
             continue;
-          if (!ProposalBudget.consume(
-                  orderedEvidenceLookupWork(Insns.size()) + 1)) {
+          if (!ProposalBudget.consume(orderedEvidenceLookupWork(Insns.size()) +
+                                      1)) {
             break;
           }
           const auto It = Insns.find(Addr);
@@ -5091,13 +5689,11 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
             break;
           }
           for (const LowOp &Op : It->second.Ops) {
-            if ((Op.Opcode != NdOp::INT_SUB &&
-                 Op.Opcode != NdOp::INT_REM) ||
+            if ((Op.Opcode != NdOp::INT_SUB && Op.Opcode != NdOp::INT_REM) ||
                 Op.NumInputs < 2)
               continue;
             recordCandidateProducer(Info.PhysicalCapacity, Op,
-                                    /*DefinitionIndex=*/-1,
-                                    ProposalBudget);
+                                    /*DefinitionIndex=*/-1, ProposalBudget);
             if (ProposalBudget.exhausted()) {
               break;
             }
@@ -5366,11 +5962,9 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
   using ProvenProducerMap = std::map<uint32_t, ProvenProducerList>;
   ProvenProducerMap ProvenProducers;
   ProvenProducerMap ReplayableExactProducers;
-  auto appendUniqueProducer =
-      [&](ProvenProducerMap &ByBound, uint32_t Bound,
-          const JumpTableValueOccurrence &Producer) {
-    if (!StructuralBudget.consume(
-            orderedEvidenceLookupWork(ByBound.size())))
+  auto appendUniqueProducer = [&](ProvenProducerMap &ByBound, uint32_t Bound,
+                                  const JumpTableValueOccurrence &Producer) {
+    if (!StructuralBudget.consume(orderedEvidenceLookupWork(ByBound.size())))
       return false;
     auto It = ByBound.find(Bound);
     if (It == ByBound.end()) {
@@ -5403,8 +5997,8 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
       if (!StructuralBudget.consume() ||
           !appendUniqueProducer(ProvenProducers, RequiredProducerBound,
                                 Producer) ||
-          !appendUniqueProducer(ReplayableExactProducers,
-                                RequiredProducerBound, Producer)) {
+          !appendUniqueProducer(ReplayableExactProducers, RequiredProducerBound,
+                                Producer)) {
         ExplicitlyIncomplete = true;
         return false;
       }
@@ -5425,24 +6019,23 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
   // full-CFG MustEqual/MayDepend replay then rejects any selector path that
   // needs one, so prefix exhaustion cannot manufacture a domain.
   bool StructuralRetentionFull = false;
-  auto retainExactModuloQuery =
-      [&](uint32_t Bound, const JumpTableValueOccurrence &Producer) {
-        // Prepay metadata, public query, result slot, and eventual
-        // authenticated alternative.  The relation carries no alternatives
-        // and shares one structural-symbolization budget for the whole batch.
-        if (!StructuralBudget.canConsume(4) ||
-            !StructuralBudget.consume(4))
-          return false;
-        JumpTableValueQuery Query;
-        Query.Candidate = Producer.Value;
-        Query.UseAddr = Producer.Addr;
-        Query.UseSeq = Producer.Seq;
-        Query.Relation = JumpTableValueRelation::ExactUnsignedModuloRecipe;
-        Query.UnsignedUpperBound = Bound;
-        StructuralModuloProducers.push_back({Bound, Producer});
-        StructuralModuloQueries.push_back(std::move(Query));
-        return true;
-      };
+  auto retainExactModuloQuery = [&](uint32_t Bound,
+                                    const JumpTableValueOccurrence &Producer) {
+    // Prepay metadata, public query, result slot, and eventual
+    // authenticated alternative.  The relation carries no alternatives
+    // and shares one structural-symbolization budget for the whole batch.
+    if (!StructuralBudget.canConsume(4) || !StructuralBudget.consume(4))
+      return false;
+    JumpTableValueQuery Query;
+    Query.Candidate = Producer.Value;
+    Query.UseAddr = Producer.Addr;
+    Query.UseSeq = Producer.Seq;
+    Query.Relation = JumpTableValueRelation::ExactUnsignedModuloRecipe;
+    Query.UnsignedUpperBound = Bound;
+    StructuralModuloProducers.push_back({Bound, Producer});
+    StructuralModuloQueries.push_back(std::move(Query));
+    return true;
+  };
   for (auto CandidateIt = ProducerCandidates.begin();
        CandidateIt != ProducerCandidates.end(); ++CandidateIt) {
     const auto &[Bound, Producers] = *CandidateIt;
@@ -5593,8 +6186,8 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
   bool ConditionalSignedAnalysisComplete = false;
   const std::vector<bool> ConditionalSignedResults = tableValuesMatchAtUses(
       ConditionalSignedQueries, &ConditionalSignedAnalysisComplete, nullptr,
-      CandidateTargetsOverride ? Rec.Addr : InvalidVA,
-      CandidateTargetsOverride, AggregateEvidenceBudget);
+      CandidateTargetsOverride ? Rec.Addr : InvalidVA, CandidateTargetsOverride,
+      AggregateEvidenceBudget);
   if (!ConditionalSignedQueries.empty() &&
       (!ConditionalSignedAnalysisComplete ||
        ConditionalSignedResults.size() != ConditionalSignedProofs.size()))
@@ -5762,10 +6355,10 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
     return false;
 
   std::vector<bool> QueryAnalysisComplete;
-  const std::vector<bool> Results = tableValuesMatchAtUses(
-      Queries, nullptr, &QueryAnalysisComplete,
-      CandidateTargetsOverride ? Rec.Addr : InvalidVA,
-      CandidateTargetsOverride, AggregateEvidenceBudget);
+  const std::vector<bool> Results =
+      tableValuesMatchAtUses(Queries, nullptr, &QueryAnalysisComplete,
+                             CandidateTargetsOverride ? Rec.Addr : InvalidVA,
+                             CandidateTargetsOverride, AggregateEvidenceBudget);
   if (Results.size() != Queries.size() ||
       QueryAnalysisComplete.size() != Queries.size()) {
     ExplicitlyIncomplete = true;

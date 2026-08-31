@@ -263,10 +263,19 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
 
   // Flatten the INDIR_BR block ops; the table base may be a block live-in.
   va_t BlkStart = CurrentFuncEntry;
-  auto BIt = BlockStarts.upper_bound(Rec.Addr);
-  if (BIt != BlockStarts.begin()) {
-    --BIt;
-    BlkStart = *BIt;
+  if (!PublishedBlockStarts.empty()) {
+    auto BIt = std::upper_bound(PublishedBlockStarts.begin(),
+                                PublishedBlockStarts.end(), Rec.Addr);
+    if (BIt != PublishedBlockStarts.begin()) {
+      --BIt;
+      BlkStart = *BIt;
+    }
+  } else {
+    auto BIt = BlockStarts.upper_bound(Rec.Addr);
+    if (BIt != BlockStarts.begin()) {
+      --BIt;
+      BlkStart = *BIt;
+    }
   }
   std::vector<LowOp> BlockOps;
   for (auto It = Insns.lower_bound(BlkStart);
