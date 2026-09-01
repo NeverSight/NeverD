@@ -327,6 +327,16 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
     return -1;
   };
 
+  // isFPArgReg deliberately names only the ABI argument bank (v0-v7 /
+  // xmm0-xmm7).  Outgoing overflow values may be computed in any vector
+  // register before being stored to the call frame (clang commonly uses
+  // AArch64 v16-v20).  Classify those stored values by the full vector bank,
+  // while retaining the ARM high-half S-register exception encoded by
+  // isFPArgReg.
+  auto isFPValueReg = [&](uint64_t RegOff) {
+    return TRI.isVectorReg(RegOff) || TRI.isFPArgReg(RegOff);
+  };
+
   // Argument registers a forwarder passes straight through from its incoming
   // value (recovered only via the live-in fallback, never written in the
   // function): promoted to real parameters after all calls are processed.
@@ -939,7 +949,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
               Prev.Opcode == NdOp::INTRINSIC)
             break;
           if (Prev.Output.Kind == MedVar::Reg && Prev.Output.Size > 0 &&
-              TRI.isFPArgReg(Prev.Output.RegOff)) {
+              isFPValueReg(Prev.Output.RegOff)) {
             if (Prev.Opcode == NdOp::COPY && Prev.NumInputs >= 1 &&
                 Prev.Inputs[0].Kind == MedVar::Reg &&
                 Prev.Inputs[0].RegOff == Prev.Output.RegOff &&
@@ -1079,7 +1089,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         // The reverse scan visits later stores first; keep the first seen
         // (= last in program order, the value live at the call) per offset.
         if (CI.IsIndirect && Prev.Inputs[1].Kind == MedVar::Reg &&
-            TRI.isFPArgReg(Prev.Inputs[1].RegOff) &&
+            isFPValueReg(Prev.Inputs[1].RegOff) &&
             FPStackByOff.find(StackOff) == FPStackByOff.end())
           FPStackByOff[StackOff] = Prev.Inputs[1];
 
@@ -1135,7 +1145,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         if (!CI.IsIndirect && SlotSize > 0 && Prev.Inputs[1].Size > 0 &&
             Prev.Inputs[1].Size < SlotSize &&
             !(Prev.Inputs[1].Kind == MedVar::Reg &&
-              TRI.isFPArgReg(Prev.Inputs[1].RegOff)) &&
+              isFPValueReg(Prev.Inputs[1].RegOff)) &&
             IntStackByOff.find(StackOff) == IntStackByOff.end())
           IntStackByOff[StackOff] = Prev.Inputs[1];
 

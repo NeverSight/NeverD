@@ -631,6 +631,74 @@ TEST(MedABIPass, X86CdeclRecoversLoopCarriedCallSpRelativeSlots) {
   EXPECT_EQ(Func.CallInfos[0].Args[1].ConstVal, 22u);
 }
 
+TEST(MedABIPass,
+     AArch64IndirectCallRecoversFloatOverflowFromScratchVectorRegs) {
+  constexpr Arch TheArch = Arch::AArch64;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+  ASSERT_EQ(TRI.FPParamRegs.size(), 8u);
+
+  MedFunc Func;
+  Func.Entry = 0x1000;
+  Func.Name = "aarch64_indirect_float_overflow";
+  Func.Blocks.resize(1);
+  MedBlock &Block = Func.Blocks[0];
+  Block.Id = 0;
+
+  const MedVar EntrySP = reg(10, 0, TRI.PointerSize, TRI.StackPointer, TheArch);
+  addLiveIn(Block, EntrySP);
+
+  std::vector<MedVar> RegisterArgs;
+  for (size_t I = 0; I < TRI.FPParamRegs.size(); ++I) {
+    MedVar Arg =
+        reg(20 + static_cast<int>(I), 1, 4, TRI.FPParamRegs[I], TheArch);
+    Block.Ops.push_back(unary(NdOp::COPY, Arg, MedVar::makeConst(I + 1, 4)));
+    RegisterArgs.push_back(Arg);
+  }
+
+  std::vector<MedVar> OverflowArgs;
+  for (int I = 0; I < 4; ++I) {
+    const uint64_t ScratchReg =
+        TRI.VecRegBase + static_cast<uint64_t>(16 + I) * TRI.VecRegStride;
+    EXPECT_TRUE(TRI.isVectorReg(ScratchReg));
+    EXPECT_FALSE(TRI.isFPArgReg(ScratchReg));
+    MedVar Arg = reg(40 + I, 1, 4, ScratchReg, TheArch);
+    Block.Ops.push_back(unary(NdOp::COPY, Arg, MedVar::makeConst(9 + I, 4)));
+
+    MedVar Address = EntrySP;
+    if (I != 0) {
+      Address = temp(60 + I, 0, TRI.PointerSize, TheArch);
+      Block.Ops.push_back(binary(
+          NdOp::INT_ADD, Address, EntrySP,
+          MedVar::makeConst(static_cast<uint64_t>(I * 4), TRI.PointerSize)));
+    }
+    MedOp Store;
+    Store.Opcode = NdOp::STORE;
+    Store.addInput(Address);
+    Store.addInput(Arg);
+    Block.Ops.push_back(Store);
+    OverflowArgs.push_back(Arg);
+  }
+
+  MedVar Target = temp(80, 0, TRI.PointerSize, TheArch);
+  Block.Ops.push_back(
+      unary(NdOp::COPY, Target, MedVar::makeConst(0x2000, TRI.PointerSize)));
+  MedOp Call;
+  Call.Opcode = NdOp::INDIR_CALL;
+  Call.Output = reg(90, 1, TRI.PointerSize, TRI.IntReturnReg, TheArch);
+  Call.addInput(Target);
+  Block.Ops.push_back(Call);
+
+  recoverCallAbi(Func, TheArch, {});
+
+  ASSERT_EQ(Func.CallInfos.size(), 1u);
+  const std::vector<MedVar> &Args = Func.CallInfos[0].Args;
+  ASSERT_EQ(Args.size(), RegisterArgs.size() + OverflowArgs.size());
+  for (size_t I = 0; I < RegisterArgs.size(); ++I)
+    EXPECT_EQ(Args[I], RegisterArgs[I]);
+  for (size_t I = 0; I < OverflowArgs.size(); ++I)
+    EXPECT_EQ(Args[RegisterArgs.size() + I], OverflowArgs[I]);
+}
+
 TEST(MedTypePass, X86InfersFloatReturnFromX87CarrierExtension) {
   constexpr Arch TheArch = Arch::X86;
 
