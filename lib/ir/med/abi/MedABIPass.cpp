@@ -185,6 +185,103 @@ std::optional<int64_t> exactEntrySpDelta(const MedFunc &Func, Arch TheArch,
 
   return Eval(Root);
 }
+
+enum class ReachingSpState : uint8_t { Value, Cycle, Unknown };
+
+struct ReachingSpResult {
+  ReachingSpState State = ReachingSpState::Unknown;
+  int64_t Delta = 0;
+};
+
+ReachingSpResult
+reachingStackPtrDeltaImpl(const MedFunc &Func, const TargetRegInfo &TRI,
+                          int BlockId, int BeforeIdx,
+                          std::set<std::pair<int, int>> &Active) {
+  const std::pair<int, int> Key{BlockId, BeforeIdx};
+  if (!Active.insert(Key).second)
+    return {ReachingSpState::Cycle, 0};
+
+  const MedBlock *Block = nullptr;
+  for (const MedBlock &Candidate : Func.Blocks)
+    if (Candidate.Id == BlockId) {
+      Block = &Candidate;
+      break;
+    }
+  if (!Block) {
+    Active.erase(Key);
+    return {};
+  }
+
+  const int Boundary = std::min(BeforeIdx, static_cast<int>(Block->Ops.size()));
+  for (int I = Boundary - 1; I >= 0; --I) {
+    const MedVar &Output = Block->Ops[I].Output;
+    if (Output.Kind != MedVar::Reg || Output.Size == 0 ||
+        Output.RegOff != TRI.StackPointer)
+      continue;
+    auto Delta = stackPtrDelta(Func, TRI, Output);
+    Active.erase(Key);
+    return Delta ? ReachingSpResult{ReachingSpState::Value, *Delta}
+                 : ReachingSpResult{};
+  }
+
+  for (const PhiNode &Phi : Block->Phis) {
+    if (Phi.Output.Kind != MedVar::Reg || Phi.Output.Size == 0 ||
+        Phi.Output.RegOff != TRI.StackPointer)
+      continue;
+    auto Delta = stackPtrDelta(Func, TRI, Phi.Output);
+    Active.erase(Key);
+    return Delta ? ReachingSpResult{ReachingSpState::Value, *Delta}
+                 : ReachingSpResult{};
+  }
+
+  if (Block->Preds.empty()) {
+    Active.erase(Key);
+    return {ReachingSpState::Value, 0};
+  }
+
+  std::optional<int64_t> Common;
+  bool SawCycle = false;
+  for (int PredId : Block->Preds) {
+    const MedBlock *Pred = nullptr;
+    for (const MedBlock &Candidate : Func.Blocks)
+      if (Candidate.Id == PredId) {
+        Pred = &Candidate;
+        break;
+      }
+    if (!Pred) {
+      Active.erase(Key);
+      return {};
+    }
+    ReachingSpResult Incoming = reachingStackPtrDeltaImpl(
+        Func, TRI, PredId, static_cast<int>(Pred->Ops.size()), Active);
+    if (Incoming.State == ReachingSpState::Cycle) {
+      SawCycle = true;
+      continue;
+    }
+    if (Incoming.State != ReachingSpState::Value ||
+        (Common && *Common != Incoming.Delta)) {
+      Active.erase(Key);
+      return {};
+    }
+    Common = Incoming.Delta;
+  }
+
+  Active.erase(Key);
+  if (Common)
+    return {ReachingSpState::Value, *Common};
+  return {SawCycle ? ReachingSpState::Cycle : ReachingSpState::Unknown, 0};
+}
+
+std::optional<int64_t> reachingStackPtrDelta(const MedFunc &Func,
+                                             const TargetRegInfo &TRI,
+                                             int BlockId, int BeforeIdx) {
+  std::set<std::pair<int, int>> Active;
+  ReachingSpResult Result =
+      reachingStackPtrDeltaImpl(Func, TRI, BlockId, BeforeIdx, Active);
+  return Result.State == ReachingSpState::Value
+             ? std::optional<int64_t>(Result.Delta)
+             : std::nullopt;
+}
 } // namespace
 
 void recoverCallAbi(MedFunc &Func, Arch TheArch,
@@ -572,21 +669,28 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       // by successive `push`es (x86/x64 pass stack arguments by `push`,
       // AArch64/ ARM by `str [sp,#k]`).  The call-site SP is the most recent
       // stack-pointer definition before the call (entry SP = offset 0).
+      bool HaveCallSpDelta = false;
       int64_t CallSpDelta = 0;
       std::map<SpOffsetKey, int64_t> CallSpOffsets;
       for (int J = static_cast<int>(OI) - 1; J >= 0; --J) {
         auto &Prev = Blk.Ops[J];
         if (Prev.Output.Kind == MedVar::Reg &&
             Prev.Output.RegOff == TRI.StackPointer) {
-          if (auto D = stackPtrDelta(Blk, TRI, Prev.Output))
+          if (auto D = stackPtrDelta(Func, TRI, Prev.Output)) {
             CallSpDelta = *D;
+            HaveCallSpDelta = true;
+          }
           // Relative-offset fallback: map the call SP's own definition chain so
           // pushes can still be placed when the absolute entry delta is
           // unavailable (a post-loop push chain threading a loop-carried PHI).
-          buildCallSpOffsets(Blk, TRI, Prev.Output, 0, CallSpOffsets, 0);
+          buildCallSpOffsets(Func, TRI, Prev.Output, 0, CallSpOffsets, 0);
           break;
         }
       }
+      if (!HaveCallSpDelta)
+        if (auto D =
+                reachingStackPtrDelta(Func, TRI, Blk.Id, static_cast<int>(OI)))
+          CallSpDelta = *D;
 
       // A value spilled to the call frame before the call (an outgoing `push` /
       // `str [sp,#k]` landing at or above the call SP) means the ABI has run
@@ -603,7 +707,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
           break;
         if (Prev.Opcode == NdOp::STORE && Prev.NumInputs >= 2 &&
             Prev.MemoryAddressSpace == NdMemoryAddressSpace::Default)
-          if (auto D = stackPtrDelta(Blk, TRI, Prev.Inputs[0]))
+          if (auto D = stackPtrDelta(Func, TRI, Prev.Inputs[0]))
             if (int64_t Rel = *D - CallSpDelta; Rel >= 0) {
               if (IsWin64 && Rel < static_cast<int64_t>(IntParamRegs.size() *
                                                         TRI.PointerSize))
@@ -875,7 +979,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         // stack-pointer delta chain, so consecutive `push`es land in distinct
         // argument slots (the simple "SP register => offset 0" rule below would
         // collapse every push onto slot 0).
-        if (auto D = stackPtrDelta(Blk, TRI, AddrVar)) {
+        if (auto D = stackPtrDelta(Func, TRI, AddrVar)) {
           int64_t Rel = *D - CallSpDelta;
           if (Rel >= 0)
             StackOff = Rel;
@@ -886,7 +990,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         // chain.  Only runs when the absolute scan above did not resolve, so
         // working cases are unaffected.
         if (StackOff < 0)
-          if (auto R = relStackOff(Blk, TRI, AddrVar, CallSpOffsets, 0))
+          if (auto R = relStackOff(Func, TRI, AddrVar, CallSpOffsets, 0))
             if (*R >= 0)
               StackOff = *R;
 
@@ -1188,7 +1292,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
               if (Candidate.Opcode != NdOp::STORE || Candidate.NumInputs < 2 ||
                   Candidate.MemoryAddressSpace != NdMemoryAddressSpace::Default)
                 continue;
-              auto D = stackPtrDelta(*Block, TRI, Candidate.Inputs[0]);
+              auto D = stackPtrDelta(Func, TRI, Candidate.Inputs[0]);
               if (D && *D == TargetOffset) {
                 MedVar Value = Candidate.Inputs[1];
                 Active.erase(BlockId);

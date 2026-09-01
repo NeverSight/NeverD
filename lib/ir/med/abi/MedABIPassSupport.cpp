@@ -238,26 +238,85 @@ std::optional<int> resolveIndirectTargetArgIdx(const MedBlock &Blk, int FromIdx,
 // its true distance from the call-site SP even when successive `push`es
 // retarget a moving stack pointer.  nullopt when \p V does not derive from the
 // SP.
-std::optional<int64_t> stackPtrDelta(const MedBlock &Blk,
+//
+// SSA definitions are function-wide.  In particular, clang often computes an
+// outgoing call-frame base in a predecessor and emits the STOREs and CALL in a
+// successor.  Looking only in the use block loses that exact definition and
+// silently drops every cdecl argument.
+struct MedDefSite {
+  const MedBlock *Block = nullptr;
+  const MedOp *Op = nullptr;
+  const PhiNode *Phi = nullptr;
+  bool Ambiguous = false;
+};
+
+static bool sameDefIdentity(const MedVar &A, const MedVar &B) {
+  return A.Kind == B.Kind && A.Id == B.Id && A.SSAVer == B.SSAVer &&
+         A.RegOff == B.RegOff;
+}
+
+static MedDefSite findFuncDef(const MedFunc &Func, const MedVar &V) {
+  MedDefSite Site;
+  auto Record = [&](const MedBlock &Block, const MedOp *Op,
+                    const PhiNode *Phi) {
+    if (Site.Op || Site.Phi) {
+      Site = {};
+      Site.Ambiguous = true;
+      return;
+    }
+    Site.Block = &Block;
+    Site.Op = Op;
+    Site.Phi = Phi;
+  };
+
+  for (const MedBlock &Block : Func.Blocks) {
+    for (const PhiNode &Phi : Block.Phis)
+      if (sameDefIdentity(Phi.Output, V)) {
+        Record(Block, nullptr, &Phi);
+        if (Site.Ambiguous)
+          return Site;
+      }
+    for (const MedOp &Op : Block.Ops)
+      if (sameDefIdentity(Op.Output, V)) {
+        Record(Block, &Op, nullptr);
+        if (Site.Ambiguous)
+          return Site;
+      }
+  }
+  return Site;
+}
+
+std::optional<int64_t> stackPtrDelta(const MedFunc &Func,
                                      const TargetRegInfo &TRI, const MedVar &V,
                                      int Depth) {
   if (Depth > 128 || V.isConst())
     return std::nullopt;
 
-  const MedOp *Def = nullptr;
-  for (auto &Op : Blk.Ops)
-    if (Op.Output.Kind == V.Kind && Op.Output.Id == V.Id &&
-        Op.Output.SSAVer == V.SSAVer && Op.Output.RegOff == V.RegOff) {
-      Def = &Op;
-      break;
+  const MedDefSite Site = findFuncDef(Func, V);
+  if (Site.Ambiguous)
+    return std::nullopt;
+  if (Site.Phi) {
+    std::optional<int64_t> Common;
+    for (const auto &[Pred, Incoming] : Site.Phi->Args) {
+      (void)Pred;
+      if (sameDefIdentity(Incoming, V))
+        continue;
+      auto Delta = stackPtrDelta(Func, TRI, Incoming, Depth + 1);
+      if (!Delta || (Common && *Common != *Delta))
+        return std::nullopt;
+      Common = *Delta;
     }
-  if (!Def) {
-    // No in-block definition: the live-in stack pointer is the zero reference;
-    // anything else is not SP-derived.
+    return Common;
+  }
+  if (!Site.Op) {
+    // No function-wide definition: the live-in stack pointer is the zero
+    // reference; anything else is not SP-derived.
     if (V.Kind == MedVar::Reg && V.RegOff == TRI.StackPointer)
       return 0;
     return std::nullopt;
   }
+  const MedOp *Def = Site.Op;
+  const MedBlock &DefBlock = *Site.Block;
 
   switch (Def->Opcode) {
   case NdOp::COPY:
@@ -270,14 +329,14 @@ std::optional<int64_t> stackPtrDelta(const MedBlock &Blk,
       if (In.Kind == MedVar::Reg && In.RegOff == TRI.StackPointer &&
           In.Id == V.Id && In.SSAVer == V.SSAVer)
         return 0;
-      return stackPtrDelta(Blk, TRI, In, Depth + 1);
+      return stackPtrDelta(Func, TRI, In, Depth + 1);
     }
     return std::nullopt;
   case NdOp::SUBBYTES:
   case NdOp::INT_ZEXT:
   case NdOp::INT_SEXT:
     return Def->NumInputs >= 1
-               ? stackPtrDelta(Blk, TRI, Def->Inputs[0], Depth + 1)
+               ? stackPtrDelta(Func, TRI, Def->Inputs[0], Depth + 1)
                : std::nullopt;
   case NdOp::INT_ADD:
   case NdOp::INT_SUB: {
@@ -291,7 +350,7 @@ std::optional<int64_t> stackPtrDelta(const MedBlock &Blk,
         K = static_cast<int64_t>(Def->Inputs[I].ConstVal);
         HaveK = true;
       } else if (!Base) {
-        Base = stackPtrDelta(Blk, TRI, Def->Inputs[I], Depth + 1);
+        Base = stackPtrDelta(Func, TRI, Def->Inputs[I], Depth + 1);
       }
     }
     if (!Base || !HaveK)
@@ -311,18 +370,18 @@ std::optional<int64_t> stackPtrDelta(const MedBlock &Blk,
     if (Def->NumInputs < 1 ||
         Def->MemoryAddressSpace != NdMemoryAddressSpace::Default)
       return std::nullopt;
-    auto LoadAddr = reduceAddr(Blk, Def->Inputs[0], 0, 0);
-    size_t DefIdx = static_cast<size_t>(Def - Blk.Ops.data());
+    auto LoadAddr = reduceAddr(DefBlock, Def->Inputs[0], 0, 0);
+    size_t DefIdx = static_cast<size_t>(Def - DefBlock.Ops.data());
     for (size_t I = DefIdx; I-- > 0;) {
-      const MedOp &S = Blk.Ops[I];
+      const MedOp &S = DefBlock.Ops[I];
       if (S.Opcode != NdOp::STORE || S.NumInputs < 2 ||
           S.MemoryAddressSpace != NdMemoryAddressSpace::Default)
         continue;
-      if (!sameReducedAddr(reduceAddr(Blk, S.Inputs[0], 0, 0), LoadAddr))
+      if (!sameReducedAddr(reduceAddr(DefBlock, S.Inputs[0], 0, 0), LoadAddr))
         continue; // a store to a different slot does not define this load
       // The nearest prior store to this slot defines the loaded value: forward
       // its SP delta (nullopt when the slot holds a non-pointer).
-      return stackPtrDelta(Blk, TRI, S.Inputs[1], Depth + 1);
+      return stackPtrDelta(Func, TRI, S.Inputs[1], Depth + 1);
     }
     return std::nullopt;
   }
@@ -384,15 +443,6 @@ static SpOffsetKey spOffsetKey(const MedVar &V) {
   return {V.Id, V.SSAVer, V.RegOff};
 }
 
-// Finds the in-block definition of \p V (matching kind/id/version/regoff).
-static const MedOp *findBlockDef(const MedBlock &Blk, const MedVar &V) {
-  for (auto &Op : Blk.Ops)
-    if (Op.Output.Kind == V.Kind && Op.Output.Id == V.Id &&
-        Op.Output.SSAVer == V.SSAVer && Op.Output.RegOff == V.RegOff)
-      return &Op;
-  return nullptr;
-}
-
 // Records, for each stack-pointer value on the call-site SP's definition chain,
 // its byte offset *above* the call SP (call SP = 0, each earlier `push`'s SP
 // one slot higher).  Offset-preserving casts (SUBBYTES/ZEXT/SEXT/COPY) keep the
@@ -401,14 +451,23 @@ static const MedOp *findBlockDef(const MedBlock &Blk, const MedVar &V) {
 // unavailable (a post-loop push chain whose SP threads a loop-carried PHI,
 // where the chain round-trips ESP<->RSP and never reaches the entry SP as a
 // constant).
-void buildCallSpOffsets(const MedBlock &Blk, const TargetRegInfo &TRI,
+void buildCallSpOffsets(const MedFunc &Func, const TargetRegInfo &TRI,
                         const MedVar &V, int64_t Off,
                         std::map<SpOffsetKey, int64_t> &Map, int Depth) {
   if (Depth > 128 || V.isConst())
     return;
   if (!Map.emplace(spOffsetKey(V), Off).second)
     return; // already visited (e.g. the entry SP self-copy)
-  const MedOp *Def = findBlockDef(Blk, V);
+  const MedDefSite Site = findFuncDef(Func, V);
+  if (Site.Ambiguous)
+    return;
+  // A PHI can merge different concrete stack deltas.  The relative fallback
+  // deliberately stops at that boundary: values already mapped on the
+  // call-side chain remain usable, while path-specific predecessors cannot be
+  // assigned the same offset without an equality proof.
+  if (Site.Phi)
+    return;
+  const MedOp *Def = Site.Op;
   if (!Def)
     return;
   switch (Def->Opcode) {
@@ -417,12 +476,12 @@ void buildCallSpOffsets(const MedBlock &Blk, const TargetRegInfo &TRI,
   case NdOp::INT_ZEXT:
   case NdOp::INT_SEXT:
     if (Def->NumInputs >= 1)
-      buildCallSpOffsets(Blk, TRI, Def->Inputs[0], Off, Map, Depth + 1);
+      buildCallSpOffsets(Func, TRI, Def->Inputs[0], Off, Map, Depth + 1);
     break;
   case NdOp::INT_SUB:
     // V = base - C  =>  base sits C higher  =>  base offset = Off + C.
     if (Def->NumInputs >= 2 && Def->Inputs[1].isConst())
-      buildCallSpOffsets(Blk, TRI, Def->Inputs[0],
+      buildCallSpOffsets(Func, TRI, Def->Inputs[0],
                          Off + static_cast<int64_t>(Def->Inputs[1].ConstVal),
                          Map, Depth + 1);
     break;
@@ -434,7 +493,7 @@ void buildCallSpOffsets(const MedBlock &Blk, const TargetRegInfo &TRI,
           for (uint8_t J = 0; J < Def->NumInputs; ++J)
             if (!Def->Inputs[J].isConst())
               buildCallSpOffsets(
-                  Blk, TRI, Def->Inputs[J],
+                  Func, TRI, Def->Inputs[J],
                   Off - static_cast<int64_t>(Def->Inputs[I].ConstVal), Map,
                   Depth + 1);
     }
@@ -448,7 +507,7 @@ void buildCallSpOffsets(const MedBlock &Blk, const TargetRegInfo &TRI,
 // SP's offset map.  Follows \p V's definition chain (offset-preserving casts,
 // and constant add/sub) until it reaches a value on the call SP chain.  nullopt
 // when the address is not stack-pointer derived.
-std::optional<int64_t> relStackOff(const MedBlock &Blk,
+std::optional<int64_t> relStackOff(const MedFunc &Func,
                                    const TargetRegInfo &TRI, const MedVar &V,
                                    const std::map<SpOffsetKey, int64_t> &Map,
                                    int Depth) {
@@ -456,7 +515,21 @@ std::optional<int64_t> relStackOff(const MedBlock &Blk,
     return std::nullopt;
   if (auto It = Map.find(spOffsetKey(V)); It != Map.end())
     return It->second;
-  const MedOp *Def = findBlockDef(Blk, V);
+  const MedDefSite Site = findFuncDef(Func, V);
+  if (Site.Ambiguous)
+    return std::nullopt;
+  if (Site.Phi) {
+    std::optional<int64_t> Common;
+    for (const auto &[Pred, Incoming] : Site.Phi->Args) {
+      (void)Pred;
+      auto Rel = relStackOff(Func, TRI, Incoming, Map, Depth + 1);
+      if (!Rel || (Common && *Common != *Rel))
+        return std::nullopt;
+      Common = *Rel;
+    }
+    return Common;
+  }
+  const MedOp *Def = Site.Op;
   if (!Def)
     return std::nullopt;
   switch (Def->Opcode) {
@@ -465,11 +538,11 @@ std::optional<int64_t> relStackOff(const MedBlock &Blk,
   case NdOp::INT_ZEXT:
   case NdOp::INT_SEXT:
     return Def->NumInputs >= 1
-               ? relStackOff(Blk, TRI, Def->Inputs[0], Map, Depth + 1)
+               ? relStackOff(Func, TRI, Def->Inputs[0], Map, Depth + 1)
                : std::nullopt;
   case NdOp::INT_SUB:
     if (Def->NumInputs >= 2 && Def->Inputs[1].isConst())
-      if (auto B = relStackOff(Blk, TRI, Def->Inputs[0], Map, Depth + 1))
+      if (auto B = relStackOff(Func, TRI, Def->Inputs[0], Map, Depth + 1))
         return *B - static_cast<int64_t>(Def->Inputs[1].ConstVal);
     return std::nullopt;
   case NdOp::INT_ADD:
@@ -479,7 +552,7 @@ std::optional<int64_t> relStackOff(const MedBlock &Blk,
           for (uint8_t J = 0; J < Def->NumInputs; ++J)
             if (!Def->Inputs[J].isConst())
               if (auto B =
-                      relStackOff(Blk, TRI, Def->Inputs[J], Map, Depth + 1))
+                      relStackOff(Func, TRI, Def->Inputs[J], Map, Depth + 1))
                 return *B + static_cast<int64_t>(Def->Inputs[I].ConstVal);
     }
     return std::nullopt;

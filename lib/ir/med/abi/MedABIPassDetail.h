@@ -60,7 +60,7 @@ std::optional<int> resolveIndirectTargetArgIdx(const MedBlock &Blk, int FromIdx,
 /// Offset of \p V relative to the function-entry stack pointer, following the
 /// SP definition chain through constant add/sub decrements and width casts.
 /// nullopt when \p V does not derive from the SP.
-std::optional<int64_t> stackPtrDelta(const MedBlock &Blk,
+std::optional<int64_t> stackPtrDelta(const MedFunc &Func,
                                      const TargetRegInfo &TRI, const MedVar &V,
                                      int Depth = 0);
 
@@ -76,13 +76,13 @@ using SpOffsetKey = std::tuple<int, int, uint64_t>;
 /// chain, its byte offset *above* the call SP (call SP = 0).  Used to place
 /// pushed arguments relative to the call SP when the absolute entry-relative
 /// delta is unavailable.
-void buildCallSpOffsets(const MedBlock &Blk, const TargetRegInfo &TRI,
+void buildCallSpOffsets(const MedFunc &Func, const TargetRegInfo &TRI,
                         const MedVar &V, int64_t Off,
                         std::map<SpOffsetKey, int64_t> &Map, int Depth);
 
 /// Offset of store-address \p V above the call SP, resolved against the call
 /// SP's offset map.  nullopt when the address is not stack-pointer derived.
-std::optional<int64_t> relStackOff(const MedBlock &Blk,
+std::optional<int64_t> relStackOff(const MedFunc &Func,
                                    const TargetRegInfo &TRI, const MedVar &V,
                                    const std::map<SpOffsetKey, int64_t> &Map,
                                    int Depth);

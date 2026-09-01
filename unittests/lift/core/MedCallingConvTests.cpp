@@ -13,6 +13,7 @@
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"
 #include "neverd/ir/med/MedSwitchNorm.h"
+#include "neverd/ir/med/MedTypePass.h"
 #include "neverd/lift/ARMRegs.h"
 #include "neverd/lift/X86Regs.h"
 
@@ -434,6 +435,180 @@ TEST(MedABIPass, PromotedRegisterParamsRebaseMutableStackHomes) {
   EXPECT_EQ(Func.Params[1].RegOff, TRI.IntParamRegs[1]);
   EXPECT_EQ(Func.MutableStackParamHomes,
             (std::vector<std::pair<int, int64_t>>{{2, 4}, {4, 12}}));
+}
+
+TEST(MedABIPass, X86CdeclRecoversStackAddressesDefinedInPredecessor) {
+  constexpr Arch TheArch = Arch::X86;
+  constexpr va_t Callee = 0x2000;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+
+  MedFunc Func;
+  Func.Entry = 0x1000;
+  Func.Name = "cross_block_cdecl_arguments";
+  Func.Blocks.resize(2);
+
+  MedBlock &Entry = Func.Blocks[0];
+  Entry.Id = 0;
+  Entry.Succs = {1};
+  const MedVar EntrySP = reg(10, 0, TRI.PointerSize, TRI.StackPointer, TheArch);
+  addLiveIn(Entry, EntrySP);
+  const MedVar CallSP = temp(20, 0, TRI.PointerSize, TheArch);
+  Entry.Ops.push_back(
+      binary(NdOp::INT_SUB, CallSP, EntrySP,
+             MedVar::makeConst(3 * TRI.PointerSize, TRI.PointerSize)));
+  const MedVar UpdatedSP =
+      reg(10, 1, TRI.PointerSize, TRI.StackPointer, TheArch);
+  Entry.Ops.push_back(unary(NdOp::COPY, UpdatedSP, CallSP));
+
+  std::vector<MedVar> SlotAddresses;
+  for (int I = 0; I < 3; ++I) {
+    MedVar Address = temp(21 + I, 0, TRI.PointerSize, TheArch);
+    Entry.Ops.push_back(
+        binary(NdOp::INT_ADD, Address, CallSP,
+               MedVar::makeConst(static_cast<uint64_t>(I * TRI.PointerSize),
+                                 TRI.PointerSize)));
+    SlotAddresses.push_back(Address);
+  }
+
+  MedBlock &CallBlock = Func.Blocks[1];
+  CallBlock.Id = 1;
+  CallBlock.Preds = {0};
+  for (int I = 0; I < 3; ++I) {
+    MedOp Store;
+    Store.Opcode = NdOp::STORE;
+    Store.addInput(SlotAddresses[I]);
+    Store.addInput(MedVar::makeConst(11 + I * 11, TRI.PointerSize));
+    CallBlock.Ops.push_back(Store);
+  }
+
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Output = reg(30, 0, TRI.PointerSize, TRI.IntReturnReg, TheArch);
+  Call.addInput(MedVar::makeConst(Callee, TRI.PointerSize));
+  CallBlock.Ops.push_back(Call);
+
+  const std::map<va_t, std::string> Names{{Callee, "cdecl_callee"}};
+  std::map<va_t, int> RegArity{{Callee, 0}};
+  std::map<va_t, int> TotalArity{{Callee, 3}};
+  recoverCallAbi(Func, TheArch, Names, nullptr, &RegArity, &TotalArity);
+
+  ASSERT_EQ(Func.CallInfos.size(), 1u);
+  ASSERT_EQ(Func.CallInfos[0].Args.size(), 3u);
+  EXPECT_EQ(Func.CallInfos[0].Args[0].ConstVal, 11u);
+  EXPECT_EQ(Func.CallInfos[0].Args[1].ConstVal, 22u);
+  EXPECT_EQ(Func.CallInfos[0].Args[2].ConstVal, 33u);
+}
+
+TEST(MedABIPass, X86CdeclRejectsConflictingPredecessorStackOffsets) {
+  constexpr Arch TheArch = Arch::X86;
+  constexpr va_t Callee = 0x2000;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+
+  MedFunc Func;
+  Func.Entry = 0x1000;
+  Func.Name = "conflicting_cross_block_cdecl_address";
+  Func.Blocks.resize(4);
+
+  MedBlock &Entry = Func.Blocks[0];
+  Entry.Id = 0;
+  Entry.Succs = {1, 2};
+  const MedVar EntrySP = reg(10, 0, TRI.PointerSize, TRI.StackPointer, TheArch);
+  addLiveIn(Entry, EntrySP);
+  const MedVar Slot0 = temp(20, 0, TRI.PointerSize, TheArch);
+  const MedVar Slot1 = temp(21, 0, TRI.PointerSize, TheArch);
+  Entry.Ops.push_back(unary(NdOp::COPY, Slot0, EntrySP));
+  Entry.Ops.push_back(
+      binary(NdOp::INT_ADD, Slot1, EntrySP,
+             MedVar::makeConst(TRI.PointerSize, TRI.PointerSize)));
+
+  Func.Blocks[1].Id = 1;
+  Func.Blocks[1].Preds = {0};
+  Func.Blocks[1].Succs = {3};
+  Func.Blocks[2].Id = 2;
+  Func.Blocks[2].Preds = {0};
+  Func.Blocks[2].Succs = {3};
+
+  MedBlock &CallBlock = Func.Blocks[3];
+  CallBlock.Id = 3;
+  CallBlock.Preds = {1, 2};
+  const MedVar MergedAddress = temp(22, 0, TRI.PointerSize, TheArch);
+  CallBlock.Phis.push_back({MergedAddress, {{1, Slot0}, {2, Slot1}}});
+
+  MedOp Store;
+  Store.Opcode = NdOp::STORE;
+  Store.addInput(MergedAddress);
+  Store.addInput(MedVar::makeConst(42, TRI.PointerSize));
+  CallBlock.Ops.push_back(Store);
+
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Output = reg(30, 0, TRI.PointerSize, TRI.IntReturnReg, TheArch);
+  Call.addInput(MedVar::makeConst(Callee, TRI.PointerSize));
+  CallBlock.Ops.push_back(Call);
+
+  const std::map<va_t, std::string> Names{{Callee, "cdecl_callee"}};
+  std::map<va_t, int> RegArity{{Callee, 0}};
+  std::map<va_t, int> TotalArity{{Callee, 1}};
+  recoverCallAbi(Func, TheArch, Names, nullptr, &RegArity, &TotalArity);
+
+  ASSERT_EQ(Func.CallInfos.size(), 1u);
+  EXPECT_TRUE(Func.CallInfos[0].Args.empty());
+}
+
+TEST(MedTypePass, X86InfersFloatReturnFromX87CarrierExtension) {
+  constexpr Arch TheArch = Arch::X86;
+
+  MedFunc Func;
+  Func.Entry = 0x1000;
+  Func.Name = "x87_float_return";
+  Func.Blocks.resize(1);
+  MedBlock &Block = Func.Blocks[0];
+  Block.Id = 0;
+
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+  const MedVar EntrySP = reg(30, 0, TRI.PointerSize, TRI.StackPointer, TheArch);
+  addLiveIn(Block, EntrySP);
+  const MedVar SavedSlot = temp(31, 0, TRI.PointerSize, TheArch);
+  Block.Ops.push_back(
+      binary(NdOp::INT_SUB, SavedSlot, EntrySP,
+             MedVar::makeConst(TRI.PointerSize, TRI.PointerSize)));
+  const MedVar SavedEAX = temp(32, 0, TRI.PointerSize, TheArch);
+  MedOp LoadSaved;
+  LoadSaved.Opcode = NdOp::LOAD;
+  LoadSaved.Output = SavedEAX;
+  LoadSaved.addInput(SavedSlot);
+  Block.Ops.push_back(LoadSaved);
+
+  const MedVar Scalar = temp(10, 0, 4, TheArch);
+  Block.Ops.push_back(binary(NdOp::FLOAT_INT2FLOAT, Scalar,
+                             MedVar::makeConst(42, 4),
+                             MedVar::makeConst(4, 4)));
+  const MedVar Carrier = temp(11, 0, x86reg::FPURegSize, TheArch);
+  Block.Ops.push_back(unary(NdOp::FLOAT_FLOAT2FLOAT, Carrier, Scalar));
+  // x87 TOP rotation can leave the logical return value in any physical slot.
+  const MedVar X87Top = reg(20, 0, x86reg::FPURegSize, x86reg::ST7, TheArch);
+  Block.Ops.push_back(unary(NdOp::COPY, X87Top, Carrier));
+  const MedVar NextSP = temp(33, 0, TRI.PointerSize, TheArch);
+  Block.Ops.push_back(
+      binary(NdOp::INT_ADD, NextSP, SavedSlot,
+             MedVar::makeConst(TRI.PointerSize, TRI.PointerSize)));
+  Block.Ops.push_back(
+      unary(NdOp::COPY, reg(30, 1, TRI.PointerSize, TRI.StackPointer, TheArch),
+            NextSP));
+  Block.Ops.push_back(
+      unary(NdOp::COPY, reg(40, 1, TRI.PointerSize, TRI.IntReturnReg, TheArch),
+            SavedEAX));
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.addInput(X87Top);
+  Block.Ops.push_back(Return);
+
+  inferMedTypes(Func, TheArch);
+
+  ASSERT_TRUE(Func.ReturnType);
+  EXPECT_EQ(Func.ReturnType->Kind, NdTypeKind::Float);
+  EXPECT_EQ(Func.ReturnType->Size, 4u);
+  EXPECT_TRUE(Func.FPReturnViaX87);
 }
 
 TEST(MedABIPass, DirectCallUsesWidestEquallySeededArgumentPhi) {

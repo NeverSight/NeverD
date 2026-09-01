@@ -118,6 +118,31 @@ scalarFPLoadElemSize(const std::map<std::pair<int, int>, const MedOp *> &Defs,
   return 0;
 }
 
+// Logical scalar width carried by an i386 x87 ST0 return.  The architectural
+// carrier is always x86_fp80 (10 bytes), so a final FLOAT_FLOAT2FLOAT extension
+// from float/double into ST0 must retain the source language width rather than
+// typing every x87 return as double.
+static uint16_t
+x87ReturnElemSize(const std::map<std::pair<int, int>, const MedOp *> &Defs,
+                  const MedVar &V, int Depth) {
+  if (Depth > 16 || V.isConst())
+    return 0;
+  auto It = Defs.find({V.Id, V.SSAVer});
+  if (It == Defs.end())
+    return 0;
+  const MedOp *Def = It->second;
+  if (Def->Opcode == NdOp::FLOAT_FLOAT2FLOAT && Def->NumInputs >= 1 &&
+      Def->Output.Size > 8 &&
+      (Def->Inputs[0].Size == 4 || Def->Inputs[0].Size == 8))
+    return Def->Inputs[0].Size;
+  if ((Def->Opcode == NdOp::COPY || Def->Opcode == NdOp::SUBBYTES) &&
+      Def->NumInputs >= 1)
+    if (uint16_t Elem = x87ReturnElemSize(Defs, Def->Inputs[0], Depth + 1))
+      return Elem;
+  uint16_t Elem = fpReturnElemSize(Defs, V, 0);
+  return Elem ? Elem : scalarFPLoadElemSize(Defs, V, 0);
+}
+
 // The FP return register is written but neither an FP producer nor an FP load
 // supplies its value -- a floating-point *constant* materialized as integer
 // bits and moved into the FP register (a leaf `return 3.5;` at -O2 lowers to
@@ -150,7 +175,8 @@ static uint16_t fpReturnFallbackElem(const MedOp &Op) {
 // its PIC-base EAX with `pop eax` right before `ret`).
 static bool
 isReturnRegRestore(const std::map<std::pair<int, int>, const MedOp *> &Defs,
-                   const MedOp &Op, const TargetRegInfo &TRI) {
+                   const MedBlock &Block, const MedOp &Op,
+                   const TargetRegInfo &TRI) {
   auto isStackPtr = [&](MedVar A) {
     for (int D = 0; D < 8; ++D) {
       if (A.Kind == MedVar::Reg && A.RegOff == TRI.StackPointer)
@@ -170,8 +196,64 @@ isReturnRegRestore(const std::map<std::pair<int, int>, const MedOp *> &Defs,
   };
   const MedOp *Cur = &Op;
   for (int Depth = 0; Depth < 8 && Cur; ++Depth) {
-    if (Cur->Opcode == NdOp::LOAD)
-      return Cur->NumInputs >= 1 && isStackPtr(Cur->Inputs[0]);
+    if (Cur->Opcode == NdOp::LOAD) {
+      if (Cur->NumInputs < 1)
+        return false;
+      const MedVar Address = Cur->Inputs[0];
+      if (isStackPtr(Address))
+        return true;
+
+      // LowIR models `pop eax` as LOAD from the current derived SP followed by
+      // `new_sp = address + pointer_size`.  The address can be a cross-op temp
+      // rather than the physical SP register itself, especially after an i386
+      // PIC thunk.  Require that exact stack advance before classifying the
+      // integer-register write as a restore; an ordinary frame-slot load has no
+      // such proof and remains a genuine integer result.
+      auto isPopAdvance = [&](MedVar V) {
+        for (int D = 0; D < 8; ++D) {
+          auto It = Defs.find({V.Id, V.SSAVer});
+          if (It == Defs.end())
+            return false;
+          const MedOp *Def = It->second;
+          if (Def->Opcode == NdOp::INT_ADD && Def->NumInputs >= 2) {
+            bool HasAddress = false;
+            bool HasPointerSize = false;
+            for (uint8_t I = 0; I < Def->NumInputs; ++I) {
+              HasAddress |= Def->Inputs[I] == Address;
+              HasPointerSize |= Def->Inputs[I].isConst() &&
+                                Def->Inputs[I].ConstVal == TRI.PointerSize;
+            }
+            return HasAddress && HasPointerSize;
+          }
+          bool Forward =
+              Def->Opcode == NdOp::COPY || Def->Opcode == NdOp::INT_ZEXT ||
+              Def->Opcode == NdOp::INT_SEXT ||
+              (Def->Opcode == NdOp::SUBBYTES && Def->NumInputs >= 2 &&
+               Def->Inputs[1].isConst() && Def->Inputs[1].ConstVal == 0);
+          if (!Forward || Def->NumInputs < 1)
+            return false;
+          V = Def->Inputs[0];
+        }
+        return false;
+      };
+
+      bool SawLoad = false;
+      for (const MedOp &After : Block.Ops) {
+        if (&After == Cur) {
+          SawLoad = true;
+          continue;
+        }
+        if (!SawLoad)
+          continue;
+        if (After.Opcode == NdOp::RETURN)
+          break;
+        if (After.Output.Kind == MedVar::Reg &&
+            After.Output.RegOff == TRI.StackPointer &&
+            isPopAdvance(After.Output))
+          return true;
+      }
+      return false;
+    }
     if ((Cur->Opcode == NdOp::COPY || Cur->Opcode == NdOp::INT_ZEXT ||
          Cur->Opcode == NdOp::INT_SEXT || Cur->Opcode == NdOp::SUBBYTES) &&
         Cur->NumInputs >= 1) {
@@ -309,20 +391,27 @@ static TypeRef inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI,
 
         if (Rit2->Output.RegOff == TRI.IntReturnReg &&
             Rit2->Opcode != NdOp::SUBBYTES &&
-            !(FilterRestore && isReturnRegRestore(Defs, *Rit2, TRI))) {
+            !(FilterRestore && isReturnRegRestore(Defs, Blk, *Rit2, TRI))) {
           if (IntDist < 0)
             IntDist = Dist;
           if (!WidestInt || Rit2->Output.Size > WidestInt->Output.Size)
             WidestInt = &*Rit2;
         }
 
-        if (TRI.hasFPReturnReg() && Rit2->Output.RegOff == TRI.FPReturnReg) {
-          if (!FPRegWriteOp)
+        const bool IsFPRegReturn =
+            TRI.hasFPReturnReg() && Rit2->Output.RegOff == TRI.FPReturnReg;
+        // The x87 TOP rotates, so the physical slot carrying the logical ST0
+        // return may be any ST0..ST7 register after stack fixup.
+        const bool IsX87Return =
+            TheArch == Arch::X86 && TRI.isX87StackReg(Rit2->Output.RegOff);
+        if (IsFPRegReturn || IsX87Return) {
+          if (IsFPRegReturn && !FPRegWriteOp)
             FPRegWriteOp =
                 &*Rit2; // closest write, used by the constant fallback
           if (!FirstFloat) {
-            uint16_t E = fpReturnElemSize(Defs, Rit2->Output, 0);
-            if (!E)
+            uint16_t E = IsX87Return ? x87ReturnElemSize(Defs, Rit2->Output, 0)
+                                     : fpReturnElemSize(Defs, Rit2->Output, 0);
+            if (!E && IsFPRegReturn)
               E = scalarFPLoadElemSize(Defs, Rit2->Output, 0);
             if (E) {
               FirstFloat = &*Rit2;
