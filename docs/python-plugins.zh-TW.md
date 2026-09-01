@@ -103,6 +103,24 @@ for path in result.paths:
 
 若路徑數、步數、迴圈造訪次數或未解析分支達到上限並終止遍歷，`complete` 為 false。`exact` 還要求沒有任何操作被保守地替換為未知狀態；不受支援的 LowIR 操作、沒有摘要的呼叫，以及透過未解析位址進行的儲存都會計入 `unmodelled_ops`。EVM 與 SBF 工作階段不提供原生 LowIR 探索。
 
+### 已驗證的 LowIR 混合執行分支翻轉
+
+`session.lowir_concolic` 從明確指定的入口暫存器位元組範圍沿一條原生 LowIR 軌跡執行，只傳回由求解器產生、並經全新重播在同一控制決策出現位置驗證的候選：
+
+```python
+from neverd_plugin import ConcolicRegisterSeed
+
+report = session.lowir_concolic(
+    0x401000,
+    [ConcolicRegisterSeed(offset=56, bytes=4, value=0)],
+)
+for flip in report.flips:
+    if flip.candidate_id is not None:
+        print(report.candidates[flip.candidate_id].seed)
+```
+
+暫存器偏移是 NeverD 暫存器檔案中的位元組偏移，不是原生指標或暫存器編號。報告始終是非窮舉的；UNSAT、求解器預算耗盡、投影拒絕和重播拒絕均保留為具型別的翻轉結果，而不是例外。
+
 ### 記憶體安全稽核與獵取
 
 `session.audit()` 與 `session.hunt()` 會傳回解析後的 JSON 報告（與 CLI 同一模式）。它們需要已提升的原生工作階段：

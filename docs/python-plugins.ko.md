@@ -103,6 +103,24 @@ for path in result.paths:
 
 경로, 단계, 루프 방문 또는 확인되지 않은 분기 제한 때문에 탐색이 중단되면 `complete`는 false입니다. `exact`가 true이려면 어떤 연산도 보수적으로 미지 상태로 대체되지 않아야 합니다. 지원되지 않는 LowIR 연산, 요약이 없는 호출 및 확인되지 않은 주소를 통한 저장은 `unmodelled_ops`에 포함됩니다. EVM 및 SBF 세션에서는 네이티브 LowIR 탐색을 사용할 수 없습니다.
 
+### 검증된 LowIR 콘콜릭 분기 반전
+
+`session.lowir_concolic`는 명시적인 입력 레지스터 바이트 범위에서 하나의 네이티브 LowIR 경로를 추적하고, 새 재실행이 동일한 제어 결정 발생 지점에서 검증한 솔버 생성 후보만 반환합니다.
+
+```python
+from neverd_plugin import ConcolicRegisterSeed
+
+report = session.lowir_concolic(
+    0x401000,
+    [ConcolicRegisterSeed(offset=56, bytes=4, value=0)],
+)
+for flip in report.flips:
+    if flip.candidate_id is not None:
+        print(report.candidates[flip.candidate_id].seed)
+```
+
+레지스터 오프셋은 NeverD 레지스터 파일의 바이트 오프셋이며 네이티브 포인터나 레지스터 번호가 아닙니다. 보고서는 항상 비완전하며 UNSAT, 솔버 제한, 투영 거부 및 재실행 거부는 예외가 아닌 형식화된 반전 결과로 남습니다.
+
 ### 메모리 안전성 감사와 헌트
 
 `session.audit()`와 `session.hunt()`는 파싱된 JSON 보고서를 반환합니다(CLI와 같은 스키마). 리프트된 네이티브 세션이 필요합니다.

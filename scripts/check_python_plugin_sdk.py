@@ -12,6 +12,7 @@ from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
 C_API_HEADER = ROOT / "include" / "neverd" / "sdk" / "NeverDCAPI.h"
+SYMBOLIC_HEADER = ROOT / "include" / "neverd" / "sdk" / "NeverDCAPISymbolic.h"
 TRANSLATE_HEADER = ROOT / "include" / "neverd" / "sdk" / "NeverDCAPITranslate.h"
 PLUGIN_HEADER = ROOT / "include" / "neverd" / "sdk" / "NeverDPlugin.h"
 OUTPUT_LANGUAGES = ROOT / "include" / "neverd" / "OutputLanguages.def"
@@ -31,6 +32,7 @@ DOCUMENT_LOCALES = (
     ".ru",
     ".ar",
 )
+CONCOLIC_V1_REGISTER_SEED_CEILING = 4096
 
 # Keep the audit directly runnable from any working directory.  CI sets
 # PYTHONPATH for the SDK test suite, but contributors should not need to know
@@ -360,6 +362,107 @@ def check_translation_abi(errors: list[str]) -> None:
                 )
 
 
+def check_concolic_abi(errors: list[str]) -> None:
+    """Audit the frozen concolic-v1 ctypes layout and owned result contract."""
+
+    import ctypes
+
+    from neverd_plugin import abi, api
+
+    source = SYMBOLIC_HEADER.read_text(encoding="utf-8")
+    seed_ceiling = re.search(
+        r"^\s*#\s*define\s+NEVERD_LOWIR_CONCOLIC_MAX_REGISTER_SEEDS_V1"
+        r"\s+([0-9]+)[uUlL]*\s*$",
+        _without_comments(source),
+        flags=re.MULTILINE,
+    )
+    if seed_ceiling is None:
+        errors.append("cannot read native concolic register-seed ceiling")
+    else:
+        native_seed_ceiling = int(seed_ceiling.group(1))
+        python_seed_ceiling = api._LOWIR_CONCOLIC_MAX_REGISTER_SEEDS_V1
+        if native_seed_ceiling != python_seed_ceiling:
+            errors.append(
+                "concolic register-seed ceiling mismatch: "
+                f"header={native_seed_ceiling}, Python={python_seed_ceiling}"
+            )
+        elif native_seed_ceiling != CONCOLIC_V1_REGISTER_SEED_CEILING:
+            errors.append(
+                "concolic v1 register-seed ceiling changed: "
+                f"expected={CONCOLIC_V1_REGISTER_SEED_CEILING}, "
+                f"header={native_seed_ceiling}, Python={python_seed_ceiling}"
+            )
+    native_ctypes = {
+        "size_t": ctypes.c_size_t,
+        "unsigned": ctypes.c_uint,
+        "uint32_t": ctypes.c_uint32,
+        "uint64_t": ctypes.c_uint64,
+        "const neverd_lowir_concolic_register_seed_v1 *": ctypes.POINTER(
+            abi.NeverDLowIRConcolicRegisterSeedV1
+        ),
+    }
+    struct_contracts = (
+        (
+            "neverd_lowir_concolic_register_seed_v1",
+            abi.NeverDLowIRConcolicRegisterSeedV1,
+        ),
+        (
+            "neverd_lowir_concolic_options_v1",
+            abi.NeverDLowIRConcolicOptionsV1,
+        ),
+    )
+    for typedef_name, python_struct in struct_contracts:
+        native_layout = parse_c_struct_layout(source, typedef_name)
+        python_layout = tuple(python_struct._fields_)
+        native_fields = tuple(name for name, _c_type in native_layout)
+        python_fields = tuple(name for name, _ctype in python_layout)
+        if native_fields != python_fields:
+            errors.append(
+                f"{typedef_name} field mismatch: native={native_fields!r}, "
+                f"Python={python_fields!r}"
+            )
+            continue
+        for (field_name, c_type), (_python_name, python_ctype) in zip(
+            native_layout, python_layout, strict=True
+        ):
+            expected_ctype = native_ctypes.get(c_type)
+            if expected_ctype is None:
+                errors.append(
+                    f"{typedef_name}.{field_name} has an unaudited C type {c_type!r}"
+                )
+            elif python_ctype is not expected_ctype:
+                errors.append(
+                    f"{typedef_name}.{field_name} type mismatch: "
+                    f"header={c_type!r}, Python={python_ctype!r}, "
+                    f"expected={expected_ctype!r}"
+                )
+
+    function_name = "neverd_lowir_concolic_json_v1"
+    declaration = parse_c_api(source).get(function_name)
+    expected_declaration = (
+        "const char *",
+        (
+            "neverd_session_t",
+            "neverd_va_t",
+            "const neverd_lowir_concolic_options_v1 *",
+        ),
+    )
+    if declaration != expected_declaration:
+        errors.append(
+            f"{function_name} declaration mismatch: "
+            f"header={declaration!r}, expected={expected_declaration!r}"
+        )
+    spec = abi.FUNCTION_SPECS.get(function_name)
+    if spec is None:
+        errors.append(f"Python ABI is missing exported function {function_name}")
+    elif spec.ownership is not abi.Ownership.OWNED_STRING:
+        errors.append(
+            f"{function_name} ownership mismatch: "
+            f"expected={abi.Ownership.OWNED_STRING.value}, "
+            f"Python={spec.ownership.value}"
+        )
+
+
 def _required_match(path: Path, pattern: str, label: str, errors: list[str]) -> None:
     source = path.read_text(encoding="utf-8")
     if not re.search(pattern, source, flags=re.MULTILINE | re.DOTALL):
@@ -535,6 +638,7 @@ def audit_repository(*, include_workflows: bool = True) -> list[str]:
     check_plugin_enums(errors)
     check_output_languages(errors)
     check_translation_abi(errors)
+    check_concolic_abi(errors)
     check_versions(errors)
     check_documentation(errors)
     if include_workflows:

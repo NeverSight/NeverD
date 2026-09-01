@@ -33,6 +33,51 @@
       }
     },
     {
+      "id": "symbolic.execution.lowir-concolic",
+      "kind": "analysis",
+      "status": "experimental",
+      "owner": "symbolic",
+      "targets": [
+        "x86_64",
+        "aarch64"
+      ],
+      "docs": [
+        "docs/architecture.md",
+        "docs/python-plugins.md"
+      ],
+      "limitations": [
+        "version 1 explores one bounded intraprocedural native LowIR trace from explicit register seeds and does not claim exhaustive path coverage",
+        "calls, memory effects, and unsupported LowIR operations terminate exact exploration instead of being approximated",
+        "only conditional branches are flipped; indirect target equalities constrain later prefixes but indirect targets are not enumerated",
+        "candidate seeds are published only after a fresh replay reaches the same physical decision occurrence under the exact earlier prefix and takes the opposite polarity"
+      ],
+      "tests": [
+        "LowIRConcolic.OneRegisterBranchProducesAReplayVerifiedFlip",
+        "LowIRConcolicIntegration.FindsUniqueVerifiedFlipAndReplaysExactOccurrence",
+        "NeverDConcolicCAPI.PublishesDeterministicVerifiedJSONBoundToTheLoadedSnapshot",
+        "ConcolicCLI.NameLookupAllBudgetsAndRepeatedRunsProduceOnlyStableJSON",
+        "ABIInventoryTests.test_lowir_concolic_structs_mirror_the_v1_c_layout",
+        "SessionTests.test_lowir_concolic_returns_a_frozen_typed_report_and_passes_v1_options",
+        "SessionTests.test_lowir_concolic_strictly_validates_native_reports",
+        "SessionTests.test_lowir_concolic_accepts_consistent_inexact_native_reports",
+        "ConcolicIntegrationTests.test_real_library_runs_verified_concolic_report"
+      ],
+      "public_surfaces": {
+        "c": [
+          "neverd_lowir_concolic_json_v1"
+        ],
+        "python": [
+          "lowir_concolic"
+        ],
+        "cli": [
+          "neverd concolic"
+        ],
+        "json": [
+          "neverd_lowir_concolic_json_v1"
+        ]
+      }
+    },
+    {
       "id": "translation.runtime-contract",
       "kind": "translation",
       "status": "experimental",

@@ -103,6 +103,24 @@ for path in result.paths:
 
 تكون `complete` بقيمة false عندما يوقف الاستكشاف حد للمسارات أو الخطوات أو زيارات الحلقات أو الفروع غير المحلولة. وتتطلب `exact` أيضاً ألا تكون أي عملية قد استُبدلت بصورة محافظة بحالة مجهولة؛ إذ تُحتسب عمليات LowIR غير المدعومة، والاستدعاءات التي بلا ملخص، وعمليات التخزين عبر عناوين غير محلولة ضمن `unmodelled_ops`. لا تتيح جلسات EVM وSBF استكشاف LowIR الأصلي.
 
+### قلب فروع LowIR المتزامن المتحقق منه
+
+يتتبع `session.lowir_concolic` مسار LowIR أصلياً واحداً انطلاقاً من نطاقات بايت صريحة لسجل الدخول، ولا يعيد إلا المرشحين الذين أنشأهم المحلل وتحقق منهم تشغيل جديد عند موضع قرار التحكم نفسه:
+
+```python
+from neverd_plugin import ConcolicRegisterSeed
+
+report = session.lowir_concolic(
+    0x401000,
+    [ConcolicRegisterSeed(offset=56, bytes=4, value=0)],
+)
+for flip in report.flips:
+    if flip.candidate_id is not None:
+        print(report.candidates[flip.candidate_id].seed)
+```
+
+إزاحة السجل هي إزاحة بايت في ملف سجلات NeverD، وليست مؤشراً أصلياً أو رقم سجل. التقرير غير شامل دائماً، وتبقى حالات UNSAT وحدود المحلل ورفض الإسقاط أو إعادة التشغيل نتائج قلب ذات أنواع محددة وليست استثناءات.
+
 ### تدقيق وصيد أمان الذاكرة
 
 تعيد `session.audit()` و`session.hunt()` تقارير JSON محلولة (نفس مخطط CLI). تتطلب جلسة أصلية مرفوعة:

@@ -103,6 +103,24 @@ for path in result.paths:
 
 パス数、ステップ数、ループ訪問回数、または未解決分岐の上限によって探索が停止した場合、`complete` は false です。さらに `exact` が true になるには、未知状態による保守的な置換が一度も行われていない必要があります。未対応の LowIR 操作、要約のない呼び出し、未解決アドレスへのストアは `unmodelled_ops` に数えられます。EVM および SBF セッションではネイティブ LowIR 探索を利用できません。
 
+### 検証済み LowIR コンコリック分岐反転
+
+`session.lowir_concolic` は明示した入力レジスタのバイト範囲から 1 本のネイティブ LowIR 経路を追跡し、新しい再実行が同じ制御判断の出現位置で検証したソルバー生成候補だけを返します。
+
+```python
+from neverd_plugin import ConcolicRegisterSeed
+
+report = session.lowir_concolic(
+    0x401000,
+    [ConcolicRegisterSeed(offset=56, bytes=4, value=0)],
+)
+for flip in report.flips:
+    if flip.candidate_id is not None:
+        print(report.candidates[flip.candidate_id].seed)
+```
+
+レジスタオフセットは NeverD のレジスタファイル内のバイトオフセットであり、ネイティブポインタやレジスタ番号ではありません。レポートは常に非網羅的で、UNSAT、ソルバー上限、射影拒否、再実行拒否は例外ではなく型付き反転結果として残ります。
+
 ### メモリ安全性の監査とハント
 
 `session.audit()` と `session.hunt()` は解析済み JSON レポートを返します（CLI と同じスキーマ）。リフト済みのネイティブセッションが必要です。

@@ -615,7 +615,7 @@ TEST_F(NdOpEmulatorTest, AConcolicWalkFollowsTheSeededRunAndKeepsItsCondition) {
   auto walk = [&](uint64_t Index) {
     ExploreOptions Opts;
     Opts.Concolic = &Shadow;
-    Opts.ConcolicSeed.push_back({kIndexReg, Index});
+    Opts.ConcolicSeed.push_back({kIndexReg, 8, Index});
     return explorePathsDetailed(Ctx, Func, Opts);
   };
 

@@ -437,6 +437,40 @@ class NeverDSymbolicExploreOptions(ctypes.Structure):
     ]
 
 
+class NeverDLowIRConcolicRegisterSeedV1(ctypes.Structure):
+    """Frozen v1 entry-register seed range."""
+
+    _fields_ = [
+        ("offset", ctypes.c_uint64),
+        ("value", ctypes.c_uint64),
+        ("bytes", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32),
+    ]
+
+
+class NeverDLowIRConcolicOptionsV1(ctypes.Structure):
+    """Append-only borrowed inputs and bounds for LowIR concolic v1."""
+
+    _fields_ = [
+        ("struct_size", ctypes.c_size_t),
+        (
+            "register_seeds",
+            ctypes.POINTER(NeverDLowIRConcolicRegisterSeedV1),
+        ),
+        ("register_seed_count", ctypes.c_size_t),
+        ("max_steps", ctypes.c_uint),
+        ("max_block_visits", ctypes.c_uint),
+        ("max_loop_iterations", ctypes.c_uint),
+        ("max_flip_attempts", ctypes.c_uint),
+        ("max_candidates", ctypes.c_uint),
+        ("reserved", ctypes.c_uint32),
+        ("solver_max_conflicts", ctypes.c_uint64),
+        ("solver_max_propagations", ctypes.c_uint64),
+        ("solver_max_watch_visits", ctypes.c_uint64),
+        ("solver_max_gates", ctypes.c_uint64),
+    ]
+
+
 class NeverDSafetyOptions(ctypes.Structure):
     """Layout of ``neverd_safety_options``."""
 
@@ -498,6 +532,9 @@ _C_TYPES: dict[str, object] = {
     ),
     "const neverd_symbolic_explore_options *": ctypes.POINTER(
         NeverDSymbolicExploreOptions
+    ),
+    "const neverd_lowir_concolic_options_v1 *": ctypes.POINTER(
+        NeverDLowIRConcolicOptionsV1
     ),
     "const neverd_safety_options *": ctypes.POINTER(NeverDSafetyOptions),
 }
@@ -704,6 +741,16 @@ _declare(
         "neverd_session_t",
         "neverd_va_t",
         "const neverd_symbolic_explore_options *",
+    ],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_lowir_concolic_json_v1",
+    "const char *",
+    [
+        "neverd_session_t",
+        "neverd_va_t",
+        "const neverd_lowir_concolic_options_v1 *",
     ],
     ownership=Ownership.OWNED_STRING,
 )
@@ -1127,6 +1174,8 @@ __all__ = [
     "NeverDPlugin",
     "NeverDOptimizeLLVMOptions",
     "NeverDOptimizeLLVMResult",
+    "NeverDLowIRConcolicOptionsV1",
+    "NeverDLowIRConcolicRegisterSeedV1",
     "NeverDSimplifyOptions",
     "NeverDSimplifyResult",
     "NeverDSynthesizeOptions",

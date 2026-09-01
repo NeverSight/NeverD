@@ -77,6 +77,7 @@ inline constexpr unsigned kUnbounded = 0;
 /// One register of a concolic seed.
 struct SymConcreteRegister {
   uint64_t Offset = 0;
+  uint16_t Bytes = 0;
   uint64_t Value = 0;
 };
 
@@ -113,11 +114,13 @@ class ConcreteShadow {
 public:
   virtual ~ConcreteShadow() = default;
 
-  /// Start from nothing.  Called once, before the walk.
-  virtual void reset() = 0;
+  /// Start from nothing in the target byte order.  Called once, before the
+  /// walk.  False means this shadow cannot represent the requested target.
+  virtual bool reset(llvm::endianness ByteOrder) = 0;
 
-  /// Give the register at \p Offset the value \p Value.
-  virtual void setRegister(uint64_t Offset, uint64_t Value) = 0;
+  /// Give \p Bytes of the register file at \p Offset the value \p Value.
+  /// False rejects an invalid or conflicting seed before execution begins.
+  virtual bool setRegister(uint64_t Offset, uint16_t Bytes, uint64_t Value) = 0;
 
   /// Carry \p Op out concretely.  A false result means the shadow could not,
   /// and the walk stops consulting it from there on rather than following a
@@ -126,7 +129,7 @@ public:
 
   /// What \p V concretely holds, or nothing when the shadow has no value for
   /// it — which likewise ends the concrete half of the walk.
-  virtual std::optional<uint64_t> value(const NdVar &V) const = 0;
+  virtual std::optional<uint64_t> value(const NdVar &V) = 0;
 };
 
 struct ExploreOptions {
@@ -202,6 +205,46 @@ struct SymExecutedOp {
   NdOp Opcode = NdOp::_COUNT;
 };
 
+/// What kind of control decision one recorded constraint describes.
+enum class SymDecisionKind : uint8_t {
+  ConditionalBranch,
+  IndirectBranchTarget,
+};
+
+/// Stable identity of one executed control decision.
+///
+/// Address plus sequence distinguishes multiple LowIR controls emitted for one
+/// machine instruction; block and operation index keep hand-built or
+/// address-less LowIR unambiguous; invocation distinguishes loop iterations.
+struct SymDecisionOccurrence {
+  va_t VA = 0;
+  int Seq = -1;
+  int BlockId = -1;
+  size_t OpIndex = 0;
+  unsigned Invocation = 0;
+  SymDecisionKind Kind = SymDecisionKind::ConditionalBranch;
+
+  friend bool operator==(const SymDecisionOccurrence &,
+                         const SymDecisionOccurrence &) = default;
+};
+
+/// One non-constant conditional or indirect decision encountered on a path.
+///
+/// \c Condition is always the branch's positive condition; \c Taken records
+/// which polarity a conditional path selected.  An indirect target decision is
+/// an equality and is always taken.  \c ConstraintPrefix is the number of
+/// constraints that preceded the selected decision constraint, so consumers
+/// can rebuild the exact prefix without relying on expression shape.
+/// \c Concrete distinguishes a choice supplied by a concolic shadow from a
+/// symbolic fork.
+struct SymBranchDecision {
+  SymRef Condition;
+  bool Taken = false;
+  size_t ConstraintPrefix = 0;
+  bool Concrete = false;
+  SymDecisionOccurrence Occurrence;
+};
+
 /// One finished path.
 struct SymPath {
   PathOutcome Outcome = PathOutcome::StepBudget;
@@ -211,6 +254,10 @@ struct SymPath {
   /// the code already decided contributes nothing, so this lists the genuine
   /// choices and only those.
   std::vector<SymRef> Constraints;
+  /// Structured identities for the conditional choices in \c Constraints.
+  /// A merged path retains only the exact decision prefix common to every
+  /// route it represents.
+  std::vector<SymBranchDecision> BranchDecisions;
   /// The blocks entered, in order.  What the path *is* — or, when
   /// \c MergedPaths is not zero, one of the routes it stands for.
   std::vector<int> Blocks;
@@ -242,6 +289,9 @@ struct SymPath {
   /// Branches a concrete shadow decided rather than the walk forking at.  Zero
   /// for a purely symbolic walk.
   unsigned ConcreteBranches = 0;
+  /// True when a concrete shadow followed this path from entry to its stopping
+  /// point without declining an operation or operand value.
+  bool ConcreteComplete = false;
   /// Routes continued as this one because they reached a join holding the same
   /// values.  This path's condition is the disjunction over all of them, and
   /// \c Blocks is whichever of them arrived first.
@@ -255,7 +305,9 @@ struct SymPath {
 struct SymExploration {
   std::vector<SymPath> Paths;
   /// True only when every reachable frontier ended without a path or loop
-  /// budget and without an unresolved or invalid control target.
+  /// budget and without an unresolved or invalid control target.  A concolic
+  /// run deliberately explores one trace, not every reachable frontier, so it
+  /// is never exhaustive and this remains false.
   bool Complete = false;
   unsigned ReachablePaths = 0;
   size_t ExecutedSteps = 0;

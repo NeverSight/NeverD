@@ -130,9 +130,13 @@ prefilter, object model, hunt, audit) and an end-to-end
 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp)
 that runs the mandatory PE/ELF/Mach-O × x86-64/AArch64 fixture matrix on every
 host. See
-[Memory-safety audit & hunt](../memory-safety.md). P2 binary checks, hybrid
-fuzzing, and broader interprocedural reachability remain follow-on roadmap work,
-not part of the Phase-1 acceptance contract.
+[Memory-safety audit & hunt](../memory-safety.md). One P2 foundation is now
+implemented: versioned `lowir-concolic-v1` follows one bounded native LowIR
+trace and publishes only replay-verified register seeds, with
+PE/ELF/Mach-O × x86-64/AArch64 evidence through C, CLI, and Python. Binary
+check insertion, hybrid-fuzz corpus scheduling and mutation, memory-input
+projection, and broader interprocedural reachability remain follow-on roadmap
+work, not part of the Phase-1 acceptance contract.
 
 ---
 
@@ -162,5 +166,5 @@ be tracked here.
 | EVM legacy decoding/lifting | Complete through Fusaka — regression-covered |
 | EVM source reconstruction | Ongoing — evidence-backed and conservative |
 | Solana eBPF (SBF) decompilation | Complete — v0-v4, C, Rust, and LLVM; regression-covered |
-| Memory-safety audit & hunt | Phase 1 complete — P0/P1 analysis, replay evidence, and native format/architecture matrix present; P2 follow-ons planned |
+| Memory-safety audit & hunt | Phase 1 complete — P0/P1 analysis and replay evidence present; replay-verified LowIR concolic register seeds landed as a P2 foundation, with remaining P2 orchestration planned |
 | Engine & product hardening | Ongoing |

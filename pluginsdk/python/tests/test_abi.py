@@ -3,10 +3,19 @@ from __future__ import annotations
 import ctypes
 import unittest
 
-from scripts.check_python_plugin_sdk import C_API_HEADER, parse_c_api_header
+from scripts.check_python_plugin_sdk import (
+    C_API_HEADER,
+    check_concolic_abi,
+    parse_c_api_header,
+)
 
 
 class ABIInventoryTests(unittest.TestCase):
+    def test_concolic_header_and_python_contract_do_not_drift(self) -> None:
+        errors: list[str] = []
+        check_concolic_abi(errors)
+        self.assertEqual(errors, [])
+
     def test_public_enums_are_the_exact_abi_definitions(self) -> None:
         import neverd_plugin
         from neverd_plugin import abi
@@ -140,6 +149,82 @@ class ABIInventoryTests(unittest.TestCase):
             self.assertEqual(ctypes.sizeof(abi.NeverDSafetyOptions), 48)
             self.assertEqual(abi.NeverDSafetyOptions.solver_conflicts.offset, 24)
             self.assertEqual(abi.NeverDSafetyOptions.sinks_path.offset, 32)
+
+    def test_lowir_concolic_structs_mirror_the_v1_c_layout(self) -> None:
+        from neverd_plugin import abi
+
+        self.assertEqual(
+            [name for name, _ctype in abi.NeverDLowIRConcolicRegisterSeedV1._fields_],
+            ["offset", "value", "bytes", "reserved"],
+        )
+        self.assertEqual(
+            [name for name, _ctype in abi.NeverDLowIRConcolicOptionsV1._fields_],
+            [
+                "struct_size",
+                "register_seeds",
+                "register_seed_count",
+                "max_steps",
+                "max_block_visits",
+                "max_loop_iterations",
+                "max_flip_attempts",
+                "max_candidates",
+                "reserved",
+                "solver_max_conflicts",
+                "solver_max_propagations",
+                "solver_max_watch_visits",
+                "solver_max_gates",
+            ],
+        )
+        if ctypes.sizeof(ctypes.c_void_p) != 8:
+            self.skipTest("the published Python SDK supports 64-bit hosts")
+
+        self.assertEqual(ctypes.sizeof(abi.NeverDLowIRConcolicRegisterSeedV1), 24)
+        self.assertEqual(ctypes.alignment(abi.NeverDLowIRConcolicRegisterSeedV1), 8)
+        self.assertEqual(ctypes.sizeof(abi.NeverDLowIRConcolicOptionsV1), 80)
+        self.assertEqual(ctypes.alignment(abi.NeverDLowIRConcolicOptionsV1), 8)
+        for field, expected in {
+            "offset": 0,
+            "value": 8,
+            "bytes": 16,
+            "reserved": 20,
+        }.items():
+            with self.subTest(struct="seed", field=field):
+                self.assertEqual(
+                    getattr(abi.NeverDLowIRConcolicRegisterSeedV1, field).offset,
+                    expected,
+                )
+        for field, expected in {
+            "struct_size": 0,
+            "register_seeds": 8,
+            "register_seed_count": 16,
+            "max_steps": 24,
+            "max_block_visits": 28,
+            "max_loop_iterations": 32,
+            "max_flip_attempts": 36,
+            "max_candidates": 40,
+            "reserved": 44,
+            "solver_max_conflicts": 48,
+            "solver_max_propagations": 56,
+            "solver_max_watch_visits": 64,
+            "solver_max_gates": 72,
+        }.items():
+            with self.subTest(struct="options", field=field):
+                self.assertEqual(
+                    getattr(abi.NeverDLowIRConcolicOptionsV1, field).offset,
+                    expected,
+                )
+
+        spec = abi.FUNCTION_SPECS["neverd_lowir_concolic_json_v1"]
+        self.assertEqual(
+            spec.c_arguments,
+            (
+                "neverd_session_t",
+                "neverd_va_t",
+                "const neverd_lowir_concolic_options_v1 *",
+            ),
+        )
+        self.assertIs(spec.ownership, abi.Ownership.OWNED_STRING)
+
 
     def test_every_exported_c_function_has_a_python_signature(self) -> None:
         from neverd_plugin import abi

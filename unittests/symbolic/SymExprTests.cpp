@@ -190,10 +190,17 @@ TEST(SymExpr, CollectVarsReportsEveryReachableVariableOnce) {
 
 TEST(SymExpr, FindVarSeesDeclarationsAndNothingElse) {
   SymContext Ctx;
-  Ctx.mkVar("x", W32);
+  SymRef X32 = Ctx.mkVar("x", W32);
+  EXPECT_TRUE(Ctx.hasVarName("x"));
+  EXPECT_FALSE(Ctx.hasVarName("nope"));
   ASSERT_TRUE(Ctx.findVar("x").has_value());
+  EXPECT_EQ(*Ctx.findVar("x"), Ctx.varId(X32));
   EXPECT_EQ(Ctx.varInfo(*Ctx.findVar("x")).Width, W32);
   EXPECT_FALSE(Ctx.findVar("nope").has_value());
+
+  Ctx.mkVar("x", 8);
+  EXPECT_TRUE(Ctx.hasVarName("x"));
+  EXPECT_FALSE(Ctx.findVar("x").has_value());
 }
 
 TEST(SymExpr, FreshVariablesCarryExplicitOrigin) {
@@ -203,6 +210,80 @@ TEST(SymExpr, FreshVariablesCarryExplicitOrigin) {
 
   EXPECT_FALSE(Ctx.varInfo(Ctx.varId(Input)).Fresh);
   EXPECT_TRUE(Ctx.varInfo(Ctx.varId(Havoc)).Fresh);
+}
+
+TEST(SymExpr, StructuredInputNeverMutatesAPlainVariableIdentity) {
+  SymContext Ctx;
+  const SymInputOrigin Origin{SymInputKind::Register, 24, 4, 0};
+
+  SymRef Plain = Ctx.mkVar("reg$24", W32);
+  SymRef Input = Ctx.mkInputVar("reg$24", W32, Origin);
+  EXPECT_NE(Input, Plain);
+  EXPECT_EQ(Plain, Ctx.mkVar("reg$24", W32));
+  EXPECT_FALSE(Ctx.varInfo(Ctx.varId(Plain)).InputOrigin.has_value());
+  EXPECT_EQ(Input, Ctx.varRef(Ctx.varId(Input)));
+  EXPECT_TRUE(Ctx.hasVarName("reg$24"));
+  EXPECT_FALSE(Ctx.findVar("reg$24").has_value());
+  EXPECT_FALSE(Ctx.varRef(Ctx.numVars()).isValid());
+  EXPECT_FALSE(Ctx.mkInputVar("zero-width", 0,
+                              SymInputOrigin{SymInputKind::Register, 0, 1, 0})
+                   .isValid());
+
+  const SymVarInfo &Info = Ctx.varInfo(Ctx.varId(Input));
+  ASSERT_TRUE(Info.InputOrigin.has_value());
+  EXPECT_EQ(*Info.InputOrigin, Origin);
+  EXPECT_FALSE(Info.Fresh);
+
+  SymContext ReverseCtx;
+  SymRef InputFirst = ReverseCtx.mkInputVar("reg$24", W32, Origin);
+  SymRef PlainAfter = ReverseCtx.mkVar("reg$24", W32);
+  EXPECT_NE(PlainAfter, InputFirst);
+  EXPECT_FALSE(
+      ReverseCtx.varInfo(ReverseCtx.varId(PlainAfter)).InputOrigin.has_value());
+}
+
+TEST(SymExpr, SameInputNameAndWidthKeepsDifferentOriginsIndependent) {
+  SymContext Ctx;
+  const SymInputOrigin RegisterOrigin{SymInputKind::Register, 24, 4, 0};
+  const SymInputOrigin TemporaryOrigin{SymInputKind::Temporary, 24, 4, 0};
+
+  SymRef Register = Ctx.mkInputVar("machine-input", W32, RegisterOrigin);
+  SymRef Temporary = Ctx.mkInputVar("machine-input", W32, TemporaryOrigin);
+
+  EXPECT_NE(Register, Temporary);
+  EXPECT_NE(Ctx.varId(Register), Ctx.varId(Temporary));
+  EXPECT_EQ(Ctx.varInfo(Ctx.varId(Register)).InputOrigin, RegisterOrigin);
+  EXPECT_EQ(Ctx.varInfo(Ctx.varId(Temporary)).InputOrigin, TemporaryOrigin);
+  EXPECT_TRUE(Ctx.hasVarName("machine-input"));
+  EXPECT_FALSE(Ctx.findVar("machine-input").has_value());
+}
+
+TEST(SymExpr, OneNameAtDifferentWidthsHasDistinctConsistentVariables) {
+  SymContext Ctx;
+  SymRef Byte = Ctx.mkVar("same-name", 8);
+  SymRef Word = Ctx.mkVar("same-name", 16);
+
+  EXPECT_NE(Ctx.varId(Byte), Ctx.varId(Word));
+  EXPECT_EQ(Ctx.varInfo(Ctx.varId(Byte)).Width, Ctx.width(Byte));
+  EXPECT_EQ(Ctx.varInfo(Ctx.varId(Word)).Width, Ctx.width(Word));
+  EXPECT_EQ(Byte, Ctx.mkVar("same-name", 8));
+  EXPECT_EQ(Word, Ctx.mkVar("same-name", 16));
+}
+
+TEST(SymExpr, OneInputNameAtDifferentWidthsKeepsDistinctMetadata) {
+  SymContext Ctx;
+  const SymInputOrigin ByteOrigin{SymInputKind::Register, 0, 1, 0};
+  const SymInputOrigin WordOrigin{SymInputKind::Register, 16, 2, 0};
+  SymRef Byte = Ctx.mkInputVar("same-input", 8, ByteOrigin);
+  SymRef Word = Ctx.mkInputVar("same-input", 16, WordOrigin);
+
+  ASSERT_TRUE(Ctx.isVar(Byte));
+  ASSERT_TRUE(Ctx.isVar(Word));
+  EXPECT_NE(Ctx.varId(Byte), Ctx.varId(Word));
+  EXPECT_EQ(Ctx.varInfo(Ctx.varId(Byte)).Width, Ctx.width(Byte));
+  EXPECT_EQ(Ctx.varInfo(Ctx.varId(Word)).Width, Ctx.width(Word));
+  EXPECT_EQ(Ctx.varInfo(Ctx.varId(Byte)).InputOrigin, ByteOrigin);
+  EXPECT_EQ(Ctx.varInfo(Ctx.varId(Word)).InputOrigin, WordOrigin);
 }
 
 TEST(SymExpr, SubstitutionRebuildsThroughTheCanonicalisingBuilders) {

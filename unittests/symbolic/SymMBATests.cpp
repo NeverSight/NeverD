@@ -26,6 +26,9 @@
 #include "neverd/symbolic/SymMBA.h"
 #include "neverd/symbolic/SymParse.h"
 
+#include <algorithm>
+#include <array>
+
 using namespace neverd::symbolic;
 
 namespace {
@@ -44,6 +47,28 @@ TEST(SymMBA, RecoversAdditionFromItsBitwiseRewriting) {
   simplifiesTo("(x | y) + (x & y)", "x + y");
   simplifiesTo("(x | y) + y - (~x & y)", "x + y");
   simplifiesTo("2 * (x | y) - (x ^ y)", "x + y");
+}
+
+TEST(SymMBA, RewritePreservesStructuredInputVariableIdentity) {
+  SymContext Ctx;
+  SymRef X = Ctx.mkInputVar("reg$0", W32,
+                            SymInputOrigin{SymInputKind::Register, 0, 4, 0});
+  SymRef Y = Ctx.mkInputVar("reg$8", W32,
+                            SymInputOrigin{SymInputKind::Register, 8, 4, 0});
+  SymRef Hidden = Ctx.mkAdd(Ctx.mkXor(X, Y),
+                            Ctx.mkMul(Ctx.mkConst(W32, 2), Ctx.mkAnd(X, Y)));
+
+  MBAResult Result = simplifyMBA(Ctx, Hidden);
+  ASSERT_TRUE(Result.Changed);
+  llvm::SmallVector<uint32_t, 2> Variables;
+  Ctx.collectVars(Result.Expr, Variables);
+  std::sort(Variables.begin(), Variables.end());
+  std::array<uint32_t, 2> Expected{Ctx.varId(X), Ctx.varId(Y)};
+  std::sort(Expected.begin(), Expected.end());
+  ASSERT_EQ(Variables.size(), Expected.size());
+  EXPECT_TRUE(std::equal(Variables.begin(), Variables.end(), Expected.begin()));
+  for (uint32_t Id : Variables)
+    EXPECT_TRUE(Ctx.varInfo(Id).InputOrigin.has_value());
 }
 
 TEST(SymMBA, RecoversTheBitwiseOperatorsFromTheirArithmeticRewritings) {

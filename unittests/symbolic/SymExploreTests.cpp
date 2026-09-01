@@ -15,7 +15,10 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/symbolic/SymConcrete.h"
 #include "neverd/symbolic/SymExplore.h"
+
+#include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
 #include <vector>
@@ -154,6 +157,46 @@ unsigned countOutcome(const std::vector<SymPath> &Paths, PathOutcome Wanted) {
   return Count;
 }
 
+class BranchShadow final : public ConcreteShadow {
+public:
+  explicit BranchShadow(std::optional<uint64_t> Decision,
+                        std::optional<unsigned> FirstFailingStep = std::nullopt)
+      : Decision(Decision), FirstFailingStep(FirstFailingStep) {}
+
+  bool reset(llvm::endianness) override {
+    Steps = 0;
+    return true;
+  }
+  bool setRegister(uint64_t, uint16_t, uint64_t) override { return true; }
+  bool step(const LowOp &) override {
+    return !FirstFailingStep || Steps++ < *FirstFailingStep;
+  }
+
+  std::optional<uint64_t> value(const NdVar &V) override {
+    if (V.isConst())
+      return V.Offset;
+    return Decision;
+  }
+
+private:
+  std::optional<uint64_t> Decision;
+  std::optional<unsigned> FirstFailingStep;
+  unsigned Steps = 0;
+};
+
+class RejectingResetShadow final : public ConcreteShadow {
+public:
+  bool reset(llvm::endianness) override { return false; }
+  bool setRegister(uint64_t, uint16_t, uint64_t) override {
+    ++SeedCalls;
+    return true;
+  }
+  bool step(const LowOp &) override { return false; }
+  std::optional<uint64_t> value(const NdVar &) override { return std::nullopt; }
+
+  unsigned SeedCalls = 0;
+};
+
 TEST(SymExplore, AStraightLineFunctionIsOnePath) {
   SymContext Ctx;
   FunctionBuilder B;
@@ -257,6 +300,18 @@ TEST(SymExplore, ARealBranchBecomesTwoPathsWithOppositeConditions) {
   EXPECT_EQ(Paths[1].Blocks, (std::vector<int>{0, Else}));
   ASSERT_EQ(Paths[0].Constraints.size(), 1u);
   ASSERT_EQ(Paths[1].Constraints.size(), 1u);
+  ASSERT_EQ(Paths[0].BranchDecisions.size(), 1u);
+  ASSERT_EQ(Paths[1].BranchDecisions.size(), 1u);
+  EXPECT_EQ(Paths[0].BranchDecisions[0].Condition, Paths[0].Constraints[0]);
+  EXPECT_EQ(Paths[1].BranchDecisions[0].Condition, Paths[0].Constraints[0]);
+  EXPECT_TRUE(Paths[0].BranchDecisions[0].Taken);
+  EXPECT_FALSE(Paths[1].BranchDecisions[0].Taken);
+  EXPECT_EQ(Paths[0].BranchDecisions[0].ConstraintPrefix, 0u);
+  EXPECT_EQ(Paths[1].BranchDecisions[0].ConstraintPrefix, 0u);
+  EXPECT_FALSE(Paths[0].BranchDecisions[0].Concrete);
+  EXPECT_FALSE(Paths[1].BranchDecisions[0].Concrete);
+  EXPECT_FALSE(Paths[0].ConcreteComplete);
+  EXPECT_FALSE(Paths[1].ConcreteComplete);
   // The two paths assume opposite things, so together they assume nothing.
   EXPECT_EQ(Ctx.mkNot(Paths[0].Constraints[0]), Paths[1].Constraints[0]);
   EXPECT_EQ(Ctx.mkAnd(Paths[0].predicate(Ctx), Paths[1].predicate(Ctx)),
@@ -269,6 +324,239 @@ TEST(SymExplore, ARealBranchBecomesTwoPathsWithOppositeConditions) {
   ASSERT_TRUE(Ctx.isConst(ElseValue));
   EXPECT_EQ(Ctx.constValue(ThenValue).getZExtValue(), 1u);
   EXPECT_EQ(Ctx.constValue(ElseValue).getZExtValue(), 2u);
+}
+
+TEST(SymExplore, AConcolicBranchRecordsItsDecisionAndCompleteShadow) {
+  SymContext Ctx;
+  FunctionBuilder B;
+  constexpr int Then = 1, Else = 2;
+  B.block({compareRax(10),
+           op(NdOp::COND_BR, NdVar{},
+              {FunctionBuilder::addressOf(Then), NdVar::reg(kFlag, 1)})},
+          {Then, Else});
+  B.block({op(NdOp::RETURN, NdVar{}, {})}, {});
+  B.block({op(NdOp::RETURN, NdVar{}, {})}, {});
+
+  BranchShadow Shadow(1);
+  ExploreOptions Opts;
+  Opts.Concolic = &Shadow;
+  SymExploration Exploration = explorePathsDetailed(Ctx, B.function(), Opts);
+
+  ASSERT_EQ(Exploration.Paths.size(), 1u);
+  const SymPath &Path = Exploration.Paths.front();
+  EXPECT_FALSE(Exploration.Complete)
+      << "one concrete trace is not an exhaustive symbolic exploration";
+  EXPECT_EQ(Path.Blocks, (std::vector<int>{0, Then}));
+  EXPECT_TRUE(Path.ConcreteComplete);
+  EXPECT_EQ(Path.ConcreteBranches, 1u);
+  ASSERT_EQ(Path.Constraints.size(), 1u);
+  ASSERT_EQ(Path.BranchDecisions.size(), 1u);
+  const SymBranchDecision &Decision = Path.BranchDecisions.front();
+  EXPECT_EQ(Decision.Condition, Path.Constraints.front());
+  EXPECT_TRUE(Decision.Taken);
+  EXPECT_EQ(Decision.ConstraintPrefix, 0u);
+  EXPECT_TRUE(Decision.Concrete);
+  const SymRef PositiveCondition = Decision.Condition;
+
+  BranchShadow OtherShadow(0);
+  Opts.Concolic = &OtherShadow;
+  Exploration = explorePathsDetailed(Ctx, B.function(), Opts);
+  ASSERT_EQ(Exploration.Paths.size(), 1u);
+  const SymPath &OtherPath = Exploration.Paths.front();
+  EXPECT_EQ(OtherPath.Blocks, (std::vector<int>{0, Else}));
+  EXPECT_TRUE(OtherPath.ConcreteComplete);
+  ASSERT_EQ(OtherPath.Constraints.size(), 1u);
+  ASSERT_EQ(OtherPath.BranchDecisions.size(), 1u);
+  const SymBranchDecision &OtherDecision = OtherPath.BranchDecisions.front();
+  EXPECT_EQ(OtherDecision.Condition, PositiveCondition);
+  EXPECT_FALSE(OtherDecision.Taken);
+  EXPECT_EQ(OtherDecision.ConstraintPrefix, 0u);
+  EXPECT_TRUE(OtherDecision.Concrete);
+  EXPECT_EQ(OtherPath.Constraints.front(), Ctx.mkNot(OtherDecision.Condition));
+}
+
+TEST(SymExplore, ARejectedShadowResetDoesNotReceiveSeeds) {
+  SymContext Ctx;
+  FunctionBuilder B;
+  B.block({op(NdOp::RETURN, NdVar{}, {})}, {});
+
+  RejectingResetShadow Shadow;
+  ExploreOptions Opts;
+  Opts.Concolic = &Shadow;
+  Opts.ConcolicSeed.push_back({kRax, 8, 1});
+  SymExploration Exploration = explorePathsDetailed(Ctx, B.function(), Opts);
+
+  EXPECT_EQ(Shadow.SeedCalls, 0u);
+  ASSERT_EQ(Exploration.Paths.size(), 1u);
+  EXPECT_FALSE(Exploration.Paths.front().ConcreteComplete);
+}
+
+TEST(SymExplore, ALoopGivesEachConcreteDecisionAStableInvocation) {
+  SymContext Ctx;
+  FunctionBuilder B;
+  constexpr int Header = 0, Body = 1, Exit = 2;
+  LowOp Terminator =
+      op(NdOp::COND_BR, NdVar{},
+         {FunctionBuilder::addressOf(Body), NdVar::reg(kFlag, 1)});
+  Terminator.Addr = kBase;
+  Terminator.Seq = 7;
+  B.block({compareRax(2), Terminator}, {Body, Exit});
+  B.block({op(NdOp::INT_ADD, NdVar::reg(kRax, 8),
+              {NdVar::reg(kRax, 8), NdVar::cst(1, 8)}),
+           op(NdOp::BRANCH, NdVar{}, {FunctionBuilder::addressOf(Header)})},
+          {Header});
+  B.block({op(NdOp::RETURN, NdVar{}, {})}, {});
+
+  SymExecConcreteShadow Shadow;
+  ExploreOptions Opts;
+  Opts.Concolic = &Shadow;
+  Opts.ConcolicSeed.push_back({kRax, 8, 0});
+  Opts.MaxLoopIterations = 4;
+  SymExploration Exploration = explorePathsDetailed(Ctx, B.function(), Opts);
+
+  ASSERT_EQ(Exploration.Paths.size(), 1u);
+  const SymPath &Path = Exploration.Paths.front();
+  EXPECT_EQ(Path.Outcome, PathOutcome::Returned);
+  EXPECT_TRUE(Path.ConcreteComplete);
+  EXPECT_FALSE(Exploration.Complete);
+  ASSERT_EQ(Path.BranchDecisions.size(), 3u);
+  for (unsigned Invocation = 0; Invocation < 3; ++Invocation) {
+    const SymDecisionOccurrence &Occurrence =
+        Path.BranchDecisions[Invocation].Occurrence;
+    EXPECT_EQ(Occurrence.VA, kBase);
+    EXPECT_EQ(Occurrence.Seq, 7);
+    EXPECT_EQ(Occurrence.BlockId, Header);
+    EXPECT_EQ(Occurrence.OpIndex, 1u);
+    EXPECT_EQ(Occurrence.Invocation, Invocation);
+    EXPECT_EQ(Occurrence.Kind, SymDecisionKind::ConditionalBranch);
+  }
+  EXPECT_TRUE(Path.BranchDecisions[0].Taken);
+  EXPECT_TRUE(Path.BranchDecisions[1].Taken);
+  EXPECT_FALSE(Path.BranchDecisions[2].Taken);
+
+  llvm::SmallVector<uint32_t, 2> Variables;
+  Ctx.collectVars(Path.BranchDecisions.front().Condition, Variables);
+  ASSERT_EQ(Variables.size(), 1u);
+  const SymVarInfo &Input = Ctx.varInfo(Variables.front());
+  ASSERT_TRUE(Input.InputOrigin.has_value());
+  EXPECT_EQ(*Input.InputOrigin,
+            (SymInputOrigin{SymInputKind::Register, kRax, 8, 0}))
+      << "the concrete seed belongs only to the private shadow state";
+}
+
+TEST(SymExplore, AConstantOccurrenceStillAdvancesTheDecisionInvocation) {
+  SymContext Ctx;
+  FunctionBuilder B;
+  constexpr int Header = 1, Body = 2, Exit = 3;
+  B.block({op(NdOp::COPY, NdVar::reg(kRbx, 1), {NdVar::cst(1, 1)}),
+           op(NdOp::BRANCH, NdVar{}, {FunctionBuilder::addressOf(Header)})},
+          {Header});
+  LowOp Terminator =
+      op(NdOp::COND_BR, NdVar{},
+         {FunctionBuilder::addressOf(Body), NdVar::reg(kRbx, 1)});
+  Terminator.Addr = kBase + kBlockSize;
+  Terminator.Seq = 9;
+  B.block({Terminator}, {Body, Exit});
+  B.block({compareRax(1),
+           op(NdOp::COPY, NdVar::reg(kRbx, 1), {NdVar::reg(kFlag, 1)}),
+           op(NdOp::BRANCH, NdVar{}, {FunctionBuilder::addressOf(Header)})},
+          {Header});
+  B.block({op(NdOp::RETURN, NdVar{}, {})}, {});
+
+  SymExecConcreteShadow Shadow;
+  ExploreOptions Opts;
+  Opts.Concolic = &Shadow;
+  Opts.ConcolicSeed.push_back({kRax, 8, 1});
+  Opts.MaxLoopIterations = 3;
+  SymExploration Exploration = explorePathsDetailed(Ctx, B.function(), Opts);
+
+  ASSERT_EQ(Exploration.Paths.size(), 1u);
+  const SymPath &Path = Exploration.Paths.front();
+  ASSERT_EQ(Path.BranchDecisions.size(), 1u)
+      << "the first, constant occurrence has no decision record";
+  EXPECT_EQ(Path.BranchDecisions.front().Occurrence.Invocation, 1u);
+  EXPECT_FALSE(Path.BranchDecisions.front().Taken);
+  EXPECT_TRUE(Path.ConcreteComplete);
+}
+
+TEST(SymExplore, BranchDecisionsPointToTheirConstraintPrefixes) {
+  SymContext Ctx;
+  FunctionBuilder B;
+  constexpr int FirstTaken = 1, FirstOther = 2;
+  constexpr int SecondTaken = 3, SecondOther = 4;
+  B.block({compareRax(10),
+           op(NdOp::COND_BR, NdVar{},
+              {FunctionBuilder::addressOf(FirstTaken), NdVar::reg(kFlag, 1)})},
+          {FirstTaken, FirstOther});
+  B.block({compareRax(20),
+           op(NdOp::COND_BR, NdVar{},
+              {FunctionBuilder::addressOf(SecondTaken), NdVar::reg(kFlag, 1)})},
+          {SecondTaken, SecondOther});
+  B.block({op(NdOp::RETURN, NdVar{}, {})}, {});
+  B.block({op(NdOp::RETURN, NdVar{}, {})}, {});
+  B.block({op(NdOp::RETURN, NdVar{}, {})}, {});
+
+  std::vector<SymPath> Paths = explorePaths(Ctx, B.function());
+  const auto Deep = std::find_if(Paths.begin(), Paths.end(), [](const auto &P) {
+    return P.Blocks == std::vector<int>({0, FirstTaken, SecondTaken});
+  });
+  ASSERT_NE(Deep, Paths.end());
+  ASSERT_EQ(Deep->Constraints.size(), 2u);
+  ASSERT_EQ(Deep->BranchDecisions.size(), 2u);
+  EXPECT_EQ(Deep->BranchDecisions[0].ConstraintPrefix, 0u);
+  EXPECT_EQ(Deep->BranchDecisions[1].ConstraintPrefix, 1u);
+  EXPECT_EQ(Deep->BranchDecisions[0].Condition, Deep->Constraints[0]);
+  EXPECT_EQ(Deep->BranchDecisions[1].Condition, Deep->Constraints[1]);
+}
+
+TEST(SymExplore, LosingTheShadowBeforeABranchMarksFallbackPathsIncomplete) {
+  SymContext Ctx;
+  FunctionBuilder B;
+  constexpr int Then = 1, Else = 2;
+  B.block({compareRax(10),
+           op(NdOp::COND_BR, NdVar{},
+              {FunctionBuilder::addressOf(Then), NdVar::reg(kFlag, 1)})},
+          {Then, Else});
+  B.block({op(NdOp::RETURN, NdVar{}, {})}, {});
+  B.block({op(NdOp::RETURN, NdVar{}, {})}, {});
+
+  BranchShadow Shadow(1, 0);
+  ExploreOptions Opts;
+  Opts.Concolic = &Shadow;
+  SymExploration Exploration = explorePathsDetailed(Ctx, B.function(), Opts);
+
+  ASSERT_EQ(Exploration.Paths.size(), 2u);
+  for (const SymPath &Path : Exploration.Paths) {
+    EXPECT_FALSE(Path.ConcreteComplete);
+    EXPECT_EQ(Path.ConcreteBranches, 0u);
+    ASSERT_EQ(Path.BranchDecisions.size(), 1u);
+    EXPECT_FALSE(Path.BranchDecisions.front().Concrete);
+  }
+}
+
+TEST(SymExplore, MissingConcreteBranchValueMarksFallbackPathsIncomplete) {
+  SymContext Ctx;
+  FunctionBuilder B;
+  constexpr int Then = 1, Else = 2;
+  B.block({compareRax(10),
+           op(NdOp::COND_BR, NdVar{},
+              {FunctionBuilder::addressOf(Then), NdVar::reg(kFlag, 1)})},
+          {Then, Else});
+  B.block({op(NdOp::RETURN, NdVar{}, {})}, {});
+  B.block({op(NdOp::RETURN, NdVar{}, {})}, {});
+
+  BranchShadow Shadow(std::nullopt);
+  ExploreOptions Opts;
+  Opts.Concolic = &Shadow;
+  SymExploration Exploration = explorePathsDetailed(Ctx, B.function(), Opts);
+
+  ASSERT_EQ(Exploration.Paths.size(), 2u);
+  for (const SymPath &Path : Exploration.Paths) {
+    EXPECT_FALSE(Path.ConcreteComplete);
+    EXPECT_EQ(Path.ConcreteBranches, 0u);
+    ASSERT_EQ(Path.BranchDecisions.size(), 1u);
+    EXPECT_FALSE(Path.BranchDecisions.front().Concrete);
+  }
 }
 
 TEST(SymExplore, PredicatedDirectCallExecutesOnlyOnThePredicatePath) {
@@ -654,6 +942,7 @@ TEST(SymExplore, APredicateTheCodeAlreadyDecidedDoesNotFork) {
   EXPECT_EQ(Paths[0].Blocks, (std::vector<int>{0, Real}));
   EXPECT_TRUE(Paths[0].Constraints.empty())
       << "a decided branch is not a choice, so it assumes nothing";
+  EXPECT_TRUE(Paths[0].BranchDecisions.empty());
 }
 
 TEST(SymExplore, ALoopWithNoKnownTripCountStopsAtItsBound) {
@@ -748,6 +1037,31 @@ TEST(SymExplore, PathsThatMeetHoldingTheSameValuesGoOnAsOne) {
   // Every choice was made both ways, so between them the paths assume nothing
   // — which is what the disjunction of the two arms of a branch comes to.
   EXPECT_EQ(Exploration.Paths[0].predicate(Ctx), Ctx.mkTrue());
+  EXPECT_TRUE(Exploration.Paths[0].BranchDecisions.empty())
+      << "a merged predicate has no single divergent decision history";
+}
+
+TEST(SymExplore, AJoinKeepsOnlyTheCommonConcreteDecisionPrefix) {
+  SymContext Ctx;
+  FunctionBuilder B;
+  buildDiamondChain(B, 2);
+
+  BranchShadow Shadow(1, 1);
+  ExploreOptions Opts;
+  Opts.Concolic = &Shadow;
+  Opts.MergeEquivalentPaths = true;
+  SymExploration Exploration = explorePathsDetailed(Ctx, B.function(), Opts);
+
+  ASSERT_EQ(Exploration.Paths.size(), 1u);
+  const SymPath &Path = Exploration.Paths.front();
+  EXPECT_FALSE(Path.ConcreteComplete);
+  EXPECT_EQ(Path.ConcreteBranches, 1u);
+  ASSERT_EQ(Path.BranchDecisions.size(), 1u);
+  EXPECT_TRUE(Path.BranchDecisions.front().Concrete);
+  EXPECT_TRUE(Path.BranchDecisions.front().Taken);
+  EXPECT_EQ(Path.BranchDecisions.front().ConstraintPrefix, 0u);
+  ASSERT_FALSE(Path.Constraints.empty());
+  EXPECT_EQ(Path.BranchDecisions.front().Condition, Path.Constraints.front());
 }
 
 TEST(SymExplore, AnUnresolvedIndirectBranchEndsThePathAndSaysWhereItWasGoing) {
@@ -765,6 +1079,110 @@ TEST(SymExplore, AnUnresolvedIndirectBranchEndsThePathAndSaysWhereItWasGoing) {
   // in order to ask what it becomes for each index.
   EXPECT_TRUE(Paths[0].Target.isValid());
   EXPECT_FALSE(Ctx.isConst(Paths[0].Target));
+}
+
+TEST(SymExplore, MissingConcreteIndirectTargetMarksThePathIncomplete) {
+  SymContext Ctx;
+  FunctionBuilder B;
+  B.block({op(NdOp::INT_MULT, NdVar::tmp(0, 8),
+              {NdVar::reg(kRax, 8), NdVar::cst(8, 8)}),
+           op(NdOp::INDIR_BR, NdVar{}, {NdVar::tmp(0, 8)})},
+          {});
+
+  BranchShadow Shadow(std::nullopt);
+  ExploreOptions Opts;
+  Opts.Concolic = &Shadow;
+  SymExploration Exploration = explorePathsDetailed(Ctx, B.function(), Opts);
+
+  ASSERT_EQ(Exploration.Paths.size(), 1u);
+  EXPECT_EQ(Exploration.Paths.front().Outcome, PathOutcome::UnresolvedBranch);
+  EXPECT_FALSE(Exploration.Paths.front().ConcreteComplete);
+}
+
+TEST(SymExplore, ConcreteIndirectTargetAddsTargetEqualityConstraint) {
+  SymContext Ctx;
+  FunctionBuilder B;
+  constexpr int Destination = 1;
+  B.block({op(NdOp::INDIR_BR, NdVar{}, {NdVar::reg(kRax, 8)})}, {Destination});
+  B.block({op(NdOp::RETURN, NdVar{}, {})}, {});
+
+  BranchShadow Shadow(FunctionBuilder::addressOf(Destination).Offset);
+  ExploreOptions Opts;
+  Opts.Concolic = &Shadow;
+  SymExploration Exploration = explorePathsDetailed(Ctx, B.function(), Opts);
+
+  ASSERT_EQ(Exploration.Paths.size(), 1u);
+  SymPath &Path = Exploration.Paths.front();
+  EXPECT_EQ(Path.Outcome, PathOutcome::Returned);
+  EXPECT_EQ(Path.Blocks, (std::vector<int>{0, Destination}));
+  EXPECT_TRUE(Path.ConcreteComplete);
+  EXPECT_EQ(Path.ConcreteBranches, 1u);
+
+  ASSERT_EQ(Path.Constraints.size(), 1u);
+  SymRef SymbolicTarget =
+      Path.State.read(SymSpace::Register, kRax, sizeof(uint64_t));
+  SymRef TargetEquality =
+      Ctx.mkEq(SymbolicTarget,
+               Ctx.mkConst(Ctx.width(SymbolicTarget),
+                           FunctionBuilder::addressOf(Destination).Offset));
+  EXPECT_EQ(Path.Constraints.front(), TargetEquality);
+  EXPECT_EQ(Path.predicate(Ctx), TargetEquality);
+
+  ASSERT_EQ(Path.BranchDecisions.size(), 1u);
+  const SymBranchDecision &Decision = Path.BranchDecisions.front();
+  EXPECT_EQ(Decision.Condition, TargetEquality);
+  EXPECT_TRUE(Decision.Taken);
+  EXPECT_EQ(Decision.ConstraintPrefix, 0u);
+  EXPECT_TRUE(Decision.Concrete);
+  EXPECT_EQ(Decision.Occurrence.VA, 0u);
+  EXPECT_EQ(Decision.Occurrence.Seq, 0);
+  EXPECT_EQ(Decision.Occurrence.BlockId, 0);
+  EXPECT_EQ(Decision.Occurrence.OpIndex, 0u);
+  EXPECT_EQ(Decision.Occurrence.Invocation, 0u);
+  EXPECT_EQ(Decision.Occurrence.Kind, SymDecisionKind::IndirectBranchTarget);
+}
+
+TEST(SymExplore, ContradictoryConcreteIndirectTargetIsInfeasible) {
+  SymContext Ctx;
+  FunctionBuilder B;
+  constexpr int Destination = 1;
+  const NdVar DestinationAddress = FunctionBuilder::addressOf(Destination);
+  B.block({op(NdOp::CALL, NdVar{}, {NdVar::cst(0x401500, 8)}),
+           op(NdOp::INDIR_BR, NdVar{}, {NdVar::reg(kRax, 8)})},
+          {Destination});
+  B.block({op(NdOp::RETURN, NdVar{}, {})}, {});
+
+  BranchShadow Shadow(DestinationAddress.Offset);
+  ExploreOptions Opts;
+  Opts.Concolic = &Shadow;
+  Opts.CallPreservedRegisters.push_back({kRax, 8});
+  Opts.CallEffects =
+      [ConcreteTarget = DestinationAddress.Offset](
+          SymContext &CallCtx, SymState &State, const LowOp &,
+          const SymCallOccurrence &) -> std::optional<SymCallEffect> {
+    SymRef SymbolicTarget =
+        State.read(SymSpace::Register, kRax, sizeof(uint64_t));
+    SymCallEffect Effect;
+    Effect.Memory = SymCallMemoryEffect::Preserve;
+    Effect.Constraints.push_back(CallCtx.mkNe(
+        SymbolicTarget,
+        CallCtx.mkConst(CallCtx.width(SymbolicTarget), ConcreteTarget)));
+    return Effect;
+  };
+  SymExploration Exploration = explorePathsDetailed(Ctx, B.function(), Opts);
+
+  ASSERT_EQ(Exploration.Paths.size(), 1u);
+  const SymPath &Path = Exploration.Paths.front();
+  EXPECT_EQ(Path.Outcome, PathOutcome::Infeasible);
+  EXPECT_EQ(Path.Blocks, (std::vector<int>{0}));
+  EXPECT_EQ(Path.ConcreteBranches, 1u);
+  ASSERT_EQ(Path.Constraints.size(), 2u);
+  EXPECT_EQ(Path.predicate(Ctx), Ctx.mkFalse());
+  ASSERT_EQ(Path.BranchDecisions.size(), 1u);
+  EXPECT_EQ(Path.BranchDecisions.back().Condition, Path.Constraints.back());
+  EXPECT_TRUE(Path.BranchDecisions.back().Taken);
+  EXPECT_EQ(Path.BranchDecisions.back().ConstraintPrefix, 1u);
+  EXPECT_TRUE(Path.BranchDecisions.back().Concrete);
 }
 
 TEST(SymExplore, OddInterworkingTargetFindsItsCanonicalThumbBlock) {

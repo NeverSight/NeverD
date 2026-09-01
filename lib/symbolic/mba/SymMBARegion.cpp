@@ -66,10 +66,8 @@ std::optional<Region> readRegion(SymContext &Ctx, SymRef E, unsigned MaxAtoms,
     Rep.TooWide = true;
   if (Out.AtomIds.empty() || TooWide)
     return std::nullopt;
-  for (uint32_t Id : Out.AtomIds) {
-    const SymVarInfo &Info = Ctx.varInfo(Id);
-    Out.Atoms.push_back(Ctx.mkVar(Info.Name, Info.Width));
-  }
+  for (uint32_t Id : Out.AtomIds)
+    Out.Atoms.push_back(Ctx.varRef(Id));
   return Out;
 }
 

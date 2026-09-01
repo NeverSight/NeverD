@@ -11,14 +11,14 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/symbolic/SymExpr.h"
-
 #include "SymParseDetail.h"
 
+#include "neverd/symbolic/SymExpr.h"
+
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/ErrorHandling.h"
 
 #include <optional>
@@ -32,6 +32,11 @@ namespace neverd::symbolic {
 namespace {
 
 using namespace detail;
+
+bool isTextIdentifier(llvm::StringRef Name) {
+  return !Name.empty() && isIdentStart(Name.front()) &&
+         llvm::all_of(Name.drop_front(), isIdentBody);
+}
 
 /// A rendered subexpression, tagged with the strength of its outermost
 /// operator so the parent can decide about parentheses.
@@ -217,8 +222,14 @@ Fragment Printer::render(SymRef R) const {
       return {"-" + Mag->Text, PrecUnary};
     return literal(V, N.Width);
   }
-  case SymOp::Var:
-    return leaf(Ctx.varInfo(Ctx.varId(R)).Name, N.Width);
+  case SymOp::Var: {
+    const uint32_t Id = Ctx.varId(R);
+    const SymVarInfo &Info = Ctx.varInfo(Id);
+    const std::optional<uint32_t> Unique = Ctx.findVar(Info.Name);
+    if (Unique && *Unique == Id && isTextIdentifier(Info.Name))
+      return leaf(Info.Name, N.Width);
+    return {"varid(" + std::to_string(Id) + ")", PrecPrimary};
+  }
 
   case SymOp::Add: {
     std::string T;
@@ -237,8 +248,7 @@ Fragment Printer::render(SymRef R) const {
   }
   case SymOp::Mul:
     if (std::optional<Magnitude> Neg = negatedProduct(R))
-      return {negate(*Neg),
-              Neg->CoeffLed ? PrecMultiplicative : PrecUnary};
+      return {negate(*Neg), Neg->CoeffLed ? PrecMultiplicative : PrecUnary};
     return {join(Ops, " * ", PrecMultiplicative + 1), PrecMultiplicative};
 
   case SymOp::And:
@@ -253,8 +263,8 @@ Fragment Printer::render(SymRef R) const {
     // exactly what the parser rebuilds.
     if (Ctx.op(Ops[0]) == SymOp::Eq) {
       llvm::ArrayRef<SymRef> Cmp = Ctx.operands(Ops[0]);
-      return {sub(Cmp[0], PrecEquality) + " != " +
-                  sub(Cmp[1], PrecEquality + 1),
+      return {sub(Cmp[0], PrecEquality) +
+                  " != " + sub(Cmp[1], PrecEquality + 1),
               PrecEquality};
     }
     return {"~" + sub(Ops[0], PrecUnary), PrecUnary};
@@ -303,16 +313,15 @@ Fragment Printer::render(SymRef R) const {
             PrecTernary};
 
   case SymOp::Eq:
-    return {sub(Ops[0], PrecEquality) + " == " +
-                sub(Ops[1], PrecEquality + 1),
+    return {sub(Ops[0], PrecEquality) + " == " + sub(Ops[1], PrecEquality + 1),
             PrecEquality};
   case SymOp::Ult:
     return {sub(Ops[0], PrecRelational) + " < " +
                 sub(Ops[1], PrecRelational + 1),
             PrecRelational};
   case SymOp::Ule:
-    return {sub(Ops[0], PrecRelational) + " <= " +
-                sub(Ops[1], PrecRelational + 1),
+    return {sub(Ops[0], PrecRelational) +
+                " <= " + sub(Ops[1], PrecRelational + 1),
             PrecRelational};
   case SymOp::Slt:
     return {call("slt", Ops), PrecPrimary};

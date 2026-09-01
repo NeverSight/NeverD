@@ -66,6 +66,8 @@ SymRef SymExec::read(const NdVar &V) {
   return State.read(spaceOf(V), V.Offset, V.Size ? V.Size : uint16_t(8));
 }
 
+SymRef SymExec::operandValue(const NdVar &V) { return read(V); }
+
 SymRef SymExec::fit(SymRef Value, uint32_t Bits) {
   return Bits == 0 ? Value : Ctx.mkZExtOrTrunc(Value, Bits);
 }

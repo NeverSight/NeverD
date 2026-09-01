@@ -320,6 +320,35 @@ void expectRoundTrip(SymContext &Ctx, SymRef R) {
                           << "\n  reparsed as: " << Ctx.toString(Back.Root);
 }
 
+TEST(SymParse, StructuredInputRoundTripPreservesExactIdentity) {
+  SymContext Ctx;
+  SymRef Input = Ctx.mkInputVar(
+      "reg$0", W32, SymInputOrigin{SymInputKind::Register, 0, 4, 0});
+  expectRoundTrip(Ctx, Input);
+
+  SymRef Other = Ctx.mkInputVar(
+      "reg$0", W32, SymInputOrigin{SymInputKind::Register, 8, 4, 0});
+  EXPECT_NE(Ctx.toString(Input), Ctx.toString(Other));
+  expectRoundTrip(Ctx, Input);
+  expectRoundTrip(Ctx, Other);
+  SymParseResult Ambiguous = parseSymExpr(Ctx, "reg$0", W32);
+  ASSERT_FALSE(Ambiguous.ok());
+  EXPECT_NE(Ambiguous.Error.find("more than one symbolic variable"),
+            std::string::npos);
+
+  SymContext Mixed;
+  SymRef Plain = Mixed.mkVar("shared", W32);
+  SymRef Structured = Mixed.mkInputVar(
+      "shared", W32, SymInputOrigin{SymInputKind::Register, 0, 4, 0});
+  expectRoundTrip(Mixed, Plain);
+  expectRoundTrip(Mixed, Structured);
+  EXPECT_FALSE(parseSymExpr(Mixed, "shared", W32).ok());
+
+  SymRef NonIdentifier = Mixed.mkVar("not a token", W32);
+  EXPECT_NE(Mixed.toString(NonIdentifier), "not a token");
+  expectRoundTrip(Mixed, NonIdentifier);
+}
+
 TEST(SymParse, HandWrittenShapesSurviveTheRoundTrip) {
   SymContext Ctx;
   static constexpr const char *Cases[] = {

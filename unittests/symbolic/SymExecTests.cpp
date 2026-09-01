@@ -20,6 +20,7 @@
 #include "neverd/symbolic/SymExec.h"
 #include "neverd/symbolic/SymParse.h"
 
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -57,6 +58,44 @@ TEST(SymState, ALocationNeverWrittenReadsAsAnInputNamedForItself) {
             "concat(reg$3#8, reg$2#8, reg$1#8, reg$0#8)");
 }
 
+TEST(SymState, ZeroByteReadFailsClosedWithoutCreatingAnInput) {
+  SymContext Ctx;
+  SymState State(Ctx);
+  EXPECT_FALSE(State.read(SymSpace::Register, kRax, 0).isValid());
+  EXPECT_EQ(Ctx.numVars(), 0u);
+}
+
+TEST(SymState, WrappingRegisterRangesFailClosedWithoutMutatingState) {
+  SymContext Ctx;
+  SymState State(Ctx);
+  constexpr uint64_t Last = std::numeric_limits<uint64_t>::max();
+
+  EXPECT_FALSE(State.read(SymSpace::Register, Last, 2).isValid());
+  EXPECT_EQ(Ctx.numVars(), 0u);
+  State.write(SymSpace::Register, Last, Ctx.mkConst(16, 0xAABB));
+
+  SymRef AtZero = State.read(SymSpace::Register, 0, 1);
+  ASSERT_TRUE(Ctx.isVar(AtZero));
+  const SymVarInfo &Info = Ctx.varInfo(Ctx.varId(AtZero));
+  ASSERT_TRUE(Info.InputOrigin.has_value());
+  EXPECT_EQ(*Info.InputOrigin,
+            (SymInputOrigin{SymInputKind::Register, 0, 1, 0}));
+}
+
+TEST(SymState, OversizedWriteDoesNotTruncateItsByteCount) {
+  SymContext Ctx;
+  SymState State(Ctx);
+  constexpr uint32_t TooManyBytes =
+      uint32_t{std::numeric_limits<uint16_t>::max()} + 1;
+  SymRef Wide = Ctx.mkVar("wide", TooManyBytes * 8);
+
+  State.write(SymSpace::Register, 0, Wide);
+  SymRef Byte = State.read(SymSpace::Register, 0, 1);
+  ASSERT_TRUE(Ctx.isVar(Byte));
+  EXPECT_NE(Ctx.varId(Byte), Ctx.varId(Wide));
+  ASSERT_TRUE(Ctx.varInfo(Ctx.varId(Byte)).InputOrigin.has_value());
+}
+
 TEST(SymState, AWholeUntouchedRegisterStartsAsOneInput) {
   SymContext Ctx;
   SymState State(Ctx);
@@ -65,6 +104,122 @@ TEST(SymState, AWholeUntouchedRegisterStartsAsOneInput) {
   EXPECT_EQ(Ctx.op(Whole), SymOp::Var);
   EXPECT_EQ(State.read(SymSpace::Register, kRax, 4),
             Ctx.mkExtract(Whole, 0, 32));
+}
+
+TEST(SymState, SiblingStatesShareWideThenNarrowInitialRegisterBytes) {
+  SymContext Ctx;
+  SymState WideState(Ctx);
+  SymState NarrowState(Ctx);
+
+  SymRef Wide = WideState.read(SymSpace::Register, kRax, 8);
+  ASSERT_TRUE(Ctx.isVar(Wide));
+  const uint32_t WideId = Ctx.varId(Wide);
+  ASSERT_TRUE(Ctx.varInfo(WideId).InputOrigin.has_value());
+  EXPECT_EQ(*Ctx.varInfo(WideId).InputOrigin,
+            (SymInputOrigin{SymInputKind::Register, kRax, 8, 0}));
+
+  SymRef Narrow = NarrowState.read(SymSpace::Register, kRax, 4);
+  EXPECT_EQ(Narrow, Ctx.mkExtract(Wide, 0, 32));
+  EXPECT_EQ(Ctx.varInfo(WideId).Width, Ctx.width(Wide));
+  EXPECT_EQ(*Ctx.varInfo(WideId).InputOrigin,
+            (SymInputOrigin{SymInputKind::Register, kRax, 8, 0}));
+}
+
+TEST(SymState, SiblingStatesShareNarrowThenWideStructuredMemoryBytes) {
+  SymContext Ctx;
+  SymState NarrowState(Ctx);
+  SymState WideState(Ctx);
+  SymRef Address = Ctx.mkConst(64, 0x401000);
+
+  SymRef Narrow = NarrowState.load(Address, 4);
+  ASSERT_TRUE(Ctx.isVar(Narrow));
+  const uint32_t NarrowId = Ctx.varId(Narrow);
+  ASSERT_TRUE(Ctx.varInfo(NarrowId).InputOrigin.has_value());
+  EXPECT_EQ(*Ctx.varInfo(NarrowId).InputOrigin,
+            (SymInputOrigin{SymInputKind::AbsoluteMemory, 0x401000, 4, 0}));
+
+  SymRef Wide = WideState.load(Address, 8);
+  EXPECT_EQ(Ctx.mkExtract(Wide, 0, 32), Narrow);
+  EXPECT_EQ(Ctx.varInfo(NarrowId).Width, Ctx.width(Narrow));
+  EXPECT_EQ(*Ctx.varInfo(NarrowId).InputOrigin,
+            (SymInputOrigin{SymInputKind::AbsoluteMemory, 0x401000, 4, 0}));
+
+  llvm::SmallVector<uint32_t, 2> Inputs;
+  Ctx.collectVars(Wide, Inputs);
+  ASSERT_EQ(Inputs.size(), 2u);
+  for (uint32_t Id : Inputs) {
+    const SymVarInfo &Info = Ctx.varInfo(Id);
+    ASSERT_TRUE(Info.InputOrigin.has_value());
+    EXPECT_EQ(Info.InputOrigin->Kind, SymInputKind::AbsoluteMemory);
+    EXPECT_EQ(Info.InputOrigin->Epoch, 0u);
+    EXPECT_GE(Info.InputOrigin->Offset, 0x401000u);
+    EXPECT_LE(Info.InputOrigin->Offset + Info.InputOrigin->Bytes, 0x401008u);
+  }
+}
+
+TEST(SymState, BigEndianSiblingsShareWideThenNarrowInitialRegisterBytes) {
+  SymContext Ctx;
+  SymState WideState(Ctx, llvm::endianness::big);
+  SymState NarrowState(Ctx, llvm::endianness::big);
+
+  SymRef Wide = WideState.read(SymSpace::Register, kRax, 8);
+  ASSERT_TRUE(Ctx.isVar(Wide));
+  const uint32_t WideId = Ctx.varId(Wide);
+  SymRef Narrow = NarrowState.read(SymSpace::Register, kRax, 4);
+
+  EXPECT_EQ(Narrow, Ctx.mkExtract(Wide, 32, 32));
+  EXPECT_EQ(Ctx.varInfo(WideId).Width, Ctx.width(Wide));
+  ASSERT_TRUE(Ctx.varInfo(WideId).InputOrigin.has_value());
+  EXPECT_EQ(*Ctx.varInfo(WideId).InputOrigin,
+            (SymInputOrigin{SymInputKind::Register, kRax, 8, 0}));
+}
+
+TEST(SymState, BigEndianSiblingsShareNarrowThenWideInitialRegisterBytes) {
+  SymContext Ctx;
+  SymState NarrowState(Ctx, llvm::endianness::big);
+  SymState WideState(Ctx, llvm::endianness::big);
+
+  SymRef Narrow = NarrowState.read(SymSpace::Register, kRax, 4);
+  ASSERT_TRUE(Ctx.isVar(Narrow));
+  const uint32_t NarrowId = Ctx.varId(Narrow);
+  SymRef Wide = WideState.read(SymSpace::Register, kRax, 8);
+
+  EXPECT_EQ(Ctx.mkExtract(Wide, 32, 32), Narrow);
+  EXPECT_EQ(Ctx.varInfo(NarrowId).Width, Ctx.width(Narrow));
+  ASSERT_TRUE(Ctx.varInfo(NarrowId).InputOrigin.has_value());
+  EXPECT_EQ(*Ctx.varInfo(NarrowId).InputOrigin,
+            (SymInputOrigin{SymInputKind::Register, kRax, 4, 0}));
+}
+
+TEST(SymState, UntouchedMachineBanksCarryStructuredInitialOrigins) {
+  SymContext Ctx;
+  SymState State(Ctx);
+
+  struct Case {
+    const char *Label;
+    SymRef Value;
+    SymInputOrigin Expected;
+  };
+  const Case Cases[] = {
+      {"register",
+       State.read(SymSpace::Register, kRbx, 8),
+       {SymInputKind::Register, kRbx, 8, 0}},
+      {"temporary",
+       State.read(SymSpace::Temporary, 40, 4),
+       {SymInputKind::Temporary, 40, 4, 0}},
+      {"absolute memory",
+       State.load(Ctx.mkConst(64, 0x401020), 2),
+       {SymInputKind::AbsoluteMemory, 0x401020, 2, 0}},
+  };
+
+  for (const Case &C : Cases) {
+    SCOPED_TRACE(C.Label);
+    ASSERT_TRUE(Ctx.isVar(C.Value));
+    const SymVarInfo &Info = Ctx.varInfo(Ctx.varId(C.Value));
+    ASSERT_TRUE(Info.InputOrigin.has_value());
+    EXPECT_EQ(*Info.InputOrigin, C.Expected);
+    EXPECT_FALSE(Info.Fresh);
+  }
 }
 
 TEST(SymState, AWriteAndAReadOfTheSameWidthCancelOut) {
@@ -360,6 +515,38 @@ TEST(SymState, EveryRegisterClobberCreatesANewUnknownState) {
   EXPECT_NE(AfterSecond, AfterFirst);
 }
 
+TEST(SymState, FreshAndClobberedValuesHaveNoReplayableInputOrigin) {
+  SymContext Ctx;
+  SymState State(Ctx);
+
+  SymRef Fresh = State.freshInput("opaque", 32);
+  ASSERT_TRUE(Ctx.isVar(Fresh));
+  EXPECT_TRUE(Ctx.varInfo(Ctx.varId(Fresh)).Fresh);
+  EXPECT_FALSE(Ctx.varInfo(Ctx.varId(Fresh)).InputOrigin.has_value());
+
+  State.clobberRegistersExcept({});
+  SymRef Register = State.read(SymSpace::Register, kRax, 8);
+  ASSERT_TRUE(Ctx.isVar(Register));
+  EXPECT_TRUE(Ctx.varInfo(Ctx.varId(Register)).Fresh);
+  EXPECT_FALSE(Ctx.varInfo(Ctx.varId(Register)).InputOrigin.has_value());
+
+  SymRef Temporary = State.read(SymSpace::Temporary, 40, 4);
+  ASSERT_TRUE(Ctx.isVar(Temporary));
+  EXPECT_TRUE(Ctx.varInfo(Ctx.varId(Temporary)).Fresh);
+  EXPECT_FALSE(Ctx.varInfo(Ctx.varId(Temporary)).InputOrigin.has_value());
+
+  SymRef Pointer = Ctx.mkVar("pointer", 64);
+  SymRef SymbolicMemory = State.load(Pointer, 4);
+  ASSERT_TRUE(Ctx.isVar(SymbolicMemory));
+  EXPECT_FALSE(Ctx.varInfo(Ctx.varId(SymbolicMemory)).InputOrigin.has_value());
+
+  State.clobberMemory();
+  SymRef Memory = State.load(Ctx.mkConst(64, 0x401000), 4);
+  ASSERT_TRUE(Ctx.isVar(Memory));
+  EXPECT_TRUE(Ctx.varInfo(Ctx.varId(Memory)).Fresh);
+  EXPECT_FALSE(Ctx.varInfo(Ctx.varId(Memory)).InputOrigin.has_value());
+}
+
 TEST(SymState, AClobberBeforeAForkNamesOneSharedUnknownState) {
   SymContext Ctx;
   SymState Left(Ctx);
@@ -518,6 +705,97 @@ TEST(SymExec, MemoryRoundTripsThroughLoadAndStore) {
       kRcx, 4);
   ASSERT_TRUE(Ctx.isConst(Result));
   EXPECT_EQ(Ctx.constValue(Result).getZExtValue(), 0x12345678u);
+}
+
+TEST(SymExec, NonDefaultAddressSpaceLoadFailsClosedWithAWidthStableUnknown) {
+  SymContext Ctx;
+  SymState State(Ctx);
+  SymExec Exec(Ctx, State);
+  SymRef Address = Ctx.mkConst(64, 0x401000);
+  State.store(Address, Ctx.mkConst(32, 0x12345678));
+
+  LowOp Load = op(NdOp::LOAD, NdVar::reg(kRcx, 4), {NdVar::reg(kRax, 8)});
+  Load.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+  EXPECT_EQ(Exec.step(Load), StepResult::Unmodelled);
+
+  SymRef Result = State.read(SymSpace::Register, kRcx, 4);
+  ASSERT_TRUE(Ctx.isVar(Result));
+  EXPECT_EQ(Ctx.width(Result), 32u);
+  const SymVarInfo &Info = Ctx.varInfo(Ctx.varId(Result));
+  EXPECT_TRUE(Info.Fresh);
+  EXPECT_FALSE(Info.InputOrigin.has_value());
+  EXPECT_EQ(Exec.unmodelledCount(), 1u);
+  EXPECT_EQ(Exec.opaqueOperationCount(), 1u);
+  EXPECT_EQ(Exec.memoryHavocCount(), 0u);
+  EXPECT_TRUE(Ctx.isConst(State.load(Address, 4)))
+      << "a segmented load must not read or clobber default memory";
+}
+
+TEST(SymExec, NonDefaultAddressSpaceStoreClobbersDefaultMemory) {
+  SymContext Ctx;
+  SymState State(Ctx);
+  SymExec Exec(Ctx, State);
+  SymRef Address = Ctx.mkConst(64, 0x401000);
+  State.store(Address, Ctx.mkConst(32, 0x12345678));
+
+  LowOp Store = op(NdOp::STORE, NdVar{},
+                   {NdVar::reg(kRax, 8), NdVar::cst(0xAABBCCDD, 4)});
+  Store.MemoryAddressSpace = NdMemoryAddressSpace::X86GS;
+  EXPECT_EQ(Exec.step(Store), StepResult::Unmodelled);
+
+  EXPECT_TRUE(State.memoryIsUnknown());
+  EXPECT_EQ(Exec.unmodelledCount(), 1u);
+  EXPECT_EQ(Exec.memoryHavocCount(), 1u);
+  SymRef After = State.load(Address, 4);
+  ASSERT_TRUE(Ctx.isVar(After));
+  EXPECT_EQ(Ctx.width(After), 32u);
+  const SymVarInfo &Info = Ctx.varInfo(Ctx.varId(After));
+  EXPECT_TRUE(Info.Fresh);
+  EXPECT_FALSE(Info.InputOrigin.has_value());
+}
+
+TEST(SymExec, NonDefaultAddressSpaceAtomicsClobberMemoryAndHavocOutputs) {
+  struct AtomicCase {
+    NdOp Opcode;
+    std::vector<NdVar> Inputs;
+  };
+  const AtomicCase Cases[] = {
+      {NdOp::ATOMIC_XCHG, {NdVar::reg(kRax, 8), NdVar::cst(0x11111111, 4)}},
+      {NdOp::ATOMIC_ADD, {NdVar::reg(kRax, 8), NdVar::cst(0x22222222, 4)}},
+      {NdOp::ATOMIC_CMPXCHG,
+       {NdVar::reg(kRax, 8), NdVar::cst(0x33333333, 4),
+        NdVar::cst(0x44444444, 4)}},
+  };
+
+  for (const AtomicCase &C : Cases) {
+    SCOPED_TRACE(static_cast<unsigned>(C.Opcode));
+    SymContext Ctx;
+    SymState State(Ctx);
+    SymExec Exec(Ctx, State);
+    SymRef Address = Ctx.mkConst(64, 0x401000);
+    State.store(Address, Ctx.mkConst(32, 0x12345678));
+
+    LowOp Atomic = op(C.Opcode, NdVar::reg(kRcx, 4), C.Inputs);
+    Atomic.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+    Atomic.MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+    EXPECT_EQ(Exec.step(Atomic), StepResult::Unmodelled);
+
+    EXPECT_TRUE(State.memoryIsUnknown());
+    EXPECT_EQ(Exec.unmodelledCount(), 1u);
+    EXPECT_EQ(Exec.memoryHavocCount(), 1u);
+    SymRef Output = State.read(SymSpace::Register, kRcx, 4);
+    SymRef Memory = State.load(Address, 4);
+    ASSERT_TRUE(Ctx.isVar(Output));
+    ASSERT_TRUE(Ctx.isVar(Memory));
+    EXPECT_EQ(Ctx.width(Output), 32u);
+    EXPECT_EQ(Ctx.width(Memory), 32u);
+    EXPECT_NE(Ctx.varId(Output), Ctx.varId(Memory));
+    for (SymRef Value : {Output, Memory}) {
+      const SymVarInfo &Info = Ctx.varInfo(Ctx.varId(Value));
+      EXPECT_TRUE(Info.Fresh);
+      EXPECT_FALSE(Info.InputOrigin.has_value());
+    }
+  }
 }
 
 TEST(SymExec, TheBitCountsAndBitFieldsAreModelledRatherThanNamed) {

@@ -47,6 +47,16 @@ enum Prec : int {
   PrecPrimary,
 };
 
+inline bool isIdentStart(char C) {
+  return (C >= 'a' && C <= 'z') || (C >= 'A' && C <= 'Z') || C == '_';
+}
+
+/// Decompiler-generated names carry `.` and `$`, so an identifier admits them
+/// rather than forcing every caller to quote.
+inline bool isIdentBody(char C) {
+  return isIdentStart(C) || (C >= '0' && C <= '9') || C == '.' || C == '$';
+}
+
 //===----------------------------------------------------------------------===//
 // Lexing
 //===----------------------------------------------------------------------===//

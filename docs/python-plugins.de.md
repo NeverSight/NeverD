@@ -103,6 +103,24 @@ for path in result.paths:
 
 `complete` ist false, wenn eine Grenze für Pfade, Schritte, Schleifenbesuche oder nicht aufgelöste Verzweigungen die Erkundung beendet. `exact` setzt zusätzlich voraus, dass keine Operation konservativ durch einen unbekannten Zustand ersetzt wurde; nicht unterstützte LowIR-Operationen, Aufrufe ohne Zusammenfassung und Speicherzugriffe über nicht aufgelöste Adressen werden in `unmodelled_ops` gezählt. EVM- und SBF-Sessions bieten keine native LowIR-Erkundung.
 
+### Verifizierte konkolische LowIR-Zweigumkehrungen
+
+`session.lowir_concolic` verfolgt einen nativen LowIR-Pfad aus expliziten Bytebereichen des Eingaberegisters und liefert nur Solver-Kandidaten, die eine neue Ausführung am selben Kontrollentscheidungsvorkommen bestätigt:
+
+```python
+from neverd_plugin import ConcolicRegisterSeed
+
+report = session.lowir_concolic(
+    0x401000,
+    [ConcolicRegisterSeed(offset=56, bytes=4, value=0)],
+)
+for flip in report.flips:
+    if flip.candidate_id is not None:
+        print(report.candidates[flip.candidate_id].seed)
+```
+
+Der Register-Offset ist ein Byte-Offset in NeverDs Registerdatei, kein nativer Zeiger oder eine Registernummer. Der Bericht ist stets nicht vollständig; UNSAT, Solver-Grenzen sowie Projektions- oder Replay-Ablehnungen bleiben typisierte Flip-Ergebnisse statt Ausnahmen.
+
 ### Speicher-Audit und Hunt
 
 `session.audit()` und `session.hunt()` liefern geparste JSON-Berichte (dasselbe Schema wie die CLI). Sie brauchen eine geliftete native Session:

@@ -56,6 +56,7 @@ REQUIRED_CAPABILITY_IDS = frozenset(
         "llvm.semantic.synthesis-rewrite",
         "semantic.mba.derivation",
         "semantic.synthesis.candidate",
+        "symbolic.execution.lowir-concolic",
         "symbolic.execution.path-exploration",
         "translation.executable-engine",
         "translation.runtime-contract",

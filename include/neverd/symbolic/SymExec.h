@@ -104,6 +104,11 @@ public:
   /// fail-closed default used by \c step(const LowOp&).
   StepResult step(const LowOp &Op, const SymCallEffect *CallEffect);
 
+  /// Read one operand through the same width, space, and memory semantics used
+  /// by \c step.  This may materialise an untouched symbolic input in \c State.
+  /// Concrete shadow execution uses it instead of duplicating NdVar semantics.
+  SymRef operandValue(const NdVar &V);
+
   /// Execute operations in order, stopping when one changes control flow.
   /// An unmodelled operation has already written a named unknown and therefore
   /// falls through like an ordinary operation.  Returns how many were executed,

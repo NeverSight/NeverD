@@ -38,6 +38,16 @@ SAFETY_LABELS = (
 # required on every host so a build cannot retain generic loader fixtures while
 # silently dropping the artifact and discovery path promised to SDK users.
 PLUGIN_LABELS = ("NeverDExamplePluginTests",)
+# The LowIR concolic contract spans its core engine, six-format integration,
+# C ABI, CLI, and real Python binding.  All five are focused suites and must
+# remain present and selected on every supported CI host.
+CONCOLIC_LABELS = (
+    "NeverDConcolicTests",
+    "NeverDConcolicIntegrationTests",
+    "NeverDConcolicCAPITests",
+    "NeverDConcolicCLITests",
+    "NeverDConcolicPythonIntegration",
+)
 PROFILE_EXCLUSIONS = {
     "linux-semantic": r"^NeverDPatchFullTests$",
     "macos-patch": r"^NeverDSemanticTests$",
@@ -188,6 +198,17 @@ def audit_inventory(
             "example-plugin CLI smoke test"
         )
 
+    absent_concolic = [
+        label for label in CONCOLIC_LABELS if label not in present_labels
+    ]
+    if absent_concolic:
+        raise InventoryError(
+            "LowIR concolic tests are not under test: "
+            + ", ".join(absent_concolic)
+            + "; build the core, integration, C API, CLI, and real Python "
+            "concolic suites"
+        )
+
     semantic_names = {
         record.name for record in records if SEMANTIC_LABEL in record.labels
     }
@@ -227,6 +248,15 @@ def audit_inventory(
         raise InventoryError(
             f"profile {profile!r} does not select required native plugin tests: "
             + ", ".join(unselected_plugins)
+        )
+
+    unselected_concolic = [
+        label for label in CONCOLIC_LABELS if label not in selected_labels
+    ]
+    if unselected_concolic:
+        raise InventoryError(
+            f"profile {profile!r} does not select required concolic tests: "
+            + ", ".join(unselected_concolic)
         )
 
     heavy_sets = {

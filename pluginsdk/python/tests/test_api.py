@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import ctypes
 import json
 import sys
@@ -287,6 +288,251 @@ class _SafetyHost:
         )
 
 
+def _concolic_occurrence(index: int) -> dict[str, object]:
+    return {
+        "va": f"0x{0x401000 + index:016x}",
+        "seq": index,
+        "block_id": index,
+        "op_index": index + 1,
+        "invocation": 0,
+        "kind": "conditional_branch",
+    }
+
+
+def _concolic_seed(offset: int, value: int, width: int) -> dict[str, object]:
+    return {
+        "offset": f"0x{offset:016x}",
+        "bytes": width,
+        "value": f"0x{value:0{width * 2}x}",
+    }
+
+
+def _concolic_report(
+    *,
+    seed: tuple[int, int, int] | None = None,
+    limits: dict[str, int] | None = None,
+) -> dict[str, object]:
+    decisions = [
+        {
+            "decision_id": index,
+            "occurrence": _concolic_occurrence(index),
+            "taken": index % 2 == 0,
+            "constraint_prefix": index,
+            "concrete": True,
+        }
+        for index in range(5)
+    ]
+    flips = [
+        {
+            "decision_id": 0,
+            "occurrence": _concolic_occurrence(0),
+            "original_taken": True,
+            "constraint_prefix": 0,
+            "status": "verified",
+            "solver_status": "sat",
+            "encoding_error": "none",
+            "projection_status": "accepted",
+            "projection_reason": "none",
+            "replay_status": "verified",
+            "replay_reason": "none",
+            "candidate_id": 0,
+        },
+        {
+            "decision_id": 1,
+            "occurrence": _concolic_occurrence(1),
+            "original_taken": False,
+            "constraint_prefix": 1,
+            "status": "unsat",
+            "solver_status": "unsat",
+            "encoding_error": "none",
+            "projection_status": "not_run",
+            "projection_reason": "none",
+            "replay_status": "not_run",
+            "replay_reason": "none",
+            "candidate_id": None,
+        },
+        {
+            "decision_id": 2,
+            "occurrence": _concolic_occurrence(2),
+            "original_taken": True,
+            "constraint_prefix": 2,
+            "status": "solver_unknown",
+            "solver_status": "unknown",
+            "encoding_error": "width too large",
+            "projection_status": "not_run",
+            "projection_reason": "none",
+            "replay_status": "not_run",
+            "replay_reason": "none",
+            "candidate_id": None,
+        },
+        {
+            "decision_id": 3,
+            "occurrence": _concolic_occurrence(3),
+            "original_taken": False,
+            "constraint_prefix": 3,
+            "status": "projection_rejected",
+            "solver_status": "sat",
+            "encoding_error": "none",
+            "projection_status": "rejected",
+            "projection_reason": "missing_model_value",
+            "replay_status": "not_run",
+            "replay_reason": "none",
+            "candidate_id": None,
+        },
+        {
+            "decision_id": 4,
+            "occurrence": _concolic_occurrence(4),
+            "original_taken": True,
+            "constraint_prefix": 4,
+            "status": "replay_rejected",
+            "solver_status": "sat",
+            "encoding_error": "none",
+            "projection_status": "accepted",
+            "projection_reason": "none",
+            "replay_status": "rejected",
+            "replay_reason": "target_polarity_not_flipped",
+            "candidate_id": None,
+        },
+    ]
+    effective_limits = {
+        "max_steps": 1 << 16,
+        "max_block_visits": 3,
+        "max_loop_iterations": 3,
+        "max_flip_attempts": 64,
+        "max_candidates": 64,
+        "solver_max_conflicts": 1 << 18,
+        "solver_max_propagations": 1 << 24,
+        "solver_max_watch_visits": 1 << 26,
+        "solver_max_width": 256,
+        "solver_max_gates": 1 << 22,
+    }
+    if limits is not None:
+        effective_limits.update(limits)
+    initial_seed = [] if seed is None else [_concolic_seed(*seed)]
+    candidate_seed = (
+        []
+        if seed is None
+        else [_concolic_seed(seed[0], min(7, (1 << (seed[2] * 8)) - 1), seed[2])]
+    )
+    return {
+        "schema_version": 1,
+        "adapter": "lowir-concolic-v1",
+        "mode": "concolic",
+        "ok": True,
+        "exhaustive": False,
+        "image": {
+            "format": "ELF",
+            "arch": "x86_64",
+            "bits": 64,
+            "endianness": "little",
+            "base": "0x0000000000400000",
+            "entry": "0x0000000000401000",
+            "identity_status": "exact_loaded_snapshot",
+            "identity_reason": None,
+            "sha256": "ab" * 32,
+        },
+        "function": {
+            "entry": "0x0000000000401000",
+            "name": "concolic_branch",
+            "lift_complete": True,
+        },
+        "limits": effective_limits,
+        "initial_seed": initial_seed,
+        "trace_outcome": "returned",
+        "trace_complete": True,
+        "trace_exact": True,
+        "trace_reason": "none",
+        "executed_steps": 12,
+        "unmodelled_ops": 0,
+        "opaque_ops": 0,
+        "call_havocs": 0,
+        "memory_havocs": 0,
+        "flip_attempts": 5,
+        "flip_budget_hit": False,
+        "candidate_budget_hit": False,
+        "blocks": [0, 1],
+        "decisions": decisions,
+        "flips": flips,
+        "candidates": [
+            {
+                "candidate_id": 0,
+                "seed": candidate_seed,
+            }
+        ],
+    }
+
+
+class _ConcolicHost:
+    def __init__(self, report: object | None = None) -> None:
+        self.report = _concolic_report() if report is None else report
+        self.options: dict[str, object] | None = None
+        self.seeds: tuple[tuple[int, int, int, int], ...] = ()
+        self.seed_pointer_is_null = False
+
+    def owned_string(self, name: str, *arguments: object) -> str:
+        if name == "neverd_last_error":
+            return "native concolic error"
+        if name != "neverd_lowir_concolic_json_v1":
+            raise AssertionError(name)
+        options = arguments[2]._obj
+        self.options = {
+            field: getattr(options, field)
+            for field in (
+                "struct_size",
+                "register_seed_count",
+                "max_steps",
+                "max_block_visits",
+                "max_loop_iterations",
+                "max_flip_attempts",
+                "max_candidates",
+                "reserved",
+                "solver_max_conflicts",
+                "solver_max_propagations",
+                "solver_max_watch_visits",
+                "solver_max_gates",
+            )
+        }
+        self.seed_pointer_is_null = not bool(options.register_seeds)
+        self.seeds = tuple(
+            (
+                options.register_seeds[index].offset,
+                options.register_seeds[index].value,
+                options.register_seeds[index].bytes,
+                options.register_seeds[index].reserved,
+            )
+            for index in range(options.register_seed_count)
+        )
+        return json.dumps(self.report)
+
+
+class _ConcolicCFunction:
+    def __init__(self, implementation: Callable[..., object]) -> None:
+        self.implementation = implementation
+        self.argtypes: object | None = None
+        self.restype: object | None = None
+
+    def __call__(self, *arguments: object) -> object:
+        return self.implementation(*arguments)
+
+
+class _OwnedConcolicLibrary:
+    def __init__(self) -> None:
+        payload = json.dumps(_concolic_report()).encode("utf-8")
+        self.buffer = ctypes.create_string_buffer(payload)
+        self.freed: list[int] = []
+        self.neverd_lowir_concolic_json_v1 = _ConcolicCFunction(self._lowir_concolic)
+        self.neverd_free_string = _ConcolicCFunction(self._free)
+
+    def _lowir_concolic(self, _session: object, _entry: object, options: object) -> int:
+        typed = options._obj
+        self.seed_pointer_is_null_during_call = not bool(typed.register_seeds)
+        return ctypes.addressof(self.buffer)
+
+    def _free(self, pointer: object) -> None:
+        address = ctypes.cast(pointer, ctypes.c_void_p).value
+        self.freed.append(int(address or 0))
+
+
 class SessionTests(unittest.TestCase):
     def test_default_host_is_lazy_and_cached(self) -> None:
         import neverd_plugin.api as api_module
@@ -454,6 +700,600 @@ class SessionTests(unittest.TestCase):
             session.hunt(max_paths=-1)
         with self.assertRaisesRegex(ValueError, "solver_conflicts"):
             session.hunt(solver_conflicts=1 << 64)
+
+    def test_lowir_concolic_returns_a_frozen_typed_report_and_passes_v1_options(
+        self,
+    ) -> None:
+        from neverd_plugin import (
+            ConcolicFlipStatus,
+            ConcolicProjectionStatus,
+            ConcolicRegisterSeed,
+            ConcolicReplayStatus,
+            ConcolicReport,
+            ConcolicSolverStatus,
+            Session,
+        )
+
+        requested_limits = {
+            "max_steps": 100,
+            "max_block_visits": 4,
+            "max_loop_iterations": 5,
+            "max_flip_attempts": 6,
+            "max_candidates": 7,
+            "solver_max_conflicts": 8,
+            "solver_max_propagations": 9,
+            "solver_max_watch_visits": 10,
+            "solver_max_gates": 11,
+        }
+        host = _ConcolicHost(
+            _concolic_report(
+                seed=(0x10, 0xBEEF, 2),
+                limits=requested_limits,
+            )
+        )
+        session = Session(object(), _native=_FakeNativeBridge(), _host=host)
+        seed = ConcolicRegisterSeed(offset=0x10, value=0xBEEF, bytes=2)
+        result = session.lowir_concolic(
+            0x401000,
+            [seed],
+            max_steps=100,
+            max_block_visits=4,
+            max_loop_iterations=5,
+            max_flip_attempts=6,
+            max_candidates=7,
+            solver_max_conflicts=8,
+            solver_max_propagations=9,
+            solver_max_watch_visits=10,
+            solver_max_gates=11,
+        )
+
+        self.assertIsInstance(result, ConcolicReport)
+        self.assertEqual(result.image.base, 0x400000)
+        self.assertEqual(result.function.entry, 0x401000)
+        self.assertEqual(result.limits.solver_max_width, 256)
+        self.assertEqual(result.initial_seed[0].value, 0xBEEF)
+        self.assertEqual(result.blocks, (0, 1))
+        self.assertEqual(result.decisions[0].occurrence.va, 0x401000)
+        self.assertIs(result.flips[0].status, ConcolicFlipStatus.VERIFIED)
+        self.assertIs(result.flips[0].solver_status, ConcolicSolverStatus.SAT)
+        self.assertIs(
+            result.flips[0].projection_status,
+            ConcolicProjectionStatus.ACCEPTED,
+        )
+        self.assertIs(
+            result.flips[0].replay_status,
+            ConcolicReplayStatus.VERIFIED,
+        )
+        self.assertIs(result.flips[1].status, ConcolicFlipStatus.UNSAT)
+        self.assertIs(result.flips[2].status, ConcolicFlipStatus.SOLVER_UNKNOWN)
+        self.assertIs(result.flips[3].status, ConcolicFlipStatus.PROJECTION_REJECTED)
+        self.assertIs(result.flips[4].status, ConcolicFlipStatus.REPLAY_REJECTED)
+        self.assertEqual(result.candidates[0].seed[0].value, 7)
+        with self.assertRaises(FrozenInstanceError):
+            result.executed_steps = 0
+
+        self.assertEqual(
+            host.seeds,
+            ((0x10, 0xBEEF, 2, 0),),
+        )
+        self.assertFalse(host.seed_pointer_is_null)
+        self.assertEqual(
+            host.options,
+            {
+                "struct_size": 80,
+                "register_seed_count": 1,
+                "max_steps": 100,
+                "max_block_visits": 4,
+                "max_loop_iterations": 5,
+                "max_flip_attempts": 6,
+                "max_candidates": 7,
+                "reserved": 0,
+                "solver_max_conflicts": 8,
+                "solver_max_propagations": 9,
+                "solver_max_watch_visits": 10,
+                "solver_max_gates": 11,
+            },
+        )
+
+    def test_lowir_concolic_empty_seed_uses_a_null_pointer(self) -> None:
+        from neverd_plugin import Session
+
+        host = _ConcolicHost()
+        session = Session(object(), _native=_FakeNativeBridge(), _host=host)
+        session.lowir_concolic(0x401000)
+
+        self.assertTrue(host.seed_pointer_is_null)
+        self.assertEqual(host.seeds, ())
+        self.assertEqual(host.options["register_seed_count"], 0)
+
+    def test_lowir_concolic_owned_json_is_freed_after_copying(self) -> None:
+        from neverd_plugin import Session
+        from neverd_plugin.ffi import HostAPI
+
+        library = _OwnedConcolicLibrary()
+        session = Session(
+            object(),
+            _native=_FakeNativeBridge(),
+            _host=HostAPI(library),
+        )
+        result = session.lowir_concolic(0x401000)
+
+        self.assertEqual(result.function.name, "concolic_branch")
+        self.assertTrue(library.seed_pointer_is_null_during_call)
+        self.assertEqual(library.freed, [ctypes.addressof(library.buffer)])
+        self.assertIs(library.neverd_lowir_concolic_json_v1.restype, ctypes.c_void_p)
+
+    def test_lowir_concolic_rejects_invalid_arguments_before_ffi(self) -> None:
+        from neverd_plugin import ConcolicRegisterSeed, Session
+
+        session = Session(
+            object(), _native=_FakeNativeBridge(), _host=_FailIfCalledHost()
+        )
+        for field, value in (
+            ("address", True),
+            ("max_steps", True),
+            ("max_steps", -1),
+            ("max_steps", 1 << 32),
+            ("solver_max_gates", 1 << 64),
+        ):
+            with self.subTest(field=field, value=value):
+                arguments = {field: value}
+                if field == "address":
+                    with self.assertRaises((TypeError, ValueError)):
+                        session.lowir_concolic(value)
+                else:
+                    with self.assertRaises((TypeError, ValueError)):
+                        session.lowir_concolic(0x401000, **arguments)
+
+        for arguments in (
+            {"offset": True, "value": 0, "bytes": 1},
+            {"offset": 0, "value": True, "bytes": 1},
+            {"offset": 0, "value": 0, "bytes": True},
+            {"offset": -1, "value": 0, "bytes": 1},
+            {"offset": 1 << 64, "value": 0, "bytes": 1},
+            {"offset": 0, "value": 0, "bytes": 0},
+            {"offset": 0, "value": 0, "bytes": 9},
+            {"offset": 0, "value": 0x100, "bytes": 1},
+            {"offset": (1 << 64) - 1, "value": 0, "bytes": 1},
+        ):
+            with self.subTest(seed=arguments):
+                with self.assertRaises((TypeError, ValueError)):
+                    ConcolicRegisterSeed(**arguments)
+
+        with self.assertRaisesRegex(ValueError, "overlap"):
+            session.lowir_concolic(
+                0x401000,
+                (
+                    ConcolicRegisterSeed(offset=0, value=0, bytes=2),
+                    ConcolicRegisterSeed(offset=1, value=0, bytes=1),
+                ),
+            )
+        with self.assertRaisesRegex(ValueError, "4096"):
+            session.lowir_concolic(
+                0x401000,
+                tuple(
+                    ConcolicRegisterSeed(offset=index, value=0, bytes=1)
+                    for index in range(4097)
+                ),
+            )
+
+        consumed = 0
+
+        def excessive_seeds():
+            nonlocal consumed
+            for index in range(5000):
+                consumed += 1
+                yield ConcolicRegisterSeed(offset=index, value=0, bytes=1)
+
+        with self.assertRaisesRegex(ValueError, "4096"):
+            session.lowir_concolic(0x401000, excessive_seeds())
+        self.assertEqual(consumed, 4097)
+
+        with self.assertRaisesRegex(TypeError, "ConcolicRegisterSeed"):
+            session.lowir_concolic(0x401000, [object()])
+
+    def test_lowir_concolic_strictly_validates_native_reports(self) -> None:
+        from neverd_plugin import NeverDError, Session
+
+        def rejected(report: object) -> None:
+            session = Session(
+                object(),
+                _native=_FakeNativeBridge(),
+                _host=_ConcolicHost(report),
+            )
+            with self.assertRaises(NeverDError):
+                session.lowir_concolic(0x401000)
+
+        def overflow_candidates(value: dict[str, object]) -> None:
+            candidates = value["candidates"]
+            assert isinstance(candidates, list)
+            template = copy.deepcopy(candidates[0])
+            candidates.clear()
+            for candidate_id in range(65):
+                candidate = copy.deepcopy(template)
+                candidate["candidate_id"] = candidate_id
+                candidates.append(candidate)
+
+        error = {
+            "schema_version": 1,
+            "adapter": "lowir-concolic-v1",
+            "mode": "concolic",
+            "ok": False,
+            "exhaustive": False,
+            "error_code": "function_not_found",
+            "error": "function not found in native LowIR",
+        }
+        rejected(error)
+
+        mutations: list[tuple[str, Callable[[dict[str, object]], None]]] = [
+            ("schema", lambda value: value.__setitem__("schema_version", True)),
+            ("adapter", lambda value: value.__setitem__("adapter", "future")),
+            ("mode", lambda value: value.__setitem__("mode", "symbolic")),
+            ("ok", lambda value: value.__setitem__("ok", 1)),
+            ("exhaustive", lambda value: value.__setitem__("exhaustive", 0)),
+            (
+                "field type",
+                lambda value: value["image"].__setitem__("bits", "64"),
+            ),
+            (
+                "image format",
+                lambda value: value["image"].__setitem__("format", "WASM"),
+            ),
+            (
+                "image architecture",
+                lambda value: value["image"].__setitem__("arch", "riscv64"),
+            ),
+            (
+                "image bitness",
+                lambda value: value["image"].__setitem__("bits", 32),
+            ),
+            (
+                "image endianness",
+                lambda value: value["image"].__setitem__("endianness", "big"),
+            ),
+            (
+                "enum",
+                lambda value: value["flips"][0].__setitem__("status", "future"),
+            ),
+            (
+                "decision id",
+                lambda value: value["decisions"][0].__setitem__("decision_id", 9),
+            ),
+            (
+                "dangling decision",
+                lambda value: value["flips"][0].__setitem__("decision_id", 99),
+            ),
+            (
+                "dangling candidate",
+                lambda value: value["flips"][0].__setitem__("candidate_id", 99),
+            ),
+            (
+                "seed request binding",
+                lambda value: value["initial_seed"].append(_concolic_seed(0, 0, 1)),
+            ),
+            (
+                "limit request binding",
+                lambda value: value["limits"].__setitem__("solver_max_width", 4096),
+            ),
+            (
+                "executed step budget",
+                lambda value: value.__setitem__("executed_steps", (1 << 16) + 1),
+            ),
+            (
+                "decision count exceeds executed steps",
+                lambda value: value.__setitem__("executed_steps", 4),
+            ),
+            (
+                "flip attempt count",
+                lambda value: value.__setitem__("flip_attempts", 4),
+            ),
+            (
+                "candidate count budget",
+                overflow_candidates,
+            ),
+            (
+                "spurious flip budget flag",
+                lambda value: value.__setitem__("flip_budget_hit", True),
+            ),
+            (
+                "spurious candidate budget flag",
+                lambda value: value.__setitem__("candidate_budget_hit", True),
+            ),
+            (
+                "exact trace with unsupported effects",
+                lambda value: value.__setitem__("unmodelled_ops", 1),
+            ),
+            (
+                "inexact trace with exact reason",
+                lambda value: value.__setitem__("trace_exact", False),
+            ),
+            (
+                "duplicate physical decision occurrence",
+                lambda value: (
+                    value["decisions"][1].__setitem__(
+                        "occurrence",
+                        copy.deepcopy(value["decisions"][0]["occurrence"]),
+                    ),
+                    value["flips"][1].__setitem__(
+                        "occurrence",
+                        copy.deepcopy(value["decisions"][0]["occurrence"]),
+                    ),
+                ),
+            ),
+            (
+                "verified evidence",
+                lambda value: value["flips"][0].__setitem__("solver_status", "unsat"),
+            ),
+            (
+                "unsat evidence",
+                lambda value: value["flips"][1].__setitem__("candidate_id", 0),
+            ),
+            (
+                "unknown evidence",
+                lambda value: value["flips"][2].__setitem__(
+                    "encoding_error", "malformed expression"
+                ),
+            ),
+            (
+                "projection rejection evidence",
+                lambda value: value["flips"][3].__setitem__(
+                    "projection_reason", "none"
+                ),
+            ),
+            (
+                "replay rejection evidence",
+                lambda value: value["flips"][4].__setitem__(
+                    "replay_status", "verified"
+                ),
+            ),
+        ]
+        for name, mutate in mutations:
+            with self.subTest(name=name):
+                report = copy.deepcopy(_concolic_report())
+                mutate(report)
+                rejected(report)
+
+        report = copy.deepcopy(_concolic_report())
+        report["future_root_field"] = {"kept": "compatible"}
+        report["image"]["future_image_field"] = 7
+        session = Session(
+            object(), _native=_FakeNativeBridge(), _host=_ConcolicHost(report)
+        )
+        self.assertEqual(
+            session.lowir_concolic(0x401000).function.name, "concolic_branch"
+        )
+
+    def test_lowir_concolic_accepts_consistent_inexact_native_reports(self) -> None:
+        from neverd_plugin import ConcolicTraceReason, Session
+
+        reports: list[tuple[str, dict[str, object]]] = []
+
+        unsupported = copy.deepcopy(_concolic_report())
+        unsupported.update(
+            trace_exact=False,
+            trace_reason="unsupported_effects",
+            unmodelled_ops=1,
+            flip_attempts=0,
+        )
+        unsupported["flips"].clear()
+        unsupported["candidates"].clear()
+        reports.append(("unsupported effects", unsupported))
+
+        incomplete_lift = copy.deepcopy(_concolic_report())
+        incomplete_lift.update(
+            trace_exact=False,
+            trace_reason="incomplete_lift",
+            flip_attempts=0,
+        )
+        incomplete_lift["function"]["lift_complete"] = False
+        incomplete_lift["flips"].clear()
+        incomplete_lift["candidates"].clear()
+        reports.append(("incomplete lift", incomplete_lift))
+
+        incomplete_concrete = copy.deepcopy(_concolic_report())
+        incomplete_concrete.update(
+            trace_complete=False,
+            trace_exact=False,
+            trace_reason="incomplete_concrete_trace",
+            flip_attempts=0,
+        )
+        incomplete_concrete["flips"].clear()
+        incomplete_concrete["candidates"].clear()
+        reports.append(("incomplete concrete trace", incomplete_concrete))
+
+        incomplete_outcome = copy.deepcopy(_concolic_report())
+        incomplete_outcome.update(
+            trace_outcome="step_budget",
+            trace_complete=False,
+            trace_exact=False,
+            trace_reason="incomplete_outcome",
+            flip_attempts=0,
+        )
+        incomplete_outcome["flips"].clear()
+        incomplete_outcome["candidates"].clear()
+        reports.append(("incomplete outcome", incomplete_outcome))
+
+        invalid_history = copy.deepcopy(_concolic_report())
+        invalid_history.update(
+            trace_exact=False,
+            trace_reason="invalid_decision_history",
+            flip_attempts=0,
+        )
+        invalid_history["decisions"][1]["constraint_prefix"] = 0
+        invalid_history["flips"].clear()
+        invalid_history["candidates"].clear()
+        reports.append(("invalid decision history", invalid_history))
+
+        no_trace = copy.deepcopy(_concolic_report())
+        no_trace.update(
+            trace_outcome=None,
+            trace_complete=False,
+            trace_exact=False,
+            trace_reason="no_trace",
+            executed_steps=0,
+            flip_attempts=0,
+        )
+        no_trace["blocks"].clear()
+        no_trace["decisions"].clear()
+        no_trace["flips"].clear()
+        no_trace["candidates"].clear()
+        reports.append(("no trace", no_trace))
+
+        for name, report in reports:
+            with self.subTest(name=name):
+                parsed = Session(
+                    object(),
+                    _native=_FakeNativeBridge(),
+                    _host=_ConcolicHost(report),
+                ).lowir_concolic(0x401000)
+                self.assertFalse(parsed.trace_exact)
+                self.assertIsNot(parsed.trace_reason, ConcolicTraceReason.NONE)
+                self.assertEqual(parsed.flips, ())
+                self.assertEqual(parsed.candidates, ())
+
+    def test_lowir_concolic_rejects_inexact_reason_evidence_mismatches(
+        self,
+    ) -> None:
+        from neverd_plugin import NeverDError, Session
+
+        def inexact(reason: str) -> dict[str, object]:
+            report = copy.deepcopy(_concolic_report())
+            report.update(
+                trace_exact=False,
+                trace_reason=reason,
+                flip_attempts=0,
+            )
+            report["flips"].clear()
+            report["candidates"].clear()
+            return report
+
+        reports: list[tuple[str, dict[str, object]]] = []
+        reports.append(("unsupported without effects", inexact("unsupported_effects")))
+        reports.append(("complete lift", inexact("incomplete_lift")))
+
+        incomplete_outcome = inexact("incomplete_outcome")
+        incomplete_outcome["trace_complete"] = False
+        reports.append(("terminal incomplete outcome", incomplete_outcome))
+
+        incomplete_concrete = inexact("incomplete_concrete_trace")
+        incomplete_concrete.update(trace_complete=False, unmodelled_ops=1)
+        reports.append(("effects outrank incomplete concrete", incomplete_concrete))
+
+        invalid_history = inexact("invalid_decision_history")
+        invalid_history["function"]["lift_complete"] = False
+        reports.append(("incomplete lift outranks invalid history", invalid_history))
+
+        for reason in ("invalid_initial_seed", "no_trace", "ambiguous_trace"):
+            pretrace = inexact(reason)
+            pretrace["trace_complete"] = False
+            reports.append((f"{reason} with trace evidence", pretrace))
+
+        for name, report in reports:
+            with self.subTest(name=name):
+                session = Session(
+                    object(),
+                    _native=_FakeNativeBridge(),
+                    _host=_ConcolicHost(report),
+                )
+                with self.assertRaises(NeverDError):
+                    session.lowir_concolic(0x401000)
+
+    def test_lowir_concolic_validates_every_flip_status_evidence_matrix(self) -> None:
+        from neverd_plugin import NeverDError, Session
+
+        def run(report: dict[str, object]) -> None:
+            limits = report["limits"]
+            assert isinstance(limits, dict)
+            Session(
+                object(),
+                _native=_FakeNativeBridge(),
+                _host=_ConcolicHost(report),
+            ).lowir_concolic(
+                0x401000,
+                max_flip_attempts=int(limits["max_flip_attempts"]),
+                max_candidates=int(limits["max_candidates"]),
+            )
+
+        variants: list[
+            tuple[
+                str,
+                Callable[[dict[str, object]], None],
+                Callable[[dict[str, object]], None],
+            ]
+        ] = [
+            (
+                "invalid query",
+                lambda value: value["flips"][2].update(
+                    status="invalid_query",
+                    solver_status="invalid",
+                    encoding_error="malformed expression",
+                ),
+                lambda value: value["flips"][2].__setitem__("encoding_error", "none"),
+            ),
+            (
+                "verified duplicate",
+                lambda value: value["flips"][1].update(
+                    status="verified_duplicate",
+                    solver_status="sat",
+                    projection_status="accepted",
+                    replay_status="verified",
+                    candidate_id=0,
+                ),
+                lambda value: value["flips"][1].__setitem__("candidate_id", None),
+            ),
+            (
+                "attempt budget",
+                lambda value: (
+                    value["flips"][1].update(
+                        status="attempt_budget_exceeded",
+                        solver_status="not_run",
+                    ),
+                    value.__setitem__("flip_attempts", 4),
+                    value.__setitem__("flip_budget_hit", True),
+                    value["limits"].__setitem__("max_flip_attempts", 4),
+                ),
+                lambda value: value["flips"][1].__setitem__(
+                    "projection_status", "accepted"
+                ),
+            ),
+            (
+                "candidate budget",
+                lambda value: (
+                    value["flips"][1].update(
+                        status="candidate_budget_exceeded",
+                        solver_status="sat",
+                        projection_status="accepted",
+                        replay_status="verified",
+                        candidate_id=None,
+                    ),
+                    value.__setitem__("candidate_budget_hit", True),
+                    value["limits"].__setitem__("max_candidates", 1),
+                ),
+                lambda value: value["flips"][1].__setitem__("replay_status", "not_run"),
+            ),
+            (
+                "unknown before solver call",
+                lambda value: (
+                    value["flips"][2].update(
+                        solver_status="not_run",
+                        encoding_error="too many gates",
+                    ),
+                    value.__setitem__("flip_attempts", 4),
+                ),
+                lambda value: value["flips"][2].__setitem__("encoding_error", "none"),
+            ),
+        ]
+        for name, configure, break_evidence in variants:
+            with self.subTest(name=name, valid=True):
+                report = copy.deepcopy(_concolic_report())
+                configure(report)
+                run(report)
+            with self.subTest(name=name, valid=False):
+                report = copy.deepcopy(_concolic_report())
+                configure(report)
+                break_evidence(report)
+                with self.assertRaises(NeverDError):
+                    run(report)
 
 
 class EventTests(unittest.TestCase):

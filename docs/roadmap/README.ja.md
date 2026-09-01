@@ -91,7 +91,7 @@ EIP-3540 は Stagnant であり、確定 mainnet behavior として扱いませ�
 | `hunt` トラック | シンクカタログ + 引数事前フィルタ + 宛先容量 + ソルバ証人 |
 | 識別契約 | 形式ごとのシンク解決（PE IAT、ELF PLT、Mach-O dyld bind）と PDB / DWARF / MAP の名前出所 |
 
-**状態：** PE、ELF、Mach-O の Phase 1 は実装済みです。P0 はヒープ寿命と危険なコピーの閉世界解析、および正確なリテラル環境値と最初の標準入力消費に対する schema v1 の追加的な `process-input-v1` 再生証拠を含みます。その他の入力種別は理由付きで再生不能のままです。P1 はスタック／グローバル越境、未初期化ローカル読み、書式文字列をカバーします。未知または部分的にしか適用できない呼び出し効果は UNKNOWN のままです。判定と識別の被覆は [`unittests/safety`](../../unittests/safety) と、全ホストで必須の PE/ELF/Mach-O × x86-64/AArch64 6 セル fixture 行列を実行するエンドツーエンド [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) で固定。詳細は [メモリ安全性の監査とハント](../memory-safety.ja.md)。P2 のバイナリ検査挿入、ハイブリッド fuzz、より広い手続き間到達可能性は Phase-1 受け入れ範囲外の後続ロードマップ作業です。
+**状態：** PE、ELF、Mach-O の Phase 1 は実装済みです。P0 はヒープ寿命と危険なコピーの閉世界解析、および正確なリテラル環境値と最初の標準入力消費に対する schema v1 の追加的な `process-input-v1` 再生証拠を含みます。その他の入力種別は理由付きで再生不能のままです。P1 はスタック／グローバル越境、未初期化ローカル読み、書式文字列をカバーします。未知または部分的にしか適用できない呼び出し効果は UNKNOWN のままです。判定と識別の被覆は [`unittests/safety`](../../unittests/safety) と、全ホストで必須の PE/ELF/Mach-O × x86-64/AArch64 6 セル fixture 行列を実行するエンドツーエンド [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) で固定。詳細は [メモリ安全性の監査とハント](../memory-safety.ja.md)。P2 の基盤の一つは実装済みです。バージョン化された `lowir-concolic-v1` は有界なネイティブ LowIR トレースを一本たどり、再生検証済みのレジスタ seed だけを公開します。C、CLI、Python を通じて PE/ELF/Mach-O × x86-64/AArch64 の証拠を固定しています。バイナリ検査挿入、ハイブリッド fuzz の corpus スケジューリングと変異、メモリ入力投影、より広い手続き間到達可能性は Phase-1 受け入れ範囲外の後続作業です。
 
 ---
 
@@ -118,5 +118,5 @@ native format、Fusaka までの legacy EVM decode/lifting、Solana SBF、メモ
 | EVM legacy decode/lifting | Fusaka まで完了；回帰試験済み |
 | EVM source reconstruction | 継続 — evidence-backed かつ保守的 |
 | Solana eBPF（SBF）逆コンパイル | 完了 — v0-v4、C、Rust、LLVM；回帰試験済み |
-| メモリ安全性の監査とハント | Phase 1 完了 — P0/P1 解析、再生証拠、ネイティブ形式／アーキテクチャ行列を実装済み；P2 は後続予定 |
+| メモリ安全性の監査とハント | Phase 1 完了 — P0/P1 解析と再生証拠を実装済み；再生検証済み LowIR concolic レジスタ seed が P2 基盤として完成し、残る P2 オーケストレーションは後続予定 |
 | エンジンとプロダクト強化 | 継続 |

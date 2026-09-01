@@ -1,4 +1,5 @@
 add_neverd_component_library(NeverDSymbolic
+  exec/SymConcrete.cpp
   exec/SymDispatch.cpp
   exec/SymExec.cpp
   exec/SymExplore.cpp

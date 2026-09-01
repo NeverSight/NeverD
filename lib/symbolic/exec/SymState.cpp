@@ -29,6 +29,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <limits>
 
 namespace neverd::symbolic {
 
@@ -84,7 +85,12 @@ SymRef SymState::byteAt(Bank &B, uint64_t Offset) {
     // Before anything was forgotten, name an untouched location for where it
     // is.  Once it has been, the shared epoch above keeps copied states equal
     // while independently forgetful forks receive different values.
-    Input = Ctx->mkVar(byteName(B.Name, Offset), kByteBits);
+    const std::string Name = byteName(B.Name, Offset);
+    Input = B.InputKind
+                ? Ctx->mkInputVar(
+                      Name, kByteBits,
+                      SymInputOrigin{*B.InputKind, Offset, 1, B.Epoch}, Order)
+                : Ctx->mkVar(Name, kByteBits);
   }
   B.Bytes.emplace(Offset, Input);
   return Input;
@@ -104,7 +110,8 @@ SymRef SymState::joinBytes(llvm::ArrayRef<SymRef> Bytes) const {
 }
 
 SymRef SymState::readBank(Bank &B, uint64_t Offset, uint16_t Bytes) {
-  assert(Bytes > 0 && "a read of no bytes has no value");
+  if (Bytes == 0 || Offset > std::numeric_limits<uint64_t>::max() - (Bytes - 1))
+    return {};
 
   // Keep an untouched word as one input rather than eagerly turning it into a
   // concatenation of unrelated byte variables.  The write records its byte
@@ -117,9 +124,18 @@ SymRef SymState::readBank(Bank &B, uint64_t Offset, uint16_t Bytes) {
   if (!HasMaterialisedByte) {
     const std::string Name = byteName(B.Name, Offset);
     const uint32_t Width = uint32_t(Bytes) * kByteBits;
-    SymRef Input = B.Unknowns ? Ctx->mkFreshVar(Width, Name + "$")
-                              : Ctx->mkVar(Name, Width);
-    writeBank(B, Offset, Input);
+    SymRef Input;
+    if (B.Unknowns) {
+      Input = Ctx->mkFreshVar(Width, Name + "$");
+    } else if (B.InputKind) {
+      Input = Ctx->mkInputVar(
+          Name, Width, SymInputOrigin{*B.InputKind, Offset, Bytes, B.Epoch},
+          Order);
+    } else {
+      Input = Ctx->mkVar(Name, Width);
+    }
+    if (!writeBank(B, Offset, Input))
+      return {};
     if (B.Unknowns)
       for (uint16_t I = 0; I < Bytes; ++I)
         B.Unknowns->Values.emplace(Offset + I, B.Bytes.at(Offset + I));
@@ -133,10 +149,17 @@ SymRef SymState::readBank(Bank &B, uint64_t Offset, uint16_t Bytes) {
   return joinBytes(Parts);
 }
 
-void SymState::writeBank(Bank &B, uint64_t Offset, SymRef Value) {
+bool SymState::writeBank(Bank &B, uint64_t Offset, SymRef Value) {
+  if (!Value.isValid())
+    return false;
   const uint32_t Width = Ctx->width(Value);
-  assert(Width % kByteBits == 0 && "a stored value must be whole bytes");
-  const uint16_t Bytes = static_cast<uint16_t>(Width / kByteBits);
+  if (Width == 0 || Width % kByteBits != 0)
+    return false;
+  const uint32_t ByteCount = Width / kByteBits;
+  if (ByteCount > std::numeric_limits<uint16_t>::max() ||
+      Offset > std::numeric_limits<uint64_t>::max() - (ByteCount - 1))
+    return false;
+  const uint16_t Bytes = static_cast<uint16_t>(ByteCount);
 
   for (uint16_t I = 0; I < Bytes; ++I) {
     // Bit position of byte I of the address range, which is the low end of the
@@ -146,11 +169,14 @@ void SymState::writeBank(Bank &B, uint64_t Offset, SymRef Value) {
                              : Width - (uint32_t(I) + 1) * kByteBits;
     B.Bytes[Offset + I] = Ctx->mkExtract(Value, Low, kByteBits);
   }
+  return true;
 }
 
 void SymState::forget(Bank &B) {
   B.Bytes.clear();
   B.Unknowns = std::make_shared<UnknownBytes>();
+  if (B.Epoch != std::numeric_limits<uint64_t>::max())
+    ++B.Epoch;
 }
 
 SymRef SymState::read(SymSpace Space, uint64_t Offset, uint16_t Bytes) {
@@ -158,7 +184,7 @@ SymRef SymState::read(SymSpace Space, uint64_t Offset, uint16_t Bytes) {
 }
 
 void SymState::write(SymSpace Space, uint64_t Offset, SymRef Value) {
-  writeBank(bank(Space), Offset, Value);
+  (void)writeBank(bank(Space), Offset, Value);
 }
 
 size_t SymState::numLiveBytes() const {
@@ -257,12 +283,15 @@ void SymState::recordLoadOrigin(SymRef Value, LoadOrigin Origin) {
 }
 
 SymRef SymState::load(SymRef Addr, uint16_t Bytes) {
-  assert(Bytes > 0);
+  if (!Addr.isValid() || Bytes == 0)
+    return {};
 
   Location Where = locate(Addr);
   SymRef Value = !Where.Base.isValid()
                      ? readBank(AbsoluteMemory, Where.Offset, Bytes)
                      : readBank(bankFor(Where), Where.Offset, Bytes);
+  if (!Value.isValid())
+    return {};
   // Keep what it was reading.  The value is only a name, so without this the
   // address is lost exactly when it becomes the interesting part.
   recordLoadOrigin(Value, LoadOrigin{Addr, Bytes});
@@ -270,20 +299,30 @@ SymRef SymState::load(SymRef Addr, uint16_t Bytes) {
 }
 
 bool SymState::store(SymRef Addr, SymRef Value) {
+  if (!Addr.isValid() || !Value.isValid()) {
+    clobberMemory();
+    return false;
+  }
   Location Where = locate(Addr);
   if (!Where.Base.isValid()) {
     // One number cannot be another, so absolute memory keeps everything it
     // held; but nothing rules out this address being where some pointer
     // pointed, so what was reached through a pointer is given up.
+    if (!writeBank(AbsoluteMemory, Where.Offset, Value)) {
+      clobberMemory();
+      return false;
+    }
     forgetRegions(SymRef());
-    writeBank(AbsoluteMemory, Where.Offset, Value);
     return true;
   }
 
   // Within the region the displacement says exactly which bytes changed, which
   // is what keeps two frame slots two frame slots.  Across regions nothing
   // says anything, so the rest is given up.
-  writeBank(bankFor(Where), Where.Offset, Value);
+  if (!writeBank(bankFor(Where), Where.Offset, Value)) {
+    clobberMemory();
+    return false;
+  }
   forget(AbsoluteMemory);
   forgetRegions(Where.Base);
   MemoryClobbered = true;

@@ -35,6 +35,14 @@ operations; pass `include_expressions=True` to include path predicates. Calls
 without summaries and stores through unresolved addresses are conservative
 approximations, so they make `exact` false and contribute to `unmodelled_ops`.
 
+For verified branch-input generation, `session.lowir_concolic(address, seeds)`
+accepts typed `ConcolicRegisterSeed` entry-register ranges. It follows one
+exact LowIR trace, negates each conditional decision under its exact earlier
+prefix, and exposes a candidate only after a fresh replay reaches the same
+occurrence with the opposite polarity. The report always has
+`exhaustive=False`; typed solver, projection, replay, and budget statuses make
+every refusal distinguishable from a verified seed.
+
 Proof-gated synthesis and transactional LLVM optimization are also available
 without a session:
 

@@ -72,6 +72,9 @@ cl::SubCommand AuditCmd("audit",
                         "stack reads");
 cl::SubCommand HuntCmd("hunt",
                        "Hunt dangerous-copy overflows and report a witness");
+cl::SubCommand
+    ConcolicCmd("concolic",
+                "Generate replay-verified LowIR conditional-branch seeds");
 // Takes text rather than a binary, so it is not among the subcommands that
 // register the positional input file below.
 cl::SubCommand SimplifyCmd("simplify", "Simplify a bitvector expression");
@@ -475,6 +478,79 @@ cl::opt<unsigned long long>
     SafetySolverConflicts("solver-conflicts",
                           cl::desc("Solver conflict budget (0 = default)"),
                           cl::init(0), cl::sub(HuntCmd), cl::sub(AuditCmd));
+
+//===----------------------------------------------------------------------===//
+// LowIR concolic options
+//===----------------------------------------------------------------------===//
+
+cl::list<std::string> ConcolicInputFiles(cl::Positional, cl::desc("<binary>"),
+                                         cl::ZeroOrMore, cl::sub(ConcolicCmd));
+
+ConcolicStringList
+    ConcolicOutputFiles("o", cl::desc("Write the JSON report to this file"),
+                        cl::ZeroOrMore, cl::ValueOptional,
+                        cl::value_desc("file"), cl::sub(ConcolicCmd));
+
+ConcolicStringList
+    ConcolicFunctions("func",
+                      cl::desc("Function name or hexadecimal entry address"),
+                      cl::ZeroOrMore, cl::ValueOptional,
+                      cl::value_desc("name|hex-va"), cl::sub(ConcolicCmd));
+
+ConcolicStringList ConcolicSeeds(
+    "seed",
+    cl::desc("Entry register seed: offset-or-ABI-alias:bytes=value; decimal "
+             "and 0x-prefixed numbers are accepted"),
+    cl::ZeroOrMore, cl::ValueOptional, cl::value_desc("location:bytes=value"),
+    cl::sub(ConcolicCmd));
+
+ConcolicStringList
+    ConcolicMaxSteps("max-steps",
+                     cl::desc("Maximum operations along the concrete trace"),
+                     cl::ZeroOrMore, cl::ValueOptional, cl::value_desc("count"),
+                     cl::sub(ConcolicCmd));
+
+ConcolicStringList ConcolicMaxBlockVisits(
+    "max-block-visits", cl::desc("Maximum visits to one block"), cl::ZeroOrMore,
+    cl::ValueOptional, cl::value_desc("count"), cl::sub(ConcolicCmd));
+
+ConcolicStringList
+    ConcolicMaxLoopIterations("max-loop-iterations",
+                              cl::desc("Maximum visits to one loop header"),
+                              cl::ZeroOrMore, cl::ValueOptional,
+                              cl::value_desc("count"), cl::sub(ConcolicCmd));
+
+ConcolicStringList ConcolicMaxFlipAttempts(
+    "max-flip-attempts", cl::desc("Maximum conditional-decision solver checks"),
+    cl::ZeroOrMore, cl::ValueOptional, cl::value_desc("count"),
+    cl::sub(ConcolicCmd));
+
+ConcolicStringList
+    ConcolicMaxCandidates("max-candidates",
+                          cl::desc("Maximum distinct replay-verified seeds"),
+                          cl::ZeroOrMore, cl::ValueOptional,
+                          cl::value_desc("count"), cl::sub(ConcolicCmd));
+
+ConcolicStringList ConcolicSolverConflicts(
+    "solver-conflicts", cl::desc("SAT conflict budget (0 = bounded default)"),
+    cl::ZeroOrMore, cl::ValueOptional, cl::value_desc("count"),
+    cl::sub(ConcolicCmd));
+
+ConcolicStringList ConcolicSolverPropagations(
+    "solver-propagations",
+    cl::desc("SAT propagation budget (0 = bounded default)"), cl::ZeroOrMore,
+    cl::ValueOptional, cl::value_desc("count"), cl::sub(ConcolicCmd));
+
+ConcolicStringList ConcolicSolverWatchVisits(
+    "solver-watch-visits",
+    cl::desc("SAT watched-clause visit budget (0 = bounded default)"),
+    cl::ZeroOrMore, cl::ValueOptional, cl::value_desc("count"),
+    cl::sub(ConcolicCmd));
+
+ConcolicStringList ConcolicSolverGates(
+    "solver-gates", cl::desc("Bit-blasting gate budget (0 = bounded default)"),
+    cl::ZeroOrMore, cl::ValueOptional, cl::value_desc("count"),
+    cl::sub(ConcolicCmd));
 
 //===----------------------------------------------------------------------===//
 // JSON output option (shared)

@@ -31,6 +31,7 @@
 #include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
+#include <map>
 #include <optional>
 #include <utility>
 
@@ -64,6 +65,25 @@ SymRef SymPath::predicate(SymContext &Ctx) const {
 
 namespace {
 
+struct DecisionSite {
+  int BlockId = -1;
+  size_t OpIndex = 0;
+  SymDecisionKind Kind = SymDecisionKind::ConditionalBranch;
+
+  bool operator<(const DecisionSite &Other) const {
+    if (BlockId != Other.BlockId)
+      return BlockId < Other.BlockId;
+    if (OpIndex != Other.OpIndex)
+      return OpIndex < Other.OpIndex;
+    return Kind < Other.Kind;
+  }
+
+  bool operator==(const DecisionSite &Other) const {
+    return BlockId == Other.BlockId && OpIndex == Other.OpIndex &&
+           Kind == Other.Kind;
+  }
+};
+
 /// A path still being walked.  Forking one is copying it.
 struct Frontier {
   Frontier(SymState State, int BlockId)
@@ -71,11 +91,16 @@ struct Frontier {
 
   SymState State;
   std::vector<SymRef> Constraints;
+  std::vector<SymBranchDecision> BranchDecisions;
   std::vector<int> Blocks;
   std::vector<SymExecutedOp> ExecutedOps;
   std::vector<SymCallResult> CallResults;
   /// Number of times each exact LowIR call has executed on this path.
   llvm::DenseMap<uint64_t, unsigned> CallInvocations;
+  /// Number of times each physical control decision has executed on this path.
+  /// This advances even for a constant decision so a later loop occurrence
+  /// cannot be renumbered merely because an earlier one folded away.
+  std::map<DecisionSite, unsigned> DecisionInvocations;
   /// How often this path has entered each block, which is what the loop bound
   /// is counted against.  Per path, because two paths through a loop have
   /// nothing to say about each other.
@@ -102,6 +127,7 @@ struct Frontier {
   unsigned CallHavocs = 0;
   unsigned MemoryHavocs = 0;
   unsigned ConcreteBranches = 0;
+  bool ConcreteComplete = false;
   unsigned MergedPaths = 0;
 };
 
@@ -114,6 +140,18 @@ bool sameCallInvocations(const llvm::DenseMap<uint64_t, unsigned> &Left,
     if (It == Right.end() || It->second != Entry.second)
       return false;
   }
+  return true;
+}
+
+bool sameDecisionInvocations(const std::map<DecisionSite, unsigned> &Left,
+                             const std::map<DecisionSite, unsigned> &Right) {
+  if (Left.size() != Right.size())
+    return false;
+  auto L = Left.begin();
+  auto R = Right.begin();
+  for (; L != Left.end(); ++L, ++R)
+    if (!(L->first == R->first) || L->second != R->second)
+      return false;
   return true;
 }
 
@@ -203,6 +241,20 @@ bool addConstraint(SymContext &Ctx, Frontier &F, SymRef Condition) {
   return !Decided || !Decided->isZero();
 }
 
+SymDecisionOccurrence nextDecisionOccurrence(Frontier &F, const LowOp &Op,
+                                             size_t OpIndex,
+                                             SymDecisionKind Kind) {
+  const DecisionSite Site{F.BlockId, OpIndex, Kind};
+  const unsigned Invocation = F.DecisionInvocations[Site]++;
+  return {Op.Addr, Op.Seq, F.BlockId, OpIndex, Invocation, Kind};
+}
+
+void addBranchDecision(Frontier &F, SymRef Condition, bool Taken, bool Concrete,
+                       const SymDecisionOccurrence &Occurrence) {
+  F.BranchDecisions.push_back(
+      {Condition, Taken, F.Constraints.size(), Concrete, Occurrence});
+}
+
 /// Take the larger of each count, so a path standing for two is bounded by
 /// whichever of them was closest to its loop bound.
 void mergeVisits(llvm::DenseMap<int, unsigned> &Into,
@@ -211,6 +263,14 @@ void mergeVisits(llvm::DenseMap<int, unsigned> &Into,
     unsigned &Count = Into[Entry.first];
     Count = std::max(Count, Entry.second);
   }
+}
+
+size_t commonConstraintPrefix(const std::vector<SymRef> &A,
+                              const std::vector<SymRef> &B) {
+  size_t Common = 0;
+  while (Common < A.size() && Common < B.size() && A[Common] == B[Common])
+    ++Common;
+  return Common;
 }
 
 /// What two paths that met again jointly assume.
@@ -222,9 +282,7 @@ void mergeVisits(llvm::DenseMap<int, unsigned> &Into,
 std::vector<SymRef> unionOfConstraints(SymContext &Ctx,
                                        const std::vector<SymRef> &A,
                                        const std::vector<SymRef> &B) {
-  size_t Common = 0;
-  while (Common < A.size() && Common < B.size() && A[Common] == B[Common])
-    ++Common;
+  const size_t Common = commonConstraintPrefix(A, B);
 
   std::vector<SymRef> Merged;
   Merged.reserve(Common + 1);
@@ -243,6 +301,26 @@ std::vector<SymRef> unionOfConstraints(SymContext &Ctx,
   };
   Merged.push_back(Ctx.mkOr(rest(A), rest(B)));
   return Merged;
+}
+
+/// Keep only decisions whose selected constraints remain an exact prefix of a
+/// merged predicate.  A disjunction represents both divergent routes and has
+/// no single Taken value, so retaining either route's later decisions would
+/// make ConstraintPrefix point into a different predicate.
+void retainCommonBranchDecisions(Frontier &Into, const Frontier &From,
+                                 size_t CommonConstraints) {
+  size_t CommonDecisions = 0;
+  while (CommonDecisions < Into.BranchDecisions.size() &&
+         CommonDecisions < From.BranchDecisions.size()) {
+    const SymBranchDecision &A = Into.BranchDecisions[CommonDecisions];
+    const SymBranchDecision &B = From.BranchDecisions[CommonDecisions];
+    if (A.Condition != B.Condition || A.Taken != B.Taken ||
+        A.ConstraintPrefix != B.ConstraintPrefix || A.Concrete != B.Concrete ||
+        A.Occurrence != B.Occurrence || A.ConstraintPrefix >= CommonConstraints)
+      break;
+    ++CommonDecisions;
+  }
+  Into.BranchDecisions.resize(CommonDecisions);
 }
 
 /// Everything the walk needs to know about the shape of the function, worked
@@ -529,6 +607,7 @@ SymPath finish(Frontier &&F, PathOutcome Outcome, SymRef Target = SymRef(),
   return SymPath{Outcome,
                  F.BlockId,
                  std::move(F.Constraints),
+                 std::move(F.BranchDecisions),
                  std::move(F.Blocks),
                  std::move(F.ExecutedOps),
                  std::move(F.State),
@@ -541,6 +620,7 @@ SymPath finish(Frontier &&F, PathOutcome Outcome, SymRef Target = SymRef(),
                  F.CallHavocs,
                  F.MemoryHavocs,
                  F.ConcreteBranches,
+                 F.ConcreteComplete,
                  F.MergedPaths};
 }
 
@@ -551,7 +631,8 @@ SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,
   std::vector<SymPath> Finished;
   BlockIndex Index(Func);
   if (Index.entry() < 0)
-    return SymExploration{std::move(Finished), true, 0, 0, 0, 0};
+    return SymExploration{
+        std::move(Finished), Opts.Concolic == nullptr, 0, 0, 0, 0};
 
   // There is one concrete run, so the shadow can only be following one path.
   // It is consulted until it first fails to answer and never afterwards, which
@@ -560,15 +641,20 @@ SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,
   ConcreteShadow *Shadow = Opts.Concolic;
   bool ShadowTrusted = Shadow != nullptr;
   if (Shadow) {
-    Shadow->reset();
-    for (const SymConcreteRegister &Seed : Opts.ConcolicSeed)
-      Shadow->setRegister(Seed.Offset, Seed.Value);
+    ShadowTrusted = Shadow->reset(Opts.ByteOrder);
+    for (const SymConcreteRegister &Seed : Opts.ConcolicSeed) {
+      if (ShadowTrusted &&
+          !Shadow->setRegister(Seed.Offset, Seed.Bytes, Seed.Value))
+        ShadowTrusted = false;
+    }
   }
 
   llvm::SmallVector<Frontier, 8> Pending;
   // Paths paused at a join, waiting to see whether another one arrives there.
   llvm::SmallVector<Frontier, 8> Waiting;
-  Pending.push_back(Frontier(SymState(Ctx, Opts.ByteOrder), Index.entry()));
+  Frontier Initial(SymState(Ctx, Opts.ByteOrder), Index.entry());
+  Initial.ConcreteComplete = ShadowTrusted;
+  Pending.push_back(std::move(Initial));
 
   unsigned ReachablePaths = 0;
   size_t ExecutedSteps = 0;
@@ -596,8 +682,16 @@ SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,
     for (Frontier &Waiter : Waiting) {
       if (Waiter.BlockId != F.BlockId || Waiter.NextOp != F.NextOp ||
           !sameCallInvocations(Waiter.CallInvocations, F.CallInvocations) ||
+          !sameDecisionInvocations(Waiter.DecisionInvocations,
+                                   F.DecisionInvocations) ||
           !Waiter.State.mergeIdentical(F.State))
         continue;
+      const size_t CommonConstraints =
+          commonConstraintPrefix(Waiter.Constraints, F.Constraints);
+      retainCommonBranchDecisions(Waiter, F, CommonConstraints);
+      Waiter.ConcreteBranches = static_cast<unsigned>(llvm::count_if(
+          Waiter.BranchDecisions,
+          [](const SymBranchDecision &Decision) { return Decision.Concrete; }));
       Waiter.Constraints =
           unionOfConstraints(Ctx, Waiter.Constraints, F.Constraints);
       mergeVisits(Waiter.Visits, F.Visits);
@@ -606,6 +700,7 @@ SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,
       Waiter.OpaqueOps = std::max(Waiter.OpaqueOps, F.OpaqueOps);
       Waiter.CallHavocs = std::max(Waiter.CallHavocs, F.CallHavocs);
       Waiter.MemoryHavocs = std::max(Waiter.MemoryHavocs, F.MemoryHavocs);
+      Waiter.ConcreteComplete &= F.ConcreteComplete;
       // Everything the arriving path already stood for is now stood for here.
       MergedPaths += F.MergedPaths + 1;
       Waiter.MergedPaths += F.MergedPaths + 1;
@@ -762,8 +857,10 @@ SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,
         // A terminator is not handed to the shadow: what the walk wants from
         // it there is the value of an operand, and a concrete engine modelling
         // one straight line has nowhere to go from a branch.
-        if (ShadowTrusted)
-          ShadowTrusted = Shadow->step(Op);
+        if (ShadowTrusted && !Shadow->step(Op)) {
+          ShadowTrusted = false;
+          Current.ConcreteComplete = false;
+        }
       }
       Current.UnmodelledOps += Exec.unmodelledCount();
       Current.OpaqueOps += Exec.opaqueOperationCount();
@@ -829,6 +926,11 @@ SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,
 
       if (Result == StepResult::Branch ||
           Result == StepResult::IndirectBranch) {
+        std::optional<SymDecisionOccurrence> IndirectOccurrence;
+        if (Result == StepResult::IndirectBranch)
+          IndirectOccurrence =
+              nextDecisionOccurrence(Current, *Terminator, TerminatorIndex,
+                                     SymDecisionKind::IndirectBranchTarget);
         ControlTargetResolution Resolution = resolveControlTarget(
             Ctx, Index, *Block, TerminatorIndex, Exec.branchTarget());
         if (Resolution.Invalid) {
@@ -839,21 +941,31 @@ SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,
         }
 
         if (Resolution.BlockId < 0 && !Resolution.IsConcrete &&
-            Result == StepResult::IndirectBranch && ShadowTrusted &&
-            Terminator && Terminator->NumInputs >= 1) {
+            Result == StepResult::IndirectBranch && ShadowTrusted) {
           // The expression could not say where this goes, but the concrete run
-          // went somewhere, and it went there for a reason the path condition
-          // already records.
-          if (std::optional<uint64_t> Concrete =
-                  Shadow->value(Terminator->Inputs[0])) {
-            const uint32_t Width = Exec.branchTarget().isValid()
-                                       ? Ctx.width(Exec.branchTarget())
-                                       : 64;
-            Resolution =
-                resolveControlTarget(Ctx, Index, *Block, TerminatorIndex,
-                                     Ctx.mkConst(Width, *Concrete));
+          // did.  Commit that observation to the path before using it for
+          // control flow, so the returned predicate explains the chosen target.
+          std::optional<uint64_t> Concrete;
+          if (Terminator && Terminator->NumInputs >= 1)
+            Concrete = Shadow->value(Terminator->Inputs[0]);
+          const SymRef SymbolicTarget = Exec.branchTarget();
+          if (Concrete && SymbolicTarget.isValid()) {
+            const uint32_t Width = Ctx.width(SymbolicTarget);
+            const SymRef ConcreteTarget = Ctx.mkConst(Width, *Concrete);
+            const SymRef TargetEquality =
+                Ctx.mkEq(SymbolicTarget, ConcreteTarget);
+            ++Current.ConcreteBranches;
+            addBranchDecision(Current, TargetEquality, true, true,
+                              *IndirectOccurrence);
+            if (!addConstraint(Ctx, Current, TargetEquality)) {
+              Record(std::move(Current), PathOutcome::Infeasible);
+              break;
+            }
+            Resolution = resolveControlTarget(Ctx, Index, *Block,
+                                              TerminatorIndex, ConcreteTarget);
           } else {
             ShadowTrusted = false;
+            Current.ConcreteComplete = false;
           }
         }
         if (Resolution.Invalid) {
@@ -877,6 +989,9 @@ SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,
       // A conditional branch.  Where the predicate already came out constant
       // the code has decided, and only one side exists to walk — which is what
       // silently undoes an opaque predicate, no rule required.
+      const SymDecisionOccurrence Occurrence =
+          nextDecisionOccurrence(Current, *Terminator, TerminatorIndex,
+                                 SymDecisionKind::ConditionalBranch);
       SymRef Condition = Exec.branchCondition();
       const std::optional<size_t> InstructionContinuation =
           predicatedInstructionContinuation(*Block, TerminatorIndex);
@@ -934,13 +1049,18 @@ SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,
       // choice: the concrete run went one way, and recording which way and why
       // is what it was asked for.
       std::optional<uint64_t> Decision;
-      if (ShadowTrusted && Terminator && Terminator->NumInputs >= 2) {
-        Decision = Shadow->value(Terminator->Inputs[1]);
-        ShadowTrusted = Decision.has_value();
+      if (ShadowTrusted) {
+        if (Terminator && Terminator->NumInputs >= 2)
+          Decision = Shadow->value(Terminator->Inputs[1]);
+        if (!Decision) {
+          ShadowTrusted = false;
+          Current.ConcreteComplete = false;
+        }
       }
       if (Decision) {
         const bool Taking = *Decision != 0;
         ++Current.ConcreteBranches;
+        addBranchDecision(Current, Condition, Taking, true, Occurrence);
         if (!addConstraint(Ctx, Current,
                            Taking ? Condition : Ctx.mkNot(Condition))) {
           Record(std::move(Current), PathOutcome::Infeasible);
@@ -971,12 +1091,14 @@ SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,
       // results.
       if (NotTaken >= 0) {
         Frontier Fork = Current;
+        addBranchDecision(Fork, Condition, false, false, Occurrence);
         if (addConstraint(Ctx, Fork, Ctx.mkNot(Condition)))
           ContinueAt(Fork, false);
         else
           Fork.Infeasible = true;
         Pending.push_back(std::move(Fork));
       }
+      addBranchDecision(Current, Condition, true, false, Occurrence);
       if (!addConstraint(Ctx, Current, Condition)) {
         Record(std::move(Current), PathOutcome::Infeasible);
         break;
@@ -999,10 +1121,13 @@ SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,
   auto reachable = [](const Frontier &F) { return !F.Infeasible; };
   const bool HasReachableFrontier =
       llvm::any_of(Pending, reachable) || llvm::any_of(Waiting, reachable);
-  return SymExploration{
-      std::move(Finished), !HitIncompleteOutcome && !HasReachableFrontier,
-      ReachablePaths,      ExecutedSteps,
-      UnmodelledOps,       MergedPaths};
+  return SymExploration{std::move(Finished),
+                        Opts.Concolic == nullptr && !HitIncompleteOutcome &&
+                            !HasReachableFrontier,
+                        ReachablePaths,
+                        ExecutedSteps,
+                        UnmodelledOps,
+                        MergedPaths};
 }
 
 std::vector<SymPath> explorePaths(SymContext &Ctx, const LowFunc &Func,

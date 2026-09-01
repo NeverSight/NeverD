@@ -129,6 +129,34 @@ replaced by unknown state; unsupported LowIR operations, calls without
 summaries, and stores through unresolved addresses are counted in
 `unmodelled_ops`. EVM and SBF sessions do not expose native LowIR exploration.
 
+### Verified LowIR concolic branch flips
+
+`session.lowir_concolic` follows one native LowIR trace from explicit
+entry-register byte ranges and returns only solver-generated candidates that a
+fresh replay verifies at the same control-decision occurrence:
+
+```python
+from neverd_plugin import ConcolicRegisterSeed
+
+report = session.lowir_concolic(
+    0x401000,
+    [ConcolicRegisterSeed(offset=56, bytes=4, value=0)],
+)
+for flip in report.flips:
+    if flip.candidate_id is not None:
+        print(report.candidates[flip.candidate_id].seed)
+```
+
+The register offset is NeverD's architecture register-file byte offset, not a
+native pointer or register number. Seed widths are 1 through 8 bytes; ranges
+must not overlap and every value must fit its declared width. The report is
+always non-exhaustive. `trace_complete` says the selected concrete route
+terminated; `trace_exact` additionally requires a complete lift and no opaque,
+unmodelled, call-havoc, or memory-havoc effect. UNSAT, solver limits,
+projection refusal, replay refusal, and candidate limits remain typed flip
+results rather than exceptions. Local argument errors raise `TypeError` or
+`ValueError`; native request and schema failures raise `NeverDError`.
+
 ### Memory-safety audit and hunt
 
 `session.audit()` and `session.hunt()` return parsed JSON reports (the same

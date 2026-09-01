@@ -197,8 +197,10 @@ SymRef Parser::parsePrimary() {
     uint32_t W = parseWidthSuffix(Width);
     if (Failed)
       return {};
-    // mkVar asserts on a width change, and text from a user is exactly where
-    // that would fire, so the clash becomes a diagnostic here instead.
+    // Keep a name-only declaration width-stable for readable parsed formulas.
+    // Width-specific and structured identities can coexist internally, but a
+    // textual name with one unambiguous declaration must not silently change
+    // meaning across occurrences.
     if (std::optional<uint32_t> Existing = Ctx.findVar(Id.Text)) {
       uint32_t Have = Ctx.varInfo(*Existing).Width;
       if (Have != W) {
@@ -206,6 +208,12 @@ SymRef Parser::parsePrimary() {
                             llvm::Twine(Have));
         return {};
       }
+      return Ctx.varRef(*Existing);
+    }
+    if (Ctx.hasVarName(Id.Text)) {
+      fail(Id.Offset,
+           "'" + Id.Text + "' names more than one symbolic variable");
+      return {};
     }
     return Ctx.mkVar(Id.Text, W);
   }

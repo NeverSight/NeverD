@@ -13,6 +13,7 @@ add_neverd_tool(neverd
   cmd/NeverDCmdOptimizeIR.cpp
   cmd/NeverDCmdTranslate.cpp
   cmd/NeverDCmdSafety.cpp
+  cmd/NeverDCmdConcolic.cpp
 
   LINK_LIBS
   neverd_shared

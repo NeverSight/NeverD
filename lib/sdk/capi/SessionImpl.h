@@ -38,6 +38,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -83,6 +84,10 @@ struct Session {
   std::vector<FuncInfo> Functions;
 
   PatchResult LastPatch;
+
+  /// Internal JSON-boundary seam used to prove that no C++ exception crosses
+  /// extern C. Empty in production.
+  std::function<void()> LowIRConcolicBeforeRunForTesting;
 
   // Instruction-substitution toggle, consulted by every patch
   // entry point.  LastSubstitutionCount records how many operators the most

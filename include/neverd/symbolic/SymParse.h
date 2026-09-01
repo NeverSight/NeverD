@@ -14,8 +14,11 @@
 ///
 ///     parseSymExpr(Ctx, Ctx.toString(R), Ctx.width(R)).Root == R
 ///
-/// for every \p R in \p Ctx.  The parser and printer share one precedence
-/// definition so the two halves of that identity stay aligned.
+/// for every \p R in \p Ctx.  When two exact variables share a diagnostic
+/// name, or a name is not a textual identifier, the printer uses the
+/// context-local `varid(<id>)` spelling so the identity remains lossless; an
+/// ambiguous bare name is rejected.  The parser and printer share one
+/// precedence definition so the two halves stay aligned.
 ///
 /// Operators and precedence follow C, so an expression copied out of an
 /// obfuscated decompilation reads the same here.  From loosest to tightest:
@@ -31,6 +34,7 @@
 ///     sdiv srem ashr rol ror slt sle sgt sge ult ule ugt uge eq ne
 ///     add sub mul and or xor not neg concat ite
 ///     zext(x, w)  sext(x, w)  trunc(x, w)  extract(x, lowbit, w)
+///     varid(id)   // exact context-local variable identity
 ///
 /// Identifiers denote free variables and literals may be decimal,
 /// `0x`-prefixed hex, or `0b` binary.  Both are created at the width passed to

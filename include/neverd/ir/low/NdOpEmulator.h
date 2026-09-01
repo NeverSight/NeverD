@@ -275,15 +275,23 @@ class NdOpEmulatorShadow final : public symbolic::ConcreteShadow {
 public:
   explicit NdOpEmulatorShadow(NdOpEmulator &Emu) : Emu(Emu) {}
 
-  void reset() override { Emu.reset(); }
+  bool reset(llvm::endianness ByteOrder) override {
+    if (ByteOrder != llvm::endianness::little)
+      return false;
+    Emu.reset();
+    return true;
+  }
 
-  void setRegister(uint64_t Offset, uint64_t Value) override {
+  bool setRegister(uint64_t Offset, uint16_t Bytes, uint64_t Value) override {
+    if (Bytes != sizeof(uint64_t))
+      return false;
     Emu.setRegister(Offset, Value);
+    return true;
   }
 
   bool step(const LowOp &Op) override { return Emu.step(Op); }
 
-  std::optional<uint64_t> value(const NdVar &V) const override {
+  std::optional<uint64_t> value(const NdVar &V) override {
     if (V.isConst())
       return V.Offset;
     if (V.isReg() || V.isTemp())

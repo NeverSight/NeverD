@@ -103,6 +103,24 @@ for path in result.paths:
 
 `complete` vaut false lorsqu’une limite de chemins, d’étapes, de visites de boucle ou de branche non résolue arrête le parcours. `exact` exige en outre qu’aucune opération n’ait été remplacée de façon conservatrice par un état inconnu ; les opérations LowIR non prises en charge, les appels sans résumé et les écritures via une adresse non résolue sont comptés dans `unmodelled_ops`. Les sessions EVM et SBF n’exposent pas l’exploration LowIR native.
 
+### Inversions concoliques vérifiées de branches LowIR
+
+`session.lowir_concolic` suit un chemin LowIR natif depuis des plages d’octets explicites du registre d’entrée et ne renvoie que les candidats du solveur qu’une nouvelle exécution vérifie à la même occurrence de décision de contrôle :
+
+```python
+from neverd_plugin import ConcolicRegisterSeed
+
+report = session.lowir_concolic(
+    0x401000,
+    [ConcolicRegisterSeed(offset=56, bytes=4, value=0)],
+)
+for flip in report.flips:
+    if flip.candidate_id is not None:
+        print(report.candidates[flip.candidate_id].seed)
+```
+
+Le décalage de registre est un décalage en octets dans le fichier de registres de NeverD, pas un pointeur natif ni un numéro de registre. Le rapport reste toujours non exhaustif ; UNSAT, les limites du solveur et les refus de projection ou de réexécution sont des résultats typés, pas des exceptions.
+
 ### Audit et chasse de sûreté mémoire
 
 `session.audit()` et `session.hunt()` renvoient des rapports JSON analysés (même schéma que le CLI). Ils exigent une session native levée :

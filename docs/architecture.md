@@ -371,6 +371,34 @@ never followed as `std::type_info`. Native reconstruction emits LLVM
 status is a separate claim and is not implied by personality recognition or
 native lowering.
 
+## Verified LowIR concolic branch flips
+
+`NeverDConcolic` follows one native LowIR trace from explicit entry-register
+byte ranges. Its concrete shadow is a second `SymExec`, so concrete and
+symbolic execution share the same operation and bit-width semantics. Missing
+register bytes, unsupported operations, opaque effects, unsummarized calls,
+and unresolved memory effects stop the exact trace; none is filled with an
+invented zero.
+
+Each non-constant control decision has a stable occurrence identity containing
+its machine address, sequence, block, LowIR operation index, loop invocation,
+and kind. For a conditional decision, the engine asks the bounded bit-vector
+solver for the exact earlier constraint prefix plus the opposite polarity. A
+SAT model is projected only from epoch-zero register-input origins that are
+fully covered by the caller's baseline seed. The candidate is published only
+after the query evaluates true under the projected bytes and a fresh execution
+reaches the same earlier decisions and target occurrence with the target
+polarity reversed. Indirect-target equalities remain prefix constraints but
+version 1 does not enumerate alternate indirect targets.
+
+The result is deliberately one trace, never path coverage: public reports use
+`trace_complete`, `trace_exact`, and the literal `exhaustive: false`. Solver,
+projection, replay, and candidate-budget failures retain typed statuses and do
+not publish an unverified seed. JSON image identity hashes `BinaryImage::Raw`,
+the exact snapshot parsed by the loader, rather than reopening the source path.
+The initial public slice is register-seeded and intraprocedural on x86-64 and
+AArch64 PE, ELF, and Mach-O images.
+
 ## Component map
 
 Every component is a static archive created by `add_neverd_component_library`.
@@ -392,6 +420,9 @@ libraries supplied by the CMake helper.
 | `lib/debug` | DWARF, PDB, and linker-map debug contexts | IR |
 | `lib/sigs` | Signature parsing, databases, and matching | Loader |
 | `lib/libc` | Known libc names and call-model support | Standalone component |
+| `lib/symbolic` | Width-exact symbolic execution, bounded path exploration, stable control-decision histories, and the exact concrete shadow | LowIR |
+| `lib/solver` | Bounded bit-vector encoding, incremental SAT solving, models, and typed unknown/invalid outcomes | Symbolic |
+| `lib/concolic` | Exact-prefix conditional branch flips with register-model projection and fresh replay receipts | Symbolic, Solver |
 | `lib/safety` | Heap-lifetime audit and copy-overflow hunt on lifted IR | Symbolic, Solver |
 | `lib/support` | Shared binary-loading helpers | Loader |
 | `lib/translate` | Versioned guest state/policy/exits, fixed runtime ABI, checked guest memory, generated-IR/object/LinkGraph audits, sealed native linking, and the experimental x86-64-to-AArch64 C++ dispatcher | IR, LLVM, LLVM Object, and JITLink contracts |

@@ -76,7 +76,7 @@ EIP-3540은 Stagnant라 확정 mainnet behavior로 다루지 않습니다. 자�
 | `hunt` 트랙 | 싱크 카탈로그 + 인수 사전 필터 + 목적지 용량 + 솔버 증거 |
 | 신원 계약 | 형식별 싱크 해석(PE IAT, ELF PLT, Mach-O dyld bind)과 PDB / DWARF / MAP 이름 출처 |
 
-**상태:** PE, ELF, Mach-O의 Phase 1 구현이 완료되었습니다. P0은 힙 수명과 위험한 복사에 대한 폐쇄 세계 분석 및 정확한 리터럴 환경 값과 첫 표준 입력 소비를 위한 schema v1의 추가 `process-input-v1` 재생 증거를 포함합니다. 다른 입력 종류는 이유와 함께 재생 불가로 남습니다. P1은 스택/전역 오버플로, 미초기화 로컬 읽기, 형식 문자열을 다룹니다. 알 수 없거나 일부만 적용 가능한 호출 효과는 UNKNOWN입니다. 판정과 신원 커버리지는 [`unittests/safety`](../../unittests/safety)와 모든 호스트에서 필수 PE/ELF/Mach-O × x86-64/AArch64 6셀 fixture 매트릭스를 실행하는 종단 간 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp)로 고정됩니다. 자세한 내용은 [메모리 안전성 감사와 헌트](../memory-safety.ko.md). P2의 바이너리 검사 삽입, 하이브리드 퍼징, 더 넓은 프로시저 간 도달 가능성은 Phase-1 승인 범위 밖의 후속 로드맵 작업입니다.
+**상태:** PE, ELF, Mach-O의 Phase 1 구현이 완료되었습니다. P0은 힙 수명과 위험한 복사에 대한 폐쇄 세계 분석 및 정확한 리터럴 환경 값과 첫 표준 입력 소비를 위한 schema v1의 추가 `process-input-v1` 재생 증거를 포함합니다. 다른 입력 종류는 이유와 함께 재생 불가로 남습니다. P1은 스택/전역 오버플로, 미초기화 로컬 읽기, 형식 문자열을 다룹니다. 알 수 없거나 일부만 적용 가능한 호출 효과는 UNKNOWN입니다. 판정과 신원 커버리지는 [`unittests/safety`](../../unittests/safety)와 모든 호스트에서 필수 PE/ELF/Mach-O × x86-64/AArch64 6셀 fixture 매트릭스를 실행하는 종단 간 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp)로 고정됩니다. 자세한 내용은 [메모리 안전성 감사와 헌트](../memory-safety.ko.md). P2 기반 하나는 이제 구현되었습니다. 버전이 고정된 `lowir-concolic-v1`은 제한된 네이티브 LowIR 추적 하나를 따라가며 재생으로 검증된 레지스터 seed만 공개하고, C·CLI·Python을 통해 PE/ELF/Mach-O × x86-64/AArch64 증거를 제공합니다. 바이너리 검사 삽입, 하이브리드 퍼징 corpus 스케줄링과 변이, 메모리 입력 투영, 더 넓은 프로시저 간 도달 가능성은 Phase-1 승인 범위 밖의 후속 작업입니다.
 
 ---
 
@@ -103,5 +103,5 @@ EIP-3540은 Stagnant라 확정 mainnet behavior로 다루지 않습니다. 자�
 | EVM legacy decode/lifting | Fusaka까지 완료; 회귀 테스트 적용 |
 | EVM source reconstruction | 진행 중 — evidence-backed, 보수적 |
 | Solana eBPF (SBF) 디컴파일 | 완료 — v0-v4, C, Rust, LLVM; 회귀 테스트 완료 |
-| 메모리 안전성 감사와 헌트 | Phase 1 완료 — P0/P1 분석, 재생 증거, 네이티브 형식/아키텍처 매트릭스 제공; P2 후속 작업 예정 |
+| 메모리 안전성 감사와 헌트 | Phase 1 완료 — P0/P1 분석과 재생 증거 제공; 재생 검증된 LowIR concolic 레지스터 seed가 P2 기반으로 구현되었고 나머지 P2 오케스트레이션은 후속 예정 |
 | 엔진·제품 강화 | 지속 |

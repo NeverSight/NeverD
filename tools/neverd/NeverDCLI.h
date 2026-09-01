@@ -58,6 +58,30 @@ enum PatchStrategy { SectionMode, InplaceMode };
 /// an actual enum type for their parser.
 enum class TranslateObjectContainer { ELF, MachO };
 
+/// Preserve LLVM's distinction between a missing optional value (`--func`)
+/// and an explicitly empty one (`--func=`).  Options using ValueOptional need
+/// that distinction so their handlers can produce stable, domain-specific
+/// diagnostics; the private NUL sentinel cannot occur in an argv string.
+class OptionalStringParser : public llvm::cl::parser<std::string> {
+public:
+  explicit OptionalStringParser(llvm::cl::Option &Option)
+      : llvm::cl::parser<std::string>(Option) {}
+
+  bool parse(llvm::cl::Option &, llvm::StringRef, llvm::StringRef Argument,
+             std::string &Value) {
+    if (!Argument.data()) {
+      Value.assign(1, '\0');
+      return false;
+    }
+    Value = Argument.str();
+    return false;
+  }
+};
+
+using OptionalStringList =
+    llvm::cl::list<std::string, bool, OptionalStringParser>;
+using ConcolicStringList = OptionalStringList;
+
 //===----------------------------------------------------------------------===//
 // Shared helpers
 //===----------------------------------------------------------------------===//
@@ -145,6 +169,7 @@ extern llvm::cl::SubCommand OptimizeIRCmd;
 extern llvm::cl::SubCommand TranslateObjectCmd;
 extern llvm::cl::SubCommand AuditCmd;
 extern llvm::cl::SubCommand HuntCmd;
+extern llvm::cl::SubCommand ConcolicCmd;
 
 //===----------------------------------------------------------------------===//
 // Options (defined in NeverDCLIOptions.cpp)
@@ -221,6 +246,23 @@ extern llvm::cl::opt<unsigned> SafetyMaxPaths;
 extern llvm::cl::opt<unsigned> SafetyMaxSteps;
 extern llvm::cl::opt<unsigned> SafetyMaxLoop;
 extern llvm::cl::opt<unsigned long long> SafetySolverConflicts;
+
+// LowIR concolic branch flipping.  Strings are parsed by the handler so
+// overflow, boolean-like values, and repeated scalar flags become stable JSON
+// errors instead of command-line library diagnostics.
+extern llvm::cl::list<std::string> ConcolicInputFiles;
+extern ConcolicStringList ConcolicOutputFiles;
+extern ConcolicStringList ConcolicFunctions;
+extern ConcolicStringList ConcolicSeeds;
+extern ConcolicStringList ConcolicMaxSteps;
+extern ConcolicStringList ConcolicMaxBlockVisits;
+extern ConcolicStringList ConcolicMaxLoopIterations;
+extern ConcolicStringList ConcolicMaxFlipAttempts;
+extern ConcolicStringList ConcolicMaxCandidates;
+extern ConcolicStringList ConcolicSolverConflicts;
+extern ConcolicStringList ConcolicSolverPropagations;
+extern ConcolicStringList ConcolicSolverWatchVisits;
+extern ConcolicStringList ConcolicSolverGates;
 
 // Plugins.
 extern llvm::cl::opt<bool> PluginList;
@@ -383,6 +425,10 @@ int runSymbolicExplore(neverd_session_t Sess);
 // NeverDCmdSafety.cpp — memory-safety audit and hunt over the lifted IR.
 int runAudit(neverd_session_t Sess);
 int runHunt(neverd_session_t Sess);
+
+// NeverDCmdConcolic.cpp — dedicated versioned JSON command.  It owns its
+// session so load, argument, target, and pipeline failures share one schema.
+int runConcolic();
 
 // NeverDCmdMarkup.cpp — user annotations persisted beside the binary.
 // runBookmarks operates purely on the JSON sidecar, so it needs no session.

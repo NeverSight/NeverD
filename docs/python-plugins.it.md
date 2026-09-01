@@ -103,6 +103,24 @@ for path in result.paths:
 
 `complete` è false quando un limite di percorsi, passi, visite del ciclo o rami non risolti interrompe l’esplorazione. `exact` richiede inoltre che nessuna operazione sia stata sostituita in modo conservativo da uno stato sconosciuto; le operazioni LowIR non supportate, le chiamate senza riepilogo e le scritture tramite indirizzi non risolti vengono conteggiate in `unmodelled_ops`. Le sessioni EVM e SBF non espongono l’esplorazione LowIR nativa.
 
+### Inversioni concoliche verificate dei rami LowIR
+
+`session.lowir_concolic` segue un percorso LowIR nativo da intervalli di byte espliciti del registro di ingresso e restituisce solo i candidati del solver che una nuova esecuzione verifica nella stessa occorrenza della decisione di controllo:
+
+```python
+from neverd_plugin import ConcolicRegisterSeed
+
+report = session.lowir_concolic(
+    0x401000,
+    [ConcolicRegisterSeed(offset=56, bytes=4, value=0)],
+)
+for flip in report.flips:
+    if flip.candidate_id is not None:
+        print(report.candidates[flip.candidate_id].seed)
+```
+
+L’offset del registro è un offset in byte nel file di registri NeverD, non un puntatore nativo o un numero di registro. Il report è sempre non esaustivo; UNSAT, i limiti del solver e i rifiuti di proiezione o replay restano risultati tipizzati, non eccezioni.
+
 ### Audit e hunt di sicurezza della memoria
 
 `session.audit()` e `session.hunt()` restituiscono report JSON analizzati (lo stesso schema del CLI). Richiedono una sessione nativa sollevata:

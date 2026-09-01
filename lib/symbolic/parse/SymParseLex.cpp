@@ -19,16 +19,6 @@ namespace neverd::symbolic::detail {
 
 namespace {
 
-bool isIdentStart(char C) {
-  return (C >= 'a' && C <= 'z') || (C >= 'A' && C <= 'Z') || C == '_';
-}
-
-/// Decompiler-generated names carry `.` and `$`, so an identifier admits them
-/// rather than forcing every caller to quote.
-bool isIdentBody(char C) {
-  return isIdentStart(C) || (C >= '0' && C <= '9') || C == '.' || C == '$';
-}
-
 bool isDigit(char C) { return C >= '0' && C <= '9'; }
 
 bool isRadixDigit(char C, unsigned Radix) {

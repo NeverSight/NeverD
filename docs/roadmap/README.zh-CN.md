@@ -91,7 +91,7 @@ Review/development 的显式 opt-in target；`latest` 仍为 Fusaka。EOFv1/EIP-
 | `hunt` 轨道 | 汇目录 + 参数预过滤 + 目标容量 + 求解器见证 |
 | 身份契约 | 按格式解析汇（PE IAT、ELF PLT、Mach-O dyld bind）以及 PDB / DWARF / MAP 名称来源 |
 
-**状态：** PE、ELF、Mach-O 的 Phase 1 已实现。P0 包含闭世界堆生命周期与危险拷贝分析；schema v1 的增量证据可为精确字面环境值及第一次受支持的 `read(0)` 系列标准输入消费提供 `process-input-v1` 重放，其他输入类型保持不可重放并附带原因。P1 已覆盖栈/全局越界、未初始化局部读取与格式串。未知或只能部分适用的调用效果保持 UNKNOWN。判定与身份覆盖由 [`unittests/safety`](../../unittests/safety)（目录、扫描器、参数预过滤、对象模型、hunt、audit）以及在每个主机上强制运行 PE/ELF/Mach-O × x86-64/AArch64 六单元 fixture 矩阵的端到端 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) 锁定。详见 [内存安全审计与猎取](../memory-safety.zh-CN.md)。P2 的二进制检查插入、混合模糊测试与更广的跨过程可达性属于后续路线图，不在 Phase-1 验收契约内。
+**状态：** PE、ELF、Mach-O 的 Phase 1 已实现。P0 包含闭世界堆生命周期与危险拷贝分析；schema v1 的增量证据可为精确字面环境值及第一次受支持的 `read(0)` 系列标准输入消费提供 `process-input-v1` 重放，其他输入类型保持不可重放并附带原因。P1 已覆盖栈/全局越界、未初始化局部读取与格式串。未知或只能部分适用的调用效果保持 UNKNOWN。判定与身份覆盖由 [`unittests/safety`](../../unittests/safety)（目录、扫描器、参数预过滤、对象模型、hunt、audit）以及在每个主机上强制运行 PE/ELF/Mach-O × x86-64/AArch64 六单元 fixture 矩阵的端到端 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) 锁定。详见 [内存安全审计与猎取](../memory-safety.zh-CN.md)。P2 的一项基础能力现已落地：版本化的 `lowir-concolic-v1` 沿一条有界原生 LowIR 轨迹执行，只发布经重放验证的寄存器种子，并通过 C、CLI 与 Python 在 PE/ELF/Mach-O × x86-64/AArch64 矩阵上取证。二进制检查插入、混合模糊测试的语料调度与变异、内存输入投影及更广的跨过程可达性仍属于后续路线图，不在 Phase-1 验收契约内。
 
 ---
 
@@ -122,5 +122,5 @@ Review/development 的显式 opt-in target；`latest` 仍为 Fusaka。EOFv1/EIP-
 | EVM 传统解码/lifting              | 到 Fusaka 已完成；有回归测试覆盖 |
 | EVM 源码重建                      | 持续进行 — 有证据才报告，保持保守 |
 | Solana eBPF（SBF）反编译         | 已完成 — v0-v4、C、Rust 与 LLVM；有回归测试覆盖 |
-| 内存安全审计与猎取                   | Phase 1 完成 — P0/P1 分析、重放证据与原生格式/架构矩阵已具备；P2 后续项待规划 |
+| 内存安全审计与猎取                   | Phase 1 完成 — P0/P1 分析与重放证据已具备；经重放验证的 LowIR concolic 寄存器种子已作为 P2 基础落地，其余 P2 编排仍待规划 |
 | 引擎与产品加固                     | 持续进行      |

@@ -5,19 +5,23 @@ from __future__ import annotations
 import builtins
 import ctypes
 from dataclasses import dataclass
+from enum import Enum
+from itertools import islice
 import json
 import os
 import re
 import sys
 from types import ModuleType
 from types import MappingProxyType
-from typing import Any, Callable, Iterator, Mapping, Protocol, TypeVar, cast
+from typing import Any, Callable, Iterable, Iterator, Mapping, Protocol, TypeVar, cast
 
 from .abi import (
     EventType,
     LLVMOptimizationLevel,
     NeverDOptimizeLLVMOptions,
     NeverDOptimizeLLVMResult,
+    NeverDLowIRConcolicOptionsV1,
+    NeverDLowIRConcolicRegisterSeedV1,
     NeverDSimplifyOptions,
     NeverDSimplifyResult,
     NeverDSynthesizeOptions,
@@ -40,6 +44,9 @@ from .abi import (
     TranslationSemanticStop,
 )
 from .ffi import HostAPI
+
+
+_LOWIR_CONCOLIC_MAX_REGISTER_SEEDS_V1 = 4096
 
 
 _SEMVER = re.compile(
@@ -213,6 +220,241 @@ class SymbolicExploration:
     executed_steps: int
     unmodelled_ops: int
     paths: tuple[SymbolicPath, ...]
+
+
+class ConcolicImageIdentityStatus(str, Enum):
+    EXACT_LOADED_SNAPSHOT = "exact_loaded_snapshot"
+    UNAVAILABLE = "unavailable"
+
+
+class ConcolicEndianness(str, Enum):
+    LITTLE = "little"
+    BIG = "big"
+
+
+class ConcolicTraceOutcome(str, Enum):
+    RETURNED = "returned"
+    LEFT_FUNCTION = "left_function"
+    UNRESOLVED_BRANCH = "unresolved_branch"
+    INVALID_CONTROL_TARGET = "invalid_control_target"
+    LOOP_BUDGET = "loop_budget"
+    STEP_BUDGET = "step_budget"
+    INFEASIBLE = "infeasible"
+
+
+class ConcolicTraceReason(str, Enum):
+    NONE = "none"
+    INVALID_INITIAL_SEED = "invalid_initial_seed"
+    NO_TRACE = "no_trace"
+    AMBIGUOUS_TRACE = "ambiguous_trace"
+    INCOMPLETE_CONCRETE_TRACE = "incomplete_concrete_trace"
+    INCOMPLETE_LIFT = "incomplete_lift"
+    UNSUPPORTED_EFFECTS = "unsupported_effects"
+    INCOMPLETE_OUTCOME = "incomplete_outcome"
+    INVALID_DECISION_HISTORY = "invalid_decision_history"
+
+
+class ConcolicDecisionKind(str, Enum):
+    CONDITIONAL_BRANCH = "conditional_branch"
+    INDIRECT_BRANCH_TARGET = "indirect_branch_target"
+
+
+class ConcolicFlipStatus(str, Enum):
+    VERIFIED = "verified"
+    UNSAT = "unsat"
+    SOLVER_UNKNOWN = "solver_unknown"
+    INVALID_QUERY = "invalid_query"
+    PROJECTION_REJECTED = "projection_rejected"
+    REPLAY_REJECTED = "replay_rejected"
+    VERIFIED_DUPLICATE = "verified_duplicate"
+    ATTEMPT_BUDGET_EXCEEDED = "attempt_budget_exceeded"
+    CANDIDATE_BUDGET_EXCEEDED = "candidate_budget_exceeded"
+
+
+class ConcolicSolverStatus(str, Enum):
+    NOT_RUN = "not_run"
+    UNSAT = "unsat"
+    SAT = "sat"
+    UNKNOWN = "unknown"
+    INVALID = "invalid"
+
+
+class ConcolicEncodingError(str, Enum):
+    NONE = "none"
+    WIDTH_TOO_LARGE = "width too large"
+    TOO_MANY_GATES = "too many gates"
+    MALFORMED_EXPRESSION = "malformed expression"
+
+
+class ConcolicProjectionStatus(str, Enum):
+    NOT_RUN = "not_run"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+
+
+class ConcolicProjectionReason(str, Enum):
+    NONE = "none"
+    INVALID_QUERY = "invalid_query"
+    FRESH_VARIABLE = "fresh_variable"
+    MISSING_INPUT_ORIGIN = "missing_input_origin"
+    UNSUPPORTED_INPUT_KIND = "unsupported_input_kind"
+    NONZERO_INPUT_EPOCH = "nonzero_input_epoch"
+    INVALID_INPUT_WIDTH = "invalid_input_width"
+    MISSING_MODEL_VALUE = "missing_model_value"
+    OVERLAPPING_INPUT_ORIGINS = "overlapping_input_origins"
+    MISSING_BASELINE_BYTE = "missing_baseline_byte"
+    CANDIDATE_DOES_NOT_SATISFY_QUERY = "candidate_does_not_satisfy_query"
+
+
+class ConcolicReplayStatus(str, Enum):
+    NOT_RUN = "not_run"
+    VERIFIED = "verified"
+    REJECTED = "rejected"
+
+
+class ConcolicReplayReason(str, Enum):
+    NONE = "none"
+    NO_REPLAY_TRACE = "no_replay_trace"
+    EARLIER_DECISION_MISSING = "earlier_decision_missing"
+    EARLIER_OCCURRENCE_MISMATCH = "earlier_occurrence_mismatch"
+    EARLIER_POLARITY_MISMATCH = "earlier_polarity_mismatch"
+    EARLIER_CONSTRAINT_PREFIX_MISMATCH = "earlier_constraint_prefix_mismatch"
+    EARLIER_DECISION_NOT_CONCRETE = "earlier_decision_not_concrete"
+    TARGET_DECISION_MISSING = "target_decision_missing"
+    TARGET_OCCURRENCE_MISMATCH = "target_occurrence_mismatch"
+    TARGET_DECISION_NOT_CONCRETE = "target_decision_not_concrete"
+    TARGET_CONSTRAINT_PREFIX_MISMATCH = "target_constraint_prefix_mismatch"
+    TARGET_POLARITY_NOT_FLIPPED = "target_polarity_not_flipped"
+
+
+@dataclass(frozen=True, slots=True)
+class ConcolicRegisterSeed:
+    offset: int
+    value: int
+    bytes: int
+
+    def __post_init__(self) -> None:
+        offset = _unsigned("register seed offset", self.offset, 64)
+        value = _unsigned("register seed value", self.value, 64)
+        width = _unsigned("register seed bytes", self.bytes, 32)
+        if width == 0 or width > 8:
+            raise ValueError("register seed bytes must be between 1 and 8")
+        if offset > ((1 << 64) - 1) - width:
+            raise ValueError("register seed range overflows uint64")
+        if width < 8 and value >= 1 << (width * 8):
+            raise ValueError("register seed value has high bits outside its width")
+
+
+@dataclass(frozen=True, slots=True)
+class ConcolicImage:
+    format: str
+    arch: str
+    bits: int
+    endianness: ConcolicEndianness
+    base: int
+    entry: int
+    identity_status: ConcolicImageIdentityStatus
+    identity_reason: str | None
+    sha256: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ConcolicFunction:
+    entry: int
+    name: str
+    lift_complete: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ConcolicLimits:
+    max_steps: int
+    max_block_visits: int
+    max_loop_iterations: int
+    max_flip_attempts: int
+    max_candidates: int
+    solver_max_conflicts: int
+    solver_max_propagations: int
+    solver_max_watch_visits: int
+    solver_max_width: int
+    solver_max_gates: int
+
+
+@dataclass(frozen=True, slots=True)
+class ConcolicDecisionOccurrence:
+    va: int
+    seq: int
+    block_id: int
+    op_index: int
+    invocation: int
+    kind: ConcolicDecisionKind
+
+
+@dataclass(frozen=True, slots=True)
+class ConcolicDecision:
+    decision_id: int
+    occurrence: ConcolicDecisionOccurrence
+    taken: bool
+    constraint_prefix: int
+    concrete: bool
+
+    @property
+    def id(self) -> int:
+        return self.decision_id
+
+
+@dataclass(frozen=True, slots=True)
+class ConcolicCandidate:
+    candidate_id: int
+    seed: tuple[ConcolicRegisterSeed, ...]
+
+    @property
+    def id(self) -> int:
+        return self.candidate_id
+
+
+@dataclass(frozen=True, slots=True)
+class ConcolicFlip:
+    decision_id: int
+    occurrence: ConcolicDecisionOccurrence
+    original_taken: bool
+    constraint_prefix: int
+    status: ConcolicFlipStatus
+    solver_status: ConcolicSolverStatus
+    encoding_error: ConcolicEncodingError
+    projection_status: ConcolicProjectionStatus
+    projection_reason: ConcolicProjectionReason
+    replay_status: ConcolicReplayStatus
+    replay_reason: ConcolicReplayReason
+    candidate_id: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class ConcolicReport:
+    schema_version: int
+    adapter: str
+    mode: str
+    ok: bool
+    exhaustive: bool
+    image: ConcolicImage
+    function: ConcolicFunction
+    limits: ConcolicLimits
+    initial_seed: tuple[ConcolicRegisterSeed, ...]
+    trace_outcome: ConcolicTraceOutcome | None
+    trace_complete: bool
+    trace_exact: bool
+    trace_reason: ConcolicTraceReason
+    executed_steps: int
+    unmodelled_ops: int
+    opaque_ops: int
+    call_havocs: int
+    memory_havocs: int
+    flip_attempts: int
+    flip_budget_hit: bool
+    candidate_budget_hit: bool
+    blocks: tuple[int, ...]
+    decisions: tuple[ConcolicDecision, ...]
+    flips: tuple[ConcolicFlip, ...]
+    candidates: tuple[ConcolicCandidate, ...]
 
 
 class Session:
@@ -587,6 +829,119 @@ class Session:
             executed_steps=int(report.get("executedSteps", 0)),
             unmodelled_ops=int(report.get("unmodelledOps", 0)),
             paths=tuple(paths),
+        )
+
+    def lowir_concolic(
+        self,
+        address: int,
+        seeds: Iterable[ConcolicRegisterSeed] = (),
+        *,
+        max_steps: int = 0,
+        max_block_visits: int = 0,
+        max_loop_iterations: int = 0,
+        max_flip_attempts: int = 0,
+        max_candidates: int = 0,
+        solver_max_conflicts: int = 0,
+        solver_max_propagations: int = 0,
+        solver_max_watch_visits: int = 0,
+        solver_max_gates: int = 0,
+    ) -> ConcolicReport:
+        """Run one bounded LowIR trace and return replay-verified branch flips."""
+
+        entry = _unsigned("address", address, 64)
+        try:
+            seed_values: tuple[ConcolicRegisterSeed, ...] = tuple(
+                islice(seeds, _LOWIR_CONCOLIC_MAX_REGISTER_SEEDS_V1 + 1)
+            )
+        except TypeError as error:
+            raise TypeError(
+                "seeds must be an iterable of ConcolicRegisterSeed"
+            ) from error
+        if len(seed_values) > _LOWIR_CONCOLIC_MAX_REGISTER_SEEDS_V1:
+            raise ValueError(
+                "register seed count must not exceed "
+                f"{_LOWIR_CONCOLIC_MAX_REGISTER_SEEDS_V1}"
+            )
+        for seed in seed_values:
+            if not isinstance(seed, ConcolicRegisterSeed):
+                raise TypeError("seeds must contain only ConcolicRegisterSeed values")
+        _validate_concolic_seed_ranges(seed_values, "register seeds")
+
+        seed_array: object | None = None
+        options = NeverDLowIRConcolicOptionsV1()
+        options.struct_size = ctypes.sizeof(NeverDLowIRConcolicOptionsV1)
+        if seed_values:
+            seed_array_type = NeverDLowIRConcolicRegisterSeedV1 * len(seed_values)
+            seed_array = seed_array_type(
+                *(
+                    NeverDLowIRConcolicRegisterSeedV1(
+                        offset=seed.offset,
+                        value=seed.value,
+                        bytes=seed.bytes,
+                        reserved=0,
+                    )
+                    for seed in seed_values
+                )
+            )
+            options.register_seeds = ctypes.cast(
+                seed_array,
+                ctypes.POINTER(NeverDLowIRConcolicRegisterSeedV1),
+            )
+        else:
+            options.register_seeds = None
+        options.register_seed_count = len(seed_values)
+        options.max_steps = _unsigned("max_steps", max_steps, 32)
+        options.max_block_visits = _unsigned("max_block_visits", max_block_visits, 32)
+        options.max_loop_iterations = _unsigned(
+            "max_loop_iterations", max_loop_iterations, 32
+        )
+        options.max_flip_attempts = _unsigned(
+            "max_flip_attempts", max_flip_attempts, 32
+        )
+        options.max_candidates = _unsigned("max_candidates", max_candidates, 32)
+        options.reserved = 0
+        options.solver_max_conflicts = _unsigned(
+            "solver_max_conflicts", solver_max_conflicts, 64
+        )
+        options.solver_max_propagations = _unsigned(
+            "solver_max_propagations", solver_max_propagations, 64
+        )
+        options.solver_max_watch_visits = _unsigned(
+            "solver_max_watch_visits", solver_max_watch_visits, 64
+        )
+        options.solver_max_gates = _unsigned("solver_max_gates", solver_max_gates, 64)
+
+        expected_limits = ConcolicLimits(
+            max_steps=max_steps or 1 << 16,
+            max_block_visits=max_block_visits or 3,
+            max_loop_iterations=max_loop_iterations or 3,
+            max_flip_attempts=max_flip_attempts or 64,
+            max_candidates=max_candidates or 64,
+            solver_max_conflicts=solver_max_conflicts or 1 << 18,
+            solver_max_propagations=solver_max_propagations or 1 << 24,
+            solver_max_watch_visits=solver_max_watch_visits or 1 << 26,
+            solver_max_width=256,
+            solver_max_gates=solver_max_gates or 1 << 22,
+        )
+        expected_seed = tuple(
+            sorted(
+                seed_values,
+                key=lambda seed: (seed.offset, seed.bytes, seed.value),
+            )
+        )
+
+        raw_report = self._json(
+            "neverd_lowir_concolic_json_v1",
+            "LowIR concolic",
+            entry,
+            ctypes.byref(options),
+        )
+        # ``seed_array`` intentionally remains live through the owned-string call.
+        return _parse_concolic_report(
+            raw_report,
+            expected_entry=entry,
+            expected_seed=expected_seed,
+            expected_limits=expected_limits,
         )
 
     def _safety_options(
@@ -1141,6 +1496,867 @@ def _decode_json(operation: str, value: str | None) -> object:
         return json.loads(value)
     except json.JSONDecodeError as error:
         raise NeverDError(f"NeverD returned invalid {operation} JSON") from error
+
+
+_ConcolicEnum = TypeVar("_ConcolicEnum", bound=Enum)
+
+
+def _concolic_error(path: str, message: str) -> NeverDError:
+    return NeverDError(f"NeverD returned invalid LowIR concolic {path}: {message}")
+
+
+def _concolic_object(value: object, path: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise _concolic_error(path, "expected an object")
+    return cast(Mapping[str, object], value)
+
+
+def _concolic_field(value: Mapping[str, object], name: str, path: str) -> object:
+    if name not in value:
+        raise _concolic_error(path, f"missing field {name!r}")
+    return value[name]
+
+
+def _concolic_string(value: object, path: str) -> str:
+    if not isinstance(value, str):
+        raise _concolic_error(path, "expected a string")
+    return value
+
+
+def _concolic_bool(value: object, path: str) -> bool:
+    if not isinstance(value, bool):
+        raise _concolic_error(path, "expected a boolean")
+    return value
+
+
+def _concolic_int(
+    value: object,
+    path: str,
+    *,
+    minimum: int = 0,
+    maximum: int = (1 << 64) - 1,
+) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise _concolic_error(path, "expected an integer")
+    if value < minimum or value > maximum:
+        raise _concolic_error(path, "integer is out of range")
+    return value
+
+
+def _concolic_array(value: object, path: str) -> list[object]:
+    if not isinstance(value, list):
+        raise _concolic_error(path, "expected an array")
+    return value
+
+
+def _concolic_enum(
+    value: object,
+    path: str,
+    enum_type: type[_ConcolicEnum],
+) -> _ConcolicEnum:
+    text = _concolic_string(value, path)
+    try:
+        return enum_type(text)
+    except ValueError as error:
+        raise _concolic_error(path, f"unknown enum value {text!r}") from error
+
+
+def _concolic_hex(value: object, path: str, digits: int) -> int:
+    text = _concolic_string(value, path)
+    if re.fullmatch(rf"0x[0-9a-f]{{{digits}}}", text) is None:
+        raise _concolic_error(path, f"expected a fixed-width {digits}-digit hex value")
+    return int(text[2:], 16)
+
+
+def _validate_concolic_seed_ranges(
+    seeds: tuple[ConcolicRegisterSeed, ...],
+    path: str,
+) -> None:
+    ordered = sorted(seeds, key=lambda seed: (seed.offset, seed.bytes, seed.value))
+    for previous, current in zip(ordered, ordered[1:]):
+        if current.offset < previous.offset + previous.bytes:
+            raise ValueError(f"{path} overlap")
+
+
+def _parse_concolic_seed(value: object, path: str) -> ConcolicRegisterSeed:
+    item = _concolic_object(value, path)
+    width = _concolic_int(
+        _concolic_field(item, "bytes", path),
+        f"{path}.bytes",
+        minimum=1,
+        maximum=8,
+    )
+    offset = _concolic_hex(
+        _concolic_field(item, "offset", path),
+        f"{path}.offset",
+        16,
+    )
+    raw_value = _concolic_hex(
+        _concolic_field(item, "value", path),
+        f"{path}.value",
+        width * 2,
+    )
+    try:
+        return ConcolicRegisterSeed(offset=offset, value=raw_value, bytes=width)
+    except (TypeError, ValueError) as error:
+        raise _concolic_error(path, str(error)) from error
+
+
+def _parse_concolic_seeds(value: object, path: str) -> tuple[ConcolicRegisterSeed, ...]:
+    items = _concolic_array(value, path)
+    if len(items) > _LOWIR_CONCOLIC_MAX_REGISTER_SEEDS_V1:
+        raise _concolic_error(
+            path,
+            f"register seed count exceeds {_LOWIR_CONCOLIC_MAX_REGISTER_SEEDS_V1}",
+        )
+    seeds = tuple(
+        _parse_concolic_seed(item, f"{path}[{index}]")
+        for index, item in enumerate(items)
+    )
+    try:
+        _validate_concolic_seed_ranges(seeds, path)
+    except ValueError as error:
+        raise _concolic_error(path, str(error)) from error
+    return seeds
+
+
+def _parse_concolic_occurrence(
+    value: object,
+    path: str,
+) -> ConcolicDecisionOccurrence:
+    item = _concolic_object(value, path)
+    return ConcolicDecisionOccurrence(
+        va=_concolic_hex(_concolic_field(item, "va", path), f"{path}.va", 16),
+        seq=_concolic_int(
+            _concolic_field(item, "seq", path),
+            f"{path}.seq",
+            minimum=-(1 << 31),
+            maximum=(1 << 31) - 1,
+        ),
+        block_id=_concolic_int(
+            _concolic_field(item, "block_id", path),
+            f"{path}.block_id",
+            minimum=-(1 << 31),
+            maximum=(1 << 31) - 1,
+        ),
+        op_index=_concolic_int(
+            _concolic_field(item, "op_index", path), f"{path}.op_index"
+        ),
+        invocation=_concolic_int(
+            _concolic_field(item, "invocation", path),
+            f"{path}.invocation",
+        ),
+        kind=_concolic_enum(
+            _concolic_field(item, "kind", path),
+            f"{path}.kind",
+            ConcolicDecisionKind,
+        ),
+    )
+
+
+def _validate_concolic_flip_evidence(flip: ConcolicFlip, path: str) -> None:
+    no_projection = (
+        flip.projection_status is ConcolicProjectionStatus.NOT_RUN
+        and flip.projection_reason is ConcolicProjectionReason.NONE
+    )
+    no_replay = (
+        flip.replay_status is ConcolicReplayStatus.NOT_RUN
+        and flip.replay_reason is ConcolicReplayReason.NONE
+    )
+    encoding_none = flip.encoding_error is ConcolicEncodingError.NONE
+    no_candidate = flip.candidate_id is None
+
+    if flip.status in {
+        ConcolicFlipStatus.VERIFIED,
+        ConcolicFlipStatus.VERIFIED_DUPLICATE,
+    }:
+        valid = (
+            flip.solver_status is ConcolicSolverStatus.SAT
+            and encoding_none
+            and flip.projection_status is ConcolicProjectionStatus.ACCEPTED
+            and flip.projection_reason is ConcolicProjectionReason.NONE
+            and flip.replay_status is ConcolicReplayStatus.VERIFIED
+            and flip.replay_reason is ConcolicReplayReason.NONE
+            and flip.candidate_id is not None
+        )
+    elif flip.status is ConcolicFlipStatus.CANDIDATE_BUDGET_EXCEEDED:
+        valid = (
+            flip.solver_status is ConcolicSolverStatus.SAT
+            and encoding_none
+            and flip.projection_status is ConcolicProjectionStatus.ACCEPTED
+            and flip.projection_reason is ConcolicProjectionReason.NONE
+            and flip.replay_status is ConcolicReplayStatus.VERIFIED
+            and flip.replay_reason is ConcolicReplayReason.NONE
+            and no_candidate
+        )
+    elif flip.status is ConcolicFlipStatus.UNSAT:
+        valid = (
+            flip.solver_status is ConcolicSolverStatus.UNSAT
+            and encoding_none
+            and no_projection
+            and no_replay
+            and no_candidate
+        )
+    elif flip.status is ConcolicFlipStatus.SOLVER_UNKNOWN:
+        valid = (
+            flip.solver_status
+            in {ConcolicSolverStatus.UNKNOWN, ConcolicSolverStatus.NOT_RUN}
+            and flip.encoding_error
+            in {
+                ConcolicEncodingError.NONE,
+                ConcolicEncodingError.WIDTH_TOO_LARGE,
+                ConcolicEncodingError.TOO_MANY_GATES,
+            }
+            and not (
+                flip.solver_status is ConcolicSolverStatus.NOT_RUN and encoding_none
+            )
+            and no_projection
+            and no_replay
+            and no_candidate
+        )
+    elif flip.status is ConcolicFlipStatus.INVALID_QUERY:
+        valid = (
+            flip.solver_status
+            in {ConcolicSolverStatus.INVALID, ConcolicSolverStatus.NOT_RUN}
+            and flip.encoding_error is ConcolicEncodingError.MALFORMED_EXPRESSION
+            and no_projection
+            and no_replay
+            and no_candidate
+        )
+    elif flip.status is ConcolicFlipStatus.PROJECTION_REJECTED:
+        valid = (
+            flip.solver_status is ConcolicSolverStatus.SAT
+            and encoding_none
+            and flip.projection_status is ConcolicProjectionStatus.REJECTED
+            and flip.projection_reason is not ConcolicProjectionReason.NONE
+            and no_replay
+            and no_candidate
+        )
+    elif flip.status is ConcolicFlipStatus.REPLAY_REJECTED:
+        valid = (
+            flip.solver_status is ConcolicSolverStatus.SAT
+            and encoding_none
+            and flip.projection_status is ConcolicProjectionStatus.ACCEPTED
+            and flip.projection_reason is ConcolicProjectionReason.NONE
+            and flip.replay_status is ConcolicReplayStatus.REJECTED
+            and flip.replay_reason is not ConcolicReplayReason.NONE
+            and no_candidate
+        )
+    else:
+        valid = (
+            flip.status is ConcolicFlipStatus.ATTEMPT_BUDGET_EXCEEDED
+            and flip.solver_status is ConcolicSolverStatus.NOT_RUN
+            and encoding_none
+            and no_projection
+            and no_replay
+            and no_candidate
+        )
+    if not valid:
+        raise _concolic_error(path, "status and evidence fields are inconsistent")
+
+
+def _validate_concolic_report_consistency(report: ConcolicReport) -> None:
+    if report.executed_steps > report.limits.max_steps:
+        raise _concolic_error("report.executed_steps", "exceeds max_steps")
+    if len(report.decisions) > report.executed_steps:
+        raise _concolic_error("report.decisions", "count exceeds executed_steps")
+    if report.flip_attempts > report.limits.max_flip_attempts:
+        raise _concolic_error("report.flip_attempts", "exceeds max_flip_attempts")
+    if len(report.candidates) > report.limits.max_candidates:
+        raise _concolic_error("report.candidates", "count exceeds max_candidates")
+
+    attempted_flips = sum(
+        flip.solver_status is not ConcolicSolverStatus.NOT_RUN for flip in report.flips
+    )
+    if report.flip_attempts != attempted_flips:
+        raise _concolic_error("report.flip_attempts", "does not match attempted flips")
+    flip_budget_hit = any(
+        flip.status is ConcolicFlipStatus.ATTEMPT_BUDGET_EXCEEDED
+        for flip in report.flips
+    )
+    if report.flip_budget_hit is not flip_budget_hit:
+        raise _concolic_error("report.flip_budget_hit", "does not match flip statuses")
+    if report.flip_budget_hit and (
+        report.flip_attempts != report.limits.max_flip_attempts
+    ):
+        raise _concolic_error(
+            "report.flip_budget_hit", "requires an exhausted flip budget"
+        )
+    candidate_budget_hit = any(
+        flip.status is ConcolicFlipStatus.CANDIDATE_BUDGET_EXCEEDED
+        for flip in report.flips
+    )
+    if report.candidate_budget_hit is not candidate_budget_hit:
+        raise _concolic_error(
+            "report.candidate_budget_hit", "does not match flip statuses"
+        )
+    if report.candidate_budget_hit and (
+        len(report.candidates) != report.limits.max_candidates
+    ):
+        raise _concolic_error(
+            "report.candidate_budget_hit", "requires an exhausted candidate budget"
+        )
+
+    published_candidates = 0
+    for index, flip in enumerate(report.flips):
+        if flip.status is ConcolicFlipStatus.VERIFIED:
+            if flip.candidate_id != published_candidates:
+                raise _concolic_error(
+                    f"report.flips[{index}].candidate_id",
+                    "does not publish the next candidate",
+                )
+            published_candidates += 1
+        elif (
+            flip.status is ConcolicFlipStatus.VERIFIED_DUPLICATE
+            and flip.candidate_id is not None
+            and flip.candidate_id >= published_candidates
+        ):
+            raise _concolic_error(
+                f"report.flips[{index}].candidate_id",
+                "does not reference an earlier candidate",
+            )
+    if published_candidates != len(report.candidates):
+        raise _concolic_error("report.candidates", "contains an unpublished candidate")
+    candidate_seeds = tuple(candidate.seed for candidate in report.candidates)
+    if len(set(candidate_seeds)) != len(candidate_seeds):
+        raise _concolic_error("report.candidates", "contains duplicate seeds")
+
+    occurrence_keys = tuple(
+        (
+            decision.occurrence.va,
+            decision.occurrence.seq,
+            decision.occurrence.block_id,
+            decision.occurrence.op_index,
+            decision.occurrence.invocation,
+            decision.occurrence.kind,
+        )
+        for decision in report.decisions
+    )
+    if len(set(occurrence_keys)) != len(occurrence_keys):
+        raise _concolic_error(
+            "report.decisions", "contains duplicate physical occurrences"
+        )
+
+    effects = (
+        report.unmodelled_ops,
+        report.opaque_ops,
+        report.call_havocs,
+        report.memory_havocs,
+    )
+    terminal_outcome = report.trace_outcome in {
+        ConcolicTraceOutcome.RETURNED,
+        ConcolicTraceOutcome.LEFT_FUNCTION,
+    }
+    if report.trace_complete and not terminal_outcome:
+        raise _concolic_error(
+            "report.trace_complete", "requires a terminal trace outcome"
+        )
+    if report.trace_exact:
+        if (
+            not report.trace_complete
+            or not report.function.lift_complete
+            or report.trace_reason is not ConcolicTraceReason.NONE
+            or any(effects)
+            or any(not decision.concrete for decision in report.decisions)
+        ):
+            raise _concolic_error(
+                "report.trace_exact", "exact-trace evidence is inconsistent"
+            )
+        prefixes = tuple(decision.constraint_prefix for decision in report.decisions)
+        if any(left >= right for left, right in zip(prefixes, prefixes[1:])):
+            raise _concolic_error(
+                "report.decisions", "constraint prefixes are not increasing"
+            )
+        expected_flip_ids = tuple(
+            decision.decision_id
+            for decision in report.decisions
+            if decision.occurrence.kind is ConcolicDecisionKind.CONDITIONAL_BRANCH
+        )
+        if tuple(flip.decision_id for flip in report.flips) != expected_flip_ids:
+            raise _concolic_error(
+                "report.flips", "does not cover each conditional decision"
+            )
+    else:
+        if (
+            report.trace_reason is ConcolicTraceReason.NONE
+            or report.flips
+            or report.candidates
+            or report.flip_attempts != 0
+            or report.flip_budget_hit
+            or report.candidate_budget_hit
+        ):
+            raise _concolic_error(
+                "report.trace_exact", "inexact traces cannot publish flip evidence"
+            )
+
+        if report.trace_reason in {
+            ConcolicTraceReason.INVALID_INITIAL_SEED,
+            ConcolicTraceReason.NO_TRACE,
+            ConcolicTraceReason.AMBIGUOUS_TRACE,
+        }:
+            if (
+                report.trace_outcome is not None
+                or report.trace_complete
+                or report.executed_steps != 0
+                or report.blocks
+                or report.decisions
+                or any(effects)
+            ):
+                raise _concolic_error(
+                    "report.trace_reason",
+                    "pre-trace reason carries execution evidence",
+                )
+        elif report.trace_reason is ConcolicTraceReason.UNSUPPORTED_EFFECTS:
+            if not any(effects):
+                raise _concolic_error(
+                    "report.trace_reason",
+                    "unsupported effects require a nonzero effect count",
+                )
+        elif report.trace_reason is ConcolicTraceReason.INCOMPLETE_CONCRETE_TRACE:
+            if report.trace_complete or any(effects):
+                raise _concolic_error(
+                    "report.trace_reason",
+                    "incomplete concrete trace evidence is inconsistent",
+                )
+        elif report.trace_reason is ConcolicTraceReason.INCOMPLETE_OUTCOME:
+            if (
+                report.trace_complete
+                or report.trace_outcome is None
+                or terminal_outcome
+                or any(effects)
+            ):
+                raise _concolic_error(
+                    "report.trace_reason",
+                    "incomplete outcome evidence is inconsistent",
+                )
+        elif report.trace_reason is ConcolicTraceReason.INCOMPLETE_LIFT:
+            if (
+                not report.trace_complete
+                or report.function.lift_complete
+                or any(effects)
+            ):
+                raise _concolic_error(
+                    "report.trace_reason",
+                    "incomplete lift evidence is inconsistent",
+                )
+        elif report.trace_reason is ConcolicTraceReason.INVALID_DECISION_HISTORY:
+            if (
+                not report.trace_complete
+                or not report.function.lift_complete
+                or any(effects)
+            ):
+                raise _concolic_error(
+                    "report.trace_reason",
+                    "invalid decision history evidence is inconsistent",
+                )
+
+
+def _parse_concolic_report(
+    value: object,
+    *,
+    expected_entry: int,
+    expected_seed: tuple[ConcolicRegisterSeed, ...],
+    expected_limits: ConcolicLimits,
+) -> ConcolicReport:
+    root = _concolic_object(value, "report")
+    schema_version = _concolic_int(
+        _concolic_field(root, "schema_version", "report"),
+        "report.schema_version",
+        maximum=(1 << 32) - 1,
+    )
+    if schema_version != 1:
+        raise _concolic_error("report.schema_version", "expected 1")
+    adapter = _concolic_string(
+        _concolic_field(root, "adapter", "report"), "report.adapter"
+    )
+    if adapter != "lowir-concolic-v1":
+        raise _concolic_error("report.adapter", "unexpected adapter")
+    mode = _concolic_string(_concolic_field(root, "mode", "report"), "report.mode")
+    if mode != "concolic":
+        raise _concolic_error("report.mode", "unexpected mode")
+    exhaustive = _concolic_bool(
+        _concolic_field(root, "exhaustive", "report"), "report.exhaustive"
+    )
+    if exhaustive is not False:
+        raise _concolic_error("report.exhaustive", "v1 must be false")
+    ok = _concolic_bool(_concolic_field(root, "ok", "report"), "report.ok")
+    if ok is False:
+        error_code = _concolic_string(
+            _concolic_field(root, "error_code", "report"),
+            "report.error_code",
+        )
+        message = _concolic_string(
+            _concolic_field(root, "error", "report"), "report.error"
+        )
+        raise NeverDError(f"LowIR concolic failed ({error_code}): {message}")
+
+    image_value = _concolic_object(
+        _concolic_field(root, "image", "report"), "report.image"
+    )
+    identity_status = _concolic_enum(
+        _concolic_field(image_value, "identity_status", "report.image"),
+        "report.image.identity_status",
+        ConcolicImageIdentityStatus,
+    )
+    raw_identity_reason = _concolic_field(
+        image_value, "identity_reason", "report.image"
+    )
+    identity_reason = (
+        None
+        if raw_identity_reason is None
+        else _concolic_string(raw_identity_reason, "report.image.identity_reason")
+    )
+    raw_sha256 = _concolic_field(image_value, "sha256", "report.image")
+    sha256_value = (
+        None
+        if raw_sha256 is None
+        else _concolic_string(raw_sha256, "report.image.sha256")
+    )
+    if sha256_value is not None and re.fullmatch(r"[0-9a-f]{64}", sha256_value) is None:
+        raise _concolic_error("report.image.sha256", "expected lowercase SHA-256")
+    if identity_status is ConcolicImageIdentityStatus.EXACT_LOADED_SNAPSHOT:
+        if identity_reason is not None or sha256_value is None:
+            raise _concolic_error(
+                "report.image", "exact identity requires sha256 and no reason"
+            )
+    elif identity_reason is None or sha256_value is not None:
+        raise _concolic_error(
+            "report.image", "unavailable identity requires a reason and null sha256"
+        )
+    image = ConcolicImage(
+        format=_concolic_string(
+            _concolic_field(image_value, "format", "report.image"),
+            "report.image.format",
+        ),
+        arch=_concolic_string(
+            _concolic_field(image_value, "arch", "report.image"),
+            "report.image.arch",
+        ),
+        bits=_concolic_int(
+            _concolic_field(image_value, "bits", "report.image"),
+            "report.image.bits",
+            maximum=(1 << 32) - 1,
+        ),
+        endianness=_concolic_enum(
+            _concolic_field(image_value, "endianness", "report.image"),
+            "report.image.endianness",
+            ConcolicEndianness,
+        ),
+        base=_concolic_hex(
+            _concolic_field(image_value, "base", "report.image"),
+            "report.image.base",
+            16,
+        ),
+        entry=_concolic_hex(
+            _concolic_field(image_value, "entry", "report.image"),
+            "report.image.entry",
+            16,
+        ),
+        identity_status=identity_status,
+        identity_reason=identity_reason,
+        sha256=sha256_value,
+    )
+    if image.format not in {"PE", "ELF", "Mach-O"}:
+        raise _concolic_error("report.image.format", "unsupported v1 format")
+    if image.arch not in {"x86_64", "aarch64"}:
+        raise _concolic_error("report.image.arch", "unsupported v1 architecture")
+    if image.bits != 64:
+        raise _concolic_error("report.image.bits", "v1 requires 64-bit images")
+    if image.endianness is not ConcolicEndianness.LITTLE:
+        raise _concolic_error("report.image.endianness", "v1 requires little endian")
+
+    function_value = _concolic_object(
+        _concolic_field(root, "function", "report"), "report.function"
+    )
+    function = ConcolicFunction(
+        entry=_concolic_hex(
+            _concolic_field(function_value, "entry", "report.function"),
+            "report.function.entry",
+            16,
+        ),
+        name=_concolic_string(
+            _concolic_field(function_value, "name", "report.function"),
+            "report.function.name",
+        ),
+        lift_complete=_concolic_bool(
+            _concolic_field(function_value, "lift_complete", "report.function"),
+            "report.function.lift_complete",
+        ),
+    )
+    if function.entry != expected_entry:
+        raise _concolic_error("report.function.entry", "does not match the request")
+
+    limits_value = _concolic_object(
+        _concolic_field(root, "limits", "report"), "report.limits"
+    )
+    limit_names_32 = (
+        "max_steps",
+        "max_block_visits",
+        "max_loop_iterations",
+        "max_flip_attempts",
+        "max_candidates",
+    )
+    parsed_limits = {
+        name: _concolic_int(
+            _concolic_field(limits_value, name, "report.limits"),
+            f"report.limits.{name}",
+            maximum=(1 << 32) - 1,
+        )
+        for name in limit_names_32
+    }
+    for name in (
+        "solver_max_conflicts",
+        "solver_max_propagations",
+        "solver_max_watch_visits",
+        "solver_max_width",
+        "solver_max_gates",
+    ):
+        parsed_limits[name] = _concolic_int(
+            _concolic_field(limits_value, name, "report.limits"),
+            f"report.limits.{name}",
+        )
+    limits = ConcolicLimits(
+        max_steps=parsed_limits["max_steps"],
+        max_block_visits=parsed_limits["max_block_visits"],
+        max_loop_iterations=parsed_limits["max_loop_iterations"],
+        max_flip_attempts=parsed_limits["max_flip_attempts"],
+        max_candidates=parsed_limits["max_candidates"],
+        solver_max_conflicts=parsed_limits["solver_max_conflicts"],
+        solver_max_propagations=parsed_limits["solver_max_propagations"],
+        solver_max_watch_visits=parsed_limits["solver_max_watch_visits"],
+        solver_max_width=parsed_limits["solver_max_width"],
+        solver_max_gates=parsed_limits["solver_max_gates"],
+    )
+    if limits != expected_limits:
+        raise _concolic_error(
+            "report.limits", "does not match effective request limits"
+        )
+
+    initial_seed = _parse_concolic_seeds(
+        _concolic_field(root, "initial_seed", "report"), "report.initial_seed"
+    )
+    if initial_seed != expected_seed:
+        raise _concolic_error("report.initial_seed", "does not match the request")
+    trace_outcome_value = _concolic_field(root, "trace_outcome", "report")
+    trace_outcome = (
+        None
+        if trace_outcome_value is None
+        else _concolic_enum(
+            trace_outcome_value, "report.trace_outcome", ConcolicTraceOutcome
+        )
+    )
+
+    decisions_value = _concolic_array(
+        _concolic_field(root, "decisions", "report"), "report.decisions"
+    )
+    decisions: list[ConcolicDecision] = []
+    for index, raw_decision in enumerate(decisions_value):
+        path = f"report.decisions[{index}]"
+        item = _concolic_object(raw_decision, path)
+        decision_id = _concolic_int(
+            _concolic_field(item, "decision_id", path), f"{path}.decision_id"
+        )
+        if decision_id != index:
+            raise _concolic_error(f"{path}.decision_id", "must equal its array index")
+        decisions.append(
+            ConcolicDecision(
+                decision_id=decision_id,
+                occurrence=_parse_concolic_occurrence(
+                    _concolic_field(item, "occurrence", path),
+                    f"{path}.occurrence",
+                ),
+                taken=_concolic_bool(
+                    _concolic_field(item, "taken", path), f"{path}.taken"
+                ),
+                constraint_prefix=_concolic_int(
+                    _concolic_field(item, "constraint_prefix", path),
+                    f"{path}.constraint_prefix",
+                ),
+                concrete=_concolic_bool(
+                    _concolic_field(item, "concrete", path), f"{path}.concrete"
+                ),
+            )
+        )
+
+    candidates_value = _concolic_array(
+        _concolic_field(root, "candidates", "report"), "report.candidates"
+    )
+    candidates: list[ConcolicCandidate] = []
+    expected_shape = tuple((seed.offset, seed.bytes) for seed in initial_seed)
+    for index, raw_candidate in enumerate(candidates_value):
+        path = f"report.candidates[{index}]"
+        item = _concolic_object(raw_candidate, path)
+        candidate_record_id = _concolic_int(
+            _concolic_field(item, "candidate_id", path), f"{path}.candidate_id"
+        )
+        if candidate_record_id != index:
+            raise _concolic_error(f"{path}.candidate_id", "must equal its array index")
+        seed = _parse_concolic_seeds(
+            _concolic_field(item, "seed", path), f"{path}.seed"
+        )
+        if tuple((part.offset, part.bytes) for part in seed) != expected_shape:
+            raise _concolic_error(f"{path}.seed", "shape differs from initial_seed")
+        candidates.append(
+            ConcolicCandidate(candidate_id=candidate_record_id, seed=seed)
+        )
+
+    flips_value = _concolic_array(
+        _concolic_field(root, "flips", "report"), "report.flips"
+    )
+    flips: list[ConcolicFlip] = []
+    for index, raw_flip in enumerate(flips_value):
+        path = f"report.flips[{index}]"
+        item = _concolic_object(raw_flip, path)
+        decision_id = _concolic_int(
+            _concolic_field(item, "decision_id", path), f"{path}.decision_id"
+        )
+        if decision_id >= len(decisions):
+            raise _concolic_error(f"{path}.decision_id", "dangling decision ID")
+        raw_candidate_id = _concolic_field(item, "candidate_id", path)
+        flip_candidate_id = (
+            None
+            if raw_candidate_id is None
+            else _concolic_int(raw_candidate_id, f"{path}.candidate_id")
+        )
+        if flip_candidate_id is not None and flip_candidate_id >= len(candidates):
+            raise _concolic_error(f"{path}.candidate_id", "dangling candidate ID")
+        flip = ConcolicFlip(
+            decision_id=decision_id,
+            occurrence=_parse_concolic_occurrence(
+                _concolic_field(item, "occurrence", path), f"{path}.occurrence"
+            ),
+            original_taken=_concolic_bool(
+                _concolic_field(item, "original_taken", path),
+                f"{path}.original_taken",
+            ),
+            constraint_prefix=_concolic_int(
+                _concolic_field(item, "constraint_prefix", path),
+                f"{path}.constraint_prefix",
+            ),
+            status=_concolic_enum(
+                _concolic_field(item, "status", path),
+                f"{path}.status",
+                ConcolicFlipStatus,
+            ),
+            solver_status=_concolic_enum(
+                _concolic_field(item, "solver_status", path),
+                f"{path}.solver_status",
+                ConcolicSolverStatus,
+            ),
+            encoding_error=_concolic_enum(
+                _concolic_field(item, "encoding_error", path),
+                f"{path}.encoding_error",
+                ConcolicEncodingError,
+            ),
+            projection_status=_concolic_enum(
+                _concolic_field(item, "projection_status", path),
+                f"{path}.projection_status",
+                ConcolicProjectionStatus,
+            ),
+            projection_reason=_concolic_enum(
+                _concolic_field(item, "projection_reason", path),
+                f"{path}.projection_reason",
+                ConcolicProjectionReason,
+            ),
+            replay_status=_concolic_enum(
+                _concolic_field(item, "replay_status", path),
+                f"{path}.replay_status",
+                ConcolicReplayStatus,
+            ),
+            replay_reason=_concolic_enum(
+                _concolic_field(item, "replay_reason", path),
+                f"{path}.replay_reason",
+                ConcolicReplayReason,
+            ),
+            candidate_id=flip_candidate_id,
+        )
+        decision = decisions[decision_id]
+        if (
+            flip.occurrence != decision.occurrence
+            or flip.original_taken is not decision.taken
+            or flip.constraint_prefix != decision.constraint_prefix
+        ):
+            raise _concolic_error(path, "does not match its referenced decision")
+        _validate_concolic_flip_evidence(flip, path)
+        flips.append(flip)
+
+    blocks = tuple(
+        _concolic_int(
+            raw_block,
+            f"report.blocks[{index}]",
+            maximum=(1 << 31) - 1,
+        )
+        for index, raw_block in enumerate(
+            _concolic_array(_concolic_field(root, "blocks", "report"), "report.blocks")
+        )
+    )
+    report = ConcolicReport(
+        schema_version=schema_version,
+        adapter=adapter,
+        mode=mode,
+        ok=ok,
+        exhaustive=exhaustive,
+        image=image,
+        function=function,
+        limits=limits,
+        initial_seed=initial_seed,
+        trace_outcome=trace_outcome,
+        trace_complete=_concolic_bool(
+            _concolic_field(root, "trace_complete", "report"),
+            "report.trace_complete",
+        ),
+        trace_exact=_concolic_bool(
+            _concolic_field(root, "trace_exact", "report"), "report.trace_exact"
+        ),
+        trace_reason=_concolic_enum(
+            _concolic_field(root, "trace_reason", "report"),
+            "report.trace_reason",
+            ConcolicTraceReason,
+        ),
+        executed_steps=_concolic_int(
+            _concolic_field(root, "executed_steps", "report"),
+            "report.executed_steps",
+        ),
+        unmodelled_ops=_concolic_int(
+            _concolic_field(root, "unmodelled_ops", "report"),
+            "report.unmodelled_ops",
+            maximum=(1 << 32) - 1,
+        ),
+        opaque_ops=_concolic_int(
+            _concolic_field(root, "opaque_ops", "report"),
+            "report.opaque_ops",
+            maximum=(1 << 32) - 1,
+        ),
+        call_havocs=_concolic_int(
+            _concolic_field(root, "call_havocs", "report"),
+            "report.call_havocs",
+            maximum=(1 << 32) - 1,
+        ),
+        memory_havocs=_concolic_int(
+            _concolic_field(root, "memory_havocs", "report"),
+            "report.memory_havocs",
+            maximum=(1 << 32) - 1,
+        ),
+        flip_attempts=_concolic_int(
+            _concolic_field(root, "flip_attempts", "report"),
+            "report.flip_attempts",
+            maximum=(1 << 32) - 1,
+        ),
+        flip_budget_hit=_concolic_bool(
+            _concolic_field(root, "flip_budget_hit", "report"),
+            "report.flip_budget_hit",
+        ),
+        candidate_budget_hit=_concolic_bool(
+            _concolic_field(root, "candidate_budget_hit", "report"),
+            "report.candidate_budget_hit",
+        ),
+        blocks=blocks,
+        decisions=tuple(decisions),
+        flips=tuple(flips),
+        candidates=tuple(candidates),
+    )
+    _validate_concolic_report_consistency(report)
+    return report
 
 
 class ExpressionSyntaxError(NeverDError):
@@ -1853,6 +3069,27 @@ def translate_x86_64_block_to_aarch64_object(
 
 
 __all__ = [
+    "ConcolicCandidate",
+    "ConcolicDecision",
+    "ConcolicDecisionKind",
+    "ConcolicDecisionOccurrence",
+    "ConcolicEncodingError",
+    "ConcolicEndianness",
+    "ConcolicFlip",
+    "ConcolicFlipStatus",
+    "ConcolicFunction",
+    "ConcolicImage",
+    "ConcolicImageIdentityStatus",
+    "ConcolicLimits",
+    "ConcolicProjectionReason",
+    "ConcolicProjectionStatus",
+    "ConcolicRegisterSeed",
+    "ConcolicReplayReason",
+    "ConcolicReplayStatus",
+    "ConcolicReport",
+    "ConcolicSolverStatus",
+    "ConcolicTraceOutcome",
+    "ConcolicTraceReason",
     "Event",
     "EventType",
     "ExpressionSyntaxError",

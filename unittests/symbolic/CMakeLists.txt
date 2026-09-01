@@ -1,4 +1,5 @@
 add_neverd_unittest(NeverDSymbolicTests
+  SymConcreteTests.cpp
   SymDispatchTests.cpp
   SymExecTests.cpp
   SymExploreTests.cpp

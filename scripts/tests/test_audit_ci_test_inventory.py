@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from scripts.audit_ci_test_inventory import (
+    CONCOLIC_LABELS,
     CORPUS_LABELS,
     PLUGIN_LABELS,
     SAFETY_LABELS,
@@ -17,6 +18,7 @@ PATCH = "NeverDPatchFullTests"
 CORPUS_NAMES = tuple(f"corpus/{label}" for label in CORPUS_LABELS)
 PLUGIN_NAMES = tuple(f"plugin/{label}" for label in PLUGIN_LABELS)
 SAFETY_NAMES = tuple(f"safety/{label}" for label in SAFETY_LABELS)
+CONCOLIC_NAMES = tuple(f"concolic/{label}" for label in CONCOLIC_LABELS)
 
 
 def ctest_inventory(*entries: tuple[str, tuple[str, ...]]) -> dict:
@@ -45,6 +47,7 @@ def valid_inventory() -> dict:
         ("cfg/a", ("NeverDCFGLoopXformTests",)),
         *((name, (label,)) for name, label in zip(PLUGIN_NAMES, PLUGIN_LABELS)),
         *((name, (label,)) for name, label in zip(SAFETY_NAMES, SAFETY_LABELS)),
+        *((name, (label,)) for name, label in zip(CONCOLIC_NAMES, CONCOLIC_LABELS)),
         *((name, (label,)) for name, label in zip(CORPUS_NAMES, CORPUS_LABELS)),
     )
 
@@ -62,12 +65,14 @@ class AuditInventoryTests(unittest.TestCase):
     def test_linux_owns_semantic_and_keeps_focused_tests(self):
         result = self.audit("linux-semantic", r"^NeverDPatchFullTests$")
         self.assertEqual(
-            result.full_count, 8 + len(PLUGIN_NAMES) + len(CORPUS_NAMES)
+            result.full_count,
+            8 + len(PLUGIN_NAMES) + len(CONCOLIC_NAMES) + len(CORPUS_NAMES),
         )
         self.assertEqual(result.semantic_count, 2)
         self.assertEqual(result.patch_count, 2)
         self.assertEqual(
-            result.selected_count, 6 + len(PLUGIN_NAMES) + len(CORPUS_NAMES)
+            result.selected_count,
+            6 + len(PLUGIN_NAMES) + len(CONCOLIC_NAMES) + len(CORPUS_NAMES),
         )
         self.assertEqual(result.excluded_count, 2)
         self.assertEqual(
@@ -79,6 +84,7 @@ class AuditInventoryTests(unittest.TestCase):
                 "cfg/a",
                 *PLUGIN_NAMES,
                 *SAFETY_NAMES,
+                *CONCOLIC_NAMES,
                 *CORPUS_NAMES,
             },
         )
@@ -86,7 +92,8 @@ class AuditInventoryTests(unittest.TestCase):
     def test_macos_owns_patch_and_keeps_focused_tests(self):
         result = self.audit("macos-patch", r"^NeverDSemanticTests$")
         self.assertEqual(
-            result.selected_count, 6 + len(PLUGIN_NAMES) + len(CORPUS_NAMES)
+            result.selected_count,
+            6 + len(PLUGIN_NAMES) + len(CONCOLIC_NAMES) + len(CORPUS_NAMES),
         )
         self.assertEqual(
             set(result.selected_names),
@@ -97,6 +104,7 @@ class AuditInventoryTests(unittest.TestCase):
                 "cfg/a",
                 *PLUGIN_NAMES,
                 *SAFETY_NAMES,
+                *CONCOLIC_NAMES,
                 *CORPUS_NAMES,
             },
         )
@@ -106,11 +114,19 @@ class AuditInventoryTests(unittest.TestCase):
             "windows-focused", r"^NeverD(Semantic|PatchFull)Tests$"
         )
         self.assertEqual(
-            result.selected_count, 4 + len(PLUGIN_NAMES) + len(CORPUS_NAMES)
+            result.selected_count,
+            4 + len(PLUGIN_NAMES) + len(CONCOLIC_NAMES) + len(CORPUS_NAMES),
         )
         self.assertEqual(
             set(result.selected_names),
-            {"lift/a", "cfg/a", *PLUGIN_NAMES, *SAFETY_NAMES, *CORPUS_NAMES},
+            {
+                "lift/a",
+                "cfg/a",
+                *PLUGIN_NAMES,
+                *SAFETY_NAMES,
+                *CONCOLIC_NAMES,
+                *CORPUS_NAMES,
+            },
         )
 
     # Every host reads the corpus.  The bytes are the same everywhere, but what
@@ -145,6 +161,49 @@ class AuditInventoryTests(unittest.TestCase):
             with self.subTest(profile=profile):
                 result = self.audit(profile, expression)
                 self.assertTrue(set(PLUGIN_NAMES) <= set(result.selected_names))
+
+    def test_every_profile_selects_all_concolic_suites(self):
+        for profile, expression in (
+            ("linux-semantic", r"^NeverDPatchFullTests$"),
+            ("macos-patch", r"^NeverDSemanticTests$"),
+            ("windows-focused", r"^NeverD(Semantic|PatchFull)Tests$"),
+        ):
+            with self.subTest(profile=profile):
+                result = self.audit(profile, expression)
+                self.assertTrue(set(CONCOLIC_NAMES) <= set(result.selected_names))
+
+    def test_a_build_that_left_concolic_out_fails(self):
+        for label, name in zip(CONCOLIC_LABELS, CONCOLIC_NAMES):
+            document = valid_inventory()
+            document["tests"] = [
+                test for test in document["tests"] if test["name"] != name
+            ]
+            with self.subTest(label=label):
+                with self.assertRaisesRegex(InventoryError, label):
+                    audit_inventory(
+                        document,
+                        "linux-semantic",
+                        r"^NeverDPatchFullTests$",
+                        semantic_minimum=2,
+                        patch_minimum=2,
+                    )
+
+    def test_profile_cannot_exclude_required_concolic_suites(self):
+        document = valid_inventory()
+        concolic_test = next(
+            test for test in document["tests"] if test["name"] == CONCOLIC_NAMES[0]
+        )
+        concolic_test["properties"][0]["value"].append(PATCH)
+        with self.assertRaisesRegex(
+            InventoryError, "does not select required concolic tests"
+        ):
+            audit_inventory(
+                document,
+                "linux-semantic",
+                r"^NeverDPatchFullTests$",
+                semantic_minimum=2,
+                patch_minimum=2,
+            )
 
     def test_a_build_that_left_the_native_example_plugin_out_fails(self):
         for label, name in zip(PLUGIN_LABELS, PLUGIN_NAMES):
@@ -325,11 +384,14 @@ class AuditInventoryTests(unittest.TestCase):
                 summary_path=summary_path,
             )
 
-            selected = 6 + len(PLUGIN_NAMES) + len(CORPUS_NAMES)
+            selected = (
+                6 + len(PLUGIN_NAMES) + len(CONCOLIC_NAMES) + len(CORPUS_NAMES)
+            )
             outputs = output_path.read_text(encoding="utf-8")
             self.assertIn(f"count={selected}\n", outputs)
             self.assertIn(
-                f"full_count={8 + len(PLUGIN_NAMES) + len(CORPUS_NAMES)}\n",
+                "full_count="
+                f"{8 + len(PLUGIN_NAMES) + len(CONCOLIC_NAMES) + len(CORPUS_NAMES)}\n",
                 outputs,
             )
             self.assertIn("semantic_count=2\n", outputs)

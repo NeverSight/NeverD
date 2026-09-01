@@ -17,7 +17,7 @@
 ///   - NeverDCAPISession.h  -- session lifecycle, metadata, errors, version
 ///   - NeverDCAPIDisasm.h   -- functions, bytes, disassembly, decompile, IR
 ///   - NeverDCAPIQuery.h    -- info panels, graphs, search, diff
-///   - NeverDCAPISymbolic.h -- symbolic path exploration
+///   - NeverDCAPISymbolic.h -- symbolic exploration and concolic branch flips
 ///   - NeverDCAPISafety.h   -- memory-safety audit and vulnerability hunt
 ///   - NeverDCAPIPatch.h    -- patching, pipeline, target config, benchmarks
 ///   - NeverDCAPIPersist.h  -- annotations and renames (JSON sidecar)

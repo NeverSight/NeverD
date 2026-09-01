@@ -4,6 +4,7 @@ set(NEVERD_SDK_SOURCES
     capi/NeverDCAPI.cpp
     capi/NeverDCAPIBench.cpp
     capi/NeverDCAPIBenchDecode.cpp
+    capi/NeverDCAPIConcolic.cpp
     capi/NeverDCAPIDecompile.cpp
     capi/NeverDCAPIDisasm.cpp
     capi/NeverDCAPIGraph.cpp
@@ -68,6 +69,7 @@ target_link_libraries(neverd_shared PRIVATE
     NeverDDebugInfo
     NeverDSolver
     NeverDSymbolic
+    NeverDConcolic
     NeverDSafety
     NeverDTranslate
     NeverDSigs

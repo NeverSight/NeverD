@@ -580,6 +580,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
                 "exception.rewrite.end-to-end": "unsupported",
                 "semantic.mba.derivation": "supported",
                 "semantic.synthesis.candidate": "supported",
+                "symbolic.execution.lowir-concolic": "experimental",
                 "symbolic.execution.path-exploration": "experimental",
                 "llvm.semantic.synthesis-rewrite": "supported",
                 "translation.executable-engine": "experimental",
@@ -610,6 +611,12 @@ class RepositoryCapabilityTests(unittest.TestCase):
                 "python": [],
                 "cli": ["neverd sym-explore"],
                 "json": [],
+            },
+            "symbolic.execution.lowir-concolic": {
+                "c": ["neverd_lowir_concolic_json_v1"],
+                "python": ["lowir_concolic"],
+                "cli": ["neverd concolic"],
+                "json": ["neverd_lowir_concolic_json_v1"],
             },
             "translation.executable-engine": no_surfaces,
             "translation.runtime-contract": {

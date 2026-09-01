@@ -77,8 +77,11 @@ public:
   /// Read \p Bytes bytes starting at \p Offset.  A wholly untouched range
   /// starts as one input; overlapping reads thereafter use its exact byte
   /// views.  This keeps ordinary whole-register inputs compact without losing
-  /// sub-register aliasing.
+  /// sub-register aliasing.  A zero-byte or wrapping request fails closed with
+  /// an invalid reference and does not mutate the state.
   SymRef read(SymSpace Space, uint64_t Offset, uint16_t Bytes);
+  /// Write a whole-byte value.  Invalid, wrapping, or wider-than-bank ranges
+  /// fail closed without mutating the state.
   void write(SymSpace Space, uint64_t Offset, SymRef Value);
 
   //===--------------------------------------------------------------------===//
@@ -87,16 +90,16 @@ public:
 
   /// Read \p Bytes at \p Addr.  An address that is a base plus a constant is
   /// read out of that base's region; anything else is its own region, read as
-  /// stable unknowns that later reads of the same address agree with.
+  /// stable unknowns that later reads of the same address agree with.  Invalid,
+  /// zero-byte, and wrapping requests return an invalid reference.
   SymRef load(SymRef Addr, uint16_t Bytes);
 
-  /// Store \p Value and return whether its address came out a number.
+  /// Store \p Value and return whether an exact absolute write was recorded.
   ///
-  /// A false result does not mean the value was thrown away — it was written
-  /// to its region, and reads at other displacements of that same base still
-  /// see what they saw.  It means the store may have landed in some *other*
-  /// region as well, so those were forgotten, and the caller is looking at an
-  /// approximation.
+  /// For a valid symbolic-base write, false means the value was recorded in
+  /// that region but may also alias others, which are forgotten.  Invalid or
+  /// unrepresentable writes also return false and conservatively clobber
+  /// memory instead of publishing a partial update.
   bool store(SymRef Addr, SymRef Value);
 
   /// What a load that could not be resolved was reading.
@@ -184,6 +187,10 @@ private:
     std::shared_ptr<UnknownBytes> Unknowns;
     /// What an untouched byte of this bank is named after.
     std::string Name;
+    /// Machine kind for banks whose untouched epoch-zero values have structured
+    /// input origins.  Symbolic pointer regions deliberately have no kind.
+    std::optional<SymInputKind> InputKind;
+    uint64_t Epoch = 0;
   };
 
   /// Where an address points, as a base and a displacement from it.  An
@@ -202,7 +209,7 @@ private:
   /// One byte of a bank, minting a named input for it when it has none.
   SymRef byteAt(Bank &B, uint64_t Offset);
   SymRef readBank(Bank &B, uint64_t Offset, uint16_t Bytes);
-  void writeBank(Bank &B, uint64_t Offset, SymRef Value);
+  bool writeBank(Bank &B, uint64_t Offset, SymRef Value);
 
   /// Give up everything \p B held, and start an epoch so that what is read
   /// from it next cannot be mistaken for what was read before.
@@ -223,9 +230,9 @@ private:
   SymContext *Ctx;
   llvm::endianness Order;
 
-  Bank Registers{{}, nullptr, "reg"};
-  Bank Temporaries{{}, nullptr, "tmp"};
-  Bank AbsoluteMemory{{}, nullptr, "mem"};
+  Bank Registers{{}, nullptr, "reg", SymInputKind::Register, 0};
+  Bank Temporaries{{}, nullptr, "tmp", SymInputKind::Temporary, 0};
+  Bank AbsoluteMemory{{}, nullptr, "mem", SymInputKind::AbsoluteMemory, 0};
   /// One bank per symbolic base, keyed by the node that base interned to.
   std::map<uint32_t, Bank> Regions;
   /// Keyed by the node index of the value the loads produced.

@@ -89,7 +89,7 @@ EIP-3540 為 Stagnant，兩者都不冒充已定案 mainnet 行為。host ABI �
 | `hunt` 軌道 | 匯目錄 + 參數預過濾 + 目標容量 + 求解器見證 |
 | 身分契約 | 依格式解析匯（PE IAT、ELF PLT、Mach-O dyld bind）以及 PDB / DWARF / MAP 名稱來源 |
 
-**狀態：** PE、ELF、Mach-O 的 Phase 1 已實作。P0 包含封閉世界堆積生命週期與危險複製分析；schema v1 的增量證據可為精確字面環境值及第一次受支援的 `read(0)` 系列標準輸入消耗提供 `process-input-v1` 重播，其他輸入類型保持不可重播並附帶原因。P1 已涵蓋堆疊／全域越界、未初始化區域讀取與格式字串。未知或只能部分套用的呼叫效果保持 UNKNOWN。判定與身分覆蓋由 [`unittests/safety`](../../unittests/safety) 以及在每個主機強制執行 PE/ELF/Mach-O × x86-64/AArch64 六單元 fixture 矩陣的端到端 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) 鎖定。詳見 [記憶體安全稽核與獵取](../memory-safety.zh-TW.md)。P2 的二進位檢查插入、混合模糊測試與更廣的跨程序可達性屬於後續路線圖，不在 Phase-1 驗收契約內。
+**狀態：** PE、ELF、Mach-O 的 Phase 1 已實作。P0 包含封閉世界堆積生命週期與危險複製分析；schema v1 的增量證據可為精確字面環境值及第一次受支援的 `read(0)` 系列標準輸入消耗提供 `process-input-v1` 重播，其他輸入類型保持不可重播並附帶原因。P1 已涵蓋堆疊／全域越界、未初始化區域讀取與格式字串。未知或只能部分套用的呼叫效果保持 UNKNOWN。判定與身分覆蓋由 [`unittests/safety`](../../unittests/safety) 以及在每個主機強制執行 PE/ELF/Mach-O × x86-64/AArch64 六單元 fixture 矩陣的端到端 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) 鎖定。詳見 [記憶體安全稽核與獵取](../memory-safety.zh-TW.md)。P2 的一項基礎能力現已落地：版本化的 `lowir-concolic-v1` 沿一條有界原生 LowIR 軌跡執行，只發布經重播驗證的暫存器種子，並透過 C、CLI 與 Python 在 PE/ELF/Mach-O × x86-64/AArch64 矩陣上取證。二進位檢查插入、混合模糊測試的語料排程與變異、記憶體輸入投影及更廣的跨程序可達性仍屬後續路線圖，不在 Phase-1 驗收契約內。
 
 ---
 
@@ -115,5 +115,5 @@ P0 已有迴歸覆蓋；保守 EVM 原始碼重建仍在進行。不承諾具體
 | EVM 傳統 decode/lifting | 至 Fusaka 已完成；有迴歸測試覆蓋 |
 | EVM 原始碼重建 | 持續進行 — 只回報有證據的保守結果 |
 | Solana eBPF（SBF）反編譯 | 已完成 — v0-v4、C、Rust 與 LLVM；有迴歸測試覆蓋 |
-| 記憶體安全稽核與獵取 | Phase 1 完成 — P0/P1 分析、重播證據與原生格式／架構矩陣已具備；P2 後續項待規劃 |
+| 記憶體安全稽核與獵取 | Phase 1 完成 — P0/P1 分析與重播證據已具備；經重播驗證的 LowIR concolic 暫存器種子已作為 P2 基礎落地，其餘 P2 編排仍待規劃 |
 | 引擎與產品加固 | 持續進行 |

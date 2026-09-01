@@ -79,6 +79,20 @@ SymRef Parser::parseCall(const Token &Name) {
   if (Failed)
     return {};
   Lex.take(); // '('
+  if (Name.Text == "varid") {
+    const size_t IdOffset = Lex.peek().Offset;
+    uint64_t Id = 0;
+    if (!parsePlainInt(Id) || !expectPunct(")"))
+      return {};
+    if (Id >= Ctx.numVars()) {
+      fail(IdOffset, "symbolic variable id is out of range");
+      return {};
+    }
+    const uint32_t Width = Ctx.varInfo(static_cast<uint32_t>(Id)).Width;
+    if (!validateWidth(Width, IdOffset))
+      return {};
+    return Ctx.varRef(static_cast<uint32_t>(Id));
+  }
   return takesBitCounts(Name.Text) ? parseWidthCall(Name)
                                    : parseVariadicCall(Name);
 }

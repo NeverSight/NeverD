@@ -39,8 +39,10 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Endian.h"
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -182,13 +184,34 @@ struct SymNode {
   uint64_t Aux = 0;
 };
 
-/// A free variable's name and width.
+/// A machine location that supplied a symbolic input before execution changed
+/// that location.  This lets consumers decide whether an input is seedable
+/// without parsing a diagnostic variable name as a location.
+enum class SymInputKind : uint8_t { Register, Temporary, AbsoluteMemory };
+
+struct SymInputOrigin {
+  SymInputKind Kind = SymInputKind::Register;
+  uint64_t Offset = 0;
+  uint16_t Bytes = 0;
+  uint64_t Epoch = 0;
+
+  friend bool operator==(const SymInputOrigin &,
+                         const SymInputOrigin &) = default;
+};
+
+/// A free variable's name, width, and optional machine-input origin.
 struct SymVarInfo {
   std::string Name;
   uint32_t Width = 0;
   /// True for a generated stand-in (havoc, undefined value, or solver
   /// placeholder); false for a named input declared by the caller.
   bool Fresh = false;
+  /// A producer's claimed untouched machine location.  Consumers at trust
+  /// boundaries must validate the range and width before using it as replay
+  /// input.  Generated variables and values created after a clobber have no
+  /// structured origin, even when their diagnostic names resemble an input
+  /// name.
+  std::optional<SymInputOrigin> InputOrigin;
 };
 
 /// Owner of a set of interned expressions.
@@ -216,9 +239,20 @@ public:
   SymRef mkTrue() { return mkConst(1, 1); }
   SymRef mkFalse() { return mkConst(1, 0); }
 
-  /// Intern a variable by name.  Re-requesting an existing name returns the
-  /// same node; the width must match the original declaration.
+  /// Intern a variable by name and width.  Re-requesting the same pair returns
+  /// the same node; one diagnostic name used at another width receives a
+  /// distinct variable id rather than corrupting the first declaration.
   SymRef mkVar(llvm::StringRef Name, uint32_t Width);
+  /// Materialise a structured machine input.  A wholly unseen range starts as
+  /// one variable, while a range that overlaps an earlier input is rebuilt
+  /// from the context's shared byte views.  Thus sibling states agree on the
+  /// bytes of one initial machine location even when they first read it at
+  /// different widths.  \p Name remains the compact variable name used when
+  /// the whole range is new.  A zero width returns an invalid reference;
+  /// malformed nonzero origin metadata is isolated from the shared byte store
+  /// so trust-boundary consumers can reject it without a process abort.
+  SymRef mkInputVar(llvm::StringRef Name, uint32_t Width, SymInputOrigin Origin,
+                    llvm::endianness Order = llvm::endianness::little);
   /// Declare a fresh variable with a generated name that cannot collide with
   /// an existing one.  Used by the MBA solver to stand in for a subtree it
   /// cannot see inside of.
@@ -313,11 +347,18 @@ public:
 
   uint32_t varId(SymRef R) const { return uint32_t(Nodes[R.index()].Aux); }
   const SymVarInfo &varInfo(uint32_t Id) const { return Vars[Id]; }
+  /// The variable node for an exact id, or an invalid ref when the id is out of
+  /// range.  Unlike name-based declaration, this preserves structured-input
+  /// identity when a diagnostic name is shared.
+  SymRef varRef(uint32_t Id);
   size_t numVars() const { return Vars.size(); }
 
-  /// The id of the variable named \p Name, if one has been declared.  Callers
-  /// that would otherwise hit \c mkVar's width assertion — a parser reading
-  /// untrusted text, say — use this to check first.
+  /// Whether any variable carries \p Name, including an ambiguous name shared
+  /// by multiple widths or input origins.
+  bool hasVarName(llvm::StringRef Name) const;
+  /// The id of the sole variable named \p Name.  Returns nothing when the name
+  /// is absent or belongs to more than one width, so name-only callers cannot
+  /// silently select an arbitrary width-specific declaration.
   std::optional<uint32_t> findVar(llvm::StringRef Name) const;
 
   /// Number of distinct nodes reachable from \p R, i.e. the size of the DAG.
@@ -378,13 +419,15 @@ public:
   // Printing
   //===--------------------------------------------------------------------===//
 
-  /// Render \p R in the infix syntax that \c parseSymExpr accepts.
+  /// Render \p R in the infix syntax that \c parseSymExpr accepts.  Ambiguous
+  /// diagnostic names use a context-local exact-id spelling.
   std::string toString(SymRef R) const;
 
 private:
   /// Intern a node, returning an existing ref when an identical node exists.
   SymRef intern(SymOp Op, uint32_t Width, llvm::ArrayRef<SymRef> Ops,
                 uint64_t Aux);
+  void recordVariableName(llvm::StringRef Name, uint32_t Id);
 
   /// Split \p R into a coefficient and a base so that `R == Coeff * Base`.
   /// A node that is not a constant multiple yields a coefficient of one.
@@ -404,8 +447,53 @@ private:
   /// Hash of a node's identity to the nodes carrying that hash.  Collisions
   /// are resolved by comparing the candidate against each bucket entry.
   std::unordered_map<uint64_t, llvm::SmallVector<uint32_t, 2>> InternTable;
+  /// Plain variables keep their legacy name-and-width declaration identity.
+  std::map<std::pair<std::string, uint32_t>, uint32_t> VarByNameAndWidth;
+
+  struct InputVariableKey {
+    std::string Name;
+    uint32_t Width = 0;
+    SymInputOrigin Origin;
+
+    friend bool operator<(const InputVariableKey &Left,
+                          const InputVariableKey &Right) {
+      if (Left.Name != Right.Name)
+        return Left.Name < Right.Name;
+      if (Left.Width != Right.Width)
+        return Left.Width < Right.Width;
+      if (Left.Origin.Kind != Right.Origin.Kind)
+        return Left.Origin.Kind < Right.Origin.Kind;
+      if (Left.Origin.Offset != Right.Origin.Offset)
+        return Left.Origin.Offset < Right.Origin.Offset;
+      if (Left.Origin.Bytes != Right.Origin.Bytes)
+        return Left.Origin.Bytes < Right.Origin.Bytes;
+      return Left.Origin.Epoch < Right.Origin.Epoch;
+    }
+  };
+  /// Replayable inputs are separate from plain variables even when their
+  /// diagnostic name and width collide.
+  std::map<InputVariableKey, uint32_t> InputVarByIdentity;
+  /// The sole declaration for a diagnostic name, or an ambiguity sentinel
+  /// once more than one width uses it.  Name-only lookup must never choose one
+  /// of several width-specific variables by accident.
   std::unordered_map<std::string, uint32_t> VarByName;
   std::unordered_map<std::string, uint32_t> WideConstByKey;
+
+  struct InputSpaceKey {
+    SymInputKind Kind = SymInputKind::Register;
+    uint64_t Epoch = 0;
+
+    friend bool operator<(const InputSpaceKey &Left,
+                          const InputSpaceKey &Right) {
+      if (Left.Kind != Right.Kind)
+        return Left.Kind < Right.Kind;
+      return Left.Epoch < Right.Epoch;
+    }
+  };
+  /// Canonical byte views of untouched machine inputs, shared by every state
+  /// using this context.  Each space/epoch has one raw byte store; byte order
+  /// only decides how a caller joins those bytes into a word.
+  std::map<InputSpaceKey, std::map<uint64_t, SymRef>> InputBytes;
   uint32_t FreshCounter = 0;
 };
 
