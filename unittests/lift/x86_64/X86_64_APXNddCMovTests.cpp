@@ -288,9 +288,9 @@ TEST(X86APXNddCMov, MemorySourceAlwaysReadsBeforeSelecting) {
     Initialize(FaultPath, false);
     EXPECT_LT(FaultPath.run(Move.Ops), Move.Ops.size());
     EXPECT_EQ(FaultPath.getRegister(Destination.Offset), Initial);
-    ASSERT_EQ(FaultPath.getLoadRecords().size(), 1u);
-    EXPECT_EQ(FaultPath.getLoadRecords()[0].Addr, Target);
-    EXPECT_EQ(FaultPath.getLoadRecords()[0].Size, Width.Bytes);
+    // The failed access proves that a false condition did not suppress the
+    // source read. Load records contain only accesses that completed.
+    EXPECT_TRUE(FaultPath.getLoadRecords().empty());
     EXPECT_EQ(FaultPath.getRegister(Fallback.Offset), FallbackValue);
     EXPECT_EQ(FaultPath.getRegister(x86reg::ZF), 0u);
     EXPECT_FALSE(FaultPath.skips().any());
