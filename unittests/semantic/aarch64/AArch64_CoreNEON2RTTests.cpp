@@ -216,6 +216,8 @@ static const std::vector<RoundTripTC> kCoreNEON2 = {
    {50}, "CoreNEON2", 1, "-march=armv8-a+simd"},
 
   // --- FCVTL (FP convert narrow to wider, bottom half) via inline asm ---
+  // Full FP16 is not available on Unicorn's default A72 model, so select the
+  // feature-complete AArch64 model for this one advanced-feature probe.
   {"fcvtl_f16_f32",
    "#include <arm_neon.h>\n"
    "long fcvtl_f16_f32(long a) {\n"
@@ -229,7 +231,8 @@ static const std::vector<RoundTripTC> kCoreNEON2 = {
    "  c2.f = vgetq_lane_f32(vr,2); c3.f = vgetq_lane_f32(vr,3);\n"
    "  return (long)(c0.u ^ c1.u ^ c2.u ^ c3.u);\n"
    "}\n",
-   {7}, "CoreNEON2", 1, "-march=armv8-a+simd+fp16"},
+   {7}, "CoreNEON2", 1, "-march=armv8-a+simd+fp16", false, "",
+   UC_CPU_ARM64_MAX},
 
   // --- SADDLV / UADDLV (across-vector add long) ---
   {"saddlv_s16",

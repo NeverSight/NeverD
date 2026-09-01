@@ -24,8 +24,8 @@
 // copy, no fcvt), so these probes exercise ONLY the pairwise handlers.
 // fp16 bit patterns: 0.0=0x0000 -0.0=0x8000 1.0=0x3C00 2.0=0x4000 3.0=0x4200
 // 4.0=0x4400 5.0=0x4500 6.0=0x4600 7.0=0x4700 qNaN=0x7E00.
-// Requires -march=armv8.2-a+fp16; the default AArch64 Unicorn MAX CPU executes
-// fp16 pairwise min/max natively.
+// Requires -march=armv8.2-a+fp16; select Unicorn's MAX CPU explicitly so the
+// fp16 pairwise min/max instructions execute natively.
 //
 //===----------------------------------------------------------------------===//
 
@@ -36,7 +36,8 @@ class AArch64FP16PairwiseRT : public SemanticRoundTripFixture,
 };
 TEST_P(AArch64FP16PairwiseRT, Verify) { roundTripAArch64(GetParam()); }
 
-#define FP16FLAGS "FP16Pairwise", 0, "-march=armv8.2-a+fp16"
+#define FP16FLAGS                                                              \
+  "FP16Pairwise", 0, "-march=armv8.2-a+fp16", false, "", UC_CPU_ARM64_MAX
 
 // Lane packing is little-endian: lane0 occupies bits 0..15.
 #define H_1425 0x4200400044003C00ULL // [1.0, 4.0, 2.0, 3.0]

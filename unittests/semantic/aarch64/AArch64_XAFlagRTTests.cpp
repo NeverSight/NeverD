@@ -24,8 +24,8 @@
 //
 // Each probe sets a known NZCV with `cmp` (a modelled producer), runs
 // xaflag/axflag, then reads N/Z/C/V back with `cset mi/eq/cs/vs` (modelled
-// consumers) folded into distinct return bits.  Unicorn's default AArch64 CPU
-// is MAX (ID_AA64ISAR0.TS = 2 => FlagM2), so the roundtrip is native.
+// consumers) folded into distinct return bits.  Select Unicorn's MAX CPU
+// explicitly so FlagM2 is present; Unicorn's default is an A72 model.
 //
 //===----------------------------------------------------------------------===//
 
@@ -57,26 +57,26 @@ static const std::vector<RoundTripTC> kA64 = {
   // cmp(INT64_MIN, 1): N=0,Z=0,C=1,V=1.  -> N0,Z=0|1=1,C=1&0=0,V=0 => 0b0010=2.
   // (old/buggy: untransformed 0b0100=4)
   {"ax_v1",    AXFLAG_FN, {0x8000000000000000ULL, 1ULL}, "XAFlag", 0,
-   "-march=armv8.5-a"},
+   "-march=armv8.5-a", false, "", UC_CPU_ARM64_MAX},
   // cmp(-1, 1): N=1,Z=0,C=1,V=0.  -> N0,Z=0,C=1&1=1,V=0 => 0b0100=4.  (old: 5)
   {"ax_n1c1",  AXFLAG_FN, {0xFFFFFFFFFFFFFFFFULL, 1ULL}, "XAFlag", 0,
-   "-march=armv8.5-a"},
+   "-march=armv8.5-a", false, "", UC_CPU_ARM64_MAX},
   // Control: cmp(7,7): N=0,Z=1,C=1,V=0.  V=0 so transform == identity here
   // (N already 0) => 0b0110=6, matches old.  Passes RED and GREEN.
   {"ax_z1c1",  AXFLAG_FN, {7ULL, 7ULL}, "XAFlag", 0,
-   "-march=armv8.5-a"},
+   "-march=armv8.5-a", false, "", UC_CPU_ARM64_MAX},
 
   // ---- XAFLAG: N=!C&!Z, Z=C&Z, C=C|Z, V=!C&Z ----
   // cmp(-1, 1): N=1,Z=0,C=1,V=0. -> N=!1&!0=0,Z=0,C=1,V=0 => 0b0100=4. (old:5)
   {"xa_c1z0",  XAFLAG_FN, {0xFFFFFFFFFFFFFFFFULL, 1ULL}, "XAFlag", 0,
-   "-march=armv8.5-a"},
+   "-march=armv8.5-a", false, "", UC_CPU_ARM64_MAX},
   // cmp(0, INT64_MIN+1): N=0,Z=0,C=0,V=0. -> N=!0&!0=1,Z=0,C=0,V=0 => 1. (old:0)
   {"xa_c0z0",  XAFLAG_FN, {0ULL, 0x8000000000000001ULL}, "XAFlag", 0,
-   "-march=armv8.5-a"},
+   "-march=armv8.5-a", false, "", UC_CPU_ARM64_MAX},
   // Control: cmp(3,3): N=0,Z=1,C=1,V=0. -> N=0,Z=1,C=1,V=0 => 0b0110=6.
   // Matches old (untransformed also 0b0110=6).  Passes RED and GREEN.
   {"xa_c1z1",  XAFLAG_FN, {3ULL, 3ULL}, "XAFlag", 0,
-   "-march=armv8.5-a"},
+   "-march=armv8.5-a", false, "", UC_CPU_ARM64_MAX},
 };
 // clang-format on
 

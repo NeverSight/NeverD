@@ -22,8 +22,8 @@
 // MedFlags "fold condition back to the nearest CMP" pass has no comparison to
 // (mis)match; the flags are read back with `cset mi/eq/cs/vs` folded into
 // distinct return bits.  Preservation is exercised by a second RMIF with a
-// partial/zero mask.  RMIF is native on Unicorn's default MAX CPU
-// (ID_AA64ISAR0.TS = 2 => FlagM2 ⊇ FlagM).
+// partial/zero mask.  Select Unicorn's MAX CPU explicitly so FlagM2 (and thus
+// FlagM) is present even though Unicorn's default is an A72 model.
 //
 //===----------------------------------------------------------------------===//
 
@@ -42,7 +42,8 @@ static const std::vector<RoundTripTC> kA64 = {
    "\"cset %w0, mi\\n\\t\"\"cset %w1, eq\\n\\t\"\"cset %w2, cs\\n\\t\"\"cset %w3, vs\""
    ":\"=&r\"(n),\"=&r\"(z),\"=&r\"(c),\"=&r\"(v):\"r\"(a):\"cc\");"
    "return (long)n|((long)z<<1)|((long)c<<2)|((long)v<<3);}\n",
-   {0xAULL}, "Rmif", 0, "-march=armv8.4-a"},
+   {0xAULL}, "Rmif", 0, "-march=armv8.4-a", false, "",
+   UC_CPU_ARM64_MAX},
 
   // rmif a,#4,#15: low4 of ROR(a,4) = a[7:4].  a=0x60 -> a[7:4]=0110 ->
   // N0 Z1 C1 V0 => 6.
@@ -52,7 +53,8 @@ static const std::vector<RoundTripTC> kA64 = {
    "\"cset %w0, mi\\n\\t\"\"cset %w1, eq\\n\\t\"\"cset %w2, cs\\n\\t\"\"cset %w3, vs\""
    ":\"=&r\"(n),\"=&r\"(z),\"=&r\"(c),\"=&r\"(v):\"r\"(a):\"cc\");"
    "return (long)n|((long)z<<1)|((long)c<<2)|((long)v<<3);}\n",
-   {0x60ULL}, "Rmif", 0, "-march=armv8.4-a"},
+   {0x60ULL}, "Rmif", 0, "-march=armv8.4-a", false, "",
+   UC_CPU_ARM64_MAX},
 
   // Mask isolation: rmif a,#0,#15 sets all (a=0x8 -> N1 Z0 C0 V0), then
   // rmif b,#0,#2 sets only C from b1 (b=0x2 -> C=1); N preserved from a.
@@ -64,7 +66,8 @@ static const std::vector<RoundTripTC> kA64 = {
    "\"cset %w0, mi\\n\\t\"\"cset %w1, eq\\n\\t\"\"cset %w2, cs\\n\\t\"\"cset %w3, vs\""
    ":\"=&r\"(n),\"=&r\"(z),\"=&r\"(c),\"=&r\"(v):\"r\"(a),\"r\"(b):\"cc\");"
    "return (long)n|((long)z<<1)|((long)c<<2)|((long)v<<3);}\n",
-   {0x8ULL, 0x2ULL}, "Rmif", 0, "-march=armv8.4-a"},
+   {0x8ULL, 0x2ULL}, "Rmif", 0, "-march=armv8.4-a", false, "",
+   UC_CPU_ARM64_MAX},
 
   // Preserve: rmif a,#0,#15 sets all (a=0xF -> all 1), then rmif b,#0,#8 sets
   // only N from b3 (b=0 -> N=0); Z/C/V preserved as 1 => 0|2|4|8 = 14.
@@ -74,7 +77,8 @@ static const std::vector<RoundTripTC> kA64 = {
    "\"cset %w0, mi\\n\\t\"\"cset %w1, eq\\n\\t\"\"cset %w2, cs\\n\\t\"\"cset %w3, vs\""
    ":\"=&r\"(n),\"=&r\"(z),\"=&r\"(c),\"=&r\"(v):\"r\"(a),\"r\"(b):\"cc\");"
    "return (long)n|((long)z<<1)|((long)c<<2)|((long)v<<3);}\n",
-   {0xFULL, 0x0ULL}, "Rmif", 0, "-march=armv8.4-a"},
+   {0xFULL, 0x0ULL}, "Rmif", 0, "-march=armv8.4-a", false, "",
+   UC_CPU_ARM64_MAX},
 
   // Mask = 0 (no-op): rmif a,#0,#15 sets all (a=0x5 -> N0 Z1 C0 V1), then
   // rmif b,#0,#0 changes nothing => 0|2|0|8 = 10.
@@ -84,7 +88,8 @@ static const std::vector<RoundTripTC> kA64 = {
    "\"cset %w0, mi\\n\\t\"\"cset %w1, eq\\n\\t\"\"cset %w2, cs\\n\\t\"\"cset %w3, vs\""
    ":\"=&r\"(n),\"=&r\"(z),\"=&r\"(c),\"=&r\"(v):\"r\"(a),\"r\"(b):\"cc\");"
    "return (long)n|((long)z<<1)|((long)c<<2)|((long)v<<3);}\n",
-   {0x5ULL, 0x0ULL}, "Rmif", 0, "-march=armv8.4-a"},
+   {0x5ULL, 0x0ULL}, "Rmif", 0, "-march=armv8.4-a", false, "",
+   UC_CPU_ARM64_MAX},
 };
 // clang-format on
 

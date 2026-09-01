@@ -21,8 +21,8 @@
 // copy, no fcvt), so these probes exercise ONLY the fp16 FMA/FABD handlers.
 // fp16 bit patterns: 1.0=0x3C00 1.5=0x3E00 2.0=0x4000 3.0=0x4200 4.0=0x4400
 // 5.0=0x4500 6.0=0x4600 7.0=0x4700 8.0=0x4800 10.0=0x4900 0.0=0x0000.
-// Requires -march=armv8.2-a+fp16; the default AArch64 Unicorn MAX CPU executes
-// fp16 FMA/FABD natively.
+// Requires -march=armv8.2-a+fp16; select Unicorn's MAX CPU explicitly so the
+// fp16 FMA/FABD instructions execute natively.
 //
 //===----------------------------------------------------------------------===//
 
@@ -32,7 +32,8 @@ class AArch64FP16FusedRT : public SemanticRoundTripFixture,
                            public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(AArch64FP16FusedRT, Verify) { roundTripAArch64(GetParam()); }
 
-#define FP16FLAGS "FP16Fused", 0, "-march=armv8.2-a+fp16"
+#define FP16FLAGS                                                              \
+  "FP16Fused", 0, "-march=armv8.2-a+fp16", false, "", UC_CPU_ARM64_MAX
 
 // clang-format off
 static const std::vector<RoundTripTC> kA64 = {

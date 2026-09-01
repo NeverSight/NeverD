@@ -21,8 +21,8 @@
 // bit copies, no fcvt), so these probes exercise ONLY the fp16 arithmetic
 // handlers — conversions are a separate concern.  Inputs pack fp16 lane bit
 // patterns; values are chosen to stay normal (and include NaN / signed zero for
-// the min/max probes).  Requires -march=armv8.2-a+fp16; the default AArch64
-// Unicorn MAX CPU executes fp16 arithmetic natively.
+// the min/max probes).  Requires -march=armv8.2-a+fp16; pin Unicorn's MAX CPU
+// because its default Cortex-A72 model lacks FEAT_FP16 arithmetic.
 //
 //===----------------------------------------------------------------------===//
 
@@ -32,7 +32,8 @@ class AArch64FP16ArithRT : public SemanticRoundTripFixture,
                            public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(AArch64FP16ArithRT, Verify) { roundTripAArch64(GetParam()); }
 
-#define FP16FLAGS "FP16Arith", 0, "-march=armv8.2-a+fp16"
+#define FP16FLAGS                                                              \
+  "FP16Arith", 0, "-march=armv8.2-a+fp16", false, "", UC_CPU_ARM64_MAX
 
 // clang-format off
 static const std::vector<RoundTripTC> kA64 = {

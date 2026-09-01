@@ -16,8 +16,8 @@
 // llvm.aarch64.fjcvtzs intrinsic so codegen emits `fjcvtzs` and the recompiled
 // code wraps bit-exactly.
 //
-// Data moves through integer `fmov`.  Requires -march=armv8.3-a (FEAT_JSCVT);
-// executed natively by the Unicorn CPU.
+// Data moves through integer `fmov`.  Requires -march=armv8.3-a (FEAT_JSCVT)
+// and Unicorn's MAX CPU; the default Cortex-A72 lacks FEAT_JSCVT.
 //
 //===----------------------------------------------------------------------===//
 
@@ -27,7 +27,8 @@ class AArch64FjcvtzsRT : public SemanticRoundTripFixture,
                          public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(AArch64FjcvtzsRT, Verify) { roundTripAArch64(GetParam()); }
 
-#define JSFLAGS "Fjcvtzs", 0, "-march=armv8.3-a+jscvt"
+#define JSFLAGS                                                                \
+  "Fjcvtzs", 0, "-march=armv8.3-a+jscvt", false, "", UC_CPU_ARM64_MAX
 
 // One C template: load the double bit pattern, fjcvtzs into a GPR, return it.
 #define JCVT(NAME, BITS)                                                        \

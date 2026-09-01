@@ -24,7 +24,9 @@
 // frecpe/frsqrte, so Unicorn computes a bit-identical estimate on both sides.
 // Data moves through integer `fmov` (pure bit copies).  fp16 patterns:
 // 0.25=0x3400 0.5=0x3800 1.0=0x3C00 2.0=0x4000 3.0=0x4200 4.0=0x4400
-// 6.0=0x4600 8.0=0x4800 16.0=0x4C00 +Inf=0x7C00.  Requires -march=armv8.2-a+fp16.
+// 6.0=0x4600 8.0=0x4800 16.0=0x4C00 +Inf=0x7C00.  Requires
+// -march=armv8.2-a+fp16 and Unicorn's MAX CPU; the default Cortex-A72 lacks
+// FEAT_FP16 arithmetic.
 //
 //===----------------------------------------------------------------------===//
 
@@ -34,7 +36,8 @@ class AArch64FP16RecipRT : public SemanticRoundTripFixture,
                            public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(AArch64FP16RecipRT, Verify) { roundTripAArch64(GetParam()); }
 
-#define FP16FLAGS "FP16Recip", 0, "-march=armv8.2-a+fp16"
+#define FP16FLAGS                                                              \
+  "FP16Recip", 0, "-march=armv8.2-a+fp16", false, "", UC_CPU_ARM64_MAX
 
 // clang-format off
 static const std::vector<RoundTripTC> kA64 = {

@@ -18,8 +18,8 @@
 //
 // Data moves through integer `fmov`/`dup`.  fp16: 2.0=0x4000 3.0=0x4200
 // 4.0=0x4400 5.0=0x4500; f32: 1.0=0x3F800000.  Requires
-// -march=armv8.2-a+fp16fml (FEAT_FHM); executed natively by the Unicorn CPU
-// when the feature is present.
+// -march=armv8.2-a+fp16fml (FEAT_FHM) and Unicorn's MAX CPU; the default
+// Cortex-A72 lacks FEAT_FHM.
 //
 //===----------------------------------------------------------------------===//
 
@@ -29,7 +29,8 @@ class AArch64FP16WidenFMART : public SemanticRoundTripFixture,
                               public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(AArch64FP16WidenFMART, Verify) { roundTripAArch64(GetParam()); }
 
-#define FHMFLAGS "FP16WidenFMA", 0, "-march=armv8.2-a+fp16fml"
+#define FHMFLAGS                                                               \
+  "FP16WidenFMA", 0, "-march=armv8.2-a+fp16fml", false, "", UC_CPU_ARM64_MAX
 
 // clang-format off
 static const std::vector<RoundTripTC> kA64 = {

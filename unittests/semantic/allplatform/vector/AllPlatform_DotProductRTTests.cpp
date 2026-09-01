@@ -10,7 +10,7 @@
 // placeholder (whole register as one integer — completely wrong).  Now lifted
 // per-lane.  The indexed form broadcasts one 4-byte group of the second source.
 //
-// Requires +dotprod; Unicorn's default AArch64 MAX CPU supports it.  All values
+// Requires +dotprod; select Unicorn's MAX AArch64 CPU explicitly.  All values
 // are bounded so no result overflows the 32-bit accumulator unexpectedly.
 //
 //===----------------------------------------------------------------------===//
@@ -24,6 +24,9 @@ TEST_P(A64DotProductRT, Verify) { roundTripAArch64(GetParam()); }
 class ARM32DotProductRT : public SemanticRoundTripFixture,
                           public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(ARM32DotProductRT, Verify) { roundTripARM32(GetParam()); }
+
+#define A64DOT                                                                 \
+  "DotProduct", 1, "-march=armv8.2-a+dotprod", false, "", UC_CPU_ARM64_MAX
 
 // AArch32 dot product needs an ARMv8.2 target + the MAX CPU for emulation
 // (the default fixture pins cortex-a15, which is ARMv7 without FEAT_DotProd).
@@ -46,7 +49,7 @@ static const std::vector<RoundTripTC> kA64Dot = {
    "  return (unsigned long)(vgetq_lane_u32(acc,0)+vgetq_lane_u32(acc,1)*7u\n"
    "        +vgetq_lane_u32(acc,2)*13u+vgetq_lane_u32(acc,3)*17u);\n"
    "}\n",
-   {0x37ULL}, "DotProduct", 1, "-march=armv8.2-a+dotprod"},
+   {0x37ULL}, A64DOT},
 
   // SDOT q-reg: signed bytes (include negatives) -> 4x s32 accumulators.
   {"a64_sdot16",
@@ -60,7 +63,7 @@ static const std::vector<RoundTripTC> kA64Dot = {
    "  return (long)(vgetq_lane_s32(acc,0)+vgetq_lane_s32(acc,1)*7\n"
    "        +vgetq_lane_s32(acc,2)*13+vgetq_lane_s32(acc,3)*17);\n"
    "}\n",
-   {0x29ULL}, "DotProduct", 1, "-march=armv8.2-a+dotprod"},
+   {0x29ULL}, A64DOT},
 
   // UDOT d-reg: 2x u32 accumulators (8-byte sources).
   {"a64_udot8",
@@ -73,7 +76,7 @@ static const std::vector<RoundTripTC> kA64Dot = {
    "  acc=vdot_u32(acc,va,vb);\n"
    "  return (unsigned long)(vget_lane_u32(acc,0)+vget_lane_u32(acc,1)*7u);\n"
    "}\n",
-   {0x4BULL}, "DotProduct", 1, "-march=armv8.2-a+dotprod"},
+   {0x4BULL}, A64DOT},
 
   // UDOT indexed: broadcast one 4-byte group of the second source.
   {"a64_udot_idx",
@@ -87,7 +90,7 @@ static const std::vector<RoundTripTC> kA64Dot = {
    "  return (unsigned long)(vgetq_lane_u32(acc,0)+vgetq_lane_u32(acc,1)*7u\n"
    "        +vgetq_lane_u32(acc,2)*13u+vgetq_lane_u32(acc,3)*17u);\n"
    "}\n",
-   {0x55ULL}, "DotProduct", 1, "-march=armv8.2-a+dotprod"},
+   {0x55ULL}, A64DOT},
   // NOTE: i8mm (USDOT/SUDOT mixed-sign dot, SMMLA/UMMLA/USMMLA int8 matmul) is
   // ARMv8.6 — this Unicorn build raises UC_ERR_EXCEPTION (undefined insn) for it,
   // so those instructions can't be roundtrip-verified.  Unicorn MAX covers up to

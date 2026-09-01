@@ -15,8 +15,9 @@
 // precision follows the output width (h/s/d) and the lane size covers .8H/.4H.
 //
 // Data is moved via integer fmov (bit copies); the fp16 bit patterns are passed
-// as integer inputs.  Requires -march=armv8.2-a+fp16; the default AArch64
-// Unicorn MAX CPU executes fp16 conversions natively.
+// as integer inputs.  Requires -march=armv8.2-a+fp16.  Most instructions need
+// Unicorn's MAX CPU because its default Cortex-A72 lacks FEAT_FP16 arithmetic;
+// the four scalar FP16/FP32/FP64 FCVT forms are supported by the default model.
 //
 //===----------------------------------------------------------------------===//
 
@@ -26,7 +27,9 @@ class AArch64FP16ConvRT : public SemanticRoundTripFixture,
                           public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(AArch64FP16ConvRT, Verify) { roundTripAArch64(GetParam()); }
 
-#define FP16FLAGS "FP16Conv", 0, "-march=armv8.2-a+fp16"
+#define FP16FLAGS                                                              \
+  "FP16Conv", 0, "-march=armv8.2-a+fp16", false, "", UC_CPU_ARM64_MAX
+#define FP16BASEFLAGS "FP16Conv", 0, "-march=armv8.2-a+fp16"
 
 // clang-format off
 static const std::vector<RoundTripTC> kA64 = {
@@ -104,14 +107,14 @@ static const std::vector<RoundTripTC> kA64 = {
    "long f(long a){unsigned int r;"
    "__asm__ volatile(\"fmov s0,%w1\\n fcvt s0,h0\\n fmov %w0,s0\":\"=r\"(r):\"r\"((unsigned)a):\"v0\");"
    "return (long)r;}\n",
-   {0x3E00ULL}, FP16FLAGS},
+   {0x3E00ULL}, FP16BASEFLAGS},
 
   // 2.5f (0x40200000) -> 2.5h (0x4100)
   {"fcvt_h_s",
    "long f(long a){unsigned int r;"
    "__asm__ volatile(\"fmov s0,%w1\\n fcvt h0,s0\\n fmov %w0,s0\":\"=r\"(r):\"r\"((unsigned)a):\"v0\");"
    "return (long)r;}\n",
-   {0x40200000ULL}, FP16FLAGS},
+   {0x40200000ULL}, FP16BASEFLAGS},
 
   // --- fp16 <-> fp64 (FCVT) ---
   // 0.5h (0x3800) -> 0.5 (0x3FE0000000000000)
@@ -119,14 +122,14 @@ static const std::vector<RoundTripTC> kA64 = {
    "long f(long a){unsigned long r;"
    "__asm__ volatile(\"fmov s0,%w1\\n fcvt d0,h0\\n fmov %0,d0\":\"=r\"(r):\"r\"((unsigned)a):\"v0\");"
    "return (long)r;}\n",
-   {0x3800ULL}, FP16FLAGS},
+   {0x3800ULL}, FP16BASEFLAGS},
 
   // 4.0 (0x4010000000000000) -> 4.0h (0x4400)
   {"fcvt_h_d",
    "long f(long a){unsigned int r;"
    "__asm__ volatile(\"fmov d0,%1\\n fcvt h0,d0\\n fmov %w0,s0\":\"=r\"(r):\"r\"((unsigned long)a):\"v0\");"
    "return (long)r;}\n",
-   {0x4010000000000000ULL}, FP16FLAGS},
+   {0x4010000000000000ULL}, FP16BASEFLAGS},
 
   // --- vector int16 -> fp16 (.4H per-lane SCVTF) ---
   // [1,2,3,4] -> [1.0,2.0,3.0,4.0]h

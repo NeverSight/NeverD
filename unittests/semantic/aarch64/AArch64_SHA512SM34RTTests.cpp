@@ -12,9 +12,9 @@
 // These previously lifted to a generic ShaGeneric/AesGeneric placeholder that
 // merely copied one source, folding the result to garbage.  Each now maps to
 // the real LLVM AArch64 crypto intrinsic (llvm.aarch64.crypto.sha512h, ...) so
-// codegen emits the actual instruction.  Unicorn's default MAX CPU enables all
-// three extensions (id_aa64isar0: SHA2=2, SM3=1, SM4=1), so the roundtrip is
-// bit-exact.
+// codegen emits the actual instruction.  Select Unicorn's MAX CPU explicitly;
+// it enables all three extensions (id_aa64isar0: SHA2=2, SM3=1, SM4=1), so the
+// roundtrip is bit-exact.
 //
 //===----------------------------------------------------------------------===//
 
@@ -23,6 +23,11 @@
 class AArch64SHA512SM34RT : public SemanticRoundTripFixture,
                             public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(AArch64SHA512SM34RT, Verify) { roundTripAArch64(GetParam()); }
+
+#define SHA512FLAGS                                                            \
+  "Crypto", 1, "-march=armv8.2-a+sha3", false, "", UC_CPU_ARM64_MAX
+#define SM34FLAGS                                                              \
+  "Crypto", 1, "-march=armv8.2-a+sm4", false, "", UC_CPU_ARM64_MAX
 
 // clang-format off
 
@@ -38,8 +43,7 @@ static const std::vector<RoundTripTC> kA64Sha512Sm34 = {
    "  uint64x2_t o = vsha512hq_u64(x, y, z);\n"
    "  return o[0] ^ o[1];\n"
    "}\n",
-   {0x0123456789ABCDEFULL, 0xFEDCBA9876543210ULL}, "Crypto", 1,
-   "-march=armv8.2-a+sha3"},
+   {0x0123456789ABCDEFULL, 0xFEDCBA9876543210ULL}, SHA512FLAGS},
 
   // ===== SHA512H2 — SHA512 hash update part 2 =====
   {"sha512h2",
@@ -51,8 +55,7 @@ static const std::vector<RoundTripTC> kA64Sha512Sm34 = {
    "  uint64x2_t o = vsha512h2q_u64(x, y, z);\n"
    "  return o[0] ^ o[1];\n"
    "}\n",
-   {0x1122334455667788ULL, 0x99AABBCCDDEEFF00ULL}, "Crypto", 1,
-   "-march=armv8.2-a+sha3"},
+   {0x1122334455667788ULL, 0x99AABBCCDDEEFF00ULL}, SHA512FLAGS},
 
   // ===== SHA512SU0 — SHA512 schedule update 0 (2-source, destructive) =====
   {"sha512su0",
@@ -63,8 +66,7 @@ static const std::vector<RoundTripTC> kA64Sha512Sm34 = {
    "  uint64x2_t o = vsha512su0q_u64(x, y);\n"
    "  return o[0] ^ o[1];\n"
    "}\n",
-   {0xCAFEBABEDEADBEEFULL, 0x8BADF00DC0FFEE11ULL}, "Crypto", 1,
-   "-march=armv8.2-a+sha3"},
+   {0xCAFEBABEDEADBEEFULL, 0x8BADF00DC0FFEE11ULL}, SHA512FLAGS},
 
   // ===== SHA512SU1 — SHA512 schedule update 1 (3-source, destructive) =====
   {"sha512su1",
@@ -76,8 +78,7 @@ static const std::vector<RoundTripTC> kA64Sha512Sm34 = {
    "  uint64x2_t o = vsha512su1q_u64(x, y, z);\n"
    "  return o[0] ^ o[1];\n"
    "}\n",
-   {0x0011223344556677ULL, 0x8899AABBCCDDEEFFULL}, "Crypto", 1,
-   "-march=armv8.2-a+sha3"},
+   {0x0011223344556677ULL, 0x8899AABBCCDDEEFFULL}, SHA512FLAGS},
 
   // ===== SHA512 full update idiom (su0 + su1 + h + h2 chained) =====
   {"sha512_chain",
@@ -91,8 +92,7 @@ static const std::vector<RoundTripTC> kA64Sha512Sm34 = {
    "  h = vsha512h2q_u64(h, w0, s);\n"
    "  return h[0] ^ h[1];\n"
    "}\n",
-   {0x6A09E667F3BCC908ULL, 0xBB67AE8584CAA73BULL}, "Crypto", 1,
-   "-march=armv8.2-a+sha3"},
+   {0x6A09E667F3BCC908ULL, 0xBB67AE8584CAA73BULL}, SHA512FLAGS},
 
   // ===== SM3PARTW1 — SM3 message expansion part 1 (3-source, destructive) =====
   {"sm3partw1",
@@ -104,8 +104,7 @@ static const std::vector<RoundTripTC> kA64Sha512Sm34 = {
    "  uint64x2_t o = vreinterpretq_u64_u32(vsm3partw1q_u32(x, y, z));\n"
    "  return o[0] ^ o[1];\n"
    "}\n",
-   {0x0123456789ABCDEFULL, 0xFEDCBA9876543210ULL}, "Crypto", 1,
-   "-march=armv8.2-a+sm4"},
+   {0x0123456789ABCDEFULL, 0xFEDCBA9876543210ULL}, SM34FLAGS},
 
   // ===== SM3PARTW2 — SM3 message expansion part 2 =====
   {"sm3partw2",
@@ -117,8 +116,7 @@ static const std::vector<RoundTripTC> kA64Sha512Sm34 = {
    "  uint64x2_t o = vreinterpretq_u64_u32(vsm3partw2q_u32(x, y, z));\n"
    "  return o[0] ^ o[1];\n"
    "}\n",
-   {0x1122334455667788ULL, 0x99AABBCCDDEEFF00ULL}, "Crypto", 1,
-   "-march=armv8.2-a+sm4"},
+   {0x1122334455667788ULL, 0x99AABBCCDDEEFF00ULL}, SM34FLAGS},
 
   // ===== SM3SS1 — SM3 round constant rotate (4-register, non-destructive) =====
   {"sm3ss1",
@@ -130,8 +128,7 @@ static const std::vector<RoundTripTC> kA64Sha512Sm34 = {
    "  uint64x2_t o = vreinterpretq_u64_u32(vsm3ss1q_u32(x, y, z));\n"
    "  return o[0] ^ o[1];\n"
    "}\n",
-   {0x0123456789ABCDEFULL, 0xFEDCBA9876543210ULL}, "Crypto", 1,
-   "-march=armv8.2-a+sm4"},
+   {0x0123456789ABCDEFULL, 0xFEDCBA9876543210ULL}, SM34FLAGS},
 
   // ===== SM3TT1A — SM3 compression T1, lane index 0 (destructive + imm) =====
   {"sm3tt1a",
@@ -143,8 +140,7 @@ static const std::vector<RoundTripTC> kA64Sha512Sm34 = {
    "  uint64x2_t o = vreinterpretq_u64_u32(vsm3tt1aq_u32(x, y, z, 0));\n"
    "  return o[0] ^ o[1];\n"
    "}\n",
-   {0x0123456789ABCDEFULL, 0xFEDCBA9876543210ULL}, "Crypto", 1,
-   "-march=armv8.2-a+sm4"},
+   {0x0123456789ABCDEFULL, 0xFEDCBA9876543210ULL}, SM34FLAGS},
 
   // ===== SM3TT1B — SM3 compression T1 variant, lane index 2 =====
   {"sm3tt1b",
@@ -156,8 +152,7 @@ static const std::vector<RoundTripTC> kA64Sha512Sm34 = {
    "  uint64x2_t o = vreinterpretq_u64_u32(vsm3tt1bq_u32(x, y, z, 2));\n"
    "  return o[0] ^ o[1];\n"
    "}\n",
-   {0x1122334455667788ULL, 0x99AABBCCDDEEFF00ULL}, "Crypto", 1,
-   "-march=armv8.2-a+sm4"},
+   {0x1122334455667788ULL, 0x99AABBCCDDEEFF00ULL}, SM34FLAGS},
 
   // ===== SM3TT2A — SM3 compression T2, lane index 1 =====
   {"sm3tt2a",
@@ -169,8 +164,7 @@ static const std::vector<RoundTripTC> kA64Sha512Sm34 = {
    "  uint64x2_t o = vreinterpretq_u64_u32(vsm3tt2aq_u32(x, y, z, 1));\n"
    "  return o[0] ^ o[1];\n"
    "}\n",
-   {0xCAFEBABEDEADBEEFULL, 0x8BADF00DC0FFEE11ULL}, "Crypto", 1,
-   "-march=armv8.2-a+sm4"},
+   {0xCAFEBABEDEADBEEFULL, 0x8BADF00DC0FFEE11ULL}, SM34FLAGS},
 
   // ===== SM3TT2B — SM3 compression T2 variant, lane index 3 =====
   {"sm3tt2b",
@@ -182,8 +176,7 @@ static const std::vector<RoundTripTC> kA64Sha512Sm34 = {
    "  uint64x2_t o = vreinterpretq_u64_u32(vsm3tt2bq_u32(x, y, z, 3));\n"
    "  return o[0] ^ o[1];\n"
    "}\n",
-   {0x0011223344556677ULL, 0x8899AABBCCDDEEFFULL}, "Crypto", 1,
-   "-march=armv8.2-a+sm4"},
+   {0x0011223344556677ULL, 0x8899AABBCCDDEEFFULL}, SM34FLAGS},
 
   // ===== SM4E — SM4 encryption round (2-source, destructive) =====
   {"sm4e",
@@ -194,8 +187,7 @@ static const std::vector<RoundTripTC> kA64Sha512Sm34 = {
    "  uint64x2_t o = vreinterpretq_u64_u32(vsm4eq_u32(x, k));\n"
    "  return o[0] ^ o[1];\n"
    "}\n",
-   {0x0123456789ABCDEFULL, 0xFEDCBA9876543210ULL}, "Crypto", 1,
-   "-march=armv8.2-a+sm4"},
+   {0x0123456789ABCDEFULL, 0xFEDCBA9876543210ULL}, SM34FLAGS},
 
   // ===== SM4EKEY — SM4 key expansion (2-source, non-destructive) =====
   {"sm4ekey",
@@ -206,8 +198,7 @@ static const std::vector<RoundTripTC> kA64Sha512Sm34 = {
    "  uint64x2_t o = vreinterpretq_u64_u32(vsm4ekeyq_u32(x, k));\n"
    "  return o[0] ^ o[1];\n"
    "}\n",
-   {0x1122334455667788ULL, 0x99AABBCCDDEEFF00ULL}, "Crypto", 1,
-   "-march=armv8.2-a+sm4"},
+   {0x1122334455667788ULL, 0x99AABBCCDDEEFF00ULL}, SM34FLAGS},
 
   // ===== SM4 round idiom (key expand then encrypt) =====
   {"sm4_round",
@@ -219,8 +210,7 @@ static const std::vector<RoundTripTC> kA64Sha512Sm34 = {
    "  uint64x2_t o = vreinterpretq_u64_u32(vsm4eq_u32(st, rk));\n"
    "  return o[0] ^ o[1];\n"
    "}\n",
-   {0x0123456789ABCDEFULL, 0xFEDCBA9876543210ULL}, "Crypto", 1,
-   "-march=armv8.2-a+sm4"},
+   {0x0123456789ABCDEFULL, 0xFEDCBA9876543210ULL}, SM34FLAGS},
 };
 
 INSTANTIATE_TEST_SUITE_P(SHA512SM34, AArch64SHA512SM34RT,

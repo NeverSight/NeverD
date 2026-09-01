@@ -19,7 +19,7 @@
 // float-comparison range clamp matching QEMU's frint_s/frint_d helpers.
 //
 // Data moves through integer `fmov`/`ins`.  Requires -march=armv8.5-a
-// (FEAT_FRINTTS); executed natively by the Unicorn CPU.
+// (FEAT_FRINTTS); select Unicorn's MAX CPU explicitly for native execution.
 //
 //===----------------------------------------------------------------------===//
 
@@ -29,7 +29,7 @@ class AArch64FRIntTSRT : public SemanticRoundTripFixture,
                          public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(AArch64FRIntTSRT, Verify) { roundTripAArch64(GetParam()); }
 
-#define TSFLAGS "FRIntTS", 0, "-march=armv8.5-a"
+#define TSFLAGS "FRIntTS", 0, "-march=armv8.5-a", false, "", UC_CPU_ARM64_MAX
 
 // clang-format off
 static const std::vector<RoundTripTC> kA64 = {

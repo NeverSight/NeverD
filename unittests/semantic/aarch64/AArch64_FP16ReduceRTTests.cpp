@@ -17,7 +17,8 @@
 // Data moves via integer `fmov` (bit copy, no fcvt).
 // fp16 bits: 0.0=0x0000 -0.0=0x8000 1.0=0x3C00 4.0=0x4400 5.0=0x4500
 // 9.0=0x4880 11.0=0x4980 13.0=0x4A80 qNaN=0x7E00.
-// Requires -march=armv8.2-a+fp16; Unicorn MAX executes these natively.
+// Requires -march=armv8.2-a+fp16 and Unicorn's MAX CPU; the default
+// Cortex-A72 lacks FEAT_FP16 arithmetic.
 //
 //===----------------------------------------------------------------------===//
 
@@ -27,7 +28,8 @@ class AArch64FP16ReduceRT : public SemanticRoundTripFixture,
                             public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(AArch64FP16ReduceRT, Verify) { roundTripAArch64(GetParam()); }
 
-#define FP16FLAGS "FP16Reduce", 0, "-march=armv8.2-a+fp16"
+#define FP16FLAGS                                                              \
+  "FP16Reduce", 0, "-march=armv8.2-a+fp16", false, "", UC_CPU_ARM64_MAX
 
 #define H_1425 0x4200400044003C00ULL // [1.0, 4.0, 2.0, 3.0]
 #define H_4123 0x420040003C004400ULL // [4.0, 1.0, 2.0, 3.0]
