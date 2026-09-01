@@ -401,14 +401,16 @@ void LowToMedConverter::fixupSubRegisters(MedFunc &Func) {
 
     for (auto &MB : Func.Blocks) {
       // Find the LAST write index for each (RegOff, Size) pair, excluding
-      // SUBBYTES (a sub-register extract) and INT_ZEXT (an implicit
-      // zero-extension synced by Phase A; its real value lives in the
-      // narrower write it extends).
+      // SUBBYTES (a sub-register extract).  An INT_ZEXT normally leaves its
+      // input alias as the real narrow definition, but it is also the only
+      // definition of any intermediate alias wider than that input (for
+      // example YMM after a VEX.128 XMM -> ZMM zero-extension), so retain it
+      // for the per-read filter below.
       std::map<std::pair<uint64_t, uint16_t>, size_t> LastWide;
       for (size_t OI = 0; OI < MB.Ops.size(); ++OI) {
         auto &MOp = MB.Ops[OI];
         if (MOp.Output.Kind == MedVar::Reg && MOp.Output.Size > 0 &&
-            MOp.Opcode != NdOp::SUBBYTES && MOp.Opcode != NdOp::INT_ZEXT)
+            MOp.Opcode != NdOp::SUBBYTES)
           LastWide[{MOp.Output.RegOff, MOp.Output.Size}] = OI;
       }
 
@@ -459,6 +461,19 @@ void LowToMedConverter::fixupSubRegisters(MedFunc &Func) {
           uint16_t WideSz = WKey.second;
           if (WideSz <= NarSz)
             continue;
+          const MedOp &WideOp = MB.Ops[OI];
+          if (WideOp.Opcode == NdOp::INT_ZEXT) {
+            if (WideOp.NumInputs < 1 || WideOp.Inputs[0].Kind != MedVar::Reg ||
+                WideOp.Inputs[0].Size >= NarSz)
+              continue;
+            int InputByteOff =
+                TRI.subRegByteOffset(WideOp.Inputs[0].RegOff,
+                                     WideOp.Inputs[0].Size, WideOff, WideSz);
+            if (InputByteOff < 0 && WideOp.Inputs[0].RegOff == WideOff)
+              InputByteOff = 0;
+            if (InputByteOff != 0)
+              continue;
+          }
           int ByteOff;
           if (WideOff == NarOff)
             ByteOff = 0;
