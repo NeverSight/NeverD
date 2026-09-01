@@ -18,6 +18,8 @@
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/lift/X86Lifter.h"
 
+#include <algorithm>
+
 #define DEBUG_TYPE "neverd-lift-x86"
 
 namespace neverd {
@@ -30,6 +32,26 @@ bool isZmm64(const cs_x86_op &Operand) {
 }
 
 unsigned zmmIndex(const cs_x86_op &Operand) {
+  return static_cast<unsigned>(Operand.reg - X86_REG_ZMM0);
+}
+
+bool isVectorRegisterOfSize(const cs_x86_op &Operand, uint16_t Size) {
+  if (Operand.type != X86_OP_REG || Operand.size != Size)
+    return false;
+  if (Size == 16)
+    return Operand.reg >= X86_REG_XMM0 && Operand.reg <= X86_REG_XMM31;
+  if (Size == 32)
+    return Operand.reg >= X86_REG_YMM0 && Operand.reg <= X86_REG_YMM31;
+  if (Size == 64)
+    return Operand.reg >= X86_REG_ZMM0 && Operand.reg <= X86_REG_ZMM31;
+  return false;
+}
+
+unsigned vectorRegisterIndex(const cs_x86_op &Operand) {
+  if (Operand.size == 16)
+    return static_cast<unsigned>(Operand.reg - X86_REG_XMM0);
+  if (Operand.size == 32)
+    return static_cast<unsigned>(Operand.reg - X86_REG_YMM0);
   return static_cast<unsigned>(Operand.reg - X86_REG_ZMM0);
 }
 
@@ -56,10 +78,131 @@ bool liftLegacyXOP(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   }
 
   // ========================================================================
-  // AVX-512 shuffles / blends / aligns — COPY-based dataflow.
+  // AVX-512 VALIGND/Q — concatenate src1 above src2, shift right by an
+  // immediate element count, and keep the low vector width.  The count wraps
+  // to the number of elements in one destination vector.
   // ========================================================================
   case X86_INS_VALIGND:
-  case X86_INS_VALIGNQ:
+  case X86_INS_VALIGNQ: {
+    const uint16_t ElementSize = InsnId == X86_INS_VALIGND ? 4 : 8;
+    CanonicalEvexEncodingInfo Encoding;
+    if (!parseCanonicalEvexEncodingInfo(Insn, X86, L.targetArch(), Encoding) ||
+        Encoding.Offset + 7 > Insn->size || (Encoding.P0 & 0x07) != 0x03 ||
+        (Encoding.P1 & 0x87) !=
+            static_cast<uint8_t>((ElementSize == 8 ? 0x80 : 0) | 0x05) ||
+        Encoding.Opcode != 0x03 || (Encoding.P2 & 0x60) == 0x60 ||
+        (Encoding.P2 & 0x10) != 0 || X86.encoding.imm_size != 1 ||
+        X86.encoding.imm_offset != Insn->size - 1 || X86.avx_sae ||
+        X86.avx_rm != X86_AVX_RM_INVALID)
+      return false;
+
+    const bool HasMask = X86.op_count == 5;
+    if ((!HasMask && X86.op_count != 4) ||
+        (HasMask && !isX86OpmaskOperand(X86.operands[1])))
+      return false;
+    const unsigned Source1Index = HasMask ? 2 : 1;
+    const unsigned Source2Index = HasMask ? 3 : 2;
+    const unsigned ImmediateIndex = HasMask ? 4 : 3;
+    const cs_x86_op &DestinationOperand = X86.operands[0];
+    const cs_x86_op &Source1Operand = X86.operands[Source1Index];
+    const cs_x86_op &Source2Operand = X86.operands[Source2Index];
+    const cs_x86_op &ImmediateOperand = X86.operands[ImmediateIndex];
+
+    const uint8_t EncodedLength = Encoding.P2 & 0x60;
+    const uint16_t VectorSize =
+        EncodedLength == 0 ? 16 : (EncodedLength == 0x20 ? 32 : 64);
+    if (!isVectorRegisterOfSize(DestinationOperand, VectorSize) ||
+        !isVectorRegisterOfSize(Source1Operand, VectorSize) ||
+        (Source2Operand.type != X86_OP_REG &&
+         Source2Operand.type != X86_OP_MEM) ||
+        ImmediateOperand.type != X86_OP_IMM || ImmediateOperand.size != 1 ||
+        static_cast<uint8_t>(ImmediateOperand.imm) !=
+            Insn->bytes[Insn->size - 1] ||
+        decodeEvexVectorRegIndex(Encoding.P0, Encoding.ModRM) !=
+            vectorRegisterIndex(DestinationOperand) ||
+        decodeEvexVectorVvvvIndex(Encoding.P1, Encoding.P2) !=
+            vectorRegisterIndex(Source1Operand))
+      return false;
+
+    const bool MemoryForm = (Encoding.ModRM & 0xc0) != 0xc0;
+    if (MemoryForm != (Source2Operand.type == X86_OP_MEM) ||
+        (MemoryForm &&
+         (HasMask || Source2Operand.size != VectorSize ||
+          !validateCanonicalEvexMemoryTail(Insn, X86, Encoding, Source2Operand,
+                                           VectorSize, 1))) ||
+        (!MemoryForm &&
+         (!isVectorRegisterOfSize(Source2Operand, VectorSize) ||
+          decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) !=
+              vectorRegisterIndex(Source2Operand) ||
+          !validateCanonicalEvexRegisterTail(Insn, X86, Encoding, 1))))
+      return false;
+
+    if (L.targetArch() == Arch::X86 &&
+        (vectorRegisterIndex(DestinationOperand) >= 8 ||
+         vectorRegisterIndex(Source1Operand) >= 8 ||
+         (!MemoryForm && vectorRegisterIndex(Source2Operand) >= 8)))
+      return false;
+
+    const unsigned LaneCount = VectorSize / ElementSize;
+    const uint16_t MaskSize =
+        static_cast<uint16_t>(std::max(1u, (LaneCount + 7u) / 8u));
+    const uint8_t EncodedMask = Encoding.P2 & 0x07;
+    if (HasMask) {
+      const cs_x86_op &MaskOperand = X86.operands[1];
+      const RegInfo MaskInfo =
+          mapCapstoneReg(static_cast<x86_reg>(MaskOperand.reg));
+      if (EncodedMask == 0 || MaskOperand.reg == X86_REG_K0 ||
+          EncodedMask != MaskOperand.reg - X86_REG_K0 ||
+          MaskOperand.size != MaskSize || MaskInfo.Offset == UINT64_C(0xffff) ||
+          MaskInfo.Size < MaskSize ||
+          (((Encoding.P2 & 0x80) != 0) != MaskOperand.avx_zero_opmask))
+        return false;
+    } else if (EncodedMask != 0 || (Encoding.P2 & 0x80) != 0) {
+      return false;
+    }
+    for (unsigned Index = 0; Index < X86.op_count; ++Index)
+      if (X86.operands[Index].avx_bcast != X86_AVX_BCAST_INVALID ||
+          (X86.operands[Index].avx_zero_opmask && (!HasMask || Index != 1)))
+        return false;
+
+    NdVar Source1 = L.operandRead(S, Source1Operand);
+    NdVar Source2 = L.operandRead(S, Source2Operand);
+
+    const unsigned Shift =
+        static_cast<uint8_t>(ImmediateOperand.imm) & (LaneCount - 1);
+    NdVar Lanes[16];
+    for (unsigned Lane = 0; Lane < LaneCount; ++Lane) {
+      const unsigned SourceLane = Shift + Lane;
+      if (SourceLane < LaneCount) {
+        Lanes[Lane] = S.makeTemp(ElementSize);
+        S.emit(NdOp::SUBBYTES, Lanes[Lane],
+               {Source2, NdVar::cst(SourceLane * ElementSize, 4)});
+      } else {
+        Lanes[Lane] = S.makeTemp(ElementSize);
+        S.emit(
+            NdOp::SUBBYTES, Lanes[Lane],
+            {Source1, NdVar::cst((SourceLane - LaneCount) * ElementSize, 4)});
+      }
+    }
+
+    for (unsigned Count = LaneCount, Width = ElementSize; Count > 1;
+         Count >>= 1, Width <<= 1) {
+      for (unsigned Pair = 0; Pair < Count / 2; ++Pair) {
+        NdVar Joined = S.makeTemp(Width * 2);
+        S.emit(NdOp::CONCAT, Joined, {Lanes[Pair * 2 + 1], Lanes[Pair * 2]});
+        Lanes[Pair] = Joined;
+      }
+    }
+    if (HasMask)
+      return emitMaskedVectorResult(L, S, DestinationOperand, X86.operands[1],
+                                    Lanes[0], ElementSize);
+    S.emit(NdOp::COPY, L.operandWrite(DestinationOperand), {Lanes[0]});
+    return true;
+  }
+
+  // ========================================================================
+  // Remaining AVX-512 shuffles — COPY-based dataflow.
+  // ========================================================================
   case X86_INS_VSHUFF32X4:
   case X86_INS_VSHUFF64X2:
   case X86_INS_VSHUFI32X4:
