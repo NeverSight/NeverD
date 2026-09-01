@@ -85,8 +85,9 @@ bool intrinsicMayClobberFrameMemory(const LowOp &Op) {
     return true;
   const Intrinsic Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
   switch (Id) {
-  // Ordering/cache hints do not change the stored scalar value.  Everything
-  // else marked side-effecting is conservatively a memory barrier here:
+  // Ordering/cache hints and trap-only preconditions do not change the stored
+  // scalar value.  Everything else marked side-effecting is conservatively a
+  // memory barrier here:
   // system calls and architecture memory intrinsics lack a LowIR summary that
   // could prove an escaped frame slot unchanged.
   case Intrinsic::Dmb:
@@ -100,6 +101,7 @@ bool intrinsicMayClobberFrameMemory(const LowOp &Op) {
   case Intrinsic::Sfence:
   case Intrinsic::Prefetch:
   case Intrinsic::Pause:
+  case Intrinsic::X86RequireDivPrecondition:
     return false;
   default:
     return isSideeffectIntrinsic(Id);

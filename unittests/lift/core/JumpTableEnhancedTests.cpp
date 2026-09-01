@@ -94,6 +94,17 @@ static bool lowFunctionHasOpcode(const neverd::LowFunc &Function,
   return false;
 }
 
+static bool lowFunctionHasIntrinsic(const neverd::LowFunc &Function,
+                                    neverd::Intrinsic IntrinsicId) {
+  for (const neverd::LowBlock &Block : Function.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops)
+      if (Op.Opcode == neverd::NdOp::INTRINSIC && Op.NumInputs >= 1 &&
+          Op.Inputs[0].isConst() &&
+          Op.Inputs[0].Offset == static_cast<uint64_t>(IntrinsicId))
+        return true;
+  return false;
+}
+
 static const neverd::LowOp *findExactLowOp(const neverd::LowFunc &Function,
                                            neverd::va_t Address, int Sequence,
                                            neverd::NdOp Opcode) {
@@ -600,6 +611,140 @@ TEST_F(JTE_X86_32, GOTOFFPrivateFrameSpillSurvivesOnlyNonEscapingCalls) {
             1u)
       << "the negative must fail during expanded-graph replay, not before the "
          "table shape is exercised";
+}
+
+static neverd::BinaryImage
+makeI386GOTOFFAbsoluteLabelLoop(bool InsertMemoryClobber = false) {
+  constexpr neverd::va_t FunctionVA = 0;
+  constexpr neverd::va_t FunctionEnd = 0x40;
+  constexpr neverd::va_t TableVA = FunctionEnd;
+  constexpr neverd::va_t GOTPCFieldVA = 0xd;
+  constexpr neverd::va_t GOTOFFFieldVA = 0x3a;
+  constexpr std::array<neverd::va_t, 6> Targets{0x25, 0x27, 0x29,
+                                                0x2b, 0x2d, 0x2f};
+
+  neverd::BinaryImage Image;
+  Image.Arch = neverd::Arch::X86;
+  Image.Bits = neverd::Bitness::Bits32;
+  Image.Format = neverd::BinaryFormat::ELF;
+  Image.IsRelocatable = true;
+  Image.Entry = FunctionVA;
+
+  neverd::Segment Text;
+  Text.Name = ".text";
+  Text.VA = FunctionVA;
+  Text.Size = FunctionEnd;
+  Text.FileSz = FunctionEnd;
+  Text.Flags =
+      neverd::SegmentFlags::Readable | neverd::SegmentFlags::Executable;
+  Text.Data = {0x55, 0x89, 0xe5, 0x83, 0xec, 0x08, 0xe8, 0x00, 0x00, 0x00, 0x00,
+               0x58, 0x05, 0xf5, 0xff, 0xff, 0xff, 0x89, 0x45, 0xfc, 0x8b, 0x45,
+               0x08, 0x31, 0xd2, 0xb9, 0x06, 0x00, 0x00, 0x00, 0xf7, 0xf1, 0x89,
+               0x55, 0xf8, 0xeb, 0x0c, 0xeb, 0x0a, 0xeb, 0x08, 0xeb, 0x06, 0xeb,
+               0x04, 0xeb, 0x02, 0xeb, 0x00, 0x8b, 0x45, 0xfc, 0x8b, 0x4d, 0xf8,
+               0x8b, 0x84, 0x88, 0x40, 0x00, 0x00, 0x00, 0xff, 0xe0};
+  if (InsertMemoryClobber) {
+    // Replace the jump to the shared dispatch with `rep stosb`.  The divisor
+    // leaves ECX equal to six, so this is a real opaque memory write before
+    // control falls through the first case stub to the same dispatch.
+    Text.Data[0x23] = 0xf3;
+    Text.Data[0x24] = 0xaa;
+  }
+  Image.Segments.push_back(std::move(Text));
+
+  neverd::Segment Data;
+  Data.Name = ".data.rel.ro";
+  Data.VA = TableVA;
+  Data.Size = Targets.size() * sizeof(uint32_t);
+  Data.FileSz = Data.Size;
+  Data.Flags = neverd::SegmentFlags::Readable;
+  for (neverd::va_t Target : Targets)
+    for (unsigned Byte = 0; Byte < sizeof(uint32_t); ++Byte)
+      Data.Data.push_back(static_cast<uint8_t>(Target >> (Byte * 8)));
+  Image.Segments.push_back(std::move(Data));
+
+  neverd::Section TextSection;
+  TextSection.Name = ".text";
+  TextSection.VA = FunctionVA;
+  TextSection.Size = FunctionEnd;
+  TextSection.FileSz = FunctionEnd;
+  TextSection.Flags =
+      neverd::SegmentFlags::Readable | neverd::SegmentFlags::Executable;
+  Image.Sections.push_back(std::move(TextSection));
+
+  neverd::Section DataSection;
+  DataSection.Name = ".data.rel.ro";
+  DataSection.VA = TableVA;
+  DataSection.Size = Targets.size() * sizeof(uint32_t);
+  DataSection.FileSz = DataSection.Size;
+  DataSection.Flags = neverd::SegmentFlags::Readable;
+  Image.Sections.push_back(std::move(DataSection));
+
+  neverd::Symbol Function =
+      neverd::Symbol::makeFunc(FunctionVA, FunctionEnd - FunctionVA);
+  Function.Name = "i386_gotoff_absolute_label_loop";
+  Image.Symbols.push_back(std::move(Function));
+  Image.KnownCodeRanges.emplace_back(FunctionVA, FunctionEnd);
+  Image.I386GOTPCFields.emplace(
+      GOTPCFieldVA, neverd::AppliedI386GOTPCField{.EncodedValue = 0xfffffff5,
+                                                  .ExpectedPCValue = 0xb});
+  Image.DataAddressRelocOperands.emplace(
+      GOTOFFFieldVA,
+      neverd::RelocatedAddressField{
+          .EncodedValue = TableVA,
+          .TargetVA = TableVA,
+          .Width = sizeof(uint32_t),
+          .TargetOwnerVA = TableVA,
+          .Kind = neverd::RelocatedAddressFieldKind::I386ELFGOTOFF});
+  for (size_t I = 0; I < Targets.size(); ++I)
+    Image.CodePtrRelocSlots.insert(TableVA + I * sizeof(uint32_t));
+  return Image;
+}
+
+TEST_F(JTE_X86_32,
+       GOTOFFPrivateSpillSurvivesDivPreconditionAndAbsoluteLabelRoots) {
+  neverd::BinaryImage Image = makeI386GOTOFFAbsoluteLabelLoop();
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low = Builder.build(Image, Decoder, Image.Entry,
+                                            "i386_gotoff_absolute_label_loop");
+
+  ASSERT_EQ(Low.RelocatedInstructionScalarModelOccurrences.size(), 1u);
+  ASSERT_TRUE(lowFunctionHasIntrinsic(
+      Low, neverd::Intrinsic::X86RequireDivPrecondition));
+  EXPECT_TRUE(Builder.i386GOTOFFGraphQueryIssuedForTesting());
+  EXPECT_FALSE(Builder.i386GOTOFFGraphQueryBudgetExhaustedForTesting());
+  EXPECT_EQ(Low.EverPublishedJumpTableBranchAddresses.count(0x3e), 1u);
+  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_EQ(Low.JumpTables.front().InsnAddr, 0x3eu);
+  EXPECT_EQ(Low.JumpTables.front().Targets,
+            (std::vector<neverd::va_t>{0x25, 0x27, 0x29, 0x2b, 0x2d, 0x2f}));
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(0x3e), 0u);
+}
+
+TEST_F(JTE_X86_32, GOTOFFPrivateSpillRejectsMemoryWritingStringIntrinsic) {
+  neverd::BinaryImage Image = makeI386GOTOFFAbsoluteLabelLoop(
+      /*InsertMemoryClobber=*/true);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low = Builder.build(
+      Image, Decoder, Image.Entry, "i386_gotoff_opaque_memory_intrinsic");
+
+  ASSERT_EQ(Low.RelocatedInstructionScalarModelOccurrences.size(), 1u);
+  ASSERT_TRUE(lowFunctionHasIntrinsic(
+      Low, neverd::Intrinsic::X86RequireDivPrecondition));
+  ASSERT_TRUE(lowFunctionHasIntrinsic(Low, neverd::Intrinsic::Stosb));
+  EXPECT_TRUE(Builder.i386GOTOFFGraphQueryIssuedForTesting());
+  EXPECT_FALSE(Builder.i386GOTOFFGraphQueryBudgetExhaustedForTesting());
+  EXPECT_TRUE(Low.EverPublishedJumpTableBranchAddresses.empty());
+  EXPECT_TRUE(Low.JumpTables.empty());
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
+  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
 }
 
 TEST_F(JTE_X86_32, TLSDescWriterFootprintInvalidatesOnlyOverlappingGOTPCField) {
