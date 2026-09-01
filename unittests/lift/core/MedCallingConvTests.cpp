@@ -687,6 +687,88 @@ TEST(MedTypePass, X86InfersFloatReturnFromX87CarrierExtension) {
   EXPECT_TRUE(Func.FPReturnViaX87);
 }
 
+TEST(MedTypePass, X86X87CleanupDoesNotOverrideExplicitIntegerReturn) {
+  constexpr Arch TheArch = Arch::X86;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+
+  MedFunc Func;
+  Func.Entry = 0x1000;
+  Func.Name = "x87_cleanup_with_integer_return";
+  Func.Blocks.resize(1);
+  MedBlock &Block = Func.Blocks[0];
+  Block.Id = 0;
+
+  const MedVar Scalar = temp(10, 0, 4, TheArch);
+  Block.Ops.push_back(binary(NdOp::FLOAT_INT2FLOAT, Scalar,
+                             MedVar::makeConst(42, 4),
+                             MedVar::makeConst(4, 4)));
+  const MedVar Carrier = temp(11, 0, x86reg::FPURegSize, TheArch);
+  Block.Ops.push_back(unary(NdOp::FLOAT_FLOAT2FLOAT, Carrier, Scalar));
+  const MedVar X87Value = reg(20, 0, x86reg::FPURegSize, x86reg::ST7, TheArch);
+  Block.Ops.push_back(unary(NdOp::COPY, X87Value, Carrier));
+
+  const MedVar IntResult =
+      reg(30, 1, TRI.PointerSize, TRI.IntReturnReg, TheArch);
+  Block.Ops.push_back(
+      unary(NdOp::COPY, IntResult, MedVar::makeConst(0x1234, 4)));
+
+  // `fstp %st(0)` may leave a same-physical-slot x87 COPY after the real EAX
+  // result.  That data-identity cleanup is not fresh x87 return evidence.
+  const MedVar X87Cleanup =
+      reg(20, 1, x86reg::FPURegSize, x86reg::ST7, TheArch);
+  Block.Ops.push_back(unary(NdOp::COPY, X87Cleanup, X87Value));
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.addInput(IntResult);
+  Block.Ops.push_back(Return);
+
+  inferMedTypes(Func, TheArch);
+
+  ASSERT_TRUE(Func.ReturnType);
+  EXPECT_EQ(Func.ReturnType->Kind, NdTypeKind::Int);
+  EXPECT_EQ(Func.ReturnType->Size, TRI.PointerSize);
+  EXPECT_FALSE(Func.FPReturnViaX87);
+}
+
+TEST(MedTypePass, X86IntermediateX87DoesNotOverrideXMMReturnConvention) {
+  constexpr Arch TheArch = Arch::X86;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+
+  MedFunc Func;
+  Func.Entry = 0x1000;
+  Func.Name = "x87_intermediate_with_xmm_return";
+  Func.Blocks.resize(1);
+  MedBlock &Block = Func.Blocks[0];
+  Block.Id = 0;
+
+  const MedVar X87Scalar = temp(10, 0, 4, TheArch);
+  Block.Ops.push_back(binary(NdOp::FLOAT_INT2FLOAT, X87Scalar,
+                             MedVar::makeConst(42, 4),
+                             MedVar::makeConst(4, 4)));
+  const MedVar X87Carrier = temp(11, 0, x86reg::FPURegSize, TheArch);
+  Block.Ops.push_back(unary(NdOp::FLOAT_FLOAT2FLOAT, X87Carrier, X87Scalar));
+  const MedVar X87Intermediate =
+      reg(20, 0, x86reg::FPURegSize, x86reg::ST7, TheArch);
+  Block.Ops.push_back(unary(NdOp::COPY, X87Intermediate, X87Carrier));
+
+  const MedVar XMMScalar = temp(12, 0, 8, TheArch);
+  Block.Ops.push_back(binary(NdOp::FLOAT_INT2FLOAT, XMMScalar,
+                             MedVar::makeConst(7, 4), MedVar::makeConst(8, 4)));
+  const MedVar XMMReturn = reg(21, 0, 16, TRI.FPReturnReg, TheArch);
+  Block.Ops.push_back(unary(NdOp::COPY, XMMReturn, XMMScalar));
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.addInput(XMMReturn);
+  Block.Ops.push_back(Return);
+
+  inferMedTypes(Func, TheArch);
+
+  ASSERT_TRUE(Func.ReturnType);
+  EXPECT_EQ(Func.ReturnType->Kind, NdTypeKind::Float);
+  EXPECT_EQ(Func.ReturnType->Size, 8u);
+  EXPECT_FALSE(Func.FPReturnViaX87);
+}
+
 TEST(MedABIPass, DirectCallUsesWidestEquallySeededArgumentPhi) {
   constexpr Arch TheArch = Arch::AArch64;
   const TargetRegInfo &TRI = getTargetRegInfo(TheArch);

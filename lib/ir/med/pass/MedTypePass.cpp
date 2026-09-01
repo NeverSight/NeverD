@@ -143,6 +143,17 @@ x87ReturnElemSize(const std::map<std::pair<int, int>, const MedOp *> &Defs,
   return Elem ? Elem : scalarFPLoadElemSize(Defs, V, 0);
 }
 
+// LowIR represents `fstp st(0)` as a COPY between two SSA versions of the
+// same physical x87 slot followed by a TOP rotation.  The COPY is a data
+// identity used for stack bookkeeping, not a fresh floating-point return.
+static bool isX87StackSelfCopy(const MedOp &Op, const TargetRegInfo &TRI) {
+  return Op.Opcode == NdOp::COPY && Op.NumInputs >= 1 &&
+         Op.Output.Kind == MedVar::Reg && TRI.isX87StackReg(Op.Output.RegOff) &&
+         Op.Inputs[0].Kind == MedVar::Reg &&
+         TRI.isX87StackReg(Op.Inputs[0].RegOff) &&
+         Op.Inputs[0].RegOff == Op.Output.RegOff;
+}
+
 // The FP return register is written but neither an FP producer nor an FP load
 // supplies its value -- a floating-point *constant* materialized as integer
 // bits and moved into the FP register (a leaf `return 3.5;` at -O2 lowers to
@@ -323,7 +334,8 @@ intRetEffWidth(const std::map<std::pair<int, int>, const MedOp *> &Defs,
 }
 
 static TypeRef inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI,
-                               Arch TheArch) {
+                               Arch TheArch, bool &ReturnViaX87) {
+  ReturnViaX87 = false;
   uint16_t DefaultSize = TRI.PointerSize > 0 ? TRI.PointerSize : 4;
 
   // The epilogue register-restore filter below applies to x86/x86-64: a `pop`
@@ -380,6 +392,7 @@ static TypeRef inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI,
       const MedOp *FirstFloat = nullptr;
       uint16_t FloatElem = 0;
       int FloatDist = -1;
+      bool FirstFloatViaX87 = false;
       bool FloatViaPhi = false;
       const MedOp *FPRegWriteOp =
           nullptr; // closest FP-return-reg write (any op)
@@ -402,8 +415,9 @@ static TypeRef inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI,
             TRI.hasFPReturnReg() && Rit2->Output.RegOff == TRI.FPReturnReg;
         // The x87 TOP rotates, so the physical slot carrying the logical ST0
         // return may be any ST0..ST7 register after stack fixup.
-        const bool IsX87Return =
-            TheArch == Arch::X86 && TRI.isX87StackReg(Rit2->Output.RegOff);
+        const bool IsX87Return = TheArch == Arch::X86 &&
+                                 TRI.isX87StackReg(Rit2->Output.RegOff) &&
+                                 !isX87StackSelfCopy(*Rit2, TRI);
         if (IsFPRegReturn || IsX87Return) {
           if (IsFPRegReturn && !FPRegWriteOp)
             FPRegWriteOp =
@@ -417,6 +431,7 @@ static TypeRef inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI,
               FirstFloat = &*Rit2;
               FloatElem = E;
               FloatDist = Dist;
+              FirstFloatViaX87 = IsX87Return;
             }
           }
         }
@@ -479,6 +494,7 @@ static TypeRef inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI,
                       (IntDist < 0 || FloatDist <= IntDist);
       if (UseFloat) {
         AnyFloat = true;
+        ReturnViaX87 |= FirstFloatViaX87;
         uint16_t E = FloatElem ? FloatElem : FloatFallbackElem;
         if (E > BestFloatElem)
           BestFloatElem = E;
@@ -650,27 +666,11 @@ static void inferLocalTypes(MedFunc &Func) {
 
 void inferMedTypes(MedFunc &Func, Arch TheArch) {
   const auto &TRI = getTargetRegInfo(TheArch);
-  Func.ReturnType = inferReturnType(Func, TRI, TheArch);
+  bool ReturnViaX87 = false;
+  Func.ReturnType = inferReturnType(Func, TRI, TheArch, ReturnViaX87);
+  Func.FPReturnViaX87 = ReturnViaX87;
   inferParamTypes(Func, TRI);
   inferLocalTypes(Func);
-
-  // i386 cdecl returns a floating-point value through the x87 stack (st0): an
-  // external callee loads its result onto st0 (`fldl`) before `ret`, so any x87
-  // stack-register write in an FP-returning i386 function marks the st0 return
-  // convention.  clang's internal convention for static functions returns FP in
-  // XMM0 with no x87, so this cleanly separates the two.
-  if (Func.ReturnType && Func.ReturnType->Kind == NdTypeKind::Float) {
-    for (const auto &Blk : Func.Blocks) {
-      for (const auto &Op : Blk.Ops)
-        if (Op.Output.Kind == MedVar::Reg &&
-            TRI.isX87StackReg(Op.Output.RegOff)) {
-          Func.FPReturnViaX87 = true;
-          break;
-        }
-      if (Func.FPReturnViaX87)
-        break;
-    }
-  }
 }
 
 } // namespace neverd
