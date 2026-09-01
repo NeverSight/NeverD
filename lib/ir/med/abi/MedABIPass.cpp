@@ -186,101 +186,92 @@ std::optional<int64_t> exactEntrySpDelta(const MedFunc &Func, Arch TheArch,
   return Eval(Root);
 }
 
-enum class ReachingSpState : uint8_t { Value, Cycle, Unknown };
-
-struct ReachingSpResult {
-  ReachingSpState State = ReachingSpState::Unknown;
-  int64_t Delta = 0;
-};
-
-ReachingSpResult
-reachingStackPtrDeltaImpl(const MedFunc &Func, const TargetRegInfo &TRI,
-                          int BlockId, int BeforeIdx,
-                          std::set<std::pair<int, int>> &Active) {
-  const std::pair<int, int> Key{BlockId, BeforeIdx};
-  if (!Active.insert(Key).second)
-    return {ReachingSpState::Cycle, 0};
-
-  const MedBlock *Block = nullptr;
-  for (const MedBlock &Candidate : Func.Blocks)
-    if (Candidate.Id == BlockId) {
-      Block = &Candidate;
-      break;
-    }
-  if (!Block) {
-    Active.erase(Key);
-    return {};
-  }
-
-  const int Boundary = std::min(BeforeIdx, static_cast<int>(Block->Ops.size()));
-  for (int I = Boundary - 1; I >= 0; --I) {
-    const MedVar &Output = Block->Ops[I].Output;
-    if (Output.Kind != MedVar::Reg || Output.Size == 0 ||
-        Output.RegOff != TRI.StackPointer)
-      continue;
-    auto Delta = stackPtrDelta(Func, TRI, Output);
-    Active.erase(Key);
-    return Delta ? ReachingSpResult{ReachingSpState::Value, *Delta}
-                 : ReachingSpResult{};
-  }
-
-  for (const PhiNode &Phi : Block->Phis) {
-    if (Phi.Output.Kind != MedVar::Reg || Phi.Output.Size == 0 ||
-        Phi.Output.RegOff != TRI.StackPointer)
-      continue;
-    auto Delta = stackPtrDelta(Func, TRI, Phi.Output);
-    Active.erase(Key);
-    return Delta ? ReachingSpResult{ReachingSpState::Value, *Delta}
-                 : ReachingSpResult{};
-  }
-
-  if (Block->Preds.empty()) {
-    Active.erase(Key);
-    return {ReachingSpState::Value, 0};
-  }
-
-  std::optional<int64_t> Common;
-  bool SawCycle = false;
-  for (int PredId : Block->Preds) {
-    const MedBlock *Pred = nullptr;
-    for (const MedBlock &Candidate : Func.Blocks)
-      if (Candidate.Id == PredId) {
-        Pred = &Candidate;
-        break;
-      }
-    if (!Pred) {
-      Active.erase(Key);
-      return {};
-    }
-    ReachingSpResult Incoming = reachingStackPtrDeltaImpl(
-        Func, TRI, PredId, static_cast<int>(Pred->Ops.size()), Active);
-    if (Incoming.State == ReachingSpState::Cycle) {
-      SawCycle = true;
-      continue;
-    }
-    if (Incoming.State != ReachingSpState::Value ||
-        (Common && *Common != Incoming.Delta)) {
-      Active.erase(Key);
-      return {};
-    }
-    Common = Incoming.Delta;
-  }
-
-  Active.erase(Key);
-  if (Common)
-    return {ReachingSpState::Value, *Common};
-  return {SawCycle ? ReachingSpState::Cycle : ReachingSpState::Unknown, 0};
-}
-
 std::optional<int64_t> reachingStackPtrDelta(const MedFunc &Func,
                                              const TargetRegInfo &TRI,
                                              int BlockId, int BeforeIdx) {
-  std::set<std::pair<int, int>> Active;
-  ReachingSpResult Result =
-      reachingStackPtrDeltaImpl(Func, TRI, BlockId, BeforeIdx, Active);
-  return Result.State == ReachingSpState::Value
-             ? std::optional<int64_t>(Result.Delta)
-             : std::nullopt;
+  // Walk transparent predecessors once and collect every boundary at which the
+  // reaching SP becomes concrete: a local SP definition, an SP PHI, or a
+  // function-entry block.  The former recursive walk only marked the current
+  // DFS path active.  A large loop/diamond CFG therefore revisited the same
+  // predecessor subgraph for every path and could grow exponentially while
+  // recovering an otherwise ordinary call (for example an ARM memset in a
+  // nested DP loop).  A state is fully described by its block and scan
+  // boundary, so a visited worklist preserves the exact all-path agreement
+  // check while making the traversal linear in the reachable CFG.
+  using State = std::pair<int, int>;
+  std::map<int, const MedBlock *> Blocks;
+  for (const MedBlock &Block : Func.Blocks)
+    if (!Blocks.emplace(Block.Id, &Block).second)
+      return std::nullopt;
+
+  std::vector<State> Worklist{{BlockId, BeforeIdx}};
+  std::set<State> Visited;
+  std::optional<int64_t> Common;
+
+  auto Merge = [&](int64_t Delta) {
+    if (Common && *Common != Delta)
+      return false;
+    Common = Delta;
+    return true;
+  };
+
+  while (!Worklist.empty()) {
+    const State Current = Worklist.back();
+    Worklist.pop_back();
+    if (!Visited.insert(Current).second)
+      continue;
+
+    auto BlockIt = Blocks.find(Current.first);
+    if (BlockIt == Blocks.end())
+      return std::nullopt;
+    const MedBlock &Block = *BlockIt->second;
+    const int Boundary =
+        std::clamp(Current.second, 0, static_cast<int>(Block.Ops.size()));
+
+    bool FoundBoundary = false;
+    for (int I = Boundary - 1; I >= 0; --I) {
+      const MedVar &Output = Block.Ops[I].Output;
+      if (Output.Kind != MedVar::Reg || Output.Size == 0 ||
+          Output.RegOff != TRI.StackPointer)
+        continue;
+      auto Delta = stackPtrDelta(Func, TRI, Output);
+      if (!Delta || !Merge(*Delta))
+        return std::nullopt;
+      FoundBoundary = true;
+      break;
+    }
+    if (FoundBoundary)
+      continue;
+
+    for (const PhiNode &Phi : Block.Phis) {
+      if (Phi.Output.Kind != MedVar::Reg || Phi.Output.Size == 0 ||
+          Phi.Output.RegOff != TRI.StackPointer)
+        continue;
+      auto Delta = stackPtrDelta(Func, TRI, Phi.Output);
+      if (!Delta || !Merge(*Delta))
+        return std::nullopt;
+      FoundBoundary = true;
+      break;
+    }
+    if (FoundBoundary)
+      continue;
+
+    if (Block.Preds.empty()) {
+      if (!Merge(0))
+        return std::nullopt;
+      continue;
+    }
+
+    for (int PredId : Block.Preds) {
+      auto PredIt = Blocks.find(PredId);
+      if (PredIt == Blocks.end())
+        return std::nullopt;
+      Worklist.emplace_back(PredId,
+                            static_cast<int>(PredIt->second->Ops.size()));
+    }
+  }
+
+  return Common;
 }
 } // namespace
 
