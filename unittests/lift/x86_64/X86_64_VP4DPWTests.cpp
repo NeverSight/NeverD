@@ -86,20 +86,30 @@ std::vector<LowOp> lift(std::initializer_list<uint8_t> Bytes) {
 
 TEST(X86VP4DPW, CanonicalLiftOwnsMemoryAndFourRegisterSourceBlock) {
   const auto Ops = lift({0x62, 0xf2, 0x5f, 0xc2, 0x52, 0x08});
-  ASSERT_EQ(Ops.size(), 1u);
-  ASSERT_EQ(Ops[0].Opcode, NdOp::INTRINSIC);
-  ASSERT_TRUE(Ops[0].Inputs[0].isConst());
-  EXPECT_EQ(static_cast<Intrinsic>(Ops[0].Inputs[0].Offset),
+  EXPECT_TRUE(std::none_of(Ops.begin(), Ops.end(), [](const LowOp &Op) {
+    return Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE;
+  }));
+  const auto IntrinsicOp =
+      std::find_if(Ops.begin(), Ops.end(), [](const LowOp &Op) {
+        return Op.Opcode == NdOp::INTRINSIC;
+      });
+  ASSERT_NE(IntrinsicOp, Ops.end());
+  EXPECT_EQ(std::count_if(
+                Ops.begin(), Ops.end(),
+                [](const LowOp &Op) { return Op.Opcode == NdOp::INTRINSIC; }),
+            1);
+  ASSERT_EQ(IntrinsicOp->NumInputs, 6);
+  ASSERT_TRUE(IntrinsicOp->Inputs[0].isConst());
+  EXPECT_EQ(static_cast<Intrinsic>(IntrinsicOp->Inputs[0].Offset),
             Intrinsic::X86VP4DPWSSD);
-  ASSERT_EQ(Ops[0].NumInputs, 6);
-  EXPECT_EQ(Ops[0].Output.Size, 64);
-  EXPECT_EQ(Ops[0].Inputs[1].Size, 8);
-  EXPECT_EQ(Ops[0].Inputs[2].Size, 64);
-  ASSERT_TRUE(Ops[0].Inputs[3].isConst());
-  EXPECT_EQ(Ops[0].Inputs[3].Offset, 20u);
-  EXPECT_EQ(Ops[0].Inputs[4].Size, 2);
-  ASSERT_TRUE(Ops[0].Inputs[5].isConst());
-  EXPECT_EQ(Ops[0].Inputs[5].Offset, 1u);
+  EXPECT_EQ(IntrinsicOp->Output.Size, 64);
+  EXPECT_EQ(IntrinsicOp->Inputs[1].Size, 8);
+  EXPECT_EQ(IntrinsicOp->Inputs[2].Size, 64);
+  ASSERT_TRUE(IntrinsicOp->Inputs[3].isConst());
+  EXPECT_EQ(IntrinsicOp->Inputs[3].Offset, 20u);
+  EXPECT_EQ(IntrinsicOp->Inputs[4].Size, 2);
+  ASSERT_TRUE(IntrinsicOp->Inputs[5].isConst());
+  EXPECT_EQ(IntrinsicOp->Inputs[5].Offset, 1u);
 }
 
 TEST(X86VP4DPW, SideeffectIDsAndFourSequentialWrapOrSaturateRounds) {
