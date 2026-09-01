@@ -139,8 +139,9 @@ bool validateCanonicalEvexVSIB(
       ValueOperand.size != ValueInfo.Size)
     return false;
 
+  const uint16_t VectorBytes = std::max(IndexInfo.Size, ValueInfo.Size);
   const uint8_t ExpectedLength =
-      IndexInfo.Size == 16 ? 0 : (IndexInfo.Size == 32 ? 0x20 : 0x40);
+      VectorBytes == 16 ? 0 : (VectorBytes == 32 ? 0x20 : 0x40);
   if ((Encoding.P2 & 0x60) != ExpectedLength ||
       decodeEvexVectorRegIndex(Encoding.P0, Encoding.ModRM) !=
           (ValueInfo.Offset - x86reg::XMM0) / x86reg::VectorRegStride)
