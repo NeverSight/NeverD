@@ -346,6 +346,335 @@ TEST(X86WideISAState, EvexAlignUsesBothSourcesAndImmediate) {
   expectStrictlyUnlifted({0x62, 0xf3, 0x6d, 0x2a, 0x03, 0x08, 0x01});
 }
 
+TEST(X86WideISAState, EvexShuffleQuartersUseBothSourcesAndImmediate) {
+  struct ShuffleCase {
+    std::vector<uint8_t> Bytes;
+    uint16_t VectorSize;
+  };
+  const ShuffleCase Cases[] = {
+      // vshuff32x4 ymm1, ymm2, ymm3, 0xab
+      {{0x62, 0xf3, 0x6d, 0x28, 0x23, 0xcb, 0xab}, 32},
+      // vshuff32x4 zmm1, zmm2, zmm3, 0xab
+      {{0x62, 0xf3, 0x6d, 0x48, 0x23, 0xcb, 0xab}, 64},
+      // vshuff64x2 ymm1, ymm2, ymm3, 0xab
+      {{0x62, 0xf3, 0xed, 0x28, 0x23, 0xcb, 0xab}, 32},
+      // vshuff64x2 zmm1, zmm2, zmm3, 0xab
+      {{0x62, 0xf3, 0xed, 0x48, 0x23, 0xcb, 0xab}, 64},
+      // vshufi32x4 ymm1, ymm2, ymm3, 0xab
+      {{0x62, 0xf3, 0x6d, 0x28, 0x43, 0xcb, 0xab}, 32},
+      // vshufi32x4 zmm1, zmm2, zmm3, 0xab
+      {{0x62, 0xf3, 0x6d, 0x48, 0x43, 0xcb, 0xab}, 64},
+      // vshufi64x2 ymm1, ymm2, ymm3, 0xab
+      {{0x62, 0xf3, 0xed, 0x28, 0x43, 0xcb, 0xab}, 32},
+      // vshufi64x2 zmm1, zmm2, zmm3, 0xab
+      {{0x62, 0xf3, 0xed, 0x48, 0x43, 0xcb, 0xab}, 64},
+  };
+  constexpr std::array<size_t, 2> YmmQuarterSelectors = {1, 1};
+  constexpr std::array<size_t, 4> ZmmQuarterSelectors = {3, 2, 2, 2};
+  const RegInfo Destination = mapCapstoneReg(X86_REG_ZMM1);
+  const RegInfo Source1 = mapCapstoneReg(X86_REG_ZMM2);
+  const RegInfo Source2 = mapCapstoneReg(X86_REG_ZMM3);
+  for (const ShuffleCase &Current : Cases) {
+    SCOPED_TRACE(testing::Message()
+                 << "vector size " << Current.VectorSize << ", opcode 0x"
+                 << std::hex << static_cast<unsigned>(Current.Bytes[4]));
+    const std::vector<LowOp> Ops = liftX64(Current.Bytes);
+    ASSERT_FALSE(Ops.empty());
+    ASSERT_TRUE(hasOnlyMappedRegisters(Ops));
+
+    std::vector<uint8_t> Source1Value(Destination.Size);
+    std::vector<uint8_t> Source2Value(Destination.Size);
+    std::vector<uint8_t> OldDestination(Destination.Size, 0xa5);
+    for (size_t Lane = 0; Lane < 16; ++Lane) {
+      setDwordLane(Source1Value, Lane, 0x1000 + Lane);
+      setDwordLane(Source2Value, Lane, 0x2000 + Lane);
+    }
+
+    BinaryImage Image;
+    Image.Arch = Arch::X64;
+    Image.Bits = Bitness::Bits64;
+    NdOpEmulator Emulator(Image);
+    Emulator.setStrictMode(true);
+    Emulator.setRegisterBytes(Source1.Offset, Source1Value);
+    Emulator.setRegisterBytes(Source2.Offset, Source2Value);
+    Emulator.setRegisterBytes(Destination.Offset, OldDestination);
+    ASSERT_EQ(Emulator.run(Ops), Ops.size());
+    EXPECT_FALSE(Emulator.skips().any());
+
+    const auto Result = Emulator.getRegisterBytes(Destination.Offset);
+    ASSERT_TRUE(Result);
+    ASSERT_EQ(Result->size(), Destination.Size);
+    const size_t QuarterCount = Current.VectorSize / 16;
+    for (size_t Lane = 0; Lane < Current.VectorSize / 4; ++Lane) {
+      const size_t Quarter = Lane / 4;
+      const size_t Selector = Current.VectorSize == 32
+                                  ? YmmQuarterSelectors[Quarter]
+                                  : ZmmQuarterSelectors[Quarter];
+      const uint32_t SourceBase = Quarter < QuarterCount / 2 ? 0x1000 : 0x2000;
+      EXPECT_EQ(getDwordLane(*Result, Lane),
+                SourceBase + static_cast<uint32_t>(Selector * 4 + Lane % 4));
+    }
+    EXPECT_TRUE(std::all_of(Result->begin() + Current.VectorSize, Result->end(),
+                            [](uint8_t Byte) { return Byte == 0; }));
+  }
+
+  {
+    // vshuff32x4 zmm1 {k2}, zmm2, zmm3, 0x1b
+    const std::vector<LowOp> Ops =
+        liftX64({0x62, 0xf3, 0x6d, 0x4a, 0x23, 0xcb, 0x1b});
+    ASSERT_FALSE(Ops.empty());
+    ASSERT_TRUE(hasOnlyMappedRegisters(Ops));
+
+    const RegInfo Mask = mapCapstoneReg(X86_REG_K2);
+    constexpr uint64_t MaskValue = UINT64_C(0xa55a);
+    std::vector<uint8_t> Source1Value(Destination.Size);
+    std::vector<uint8_t> Source2Value(Destination.Size);
+    std::vector<uint8_t> OldDestination(Destination.Size);
+    for (size_t Lane = 0; Lane < 16; ++Lane) {
+      setDwordLane(Source1Value, Lane, 0x1000 + Lane);
+      setDwordLane(Source2Value, Lane, 0x2000 + Lane);
+      setDwordLane(OldDestination, Lane, 0x3000 + Lane);
+    }
+
+    BinaryImage Image;
+    Image.Arch = Arch::X64;
+    Image.Bits = Bitness::Bits64;
+    NdOpEmulator Emulator(Image);
+    Emulator.setStrictMode(true);
+    Emulator.setRegisterBytes(Source1.Offset, Source1Value);
+    Emulator.setRegisterBytes(Source2.Offset, Source2Value);
+    Emulator.setRegisterBytes(Destination.Offset, OldDestination);
+    Emulator.setRegister(Mask.Offset, MaskValue);
+    ASSERT_EQ(Emulator.run(Ops), Ops.size());
+    EXPECT_FALSE(Emulator.skips().any());
+    EXPECT_EQ(Emulator.getRegister(Mask.Offset), MaskValue);
+
+    const auto Result = Emulator.getRegisterBytes(Destination.Offset);
+    ASSERT_TRUE(Result);
+    constexpr std::array<uint32_t, 16> Expected = {
+        0x3000, 0x100d, 0x3002, 0x100f, 0x1008, 0x3005, 0x100a, 0x3007,
+        0x2004, 0x3009, 0x2006, 0x300b, 0x300c, 0x2001, 0x300e, 0x2003};
+    for (size_t Lane = 0; Lane < 16; ++Lane) {
+      EXPECT_EQ(getDwordLane(*Result, Lane), Expected[Lane]);
+    }
+  }
+
+  {
+    // vshuff64x2 ymm1 {k2} {z}, ymm2, ymm3, 0x1b
+    const std::vector<LowOp> Ops =
+        liftX64({0x62, 0xf3, 0xed, 0xaa, 0x23, 0xcb, 0x1b});
+    ASSERT_FALSE(Ops.empty());
+    ASSERT_TRUE(hasOnlyMappedRegisters(Ops));
+
+    const RegInfo Mask = mapCapstoneReg(X86_REG_K2);
+    constexpr uint64_t MaskValue = UINT64_C(0xf5);
+    std::vector<uint8_t> Source1Value(Destination.Size);
+    std::vector<uint8_t> Source2Value(Destination.Size);
+    std::vector<uint8_t> OldDestination(Destination.Size, 0xa5);
+    for (size_t Lane = 0; Lane < 8; ++Lane) {
+      setIntegerLane(Source1Value, Lane, 8, 0x1000 + Lane);
+      setIntegerLane(Source2Value, Lane, 8, 0x2000 + Lane);
+    }
+
+    BinaryImage Image;
+    Image.Arch = Arch::X64;
+    Image.Bits = Bitness::Bits64;
+    NdOpEmulator Emulator(Image);
+    Emulator.setStrictMode(true);
+    Emulator.setRegisterBytes(Source1.Offset, Source1Value);
+    Emulator.setRegisterBytes(Source2.Offset, Source2Value);
+    Emulator.setRegisterBytes(Destination.Offset, OldDestination);
+    Emulator.setRegister(Mask.Offset, MaskValue);
+    ASSERT_EQ(Emulator.run(Ops), Ops.size());
+    EXPECT_FALSE(Emulator.skips().any());
+    EXPECT_EQ(Emulator.getRegister(Mask.Offset), MaskValue);
+
+    const auto Result = Emulator.getRegisterBytes(Destination.Offset);
+    ASSERT_TRUE(Result);
+    EXPECT_EQ(getIntegerLane(*Result, 0, 8), UINT64_C(0x1002));
+    EXPECT_EQ(getIntegerLane(*Result, 1, 8), UINT64_C(0));
+    EXPECT_EQ(getIntegerLane(*Result, 2, 8), UINT64_C(0x2002));
+    EXPECT_EQ(getIntegerLane(*Result, 3, 8), UINT64_C(0));
+    EXPECT_TRUE(std::all_of(Result->begin() + 32, Result->end(),
+                            [](uint8_t Byte) { return Byte == 0; }));
+  }
+
+  {
+    constexpr uint64_t MemoryBase = UINT64_C(0x6000);
+    constexpr uint64_t MemoryDisplacement = UINT64_C(0x40);
+    enum class MemoryMaskMode : uint8_t { None, Merge };
+    struct MemoryCase {
+      std::vector<uint8_t> Bytes;
+      uint16_t VectorSize;
+      uint16_t ElementSize;
+      MemoryMaskMode Mode;
+      uint64_t MaskValue;
+    };
+    const MemoryCase MemoryCases[] = {
+        // vshuff32x4 zmm1 {k2}, zmm2, [rax + 0x40], 0x1b
+        {{0x62, 0xf3, 0x6d, 0x4a, 0x23, 0x48, 0x01, 0x1b},
+         64,
+         4,
+         MemoryMaskMode::Merge,
+         UINT64_C(0xa55a)},
+        // vshuff64x2 ymm1 {k2}, ymm2, [rax + 0x40], 0x1b
+        {{0x62, 0xf3, 0xed, 0x2a, 0x23, 0x48, 0x02, 0x1b},
+         32,
+         8,
+         MemoryMaskMode::Merge,
+         UINT64_C(0x5)},
+        // vshufi32x4 zmm1, zmm2, [rax + 0x40], 0x1b
+        {{0x62, 0xf3, 0x6d, 0x48, 0x43, 0x48, 0x01, 0x1b},
+         64,
+         4,
+         MemoryMaskMode::None,
+         0},
+        // vshufi64x2 ymm1, ymm2, [rax + 0x40], 0x1b
+        {{0x62, 0xf3, 0xed, 0x28, 0x43, 0x48, 0x02, 0x1b},
+         32,
+         8,
+         MemoryMaskMode::None,
+         0},
+    };
+    constexpr std::array<size_t, 2> YmmQuarterSelectors = {1, 1};
+    constexpr std::array<size_t, 4> ZmmQuarterSelectors = {3, 2, 1, 0};
+    const RegInfo Mask = mapCapstoneReg(X86_REG_K2);
+    for (const MemoryCase &Current : MemoryCases) {
+      SCOPED_TRACE(testing::Message()
+                   << "memory vector size " << Current.VectorSize
+                   << ", element size " << Current.ElementSize << ", opcode 0x"
+                   << std::hex << static_cast<unsigned>(Current.Bytes[4]));
+      const std::vector<LowOp> Ops = liftX64(Current.Bytes);
+      ASSERT_FALSE(Ops.empty());
+      ASSERT_TRUE(hasOnlyMappedRegisters(Ops));
+
+      const size_t LaneCount = Current.VectorSize / Current.ElementSize;
+      const size_t ElementsPerQuarter = 16 / Current.ElementSize;
+      const size_t QuarterCount = Current.VectorSize / 16;
+      std::vector<uint8_t> Source1Value(Destination.Size);
+      std::vector<uint8_t> MemoryValue(Current.VectorSize);
+      std::vector<uint8_t> OldDestination(Destination.Size, 0xa5);
+      for (size_t Lane = 0; Lane < LaneCount; ++Lane) {
+        setIntegerLane(Source1Value, Lane, Current.ElementSize, 0x1000 + Lane);
+        setIntegerLane(MemoryValue, Lane, Current.ElementSize, 0x4000 + Lane);
+        setIntegerLane(OldDestination, Lane, Current.ElementSize,
+                       0x3000 + Lane);
+      }
+
+      BinaryImage Image;
+      Image.Arch = Arch::X64;
+      Image.Bits = Bitness::Bits64;
+      Segment Data;
+      Data.VA = MemoryBase + MemoryDisplacement;
+      Data.Size = MemoryValue.size();
+      Data.Flags = SegmentFlags::Readable;
+      Data.Data = MemoryValue;
+      Image.Segments.push_back(std::move(Data));
+
+      NdOpEmulator Emulator(Image);
+      Emulator.setStrictMode(true);
+      Emulator.setLoadCollect(true);
+      Emulator.setRegister(x86reg::RAX, MemoryBase);
+      Emulator.setRegisterBytes(Source1.Offset, Source1Value);
+      Emulator.setRegisterBytes(Destination.Offset, OldDestination);
+      if (Current.Mode != MemoryMaskMode::None)
+        Emulator.setRegister(Mask.Offset, Current.MaskValue);
+      ASSERT_EQ(Emulator.run(Ops), Ops.size());
+      EXPECT_FALSE(Emulator.skips().any());
+      if (Current.Mode != MemoryMaskMode::None)
+        EXPECT_EQ(Emulator.getRegister(Mask.Offset), Current.MaskValue);
+
+      const auto Result = Emulator.getRegisterBytes(Destination.Offset);
+      ASSERT_TRUE(Result);
+      for (size_t Lane = 0; Lane < LaneCount; ++Lane) {
+        const size_t Quarter = Lane / ElementsPerQuarter;
+        const size_t Selector = Current.VectorSize == 32
+                                    ? YmmQuarterSelectors[Quarter]
+                                    : ZmmQuarterSelectors[Quarter];
+        const uint64_t SourceBase =
+            Quarter < QuarterCount / 2 ? 0x1000 : 0x4000;
+        const uint64_t Shuffled = SourceBase + Selector * ElementsPerQuarter +
+                                  Lane % ElementsPerQuarter;
+        const uint64_t Expected =
+            Current.Mode == MemoryMaskMode::None ||
+                    (Current.MaskValue & (UINT64_C(1) << Lane)) != 0
+                ? Shuffled
+                : 0x3000 + Lane;
+        EXPECT_EQ(getIntegerLane(*Result, Lane, Current.ElementSize), Expected);
+      }
+      EXPECT_TRUE(std::all_of(Result->begin() + Current.VectorSize,
+                              Result->end(),
+                              [](uint8_t Byte) { return Byte == 0; }));
+      ASSERT_EQ(Emulator.getLoadRecords().size(), 1u);
+      EXPECT_EQ(Emulator.getLoadRecords()[0].Addr,
+                MemoryBase + MemoryDisplacement);
+      EXPECT_EQ(Emulator.getLoadRecords()[0].Size, Current.VectorSize);
+    }
+  }
+
+  {
+    // A full memory tuple is read even when every writemask bit is clear.
+    constexpr uint64_t MemoryBase = UINT64_C(0x6000);
+    const std::vector<LowOp> Ops =
+        liftX64({0x62, 0xf3, 0x6d, 0xca, 0x23, 0x48, 0x01, 0x1b});
+    ASSERT_FALSE(Ops.empty());
+    ASSERT_TRUE(hasOnlyMappedRegisters(Ops));
+
+    const RegInfo Mask = mapCapstoneReg(X86_REG_K2);
+    std::vector<uint8_t> Source1Value(Destination.Size, 0x5a);
+    std::vector<uint8_t> OldDestination(Destination.Size, 0xa5);
+    BinaryImage Image;
+    Image.Arch = Arch::X64;
+    Image.Bits = Bitness::Bits64;
+    NdOpEmulator Emulator(Image);
+    Emulator.setStrictMode(true);
+    Emulator.setLoadCollect(true);
+    Emulator.setRegister(x86reg::RAX, MemoryBase);
+    Emulator.setRegisterBytes(Source1.Offset, Source1Value);
+    Emulator.setRegisterBytes(Destination.Offset, OldDestination);
+    Emulator.setRegister(Mask.Offset, 0);
+    EXPECT_LT(Emulator.run(Ops), Ops.size());
+    EXPECT_EQ(Emulator.getRegisterBytes(Destination.Offset), OldDestination);
+    EXPECT_EQ(Emulator.getRegister(Mask.Offset), UINT64_C(0));
+    EXPECT_TRUE(Emulator.getLoadRecords().empty());
+    EXPECT_FALSE(Emulator.skips().any());
+  }
+
+  // EVEX.z without a nonzero mask selector is invalid.
+  expectStrictlyUnlifted({0x62, 0xf3, 0x6d, 0xc8, 0x23, 0xcb, 0x1b});
+  // Broadcast forms remain fail-closed until their tuple semantics are
+  // modeled directly.
+  expectStrictlyUnlifted({0x62, 0xf3, 0x6d, 0x38, 0x23, 0x08, 0x1b});
+  expectStrictlyUnlifted({0x62, 0xf3, 0xed, 0x38, 0x23, 0x08, 0x1b});
+  expectStrictlyUnlifted({0x62, 0xf3, 0x6d, 0x38, 0x43, 0x08, 0x1b});
+  expectStrictlyUnlifted({0x62, 0xf3, 0xed, 0x38, 0x43, 0x08, 0x1b});
+  expectStrictlyUnlifted({0x62, 0xf3, 0x6d, 0x58, 0x23, 0x08, 0x1b});
+  expectStrictlyUnlifted({0x62, 0xf3, 0xed, 0x58, 0x23, 0x08, 0x1b});
+  expectStrictlyUnlifted({0x62, 0xf3, 0x6d, 0x58, 0x43, 0x08, 0x1b});
+  expectStrictlyUnlifted({0x62, 0xf3, 0xed, 0x58, 0x43, 0x08, 0x1b});
+
+  // EVEX.L'L=11 is reserved even though the decoder accepts it as ZMM.
+  expectStrictlyUnlifted({0x62, 0xf3, 0x6d, 0x68, 0x23, 0xcb, 0x1b});
+  expectStrictlyUnlifted({0x62, 0xf3, 0xed, 0x68, 0x23, 0xcb, 0x1b});
+  expectStrictlyUnlifted({0x62, 0xf3, 0x6d, 0x68, 0x43, 0xcb, 0x1b});
+  expectStrictlyUnlifted({0x62, 0xf3, 0xed, 0x68, 0x43, 0xcb, 0x1b});
+
+  const std::array<std::array<uint8_t, 7>, 4> InvalidLl00 = {{
+      {{0x62, 0xf3, 0x6d, 0x08, 0x23, 0xcb, 0x1b}},
+      {{0x62, 0xf3, 0xed, 0x08, 0x23, 0xcb, 0x1b}},
+      {{0x62, 0xf3, 0x6d, 0x08, 0x43, 0xcb, 0x1b}},
+      {{0x62, 0xf3, 0xed, 0x08, 0x43, 0xcb, 0x1b}},
+  }};
+  Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Arch::X64));
+  for (const auto &Bytes : InvalidLl00) {
+    DecodedInsn Insn{};
+    EXPECT_NE(
+        Decoder.decodeOneForLift(Bytes.data(), Bytes.size(), kAddress, Insn),
+        static_cast<int>(Bytes.size()));
+  }
+}
+
 TEST(X86WideISAState, LiftedKandqUsesDistinctFullWidthOpmaskRegisters) {
   // kandq k3, k1, k2
   const std::vector<LowOp> Ops = liftX64({0xc4, 0xe1, 0xf4, 0x41, 0xda});

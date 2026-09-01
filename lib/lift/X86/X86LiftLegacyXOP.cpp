@@ -201,18 +201,125 @@ bool liftLegacyXOP(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   }
 
   // ========================================================================
-  // Remaining AVX-512 shuffles — COPY-based dataflow.
+  // AVX-512 VSHUFF32X4/VSHUFF64X2/VSHUFI32X4/VSHUFI64X2 — select 128-bit
+  // quarters from two vector sources.
   // ========================================================================
   case X86_INS_VSHUFF32X4:
   case X86_INS_VSHUFF64X2:
   case X86_INS_VSHUFI32X4:
   case X86_INS_VSHUFI64X2: {
-    if (X86.op_count < 3)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    S.emit(NdOp::COPY, Dst, {Src});
-    break;
+    const bool IsQword =
+        InsnId == X86_INS_VSHUFF64X2 || InsnId == X86_INS_VSHUFI64X2;
+    const uint8_t Opcode =
+        InsnId == X86_INS_VSHUFF32X4 || InsnId == X86_INS_VSHUFF64X2 ? 0x23
+                                                                     : 0x43;
+    CanonicalEvexEncodingInfo Encoding;
+    if (!parseCanonicalEvexEncodingInfo(Insn, X86, L.targetArch(), Encoding) ||
+        Encoding.Offset + 7 > Insn->size || (Encoding.P0 & 0x07) != 0x03 ||
+        (Encoding.P1 & 0x87) !=
+            static_cast<uint8_t>((IsQword ? 0x80 : 0) | 0x05) ||
+        Encoding.Opcode != Opcode ||
+        ((Encoding.P2 & 0x60) != 0x20 && (Encoding.P2 & 0x60) != 0x40) ||
+        (Encoding.P2 & 0x10) != 0 || X86.encoding.imm_size != 1 ||
+        X86.encoding.imm_offset != Insn->size - 1 || X86.avx_sae ||
+        X86.avx_rm != X86_AVX_RM_INVALID)
+      return false;
+
+    const bool HasMask = X86.op_count == 5;
+    if ((!HasMask && X86.op_count != 4) ||
+        (HasMask && !isX86OpmaskOperand(X86.operands[1])))
+      return false;
+    const unsigned Source1Index = HasMask ? 2 : 1;
+    const unsigned Source2Index = HasMask ? 3 : 2;
+    const unsigned ImmediateIndex = HasMask ? 4 : 3;
+    const uint16_t VectorSize = (Encoding.P2 & 0x60) == 0x20 ? 32 : 64;
+    const uint16_t ElementSize = IsQword ? 8 : 4;
+    const cs_x86_op &DestinationOperand = X86.operands[0];
+    const cs_x86_op &Source1Operand = X86.operands[Source1Index];
+    const cs_x86_op &Source2Operand = X86.operands[Source2Index];
+    const cs_x86_op &ImmediateOperand = X86.operands[ImmediateIndex];
+    if (!isVectorRegisterOfSize(DestinationOperand, VectorSize) ||
+        !isVectorRegisterOfSize(Source1Operand, VectorSize) ||
+        (Source2Operand.type != X86_OP_REG &&
+         Source2Operand.type != X86_OP_MEM) ||
+        ImmediateOperand.type != X86_OP_IMM || ImmediateOperand.size != 1 ||
+        static_cast<uint8_t>(ImmediateOperand.imm) !=
+            Insn->bytes[Insn->size - 1] ||
+        decodeEvexVectorRegIndex(Encoding.P0, Encoding.ModRM) !=
+            vectorRegisterIndex(DestinationOperand) ||
+        decodeEvexVectorVvvvIndex(Encoding.P1, Encoding.P2) !=
+            vectorRegisterIndex(Source1Operand))
+      return false;
+
+    const bool MemoryForm = (Encoding.ModRM & 0xc0) != 0xc0;
+    if (MemoryForm != (Source2Operand.type == X86_OP_MEM) ||
+        (MemoryForm &&
+         (Source2Operand.size != VectorSize ||
+          !validateCanonicalEvexMemoryTail(Insn, X86, Encoding, Source2Operand,
+                                           VectorSize, 1))) ||
+        (!MemoryForm &&
+         (!isVectorRegisterOfSize(Source2Operand, VectorSize) ||
+          decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) !=
+              vectorRegisterIndex(Source2Operand) ||
+          !validateCanonicalEvexRegisterTail(Insn, X86, Encoding, 1))))
+      return false;
+
+    if (L.targetArch() == Arch::X86 &&
+        (vectorRegisterIndex(DestinationOperand) >= 8 ||
+         vectorRegisterIndex(Source1Operand) >= 8 ||
+         (!MemoryForm && vectorRegisterIndex(Source2Operand) >= 8)))
+      return false;
+
+    const unsigned LaneCount = VectorSize / ElementSize;
+    const uint16_t MaskSize =
+        static_cast<uint16_t>(std::max(1u, (LaneCount + 7u) / 8u));
+    const uint8_t EncodedMask = Encoding.P2 & 0x07;
+    if (HasMask) {
+      const cs_x86_op &MaskOperand = X86.operands[1];
+      const RegInfo MaskInfo =
+          mapCapstoneReg(static_cast<x86_reg>(MaskOperand.reg));
+      if (EncodedMask == 0 || MaskOperand.reg == X86_REG_K0 ||
+          EncodedMask != MaskOperand.reg - X86_REG_K0 ||
+          MaskOperand.size != 2 || MaskInfo.Offset == UINT64_C(0xffff) ||
+          MaskInfo.Size < MaskSize ||
+          (((Encoding.P2 & 0x80) != 0) != MaskOperand.avx_zero_opmask))
+        return false;
+    } else if (EncodedMask != 0 || (Encoding.P2 & 0x80) != 0) {
+      return false;
+    }
+    for (unsigned Index = 0; Index < X86.op_count; ++Index)
+      if (X86.operands[Index].avx_bcast != X86_AVX_BCAST_INVALID ||
+          (X86.operands[Index].avx_zero_opmask && (!HasMask || Index != 1)))
+        return false;
+
+    NdVar Source1 = L.operandRead(S, Source1Operand);
+    NdVar Source2 = L.operandRead(S, Source2Operand);
+    const unsigned QuarterCount = VectorSize / 16;
+    const unsigned SelectorBits = VectorSize == 32 ? 1 : 2;
+    const uint8_t Immediate = static_cast<uint8_t>(ImmediateOperand.imm);
+    NdVar Quarters[4];
+    for (unsigned Quarter = 0; Quarter < QuarterCount; ++Quarter) {
+      const unsigned Selector =
+          (Immediate >> (Quarter * SelectorBits)) & (QuarterCount - 1);
+      Quarters[Quarter] = S.makeTemp(16);
+      S.emit(NdOp::SUBBYTES, Quarters[Quarter],
+             {Quarter < QuarterCount / 2 ? Source1 : Source2,
+              NdVar::cst(Selector * 16, 4)});
+    }
+    for (unsigned Count = QuarterCount, Width = 16; Count > 1;
+         Count >>= 1, Width <<= 1) {
+      for (unsigned Pair = 0; Pair < Count / 2; ++Pair) {
+        NdVar Joined = S.makeTemp(Width * 2);
+        S.emit(NdOp::CONCAT, Joined,
+               {Quarters[Pair * 2 + 1], Quarters[Pair * 2]});
+        Quarters[Pair] = Joined;
+      }
+    }
+    if (HasMask)
+      return emitMaskedVectorResult(L, S, DestinationOperand, X86.operands[1],
+                                    Quarters[0], ElementSize);
+    S.emit(NdOp::COPY, L.operandWrite(DestinationOperand), {Quarters[0]});
+    return true;
   }
 
   // ========================================================================
