@@ -105,6 +105,7 @@ size_t bitCount(uint64_t Value) {
 }
 
 void expectGenericRex2DecodeLiftAndEmulate();
+void expectPackedConvertControlAndMemoryForms();
 void expectExplicitMsrInvalidateAndHighCFailClosed();
 
 void expectMemoryDetail(const std::vector<uint8_t> &Bytes, x86_reg Base,
@@ -4000,6 +4001,7 @@ TEST(X86APXEVEXExistingGpr,
     EXPECT_FALSE(UnmappedPortal.skips().any());
   }
 
+  expectPackedConvertControlAndMemoryForms();
   expectGenericRex2DecodeLiftAndEmulate();
   expectExplicitMsrInvalidateAndHighCFailClosed();
 }
@@ -4824,6 +4826,135 @@ TEST(X86APXEVEXExistingGpr,
   });
 }
 
+void expectPackedConvertControlAndMemoryForms() {
+  const RegInfo Destination = mapCapstoneReg(X86_REG_ZMM30);
+  const RegInfo SourceZmm = mapCapstoneReg(X86_REG_ZMM29);
+  const RegInfo SourceYmm = mapCapstoneReg(X86_REG_YMM29);
+  const RegInfo WriteMask = mapCapstoneReg(X86_REG_K7);
+  ASSERT_NE(Destination.Offset, UINT64_C(0xffff));
+  ASSERT_NE(SourceZmm.Offset, UINT64_C(0xffff));
+  ASSERT_NE(SourceYmm.Offset, UINT64_C(0xffff));
+  ASSERT_NE(WriteMask.Offset, UINT64_C(0xffff));
+
+  // vcvtuqq2pd zmm30 {k7}{z}, zmm29, {ru-sae}.  Embedded rounding must
+  // override MXCSR and SAE must suppress the precision status update.
+  {
+    const std::vector<uint8_t> Encoding = {0x62, 0x01, 0xfe,
+                                           0xdf, 0x7a, 0xf5};
+    const std::vector<uint64_t> Source(8, UINT64_C(0x0020000000000001));
+    const std::vector<uint64_t> Expected(8, UINT64_C(0x4340000000000001));
+    const std::vector<LowOp> Ops = liftX64(Encoding);
+    ASSERT_FALSE(Ops.empty());
+
+    BinaryImage Image = emptyImage();
+    NdOpEmulator Emulator(Image);
+    Emulator.setStrictMode(true);
+    Emulator.setMXCSR(0x3f00); // Round down; overridden by embedded rounding.
+    Emulator.setRegister(WriteMask.Offset, UINT64_C(0xff));
+    Emulator.setRegisterBytes(SourceZmm.Offset, bytes(Source));
+    ASSERT_EQ(Emulator.run(Ops), Ops.size());
+    EXPECT_EQ(Emulator.getRegisterBytes(Destination.Offset), bytes(Expected));
+    EXPECT_EQ(Emulator.getMXCSR(), 0x3f00U);
+    EXPECT_FALSE(Emulator.skips().any());
+  }
+
+  // vcvttps2uqq zmm30 {k7}{z}, ymm29, {sae}.  Truncation remains fixed
+  // toward zero, invalid lanes use the unsigned indefinite value, and SAE
+  // hides both invalid and precision status.
+  {
+    const std::vector<uint8_t> Encoding = {0x62, 0x01, 0x7d,
+                                           0x9f, 0x78, 0xf5};
+    const std::vector<uint32_t> Source = {
+        UINT32_C(0x40700000), UINT32_C(0xbf000000),
+        UINT32_C(0x7f800000), UINT32_C(0x7f800001), 0, 0, 0, 0};
+    const std::vector<uint64_t> Expected = {
+        3, 0, UINT64_MAX, UINT64_MAX, 0, 0, 0, 0};
+    const std::vector<LowOp> Ops = liftX64(Encoding);
+    ASSERT_FALSE(Ops.empty());
+
+    BinaryImage Image = emptyImage();
+    NdOpEmulator Emulator(Image);
+    Emulator.setStrictMode(true);
+    Emulator.setMXCSR(0x1f00); // Invalid is unmasked, but SAE suppresses it.
+    Emulator.setRegister(WriteMask.Offset, UINT64_C(0x0f));
+    Emulator.setRegisterBytes(SourceYmm.Offset, bytes(Source));
+    ASSERT_EQ(Emulator.run(Ops), Ops.size());
+    EXPECT_EQ(Emulator.getRegisterBytes(Destination.Offset), bytes(Expected));
+    EXPECT_EQ(Emulator.getMXCSR(), 0x1f00U);
+    EXPECT_FALSE(Emulator.skips().any());
+  }
+
+  // Full-tuple and broadcast memory forms share the same lane conversion,
+  // while the broadcast form performs only one physical memory read.
+  {
+    struct MemoryCase {
+      std::vector<uint8_t> Encoding;
+      bool Broadcast;
+    };
+    const std::vector<MemoryCase> Cases = {
+        {{0x62, 0x61, 0xfd, 0xcf, 0x78, 0x30}, false},
+        {{0x62, 0x61, 0xfd, 0xdf, 0x78, 0x30}, true},
+    };
+    constexpr uint64_t Address = UINT64_C(0x31000);
+    const std::vector<double> FullSource = {1.75, 2.75, 3.75, 4.75,
+                                            5.75, 6.75, 7.75, 8.75};
+    const double BroadcastSource = 9.75;
+
+    for (const MemoryCase &Test : Cases) {
+      SCOPED_TRACE(Test.Broadcast ? "broadcast" : "full tuple");
+      std::vector<uint64_t> Expected(8);
+      for (unsigned Lane = 0; Lane < Expected.size(); ++Lane)
+        Expected[Lane] =
+            Test.Broadcast ? 9 : static_cast<uint64_t>(Lane + 1);
+
+      const std::vector<LowOp> Ops = liftX64(Test.Encoding);
+      ASSERT_FALSE(Ops.empty());
+      BinaryImage Image = emptyImage();
+      if (Test.Broadcast)
+        addReadableBytes(Image, Address, &BroadcastSource,
+                         sizeof(BroadcastSource));
+      else
+        addReadableBytes(Image, Address, FullSource.data(),
+                         FullSource.size() * sizeof(double));
+      NdOpEmulator Emulator(Image);
+      Emulator.setStrictMode(true);
+      Emulator.setLoadCollect(true);
+      Emulator.setRegister(x86reg::RAX, Address);
+      Emulator.setRegister(WriteMask.Offset, UINT64_C(0xff));
+      ASSERT_EQ(Emulator.run(Ops), Ops.size());
+      EXPECT_EQ(Emulator.getRegisterBytes(Destination.Offset),
+                bytes(Expected));
+      EXPECT_EQ(Emulator.getLoadRecords().size(), Test.Broadcast ? 1U : 8U);
+      EXPECT_FALSE(Emulator.skips().any());
+    }
+  }
+
+  // vcvtps2dq zmm30 {k7}{z}, zmm29 follows MXCSR when EVEX.b is clear.
+  {
+    const std::vector<uint8_t> Encoding = {0x62, 0x01, 0x7d,
+                                           0xcf, 0x5b, 0xf5};
+    std::vector<uint32_t> Source(16, 0);
+    Source[0] = UINT32_C(0x3fa00000); // 1.25f
+    Source[1] = UINT32_C(0xbfa00000); // -1.25f
+    std::vector<uint32_t> Expected(16, 0);
+    Expected[0] = 2;
+    Expected[1] = UINT32_MAX;
+    const std::vector<LowOp> Ops = liftX64(Encoding);
+    ASSERT_FALSE(Ops.empty());
+
+    BinaryImage Image = emptyImage();
+    NdOpEmulator Emulator(Image);
+    Emulator.setStrictMode(true);
+    Emulator.setMXCSR(0x5f80); // Masked exceptions, round toward +infinity.
+    Emulator.setRegister(WriteMask.Offset, 3);
+    Emulator.setRegisterBytes(SourceZmm.Offset, bytes(Source));
+    ASSERT_EQ(Emulator.run(Ops), Ops.size());
+    EXPECT_EQ(Emulator.getRegisterBytes(Destination.Offset), bytes(Expected));
+    EXPECT_NE(Emulator.getMXCSR() & (1U << 5), 0U);
+    EXPECT_FALSE(Emulator.skips().any());
+  }
+}
+
 void expectGenericRex2DecodeLiftAndEmulate() {
   // mov r24, qword ptr [r31 + r30*4 - 32].  This is a generated-table
   // MAP0 REX2 instruction, rather than one of the dedicated APX decoders.
@@ -4879,6 +5010,51 @@ void expectGenericRex2DecodeLiftAndEmulate() {
   EXPECT_EQ(Emulator.getLoadRecords()[0].Addr, Address);
   EXPECT_EQ(Emulator.getLoadRecords()[0].Size, sizeof(Value));
   EXPECT_FALSE(Emulator.skips().any());
+
+  // A legacy prefix after a REX byte invalidates that REX before REX2 is
+  // decoded.  The resulting word move must preserve the upper destination
+  // bits; an emulator must not turn this valid sequence into #UD.
+  const std::vector<uint8_t> SeparatedRex = {0x4f, 0x66, 0xd5,
+                                              0x55, 0x89, 0xc7};
+  const std::vector<LowOp> SeparatedOps = liftX64(SeparatedRex);
+  ASSERT_FALSE(SeparatedOps.empty());
+  BinaryImage RegisterImage = emptyImage();
+  NdOpEmulator RegisterEmulator(RegisterImage);
+  RegisterEmulator.setStrictMode(true);
+  RegisterEmulator.setRegister(x86reg::R24,
+                               UINT64_C(0x0123456789abcdef));
+  RegisterEmulator.setRegister(x86reg::R31,
+                               UINT64_C(0xfedcba9876543210));
+  RegisterEmulator.setRegister(x86reg::CF, 1);
+  ASSERT_EQ(RegisterEmulator.run(SeparatedOps), SeparatedOps.size());
+  EXPECT_EQ(RegisterEmulator.getRegister(x86reg::R24),
+            UINT64_C(0x0123456789abcdef));
+  EXPECT_EQ(RegisterEmulator.getRegister(x86reg::R31),
+            UINT64_C(0xfedcba987654cdef));
+  EXPECT_EQ(RegisterEmulator.getRegister(x86reg::CF), 1U);
+  EXPECT_FALSE(RegisterEmulator.skips().any());
+
+  // REX2 map 1 elides the legacy 0F map byte.  Verify that the generated
+  // decode reaches the ordinary signed multiply lifter and that overflow is
+  // derived from the full-width product.
+  {
+    const std::vector<uint8_t> Imul = {0xd5, 0xdd, 0xaf, 0xc7};
+    const std::vector<LowOp> ImulOps = liftX64(Imul);
+    ASSERT_FALSE(ImulOps.empty());
+    BinaryImage ImulImage = emptyImage();
+    NdOpEmulator ImulEmulator(ImulImage);
+    ImulEmulator.setStrictMode(true);
+    ImulEmulator.setRegister(x86reg::R24, INT64_MAX);
+    ImulEmulator.setRegister(x86reg::R31, 2);
+    ImulEmulator.setRegister(x86reg::CF, 0);
+    ImulEmulator.setRegister(x86reg::OF, 0);
+    ASSERT_EQ(ImulEmulator.run(ImulOps), ImulOps.size());
+    EXPECT_EQ(ImulEmulator.getRegister(x86reg::R24), UINT64_C(-2));
+    EXPECT_EQ(ImulEmulator.getRegister(x86reg::R31), 2U);
+    EXPECT_EQ(ImulEmulator.getRegister(x86reg::CF), 1U);
+    EXPECT_EQ(ImulEmulator.getRegister(x86reg::OF), 1U);
+    EXPECT_FALSE(ImulEmulator.skips().any());
+  }
 }
 
 void expectExplicitMsrInvalidateAndHighCFailClosed() {

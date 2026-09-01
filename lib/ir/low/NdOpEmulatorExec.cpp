@@ -2715,6 +2715,20 @@ bool NdOpEmulator::executeCopy(const LowOp &Op) {
 bool NdOpEmulator::executeCompare(const LowOp &Op) {
   if (Op.NumInputs < 2)
     return false;
+  if (Op.Inputs[0].Size > sizeof(uint64_t) ||
+      Op.Inputs[1].Size > sizeof(uint64_t)) {
+    if (Op.Inputs[0].Size == 0 ||
+        Op.Inputs[0].Size != Op.Inputs[1].Size || Op.Output.Size == 0 ||
+        Op.Output.Size > sizeof(uint64_t) ||
+        (Op.Opcode != NdOp::INT_EQUAL &&
+         Op.Opcode != NdOp::INT_NOTEQUAL))
+      return false;
+    const bool Equal =
+        readOperandBytes(Op.Inputs[0]) == readOperandBytes(Op.Inputs[1]);
+    writeOutput(Op.Output,
+                Op.Opcode == NdOp::INT_EQUAL ? Equal : !Equal);
+    return true;
+  }
   uint64_t A = readOperand(Op.Inputs[0]);
   uint64_t B = readOperand(Op.Inputs[1]);
   uint64_t Result = 0;

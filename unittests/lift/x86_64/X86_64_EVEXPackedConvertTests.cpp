@@ -193,20 +193,6 @@ uint64_t truncationResult(long double Value, unsigned Bits, bool Unsigned) {
                     : static_cast<uint32_t>(static_cast<int32_t>(Truncated));
 }
 
-void expectStrictlyUnlifted(const std::vector<uint8_t> &Bytes,
-                            unsigned ExpectedId) {
-  Decoder Dec;
-  ASSERT_TRUE(Dec.init(Arch::X64));
-  DecodedInsn Insn{};
-  ASSERT_EQ(Dec.decodeOneForLift(Bytes.data(), Bytes.size(), kAddress, Insn),
-            static_cast<int>(Bytes.size()));
-  ASSERT_NE(Insn.Raw, nullptr);
-  ASSERT_EQ(Insn.Raw->id, ExpectedId);
-  std::vector<LowOp> Ops;
-  EXPECT_THROW(Dec.liftToLow(Insn, Ops), UnliftedInstruction);
-  EXPECT_TRUE(Ops.empty());
-}
-
 void expectMalformedShapeRejected(const std::vector<uint8_t> &Bytes,
                                   unsigned ExpectedId,
                                   const std::function<void(cs_x86 &)> &Mutate) {
@@ -401,19 +387,22 @@ TEST(X86EVEXPackedConvert, MaskedOffLanesSuppressConversionExceptions) {
   EXPECT_FALSE(Emulator.skips().any());
 }
 
-TEST(X86EVEXPackedConvert, UnsupportedRoundingAndMemoryFormsFailClosed) {
-  // Embedded upward rounding, SAE-only truncation, full-tuple memory,
-  // broadcast memory, and MXCSR-rounded FP->integer respectively.
-  expectStrictlyUnlifted({0x62, 0x01, 0xfe, 0xdf, 0x7a, 0xf5},
-                         X86_INS_VCVTUQQ2PD);
-  expectStrictlyUnlifted({0x62, 0x01, 0x7d, 0x9f, 0x78, 0xf5},
-                         X86_INS_VCVTTPS2UQQ);
-  expectStrictlyUnlifted({0x62, 0x61, 0xfd, 0xcf, 0x78, 0x30},
-                         X86_INS_VCVTTPD2UQQ);
-  expectStrictlyUnlifted({0x62, 0x61, 0xfd, 0xdf, 0x78, 0x30},
-                         X86_INS_VCVTTPD2UQQ);
-  expectStrictlyUnlifted({0x62, 0x01, 0x7d, 0xcf, 0x5b, 0xf5},
-                         X86_INS_VCVTPS2DQ);
+TEST(X86EVEXPackedConvert, RoundingAndMemoryFormsLift) {
+  static const struct {
+    std::vector<uint8_t> Bytes;
+    unsigned Id;
+  } Cases[] = {
+      {{0x62, 0x01, 0xfe, 0xdf, 0x7a, 0xf5}, X86_INS_VCVTUQQ2PD},
+      {{0x62, 0x01, 0x7d, 0x9f, 0x78, 0xf5}, X86_INS_VCVTTPS2UQQ},
+      {{0x62, 0x61, 0xfd, 0xcf, 0x78, 0x30}, X86_INS_VCVTTPD2UQQ},
+      {{0x62, 0x61, 0xfd, 0xdf, 0x78, 0x30}, X86_INS_VCVTTPD2UQQ},
+      {{0x62, 0x01, 0x7d, 0xcf, 0x5b, 0xf5}, X86_INS_VCVTPS2DQ},
+  };
+
+  for (const auto &Test : Cases) {
+    SCOPED_TRACE(Test.Id);
+    EXPECT_FALSE(liftX64(Test.Bytes, Test.Id).empty());
+  }
 }
 
 TEST(X86EVEXPackedConvert, RawEncodingAndDecodedShapeMustAgree) {
