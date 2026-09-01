@@ -142,6 +142,12 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
     Name = (kAutoFuncPrefix + llvm::utohexstr(E.CallAddr)).str();
 
   if (E.IntrinsicId != Intrinsic::None) {
+    auto Typed = renderX86TypedIntrinsicCall(
+        Opts.TheArch, E, [this](const HighExpr &Expr) { return exprStr(Expr); },
+        HasCIntrinsics);
+    if (!Typed.empty())
+      return Typed;
+
     std::vector<std::string> OpStrs;
     for (auto &Op : E.Operands)
       if (Op)

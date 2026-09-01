@@ -207,13 +207,16 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
   AtomicStoreTypes.clear();
   HasSegmentedMemory = false;
   Has256BitInteger = false;
-  // Native AArch64 vector carriers are projected to SVE ACLE types.  Only the
-  // x86 masked-memory renderer currently emits scalar uint256_t/int256_t C.
-  const bool ProjectsScalar256BitIntegers =
+  Has512BitInteger = false;
+  // Native AArch64 vector carriers are projected to SVE ACLE types.  x86
+  // vector intrinsics use scalar integer carriers at the HighIR boundary.
+  const bool ProjectsScalarWideIntegers =
       Opts.TheArch == Arch::X86 || Opts.TheArch == Arch::X64;
   auto CollectWideType = [&](const TypeRef &Type) {
-    Has256BitInteger |= ProjectsScalar256BitIntegers && Type &&
+    Has256BitInteger |= ProjectsScalarWideIntegers && Type &&
                         Type->Kind == NdTypeKind::Int && Type->Size == 32;
+    Has512BitInteger |= ProjectsScalarWideIntegers && Type &&
+                        Type->Kind == NdTypeKind::Int && Type->Size == 64;
   };
   std::set<const HighExpr *> Seen;
   std::function<void(const HighExpr &)> Visit = [&](const HighExpr &E) {
@@ -257,11 +260,11 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
   };
 
   for (const HighFunc &Func : Funcs) {
-    if (GuardAnalysisOnlyFunctions && isAnalysisOnlyFunction(Func))
-      continue;
     CollectWideType(Func.ReturnType);
     for (const HighParam &Param : Func.Params)
       CollectWideType(Param.Type);
+    if (GuardAnalysisOnlyFunctions && isAnalysisOnlyFunction(Func))
+      continue;
     for (const HighLocal &Local : Func.Locals)
       CollectWideType(Local.Type);
     walkStmts(Func.Body, [&](const HighStmt &Stmt) {
@@ -463,11 +466,11 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
     if (Ex.Kind == ExprKind::Call) {
       if (Ex.IntrinsicId == Intrinsic::A64_Frinti)
         NeedsFEnvAccess = true;
+      if (Ex.IntrinsicId != Intrinsic::None && intrinsicCName(Ex.IntrinsicId))
+        HasCIntrinsics = true;
       std::string Name = Ex.CallTarget;
       if (!Name.empty()) {
         if (Ex.IntrinsicId != Intrinsic::None) {
-          if (intrinsicCName(Ex.IntrinsicId))
-            HasCIntrinsics = true;
           CIntrinsicNames.insert(Name);
         }
         if (Ex.IntrinsicId == Intrinsic::None && Name[0] == '_')
@@ -504,6 +507,9 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
     if (Has256BitInteger)
       OS << "typedef unsigned _BitInt(256) uint256_t;\n"
             "typedef _BitInt(256) int256_t;\n\n";
+    if (Has512BitInteger)
+      OS << "typedef unsigned _BitInt(512) uint512_t;\n"
+            "typedef _BitInt(512) int512_t;\n\n";
     return;
   }
 
@@ -536,6 +542,9 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
   if (Has256BitInteger)
     OS << "typedef unsigned _BitInt(256) uint256_t;\n"
           "typedef _BitInt(256) int256_t;\n\n";
+  if (Has512BitInteger)
+    OS << "typedef unsigned _BitInt(512) uint512_t;\n"
+          "typedef _BitInt(512) int512_t;\n\n";
 }
 
 void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {

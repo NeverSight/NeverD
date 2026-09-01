@@ -105,6 +105,7 @@ TEST_F(AArch64_SVEState, HighCUsesStandardSVEACLEAndCompiles) {
   EXPECT_NE(source.find("svdup_n_u8(1)"), std::string::npos) << source;
   EXPECT_NE(source.find("svlastb_u8("), std::string::npos) << source;
   EXPECT_EQ(source.find("_BitInt(256)"), std::string::npos) << source;
+  EXPECT_EQ(source.find("_BitInt(512)"), std::string::npos) << source;
 
   expectPairedClangSyntax(cFile, source);
 }

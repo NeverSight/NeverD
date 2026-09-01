@@ -56,6 +56,14 @@ std::string renderX86IntrinsicCall(Intrinsic Id,
                                    const std::vector<std::string> &Ops,
                                    bool &HasCIntrinsics);
 
+/// Render x86 intrinsics whose C spelling depends on the complete HighIR
+/// result and operand types. Returns an empty string when \p Call is not one
+/// of those intrinsics; recognized malformed calls fail closed.
+std::string
+renderX86TypedIntrinsicCall(Arch TheArch, const HighExpr &Call,
+                            std::function<std::string(const HighExpr &)> ExprFn,
+                            bool &HasCIntrinsics);
+
 /// Return the fail-closed diagnostic for an x86 intrinsic that cannot be
 /// represented faithfully as standalone C, or nullptr when normal rendering
 /// may proceed. renderX86IntrinsicCall uses this same policy.

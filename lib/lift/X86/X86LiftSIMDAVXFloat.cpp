@@ -2515,23 +2515,23 @@ bool liftSIMDAVXFloat(X86Lifter &L, X86Lifter::LiftState &S,
   case X86_INS_V4FMADDSS:
   case X86_INS_V4FNMADDPS:
   case X86_INS_V4FNMADDSS: {
-    CanonicalEvexEncodingInfo Encoding;
-    if (!parseCanonicalEvexEncodingInfo(Insn, X86, L.targetArch(), Encoding) ||
-        X86.encoding.imm_offset != 0 || X86.encoding.imm_size != 0 ||
-        (Encoding.P0 & 0x07) != 2 ||
-        ((Encoding.P1 | 0x04) & 0x87) != 0x07 ||
-        (Encoding.P2 & 0x10) != 0 || (Encoding.ModRM & 0xc0) == 0xc0)
-      return false;
     const bool Scalar =
         InsnId == X86_INS_V4FMADDSS || InsnId == X86_INS_V4FNMADDSS;
     const bool Negative =
         InsnId == X86_INS_V4FNMADDPS || InsnId == X86_INS_V4FNMADDSS;
+    CanonicalEvexEncodingInfo Encoding;
+    const bool Parsed = Scalar ? parseCanonicalEvexLligEncodingInfo(
+                                     Insn, X86, L.targetArch(), Encoding)
+                               : parseCanonicalEvexEncodingInfo(
+                                     Insn, X86, L.targetArch(), Encoding);
+    if (!Parsed || X86.encoding.imm_offset != 0 || X86.encoding.imm_size != 0 ||
+        (Encoding.P0 & 0x07) != 2 || ((Encoding.P1 | 0x04) & 0x87) != 0x07 ||
+        (Encoding.P2 & 0x10) != 0 || (Encoding.ModRM & 0xc0) == 0xc0)
+      return false;
     const uint8_t ExpectedOpcode =
         static_cast<uint8_t>((Negative ? 0xaa : 0x9a) + (Scalar ? 1 : 0));
-    // Packed forms require 512-bit L'L=10.  Scalar forms are LLIG; the
-    // decoder currently only materializes L'L=00, while this check remains
-    // correct if the fork later accepts the other architecturally ignored
-    // encodings.
+    // Packed forms require 512-bit L'L=10. Scalar forms accept every LLIG
+    // spelling after binding Capstone's canonical detail to the raw prefix.
     if (Encoding.Opcode != ExpectedOpcode ||
         (!Scalar && (Encoding.P2 & 0x60) != 0x40) || X86.avx_sae ||
         X86.avx_rm != X86_AVX_RM_INVALID)

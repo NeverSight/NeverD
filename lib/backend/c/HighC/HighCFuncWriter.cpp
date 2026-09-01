@@ -18,6 +18,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/ErrorHandling.h"
 
+#include <algorithm>
 #include <limits>
 
 namespace neverd {
@@ -104,6 +105,66 @@ bool carriesWindowsLanguageSemantics(const ExceptionFunction &EH) {
     return true;
 
   return false;
+}
+
+struct X86CIntrinsicFeatures {
+  unsigned GfniWidth = 0;
+  bool HasVdbpsadbw = false;
+  bool NeedsVdbpsadbwVL = false;
+};
+
+X86CIntrinsicFeatures collectX86CIntrinsicFeatures(const HighFunc &Func) {
+  X86CIntrinsicFeatures Features;
+  std::set<const HighExpr *> Seen;
+  std::function<void(const HighExpr &)> Visit = [&](const HighExpr &Expr) {
+    if (!Seen.insert(&Expr).second)
+      return;
+    using I = Intrinsic;
+    if (Expr.IntrinsicId == I::Gf2p8MulB ||
+        Expr.IntrinsicId == I::Gf2p8AffineQb ||
+        Expr.IntrinsicId == I::Gf2p8AffineInvQb) {
+      if (Expr.Type)
+        Features.GfniWidth =
+            std::max<unsigned>(Features.GfniWidth, Expr.Type->Size);
+    } else if (Expr.IntrinsicId == I::Vdbpsadbw) {
+      Features.HasVdbpsadbw = true;
+      if (Expr.Type && Expr.Type->Size != 64)
+        Features.NeedsVdbpsadbwVL = true;
+    }
+    for (const ExprPtr &Operand : Expr.Operands)
+      if (Operand)
+        Visit(*Operand);
+  };
+  walkStmts(Func.Body, [&](const HighStmt &Stmt) {
+    forEachExpr(Stmt, [&](const ExprPtr &Expr) {
+      if (Expr)
+        Visit(*Expr);
+    });
+  });
+  return Features;
+}
+
+std::string x86CIntrinsicTargetFeatures(const HighFunc &Func) {
+  const X86CIntrinsicFeatures Required = collectX86CIntrinsicFeatures(Func);
+  std::vector<std::string> Features;
+  if (Required.GfniWidth == 32)
+    Features.emplace_back("avx");
+  else if (Required.GfniWidth == 64)
+    Features.emplace_back("avx512f");
+  if (Required.HasVdbpsadbw)
+    Features.emplace_back("avx512bw");
+  if (Required.NeedsVdbpsadbwVL)
+    Features.emplace_back("avx512vl");
+  if (Required.GfniWidth != 0)
+    Features.emplace_back("gfni");
+
+  std::string Result;
+  for (const std::string &Feature : Features) {
+    if (!Result.empty())
+      Result += ",";
+    Result += Feature;
+  }
+  return Result;
 }
 
 void writeCommentedLine(llvm::raw_ostream &OS, llvm::StringRef Line) {
@@ -567,6 +628,12 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   }
 
   writeExceptionAnnotation(Func);
+
+  if (Opts.TheArch == Arch::X86 || Opts.TheArch == Arch::X64) {
+    const std::string TargetFeatures = x86CIntrinsicTargetFeatures(Func);
+    if (!TargetFeatures.empty())
+      OS << "__attribute__((target(\"" << TargetFeatures << "\")))\n";
+  }
 
   if (Func.DoesNotReturn)
     OS << "_Noreturn ";

@@ -136,6 +136,7 @@ public:
       AtomicStoreTypes;
   bool HasSegmentedMemory = false;
   bool Has256BitInteger = false;
+  bool Has512BitInteger = false;
 
   HighCAnalysisState Analysis;
   bool InferredVoid = false;

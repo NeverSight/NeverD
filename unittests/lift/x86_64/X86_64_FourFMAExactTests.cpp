@@ -132,27 +132,33 @@ TEST(X86FourFMAExact, PackedPositiveAndHighGroupNegativeAreSequentiallyFused) {
 }
 
 TEST(X86FourFMAExact, ScalarMaskPreservesUpperAndSuppressesMemory) {
-  const auto Ops = lift({0x62, 0xe2, 0x5f, 0x02, 0xab, 0x08});
-  ASSERT_FALSE(Ops.empty());
-  BinaryImage Empty;
-  Empty.Arch = Arch::X64;
-  Empty.Bits = Bitness::Bits64;
-  NdOpEmulator E(Empty);
-  E.setStrictMode(true);
-  auto Low = floats({9, 10, 11, 12}, 4);
-  std::vector<uint8_t> Old(64, 0xcc);
-  std::copy(Low.begin(), Low.end(), Old.begin());
-  E.setRegisterBytes(mapCapstoneReg(X86_REG_ZMM17).Offset, Old);
-  E.setRegister(mapCapstoneReg(X86_REG_RAX).Offset, 0xdead0000);
-  E.setRegister(mapCapstoneReg(X86_REG_K2).Offset, 0);
-  const uint32_t Before = E.getMXCSR();
-  EXPECT_EQ(E.run(Ops), Ops.size());
-  EXPECT_EQ(E.getMXCSR(), Before);
-  auto Got = E.getRegisterBytes(mapCapstoneReg(X86_REG_ZMM17).Offset);
-  ASSERT_TRUE(Got);
-  EXPECT_TRUE(std::equal(Low.begin(), Low.end(), Got->begin()));
-  EXPECT_TRUE(std::all_of(Got->begin() + 16, Got->begin() + 64,
-                          [](uint8_t B) { return B == 0; }));
+  for (uint8_t Length :
+       {uint8_t{0x00}, uint8_t{0x20}, uint8_t{0x40}, uint8_t{0x60}}) {
+    SCOPED_TRACE(static_cast<unsigned>(Length));
+    const auto Ops = lift(
+        {0x62, 0xe2, 0x5f, static_cast<uint8_t>(Length | 0x02), 0xab, 0x08});
+    ASSERT_FALSE(Ops.empty());
+    BinaryImage Empty;
+    Empty.Arch = Arch::X64;
+    Empty.Bits = Bitness::Bits64;
+    NdOpEmulator E(Empty);
+    E.setStrictMode(true);
+    auto Low = floats({9, 10, 11, 12}, 4);
+    std::vector<uint8_t> Old(64, 0xcc);
+    std::copy(Low.begin(), Low.end(), Old.begin());
+    E.setRegisterBytes(mapCapstoneReg(X86_REG_ZMM17).Offset, Old);
+    E.setRegister(mapCapstoneReg(X86_REG_RAX).Offset, 0xdead0000);
+    E.setRegister(mapCapstoneReg(X86_REG_K2).Offset, 0);
+    const uint32_t Before = E.getMXCSR();
+    EXPECT_EQ(E.run(Ops), Ops.size());
+    EXPECT_EQ(E.getMXCSR(), Before);
+    auto Got = E.getRegisterBytes(mapCapstoneReg(X86_REG_ZMM17).Offset);
+    ASSERT_TRUE(Got);
+    EXPECT_TRUE(std::equal(Low.begin(), Low.end(), Got->begin()));
+    EXPECT_TRUE(std::all_of(Got->begin() + 16, Got->begin() + 64,
+                            [](uint8_t B) { return B == 0; }));
+    EXPECT_EQ(E.getRegister(mapCapstoneReg(X86_REG_K2).Offset), 0u);
+  }
 }
 
 TEST(X86FourFMAExact, ScalarNaNPayloadAndSegmentedMemoryAreArchitectural) {

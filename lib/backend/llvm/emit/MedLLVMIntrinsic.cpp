@@ -126,12 +126,11 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
     llvm::report_fatal_error(
         "EVEX compress/expand memory lowering is not available");
 
-  // The supported LLVM fork has no stable intrinsic for VDBPSADBW's four
-  // independent immediate selectors.  Returning the generic zero fallback
-  // would silently change program semantics, so keep this exact lift closed
-  // until a target-independent lowering is provided.
-  if (IC == I::Vdbpsadbw)
-    llvm::report_fatal_error("VDBPSADBW LLVM lowering is not available");
+  if (IC == I::Vdbpsadbw) {
+    if (TargetArch != Arch::X86 && TargetArch != Arch::X64)
+      llvm::report_fatal_error("VDBPSADBW intrinsic requires an x86 target");
+    return emitVdbpsadbwIntrinsic(Op, IC, Builder);
+  }
   if (IC == I::X86FourFMA)
     llvm::report_fatal_error("x86 four-iteration FMA lowering is not available");
   if (isX86VP4DPIntrinsic(IC))
@@ -180,6 +179,17 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
     return nullptr;
   }
 
+  // GFNI is an x86 value-producing family.  Dispatch it before the generic
+  // void early return so a malformed zero-width shape cannot be mistaken for
+  // a successfully handled side effect or a non-x86 zero fallback.
+  const bool IsGfni =
+      IC == I::Gf2p8MulB || IC == I::Gf2p8AffineQb || IC == I::Gf2p8AffineInvQb;
+  if (IsGfni) {
+    if (TargetArch != Arch::X86 && TargetArch != Arch::X64)
+      llvm::report_fatal_error("GFNI intrinsic requires an x86 target");
+    return emitGfniIntrinsic(Op, IC, Builder);
+  }
+
   if (Op.Output.Size == 0)
     return nullptr;
 
@@ -193,8 +203,6 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
     if ((R = emitAesIntrinsic(Op, IC, Builder)))
       return R;
     if ((R = emitShaIntrinsic(Op, IC, Builder)))
-      return R;
-    if ((R = emitGfniIntrinsic(Op, IC, Builder)))
       return R;
     if ((R = emitShuffleIntrinsic(Op, IC, Builder)))
       return R;

@@ -16,10 +16,12 @@
 
 #define DEBUG_TYPE "neverd-med-llvm-x86-crypto"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/med/IntrinsicShapes.h"
 
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/IntrinsicsX86.h"
+#include "llvm/Support/ErrorHandling.h"
 
 namespace neverd {
 
@@ -200,11 +202,23 @@ llvm::Value *MedLLVMEmitter::emitGfniIntrinsic(const MedOp &Op, Intrinsic IC,
   if (IC != I::Gf2p8MulB && IC != I::Gf2p8AffineQb &&
       IC != I::Gf2p8AffineInvQb)
     return nullptr;
-  if (Op.Output.Size != 16 && Op.Output.Size != 32)
-    return nullptr;
 
-  const bool Is256 = Op.Output.Size == 32;
-  const unsigned NumBytes = Is256 ? 32 : 16;
+  const bool IsMul = IC == I::Gf2p8MulB;
+  const unsigned ExpectedInputs = IsMul ? 3 : 4;
+  if (Op.NumInputs != ExpectedInputs || !Op.Inputs[0].isConst() ||
+      Op.Inputs[0].Size != 2 ||
+      Op.Inputs[0].ConstVal != static_cast<uint64_t>(IC) ||
+      !isMedIntrinsicWritableScalar(Op.Output) ||
+      (Op.Output.Size != 16 && Op.Output.Size != 32 && Op.Output.Size != 64) ||
+      Op.Inputs[1].Size != Op.Output.Size ||
+      Op.Inputs[2].Size != Op.Output.Size ||
+      Op.MemoryOrdering != NdMemoryOrdering::None ||
+      Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+      (!IsMul && (!Op.Inputs[3].isConst() || Op.Inputs[3].Size != 1 ||
+                  Op.Inputs[3].ConstVal > 0xff)))
+    llvm::report_fatal_error("invalid GFNI intrinsic shape");
+
+  const unsigned NumBytes = Op.Output.Size;
   auto *VTy =
       llvm::FixedVectorType::get(llvm::Type::getInt8Ty(*Ctx), NumBytes);
   auto GetInput = [&](unsigned Idx) {
@@ -239,14 +253,10 @@ llvm::Value *MedLLVMEmitter::emitGfniIntrinsic(const MedOp &Op, Intrinsic IC,
     return Result;
   };
 
-  if (IC == I::Gf2p8MulB) {
-    if (Op.NumInputs < 3)
-      return nullptr;
+  if (IsMul) {
     return fromVec(GfMul(GetInput(1), GetInput(2)), Builder);
   }
 
-  if (Op.NumInputs < 4 || !Op.Inputs[Op.NumInputs - 1].isConst())
-    return nullptr;
   llvm::Value *X = GetInput(1);
   llvm::Value *Matrix = GetInput(2);
 
@@ -289,6 +299,69 @@ llvm::Value *MedLLVMEmitter::emitGfniIntrinsic(const MedOp &Op, Intrinsic IC,
                               Builder.CreateShl(Parity, Splat(Bit)),
                               "gfni.affine.acc");
   }
+  return fromVec(Result, Builder);
+}
+
+llvm::Value *
+MedLLVMEmitter::emitVdbpsadbwIntrinsic(const MedOp &Op, Intrinsic IC,
+                                       llvm::IRBuilder<> &Builder) {
+  using I = Intrinsic;
+
+  if (IC != I::Vdbpsadbw)
+    return nullptr;
+  if (Op.NumInputs != 4 || !Op.Inputs[0].isConst() || Op.Inputs[0].Size != 2 ||
+      Op.Inputs[0].ConstVal != static_cast<uint64_t>(IC) ||
+      !isMedIntrinsicWritableScalar(Op.Output) ||
+      (Op.Output.Size != 16 && Op.Output.Size != 32 && Op.Output.Size != 64) ||
+      Op.Inputs[1].Size != Op.Output.Size ||
+      Op.Inputs[2].Size != Op.Output.Size || !Op.Inputs[3].isConst() ||
+      Op.Inputs[3].Size != 1 || Op.Inputs[3].ConstVal > 0xff ||
+      Op.MemoryOrdering != NdMemoryOrdering::None ||
+      Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+    llvm::report_fatal_error("invalid VDBPSADBW intrinsic shape");
+
+  const unsigned NumBytes = Op.Output.Size;
+  auto *ByteTy = llvm::Type::getInt8Ty(*Ctx);
+  auto *WordTy = llvm::Type::getInt16Ty(*Ctx);
+  auto *ByteVectorTy = llvm::FixedVectorType::get(ByteTy, NumBytes);
+  auto *WordVectorTy = llvm::FixedVectorType::get(WordTy, NumBytes / 2);
+  llvm::Value *Left =
+      toVec(getVar(Op.Inputs[1], Builder), ByteVectorTy, Builder);
+  llvm::Value *Right =
+      toVec(getVar(Op.Inputs[2], Builder), ByteVectorTy, Builder);
+  const uint8_t Immediate = static_cast<uint8_t>(Op.Inputs[3].ConstVal);
+
+  std::vector<int> Permutation(NumBytes);
+  for (unsigned Lane = 0; Lane < NumBytes; Lane += 16)
+    for (unsigned Dword = 0; Dword < 4; ++Dword) {
+      const unsigned Source = Lane + ((Immediate >> (Dword * 2)) & 3) * 4;
+      for (unsigned Byte = 0; Byte < 4; ++Byte)
+        Permutation[Lane + Dword * 4 + Byte] = static_cast<int>(Source + Byte);
+    }
+  llvm::Value *Permuted = Builder.CreateShuffleVector(Right, Right, Permutation,
+                                                      "vdbpsadbw.permute");
+
+  llvm::Value *Result = llvm::PoisonValue::get(WordVectorTy);
+  for (unsigned Base = 0; Base < NumBytes; Base += 8)
+    for (unsigned Word = 0; Word < 4; ++Word) {
+      const unsigned LeftBase = Base + (Word >= 2 ? 4 : 0);
+      const unsigned RightBase = Base + Word;
+      llvm::Value *Sum = llvm::ConstantInt::get(WordTy, 0);
+      for (unsigned Byte = 0; Byte < 4; ++Byte) {
+        llvm::Value *A = Builder.CreateZExt(
+            Builder.CreateExtractElement(Left, LeftBase + Byte), WordTy,
+            "vdbpsadbw.left");
+        llvm::Value *B = Builder.CreateZExt(
+            Builder.CreateExtractElement(Permuted, RightBase + Byte), WordTy,
+            "vdbpsadbw.right");
+        llvm::Value *Difference = Builder.CreateSelect(
+            Builder.CreateICmpUGE(A, B), Builder.CreateSub(A, B),
+            Builder.CreateSub(B, A), "vdbpsadbw.absdiff");
+        Sum = Builder.CreateAdd(Sum, Difference, "vdbpsadbw.sum");
+      }
+      Result = Builder.CreateInsertElement(Result, Sum, Base / 2 + Word,
+                                           "vdbpsadbw.word");
+    }
   return fromVec(Result, Builder);
 }
 

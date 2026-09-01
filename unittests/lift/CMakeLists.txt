@@ -835,7 +835,14 @@ target_include_directories(NeverDX86EVEXCompressExpandMemoryTests PRIVATE
 
 add_neverd_unittest(NeverDX86EVEXCryptoTests
   x86_64/X86_64_EVEXCryptoTests.cpp
-  LINK_COMPONENTS Decode Lift Loader
+
+  LINK_COMPONENTS
+  BackendC
+  BackendLLVM
+  Decode
+  LibC
+  Lift
+  Loader
 )
 target_include_directories(NeverDX86EVEXCryptoTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
@@ -853,6 +860,10 @@ else()
     set(_neverd_test_clang "${CMAKE_C_COMPILER}")
   endif()
 endif()
+
+target_compile_definitions(NeverDX86EVEXCryptoTests PRIVATE
+  NEVERD_TEST_CLANG="${_neverd_test_clang}"
+)
 
 target_compile_definitions(NeverDLiftTests PRIVATE
   NEVERD_BINARY="$<TARGET_FILE:neverd>"

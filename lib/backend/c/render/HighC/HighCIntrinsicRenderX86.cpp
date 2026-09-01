@@ -736,6 +736,86 @@ std::string renderRdtscp(const std::vector<MedVar> &Outs,
 
 } // anonymous namespace
 
+std::string
+renderX86TypedIntrinsicCall(Arch TheArch, const HighExpr &Call,
+                            std::function<std::string(const HighExpr &)> ExprFn,
+                            bool &HasCIntrinsics) {
+  using I = Intrinsic;
+  const bool IsGfni = Call.IntrinsicId == I::Gf2p8MulB ||
+                      Call.IntrinsicId == I::Gf2p8AffineQb ||
+                      Call.IntrinsicId == I::Gf2p8AffineInvQb;
+  const bool IsVdbpsadbw = Call.IntrinsicId == I::Vdbpsadbw;
+  if (!IsGfni && !IsVdbpsadbw)
+    return {};
+  if (TheArch != Arch::X86 && TheArch != Arch::X64)
+    llvm::report_fatal_error(
+        "typed x86 vector intrinsic requires an x86 target");
+
+  const size_t RequiredOperands = Call.IntrinsicId == I::Gf2p8MulB ? 2 : 3;
+  const bool HasValidResult =
+      Call.Kind == ExprKind::Call && Call.Type &&
+      Call.Type->Kind == NdTypeKind::Int &&
+      (Call.Type->Size == 16 || Call.Type->Size == 32 || Call.Type->Size == 64);
+  if (!HasValidResult || Call.Operands.size() != RequiredOperands ||
+      !Call.IntrinsicOutputs.empty() ||
+      Call.MemoryOrdering != NdMemoryOrdering::None ||
+      Call.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+    llvm::report_fatal_error("invalid typed x86 vector intrinsic shape");
+
+  const uint16_t Width = Call.Type->Size;
+  for (size_t Index = 0; Index < 2; ++Index) {
+    const ExprPtr &Operand = Call.Operands[Index];
+    if (!Operand || !Operand->Type || Operand->Type->Kind != NdTypeKind::Int ||
+        Operand->Type->Size != Width)
+      llvm::report_fatal_error("invalid typed x86 vector intrinsic shape");
+  }
+  if (RequiredOperands == 3) {
+    const ExprPtr &Immediate = Call.Operands[2];
+    if (!Immediate || Immediate->Kind != ExprKind::Const || !Immediate->Type ||
+        Immediate->Type->Kind != NdTypeKind::Int ||
+        Immediate->Type->Size != 1 || Immediate->ConstVal > 0xff)
+      llvm::report_fatal_error("invalid typed x86 vector intrinsic shape");
+  }
+
+  const char *RawType = Width == 16   ? "unsigned __int128"
+                        : Width == 32 ? "uint256_t"
+                                      : "uint512_t";
+  const char *VectorType = Width == 16   ? "__m128i"
+                           : Width == 32 ? "__m256i"
+                                         : "__m512i";
+  const char *Prefix = Width == 16 ? "_mm" : Width == 32 ? "_mm256" : "_mm512";
+  const char *Suffix = nullptr;
+  switch (Call.IntrinsicId) {
+  case I::Gf2p8MulB:
+    Suffix = "_gf2p8mul_epi8";
+    break;
+  case I::Gf2p8AffineQb:
+    Suffix = "_gf2p8affine_epi64_epi8";
+    break;
+  case I::Gf2p8AffineInvQb:
+    Suffix = "_gf2p8affineinv_epi64_epi8";
+    break;
+  case I::Vdbpsadbw:
+    Suffix = "_dbsad_epu8";
+    break;
+  default:
+    llvm_unreachable("typed intrinsic was validated above");
+  }
+
+  auto VectorOperand = [&](size_t Index) {
+    return std::string("__builtin_bit_cast(") + VectorType + ", (" + RawType +
+           ")(" + ExprFn(*Call.Operands[Index]) + "))";
+  };
+  std::string Result = std::string("__builtin_bit_cast(") + RawType + ", " +
+                       Prefix + Suffix + "(" + VectorOperand(0) + ", " +
+                       VectorOperand(1);
+  if (RequiredOperands == 3)
+    Result += ", " + ExprFn(*Call.Operands[2]);
+  Result += "))";
+  HasCIntrinsics = true;
+  return Result;
+}
+
 std::string renderX86SegmentedIntrinsicStatement(
     Arch TheArch, const HighExpr &Call, const HighExpr *PrimaryDst,
     std::function<std::string(const HighExpr &)> ExprFn,
@@ -794,6 +874,9 @@ const char *x86HighCIntrinsicFatalReason(Intrinsic Id) {
   case I::X86RequireDivPrecondition:
     return "x86 division precondition requires an architectural fault "
            "environment";
+  case I::X86FourFMA:
+    return "x86 four-source FMA requires explicit architectural source and "
+           "floating-point state";
   default:
     return nullptr;
   }
