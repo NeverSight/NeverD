@@ -1,3 +1,4 @@
+#include "../TestProcess.h"
 #include "PluginManager.h"
 #include "gtest/gtest.h"
 
@@ -80,9 +81,25 @@ protected:
   void SetUp() override {
     const auto Stamp =
         std::chrono::steady_clock::now().time_since_epoch().count();
-    TempDir = fs::temp_directory_path() /
-              ("neverd-plugin-manager-" + std::to_string(Stamp));
-    ASSERT_TRUE(fs::create_directories(TempDir));
+    const fs::path Root = fs::temp_directory_path();
+    const std::string Prefix =
+        "neverd-plugin-manager-" +
+        std::to_string(neverd::test::currentProcessId()) + "-" +
+        std::to_string(Stamp) + "-";
+    // CTest may launch each discovered GoogleTest in a separate process.
+    // Claim the directory atomically so one fixture never cleans up another's.
+    for (unsigned Attempt = 0; Attempt != 1000; ++Attempt) {
+      const fs::path Candidate = Root / (Prefix + std::to_string(Attempt));
+      std::error_code EC;
+      if (fs::create_directory(Candidate, EC)) {
+        TempDir = Candidate;
+        break;
+      }
+      if (EC)
+        FAIL() << "could not create test directory " << Candidate << ": "
+               << EC.message();
+    }
+    ASSERT_FALSE(TempDir.empty()) << "could not create a unique test directory";
     TracePath = TempDir / "lifecycle.trace";
     setEnvironment("NEVERD_LIFECYCLE_PROBE_TRACE", TracePath.string());
     unsetEnvironment("NEVERD_LIFECYCLE_PROBE_FAIL_INIT");
