@@ -63,21 +63,6 @@ std::vector<LowOp> liftX64(const std::vector<uint8_t> &Bytes,
   return Ops;
 }
 
-void expectStrictlyUnlifted(const std::vector<uint8_t> &Bytes,
-                            unsigned ExpectedId) {
-  Decoder Dec;
-  ASSERT_TRUE(Dec.init(Arch::X64));
-  DecodedInsn Insn{};
-  ASSERT_EQ(Dec.decodeOneForLift(Bytes.data(), Bytes.size(),
-                                 kInstructionAddress, Insn),
-            static_cast<int>(Bytes.size()));
-  ASSERT_NE(Insn.Raw, nullptr);
-  ASSERT_EQ(Insn.Raw->id, ExpectedId);
-  std::vector<LowOp> Ops;
-  EXPECT_THROW(Dec.liftToLow(Insn, Ops), UnliftedInstruction);
-  EXPECT_TRUE(Ops.empty());
-}
-
 template <typename Mutator>
 void expectMutatedLiftFailsClosed(const std::vector<uint8_t> &Bytes,
                                   unsigned ExpectedId, Mutator Mutate) {
@@ -291,16 +276,106 @@ TEST(X86EVEXDwordConvertMemory,
 }
 
 TEST(X86EVEXDwordConvertMemory,
-     MXCSRRoundedMemoryFormsRemainExplicitlyFailClosed) {
-  // VCVTPS2DQ and VCVTPS2UDQ require MXCSR.RC in ordinary EVEX forms.
-  expectStrictlyUnlifted({0x62, 0xf1, 0x7d, 0xc9, 0x5b, 0x00},
-                         X86_INS_VCVTPS2DQ);
-  expectStrictlyUnlifted({0x62, 0xf1, 0x7d, 0xd9, 0x5b, 0x00},
-                         X86_INS_VCVTPS2DQ);
-  expectStrictlyUnlifted({0x62, 0xf1, 0x7c, 0xc9, 0x79, 0x00},
-                         X86_INS_VCVTPS2UDQ);
-  expectStrictlyUnlifted({0x62, 0xf1, 0x7c, 0xd9, 0x79, 0x00},
-                         X86_INS_VCVTPS2UDQ);
+     MXCSRRoundedMemoryFormsUseDynamicRoundingAndSuppressMaskedLoads) {
+  static const struct {
+    const char *Name;
+    std::vector<uint8_t> Bytes;
+    unsigned Id;
+    bool Unsigned;
+    bool Broadcast;
+  } Cases[] = {
+      // vcvtps2dq zmm0 {k1}{z}, zmmword ptr [rax]
+      {"signed-full",
+       {0x62, 0xf1, 0x7d, 0xc9, 0x5b, 0x00},
+       X86_INS_VCVTPS2DQ,
+       false,
+       false},
+      // vcvtps2dq zmm0 {k1}{z}, dword ptr [rax]{1to16}
+      {"signed-broadcast",
+       {0x62, 0xf1, 0x7d, 0xd9, 0x5b, 0x00},
+       X86_INS_VCVTPS2DQ,
+       false,
+       true},
+      // vcvtps2udq zmm0 {k1}{z}, zmmword ptr [rax]
+      {"unsigned-full",
+       {0x62, 0xf1, 0x7c, 0xc9, 0x79, 0x00},
+       X86_INS_VCVTPS2UDQ,
+       true,
+       false},
+      // vcvtps2udq zmm0 {k1}{z}, dword ptr [rax]{1to16}
+      {"unsigned-broadcast",
+       {0x62, 0xf1, 0x7c, 0xd9, 0x79, 0x00},
+       X86_INS_VCVTPS2UDQ,
+       true,
+       true},
+  };
+  constexpr uint64_t Address = UINT64_C(0x6000);
+
+  for (const auto &Case : Cases) {
+    SCOPED_TRACE(Case.Name);
+    const std::vector<LowOp> Ops = liftX64(Case.Bytes, Case.Id);
+    ASSERT_FALSE(Ops.empty());
+
+    // A zeroing mask suppresses even an unmapped memory operand and does not
+    // manufacture conversion exceptions.
+    BinaryImage Unmapped = emptyImage();
+    NdOpEmulator Suppressed(Unmapped);
+    Suppressed.setStrictMode(true);
+    Suppressed.setLoadCollect(true);
+    Suppressed.setRegister(x86reg::RAX, Address);
+    Suppressed.setRegister(x86reg::K1, 0);
+    Suppressed.setRegisterBytes(x86reg::vectorReg(0),
+                                std::vector<uint8_t>(64, 0xcc));
+    ASSERT_EQ(Suppressed.run(Ops), Ops.size());
+    EXPECT_EQ(Suppressed.getRegisterBytes(x86reg::vectorReg(0)),
+              std::vector<uint8_t>(64, 0));
+    EXPECT_TRUE(Suppressed.getLoadRecords().empty());
+    EXPECT_EQ(Suppressed.getMXCSR(), UINT32_C(0x1f80));
+    EXPECT_FALSE(Suppressed.skips().any());
+
+    const float FirstSource = Case.Unsigned ? 1.5f : -1.5f;
+    const float SecondSource = Case.Unsigned ? 3.5f : -3.5f;
+    for (uint32_t MXCSR : {UINT32_C(0x1f80), UINT32_C(0x7f80)}) {
+      SCOPED_TRACE(testing::Message() << "mxcsr=0x" << std::hex << MXCSR);
+      const bool NearestEven = MXCSR == UINT32_C(0x1f80);
+      const uint32_t FirstRounded =
+          Case.Unsigned
+              ? (NearestEven ? UINT32_C(2) : UINT32_C(1))
+              : (NearestEven ? UINT32_C(0xfffffffe) : UINT32_C(0xffffffff));
+      const uint32_t SecondRounded =
+          Case.Broadcast ? FirstRounded
+          : Case.Unsigned
+              ? (NearestEven ? UINT32_C(4) : UINT32_C(3))
+              : (NearestEven ? UINT32_C(0xfffffffc) : UINT32_C(0xfffffffd));
+      BinaryImage Image = emptyImage();
+      addDword(Image, Address, std::bit_cast<uint32_t>(FirstSource));
+      if (!Case.Broadcast)
+        addDword(Image, Address + 4, std::bit_cast<uint32_t>(SecondSource));
+      NdOpEmulator Emulator(Image);
+      Emulator.setStrictMode(true);
+      Emulator.setLoadCollect(true);
+      Emulator.setMXCSR(MXCSR);
+      Emulator.setRegister(x86reg::RAX, Address);
+      Emulator.setRegister(x86reg::K1, 3);
+      Emulator.setRegisterBytes(x86reg::vectorReg(0),
+                                std::vector<uint8_t>(64, 0xcc));
+      ASSERT_EQ(Emulator.run(Ops), Ops.size());
+
+      std::vector<uint8_t> Expected(64, 0);
+      setDword(Expected, 0, FirstRounded);
+      setDword(Expected, 1, SecondRounded);
+      EXPECT_EQ(Emulator.getRegisterBytes(x86reg::vectorReg(0)), Expected);
+      ASSERT_EQ(Emulator.getLoadRecords().size(), Case.Broadcast ? 1u : 2u);
+      EXPECT_EQ(Emulator.getLoadRecords().front().Addr, Address);
+      EXPECT_EQ(Emulator.getLoadRecords().front().Size, 4u);
+      if (!Case.Broadcast) {
+        EXPECT_EQ(Emulator.getLoadRecords()[1].Addr, Address + 4);
+        EXPECT_EQ(Emulator.getLoadRecords()[1].Size, 4u);
+      }
+      EXPECT_EQ(Emulator.getMXCSR(), MXCSR | (1U << 5));
+      EXPECT_FALSE(Emulator.skips().any());
+    }
+  }
 }
 
 } // namespace

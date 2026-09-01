@@ -3,10 +3,12 @@
 #include "gtest/gtest.h"
 
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstdint>
@@ -41,17 +43,18 @@ std::vector<LowOp> liftX64(const std::vector<uint8_t> &Bytes) {
   return Ops;
 }
 
-void expectStrictlyUnlifted(const std::vector<uint8_t> &Bytes) {
-  Decoder Dec;
-  ASSERT_TRUE(Dec.init(Arch::X64));
-
-  DecodedInsn Insn{};
-  ASSERT_EQ(Dec.decodeOneForLift(Bytes.data(), Bytes.size(), kAddress, Insn),
-            static_cast<int>(Bytes.size()));
-
-  std::vector<LowOp> Ops;
-  EXPECT_THROW(Dec.liftToLow(Insn, Ops), UnliftedInstruction);
-  EXPECT_TRUE(Ops.empty());
+void expectExactlyOneFPArith(const std::vector<uint8_t> &Bytes) {
+  const std::vector<LowOp> Ops = liftX64(Bytes);
+  ASSERT_FALSE(Ops.empty());
+  EXPECT_EQ(
+      std::count_if(Ops.begin(), Ops.end(),
+                    [](const LowOp &Op) {
+                      return Op.Opcode == NdOp::INTRINSIC &&
+                             Op.NumInputs != 0 && Op.Inputs[0].isConst() &&
+                             Op.Inputs[0].Offset ==
+                                 static_cast<uint64_t>(Intrinsic::X86FPArith);
+                    }),
+      1);
 }
 
 std::vector<uint8_t> floatVector(const std::vector<float> &Lanes) {
@@ -706,17 +709,73 @@ TEST(X86EVEXFloatArith,
 }
 
 TEST(X86EVEXFloatArith,
-     BroadcastSaeAndEmbeddedRoundingFormsFailClosedWithoutPartialLowIR) {
+     BroadcastSaeAndEmbeddedRoundingFormsLiftToExactFPArith) {
   // vaddps zmm0, zmm2, dword ptr [rax] {1to16}
-  expectStrictlyUnlifted({0x62, 0xf1, 0x6c, 0x58, 0x58, 0x00});
+  expectExactlyOneFPArith({0x62, 0xf1, 0x6c, 0x58, 0x58, 0x00});
   // vaddpd zmm0, zmm2, qword ptr [rax] {1to8}
-  expectStrictlyUnlifted({0x62, 0xf1, 0xed, 0x58, 0x58, 0x00});
+  expectExactlyOneFPArith({0x62, 0xf1, 0xed, 0x58, 0x58, 0x00});
   // vaddps zmm0, zmm2, zmm3, {rn-sae}
-  expectStrictlyUnlifted({0x62, 0xf1, 0x6c, 0x18, 0x58, 0xc3});
+  expectExactlyOneFPArith({0x62, 0xf1, 0x6c, 0x18, 0x58, 0xc3});
   // vaddpd zmm0, zmm2, zmm3, {rz-sae}
-  expectStrictlyUnlifted({0x62, 0xf1, 0xed, 0x78, 0x58, 0xc3});
+  expectExactlyOneFPArith({0x62, 0xf1, 0xed, 0x78, 0x58, 0xc3});
   // vaddps zmm0 {k1}, zmm2, zmmword ptr [rax]
-  expectStrictlyUnlifted({0x62, 0xf1, 0x6c, 0x49, 0x58, 0x00});
+  expectExactlyOneFPArith({0x62, 0xf1, 0x6c, 0x49, 0x58, 0x00});
+}
+
+TEST(X86EVEXFloatArith,
+     EmbeddedRoundingOverridesMXCSRAndSuppressesInexactState) {
+  const RegInfo Source1 = mapCapstoneReg(X86_REG_ZMM2);
+  const RegInfo Source2 = mapCapstoneReg(X86_REG_ZMM3);
+  const RegInfo Destination = mapCapstoneReg(X86_REG_ZMM0);
+
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+
+  {
+    // vaddps zmm0, zmm2, zmm3, {rn-sae}.  Add half an ULP to an
+    // odd-significand value: ties-to-even rounds up despite MXCSR selecting
+    // round-toward-zero, and SAE leaves the inexact flag untouched.
+    const std::vector<LowOp> Ops =
+        liftX64({0x62, 0xf1, 0x6c, 0x18, 0x58, 0xc3});
+    ASSERT_FALSE(Ops.empty());
+    const std::vector<uint32_t> Left(16, UINT32_C(0x3f800001));
+    const std::vector<uint32_t> Right(16, UINT32_C(0x33800000));
+    const std::vector<uint32_t> Expected(16, UINT32_C(0x3f800002));
+    constexpr uint32_t InitialMXCSR = UINT32_C(0x7f80);
+
+    NdOpEmulator Emulator(Image);
+    Emulator.setStrictMode(true);
+    Emulator.setMXCSR(InitialMXCSR);
+    Emulator.setRegisterBytes(Source1.Offset, dwordBitsVector(Left));
+    Emulator.setRegisterBytes(Source2.Offset, dwordBitsVector(Right));
+    ASSERT_EQ(Emulator.run(Ops), Ops.size());
+    EXPECT_EQ(Emulator.getRegisterBytes(Destination.Offset),
+              dwordBitsVector(Expected));
+    EXPECT_EQ(Emulator.getMXCSR(), InitialMXCSR);
+  }
+
+  {
+    // vaddpd zmm0, zmm2, zmm3, {rz-sae}.  The same tie remains at the
+    // lower odd-significand value even though MXCSR selects nearest-even.
+    const std::vector<LowOp> Ops =
+        liftX64({0x62, 0xf1, 0xed, 0x78, 0x58, 0xc3});
+    ASSERT_FALSE(Ops.empty());
+    const std::vector<uint64_t> Left(8, UINT64_C(0x3ff0000000000001));
+    const std::vector<uint64_t> Right(8, UINT64_C(0x3ca0000000000000));
+    const std::vector<uint64_t> Expected(8, UINT64_C(0x3ff0000000000001));
+    constexpr uint32_t InitialMXCSR = UINT32_C(0x1f80);
+
+    NdOpEmulator Emulator(Image);
+    Emulator.setStrictMode(true);
+    Emulator.setMXCSR(InitialMXCSR);
+    Emulator.setRegisterBytes(Source1.Offset, qwordBitsVector(Left));
+    Emulator.setRegisterBytes(Source2.Offset, qwordBitsVector(Right));
+    ASSERT_EQ(Emulator.run(Ops), Ops.size());
+    EXPECT_EQ(Emulator.getRegisterBytes(Destination.Offset),
+              qwordBitsVector(Expected));
+    EXPECT_EQ(Emulator.getMXCSR(), InitialMXCSR);
+  }
 }
 
 TEST(X86EVEXFloatArith, ZmmSqrtpsComputesEveryLaneAndPreservesNegativeZero) {
@@ -1176,35 +1235,35 @@ TEST(X86EVEXFloatArith,
 }
 
 TEST(X86EVEXFloatArith,
-     NewFloatFamiliesRejectMemorySaeAndEmbeddedRoundingWithoutPartialLowIR) {
+     NewFloatFamiliesMemorySaeAndRoundingLiftToExactFPArith) {
   // vsqrtps zmm0, zmmword ptr [rax]
-  expectStrictlyUnlifted({0x62, 0xf1, 0x7c, 0x48, 0x51, 0x00});
+  expectExactlyOneFPArith({0x62, 0xf1, 0x7c, 0x48, 0x51, 0x00});
   // vsqrtpd zmm0, zmmword ptr [rax]
-  expectStrictlyUnlifted({0x62, 0xf1, 0xfd, 0x48, 0x51, 0x00});
+  expectExactlyOneFPArith({0x62, 0xf1, 0xfd, 0x48, 0x51, 0x00});
   // vminps zmm0, zmm2, zmmword ptr [rax]
-  expectStrictlyUnlifted({0x62, 0xf1, 0x6c, 0x48, 0x5d, 0x00});
+  expectExactlyOneFPArith({0x62, 0xf1, 0x6c, 0x48, 0x5d, 0x00});
   // vmaxpd zmm0, zmm2, zmmword ptr [rax]
-  expectStrictlyUnlifted({0x62, 0xf1, 0xed, 0x48, 0x5f, 0x00});
+  expectExactlyOneFPArith({0x62, 0xf1, 0xed, 0x48, 0x5f, 0x00});
   // vaddss xmm0 {k1}, xmm2, dword ptr [rax]
-  expectStrictlyUnlifted({0x62, 0xf1, 0x6e, 0x09, 0x58, 0x00});
+  expectExactlyOneFPArith({0x62, 0xf1, 0x6e, 0x09, 0x58, 0x00});
   // vaddsd xmm0 {k1}, xmm2, qword ptr [rax]
-  expectStrictlyUnlifted({0x62, 0xf1, 0xef, 0x09, 0x58, 0x00});
+  expectExactlyOneFPArith({0x62, 0xf1, 0xef, 0x09, 0x58, 0x00});
   // vaddss xmm0, xmm18, dword ptr [rax]
-  expectStrictlyUnlifted({0x62, 0xf1, 0x6e, 0x00, 0x58, 0x00});
+  expectExactlyOneFPArith({0x62, 0xf1, 0x6e, 0x00, 0x58, 0x00});
   // vaddsd xmm0, xmm18, qword ptr [rax]
-  expectStrictlyUnlifted({0x62, 0xf1, 0xef, 0x00, 0x58, 0x00});
+  expectExactlyOneFPArith({0x62, 0xf1, 0xef, 0x00, 0x58, 0x00});
   // vsqrtps zmm0, zmm19, {rn-sae}
-  expectStrictlyUnlifted({0x62, 0xb1, 0x7c, 0x18, 0x51, 0xc3});
+  expectExactlyOneFPArith({0x62, 0xb1, 0x7c, 0x18, 0x51, 0xc3});
   // vsqrtpd zmm0, zmm19, {rz-sae}
-  expectStrictlyUnlifted({0x62, 0xb1, 0xfd, 0x78, 0x51, 0xc3});
+  expectExactlyOneFPArith({0x62, 0xb1, 0xfd, 0x78, 0x51, 0xc3});
   // vminps zmm0, zmm2, zmm19, {sae}
-  expectStrictlyUnlifted({0x62, 0xb1, 0x6c, 0x18, 0x5d, 0xc3});
+  expectExactlyOneFPArith({0x62, 0xb1, 0x6c, 0x18, 0x5d, 0xc3});
   // vmaxpd zmm0, zmm2, zmm19, {sae}
-  expectStrictlyUnlifted({0x62, 0xb1, 0xed, 0x18, 0x5f, 0xc3});
+  expectExactlyOneFPArith({0x62, 0xb1, 0xed, 0x18, 0x5f, 0xc3});
   // vaddss xmm0 {k1}, xmm2, xmm19, {rn-sae}
-  expectStrictlyUnlifted({0x62, 0xb1, 0x6e, 0x19, 0x58, 0xc3});
+  expectExactlyOneFPArith({0x62, 0xb1, 0x6e, 0x19, 0x58, 0xc3});
   // vaddsd xmm0 {k1}, xmm2, xmm19, {rz-sae}
-  expectStrictlyUnlifted({0x62, 0xb1, 0xef, 0x79, 0x58, 0xc3});
+  expectExactlyOneFPArith({0x62, 0xb1, 0xef, 0x79, 0x58, 0xc3});
 }
 
 } // namespace

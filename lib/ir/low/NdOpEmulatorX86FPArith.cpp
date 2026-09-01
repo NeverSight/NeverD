@@ -271,8 +271,10 @@ bool NdOpEmulator::executeX86FPArith(const LowOp &Op) {
           (IsFma && isSignalingNaN(OriginalC, Format)))
         PreRaised |= 1U << 0;
       if (IsMinMax) {
-        writeLane(Result, Offset, ElementSize,
-                  BNaN ? OriginalB | Format.Quiet : OriginalB);
+        // MIN/MAX select the second source for every unordered pair.  Intel
+        // also requires an SNaN in that source to be forwarded bit-for-bit;
+        // the invalid exception is raised above without quieting the result.
+        writeLane(Result, Offset, ElementSize, OriginalB);
       } else {
         const uint64_t Selected =
             ANaN ? OriginalA : (BNaN ? OriginalB : OriginalC);

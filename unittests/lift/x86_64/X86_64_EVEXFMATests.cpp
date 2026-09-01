@@ -39,19 +39,6 @@ std::vector<LowOp> liftX64(const std::vector<uint8_t> &Bytes) {
   return Ops;
 }
 
-void expectStrictlyUnlifted(const std::vector<uint8_t> &Bytes) {
-  Decoder Dec;
-  ASSERT_TRUE(Dec.init(Arch::X64));
-
-  DecodedInsn Insn{};
-  ASSERT_EQ(Dec.decodeOneForLift(Bytes.data(), Bytes.size(), kAddress, Insn),
-            static_cast<int>(Bytes.size()));
-
-  std::vector<LowOp> Ops;
-  EXPECT_THROW(Dec.liftToLow(Insn, Ops), UnliftedInstruction);
-  EXPECT_TRUE(Ops.empty());
-}
-
 std::vector<uint8_t> floatVector(const std::vector<float> &Lanes) {
   std::vector<uint8_t> Bytes(Lanes.size() * sizeof(float));
   std::memcpy(Bytes.data(), Lanes.data(), Bytes.size());
@@ -394,12 +381,80 @@ TEST(X86EVEXFMA,
     }
 }
 
-TEST(X86EVEXFMA,
-     UnsupportedEmbeddedRoundingFailsWithoutPartialLowIR) {
-  // vfnmadd231pd zmm0, zmm2, zmm19, {rn-sae}
-  expectStrictlyUnlifted({0x62, 0xb2, 0xed, 0x18, 0xbc, 0xc3});
-  // vfnmsub132ss xmm0 {k1}, xmm2, xmm19, {rz-sae}
-  expectStrictlyUnlifted({0x62, 0xb2, 0x6d, 0x79, 0x9f, 0xc3});
+TEST(X86EVEXFMA, EmbeddedRoundingOverridesMXCSRAndSuppressesInexactState) {
+  const RegInfo Destination = mapCapstoneReg(X86_REG_ZMM0);
+  const RegInfo Source1 = mapCapstoneReg(X86_REG_ZMM2);
+  const RegInfo Source2 = mapCapstoneReg(X86_REG_ZMM19);
+  const RegInfo WriteMask = mapCapstoneReg(X86_REG_K1);
+
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+
+  {
+    // vfnmadd231pd zmm0, zmm2, zmm19, {rn-sae}.  The exact result is halfway
+    // above an odd-significand destination.  Nearest-even must write the next
+    // value despite MXCSR requesting round-toward-zero, and SAE preserves
+    // MXCSR.
+    const std::vector<LowOp> Ops =
+        liftX64({0x62, 0xb2, 0xed, 0x18, 0xbc, 0xc3});
+    ASSERT_FALSE(Ops.empty());
+    const std::vector<double> DestinationValues(
+        8, std::bit_cast<double>(UINT64_C(0x3ff0000000000001)));
+    const std::vector<double> Source1Values(8, -1.0);
+    const std::vector<double> Source2Values(
+        8, std::bit_cast<double>(UINT64_C(0x3ca0000000000000)));
+    const std::vector<double> Expected(
+        8, std::bit_cast<double>(UINT64_C(0x3ff0000000000002)));
+    constexpr uint32_t InitialMXCSR = UINT32_C(0x7f80);
+
+    NdOpEmulator Emulator(Image);
+    Emulator.setStrictMode(true);
+    Emulator.setMXCSR(InitialMXCSR);
+    Emulator.setRegisterBytes(Destination.Offset,
+                              doubleVector(DestinationValues));
+    Emulator.setRegisterBytes(Source1.Offset, doubleVector(Source1Values));
+    Emulator.setRegisterBytes(Source2.Offset, doubleVector(Source2Values));
+    ASSERT_EQ(Emulator.run(Ops), Ops.size());
+    EXPECT_EQ(Emulator.getRegisterBytes(Destination.Offset),
+              doubleVector(Expected));
+    EXPECT_EQ(Emulator.getMXCSR(), InitialMXCSR);
+  }
+
+  {
+    // vfnmsub132ss xmm0 {k1}, xmm2, xmm19, {rz-sae}.  The exact low-lane
+    // result is halfway above an odd significand; round-toward-zero retains
+    // that lower value even though MXCSR requests nearest-even.
+    const std::vector<LowOp> Ops =
+        liftX64({0x62, 0xb2, 0x6d, 0x79, 0x9f, 0xc3});
+    ASSERT_FALSE(Ops.empty());
+    std::vector<float> DestinationValues(16, 0.0f);
+    std::vector<float> Source1Values(16, 0.0f);
+    std::vector<float> Source2Values(16, 0.0f);
+    std::vector<float> Expected(16, 0.0f);
+    DestinationValues[0] = -1.0f;
+    Source1Values[0] = std::bit_cast<float>(UINT32_C(0xbf800001));
+    Source2Values[0] = std::bit_cast<float>(UINT32_C(0x33800000));
+    Expected[0] = std::bit_cast<float>(UINT32_C(0x3f800001));
+    for (size_t Lane = 1; Lane < 4; ++Lane) {
+      Source1Values[Lane] = static_cast<float>(10 + Lane);
+      Expected[Lane] = Source1Values[Lane];
+    }
+    constexpr uint32_t InitialMXCSR = UINT32_C(0x1f80);
+
+    NdOpEmulator Emulator(Image);
+    Emulator.setStrictMode(true);
+    Emulator.setMXCSR(InitialMXCSR);
+    Emulator.setRegisterBytes(Destination.Offset,
+                              floatVector(DestinationValues));
+    Emulator.setRegisterBytes(Source1.Offset, floatVector(Source1Values));
+    Emulator.setRegisterBytes(Source2.Offset, floatVector(Source2Values));
+    Emulator.setRegister(WriteMask.Offset, UINT64_C(1));
+    ASSERT_EQ(Emulator.run(Ops), Ops.size());
+    EXPECT_EQ(Emulator.getRegisterBytes(Destination.Offset),
+              floatVector(Expected));
+    EXPECT_EQ(Emulator.getMXCSR(), InitialMXCSR);
+  }
 }
 
 } // namespace
