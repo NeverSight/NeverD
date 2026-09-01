@@ -1074,6 +1074,101 @@ TEST(X86EVEXFloatArith,
   EXPECT_EQ(*Result, qwordBitsVector(Expected));
 }
 
+TEST(X86EVEXFloatArith,
+     PackedMinMaxQuietNaNRaisesInvalidUnlessSAESuppressesIt) {
+  struct QuietNaNCase {
+    const char *Name;
+    std::vector<uint8_t> Encoding;
+    std::vector<uint8_t> MaskedEncoding;
+    std::vector<uint8_t> SAEEncoding;
+    std::vector<uint8_t> Left;
+    std::vector<uint8_t> Right;
+  };
+  const QuietNaNCase Cases[] = {
+      {// vminps zmm0, zmm2, zmm19[,{sae}]
+       "minps",
+       {0x62, 0xb1, 0x6c, 0x48, 0x5d, 0xc3},
+       {0x62, 0xb1, 0x6c, 0x49, 0x5d, 0xc3},
+       {0x62, 0xb1, 0x6c, 0x18, 0x5d, 0xc3},
+       dwordBitsVector(std::vector<uint32_t>(16, UINT32_C(0x3f800000))),
+       dwordBitsVector(std::vector<uint32_t>(16, UINT32_C(0xffc54321)))},
+      {// vmaxpd zmm0, zmm2, zmm19[,{sae}]
+       "maxpd",
+       {0x62, 0xb1, 0xed, 0x48, 0x5f, 0xc3},
+       {0x62, 0xb1, 0xed, 0x49, 0x5f, 0xc3},
+       {0x62, 0xb1, 0xed, 0x18, 0x5f, 0xc3},
+       qwordBitsVector(std::vector<uint64_t>(8, UINT64_C(0x3ff0000000000000))),
+       qwordBitsVector(std::vector<uint64_t>(8, UINT64_C(0xfff8123456789abc)))},
+  };
+
+  const RegInfo Source1 = mapCapstoneReg(X86_REG_ZMM2);
+  const RegInfo Source2 = mapCapstoneReg(X86_REG_ZMM19);
+  const RegInfo Destination = mapCapstoneReg(X86_REG_ZMM0);
+  const std::vector<uint8_t> OldDestination(64, 0xa5);
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+
+  for (const QuietNaNCase &Case : Cases) {
+    SCOPED_TRACE(Case.Name);
+    const std::vector<LowOp> Ops = liftX64(Case.Encoding);
+    const std::vector<LowOp> MaskedOps = liftX64(Case.MaskedEncoding);
+    const std::vector<LowOp> SAEOps = liftX64(Case.SAEEncoding);
+    ASSERT_FALSE(Ops.empty());
+    ASSERT_FALSE(MaskedOps.empty());
+    ASSERT_FALSE(SAEOps.empty());
+
+    // Masked invalid commits the second source unchanged and records IE.
+    NdOpEmulator Masked(Image);
+    Masked.setStrictMode(true);
+    Masked.setMXCSR(0x1f80);
+    Masked.setRegisterBytes(Source1.Offset, Case.Left);
+    Masked.setRegisterBytes(Source2.Offset, Case.Right);
+    Masked.setRegisterBytes(Destination.Offset, OldDestination);
+    ASSERT_EQ(Masked.run(Ops), Ops.size());
+    EXPECT_EQ(Masked.getRegisterBytes(Destination.Offset), Case.Right);
+    EXPECT_EQ(Masked.getMXCSR(), UINT32_C(0x1f81));
+    EXPECT_FALSE(Masked.skips().any());
+
+    // Unmasked invalid updates IE but traps before the destination commit.
+    NdOpEmulator Unmasked(Image);
+    Unmasked.setStrictMode(true);
+    Unmasked.setMXCSR(0x1f00);
+    Unmasked.setRegisterBytes(Source1.Offset, Case.Left);
+    Unmasked.setRegisterBytes(Source2.Offset, Case.Right);
+    Unmasked.setRegisterBytes(Destination.Offset, OldDestination);
+    EXPECT_LT(Unmasked.run(Ops), Ops.size());
+    EXPECT_EQ(Unmasked.getRegisterBytes(Destination.Offset), OldDestination);
+    EXPECT_EQ(Unmasked.getMXCSR(), UINT32_C(0x1f01));
+    EXPECT_FALSE(Unmasked.skips().any());
+
+    // SAE suppresses both the architectural flag and the trap.
+    NdOpEmulator Suppressed(Image);
+    Suppressed.setStrictMode(true);
+    Suppressed.setMXCSR(0x1f00);
+    Suppressed.setRegisterBytes(Source1.Offset, Case.Left);
+    Suppressed.setRegisterBytes(Source2.Offset, Case.Right);
+    Suppressed.setRegisterBytes(Destination.Offset, OldDestination);
+    ASSERT_EQ(Suppressed.run(SAEOps), SAEOps.size());
+    EXPECT_EQ(Suppressed.getRegisterBytes(Destination.Offset), Case.Right);
+    EXPECT_EQ(Suppressed.getMXCSR(), UINT32_C(0x1f00));
+    EXPECT_FALSE(Suppressed.skips().any());
+
+    // Inactive mask lanes do not inspect their QNaN source or raise IE.
+    NdOpEmulator Inactive(Image);
+    Inactive.setStrictMode(true);
+    Inactive.setMXCSR(0x1f00);
+    Inactive.setRegisterBytes(Source1.Offset, Case.Left);
+    Inactive.setRegisterBytes(Source2.Offset, Case.Right);
+    Inactive.setRegister(x86reg::K1, 0);
+    Inactive.setRegisterBytes(Destination.Offset, OldDestination);
+    ASSERT_EQ(Inactive.run(MaskedOps), MaskedOps.size());
+    EXPECT_EQ(Inactive.getRegisterBytes(Destination.Offset), OldDestination);
+    EXPECT_EQ(Inactive.getMXCSR(), UINT32_C(0x1f00));
+    EXPECT_FALSE(Inactive.skips().any());
+  }
+}
+
 TEST(X86EVEXFloatArith, ZmmMaxpdZeroMaskClearsInactiveLanes) {
   // vmaxpd zmm0 {k1} {z}, zmm2, zmm19
   const std::vector<LowOp> Ops = liftX64({0x62, 0xb1, 0xed, 0xc9, 0x5f, 0xc3});

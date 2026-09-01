@@ -266,14 +266,16 @@ bool NdOpEmulator::executeX86FPArith(const LowOp &Op) {
     const bool BNaN = UsesRight && isNaN(OriginalB, Format);
     const bool CNaN = IsFma && isNaN(OriginalC, Format);
     if (ANaN || BNaN || CNaN) {
-      if (isSignalingNaN(OriginalA, Format) ||
+      const bool HasSignalingNaN =
+          isSignalingNaN(OriginalA, Format) ||
           (UsesRight && isSignalingNaN(OriginalB, Format)) ||
-          (IsFma && isSignalingNaN(OriginalC, Format)))
+          (IsFma && isSignalingNaN(OriginalC, Format));
+      if (IsMinMax || HasSignalingNaN)
         PreRaised |= 1U << 0;
       if (IsMinMax) {
         // MIN/MAX select the second source for every unordered pair.  Intel
-        // also requires an SNaN in that source to be forwarded bit-for-bit;
-        // the invalid exception is raised above without quieting the result.
+        // raises invalid even for a QNaN, but still forwards a second-source
+        // SNaN bit-for-bit rather than quieting the selected result.
         writeLane(Result, Offset, ElementSize, OriginalB);
       } else {
         const uint64_t Selected =
