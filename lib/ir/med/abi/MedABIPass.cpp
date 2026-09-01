@@ -186,9 +186,14 @@ std::optional<int64_t> exactEntrySpDelta(const MedFunc &Func, Arch TheArch,
   return Eval(Root);
 }
 
-std::optional<int64_t> reachingStackPtrDelta(const MedFunc &Func,
-                                             const TargetRegInfo &TRI,
-                                             int BlockId, int BeforeIdx) {
+struct ReachingStackPtrResult {
+  std::optional<MedVar> Basis;
+  std::optional<int64_t> Delta;
+};
+
+ReachingStackPtrResult findReachingStackPtr(const MedFunc &Func,
+                                            const TargetRegInfo &TRI,
+                                            int BlockId, int BeforeIdx) {
   // Walk transparent predecessors once and collect every boundary at which the
   // reaching SP becomes concrete: a local SP definition, an SP PHI, or a
   // function-entry block.  The former recursive walk only marked the current
@@ -202,17 +207,38 @@ std::optional<int64_t> reachingStackPtrDelta(const MedFunc &Func,
   std::map<int, const MedBlock *> Blocks;
   for (const MedBlock &Block : Func.Blocks)
     if (!Blocks.emplace(Block.Id, &Block).second)
-      return std::nullopt;
+      return {};
 
   std::vector<State> Worklist{{BlockId, BeforeIdx}};
   std::set<State> Visited;
-  std::optional<int64_t> Common;
+  std::optional<MedVar> CommonBasis;
+  std::optional<int64_t> CommonDelta;
+  bool BasisExact = true;
+  bool DeltaExact = true;
 
-  auto Merge = [&](int64_t Delta) {
-    if (Common && *Common != Delta)
-      return false;
-    Common = Delta;
-    return true;
+  auto MergeBasis = [&](const MedVar &Value) {
+    if (!BasisExact)
+      return;
+    if (CommonBasis && entrySpKey(*CommonBasis) != entrySpKey(Value)) {
+      CommonBasis.reset();
+      BasisExact = false;
+      return;
+    }
+    CommonBasis = Value;
+  };
+  auto MergeDelta = [&](std::optional<int64_t> Delta) {
+    if (!DeltaExact)
+      return;
+    if (!Delta || (CommonDelta && *CommonDelta != *Delta)) {
+      CommonDelta.reset();
+      DeltaExact = false;
+      return;
+    }
+    CommonDelta = *Delta;
+  };
+  auto MergeBoundary = [&](const MedVar &Value) {
+    MergeBasis(Value);
+    MergeDelta(stackPtrDelta(Func, TRI, Value));
   };
 
   while (!Worklist.empty()) {
@@ -223,7 +249,7 @@ std::optional<int64_t> reachingStackPtrDelta(const MedFunc &Func,
 
     auto BlockIt = Blocks.find(Current.first);
     if (BlockIt == Blocks.end())
-      return std::nullopt;
+      return {};
     const MedBlock &Block = *BlockIt->second;
     const int Boundary =
         std::clamp(Current.second, 0, static_cast<int>(Block.Ops.size()));
@@ -234,9 +260,7 @@ std::optional<int64_t> reachingStackPtrDelta(const MedFunc &Func,
       if (Output.Kind != MedVar::Reg || Output.Size == 0 ||
           Output.RegOff != TRI.StackPointer)
         continue;
-      auto Delta = stackPtrDelta(Func, TRI, Output);
-      if (!Delta || !Merge(*Delta))
-        return std::nullopt;
+      MergeBoundary(Output);
       FoundBoundary = true;
       break;
     }
@@ -247,9 +271,7 @@ std::optional<int64_t> reachingStackPtrDelta(const MedFunc &Func,
       if (Phi.Output.Kind != MedVar::Reg || Phi.Output.Size == 0 ||
           Phi.Output.RegOff != TRI.StackPointer)
         continue;
-      auto Delta = stackPtrDelta(Func, TRI, Phi.Output);
-      if (!Delta || !Merge(*Delta))
-        return std::nullopt;
+      MergeBoundary(Phi.Output);
       FoundBoundary = true;
       break;
     }
@@ -257,21 +279,27 @@ std::optional<int64_t> reachingStackPtrDelta(const MedFunc &Func,
       continue;
 
     if (Block.Preds.empty()) {
-      if (!Merge(0))
-        return std::nullopt;
+      CommonBasis.reset();
+      BasisExact = false;
+      MergeDelta(0);
       continue;
     }
 
     for (int PredId : Block.Preds) {
       auto PredIt = Blocks.find(PredId);
       if (PredIt == Blocks.end())
-        return std::nullopt;
+        return {};
       Worklist.emplace_back(PredId,
                             static_cast<int>(PredIt->second->Ops.size()));
     }
   }
 
-  return Common;
+  ReachingStackPtrResult Result;
+  if (BasisExact)
+    Result.Basis = CommonBasis;
+  if (DeltaExact)
+    Result.Delta = CommonDelta;
+  return Result;
 }
 } // namespace
 
@@ -661,6 +689,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       // AArch64/ ARM by `str [sp,#k]`).  The call-site SP is the most recent
       // stack-pointer definition before the call (entry SP = offset 0).
       bool HaveCallSpDelta = false;
+      bool HaveCallSpBasis = false;
       int64_t CallSpDelta = 0;
       std::map<SpOffsetKey, int64_t> CallSpOffsets;
       for (int J = static_cast<int>(OI) - 1; J >= 0; --J) {
@@ -675,13 +704,22 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
           // pushes can still be placed when the absolute entry delta is
           // unavailable (a post-loop push chain threading a loop-carried PHI).
           buildCallSpOffsets(Func, TRI, Prev.Output, 0, CallSpOffsets, 0);
+          HaveCallSpBasis = true;
           break;
         }
       }
-      if (!HaveCallSpDelta)
-        if (auto D =
-                reachingStackPtrDelta(Func, TRI, Blk.Id, static_cast<int>(OI)))
-          CallSpDelta = *D;
+      if (!HaveCallSpBasis || !HaveCallSpDelta) {
+        ReachingStackPtrResult Reaching = findReachingStackPtr(
+            Func, TRI, Blk.Id, static_cast<int>(OI));
+        if (!HaveCallSpBasis && Reaching.Basis) {
+          buildCallSpOffsets(Func, TRI, *Reaching.Basis, 0, CallSpOffsets, 0);
+          HaveCallSpBasis = true;
+        }
+        if (!HaveCallSpDelta && Reaching.Delta) {
+          CallSpDelta = *Reaching.Delta;
+          HaveCallSpDelta = true;
+        }
+      }
 
       // A value spilled to the call frame before the call (an outgoing `push` /
       // `str [sp,#k]` landing at or above the call SP) means the ABI has run

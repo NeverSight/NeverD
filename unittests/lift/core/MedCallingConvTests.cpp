@@ -555,6 +555,82 @@ TEST(MedABIPass, X86CdeclRejectsConflictingPredecessorStackOffsets) {
   EXPECT_TRUE(Func.CallInfos[0].Args.empty());
 }
 
+TEST(MedABIPass, X86CdeclRecoversLoopCarriedCallSpRelativeSlots) {
+  constexpr Arch TheArch = Arch::X86;
+  constexpr va_t Callee = 0x2000;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+
+  MedFunc Func;
+  Func.Entry = 0x1000;
+  Func.Name = "loop_carried_cdecl_arguments";
+  Func.Blocks.resize(3);
+
+  MedBlock &Entry = Func.Blocks[0];
+  Entry.Id = 0;
+  Entry.Succs = {1};
+  const MedVar EntrySP = reg(10, 0, TRI.PointerSize, TRI.StackPointer, TheArch);
+  addLiveIn(Entry, EntrySP);
+
+  const MedVar LoopSP = reg(10, 1, TRI.PointerSize, TRI.StackPointer, TheArch);
+  const MedVar CalleePoppedSP =
+      reg(10, 2, TRI.PointerSize, TRI.StackPointer, TheArch);
+  const MedVar RestoredSP =
+      reg(10, 3, TRI.PointerSize, TRI.StackPointer, TheArch);
+
+  MedBlock &Header = Func.Blocks[1];
+  Header.Id = 1;
+  Header.Preds = {0, 2};
+  Header.Succs = {2};
+  Header.Phis.push_back({LoopSP, {{0, EntrySP}, {2, RestoredSP}}});
+
+  MedBlock &CallBlock = Func.Blocks[2];
+  CallBlock.Id = 2;
+  CallBlock.Preds = {1};
+  CallBlock.Succs = {1};
+
+  const MedVar Slot1Raw = temp(20, 0, TRI.PointerSize, TheArch);
+  const MedVar Slot1Address = temp(21, 0, 8, TheArch);
+  CallBlock.Ops.push_back(
+      binary(NdOp::INT_ADD, Slot1Raw, LoopSP,
+             MedVar::makeConst(TRI.PointerSize, TRI.PointerSize)));
+  CallBlock.Ops.push_back(unary(NdOp::INT_ZEXT, Slot1Address, Slot1Raw));
+
+  MedOp StoreArg1;
+  StoreArg1.Opcode = NdOp::STORE;
+  StoreArg1.addInput(Slot1Address);
+  StoreArg1.addInput(MedVar::makeConst(22, TRI.PointerSize));
+  CallBlock.Ops.push_back(StoreArg1);
+
+  MedOp StoreArg0;
+  StoreArg0.Opcode = NdOp::STORE;
+  StoreArg0.addInput(LoopSP);
+  StoreArg0.addInput(MedVar::makeConst(11, TRI.PointerSize));
+  CallBlock.Ops.push_back(StoreArg0);
+
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Output = reg(30, 0, TRI.PointerSize, TRI.IntReturnReg, TheArch);
+  Call.addInput(MedVar::makeConst(Callee, TRI.PointerSize));
+  CallBlock.Ops.push_back(Call);
+
+  CallBlock.Ops.push_back(
+      binary(NdOp::INT_ADD, CalleePoppedSP, LoopSP,
+             MedVar::makeConst(TRI.PointerSize, TRI.PointerSize)));
+  CallBlock.Ops.push_back(
+      binary(NdOp::INT_SUB, RestoredSP, CalleePoppedSP,
+             MedVar::makeConst(TRI.PointerSize, TRI.PointerSize)));
+
+  const std::map<va_t, std::string> Names{{Callee, "cdecl_callee"}};
+  std::map<va_t, int> RegArity{{Callee, 0}};
+  std::map<va_t, int> TotalArity{{Callee, 2}};
+  recoverCallAbi(Func, TheArch, Names, nullptr, &RegArity, &TotalArity);
+
+  ASSERT_EQ(Func.CallInfos.size(), 1u);
+  ASSERT_EQ(Func.CallInfos[0].Args.size(), 2u);
+  EXPECT_EQ(Func.CallInfos[0].Args[0].ConstVal, 11u);
+  EXPECT_EQ(Func.CallInfos[0].Args[1].ConstVal, 22u);
+}
+
 TEST(MedTypePass, X86InfersFloatReturnFromX87CarrierExtension) {
   constexpr Arch TheArch = Arch::X86;
 
