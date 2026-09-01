@@ -34266,11 +34266,12 @@ int runExit(const std::string &Cmd) {
   return neverd::test::systemExitCode(RC);
 }
 
-// Build a host sample on the Mach-O patcher's registrable DWARF path.  Darwin
-// AArch64 normally emits compact unwind alone; the extra assembly function uses
-// valid, deliberately non-compact CFI so the linker retains
-// __TEXT,__eh_frame.  A separate negative E2E test below keeps the fixed-size
-// compact-unwind capacity fail-closed boundary observable.
+// Build a host sample in the exception format the Mach-O patcher currently
+// supports.  Darwin AArch64 normally emits compact unwind alone, but the
+// patcher can register regenerated records only through an existing
+// __TEXT,__eh_frame.  The extra assembly function uses valid, deliberately
+// non-compact CFI so the linker retains that section.  A separate negative E2E
+// test below keeps the compact-only fail-closed boundary observable.
 bool compileHostProgram(const fs::path &Dir, const char *Program,
                         const std::string &Executable, const char *OptFlag,
                         bool AddMachODwarfAnchor = true) {
@@ -36178,9 +36179,9 @@ void runHostE2ENoSilentMiscompile(const char *Mode, const char *Program,
 } // namespace
 
 #if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
-// Without the DWARF anchor, ld64 leaves a compact-only fixed-size
-// __unwind_info section.  The regenerated table is larger than that allocation,
-// so the patcher must fail closed without publishing a partial output.
+// Without the DWARF anchor, ld64 leaves compact unwind alone, but the patcher
+// can register regenerated records only through an existing __TEXT,__eh_frame.
+// It must fail closed without publishing a partial output.
 TEST(PatchFullMachOUnwind_HostE2E, CompactUnwindOnlyInputFailsClosed) {
   if (!haveClang())
     GTEST_SKIP() << "host clang unavailable";
@@ -36210,9 +36211,9 @@ TEST(PatchFullMachOUnwind_HostE2E, CompactUnwindOnlyInputFailsClosed) {
   EXPECT_FALSE(fs::exists(Patched))
       << "failed compact-unwind rewrite left an output file";
   const std::string ErrorText = readFile(Stderr);
-  EXPECT_NE(
-      ErrorText.find("final compact-unwind section has insufficient capacity"),
-      std::string::npos)
+  EXPECT_NE(ErrorText.find(
+                "macho exception patch: no registrable __eh_frame produced"),
+            std::string::npos)
       << ErrorText;
 
   if (!::testing::Test::HasFailure())
