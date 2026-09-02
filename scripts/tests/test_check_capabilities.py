@@ -1757,10 +1757,10 @@ class CapabilitySchemaTests(unittest.TestCase):
             cache.write_text("cache\n", encoding="utf-8")
             stamp = build / capabilities.BUILD_COMPLETION_STAMP
             stamp.write_text("complete\n", encoding="utf-8")
-            os.utime(index, ns=(10, 10))
-            os.utime(cache, ns=(10, 10))
-            os.utime(stamp, ns=(20, 20))
-            os.utime(source, ns=(30, 30))
+            os.utime(index, ns=(1_000_000_000, 1_000_000_000))
+            os.utime(cache, ns=(1_000_000_000, 1_000_000_000))
+            os.utime(stamp, ns=(2_000_000_000, 2_000_000_000))
+            os.utime(source, ns=(3_000_000_000, 3_000_000_000))
             document = {
                 "schema": 2,
                 "capabilities": [
@@ -1796,9 +1796,9 @@ class CapabilitySchemaTests(unittest.TestCase):
             cache.write_text("cache\n", encoding="utf-8")
             stamp = build / capabilities.BUILD_COMPLETION_STAMP
             stamp.write_text("complete\n", encoding="utf-8")
-            os.utime(index, ns=(10, 10))
-            os.utime(cache, ns=(20, 20))
-            os.utime(stamp, ns=(30, 30))
+            os.utime(index, ns=(1_000_000_000, 1_000_000_000))
+            os.utime(cache, ns=(2_000_000_000, 2_000_000_000))
+            os.utime(stamp, ns=(3_000_000_000, 3_000_000_000))
 
             diagnostics = capabilities.audit_build_freshness(
                 root, build, {"schema": 2, "capabilities": []}
@@ -1870,13 +1870,14 @@ class CapabilitySchemaTests(unittest.TestCase):
                 stdout=subprocess.DEVNULL,
             )
             cache = build / "CMakeCache.txt"
-            cache.write_text(
-                cache.read_text(encoding="utf-8").replace(
-                    f"CMAKE_HOME_DIRECTORY:INTERNAL={other}",
-                    f"CMAKE_HOME_DIRECTORY:INTERNAL={root}",
-                ),
-                encoding="utf-8",
-            )
+            cache_lines = cache.read_text(encoding="utf-8").splitlines()
+            cache_lines = [
+                f"CMAKE_HOME_DIRECTORY:INTERNAL={root}"
+                if line.startswith("CMAKE_HOME_DIRECTORY:INTERNAL=")
+                else line
+                for line in cache_lines
+            ]
+            cache.write_text("\n".join(cache_lines) + "\n", encoding="utf-8")
 
             with (
                 mock.patch.object(
@@ -1960,24 +1961,26 @@ class CapabilitySchemaTests(unittest.TestCase):
     def test_configured_build_failure_reports_only_the_log_tail(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             temporary = Path(directory)
-            fake_bin = temporary / "bin"
-            fake_bin.mkdir()
-            fake_cmake = fake_bin / "cmake"
-            fake_cmake.write_text(
-                "#!/bin/sh\n"
-                "index=0\n"
-                'while [ "$index" -lt 2000 ]; do printf x; index=$((index + 1)); '
-                "done\n"
-                "printf '\\nTAIL-MARKER\\n' >&2\n"
-                "exit 7\n",
-                encoding="utf-8",
+            program = (
+                "import sys\n"
+                "sys.stdout.write('x' * 2000)\n"
+                "sys.stderr.write('\\nTAIL-MARKER\\n')\n"
+                "raise SystemExit(7)\n"
             )
-            fake_cmake.chmod(0o755)
-            environment = {
-                "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}"
-            }
+            run_bounded_process = capabilities._run_bounded_process
 
-            with mock.patch.dict(os.environ, environment):
+            def run_fake_cmake(
+                _command: object, **kwargs: object
+            ) -> tuple[subprocess.CompletedProcess[str] | None, str | None]:
+                return run_bounded_process(
+                    (sys.executable, "-c", program), **kwargs
+                )
+
+            with mock.patch.object(
+                capabilities,
+                "_run_bounded_process",
+                side_effect=run_fake_cmake,
+            ):
                 diagnostics = capabilities.build_configured_evidence(
                     {"schema": 2, "capabilities": []}, temporary / "build"
                 )
@@ -2368,7 +2371,9 @@ int main(int argc, char **argv) {
                 check=True,
                 stdout=subprocess.DEVNULL,
             )
-            artifact = build / "FakeEvidence"
+            artifact = build / (
+                "FakeEvidence.exe" if os.name == "nt" else "FakeEvidence"
+            )
             initial_artifact_time = artifact.stat().st_mtime_ns
             (build / "expected.txt").write_text("2\n", encoding="utf-8")
             header.write_text(
@@ -2782,6 +2787,22 @@ int main(int argc, char **argv) {
 
         self.assertEqual(result.tests, 1)
         self.assertEqual(result.skipped, 1)
+        self.assertEqual(
+            result.runtime_names,
+            frozenset({"test_api.SessionTests.test_one"}),
+        )
+
+    def test_python_unittest_parser_accepts_windows_line_endings(self) -> None:
+        result = capabilities.parse_python_unittest_result(
+            "test_one (test_api.SessionTests.test_one) ... ok\r\n"
+            "\r\n----------------------------------------------------------------------\r\n"
+            "Ran 1 test in 0.001s\r\n\r\nOK\r\n"
+        )
+
+        self.assertEqual(result.tests, 1)
+        self.assertEqual(result.failures, 0)
+        self.assertEqual(result.errors, 0)
+        self.assertEqual(result.skipped, 0)
         self.assertEqual(
             result.runtime_names,
             frozenset({"test_api.SessionTests.test_one"}),

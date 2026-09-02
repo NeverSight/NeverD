@@ -1771,11 +1771,13 @@ def parse_gtest_xml_result(output: str) -> ExecutedTestResult:
 def parse_python_unittest_result(output: str) -> ExecutedTestResult:
     """Parse verbose unittest output, preserving every non-normal outcome."""
 
-    ran_matches = re.findall(r"(?m)^Ran ([0-9]+) tests? in [^\r\n]+$", output)
+    ran_matches = re.findall(r"(?m)^Ran ([0-9]+) tests? in [^\r\n]+\r?$", output)
     if not ran_matches:
         raise ValueError("Python unittest output has no Ran N tests summary")
     tests = int(ran_matches[-1])
-    summary_matches = re.findall(r"(?m)^(OK|FAILED)(?: \(([^\r\n]*)\))?$", output)
+    summary_matches = re.findall(
+        r"(?m)^(OK|FAILED)(?: \(([^\r\n]*)\))?\r?$", output
+    )
     if not summary_matches:
         raise ValueError("Python unittest output has no final result summary")
     disposition, details = summary_matches[-1]
@@ -1792,7 +1794,7 @@ def parse_python_unittest_result(output: str) -> ExecutedTestResult:
         match.group(1)
         for match in re.finditer(
             r"(?m)^[^\r\n]*\(([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)\) "
-            r"\.\.\. (?:ok|FAIL|ERROR|skipped\b[^\r\n]*)$",
+            r"\.\.\. (?:ok|FAIL|ERROR|skipped\b[^\r\n]*)\r?$",
             output,
         )
     )
