@@ -94,6 +94,7 @@ enum neverd_sanitize_publication_namespace {
 typedef uint32_t neverd_sanitize_publication_namespace_t;
 
 enum neverd_sanitize_publication_guarantee {
+  NEVERD_SANITIZE_PUBLICATION_GUARANTEE_NONE = 0,
   NEVERD_SANITIZE_PUBLICATION_GUARANTEE_NAMESPACE_ATOMIC = 1u << 0,
   NEVERD_SANITIZE_PUBLICATION_GUARANTEE_DESTINATION_CREATE_EXCLUSIVE = 1u << 1,
   NEVERD_SANITIZE_PUBLICATION_GUARANTEE_COMPARE_AND_SWAP = 1u << 2,

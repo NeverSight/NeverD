@@ -111,8 +111,12 @@ class ABIInventoryTests(unittest.TestCase):
             [0, 1, 2],
         )
         self.assertEqual(
-            {member.name: member.value for member in abi.SanitizePublicationGuarantee},
             {
+                name: member.value
+                for name, member in abi.SanitizePublicationGuarantee.__members__.items()
+            },
+            {
+                "NONE": 0,
                 "NAMESPACE_ATOMIC": 1,
                 "DESTINATION_CREATE_EXCLUSIVE": 2,
                 "COMPARE_AND_SWAP": 4,

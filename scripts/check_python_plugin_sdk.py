@@ -440,7 +440,9 @@ def check_sanitizer_abi(errors: list[str]) -> None:
             name.removeprefix(prefix): value
             for name, value in parse_c_enum_tag(source, tag_name).items()
         }
-        python = {member.name: member.value for member in python_enum}
+        python = {
+            name: member.value for name, member in python_enum.__members__.items()
+        }
         if native != python:
             errors.append(
                 f"{typedef_name} mismatch: native={native!r}, Python={python!r}"
