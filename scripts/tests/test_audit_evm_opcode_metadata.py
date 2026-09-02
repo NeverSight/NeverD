@@ -726,7 +726,7 @@ EVM_GETH_ACTIVE_WITHOUT_COST(STOP, Frontier)
                 )
 
             profile_source = profile.read_text(encoding="utf-8")
-            rosetta = str(rosetta_root.resolve())
+            rosetta = opcode_audit._sandbox_profile_string(rosetta_root.resolve())
             self.assertIn(f'(allow file-read* (subpath "{rosetta}"))', profile_source)
             self.assertNotIn(
                 f'(allow file-write* (subpath "{rosetta}"))', profile_source
