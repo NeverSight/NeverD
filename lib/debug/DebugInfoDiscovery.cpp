@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <map>
+#include <span>
 #include <system_error>
 
 #define DEBUG_TYPE "neverd-debug-discovery"
@@ -100,20 +101,30 @@ mapCandidates(const std::filesystem::path &BinaryPath) {
   return Out;
 }
 
-DebugInfoResult loadPDB(const std::filesystem::path &P, const BinaryImage &Img) {
+DebugInfoResult loadPDB(const std::filesystem::path &P,
+                        const BinaryImage &Img) {
   DebugInfoResult R;
-  auto Ctx = PDBDebugContext::load(P, Img.Base);
+  auto CtxOr = PDBDebugContext::load(P, Img);
+  if (!CtxOr) {
+    R.Error = llvm::toString(CtxOr.takeError());
+    return R;
+  }
+  auto Ctx = std::move(*CtxOr);
   if (Ctx && Ctx->hasInfo()) {
     R.Context = std::move(Ctx);
     R.Kind = DebugInfoKind::PDB;
     R.Path = P;
+  } else {
+    R.Error = "no function symbols in " + P.string();
   }
   return R;
 }
 
-DebugInfoResult loadDWARF(const std::filesystem::path &P, BinaryFormat Format) {
+DebugInfoResult loadDWARF(const std::filesystem::path &P, BinaryFormat Format,
+                          DWARFLoadTrust Trust,
+                          std::span<const uint8_t> ExpectedImageBytes = {}) {
   DebugInfoResult R;
-  auto Ctx = DWARFDebugContext::load(P, Format);
+  auto Ctx = DWARFDebugContext::load(P, Format, Trust, ExpectedImageBytes);
   if (Ctx && Ctx->hasInfo()) {
     R.Context = std::move(Ctx);
     R.Kind = DebugInfoKind::DWARF;
@@ -122,7 +133,8 @@ DebugInfoResult loadDWARF(const std::filesystem::path &P, BinaryFormat Format) {
   return R;
 }
 
-DebugInfoResult loadMap(const std::filesystem::path &P, const BinaryImage &Img) {
+DebugInfoResult loadMap(const std::filesystem::path &P,
+                        const BinaryImage &Img) {
   DebugInfoResult R;
 
   // A COFF /MAP states addresses as segment:offset, so it only resolves
@@ -179,7 +191,7 @@ DebugInfoResult loadDebugInfo(const std::filesystem::path &BinaryPath,
       return Result;
     }
     Result = loadPDB(Req.PDBPath, Img);
-    if (!Result)
+    if (!Result && Result.Error.empty())
       Result.Error = "no function symbols in " + Req.PDBPath.string();
     return Result;
   }
@@ -206,22 +218,32 @@ DebugInfoResult loadDebugInfo(const std::filesystem::path &BinaryPath,
     for (const std::filesystem::path &C : pdbCandidates(BinaryPath, Img)) {
       if (!isReadableFile(C))
         continue;
-      Result = loadPDB(C, Img);
-      if (Result)
-        return Result;
+      DebugInfoResult Attempt = loadPDB(C, Img);
+      if (Attempt)
+        return Attempt;
+      LLVM_DEBUG(llvm::dbgs()
+                 << "debug-discovery: rejected PDB candidate " << C.string()
+                 << (Attempt.Error.empty() ? "" : ": ") << Attempt.Error
+                 << "\n");
     }
     break;
 
   case BinaryFormat::ELF:
   case BinaryFormat::MachO:
     // Covers in-image .debug_info and, for Mach-O, an adjacent .dSYM bundle.
-    Result = loadDWARF(BinaryPath, Img.Format);
+    Result =
+        loadDWARF(BinaryPath, Img.Format, DWARFLoadTrust::InImage, Img.Raw);
     if (Result)
       return Result;
     for (const std::filesystem::path &C : splitDwarfCandidates(BinaryPath)) {
       if (!isReadableFile(C))
         continue;
-      Result = loadDWARF(C, Img.Format);
+      // Split ELF/Mach-O candidates remain useful for names and lines, but
+      // cannot publish object extents until build-id/debuglink identity is
+      // authenticated.  dSYM discovery from the primary Mach-O is handled by
+      // DWARFDebugContext and separately verifies LC_UUID.
+      Result =
+          loadDWARF(C, Img.Format, DWARFLoadTrust::UnauthenticatedCompanion);
       if (Result)
         return Result;
     }
@@ -247,6 +269,18 @@ DebugInfoResult loadDebugInfo(const std::filesystem::path &BinaryPath,
 
 unsigned applyDebugSymbols(BinaryImage &Img, const DebugContext &Dbg) {
   const std::vector<FunctionSym> DbgFuncs = Dbg.allFunctions();
+  if (Dbg.hasAuthenticatedObjectExtents()) {
+    for (const DataObjectSym &Object : Dbg.allDataObjects()) {
+      if (Object.Addr == InvalidVA || Object.Size == 0 ||
+          Object.Size > InvalidVA - Object.Addr)
+        continue;
+      Img.ExactDataObjects.push_back(ExactDataObjectExtent{
+          Object.Addr, Object.Size, ExactDataObjectEvidence::AuthenticatedDebug,
+          Object.IsBuffer ? ExactDataObjectPrecision::TypedBuffer
+                          : ExactDataObjectPrecision::TypedNonBuffer});
+    }
+  }
+
   if (DbgFuncs.empty())
     return 0;
 

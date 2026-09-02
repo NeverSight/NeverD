@@ -310,7 +310,8 @@ uint64_t COFFPatcher::appendExecSegment(std::vector<uint8_t> &Binary,
   uint64_t NewSecRawOff64 = alignUp(Binary.size(), Layout.FileAlignment);
   uint64_t NewSecRawSize64 = alignUp(TextSize, Layout.FileAlignment);
   if (NewSecRawOff64 + NewSecRawSize64 > 0xFFFFFFFFULL) {
-    llvm::WithColor::error() << "coff_patch: section layout exceeds PE limits\n";
+    llvm::WithColor::error()
+        << "coff_patch: section layout exceeds PE limits\n";
     return 0;
   }
   uint32_t NewSecRawOff = static_cast<uint32_t>(NewSecRawOff64);
@@ -363,14 +364,14 @@ PatchResult COFFPatcher::patch(const std::filesystem::path &InputPath,
     return PatchResult{};
   }
 
-  return readPatchWrite(
+  std::vector<PatchedFunctionEntry> InstalledFunctions;
+  PatchResult Patch = readPatchWrite(
       InputPath, OutputPath, /*SetExecPerm=*/false, "coff_patch",
       [&](std::vector<uint8_t> &Binary, PatchResult &Result) -> bool {
         PatchLayout Layout;
         if (!parseLayout(Binary, Layout))
           return false;
-        if (TargetArch == Arch::ARM &&
-            CachedMode != InstructionMode::Thumb) {
+        if (TargetArch == Arch::ARM && CachedMode != InstructionMode::Thumb) {
           llvm::WithColor::error()
               << "coff_patch: Windows ARM patching requires Thumb image "
                  "context\n";
@@ -498,7 +499,6 @@ PatchResult COFFPatcher::patch(const std::filesystem::path &InputPath,
             authenticatedFunctionExports(CachedImage);
         const std::vector<Export> *TrampolineExports =
             CachedImage ? &AuthenticatedExports : CachedExports;
-        std::vector<PatchedFunctionEntry> PatchedFunctions;
         const bool HasExactSourcePlan = SourcePreparation.HasExactSources;
         if (HasExactSourcePlan &&
             !validateSourceFunctionPatchPlan(Img, CachedImage, SourceDetail)) {
@@ -525,10 +525,11 @@ PatchResult COFFPatcher::patch(const std::filesystem::path &InputPath,
                 Layout.TextFileOff, Layout.ImageBase, TargetArch, CachedMode,
                 CachedSymbols, CachedCodeRanges, TrampolineExports,
                 &PatchedOriginalEntries, &PatchedEntryMappings,
-                &PatchedFunctions, TrampolinePlan.Owners,
+                &InstalledFunctions, TrampolinePlan.Owners,
                 TrampolinePlan.OriginalVAs);
           if (!validatePatchedSourceTrampolineClosure(
-                  TrampolinePlan, PatchedFunctions, TrampCount, SourceDetail)) {
+                  TrampolinePlan, InstalledFunctions, TrampCount,
+                  SourceDetail)) {
             llvm::WithColor::error()
                 << "coff_patch: source trampoline closure failed: "
                 << SourceDetail << "\n";
@@ -539,7 +540,8 @@ PatchResult COFFPatcher::patch(const std::filesystem::path &InputPath,
               Binary, Img.SymbolAddrs, Layout.TextVA, Layout.TextSize,
               Layout.TextFileOff, Layout.ImageBase, TargetArch, CachedMode,
               CachedSymbols, CachedCodeRanges, TrampolineExports,
-              &PatchedOriginalEntries, &PatchedEntryMappings);
+              &PatchedOriginalEntries, &PatchedEntryMappings,
+              &InstalledFunctions);
         }
 
         auto EHUpdateOrErr = prepareCOFFExceptionDirectory(
@@ -591,6 +593,11 @@ PatchResult COFFPatcher::patch(const std::filesystem::path &InputPath,
         Result.TrampolineCount = TrampCount;
         return true;
       });
+  patch_receipt_detail::publishCommitted(
+      Patch, InstalledFunctions, [](const PatchedFunctionEntry &Installed) {
+        return Installed.OriginalVA;
+      });
+  return Patch;
 }
 
 } // namespace neverd

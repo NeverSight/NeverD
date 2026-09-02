@@ -32,9 +32,24 @@
 
 #include <optional>
 
+#ifndef NEVERD_RUNTIME_FIXTURE_COMPILER
+#define NEVERD_RUNTIME_FIXTURE_COMPILER ""
+#endif
+
 namespace {
 
 using namespace neverd;
+
+bool hasHostFixtureCompiler() {
+  return NEVERD_RUNTIME_FIXTURE_COMPILER[0] != '\0';
+}
+
+#define REQUIRE_HOST_FIXTURE_COMPILER()                                        \
+  do {                                                                         \
+    if (!hasHostFixtureCompiler())                                             \
+      GTEST_SKIP() << "host C syntax fixtures require a GNU-style GCC/Clang "  \
+                      "driver";                                                \
+  } while (false)
 
 struct CompilerResult {
   int ExitCode = -1;
@@ -80,13 +95,13 @@ CompilerResult runCCompiler(llvm::StringRef Source,
   }
 
   llvm::SmallVector<llvm::StringRef, 12> Arguments;
-  Arguments.push_back(NEVERD_TEST_CLANG);
+  Arguments.push_back(NEVERD_RUNTIME_FIXTURE_COMPILER);
   Arguments.append(Options.begin(), Options.end());
   Arguments.push_back(InputPath);
   std::optional<llvm::StringRef> Redirects[] = {std::nullopt, OutputPath.str(),
                                                 ErrorPath.str()};
   Result.ExitCode = llvm::sys::ExecuteAndWait(
-      NEVERD_TEST_CLANG, Arguments, std::nullopt, Redirects,
+      NEVERD_RUNTIME_FIXTURE_COMPILER, Arguments, std::nullopt, Redirects,
       /*SecondsToWait=*/30, /*MemoryLimit=*/0, &Result.Error);
 
   auto Read = [](llvm::StringRef Path) {
@@ -236,6 +251,7 @@ TEST(COFFExceptionIR,
   EXPECT_NE(Source.find("sub_14000B000();"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("extern int sub_"), std::string::npos) << Source;
 
+  REQUIRE_HOST_FIXTURE_COMPILER();
   CompilerResult Syntax = runCCompiler(Source, {"-std=c11", "-fsyntax-only"});
   ASSERT_EQ(Syntax.ExitCode, 0) << Syntax.Error << "\n" << Source;
   CompilerResult Preprocessed = runCCompiler(Source, {"-std=c11", "-E", "-P"});
@@ -285,6 +301,7 @@ TEST(COFFExceptionIR,
   EXPECT_NE(Source.find("sub_14000E000();"), std::string::npos) << Source;
   EXPECT_NE(Source.find("funclet@0x180001000"), std::string::npos) << Source;
 
+  REQUIRE_HOST_FIXTURE_COMPILER();
   CompilerResult Preprocessed = runCCompiler(Source, {"-std=c11", "-E", "-P"});
   ASSERT_EQ(Preprocessed.ExitCode, 0) << Preprocessed.Error;
   EXPECT_NE(Preprocessed.Output.find("__builtin_trap"), std::string::npos)
@@ -310,6 +327,7 @@ TEST(COFFExceptionIR, HighCCommentsDisabledStillEmitsOnlyTrap) {
   EXPECT_EQ(Source.find("funclet@"), std::string::npos) << Source;
   EXPECT_NE(Source.find("__builtin_trap"), std::string::npos) << Source;
 
+  REQUIRE_HOST_FIXTURE_COMPILER();
   CompilerResult Syntax = runCCompiler(Source, {"-std=c11", "-fsyntax-only"});
   EXPECT_EQ(Syntax.ExitCode, 0) << Syntax.Error << "\n" << Source;
 }
@@ -383,6 +401,7 @@ TEST(COFFExceptionIR,
             std::string::npos)
       << Source;
 
+  REQUIRE_HOST_FIXTURE_COMPILER();
   CompilerResult Syntax = runCCompiler(Source, {"-std=c11", "-fsyntax-only"});
   ASSERT_EQ(Syntax.ExitCode, 0) << Syntax.Error << "\n" << Source;
   CompilerResult Preprocessed = runCCompiler(Source, {"-std=c11", "-E", "-P"});
@@ -435,6 +454,7 @@ TEST(COFFExceptionIR,
   EXPECT_NE(Source.find("neverd.analysis-only"), std::string::npos) << Source;
   EXPECT_NE(Source.find("nd_for"), std::string::npos) << Source;
 
+  REQUIRE_HOST_FIXTURE_COMPILER();
   CompilerResult Syntax = runCCompiler(Source, {"-std=c11", "-fsyntax-only"});
   ASSERT_EQ(Syntax.ExitCode, 0) << Syntax.Error << "\n" << Source;
   CompilerResult Preprocessed = runCCompiler(Source, {"-std=c11", "-E", "-P"});
@@ -559,6 +579,7 @@ TEST(COFFExceptionIR,
   EXPECT_NE(Source.find("collision_x2D_name_2(void)"), std::string::npos)
       << Source;
 
+  REQUIRE_HOST_FIXTURE_COMPILER();
   CompilerResult Syntax = runCCompiler(Source, {"-std=c11", "-fsyntax-only"});
   ASSERT_EQ(Syntax.ExitCode, 0) << Syntax.Error << "\n" << Source;
   CompilerResult Preprocessed = runCCompiler(Source, {"-std=c11", "-E", "-P"});

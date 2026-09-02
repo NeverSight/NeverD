@@ -208,6 +208,24 @@ struct MedTypedParam {
   TypeRef Type;
 };
 
+/// Declaration-quality evidence about whether a function returns a semantic
+/// value.  This is deliberately independent of MedFunc::ReturnType: the type
+/// pass must choose a backend type even when it only sees a stale ABI return
+/// register, so that heuristic type is not proof that a source-level value is
+/// returned.  Only an authenticated declaration or an explicit semantic model
+/// may publish a concrete return contract; absence of either stays Unknown.
+enum class MedReturnValueEvidence : uint8_t {
+  Unknown,
+  ReturnsNoValue,
+  /// A semantic value exists, but its ABI carrier class is not authenticated.
+  /// This can justify only potential ownership flow.
+  ReturnsValue,
+  ReturnsPointer,
+  ReturnsInteger,
+  ReturnsFloatingPoint,
+  ReturnsAggregate,
+};
+
 /// One register of a small aggregate (struct-by-value) returned in multiple
 /// registers: SysV x86-64 returns a <=16-byte struct in up to two eightbyte
 /// registers (an INTEGER eightbyte in RAX/RDX, an SSE eightbyte in XMM0/XMM1),
@@ -277,6 +295,11 @@ struct MedFunc {
   int64_t FrameHeadroom = 0;
 
   TypeRef ReturnType;
+
+  /// Trusted return-value evidence for consumers that need declaration
+  /// semantics rather than a code-generation type.  Debug providers remain
+  /// queryable separately, so ordinary lifting leaves this Unknown.
+  MedReturnValueEvidence ReturnValueEvidence = MedReturnValueEvidence::Unknown;
 
   /// A small struct returned by value across multiple registers (x86-64 SysV
   /// eightbytes / AArch64 HFA): when non-empty the function returns an LLVM

@@ -137,6 +137,12 @@ Die sechs unveränderlichen Event-Varianten heißen `BINARY_LOADED`, `BINARY_CLO
 
 Speichern Sie niemals eine `Session`, um sie nach der Terminierung weiterzuverwenden. Die native Capsule wird vor Beginn von `on_term` und vor einer möglichen Freigabe der nativen Session ungültig gemacht. Ein späterer Aufruf schlägt mit `RuntimeError` fehl, statt veralteten Speicher zu dereferenzieren.
 
+### Strikte Veröffentlichung des Binär-Sanitizers
+
+`session.sanitize()` führt die experimentelle Alles-oder-Ablehnen-Transaktion `binary-sanitizer-v1` aus und gibt erst nach Prüfung eines vollständigen, konsistenten authentisierten Receipts ein eingefrorenes `SanitizeResult` zurück. Nicht-Darwin-Hosts lehnen vor Lifting, Guard-Erzeugung, Kandidatenerstellung oder Namespace-Änderung ab. `PUBLISH_INDETERMINATE` und `PUBLISHED_INCOMPLETE` sind Fehler und bedeuten, dass das Ziel bereits existieren kann und vor Verwendung oder Wiederholung geprüft werden muss.
+
+Ein vollständiger Darwin-Receipt authentisiert nur das während der Transaktion gehaltene Zielverzeichnisobjekt. Da dieses nach dem Öffnen umbenannt werden kann, garantiert der Receipt weder während noch nach der Transaktion die Bindung des ursprünglichen Pfads und ist keine dauerhafte, unabhängig nachprüfbare Pfadbindung. Späteres erneutes Öffnen erfordert einen externen Anker und erneute Authentisierung. Python bietet derzeit kein natives Whole-Process-Replay; `NativeProcessReplayAdapter` ist nur eine fail-closed Phase-0-C++-Verfügbarkeits-/Factory-Grenze, auf der alle Hosts alle Fähigkeiten false und keine Operationstabelle melden.
+
 ### Beweisgesicherte Synthese und LLVM-Optimierung
 
 `synthesize_expression` ist von der aus ABI-Gründen erhaltenen, reinen

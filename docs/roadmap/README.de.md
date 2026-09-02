@@ -76,9 +76,39 @@ Ein geliftetes Binärfile auf Heap-Lebensdauerfehler (Leak, Double-Free, Use-aft
 |-------|----------|
 | Spur `audit` | Heap-Zustandsmaschine über IR + Escape-Zusammenfassungen: Leak, Double-Free, Use-after-Free |
 | Spur `hunt` | Senkenkatalog + Argument-Vorfilter + Zielkapazität + Solver-Zeuge |
+| Erreichbarkeitsevidenz | Kontrollstatus ab bekannten Einstiegen plus unabhängiger Angreifer-Fixpunkt und exakter Wurzel-/Aufrufkettenzeuge |
 | Identitätsvertrag | Senkenauflösung je Format (PE-IAT, ELF-PLT, Mach-O-dyld-Bind) und PDB-/DWARF-/MAP-Namensquellen |
 
-**Status:** Phase 1 ist für PE, ELF und Mach-O implementiert. P0 umfasst Closed-World-Analysen für Heap-Lebensdauer und gefährliche Kopien sowie additive Schema-v1-Evidenz mit `process-input-v1`-Replay für exakte literale Umgebungswerte und den ersten unterstützten `read(0)`-Familienaufruf auf der Standardeingabe; andere Eingabearten bleiben mit Begründung nicht abspielbar. P1 deckt Stack-/Global-Überläufe, uninitialisierte lokale Reads und Formatstrings ab. Unbekannte oder nur teilweise anwendbare Aufrufeffekte bleiben UNKNOWN. Urteils- und Identitätsabdeckung ist durch [`unittests/safety`](../../unittests/safety) und den End-to-End-[`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) festgeschrieben, der auf jedem Host die verpflichtende PE/ELF/Mach-O × x86-64/AArch64-Matrix ausführt. Siehe [Speicher-Audit und Hunt](../memory-safety.de.md). Eine P2-Grundlage ist jetzt implementiert: Das versionierte `lowir-concolic-v1` folgt einer begrenzten nativen LowIR-Spur und veröffentlicht nur durch Replay verifizierte Register-Seeds; die PE/ELF/Mach-O × x86-64/AArch64-Evidenz läuft über C, CLI und Python. Binäre Prüfinstrumentierung, Corpus-Planung und -Mutation für hybrides Fuzzing, Projektion von Speichereingaben und breitere interprozedurale Erreichbarkeit bleiben nachgelagerte Roadmap-Arbeiten außerhalb der Phase-1-Abnahme.
+**Status:** Phase 1 ist für PE, ELF und Mach-O implementiert. P0 umfasst Closed-World-Analysen für Heap-Lebensdauer und gefährliche Kopien sowie additive Schema-v1-Evidenz mit `process-input-v1`-Replay für exakte literale Umgebungswerte und den ersten unterstützten `read(0)`-Familienaufruf auf der Standardeingabe; andere Eingabearten bleiben mit Begründung nicht abspielbar. P1 deckt Stack-/Global-Überläufe, uninitialisierte lokale Reads und Formatstrings ab. Unbekannte oder nur teilweise anwendbare Aufrufeffekte bleiben UNKNOWN. Urteils- und Identitätsabdeckung ist durch [`unittests/safety`](../../unittests/safety) und den End-to-End-[`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) festgeschrieben, der auf jedem Host die verpflichtende PE/ELF/Mach-O × x86-64/AArch64-Matrix ausführt. Siehe [Speicher-Audit und Hunt](../memory-safety.de.md).
+
+Der aktuelle interprozedurale Slice ergänzt `reachability.status` und
+`reachability.attacker_control` in Schema v1, ohne den unabhängigen `verdict` zu
+ändern. Er berichtet `application`-, `image`- oder `export`-Wurzeln, exakte
+interne Aufrufketten und geschlossen fehlschlagende UNKNOWN-Zustände. Die
+Budgets `max_call_depth` und `max_summary_iterations` sind über C-API, beide
+CLI-Befehle und beide Python-Methoden verfügbar. `control_reachable` und
+`attacker_reachable` sind
+daher Erreichbarkeits- und keine Urteilssummen.
+
+P2-Analyseoberflächen und -Pläne verwenden versionierte Grenzen mit explizitem Status:
+
+| Plan | Umfang | Status |
+|------|--------|--------|
+| `lowir-concolic-v1` | Hybride/concolic LowIR-Erkundung und Seed-Erzeugung | Experimentell; per Replay verifizierte Register-Seeds auf PE/ELF/Mach-O × x86-64/AArch64 |
+| `binary-sanitizer-v1` | In eine umgeschriebene native Binärdatei eingefügte Laufzeitprüfungen | Experimentell auf Darwin: Counted-Write-Guards nach dem Alles-oder-Ablehnen-Prinzip und authentisierte Create-Exclusive- bzw. Same-Source-No-Change-Veröffentlichung |
+| `process-replay-v1` | Breiteres Prozess-Replay für argv, Dateien, Netzwerk und wiederholte Reads jenseits des aktuellen `process-input-v1` | Nur Phase-0-Grenze: Plan-/Koordinatorvalidierung und fail-closed Abfrage nativer Verfügbarkeit; kein Host stellt native Replay-Operationen bereit |
+
+Der Concolic-Adapter ist eine separate Analyseoberfläche und keine Erweiterung
+des Abnahmevertrags für Phase-1-Sicherheitsberichte. Der experimentelle
+Sanitizer ist über `neverd_session_sanitize`, `neverd patch --sanitize=strict`
+und Python `Session.sanitize` verfügbar; Nicht-Darwin-Hosts lehnen vor Lifting
+oder Namespace-Änderungen ab. Ein vollständiger Receipt authentisiert nur das
+während der Transaktion gehaltene Zielverzeichnisobjekt. Da dieses nach dem
+Öffnen umbenannt werden kann, belegt er weder die fortlaufende noch die
+nachträgliche Bindung des ursprünglichen Pfadnamens und ist keine dauerhafte
+Pfadbindung. `NativeProcessReplayAdapter` bleibt eine Alles-oder-nichts-
+Phase-0-Abfrage-/Factory-Grenze; alle Hosts melden derzeit alle Fähigkeiten als
+false und liefern keine Operationstabelle.
 
 ---
 
@@ -96,7 +126,8 @@ Ein geliftetes Binärfile auf Heap-Lebensdauerfehler (Leak, Double-Free, Use-aft
 ## Zeitplan
 
 Native Formate, Legacy-EVM-Decoding/Lifting bis Fusaka, Solana SBF und
-Speichersicherheit P0 sind regressionstestgedeckt. Die konservative EVM-Source-
+Speichersicherheit Phase 1 einschließlich des aktuellen Known-Entry-
+Erreichbarkeitsslices sind regressionstestgedeckt. Die konservative EVM-Source-
 Rekonstruktion läuft weiter. Keine Termine zugesagt.
 
 | Feature | Status |
@@ -105,5 +136,5 @@ Rekonstruktion läuft weiter. Keine Termine zugesagt.
 | Legacy-EVM-Decoding/Lifting | Bis Fusaka abgeschlossen; regressionstestgedeckt |
 | EVM-Source-Rekonstruktion | Laufend — evidenzgestützt und konservativ |
 | Solana-eBPF-(SBF)-Dekompilation | Abgeschlossen — v0-v4, C, Rust und LLVM; regressionstestgedeckt |
-| Speicher-Audit und Hunt | Phase 1 abgeschlossen — P0/P1-Analyse und Replay-Evidenz vorhanden; Replay-verifizierte LowIR-Concolic-Register-Seeds sind als P2-Grundlage umgesetzt, die übrige P2-Orchestrierung bleibt geplant |
+| Speicher-Audit und Hunt | Phase 1 plus Known-Entry-Erreichbarkeitsslice abgeschlossen; `lowir-concolic-v1` und Darwin-`binary-sanitizer-v1` sind experimentell; natives `process-replay-v1` bleibt hinter dem fail-closed Phase-0-Adapter nicht verfügbar |
 | Engine- & Produkt-Härtung | Laufend |

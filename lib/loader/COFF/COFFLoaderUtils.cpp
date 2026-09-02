@@ -21,9 +21,11 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <set>
+#include <vector>
 
 #define DEBUG_TYPE "neverd-coff-loader"
 
@@ -118,6 +120,206 @@ resolveDelayDescriptor(const delay_import_directory_table_entry &Desc,
 }
 
 } // anonymous namespace
+
+namespace {
+
+llvm::Error codeViewRangeError(const llvm::Twine &Message) {
+  return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                 "coff CodeView: " + Message);
+}
+
+llvm::Error validateRawBackedSections(
+    llvm::ArrayRef<detail::RawBackedSectionRange> Sections, uint64_t FileSize) {
+  constexpr uint64_t RVAAddressSpace = uint64_t{1} << 32;
+  for (const detail::RawBackedSectionRange &Section : Sections) {
+    const uint64_t VirtualEnd =
+        static_cast<uint64_t>(Section.RVA) + Section.VirtualSize;
+    if (VirtualEnd > RVAAddressSpace)
+      return codeViewRangeError("section virtual range overflows");
+    if (Section.RawSize == 0)
+      continue;
+    const uint64_t RawEnd =
+        static_cast<uint64_t>(Section.FileOffset) + Section.RawSize;
+    if (Section.FileOffset == 0 || RawEnd > FileSize)
+      return codeViewRangeError("section raw range is outside the file");
+  }
+  return llvm::Error::success();
+}
+
+llvm::Expected<uint64_t> resolveUniqueRawFileRange(
+    llvm::ArrayRef<detail::RawBackedSectionRange> Sections, uint64_t FileSize,
+    uint32_t FileOffset, uint32_t Size) {
+  if (FileOffset == 0 || Size == 0)
+    return codeViewRangeError("raw range is absent or empty");
+  if (auto Error = validateRawBackedSections(Sections, FileSize))
+    return std::move(Error);
+
+  const uint64_t RequestedBegin = FileOffset;
+  const uint64_t RequestedEnd = RequestedBegin + Size;
+  if (RequestedEnd > FileSize)
+    return codeViewRangeError("raw range is outside the file");
+
+  const detail::RawBackedSectionRange *Owner = nullptr;
+  for (const detail::RawBackedSectionRange &Section : Sections) {
+    if (Section.RawSize == 0)
+      continue;
+    const uint64_t SectionBegin = Section.FileOffset;
+    const uint64_t SectionEnd = SectionBegin + Section.RawSize;
+    if (RequestedBegin >= SectionEnd || SectionBegin >= RequestedEnd)
+      continue;
+    if (Owner)
+      return codeViewRangeError("raw range has overlapping section owners");
+    Owner = &Section;
+  }
+  if (!Owner)
+    return codeViewRangeError("raw range has no section owner");
+
+  const uint64_t OwnerBegin = Owner->FileOffset;
+  const uint64_t OwnerEnd = OwnerBegin + Owner->RawSize;
+  if (RequestedBegin < OwnerBegin || RequestedEnd > OwnerEnd)
+    return codeViewRangeError("raw range crosses its section boundary");
+  const uint64_t Delta = RequestedBegin - OwnerBegin;
+  if (Delta + Size > Owner->VirtualSize)
+    return codeViewRangeError("raw range crosses the section virtual tail");
+  return RequestedBegin;
+}
+
+} // namespace
+
+llvm::Expected<uint64_t> detail::resolveUniqueRawBackedFileOffset(
+    llvm::ArrayRef<RawBackedSectionRange> Sections, uint64_t FileSize,
+    uint32_t RVA, uint32_t Size) {
+  if (RVA == 0 || Size == 0)
+    return codeViewRangeError("RVA range is absent or empty");
+  if (auto Error = validateRawBackedSections(Sections, FileSize))
+    return std::move(Error);
+
+  constexpr uint64_t RVAAddressSpace = uint64_t{1} << 32;
+  const uint64_t RequestedBegin = RVA;
+  const uint64_t RequestedEnd = RequestedBegin + Size;
+  if (RequestedEnd > RVAAddressSpace)
+    return codeViewRangeError("RVA range overflows");
+
+  const RawBackedSectionRange *Owner = nullptr;
+  for (const RawBackedSectionRange &Section : Sections) {
+    if (Section.VirtualSize == 0)
+      continue;
+    const uint64_t SectionBegin = Section.RVA;
+    const uint64_t SectionEnd = SectionBegin + Section.VirtualSize;
+    if (RequestedBegin >= SectionEnd || SectionBegin >= RequestedEnd)
+      continue;
+    if (Owner)
+      return codeViewRangeError("RVA range has overlapping section owners");
+    Owner = &Section;
+  }
+  if (!Owner)
+    return codeViewRangeError("RVA range has no section owner");
+
+  const uint64_t OwnerBegin = Owner->RVA;
+  const uint64_t OwnerEnd = OwnerBegin + Owner->VirtualSize;
+  if (RequestedBegin < OwnerBegin || RequestedEnd > OwnerEnd)
+    return codeViewRangeError("RVA range crosses its section boundary");
+  const uint64_t Delta = RequestedBegin - OwnerBegin;
+  if (Owner->RawSize == 0 || Delta + Size > Owner->RawSize)
+    return codeViewRangeError("RVA range crosses the section raw tail");
+
+  const uint64_t FileOffset = Owner->FileOffset + Delta;
+  if (FileOffset + Size > FileSize)
+    return codeViewRangeError("resolved RVA range is outside the file");
+  return FileOffset;
+}
+
+llvm::Expected<llvm::ArrayRef<uint8_t>>
+detail::resolveCodeViewPayload(llvm::ArrayRef<uint8_t> FileData,
+                               llvm::ArrayRef<RawBackedSectionRange> Sections,
+                               uint32_t RVA, uint32_t RawFileOffset,
+                               uint32_t Size) {
+  if (Size == 0 || (RVA == 0 && RawFileOffset == 0))
+    return codeViewRangeError("payload is absent or empty");
+
+  std::optional<uint64_t> RVAOffset;
+  if (RVA != 0) {
+    auto Offset =
+        resolveUniqueRawBackedFileOffset(Sections, FileData.size(), RVA, Size);
+    if (!Offset)
+      return Offset.takeError();
+    RVAOffset = *Offset;
+  }
+
+  std::optional<uint64_t> RawOffset;
+  if (RawFileOffset != 0) {
+    auto Offset = resolveUniqueRawFileRange(Sections, FileData.size(),
+                                            RawFileOffset, Size);
+    if (!Offset)
+      return Offset.takeError();
+    RawOffset = *Offset;
+  }
+
+  if (RVAOffset && RawOffset && *RVAOffset != *RawOffset)
+    return codeViewRangeError(
+        "RVA and PointerToRawData identify different file offsets");
+  const uint64_t Offset = RVAOffset ? *RVAOffset : *RawOffset;
+  return FileData.slice(static_cast<size_t>(Offset), Size);
+}
+
+llvm::Expected<detail::CodeViewRSDSRecord>
+detail::parseCodeViewRSDS(llvm::ArrayRef<uint8_t> Bytes) {
+  using PDB70 = llvm::codeview::PDB70DebugInfo;
+  if (Bytes.size() < sizeof(PDB70) + 1)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "CodeView RSDS record is truncated");
+
+  PDB70 Info{};
+  std::memcpy(&Info, Bytes.data(), sizeof(Info));
+  if (Info.CVSignature != llvm::OMF::Signature::PDB70)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "CodeView record is not RSDS/PDB70");
+
+  CodeViewRSDSRecord Record;
+  std::copy(std::begin(Info.Signature), std::end(Info.Signature),
+            Record.Identity.Guid.begin());
+  Record.Identity.Age = Info.Age;
+  if (!Record.Identity.isValid())
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "CodeView RSDS identity is invalid");
+
+  llvm::ArrayRef<uint8_t> PathBytes = Bytes.drop_front(sizeof(PDB70));
+  const auto End = std::find(PathBytes.begin(), PathBytes.end(), uint8_t{0});
+  if (End == PathBytes.end())
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "CodeView RSDS path is unterminated");
+  Record.Path.assign(reinterpret_cast<const char *>(PathBytes.data()),
+                     static_cast<size_t>(End - PathBytes.begin()));
+  return Record;
+}
+
+void detail::CodeViewIdentityRegistry::observe(
+    const CodeViewRSDSRecord &Record) {
+  if (!Record.Identity.isValid()) {
+    observeMalformed();
+    return;
+  }
+
+  if (!Record.Path.empty() && (Path.empty() || Record.Path < Path))
+    Path = Record.Path;
+
+  if (State == PDBIdentityState::Ambiguous)
+    return;
+  if (State == PDBIdentityState::Absent) {
+    State = PDBIdentityState::Unique;
+    Identity = Record.Identity;
+    return;
+  }
+  if (!Identity || *Identity != Record.Identity) {
+    State = PDBIdentityState::Ambiguous;
+    Identity.reset();
+  }
+}
+
+void detail::CodeViewIdentityRegistry::observeMalformed() {
+  State = PDBIdentityState::Ambiguous;
+  Identity.reset();
+}
 
 void addImportedSymbol(const llvm::object::imported_symbol_iterator &SI,
                        llvm::StringRef ModuleName, va_t IATAddr,
@@ -393,62 +595,90 @@ void parseBaseRelocations(const COFFObjectFile &Obj, BinaryImage &Img,
 }
 
 void parseDebugDirectory(const COFFObjectFile &Obj, BinaryImage &Img) {
+  Img.DynInfo.PDBPath.clear();
+  Img.DynInfo.CodeViewPDBIdentityState = PDBIdentityState::Absent;
+  Img.DynInfo.CodeViewPDBIdentity.reset();
+
   const data_directory *DebugDir =
       Obj.getDataDirectory(llvm::COFF::DEBUG_DIRECTORY);
-  if (!DebugDir || DebugDir->RelativeVirtualAddress == 0 ||
-      DebugDir->Size < sizeof(llvm::object::debug_directory))
+  if (!DebugDir || DebugDir->RelativeVirtualAddress == 0 || DebugDir->Size == 0)
     return;
 
-  uintptr_t DebugPtr;
-  if (auto Err = Obj.getRvaPtr(DebugDir->RelativeVirtualAddress, DebugPtr)) {
-    llvm::consumeError(std::move(Err));
+  detail::CodeViewIdentityRegistry Registry;
+  auto Publish = [&] {
+    Img.DynInfo.CodeViewPDBIdentityState = Registry.state();
+    Img.DynInfo.CodeViewPDBIdentity = Registry.identity();
+    Img.DynInfo.PDBPath = Registry.path();
+  };
+  if (DebugDir->Size < sizeof(llvm::object::debug_directory) ||
+      DebugDir->Size % sizeof(llvm::object::debug_directory) != 0) {
+    Registry.observeMalformed();
+    Publish();
     return;
   }
 
-  // DebugDir->Size is untrusted and getRvaPtr only validates the start; clamp
-  // the entry count to the bytes present up to the end of the file buffer.
   llvm::StringRef FileData = Obj.getData();
-  uintptr_t FileBegin = reinterpret_cast<uintptr_t>(FileData.data());
-  uintptr_t FileEnd = FileBegin + FileData.size();
-  size_t DbgAvail =
-      (DebugPtr >= FileBegin && DebugPtr <= FileEnd) ? (FileEnd - DebugPtr) : 0;
-  uint32_t NumEntries =
-      static_cast<uint32_t>(std::min<size_t>(DebugDir->Size, DbgAvail) /
-                            sizeof(llvm::object::debug_directory));
-  const auto *EntryBytes = reinterpret_cast<const uint8_t *>(DebugPtr);
+  const llvm::ArrayRef<uint8_t> FileBytes(
+      reinterpret_cast<const uint8_t *>(FileData.data()), FileData.size());
+  std::vector<detail::RawBackedSectionRange> Sections;
+  Sections.reserve(Obj.getNumberOfSections());
+  for (const SectionRef &SectionRef : Obj.sections()) {
+    const coff_section *Section = Obj.getCOFFSection(SectionRef);
+    Sections.push_back({Section->VirtualAddress, Section->VirtualSize,
+                        Section->PointerToRawData, Section->SizeOfRawData});
+  }
 
-  using PDB70 = llvm::codeview::PDB70DebugInfo;
-  for (uint32_t I = 0; I < NumEntries; ++I) {
+  auto DirectoryOffset = detail::resolveUniqueRawBackedFileOffset(
+      Sections, FileBytes.size(), DebugDir->RelativeVirtualAddress,
+      DebugDir->Size);
+  if (!DirectoryOffset) {
+    llvm::consumeError(DirectoryOffset.takeError());
+    Registry.observeMalformed();
+    Publish();
+    return;
+  }
+  const llvm::ArrayRef<uint8_t> DirectoryBytes =
+      FileBytes.slice(static_cast<size_t>(*DirectoryOffset), DebugDir->Size);
+  const size_t NumEntries =
+      DirectoryBytes.size() / sizeof(llvm::object::debug_directory);
+
+  for (size_t I = 0; I < NumEntries; ++I) {
     llvm::object::debug_directory DbgEntry;
-    std::memcpy(&DbgEntry, EntryBytes + I * sizeof(DbgEntry), sizeof(DbgEntry));
+    std::memcpy(&DbgEntry, DirectoryBytes.data() + I * sizeof(DbgEntry),
+                sizeof(DbgEntry));
     if (DbgEntry.Type != llvm::COFF::IMAGE_DEBUG_TYPE_CODEVIEW)
       continue;
-    uint32_t DataRVA = DbgEntry.AddressOfRawData;
-    uint32_t DataSize = DbgEntry.SizeOfData;
-    if (DataRVA == 0 || DataSize < sizeof(PDB70))
-      continue;
-    uintptr_t CvPtr;
-    if (auto Err = Obj.getRvaPtr(DataRVA, CvPtr)) {
-      llvm::consumeError(std::move(Err));
+
+    const uint32_t DataRVA = DbgEntry.AddressOfRawData;
+    const uint32_t FileOffset = DbgEntry.PointerToRawData;
+    const uint32_t DataSize = DbgEntry.SizeOfData;
+    if (DataSize == 0 || (DataRVA == 0 && FileOffset == 0)) {
+      Registry.observeMalformed();
       continue;
     }
-    // getRvaPtr validates only the start RVA; bound the record (and the
-    // trailing PDB path string) by the bytes actually present in the file
-    // buffer.
-    size_t CvAvail =
-        (CvPtr >= FileBegin && CvPtr <= FileEnd) ? (FileEnd - CvPtr) : 0;
-    if (CvAvail < sizeof(PDB70))
+
+    auto Payload = detail::resolveCodeViewPayload(FileBytes, Sections, DataRVA,
+                                                  FileOffset, DataSize);
+    if (!Payload) {
+      llvm::consumeError(Payload.takeError());
+      Registry.observeMalformed();
       continue;
-    PDB70 Info;
-    std::memcpy(&Info, reinterpret_cast<const void *>(CvPtr), sizeof(Info));
-    if (Info.CVSignature == llvm::OMF::Signature::PDB70) {
-      const char *Path = reinterpret_cast<const char *>(CvPtr + sizeof(PDB70));
-      size_t MaxLen = std::min<size_t>(DataSize, CvAvail) - sizeof(PDB70);
-      Img.DynInfo.PDBPath = readFixedName(Path, MaxLen);
-      LLVM_DEBUG(llvm::dbgs()
-                 << "coff: PDB path = " << Img.DynInfo.PDBPath << "\n");
     }
+
+    auto Record = detail::parseCodeViewRSDS(*Payload);
+    if (!Record) {
+      llvm::consumeError(Record.takeError());
+      Registry.observeMalformed();
+      continue;
+    }
+    Registry.observe(*Record);
   }
+
+  Publish();
+  LLVM_DEBUG(llvm::dbgs() << "coff: CodeView PDB identity state = "
+                          << static_cast<unsigned>(
+                                 Img.DynInfo.CodeViewPDBIdentityState)
+                          << ", path = " << Img.DynInfo.PDBPath << "\n");
 }
 
 namespace {
@@ -466,14 +696,14 @@ void extractLoadCfgFields(uintptr_t CfgPtr, size_t AvailableSize,
   auto ToRVA = [&](uint64_t VA) -> va_t {
     return VA >= ImageBase ? VA - ImageBase : 0;
   };
-  auto RecordRuntimeCallableSlot =
-      [&](size_t Offset, size_t Width, uint64_t SlotVA,
-          RuntimeCallablePointerSlotKind Kind) {
-        if (!Has(Offset, Width) || SlotVA < ImageBase ||
-            SlotVA > std::numeric_limits<va_t>::max())
-          return;
-        Img.recordRuntimeCallablePointerSlot(static_cast<va_t>(SlotVA), Kind);
-      };
+  auto RecordRuntimeCallableSlot = [&](size_t Offset, size_t Width,
+                                       uint64_t SlotVA,
+                                       RuntimeCallablePointerSlotKind Kind) {
+    if (!Has(Offset, Width) || SlotVA < ImageBase ||
+        SlotVA > std::numeric_limits<va_t>::max())
+      return;
+    Img.recordRuntimeCallablePointerSlot(static_cast<va_t>(SlotVA), Kind);
+  };
 
   if (Has(offsetof(LoadCfgT, SecurityCookie), sizeof(Cfg.SecurityCookie)) &&
       Cfg.SecurityCookie >= ImageBase)
@@ -498,14 +728,14 @@ void extractLoadCfgFields(uintptr_t CfgPtr, size_t AvailableSize,
           sizeof(Cfg.GuardEHContinuationCount)))
     Img.DynInfo.GuardEHContinuationCount = Cfg.GuardEHContinuationCount;
 
-  RecordRuntimeCallableSlot(
-      offsetof(LoadCfgT, GuardCFCheckFunction),
-      sizeof(Cfg.GuardCFCheckFunction), Cfg.GuardCFCheckFunction,
-      RuntimeCallablePointerSlotKind::GuardCFCheck);
-  RecordRuntimeCallableSlot(
-      offsetof(LoadCfgT, GuardCFCheckDispatch),
-      sizeof(Cfg.GuardCFCheckDispatch), Cfg.GuardCFCheckDispatch,
-      RuntimeCallablePointerSlotKind::GuardCFDispatch);
+  RecordRuntimeCallableSlot(offsetof(LoadCfgT, GuardCFCheckFunction),
+                            sizeof(Cfg.GuardCFCheckFunction),
+                            Cfg.GuardCFCheckFunction,
+                            RuntimeCallablePointerSlotKind::GuardCFCheck);
+  RecordRuntimeCallableSlot(offsetof(LoadCfgT, GuardCFCheckDispatch),
+                            sizeof(Cfg.GuardCFCheckDispatch),
+                            Cfg.GuardCFCheckDispatch,
+                            RuntimeCallablePointerSlotKind::GuardCFDispatch);
   RecordRuntimeCallableSlot(
       offsetof(LoadCfgT, GuardRFFailureRoutineFunctionPointer),
       sizeof(Cfg.GuardRFFailureRoutineFunctionPointer),
@@ -516,15 +746,14 @@ void extractLoadCfgFields(uintptr_t CfgPtr, size_t AvailableSize,
       sizeof(Cfg.GuardRFVerifyStackPointerFunctionPointer),
       Cfg.GuardRFVerifyStackPointerFunctionPointer,
       RuntimeCallablePointerSlotKind::GuardRFVerifyStackPointer);
-  RecordRuntimeCallableSlot(
-      offsetof(LoadCfgT, GuardXFGCheckFunctionPointer),
-      sizeof(Cfg.GuardXFGCheckFunctionPointer), Cfg.GuardXFGCheckFunctionPointer,
-      RuntimeCallablePointerSlotKind::GuardXFGCheck);
-  RecordRuntimeCallableSlot(
-      offsetof(LoadCfgT, GuardXFGDispatchFunctionPointer),
-      sizeof(Cfg.GuardXFGDispatchFunctionPointer),
-      Cfg.GuardXFGDispatchFunctionPointer,
-      RuntimeCallablePointerSlotKind::GuardXFGDispatch);
+  RecordRuntimeCallableSlot(offsetof(LoadCfgT, GuardXFGCheckFunctionPointer),
+                            sizeof(Cfg.GuardXFGCheckFunctionPointer),
+                            Cfg.GuardXFGCheckFunctionPointer,
+                            RuntimeCallablePointerSlotKind::GuardXFGCheck);
+  RecordRuntimeCallableSlot(offsetof(LoadCfgT, GuardXFGDispatchFunctionPointer),
+                            sizeof(Cfg.GuardXFGDispatchFunctionPointer),
+                            Cfg.GuardXFGDispatchFunctionPointer,
+                            RuntimeCallablePointerSlotKind::GuardXFGDispatch);
   RecordRuntimeCallableSlot(
       offsetof(LoadCfgT, GuardXFGTableDispatchFunctionPointer),
       sizeof(Cfg.GuardXFGTableDispatchFunctionPointer),
@@ -545,17 +774,15 @@ void extractLoadCfgFields(uintptr_t CfgPtr, size_t AvailableSize,
   constexpr size_t GuardMemcpyOffset =
       offsetof(LoadCfgT, CastGuardOsDeterminedFailureMode) +
       sizeof(Cfg.CastGuardOsDeterminedFailureMode);
-  constexpr size_t PointerWidth =
-      sizeof(Cfg.CastGuardOsDeterminedFailureMode);
+  constexpr size_t PointerWidth = sizeof(Cfg.CastGuardOsDeterminedFailureMode);
   if (Has(GuardMemcpyOffset, PointerWidth)) {
     const auto *Field =
         reinterpret_cast<const uint8_t *>(CfgPtr) + GuardMemcpyOffset;
     const uint64_t SlotVA = PointerWidth == sizeof(uint64_t)
                                 ? readLE<uint64_t>(Field)
                                 : readLE<uint32_t>(Field);
-    RecordRuntimeCallableSlot(
-        GuardMemcpyOffset, PointerWidth, SlotVA,
-        RuntimeCallablePointerSlotKind::GuardMemcpy);
+    RecordRuntimeCallableSlot(GuardMemcpyOffset, PointerWidth, SlotVA,
+                              RuntimeCallablePointerSlotKind::GuardMemcpy);
   }
 }
 } // anonymous namespace

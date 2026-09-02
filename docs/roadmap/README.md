@@ -116,6 +116,7 @@ external solver or container.
 |------|--------|
 | `audit` track | Heap lifetime defects plus local-stack initialization analysis |
 | `hunt` track | Sink catalog + argument prefilter + destination capacity + solver witness |
+| Reachability evidence | Known-entry control status plus an independent attacker-control fixed point and exact root/call-chain witness |
 | Identity contract | Per-format sink resolution (PE IAT, ELF PLT, Mach-O dyld bind) and PDB / DWARF / MAP name sources |
 
 **Status:** Phase 1 is implemented for PE, ELF, and Mach-O. P0 includes
@@ -124,19 +125,53 @@ closed-world heap-lifetime and dangerous-copy analysis plus additive schema-v1
 supported `read(0)`-family standard-input consumption; other input kinds remain
 non-replayable with a reason. P1 covers stack/global overflow, uninitialised local reads, and format
 strings. Unknown or partially applicable call effects remain UNKNOWN.
+The current interprocedural slice adds schema-v1 `reachability.status` and
+`reachability.attacker_control` without changing the independent safety
+`verdict`; it reports `application`, `image`, or `export` roots, exact internal
+call chains, and fail-closed UNKNOWN states. Its `max_call_depth` and
+`max_summary_iterations` budgets are available through the C API, both CLI
+commands, and both Python methods. Report-level `control_reachable` and
+`attacker_reachable` counts are
+therefore reachability tallies, not alternate verdict counts.
 Verdict and identity coverage is locked by
 [`unittests/safety`](../../unittests/safety) (catalog, scanner, argument
 prefilter, object model, hunt, audit) and an end-to-end
 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp)
 that runs the mandatory PE/ELF/Mach-O × x86-64/AArch64 fixture matrix on every
 host. See
-[Memory-safety audit & hunt](../memory-safety.md). One P2 foundation is now
-implemented: versioned `lowir-concolic-v1` follows one bounded native LowIR
-trace and publishes only replay-verified register seeds, with
-PE/ELF/Mach-O × x86-64/AArch64 evidence through C, CLI, and Python. Binary
-check insertion, hybrid-fuzz corpus scheduling and mutation, memory-input
-projection, and broader interprocedural reachability remain follow-on roadmap
-work, not part of the Phase-1 acceptance contract.
+[Memory-safety audit & hunt](../memory-safety.md).
+
+P2 work is deliberately decomposed into versioned boundaries:
+
+| Plan | Scope | Status |
+|------|-------|--------|
+| `lowir-concolic-v1` | Hybrid/concolic LowIR exploration and seed generation beyond one bounded finding proof | Experimental; replay-verified register seeds on PE/ELF/Mach-O × x86-64/AArch64 |
+| `binary-sanitizer-v1` | Runtime checks inserted into a rewritten native binary | Experimental on Darwin: all-sites-or-refuse counted-write guards with authenticated create-exclusive or same-source no-change publication |
+| `process-replay-v1` | Broader whole-process replay for argv, files, network input, and repeated reads beyond the current `process-input-v1` evidence adapter | Phase 0 boundary only: plan/coordinator validation and fail-closed native availability; no host has native replay operations |
+
+The concolic adapter is a separate analysis surface, not an expansion of the
+Phase-1 safety-report acceptance contract. The experimental sanitizer is
+published through `neverd_session_sanitize`, `neverd patch --sanitize=strict`,
+and Python `Session.sanitize`. On non-Darwin hosts it refuses before lifting,
+guard generation, candidate creation, or namespace mutation. Darwin publication
+v1 either creates an absent destination with one authenticated no-replace
+operation or, for an empty plan targeting the loaded source object, returns a
+read-only no-change receipt. A distinct existing destination is preserved: v1
+has no replacement compare-and-swap or crash-durability claim. C, CLI, and
+Python accept success only with a complete coherent receipt; indeterminate or
+published-but-incomplete outcomes require destination inspection. The receipt
+authenticates the held destination-directory object for the transaction, not
+continuous or post-return identity of the original pathname if that directory
+is renamed; it is an attestation summary rather than a durable path binding.
+
+The `NativeProcessReplayAdapter` phase-0 query validates an immutable execution
+request and the physical occurrence map without opening or launching the target.
+Its capability contract is all-or-nothing: every current host reports all
+capabilities false, and the factory returns no callback table. Linux remains
+backend-incomplete; macOS lacks supported public primitives for held-object
+execution, an arbitrary-target pre-code sandbox, and race-free process-tree
+containment. The plan vocabulary and platform-neutral coordinator therefore do
+not constitute a native replay claim.
 
 ---
 
@@ -157,8 +192,9 @@ Cross-cutting work that unblocks the items above and improves today’s native e
 
 Native format completeness, legacy EVM decoding/lifting through Fusaka, and
 Solana SBF decompilation are regression-covered. Conservative EVM source
-reconstruction remains ongoing. No release dates are committed. Progress will
-be tracked here.
+reconstruction remains ongoing. Memory-safety Phase 1 and the current
+known-entry reachability slice are also regression-covered. No release dates
+are committed. Progress will be tracked here.
 
 | Feature | Status |
 |---------|--------|
@@ -166,5 +202,5 @@ be tracked here.
 | EVM legacy decoding/lifting | Complete through Fusaka — regression-covered |
 | EVM source reconstruction | Ongoing — evidence-backed and conservative |
 | Solana eBPF (SBF) decompilation | Complete — v0-v4, C, Rust, and LLVM; regression-covered |
-| Memory-safety audit & hunt | Phase 1 complete — P0/P1 analysis and replay evidence present; replay-verified LowIR concolic register seeds landed as a P2 foundation, with remaining P2 orchestration planned |
+| Memory-safety audit & hunt | Phase 1 plus known-entry reachability complete; `lowir-concolic-v1` and Darwin `binary-sanitizer-v1` publication are experimental; native `process-replay-v1` remains unavailable behind a fail-closed phase-0 adapter |
 | Engine & product hardening | Ongoing |

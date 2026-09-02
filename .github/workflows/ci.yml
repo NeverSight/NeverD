@@ -196,6 +196,9 @@ jobs:
         shell: bash
         run: |
           PYTHON_EXECUTABLE="$("$PYTHON" -c 'import sys; print(sys.executable)')"
+          cmake -E make_directory build-ci/.cmake/api/v1/query
+          cmake -E touch build-ci/.cmake/api/v1/query/codemodel-v2
+          cmake -E touch build-ci/.cmake/api/v1/query/cmakeFiles-v1
           cmake -S . -B build-ci -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER="$CC" \
@@ -215,7 +218,9 @@ jobs:
 
       - name: Build default targets
         shell: bash
-        run: cmake --build build-ci --config Release --parallel "$BUILD_PARALLEL"
+        run: |
+          cmake --build build-ci --config Release --parallel "$BUILD_PARALLEL"
+          cmake -E touch build-ci/.neverd-capability-build-complete
         env:
           BUILD_PARALLEL: ${{ matrix.parallel }}
 
@@ -326,6 +331,14 @@ jobs:
           EXCLUDE_LABELS: ${{ steps.inventory.outputs.label_exclude }}
           EXPECTED_TESTS: ${{ steps.inventory.outputs.count }}
           TEST_PARALLEL: ${{ matrix.parallel }}
+
+      - name: Audit configured and executable capability evidence
+        shell: bash
+        run: |
+          "$PYTHON" scripts/check_capabilities.py \
+            --build-dir build-ci --build-config Release
+        env:
+          PYTHON: ${{ matrix.python }}
 
       # The CLI, the typed C entry point and the JSON one are three surfaces
       # over one implementation, and nothing that tests any of them alone would

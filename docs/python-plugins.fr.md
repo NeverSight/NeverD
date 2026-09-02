@@ -137,6 +137,12 @@ Les six variantes d’événement immuables sont `BINARY_LOADED`, `BINARY_CLOSIN
 
 Ne conservez jamais une `Session` pour l’utiliser après la terminaison. La capsule native est invalidée avant le début de `on_term` et avant que la session native puisse être libérée. Un appel ultérieur échoue avec `RuntimeError` au lieu de déréférencer une mémoire périmée.
 
+### Publication stricte du sanitizer binaire
+
+`session.sanitize()` exécute la transaction expérimentale tout-ou-refus `binary-sanitizer-v1` et ne renvoie un `SanitizeResult` immuable qu’après validation d’un receipt authentifié, complet et cohérent. Les hôtes non Darwin refusent avant le lifting, la génération des gardes, la création du candidat ou la mutation du namespace. `PUBLISH_INDETERMINATE` et `PUBLISHED_INCOMPLETE` sont des échecs : la destination peut exister et doit être inspectée avant usage ou nouvelle tentative.
+
+Un receipt Darwin complet authentifie seulement l’objet répertoire de destination conservé pendant la transaction. Comme il peut être renommé après son ouverture, le receipt ne garantit pas que le pathname d’origine continue de désigner l’objet pendant ou après le retour et n’est pas une liaison de chemin durable et vérifiable indépendamment. Le code qui rouvre ensuite le chemin doit conserver une ancre externe et réauthentifier l’objet. Python ne fournit actuellement aucun rejeu natif de processus complet ; `NativeProcessReplayAdapter` est uniquement une limite C++ fail-closed de disponibilité/factory Phase 0, où tous les hôtes renvoient toutes les capacités à false et aucune table d’opérations.
+
 ### Synthèse contrôlée par preuve et optimisation LLVM
 
 `synthesize_expression` est distinct de `simplify_expression`, conservé pour

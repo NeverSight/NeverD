@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import ctypes
+import copy
 import json
 import sys
 import types
@@ -533,6 +534,100 @@ class _OwnedConcolicLibrary:
         self.freed.append(int(address or 0))
 
 
+class _SanitizeHost:
+    def __init__(
+        self,
+        *,
+        call_result: int = 1,
+        ok: int = 1,
+        status: int = 0,
+        plan_version: int = 1,
+        findings: int = 5,
+        guarded_sites: int = 5,
+        guarded_functions: int = 3,
+        unsupported_sites: int = 0,
+        patched_functions: int = 3,
+        code_size: int = 4096,
+        trampoline_count: int = 3,
+        publication_abi_version: int = 1,
+        publication_outcome: int = 2,
+        publication_receipt_version: int = 1,
+        publication_receipt_complete: int = 1,
+        publication_namespace_disposition: int = 1,
+        publication_guarantee_flags: int = 3,
+        publication_operand_binding: int = 1,
+        returned_struct_size: int | None = None,
+        output_path: str | None = "/tmp/published.bin",
+        last_error: str | None = "native sanitizer failure",
+    ) -> None:
+        self.call_result = call_result
+        self.ok = ok
+        self.status = status
+        self.plan_version = plan_version
+        self.findings = findings
+        self.guarded_sites = guarded_sites
+        self.guarded_functions = guarded_functions
+        self.unsupported_sites = unsupported_sites
+        self.patched_functions = patched_functions
+        self.code_size = code_size
+        self.trampoline_count = trampoline_count
+        self.publication_abi_version = publication_abi_version
+        self.publication_outcome = publication_outcome
+        self.publication_receipt_version = publication_receipt_version
+        self.publication_receipt_complete = publication_receipt_complete
+        self.publication_namespace_disposition = publication_namespace_disposition
+        self.publication_guarantee_flags = publication_guarantee_flags
+        self.publication_operand_binding = publication_operand_binding
+        self.returned_struct_size = returned_struct_size
+        self.output_path = output_path
+        self.last_error = last_error
+        self.output_argument: bytes | None = None
+        self.options: object | None = None
+        self.result_struct_size = 0
+        self.calls: list[str] = []
+        self.output_path_queries = 0
+
+    def call(self, name: str, *arguments: object) -> object:
+        self.calls.append(name)
+        if name == "neverd_sanitize_publication_abi_version":
+            return self.publication_abi_version
+        if name != "neverd_session_sanitize":
+            raise AssertionError(name)
+        self.output_argument = arguments[1]
+        self.options = arguments[2]._obj
+        result = arguments[3]._obj
+        self.result_struct_size = int(result.struct_size)
+        if self.returned_struct_size is not None:
+            result.struct_size = self.returned_struct_size
+        result.ok = self.ok
+        result.status = self.status
+        result.plan_version = self.plan_version
+        result.findings = self.findings
+        result.guarded_sites = self.guarded_sites
+        result.guarded_functions = self.guarded_functions
+        result.unsupported_sites = self.unsupported_sites
+        result.patched_functions = self.patched_functions
+        result.code_size = self.code_size
+        result.trampoline_count = self.trampoline_count
+        result.publication_outcome = self.publication_outcome
+        result.publication_receipt_version = self.publication_receipt_version
+        result.publication_receipt_complete = self.publication_receipt_complete
+        result.publication_namespace_disposition = (
+            self.publication_namespace_disposition
+        )
+        result.publication_guarantee_flags = self.publication_guarantee_flags
+        result.publication_operand_binding = self.publication_operand_binding
+        return self.call_result
+
+    def owned_string(self, name: str, *_arguments: object) -> str | None:
+        if name == "neverd_patch_output_path":
+            self.output_path_queries += 1
+            return self.output_path
+        if name == "neverd_last_error":
+            return self.last_error
+        raise AssertionError(name)
+
+
 class SessionTests(unittest.TestCase):
     def test_default_host_is_lazy_and_cached(self) -> None:
         import neverd_plugin.api as api_module
@@ -660,10 +755,16 @@ class SessionTests(unittest.TestCase):
             max_steps=101,
             max_loop=5,
             solver_conflicts=999,
+            max_call_depth=4,
+            max_summary_iterations=6,
             sinks="rules/sinks.json",
             sources="rules/sources.json",
         )
-        hunt = session.hunt(max_paths=3)
+        hunt = session.hunt(
+            max_paths=3,
+            max_call_depth=8,
+            max_summary_iterations=10,
+        )
 
         self.assertEqual(audit["track"], "audit")
         self.assertEqual(hunt["track"], "hunt")
@@ -683,9 +784,19 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(audit_options.solver_conflicts, 999)
         self.assertEqual(audit_options.sinks_path, b"rules/sinks.json")
         self.assertEqual(audit_options.sources_path, b"rules/sources.json")
+        self.assertEqual(audit_options.max_call_depth, 4)
+        self.assertEqual(audit_options.max_summary_iterations, 6)
         self.assertEqual(
             host.options["neverd_session_hunt_json"].max_paths,
             3,
+        )
+        self.assertEqual(
+            host.options["neverd_session_hunt_json"].max_call_depth,
+            8,
+        )
+        self.assertEqual(
+            host.options["neverd_session_hunt_json"].max_summary_iterations,
+            10,
         )
 
     def test_safety_tracks_surface_native_errors_and_validate_budgets(self) -> None:
@@ -700,6 +811,636 @@ class SessionTests(unittest.TestCase):
             session.hunt(max_paths=-1)
         with self.assertRaisesRegex(ValueError, "solver_conflicts"):
             session.hunt(solver_conflicts=1 << 64)
+        with self.assertRaisesRegex(ValueError, "max_call_depth"):
+            session.audit(max_call_depth=-1)
+        with self.assertRaisesRegex(ValueError, "max_summary_iterations"):
+            session.hunt(max_summary_iterations=1 << 32)
+
+    def test_strict_sanitize_returns_typed_result_and_full_size_options(self) -> None:
+        from neverd_plugin import (
+            SanitizePublicationGuarantee,
+            SanitizePublicationNamespace,
+            SanitizePublicationOperandBinding,
+            SanitizePublicationOutcome,
+            SanitizePublicationReceipt,
+            SanitizeResult,
+            SanitizeStatus,
+            SanitizeStrategy,
+        )
+        from neverd_plugin import Session
+
+        host = _SanitizeHost()
+        session = Session(object(), _native=_FakeNativeBridge(), _host=host)
+        result = session.sanitize(
+            "/tmp/requested.bin",
+            strategy=SanitizeStrategy.INPLACE,
+            max_paths=7,
+            max_steps=101,
+            max_loop=5,
+            solver_conflicts=999,
+            max_call_depth=4,
+            max_summary_iterations=6,
+        )
+
+        self.assertIsInstance(result, SanitizeResult)
+        self.assertIs(result.status, SanitizeStatus.OK)
+        self.assertEqual(result.output_path, "/tmp/published.bin")
+        self.assertEqual(result.plan_version, 1)
+        self.assertEqual(result.findings, 5)
+        self.assertEqual(result.guarded_sites, 5)
+        self.assertEqual(result.guarded_functions, 3)
+        self.assertEqual(result.unsupported_sites, 0)
+        self.assertEqual(result.patched_functions, 3)
+        self.assertEqual(result.code_size, 4096)
+        self.assertEqual(result.trampoline_count, 3)
+        self.assertIsInstance(result.receipt, SanitizePublicationReceipt)
+        self.assertIs(result.receipt.outcome, SanitizePublicationOutcome.PUBLISHED)
+        self.assertEqual(result.receipt.version, 1)
+        self.assertTrue(result.receipt.complete)
+        self.assertIs(
+            result.receipt.namespace,
+            SanitizePublicationNamespace.CREATE_EXCLUSIVE,
+        )
+        self.assertEqual(
+            result.receipt.guarantees,
+            SanitizePublicationGuarantee.NAMESPACE_ATOMIC
+            | SanitizePublicationGuarantee.DESTINATION_CREATE_EXCLUSIVE,
+        )
+        self.assertIs(
+            result.receipt.operand_binding,
+            SanitizePublicationOperandBinding.ACCESS_CONTROL_CONFINED_DISTINCT_CREDENTIALS,
+        )
+        with self.assertRaises(FrozenInstanceError):
+            result.findings = 0
+        with self.assertRaises(FrozenInstanceError):
+            result.receipt.complete = False
+
+        options = host.options
+        self.assertEqual(
+            options.struct_size,
+            ctypes.sizeof(type(options)),
+        )
+        self.assertEqual(host.result_struct_size, 104)
+        self.assertEqual(options.strategy, SanitizeStrategy.INPLACE)
+        self.assertEqual(options.max_paths, 7)
+        self.assertEqual(options.max_steps, 101)
+        self.assertEqual(options.max_loop, 5)
+        self.assertEqual(options.solver_conflicts, 999)
+        self.assertEqual(options.max_call_depth, 4)
+        self.assertEqual(options.max_summary_iterations, 6)
+        self.assertEqual(host.output_argument, b"/tmp/requested.bin")
+        self.assertEqual(
+            host.calls,
+            [
+                "neverd_sanitize_publication_abi_version",
+                "neverd_session_sanitize",
+            ],
+        )
+        self.assertEqual(host.output_path_queries, 1)
+
+    def test_strict_sanitize_defaults_are_zero_and_errors_remain_typed(self) -> None:
+        from neverd_plugin import SanitizeError, SanitizeStatus, Session
+
+        defaults = _SanitizeHost()
+        Session(object(), _native=_FakeNativeBridge(), _host=defaults).sanitize(
+            "/tmp/default.bin"
+        )
+        options = defaults.options
+        self.assertEqual(
+            (
+                options.strategy,
+                options.max_paths,
+                options.max_steps,
+                options.max_loop,
+                options.solver_conflicts,
+                options.max_call_depth,
+                options.max_summary_iterations,
+            ),
+            (0, 0, 0, 0, 0, 0, 0),
+        )
+
+        failed = _SanitizeHost(
+            call_result=0,
+            ok=0,
+            status=SanitizeStatus.METADATA_INVALID,
+            publication_outcome=0,
+            publication_receipt_complete=0,
+            publication_namespace_disposition=0,
+            publication_guarantee_flags=0,
+            publication_operand_binding=0,
+            last_error=None,
+        )
+        with self.assertRaisesRegex(SanitizeError, "metadata-invalid") as caught:
+            Session(object(), _native=_FakeNativeBridge(), _host=failed).sanitize(
+                "/tmp/fail.bin"
+            )
+        self.assertIs(caught.exception.status, SanitizeStatus.METADATA_INVALID)
+
+        null_output = _SanitizeHost(output_path=None)
+        with self.assertRaisesRegex(SanitizeError, "output path") as caught:
+            Session(object(), _native=_FakeNativeBridge(), _host=null_output).sanitize(
+                "/tmp/null-output.bin"
+            )
+        rendered = str(caught.exception)
+        self.assertIn("destination state is unknown", rendered)
+        self.assertIn("destination may exist", rendered)
+        self.assertIn("inspect it", rendered)
+        self.assertIn("/tmp/null-output.bin", rendered)
+
+        wrong_plan = _SanitizeHost(plan_version=2)
+        with self.assertRaisesRegex(SanitizeError, "plan version 2; expected 1"):
+            Session(object(), _native=_FakeNativeBridge(), _host=wrong_plan).sanitize(
+                "/tmp/wrong-plan.bin"
+            )
+
+        malformed_success = _SanitizeHost(call_result=2)
+        with self.assertRaisesRegex(SanitizeError, "invalid call result"):
+            Session(
+                object(), _native=_FakeNativeBridge(), _host=malformed_success
+            ).sanitize("/tmp/malformed-success.bin")
+
+        integrity_failures = (
+            (
+                _SanitizeHost(returned_struct_size=16),
+                "changed result struct_size",
+            ),
+            (_SanitizeHost(unsupported_sites=1), "unsupported sites"),
+            (_SanitizeHost(guarded_sites=4), "does not match findings"),
+            (
+                _SanitizeHost(patched_functions=2),
+                "patched fewer functions",
+            ),
+            (
+                _SanitizeHost(
+                    findings=0,
+                    guarded_sites=0,
+                    guarded_functions=0,
+                    patched_functions=0,
+                    code_size=1,
+                    trampoline_count=0,
+                ),
+                "empty plan",
+            ),
+        )
+        for host, message in integrity_failures:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(SanitizeError, message) as caught:
+                    Session(object(), _native=_FakeNativeBridge(), _host=host).sanitize(
+                        "/tmp/inconsistent.bin"
+                    )
+                rendered = str(caught.exception)
+                self.assertIn("destination state is unknown", rendered)
+                self.assertIn("destination may exist", rendered)
+                self.assertIn("inspect it", rendered)
+                self.assertIn("/tmp/inconsistent.bin", rendered)
+
+        empty = _SanitizeHost(
+            findings=0,
+            guarded_sites=0,
+            guarded_functions=0,
+            patched_functions=0,
+            code_size=0,
+            trampoline_count=0,
+        )
+        empty_result = Session(
+            object(), _native=_FakeNativeBridge(), _host=empty
+        ).sanitize("/tmp/empty.bin")
+        self.assertEqual(empty_result.findings, 0)
+
+    def test_strict_sanitize_rejects_an_old_publication_abi_before_mutation(
+        self,
+    ) -> None:
+        from neverd_plugin import SanitizeError, Session
+
+        host = _SanitizeHost(publication_abi_version=0)
+        with self.assertRaisesRegex(
+            SanitizeError, "publication ABI version 0"
+        ) as caught:
+            Session(object(), _native=_FakeNativeBridge(), _host=host).sanitize(
+                "/tmp/must-not-publish.bin"
+            )
+
+        self.assertIsNone(caught.exception.status)
+        self.assertIsNone(caught.exception.receipt)
+        message = str(caught.exception)
+        self.assertNotIn("destination state is unknown", message)
+        self.assertNotIn("destination may exist", message)
+        self.assertEqual(host.calls, ["neverd_sanitize_publication_abi_version"])
+        self.assertEqual(host.result_struct_size, 0)
+        self.assertEqual(host.output_path_queries, 0)
+
+    def test_strict_sanitize_rejects_a_newer_publication_abi_before_mutation(
+        self,
+    ) -> None:
+        from neverd_plugin import SanitizeError, Session
+
+        host = _SanitizeHost(publication_abi_version=2)
+        with self.assertRaisesRegex(
+            SanitizeError, "publication ABI version 2"
+        ) as caught:
+            Session(object(), _native=_FakeNativeBridge(), _host=host).sanitize(
+                "/tmp/must-not-publish.bin"
+            )
+
+        self.assertIsNone(caught.exception.status)
+        self.assertIsNone(caught.exception.receipt)
+        message = str(caught.exception)
+        self.assertNotIn("destination state is unknown", message)
+        self.assertNotIn("destination may exist", message)
+        self.assertEqual(host.calls, ["neverd_sanitize_publication_abi_version"])
+        self.assertEqual(host.result_struct_size, 0)
+        self.assertEqual(host.output_path_queries, 0)
+
+    def test_strict_sanitize_refuses_success_without_a_complete_receipt(
+        self,
+    ) -> None:
+        from neverd_plugin import SanitizeError, Session
+
+        host = _SanitizeHost(
+            publication_receipt_complete=0,
+            publication_guarantee_flags=0,
+            publication_operand_binding=0,
+        )
+        with self.assertRaisesRegex(
+            SanitizeError, "publication receipt is incomplete"
+        ) as caught:
+            Session(object(), _native=_FakeNativeBridge(), _host=host).sanitize(
+                "/tmp/incomplete.bin"
+            )
+
+        self.assertIsNotNone(caught.exception.receipt)
+        self.assertFalse(caught.exception.receipt.complete)
+        message = str(caught.exception)
+        self.assertIn("destination state is unknown", message)
+        self.assertIn("destination may exist", message)
+        self.assertIn("inspect it", message)
+        self.assertIn("/tmp/incomplete.bin", message)
+        self.assertEqual(host.output_path_queries, 0)
+
+    def test_strict_sanitize_rejects_unknown_publication_receipt_values(
+        self,
+    ) -> None:
+        from neverd_plugin import SanitizeError, Session
+
+        cases = (
+            {"publication_outcome": 99},
+            {"publication_receipt_complete": 2},
+            {"publication_namespace_disposition": 99},
+            {"publication_guarantee_flags": 1 << 4},
+            {"publication_operand_binding": 99},
+        )
+        for overrides in cases:
+            with self.subTest(overrides=overrides):
+                host = _SanitizeHost(**overrides)
+                with self.assertRaisesRegex(
+                    SanitizeError, "invalid publication receipt"
+                ) as caught:
+                    Session(object(), _native=_FakeNativeBridge(), _host=host).sanitize(
+                        "/tmp/malformed-receipt.bin"
+                    )
+
+                self.assertIsNone(caught.exception.receipt)
+                message = str(caught.exception)
+                self.assertIn("destination state is unknown", message)
+                self.assertIn("destination may exist", message)
+                self.assertIn("inspect it", message)
+                self.assertIn("/tmp/malformed-receipt.bin", message)
+                self.assertEqual(host.output_path_queries, 0)
+
+    def test_strict_sanitize_rejects_unknown_status_with_destination_advisory(
+        self,
+    ) -> None:
+        from neverd_plugin import SanitizeError, Session
+
+        host = _SanitizeHost(status=99, last_error=None)
+        with self.assertRaisesRegex(SanitizeError, "invalid status 99") as caught:
+            Session(object(), _native=_FakeNativeBridge(), _host=host).sanitize(
+                "/tmp/unknown-status.bin"
+            )
+
+        self.assertIsNone(caught.exception.status)
+        self.assertIsNotNone(caught.exception.receipt)
+        message = str(caught.exception)
+        self.assertIn("destination state is unknown", message)
+        self.assertIn("destination may exist", message)
+        self.assertIn("inspect it", message)
+        self.assertIn("/tmp/unknown-status.bin", message)
+        self.assertEqual(host.output_path_queries, 0)
+
+    def test_strict_sanitize_rejects_inconsistent_publication_receipts(
+        self,
+    ) -> None:
+        from neverd_plugin import SanitizeError, Session
+
+        cases = (
+            ({"publication_receipt_version": 0}, "receipt version"),
+            ({"publication_receipt_version": 2}, "receipt version"),
+            ({"publication_outcome": 0}, "complete receipt outcome"),
+            ({"publication_outcome": 3}, "complete receipt outcome"),
+            ({"publication_namespace_disposition": 0}, "namespace"),
+            (
+                {
+                    "publication_outcome": 2,
+                    "publication_namespace_disposition": 2,
+                    "publication_guarantee_flags": 0,
+                    "publication_operand_binding": 0,
+                },
+                "no-change outcome",
+            ),
+            ({"publication_outcome": 1}, "create-exclusive outcome"),
+            ({"publication_guarantee_flags": 1}, "create-exclusive guarantees"),
+            (
+                {"publication_guarantee_flags": 7},
+                "replacement compare-and-swap",
+            ),
+            (
+                {"publication_guarantee_flags": 11},
+                "crash-durable",
+            ),
+            ({"publication_operand_binding": 0}, "operand binding"),
+            (
+                {
+                    "publication_outcome": 1,
+                    "publication_namespace_disposition": 2,
+                    "publication_guarantee_flags": 1,
+                    "publication_operand_binding": 0,
+                },
+                "no-change receipt cannot claim publication guarantees",
+            ),
+            (
+                {
+                    "publication_outcome": 1,
+                    "publication_namespace_disposition": 2,
+                    "publication_guarantee_flags": 0,
+                    "publication_operand_binding": 1,
+                },
+                "no-change receipt cannot claim an operand binding",
+            ),
+            (
+                {
+                    "publication_receipt_complete": 0,
+                    "publication_guarantee_flags": 1,
+                    "publication_operand_binding": 0,
+                },
+                "incomplete publication receipt cannot claim publication guarantees",
+            ),
+            (
+                {
+                    "publication_receipt_complete": 0,
+                    "publication_guarantee_flags": 0,
+                    "publication_operand_binding": 1,
+                },
+                "incomplete publication receipt cannot claim an operand binding",
+            ),
+        )
+        for overrides, message in cases:
+            with self.subTest(overrides=overrides):
+                host = _SanitizeHost(**overrides)
+                with self.assertRaisesRegex(SanitizeError, message) as caught:
+                    Session(object(), _native=_FakeNativeBridge(), _host=host).sanitize(
+                        "/tmp/inconsistent-receipt.bin"
+                    )
+
+                self.assertIsNotNone(caught.exception.receipt)
+                rendered = str(caught.exception)
+                self.assertIn("destination state is unknown", rendered)
+                self.assertIn("destination may exist", rendered)
+                self.assertIn("inspect it", rendered)
+                self.assertIn("/tmp/inconsistent-receipt.bin", rendered)
+                self.assertEqual(host.output_path_queries, 0)
+
+    def test_strict_sanitize_exposes_a_failed_publication_receipt(self) -> None:
+        from neverd_plugin import (
+            SanitizeError,
+            SanitizePublicationOutcome,
+            SanitizeStatus,
+            Session,
+        )
+
+        host = _SanitizeHost(
+            call_result=0,
+            ok=0,
+            status=SanitizeStatus.PUBLISH_INDETERMINATE,
+            publication_outcome=SanitizePublicationOutcome.INDETERMINATE,
+            publication_receipt_complete=0,
+            publication_guarantee_flags=0,
+            publication_operand_binding=0,
+            last_error=None,
+        )
+        with self.assertRaisesRegex(SanitizeError, "publish-indeterminate") as caught:
+            Session(object(), _native=_FakeNativeBridge(), _host=host).sanitize(
+                "/tmp/indeterminate.bin"
+            )
+
+        self.assertIs(caught.exception.status, SanitizeStatus.PUBLISH_INDETERMINATE)
+        self.assertIs(
+            caught.exception.receipt.outcome,
+            SanitizePublicationOutcome.INDETERMINATE,
+        )
+        self.assertFalse(caught.exception.receipt.complete)
+        message = str(caught.exception)
+        self.assertIn("destination state is unknown", message)
+        self.assertIn("destination may exist", message)
+        self.assertIn("inspect it", message)
+        self.assertIn("/tmp/indeterminate.bin", message)
+        self.assertEqual(host.output_path_queries, 0)
+
+    def test_strict_sanitize_warns_for_published_incomplete_failure(self) -> None:
+        from neverd_plugin import (
+            SanitizeError,
+            SanitizePublicationOutcome,
+            SanitizeStatus,
+            Session,
+        )
+
+        host = _SanitizeHost(
+            call_result=0,
+            ok=0,
+            status=SanitizeStatus.PUBLISHED_INCOMPLETE,
+            publication_outcome=SanitizePublicationOutcome.PUBLISHED,
+            publication_receipt_complete=0,
+            publication_guarantee_flags=0,
+            publication_operand_binding=0,
+            last_error=None,
+        )
+        with self.assertRaisesRegex(SanitizeError, "published-incomplete") as caught:
+            Session(object(), _native=_FakeNativeBridge(), _host=host).sanitize(
+                "/tmp/published-incomplete.bin"
+            )
+
+        self.assertIs(caught.exception.status, SanitizeStatus.PUBLISHED_INCOMPLETE)
+        self.assertIs(
+            caught.exception.receipt.outcome,
+            SanitizePublicationOutcome.PUBLISHED,
+        )
+        message = str(caught.exception)
+        self.assertIn("destination may exist", message)
+        self.assertIn("inspect it", message)
+        self.assertIn("/tmp/published-incomplete.bin", message)
+        self.assertEqual(host.output_path_queries, 0)
+
+    def test_strict_sanitize_preserves_prepublication_failure_diagnostic(
+        self,
+    ) -> None:
+        from neverd_plugin import (
+            SanitizeError,
+            SanitizePublicationOutcome,
+            SanitizeStatus,
+            Session,
+        )
+
+        host = _SanitizeHost(
+            call_result=0,
+            ok=0,
+            status=SanitizeStatus.PUBLISH_FAILED,
+            publication_outcome=SanitizePublicationOutcome.NOT_ATTEMPTED,
+            publication_receipt_complete=0,
+            publication_namespace_disposition=0,
+            publication_guarantee_flags=0,
+            publication_operand_binding=0,
+            last_error="native publication preparation failed",
+        )
+        with self.assertRaisesRegex(
+            SanitizeError, "native publication preparation failed"
+        ) as caught:
+            Session(object(), _native=_FakeNativeBridge(), _host=host).sanitize(
+                "/tmp/prepublication-failure.bin"
+            )
+
+        self.assertIs(caught.exception.status, SanitizeStatus.PUBLISH_FAILED)
+        self.assertIs(
+            caught.exception.receipt.outcome,
+            SanitizePublicationOutcome.NOT_ATTEMPTED,
+        )
+        message = str(caught.exception)
+        self.assertNotIn("destination state is unknown", message)
+        self.assertNotIn("destination may exist", message)
+        self.assertEqual(host.output_path_queries, 0)
+
+    def test_strict_sanitize_accepts_an_authenticated_no_change_receipt(
+        self,
+    ) -> None:
+        from neverd_plugin import (
+            SanitizePublicationGuarantee,
+            SanitizePublicationNamespace,
+            SanitizePublicationOperandBinding,
+            SanitizePublicationOutcome,
+            Session,
+        )
+
+        host = _SanitizeHost(
+            publication_outcome=SanitizePublicationOutcome.NOT_PUBLISHED,
+            publication_namespace_disposition=SanitizePublicationNamespace.NO_CHANGE,
+            publication_guarantee_flags=SanitizePublicationGuarantee.NONE,
+            publication_operand_binding=SanitizePublicationOperandBinding.NONE,
+        )
+        result = Session(object(), _native=_FakeNativeBridge(), _host=host).sanitize(
+            "/tmp/no-change.bin"
+        )
+
+        self.assertIs(result.receipt.outcome, SanitizePublicationOutcome.NOT_PUBLISHED)
+        self.assertIs(result.receipt.namespace, SanitizePublicationNamespace.NO_CHANGE)
+        self.assertEqual(host.output_path_queries, 1)
+
+    def test_strict_sanitize_validates_terminal_status_against_the_receipt(
+        self,
+    ) -> None:
+        from neverd_plugin import SanitizeError, SanitizeStatus, Session
+
+        cases = (
+            (
+                _SanitizeHost(call_result=0, ok=0, status=SanitizeStatus.IO_FAILED),
+                "failed transaction cannot carry a complete publication receipt",
+            ),
+            (
+                _SanitizeHost(
+                    call_result=0,
+                    ok=0,
+                    status=SanitizeStatus.OK,
+                    publication_outcome=0,
+                    publication_receipt_complete=0,
+                    publication_namespace_disposition=0,
+                    publication_guarantee_flags=0,
+                    publication_operand_binding=0,
+                ),
+                "failed transaction returned OK status",
+            ),
+            (
+                _SanitizeHost(
+                    call_result=0,
+                    ok=0,
+                    status=SanitizeStatus.PUBLISH_INDETERMINATE,
+                    publication_outcome=2,
+                    publication_receipt_complete=0,
+                    publication_guarantee_flags=0,
+                    publication_operand_binding=0,
+                ),
+                "publish-indeterminate status requires an indeterminate outcome",
+            ),
+            (
+                _SanitizeHost(
+                    call_result=0,
+                    ok=0,
+                    status=SanitizeStatus.PUBLISHED_INCOMPLETE,
+                    publication_outcome=1,
+                    publication_receipt_complete=0,
+                    publication_guarantee_flags=0,
+                    publication_operand_binding=0,
+                ),
+                "published-incomplete status requires a published outcome",
+            ),
+            (
+                _SanitizeHost(
+                    call_result=0,
+                    ok=0,
+                    status=SanitizeStatus.PUBLISH_FAILED,
+                    publication_outcome=3,
+                    publication_receipt_complete=0,
+                    publication_guarantee_flags=0,
+                    publication_operand_binding=0,
+                ),
+                "publish-failed status requires a not-attempted or not-published outcome",
+            ),
+            (_SanitizeHost(call_result=2), "invalid call result"),
+            (_SanitizeHost(ok=2), "invalid ok flag"),
+        )
+        for host, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(SanitizeError, message) as caught:
+                    Session(object(), _native=_FakeNativeBridge(), _host=host).sanitize(
+                        "/tmp/terminal-mismatch.bin"
+                    )
+
+                self.assertIsNotNone(caught.exception.receipt)
+                rendered = str(caught.exception)
+                self.assertIn("destination state is unknown", rendered)
+                self.assertIn("destination may exist", rendered)
+                self.assertIn("inspect it", rendered)
+                self.assertIn("/tmp/terminal-mismatch.bin", rendered)
+                self.assertEqual(host.output_path_queries, 0)
+
+    def test_strict_sanitize_rejects_invalid_inputs_before_ffi(self) -> None:
+        from neverd_plugin import Session
+
+        session = Session(
+            object(), _native=_FakeNativeBridge(), _host=_FailIfCalledHost()
+        )
+        calls = (
+            lambda: session.sanitize(""),
+            lambda: session.sanitize("/tmp/out", strategy=True),
+            lambda: session.sanitize("/tmp/out", strategy=2),
+            lambda: session.sanitize("/tmp/out", max_paths=True),
+            lambda: session.sanitize("/tmp/out", max_paths=-1),
+            lambda: session.sanitize("/tmp/out", max_steps=1 << 32),
+            lambda: session.sanitize("/tmp/out", solver_conflicts=1 << 64),
+            lambda: session.sanitize("/tmp/out", max_call_depth=-1),
+            lambda: session.sanitize("/tmp/out", max_summary_iterations=1 << 32),
+        )
+        for call in calls:
+            with self.subTest(call=call):
+                with self.assertRaises((TypeError, ValueError)):
+                    call()
+
 
     def test_lowir_concolic_returns_a_frozen_typed_report_and_passes_v1_options(
         self,

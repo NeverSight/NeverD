@@ -17,6 +17,7 @@
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImageModel.h"
 #include "neverd/safety/ArgSlicer.h"
+#include "neverd/safety/EntryInputPolicy.h"
 #include "neverd/safety/ObjectModel.h"
 #include "neverd/safety/SinkScanner.h"
 #include "neverd/solver/BitVectorSolver.h"
@@ -53,7 +54,19 @@ void stampSite(Finding &F, const AnalysisInput &In, const MedFunc &Fn,
   F.Name = Site.StatedName;
   F.Source = Site.Source;
   F.CallVA = Site.CallVA;
+  F.BlockId = Site.BlockId;
+  F.OpIdx = Site.OpIdx;
+  for (const MedBlock &Block : Fn.Blocks) {
+    if (Block.Id != Site.BlockId || Site.OpIdx < 0 ||
+        Site.OpIdx >= static_cast<int>(Block.Ops.size()))
+      continue;
+    const MedOp &Op = Block.Ops[Site.OpIdx];
+    F.OriginSeq = Op.OriginSeq;
+    F.CallSiteId = Op.CallSiteId;
+    break;
+  }
   F.Sink = Site.Sink;
+  F.Kind = Site.Kind;
   F.ArgIndex = Site.ArgIndex;
   if (In.Dbg) {
     if (auto Loc = In.Dbg->sourceLocation(Site.CallVA);
@@ -314,10 +327,39 @@ std::optional<uint64_t> exactScalarConstant(const MedVar &Value) {
   return safety::detail::canonicalConstantValue(Value);
 }
 
+std::optional<std::string> readImmutableMappedCString(const BinaryImage *Img,
+                                                      const MedVar &Address) {
+  if (!Img)
+    return std::nullopt;
+  const std::optional<uint64_t> AddressValue =
+      safety::detail::canonicalConstantValue(Address);
+  if (!AddressValue)
+    return std::nullopt;
+  const Segment *Seg = Img->getSegmentFor(*AddressValue);
+  if (!Seg || !Seg->isReadable() || Seg->isWritable())
+    return std::nullopt;
+  if (const Section *Sec = Img->getSectionFor(*AddressValue);
+      Sec && (!Sec->isReadable() || Sec->isWritable()))
+    return std::nullopt;
+  const std::optional<va_t> OwnerEnd = Img->mappedObjectOwnerEnd(*AddressValue);
+  if (!OwnerEnd)
+    return std::nullopt;
+  std::optional<std::string> Value =
+      safety::detail::readMappedCString(Img, Address);
+  if (!Value || Value->size() == std::numeric_limits<size_t>::max())
+    return std::nullopt;
+  const uint64_t SerializedBytes = static_cast<uint64_t>(Value->size()) + 1;
+  if (*AddressValue > *OwnerEnd || SerializedBytes > *OwnerEnd - *AddressValue)
+    return std::nullopt;
+  return Value;
+}
+
 std::optional<ReplayInput>
 replayInputForSource(const AnalysisInput &In, const SinkCatalog &Cat,
                      const MedCallInfo &Call, const LowOp &Op,
-                     uint64_t Invocation, bool StandardInputAvailable) {
+                     uint64_t Invocation, bool StandardInputAvailable,
+                     std::optional<std::string> RuntimeEnvironmentKey,
+                     std::optional<uint64_t> RuntimeDescriptor) {
   const CallEffects Effects = resolveCallEffects(In, Cat, Call);
   ReplayInput Input;
   Input.CallVA = Op.Addr;
@@ -325,8 +367,15 @@ replayInputForSource(const AnalysisInput &In, const SinkCatalog &Cat,
   Input.Invocation = Invocation;
 
   if (Effects.has(CallEffectCapability::LiteralEnvironmentReplay)) {
+    if (Call.Args.empty())
+      return std::nullopt;
+    std::optional<std::string> StaticKey =
+        readImmutableMappedCString(In.Img, Call.Args[0]);
+    if (StaticKey && RuntimeEnvironmentKey &&
+        *StaticKey != *RuntimeEnvironmentKey)
+      return std::nullopt;
     std::optional<std::string> Key =
-        safety::detail::readMappedCString(In.Img, Call.Args[0]);
+        StaticKey ? std::move(StaticKey) : std::move(RuntimeEnvironmentKey);
     if (!Key || Key->empty() || Key->find('=') != std::string::npos)
       return std::nullopt;
     Input.Kind = ReplayInputKind::Environment;
@@ -337,8 +386,15 @@ replayInputForSource(const AnalysisInput &In, const SinkCatalog &Cat,
 
   if (Effects.has(CallEffectCapability::ExactStandardInputReplay) &&
       StandardInputAvailable) {
-    const std::optional<uint64_t> Descriptor =
+    if (Call.Args.empty())
+      return std::nullopt;
+    std::optional<uint64_t> StaticDescriptor =
         exactScalarConstant(Call.Args[0]);
+    if (StaticDescriptor && RuntimeDescriptor &&
+        *StaticDescriptor != *RuntimeDescriptor)
+      return std::nullopt;
+    std::optional<uint64_t> Descriptor =
+        StaticDescriptor ? StaticDescriptor : RuntimeDescriptor;
     if (!Descriptor || *Descriptor != 0)
       return std::nullopt;
     Input.Kind = ReplayInputKind::StandardInput;
@@ -382,17 +438,17 @@ bool writeIsProvablyBeforeSource(SymContext &Ctx, SymState &State,
                                  const LowOp &Op, SymRef Source,
                                  const std::vector<SymRef> &Constraints,
                                  const SafetyBudgets &Budgets) {
-  if (!Source.isValid() || Op.NumInputs < 2)
+  if (!Source.isValid() ||
+      Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
     return false;
-  const bool HasAddressSpace = Op.Opcode == NdOp::STORE && Op.NumInputs >= 3;
-  const unsigned AddressIndex = HasAddressSpace ? 1 : 0;
-  const unsigned ValueIndex = HasAddressSpace ? 2 : 1;
-  const SymRef RawAddress = readLowValue(Ctx, State, Op.Inputs[AddressIndex]);
+  const LowMemoryOperandView Memory = lowMemoryOperands(Op);
+  if (!Memory.Complete || !Memory.Address || !Memory.StoredValue)
+    return false;
+  const SymRef RawAddress = readLowValue(Ctx, State, *Memory.Address);
   if (!RawAddress.isValid())
     return false;
   const SymRef Address = Ctx.mkZExtOrTrunc(RawAddress, 64);
-  const uint64_t Bytes =
-      Op.Inputs[ValueIndex].Size ? Op.Inputs[ValueIndex].Size : 1;
+  const uint64_t Bytes = Memory.AccessSize;
   const SymRef NoOverflow =
       Ctx.mkUle(Address, Ctx.mkConst(64, UINT64_MAX - Bytes));
   const SymRef End = Ctx.mkAdd(Address, Ctx.mkConst(64, Bytes));
@@ -461,12 +517,13 @@ bool expressionsShareInput(SymContext &Ctx, SymRef Left, SymRef Right) {
 std::optional<uint64_t> storedStringTerminatorBound(
     SymContext &Ctx, SymState &State, const LowOp &Op, SymRef Source,
     const std::vector<SymRef> &Constraints, const SafetyBudgets &Budgets) {
-  if (Op.Opcode != NdOp::STORE || Op.NumInputs < 2 || !Source.isValid())
+  if (Op.Opcode != NdOp::STORE || !Source.isValid() ||
+      Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
     return std::nullopt;
-  const bool HasAddressSpace = Op.NumInputs >= 3;
-  const unsigned AddressIndex = HasAddressSpace ? 1 : 0;
-  const unsigned ValueIndex = HasAddressSpace ? 2 : 1;
-  const SymRef Value = readLowValue(Ctx, State, Op.Inputs[ValueIndex]);
+  const LowMemoryOperandView Memory = lowMemoryOperands(Op);
+  if (!Memory.Complete || !Memory.Address || !Memory.StoredValue)
+    return std::nullopt;
+  const SymRef Value = readLowValue(Ctx, State, *Memory.StoredValue);
   if (!Value.isValid())
     return std::nullopt;
   const std::optional<llvm::APInt> Constant = Ctx.asConst(Value);
@@ -474,7 +531,7 @@ std::optional<uint64_t> storedStringTerminatorBound(
       Constant->getBitWidth() % 8 != 0 || !Constant->isZero())
     return std::nullopt;
 
-  const SymRef RawAddress = readLowValue(Ctx, State, Op.Inputs[AddressIndex]);
+  const SymRef RawAddress = readLowValue(Ctx, State, *Memory.Address);
   if (!RawAddress.isValid())
     return std::nullopt;
   const SymRef Address = Ctx.mkZExtOrTrunc(RawAddress, 64);
@@ -677,6 +734,45 @@ int otherSucc(const LowBlock &B, int Taken) {
   return -1;
 }
 
+SymRef readABIArgument(const AnalysisInput &In, const MedFunc &Fn, int ArgIndex,
+                       uint16_t StackBytes, SymState &State) {
+  if (!In.Img || ArgIndex < 0 || StackBytes == 0 ||
+      StackBytes > sizeof(uint64_t))
+    return {};
+  SymContext &Ctx = State.context();
+  const TargetRegInfo &TRI = getTargetRegInfo(In.Img->Arch);
+  if (TRI.PointerSize == 0 || TRI.PointerSize > sizeof(uint64_t))
+    return {};
+
+  const bool IsCdecl = In.Img->Arch == Arch::X86 && Fn.CC == CallingConv::CDECL;
+  llvm::ArrayRef<uint64_t> Params = IsCdecl ? llvm::ArrayRef<uint64_t>()
+                                    : Fn.CC == CallingConv::Win64
+                                        ? TRI.Win64ParamRegs
+                                        : TRI.IntParamRegs;
+  if (ArgIndex < static_cast<int>(Params.size()))
+    return Ctx.mkZExtOrTrunc(
+        State.read(SymSpace::Register, Params[ArgIndex], TRI.PointerSize), 64);
+
+  const uint64_t StackIndex =
+      uint64_t(ArgIndex - static_cast<int>(Params.size()));
+  const uint64_t ShadowBytes =
+      Fn.CC == CallingConv::Win64
+          ? uint64_t(TRI.Win64ParamRegs.size()) * TRI.PointerSize
+          : 0;
+  if (StackIndex >
+      (std::numeric_limits<uint64_t>::max() - ShadowBytes) / TRI.PointerSize)
+    return {};
+  const uint64_t StackOffset =
+      ShadowBytes + StackIndex * uint64_t(TRI.PointerSize);
+  const SymRef StackPointer =
+      State.read(SymSpace::Register, TRI.StackPointer, TRI.PointerSize);
+  if (!StackPointer.isValid())
+    return {};
+  const SymRef Address = Ctx.mkAdd(Ctx.mkZExtOrTrunc(StackPointer, 64),
+                                   Ctx.mkConst(64, StackOffset));
+  return Ctx.mkZExtOrTrunc(State.load(Address, StackBytes), 64);
+}
+
 SymRef readCallArgument(const AnalysisInput &In, const MedFunc &Fn,
                         int ArgIndex, const MedCallInfo &CI, SymState &State) {
   SymContext &Ctx = State.context();
@@ -706,42 +802,10 @@ SymRef readCallArgument(const AnalysisInput &In, const MedFunc &Fn,
       return {};
   }
 
-  if (!In.Img)
-    return SymRef();
-  const TargetRegInfo &TRI = getTargetRegInfo(In.Img->Arch);
-  if (TRI.PointerSize == 0 || TRI.PointerSize > sizeof(uint64_t) ||
-      ArgIndex < 0)
-    return SymRef();
-
-  const bool IsCdecl = In.Img->Arch == Arch::X86 && Fn.CC == CallingConv::CDECL;
-  llvm::ArrayRef<uint64_t> Params = IsCdecl ? llvm::ArrayRef<uint64_t>()
-                                    : Fn.CC == CallingConv::Win64
-                                        ? TRI.Win64ParamRegs
-                                        : TRI.IntParamRegs;
-  if (ArgIndex < static_cast<int>(Params.size()))
-    return Ctx.mkZExtOrTrunc(
-        State.read(SymSpace::Register, Params[ArgIndex], TRI.PointerSize), 64);
-
-  const uint64_t StackIndex =
-      uint64_t(ArgIndex - static_cast<int>(Params.size()));
-  const uint64_t ShadowBytes =
-      Fn.CC == CallingConv::Win64
-          ? uint64_t(TRI.Win64ParamRegs.size()) * TRI.PointerSize
-          : 0;
-  if (StackIndex >
-      (std::numeric_limits<uint64_t>::max() - ShadowBytes) / TRI.PointerSize)
-    return {};
-  const uint64_t StackOffset =
-      ShadowBytes + StackIndex * uint64_t(TRI.PointerSize);
-  const uint16_t Bytes = RecoveredArg ? RecoveredArg->Size : TRI.PointerSize;
-  const SymRef StackPointer =
-      State.read(SymSpace::Register, TRI.StackPointer, TRI.PointerSize);
-  if (!StackPointer.isValid())
-    return {};
-  const SymRef Address = Ctx.mkAdd(Ctx.mkZExtOrTrunc(StackPointer, 64),
-                                   Ctx.mkConst(64, StackOffset));
-  const SymRef Loaded = State.load(Address, Bytes);
-  return Ctx.mkZExtOrTrunc(Loaded, 64);
+  const uint16_t StackBytes =
+      RecoveredArg ? RecoveredArg->Size
+                   : (In.Img ? getTargetRegInfo(In.Img->Arch).PointerSize : 0);
+  return readABIArgument(In, Fn, ArgIndex, StackBytes, State);
 }
 
 SymRef readPointerCallArgument(const AnalysisInput &In, const MedFunc &Fn,
@@ -756,6 +820,65 @@ SymRef readPointerCallArgument(const AnalysisInput &In, const MedFunc &Fn,
       !safety::detail::hasTargetPointerWidth(In.Img, CI.Args[ArgIndex]))
     return {};
   return readCallArgument(In, Fn, ArgIndex, CI, State);
+}
+
+SymRef readRuntimeCallArgument(const AnalysisInput &In, const MedFunc &Fn,
+                               int ArgIndex, const MedCallInfo &CI,
+                               SymState &State) {
+  if (ArgIndex < 0 || ArgIndex >= static_cast<int>(CI.Args.size()))
+    return {};
+  const uint16_t Bytes = CI.Args[ArgIndex].Size;
+  return readABIArgument(In, Fn, ArgIndex, Bytes, State);
+}
+
+SymRef readRuntimePointerCallArgument(const AnalysisInput &In,
+                                      const MedFunc &Fn, int ArgIndex,
+                                      const MedCallInfo &CI, SymState &State) {
+  if (!safety::detail::callArgumentHasTargetPointerWidth(In.Img, CI, ArgIndex))
+    return {};
+  return readABIArgument(In, Fn, ArgIndex,
+                         safety::detail::targetPointerBytes(In.Img), State);
+}
+
+std::optional<uint64_t>
+constrainedExactValue(SymContext &Ctx, SymRef Value,
+                      const std::vector<SymRef> &Constraints,
+                      const SafetyBudgets &Budgets) {
+  if (!Value.isValid() || Ctx.width(Value) == 0 || Ctx.width(Value) > 64)
+    return std::nullopt;
+  if (const std::optional<llvm::APInt> Constant = Ctx.asConst(Value))
+    return Constant->getZExtValue();
+  if (Constraints.empty())
+    return std::nullopt;
+
+  const SymRef Path =
+      Constraints.size() == 1 ? Constraints.front() : Ctx.mkAnd(Constraints);
+  BitVectorModel Model;
+  if (checkSat(Ctx, Path, &Model, solverOpts(Budgets)) != SatResult::Sat)
+    return std::nullopt;
+  const std::optional<llvm::APInt> Candidate = Model.value(Ctx, Value);
+  if (!Candidate || Candidate->getActiveBits() > 64)
+    return std::nullopt;
+  const SymRef Exact =
+      Ctx.mkEq(Value, Ctx.mkConst(Ctx.width(Value), Candidate->getZExtValue()));
+  if (!predicateMustHold(Ctx, Exact, Constraints, Budgets))
+    return std::nullopt;
+  return Candidate->getZExtValue();
+}
+
+std::optional<std::string>
+runtimeEnvironmentKey(const AnalysisInput &In, const MedFunc &Fn,
+                      const MedCallInfo &Call, SymState &State,
+                      const std::vector<SymRef> &Constraints,
+                      const SafetyBudgets &Budgets) {
+  const SymRef Address = readRuntimePointerCallArgument(In, Fn, 0, Call, State);
+  const std::optional<uint64_t> Exact =
+      constrainedExactValue(State.context(), Address, Constraints, Budgets);
+  const uint16_t PointerBytes = safety::detail::targetPointerBytes(In.Img);
+  if (!Exact || PointerBytes == 0)
+    return std::nullopt;
+  return readImmutableMappedCString(In.Img,
+                                    MedVar::makeConst(*Exact, PointerBytes));
 }
 
 struct ExploreHit {
@@ -817,7 +940,7 @@ materializeReplay(SymContext &Ctx, SymRef Query, const ReplaySeed &Seed,
     llvm::SmallVector<SymRef, 4> SuccessParts;
     for (uint32_t Id : Seed.BoundVariables) {
       const SymVarInfo &Info = Ctx.varInfo(Id);
-      const SymRef Var = Ctx.mkVar(Info.Name, Info.Width);
+      const SymRef Var = Ctx.varRef(Id);
       SuccessParts.push_back(Ctx.mkNe(Var, Ctx.mkZero(Info.Width)));
     }
     const SymRef Success = SuccessParts.size() == 1 ? SuccessParts.front()
@@ -1660,6 +1783,22 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
           if (!Summarized)
             Cur.SemanticUnknown = true;
         }
+        std::optional<std::string> RuntimeEnvironmentKey;
+        std::optional<uint64_t> RuntimeDescriptor;
+        if (Callee &&
+            CalleeEffects.has(CallEffectCapability::LiteralEnvironmentReplay))
+          RuntimeEnvironmentKey = runtimeEnvironmentKey(
+              In, Fn, *Callee, Cur.State, Cur.Constraints, Budgets);
+        if (Callee &&
+            CalleeEffects.has(CallEffectCapability::ExactStandardInputReplay))
+          RuntimeDescriptor = constrainedExactValue(
+              Ctx, readRuntimeCallArgument(In, Fn, 0, *Callee, Cur.State),
+              Cur.Constraints, Budgets);
+        std::optional<ReplayInput> ExactReplayInput;
+        if (Callee)
+          ExactReplayInput = replayInputForSource(
+              In, Cat, *Callee, Op, CallInvocation, StandardInputAvailable,
+              std::move(RuntimeEnvironmentKey), RuntimeDescriptor);
         StepResult SR = Exec.step(Op);
         SymRef CountedReturnValue;
         SymRef CountedReturnSuccess;
@@ -1947,15 +2086,13 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
           }
         }
         if (Callee) {
-          if (std::optional<ReplayInput> Input =
-                  replayInputForSource(In, Cat, *Callee, Op, CallInvocation,
-                                       StandardInputAvailable)) {
+          if (ExactReplayInput) {
             const ReplayBindingRole Role =
-                Input->Kind == ReplayInputKind::Environment
+                ExactReplayInput->Kind == ReplayInputKind::Environment
                     ? ReplayBindingRole::Success
                     : ReplayBindingRole::Extent;
             for (SourceEvent &Event : NewSourceEvents) {
-              Event.Replay = *Input;
+              Event.Replay = *ExactReplayInput;
               Event.ReplayRole = Role;
             }
           }
@@ -2333,6 +2470,7 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     ArgClassification Arg =
         classifyArgument(In, Cat, F, Site.CallInfoIndex, E->FmtArg);
     Out.Flow = Arg.Flow;
+    Out.AttackerWitness = Arg.AttackerWitness;
     const std::optional<uint64_t> FormatAddress =
         safety::detail::canonicalConstantValue(FormatArg);
     const Segment *FormatSegment = In.Img && FormatAddress
@@ -2357,6 +2495,7 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
           resolveDestination(In, Cat, F, Site.CallInfoIndex, E->DstArg);
       if (Dst.Capacity) {
         Out.Capacity = Dst.Capacity;
+        Out.CapacityKind = Dst.Precision;
         Out.CapacityExact = Dst.CapacityExact;
       }
 
@@ -2506,7 +2645,7 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     }
 
     const std::string Source = SinkCatalog::normalize(Arg.TaintSource);
-    const bool EntrySource = Source == "argv";
+    const bool EntrySource = isApplicationEntryParameterSource(Source);
     SinkEntry Probe = *E;
     Probe.LenArg = -1;
     Probe.SrcArg = E->FmtArg;
@@ -2587,8 +2726,10 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     Arg.Flow = ArgFlow::Tainted;
     Arg.TaintSource = SinkCatalog::normalize(Site.Sink);
     Arg.Reason = "sink receives unbounded external input";
+    Arg.AttackerWitness.reset();
   }
   Out.Flow = Arg.Flow;
+  Out.AttackerWitness = Arg.AttackerWitness;
 
   const bool Fortified = E->CapArg >= 0;
   std::optional<ArgClassification> RuntimeBound;
@@ -2611,6 +2752,7 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
       resolveDestination(In, Cat, F, Site.CallInfoIndex, E->DstArg);
   if (Dst.Capacity) {
     Out.Capacity = Dst.Capacity;
+    Out.CapacityKind = Dst.Precision;
     Out.CapacityExact = Dst.CapacityExact;
   }
 

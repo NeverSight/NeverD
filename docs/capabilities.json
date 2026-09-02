@@ -1,5 +1,638 @@
 {
-  "schema": 1,
+  "schema": 2,
+  "surface_exclusions": {
+    "c": [
+      {
+        "owner": "sdk",
+        "reason": "General C SDK API outside the focused capability claims in this ledger.",
+        "names": [
+          "neverd_annotation_get",
+          "neverd_annotation_remove",
+          "neverd_annotation_set",
+          "neverd_annotations_json",
+          "neverd_annotations_load",
+          "neverd_annotations_save",
+          "neverd_apply_signature_file",
+          "neverd_apply_signatures",
+          "neverd_auto_apply_signatures",
+          "neverd_bench_decode",
+          "neverd_bench_run",
+          "neverd_callgraph_json",
+          "neverd_cfg_dot",
+          "neverd_cfg_json",
+          "neverd_dashboard_json",
+          "neverd_decompile",
+          "neverd_decompile_all",
+          "neverd_decompile_all_ex",
+          "neverd_diff_decompile",
+          "neverd_diff_functions",
+          "neverd_disasm_json",
+          "neverd_disasm_text",
+          "neverd_entrypoints_json",
+          "neverd_evm_set_hardfork",
+          "neverd_evm_set_strict",
+          "neverd_exports_json",
+          "neverd_free_string",
+          "neverd_func_count",
+          "neverd_func_entry",
+          "neverd_func_find_by_addr",
+          "neverd_func_find_by_name",
+          "neverd_func_name",
+          "neverd_func_size",
+          "neverd_headers_json",
+          "neverd_hex_dump",
+          "neverd_imports_json",
+          "neverd_inject_hello",
+          "neverd_ir_high",
+          "neverd_ir_llvm",
+          "neverd_ir_low",
+          "neverd_ir_med",
+          "neverd_last_error",
+          "neverd_lift_dump",
+          "neverd_lift_module",
+          "neverd_lift_to_obj",
+          "neverd_optimization_stop_name",
+          "neverd_optimize_llvm_ir_result_dispose",
+          "neverd_patch_bit_masking_count",
+          "neverd_patch_bogus_control_flow_count",
+          "neverd_patch_code_size",
+          "neverd_patch_constant_encryption_count",
+          "neverd_patch_constant_pooling_count",
+          "neverd_patch_control_flow_flattening_count",
+          "neverd_patch_from_c",
+          "neverd_patch_from_ir",
+          "neverd_patch_full",
+          "neverd_patch_indirect_branch_count",
+          "neverd_patch_indirect_call_count",
+          "neverd_patch_indirect_global_count",
+          "neverd_patch_mba_count",
+          "neverd_patch_opaque_predicate_count",
+          "neverd_patch_output_path",
+          "neverd_patch_substitution_count",
+          "neverd_patch_trampoline_count",
+          "neverd_patch_value_launder_count",
+          "neverd_plugins_count",
+          "neverd_plugins_dispatch_event",
+          "neverd_plugins_init",
+          "neverd_plugins_list_json",
+          "neverd_plugins_load_dir",
+          "neverd_plugins_load_file",
+          "neverd_plugins_run",
+          "neverd_plugins_term",
+          "neverd_project_name",
+          "neverd_proof_status_name",
+          "neverd_read_bytes",
+          "neverd_relocs_json",
+          "neverd_rename_func",
+          "neverd_renames_json",
+          "neverd_renames_load",
+          "neverd_renames_save",
+          "neverd_resolve_addr",
+          "neverd_roundtrip_func_count",
+          "neverd_roundtrip_func_name",
+          "neverd_roundtrip_func_offset",
+          "neverd_roundtrip_func_param_count",
+          "neverd_roundtrip_func_size",
+          "neverd_roundtrip_ir",
+          "neverd_roundtrip_obj",
+          "neverd_sanitize_status_name",
+          "neverd_sbf_set_cluster",
+          "neverd_sbf_set_idl",
+          "neverd_sbf_set_loader",
+          "neverd_sbf_set_purpose",
+          "neverd_sbf_set_slot",
+          "neverd_sbf_set_strict",
+          "neverd_sbf_set_version",
+          "neverd_search_bytes",
+          "neverd_search_string",
+          "neverd_sections_json",
+          "neverd_segments_json",
+          "neverd_session_analyze",
+          "neverd_session_arch_name",
+          "neverd_session_audit_json",
+          "neverd_session_base_addr",
+          "neverd_session_bitness",
+          "neverd_session_create",
+          "neverd_session_debug_info_kind",
+          "neverd_session_debug_info_path",
+          "neverd_session_destroy",
+          "neverd_session_entry_addr",
+          "neverd_session_export_count",
+          "neverd_session_file_path",
+          "neverd_session_file_size",
+          "neverd_session_format_name",
+          "neverd_session_hunt_json",
+          "neverd_session_import_count",
+          "neverd_session_is_64bit",
+          "neverd_session_is_loaded",
+          "neverd_session_load",
+          "neverd_session_section_count",
+          "neverd_session_segment_count",
+          "neverd_session_set_debug_info_enabled",
+          "neverd_session_set_map_path",
+          "neverd_session_set_pdb_path",
+          "neverd_session_symbol_count",
+          "neverd_set_bit_masking",
+          "neverd_set_bogus_control_flow",
+          "neverd_set_constant_encryption",
+          "neverd_set_constant_pooling",
+          "neverd_set_control_flow_flattening",
+          "neverd_set_indirect_branch",
+          "neverd_set_indirect_call",
+          "neverd_set_indirect_global",
+          "neverd_set_inst_substitution",
+          "neverd_set_mba",
+          "neverd_set_opaque_predicate",
+          "neverd_set_text_section",
+          "neverd_set_value_launder",
+          "neverd_sig_compute_crc16",
+          "neverd_sig_match_count",
+          "neverd_sig_matches_json",
+          "neverd_simplify_result_dispose",
+          "neverd_strings_json",
+          "neverd_symbols_json",
+          "neverd_synthesis_outcome_name",
+          "neverd_synthesize_result_dispose",
+          "neverd_translate_error_code_name",
+          "neverd_translate_object_result_dispose",
+          "neverd_version",
+          "neverd_version_number",
+          "neverd_xrefs_from_json",
+          "neverd_xrefs_scan",
+          "neverd_xrefs_to_json"
+        ]
+      }
+    ],
+    "cli": [
+      {
+        "owner": "cli",
+        "reason": "General CLI surface outside the focused capability claims in this ledger.",
+        "names": [
+          "neverd annotate",
+          "neverd annotate --add",
+          "neverd annotate --json",
+          "neverd annotate --list",
+          "neverd annotate --map",
+          "neverd annotate --no-debug",
+          "neverd annotate --pdb",
+          "neverd annotate --remove",
+          "neverd annotate --text",
+          "neverd annotate --v",
+          "neverd audit",
+          "neverd audit --auto",
+          "neverd audit --json",
+          "neverd audit --map",
+          "neverd audit --max-call-depth",
+          "neverd audit --max-loop",
+          "neverd audit --max-paths",
+          "neverd audit --max-steps",
+          "neverd audit --max-summary-iterations",
+          "neverd audit --no-debug",
+          "neverd audit --o",
+          "neverd audit --pdb",
+          "neverd audit --sig-dir",
+          "neverd audit --sig-file",
+          "neverd audit --sinks",
+          "neverd audit --solver-conflicts",
+          "neverd audit --sources",
+          "neverd bookmarks",
+          "neverd bookmarks --add",
+          "neverd bookmarks --json",
+          "neverd bookmarks --list",
+          "neverd bookmarks --map",
+          "neverd bookmarks --name",
+          "neverd bookmarks --no-debug",
+          "neverd bookmarks --pdb",
+          "neverd bookmarks --remove",
+          "neverd bookmarks --v",
+          "neverd callgraph",
+          "neverd callgraph --dot",
+          "neverd callgraph --json",
+          "neverd callgraph --map",
+          "neverd callgraph --no-debug",
+          "neverd callgraph --pdb",
+          "neverd callgraph --svg",
+          "neverd callgraph --v",
+          "neverd cfg",
+          "neverd cfg --dot",
+          "neverd cfg --evm-hardfork",
+          "neverd cfg --evm-relaxed",
+          "neverd cfg --func",
+          "neverd cfg --json",
+          "neverd cfg --map",
+          "neverd cfg --no-debug",
+          "neverd cfg --no-opt",
+          "neverd cfg --pdb",
+          "neverd cfg --svg",
+          "neverd cfg --v",
+          "neverd dashboard",
+          "neverd dashboard --json",
+          "neverd dashboard --map",
+          "neverd dashboard --no-debug",
+          "neverd dashboard --pdb",
+          "neverd dashboard --v",
+          "neverd decompile",
+          "neverd decompile --evm-hardfork",
+          "neverd decompile --evm-relaxed",
+          "neverd decompile --hello",
+          "neverd decompile --language",
+          "neverd decompile --llvm",
+          "neverd decompile --map",
+          "neverd decompile --max-func",
+          "neverd decompile --no-debug",
+          "neverd decompile --no-opt",
+          "neverd decompile --o",
+          "neverd decompile --pdb",
+          "neverd decompile --sbf-cluster",
+          "neverd decompile --sbf-idl",
+          "neverd decompile --sbf-loader",
+          "neverd decompile --sbf-purpose",
+          "neverd decompile --sbf-relaxed",
+          "neverd decompile --sbf-slot",
+          "neverd decompile --sbf-version",
+          "neverd decompile --v",
+          "neverd diff",
+          "neverd diff --a",
+          "neverd diff --b",
+          "neverd diff --func",
+          "neverd diff --json",
+          "neverd disasm",
+          "neverd disasm --annotate",
+          "neverd disasm --evm-hardfork",
+          "neverd disasm --evm-relaxed",
+          "neverd disasm --func",
+          "neverd disasm --json",
+          "neverd disasm --map",
+          "neverd disasm --no-debug",
+          "neverd disasm --pdb",
+          "neverd disasm --v",
+          "neverd entrypoints",
+          "neverd entrypoints --json",
+          "neverd entrypoints --map",
+          "neverd entrypoints --no-debug",
+          "neverd entrypoints --pdb",
+          "neverd entrypoints --v",
+          "neverd export",
+          "neverd export --format",
+          "neverd export --func",
+          "neverd export --map",
+          "neverd export --no-debug",
+          "neverd export --o",
+          "neverd export --pdb",
+          "neverd export --v",
+          "neverd exports",
+          "neverd exports --json",
+          "neverd exports --map",
+          "neverd exports --no-debug",
+          "neverd exports --pdb",
+          "neverd exports --v",
+          "neverd funcs",
+          "neverd funcs --json",
+          "neverd funcs --map",
+          "neverd funcs --no-debug",
+          "neverd funcs --pdb",
+          "neverd funcs --v",
+          "neverd headers",
+          "neverd headers --json",
+          "neverd headers --map",
+          "neverd headers --no-debug",
+          "neverd headers --pdb",
+          "neverd headers --v",
+          "neverd hex",
+          "neverd hex --addr",
+          "neverd hex --json",
+          "neverd hex --map",
+          "neverd hex --no-debug",
+          "neverd hex --pdb",
+          "neverd hex --size",
+          "neverd hex --v",
+          "neverd hunt",
+          "neverd hunt --auto",
+          "neverd hunt --json",
+          "neverd hunt --map",
+          "neverd hunt --max-call-depth",
+          "neverd hunt --max-loop",
+          "neverd hunt --max-paths",
+          "neverd hunt --max-steps",
+          "neverd hunt --max-summary-iterations",
+          "neverd hunt --no-debug",
+          "neverd hunt --o",
+          "neverd hunt --pdb",
+          "neverd hunt --sig-dir",
+          "neverd hunt --sig-file",
+          "neverd hunt --sinks",
+          "neverd hunt --solver-conflicts",
+          "neverd hunt --sources",
+          "neverd imports",
+          "neverd imports --json",
+          "neverd imports --map",
+          "neverd imports --no-debug",
+          "neverd imports --pdb",
+          "neverd imports --v",
+          "neverd info",
+          "neverd info --json",
+          "neverd info --map",
+          "neverd info --no-debug",
+          "neverd info --pdb",
+          "neverd info --v",
+          "neverd lift",
+          "neverd lift --dump-high",
+          "neverd lift --dump-low",
+          "neverd lift --dump-med",
+          "neverd lift --evm-hardfork",
+          "neverd lift --evm-relaxed",
+          "neverd lift --hello",
+          "neverd lift --map",
+          "neverd lift --max-func",
+          "neverd lift --no-debug",
+          "neverd lift --no-opt",
+          "neverd lift --o",
+          "neverd lift --pdb",
+          "neverd lift --sbf-cluster",
+          "neverd lift --sbf-idl",
+          "neverd lift --sbf-loader",
+          "neverd lift --sbf-purpose",
+          "neverd lift --sbf-relaxed",
+          "neverd lift --sbf-slot",
+          "neverd lift --sbf-version",
+          "neverd lift --v",
+          "neverd optimize-ir --exhaustive",
+          "neverd optimize-ir --json",
+          "neverd optimize-ir --llvm-level",
+          "neverd optimize-ir --max-rounds",
+          "neverd optimize-ir --mode",
+          "neverd optimize-ir --o",
+          "neverd optimize-ir --solver-max-conflicts",
+          "neverd optimize-ir --solver-max-propagations",
+          "neverd optimize-ir --solver-max-watch-visits",
+          "neverd optimize-ir --synthesis-max-constants",
+          "neverd optimize-ir --synthesis-max-cost",
+          "neverd optimize-ir --synthesis-max-leaves",
+          "neverd optimize-ir --synthesis-max-samples",
+          "neverd optimize-ir --synthesis-max-work",
+          "neverd optimize-ir --synthesis-stochastic-iterations",
+          "neverd optimize-ir --synthesis-stochastic-restarts",
+          "neverd optimize-ir --synthesis-stochastic-slots",
+          "neverd optimize-ir --synthesis-verify-samples",
+          "neverd optimize-ir --synthesize",
+          "neverd patch",
+          "neverd patch --bit-mask",
+          "neverd patch --bogus",
+          "neverd patch --const-enc",
+          "neverd patch --const-pool",
+          "neverd patch --flatten",
+          "neverd patch --from-c",
+          "neverd patch --from-ir",
+          "neverd patch --func",
+          "neverd patch --hello",
+          "neverd patch --ind-call",
+          "neverd patch --ind-gv",
+          "neverd patch --indirect",
+          "neverd patch --launder",
+          "neverd patch --map",
+          "neverd patch --max-func",
+          "neverd patch --mba",
+          "neverd patch --mode",
+          "neverd patch --no-debug",
+          "neverd patch --no-opt",
+          "neverd patch --nop",
+          "neverd patch --o",
+          "neverd patch --opaque",
+          "neverd patch --pdb",
+          "neverd patch --subst",
+          "neverd patch --subst-rounds",
+          "neverd patch --text-section",
+          "neverd patch --v",
+          "neverd plugins",
+          "neverd plugins --binary",
+          "neverd plugins --json",
+          "neverd plugins --list",
+          "neverd plugins --plugin-dir",
+          "neverd plugins --run",
+          "neverd relocs",
+          "neverd relocs --json",
+          "neverd relocs --map",
+          "neverd relocs --no-debug",
+          "neverd relocs --pdb",
+          "neverd relocs --v",
+          "neverd rename",
+          "neverd rename --func",
+          "neverd rename --json",
+          "neverd rename --list",
+          "neverd rename --map",
+          "neverd rename --no-debug",
+          "neverd rename --pdb",
+          "neverd rename --to",
+          "neverd rename --v",
+          "neverd search",
+          "neverd search --case-sensitive",
+          "neverd search --hex",
+          "neverd search --json",
+          "neverd search --map",
+          "neverd search --max-results",
+          "neverd search --no-debug",
+          "neverd search --pdb",
+          "neverd search --text",
+          "neverd search --v",
+          "neverd sections",
+          "neverd sections --json",
+          "neverd sections --map",
+          "neverd sections --no-debug",
+          "neverd sections --pdb",
+          "neverd sections --v",
+          "neverd segments",
+          "neverd segments --json",
+          "neverd segments --map",
+          "neverd segments --no-debug",
+          "neverd segments --pdb",
+          "neverd segments --v",
+          "neverd sigs",
+          "neverd sigs --auto",
+          "neverd sigs --json",
+          "neverd sigs --map",
+          "neverd sigs --no-debug",
+          "neverd sigs --pdb",
+          "neverd sigs --sig-dir",
+          "neverd sigs --sig-file",
+          "neverd sigs --v",
+          "neverd simplify --allow-growth",
+          "neverd simplify --exhaustive",
+          "neverd simplify --f",
+          "neverd simplify --json",
+          "neverd simplify --max-atoms",
+          "neverd simplify --max-constants",
+          "neverd simplify --max-cost",
+          "neverd simplify --max-leaves",
+          "neverd simplify --max-samples",
+          "neverd simplify --max-work",
+          "neverd simplify --shallow",
+          "neverd simplify --solver-max-conflicts",
+          "neverd simplify --solver-max-propagations",
+          "neverd simplify --solver-max-watch-visits",
+          "neverd simplify --stats",
+          "neverd simplify --stochastic-iterations",
+          "neverd simplify --stochastic-restarts",
+          "neverd simplify --stochastic-slots",
+          "neverd simplify --verify-samples",
+          "neverd simplify --width",
+          "neverd strings",
+          "neverd strings --json",
+          "neverd strings --map",
+          "neverd strings --min-len",
+          "neverd strings --no-debug",
+          "neverd strings --pdb",
+          "neverd strings --v",
+          "neverd sym-explore --expressions",
+          "neverd sym-explore --func",
+          "neverd sym-explore --map",
+          "neverd sym-explore --max-block-visits",
+          "neverd sym-explore --max-paths",
+          "neverd sym-explore --max-steps",
+          "neverd sym-explore --no-debug",
+          "neverd sym-explore --pdb",
+          "neverd sym-explore --v",
+          "neverd symbols",
+          "neverd symbols --json",
+          "neverd symbols --map",
+          "neverd symbols --no-debug",
+          "neverd symbols --pdb",
+          "neverd symbols --v",
+          "neverd translate-object --entry",
+          "neverd translate-object --format",
+          "neverd translate-object --generation",
+          "neverd translate-object --o",
+          "neverd xrefs",
+          "neverd xrefs --addr",
+          "neverd xrefs --json",
+          "neverd xrefs --map",
+          "neverd xrefs --no-debug",
+          "neverd xrefs --pdb"
+        ]
+      }
+    ],
+    "json": [
+      {
+        "owner": "sdk",
+        "reason": "General JSON API outside the focused capability claims in this ledger.",
+        "names": [
+          "neverd_annotations_json",
+          "neverd_callgraph_json",
+          "neverd_cfg_json",
+          "neverd_dashboard_json",
+          "neverd_disasm_json",
+          "neverd_entrypoints_json",
+          "neverd_exports_json",
+          "neverd_headers_json",
+          "neverd_imports_json",
+          "neverd_plugins_list_json",
+          "neverd_relocs_json",
+          "neverd_renames_json",
+          "neverd_sections_json",
+          "neverd_segments_json",
+          "neverd_session_audit_json",
+          "neverd_session_hunt_json",
+          "neverd_sig_matches_json",
+          "neverd_strings_json",
+          "neverd_symbols_json",
+          "neverd_xrefs_from_json",
+          "neverd_xrefs_to_json"
+        ]
+      }
+    ],
+    "python": [
+      {
+        "owner": "python-sdk",
+        "reason": "General Python SDK API outside the focused capability claims in this ledger.",
+        "names": [
+          "ConcolicCandidate.id",
+          "ConcolicDecision.id",
+          "Event.from_host",
+          "Function.address",
+          "Function.name",
+          "Function.size",
+          "Plugin",
+          "RawSessionAPI.borrowed_bytes",
+          "RawSessionAPI.call",
+          "RawSessionAPI.function",
+          "RawSessionAPI.owned_string",
+          "RawSessionAPI.session_borrowed_bytes",
+          "RawSessionAPI.session_call",
+          "RawSessionAPI.session_owned_string",
+          "Session.analyze",
+          "Session.annotation",
+          "Session.annotations",
+          "Session.architecture",
+          "Session.audit",
+          "Session.base_address",
+          "Session.bitness",
+          "Session.callgraph",
+          "Session.cfg",
+          "Session.configure_transforms",
+          "Session.dashboard",
+          "Session.debug_info_kind",
+          "Session.debug_info_path",
+          "Session.decompile",
+          "Session.decompile_all",
+          "Session.diff_decompile",
+          "Session.diff_functions",
+          "Session.disassemble",
+          "Session.entry_address",
+          "Session.entrypoints",
+          "Session.export_count",
+          "Session.exports",
+          "Session.file_path",
+          "Session.file_size",
+          "Session.format",
+          "Session.function_at",
+          "Session.function_by_name",
+          "Session.function_count",
+          "Session.functions",
+          "Session.headers",
+          "Session.hex_dump",
+          "Session.hunt",
+          "Session.import_count",
+          "Session.imports",
+          "Session.ir",
+          "Session.is_64bit",
+          "Session.last_error",
+          "Session.load",
+          "Session.load_annotations",
+          "Session.loaded",
+          "Session.patch_from_c",
+          "Session.patch_from_ir",
+          "Session.patch_result",
+          "Session.project_name",
+          "Session.raw",
+          "Session.read",
+          "Session.relocations",
+          "Session.remove_annotation",
+          "Session.rename_function",
+          "Session.renames",
+          "Session.resolve_address",
+          "Session.save_annotations",
+          "Session.search_bytes",
+          "Session.search_string",
+          "Session.section_count",
+          "Session.sections",
+          "Session.segment_count",
+          "Session.segments",
+          "Session.set_annotation",
+          "Session.set_debug_info",
+          "Session.set_evm",
+          "Session.set_sbf",
+          "Session.set_text_section",
+          "Session.strings",
+          "Session.symbol_count",
+          "Session.symbols",
+          "Session.version",
+          "Session.xrefs_from",
+          "Session.xrefs_to",
+          "SimplifyResult.saved",
+          "SynthesisResult.saved"
+        ]
+      }
+    ]
+  },
   "capabilities": [
     {
       "id": "symbolic.execution.path-exploration",
@@ -20,16 +653,42 @@
         "unresolved indirect control flow is reported as a typed path termination"
       ],
       "tests": [
-        "SymExplore.InterworkingDoesNotEnterABlockDecodedInTheWrongMode",
-        "SymExplore.ContradictoryPathConditionsAreNotExecuted"
+        {
+          "runner": "gtest",
+          "target": "NeverDSymbolicTests",
+          "source": "unittests/symbolic/SymExploreTests.cpp",
+          "filter": "SymExplore.InterworkingDoesNotEnterABlockDecodedInTheWrongMode",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDSymbolicTests",
+          "source": "unittests/symbolic/SymExploreTests.cpp",
+          "filter": "SymExplore.ContradictoryPathConditionsAreNotExecuted",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
       ],
       "public_surfaces": {
-        "c": [],
-        "python": [],
+        "c": [
+          "neverd_symbolic_explore_json"
+        ],
+        "python": [
+          "Session.symbolic_explore"
+        ],
         "cli": [
           "neverd sym-explore"
         ],
-        "json": []
+        "json": [
+          "neverd_symbolic_explore_json"
+        ]
       }
     },
     {
@@ -52,29 +711,389 @@
         "candidate seeds are published only after a fresh replay reaches the same physical decision occurrence under the exact earlier prefix and takes the opposite polarity"
       ],
       "tests": [
-        "LowIRConcolic.OneRegisterBranchProducesAReplayVerifiedFlip",
-        "LowIRConcolicIntegration.FindsUniqueVerifiedFlipAndReplaysExactOccurrence",
-        "NeverDConcolicCAPI.PublishesDeterministicVerifiedJSONBoundToTheLoadedSnapshot",
-        "ConcolicCLI.NameLookupAllBudgetsAndRepeatedRunsProduceOnlyStableJSON",
-        "ABIInventoryTests.test_lowir_concolic_structs_mirror_the_v1_c_layout",
-        "SessionTests.test_lowir_concolic_returns_a_frozen_typed_report_and_passes_v1_options",
-        "SessionTests.test_lowir_concolic_strictly_validates_native_reports",
-        "SessionTests.test_lowir_concolic_accepts_consistent_inexact_native_reports",
-        "ConcolicIntegrationTests.test_real_library_runs_verified_concolic_report"
+        {
+          "runner": "gtest",
+          "target": "NeverDConcolicTests",
+          "source": "unittests/concolic/LowIRConcolicTests.cpp",
+          "filter": "LowIRConcolic.OneRegisterBranchProducesAReplayVerifiedFlip",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDConcolicIntegrationTests",
+          "source": "unittests/concolic/LowIRConcolicIntegrationTests.cpp",
+          "filter": "*/LowIRConcolicIntegration.FindsUniqueVerifiedFlipAndReplaysExactOccurrence/*",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDConcolicCAPITests",
+          "source": "unittests/concolic/ConcolicCAPITests.cpp",
+          "filter": "NeverDConcolicCAPI.PublishesDeterministicVerifiedJSONBoundToTheLoadedSnapshot",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDConcolicCLITests",
+          "source": "unittests/concolic/ConcolicCLIContractTests.cpp",
+          "filter": "ConcolicCLI.NameLookupAllBudgetsAndRepeatedRunsProduceOnlyStableJSON",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDPythonSDKUnitTests",
+          "source": "pluginsdk/python/tests/test_abi.py",
+          "filter": "ABIInventoryTests.test_lowir_concolic_structs_mirror_the_v1_c_layout",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDPythonSDKUnitTests",
+          "source": "pluginsdk/python/tests/test_api.py",
+          "filter": "SessionTests.test_lowir_concolic_returns_a_frozen_typed_report_and_passes_v1_options",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDPythonSDKUnitTests",
+          "source": "pluginsdk/python/tests/test_api.py",
+          "filter": "SessionTests.test_lowir_concolic_strictly_validates_native_reports",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDPythonSDKUnitTests",
+          "source": "pluginsdk/python/tests/test_api.py",
+          "filter": "SessionTests.test_lowir_concolic_accepts_consistent_inexact_native_reports",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDConcolicPythonIntegration",
+          "source": "pluginsdk/python/tests/test_concolic_integration.py",
+          "filter": "ConcolicIntegrationTests.test_real_library_runs_verified_concolic_report",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
       ],
       "public_surfaces": {
         "c": [
           "neverd_lowir_concolic_json_v1"
         ],
         "python": [
-          "lowir_concolic"
+          "Session.lowir_concolic"
         ],
         "cli": [
-          "neverd concolic"
+          "neverd concolic",
+          "neverd concolic --func",
+          "neverd concolic --max-block-visits",
+          "neverd concolic --max-candidates",
+          "neverd concolic --max-flip-attempts",
+          "neverd concolic --max-loop-iterations",
+          "neverd concolic --max-steps",
+          "neverd concolic --o",
+          "neverd concolic --seed",
+          "neverd concolic --solver-conflicts",
+          "neverd concolic --solver-gates",
+          "neverd concolic --solver-propagations",
+          "neverd concolic --solver-watch-visits"
         ],
         "json": [
           "neverd_lowir_concolic_json_v1"
         ]
+      }
+    },
+    {
+      "id": "safety.binary-sanitizer-publication",
+      "kind": "rewrite",
+      "status": "experimental",
+      "owner": "safety",
+      "targets": [
+        "x86_64",
+        "aarch64"
+      ],
+      "docs": [
+        "docs/roadmap/README.md",
+        "docs/memory-safety.md",
+        "docs/python-plugins.md"
+      ],
+      "limitations": [
+        "binary-sanitizer-v1 is an all-sites-or-refuse counted-write guard workflow whose authenticated namespace-publication v1 backend is available only on Darwin; non-Darwin hosts refuse before lifting, guard generation, candidate creation, or namespace mutation",
+        "strict publication accepts only non-relocatable native PE, ELF, and Mach-O executables; universal Mach-O, dynamic libraries, relocatable objects, guarded Mach-O bundle members, and unsupported signature states fail closed",
+        "an absent destination is published by one create-exclusive rename, while an empty guard plan may return authenticated NoChange only when the requested destination is the held loaded-source object; guarded output never replaces that source",
+        "a distinct existing destination is preserved because publication v1 has no replacement compare-and-swap, and neither successful disposition claims replacement CAS or crash durability",
+        "the external session byte digest anchors source content, but metadata and stable object identity are transaction-time observations; create-exclusive operand binding excludes equally privileged or root/DAC-bypass processes and trusts the kernel, VFS, and mounted filesystem to honor their reported access-control semantics",
+        "C, CLI, and Python accept success only with a coherent complete receipt; an indeterminate outcome or a published-but-incomplete receipt is failure and means the destination may exist and must be inspected before use or retry",
+        "the held destination-directory object is authenticated only for the transaction; the directory may be renamed after it is opened, so the original pathname is not promised to keep naming that object after open or after return, and the public receipt is an attestation summary rather than a persistent independently re-verifiable path binding"
+      ],
+      "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinSanitizerPublicationAdapterTests",
+          "source": "unittests/safety/DarwinSanitizerPublicationAdapterTests.cpp",
+          "filter": "DarwinSanitizerPublicationAdapterTest.CreateExclusiveRunsOneRenameAndFinalizeExactlyOnce",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinSanitizerPublicationAdapterTests",
+          "source": "unittests/safety/DarwinSanitizerPublicationAdapterTests.cpp",
+          "filter": "DarwinSanitizerPublicationAdapterTest.NoChangeUsesOneHeldSourceAndAnchoredFinalFrame",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinSanitizerPublicationAdapterTests",
+          "source": "unittests/safety/DarwinSanitizerPublicationAdapterTests.cpp",
+          "filter": "DarwinSanitizerPublicationAdapterTest.NonAppleAvailabilityIsExplicitAndAllFalse",
+          "platforms": [
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDarwinSanitizerPublicationAdapterTests",
+          "source": "unittests/safety/DarwinSanitizerPublicationAdapterTests.cpp",
+          "filter": "DarwinSanitizerPublicationAdapterNativeTest.PublishesInRealAnchoredTemporaryDirectory",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDSafetyPatchCAPITests",
+          "source": "unittests/lift/sdk/SafetyPatchCAPITests.cpp",
+          "filter": "NeverDSafetyPatchCAPI.PublicationABIVersionIsStableAndProbeable",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDSafetyPatchCAPITests",
+          "source": "unittests/lift/sdk/SafetyPatchCAPITests.cpp",
+          "filter": "NeverDSafetyPatchCAPI.EmptyPlanAuthenticatesItsSourceWithoutNamespaceMutation",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDSafetyPatchCAPITests",
+          "source": "unittests/lift/sdk/SafetyPatchCAPITests.cpp",
+          "filter": "NeverDSafetyPatchCAPI.ExistingDistinctDestinationIsNeverReplacedWithoutCAS",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDSafetyPatchCAPITests",
+          "source": "unittests/lift/sdk/SafetyPatchCAPITests.cpp",
+          "filter": "NeverDSafetyPatchCAPI.PublicationOutcomeDistinguishesIndeterminateAndPublishedIncomplete",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDSafetyIntegrationTests",
+          "source": "unittests/safety/RuntimeSanitizerCLIContractTests.cpp",
+          "filter": "RuntimeSanitizerPublicationCLI.CompleteReceiptsHaveDistinctAndTruthfulSuccessMessages",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDSafetyIntegrationTests",
+          "source": "unittests/safety/RuntimeSanitizerCLIContractTests.cpp",
+          "filter": "RuntimeSanitizerCLI.StrictSanitizeFailsBeforeMutationWithoutNativePublicationReceipt",
+          "platforms": [
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDPythonSDKUnitTests",
+          "source": "pluginsdk/python/tests/test_api.py",
+          "filter": "SessionTests.test_strict_sanitize_returns_typed_result_and_full_size_options",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDPythonSDKUnitTests",
+          "source": "pluginsdk/python/tests/test_api.py",
+          "filter": "SessionTests.test_strict_sanitize_accepts_an_authenticated_no_change_receipt",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
+      ],
+      "public_surfaces": {
+        "c": [
+          "neverd_sanitize_publication_abi_version",
+          "neverd_session_sanitize"
+        ],
+        "python": [
+          "Session.sanitize"
+        ],
+        "cli": [
+          "neverd patch --sanitize=strict"
+        ],
+        "json": []
+      }
+    },
+    {
+      "id": "safety.process-replay-native-execution",
+      "kind": "execution",
+      "status": "unsupported",
+      "owner": "safety",
+      "targets": [
+        "x86_64",
+        "aarch64"
+      ],
+      "docs": [
+        "docs/roadmap/README.md",
+        "docs/memory-safety.md"
+      ],
+      "limitations": [
+        "native-process-replay-v1 phase 0 publishes only a C++ availability query and future factory boundary; there is no C, Python, CLI, or JSON native-execution surface",
+        "the pure query validates the immutable plan, execution limits, executable locator, and physical call-site uniqueness without opening the target, invoking callbacks, or launching a process",
+        "availability is all-or-nothing across the complete executor capability contract: every unavailable host reports Available=false with every capability false, and the factory returns an error without an operations table",
+        "Linux remains backend-incomplete until trusted static-ELF instrumentation, persistent supervision, complete containment, limits, and runtime attestation are implemented; macOS lacks supported public primitives for held-object execution, an arbitrary-target pre-code sandbox, and race-free process-tree containment; other hosts are unsupported",
+        "the existing process-replay-v1 plan vocabulary and platform-neutral coordinator do not establish that a native execution occurred; no current host has native replay operations"
+      ],
+      "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeProcessReplayAdapterTests",
+          "source": "unittests/safety/NativeProcessReplayAdapterTests.cpp",
+          "filter": "NativeProcessReplayAdapter.HostAvailabilityNeverInventsCapabilities",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeProcessReplayAdapterTests",
+          "source": "unittests/safety/NativeProcessReplayAdapterTests.cpp",
+          "filter": "NativeProcessReplayAdapter.InvalidOptionsPlanAndLimitsPrecedeHostAvailability",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeProcessReplayAdapterTests",
+          "source": "unittests/safety/NativeProcessReplayAdapterTests.cpp",
+          "filter": "NativeProcessReplayAdapter.PhysicalCallAddressCollisionsAreUnattestableEvenWhenLabelsDiffer",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeProcessReplayAdapterTests",
+          "source": "unittests/safety/NativeProcessReplayAdapterTests.cpp",
+          "filter": "NativeProcessReplayAdapter.RepeatedInvocationsOfOnePhysicalInputSiteRemainAttestable",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeProcessReplayAdapterTests",
+          "source": "unittests/safety/NativeProcessReplayAdapterTests.cpp",
+          "filter": "NativeProcessReplayAdapter.FactoryReturnsNoCallbacksWhileTheCompleteBackendIsUnavailable",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeProcessReplayAdapterTests",
+          "source": "unittests/safety/NativeProcessReplayAdapterTests.cpp",
+          "filter": "NativeProcessReplayAdapter.AvailabilityReasonNamesAreStable",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
+      ],
+      "public_surfaces": {
+        "c": [],
+        "python": [],
+        "cli": [],
+        "json": []
       }
     },
     {
@@ -101,88 +1120,908 @@
         "native linking and execution are a separate experimental C++ boundary and do not turn the C, Python, or CLI object APIs into execution interfaces"
       ],
       "tests": [
-        "RuntimeGuestState.X86_64LogicalStateRoundTripsWithoutLosingRFlags",
-        "RuntimeHelpers.AcceptsCheckedLoadAndStoreControlFlow",
-        "ResolvedHostTarget.FeatureOrderDoesNotChangeCacheIdentity",
-        "ResolvedHostTarget.ResolvesTheNativeProcessIdentity",
-        "RuntimeCodeMemory.PublishesExactlyOnceFromWritableToExecutable",
-        "RuntimeCodeMemory.ExecutesOnlyAfterHostInstructionsArePublished",
-        "RuntimeSymbolRegistry.ResolvesOnlyExactRegisteredNames",
-        "RuntimeSymbolRegistry.IdentityIsVersionedAddressFreeAndOrderStable",
-        "TranslationObjectCompiler.EmitsParsableAuditedObjectsAtO0AndO2",
-        "TranslationObjectCompiler.NeverMutatesTheInputOnSuccessOrFailure",
-        "TranslationObjectCompiler.RequiresTheExactDefinitionManifest",
-        "TranslationObjectCompiler.EnforcesOnlyANonzeroGeneratedByteBudget",
-        "TranslationObjectCompiler.RejectsWrongTripleAndDataLayout",
-        "TranslationObjectCompiler.RejectsMalformedLLVMIRBeforeCloning",
-        "TranslationObjectCompiler.ProducesDeterministicBytesAndVersionedKeys",
-        "TranslationObjectCompiler.EmitsEveryContractHostArchitecture",
-        "TranslationObjectCompiler.UsesLLVMsMachOSymbolPrefixAtTheBoundary",
-        "TranslationObjectCompiler.EmitsAuditedDirectRuntimeCallsAcrossObjectFormats",
-        "TranslationObjectCompiler.ComposesSemanticAndLLVMOptimization",
-        "TranslationObjectCompiler.RejectsNonDeterministicProofProviders",
-        "TranslationArtifactVerifier.AcceptsOnlySealedLLVMPLT32RuntimeCallsInV1Policy",
-        "TranslationArtifactVerifier.AcceptsCanonicalMachOObject",
-        "TranslationObjectRequest.ProducesAuditedAArch64ELFFromExactX86GuestBytes",
-        "TranslationObjectRequest.EmitsAArch64MachORelocatableObject",
-        "TranslationObjectRequest.EmitsAuditedObjectsForCanonicalRel8AndRel32DirectJumps",
-        "TranslationObjectRequest.EmitsAuditedObjectsForCanonicalZeroFlagConditionalBranches",
-        "TranslationObjectRequest.EmitsAuditedObjectsForCanonicalSingleFlagConditionalBranches",
-        "TranslationObjectRequest.EmitsAuditedObjectsForCanonicalMultiFlagConditionalBranches",
-        "TranslationObjectRequest.TranslatesGeneralPublishedScalarSliceWithoutMutatingGuestState",
-        "TranslationObjectRequest.EmitsAuditedObjectForLogicalScalarForms",
-        "TranslationObjectRequest.RejectsUnsupportedLowIROperations",
-        "X86TranslationBlockLowerer.LowersDifferentFullWidthRegistersAndAddImmediate",
-        "X86TranslationBlockLowerer.LowersSubtractAndSignedBorrowFlags",
-        "X86TranslationBlockLowerer.MatchesIndependentLogicalOperationAndFlagTruthVectors",
-        "X86TranslationBlockLowerer.HandlesLogicalIdiomAndSignExtendedImmediateForms",
-        "X86TranslationBlockLowerer.PublishesCanonicalCompareAndTestRegisterForms",
-        "X86TranslationBlockLowerer.PublishesCanonicalCompareAndTestImmediateForms",
-        "X86TranslationBlockLowerer.RejectsReservedAndNonCanonicalCompareTestEncodings",
-        "X86TranslationBlockLowerer.MatchesCompareFlagsWithoutWritingEitherOperand",
-        "X86TranslationBlockLowerer.MatchesTestFlagsWithoutWritingOperandsOrAuxiliaryFlag",
-        "X86TranslationBlockLowerer.RejectsCompareAndTestLowIRDataflowDriftBeforeLowering",
-        "X86TranslationBlockLowerer.RejectsNonCanonicalWidthMemoryAndPrefixScalarForms",
-        "X86TranslationBlockLowerer.RejectsSemanticallyRedundantREXExtensionBits",
-        "X86TranslationBlockLowerer.AcceptsNecessaryREXExtensionBits",
-        "X86TranslationBlockLowerer.RejectsUndeclaredGuestOpcodeEvenWhenItsLowIRIsLowerable",
-        "X86TranslationBlockLowerer.LowersReturnImmediateStackAdjustment",
-        "X86TranslationBlockLowerer.LowersCanonicalZeroFlagBranchesToASelectedGuestPC",
-        "X86TranslationBlockLowerer.LowersCanonicalSingleFlagBranchesToASelectedGuestPC",
-        "X86TranslationBlockLowerer.LowersCanonicalShortJBEFromCarryOrZero",
-        "X86TranslationBlockLowerer.LowersCanonicalShortJAFromClearCarryAndZero",
-        "X86TranslationBlockLowerer.LowersEveryCanonicalUnsignedMultiFlagBranchEncoding",
-        "X86TranslationBlockLowerer.LowersCanonicalSignedMultiFlagBranchesToASelectedGuestPC",
-        "X86TranslationBlockLowerer.RejectsMultiFlagPredicatesThatDisagreeWithGuestBytes",
-        "X86TranslationBlockLowerer.RejectsPrefixedAndUnpublishedControlFormsWithoutExpandingTheSlice",
-        "X86TranslationBlockLowerer.RejectsCountedAndLoopConditionalBranchEncodings",
-        "TranslationLinkGraphVerifier.AcceptsCompilerProducedAArch64ELFBeforeAllocation",
-        "TranslationLinkGraphVerifier.AcceptsCompilerProducedAArch64MachOBeforeAllocation",
-        "NeverDTranslationCAPI.EmitsOwnedAuditedAArch64ELFObject",
-        "NeverDTranslationCAPI.EmitsOwnedAuditedAArch64MachOObject",
-        "NeverDTranslationCAPI.EmitsOwnedObjectForCanonicalShortDirectJump",
-        "NeverDTranslationCAPI.EmitsOwnedObjectForCanonicalNearDirectJump",
-        "NeverDTranslationCAPI.EmitsOwnedObjectsForCanonicalZeroFlagConditionalBranches",
-        "NeverDTranslationCAPI.EmitsOwnedObjectsForCanonicalSingleFlagConditionalBranches",
-        "NeverDTranslationCAPI.EmitsOwnedObjectsForCanonicalMultiFlagConditionalBranches",
-        "NeverDTranslationCAPI.EmitsOwnedObjectsForEveryPublishedCompareAndTestEncoding",
-        "TranslateX86_64ToAArch64ObjectTests.test_copies_owned_result_and_reports_all_telemetry",
-        "TranslateX86_64ToAArch64ObjectTests.test_macho_is_the_only_other_published_container",
-        "TranslateX86_64ToAArch64ObjectTests.test_canonical_control_transfers_cross_the_public_boundary",
-        "TranslationIntegrationTests.test_real_library_emits_aarch64_object_for_zero_flag_branch",
-        "TranslationIntegrationTests.test_real_library_emits_aarch64_object_for_single_flag_branch",
-        "TranslationIntegrationTests.test_real_library_emits_aarch64_objects_for_compare_and_test_branches",
-        "TranslationIntegrationTests.test_real_library_emits_aarch64_objects_for_negative_compare_immediates",
-        "TranslationIntegrationTests.test_real_library_rejects_reserved_test_opcode_extension",
-        "TranslationCLIContract.EmitsObjectForCanonicalShortDirectJump",
-        "TranslationCLIContract.EmitsObjectForCanonicalNearDirectJump",
-        "TranslationCLIContract.EmitsObjectsForCanonicalZeroFlagConditionalBranches",
-        "TranslationCLIContract.EmitsObjectsForCanonicalSingleFlagConditionalBranches",
-        "TranslationCLIContract.EmitsObjectsForCanonicalMultiFlagConditionalBranches",
-        "TranslationCLIContract.EmitsObjectsForCompareAndTestGuardedConditionalBranches",
-        "TranslationCLIContract.EmitsObjectsForNegativeImmediateCompareForms",
-        "TranslationCLIContract.RejectsReservedTestOpcodeExtension",
-        "TranslationCLIContract.HelpPublishesSchemaNineCompareTestAndControlEncodings"
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/RuntimeGuestStateTests.cpp",
+          "filter": "RuntimeGuestState.X86_64LogicalStateRoundTripsWithoutLosingRFlags",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/RuntimeHelpersTests.cpp",
+          "filter": "RuntimeHelpers.AcceptsCheckedLoadAndStoreControlFlow",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/ResolvedHostTargetTests.cpp",
+          "filter": "ResolvedHostTarget.FeatureOrderDoesNotChangeCacheIdentity",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/ResolvedHostTargetTests.cpp",
+          "filter": "ResolvedHostTarget.ResolvesTheNativeProcessIdentity",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/RuntimeCodeMemoryTests.cpp",
+          "filter": "RuntimeCodeMemory.PublishesExactlyOnceFromWritableToExecutable",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/RuntimeCodeMemoryTests.cpp",
+          "filter": "RuntimeCodeMemory.ExecutesOnlyAfterHostInstructionsArePublished",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/RuntimeSymbolRegistryTests.cpp",
+          "filter": "RuntimeSymbolRegistry.ResolvesOnlyExactRegisteredNames",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/RuntimeSymbolRegistryTests.cpp",
+          "filter": "RuntimeSymbolRegistry.IdentityIsVersionedAddressFreeAndOrderStable",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationObjectCompilerTests.cpp",
+          "filter": "TranslationObjectCompiler.EmitsParsableAuditedObjectsAtO0AndO2",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationObjectCompilerTests.cpp",
+          "filter": "TranslationObjectCompiler.NeverMutatesTheInputOnSuccessOrFailure",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationObjectCompilerTests.cpp",
+          "filter": "TranslationObjectCompiler.RequiresTheExactDefinitionManifest",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationObjectCompilerTests.cpp",
+          "filter": "TranslationObjectCompiler.EnforcesOnlyANonzeroGeneratedByteBudget",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationObjectCompilerTests.cpp",
+          "filter": "TranslationObjectCompiler.RejectsWrongTripleAndDataLayout",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationObjectCompilerTests.cpp",
+          "filter": "TranslationObjectCompiler.RejectsMalformedLLVMIRBeforeCloning",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationObjectCompilerTests.cpp",
+          "filter": "TranslationObjectCompiler.ProducesDeterministicBytesAndVersionedKeys",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationObjectCompilerTests.cpp",
+          "filter": "TranslationObjectCompiler.EmitsEveryContractHostArchitecture",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationObjectCompilerTests.cpp",
+          "filter": "TranslationObjectCompiler.UsesLLVMsMachOSymbolPrefixAtTheBoundary",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationObjectCompilerTests.cpp",
+          "filter": "TranslationObjectCompiler.EmitsAuditedDirectRuntimeCallsAcrossObjectFormats",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationObjectCompilerTests.cpp",
+          "filter": "TranslationObjectCompiler.ComposesSemanticAndLLVMOptimization",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationObjectCompilerTests.cpp",
+          "filter": "TranslationObjectCompiler.RejectsNonDeterministicProofProviders",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationArtifactVerifierTests.cpp",
+          "filter": "TranslationArtifactVerifier.AcceptsOnlySealedLLVMPLT32RuntimeCallsInV1Policy",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationArtifactVerifierTests.cpp",
+          "filter": "TranslationArtifactVerifier.AcceptsCanonicalMachOObject",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationObjectRequestTests.cpp",
+          "filter": "TranslationObjectRequest.ProducesAuditedAArch64ELFFromExactX86GuestBytes",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationObjectRequestTests.cpp",
+          "filter": "TranslationObjectRequest.EmitsAArch64MachORelocatableObject",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationObjectRequestTests.cpp",
+          "filter": "TranslationObjectRequest.EmitsAuditedObjectsForCanonicalRel8AndRel32DirectJumps",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationObjectRequestTests.cpp",
+          "filter": "TranslationObjectRequest.EmitsAuditedObjectsForCanonicalZeroFlagConditionalBranches",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationObjectRequestTests.cpp",
+          "filter": "TranslationObjectRequest.EmitsAuditedObjectsForCanonicalSingleFlagConditionalBranches",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationObjectRequestTests.cpp",
+          "filter": "TranslationObjectRequest.EmitsAuditedObjectsForCanonicalMultiFlagConditionalBranches",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationObjectRequestTests.cpp",
+          "filter": "TranslationObjectRequest.TranslatesGeneralPublishedScalarSliceWithoutMutatingGuestState",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationObjectRequestTests.cpp",
+          "filter": "TranslationObjectRequest.EmitsAuditedObjectForLogicalScalarForms",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationObjectRequestTests.cpp",
+          "filter": "TranslationObjectRequest.RejectsUnsupportedLowIROperations",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "filter": "X86TranslationBlockLowerer.LowersDifferentFullWidthRegistersAndAddImmediate",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "filter": "X86TranslationBlockLowerer.LowersSubtractAndSignedBorrowFlags",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "filter": "X86TranslationBlockLowerer.MatchesIndependentLogicalOperationAndFlagTruthVectors",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "filter": "X86TranslationBlockLowerer.HandlesLogicalIdiomAndSignExtendedImmediateForms",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "filter": "X86TranslationBlockLowerer.PublishesCanonicalCompareAndTestRegisterForms",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "filter": "X86TranslationBlockLowerer.PublishesCanonicalCompareAndTestImmediateForms",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "filter": "X86TranslationBlockLowerer.RejectsReservedAndNonCanonicalCompareTestEncodings",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "filter": "X86TranslationBlockLowerer.MatchesCompareFlagsWithoutWritingEitherOperand",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "filter": "X86TranslationBlockLowerer.MatchesTestFlagsWithoutWritingOperandsOrAuxiliaryFlag",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "filter": "X86TranslationBlockLowerer.RejectsCompareAndTestLowIRDataflowDriftBeforeLowering",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "filter": "X86TranslationBlockLowerer.RejectsNonCanonicalWidthMemoryAndPrefixScalarForms",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "filter": "X86TranslationBlockLowerer.RejectsSemanticallyRedundantREXExtensionBits",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "filter": "X86TranslationBlockLowerer.AcceptsNecessaryREXExtensionBits",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "filter": "X86TranslationBlockLowerer.RejectsUndeclaredGuestOpcodeEvenWhenItsLowIRIsLowerable",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "filter": "X86TranslationBlockLowerer.LowersReturnImmediateStackAdjustment",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "filter": "X86TranslationBlockLowerer.LowersCanonicalZeroFlagBranchesToASelectedGuestPC",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "filter": "X86TranslationBlockLowerer.LowersCanonicalSingleFlagBranchesToASelectedGuestPC",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "filter": "X86TranslationBlockLowerer.LowersCanonicalShortJBEFromCarryOrZero",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "filter": "X86TranslationBlockLowerer.LowersCanonicalShortJAFromClearCarryAndZero",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "filter": "X86TranslationBlockLowerer.LowersEveryCanonicalUnsignedMultiFlagBranchEncoding",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "filter": "X86TranslationBlockLowerer.LowersCanonicalSignedMultiFlagBranchesToASelectedGuestPC",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "filter": "X86TranslationBlockLowerer.RejectsMultiFlagPredicatesThatDisagreeWithGuestBytes",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "filter": "X86TranslationBlockLowerer.RejectsPrefixedAndUnpublishedControlFormsWithoutExpandingTheSlice",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "filter": "X86TranslationBlockLowerer.RejectsCountedAndLoopConditionalBranchEncodings",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationLinkGraphVerifierTests.cpp",
+          "filter": "TranslationLinkGraphVerifier.AcceptsCompilerProducedAArch64ELFBeforeAllocation",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationLinkGraphVerifierTests.cpp",
+          "filter": "TranslationLinkGraphVerifier.AcceptsCompilerProducedAArch64MachOBeforeAllocation",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationCAPITests",
+          "source": "unittests/translate/TranslationCAPITests.cpp",
+          "filter": "NeverDTranslationCAPI.EmitsOwnedAuditedAArch64ELFObject",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationCAPITests",
+          "source": "unittests/translate/TranslationCAPITests.cpp",
+          "filter": "NeverDTranslationCAPI.EmitsOwnedAuditedAArch64MachOObject",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationCAPITests",
+          "source": "unittests/translate/TranslationCAPITests.cpp",
+          "filter": "NeverDTranslationCAPI.EmitsOwnedObjectForCanonicalShortDirectJump",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationCAPITests",
+          "source": "unittests/translate/TranslationCAPITests.cpp",
+          "filter": "NeverDTranslationCAPI.EmitsOwnedObjectForCanonicalNearDirectJump",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationCAPITests",
+          "source": "unittests/translate/TranslationCAPITests.cpp",
+          "filter": "NeverDTranslationCAPI.EmitsOwnedObjectsForCanonicalZeroFlagConditionalBranches",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationCAPITests",
+          "source": "unittests/translate/TranslationCAPITests.cpp",
+          "filter": "NeverDTranslationCAPI.EmitsOwnedObjectsForCanonicalSingleFlagConditionalBranches",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationCAPITests",
+          "source": "unittests/translate/TranslationCAPITests.cpp",
+          "filter": "NeverDTranslationCAPI.EmitsOwnedObjectsForCanonicalMultiFlagConditionalBranches",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationCAPITests",
+          "source": "unittests/translate/TranslationCAPITests.cpp",
+          "filter": "NeverDTranslationCAPI.EmitsOwnedObjectsForEveryPublishedCompareAndTestEncoding",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDPythonSDKUnitTests",
+          "source": "pluginsdk/python/tests/test_api.py",
+          "filter": "TranslateX86_64ToAArch64ObjectTests.test_copies_owned_result_and_reports_all_telemetry",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDPythonSDKUnitTests",
+          "source": "pluginsdk/python/tests/test_api.py",
+          "filter": "TranslateX86_64ToAArch64ObjectTests.test_macho_is_the_only_other_published_container",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDPythonSDKUnitTests",
+          "source": "pluginsdk/python/tests/test_api.py",
+          "filter": "TranslateX86_64ToAArch64ObjectTests.test_canonical_control_transfers_cross_the_public_boundary",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDTranslationPythonIntegration",
+          "source": "pluginsdk/python/tests/test_translation_integration.py",
+          "filter": "TranslationIntegrationTests.test_real_library_emits_aarch64_object_for_zero_flag_branch",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDTranslationPythonIntegration",
+          "source": "pluginsdk/python/tests/test_translation_integration.py",
+          "filter": "TranslationIntegrationTests.test_real_library_emits_aarch64_object_for_single_flag_branch",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDTranslationPythonIntegration",
+          "source": "pluginsdk/python/tests/test_translation_integration.py",
+          "filter": "TranslationIntegrationTests.test_real_library_emits_aarch64_objects_for_compare_and_test_branches",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDTranslationPythonIntegration",
+          "source": "pluginsdk/python/tests/test_translation_integration.py",
+          "filter": "TranslationIntegrationTests.test_real_library_emits_aarch64_objects_for_negative_compare_immediates",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDTranslationPythonIntegration",
+          "source": "pluginsdk/python/tests/test_translation_integration.py",
+          "filter": "TranslationIntegrationTests.test_real_library_rejects_reserved_test_opcode_extension",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationCLIContractTests.cpp",
+          "filter": "TranslationCLIContract.EmitsObjectForCanonicalShortDirectJump",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationCLIContractTests.cpp",
+          "filter": "TranslationCLIContract.EmitsObjectForCanonicalNearDirectJump",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationCLIContractTests.cpp",
+          "filter": "TranslationCLIContract.EmitsObjectsForCanonicalZeroFlagConditionalBranches",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationCLIContractTests.cpp",
+          "filter": "TranslationCLIContract.EmitsObjectsForCanonicalSingleFlagConditionalBranches",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationCLIContractTests.cpp",
+          "filter": "TranslationCLIContract.EmitsObjectsForCanonicalMultiFlagConditionalBranches",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationCLIContractTests.cpp",
+          "filter": "TranslationCLIContract.EmitsObjectsForCompareAndTestGuardedConditionalBranches",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationCLIContractTests.cpp",
+          "filter": "TranslationCLIContract.EmitsObjectsForNegativeImmediateCompareForms",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationCLIContractTests.cpp",
+          "filter": "TranslationCLIContract.RejectsReservedTestOpcodeExtension",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationCLIContractTests.cpp",
+          "filter": "TranslationCLIContract.HelpPublishesSchemaNineCompareTestAndControlEncodings",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
       ],
       "public_surfaces": {
         "c": [
@@ -216,25 +2055,215 @@
         "the executable session is currently a C++ API; no C, Python, CLI, or JSON execution surface is published"
       ],
       "tests": [
-        "TranslationJITLinker.InvokesAuditedDirectBranchWithoutInventingRuntimeReferences",
-        "TranslationJITLinker.InvokesAuditedZeroFlagBranchesWithoutRuntimeReferences",
-        "TranslationJITLinker.InvokesAuditedSingleFlagBranchesWithoutRuntimeReferences",
-        "TranslationJITLinker.InvokesEveryMultiFlagBranchTruthTableWithoutRuntimeReferences",
-        "TranslationJITLinker.InvokesAuditedX86ReturnThroughFinalizedAArch64Code",
-        "TranslationJITLinker.RejectsRuntimeStateAtWrongEntryPCWithoutMutatingInvocationInputs",
-        "NativeTranslationSession.DispatchesDirectBranchIntoASecondAuditedBlock",
-        "NativeTranslationSession.ValidatesAResolvedConditionalBranchAgainstBothManifestSuccessors",
-        "NativeTranslationSession.DispatchesBothSelectedSuccessorsOfAZeroFlagBranch",
-        "NativeTranslationSession.DispatchesBothSelectedSuccessorsOfSingleFlagBranches",
-        "NativeTranslationSession.DispatchesBothSelectedSuccessorsOfEveryMultiFlagBranch",
-        "NativeTranslationSession.ExecutesCompareAndTestBeforeDispatchingBothBranchSuccessors",
-        "NativeTranslationSession.ExecutesNegativeImmediateCompareAndTestThroughTheNativeDispatcher",
-        "NativeTranslationSession.KeepsTheCommittedPCWhenFetchFailsAfterAnUnexecutedPrefix",
-        "NativeTranslationSession.ReportsAnUnsupportedLoweringSliceAtTheGuestBlockEntry",
-        "NativeTranslationSession.DoesNotClaimThatAnUnexecutedSupportedPrefixIsRestartableAtTheFailure",
-        "NativeTranslationSession.CommitsTheFirstBlockBeforeASecondBlockLoweringSliceStop",
-        "NativeTranslationSession.TerminalReturnWinsAtExactInstructionAndBlockBudgets",
-        "NativeTranslationSession.AcceptedCancellationWinsTheSuccessfulCommitLinearizationPoint"
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationJITLinkerTests.cpp",
+          "filter": "TranslationJITLinker.InvokesAuditedDirectBranchWithoutInventingRuntimeReferences",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationJITLinkerTests.cpp",
+          "filter": "TranslationJITLinker.InvokesAuditedZeroFlagBranchesWithoutRuntimeReferences",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationJITLinkerTests.cpp",
+          "filter": "TranslationJITLinker.InvokesAuditedSingleFlagBranchesWithoutRuntimeReferences",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationJITLinkerTests.cpp",
+          "filter": "TranslationJITLinker.InvokesEveryMultiFlagBranchTruthTableWithoutRuntimeReferences",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationJITLinkerTests.cpp",
+          "filter": "TranslationJITLinker.InvokesAuditedX86ReturnThroughFinalizedAArch64Code",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/TranslationJITLinkerTests.cpp",
+          "filter": "TranslationJITLinker.RejectsRuntimeStateAtWrongEntryPCWithoutMutatingInvocationInputs",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/NativeTranslationSessionTests.cpp",
+          "filter": "NativeTranslationSession.DispatchesDirectBranchIntoASecondAuditedBlock",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/NativeTranslationSessionTests.cpp",
+          "filter": "NativeTranslationSession.ValidatesAResolvedConditionalBranchAgainstBothManifestSuccessors",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/NativeTranslationSessionTests.cpp",
+          "filter": "NativeTranslationSession.DispatchesBothSelectedSuccessorsOfAZeroFlagBranch",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/NativeTranslationSessionTests.cpp",
+          "filter": "NativeTranslationSession.DispatchesBothSelectedSuccessorsOfSingleFlagBranches",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/NativeTranslationSessionTests.cpp",
+          "filter": "NativeTranslationSession.DispatchesBothSelectedSuccessorsOfEveryMultiFlagBranch",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/NativeTranslationSessionTests.cpp",
+          "filter": "NativeTranslationSession.ExecutesCompareAndTestBeforeDispatchingBothBranchSuccessors",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/NativeTranslationSessionTests.cpp",
+          "filter": "NativeTranslationSession.ExecutesNegativeImmediateCompareAndTestThroughTheNativeDispatcher",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/NativeTranslationSessionTests.cpp",
+          "filter": "NativeTranslationSession.KeepsTheCommittedPCWhenFetchFailsAfterAnUnexecutedPrefix",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/NativeTranslationSessionTests.cpp",
+          "filter": "NativeTranslationSession.ReportsAnUnsupportedLoweringSliceAtTheGuestBlockEntry",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/NativeTranslationSessionTests.cpp",
+          "filter": "NativeTranslationSession.DoesNotClaimThatAnUnexecutedSupportedPrefixIsRestartableAtTheFailure",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/NativeTranslationSessionTests.cpp",
+          "filter": "NativeTranslationSession.CommitsTheFirstBlockBeforeASecondBlockLoweringSliceStop",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/NativeTranslationSessionTests.cpp",
+          "filter": "NativeTranslationSession.TerminalReturnWinsAtExactInstructionAndBlockBudgets",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDTranslationContractTests",
+          "source": "unittests/translate/NativeTranslationSessionTests.cpp",
+          "filter": "NativeTranslationSession.AcceptedCancellationWinsTheSuccessfulCommitLinearizationPoint",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
       ],
       "public_surfaces": {
         "c": [],
@@ -343,61 +2372,611 @@
         "unsupported exception encodings and registration states fail closed without mutating output"
       ],
       "tests": [
-        "ExceptionRewriteContract.RequiredUnresolvedOutputIsByteIdenticalOnError",
-        "ExceptionRewriteContract.RejectsSymbolSpellingWithoutCompilerIdentity",
-        "RewriteFunctionProvenance.ResolvesPrivateMachOOwnerWithoutPublishingIt",
-        "RewriteFunctionProvenance.PreservesARMSourceOwnerWithoutDwarfCFI",
-        "RewriteFunctionProvenance.ExplicitARMv7kMachOTargetAuthenticatesUnwindRange",
-        "RewriteFunctionProvenance.ARMv7kRejectsARMv8OnlyIRRequirements",
-        "RewriteFunctionProvenance.DirectRewriteRejectsSameArchitectureWrongObjectFormat",
-        "RewriteFunctionProvenance.RejectsMismatchedExplicitTargetTriple",
-        "CompactUnwindARM32.DecodesFrameStackAdjustmentAndGPRLayout",
-        "CompactUnwindARM32.DecodesEveryStackAdjustmentAndSavedGPRBit",
-        "CompactUnwindARM32.DecodesFixedFrameDRegisterLayouts",
-        "CompactUnwindARM32.RetainsProvenDRegistersWithoutInventingAlignedStackSlots",
-        "CompactUnwindARM32.PropagatesPartialFrameDLayoutToItsFunction",
-        "MachOExceptionPatch.RequiresAnExactGeneratedFDEForEveryAuthenticatedFragment",
-        "MachOExceptionPatch.RejectsUnauthenticatedCompactCoverageWithoutChangingBytes",
-        "MachOExceptionPatch.AcceptsVerifiedARMCompactCoverageWithoutInstallingAnFDE",
-        "MachOCompactUnwindMerge.PreservesOriginalRangePersonalityAndLSDA",
-        "MachOGeneratedCompactUnwind.RejectsMissingDuplicateDanglingAndMismatchedRangeProvenance",
-        "MachOGeneratedCompactUnwind.ParsesARM32RecordLayout",
-        "MachOCompactUnwindDwarfBind.BindsOnlyFromInstalledReceiptAndLeavesGeneratedInputUnchanged",
-        "MachOCompactUnwindDwarfBind.BindsARM32DwarfFallbackByExactRange",
-        "MachOCompactUnwindDwarfBind.RejectsAArch64ReceiptForARM32GeneratedRecords",
-        "MachOCompactUnwindDwarfBind.RejectsARM32ReceiptForAArch64GeneratedRecords",
-        "MachOCompactUnwindDwarfBind.RejectsSameWidthReceiptFromDifferentArchitecture",
-        "MachOCompactUnwindDwarfBind.RejectsInstalledReceiptWithDifferentPointerWidth",
-        "MachOCompactUnwindDwarfBind.RejectsInstalledReceiptWithDifferentByteOrder",
-        "MachOCompactUnwindRangeMap.SameOwnerAdjacentAndDisjointFragmentsReuseOneSourceRecipe",
-        "MachOCompactUnwindMerge.RejectsMissingDuplicateDanglingAndMismatchedFragmentIdentities",
-        "MachOCompactUnwindEncode.EmitsStableMultiPageLayoutAndRoundTripsEveryRecipe",
-        "MachOCompactUnwindInstall.RewritesPrefixClearsTailAndKeepsDeclaredCapacity",
-        "MachOCompactUnwindInstall.RejectsStaleRegionAndPreimageWithoutFurtherMutation",
-        "MachOCompactUnwindInstall.RejectsOneByteCapacityShortageWithoutMutation",
-        "MachOPatchTransaction.CompactPrepareFailureLeavesExistingOutputAndInputUnchanged",
-        "MachOPatchTransaction.GeneratedCompactWithoutFinalSectionUsesAuthenticatedDwarfFallback",
-        "MachOPatchSegmentInstall.RejectsDuplicateLinkeditSegmentsWithoutMutation",
-        "MachOPatchSegmentInstall.RejectsNonterminalLinkeditSegmentWithoutMutation",
-        "MachOPatchTransaction.SuccessCommitsEHSegmentTrampolineAndCompactUnwindTogether",
-        "MachOPatchTransaction.ResolvesSameClassicBindSymbolAsStubAndZeroFilledPersonalitySlot",
-        "MachOSymbolResolution.ClassifiesArchitectureSpecificSpecifiers",
-        "MachOSymbolResolution.RejectsTLSAuthenticatedAndUnknownSpecifiers",
-        "MachOSymbolResolution.CompactUnwindPersonalityUsesImportSlotContext",
-        "MachOSymbolResolution.DirectReferenceSelectsStubNotPointerSlot",
-        "MachOSymbolResolution.GOTReferenceReturnsSlotAddressWithoutDereference",
-        "MachOSymbolResolution.SlotOnlyPersonalityResolvesWithoutCallableTarget",
-        "MachOSymbolResolution.RejectsSlotOutsideNonLazyPointerSection",
-        "MachOSymbolResolution.DirectReferenceSelectsMappedData",
-        "MachOSymbolResolution.CallableReferenceRejectsMappedData",
-        "MachOSymbolResolution.AmbiguousSelectedCandidateSetFailsClosed",
-        "MachOARM32Transaction.RejectsEveryPartialFrameDPatternWithTypedMergeError",
-        "MachOARM32Transaction.SuccessCommitsCompilerAuthenticatedEHAndCompactUnwind",
-        "MachOARM32Transaction.ReadsPositiveThumbModeFromExactNListMetadata",
-        "MachOARM32Transaction.UnflaggedTextSymbolIsNotARMModeEvidence",
-        "MachOARM32Transaction.DoesNotTreatTextSegmentDataAsModeEvidence",
-        "MachOARM32Transaction.ARMv7kModeMismatchLeavesInputAndOutputUnchanged",
-        "MachOARM32Transaction.PartialFrameDFailureLeavesInputAndOutputUnchanged"
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/NativeExceptionRewriteContractTests.cpp",
+          "filter": "ExceptionRewriteContract.RequiredUnresolvedOutputIsByteIdenticalOnError",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/NativeExceptionRewriteContractTests.cpp",
+          "filter": "ExceptionRewriteContract.RejectsSymbolSpellingWithoutCompilerIdentity",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/RewriteFunctionProvenanceTests.cpp",
+          "filter": "RewriteFunctionProvenance.ResolvesPrivateMachOOwnerWithoutPublishingIt",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/RewriteFunctionProvenanceTests.cpp",
+          "filter": "RewriteFunctionProvenance.PreservesARMSourceOwnerWithoutDwarfCFI",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/RewriteFunctionProvenanceTests.cpp",
+          "filter": "RewriteFunctionProvenance.ExplicitARMv7kMachOTargetAuthenticatesUnwindRange",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/RewriteFunctionProvenanceTests.cpp",
+          "filter": "RewriteFunctionProvenance.ARMv7kRejectsARMv8OnlyIRRequirements",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/RewriteFunctionProvenanceTests.cpp",
+          "filter": "RewriteFunctionProvenance.DirectRewriteRejectsSameArchitectureWrongObjectFormat",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/RewriteFunctionProvenanceTests.cpp",
+          "filter": "RewriteFunctionProvenance.RejectsMismatchedExplicitTargetTriple",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLanguageEHTests",
+          "source": "unittests/lift/language/CompactUnwindARM32Tests.cpp",
+          "filter": "CompactUnwindARM32.DecodesFrameStackAdjustmentAndGPRLayout",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLanguageEHTests",
+          "source": "unittests/lift/language/CompactUnwindARM32Tests.cpp",
+          "filter": "CompactUnwindARM32.DecodesEveryStackAdjustmentAndSavedGPRBit",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLanguageEHTests",
+          "source": "unittests/lift/language/CompactUnwindARM32Tests.cpp",
+          "filter": "CompactUnwindARM32.DecodesFixedFrameDRegisterLayouts",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLanguageEHTests",
+          "source": "unittests/lift/language/CompactUnwindARM32Tests.cpp",
+          "filter": "CompactUnwindARM32.RetainsProvenDRegistersWithoutInventingAlignedStackSlots",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLanguageEHTests",
+          "source": "unittests/lift/language/CompactUnwindARM32Tests.cpp",
+          "filter": "CompactUnwindARM32.PropagatesPartialFrameDLayoutToItsFunction",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/MachOExceptionPatchTests.cpp",
+          "filter": "MachOExceptionPatch.RequiresAnExactGeneratedFDEForEveryAuthenticatedFragment",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/MachOExceptionPatchTests.cpp",
+          "filter": "MachOExceptionPatch.RejectsUnauthenticatedCompactCoverageWithoutChangingBytes",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/MachOExceptionPatchTests.cpp",
+          "filter": "MachOExceptionPatch.AcceptsVerifiedARMCompactCoverageWithoutInstallingAnFDE",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/MachOCompactUnwindPatchTests.cpp",
+          "filter": "MachOCompactUnwindMerge.PreservesOriginalRangePersonalityAndLSDA",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/MachOCompactUnwindPatchTests.cpp",
+          "filter": "MachOGeneratedCompactUnwind.RejectsMissingDuplicateDanglingAndMismatchedRangeProvenance",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/MachOCompactUnwindPatchTests.cpp",
+          "filter": "MachOGeneratedCompactUnwind.ParsesARM32RecordLayout",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/MachOCompactUnwindPatchTests.cpp",
+          "filter": "MachOCompactUnwindDwarfBind.BindsOnlyFromInstalledReceiptAndLeavesGeneratedInputUnchanged",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/MachOCompactUnwindPatchTests.cpp",
+          "filter": "MachOCompactUnwindDwarfBind.BindsARM32DwarfFallbackByExactRange",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/MachOCompactUnwindPatchTests.cpp",
+          "filter": "MachOCompactUnwindDwarfBind.RejectsAArch64ReceiptForARM32GeneratedRecords",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/MachOCompactUnwindPatchTests.cpp",
+          "filter": "MachOCompactUnwindDwarfBind.RejectsARM32ReceiptForAArch64GeneratedRecords",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/MachOCompactUnwindPatchTests.cpp",
+          "filter": "MachOCompactUnwindDwarfBind.RejectsSameWidthReceiptFromDifferentArchitecture",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/MachOCompactUnwindPatchTests.cpp",
+          "filter": "MachOCompactUnwindDwarfBind.RejectsInstalledReceiptWithDifferentPointerWidth",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/MachOCompactUnwindPatchTests.cpp",
+          "filter": "MachOCompactUnwindDwarfBind.RejectsInstalledReceiptWithDifferentByteOrder",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/MachOCompactUnwindPatchTests.cpp",
+          "filter": "MachOCompactUnwindRangeMap.SameOwnerAdjacentAndDisjointFragmentsReuseOneSourceRecipe",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/MachOCompactUnwindPatchTests.cpp",
+          "filter": "MachOCompactUnwindMerge.RejectsMissingDuplicateDanglingAndMismatchedFragmentIdentities",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/MachOCompactUnwindPatchTests.cpp",
+          "filter": "MachOCompactUnwindEncode.EmitsStableMultiPageLayoutAndRoundTripsEveryRecipe",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/MachOCompactUnwindPatchTests.cpp",
+          "filter": "MachOCompactUnwindInstall.RewritesPrefixClearsTailAndKeepsDeclaredCapacity",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/MachOCompactUnwindPatchTests.cpp",
+          "filter": "MachOCompactUnwindInstall.RejectsStaleRegionAndPreimageWithoutFurtherMutation",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/MachOCompactUnwindPatchTests.cpp",
+          "filter": "MachOCompactUnwindInstall.RejectsOneByteCapacityShortageWithoutMutation",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/MachOCompactUnwindPatchTests.cpp",
+          "filter": "MachOPatchTransaction.CompactPrepareFailureLeavesExistingOutputAndInputUnchanged",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/MachOCompactUnwindPatchTests.cpp",
+          "filter": "MachOPatchTransaction.GeneratedCompactWithoutFinalSectionUsesAuthenticatedDwarfFallback",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/MachOCompactUnwindPatchTests.cpp",
+          "filter": "MachOPatchSegmentInstall.RejectsDuplicateLinkeditSegmentsWithoutMutation",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/MachOCompactUnwindPatchTests.cpp",
+          "filter": "MachOPatchSegmentInstall.RejectsNonterminalLinkeditSegmentWithoutMutation",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/MachOCompactUnwindPatchTests.cpp",
+          "filter": "MachOPatchTransaction.SuccessCommitsEHSegmentTrampolineAndCompactUnwindTogether",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDNativeExceptionRewriteContractTests",
+          "source": "unittests/lift/eh/MachOCompactUnwindPatchTests.cpp",
+          "filter": "MachOPatchTransaction.ResolvesSameClassicBindSymbolAsStubAndZeroFilledPersonalitySlot",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMachOSymbolResolutionTests",
+          "source": "unittests/lift/format/MachOSymbolResolutionTests.cpp",
+          "filter": "MachOSymbolResolution.ClassifiesArchitectureSpecificSpecifiers",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMachOSymbolResolutionTests",
+          "source": "unittests/lift/format/MachOSymbolResolutionTests.cpp",
+          "filter": "MachOSymbolResolution.RejectsTLSAuthenticatedAndUnknownSpecifiers",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMachOSymbolResolutionTests",
+          "source": "unittests/lift/format/MachOSymbolResolutionTests.cpp",
+          "filter": "MachOSymbolResolution.CompactUnwindPersonalityUsesImportSlotContext",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMachOSymbolResolutionTests",
+          "source": "unittests/lift/format/MachOSymbolResolutionTests.cpp",
+          "filter": "MachOSymbolResolution.DirectReferenceSelectsStubNotPointerSlot",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMachOSymbolResolutionTests",
+          "source": "unittests/lift/format/MachOSymbolResolutionTests.cpp",
+          "filter": "MachOSymbolResolution.GOTReferenceReturnsSlotAddressWithoutDereference",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMachOSymbolResolutionTests",
+          "source": "unittests/lift/format/MachOSymbolResolutionTests.cpp",
+          "filter": "MachOSymbolResolution.SlotOnlyPersonalityResolvesWithoutCallableTarget",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMachOSymbolResolutionTests",
+          "source": "unittests/lift/format/MachOSymbolResolutionTests.cpp",
+          "filter": "MachOSymbolResolution.RejectsSlotOutsideNonLazyPointerSection",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMachOSymbolResolutionTests",
+          "source": "unittests/lift/format/MachOSymbolResolutionTests.cpp",
+          "filter": "MachOSymbolResolution.DirectReferenceSelectsMappedData",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMachOSymbolResolutionTests",
+          "source": "unittests/lift/format/MachOSymbolResolutionTests.cpp",
+          "filter": "MachOSymbolResolution.CallableReferenceRejectsMappedData",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMachOSymbolResolutionTests",
+          "source": "unittests/lift/format/MachOSymbolResolutionTests.cpp",
+          "filter": "MachOSymbolResolution.AmbiguousSelectedCandidateSetFailsClosed",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLiftTests",
+          "source": "unittests/lift/eh/MachOARM32TransactionTests.cpp",
+          "filter": "MachOARM32Transaction.RejectsEveryPartialFrameDPatternWithTypedMergeError",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLiftTests",
+          "source": "unittests/lift/eh/MachOARM32TransactionTests.cpp",
+          "filter": "MachOARM32Transaction.SuccessCommitsCompilerAuthenticatedEHAndCompactUnwind",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLiftTests",
+          "source": "unittests/lift/eh/MachOARM32TransactionTests.cpp",
+          "filter": "MachOARM32Transaction.ReadsPositiveThumbModeFromExactNListMetadata",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLiftTests",
+          "source": "unittests/lift/eh/MachOARM32TransactionTests.cpp",
+          "filter": "MachOARM32Transaction.UnflaggedTextSymbolIsNotARMModeEvidence",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLiftTests",
+          "source": "unittests/lift/eh/MachOARM32TransactionTests.cpp",
+          "filter": "MachOARM32Transaction.DoesNotTreatTextSegmentDataAsModeEvidence",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLiftTests",
+          "source": "unittests/lift/eh/MachOARM32TransactionTests.cpp",
+          "filter": "MachOARM32Transaction.ARMv7kModeMismatchLeavesInputAndOutputUnchanged",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLiftTests",
+          "source": "unittests/lift/eh/MachOARM32TransactionTests.cpp",
+          "filter": "MachOARM32Transaction.PartialFrameDFailureLeavesInputAndOutputUnchanged",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
       ],
       "public_surfaces": {
         "c": [],
@@ -425,11 +3004,61 @@
         "corpus-proven status is a separate claim and is not published by this capability"
       ],
       "tests": [
-        "ItaniumLSDA.KeepsAdaAndDTypeDescriptorsOpaque",
-        "ItaniumEHEmitter.PreservesAdaAndDAddressFormPersonalities",
-        "AdaDEHCorpus.DeclaresCompleteBuildMatrix",
-        "AdaDEHCorpus.RecoversTheCallSiteGraphOnEveryCell",
-        "AdaDEHCorpus.KeepsAdaAndDTypeDescriptorsOpaque"
+        {
+          "runner": "gtest",
+          "target": "NeverDLanguageEHTests",
+          "source": "unittests/lift/language/LanguageEHItaniumTests.cpp",
+          "filter": "ItaniumLSDA.KeepsAdaAndDTypeDescriptorsOpaque",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLiftTests",
+          "source": "unittests/lift/eh/ItaniumEHEmitterTests.cpp",
+          "filter": "ItaniumEHEmitter.PreservesAdaAndDAddressFormPersonalities",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDAdaDEHCorpusTests",
+          "source": "unittests/lift/corpus/ada-d-eh/AdaDEHCorpusTests.cpp",
+          "filter": "AdaDEHCorpus.DeclaresCompleteBuildMatrix",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDAdaDEHCorpusTests",
+          "source": "unittests/lift/corpus/ada-d-eh/AdaDEHCorpusTests.cpp",
+          "filter": "AdaDEHCorpus.RecoversTheCallSiteGraphOnEveryCell",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDAdaDEHCorpusTests",
+          "source": "unittests/lift/corpus/ada-d-eh/AdaDEHCorpusTests.cpp",
+          "filter": "AdaDEHCorpus.KeepsAdaAndDTypeDescriptorsOpaque",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
       ],
       "public_surfaces": {
         "c": [],
@@ -457,28 +3086,68 @@
         "synthesis is opt-in and conservative mode deliberately performs no semantic rewrite"
       ],
       "proof_test": {
+        "runner": "gtest",
         "target": "NeverDSymSimplifyGuardTests",
         "source": "unittests/lift/pipeline/SymSimplifyGuardTests.cpp",
-        "filter": "SymSimplifyGuard.SynthesisEquivalent"
+        "filter": "SymSimplifyGuard.SynthesisEquivalent",
+        "platforms": [
+          "darwin",
+          "linux",
+          "windows"
+        ]
       },
       "unknown_test": {
+        "runner": "gtest",
         "target": "NeverDSymSimplifyGuardTests",
         "source": "unittests/lift/pipeline/SymSimplifyGuardTests.cpp",
-        "filter": "SymSimplifyGuard.SynthesisUnknownLeavesIRUnchanged"
+        "filter": "SymSimplifyGuard.SynthesisUnknownLeavesIRUnchanged",
+        "platforms": [
+          "darwin",
+          "linux",
+          "windows"
+        ]
       },
       "poison_test": {
+        "runner": "gtest",
         "target": "NeverDSymSimplifyGuardTests",
         "source": "unittests/lift/pipeline/SymSimplifyGuardTests.cpp",
-        "filter": "SymSimplifyGuard.LeavesPoisonGeneratingOperationsOpaque"
+        "filter": "SymSimplifyGuard.LeavesPoisonGeneratingOperationsOpaque",
+        "platforms": [
+          "darwin",
+          "linux",
+          "windows"
+        ]
       },
       "tests": [
-        "NeverDSemanticCAPI.SynthesisRewriteRequiresAnEquivalentProof",
-        "NeverDSemanticCAPI.LLVMOptimizationUsesTheTransactionalDeepPipeline"
+        {
+          "runner": "gtest",
+          "target": "NeverDSemanticCAPITests",
+          "source": "unittests/lift/sdk/SemanticCAPITests.cpp",
+          "filter": "NeverDSemanticCAPI.SynthesisRewriteRequiresAnEquivalentProof",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDSemanticCAPITests",
+          "source": "unittests/lift/sdk/SemanticCAPITests.cpp",
+          "filter": "NeverDSemanticCAPI.LLVMOptimizationUsesTheTransactionalDeepPipeline",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
       ],
       "public_surfaces": {
         "c": [
           "neverd_synthesize_expr",
-          "neverd_optimize_llvm_ir"
+          "neverd_synthesize_expr_json_v1",
+          "neverd_optimize_llvm_ir",
+          "neverd_optimize_llvm_ir_json_v1"
         ],
         "python": [
           "synthesize_expression",
@@ -512,16 +3181,33 @@
         "integer bit-vector expressions in modeled semantic domains"
       ],
       "proof_test": {
+        "runner": "gtest",
         "target": "NeverDSymbolicTests",
         "source": "unittests/symbolic/SymMBAStressTests.cpp",
-        "filter": "SymMBA.IsExhaustivelyEquivalentAtASmallWidth"
+        "filter": "SymMBA.IsExhaustivelyEquivalentAtASmallWidth",
+        "platforms": [
+          "darwin",
+          "linux",
+          "windows"
+        ]
       },
       "tests": [
-        "SimplifySurfaceAgreementTests.test_the_three_surfaces_agree"
+        {
+          "runner": "python-unittest",
+          "target": "NeverDSimplifySurfaceAgreement",
+          "source": "scripts/tests/test_simplify_surfaces.py",
+          "filter": "SimplifySurfaceAgreementTests.test_the_three_surfaces_agree",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
       ],
       "public_surfaces": {
         "c": [
-          "neverd_simplify_expr"
+          "neverd_simplify_expr",
+          "neverd_simplify_expr_json"
         ],
         "python": [
           "simplify_expression"
@@ -553,21 +3239,44 @@
         "grammar coverage is explicit; exhaustive mode removes work and solver ceilings but cannot remove physical resource limits"
       ],
       "proof_test": {
+        "runner": "gtest",
         "target": "NeverDSymbolicTests",
         "source": "unittests/symbolic/SymSynthTests.cpp",
-        "filter": "SymSynth.ProductionRewriteAcceptsOnlyAProvedEquivalent"
+        "filter": "SymSynth.ProductionRewriteAcceptsOnlyAProvedEquivalent",
+        "platforms": [
+          "darwin",
+          "linux",
+          "windows"
+        ]
       },
       "unknown_test": {
+        "runner": "gtest",
         "target": "NeverDSymbolicTests",
         "source": "unittests/symbolic/SymSynthTests.cpp",
-        "filter": "SymSynth.ReportsWhenProofIsIncomplete"
+        "filter": "SymSynth.ReportsWhenProofIsIncomplete",
+        "platforms": [
+          "darwin",
+          "linux",
+          "windows"
+        ]
       },
       "tests": [
-        "NeverDSemanticCAPI.SolverUnknownAndSearchBudgetAreDistinct"
+        {
+          "runner": "gtest",
+          "target": "NeverDSemanticCAPITests",
+          "source": "unittests/lift/sdk/SemanticCAPITests.cpp",
+          "filter": "NeverDSemanticCAPI.SolverUnknownAndSearchBudgetAreDistinct",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
       ],
       "public_surfaces": {
         "c": [
-          "neverd_synthesize_expr"
+          "neverd_synthesize_expr",
+          "neverd_synthesize_expr_json_v1"
         ],
         "python": [
           "synthesize_expression"

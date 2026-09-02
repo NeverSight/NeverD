@@ -144,6 +144,27 @@ void collectSymbols(const llvm::object::ELFFile<ELFT> &ELF,
       S.IsFunc = IsFunction;
       Img.Symbols.push_back(std::move(S));
 
+      // st_size is an object boundary only for a defined STT_OBJECT whose
+      // complete range belongs to one allocated section.  STT_NOTYPE,
+      // section symbols, TLS, COMMON, and distances to neighbouring symbols
+      // are not interchangeable with a C object extent.
+      if (Type == STT_OBJECT && Sym.st_size != 0 &&
+          Sym.st_shndx < SHN_LORESERVE && Sym.st_shndx < Sections.size()) {
+        const Elf_Shdr &Owner = Sections[Sym.st_shndx];
+        const va_t OwnerVA =
+            sectionVA<ELFT>(IsRelocatable, SecBase, Owner, Sym.st_shndx);
+        if ((Owner.sh_flags & SHF_ALLOC) != 0 &&
+            Owner.sh_size <= InvalidVA - OwnerVA &&
+            Sym.st_size <= InvalidVA - Value) {
+          const va_t OwnerEnd = OwnerVA + Owner.sh_size;
+          const va_t ObjectEnd = Value + Sym.st_size;
+          if (Value >= OwnerVA && ObjectEnd <= OwnerEnd)
+            Img.ExactDataObjects.push_back(ExactDataObjectExtent{
+                Value, Sym.st_size, ExactDataObjectEvidence::ELFObjectSymbol,
+                ExactDataObjectPrecision::Storage});
+        }
+      }
+
       if (Type == STT_GNU_IFUNC)
         Img.recordRuntimeFunction(Value);
 

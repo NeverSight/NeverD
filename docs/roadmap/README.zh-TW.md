@@ -87,9 +87,27 @@ EIP-3540 為 Stagnant，兩者都不冒充已定案 mainnet 行為。host ABI �
 |------|------|
 | `audit` 軌道 | IR 上的堆積狀態機 + 逃逸摘要：洩漏、重複釋放、釋放後使用 |
 | `hunt` 軌道 | 匯目錄 + 參數預過濾 + 目標容量 + 求解器見證 |
+| 可達性證據 | 從已知進入點出發的控制狀態、獨立的攻擊者控制固定點，以及精確的根／呼叫鏈見證 |
 | 身分契約 | 依格式解析匯（PE IAT、ELF PLT、Mach-O dyld bind）以及 PDB / DWARF / MAP 名稱來源 |
 
-**狀態：** PE、ELF、Mach-O 的 Phase 1 已實作。P0 包含封閉世界堆積生命週期與危險複製分析；schema v1 的增量證據可為精確字面環境值及第一次受支援的 `read(0)` 系列標準輸入消耗提供 `process-input-v1` 重播，其他輸入類型保持不可重播並附帶原因。P1 已涵蓋堆疊／全域越界、未初始化區域讀取與格式字串。未知或只能部分套用的呼叫效果保持 UNKNOWN。判定與身分覆蓋由 [`unittests/safety`](../../unittests/safety) 以及在每個主機強制執行 PE/ELF/Mach-O × x86-64/AArch64 六單元 fixture 矩陣的端到端 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) 鎖定。詳見 [記憶體安全稽核與獵取](../memory-safety.zh-TW.md)。P2 的一項基礎能力現已落地：版本化的 `lowir-concolic-v1` 沿一條有界原生 LowIR 軌跡執行，只發布經重播驗證的暫存器種子，並透過 C、CLI 與 Python 在 PE/ELF/Mach-O × x86-64/AArch64 矩陣上取證。二進位檢查插入、混合模糊測試的語料排程與變異、記憶體輸入投影及更廣的跨程序可達性仍屬後續路線圖，不在 Phase-1 驗收契約內。
+**狀態：** PE、ELF、Mach-O 的 Phase 1 已實作。P0 包含封閉世界堆積生命週期與危險複製分析；schema v1 的增量證據可為精確字面環境值及第一次受支援的 `read(0)` 系列標準輸入消耗提供 `process-input-v1` 重播，其他輸入類型保持不可重播並附帶原因。P1 已涵蓋堆疊／全域越界、未初始化區域讀取與格式字串。未知或只能部分套用的呼叫效果保持 UNKNOWN。判定與身分覆蓋由 [`unittests/safety`](../../unittests/safety) 以及在每個主機強制執行 PE/ELF/Mach-O × x86-64/AArch64 六單元 fixture 矩陣的端到端 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) 鎖定。詳見 [記憶體安全稽核與獵取](../memory-safety.zh-TW.md)。
+
+目前程序間切片在不改變獨立 `verdict` 的前提下，為 schema v1 加入
+`reachability.status` 與 `reachability.attacker_control`。它報告
+`application`、`image` 或 `export` 根、精確內部呼叫鏈，以及閉合失敗的 UNKNOWN
+狀態。`max_call_depth` 與 `max_summary_iterations` 預算可透過 C API、兩條 CLI 命令和
+兩個 Python 方法設定。因此，
+`control_reachable` 與 `attacker_reachable` 是可達性計數，而非另一套裁決計數。
+
+P2 分析面與計畫採用帶明確狀態的版本化邊界：
+
+| 計畫 | 範圍 | 狀態 |
+|------|------|------|
+| `lowir-concolic-v1` | LowIR 混合／concolic 探索與種子產生 | 實驗性；在 PE/ELF/Mach-O × x86-64/AArch64 上產生經重播驗證的暫存器種子 |
+| `binary-sanitizer-v1` | 向重寫後的原生二進位插入執行階段檢查 | Darwin 上為實驗性：全點位或拒絕的計數寫入防護，以及經驗證的排他建立或同來源無變更發佈 |
+| `process-replay-v1` | 涵蓋 argv、檔案、網路和重複讀取、超出 `process-input-v1` 的更廣處理程序重播 | 僅 Phase 0 邊界：計畫／協調器驗證與故障關閉的原生可用性查詢；目前沒有主機提供原生重播操作 |
+
+concolic 轉接器是獨立分析面，並非對 Phase 1 安全報告驗收契約的擴充。實驗性 sanitizer 透過 `neverd_session_sanitize`、`neverd patch --sanitize=strict` 與 Python `Session.sanitize` 公開；非 Darwin 主機會在 lifting 或命名空間變更前拒絕。完整 receipt 只驗證交易期間持有的目的目錄物件；目錄可在開啟後重新命名，因此它不證明原始路徑名稱在交易中或回傳後仍指向該物件，也不是持久路徑綁定。`NativeProcessReplayAdapter` 仍是能力全有或全無的 Phase 0 查詢／工廠邊界，所有主機目前都回報能力全 false 且沒有操作表。
 
 ---
 
@@ -107,7 +125,8 @@ EIP-3540 為 Stagnant，兩者都不冒充已定案 mainnet 行為。host ABI �
 ## 時間線
 
 原生格式補齊、Fusaka 以前的傳統 EVM decode/lifting、Solana SBF 反編譯與記憶體安全
-P0 已有迴歸覆蓋；保守 EVM 原始碼重建仍在進行。不承諾具體發布日期。
+Phase 1 和目前已知進入點可達性切片已有迴歸覆蓋；保守 EVM 原始碼重建仍在進行。
+不承諾具體發布日期。
 
 | 功能 | 狀態 |
 |------|------|
@@ -115,5 +134,5 @@ P0 已有迴歸覆蓋；保守 EVM 原始碼重建仍在進行。不承諾具體
 | EVM 傳統 decode/lifting | 至 Fusaka 已完成；有迴歸測試覆蓋 |
 | EVM 原始碼重建 | 持續進行 — 只回報有證據的保守結果 |
 | Solana eBPF（SBF）反編譯 | 已完成 — v0-v4、C、Rust 與 LLVM；有迴歸測試覆蓋 |
-| 記憶體安全稽核與獵取 | Phase 1 完成 — P0/P1 分析與重播證據已具備；經重播驗證的 LowIR concolic 暫存器種子已作為 P2 基礎落地，其餘 P2 編排仍待規劃 |
+| 記憶體安全稽核與獵取 | Phase 1 與已知進入點可達性切片已完成；`lowir-concolic-v1` 與 Darwin `binary-sanitizer-v1` 已作為實驗性能力交付；原生 `process-replay-v1` 仍位於故障關閉的 Phase 0 轉接器後且不可用 |
 | 引擎與產品加固 | 持續進行 |

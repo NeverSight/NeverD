@@ -14,8 +14,10 @@
 #include "neverd/backend/llvm/LLVMName.h"
 #include "neverd/backend/llvm/LanguageEHMetadata.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/backend/llvm/SafetyCallsiteMetadata.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/object/SectionNames.h"
+#include "neverd/safety/CountedWriteSemantics.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-call"
 #include "neverd/ir/TargetRegInfo.h"
@@ -26,6 +28,7 @@
 #include "llvm/IR/DerivedTypes.h"
 
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -243,6 +246,27 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     return {};
   };
 
+  const std::optional<counted_write::Semantics> SafetyShape =
+      counted_write::classify(resolveCalleeName(), TargetFormat);
+  auto AttachSafetyCallsite = [&](llvm::CallBase &Call) {
+    if (!SafetyShape || !CurMedFunc || BlockId < 0 || OpIdx < 0 ||
+        Op.OriginSeq < 0 || Op.CallSiteId == 0)
+      return;
+    safety_callsite_md::SafetyCallsiteRecord Record;
+    Record.Occurrence.FuncEntry = CurMedFunc->Entry;
+    Record.Occurrence.CallVA = Op.Addr;
+    Record.Occurrence.BlockId = static_cast<uint32_t>(BlockId);
+    Record.Occurrence.OpIdx = static_cast<uint32_t>(OpIdx);
+    Record.Occurrence.OriginSeq = static_cast<uint32_t>(Op.OriginSeq);
+    Record.Occurrence.CallSiteId = Op.CallSiteId;
+    Record.Kind = SafetyShape->Kind;
+    Record.DestinationOperandIndex = SafetyShape->DestinationOperandIndex;
+    Record.LengthOperandIndex = SafetyShape->LengthOperandIndex;
+    Record.ElementBytes = SafetyShape->ElementBytes;
+    if (llvm::Error Error = safety_callsite_md::attach(Call, Record))
+      llvm::consumeError(std::move(Error));
+  };
+
   if (Op.Opcode == NdOp::CALL && CI && Args.size() >= 3) {
     std::string LibNameStr = resolveCalleeName();
     llvm::StringRef LibName = stripLeadingUnderscores(LibNameStr);
@@ -262,7 +286,9 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       llvm::Value *Len = Args[2];
       if (Len->getType()->getIntegerBitWidth() < 64)
         Len = Builder.CreateZExt(Len, I64Ty);
-      Builder.CreateMemSet(Dest, Val, Len, llvm::MaybeAlign(1));
+      llvm::CallInst *Memset =
+          Builder.CreateMemSet(Dest, Val, Len, llvm::MaybeAlign(1));
+      AttachSafetyCallsite(*Memset);
       if (Op.Output.Size > 0)
         setVar(Op.Output, Dest, Builder);
       defineCallClobbers(Op, Builder);
@@ -472,7 +498,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
             Callee->setCallingConv(llvm::CallingConv::C);
           }
         } else if (Arity && libc::isVaListConsumer(
-                               stripLeadingUnderscores(CalleeName))) {
+                                stripLeadingUnderscores(CalleeName))) {
           std::vector<llvm::Type *> ParamTys(
               static_cast<size_t>(Arity->IntArgs), PtrTy);
           auto *FT = llvm::FunctionType::get(DefaultRetTy, ParamTys, false);
@@ -762,6 +788,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   // Itanium call-site ranges are tight around individual calls rather than
   // aligned to machine blocks, so the address this call came from has to
   // survive lowering for the LSDA to be able to name it.
+  if (auto *Emitted = llvm::dyn_cast_or_null<llvm::CallBase>(Result))
+    AttachSafetyCallsite(*Emitted);
   if (auto *Emitted = llvm::dyn_cast_or_null<llvm::CallInst>(Result)) {
     llvm::Metadata *Address = llvm::ConstantAsMetadata::get(
         llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx), Op.Addr));

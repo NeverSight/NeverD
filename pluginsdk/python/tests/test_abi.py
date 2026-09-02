@@ -6,11 +6,17 @@ import unittest
 from scripts.check_python_plugin_sdk import (
     C_API_HEADER,
     check_concolic_abi,
+    check_sanitizer_abi,
     parse_c_api_header,
 )
 
 
 class ABIInventoryTests(unittest.TestCase):
+    def test_sanitizer_header_and_python_contract_do_not_drift(self) -> None:
+        errors: list[str] = []
+        check_sanitizer_abi(errors)
+        self.assertEqual(errors, [])
+
     def test_concolic_header_and_python_contract_do_not_drift(self) -> None:
         errors: list[str] = []
         check_concolic_abi(errors)
@@ -41,6 +47,24 @@ class ABIInventoryTests(unittest.TestCase):
             neverd_plugin.TranslationProofStatus,
             abi.TranslationProofStatus,
         )
+        self.assertIs(neverd_plugin.SanitizeStrategy, abi.SanitizeStrategy)
+        self.assertIs(neverd_plugin.SanitizeStatus, abi.SanitizeStatus)
+        self.assertIs(
+            neverd_plugin.SanitizePublicationOutcome,
+            abi.SanitizePublicationOutcome,
+        )
+        self.assertIs(
+            neverd_plugin.SanitizePublicationNamespace,
+            abi.SanitizePublicationNamespace,
+        )
+        self.assertIs(
+            neverd_plugin.SanitizePublicationGuarantee,
+            abi.SanitizePublicationGuarantee,
+        )
+        self.assertIs(
+            neverd_plugin.SanitizePublicationOperandBinding,
+            abi.SanitizePublicationOperandBinding,
+        )
 
         self.assertEqual([member.value for member in abi.ProofStatus], [0, 1, 2, 3, 4])
         self.assertEqual(
@@ -69,6 +93,150 @@ class ABIInventoryTests(unittest.TestCase):
             [member.value for member in abi.TranslationProofStatus],
             [0, 1, 2, 3, 4],
         )
+        self.assertEqual([member.value for member in abi.SanitizeStrategy], [0, 1])
+        self.assertEqual(
+            [member.value for member in abi.SanitizeStatus],
+            list(range(21)),
+        )
+        self.assertEqual(
+            [member.value for member in abi.SanitizePublicationOutcome],
+            [0, 1, 2, 3],
+        )
+        self.assertEqual(
+            [member.value for member in abi.SanitizePublicationNamespace],
+            [0, 1, 2],
+        )
+        self.assertEqual(
+            [member.value for member in abi.SanitizePublicationOperandBinding],
+            [0, 1, 2],
+        )
+        self.assertEqual(
+            {member.name: member.value for member in abi.SanitizePublicationGuarantee},
+            {
+                "NAMESPACE_ATOMIC": 1,
+                "DESTINATION_CREATE_EXCLUSIVE": 2,
+                "COMPARE_AND_SWAP": 4,
+                "CRASH_DURABLE": 8,
+            },
+        )
+
+    def test_sanitizer_structs_mirror_size_gated_append_only_layouts(self) -> None:
+        from neverd_plugin import abi
+
+        self.assertEqual(
+            [name for name, _ctype in abi.NeverDSanitizeOptionsV1._fields_],
+            [
+                "struct_size",
+                "strategy",
+                "max_paths",
+                "max_steps",
+                "max_loop",
+                "solver_conflicts",
+                "max_call_depth",
+                "max_summary_iterations",
+            ],
+        )
+        self.assertEqual(
+            [name for name, _ctype in abi.NeverDSanitizeResultV1._fields_],
+            [
+                "struct_size",
+                "ok",
+                "status",
+                "plan_version",
+                "findings",
+                "guarded_sites",
+                "guarded_functions",
+                "unsupported_sites",
+                "patched_functions",
+                "code_size",
+                "trampoline_count",
+                "publication_outcome",
+                "publication_receipt_version",
+                "publication_receipt_complete",
+                "publication_namespace_disposition",
+                "publication_guarantee_flags",
+                "publication_operand_binding",
+            ],
+        )
+        if ctypes.sizeof(ctypes.c_void_p) != 8:
+            self.skipTest("the published Python SDK supports 64-bit hosts")
+
+        self.assertEqual(ctypes.sizeof(abi.NeverDSanitizeOptionsV1), 40)
+        self.assertEqual(ctypes.sizeof(abi.NeverDSanitizeResultV1), 104)
+        self.assertIs(
+            dict(abi.NeverDSanitizeResultV1._fields_)["status"],
+            ctypes.c_uint32,
+        )
+        for field, expected in {
+            "struct_size": 0,
+            "strategy": 8,
+            "max_paths": 12,
+            "max_steps": 16,
+            "max_loop": 20,
+            "solver_conflicts": 24,
+            "max_call_depth": 32,
+            "max_summary_iterations": 36,
+        }.items():
+            with self.subTest(struct="options", field=field):
+                self.assertEqual(
+                    getattr(abi.NeverDSanitizeOptionsV1, field).offset,
+                    expected,
+                )
+        for field, expected in {
+            "struct_size": 0,
+            "ok": 8,
+            "status": 12,
+            "plan_version": 16,
+            "findings": 24,
+            "guarded_sites": 32,
+            "guarded_functions": 40,
+            "unsupported_sites": 48,
+            "patched_functions": 56,
+            "code_size": 64,
+            "trampoline_count": 72,
+            "publication_outcome": 80,
+            "publication_receipt_version": 84,
+            "publication_receipt_complete": 88,
+            "publication_namespace_disposition": 92,
+            "publication_guarantee_flags": 96,
+            "publication_operand_binding": 100,
+        }.items():
+            with self.subTest(struct="result", field=field):
+                self.assertEqual(
+                    getattr(abi.NeverDSanitizeResultV1, field).offset,
+                    expected,
+                )
+
+        # These are the C ABI's documented short-struct prefixes.  Keeping the
+        # offsets explicit makes append-only drift visible to Python callers.
+        self.assertEqual(ctypes.sizeof(ctypes.c_size_t), 8)
+        self.assertEqual(
+            abi.NeverDSanitizeResultV1.status.offset + ctypes.sizeof(ctypes.c_uint32),
+            16,
+        )
+
+        spec = abi.FUNCTION_SPECS["neverd_session_sanitize"]
+        self.assertEqual(
+            spec.c_arguments,
+            (
+                "neverd_session_t",
+                "const char *",
+                "const neverd_sanitize_options_v1 *",
+                "neverd_sanitize_result_v1 *",
+            ),
+        )
+        self.assertIs(spec.ownership, abi.Ownership.VALUE)
+        self.assertIs(
+            abi.FUNCTION_SPECS["neverd_sanitize_status_name"].ownership,
+            abi.Ownership.BORROWED_STRING,
+        )
+        self.assertIs(
+            abi.FUNCTION_SPECS["neverd_sanitize_status_name"].argtypes[0],
+            ctypes.c_uint32,
+        )
+        version_spec = abi.FUNCTION_SPECS["neverd_sanitize_publication_abi_version"]
+        self.assertEqual(version_spec.c_arguments, ())
+        self.assertIs(version_spec.restype, ctypes.c_uint32)
 
     def test_semantic_structs_mirror_the_append_only_c_layouts(self) -> None:
         from neverd_plugin import abi
@@ -133,6 +301,8 @@ class ABIInventoryTests(unittest.TestCase):
     def test_safety_options_mirror_the_versioned_c_layout(self) -> None:
         from neverd_plugin import abi
 
+        self.assertIn("NeverDSafetyOptions", abi.__all__)
+
         self.assertEqual(
             [name for name, _ctype in abi.NeverDSafetyOptions._fields_],
             [
@@ -143,12 +313,20 @@ class ABIInventoryTests(unittest.TestCase):
                 "solver_conflicts",
                 "sinks_path",
                 "sources_path",
+                "max_call_depth",
+                "max_summary_iterations",
             ],
         )
         if ctypes.sizeof(ctypes.c_void_p) == 8:
-            self.assertEqual(ctypes.sizeof(abi.NeverDSafetyOptions), 48)
+            self.assertEqual(ctypes.sizeof(abi.NeverDSafetyOptions), 56)
             self.assertEqual(abi.NeverDSafetyOptions.solver_conflicts.offset, 24)
             self.assertEqual(abi.NeverDSafetyOptions.sinks_path.offset, 32)
+            self.assertEqual(abi.NeverDSafetyOptions.max_call_depth.offset, 48)
+            self.assertEqual(
+                abi.NeverDSafetyOptions.max_summary_iterations.offset,
+                52,
+            )
+
 
     def test_lowir_concolic_structs_mirror_the_v1_c_layout(self) -> None:
         from neverd_plugin import abi

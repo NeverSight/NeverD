@@ -16,11 +16,37 @@
 
 #include "neverd/Common.h"
 
+#include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace neverd {
+
+/// Linker-authored identity shared by a PE CodeView RSDS record and its PDB
+/// Info stream.  The GUID bytes are kept in serialized order; comparing a
+/// formatted GUID string would introduce byte-order ambiguity.
+struct PDBBuildIdentity {
+  std::array<uint8_t, 16> Guid{};
+  uint32_t Age = 0;
+
+  bool isValid() const {
+    if (Age == 0)
+      return false;
+    for (uint8_t Byte : Guid)
+      if (Byte != 0)
+        return true;
+    return false;
+  }
+
+  bool operator==(const PDBBuildIdentity &Other) const = default;
+};
+
+/// Result of reducing every PE CodeView entry to one build identity.  A
+/// malformed entry and two different well-formed identities are both
+/// Ambiguous: neither may be repaired by a later record or by container order.
+enum class PDBIdentityState : uint8_t { Absent, Unique, Ambiguous };
 
 // ===--------------------------------------------------------------------===//
 // DynamicInfo — dynamic linking metadata
@@ -38,6 +64,12 @@ struct DynamicInfo {
 
   /// PDB path (PE/COFF) or build-id string (ELF).
   std::string PDBPath;
+
+  /// PE/COFF CodeView RSDS identity.  The optional is populated exactly when
+  /// CodeViewPDBIdentityState is Unique.  PDBPath remains a discovery hint and
+  /// is never evidence that a companion belongs to this image.
+  PDBIdentityState CodeViewPDBIdentityState = PDBIdentityState::Absent;
+  std::optional<PDBBuildIdentity> CodeViewPDBIdentity;
 
   /// Mach-O: 16-byte UUID from LC_UUID, hex-encoded.
   std::string UUID;

@@ -604,8 +604,8 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
   // in the displacement field.  Accept that interpretation only when the
   // displacement itself names mapped data; an unmapped PE RVA must instead be
   // added to its authenticated image-base occurrence below.
-  const bool GotOff = Disp != 0 && DispIsDataVA &&
-                      (!BaseIsFrame || FrameMayBeI386GOT);
+  const bool GotOff =
+      Disp != 0 && DispIsDataVA && (!BaseIsFrame || FrameMayBeI386GOT);
   if (Unscaled) {
     TableAddr = UnscaledTableAddr;
   } else if (GotOff) {
@@ -669,7 +669,7 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
           foldRegConstant(Img, Rec, BaseReg, FoldAt, {},
                           /*RequireMappedValue=*/true,
                           /*AllowUnmappedCOFFImageBase=*/
-                              Disp != 0 && Img.isCOFF());
+                          Disp != 0 && Img.isCOFF());
       if (!RelBaseOpt)
         return false;
       TableAddr = *RelBaseOpt;
@@ -891,11 +891,10 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
         // is used only for the shared span/owner predicate; a separate check
         // below requires exactly one real loader-side field record.
         const RelocatedAddressField ExactDecodedField{
-            0, Occurrence.TargetVA, Occurrence.Width,
-            Occurrence.TargetOwnerVA};
+            0, Occurrence.TargetVA, Occurrence.Width, Occurrence.TargetOwnerVA};
         if (!authenticatedSourceAnchorExemptionMatches(
-                *Exemption, TableAddr, LoadWidth, RelocRun,
-                Exemption->FieldVA, ExactDecodedField))
+                *Exemption, TableAddr, LoadWidth, RelocRun, Exemption->FieldVA,
+                ExactDecodedField))
           continue;
 
         const auto Field =
@@ -919,8 +918,7 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
             Img.InstructionAddressMaterializations.find(Exemption->FieldVA);
         if (Materialized != Img.InstructionAddressMaterializations.end() &&
             Occurrence.DefinesOutput &&
-            !Occurrence.PCRelativeFromInstructionEnd &&
-            Occurrence.Width == 4 &&
+            !Occurrence.PCRelativeFromInstructionEnd && Occurrence.Width == 4 &&
             Materialized->second.TargetVA == Occurrence.TargetVA &&
             Materialized->second.TargetOwnerVA == Occurrence.TargetOwnerVA)
           ++LoaderFieldMatches;
@@ -928,8 +926,7 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
             Img.ARMRelativeLiteralFields.find(Exemption->FieldVA);
         if (ARMRelative != Img.ARMRelativeLiteralFields.end() &&
             Occurrence.DefinesOutput &&
-            !Occurrence.PCRelativeFromInstructionEnd &&
-            Occurrence.Width == 4 &&
+            !Occurrence.PCRelativeFromInstructionEnd && Occurrence.Width == 4 &&
             ARMRelative->second.TargetVA == Occurrence.TargetVA &&
             ARMRelative->second.TargetOwnerVA == Occurrence.TargetOwnerVA)
           ++LoaderFieldMatches;
@@ -992,12 +989,12 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
           AuthenticatedRelocationFreeOccurrenceSources.size();
       if (!chargeAuthenticatedSourceEvidence(AuthenticatedOccurrenceCount))
         return false;
-      auto MatchesAuthenticatedSource = [&](const AuthenticatedOccurrenceSource
-                                                &Source) {
-        return Source.Exemption.TargetVA == Occurrence.TargetVA &&
-               Source.Exemption.TargetOwnerVA == Occurrence.TargetOwnerVA &&
-               Source.OccurrenceIndex == OccurrenceIndex;
-      };
+      auto MatchesAuthenticatedSource =
+          [&](const AuthenticatedOccurrenceSource &Source) {
+            return Source.Exemption.TargetVA == Occurrence.TargetVA &&
+                   Source.Exemption.TargetOwnerVA == Occurrence.TargetOwnerVA &&
+                   Source.OccurrenceIndex == OccurrenceIndex;
+          };
       const bool IsAuthenticatedSource =
           std::any_of(AuthenticatedLoaderOccurrenceSources.begin(),
                       AuthenticatedLoaderOccurrenceSources.end(),
@@ -1108,8 +1105,7 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
                                   int Before) -> std::optional<bool> {
         size_t WorkRemaining = limits::kMaxSliceDepth * 4;
         std::function<std::optional<bool>(NdVar, int, int)> Visit =
-            [&](NdVar Value, int From,
-                int Depth) -> std::optional<bool> {
+            [&](NdVar Value, int From, int Depth) -> std::optional<bool> {
           if (WorkRemaining == 0 || Depth > limits::kMaxSliceDepth)
             return std::nullopt;
           --WorkRemaining;
@@ -1165,11 +1161,10 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
           // transport.  Publication still requires the point-sensitive
           // anchor occurrence in branchTargetDependsOnTableLoad below.
           if (V.isReg()) {
-            auto Folded = foldRegConstant(
-                Img, Rec, V.Offset, AddAddr, {},
-                /*RequireMappedValue=*/true,
-                /*AllowUnmappedCOFFImageBase=*/
-                    Disp != 0 && Img.isCOFF());
+            auto Folded = foldRegConstant(Img, Rec, V.Offset, AddAddr, {},
+                                          /*RequireMappedValue=*/true,
+                                          /*AllowUnmappedCOFFImageBase=*/
+                                          Disp != 0 && Img.isCOFF());
             if (Folded)
               return *Folded;
           }

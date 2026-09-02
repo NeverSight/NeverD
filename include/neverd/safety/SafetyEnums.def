@@ -35,6 +35,12 @@
 #ifndef SAFETY_REPLAY_BINDING_ROLE
 #define SAFETY_REPLAY_BINDING_ROLE(ID, SPELLING)
 #endif
+#ifndef SAFETY_REACHABILITY_STATUS
+#define SAFETY_REACHABILITY_STATUS(ID, SPELLING)
+#endif
+#ifndef SAFETY_ENTRY_KIND
+#define SAFETY_ENTRY_KIND(ID, SPELLING)
+#endif
 
 //===----------------------------------------------------------------------===//
 // Tracks
@@ -118,6 +124,20 @@ SAFETY_REPLAY_BINDING_ROLE(Extent, "extent")
 SAFETY_REPLAY_BINDING_ROLE(Success, "success")
 SAFETY_REPLAY_BINDING_ROLE(Byte, "byte")
 
+//===----------------------------------------------------------------------===//
+// Known-entry interprocedural reachability
+//===----------------------------------------------------------------------===//
+
+SAFETY_REACHABILITY_STATUS(Reachable, "REACHABLE")
+SAFETY_REACHABILITY_STATUS(Unreachable, "UNREACHABLE")
+SAFETY_REACHABILITY_STATUS(Unknown, "UNKNOWN")
+
+SAFETY_ENTRY_KIND(Image, "image")
+SAFETY_ENTRY_KIND(Application, "application")
+SAFETY_ENTRY_KIND(Export, "export")
+
+#undef SAFETY_ENTRY_KIND
+#undef SAFETY_REACHABILITY_STATUS
 #undef SAFETY_REPLAY_BINDING_ROLE
 #undef SAFETY_REPLAY_INPUT_KIND
 #undef SAFETY_ARG_FLOW

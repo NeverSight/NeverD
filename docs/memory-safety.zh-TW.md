@@ -119,9 +119,58 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 
 ---
 
+## 從已知進入點出發的程序間可達性
+
+每個發現都帶有三項彼此獨立、不可混為一談的結論：
+
+| 欄位 | 回答的問題 | 取值 |
+|------|------------|------|
+| `verdict` | 區域安全分析對該操作證明了什麼？ | `SAFE`、`UNSAFE`、`UNKNOWN` |
+| `reachability.status` | 所在函式是否位於從已知原生進入點恢復出的控制路徑上？ | `REACHABLE`、`UNREACHABLE`、`UNKNOWN` |
+| `reachability.attacker_control` | 參數切片對該發現處的攻擊者影響證明了什麼？ | `TAINTED`、`BOUNDED`、`UNKNOWN` |
+
+可達性是增量證據，不會改寫發現的 `verdict`、報告的彙總裁決或 CLI 結束碼。
+因此，區域已證明的越界可以同時是 `verdict=UNSAFE` 與
+`reachability.status=UNREACHABLE`。要求存在可執行攻擊路徑的消費端必須同時檢查
+裁決和可達性欄位。
+
+根包括已識別的應用程式進入點（`application`，如 `main` 或 `WinMain`）、映像進入點
+（`image`）和匯出常式（`export`）。同一函式具有多種根身分時，確定性優先順序為
+`application`、`image`、`export`。`reachability.entry` 記錄根的 `va`、`name`
+與 `kind`。對於可達的非根發現，`call_chain` 還給出由精確內部邊組成的最短確定性
+路徑；每條邊包含 `caller_va`、呼叫點 `call_va`、`callee_va`，以及值為
+`direct` 或 `indirect` 的 `kind`。
+
+只有至少存在一個根、內部呼叫清單完整、深度預算未耗盡且確實沒有路徑時，才給出
+`UNREACHABLE`。對於尚未由其他正面證據證明可達的函式，根缺失、函式身分重複或有
+歧義、CFG／呼叫清單不一致、未解析的可執行內部目標，以及呼叫深度耗盡，都會阻止否定
+證明並給出 `reachability.status=UNKNOWN`，並在適用時
+附帶 `reason` 與 `budget_hit`。未知 ABI、參數寬度不相符、僅可變參數 slot、不完整
+切片，以及深度或摘要預算耗盡，也會讓尚未證明的攻擊者控制保持 UNKNOWN；已證明的
+事實繼續有效，分析不會臆造傳播。
+
+報告層級計數器按發現計數，而不是按函式或路徑計數。`control_reachable` 統計
+`status=REACHABLE`；`attacker_reachable` 是其中還滿足
+`attacker_control=TAINTED` 的子集。`reachability_unknown` 與 `unreachable` 統計
+另外兩種控制狀態。它們不同於按裁決統計的 `safe`、`unsafe` 與 `unknown`。
+
+---
+
 ## 預算、輸出與繫結
 
-獵取探索與求解器受預算約束（`--max-paths`、`--max-steps`、`--max-loop`、`--solver-conflicts`）；預算耗盡給出 UNKNOWN。兩條命令都列印 JSON，並尊重 `-o`。結束碼：SAFE 為 `0`，UNSAFE 為 `2`，UNKNOWN 或出錯為 `1`。
+獵取探索與求解器受預算約束（`--max-paths`、`--max-steps`、`--max-loop`、`--solver-conflicts`）。程序間分析有兩個獨立限制：`max_call_depth` 限制從已知進入點出發的內部呼叫邊數，`max_summary_iterations` 限制攻擊者控制固定點輪數。預設值分別為 64 條邊，以及有效深度上限加一輪。預算耗盡依上文所述閉合失敗。耗盡 `max_call_depth` 可使尚未到達的函式保持 `status=UNKNOWN`；耗盡 `max_summary_iterations` 不會抹去結構見證，因此 `status=REACHABLE` 可以與 `attacker_control=UNKNOWN`、`budget_hit=true` 同時存在。兩條命令都列印 JSON，並尊重 `-o`。結束碼：SAFE 為 `0`，UNSAFE 為 `2`，UNKNOWN 或出錯為 `1`。
+
+每個公開入口都以 0 選擇引擎預設值：
+
+| 介面 | 控制深度 | 攻擊者摘要 |
+|------|----------|------------|
+| CLI（`audit` 與 `hunt`） | `--max-call-depth <n>` | `--max-summary-iterations <n>` |
+| C（`neverd_safety_options`） | `max_call_depth` | `max_summary_iterations` |
+| Python（`Session.audit()` / `Session.hunt()`） | `max_call_depth=<n>` | `max_summary_iterations=<n>` |
+
+C 呼叫端應將 `neverd_safety_options` 歸零，並設定
+`struct_size=sizeof(neverd_safety_options)`；舊結構大小仍採用預設值。Python 在呼叫
+C API 前將兩項都驗證為無號 32 位元整數。
 
 同一分析也可透過 C API（`neverd_session_audit_json` / `neverd_session_hunt_json`，帶版本化 `neverd_safety_options`）和 Python SDK（`Session.audit()` / `Session.hunt()`）使用。
 
@@ -143,11 +192,12 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
   "capacity": 16,
   "capacity_kind": "exact",
   "corroboration": "path predicate and overflow are jointly satisfiable",
+  "reachability": { "status": "REACHABLE", "attacker_control": "TAINTED", "budget_hit": false, "entry": { "va": "0x1000", "name": "main", "kind": "application" }, "call_chain": [{ "caller_va": "0x1000", "call_va": "0x1080", "callee_va": "0x1100", "kind": "direct" }] },
   "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" }, "candidate_values": [{ "name": "copy_length", "value": "17" }, { "name": "argv[1]", "value": "16 bytes" }], "replayable": false, "replay": { "adapter": "process-input-v1", "reason": "argv input is not supported by process-input-v1" }, "symbolic_model": [{ "id": 0, "name": "copy_len", "width": 64, "value_hex": "0x11", "origin": "input" }] }
 }
 ```
 
-`replayable` 是衍生證據，而非獨立承諾：僅當 `replay` 包含供 `process-input-v1` 轉接器使用的完整輸入計畫時才為真。計畫記錄精確的環境位元組、使用時第一次受支援的 `read(0)` 系列標準輸入位元組序列，以及從求解器賦值 ID 到這些輸入的綁定；無法建立時由 `replay.reason` 說明原因。這些欄位以增量方式加入；頂層 `schema_version` 仍為 `1`。
+`replayable` 是衍生證據，而非獨立承諾：僅當 `replay` 包含供 `process-input-v1` 轉接器使用的完整輸入計畫時才為真。計畫記錄精確的環境位元組、使用時第一次受支援的 `read(0)` 系列標準輸入位元組序列，以及從求解器賦值 ID 到這些輸入的綁定；無法建立時由 `replay.reason` 說明原因。重播與可達性欄位都以增量方式加入；頂層 `schema_version` 仍為 `1`。
 
 ---
 
@@ -158,4 +208,4 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 - 已入目錄的寬字元與追加拷貝，在元素位元組寬度或目的字串既有長度未恢復時保持 UNKNOWN。出參配置器與條件 `realloc` 的所有權轉移無法證明時也保持 UNKNOWN。
 - **P0**（本發行，三種格式）：sink 目錄、參數預過濾、拷貝越界獵取、堆積生命週期稽核。每個測試主機都執行 PE、ELF、Mach-O × x86-64、AArch64 六個已檢入樣例。
 - **P1**：堆疊/全域越界、未初始化區域讀取與格式字串檢查已提供；更豐富的 PDB 堆疊型別和更多平台配置器仍是增量覆蓋項，缺少精確摘要時保持 UNKNOWN。
-- **P2**：patch 插入的執行階段檢查、程序間攻擊者可達性。
+- 目前切片已涵蓋已知進入點、結構化程序間可達性和攻擊者參數的單調傳播。獨立的實驗性 `lowir-concolic-v1` 轉接器現可在強制要求的原生格式／架構矩陣上，提供由暫存器種子驅動、經重播驗證的分支翻轉；它始終不窮舉，也不改變安全裁決。實驗性 `binary-sanitizer-v1` 現可在 Darwin 上提供全點位或拒絕的計數寫入防護與經驗證的發佈；receipt 只驗證交易期間持有的目錄物件，而不是可持續複核的原路徑綁定。更廣的 `process-replay-v1` 仍只有故障關閉的 Phase 0 計畫／協調器與可用性邊界，目前沒有主機執行原生重播。

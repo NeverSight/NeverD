@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import ctypes
 from dataclasses import dataclass
-from enum import Enum, IntEnum
+from enum import Enum, IntEnum, IntFlag
 
 
 SessionHandle = ctypes.c_void_p
@@ -205,6 +205,113 @@ class TranslationProofStatus(IntEnum):
     DIFFERENT = 2
     UNKNOWN = 3
     INVALID = 4
+
+
+class SanitizeStrategy(IntEnum):
+    """Native binary publication strategy for strict sanitization."""
+
+    SECTION = 0
+    INPLACE = 1
+
+
+class SanitizeStatus(IntEnum):
+    """Stable terminal state of a strict sanitizer transaction."""
+
+    OK = 0
+    INVALID_ARGUMENT = 1
+    INVALID_SESSION = 2
+    NOT_LOADED = 3
+    UNSUPPORTED_TARGET = 4
+    PIPELINE_FAILED = 5
+    INCOMPLETE_COVERAGE = 6
+    HUNT_INCOMPLETE = 7
+    METADATA_INVALID = 8
+    PLAN_INCOMPLETE = 9
+    GUARD_FAILED = 10
+    IO_FAILED = 11
+    PATCH_FAILED = 12
+    RECEIPT_MISMATCH = 13
+    RELOAD_FAILED = 14
+    AUTHENTICATION_FAILED = 15
+    PUBLISH_FAILED = 16
+    SIGNATURE_UNSUPPORTED = 17
+    SIGNING_FAILED = 18
+    PUBLISH_INDETERMINATE = 19
+    PUBLISHED_INCOMPLETE = 20
+
+
+class SanitizePublicationOutcome(IntEnum):
+    """Whether strict sanitizer publication changed the destination namespace."""
+
+    NOT_ATTEMPTED = 0
+    NOT_PUBLISHED = 1
+    PUBLISHED = 2
+    INDETERMINATE = 3
+
+
+class SanitizePublicationNamespace(IntEnum):
+    """The namespace operation authenticated by a publication receipt."""
+
+    NONE = 0
+    CREATE_EXCLUSIVE = 1
+    NO_CHANGE = 2
+
+
+class SanitizePublicationGuarantee(IntFlag):
+    """Independent guarantees established by the native publication backend."""
+
+    NONE = 0
+    NAMESPACE_ATOMIC = 1 << 0
+    DESTINATION_CREATE_EXCLUSIVE = 1 << 1
+    COMPARE_AND_SWAP = 1 << 2
+    CRASH_DURABLE = 1 << 3
+
+
+class SanitizePublicationOperandBinding(IntEnum):
+    """How the publication source operand remained bound to its candidate."""
+
+    NONE = 0
+    ACCESS_CONTROL_CONFINED_DISTINCT_CREDENTIALS = 1
+    KERNEL_HELD_OBJECT = 2
+
+
+class NeverDSanitizeOptionsV1(ctypes.Structure):
+    """Append-only, size-gated strict sanitizer options."""
+
+    _fields_ = [
+        ("struct_size", ctypes.c_size_t),
+        ("strategy", ctypes.c_uint32),
+        ("max_paths", ctypes.c_uint32),
+        ("max_steps", ctypes.c_uint32),
+        ("max_loop", ctypes.c_uint32),
+        ("solver_conflicts", ctypes.c_uint64),
+        ("max_call_depth", ctypes.c_uint32),
+        ("max_summary_iterations", ctypes.c_uint32),
+    ]
+
+
+class NeverDSanitizeResultV1(ctypes.Structure):
+    """Append-only, size-gated result from one sanitizer transaction."""
+
+    _fields_ = [
+        ("struct_size", ctypes.c_size_t),
+        ("ok", ctypes.c_int),
+        ("status", ctypes.c_uint32),
+        ("plan_version", ctypes.c_uint32),
+        ("findings", ctypes.c_uint64),
+        ("guarded_sites", ctypes.c_uint64),
+        ("guarded_functions", ctypes.c_uint64),
+        ("unsupported_sites", ctypes.c_uint64),
+        ("patched_functions", ctypes.c_uint64),
+        ("code_size", ctypes.c_uint64),
+        ("trampoline_count", ctypes.c_uint64),
+        ("publication_outcome", ctypes.c_uint32),
+        ("publication_receipt_version", ctypes.c_uint32),
+        ("publication_receipt_complete", ctypes.c_uint32),
+        ("publication_namespace_disposition", ctypes.c_uint32),
+        ("publication_guarantee_flags", ctypes.c_uint32),
+        ("publication_operand_binding", ctypes.c_uint32),
+    ]
 
 
 class NeverDSimplifyOptions(ctypes.Structure):
@@ -482,6 +589,8 @@ class NeverDSafetyOptions(ctypes.Structure):
         ("solver_conflicts", ctypes.c_ulonglong),
         ("sinks_path", ctypes.c_char_p),
         ("sources_path", ctypes.c_char_p),
+        ("max_call_depth", ctypes.c_uint32),
+        ("max_summary_iterations", ctypes.c_uint32),
     ]
 
 
@@ -497,6 +606,7 @@ class Ownership(Enum):
 _C_TYPES: dict[str, object] = {
     "void": None,
     "int": ctypes.c_int,
+    "uint32_t": ctypes.c_uint32,
     "unsigned": ctypes.c_uint,
     "unsigned short": ctypes.c_ushort,
     "unsigned long long": ctypes.c_ulonglong,
@@ -511,6 +621,7 @@ _C_TYPES: dict[str, object] = {
     "neverd_translate_error_code_t": ctypes.c_uint32,
     "neverd_translate_semantic_stop_t": ctypes.c_uint32,
     "neverd_translate_proof_status_t": ctypes.c_uint32,
+    "neverd_sanitize_status_t": ctypes.c_uint32,
     "const char *": ctypes.c_char_p,
     "unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
     "const unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
@@ -537,6 +648,8 @@ _C_TYPES: dict[str, object] = {
         NeverDLowIRConcolicOptionsV1
     ),
     "const neverd_safety_options *": ctypes.POINTER(NeverDSafetyOptions),
+    "const neverd_sanitize_options_v1 *": ctypes.POINTER(NeverDSanitizeOptionsV1),
+    "neverd_sanitize_result_v1 *": ctypes.POINTER(NeverDSanitizeResultV1),
 }
 
 
@@ -771,6 +884,23 @@ _declare(
         "const neverd_safety_options *",
     ],
     ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_sanitize_status_name",
+    "const char *",
+    ["neverd_sanitize_status_t"],
+    ownership=Ownership.BORROWED_STRING,
+)
+_declare("neverd_sanitize_publication_abi_version", "uint32_t", [])
+_declare(
+    "neverd_session_sanitize",
+    "int",
+    [
+        "neverd_session_t",
+        "const char *",
+        "const neverd_sanitize_options_v1 *",
+        "neverd_sanitize_result_v1 *",
+    ],
 )
 _declare(
     "neverd_patch_from_ir",
@@ -1176,6 +1306,9 @@ __all__ = [
     "NeverDOptimizeLLVMResult",
     "NeverDLowIRConcolicOptionsV1",
     "NeverDLowIRConcolicRegisterSeedV1",
+    "NeverDSafetyOptions",
+    "NeverDSanitizeOptionsV1",
+    "NeverDSanitizeResultV1",
     "NeverDSimplifyOptions",
     "NeverDSimplifyResult",
     "NeverDSynthesizeOptions",
@@ -1195,6 +1328,12 @@ __all__ = [
     "PluginTermCallback",
     "PluginType",
     "ProofStatus",
+    "SanitizePublicationGuarantee",
+    "SanitizePublicationNamespace",
+    "SanitizePublicationOperandBinding",
+    "SanitizePublicationOutcome",
+    "SanitizeStatus",
+    "SanitizeStrategy",
     "SessionHandle",
     "SimplifyEvidence",
     "SimplifyOutcome",

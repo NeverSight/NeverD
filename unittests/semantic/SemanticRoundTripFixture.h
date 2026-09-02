@@ -1,4 +1,5 @@
-//===- SemanticRoundTripFixture.h - Lift roundtrip test fixture --*- C++ -*-===//
+//===- SemanticRoundTripFixture.h - Lift roundtrip test fixture --*- C++
+//-*-===//
 //
 // NeverD Decompiler — Semantic Roundtrip Verification Tests
 //
@@ -28,8 +29,9 @@
 
 #include "../TestProcess.h"
 #include "UnicornSemanticFixture.h"
-#include "neverd/object/SectionNames.h"
+
 #include "neverd/libc/LibCNames.h"
+#include "neverd/object/SectionNames.h"
 #include "neverd/sdk/NeverDCAPI.h"
 
 #include "llvm/Object/ELFObjectFile.h"
@@ -92,16 +94,17 @@ struct RoundTripTC {
   int UcCpuModel = -1;
 
   /// Link a freestanding memcpy/memset/memmove into both the original and
-  /// recompiled images so a mem* builtin the source emits (e.g. clang's `memcpy`
-  /// for a >=5-entry local computed-goto table, or any stack-array memset) resolves
-  /// to real, Unicorn-runnable code instead of the unresolved -nostdlib
-  /// placeholder.  Default ON: the helper links into BOTH the original and the
-  /// recompiled image, so a test that copies/zeroes a buffer genuinely executes it
-  /// on both sides instead of comparing two un-cleared stack-garbage runs that only
-  /// happen to match (an "accidental pass").  The harness gates the actual link on
-  /// objReferencesMemBuiltins, so a test that emits no mem* call is unaffected.
-  /// (External-mem* argument recovery — the VA-0 arity collision and the i386
-  /// cdecl stack-arg order — is fixed in MedABIPass; see §15.2 arm32-memset-note.)
+  /// recompiled images so a mem* builtin the source emits (e.g. clang's
+  /// `memcpy` for a >=5-entry local computed-goto table, or any stack-array
+  /// memset) resolves to real, Unicorn-runnable code instead of the unresolved
+  /// -nostdlib placeholder.  Default ON: the helper links into BOTH the
+  /// original and the recompiled image, so a test that copies/zeroes a buffer
+  /// genuinely executes it on both sides instead of comparing two un-cleared
+  /// stack-garbage runs that only happen to match (an "accidental pass").  The
+  /// harness gates the actual link on objReferencesMemBuiltins, so a test that
+  /// emits no mem* call is unaffected. (External-mem* argument recovery — the
+  /// VA-0 arity collision and the i386 cdecl stack-arg order — is fixed in
+  /// MedABIPass; see §15.2 arm32-memset-note.)
   bool LinkMemBuiltins = true;
 
   /// Initial FPCR value for AArch64 emulation.  This lets a test exercise an
@@ -139,13 +142,11 @@ protected:
       const size_t NameAt = IR.find(DefinitionName, SearchFrom);
       if (NameAt == std::string_view::npos)
         break;
-      const size_t LineBegin =
-          NameAt == 0 ? 0 : IR.rfind('\n', NameAt - 1) + 1;
+      const size_t LineBegin = NameAt == 0 ? 0 : IR.rfind('\n', NameAt - 1) + 1;
       const size_t LineEnd = IR.find('\n', NameAt);
       const std::string_view DefinitionLine = IR.substr(
-          LineBegin, LineEnd == std::string_view::npos
-                         ? IR.size() - LineBegin
-                         : LineEnd - LineBegin);
+          LineBegin, LineEnd == std::string_view::npos ? IR.size() - LineBegin
+                                                       : LineEnd - LineBegin);
       if (DefinitionLine.find("define ") != std::string_view::npos) {
         const size_t BodyBegin = IR.find('{', NameAt + DefinitionName.size());
         if (BodyBegin == std::string_view::npos)
@@ -177,9 +178,9 @@ protected:
     // suites never share files. Suite teardown must NOT wipe this root (other
     // suites follow it in the same process), only per-test guards clean up.
     if (TmpDir.empty())
-      TmpDir = fs::temp_directory_path() /
-               ("neverd_rt_" +
-                std::to_string(neverd::test::currentProcessId()));
+      TmpDir =
+          fs::temp_directory_path() /
+          ("neverd_rt_" + std::to_string(neverd::test::currentProcessId()));
     std::error_code EC;
     fs::create_directories(TmpDir, EC);
   }
@@ -194,8 +195,8 @@ protected:
   // --- Architecture-specific roundtrip runners ---
 
   void roundTripX64(const RoundTripTC &TC) {
-    roundTripImpl(TC, "x86_64-linux-gnu", "x86_64-linux-gnu",
-                  UC_ARCH_X86, UC_MODE_64, UC_X86_REG_RSP,
+    roundTripImpl(TC, "x86_64-linux-gnu", "x86_64-linux-gnu", UC_ARCH_X86,
+                  UC_MODE_64, UC_X86_REG_RSP,
                   {UC_X86_REG_RDI, UC_X86_REG_RSI, UC_X86_REG_RDX,
                    UC_X86_REG_RCX, UC_X86_REG_R8, UC_X86_REG_R9},
                   UC_X86_REG_RAX);
@@ -205,22 +206,21 @@ protected:
   // the 32-bit result returns in EAX.  emulateFunction lays out the cdecl frame
   // when it sees UC_ARCH_X86 + UC_MODE_32.
   void roundTripX86(const RoundTripTC &TC) {
-    roundTripImpl(TC, "i386-linux-gnu", "i386-linux-gnu",
-                  UC_ARCH_X86, UC_MODE_32, UC_X86_REG_ESP,
-                  {}, UC_X86_REG_EAX);
+    roundTripImpl(TC, "i386-linux-gnu", "i386-linux-gnu", UC_ARCH_X86,
+                  UC_MODE_32, UC_X86_REG_ESP, {}, UC_X86_REG_EAX);
   }
 
   void roundTripAArch64(const RoundTripTC &TC) {
-    roundTripImpl(TC, "aarch64-linux-gnu", "aarch64-linux-gnu",
-                  UC_ARCH_ARM64, static_cast<uc_mode>(0), UC_ARM64_REG_SP,
+    roundTripImpl(TC, "aarch64-linux-gnu", "aarch64-linux-gnu", UC_ARCH_ARM64,
+                  static_cast<uc_mode>(0), UC_ARM64_REG_SP,
                   {UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2,
                    UC_ARM64_REG_X3, UC_ARM64_REG_X4, UC_ARM64_REG_X5},
                   UC_ARM64_REG_X0);
   }
 
   void roundTripARM32(const RoundTripTC &TC) {
-    roundTripImpl(TC, "armv7-linux-gnueabi", "armv7-linux-gnueabi",
-                  UC_ARCH_ARM, UC_MODE_ARM, UC_ARM_REG_SP,
+    roundTripImpl(TC, "armv7-linux-gnueabi", "armv7-linux-gnueabi", UC_ARCH_ARM,
+                  UC_MODE_ARM, UC_ARM_REG_SP,
                   {UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3},
                   UC_ARM_REG_R0, true);
   }
@@ -292,7 +292,8 @@ private:
       // not run, e.g. transient EAGAIN), backing off briefly each time.
       if (R.Code == 0 || !R.Out.empty() || !R.Err.empty())
         break;
-      std::this_thread::sleep_for(std::chrono::milliseconds(20 * (Attempt + 1)));
+      std::this_thread::sleep_for(
+          std::chrono::milliseconds(20 * (Attempt + 1)));
     }
     return R;
   }
@@ -317,7 +318,8 @@ private:
       F.close();
       if (fs::exists(CPath))
         break;
-      std::this_thread::sleep_for(std::chrono::milliseconds(20 * (Attempt + 1)));
+      std::this_thread::sleep_for(
+          std::chrono::milliseconds(20 * (Attempt + 1)));
     }
 
     // ---- Step 2: Compile with clang ----
@@ -325,8 +327,8 @@ private:
     std::string EffTarget =
         TC.ClangTargetOverride.empty() ? ClangTarget : TC.ClangTargetOverride;
     std::string CompileCmd =
-        "clang -target " + EffTarget +
-        " -nostdlib -c " + OptFlag + " -fno-stack-protector -fno-exceptions"
+        "clang -target " + EffTarget + " -nostdlib -c " + OptFlag +
+        " -fno-stack-protector -fno-exceptions"
         " -fno-unwind-tables -fno-asynchronous-unwind-tables";
     // Normalize cross-target defaults across Clang distributions.  Apple Clang
     // enables Cortex-A15 FP/NEON instructions for gnueabi and selects Pentium 4
@@ -356,11 +358,12 @@ private:
     // images so the call resolves to real, Unicorn-runnable code on each side.
     // The gate on objReferencesMemBuiltins keeps a test that emits no mem* call
     // byte-for-byte unchanged.  The 32-bit external-mem* argument recovery (the
-    // VA-0 arity collision on ARM32 and the i386 cdecl stack-arg order) is fixed
-    // in MedABIPass and regression-covered by AllPlatform_MemBuiltinLiveRTTests
-    // (see §15.2 arm32-memset-note).
+    // VA-0 arity collision on ARM32 and the i386 cdecl stack-arg order) is
+    // fixed in MedABIPass and regression-covered by
+    // AllPlatform_MemBuiltinLiveRTTests (see §15.2 arm32-memset-note).
     if (TC.LinkMemBuiltins && objReferencesMemBuiltins(ObjPath))
-      MemHelperObj = compileMemHelper(EffTarget, IsARM32, TC.ClangTargetOverride);
+      MemHelperObj =
+          compileMemHelper(EffTarget, IsARM32, TC.ClangTargetOverride);
 
     // ---- Step 3: Extract original .text (+ link if relocations / rodata) ----
     SectionData OrigSections;
@@ -378,8 +381,8 @@ private:
       }
       if (NeedLink) {
         bool OriginalLinkFailed = false;
-        auto Linked = linkAndExtract(ObjPath, TC.Name + "_orig", UcArch,
-                                     UcMode, &OriginalLinkFailed);
+        auto Linked = linkAndExtract(ObjPath, TC.Name + "_orig", UcArch, UcMode,
+                                     &OriginalLinkFailed);
         // The object has relocations/data or split text — only the LINKED image
         // has correct addresses and section layout.  Do NOT fall back to the
         // unlinked object: unresolved relocations emulate to wrong/unmapped
@@ -405,16 +408,17 @@ private:
     packSections(OrigSections);
 
     // ---- Step 4: Run original in Unicorn ----
-    auto OrigState = emulateFunction(
-        UcArch, UcMode, OrigSections.Text, TC.Args, ParamRegs, SPReg, RetReg,
-        IsARM32, {}, 0, TC.UcCpuModel, TC.InitialAArch64FPCR);
+    auto OrigState = emulateFunction(UcArch, UcMode, OrigSections.Text, TC.Args,
+                                     ParamRegs, SPReg, RetReg, IsARM32, {}, 0,
+                                     TC.UcCpuModel, TC.InitialAArch64FPCR);
     ASSERT_TRUE(OrigState.OK)
         << "Original emulation failed: " << OrigState.Error
         << "\n  Test: " << TC.Name;
 
     // ---- Step 5: Lift and recompile with NeverD ----
-    int Ret = neverd_lift_to_obj(Sess, ObjPath.c_str(),
-                                  /*NoOpt=*/TC.NoOpt ? 1 : 0, /*MaxFunctions=*/0);
+    int Ret =
+        neverd_lift_to_obj(Sess, ObjPath.c_str(),
+                           /*NoOpt=*/TC.NoOpt ? 1 : 0, /*MaxFunctions=*/0);
     if (Ret != 0) {
       const char *Err = neverd_last_error(Sess);
       GTEST_SKIP() << "Lift-to-obj failed: " << (Err ? Err : "unknown")
@@ -449,7 +453,7 @@ private:
     int FuncCount = neverd_roundtrip_func_count(Sess);
     if (FuncCount == 0) {
       GTEST_SKIP() << "No functions in roundtrip result"
-                    << "\n  Test: " << TC.Name;
+                   << "\n  Test: " << TC.Name;
       return;
     }
 
@@ -482,9 +486,9 @@ private:
     // ---- Step 8: Compare return values ----
     EXPECT_EQ(OrigState.RetVal, RecompState.RetVal)
         << "Return value mismatch after roundtrip"
-        << "\n  Test: " << TC.Name
-        << "\n  Original:   0x" << std::hex << OrigState.RetVal
-        << "\n  Recompiled: 0x" << RecompState.RetVal << std::dec;
+        << "\n  Test: " << TC.Name << "\n  Original:   0x" << std::hex
+        << OrigState.RetVal << "\n  Recompiled: 0x" << RecompState.RetVal
+        << std::dec;
   }
 
   // --- Unicorn emulation of a C function ---
@@ -498,12 +502,10 @@ private:
   FuncResult emulateFunction(uc_arch Arch, uc_mode Mode,
                              const std::vector<uint8_t> &Code,
                              const std::vector<uint64_t> &Args,
-                             const std::vector<int> &ParamRegs,
-                             int SPReg, int RetReg,
-                             bool IsARM32 = false,
+                             const std::vector<int> &ParamRegs, int SPReg,
+                             int RetReg, bool IsARM32 = false,
                              const std::vector<uint8_t> &Rodata = {},
-                             uint64_t RodataAddr = 0,
-                             int UcCpuModel = -1,
+                             uint64_t RodataAddr = 0, int UcCpuModel = -1,
                              uint64_t InitialAArch64FPCR = 0) {
     FuncResult R;
     uc_engine *UC = nullptr;
@@ -520,11 +522,11 @@ private:
       uc_ctl_set_cpu_model(UC, Model);
     }
 
-    // The function returns to (and emulation stops at) the address just past the
-    // code image.  ARM `bx`/`pop {pc}` treats the low bit of a loaded PC as a
-    // Thumb-mode select, so an ODD landing address (e.g. when packed .rodata
-    // makes the image an odd length) silently switches to Thumb at addr&~1 — the
-    // PC then never equals the `until` value and runs into unmapped memory.
+    // The function returns to (and emulation stops at) the address just past
+    // the code image.  ARM `bx`/`pop {pc}` treats the low bit of a loaded PC as
+    // a Thumb-mode select, so an ODD landing address (e.g. when packed .rodata
+    // makes the image an odd length) silently switches to Thumb at addr&~1 —
+    // the PC then never equals the `until` value and runs into unmapped memory.
     // Align the landing address up to 4 bytes so it stays ARM-mode and matches.
     uint64_t RetLanding = (Code.size() + 3) & ~3ULL;
     uint64_t CodeMapSize = (RetLanding + 0x1000) & ~0xFFFULL;
@@ -611,10 +613,11 @@ private:
     if (Err != UC_ERR_OK) {
       // Capture the faulting PC (relative to CODE_BASE) so a write/exception
       // fault points at the offending instruction in the disassembly.
-      int PCReg = (Arch == UC_ARCH_X86 && Mode == UC_MODE_64) ? int(UC_X86_REG_RIP)
-                  : (Arch == UC_ARCH_X86)                     ? int(UC_X86_REG_EIP)
-                  : (Arch == UC_ARCH_ARM64)                   ? int(UC_ARM64_REG_PC)
-                                                              : int(UC_ARM_REG_PC);
+      int PCReg = (Arch == UC_ARCH_X86 && Mode == UC_MODE_64)
+                      ? int(UC_X86_REG_RIP)
+                  : (Arch == UC_ARCH_X86)   ? int(UC_X86_REG_EIP)
+                  : (Arch == UC_ARCH_ARM64) ? int(UC_ARM64_REG_PC)
+                                            : int(UC_ARM_REG_PC);
       uint64_t PC = 0;
       uc_reg_read(UC, PCReg, &PC);
       char Buf[96];
@@ -655,10 +658,10 @@ private:
     // executable input exists and forces the common link-and-extract path.
     bool HasSplitText = false;
     // Every allocated read-only AND writable data section (.rodata*,
-    // .data.rel.ro, .data, .bss) at its VMA relative to the text base.  Captured
+    // .data.rel.ro, .data, .bss) at its VMA relative to the text base. Captured
     // as a list — not a single blob — so a function touching several globals (a
-    // read-only table plus a mutable .data array plus a .bss buffer) round-trips
-    // every section rather than only the first.
+    // read-only table plus a mutable .data array plus a .bss buffer)
+    // round-trips every section rather than only the first.
     std::vector<DataSeg> Data;
 
     bool hasData() const {
@@ -672,10 +675,10 @@ private:
     bool requiresLink() const { return HasSplitText || hasData(); }
   };
 
-  // Collect .text and every allocated data section (read-only and writable) from
-  // an object/linked file.  \p AddrBias is subtracted from each section VMA so
-  // the result is relative to the text base (0 for a relocatable .o, CODE_BASE
-  // for a linked image).
+  // Collect .text and every allocated data section (read-only and writable)
+  // from an object/linked file.  \p AddrBias is subtracted from each section
+  // VMA so the result is relative to the text base (0 for a relocatable .o,
+  // CODE_BASE for a linked image).
   static void captureSections(const llvm::object::ObjectFile &Obj,
                               SectionData &SD, uint64_t AddrBias) {
     for (const auto &Sec : Obj.sections()) {
@@ -741,8 +744,8 @@ private:
     return false;
   }
 
-  // True when the object carries an *undefined* reference to a mem* builtin that
-  // clang emits for aggregate/array initialisation (e.g. a >=5-entry local
+  // True when the object carries an *undefined* reference to a mem* builtin
+  // that clang emits for aggregate/array initialisation (e.g. a >=5-entry local
   // computed-goto table copied with `memcpy`).  The roundtrip links -nostdlib,
   // so such a reference is otherwise unresolved and the function would call an
   // unmapped address under Unicorn; when present a freestanding mem* helper is
@@ -772,9 +775,10 @@ private:
     return false;
   }
 
-  // Compile a freestanding memcpy/memset/memmove (plain byte loops; -fno-builtin
-  // so clang does not lower the loop back into a mem* call) for the test target.
-  // Returns the object path, or "" on failure (the caller links without it).
+  // Compile a freestanding memcpy/memset/memmove (plain byte loops;
+  // -fno-builtin so clang does not lower the loop back into a mem* call) for
+  // the test target. Returns the object path, or "" on failure (the caller
+  // links without it).
   std::string compileMemHelper(const std::string &EffTarget, bool IsARM32,
                                const std::string &ClangTargetOverride) {
     auto SrcPath = (Work / "_memhelper.c").string();
@@ -849,7 +853,7 @@ private:
   }
 
   static std::vector<uint8_t> extractTextSection(const unsigned char *Data,
-                                                  size_t Len) {
+                                                 size_t Len) {
     auto SD = extractSections(Data, Len);
     return SD.Text;
   }
@@ -858,17 +862,16 @@ private:
     SectionData SD;
     auto BufOrErr = llvm::MemoryBuffer::getMemBuffer(
         llvm::StringRef(reinterpret_cast<const char *>(Data), Len), "", false);
-    auto ObjOrErr = llvm::object::ObjectFile::createObjectFile(
-        BufOrErr->getMemBufferRef());
+    auto ObjOrErr =
+        llvm::object::ObjectFile::createObjectFile(BufOrErr->getMemBufferRef());
     if (!ObjOrErr)
       return SD;
     captureSections(**ObjOrErr, SD, /*AddrBias=*/0);
     return SD;
   }
 
-  SectionData linkAndExtract(const std::string &ObjPath,
-                             const std::string &Tag, uc_arch Arch,
-                             uc_mode Mode = UC_MODE_64,
+  SectionData linkAndExtract(const std::string &ObjPath, const std::string &Tag,
+                             uc_arch Arch, uc_mode Mode = UC_MODE_64,
                              bool *LinkFailed = nullptr) {
     if (LinkFailed)
       *LinkFailed = false;
@@ -889,8 +892,7 @@ private:
     // The main object is linked first so its function lands at CODE_BASE (the
     // emulation entry); the mem* helper, when present, follows and is reached
     // only via call.
-    std::string LinkCmd = "ld.lld -m " + Emul +
-                          " --image-base=" + HexBuf +
+    std::string LinkCmd = "ld.lld -m " + Emul + " --image-base=" + HexBuf +
                           " -Ttext=" + HexBuf +
                           " --oformat=elf -nostdlib --no-dynamic-linker"
                           " --noinhibit-exec -o " +
@@ -936,8 +938,8 @@ private:
   // caller must skip — never emulate the unlinked object, whose unresolved
   // relocations read wrong/unmapped memory and look like a semantic failure.
   SectionData extractSectionsWithLink(const unsigned char *Data, size_t Len,
-                                       const std::string &Name,
-                                       bool &LinkFailed) {
+                                      const std::string &Name,
+                                      bool &LinkFailed) {
     LinkFailed = false;
     auto PlainSD = extractSections(Data, Len);
     if (!PlainSD.hasText())
@@ -973,12 +975,10 @@ private:
       // image.  A successful link that still exposes no executable text is an
       // invalid roundtrip result, not transient infrastructure; leave
       // LinkFailed false so the caller reports an assertion failure.
-      return linkAndExtract(ObjFile, Name + "_recomp", Arch, Mode,
-                            &LinkFailed);
+      return linkAndExtract(ObjFile, Name + "_recomp", Arch, Mode, &LinkFailed);
     }
     return PlainSD;
   }
-
 };
 
 // ============================================================================

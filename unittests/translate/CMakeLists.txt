@@ -19,6 +19,7 @@ add_neverd_unittest(NeverDTranslationContractTests
   X86TranslationBlockLowererTests.cpp
 
   LINK_COMPONENTS
+  Support
   Translate
 
   LINK_LIBS

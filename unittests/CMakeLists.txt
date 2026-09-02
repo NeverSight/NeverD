@@ -14,8 +14,78 @@ FetchContent_MakeAvailable(googletest)
 enable_testing()
 include(GoogleTest)
 
+# Cross-target compiler fixtures require Clang's driver and GNU inline-assembly
+# syntax.  Detect it once for the complete test tree; do not silently treat the
+# configured C compiler as equivalent (notably cl.exe and GCC-only installs).
+set(_neverd_bundled_test_clang
+    "${LLVM_TOOLS_BINARY_DIR}/clang${CMAKE_EXECUTABLE_SUFFIX}")
+if(EXISTS "${_neverd_bundled_test_clang}")
+  get_filename_component(NEVERD_TEST_CLANG_EXECUTABLE
+    "${_neverd_bundled_test_clang}" ABSOLUTE)
+else()
+  find_program(_neverd_host_test_clang NAMES clang)
+  if(_neverd_host_test_clang)
+    get_filename_component(NEVERD_TEST_CLANG_EXECUTABLE
+      "${_neverd_host_test_clang}" ABSOLUTE)
+  else()
+    set(NEVERD_TEST_CLANG_EXECUTABLE "")
+  endif()
+endif()
+
+# Host runtime and syntax fixtures target the configured host and are compatible
+# with GNU-style GCC/Clang C drivers.  Prefer the detected `clang` executable
+# even when CMake itself uses cl.exe (the supported Windows CI setup), then
+# fall back only to a configured GNU-style C driver.  Never pass cl.exe or
+# clang-cl their GNU assembly or command-line options.
+if(NEVERD_TEST_CLANG_EXECUTABLE)
+  set(NEVERD_HOST_RUNTIME_FIXTURE_COMPILER_EXECUTABLE
+    "${NEVERD_TEST_CLANG_EXECUTABLE}")
+elseif(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
+       CMAKE_C_COMPILER_ID STREQUAL "AppleClang" OR
+       (CMAKE_C_COMPILER_ID STREQUAL "Clang" AND
+        NOT MSVC AND
+        NOT (CMAKE_C_SIMULATE_ID STREQUAL "MSVC") AND
+        (NOT DEFINED CMAKE_C_COMPILER_FRONTEND_VARIANT OR
+         CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "GNU")))
+  get_filename_component(NEVERD_HOST_RUNTIME_FIXTURE_COMPILER_EXECUTABLE
+    "${CMAKE_C_COMPILER}" ABSOLUTE)
+else()
+  set(NEVERD_HOST_RUNTIME_FIXTURE_COMPILER_EXECUTABLE "")
+endif()
+
 add_neverd_unittest(NeverDTestProcessTests
   TestProcessTests.cpp
+)
+
+# Capability evidence is bound to CTest registrations, not to workflow text.
+# These runners therefore remain discoverable in the configured test graph on
+# every platform and cannot be made to disappear behind a disabled CI step.
+add_test(
+  NAME NeverDPythonSDKUnitTests
+  COMMAND "${CMAKE_COMMAND}" -E env
+          "PYTHONPATH=${CMAKE_SOURCE_DIR}/pluginsdk/python"
+          "${Python3_EXECUTABLE}" -m unittest discover
+          -s "${CMAKE_SOURCE_DIR}/pluginsdk/python/tests"
+          -p "test*.py" -v
+)
+set_tests_properties(NeverDPythonSDKUnitTests PROPERTIES
+  LABELS NeverDPythonSDKUnitTests
+  TIMEOUT 120
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+
+add_test(
+  NAME NeverDSimplifySurfaceAgreement
+  COMMAND "${CMAKE_COMMAND}" -E env
+          "NEVERD_BUILD_DIR=${CMAKE_BINARY_DIR}"
+          "PYTHONPATH=${CMAKE_SOURCE_DIR}/pluginsdk/python"
+          "${Python3_EXECUTABLE}" -m unittest
+          scripts.tests.test_simplify_surfaces -v
+)
+set_tests_properties(NeverDSimplifySurfaceAgreement PROPERTIES
+  LABELS NeverDSimplifySurfaceAgreement
+  TIMEOUT 120
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 
 add_subdirectory(symbolic)

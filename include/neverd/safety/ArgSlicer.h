@@ -47,6 +47,10 @@ struct ArgClassification {
   bool RequiresPathValidation = false;
   std::string Reason;      ///< why it was classed as it was.
   std::string TaintSource; ///< the reaching input, when TAINTED.
+  /// Exact interprocedural root/call chain when the taint entered through a
+  /// propagated parameter.  Local input sources leave this empty and are
+  /// anchored to the containing function's structural witness later.
+  std::optional<ReachabilityWitness> AttackerWitness;
 };
 
 /// Classify the argument at position \p ArgIndex of the call record

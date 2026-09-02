@@ -55,6 +55,10 @@ typedef struct neverd_safety_options {
   /// Optional catalog specification files (UTF-8 paths); NULL to skip.
   const char *sinks_path;
   const char *sources_path;
+  /// Interprocedural call-edge and attacker-control summary limits.  Zero
+  /// selects the engine default.
+  unsigned max_call_depth;
+  unsigned max_summary_iterations;
 } neverd_safety_options;
 
 /// Audit heap-object lifetimes and local stack initialization, returning an

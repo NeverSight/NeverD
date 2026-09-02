@@ -14,7 +14,6 @@
 #define NEVERD_UNITTESTS_LIFT_NEVERDLIFTFIXTURE_H
 
 #include "../TestProcess.h"
-
 #include "gtest/gtest.h"
 
 #include <algorithm>
@@ -26,6 +25,10 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+#ifndef NEVERD_TEST_CLANG
+#define NEVERD_TEST_CLANG ""
+#endif
 
 namespace fs = std::filesystem;
 
@@ -45,13 +48,13 @@ struct RunResult {
 
 class NeverDLiftTest : public ::testing::Test {
 protected:
+  static bool hasCrossTargetClang() { return NEVERD_TEST_CLANG[0] != '\0'; }
+
   void SetUp() override {
-    TmpDir = fs::temp_directory_path() /
-             ("nd_test_" +
-              std::to_string(neverd::test::currentProcessId()) + "_" +
-              ::testing::UnitTest::GetInstance()
-                  ->current_test_info()
-                  ->name());
+    TmpDir =
+        fs::temp_directory_path() /
+        ("nd_test_" + std::to_string(neverd::test::currentProcessId()) + "_" +
+         ::testing::UnitTest::GetInstance()->current_test_info()->name());
     fs::create_directories(TmpDir);
   }
 
@@ -101,32 +104,27 @@ protected:
     return Obj;
   }
 
-  RunResult liftToLowIR(const fs::path &Binary,
-                        const std::string &Func = "") {
+  RunResult liftToLowIR(const fs::path &Binary, const std::string &Func = "") {
     (void)Func;
     return exec(ndBin(), {"lift", "-dump-low", Binary.string()});
   }
 
-  RunResult liftToMedIR(const fs::path &Binary,
-                        const std::string &Func = "") {
+  RunResult liftToMedIR(const fs::path &Binary, const std::string &Func = "") {
     (void)Func;
     return exec(ndBin(), {"lift", "-dump-med", Binary.string()});
   }
 
-  RunResult liftToHighIR(const fs::path &Binary,
-                         const std::string &Func = "") {
+  RunResult liftToHighIR(const fs::path &Binary, const std::string &Func = "") {
     (void)Func;
     return exec(ndBin(), {"lift", "-dump-high", Binary.string()});
   }
 
-  RunResult liftToLLVMIR(const fs::path &Binary,
-                         const std::string &Func = "") {
+  RunResult liftToLLVMIR(const fs::path &Binary, const std::string &Func = "") {
     (void)Func;
     return exec(ndBin(), {"lift", Binary.string()});
   }
 
-  void verifyAllStages(const fs::path &Binary,
-                       const std::string &Func = "") {
+  void verifyAllStages(const fs::path &Binary, const std::string &Func = "") {
     auto Low = liftToLowIR(Binary, Func);
     ASSERT_EQ(Low.exitCode, 0) << "LowIR failed: " << Low.err;
     EXPECT_FALSE(Low.out.empty()) << "LowIR output is empty";
@@ -175,8 +173,7 @@ protected:
         << R.out;
   }
 
-  void verifyLLVMIRNotContains(const fs::path &Binary,
-                               const std::string &Func,
+  void verifyLLVMIRNotContains(const fs::path &Binary, const std::string &Func,
                                const std::string &Needle) {
     auto R = liftToLLVMIR(Binary, Func);
     ASSERT_EQ(R.exitCode, 0) << "LLVM IR lift failed: " << R.err;
@@ -302,8 +299,9 @@ protected:
     while (std::getline(Lines, Line)) {
       const auto First = Line.find_first_not_of(" \t\r");
       const auto Last = Line.find_last_not_of(" \t\r");
-      const std::string Trimmed =
-          First == std::string::npos ? "" : Line.substr(First, Last - First + 1);
+      const std::string Trimmed = First == std::string::npos
+                                      ? ""
+                                      : Line.substr(First, Last - First + 1);
 
       // Architectural exception paths terminate with llvm.trap followed by
       // unreachable. Reject every other unreachable as a missing terminator.
@@ -329,8 +327,20 @@ protected:
 
   // Host clang does not know NeverD LLVM-fork builtins.  Keep HighC emitting
   // those names, and only stub them for syntax-only checking.
-  RunResult checkHighCClangSyntax(
-      const fs::path &CFile, const std::vector<std::string> &ExtraArgs) const {
+  RunResult
+  checkHighCClangSyntax(const fs::path &CFile,
+                        const std::vector<std::string> &ExtraArgs) const {
+    if (!hasCrossTargetClang()) {
+      // GTEST_SKIP returns from its lexical helper.  Record the skip in a void
+      // helper, then return a successful sentinel so the caller's immediate
+      // syntax assertion cannot turn the skipped test into a failure.
+      [] {
+        GTEST_SKIP() << "cross-target HighC fixture tests require Clang's "
+                        "GNU-style driver";
+      }();
+      return {0, {}, {}};
+    }
+
     auto StringHeader = tmpFile("string.h");
     std::ofstream Shim(StringHeader);
     Shim << "void *memcpy(void *, const void *, __SIZE_TYPE__);\n";
@@ -362,7 +372,6 @@ private:
     SS << IFS.rdbuf();
     return SS.str();
   }
-
 };
 
 #endif // NEVERD_UNITTESTS_LIFT_NEVERDLIFTFIXTURE_H

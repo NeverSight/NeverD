@@ -37,6 +37,8 @@ neverd_safety_options makeOptions() {
   Options.max_paths = SafetyMaxPaths;
   Options.max_steps = SafetyMaxSteps;
   Options.max_loop = SafetyMaxLoop;
+  Options.max_call_depth = SafetyMaxCallDepth;
+  Options.max_summary_iterations = SafetyMaxSummaryIterations;
   Options.solver_conflicts = SafetySolverConflicts;
   Options.sinks_path = SafetySinks.empty() ? nullptr : SafetySinks.c_str();
   Options.sources_path =

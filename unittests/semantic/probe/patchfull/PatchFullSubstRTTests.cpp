@@ -45,8 +45,21 @@
 //===----------------------------------------------------------------------===//
 
 #include "../TestProcess.h"
+#include "gtest/gtest.h"
+
 #include "neverd/backend/codegen/CodeGen.h" // Codegen, Arch, BinaryFormat (via Common.h)
 #include "neverd/pipeline/Pipeline.h"
+
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/IntrinsicsAArch64.h" // llvm::Intrinsic::aarch64_crc32c* (CRC32C)
+#include "llvm/IR/IntrinsicsARM.h"     // llvm::Intrinsic::arm_crc32c* (CRC32C)
+#include "llvm/IR/IntrinsicsX86.h" // llvm::Intrinsic::x86_avx2_* (256-bit var shift)
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/MC/BinaryRewrite.h"
+#include "llvm/Support/TargetSelect.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -58,18 +71,6 @@
 #include <string>
 #include <unicorn/unicorn.h>
 #include <vector>
-
-#include "gtest/gtest.h"
-#include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/Intrinsics.h"
-#include "llvm/IR/IntrinsicsAArch64.h" // llvm::Intrinsic::aarch64_crc32c* (CRC32C)
-#include "llvm/IR/IntrinsicsARM.h"     // llvm::Intrinsic::arm_crc32c* (CRC32C)
-#include "llvm/IR/IntrinsicsX86.h" // llvm::Intrinsic::x86_avx2_* (256-bit var shift)
-#include "llvm/IR/LLVMContext.h"
-#include "llvm/IR/Module.h"
-#include "llvm/IR/Verifier.h"
-#include "llvm/MC/BinaryRewrite.h"
-#include "llvm/Support/TargetSelect.h"
 
 using namespace neverd;
 
@@ -4328,23 +4329,24 @@ std::unique_ptr<llvm::Module> buildVecAvxFmaVar256IR(llvm::LLVMContext &Ctx,
 // 256-bit AVX duplicate/splat moves on YMM — every prior 256-bit shuffle shape
 // (vfshuf256 / vfshufd256) used only *two-source* permutes (vshufps / vshufpd /
 // vperm2f128 / vblendps) or the cross-lane vpermpd; none exercised the *single-
-// source duplicate* family vmovddup (even f64 lanes), vmovsldup (even f32 lanes)
-// and vmovshdup (odd f32 lanes) — a distinct VEX.256 decode group (0F 12 with
-// F2/F3, 0F 16 with F3) that the generic in-lane table path leaves SSE_SPECIAL
-// (so an undecoded ymm form would #UD).  One <4 x double> llvm.fma forces
-// +fma,+avx (CodeGenX86::detectTargetFeaturesX86 keys on llvm.fma), so both the
-// <4 x double> and the <8 x float> duplicate shuffles lower to a 256-bit YMM
-// move rather than splitting into two 128-bit halves.  Each lane is a small
-// integer (fma (alo+i)*(clo+i)+(alo+i) <= 10*10+10 = 110, exact single-rounded;
-// floats xlo+i in [0,14]); duplicates only move lanes so they stay exact.  The
-// duplicated f64 vector is reduced with a per-position weight {1..4}, and the
-// two f32 duplicates are summed and reduced with a per-position weight {1..8},
-// so a lane landing in the wrong place changes the sum; both fptosi'd in range
-// (no NaN/Inf).  No obfuscation pass touches the FP sub-graph (orig/obf byte-
-// identical over it); an undecoded 256-bit duplicate faults the Unicorn baseline
-// (UC_ERR_INSN_INVALID) and any value divergence is a genuine backend / fork-
-// Unicorn bug.  Integer add/sub/and/or/xor + non-folding constants (0x5A5A/
-// 12345) + a data-dependent diamond + PHI drive the obfuscation passes.
+// source duplicate* family vmovddup (even f64 lanes), vmovsldup (even f32
+// lanes) and vmovshdup (odd f32 lanes) — a distinct VEX.256 decode group (0F 12
+// with F2/F3, 0F 16 with F3) that the generic in-lane table path leaves
+// SSE_SPECIAL (so an undecoded ymm form would #UD).  One <4 x double> llvm.fma
+// forces +fma,+avx (CodeGenX86::detectTargetFeaturesX86 keys on llvm.fma), so
+// both the <4 x double> and the <8 x float> duplicate shuffles lower to a
+// 256-bit YMM move rather than splitting into two 128-bit halves.  Each lane is
+// a small integer (fma (alo+i)*(clo+i)+(alo+i) <= 10*10+10 = 110, exact
+// single-rounded; floats xlo+i in [0,14]); duplicates only move lanes so they
+// stay exact.  The duplicated f64 vector is reduced with a per-position weight
+// {1..4}, and the two f32 duplicates are summed and reduced with a per-position
+// weight {1..8}, so a lane landing in the wrong place changes the sum; both
+// fptosi'd in range (no NaN/Inf).  No obfuscation pass touches the FP sub-graph
+// (orig/obf byte- identical over it); an undecoded 256-bit duplicate faults the
+// Unicorn baseline (UC_ERR_INSN_INVALID) and any value divergence is a genuine
+// backend / fork- Unicorn bug.  Integer add/sub/and/or/xor + non-folding
+// constants (0x5A5A/ 12345) + a data-dependent diamond + PHI drive the
+// obfuscation passes.
 std::unique_ptr<llvm::Module> buildVecAvxDup256IR(llvm::LLVMContext &Ctx,
                                                   const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -4387,16 +4389,17 @@ std::unique_ptr<llvm::Module> buildVecAvxDup256IR(llvm::LLVMContext &Ctx,
   auto *PoisonD = llvm::PoisonValue::get(V4d);
   auto *PoisonF = llvm::PoisonValue::get(V8f);
   auto *Dd = B.CreateShuffleVector(Vd, PoisonD, {0, 0, 2, 2}); // vmovddup
-  auto *Sl = B.CreateShuffleVector(VF, PoisonF,
-                                   {0, 0, 2, 2, 4, 4, 6, 6}); // vmovsldup
-  auto *Sh = B.CreateShuffleVector(VF, PoisonF,
-                                   {1, 1, 3, 3, 5, 5, 7, 7}); // vmovshdup
+  auto *Sl =
+      B.CreateShuffleVector(VF, PoisonF, {0, 0, 2, 2, 4, 4, 6, 6}); // vmovsldup
+  auto *Sh =
+      B.CreateShuffleVector(VF, PoisonF, {1, 1, 3, 3, 5, 5, 7, 7}); // vmovshdup
 
   // f64 reduction: position-weighted {1..4}.
   llvm::SmallVector<llvm::Constant *, 4> Wd;
   for (unsigned I = 0; I < 4; ++I)
     Wd.push_back(llvm::ConstantFP::get(Dbl, double(I + 1)));
-  auto *Di = B.CreateFPToSI(B.CreateFMul(Dd, llvm::ConstantVector::get(Wd)), V4i);
+  auto *Di =
+      B.CreateFPToSI(B.CreateFMul(Dd, llvm::ConstantVector::get(Wd)), V4i);
   llvm::Value *S = B.CreateExtractElement(Di, uint64_t(0));
   for (unsigned I = 1; I < 4; ++I)
     S = B.CreateAdd(S, B.CreateExtractElement(Di, uint64_t(I)));
@@ -4495,10 +4498,10 @@ std::unique_ptr<llvm::Module> buildVecAvxCmpNe256IR(llvm::LLVMContext &Ctx,
   // keeps the fcmp one from folding into an integer icmp.
   auto *Vd = B.CreateIntrinsic(llvm::Intrinsic::fma, {V4d}, {VA, VB, VA});
   auto *Vff = B.CreateFMul(VF, VF);
-  auto *CmpD = B.CreateFCmpONE(Vd, VB);  // vcmpneq_oqpd (predicate 0x0C)
-  auto *CmpF = B.CreateFCmpONE(Vff, VF); // vcmpneq_oqps (predicate 0x0C)
-  auto *SelD = B.CreateSelect(CmpD, Vd, VB);   // vblendvpd
-  auto *SelF = B.CreateSelect(CmpF, Vff, VF);  // vblendvps
+  auto *CmpD = B.CreateFCmpONE(Vd, VB);       // vcmpneq_oqpd (predicate 0x0C)
+  auto *CmpF = B.CreateFCmpONE(Vff, VF);      // vcmpneq_oqps (predicate 0x0C)
+  auto *SelD = B.CreateSelect(CmpD, Vd, VB);  // vblendvpd
+  auto *SelF = B.CreateSelect(CmpF, Vff, VF); // vblendvps
 
   llvm::SmallVector<llvm::Constant *, 4> Wd;
   for (unsigned I = 0; I < 4; ++I)
@@ -4556,10 +4559,11 @@ std::unique_ptr<llvm::Module> buildVecAvxCmpNe256IR(llvm::LLVMContext &Ctx,
 // Lanes are small integers (fma <= 110, fmul <= 196, sub/add exact); distinct
 // {1..4}/{1..8} position weights keep the lane sums position-sensitive and
 // fptosi stays in range (no NaN/Inf).  No obfuscation pass touches the FP
-// sub-graph (orig/obf byte-identical over it); an undecoded vaddsubp would fault
-// the Unicorn baseline (UC_ERR_INSN_INVALID) and any value divergence is a
-// genuine backend / fork-Unicorn bug.  Integer add/sub/and/or/xor + non-folding
-// constants (0x5A5A/12345) + a data-dependent diamond + PHI drive the passes.
+// sub-graph (orig/obf byte-identical over it); an undecoded vaddsubp would
+// fault the Unicorn baseline (UC_ERR_INSN_INVALID) and any value divergence is
+// a genuine backend / fork-Unicorn bug.  Integer add/sub/and/or/xor +
+// non-folding constants (0x5A5A/12345) + a data-dependent diamond + PHI drive
+// the passes.
 std::unique_ptr<llvm::Module> buildVecAvxAddSub256IR(llvm::LLVMContext &Ctx,
                                                      const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -4667,13 +4671,14 @@ std::unique_ptr<llvm::Module> buildVecAvxAddSub256IR(llvm::LLVMContext &Ctx,
 // instcombine cannot fold the sub-graph away; hadd and hsub share the SAME two
 // shuffles per width so both a vhadd and a vhsub are emitted.  Lanes are small
 // integers (fma <= 110, fmul <= 196, hadd/hsub exact); distinct ascending /
-// descending position weights keep the lane sums position-sensitive (a misplaced
-// lane or a swapped hadd/hsub changes the sum) and fptosi stays in range (no
-// NaN/Inf).  No obfuscation pass touches the FP sub-graph (orig/obf byte-
-// identical over it); an undecoded vhaddp would fault the Unicorn baseline
-// (UC_ERR_INSN_INVALID) and any value divergence is a genuine backend / fork-
-// Unicorn bug.  Integer add/sub/and/or/xor + non-folding constants (0x5A5A/
-// 12345) + a data-dependent diamond + PHI drive the obfuscation passes.
+// descending position weights keep the lane sums position-sensitive (a
+// misplaced lane or a swapped hadd/hsub changes the sum) and fptosi stays in
+// range (no NaN/Inf).  No obfuscation pass touches the FP sub-graph (orig/obf
+// byte- identical over it); an undecoded vhaddp would fault the Unicorn
+// baseline (UC_ERR_INSN_INVALID) and any value divergence is a genuine backend
+// / fork- Unicorn bug.  Integer add/sub/and/or/xor + non-folding constants
+// (0x5A5A/ 12345) + a data-dependent diamond + PHI drive the obfuscation
+// passes.
 std::unique_ptr<llvm::Module> buildVecAvxHAddSub256IR(llvm::LLVMContext &Ctx,
                                                       const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -4710,17 +4715,19 @@ std::unique_ptr<llvm::Module> buildVecAvxHAddSub256IR(llvm::LLVMContext &Ctx,
   for (unsigned I = 0; I < 8; ++I)
     VF = B.CreateInsertElement(
         VF, B.CreateSIToFP(B.CreateAdd(Xlo, B.getInt32(I)), Flt), uint64_t(I));
-  // llvm.fma forces +fma,+avx; the horizontal operands are fma/fmul results (not
-  // bare sitofp) so the fadd/fsub(shuffle,shuffle) horizontal combine fires on
-  // real values.
+  // llvm.fma forces +fma,+avx; the horizontal operands are fma/fmul results
+  // (not bare sitofp) so the fadd/fsub(shuffle,shuffle) horizontal combine
+  // fires on real values.
   auto *Vd = B.CreateIntrinsic(llvm::Intrinsic::fma, {V4d}, {VA, VB, VA});
   auto *Vff = B.CreateFMul(VF, VF);
-  // vhaddpd / vhsubpd: pair adjacent lanes within each 128-bit half of (Vd, VB).
+  // vhaddpd / vhsubpd: pair adjacent lanes within each 128-bit half of (Vd,
+  // VB).
   auto *EvD = B.CreateShuffleVector(Vd, VB, {0, 4, 2, 6});
   auto *OdD = B.CreateShuffleVector(Vd, VB, {1, 5, 3, 7});
   auto *HAddD = B.CreateFAdd(EvD, OdD);
   auto *HSubD = B.CreateFSub(EvD, OdD);
-  // vhaddps / vhsubps: pair adjacent lanes within each 128-bit half of (Vff, VF).
+  // vhaddps / vhsubps: pair adjacent lanes within each 128-bit half of (Vff,
+  // VF).
   auto *EvF = B.CreateShuffleVector(Vff, VF, {0, 2, 8, 10, 4, 6, 12, 14});
   auto *OdF = B.CreateShuffleVector(Vff, VF, {1, 3, 9, 11, 5, 7, 13, 15});
   auto *HAddF = B.CreateFAdd(EvF, OdF);
@@ -4801,11 +4808,11 @@ std::unique_ptr<llvm::Module> buildVecAvxHAddSub256IR(llvm::LLVMContext &Ctx,
 // mask or a misplaced lane changes the sum) and fptosi stays in range (no
 // NaN/Inf; copysign's -0.0 fptosi's to 0 identically on both copies).  No
 // obfuscation pass touches the FP sub-graph (orig/obf byte-identical over it,
-// including the sign-mask constant-pool loads); an undecoded 256-bit vxorp/vandp
-// would fault the Unicorn baseline (UC_ERR_INSN_INVALID) and any value
-// divergence is a genuine backend / fork-Unicorn bug.  Integer add/sub/and/or/
-// xor + non-folding constants (0x5A5A/12345) + a data-dependent diamond + PHI
-// drive the obfuscation passes.
+// including the sign-mask constant-pool loads); an undecoded 256-bit
+// vxorp/vandp would fault the Unicorn baseline (UC_ERR_INSN_INVALID) and any
+// value divergence is a genuine backend / fork-Unicorn bug.  Integer
+// add/sub/and/or/ xor + non-folding constants (0x5A5A/12345) + a data-dependent
+// diamond + PHI drive the obfuscation passes.
 std::unique_ptr<llvm::Module> buildVecAvxFLogic256IR(llvm::LLVMContext &Ctx,
                                                      const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -4852,7 +4859,8 @@ std::unique_ptr<llvm::Module> buildVecAvxFLogic256IR(llvm::LLVMContext &Ctx,
   // llvm.fma forces +fma,+avx; Vd is a real fma value with runtime-varying sign
   // so its fabs/fneg/copysign all reach the machine layer on 256-bit YMM.
   auto *Vd = B.CreateIntrinsic(llvm::Intrinsic::fma, {V4d}, {VA, VB, VA});
-  // <4 x double>: fneg -> vxorpd, fabs -> vandpd, copysign -> vandpd/vandnpd/vorpd.
+  // <4 x double>: fneg -> vxorpd, fabs -> vandpd, copysign ->
+  // vandpd/vandnpd/vorpd.
   auto *NegD = B.CreateFNeg(Vd);
   auto *AbsD = B.CreateUnaryIntrinsic(llvm::Intrinsic::fabs, Vd);
   auto *CsD = B.CreateBinaryIntrinsic(llvm::Intrinsic::copysign, Vd, VB);
@@ -4929,25 +4937,25 @@ std::unique_ptr<llvm::Module> buildVecAvxFLogic256IR(llvm::LLVMContext &Ctx,
 }
 
 // 256-bit AVX floating-point unpack / interleave on YMM — the FP-shuffle family
-// no prior 256-bit shape produced.  vfshuf256 used cross-lane permute / pairwise
-// swap / blend / reverse masks (and, lacking an fma, never even reached a YMM
-// register), and vfshufd256 did vshufpd; none emitted the *unpack interleave*
-// shuffles, which on a 256-bit register interleave the two 128-bit lanes
-// independently:
+// no prior 256-bit shape produced.  vfshuf256 used cross-lane permute /
+// pairwise swap / blend / reverse masks (and, lacking an fma, never even
+// reached a YMM register), and vfshufd256 did vshufpd; none emitted the *unpack
+// interleave* shuffles, which on a 256-bit register interleave the two 128-bit
+// lanes independently:
 //   vunpcklps ymm: dst = {a0,b0,a1,b1, a4,b4,a5,b5}  (mask 0,8,1,9,4,12,5,13)
 //   vunpckhps ymm: dst = {a2,b2,a3,b3, a6,b6,a7,b7}  (mask 2,10,3,11,6,14,7,15)
 //   vunpcklpd ymm: dst = {a0,b0, a2,b2}              (mask 0,4,2,6)
 //   vunpckhpd ymm: dst = {a1,b1, a3,b3}              (mask 1,5,3,7)
 // (verified with `clang -mavx -S`: each mask lowers to exactly one YMM unpack.)
 // One <4 x double> llvm.fma forces +fma,+avx and the AVX CPU model
-// (CodeGenX86::detectTargetFeaturesX86 keys on llvm.fma), so every <8 x float> /
-// <4 x double> shuffle below lands on a genuine 256-bit YMM unpack rather than
-// two 128-bit SSE unpcklps.  The unpack sources are real FP computations (an fma
-// result and runtime-varying sitofp vectors), not bare sitofp, so instcombine
-// cannot fold the interleave away, and the per-128-lane behaviour means a
-// lane-agnostic (single-128) unpack lowering would diverge.  Lanes are small
-// integers (fma <= 110, products exact) so every shuffle keeps values exact;
-// distinct {1..4}/{1..8} position weights make the lane-sum reduction
+// (CodeGenX86::detectTargetFeaturesX86 keys on llvm.fma), so every <8 x float>
+// / <4 x double> shuffle below lands on a genuine 256-bit YMM unpack rather
+// than two 128-bit SSE unpcklps.  The unpack sources are real FP computations
+// (an fma result and runtime-varying sitofp vectors), not bare sitofp, so
+// instcombine cannot fold the interleave away, and the per-128-lane behaviour
+// means a lane-agnostic (single-128) unpack lowering would diverge.  Lanes are
+// small integers (fma <= 110, products exact) so every shuffle keeps values
+// exact; distinct {1..4}/{1..8} position weights make the lane-sum reduction
 // order-sensitive and the fptosi stays in range (no NaN/Inf).  No obfuscation
 // pass touches the FP sub-graph, so orig/obfuscated lower byte-identically over
 // it; an undecoded YMM unpack faults the Unicorn baseline (UC_ERR_INSN_INVALID)
@@ -5063,14 +5071,15 @@ std::unique_ptr<llvm::Module> buildVecAvxUnpack256IR(llvm::LLVMContext &Ctx,
   return M;
 }
 
-// 256-bit AVX2 integer unpack / interleave on YMM -- vpunpcklbw/hbw (<32 x i8>),
-// vpunpcklwd/hwd (<16 x i16>), vpunpckldq/hdq (<8 x i32>), vpunpcklqdq/hqdq
+// 256-bit AVX2 integer unpack / interleave on YMM -- vpunpcklbw/hbw (<32 x
+// i8>), vpunpcklwd/hwd (<16 x i16>), vpunpckldq/hdq (<8 x i32>),
+// vpunpcklqdq/hqdq
 // (<4 x i64>): the integer interleave family no prior 256-bit shape produced.
 // vunpack256 covered only the FP unpacks (vunpcklps/pd), which reuse the
 // punpckldq/punpcklqdq helpers -- so the byte- and word-granularity integer
-// unpacks (punpcklbw/punpcklwd, with no FP equivalent) were never exercised, and
-// even the dword/qword forms are distinct opcodes (0F 62/6C vs the FP 0F 14/15).
-// On a 256-bit register each unpack interleaves the two 128-bit lanes
+// unpacks (punpcklbw/punpcklwd, with no FP equivalent) were never exercised,
+// and even the dword/qword forms are distinct opcodes (0F 62/6C vs the FP 0F
+// 14/15). On a 256-bit register each unpack interleaves the two 128-bit lanes
 // independently, so a lane-agnostic (single-128) lowering would diverge.
 //
 // Cross-ISA: on x86-64 a dead llvm.x86.avx2.psllv.d.256 anchors +avx2 (256-bit
@@ -5081,12 +5090,12 @@ std::unique_ptr<llvm::Module> buildVecAvxUnpack256IR(llvm::LLVMContext &Ctx,
 // for the word/dword/qword interleaves; each result lane is folded with a
 // distinct ascending/descending weight so a swapped lane -- or a lane-agnostic
 // unpack -- changes the sum (qword lanes folded lo^hi to observe both dwords).
-// No L1 pass touches the shuffle sub-graph, so the original and obfuscated copies
-// stay byte-identical over it; an undecoded YMM unpack faults the Unicorn
-// baseline (UC_ERR_INSN_INVALID) and any value divergence is a genuine backend /
-// fork-Unicorn bug.  Integer add/sub/and/or/xor + non-folding constants
-// (0x6E6E/40787) + a data-dependent diamond + PHI drive the subst / const-enc /
-// opaque / flatten / bogus / indirect L1 passes.
+// No L1 pass touches the shuffle sub-graph, so the original and obfuscated
+// copies stay byte-identical over it; an undecoded YMM unpack faults the
+// Unicorn baseline (UC_ERR_INSN_INVALID) and any value divergence is a genuine
+// backend / fork-Unicorn bug.  Integer add/sub/and/or/xor + non-folding
+// constants (0x6E6E/40787) + a data-dependent diamond + PHI drive the subst /
+// const-enc / opaque / flatten / bogus / indirect L1 passes.
 std::unique_ptr<llvm::Module> buildVecAvxIUnpack256IR(llvm::LLVMContext &Ctx,
                                                       const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -5120,10 +5129,10 @@ std::unique_ptr<llvm::Module> buildVecAvxIUnpack256IR(llvm::LLVMContext &Ctx,
         B.CreateXor(B.CreateMul(A, B.getInt32(I * 0x1B + 3)),
                     B.CreateAdd(C, B.getInt32((uint32_t)((int)I - 16) * 0x25))),
         I8);
-    llvm::Value *Bv = B.CreateTrunc(
-        B.CreateXor(B.CreateMul(C, B.getInt32(I * 0x2F + 7)),
-                    B.CreateSub(A, B.getInt32(I * 0x13))),
-        I8);
+    llvm::Value *Bv =
+        B.CreateTrunc(B.CreateXor(B.CreateMul(C, B.getInt32(I * 0x2F + 7)),
+                                  B.CreateSub(A, B.getInt32(I * 0x13))),
+                      I8);
     VA = B.CreateInsertElement(VA, Av, uint64_t(I));
     VB = B.CreateInsertElement(VB, Bv, uint64_t(I));
   }
@@ -5134,8 +5143,8 @@ std::unique_ptr<llvm::Module> buildVecAvxIUnpack256IR(llvm::LLVMContext &Ctx,
     llvm::Value *VAa = llvm::UndefValue::get(V8d);
     llvm::Value *VSa = llvm::UndefValue::get(V8d);
     for (unsigned I = 0; I < 8; ++I) {
-      VAa =
-          B.CreateInsertElement(VAa, B.CreateAdd(A, B.getInt32(I)), uint64_t(I));
+      VAa = B.CreateInsertElement(VAa, B.CreateAdd(A, B.getInt32(I)),
+                                  uint64_t(I));
       VSa = B.CreateInsertElement(
           VSa, B.CreateAnd(B.CreateAdd(C, B.getInt32(I)), B.getInt32(7)),
           uint64_t(I));
@@ -5199,23 +5208,23 @@ std::unique_ptr<llvm::Module> buildVecAvxIUnpack256IR(llvm::LLVMContext &Ctx,
   llvm::Value *S = B.getInt32(0);
   for (unsigned L = 0; L < 32; ++L) {
     S = B.CreateAdd(
-        S, B.CreateMul(B.CreateZExt(B.CreateExtractElement(Lb, uint64_t(L)),
-                                    I32),
-                       B.getInt32(L + 1)));
+        S,
+        B.CreateMul(B.CreateZExt(B.CreateExtractElement(Lb, uint64_t(L)), I32),
+                    B.getInt32(L + 1)));
     S = B.CreateAdd(
-        S, B.CreateMul(B.CreateZExt(B.CreateExtractElement(Hb, uint64_t(L)),
-                                    I32),
-                       B.getInt32(32 - L)));
+        S,
+        B.CreateMul(B.CreateZExt(B.CreateExtractElement(Hb, uint64_t(L)), I32),
+                    B.getInt32(32 - L)));
   }
   for (unsigned L = 0; L < 16; ++L) {
     S = B.CreateAdd(
-        S, B.CreateMul(B.CreateZExt(B.CreateExtractElement(Lw, uint64_t(L)),
-                                    I32),
-                       B.getInt32(L + 1)));
+        S,
+        B.CreateMul(B.CreateZExt(B.CreateExtractElement(Lw, uint64_t(L)), I32),
+                    B.getInt32(L + 1)));
     S = B.CreateAdd(
-        S, B.CreateMul(B.CreateZExt(B.CreateExtractElement(Hw, uint64_t(L)),
-                                    I32),
-                       B.getInt32(16 - L)));
+        S,
+        B.CreateMul(B.CreateZExt(B.CreateExtractElement(Hw, uint64_t(L)), I32),
+                    B.getInt32(16 - L)));
   }
   for (unsigned L = 0; L < 8; ++L) {
     S = B.CreateAdd(S, B.CreateMul(B.CreateExtractElement(Ld, uint64_t(L)),
@@ -5226,12 +5235,12 @@ std::unique_ptr<llvm::Module> buildVecAvxIUnpack256IR(llvm::LLVMContext &Ctx,
   for (unsigned L = 0; L < 4; ++L) {
     auto *Ql = B.CreateExtractElement(Lq, uint64_t(L));
     auto *Qh = B.CreateExtractElement(Hq, uint64_t(L));
-    auto *LFold = B.CreateXor(
-        B.CreateTrunc(Ql, I32),
-        B.CreateTrunc(B.CreateLShr(Ql, B.getInt64(32)), I32));
-    auto *HFold = B.CreateXor(
-        B.CreateTrunc(Qh, I32),
-        B.CreateTrunc(B.CreateLShr(Qh, B.getInt64(32)), I32));
+    auto *LFold =
+        B.CreateXor(B.CreateTrunc(Ql, I32),
+                    B.CreateTrunc(B.CreateLShr(Ql, B.getInt64(32)), I32));
+    auto *HFold =
+        B.CreateXor(B.CreateTrunc(Qh, I32),
+                    B.CreateTrunc(B.CreateLShr(Qh, B.getInt64(32)), I32));
     S = B.CreateAdd(S, B.CreateMul(LFold, B.getInt32(L + 1)));
     S = B.CreateAdd(S, B.CreateMul(HFold, B.getInt32(4 - L)));
   }
@@ -5265,30 +5274,30 @@ std::unique_ptr<llvm::Module> buildVecAvxIUnpack256IR(llvm::LLVMContext &Ctx,
 // (<8 x i32>) and vpsllvq/vpsrlvq (<4 x i64>), the per-lane-amount shift family
 // no prior PatchFull shape produced.  vfunnel256 used a *uniform* splat shift
 // amount (one vpslld/vpsrld by imm), so the AVX2 variable-shift opcodes — where
-// each lane shifts by its own runtime count — were never emitted, and in fact NO
-// PatchFull sample ever turned on +avx2 before (the integer-256 samples split
-// into 2x128 SSE / scalarize).  This is the first PatchFull test to drive the
-// +avx2 256-bit-YMM rewrite-codegen path through compileForRewrite.
+// each lane shifts by its own runtime count — were never emitted, and in fact
+// NO PatchFull sample ever turned on +avx2 before (the integer-256 samples
+// split into 2x128 SSE / scalarize).  This is the first PatchFull test to drive
+// the +avx2 256-bit-YMM rewrite-codegen path through compileForRewrite.
 //
 // Cross-ISA: only x86-64 has the VEX.256 variable-shift encodings, and
 // CodeGenX86::detectTargetFeaturesX86 keys +avx2 off an "avx2"-named intrinsic,
 // so the x86-64 cell uses the llvm.x86.avx2.psllv/psrlv/psrav intrinsics
-// directly (which both request +avx2 and pin the exact YMM opcode).  Every other
-// cell (i386, AArch64, ARM32) uses the generic shl/lshr/ashr of <8 x i32> by a
-// vector, which lowers to NEON ushl/sshl or a scalarized per-lane 32-bit shift —
-// a path no narrower sample reaches, and (unlike a <4 x i64> variable shift,
-// which 32-bit ISAs turn into __aeabi_ll*/__ashldi3 libcalls the rewrite image
-// cannot resolve) one that stays libcall-free; the i64-lane shifts are therefore
-// kept x86-64-only (single vpsllvq/vpsrlvq, no libcall).  Shift counts are masked
-// to [0,width) so no lane is poison; the i32 data mixes sign so vpsravd
-// (arithmetic) diverges from vpsrlvd (logical).  Per cell the original and
-// obfuscated copies share the identical shift sub-graph (no L1 pass rewrites
-// vector shifts), so they stay byte-identical over it; an undecoded YMM variable
-// shift faults the Unicorn baseline (UC_ERR_INSN_INVALID) and any divergence is
-// a genuine backend / fork-Unicorn bug.  Distinct position weights keep the
-// lane-sum reduction order-sensitive; integer add/sub/mul/and/or/xor +
-// non-folding constants (0x5A5A/12345) + a data-dependent diamond + PHI drive
-// the L1 passes.
+// directly (which both request +avx2 and pin the exact YMM opcode).  Every
+// other cell (i386, AArch64, ARM32) uses the generic shl/lshr/ashr of <8 x i32>
+// by a vector, which lowers to NEON ushl/sshl or a scalarized per-lane 32-bit
+// shift — a path no narrower sample reaches, and (unlike a <4 x i64> variable
+// shift, which 32-bit ISAs turn into __aeabi_ll*/__ashldi3 libcalls the rewrite
+// image cannot resolve) one that stays libcall-free; the i64-lane shifts are
+// therefore kept x86-64-only (single vpsllvq/vpsrlvq, no libcall).  Shift
+// counts are masked to [0,width) so no lane is poison; the i32 data mixes sign
+// so vpsravd (arithmetic) diverges from vpsrlvd (logical).  Per cell the
+// original and obfuscated copies share the identical shift sub-graph (no L1
+// pass rewrites vector shifts), so they stay byte-identical over it; an
+// undecoded YMM variable shift faults the Unicorn baseline
+// (UC_ERR_INSN_INVALID) and any divergence is a genuine backend / fork-Unicorn
+// bug.  Distinct position weights keep the lane-sum reduction order-sensitive;
+// integer add/sub/mul/and/or/xor + non-folding constants (0x5A5A/12345) + a
+// data-dependent diamond + PHI drive the L1 passes.
 std::unique_ptr<llvm::Module> buildVecAvxVarShift256IR(llvm::LLVMContext &Ctx,
                                                        const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -5326,7 +5335,8 @@ std::unique_ptr<llvm::Module> buildVecAvxVarShift256IR(llvm::LLVMContext &Ctx,
   // requests +avx2) via the x86 intrinsics; other ISAs use the generic form.
   llvm::Value *Shl, *Lshr, *Ashr;
   if (IsX64) {
-    Shl = B.CreateIntrinsic(llvm::Intrinsic::x86_avx2_psllv_d_256, {}, {VD, VS});
+    Shl =
+        B.CreateIntrinsic(llvm::Intrinsic::x86_avx2_psllv_d_256, {}, {VD, VS});
     Lshr =
         B.CreateIntrinsic(llvm::Intrinsic::x86_avx2_psrlv_d_256, {}, {VD, VS});
     Ashr =
@@ -5359,7 +5369,8 @@ std::unique_ptr<llvm::Module> buildVecAvxVarShift256IR(llvm::LLVMContext &Ctx,
     llvm::Value *VSQ = llvm::UndefValue::get(V4q);
     for (unsigned I = 0; I < 4; ++I) {
       llvm::Value *Dq = B.CreateAdd(
-          B.CreateMul(Aq, llvm::ConstantInt::getSigned(I64, (int64_t)I * 2 - 3)),
+          B.CreateMul(Aq,
+                      llvm::ConstantInt::getSigned(I64, (int64_t)I * 2 - 3)),
           B.CreateXor(Cq, llvm::ConstantInt::get(I64, I * 0x1234567ULL + 1)));
       VQ = B.CreateInsertElement(VQ, Dq, uint64_t(I));
       llvm::Value *Sq =
@@ -5415,20 +5426,20 @@ std::unique_ptr<llvm::Module> buildVecAvxVarShift256IR(llvm::LLVMContext &Ctx,
 // emitted.  vvshift256 first lit up +avx2 (variable shifts); this adds the
 // packed dword multiply / add / subtract.  Like vvshift256 it stays
 // dword-granularity throughout — the width the fork-Unicorn gen_sse_256 and
-// every L1 pass (including the bit-masking pass that only runs under Xform::All)
-// handle cleanly.
+// every L1 pass (including the bit-masking pass that only runs under
+// Xform::All) handle cleanly.
 //
 // Cross-ISA: a dword AVX2 op only reaches a YMM register once +avx2 is on, and
 // CodeGenX86::detectTargetFeaturesX86 keys +avx2 off an "avx2"-named intrinsic.
 // The packed add/sub/mul opcodes have no x86 intrinsic in this LLVM (they are
 // generic IR), so the x86-64 cell pins one llvm.x86.avx2.psllv.d.256 (a real
 // per-lane shift that also requests +avx2); with +avx2 live the generic
-// mul/add/sub of <8 x i32> then lower to vpmulld/vpaddd/vpsubd ymm.  Every other
-// cell uses the plain generic shift + arithmetic (NEON / scalarized), all
-// libcall-free.  Per cell the original and obfuscated copies share the identical
-// arithmetic sub-graph (no L1 pass changes its value), so they stay
-// byte-identical over it under emulation; an undecoded YMM op faults the Unicorn
-// baseline (UC_ERR_INSN_INVALID) and any divergence is a real backend /
+// mul/add/sub of <8 x i32> then lower to vpmulld/vpaddd/vpsubd ymm.  Every
+// other cell uses the plain generic shift + arithmetic (NEON / scalarized), all
+// libcall-free.  Per cell the original and obfuscated copies share the
+// identical arithmetic sub-graph (no L1 pass changes its value), so they stay
+// byte-identical over it under emulation; an undecoded YMM op faults the
+// Unicorn baseline (UC_ERR_INSN_INVALID) and any divergence is a real backend /
 // fork-Unicorn bug.  Sign-mixed dword data + distinct position weights keep the
 // lane-sum reduction order-sensitive; integer add/sub/mul/and/or/xor +
 // non-folding constants (0x5A5A/12345) + a data-dependent diamond + PHI drive
@@ -5467,8 +5478,9 @@ std::unique_ptr<llvm::Module> buildVecAvxIArith256IR(llvm::LLVMContext &Ctx,
                     B.CreateXor(A, B.getInt32(I * 0x77 + 5))),
         uint64_t(I));
     VS = B.CreateInsertElement(
-        VS, B.CreateAnd(B.CreateAdd(B.CreateAdd(A, C), B.getInt32(I * 3 + 1)),
-                        B.getInt32(7)),
+        VS,
+        B.CreateAnd(B.CreateAdd(B.CreateAdd(A, C), B.getInt32(I * 3 + 1)),
+                    B.getInt32(7)),
         uint64_t(I));
   }
 
@@ -5580,8 +5592,9 @@ std::unique_ptr<llvm::Module> buildVecAvxIMinMax256IR(llvm::LLVMContext &Ctx,
                     B.CreateXor(A, B.getInt32(I * 0x77 + 5))),
         uint64_t(I));
     VS = B.CreateInsertElement(
-        VS, B.CreateAnd(B.CreateAdd(B.CreateAdd(A, C), B.getInt32(I * 3 + 1)),
-                        B.getInt32(7)),
+        VS,
+        B.CreateAnd(B.CreateAdd(B.CreateAdd(A, C), B.getInt32(I * 3 + 1)),
+                    B.getInt32(7)),
         uint64_t(I));
   }
 
@@ -5651,22 +5664,23 @@ std::unique_ptr<llvm::Module> buildVecAvxIMinMax256IR(llvm::LLVMContext &Ctx,
 // CodeGenX86::detectTargetFeaturesX86 keys +avx2 off an "avx2"-named intrinsic.
 // The packed compare opcodes have no x86 intrinsic in this LLVM (they are the
 // generic icmp + sext), so the x86-64 cell pins one llvm.x86.avx2.psllv.d.256
-// (a real per-lane shift that also requests +avx2) and feeds its result into the
-// compares; with +avx2 live the generic sext(icmp eq/sgt) of <8 x i32> then
+// (a real per-lane shift that also requests +avx2) and feeds its result into
+// the compares; with +avx2 live the generic sext(icmp eq/sgt) of <8 x i32> then
 // lower to vpcmpeqd / vpcmpgtd ymm (the all-ones/zero lane mask the compare
 // already yields, so the sext folds away; signed less-than reuses vpcmpgtd with
-// swapped operands).  The masks are reduced directly — no vector select — so the
-// shape stays pure dword compare + ALU and never emits the byte-granular
+// swapped operands).  The masks are reduced directly — no vector select — so
+// the shape stays pure dword compare + ALU and never emits the byte-granular
 // variable blend (vpblendvb) the fork-Unicorn 256-bit decoder would have to
 // model separately.  Every other cell uses the plain generic shift + icmp/sext
 // (NEON cmeq/cmgt / scalarized), all libcall-free.  Per cell the original and
 // obfuscated copies share the identical compare sub-graph (no L1 pass touches
 // icmp/sext), so they stay byte-identical over it under emulation; an undecoded
-// YMM op faults the Unicorn baseline (UC_ERR_INSN_INVALID) and any divergence is
-// a real backend / fork-Unicorn bug.  Sign-mixed dword data + distinct position
-// weights keep the lane-sum reduction order-sensitive (so a flipped eq/gt lane
-// changes the sum); integer add/sub/mul/and/or/xor + non-folding constants
-// (0x5A5A/12345) + a data-dependent diamond + PHI drive the L1 passes.
+// YMM op faults the Unicorn baseline (UC_ERR_INSN_INVALID) and any divergence
+// is a real backend / fork-Unicorn bug.  Sign-mixed dword data + distinct
+// position weights keep the lane-sum reduction order-sensitive (so a flipped
+// eq/gt lane changes the sum); integer add/sub/mul/and/or/xor + non-folding
+// constants (0x5A5A/12345) + a data-dependent diamond + PHI drive the L1
+// passes.
 std::unique_ptr<llvm::Module> buildVecAvxICmp256IR(llvm::LLVMContext &Ctx,
                                                    const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -5701,8 +5715,9 @@ std::unique_ptr<llvm::Module> buildVecAvxICmp256IR(llvm::LLVMContext &Ctx,
                     B.CreateXor(A, B.getInt32(I * 0x77 + 5))),
         uint64_t(I));
     VS = B.CreateInsertElement(
-        VS, B.CreateAnd(B.CreateAdd(B.CreateAdd(A, C), B.getInt32(I * 3 + 1)),
-                        B.getInt32(7)),
+        VS,
+        B.CreateAnd(B.CreateAdd(B.CreateAdd(A, C), B.getInt32(I * 3 + 1)),
+                    B.getInt32(7)),
         uint64_t(I));
   }
 
@@ -5763,8 +5778,8 @@ std::unique_ptr<llvm::Module> buildVecAvxICmp256IR(llvm::LLVMContext &Ctx,
 // distinct opcode, and vpcmpgtq is AVX2's *signed 64-bit* compare with no SSE2
 // equivalent; on the 32-bit ISAs (i386/ARM32) the <4 x i64> compare scalarizes
 // into multi-register 64-bit compares -- a lowering no prior 256-bit shape
-// reached.  On a 256-bit register each compare acts within its two 128-bit lanes
-// independently, so a lane-agnostic (single-128) lowering would diverge.
+// reached.  On a 256-bit register each compare acts within its two 128-bit
+// lanes independently, so a lane-agnostic (single-128) lowering would diverge.
 //
 // Cross-ISA: on x86-64 a dead llvm.x86.avx2.psllv.d.256 anchors +avx2 (256-bit
 // integer needs AVX2, not just AVX) so every compare lowers to a genuine
@@ -5772,12 +5787,13 @@ std::unique_ptr<llvm::Module> buildVecAvxICmp256IR(llvm::LLVMContext &Ctx,
 // lowers the identical icmp+sext to NEON cmeq/cmgt (or scalarized 64-bit
 // compares), libcall-free.  Each compare's <N x i1> result is sign-extended to
 // the lane width (the all-ones/zero mask the compare already yields) and the
-// mask lanes are reduced directly with distinct ascending/descending weights, so
-// no vector select / variable blend is emitted and a swapped lane -- or a
+// mask lanes are reduced directly with distinct ascending/descending weights,
+// so no vector select / variable blend is emitted and a swapped lane -- or a
 // lane-agnostic compare -- changes the sum.  No L1 pass touches the compare
 // sub-graph, so the original and obfuscated copies stay byte-identical over it;
-// an undecoded YMM compare faults the Unicorn baseline (UC_ERR_INSN_INVALID) and
-// any value divergence is a genuine backend / fork-Unicorn bug.  Sign-mixed data
+// an undecoded YMM compare faults the Unicorn baseline (UC_ERR_INSN_INVALID)
+// and any value divergence is a genuine backend / fork-Unicorn bug.  Sign-mixed
+// data
 // + integer add/sub/and/or/xor + non-folding constants (0x7A7A/28541) + a
 // data-dependent diamond + PHI drive the subst / const-enc / opaque / flatten /
 // bogus / indirect L1 passes.
@@ -5813,9 +5829,9 @@ std::unique_ptr<llvm::Module> buildVecAvxICmpBWQ256IR(llvm::LLVMContext &Ctx,
     VBa = B.CreateInsertElement(
         VBa,
         B.CreateTrunc(
-            B.CreateXor(B.CreateMul(A, B.getInt32(I * 0x1B + 3)),
-                        B.CreateAdd(C, B.getInt32((uint32_t)((int)I - 16) *
-                                                  0x25))),
+            B.CreateXor(
+                B.CreateMul(A, B.getInt32(I * 0x1B + 3)),
+                B.CreateAdd(C, B.getInt32((uint32_t)((int)I - 16) * 0x25))),
             I8),
         uint64_t(I));
     VBb = B.CreateInsertElement(
@@ -5832,9 +5848,9 @@ std::unique_ptr<llvm::Module> buildVecAvxICmpBWQ256IR(llvm::LLVMContext &Ctx,
     VWa = B.CreateInsertElement(
         VWa,
         B.CreateTrunc(
-            B.CreateXor(B.CreateMul(A, B.getInt32(I * 0x137 + 5)),
-                        B.CreateAdd(C, B.getInt32((uint32_t)((int)I - 8) *
-                                                  0x2AB))),
+            B.CreateXor(
+                B.CreateMul(A, B.getInt32(I * 0x137 + 5)),
+                B.CreateAdd(C, B.getInt32((uint32_t)((int)I - 8) * 0x2AB))),
             I16),
         uint64_t(I));
     VWb = B.CreateInsertElement(
@@ -5852,16 +5868,14 @@ std::unique_ptr<llvm::Module> buildVecAvxICmpBWQ256IR(llvm::LLVMContext &Ctx,
   llvm::Value *VQa = llvm::UndefValue::get(V4q);
   llvm::Value *VQb = llvm::UndefValue::get(V4q);
   for (unsigned I = 0; I < 4; ++I) {
-    VQa = B.CreateInsertElement(
-        VQa,
-        MkQ(B.CreateXor(A, B.getInt32(I * 0x9E37 + 1)),
-            B.CreateAdd(C, B.getInt32(I * 0x1234 + 7))),
-        uint64_t(I));
-    VQb = B.CreateInsertElement(
-        VQb,
-        MkQ(B.CreateSub(C, B.getInt32(I * 0x55 + 3)),
-            B.CreateXor(A, B.getInt32(I * 0x77 + 11))),
-        uint64_t(I));
+    VQa = B.CreateInsertElement(VQa,
+                                MkQ(B.CreateXor(A, B.getInt32(I * 0x9E37 + 1)),
+                                    B.CreateAdd(C, B.getInt32(I * 0x1234 + 7))),
+                                uint64_t(I));
+    VQb = B.CreateInsertElement(VQb,
+                                MkQ(B.CreateSub(C, B.getInt32(I * 0x55 + 3)),
+                                    B.CreateXor(A, B.getInt32(I * 0x77 + 11))),
+                                uint64_t(I));
   }
 
   // +avx2 anchor (x86-64): keep the 256-bit YMM domain so the compares lower to
@@ -5870,8 +5884,8 @@ std::unique_ptr<llvm::Module> buildVecAvxICmpBWQ256IR(llvm::LLVMContext &Ctx,
     llvm::Value *VAa = llvm::UndefValue::get(V8d);
     llvm::Value *VSa = llvm::UndefValue::get(V8d);
     for (unsigned I = 0; I < 8; ++I) {
-      VAa =
-          B.CreateInsertElement(VAa, B.CreateAdd(A, B.getInt32(I)), uint64_t(I));
+      VAa = B.CreateInsertElement(VAa, B.CreateAdd(A, B.getInt32(I)),
+                                  uint64_t(I));
       VSa = B.CreateInsertElement(
           VSa, B.CreateAnd(B.CreateAdd(C, B.getInt32(I)), B.getInt32(7)),
           uint64_t(I));
@@ -5892,33 +5906,33 @@ std::unique_ptr<llvm::Module> buildVecAvxICmpBWQ256IR(llvm::LLVMContext &Ctx,
   llvm::Value *S = B.getInt32(0);
   for (unsigned I = 0; I < 32; ++I) {
     S = B.CreateAdd(
-        S, B.CreateMul(B.CreateSExt(B.CreateExtractElement(EqB, uint64_t(I)),
-                                    I32),
-                       B.getInt32(I + 1)));
+        S,
+        B.CreateMul(B.CreateSExt(B.CreateExtractElement(EqB, uint64_t(I)), I32),
+                    B.getInt32(I + 1)));
     S = B.CreateAdd(
-        S, B.CreateMul(B.CreateSExt(B.CreateExtractElement(GtB, uint64_t(I)),
-                                    I32),
-                       B.getInt32(32 - I)));
+        S,
+        B.CreateMul(B.CreateSExt(B.CreateExtractElement(GtB, uint64_t(I)), I32),
+                    B.getInt32(32 - I)));
   }
   for (unsigned I = 0; I < 16; ++I) {
     S = B.CreateAdd(
-        S, B.CreateMul(B.CreateSExt(B.CreateExtractElement(EqW, uint64_t(I)),
-                                    I32),
-                       B.getInt32(I + 1)));
+        S,
+        B.CreateMul(B.CreateSExt(B.CreateExtractElement(EqW, uint64_t(I)), I32),
+                    B.getInt32(I + 1)));
     S = B.CreateAdd(
-        S, B.CreateMul(B.CreateSExt(B.CreateExtractElement(GtW, uint64_t(I)),
-                                    I32),
-                       B.getInt32(16 - I)));
+        S,
+        B.CreateMul(B.CreateSExt(B.CreateExtractElement(GtW, uint64_t(I)), I32),
+                    B.getInt32(16 - I)));
   }
   for (unsigned I = 0; I < 4; ++I) {
     S = B.CreateAdd(
-        S, B.CreateMul(B.CreateTrunc(B.CreateExtractElement(EqQ, uint64_t(I)),
-                                     I32),
-                       B.getInt32(I + 1)));
+        S, B.CreateMul(
+               B.CreateTrunc(B.CreateExtractElement(EqQ, uint64_t(I)), I32),
+               B.getInt32(I + 1)));
     S = B.CreateAdd(
-        S, B.CreateMul(B.CreateTrunc(B.CreateExtractElement(GtQ, uint64_t(I)),
-                                     I32),
-                       B.getInt32(4 - I)));
+        S, B.CreateMul(
+               B.CreateTrunc(B.CreateExtractElement(GtQ, uint64_t(I)), I32),
+               B.getInt32(4 - I)));
   }
 
   auto *T = B.CreateXor(B.CreateXor(B.CreateAdd(A, C), B.CreateSub(A, C)),
@@ -5946,14 +5960,14 @@ std::unique_ptr<llvm::Module> buildVecAvxICmpBWQ256IR(llvm::LLVMContext &Ctx,
   return M;
 }
 
-// 256-bit AVX2 VSIB gather on YMM — vpgatherdd via llvm.x86.avx2.gather.d.d.256:
-// the first PatchFull shape to exercise a real hardware gather (per-lane load
-// from base + <8 x i32> index * scale).  No prior 256-bit shape touched gather;
-// it uniquely stresses (a) the rewrite backend relocating the gather base
-// global's address (a RIP-relative lea into the GP base register that feeds the
-// VSIB operand) and (b) fork-Unicorn's from-scratch VSIB gather emulation
-// (gen_vsib_gather) end-to-end -- so far only decoded, never validated through
-// the rewrite/patch path.
+// 256-bit AVX2 VSIB gather on YMM — vpgatherdd via
+// llvm.x86.avx2.gather.d.d.256: the first PatchFull shape to exercise a real
+// hardware gather (per-lane load from base + <8 x i32> index * scale).  No
+// prior 256-bit shape touched gather; it uniquely stresses (a) the rewrite
+// backend relocating the gather base global's address (a RIP-relative lea into
+// the GP base register that feeds the VSIB operand) and (b) fork-Unicorn's
+// from-scratch VSIB gather emulation (gen_vsib_gather) end-to-end -- so far
+// only decoded, never validated through the rewrite/patch path.
 //
 // Cross-ISA: on x86-64 the avx2 gather intrinsic (its name carries "avx2" ->
 // detectTargetFeaturesX86 auto-enables +avx2) pins vpgatherdd ymm; every other
@@ -5961,14 +5975,15 @@ std::unique_ptr<llvm::Module> buildVecAvxICmpBWQ256IR(llvm::LLVMContext &Ctx,
 // GEP -> load -> insertelement), libcall-free.  The eight indices are
 // runtime-derived from the inputs and masked in-bounds [0,15]; the gather mask
 // is all-ones (every lane gathered), matching the emulator's "all lanes loaded,
-// in-bounds" contract, so the passthrough src is irrelevant.  Each gathered lane
-// is folded with distinct ascending and descending weights so a mis-routed lane
-// changes the sum.  No L1 pass touches the gather sub-graph, so the original and
-// obfuscated copies stay byte-identical over it; an undecoded gather faults the
-// Unicorn baseline (UC_ERR_INSN_INVALID) and any value divergence is a genuine
-// backend / fork-Unicorn bug.  Integer add/sub/and/or/xor + non-folding
-// constants (0x5C5C/33203) + a data-dependent diamond + PHI drive the subst /
-// const-enc / opaque / flatten / bogus / indirect L1 passes.
+// in-bounds" contract, so the passthrough src is irrelevant.  Each gathered
+// lane is folded with distinct ascending and descending weights so a mis-routed
+// lane changes the sum.  No L1 pass touches the gather sub-graph, so the
+// original and obfuscated copies stay byte-identical over it; an undecoded
+// gather faults the Unicorn baseline (UC_ERR_INSN_INVALID) and any value
+// divergence is a genuine backend / fork-Unicorn bug.  Integer
+// add/sub/and/or/xor + non-folding constants (0x5C5C/33203) + a data-dependent
+// diamond + PHI drive the subst / const-enc / opaque / flatten / bogus /
+// indirect L1 passes.
 std::unique_ptr<llvm::Module> buildVecAvxGatherD256IR(llvm::LLVMContext &Ctx,
                                                       const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -5983,10 +5998,9 @@ std::unique_ptr<llvm::Module> buildVecAvxGatherD256IR(llvm::LLVMContext &Ctx,
   for (int I = 0; I < 16; ++I)
     Init.push_back(llvm::ConstantInt::get(
         I32, (uint32_t)((I * 0x9E37 + 0x1234) ^ (I << 12) ^ 0x55AA)));
-  auto *Tab = new llvm::GlobalVariable(*M, ArrTy, /*isConstant=*/false,
-                                       llvm::GlobalValue::InternalLinkage,
-                                       llvm::ConstantArray::get(ArrTy, Init),
-                                       "g_gtab");
+  auto *Tab = new llvm::GlobalVariable(
+      *M, ArrTy, /*isConstant=*/false, llvm::GlobalValue::InternalLinkage,
+      llvm::ConstantArray::get(ArrTy, Init), "g_gtab");
   Tab->setDSOLocal(true);
 
   auto *FTy = llvm::FunctionType::get(I32, {I32, I32}, false);
@@ -6015,16 +6029,15 @@ std::unique_ptr<llvm::Module> buildVecAvxGatherD256IR(llvm::LLVMContext &Ctx,
   if (IsX64) {
     llvm::Value *TabBase =
         B.CreateInBoundsGEP(ArrTy, Tab, {B.getInt32(0), B.getInt32(0)});
-    Res = B.CreateIntrinsic(llvm::Intrinsic::x86_avx2_gather_d_d_256, {},
-                            {llvm::Constant::getNullValue(V8i), TabBase, Idx,
-                             llvm::Constant::getAllOnesValue(V8i),
-                             B.getInt8(4)});
+    Res =
+        B.CreateIntrinsic(llvm::Intrinsic::x86_avx2_gather_d_d_256, {},
+                          {llvm::Constant::getNullValue(V8i), TabBase, Idx,
+                           llvm::Constant::getAllOnesValue(V8i), B.getInt8(4)});
   } else {
     Res = llvm::UndefValue::get(V8i);
     for (unsigned I = 0; I < 8; ++I) {
       llvm::Value *Ix = B.CreateExtractElement(Idx, uint64_t(I));
-      llvm::Value *EP =
-          B.CreateInBoundsGEP(ArrTy, Tab, {B.getInt32(0), Ix});
+      llvm::Value *EP = B.CreateInBoundsGEP(ArrTy, Tab, {B.getInt32(0), Ix});
       Res = B.CreateInsertElement(Res, B.CreateLoad(I32, EP), uint64_t(I));
     }
   }
@@ -6103,10 +6116,9 @@ std::unique_ptr<llvm::Module> buildVecAvxGatherDQ256IR(llvm::LLVMContext &Ctx,
     Init.push_back(llvm::ConstantInt::get(
         I64, ((uint64_t)(uint32_t)(I * 0x9E3779B9u + 0x1234u) << 32) ^
                  (uint64_t)(uint32_t)((I * 0x2545F491u) ^ 0x55AA37C3u)));
-  auto *Tab = new llvm::GlobalVariable(*M, ArrTy, /*isConstant=*/false,
-                                       llvm::GlobalValue::InternalLinkage,
-                                       llvm::ConstantArray::get(ArrTy, Init),
-                                       "g_gtabq");
+  auto *Tab = new llvm::GlobalVariable(
+      *M, ArrTy, /*isConstant=*/false, llvm::GlobalValue::InternalLinkage,
+      llvm::ConstantArray::get(ArrTy, Init), "g_gtabq");
   Tab->setDSOLocal(true);
 
   auto *FTy = llvm::FunctionType::get(I32, {I32, I32}, false);
@@ -6153,9 +6165,9 @@ std::unique_ptr<llvm::Module> buildVecAvxGatherDQ256IR(llvm::LLVMContext &Ctx,
   llvm::Value *S = B.getInt32(0);
   for (unsigned I = 0; I < 4; ++I) {
     llvm::Value *L = B.CreateExtractElement(Res, uint64_t(I));
-    llvm::Value *W = B.CreateXor(B.CreateTrunc(L, I32),
-                                 B.CreateTrunc(B.CreateLShr(L, B.getInt64(32)),
-                                               I32));
+    llvm::Value *W =
+        B.CreateXor(B.CreateTrunc(L, I32),
+                    B.CreateTrunc(B.CreateLShr(L, B.getInt64(32)), I32));
     S = B.CreateAdd(S, B.CreateMul(W, B.getInt32(I + 1)));
     S = B.CreateAdd(S, B.CreateMul(W, B.getInt32(4 - I)));
   }
@@ -6208,8 +6220,8 @@ std::unique_ptr<llvm::Module> buildVecAvxGatherDQ256IR(llvm::LLVMContext &Ctx,
 // distinct ascending and descending weights so a mis-routed lane changes the
 // sum.  No L1 pass touches the gather sub-graph, so the original and obfuscated
 // copies stay byte-identical over it; an undecoded gather faults the Unicorn
-// baseline (UC_ERR_INSN_INVALID) and any value divergence is a genuine backend /
-// fork-Unicorn bug.  Integer add/sub/and/or/xor + non-folding constants
+// baseline (UC_ERR_INSN_INVALID) and any value divergence is a genuine backend
+// / fork-Unicorn bug.  Integer add/sub/and/or/xor + non-folding constants
 // (0x5C5C/33203) + a data-dependent diamond + PHI drive the subst / const-enc /
 // opaque / flatten / bogus / indirect L1 passes.
 std::unique_ptr<llvm::Module> buildVecAvxGatherQD256IR(llvm::LLVMContext &Ctx,
@@ -6228,10 +6240,9 @@ std::unique_ptr<llvm::Module> buildVecAvxGatherQD256IR(llvm::LLVMContext &Ctx,
     Init.push_back(llvm::ConstantInt::get(
         I32, (uint32_t)(I * 0x9E3779B9u + 0x1234u) ^
                  (uint32_t)((I * 0x2545F491u) ^ 0x55AA37C3u)));
-  auto *Tab = new llvm::GlobalVariable(*M, ArrTy, /*isConstant=*/false,
-                                       llvm::GlobalValue::InternalLinkage,
-                                       llvm::ConstantArray::get(ArrTy, Init),
-                                       "g_gtabqd");
+  auto *Tab = new llvm::GlobalVariable(
+      *M, ArrTy, /*isConstant=*/false, llvm::GlobalValue::InternalLinkage,
+      llvm::ConstantArray::get(ArrTy, Init), "g_gtabqd");
   Tab->setDSOLocal(true);
 
   auto *FTy = llvm::FunctionType::get(I32, {I32, I32}, false);
@@ -6309,8 +6320,9 @@ std::unique_ptr<llvm::Module> buildVecAvxGatherQD256IR(llvm::LLVMContext &Ctx,
 // 256-bit AVX2 VSIB *full-width* qword-index qword-value gather on YMM —
 // vpgatherqq via llvm.x86.avx2.gather.q.q.256: qword indices (<4 x i64>, a full
 // YMM index register) gather qword values (<4 x i64>, a full YMM result).  This
-// completes the 256-bit VSIB gather matrix: vgatherd256 (d.d, dword idx -> dword
-// val), vgatherdq256 (d.q, dword idx -> qword val), vgatherqd256 (q.d, qword idx
+// completes the 256-bit VSIB gather matrix: vgatherd256 (d.d, dword idx ->
+// dword val), vgatherdq256 (d.q, dword idx -> qword val), vgatherqd256 (q.d,
+// qword idx
 // -> dword val, the *narrowing* case with upper-lane zeroing), and now this q.q
 // *full-width* case (opcode 0f38 91, idx_sz=8, val_sz=8, n*val_sz == VL=32, no
 // narrowing).  Unlike vgatherqd256 it produces a full 256-bit result with no
@@ -6351,10 +6363,9 @@ std::unique_ptr<llvm::Module> buildVecAvxGatherQQ256IR(llvm::LLVMContext &Ctx,
     Init.push_back(llvm::ConstantInt::get(
         I64, ((uint64_t)(uint32_t)(I * 0x9E3779B9u + 0x1234u) << 32) ^
                  (uint64_t)(uint32_t)((I * 0x2545F491u) ^ 0x55AA37C3u)));
-  auto *Tab = new llvm::GlobalVariable(*M, ArrTy, /*isConstant=*/false,
-                                       llvm::GlobalValue::InternalLinkage,
-                                       llvm::ConstantArray::get(ArrTy, Init),
-                                       "g_gtabqq");
+  auto *Tab = new llvm::GlobalVariable(
+      *M, ArrTy, /*isConstant=*/false, llvm::GlobalValue::InternalLinkage,
+      llvm::ConstantArray::get(ArrTy, Init), "g_gtabqq");
   Tab->setDSOLocal(true);
 
   auto *FTy = llvm::FunctionType::get(I32, {I32, I32}, false);
@@ -6401,9 +6412,9 @@ std::unique_ptr<llvm::Module> buildVecAvxGatherQQ256IR(llvm::LLVMContext &Ctx,
   llvm::Value *S = B.getInt32(0);
   for (unsigned I = 0; I < 4; ++I) {
     llvm::Value *L = B.CreateExtractElement(Res, uint64_t(I));
-    llvm::Value *W = B.CreateXor(
-        B.CreateTrunc(L, I32),
-        B.CreateTrunc(B.CreateLShr(L, B.getInt64(32)), I32));
+    llvm::Value *W =
+        B.CreateXor(B.CreateTrunc(L, I32),
+                    B.CreateTrunc(B.CreateLShr(L, B.getInt64(32)), I32));
     S = B.CreateAdd(S, B.CreateMul(W, B.getInt32(I + 1)));
     S = B.CreateAdd(S, B.CreateMul(W, B.getInt32(4 - I)));
   }
@@ -6435,15 +6446,16 @@ std::unique_ptr<llvm::Module> buildVecAvxGatherQQ256IR(llvm::LLVMContext &Ctx,
 
 // 256-bit AVX2 masked contiguous load + store on YMM — vpmaskmovd via
 // llvm.x86.avx2.maskload.d.256 / maskstore.d.256: a per-lane sign-bit mask
-// (bit31 of each <8 x i32> lane) selects which lanes are loaded from / stored to
-// a *contiguous* global base — masked-off load lanes read 0, masked-off store
-// lanes leave memory unchanged.  This is the *masked contiguous* memory-op
-// sibling of the VSIB *scattered* gather family (vgather*256): both are
-// conditional, mask-register-driven memory ops, but maskmov addresses a single
-// contiguous base with no index vector (VEX.256.66.0F38.8C load / 8E store, W0
-// dword) — a decode/codegen path no gather or other 256-bit shape ever reached.
-// On 32-bit ISAs the intrinsics are x86-only; every other cell open-codes the
-// exact same semantics (full 256-bit load + select for maskload; load + select
+// (bit31 of each <8 x i32> lane) selects which lanes are loaded from / stored
+// to a *contiguous* global base — masked-off load lanes read 0, masked-off
+// store lanes leave memory unchanged.  This is the *masked contiguous*
+// memory-op sibling of the VSIB *scattered* gather family (vgather*256): both
+// are conditional, mask-register-driven memory ops, but maskmov addresses a
+// single contiguous base with no index vector (VEX.256.66.0F38.8C load / 8E
+// store, W0 dword) — a decode/codegen path no gather or other 256-bit shape
+// ever reached. On 32-bit ISAs the intrinsics are x86-only; every other cell
+// open-codes the exact same semantics (full 256-bit load + select for maskload;
+// load + select
 // + store for maskstore), so all lanes are in-bounds and the open-code is
 // equivalent to the hardware masked op.
 //
@@ -6478,15 +6490,13 @@ std::unique_ptr<llvm::Module> buildVecAvxMaskMov256IR(llvm::LLVMContext &Ctx,
     DstInit.push_back(
         llvm::ConstantInt::get(I32, (uint32_t)(I * 0x2545F491u ^ 0x1357BDF9u)));
   }
-  auto *Src = new llvm::GlobalVariable(*M, ArrTy, /*isConstant=*/false,
-                                       llvm::GlobalValue::InternalLinkage,
-                                       llvm::ConstantArray::get(ArrTy, SrcInit),
-                                       "g_mmsrc");
+  auto *Src = new llvm::GlobalVariable(
+      *M, ArrTy, /*isConstant=*/false, llvm::GlobalValue::InternalLinkage,
+      llvm::ConstantArray::get(ArrTy, SrcInit), "g_mmsrc");
   Src->setDSOLocal(true);
-  auto *Dst = new llvm::GlobalVariable(*M, ArrTy, /*isConstant=*/false,
-                                       llvm::GlobalValue::InternalLinkage,
-                                       llvm::ConstantArray::get(ArrTy, DstInit),
-                                       "g_mmdst");
+  auto *Dst = new llvm::GlobalVariable(
+      *M, ArrTy, /*isConstant=*/false, llvm::GlobalValue::InternalLinkage,
+      llvm::ConstantArray::get(ArrTy, DstInit), "g_mmdst");
   Dst->setDSOLocal(true);
 
   auto *FTy = llvm::FunctionType::get(I32, {I32, I32}, false);
@@ -6513,9 +6523,10 @@ std::unique_ptr<llvm::Module> buildVecAvxMaskMov256IR(llvm::LLVMContext &Ctx,
     auto *B1 = B.CreateTrunc(B.CreateXor(B.CreateLShr(A, B.getInt32(I % 5)),
                                          B.CreateAdd(C, B.getInt32(I * 3 + 1))),
                              I1);
-    auto *B2 = B.CreateTrunc(B.CreateAdd(B.CreateMul(A, B.getInt32(I + 1)),
-                                         B.CreateLShr(C, B.getInt32((I + 2) % 5))),
-                             I1);
+    auto *B2 =
+        B.CreateTrunc(B.CreateAdd(B.CreateMul(A, B.getInt32(I + 1)),
+                                  B.CreateLShr(C, B.getInt32((I + 2) % 5))),
+                      I1);
     M1 = B.CreateInsertElement(M1, B.CreateSExt(B1, I32), uint64_t(I));
     M2 = B.CreateInsertElement(M2, B.CreateSExt(B2, I32), uint64_t(I));
   }
@@ -6577,28 +6588,29 @@ std::unique_ptr<llvm::Module> buildVecAvxMaskMov256IR(llvm::LLVMContext &Ctx,
 // 256-bit AVX2 *qword* masked contiguous load + store on YMM — vpmaskmovq via
 // llvm.x86.avx2.maskload.q.256 / maskstore.q.256: the qword (VEX.W1) sibling of
 // vmaskmov256.  A per-lane sign-bit mask (bit63 of each <4 x i64> lane) selects
-// which lanes are loaded from / stored to a *contiguous* global base — masked-off
-// load lanes read 0, masked-off store lanes leave memory unchanged.  This is the
-// dedicated exercise for the W1 (qword) arm of the 0F38 8C/8E decode: vmaskmov256
-// only drives the W0 (dword) arm, so without this shape the qword lane stride is
-// never emulated end to end.  On 32-bit ISAs the <4 x i64> mask/value scalarize to
-// multi-register 64-bit ops; every other cell open-codes the identical semantics
-// (full 256-bit load + select for maskload; load + select + store for maskstore).
+// which lanes are loaded from / stored to a *contiguous* global base —
+// masked-off load lanes read 0, masked-off store lanes leave memory unchanged.
+// This is the dedicated exercise for the W1 (qword) arm of the 0F38 8C/8E
+// decode: vmaskmov256 only drives the W0 (dword) arm, so without this shape the
+// qword lane stride is never emulated end to end.  On 32-bit ISAs the <4 x i64>
+// mask/value scalarize to multi-register 64-bit ops; every other cell
+// open-codes the identical semantics (full 256-bit load + select for maskload;
+// load + select + store for maskstore).
 //
 // Cross-ISA: on x86-64 the avx2 intrinsic (its name carries "avx2" ->
 // detectTargetFeaturesX86 auto-enables +avx2) pins vpmaskmovq ymm for both the
-// load and the store; every other cell open-codes select(mask<0, ...) over a plain
-// contiguous <4 x i64> load/store, libcall-free.  Two runtime per-lane masks (M1
-// for the load, M2 for the store) are derived from the args so their bit63 flags
-// vary at run time and the backend cannot fold the masked ops to constants.  The
-// store target g_mmqdst is a writable global read back and byte-compared by the
-// harness; g_mmqsrc is a read-only source.  No L1 pass touches the masked-mov
-// sub-graph, so the original and obfuscated copies stay byte-identical over it; an
-// undecoded vpmaskmovq faults the Unicorn baseline (UC_ERR_INSN_INVALID) and any
-// value/data divergence is a genuine backend / fork-Unicorn bug.  Integer
-// add/sub/and/or/xor + non-folding constants (0x5C5C/33203) + a data-dependent
-// diamond + PHI drive the subst / const-enc / opaque / flatten / bogus / indirect
-// L1 passes.
+// load and the store; every other cell open-codes select(mask<0, ...) over a
+// plain contiguous <4 x i64> load/store, libcall-free.  Two runtime per-lane
+// masks (M1 for the load, M2 for the store) are derived from the args so their
+// bit63 flags vary at run time and the backend cannot fold the masked ops to
+// constants.  The store target g_mmqdst is a writable global read back and
+// byte-compared by the harness; g_mmqsrc is a read-only source.  No L1 pass
+// touches the masked-mov sub-graph, so the original and obfuscated copies stay
+// byte-identical over it; an undecoded vpmaskmovq faults the Unicorn baseline
+// (UC_ERR_INSN_INVALID) and any value/data divergence is a genuine backend /
+// fork-Unicorn bug.  Integer add/sub/and/or/xor + non-folding constants
+// (0x5C5C/33203) + a data-dependent diamond + PHI drive the subst / const-enc /
+// opaque / flatten / bogus / indirect L1 passes.
 std::unique_ptr<llvm::Module> buildVecAvxMaskMovQ256IR(llvm::LLVMContext &Ctx,
                                                        const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -6617,15 +6629,13 @@ std::unique_ptr<llvm::Module> buildVecAvxMaskMovQ256IR(llvm::LLVMContext &Ctx,
     DstInit.push_back(llvm::ConstantInt::get(
         I64, ((uint64_t)I * 0x2545F4914F6CDD1Dull) ^ 0x1357BDF9ACE24680ull));
   }
-  auto *Src = new llvm::GlobalVariable(*M, ArrTy, /*isConstant=*/false,
-                                       llvm::GlobalValue::InternalLinkage,
-                                       llvm::ConstantArray::get(ArrTy, SrcInit),
-                                       "g_mmqsrc");
+  auto *Src = new llvm::GlobalVariable(
+      *M, ArrTy, /*isConstant=*/false, llvm::GlobalValue::InternalLinkage,
+      llvm::ConstantArray::get(ArrTy, SrcInit), "g_mmqsrc");
   Src->setDSOLocal(true);
-  auto *Dst = new llvm::GlobalVariable(*M, ArrTy, /*isConstant=*/false,
-                                       llvm::GlobalValue::InternalLinkage,
-                                       llvm::ConstantArray::get(ArrTy, DstInit),
-                                       "g_mmqdst");
+  auto *Dst = new llvm::GlobalVariable(
+      *M, ArrTy, /*isConstant=*/false, llvm::GlobalValue::InternalLinkage,
+      llvm::ConstantArray::get(ArrTy, DstInit), "g_mmqdst");
   Dst->setDSOLocal(true);
 
   auto *FTy = llvm::FunctionType::get(I32, {I32, I32}, false);
@@ -6652,10 +6662,10 @@ std::unique_ptr<llvm::Module> buildVecAvxMaskMovQ256IR(llvm::LLVMContext &Ctx,
     auto *B1 = B.CreateTrunc(B.CreateXor(B.CreateLShr(A, B.getInt32(I % 5)),
                                          B.CreateAdd(C, B.getInt32(I * 3 + 1))),
                              I1);
-    auto *B2 = B.CreateTrunc(
-        B.CreateAdd(B.CreateMul(A, B.getInt32(I + 1)),
-                    B.CreateLShr(C, B.getInt32((I + 2) % 5))),
-        I1);
+    auto *B2 =
+        B.CreateTrunc(B.CreateAdd(B.CreateMul(A, B.getInt32(I + 1)),
+                                  B.CreateLShr(C, B.getInt32((I + 2) % 5))),
+                      I1);
     M1 = B.CreateInsertElement(M1, B.CreateSExt(B1, I64), uint64_t(I));
     M2 = B.CreateInsertElement(M2, B.CreateSExt(B2, I64), uint64_t(I));
   }
@@ -6670,8 +6680,8 @@ std::unique_ptr<llvm::Module> buildVecAvxMaskMovQ256IR(llvm::LLVMContext &Ctx,
     Loaded = B.CreateSelect(B.CreateICmpSLT(M1, Zero), Full, Zero);
   }
 
-  // Transform, then masked store to g_mmqdst under M2 (masked-off lanes keep the
-  // existing memory contents).
+  // Transform, then masked store to g_mmqdst under M2 (masked-off lanes keep
+  // the existing memory contents).
   auto *Res = B.CreateAdd(Loaded, B.CreateVectorSplat(4, B.CreateZExt(A, I64)));
   if (IsX64) {
     B.CreateIntrinsic(llvm::Intrinsic::x86_avx2_maskstore_q_256, {},
@@ -6688,9 +6698,9 @@ std::unique_ptr<llvm::Module> buildVecAvxMaskMovQ256IR(llvm::LLVMContext &Ctx,
   llvm::Value *S = B.getInt32(0);
   for (unsigned I = 0; I < 4; ++I) {
     auto *L = B.CreateExtractElement(Back, uint64_t(I));
-    auto *Folded = B.CreateXor(
-        B.CreateTrunc(L, I32),
-        B.CreateTrunc(B.CreateLShr(L, B.getInt64(32)), I32));
+    auto *Folded =
+        B.CreateXor(B.CreateTrunc(L, I32),
+                    B.CreateTrunc(B.CreateLShr(L, B.getInt64(32)), I32));
     S = B.CreateAdd(S, B.CreateMul(Folded, B.getInt32(I + 1)));
   }
 
@@ -6720,16 +6730,16 @@ std::unique_ptr<llvm::Module> buildVecAvxMaskMovQ256IR(llvm::LLVMContext &Ctx,
 }
 
 // 256-bit AVX (VEX.256) *float* masked contiguous load + store on YMM —
-// vmaskmovps via llvm.x86.avx.maskload.ps.256 / maskstore.ps.256: the FP sibling
-// of vmaskmov256 (integer vpmaskmovd).  A per-lane sign-bit mask (bit31 of each
-// <8 x i32> lane) selects which lanes are loaded from / stored to a contiguous
-// global base — masked-off load lanes read 0, masked-off store lanes leave
-// memory unchanged.  The FP maskmov is a *different opcode* from the integer one
-// — VEX.256.66.0F38.W0 2C load / 2E store, vs the integer 0F38 8C/8E — so it
-// drives a decode path the integer maskmov shapes never touched.  The moved data
-// is treated as raw bit patterns (the globals are [8 x i32], read back as
-// <8 x i32> and folded), so the check is byte-exact and libcall/rounding-free —
-// maskmov is pure data movement, not FP arithmetic.
+// vmaskmovps via llvm.x86.avx.maskload.ps.256 / maskstore.ps.256: the FP
+// sibling of vmaskmov256 (integer vpmaskmovd).  A per-lane sign-bit mask (bit31
+// of each <8 x i32> lane) selects which lanes are loaded from / stored to a
+// contiguous global base — masked-off load lanes read 0, masked-off store lanes
+// leave memory unchanged.  The FP maskmov is a *different opcode* from the
+// integer one — VEX.256.66.0F38.W0 2C load / 2E store, vs the integer 0F38
+// 8C/8E — so it drives a decode path the integer maskmov shapes never touched.
+// The moved data is treated as raw bit patterns (the globals are [8 x i32],
+// read back as <8 x i32> and folded), so the check is byte-exact and
+// libcall/rounding-free — maskmov is pure data movement, not FP arithmetic.
 //
 // Cross-ISA: on x86-64 the avx intrinsic (its name carries "avx" ->
 // detectTargetFeaturesX86 auto-enables +avx + an AVX CPU model) pins vmaskmovps
@@ -6764,15 +6774,13 @@ std::unique_ptr<llvm::Module> buildVecAvxMaskMovPS256IR(llvm::LLVMContext &Ctx,
     DstInit.push_back(
         llvm::ConstantInt::get(I32, ((uint32_t)I * 0x2545F491u) ^ 0xACE24680u));
   }
-  auto *Src = new llvm::GlobalVariable(*M, ArrTy, /*isConstant=*/false,
-                                       llvm::GlobalValue::InternalLinkage,
-                                       llvm::ConstantArray::get(ArrTy, SrcInit),
-                                       "g_mmpssrc");
+  auto *Src = new llvm::GlobalVariable(
+      *M, ArrTy, /*isConstant=*/false, llvm::GlobalValue::InternalLinkage,
+      llvm::ConstantArray::get(ArrTy, SrcInit), "g_mmpssrc");
   Src->setDSOLocal(true);
-  auto *Dst = new llvm::GlobalVariable(*M, ArrTy, /*isConstant=*/false,
-                                       llvm::GlobalValue::InternalLinkage,
-                                       llvm::ConstantArray::get(ArrTy, DstInit),
-                                       "g_mmpsdst");
+  auto *Dst = new llvm::GlobalVariable(
+      *M, ArrTy, /*isConstant=*/false, llvm::GlobalValue::InternalLinkage,
+      llvm::ConstantArray::get(ArrTy, DstInit), "g_mmpsdst");
   Dst->setDSOLocal(true);
 
   auto *FTy = llvm::FunctionType::get(I32, {I32, I32}, false);
@@ -6800,10 +6808,10 @@ std::unique_ptr<llvm::Module> buildVecAvxMaskMovPS256IR(llvm::LLVMContext &Ctx,
     auto *B1 = B.CreateTrunc(B.CreateXor(B.CreateLShr(A, B.getInt32(I % 5)),
                                          B.CreateAdd(C, B.getInt32(I * 3 + 1))),
                              I1);
-    auto *B2 = B.CreateTrunc(
-        B.CreateAdd(B.CreateMul(A, B.getInt32(I + 1)),
-                    B.CreateLShr(C, B.getInt32((I + 2) % 5))),
-        I1);
+    auto *B2 =
+        B.CreateTrunc(B.CreateAdd(B.CreateMul(A, B.getInt32(I + 1)),
+                                  B.CreateLShr(C, B.getInt32((I + 2) % 5))),
+                      I1);
     M1 = B.CreateInsertElement(M1, B.CreateSExt(B1, I32), uint64_t(I));
     M2 = B.CreateInsertElement(M2, B.CreateSExt(B2, I32), uint64_t(I));
   }
@@ -6869,8 +6877,8 @@ std::unique_ptr<llvm::Module> buildVecAvxMaskMovPS256IR(llvm::LLVMContext &Ctx,
 // 256-bit AVX (VEX.256) *double* masked contiguous load + store on YMM —
 // vmaskmovpd via llvm.x86.avx.maskload.pd.256 / maskstore.pd.256: the qword FP
 // sibling of vmaskmovps256.  A per-lane sign-bit mask (bit63 of each <4 x i64>
-// lane) selects which lanes are loaded from / stored to a contiguous global base
-// — masked-off load lanes read 0, masked-off store lanes leave memory
+// lane) selects which lanes are loaded from / stored to a contiguous global
+// base — masked-off load lanes read 0, masked-off store lanes leave memory
 // unchanged.  This drives the W1 (pd, qword-lane) FP maskmov opcodes
 // VEX.256.66.0F38.W1 2D load / 2F store — distinct from both the integer 8C/8E
 // and the ps 2C/2E arms.  As with the ps shape the moved data is raw bit
@@ -6880,14 +6888,15 @@ std::unique_ptr<llvm::Module> buildVecAvxMaskMovPS256IR(llvm::LLVMContext &Ctx,
 // Cross-ISA: on x86-64 the avx intrinsic pins vmaskmovpd ymm for both the load
 // and the store; every other cell open-codes select(mask<0, ...) over a plain
 // contiguous <4 x double> load/store (the <4 x i64> mask/value scalarize to
-// multi-register 64-bit ops on 32-bit ISAs), libcall-free.  Two runtime per-lane
-// masks (M1 load, M2 store) keep bit63 varying at run time so the backend cannot
-// fold the masked ops to constants.  g_mmpddst is a writable global read back and
-// byte-compared; g_mmpdsrc is a read-only source.  No L1 pass touches the
-// masked-mov sub-graph, so orig/obfuscated stay byte-identical over it; an
-// undecoded vmaskmovpd faults the Unicorn baseline and any divergence is a
-// genuine backend / fork-Unicorn bug.  Integer add/sub/and/or/xor + non-folding
-// constants (0x5C5C/33203) + a data-dependent diamond + PHI drive the L1 passes.
+// multi-register 64-bit ops on 32-bit ISAs), libcall-free.  Two runtime
+// per-lane masks (M1 load, M2 store) keep bit63 varying at run time so the
+// backend cannot fold the masked ops to constants.  g_mmpddst is a writable
+// global read back and byte-compared; g_mmpdsrc is a read-only source.  No L1
+// pass touches the masked-mov sub-graph, so orig/obfuscated stay byte-identical
+// over it; an undecoded vmaskmovpd faults the Unicorn baseline and any
+// divergence is a genuine backend / fork-Unicorn bug.  Integer
+// add/sub/and/or/xor + non-folding constants (0x5C5C/33203) + a data-dependent
+// diamond + PHI drive the L1 passes.
 std::unique_ptr<llvm::Module> buildVecAvxMaskMovPD256IR(llvm::LLVMContext &Ctx,
                                                         const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -6908,15 +6917,13 @@ std::unique_ptr<llvm::Module> buildVecAvxMaskMovPD256IR(llvm::LLVMContext &Ctx,
     DstInit.push_back(llvm::ConstantInt::get(
         I64, ((uint64_t)I * 0x2545F4914F6CDD1Dull) ^ 0x1357BDF9ACE24680ull));
   }
-  auto *Src = new llvm::GlobalVariable(*M, ArrTy, /*isConstant=*/false,
-                                       llvm::GlobalValue::InternalLinkage,
-                                       llvm::ConstantArray::get(ArrTy, SrcInit),
-                                       "g_mmpdsrc");
+  auto *Src = new llvm::GlobalVariable(
+      *M, ArrTy, /*isConstant=*/false, llvm::GlobalValue::InternalLinkage,
+      llvm::ConstantArray::get(ArrTy, SrcInit), "g_mmpdsrc");
   Src->setDSOLocal(true);
-  auto *Dst = new llvm::GlobalVariable(*M, ArrTy, /*isConstant=*/false,
-                                       llvm::GlobalValue::InternalLinkage,
-                                       llvm::ConstantArray::get(ArrTy, DstInit),
-                                       "g_mmpddst");
+  auto *Dst = new llvm::GlobalVariable(
+      *M, ArrTy, /*isConstant=*/false, llvm::GlobalValue::InternalLinkage,
+      llvm::ConstantArray::get(ArrTy, DstInit), "g_mmpddst");
   Dst->setDSOLocal(true);
 
   auto *FTy = llvm::FunctionType::get(I32, {I32, I32}, false);
@@ -6944,10 +6951,10 @@ std::unique_ptr<llvm::Module> buildVecAvxMaskMovPD256IR(llvm::LLVMContext &Ctx,
     auto *B1 = B.CreateTrunc(B.CreateXor(B.CreateLShr(A, B.getInt32(I % 5)),
                                          B.CreateAdd(C, B.getInt32(I * 3 + 1))),
                              I1);
-    auto *B2 = B.CreateTrunc(
-        B.CreateAdd(B.CreateMul(A, B.getInt32(I + 1)),
-                    B.CreateLShr(C, B.getInt32((I + 2) % 5))),
-        I1);
+    auto *B2 =
+        B.CreateTrunc(B.CreateAdd(B.CreateMul(A, B.getInt32(I + 1)),
+                                  B.CreateLShr(C, B.getInt32((I + 2) % 5))),
+                      I1);
     M1 = B.CreateInsertElement(M1, B.CreateSExt(B1, I64), uint64_t(I));
     M2 = B.CreateInsertElement(M2, B.CreateSExt(B2, I64), uint64_t(I));
   }
@@ -6964,10 +6971,10 @@ std::unique_ptr<llvm::Module> buildVecAvxMaskMovPD256IR(llvm::LLVMContext &Ctx,
 
   // Transform in the integer domain (byte-exact, no FP rounding), then masked
   // store to g_mmpddst under M2 (masked-off lanes keep existing contents).
-  auto *ResF = B.CreateBitCast(
-      B.CreateAdd(B.CreateBitCast(Loaded, V4i64),
-                  B.CreateVectorSplat(4, B.CreateZExt(A, I64))),
-      V4f64);
+  auto *ResF =
+      B.CreateBitCast(B.CreateAdd(B.CreateBitCast(Loaded, V4i64),
+                                  B.CreateVectorSplat(4, B.CreateZExt(A, I64))),
+                      V4f64);
   if (IsX64) {
     B.CreateIntrinsic(llvm::Intrinsic::x86_avx_maskstore_pd_256, {},
                       {DstBase, M2, ResF});
@@ -7025,19 +7032,20 @@ std::unique_ptr<llvm::Module> buildVecAvxMaskMovPD256IR(llvm::LLVMContext &Ctx,
 // Cross-ISA: a dword AVX2 op only reaches a YMM register once +avx2 is on, and
 // CodeGenX86::detectTargetFeaturesX86 keys +avx2 off an "avx2"-named intrinsic;
 // a generic splat shift carries no such name, so the x86-64 cell pins one
-// llvm.x86.avx2.psllv.d.256 (a real per-lane shift that also requests +avx2) and
-// feeds its result into the uniform shifts; with +avx2 live the generic
-// shl/lshr/ashr of <8 x i32> by a splat count then lower to vpslld/vpsrld/vpsrad
-// ymm (xmm count).  Every other cell uses the plain generic shift (NEON
-// ushl/sshl by a splat shift vector / scalarized), all libcall-free.  Per cell
-// the original and obfuscated copies share the identical shift sub-graph (no L1
-// pass changes its value), so they stay byte-identical over it under emulation;
-// an undecoded YMM op faults the Unicorn baseline (UC_ERR_INSN_INVALID) and any
-// divergence is a real backend / fork-Unicorn bug.  Sign-mixed dword data +
-// distinct position weights keep the lane-sum reduction order-sensitive; the
-// shared count is masked to [0,31] so every shift is well-defined; integer
-// add/sub/mul/and/or/xor + non-folding constants (0x5A5A/12345) + a
-// data-dependent diamond + PHI drive the L1 passes.
+// llvm.x86.avx2.psllv.d.256 (a real per-lane shift that also requests +avx2)
+// and feeds its result into the uniform shifts; with +avx2 live the generic
+// shl/lshr/ashr of <8 x i32> by a splat count then lower to
+// vpslld/vpsrld/vpsrad ymm (xmm count).  Every other cell uses the plain
+// generic shift (NEON ushl/sshl by a splat shift vector / scalarized), all
+// libcall-free.  Per cell the original and obfuscated copies share the
+// identical shift sub-graph (no L1 pass changes its value), so they stay
+// byte-identical over it under emulation; an undecoded YMM op faults the
+// Unicorn baseline (UC_ERR_INSN_INVALID) and any divergence is a real backend /
+// fork-Unicorn bug.  Sign-mixed dword data + distinct position weights keep the
+// lane-sum reduction order-sensitive; the shared count is masked to [0,31] so
+// every shift is well-defined; integer add/sub/mul/and/or/xor + non-folding
+// constants (0x5A5A/12345) + a data-dependent diamond + PHI drive the L1
+// passes.
 std::unique_ptr<llvm::Module> buildVecAvxUShift256IR(llvm::LLVMContext &Ctx,
                                                      const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -7056,7 +7064,8 @@ std::unique_ptr<llvm::Module> buildVecAvxUShift256IR(llvm::LLVMContext &Ctx,
   auto *A = F->getArg(0), *C = F->getArg(1);
 
   llvm::IRBuilder<> B(Entry);
-  // <8 x i32> data (sign-mixed) and a per-lane count [0,31] for the +avx2 anchor.
+  // <8 x i32> data (sign-mixed) and a per-lane count [0,31] for the +avx2
+  // anchor.
   llvm::Value *VD = llvm::UndefValue::get(V8i);
   llvm::Value *VS = llvm::UndefValue::get(V8i);
   for (unsigned I = 0; I < 8; ++I) {
@@ -7066,8 +7075,9 @@ std::unique_ptr<llvm::Module> buildVecAvxUShift256IR(llvm::LLVMContext &Ctx,
                     B.CreateAdd(C, B.getInt32(I * 0x101 + 1))),
         uint64_t(I));
     VS = B.CreateInsertElement(
-        VS, B.CreateAnd(B.CreateAdd(B.CreateAdd(A, C), B.getInt32(I * 5 + 1)),
-                        B.getInt32(31)),
+        VS,
+        B.CreateAnd(B.CreateAdd(B.CreateAdd(A, C), B.getInt32(I * 5 + 1)),
+                    B.getInt32(31)),
         uint64_t(I));
   }
 
@@ -7133,17 +7143,18 @@ std::unique_ptr<llvm::Module> buildVecAvxUShift256IR(llvm::LLVMContext &Ctx,
 // Cross-ISA: llvm.x86.avx2.pmadd.wd is a real avx2-named intrinsic on x86-64
 // (requests +avx2 directly — no psllv anchor needed).  The operands are built
 // as <8 x i32> (sign-mixed, runtime) and bitcast to <16 x i16> before the
-// intrinsic: trunc+insert into i16 lanes is rewritten by ValueLaunder/BitMasking
-// (Xform::All) into undecodable ops, while the i32 insert+bitcast subgraph is
-// identical in both copies and survives every L1 pass.  Non-x64 cells expand the
-// pair-wise i16 mul+add in scalar/generic form (NEON widening mul + add /
-// scalarized), all libcall-free.  Per cell the original and obfuscated copies
-// share the identical pmadd sub-graph (no L1 pass changes its value), so they
-// stay byte-identical over it under emulation; an undecoded YMM op faults the
-// Unicorn baseline (UC_ERR_INSN_INVALID) and any divergence is a real backend /
-// fork-Unicorn bug.  Distinct position weights on the <8 x i32> reduction keep
-// the lane-sum order-sensitive; integer add/sub/mul/and/or/xor + non-folding
-// constants (0x5A5A/12345) + a data-dependent diamond + PHI drive the L1 passes.
+// intrinsic: trunc+insert into i16 lanes is rewritten by
+// ValueLaunder/BitMasking (Xform::All) into undecodable ops, while the i32
+// insert+bitcast subgraph is identical in both copies and survives every L1
+// pass.  Non-x64 cells expand the pair-wise i16 mul+add in scalar/generic form
+// (NEON widening mul + add / scalarized), all libcall-free.  Per cell the
+// original and obfuscated copies share the identical pmadd sub-graph (no L1
+// pass changes its value), so they stay byte-identical over it under emulation;
+// an undecoded YMM op faults the Unicorn baseline (UC_ERR_INSN_INVALID) and any
+// divergence is a real backend / fork-Unicorn bug.  Distinct position weights
+// on the <8 x i32> reduction keep the lane-sum order-sensitive; integer
+// add/sub/mul/and/or/xor + non-folding constants (0x5A5A/12345) + a
+// data-dependent diamond + PHI drive the L1 passes.
 std::unique_ptr<llvm::Module> buildVecAvxIPMadd256IR(llvm::LLVMContext &Ctx,
                                                      const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -7164,7 +7175,8 @@ std::unique_ptr<llvm::Module> buildVecAvxIPMadd256IR(llvm::LLVMContext &Ctx,
   auto *A = F->getArg(0), *C = F->getArg(1);
 
   llvm::IRBuilder<> B(Entry);
-  // <8 x i32> operands (sign-mixed, runtime) -> bitcast to <16 x i16> for pmadd.
+  // <8 x i32> operands (sign-mixed, runtime) -> bitcast to <16 x i16> for
+  // pmadd.
   llvm::Value *VD = llvm::UndefValue::get(V8i);
   llvm::Value *VE = llvm::UndefValue::get(V8i);
   for (unsigned I = 0; I < 8; ++I) {
@@ -7189,12 +7201,12 @@ std::unique_ptr<llvm::Module> buildVecAvxIPMadd256IR(llvm::LLVMContext &Ctx,
   else {
     Madd = llvm::UndefValue::get(V8i);
     for (unsigned I = 0; I < 8; ++I) {
-      auto *P0 = B.CreateMul(
-          B.CreateSExt(B.CreateExtractElement(VA, 2 * I), I32),
-          B.CreateSExt(B.CreateExtractElement(VB, 2 * I), I32));
-      auto *P1 = B.CreateMul(
-          B.CreateSExt(B.CreateExtractElement(VA, 2 * I + 1), I32),
-          B.CreateSExt(B.CreateExtractElement(VB, 2 * I + 1), I32));
+      auto *P0 =
+          B.CreateMul(B.CreateSExt(B.CreateExtractElement(VA, 2 * I), I32),
+                      B.CreateSExt(B.CreateExtractElement(VB, 2 * I), I32));
+      auto *P1 =
+          B.CreateMul(B.CreateSExt(B.CreateExtractElement(VA, 2 * I + 1), I32),
+                      B.CreateSExt(B.CreateExtractElement(VB, 2 * I + 1), I32));
       Madd = B.CreateInsertElement(Madd, B.CreateAdd(P0, P1), uint64_t(I));
     }
   }
@@ -7240,9 +7252,10 @@ std::unique_ptr<llvm::Module> buildVecAvxIPMadd256IR(llvm::LLVMContext &Ctx,
 // result into llvm.abs of <8 x i32>; with +avx2 live the abs then lowers to
 // vpabsd ymm (not the SSSE3 SWAR psrad/pxor/psub expand vabsi uses at 128-bit).
 // Every other cell uses generic shift + abs (NEON abs / scalarized), all
-// libcall-free.  is_int_min_poison=false keeps abs(INT_MIN) well-defined.  No L1
-// pass touches abs, so orig/obfuscated copies stay byte-identical over the abs
-// sub-graph; an undecoded YMM op faults Unicorn baseline (UC_ERR_INSN_INVALID).
+// libcall-free.  is_int_min_poison=false keeps abs(INT_MIN) well-defined.  No
+// L1 pass touches abs, so orig/obfuscated copies stay byte-identical over the
+// abs sub-graph; an undecoded YMM op faults Unicorn baseline
+// (UC_ERR_INSN_INVALID).
 std::unique_ptr<llvm::Module> buildVecAvxIAbs256IR(llvm::LLVMContext &Ctx,
                                                    const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -7277,8 +7290,9 @@ std::unique_ptr<llvm::Module> buildVecAvxIAbs256IR(llvm::LLVMContext &Ctx,
                     B.CreateXor(A, B.getInt32(I * 0x77 + 5))),
         uint64_t(I));
     VS = B.CreateInsertElement(
-        VS, B.CreateAnd(B.CreateAdd(B.CreateAdd(A, C), B.getInt32(I * 3 + 1)),
-                        B.getInt32(7)),
+        VS,
+        B.CreateAnd(B.CreateAdd(B.CreateAdd(A, C), B.getInt32(I * 3 + 1)),
+                    B.getInt32(7)),
         uint64_t(I));
   }
 
@@ -7341,9 +7355,9 @@ std::unique_ptr<llvm::Module> buildVecAvxIAbs256IR(llvm::LLVMContext &Ctx,
 // add, +1, lshr 1, truncate back — which lowers to NEON urhadd / a scalarized
 // widen-add-shift, all libcall-free and numerically equal to the hardware avg.
 // No L1 pass rewrites the average sub-graph, so the original and obfuscated
-// copies stay byte-identical over it under emulation; an undecoded YMM op faults
-// the Unicorn baseline (UC_ERR_INSN_INVALID).  zext-then-weighted-sum with
-// distinct per-lane weights (the 16 word lanes and the 32 byte lanes use
+// copies stay byte-identical over it under emulation; an undecoded YMM op
+// faults the Unicorn baseline (UC_ERR_INSN_INVALID).  zext-then-weighted-sum
+// with distinct per-lane weights (the 16 word lanes and the 32 byte lanes use
 // different weight bases) keeps the reduction order-sensitive, while integer
 // add/sub/and/or/xor + non-folding constants (0x5A5A/12345) + a data-dependent
 // diamond + PHI drive the subst / const-enc / opaque / flatten / bogus /
@@ -7465,20 +7479,21 @@ std::unique_ptr<llvm::Module> buildVecAvxIAvg256IR(llvm::LLVMContext &Ctx,
 // [-32768, 32767].  No prior PatchFull shape emitted a saturating byte
 // multiply-add, and none reached vpmaddubsw at 256-bit width.
 //
-// Cross-ISA: vpmaddubsw has a dedicated x86 intrinsic (llvm.x86.avx2.pmadd.ub.sw)
-// that itself requests +avx2, so the x86-64 cell pins it directly (no psllv pin
-// needed) and it lowers straight to vpmaddubsw ymm.  Every other cell open-codes
-// the identical operation — zext the unsigned bytes, sext the signed bytes,
-// multiply, add the adjacent pair in i32, clamp with llvm.smin/llvm.smax to the
-// i16 range, truncate — which lowers to NEON widening multiply + saturating
-// narrow / a scalarized clamp, all libcall-free (i32-domain only; no i64
-// multiply).  No L1 pass rewrites the multiply-add sub-graph, so the original and
-// obfuscated copies stay byte-identical over it under emulation; an undecoded YMM
-// op faults the Unicorn baseline (UC_ERR_INSN_INVALID).  sext-then-weighted-sum
-// (the saturated words are signed) with distinct per-lane weights keeps the
-// reduction order-sensitive, while integer add/sub/and/or/xor + non-folding
-// constants (0x5A5A/12345) + a data-dependent diamond + PHI drive the subst /
-// const-enc / opaque / flatten / bogus / indirect L1 passes.
+// Cross-ISA: vpmaddubsw has a dedicated x86 intrinsic
+// (llvm.x86.avx2.pmadd.ub.sw) that itself requests +avx2, so the x86-64 cell
+// pins it directly (no psllv pin needed) and it lowers straight to vpmaddubsw
+// ymm.  Every other cell open-codes the identical operation — zext the unsigned
+// bytes, sext the signed bytes, multiply, add the adjacent pair in i32, clamp
+// with llvm.smin/llvm.smax to the i16 range, truncate — which lowers to NEON
+// widening multiply + saturating narrow / a scalarized clamp, all libcall-free
+// (i32-domain only; no i64 multiply).  No L1 pass rewrites the multiply-add
+// sub-graph, so the original and obfuscated copies stay byte-identical over it
+// under emulation; an undecoded YMM op faults the Unicorn baseline
+// (UC_ERR_INSN_INVALID).  sext-then-weighted-sum (the saturated words are
+// signed) with distinct per-lane weights keeps the reduction order-sensitive,
+// while integer add/sub/and/or/xor + non-folding constants (0x5A5A/12345) + a
+// data-dependent diamond + PHI drive the subst / const-enc / opaque / flatten /
+// bogus / indirect L1 passes.
 std::unique_ptr<llvm::Module> buildVecAvxIMaddUB256IR(llvm::LLVMContext &Ctx,
                                                       const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -7501,7 +7516,8 @@ std::unique_ptr<llvm::Module> buildVecAvxIMaddUB256IR(llvm::LLVMContext &Ctx,
   auto *A = F->getArg(0), *C = F->getArg(1);
 
   llvm::IRBuilder<> B(Entry);
-  // <8 x i32> operands (sign-mixed, runtime) -> bitcast to <32 x i8> byte lanes.
+  // <8 x i32> operands (sign-mixed, runtime) -> bitcast to <32 x i8> byte
+  // lanes.
   llvm::Value *VD = llvm::UndefValue::get(V8i);
   llvm::Value *VE = llvm::UndefValue::get(V8i);
   for (unsigned I = 0; I < 8; ++I) {
@@ -7527,9 +7543,9 @@ std::unique_ptr<llvm::Module> buildVecAvxIMaddUB256IR(llvm::LLVMContext &Ctx,
   } else {
     Madd = llvm::UndefValue::get(V16h);
     for (unsigned I = 0; I < 16; ++I) {
-      auto *P0 = B.CreateMul(
-          B.CreateZExt(B.CreateExtractElement(VAb, 2 * I), I32),
-          B.CreateSExt(B.CreateExtractElement(VBb, 2 * I), I32));
+      auto *P0 =
+          B.CreateMul(B.CreateZExt(B.CreateExtractElement(VAb, 2 * I), I32),
+                      B.CreateSExt(B.CreateExtractElement(VBb, 2 * I), I32));
       auto *P1 = B.CreateMul(
           B.CreateZExt(B.CreateExtractElement(VAb, 2 * I + 1), I32),
           B.CreateSExt(B.CreateExtractElement(VBb, 2 * I + 1), I32));
@@ -7620,7 +7636,8 @@ std::unique_ptr<llvm::Module> buildVecAvxIMulH256IR(llvm::LLVMContext &Ctx,
   auto *A = F->getArg(0), *C = F->getArg(1);
 
   llvm::IRBuilder<> B(Entry);
-  // <8 x i32> operands (sign-mixed, runtime) -> bitcast to <16 x i16> word lanes.
+  // <8 x i32> operands (sign-mixed, runtime) -> bitcast to <16 x i16> word
+  // lanes.
   llvm::Value *VD = llvm::UndefValue::get(V8i);
   llvm::Value *VE = llvm::UndefValue::get(V8i);
   for (unsigned I = 0; I < 8; ++I) {
@@ -7713,9 +7730,9 @@ std::unique_ptr<llvm::Module> buildVecAvxIMulH256IR(llvm::LLVMContext &Ctx,
 // the identical Q15 rounding multiply -- sext each i16 lane to i32, multiply,
 // ashr 14, +1, ashr 1, truncate back -- which lowers to NEON sqrdmulh-style
 // widen-mul-round / a scalarized sequence, all libcall-free (i32-domain only;
-// no i64 multiply).  No L1 pass rewrites the multiply sub-graph, so the original
-// and obfuscated copies stay byte-identical over it under emulation; an
-// undecoded YMM op faults the Unicorn baseline (UC_ERR_INSN_INVALID).
+// no i64 multiply).  No L1 pass rewrites the multiply sub-graph, so the
+// original and obfuscated copies stay byte-identical over it under emulation;
+// an undecoded YMM op faults the Unicorn baseline (UC_ERR_INSN_INVALID).
 // sext-then-weighted-sum (the rounded high words are signed) with distinct
 // per-lane weights keeps the reduction order-sensitive, while integer
 // add/sub/and/or/xor + non-folding constants (0x5A5A/12345) + a data-dependent
@@ -7741,7 +7758,8 @@ std::unique_ptr<llvm::Module> buildVecAvxIMulHRS256IR(llvm::LLVMContext &Ctx,
   auto *A = F->getArg(0), *C = F->getArg(1);
 
   llvm::IRBuilder<> B(Entry);
-  // <8 x i32> operands (sign-mixed, runtime) -> bitcast to <16 x i16> word lanes.
+  // <8 x i32> operands (sign-mixed, runtime) -> bitcast to <16 x i16> word
+  // lanes.
   llvm::Value *VD = llvm::UndefValue::get(V8i);
   llvm::Value *VE = llvm::UndefValue::get(V8i);
   for (unsigned I = 0; I < 8; ++I) {
@@ -7762,13 +7780,13 @@ std::unique_ptr<llvm::Module> buildVecAvxIMulHRS256IR(llvm::LLVMContext &Ctx,
   // vpmulhrsw ymm on x86-64; open-coded Q15 rounding multiply-high elsewhere.
   llvm::Value *MulR;
   if (IsX64)
-    MulR = B.CreateIntrinsic(llvm::Intrinsic::x86_avx2_pmul_hr_sw, {}, {VA, VB});
+    MulR =
+        B.CreateIntrinsic(llvm::Intrinsic::x86_avx2_pmul_hr_sw, {}, {VA, VB});
   else {
     MulR = llvm::UndefValue::get(V16h);
     for (unsigned I = 0; I < 16; ++I) {
-      auto *P =
-          B.CreateMul(B.CreateSExt(B.CreateExtractElement(VA, I), I32),
-                      B.CreateSExt(B.CreateExtractElement(VB, I), I32));
+      auto *P = B.CreateMul(B.CreateSExt(B.CreateExtractElement(VA, I), I32),
+                            B.CreateSExt(B.CreateExtractElement(VB, I), I32));
       auto *R = B.CreateAShr(
           B.CreateAdd(B.CreateAShr(P, B.getInt32(14)), B.getInt32(1)),
           B.getInt32(1));
@@ -7824,8 +7842,8 @@ std::unique_ptr<llvm::Module> buildVecAvxIMulHRS256IR(llvm::LLVMContext &Ctx,
 // umax-umin, sum the 8 per 64-bit lane, zext to i64 -- which lowers to NEON
 // uabd/uadalp / a scalarized abs-diff-accumulate, all libcall-free (no i64
 // multiply; only i16/i64 add).  No L1 pass rewrites the SAD sub-graph, so the
-// original and obfuscated copies stay byte-identical over it under emulation; an
-// undecoded YMM op faults the Unicorn baseline (UC_ERR_INSN_INVALID).
+// original and obfuscated copies stay byte-identical over it under emulation;
+// an undecoded YMM op faults the Unicorn baseline (UC_ERR_INSN_INVALID).
 // zext-then-weighted-sum of the four 64-bit lane sums (truncated to i32; each
 // SAD <= 2040 fits) with distinct per-lane weights keeps the reduction
 // order-sensitive, while integer add/sub/and/or/xor + non-folding constants
@@ -7854,7 +7872,8 @@ std::unique_ptr<llvm::Module> buildVecAvxISad256IR(llvm::LLVMContext &Ctx,
   auto *A = F->getArg(0), *C = F->getArg(1);
 
   llvm::IRBuilder<> B(Entry);
-  // <8 x i32> operands (sign-mixed, runtime) -> bitcast to <32 x i8> byte lanes.
+  // <8 x i32> operands (sign-mixed, runtime) -> bitcast to <32 x i8> byte
+  // lanes.
   llvm::Value *VD = llvm::UndefValue::get(V8i);
   llvm::Value *VE = llvm::UndefValue::get(V8i);
   for (unsigned I = 0; I < 8; ++I) {
@@ -7939,14 +7958,14 @@ std::unique_ptr<llvm::Module> buildVecAvxISad256IR(llvm::LLVMContext &Ctx,
 // needed) and it lowers straight to vpsignd ymm.  Every other cell open-codes
 // the identical sign transfer -- negate the data lane, then a control==0 / <0
 // select chain -- which lowers to NEON neg + cmlt/cmeq + bsl or a scalarized
-// compare-select, all libcall-free (only i32 sub / compare / select; no multiply
-// or divide of the sign result).  No L1 pass rewrites the select sub-graph, so
-// the original and obfuscated copies stay byte-identical over it under
-// emulation; an undecoded YMM op faults the Unicorn baseline
-// (UC_ERR_INSN_INVALID).  The eight sign-applied lanes are reduced with distinct
-// per-lane weights (order-sensitive), while integer add/sub/and/or/xor +
-// non-folding constants (0x3C3C/9973) + a data-dependent diamond + PHI drive the
-// subst / const-enc / opaque / flatten / bogus / indirect L1 passes.
+// compare-select, all libcall-free (only i32 sub / compare / select; no
+// multiply or divide of the sign result).  No L1 pass rewrites the select
+// sub-graph, so the original and obfuscated copies stay byte-identical over it
+// under emulation; an undecoded YMM op faults the Unicorn baseline
+// (UC_ERR_INSN_INVALID).  The eight sign-applied lanes are reduced with
+// distinct per-lane weights (order-sensitive), while integer add/sub/and/or/xor
+// + non-folding constants (0x3C3C/9973) + a data-dependent diamond + PHI drive
+// the subst / const-enc / opaque / flatten / bogus / indirect L1 passes.
 std::unique_ptr<llvm::Module> buildVecAvxISign256IR(llvm::LLVMContext &Ctx,
                                                     const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -7985,8 +8004,8 @@ std::unique_ptr<llvm::Module> buildVecAvxISign256IR(llvm::LLVMContext &Ctx,
   // vpsignd ymm on x86-64; open-coded sign transfer elsewhere.
   llvm::Value *Sgn;
   if (IsX64)
-    Sgn = B.CreateIntrinsic(llvm::Intrinsic::x86_avx2_psign_d, {},
-                            {VData, VCtl});
+    Sgn =
+        B.CreateIntrinsic(llvm::Intrinsic::x86_avx2_psign_d, {}, {VData, VCtl});
   else {
     Sgn = llvm::UndefValue::get(V8i);
     auto *Zero = B.getInt32(0);
@@ -8089,8 +8108,9 @@ std::unique_ptr<llvm::Module> buildVecAvxIHAdd256IR(llvm::LLVMContext &Ctx,
         uint64_t(I));
   }
 
-  // In-lane pairwise horizontal op: output lane O (lane=O/4, p=O%4) takes src1's
-  // pair for p<2 and src2's pair for p>=2 -- matching vphaddd/vphsubd ymm.
+  // In-lane pairwise horizontal op: output lane O (lane=O/4, p=O%4) takes
+  // src1's pair for p<2 and src2's pair for p>=2 -- matching vphaddd/vphsubd
+  // ymm.
   auto Horiz = [&](bool IsAdd, llvm::Value *Va,
                    llvm::Value *Vb) -> llvm::Value * {
     llvm::Value *R = llvm::UndefValue::get(V8i);
@@ -8224,8 +8244,8 @@ std::unique_ptr<llvm::Module> buildVecAvxIPerm256IR(llvm::LLVMContext &Ctx,
   auto Perm = [&](llvm::Value *Data, llvm::Type *VTy) -> llvm::Value * {
     llvm::Value *R = llvm::UndefValue::get(VTy);
     for (unsigned O = 0; O < 8; ++O) {
-      auto *Sel = B.CreateAnd(B.CreateExtractElement(VI, uint64_t(O)),
-                              B.getInt32(7));
+      auto *Sel =
+          B.CreateAnd(B.CreateExtractElement(VI, uint64_t(O)), B.getInt32(7));
       llvm::Value *Pick = B.CreateExtractElement(Data, uint64_t(0));
       for (unsigned J = 1; J < 8; ++J)
         Pick = B.CreateSelect(B.CreateICmpEQ(Sel, B.getInt32(J)),
@@ -8365,7 +8385,8 @@ std::unique_ptr<llvm::Module> buildVecAvxIHAddSW256IR(llvm::LLVMContext &Ctx,
     return R;
   };
 
-  // vphaddsw / vphsubsw ymm on x86-64; open-coded saturating pairwise elsewhere.
+  // vphaddsw / vphsubsw ymm on x86-64; open-coded saturating pairwise
+  // elsewhere.
   llvm::Value *HAdd, *HSub;
   if (IsX64) {
     HAdd = B.CreateIntrinsic(llvm::Intrinsic::x86_avx2_phadd_sw, {}, {VD, VE});
@@ -8375,20 +8396,18 @@ std::unique_ptr<llvm::Module> buildVecAvxIHAddSW256IR(llvm::LLVMContext &Ctx,
     HSub = Horiz(false, VD, VE);
   }
 
-  // Reduce both results with distinct ascending/descending weights (sign-extend:
-  // words are signed) so each op and lane position is observable.
+  // Reduce both results with distinct ascending/descending weights
+  // (sign-extend: words are signed) so each op and lane position is observable.
   llvm::Value *S = B.getInt32(0);
   for (unsigned L = 0; L < 16; ++L) {
     S = B.CreateAdd(
-        S,
-        B.CreateMul(
-            B.CreateSExt(B.CreateExtractElement(HAdd, uint64_t(L)), I32),
-            B.getInt32(L + 1)));
+        S, B.CreateMul(
+               B.CreateSExt(B.CreateExtractElement(HAdd, uint64_t(L)), I32),
+               B.getInt32(L + 1)));
     S = B.CreateAdd(
-        S,
-        B.CreateMul(
-            B.CreateSExt(B.CreateExtractElement(HSub, uint64_t(L)), I32),
-            B.getInt32(16 - L)));
+        S, B.CreateMul(
+               B.CreateSExt(B.CreateExtractElement(HSub, uint64_t(L)), I32),
+               B.getInt32(16 - L)));
   }
 
   auto *T = B.CreateXor(B.CreateXor(B.CreateAdd(A, C), B.CreateSub(A, C)),
@@ -8427,13 +8446,14 @@ std::unique_ptr<llvm::Module> buildVecAvxIHAddSW256IR(llvm::LLVMContext &Ctx,
 // Cross-ISA: on x86-64, +avx2 is pinned via llvm.x86.avx2.psllv.d.256 (same
 // anchor as vicmp256) and the blends are expressed as CreateShuffleVector masks
 // that Apple/fork LLVM ISel folds to vpblendw ymm (verified:
-// shufflevector <16 x i16> with indices i / 16+i from imm8 bit (i&7) -> vpblendw
-// at -O2).  Every other cell open-codes the identical per-word imm8 rule with
-// extract/select (zero libcall).  Two complementary imm8 masks (0xAA / 0x55)
-// keep both src1/src2 contributions observable; sign-extended ascending/descending
-// per-lane weights make mis-blended words change the sum.  Integer add/sub/and/
-// or/xor + non-folding constants (0x2E2E/13579) + a data-dependent diamond + PHI
-// drive the subst/const-enc/opaque/flatten/bogus/indirect passes.
+// shufflevector <16 x i16> with indices i / 16+i from imm8 bit (i&7) ->
+// vpblendw at -O2).  Every other cell open-codes the identical per-word imm8
+// rule with extract/select (zero libcall).  Two complementary imm8 masks (0xAA
+// / 0x55) keep both src1/src2 contributions observable; sign-extended
+// ascending/descending per-lane weights make mis-blended words change the sum.
+// Integer add/sub/and/ or/xor + non-folding constants (0x2E2E/13579) + a
+// data-dependent diamond + PHI drive the
+// subst/const-enc/opaque/flatten/bogus/indirect passes.
 std::unique_ptr<llvm::Module> buildVecAvxIBlendW256IR(llvm::LLVMContext &Ctx,
                                                       const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -8492,18 +8512,20 @@ std::unique_ptr<llvm::Module> buildVecAvxIBlendW256IR(llvm::LLVMContext &Ctx,
     return R;
   };
 
-  // +avx2 anchor so 256-bit YMM shuffles lower to vpblendw, not split xmm halves.
+  // +avx2 anchor so 256-bit YMM shuffles lower to vpblendw, not split xmm
+  // halves.
   if (IsX64) {
     llvm::Value *VD = llvm::UndefValue::get(V8i);
     llvm::Value *VS = llvm::UndefValue::get(V8i);
     for (unsigned I = 0; I < 8; ++I) {
-      VD = B.CreateInsertElement(
-          VD, B.CreateAdd(A, B.getInt32(I)), uint64_t(I));
+      VD =
+          B.CreateInsertElement(VD, B.CreateAdd(A, B.getInt32(I)), uint64_t(I));
       VS = B.CreateInsertElement(
           VS, B.CreateAnd(B.CreateAdd(C, B.getInt32(I)), B.getInt32(7)),
           uint64_t(I));
     }
-    (void)B.CreateIntrinsic(llvm::Intrinsic::x86_avx2_psllv_d_256, {}, {VD, VS});
+    (void)B.CreateIntrinsic(llvm::Intrinsic::x86_avx2_psllv_d_256, {},
+                            {VD, VS});
   }
 
   llvm::Value *B1 = WordBlend(VA, VB, 0xAA);
@@ -8513,14 +8535,12 @@ std::unique_ptr<llvm::Module> buildVecAvxIBlendW256IR(llvm::LLVMContext &Ctx,
   for (unsigned L = 0; L < 16; ++L) {
     S = B.CreateAdd(
         S,
-        B.CreateMul(
-            B.CreateSExt(B.CreateExtractElement(B1, uint64_t(L)), I32),
-            B.getInt32(L + 1)));
+        B.CreateMul(B.CreateSExt(B.CreateExtractElement(B1, uint64_t(L)), I32),
+                    B.getInt32(L + 1)));
     S = B.CreateAdd(
         S,
-        B.CreateMul(
-            B.CreateSExt(B.CreateExtractElement(B2, uint64_t(L)), I32),
-            B.getInt32(16 - L)));
+        B.CreateMul(B.CreateSExt(B.CreateExtractElement(B2, uint64_t(L)), I32),
+                    B.getInt32(16 - L)));
   }
 
   auto *T = B.CreateXor(B.CreateXor(B.CreateAdd(A, C), B.CreateSub(A, C)),
@@ -8548,12 +8568,13 @@ std::unique_ptr<llvm::Module> buildVecAvxIBlendW256IR(llvm::LLVMContext &Ctx,
   return M;
 }
 
-// 256-bit AVX2 packed word->byte saturating pack on YMM -- vpacksswb / vpackuswb
-// (<16 x i16>, <16 x i16> -> <32 x i8> with signed / unsigned saturation).  This
+// 256-bit AVX2 packed word->byte saturating pack on YMM -- vpacksswb /
+// vpackuswb
+// (<16 x i16>, <16 x i16> -> <32 x i8> with signed / unsigned saturation). This
 // is the first 256-bit shape to exercise a SATURATING NARROW (pack): prior
 // shapes saturate on an add (vihaddsw256 via sadd.sat/ssub.sat) but none
-// narrow-with-clamp, and -- the headline bug magnet -- the 256-bit pack does NOT
-// concatenate the two sources; within EACH 128-bit lane it lays down src1's
+// narrow-with-clamp, and -- the headline bug magnet -- the 256-bit pack does
+// NOT concatenate the two sources; within EACH 128-bit lane it lays down src1's
 // eight clamped bytes then src2's eight (result byte b: lane=b/16, p=b%16; src1
 // for p<8 else src2; word = lane*8 + (p&7)).  A decoder that treated
 // vpack{ss,us}wb ymm as a flat 256-bit concat would mis-place sixteen bytes and
@@ -8565,10 +8586,11 @@ std::unique_ptr<llvm::Module> buildVecAvxIBlendW256IR(llvm::LLVMContext &Ctx,
 // the source word is read SIGNED (sext to i32) for both, then clamped to
 // [-128,127] (signed) or [0,255] (unsigned) via llvm.smin/smax (native
 // saturating-narrow on NEON: sqxtn/sqxtun, no libcall).  Both packs are
-// observable -- packsswb bytes are reduced sign-extended with ascending weights,
-// packuswb bytes zero-extended with descending weights -- while integer
-// add/sub/and/or/xor + non-folding constants (0x4B4B/31337) + a data-dependent
-// diamond + PHI drive the subst/const-enc/opaque/flatten/bogus/indirect passes.
+// observable -- packsswb bytes are reduced sign-extended with ascending
+// weights, packuswb bytes zero-extended with descending weights -- while
+// integer add/sub/and/or/xor + non-folding constants (0x4B4B/31337) + a
+// data-dependent diamond + PHI drive the
+// subst/const-enc/opaque/flatten/bogus/indirect passes.
 std::unique_ptr<llvm::Module> buildVecAvxIPack256IR(llvm::LLVMContext &Ctx,
                                                     const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -8591,8 +8613,8 @@ std::unique_ptr<llvm::Module> buildVecAvxIPack256IR(llvm::LLVMContext &Ctx,
   auto *A = F->getArg(0), *C = F->getArg(1);
 
   llvm::IRBuilder<> B(Entry);
-  // Two <16 x i16> operands, full-range words (truncated from runtime i32) so the
-  // i16->i8 clamps fire on both the signed and unsigned ends.
+  // Two <16 x i16> operands, full-range words (truncated from runtime i32) so
+  // the i16->i8 clamps fire on both the signed and unsigned ends.
   llvm::Value *VA = llvm::UndefValue::get(V16i);
   llvm::Value *VB = llvm::UndefValue::get(V16i);
   for (unsigned I = 0; I < 16; ++I) {
@@ -8613,8 +8635,9 @@ std::unique_ptr<llvm::Module> buildVecAvxIPack256IR(llvm::LLVMContext &Ctx,
   }
 
   // Open-coded interleaved clamp+truncate matching vpack{ss,us}wb ymm layout:
-  // output byte b (lane=b/16, p=b%16) takes src1's lane words for p<8 and src2's
-  // for p>=8 (word = lane*8 + (p&7)), read signed, clamped, truncated to i8.
+  // output byte b (lane=b/16, p=b%16) takes src1's lane words for p<8 and
+  // src2's for p>=8 (word = lane*8 + (p&7)), read signed, clamped, truncated to
+  // i8.
   auto Pack = [&](bool Signed, llvm::Value *V1,
                   llvm::Value *V2) -> llvm::Value * {
     llvm::Value *R = llvm::UndefValue::get(V32b);
@@ -8625,11 +8648,14 @@ std::unique_ptr<llvm::Module> buildVecAvxIPack256IR(llvm::LLVMContext &Ctx,
       auto *X = B.CreateSExt(B.CreateExtractElement(Src, uint64_t(E)), I32);
       llvm::Value *Cl;
       if (Signed) {
-        Cl = B.CreateBinaryIntrinsic(llvm::Intrinsic::smax, X, B.getInt32(-128));
-        Cl = B.CreateBinaryIntrinsic(llvm::Intrinsic::smin, Cl, B.getInt32(127));
+        Cl =
+            B.CreateBinaryIntrinsic(llvm::Intrinsic::smax, X, B.getInt32(-128));
+        Cl =
+            B.CreateBinaryIntrinsic(llvm::Intrinsic::smin, Cl, B.getInt32(127));
       } else {
         Cl = B.CreateBinaryIntrinsic(llvm::Intrinsic::smax, X, B.getInt32(0));
-        Cl = B.CreateBinaryIntrinsic(llvm::Intrinsic::smin, Cl, B.getInt32(255));
+        Cl =
+            B.CreateBinaryIntrinsic(llvm::Intrinsic::smin, Cl, B.getInt32(255));
       }
       R = B.CreateInsertElement(R, B.CreateTrunc(Cl, I8), uint64_t(Bx));
     }
@@ -8652,14 +8678,12 @@ std::unique_ptr<llvm::Module> buildVecAvxIPack256IR(llvm::LLVMContext &Ctx,
   for (unsigned L = 0; L < 32; ++L) {
     S = B.CreateAdd(
         S,
-        B.CreateMul(
-            B.CreateSExt(B.CreateExtractElement(PS, uint64_t(L)), I32),
-            B.getInt32(L + 1)));
+        B.CreateMul(B.CreateSExt(B.CreateExtractElement(PS, uint64_t(L)), I32),
+                    B.getInt32(L + 1)));
     S = B.CreateAdd(
         S,
-        B.CreateMul(
-            B.CreateZExt(B.CreateExtractElement(PU, uint64_t(L)), I32),
-            B.getInt32(32 - L)));
+        B.CreateMul(B.CreateZExt(B.CreateExtractElement(PU, uint64_t(L)), I32),
+                    B.getInt32(32 - L)));
   }
 
   auto *T = B.CreateXor(B.CreateXor(B.CreateAdd(A, C), B.CreateSub(A, C)),
@@ -8691,13 +8715,13 @@ std::unique_ptr<llvm::Module> buildVecAvxIPack256IR(llvm::LLVMContext &Ctx,
 // <32 x i8> control -> <32 x i8>).  This is the byte-granular, IN-LANE dual of
 // the cross-lane dword viperm256 (vpermd/vpermps): where vpermd routes whole
 // dwords across the full 256-bit register by a runtime index, vpshufb routes
-// individual bytes WITHIN each 128-bit lane and -- the headline gotcha -- zeroes
-// the output byte whenever the control byte's bit 7 is set
-// (result[i] = (ctrl[i] & 0x80) ? 0 : data[lane*16 + (ctrl[i] & 0x0F)],
-// lane = i/16).  No prior 256-bit shape exercises a runtime byte-granular gather
-// or the zero-on-high-bit semantic; a decoder that crossed lanes (used the full
-// 5-bit index instead of the in-lane low nibble) or skipped the bit-7 zeroing
-// would mis-route bytes and change the reduction.
+// individual bytes WITHIN each 128-bit lane and -- the headline gotcha --
+// zeroes the output byte whenever the control byte's bit 7 is set (result[i] =
+// (ctrl[i] & 0x80) ? 0 : data[lane*16 + (ctrl[i] & 0x0F)], lane = i/16).  No
+// prior 256-bit shape exercises a runtime byte-granular gather or the
+// zero-on-high-bit semantic; a decoder that crossed lanes (used the full 5-bit
+// index instead of the in-lane low nibble) or skipped the bit-7 zeroing would
+// mis-route bytes and change the reduction.
 //
 // Cross-ISA: on x86-64 the dedicated llvm.x86.avx2.pshuf.b carries +avx2, so it
 // lowers straight to vpshufb ymm; every other cell open-codes the identical
@@ -8795,14 +8819,12 @@ std::unique_ptr<llvm::Module> buildVecAvxIShufB256IR(llvm::LLVMContext &Ctx,
   for (unsigned L = 0; L < 32; ++L) {
     S = B.CreateAdd(
         S,
-        B.CreateMul(
-            B.CreateSExt(B.CreateExtractElement(P1, uint64_t(L)), I32),
-            B.getInt32(L + 1)));
+        B.CreateMul(B.CreateSExt(B.CreateExtractElement(P1, uint64_t(L)), I32),
+                    B.getInt32(L + 1)));
     S = B.CreateAdd(
         S,
-        B.CreateMul(
-            B.CreateZExt(B.CreateExtractElement(P2, uint64_t(L)), I32),
-            B.getInt32(32 - L)));
+        B.CreateMul(B.CreateZExt(B.CreateExtractElement(P2, uint64_t(L)), I32),
+                    B.getInt32(32 - L)));
   }
 
   auto *T = B.CreateXor(B.CreateXor(B.CreateAdd(A, C), B.CreateSub(A, C)),
@@ -9039,14 +9061,12 @@ std::unique_ptr<llvm::Module> buildVecAvxIBlendVB256IR(llvm::LLVMContext &Ctx,
   for (unsigned L = 0; L < 32; ++L) {
     S = B.CreateAdd(
         S,
-        B.CreateMul(
-            B.CreateSExt(B.CreateExtractElement(Bl1, uint64_t(L)), I32),
-            B.getInt32(L + 1)));
+        B.CreateMul(B.CreateSExt(B.CreateExtractElement(Bl1, uint64_t(L)), I32),
+                    B.getInt32(L + 1)));
     S = B.CreateAdd(
         S,
-        B.CreateMul(
-            B.CreateZExt(B.CreateExtractElement(Bl2, uint64_t(L)), I32),
-            B.getInt32(32 - L)));
+        B.CreateMul(B.CreateZExt(B.CreateExtractElement(Bl2, uint64_t(L)), I32),
+                    B.getInt32(32 - L)));
   }
 
   auto *T = B.CreateXor(B.CreateXor(B.CreateAdd(A, C), B.CreateSub(A, C)),
@@ -9076,29 +9096,30 @@ std::unique_ptr<llvm::Module> buildVecAvxIBlendVB256IR(llvm::LLVMContext &Ctx,
 
 // 256-bit AVX2 widening dword->qword multiply on YMM -- vpmuldq / vpmuludq
 // (<8 x i32> x <8 x i32> -> <4 x i64>, EVEN dwords only).  This is the first
-// 256-bit shape to produce i64 lanes and the first full-width widening multiply:
-// every prior integer-YMM shape reduces i8/i16/i32 lanes, and the only
-// multiplies so far are the word high-half (vimulh256) and word multiply-add
-// (vipmadd256/vimaddub256) that never exceed i32.  vpmuldq/vpmuludq read ONLY
-// the even dword of each qword position (result qword j = src1.dword[2j] *
-// src2.dword[2j], odd dwords discarded) and yield a full 64-bit product -- the
-// headline bug magnet: a decoder that read the odd dwords, all eight dwords, or
-// treated the source as already 64-bit would change every product.
+// 256-bit shape to produce i64 lanes and the first full-width widening
+// multiply: every prior integer-YMM shape reduces i8/i16/i32 lanes, and the
+// only multiplies so far are the word high-half (vimulh256) and word
+// multiply-add (vipmadd256/vimaddub256) that never exceed i32. vpmuldq/vpmuludq
+// read ONLY the even dword of each qword position (result qword j =
+// src1.dword[2j] * src2.dword[2j], odd dwords discarded) and yield a full
+// 64-bit product -- the headline bug magnet: a decoder that read the odd
+// dwords, all eight dwords, or treated the source as already 64-bit would
+// change every product.
 //
 // LLVM dropped the dedicated sse2/avx2 pmulu.dq / pmul.dq intrinsics
 // (autoupgraded to generic IR), so the x86-64 cell pins +avx2 with a throwaway
 // llvm.x86.avx2.psllv.d.256 anchor (whose result IS the first multiply operand,
-// so it is never dead) and then the canonical generic patterns over <4 x i64> --
-// mul(and(x,0xFFFFFFFF), and(y,0xFFFFFFFF)) for the unsigned product and
-// mul(sext_inreg(x), sext_inreg(y)) for the signed product -- fold to vpmuludq /
-// vpmuldq ymm (verified: clang -mavx2).  Every other cell open-codes the
+// so it is never dead) and then the canonical generic patterns over <4 x i64>
+// -- mul(and(x,0xFFFFFFFF), and(y,0xFFFFFFFF)) for the unsigned product and
+// mul(sext_inreg(x), sext_inreg(y)) for the signed product -- fold to vpmuludq
+// / vpmuldq ymm (verified: clang -mavx2).  Every other cell open-codes the
 // identical even-lane widening explicitly: zext/sext each even i32 dword to i64
 // and multiply (NEON umull/smull, i386 widening imul -- a single instruction,
 // zero libcall on every ISA).  Both products are observable: signed qwords
 // reduced with ascending weights, unsigned with descending, and BOTH halves
 // (low 32 + high 32) folded in so the sext-vs-zext split on negative dwords and
-// the full 64-bit width stay order-sensitive, while integer add/sub/and/or/xor +
-// non-folding constants (0x6363/25117) + a data-dependent diamond + PHI drive
+// the full 64-bit width stay order-sensitive, while integer add/sub/and/or/xor
+// + non-folding constants (0x6363/25117) + a data-dependent diamond + PHI drive
 // the subst/const-enc/opaque/flatten/bogus/indirect passes.
 std::unique_ptr<llvm::Module> buildVecAvxIMulDQ256IR(llvm::LLVMContext &Ctx,
                                                      const char *Triple) {
@@ -9121,9 +9142,10 @@ std::unique_ptr<llvm::Module> buildVecAvxIMulDQ256IR(llvm::LLVMContext &Ctx,
   auto *A = F->getArg(0), *C = F->getArg(1);
 
   llvm::IRBuilder<> B(Entry);
-  // Two <8 x i32> sources whose even dwords differ from the odd ones (so reading
-  // the wrong dword changes the product) with mixed sign (so signed and unsigned
-  // products differ), plus a per-lane [0,7] shift vector for the +avx2 anchor.
+  // Two <8 x i32> sources whose even dwords differ from the odd ones (so
+  // reading the wrong dword changes the product) with mixed sign (so signed and
+  // unsigned products differ), plus a per-lane [0,7] shift vector for the +avx2
+  // anchor.
   llvm::Value *VA = llvm::UndefValue::get(V8i);
   llvm::Value *VB = llvm::UndefValue::get(V8i);
   llvm::Value *VS = llvm::UndefValue::get(V8i);
@@ -9145,12 +9167,13 @@ std::unique_ptr<llvm::Module> buildVecAvxIMulDQ256IR(llvm::LLVMContext &Ctx,
         uint64_t(I));
   }
 
-  // +avx2 anchor: psllv.d.256 on x86-64 (its result is multiply operand 1, never
-  // dead); a plain per-lane shl elsewhere.  In-range [0,7] shifts so psllv and
-  // shl agree per cell and no lane is poisoned.
+  // +avx2 anchor: psllv.d.256 on x86-64 (its result is multiply operand 1,
+  // never dead); a plain per-lane shl elsewhere.  In-range [0,7] shifts so
+  // psllv and shl agree per cell and no lane is poisoned.
   llvm::Value *ShA;
   if (IsX64)
-    ShA = B.CreateIntrinsic(llvm::Intrinsic::x86_avx2_psllv_d_256, {}, {VA, VS});
+    ShA =
+        B.CreateIntrinsic(llvm::Intrinsic::x86_avx2_psllv_d_256, {}, {VA, VS});
   else
     ShA = B.CreateShl(VA, VS);
 
@@ -9324,14 +9347,12 @@ std::unique_ptr<llvm::Module> buildVecAvxIPackD256IR(llvm::LLVMContext &Ctx,
   for (unsigned L = 0; L < 16; ++L) {
     S = B.CreateAdd(
         S,
-        B.CreateMul(
-            B.CreateSExt(B.CreateExtractElement(PS, uint64_t(L)), I32),
-            B.getInt32(L + 1)));
+        B.CreateMul(B.CreateSExt(B.CreateExtractElement(PS, uint64_t(L)), I32),
+                    B.getInt32(L + 1)));
     S = B.CreateAdd(
         S,
-        B.CreateMul(
-            B.CreateZExt(B.CreateExtractElement(PU, uint64_t(L)), I32),
-            B.getInt32(16 - L)));
+        B.CreateMul(B.CreateZExt(B.CreateExtractElement(PU, uint64_t(L)), I32),
+                    B.getInt32(16 - L)));
   }
 
   auto *T = B.CreateXor(B.CreateXor(B.CreateAdd(A, C), B.CreateSub(A, C)),
@@ -9366,18 +9387,18 @@ std::unique_ptr<llvm::Module> buildVecAvxIPackD256IR(llvm::LLVMContext &Ctx,
 // are added/subtracted with plain 2's-complement wrap (NOT signed saturation),
 // src1's four pair results first then src2's four (output word O: lane=O/8,
 // p=O%8; src1 for p<4 else src2; pair = lane*8 + 2*(p&3)).  With full-range
-// inputs the pair sums overflow i16, so a decoder that confused vphaddw with the
-// saturating vphaddsw (clamp vs wrap) -- or crossed the 128-bit lane -- would
-// change the weighted reduction.
+// inputs the pair sums overflow i16, so a decoder that confused vphaddw with
+// the saturating vphaddsw (clamp vs wrap) -- or crossed the 128-bit lane --
+// would change the weighted reduction.
 //
 // Cross-ISA: on x86-64 the dedicated llvm.x86.avx2.phadd.w / phsub.w carry
 // +avx2, so they lower straight to vphaddw / vphsubw ymm.  Every other cell
-// open-codes the identical in-lane pairwise wrapping add/sub (plain i16 add/sub,
-// NEON addp / shuffle+sub, zero libcall).  Both results are observable -- sign-
-// extended with ascending (phaddw) / descending (phsubw) per-lane weights --
-// while integer add/sub/and/or/xor + non-folding constants (0x1B1B/11171) + a
-// data-dependent diamond + PHI drive the subst/const-enc/opaque/flatten/bogus/
-// indirect passes.
+// open-codes the identical in-lane pairwise wrapping add/sub (plain i16
+// add/sub, NEON addp / shuffle+sub, zero libcall).  Both results are observable
+// -- sign- extended with ascending (phaddw) / descending (phsubw) per-lane
+// weights -- while integer add/sub/and/or/xor + non-folding constants
+// (0x1B1B/11171) + a data-dependent diamond + PHI drive the
+// subst/const-enc/opaque/flatten/bogus/ indirect passes.
 std::unique_ptr<llvm::Module> buildVecAvxIHAddW256IR(llvm::LLVMContext &Ctx,
                                                      const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -9447,20 +9468,18 @@ std::unique_ptr<llvm::Module> buildVecAvxIHAddW256IR(llvm::LLVMContext &Ctx,
     HSub = Horiz(false, VD, VE);
   }
 
-  // Reduce both results with distinct ascending/descending weights (sign-extend:
-  // words are signed) so each op and lane position is observable.
+  // Reduce both results with distinct ascending/descending weights
+  // (sign-extend: words are signed) so each op and lane position is observable.
   llvm::Value *S = B.getInt32(0);
   for (unsigned L = 0; L < 16; ++L) {
     S = B.CreateAdd(
-        S,
-        B.CreateMul(
-            B.CreateSExt(B.CreateExtractElement(HAdd, uint64_t(L)), I32),
-            B.getInt32(L + 1)));
+        S, B.CreateMul(
+               B.CreateSExt(B.CreateExtractElement(HAdd, uint64_t(L)), I32),
+               B.getInt32(L + 1)));
     S = B.CreateAdd(
-        S,
-        B.CreateMul(
-            B.CreateSExt(B.CreateExtractElement(HSub, uint64_t(L)), I32),
-            B.getInt32(16 - L)));
+        S, B.CreateMul(
+               B.CreateSExt(B.CreateExtractElement(HSub, uint64_t(L)), I32),
+               B.getInt32(16 - L)));
   }
 
   auto *T = B.CreateXor(B.CreateXor(B.CreateAdd(A, C), B.CreateSub(A, C)),
@@ -9489,8 +9508,8 @@ std::unique_ptr<llvm::Module> buildVecAvxIHAddW256IR(llvm::LLVMContext &Ctx,
 }
 
 // 256-bit AVX2 packed byte/word sign-transfer on YMM -- vpsignb / vpsignw
-// (<32 x i8> / <16 x i16>: each lane dst = ctl<0 ? -data : (ctl==0 ? 0 : data)).
-// The byte (32-lane) and word (16-lane) siblings of the dword visign256
+// (<32 x i8> / <16 x i16>: each lane dst = ctl<0 ? -data : (ctl==0 ? 0 :
+// data)). The byte (32-lane) and word (16-lane) siblings of the dword visign256
 // (vpsignd): identical sign-application semantics two and one element-widths
 // narrower, so the far denser lane grid makes element-width confusion
 // observable -- a decoder that treated vpsignb/vpsignw as the dword vpsignd
@@ -9583,8 +9602,8 @@ std::unique_ptr<llvm::Module> buildVecAvxISignBW256IR(llvm::LLVMContext &Ctx,
       auto *Dv = B.CreateExtractElement(Data, uint64_t(L));
       auto *Sv = B.CreateExtractElement(Ctl, uint64_t(L));
       auto *NZ = B.CreateSelect(B.CreateICmpEQ(Sv, Zero), Zero, Dv);
-      auto *Rv = B.CreateSelect(B.CreateICmpSLT(Sv, Zero),
-                                B.CreateSub(Zero, Dv), NZ);
+      auto *Rv =
+          B.CreateSelect(B.CreateICmpSLT(Sv, Zero), B.CreateSub(Zero, Dv), NZ);
       R = B.CreateInsertElement(R, Rv, uint64_t(L));
     }
     return R;
@@ -9608,14 +9627,14 @@ std::unique_ptr<llvm::Module> buildVecAvxISignBW256IR(llvm::LLVMContext &Ctx,
   llvm::Value *S = B.getInt32(0);
   for (unsigned L = 0; L < 32; ++L)
     S = B.CreateAdd(
-        S, B.CreateMul(
-               B.CreateSExt(B.CreateExtractElement(SB, uint64_t(L)), I32),
-               B.getInt32(L + 1)));
+        S,
+        B.CreateMul(B.CreateSExt(B.CreateExtractElement(SB, uint64_t(L)), I32),
+                    B.getInt32(L + 1)));
   for (unsigned L = 0; L < 16; ++L)
     S = B.CreateAdd(
-        S, B.CreateMul(
-               B.CreateSExt(B.CreateExtractElement(SW, uint64_t(L)), I32),
-               B.getInt32(16 - L)));
+        S,
+        B.CreateMul(B.CreateSExt(B.CreateExtractElement(SW, uint64_t(L)), I32),
+                    B.getInt32(16 - L)));
 
   auto *T = B.CreateXor(B.CreateXor(B.CreateAdd(A, C), B.CreateSub(A, C)),
                         B.getInt32(0x2D2D));
@@ -9647,12 +9666,12 @@ std::unique_ptr<llvm::Module> buildVecAvxISignBW256IR(llvm::LLVMContext &Ctx,
 // compile-time imm8, the SAME imm8 driving both 128-bit lanes).  This is the
 // immediate, single-source, dword-granular sibling of the existing 256-bit
 // shuffles: vishufb256 (vpshufb) is runtime, byte-granular, in-lane; viperm256
-// (vpermd/vpermps) is runtime, dword-granular and CROSS-128-bit-lane; vpshufd is
-// compile-time, dword-granular and IN-128-bit-lane -- a distinct decode path
+// (vpermd/vpermps) is runtime, dword-granular and CROSS-128-bit-lane; vpshufd
+// is compile-time, dword-granular and IN-128-bit-lane -- a distinct decode path
 // (0F 70 /r ib) no prior 256-bit shape exercises.  Because the imm8 is applied
 // independently to each 128-bit lane (result.d[lane*4 + p] =
-// src.d[lane*4 + ((imm >> (2*p)) & 3)]), a decoder that treated vpshufd ymm as a
-// flat 256-bit dword permute -- or that applied the low imm bits across the
+// src.d[lane*4 + ((imm >> (2*p)) & 3)]), a decoder that treated vpshufd ymm as
+// a flat 256-bit dword permute -- or that applied the low imm bits across the
 // whole register -- would mis-route four dwords and change the reduction.
 //
 // Cross-ISA: vpshufd has no dedicated intrinsic in modern LLVM (it is a pure
@@ -9660,8 +9679,8 @@ std::unique_ptr<llvm::Module> buildVecAvxISignBW256IR(llvm::LLVMContext &Ctx,
 // +avx2 by an idle llvm.x86.avx2.psllv.d.256 sentinel, is selected straight to
 // vpshufd ymm; every other cell open-codes the identical permute
 // (extractelement / insertelement by the same per-lane index, all native i32
-// moves, zero libcall).  Two different imm8 patterns (0x4E = swap the two 64-bit
-// halves, 0xB1 = swap adjacent dwords) drive two shuffles, reduced with
+// moves, zero libcall).  Two different imm8 patterns (0x4E = swap the two
+// 64-bit halves, 0xB1 = swap adjacent dwords) drive two shuffles, reduced with
 // ascending / descending per-lane weights so every routed dword is observable,
 // while integer add/sub/and/or/xor + non-folding constants (0x3D3D/20231) + a
 // data-dependent diamond + PHI drive the subst/const-enc/opaque/flatten/bogus/
@@ -9685,8 +9704,8 @@ std::unique_ptr<llvm::Module> buildVecAvxIShufD256IR(llvm::LLVMContext &Ctx,
   auto *A = F->getArg(0), *C = F->getArg(1);
 
   llvm::IRBuilder<> B(Entry);
-  // <8 x i32> data, runtime-derived from the inputs so each dword spans the full
-  // range and the shuffle cannot be folded to a constant.
+  // <8 x i32> data, runtime-derived from the inputs so each dword spans the
+  // full range and the shuffle cannot be folded to a constant.
   llvm::Value *VD = llvm::UndefValue::get(V8i);
   for (unsigned I = 0; I < 8; ++I)
     VD = B.CreateInsertElement(
@@ -9717,17 +9736,20 @@ std::unique_ptr<llvm::Module> buildVecAvxIShufD256IR(llvm::LLVMContext &Ctx,
     return R;
   };
 
-  // +avx2 anchor so the 256-bit YMM shuffle lowers to vpshufd, not split halves.
+  // +avx2 anchor so the 256-bit YMM shuffle lowers to vpshufd, not split
+  // halves.
   if (IsX64) {
     llvm::Value *VA = llvm::UndefValue::get(V8i);
     llvm::Value *VS = llvm::UndefValue::get(V8i);
     for (unsigned I = 0; I < 8; ++I) {
-      VA = B.CreateInsertElement(VA, B.CreateAdd(A, B.getInt32(I)), uint64_t(I));
+      VA =
+          B.CreateInsertElement(VA, B.CreateAdd(A, B.getInt32(I)), uint64_t(I));
       VS = B.CreateInsertElement(
           VS, B.CreateAnd(B.CreateAdd(C, B.getInt32(I)), B.getInt32(7)),
           uint64_t(I));
     }
-    (void)B.CreateIntrinsic(llvm::Intrinsic::x86_avx2_psllv_d_256, {}, {VA, VS});
+    (void)B.CreateIntrinsic(llvm::Intrinsic::x86_avx2_psllv_d_256, {},
+                            {VA, VS});
   }
 
   llvm::Value *S1 = ShufD(0x4E);
@@ -9771,25 +9793,25 @@ std::unique_ptr<llvm::Module> buildVecAvxIShufD256IR(llvm::LLVMContext &Ctx,
 // 256-bit AVX2 packed word in-lane immediate shuffle on YMM -- vpshuflw /
 // vpshufhw (<16 x i16>: within each 128-bit lane vpshuflw permutes the FOUR LOW
 // words by a compile-time imm8 and copies the four high words unchanged, while
-// vpshufhw permutes the four HIGH words and copies the four low words unchanged;
-// the SAME imm8 drives both 128-bit lanes).  This is the WORD-granular sibling of
-// the dword vishufd256 (vpshufd) just added: vpshufd is dword-granular and
-// rewrites all four dwords of each lane, whereas vpshuflw/vpshufhw are
-// word-granular, touch only HALF the lane and copy the other half verbatim -- and
-// they ride a DISTINCT decode path (F2 0F 70 /r ib for vpshuflw, F3 0F 70 /r ib
-// for vpshufhw, vs 66 0F 70 for vpshufd).  Because each instruction shuffles only
-// its own 64-bit half of every 128-bit lane (the other half is identity) and the
-// imm8 indexes within that half, a decoder that let the imm8 address all eight
-// words, permuted the wrong half, or crossed the 128-bit lane would mis-route
-// four words and change the reduction.
+// vpshufhw permutes the four HIGH words and copies the four low words
+// unchanged; the SAME imm8 drives both 128-bit lanes).  This is the
+// WORD-granular sibling of the dword vishufd256 (vpshufd) just added: vpshufd
+// is dword-granular and rewrites all four dwords of each lane, whereas
+// vpshuflw/vpshufhw are word-granular, touch only HALF the lane and copy the
+// other half verbatim -- and they ride a DISTINCT decode path (F2 0F 70 /r ib
+// for vpshuflw, F3 0F 70 /r ib for vpshufhw, vs 66 0F 70 for vpshufd).  Because
+// each instruction shuffles only its own 64-bit half of every 128-bit lane (the
+// other half is identity) and the imm8 indexes within that half, a decoder that
+// let the imm8 address all eight words, permuted the wrong half, or crossed the
+// 128-bit lane would mis-route four words and change the reduction.
 //
 // Cross-ISA: vpshuflw/vpshufhw have no dedicated intrinsic in modern LLVM (they
 // are pure shufflevectors), so on x86-64 the constant <16 x i16> half-lane
 // shuffles, anchored +avx2 by an idle llvm.x86.avx2.psllv.d.256 sentinel, are
 // selected to vpshuflw ymm / vpshufhw ymm; every other cell open-codes the
 // identical permute (extractelement / insertelement by the same per-lane index,
-// all native i16 moves, zero libcall).  vpshuflw imm8 0x1B (reverse the four low
-// words) and vpshufhw imm8 0x1B (reverse the four high words) drive the two
+// all native i16 moves, zero libcall).  vpshuflw imm8 0x1B (reverse the four
+// low words) and vpshufhw imm8 0x1B (reverse the four high words) drive the two
 // shuffles, reduced with ascending zero-extended / descending sign-extended
 // per-lane weights so every routed word -- and every identity-copied word -- is
 // observable, while integer add/sub/and/or/xor + non-folding constants
@@ -9816,8 +9838,8 @@ std::unique_ptr<llvm::Module> buildVecAvxIShufW256IR(llvm::LLVMContext &Ctx,
   auto *A = F->getArg(0), *C = F->getArg(1);
 
   llvm::IRBuilder<> B(Entry);
-  // <16 x i16> data, runtime-derived from the inputs so each word spans the full
-  // range and the shuffles cannot be folded to a constant.
+  // <16 x i16> data, runtime-derived from the inputs so each word spans the
+  // full range and the shuffles cannot be folded to a constant.
   llvm::Value *VD = llvm::UndefValue::get(V16w);
   for (unsigned I = 0; I < 16; ++I)
     VD = B.CreateInsertElement(
@@ -9828,7 +9850,8 @@ std::unique_ptr<llvm::Module> buildVecAvxIShufW256IR(llvm::LLVMContext &Ctx,
             I16),
         uint64_t(I));
 
-  // vpshuflw: low 4 words of each 128-bit lane permuted by imm8, high 4 identity.
+  // vpshuflw: low 4 words of each 128-bit lane permuted by imm8, high 4
+  // identity.
   auto ShufLW = [&](uint8_t Imm) -> llvm::Value * {
     int Lane[4];
     for (unsigned P = 0; P < 4; ++P)
@@ -9857,7 +9880,8 @@ std::unique_ptr<llvm::Module> buildVecAvxIShufW256IR(llvm::LLVMContext &Ctx,
     return R;
   };
 
-  // vpshufhw: high 4 words of each 128-bit lane permuted by imm8, low 4 identity.
+  // vpshufhw: high 4 words of each 128-bit lane permuted by imm8, low 4
+  // identity.
   auto ShufHW = [&](uint8_t Imm) -> llvm::Value * {
     int Lane[4];
     for (unsigned P = 0; P < 4; ++P)
@@ -9892,12 +9916,14 @@ std::unique_ptr<llvm::Module> buildVecAvxIShufW256IR(llvm::LLVMContext &Ctx,
     llvm::Value *VA = llvm::UndefValue::get(V8d);
     llvm::Value *VS = llvm::UndefValue::get(V8d);
     for (unsigned I = 0; I < 8; ++I) {
-      VA = B.CreateInsertElement(VA, B.CreateAdd(A, B.getInt32(I)), uint64_t(I));
+      VA =
+          B.CreateInsertElement(VA, B.CreateAdd(A, B.getInt32(I)), uint64_t(I));
       VS = B.CreateInsertElement(
           VS, B.CreateAnd(B.CreateAdd(C, B.getInt32(I)), B.getInt32(7)),
           uint64_t(I));
     }
-    (void)B.CreateIntrinsic(llvm::Intrinsic::x86_avx2_psllv_d_256, {}, {VA, VS});
+    (void)B.CreateIntrinsic(llvm::Intrinsic::x86_avx2_psllv_d_256, {},
+                            {VA, VS});
   }
 
   llvm::Value *S1 = ShufLW(0x1B);
@@ -9908,13 +9934,13 @@ std::unique_ptr<llvm::Module> buildVecAvxIShufW256IR(llvm::LLVMContext &Ctx,
   llvm::Value *S = B.getInt32(0);
   for (unsigned L = 0; L < 16; ++L) {
     S = B.CreateAdd(
-        S, B.CreateMul(
-               B.CreateZExt(B.CreateExtractElement(S1, uint64_t(L)), I32),
-               B.getInt32(L + 1)));
+        S,
+        B.CreateMul(B.CreateZExt(B.CreateExtractElement(S1, uint64_t(L)), I32),
+                    B.getInt32(L + 1)));
     S = B.CreateAdd(
-        S, B.CreateMul(
-               B.CreateSExt(B.CreateExtractElement(S2, uint64_t(L)), I32),
-               B.getInt32(16 - L)));
+        S,
+        B.CreateMul(B.CreateSExt(B.CreateExtractElement(S2, uint64_t(L)), I32),
+                    B.getInt32(16 - L)));
   }
 
   auto *T = B.CreateXor(B.CreateXor(B.CreateAdd(A, C), B.CreateSub(A, C)),
@@ -9942,7 +9968,8 @@ std::unique_ptr<llvm::Module> buildVecAvxIShufW256IR(llvm::LLVMContext &Ctx,
   return M;
 }
 
-// 256-bit AVX2 packed byte in-lane dual-source immediate align on YMM -- vpalignr
+// 256-bit AVX2 packed byte in-lane dual-source immediate align on YMM --
+// vpalignr
 // (<32 x i8>: within each 128-bit lane concatenate src1||src2 into a 32-byte
 // stream and extract 16 bytes starting at compile-time imm8&0x1F; the SAME imm8
 // drives both 128-bit lanes).  This is the first 256-bit shape that is a
@@ -9954,18 +9981,18 @@ std::unique_ptr<llvm::Module> buildVecAvxIShufW256IR(llvm::LLVMContext &Ctx,
 // failed to mask imm8 to five bits would mis-route bytes and change the
 // reduction.
 //
-// Cross-ISA: vpalignr has no dedicated 256-bit intrinsic in modern LLVM (it is a
-// pure shufflevector), so on x86-64 the constant <32 x i8> in-lane align,
+// Cross-ISA: vpalignr has no dedicated 256-bit intrinsic in modern LLVM (it is
+// a pure shufflevector), so on x86-64 the constant <32 x i8> in-lane align,
 // anchored +avx2 by an idle llvm.x86.avx2.psllv.d.256 sentinel, is selected to
-// vpalignr ymm; every other cell open-codes the identical per-lane concat+extract
-// (extractelement / insertelement, all native i8 moves, zero libcall).  imm8 3
-// on (VA,VB) and imm8 8 on swapped (VB,VA) drive two aligns, reduced with
-// ascending zero-extended / descending sign-extended per-byte weights so every
-// routed byte is observable, while integer add/sub/and/or/xor + non-folding
-// constants (0x5151/23357) + a data-dependent diamond + PHI drive the
-// subst/const-enc/opaque/flatten/bogus/indirect passes.
+// vpalignr ymm; every other cell open-codes the identical per-lane
+// concat+extract (extractelement / insertelement, all native i8 moves, zero
+// libcall).  imm8 3 on (VA,VB) and imm8 8 on swapped (VB,VA) drive two aligns,
+// reduced with ascending zero-extended / descending sign-extended per-byte
+// weights so every routed byte is observable, while integer add/sub/and/or/xor
+// + non-folding constants (0x5151/23357) + a data-dependent diamond + PHI drive
+// the subst/const-enc/opaque/flatten/bogus/indirect passes.
 std::unique_ptr<llvm::Module> buildVecAvxIAlignR256IR(llvm::LLVMContext &Ctx,
-                                                     const char *Triple) {
+                                                      const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
   M->setTargetTriple(llvm::Triple(Triple));
   llvm::Triple TT(Triple);
@@ -10024,10 +10051,9 @@ std::unique_ptr<llvm::Module> buildVecAvxIAlignR256IR(llvm::LLVMContext &Ctx,
     for (unsigned L = 0; L < 2; ++L)
       for (unsigned K = 0; K < 16; ++K) {
         unsigned Pos = Imm + K;
-        llvm::Value *Byte = Pos < 16
-                                ? B.CreateExtractElement(S1, uint64_t(L * 16 + Pos))
-                                : B.CreateExtractElement(
-                                      S2, uint64_t(L * 16 + Pos - 16));
+        llvm::Value *Byte =
+            Pos < 16 ? B.CreateExtractElement(S1, uint64_t(L * 16 + Pos))
+                     : B.CreateExtractElement(S2, uint64_t(L * 16 + Pos - 16));
         R = B.CreateInsertElement(R, Byte, uint64_t(L * 16 + K));
       }
     return R;
@@ -10037,12 +10063,14 @@ std::unique_ptr<llvm::Module> buildVecAvxIAlignR256IR(llvm::LLVMContext &Ctx,
     llvm::Value *VD = llvm::UndefValue::get(V8d);
     llvm::Value *VS = llvm::UndefValue::get(V8d);
     for (unsigned I = 0; I < 8; ++I) {
-      VD = B.CreateInsertElement(VD, B.CreateAdd(A, B.getInt32(I)), uint64_t(I));
+      VD =
+          B.CreateInsertElement(VD, B.CreateAdd(A, B.getInt32(I)), uint64_t(I));
       VS = B.CreateInsertElement(
           VS, B.CreateAnd(B.CreateAdd(C, B.getInt32(I)), B.getInt32(7)),
           uint64_t(I));
     }
-    (void)B.CreateIntrinsic(llvm::Intrinsic::x86_avx2_psllv_d_256, {}, {VD, VS});
+    (void)B.CreateIntrinsic(llvm::Intrinsic::x86_avx2_psllv_d_256, {},
+                            {VD, VS});
   }
 
   llvm::Value *R1 = AlignR(VA, VB, 3);
@@ -10051,13 +10079,13 @@ std::unique_ptr<llvm::Module> buildVecAvxIAlignR256IR(llvm::LLVMContext &Ctx,
   llvm::Value *S = B.getInt32(0);
   for (unsigned L = 0; L < 32; ++L) {
     S = B.CreateAdd(
-        S, B.CreateMul(
-               B.CreateZExt(B.CreateExtractElement(R1, uint64_t(L)), I32),
-               B.getInt32(L + 1)));
+        S,
+        B.CreateMul(B.CreateZExt(B.CreateExtractElement(R1, uint64_t(L)), I32),
+                    B.getInt32(L + 1)));
     S = B.CreateAdd(
-        S, B.CreateMul(
-               B.CreateSExt(B.CreateExtractElement(R2, uint64_t(L)), I32),
-               B.getInt32(32 - L)));
+        S,
+        B.CreateMul(B.CreateSExt(B.CreateExtractElement(R2, uint64_t(L)), I32),
+                    B.getInt32(32 - L)));
   }
 
   auto *T = B.CreateXor(B.CreateXor(B.CreateAdd(A, C), B.CreateSub(A, C)),
@@ -10103,7 +10131,7 @@ std::unique_ptr<llvm::Module> buildVecAvxIAlignR256IR(llvm::LLVMContext &Ctx,
 // ascending / descending per-byte weights, while integer add/sub/and/or/xor +
 // non-folding constants (0x5353/24071) + diamond + PHI drive the seven passes.
 std::unique_ptr<llvm::Module> buildVecAvxIBShiftDQ256IR(llvm::LLVMContext &Ctx,
-                                                       const char *Triple) {
+                                                        const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
   M->setTargetTriple(llvm::Triple(Triple));
   llvm::Triple TT(Triple);
@@ -10142,8 +10170,7 @@ std::unique_ptr<llvm::Module> buildVecAvxIBShiftDQ256IR(llvm::LLVMContext &Ctx,
       llvm::SmallVector<int, 32> Idx;
       for (unsigned L = 0; L < 2; ++L)
         for (unsigned K = 0; K < 16; ++K)
-          Idx.push_back(K < Imm ? int(32 + L * 16 + K)
-                                : int(L * 16 + K - Imm));
+          Idx.push_back(K < Imm ? int(32 + L * 16 + K) : int(L * 16 + K - Imm));
       return B.CreateShuffleVector(Src, Z, Idx);
     }
     llvm::Value *R = llvm::UndefValue::get(V32b);
@@ -10186,12 +10213,14 @@ std::unique_ptr<llvm::Module> buildVecAvxIBShiftDQ256IR(llvm::LLVMContext &Ctx,
     llvm::Value *VA = llvm::UndefValue::get(V8d);
     llvm::Value *VS = llvm::UndefValue::get(V8d);
     for (unsigned I = 0; I < 8; ++I) {
-      VA = B.CreateInsertElement(VA, B.CreateAdd(A, B.getInt32(I)), uint64_t(I));
+      VA =
+          B.CreateInsertElement(VA, B.CreateAdd(A, B.getInt32(I)), uint64_t(I));
       VS = B.CreateInsertElement(
           VS, B.CreateAnd(B.CreateAdd(C, B.getInt32(I)), B.getInt32(7)),
           uint64_t(I));
     }
-    (void)B.CreateIntrinsic(llvm::Intrinsic::x86_avx2_psllv_d_256, {}, {VA, VS});
+    (void)B.CreateIntrinsic(llvm::Intrinsic::x86_avx2_psllv_d_256, {},
+                            {VA, VS});
   }
 
   llvm::Value *S1 = ShiftLDQ(VD, 3);
@@ -10200,13 +10229,13 @@ std::unique_ptr<llvm::Module> buildVecAvxIBShiftDQ256IR(llvm::LLVMContext &Ctx,
   llvm::Value *S = B.getInt32(0);
   for (unsigned L = 0; L < 32; ++L) {
     S = B.CreateAdd(
-        S, B.CreateMul(
-               B.CreateZExt(B.CreateExtractElement(S1, uint64_t(L)), I32),
-               B.getInt32(L + 1)));
+        S,
+        B.CreateMul(B.CreateZExt(B.CreateExtractElement(S1, uint64_t(L)), I32),
+                    B.getInt32(L + 1)));
     S = B.CreateAdd(
-        S, B.CreateMul(
-               B.CreateSExt(B.CreateExtractElement(S2, uint64_t(L)), I32),
-               B.getInt32(32 - L)));
+        S,
+        B.CreateMul(B.CreateSExt(B.CreateExtractElement(S2, uint64_t(L)), I32),
+                    B.getInt32(32 - L)));
   }
 
   auto *T = B.CreateXor(B.CreateXor(B.CreateAdd(A, C), B.CreateSub(A, C)),
@@ -10235,22 +10264,22 @@ std::unique_ptr<llvm::Module> buildVecAvxIBShiftDQ256IR(llvm::LLVMContext &Ctx,
 }
 
 // 256-bit AVX2 element broadcast on YMM -- vpbroadcastb / vpbroadcastw /
-// vpbroadcastd / vpbroadcastq (replicate the lowest byte/word/dword/qword of the
-// source across every lane of the 256-bit destination).  This is the first
+// vpbroadcastd / vpbroadcastq (replicate the lowest byte/word/dword/qword of
+// the source across every lane of the 256-bit destination).  This is the first
 // 256-bit integer shape that is a single-source ELEMENT splat from memory/xmm
 // low element -- distinct from vdup256 (FP vmovddup/vmovsldup/vmovshdup in-lane
 // partial dup) and from shuffle/align/shift families.  Because each broadcast
 // reads only element 0 of the source, a decoder that splatted the wrong element
 // or crossed 128-bit lanes would change every lane of the reduction.
 //
-// Cross-ISA: on x86-64 constant-index shufflevectors over runtime-filled vectors
-// lower to vpbroadcast* ymm with +avx2 anchored by llvm.x86.avx2.psllv.d.256;
-// other cells open-code extractelement+insertelement splat (zero libcall).
-// Four element widths are reduced with ascending per-lane weights so every
-// replicated lane is observable; integer add/sub/and/or/xor + 0x5757/25211 +
-// diamond + PHI drive the seven passes.
+// Cross-ISA: on x86-64 constant-index shufflevectors over runtime-filled
+// vectors lower to vpbroadcast* ymm with +avx2 anchored by
+// llvm.x86.avx2.psllv.d.256; other cells open-code extractelement+insertelement
+// splat (zero libcall). Four element widths are reduced with ascending per-lane
+// weights so every replicated lane is observable; integer add/sub/and/or/xor +
+// 0x5757/25211 + diamond + PHI drive the seven passes.
 std::unique_ptr<llvm::Module> buildVecAvxIBroadcast256IR(llvm::LLVMContext &Ctx,
-                                                          const char *Triple) {
+                                                         const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
   M->setTargetTriple(llvm::Triple(Triple));
   llvm::Triple TT(Triple);
@@ -10287,12 +10316,11 @@ std::unique_ptr<llvm::Module> buildVecAvxIBroadcast256IR(llvm::LLVMContext &Ctx,
     if (I < 16)
       VW = B.CreateInsertElement(VW, B.CreateZExt(Bval, I16), uint64_t(I));
     if (I < 8)
-      VD = B.CreateInsertElement(
-          VD, B.CreateZExt(B.CreateZExt(Bval, I32), I32), uint64_t(I));
+      VD = B.CreateInsertElement(VD, B.CreateZExt(B.CreateZExt(Bval, I32), I32),
+                                 uint64_t(I));
     if (I < 4)
       VQ = B.CreateInsertElement(
-          VQ,
-          B.CreateZExt(B.CreateZExt(B.CreateZExt(Bval, I32), I32), I64),
+          VQ, B.CreateZExt(B.CreateZExt(B.CreateZExt(Bval, I32), I32), I64),
           uint64_t(I));
   }
 
@@ -10312,12 +10340,14 @@ std::unique_ptr<llvm::Module> buildVecAvxIBroadcast256IR(llvm::LLVMContext &Ctx,
     llvm::Value *VA = llvm::UndefValue::get(V8d);
     llvm::Value *VS = llvm::UndefValue::get(V8d);
     for (unsigned I = 0; I < 8; ++I) {
-      VA = B.CreateInsertElement(VA, B.CreateAdd(A, B.getInt32(I)), uint64_t(I));
+      VA =
+          B.CreateInsertElement(VA, B.CreateAdd(A, B.getInt32(I)), uint64_t(I));
       VS = B.CreateInsertElement(
           VS, B.CreateAnd(B.CreateAdd(C, B.getInt32(I)), B.getInt32(7)),
           uint64_t(I));
     }
-    (void)B.CreateIntrinsic(llvm::Intrinsic::x86_avx2_psllv_d_256, {}, {VA, VS});
+    (void)B.CreateIntrinsic(llvm::Intrinsic::x86_avx2_psllv_d_256, {},
+                            {VA, VS});
   }
 
   llvm::Value *PB = Bcast(VB, 32);
@@ -10328,22 +10358,22 @@ std::unique_ptr<llvm::Module> buildVecAvxIBroadcast256IR(llvm::LLVMContext &Ctx,
   llvm::Value *S = B.getInt32(0);
   for (unsigned L = 0; L < 32; ++L)
     S = B.CreateAdd(
-        S, B.CreateMul(
-               B.CreateZExt(B.CreateExtractElement(PB, uint64_t(L)), I32),
-               B.getInt32(L + 1)));
+        S,
+        B.CreateMul(B.CreateZExt(B.CreateExtractElement(PB, uint64_t(L)), I32),
+                    B.getInt32(L + 1)));
   for (unsigned L = 0; L < 16; ++L)
     S = B.CreateAdd(
-        S, B.CreateMul(
-               B.CreateSExt(B.CreateExtractElement(PW, uint64_t(L)), I32),
-               B.getInt32(L + 1)));
+        S,
+        B.CreateMul(B.CreateSExt(B.CreateExtractElement(PW, uint64_t(L)), I32),
+                    B.getInt32(L + 1)));
   for (unsigned L = 0; L < 8; ++L)
-    S = B.CreateAdd(
-        S, B.CreateMul(B.CreateExtractElement(PD, uint64_t(L)),
-                      B.getInt32((L + 1) * 3)));
+    S = B.CreateAdd(S, B.CreateMul(B.CreateExtractElement(PD, uint64_t(L)),
+                                   B.getInt32((L + 1) * 3)));
   for (unsigned L = 0; L < 4; ++L)
     S = B.CreateAdd(
-        S, B.CreateMul(B.CreateTrunc(B.CreateExtractElement(PQ, uint64_t(L)), I32),
-                      B.getInt32((L + 1) * 5)));
+        S,
+        B.CreateMul(B.CreateTrunc(B.CreateExtractElement(PQ, uint64_t(L)), I32),
+                    B.getInt32((L + 1) * 5)));
 
   auto *T = B.CreateXor(B.CreateXor(B.CreateAdd(A, C), B.CreateSub(A, C)),
                         B.getInt32(0x5757));
@@ -10383,12 +10413,12 @@ std::unique_ptr<llvm::Module> buildVecAvxIBroadcast256IR(llvm::LLVMContext &Ctx,
 // whose name itself requests +avx2, so the x86-64 cell pins it directly and it
 // lowers straight to vmpsadbw ymm; an undecoded YMM op faults the Unicorn
 // baseline (UC_ERR_INSN_INVALID).  Every other cell open-codes the identical
-// per-lane multiple-SAD (unsigned byte abs-diff windows summed to a word), which
-// lowers to plain i32 sub / compare / select / add, libcall-free.  Two calls
-// with swapped sources and distinct imm8s (0x27 -> lanes {7,4}, 0x13 ->
-// lanes {3,2}) exercise both imm sub-fields; their sixteen unsigned word results
-// are reduced with distinct ascending / descending per-lane weights (so a
-// mis-routed lane changes the sum).  No L1 pass touches the SAD sub-graph, so
+// per-lane multiple-SAD (unsigned byte abs-diff windows summed to a word),
+// which lowers to plain i32 sub / compare / select / add, libcall-free.  Two
+// calls with swapped sources and distinct imm8s (0x27 -> lanes {7,4}, 0x13 ->
+// lanes {3,2}) exercise both imm sub-fields; their sixteen unsigned word
+// results are reduced with distinct ascending / descending per-lane weights (so
+// a mis-routed lane changes the sum).  No L1 pass touches the SAD sub-graph, so
 // the original and obfuscated copies stay byte-identical over it under
 // emulation, while integer add/sub/and/or/xor + non-folding constants
 // (0x6B6B/23981) + a data-dependent diamond + PHI drive the subst / const-enc /
@@ -10460,8 +10490,9 @@ std::unique_ptr<llvm::Module> buildVecAvxIMpsadbw256IR(llvm::LLVMContext &Ctx,
           auto *Y = B.CreateZExt(
               B.CreateExtractElement(S2, uint64_t(Lane * 16 + Base2 + K)), I32);
           auto *D = B.CreateSub(X, Y);
-          Acc = B.CreateAdd(Acc, B.CreateSelect(B.CreateICmpSLT(D, B.getInt32(0)),
-                                                B.CreateNeg(D), D));
+          Acc =
+              B.CreateAdd(Acc, B.CreateSelect(B.CreateICmpSLT(D, B.getInt32(0)),
+                                              B.CreateNeg(D), D));
         }
         R = B.CreateInsertElement(R, B.CreateTrunc(Acc, I16),
                                   uint64_t(Lane * 8 + J));
@@ -10481,19 +10512,19 @@ std::unique_ptr<llvm::Module> buildVecAvxIMpsadbw256IR(llvm::LLVMContext &Ctx,
     R2v = OpenMpsad(VB, VA, 0x13);
   }
 
-  // SAD words are unsigned [0,1020]; reduce with distinct ascending / descending
-  // weights so a mis-routed lane changes the sum.
+  // SAD words are unsigned [0,1020]; reduce with distinct ascending /
+  // descending weights so a mis-routed lane changes the sum.
   llvm::Value *S = B.getInt32(0);
   for (unsigned L = 0; L < 16; ++L)
     S = B.CreateAdd(
-        S, B.CreateMul(
-               B.CreateZExt(B.CreateExtractElement(R1v, uint64_t(L)), I32),
-               B.getInt32(L + 1)));
+        S,
+        B.CreateMul(B.CreateZExt(B.CreateExtractElement(R1v, uint64_t(L)), I32),
+                    B.getInt32(L + 1)));
   for (unsigned L = 0; L < 16; ++L)
     S = B.CreateAdd(
-        S, B.CreateMul(
-               B.CreateZExt(B.CreateExtractElement(R2v, uint64_t(L)), I32),
-               B.getInt32(16 - L)));
+        S,
+        B.CreateMul(B.CreateZExt(B.CreateExtractElement(R2v, uint64_t(L)), I32),
+                    B.getInt32(16 - L)));
 
   auto *T = B.CreateXor(B.CreateXor(B.CreateAdd(A, C), B.CreateSub(A, C)),
                         B.getInt32(0x6B6B));
@@ -10520,28 +10551,30 @@ std::unique_ptr<llvm::Module> buildVecAvxIMpsadbw256IR(llvm::LLVMContext &Ctx,
   return M;
 }
 
-// 256-bit AVX2 cross-128-bit-lane block permute -- vperm2i128.  Distinct from the
-// element-granular cross-lane permute viperm256 (vpermd/vpermps, one dword per
-// index lane): this moves whole 128-bit blocks -- each of the two 128-bit dst
-// halves is filled from one of the four 128-bit source blocks (src1 low/high,
-// src2 low/high), selected by imm8[1:0] / imm8[5:4].  A decoder that applies one
-// block selector to both lanes, or fails to decode the YMM form, is caught.
+// 256-bit AVX2 cross-128-bit-lane block permute -- vperm2i128.  Distinct from
+// the element-granular cross-lane permute viperm256 (vpermd/vpermps, one dword
+// per index lane): this moves whole 128-bit blocks -- each of the two 128-bit
+// dst halves is filled from one of the four 128-bit source blocks (src1
+// low/high, src2 low/high), selected by imm8[1:0] / imm8[5:4].  A decoder that
+// applies one block selector to both lanes, or fails to decode the YMM form, is
+// caught.
 //
 // Cross-ISA: llvm.x86.avx2.vperm2i128 was auto-upgraded to native IR in modern
-// LLVM, so the permute is expressed as two 2-source 128-bit-block shufflevectors
-// (each dst half drawn from a DIFFERENT source so ISel must select vperm2i128,
-// not vpermq / vinserti128).  On x86-64 a dead llvm.x86.avx2.psllv.d.256 anchors
-// +avx2 (CodeGenX86::detectTargetFeaturesX86 keys it off the avx2 intrinsic name)
-// so the <8 x i32> block shuffles lower to vperm2i128 ymm with two distinct imm8s
-// (0x31: va.hi/vb.hi, 0x02: vb.lo/va.lo) -- an undecoded YMM op faults the
-// Unicorn baseline (UC_ERR_INSN_INVALID).  Other cells lower the same shuffles to
-// native 128-bit moves (NEON / split SSE), libcall-free.  The sixteen dword
-// results are reduced with distinct ascending / descending per-lane weights (so a
-// mis-routed 128-bit block changes the sum).  No L1 pass touches the permute
-// sub-graph, so the original and obfuscated copies stay byte-identical over it
-// under emulation, while integer add/sub/and/or/xor + non-folding constants
-// (0x5C5C/26309) + a data-dependent diamond + PHI drive the subst / const-enc /
-// opaque / flatten / bogus / indirect L1 passes.
+// LLVM, so the permute is expressed as two 2-source 128-bit-block
+// shufflevectors (each dst half drawn from a DIFFERENT source so ISel must
+// select vperm2i128, not vpermq / vinserti128).  On x86-64 a dead
+// llvm.x86.avx2.psllv.d.256 anchors +avx2 (CodeGenX86::detectTargetFeaturesX86
+// keys it off the avx2 intrinsic name) so the <8 x i32> block shuffles lower to
+// vperm2i128 ymm with two distinct imm8s (0x31: va.hi/vb.hi, 0x02: vb.lo/va.lo)
+// -- an undecoded YMM op faults the Unicorn baseline (UC_ERR_INSN_INVALID).
+// Other cells lower the same shuffles to native 128-bit moves (NEON / split
+// SSE), libcall-free.  The sixteen dword results are reduced with distinct
+// ascending / descending per-lane weights (so a mis-routed 128-bit block
+// changes the sum).  No L1 pass touches the permute sub-graph, so the original
+// and obfuscated copies stay byte-identical over it under emulation, while
+// integer add/sub/and/or/xor + non-folding constants (0x5C5C/26309) + a
+// data-dependent diamond + PHI drive the subst / const-enc / opaque / flatten /
+// bogus / indirect L1 passes.
 //
 //   int vperm2i256(int a, int c) {
 //     int32x8 va, vb;                                      // both arg-derived
@@ -10574,24 +10607,27 @@ std::unique_ptr<llvm::Module> buildVecAvxIVPerm2I256IR(llvm::LLVMContext &Ctx,
   llvm::Value *VB = llvm::UndefValue::get(V8d);
   for (unsigned I = 0; I < 8; ++I) {
     VA = B.CreateInsertElement(
-        VA, B.CreateXor(B.CreateMul(A, B.getInt32(I * 0x1B7 + 7)),
-                        B.CreateAdd(C, B.getInt32(I * 5 + 1))),
+        VA,
+        B.CreateXor(B.CreateMul(A, B.getInt32(I * 0x1B7 + 7)),
+                    B.CreateAdd(C, B.getInt32(I * 5 + 1))),
         uint64_t(I));
     VB = B.CreateInsertElement(
-        VB, B.CreateXor(B.CreateMul(C, B.getInt32(I * 0x0D3 + 13)),
-                        B.CreateAdd(A, B.getInt32(I * 3 + 2))),
+        VB,
+        B.CreateXor(B.CreateMul(C, B.getInt32(I * 0x0D3 + 13)),
+                    B.CreateAdd(A, B.getInt32(I * 3 + 2))),
         uint64_t(I));
   }
 
   // +avx2 anchor (x86-64): a dead psllv keeps the 256-bit YMM domain so the
   // 128-bit-block shuffles below lower to vperm2i128 ymm rather than split SSE
-  // (CodeGenX86::detectTargetFeaturesX86 keys +avx2 off the avx2 intrinsic name).
+  // (CodeGenX86::detectTargetFeaturesX86 keys +avx2 off the avx2 intrinsic
+  // name).
   if (IsX64) {
     llvm::Value *VAa = llvm::UndefValue::get(V8d);
     llvm::Value *VSa = llvm::UndefValue::get(V8d);
     for (unsigned I = 0; I < 8; ++I) {
-      VAa =
-          B.CreateInsertElement(VAa, B.CreateAdd(A, B.getInt32(I)), uint64_t(I));
+      VAa = B.CreateInsertElement(VAa, B.CreateAdd(A, B.getInt32(I)),
+                                  uint64_t(I));
       VSa = B.CreateInsertElement(
           VSa, B.CreateAnd(B.CreateAdd(C, B.getInt32(I)), B.getInt32(7)),
           uint64_t(I));
@@ -10604,7 +10640,8 @@ std::unique_ptr<llvm::Module> buildVecAvxIVPerm2I256IR(llvm::LLVMContext &Ctx,
   // from a DIFFERENT source so ISel must select vperm2i128 (not vpermq /
   // vinserti128): {4,5,6,7,12,13,14,15} = va.hi:vb.hi (imm 0x31),
   // {8,9,10,11,0,1,2,3} = vb.lo:va.lo (imm 0x02).
-  llvm::Value *R1v = B.CreateShuffleVector(VA, VB, {4, 5, 6, 7, 12, 13, 14, 15});
+  llvm::Value *R1v =
+      B.CreateShuffleVector(VA, VB, {4, 5, 6, 7, 12, 13, 14, 15});
   llvm::Value *R2v = B.CreateShuffleVector(VA, VB, {8, 9, 10, 11, 0, 1, 2, 3});
 
   // Sixteen dword results reduced with ascending / descending weights so a
@@ -10721,8 +10758,8 @@ std::unique_ptr<llvm::Module> buildVecAvxIVPermQ256IR(llvm::LLVMContext &Ctx,
     llvm::Value *VAa = llvm::UndefValue::get(V8d);
     llvm::Value *VSa = llvm::UndefValue::get(V8d);
     for (unsigned I = 0; I < 8; ++I) {
-      VAa =
-          B.CreateInsertElement(VAa, B.CreateAdd(A, B.getInt32(I)), uint64_t(I));
+      VAa = B.CreateInsertElement(VAa, B.CreateAdd(A, B.getInt32(I)),
+                                  uint64_t(I));
       VSa = B.CreateInsertElement(
           VSa, B.CreateAnd(B.CreateAdd(C, B.getInt32(I)), B.getInt32(7)),
           uint64_t(I));
@@ -10836,12 +10873,14 @@ std::unique_ptr<llvm::Module> buildVecAvxIBlendD256IR(llvm::LLVMContext &Ctx,
   llvm::Value *VB = llvm::UndefValue::get(V8d);
   for (unsigned I = 0; I < 8; ++I) {
     VA = B.CreateInsertElement(
-        VA, B.CreateXor(B.CreateMul(A, B.getInt32(I * 0x1B7 + 7)),
-                        B.CreateAdd(C, B.getInt32(I * 5 + 1))),
+        VA,
+        B.CreateXor(B.CreateMul(A, B.getInt32(I * 0x1B7 + 7)),
+                    B.CreateAdd(C, B.getInt32(I * 5 + 1))),
         uint64_t(I));
     VB = B.CreateInsertElement(
-        VB, B.CreateXor(B.CreateMul(C, B.getInt32(I * 0x0D3 + 13)),
-                        B.CreateAdd(A, B.getInt32(I * 3 + 2))),
+        VB,
+        B.CreateXor(B.CreateMul(C, B.getInt32(I * 0x0D3 + 13)),
+                    B.CreateAdd(A, B.getInt32(I * 3 + 2))),
         uint64_t(I));
   }
 
@@ -10851,8 +10890,8 @@ std::unique_ptr<llvm::Module> buildVecAvxIBlendD256IR(llvm::LLVMContext &Ctx,
     llvm::Value *VAa = llvm::UndefValue::get(V8d);
     llvm::Value *VSa = llvm::UndefValue::get(V8d);
     for (unsigned I = 0; I < 8; ++I) {
-      VAa =
-          B.CreateInsertElement(VAa, B.CreateAdd(A, B.getInt32(I)), uint64_t(I));
+      VAa = B.CreateInsertElement(VAa, B.CreateAdd(A, B.getInt32(I)),
+                                  uint64_t(I));
       VSa = B.CreateInsertElement(
           VSa, B.CreateAnd(B.CreateAdd(C, B.getInt32(I)), B.getInt32(7)),
           uint64_t(I));
@@ -10981,8 +11020,8 @@ std::unique_ptr<llvm::Module> buildVecAvxIMovExtBW256IR(llvm::LLVMContext &Ctx,
     llvm::Value *VAa = llvm::UndefValue::get(V8d);
     llvm::Value *VSa = llvm::UndefValue::get(V8d);
     for (unsigned I = 0; I < 8; ++I) {
-      VAa =
-          B.CreateInsertElement(VAa, B.CreateAdd(A, B.getInt32(I)), uint64_t(I));
+      VAa = B.CreateInsertElement(VAa, B.CreateAdd(A, B.getInt32(I)),
+                                  uint64_t(I));
       VSa = B.CreateInsertElement(
           VSa, B.CreateAnd(B.CreateAdd(C, B.getInt32(I)), B.getInt32(7)),
           uint64_t(I));
@@ -11036,12 +11075,12 @@ std::unique_ptr<llvm::Module> buildVecAvxIMovExtBW256IR(llvm::LLVMContext &Ctx,
 // 256-bit AVX2 dword->qword integer widening on YMM -- vpmovsxdq / vpmovzxdq
 // (a 128-bit <4 x i32> source widened to a 256-bit <4 x i64> dest:
 // dst.q[i] = ext(src.d[i]) for the four lanes).  Sibling of vimovextbw256
-// (vpmovsxbw/vpmovzxbw, byte->word) at the widest step: a 32->64-bit widen whose
-// result lives in the qword/i64 domain.  Like all pmovsx/pmovzx it consumes a
-// narrow 128-bit source and expands it across the full 256-bit register, so a
-// decoder that treats it as a lane-wise op (not one source dword per dest qword)
-// mis-places every qword; treating the high lane's source as dwords 0-1 instead
-// of 2-3 is also caught.
+// (vpmovsxbw/vpmovzxbw, byte->word) at the widest step: a 32->64-bit widen
+// whose result lives in the qword/i64 domain.  Like all pmovsx/pmovzx it
+// consumes a narrow 128-bit source and expands it across the full 256-bit
+// register, so a decoder that treats it as a lane-wise op (not one source dword
+// per dest qword) mis-places every qword; treating the high lane's source as
+// dwords 0-1 instead of 2-3 is also caught.
 //
 // Cross-ISA: llvm.x86.avx2.pmovsxdq / pmovzxdq were auto-upgraded to native IR,
 // i.e. a plain <4 x i32> sext / zext to <4 x i64>.  On x86-64 a dead
@@ -11061,10 +11100,10 @@ std::unique_ptr<llvm::Module> buildVecAvxIMovExtBW256IR(llvm::LLVMContext &Ctx,
 // const-enc / opaque / flatten / bogus / indirect L1 passes.
 //
 //   int vimovextdq256(int a, int c) {
-//     int32x4 vd;                                  // 128-bit, dword arg-derived
-//     int64x4 sx = (int64x4)vd;                    // vpmovsxdq (sign-extend)
-//     uint64x4 zx = (uint64x4)(uint32x4)vd;        // vpmovzxdq (zero-extend)
-//     int s = sum((lo(sx[i])^hi(sx[i]))*(i+1))
+//     int32x4 vd;                                  // 128-bit, dword
+//     arg-derived int64x4 sx = (int64x4)vd;                    // vpmovsxdq
+//     (sign-extend) uint64x4 zx = (uint64x4)(uint32x4)vd;        // vpmovzxdq
+//     (zero-extend) int s = sum((lo(sx[i])^hi(sx[i]))*(i+1))
 //           + sum((lo(zx[i])^hi(zx[i]))*(8-i));
 //     ... data-dependent diamond ...
 //   }
@@ -11100,14 +11139,14 @@ std::unique_ptr<llvm::Module> buildVecAvxIMovExtDQ256IR(llvm::LLVMContext &Ctx,
     VD = B.CreateInsertElement(VD, Dv, uint64_t(I));
   }
 
-  // +avx2 anchor (x86-64): keep the 256-bit YMM domain so the dword->qword widen
-  // lowers to vpmovsxdq / vpmovzxdq ymm rather than two split xmm widens.
+  // +avx2 anchor (x86-64): keep the 256-bit YMM domain so the dword->qword
+  // widen lowers to vpmovsxdq / vpmovzxdq ymm rather than two split xmm widens.
   if (IsX64) {
     llvm::Value *VAa = llvm::UndefValue::get(V8d);
     llvm::Value *VSa = llvm::UndefValue::get(V8d);
     for (unsigned I = 0; I < 8; ++I) {
-      VAa =
-          B.CreateInsertElement(VAa, B.CreateAdd(A, B.getInt32(I)), uint64_t(I));
+      VAa = B.CreateInsertElement(VAa, B.CreateAdd(A, B.getInt32(I)),
+                                  uint64_t(I));
       VSa = B.CreateInsertElement(
           VSa, B.CreateAnd(B.CreateAdd(C, B.getInt32(I)), B.getInt32(7)),
           uint64_t(I));
@@ -11122,8 +11161,9 @@ std::unique_ptr<llvm::Module> buildVecAvxIMovExtDQ256IR(llvm::LLVMContext &Ctx,
   llvm::Value *SX = B.CreateSExt(VD, V4q);
   llvm::Value *ZX = B.CreateZExt(VD, V4q);
 
-  // Fold each 64-bit result (lo ^ hi) so the sign-fill high dword (sext) vs zero
-  // (zext) is observable, with distinct ascending / descending per-lane weights.
+  // Fold each 64-bit result (lo ^ hi) so the sign-fill high dword (sext) vs
+  // zero (zext) is observable, with distinct ascending / descending per-lane
+  // weights.
   llvm::Value *S = B.getInt32(0);
   for (unsigned L = 0; L < 4; ++L) {
     llvm::Value *E = B.CreateExtractElement(SX, uint64_t(L));
@@ -11168,9 +11208,9 @@ std::unique_ptr<llvm::Module> buildVecAvxIMovExtDQ256IR(llvm::LLVMContext &Ctx,
 // dst.d[i] = ext(src.b[i]) for the eight lanes).  Sibling of vimovextbw256
 // (byte->word, 2x) and vimovextdq256 (dword->qword, 2x) at a *skip* step: a
 // 4x byte->dword widen that consumes only eight source bytes yet spans the full
-// 256-bit register.  Because it discards bytes 8-15 of the xmm source, a decoder
-// that mistakes it for the 2x byte->word form (consuming 16 bytes) or that
-// mis-strides the source bytes mis-fills every dword lane.
+// 256-bit register.  Because it discards bytes 8-15 of the xmm source, a
+// decoder that mistakes it for the 2x byte->word form (consuming 16 bytes) or
+// that mis-strides the source bytes mis-fills every dword lane.
 //
 // Cross-ISA: llvm.x86.avx2.pmovsxbd / pmovzxbd were auto-upgraded to native IR,
 // i.e. a plain <8 x i8> sext / zext to <8 x i32>.  On x86-64 a dead
@@ -11178,12 +11218,13 @@ std::unique_ptr<llvm::Module> buildVecAvxIMovExtDQ256IR(llvm::LLVMContext &Ctx,
 // vpmovzxbd ymm (one xmm source -> ymm dest) rather than split xmm widens -- an
 // undecoded YMM op faults the Unicorn baseline (UC_ERR_INSN_INVALID).  Every
 // other cell lowers the identical sext / zext to native widening moves (NEON
-// sshll/ushll chains, split SSE), libcall-free.  Each source byte is arg-derived
-// and sign-mixed so sext (vpmovsxbd) and zext (vpmovzxbd) diverge; the eight
-// sign-extended dwords carry ascending weights and the eight zero-extended
-// dwords descending weights, so both widens -- and any byte where they differ --
-// are observable.  No L1 pass touches the widen sub-graph, so the original and
-// obfuscated copies stay byte-identical over it, while integer add/sub/and/or/xor
+// sshll/ushll chains, split SSE), libcall-free.  Each source byte is
+// arg-derived and sign-mixed so sext (vpmovsxbd) and zext (vpmovzxbd) diverge;
+// the eight sign-extended dwords carry ascending weights and the eight
+// zero-extended dwords descending weights, so both widens -- and any byte where
+// they differ -- are observable.  No L1 pass touches the widen sub-graph, so
+// the original and obfuscated copies stay byte-identical over it, while integer
+// add/sub/and/or/xor
 // + non-folding constants (0x7C7C/40903) + a data-dependent diamond + PHI drive
 // the subst / const-enc / opaque / flatten / bogus / indirect L1 passes.
 //
@@ -11232,8 +11273,8 @@ std::unique_ptr<llvm::Module> buildVecAvxIMovExtBD256IR(llvm::LLVMContext &Ctx,
     llvm::Value *VAa = llvm::UndefValue::get(V8d);
     llvm::Value *VSa = llvm::UndefValue::get(V8d);
     for (unsigned I = 0; I < 8; ++I) {
-      VAa =
-          B.CreateInsertElement(VAa, B.CreateAdd(A, B.getInt32(I)), uint64_t(I));
+      VAa = B.CreateInsertElement(VAa, B.CreateAdd(A, B.getInt32(I)),
+                                  uint64_t(I));
       VSa = B.CreateInsertElement(
           VSa, B.CreateAnd(B.CreateAdd(C, B.getInt32(I)), B.getInt32(7)),
           uint64_t(I));
@@ -11242,14 +11283,15 @@ std::unique_ptr<llvm::Module> buildVecAvxIMovExtBD256IR(llvm::LLVMContext &Ctx,
                             {VAa, VSa});
   }
 
-  // Byte->dword widen: sign-extend (vpmovsxbd) and zero-extend (vpmovzxbd).  The
+  // Byte->dword widen: sign-extend (vpmovsxbd) and zero-extend (vpmovzxbd). The
   // auto-upgraded native form of llvm.x86.avx2.pmovsxbd / pmovzxbd is exactly a
   // <8 x i8> sext / zext to <8 x i32> (dst.d[i] = ext(src.b[i])).
   llvm::Value *SX = B.CreateSExt(VB, V8d);
   llvm::Value *ZX = B.CreateZExt(VB, V8d);
 
   // Reduce: sext dwords with ascending weights, zext dwords with descending
-  // weights, so both widens -- and any byte where they differ -- are observable.
+  // weights, so both widens -- and any byte where they differ -- are
+  // observable.
   llvm::Value *S = B.getInt32(0);
   for (unsigned L = 0; L < 8; ++L) {
     auto *Sw = B.CreateExtractElement(SX, uint64_t(L));
@@ -11298,12 +11340,13 @@ std::unique_ptr<llvm::Module> buildVecAvxIMovExtBD256IR(llvm::LLVMContext &Ctx,
 // vpmovzxwd ymm (one xmm source -> ymm dest) rather than two split xmm widens
 // -- an undecoded YMM op faults the Unicorn baseline (UC_ERR_INSN_INVALID).
 // Every other cell lowers the identical sext / zext to native widening moves
-// (NEON sshll / ushll, split SSE), libcall-free.  Each source word is arg-derived
-// and sign-mixed so sext (vpmovsxwd) and zext (vpmovzxwd) diverge; the eight
-// sign-extended dwords carry ascending weights and the eight zero-extended
-// dwords descending weights, so both widens -- and any word where they differ --
-// are observable.  No L1 pass touches the widen sub-graph, so the original and
-// obfuscated copies stay byte-identical over it, while integer add/sub/and/or/xor
+// (NEON sshll / ushll, split SSE), libcall-free.  Each source word is
+// arg-derived and sign-mixed so sext (vpmovsxwd) and zext (vpmovzxwd) diverge;
+// the eight sign-extended dwords carry ascending weights and the eight
+// zero-extended dwords descending weights, so both widens -- and any word where
+// they differ -- are observable.  No L1 pass touches the widen sub-graph, so
+// the original and obfuscated copies stay byte-identical over it, while integer
+// add/sub/and/or/xor
 // + non-folding constants (0x5B5B/47351) + a data-dependent diamond + PHI drive
 // the subst / const-enc / opaque / flatten / bogus / indirect L1 passes.
 //
@@ -11352,8 +11395,8 @@ std::unique_ptr<llvm::Module> buildVecAvxIMovExtWD256IR(llvm::LLVMContext &Ctx,
     llvm::Value *VAa = llvm::UndefValue::get(V8d);
     llvm::Value *VSa = llvm::UndefValue::get(V8d);
     for (unsigned I = 0; I < 8; ++I) {
-      VAa =
-          B.CreateInsertElement(VAa, B.CreateAdd(A, B.getInt32(I)), uint64_t(I));
+      VAa = B.CreateInsertElement(VAa, B.CreateAdd(A, B.getInt32(I)),
+                                  uint64_t(I));
       VSa = B.CreateInsertElement(
           VSa, B.CreateAnd(B.CreateAdd(C, B.getInt32(I)), B.getInt32(7)),
           uint64_t(I));
@@ -11362,14 +11405,15 @@ std::unique_ptr<llvm::Module> buildVecAvxIMovExtWD256IR(llvm::LLVMContext &Ctx,
                             {VAa, VSa});
   }
 
-  // Word->dword widen: sign-extend (vpmovsxwd) and zero-extend (vpmovzxwd).  The
+  // Word->dword widen: sign-extend (vpmovsxwd) and zero-extend (vpmovzxwd). The
   // auto-upgraded native form of llvm.x86.avx2.pmovsxwd / pmovzxwd is exactly a
   // <8 x i16> sext / zext to <8 x i32> (dst.d[i] = ext(src.w[i])).
   llvm::Value *SX = B.CreateSExt(VW, V8d);
   llvm::Value *ZX = B.CreateZExt(VW, V8d);
 
   // Reduce: sext dwords with ascending weights, zext dwords with descending
-  // weights, so both widens -- and any word where they differ -- are observable.
+  // weights, so both widens -- and any word where they differ -- are
+  // observable.
   llvm::Value *S = B.getInt32(0);
   for (unsigned L = 0; L < 8; ++L) {
     auto *Sw = B.CreateExtractElement(SX, uint64_t(L));
@@ -11418,14 +11462,15 @@ std::unique_ptr<llvm::Module> buildVecAvxIMovExtWD256IR(llvm::LLVMContext &Ctx,
 // vpmovzxwq ymm (one xmm source -> ymm dest) rather than split xmm widens -- an
 // undecoded YMM op faults the Unicorn baseline (UC_ERR_INSN_INVALID).  Every
 // other cell lowers the identical sext / zext to native widening moves (NEON
-// sshll/ushll chains, split SSE), libcall-free.  Each source word is arg-derived
-// and sign-mixed so sext (vpmovsxwq) and zext (vpmovzxwq) diverge; each 64-bit
-// lane is folded (lo ^ hi) so the sign-fill high dword (sext) vs zero (zext) is
-// observable, with distinct ascending / descending per-lane weights.  No L1 pass
-// touches the widen sub-graph, so the original and obfuscated copies stay
-// byte-identical over it, while integer add/sub/and/or/xor + non-folding
-// constants (0x6D6D/53617) + a data-dependent diamond + PHI drive the subst /
-// const-enc / opaque / flatten / bogus / indirect L1 passes.
+// sshll/ushll chains, split SSE), libcall-free.  Each source word is
+// arg-derived and sign-mixed so sext (vpmovsxwq) and zext (vpmovzxwq) diverge;
+// each 64-bit lane is folded (lo ^ hi) so the sign-fill high dword (sext) vs
+// zero (zext) is observable, with distinct ascending / descending per-lane
+// weights.  No L1 pass touches the widen sub-graph, so the original and
+// obfuscated copies stay byte-identical over it, while integer
+// add/sub/and/or/xor + non-folding constants (0x6D6D/53617) + a data-dependent
+// diamond + PHI drive the subst / const-enc / opaque / flatten / bogus /
+// indirect L1 passes.
 //
 //   int vimovextwq256(int a, int c) {
 //     int16x4 vw;                                  // low 4 words, arg-derived
@@ -11474,8 +11519,8 @@ std::unique_ptr<llvm::Module> buildVecAvxIMovExtWQ256IR(llvm::LLVMContext &Ctx,
     llvm::Value *VAa = llvm::UndefValue::get(V8d);
     llvm::Value *VSa = llvm::UndefValue::get(V8d);
     for (unsigned I = 0; I < 8; ++I) {
-      VAa =
-          B.CreateInsertElement(VAa, B.CreateAdd(A, B.getInt32(I)), uint64_t(I));
+      VAa = B.CreateInsertElement(VAa, B.CreateAdd(A, B.getInt32(I)),
+                                  uint64_t(I));
       VSa = B.CreateInsertElement(
           VSa, B.CreateAnd(B.CreateAdd(C, B.getInt32(I)), B.getInt32(7)),
           uint64_t(I));
@@ -11484,14 +11529,15 @@ std::unique_ptr<llvm::Module> buildVecAvxIMovExtWQ256IR(llvm::LLVMContext &Ctx,
                             {VAa, VSa});
   }
 
-  // Word->qword widen: sign-extend (vpmovsxwq) and zero-extend (vpmovzxwq).  The
+  // Word->qword widen: sign-extend (vpmovsxwq) and zero-extend (vpmovzxwq). The
   // auto-upgraded native form of llvm.x86.avx2.pmovsxwq / pmovzxwq is exactly a
   // <4 x i16> sext / zext to <4 x i64> (dst.q[i] = ext(src.w[i])).
   llvm::Value *SX = B.CreateSExt(VW, V4q);
   llvm::Value *ZX = B.CreateZExt(VW, V4q);
 
-  // Fold each 64-bit result (lo ^ hi) so the sign-fill high dword (sext) vs zero
-  // (zext) is observable, with distinct ascending / descending per-lane weights.
+  // Fold each 64-bit result (lo ^ hi) so the sign-fill high dword (sext) vs
+  // zero (zext) is observable, with distinct ascending / descending per-lane
+  // weights.
   llvm::Value *S = B.getInt32(0);
   for (unsigned L = 0; L < 4; ++L) {
     llvm::Value *E = B.CreateExtractElement(SX, uint64_t(L));
@@ -11535,11 +11581,11 @@ std::unique_ptr<llvm::Module> buildVecAvxIMovExtWQ256IR(llvm::LLVMContext &Ctx,
 // (the low 4 bytes of a 128-bit source widened to a 256-bit <4 x i64> dest:
 // dst.q[i] = ext(src.b[i]) for the four lanes).  The widest widen of the
 // pmovsx/pmovzx family: an 8x byte->qword step that consumes only four source
-// bytes yet spans the full 256-bit register, completing the family alongside the
-// 2x (vimovextbw256/wd256/dq256) and 4x (vimovextbd256/wq256) forms.  Because it
-// discards bytes 4-15 of the xmm source, a decoder that mistakes it for a
-// narrower stride (the 4x byte->dword form, or reading words) mis-fills every
-// qword lane.
+// bytes yet spans the full 256-bit register, completing the family alongside
+// the 2x (vimovextbw256/wd256/dq256) and 4x (vimovextbd256/wq256) forms.
+// Because it discards bytes 4-15 of the xmm source, a decoder that mistakes it
+// for a narrower stride (the 4x byte->dword form, or reading words) mis-fills
+// every qword lane.
 //
 // Cross-ISA: llvm.x86.avx2.pmovsxbq / pmovzxbq were auto-upgraded to native IR,
 // i.e. a plain <4 x i8> sext / zext to <4 x i64>.  On x86-64 a dead
@@ -11547,14 +11593,15 @@ std::unique_ptr<llvm::Module> buildVecAvxIMovExtWQ256IR(llvm::LLVMContext &Ctx,
 // vpmovzxbq ymm (one xmm source -> ymm dest) rather than split xmm widens -- an
 // undecoded YMM op faults the Unicorn baseline (UC_ERR_INSN_INVALID).  Every
 // other cell lowers the identical sext / zext to native widening moves (NEON
-// sshll/ushll chains, split SSE), libcall-free.  Each source byte is arg-derived
-// and sign-mixed so sext (vpmovsxbq) and zext (vpmovzxbq) diverge; each 64-bit
-// lane is folded (lo ^ hi) so the sign-fill high dword (sext) vs zero (zext) is
-// observable, with distinct ascending / descending per-lane weights.  No L1 pass
-// touches the widen sub-graph, so the original and obfuscated copies stay
-// byte-identical over it, while integer add/sub/and/or/xor + non-folding
-// constants (0x7E7E/58393) + a data-dependent diamond + PHI drive the subst /
-// const-enc / opaque / flatten / bogus / indirect L1 passes.
+// sshll/ushll chains, split SSE), libcall-free.  Each source byte is
+// arg-derived and sign-mixed so sext (vpmovsxbq) and zext (vpmovzxbq) diverge;
+// each 64-bit lane is folded (lo ^ hi) so the sign-fill high dword (sext) vs
+// zero (zext) is observable, with distinct ascending / descending per-lane
+// weights.  No L1 pass touches the widen sub-graph, so the original and
+// obfuscated copies stay byte-identical over it, while integer
+// add/sub/and/or/xor + non-folding constants (0x7E7E/58393) + a data-dependent
+// diamond + PHI drive the subst / const-enc / opaque / flatten / bogus /
+// indirect L1 passes.
 //
 //   int vimovextbq256(int a, int c) {
 //     int8x4 vb;                                   // low 4 bytes, arg-derived
@@ -11603,8 +11650,8 @@ std::unique_ptr<llvm::Module> buildVecAvxIMovExtBQ256IR(llvm::LLVMContext &Ctx,
     llvm::Value *VAa = llvm::UndefValue::get(V8d);
     llvm::Value *VSa = llvm::UndefValue::get(V8d);
     for (unsigned I = 0; I < 8; ++I) {
-      VAa =
-          B.CreateInsertElement(VAa, B.CreateAdd(A, B.getInt32(I)), uint64_t(I));
+      VAa = B.CreateInsertElement(VAa, B.CreateAdd(A, B.getInt32(I)),
+                                  uint64_t(I));
       VSa = B.CreateInsertElement(
           VSa, B.CreateAnd(B.CreateAdd(C, B.getInt32(I)), B.getInt32(7)),
           uint64_t(I));
@@ -11613,14 +11660,15 @@ std::unique_ptr<llvm::Module> buildVecAvxIMovExtBQ256IR(llvm::LLVMContext &Ctx,
                             {VAa, VSa});
   }
 
-  // Byte->qword widen: sign-extend (vpmovsxbq) and zero-extend (vpmovzxbq).  The
+  // Byte->qword widen: sign-extend (vpmovsxbq) and zero-extend (vpmovzxbq). The
   // auto-upgraded native form of llvm.x86.avx2.pmovsxbq / pmovzxbq is exactly a
   // <4 x i8> sext / zext to <4 x i64> (dst.q[i] = ext(src.b[i])).
   llvm::Value *SX = B.CreateSExt(VB, V4q);
   llvm::Value *ZX = B.CreateZExt(VB, V4q);
 
-  // Fold each 64-bit result (lo ^ hi) so the sign-fill high dword (sext) vs zero
-  // (zext) is observable, with distinct ascending / descending per-lane weights.
+  // Fold each 64-bit result (lo ^ hi) so the sign-fill high dword (sext) vs
+  // zero (zext) is observable, with distinct ascending / descending per-lane
+  // weights.
   llvm::Value *S = B.getInt32(0);
   for (unsigned L = 0; L < 4; ++L) {
     llvm::Value *E = B.CreateExtractElement(SX, uint64_t(L));
@@ -11667,31 +11715,32 @@ std::unique_ptr<llvm::Module> buildVecAvxIMovExtBQ256IR(llvm::LLVMContext &Ctx,
 // runtime <32 x i8> mask, vblendvps/vblendvpd select per dword/qword from a
 // runtime float/double-domain mask, exercising the wider-lane, FP-domain
 // variable-blend path no prior 256-bit shape reaches.  Like vpblendvb they use
-// the 4-operand VEX /is4 encoding (the mask register is named in imm8[7:4]), but
-// a decoder that read the mask per byte, dropped the high 128-bit lane, or
-// treated it as an immediate blend would mis-select lanes -- a classic mis-decode
-// magnet.  fork-Unicorn already decodes vblendvps (0F3A 4A) and vblendvpd
-// (0F3A 4B) in the same gen_sse_256 branch as the covered vpblendvb (0F3A 4C,
-// esz=1), so this needs no Unicorn change; it is the first end-to-end exercise of
-// the 4A/4B (dword/qword) arms through the rewrite/patch chain.
+// the 4-operand VEX /is4 encoding (the mask register is named in imm8[7:4]),
+// but a decoder that read the mask per byte, dropped the high 128-bit lane, or
+// treated it as an immediate blend would mis-select lanes -- a classic
+// mis-decode magnet.  fork-Unicorn already decodes vblendvps (0F3A 4A) and
+// vblendvpd (0F3A 4B) in the same gen_sse_256 branch as the covered vpblendvb
+// (0F3A 4C, esz=1), so this needs no Unicorn change; it is the first end-to-end
+// exercise of the 4A/4B (dword/qword) arms through the rewrite/patch chain.
 //
 // Cross-ISA: the x86-64 cell pins the dedicated intrinsics
 // llvm.x86.avx.blendv.ps.256 / blendv.pd.256 (the "avx" substring makes
 // detectTargetFeaturesX86 add +avx), which lower straight to vblendvps /
 // vblendvpd ymm.  Every other cell open-codes the identical sign-bit select --
 // select(icmp slt <8 x i32>/<4 x i64> mask, 0, b, a), matching the intrinsic's
-// "lane = (mask < 0) ? b : a" semantics -- over the SAME integer masks (NEON bsl
-// / scalarised, zero libcall on every ISA; no FP touches the non-x86 masks at
-// all).  The two runtime masks are input-derived so their sign bits vary at
+// "lane = (mask < 0) ? b : a" semantics -- over the SAME integer masks (NEON
+// bsl / scalarised, zero libcall on every ISA; no FP touches the non-x86 masks
+// at all).  The two runtime masks are input-derived so their sign bits vary at
 // runtime -- LLVM cannot fold to a constant blend, so the real variable
 // vblendvps/vblendvpd survive to the machine layer.  Data lanes are exact small
 // integers via scalar sitofp, so the blend (pure lane move) and the fptosi back
 // are bit-exact with no rounding; the two blends swap sources so both are
 // observable, and their lanes are reduced with ascending (ps) / descending (pd)
 // per-lane weights so any mis-routed lane changes the sum.  No obfuscation pass
-// touches the blend sub-graph (orig/obf byte-identical over it); an undecoded YMM
-// blend faults the Unicorn baseline (UC_ERR_INSN_INVALID) and any value
-// divergence is a genuine backend / fork-Unicorn bug.  Integer add/sub/and/or/xor
+// touches the blend sub-graph (orig/obf byte-identical over it); an undecoded
+// YMM blend faults the Unicorn baseline (UC_ERR_INSN_INVALID) and any value
+// divergence is a genuine backend / fork-Unicorn bug.  Integer
+// add/sub/and/or/xor
 // + non-folding constants (0x6D6D/27983) + a data-dependent diamond + PHI drive
 // the subst/const-enc/opaque/flatten/bogus/indirect passes.
 std::unique_ptr<llvm::Module> buildVecAvxBlendV256IR(llvm::LLVMContext &Ctx,
@@ -24975,25 +25024,26 @@ std::unique_ptr<llvm::Module> buildVecWide256RevIR(llvm::LLVMContext &Ctx,
   return M;
 }
 
-// Hardware CRC32C (Castagnoli) accumulate — the first patch-full coverage of the
-// CRC checksum instruction family.  x86/x86-64 emit SSE4.2 `crc32` (via
+// Hardware CRC32C (Castagnoli) accumulate — the first patch-full coverage of
+// the CRC checksum instruction family.  x86/x86-64 emit SSE4.2 `crc32` (via
 // llvm.x86.sse42.crc32.*; the "sse42.crc32" substring makes
 // detectTargetFeaturesX86 add +sse4.2,+crc32); AArch64 emits `crc32c{b,h,w,x}`
 // (llvm.aarch64.crc32c*, +crc); ARM32 emits ARMv8 AArch32 `crc32c{b,h,w}`
 // (llvm.arm.crc32c*, +v8,+fp-armv8,+crc).  crc32 is not a plain ALU op: it
 // threads a running 32-bit accumulator through byte/half/word (and, on 64-bit
-// ISAs, qword) updates — a distinct per-ISA hardware path no other shape reaches,
-// and one every requested ISA implements natively.  checkEquiv compares the
-// original against the obfuscated copy *within* each cell (never across ISAs), so
-// the differing CRC32C results across ISAs are irrelevant; each cell only needs
-// its own crc instructions to decode and the obfuscation to preserve them.  The
-// accumulator folds into the usual data-dependent diamond + PHI with non-folding
-// constants (0x5C5C/33203) so the subst / const-enc / opaque / flatten / bogus /
-// indirect passes have integer arithmetic (and a branch) to transform, while the
-// crc intrinsics themselves are untouched — the original and obfuscated copies
-// stay byte-identical over the crc sub-graph, an undecoded crc32/crc32c faults
-// the Unicorn baseline (UC_ERR_INSN_INVALID), and any value divergence is a
-// genuine backend / fork-Unicorn bug.
+// ISAs, qword) updates — a distinct per-ISA hardware path no other shape
+// reaches, and one every requested ISA implements natively.  checkEquiv
+// compares the original against the obfuscated copy *within* each cell (never
+// across ISAs), so the differing CRC32C results across ISAs are irrelevant;
+// each cell only needs its own crc instructions to decode and the obfuscation
+// to preserve them.  The accumulator folds into the usual data-dependent
+// diamond + PHI with non-folding constants (0x5C5C/33203) so the subst /
+// const-enc / opaque / flatten / bogus / indirect passes have integer
+// arithmetic (and a branch) to transform, while the crc intrinsics themselves
+// are untouched — the original and obfuscated copies stay byte-identical over
+// the crc sub-graph, an undecoded crc32/crc32c faults the Unicorn baseline
+// (UC_ERR_INSN_INVALID), and any value divergence is a genuine backend /
+// fork-Unicorn bug.
 std::unique_ptr<llvm::Module> buildScalarCrc32IR(llvm::LLVMContext &Ctx,
                                                  const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -25026,8 +25076,9 @@ std::unique_ptr<llvm::Module> buildScalarCrc32IR(llvm::LLVMContext &Ctx,
       return B.CreateIntrinsic(llvm::Intrinsic::x86_sse42_crc32_32_8, {},
                                {Crc, B.CreateTrunc(D, I8)});
     return B.CreateIntrinsic(
-        IsA64 ? static_cast<llvm::Intrinsic::ID>(llvm::Intrinsic::aarch64_crc32cb)
-              : static_cast<llvm::Intrinsic::ID>(llvm::Intrinsic::arm_crc32cb),
+        IsA64
+            ? static_cast<llvm::Intrinsic::ID>(llvm::Intrinsic::aarch64_crc32cb)
+            : static_cast<llvm::Intrinsic::ID>(llvm::Intrinsic::arm_crc32cb),
         {}, {Crc, D});
   };
   auto crcHalf = [&](llvm::Value *Crc, llvm::Value *D) -> llvm::Value * {
@@ -25035,8 +25086,9 @@ std::unique_ptr<llvm::Module> buildScalarCrc32IR(llvm::LLVMContext &Ctx,
       return B.CreateIntrinsic(llvm::Intrinsic::x86_sse42_crc32_32_16, {},
                                {Crc, B.CreateTrunc(D, I16)});
     return B.CreateIntrinsic(
-        IsA64 ? static_cast<llvm::Intrinsic::ID>(llvm::Intrinsic::aarch64_crc32ch)
-              : static_cast<llvm::Intrinsic::ID>(llvm::Intrinsic::arm_crc32ch),
+        IsA64
+            ? static_cast<llvm::Intrinsic::ID>(llvm::Intrinsic::aarch64_crc32ch)
+            : static_cast<llvm::Intrinsic::ID>(llvm::Intrinsic::arm_crc32ch),
         {}, {Crc, D});
   };
   auto crcWord = [&](llvm::Value *Crc, llvm::Value *D) -> llvm::Value * {
@@ -25044,8 +25096,9 @@ std::unique_ptr<llvm::Module> buildScalarCrc32IR(llvm::LLVMContext &Ctx,
       return B.CreateIntrinsic(llvm::Intrinsic::x86_sse42_crc32_32_32, {},
                                {Crc, D});
     return B.CreateIntrinsic(
-        IsA64 ? static_cast<llvm::Intrinsic::ID>(llvm::Intrinsic::aarch64_crc32cw)
-              : static_cast<llvm::Intrinsic::ID>(llvm::Intrinsic::arm_crc32cw),
+        IsA64
+            ? static_cast<llvm::Intrinsic::ID>(llvm::Intrinsic::aarch64_crc32cw)
+            : static_cast<llvm::Intrinsic::ID>(llvm::Intrinsic::arm_crc32cw),
         {}, {Crc, D});
   };
 
@@ -25109,14 +25162,15 @@ std::unique_ptr<llvm::Module> buildScalarCrc32IR(llvm::LLVMContext &Ctx,
 // implements natively.  checkEquiv compares the original against the obfuscated
 // copy *within* each cell (never across ISAs), so the differing poly products
 // across ISAs are irrelevant; each cell only needs its own pclmulqdq/pmul to
-// decode and the obfuscation to preserve it.  The reduced product folds into the
-// usual data-dependent diamond + PHI with non-folding constants (0x5C5C/33203)
-// so the subst / const-enc / opaque / flatten / bogus / indirect passes have
-// integer arithmetic (and a branch) to transform, while the poly-multiply
-// intrinsic (and its x86 imm-arg) is left untouched — the original and
-// obfuscated copies stay byte-identical over the poly sub-graph, an undecoded
-// pclmulqdq/pmul faults the Unicorn baseline (UC_ERR_INSN_INVALID), and any
-// value divergence is a genuine backend / fork-Unicorn bug.
+// decode and the obfuscation to preserve it.  The reduced product folds into
+// the usual data-dependent diamond + PHI with non-folding constants
+// (0x5C5C/33203) so the subst / const-enc / opaque / flatten / bogus / indirect
+// passes have integer arithmetic (and a branch) to transform, while the
+// poly-multiply intrinsic (and its x86 imm-arg) is left untouched — the
+// original and obfuscated copies stay byte-identical over the poly sub-graph,
+// an undecoded pclmulqdq/pmul faults the Unicorn baseline
+// (UC_ERR_INSN_INVALID), and any value divergence is a genuine backend /
+// fork-Unicorn bug.
 std::unique_ptr<llvm::Module> buildPolyMulIR(llvm::LLVMContext &Ctx,
                                              const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -25173,10 +25227,11 @@ std::unique_ptr<llvm::Module> buildPolyMulIR(llvm::LLVMContext &Ctx,
     auto *Cb = B.CreateTrunc(C, I8);
     auto *VA = B.CreateAdd(B.CreateVectorSplat(W, Ab), Iota);
     auto *VB = B.CreateXor(B.CreateVectorSplat(W, Cb), Iota);
-    auto ID = IsA64 ? static_cast<llvm::Intrinsic::ID>(
-                          llvm::Intrinsic::aarch64_neon_pmul)
-                    : static_cast<llvm::Intrinsic::ID>(
-                          llvm::Intrinsic::arm_neon_vmulp);
+    auto ID =
+        IsA64
+            ? static_cast<llvm::Intrinsic::ID>(
+                  llvm::Intrinsic::aarch64_neon_pmul)
+            : static_cast<llvm::Intrinsic::ID>(llvm::Intrinsic::arm_neon_vmulp);
     auto *R = B.CreateIntrinsic(ID, {V16}, {VA, VB});
     auto *R4 = B.CreateBitCast(R, V4I32);
     llvm::Value *Acc = B.CreateExtractElement(R4, B.getInt32(0));
@@ -25228,12 +25283,12 @@ std::unique_ptr<llvm::Module> buildPolyMulIR(llvm::LLVMContext &Ctx,
 // the original against the obfuscated copy *within* each cell (never across
 // ISAs) and neither copy touches the estimate sub-graph, so both emit
 // byte-identical estimate instructions and observe identical results; each cell
-// only needs its own vrcpps/frecpe to decode and the obfuscation to preserve it.
-// Every lane input is forced >= 1.0 so the estimate is finite and positive (no
-// NaN/inf/zero) and lands in (0, ~1.01]; scaling by 2^20 keeps every fptosi lane
-// within i32 range.  The reduced estimate folds into the usual data-dependent
-// diamond + PHI with non-folding constants (0x5C5C/33203) so the subst /
-// const-enc / opaque / flatten / bogus / indirect passes have integer
+// only needs its own vrcpps/frecpe to decode and the obfuscation to preserve
+// it. Every lane input is forced >= 1.0 so the estimate is finite and positive
+// (no NaN/inf/zero) and lands in (0, ~1.01]; scaling by 2^20 keeps every fptosi
+// lane within i32 range.  The reduced estimate folds into the usual
+// data-dependent diamond + PHI with non-folding constants (0x5C5C/33203) so the
+// subst / const-enc / opaque / flatten / bogus / indirect passes have integer
 // arithmetic (and a branch) to transform, while the estimate intrinsics
 // themselves are left untouched — an undecoded vrcpps/vrsqrtps faults the
 // Unicorn baseline (UC_ERR_INSN_INVALID) and any value divergence is a genuine
@@ -25266,8 +25321,9 @@ std::unique_ptr<llvm::Module> buildVecAvxRcpRsqrt256IR(llvm::LLVMContext &Ctx,
   llvm::IRBuilder<> B(Entry);
 
   // Native per-ISA reciprocal / reciprocal-sqrt estimate over a <8 x float>.
-  // x86 pins the AVX 256-bit intrinsic (both i386 and x86-64); AArch64/ARM apply
-  // the native <4 x float> NEON estimate to each 128-bit half and reassemble.
+  // x86 pins the AVX 256-bit intrinsic (both i386 and x86-64); AArch64/ARM
+  // apply the native <4 x float> NEON estimate to each 128-bit half and
+  // reassemble.
   auto *Poison = llvm::PoisonValue::get(V8f);
   auto estimate = [&](llvm::Value *X, bool Rsqrt) -> llvm::Value * {
     if (IsX86)
@@ -25303,8 +25359,8 @@ std::unique_ptr<llvm::Module> buildVecAvxRcpRsqrt256IR(llvm::LLVMContext &Ctx,
         uint64_t(I));
   }
 
-  // Native reciprocal estimate of VA, reciprocal-sqrt estimate of VC; scale each
-  // lane by 2^20 and truncate to i32 (positive, in range).
+  // Native reciprocal estimate of VA, reciprocal-sqrt estimate of VC; scale
+  // each lane by 2^20 and truncate to i32 (positive, in range).
   auto *Scale = B.CreateVectorSplat(8, llvm::ConstantFP::get(Flt, 1048576.0));
   auto *Ri = B.CreateFPToSI(B.CreateFMul(estimate(VA, false), Scale), V8i);
   auto *Qi = B.CreateFPToSI(B.CreateFMul(estimate(VC, true), Scale), V8i);
@@ -25359,25 +25415,25 @@ std::unique_ptr<llvm::Module> buildVecAvxRcpRsqrt256IR(llvm::LLVMContext &Ctx,
 // .aes" adds +aes; llvm.arm.neon.aese/aesmc — "arm.neon.aes" adds
 // +v8,+fp-armv8,+aes).  The round result differs across ISAs (x86 fuses
 // MixColumns into aesenc, ARM splits it; the byte orders differ too), but
-// checkEquiv compares the original against the obfuscated copy *within* each cell
-// (never across ISAs) and neither copy touches the AES sub-graph, so both emit
-// byte-identical AES instructions and observe identical results; each cell only
-// needs its own aesenc/aese+aesmc to decode and the obfuscation to preserve it.
-// fork-Unicorn already decodes all three: the default x86 CPU model is Haswell
-// (cpu.c: FEAT_1_ECX has CPUID_EXT_AES), so the AESNI_OP decode gate
-// (cpuid_ext_features & CPUID_EXT_AES) passes for both i386 and x86-64; AArch64/
-// ARM32 crypto decode on UC_CPU_ARM64_MAX / UC_CPU_ARM_MAX (already exercised by
-// AArch64_CryptoRTTests / ARM32_CryptoRTTests).  Both the 128-bit state and the
-// round key are derived from the two runtime args (each lane mixes both args;
-// the key XORs a distinct non-folding constant into each lane) so the backend
-// cannot fold the round to a constant.  The 128-bit result is folded down to a
-// scalar (xor the two 64-bit lanes, then xor-fold the halves) and merged into
-// the usual data-dependent diamond + PHI with non-folding constants (0x5C5C/
-// 33203) so the subst / const-enc / opaque / flatten / bogus / indirect passes
-// have integer arithmetic (and a branch) to transform, while the AES intrinsics
-// themselves are left untouched — an undecoded aesenc/aese faults the Unicorn
-// baseline (UC_ERR_INSN_INVALID) and any value divergence is a genuine backend /
-// fork-Unicorn bug.
+// checkEquiv compares the original against the obfuscated copy *within* each
+// cell (never across ISAs) and neither copy touches the AES sub-graph, so both
+// emit byte-identical AES instructions and observe identical results; each cell
+// only needs its own aesenc/aese+aesmc to decode and the obfuscation to
+// preserve it. fork-Unicorn already decodes all three: the default x86 CPU
+// model is Haswell (cpu.c: FEAT_1_ECX has CPUID_EXT_AES), so the AESNI_OP
+// decode gate (cpuid_ext_features & CPUID_EXT_AES) passes for both i386 and
+// x86-64; AArch64/ ARM32 crypto decode on UC_CPU_ARM64_MAX / UC_CPU_ARM_MAX
+// (already exercised by AArch64_CryptoRTTests / ARM32_CryptoRTTests).  Both the
+// 128-bit state and the round key are derived from the two runtime args (each
+// lane mixes both args; the key XORs a distinct non-folding constant into each
+// lane) so the backend cannot fold the round to a constant.  The 128-bit result
+// is folded down to a scalar (xor the two 64-bit lanes, then xor-fold the
+// halves) and merged into the usual data-dependent diamond + PHI with
+// non-folding constants (0x5C5C/ 33203) so the subst / const-enc / opaque /
+// flatten / bogus / indirect passes have integer arithmetic (and a branch) to
+// transform, while the AES intrinsics themselves are left untouched — an
+// undecoded aesenc/aese faults the Unicorn baseline (UC_ERR_INSN_INVALID) and
+// any value divergence is a genuine backend / fork-Unicorn bug.
 std::unique_ptr<llvm::Module> buildVecAesEnc128IR(llvm::LLVMContext &Ctx,
                                                   const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -25406,9 +25462,9 @@ std::unique_ptr<llvm::Module> buildVecAesEnc128IR(llvm::LLVMContext &Ctx,
   llvm::IRBuilder<> B(Entry);
 
   // Build a 128-bit state and round key, both derived from the two args (each
-  // lane mixes both, so no lane is a foldable constant), then run one native AES
-  // encrypt round: x86 pins the fused AES-NI aesenc, AArch64/ARM apply the split
-  // aese (AddRoundKey∘ShiftRows∘SubBytes) + aesmc (MixColumns) idiom.
+  // lane mixes both, so no lane is a foldable constant), then run one native
+  // AES encrypt round: x86 pins the fused AES-NI aesenc, AArch64/ARM apply the
+  // split aese (AddRoundKey∘ShiftRows∘SubBytes) + aesmc (MixColumns) idiom.
   auto *A64 = B.CreateZExt(A, I64);
   auto *C64 = B.CreateZExt(C, I64);
   auto *Lane0 = B.CreateOr(A64, B.CreateShl(C64, B.getInt64(32)));
@@ -25450,8 +25506,8 @@ std::unique_ptr<llvm::Module> buildVecAesEnc128IR(llvm::LLVMContext &Ctx,
   auto *R = aesRound(St, Key);
   auto *Mix = B.CreateXor(B.CreateExtractElement(R, uint64_t(0)),
                           B.CreateExtractElement(R, uint64_t(1)));
-  auto *S = B.CreateTrunc(B.CreateXor(Mix, B.CreateLShr(Mix, B.getInt64(32))),
-                          I32);
+  auto *S =
+      B.CreateTrunc(B.CreateXor(Mix, B.CreateLShr(Mix, B.getInt64(32))), I32);
 
   // Fold into the usual data-dependent diamond + PHI so the L1 passes have
   // integer arithmetic (and a branch) to transform.
@@ -25495,26 +25551,26 @@ std::unique_ptr<llvm::Module> buildVecAesEnc128IR(llvm::LLVMContext &Ctx,
 // "aarch64.crypto.aes" adds +aes; llvm.arm.neon.aesd/aesimc — "arm.neon.aes"
 // adds +v8,+fp-armv8,+aes).  The round result differs across ISAs (x86 fuses
 // InvMixColumns into aesdec, ARM splits it; the byte orders differ too), but
-// checkEquiv compares the original against the obfuscated copy *within* each cell
-// (never across ISAs) and neither copy touches the AES sub-graph, so both emit
-// byte-identical AES instructions and observe identical results; each cell only
-// needs its own aesdec/aesd+aesimc to decode and the obfuscation to preserve it.
-// fork-Unicorn already decodes all three: the default x86 CPU model is Haswell
-// (cpu.c: FEAT_1_ECX has CPUID_EXT_AES), so the AESNI_OP decode gate
-// (cpuid_ext_features & CPUID_EXT_AES) passes the aesdec (DE) arm for both i386
-// and x86-64 exactly as it already does for aesenc (DC); AArch64/ARM32 crypto
-// decode on UC_CPU_ARM64_MAX / UC_CPU_ARM_MAX (already exercised by
-// AArch64_CryptoRTTests / ARM32_CryptoRTTests).  Both the 128-bit state and the
-// round key are derived from the two runtime args (each lane mixes both args;
-// the key XORs a distinct non-folding constant into each lane) so the backend
-// cannot fold the round to a constant.  The 128-bit result is folded down to a
-// scalar (xor the two 64-bit lanes, then xor-fold the halves) and merged into
-// the usual data-dependent diamond + PHI with non-folding constants (0x5C5C/
-// 33203) so the subst / const-enc / opaque / flatten / bogus / indirect passes
-// have integer arithmetic (and a branch) to transform, while the AES intrinsics
-// themselves are left untouched — an undecoded aesdec/aesd faults the Unicorn
-// baseline (UC_ERR_INSN_INVALID) and any value divergence is a genuine backend /
-// fork-Unicorn bug.
+// checkEquiv compares the original against the obfuscated copy *within* each
+// cell (never across ISAs) and neither copy touches the AES sub-graph, so both
+// emit byte-identical AES instructions and observe identical results; each cell
+// only needs its own aesdec/aesd+aesimc to decode and the obfuscation to
+// preserve it. fork-Unicorn already decodes all three: the default x86 CPU
+// model is Haswell (cpu.c: FEAT_1_ECX has CPUID_EXT_AES), so the AESNI_OP
+// decode gate (cpuid_ext_features & CPUID_EXT_AES) passes the aesdec (DE) arm
+// for both i386 and x86-64 exactly as it already does for aesenc (DC);
+// AArch64/ARM32 crypto decode on UC_CPU_ARM64_MAX / UC_CPU_ARM_MAX (already
+// exercised by AArch64_CryptoRTTests / ARM32_CryptoRTTests).  Both the 128-bit
+// state and the round key are derived from the two runtime args (each lane
+// mixes both args; the key XORs a distinct non-folding constant into each lane)
+// so the backend cannot fold the round to a constant.  The 128-bit result is
+// folded down to a scalar (xor the two 64-bit lanes, then xor-fold the halves)
+// and merged into the usual data-dependent diamond + PHI with non-folding
+// constants (0x5C5C/ 33203) so the subst / const-enc / opaque / flatten / bogus
+// / indirect passes have integer arithmetic (and a branch) to transform, while
+// the AES intrinsics themselves are left untouched — an undecoded aesdec/aesd
+// faults the Unicorn baseline (UC_ERR_INSN_INVALID) and any value divergence is
+// a genuine backend / fork-Unicorn bug.
 std::unique_ptr<llvm::Module> buildVecAesDec128IR(llvm::LLVMContext &Ctx,
                                                   const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -25543,9 +25599,10 @@ std::unique_ptr<llvm::Module> buildVecAesDec128IR(llvm::LLVMContext &Ctx,
   llvm::IRBuilder<> B(Entry);
 
   // Build a 128-bit state and round key, both derived from the two args (each
-  // lane mixes both, so no lane is a foldable constant), then run one native AES
-  // decrypt round: x86 pins the fused AES-NI aesdec, AArch64/ARM apply the split
-  // aesd (AddRoundKey∘InvShiftRows∘InvSubBytes) + aesimc (InvMixColumns) idiom.
+  // lane mixes both, so no lane is a foldable constant), then run one native
+  // AES decrypt round: x86 pins the fused AES-NI aesdec, AArch64/ARM apply the
+  // split aesd (AddRoundKey∘InvShiftRows∘InvSubBytes) + aesimc (InvMixColumns)
+  // idiom.
   auto *A64 = B.CreateZExt(A, I64);
   auto *C64 = B.CreateZExt(C, I64);
   auto *Lane0 = B.CreateOr(A64, B.CreateShl(C64, B.getInt64(32)));
@@ -25587,8 +25644,8 @@ std::unique_ptr<llvm::Module> buildVecAesDec128IR(llvm::LLVMContext &Ctx,
   auto *R = aesRound(St, Key);
   auto *Mix = B.CreateXor(B.CreateExtractElement(R, uint64_t(0)),
                           B.CreateExtractElement(R, uint64_t(1)));
-  auto *S = B.CreateTrunc(B.CreateXor(Mix, B.CreateLShr(Mix, B.getInt64(32))),
-                          I32);
+  auto *S =
+      B.CreateTrunc(B.CreateXor(Mix, B.CreateLShr(Mix, B.getInt64(32))), I32);
 
   // Fold into the usual data-dependent diamond + PHI so the L1 passes have
   // integer arithmetic (and a branch) to transform.
@@ -25620,32 +25677,32 @@ std::unique_ptr<llvm::Module> buildVecAesDec128IR(llvm::LLVMContext &Ctx,
 // One standalone AES *InvMixColumns* (AESIMC) over a 128-bit state — the first
 // patch-full coverage of the standalone AESIMC instruction, completing the
 // AES-NI family beyond the encrypt/decrypt rounds (vaesenc128 / vaesdec128).
-// AESIMC is a *distinct* hardware opcode from the round instructions: x86/x86-64
-// emit the standalone AES-NI `aesimc` (llvm.x86.aesni.aesimc, 66 0F38 DB — the
-// "aesni" substring makes detectTargetFeaturesX86 add +aes; a single unary
-// instruction applying the AES InvMixColumns transform, with no round key),
-// distinct from aesenc's DC / aesdec's DE which fuse (Inv)MixColumns into the
-// round.  AArch64 and ARM32 apply the native single-operand `aesimc`
-// (llvm.aarch64.crypto.aesimc — "aarch64.crypto.aes" adds +aes; llvm.arm.neon
-// .aesimc — "arm.neon.aes" adds +v8,+fp-armv8,+aes).  The transform result
-// differs across ISAs (byte orders differ), but checkEquiv compares the original
-// against the obfuscated copy *within* each cell (never across ISAs) and neither
-// copy touches the AES sub-graph, so both emit byte-identical AESIMC and observe
-// identical results; each cell only needs its own aesimc to decode and the
-// obfuscation to preserve it.  fork-Unicorn already decodes it: the default x86
-// CPU model is Haswell (cpu.c: FEAT_1_ECX has CPUID_EXT_AES), so the AESNI_OP
-// decode gate ([0xdb] = AESNI_OP(aesimc)) passes for both i386 and x86-64;
-// AArch64/ARM32 crypto decode on UC_CPU_ARM64_MAX / UC_CPU_ARM_MAX.  The 128-bit
-// state is derived from the two runtime args (each lane mixes both, xored with a
-// distinct non-folding constant per lane) so the backend cannot fold the
-// transform to a constant.  The 128-bit result is folded to a scalar (xor the
-// two 64-bit lanes, then xor-fold the halves) and merged into the usual
-// data-dependent diamond + PHI with non-folding constants (0x5C5C / 33203) so
-// the subst / const-enc / opaque / flatten / bogus / indirect passes have
-// integer arithmetic (and a branch) to transform, while the AESIMC intrinsic
-// itself is left untouched — an undecoded aesimc faults the Unicorn baseline
-// (UC_ERR_INSN_INVALID) and any value divergence is a genuine backend /
-// fork-Unicorn bug.
+// AESIMC is a *distinct* hardware opcode from the round instructions:
+// x86/x86-64 emit the standalone AES-NI `aesimc` (llvm.x86.aesni.aesimc, 66
+// 0F38 DB — the "aesni" substring makes detectTargetFeaturesX86 add +aes; a
+// single unary instruction applying the AES InvMixColumns transform, with no
+// round key), distinct from aesenc's DC / aesdec's DE which fuse
+// (Inv)MixColumns into the round.  AArch64 and ARM32 apply the native
+// single-operand `aesimc` (llvm.aarch64.crypto.aesimc — "aarch64.crypto.aes"
+// adds +aes; llvm.arm.neon .aesimc — "arm.neon.aes" adds +v8,+fp-armv8,+aes).
+// The transform result differs across ISAs (byte orders differ), but checkEquiv
+// compares the original against the obfuscated copy *within* each cell (never
+// across ISAs) and neither copy touches the AES sub-graph, so both emit
+// byte-identical AESIMC and observe identical results; each cell only needs its
+// own aesimc to decode and the obfuscation to preserve it.  fork-Unicorn
+// already decodes it: the default x86 CPU model is Haswell (cpu.c: FEAT_1_ECX
+// has CPUID_EXT_AES), so the AESNI_OP decode gate ([0xdb] = AESNI_OP(aesimc))
+// passes for both i386 and x86-64; AArch64/ARM32 crypto decode on
+// UC_CPU_ARM64_MAX / UC_CPU_ARM_MAX.  The 128-bit state is derived from the two
+// runtime args (each lane mixes both, xored with a distinct non-folding
+// constant per lane) so the backend cannot fold the transform to a constant.
+// The 128-bit result is folded to a scalar (xor the two 64-bit lanes, then
+// xor-fold the halves) and merged into the usual data-dependent diamond + PHI
+// with non-folding constants (0x5C5C / 33203) so the subst / const-enc / opaque
+// / flatten / bogus / indirect passes have integer arithmetic (and a branch) to
+// transform, while the AESIMC intrinsic itself is left untouched — an undecoded
+// aesimc faults the Unicorn baseline (UC_ERR_INSN_INVALID) and any value
+// divergence is a genuine backend / fork-Unicorn bug.
 std::unique_ptr<llvm::Module> buildVecAesImc128IR(llvm::LLVMContext &Ctx,
                                                   const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -25710,8 +25767,8 @@ std::unique_ptr<llvm::Module> buildVecAesImc128IR(llvm::LLVMContext &Ctx,
   auto *R = aesImc(St);
   auto *Mix = B.CreateXor(B.CreateExtractElement(R, uint64_t(0)),
                           B.CreateExtractElement(R, uint64_t(1)));
-  auto *S = B.CreateTrunc(B.CreateXor(Mix, B.CreateLShr(Mix, B.getInt64(32))),
-                          I32);
+  auto *S =
+      B.CreateTrunc(B.CreateXor(Mix, B.CreateLShr(Mix, B.getInt64(32))), I32);
 
   // Fold into the usual data-dependent diamond + PHI so the L1 passes have
   // integer arithmetic (and a branch) to transform.
@@ -25761,11 +25818,11 @@ std::unique_ptr<llvm::Module> buildVecAesImc128IR(llvm::LLVMContext &Ctx,
 // FEAT_1_ECX has CPUID_EXT_AES), so the AESNI_OP decode gate ([0xdd] =
 // AESNI_OP(aesenclast), [0xdf] = AESNI_OP(aesdeclast)) passes for both i386 and
 // x86-64; AArch64/ARM32 crypto decode on UC_CPU_ARM64_MAX / UC_CPU_ARM_MAX.
-// Both the 128-bit state and the two round keys are derived from the two runtime
-// args (each lane mixes both args; each key XORs a distinct non-folding constant
-// into each lane) so the backend cannot fold the rounds to constants.  The two
-// 128-bit results are XORed together, then folded to a scalar (xor the two
-// 64-bit lanes, then xor-fold the halves) and merged into the usual
+// Both the 128-bit state and the two round keys are derived from the two
+// runtime args (each lane mixes both args; each key XORs a distinct non-folding
+// constant into each lane) so the backend cannot fold the rounds to constants.
+// The two 128-bit results are XORed together, then folded to a scalar (xor the
+// two 64-bit lanes, then xor-fold the halves) and merged into the usual
 // data-dependent diamond + PHI with non-folding constants (0x5C5C / 33203) so
 // the subst / const-enc / opaque / flatten / bogus / indirect passes have
 // integer arithmetic (and a branch) to transform, while the AES intrinsics
@@ -25834,7 +25891,8 @@ std::unique_ptr<llvm::Module> buildVecAesLast128IR(llvm::LLVMContext &Ctx,
     auto *k1 = B.CreateBitCast(K1, V16i8);
     auto *k2 = B.CreateBitCast(K2, V16i8);
     // Keep AArch64 and ARM intrinsic IDs out of a single ?: — they are distinct
-    // enum values and mixing them in one conditional is a deprecated conversion.
+    // enum values and mixing them in one conditional is a deprecated
+    // conversion.
     llvm::Intrinsic::ID EseID, EsdID;
     if (IsA64) {
       EseID = llvm::Intrinsic::aarch64_crypto_aese;
@@ -25854,8 +25912,8 @@ std::unique_ptr<llvm::Module> buildVecAesLast128IR(llvm::LLVMContext &Ctx,
   auto *R = aesLast(St, Key1, Key2);
   auto *Mix = B.CreateXor(B.CreateExtractElement(R, uint64_t(0)),
                           B.CreateExtractElement(R, uint64_t(1)));
-  auto *S = B.CreateTrunc(B.CreateXor(Mix, B.CreateLShr(Mix, B.getInt64(32))),
-                          I32);
+  auto *S =
+      B.CreateTrunc(B.CreateXor(Mix, B.CreateLShr(Mix, B.getInt64(32))), I32);
 
   // Fold into the usual data-dependent diamond + PHI so the L1 passes have
   // integer arithmetic (and a branch) to transform.
@@ -25888,26 +25946,27 @@ std::unique_ptr<llvm::Module> buildVecAesLast128IR(llvm::LLVMContext &Ctx,
 // instruction family (aesenc/aesdec/aesimc/aesenclast/aesdeclast, plus
 // pclmulqdq via polymul) with the *key-generation* helper, a distinct hardware
 // opcode no other shape reaches.  x86/x86-64 emit the AES-NI `aeskeygenassist`
-// (llvm.x86.aesni.aeskeygenassist, 66 0F3A DF imm8 — the "aesni" substring makes
-// detectTargetFeaturesX86 add +aes; it applies SubWord/RotWord and XORs an
-// immediate round constant).  Unlike the round instructions it has no ARM crypto
-// dual, so — exactly like the SSE4.1-only PHMINPOSUW shape (vphminpos128) — every
-// non-x86 ISA *open-codes* the identical transform in software: SubWord via a
-// constant AES S-box table, RotWord via a byte rotate, XOR the same round
-// constant.  x86 pins the hardware instruction (fork-Unicorn decodes it:
-// translate.c [0xdf] in the 66 0F3A table = AESNI_OP(aeskeygenassist), helper
-// present, default Haswell CPU has CPUID_EXT_AES); the open-coded software path
-// is a pure deterministic bit computation valid on every ISA.  checkEquiv
-// compares the original against the obfuscated copy *within* each cell (never
-// across ISAs) and neither copy touches the key-schedule sub-graph, so both
-// emit byte-identical code and observe identical results; an undecoded
-// aeskeygenassist faults the Unicorn baseline (UC_ERR_INSN_INVALID) and any
-// value divergence is a genuine backend / fork-Unicorn bug.  The 128-bit state
-// is derived from the two runtime args (each lane mixes both, xored with a
-// distinct non-folding constant) so the backend cannot fold the result to a
-// constant.  The result is folded to a scalar and merged into the usual
-// data-dependent diamond + PHI with non-folding constants (0x5C5C / 33203) so
-// the L1 passes have integer arithmetic (and a branch) to transform.
+// (llvm.x86.aesni.aeskeygenassist, 66 0F3A DF imm8 — the "aesni" substring
+// makes detectTargetFeaturesX86 add +aes; it applies SubWord/RotWord and XORs
+// an immediate round constant).  Unlike the round instructions it has no ARM
+// crypto dual, so — exactly like the SSE4.1-only PHMINPOSUW shape
+// (vphminpos128) — every non-x86 ISA *open-codes* the identical transform in
+// software: SubWord via a constant AES S-box table, RotWord via a byte rotate,
+// XOR the same round constant.  x86 pins the hardware instruction (fork-Unicorn
+// decodes it: translate.c [0xdf] in the 66 0F3A table =
+// AESNI_OP(aeskeygenassist), helper present, default Haswell CPU has
+// CPUID_EXT_AES); the open-coded software path is a pure deterministic bit
+// computation valid on every ISA.  checkEquiv compares the original against the
+// obfuscated copy *within* each cell (never across ISAs) and neither copy
+// touches the key-schedule sub-graph, so both emit byte-identical code and
+// observe identical results; an undecoded aeskeygenassist faults the Unicorn
+// baseline (UC_ERR_INSN_INVALID) and any value divergence is a genuine backend
+// / fork-Unicorn bug.  The 128-bit state is derived from the two runtime args
+// (each lane mixes both, xored with a distinct non-folding constant) so the
+// backend cannot fold the result to a constant.  The result is folded to a
+// scalar and merged into the usual data-dependent diamond + PHI with
+// non-folding constants (0x5C5C / 33203) so the L1 passes have integer
+// arithmetic (and a branch) to transform.
 std::unique_ptr<llvm::Module> buildVecAesKeyGen128IR(llvm::LLVMContext &Ctx,
                                                      const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -25955,29 +26014,28 @@ std::unique_ptr<llvm::Module> buildVecAesKeyGen128IR(llvm::LLVMContext &Ctx,
     // dst0=SubWord(X1); dst1=RotWord(SubWord(X1))^Rcon; dst2=SubWord(X3);
     // dst3=RotWord(SubWord(X3))^Rcon, with SubWord = per-byte S-box.
     static const uint8_t SBoxBytes[256] = {
-      0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b,
-      0xfe, 0xd7, 0xab, 0x76, 0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0,
-      0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0, 0xb7, 0xfd, 0x93, 0x26,
-      0x36, 0x3f, 0xf7, 0xcc, 0x34, 0xa5, 0xe5, 0xf1, 0x71, 0xd8, 0x31, 0x15,
-      0x04, 0xc7, 0x23, 0xc3, 0x18, 0x96, 0x05, 0x9a, 0x07, 0x12, 0x80, 0xe2,
-      0xeb, 0x27, 0xb2, 0x75, 0x09, 0x83, 0x2c, 0x1a, 0x1b, 0x6e, 0x5a, 0xa0,
-      0x52, 0x3b, 0xd6, 0xb3, 0x29, 0xe3, 0x2f, 0x84, 0x53, 0xd1, 0x00, 0xed,
-      0x20, 0xfc, 0xb1, 0x5b, 0x6a, 0xcb, 0xbe, 0x39, 0x4a, 0x4c, 0x58, 0xcf,
-      0xd0, 0xef, 0xaa, 0xfb, 0x43, 0x4d, 0x33, 0x85, 0x45, 0xf9, 0x02, 0x7f,
-      0x50, 0x3c, 0x9f, 0xa8, 0x51, 0xa3, 0x40, 0x8f, 0x92, 0x9d, 0x38, 0xf5,
-      0xbc, 0xb6, 0xda, 0x21, 0x10, 0xff, 0xf3, 0xd2, 0xcd, 0x0c, 0x13, 0xec,
-      0x5f, 0x97, 0x44, 0x17, 0xc4, 0xa7, 0x7e, 0x3d, 0x64, 0x5d, 0x19, 0x73,
-      0x60, 0x81, 0x4f, 0xdc, 0x22, 0x2a, 0x90, 0x88, 0x46, 0xee, 0xb8, 0x14,
-      0xde, 0x5e, 0x0b, 0xdb, 0xe0, 0x32, 0x3a, 0x0a, 0x49, 0x06, 0x24, 0x5c,
-      0xc2, 0xd3, 0xac, 0x62, 0x91, 0x95, 0xe4, 0x79, 0xe7, 0xc8, 0x37, 0x6d,
-      0x8d, 0xd5, 0x4e, 0xa9, 0x6c, 0x56, 0xf4, 0xea, 0x65, 0x7a, 0xae, 0x08,
-      0xba, 0x78, 0x25, 0x2e, 0x1c, 0xa6, 0xb4, 0xc6, 0xe8, 0xdd, 0x74, 0x1f,
-      0x4b, 0xbd, 0x8b, 0x8a, 0x70, 0x3e, 0xb5, 0x66, 0x48, 0x03, 0xf6, 0x0e,
-      0x61, 0x35, 0x57, 0xb9, 0x86, 0xc1, 0x1d, 0x9e, 0xe1, 0xf8, 0x98, 0x11,
-      0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf,
-      0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f,
-      0xb0, 0x54, 0xbb, 0x16
-    };
+        0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b,
+        0xfe, 0xd7, 0xab, 0x76, 0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0,
+        0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0, 0xb7, 0xfd, 0x93, 0x26,
+        0x36, 0x3f, 0xf7, 0xcc, 0x34, 0xa5, 0xe5, 0xf1, 0x71, 0xd8, 0x31, 0x15,
+        0x04, 0xc7, 0x23, 0xc3, 0x18, 0x96, 0x05, 0x9a, 0x07, 0x12, 0x80, 0xe2,
+        0xeb, 0x27, 0xb2, 0x75, 0x09, 0x83, 0x2c, 0x1a, 0x1b, 0x6e, 0x5a, 0xa0,
+        0x52, 0x3b, 0xd6, 0xb3, 0x29, 0xe3, 0x2f, 0x84, 0x53, 0xd1, 0x00, 0xed,
+        0x20, 0xfc, 0xb1, 0x5b, 0x6a, 0xcb, 0xbe, 0x39, 0x4a, 0x4c, 0x58, 0xcf,
+        0xd0, 0xef, 0xaa, 0xfb, 0x43, 0x4d, 0x33, 0x85, 0x45, 0xf9, 0x02, 0x7f,
+        0x50, 0x3c, 0x9f, 0xa8, 0x51, 0xa3, 0x40, 0x8f, 0x92, 0x9d, 0x38, 0xf5,
+        0xbc, 0xb6, 0xda, 0x21, 0x10, 0xff, 0xf3, 0xd2, 0xcd, 0x0c, 0x13, 0xec,
+        0x5f, 0x97, 0x44, 0x17, 0xc4, 0xa7, 0x7e, 0x3d, 0x64, 0x5d, 0x19, 0x73,
+        0x60, 0x81, 0x4f, 0xdc, 0x22, 0x2a, 0x90, 0x88, 0x46, 0xee, 0xb8, 0x14,
+        0xde, 0x5e, 0x0b, 0xdb, 0xe0, 0x32, 0x3a, 0x0a, 0x49, 0x06, 0x24, 0x5c,
+        0xc2, 0xd3, 0xac, 0x62, 0x91, 0x95, 0xe4, 0x79, 0xe7, 0xc8, 0x37, 0x6d,
+        0x8d, 0xd5, 0x4e, 0xa9, 0x6c, 0x56, 0xf4, 0xea, 0x65, 0x7a, 0xae, 0x08,
+        0xba, 0x78, 0x25, 0x2e, 0x1c, 0xa6, 0xb4, 0xc6, 0xe8, 0xdd, 0x74, 0x1f,
+        0x4b, 0xbd, 0x8b, 0x8a, 0x70, 0x3e, 0xb5, 0x66, 0x48, 0x03, 0xf6, 0x0e,
+        0x61, 0x35, 0x57, 0xb9, 0x86, 0xc1, 0x1d, 0x9e, 0xe1, 0xf8, 0x98, 0x11,
+        0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf,
+        0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f,
+        0xb0, 0x54, 0xbb, 0x16};
     auto *SBoxTy = llvm::ArrayType::get(I8, 256);
     std::vector<llvm::Constant *> SEnts;
     SEnts.reserve(256);
@@ -26020,8 +26078,8 @@ std::unique_ptr<llvm::Module> buildVecAesKeyGen128IR(llvm::LLVMContext &Ctx,
   auto *Rk = keyGen(St);
   auto *Mix = B.CreateXor(B.CreateExtractElement(Rk, uint64_t(0)),
                           B.CreateExtractElement(Rk, uint64_t(1)));
-  auto *S = B.CreateTrunc(B.CreateXor(Mix, B.CreateLShr(Mix, B.getInt64(32))),
-                          I32);
+  auto *S =
+      B.CreateTrunc(B.CreateXor(Mix, B.CreateLShr(Mix, B.getInt64(32))), I32);
 
   // Fold into the usual data-dependent diamond + PHI so the L1 passes have
   // integer arithmetic (and a branch) to transform.
@@ -26057,22 +26115,22 @@ std::unique_ptr<llvm::Module> buildVecAesKeyGen128IR(llvm::LLVMContext &Ctx,
 // "bmi.pext"/"bmi.pdep" substrings make detectTargetFeaturesX86 add +bmi2.
 // PEXT gathers the src bits selected by a mask into the low bits of the result;
 // PDEP scatters the low src bits into the mask-selected positions.  Like the
-// SSE4.1-only PHMINPOSUW shape (vphminpos128), neither has an ARM dual, so every
-// non-x86 ISA open-codes the identical transform in software: a straight-line
-// (compile-time-unrolled) scan over the 32 bit positions maintaining a running
-// destination/source cursor.  The variable shift amount never reaches 32 (the
-// cursor advances only on a set mask bit and the shift uses its value *before*
-// the increment, so it tops out at 31), so no shift is poison.  x86 pins the
-// hardware instruction; fork-Unicorn already decodes both (translate.c
-// gen_helper_pdep/pext, helper_pdep/pext in int_helper.c).  src and both masks
-// are derived from the two runtime args (each mixes both, and each mask ORs a
-// non-folding constant so it always has set bits) so the backend cannot fold the
-// permute to a constant.  checkEquiv compares the original against the obfuscated
-// copy within each cell (never across ISAs) and neither copy touches the
-// pdep/pext sub-graph, so both emit byte-identical code and observe identical
-// results; an undecoded pdep/pext faults the Unicorn baseline
-// (UC_ERR_INSN_INVALID) and any value divergence is a genuine backend /
-// fork-Unicorn bug.  The two results are combined and folded into the usual
+// SSE4.1-only PHMINPOSUW shape (vphminpos128), neither has an ARM dual, so
+// every non-x86 ISA open-codes the identical transform in software: a
+// straight-line (compile-time-unrolled) scan over the 32 bit positions
+// maintaining a running destination/source cursor.  The variable shift amount
+// never reaches 32 (the cursor advances only on a set mask bit and the shift
+// uses its value *before* the increment, so it tops out at 31), so no shift is
+// poison.  x86 pins the hardware instruction; fork-Unicorn already decodes both
+// (translate.c gen_helper_pdep/pext, helper_pdep/pext in int_helper.c).  src
+// and both masks are derived from the two runtime args (each mixes both, and
+// each mask ORs a non-folding constant so it always has set bits) so the
+// backend cannot fold the permute to a constant.  checkEquiv compares the
+// original against the obfuscated copy within each cell (never across ISAs) and
+// neither copy touches the pdep/pext sub-graph, so both emit byte-identical
+// code and observe identical results; an undecoded pdep/pext faults the Unicorn
+// baseline (UC_ERR_INSN_INVALID) and any value divergence is a genuine backend
+// / fork-Unicorn bug.  The two results are combined and folded into the usual
 // data-dependent diamond + PHI with non-folding constants (0x5C5C / 33203).
 std::unique_ptr<llvm::Module> buildPdepPextIR(llvm::LLVMContext &Ctx,
                                               const char *Triple) {
@@ -26186,21 +26244,22 @@ std::unique_ptr<llvm::Module> buildPdepPextIR(llvm::LLVMContext &Ctx,
 // x86-64 select the native instruction (SSE4.1 is present in 32-bit mode, and
 // the harness already decodes AVX on i386), and fork-Unicorn's default x86 CPU
 // is Haswell (SSE4.1), so PHMINPOSUW decodes on every x86 cell; AArch64/ARM run
-// the open-coded scan on UC_CPU_ARM64_MAX / UC_CPU_ARM_MAX.  checkEquiv compares
-// the original against the obfuscated copy *within* each cell (never across
-// ISAs) and neither copy touches the min sub-graph, so both emit byte-identical
-// PHMINPOSUW (or byte-identical scans) and observe identical results; each cell
-// only needs its own PHMINPOSUW to decode and the obfuscation to preserve it.
-// Two independent <8 x u16> vectors are built from the runtime args (each lane
-// mixes both args, truncated to 16 bits) so neither the min value nor its
-// position folds to a constant, and the (min, index) pairs of both searches are
-// combined with distinct weights (so a mis-selected value OR a mis-reported
-// index changes the sum) before folding into the usual data-dependent diamond +
-// PHI with non-folding constants (0x5C5C/33203) so the subst / const-enc /
-// opaque / flatten / bogus / indirect passes have integer arithmetic (and a
-// branch) to transform, while the PHMINPOSUW itself is left untouched — an
-// undecoded PHMINPOSUW faults the Unicorn baseline (UC_ERR_INSN_INVALID) and
-// any value divergence is a genuine backend / fork-Unicorn bug.
+// the open-coded scan on UC_CPU_ARM64_MAX / UC_CPU_ARM_MAX.  checkEquiv
+// compares the original against the obfuscated copy *within* each cell (never
+// across ISAs) and neither copy touches the min sub-graph, so both emit
+// byte-identical PHMINPOSUW (or byte-identical scans) and observe identical
+// results; each cell only needs its own PHMINPOSUW to decode and the
+// obfuscation to preserve it. Two independent <8 x u16> vectors are built from
+// the runtime args (each lane mixes both args, truncated to 16 bits) so neither
+// the min value nor its position folds to a constant, and the (min, index)
+// pairs of both searches are combined with distinct weights (so a mis-selected
+// value OR a mis-reported index changes the sum) before folding into the usual
+// data-dependent diamond + PHI with non-folding constants (0x5C5C/33203) so the
+// subst / const-enc / opaque / flatten / bogus / indirect passes have integer
+// arithmetic (and a branch) to transform, while the PHMINPOSUW itself is left
+// untouched — an undecoded PHMINPOSUW faults the Unicorn baseline
+// (UC_ERR_INSN_INVALID) and any value divergence is a genuine backend /
+// fork-Unicorn bug.
 std::unique_ptr<llvm::Module> buildVecPhMinPosUW128IR(llvm::LLVMContext &Ctx,
                                                       const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -26270,11 +26329,10 @@ std::unique_ptr<llvm::Module> buildVecPhMinPosUW128IR(llvm::LLVMContext &Ctx,
 
   // Weight value and index of both searches distinctly so a mis-selected value
   // OR a mis-reported position perturbs the scalar reduction.
-  llvm::Value *S = B.CreateAdd(
-      B.CreateAdd(B.CreateMul(Min1, B.getInt32(3)),
-                  B.CreateMul(Idx1, B.getInt32(7))),
-      B.CreateAdd(B.CreateMul(Min2, B.getInt32(5)),
-                  B.CreateMul(Idx2, B.getInt32(11))));
+  llvm::Value *S = B.CreateAdd(B.CreateAdd(B.CreateMul(Min1, B.getInt32(3)),
+                                           B.CreateMul(Idx1, B.getInt32(7))),
+                               B.CreateAdd(B.CreateMul(Min2, B.getInt32(5)),
+                                           B.CreateMul(Idx2, B.getInt32(11))));
 
   // Fold into the usual data-dependent diamond + PHI so the L1 passes have
   // integer arithmetic (and a branch) to transform.
@@ -26314,27 +26372,28 @@ std::unique_ptr<llvm::Module> buildVecPhMinPosUW128IR(llvm::LLVMContext &Ctx,
 // x86/x86-64 emit DPPS (66 0F3A 40) / DPPD (66 0F3A 41) via llvm.x86.sse41.dpps
 // / llvm.x86.sse41.dppd (the "sse41" substring makes detectTargetFeaturesX86
 // add +sse4.1) — both i386 and x86-64 select the native instruction, and the
-// default fork-Unicorn x86 CPU is Haswell (SSE4.1), so DPPS/DPPD decode on every
-// x86 cell (fork-Unicorn already has helper_dpps/helper_dppd, sse_op_table7
-// [0x40]=dpps / [0x41]=dppd).  Neither has an ARM dual, so AArch64 and ARM32
-// open-code the identical masked dot product (per-lane fmul of the selected
-// products, an fadd tree, then the scalar sum in result lane 0), libcall-free.
-// checkEquiv compares the original against the obfuscated copy *within* each
-// cell (never across ISAs) and no obfuscation pass touches the FP sub-graph
-// (InstSubstitutionPass gates on isIntOrIntVectorTy; ConstantEncryptionPass
-// only rewrites ConstantInt/ICmpInst), so both copies emit byte-identical
-// DPPS/DPPD (or byte-identical open-coded sums) and observe identical results —
-// the x86 hardware summation order need never match the open-coded one because
-// only same-ISA copies are compared; an undecoded DPPS/DPPD faults the Unicorn
-// baseline (UC_ERR_INSN_INVALID) and any value divergence is a genuine backend /
-// fork-Unicorn bug.  Every lane is a runtime mix of both args masked to a small
-// signed range ([-32,31]) so the products/sums are exact in float and double
-// (well within i32 after fptosi, no rounding, no poison) yet never fold to a
-// constant.  The two dot products are combined with distinct weights and folded
-// into the usual data-dependent diamond + PHI with non-folding constants
-// (0x5C5C / 33203) so the subst / const-enc / opaque / flatten / bogus /
-// indirect passes have integer arithmetic (and a branch) to transform while the
-// dot-product sub-graph is left untouched.
+// default fork-Unicorn x86 CPU is Haswell (SSE4.1), so DPPS/DPPD decode on
+// every x86 cell (fork-Unicorn already has helper_dpps/helper_dppd,
+// sse_op_table7 [0x40]=dpps / [0x41]=dppd).  Neither has an ARM dual, so
+// AArch64 and ARM32 open-code the identical masked dot product (per-lane fmul
+// of the selected products, an fadd tree, then the scalar sum in result lane
+// 0), libcall-free. checkEquiv compares the original against the obfuscated
+// copy *within* each cell (never across ISAs) and no obfuscation pass touches
+// the FP sub-graph (InstSubstitutionPass gates on isIntOrIntVectorTy;
+// ConstantEncryptionPass only rewrites ConstantInt/ICmpInst), so both copies
+// emit byte-identical DPPS/DPPD (or byte-identical open-coded sums) and observe
+// identical results — the x86 hardware summation order need never match the
+// open-coded one because only same-ISA copies are compared; an undecoded
+// DPPS/DPPD faults the Unicorn baseline (UC_ERR_INSN_INVALID) and any value
+// divergence is a genuine backend / fork-Unicorn bug.  Every lane is a runtime
+// mix of both args masked to a small signed range ([-32,31]) so the
+// products/sums are exact in float and double (well within i32 after fptosi, no
+// rounding, no poison) yet never fold to a constant.  The two dot products are
+// combined with distinct weights and folded into the usual data-dependent
+// diamond + PHI with non-folding constants (0x5C5C / 33203) so the subst /
+// const-enc / opaque / flatten / bogus / indirect passes have integer
+// arithmetic (and a branch) to transform while the dot-product sub-graph is
+// left untouched.
 std::unique_ptr<llvm::Module> buildVecDpProd128IR(llvm::LLVMContext &Ctx,
                                                   const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -26453,9 +26512,9 @@ std::unique_ptr<llvm::Module> buildVecDpProd128IR(llvm::LLVMContext &Ctx,
 }
 
 // One BMI bit-field-extract pair (BEXTR + BZHI) on 32-bit GPRs — the first
-// patch-full coverage of the BMI1 BEXTR and BMI2 BZHI instructions, distinct x86
-// bit-field primitives the pdeppext (PDEP/PEXT) shape does not reach.  x86 emits
-// BEXTR (VEX.LZ.0F38.W0 F7) via llvm.x86.bmi.bextr.32 — the "bmi.bextr"
+// patch-full coverage of the BMI1 BEXTR and BMI2 BZHI instructions, distinct
+// x86 bit-field primitives the pdeppext (PDEP/PEXT) shape does not reach.  x86
+// emits BEXTR (VEX.LZ.0F38.W0 F7) via llvm.x86.bmi.bextr.32 — the "bmi.bextr"
 // substring makes detectTargetFeaturesX86 add +bmi — and BZHI (VEX.LZ.0F38.W0
 // F5) via llvm.x86.bmi.bzhi.32 ("bmi.bzhi" adds +bmi2).  BEXTR extracts LEN
 // (control[15:8]) bits starting at START (control[7:0]) from the source; BZHI
@@ -26467,14 +26526,14 @@ std::unique_ptr<llvm::Module> buildVecDpProd128IR(llvm::LLVMContext &Ctx,
 // exactly (a shift of 31 already zeroes the high bits, so an over-wide LEN mask
 // is harmless).  fork-Unicorn already decodes both (translate.c case 0x0f7
 // bextr / 0x0f5 bzhi).  src and the two controls are derived from the two
-// runtime args so the backend cannot fold the extract to a constant.  checkEquiv
+// runtime args so the backend cannot fold the extract to a constant. checkEquiv
 // compares the original against the obfuscated copy within each cell (never
 // across ISAs) and neither copy touches the bextr/bzhi sub-graph, so both emit
 // byte-identical code and observe identical results; an undecoded bextr/bzhi
-// faults the x86 Unicorn baseline (UC_ERR_INSN_INVALID) and any value divergence
-// is a genuine backend / fork-Unicorn bug.  The two results are combined and
-// folded into the usual data-dependent diamond + PHI with non-folding constants
-// (0x5C5C / 33203).
+// faults the x86 Unicorn baseline (UC_ERR_INSN_INVALID) and any value
+// divergence is a genuine backend / fork-Unicorn bug.  The two results are
+// combined and folded into the usual data-dependent diamond + PHI with
+// non-folding constants (0x5C5C / 33203).
 std::unique_ptr<llvm::Module> buildBmiBitsIR(llvm::LLVMContext &Ctx,
                                              const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -26502,8 +26561,8 @@ std::unique_ptr<llvm::Module> buildBmiBitsIR(llvm::LLVMContext &Ctx,
                             B.getInt32(31));
   auto *Len = B.CreateAnd(B.CreateXor(A, B.CreateShl(C, B.getInt32(1))),
                           B.getInt32(31));
-  auto *Index =
-      B.CreateAnd(B.CreateAdd(C, B.CreateMul(A, B.getInt32(7))), B.getInt32(31));
+  auto *Index = B.CreateAnd(B.CreateAdd(C, B.CreateMul(A, B.getInt32(7))),
+                            B.getInt32(31));
 
   // BEXTR: extract LEN bits at START.  x86 pins the hardware instruction; every
   // other ISA open-codes (src >> start) & ((1<<len)-1).
@@ -26616,9 +26675,9 @@ std::unique_ptr<llvm::Module> buildSha256IR(llvm::LLVMContext &Ctx,
     uint32_t Ks[4] = {K0, K1, K2, K3};
     llvm::Value *V = llvm::UndefValue::get(V4i32);
     for (unsigned I = 0; I < 4; ++I) {
-      llvm::Value *Lane = B.CreateXor(
-          B.CreateAdd(B.CreateMul(A, B.getInt32(1u + 2u * I)), C),
-          B.getInt32(Ks[I]));
+      llvm::Value *Lane =
+          B.CreateXor(B.CreateAdd(B.CreateMul(A, B.getInt32(1u + 2u * I)), C),
+                      B.getInt32(Ks[I]));
       V = B.CreateInsertElement(V, Lane, uint64_t(I));
     }
     return V;
@@ -26663,13 +26722,16 @@ std::unique_ptr<llvm::Module> buildSha256IR(llvm::LLVMContext &Ctx,
     llvm::Value *Ve = Ln(Efgh, 0), *Vf = Ln(Efgh, 1), *Vg = Ln(Efgh, 2),
                 *Vh = Ln(Efgh, 3);
     llvm::Value *W = Ln(Wk, 0);
-    auto *S1 = B.CreateXor(B.CreateXor(rotr(Ve, 6), rotr(Ve, 11)), rotr(Ve, 25));
+    auto *S1 =
+        B.CreateXor(B.CreateXor(rotr(Ve, 6), rotr(Ve, 11)), rotr(Ve, 25));
     auto *Ch = B.CreateXor(B.CreateAnd(Ve, Vf),
                            B.CreateAnd(B.CreateXor(Ve, B.getInt32(-1)), Vg));
     auto *T1 = B.CreateAdd(B.CreateAdd(B.CreateAdd(Vh, S1), Ch), W);
-    auto *S0 = B.CreateXor(B.CreateXor(rotr(Va, 2), rotr(Va, 13)), rotr(Va, 22));
-    auto *Maj = B.CreateXor(B.CreateXor(B.CreateAnd(Va, Vb), B.CreateAnd(Va, Vc)),
-                            B.CreateAnd(Vb, Vc));
+    auto *S0 =
+        B.CreateXor(B.CreateXor(rotr(Va, 2), rotr(Va, 13)), rotr(Va, 22));
+    auto *Maj =
+        B.CreateXor(B.CreateXor(B.CreateAnd(Va, Vb), B.CreateAnd(Va, Vc)),
+                    B.CreateAnd(Vb, Vc));
     auto *T2 = B.CreateAdd(S0, Maj);
     llvm::Value *V = llvm::UndefValue::get(V4i32);
     V = B.CreateInsertElement(V, B.CreateAdd(T1, T2), uint64_t(0));
@@ -26680,11 +26742,10 @@ std::unique_ptr<llvm::Module> buildSha256IR(llvm::LLVMContext &Ctx,
   }
 
   // Reduce the <4 x i32> result to a scalar by xoring the four lanes.
-  auto *S = B.CreateXor(
-      B.CreateXor(B.CreateExtractElement(Res, uint64_t(0)),
-                  B.CreateExtractElement(Res, uint64_t(1))),
-      B.CreateXor(B.CreateExtractElement(Res, uint64_t(2)),
-                  B.CreateExtractElement(Res, uint64_t(3))));
+  auto *S = B.CreateXor(B.CreateXor(B.CreateExtractElement(Res, uint64_t(0)),
+                                    B.CreateExtractElement(Res, uint64_t(1))),
+                        B.CreateXor(B.CreateExtractElement(Res, uint64_t(2)),
+                                    B.CreateExtractElement(Res, uint64_t(3))));
 
   // Fold into the usual data-dependent diamond + PHI so the L1 passes have
   // integer arithmetic (and a branch) to transform.
@@ -26719,9 +26780,9 @@ std::unique_ptr<llvm::Module> buildSha256IR(llvm::LLVMContext &Ctx,
 // "ARM pins the hardware crypto, x86 software-open-codes" shape — SHA-NI is not
 // on the harness's default x86 Unicorn CPU (Haswell) — but adds a dimension
 // SHA-256 has none of: SHA1H returns a *scalar* i32 from a crypto intrinsic
-// (llvm.aarch64.crypto.sha1h / llvm.arm.neon.sha1h : i32 -> i32), exercising the
-// scalar crypto-result codegen path, and SHA-1's 5-word (a,b,c,d,e) state is
-// structurally different from SHA-256's 8-word state.  AArch64 emits native
+// (llvm.aarch64.crypto.sha1h / llvm.arm.neon.sha1h : i32 -> i32), exercising
+// the scalar crypto-result codegen path, and SHA-1's 5-word (a,b,c,d,e) state
+// is structurally different from SHA-256's 8-word state.  AArch64 emits native
 // SHA1C/SHA1H/SHA1SU0/SHA1SU1 (the "aarch64.crypto.sha" substring makes
 // detectTargetFeaturesAArch64 add +sha2; decode on UC_CPU_ARM64_MAX); ARM32
 // emits the AArch32 equivalents (llvm.arm.neon.sha1* — "arm.neon.sha" adds
@@ -26830,10 +26891,9 @@ std::unique_ptr<llvm::Module> buildSha1IR(llvm::LLVMContext &Ctx,
 
   // Reduce the <4 x i32> result to a scalar (xor lanes) and fold in the scalar
   // SHA1H / e' output.
-  auto *S = B.CreateXor(
-      B.CreateXor(B.CreateXor(ln(Res, 0), ln(Res, 1)),
-                  B.CreateXor(ln(Res, 2), ln(Res, 3))),
-      Extra);
+  auto *S = B.CreateXor(B.CreateXor(B.CreateXor(ln(Res, 0), ln(Res, 1)),
+                                    B.CreateXor(ln(Res, 2), ln(Res, 3))),
+                        Extra);
 
   auto *T = B.CreateXor(B.CreateXor(B.CreateAdd(A, C), B.CreateSub(A, C)),
                         B.getInt32(0x5C5C));
@@ -26868,25 +26928,26 @@ std::unique_ptr<llvm::Module> buildSha1IR(llvm::LLVMContext &Ctx,
 // hardware — AArch32 has no SHA-512 instructions — so unlike sha256/sha1 (where
 // ARM32 pinned the hardware) here ARM32 joins x86 and everything else in the
 // software-open-code group, and *only* AArch64 pins hardware.  The feature is
-// also different: FEAT_SHA512 is grouped under LLVM's SHA3 subtarget feature, so
-// the "aarch64.crypto.sha512" substring makes detectTargetFeaturesAArch64 add
-// +sha3 (not +sha2).  AArch64 emits native SHA512H/SHA512H2/SHA512SU0/SHA512SU1
-// (llvm.aarch64.crypto.sha512* on <2 x i64>; UC_CPU_ARM64_MAX decodes them via
-// disas_crypto_three_reg_sha512 / disas_crypto_two_reg_sha512, gated on
-// aa64_sha512 = ID_AA64ISAR0.SHA2>=2, which the harness CPU sets); x86/x86-64,
-// ARM32 and any other ISA open-code an equivalent SHA-512 round (Sigma/Ch/Maj on
-// i64 via rotate + shift + and + xor + add — all exact, all legal, zero
-// libcall).  checkEquiv compares the original against the obfuscated copy
-// *within* each cell (never across ISAs), so the software round need not match
-// the AArch64 hardware result.  State and schedule words derive from the two
-// runtime args (each lane mixes both, xored with a distinct non-folding
-// constant) so the backend cannot fold the round to a constant; the <2 x i64>
-// result is reduced to a scalar and merged into the usual data-dependent diamond
+// also different: FEAT_SHA512 is grouped under LLVM's SHA3 subtarget feature,
+// so the "aarch64.crypto.sha512" substring makes detectTargetFeaturesAArch64
+// add +sha3 (not +sha2).  AArch64 emits native
+// SHA512H/SHA512H2/SHA512SU0/SHA512SU1 (llvm.aarch64.crypto.sha512* on <2 x
+// i64>; UC_CPU_ARM64_MAX decodes them via disas_crypto_three_reg_sha512 /
+// disas_crypto_two_reg_sha512, gated on aa64_sha512 = ID_AA64ISAR0.SHA2>=2,
+// which the harness CPU sets); x86/x86-64, ARM32 and any other ISA open-code an
+// equivalent SHA-512 round (Sigma/Ch/Maj on i64 via rotate + shift + and + xor
+// + add — all exact, all legal, zero libcall).  checkEquiv compares the
+// original against the obfuscated copy *within* each cell (never across ISAs),
+// so the software round need not match the AArch64 hardware result.  State and
+// schedule words derive from the two runtime args (each lane mixes both, xored
+// with a distinct non-folding constant) so the backend cannot fold the round to
+// a constant; the <2 x i64> result is reduced to a scalar and merged into the
+// usual data-dependent diamond
 // + PHI with non-folding constants (0x5C5C / 33203) so the L1 passes have
 // integer arithmetic (and a branch) to transform, while the SHA sub-graph is
 // left in place — an undecoded SHA instruction faults the AArch64 Unicorn
-// baseline (UC_ERR_INSN_INVALID) and any value divergence is a genuine backend /
-// fork-Unicorn bug.
+// baseline (UC_ERR_INSN_INVALID) and any value divergence is a genuine backend
+// / fork-Unicorn bug.
 std::unique_ptr<llvm::Module> buildSha512IR(llvm::LLVMContext &Ctx,
                                             const char *Triple) {
   auto M = std::make_unique<llvm::Module>("substtest", Ctx);
@@ -27508,149 +27569,147 @@ std::unique_ptr<llvm::Module> buildSha512IR(llvm::LLVMContext &Ctx,
   TEST(SUITE, Dup256) {                                                        \
     checkEquiv(ISA, buildVecAvxDup256IR, "vdup256", kPairs);                   \
   }                                                                            \
-  TEST(SUITE, CmpNe256) {                                                       \
-    checkEquiv(ISA, buildVecAvxCmpNe256IR, "vcmpne256", kPairs);                \
+  TEST(SUITE, CmpNe256) {                                                      \
+    checkEquiv(ISA, buildVecAvxCmpNe256IR, "vcmpne256", kPairs);               \
   }                                                                            \
-  TEST(SUITE, AddSub256) {                                                      \
-    checkEquiv(ISA, buildVecAvxAddSub256IR, "vaddsub256", kPairs);              \
+  TEST(SUITE, AddSub256) {                                                     \
+    checkEquiv(ISA, buildVecAvxAddSub256IR, "vaddsub256", kPairs);             \
   }                                                                            \
-  TEST(SUITE, HAddSub256) {                                                     \
-    checkEquiv(ISA, buildVecAvxHAddSub256IR, "vhaddsub256", kPairs);            \
+  TEST(SUITE, HAddSub256) {                                                    \
+    checkEquiv(ISA, buildVecAvxHAddSub256IR, "vhaddsub256", kPairs);           \
   }                                                                            \
-  TEST(SUITE, FLogic256) {                                                      \
-    checkEquiv(ISA, buildVecAvxFLogic256IR, "vflogic256", kPairs);              \
+  TEST(SUITE, FLogic256) {                                                     \
+    checkEquiv(ISA, buildVecAvxFLogic256IR, "vflogic256", kPairs);             \
   }                                                                            \
-  TEST(SUITE, Unpack256) {                                                      \
-    checkEquiv(ISA, buildVecAvxUnpack256IR, "vunpack256", kPairs);              \
+  TEST(SUITE, Unpack256) {                                                     \
+    checkEquiv(ISA, buildVecAvxUnpack256IR, "vunpack256", kPairs);             \
   }                                                                            \
-  TEST(SUITE, IUnpack256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIUnpack256IR, "viunpack256", kPairs);              \
+  TEST(SUITE, IUnpack256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIUnpack256IR, "viunpack256", kPairs);           \
   }                                                                            \
-  TEST(SUITE, VarShift256) {                                                      \
-    checkEquiv(ISA, buildVecAvxVarShift256IR, "vvshift256", kPairs);              \
+  TEST(SUITE, VarShift256) {                                                   \
+    checkEquiv(ISA, buildVecAvxVarShift256IR, "vvshift256", kPairs);           \
   }                                                                            \
-  TEST(SUITE, IArith256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIArith256IR, "viarith256", kPairs);              \
+  TEST(SUITE, IArith256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIArith256IR, "viarith256", kPairs);             \
   }                                                                            \
-  TEST(SUITE, IMinMax256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIMinMax256IR, "viminmax256", kPairs);            \
+  TEST(SUITE, IMinMax256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIMinMax256IR, "viminmax256", kPairs);           \
   }                                                                            \
-  TEST(SUITE, ICmp256) {                                                        \
-    checkEquiv(ISA, buildVecAvxICmp256IR, "vicmp256", kPairs);                  \
+  TEST(SUITE, ICmp256) {                                                       \
+    checkEquiv(ISA, buildVecAvxICmp256IR, "vicmp256", kPairs);                 \
   }                                                                            \
-  TEST(SUITE, ICmpBWQ256) {                                                     \
-    checkEquiv(ISA, buildVecAvxICmpBWQ256IR, "vicmpbwq256", kPairs);            \
+  TEST(SUITE, ICmpBWQ256) {                                                    \
+    checkEquiv(ISA, buildVecAvxICmpBWQ256IR, "vicmpbwq256", kPairs);           \
   }                                                                            \
-  TEST(SUITE, GatherD256) {                                                     \
-    checkEquiv(ISA, buildVecAvxGatherD256IR, "vgatherd256", kPairs);            \
+  TEST(SUITE, GatherD256) {                                                    \
+    checkEquiv(ISA, buildVecAvxGatherD256IR, "vgatherd256", kPairs);           \
   }                                                                            \
-  TEST(SUITE, GatherDQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxGatherDQ256IR, "vgatherdq256", kPairs);          \
+  TEST(SUITE, GatherDQ256) {                                                   \
+    checkEquiv(ISA, buildVecAvxGatherDQ256IR, "vgatherdq256", kPairs);         \
   }                                                                            \
-  TEST(SUITE, GatherQD256) {                                                    \
-    checkEquiv(ISA, buildVecAvxGatherQD256IR, "vgatherqd256", kPairs);          \
+  TEST(SUITE, GatherQD256) {                                                   \
+    checkEquiv(ISA, buildVecAvxGatherQD256IR, "vgatherqd256", kPairs);         \
   }                                                                            \
-  TEST(SUITE, GatherQQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxGatherQQ256IR, "vgatherqq256", kPairs);          \
+  TEST(SUITE, GatherQQ256) {                                                   \
+    checkEquiv(ISA, buildVecAvxGatherQQ256IR, "vgatherqq256", kPairs);         \
   }                                                                            \
-  TEST(SUITE, MaskMov256) {                                                     \
-    checkEquiv(ISA, buildVecAvxMaskMov256IR, "vmaskmov256", kPairs);            \
+  TEST(SUITE, MaskMov256) {                                                    \
+    checkEquiv(ISA, buildVecAvxMaskMov256IR, "vmaskmov256", kPairs);           \
   }                                                                            \
-  TEST(SUITE, MaskMovQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxMaskMovQ256IR, "vmaskmovq256", kPairs);          \
+  TEST(SUITE, MaskMovQ256) {                                                   \
+    checkEquiv(ISA, buildVecAvxMaskMovQ256IR, "vmaskmovq256", kPairs);         \
   }                                                                            \
-  TEST(SUITE, MaskMovPS256) {                                                   \
-    checkEquiv(ISA, buildVecAvxMaskMovPS256IR, "vmaskmovps256", kPairs);        \
+  TEST(SUITE, MaskMovPS256) {                                                  \
+    checkEquiv(ISA, buildVecAvxMaskMovPS256IR, "vmaskmovps256", kPairs);       \
   }                                                                            \
-  TEST(SUITE, MaskMovPD256) {                                                   \
-    checkEquiv(ISA, buildVecAvxMaskMovPD256IR, "vmaskmovpd256", kPairs);        \
+  TEST(SUITE, MaskMovPD256) {                                                  \
+    checkEquiv(ISA, buildVecAvxMaskMovPD256IR, "vmaskmovpd256", kPairs);       \
   }                                                                            \
   TEST(SUITE, Crc32) {                                                         \
     checkEquiv(ISA, buildScalarCrc32IR, "crc32acc", kPairs);                   \
   }                                                                            \
-  TEST(SUITE, PolyMul) {                                                       \
-    checkEquiv(ISA, buildPolyMulIR, "polymul", kPairs);                        \
+  TEST(SUITE, PolyMul) { checkEquiv(ISA, buildPolyMulIR, "polymul", kPairs); } \
+  TEST(SUITE, UShift256) {                                                     \
+    checkEquiv(ISA, buildVecAvxUShift256IR, "vushift256", kPairs);             \
   }                                                                            \
-  TEST(SUITE, UShift256) {                                                      \
-    checkEquiv(ISA, buildVecAvxUShift256IR, "vushift256", kPairs);              \
+  TEST(SUITE, IPMadd256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIPMadd256IR, "vipmadd256", kPairs);             \
   }                                                                            \
-  TEST(SUITE, IPMadd256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIPMadd256IR, "vipmadd256", kPairs);              \
+  TEST(SUITE, IAbs256) {                                                       \
+    checkEquiv(ISA, buildVecAvxIAbs256IR, "viabs256", kPairs);                 \
   }                                                                            \
-  TEST(SUITE, IAbs256) {                                                        \
-    checkEquiv(ISA, buildVecAvxIAbs256IR, "viabs256", kPairs);                  \
+  TEST(SUITE, IAvg256) {                                                       \
+    checkEquiv(ISA, buildVecAvxIAvg256IR, "viavg256", kPairs);                 \
   }                                                                            \
-  TEST(SUITE, IAvg256) {                                                        \
-    checkEquiv(ISA, buildVecAvxIAvg256IR, "viavg256", kPairs);                  \
+  TEST(SUITE, IMaddUB256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIMaddUB256IR, "vimaddub256", kPairs);           \
   }                                                                            \
-  TEST(SUITE, IMaddUB256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIMaddUB256IR, "vimaddub256", kPairs);            \
+  TEST(SUITE, IMulH256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIMulH256IR, "vimulh256", kPairs);               \
   }                                                                            \
-  TEST(SUITE, IMulH256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIMulH256IR, "vimulh256", kPairs);                \
+  TEST(SUITE, IMulHRS256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIMulHRS256IR, "vimulhrs256", kPairs);           \
   }                                                                            \
-  TEST(SUITE, IMulHRS256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIMulHRS256IR, "vimulhrs256", kPairs);            \
+  TEST(SUITE, ISad256) {                                                       \
+    checkEquiv(ISA, buildVecAvxISad256IR, "visad256", kPairs);                 \
   }                                                                            \
-  TEST(SUITE, ISad256) {                                                        \
-    checkEquiv(ISA, buildVecAvxISad256IR, "visad256", kPairs);                  \
+  TEST(SUITE, ISign256) {                                                      \
+    checkEquiv(ISA, buildVecAvxISign256IR, "visign256", kPairs);               \
   }                                                                            \
-  TEST(SUITE, ISign256) {                                                       \
-    checkEquiv(ISA, buildVecAvxISign256IR, "visign256", kPairs);                \
-  }                                                                             \
-  TEST(SUITE, IHAdd256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIHAdd256IR, "vihadd256", kPairs);                \
-  }                                                                             \
-  TEST(SUITE, IPerm256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIPerm256IR, "viperm256", kPairs);                \
-  }                                                                             \
-  TEST(SUITE, IHAddSW256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIHAddSW256IR, "vihaddsw256", kPairs);            \
-  }                                                                             \
-  TEST(SUITE, IBlendW256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIBlendW256IR, "viblendw256", kPairs);            \
-  }                                                                             \
-  TEST(SUITE, IPack256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIPack256IR, "vipack256", kPairs);                \
-  }                                                                             \
-  TEST(SUITE, IShufB256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIShufB256IR, "vishufb256", kPairs);              \
-  }                                                                             \
-  TEST(SUITE, IMovMskB256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIMovMskB256IR, "vimovmskb256", kPairs);          \
-  }                                                                             \
-  TEST(SUITE, IBlendVB256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIBlendVB256IR, "viblendvb256", kPairs);          \
-  }                                                                             \
-  TEST(SUITE, IMulDQ256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIMulDQ256IR, "vimuldq256", kPairs);              \
-  }                                                                             \
-  TEST(SUITE, IPackD256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIPackD256IR, "vipackd256", kPairs);              \
-  }                                                                             \
-  TEST(SUITE, IHAddW256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIHAddW256IR, "vihaddw256", kPairs);              \
-  }                                                                             \
-  TEST(SUITE, ISignBW256) {                                                     \
-    checkEquiv(ISA, buildVecAvxISignBW256IR, "visignbw256", kPairs);            \
-  }                                                                             \
-  TEST(SUITE, IShufD256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIShufD256IR, "vishufd256", kPairs);              \
-  }                                                                             \
-  TEST(SUITE, IShufW256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIShufW256IR, "vishufw256", kPairs);              \
-  }                                                                             \
-  TEST(SUITE, IAlignR256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIAlignR256IR, "vialignr256", kPairs);            \
-  }                                                                             \
-  TEST(SUITE, IBShiftDQ256) {                                                   \
-    checkEquiv(ISA, buildVecAvxIBShiftDQ256IR, "vibshiftdq256", kPairs);        \
-  }                                                                             \
-  TEST(SUITE, IBroadcast256) {                                                  \
-    checkEquiv(ISA, buildVecAvxIBroadcast256IR, "vibroadcast256", kPairs);      \
-  }                                                                             \
-  TEST(SUITE, IMpsad256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIMpsadbw256IR, "vimpsad256", kPairs);            \
+  TEST(SUITE, IHAdd256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIHAdd256IR, "vihadd256", kPairs);               \
+  }                                                                            \
+  TEST(SUITE, IPerm256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIPerm256IR, "viperm256", kPairs);               \
+  }                                                                            \
+  TEST(SUITE, IHAddSW256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIHAddSW256IR, "vihaddsw256", kPairs);           \
+  }                                                                            \
+  TEST(SUITE, IBlendW256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIBlendW256IR, "viblendw256", kPairs);           \
+  }                                                                            \
+  TEST(SUITE, IPack256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIPack256IR, "vipack256", kPairs);               \
+  }                                                                            \
+  TEST(SUITE, IShufB256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIShufB256IR, "vishufb256", kPairs);             \
+  }                                                                            \
+  TEST(SUITE, IMovMskB256) {                                                   \
+    checkEquiv(ISA, buildVecAvxIMovMskB256IR, "vimovmskb256", kPairs);         \
+  }                                                                            \
+  TEST(SUITE, IBlendVB256) {                                                   \
+    checkEquiv(ISA, buildVecAvxIBlendVB256IR, "viblendvb256", kPairs);         \
+  }                                                                            \
+  TEST(SUITE, IMulDQ256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIMulDQ256IR, "vimuldq256", kPairs);             \
+  }                                                                            \
+  TEST(SUITE, IPackD256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIPackD256IR, "vipackd256", kPairs);             \
+  }                                                                            \
+  TEST(SUITE, IHAddW256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIHAddW256IR, "vihaddw256", kPairs);             \
+  }                                                                            \
+  TEST(SUITE, ISignBW256) {                                                    \
+    checkEquiv(ISA, buildVecAvxISignBW256IR, "visignbw256", kPairs);           \
+  }                                                                            \
+  TEST(SUITE, IShufD256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIShufD256IR, "vishufd256", kPairs);             \
+  }                                                                            \
+  TEST(SUITE, IShufW256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIShufW256IR, "vishufw256", kPairs);             \
+  }                                                                            \
+  TEST(SUITE, IAlignR256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIAlignR256IR, "vialignr256", kPairs);           \
+  }                                                                            \
+  TEST(SUITE, IBShiftDQ256) {                                                  \
+    checkEquiv(ISA, buildVecAvxIBShiftDQ256IR, "vibshiftdq256", kPairs);       \
+  }                                                                            \
+  TEST(SUITE, IBroadcast256) {                                                 \
+    checkEquiv(ISA, buildVecAvxIBroadcast256IR, "vibroadcast256", kPairs);     \
+  }                                                                            \
+  TEST(SUITE, IMpsad256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIMpsadbw256IR, "vimpsad256", kPairs);           \
   }                                                                            \
   TEST(SUITE, IVPerm2I256) {                                                   \
     checkEquiv(ISA, buildVecAvxIVPerm2I256IR, "vperm2i256", kPairs);           \
@@ -27709,18 +27768,10 @@ std::unique_ptr<llvm::Module> buildSha512IR(llvm::LLVMContext &Ctx,
   TEST(SUITE, DpProd128) {                                                     \
     checkEquiv(ISA, buildVecDpProd128IR, "vdp128", kPairs);                    \
   }                                                                            \
-  TEST(SUITE, BmiBits) {                                                       \
-    checkEquiv(ISA, buildBmiBitsIR, "bmibits", kPairs);                        \
-  }                                                                            \
-  TEST(SUITE, Sha256) {                                                        \
-    checkEquiv(ISA, buildSha256IR, "sha256", kPairs);                          \
-  }                                                                            \
-  TEST(SUITE, Sha1) {                                                          \
-    checkEquiv(ISA, buildSha1IR, "sha1", kPairs);                              \
-  }                                                                            \
-  TEST(SUITE, Sha512) {                                                        \
-    checkEquiv(ISA, buildSha512IR, "sha512", kPairs);                          \
-  }
+  TEST(SUITE, BmiBits) { checkEquiv(ISA, buildBmiBitsIR, "bmibits", kPairs); } \
+  TEST(SUITE, Sha256) { checkEquiv(ISA, buildSha256IR, "sha256", kPairs); }    \
+  TEST(SUITE, Sha1) { checkEquiv(ISA, buildSha1IR, "sha1", kPairs); }          \
+  TEST(SUITE, Sha512) { checkEquiv(ISA, buildSha512IR, "sha512", kPairs); }
 
 PATCH_FULL_SUITE(PatchFullSubst_ELF_x64, kELF_x64)
 PATCH_FULL_SUITE(PatchFullSubst_ELF_AArch64, kELF_AArch64)
@@ -28509,81 +28560,81 @@ PATCH_FULL_SUITE(PatchFullSubst_MachO_ARM32, kMachO_ARM32)
     checkEquiv(ISA, buildVecAvxDup256IR, "vdup256", kPairs, 1, true,           \
                Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, CmpNe256) {                                                       \
-    checkEquiv(ISA, buildVecAvxCmpNe256IR, "vcmpne256", kPairs, 1, true,        \
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, CmpNe256) {                                                      \
+    checkEquiv(ISA, buildVecAvxCmpNe256IR, "vcmpne256", kPairs, 1, true,       \
+               Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, AddSub256) {                                                      \
-    checkEquiv(ISA, buildVecAvxAddSub256IR, "vaddsub256", kPairs, 1, true,      \
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, AddSub256) {                                                     \
+    checkEquiv(ISA, buildVecAvxAddSub256IR, "vaddsub256", kPairs, 1, true,     \
+               Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, HAddSub256) {                                                     \
-    checkEquiv(ISA, buildVecAvxHAddSub256IR, "vhaddsub256", kPairs, 1, true,    \
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, HAddSub256) {                                                    \
+    checkEquiv(ISA, buildVecAvxHAddSub256IR, "vhaddsub256", kPairs, 1, true,   \
+               Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, FLogic256) {                                                      \
-    checkEquiv(ISA, buildVecAvxFLogic256IR, "vflogic256", kPairs, 1, true,      \
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, FLogic256) {                                                     \
+    checkEquiv(ISA, buildVecAvxFLogic256IR, "vflogic256", kPairs, 1, true,     \
+               Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, Unpack256) {                                                      \
-    checkEquiv(ISA, buildVecAvxUnpack256IR, "vunpack256", kPairs, 1, true,      \
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, Unpack256) {                                                     \
+    checkEquiv(ISA, buildVecAvxUnpack256IR, "vunpack256", kPairs, 1, true,     \
+               Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, IUnpack256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIUnpack256IR, "viunpack256", kPairs, 1, true,      \
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, IUnpack256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIUnpack256IR, "viunpack256", kPairs, 1, true,   \
+               Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, VarShift256) {                                                      \
-    checkEquiv(ISA, buildVecAvxVarShift256IR, "vvshift256", kPairs, 1, true,      \
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, VarShift256) {                                                   \
+    checkEquiv(ISA, buildVecAvxVarShift256IR, "vvshift256", kPairs, 1, true,   \
+               Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, IArith256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIArith256IR, "viarith256", kPairs, 1, true,      \
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, IArith256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIArith256IR, "viarith256", kPairs, 1, true,     \
+               Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, IMinMax256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIMinMax256IR, "viminmax256", kPairs, 1, true,    \
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, IMinMax256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIMinMax256IR, "viminmax256", kPairs, 1, true,   \
+               Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, ICmp256) {                                                        \
-    checkEquiv(ISA, buildVecAvxICmp256IR, "vicmp256", kPairs, 1, true,          \
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, ICmp256) {                                                       \
+    checkEquiv(ISA, buildVecAvxICmp256IR, "vicmp256", kPairs, 1, true,         \
+               Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, ICmpBWQ256) {                                                     \
-    checkEquiv(ISA, buildVecAvxICmpBWQ256IR, "vicmpbwq256", kPairs, 1, true,    \
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, ICmpBWQ256) {                                                    \
+    checkEquiv(ISA, buildVecAvxICmpBWQ256IR, "vicmpbwq256", kPairs, 1, true,   \
+               Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, GatherD256) {                                                     \
-    checkEquiv(ISA, buildVecAvxGatherD256IR, "vgatherd256", kPairs, 1, true,    \
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, GatherD256) {                                                    \
+    checkEquiv(ISA, buildVecAvxGatherD256IR, "vgatherd256", kPairs, 1, true,   \
+               Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, GatherDQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxGatherDQ256IR, "vgatherdq256", kPairs, 1, true,  \
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, GatherDQ256) {                                                   \
+    checkEquiv(ISA, buildVecAvxGatherDQ256IR, "vgatherdq256", kPairs, 1, true, \
+               Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, GatherQD256) {                                                    \
-    checkEquiv(ISA, buildVecAvxGatherQD256IR, "vgatherqd256", kPairs, 1, true,  \
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, GatherQD256) {                                                   \
+    checkEquiv(ISA, buildVecAvxGatherQD256IR, "vgatherqd256", kPairs, 1, true, \
+               Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, GatherQQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxGatherQQ256IR, "vgatherqq256", kPairs, 1, true,  \
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, GatherQQ256) {                                                   \
+    checkEquiv(ISA, buildVecAvxGatherQQ256IR, "vgatherqq256", kPairs, 1, true, \
+               Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, MaskMov256) {                                                     \
-    checkEquiv(ISA, buildVecAvxMaskMov256IR, "vmaskmov256", kPairs, 1, true,    \
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, MaskMov256) {                                                    \
+    checkEquiv(ISA, buildVecAvxMaskMov256IR, "vmaskmov256", kPairs, 1, true,   \
+               Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, MaskMovQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxMaskMovQ256IR, "vmaskmovq256", kPairs, 1, true,  \
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, MaskMovQ256) {                                                   \
+    checkEquiv(ISA, buildVecAvxMaskMovQ256IR, "vmaskmovq256", kPairs, 1, true, \
+               Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, MaskMovPS256) {                                                   \
-    checkEquiv(ISA, buildVecAvxMaskMovPS256IR, "vmaskmovps256", kPairs, 1, true,\
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, MaskMovPS256) {                                                  \
+    checkEquiv(ISA, buildVecAvxMaskMovPS256IR, "vmaskmovps256", kPairs, 1,     \
+               true, Xform::ConstEnc);                                         \
   }                                                                            \
-  TEST(SUITE, MaskMovPD256) {                                                   \
-    checkEquiv(ISA, buildVecAvxMaskMovPD256IR, "vmaskmovpd256", kPairs, 1, true,\
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, MaskMovPD256) {                                                  \
+    checkEquiv(ISA, buildVecAvxMaskMovPD256IR, "vmaskmovpd256", kPairs, 1,     \
+               true, Xform::ConstEnc);                                         \
   }                                                                            \
   TEST(SUITE, Crc32) {                                                         \
     checkEquiv(ISA, buildScalarCrc32IR, "crc32acc", kPairs, 1, true,           \
@@ -28593,125 +28644,125 @@ PATCH_FULL_SUITE(PatchFullSubst_MachO_ARM32, kMachO_ARM32)
     checkEquiv(ISA, buildPolyMulIR, "polymul", kPairs, 1, true,                \
                Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, UShift256) {                                                      \
-    checkEquiv(ISA, buildVecAvxUShift256IR, "vushift256", kPairs, 1, true,      \
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, UShift256) {                                                     \
+    checkEquiv(ISA, buildVecAvxUShift256IR, "vushift256", kPairs, 1, true,     \
+               Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, IPMadd256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIPMadd256IR, "vipmadd256", kPairs, 1, true,      \
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, IPMadd256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIPMadd256IR, "vipmadd256", kPairs, 1, true,     \
+               Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, IAbs256) {                                                        \
-    checkEquiv(ISA, buildVecAvxIAbs256IR, "viabs256", kPairs, 1, true,          \
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, IAbs256) {                                                       \
+    checkEquiv(ISA, buildVecAvxIAbs256IR, "viabs256", kPairs, 1, true,         \
+               Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, IAvg256) {                                                        \
-    checkEquiv(ISA, buildVecAvxIAvg256IR, "viavg256", kPairs, 1, true,          \
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, IAvg256) {                                                       \
+    checkEquiv(ISA, buildVecAvxIAvg256IR, "viavg256", kPairs, 1, true,         \
+               Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, IMaddUB256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIMaddUB256IR, "vimaddub256", kPairs, 1, true,    \
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, IMaddUB256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIMaddUB256IR, "vimaddub256", kPairs, 1, true,   \
+               Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, IMulH256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIMulH256IR, "vimulh256", kPairs, 1, true,        \
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, IMulH256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIMulH256IR, "vimulh256", kPairs, 1, true,       \
+               Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, IMulHRS256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIMulHRS256IR, "vimulhrs256", kPairs, 1, true,    \
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, IMulHRS256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIMulHRS256IR, "vimulhrs256", kPairs, 1, true,   \
+               Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, ISad256) {                                                        \
-    checkEquiv(ISA, buildVecAvxISad256IR, "visad256", kPairs, 1, true,          \
-               Xform::ConstEnc);                                                \
+  TEST(SUITE, ISad256) {                                                       \
+    checkEquiv(ISA, buildVecAvxISad256IR, "visad256", kPairs, 1, true,         \
+               Xform::ConstEnc);                                               \
   }                                                                            \
-  TEST(SUITE, ISign256) {                                                       \
-    checkEquiv(ISA, buildVecAvxISign256IR, "visign256", kPairs, 1, true,        \
-               Xform::ConstEnc);                                                \
-  }                                                                             \
-  TEST(SUITE, IHAdd256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIHAdd256IR, "vihadd256", kPairs, 1, true,        \
-               Xform::ConstEnc);                                                \
-  }                                                                             \
-  TEST(SUITE, IPerm256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIPerm256IR, "viperm256", kPairs, 1, true,        \
-               Xform::ConstEnc);                                                \
-  }                                                                             \
-  TEST(SUITE, IHAddSW256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIHAddSW256IR, "vihaddsw256", kPairs, 1, true,    \
-               Xform::ConstEnc);                                                \
-  }                                                                             \
-  TEST(SUITE, IBlendW256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIBlendW256IR, "viblendw256", kPairs, 1, true,    \
-               Xform::ConstEnc);                                                \
-  }                                                                             \
-  TEST(SUITE, IPack256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIPack256IR, "vipack256", kPairs, 1, true,        \
-               Xform::ConstEnc);                                                \
-  }                                                                             \
-  TEST(SUITE, IShufB256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIShufB256IR, "vishufb256", kPairs, 1, true,      \
-               Xform::ConstEnc);                                                \
-  }                                                                             \
-  TEST(SUITE, IMovMskB256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIMovMskB256IR, "vimovmskb256", kPairs, 1, true,  \
-               Xform::ConstEnc);                                                \
-  }                                                                             \
-  TEST(SUITE, IBlendVB256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIBlendVB256IR, "viblendvb256", kPairs, 1, true,  \
-               Xform::ConstEnc);                                                \
-  }                                                                             \
-  TEST(SUITE, IMulDQ256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIMulDQ256IR, "vimuldq256", kPairs, 1, true,      \
-               Xform::ConstEnc);                                                \
-  }                                                                             \
-  TEST(SUITE, IPackD256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIPackD256IR, "vipackd256", kPairs, 1, true,      \
-               Xform::ConstEnc);                                                \
-  }                                                                             \
-  TEST(SUITE, IHAddW256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIHAddW256IR, "vihaddw256", kPairs, 1, true,      \
-               Xform::ConstEnc);                                                \
-  }                                                                             \
-  TEST(SUITE, ISignBW256) {                                                     \
-    checkEquiv(ISA, buildVecAvxISignBW256IR, "visignbw256", kPairs, 1, true,    \
-               Xform::ConstEnc);                                                \
-  }                                                                             \
-  TEST(SUITE, IShufD256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIShufD256IR, "vishufd256", kPairs, 1, true,      \
-               Xform::ConstEnc);                                                \
-  }                                                                             \
-  TEST(SUITE, IShufW256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIShufW256IR, "vishufw256", kPairs, 1, true,      \
-               Xform::ConstEnc);                                                \
-  }                                                                             \
-  TEST(SUITE, IAlignR256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIAlignR256IR, "vialignr256", kPairs, 1, true,    \
-               Xform::ConstEnc);                                                \
-  }                                                                             \
-  TEST(SUITE, IBShiftDQ256) {                                                   \
-    checkEquiv(ISA, buildVecAvxIBShiftDQ256IR, "vibshiftdq256", kPairs, 1, true,\
-               Xform::ConstEnc);                                                \
-  }                                                                             \
-  TEST(SUITE, IBroadcast256) {                                                  \
-    checkEquiv(ISA, buildVecAvxIBroadcast256IR, "vibroadcast256", kPairs, 1,    \
-               true, Xform::ConstEnc);                                          \
-  }                                                                             \
-  TEST(SUITE, IMpsad256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIMpsadbw256IR, "vimpsad256", kPairs, 1,          \
-               true, Xform::ConstEnc);                                          \
+  TEST(SUITE, ISign256) {                                                      \
+    checkEquiv(ISA, buildVecAvxISign256IR, "visign256", kPairs, 1, true,       \
+               Xform::ConstEnc);                                               \
+  }                                                                            \
+  TEST(SUITE, IHAdd256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIHAdd256IR, "vihadd256", kPairs, 1, true,       \
+               Xform::ConstEnc);                                               \
+  }                                                                            \
+  TEST(SUITE, IPerm256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIPerm256IR, "viperm256", kPairs, 1, true,       \
+               Xform::ConstEnc);                                               \
+  }                                                                            \
+  TEST(SUITE, IHAddSW256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIHAddSW256IR, "vihaddsw256", kPairs, 1, true,   \
+               Xform::ConstEnc);                                               \
+  }                                                                            \
+  TEST(SUITE, IBlendW256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIBlendW256IR, "viblendw256", kPairs, 1, true,   \
+               Xform::ConstEnc);                                               \
+  }                                                                            \
+  TEST(SUITE, IPack256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIPack256IR, "vipack256", kPairs, 1, true,       \
+               Xform::ConstEnc);                                               \
+  }                                                                            \
+  TEST(SUITE, IShufB256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIShufB256IR, "vishufb256", kPairs, 1, true,     \
+               Xform::ConstEnc);                                               \
+  }                                                                            \
+  TEST(SUITE, IMovMskB256) {                                                   \
+    checkEquiv(ISA, buildVecAvxIMovMskB256IR, "vimovmskb256", kPairs, 1, true, \
+               Xform::ConstEnc);                                               \
+  }                                                                            \
+  TEST(SUITE, IBlendVB256) {                                                   \
+    checkEquiv(ISA, buildVecAvxIBlendVB256IR, "viblendvb256", kPairs, 1, true, \
+               Xform::ConstEnc);                                               \
+  }                                                                            \
+  TEST(SUITE, IMulDQ256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIMulDQ256IR, "vimuldq256", kPairs, 1, true,     \
+               Xform::ConstEnc);                                               \
+  }                                                                            \
+  TEST(SUITE, IPackD256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIPackD256IR, "vipackd256", kPairs, 1, true,     \
+               Xform::ConstEnc);                                               \
+  }                                                                            \
+  TEST(SUITE, IHAddW256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIHAddW256IR, "vihaddw256", kPairs, 1, true,     \
+               Xform::ConstEnc);                                               \
+  }                                                                            \
+  TEST(SUITE, ISignBW256) {                                                    \
+    checkEquiv(ISA, buildVecAvxISignBW256IR, "visignbw256", kPairs, 1, true,   \
+               Xform::ConstEnc);                                               \
+  }                                                                            \
+  TEST(SUITE, IShufD256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIShufD256IR, "vishufd256", kPairs, 1, true,     \
+               Xform::ConstEnc);                                               \
+  }                                                                            \
+  TEST(SUITE, IShufW256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIShufW256IR, "vishufw256", kPairs, 1, true,     \
+               Xform::ConstEnc);                                               \
+  }                                                                            \
+  TEST(SUITE, IAlignR256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIAlignR256IR, "vialignr256", kPairs, 1, true,   \
+               Xform::ConstEnc);                                               \
+  }                                                                            \
+  TEST(SUITE, IBShiftDQ256) {                                                  \
+    checkEquiv(ISA, buildVecAvxIBShiftDQ256IR, "vibshiftdq256", kPairs, 1,     \
+               true, Xform::ConstEnc);                                         \
+  }                                                                            \
+  TEST(SUITE, IBroadcast256) {                                                 \
+    checkEquiv(ISA, buildVecAvxIBroadcast256IR, "vibroadcast256", kPairs, 1,   \
+               true, Xform::ConstEnc);                                         \
+  }                                                                            \
+  TEST(SUITE, IMpsad256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIMpsadbw256IR, "vimpsad256", kPairs, 1, true,   \
+               Xform::ConstEnc);                                               \
   }                                                                            \
   TEST(SUITE, IVPerm2I256) {                                                   \
-    checkEquiv(ISA, buildVecAvxIVPerm2I256IR, "vperm2i256", kPairs, 1,         \
-               true, Xform::ConstEnc);                                         \
+    checkEquiv(ISA, buildVecAvxIVPerm2I256IR, "vperm2i256", kPairs, 1, true,   \
+               Xform::ConstEnc);                                               \
   }                                                                            \
   TEST(SUITE, IVPermQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIVPermQ256IR, "vpermq256", kPairs, 1,           \
-               true, Xform::ConstEnc);                                         \
+    checkEquiv(ISA, buildVecAvxIVPermQ256IR, "vpermq256", kPairs, 1, true,     \
+               Xform::ConstEnc);                                               \
   }                                                                            \
   TEST(SUITE, IBlendD256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIBlendD256IR, "viblendd256", kPairs, 1,         \
-               true, Xform::ConstEnc);                                         \
+    checkEquiv(ISA, buildVecAvxIBlendD256IR, "viblendd256", kPairs, 1, true,   \
+               Xform::ConstEnc);                                               \
   }                                                                            \
   TEST(SUITE, IMovExtBW256) {                                                  \
     checkEquiv(ISA, buildVecAvxIMovExtBW256IR, "vimovextbw256", kPairs, 1,     \
@@ -28738,47 +28789,47 @@ PATCH_FULL_SUITE(PatchFullSubst_MachO_ARM32, kMachO_ARM32)
                true, Xform::ConstEnc);                                         \
   }                                                                            \
   TEST(SUITE, BlendV256) {                                                     \
-    checkEquiv(ISA, buildVecAvxBlendV256IR, "vblendv256", kPairs, 1,           \
-               true, Xform::ConstEnc);                                         \
+    checkEquiv(ISA, buildVecAvxBlendV256IR, "vblendv256", kPairs, 1, true,     \
+               Xform::ConstEnc);                                               \
   }                                                                            \
   TEST(SUITE, RcpRsqrt256) {                                                   \
-    checkEquiv(ISA, buildVecAvxRcpRsqrt256IR, "vrcprsqrt256", kPairs, 1,       \
-               true, Xform::ConstEnc);                                         \
+    checkEquiv(ISA, buildVecAvxRcpRsqrt256IR, "vrcprsqrt256", kPairs, 1, true, \
+               Xform::ConstEnc);                                               \
   }                                                                            \
   TEST(SUITE, AesEnc128) {                                                     \
-    checkEquiv(ISA, buildVecAesEnc128IR, "vaesenc128", kPairs, 1,              \
-               true, Xform::ConstEnc);                                         \
+    checkEquiv(ISA, buildVecAesEnc128IR, "vaesenc128", kPairs, 1, true,        \
+               Xform::ConstEnc);                                               \
   }                                                                            \
   TEST(SUITE, AesDec128) {                                                     \
-    checkEquiv(ISA, buildVecAesDec128IR, "vaesdec128", kPairs, 1,              \
-               true, Xform::ConstEnc);                                         \
+    checkEquiv(ISA, buildVecAesDec128IR, "vaesdec128", kPairs, 1, true,        \
+               Xform::ConstEnc);                                               \
   }                                                                            \
   TEST(SUITE, AesImc128) {                                                     \
-    checkEquiv(ISA, buildVecAesImc128IR, "vaesimc128", kPairs, 1,              \
-               true, Xform::ConstEnc);                                         \
+    checkEquiv(ISA, buildVecAesImc128IR, "vaesimc128", kPairs, 1, true,        \
+               Xform::ConstEnc);                                               \
   }                                                                            \
   TEST(SUITE, AesLast128) {                                                    \
-    checkEquiv(ISA, buildVecAesLast128IR, "vaeslast128", kPairs, 1,            \
-               true, Xform::ConstEnc);                                         \
+    checkEquiv(ISA, buildVecAesLast128IR, "vaeslast128", kPairs, 1, true,      \
+               Xform::ConstEnc);                                               \
   }                                                                            \
   TEST(SUITE, AesKeyGen128) {                                                  \
-    checkEquiv(ISA, buildVecAesKeyGen128IR, "vaeskeygen128", kPairs, 1,        \
-               true, Xform::ConstEnc);                                         \
+    checkEquiv(ISA, buildVecAesKeyGen128IR, "vaeskeygen128", kPairs, 1, true,  \
+               Xform::ConstEnc);                                               \
   }                                                                            \
   TEST(SUITE, PdepPext) {                                                      \
-    checkEquiv(ISA, buildPdepPextIR, "pdeppext", kPairs, 1,                    \
-               true, Xform::ConstEnc);                                         \
+    checkEquiv(ISA, buildPdepPextIR, "pdeppext", kPairs, 1, true,              \
+               Xform::ConstEnc);                                               \
   }                                                                            \
   TEST(SUITE, PhMinPosUW128) {                                                 \
-    checkEquiv(ISA, buildVecPhMinPosUW128IR, "vphminpos128", kPairs, 1,        \
-               true, Xform::ConstEnc);                                         \
+    checkEquiv(ISA, buildVecPhMinPosUW128IR, "vphminpos128", kPairs, 1, true,  \
+               Xform::ConstEnc);                                               \
   }                                                                            \
   TEST(SUITE, DpProd128) {                                                     \
     checkEquiv(ISA, buildVecDpProd128IR, "vdp128", kPairs, 1, true,            \
                Xform::ConstEnc);                                               \
   }                                                                            \
   TEST(SUITE, BmiBits) {                                                       \
-    checkEquiv(ISA, buildBmiBitsIR, "bmibits", kPairs, 1, true,               \
+    checkEquiv(ISA, buildBmiBitsIR, "bmibits", kPairs, 1, true,                \
                Xform::ConstEnc);                                               \
   }                                                                            \
   TEST(SUITE, Sha256) {                                                        \
@@ -28786,8 +28837,7 @@ PATCH_FULL_SUITE(PatchFullSubst_MachO_ARM32, kMachO_ARM32)
                Xform::ConstEnc);                                               \
   }                                                                            \
   TEST(SUITE, Sha1) {                                                          \
-    checkEquiv(ISA, buildSha1IR, "sha1", kPairs, 1, true,                      \
-               Xform::ConstEnc);                                               \
+    checkEquiv(ISA, buildSha1IR, "sha1", kPairs, 1, true, Xform::ConstEnc);    \
   }                                                                            \
   TEST(SUITE, Sha512) {                                                        \
     checkEquiv(ISA, buildSha512IR, "sha512", kPairs, 1, true,                  \
@@ -29556,81 +29606,81 @@ PATCH_FULL_CE_SUITE(PatchFullConstEnc_MachO_ARM32, kMachO_ARM32)
     checkEquiv(ISA, buildVecAvxDup256IR, "vdup256", kPairs, 1, true,           \
                Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, CmpNe256) {                                                       \
-    checkEquiv(ISA, buildVecAvxCmpNe256IR, "vcmpne256", kPairs, 1, true,        \
-               Xform::Opaque);                                                  \
+  TEST(SUITE, CmpNe256) {                                                      \
+    checkEquiv(ISA, buildVecAvxCmpNe256IR, "vcmpne256", kPairs, 1, true,       \
+               Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, AddSub256) {                                                      \
-    checkEquiv(ISA, buildVecAvxAddSub256IR, "vaddsub256", kPairs, 1, true,      \
-               Xform::Opaque);                                                  \
+  TEST(SUITE, AddSub256) {                                                     \
+    checkEquiv(ISA, buildVecAvxAddSub256IR, "vaddsub256", kPairs, 1, true,     \
+               Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, HAddSub256) {                                                     \
-    checkEquiv(ISA, buildVecAvxHAddSub256IR, "vhaddsub256", kPairs, 1, true,    \
-               Xform::Opaque);                                                  \
+  TEST(SUITE, HAddSub256) {                                                    \
+    checkEquiv(ISA, buildVecAvxHAddSub256IR, "vhaddsub256", kPairs, 1, true,   \
+               Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, FLogic256) {                                                      \
-    checkEquiv(ISA, buildVecAvxFLogic256IR, "vflogic256", kPairs, 1, true,      \
-               Xform::Opaque);                                                  \
+  TEST(SUITE, FLogic256) {                                                     \
+    checkEquiv(ISA, buildVecAvxFLogic256IR, "vflogic256", kPairs, 1, true,     \
+               Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, Unpack256) {                                                      \
-    checkEquiv(ISA, buildVecAvxUnpack256IR, "vunpack256", kPairs, 1, true,      \
-               Xform::Opaque);                                                  \
+  TEST(SUITE, Unpack256) {                                                     \
+    checkEquiv(ISA, buildVecAvxUnpack256IR, "vunpack256", kPairs, 1, true,     \
+               Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, IUnpack256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIUnpack256IR, "viunpack256", kPairs, 1, true,      \
-               Xform::Opaque);                                                  \
+  TEST(SUITE, IUnpack256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIUnpack256IR, "viunpack256", kPairs, 1, true,   \
+               Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, VarShift256) {                                                      \
-    checkEquiv(ISA, buildVecAvxVarShift256IR, "vvshift256", kPairs, 1, true,      \
-               Xform::Opaque);                                                  \
+  TEST(SUITE, VarShift256) {                                                   \
+    checkEquiv(ISA, buildVecAvxVarShift256IR, "vvshift256", kPairs, 1, true,   \
+               Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, IArith256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIArith256IR, "viarith256", kPairs, 1, true,      \
-               Xform::Opaque);                                                  \
+  TEST(SUITE, IArith256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIArith256IR, "viarith256", kPairs, 1, true,     \
+               Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, IMinMax256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIMinMax256IR, "viminmax256", kPairs, 1, true,    \
-               Xform::Opaque);                                                  \
+  TEST(SUITE, IMinMax256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIMinMax256IR, "viminmax256", kPairs, 1, true,   \
+               Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, ICmp256) {                                                        \
-    checkEquiv(ISA, buildVecAvxICmp256IR, "vicmp256", kPairs, 1, true,          \
-               Xform::Opaque);                                                  \
+  TEST(SUITE, ICmp256) {                                                       \
+    checkEquiv(ISA, buildVecAvxICmp256IR, "vicmp256", kPairs, 1, true,         \
+               Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, ICmpBWQ256) {                                                     \
-    checkEquiv(ISA, buildVecAvxICmpBWQ256IR, "vicmpbwq256", kPairs, 1, true,    \
-               Xform::Opaque);                                                  \
+  TEST(SUITE, ICmpBWQ256) {                                                    \
+    checkEquiv(ISA, buildVecAvxICmpBWQ256IR, "vicmpbwq256", kPairs, 1, true,   \
+               Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, GatherD256) {                                                     \
-    checkEquiv(ISA, buildVecAvxGatherD256IR, "vgatherd256", kPairs, 1, true,    \
-               Xform::Opaque);                                                  \
+  TEST(SUITE, GatherD256) {                                                    \
+    checkEquiv(ISA, buildVecAvxGatherD256IR, "vgatherd256", kPairs, 1, true,   \
+               Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, GatherDQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxGatherDQ256IR, "vgatherdq256", kPairs, 1, true,  \
-               Xform::Opaque);                                                  \
+  TEST(SUITE, GatherDQ256) {                                                   \
+    checkEquiv(ISA, buildVecAvxGatherDQ256IR, "vgatherdq256", kPairs, 1, true, \
+               Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, GatherQD256) {                                                    \
-    checkEquiv(ISA, buildVecAvxGatherQD256IR, "vgatherqd256", kPairs, 1, true,  \
-               Xform::Opaque);                                                  \
+  TEST(SUITE, GatherQD256) {                                                   \
+    checkEquiv(ISA, buildVecAvxGatherQD256IR, "vgatherqd256", kPairs, 1, true, \
+               Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, GatherQQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxGatherQQ256IR, "vgatherqq256", kPairs, 1, true,  \
-               Xform::Opaque);                                                  \
+  TEST(SUITE, GatherQQ256) {                                                   \
+    checkEquiv(ISA, buildVecAvxGatherQQ256IR, "vgatherqq256", kPairs, 1, true, \
+               Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, MaskMov256) {                                                     \
-    checkEquiv(ISA, buildVecAvxMaskMov256IR, "vmaskmov256", kPairs, 1, true,    \
-               Xform::Opaque);                                                  \
+  TEST(SUITE, MaskMov256) {                                                    \
+    checkEquiv(ISA, buildVecAvxMaskMov256IR, "vmaskmov256", kPairs, 1, true,   \
+               Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, MaskMovQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxMaskMovQ256IR, "vmaskmovq256", kPairs, 1, true,  \
-               Xform::Opaque);                                                  \
+  TEST(SUITE, MaskMovQ256) {                                                   \
+    checkEquiv(ISA, buildVecAvxMaskMovQ256IR, "vmaskmovq256", kPairs, 1, true, \
+               Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, MaskMovPS256) {                                                   \
-    checkEquiv(ISA, buildVecAvxMaskMovPS256IR, "vmaskmovps256", kPairs, 1, true,\
-               Xform::Opaque);                                                  \
+  TEST(SUITE, MaskMovPS256) {                                                  \
+    checkEquiv(ISA, buildVecAvxMaskMovPS256IR, "vmaskmovps256", kPairs, 1,     \
+               true, Xform::Opaque);                                           \
   }                                                                            \
-  TEST(SUITE, MaskMovPD256) {                                                   \
-    checkEquiv(ISA, buildVecAvxMaskMovPD256IR, "vmaskmovpd256", kPairs, 1, true,\
-               Xform::Opaque);                                                  \
+  TEST(SUITE, MaskMovPD256) {                                                  \
+    checkEquiv(ISA, buildVecAvxMaskMovPD256IR, "vmaskmovpd256", kPairs, 1,     \
+               true, Xform::Opaque);                                           \
   }                                                                            \
   TEST(SUITE, Crc32) {                                                         \
     checkEquiv(ISA, buildScalarCrc32IR, "crc32acc", kPairs, 1, true,           \
@@ -29640,125 +29690,125 @@ PATCH_FULL_CE_SUITE(PatchFullConstEnc_MachO_ARM32, kMachO_ARM32)
     checkEquiv(ISA, buildPolyMulIR, "polymul", kPairs, 1, true,                \
                Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, UShift256) {                                                      \
-    checkEquiv(ISA, buildVecAvxUShift256IR, "vushift256", kPairs, 1, true,      \
-               Xform::Opaque);                                                  \
+  TEST(SUITE, UShift256) {                                                     \
+    checkEquiv(ISA, buildVecAvxUShift256IR, "vushift256", kPairs, 1, true,     \
+               Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, IPMadd256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIPMadd256IR, "vipmadd256", kPairs, 1, true,      \
-               Xform::Opaque);                                                  \
+  TEST(SUITE, IPMadd256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIPMadd256IR, "vipmadd256", kPairs, 1, true,     \
+               Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, IAbs256) {                                                        \
-    checkEquiv(ISA, buildVecAvxIAbs256IR, "viabs256", kPairs, 1, true,          \
-               Xform::Opaque);                                                  \
+  TEST(SUITE, IAbs256) {                                                       \
+    checkEquiv(ISA, buildVecAvxIAbs256IR, "viabs256", kPairs, 1, true,         \
+               Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, IAvg256) {                                                        \
-    checkEquiv(ISA, buildVecAvxIAvg256IR, "viavg256", kPairs, 1, true,          \
-               Xform::Opaque);                                                  \
+  TEST(SUITE, IAvg256) {                                                       \
+    checkEquiv(ISA, buildVecAvxIAvg256IR, "viavg256", kPairs, 1, true,         \
+               Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, IMaddUB256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIMaddUB256IR, "vimaddub256", kPairs, 1, true,    \
-               Xform::Opaque);                                                  \
+  TEST(SUITE, IMaddUB256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIMaddUB256IR, "vimaddub256", kPairs, 1, true,   \
+               Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, IMulH256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIMulH256IR, "vimulh256", kPairs, 1, true,        \
-               Xform::Opaque);                                                  \
+  TEST(SUITE, IMulH256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIMulH256IR, "vimulh256", kPairs, 1, true,       \
+               Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, IMulHRS256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIMulHRS256IR, "vimulhrs256", kPairs, 1, true,    \
-               Xform::Opaque);                                                  \
+  TEST(SUITE, IMulHRS256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIMulHRS256IR, "vimulhrs256", kPairs, 1, true,   \
+               Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, ISad256) {                                                        \
-    checkEquiv(ISA, buildVecAvxISad256IR, "visad256", kPairs, 1, true,          \
-               Xform::Opaque);                                                  \
+  TEST(SUITE, ISad256) {                                                       \
+    checkEquiv(ISA, buildVecAvxISad256IR, "visad256", kPairs, 1, true,         \
+               Xform::Opaque);                                                 \
   }                                                                            \
-  TEST(SUITE, ISign256) {                                                       \
-    checkEquiv(ISA, buildVecAvxISign256IR, "visign256", kPairs, 1, true,        \
-               Xform::Opaque);                                                  \
-  }                                                                             \
-  TEST(SUITE, IHAdd256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIHAdd256IR, "vihadd256", kPairs, 1, true,        \
-               Xform::Opaque);                                                  \
-  }                                                                             \
-  TEST(SUITE, IPerm256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIPerm256IR, "viperm256", kPairs, 1, true,        \
-               Xform::Opaque);                                                  \
-  }                                                                             \
-  TEST(SUITE, IHAddSW256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIHAddSW256IR, "vihaddsw256", kPairs, 1, true,    \
-               Xform::Opaque);                                                  \
-  }                                                                             \
-  TEST(SUITE, IBlendW256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIBlendW256IR, "viblendw256", kPairs, 1, true,    \
-               Xform::Opaque);                                                  \
-  }                                                                             \
-  TEST(SUITE, IPack256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIPack256IR, "vipack256", kPairs, 1, true,        \
-               Xform::Opaque);                                                  \
-  }                                                                             \
-  TEST(SUITE, IShufB256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIShufB256IR, "vishufb256", kPairs, 1, true,      \
-               Xform::Opaque);                                                  \
-  }                                                                             \
-  TEST(SUITE, IMovMskB256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIMovMskB256IR, "vimovmskb256", kPairs, 1, true,  \
-               Xform::Opaque);                                                  \
-  }                                                                             \
-  TEST(SUITE, IBlendVB256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIBlendVB256IR, "viblendvb256", kPairs, 1, true,  \
-               Xform::Opaque);                                                  \
-  }                                                                             \
-  TEST(SUITE, IMulDQ256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIMulDQ256IR, "vimuldq256", kPairs, 1, true,      \
-               Xform::Opaque);                                                  \
-  }                                                                             \
-  TEST(SUITE, IPackD256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIPackD256IR, "vipackd256", kPairs, 1, true,      \
-               Xform::Opaque);                                                  \
-  }                                                                             \
-  TEST(SUITE, IHAddW256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIHAddW256IR, "vihaddw256", kPairs, 1, true,      \
-               Xform::Opaque);                                                  \
-  }                                                                             \
-  TEST(SUITE, ISignBW256) {                                                     \
-    checkEquiv(ISA, buildVecAvxISignBW256IR, "visignbw256", kPairs, 1, true,    \
-               Xform::Opaque);                                                  \
-  }                                                                             \
-  TEST(SUITE, IShufD256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIShufD256IR, "vishufd256", kPairs, 1, true,      \
-               Xform::Opaque);                                                  \
-  }                                                                             \
-  TEST(SUITE, IShufW256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIShufW256IR, "vishufw256", kPairs, 1, true,      \
-               Xform::Opaque);                                                  \
-  }                                                                             \
-  TEST(SUITE, IAlignR256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIAlignR256IR, "vialignr256", kPairs, 1, true,    \
-               Xform::Opaque);                                                  \
-  }                                                                             \
-  TEST(SUITE, IBShiftDQ256) {                                                   \
-    checkEquiv(ISA, buildVecAvxIBShiftDQ256IR, "vibshiftdq256", kPairs, 1, true,\
-               Xform::Opaque);                                                  \
-  }                                                                             \
-  TEST(SUITE, IBroadcast256) {                                                  \
-    checkEquiv(ISA, buildVecAvxIBroadcast256IR, "vibroadcast256", kPairs, 1,    \
-               true, Xform::Opaque);                                            \
-  }                                                                             \
-  TEST(SUITE, IMpsad256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIMpsadbw256IR, "vimpsad256", kPairs, 1,          \
-               true, Xform::Opaque);                                            \
+  TEST(SUITE, ISign256) {                                                      \
+    checkEquiv(ISA, buildVecAvxISign256IR, "visign256", kPairs, 1, true,       \
+               Xform::Opaque);                                                 \
+  }                                                                            \
+  TEST(SUITE, IHAdd256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIHAdd256IR, "vihadd256", kPairs, 1, true,       \
+               Xform::Opaque);                                                 \
+  }                                                                            \
+  TEST(SUITE, IPerm256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIPerm256IR, "viperm256", kPairs, 1, true,       \
+               Xform::Opaque);                                                 \
+  }                                                                            \
+  TEST(SUITE, IHAddSW256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIHAddSW256IR, "vihaddsw256", kPairs, 1, true,   \
+               Xform::Opaque);                                                 \
+  }                                                                            \
+  TEST(SUITE, IBlendW256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIBlendW256IR, "viblendw256", kPairs, 1, true,   \
+               Xform::Opaque);                                                 \
+  }                                                                            \
+  TEST(SUITE, IPack256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIPack256IR, "vipack256", kPairs, 1, true,       \
+               Xform::Opaque);                                                 \
+  }                                                                            \
+  TEST(SUITE, IShufB256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIShufB256IR, "vishufb256", kPairs, 1, true,     \
+               Xform::Opaque);                                                 \
+  }                                                                            \
+  TEST(SUITE, IMovMskB256) {                                                   \
+    checkEquiv(ISA, buildVecAvxIMovMskB256IR, "vimovmskb256", kPairs, 1, true, \
+               Xform::Opaque);                                                 \
+  }                                                                            \
+  TEST(SUITE, IBlendVB256) {                                                   \
+    checkEquiv(ISA, buildVecAvxIBlendVB256IR, "viblendvb256", kPairs, 1, true, \
+               Xform::Opaque);                                                 \
+  }                                                                            \
+  TEST(SUITE, IMulDQ256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIMulDQ256IR, "vimuldq256", kPairs, 1, true,     \
+               Xform::Opaque);                                                 \
+  }                                                                            \
+  TEST(SUITE, IPackD256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIPackD256IR, "vipackd256", kPairs, 1, true,     \
+               Xform::Opaque);                                                 \
+  }                                                                            \
+  TEST(SUITE, IHAddW256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIHAddW256IR, "vihaddw256", kPairs, 1, true,     \
+               Xform::Opaque);                                                 \
+  }                                                                            \
+  TEST(SUITE, ISignBW256) {                                                    \
+    checkEquiv(ISA, buildVecAvxISignBW256IR, "visignbw256", kPairs, 1, true,   \
+               Xform::Opaque);                                                 \
+  }                                                                            \
+  TEST(SUITE, IShufD256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIShufD256IR, "vishufd256", kPairs, 1, true,     \
+               Xform::Opaque);                                                 \
+  }                                                                            \
+  TEST(SUITE, IShufW256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIShufW256IR, "vishufw256", kPairs, 1, true,     \
+               Xform::Opaque);                                                 \
+  }                                                                            \
+  TEST(SUITE, IAlignR256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIAlignR256IR, "vialignr256", kPairs, 1, true,   \
+               Xform::Opaque);                                                 \
+  }                                                                            \
+  TEST(SUITE, IBShiftDQ256) {                                                  \
+    checkEquiv(ISA, buildVecAvxIBShiftDQ256IR, "vibshiftdq256", kPairs, 1,     \
+               true, Xform::Opaque);                                           \
+  }                                                                            \
+  TEST(SUITE, IBroadcast256) {                                                 \
+    checkEquiv(ISA, buildVecAvxIBroadcast256IR, "vibroadcast256", kPairs, 1,   \
+               true, Xform::Opaque);                                           \
+  }                                                                            \
+  TEST(SUITE, IMpsad256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIMpsadbw256IR, "vimpsad256", kPairs, 1, true,   \
+               Xform::Opaque);                                                 \
   }                                                                            \
   TEST(SUITE, IVPerm2I256) {                                                   \
-    checkEquiv(ISA, buildVecAvxIVPerm2I256IR, "vperm2i256", kPairs, 1,         \
-               true, Xform::Opaque);                                           \
+    checkEquiv(ISA, buildVecAvxIVPerm2I256IR, "vperm2i256", kPairs, 1, true,   \
+               Xform::Opaque);                                                 \
   }                                                                            \
   TEST(SUITE, IVPermQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIVPermQ256IR, "vpermq256", kPairs, 1,           \
-               true, Xform::Opaque);                                           \
+    checkEquiv(ISA, buildVecAvxIVPermQ256IR, "vpermq256", kPairs, 1, true,     \
+               Xform::Opaque);                                                 \
   }                                                                            \
   TEST(SUITE, IBlendD256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIBlendD256IR, "viblendd256", kPairs, 1,         \
-               true, Xform::Opaque);                                           \
+    checkEquiv(ISA, buildVecAvxIBlendD256IR, "viblendd256", kPairs, 1, true,   \
+               Xform::Opaque);                                                 \
   }                                                                            \
   TEST(SUITE, IMovExtBW256) {                                                  \
     checkEquiv(ISA, buildVecAvxIMovExtBW256IR, "vimovextbw256", kPairs, 1,     \
@@ -29785,60 +29835,57 @@ PATCH_FULL_CE_SUITE(PatchFullConstEnc_MachO_ARM32, kMachO_ARM32)
                true, Xform::Opaque);                                           \
   }                                                                            \
   TEST(SUITE, BlendV256) {                                                     \
-    checkEquiv(ISA, buildVecAvxBlendV256IR, "vblendv256", kPairs, 1,           \
-               true, Xform::Opaque);                                           \
+    checkEquiv(ISA, buildVecAvxBlendV256IR, "vblendv256", kPairs, 1, true,     \
+               Xform::Opaque);                                                 \
   }                                                                            \
   TEST(SUITE, RcpRsqrt256) {                                                   \
-    checkEquiv(ISA, buildVecAvxRcpRsqrt256IR, "vrcprsqrt256", kPairs, 1,       \
-               true, Xform::Opaque);                                           \
+    checkEquiv(ISA, buildVecAvxRcpRsqrt256IR, "vrcprsqrt256", kPairs, 1, true, \
+               Xform::Opaque);                                                 \
   }                                                                            \
   TEST(SUITE, AesEnc128) {                                                     \
-    checkEquiv(ISA, buildVecAesEnc128IR, "vaesenc128", kPairs, 1,              \
-               true, Xform::Opaque);                                           \
+    checkEquiv(ISA, buildVecAesEnc128IR, "vaesenc128", kPairs, 1, true,        \
+               Xform::Opaque);                                                 \
   }                                                                            \
   TEST(SUITE, AesDec128) {                                                     \
-    checkEquiv(ISA, buildVecAesDec128IR, "vaesdec128", kPairs, 1,              \
-               true, Xform::Opaque);                                           \
+    checkEquiv(ISA, buildVecAesDec128IR, "vaesdec128", kPairs, 1, true,        \
+               Xform::Opaque);                                                 \
   }                                                                            \
   TEST(SUITE, AesImc128) {                                                     \
-    checkEquiv(ISA, buildVecAesImc128IR, "vaesimc128", kPairs, 1,              \
-               true, Xform::Opaque);                                           \
+    checkEquiv(ISA, buildVecAesImc128IR, "vaesimc128", kPairs, 1, true,        \
+               Xform::Opaque);                                                 \
   }                                                                            \
   TEST(SUITE, AesLast128) {                                                    \
-    checkEquiv(ISA, buildVecAesLast128IR, "vaeslast128", kPairs, 1,            \
-               true, Xform::Opaque);                                           \
+    checkEquiv(ISA, buildVecAesLast128IR, "vaeslast128", kPairs, 1, true,      \
+               Xform::Opaque);                                                 \
   }                                                                            \
   TEST(SUITE, AesKeyGen128) {                                                  \
-    checkEquiv(ISA, buildVecAesKeyGen128IR, "vaeskeygen128", kPairs, 1,        \
-               true, Xform::Opaque);                                           \
+    checkEquiv(ISA, buildVecAesKeyGen128IR, "vaeskeygen128", kPairs, 1, true,  \
+               Xform::Opaque);                                                 \
   }                                                                            \
   TEST(SUITE, PdepPext) {                                                      \
-    checkEquiv(ISA, buildPdepPextIR, "pdeppext", kPairs, 1,                    \
-               true, Xform::Opaque);                                           \
+    checkEquiv(ISA, buildPdepPextIR, "pdeppext", kPairs, 1, true,              \
+               Xform::Opaque);                                                 \
   }                                                                            \
   TEST(SUITE, PhMinPosUW128) {                                                 \
-    checkEquiv(ISA, buildVecPhMinPosUW128IR, "vphminpos128", kPairs, 1,        \
-               true, Xform::Opaque);                                           \
+    checkEquiv(ISA, buildVecPhMinPosUW128IR, "vphminpos128", kPairs, 1, true,  \
+               Xform::Opaque);                                                 \
   }                                                                            \
   TEST(SUITE, DpProd128) {                                                     \
     checkEquiv(ISA, buildVecDpProd128IR, "vdp128", kPairs, 1, true,            \
                Xform::Opaque);                                                 \
   }                                                                            \
   TEST(SUITE, BmiBits) {                                                       \
-    checkEquiv(ISA, buildBmiBitsIR, "bmibits", kPairs, 1, true,               \
+    checkEquiv(ISA, buildBmiBitsIR, "bmibits", kPairs, 1, true,                \
                Xform::Opaque);                                                 \
   }                                                                            \
   TEST(SUITE, Sha256) {                                                        \
-    checkEquiv(ISA, buildSha256IR, "sha256", kPairs, 1, true,                  \
-               Xform::Opaque);                                                 \
+    checkEquiv(ISA, buildSha256IR, "sha256", kPairs, 1, true, Xform::Opaque);  \
   }                                                                            \
   TEST(SUITE, Sha1) {                                                          \
-    checkEquiv(ISA, buildSha1IR, "sha1", kPairs, 1, true,                      \
-               Xform::Opaque);                                                 \
+    checkEquiv(ISA, buildSha1IR, "sha1", kPairs, 1, true, Xform::Opaque);      \
   }                                                                            \
   TEST(SUITE, Sha512) {                                                        \
-    checkEquiv(ISA, buildSha512IR, "sha512", kPairs, 1, true,                  \
-               Xform::Opaque);                                                 \
+    checkEquiv(ISA, buildSha512IR, "sha512", kPairs, 1, true, Xform::Opaque);  \
   }
 
 PATCH_FULL_OP_SUITE(PatchFullOpaque_ELF_x64, kELF_x64)
@@ -30538,209 +30585,208 @@ PATCH_FULL_OP_SUITE(PatchFullOpaque_MachO_ARM32, kMachO_ARM32)
     checkEquiv(ISA, buildVecAvxDup256IR, "vdup256", kPairs, 1, true,           \
                Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, CmpNe256) {                                                       \
-    checkEquiv(ISA, buildVecAvxCmpNe256IR, "vcmpne256", kPairs, 1, true,        \
-               Xform::All);                                                     \
+  TEST(SUITE, CmpNe256) {                                                      \
+    checkEquiv(ISA, buildVecAvxCmpNe256IR, "vcmpne256", kPairs, 1, true,       \
+               Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, AddSub256) {                                                      \
-    checkEquiv(ISA, buildVecAvxAddSub256IR, "vaddsub256", kPairs, 1, true,      \
-               Xform::All);                                                     \
+  TEST(SUITE, AddSub256) {                                                     \
+    checkEquiv(ISA, buildVecAvxAddSub256IR, "vaddsub256", kPairs, 1, true,     \
+               Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, HAddSub256) {                                                     \
-    checkEquiv(ISA, buildVecAvxHAddSub256IR, "vhaddsub256", kPairs, 1, true,    \
-               Xform::All);                                                     \
+  TEST(SUITE, HAddSub256) {                                                    \
+    checkEquiv(ISA, buildVecAvxHAddSub256IR, "vhaddsub256", kPairs, 1, true,   \
+               Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, FLogic256) {                                                      \
-    checkEquiv(ISA, buildVecAvxFLogic256IR, "vflogic256", kPairs, 1, true,      \
-               Xform::All);                                                     \
+  TEST(SUITE, FLogic256) {                                                     \
+    checkEquiv(ISA, buildVecAvxFLogic256IR, "vflogic256", kPairs, 1, true,     \
+               Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, Unpack256) {                                                      \
-    checkEquiv(ISA, buildVecAvxUnpack256IR, "vunpack256", kPairs, 1, true,      \
-               Xform::All);                                                     \
+  TEST(SUITE, Unpack256) {                                                     \
+    checkEquiv(ISA, buildVecAvxUnpack256IR, "vunpack256", kPairs, 1, true,     \
+               Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, IUnpack256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIUnpack256IR, "viunpack256", kPairs, 1, true,      \
-               Xform::All);                                                     \
+  TEST(SUITE, IUnpack256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIUnpack256IR, "viunpack256", kPairs, 1, true,   \
+               Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, VarShift256) {                                                      \
-    checkEquiv(ISA, buildVecAvxVarShift256IR, "vvshift256", kPairs, 1, true,      \
-               Xform::All);                                                     \
+  TEST(SUITE, VarShift256) {                                                   \
+    checkEquiv(ISA, buildVecAvxVarShift256IR, "vvshift256", kPairs, 1, true,   \
+               Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, IArith256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIArith256IR, "viarith256", kPairs, 1, true,      \
-               Xform::All);                                                     \
+  TEST(SUITE, IArith256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIArith256IR, "viarith256", kPairs, 1, true,     \
+               Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, IMinMax256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIMinMax256IR, "viminmax256", kPairs, 1, true,    \
-               Xform::All);                                                     \
+  TEST(SUITE, IMinMax256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIMinMax256IR, "viminmax256", kPairs, 1, true,   \
+               Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, ICmp256) {                                                        \
-    checkEquiv(ISA, buildVecAvxICmp256IR, "vicmp256", kPairs, 1, true,          \
-               Xform::All);                                                     \
+  TEST(SUITE, ICmp256) {                                                       \
+    checkEquiv(ISA, buildVecAvxICmp256IR, "vicmp256", kPairs, 1, true,         \
+               Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, ICmpBWQ256) {                                                     \
-    checkEquiv(ISA, buildVecAvxICmpBWQ256IR, "vicmpbwq256", kPairs, 1, true,    \
-               Xform::All);                                                     \
+  TEST(SUITE, ICmpBWQ256) {                                                    \
+    checkEquiv(ISA, buildVecAvxICmpBWQ256IR, "vicmpbwq256", kPairs, 1, true,   \
+               Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, GatherD256) {                                                     \
-    checkEquiv(ISA, buildVecAvxGatherD256IR, "vgatherd256", kPairs, 1, true,    \
-               Xform::All);                                                     \
+  TEST(SUITE, GatherD256) {                                                    \
+    checkEquiv(ISA, buildVecAvxGatherD256IR, "vgatherd256", kPairs, 1, true,   \
+               Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, GatherDQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxGatherDQ256IR, "vgatherdq256", kPairs, 1, true,  \
-               Xform::All);                                                     \
+  TEST(SUITE, GatherDQ256) {                                                   \
+    checkEquiv(ISA, buildVecAvxGatherDQ256IR, "vgatherdq256", kPairs, 1, true, \
+               Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, GatherQD256) {                                                    \
-    checkEquiv(ISA, buildVecAvxGatherQD256IR, "vgatherqd256", kPairs, 1, true,  \
-               Xform::All);                                                     \
+  TEST(SUITE, GatherQD256) {                                                   \
+    checkEquiv(ISA, buildVecAvxGatherQD256IR, "vgatherqd256", kPairs, 1, true, \
+               Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, GatherQQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxGatherQQ256IR, "vgatherqq256", kPairs, 1, true,  \
-               Xform::All);                                                     \
+  TEST(SUITE, GatherQQ256) {                                                   \
+    checkEquiv(ISA, buildVecAvxGatherQQ256IR, "vgatherqq256", kPairs, 1, true, \
+               Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, MaskMov256) {                                                     \
-    checkEquiv(ISA, buildVecAvxMaskMov256IR, "vmaskmov256", kPairs, 1, true,    \
-               Xform::All);                                                     \
+  TEST(SUITE, MaskMov256) {                                                    \
+    checkEquiv(ISA, buildVecAvxMaskMov256IR, "vmaskmov256", kPairs, 1, true,   \
+               Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, MaskMovQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxMaskMovQ256IR, "vmaskmovq256", kPairs, 1, true,  \
-               Xform::All);                                                     \
+  TEST(SUITE, MaskMovQ256) {                                                   \
+    checkEquiv(ISA, buildVecAvxMaskMovQ256IR, "vmaskmovq256", kPairs, 1, true, \
+               Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, MaskMovPS256) {                                                   \
-    checkEquiv(ISA, buildVecAvxMaskMovPS256IR, "vmaskmovps256", kPairs, 1, true,\
-               Xform::All);                                                     \
+  TEST(SUITE, MaskMovPS256) {                                                  \
+    checkEquiv(ISA, buildVecAvxMaskMovPS256IR, "vmaskmovps256", kPairs, 1,     \
+               true, Xform::All);                                              \
   }                                                                            \
-  TEST(SUITE, MaskMovPD256) {                                                   \
-    checkEquiv(ISA, buildVecAvxMaskMovPD256IR, "vmaskmovpd256", kPairs, 1, true,\
-               Xform::All);                                                     \
+  TEST(SUITE, MaskMovPD256) {                                                  \
+    checkEquiv(ISA, buildVecAvxMaskMovPD256IR, "vmaskmovpd256", kPairs, 1,     \
+               true, Xform::All);                                              \
   }                                                                            \
   TEST(SUITE, Crc32) {                                                         \
     checkEquiv(ISA, buildScalarCrc32IR, "crc32acc", kPairs, 1, true,           \
                Xform::All);                                                    \
   }                                                                            \
   TEST(SUITE, PolyMul) {                                                       \
-    checkEquiv(ISA, buildPolyMulIR, "polymul", kPairs, 1, true,                \
+    checkEquiv(ISA, buildPolyMulIR, "polymul", kPairs, 1, true, Xform::All);   \
+  }                                                                            \
+  TEST(SUITE, UShift256) {                                                     \
+    checkEquiv(ISA, buildVecAvxUShift256IR, "vushift256", kPairs, 1, true,     \
                Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, UShift256) {                                                      \
-    checkEquiv(ISA, buildVecAvxUShift256IR, "vushift256", kPairs, 1, true,      \
-               Xform::All);                                                     \
+  TEST(SUITE, IPMadd256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIPMadd256IR, "vipmadd256", kPairs, 1, true,     \
+               Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, IPMadd256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIPMadd256IR, "vipmadd256", kPairs, 1, true,      \
-               Xform::All);                                                     \
+  TEST(SUITE, IAbs256) {                                                       \
+    checkEquiv(ISA, buildVecAvxIAbs256IR, "viabs256", kPairs, 1, true,         \
+               Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, IAbs256) {                                                        \
-    checkEquiv(ISA, buildVecAvxIAbs256IR, "viabs256", kPairs, 1, true,          \
-               Xform::All);                                                     \
+  TEST(SUITE, IAvg256) {                                                       \
+    checkEquiv(ISA, buildVecAvxIAvg256IR, "viavg256", kPairs, 1, true,         \
+               Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, IAvg256) {                                                        \
-    checkEquiv(ISA, buildVecAvxIAvg256IR, "viavg256", kPairs, 1, true,          \
-               Xform::All);                                                     \
+  TEST(SUITE, IMaddUB256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIMaddUB256IR, "vimaddub256", kPairs, 1, true,   \
+               Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, IMaddUB256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIMaddUB256IR, "vimaddub256", kPairs, 1, true,    \
-               Xform::All);                                                     \
+  TEST(SUITE, IMulH256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIMulH256IR, "vimulh256", kPairs, 1, true,       \
+               Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, IMulH256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIMulH256IR, "vimulh256", kPairs, 1, true,        \
-               Xform::All);                                                     \
+  TEST(SUITE, IMulHRS256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIMulHRS256IR, "vimulhrs256", kPairs, 1, true,   \
+               Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, IMulHRS256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIMulHRS256IR, "vimulhrs256", kPairs, 1, true,    \
-               Xform::All);                                                     \
+  TEST(SUITE, ISad256) {                                                       \
+    checkEquiv(ISA, buildVecAvxISad256IR, "visad256", kPairs, 1, true,         \
+               Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, ISad256) {                                                        \
-    checkEquiv(ISA, buildVecAvxISad256IR, "visad256", kPairs, 1, true,          \
-               Xform::All);                                                     \
+  TEST(SUITE, ISign256) {                                                      \
+    checkEquiv(ISA, buildVecAvxISign256IR, "visign256", kPairs, 1, true,       \
+               Xform::All);                                                    \
   }                                                                            \
-  TEST(SUITE, ISign256) {                                                       \
-    checkEquiv(ISA, buildVecAvxISign256IR, "visign256", kPairs, 1, true,        \
-               Xform::All);                                                     \
-  }                                                                             \
-  TEST(SUITE, IHAdd256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIHAdd256IR, "vihadd256", kPairs, 1, true,        \
-               Xform::All);                                                     \
-  }                                                                             \
-  TEST(SUITE, IPerm256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIPerm256IR, "viperm256", kPairs, 1, true,        \
-               Xform::All);                                                     \
-  }                                                                             \
-  TEST(SUITE, IHAddSW256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIHAddSW256IR, "vihaddsw256", kPairs, 1, true,    \
-               Xform::All);                                                     \
-  }                                                                             \
-  TEST(SUITE, IBlendW256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIBlendW256IR, "viblendw256", kPairs, 1, true,    \
-               Xform::All);                                                     \
-  }                                                                             \
-  TEST(SUITE, IPack256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIPack256IR, "vipack256", kPairs, 1, true,        \
-               Xform::All);                                                     \
-  }                                                                             \
-  TEST(SUITE, IShufB256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIShufB256IR, "vishufb256", kPairs, 1, true,      \
-               Xform::All);                                                     \
-  }                                                                             \
-  TEST(SUITE, IMovMskB256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIMovMskB256IR, "vimovmskb256", kPairs, 1, true,  \
-               Xform::All);                                                     \
-  }                                                                             \
-  TEST(SUITE, IBlendVB256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIBlendVB256IR, "viblendvb256", kPairs, 1, true,  \
-               Xform::All);                                                     \
-  }                                                                             \
-  TEST(SUITE, IMulDQ256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIMulDQ256IR, "vimuldq256", kPairs, 1, true,      \
-               Xform::All);                                                     \
-  }                                                                             \
-  TEST(SUITE, IPackD256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIPackD256IR, "vipackd256", kPairs, 1, true,      \
-               Xform::All);                                                     \
-  }                                                                             \
-  TEST(SUITE, IHAddW256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIHAddW256IR, "vihaddw256", kPairs, 1, true,      \
-               Xform::All);                                                     \
-  }                                                                             \
-  TEST(SUITE, ISignBW256) {                                                     \
-    checkEquiv(ISA, buildVecAvxISignBW256IR, "visignbw256", kPairs, 1, true,    \
-               Xform::All);                                                     \
-  }                                                                             \
-  TEST(SUITE, IShufD256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIShufD256IR, "vishufd256", kPairs, 1, true,      \
-               Xform::All);                                                     \
-  }                                                                             \
-  TEST(SUITE, IShufW256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIShufW256IR, "vishufw256", kPairs, 1, true,      \
-               Xform::All);                                                     \
-  }                                                                             \
-  TEST(SUITE, IAlignR256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIAlignR256IR, "vialignr256", kPairs, 1, true,    \
-               Xform::All);                                                     \
-  }                                                                             \
-  TEST(SUITE, IBShiftDQ256) {                                                   \
-    checkEquiv(ISA, buildVecAvxIBShiftDQ256IR, "vibshiftdq256", kPairs, 1, true,\
-               Xform::All);                                                     \
-  }                                                                             \
-  TEST(SUITE, IBroadcast256) {                                                  \
-    checkEquiv(ISA, buildVecAvxIBroadcast256IR, "vibroadcast256", kPairs, 1,    \
-               true, Xform::All);                                               \
-  }                                                                             \
-  TEST(SUITE, IMpsad256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIMpsadbw256IR, "vimpsad256", kPairs, 1,          \
-               true, Xform::All);                                               \
+  TEST(SUITE, IHAdd256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIHAdd256IR, "vihadd256", kPairs, 1, true,       \
+               Xform::All);                                                    \
+  }                                                                            \
+  TEST(SUITE, IPerm256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIPerm256IR, "viperm256", kPairs, 1, true,       \
+               Xform::All);                                                    \
+  }                                                                            \
+  TEST(SUITE, IHAddSW256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIHAddSW256IR, "vihaddsw256", kPairs, 1, true,   \
+               Xform::All);                                                    \
+  }                                                                            \
+  TEST(SUITE, IBlendW256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIBlendW256IR, "viblendw256", kPairs, 1, true,   \
+               Xform::All);                                                    \
+  }                                                                            \
+  TEST(SUITE, IPack256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIPack256IR, "vipack256", kPairs, 1, true,       \
+               Xform::All);                                                    \
+  }                                                                            \
+  TEST(SUITE, IShufB256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIShufB256IR, "vishufb256", kPairs, 1, true,     \
+               Xform::All);                                                    \
+  }                                                                            \
+  TEST(SUITE, IMovMskB256) {                                                   \
+    checkEquiv(ISA, buildVecAvxIMovMskB256IR, "vimovmskb256", kPairs, 1, true, \
+               Xform::All);                                                    \
+  }                                                                            \
+  TEST(SUITE, IBlendVB256) {                                                   \
+    checkEquiv(ISA, buildVecAvxIBlendVB256IR, "viblendvb256", kPairs, 1, true, \
+               Xform::All);                                                    \
+  }                                                                            \
+  TEST(SUITE, IMulDQ256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIMulDQ256IR, "vimuldq256", kPairs, 1, true,     \
+               Xform::All);                                                    \
+  }                                                                            \
+  TEST(SUITE, IPackD256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIPackD256IR, "vipackd256", kPairs, 1, true,     \
+               Xform::All);                                                    \
+  }                                                                            \
+  TEST(SUITE, IHAddW256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIHAddW256IR, "vihaddw256", kPairs, 1, true,     \
+               Xform::All);                                                    \
+  }                                                                            \
+  TEST(SUITE, ISignBW256) {                                                    \
+    checkEquiv(ISA, buildVecAvxISignBW256IR, "visignbw256", kPairs, 1, true,   \
+               Xform::All);                                                    \
+  }                                                                            \
+  TEST(SUITE, IShufD256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIShufD256IR, "vishufd256", kPairs, 1, true,     \
+               Xform::All);                                                    \
+  }                                                                            \
+  TEST(SUITE, IShufW256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIShufW256IR, "vishufw256", kPairs, 1, true,     \
+               Xform::All);                                                    \
+  }                                                                            \
+  TEST(SUITE, IAlignR256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIAlignR256IR, "vialignr256", kPairs, 1, true,   \
+               Xform::All);                                                    \
+  }                                                                            \
+  TEST(SUITE, IBShiftDQ256) {                                                  \
+    checkEquiv(ISA, buildVecAvxIBShiftDQ256IR, "vibshiftdq256", kPairs, 1,     \
+               true, Xform::All);                                              \
+  }                                                                            \
+  TEST(SUITE, IBroadcast256) {                                                 \
+    checkEquiv(ISA, buildVecAvxIBroadcast256IR, "vibroadcast256", kPairs, 1,   \
+               true, Xform::All);                                              \
+  }                                                                            \
+  TEST(SUITE, IMpsad256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIMpsadbw256IR, "vimpsad256", kPairs, 1, true,   \
+               Xform::All);                                                    \
   }                                                                            \
   TEST(SUITE, IVPerm2I256) {                                                   \
-    checkEquiv(ISA, buildVecAvxIVPerm2I256IR, "vperm2i256", kPairs, 1,         \
-               true, Xform::All);                                              \
+    checkEquiv(ISA, buildVecAvxIVPerm2I256IR, "vperm2i256", kPairs, 1, true,   \
+               Xform::All);                                                    \
   }                                                                            \
   TEST(SUITE, IVPermQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIVPermQ256IR, "vpermq256", kPairs, 1,           \
-               true, Xform::All);                                              \
+    checkEquiv(ISA, buildVecAvxIVPermQ256IR, "vpermq256", kPairs, 1, true,     \
+               Xform::All);                                                    \
   }                                                                            \
   TEST(SUITE, IBlendD256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIBlendD256IR, "viblendd256", kPairs, 1,         \
-               true, Xform::All);                                              \
+    checkEquiv(ISA, buildVecAvxIBlendD256IR, "viblendd256", kPairs, 1, true,   \
+               Xform::All);                                                    \
   }                                                                            \
   TEST(SUITE, IMovExtBW256) {                                                  \
     checkEquiv(ISA, buildVecAvxIMovExtBW256IR, "vimovextbw256", kPairs, 1,     \
@@ -30767,60 +30813,55 @@ PATCH_FULL_OP_SUITE(PatchFullOpaque_MachO_ARM32, kMachO_ARM32)
                true, Xform::All);                                              \
   }                                                                            \
   TEST(SUITE, BlendV256) {                                                     \
-    checkEquiv(ISA, buildVecAvxBlendV256IR, "vblendv256", kPairs, 1,           \
-               true, Xform::All);                                              \
+    checkEquiv(ISA, buildVecAvxBlendV256IR, "vblendv256", kPairs, 1, true,     \
+               Xform::All);                                                    \
   }                                                                            \
   TEST(SUITE, RcpRsqrt256) {                                                   \
-    checkEquiv(ISA, buildVecAvxRcpRsqrt256IR, "vrcprsqrt256", kPairs, 1,       \
-               true, Xform::All);                                              \
+    checkEquiv(ISA, buildVecAvxRcpRsqrt256IR, "vrcprsqrt256", kPairs, 1, true, \
+               Xform::All);                                                    \
   }                                                                            \
   TEST(SUITE, AesEnc128) {                                                     \
-    checkEquiv(ISA, buildVecAesEnc128IR, "vaesenc128", kPairs, 1,              \
-               true, Xform::All);                                              \
+    checkEquiv(ISA, buildVecAesEnc128IR, "vaesenc128", kPairs, 1, true,        \
+               Xform::All);                                                    \
   }                                                                            \
   TEST(SUITE, AesDec128) {                                                     \
-    checkEquiv(ISA, buildVecAesDec128IR, "vaesdec128", kPairs, 1,              \
-               true, Xform::All);                                              \
+    checkEquiv(ISA, buildVecAesDec128IR, "vaesdec128", kPairs, 1, true,        \
+               Xform::All);                                                    \
   }                                                                            \
   TEST(SUITE, AesImc128) {                                                     \
-    checkEquiv(ISA, buildVecAesImc128IR, "vaesimc128", kPairs, 1,              \
-               true, Xform::All);                                              \
+    checkEquiv(ISA, buildVecAesImc128IR, "vaesimc128", kPairs, 1, true,        \
+               Xform::All);                                                    \
   }                                                                            \
   TEST(SUITE, AesLast128) {                                                    \
-    checkEquiv(ISA, buildVecAesLast128IR, "vaeslast128", kPairs, 1,            \
-               true, Xform::All);                                              \
+    checkEquiv(ISA, buildVecAesLast128IR, "vaeslast128", kPairs, 1, true,      \
+               Xform::All);                                                    \
   }                                                                            \
   TEST(SUITE, AesKeyGen128) {                                                  \
-    checkEquiv(ISA, buildVecAesKeyGen128IR, "vaeskeygen128", kPairs, 1,        \
-               true, Xform::All);                                              \
+    checkEquiv(ISA, buildVecAesKeyGen128IR, "vaeskeygen128", kPairs, 1, true,  \
+               Xform::All);                                                    \
   }                                                                            \
   TEST(SUITE, PdepPext) {                                                      \
-    checkEquiv(ISA, buildPdepPextIR, "pdeppext", kPairs, 1,                    \
-               true, Xform::All);                                              \
+    checkEquiv(ISA, buildPdepPextIR, "pdeppext", kPairs, 1, true, Xform::All); \
   }                                                                            \
   TEST(SUITE, PhMinPosUW128) {                                                 \
-    checkEquiv(ISA, buildVecPhMinPosUW128IR, "vphminpos128", kPairs, 1,        \
-               true, Xform::All);                                              \
+    checkEquiv(ISA, buildVecPhMinPosUW128IR, "vphminpos128", kPairs, 1, true,  \
+               Xform::All);                                                    \
   }                                                                            \
   TEST(SUITE, DpProd128) {                                                     \
     checkEquiv(ISA, buildVecDpProd128IR, "vdp128", kPairs, 1, true,            \
                Xform::All);                                                    \
   }                                                                            \
   TEST(SUITE, BmiBits) {                                                       \
-    checkEquiv(ISA, buildBmiBitsIR, "bmibits", kPairs, 1, true,               \
-               Xform::All);                                                    \
+    checkEquiv(ISA, buildBmiBitsIR, "bmibits", kPairs, 1, true, Xform::All);   \
   }                                                                            \
   TEST(SUITE, Sha256) {                                                        \
-    checkEquiv(ISA, buildSha256IR, "sha256", kPairs, 1, true,                  \
-               Xform::All);                                                    \
+    checkEquiv(ISA, buildSha256IR, "sha256", kPairs, 1, true, Xform::All);     \
   }                                                                            \
   TEST(SUITE, Sha1) {                                                          \
-    checkEquiv(ISA, buildSha1IR, "sha1", kPairs, 1, true,                      \
-               Xform::All);                                                    \
+    checkEquiv(ISA, buildSha1IR, "sha1", kPairs, 1, true, Xform::All);         \
   }                                                                            \
   TEST(SUITE, Sha512) {                                                        \
-    checkEquiv(ISA, buildSha512IR, "sha512", kPairs, 1, true,                  \
-               Xform::All);                                                    \
+    checkEquiv(ISA, buildSha512IR, "sha512", kPairs, 1, true, Xform::All);     \
   }
 
 PATCH_FULL_ALL_SUITE(PatchFullAll_ELF_x64, kELF_x64)
@@ -31562,81 +31603,81 @@ PATCH_FULL_ALL_SUITE(PatchFullAll_MachO_ARM32, kMachO_ARM32)
     checkEquiv(ISA, buildVecAvxDup256IR, "vdup256", kPairs, 1, true,           \
                Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, CmpNe256) {                                                       \
-    checkEquiv(ISA, buildVecAvxCmpNe256IR, "vcmpne256", kPairs, 1, true,        \
-               Xform::Flatten);                                                 \
+  TEST(SUITE, CmpNe256) {                                                      \
+    checkEquiv(ISA, buildVecAvxCmpNe256IR, "vcmpne256", kPairs, 1, true,       \
+               Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, AddSub256) {                                                      \
-    checkEquiv(ISA, buildVecAvxAddSub256IR, "vaddsub256", kPairs, 1, true,      \
-               Xform::Flatten);                                                 \
+  TEST(SUITE, AddSub256) {                                                     \
+    checkEquiv(ISA, buildVecAvxAddSub256IR, "vaddsub256", kPairs, 1, true,     \
+               Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, HAddSub256) {                                                     \
-    checkEquiv(ISA, buildVecAvxHAddSub256IR, "vhaddsub256", kPairs, 1, true,    \
-               Xform::Flatten);                                                 \
+  TEST(SUITE, HAddSub256) {                                                    \
+    checkEquiv(ISA, buildVecAvxHAddSub256IR, "vhaddsub256", kPairs, 1, true,   \
+               Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, FLogic256) {                                                      \
-    checkEquiv(ISA, buildVecAvxFLogic256IR, "vflogic256", kPairs, 1, true,      \
-               Xform::Flatten);                                                 \
+  TEST(SUITE, FLogic256) {                                                     \
+    checkEquiv(ISA, buildVecAvxFLogic256IR, "vflogic256", kPairs, 1, true,     \
+               Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, Unpack256) {                                                      \
-    checkEquiv(ISA, buildVecAvxUnpack256IR, "vunpack256", kPairs, 1, true,      \
-               Xform::Flatten);                                                 \
+  TEST(SUITE, Unpack256) {                                                     \
+    checkEquiv(ISA, buildVecAvxUnpack256IR, "vunpack256", kPairs, 1, true,     \
+               Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, IUnpack256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIUnpack256IR, "viunpack256", kPairs, 1, true,      \
-               Xform::Flatten);                                                 \
+  TEST(SUITE, IUnpack256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIUnpack256IR, "viunpack256", kPairs, 1, true,   \
+               Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, VarShift256) {                                                      \
-    checkEquiv(ISA, buildVecAvxVarShift256IR, "vvshift256", kPairs, 1, true,      \
-               Xform::Flatten);                                                 \
+  TEST(SUITE, VarShift256) {                                                   \
+    checkEquiv(ISA, buildVecAvxVarShift256IR, "vvshift256", kPairs, 1, true,   \
+               Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, IArith256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIArith256IR, "viarith256", kPairs, 1, true,      \
-               Xform::Flatten);                                                 \
+  TEST(SUITE, IArith256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIArith256IR, "viarith256", kPairs, 1, true,     \
+               Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, IMinMax256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIMinMax256IR, "viminmax256", kPairs, 1, true,    \
-               Xform::Flatten);                                                 \
+  TEST(SUITE, IMinMax256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIMinMax256IR, "viminmax256", kPairs, 1, true,   \
+               Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, ICmp256) {                                                        \
-    checkEquiv(ISA, buildVecAvxICmp256IR, "vicmp256", kPairs, 1, true,          \
-               Xform::Flatten);                                                 \
+  TEST(SUITE, ICmp256) {                                                       \
+    checkEquiv(ISA, buildVecAvxICmp256IR, "vicmp256", kPairs, 1, true,         \
+               Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, ICmpBWQ256) {                                                     \
-    checkEquiv(ISA, buildVecAvxICmpBWQ256IR, "vicmpbwq256", kPairs, 1, true,    \
-               Xform::Flatten);                                                 \
+  TEST(SUITE, ICmpBWQ256) {                                                    \
+    checkEquiv(ISA, buildVecAvxICmpBWQ256IR, "vicmpbwq256", kPairs, 1, true,   \
+               Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, GatherD256) {                                                     \
-    checkEquiv(ISA, buildVecAvxGatherD256IR, "vgatherd256", kPairs, 1, true,    \
-               Xform::Flatten);                                                 \
+  TEST(SUITE, GatherD256) {                                                    \
+    checkEquiv(ISA, buildVecAvxGatherD256IR, "vgatherd256", kPairs, 1, true,   \
+               Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, GatherDQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxGatherDQ256IR, "vgatherdq256", kPairs, 1, true,  \
-               Xform::Flatten);                                                 \
+  TEST(SUITE, GatherDQ256) {                                                   \
+    checkEquiv(ISA, buildVecAvxGatherDQ256IR, "vgatherdq256", kPairs, 1, true, \
+               Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, GatherQD256) {                                                    \
-    checkEquiv(ISA, buildVecAvxGatherQD256IR, "vgatherqd256", kPairs, 1, true,  \
-               Xform::Flatten);                                                 \
+  TEST(SUITE, GatherQD256) {                                                   \
+    checkEquiv(ISA, buildVecAvxGatherQD256IR, "vgatherqd256", kPairs, 1, true, \
+               Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, GatherQQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxGatherQQ256IR, "vgatherqq256", kPairs, 1, true,  \
-               Xform::Flatten);                                                 \
+  TEST(SUITE, GatherQQ256) {                                                   \
+    checkEquiv(ISA, buildVecAvxGatherQQ256IR, "vgatherqq256", kPairs, 1, true, \
+               Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, MaskMov256) {                                                     \
-    checkEquiv(ISA, buildVecAvxMaskMov256IR, "vmaskmov256", kPairs, 1, true,    \
-               Xform::Flatten);                                                 \
+  TEST(SUITE, MaskMov256) {                                                    \
+    checkEquiv(ISA, buildVecAvxMaskMov256IR, "vmaskmov256", kPairs, 1, true,   \
+               Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, MaskMovQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxMaskMovQ256IR, "vmaskmovq256", kPairs, 1, true,  \
-               Xform::Flatten);                                                 \
+  TEST(SUITE, MaskMovQ256) {                                                   \
+    checkEquiv(ISA, buildVecAvxMaskMovQ256IR, "vmaskmovq256", kPairs, 1, true, \
+               Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, MaskMovPS256) {                                                   \
-    checkEquiv(ISA, buildVecAvxMaskMovPS256IR, "vmaskmovps256", kPairs, 1, true,\
-               Xform::Flatten);                                                 \
+  TEST(SUITE, MaskMovPS256) {                                                  \
+    checkEquiv(ISA, buildVecAvxMaskMovPS256IR, "vmaskmovps256", kPairs, 1,     \
+               true, Xform::Flatten);                                          \
   }                                                                            \
-  TEST(SUITE, MaskMovPD256) {                                                   \
-    checkEquiv(ISA, buildVecAvxMaskMovPD256IR, "vmaskmovpd256", kPairs, 1, true,\
-               Xform::Flatten);                                                 \
+  TEST(SUITE, MaskMovPD256) {                                                  \
+    checkEquiv(ISA, buildVecAvxMaskMovPD256IR, "vmaskmovpd256", kPairs, 1,     \
+               true, Xform::Flatten);                                          \
   }                                                                            \
   TEST(SUITE, Crc32) {                                                         \
     checkEquiv(ISA, buildScalarCrc32IR, "crc32acc", kPairs, 1, true,           \
@@ -31646,125 +31687,125 @@ PATCH_FULL_ALL_SUITE(PatchFullAll_MachO_ARM32, kMachO_ARM32)
     checkEquiv(ISA, buildPolyMulIR, "polymul", kPairs, 1, true,                \
                Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, UShift256) {                                                      \
-    checkEquiv(ISA, buildVecAvxUShift256IR, "vushift256", kPairs, 1, true,      \
-               Xform::Flatten);                                                 \
+  TEST(SUITE, UShift256) {                                                     \
+    checkEquiv(ISA, buildVecAvxUShift256IR, "vushift256", kPairs, 1, true,     \
+               Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, IPMadd256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIPMadd256IR, "vipmadd256", kPairs, 1, true,      \
-               Xform::Flatten);                                                 \
+  TEST(SUITE, IPMadd256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIPMadd256IR, "vipmadd256", kPairs, 1, true,     \
+               Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, IAbs256) {                                                        \
-    checkEquiv(ISA, buildVecAvxIAbs256IR, "viabs256", kPairs, 1, true,          \
-               Xform::Flatten);                                                 \
+  TEST(SUITE, IAbs256) {                                                       \
+    checkEquiv(ISA, buildVecAvxIAbs256IR, "viabs256", kPairs, 1, true,         \
+               Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, IAvg256) {                                                        \
-    checkEquiv(ISA, buildVecAvxIAvg256IR, "viavg256", kPairs, 1, true,          \
-               Xform::Flatten);                                                 \
+  TEST(SUITE, IAvg256) {                                                       \
+    checkEquiv(ISA, buildVecAvxIAvg256IR, "viavg256", kPairs, 1, true,         \
+               Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, IMaddUB256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIMaddUB256IR, "vimaddub256", kPairs, 1, true,    \
-               Xform::Flatten);                                                 \
+  TEST(SUITE, IMaddUB256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIMaddUB256IR, "vimaddub256", kPairs, 1, true,   \
+               Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, IMulH256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIMulH256IR, "vimulh256", kPairs, 1, true,        \
-               Xform::Flatten);                                                 \
+  TEST(SUITE, IMulH256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIMulH256IR, "vimulh256", kPairs, 1, true,       \
+               Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, IMulHRS256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIMulHRS256IR, "vimulhrs256", kPairs, 1, true,    \
-               Xform::Flatten);                                                 \
+  TEST(SUITE, IMulHRS256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIMulHRS256IR, "vimulhrs256", kPairs, 1, true,   \
+               Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, ISad256) {                                                        \
-    checkEquiv(ISA, buildVecAvxISad256IR, "visad256", kPairs, 1, true,          \
-               Xform::Flatten);                                                 \
+  TEST(SUITE, ISad256) {                                                       \
+    checkEquiv(ISA, buildVecAvxISad256IR, "visad256", kPairs, 1, true,         \
+               Xform::Flatten);                                                \
   }                                                                            \
-  TEST(SUITE, ISign256) {                                                       \
-    checkEquiv(ISA, buildVecAvxISign256IR, "visign256", kPairs, 1, true,        \
-               Xform::Flatten);                                                 \
-  }                                                                             \
-  TEST(SUITE, IHAdd256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIHAdd256IR, "vihadd256", kPairs, 1, true,        \
-               Xform::Flatten);                                                 \
-  }                                                                             \
-  TEST(SUITE, IPerm256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIPerm256IR, "viperm256", kPairs, 1, true,        \
-               Xform::Flatten);                                                 \
-  }                                                                             \
-  TEST(SUITE, IHAddSW256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIHAddSW256IR, "vihaddsw256", kPairs, 1, true,    \
-               Xform::Flatten);                                                 \
-  }                                                                             \
-  TEST(SUITE, IBlendW256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIBlendW256IR, "viblendw256", kPairs, 1, true,    \
-               Xform::Flatten);                                                 \
-  }                                                                             \
-  TEST(SUITE, IPack256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIPack256IR, "vipack256", kPairs, 1, true,        \
-               Xform::Flatten);                                                 \
-  }                                                                             \
-  TEST(SUITE, IShufB256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIShufB256IR, "vishufb256", kPairs, 1, true,      \
-               Xform::Flatten);                                                 \
-  }                                                                             \
-  TEST(SUITE, IMovMskB256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIMovMskB256IR, "vimovmskb256", kPairs, 1, true,  \
-               Xform::Flatten);                                                 \
-  }                                                                             \
-  TEST(SUITE, IBlendVB256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIBlendVB256IR, "viblendvb256", kPairs, 1, true,  \
-               Xform::Flatten);                                                 \
-  }                                                                             \
-  TEST(SUITE, IMulDQ256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIMulDQ256IR, "vimuldq256", kPairs, 1, true,      \
-               Xform::Flatten);                                                 \
-  }                                                                             \
-  TEST(SUITE, IPackD256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIPackD256IR, "vipackd256", kPairs, 1, true,      \
-               Xform::Flatten);                                                 \
-  }                                                                             \
-  TEST(SUITE, IHAddW256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIHAddW256IR, "vihaddw256", kPairs, 1, true,      \
-               Xform::Flatten);                                                 \
-  }                                                                             \
-  TEST(SUITE, ISignBW256) {                                                     \
-    checkEquiv(ISA, buildVecAvxISignBW256IR, "visignbw256", kPairs, 1, true,    \
-               Xform::Flatten);                                                 \
-  }                                                                             \
-  TEST(SUITE, IShufD256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIShufD256IR, "vishufd256", kPairs, 1, true,      \
-               Xform::Flatten);                                                 \
-  }                                                                             \
-  TEST(SUITE, IShufW256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIShufW256IR, "vishufw256", kPairs, 1, true,      \
-               Xform::Flatten);                                                 \
-  }                                                                             \
-  TEST(SUITE, IAlignR256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIAlignR256IR, "vialignr256", kPairs, 1, true,    \
-               Xform::Flatten);                                                 \
-  }                                                                             \
-  TEST(SUITE, IBShiftDQ256) {                                                   \
-    checkEquiv(ISA, buildVecAvxIBShiftDQ256IR, "vibshiftdq256", kPairs, 1, true,\
-               Xform::Flatten);                                                 \
-  }                                                                             \
-  TEST(SUITE, IBroadcast256) {                                                  \
-    checkEquiv(ISA, buildVecAvxIBroadcast256IR, "vibroadcast256", kPairs, 1,    \
-               true, Xform::Flatten);                                           \
-  }                                                                             \
-  TEST(SUITE, IMpsad256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIMpsadbw256IR, "vimpsad256", kPairs, 1,          \
-               true, Xform::Flatten);                                           \
+  TEST(SUITE, ISign256) {                                                      \
+    checkEquiv(ISA, buildVecAvxISign256IR, "visign256", kPairs, 1, true,       \
+               Xform::Flatten);                                                \
+  }                                                                            \
+  TEST(SUITE, IHAdd256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIHAdd256IR, "vihadd256", kPairs, 1, true,       \
+               Xform::Flatten);                                                \
+  }                                                                            \
+  TEST(SUITE, IPerm256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIPerm256IR, "viperm256", kPairs, 1, true,       \
+               Xform::Flatten);                                                \
+  }                                                                            \
+  TEST(SUITE, IHAddSW256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIHAddSW256IR, "vihaddsw256", kPairs, 1, true,   \
+               Xform::Flatten);                                                \
+  }                                                                            \
+  TEST(SUITE, IBlendW256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIBlendW256IR, "viblendw256", kPairs, 1, true,   \
+               Xform::Flatten);                                                \
+  }                                                                            \
+  TEST(SUITE, IPack256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIPack256IR, "vipack256", kPairs, 1, true,       \
+               Xform::Flatten);                                                \
+  }                                                                            \
+  TEST(SUITE, IShufB256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIShufB256IR, "vishufb256", kPairs, 1, true,     \
+               Xform::Flatten);                                                \
+  }                                                                            \
+  TEST(SUITE, IMovMskB256) {                                                   \
+    checkEquiv(ISA, buildVecAvxIMovMskB256IR, "vimovmskb256", kPairs, 1, true, \
+               Xform::Flatten);                                                \
+  }                                                                            \
+  TEST(SUITE, IBlendVB256) {                                                   \
+    checkEquiv(ISA, buildVecAvxIBlendVB256IR, "viblendvb256", kPairs, 1, true, \
+               Xform::Flatten);                                                \
+  }                                                                            \
+  TEST(SUITE, IMulDQ256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIMulDQ256IR, "vimuldq256", kPairs, 1, true,     \
+               Xform::Flatten);                                                \
+  }                                                                            \
+  TEST(SUITE, IPackD256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIPackD256IR, "vipackd256", kPairs, 1, true,     \
+               Xform::Flatten);                                                \
+  }                                                                            \
+  TEST(SUITE, IHAddW256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIHAddW256IR, "vihaddw256", kPairs, 1, true,     \
+               Xform::Flatten);                                                \
+  }                                                                            \
+  TEST(SUITE, ISignBW256) {                                                    \
+    checkEquiv(ISA, buildVecAvxISignBW256IR, "visignbw256", kPairs, 1, true,   \
+               Xform::Flatten);                                                \
+  }                                                                            \
+  TEST(SUITE, IShufD256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIShufD256IR, "vishufd256", kPairs, 1, true,     \
+               Xform::Flatten);                                                \
+  }                                                                            \
+  TEST(SUITE, IShufW256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIShufW256IR, "vishufw256", kPairs, 1, true,     \
+               Xform::Flatten);                                                \
+  }                                                                            \
+  TEST(SUITE, IAlignR256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIAlignR256IR, "vialignr256", kPairs, 1, true,   \
+               Xform::Flatten);                                                \
+  }                                                                            \
+  TEST(SUITE, IBShiftDQ256) {                                                  \
+    checkEquiv(ISA, buildVecAvxIBShiftDQ256IR, "vibshiftdq256", kPairs, 1,     \
+               true, Xform::Flatten);                                          \
+  }                                                                            \
+  TEST(SUITE, IBroadcast256) {                                                 \
+    checkEquiv(ISA, buildVecAvxIBroadcast256IR, "vibroadcast256", kPairs, 1,   \
+               true, Xform::Flatten);                                          \
+  }                                                                            \
+  TEST(SUITE, IMpsad256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIMpsadbw256IR, "vimpsad256", kPairs, 1, true,   \
+               Xform::Flatten);                                                \
   }                                                                            \
   TEST(SUITE, IVPerm2I256) {                                                   \
-    checkEquiv(ISA, buildVecAvxIVPerm2I256IR, "vperm2i256", kPairs, 1,         \
-               true, Xform::Flatten);                                          \
+    checkEquiv(ISA, buildVecAvxIVPerm2I256IR, "vperm2i256", kPairs, 1, true,   \
+               Xform::Flatten);                                                \
   }                                                                            \
   TEST(SUITE, IVPermQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIVPermQ256IR, "vpermq256", kPairs, 1,           \
-               true, Xform::Flatten);                                          \
+    checkEquiv(ISA, buildVecAvxIVPermQ256IR, "vpermq256", kPairs, 1, true,     \
+               Xform::Flatten);                                                \
   }                                                                            \
   TEST(SUITE, IBlendD256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIBlendD256IR, "viblendd256", kPairs, 1,         \
-               true, Xform::Flatten);                                          \
+    checkEquiv(ISA, buildVecAvxIBlendD256IR, "viblendd256", kPairs, 1, true,   \
+               Xform::Flatten);                                                \
   }                                                                            \
   TEST(SUITE, IMovExtBW256) {                                                  \
     checkEquiv(ISA, buildVecAvxIMovExtBW256IR, "vimovextbw256", kPairs, 1,     \
@@ -31791,60 +31832,57 @@ PATCH_FULL_ALL_SUITE(PatchFullAll_MachO_ARM32, kMachO_ARM32)
                true, Xform::Flatten);                                          \
   }                                                                            \
   TEST(SUITE, BlendV256) {                                                     \
-    checkEquiv(ISA, buildVecAvxBlendV256IR, "vblendv256", kPairs, 1,           \
-               true, Xform::Flatten);                                          \
+    checkEquiv(ISA, buildVecAvxBlendV256IR, "vblendv256", kPairs, 1, true,     \
+               Xform::Flatten);                                                \
   }                                                                            \
   TEST(SUITE, RcpRsqrt256) {                                                   \
-    checkEquiv(ISA, buildVecAvxRcpRsqrt256IR, "vrcprsqrt256", kPairs, 1,       \
-               true, Xform::Flatten);                                          \
+    checkEquiv(ISA, buildVecAvxRcpRsqrt256IR, "vrcprsqrt256", kPairs, 1, true, \
+               Xform::Flatten);                                                \
   }                                                                            \
   TEST(SUITE, AesEnc128) {                                                     \
-    checkEquiv(ISA, buildVecAesEnc128IR, "vaesenc128", kPairs, 1,              \
-               true, Xform::Flatten);                                          \
+    checkEquiv(ISA, buildVecAesEnc128IR, "vaesenc128", kPairs, 1, true,        \
+               Xform::Flatten);                                                \
   }                                                                            \
   TEST(SUITE, AesDec128) {                                                     \
-    checkEquiv(ISA, buildVecAesDec128IR, "vaesdec128", kPairs, 1,              \
-               true, Xform::Flatten);                                          \
+    checkEquiv(ISA, buildVecAesDec128IR, "vaesdec128", kPairs, 1, true,        \
+               Xform::Flatten);                                                \
   }                                                                            \
   TEST(SUITE, AesImc128) {                                                     \
-    checkEquiv(ISA, buildVecAesImc128IR, "vaesimc128", kPairs, 1,              \
-               true, Xform::Flatten);                                          \
+    checkEquiv(ISA, buildVecAesImc128IR, "vaesimc128", kPairs, 1, true,        \
+               Xform::Flatten);                                                \
   }                                                                            \
   TEST(SUITE, AesLast128) {                                                    \
-    checkEquiv(ISA, buildVecAesLast128IR, "vaeslast128", kPairs, 1,            \
-               true, Xform::Flatten);                                          \
+    checkEquiv(ISA, buildVecAesLast128IR, "vaeslast128", kPairs, 1, true,      \
+               Xform::Flatten);                                                \
   }                                                                            \
   TEST(SUITE, AesKeyGen128) {                                                  \
-    checkEquiv(ISA, buildVecAesKeyGen128IR, "vaeskeygen128", kPairs, 1,        \
-               true, Xform::Flatten);                                          \
+    checkEquiv(ISA, buildVecAesKeyGen128IR, "vaeskeygen128", kPairs, 1, true,  \
+               Xform::Flatten);                                                \
   }                                                                            \
   TEST(SUITE, PdepPext) {                                                      \
-    checkEquiv(ISA, buildPdepPextIR, "pdeppext", kPairs, 1,                    \
-               true, Xform::Flatten);                                          \
+    checkEquiv(ISA, buildPdepPextIR, "pdeppext", kPairs, 1, true,              \
+               Xform::Flatten);                                                \
   }                                                                            \
   TEST(SUITE, PhMinPosUW128) {                                                 \
-    checkEquiv(ISA, buildVecPhMinPosUW128IR, "vphminpos128", kPairs, 1,        \
-               true, Xform::Flatten);                                          \
+    checkEquiv(ISA, buildVecPhMinPosUW128IR, "vphminpos128", kPairs, 1, true,  \
+               Xform::Flatten);                                                \
   }                                                                            \
   TEST(SUITE, DpProd128) {                                                     \
     checkEquiv(ISA, buildVecDpProd128IR, "vdp128", kPairs, 1, true,            \
                Xform::Flatten);                                                \
   }                                                                            \
   TEST(SUITE, BmiBits) {                                                       \
-    checkEquiv(ISA, buildBmiBitsIR, "bmibits", kPairs, 1, true,               \
+    checkEquiv(ISA, buildBmiBitsIR, "bmibits", kPairs, 1, true,                \
                Xform::Flatten);                                                \
   }                                                                            \
   TEST(SUITE, Sha256) {                                                        \
-    checkEquiv(ISA, buildSha256IR, "sha256", kPairs, 1, true,                  \
-               Xform::Flatten);                                                \
+    checkEquiv(ISA, buildSha256IR, "sha256", kPairs, 1, true, Xform::Flatten); \
   }                                                                            \
   TEST(SUITE, Sha1) {                                                          \
-    checkEquiv(ISA, buildSha1IR, "sha1", kPairs, 1, true,                      \
-               Xform::Flatten);                                                \
+    checkEquiv(ISA, buildSha1IR, "sha1", kPairs, 1, true, Xform::Flatten);     \
   }                                                                            \
   TEST(SUITE, Sha512) {                                                        \
-    checkEquiv(ISA, buildSha512IR, "sha512", kPairs, 1, true,                  \
-               Xform::Flatten);                                                \
+    checkEquiv(ISA, buildSha512IR, "sha512", kPairs, 1, true, Xform::Flatten); \
   }
 
 PATCH_FULL_FLAT_SUITE(PatchFullFlatten_ELF_x64, kELF_x64)
@@ -32589,209 +32627,208 @@ PATCH_FULL_FLAT_SUITE(PatchFullFlatten_MachO_ARM32, kMachO_ARM32)
     checkEquiv(ISA, buildVecAvxDup256IR, "vdup256", kPairs, 1, true,           \
                Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, CmpNe256) {                                                       \
-    checkEquiv(ISA, buildVecAvxCmpNe256IR, "vcmpne256", kPairs, 1, true,        \
-               Xform::Bogus);                                                   \
+  TEST(SUITE, CmpNe256) {                                                      \
+    checkEquiv(ISA, buildVecAvxCmpNe256IR, "vcmpne256", kPairs, 1, true,       \
+               Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, AddSub256) {                                                      \
-    checkEquiv(ISA, buildVecAvxAddSub256IR, "vaddsub256", kPairs, 1, true,      \
-               Xform::Bogus);                                                   \
+  TEST(SUITE, AddSub256) {                                                     \
+    checkEquiv(ISA, buildVecAvxAddSub256IR, "vaddsub256", kPairs, 1, true,     \
+               Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, HAddSub256) {                                                     \
-    checkEquiv(ISA, buildVecAvxHAddSub256IR, "vhaddsub256", kPairs, 1, true,    \
-               Xform::Bogus);                                                   \
+  TEST(SUITE, HAddSub256) {                                                    \
+    checkEquiv(ISA, buildVecAvxHAddSub256IR, "vhaddsub256", kPairs, 1, true,   \
+               Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, FLogic256) {                                                      \
-    checkEquiv(ISA, buildVecAvxFLogic256IR, "vflogic256", kPairs, 1, true,      \
-               Xform::Bogus);                                                   \
+  TEST(SUITE, FLogic256) {                                                     \
+    checkEquiv(ISA, buildVecAvxFLogic256IR, "vflogic256", kPairs, 1, true,     \
+               Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, Unpack256) {                                                      \
-    checkEquiv(ISA, buildVecAvxUnpack256IR, "vunpack256", kPairs, 1, true,      \
-               Xform::Bogus);                                                   \
+  TEST(SUITE, Unpack256) {                                                     \
+    checkEquiv(ISA, buildVecAvxUnpack256IR, "vunpack256", kPairs, 1, true,     \
+               Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, IUnpack256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIUnpack256IR, "viunpack256", kPairs, 1, true,      \
-               Xform::Bogus);                                                   \
+  TEST(SUITE, IUnpack256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIUnpack256IR, "viunpack256", kPairs, 1, true,   \
+               Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, VarShift256) {                                                      \
-    checkEquiv(ISA, buildVecAvxVarShift256IR, "vvshift256", kPairs, 1, true,      \
-               Xform::Bogus);                                                   \
+  TEST(SUITE, VarShift256) {                                                   \
+    checkEquiv(ISA, buildVecAvxVarShift256IR, "vvshift256", kPairs, 1, true,   \
+               Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, IArith256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIArith256IR, "viarith256", kPairs, 1, true,      \
-               Xform::Bogus);                                                   \
+  TEST(SUITE, IArith256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIArith256IR, "viarith256", kPairs, 1, true,     \
+               Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, IMinMax256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIMinMax256IR, "viminmax256", kPairs, 1, true,    \
-               Xform::Bogus);                                                   \
+  TEST(SUITE, IMinMax256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIMinMax256IR, "viminmax256", kPairs, 1, true,   \
+               Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, ICmp256) {                                                        \
-    checkEquiv(ISA, buildVecAvxICmp256IR, "vicmp256", kPairs, 1, true,          \
-               Xform::Bogus);                                                   \
+  TEST(SUITE, ICmp256) {                                                       \
+    checkEquiv(ISA, buildVecAvxICmp256IR, "vicmp256", kPairs, 1, true,         \
+               Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, ICmpBWQ256) {                                                     \
-    checkEquiv(ISA, buildVecAvxICmpBWQ256IR, "vicmpbwq256", kPairs, 1, true,    \
-               Xform::Bogus);                                                   \
+  TEST(SUITE, ICmpBWQ256) {                                                    \
+    checkEquiv(ISA, buildVecAvxICmpBWQ256IR, "vicmpbwq256", kPairs, 1, true,   \
+               Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, GatherD256) {                                                     \
-    checkEquiv(ISA, buildVecAvxGatherD256IR, "vgatherd256", kPairs, 1, true,    \
-               Xform::Bogus);                                                   \
+  TEST(SUITE, GatherD256) {                                                    \
+    checkEquiv(ISA, buildVecAvxGatherD256IR, "vgatherd256", kPairs, 1, true,   \
+               Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, GatherDQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxGatherDQ256IR, "vgatherdq256", kPairs, 1, true,  \
-               Xform::Bogus);                                                   \
+  TEST(SUITE, GatherDQ256) {                                                   \
+    checkEquiv(ISA, buildVecAvxGatherDQ256IR, "vgatherdq256", kPairs, 1, true, \
+               Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, GatherQD256) {                                                    \
-    checkEquiv(ISA, buildVecAvxGatherQD256IR, "vgatherqd256", kPairs, 1, true,  \
-               Xform::Bogus);                                                   \
+  TEST(SUITE, GatherQD256) {                                                   \
+    checkEquiv(ISA, buildVecAvxGatherQD256IR, "vgatherqd256", kPairs, 1, true, \
+               Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, GatherQQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxGatherQQ256IR, "vgatherqq256", kPairs, 1, true,  \
-               Xform::Bogus);                                                   \
+  TEST(SUITE, GatherQQ256) {                                                   \
+    checkEquiv(ISA, buildVecAvxGatherQQ256IR, "vgatherqq256", kPairs, 1, true, \
+               Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, MaskMov256) {                                                     \
-    checkEquiv(ISA, buildVecAvxMaskMov256IR, "vmaskmov256", kPairs, 1, true,    \
-               Xform::Bogus);                                                   \
+  TEST(SUITE, MaskMov256) {                                                    \
+    checkEquiv(ISA, buildVecAvxMaskMov256IR, "vmaskmov256", kPairs, 1, true,   \
+               Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, MaskMovQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxMaskMovQ256IR, "vmaskmovq256", kPairs, 1, true,  \
-               Xform::Bogus);                                                   \
+  TEST(SUITE, MaskMovQ256) {                                                   \
+    checkEquiv(ISA, buildVecAvxMaskMovQ256IR, "vmaskmovq256", kPairs, 1, true, \
+               Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, MaskMovPS256) {                                                   \
-    checkEquiv(ISA, buildVecAvxMaskMovPS256IR, "vmaskmovps256", kPairs, 1, true,\
-               Xform::Bogus);                                                   \
+  TEST(SUITE, MaskMovPS256) {                                                  \
+    checkEquiv(ISA, buildVecAvxMaskMovPS256IR, "vmaskmovps256", kPairs, 1,     \
+               true, Xform::Bogus);                                            \
   }                                                                            \
-  TEST(SUITE, MaskMovPD256) {                                                   \
-    checkEquiv(ISA, buildVecAvxMaskMovPD256IR, "vmaskmovpd256", kPairs, 1, true,\
-               Xform::Bogus);                                                   \
+  TEST(SUITE, MaskMovPD256) {                                                  \
+    checkEquiv(ISA, buildVecAvxMaskMovPD256IR, "vmaskmovpd256", kPairs, 1,     \
+               true, Xform::Bogus);                                            \
   }                                                                            \
   TEST(SUITE, Crc32) {                                                         \
     checkEquiv(ISA, buildScalarCrc32IR, "crc32acc", kPairs, 1, true,           \
                Xform::Bogus);                                                  \
   }                                                                            \
   TEST(SUITE, PolyMul) {                                                       \
-    checkEquiv(ISA, buildPolyMulIR, "polymul", kPairs, 1, true,                \
+    checkEquiv(ISA, buildPolyMulIR, "polymul", kPairs, 1, true, Xform::Bogus); \
+  }                                                                            \
+  TEST(SUITE, UShift256) {                                                     \
+    checkEquiv(ISA, buildVecAvxUShift256IR, "vushift256", kPairs, 1, true,     \
                Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, UShift256) {                                                      \
-    checkEquiv(ISA, buildVecAvxUShift256IR, "vushift256", kPairs, 1, true,      \
-               Xform::Bogus);                                                   \
+  TEST(SUITE, IPMadd256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIPMadd256IR, "vipmadd256", kPairs, 1, true,     \
+               Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, IPMadd256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIPMadd256IR, "vipmadd256", kPairs, 1, true,      \
-               Xform::Bogus);                                                   \
+  TEST(SUITE, IAbs256) {                                                       \
+    checkEquiv(ISA, buildVecAvxIAbs256IR, "viabs256", kPairs, 1, true,         \
+               Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, IAbs256) {                                                        \
-    checkEquiv(ISA, buildVecAvxIAbs256IR, "viabs256", kPairs, 1, true,          \
-               Xform::Bogus);                                                   \
+  TEST(SUITE, IAvg256) {                                                       \
+    checkEquiv(ISA, buildVecAvxIAvg256IR, "viavg256", kPairs, 1, true,         \
+               Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, IAvg256) {                                                        \
-    checkEquiv(ISA, buildVecAvxIAvg256IR, "viavg256", kPairs, 1, true,          \
-               Xform::Bogus);                                                   \
+  TEST(SUITE, IMaddUB256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIMaddUB256IR, "vimaddub256", kPairs, 1, true,   \
+               Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, IMaddUB256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIMaddUB256IR, "vimaddub256", kPairs, 1, true,    \
-               Xform::Bogus);                                                   \
+  TEST(SUITE, IMulH256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIMulH256IR, "vimulh256", kPairs, 1, true,       \
+               Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, IMulH256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIMulH256IR, "vimulh256", kPairs, 1, true,        \
-               Xform::Bogus);                                                   \
+  TEST(SUITE, IMulHRS256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIMulHRS256IR, "vimulhrs256", kPairs, 1, true,   \
+               Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, IMulHRS256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIMulHRS256IR, "vimulhrs256", kPairs, 1, true,    \
-               Xform::Bogus);                                                   \
+  TEST(SUITE, ISad256) {                                                       \
+    checkEquiv(ISA, buildVecAvxISad256IR, "visad256", kPairs, 1, true,         \
+               Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, ISad256) {                                                        \
-    checkEquiv(ISA, buildVecAvxISad256IR, "visad256", kPairs, 1, true,          \
-               Xform::Bogus);                                                   \
+  TEST(SUITE, ISign256) {                                                      \
+    checkEquiv(ISA, buildVecAvxISign256IR, "visign256", kPairs, 1, true,       \
+               Xform::Bogus);                                                  \
   }                                                                            \
-  TEST(SUITE, ISign256) {                                                       \
-    checkEquiv(ISA, buildVecAvxISign256IR, "visign256", kPairs, 1, true,        \
-               Xform::Bogus);                                                   \
-  }                                                                             \
-  TEST(SUITE, IHAdd256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIHAdd256IR, "vihadd256", kPairs, 1, true,        \
-               Xform::Bogus);                                                   \
-  }                                                                             \
-  TEST(SUITE, IPerm256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIPerm256IR, "viperm256", kPairs, 1, true,        \
-               Xform::Bogus);                                                   \
-  }                                                                             \
-  TEST(SUITE, IHAddSW256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIHAddSW256IR, "vihaddsw256", kPairs, 1, true,    \
-               Xform::Bogus);                                                   \
-  }                                                                             \
-  TEST(SUITE, IBlendW256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIBlendW256IR, "viblendw256", kPairs, 1, true,    \
-               Xform::Bogus);                                                   \
-  }                                                                             \
-  TEST(SUITE, IPack256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIPack256IR, "vipack256", kPairs, 1, true,        \
-               Xform::Bogus);                                                   \
-  }                                                                             \
-  TEST(SUITE, IShufB256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIShufB256IR, "vishufb256", kPairs, 1, true,      \
-               Xform::Bogus);                                                   \
-  }                                                                             \
-  TEST(SUITE, IMovMskB256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIMovMskB256IR, "vimovmskb256", kPairs, 1, true,  \
-               Xform::Bogus);                                                   \
-  }                                                                             \
-  TEST(SUITE, IBlendVB256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIBlendVB256IR, "viblendvb256", kPairs, 1, true,  \
-               Xform::Bogus);                                                   \
-  }                                                                             \
-  TEST(SUITE, IMulDQ256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIMulDQ256IR, "vimuldq256", kPairs, 1, true,      \
-               Xform::Bogus);                                                   \
-  }                                                                             \
-  TEST(SUITE, IPackD256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIPackD256IR, "vipackd256", kPairs, 1, true,      \
-               Xform::Bogus);                                                   \
-  }                                                                             \
-  TEST(SUITE, IHAddW256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIHAddW256IR, "vihaddw256", kPairs, 1, true,      \
-               Xform::Bogus);                                                   \
-  }                                                                             \
-  TEST(SUITE, ISignBW256) {                                                     \
-    checkEquiv(ISA, buildVecAvxISignBW256IR, "visignbw256", kPairs, 1, true,    \
-               Xform::Bogus);                                                   \
-  }                                                                             \
-  TEST(SUITE, IShufD256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIShufD256IR, "vishufd256", kPairs, 1, true,      \
-               Xform::Bogus);                                                   \
-  }                                                                             \
-  TEST(SUITE, IShufW256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIShufW256IR, "vishufw256", kPairs, 1, true,      \
-               Xform::Bogus);                                                   \
-  }                                                                             \
-  TEST(SUITE, IAlignR256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIAlignR256IR, "vialignr256", kPairs, 1, true,    \
-               Xform::Bogus);                                                   \
-  }                                                                             \
-  TEST(SUITE, IBShiftDQ256) {                                                   \
-    checkEquiv(ISA, buildVecAvxIBShiftDQ256IR, "vibshiftdq256", kPairs, 1, true,\
-               Xform::Bogus);                                                   \
-  }                                                                             \
-  TEST(SUITE, IBroadcast256) {                                                  \
-    checkEquiv(ISA, buildVecAvxIBroadcast256IR, "vibroadcast256", kPairs, 1,    \
-               true, Xform::Bogus);                                             \
-  }                                                                             \
-  TEST(SUITE, IMpsad256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIMpsadbw256IR, "vimpsad256", kPairs, 1,          \
-               true, Xform::Bogus);                                             \
+  TEST(SUITE, IHAdd256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIHAdd256IR, "vihadd256", kPairs, 1, true,       \
+               Xform::Bogus);                                                  \
+  }                                                                            \
+  TEST(SUITE, IPerm256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIPerm256IR, "viperm256", kPairs, 1, true,       \
+               Xform::Bogus);                                                  \
+  }                                                                            \
+  TEST(SUITE, IHAddSW256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIHAddSW256IR, "vihaddsw256", kPairs, 1, true,   \
+               Xform::Bogus);                                                  \
+  }                                                                            \
+  TEST(SUITE, IBlendW256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIBlendW256IR, "viblendw256", kPairs, 1, true,   \
+               Xform::Bogus);                                                  \
+  }                                                                            \
+  TEST(SUITE, IPack256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIPack256IR, "vipack256", kPairs, 1, true,       \
+               Xform::Bogus);                                                  \
+  }                                                                            \
+  TEST(SUITE, IShufB256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIShufB256IR, "vishufb256", kPairs, 1, true,     \
+               Xform::Bogus);                                                  \
+  }                                                                            \
+  TEST(SUITE, IMovMskB256) {                                                   \
+    checkEquiv(ISA, buildVecAvxIMovMskB256IR, "vimovmskb256", kPairs, 1, true, \
+               Xform::Bogus);                                                  \
+  }                                                                            \
+  TEST(SUITE, IBlendVB256) {                                                   \
+    checkEquiv(ISA, buildVecAvxIBlendVB256IR, "viblendvb256", kPairs, 1, true, \
+               Xform::Bogus);                                                  \
+  }                                                                            \
+  TEST(SUITE, IMulDQ256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIMulDQ256IR, "vimuldq256", kPairs, 1, true,     \
+               Xform::Bogus);                                                  \
+  }                                                                            \
+  TEST(SUITE, IPackD256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIPackD256IR, "vipackd256", kPairs, 1, true,     \
+               Xform::Bogus);                                                  \
+  }                                                                            \
+  TEST(SUITE, IHAddW256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIHAddW256IR, "vihaddw256", kPairs, 1, true,     \
+               Xform::Bogus);                                                  \
+  }                                                                            \
+  TEST(SUITE, ISignBW256) {                                                    \
+    checkEquiv(ISA, buildVecAvxISignBW256IR, "visignbw256", kPairs, 1, true,   \
+               Xform::Bogus);                                                  \
+  }                                                                            \
+  TEST(SUITE, IShufD256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIShufD256IR, "vishufd256", kPairs, 1, true,     \
+               Xform::Bogus);                                                  \
+  }                                                                            \
+  TEST(SUITE, IShufW256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIShufW256IR, "vishufw256", kPairs, 1, true,     \
+               Xform::Bogus);                                                  \
+  }                                                                            \
+  TEST(SUITE, IAlignR256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIAlignR256IR, "vialignr256", kPairs, 1, true,   \
+               Xform::Bogus);                                                  \
+  }                                                                            \
+  TEST(SUITE, IBShiftDQ256) {                                                  \
+    checkEquiv(ISA, buildVecAvxIBShiftDQ256IR, "vibshiftdq256", kPairs, 1,     \
+               true, Xform::Bogus);                                            \
+  }                                                                            \
+  TEST(SUITE, IBroadcast256) {                                                 \
+    checkEquiv(ISA, buildVecAvxIBroadcast256IR, "vibroadcast256", kPairs, 1,   \
+               true, Xform::Bogus);                                            \
+  }                                                                            \
+  TEST(SUITE, IMpsad256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIMpsadbw256IR, "vimpsad256", kPairs, 1, true,   \
+               Xform::Bogus);                                                  \
   }                                                                            \
   TEST(SUITE, IVPerm2I256) {                                                   \
-    checkEquiv(ISA, buildVecAvxIVPerm2I256IR, "vperm2i256", kPairs, 1,         \
-               true, Xform::Bogus);                                            \
+    checkEquiv(ISA, buildVecAvxIVPerm2I256IR, "vperm2i256", kPairs, 1, true,   \
+               Xform::Bogus);                                                  \
   }                                                                            \
   TEST(SUITE, IVPermQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIVPermQ256IR, "vpermq256", kPairs, 1,           \
-               true, Xform::Bogus);                                            \
+    checkEquiv(ISA, buildVecAvxIVPermQ256IR, "vpermq256", kPairs, 1, true,     \
+               Xform::Bogus);                                                  \
   }                                                                            \
   TEST(SUITE, IBlendD256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIBlendD256IR, "viblendd256", kPairs, 1,         \
-               true, Xform::Bogus);                                            \
+    checkEquiv(ISA, buildVecAvxIBlendD256IR, "viblendd256", kPairs, 1, true,   \
+               Xform::Bogus);                                                  \
   }                                                                            \
   TEST(SUITE, IMovExtBW256) {                                                  \
     checkEquiv(ISA, buildVecAvxIMovExtBW256IR, "vimovextbw256", kPairs, 1,     \
@@ -32818,60 +32855,56 @@ PATCH_FULL_FLAT_SUITE(PatchFullFlatten_MachO_ARM32, kMachO_ARM32)
                true, Xform::Bogus);                                            \
   }                                                                            \
   TEST(SUITE, BlendV256) {                                                     \
-    checkEquiv(ISA, buildVecAvxBlendV256IR, "vblendv256", kPairs, 1,           \
-               true, Xform::Bogus);                                            \
+    checkEquiv(ISA, buildVecAvxBlendV256IR, "vblendv256", kPairs, 1, true,     \
+               Xform::Bogus);                                                  \
   }                                                                            \
   TEST(SUITE, RcpRsqrt256) {                                                   \
-    checkEquiv(ISA, buildVecAvxRcpRsqrt256IR, "vrcprsqrt256", kPairs, 1,       \
-               true, Xform::Bogus);                                            \
+    checkEquiv(ISA, buildVecAvxRcpRsqrt256IR, "vrcprsqrt256", kPairs, 1, true, \
+               Xform::Bogus);                                                  \
   }                                                                            \
   TEST(SUITE, AesEnc128) {                                                     \
-    checkEquiv(ISA, buildVecAesEnc128IR, "vaesenc128", kPairs, 1,              \
-               true, Xform::Bogus);                                            \
+    checkEquiv(ISA, buildVecAesEnc128IR, "vaesenc128", kPairs, 1, true,        \
+               Xform::Bogus);                                                  \
   }                                                                            \
   TEST(SUITE, AesDec128) {                                                     \
-    checkEquiv(ISA, buildVecAesDec128IR, "vaesdec128", kPairs, 1,              \
-               true, Xform::Bogus);                                            \
+    checkEquiv(ISA, buildVecAesDec128IR, "vaesdec128", kPairs, 1, true,        \
+               Xform::Bogus);                                                  \
   }                                                                            \
   TEST(SUITE, AesImc128) {                                                     \
-    checkEquiv(ISA, buildVecAesImc128IR, "vaesimc128", kPairs, 1,              \
-               true, Xform::Bogus);                                            \
+    checkEquiv(ISA, buildVecAesImc128IR, "vaesimc128", kPairs, 1, true,        \
+               Xform::Bogus);                                                  \
   }                                                                            \
   TEST(SUITE, AesLast128) {                                                    \
-    checkEquiv(ISA, buildVecAesLast128IR, "vaeslast128", kPairs, 1,            \
-               true, Xform::Bogus);                                            \
+    checkEquiv(ISA, buildVecAesLast128IR, "vaeslast128", kPairs, 1, true,      \
+               Xform::Bogus);                                                  \
   }                                                                            \
   TEST(SUITE, AesKeyGen128) {                                                  \
-    checkEquiv(ISA, buildVecAesKeyGen128IR, "vaeskeygen128", kPairs, 1,        \
-               true, Xform::Bogus);                                            \
+    checkEquiv(ISA, buildVecAesKeyGen128IR, "vaeskeygen128", kPairs, 1, true,  \
+               Xform::Bogus);                                                  \
   }                                                                            \
   TEST(SUITE, PdepPext) {                                                      \
-    checkEquiv(ISA, buildPdepPextIR, "pdeppext", kPairs, 1,                    \
-               true, Xform::Bogus);                                            \
+    checkEquiv(ISA, buildPdepPextIR, "pdeppext", kPairs, 1, true,              \
+               Xform::Bogus);                                                  \
   }                                                                            \
   TEST(SUITE, PhMinPosUW128) {                                                 \
-    checkEquiv(ISA, buildVecPhMinPosUW128IR, "vphminpos128", kPairs, 1,        \
-               true, Xform::Bogus);                                            \
+    checkEquiv(ISA, buildVecPhMinPosUW128IR, "vphminpos128", kPairs, 1, true,  \
+               Xform::Bogus);                                                  \
   }                                                                            \
   TEST(SUITE, DpProd128) {                                                     \
     checkEquiv(ISA, buildVecDpProd128IR, "vdp128", kPairs, 1, true,            \
                Xform::Bogus);                                                  \
   }                                                                            \
   TEST(SUITE, BmiBits) {                                                       \
-    checkEquiv(ISA, buildBmiBitsIR, "bmibits", kPairs, 1, true,               \
-               Xform::Bogus);                                                  \
+    checkEquiv(ISA, buildBmiBitsIR, "bmibits", kPairs, 1, true, Xform::Bogus); \
   }                                                                            \
   TEST(SUITE, Sha256) {                                                        \
-    checkEquiv(ISA, buildSha256IR, "sha256", kPairs, 1, true,                  \
-               Xform::Bogus);                                                  \
+    checkEquiv(ISA, buildSha256IR, "sha256", kPairs, 1, true, Xform::Bogus);   \
   }                                                                            \
   TEST(SUITE, Sha1) {                                                          \
-    checkEquiv(ISA, buildSha1IR, "sha1", kPairs, 1, true,                      \
-               Xform::Bogus);                                                  \
+    checkEquiv(ISA, buildSha1IR, "sha1", kPairs, 1, true, Xform::Bogus);       \
   }                                                                            \
   TEST(SUITE, Sha512) {                                                        \
-    checkEquiv(ISA, buildSha512IR, "sha512", kPairs, 1, true,                  \
-               Xform::Bogus);                                                  \
+    checkEquiv(ISA, buildSha512IR, "sha512", kPairs, 1, true, Xform::Bogus);   \
   }
 
 PATCH_FULL_BOGUS_SUITE(PatchFullBogus_ELF_x64, kELF_x64)
@@ -33644,81 +33677,81 @@ PATCH_FULL_BOGUS_SUITE(PatchFullBogus_MachO_ARM32, kMachO_ARM32)
     checkEquiv(ISA, buildVecAvxDup256IR, "vdup256", kPairs, 1, true,           \
                Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, CmpNe256) {                                                       \
-    checkEquiv(ISA, buildVecAvxCmpNe256IR, "vcmpne256", kPairs, 1, true,        \
-               Xform::Indirect);                                                \
+  TEST(SUITE, CmpNe256) {                                                      \
+    checkEquiv(ISA, buildVecAvxCmpNe256IR, "vcmpne256", kPairs, 1, true,       \
+               Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, AddSub256) {                                                      \
-    checkEquiv(ISA, buildVecAvxAddSub256IR, "vaddsub256", kPairs, 1, true,      \
-               Xform::Indirect);                                                \
+  TEST(SUITE, AddSub256) {                                                     \
+    checkEquiv(ISA, buildVecAvxAddSub256IR, "vaddsub256", kPairs, 1, true,     \
+               Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, HAddSub256) {                                                     \
-    checkEquiv(ISA, buildVecAvxHAddSub256IR, "vhaddsub256", kPairs, 1, true,    \
-               Xform::Indirect);                                                \
+  TEST(SUITE, HAddSub256) {                                                    \
+    checkEquiv(ISA, buildVecAvxHAddSub256IR, "vhaddsub256", kPairs, 1, true,   \
+               Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, FLogic256) {                                                      \
-    checkEquiv(ISA, buildVecAvxFLogic256IR, "vflogic256", kPairs, 1, true,      \
-               Xform::Indirect);                                                \
+  TEST(SUITE, FLogic256) {                                                     \
+    checkEquiv(ISA, buildVecAvxFLogic256IR, "vflogic256", kPairs, 1, true,     \
+               Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, Unpack256) {                                                      \
-    checkEquiv(ISA, buildVecAvxUnpack256IR, "vunpack256", kPairs, 1, true,      \
-               Xform::Indirect);                                                \
+  TEST(SUITE, Unpack256) {                                                     \
+    checkEquiv(ISA, buildVecAvxUnpack256IR, "vunpack256", kPairs, 1, true,     \
+               Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, IUnpack256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIUnpack256IR, "viunpack256", kPairs, 1, true,      \
-               Xform::Indirect);                                                \
+  TEST(SUITE, IUnpack256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIUnpack256IR, "viunpack256", kPairs, 1, true,   \
+               Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, VarShift256) {                                                      \
-    checkEquiv(ISA, buildVecAvxVarShift256IR, "vvshift256", kPairs, 1, true,      \
-               Xform::Indirect);                                                \
+  TEST(SUITE, VarShift256) {                                                   \
+    checkEquiv(ISA, buildVecAvxVarShift256IR, "vvshift256", kPairs, 1, true,   \
+               Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, IArith256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIArith256IR, "viarith256", kPairs, 1, true,      \
-               Xform::Indirect);                                                \
+  TEST(SUITE, IArith256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIArith256IR, "viarith256", kPairs, 1, true,     \
+               Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, IMinMax256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIMinMax256IR, "viminmax256", kPairs, 1, true,    \
-               Xform::Indirect);                                                \
+  TEST(SUITE, IMinMax256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIMinMax256IR, "viminmax256", kPairs, 1, true,   \
+               Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, ICmp256) {                                                        \
-    checkEquiv(ISA, buildVecAvxICmp256IR, "vicmp256", kPairs, 1, true,          \
-               Xform::Indirect);                                                \
+  TEST(SUITE, ICmp256) {                                                       \
+    checkEquiv(ISA, buildVecAvxICmp256IR, "vicmp256", kPairs, 1, true,         \
+               Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, ICmpBWQ256) {                                                     \
-    checkEquiv(ISA, buildVecAvxICmpBWQ256IR, "vicmpbwq256", kPairs, 1, true,    \
-               Xform::Indirect);                                                \
+  TEST(SUITE, ICmpBWQ256) {                                                    \
+    checkEquiv(ISA, buildVecAvxICmpBWQ256IR, "vicmpbwq256", kPairs, 1, true,   \
+               Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, GatherD256) {                                                     \
-    checkEquiv(ISA, buildVecAvxGatherD256IR, "vgatherd256", kPairs, 1, true,    \
-               Xform::Indirect);                                                \
+  TEST(SUITE, GatherD256) {                                                    \
+    checkEquiv(ISA, buildVecAvxGatherD256IR, "vgatherd256", kPairs, 1, true,   \
+               Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, GatherDQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxGatherDQ256IR, "vgatherdq256", kPairs, 1, true,  \
-               Xform::Indirect);                                                \
+  TEST(SUITE, GatherDQ256) {                                                   \
+    checkEquiv(ISA, buildVecAvxGatherDQ256IR, "vgatherdq256", kPairs, 1, true, \
+               Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, GatherQD256) {                                                    \
-    checkEquiv(ISA, buildVecAvxGatherQD256IR, "vgatherqd256", kPairs, 1, true,  \
-               Xform::Indirect);                                                \
+  TEST(SUITE, GatherQD256) {                                                   \
+    checkEquiv(ISA, buildVecAvxGatherQD256IR, "vgatherqd256", kPairs, 1, true, \
+               Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, GatherQQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxGatherQQ256IR, "vgatherqq256", kPairs, 1, true,  \
-               Xform::Indirect);                                                \
+  TEST(SUITE, GatherQQ256) {                                                   \
+    checkEquiv(ISA, buildVecAvxGatherQQ256IR, "vgatherqq256", kPairs, 1, true, \
+               Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, MaskMov256) {                                                     \
-    checkEquiv(ISA, buildVecAvxMaskMov256IR, "vmaskmov256", kPairs, 1, true,    \
-               Xform::Indirect);                                                \
+  TEST(SUITE, MaskMov256) {                                                    \
+    checkEquiv(ISA, buildVecAvxMaskMov256IR, "vmaskmov256", kPairs, 1, true,   \
+               Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, MaskMovQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxMaskMovQ256IR, "vmaskmovq256", kPairs, 1, true,  \
-               Xform::Indirect);                                                \
+  TEST(SUITE, MaskMovQ256) {                                                   \
+    checkEquiv(ISA, buildVecAvxMaskMovQ256IR, "vmaskmovq256", kPairs, 1, true, \
+               Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, MaskMovPS256) {                                                   \
-    checkEquiv(ISA, buildVecAvxMaskMovPS256IR, "vmaskmovps256", kPairs, 1, true,\
-               Xform::Indirect);                                                \
+  TEST(SUITE, MaskMovPS256) {                                                  \
+    checkEquiv(ISA, buildVecAvxMaskMovPS256IR, "vmaskmovps256", kPairs, 1,     \
+               true, Xform::Indirect);                                         \
   }                                                                            \
-  TEST(SUITE, MaskMovPD256) {                                                   \
-    checkEquiv(ISA, buildVecAvxMaskMovPD256IR, "vmaskmovpd256", kPairs, 1, true,\
-               Xform::Indirect);                                                \
+  TEST(SUITE, MaskMovPD256) {                                                  \
+    checkEquiv(ISA, buildVecAvxMaskMovPD256IR, "vmaskmovpd256", kPairs, 1,     \
+               true, Xform::Indirect);                                         \
   }                                                                            \
   TEST(SUITE, Crc32) {                                                         \
     checkEquiv(ISA, buildScalarCrc32IR, "crc32acc", kPairs, 1, true,           \
@@ -33728,125 +33761,125 @@ PATCH_FULL_BOGUS_SUITE(PatchFullBogus_MachO_ARM32, kMachO_ARM32)
     checkEquiv(ISA, buildPolyMulIR, "polymul", kPairs, 1, true,                \
                Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, UShift256) {                                                      \
-    checkEquiv(ISA, buildVecAvxUShift256IR, "vushift256", kPairs, 1, true,      \
-               Xform::Indirect);                                                \
+  TEST(SUITE, UShift256) {                                                     \
+    checkEquiv(ISA, buildVecAvxUShift256IR, "vushift256", kPairs, 1, true,     \
+               Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, IPMadd256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIPMadd256IR, "vipmadd256", kPairs, 1, true,      \
-               Xform::Indirect);                                                \
+  TEST(SUITE, IPMadd256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIPMadd256IR, "vipmadd256", kPairs, 1, true,     \
+               Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, IAbs256) {                                                        \
-    checkEquiv(ISA, buildVecAvxIAbs256IR, "viabs256", kPairs, 1, true,          \
-               Xform::Indirect);                                                \
+  TEST(SUITE, IAbs256) {                                                       \
+    checkEquiv(ISA, buildVecAvxIAbs256IR, "viabs256", kPairs, 1, true,         \
+               Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, IAvg256) {                                                        \
-    checkEquiv(ISA, buildVecAvxIAvg256IR, "viavg256", kPairs, 1, true,          \
-               Xform::Indirect);                                                \
+  TEST(SUITE, IAvg256) {                                                       \
+    checkEquiv(ISA, buildVecAvxIAvg256IR, "viavg256", kPairs, 1, true,         \
+               Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, IMaddUB256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIMaddUB256IR, "vimaddub256", kPairs, 1, true,    \
-               Xform::Indirect);                                                \
+  TEST(SUITE, IMaddUB256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIMaddUB256IR, "vimaddub256", kPairs, 1, true,   \
+               Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, IMulH256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIMulH256IR, "vimulh256", kPairs, 1, true,        \
-               Xform::Indirect);                                                \
+  TEST(SUITE, IMulH256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIMulH256IR, "vimulh256", kPairs, 1, true,       \
+               Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, IMulHRS256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIMulHRS256IR, "vimulhrs256", kPairs, 1, true,    \
-               Xform::Indirect);                                                \
+  TEST(SUITE, IMulHRS256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIMulHRS256IR, "vimulhrs256", kPairs, 1, true,   \
+               Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, ISad256) {                                                        \
-    checkEquiv(ISA, buildVecAvxISad256IR, "visad256", kPairs, 1, true,          \
-               Xform::Indirect);                                                \
+  TEST(SUITE, ISad256) {                                                       \
+    checkEquiv(ISA, buildVecAvxISad256IR, "visad256", kPairs, 1, true,         \
+               Xform::Indirect);                                               \
   }                                                                            \
-  TEST(SUITE, ISign256) {                                                       \
-    checkEquiv(ISA, buildVecAvxISign256IR, "visign256", kPairs, 1, true,        \
-               Xform::Indirect);                                                \
-  }                                                                             \
-  TEST(SUITE, IHAdd256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIHAdd256IR, "vihadd256", kPairs, 1, true,        \
-               Xform::Indirect);                                                \
-  }                                                                             \
-  TEST(SUITE, IPerm256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIPerm256IR, "viperm256", kPairs, 1, true,        \
-               Xform::Indirect);                                                \
-  }                                                                             \
-  TEST(SUITE, IHAddSW256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIHAddSW256IR, "vihaddsw256", kPairs, 1, true,    \
-               Xform::Indirect);                                                \
-  }                                                                             \
-  TEST(SUITE, IBlendW256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIBlendW256IR, "viblendw256", kPairs, 1, true,    \
-               Xform::Indirect);                                                \
-  }                                                                             \
-  TEST(SUITE, IPack256) {                                                       \
-    checkEquiv(ISA, buildVecAvxIPack256IR, "vipack256", kPairs, 1, true,        \
-               Xform::Indirect);                                                \
-  }                                                                             \
-  TEST(SUITE, IShufB256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIShufB256IR, "vishufb256", kPairs, 1, true,      \
-               Xform::Indirect);                                                \
-  }                                                                             \
-  TEST(SUITE, IMovMskB256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIMovMskB256IR, "vimovmskb256", kPairs, 1, true,  \
-               Xform::Indirect);                                                \
-  }                                                                             \
-  TEST(SUITE, IBlendVB256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIBlendVB256IR, "viblendvb256", kPairs, 1, true,  \
-               Xform::Indirect);                                                \
-  }                                                                             \
-  TEST(SUITE, IMulDQ256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIMulDQ256IR, "vimuldq256", kPairs, 1, true,      \
-               Xform::Indirect);                                                \
-  }                                                                             \
-  TEST(SUITE, IPackD256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIPackD256IR, "vipackd256", kPairs, 1, true,      \
-               Xform::Indirect);                                                \
-  }                                                                             \
-  TEST(SUITE, IHAddW256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIHAddW256IR, "vihaddw256", kPairs, 1, true,      \
-               Xform::Indirect);                                                \
-  }                                                                             \
-  TEST(SUITE, ISignBW256) {                                                     \
-    checkEquiv(ISA, buildVecAvxISignBW256IR, "visignbw256", kPairs, 1, true,    \
-               Xform::Indirect);                                                \
-  }                                                                             \
-  TEST(SUITE, IShufD256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIShufD256IR, "vishufd256", kPairs, 1, true,      \
-               Xform::Indirect);                                                \
-  }                                                                             \
-  TEST(SUITE, IShufW256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIShufW256IR, "vishufw256", kPairs, 1, true,      \
-               Xform::Indirect);                                                \
-  }                                                                             \
-  TEST(SUITE, IAlignR256) {                                                     \
-    checkEquiv(ISA, buildVecAvxIAlignR256IR, "vialignr256", kPairs, 1, true,    \
-               Xform::Indirect);                                                \
-  }                                                                             \
-  TEST(SUITE, IBShiftDQ256) {                                                   \
-    checkEquiv(ISA, buildVecAvxIBShiftDQ256IR, "vibshiftdq256", kPairs, 1, true,\
-               Xform::Indirect);                                                \
-  }                                                                             \
-  TEST(SUITE, IBroadcast256) {                                                  \
-    checkEquiv(ISA, buildVecAvxIBroadcast256IR, "vibroadcast256", kPairs, 1,    \
-               true, Xform::Indirect);                                          \
-  }                                                                             \
-  TEST(SUITE, IMpsad256) {                                                      \
-    checkEquiv(ISA, buildVecAvxIMpsadbw256IR, "vimpsad256", kPairs, 1,          \
-               true, Xform::Indirect);                                          \
+  TEST(SUITE, ISign256) {                                                      \
+    checkEquiv(ISA, buildVecAvxISign256IR, "visign256", kPairs, 1, true,       \
+               Xform::Indirect);                                               \
+  }                                                                            \
+  TEST(SUITE, IHAdd256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIHAdd256IR, "vihadd256", kPairs, 1, true,       \
+               Xform::Indirect);                                               \
+  }                                                                            \
+  TEST(SUITE, IPerm256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIPerm256IR, "viperm256", kPairs, 1, true,       \
+               Xform::Indirect);                                               \
+  }                                                                            \
+  TEST(SUITE, IHAddSW256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIHAddSW256IR, "vihaddsw256", kPairs, 1, true,   \
+               Xform::Indirect);                                               \
+  }                                                                            \
+  TEST(SUITE, IBlendW256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIBlendW256IR, "viblendw256", kPairs, 1, true,   \
+               Xform::Indirect);                                               \
+  }                                                                            \
+  TEST(SUITE, IPack256) {                                                      \
+    checkEquiv(ISA, buildVecAvxIPack256IR, "vipack256", kPairs, 1, true,       \
+               Xform::Indirect);                                               \
+  }                                                                            \
+  TEST(SUITE, IShufB256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIShufB256IR, "vishufb256", kPairs, 1, true,     \
+               Xform::Indirect);                                               \
+  }                                                                            \
+  TEST(SUITE, IMovMskB256) {                                                   \
+    checkEquiv(ISA, buildVecAvxIMovMskB256IR, "vimovmskb256", kPairs, 1, true, \
+               Xform::Indirect);                                               \
+  }                                                                            \
+  TEST(SUITE, IBlendVB256) {                                                   \
+    checkEquiv(ISA, buildVecAvxIBlendVB256IR, "viblendvb256", kPairs, 1, true, \
+               Xform::Indirect);                                               \
+  }                                                                            \
+  TEST(SUITE, IMulDQ256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIMulDQ256IR, "vimuldq256", kPairs, 1, true,     \
+               Xform::Indirect);                                               \
+  }                                                                            \
+  TEST(SUITE, IPackD256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIPackD256IR, "vipackd256", kPairs, 1, true,     \
+               Xform::Indirect);                                               \
+  }                                                                            \
+  TEST(SUITE, IHAddW256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIHAddW256IR, "vihaddw256", kPairs, 1, true,     \
+               Xform::Indirect);                                               \
+  }                                                                            \
+  TEST(SUITE, ISignBW256) {                                                    \
+    checkEquiv(ISA, buildVecAvxISignBW256IR, "visignbw256", kPairs, 1, true,   \
+               Xform::Indirect);                                               \
+  }                                                                            \
+  TEST(SUITE, IShufD256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIShufD256IR, "vishufd256", kPairs, 1, true,     \
+               Xform::Indirect);                                               \
+  }                                                                            \
+  TEST(SUITE, IShufW256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIShufW256IR, "vishufw256", kPairs, 1, true,     \
+               Xform::Indirect);                                               \
+  }                                                                            \
+  TEST(SUITE, IAlignR256) {                                                    \
+    checkEquiv(ISA, buildVecAvxIAlignR256IR, "vialignr256", kPairs, 1, true,   \
+               Xform::Indirect);                                               \
+  }                                                                            \
+  TEST(SUITE, IBShiftDQ256) {                                                  \
+    checkEquiv(ISA, buildVecAvxIBShiftDQ256IR, "vibshiftdq256", kPairs, 1,     \
+               true, Xform::Indirect);                                         \
+  }                                                                            \
+  TEST(SUITE, IBroadcast256) {                                                 \
+    checkEquiv(ISA, buildVecAvxIBroadcast256IR, "vibroadcast256", kPairs, 1,   \
+               true, Xform::Indirect);                                         \
+  }                                                                            \
+  TEST(SUITE, IMpsad256) {                                                     \
+    checkEquiv(ISA, buildVecAvxIMpsadbw256IR, "vimpsad256", kPairs, 1, true,   \
+               Xform::Indirect);                                               \
   }                                                                            \
   TEST(SUITE, IVPerm2I256) {                                                   \
-    checkEquiv(ISA, buildVecAvxIVPerm2I256IR, "vperm2i256", kPairs, 1,         \
-               true, Xform::Indirect);                                         \
+    checkEquiv(ISA, buildVecAvxIVPerm2I256IR, "vperm2i256", kPairs, 1, true,   \
+               Xform::Indirect);                                               \
   }                                                                            \
   TEST(SUITE, IVPermQ256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIVPermQ256IR, "vpermq256", kPairs, 1,           \
-               true, Xform::Indirect);                                         \
+    checkEquiv(ISA, buildVecAvxIVPermQ256IR, "vpermq256", kPairs, 1, true,     \
+               Xform::Indirect);                                               \
   }                                                                            \
   TEST(SUITE, IBlendD256) {                                                    \
-    checkEquiv(ISA, buildVecAvxIBlendD256IR, "viblendd256", kPairs, 1,         \
-               true, Xform::Indirect);                                         \
+    checkEquiv(ISA, buildVecAvxIBlendD256IR, "viblendd256", kPairs, 1, true,   \
+               Xform::Indirect);                                               \
   }                                                                            \
   TEST(SUITE, IMovExtBW256) {                                                  \
     checkEquiv(ISA, buildVecAvxIMovExtBW256IR, "vimovextbw256", kPairs, 1,     \
@@ -33873,47 +33906,47 @@ PATCH_FULL_BOGUS_SUITE(PatchFullBogus_MachO_ARM32, kMachO_ARM32)
                true, Xform::Indirect);                                         \
   }                                                                            \
   TEST(SUITE, BlendV256) {                                                     \
-    checkEquiv(ISA, buildVecAvxBlendV256IR, "vblendv256", kPairs, 1,           \
-               true, Xform::Indirect);                                         \
+    checkEquiv(ISA, buildVecAvxBlendV256IR, "vblendv256", kPairs, 1, true,     \
+               Xform::Indirect);                                               \
   }                                                                            \
   TEST(SUITE, RcpRsqrt256) {                                                   \
-    checkEquiv(ISA, buildVecAvxRcpRsqrt256IR, "vrcprsqrt256", kPairs, 1,       \
-               true, Xform::Indirect);                                         \
+    checkEquiv(ISA, buildVecAvxRcpRsqrt256IR, "vrcprsqrt256", kPairs, 1, true, \
+               Xform::Indirect);                                               \
   }                                                                            \
   TEST(SUITE, AesEnc128) {                                                     \
-    checkEquiv(ISA, buildVecAesEnc128IR, "vaesenc128", kPairs, 1,              \
-               true, Xform::Indirect);                                         \
+    checkEquiv(ISA, buildVecAesEnc128IR, "vaesenc128", kPairs, 1, true,        \
+               Xform::Indirect);                                               \
   }                                                                            \
   TEST(SUITE, AesDec128) {                                                     \
-    checkEquiv(ISA, buildVecAesDec128IR, "vaesdec128", kPairs, 1,              \
-               true, Xform::Indirect);                                         \
+    checkEquiv(ISA, buildVecAesDec128IR, "vaesdec128", kPairs, 1, true,        \
+               Xform::Indirect);                                               \
   }                                                                            \
   TEST(SUITE, AesImc128) {                                                     \
-    checkEquiv(ISA, buildVecAesImc128IR, "vaesimc128", kPairs, 1,              \
-               true, Xform::Indirect);                                         \
+    checkEquiv(ISA, buildVecAesImc128IR, "vaesimc128", kPairs, 1, true,        \
+               Xform::Indirect);                                               \
   }                                                                            \
   TEST(SUITE, AesLast128) {                                                    \
-    checkEquiv(ISA, buildVecAesLast128IR, "vaeslast128", kPairs, 1,            \
-               true, Xform::Indirect);                                         \
+    checkEquiv(ISA, buildVecAesLast128IR, "vaeslast128", kPairs, 1, true,      \
+               Xform::Indirect);                                               \
   }                                                                            \
   TEST(SUITE, AesKeyGen128) {                                                  \
-    checkEquiv(ISA, buildVecAesKeyGen128IR, "vaeskeygen128", kPairs, 1,        \
-               true, Xform::Indirect);                                         \
+    checkEquiv(ISA, buildVecAesKeyGen128IR, "vaeskeygen128", kPairs, 1, true,  \
+               Xform::Indirect);                                               \
   }                                                                            \
   TEST(SUITE, PdepPext) {                                                      \
-    checkEquiv(ISA, buildPdepPextIR, "pdeppext", kPairs, 1,                    \
-               true, Xform::Indirect);                                         \
+    checkEquiv(ISA, buildPdepPextIR, "pdeppext", kPairs, 1, true,              \
+               Xform::Indirect);                                               \
   }                                                                            \
   TEST(SUITE, PhMinPosUW128) {                                                 \
-    checkEquiv(ISA, buildVecPhMinPosUW128IR, "vphminpos128", kPairs, 1,        \
-               true, Xform::Indirect);                                         \
+    checkEquiv(ISA, buildVecPhMinPosUW128IR, "vphminpos128", kPairs, 1, true,  \
+               Xform::Indirect);                                               \
   }                                                                            \
   TEST(SUITE, DpProd128) {                                                     \
     checkEquiv(ISA, buildVecDpProd128IR, "vdp128", kPairs, 1, true,            \
                Xform::Indirect);                                               \
   }                                                                            \
   TEST(SUITE, BmiBits) {                                                       \
-    checkEquiv(ISA, buildBmiBitsIR, "bmibits", kPairs, 1, true,               \
+    checkEquiv(ISA, buildBmiBitsIR, "bmibits", kPairs, 1, true,                \
                Xform::Indirect);                                               \
   }                                                                            \
   TEST(SUITE, Sha256) {                                                        \
@@ -33921,8 +33954,7 @@ PATCH_FULL_BOGUS_SUITE(PatchFullBogus_MachO_ARM32, kMachO_ARM32)
                Xform::Indirect);                                               \
   }                                                                            \
   TEST(SUITE, Sha1) {                                                          \
-    checkEquiv(ISA, buildSha1IR, "sha1", kPairs, 1, true,                      \
-               Xform::Indirect);                                               \
+    checkEquiv(ISA, buildSha1IR, "sha1", kPairs, 1, true, Xform::Indirect);    \
   }                                                                            \
   TEST(SUITE, Sha512) {                                                        \
     checkEquiv(ISA, buildSha512IR, "sha512", kPairs, 1, true,                  \
@@ -34257,8 +34289,7 @@ std::string ndBinary() {
 
 bool haveClang() {
   auto Cmd = std::string("clang --version") + neverd::test::silenceOutput();
-  return neverd::test::systemExitCode(
-             neverd::test::runShellCommand(Cmd)) == 0;
+  return neverd::test::systemExitCode(neverd::test::runShellCommand(Cmd)) == 0;
 }
 
 int runExit(const std::string &Cmd) {
@@ -35624,8 +35655,8 @@ int main(int argc, char **argv) {
 // making the pure-GP pair look like a mixed int+FP shape that
 // modelCallStructReturn rejected
 // -- modelCallFPReturn then claimed the call output as V0 and the
-// SUBBYTES/CONCAT rebuild used the stale pre-call x1 (= argument b) for the high
-// half (`h=b, l=0`). Exercises __int128 return (mul128/add128), __int128
+// SUBBYTES/CONCAT rebuild used the stale pre-call x1 (= argument b) for the
+// high half (`h=b, l=0`). Exercises __int128 return (mul128/add128), __int128
 // by-value arguments (hi/lo), and a non-zero high half (1e20).  Checks stdout
 // so both halves are verified.
 const char *kHostI128RetProgram = R"C(
@@ -36201,7 +36232,10 @@ TEST(PatchFullMachOUnwind_HostE2E, CompactUnwindOnlyInputFailsClosed) {
   fs::remove(Patched, EC);
   ASSERT_FALSE(EC) << "cannot clear stale host-test output";
 
-  ASSERT_TRUE(compileHostProgram(Dir, kHostProgram, Exe, "-O0",
+  // The test binary can be arm64 while its shell inherits a Rosetta x86_64
+  // architecture preference.  Pin the fixture to the AArch64 contract this
+  // platform-gated test is intended to exercise.
+  ASSERT_TRUE(compileHostProgram(Dir, kHostProgram, Exe, "-O0 -arch arm64",
                                  /*AddMachODwarfAnchor=*/false));
   const std::string Command = neverd::test::shellQuote(ndBinary()) + " patch " +
                               neverd::test::shellQuote(Exe) + " --subst -o " +

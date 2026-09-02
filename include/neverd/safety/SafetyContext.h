@@ -19,9 +19,13 @@
 
 #include "neverd/Common.h"
 #include "neverd/debug/DebugInfoDiscovery.h"
+#include "neverd/safety/SafetyTypes.h"
 
+#include <cstddef>
 #include <map>
+#include <optional>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -34,6 +38,19 @@ struct PipelineResult;
 class DebugContext;
 
 namespace safety {
+
+/// Exact formal-parameter identity: function entry plus canonical ordinal.
+/// MedIR variable ids are not sufficient because promoted register parameters
+/// may deliberately share a synthetic id while occupying different ABI slots.
+using ParameterFlowKey = std::tuple<va_t, size_t>;
+
+struct ParameterFlow {
+  ArgFlow Flow = ArgFlow::Unknown;
+  std::string Source;
+  std::optional<ReachabilityWitness> Witness;
+};
+
+using ParameterFlowMap = std::map<ParameterFlowKey, ParameterFlow>;
 
 /// A read-only view of everything the analyses consume.  The pipeline must have
 /// run in lift mode so each MedFunc carries recovered call arguments.
@@ -64,6 +81,10 @@ struct AnalysisInput {
   /// name and its origin together prevents a signature-only identity from being
   /// labelled `sig` while the scanner still tries to match a stale placeholder.
   const std::unordered_map<va_t, std::string> *SignatureNames = nullptr;
+
+  /// Optional interprocedural facts for exact MedIR parameters.  When absent,
+  /// the slicer retains its standalone, intraprocedural behavior.
+  const ParameterFlowMap *ParameterFlows = nullptr;
 
   const MedFunc *findMedFunc(va_t Entry) const;
   const LowFunc *findLowFunc(va_t Entry) const;

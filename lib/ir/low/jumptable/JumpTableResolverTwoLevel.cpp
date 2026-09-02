@@ -55,13 +55,12 @@ struct BoundedRelocationRun {
 
 template <typename ConsumeLookup>
 static std::optional<BoundedRelocationRun>
-relocRunIn(const std::set<uint64_t> &Slots, va_t TableAddr,
-           uint16_t EntrySize, uint64_t OwnerEntries,
-           ConsumeLookup &&Consume) {
+relocRunIn(const std::set<uint64_t> &Slots, va_t TableAddr, uint16_t EntrySize,
+           uint64_t OwnerEntries, ConsumeLookup &&Consume) {
   if (EntrySize == 0 || Slots.empty() || OwnerEntries == 0)
     return BoundedRelocationRun{};
-  const uint32_t ScanLimit = static_cast<uint32_t>(std::min<uint64_t>(
-      OwnerEntries, limits::kMaxJumpTableEntries));
+  const uint32_t ScanLimit = static_cast<uint32_t>(
+      std::min<uint64_t>(OwnerEntries, limits::kMaxJumpTableEntries));
   uint32_t Run = 0;
   va_t VA = TableAddr;
   for (; Run < ScanLimit;) {
@@ -105,8 +104,7 @@ bool CFGBuilder::decomposeIndexTableLoadAddr(
   // reaching-definition lookup; foldRegConstant debits its own prefix work
   // through the same callback below.
   if (ConsumeWork) {
-    constexpr size_t ScanFactor =
-        size_t(limits::kMaxQuasiCopyDepth) * 8;
+    constexpr size_t ScanFactor = size_t(limits::kMaxQuasiCopyDepth) * 8;
     if (Ops.size() > std::numeric_limits<size_t>::max() / ScanFactor) {
       ConsumeWork(std::numeric_limits<size_t>::max());
       return false;
@@ -142,8 +140,7 @@ bool CFGBuilder::decomposeIndexTableLoadAddr(
       uint64_t BaseReg = traceToRegister(Ops, AddIdx - 1, BaseV);
       if (BaseReg == InvalidVA)
         continue;
-      auto Folded =
-          foldRegConstant(Img, Rec, BaseReg, LoadAddr, ConsumeWork);
+      auto Folded = foldRegConstant(Img, Rec, BaseReg, LoadAddr, ConsumeWork);
       if (!Folded)
         continue;
       Base = *Folded;
@@ -239,9 +236,8 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
       [&](std::initializer_list<std::pair<size_t, size_t>> Products) {
         size_t Total = 0;
         for (const auto &[Count, Cost] : Products) {
-          if (Count != 0 && Cost >
-                                (std::numeric_limits<size_t>::max() - Total) /
-                                    Count)
+          if (Count != 0 &&
+              Cost > (std::numeric_limits<size_t>::max() - Total) / Count)
             return consumeEvidence(std::numeric_limits<size_t>::max());
           Total += Count * Cost;
         }
@@ -250,8 +246,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   auto consumeFactorProduct = [&](std::initializer_list<size_t> Factors) {
     size_t Product = 1;
     for (size_t Factor : Factors) {
-      if (Factor != 0 &&
-          Product > std::numeric_limits<size_t>::max() / Factor)
+      if (Factor != 0 && Product > std::numeric_limits<size_t>::max() / Factor)
         return consumeEvidence(std::numeric_limits<size_t>::max());
       Product *= Factor;
     }
@@ -313,8 +308,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
                         {1, 2}}) ||
       !consumeFactorProduct(
           {PathDepth, Insns.size(), 1 + VisitedLookup + BlockLookup + 3}) ||
-      !consumeFactorProduct(
-          {PathDepth, PathDepth + 1, VisitedLookup + 4}) ||
+      !consumeFactorProduct({PathDepth, PathDepth + 1, VisitedLookup + 4}) ||
       !consumeFactorProduct({PathOpInventory, PathDepth + 1, 8}))
     return false;
 
@@ -327,13 +321,11 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   // ordinary candidate roots, so suppressing relocation-discovered case roots
   // here must debit the same candidate transaction before any set/vector work.
   auto budgetedProofRoots =
-      [&](const JumpTableInfo &Candidate)
-      -> std::optional<std::set<va_t>> {
+      [&](const JumpTableInfo &Candidate) -> std::optional<std::set<va_t>> {
     if (!CurrentImg)
       return std::nullopt;
     size_t StorageCount = Candidate.StorageRanges.size();
-    size_t SuppressibleSlotCount =
-        Candidate.SuppressibleRelocationSlots.size();
+    size_t SuppressibleSlotCount = Candidate.SuppressibleRelocationSlots.size();
     if (!consumeEvidence(PriorStrongJumpTableProposals.size()))
       return std::nullopt;
     for (const auto &[Addr, Proposal] : PriorStrongJumpTableProposals) {
@@ -349,22 +341,20 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
         return std::nullopt;
       }
       StorageCount += Proposal.StorageRanges.size();
-      SuppressibleSlotCount +=
-          Proposal.SuppressibleRelocationSlots.size();
+      SuppressibleSlotCount += Proposal.SuppressibleRelocationSlots.size();
     }
-    if (!consumeProducts(
-            {{PersistentCFGRoots.size(), 2},
-             {RelocatedInstructionAddressOccurrences.size(), 2},
-             {StorageCount, 2},
-             {Candidate.ExplicitTargets.size(), 2},
-             {SuppressibleSlotCount, 4},
-             {ProtectedJumpTableRelocationSlots
-                  ? ProtectedJumpTableRelocationSlots->size()
-                  : 0,
-              1},
-             {SuppressibleSlotCount, StorageCount},
-             {SuppressibleSlotCount, CurrentImg->Segments.size()},
-             {RelocationCFGRootSources.size(), 2}}))
+    if (!consumeProducts({{PersistentCFGRoots.size(), 2},
+                          {RelocatedInstructionAddressOccurrences.size(), 2},
+                          {StorageCount, 2},
+                          {Candidate.ExplicitTargets.size(), 2},
+                          {SuppressibleSlotCount, 4},
+                          {ProtectedJumpTableRelocationSlots
+                               ? ProtectedJumpTableRelocationSlots->size()
+                               : 0,
+                           1},
+                          {SuppressibleSlotCount, StorageCount},
+                          {SuppressibleSlotCount, CurrentImg->Segments.size()},
+                          {RelocationCFGRootSources.size(), 2}}))
       return std::nullopt;
     if (StorageCount > std::numeric_limits<size_t>::max() - 2) {
       consumeEvidence(std::numeric_limits<size_t>::max());
@@ -963,9 +953,9 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
       return false;
     size_t LocalPointerLoads = 0;
     for (const LowOp &Op : LocalOps)
-      LocalPointerLoads +=
-          Op.Opcode == NdOp::LOAD &&
-          Op.Output.Size == Img.getPointerSize() && Op.NumInputs >= 1;
+      LocalPointerLoads += Op.Opcode == NdOp::LOAD &&
+                           Op.Output.Size == Img.getPointerSize() &&
+                           Op.NumInputs >= 1;
     if (!consumeFactorProduct({LocalPointerLoads, LocalCount,
                                size_t(limits::kMaxQuasiCopyDepth), 16}))
       return false;
@@ -1132,26 +1122,23 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   // mapped base.  Include every nested getSegmentFor/getSectionFor performed
   // by mappedObjectOwnerEnd and isCodeAddress, plus the sectionless-symbol
   // fallback.  The fold emulation itself is charged through ConsumeWork.
-  if (!consumeProducts(
-          {{Img.Segments.size(), 12},
-           {Img.Sections.size(), 6},
-           {Img.Symbols.size(), 1}}))
+  if (!consumeProducts({{Img.Segments.size(), 12},
+                        {Img.Sections.size(), 6},
+                        {Img.Symbols.size(), 1}}))
     return false;
-  if (!decomposeIndexTableLoadAddr(Img, Rec, Ops, IdxLoadIdx, W1, IdxTab,
-                                   SwitchIdxReg, IdxScale, &SwitchIndexValue,
-                                   &SwitchIndexUseAddr, &SwitchIndexUseSeq,
-                                   [&](size_t Amount) {
-                                     return consumeEvidence(Amount);
-                                   }))
+  if (!decomposeIndexTableLoadAddr(
+          Img, Rec, Ops, IdxLoadIdx, W1, IdxTab, SwitchIdxReg, IdxScale,
+          &SwitchIndexValue, &SwitchIndexUseAddr, &SwitchIndexUseSeq,
+          [&](size_t Amount) { return consumeEvidence(Amount); }))
     return false;
 
   // 4) Fold the address-table base and confirm it is distinct from idxtab.
   va_t JmpTab = 0;
   {
     va_t FoldAt = Ops[JmpLoadIdx].Addr;
-    auto Folded = foldRegConstant(
-        Img, Rec, JmpBaseReg, FoldAt,
-        [&](size_t Amount) { return consumeEvidence(Amount); });
+    auto Folded =
+        foldRegConstant(Img, Rec, JmpBaseReg, FoldAt,
+                        [&](size_t Amount) { return consumeEvidence(Amount); });
     if (!Folded || !Img.getSegmentFor(*Folded))
       return false;
     JmpTab = *Folded;
@@ -1181,9 +1168,8 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   const size_t CodePtrRelocLookup =
       orderedLookupWork(Img.CodePtrRelocSlots.size()) + 1;
   const auto AbsoluteRun =
-      relocRunIn(Img.CodePtrRelocSlots, JmpTab, W2, OwnerEntries, [&] {
-        return consumeEvidence(CodePtrRelocLookup);
-      });
+      relocRunIn(Img.CodePtrRelocSlots, JmpTab, W2, OwnerEntries,
+                 [&] { return consumeEvidence(CodePtrRelocLookup); });
   if (!AbsoluteRun)
     return false;
   uint32_t M = AbsoluteRun->Count;
@@ -1192,9 +1178,8 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
     const size_t RelCodeRelocLookup =
         orderedLookupWork(Img.RelCodeRelocSlots.size()) + 1;
     const auto RelativeRun =
-        relocRunIn(Img.RelCodeRelocSlots, JmpTab, W2, OwnerEntries, [&] {
-          return consumeEvidence(RelCodeRelocLookup);
-        });
+        relocRunIn(Img.RelCodeRelocSlots, JmpTab, W2, OwnerEntries,
+                   [&] { return consumeEvidence(RelCodeRelocLookup); });
     if (!RelativeRun)
       return false;
     const uint32_t RM = RelativeRun->Count;
@@ -1239,11 +1224,10 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
     }
     PrefixOpCount += It->second.Ops.size();
   }
-  if (!consumeProducts(
-          {{1, orderedLookupWork(Insns.size())},
-           {PrefixRecordCount, 1},
-           {PrefixOpCount, 3},
-           {1, 2}}))
+  if (!consumeProducts({{1, orderedLookupWork(Insns.size())},
+                        {PrefixRecordCount, 1},
+                        {PrefixOpCount, 3},
+                        {1, 2}}))
     return false;
   std::vector<LowOp> Pre;
   Pre.reserve(PrefixOpCount);
@@ -1254,8 +1238,8 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   // Locate the index-table load in the function-prefix ops (by address and
   // output nd-var) so the discriminator below can reason about its result.
   if (!consumeProducts({{Pre.size(), 2}}) ||
-      !consumeFactorProduct({Pre.size(), Pre.size(),
-                             size_t(limits::kMaxQuasiCopyDepth), 2}))
+      !consumeFactorProduct(
+          {Pre.size(), Pre.size(), size_t(limits::kMaxQuasiCopyDepth), 2}))
     return false;
   int IdxLoadInPre = -1;
   {
@@ -1329,8 +1313,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   // identities are known, unsupported or depth-limited clamp semantics are a
   // claimed-but-incomplete composite candidate.  Do not fall through to a
   // generic inner-table resolver that could convert the machine jump to CALL.
-  if (SawClampedIndexSkeleton &&
-      (!Clamp.Present || ClampAnalysisIncomplete)) {
+  if (SawClampedIndexSkeleton && (!Clamp.Present || ClampAnalysisIncomplete)) {
     Info.CompositeShapeClaimed = true;
     Info.IncompleteGuardDomain = true;
     return false;
@@ -1360,25 +1343,23 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
     return false;
   uint16_t SelectorLaneSize = 0;
   if (Clamp.Present) {
-    const uint64_t PredicateSrc =
-        traceRegSource(Ops, Clamp.PredicateIndexBefore,
-                       Clamp.PredicateIndexReg);
+    const uint64_t PredicateSrc = traceRegSource(
+        Ops, Clamp.PredicateIndexBefore, Clamp.PredicateIndexReg);
     if (PredicateSrc == InvalidVA || PredicateSrc != SwitchSrc ||
         Clamp.BitmapBits == 0 ||
         Clamp.FallbackSlot > std::numeric_limits<uint32_t>::max())
       return false;
-    auto localSelectorRoot = [&](NdVar Value, int From)
-        -> std::optional<std::pair<NdVar, bool>> {
+    auto localSelectorRoot =
+        [&](NdVar Value, int From) -> std::optional<std::pair<NdVar, bool>> {
       bool ZeroExtended = false;
       for (size_t Depth = 0; Depth < limits::kMaxQuasiCopyDepth; ++Depth) {
         if (!consumeEvidence(Ops.size()))
           return std::nullopt;
         const int Def = reachingDefIdx(Ops, From, Value);
         if (Def < 0)
-          return Value.isReg()
-                     ? std::optional<std::pair<NdVar, bool>>(
-                           std::in_place, Value, ZeroExtended)
-                     : std::nullopt;
+          return Value.isReg() ? std::optional<std::pair<NdVar, bool>>(
+                                     std::in_place, Value, ZeroExtended)
+                               : std::nullopt;
         const LowOp &Producer = Ops[Def];
         if (Producer.NumInputs < 1)
           return std::nullopt;
@@ -1402,10 +1383,9 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
       Info.IncompleteGuardDomain = true;
       return false;
     }
-    for (int I = static_cast<int>(Ops.size()) - 1;
-         I >= 0 && SwitchUseIndex < 0; --I)
-      if (Ops[I].Addr == SwitchIndexUseAddr &&
-          Ops[I].Seq == SwitchIndexUseSeq)
+    for (int I = static_cast<int>(Ops.size()) - 1; I >= 0 && SwitchUseIndex < 0;
+         --I)
+      if (Ops[I].Addr == SwitchIndexUseAddr && Ops[I].Seq == SwitchIndexUseSeq)
         for (uint8_t Input = 0; Input < Ops[I].NumInputs; ++Input)
           if (sameValue(Ops[I].Inputs[Input], SwitchIndexValue)) {
             SwitchUseIndex = I;
@@ -1426,8 +1406,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
         SwitchRoot->first.Offset != SwitchSrc ||
         (SwitchRoot->first.Size != PredicateRoot->first.Size &&
          !(SwitchRoot->second &&
-           SwitchRoot->first.Size < PredicateRoot->first.Size)))
-    {
+           SwitchRoot->first.Size < PredicateRoot->first.Size))) {
       Info.IncompleteGuardDomain = true;
       return false;
     }
@@ -1496,9 +1475,9 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
     SameOuterSelector.Candidate = Clamp.PredicateIndexValue;
     SameOuterSelector.UseAddr = Clamp.PredicateIndexUseAddr;
     SameOuterSelector.UseSeq = Clamp.PredicateIndexUseSeq;
-    SameOuterSelector.Alternatives = {
-        {SwitchIndexValue, SwitchIndexUseAddr, SwitchIndexUseSeq,
-         /*DefinedAtPoint=*/false}};
+    SameOuterSelector.Alternatives = {{SwitchIndexValue, SwitchIndexUseAddr,
+                                       SwitchIndexUseSeq,
+                                       /*DefinedAtPoint=*/false}};
     SameOuterSelector.Relation = JumpTableValueRelation::MustEqual;
     SameOuterSelector.AllowZeroExtension = true;
 
@@ -1527,10 +1506,9 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
       Query.Relation = JumpTableValueRelation::MustEqual;
       return Query;
     };
-    JumpTableValueQuery FallbackIsConstant =
-        constantProof(Clamp.FallbackValue, Clamp.FallbackUseAddr,
-                      Clamp.FallbackUseSeq, Clamp.FallbackSource,
-                      Clamp.FallbackSlot);
+    JumpTableValueQuery FallbackIsConstant = constantProof(
+        Clamp.FallbackValue, Clamp.FallbackUseAddr, Clamp.FallbackUseSeq,
+        Clamp.FallbackSource, Clamp.FallbackSlot);
     JumpTableValueQuery BitmapIsConstant =
         constantProof(Clamp.BitmapValue, Clamp.BitmapUseAddr,
                       Clamp.BitmapUseSeq, Clamp.BitmapSource, Clamp.Bitmap);
@@ -1566,14 +1544,15 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
         !consumeFactorProduct({M, Img.Symbols.size(), 4}) ||
         !consumeFactorProduct({M, Img.Segments.size(), 16}) ||
         !consumeFactorProduct({M, Img.Sections.size(), 8}) ||
-        !consumeFactorProduct(
-            {M, Img.ExceptionMetadata.Functions.size(),
-             FragmentWorkPerEntry}) ||
+        !consumeFactorProduct({M, Img.ExceptionMetadata.Functions.size(),
+                               FragmentWorkPerEntry}) ||
         !consumeFactorProduct({M, Img.ImportStubRanges.size(), 3}) ||
         !consumeFactorProduct({M, Img.Imports.size(), 2}) ||
         !consumeFactorProduct({M, Img.KnownCodeRanges.size(), 2}) ||
-        !consumeFactorProduct({M, Img.Imports.size(), Img.Segments.size(), 4}) ||
-        !consumeFactorProduct({M, Img.Imports.size(), Img.Sections.size(), 4}) ||
+        !consumeFactorProduct(
+            {M, Img.Imports.size(), Img.Segments.size(), 4}) ||
+        !consumeFactorProduct(
+            {M, Img.Imports.size(), Img.Sections.size(), 4}) ||
         !consumeFactorProduct({M, RuntimeEntryLookup, 2}) ||
         !consumeFactorProduct({M, VerifiedEntryLookup, 2}) ||
         !consumeFactorProduct({M, ImportStubLookup, 2}) ||
@@ -1587,10 +1566,10 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
           Img.readVA(JmpTab + static_cast<uint64_t>(Slot) * W2, W2);
       if (!Entry)
         return false;
-      std::optional<va_t> Target = decodeTableEntry(
-          Entry, W2, Relative, Relative, JmpTab,
-          /*HasTargetBase=*/false, /*TargetBase=*/0, /*Scale=*/1,
-          Img.getPointerSize());
+      std::optional<va_t> Target =
+          decodeTableEntry(Entry, W2, Relative, Relative, JmpTab,
+                           /*HasTargetBase=*/false, /*TargetBase=*/0,
+                           /*Scale=*/1, Img.getPointerSize());
       if (!Target)
         return false;
       if (!Relative)
@@ -1604,8 +1583,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
     Info.PhysicalCapacity = M;
     Info.RelocAbsolute = !Relative;
     Info.ExplicitTargets = std::move(ProofTargets);
-    Info.StorageRanges = {
-        JumpTableStorageRange{JmpTab, W2, W2, M}};
+    Info.StorageRanges = {JumpTableStorageRange{JmpTab, W2, W2, M}};
     if (!Relative) {
       Info.SuppressibleRelocationSlots.reserve(M);
       for (uint32_t Slot = 0; Slot < M; ++Slot)
@@ -1644,8 +1622,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
             ? OrdinaryGuardBound >= limits::kMinJumpTableEntries &&
                   OrdinaryGuardBound <= IdxCap
             : EntryProofComplete && Results[1] && FeasibleMasks[1] != 0 &&
-                  (IdxCap == 64 ||
-                   (FeasibleMasks[1] >> IdxCap) == uint64_t{0});
+                  (IdxCap == 64 || (FeasibleMasks[1] >> IdxCap) == uint64_t{0});
     const bool EntryProven = EntrySemanticsProven && EntryDomainProven;
 
     // The empty-edge query above proves only the entry value (normally zero).
@@ -1663,8 +1640,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
       bool ReachabilityComplete = false;
       const std::set<va_t> Reachable = candidateReachableInstructions(
           Rec, Info.ExplicitTargets, *ActiveJumpTableProofRoots,
-          Info.StorageRanges, CandidateEvidenceBudget,
-          &ReachabilityComplete);
+          Info.StorageRanges, CandidateEvidenceBudget, &ReachabilityComplete);
       if (!ReachabilityComplete) {
         Info.IncompleteGuardDomain = true;
         return std::nullopt;
@@ -1678,11 +1654,10 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
         return false;
       const va_t EntryBlockStart = *std::prev(DispatchBlock);
 
-      if (!consumeProducts(
-              {{Info.ExplicitTargets.size(),
-                orderedLookupWork(Reachable.size())},
-               {Info.ExplicitTargets.size(), 1},
-               {Reachable.size(), 1}}))
+      if (!consumeProducts({{Info.ExplicitTargets.size(),
+                             orderedLookupWork(Reachable.size())},
+                            {Info.ExplicitTargets.size(), 1},
+                            {Reachable.size(), 1}}))
         return std::nullopt;
       for (va_t Target : Info.ExplicitTargets)
         if (Target == BlkStart ||
@@ -1690,8 +1665,8 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
             !Reachable.count(Target))
           return false;
 
-      auto collectBlockOps = [&](va_t Start, va_t End)
-          -> std::optional<std::vector<LowOp>> {
+      auto collectBlockOps =
+          [&](va_t Start, va_t End) -> std::optional<std::vector<LowOp>> {
         if (!consumeProducts(
                 {{1, orderedLookupWork(Insns.size())}, {Insns.size(), 1}}))
           return std::nullopt;
@@ -1707,11 +1682,10 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
           }
           OpCount += It->second.Ops.size();
         }
-        if (!consumeProducts(
-                {{1, orderedLookupWork(Insns.size())},
-                 {RecordCount, 1},
-                 {OpCount, 4},
-                 {1, 2}}))
+        if (!consumeProducts({{1, orderedLookupWork(Insns.size())},
+                              {RecordCount, 1},
+                              {OpCount, 4},
+                              {1, 2}}))
           return std::nullopt;
         std::vector<LowOp> Result;
         Result.reserve(OpCount);
@@ -1726,8 +1700,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
           collectBlockOps(EntryBlockStart, BlkStart);
       if (!EntryOps)
         return std::nullopt;
-      NdVar EntryValue =
-          NdVar::reg(SwitchSrc, Clamp.PredicateIndexValue.Size);
+      NdVar EntryValue = NdVar::reg(SwitchSrc, Clamp.PredicateIndexValue.Size);
       int EntryFrom = static_cast<int>(EntryOps->size()) - 1;
       std::optional<uint64_t> EntryCoordinate;
       for (size_t Depth = 0; Depth < limits::kMaxQuasiCopyDepth; ++Depth) {
@@ -1764,11 +1737,10 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
           (EntryMask & (uint64_t{1} << *EntryCoordinate)) == 0)
         return false;
 
-      auto branchIsBoundedReentry = [&](const LowOp &Branch)
-          -> std::optional<bool> {
+      auto branchIsBoundedReentry =
+          [&](const LowOp &Branch) -> std::optional<bool> {
         if (Branch.Opcode != NdOp::COND_BR || Branch.NumInputs < 2 ||
-            !Branch.Inputs[0].isConst() ||
-            Branch.Inputs[0].Offset != BlkStart)
+            !Branch.Inputs[0].isConst() || Branch.Inputs[0].Offset != BlkStart)
           return false;
         if (!consumeEvidence(orderedLookupWork(BlockStarts.size())))
           return std::nullopt;
@@ -1776,10 +1748,9 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
         if (GuardStart == BlockStarts.begin())
           return false;
         --GuardStart;
-        std::optional<std::vector<LowOp>> GuardOps =
-            collectBlockOps(*GuardStart,
-                            Branch.Addr == InvalidVA ? Branch.Addr
-                                                     : Branch.Addr + 1);
+        std::optional<std::vector<LowOp>> GuardOps = collectBlockOps(
+            *GuardStart,
+            Branch.Addr == InvalidVA ? Branch.Addr : Branch.Addr + 1);
         if (!GuardOps)
           return std::nullopt;
         int BranchIndex = -1;
@@ -1826,8 +1797,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
         if (Compare.NumInputs < 2 || !Compare.Inputs[0].isReg() ||
             Compare.Inputs[0].Offset != SwitchSrc ||
             Compare.Inputs[0].Size != SelectorLaneSize ||
-            !Compare.Inputs[1].isConst() ||
-            Compare.Inputs[1].Offset > IdxCap)
+            !Compare.Inputs[1].isConst() || Compare.Inputs[1].Offset > IdxCap)
           return false;
         if (!consumeEvidence(GuardOps->size()))
           return std::nullopt;
@@ -1979,12 +1949,11 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   // ordered inner-slot nodes before the first retained element is allocated.
   // The provisional clamp proof already decoded and validated all M physical
   // targets, so that path only indexes its immutable vector here.
-  if (!consumeProducts(
-          {{Scan, 1},
-           {Scan, Img.Segments.size()},
-           {Scan, 3},
-           {Scan, InnerSlotLookup + 3},
-           {1, 4}}))
+  if (!consumeProducts({{Scan, 1},
+                        {Scan, Img.Segments.size()},
+                        {Scan, 3},
+                        {Scan, InnerSlotLookup + 3},
+                        {1, 4}}))
     return false;
   if (!Clamp.Present) {
     const size_t KnownEntryLookup =
@@ -2006,9 +1975,8 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
         !consumeFactorProduct({Scan, Img.Symbols.size(), 4}) ||
         !consumeFactorProduct({Scan, Img.Segments.size(), 16}) ||
         !consumeFactorProduct({Scan, Img.Sections.size(), 8}) ||
-        !consumeFactorProduct(
-            {Scan, Img.ExceptionMetadata.Functions.size(),
-             FragmentWorkPerEntry}) ||
+        !consumeFactorProduct({Scan, Img.ExceptionMetadata.Functions.size(),
+                               FragmentWorkPerEntry}) ||
         !consumeFactorProduct({Scan, Img.ImportStubRanges.size(), 3}) ||
         !consumeFactorProduct({Scan, Img.Imports.size(), 2}) ||
         !consumeFactorProduct({Scan, Img.KnownCodeRanges.size(), 2}) ||
@@ -2098,8 +2066,8 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
     FinalStorageRanges.push_back(
         JumpTableStorageRange{JmpTab + uint64_t(InnerSlot) * W2, W2, W2, 1});
     if (SuppressibleUpper)
-      FinalSuppressibleSlots.push_back(
-          JmpTab + static_cast<uint64_t>(InnerSlot) * W2);
+      FinalSuppressibleSlots.push_back(JmpTab +
+                                       static_cast<uint64_t>(InnerSlot) * W2);
   }
 
   JumpTableLoadRole OuterRole;

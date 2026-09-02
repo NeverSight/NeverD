@@ -137,6 +137,12 @@ EVM 및 SBF 세션은 이러한 호출을 거부합니다.
 
 종료 후 사용하기 위해 `Session`을 저장하지 마십시오. 네이티브 capsule은 `on_term`이 시작되기 전과 네이티브 세션을 해제할 수 있기 전에 무효화됩니다. 이후 호출은 오래된 메모리를 역참조하지 않고 `RuntimeError`로 실패합니다.
 
+### 엄격한 바이너리 sanitizer 게시
+
+`session.sanitize()`는 모든 지점을 보호하지 못하면 거부하는 실험적 `binary-sanitizer-v1` 트랜잭션을 실행하고, 완전하고 일관된 인증 receipt를 검증한 경우에만 불변 `SanitizeResult`를 반환합니다. Darwin이 아닌 호스트는 lifting, guard 생성, 후보 생성 또는 namespace 변경 전에 거부합니다. `PUBLISH_INDETERMINATE`와 `PUBLISHED_INCOMPLETE`는 실패이며 대상이 이미 존재할 수 있으므로 사용하거나 다시 시도하기 전에 검사해야 합니다.
+
+완전한 Darwin receipt는 트랜잭션 동안 보유한 대상 디렉터리 object만 인증합니다. 이 object는 open 후 이름이 바뀔 수 있으므로 원래 pathname이 처리 중 또는 반환 후에도 같은 object를 가리킨다는 사실을 보장하지 않으며, 영구적이고 독립적으로 재검증 가능한 path binding도 아닙니다. 나중에 path를 다시 여는 코드는 외부 anchor를 유지하고 object를 다시 인증해야 합니다. Python에는 아직 네이티브 whole-process replay 메서드가 없습니다. `NativeProcessReplayAdapter`는 fail-closed Phase 0 C++ 가용성/factory 경계일 뿐이며 모든 호스트가 모든 능력을 false로 보고하고 작업 table을 반환하지 않습니다.
+
 ### 증명 게이트 합성과 LLVM 최적화
 
 `synthesize_expression`은 ABI 호환성을 위해 유지되는 MBA 전용

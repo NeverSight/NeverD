@@ -474,6 +474,16 @@ cl::opt<unsigned>
     SafetyMaxLoop("max-loop", cl::desc("Maximum iterations of one loop header"),
                   cl::init(0), cl::sub(HuntCmd), cl::sub(AuditCmd));
 
+cl::opt<unsigned> SafetyMaxCallDepth(
+    "max-call-depth",
+    cl::desc("Maximum internal call edges from a known entry (0 = default)"),
+    cl::init(0), cl::sub(HuntCmd), cl::sub(AuditCmd));
+
+cl::opt<unsigned> SafetyMaxSummaryIterations(
+    "max-summary-iterations",
+    cl::desc("Maximum interprocedural attacker-summary rounds (0 = default)"),
+    cl::init(0), cl::sub(HuntCmd), cl::sub(AuditCmd));
+
 cl::opt<unsigned long long>
     SafetySolverConflicts("solver-conflicts",
                           cl::desc("Solver conflict budget (0 = default)"),
@@ -717,6 +727,12 @@ cl::opt<std::string>
 cl::opt<std::string>
     PatchFuncAddr("func", cl::desc("Function address for --from-c patch (hex)"),
                   cl::init(""), cl::sub(PatchCmd));
+
+OptionalStringList PatchSanitize(
+    "sanitize",
+    cl::desc("Patch the loaded binary with strict runtime bounds guards"),
+    cl::ZeroOrMore, cl::ValueOptional,
+    cl::value_desc(PatchSanitizeRequiredValue), cl::sub(PatchCmd));
 
 //===----------------------------------------------------------------------===//
 // Patch-specific options

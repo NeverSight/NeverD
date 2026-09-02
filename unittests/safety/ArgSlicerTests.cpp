@@ -11,6 +11,8 @@
 #include "neverd/loader/BinaryImageModel.h"
 #include "neverd/safety/ArgSlicer.h"
 
+#include <array>
+
 using namespace neverd;
 using namespace neverd::safety;
 
@@ -53,12 +55,23 @@ void defOp(MedFunc &F, NdOp Op, MedVar Out, MedVar In0) {
   F.Blocks[0].Ops.push_back(O);
 }
 
+void defOp(MedBlock &B, NdOp Op, MedVar Out,
+           std::initializer_list<MedVar> Inputs) {
+  MedOp O;
+  O.Opcode = Op;
+  O.Output = Out;
+  for (const MedVar &Input : Inputs)
+    O.addInput(Input);
+  B.Ops.push_back(O);
+}
+
 MedFunc newFunc(const std::string &Name = "f") {
   MedFunc F;
   F.Name = Name;
   F.Entry = 0x100;
   MedBlock B;
   B.Id = 0;
+  B.StartAddr = F.Entry;
   F.Blocks.push_back(std::move(B));
   return F;
 }
@@ -105,6 +118,23 @@ size_t addSink(MedFunc &F, const std::string &Callee,
   F.Blocks[0].Ops.push_back(O);
   MedCallInfo CI;
   CI.BlockId = 0;
+  CI.OpIdx = OpIdx;
+  CI.TargetName = Callee;
+  CI.Args = std::move(Args);
+  F.CallInfos.push_back(CI);
+  return F.CallInfos.size() - 1;
+}
+
+size_t addSink(MedFunc &F, MedBlock &B, const std::string &Callee,
+               std::vector<MedVar> Args) {
+  MedOp O;
+  O.Opcode = NdOp::CALL;
+  O.Addr = 0x1234;
+  O.addInput(MedVar::makeConst(0x8000, 8));
+  const int OpIdx = static_cast<int>(B.Ops.size());
+  B.Ops.push_back(O);
+  MedCallInfo CI;
+  CI.BlockId = B.Id;
   CI.OpIdx = OpIdx;
   CI.TargetName = Callee;
   CI.Args = std::move(Args);
@@ -356,6 +386,279 @@ TEST(ArgSlicer, NarrowEncodedStackImmediateStillFindsStackStore) {
   EXPECT_EQ(C.Flow, ArgFlow::Bounded);
   ASSERT_TRUE(C.UpperBound.has_value());
   EXPECT_EQ(*C.UpperBound, 7u);
+}
+
+TEST(ArgSlicer, EntrySelfCopyKeepsBoundedStackSpillVisible) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+
+  MedFunc F = newFunc();
+  defOp(F, NdOp::COPY, mkReg(kSP, 0), mkReg(kSP, 0));
+  defOp(F.Blocks[0], NdOp::INT_SUB, temp(10),
+        {mkReg(kSP, 0), MedVar::makeConst(0x10, 8)});
+  defOp(F.Blocks[0], NdOp::STORE, MedVar{},
+        {temp(10), MedVar::makeConst(7, 8)});
+  defOp(F.Blocks[0], NdOp::LOAD, temp(5), {temp(10)});
+  const size_t Sink = addSink(F, "memcpy", {temp(1), temp(2), temp(5)});
+
+  const ArgClassification C =
+      classifyArgument(In, SinkCatalog::defaults(), F, Sink, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Bounded);
+  ASSERT_TRUE(C.UpperBound.has_value());
+  EXPECT_EQ(*C.UpperBound, 7u);
+}
+
+TEST(ArgSlicer, NonDefaultLoadCannotRecoverBoundedStackSpill) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+
+  MedFunc F = newFunc();
+  defOp(F.Blocks[0], NdOp::INT_SUB, temp(10),
+        {mkReg(kSP, 0), MedVar::makeConst(0x10, 8)});
+  defOp(F.Blocks[0], NdOp::STORE, MedVar{},
+        {temp(10), MedVar::makeConst(7, 8)});
+  defOp(F.Blocks[0], NdOp::LOAD, temp(5), {temp(10)});
+  F.Blocks[0].Ops.back().MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+  const size_t Sink = addSink(F, "memcpy", {temp(1), temp(2), temp(5)});
+
+  const ArgClassification C =
+      classifyArgument(In, SinkCatalog::defaults(), F, Sink, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+  EXPECT_FALSE(C.UpperBound.has_value());
+}
+
+TEST(ArgSlicer, NonDefaultStoreCannotCreateBoundedStackSpill) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+
+  MedFunc F = newFunc();
+  defOp(F.Blocks[0], NdOp::INT_SUB, temp(10),
+        {mkReg(kSP, 0), MedVar::makeConst(0x10, 8)});
+  defOp(F.Blocks[0], NdOp::STORE, MedVar{},
+        {temp(10), MedVar::makeConst(7, 8)});
+  F.Blocks[0].Ops.back().MemoryAddressSpace = NdMemoryAddressSpace::X86GS;
+  defOp(F.Blocks[0], NdOp::LOAD, temp(5), {temp(10)});
+  const size_t Sink = addSink(F, "memcpy", {temp(1), temp(2), temp(5)});
+
+  const ArgClassification C =
+      classifyArgument(In, SinkCatalog::defaults(), F, Sink, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+  EXPECT_FALSE(C.UpperBound.has_value());
+}
+
+TEST(ArgSlicer, DifferentStackOffsetsThroughPhiCannotBoundReload) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+
+  MedFunc F = newFunc();
+  F.Blocks.resize(4);
+  for (int I = 0; I < 4; ++I)
+    F.Blocks[I].Id = I;
+  F.Blocks[0].Succs = {1, 2};
+  F.Blocks[1].Preds = {0};
+  F.Blocks[1].Succs = {3};
+  F.Blocks[2].Preds = {0};
+  F.Blocks[2].Succs = {3};
+  F.Blocks[3].Preds = {1, 2};
+
+  defOp(F.Blocks[0], NdOp::INT_SUB, temp(10),
+        {mkReg(kSP, 0), MedVar::makeConst(0x10, 8)});
+  defOp(F.Blocks[0], NdOp::STORE, MedVar{},
+        {temp(10), MedVar::makeConst(7, 8)});
+  defOp(F.Blocks[1], NdOp::COPY, temp(20), {mkReg(kSP, 0)});
+  defOp(F.Blocks[2], NdOp::INT_SUB, temp(21),
+        {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  PhiNode Phi;
+  Phi.Output = mkReg(kSP, 2);
+  Phi.Args = {{1, temp(20)}, {2, temp(21)}};
+  F.Blocks[3].Phis.push_back(Phi);
+  defOp(F.Blocks[3], NdOp::INT_SUB, temp(30),
+        {Phi.Output, MedVar::makeConst(0x10, 8)});
+  defOp(F.Blocks[3], NdOp::LOAD, temp(5), {temp(30)});
+  const size_t Sink =
+      addSink(F, F.Blocks[3], "memcpy", {temp(1), temp(2), temp(5)});
+
+  const ArgClassification C =
+      classifyArgument(In, SinkCatalog::defaults(), F, Sink, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+  EXPECT_FALSE(C.UpperBound.has_value());
+}
+
+TEST(ArgSlicer, UndefinedNonLiveInStackPointerVersionCannotBoundReload) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+  MedFunc F = newFunc();
+  defOp(F.Blocks[0], NdOp::INT_SUB, temp(10),
+        {mkReg(kSP, 9), MedVar::makeConst(0x10, 8)});
+  defOp(F.Blocks[0], NdOp::STORE, MedVar{},
+        {temp(10), MedVar::makeConst(7, 8)});
+  defOp(F.Blocks[0], NdOp::LOAD, temp(5), {temp(10)});
+  const size_t Sink = addSink(F, "memcpy", {temp(1), temp(2), temp(5)});
+
+  const ArgClassification C =
+      classifyArgument(In, SinkCatalog::defaults(), F, Sink, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+  EXPECT_FALSE(C.UpperBound.has_value());
+}
+
+TEST(ArgSlicer, ZeroWidthStackPointerPhiCannotAuthenticateALiveIn) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+  MedFunc F = newFunc();
+  PhiNode Phi;
+  Phi.Output = mkReg(kSP, 0, 0);
+  Phi.Args = {{9, MedVar::makeConst(0, 0)}};
+  F.Blocks[0].Phis.push_back(Phi);
+  defOp(F.Blocks[0], NdOp::INT_SUB, temp(10),
+        {mkReg(kSP, 0), MedVar::makeConst(0x10, 8)});
+  defOp(F.Blocks[0], NdOp::STORE, MedVar{},
+        {temp(10), MedVar::makeConst(7, 8)});
+  defOp(F.Blocks[0], NdOp::LOAD, temp(5), {temp(10)});
+  const size_t Sink = addSink(F, "memcpy", {temp(1), temp(2), temp(5)});
+
+  const ArgClassification C =
+      classifyArgument(In, SinkCatalog::defaults(), F, Sink, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+  EXPECT_FALSE(C.UpperBound.has_value());
+}
+
+TEST(ArgSlicer, ZeroWidthStackPointerOpCannotAuthenticateALiveIn) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+  MedFunc F = newFunc();
+  defOp(F.Blocks[0], NdOp::INT_ADD, mkReg(kSP, 0, 0),
+        {MedVar::makeConst(0, 0), MedVar::makeConst(0, 0)});
+  defOp(F.Blocks[0], NdOp::INT_SUB, temp(10),
+        {mkReg(kSP, 0), MedVar::makeConst(0x10, 8)});
+  defOp(F.Blocks[0], NdOp::STORE, MedVar{},
+        {temp(10), MedVar::makeConst(7, 8)});
+  defOp(F.Blocks[0], NdOp::LOAD, temp(5), {temp(10)});
+  const size_t Sink = addSink(F, "memcpy", {temp(1), temp(2), temp(5)});
+
+  const ArgClassification C =
+      classifyArgument(In, SinkCatalog::defaults(), F, Sink, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+  EXPECT_FALSE(C.UpperBound.has_value());
+}
+
+TEST(ArgSlicer, CallClobberedStackPointerCannotAuthenticateALiveIn) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+  MedFunc F = newFunc();
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.CallSiteId = 1;
+  Call.addInput(MedVar::makeConst(0x9000, 8));
+  F.Blocks[0].Ops.push_back(Call);
+  MedCallInfo CallInfo;
+  CallInfo.BlockId = 0;
+  CallInfo.OpIdx = 0;
+  CallInfo.TargetName = "opaque_external";
+  F.CallInfos.push_back(CallInfo);
+  MedCallClobber Clobber;
+  Clobber.Value = mkReg(kSP, 0);
+  Clobber.CallSiteId = 1;
+  F.CallClobbers.push_back(Clobber);
+  defOp(F.Blocks[0], NdOp::INT_SUB, temp(10),
+        {mkReg(kSP, 0), MedVar::makeConst(0x10, 8)});
+  defOp(F.Blocks[0], NdOp::STORE, MedVar{},
+        {temp(10), MedVar::makeConst(7, 8)});
+  defOp(F.Blocks[0], NdOp::LOAD, temp(5), {temp(10)});
+  const size_t Sink = addSink(F, "memcpy", {temp(1), temp(2), temp(5)});
+
+  const ArgClassification C =
+      classifyArgument(In, SinkCatalog::defaults(), F, Sink, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+  EXPECT_FALSE(C.UpperBound.has_value());
+}
+
+TEST(ArgSlicer, DuplicateStackAddressDefinitionsCannotBoundReload) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+  MedFunc F = newFunc();
+  defOp(F.Blocks[0], NdOp::INT_SUB, temp(10),
+        {mkReg(kSP, 0), MedVar::makeConst(0x10, 8)});
+  defOp(F.Blocks[0], NdOp::INT_SUB, temp(10),
+        {mkReg(kSP, 0), MedVar::makeConst(0x10, 8)});
+  defOp(F.Blocks[0], NdOp::STORE, MedVar{},
+        {temp(10), MedVar::makeConst(7, 8)});
+  defOp(F.Blocks[0], NdOp::LOAD, temp(5), {temp(10)});
+  const size_t Sink = addSink(F, "memcpy", {temp(1), temp(2), temp(5)});
+
+  const ArgClassification C =
+      classifyArgument(In, SinkCatalog::defaults(), F, Sink, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+  EXPECT_FALSE(C.UpperBound.has_value());
+}
+
+TEST(ArgSlicer, IncompletePhiAddressConservativelyInvalidatesStackSlot) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+  MedFunc F = newFunc();
+  defOp(F.Blocks[0], NdOp::INT_SUB, temp(10),
+        {mkReg(kSP, 0), MedVar::makeConst(0x10, 8)});
+  defOp(F.Blocks[0], NdOp::STORE, MedVar{},
+        {temp(10), MedVar::makeConst(7, 8)});
+  PhiNode Phi;
+  Phi.Output = temp(20);
+  Phi.Args = {{9, MedVar::makeConst(0x5000, 8)}};
+  F.Blocks[0].Phis.push_back(Phi);
+  defOp(F.Blocks[0], NdOp::STORE, MedVar{},
+        {Phi.Output, MedVar::makeConst(1, 8)});
+  defOp(F.Blocks[0], NdOp::LOAD, temp(5), {temp(10)});
+  const size_t Sink = addSink(F, "memcpy", {temp(1), temp(2), temp(5)});
+
+  const ArgClassification C =
+      classifyArgument(In, SinkCatalog::defaults(), F, Sink, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+  EXPECT_FALSE(C.UpperBound.has_value());
 }
 
 TEST(ArgSlicer, SharedNonFrameAddressDiamondIsCheckedInLinearWork) {
@@ -633,17 +936,241 @@ TEST(ArgSlicer, RelocationAddressMaskDoesNotBoundCopyLength) {
 
 TEST(ArgSlicer, MainParameterIsTaintedArgv) {
   BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
   AnalysisInput In;
   In.Img = &Img;
   SinkCatalog Cat = SinkCatalog::defaults();
 
   // strcpy(dst, argv-derived): the source argument comes from a main parameter.
   MedFunc F = newFunc("main");
-  size_t Idx = addSink(F, "strcpy", {temp(1), param(2)});
+  F.CC = CallingConv::SysV_AMD64;
+  F.Params = {param(1, 4), param(2)};
+  size_t Idx = addSink(F, "strcpy", {temp(1), F.Params[1]});
   // strcpy's deciding argument is the source (implicit length).
   ArgClassification C = classifyArgument(In, Cat, F, Idx, 1);
   EXPECT_EQ(C.Flow, ArgFlow::Tainted);
   EXPECT_EQ(C.TaintSource, "argv");
+}
+
+TEST(ArgSlicer, MainParameterRolesRequireExactSupportedSignature) {
+  BinaryImage Img;
+  Img.Arch = Arch::AArch64;
+  Img.Bits = Bitness::Bits64;
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc("wmain");
+  F.CC = CallingConv::ARM_AAPCS;
+  F.Params = {param(1, 4), param(2), param(3)};
+  const size_t ArgcSink = addSink(F, "strcpy", {temp(10), F.Params[0]});
+  const size_t ArgvSink = addSink(F, "strcpy", {temp(11), F.Params[1]});
+  const size_t EnvpSink = addSink(F, "strcpy", {temp(12), F.Params[2]});
+
+  const ArgClassification Argc = classifyArgument(In, Cat, F, ArgcSink, 1);
+  const ArgClassification Argv = classifyArgument(In, Cat, F, ArgvSink, 1);
+  const ArgClassification Envp = classifyArgument(In, Cat, F, EnvpSink, 1);
+  EXPECT_EQ(Argc.Flow, ArgFlow::Tainted);
+  EXPECT_EQ(Argc.TaintSource, "argc");
+  EXPECT_EQ(Argv.Flow, ArgFlow::Tainted);
+  EXPECT_EQ(Argv.TaintSource, "argv");
+  EXPECT_EQ(Envp.Flow, ArgFlow::Tainted);
+  EXPECT_EQ(Envp.TaintSource, "envp");
+}
+
+TEST(ArgSlicer, WinMainTaintsOnlyValidatedCommandLineParameter) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc("WinMain");
+  F.CC = CallingConv::Win64;
+  F.Params = {param(1), param(2), param(3), param(4, 4)};
+  const size_t InstanceSink = addSink(F, "strcpy", {temp(10), F.Params[0]});
+  const size_t CommandLineSink = addSink(F, "strcpy", {temp(11), F.Params[2]});
+
+  const ArgClassification Instance =
+      classifyArgument(In, Cat, F, InstanceSink, 1);
+  const ArgClassification CommandLine =
+      classifyArgument(In, Cat, F, CommandLineSink, 1);
+  EXPECT_EQ(Instance.Flow, ArgFlow::Unknown);
+  EXPECT_EQ(CommandLine.Flow, ArgFlow::Tainted);
+  EXPECT_EQ(CommandLine.TaintSource, "command_line");
+}
+
+TEST(ArgSlicer, FamiliarEntryNameWithInvalidAbiIsUnknown) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc("main");
+  F.CC = CallingConv::Unknown;
+  F.Params = {param(1, 4), param(2)};
+  const size_t Sink = addSink(F, "strcpy", {temp(10), F.Params[1]});
+  EXPECT_EQ(classifyArgument(In, Cat, F, Sink, 1).Flow, ArgFlow::Unknown);
+
+  F.CC = CallingConv::SysV_AMD64;
+  F.Params[0].Size = 8;
+  EXPECT_EQ(classifyArgument(In, Cat, F, Sink, 1).Flow, ArgFlow::Unknown);
+
+  F.Params[0].Size = 4;
+  F.Params.push_back(param(3));
+  F.Params.push_back(param(4));
+  EXPECT_EQ(classifyArgument(In, Cat, F, Sink, 1).Flow, ArgFlow::Unknown);
+
+  F.Params.resize(2);
+  Img.Bits = Bitness::Bits32;
+  EXPECT_EQ(classifyArgument(In, Cat, F, Sink, 1).Flow, ArgFlow::Unknown);
+}
+
+TEST(ArgSlicer, InterprocParameterCopiesExactAttackerWitness) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  AnalysisInput In;
+  In.Img = &Img;
+
+  MedFunc F = newFunc("wrapper");
+  F.Params = {param(7), param(8)};
+  const size_t Sink = addSink(F, "strcpy", {temp(10), F.Params[0]});
+
+  ReachabilityWitness Witness;
+  Witness.RootFunctionVA = 0x1000;
+  Witness.EntryVA = 0x1000;
+  Witness.EntryName = "main";
+  Witness.Kind = SafetyEntryKind::Application;
+  Witness.CallChain.push_back({0x1000, 0x1010, F.Entry, false});
+  ParameterFlowMap Flows;
+  Flows[{F.Entry, 0}] = {ArgFlow::Tainted, "argv", Witness};
+  In.ParameterFlows = &Flows;
+
+  const ArgClassification Classification =
+      classifyArgument(In, SinkCatalog::defaults(), F, Sink, 1);
+  ASSERT_EQ(Classification.Flow, ArgFlow::Tainted);
+  ASSERT_TRUE(Classification.AttackerWitness.has_value());
+  EXPECT_EQ(Classification.AttackerWitness->RootFunctionVA, 0x1000u);
+  ASSERT_EQ(Classification.AttackerWitness->CallChain.size(), 1u);
+  EXPECT_EQ(Classification.AttackerWitness->CallChain.front().CallVA, 0x1010u);
+
+  const size_t SiblingSink = addSink(F, "strcpy", {temp(11), F.Params[1]});
+  EXPECT_EQ(
+      classifyArgument(In, SinkCatalog::defaults(), F, SiblingSink, 1).Flow,
+      ArgFlow::Unknown);
+}
+
+TEST(ArgSlicer, AuthenticatedEntryRegisterLiveInUsesParameterFlow) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  AnalysisInput In;
+  In.Img = &Img;
+
+  MedFunc F = newFunc("wrapper");
+  MedVar Formal = param(20);
+  Formal.TheArch = Arch::X64;
+  Formal.RegOff = 56;
+  F.Params = {Formal};
+
+  MedVar LiveIn = mkReg(56, 0);
+  LiveIn.Id = Formal.Id;
+  LiveIn.TheArch = Arch::X64;
+  defOp(F, NdOp::COPY, LiveIn, LiveIn);
+  const size_t Sink = addSink(F, "strcpy", {temp(10), LiveIn});
+
+  ReachabilityWitness Witness;
+  Witness.RootFunctionVA = 0x1000;
+  Witness.EntryVA = 0x1000;
+  Witness.EntryName = "entry";
+  Witness.Kind = SafetyEntryKind::Export;
+  Witness.CallChain.push_back({0x1000, 0x1010, F.Entry, false});
+  ParameterFlowMap Flows;
+  Flows[{F.Entry, 0}] = {ArgFlow::Tainted, "getenv", Witness};
+  In.ParameterFlows = &Flows;
+
+  const ArgClassification Classification =
+      classifyArgument(In, SinkCatalog::defaults(), F, Sink, 1);
+  EXPECT_EQ(Classification.Flow, ArgFlow::Tainted);
+  EXPECT_EQ(Classification.TaintSource, "getenv");
+  ASSERT_TRUE(Classification.AttackerWitness.has_value());
+  EXPECT_EQ(Classification.AttackerWitness->RootFunctionVA,
+            Witness.RootFunctionVA);
+  EXPECT_EQ(Classification.AttackerWitness->EntryVA, Witness.EntryVA);
+  EXPECT_EQ(Classification.AttackerWitness->EntryName, Witness.EntryName);
+  ASSERT_EQ(Classification.AttackerWitness->CallChain.size(), 1u);
+  EXPECT_EQ(Classification.AttackerWitness->CallChain.front().CallVA, 0x1010u);
+
+  MedFunc Unauthenticated = F;
+  Unauthenticated.Blocks.front().Ops.erase(
+      Unauthenticated.Blocks.front().Ops.begin());
+  Unauthenticated.CallInfos.front().OpIdx = 0;
+  EXPECT_EQ(
+      classifyArgument(In, SinkCatalog::defaults(), Unauthenticated, 0, 1).Flow,
+      ArgFlow::Unknown);
+}
+
+TEST(ArgSlicer, ParameterFlowRequiresTheExactCanonicalFormalSlot) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+
+  MedFunc F = newFunc("wrapper");
+  MedVar First = param(-1);
+  First.RegOff = 8;
+  MedVar Second = param(-1);
+  Second.RegOff = 16;
+  F.Params = {First, Second};
+  const size_t FirstSink = addSink(F, "strcpy", {temp(10), F.Params[0]});
+  const size_t SecondSink = addSink(F, "strcpy", {temp(11), F.Params[1]});
+
+  ParameterFlowMap Flows;
+  Flows[{F.Entry, 1}] = {ArgFlow::Tainted, "getenv", std::nullopt};
+  In.ParameterFlows = &Flows;
+
+  EXPECT_EQ(classifyArgument(In, SinkCatalog::defaults(), F, FirstSink, 1).Flow,
+            ArgFlow::Unknown);
+  EXPECT_EQ(
+      classifyArgument(In, SinkCatalog::defaults(), F, SecondSink, 1).Flow,
+      ArgFlow::Tainted);
+
+  MedVar WrongWidth = F.Params[1];
+  WrongWidth.Size = 4;
+  const size_t WrongWidthSink = addSink(F, "strcpy", {temp(12), WrongWidth});
+  EXPECT_EQ(
+      classifyArgument(In, SinkCatalog::defaults(), F, WrongWidthSink, 1).Flow,
+      ArgFlow::Unknown);
+}
+
+TEST(ArgSlicer, MalformedEntryCopyDoesNotAuthenticateRegisterAsParameter) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  AnalysisInput In;
+  In.Img = &Img;
+
+  MedFunc F = newFunc("wrapper");
+  MedVar Formal = param(20);
+  Formal.TheArch = Arch::X64;
+  Formal.RegOff = 56;
+  F.Params = {Formal};
+  MedVar Output = mkReg(56, 0);
+  Output.Id = Formal.Id;
+  Output.TheArch = Arch::X64;
+  MedVar WrongInput = Output;
+  WrongInput.RegOff = 48;
+  defOp(F, NdOp::COPY, Output, WrongInput);
+  const size_t Sink = addSink(F, "strcpy", {temp(10), Output});
+
+  ParameterFlowMap Flows;
+  Flows[{F.Entry, 0}] = {ArgFlow::Tainted, "getenv", std::nullopt};
+  In.ParameterFlows = &Flows;
+  EXPECT_EQ(classifyArgument(In, SinkCatalog::defaults(), F, Sink, 1).Flow,
+            ArgFlow::Unknown);
 }
 
 TEST(ArgSlicer, SelectClampIsBounded) {
@@ -749,6 +1276,142 @@ TEST(ArgSlicer, RecurrentPhiDoesNotPublishAContextualBound) {
   ArgClassification C = classifyArgument(In, Cat, F, Idx, 2);
   EXPECT_EQ(C.Flow, ArgFlow::Unknown);
   EXPECT_FALSE(C.UpperBound.has_value());
+}
+
+TEST(ArgSlicer, IncompletePhiCannotPublishBoundedArgument) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+
+  MedFunc F = newFunc();
+  F.Blocks.resize(4);
+  for (int I = 0; I < 4; ++I)
+    F.Blocks[I].Id = I;
+  F.Blocks[0].Succs = {1, 2};
+  F.Blocks[1].Preds = {0};
+  F.Blocks[1].Succs = {3};
+  F.Blocks[2].Preds = {0};
+  F.Blocks[2].Succs = {3};
+  F.Blocks[3].Preds = {1, 2};
+  PhiNode Phi;
+  Phi.Output = temp(50);
+  Phi.Args = {{1, MedVar::makeConst(8, 8)}};
+  F.Blocks[3].Phis.push_back(Phi);
+  const size_t Sink =
+      addSink(F, F.Blocks[3], "memcpy", {temp(1), temp(2), Phi.Output});
+
+  const ArgClassification C =
+      classifyArgument(In, SinkCatalog::defaults(), F, Sink, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+  EXPECT_FALSE(C.UpperBound.has_value());
+  EXPECT_TRUE(C.RequiresPathValidation);
+}
+
+TEST(ArgSlicer, CompletePhiPublishesTheMaximumIncomingBound) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+  MedFunc F = newFunc();
+  F.Blocks.resize(4);
+  for (int I = 0; I < 4; ++I)
+    F.Blocks[I].Id = I;
+  F.Blocks[0].Succs = {1, 2};
+  F.Blocks[1].Preds = {0};
+  F.Blocks[1].Succs = {3};
+  F.Blocks[2].Preds = {0};
+  F.Blocks[2].Succs = {3};
+  F.Blocks[3].Preds = {1, 2};
+  PhiNode Phi;
+  Phi.Output = temp(50);
+  Phi.Args = {{1, MedVar::makeConst(8, 8)}, {2, MedVar::makeConst(16, 8)}};
+  F.Blocks[3].Phis.push_back(Phi);
+  const size_t Sink =
+      addSink(F, F.Blocks[3], "memcpy", {temp(1), temp(2), Phi.Output});
+
+  const ArgClassification C =
+      classifyArgument(In, SinkCatalog::defaults(), F, Sink, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Bounded);
+  ASSERT_TRUE(C.UpperBound.has_value());
+  EXPECT_EQ(*C.UpperBound, 16u);
+  EXPECT_FALSE(C.RequiresPathValidation);
+}
+
+TEST(ArgSlicer, PhiBoundRequiresCompleteNormalPredecessorGraph) {
+  constexpr std::array<const char *, 8> Scenarios = {
+      "missing-pred", "forged-pred",   "duplicate-pred", "missing-arg",
+      "forged-arg",   "duplicate-arg", "duplicate-edge", "duplicate-block"};
+  for (size_t Scenario = 0; Scenario < Scenarios.size(); ++Scenario) {
+    SCOPED_TRACE(Scenarios[Scenario]);
+    BinaryImage Img;
+    AnalysisInput In;
+    In.Img = &Img;
+    MedFunc F = newFunc();
+    F.Blocks.resize(Scenario == 7 ? 5 : 4);
+    for (int I = 0; I < static_cast<int>(F.Blocks.size()); ++I)
+      F.Blocks[I].Id = I;
+    if (Scenario == 7)
+      F.Blocks[4].Id = 2;
+    F.Blocks[0].Succs = {1, 2};
+    F.Blocks[1].Preds = {0};
+    F.Blocks[1].Succs =
+        Scenario == 6 ? std::vector<int>{3, 3} : std::vector<int>{3};
+    F.Blocks[2].Preds = {0};
+    F.Blocks[2].Succs = {3};
+    F.Blocks[3].Preds = {1, 2};
+    if (Scenario == 0)
+      F.Blocks[3].Preds = {1};
+    else if (Scenario == 1)
+      F.Blocks[3].Preds = {1, 9};
+    else if (Scenario == 2)
+      F.Blocks[3].Preds = {1, 2, 2};
+    PhiNode Phi;
+    Phi.Output = temp(50);
+    Phi.Args = {{1, MedVar::makeConst(8, 8)}, {2, MedVar::makeConst(16, 8)}};
+    if (Scenario == 3)
+      Phi.Args.pop_back();
+    else if (Scenario == 4)
+      Phi.Args[1].first = 9;
+    else if (Scenario == 5)
+      Phi.Args[1].first = 1;
+    F.Blocks[3].Phis.push_back(Phi);
+    const size_t Sink =
+        addSink(F, F.Blocks[3], "memcpy", {temp(1), temp(2), Phi.Output});
+
+    const ArgClassification C =
+        classifyArgument(In, SinkCatalog::defaults(), F, Sink, 2);
+    EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+    EXPECT_FALSE(C.UpperBound.has_value());
+    EXPECT_TRUE(C.RequiresPathValidation);
+  }
+}
+
+TEST(ArgSlicer, PhiAndOpCannotBothDefineABoundedArgument) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+  MedFunc F = newFunc();
+  F.Blocks.resize(4);
+  for (int I = 0; I < 4; ++I)
+    F.Blocks[I].Id = I;
+  F.Blocks[0].Succs = {1, 2};
+  F.Blocks[1].Preds = {0};
+  F.Blocks[1].Succs = {3};
+  F.Blocks[2].Preds = {0};
+  F.Blocks[2].Succs = {3};
+  F.Blocks[3].Preds = {1, 2};
+  PhiNode Phi;
+  Phi.Output = temp(50);
+  Phi.Args = {{1, MedVar::makeConst(8, 8)}, {2, MedVar::makeConst(16, 8)}};
+  F.Blocks[3].Phis.push_back(Phi);
+  defOp(F.Blocks[3], NdOp::COPY, Phi.Output, {MedVar::makeConst(8, 8)});
+  const size_t Sink =
+      addSink(F, F.Blocks[3], "memcpy", {temp(1), temp(2), Phi.Output});
+
+  const ArgClassification C =
+      classifyArgument(In, SinkCatalog::defaults(), F, Sink, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+  EXPECT_FALSE(C.UpperBound.has_value());
+  EXPECT_TRUE(C.RequiresPathValidation);
 }
 
 TEST(ArgSlicer, RelocationAddressDoesNotProveASelectClamp) {

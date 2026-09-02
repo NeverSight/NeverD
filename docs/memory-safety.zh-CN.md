@@ -119,9 +119,58 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 
 ---
 
+## 从已知入口出发的过程间可达性
+
+每个发现都带有三项彼此独立、不能混为一谈的结论：
+
+| 字段 | 回答的问题 | 取值 |
+|------|------------|------|
+| `verdict` | 局部安全分析对该操作证明了什么？ | `SAFE`、`UNSAFE`、`UNKNOWN` |
+| `reachability.status` | 所在函数是否位于从已知原生入口恢复出的控制路径上？ | `REACHABLE`、`UNREACHABLE`、`UNKNOWN` |
+| `reachability.attacker_control` | 参数切片对该发现处的攻击者影响证明了什么？ | `TAINTED`、`BOUNDED`、`UNKNOWN` |
+
+可达性是增量证据，不会改写发现的 `verdict`、报告的聚合裁决或 CLI 退出码。
+因此，局部已证明的越界可以同时是 `verdict=UNSAFE` 与
+`reachability.status=UNREACHABLE`。要求存在可执行攻击路径的消费方必须同时检查
+裁决和可达性字段。
+
+根包括已识别的应用入口（`application`，如 `main` 或 `WinMain`）、镜像入口
+（`image`）和导出例程（`export`）。同一函数具有多种根身份时，确定性优先级为
+`application`、`image`、`export`。`reachability.entry` 记录根的 `va`、`name`
+与 `kind`。对于可达的非根发现，`call_chain` 还给出由精确内部边组成的最短确定性
+路径；每条边包含 `caller_va`、调用点 `call_va`、`callee_va`，以及值为
+`direct` 或 `indirect` 的 `kind`。
+
+只有至少存在一个根、内部调用清单完整、深度预算未耗尽且确实没有路径时，才给出
+`UNREACHABLE`。对于尚未由其他正面证据证明可达的函数，根缺失、函数身份重复或有
+歧义、CFG/调用清单不一致、未解析的可执行内部目标，以及调用深度耗尽，都会阻止否定
+证明并给出 `reachability.status=UNKNOWN`，并在适用时
+附带 `reason` 与 `budget_hit`。未知 ABI、参数宽度不匹配、仅可变参数 slot、不完整
+切片，以及深度或摘要预算耗尽，也会让尚未证明的攻击者控制保持 UNKNOWN；已证明的
+事实继续有效，分析不会臆造传播。
+
+报告级计数器按发现计数，而不是按函数或路径计数。`control_reachable` 统计
+`status=REACHABLE`；`attacker_reachable` 是其中还满足
+`attacker_control=TAINTED` 的子集。`reachability_unknown` 与 `unreachable` 统计
+另外两种控制状态。它们不同于按裁决统计的 `safe`、`unsafe` 与 `unknown`。
+
+---
+
 ## 预算、输出与绑定
 
-猎取探索与求解器受预算约束（`--max-paths`、`--max-steps`、`--max-loop`、`--solver-conflicts`）；预算耗尽给出 UNKNOWN。两条命令都打印 JSON，并尊重 `-o`。退出码：SAFE 为 `0`，UNSAFE 为 `2`，UNKNOWN 或出错为 `1`。
+猎取探索与求解器受预算约束（`--max-paths`、`--max-steps`、`--max-loop`、`--solver-conflicts`）。过程间分析有两个独立限制：`max_call_depth` 限制从已知入口出发的内部调用边数，`max_summary_iterations` 限制攻击者控制不动点轮数。默认值分别为 64 条边，以及有效深度上限加一轮。预算耗尽按上文所述闭合失败。耗尽 `max_call_depth` 可使尚未到达的函数保持 `status=UNKNOWN`；耗尽 `max_summary_iterations` 不会抹去结构见证，因此 `status=REACHABLE` 可以与 `attacker_control=UNKNOWN`、`budget_hit=true` 同时存在。两条命令都打印 JSON，并尊重 `-o`。退出码：SAFE 为 `0`，UNSAFE 为 `2`，UNKNOWN 或出错为 `1`。
+
+每个公共入口都以 0 选择引擎默认值：
+
+| 接口 | 控制深度 | 攻击者摘要 |
+|------|----------|------------|
+| CLI（`audit` 与 `hunt`） | `--max-call-depth <n>` | `--max-summary-iterations <n>` |
+| C（`neverd_safety_options`） | `max_call_depth` | `max_summary_iterations` |
+| Python（`Session.audit()` / `Session.hunt()`） | `max_call_depth=<n>` | `max_summary_iterations=<n>` |
+
+C 调用方应将 `neverd_safety_options` 清零，并设置
+`struct_size=sizeof(neverd_safety_options)`；旧结构体大小仍采用默认值。Python 在调用
+C API 前将两项都校验为无符号 32 位整数。
 
 同一分析也可通过 C API（`neverd_session_audit_json` / `neverd_session_hunt_json`，带版本化 `neverd_safety_options`）和 Python SDK（`Session.audit()` / `Session.hunt()`）使用。
 
@@ -143,11 +192,12 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
   "capacity": 16,
   "capacity_kind": "exact",
   "corroboration": "path predicate and overflow are jointly satisfiable",
+  "reachability": { "status": "REACHABLE", "attacker_control": "TAINTED", "budget_hit": false, "entry": { "va": "0x1000", "name": "main", "kind": "application" }, "call_chain": [{ "caller_va": "0x1000", "call_va": "0x1080", "callee_va": "0x1100", "kind": "direct" }] },
   "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" }, "candidate_values": [{ "name": "copy_length", "value": "17" }, { "name": "argv[1]", "value": "16 bytes" }], "replayable": false, "replay": { "adapter": "process-input-v1", "reason": "argv input is not supported by process-input-v1" }, "symbolic_model": [{ "id": 0, "name": "copy_len", "width": 64, "value_hex": "0x11", "origin": "input" }] }
 }
 ```
 
-`replayable` 是派生证据，而非独立承诺：仅当 `replay` 包含供 `process-input-v1` 适配器使用的完整输入计划时才为真。计划记录精确的环境字节、使用时第一次受支持的 `read(0)` 系列标准输入字节序列，以及从求解器赋值 ID 到这些输入的绑定；无法构造时由 `replay.reason` 说明原因。这些字段以增量方式加入；顶层 `schema_version` 仍为 `1`。
+`replayable` 是派生证据，而非独立承诺：仅当 `replay` 包含供 `process-input-v1` 适配器使用的完整输入计划时才为真。计划记录精确的环境字节、使用时第一次受支持的 `read(0)` 系列标准输入字节序列，以及从求解器赋值 ID 到这些输入的绑定；无法构造时由 `replay.reason` 说明原因。重放与可达性字段都以增量方式加入；顶层 `schema_version` 仍为 `1`。
 
 ---
 
@@ -158,4 +208,4 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 - 已入目录的宽字符与追加拷贝，在元素字节宽度或目的字符串现有长度未恢复时保持 UNKNOWN。出参分配器与条件 `realloc` 的所有权转移无法证明时也保持 UNKNOWN。
 - **P0**（本发布，三种格式）：sink 目录、参数预过滤、拷贝越界猎取、堆生命周期审计。每个测试主机都必须运行六个已检入样例，覆盖 PE、ELF、Mach-O × x86-64、AArch64。
 - **P1**：栈/全局越界、未初始化局部读取与格式串检查已提供；更丰富的 PDB 栈类型和更多平台分配器仍是增量覆盖项，缺少精确摘要时保持 UNKNOWN。
-- **P2**：patch 插入的运行时检查、过程间攻击者可达性。
+- 当前切片已覆盖已知入口、结构化过程间可达性和攻击者参数的单调传播。独立的实验性 `lowir-concolic-v1` 适配器现可在强制要求的原生格式／架构矩阵上，提供由寄存器种子驱动、经重放验证的分支翻转；它始终不穷举，也不改变安全裁决。实验性 `binary-sanitizer-v1` 现可在 Darwin 上提供全点位或拒绝的计数写入防护与经认证的发布；receipt 只认证事务期间持有的目录对象，而不是可持续复核的原路径绑定。更广的 `process-replay-v1` 仍只有故障关闭的 Phase 0 计划／协调器与可用性边界，当前没有主机执行原生重放。

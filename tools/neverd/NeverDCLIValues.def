@@ -1,0 +1,3 @@
+// Compile-visible literal CLI contracts shared by registration, validation,
+// and the capability inventory. Keep this file macro-only.
+NEVERD_CLI_LITERAL(PatchSanitize, "strict")

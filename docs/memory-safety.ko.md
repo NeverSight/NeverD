@@ -119,9 +119,60 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 
 ---
 
+## 알려진 진입점 기반 프로시저 간 도달 가능성
+
+각 발견에는 서로 혼동하면 안 되는 세 가지 독립된 판단이 있습니다.
+
+| 필드 | 질문 | 값 |
+|------|------|----|
+| `verdict` | 로컬 안전성 분석이 해당 연산에 대해 무엇을 증명했는가? | `SAFE`, `UNSAFE`, `UNKNOWN` |
+| `reachability.status` | 포함 함수가 알려진 네이티브 진입점에서 복구된 제어 경로에 있는가? | `REACHABLE`, `UNREACHABLE`, `UNKNOWN` |
+| `reachability.attacker_control` | 인수 슬라이스가 이 발견에서 공격자 영향에 대해 무엇을 증명했는가? | `TAINTED`, `BOUNDED`, `UNKNOWN` |
+
+도달 가능성은 추가 증거이며 발견의 `verdict`, 집계 판정, CLI 종료 코드를
+바꾸지 않습니다. 따라서 로컬에서 증명된 오버플로가 `verdict=UNSAFE`이면서
+`reachability.status=UNREACHABLE`일 수 있습니다. 실행 가능한 공격 경로를
+요구하는 소비자는 두 필드를 모두 검사해야 합니다.
+
+루트는 인식된 애플리케이션 진입점(`application`, 예: `main`, `WinMain`), 이미지
+진입점(`image`), 내보낸 루틴(`export`)입니다. 한 함수에 여러 신원이 있으면 결정적
+우선순위는 `application`, `image`, `export`입니다. `reachability.entry`는 `va`,
+`name`, `kind`를 기록합니다. 도달 가능한 비루트 발견의 `call_chain`은 정확한 내부
+에지의 가장 짧고 결정적인 경로이며, 각 에지는 `caller_va`, 호출 지점 `call_va`,
+`callee_va`, 그리고 `direct` 또는 `indirect`인 `kind`를 담습니다.
+
+`UNREACHABLE`은 루트가 있고 내부 호출 인벤토리가 완전하며 깊이 예산을 소진하지
+않았는데도 경로가 없을 때만 출력됩니다. 다른 양의 증거로 아직 도달하지 못한 함수에서는
+루트 부재, 중복되거나 모호한 함수 신원, 불일치하는 CFG/호출 인벤토리, 미해석 실행 가능
+내부 대상, 깊이 소진이 부정 증명을 막아 `reachability.status=UNKNOWN`을 만들며 해당하면
+`reason`과 `budget_hit`를
+제공합니다. 알 수 없는 ABI, 불일치하는 인수 너비, 가변 인수 전용 슬롯, 불완전한
+슬라이스, 깊이 또는 요약 예산 소진도 아직 증명되지 않은 공격자 제어를 UNKNOWN으로
+유지합니다. 이미 증명한 사실은 유효하며 전파를 추측하지 않습니다.
+
+보고서 카운터는 함수나 경로가 아니라 발견을 셉니다. `control_reachable`은
+`status=REACHABLE`을 세고, `attacker_reachable`은 그중
+`attacker_control=TAINTED`인 부분집합입니다. `reachability_unknown`과
+`unreachable`은 나머지 제어 상태를 셉니다. 판정을 세는 `safe`, `unsafe`,
+`unknown`과는 별개입니다.
+
+---
+
 ## 예산, 출력, 바인딩
 
-헌트 탐색과 솔버는 예산으로 제한됩니다(`--max-paths`, `--max-steps`, `--max-loop`, `--solver-conflicts`). 예산 소진은 UNKNOWN입니다. 두 명령은 JSON을 출력하고 `-o`를 존중합니다. 종료 코드는 SAFE가 `0`, UNSAFE가 `2`, UNKNOWN 또는 오류가 `1`입니다.
+헌트 탐색과 솔버는 예산으로 제한됩니다(`--max-paths`, `--max-steps`, `--max-loop`, `--solver-conflicts`). 프로시저 간 분석에서는 `max_call_depth`가 알려진 진입점부터의 내부 호출 에지 수를 제한하고 `max_summary_iterations`가 공격자 제어 고정점 라운드를 제한합니다. 기본값은 각각 64개 에지와 유효 깊이 한도에 1을 더한 라운드 수입니다. 예산 소진은 위 설명처럼 fail closed입니다. `max_call_depth` 소진은 아직 도달하지 못한 함수에 `status=UNKNOWN`을 남길 수 있습니다. `max_summary_iterations` 소진은 구조적 증거를 지우지 않으므로 `status=REACHABLE`, `attacker_control=UNKNOWN`, `budget_hit=true`가 함께 존재할 수 있습니다. 두 명령은 JSON을 출력하고 `-o`를 존중합니다. 종료 코드는 SAFE가 `0`, UNSAFE가 `2`, UNKNOWN 또는 오류가 `1`입니다.
+
+모든 공개 인터페이스에서 0은 엔진 기본값을 선택합니다.
+
+| 인터페이스 | 제어 깊이 | 공격자 요약 |
+|------------|-----------|-------------|
+| CLI(`audit`, `hunt`) | `--max-call-depth <n>` | `--max-summary-iterations <n>` |
+| C(`neverd_safety_options`) | `max_call_depth` | `max_summary_iterations` |
+| Python(`Session.audit()` / `Session.hunt()`) | `max_call_depth=<n>` | `max_summary_iterations=<n>` |
+
+C 호출자는 `neverd_safety_options`를 0으로 초기화하고
+`struct_size=sizeof(neverd_safety_options)`를 설정합니다. 이전 구조체 크기는 기본값을
+유지합니다. Python은 두 값을 부호 없는 32비트 정수로 검증합니다.
 
 같은 분석은 C API(`neverd_session_audit_json` / `neverd_session_hunt_json`, 버전 있는 `neverd_safety_options`)와 Python SDK(`Session.audit()` / `Session.hunt()`)로도 사용할 수 있습니다.
 
@@ -143,11 +194,12 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
   "capacity": 16,
   "capacity_kind": "exact",
   "corroboration": "path predicate and overflow are jointly satisfiable",
+  "reachability": { "status": "REACHABLE", "attacker_control": "TAINTED", "budget_hit": false, "entry": { "va": "0x1000", "name": "main", "kind": "application" }, "call_chain": [{ "caller_va": "0x1000", "call_va": "0x1080", "callee_va": "0x1100", "kind": "direct" }] },
   "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" }, "candidate_values": [{ "name": "copy_length", "value": "17" }, { "name": "argv[1]", "value": "16 bytes" }], "replayable": false, "replay": { "adapter": "process-input-v1", "reason": "argv input is not supported by process-input-v1" }, "symbolic_model": [{ "id": 0, "name": "copy_len", "width": 64, "value_hex": "0x11", "origin": "input" }] }
 }
 ```
 
-`replayable`은 독립적인 약속이 아니라 파생된 증거입니다. `replay`에 `process-input-v1` 어댑터용 완전한 입력 계획이 있을 때만 참입니다. 계획은 정확한 환경 바이트, 사용한 경우 첫 표준 입력 바이트열, 솔버 할당 ID에서 해당 입력으로의 바인딩을 기록하며, 만들 수 없으면 `replay.reason`이 이유를 설명합니다. 이 필드들은 추가적이며 최상위 `schema_version`은 계속 `1`입니다.
+`replayable`은 독립적인 약속이 아니라 파생된 증거입니다. `replay`에 `process-input-v1` 어댑터용 완전한 입력 계획이 있을 때만 참입니다. 계획은 정확한 환경 바이트, 사용한 경우 첫 표준 입력 바이트열, 솔버 할당 ID에서 해당 입력으로의 바인딩을 기록하며, 만들 수 없으면 `replay.reason`이 이유를 설명합니다. 재생과 도달 가능성 필드들은 추가적이며 최상위 `schema_version`은 계속 `1`입니다.
 
 ---
 
@@ -158,4 +210,4 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 - 카탈로그에 등록된 와이드 문자 및 이어붙이기 복사는 요소 너비와 기존 목적지 길이를 복구할 때까지 UNKNOWN입니다. 출력 매개변수 할당자와 조건부 `realloc` 소유권도 핸들 전이를 증명할 수 없으면 UNKNOWN입니다.
 - **P0**(이번 릴리스, 세 형식 모두): 싱크 카탈로그, 인수 사전 필터, 복사 오버플로 헌트, 힙 수명 감사. 모든 테스트 호스트에서 PE, ELF, Mach-O × x86-64, AArch64의 체크인된 6개 fixture를 실행합니다.
 - **P1**: 스택/전역 오버플로, 초기화되지 않은 로컬 읽기, 형식 문자열 검사가 제공됩니다. 더 풍부한 PDB 스택 형과 추가 플랫폼 할당자는 점진적 커버리지로 남고 정확한 요약이 없으면 UNKNOWN을 유지합니다.
-- **P2**: patch로 삽입하는 런타임 검사, 프로시저 간 공격자 도달 가능성.
+- 현재 슬라이스는 알려진 진입점, 구조적 프로시저 간 도달 가능성, 공격자 매개변수의 단조 전파를 다룹니다. 별도의 실험적 `lowir-concolic-v1` 어댑터는 이제 필수 네이티브 포맷/아키텍처 매트릭스에서 레지스터 seed로 재생 검증된 브랜치 flip을 제공합니다. 이는 항상 비포괄적이며 안전성 verdict를 변경하지 않습니다. 실험적 `binary-sanitizer-v1`은 이제 Darwin에서 모든 지점을 보호하지 못하면 거부하는 counted-write 가드와 인증된 게시를 제공하지만, receipt는 트랜잭션 동안 보유한 디렉터리 object만 인증하며 원래 pathname의 영구적이고 재검증 가능한 binding은 아닙니다. 더 넓은 `process-replay-v1`은 계속해서 plan, coordinator, 가용성의 fail-closed Phase 0 경계만 제공하며 네이티브 replay를 실행하는 호스트는 없습니다.

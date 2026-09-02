@@ -18,3 +18,10 @@ add_neverd_tool(neverd
   LINK_LIBS
   neverd_shared
 )
+
+# Internal C++ helpers are ordinary dylib exports on ELF/Mach-O.  Windows does
+# not auto-export component-library symbols from neverd_shared, so link the
+# shared atomic-output implementation's component archive into the CLI there.
+if(WIN32)
+  target_link_libraries(neverd PRIVATE NeverDSupport)
+endif()

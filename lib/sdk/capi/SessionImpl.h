@@ -35,6 +35,7 @@
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -56,7 +57,18 @@ struct FuncInfo {
 };
 
 struct Session {
+  enum class SanitizePublicationFaultForTesting : uint8_t {
+    None,
+    PublishIndeterminate,
+    PublishedFinalAuthenticationFailure,
+    PublishedFinalizationFailure,
+  };
+
   std::filesystem::path FilePath;
+  /// Absolute, symlink-free source locator captured at load time for the
+  /// authenticated sanitizer path only.  FilePath deliberately preserves the
+  /// caller's legacy spelling for every pre-existing C API consumer.
+  std::filesystem::path SanitizeSourcePath;
   BinaryImage Img;
   bool Loaded = false;
 
@@ -85,9 +97,24 @@ struct Session {
 
   PatchResult LastPatch;
 
-  /// Internal JSON-boundary seam used to prove that no C++ exception crosses
+  /// Internal JSON-boundary seams used to prove that no C++ exception crosses
   /// extern C. Empty in production.
   std::function<void()> LowIRConcolicBeforeRunForTesting;
+  std::function<void()> SafetyBeforeRunForTesting;
+
+  /// Internal fault-injection seams for transaction-integrity tests.  They
+  /// are empty in production.  Each callback receives the relevant candidate
+  /// temp path and may replace its pathname or contents.
+  std::function<void(const std::filesystem::path &)>
+      SanitizeAfterBackendForTesting;
+  std::function<void(const std::filesystem::path &)>
+      SanitizeBeforeReloadForTesting;
+  std::function<void(const std::filesystem::path &)>
+      SanitizeBeforePublishForTesting;
+  std::function<void(const std::filesystem::path &)>
+      SanitizeAfterDestinationResolutionForTesting;
+  SanitizePublicationFaultForTesting SanitizePublicationFault =
+      SanitizePublicationFaultForTesting::None;
 
   // Instruction-substitution toggle, consulted by every patch
   // entry point.  LastSubstitutionCount records how many operators the most
@@ -195,6 +222,47 @@ struct Session {
     Opts.SBFStrict = SBFStrict;
     Opts.SBFProfile = SBFProfile;
     Opts.SBFIdl = SBFIdl ? &*SBFIdl : nullptr;
+  }
+
+  /// Snapshot the enabled cosmetic transforms without touching observable
+  /// per-session result state.  Transactional callers may run the returned
+  /// policy on a candidate module and commit its counts only after publishing
+  /// the corresponding binary.
+  Pipeline::ObfuscationConfig obfuscationConfig() const {
+    Pipeline::ObfuscationConfig Cfg;
+    Cfg.InstSubstitution = InstSubstitution;
+    Cfg.InstSubstitutionRounds = InstSubstitutionRounds;
+    Cfg.ConstantEncryption = ConstantEncryption;
+    Cfg.OpaquePredicate = OpaquePredicate;
+    Cfg.BogusControlFlow = BogusControlFlow;
+    Cfg.ControlFlowFlattening = ControlFlowFlattening;
+    Cfg.IndirectBranch = IndirectBranch;
+    Cfg.IndirectCall = IndirectCall;
+    Cfg.MBA = MBA;
+    Cfg.IndirectGlobal = IndirectGlobal;
+    Cfg.ValueLaunder = ValueLaunder;
+    Cfg.ConstantPooling = ConstantPooling;
+    Cfg.BitMasking = BitMasking;
+    return Cfg;
+  }
+
+  Pipeline::ObfuscationCounts runSessionObfuscation(llvm::Module &Mod) const {
+    return Pipeline::runObfuscationPasses(Mod, obfuscationConfig());
+  }
+
+  void commitObfuscationCounts(const Pipeline::ObfuscationCounts &Counts) {
+    LastSubstitutionCount = Counts.Substitution;
+    LastConstEncCount = Counts.ConstEnc;
+    LastOpaquePredCount = Counts.OpaquePred;
+    LastBogusCount = Counts.Bogus;
+    LastFlattenCount = Counts.Flatten;
+    LastIndirectBranchCount = Counts.IndirectBranch;
+    LastIndirectCallCount = Counts.IndirectCall;
+    LastMBACount = Counts.MBA;
+    LastIndirectGlobalCount = Counts.IndirectGlobal;
+    LastValueLaunderCount = Counts.ValueLaunder;
+    LastConstPoolCount = Counts.ConstPool;
+    LastBitMaskCount = Counts.BitMask;
   }
 
   void resetFunctionsFromImage() {

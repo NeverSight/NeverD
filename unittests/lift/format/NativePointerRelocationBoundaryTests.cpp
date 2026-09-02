@@ -282,6 +282,10 @@ TEST_F(NativePointerRelocationBoundary,
 
 TEST_F(NativePointerRelocationBoundary,
        MachOObjectAbsoluteCodePointerRelocationSurvivesLift) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "cross-target Mach-O fixtures require Clang's GNU-style "
+                    "driver";
+
   const fs::path Source = tmpFile("macho_absolute_code_pointer.s");
   const fs::path Object = tmpFile("macho_absolute_code_pointer.o");
   {
@@ -347,6 +351,10 @@ _table:
 
 TEST_F(NativePointerRelocationBoundary,
        ELFRelocatableMovabsCodeRelocationStaysInstructionProvenance) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "cross-target ELF fixtures require Clang's GNU-style "
+                    "driver";
+
   const fs::path Source = tmpFile("elf_movabs_code_reference.s");
   const fs::path Object = tmpFile("elf_movabs_code_reference.o");
   {
@@ -420,6 +428,10 @@ target:
 
 TEST_F(NativePointerRelocationBoundary,
        ELFRelocatableZeroVAPointerTablePreservesSwitchAndParameterLoad) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "cross-target ELF fixtures require Clang's GNU-style "
+                    "driver";
+
   const fs::path Source = tmpFile("elf_zero_va_pointer_table.s");
   const fs::path Object = tmpFile("elf_zero_va_pointer_table.o");
   {
@@ -857,6 +869,10 @@ TEST_F(NativePointerRelocationBoundary,
 #if !defined(__APPLE__)
   GTEST_SKIP() << "AArch64 Mach-O fixture is built only on Apple hosts";
 #else
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "cross-target Mach-O fixtures require Clang's GNU-style "
+                    "driver";
+
   const fs::path Path = fixture("test_scalar_index_cycle_a64_macho");
   ASSERT_TRUE(fs::exists(Path));
 

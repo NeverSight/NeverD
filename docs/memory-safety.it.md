@@ -119,9 +119,63 @@ La macchina a stati dell’heap emette dapprima una sequenza di eventi candidata
 
 ---
 
+## Raggiungibilità interprocedurale da entry note
+
+Ogni reperto contiene tre affermazioni indipendenti, da non confondere:
+
+| Campo | Domanda | Valori |
+|-------|---------|--------|
+| `verdict` | Che cosa prova l’analisi di sicurezza locale sull’operazione? | `SAFE`, `UNSAFE`, `UNKNOWN` |
+| `reachability.status` | La funzione contenitore si trova su un percorso di controllo recuperato da una entry nativa nota? | `REACHABLE`, `UNREACHABLE`, `UNKNOWN` |
+| `reachability.attacker_control` | Che cosa prova lo slice dell’argomento sull’influenza dell’attaccante in questo reperto? | `TAINTED`, `BOUNDED`, `UNKNOWN` |
+
+La raggiungibilità è evidenza additiva: non cambia il `verdict` del reperto, il
+verdetto aggregato o il codice di uscita CLI. Un overflow provato localmente può
+quindi avere `verdict=UNSAFE` e `reachability.status=UNREACHABLE`. Un consumer
+che richiede un percorso d’attacco eseguibile deve verificare entrambi i campi.
+
+Le radici sono entry di applicazione riconosciute (`application`, come `main` o
+`WinMain`), l’entry dell’immagine (`image`) e routine esportate (`export`). Se
+una funzione ha più identità, la preferenza deterministica è `application`,
+`image`, `export`. `reachability.entry` registra `va`, `name` e `kind`. Per un
+reperto raggiungibile non radice, `call_chain` contiene inoltre il percorso
+deterministico più breve di archi interni esatti, con `caller_va`, il sito
+`call_va`, `callee_va` e `kind` pari a `direct` o `indirect`.
+
+`UNREACHABLE` è emesso solo se esiste una radice, l’inventario delle chiamate
+interne è completo e la profondità non è esaurita. Per una funzione non già
+raggiunta positivamente, radici mancanti, identità di funzione duplicate o
+ambigue, inventari CFG/chiamate incoerenti, target interni eseguibili non
+risolti ed esaurimento della profondità impediscono la prova negativa e
+producono `reachability.status=UNKNOWN`, con `reason` e `budget_hit` quando applicabile.
+ABI sconosciuta, larghezze argomento incompatibili, slot solo variadico, slice
+incompleto o budget di profondità/sommario esaurito lasciano UNKNOWN anche il
+controllo dell’attaccante non ancora provato; i fatti già dimostrati restano
+validi e non viene inventata propagazione.
+
+I contatori del report contano reperti, non funzioni o percorsi.
+`control_reachable` conta `status=REACHABLE`; `attacker_reachable` è il
+sottoinsieme con anche `attacker_control=TAINTED`. `reachability_unknown` e
+`unreachable` contano gli altri stati di controllo. Sono distinti da `safe`,
+`unsafe` e `unknown`, che contano i verdetti.
+
+---
+
 ## Budget, output e binding
 
-L’esplorazione del hunt e il solver sono limitati (`--max-paths`, `--max-steps`, `--max-loop`, `--solver-conflicts`); l’esaurimento del budget produce UNKNOWN. Entrambi i comandi stampano JSON e onorano `-o`. Il codice di uscita è `0` per SAFE, `2` per UNSAFE e `1` per UNKNOWN o un errore.
+L’esplorazione del hunt e il solver sono limitati (`--max-paths`, `--max-steps`, `--max-loop`, `--solver-conflicts`). Nel lavoro interprocedurale, `max_call_depth` limita il numero di archi di chiamata interni da una entry nota e `max_summary_iterations` limita i round del punto fisso del controllo dell’attaccante. I default sono 64 archi e la profondità effettiva più un round. L’esaurimento fallisce chiuso come descritto sopra. Esaurire `max_call_depth` può lasciare `status=UNKNOWN` per una funzione non ancora raggiunta; esaurire `max_summary_iterations` non cancella il testimone strutturale, quindi `status=REACHABLE` può coesistere con `attacker_control=UNKNOWN` e `budget_hit=true`. Entrambi i comandi stampano JSON e onorano `-o`. Il codice di uscita è `0` per SAFE, `2` per UNSAFE e `1` per UNKNOWN o un errore.
+
+Zero seleziona il default del motore su ogni interfaccia:
+
+| Interfaccia | Profondità di controllo | Sommario attaccante |
+|-------------|--------------------------|---------------------|
+| CLI (`audit` e `hunt`) | `--max-call-depth <n>` | `--max-summary-iterations <n>` |
+| C (`neverd_safety_options`) | `max_call_depth` | `max_summary_iterations` |
+| Python (`Session.audit()` / `Session.hunt()`) | `max_call_depth=<n>` | `max_summary_iterations=<n>` |
+
+Il chiamante C inizializza `neverd_safety_options` a zero e imposta
+`struct_size=sizeof(neverd_safety_options)`; le dimensioni precedenti mantengono
+i default. Python valida entrambi come interi unsigned a 32 bit.
 
 Le stesse analisi sono disponibili tramite l’API C (`neverd_session_audit_json` / `neverd_session_hunt_json` con `neverd_safety_options` versionato) e l’SDK Python (`Session.audit()` / `Session.hunt()`).
 
@@ -143,11 +197,12 @@ Le stesse analisi sono disponibili tramite l’API C (`neverd_session_audit_json
   "capacity": 16,
   "capacity_kind": "exact",
   "corroboration": "path predicate and overflow are jointly satisfiable",
+  "reachability": { "status": "REACHABLE", "attacker_control": "TAINTED", "budget_hit": false, "entry": { "va": "0x1000", "name": "main", "kind": "application" }, "call_chain": [{ "caller_va": "0x1000", "call_va": "0x1080", "callee_va": "0x1100", "kind": "direct" }] },
   "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" }, "candidate_values": [{ "name": "copy_length", "value": "17" }, { "name": "argv[1]", "value": "16 bytes" }], "replayable": false, "replay": { "adapter": "process-input-v1", "reason": "argv input is not supported by process-input-v1" }, "symbolic_model": [{ "id": 0, "name": "copy_len", "width": 64, "value_hex": "0x11", "origin": "input" }] }
 }
 ```
 
-`replayable` è evidenza derivata, non una promessa indipendente: è vero solo se `replay` contiene un piano di input completo per l’adapter `process-input-v1`. Il piano registra i byte esatti dell’ambiente, la prima sequenza dello standard input se usata e i binding dagli ID delle assegnazioni del solver; altrimenti `replay.reason` ne spiega il motivo. I campi sono additivi; lo `schema_version` principale resta `1`.
+`replayable` è evidenza derivata, non una promessa indipendente: è vero solo se `replay` contiene un piano di input completo per l’adapter `process-input-v1`. Il piano registra i byte esatti dell’ambiente, la prima sequenza dello standard input se usata e i binding dagli ID delle assegnazioni del solver; altrimenti `replay.reason` ne spiega il motivo. I campi di replay e raggiungibilità sono additivi; lo `schema_version` principale resta `1`.
 
 ---
 
@@ -158,4 +213,4 @@ Le stesse analisi sono disponibili tramite l’API C (`neverd_session_audit_json
 - Le copie catalogate wide-character e append restano UNKNOWN finché non sono recuperati la larghezza dell’elemento e l’estensione esistente della destinazione. Gli allocator con parametro di uscita e la proprietà condizionale di `realloc` restano UNKNOWN quando la transizione dell’handle non può essere provata.
 - **P0** (questa versione, tutti e tre i formati): catalogo di sink, prefiltro degli argomenti, hunt di overflow di copia, audit di vita dell’heap. Ogni host esegue sei fixture PE, ELF e Mach-O per x86-64 e AArch64.
 - **P1**: overflow di stack/globale, letture locali non inizializzate e controlli delle stringhe di formato sono disponibili; tipi di stack PDB più ricchi e ulteriori allocator di piattaforma restano copertura incrementale, mentre l’assenza di un sommario esatto resta UNKNOWN.
-- **P2**: controlli runtime inseriti da patch, raggiungibilità interprocedurale dell’attaccante.
+- Lo slice attuale copre entry note, raggiungibilità interprocedurale strutturale e propagazione monotona dei parametri controllati dall’attaccante. L’adapter sperimentale separato `lowir-concolic-v1` ora fornisce flip di branch con seed di registro verificati tramite replay sulla matrice nativa obbligatoria di formati e architetture; resta non esaustivo e non modifica i verdetti di sicurezza. Il `binary-sanitizer-v1` sperimentale offre ora su Darwin guardie counted-write tutto-o-rifiuta e pubblicazione autenticata; il suo receipt autentica l’oggetto directory mantenuto durante la transazione, non un binding durevole e riverificabile del pathname originale. Il più ampio `process-replay-v1` resta limitato a un confine fail-closed Phase 0 per piano, coordinatore e disponibilità; nessun host esegue oggi replay nativo.

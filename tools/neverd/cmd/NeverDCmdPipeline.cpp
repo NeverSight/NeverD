@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../NeverDCLI.h"
+#include "NeverDSanitizerPublicationCLI.h"
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
@@ -29,6 +30,7 @@
 #include <cstdlib>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 // This TU uses LLVM_DEBUG (which expands DEBUG_TYPE); define a category so the
@@ -43,6 +45,43 @@ namespace neverd::cli {
 namespace {
 
 int PluginExecutableAnchor;
+
+bool isMissingOptionalValue(StringRef Value) {
+  return Value.size() == 1 && Value.front() == '\0';
+}
+
+std::optional<std::string> validateSanitizeArguments() {
+  const int Occurrences = PatchSanitize.getNumOccurrences();
+  if (Occurrences == 0)
+    return std::nullopt;
+  if (Occurrences > 1 || PatchSanitize.size() > 1)
+    return "--sanitize may be specified at most once";
+  if (PatchSanitize.empty() || PatchSanitize.front().empty() ||
+      isMissingOptionalValue(PatchSanitize.front()))
+    return "--sanitize requires a value; supported value: " +
+           PatchSanitizeRequiredValue.str();
+  if (llvm::StringRef(PatchSanitize.front()) != PatchSanitizeRequiredValue)
+    return "unsupported --sanitize value '" + PatchSanitize.front() +
+           "'; supported value: " + PatchSanitizeRequiredValue.str();
+
+  struct Conflict {
+    int Occurrences;
+    const char *Flag;
+  };
+  const Conflict Conflicts[] = {
+      {PatchFromIR.getNumOccurrences(), "--from-ir"},
+      {PatchFromC.getNumOccurrences(), "--from-c"},
+      {PatchFuncAddr.getNumOccurrences(), "--func"},
+      {MaxFunc.getNumOccurrences(), "--max-func"},
+      {InjectHello.getNumOccurrences(), "--hello"},
+      {RunNop.getNumOccurrences(), "--nop"},
+  };
+  for (const Conflict &Entry : Conflicts)
+    if (Entry.Occurrences != 0)
+      return "--sanitize=strict cannot be combined with " +
+             std::string(Entry.Flag);
+  return std::nullopt;
+}
 
 const char *hardforkSpelling(evm::Hardfork Fork) {
   switch (Fork) {
@@ -409,6 +448,12 @@ int runDecompile(neverd_session_t Sess) {
 int runPatch(neverd_session_t Sess) {
   const char *InPath = InputFile.getValue().c_str();
 
+  if (std::optional<std::string> Error = validateSanitizeArguments()) {
+    WithColor::error() << *Error << "\n";
+    return 1;
+  }
+  const bool StrictSanitize = PatchSanitize.getNumOccurrences() != 0;
+
   std::string OutPath = OutputFile.getValue();
   if (OutPath.empty())
     OutPath = InputFile.getValue() + ".patched";
@@ -427,8 +472,59 @@ int runPatch(neverd_session_t Sess) {
   neverd_set_constant_pooling(Sess, ConstPool ? 1 : 0);
   neverd_set_bit_masking(Sess, BitMask ? 1 : 0);
   neverd_set_text_section(Sess, TextSection.c_str());
+  std::optional<neverd_sanitize_result_v1> SanitizeResult;
+  std::optional<sanitizer_publication::SuccessDisposition>
+      SanitizePublicationDisposition;
   int Ret = 0;
-  if (!PatchFromIR.empty()) {
+  if (StrictSanitize) {
+    const uint32_t PublicationABIVersion =
+        neverd_sanitize_publication_abi_version();
+    if (PublicationABIVersion !=
+        sanitizer_publication::kSupportedPublicationABIVersion) {
+      WithColor::error()
+          << "strict sanitize failed: unsupported publication ABI version "
+          << PublicationABIVersion << "; expected "
+          << sanitizer_publication::kSupportedPublicationABIVersion
+          << "; no output was attempted\n";
+      return 1;
+    }
+
+    neverd_sanitize_options_v1 Options{};
+    Options.struct_size = sizeof(Options);
+    Options.strategy = PatchStrat == InplaceMode
+                           ? NEVERD_SANITIZE_STRATEGY_INPLACE
+                           : NEVERD_SANITIZE_STRATEGY_SECTION;
+
+    SanitizeResult.emplace();
+    SanitizeResult->struct_size = sizeof(*SanitizeResult);
+    const int Sanitized = neverd_session_sanitize(Sess, OutPath.c_str(),
+                                                  &Options, &*SanitizeResult);
+    if (Sanitized != 1 || SanitizeResult->ok != 1 ||
+        SanitizeResult->status != NEVERD_SANITIZE_STATUS_OK) {
+      std::string Detail = takeLastError(Sess);
+      if (Detail.empty())
+        Detail = SanitizeResult->status != NEVERD_SANITIZE_STATUS_OK
+                     ? neverd_sanitize_status_name(SanitizeResult->status)
+                     : "inconsistent sanitizer success result";
+      Detail = sanitizer_publication::failureMessage(
+          *SanitizeResult, std::move(Detail), OutPath);
+      if (sanitizer_publication::
+              terminalTupleRequiresUnknownDestinationAdvisory(Sanitized,
+                                                              *SanitizeResult))
+        Detail = sanitizer_publication::unknownDestinationStateMessage(
+            std::move(Detail), OutPath);
+      WithColor::error() << "strict sanitize failed: " << Detail << "\n";
+      return 1;
+    }
+    if (std::optional<std::string> Error =
+            sanitizer_publication::validateSuccessResult(*SanitizeResult,
+                                                         OutPath)) {
+      WithColor::error() << "strict sanitize failed: " << *Error << "\n";
+      return 1;
+    }
+    SanitizePublicationDisposition =
+        sanitizer_publication::successDisposition(*SanitizeResult);
+  } else if (!PatchFromIR.empty()) {
     // Patch from external LLVM IR: skip the lift stage and feed the IR
     // straight into the rewrite pipeline (section or inplace per --mode).
     auto IRBuf = MemoryBuffer::getFile(PatchFromIR.getValue());
@@ -464,10 +560,42 @@ int runPatch(neverd_session_t Sess) {
     return 1;
   }
   const char *PatchOut = neverd_patch_output_path(Sess);
+  if (SanitizeResult) {
+    if (std::optional<std::string> Error =
+            sanitizer_publication::validateSuccessOutputPath(PatchOut,
+                                                             OutPath)) {
+      neverd_free_string(PatchOut);
+      WithColor::error() << "strict sanitize failed: " << *Error << "\n";
+      return 1;
+    }
+  }
   std::string FinalPath = PatchOut ? PatchOut : OutPath;
-  outs() << "Patched binary written to " << FinalPath << " ("
-         << neverd_patch_code_size(Sess) << " bytes code, "
-         << neverd_patch_trampoline_count(Sess) << " trampolines)\n";
+  const uint64_t CodeSize =
+      SanitizeResult ? SanitizeResult->code_size : neverd_patch_code_size(Sess);
+  const uint64_t TrampolineCount =
+      SanitizeResult
+          ? SanitizeResult->trampoline_count
+          : static_cast<uint64_t>(neverd_patch_trampoline_count(Sess));
+  if (!SanitizePublicationDisposition ||
+      *SanitizePublicationDisposition ==
+          sanitizer_publication::SuccessDisposition::CreatedExclusive)
+    outs() << "Patched binary written to " << FinalPath << " (" << CodeSize
+           << " bytes code, " << TrampolineCount << " trampolines)\n";
+  else
+    outs() << "Existing binary authenticated at " << FinalPath << " ("
+           << CodeSize << " bytes code, " << TrampolineCount
+           << " trampolines)\n";
+  if (SanitizeResult) {
+    outs() << "strict sanitizer publication: "
+           << sanitizer_publication::successMessage(
+                  *SanitizePublicationDisposition)
+           << "\n";
+    outs() << "strict sanitizer: guarded sites: "
+           << SanitizeResult->guarded_sites
+           << ", unsupported sites: " << SanitizeResult->unsupported_sites
+           << ", patched functions: " << SanitizeResult->patched_functions
+           << "\n";
+  }
   if (InstSubst)
     outs() << "instruction substitution: "
            << neverd_patch_substitution_count(Sess) << " operator(s)\n";
@@ -507,12 +635,13 @@ int runPatch(neverd_session_t Sess) {
     neverd_free_string(PatchOut);
 
 #ifdef __APPLE__
-  if (auto Codesign = sys::findProgramByName("codesign")) {
-    std::vector<StringRef> Args = {*Codesign, "-f", "-s", "-", FinalPath};
-    if (sys::ExecuteAndWait(*Codesign, Args) == 0)
-      LLVM_DEBUG(llvm::dbgs()
-                 << "patch: ad-hoc codesigned " << FinalPath << "\n");
-  }
+  if (!StrictSanitize)
+    if (auto Codesign = sys::findProgramByName("codesign")) {
+      std::vector<StringRef> Args = {*Codesign, "-f", "-s", "-", FinalPath};
+      if (sys::ExecuteAndWait(*Codesign, Args) == 0)
+        LLVM_DEBUG(llvm::dbgs()
+                   << "patch: ad-hoc codesigned " << FinalPath << "\n");
+    }
 #endif
   return 0;
 }

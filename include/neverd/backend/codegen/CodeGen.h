@@ -19,6 +19,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/MC/BinaryRewrite.h"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -31,7 +32,34 @@ struct PatchResult {
   size_t CodeSize = 0;
   size_t TrampolineCount = 0;
   std::string OutputPath;
+  /// Sorted, unique original function entries whose replacement bytes or
+  /// entry trampolines were committed to the output artifact.
+  std::vector<va_t> PatchedOriginalEntries;
 };
+
+namespace patch_receipt_detail {
+
+/// Publish a receipt from records that authenticate writes already committed
+/// to the output. Failed transactions always clear the receipt. The projection
+/// keeps the record type format-specific while normalization stays shared.
+template <typename RecordRange, typename OriginalVAProjection>
+void publishCommitted(PatchResult &Result, const RecordRange &Records,
+                      OriginalVAProjection OriginalVAOf) {
+  Result.PatchedOriginalEntries.clear();
+  if (!Result.Success)
+    return;
+  Result.PatchedOriginalEntries.reserve(Records.size());
+  for (const auto &Record : Records)
+    Result.PatchedOriginalEntries.push_back(OriginalVAOf(Record));
+  std::sort(Result.PatchedOriginalEntries.begin(),
+            Result.PatchedOriginalEntries.end());
+  Result.PatchedOriginalEntries.erase(
+      std::unique(Result.PatchedOriginalEntries.begin(),
+                  Result.PatchedOriginalEntries.end()),
+      Result.PatchedOriginalEntries.end());
+}
+
+} // namespace patch_receipt_detail
 
 struct CodegenResult {
   std::vector<uint8_t> ObjectData;

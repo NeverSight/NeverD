@@ -122,9 +122,11 @@ typedef enum {
         from neverd_plugin.abi import Ownership
 
         self.assertIs(
-            audit.expected_ownership(
-                "neverd_proof_status_name", "const char *"
-            ),
+            audit.expected_ownership("neverd_proof_status_name", "const char *"),
+            Ownership.BORROWED_STRING,
+        )
+        self.assertIs(
+            audit.expected_ownership("neverd_sanitize_status_name", "const char *"),
             Ownership.BORROWED_STRING,
         )
         self.assertIs(

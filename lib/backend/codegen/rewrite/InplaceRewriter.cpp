@@ -97,6 +97,9 @@ InplaceRewriter::writeResult(const std::filesystem::path &OutputPath,
   Result.OutputPath = OutputPath.string();
   Result.CodeSize = State.ObjText.size();
   Result.TrampolineCount = State.TrampolineCount;
+  patch_receipt_detail::publishCommitted(
+      Result, State.Mappings,
+      [](const InplaceMapping &Mapping) { return Mapping.OrigVA; });
   return Result;
 }
 

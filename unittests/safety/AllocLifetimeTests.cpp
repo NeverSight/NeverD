@@ -7,6 +7,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/debug/DebugContext.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImageModel.h"
@@ -99,8 +100,8 @@ LowFunc solverHeavyReturnedPath(va_t EntryVA) {
   Read.StartAddr = EntryVA + 0x10;
   Read.EndAddr = EntryVA + 0x20;
   Read.Preds = {0};
-  Read.Ops.push_back(lowOp(NdOp::LOAD, NdVar::tmp(209, 8),
-                           {NdVar::reg(kSP, 8)}, EntryVA + 0x18));
+  Read.Ops.push_back(lowOp(NdOp::LOAD, NdVar::tmp(209, 8), {NdVar::reg(kSP, 8)},
+                           EntryVA + 0x18));
   Read.Ops.push_back(lowOp(NdOp::RETURN, NdVar{}, {}));
 
   LowBlock &Exit = F.Blocks[2];
@@ -108,6 +109,25 @@ LowFunc solverHeavyReturnedPath(va_t EntryVA) {
   Exit.EndAddr = EntryVA + 0x30;
   Exit.Preds = {0};
   Exit.Ops.push_back(lowOp(NdOp::RETURN, NdVar{}, {}));
+  return F;
+}
+
+LowFunc straightLineCallReturnPath(va_t EntryVA, va_t CallVA, va_t TargetVA,
+                                   Arch A) {
+  const TargetRegInfo &TRI = getTargetRegInfo(A);
+  LowFunc F;
+  F.Entry = EntryVA;
+  F.DecodedInstructionCount = 2;
+  F.LiftedInstructionCount = 2;
+  LowBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = EntryVA;
+  Block.EndAddr = CallVA + 8;
+  Block.Ops.push_back(lowOp(NdOp::CALL,
+                            NdVar::reg(TRI.IntReturnReg, TRI.PointerSize),
+                            {NdVar::cst(TargetVA, TRI.PointerSize)}, CallVA));
+  Block.Ops.push_back(lowOp(NdOp::RETURN, NdVar{}, {}, CallVA + 4));
+  F.Blocks.push_back(std::move(Block));
   return F;
 }
 
@@ -166,9 +186,11 @@ struct FB {
 class TypedFunctionDebug : public NullDebugContext {
 public:
   TypedFunctionDebug(va_t Address, std::string Name,
-                     std::vector<TypeRef> Params, TypeRef ReturnType = {})
+                     std::vector<TypeRef> Params, TypeRef ReturnType = {},
+                     bool AuthenticatedSignatures = true)
       : Address(Address), Name(std::move(Name)), Params(std::move(Params)),
-        ReturnType(std::move(ReturnType)) {}
+        ReturnType(std::move(ReturnType)),
+        AuthenticatedSignatures(AuthenticatedSignatures) {}
 
   std::optional<FunctionSym> resolveFunction(va_t Query) const override {
     if (Query != Address)
@@ -183,6 +205,32 @@ public:
     return Result;
   }
 
+  bool hasAuthenticatedFunctionSignatures() const override {
+    return AuthenticatedSignatures;
+  }
+  AuthenticatedReturnValueState
+  resolveAuthenticatedReturnValueState(va_t Query) const override {
+    if (!AuthenticatedSignatures || Query != Address || !ReturnType)
+      return {};
+    using Kind = AuthenticatedReturnKind;
+    switch (ReturnType->Kind) {
+    case NdTypeKind::Void:
+      return {Kind::NoValue, 0};
+    case NdTypeKind::Ptr:
+      return {Kind::Pointer, ReturnType->Size};
+    case NdTypeKind::Int:
+      return {Kind::Integer, ReturnType->Size};
+    case NdTypeKind::Float:
+      return {Kind::FloatingPoint, ReturnType->Size};
+    case NdTypeKind::Array:
+    case NdTypeKind::Struct:
+      return {Kind::Aggregate, ReturnType->Size};
+    case NdTypeKind::Func:
+    case NdTypeKind::Unknown:
+      return {};
+    }
+    return {};
+  }
   bool hasInfo() const override { return true; }
 
 private:
@@ -190,6 +238,7 @@ private:
   std::string Name;
   std::vector<TypeRef> Params;
   TypeRef ReturnType;
+  bool AuthenticatedSignatures = true;
 };
 
 std::vector<Finding> audit(std::vector<MedFunc> Funcs,
@@ -210,6 +259,22 @@ std::vector<Finding> audit(std::vector<MedFunc> Funcs,
              : auditHeap(In, SinkCatalog::defaults(), SafetyBudgets{});
 }
 
+std::vector<Finding> auditWithLowIR(std::vector<MedFunc> Funcs,
+                                    std::vector<LowFunc> LowFuncs,
+                                    const BinaryImage *Image,
+                                    const DebugContext *Debug = nullptr,
+                                    bool StackRegs = false) {
+  AnalysisInput In;
+  In.Img = Image;
+  In.MedFuncs = &Funcs;
+  In.LowFuncs = &LowFuncs;
+  In.Dbg = Debug;
+  In.DebugKind = Debug ? DebugInfoKind::DWARF : DebugInfoKind::None;
+  In.StackRegsKnown = StackRegs;
+  In.StackPointerReg = kSP;
+  return auditHeap(In, SinkCatalog::defaults(), SafetyBudgets{});
+}
+
 bool has(const std::vector<Finding> &Fs, VulnClass C) {
   for (const Finding &F : Fs)
     if (F.Class == C)
@@ -228,6 +293,14 @@ size_t count(const std::vector<Finding> &Fs, VulnClass C) {
 const Finding *find(const std::vector<Finding> &Fs, VulnClass C) {
   for (const Finding &F : Fs)
     if (F.Class == C)
+      return &F;
+  return nullptr;
+}
+
+const Finding *findInFunction(const std::vector<Finding> &Fs, VulnClass C,
+                              va_t Entry) {
+  for (const Finding &F : Fs)
+    if (F.Class == C && F.FuncEntry == Entry)
       return &F;
   return nullptr;
 }
@@ -253,7 +326,12 @@ TEST(AllocLifetime, TruncatedStackAddressDoesNotHideAHeapEscape) {
   B.op(Block, NdOp::STORE, MedVar{}, {temp(10, 4), temp(1)});
   B.ret(Block, {});
 
-  EXPECT_FALSE(has(audit({B.F}, nullptr, true), VulnClass::HeapLeak));
+  const std::vector<Finding> Findings = audit({B.F}, nullptr, true);
+  const Finding *Leak = find(Findings, VulnClass::HeapLeak);
+  ASSERT_NE(Leak, nullptr);
+  EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown);
+  EXPECT_NE(Leak->Detail.find("heap handle may escape"), std::string::npos)
+      << Leak->Detail;
 }
 
 TEST(AllocLifetime, NarrowEncodedStackImmediateStillKeepsLocalSpill) {
@@ -266,6 +344,105 @@ TEST(AllocLifetime, NarrowEncodedStackImmediateStillKeepsLocalSpill) {
   B.ret(Block, {});
 
   EXPECT_TRUE(has(audit({B.F}, nullptr, true), VulnClass::HeapLeak));
+}
+
+TEST(AllocLifetime, EntrySelfCopyKeepsHeapIdentityAcrossLocalSpill) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  FB B("entry_live_in_heap_spill", 0x100);
+  const int Block = B.block();
+  B.F.Blocks[Block].StartAddr = B.F.Entry;
+  B.op(Block, NdOp::COPY, mkReg(kSP, 0), {mkReg(kSP, 0)});
+  B.op(Block, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.call(Block, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.op(Block, NdOp::STORE, MedVar{}, {mkReg(kSP, 1), temp(1)});
+  B.op(Block, NdOp::LOAD, temp(2), {mkReg(kSP, 1)});
+  B.call(Block, "free", MedVar{}, {temp(2)});
+  B.call(Block, "free", MedVar{}, {temp(2)});
+  B.op(Block, NdOp::LOAD, temp(3), {temp(2)});
+  B.ret(Block, {});
+
+  const std::vector<Finding> Findings = audit({B.F}, &Img, true);
+  EXPECT_TRUE(has(Findings, VulnClass::DoubleFree));
+  EXPECT_TRUE(has(Findings, VulnClass::UseAfterFree));
+}
+
+TEST(AllocLifetime, StackPointerDefinitionsMustAuthenticateLocalSpills) {
+  enum class Definition {
+    DifferentOffsetPhi,
+    SameOffsetPhi,
+    UndefinedVersion,
+    ZeroWidthOperation,
+    UnsupportedOperation,
+  };
+  for (const Definition Kind :
+       {Definition::DifferentOffsetPhi, Definition::SameOffsetPhi,
+        Definition::UndefinedVersion, Definition::ZeroWidthOperation,
+        Definition::UnsupportedOperation}) {
+    SCOPED_TRACE(static_cast<unsigned>(Kind));
+    BinaryImage Img;
+    Img.Arch = Arch::X64;
+    FB B("sp_definition", 0x100);
+    const int Entry = B.block();
+    B.call(Entry, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+
+    MedVar Address;
+    if (Kind == Definition::DifferentOffsetPhi ||
+        Kind == Definition::SameOffsetPhi) {
+      const int Left = B.block();
+      const int Right = B.block();
+      const int Join = B.block();
+      B.succ(Entry, Left);
+      B.succ(Entry, Right);
+      B.succ(Left, Join);
+      B.succ(Right, Join);
+      const MedVar LeftSP = mkReg(kSP, 1);
+      const MedVar RightSP = mkReg(kSP, 2);
+      B.op(Left, NdOp::INT_SUB, LeftSP,
+           {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+      B.op(Right, NdOp::INT_SUB, RightSP,
+           {mkReg(kSP, 0),
+            MedVar::makeConst(Kind == Definition::SameOffsetPhi ? 0x20 : 0x40,
+                              8)});
+      Address = mkReg(kSP, 3);
+      PhiNode StackPhi;
+      StackPhi.Output = Address;
+      StackPhi.Args = {{Left, LeftSP}, {Right, RightSP}};
+      B.F.Blocks[Join].Phis.push_back(std::move(StackPhi));
+      B.op(Join, NdOp::STORE, MedVar{}, {Address, temp(1)});
+      if (Kind == Definition::SameOffsetPhi) {
+        const MedVar DirectAddress = temp(20);
+        B.op(Join, NdOp::INT_SUB, DirectAddress,
+             {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+        B.op(Join, NdOp::LOAD, temp(21), {DirectAddress}, 0x408);
+      }
+      B.ret(Join, {});
+    } else {
+      const int Block = Entry;
+      Address = mkReg(kSP, 4);
+      if (Kind == Definition::ZeroWidthOperation)
+        B.op(Block, NdOp::COPY, mkReg(kSP, 4, 0), {mkReg(kSP, 0)});
+      else if (Kind == Definition::UnsupportedOperation)
+        B.op(Block, NdOp::INT_XOR, Address,
+             {mkReg(kSP, 0), MedVar::makeConst(0, 8)});
+      B.op(Block, NdOp::STORE, MedVar{}, {Address, temp(1)});
+      B.ret(Block, {});
+    }
+
+    const std::vector<Finding> Findings =
+        audit({B.F}, &Img, /*StackRegs=*/true,
+              /*IncludeStackReads=*/Kind == Definition::SameOffsetPhi);
+    const Finding *Leak = find(Findings, VulnClass::HeapLeak);
+    ASSERT_NE(Leak, nullptr);
+    EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown) << Leak->Detail;
+    const bool MustFailClosed = Kind != Definition::SameOffsetPhi;
+    EXPECT_EQ(Leak->Detail.find("heap handle may escape") != std::string::npos,
+              MustFailClosed)
+        << Leak->Detail;
+    if (Kind == Definition::SameOffsetPhi)
+      EXPECT_EQ(find(Findings, VulnClass::UninitializedRead), nullptr);
+  }
 }
 
 TEST(AllocLifetime, FindingUsesAllocatorIdentityOrigin) {
@@ -657,8 +834,7 @@ TEST(AllocLifetime, CatalogSourceResultCanCorroborateConditionalLeakPath) {
   MedFuncs.front().CallInfos[1].TargetName = "scanf";
   const std::vector<Finding> OutputOnlyFindings =
       auditHeap(In, SinkCatalog::defaults(), SafetyBudgets{});
-  const Finding *OutputOnlyLeak =
-      find(OutputOnlyFindings, VulnClass::HeapLeak);
+  const Finding *OutputOnlyLeak = find(OutputOnlyFindings, VulnClass::HeapLeak);
   ASSERT_NE(OutputOnlyLeak, nullptr);
   EXPECT_EQ(OutputOnlyLeak->TheVerdict, Verdict::Unknown);
   EXPECT_EQ(OutputOnlyLeak->TheConfidence, Confidence::Low);
@@ -731,28 +907,136 @@ TEST(AllocLifetime, WidthChangingPhiDoesNotProveAllocationReleased) {
   EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown);
 }
 
-TEST(AllocLifetime, NoLeakWhenReturned) {
-  FB B("f", 0x100);
-  int b0 = B.block();
-  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
-  B.ret(b0, {temp(1)}); // handle escapes through the return value.
-  auto Fs = audit({B.F});
-  EXPECT_FALSE(has(Fs, VulnClass::HeapLeak));
+TEST(AllocLifetime, UnknownReturnCarrierKeepsLeakUncertain) {
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<int>(A));
+    BinaryImage Img;
+    Img.Arch = A;
+    const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
+    FB B("f", 0x100);
+    int b0 = B.block();
+    const MedVar Result = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+    B.call(b0, "malloc", Result, {MedVar::makeConst(16, TRI.PointerSize)});
+    B.ret(b0,
+          A == Arch::AArch64
+              ? std::vector<MedVar>{mkReg(TRI.LinkRegister, 1, TRI.PointerSize)}
+              : std::vector<MedVar>{Result});
+    const std::vector<Finding> Fs = audit({B.F}, &Img);
+    const Finding *Leak = find(Fs, VulnClass::HeapLeak);
+    ASSERT_NE(Leak, nullptr);
+    EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown);
+  }
+}
+
+TEST(AllocLifetime, HeuristicReturnTypeCannotPublishOwnedHeapSummary) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
+  FB Wrap("untyped_factory", 0x200);
+  // Mirrors MedTypePass's default integer backend type when no declaration is
+  // available.  The explicit evidence intentionally remains Unknown.
+  Wrap.F.ReturnType = NdType::makeInt(TRI.PointerSize, false);
+  const int WrapperBlock = Wrap.block();
+  const MedVar Result = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+  Wrap.call(WrapperBlock, "malloc", Result,
+            {MedVar::makeConst(16, TRI.PointerSize)});
+  Wrap.ret(WrapperBlock, {Result});
+
+  FB User("user", 0x100);
+  const int UserBlock = User.block();
+  User.call(UserBlock, "untyped_factory", temp(9), {}, Wrap.F.Entry);
+  User.ret(UserBlock, {});
+
+  const std::vector<Finding> Findings = audit({Wrap.F, User.F}, &Img);
+  const Finding *CallerLeak = nullptr;
+  const Finding *WrapperLeak = nullptr;
+  for (const Finding &Finding : Findings) {
+    if (Finding.Class != VulnClass::HeapLeak)
+      continue;
+    if (Finding.FuncEntry == User.F.Entry)
+      CallerLeak = &Finding;
+    if (Finding.FuncEntry == Wrap.F.Entry)
+      WrapperLeak = &Finding;
+  }
+  // The heuristic type cannot establish definite pointer ownership, but the
+  // live ABI return carrier still makes ownership possible.  Preserve that
+  // May fact for callers instead of collapsing it to No.
+  ASSERT_NE(CallerLeak, nullptr);
+  EXPECT_EQ(CallerLeak->TheVerdict, Verdict::Unknown);
+  EXPECT_NE(CallerLeak->Detail.find("callee may return heap ownership"),
+            std::string::npos)
+      << CallerLeak->Detail;
+  ASSERT_NE(WrapperLeak, nullptr);
+  EXPECT_EQ(WrapperLeak->TheVerdict, Verdict::Unknown);
 }
 
 TEST(AllocLifetime, NarrowReturnDoesNotProveAllocationEscaped) {
   BinaryImage Img;
   Img.Arch = Arch::X64;
+  const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
   FB B("f", 0x100);
   int b0 = B.block();
   B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
-  B.ret(b0, {temp(1, 1)});
+  const MedVar NarrowResult = mkReg(TRI.IntReturnReg, 1, 1);
+  B.op(b0, NdOp::SUBBYTES, NarrowResult, {temp(1), MedVar::makeConst(0, 8)});
+  B.ret(b0, {NarrowResult});
 
   const std::vector<Finding> Fs = audit({B.F}, &Img);
   const Finding *Leak = find(Fs, VulnClass::HeapLeak);
   ASSERT_NE(Leak, nullptr);
   EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown) << Leak->Detail;
   EXPECT_EQ(Leak->TheConfidence, Confidence::Low) << Leak->Detail;
+}
+
+TEST(AllocLifetime, OverlappingHighByteWriteKillsStaleX64ReturnCarrier) {
+  constexpr va_t MallocVA = 0x110;
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
+  FB B("f", 0x100);
+  B.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsPointer;
+  const int Block = B.block();
+  const MedVar Result = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+  B.call(Block, "malloc", Result, {MedVar::makeConst(16, TRI.PointerSize)},
+         0x9000, MallocVA);
+  // x86 models AH at the second byte of the RAX range.  It is not a complete
+  // ABI result, but it is a newer overlapping definition that kills Result.
+  const MedVar HighByte = mkReg(TRI.IntReturnReg + 1, 2, 1);
+  B.op(Block, NdOp::COPY, HighByte, {MedVar::makeConst(0, 1)});
+  B.ret(Block, {Result});
+
+  const std::vector<Finding> Findings = auditWithLowIR(
+      {B.F},
+      {straightLineCallReturnPath(B.F.Entry, MallocVA, 0x9000, Img.Arch)},
+      &Img);
+  const Finding *Leak = find(Findings, VulnClass::HeapLeak);
+  ASSERT_NE(Leak, nullptr);
+  EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown);
+}
+
+TEST(AllocLifetime, ZeroExtendingLowWriteKillsStaleX64ReturnCarrier) {
+  constexpr va_t MallocVA = 0x110;
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
+  ASSERT_TRUE(TRI.writeZeroExtends(TRI.IntReturnReg, 4));
+  FB B("f", 0x100);
+  B.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsPointer;
+  const int Block = B.block();
+  const MedVar Result = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+  B.call(Block, "malloc", Result, {MedVar::makeConst(16, TRI.PointerSize)},
+         0x9000, MallocVA);
+  const MedVar ZeroExtended = mkReg(TRI.IntReturnReg, 2, 4);
+  B.op(Block, NdOp::COPY, ZeroExtended, {MedVar::makeConst(0, 4)});
+  B.ret(Block, {Result});
+
+  const std::vector<Finding> Findings = auditWithLowIR(
+      {B.F},
+      {straightLineCallReturnPath(B.F.Entry, MallocVA, 0x9000, Img.Arch)},
+      &Img);
+  const Finding *Leak = find(Findings, VulnClass::HeapLeak);
+  ASSERT_NE(Leak, nullptr);
+  EXPECT_EQ(Leak->TheVerdict, Verdict::Unsafe);
 }
 
 TEST(AllocLifetime, NarrowStoredValueDoesNotProveAllocationEscaped) {
@@ -772,39 +1056,53 @@ TEST(AllocLifetime, NarrowStoredValueDoesNotProveAllocationEscaped) {
 }
 
 TEST(AllocLifetime, RuntimeAdjustedReturnDoesNotProveAllocationEscaped) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
   FB B("f", 0x100);
   int b0 = B.block();
   B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
   B.op(b0, NdOp::INT_ADD, temp(2), {temp(1), temp(9)});
-  B.ret(b0, {temp(2)});
+  const MedVar Result = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+  B.op(b0, NdOp::COPY, Result, {temp(2)});
+  B.ret(b0, {Result});
 
-  const std::vector<Finding> Findings = audit({B.F});
+  const std::vector<Finding> Findings = audit({B.F}, &Img);
   const Finding *Leak = find(Findings, VulnClass::HeapLeak);
   ASSERT_NE(Leak, nullptr);
   EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown);
   EXPECT_EQ(Leak->TheConfidence, Confidence::Low);
 }
 
-TEST(AllocLifetime, RuntimeAdjustedWrapperReturnIsNotAnOwnedHeapSummary) {
+TEST(AllocLifetime, RuntimeAdjustedWrapperReturnIsOnlyAPotentialHeapSummary) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
   FB Helper("helper", 0x200);
   Helper.F.Params.push_back(temp(9));
   const int HelperBlock = Helper.block();
   Helper.call(HelperBlock, "malloc", temp(1), {MedVar::makeConst(16, 8)});
   Helper.op(HelperBlock, NdOp::INT_ADD, temp(2), {temp(1), temp(9)});
-  Helper.ret(HelperBlock, {temp(2)});
+  const MedVar Result = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+  Helper.op(HelperBlock, NdOp::COPY, Result, {temp(2)});
+  Helper.ret(HelperBlock, {Result});
 
   FB User("user", 0x100);
   const int UserBlock = User.block();
   User.call(UserBlock, "helper", temp(3), {temp(8)}, Helper.F.Entry);
   User.ret(UserBlock, {});
 
-  const std::vector<Finding> Findings = audit({Helper.F, User.F});
-  bool UserHeapFinding = false;
+  const std::vector<Finding> Findings = audit({Helper.F, User.F}, &Img);
+  const Finding *UserHeapFinding = nullptr;
   for (const Finding &Finding : Findings)
     if (Finding.FuncEntry == User.F.Entry &&
         Finding.Class == VulnClass::HeapLeak)
-      UserHeapFinding = true;
-  EXPECT_FALSE(UserHeapFinding);
+      UserHeapFinding = &Finding;
+  ASSERT_NE(UserHeapFinding, nullptr);
+  EXPECT_EQ(UserHeapFinding->TheVerdict, Verdict::Unknown);
+  EXPECT_NE(UserHeapFinding->Detail.find("callee may return heap ownership"),
+            std::string::npos)
+      << UserHeapFinding->Detail;
   const Finding *HelperLeak = nullptr;
   for (const Finding &Finding : Findings)
     if (Finding.FuncEntry == Helper.F.Entry &&
@@ -2882,30 +3180,96 @@ TEST(AllocLifetime, SolverBudgetExhaustionIsReported) {
 
 TEST(AllocLifetime, WrapperAllocationLeakIsInterprocedural) {
   // xmalloc(n){ return malloc(n); }  user(){ p = xmalloc(16); /* leak */ }
-  FB Wrap("xmalloc", 0x200);
-  int w0 = Wrap.block();
-  Wrap.call(w0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
-  Wrap.ret(w0, {temp(1)});
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<int>(A));
+    BinaryImage Img;
+    Img.Arch = A;
+    const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
+    FB Wrap("xmalloc", 0x200);
+    Wrap.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsPointer;
+    int w0 = Wrap.block();
+    const MedVar Result = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+    Wrap.call(w0, "malloc", Result, {MedVar::makeConst(16, TRI.PointerSize)});
+    Wrap.ret(w0, A == Arch::AArch64 ? std::vector<MedVar>{mkReg(
+                                          TRI.LinkRegister, 1, TRI.PointerSize)}
+                                    : std::vector<MedVar>{Result});
+
+    FB User("user", 0x100);
+    int u0 = User.block();
+    User.call(u0, "xmalloc", temp(9), {MedVar::makeConst(16, TRI.PointerSize)},
+              /*Target=*/0x200);
+    User.ret(u0, {});
+
+    auto Fs = audit({Wrap.F, User.F}, &Img);
+    const Finding *UserLeak = nullptr;
+    const Finding *WrapperLeak = nullptr;
+    for (const Finding &F : Fs) {
+      if (F.Class != VulnClass::HeapLeak)
+        continue;
+      if (F.FuncEntry == User.F.Entry)
+        UserLeak = &F;
+      if (F.FuncEntry == Wrap.F.Entry)
+        WrapperLeak = &F;
+    }
+    ASSERT_NE(UserLeak, nullptr);
+    // This helper supplies no LowIR for the caller, so the otherwise definite
+    // candidate is expected to fail closed during symbolic corroboration.  Its
+    // presence is what proves the owned-heap summary reached the caller.
+    EXPECT_EQ(UserLeak->TheVerdict, Verdict::Unknown);
+    EXPECT_EQ(UserLeak->Corroboration,
+              "no LowIR path was available for corroboration");
+    EXPECT_EQ(UserLeak->Detail.find("callee may return heap ownership"),
+              std::string::npos)
+        << UserLeak->Detail;
+    EXPECT_EQ(WrapperLeak, nullptr);
+  }
+}
+
+TEST(AllocLifetime, UnknownArchitecturePointerReturnPropagatesAsMay) {
+  BinaryImage Img;
+  Img.Arch = Arch::Unknown;
+
+  FB Wrapper("unknown_arch_factory", 0x200);
+  Wrapper.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsPointer;
+  const int WrapperBlock = Wrapper.block();
+  Wrapper.call(WrapperBlock, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  Wrapper.ret(WrapperBlock, {});
 
   FB User("user", 0x100);
-  int u0 = User.block();
-  User.call(u0, "xmalloc", temp(9), {MedVar::makeConst(16, 8)},
-            /*Target=*/0x200);
-  User.ret(u0, {});
+  const int UserBlock = User.block();
+  User.call(UserBlock, "unknown_arch_factory", temp(9), {}, Wrapper.F.Entry);
+  User.ret(UserBlock, {});
 
-  auto Fs = audit({Wrap.F, User.F});
-  bool UserLeak = false;
-  for (const Finding &F : Fs)
-    if (F.Class == VulnClass::HeapLeak && F.FuncEntry == 0x100)
-      UserLeak = true;
-  EXPECT_TRUE(UserLeak);
+  const std::vector<Finding> Findings = audit({Wrapper.F, User.F}, &Img);
+  const Finding *WrapperLeak =
+      findInFunction(Findings, VulnClass::HeapLeak, Wrapper.F.Entry);
+  ASSERT_NE(WrapperLeak, nullptr);
+  EXPECT_EQ(WrapperLeak->TheVerdict, Verdict::Unknown);
+  EXPECT_NE(WrapperLeak->Detail.find("heap handle may escape"),
+            std::string::npos)
+      << WrapperLeak->Detail;
+
+  const Finding *CallerLeak =
+      findInFunction(Findings, VulnClass::HeapLeak, User.F.Entry);
+  ASSERT_NE(CallerLeak, nullptr);
+  EXPECT_EQ(CallerLeak->TheVerdict, Verdict::Unknown);
+  EXPECT_NE(CallerLeak->Detail.find("callee may return heap ownership"),
+            std::string::npos)
+      << CallerLeak->Detail;
 }
 
 TEST(AllocLifetime, ThumbWrapperAllocationUsesCanonicalCalleeEntry) {
+  BinaryImage Img;
+  Img.Arch = Arch::ARM;
+  Img.Mode = InstructionMode::Thumb;
+  const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
   FB Wrap("xmalloc", 0x200);
+  Wrap.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsPointer;
   int WrapperBlock = Wrap.block();
-  Wrap.call(WrapperBlock, "malloc", temp(1, 4), {MedVar::makeConst(16, 4)});
-  Wrap.ret(WrapperBlock, {temp(1, 4)});
+  const MedVar Result = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+  Wrap.call(WrapperBlock, "malloc", Result,
+            {MedVar::makeConst(16, TRI.PointerSize)});
+  Wrap.ret(WrapperBlock, {mkReg(TRI.LinkRegister, 1, TRI.PointerSize)});
 
   FB User("user", 0x100);
   int UserBlock = User.block();
@@ -2913,9 +3277,6 @@ TEST(AllocLifetime, ThumbWrapperAllocationUsesCanonicalCalleeEntry) {
             0x201);
   User.ret(UserBlock, {});
 
-  BinaryImage Img;
-  Img.Arch = Arch::ARM;
-  Img.Mode = InstructionMode::Thumb;
   auto Fs = audit({User.F, Wrap.F}, &Img);
   bool UserLeak = false;
   for (const Finding &F : Fs)
@@ -3059,43 +3420,53 @@ TEST(AllocLifetime, NamedLocalZeroEntryKeepsItsInternalSummary) {
 }
 
 TEST(AllocLifetime, FreedAllocationIsNotReturnedAsOwnedHeap) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
   FB Wrap("released_factory", 0x200);
+  Wrap.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsPointer;
   int w0 = Wrap.block();
-  Wrap.call(w0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
-  Wrap.call(w0, "free", MedVar{}, {temp(1)});
-  Wrap.ret(w0, {temp(1)});
+  const MedVar Result = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+  Wrap.call(w0, "malloc", Result, {MedVar::makeConst(16, TRI.PointerSize)});
+  Wrap.call(w0, "free", MedVar{}, {Result});
+  Wrap.ret(w0, {Result});
 
   FB User("user", 0x100);
   int u0 = User.block();
   User.call(u0, "released_factory", temp(9), {}, 0x200);
   User.ret(u0, {});
 
-  auto Fs = audit({Wrap.F, User.F});
+  auto Fs = audit({Wrap.F, User.F}, &Img);
   for (const Finding &F : Fs)
     EXPECT_FALSE(F.Class == VulnClass::HeapLeak && F.FuncEntry == User.F.Entry)
         << F.Detail;
 }
 
 TEST(AllocLifetime, PartiallyFreedAllocationMayStillReturnOwnedHeap) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
   FB Wrap("conditional_factory", 0x200);
+  Wrap.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsPointer;
   int wEntry = Wrap.block();
   int wFree = Wrap.block();
   int wKeep = Wrap.block();
   int wJoin = Wrap.block();
-  Wrap.call(wEntry, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  const MedVar Result = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+  Wrap.call(wEntry, "malloc", Result, {MedVar::makeConst(16, TRI.PointerSize)});
   Wrap.succ(wEntry, wFree);
   Wrap.succ(wEntry, wKeep);
   Wrap.succ(wFree, wJoin);
   Wrap.succ(wKeep, wJoin);
-  Wrap.call(wFree, "free", MedVar{}, {temp(1)});
-  Wrap.ret(wJoin, {temp(1)});
+  Wrap.call(wFree, "free", MedVar{}, {Result});
+  Wrap.ret(wJoin, {Result});
 
   FB User("user", 0x100);
   int u0 = User.block();
   User.call(u0, "conditional_factory", temp(9), {}, 0x200);
   User.ret(u0, {});
 
-  auto Fs = audit({Wrap.F, User.F});
+  auto Fs = audit({Wrap.F, User.F}, &Img);
   bool UserLeak = false;
   for (const Finding &F : Fs)
     if (F.Class == VulnClass::HeapLeak && F.FuncEntry == User.F.Entry)
@@ -3103,23 +3474,686 @@ TEST(AllocLifetime, PartiallyFreedAllocationMayStillReturnOwnedHeap) {
   EXPECT_TRUE(UserLeak);
 }
 
+TEST(AllocLifetime,
+     FreedMixedCarrierBranchDoesNotPublishOwnedHeapForSiblingReturn) {
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<int>(A));
+    BinaryImage Img;
+    Img.Arch = A;
+    const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
+    FB Wrap("conditional_factory", 0x200);
+    Wrap.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsPointer;
+    const int Entry = Wrap.block();
+    const int Freed = Wrap.block();
+    const int Other = Wrap.block();
+    const int Join = Wrap.block();
+    Wrap.succ(Entry, Freed);
+    Wrap.succ(Entry, Other);
+    Wrap.succ(Freed, Join);
+    Wrap.succ(Other, Join);
+    const MedVar Result = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+    Wrap.call(Entry, "malloc", Result,
+              {MedVar::makeConst(16, TRI.PointerSize)});
+    Wrap.call(Freed, "free", MedVar{}, {Result});
+    const MedVar FreedResult = mkReg(TRI.IntReturnReg, 2, TRI.PointerSize);
+    Wrap.op(Freed, NdOp::COPY, FreedResult, {Result});
+    const MedVar OtherResult = mkReg(TRI.IntReturnReg, 3, TRI.PointerSize);
+    Wrap.op(Other, NdOp::COPY, OtherResult,
+            {MedVar::makeConst(0, TRI.PointerSize)});
+    Wrap.ret(Join, A == Arch::AArch64
+                       ? std::vector<MedVar>{mkReg(TRI.LinkRegister, 1,
+                                                   TRI.PointerSize)}
+                       : std::vector<MedVar>{OtherResult});
+
+    FB User("user", 0x100);
+    const int UserBlock = User.block();
+    User.call(UserBlock, "conditional_factory", temp(9, TRI.PointerSize), {},
+              Wrap.F.Entry);
+    User.ret(UserBlock, {});
+
+    const auto Findings = audit({Wrap.F, User.F}, &Img);
+    for (const Finding &F : Findings)
+      EXPECT_FALSE(F.Class == VulnClass::HeapLeak &&
+                   F.FuncEntry == User.F.Entry)
+          << F.Detail;
+  }
+}
+
+TEST(AllocLifetime, HeapReturnCorrelatesCarrierAndFreeOnTheSameIncomingEdge) {
+  enum class Case { UnfreedAliasEdge, FreedAliasEdge };
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    for (const Case C : {Case::UnfreedAliasEdge, Case::FreedAliasEdge}) {
+      SCOPED_TRACE(static_cast<int>(A));
+      SCOPED_TRACE(static_cast<int>(C));
+      BinaryImage Img;
+      Img.Arch = A;
+      const TargetRegInfo &TRI = getTargetRegInfo(A);
+
+      FB Factory("edge_factory", 0x200);
+      Factory.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsPointer;
+      const int Entry = Factory.block();
+      const int AliasEdge = Factory.block();
+      const int ZeroEdge = Factory.block();
+      const int Join = Factory.block();
+      Factory.succ(Entry, AliasEdge);
+      Factory.succ(Entry, ZeroEdge);
+      Factory.succ(AliasEdge, Join);
+      Factory.succ(ZeroEdge, Join);
+      const MedVar Allocation = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+      Factory.call(Entry, "malloc", Allocation,
+                   {MedVar::makeConst(16, TRI.PointerSize)});
+      if (C == Case::FreedAliasEdge)
+        Factory.call(AliasEdge, "free", MedVar{}, {Allocation});
+      const MedVar AliasResult = mkReg(TRI.IntReturnReg, 2, TRI.PointerSize);
+      Factory.op(AliasEdge, NdOp::COPY, AliasResult, {Allocation});
+
+      if (C == Case::UnfreedAliasEdge)
+        Factory.call(ZeroEdge, "free", MedVar{}, {Allocation});
+      const MedVar ZeroResult = mkReg(TRI.IntReturnReg, 3, TRI.PointerSize);
+      Factory.op(ZeroEdge, NdOp::COPY, ZeroResult,
+                 {MedVar::makeConst(0, TRI.PointerSize)});
+      Factory.ret(Join, A == Arch::AArch64
+                            ? std::vector<MedVar>{mkReg(TRI.LinkRegister, 1,
+                                                        TRI.PointerSize)}
+                            : std::vector<MedVar>{ZeroResult});
+
+      FB User("user", 0x100);
+      const int UserBlock = User.block();
+      User.call(UserBlock, "edge_factory", temp(9, TRI.PointerSize), {},
+                Factory.F.Entry);
+      User.ret(UserBlock, {});
+
+      const std::vector<Finding> Findings = audit({Factory.F, User.F}, &Img);
+      const Finding *CallerLeak =
+          findInFunction(Findings, VulnClass::HeapLeak, User.F.Entry);
+      if (C == Case::UnfreedAliasEdge) {
+        ASSERT_NE(CallerLeak, nullptr);
+        EXPECT_EQ(CallerLeak->Detail.find("callee may return heap ownership"),
+                  std::string::npos)
+            << CallerLeak->Detail;
+      } else {
+        EXPECT_EQ(CallerLeak, nullptr);
+      }
+    }
+  }
+}
+
+TEST(AllocLifetime, FreedAliasReturnDowngradesHeapSummaryToMay) {
+  enum class FreeKind { Guaranteed, Fallible, MayAlias };
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    for (const FreeKind Kind :
+         {FreeKind::Guaranteed, FreeKind::Fallible, FreeKind::MayAlias}) {
+      SCOPED_TRACE(static_cast<unsigned>(A));
+      SCOPED_TRACE(static_cast<unsigned>(Kind));
+      BinaryImage Img;
+      Img.Arch = A;
+      if (Kind == FreeKind::Fallible)
+        Img.Format = BinaryFormat::COFF;
+      const TargetRegInfo &TRI = getTargetRegInfo(A);
+
+      FB Factory("partially_dangling_factory", 0x200);
+      Factory.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsPointer;
+      const int Entry = Factory.block();
+      const int Owned = Factory.block();
+      const int Freed = Factory.block();
+      Factory.succ(Entry, Owned);
+      Factory.succ(Entry, Freed);
+      const MedVar Allocation = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+      Factory.call(Entry, "malloc", Allocation,
+                   {MedVar::makeConst(16, TRI.PointerSize)});
+
+      const MedVar OwnedResult = mkReg(TRI.IntReturnReg, 2, TRI.PointerSize);
+      Factory.op(Owned, NdOp::COPY, OwnedResult, {Allocation});
+      Factory.ret(Owned, A == Arch::AArch64
+                             ? std::vector<MedVar>{mkReg(TRI.LinkRegister, 1,
+                                                         TRI.PointerSize)}
+                             : std::vector<MedVar>{OwnedResult});
+
+      MedVar FreedArgument = Allocation;
+      if (Kind == FreeKind::MayAlias) {
+        FreedArgument = temp(20, TRI.PointerSize);
+        Factory.op(Freed, NdOp::SELECT, FreedArgument,
+                   {temp(21, 1), Allocation, temp(22, TRI.PointerSize)});
+      }
+      Factory.call(Freed, Kind == FreeKind::Fallible ? "LocalFree" : "free",
+                   MedVar{}, {FreedArgument});
+      const MedVar FreedResult = mkReg(TRI.IntReturnReg, 3, TRI.PointerSize);
+      Factory.op(Freed, NdOp::COPY, FreedResult, {Allocation});
+      Factory.ret(Freed, A == Arch::AArch64
+                             ? std::vector<MedVar>{mkReg(TRI.LinkRegister, 2,
+                                                         TRI.PointerSize)}
+                             : std::vector<MedVar>{FreedResult});
+
+      FB Caller("caller", 0x100);
+      Caller.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsNoValue;
+      const int CallerBlock = Caller.block();
+      Caller.call(CallerBlock, Factory.F.Name, temp(30, TRI.PointerSize), {},
+                  Factory.F.Entry);
+      Caller.ret(CallerBlock, {});
+
+      const std::vector<Finding> Findings = audit({Factory.F, Caller.F}, &Img);
+      const Finding *CallerLeak =
+          findInFunction(Findings, VulnClass::HeapLeak, Caller.F.Entry);
+      ASSERT_NE(CallerLeak, nullptr);
+      EXPECT_EQ(CallerLeak->TheVerdict, Verdict::Unknown) << CallerLeak->Detail;
+      EXPECT_NE(CallerLeak->Detail.find("callee may return heap ownership"),
+                std::string::npos)
+          << CallerLeak->Detail;
+    }
+  }
+}
+
+TEST(AllocLifetime, PotentialFreeOnZeroSiblingKeepsOwnedReturnStrong) {
+  enum class FreeKind { Fallible, MayAlias };
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    for (const FreeKind Kind : {FreeKind::Fallible, FreeKind::MayAlias}) {
+      SCOPED_TRACE(static_cast<unsigned>(A));
+      SCOPED_TRACE(static_cast<unsigned>(Kind));
+      BinaryImage Img;
+      Img.Arch = A;
+      if (Kind == FreeKind::Fallible)
+        Img.Format = BinaryFormat::COFF;
+      const TargetRegInfo &TRI = getTargetRegInfo(A);
+
+      FB Factory("zero_sibling_free_factory", 0x200);
+      Factory.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsPointer;
+      const int Entry = Factory.block();
+      const int Owned = Factory.block();
+      const int Zero = Factory.block();
+      Factory.succ(Entry, Owned);
+      Factory.succ(Entry, Zero);
+      const MedVar Allocation = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+      Factory.call(Entry, "malloc", Allocation,
+                   {MedVar::makeConst(16, TRI.PointerSize)});
+      const MedVar OwnedResult = mkReg(TRI.IntReturnReg, 2, TRI.PointerSize);
+      Factory.op(Owned, NdOp::COPY, OwnedResult, {Allocation});
+      Factory.ret(Owned, A == Arch::AArch64
+                             ? std::vector<MedVar>{mkReg(TRI.LinkRegister, 1,
+                                                         TRI.PointerSize)}
+                             : std::vector<MedVar>{OwnedResult});
+
+      MedVar FreeArgument = Allocation;
+      if (Kind == FreeKind::MayAlias) {
+        FreeArgument = temp(20, TRI.PointerSize);
+        Factory.op(Zero, NdOp::SELECT, FreeArgument,
+                   {temp(21, 1), Allocation, temp(22, TRI.PointerSize)});
+      }
+      Factory.call(Zero, Kind == FreeKind::Fallible ? "LocalFree" : "free",
+                   MedVar{}, {FreeArgument});
+      const MedVar ZeroResult = mkReg(TRI.IntReturnReg, 3, TRI.PointerSize);
+      Factory.op(Zero, NdOp::COPY, ZeroResult,
+                 {MedVar::makeConst(0, TRI.PointerSize)});
+      Factory.ret(Zero, A == Arch::AArch64
+                            ? std::vector<MedVar>{mkReg(TRI.LinkRegister, 2,
+                                                        TRI.PointerSize)}
+                            : std::vector<MedVar>{ZeroResult});
+
+      FB Caller("caller", 0x100);
+      Caller.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsNoValue;
+      const int CallerBlock = Caller.block();
+      Caller.call(CallerBlock, Factory.F.Name, temp(30, TRI.PointerSize), {},
+                  Factory.F.Entry);
+      Caller.ret(CallerBlock, {});
+
+      const std::vector<Finding> Findings = audit({Factory.F, Caller.F}, &Img);
+      const Finding *CallerLeak =
+          findInFunction(Findings, VulnClass::HeapLeak, Caller.F.Entry);
+      ASSERT_NE(CallerLeak, nullptr);
+      EXPECT_EQ(CallerLeak->Detail.find("callee may return heap ownership"),
+                std::string::npos)
+          << CallerLeak->Detail;
+    }
+  }
+}
+
+TEST(AllocLifetime, NullablePhiKeepsOwnedHeapReturnStrong) {
+  enum class ZeroEdgeRelease { None, Guaranteed };
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    for (const ZeroEdgeRelease Release :
+         {ZeroEdgeRelease::None, ZeroEdgeRelease::Guaranteed}) {
+      SCOPED_TRACE(static_cast<unsigned>(A));
+      SCOPED_TRACE(static_cast<unsigned>(Release));
+      BinaryImage Img;
+      Img.Arch = A;
+      const TargetRegInfo &TRI = getTargetRegInfo(A);
+
+      FB Factory("nullable_phi_factory", 0x200);
+      Factory.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsPointer;
+      const int Entry = Factory.block();
+      const int Owned = Factory.block();
+      const int Zero = Factory.block();
+      const int Join = Factory.block();
+      Factory.succ(Entry, Owned);
+      Factory.succ(Entry, Zero);
+      Factory.succ(Owned, Join);
+      Factory.succ(Zero, Join);
+
+      const MedVar Allocation = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+      Factory.call(Entry, "malloc", Allocation,
+                   {MedVar::makeConst(16, TRI.PointerSize)});
+      const MedVar OwnedValue = temp(20, TRI.PointerSize);
+      Factory.op(Owned, NdOp::COPY, OwnedValue, {Allocation});
+      if (Release == ZeroEdgeRelease::Guaranteed)
+        Factory.call(Zero, "free", MedVar{}, {Allocation});
+      const MedVar ZeroValue = temp(21, TRI.PointerSize);
+      Factory.op(Zero, NdOp::COPY, ZeroValue,
+                 {MedVar::makeConst(0, TRI.PointerSize)});
+
+      PhiNode Returned;
+      Returned.Output = mkReg(TRI.IntReturnReg, 2, TRI.PointerSize);
+      Returned.Args = {{Owned, OwnedValue}, {Zero, ZeroValue}};
+      Factory.F.Blocks[Join].Phis.push_back(std::move(Returned));
+      Factory.ret(Join, A == Arch::AArch64
+                            ? std::vector<MedVar>{mkReg(TRI.LinkRegister, 1,
+                                                        TRI.PointerSize)}
+                            : std::vector<MedVar>{
+                                  Factory.F.Blocks[Join].Phis.front().Output});
+
+      FB Caller("caller", 0x100);
+      Caller.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsNoValue;
+      const int CallerBlock = Caller.block();
+      Caller.call(CallerBlock, Factory.F.Name, temp(30, TRI.PointerSize), {},
+                  Factory.F.Entry);
+      Caller.ret(CallerBlock, {});
+
+      const std::vector<Finding> Findings = audit({Factory.F, Caller.F}, &Img);
+      const Finding *CallerLeak =
+          findInFunction(Findings, VulnClass::HeapLeak, Caller.F.Entry);
+      ASSERT_NE(CallerLeak, nullptr);
+      EXPECT_EQ(CallerLeak->Detail.find("callee may return heap ownership"),
+                std::string::npos)
+          << CallerLeak->Detail;
+    }
+  }
+}
+
+TEST(AllocLifetime, DuplicateSSAHeapReturnFailsClosedToMay) {
+  enum class DuplicateDefinition { Operation, Phi };
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    for (const DuplicateDefinition Duplicate :
+         {DuplicateDefinition::Operation, DuplicateDefinition::Phi}) {
+      SCOPED_TRACE(static_cast<unsigned>(A));
+      SCOPED_TRACE(static_cast<unsigned>(Duplicate));
+      BinaryImage Img;
+      Img.Arch = A;
+      const TargetRegInfo &TRI = getTargetRegInfo(A);
+
+      FB Factory("duplicate_ssa_factory", 0x200);
+      Factory.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsPointer;
+      const int Entry = Factory.block();
+      const MedVar Allocation = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+      const MedVar Returned = mkReg(TRI.IntReturnReg, 2, TRI.PointerSize);
+      Factory.call(Entry, "malloc", Allocation,
+                   {MedVar::makeConst(16, TRI.PointerSize)});
+      Factory.op(Entry, NdOp::COPY, Returned, {Allocation});
+
+      int ReturnBlock = Entry;
+      if (Duplicate == DuplicateDefinition::Operation) {
+        Factory.op(Entry, NdOp::COPY, Returned,
+                   {MedVar::makeConst(0, TRI.PointerSize)});
+      } else {
+        const int Left = Factory.block();
+        const int Right = Factory.block();
+        const int Join = Factory.block();
+        Factory.succ(Entry, Left);
+        Factory.succ(Entry, Right);
+        Factory.succ(Left, Join);
+        Factory.succ(Right, Join);
+        const MedVar LeftZero = temp(20, TRI.PointerSize);
+        const MedVar RightZero = temp(21, TRI.PointerSize);
+        Factory.op(Left, NdOp::COPY, LeftZero,
+                   {MedVar::makeConst(0, TRI.PointerSize)});
+        Factory.op(Right, NdOp::COPY, RightZero,
+                   {MedVar::makeConst(0, TRI.PointerSize)});
+        PhiNode DuplicatePhi;
+        DuplicatePhi.Output = Returned;
+        DuplicatePhi.Args = {{Left, LeftZero}, {Right, RightZero}};
+        Factory.F.Blocks[Join].Phis.push_back(std::move(DuplicatePhi));
+        ReturnBlock = Join;
+      }
+      Factory.ret(ReturnBlock, A == Arch::AArch64
+                                   ? std::vector<MedVar>{mkReg(
+                                         TRI.LinkRegister, 1, TRI.PointerSize)}
+                                   : std::vector<MedVar>{Returned});
+
+      FB Caller("caller", 0x100);
+      Caller.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsNoValue;
+      const int CallerBlock = Caller.block();
+      Caller.call(CallerBlock, Factory.F.Name, temp(30, TRI.PointerSize), {},
+                  Factory.F.Entry);
+      Caller.ret(CallerBlock, {});
+
+      const std::vector<Finding> Findings = audit({Factory.F, Caller.F}, &Img);
+      const Finding *CallerLeak =
+          findInFunction(Findings, VulnClass::HeapLeak, Caller.F.Entry);
+      ASSERT_NE(CallerLeak, nullptr);
+      EXPECT_EQ(CallerLeak->TheVerdict, Verdict::Unknown) << CallerLeak->Detail;
+      EXPECT_NE(CallerLeak->Detail.find("callee may return heap ownership"),
+                std::string::npos)
+          << CallerLeak->Detail;
+    }
+  }
+}
+
+TEST(AllocLifetime, IncompletePhiCannotProveHeapReturnMustAlias) {
+  enum class MalformedPhi {
+    MissingArgument,
+    DuplicateArgumentPredecessor,
+    UnknownArgumentPredecessor,
+    DuplicateBlockPredecessor,
+    UnknownBlockPredecessor,
+    ExistingNonPredecessor,
+    DuplicatePredecessorSuccessor,
+  };
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    for (const MalformedPhi Kind :
+         {MalformedPhi::MissingArgument,
+          MalformedPhi::DuplicateArgumentPredecessor,
+          MalformedPhi::UnknownArgumentPredecessor,
+          MalformedPhi::DuplicateBlockPredecessor,
+          MalformedPhi::UnknownBlockPredecessor,
+          MalformedPhi::ExistingNonPredecessor,
+          MalformedPhi::DuplicatePredecessorSuccessor}) {
+      SCOPED_TRACE(static_cast<unsigned>(A));
+      SCOPED_TRACE(static_cast<unsigned>(Kind));
+      BinaryImage Img;
+      Img.Arch = A;
+      const TargetRegInfo &TRI = getTargetRegInfo(A);
+
+      FB Factory("malformed_phi_factory", 0x200);
+      Factory.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsPointer;
+      const int Entry = Factory.block();
+      const int Left = Factory.block();
+      const int Right = Factory.block();
+      const int Extra = Factory.block();
+      const int Join = Factory.block();
+      Factory.succ(Entry, Left);
+      Factory.succ(Entry, Right);
+      Factory.succ(Left, Join);
+      Factory.succ(Right, Join);
+      const MedVar Allocation = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+      Factory.call(Entry, "malloc", Allocation,
+                   {MedVar::makeConst(16, TRI.PointerSize)});
+
+      PhiNode Returned;
+      Returned.Output = mkReg(TRI.IntReturnReg, 2, TRI.PointerSize);
+      Returned.Args = {{Left, Allocation}, {Right, Allocation}};
+      switch (Kind) {
+      case MalformedPhi::MissingArgument:
+        Returned.Args.pop_back();
+        break;
+      case MalformedPhi::DuplicateArgumentPredecessor:
+        Returned.Args[1].first = Left;
+        break;
+      case MalformedPhi::UnknownArgumentPredecessor:
+        Returned.Args[1].first = 999;
+        break;
+      case MalformedPhi::DuplicateBlockPredecessor:
+        Factory.F.Blocks[Join].Preds.push_back(Left);
+        break;
+      case MalformedPhi::UnknownBlockPredecessor:
+        Factory.F.Blocks[Join].Preds[1] = 999;
+        Returned.Args[1].first = 999;
+        break;
+      case MalformedPhi::ExistingNonPredecessor:
+        Factory.F.Blocks[Join].Preds[1] = Extra;
+        Returned.Args[1].first = Extra;
+        break;
+      case MalformedPhi::DuplicatePredecessorSuccessor:
+        Factory.F.Blocks[Left].Succs.push_back(Join);
+        break;
+      }
+      Factory.F.Blocks[Join].Phis.push_back(std::move(Returned));
+      Factory.ret(Join, A == Arch::AArch64
+                            ? std::vector<MedVar>{mkReg(TRI.LinkRegister, 1,
+                                                        TRI.PointerSize)}
+                            : std::vector<MedVar>{
+                                  Factory.F.Blocks[Join].Phis.front().Output});
+
+      FB Caller("caller", 0x100);
+      Caller.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsNoValue;
+      const int CallerBlock = Caller.block();
+      Caller.call(CallerBlock, Factory.F.Name, temp(30, TRI.PointerSize), {},
+                  Factory.F.Entry);
+      Caller.ret(CallerBlock, {});
+
+      const std::vector<Finding> Findings = audit({Factory.F, Caller.F}, &Img);
+      const Finding *CallerLeak =
+          findInFunction(Findings, VulnClass::HeapLeak, Caller.F.Entry);
+      ASSERT_NE(CallerLeak, nullptr);
+      EXPECT_EQ(CallerLeak->TheVerdict, Verdict::Unknown) << CallerLeak->Detail;
+      EXPECT_NE(CallerLeak->Detail.find("callee may return heap ownership"),
+                std::string::npos)
+          << CallerLeak->Detail;
+    }
+  }
+}
+
+TEST(AllocLifetime, IncompletePhiCannotProveZeroSiblingReturn) {
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<unsigned>(A));
+    BinaryImage Img;
+    Img.Arch = A;
+    const TargetRegInfo &TRI = getTargetRegInfo(A);
+
+    FB Factory("malformed_zero_factory", 0x200);
+    Factory.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsPointer;
+    const int Entry = Factory.block();
+    const int Owned = Factory.block();
+    const int ZeroLeft = Factory.block();
+    const int ZeroRight = Factory.block();
+    const int ZeroJoin = Factory.block();
+    Factory.succ(Entry, Owned);
+    Factory.succ(Entry, ZeroLeft);
+    Factory.succ(Entry, ZeroRight);
+    Factory.succ(ZeroLeft, ZeroJoin);
+    Factory.succ(ZeroRight, ZeroJoin);
+    const MedVar Allocation = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+    Factory.call(Entry, "malloc", Allocation,
+                 {MedVar::makeConst(16, TRI.PointerSize)});
+    const MedVar OwnedResult = mkReg(TRI.IntReturnReg, 2, TRI.PointerSize);
+    Factory.op(Owned, NdOp::COPY, OwnedResult, {Allocation});
+    Factory.ret(Owned, A == Arch::AArch64
+                           ? std::vector<MedVar>{mkReg(TRI.LinkRegister, 1,
+                                                       TRI.PointerSize)}
+                           : std::vector<MedVar>{OwnedResult});
+
+    PhiNode ZeroReturned;
+    ZeroReturned.Output = mkReg(TRI.IntReturnReg, 3, TRI.PointerSize);
+    ZeroReturned.Args = {{ZeroLeft, MedVar::makeConst(0, TRI.PointerSize)}};
+    Factory.F.Blocks[ZeroJoin].Phis.push_back(std::move(ZeroReturned));
+    Factory.ret(
+        ZeroJoin,
+        A == Arch::AArch64
+            ? std::vector<MedVar>{mkReg(TRI.LinkRegister, 2, TRI.PointerSize)}
+            : std::vector<MedVar>{
+                  Factory.F.Blocks[ZeroJoin].Phis.front().Output});
+
+    FB Caller("caller", 0x100);
+    Caller.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsNoValue;
+    const int CallerBlock = Caller.block();
+    Caller.call(CallerBlock, Factory.F.Name, temp(30, TRI.PointerSize), {},
+                Factory.F.Entry);
+    Caller.ret(CallerBlock, {});
+
+    const std::vector<Finding> Findings = audit({Factory.F, Caller.F}, &Img);
+    const Finding *CallerLeak =
+        findInFunction(Findings, VulnClass::HeapLeak, Caller.F.Entry);
+    ASSERT_NE(CallerLeak, nullptr);
+    EXPECT_EQ(CallerLeak->TheVerdict, Verdict::Unknown) << CallerLeak->Detail;
+    EXPECT_NE(CallerLeak->Detail.find("callee may return heap ownership"),
+              std::string::npos)
+        << CallerLeak->Detail;
+  }
+}
+
+TEST(AllocLifetime, IncompleteSharedReturnPredecessorsCannotProveHeapSummary) {
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<unsigned>(A));
+    BinaryImage Img;
+    Img.Arch = A;
+    const TargetRegInfo &TRI = getTargetRegInfo(A);
+
+    FB Factory("incomplete_return_predecessors", 0x200);
+    Factory.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsPointer;
+    const int Entry = Factory.block();
+    const int Owned = Factory.block();
+    const int Borrowed = Factory.block();
+    const int Join = Factory.block();
+    Factory.succ(Entry, Owned);
+    Factory.succ(Entry, Borrowed);
+    Factory.succ(Owned, Join);
+    Factory.succ(Borrowed, Join);
+    const MedVar Allocation = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+    Factory.call(Entry, "malloc", Allocation,
+                 {MedVar::makeConst(16, TRI.PointerSize)});
+    const MedVar OwnedResult = mkReg(TRI.IntReturnReg, 2, TRI.PointerSize);
+    Factory.op(Owned, NdOp::COPY, OwnedResult, {Allocation});
+    const MedVar BorrowedResult = mkReg(TRI.IntReturnReg, 3, TRI.PointerSize);
+    Factory.op(Borrowed, NdOp::COPY, BorrowedResult,
+               {MedVar::makeConst(0x8000, TRI.PointerSize)});
+    ASSERT_EQ(Factory.F.Blocks[Join].Preds.size(), 2u);
+    Factory.F.Blocks[Join].Preds.pop_back();
+    Factory.ret(Join, A == Arch::AArch64
+                          ? std::vector<MedVar>{mkReg(TRI.LinkRegister, 1,
+                                                      TRI.PointerSize)}
+                          : std::vector<MedVar>{OwnedResult});
+
+    FB Caller("caller", 0x100);
+    Caller.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsNoValue;
+    const int CallerBlock = Caller.block();
+    Caller.call(CallerBlock, Factory.F.Name, temp(30, TRI.PointerSize), {},
+                Factory.F.Entry);
+    Caller.ret(CallerBlock, {});
+
+    const std::vector<Finding> Findings = audit({Factory.F, Caller.F}, &Img);
+    const Finding *CallerLeak =
+        findInFunction(Findings, VulnClass::HeapLeak, Caller.F.Entry);
+    ASSERT_NE(CallerLeak, nullptr);
+    EXPECT_EQ(CallerLeak->TheVerdict, Verdict::Unknown) << CallerLeak->Detail;
+    EXPECT_NE(CallerLeak->Detail.find("callee may return heap ownership"),
+              std::string::npos)
+        << CallerLeak->Detail;
+  }
+}
+
+TEST(AllocLifetime, MultipleHeapReturnCandidatesKeepUncertaintyAbsorbing) {
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<unsigned>(A));
+    BinaryImage Img;
+    Img.Arch = A;
+    Img.Format = BinaryFormat::COFF;
+    const TargetRegInfo &TRI = getTargetRegInfo(A);
+
+    FB Factory("ambiguous_multi_allocator", 0x200);
+    Factory.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsPointer;
+    const int Block = Factory.block();
+    const MedVar SharedCarrier = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+    Factory.call(Block, "malloc", SharedCarrier,
+                 {MedVar::makeConst(16, TRI.PointerSize)});
+    Factory.call(Block, "LocalFree", MedVar{}, {SharedCarrier});
+    // Reused SSA identity is malformed input, but the safety summary must
+    // still fail closed: the first allocation candidate is May while this
+    // later allocation candidate is Yes.
+    Factory.call(Block, "malloc", SharedCarrier,
+                 {MedVar::makeConst(32, TRI.PointerSize)});
+    Factory.ret(Block, A == Arch::AArch64
+                           ? std::vector<MedVar>{mkReg(TRI.LinkRegister, 1,
+                                                       TRI.PointerSize)}
+                           : std::vector<MedVar>{SharedCarrier});
+
+    FB Caller("caller", 0x100);
+    Caller.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsNoValue;
+    const int CallerBlock = Caller.block();
+    Caller.call(CallerBlock, Factory.F.Name, temp(30, TRI.PointerSize), {},
+                Factory.F.Entry);
+    Caller.ret(CallerBlock, {});
+
+    const std::vector<Finding> Findings = audit({Factory.F, Caller.F}, &Img);
+    const Finding *CallerLeak =
+        findInFunction(Findings, VulnClass::HeapLeak, Caller.F.Entry);
+    ASSERT_NE(CallerLeak, nullptr);
+    EXPECT_EQ(CallerLeak->TheVerdict, Verdict::Unknown) << CallerLeak->Detail;
+    EXPECT_NE(CallerLeak->Detail.find("callee may return heap ownership"),
+              std::string::npos)
+        << CallerLeak->Detail;
+  }
+}
+
+TEST(AllocLifetime, BorrowedNonNullSiblingReturnDowngradesHeapSummaryToMay) {
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<int>(A));
+    BinaryImage Img;
+    Img.Arch = A;
+    const TargetRegInfo &TRI = getTargetRegInfo(A);
+
+    FB Factory("mixed_owner_factory", 0x200);
+    Factory.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsPointer;
+    const int Entry = Factory.block();
+    const int Owned = Factory.block();
+    const int Borrowed = Factory.block();
+    Factory.succ(Entry, Owned);
+    Factory.succ(Entry, Borrowed);
+    const MedVar Allocation = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+    Factory.call(Entry, "malloc", Allocation,
+                 {MedVar::makeConst(16, TRI.PointerSize)});
+    const MedVar OwnedResult = mkReg(TRI.IntReturnReg, 2, TRI.PointerSize);
+    Factory.op(Owned, NdOp::COPY, OwnedResult, {Allocation});
+    Factory.ret(Owned, A == Arch::AArch64
+                           ? std::vector<MedVar>{mkReg(TRI.LinkRegister, 1,
+                                                       TRI.PointerSize)}
+                           : std::vector<MedVar>{OwnedResult});
+    const MedVar BorrowedResult = mkReg(TRI.IntReturnReg, 3, TRI.PointerSize);
+    Factory.op(Borrowed, NdOp::COPY, BorrowedResult,
+               {MedVar::makeConst(0x8000, TRI.PointerSize)});
+    Factory.ret(Borrowed, A == Arch::AArch64
+                              ? std::vector<MedVar>{mkReg(TRI.LinkRegister, 2,
+                                                          TRI.PointerSize)}
+                              : std::vector<MedVar>{BorrowedResult});
+
+    FB User("user", 0x100);
+    const int UserBlock = User.block();
+    User.call(UserBlock, "mixed_owner_factory", temp(9, TRI.PointerSize), {},
+              Factory.F.Entry);
+    User.ret(UserBlock, {});
+
+    const std::vector<Finding> Findings = audit({Factory.F, User.F}, &Img);
+    const Finding *CallerLeak =
+        findInFunction(Findings, VulnClass::HeapLeak, User.F.Entry);
+    ASSERT_NE(CallerLeak, nullptr);
+    EXPECT_EQ(CallerLeak->TheVerdict, Verdict::Unknown);
+    EXPECT_NE(CallerLeak->Detail.find("callee may return heap ownership"),
+              std::string::npos)
+        << CallerLeak->Detail;
+  }
+}
+
 TEST(AllocLifetime, NestedWrapperAllocationLeak) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
   FB Inner("xmalloc", 0x200);
+  Inner.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsPointer;
   int i0 = Inner.block();
-  Inner.call(i0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
-  Inner.ret(i0, {temp(1)});
+  const MedVar InnerResult = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+  Inner.call(i0, "malloc", InnerResult,
+             {MedVar::makeConst(16, TRI.PointerSize)});
+  Inner.ret(i0, {InnerResult});
 
   FB Outer("ymalloc", 0x300);
+  Outer.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsPointer;
   int o0 = Outer.block();
-  Outer.call(o0, "xmalloc", temp(2), {MedVar::makeConst(16, 8)}, 0x200);
-  Outer.ret(o0, {temp(2)});
+  const MedVar OuterResult = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+  Outer.call(o0, "xmalloc", OuterResult,
+             {MedVar::makeConst(16, TRI.PointerSize)}, 0x200);
+  Outer.ret(o0, {OuterResult});
 
   FB User("user", 0x100);
   int u0 = User.block();
   User.call(u0, "ymalloc", temp(9), {MedVar::makeConst(16, 8)}, 0x300);
   User.ret(u0, {});
 
-  auto Fs = audit({User.F, Outer.F, Inner.F});
+  auto Fs = audit({User.F, Outer.F, Inner.F}, &Img);
   bool UserLeak = false;
   for (const Finding &F : Fs)
     if (F.Class == VulnClass::HeapLeak && F.FuncEntry == 0x100)
@@ -3131,6 +4165,9 @@ TEST(AllocLifetime, DeepWrapperAllocationLeakReachesTopLevelCaller) {
   constexpr int kWrapperDepth = 40;
   constexpr va_t kUserEntry = 0x100;
   constexpr va_t kFirstWrapperEntry = 0x200;
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
 
   std::vector<MedFunc> Funcs;
   FB User("user", kUserEntry);
@@ -3143,19 +4180,22 @@ TEST(AllocLifetime, DeepWrapperAllocationLeakReachesTopLevelCaller) {
   for (int I = 0; I < kWrapperDepth; ++I) {
     const va_t Entry = kFirstWrapperEntry + static_cast<va_t>(I) * 0x100;
     FB Wrapper("wrapper_" + std::to_string(I), Entry);
+    Wrapper.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsPointer;
     int Block = Wrapper.block();
+    const MedVar Result = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
     if (I + 1 == kWrapperDepth) {
-      Wrapper.call(Block, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+      Wrapper.call(Block, "malloc", Result,
+                   {MedVar::makeConst(16, TRI.PointerSize)});
     } else {
       const va_t CalleeEntry = Entry + 0x100;
-      Wrapper.call(Block, "wrapper_" + std::to_string(I + 1), temp(1),
-                   {MedVar::makeConst(16, 8)}, CalleeEntry);
+      Wrapper.call(Block, "wrapper_" + std::to_string(I + 1), Result,
+                   {MedVar::makeConst(16, TRI.PointerSize)}, CalleeEntry);
     }
-    Wrapper.ret(Block, {temp(1)});
+    Wrapper.ret(Block, {Result});
     Funcs.push_back(std::move(Wrapper.F));
   }
 
-  auto Fs = audit(std::move(Funcs));
+  auto Fs = audit(std::move(Funcs), &Img);
   bool UserLeak = false;
   for (const Finding &F : Fs)
     if (F.Class == VulnClass::HeapLeak && F.FuncEntry == kUserEntry)
@@ -3256,28 +4296,825 @@ TEST(AllocLifetime, OutParameterAllocatorStatusIsNotAHeapReturn) {
 }
 
 TEST(AllocLifetime, VoidFunctionDoesNotReturnStaleAllocationRegister) {
-  FB Helper("work", 0x200);
-  Helper.F.ReturnType = NdType::makeVoid();
-  int h0 = Helper.block();
-  Helper.call(h0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
-  Helper.ret(h0, {temp(1)});
+  constexpr va_t MallocVA = 0x210;
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<int>(A));
+    BinaryImage Img;
+    Img.Arch = A;
+    const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
+    FB Helper("work", 0x200);
+    Helper.F.ReturnType = NdType::makeVoid();
+    Helper.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsNoValue;
+    int h0 = Helper.block();
+    const MedVar StaleResult = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+    Helper.call(h0, "malloc", StaleResult,
+                {MedVar::makeConst(16, TRI.PointerSize)}, 0x9000, MallocVA);
+    Helper.ret(h0, A == Arch::AArch64
+                       ? std::vector<MedVar>{mkReg(TRI.LinkRegister, 1,
+                                                   TRI.PointerSize)}
+                       : std::vector<MedVar>{StaleResult});
+
+    FB User("user", 0x100);
+    int u0 = User.block();
+    User.call(u0, "work", temp(9, TRI.PointerSize), {}, 0x200);
+    User.ret(u0, {});
+
+    auto Fs = auditWithLowIR({Helper.F, User.F},
+                             {straightLineCallReturnPath(
+                                 Helper.F.Entry, MallocVA, 0x9000, Img.Arch)},
+                             &Img);
+    const Finding *HelperLeak = nullptr;
+    const Finding *UserLeak = nullptr;
+    for (const Finding &F : Fs) {
+      if (F.Class != VulnClass::HeapLeak)
+        continue;
+      if (F.FuncEntry == Helper.F.Entry)
+        HelperLeak = &F;
+      if (F.FuncEntry == User.F.Entry)
+        UserLeak = &F;
+    }
+    ASSERT_NE(HelperLeak, nullptr);
+    EXPECT_EQ(HelperLeak->TheVerdict, Verdict::Unsafe);
+    EXPECT_EQ(UserLeak, nullptr);
+  }
+}
+
+TEST(AllocLifetime, DebugReturnTypeRequiresAuthenticatedSignatureCapability) {
+  constexpr va_t MallocVA = 0x210;
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<int>(A));
+    BinaryImage Img;
+    Img.Arch = A;
+    const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
+    FB Helper("work", 0x200);
+    // This is the backend's heuristic type and is deliberately not evidence.
+    Helper.F.ReturnType = NdType::makeVoid();
+    int h0 = Helper.block();
+    const MedVar StaleResult = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+    Helper.call(h0, "malloc", StaleResult,
+                {MedVar::makeConst(16, TRI.PointerSize)}, 0x9000, MallocVA);
+    Helper.ret(h0, A == Arch::AArch64
+                       ? std::vector<MedVar>{mkReg(TRI.LinkRegister, 1,
+                                                   TRI.PointerSize)}
+                       : std::vector<MedVar>{StaleResult});
+
+    TypedFunctionDebug Unauthenticated(Helper.F.Entry, Helper.F.Name, {},
+                                       NdType::makeVoid(), false);
+    const auto UnauthenticatedFindings =
+        auditWithLowIR({Helper.F},
+                       {straightLineCallReturnPath(Helper.F.Entry, MallocVA,
+                                                   0x9000, Img.Arch)},
+                       &Img, &Unauthenticated);
+    const Finding *UntrustedLeak =
+        find(UnauthenticatedFindings, VulnClass::HeapLeak);
+    ASSERT_NE(UntrustedLeak, nullptr);
+    EXPECT_EQ(UntrustedLeak->TheVerdict, Verdict::Unknown);
+
+    TypedFunctionDebug Authenticated(Helper.F.Entry, Helper.F.Name, {},
+                                     NdType::makeVoid(), true);
+    const auto AuthenticatedFindings =
+        auditWithLowIR({Helper.F},
+                       {straightLineCallReturnPath(Helper.F.Entry, MallocVA,
+                                                   0x9000, Img.Arch)},
+                       &Img, &Authenticated);
+    const Finding *TrustedLeak =
+        find(AuthenticatedFindings, VulnClass::HeapLeak);
+    ASSERT_NE(TrustedLeak, nullptr);
+    EXPECT_EQ(TrustedLeak->TheVerdict, Verdict::Unsafe);
+  }
+}
+
+TEST(AllocLifetime, UnauthenticatedResolverCannotPublishPointerContract) {
+  class InconsistentDebug final : public NullDebugContext {
+  public:
+    bool hasAuthenticatedFunctionSignatures() const override { return false; }
+    AuthenticatedReturnValueState
+    resolveAuthenticatedReturnValueState(va_t) const override {
+      return {AuthenticatedReturnKind::Pointer, 8};
+    }
+  } Debug;
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
+  FB Wrapper("untrusted_debug_factory", 0x200);
+  const int WrapperBlock = Wrapper.block();
+  const MedVar Result = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+  Wrapper.call(WrapperBlock, "malloc", Result,
+               {MedVar::makeConst(16, TRI.PointerSize)});
+  Wrapper.ret(WrapperBlock, {Result});
 
   FB User("user", 0x100);
-  int u0 = User.block();
-  User.call(u0, "work", temp(9), {}, 0x200);
-  User.ret(u0, {});
+  const int UserBlock = User.block();
+  User.call(UserBlock, "untrusted_debug_factory", temp(9), {}, Wrapper.F.Entry);
+  User.ret(UserBlock, {});
 
-  auto Fs = audit({Helper.F, User.F});
-  bool HelperLeak = false;
-  bool UserLeak = false;
-  for (const Finding &F : Fs) {
-    if (F.Class != VulnClass::HeapLeak)
-      continue;
-    HelperLeak |= F.FuncEntry == 0x200;
-    UserLeak |= F.FuncEntry == 0x100;
+  const std::vector<Finding> Findings =
+      audit({Wrapper.F, User.F}, &Img, false, false, &Debug);
+  const Finding *CallerLeak =
+      findInFunction(Findings, VulnClass::HeapLeak, User.F.Entry);
+  ASSERT_NE(CallerLeak, nullptr);
+  EXPECT_EQ(CallerLeak->TheVerdict, Verdict::Unknown);
+  EXPECT_NE(CallerLeak->Detail.find("callee may return heap ownership"),
+            std::string::npos)
+      << CallerLeak->Detail;
+}
+
+TEST(AllocLifetime,
+     AuthenticatedFloatingReturnDoesNotBorrowStaleIntegerCarrier) {
+  constexpr va_t MallocVA = 0x210;
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<int>(A));
+    BinaryImage Img;
+    Img.Arch = A;
+    const TargetRegInfo &TRI = getTargetRegInfo(A);
+    ASSERT_NE(TRI.fpReturnModelReg(), 0u);
+
+    FB Helper("floating_work", 0x200);
+    const int Block = Helper.block();
+    const MedVar Allocation = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+    Helper.call(Block, "malloc", Allocation,
+                {MedVar::makeConst(16, TRI.PointerSize)}, 0x9000, MallocVA);
+    const MedVar FloatingResult = mkReg(TRI.fpReturnModelReg(), 2, 8);
+    Helper.op(Block, NdOp::COPY, FloatingResult, {MedVar::makeConst(0, 8)});
+    Helper.ret(Block, A == Arch::AArch64
+                          ? std::vector<MedVar>{mkReg(TRI.LinkRegister, 1,
+                                                      TRI.PointerSize)}
+                          : std::vector<MedVar>{FloatingResult});
+
+    FB User("user", 0x100);
+    const int UserBlock = User.block();
+    User.call(UserBlock, "floating_work", temp(9, 8), {}, Helper.F.Entry);
+    User.ret(UserBlock, {});
+
+    TypedFunctionDebug Debug(Helper.F.Entry, Helper.F.Name, {},
+                             NdType::makeFloat(8));
+    const std::vector<Finding> Findings = auditWithLowIR(
+        {Helper.F, User.F},
+        {straightLineCallReturnPath(Helper.F.Entry, MallocVA, 0x9000, A)}, &Img,
+        &Debug);
+    const Finding *HelperLeak =
+        findInFunction(Findings, VulnClass::HeapLeak, Helper.F.Entry);
+    ASSERT_NE(HelperLeak, nullptr);
+    EXPECT_EQ(HelperLeak->TheVerdict, Verdict::Unsafe) << HelperLeak->Detail;
+    EXPECT_EQ(findInFunction(Findings, VulnClass::HeapLeak, User.F.Entry),
+              nullptr);
   }
-  EXPECT_TRUE(HelperLeak);
-  EXPECT_FALSE(UserLeak);
+}
+
+TEST(AllocLifetime,
+     NonPointerOrWidthMismatchedReturnCannotPublishStrongHeapSummary) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
+
+  auto Aggregate = std::make_shared<NdType>();
+  Aggregate->Kind = NdTypeKind::Struct;
+  Aggregate->Size = 16;
+  TypeRef NarrowPointer = NdType::makePtr();
+  NarrowPointer->Size = 4;
+  const std::array<TypeRef, 3> ReturnTypes = {NdType::makeInt(TRI.PointerSize),
+                                              Aggregate, NarrowPointer};
+
+  for (const TypeRef &ReturnType : ReturnTypes) {
+    SCOPED_TRACE(static_cast<int>(ReturnType->Kind));
+    SCOPED_TRACE(ReturnType->Size);
+    FB Helper("not_pointer_factory", 0x200);
+    const int Block = Helper.block();
+    const MedVar Allocation = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+    Helper.call(Block, "malloc", Allocation,
+                {MedVar::makeConst(16, TRI.PointerSize)});
+    Helper.ret(Block, {Allocation});
+
+    FB User("user", 0x100);
+    const int UserBlock = User.block();
+    User.call(UserBlock, "not_pointer_factory", temp(9, TRI.PointerSize), {},
+              Helper.F.Entry);
+    User.ret(UserBlock, {});
+
+    TypedFunctionDebug Debug(Helper.F.Entry, Helper.F.Name, {}, ReturnType);
+    const std::vector<Finding> Findings =
+        audit({Helper.F, User.F}, &Img, false, false, &Debug);
+    const Finding *CallerLeak =
+        findInFunction(Findings, VulnClass::HeapLeak, User.F.Entry);
+    ASSERT_NE(CallerLeak, nullptr);
+    EXPECT_EQ(CallerLeak->TheVerdict, Verdict::Unknown);
+    EXPECT_NE(CallerLeak->Detail.find("callee may return heap ownership"),
+              std::string::npos)
+        << CallerLeak->Detail;
+  }
+}
+
+TEST(AllocLifetime, ConflictingVoidAndGenericValueEvidenceFailsClosed) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
+  FB Helper("conflicting_contract", 0x200);
+  Helper.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsValue;
+  const int Block = Helper.block();
+  const MedVar Allocation = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+  Helper.call(Block, "malloc", Allocation,
+              {MedVar::makeConst(16, TRI.PointerSize)});
+  Helper.ret(Block, {Allocation});
+
+  TypedFunctionDebug Debug(Helper.F.Entry, Helper.F.Name, {},
+                           NdType::makeVoid());
+  const std::vector<Finding> Findings =
+      audit({Helper.F}, &Img, false, false, &Debug);
+  const Finding *Leak = find(Findings, VulnClass::HeapLeak);
+  ASSERT_NE(Leak, nullptr);
+  EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown);
+  EXPECT_NE(Leak->Detail.find("heap handle may escape"), std::string::npos)
+      << Leak->Detail;
+}
+
+TEST(AllocLifetime, UnauthenticatedHeapReturnPropagatesAsMayAcrossCallers) {
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<int>(A));
+    BinaryImage Img;
+    Img.Arch = A;
+    const TargetRegInfo &TRI = getTargetRegInfo(A);
+
+    FB Source("maybe_factory", 0x300);
+    const int SourceBlock = Source.block();
+    const MedVar SourceResult = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+    Source.call(SourceBlock, "malloc", SourceResult,
+                {MedVar::makeConst(16, TRI.PointerSize)});
+    Source.ret(SourceBlock, A == Arch::AArch64
+                                ? std::vector<MedVar>{mkReg(TRI.LinkRegister, 1,
+                                                            TRI.PointerSize)}
+                                : std::vector<MedVar>{SourceResult});
+
+    FB Wrapper("wrapper", 0x200);
+    Wrapper.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsPointer;
+    const int WrapperBlock = Wrapper.block();
+    const MedVar WrapperResult = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+    Wrapper.call(WrapperBlock, "maybe_factory", WrapperResult, {},
+                 Source.F.Entry);
+    Wrapper.ret(WrapperBlock, A == Arch::AArch64
+                                  ? std::vector<MedVar>{mkReg(
+                                        TRI.LinkRegister, 1, TRI.PointerSize)}
+                                  : std::vector<MedVar>{WrapperResult});
+
+    FB LeakingCaller("leaking_caller", 0x100);
+    const int LeakingBlock = LeakingCaller.block();
+    LeakingCaller.call(LeakingBlock, "wrapper", temp(9, TRI.PointerSize), {},
+                       Wrapper.F.Entry);
+    LeakingCaller.ret(LeakingBlock, {});
+
+    const std::vector<Finding> LeakingFindings =
+        audit({Source.F, Wrapper.F, LeakingCaller.F}, &Img);
+    const Finding *CallerLeak = findInFunction(
+        LeakingFindings, VulnClass::HeapLeak, LeakingCaller.F.Entry);
+    ASSERT_NE(CallerLeak, nullptr);
+    EXPECT_EQ(CallerLeak->TheVerdict, Verdict::Unknown);
+    EXPECT_NE(CallerLeak->Detail.find("callee may return heap ownership"),
+              std::string::npos)
+        << CallerLeak->Detail;
+
+    FB FreeingCaller("freeing_caller", 0x100);
+    const int FreeingBlock = FreeingCaller.block();
+    const MedVar CallResult = temp(9, TRI.PointerSize);
+    FreeingCaller.call(FreeingBlock, "wrapper", CallResult, {},
+                       Wrapper.F.Entry);
+    FreeingCaller.call(FreeingBlock, "free", MedVar{}, {CallResult});
+    FreeingCaller.ret(FreeingBlock, {});
+
+    const std::vector<Finding> FreeingFindings =
+        audit({Source.F, Wrapper.F, FreeingCaller.F}, &Img);
+    EXPECT_EQ(findInFunction(FreeingFindings, VulnClass::HeapLeak,
+                             FreeingCaller.F.Entry),
+              nullptr);
+    EXPECT_EQ(findInFunction(FreeingFindings, VulnClass::DoubleFree,
+                             FreeingCaller.F.Entry),
+              nullptr);
+    EXPECT_EQ(findInFunction(FreeingFindings, VulnClass::UseAfterFree,
+                             FreeingCaller.F.Entry),
+              nullptr);
+
+    FB MisusingCaller("misusing_caller", 0x100);
+    const int MisusingBlock = MisusingCaller.block();
+    const MedVar MisusedResult = temp(9, TRI.PointerSize);
+    MisusingCaller.call(MisusingBlock, "wrapper", MisusedResult, {},
+                        Wrapper.F.Entry);
+    MisusingCaller.call(MisusingBlock, "free", MedVar{}, {MisusedResult});
+    MisusingCaller.call(MisusingBlock, "free", MedVar{}, {MisusedResult});
+    MisusingCaller.op(MisusingBlock, NdOp::LOAD, temp(10), {MisusedResult});
+    MisusingCaller.ret(MisusingBlock, {});
+
+    const std::vector<Finding> MisusingFindings =
+        audit({Source.F, Wrapper.F, MisusingCaller.F}, &Img);
+    const Finding *Double = findInFunction(
+        MisusingFindings, VulnClass::DoubleFree, MisusingCaller.F.Entry);
+    const Finding *Use = findInFunction(
+        MisusingFindings, VulnClass::UseAfterFree, MisusingCaller.F.Entry);
+    ASSERT_NE(Double, nullptr);
+    ASSERT_NE(Use, nullptr);
+    EXPECT_EQ(Double->TheVerdict, Verdict::Unknown) << Double->Detail;
+    EXPECT_EQ(Use->TheVerdict, Verdict::Unknown) << Use->Detail;
+  }
+}
+
+TEST(AllocLifetime, NonDefaultAddressSpaceStoreIsNotALocalHeapSpill) {
+  constexpr va_t MallocVA = 0x210;
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  FB B("segmented_publish", 0x100);
+  const int Block = B.block();
+  const MedVar StackAddress = mkReg(kSP, 1);
+  B.op(Block, NdOp::INT_SUB, StackAddress,
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.call(Block, "malloc", temp(1), {MedVar::makeConst(16, 8)}, 0x9000,
+         MallocVA);
+  B.op(Block, NdOp::STORE, MedVar{}, {StackAddress, temp(1)});
+  B.F.Blocks[Block].Ops.back().MemoryAddressSpace = NdMemoryAddressSpace::X86GS;
+  B.ret(Block, {});
+
+  const std::vector<Finding> Findings = auditWithLowIR(
+      {B.F},
+      {straightLineCallReturnPath(B.F.Entry, MallocVA, 0x9000, Img.Arch)}, &Img,
+      nullptr, /*StackRegs=*/true);
+  const Finding *Leak = find(Findings, VulnClass::HeapLeak);
+  ASSERT_NE(Leak, nullptr);
+  EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown) << Leak->Detail;
+}
+
+TEST(AllocLifetime, NonDefaultAddressSpaceHeapUseIsPotential) {
+  struct Case {
+    NdOp Opcode;
+    NdMemoryAddressSpace AddressSpace;
+  } Cases[] = {
+      {NdOp::LOAD, NdMemoryAddressSpace::X86FS},
+      {NdOp::STORE, NdMemoryAddressSpace::X86GS},
+      {NdOp::ATOMIC_XCHG, NdMemoryAddressSpace::X86FS},
+      {NdOp::ATOMIC_ADD, NdMemoryAddressSpace::X86GS},
+      {NdOp::ATOMIC_CMPXCHG, NdMemoryAddressSpace::X86GS},
+  };
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  for (const Case &C : Cases) {
+    SCOPED_TRACE(static_cast<unsigned>(C.Opcode));
+    FB B("segmented_use", 0x100);
+    const int Block = B.block();
+    B.call(Block, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+    B.call(Block, "free", MedVar{}, {temp(1)});
+    switch (C.Opcode) {
+    case NdOp::LOAD:
+      B.op(Block, C.Opcode, temp(2), {temp(1)});
+      break;
+    case NdOp::STORE:
+    case NdOp::ATOMIC_XCHG:
+    case NdOp::ATOMIC_ADD:
+      B.op(Block, C.Opcode, C.Opcode == NdOp::STORE ? MedVar{} : temp(2),
+           {temp(1), MedVar::makeConst(0, 8)});
+      break;
+    case NdOp::ATOMIC_CMPXCHG:
+      B.op(Block, C.Opcode, temp(2),
+           {temp(1), MedVar::makeConst(0, 8), MedVar::makeConst(0, 8)});
+      break;
+    default:
+      FAIL() << "unexpected memory opcode";
+    }
+    B.F.Blocks[Block].Ops.back().MemoryAddressSpace = C.AddressSpace;
+    B.ret(Block, {});
+
+    const std::vector<Finding> Findings = audit({B.F}, &Img);
+    const Finding *Use = find(Findings, VulnClass::UseAfterFree);
+    ASSERT_NE(Use, nullptr);
+    EXPECT_EQ(Use->TheVerdict, Verdict::Unknown) << Use->Detail;
+    EXPECT_EQ(Use->TheConfidence, Confidence::Low) << Use->Detail;
+  }
+}
+
+TEST(AllocLifetime, NonDefaultAddressSpaceDoesNotCrossDefaultStackDomain) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  for (const NdOp Opcode : {NdOp::LOAD, NdOp::STORE, NdOp::ATOMIC_XCHG,
+                            NdOp::ATOMIC_ADD, NdOp::ATOMIC_CMPXCHG}) {
+    SCOPED_TRACE(static_cast<unsigned>(Opcode));
+    FB B("segmented_stack_domain", 0x100);
+    const int Block = B.block();
+    const MedVar StackAddress = mkReg(kSP, 1);
+    B.op(Block, NdOp::INT_SUB, StackAddress,
+         {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+    B.call(Block, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+
+    if (Opcode == NdOp::STORE) {
+      B.op(Block, Opcode, MedVar{}, {StackAddress, temp(1)});
+      B.F.Blocks[Block].Ops.back().MemoryAddressSpace =
+          NdMemoryAddressSpace::X86GS;
+      B.op(Block, NdOp::LOAD, temp(2), {StackAddress});
+    } else {
+      B.op(Block, NdOp::STORE, MedVar{}, {StackAddress, temp(1)});
+      if (Opcode == NdOp::LOAD) {
+        B.op(Block, Opcode, temp(2), {StackAddress});
+      } else if (Opcode == NdOp::ATOMIC_CMPXCHG) {
+        B.op(Block, Opcode, temp(2),
+             {StackAddress, MedVar::makeConst(0, 8), MedVar::makeConst(0, 8)});
+      } else {
+        B.op(Block, Opcode, temp(2), {StackAddress, MedVar::makeConst(0, 8)});
+      }
+      B.F.Blocks[Block].Ops.back().MemoryAddressSpace =
+          NdMemoryAddressSpace::X86FS;
+    }
+
+    B.call(Block, "free", MedVar{}, {temp(2)});
+    B.op(Block, NdOp::LOAD, temp(3), {temp(1)});
+    B.ret(Block, {});
+
+    EXPECT_FALSE(
+        has(audit({B.F}, &Img, /*StackRegs=*/true), VulnClass::UseAfterFree));
+  }
+}
+
+TEST(AllocLifetime, NonDefaultAddressSpaceAtomicPublicationIsPotential) {
+  constexpr va_t MallocVA = 0x210;
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  for (const NdOp Opcode : {NdOp::ATOMIC_XCHG, NdOp::ATOMIC_CMPXCHG}) {
+    SCOPED_TRACE(static_cast<unsigned>(Opcode));
+    FB B("segmented_atomic_publish", 0x100);
+    const int Block = B.block();
+    B.call(Block, "malloc", temp(1), {MedVar::makeConst(16, 8)}, 0x9000,
+           MallocVA);
+    if (Opcode == NdOp::ATOMIC_XCHG) {
+      B.op(Block, Opcode, temp(2), {MedVar::makeConst(0x8000, 8), temp(1)});
+    } else {
+      B.op(Block, Opcode, temp(2),
+           {MedVar::makeConst(0x8000, 8), MedVar::makeConst(0, 8), temp(1)});
+    }
+    B.F.Blocks[Block].Ops.back().MemoryAddressSpace =
+        NdMemoryAddressSpace::X86FS;
+    B.ret(Block, {});
+
+    const std::vector<Finding> Findings = auditWithLowIR(
+        {B.F},
+        {straightLineCallReturnPath(B.F.Entry, MallocVA, 0x9000, Img.Arch)},
+        &Img);
+    const Finding *Leak = find(Findings, VulnClass::HeapLeak);
+    ASSERT_NE(Leak, nullptr);
+    EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown) << Leak->Detail;
+  }
+}
+
+TEST(AllocLifetime, NonDefaultAddressSpacePublicationSummaryIsPotential) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+
+  FB Publish("segmented_publish", 0x200);
+  Publish.F.Params = {temp(0)};
+  Publish.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsNoValue;
+  const int PublishBlock = Publish.block();
+  Publish.op(PublishBlock, NdOp::STORE, MedVar{},
+             {MedVar::makeConst(0x8000, 8), Publish.F.Params.front()});
+  Publish.F.Blocks[PublishBlock].Ops.back().MemoryAddressSpace =
+      NdMemoryAddressSpace::X86GS;
+  Publish.ret(PublishBlock, {});
+
+  FB User("user", 0x100);
+  const int UserBlock = User.block();
+  User.call(UserBlock, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  User.call(UserBlock, Publish.F.Name, MedVar{}, {temp(1)}, Publish.F.Entry);
+  User.ret(UserBlock, {});
+
+  const std::vector<Finding> Findings = audit({Publish.F, User.F}, &Img);
+  const Finding *CallerLeak =
+      findInFunction(Findings, VulnClass::HeapLeak, User.F.Entry);
+  ASSERT_NE(CallerLeak, nullptr);
+  EXPECT_EQ(CallerLeak->TheVerdict, Verdict::Unknown) << CallerLeak->Detail;
+}
+
+TEST(AllocLifetime, AtomicOwnershipPublicationDistinguishesCertaintyAndPaths) {
+  enum class Case {
+    XchgAllExits,
+    CmpXchgAllExits,
+    XchgSibling,
+    XchgUnknownDst
+  };
+  for (const Case C : {Case::XchgAllExits, Case::CmpXchgAllExits,
+                       Case::XchgSibling, Case::XchgUnknownDst}) {
+    SCOPED_TRACE(static_cast<int>(C));
+    FB Helper("atomic_publish", 0x200);
+    Helper.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsNoValue;
+    const int Entry = Helper.block();
+    const MedVar Allocation = temp(1);
+    Helper.call(Entry, "malloc", Allocation, {MedVar::makeConst(16, 8)});
+
+    int Publish = Entry;
+    if (C == Case::XchgSibling) {
+      Publish = Helper.block();
+      const int Leak = Helper.block();
+      Helper.succ(Entry, Publish);
+      Helper.succ(Entry, Leak);
+      Helper.ret(Leak, {});
+    }
+    const MedVar Address =
+        C == Case::XchgUnknownDst ? temp(20) : MedVar::makeConst(0x8000, 8);
+    if (C == Case::CmpXchgAllExits) {
+      Helper.op(Publish, NdOp::ATOMIC_CMPXCHG, temp(3),
+                {Address, MedVar::makeConst(0, 8), Allocation});
+    } else {
+      Helper.op(Publish, NdOp::ATOMIC_XCHG, temp(3), {Address, Allocation});
+    }
+    Helper.ret(Publish, {});
+
+    const std::vector<Finding> Findings = audit({Helper.F});
+    const Finding *Leak = find(Findings, VulnClass::HeapLeak);
+    if (C == Case::XchgAllExits) {
+      EXPECT_EQ(Leak, nullptr);
+    } else {
+      ASSERT_NE(Leak, nullptr);
+      EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown) << Leak->Detail;
+      EXPECT_NE(Leak->Detail.find("heap handle may escape"), std::string::npos)
+          << Leak->Detail;
+    }
+  }
+}
+
+TEST(AllocLifetime, AtomicCmpXchgExpectedValueIsNotPublished) {
+  constexpr va_t MallocVA = 0x210;
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  FB Helper("cmpxchg_expected", 0x200);
+  Helper.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsNoValue;
+  const int Block = Helper.block();
+  const MedVar Allocation = temp(1);
+  Helper.call(Block, "malloc", Allocation, {MedVar::makeConst(16, 8)}, 0x9000,
+              MallocVA);
+  Helper.op(
+      Block, NdOp::ATOMIC_CMPXCHG, temp(3),
+      {MedVar::makeConst(0x8000, 8), Allocation, MedVar::makeConst(0, 8)});
+  Helper.ret(Block, {});
+
+  const std::vector<Finding> Findings = auditWithLowIR(
+      {Helper.F},
+      {straightLineCallReturnPath(Helper.F.Entry, MallocVA, 0x9000, Img.Arch)},
+      &Img);
+  const Finding *Leak = find(Findings, VulnClass::HeapLeak);
+  ASSERT_NE(Leak, nullptr);
+  EXPECT_EQ(Leak->TheVerdict, Verdict::Unsafe) << Leak->Detail;
+}
+
+TEST(AllocLifetime, NarrowAtomicXchgValueIsOnlyPotentialPublication) {
+  FB Helper("narrow_xchg", 0x200);
+  Helper.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsNoValue;
+  const int Block = Helper.block();
+  const MedVar Allocation = temp(1);
+  Helper.call(Block, "malloc", Allocation, {MedVar::makeConst(16, 8)});
+  const MedVar Narrow = temp(2, 4);
+  Helper.op(Block, NdOp::COPY, Narrow, {Allocation});
+  Helper.op(Block, NdOp::ATOMIC_XCHG, temp(3),
+            {MedVar::makeConst(0x8000, 8), Narrow});
+  Helper.ret(Block, {});
+
+  const std::vector<Finding> Findings = audit({Helper.F});
+  const Finding *Leak = find(Findings, VulnClass::HeapLeak);
+  ASSERT_NE(Leak, nullptr);
+  EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown) << Leak->Detail;
+  EXPECT_NE(Leak->Detail.find("heap handle may escape"), std::string::npos)
+      << Leak->Detail;
+}
+
+TEST(AllocLifetime,
+     PublicationRequiresPointerAddressAndCompleteAtomicAccessWidth) {
+  enum class Case { StoreNarrowAddress, XchgNarrowAddress, XchgNarrowOutput };
+  for (const Case C : {Case::StoreNarrowAddress, Case::XchgNarrowAddress,
+                       Case::XchgNarrowOutput}) {
+    SCOPED_TRACE(static_cast<int>(C));
+    BinaryImage Img;
+    Img.Arch = Arch::X64;
+    FB Helper("width_checked_publish", 0x200);
+    Helper.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsNoValue;
+    const int Block = Helper.block();
+    const MedVar Allocation = temp(1, 8);
+    Helper.call(Block, "malloc", Allocation, {MedVar::makeConst(16, 8)});
+    const MedVar Address = MedVar::makeConst(
+        0x8000,
+        C == Case::XchgNarrowAddress || C == Case::StoreNarrowAddress ? 4 : 8);
+    if (C == Case::StoreNarrowAddress) {
+      Helper.op(Block, NdOp::STORE, MedVar{}, {Address, Allocation});
+    } else {
+      Helper.op(Block, NdOp::ATOMIC_XCHG,
+                temp(3, C == Case::XchgNarrowOutput ? 4 : 8),
+                {Address, Allocation});
+    }
+    Helper.ret(Block, {});
+
+    const std::vector<Finding> Findings = audit({Helper.F}, &Img);
+    const Finding *Leak = find(Findings, VulnClass::HeapLeak);
+    ASSERT_NE(Leak, nullptr);
+    EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown) << Leak->Detail;
+    EXPECT_NE(Leak->Detail.find("heap handle may escape"), std::string::npos)
+        << Leak->Detail;
+  }
+}
+
+TEST(AllocLifetime, AtomicParameterPublicationUsesAllExitSummary) {
+  enum class Case { XchgAllExits, CmpXchgAllExits, XchgSibling };
+  for (const Case C :
+       {Case::XchgAllExits, Case::CmpXchgAllExits, Case::XchgSibling}) {
+    SCOPED_TRACE(static_cast<int>(C));
+    FB Publish("atomic_publish", 0x200);
+    Publish.F.Params = {temp(0)};
+    Publish.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsNoValue;
+    const int Entry = Publish.block();
+    int Transfer = Entry;
+    if (C == Case::XchgSibling) {
+      Transfer = Publish.block();
+      const int Other = Publish.block();
+      Publish.succ(Entry, Transfer);
+      Publish.succ(Entry, Other);
+      Publish.ret(Other, {});
+    }
+    if (C == Case::CmpXchgAllExits) {
+      Publish.op(Transfer, NdOp::ATOMIC_CMPXCHG, temp(3),
+                 {MedVar::makeConst(0x8000, 8), MedVar::makeConst(0, 8),
+                  Publish.F.Params.front()});
+    } else {
+      Publish.op(Transfer, NdOp::ATOMIC_XCHG, temp(3),
+                 {MedVar::makeConst(0x8000, 8), Publish.F.Params.front()});
+    }
+    Publish.ret(Transfer, {});
+
+    FB User("user", 0x100);
+    const int UserBlock = User.block();
+    User.call(UserBlock, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+    User.call(UserBlock, "atomic_publish", MedVar{}, {temp(1)},
+              Publish.F.Entry);
+    User.ret(UserBlock, {});
+
+    const std::vector<Finding> Findings = audit({Publish.F, User.F});
+    const Finding *CallerLeak =
+        findInFunction(Findings, VulnClass::HeapLeak, User.F.Entry);
+    if (C == Case::XchgAllExits) {
+      EXPECT_EQ(CallerLeak, nullptr);
+    } else {
+      ASSERT_NE(CallerLeak, nullptr);
+      EXPECT_EQ(CallerLeak->TheVerdict, Verdict::Unknown) << CallerLeak->Detail;
+      EXPECT_NE(CallerLeak->Detail.find("heap handle may escape"),
+                std::string::npos)
+          << CallerLeak->Detail;
+    }
+  }
+}
+
+TEST(AllocLifetime, MissingSuccessorCannotCompleteAllExitPublicationProof) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  FB Helper("malformed_cfg_publish", 0x200);
+  Helper.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsNoValue;
+  const int Entry = Helper.block();
+  const int Publish = Helper.block();
+  Helper.succ(Entry, Publish);
+  Helper.F.Blocks[Entry].Succs.push_back(999);
+  const MedVar Allocation = temp(1, 8);
+  Helper.call(Entry, "malloc", Allocation, {MedVar::makeConst(16, 8)});
+  Helper.op(Publish, NdOp::STORE, MedVar{},
+            {MedVar::makeConst(0x8000, 8), Allocation});
+  Helper.ret(Publish, {});
+
+  const std::vector<Finding> Findings = audit({Helper.F}, &Img);
+  const Finding *Leak = find(Findings, VulnClass::HeapLeak);
+  ASSERT_NE(Leak, nullptr);
+  EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown) << Leak->Detail;
+  EXPECT_NE(Leak->Detail.find("heap handle may escape"), std::string::npos)
+      << Leak->Detail;
+}
+
+TEST(AllocLifetime, UnresolvedCFGEdgeDowngradesHeapReturnSummaryToMay) {
+  enum class EdgeKind {
+    OrdinaryMissingBlock,
+    ExternalExceptionalTarget,
+    TerminalWithoutReturn,
+  };
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    for (const EdgeKind Kind :
+         {EdgeKind::OrdinaryMissingBlock, EdgeKind::ExternalExceptionalTarget,
+          EdgeKind::TerminalWithoutReturn}) {
+      SCOPED_TRACE(static_cast<unsigned>(A));
+      SCOPED_TRACE(static_cast<unsigned>(Kind));
+      BinaryImage Img;
+      Img.Arch = A;
+      const TargetRegInfo &TRI = getTargetRegInfo(A);
+
+      FB Factory("malformed_factory", 0x200);
+      Factory.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsPointer;
+      const int Entry = Factory.block();
+      const int Returned = Factory.block();
+      Factory.succ(Entry, Returned);
+      if (Kind == EdgeKind::OrdinaryMissingBlock) {
+        Factory.F.Blocks[Entry].Succs.push_back(999);
+      } else if (Kind == EdgeKind::ExternalExceptionalTarget) {
+        ExceptionalEdge Edge;
+        Edge.BlockId = -1;
+        Edge.TargetVA = 0xdead;
+        Factory.F.Blocks[Entry].ExceptionalSuccs.push_back(Edge);
+      } else {
+        const int Unterminated = Factory.block();
+        Factory.succ(Entry, Unterminated);
+      }
+      const MedVar Result = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+      Factory.call(Entry, "malloc", Result,
+                   {MedVar::makeConst(16, TRI.PointerSize)});
+      Factory.ret(Returned, A == Arch::AArch64
+                                ? std::vector<MedVar>{mkReg(TRI.LinkRegister, 1,
+                                                            TRI.PointerSize)}
+                                : std::vector<MedVar>{Result});
+
+      FB Caller("caller", 0x100);
+      Caller.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsNoValue;
+      const int CallerBlock = Caller.block();
+      Caller.call(CallerBlock, Factory.F.Name, temp(9, TRI.PointerSize), {},
+                  Factory.F.Entry);
+      Caller.ret(CallerBlock, {});
+
+      const std::vector<Finding> Findings = audit({Factory.F, Caller.F}, &Img);
+      const Finding *CallerLeak =
+          findInFunction(Findings, VulnClass::HeapLeak, Caller.F.Entry);
+      ASSERT_NE(CallerLeak, nullptr);
+      EXPECT_EQ(CallerLeak->TheVerdict, Verdict::Unknown) << CallerLeak->Detail;
+      EXPECT_NE(CallerLeak->Detail.find("callee may return heap ownership"),
+                std::string::npos)
+          << CallerLeak->Detail;
+    }
+  }
+}
+
+TEST(AllocLifetime, OwnershipTransferOnOneBranchDoesNotHideSiblingLeak) {
+  enum class TransferKind { Return, Store, CalleeCapture };
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    for (const TransferKind Kind : {TransferKind::Return, TransferKind::Store,
+                                    TransferKind::CalleeCapture}) {
+      SCOPED_TRACE(static_cast<int>(A));
+      SCOPED_TRACE(static_cast<int>(Kind));
+      BinaryImage Img;
+      Img.Arch = A;
+      const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
+
+      FB Helper("partial_transfer", 0x200);
+      Helper.F.ReturnValueEvidence =
+          Kind == TransferKind::Return ? MedReturnValueEvidence::ReturnsPointer
+                                       : MedReturnValueEvidence::ReturnsNoValue;
+      const int Entry = Helper.block();
+      const int Transfer = Helper.block();
+      const int Leak = Helper.block();
+      Helper.succ(Entry, Transfer);
+      Helper.succ(Entry, Leak);
+      const MedVar Result = mkReg(TRI.IntReturnReg, 1, TRI.PointerSize);
+      Helper.call(Entry, "malloc", Result,
+                  {MedVar::makeConst(16, TRI.PointerSize)});
+
+      std::vector<MedFunc> Functions;
+      switch (Kind) {
+      case TransferKind::Return:
+        Helper.ret(Transfer, A == Arch::AArch64
+                                 ? std::vector<MedVar>{mkReg(
+                                       TRI.LinkRegister, 1, TRI.PointerSize)}
+                                 : std::vector<MedVar>{Result});
+        break;
+      case TransferKind::Store:
+        Helper.op(Transfer, NdOp::STORE, MedVar{},
+                  {MedVar::makeConst(0x8000, TRI.PointerSize), Result});
+        Helper.ret(Transfer, {});
+        break;
+      case TransferKind::CalleeCapture: {
+        FB Capture("capture", 0x300);
+        Capture.F.Params = {temp(0, TRI.PointerSize)};
+        const int CaptureBlock = Capture.block();
+        Capture.op(CaptureBlock, NdOp::STORE, MedVar{},
+                   {MedVar::makeConst(0x8000, TRI.PointerSize),
+                    Capture.F.Params.front()});
+        Capture.ret(CaptureBlock, {});
+        Helper.call(Transfer, "capture", MedVar{}, {Result}, Capture.F.Entry);
+        Helper.ret(Transfer, {});
+        Functions.push_back(std::move(Capture.F));
+        break;
+      }
+      }
+
+      if (Kind == TransferKind::Return) {
+        const MedVar Other = mkReg(TRI.IntReturnReg, 2, TRI.PointerSize);
+        Helper.op(Leak, NdOp::COPY, Other,
+                  {MedVar::makeConst(0, TRI.PointerSize)});
+        Helper.ret(Leak, A == Arch::AArch64
+                             ? std::vector<MedVar>{mkReg(TRI.LinkRegister, 2,
+                                                         TRI.PointerSize)}
+                             : std::vector<MedVar>{Other});
+      } else {
+        Helper.ret(Leak, {});
+      }
+      Functions.insert(Functions.begin(), std::move(Helper.F));
+
+      const auto Findings = audit(std::move(Functions), &Img);
+      const Finding *HelperLeak = nullptr;
+      for (const Finding &F : Findings)
+        if (F.Class == VulnClass::HeapLeak && F.FuncEntry == 0x200)
+          HelperLeak = &F;
+      ASSERT_NE(HelperLeak, nullptr);
+      EXPECT_EQ(HelperLeak->TheVerdict, Verdict::Unknown) << HelperLeak->Detail;
+    }
+  }
 }
 
 TEST(AllocLifetime, LeakOnOneExitPath) {

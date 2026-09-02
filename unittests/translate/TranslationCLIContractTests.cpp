@@ -8,6 +8,8 @@
 #include "NeverDTranslateOutput.h"
 #include "gtest/gtest.h"
 
+#include "neverd/support/AtomicOutput.h"
+
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -164,9 +166,9 @@ protected:
       ++Probe.UnregisterCalls;
       Probe.Calls.emplace_back("unregister");
     };
-    const neverd::cli::detail::AtomicOutputCommitOperations Operations{
+    const neverd::support::atomic_output::CommitOperations Operations{
         Close, Rename, Discard, Register, Unregister};
-    return neverd::cli::detail::commitTemporaryOutput(
+    return neverd::support::atomic_output::commitTemporaryOutput(
         Temporary.string(), Output.string(), Operations);
   }
 
@@ -269,10 +271,10 @@ TEST(TranslationCLICommitProtocol,
     EXPECT_TRUE(CleanupProtected);
     CleanupProtected = false;
   };
-  const neverd::cli::detail::AtomicOutputCommitOperations Operations{
+  const neverd::support::atomic_output::CommitOperations Operations{
       Close, Rename, Discard, Register, Unregister};
 
-  llvm::Error Error = neverd::cli::detail::commitTemporaryOutput(
+  llvm::Error Error = neverd::support::atomic_output::commitTemporaryOutput(
       "candidate.tmp", "output.o", Operations);
 
   ASSERT_FALSE(static_cast<bool>(Error)) << llvm::toString(std::move(Error));
@@ -313,10 +315,10 @@ TEST_F(TranslationCLIContract,
     EXPECT_EQ(To, "existing.o");
     return std::make_error_code(std::errc::permission_denied);
   };
-  const neverd::cli::detail::AtomicOutputReplaceOperations Operations{Replace};
+  const neverd::support::atomic_output::ReplaceOperations Operations{Replace};
 
   const std::error_code Error =
-      neverd::cli::detail::replaceTemporaryOutputWithoutMoveAside(
+      neverd::support::atomic_output::replaceTemporaryOutputWithoutMoveAside(
           "candidate.tmp", "existing.o", Operations);
 
   EXPECT_EQ(Error, std::make_error_code(std::errc::permission_denied));
@@ -333,10 +335,10 @@ TEST_F(TranslationCLIContract,
     EXPECT_EQ(To, "new.o");
     return {};
   };
-  const neverd::cli::detail::AtomicOutputReplaceOperations Operations{Replace};
+  const neverd::support::atomic_output::ReplaceOperations Operations{Replace};
 
   const std::error_code Error =
-      neverd::cli::detail::replaceTemporaryOutputWithoutMoveAside(
+      neverd::support::atomic_output::replaceTemporaryOutputWithoutMoveAside(
           "candidate.tmp", "new.o", Operations);
 
   EXPECT_FALSE(Error);
@@ -436,12 +438,13 @@ TEST_F(TranslationCLIContract,
   const fs::path TemporaryPath = Temporary.TmpName;
   ASSERT_FALSE(llvm::sys::Process::SafelyCloseFileDescriptor(Temporary.FD));
 
-  llvm::Error Error = neverd::cli::detail::discardTemporaryOutput(Temporary);
+  llvm::Error Error =
+      neverd::support::atomic_output::discardTemporaryOutput(Temporary);
 
   ASSERT_TRUE(static_cast<bool>(Error));
-  EXPECT_NE(llvm::toString(std::move(Error))
-                .find("cannot close temporary translation output"),
-            std::string::npos);
+  EXPECT_NE(
+      llvm::toString(std::move(Error)).find("cannot close temporary output"),
+      std::string::npos);
   EXPECT_FALSE(fs::exists(TemporaryPath));
   EXPECT_EQ(Temporary.FD, -1);
   EXPECT_TRUE(Temporary.TmpName.empty());
@@ -463,13 +466,14 @@ TEST_F(TranslationCLIContract,
   const fs::path TemporaryPath = Temporary.TmpName;
   ASSERT_FALSE(llvm::sys::Process::SafelyCloseFileDescriptor(Temporary.FD));
 
-  llvm::Error Error = neverd::cli::detail::closeAndCommitTemporaryOutput(
-      Temporary, Output.string());
+  llvm::Error Error =
+      neverd::support::atomic_output::closeAndCommitTemporaryOutput(
+          Temporary, Output.string());
 
   ASSERT_TRUE(static_cast<bool>(Error));
-  EXPECT_NE(llvm::toString(std::move(Error))
-                .find("cannot close temporary translation output"),
-            std::string::npos);
+  EXPECT_NE(
+      llvm::toString(std::move(Error)).find("cannot close temporary output"),
+      std::string::npos);
   EXPECT_EQ(readBytes(Output),
             (std::vector<uint8_t>(Original.begin(), Original.end())));
   EXPECT_FALSE(fs::exists(TemporaryPath));
@@ -496,8 +500,9 @@ TEST_F(TranslationCLIContract,
     ASSERT_FALSE(Stream.has_error());
   }
 
-  llvm::Error Error = neverd::cli::detail::closeAndCommitTemporaryOutput(
-      Temporary, Output.string());
+  llvm::Error Error =
+      neverd::support::atomic_output::closeAndCommitTemporaryOutput(
+          Temporary, Output.string());
 
   ASSERT_FALSE(static_cast<bool>(Error)) << llvm::toString(std::move(Error));
   EXPECT_EQ(readBytes(Output),
@@ -524,8 +529,9 @@ TEST_F(TranslationCLIContract,
     ASSERT_FALSE(Stream.has_error());
   }
 
-  llvm::Error Error = neverd::cli::detail::closeAndCommitTemporaryOutput(
-      Temporary, Output.string());
+  llvm::Error Error =
+      neverd::support::atomic_output::closeAndCommitTemporaryOutput(
+          Temporary, Output.string());
 
   ASSERT_FALSE(static_cast<bool>(Error)) << llvm::toString(std::move(Error));
   EXPECT_EQ(readBytes(Output),
@@ -559,13 +565,14 @@ TEST_F(TranslationCLIContract,
       nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
   ASSERT_TRUE(static_cast<bool>(LockedOutput));
 
-  llvm::Error Error = neverd::cli::detail::closeAndCommitTemporaryOutput(
-      Temporary, Output.string());
+  llvm::Error Error =
+      neverd::support::atomic_output::closeAndCommitTemporaryOutput(
+          Temporary, Output.string());
 
   ASSERT_TRUE(static_cast<bool>(Error));
-  EXPECT_NE(llvm::toString(std::move(Error))
-                .find("cannot atomically replace translation output"),
-            std::string::npos);
+  EXPECT_NE(
+      llvm::toString(std::move(Error)).find("cannot atomically replace output"),
+      std::string::npos);
   EXPECT_EQ(readBytes(Output),
             (std::vector<uint8_t>(Original.begin(), Original.end())));
   EXPECT_FALSE(fs::exists(TemporaryPath));

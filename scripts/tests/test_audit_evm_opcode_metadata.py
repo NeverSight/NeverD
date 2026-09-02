@@ -117,8 +117,8 @@ EVM_GETH_ACTIVE_WITHOUT_COST(STOP, Frontier)
         (geth / "go.sum").write_text("", encoding="utf-8")
         helper = root / "probe.go"
         helper.write_text("package main\n", encoding="utf-8")
-        go_executable = root / "test-go-root/bin" / (
-            "go.exe" if os.name == "nt" else "go"
+        go_executable = (
+            root / "test-go-root/bin" / ("go.exe" if os.name == "nt" else "go")
         )
         go_executable.parent.mkdir(parents=True)
         go_executable.write_bytes(b"test executable")
@@ -686,6 +686,54 @@ EVM_GETH_ACTIVE_WITHOUT_COST(STOP, Frontier)
                         source, destination = command[index + 1 : index + 3]
                         self.assertNotIn(source, forbidden_roots)
                         self.assertNotIn(destination, forbidden_roots)
+
+    def test_darwin_rosetta_runtime_root_is_read_only_in_generated_profile(self):
+        declared_rosetta_root = Path("/Library/Apple/usr/libexec/oah")
+        self.assertIn(
+            declared_rosetta_root, opcode_audit.DARWIN_SANDBOX_SYSTEM_READ_PATHS
+        )
+        self.assertNotIn(
+            declared_rosetta_root, opcode_audit.DARWIN_SANDBOX_SYSTEM_WRITE_PATHS
+        )
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            rosetta_root = root / "oah"
+            readable_root = root / "readable"
+            writable_root = readable_root / "writable"
+            for directory in (rosetta_root, writable_root):
+                directory.mkdir(parents=True)
+            executable = readable_root / "go"
+            executable.write_bytes(b"test executable")
+            executable.chmod(0o700)
+
+            with (
+                mock.patch.object(
+                    opcode_audit,
+                    "DARWIN_SANDBOX_SYSTEM_READ_PATHS",
+                    (rosetta_root,),
+                ),
+                mock.patch.object(
+                    opcode_audit, "DARWIN_SANDBOX_SYSTEM_WRITE_PATHS", ()
+                ),
+            ):
+                profile = opcode_audit._write_darwin_sandbox_profile(
+                    executable=executable,
+                    readable_roots=(readable_root,),
+                    writable_roots=(writable_root,),
+                    profile_root=root,
+                    network_allowed=False,
+                )
+
+            profile_source = profile.read_text(encoding="utf-8")
+            rosetta = str(rosetta_root.resolve())
+            self.assertIn(f'(allow file-read* (subpath "{rosetta}"))', profile_source)
+            self.assertNotIn(
+                f'(allow file-write* (subpath "{rosetta}"))', profile_source
+            )
+            self.assertNotIn(
+                f'(allow file-write* (literal "{rosetta}"))', profile_source
+            )
 
     def test_go_executable_must_resolve_inside_its_reported_goroot(self):
         with tempfile.TemporaryDirectory() as temporary_directory:

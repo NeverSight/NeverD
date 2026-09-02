@@ -53,6 +53,9 @@ DARWIN_SANDBOX_SYSTEM_READ_PATHS = (
     Path("/System/Library"),
     Path("/usr/lib"),
     Path("/Library/Apple/usr/lib"),
+    # An x86_64 audit process on Apple Silicon enters the sandbox through
+    # Rosetta and must load its runtime before the audited command can start.
+    Path("/Library/Apple/usr/libexec/oah"),
     Path("/private/var/db/timezone"),
     Path("/private/etc/resolv.conf"),
     Path("/private/etc/hosts"),

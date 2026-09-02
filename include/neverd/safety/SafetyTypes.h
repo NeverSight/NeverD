@@ -76,6 +76,22 @@ enum class ArgFlow : uint8_t {
 #include "neverd/safety/SafetyEnums.def"
 };
 
+/// Strength of the recovered destination-capacity evidence.  StorageExact
+/// proves an allocation or top-level storage boundary, but not the boundary of
+/// a writable subobject inside it.  Only TypedBufferExact may establish a
+/// generic SAFE verdict or authorize a strict runtime guard.
+enum class CapacityPrecision : uint8_t {
+  Unknown = 0,
+  ContainerUpperBound = 1,
+  StorageExact = 2,
+  TypedBufferExact = 3,
+};
+static_assert(static_cast<uint8_t>(CapacityPrecision::Unknown) == 0);
+static_assert(static_cast<uint8_t>(CapacityPrecision::ContainerUpperBound) ==
+              1);
+static_assert(static_cast<uint8_t>(CapacityPrecision::StorageExact) == 2);
+static_assert(static_cast<uint8_t>(CapacityPrecision::TypedBufferExact) == 3);
+
 /// The two process inputs for which the report can currently carry an exact,
 /// literal replay.  argv, files, network data, and custom sources are excluded
 /// until an adapter can give them equally precise occurrence semantics.
@@ -90,6 +106,21 @@ enum class ReplayBindingRole : uint8_t {
 #include "neverd/safety/SafetyEnums.def"
 };
 
+/// Whether a finding's containing function is reachable from the known native
+/// entry set.  This is deliberately separate from Verdict: dead code can still
+/// contain a real defect, while an incomplete entry/call model must not erase
+/// it or promote it to SAFE.
+enum class ReachabilityStatus : uint8_t {
+#define SAFETY_REACHABILITY_STATUS(ID, SPELLING) ID,
+#include "neverd/safety/SafetyEnums.def"
+};
+
+/// Why a function participates in the known native entry set.
+enum class SafetyEntryKind : uint8_t {
+#define SAFETY_ENTRY_KIND(ID, SPELLING) ID,
+#include "neverd/safety/SafetyEnums.def"
+};
+
 const char *toString(Track T);
 const char *toString(Verdict V);
 const char *toString(Confidence C);
@@ -97,8 +128,11 @@ const char *toString(VulnClass C);
 const char *toString(SinkKind K);
 const char *toString(NameSource S);
 const char *toString(ArgFlow F);
+const char *toString(CapacityPrecision P);
 const char *toString(ReplayInputKind K);
 const char *toString(ReplayBindingRole R);
+const char *toString(ReachabilityStatus S);
+const char *toString(SafetyEntryKind K);
 
 /// A call site that matched a catalog entry, before any property is checked.
 struct SinkSite {
@@ -175,6 +209,37 @@ struct ReplayPlan {
   std::vector<ReplayInput> Inputs;
 };
 
+/// One exact internal call edge in a shortest known-entry witness.
+struct ReachabilityCall {
+  va_t CallerVA = 0;
+  va_t CallVA = 0;
+  va_t CalleeVA = 0;
+  bool Indirect = false;
+};
+
+/// One coherent known-entry-to-function witness.  RootFunctionVA names the
+/// exact MedIR root even when the native entry address is zero; EntryVA uses
+/// presence rather than a numeric sentinel for the same reason.
+struct ReachabilityWitness {
+  va_t RootFunctionVA = 0;
+  std::optional<va_t> EntryVA;
+  std::string EntryName;
+  SafetyEntryKind Kind = SafetyEntryKind::Image;
+  std::vector<ReachabilityCall> CallChain;
+};
+
+/// Control reachability and attacker-control evidence for one finding.
+struct ReachabilityEvidence {
+  ReachabilityStatus Status = ReachabilityStatus::Unknown;
+  ArgFlow AttackerControl = ArgFlow::Unknown;
+  std::optional<va_t> EntryVA;
+  std::string EntryName;
+  SafetyEntryKind Kind = SafetyEntryKind::Image;
+  std::vector<ReachabilityCall> CallChain;
+  std::string Reason;
+  bool BudgetHit = false;
+};
+
 /// One evidence-carrying record in a report.
 struct Finding {
   Track Origin = Track::Hunt;
@@ -187,13 +252,21 @@ struct Finding {
   std::string Name; ///< sink / callee name.
   NameSource Source = NameSource::Synthetic;
   va_t CallVA = 0;
+  /// Exact non-serialized MedIR identity consumed by strict instrumentation.
+  int BlockId = -1;
+  int OpIdx = -1;
+  int OriginSeq = -1;
+  uint32_t CallSiteId = 0;
   std::string SourceLoc; ///< "file:line" when debug info supplies it.
   std::string Sink;      ///< normalized catalog name.
+  /// Non-serialized sink role used by strict instrumentation classification.
+  SinkKind Kind = SinkKind::Copy;
   int ArgIndex = -1;
   ArgFlow Flow = ArgFlow::Unknown;
 
   std::optional<uint64_t> Capacity; ///< destination capacity, when known.
-  bool CapacityExact = false;       ///< false means Capacity is an upper bound.
+  CapacityPrecision CapacityKind = CapacityPrecision::Unknown;
+  bool CapacityExact = false; ///< false means Capacity is an upper bound.
 
   // Evidence — at most one of the following is populated per finding.
   std::string SkipReason;  ///< why a bounded sink was filtered before solving.
@@ -212,6 +285,12 @@ struct Finding {
   std::vector<FindingEvent> ForbiddenPathEvents;
   bool RequireReturnedPath = false;
   va_t RequireNonNullCallVA = 0;
+
+  ReachabilityEvidence Reachability;
+  /// Internal provenance used to keep an attacker-control fact paired with
+  /// the root/call chain that actually produced it.  Reachability serialization
+  /// consumes this into Reachability rather than emitting a duplicate field.
+  std::optional<ReachabilityWitness> AttackerWitness;
 };
 
 /// The result of running one track over a binary.
@@ -237,6 +316,12 @@ struct SafetyBudgets {
   unsigned MaxSteps = 0;
   unsigned MaxLoop = 0;
   uint64_t SolverConflicts = 0;
+  /// Maximum number of internal call edges in a known-entry witness.  Zero
+  /// selects the finite production default.
+  unsigned MaxCallDepth = 0;
+  /// Maximum fixed-point rounds used for caller-argument to callee-parameter
+  /// attacker-control propagation.  Zero selects an inventory-sized bound.
+  unsigned MaxSummaryIterations = 0;
 };
 
 /// Default SAT-search ceiling used when a caller leaves SolverConflicts at

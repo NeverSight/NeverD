@@ -89,9 +89,28 @@ EIP-3540 は Stagnant であり、確定 mainnet behavior として扱いませ�
 |------|------|
 | `audit` トラック | IR 上のヒープ状態機械 + エスケープ要約：リーク、二重解放、解放後使用 |
 | `hunt` トラック | シンクカタログ + 引数事前フィルタ + 宛先容量 + ソルバ証人 |
+| 到達可能性証拠 | 既知エントリからの制御状態、独立した攻撃者制御の固定点、正確なルート／呼び出し鎖の証人 |
 | 識別契約 | 形式ごとのシンク解決（PE IAT、ELF PLT、Mach-O dyld bind）と PDB / DWARF / MAP の名前出所 |
 
-**状態：** PE、ELF、Mach-O の Phase 1 は実装済みです。P0 はヒープ寿命と危険なコピーの閉世界解析、および正確なリテラル環境値と最初の標準入力消費に対する schema v1 の追加的な `process-input-v1` 再生証拠を含みます。その他の入力種別は理由付きで再生不能のままです。P1 はスタック／グローバル越境、未初期化ローカル読み、書式文字列をカバーします。未知または部分的にしか適用できない呼び出し効果は UNKNOWN のままです。判定と識別の被覆は [`unittests/safety`](../../unittests/safety) と、全ホストで必須の PE/ELF/Mach-O × x86-64/AArch64 6 セル fixture 行列を実行するエンドツーエンド [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) で固定。詳細は [メモリ安全性の監査とハント](../memory-safety.ja.md)。P2 の基盤の一つは実装済みです。バージョン化された `lowir-concolic-v1` は有界なネイティブ LowIR トレースを一本たどり、再生検証済みのレジスタ seed だけを公開します。C、CLI、Python を通じて PE/ELF/Mach-O × x86-64/AArch64 の証拠を固定しています。バイナリ検査挿入、ハイブリッド fuzz の corpus スケジューリングと変異、メモリ入力投影、より広い手続き間到達可能性は Phase-1 受け入れ範囲外の後続作業です。
+**状態：** PE、ELF、Mach-O の Phase 1 は実装済みです。P0 はヒープ寿命と危険なコピーの閉世界解析、および正確なリテラル環境値と最初の標準入力消費に対する schema v1 の追加的な `process-input-v1` 再生証拠を含みます。その他の入力種別は理由付きで再生不能のままです。P1 はスタック／グローバル越境、未初期化ローカル読み、書式文字列をカバーします。未知または部分的にしか適用できない呼び出し効果は UNKNOWN のままです。判定と識別の被覆は [`unittests/safety`](../../unittests/safety) と、全ホストで必須の PE/ELF/Mach-O × x86-64/AArch64 6 セル fixture 行列を実行するエンドツーエンド [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) で固定。詳細は [メモリ安全性の監査とハント](../memory-safety.ja.md)。
+
+現在の手続き間スライスは、独立した `verdict` を変えずに schema v1 へ
+`reachability.status` と `reachability.attacker_control` を追加します。
+`application`、`image`、`export` のルート、正確な内部呼び出し鎖、fail-closed な
+UNKNOWN 状態を報告します。`max_call_depth` と `max_summary_iterations` の予算は
+C API、両 CLI コマンド、両 Python メソッドから設定できます。したがって
+`control_reachable` と
+`attacker_reachable` は到達可能性の集計であり、別の判定集計ではありません。
+
+P2 の解析面と計画は、明示的な状態を持つバージョン付き境界を使用します。
+
+| 計画 | 範囲 | 状態 |
+|------|------|------|
+| `lowir-concolic-v1` | LowIR のハイブリッド／concolic 探索と seed 生成 | 実験的；PE/ELF/Mach-O × x86-64/AArch64 でリプレイ検証済みのレジスタ seed |
+| `binary-sanitizer-v1` | 書き換えたネイティブバイナリへ挿入する実行時検査 | Darwin で実験的：全サイトを保護できなければ拒否する counted-write ガードと、認証済み create-exclusive または同一 source の no-change 公開 |
+| `process-replay-v1` | argv、ファイル、ネットワーク、反復 read を含む `process-input-v1` より広いプロセス再生 | Phase 0 境界のみ：plan/coordinator 検証と fail-closed なネイティブ可用性照会。ネイティブ replay 操作を提供するホストはない |
+
+concolic アダプタは独立した解析面であり、Phase 1 の安全性レポート受け入れ契約を拡張するものではありません。実験的 sanitizer は `neverd_session_sanitize`、`neverd patch --sanitize=strict`、Python `Session.sanitize` から利用でき、Darwin 以外では lifting や namespace 変更の前に拒否します。完全な receipt が認証するのはトランザクション中に保持した宛先ディレクトリ object だけです。ディレクトリは open 後に rename できるため、元の pathname が処理中または返却後もその object を指すことや、永続的な path binding を証明しません。`NativeProcessReplayAdapter` は引き続き能力が全部そろうか全くないかの Phase 0 query/factory 境界であり、現在は全ホストが全能力を false とし、操作 table を返しません。
 
 ---
 
@@ -108,9 +127,9 @@ EIP-3540 は Stagnant であり、確定 mainnet behavior として扱いませ�
 
 ## タイムライン
 
-native format、Fusaka までの legacy EVM decode/lifting、Solana SBF、メモリ安全性 Phase 1 は
-回帰試験で保護されています。保守的な EVM source reconstruction は継続中です。
-リリース日は約束しません。
+native format、Fusaka までの legacy EVM decode/lifting、Solana SBF、メモリ安全性
+Phase 1 と現在の既知エントリ到達可能性スライスは回帰試験で保護されています。
+保守的な EVM source reconstruction は継続中です。リリース日は約束しません。
 
 | 機能 | 状態 |
 |------|------|
@@ -118,5 +137,5 @@ native format、Fusaka までの legacy EVM decode/lifting、Solana SBF、メモ
 | EVM legacy decode/lifting | Fusaka まで完了；回帰試験済み |
 | EVM source reconstruction | 継続 — evidence-backed かつ保守的 |
 | Solana eBPF（SBF）逆コンパイル | 完了 — v0-v4、C、Rust、LLVM；回帰試験済み |
-| メモリ安全性の監査とハント | Phase 1 完了 — P0/P1 解析と再生証拠を実装済み；再生検証済み LowIR concolic レジスタ seed が P2 基盤として完成し、残る P2 オーケストレーションは後続予定 |
+| メモリ安全性の監査とハント | Phase 1 と既知エントリ到達可能性スライスを完了；`lowir-concolic-v1` と Darwin の `binary-sanitizer-v1` は実験的；ネイティブ `process-replay-v1` は fail-closed な Phase 0 アダプタの背後で未提供 |
 | エンジンとプロダクト強化 | 継続 |

@@ -171,6 +171,17 @@ int neverd_session_load(neverd_session_t Sess, const char *Path) {
     return 0;
   }
 
+  // Capture a separate absolute, symlink-free source locator at the trusted
+  // load boundary.  Keep P unchanged: FilePath is an older public contract
+  // used by sidecar discovery and must preserve the caller's spelling.
+  std::error_code CanonicalError;
+  const std::filesystem::path SanitizeSourcePath =
+      std::filesystem::canonical(P, CanonicalError);
+  if (CanonicalError) {
+    S->setError("cannot canonicalize input path: " + CanonicalError.message());
+    return 0;
+  }
+
   auto ImgOrErr = loadBinary(P);
   if (!ImgOrErr) {
     std::string Err;
@@ -182,6 +193,7 @@ int neverd_session_load(neverd_session_t Sess, const char *Path) {
 
   S->Img = std::move(*ImgOrErr);
   S->FilePath = P;
+  S->SanitizeSourcePath = SanitizeSourcePath;
   S->Loaded = true;
   S->Annotations.clear();
   S->Renames.clear();

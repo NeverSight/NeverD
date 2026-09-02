@@ -11,6 +11,7 @@
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImageModel.h"
 #include "neverd/pipeline/Pipeline.h"
+#include "neverd/safety/InterprocReachability.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/JSON.h"
@@ -332,11 +333,16 @@ SafetyReport neverd::safety::runHunt(const AnalysisInput &In,
   if (!R.AnalysisComplete)
     return R;
 
-  for (const SinkSite &Site : scanSinks(In, Cat)) {
-    const MedFunc *F = In.findMedFunc(Site.FuncEntry);
+  InterprocResult Interproc = analyzeInterprocedural(In, Cat, Budgets);
+  AnalysisInput Effective = In;
+  Effective.ParameterFlows = &Interproc.Parameters;
+  R.BudgetHit |= Interproc.BudgetHit;
+
+  for (const SinkSite &Site : scanSinks(Effective, Cat)) {
+    const MedFunc *F = Effective.findMedFunc(Site.FuncEntry);
     if (!F)
       continue;
-    std::optional<Finding> Fnd = huntSink(In, Cat, Budgets, *F, Site);
+    std::optional<Finding> Fnd = huntSink(Effective, Cat, Budgets, *F, Site);
     if (!Fnd)
       continue;
     ++R.Scanned;
@@ -344,6 +350,7 @@ SafetyReport neverd::safety::runHunt(const AnalysisInput &In,
       ++R.Skipped;
     if (Fnd->BudgetHit)
       R.BudgetHit = true;
+    Interproc.annotate(*Fnd);
     R.Findings.push_back(std::move(*Fnd));
   }
   return R;
@@ -358,13 +365,19 @@ SafetyReport neverd::safety::runAudit(const AnalysisInput &In,
   recordInputStatus(In, R);
   if (!R.AnalysisComplete)
     return R;
-  for (const SinkSite &Site : scanSinks(In, Cat))
+  InterprocResult Interproc = analyzeInterprocedural(In, Cat, Budgets);
+  AnalysisInput Effective = In;
+  Effective.ParameterFlows = &Interproc.Parameters;
+  R.BudgetHit |= Interproc.BudgetHit;
+  for (const SinkSite &Site : scanSinks(Effective, Cat))
     if (Site.Kind == SinkKind::Alloc || Site.Kind == SinkKind::Realloc)
       ++R.Scanned;
-  R.Findings = auditMemory(In, Cat, Budgets);
-  for (const Finding &F : R.Findings)
+  R.Findings = auditMemory(Effective, Cat, Budgets);
+  for (Finding &F : R.Findings) {
+    Interproc.annotate(F);
     if (F.BudgetHit)
       R.BudgetHit = true;
+  }
   return R;
 }
 
@@ -426,6 +439,13 @@ std::string neverd::safety::toJson(const SafetyReport &Report, bool Pretty) {
 
       json::Object Replay{{"adapter", "process-input-v1"}};
       if (Replayable) {
+        std::vector<uint32_t> QueryVariables = F.Replay->QueryVariables;
+        std::sort(QueryVariables.begin(), QueryVariables.end());
+        json::Array SerializedQueryVariables;
+        for (uint32_t Id : QueryVariables)
+          SerializedQueryVariables.push_back(int64_t(Id));
+        Replay["query_variables"] = std::move(SerializedQueryVariables);
+
         json::Array Inputs;
         for (const ReplayInput &Input : F.Replay->Inputs) {
           json::Object Serialized{
@@ -481,18 +501,46 @@ std::string neverd::safety::toJson(const SafetyReport &Report, bool Pretty) {
     O["confidence"] = toString(F.TheConfidence);
     if (F.Capacity) {
       O["capacity"] = *F.Capacity;
-      O["capacity_kind"] = F.CapacityExact ? "exact" : "upper_bound";
+      O["capacity_kind"] = F.CapacityKind == CapacityPrecision::TypedBufferExact
+                               ? "exact"
+                               : "upper_bound";
+      O["capacity_precision"] = toString(F.CapacityKind);
     }
     if (!F.Detail.empty())
       O["detail"] = F.Detail;
     if (!F.Corroboration.empty())
       O["corroboration"] = F.Corroboration;
+    json::Object Reachability{
+        {"status", toString(F.Reachability.Status)},
+        {"attacker_control", toString(F.Reachability.AttackerControl)},
+        {"budget_hit", F.Reachability.BudgetHit}};
+    if (F.Reachability.EntryVA) {
+      Reachability["entry"] =
+          json::Object{{"va", vaHex(*F.Reachability.EntryVA)},
+                       {"name", F.Reachability.EntryName},
+                       {"kind", toString(F.Reachability.Kind)}};
+    }
+    if (!F.Reachability.CallChain.empty()) {
+      json::Array Chain;
+      for (const ReachabilityCall &Call : F.Reachability.CallChain)
+        Chain.push_back(
+            json::Object{{"caller_va", vaHex(Call.CallerVA)},
+                         {"call_va", vaHex(Call.CallVA)},
+                         {"callee_va", vaHex(Call.CalleeVA)},
+                         {"kind", Call.Indirect ? "indirect" : "direct"}});
+      Reachability["call_chain"] = std::move(Chain);
+    }
+    if (!F.Reachability.Reason.empty())
+      Reachability["reason"] = F.Reachability.Reason;
+    O["reachability"] = std::move(Reachability);
     O["evidence"] = std::move(Ev);
     Findings.push_back(std::move(O));
   }
 
   // Verdict tally, so a caller can key an exit code off one number.
   unsigned Unsafe = 0, Unknown = 0, Safe = 0;
+  unsigned ControlReachable = 0, AttackerReachable = 0;
+  unsigned ReachabilityUnknown = 0, Unreachable = 0;
   for (const Finding &F : Report.Findings) {
     switch (F.TheVerdict) {
     case Verdict::Unsafe:
@@ -503,6 +551,19 @@ std::string neverd::safety::toJson(const SafetyReport &Report, bool Pretty) {
       break;
     case Verdict::Safe:
       ++Safe;
+      break;
+    }
+    switch (F.Reachability.Status) {
+    case ReachabilityStatus::Reachable:
+      ++ControlReachable;
+      if (F.Reachability.AttackerControl == ArgFlow::Tainted)
+        ++AttackerReachable;
+      break;
+    case ReachabilityStatus::Unknown:
+      ++ReachabilityUnknown;
+      break;
+    case ReachabilityStatus::Unreachable:
+      ++Unreachable;
       break;
     }
   }
@@ -548,6 +609,10 @@ std::string neverd::safety::toJson(const SafetyReport &Report, bool Pretty) {
   Root["unsafe"] = Unsafe;
   Root["unknown"] = Unknown;
   Root["safe"] = Safe;
+  Root["control_reachable"] = ControlReachable;
+  Root["attacker_reachable"] = AttackerReachable;
+  Root["reachability_unknown"] = ReachabilityUnknown;
+  Root["unreachable"] = Unreachable;
   Root["findings"] = std::move(Findings);
 
   std::string Buf;

@@ -3,6 +3,7 @@ add_neverd_component_library(NeverDCodeGen
   COFF/COFFFH4Encoding.cpp
   COFF/COFFInplace.cpp
   COFF/COFFPatch.cpp
+  COFF/PESignaturePolicy.cpp
   COFF/COFFReloc.cpp
   CodeGen.cpp
   CodeGenAArch64.cpp
@@ -23,6 +24,8 @@ add_neverd_component_library(NeverDCodeGen
   MachO/MachOInplace.cpp
   MachO/MachOPatch.cpp
   MachO/MachOReloc.cpp
+  MachO/MachOSigner.cpp
+  MachO/MachOSignaturePolicy.cpp
   RelocResolver.cpp
   rewrite/BinaryRewriter.cpp
   rewrite/InplaceRewriter.cpp

@@ -12,24 +12,225 @@
 #include "neverd/debug/DWARFLoader.h"
 
 #define DEBUG_TYPE "neverd-dwarf-loader"
+#include "llvm/DebugInfo/DWARF/DWARFAbbreviationDeclaration.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFDie.h"
 #include "llvm/DebugInfo/DWARF/DWARFFormValue.h"
+#include "llvm/DebugInfo/DWARF/DWARFLocationExpression.h"
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
+#include "llvm/DebugInfo/DWARF/LowLevel/DWARFExpression.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/MachO.h"
 #include "llvm/Object/MachOUniversal.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/LEB128.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 
 #include <algorithm>
+#include <array>
+#include <functional>
+#include <limits>
+#include <set>
+#include <span>
 
 namespace neverd {
+
+namespace dwarf_loader_detail {
+
+namespace {
+
+struct StrictAttributeLookup {
+  enum class Status : uint8_t { Absent, Found, Malformed };
+  Status TheStatus = Status::Absent;
+  llvm::DWARFFormValue Value;
+};
+
+bool hasCompleteAttributePayload(
+    llvm::DWARFDie Die, const llvm::DWARFAbbreviationDeclaration &Abbrev) {
+  const llvm::DWARFUnit *Unit = Die.getDwarfUnit();
+  if (!Unit)
+    return false;
+  const llvm::DWARFDataExtractor Data = Unit->getDebugInfoExtractor();
+  const uint64_t UnitEnd = Unit->getNextUnitOffset();
+  const uint64_t DieOffset = Die.getOffset();
+  if (DieOffset > UnitEnd || Abbrev.getCodeByteSize() > UnitEnd - DieOffset)
+    return false;
+  uint64_t ExpectedOffset = DieOffset + Abbrev.getCodeByteSize();
+  const auto Specs = Abbrev.attributes();
+  auto Spec = Specs.begin();
+  const auto SpecEnd = Specs.end();
+  for (const llvm::DWARFAttribute &Attribute : Die.attributes()) {
+    if (Spec == SpecEnd || Attribute.Attr != Spec->Attr ||
+        Attribute.Offset != ExpectedOffset)
+      return false;
+    const std::optional<int64_t> FixedSize = Spec->getByteSize(*Unit);
+    if (FixedSize) {
+      if (*FixedSize < 0 ||
+          static_cast<uint64_t>(*FixedSize) != Attribute.ByteSize)
+        return false;
+    } else if (Attribute.ByteSize == 0) {
+      return false;
+    }
+    if (ExpectedOffset > UnitEnd ||
+        Attribute.ByteSize > UnitEnd - ExpectedOffset ||
+        !Data.isValidOffsetForDataOfSize(ExpectedOffset, Attribute.ByteSize))
+      return false;
+    ExpectedOffset += Attribute.ByteSize;
+    ++Spec;
+  }
+  return Spec == SpecEnd;
+}
+
+StrictAttributeLookup strictAttribute(llvm::DWARFDie Die,
+                                      llvm::dwarf::Attribute Wanted) {
+  if (!Die.isValid())
+    return {StrictAttributeLookup::Status::Malformed, {}};
+  const llvm::DWARFAbbreviationDeclaration *Abbrev =
+      Die.getAbbreviationDeclarationPtr();
+  if (!Abbrev || !hasCompleteAttributePayload(Die, *Abbrev))
+    return {StrictAttributeLookup::Status::Malformed, {}};
+
+  unsigned Count = 0;
+  for (const llvm::DWARFAbbreviationDeclaration::AttributeSpec &Spec :
+       Abbrev->attributes())
+    if (Spec.Attr == Wanted)
+      ++Count;
+  if (Count == 0)
+    return {};
+  if (Count != 1)
+    return {StrictAttributeLookup::Status::Malformed, {}};
+
+  const std::optional<llvm::DWARFFormValue> Value = Die.find(Wanted);
+  return Value ? StrictAttributeLookup{StrictAttributeLookup::Status::Found,
+                                       *Value}
+               : StrictAttributeLookup{StrictAttributeLookup::Status::Malformed,
+                                       {}};
+}
+
+bool rangesOverlap(std::span<const SubprogramRange> Left,
+                   std::span<const SubprogramRange> Right) {
+  for (const SubprogramRange &L : Left)
+    for (const SubprogramRange &R : Right)
+      if (L.first < R.second && R.first < L.second)
+        return true;
+  return false;
+}
+
+bool malformedRanges(std::span<const SubprogramRange> Ranges) {
+  return Ranges.empty() || std::any_of(Ranges.begin(), Ranges.end(),
+                                       [](const SubprogramRange &Range) {
+                                         return Range.first >= Range.second;
+                                       });
+}
+
+} // namespace
+
+void SubprogramExtentRegistry::insert(va_t Entry,
+                                      std::span<const SubprogramRange> Ranges) {
+  Record New;
+  New.Entry = Entry;
+  New.Ranges.assign(Ranges.begin(), Ranges.end());
+  New.Ambiguous = Entry == InvalidVA || malformedRanges(Ranges);
+
+  for (Record &Existing : Records) {
+    if (Existing.Entry != Entry && !rangesOverlap(Existing.Ranges, New.Ranges))
+      continue;
+    Existing.Ambiguous = true;
+    New.Ambiguous = true;
+  }
+  Records.push_back(std::move(New));
+}
+
+bool SubprogramExtentRegistry::isAmbiguous(va_t Entry) const {
+  return std::any_of(Records.begin(), Records.end(), [&](const Record &Record) {
+    return Record.Entry == Entry && Record.Ambiguous;
+  });
+}
+
+ReturnTypeProvenanceStatus
+mergeReturnTypeProvenance(ReturnTypeProvenanceStatus Current,
+                          ReturnTypeProvenanceStatus Candidate,
+                          bool SameConcreteType) {
+  using Status = ReturnTypeProvenanceStatus;
+  if (Current == Status::Malformed || Candidate == Status::Malformed)
+    return Status::Malformed;
+  if (Current == Status::Unspecified)
+    return Candidate;
+  if (Candidate == Status::Unspecified)
+    return Current;
+  if (Current != Candidate)
+    return Status::Malformed;
+  if (Current == Status::Value && !SameConcreteType)
+    return Status::Malformed;
+  return Current;
+}
+
+DecodedLocationExpression decodeLocationExpressionShape(
+    uint8_t Opcode, std::span<const uint64_t> Operands, bool Complete,
+    bool IsFrameBase, std::optional<unsigned> StackPointerRegister,
+    std::optional<unsigned> FramePointerRegister) {
+  using Base = LocationExpressionBase;
+  DecodedLocationExpression Result;
+  auto finish = [&](Base Coordinate, int64_t Offset) {
+    Result.Base = Complete ? Coordinate : Base::Malformed;
+    Result.Offset = Offset;
+  };
+  auto coordinateForRegister = [&](uint64_t Register) -> std::optional<Base> {
+    if (StackPointerRegister && Register == *StackPointerRegister)
+      return Base::StackPointer;
+    if (FramePointerRegister && Register == *FramePointerRegister)
+      return Base::FramePointer;
+    return std::nullopt;
+  };
+
+  if (Opcode == llvm::dwarf::DW_OP_fbreg && Operands.size() == 1) {
+    finish(Base::FrameBase, static_cast<int64_t>(Operands[0]));
+  } else if (Opcode == llvm::dwarf::DW_OP_call_frame_cfa && Operands.empty()) {
+    finish(Base::CFA, 0);
+  } else if (Opcode >= llvm::dwarf::DW_OP_breg0 &&
+             Opcode <= llvm::dwarf::DW_OP_breg31 && Operands.size() == 1) {
+    const uint64_t Register = Opcode - llvm::dwarf::DW_OP_breg0;
+    if (const auto Coordinate = coordinateForRegister(Register))
+      finish(*Coordinate, static_cast<int64_t>(Operands[0]));
+  } else if (Opcode == llvm::dwarf::DW_OP_bregx && Operands.size() == 2) {
+    if (const auto Coordinate = coordinateForRegister(Operands[0]))
+      finish(*Coordinate, static_cast<int64_t>(Operands[1]));
+  } else if (Opcode >= llvm::dwarf::DW_OP_reg0 &&
+             Opcode <= llvm::dwarf::DW_OP_reg31 && Operands.empty()) {
+    const uint64_t Register = Opcode - llvm::dwarf::DW_OP_reg0;
+    if (IsFrameBase) {
+      if (const auto Coordinate = coordinateForRegister(Register))
+        finish(*Coordinate, 0);
+    } else {
+      // A register location holds the value itself and therefore cannot
+      // overlap a memory-backed stack object.
+      finish(Base::NonStack, 0);
+    }
+  } else if (Opcode == llvm::dwarf::DW_OP_regx && Operands.size() == 1) {
+    if (IsFrameBase) {
+      if (const auto Coordinate = coordinateForRegister(Operands[0]))
+        finish(*Coordinate, 0);
+    } else {
+      finish(Base::NonStack, 0);
+    }
+  } else if (!IsFrameBase && Opcode == llvm::dwarf::DW_OP_addr &&
+             Operands.size() == 1) {
+    // A complete fixed-address location is outside the stack coordinate
+    // space.  Indexed addresses are resolved by DWARFExpression to the same
+    // opcode/operand shape before this policy is applied.
+    finish(Base::NonStack, 0);
+  }
+  return Result;
+}
+
+} // namespace dwarf_loader_detail
+
+using dwarf_loader_detail::strictAttribute;
+using dwarf_loader_detail::StrictAttributeLookup;
 
 struct DWARFDebugContext::Impl {
   std::unique_ptr<llvm::MemoryBuffer> BinaryBuf;
@@ -38,21 +239,61 @@ struct DWARFDebugContext::Impl {
 
   std::map<va_t, FunctionSym> FuncMap;
   std::vector<FunctionSym> FuncList;
+  std::map<va_t, AuthenticatedReturnValueState> ReturnValueStates;
 
-  struct LocalInfo {
-    std::map<int64_t, VariableSym> ByOffset;
-    std::map<int64_t, VariableSym> ByStackPointerOffset;
+  using AddressRange = std::pair<va_t, va_t>;
+
+  using StackCoordinate = dwarf_loader_detail::LocationExpressionBase;
+
+  struct Location {
+    std::optional<AddressRange> Range;
+    StackCoordinate Coordinate = StackCoordinate::Malformed;
+    int64_t Offset = 0;
   };
-  std::map<va_t, LocalInfo> LocalsMap;
+
+  struct LocalObject {
+    VariableSym Variable;
+    std::vector<AddressRange> ScopeRanges;
+    std::vector<Location> Locations;
+  };
+
+  struct FunctionInfo {
+    std::vector<AddressRange> Ranges;
+    std::vector<Location> FrameBases;
+    std::vector<LocalObject> Objects;
+  };
+
+  std::map<va_t, FunctionInfo> Functions;
+  dwarf_loader_detail::SubprogramExtentRegistry SubprogramExtents;
+  std::vector<DataObjectSym> DataObjects;
 
   std::optional<unsigned> DwarfStackPointerReg;
+  std::optional<unsigned> DwarfFramePointerReg;
 
   bool Loaded = false;
+  bool AuthenticatedObjectExtents = false;
+
+  struct ReturnTypeResolution {
+    enum class Status : uint8_t { Absent, Found, Malformed };
+    Status TheStatus = Status::Absent;
+    llvm::DWARFDie TypeDie;
+  };
 
   TypeRef convertDwarfType(llvm::DWARFDie Die, int Depth = 0);
+  ReturnTypeResolution resolveReturnType(llvm::DWARFDie Die) const;
+  AuthenticatedReturnValueState classifyReturnValue(llvm::DWARFDie Die,
+                                                    int Depth = 0) const;
+  std::vector<Location> decodeLocations(llvm::DWARFDie Die,
+                                        llvm::dwarf::Attribute Attr,
+                                        llvm::DWARFUnit *Unit,
+                                        bool IsFrameBase) const;
+  VariableExtentLookup lookupLocal(va_t FuncAddr, va_t UsePC, int64_t Offset,
+                                   StackCoordinate Coordinate) const;
   void parseCompileUnits();
   void parseFunction(llvm::DWARFDie Die, llvm::DWARFUnit *Unit);
-  void parseVariable(llvm::DWARFDie Die, va_t FuncAddr, bool IsParam);
+  void parseLocalVariable(llvm::DWARFDie Die, va_t FuncAddr, bool IsParam,
+                          llvm::ArrayRef<AddressRange> ScopeRanges);
+  void parseGlobalVariable(llvm::DWARFDie Die, llvm::DWARFUnit *Unit);
 };
 
 DWARFDebugContext::~DWARFDebugContext() = default;
@@ -90,29 +331,72 @@ static std::filesystem::path findDSYM(const std::filesystem::path &BinPath) {
   return {};
 }
 
-static std::unique_ptr<llvm::object::ObjectFile>
-getObjectFromBuffer(llvm::MemoryBuffer &Buf) {
+static std::unique_ptr<llvm::object::ObjectFile> getObjectFromBuffer(
+    llvm::MemoryBuffer &Buf,
+    std::optional<llvm::Triple::ArchType> RequiredArch = std::nullopt,
+    std::span<const uint8_t> PreferredBytes = {}) {
+  auto hasBytes = [](const llvm::object::ObjectFile &Obj,
+                     std::span<const uint8_t> Bytes) {
+    const llvm::StringRef Data = Obj.getData();
+    return Data.size() == Bytes.size() &&
+           std::equal(Bytes.begin(), Bytes.end(),
+                      reinterpret_cast<const uint8_t *>(Data.data()));
+  };
+
   auto BinOr =
       llvm::object::ObjectFile::createObjectFile(Buf.getMemBufferRef());
-  if (!BinOr) {
-    llvm::consumeError(BinOr.takeError());
-
-    auto UniOr =
-        llvm::object::MachOUniversalBinary::create(Buf.getMemBufferRef());
-    if (!UniOr) {
-      llvm::consumeError(UniOr.takeError());
-      return nullptr;
-    }
-    auto &Uni = *UniOr;
-    for (auto &ObjForArch : Uni->objects()) {
-      auto ObjOr = ObjForArch.getAsObjectFile();
-      if (ObjOr)
-        return std::move(*ObjOr);
-      llvm::consumeError(ObjOr.takeError());
-    }
+  if (BinOr) {
+    if (!RequiredArch || (*BinOr)->getArch() == *RequiredArch)
+      return std::move(*BinOr);
     return nullptr;
   }
-  return std::move(*BinOr);
+  llvm::consumeError(BinOr.takeError());
+
+  auto UniOr =
+      llvm::object::MachOUniversalBinary::create(Buf.getMemBufferRef());
+  if (!UniOr) {
+    llvm::consumeError(UniOr.takeError());
+    return nullptr;
+  }
+  auto &Uni = *UniOr;
+  std::unique_ptr<llvm::object::ObjectFile> Fallback;
+  for (auto &ObjForArch : Uni->objects()) {
+    auto ObjOr = ObjForArch.getAsObjectFile();
+    if (ObjOr) {
+      if (RequiredArch && (*ObjOr)->getArch() != *RequiredArch)
+        continue;
+      if (!PreferredBytes.empty() && hasBytes(**ObjOr, PreferredBytes))
+        return std::move(*ObjOr);
+      if (!Fallback)
+        Fallback = std::move(*ObjOr);
+      continue;
+    }
+    llvm::consumeError(ObjOr.takeError());
+  }
+  return Fallback;
+}
+
+static bool objectBytesEqual(const llvm::object::ObjectFile &Obj,
+                             std::span<const uint8_t> Bytes) {
+  if (Bytes.empty())
+    return false;
+  const llvm::StringRef Data = Obj.getData();
+  return Data.size() == Bytes.size() &&
+         std::equal(Bytes.begin(), Bytes.end(),
+                    reinterpret_cast<const uint8_t *>(Data.data()));
+}
+
+static std::optional<std::array<uint8_t, 16>>
+machOUUID(const llvm::object::ObjectFile &Obj) {
+  const auto *MachO = llvm::dyn_cast<llvm::object::MachOObjectFile>(&Obj);
+  if (!MachO)
+    return std::nullopt;
+  llvm::ArrayRef<uint8_t> Bytes = MachO->getUuid();
+  if (Bytes.size() != 16)
+    return std::nullopt;
+  std::array<uint8_t, 16> UUID{};
+  std::copy(Bytes.begin(), Bytes.end(), UUID.begin());
+  return UUID;
 }
 
 static std::optional<unsigned>
@@ -135,9 +419,30 @@ dwarfStackPointerRegister(llvm::Triple::ArchType Arch) {
   }
 }
 
+static std::optional<unsigned>
+dwarfFramePointerRegister(llvm::Triple::ArchType Arch) {
+  switch (Arch) {
+  case llvm::Triple::x86:
+    return 5;
+  case llvm::Triple::x86_64:
+    return 6;
+  case llvm::Triple::arm:
+  case llvm::Triple::armeb:
+  case llvm::Triple::thumb:
+  case llvm::Triple::thumbeb:
+    return 11;
+  case llvm::Triple::aarch64:
+  case llvm::Triple::aarch64_be:
+    return 29;
+  default:
+    return std::nullopt;
+  }
+}
+
 std::unique_ptr<DWARFDebugContext>
 DWARFDebugContext::load(const std::filesystem::path &BinaryPath,
-                        BinaryFormat Format) {
+                        BinaryFormat Format, DWARFLoadTrust Trust,
+                        std::span<const uint8_t> ExpectedImageBytes) {
   auto Ctx = std::unique_ptr<DWARFDebugContext>(new DWARFDebugContext());
   Ctx->PImpl = std::make_unique<Impl>();
 
@@ -149,14 +454,19 @@ DWARFDebugContext::load(const std::filesystem::path &BinaryPath,
   }
   Ctx->PImpl->BinaryBuf = std::move(*BufOr);
 
-  auto Obj = getObjectFromBuffer(*Ctx->PImpl->BinaryBuf);
+  auto Obj = getObjectFromBuffer(*Ctx->PImpl->BinaryBuf, std::nullopt,
+                                 ExpectedImageBytes);
   if (!Obj) {
     llvm::WithColor::warning()
         << "debug: cannot parse object file " << BinaryPath.string() << "\n";
     return Ctx;
   }
 
-  Ctx->PImpl->DwarfStackPointerReg = dwarfStackPointerRegister(Obj->getArch());
+  const llvm::Triple::ArchType MainArch = Obj->getArch();
+  const std::optional<std::array<uint8_t, 16>> MainUUID = machOUUID(*Obj);
+  const bool SnapshotMatches = objectBytesEqual(*Obj, ExpectedImageBytes);
+  Ctx->PImpl->DwarfStackPointerReg = dwarfStackPointerRegister(MainArch);
+  Ctx->PImpl->DwarfFramePointerReg = dwarfFramePointerRegister(MainArch);
 
   Ctx->PImpl->DwarfCtx = llvm::DWARFContext::create(*Obj);
   if (!Ctx->PImpl->DwarfCtx) {
@@ -166,6 +476,8 @@ DWARFDebugContext::load(const std::filesystem::path &BinaryPath,
   }
 
   bool HasDwarf = Ctx->PImpl->DwarfCtx->getNumCompileUnits() > 0;
+  Ctx->PImpl->AuthenticatedObjectExtents =
+      HasDwarf && Trust == DWARFLoadTrust::InImage && SnapshotMatches;
 
   if (!HasDwarf && Format == BinaryFormat::MachO) {
     auto DSYMPath = findDSYM(BinaryPath);
@@ -175,13 +487,20 @@ DWARFDebugContext::load(const std::filesystem::path &BinaryPath,
       auto DSYMBufOr = llvm::MemoryBuffer::getFile(DSYMPath.string());
       if (DSYMBufOr) {
         Ctx->PImpl->DSYMBuf = std::move(*DSYMBufOr);
-        auto DSYMObj = getObjectFromBuffer(*Ctx->PImpl->DSYMBuf);
+        auto DSYMObj = getObjectFromBuffer(*Ctx->PImpl->DSYMBuf, MainArch);
         if (DSYMObj) {
           Ctx->PImpl->DwarfStackPointerReg =
               dwarfStackPointerRegister(DSYMObj->getArch());
+          Ctx->PImpl->DwarfFramePointerReg =
+              dwarfFramePointerRegister(DSYMObj->getArch());
           Ctx->PImpl->DwarfCtx = llvm::DWARFContext::create(*DSYMObj);
           HasDwarf = Ctx->PImpl->DwarfCtx &&
                      Ctx->PImpl->DwarfCtx->getNumCompileUnits() > 0;
+          const std::optional<std::array<uint8_t, 16>> DSYMUUID =
+              machOUUID(*DSYMObj);
+          Ctx->PImpl->AuthenticatedObjectExtents =
+              HasDwarf && Trust == DWARFLoadTrust::InImage && SnapshotMatches &&
+              MainUUID && DSYMUUID && *MainUUID == *DSYMUUID;
         }
       }
     }
@@ -307,30 +626,361 @@ TypeRef DWARFDebugContext::Impl::convertDwarfType(llvm::DWARFDie Die,
   }
 }
 
-void DWARFDebugContext::Impl::parseFunction(llvm::DWARFDie Die,
-                                            llvm::DWARFUnit *Unit) {
-  auto LowPC = Die.find(llvm::dwarf::DW_AT_low_pc);
-  if (!LowPC)
+DWARFDebugContext::Impl::ReturnTypeResolution
+DWARFDebugContext::Impl::resolveReturnType(llvm::DWARFDie Die) const {
+  using Resolution = ReturnTypeResolution;
+  std::vector<llvm::DWARFDie> Active;
+  std::function<Resolution(llvm::DWARFDie, unsigned)> Resolve =
+      [&](llvm::DWARFDie Current, unsigned Depth) -> Resolution {
+    if (!Current.isValid() || Depth > 32)
+      return {Resolution::Status::Malformed, {}};
+    if (std::find(Active.begin(), Active.end(), Current) != Active.end())
+      return {Resolution::Status::Malformed, {}};
+    Active.push_back(Current);
+
+    Resolution Result;
+    dwarf_loader_detail::ReturnTypeProvenanceStatus Merged =
+        dwarf_loader_detail::ReturnTypeProvenanceStatus::Unspecified;
+    const auto merge = [&](Resolution Candidate, bool FromProvenance) {
+      using Provenance = dwarf_loader_detail::ReturnTypeProvenanceStatus;
+      Provenance CandidateStatus = Provenance::Unspecified;
+      if (Candidate.TheStatus == Resolution::Status::Malformed)
+        CandidateStatus = Provenance::Malformed;
+      else if (Candidate.TheStatus == Resolution::Status::Found)
+        CandidateStatus = Provenance::Value;
+      else if (FromProvenance)
+        CandidateStatus = Provenance::NoValue;
+      const bool SameType = Result.TheStatus != Resolution::Status::Found ||
+                            Candidate.TheStatus != Resolution::Status::Found ||
+                            Result.TypeDie == Candidate.TypeDie;
+      Merged = dwarf_loader_detail::mergeReturnTypeProvenance(
+          Merged, CandidateStatus, SameType);
+      if (Merged == Provenance::Malformed) {
+        Result = {Resolution::Status::Malformed, {}};
+        return;
+      }
+      if (Candidate.TheStatus == Resolution::Status::Found &&
+          Result.TheStatus == Resolution::Status::Absent)
+        Result = std::move(Candidate);
+    };
+
+    const StrictAttributeLookup Type =
+        strictAttribute(Current, llvm::dwarf::DW_AT_type);
+    if (Type.TheStatus == StrictAttributeLookup::Status::Malformed) {
+      Active.pop_back();
+      return {Resolution::Status::Malformed, {}};
+    }
+    if (Type.TheStatus == StrictAttributeLookup::Status::Found) {
+      const llvm::DWARFDie Referenced =
+          Current.getAttributeValueAsReferencedDie(Type.Value);
+      merge(Referenced.isValid()
+                ? Resolution{Resolution::Status::Found, Referenced}
+                : Resolution{Resolution::Status::Malformed, {}},
+            false);
+    }
+    for (const llvm::dwarf::Attribute Provenance :
+         {llvm::dwarf::DW_AT_specification,
+          llvm::dwarf::DW_AT_abstract_origin}) {
+      const StrictAttributeLookup Attribute =
+          strictAttribute(Current, Provenance);
+      if (Attribute.TheStatus == StrictAttributeLookup::Status::Malformed) {
+        Active.pop_back();
+        return {Resolution::Status::Malformed, {}};
+      }
+      if (Attribute.TheStatus == StrictAttributeLookup::Status::Absent)
+        continue;
+      const llvm::DWARFDie Referenced =
+          Current.getAttributeValueAsReferencedDie(Attribute.Value);
+      merge(Referenced.isValid()
+                ? Resolve(Referenced, Depth + 1)
+                : Resolution{Resolution::Status::Malformed, {}},
+            true);
+    }
+
+    Active.pop_back();
+    return Result;
+  };
+  return Resolve(Die, 0);
+}
+
+AuthenticatedReturnValueState
+DWARFDebugContext::Impl::classifyReturnValue(llvm::DWARFDie Die,
+                                             int Depth) const {
+  using Kind = AuthenticatedReturnKind;
+  if (!Die.isValid() || Depth > 16)
+    return {};
+
+  const auto byteSize = [&](bool PointerDefault) -> std::optional<uint16_t> {
+    const StrictAttributeLookup Attr =
+        strictAttribute(Die, llvm::dwarf::DW_AT_byte_size);
+    if (Attr.TheStatus == StrictAttributeLookup::Status::Malformed)
+      return std::nullopt;
+    if (Attr.TheStatus == StrictAttributeLookup::Status::Absent) {
+      if (!PointerDefault || !Die.getDwarfUnit())
+        return std::nullopt;
+      const uint8_t AddressSize = Die.getDwarfUnit()->getAddressByteSize();
+      return AddressSize == 0 ? std::nullopt
+                              : std::optional<uint16_t>(AddressSize);
+    }
+    const std::optional<uint64_t> Size = Attr.Value.getAsUnsignedConstant();
+    if (!Size || *Size == 0 || *Size > std::numeric_limits<uint16_t>::max())
+      return std::nullopt;
+    return static_cast<uint16_t>(*Size);
+  };
+
+  switch (Die.getTag()) {
+  case llvm::dwarf::DW_TAG_base_type: {
+    const StrictAttributeLookup Encoding =
+        strictAttribute(Die, llvm::dwarf::DW_AT_encoding);
+    if (Encoding.TheStatus != StrictAttributeLookup::Status::Found)
+      return {};
+    const std::optional<uint64_t> Enc = Encoding.Value.getAsUnsignedConstant();
+    if (!Enc)
+      return {};
+    const std::optional<uint16_t> Size = byteSize(false);
+    if (!Size)
+      return {};
+    if (*Enc == llvm::dwarf::DW_ATE_float)
+      return {Kind::FloatingPoint, *Size};
+    switch (*Enc) {
+    case llvm::dwarf::DW_ATE_address:
+    case llvm::dwarf::DW_ATE_boolean:
+    case llvm::dwarf::DW_ATE_signed:
+    case llvm::dwarf::DW_ATE_signed_char:
+    case llvm::dwarf::DW_ATE_unsigned:
+    case llvm::dwarf::DW_ATE_unsigned_char:
+      return {Kind::Integer, *Size};
+    default:
+      return {};
+    }
+  }
+  case llvm::dwarf::DW_TAG_pointer_type: {
+    const std::optional<uint16_t> Size = byteSize(true);
+    return Size ? AuthenticatedReturnValueState{Kind::Pointer, *Size}
+                : AuthenticatedReturnValueState{};
+  }
+  case llvm::dwarf::DW_TAG_typedef:
+  case llvm::dwarf::DW_TAG_const_type:
+  case llvm::dwarf::DW_TAG_volatile_type:
+  case llvm::dwarf::DW_TAG_restrict_type: {
+    const StrictAttributeLookup Type =
+        strictAttribute(Die, llvm::dwarf::DW_AT_type);
+    if (Type.TheStatus != StrictAttributeLookup::Status::Found)
+      return {};
+    const llvm::DWARFDie Referenced =
+        Die.getAttributeValueAsReferencedDie(Type.Value);
+    return Referenced.isValid() ? classifyReturnValue(Referenced, Depth + 1)
+                                : AuthenticatedReturnValueState{};
+  }
+  case llvm::dwarf::DW_TAG_array_type:
+  case llvm::dwarf::DW_TAG_structure_type:
+  case llvm::dwarf::DW_TAG_class_type:
+  case llvm::dwarf::DW_TAG_union_type: {
+    const std::optional<uint16_t> Size = byteSize(false);
+    return Size ? AuthenticatedReturnValueState{Kind::Aggregate, *Size}
+                : AuthenticatedReturnValueState{};
+  }
+  case llvm::dwarf::DW_TAG_enumeration_type: {
+    const std::optional<uint16_t> Size = byteSize(false);
+    return Size ? AuthenticatedReturnValueState{Kind::Integer, *Size}
+                : AuthenticatedReturnValueState{};
+  }
+  default:
+    // References, unspecified types, subroutines, and extensions require ABI
+    // handling that this reader does not yet validate.  Keep them Unknown.
+    return {};
+  }
+}
+
+std::vector<DWARFDebugContext::Impl::Location>
+DWARFDebugContext::Impl::decodeLocations(llvm::DWARFDie Die,
+                                         llvm::dwarf::Attribute Attr,
+                                         llvm::DWARFUnit *Unit,
+                                         bool IsFrameBase) const {
+  std::vector<Location> Result;
+  llvm::Expected<llvm::DWARFLocationExpressionsVector> Locations =
+      Die.getLocations(Attr);
+  if (!Locations) {
+    llvm::consumeError(Locations.takeError());
+    Result.push_back(Location{std::nullopt, StackCoordinate::Malformed, 0});
+    return Result;
+  }
+
+  for (const llvm::DWARFLocationExpression &Entry : *Locations) {
+    Location Decoded;
+    if (Entry.Range) {
+      if (!Entry.Range->valid() || Entry.Range->LowPC >= Entry.Range->HighPC) {
+        Result.push_back(Location{std::nullopt, StackCoordinate::Malformed, 0});
+        continue;
+      }
+      Decoded.Range = AddressRange{Entry.Range->LowPC, Entry.Range->HighPC};
+    }
+
+    llvm::StringRef Bytes(reinterpret_cast<const char *>(Entry.Expr.data()),
+                          Entry.Expr.size());
+    llvm::DataExtractor Extractor(Bytes, Unit->isLittleEndian(),
+                                  Unit->getAddressByteSize());
+    llvm::DWARFExpression Expression(Extractor, Unit->getAddressByteSize(),
+                                     Unit->getFormat());
+    auto It = Expression.begin();
+    if (It == Expression.end() || It->isError()) {
+      Decoded.Coordinate = StackCoordinate::Malformed;
+      Result.push_back(Decoded);
+      continue;
+    }
+
+    const uint8_t Code = It->getCode();
+    const std::vector<uint64_t> Operands(It->getRawOperands().begin(),
+                                         It->getRawOperands().end());
+    ++It;
+    const bool Complete = It == Expression.end();
+    const dwarf_loader_detail::DecodedLocationExpression Shape =
+        dwarf_loader_detail::decodeLocationExpressionShape(
+            Code, Operands, Complete, IsFrameBase, DwarfStackPointerReg,
+            DwarfFramePointerReg);
+    Decoded.Coordinate = Shape.Base;
+    Decoded.Offset = Shape.Offset;
+    Result.push_back(Decoded);
+  }
+  return Result;
+}
+
+namespace {
+
+std::optional<uint64_t> declaredTypeSize(const TypeRef &Type,
+                                         std::set<const NdType *> &Active) {
+  if (!Type)
+    return std::nullopt;
+  if (Type->Kind != NdTypeKind::Array)
+    return Type->Size == 0 ? std::nullopt : std::optional<uint64_t>(Type->Size);
+  if (!Type->ElemType || !Active.insert(Type.get()).second)
+    return std::nullopt;
+  const std::optional<uint64_t> Element =
+      declaredTypeSize(Type->ElemType, Active);
+  Active.erase(Type.get());
+  if (!Element || Type->ArrayCount == 0 ||
+      *Element > std::numeric_limits<uint64_t>::max() / Type->ArrayCount)
+    return std::nullopt;
+  return *Element * Type->ArrayCount;
+}
+
+std::optional<uint64_t> declaredTypeSize(const TypeRef &Type) {
+  std::set<const NdType *> Active;
+  return declaredTypeSize(Type, Active);
+}
+
+bool containsPC(va_t PC, llvm::ArrayRef<std::pair<va_t, va_t>> AddressRanges) {
+  return std::any_of(AddressRanges.begin(), AddressRanges.end(),
+                     [&](const auto &Range) {
+                       return PC >= Range.first && PC < Range.second;
+                     });
+}
+
+} // namespace
+
+void DWARFDebugContext::Impl::parseLocalVariable(
+    llvm::DWARFDie Die, va_t FuncAddr, bool IsParam,
+    llvm::ArrayRef<AddressRange> ScopeRanges) {
+  auto TypeDie = Die.getAttributeValueAsReferencedDie(llvm::dwarf::DW_AT_type);
+  TypeRef Type =
+      TypeDie.isValid() ? convertDwarfType(TypeDie) : NdType::makeInt(4);
+  if (!declaredTypeSize(Type))
     return;
 
-  auto AddrVal = LowPC->getAsAddress();
-  if (!AddrVal)
+  LocalObject Object;
+  if (const char *Name = Die.getName(llvm::DINameKind::ShortName))
+    Object.Variable.Name = Name;
+  Object.Variable.Type = std::move(Type);
+  Object.Variable.IsParam = IsParam;
+  Object.ScopeRanges.assign(ScopeRanges.begin(), ScopeRanges.end());
+  Object.Locations = decodeLocations(Die, llvm::dwarf::DW_AT_location,
+                                     Die.getDwarfUnit(), false);
+  if (!Object.Locations.empty())
+    Functions[FuncAddr].Objects.push_back(std::move(Object));
+}
+
+void DWARFDebugContext::Impl::parseGlobalVariable(llvm::DWARFDie Die,
+                                                  llvm::DWARFUnit *Unit) {
+  auto TypeDie = Die.getAttributeValueAsReferencedDie(llvm::dwarf::DW_AT_type);
+  TypeRef Type =
+      TypeDie.isValid() ? convertDwarfType(TypeDie) : NdType::makeInt(4);
+  const std::optional<uint64_t> Size = declaredTypeSize(Type);
+  if (!Size)
     return;
-  va_t Addr = *AddrVal;
-  if (Addr == 0)
+
+  llvm::Expected<llvm::DWARFLocationExpressionsVector> Locations =
+      Die.getLocations(llvm::dwarf::DW_AT_location);
+  if (!Locations) {
+    llvm::consumeError(Locations.takeError());
     return;
+  }
+  if (Locations->size() != 1 || Locations->front().Range)
+    return;
+
+  const llvm::DWARFLocationExpression &Location = Locations->front();
+  llvm::StringRef Bytes(reinterpret_cast<const char *>(Location.Expr.data()),
+                        Location.Expr.size());
+  llvm::DataExtractor Extractor(Bytes, Unit->isLittleEndian(),
+                                Unit->getAddressByteSize());
+  llvm::DWARFExpression Expression(Extractor, Unit->getAddressByteSize(),
+                                   Unit->getFormat());
+  auto It = Expression.begin();
+  if (It == Expression.end() || It->isError())
+    return;
+  const uint8_t Code = It->getCode();
+  const std::vector<uint64_t> Operands(It->getRawOperands().begin(),
+                                       It->getRawOperands().end());
+  ++It;
+  if (It != Expression.end() || Operands.size() != 1)
+    return;
+
+  std::optional<va_t> Address;
+  if (Code == llvm::dwarf::DW_OP_addr) {
+    Address = Operands[0];
+  } else if (Code == llvm::dwarf::DW_OP_addrx &&
+             Operands[0] <= std::numeric_limits<uint32_t>::max()) {
+    if (auto Resolved =
+            Unit->getAddrOffsetSectionItem(static_cast<uint32_t>(Operands[0])))
+      Address = Resolved->Address;
+  }
+  if (!Address)
+    return;
+
+  DataObjectSym Object;
+  if (const char *Name = Die.getName(llvm::DINameKind::ShortName))
+    Object.Name = Name;
+  Object.Addr = *Address;
+  Object.Size = *Size;
+  Object.IsBuffer = Type->Kind == NdTypeKind::Array;
+  DataObjects.push_back(std::move(Object));
+}
+
+void DWARFDebugContext::Impl::parseFunction(llvm::DWARFDie Die,
+                                            llvm::DWARFUnit *Unit) {
+  llvm::Expected<llvm::DWARFAddressRangesVector> DwarfRanges =
+      Die.getAddressRanges();
+  if (!DwarfRanges) {
+    llvm::consumeError(DwarfRanges.takeError());
+    return;
+  }
+  std::vector<AddressRange> Ranges;
+  for (const llvm::DWARFAddressRange &Range : *DwarfRanges)
+    if (Range.valid() && Range.LowPC < Range.HighPC)
+      Ranges.emplace_back(Range.LowPC, Range.HighPC);
+  if (Ranges.empty())
+    return;
+  std::sort(Ranges.begin(), Ranges.end());
+  const va_t Addr = Ranges.front().first;
+  const va_t High =
+      std::max_element(Ranges.begin(), Ranges.end(),
+                       [](const AddressRange &A, const AddressRange &B) {
+                         return A.second < B.second;
+                       })
+          ->second;
 
   FunctionSym Sym;
   Sym.Addr = Addr;
-
-  auto Hi = Die.find(llvm::dwarf::DW_AT_high_pc);
-  if (Hi) {
-    if (auto HiAddr = Hi->getAsAddress())
-      Sym.Size = *HiAddr - Addr;
-    else if (auto HiOff = Hi->getAsUnsignedConstant())
-      Sym.Size = *HiOff;
-  }
-
+  Sym.Size = High - Addr;
   if (auto Name = Die.getName(llvm::DINameKind::ShortName))
     Sym.Name = Name;
   else if (auto Link = Die.getName(llvm::DINameKind::LinkageName))
@@ -354,83 +1004,92 @@ void DWARFDebugContext::Impl::parseFunction(llvm::DWARFDie Die,
     }
   }
 
-  auto RetDie = Die.getAttributeValueAsReferencedDie(llvm::dwarf::DW_AT_type);
-  Sym.ReturnType =
-      RetDie.isValid() ? convertDwarfType(RetDie) : NdType::makeVoid();
-
-  for (auto Child : Die.children()) {
-    if (Child.getTag() == llvm::dwarf::DW_TAG_formal_parameter) {
-      std::string PName;
-      if (auto N = Child.getName(llvm::DINameKind::ShortName))
-        PName = N;
-      auto PtyDie =
-          Child.getAttributeValueAsReferencedDie(llvm::dwarf::DW_AT_type);
-      auto PTy =
-          PtyDie.isValid() ? convertDwarfType(PtyDie) : NdType::makeInt(4);
-      Sym.Params.emplace_back(PName, PTy);
-      parseVariable(Child, Addr, true);
-    } else if (Child.getTag() == llvm::dwarf::DW_TAG_variable) {
-      parseVariable(Child, Addr, false);
-    }
+  AuthenticatedReturnValueState ReturnState;
+  const ReturnTypeResolution ReturnType = resolveReturnType(Die);
+  if (ReturnType.TheStatus == ReturnTypeResolution::Status::Absent) {
+    // DWARF encodes a source-level void return by omitting DW_AT_type.
+    ReturnState = {AuthenticatedReturnKind::NoValue, 0};
+    Sym.ReturnType = NdType::makeVoid();
+  } else if (ReturnType.TheStatus == ReturnTypeResolution::Status::Found) {
+    ReturnState = classifyReturnValue(ReturnType.TypeDie);
+    Sym.ReturnType = convertDwarfType(ReturnType.TypeDie);
+    if (!Sym.ReturnType || Sym.ReturnType->Kind == NdTypeKind::Unknown)
+      ReturnState = {};
+  } else {
+    // A present but malformed reference is not evidence of void.
+    Sym.ReturnType = std::make_shared<NdType>();
+  }
+  for (llvm::DWARFDie Child : Die.children()) {
+    if (Child.getTag() != llvm::dwarf::DW_TAG_formal_parameter)
+      continue;
+    std::string Name;
+    if (const char *RawName = Child.getName(llvm::DINameKind::ShortName))
+      Name = RawName;
+    auto ParamDie =
+        Child.getAttributeValueAsReferencedDie(llvm::dwarf::DW_AT_type);
+    Sym.Params.emplace_back(std::move(Name), ParamDie.isValid()
+                                                 ? convertDwarfType(ParamDie)
+                                                 : NdType::makeInt(4));
   }
 
+  FunctionInfo &Info = Functions[Addr];
+  Info = FunctionInfo{};
+  Info.Ranges = Ranges;
+  Info.FrameBases =
+      decodeLocations(Die, llvm::dwarf::DW_AT_frame_base, Unit, true);
+
+  std::function<void(llvm::DWARFDie, const std::vector<AddressRange> &)> Walk =
+      [&](llvm::DWARFDie Scope, const std::vector<AddressRange> &ScopeRanges) {
+        for (llvm::DWARFDie Child : Scope.children()) {
+          const auto Tag = Child.getTag();
+          if (Tag == llvm::dwarf::DW_TAG_variable ||
+              Tag == llvm::dwarf::DW_TAG_formal_parameter) {
+            parseLocalVariable(Child, Addr,
+                               Tag == llvm::dwarf::DW_TAG_formal_parameter,
+                               ScopeRanges);
+            continue;
+          }
+          if (Tag != llvm::dwarf::DW_TAG_lexical_block &&
+              Tag != llvm::dwarf::DW_TAG_inlined_subroutine)
+            continue;
+
+          std::vector<AddressRange> ChildRanges = ScopeRanges;
+          llvm::Expected<llvm::DWARFAddressRangesVector> RawChildRanges =
+              Child.getAddressRanges();
+          if (!RawChildRanges) {
+            llvm::consumeError(RawChildRanges.takeError());
+            LocalObject Poison;
+            Poison.Variable.Type = NdType::makeInt(1, false);
+            Poison.ScopeRanges = ScopeRanges;
+            Poison.Locations.push_back(
+                Location{std::nullopt, StackCoordinate::Malformed, 0});
+            Info.Objects.push_back(std::move(Poison));
+            continue;
+          }
+          if (!RawChildRanges->empty()) {
+            ChildRanges.clear();
+            for (const llvm::DWARFAddressRange &ChildRange : *RawChildRanges) {
+              if (!ChildRange.valid() || ChildRange.LowPC >= ChildRange.HighPC)
+                continue;
+              for (const AddressRange &ParentRange : ScopeRanges) {
+                const va_t Low = std::max(ChildRange.LowPC, ParentRange.first);
+                const va_t High =
+                    std::min(ChildRange.HighPC, ParentRange.second);
+                if (Low < High)
+                  ChildRanges.emplace_back(Low, High);
+              }
+            }
+          }
+          if (!ChildRanges.empty())
+            Walk(Child, ChildRanges);
+        }
+      };
+  Walk(Die, Ranges);
+
+  SubprogramExtents.insert(Addr, Ranges);
+  ReturnValueStates[Addr] = ReturnState;
   FuncMap[Addr] = Sym;
   FuncList.push_back(Sym);
-}
-
-void DWARFDebugContext::Impl::parseVariable(llvm::DWARFDie Die, va_t FuncAddr,
-                                            bool IsParam) {
-  std::string VName;
-  if (auto N = Die.getName(llvm::DINameKind::ShortName))
-    VName = N;
-  if (VName.empty())
-    return;
-
-  auto TypeDie = Die.getAttributeValueAsReferencedDie(llvm::dwarf::DW_AT_type);
-  auto VType =
-      TypeDie.isValid() ? convertDwarfType(TypeDie) : NdType::makeInt(4);
-
-  int64_t StackOff = 0;
-  bool FrameRelative = false;
-  bool StackPointerRelative = false;
-  auto Loc = Die.find(llvm::dwarf::DW_AT_location);
-  if (Loc && Loc->isFormClass(llvm::DWARFFormValue::FC_Exprloc)) {
-    auto Block = Loc->getAsBlock();
-    if (Block && Block->size() >= 2) {
-      auto Op = (*Block)[0];
-      const bool IsFrame = Op == llvm::dwarf::DW_OP_fbreg;
-      const bool IsStackPointer =
-          DwarfStackPointerReg && Op >= llvm::dwarf::DW_OP_breg0 &&
-          Op <= llvm::dwarf::DW_OP_breg31 &&
-          static_cast<unsigned>(Op - llvm::dwarf::DW_OP_breg0) ==
-              *DwarfStackPointerReg;
-      if (IsFrame || IsStackPointer) {
-        const uint8_t *Begin = Block->data() + 1;
-        const uint8_t *End = Block->data() + Block->size();
-        unsigned BytesRead = 0;
-        const char *Error = nullptr;
-        int64_t Val = llvm::decodeSLEB128(Begin, &BytesRead, End, &Error);
-        if (!Error && BytesRead > 0) {
-          StackOff = Val;
-          FrameRelative = IsFrame;
-          StackPointerRelative = IsStackPointer;
-        }
-      }
-    }
-  }
-
-  if (!FrameRelative && !StackPointerRelative)
-    return;
-
-  VariableSym VSym;
-  VSym.Name = VName;
-  VSym.Type = VType;
-  VSym.StackOffset = StackOff;
-  VSym.IsParam = IsParam;
-  if (FrameRelative)
-    LocalsMap[FuncAddr].ByOffset[StackOff] = VSym;
-  else
-    LocalsMap[FuncAddr].ByStackPointerOffset[StackOff] = VSym;
 }
 
 void DWARFDebugContext::Impl::parseCompileUnits() {
@@ -442,9 +1101,12 @@ void DWARFDebugContext::Impl::parseCompileUnits() {
     std::function<void(llvm::DWARFDie)> Walk = [&](llvm::DWARFDie Die) {
       if (!Die.isValid())
         return;
-      auto Tag = Die.getTag();
-      if (Tag == llvm::dwarf::DW_TAG_subprogram)
+      if (Die.getTag() == llvm::dwarf::DW_TAG_subprogram) {
         parseFunction(Die, CU.get());
+        return;
+      }
+      if (Die.getTag() == llvm::dwarf::DW_TAG_variable)
+        parseGlobalVariable(Die, CU.get());
       for (auto Child : Die.children())
         Walk(Child);
     };
@@ -457,6 +1119,143 @@ void DWARFDebugContext::Impl::parseCompileUnits() {
             });
 }
 
+VariableExtentLookup DWARFDebugContext::Impl::lookupLocal(
+    va_t FuncAddr, va_t UsePC, int64_t Offset,
+    StackCoordinate RequestedCoordinate) const {
+  const FunctionInfo *Function = nullptr;
+  if (auto It = Functions.find(FuncAddr); It != Functions.end()) {
+    if (SubprogramExtents.isAmbiguous(It->first))
+      return VariableExtentLookup::ambiguous();
+    Function = &It->second;
+  } else {
+    for (const auto &[Entry, Candidate] : Functions) {
+      if (!containsPC(FuncAddr, Candidate.Ranges))
+        continue;
+      if (SubprogramExtents.isAmbiguous(Entry))
+        return VariableExtentLookup::ambiguous();
+      if (Function)
+        return VariableExtentLookup::ambiguous();
+      Function = &Candidate;
+    }
+  }
+  if (!Function)
+    return VariableExtentLookup::notFound();
+  if (UsePC == InvalidVA || !containsPC(UsePC, Function->Ranges))
+    return VariableExtentLookup::ambiguous();
+
+  auto selectLocation = [&](llvm::ArrayRef<Location> Locations,
+                            bool &Ambiguous) -> std::optional<Location> {
+    std::vector<const Location *> Selected;
+    for (const Location &Location : Locations)
+      if (Location.Range && UsePC >= Location.Range->first &&
+          UsePC < Location.Range->second)
+        Selected.push_back(&Location);
+    if (Selected.empty()) {
+      for (const Location &Location : Locations)
+        if (!Location.Range)
+          Selected.push_back(&Location);
+    }
+    if (Selected.empty())
+      return std::nullopt;
+
+    const Location &First = *Selected.front();
+    if (First.Coordinate == StackCoordinate::Malformed) {
+      Ambiguous = true;
+      return std::nullopt;
+    }
+    for (const Location *Location : Selected) {
+      if (Location->Coordinate == StackCoordinate::Malformed ||
+          Location->Coordinate != First.Coordinate ||
+          Location->Offset != First.Offset) {
+        Ambiguous = true;
+        return std::nullopt;
+      }
+    }
+    return First;
+  };
+
+  struct ResolvedObject {
+    VariableSym Variable;
+    int64_t Base = 0;
+    int64_t End = 0;
+  };
+  std::vector<ResolvedObject> Objects;
+  for (const LocalObject &Object : Function->Objects) {
+    if (!containsPC(UsePC, Object.ScopeRanges))
+      continue;
+
+    bool Ambiguous = false;
+    std::optional<Location> SelectedLocation =
+        selectLocation(Object.Locations, Ambiguous);
+    if (Ambiguous)
+      return VariableExtentLookup::ambiguous();
+    if (!SelectedLocation ||
+        SelectedLocation->Coordinate == StackCoordinate::NonStack)
+      continue;
+
+    StackCoordinate Coordinate = SelectedLocation->Coordinate;
+    int64_t Base = SelectedLocation->Offset;
+    if (Coordinate == StackCoordinate::FrameBase) {
+      std::optional<Location> FrameBase =
+          selectLocation(Function->FrameBases, Ambiguous);
+      int64_t AbsoluteBase = 0;
+      if (Ambiguous || !FrameBase ||
+          FrameBase->Coordinate == StackCoordinate::NonStack ||
+          FrameBase->Coordinate == StackCoordinate::FrameBase ||
+          FrameBase->Coordinate == StackCoordinate::Malformed ||
+          llvm::AddOverflow(FrameBase->Offset, Base, AbsoluteBase))
+        return VariableExtentLookup::ambiguous();
+      Coordinate = FrameBase->Coordinate;
+      Base = AbsoluteBase;
+    }
+    if (Coordinate != RequestedCoordinate)
+      continue;
+
+    const std::optional<uint64_t> Size = declaredTypeSize(Object.Variable.Type);
+    if (!Size ||
+        *Size > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+      return VariableExtentLookup::ambiguous();
+    int64_t End = 0;
+    if (llvm::AddOverflow(Base, static_cast<int64_t>(*Size), End))
+      return VariableExtentLookup::ambiguous();
+
+    ResolvedObject Resolved;
+    Resolved.Variable = Object.Variable;
+    Resolved.Variable.StackOffset = Base;
+    Resolved.Base = Base;
+    Resolved.End = End;
+    Objects.push_back(std::move(Resolved));
+  }
+
+  std::vector<const ResolvedObject *> Candidates;
+  for (const ResolvedObject &Object : Objects)
+    if (Offset >= Object.Base && Offset <= Object.End)
+      Candidates.push_back(&Object);
+  if (Candidates.empty())
+    return VariableExtentLookup::notFound();
+
+  for (const ResolvedObject *Candidate : Candidates) {
+    for (const ResolvedObject &Object : Objects) {
+      const bool SameExtent =
+          Candidate->Base == Object.Base && Candidate->End == Object.End;
+      const bool ClosedOverlap =
+          Candidate->Base <= Object.End && Object.Base <= Candidate->End;
+      if (!SameExtent && ClosedOverlap)
+        return VariableExtentLookup::ambiguous();
+    }
+  }
+
+  const ResolvedObject *Chosen = Candidates.front();
+  for (const ResolvedObject *Candidate : Candidates) {
+    if (Candidate->Base != Chosen->Base || Candidate->End != Chosen->End)
+      return VariableExtentLookup::ambiguous();
+    if (!Candidate->Variable.Type ||
+        Candidate->Variable.Type->Kind != NdTypeKind::Array)
+      Chosen = Candidate;
+  }
+  return VariableExtentLookup::unique(Chosen->Variable);
+}
+
 // DebugContext interface
 
 std::optional<FunctionSym> DWARFDebugContext::resolveFunction(va_t Addr) const {
@@ -466,24 +1265,36 @@ std::optional<FunctionSym> DWARFDebugContext::resolveFunction(va_t Addr) const {
   if (It != PImpl->FuncMap.end())
     return It->second;
 
-  for (const auto &[_, FS] : PImpl->FuncMap) {
-    if (FS.contains(Addr))
-      return FS;
+  const FunctionSym *Resolved = nullptr;
+  for (const auto &[Entry, Info] : PImpl->Functions) {
+    if (!containsPC(Addr, Info.Ranges))
+      continue;
+    auto Sym = PImpl->FuncMap.find(Entry);
+    if (Sym == PImpl->FuncMap.end() || Resolved)
+      return std::nullopt;
+    Resolved = &Sym->second;
   }
-  return std::nullopt;
+  return Resolved ? std::optional<FunctionSym>(*Resolved) : std::nullopt;
 }
 
 std::optional<VariableSym>
 DWARFDebugContext::resolveVariable(va_t FuncAddr, int64_t Offset) const {
   if (!PImpl || !PImpl->Loaded)
     return std::nullopt;
-  auto It = PImpl->LocalsMap.find(FuncAddr);
-  if (It == PImpl->LocalsMap.end())
-    return std::nullopt;
-  auto VIt = It->second.ByOffset.find(Offset);
-  if (VIt == It->second.ByOffset.end())
-    return std::nullopt;
-  return VIt->second;
+  VariableExtentLookup Result = PImpl->lookupLocal(FuncAddr, FuncAddr, Offset,
+                                                   Impl::StackCoordinate::CFA);
+  return Result.Status == VariableExtentLookupStatus::Unique
+             ? std::optional<VariableSym>(std::move(Result.Variable))
+             : std::nullopt;
+}
+
+VariableExtentLookup
+DWARFDebugContext::resolveVariableAt(va_t FuncAddr, va_t UsePC,
+                                     int64_t Offset) const {
+  if (!PImpl || !PImpl->Loaded)
+    return VariableExtentLookup::notFound();
+  return PImpl->lookupLocal(FuncAddr, UsePC, Offset,
+                            Impl::StackCoordinate::CFA);
 }
 
 std::optional<VariableSym>
@@ -491,13 +1302,29 @@ DWARFDebugContext::resolveStackPointerVariable(va_t FuncAddr,
                                                int64_t Offset) const {
   if (!PImpl || !PImpl->Loaded)
     return std::nullopt;
-  auto It = PImpl->LocalsMap.find(FuncAddr);
-  if (It == PImpl->LocalsMap.end())
-    return std::nullopt;
-  auto VIt = It->second.ByStackPointerOffset.find(Offset);
-  if (VIt == It->second.ByStackPointerOffset.end())
-    return std::nullopt;
-  return VIt->second;
+  VariableExtentLookup Result = PImpl->lookupLocal(
+      FuncAddr, FuncAddr, Offset, Impl::StackCoordinate::StackPointer);
+  return Result.Status == VariableExtentLookupStatus::Unique
+             ? std::optional<VariableSym>(std::move(Result.Variable))
+             : std::nullopt;
+}
+
+VariableExtentLookup
+DWARFDebugContext::resolveStackPointerVariableAt(va_t FuncAddr, va_t UsePC,
+                                                 int64_t Offset) const {
+  if (!PImpl || !PImpl->Loaded)
+    return VariableExtentLookup::notFound();
+  return PImpl->lookupLocal(FuncAddr, UsePC, Offset,
+                            Impl::StackCoordinate::StackPointer);
+}
+
+VariableExtentLookup
+DWARFDebugContext::resolveFramePointerVariableAt(va_t FuncAddr, va_t UsePC,
+                                                 int64_t Offset) const {
+  if (!PImpl || !PImpl->Loaded)
+    return VariableExtentLookup::notFound();
+  return PImpl->lookupLocal(FuncAddr, UsePC, Offset,
+                            Impl::StackCoordinate::FramePointer);
 }
 
 std::optional<TypeSym> DWARFDebugContext::resolveType(uint64_t) const {
@@ -524,6 +1351,34 @@ std::vector<FunctionSym> DWARFDebugContext::allFunctions() const {
   if (!PImpl || !PImpl->Loaded)
     return {};
   return PImpl->FuncList;
+}
+
+std::vector<DataObjectSym> DWARFDebugContext::allDataObjects() const {
+  if (!PImpl || !PImpl->Loaded)
+    return {};
+  return PImpl->DataObjects;
+}
+
+bool DWARFDebugContext::hasAuthenticatedFunctionSignatures() const {
+  // Function declarations and object extents share the same exact-image / dSYM
+  // UUID authentication gate.  Their semantic capabilities stay separate at
+  // the DebugContext boundary so a future names-only or types-only provider
+  // cannot accidentally borrow the other one.
+  return PImpl && PImpl->Loaded && PImpl->AuthenticatedObjectExtents;
+}
+
+AuthenticatedReturnValueState
+DWARFDebugContext::resolveAuthenticatedReturnValueState(va_t Entry) const {
+  if (!PImpl || !PImpl->Loaded || !PImpl->AuthenticatedObjectExtents ||
+      PImpl->SubprogramExtents.isAmbiguous(Entry))
+    return {};
+  const auto It = PImpl->ReturnValueStates.find(Entry);
+  return It == PImpl->ReturnValueStates.end() ? AuthenticatedReturnValueState{}
+                                              : It->second;
+}
+
+bool DWARFDebugContext::hasAuthenticatedObjectExtents() const {
+  return PImpl && PImpl->Loaded && PImpl->AuthenticatedObjectExtents;
 }
 
 bool DWARFDebugContext::hasInfo() const { return PImpl && PImpl->Loaded; }

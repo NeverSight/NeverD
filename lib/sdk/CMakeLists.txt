@@ -14,11 +14,13 @@ set(NEVERD_SDK_SOURCES
     capi/NeverDCAPIPersist.cpp
     capi/NeverDCAPIRoundtrip.cpp
     capi/NeverDCAPISafety.cpp
+    capi/NeverDCAPISanitize.cpp
     capi/NeverDCAPISearch.cpp
     capi/NeverDCAPISigs.cpp
     capi/NeverDCAPISimplify.cpp
     capi/NeverDCAPISynth.cpp
     capi/NeverDCAPISymbolic.cpp
+    capi/NeverDCAPIConcolic.cpp
     capi/NeverDCAPITargetConfig.cpp
     capi/NeverDCAPITranslate.cpp
     plugin/PluginManager.cpp)

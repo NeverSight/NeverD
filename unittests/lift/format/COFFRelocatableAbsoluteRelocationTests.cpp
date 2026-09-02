@@ -26,6 +26,13 @@ using namespace neverd;
 
 class COFFRelocatableAbsoluteRelocation : public NeverDLiftTest {
 protected:
+  void SetUp() override {
+    NeverDLiftTest::SetUp();
+    if (!hasCrossTargetClang())
+      GTEST_SKIP() << "cross-target relocation fixtures require Clang's "
+                      "GNU-style driver";
+  }
+
   fs::path compileCOFF(std::string_view Name, std::string_view Triple,
                        std::string_view Assembly) {
     const fs::path Source = tmpFile(std::string(Name) + ".s");
@@ -86,9 +93,8 @@ coff_i386_pic_data:
       return Source;
     };
 
-    const fs::path Probe =
-        compileCOFF(std::string(Name) + "_probe", "i686-pc-windows-msvc",
-                    Assembly(0));
+    const fs::path Probe = compileCOFF(std::string(Name) + "_probe",
+                                       "i686-pc-windows-msvc", Assembly(0));
     if (Probe.empty())
       return {};
     auto ProbeImage = loadBinary(Probe);

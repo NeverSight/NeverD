@@ -19,6 +19,7 @@
 #include "llvm/ADT/DenseSet.h"
 
 #include <algorithm>
+#include <iterator>
 #include <limits>
 #include <tuple>
 
@@ -63,43 +64,97 @@ std::optional<uint64_t> byteSize(const TypeRef &T) {
   return byteSizeRec(T, Active);
 }
 
+std::optional<uint64_t> remainingInSignedObject(int64_t Base, uint64_t Size,
+                                                int64_t Address) {
+  if (Address < Base)
+    return std::nullopt;
+  const uint64_t Offset =
+      static_cast<uint64_t>(Address) - static_cast<uint64_t>(Base);
+  if (Offset > Size)
+    return std::nullopt;
+  return Size - Offset;
+}
+
+std::optional<int64_t>
+cfaOffsetFromIncomingStackPointer(const BinaryImage *Img) {
+  if (!Img)
+    return std::nullopt;
+  switch (Img->Arch) {
+  case Arch::X86:
+  case Arch::X64:
+    return static_cast<int64_t>(detail::targetPointerBytes(Img));
+  case Arch::ARM:
+  case Arch::AArch64:
+    return 0;
+  default:
+    return std::nullopt;
+  }
+}
+
 struct DefIndex {
   llvm::DenseMap<ValueKey, std::pair<int, int>> OpDef;
   llvm::DenseMap<ValueKey, std::pair<int, int>> PhiDef;
+  llvm::DenseSet<ValueKey> AmbiguousDef;
+  llvm::DenseSet<ValueKey> ExplicitRegDef;
+  llvm::DenseSet<ValueKey> CallDefined;
+
+  void addDefinition(llvm::DenseMap<ValueKey, std::pair<int, int>> &Target,
+                     const ValueKey &Key, std::pair<int, int> Location) {
+    if (AmbiguousDef.contains(Key))
+      return;
+    if (OpDef.contains(Key) || PhiDef.contains(Key)) {
+      OpDef.erase(Key);
+      PhiDef.erase(Key);
+      AmbiguousDef.insert(Key);
+      return;
+    }
+    Target[Key] = Location;
+  }
 
   explicit DefIndex(const MedFunc &F) {
     for (int Bi = 0; Bi < static_cast<int>(F.Blocks.size()); ++Bi) {
       const MedBlock &B = F.Blocks[Bi];
       for (int Pi = 0; Pi < static_cast<int>(B.Phis.size()); ++Pi)
-        if (!B.Phis[Pi].Output.isConst() && B.Phis[Pi].Output.Size > 0)
-          PhiDef[keyOf(B.Phis[Pi].Output)] = {Bi, Pi};
+        if (!B.Phis[Pi].Output.isConst())
+          addDefinition(PhiDef, keyOf(B.Phis[Pi].Output), {Bi, Pi});
       for (int Oi = 0; Oi < static_cast<int>(B.Ops.size()); ++Oi) {
         const MedOp &O = B.Ops[Oi];
+        if (O.Output.Kind == MedVar::Reg)
+          ExplicitRegDef.insert(keyOf(O.Output));
         if (!O.Output.isConst() && O.Output.Size > 0)
-          OpDef[keyOf(O.Output)] = {Bi, Oi};
+          addDefinition(OpDef, keyOf(O.Output), {Bi, Oi});
       }
     }
+    for (const MedCallClobber &Clobber : F.CallClobbers)
+      if (!Clobber.Value.isConst() && Clobber.Value.Size > 0)
+        CallDefined.insert(keyOf(Clobber.Value));
+  }
+
+  bool isAmbiguous(const MedVar &V) const {
+    return AmbiguousDef.contains(keyOf(V));
   }
 };
 
 class Resolver {
 public:
-  Resolver(const AnalysisInput &In, const SinkCatalog &Cat, const MedFunc &F)
-      : In(In), Cat(Cat), F(F), Defs(F) {}
+  Resolver(const AnalysisInput &In, const SinkCatalog &Cat, const MedFunc &F,
+           va_t UsePC)
+      : In(In), Cat(Cat), F(F), Defs(F), PhiGraph(F), UsePC(UsePC) {}
 
   DestObject resolve(const MedVar &Dst) {
     DestObject R;
     if (!detail::hasTargetPointerWidth(In.Img, Dst))
       return R;
 
-    // A dynamic allocation with a known size gives an exact capacity while
-    // preserving whether the object lives on the heap or stack.
+    // A dynamic allocation with a known size proves its storage boundary, not
+    // the boundary of a possible destination subobject within that storage.
     resetAllocationProof();
     if (auto Allocation = allocationObject(Dst, 0)) {
       R.Region = Allocation->Region;
       R.Capacity = Allocation->Capacity;
-      R.CapacityExact = true;
-      R.Detail = "allocation site";
+      R.Precision = CapacityPrecision::StorageExact;
+      R.CapacityExact = false;
+      R.Detail = "allocation storage bound";
       return R;
     }
 
@@ -109,46 +164,90 @@ public:
     if (auto Off = stackOffset(Dst, 0)) {
       R.Region = ObjectRegion::Stack;
       R.StackOffset = *Off;
-      if (In.Dbg) {
-        auto useArray = [&](const std::optional<VariableSym> &Var) {
-          if (!Var || !Var->Type || Var->Type->Kind != NdTypeKind::Array)
-            return false;
-          std::optional<uint64_t> Size = byteSize(Var->Type);
-          if (!Size || *Size == 0)
-            return false;
-          R.Capacity = *Size;
-          R.CapacityExact = true;
-          R.Detail = "declared array";
-          return true;
+      std::optional<std::pair<int64_t, uint64_t>> ExactLocalExtent;
+      bool ExactLocalDenied = false;
+      auto addExtent = [&](int64_t Base, uint64_t Size, bool IsBuffer) {
+        const std::pair<int64_t, uint64_t> Candidate{Base, Size};
+        if (!IsBuffer || (ExactLocalExtent && *ExactLocalExtent != Candidate)) {
+          ExactLocalDenied = true;
+          return;
+        }
+        ExactLocalExtent = Candidate;
+      };
+
+      if (In.Dbg && In.Dbg->hasAuthenticatedObjectExtents()) {
+        auto addLookup = [&](const VariableExtentLookup &Lookup,
+                             int64_t QueryAddress, int64_t CoordinateBase,
+                             bool SubtractCoordinateBase) {
+          switch (Lookup.Status) {
+          case VariableExtentLookupStatus::NotFound:
+            return;
+          case VariableExtentLookupStatus::Ambiguous:
+            ExactLocalDenied = true;
+            return;
+          case VariableExtentLookupStatus::Unique:
+            break;
+          }
+          const VariableSym &Var = Lookup.Variable;
+          const std::optional<uint64_t> Size = byteSize(Var.Type);
+          if (!Size || *Size == 0 ||
+              !remainingInSignedObject(Var.StackOffset, *Size, QueryAddress)) {
+            ExactLocalDenied = true;
+            return;
+          }
+          const std::optional<int64_t> CanonicalBase =
+              detail::checkedStackOffset(Var.StackOffset, CoordinateBase,
+                                         SubtractCoordinateBase);
+          if (!CanonicalBase) {
+            ExactLocalDenied = true;
+            return;
+          }
+          addExtent(*CanonicalBase, *Size,
+                    Var.Type && Var.Type->Kind == NdTypeKind::Array);
         };
-        if (auto Base = frameBaseOffset())
-          if (auto Relative = detail::checkedStackOffset(*Off, *Base, true))
-            if (useArray(In.Dbg->resolveVariable(F.Entry, *Relative)))
-              return R;
-        if (useArray(In.Dbg->resolveVariable(F.Entry, *Off)))
-          return R;
+
+        if (auto Base = frameBaseOffset()) {
+          if (auto Relative = detail::checkedStackOffset(*Off, *Base, true)) {
+            addLookup(In.Dbg->resolveFramePointerVariableAt(F.Entry, UsePC,
+                                                            *Relative),
+                      *Relative, *Base, false);
+          } else {
+            ExactLocalDenied = true;
+          }
+        }
+        if (const std::optional<int64_t> CFAOffset =
+                cfaOffsetFromIncomingStackPointer(In.Img)) {
+          if (const std::optional<int64_t> Relative =
+                  detail::checkedStackOffset(*Off, *CFAOffset, true)) {
+            addLookup(In.Dbg->resolveVariableAt(F.Entry, UsePC, *Relative),
+                      *Relative, *CFAOffset, false);
+          } else {
+            ExactLocalDenied = true;
+          }
+        }
         if (F.FrameSize > 0 && *Off <= 0 &&
             *Off >= -static_cast<int64_t>(F.FrameSize)) {
           const int64_t Adjusted = *Off + F.FrameSize;
-          if (useArray(In.Dbg->resolveStackPointerVariable(F.Entry, Adjusted)))
-            return R;
+          addLookup(
+              In.Dbg->resolveStackPointerVariableAt(F.Entry, UsePC, Adjusted),
+              Adjusted, F.FrameSize, true);
         }
       }
-      for (const MedTypedLocal &L : F.TypedLocals)
-        if (L.StackOff == *Off && L.Type && L.Type->Kind == NdTypeKind::Array) {
-          std::optional<uint64_t> Size = byteSize(L.Type);
-          if (Size && *Size) {
-            R.Capacity = *Size;
-            R.CapacityExact = true;
-            R.Detail = "typed local";
-            return R;
-          }
-        }
+
+      if (ExactLocalExtent && !ExactLocalDenied) {
+        R.Capacity = remainingInSignedObject(ExactLocalExtent->first,
+                                             ExactLocalExtent->second, *Off);
+        R.Precision = CapacityPrecision::TypedBufferExact;
+        R.CapacityExact = true;
+        R.Detail = "declared array";
+        return R;
+      }
       if (*Off < 0) {
         uint64_t Bound = uint64_t{0} - static_cast<uint64_t>(*Off);
         if (F.FrameSize > 0)
           Bound = std::min(Bound, static_cast<uint64_t>(F.FrameSize));
         R.Capacity = Bound;
+        R.Precision = CapacityPrecision::ContainerUpperBound;
         R.CapacityExact = false;
         R.Detail = "stack frame bound";
       }
@@ -172,12 +271,16 @@ private:
   struct ExactDataIdentity {
     uint64_t Address = 0;
     uint64_t OwnerVA = InvalidVA;
+
+    bool hasOwner() const { return OwnerVA != InvalidVA; }
   };
 
   const AnalysisInput &In;
   const SinkCatalog &Cat;
   const MedFunc &F;
   DefIndex Defs;
+  detail::ExactPhiGraph PhiGraph;
+  va_t UsePC = InvalidVA;
   llvm::DenseSet<ValueKey> Active;
   llvm::DenseMap<ValueKey, std::optional<uint64_t>> ConstantCache;
   llvm::DenseSet<ValueKey> ConstantActive;
@@ -235,11 +338,16 @@ private:
                                                      int Depth) {
     if (V.isConst()) {
       if (V.Size == 0 || V.Size > sizeof(uint64_t) ||
-          V.Provenance != ConstantAddressProvenance::DataAddress ||
-          V.AddressOwnerVA == InvalidVA)
+          (V.Provenance != ConstantAddressProvenance::Address &&
+           V.Provenance != ConstantAddressProvenance::DataAddress) ||
+          (V.Provenance == ConstantAddressProvenance::DataAddress &&
+           V.AddressOwnerVA == InvalidVA))
         return std::nullopt;
       return ExactDataIdentity{truncateToSize(V.ConstVal, V.Size),
-                               V.AddressOwnerVA};
+                               V.Provenance ==
+                                       ConstantAddressProvenance::DataAddress
+                                   ? V.AddressOwnerVA
+                                   : InvalidVA};
     }
     const ValueKey Key = keyOf(V);
     if (auto It = ExactDataIdentityCache.find(Key);
@@ -440,19 +548,15 @@ private:
     std::optional<ExactDataIdentity> Identity = exactDataIdentity(V, 0);
     if (ExactDataIdentityProofIncomplete)
       Identity.reset();
-    std::optional<uint64_t> Address =
-        Identity ? std::optional<uint64_t>(Identity->Address)
-                 : constantValue(V, 0);
-    if (!Address)
+    if (!Identity)
       return std::nullopt;
-    if (*Address == 0 && !Identity)
-      return std::nullopt;
+    const uint64_t Address = Identity->Address;
 
     const Segment *Seg = nullptr;
     const Section *Sec = nullptr;
     uint64_t OwnerBegin = 0;
     uint64_t OwnerEnd = 0;
-    if (Identity) {
+    if (Identity->hasOwner()) {
       Seg = In.Img->getSegmentFor(Identity->OwnerVA);
       if (!Seg || !Seg->isWritable() || Seg->Size > InvalidVA - Seg->VA)
         return std::nullopt;
@@ -470,70 +574,136 @@ private:
         OwnerBegin = Seg->VA;
         OwnerEnd = SegmentEnd;
       }
-      if (*Address < OwnerBegin || *Address > OwnerEnd)
+      if (Address < OwnerBegin || Address > OwnerEnd)
         return std::nullopt;
-    } else {
-      Seg = In.Img->getSegmentFor(*Address);
-      if (!Seg || !Seg->isWritable() || Seg->Size > InvalidVA - Seg->VA)
-        return std::nullopt;
-      const uint64_t SegmentEnd = Seg->VA + Seg->Size;
-      OwnerBegin = Seg->VA;
-      OwnerEnd = SegmentEnd;
-      Sec = In.Img->getSectionFor(*Address);
-      if (Sec) {
-        if (!Sec->isWritable() || Sec->Size == 0 ||
-            Sec->Size > InvalidVA - Sec->VA)
-          return std::nullopt;
-        OwnerBegin = Sec->VA;
-        OwnerEnd = std::min<uint64_t>(OwnerEnd, Sec->VA + Sec->Size);
-      } else if (In.Img->segmentHasReadableSectionMetadata(*Seg)) {
-        return std::nullopt;
+    }
+
+    struct RegisteredExtent {
+      uint64_t Base = 0;
+      uint64_t Size = 0;
+      bool HasStorage = false;
+      bool HasTypedBuffer = false;
+      bool HasTypedNonBuffer = false;
+
+      uint64_t end() const { return Base + Size; }
+      bool sameRange(uint64_t OtherBase, uint64_t OtherSize) const {
+        return Base == OtherBase && Size == OtherSize;
+      }
+    };
+    std::vector<RegisteredExtent> ValidExtents;
+    for (const ExactDataObjectExtent &Extent : In.Img->ExactDataObjects) {
+      if (Extent.Base == InvalidVA || Extent.Size == 0 ||
+          Extent.Size > InvalidVA - Extent.Base)
+        continue;
+      const uint64_t ExtentEnd = Extent.Base + Extent.Size;
+      const Segment *ExtentSeg = In.Img->getSegmentFor(Extent.Base);
+      if (!ExtentSeg || !ExtentSeg->isWritable() ||
+          ExtentSeg->Size > InvalidVA - ExtentSeg->VA ||
+          Extent.Base < ExtentSeg->VA ||
+          ExtentEnd > ExtentSeg->VA + ExtentSeg->Size)
+        continue;
+      const Section *ExtentSec = In.Img->getSectionFor(Extent.Base);
+      if (ExtentSec) {
+        if (!ExtentSec->isWritable() || ExtentSec->Size == 0 ||
+            ExtentSec->Size > InvalidVA - ExtentSec->VA ||
+            ExtentEnd > ExtentSec->VA + ExtentSec->Size)
+          continue;
+      } else if (In.Img->segmentHasReadableSectionMetadata(*ExtentSeg)) {
+        continue;
+      }
+      auto It =
+          std::find_if(ValidExtents.begin(), ValidExtents.end(),
+                       [&](const RegisteredExtent &Candidate) {
+                         return Candidate.sameRange(Extent.Base, Extent.Size);
+                       });
+      if (It == ValidExtents.end()) {
+        ValidExtents.push_back(
+            RegisteredExtent{Extent.Base, Extent.Size, false, false, false});
+        It = std::prev(ValidExtents.end());
+      }
+      switch (Extent.Precision) {
+      case ExactDataObjectPrecision::Storage:
+        It->HasStorage = true;
+        break;
+      case ExactDataObjectPrecision::TypedBuffer:
+        It->HasTypedBuffer = true;
+        break;
+      case ExactDataObjectPrecision::TypedNonBuffer:
+        It->HasTypedNonBuffer = true;
+        break;
       }
     }
 
-    std::optional<uint64_t> ExactCapacity;
-    bool ConflictingSymbols = false;
-    bool HasOnePastSymbolAtAddress = false;
-    for (const Symbol &Sym : In.Img->Symbols) {
-      if (Sym.IsFunc || Sym.Size == 0 || Sym.Addr < OwnerBegin ||
-          Sym.Size > InvalidVA - Sym.Addr)
+    const RegisteredExtent *ExactExtent = nullptr;
+    bool ConflictingExtents = false;
+    uint64_t ConservativeCapacity = 0;
+    bool HasCandidate = false;
+    for (const RegisteredExtent &Candidate : ValidExtents) {
+      const uint64_t CandidateEnd = Candidate.end();
+      if (Identity->hasOwner() &&
+          (Candidate.Base < OwnerBegin || CandidateEnd > OwnerEnd))
         continue;
-      const uint64_t SymbolEnd = Sym.Addr + Sym.Size;
-      if (SymbolEnd > OwnerEnd)
+      if (Address < Candidate.Base || Address > CandidateEnd)
         continue;
-      // A section/run owner cannot distinguish `&A[sizeof A]` from `&B`
-      // when adjacent sized symbols share the same numeric boundary.  Keep
-      // the mapped bound, but never publish B's size as an exact capacity
-      // unless a future occurrence identity names the symbol itself.
-      if (Sym.Addr < *Address && SymbolEnd == *Address)
-        HasOnePastSymbolAtAddress = true;
-      if (Sym.Addr > *Address)
+      HasCandidate = true;
+      ConservativeCapacity =
+          std::max(ConservativeCapacity, CandidateEnd - Address);
+      if (ExactExtent && ExactExtent != &Candidate) {
+        ConflictingExtents = true;
         continue;
-      if (*Address >= SymbolEnd)
-        continue;
-      const uint64_t Capacity = SymbolEnd - *Address;
-      if (ExactCapacity && *ExactCapacity != Capacity) {
-        ConflictingSymbols = true;
-        break;
       }
-      ExactCapacity = Capacity;
+      ExactExtent = &Candidate;
+    }
+
+    // Object identities are registry-level facts, not per-query guesses.  If
+    // two distinct authenticated extents overlap, or merely share an endpoint
+    // where one-past and the next base have the same numeric address, neither
+    // extent can safely answer even a query in its otherwise unshared prefix.
+    if (ExactExtent && !ConflictingExtents) {
+      const uint64_t ExactEnd = ExactExtent->end();
+      for (const RegisteredExtent &Other : ValidExtents) {
+        if (&Other == ExactExtent)
+          continue;
+        const uint64_t OtherEnd = Other.end();
+        if (ExactExtent->Base <= OtherEnd && Other.Base <= ExactEnd) {
+          ConflictingExtents = true;
+          break;
+        }
+      }
     }
 
     DestObject Result;
     Result.Region = ObjectRegion::Global;
-    if (ExactCapacity && !ConflictingSymbols && !HasOnePastSymbolAtAddress) {
-      Result.Capacity = *ExactCapacity;
+    if (ExactExtent && !ConflictingExtents && ExactExtent->HasTypedBuffer &&
+        !ExactExtent->HasTypedNonBuffer) {
+      Result.Capacity = ExactExtent->end() - Address;
+      Result.Precision = CapacityPrecision::TypedBufferExact;
       Result.CapacityExact = true;
-      Result.Detail = "sized data symbol";
+      Result.Detail = "authenticated typed buffer";
+      return Result;
+    }
+    if (HasCandidate) {
+      Result.Capacity = ConservativeCapacity;
+      Result.Precision = ConflictingExtents
+                             ? CapacityPrecision::ContainerUpperBound
+                             : CapacityPrecision::StorageExact;
+      Result.CapacityExact = false;
+      Result.Detail = ConflictingExtents ? "ambiguous object upper bound"
+                                         : "storage object upper bound";
       return Result;
     }
 
-    if (*Address > OwnerEnd)
+    // A role-neutral Address has no loader owner from which a mapped upper
+    // bound can be derived.  It is usable only after one unique authenticated
+    // object extent binds this occurrence.
+    if (!Identity->hasOwner())
       return std::nullopt;
-    Result.Capacity = OwnerEnd - *Address;
-    Result.CapacityExact = Identity && *Address == OwnerEnd;
-    Result.Detail = Result.CapacityExact ? "relocation owner boundary"
-                                         : "mapped global bound";
+    if (Address > OwnerEnd)
+      return std::nullopt;
+    Result.Capacity = OwnerEnd - Address;
+    Result.Precision = CapacityPrecision::ContainerUpperBound;
+    Result.CapacityExact = false;
+    Result.Detail = "mapped global bound";
     return Result;
   }
 
@@ -855,10 +1025,20 @@ private:
           return defOp(Current, DefBlock, DefOp);
         };
         auto FindPhi = [&](const MedVar &Current) -> const PhiNode * {
+          if (Defs.isAmbiguous(Current) ||
+              Defs.CallDefined.contains(keyOf(Current))) {
+            static const PhiNode AmbiguousPhi{};
+            return &AmbiguousPhi;
+          }
           auto It = Defs.PhiDef.find(keyOf(Current));
-          return It == Defs.PhiDef.end()
-                     ? nullptr
-                     : &F.Blocks[It->second.first].Phis[It->second.second];
+          if (It == Defs.PhiDef.end())
+            return nullptr;
+          const PhiNode &Phi =
+              F.Blocks[It->second.first].Phis[It->second.second];
+          if (PhiGraph.hasCompleteIncoming(It->second.first, Phi))
+            return &Phi;
+          static const PhiNode IncompletePhi{};
+          return &IncompletePhi;
         };
         return detail::aliasesWholeFrame(V, In.StackPointerReg,
                                          In.FramePointerReg, FindOp, FindPhi);
@@ -889,6 +1069,10 @@ private:
       return false;
 
     const ValueKey Key = keyOf(V);
+    if (Defs.AmbiguousDef.contains(Key) || Defs.CallDefined.contains(Key)) {
+      StackAddressProofIncomplete = true;
+      return true;
+    }
     if (auto It = StackAddressCache.find(Key); It != StackAddressCache.end())
       return It->second;
     if (Depth > 64) {
@@ -917,6 +1101,10 @@ private:
       Result = true;
     else if (auto It = Defs.PhiDef.find(Key); It != Defs.PhiDef.end()) {
       const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];
+      if (!PhiGraph.hasCompleteIncoming(It->second.first, Phi)) {
+        StackAddressProofIncomplete = true;
+        return true;
+      }
       for (const auto &[Pred, Arg] : Phi.Args) {
         (void)Pred;
         if (mayBeStackAddress(Arg, Depth + 1)) {
@@ -985,6 +1173,8 @@ private:
       return std::nullopt;
 
     ValueKey K = keyOf(V);
+    if (Defs.AmbiguousDef.contains(K) || Defs.CallDefined.contains(K))
+      return std::nullopt;
     if (!Active.insert(K).second)
       return std::nullopt;
     struct Pop {
@@ -993,6 +1183,21 @@ private:
       ~Pop() { S.erase(K); }
     } Guard{Active, K};
 
+    if (auto It = Defs.PhiDef.find(K); It != Defs.PhiDef.end()) {
+      const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];
+      if (!PhiGraph.hasCompleteIncoming(It->second.first, Phi))
+        return std::nullopt;
+      std::optional<int64_t> Result;
+      for (const auto &[Pred, Arg] : Phi.Args) {
+        (void)Pred;
+        const std::optional<int64_t> Incoming = stackOffset(Arg, Depth + 1);
+        if (!Incoming || (Result && *Result != *Incoming))
+          return std::nullopt;
+        Result = Incoming;
+      }
+      return Result;
+    }
+
     int Blk = 0, Oi = 0;
     const MedOp *Op = defOp(V, Blk, Oi);
 
@@ -1000,7 +1205,10 @@ private:
         V.RegOff == In.StackPointerReg) {
       if (Op && (Op->Opcode == NdOp::INT_SUB || Op->Opcode == NdOp::INT_ADD))
         return affine(*Op, Depth);
-      return 0; // the incoming stack pointer itself.
+      if (detail::isAuthenticatedEntryRegisterLiveIn(F, V))
+        return 0;
+      if (!Op && V.SSAVer == 0 && !Defs.ExplicitRegDef.contains(K))
+        return 0; // an authenticated incoming stack-pointer live-in.
     }
     if (In.StackRegsKnown && V.Kind == MedVar::Reg &&
         V.RegOff == In.FramePointerReg) {
@@ -1070,6 +1278,14 @@ DestObject neverd::safety::resolveDestination(const AnalysisInput &In,
   const MedCallInfo &CI = F.CallInfos[CallInfoIndex];
   if (DstArgIndex >= static_cast<int>(CI.Args.size()))
     return R;
-  Resolver Res(In, Cat, F);
+  va_t UsePC = InvalidVA;
+  for (const MedBlock &B : F.Blocks) {
+    if (B.Id != CI.BlockId || CI.OpIdx < 0 ||
+        CI.OpIdx >= static_cast<int>(B.Ops.size()))
+      continue;
+    UsePC = B.Ops[CI.OpIdx].Addr;
+    break;
+  }
+  Resolver Res(In, Cat, F, UsePC);
   return Res.resolve(CI.Args[DstArgIndex]);
 }

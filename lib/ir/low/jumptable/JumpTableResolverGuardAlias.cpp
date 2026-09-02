@@ -582,8 +582,8 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
   };
   auto consumeCandidateProduct = [&](size_t Left, size_t Right,
                                      size_t Extra = 0) {
-    if (Left != 0 && Right >
-                         (std::numeric_limits<size_t>::max() - Extra) / Left) {
+    if (Left != 0 &&
+        Right > (std::numeric_limits<size_t>::max() - Extra) / Left) {
       *CandidateEvidenceBudget = 0;
       GuardBuildExhausted = true;
       return false;
@@ -772,11 +772,9 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
     AliasSyntaxWork -= Amount;
     return true;
   };
-  auto consumeAliasQueryWork = [&](size_t QueryCount,
-                                   size_t EvidenceAmount) {
+  auto consumeAliasQueryWork = [&](size_t QueryCount, size_t EvidenceAmount) {
     if (AliasQueries.size() > limits::kMaxJumpTableEvidenceWork ||
-        QueryCount >
-            limits::kMaxJumpTableEvidenceWork - AliasQueries.size() ||
+        QueryCount > limits::kMaxJumpTableEvidenceWork - AliasQueries.size() ||
         !consumeCandidateEvidence(EvidenceAmount)) {
       AliasEvidenceExhausted = true;
       return false;
@@ -981,8 +979,8 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
         PredicatedIndexAlias Candidate;
         Candidate.Arm = {SelectedArm, Select.Addr, Select.Seq,
                          /*DefinedAtPoint=*/false};
-        const LocalPredicatePtr SelectPredicate = buildLocalPredicate(
-            Insn, Select.Inputs[0], SelectIndex);
+        const LocalPredicatePtr SelectPredicate =
+            buildLocalPredicate(Insn, Select.Inputs[0], SelectIndex);
         if (AliasEvidenceExhausted) {
           Info.IncompleteGuardDomain = true;
           return false;
@@ -997,8 +995,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
         }
         if (!PredicatesMatch)
           continue;
-        if (IndexAlternatives.size() >
-                std::numeric_limits<size_t>::max() / 3 ||
+        if (IndexAlternatives.size() > std::numeric_limits<size_t>::max() / 3 ||
             !consumeAliasQueryWork(IndexAlternatives.size(),
                                    IndexAlternatives.size() * 3)) {
           Info.IncompleteGuardDomain = true;
@@ -1180,8 +1177,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
       Node->Value = V;
       Node->UseAddr = UseAddr;
       Node->UseSeq = UseSeq;
-      if (IndexAlternatives.size() ==
-              std::numeric_limits<size_t>::max() ||
+      if (IndexAlternatives.size() == std::numeric_limits<size_t>::max() ||
           !consumeGuardBuildWork(IndexAlternatives.size() + 1)) {
         return Finish({});
       }
@@ -1362,9 +1358,8 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
       Expr->Constant = Node->Value.Offset;
       return Finish(Expr);
     }
-    const bool IndexQueryPresent =
-        Node->IndexQuery < ProofResults.size() &&
-        Node->IndexQuery < ProofQueryComplete.size();
+    const bool IndexQueryPresent = Node->IndexQuery < ProofResults.size() &&
+                                   Node->IndexQuery < ProofQueryComplete.size();
     const bool IndexQueryComplete =
         IndexQueryPresent && ProofQueryComplete[Node->IndexQuery];
     const bool DefQueryPresent = Node->DefQuery < ProofResults.size() &&
@@ -1544,8 +1539,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
     // symbolization can add coercions and, for carry/overflow, a small fixed
     // expansion; four units per input plus twelve covers every opcode above.
     size_t Work = Expr->K == GuardExpr::Kind::Operation ? 12 : 2;
-    if (Expr->Inputs.size() >
-        (std::numeric_limits<size_t>::max() - Work) / 4)
+    if (Expr->Inputs.size() > (std::numeric_limits<size_t>::max() - Work) / 4)
       return std::nullopt;
     Work += Expr->Inputs.size() * 4;
     for (const GuardExprPtr &Input : Expr->Inputs) {
@@ -1598,8 +1592,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
     // Each replay visits the node and materializes its input values; primitive
     // comparisons additionally materialize the parallel input-width vector.
     size_t Work = 1;
-    if (Expr->Inputs.size() >
-        (std::numeric_limits<size_t>::max() - Work) / 3)
+    if (Expr->Inputs.size() > (std::numeric_limits<size_t>::max() - Work) / 3)
       return std::nullopt;
     Work += Expr->Inputs.size() * 3;
     for (const GuardExprPtr &Input : Expr->Inputs) {
@@ -1615,8 +1608,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
     (void)TableCondition;
     std::optional<size_t> GuardWork = concreteGuardWork(Expr, 0);
     if (!GuardWork ||
-        *GuardWork > std::numeric_limits<size_t>::max() -
-                         ConcreteWorkPerValue)
+        *GuardWork > std::numeric_limits<size_t>::max() - ConcreteWorkPerValue)
       return failIncomplete();
     ConcreteWorkPerValue += *GuardWork;
   }

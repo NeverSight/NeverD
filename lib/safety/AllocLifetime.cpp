@@ -30,6 +30,7 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <set>
 #include <tuple>
 
 using namespace neverd;
@@ -148,31 +149,156 @@ struct MemModel {
   bool Have = false;
   llvm::DenseMap<ValueKey, std::pair<int, int>> OpDef;
   llvm::DenseMap<ValueKey, std::pair<int, int>> PhiDef;
+  llvm::DenseSet<ValueKey> AmbiguousDefs;
+  llvm::DenseMap<int, unsigned> BlockIdCounts;
+  llvm::DenseMap<int, llvm::DenseSet<int>> NormalPredecessors;
+  llvm::DenseSet<int> BlocksWithDuplicateIncomingEdges;
   static constexpr unsigned MaxProofSteps = 4096;
 
   MemModel(const MedFunc &Fn, const AnalysisInput &In) : F(Fn) {
     SP = In.StackPointerReg;
     FP = In.FramePointerReg;
     Have = In.StackRegsKnown;
+    const auto RecordDefinition = [&](auto &Definitions, const ValueKey &Key,
+                                      std::pair<int, int> Location) {
+      if (AmbiguousDefs.count(Key))
+        return;
+      if (OpDef.count(Key) || PhiDef.count(Key)) {
+        AmbiguousDefs.insert(Key);
+        OpDef.erase(Key);
+        PhiDef.erase(Key);
+        return;
+      }
+      Definitions[Key] = Location;
+    };
     for (int Bi = 0; Bi < static_cast<int>(F.Blocks.size()); ++Bi) {
+      ++BlockIdCounts[F.Blocks[Bi].Id];
       for (int Pi = 0; Pi < static_cast<int>(F.Blocks[Bi].Phis.size()); ++Pi) {
         const PhiNode &Phi = F.Blocks[Bi].Phis[Pi];
-        if (!Phi.Output.isConst() && Phi.Output.Size > 0)
-          PhiDef[keyOf(Phi.Output)] = {Bi, Pi};
+        if (!Phi.Output.isConst())
+          RecordDefinition(PhiDef, keyOf(Phi.Output), {Bi, Pi});
       }
       for (int Oi = 0; Oi < static_cast<int>(F.Blocks[Bi].Ops.size()); ++Oi) {
         const MedOp &O = F.Blocks[Bi].Ops[Oi];
-        if (!O.Output.isConst() && O.Output.Size > 0)
-          OpDef[keyOf(O.Output)] = {Bi, Oi};
+        if (!O.Output.isConst() &&
+            (O.Output.Size > 0 || O.Output.Kind == MedVar::Reg))
+          RecordDefinition(OpDef, keyOf(O.Output), {Bi, Oi});
+      }
+    }
+    for (const MedBlock &Block : F.Blocks) {
+      llvm::DenseSet<int> SeenSuccessors;
+      for (int SuccId : Block.Succs) {
+        if (!SeenSuccessors.insert(SuccId).second)
+          BlocksWithDuplicateIncomingEdges.insert(SuccId);
+        NormalPredecessors[SuccId].insert(Block.Id);
       }
     }
   }
 
   const MedOp *def(const MedVar &V) const {
+    if (AmbiguousDefs.count(keyOf(V)))
+      return nullptr;
     auto It = OpDef.find(keyOf(V));
     return It == OpDef.end()
                ? nullptr
                : &F.Blocks[It->second.first].Ops[It->second.second];
+  }
+
+  bool hasCompleteNormalPredecessors(const MedBlock &Block) const {
+    auto BlockCount = BlockIdCounts.find(Block.Id);
+    if (BlockCount == BlockIdCounts.end() || BlockCount->second != 1 ||
+        BlocksWithDuplicateIncomingEdges.count(Block.Id))
+      return false;
+    const auto IsUniqueBlockId = [&](int Id) {
+      auto It = BlockIdCounts.find(Id);
+      return It != BlockIdCounts.end() && It->second == 1;
+    };
+
+    llvm::DenseSet<int> Expected;
+    for (int PredId : Block.Preds)
+      if (!IsUniqueBlockId(PredId) || !Expected.insert(PredId).second)
+        return false;
+    auto ActualIt = NormalPredecessors.find(Block.Id);
+    if (ActualIt == NormalPredecessors.end())
+      return Expected.empty();
+    if (ActualIt->second.size() != Expected.size())
+      return false;
+    return std::all_of(Expected.begin(), Expected.end(), [&](int PredId) {
+      return ActualIt->second.count(PredId) != 0;
+    });
+  }
+
+  bool hasCompletePhiIncoming(int BlockIndex, const PhiNode &Phi) const {
+    if (BlockIndex < 0 || BlockIndex >= static_cast<int>(F.Blocks.size()) ||
+        Phi.Args.empty() ||
+        (!Phi.Output.isConst() && AmbiguousDefs.count(keyOf(Phi.Output))))
+      return false;
+    const MedBlock &Block = F.Blocks[BlockIndex];
+    if (!hasCompleteNormalPredecessors(Block) || Block.Preds.empty() ||
+        Phi.Args.size() != Block.Preds.size())
+      return false;
+
+    llvm::DenseSet<int> Expected;
+    for (int PredId : Block.Preds)
+      Expected.insert(PredId);
+
+    llvm::DenseSet<int> Actual;
+    for (const auto &[PredId, Arg] : Phi.Args) {
+      if (!Expected.count(PredId) || !Actual.insert(PredId).second ||
+          Arg.Size != Phi.Output.Size)
+        return false;
+    }
+    return Actual.size() == Expected.size();
+  }
+
+  bool isProvenZero(const MedVar &V) const {
+    llvm::DenseSet<ValueKey> Active;
+    unsigned Remaining = MaxProofSteps;
+    std::function<bool(const MedVar &)> Resolve = [&](const MedVar &Current) {
+      if (Current.isConst())
+        return Current.ConstVal == 0 &&
+               !isAddressProvenance(Current.Provenance);
+      if (Remaining == 0)
+        return false;
+      const ValueKey Key = keyOf(Current);
+      if (AmbiguousDefs.count(Key))
+        return false;
+      if (!Active.insert(Key).second)
+        return false;
+      struct PopActive {
+        llvm::DenseSet<ValueKey> &Set;
+        ValueKey Key;
+        ~PopActive() { Set.erase(Key); }
+      } Guard{Active, Key};
+      --Remaining;
+
+      if (auto It = PhiDef.find(Key); It != PhiDef.end()) {
+        const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];
+        if (!hasCompletePhiIncoming(It->second.first, Phi))
+          return false;
+        return std::all_of(
+            Phi.Args.begin(), Phi.Args.end(),
+            [&](const auto &Arg) { return Resolve(Arg.second); });
+      }
+
+      const MedOp *Def = def(Current);
+      if (!Def)
+        return false;
+      switch (Def->Opcode) {
+      case NdOp::COPY:
+      case NdOp::CAST:
+      case NdOp::INT_ZEXT:
+      case NdOp::INT_SEXT:
+      case NdOp::SUBBYTES:
+        return Def->NumInputs >= 1 && Resolve(Def->Inputs[0]);
+      case NdOp::SELECT:
+        return Def->NumInputs == 3 && Resolve(Def->Inputs[1]) &&
+               Resolve(Def->Inputs[2]);
+      default:
+        return false;
+      }
+    };
+    return Resolve(V);
   }
 
   std::optional<int64_t> stackOffset(const MedVar &V) const {
@@ -225,7 +351,7 @@ struct MemModel {
       std::optional<int64_t> Result;
       if (auto It = PhiDef.find(Key); It != PhiDef.end()) {
         const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];
-        if (Phi.Args.empty())
+        if (!hasCompletePhiIncoming(It->second.first, Phi))
           return finish(std::nullopt);
         for (const auto &[Pred, Arg] : Phi.Args) {
           (void)Pred;
@@ -310,6 +436,10 @@ struct MemModel {
       const ValueKey Key = keyOf(Current);
       if (auto It = Cache.find(Key); It != Cache.end())
         return It->second;
+      if (AmbiguousDefs.count(Key)) {
+        Incomplete = true;
+        return true;
+      }
       if (stackOffset(Current)) {
         Cache[Key] = true;
         return true;
@@ -332,11 +462,16 @@ struct MemModel {
       bool Result = false;
       if (auto It = PhiDef.find(Key); It != PhiDef.end()) {
         const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];
-        for (const auto &[Pred, Arg] : Phi.Args) {
-          (void)Pred;
-          if (MayBe(Arg, Depth + 1)) {
-            Result = true;
-            break;
+        if (!hasCompletePhiIncoming(It->second.first, Phi)) {
+          Incomplete = true;
+          Result = true;
+        } else {
+          for (const auto &[Pred, Arg] : Phi.Args) {
+            (void)Pred;
+            if (MayBe(Arg, Depth + 1)) {
+              Result = true;
+              break;
+            }
           }
         }
       } else if (auto It = OpDef.find(Key); It != OpDef.end()) {
@@ -392,13 +527,45 @@ struct MemModel {
 
   std::optional<int64_t> stackOffsetRec(const MedVar &V, int Depth,
                                         llvm::DenseSet<ValueKey> &Seen) const {
-    if (!Have || V.isConst() || Depth > 48 || !Seen.insert(keyOf(V)).second)
+    if (!Have || V.isConst() || Depth > 48)
       return std::nullopt;
+    const ValueKey Key = keyOf(V);
+    if (AmbiguousDefs.count(Key) || !Seen.insert(Key).second)
+      return std::nullopt;
+    struct PopSeen {
+      llvm::DenseSet<ValueKey> &Set;
+      ValueKey Key;
+      ~PopSeen() { Set.erase(Key); }
+    } Guard{Seen, Key};
+
+    if (auto It = PhiDef.find(Key); It != PhiDef.end()) {
+      const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];
+      if (V.Size == 0 || Phi.Output.Size != V.Size ||
+          !hasCompletePhiIncoming(It->second.first, Phi))
+        return std::nullopt;
+      std::optional<int64_t> Result;
+      for (const auto &[PredId, Arg] : Phi.Args) {
+        (void)PredId;
+        std::optional<int64_t> Offset = stackOffsetRec(Arg, Depth + 1, Seen);
+        if (!Offset || (Result && *Result != *Offset))
+          return std::nullopt;
+        Result = Offset;
+      }
+      return Result;
+    }
+
     const MedOp *Op = def(V);
     if (V.Kind == MedVar::Reg && (V.RegOff == SP || V.RegOff == FP)) {
-      if (Op && (Op->Opcode == NdOp::INT_ADD || Op->Opcode == NdOp::INT_SUB))
+      if (V.RegOff == SP && detail::isAuthenticatedEntryRegisterLiveIn(F, V))
+        return 0;
+      if (Op) {
+        if (Op->Output.Size == 0 || Op->Output.Size != V.Size ||
+            (Op->Opcode != NdOp::INT_ADD && Op->Opcode != NdOp::INT_SUB))
+          return std::nullopt;
         return affine(*Op, Depth, Seen);
-      return V.RegOff == SP ? std::optional<int64_t>(0) : std::nullopt;
+      }
+      return V.RegOff == SP && V.SSAVer == 0 ? std::optional<int64_t>(0)
+                                             : std::nullopt;
     }
     if (!Op)
       return std::nullopt;
@@ -453,6 +620,10 @@ struct MemModel {
       const ValueKey Key = keyOf(V);
       if (auto It = Cache.find(Key); It != Cache.end())
         return It->second;
+      if (AmbiguousDefs.count(Key)) {
+        Incomplete = true;
+        return true;
+      }
       if (Depth > 64 || Remaining == 0) {
         Incomplete = true;
         return true;
@@ -473,11 +644,16 @@ struct MemModel {
         Result = true;
       } else if (auto It = PhiDef.find(Key); It != PhiDef.end()) {
         const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];
-        for (const auto &[Pred, Arg] : Phi.Args) {
-          (void)Pred;
-          if (Prove(Arg, Depth + 1)) {
-            Result = true;
-            break;
+        if (!hasCompletePhiIncoming(It->second.first, Phi)) {
+          Incomplete = true;
+          Result = true;
+        } else {
+          for (const auto &[Pred, Arg] : Phi.Args) {
+            (void)Pred;
+            if (Prove(Arg, Depth + 1)) {
+              Result = true;
+              break;
+            }
           }
         }
       } else if (const MedOp *Op = def(V)) {
@@ -534,9 +710,13 @@ struct MemModel {
       auto FindOp = [&](const MedVar &Current) { return def(Current); };
       auto FindPhi = [&](const MedVar &Current) -> const PhiNode * {
         auto It = PhiDef.find(keyOf(Current));
-        return It == PhiDef.end()
-                   ? nullptr
-                   : &F.Blocks[It->second.first].Phis[It->second.second];
+        if (It == PhiDef.end())
+          return nullptr;
+        const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];
+        if (hasCompletePhiIncoming(It->second.first, Phi))
+          return &Phi;
+        static const PhiNode IncompletePhi{};
+        return &IncompletePhi;
       };
       return detail::aliasesWholeFrame(V, SP, FP, FindOp, FindPhi);
     };
@@ -564,9 +744,13 @@ struct MemModel {
       auto FindOp = [&](const MedVar &Current) { return def(Current); };
       auto FindPhi = [&](const MedVar &Current) -> const PhiNode * {
         auto It = PhiDef.find(keyOf(Current));
-        return It == PhiDef.end()
-                   ? nullptr
-                   : &F.Blocks[It->second.first].Phis[It->second.second];
+        if (It == PhiDef.end())
+          return nullptr;
+        const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];
+        if (hasCompletePhiIncoming(It->second.first, Phi))
+          return &Phi;
+        static const PhiNode IncompletePhi{};
+        return &IncompletePhi;
       };
       return detail::aliasesWholeFrame(V, SP, FP, FindOp, FindPhi);
     };
@@ -579,16 +763,21 @@ struct MemModel {
   llvm::DenseSet<ValueKey> aliasClosureImpl(const MedVar &Seed,
                                             bool RequireExactAlias) const {
     llvm::DenseSet<ValueKey> Set;
-    Set.insert(keyOf(Seed));
+    if (!RequireExactAlias || !AmbiguousDefs.count(keyOf(Seed)))
+      Set.insert(keyOf(Seed));
     bool Changed = true;
     while (Changed) {
       Changed = false;
-      for (const MedBlock &B : F.Blocks) {
+      for (int Bi = 0; Bi < static_cast<int>(F.Blocks.size()); ++Bi) {
+        const MedBlock &B = F.Blocks[Bi];
         for (const PhiNode &Phi : B.Phis) {
           if (Phi.Output.isConst() || Phi.Args.empty())
             continue;
+          const ValueKey OutputKey = keyOf(Phi.Output);
+          if (RequireExactAlias && AmbiguousDefs.count(OutputKey))
+            continue;
           bool AnyAlias = false;
-          bool AllAlias = true;
+          bool AllAlias = hasCompletePhiIncoming(Bi, Phi);
           for (const auto &[Pred, Arg] : Phi.Args) {
             (void)Pred;
             const bool Aliases = !Arg.isConst() && Set.count(keyOf(Arg));
@@ -596,22 +785,24 @@ struct MemModel {
             AllAlias &= Aliases && Arg.Size == Phi.Output.Size;
           }
           if ((RequireExactAlias ? AllAlias : AnyAlias) &&
-              Set.insert(keyOf(Phi.Output)).second)
+              Set.insert(OutputKey).second)
             Changed = true;
         }
         for (const MedOp &Op : B.Ops) {
           if (Op.Output.isConst() || Op.Output.Size == 0)
             continue;
+          const ValueKey OutputKey = keyOf(Op.Output);
           if (RequireExactAlias) {
-            if (mustForwardPointerValue(Op, Set) &&
-                Set.insert(keyOf(Op.Output)).second)
+            if (!AmbiguousDefs.count(OutputKey) &&
+                mustForwardPointerValue(Op, Set) &&
+                Set.insert(OutputKey).second)
               Changed = true;
             continue;
           }
           for (unsigned I = 0; I < Op.NumInputs; ++I)
             if (mayForwardPointerInput(Op.Opcode, I) &&
                 !Op.Inputs[I].isConst() && Set.count(keyOf(Op.Inputs[I])) &&
-                Set.insert(keyOf(Op.Output)).second)
+                Set.insert(OutputKey).second)
               Changed = true;
         }
       }
@@ -620,6 +811,9 @@ struct MemModel {
           const MedOp &Op = B.Ops[Oi];
           if (!detail::isStackMemoryRead(Op.Opcode) || Op.Output.isConst() ||
               Op.Output.Size == 0)
+            continue;
+          const ValueKey OutputKey = keyOf(Op.Output);
+          if (RequireExactAlias && AmbiguousDefs.count(OutputKey))
             continue;
           detail::ReachingStackValues Reaching = reachingLoad(B, Oi, Op);
           if (!Reaching.Reachable)
@@ -632,7 +826,7 @@ struct MemModel {
             else
               AllAlias = false;
           if ((RequireExactAlias ? AllAlias : AnyAlias) &&
-              Set.insert(keyOf(Op.Output)).second)
+              Set.insert(OutputKey).second)
             Changed = true;
         }
     }
@@ -706,6 +900,13 @@ const MedOp *opAt(const MedFunc &F, int BlockId, int OpIdx) {
   return nullptr;
 }
 
+const MedBlock *blockAt(const MedFunc &F, int BlockId) {
+  for (const MedBlock &B : F.Blocks)
+    if (B.Id == BlockId)
+      return &B;
+  return nullptr;
+}
+
 va_t callVA(const MedFunc &F, const MedCallInfo &CI) {
   if (const MedOp *Op = opAt(F, CI.BlockId, CI.OpIdx))
     return Op->Addr;
@@ -721,8 +922,24 @@ FindingEvent findingEvent(const MedFunc &F, int BlockId, int OpIdx, va_t VA) {
   return Event;
 }
 
+enum class HeapReturnState : uint8_t { No, May, Yes };
+
+HeapReturnState combineHeapReturnCandidates(HeapReturnState Current,
+                                            HeapReturnState Candidate) {
+  if (Current == HeapReturnState::No)
+    return Candidate;
+  if (Candidate == HeapReturnState::No)
+    return Current;
+  // Yes means every relevant non-null return is proven owned.  Any competing
+  // May candidate invalidates that universal claim, regardless of discovery
+  // order; uncertainty is therefore absorbing once evidence exists.
+  return Current == HeapReturnState::Yes && Candidate == HeapReturnState::Yes
+             ? HeapReturnState::Yes
+             : HeapReturnState::May;
+}
+
 struct Summary {
-  bool ReturnsHeap = false;
+  HeapReturnState ReturnsHeap = HeapReturnState::No;
   llvm::DenseSet<int> FreesParam;
   llvm::DenseSet<int> MayFreeParam;
   llvm::DenseSet<int> EscapesParam;
@@ -730,6 +947,23 @@ struct Summary {
 };
 
 enum class EscapeState : uint8_t { No, Yes, Unknown };
+
+struct ReturnContract {
+  AuthenticatedReturnKind Kind = AuthenticatedReturnKind::Unknown;
+  uint16_t Size = 0;
+  bool HasValueWithoutCarrier = false;
+
+  bool isPointerKind() const {
+    return Kind == AuthenticatedReturnKind::Pointer;
+  }
+  bool hasNoValue() const { return Kind == AuthenticatedReturnKind::NoValue; }
+};
+
+struct ReturnCarrierValues {
+  llvm::SmallVector<MedVar, 4> Values;
+  bool HasPathWithoutCarrier = false;
+  bool HasPotentialCarrier = false;
+};
 
 struct FreeEvent {
   int BlockId = -1;
@@ -940,11 +1174,469 @@ private:
     return detail::hasTargetPointerWidth(In.Img, Value);
   }
 
-  bool returnsValue(const MedFunc &F) const {
-    if (In.Dbg)
-      if (auto Sym = In.Dbg->resolveFunction(F.Entry); Sym && Sym->ReturnType)
-        return Sym->ReturnType->Kind != NdTypeKind::Void;
-    return !F.ReturnType || F.ReturnType->Kind != NdTypeKind::Void;
+  bool pointerContractCompatible(const ReturnContract &Contract) const {
+    if (!Contract.isPointerKind())
+      return false;
+    const uint16_t PointerBytes = detail::targetPointerBytes(In.Img);
+    return Contract.Size == 0 || PointerBytes == 0 ||
+           Contract.Size == PointerBytes;
+  }
+
+  ReturnContract returnContract(const MedFunc &F) const {
+    ReturnContract Declared;
+    if (In.Dbg && In.Dbg->hasAuthenticatedFunctionSignatures()) {
+      const AuthenticatedReturnValueState State =
+          In.Dbg->resolveAuthenticatedReturnValueState(F.Entry);
+      Declared = {State.Kind, State.Size};
+    }
+
+    ReturnContract Explicit;
+    switch (F.ReturnValueEvidence) {
+    case MedReturnValueEvidence::ReturnsNoValue:
+      Explicit.Kind = AuthenticatedReturnKind::NoValue;
+      break;
+    case MedReturnValueEvidence::ReturnsValue:
+      // A generic has-value bit does not identify the ABI carrier class and
+      // therefore cannot prove that an integer register owns a pointer.
+      Explicit.HasValueWithoutCarrier = true;
+      break;
+    case MedReturnValueEvidence::ReturnsPointer:
+      Explicit.Kind = AuthenticatedReturnKind::Pointer;
+      break;
+    case MedReturnValueEvidence::ReturnsInteger:
+      Explicit.Kind = AuthenticatedReturnKind::Integer;
+      break;
+    case MedReturnValueEvidence::ReturnsFloatingPoint:
+      Explicit.Kind = AuthenticatedReturnKind::FloatingPoint;
+      break;
+    case MedReturnValueEvidence::ReturnsAggregate:
+      Explicit.Kind = AuthenticatedReturnKind::Aggregate;
+      break;
+    case MedReturnValueEvidence::Unknown:
+      break;
+    }
+
+    // Conflicting trusted producers are not a license to choose whichever
+    // result is more convenient for the analysis.  Preserve the uncertainty.
+    if (Declared.Kind == AuthenticatedReturnKind::NoValue &&
+        Explicit.HasValueWithoutCarrier)
+      return {};
+    if (Declared.Kind != AuthenticatedReturnKind::Unknown &&
+        Explicit.Kind != AuthenticatedReturnKind::Unknown &&
+        (Declared.Kind != Explicit.Kind ||
+         (Declared.Size != 0 && Explicit.Size != 0 &&
+          Declared.Size != Explicit.Size)))
+      return {};
+    if (Declared.Kind != AuthenticatedReturnKind::Unknown)
+      return Declared;
+    return Explicit;
+  }
+
+  ReturnCarrierValues abiReturnCarriers(const MedFunc &F, int ReturnBlockId,
+                                        int ReturnOpIndex, const MemModel &Mem,
+                                        const ReturnContract &Contract) const {
+    ReturnCarrierValues Result;
+    if (!In.Img) {
+      Result.HasPotentialCarrier = true;
+      return Result;
+    }
+    const TargetRegInfo &TRI = getTargetRegInfo(In.Img->Arch);
+    if (TRI.TheArch == Arch::Unknown) {
+      Result.HasPotentialCarrier = true;
+      return Result;
+    }
+    const bool UsesFloatingCarrier =
+        Contract.Kind == AuthenticatedReturnKind::FloatingPoint;
+    const uint64_t ReturnReg =
+        UsesFloatingCarrier ? TRI.fpReturnModelReg() : TRI.IntReturnReg;
+    const auto IsReturnCarrier = [&](const MedVar &Value) {
+      return Value.Kind == MedVar::Reg && Value.Size > 0 &&
+             Value.RegOff == ReturnReg;
+    };
+    const auto OverlapsReturnCarrier = [&](const MedVar &Value) {
+      if (Value.Kind != MedVar::Reg || Value.Size == 0)
+        return false;
+      return IsReturnCarrier(Value) ||
+             TRI.isSubRegOf(Value.RegOff, Value.Size, ReturnReg,
+                            TRI.PointerSize);
+    };
+    const auto Add = [&](const MedVar &Value) {
+      if (!IsReturnCarrier(Value))
+        return;
+      if (!UsesFloatingCarrier && Value.Size != TRI.PointerSize &&
+          !TRI.writeZeroExtends(Value.RegOff, Value.Size))
+        Result.HasPotentialCarrier = true;
+      const ValueKey Key = keyOf(Value);
+      for (const MedVar &Existing : Result.Values)
+        if (keyOf(Existing) == Key)
+          return;
+      Result.Values.push_back(Value);
+    };
+    const auto BlockFor = [&](int Id) -> const MedBlock * {
+      for (const MedBlock &Block : F.Blocks)
+        if (Block.Id == Id)
+          return &Block;
+      return nullptr;
+    };
+
+    // RETURN operands are not a portable value channel: x86 RETURN commonly
+    // names RAX, while ARM/AArch64 RETURN names LR/X30.  Recover the live
+    // primary integer result from its ABI register along every predecessor
+    // path instead.  SSA PHIs and call-clobber records stop the backward walk
+    // at the same definition the emitter observes.
+    std::deque<std::pair<int, int>> Work;
+    std::set<std::pair<int, int>> Seen;
+    Work.emplace_back(ReturnBlockId, ReturnOpIndex);
+    while (!Work.empty()) {
+      const auto [BlockId, Before] = Work.front();
+      Work.pop_front();
+      if (!Seen.insert({BlockId, Before}).second)
+        continue;
+      const MedBlock *Block = BlockFor(BlockId);
+      if (!Block) {
+        Result.HasPathWithoutCarrier = true;
+        continue;
+      }
+
+      bool FoundDefinition = false;
+      const int Limit = std::min(Before, static_cast<int>(Block->Ops.size()));
+      for (int I = Limit - 1; I >= 0; --I) {
+        const MedOp &Op = Block->Ops[I];
+        if (OverlapsReturnCarrier(Op.Output)) {
+          // Only the canonical low-base view can describe a result value.
+          // A newer overlapping write (notably x86 AH) still kills the older
+          // full-register definition, but cannot itself be widened into one.
+          if (IsReturnCarrier(Op.Output))
+            Add(Op.Output);
+          else {
+            Result.HasPathWithoutCarrier = true;
+            Result.HasPotentialCarrier = true;
+          }
+          FoundDefinition = true;
+          break;
+        }
+        if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
+          continue;
+        for (const MedCallClobber &Clobber : F.CallClobbers)
+          if (Clobber.CallSiteId == Op.CallSiteId &&
+              OverlapsReturnCarrier(Clobber.Value)) {
+            if (IsReturnCarrier(Clobber.Value))
+              Add(Clobber.Value);
+            else {
+              Result.HasPathWithoutCarrier = true;
+              Result.HasPotentialCarrier = true;
+            }
+            FoundDefinition = true;
+          }
+        // A non-preserving call defines the ABI result even when no later use
+        // caused its clobber SSA value to be materialized.  Either way, an
+        // earlier allocation result cannot remain live across this boundary.
+        if (FoundDefinition || !Op.PreservesCallerSaved) {
+          if (!FoundDefinition)
+            Result.HasPathWithoutCarrier = true;
+          FoundDefinition = true;
+          break;
+        }
+      }
+      if (FoundDefinition)
+        continue;
+
+      for (const PhiNode &Phi : Block->Phis)
+        if (OverlapsReturnCarrier(Phi.Output)) {
+          if (IsReturnCarrier(Phi.Output))
+            Add(Phi.Output);
+          else {
+            Result.HasPathWithoutCarrier = true;
+            Result.HasPotentialCarrier = true;
+          }
+          FoundDefinition = true;
+        }
+      if (FoundDefinition)
+        continue;
+
+      if (!Mem.hasCompleteNormalPredecessors(*Block)) {
+        Result.HasPathWithoutCarrier = true;
+        Result.HasPotentialCarrier = true;
+        continue;
+      }
+      if (Block->Preds.empty()) {
+        bool FoundParamCarrier = false;
+        for (const MedVar &Param : F.Params) {
+          FoundParamCarrier |= IsReturnCarrier(Param);
+          Add(Param);
+        }
+        if (!FoundParamCarrier)
+          Result.HasPathWithoutCarrier = true;
+        continue;
+      }
+      for (int PredId : Block->Preds) {
+        if (const MedBlock *Pred = BlockFor(PredId))
+          Work.emplace_back(PredId, static_cast<int>(Pred->Ops.size()));
+        else
+          Result.HasPathWithoutCarrier = true;
+      }
+    }
+    return Result;
+  }
+
+  struct ReturnAliasState {
+    bool SomeDefinite = false;
+    bool Definite = false;
+    bool Possible = false;
+    bool MayReturnNonOwnedNonNull = false;
+  };
+
+  ReturnAliasState
+  classifyReturnCarriers(const ReturnCarrierValues &Carriers,
+                         const MemModel &Mem,
+                         const llvm::DenseSet<ValueKey> &Aliases,
+                         const llvm::DenseSet<ValueKey> &MustAliases) const {
+    ReturnAliasState Result;
+    bool AllDefinite =
+        !Carriers.Values.empty() && !Carriers.HasPathWithoutCarrier;
+    bool AnyPossible = false;
+    for (const MedVar &Carrier : Carriers.Values) {
+      const ValueKey Key = keyOf(Carrier);
+      if (!Aliases.count(Key)) {
+        AllDefinite = false;
+        Result.MayReturnNonOwnedNonNull |= !Mem.isProvenZero(Carrier);
+        continue;
+      }
+      if (MustAliases.count(Key) && valueHasPointerWidth(Carrier)) {
+        Result.SomeDefinite = true;
+      } else {
+        AnyPossible = true;
+        AllDefinite = false;
+        Result.MayReturnNonOwnedNonNull = true;
+      }
+    }
+    Result.Definite = Result.SomeDefinite && AllDefinite;
+    Result.Possible = AnyPossible || Carriers.HasPotentialCarrier ||
+                      (Result.SomeDefinite && !AllDefinite);
+    Result.MayReturnNonOwnedNonNull |=
+        Carriers.HasPathWithoutCarrier || Carriers.HasPotentialCarrier;
+    return Result;
+  }
+
+  struct IncomingPhiReturnCarriers {
+    ReturnCarrierValues Carriers;
+    bool HasReturnCarrierPhi = false;
+    bool Complete = true;
+  };
+
+  IncomingPhiReturnCarriers
+  incomingPhiReturnCarriers(const MedFunc &F, int BlockIndex, int PredId,
+                            const MemModel &Mem,
+                            const ReturnContract &Contract) const {
+    IncomingPhiReturnCarriers Result;
+    if (!In.Img || BlockIndex < 0 ||
+        BlockIndex >= static_cast<int>(F.Blocks.size()))
+      return Result;
+    const TargetRegInfo &TRI = getTargetRegInfo(In.Img->Arch);
+    if (TRI.TheArch == Arch::Unknown)
+      return Result;
+
+    const bool UsesFloatingCarrier =
+        Contract.Kind == AuthenticatedReturnKind::FloatingPoint;
+    const uint64_t ReturnReg =
+        UsesFloatingCarrier ? TRI.fpReturnModelReg() : TRI.IntReturnReg;
+    const auto IsReturnCarrier = [&](const MedVar &Value) {
+      return Value.Kind == MedVar::Reg && Value.Size > 0 &&
+             Value.RegOff == ReturnReg;
+    };
+    const auto OverlapsReturnCarrier = [&](const MedVar &Value) {
+      if (Value.Kind != MedVar::Reg || Value.Size == 0)
+        return false;
+      return IsReturnCarrier(Value) ||
+             TRI.isSubRegOf(Value.RegOff, Value.Size, ReturnReg,
+                            TRI.PointerSize);
+    };
+    const auto Add = [&](const MedVar &Value, const MedVar &Output) {
+      if (!UsesFloatingCarrier && Output.Size != TRI.PointerSize &&
+          !TRI.writeZeroExtends(Output.RegOff, Output.Size))
+        Result.Carriers.HasPotentialCarrier = true;
+      const ValueKey Key = keyOf(Value);
+      for (const MedVar &Existing : Result.Carriers.Values)
+        if (keyOf(Existing) == Key)
+          return;
+      Result.Carriers.Values.push_back(Value);
+    };
+
+    const MedBlock &Block = F.Blocks[BlockIndex];
+    for (const PhiNode &Phi : Block.Phis) {
+      if (!OverlapsReturnCarrier(Phi.Output))
+        continue;
+      Result.HasReturnCarrierPhi = true;
+      if (!Mem.hasCompletePhiIncoming(BlockIndex, Phi)) {
+        Result.Complete = false;
+        continue;
+      }
+      if (!IsReturnCarrier(Phi.Output)) {
+        Result.Carriers.HasPathWithoutCarrier = true;
+        Result.Carriers.HasPotentialCarrier = true;
+        continue;
+      }
+      auto Incoming =
+          std::find_if(Phi.Args.begin(), Phi.Args.end(),
+                       [&](const auto &Arg) { return Arg.first == PredId; });
+      if (Incoming == Phi.Args.end()) {
+        Result.Complete = false;
+        continue;
+      }
+      Add(Incoming->second, Phi.Output);
+    }
+    return Result;
+  }
+
+  ReturnAliasState returnAliasAt(const MedFunc &F, int BlockId, int OpIndex,
+                                 const MemModel &Mem,
+                                 const llvm::DenseSet<ValueKey> &Aliases,
+                                 const llvm::DenseSet<ValueKey> &MustAliases,
+                                 const ReturnContract &Contract) const {
+    const ReturnCarrierValues Carriers =
+        abiReturnCarriers(F, BlockId, OpIndex, Mem, Contract);
+    return classifyReturnCarriers(Carriers, Mem, Aliases, MustAliases);
+  }
+
+  struct ReturnEscapeEvents {
+    std::vector<FreeEvent> Definite;
+    std::vector<FreeEvent> Potential;
+    std::vector<FreeEvent> NonOwnedNonNull;
+  };
+
+  ReturnEscapeEvents
+  returnEscapeEvents(const MedFunc &F, const MemModel &Mem,
+                     const llvm::DenseSet<ValueKey> &Aliases,
+                     const llvm::DenseSet<ValueKey> &MustAliases,
+                     const ReturnContract &Contract) const {
+    ReturnEscapeEvents Events;
+    if (Contract.hasNoValue())
+      return Events;
+
+    const auto addAliasEvent = [&](const ReturnAliasState &Alias, int BlockId,
+                                   int OpIdx) {
+      if (Alias.Definite && pointerContractCompatible(Contract)) {
+        Events.Definite.push_back({BlockId, OpIdx});
+      } else if (Alias.SomeDefinite || Alias.Possible) {
+        Events.Potential.push_back({BlockId, OpIdx});
+      }
+      if (Alias.MayReturnNonOwnedNonNull)
+        Events.NonOwnedNonNull.push_back({BlockId, OpIdx});
+    };
+
+    for (int BlockIndex = 0; BlockIndex < static_cast<int>(F.Blocks.size());
+         ++BlockIndex) {
+      const MedBlock &Block = F.Blocks[BlockIndex];
+      for (int OpIdx = 0; OpIdx < static_cast<int>(Block.Ops.size()); ++OpIdx) {
+        if (Block.Ops[OpIdx].Opcode != NdOp::RETURN)
+          continue;
+        const ReturnAliasState AtReturn = returnAliasAt(
+            F, Block.Id, OpIdx, Mem, Aliases, MustAliases, Contract);
+        if (AtReturn.Definite) {
+          addAliasEvent(AtReturn, Block.Id, OpIdx);
+          continue;
+        }
+
+        // For an immediate shared RETURN, keep the carrier fact on its
+        // incoming edge.  Pairing a free from one predecessor with an alias
+        // from another would otherwise invent or erase ownership transfer.
+        bool CorrelatedAllPredecessors =
+            OpIdx == 0 && !Block.Preds.empty() &&
+            Mem.hasCompleteNormalPredecessors(Block);
+        std::vector<std::pair<int, ReturnAliasState>> IncomingStates;
+        if (CorrelatedAllPredecessors) {
+          for (int PredId : Block.Preds) {
+            const MedBlock *Pred = blockAt(F, PredId);
+            if (!Pred || Pred->Succs.size() != 1 ||
+                Pred->Succs.front() != Block.Id) {
+              CorrelatedAllPredecessors = false;
+              break;
+            }
+            const IncomingPhiReturnCarriers PhiCarriers =
+                incomingPhiReturnCarriers(F, BlockIndex, PredId, Mem, Contract);
+            if (!PhiCarriers.Complete) {
+              CorrelatedAllPredecessors = false;
+              break;
+            }
+            const int EdgeOp = static_cast<int>(Pred->Ops.size());
+            ReturnAliasState Incoming =
+                PhiCarriers.HasReturnCarrierPhi
+                    ? classifyReturnCarriers(PhiCarriers.Carriers, Mem, Aliases,
+                                             MustAliases)
+                    : returnAliasAt(F, PredId, EdgeOp, Mem, Aliases,
+                                    MustAliases, Contract);
+            IncomingStates.emplace_back(PredId, Incoming);
+          }
+        }
+        if (!CorrelatedAllPredecessors) {
+          addAliasEvent(AtReturn, Block.Id, OpIdx);
+          continue;
+        }
+        for (const auto &[PredId, Incoming] : IncomingStates) {
+          const MedBlock *Pred = blockAt(F, PredId);
+          const int EdgeOp = static_cast<int>(Pred->Ops.size());
+          addAliasEvent(Incoming, PredId, EdgeOp);
+        }
+      }
+    }
+    return Events;
+  }
+
+  struct OwnershipPublication {
+    const MedVar *Address = nullptr;
+    const MedVar *Value = nullptr;
+    const MedVar *AccessOutput = nullptr;
+    bool Conditional = false;
+  };
+
+  static std::optional<OwnershipPublication>
+  ownershipPublicationOf(const MedOp &Op) {
+    if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2) {
+      const int AddressIndex = Op.NumInputs >= 3 ? 1 : 0;
+      return OwnershipPublication{&Op.Inputs[AddressIndex],
+                                  &Op.Inputs[AddressIndex + 1], nullptr, false};
+    }
+    if (Op.Opcode == NdOp::ATOMIC_XCHG && Op.NumInputs >= 2)
+      return OwnershipPublication{&Op.Inputs[0], &Op.Inputs[1], &Op.Output,
+                                  false};
+    if (Op.Opcode == NdOp::ATOMIC_CMPXCHG && Op.NumInputs >= 3)
+      return OwnershipPublication{&Op.Inputs[0], &Op.Inputs[2], nullptr, true};
+    return std::nullopt;
+  }
+
+  EscapeState
+  publicationEscape(const MedOp &Op, const MemModel &Mem,
+                    const llvm::DenseSet<ValueKey> &Aliases,
+                    const llvm::DenseSet<ValueKey> &MustAliases) const {
+    const std::optional<OwnershipPublication> Publication =
+        ownershipPublicationOf(Op);
+    if (!Publication || Publication->Value->isConst())
+      return EscapeState::No;
+    const ValueKey PublishedKey = keyOf(*Publication->Value);
+    if (!Aliases.count(PublishedKey))
+      return EscapeState::No;
+    if (!valueHasPointerWidth(*Publication->Address))
+      return EscapeState::Unknown;
+    // The MedIR operand is only an offset within FS/GS.  Without an
+    // authenticated segment base it proves neither a local frame spill nor a
+    // fixed external publication target.
+    if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+      return EscapeState::Unknown;
+    if (Mem.stackOffset(*Publication->Address))
+      return EscapeState::No;
+    // An unresolved temporary may still name this frame.  Only a fixed
+    // address proves publication outside it; unresolved destinations remain a
+    // potential transfer for STORE and atomics alike.
+    if (Publication->Conditional || !Publication->Address->isConst())
+      return EscapeState::Unknown;
+    if (!MustAliases.count(PublishedKey) ||
+        !valueHasPointerWidth(*Publication->Value))
+      return EscapeState::Unknown;
+    if (Publication->AccessOutput &&
+        (!valueHasPointerWidth(*Publication->AccessOutput) ||
+         Publication->AccessOutput->Size != Publication->Value->Size))
+      return EscapeState::Unknown;
+    return EscapeState::Yes;
   }
 
   int catalogFreeArg(const MedCallInfo &CI) const {
@@ -990,13 +1682,13 @@ private:
     return Args;
   }
 
-  bool allocates(const MedCallInfo &CI) const {
+  HeapReturnState allocationState(const MedCallInfo &CI) const {
     if (const SinkEntry *E = catalogSink(CI))
       if (E->Kind == SinkKind::Alloc || E->Kind == SinkKind::Realloc)
-        return true;
-    if (const Summary *S = callSummary(CI); S && S->ReturnsHeap)
-      return true;
-    return false;
+        return HeapReturnState::Yes;
+    if (const Summary *S = callSummary(CI))
+      return S->ReturnsHeap;
+    return HeapReturnState::No;
   }
 
   static bool sameSummary(const Summary &A, const Summary &B) {
@@ -1103,42 +1795,25 @@ private:
     for (int PI = 0; PI < static_cast<int>(F.Params.size()); ++PI) {
       if (F.Params[PI].isConst())
         continue;
+      const ReturnContract Contract = returnContract(F);
       llvm::DenseSet<ValueKey> Alias = Mem.aliasClosure(F.Params[PI]);
       llvm::DenseSet<ValueKey> MustAlias = Mem.mustAliasClosure(F.Params[PI]);
-      std::vector<FreeEvent> DefiniteEscapes;
-      bool HasPotentialEscape = false;
+      ReturnEscapeEvents ReturnEvents =
+          returnEscapeEvents(F, Mem, Alias, MustAlias, Contract);
+      std::vector<FreeEvent> DefiniteEscapes = std::move(ReturnEvents.Definite);
+      bool HasPotentialEscape = !ReturnEvents.Potential.empty();
       for (const MedBlock &B : F.Blocks) {
         for (int OI = 0; OI < static_cast<int>(B.Ops.size()); ++OI) {
           const MedOp &Op = B.Ops[OI];
-          if (Op.Opcode == NdOp::RETURN && returnsValue(F)) {
-            for (unsigned I = 0; I < Op.NumInputs; ++I) {
-              if (Op.Inputs[I].isConst())
-                continue;
-              const ValueKey InputKey = keyOf(Op.Inputs[I]);
-              if (MustAlias.count(InputKey)) {
-                if (valueHasPointerWidth(Op.Inputs[I]))
-                  DefiniteEscapes.push_back({B.Id, OI});
-                else
-                  HasPotentialEscape = true;
-                break;
-              }
-              HasPotentialEscape |= Alias.count(InputKey) != 0;
-            }
-          } else if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2) {
-            const MedVar &Addr = Op.Inputs[Op.NumInputs >= 3 ? 1 : 0];
-            const MedVar &Val = Op.Inputs[Op.NumInputs >= 3 ? 2 : 1];
-            if (Val.isConst() ||
-                (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
-                 Mem.stackOffset(Addr)))
-              continue;
-            const ValueKey StoredKey = keyOf(Val);
-            if (MustAlias.count(StoredKey)) {
-              if (valueHasPointerWidth(Val))
-                DefiniteEscapes.push_back({B.Id, OI});
-              else
-                HasPotentialEscape = true;
-            } else
-              HasPotentialEscape |= Alias.count(StoredKey) != 0;
+          switch (publicationEscape(Op, Mem, Alias, MustAlias)) {
+          case EscapeState::Yes:
+            DefiniteEscapes.push_back({B.Id, OI});
+            break;
+          case EscapeState::Unknown:
+            HasPotentialEscape = true;
+            break;
+          case EscapeState::No:
+            break;
           }
         }
       }
@@ -1176,65 +1851,84 @@ private:
         S.UnknownParam.insert(PI);
     }
 
-    if (!returnsValue(F))
+    const ReturnContract HeapContract = returnContract(F);
+    if (HeapContract.hasNoValue())
       return S;
 
     for (const MedCallInfo &CI : F.CallInfos) {
-      bool Alloc = false;
+      HeapReturnState Allocation = allocationState(CI);
       if (const SinkEntry *E = catalogSink(CI)) {
         if (E->Kind == SinkKind::Alloc && E->HandleArg >= 0)
           continue;
-        Alloc = E->Kind == SinkKind::Alloc || E->Kind == SinkKind::Realloc;
       }
-      if (!Alloc)
-        if (const Summary *CalleeSummary = callSummary(CI))
-          Alloc = CalleeSummary->ReturnsHeap;
-      if (!Alloc)
+      if (Allocation == HeapReturnState::No)
         continue;
       const MedOp *Op = opAt(F, CI.BlockId, CI.OpIdx);
       if (!Op || Op->Output.isConst() || Op->Output.Size == 0 ||
           !valueHasPointerWidth(Op->Output))
         continue;
+      llvm::DenseSet<ValueKey> Alias = Mem.aliasClosure(Op->Output);
       llvm::DenseSet<ValueKey> MustAlias = Mem.mustAliasClosure(Op->Output);
-      std::vector<FreeEvent> ReturnEvents;
-      bool HasIncompleteReturn = false;
-      for (const MedBlock &B : F.Blocks)
-        for (int OI = 0; OI < static_cast<int>(B.Ops.size()); ++OI) {
-          const MedOp &O = B.Ops[OI];
-          if (O.Opcode != NdOp::RETURN)
-            continue;
-          for (unsigned Input = 0; Input < O.NumInputs; ++Input)
-            if (!O.Inputs[Input].isConst() &&
-                MustAlias.count(keyOf(O.Inputs[Input]))) {
-              if (valueHasPointerWidth(O.Inputs[Input]))
-                ReturnEvents.push_back({B.Id, OI});
-              else
-                HasIncompleteReturn = true;
-              break;
-            }
-        }
+      const ReturnEscapeEvents ReturnEvents =
+          returnEscapeEvents(F, Mem, Alias, MustAlias, HeapContract);
       std::vector<FreeEvent> DefiniteFrees;
-      bool HasIncompleteFree = false;
+      std::vector<FreeEvent> PotentialFrees;
       for (const MedCallInfo &FC : F.CallInfos)
         for (int FreeArg : freeArgsOf(FC)) {
           if (FreeArg < 0 || FreeArg >= static_cast<int>(FC.Args.size()) ||
               FC.Args[FreeArg].isConst())
             continue;
-          const bool AliasesAllocation =
-              MustAlias.count(keyOf(FC.Args[FreeArg])) != 0;
-          if (!argumentHasPointerWidth(FC, FreeArg)) {
-            HasIncompleteFree |= AliasesAllocation;
+          const ValueKey FreeKey = keyOf(FC.Args[FreeArg]);
+          if (!Alias.count(FreeKey))
             continue;
-          }
-          if (AliasesAllocation && !freeArgMayFail(FC, FreeArg)) {
+          if (MustAlias.count(FreeKey) &&
+              argumentHasPointerWidth(FC, FreeArg) &&
+              !freeArgMayFail(FC, FreeArg)) {
             DefiniteFrees.push_back({FC.BlockId, FC.OpIdx});
-            break;
+          } else {
+            // A fallible, width-incomplete, or may-alias release can still
+            // dispose of this allocation.  Keep the event so a later return
+            // of the alias cannot be advertised as definite ownership.
+            PotentialFrees.push_back({FC.BlockId, FC.OpIdx});
           }
+          break;
         }
-      if (!HasIncompleteReturn && !HasIncompleteFree &&
-          reachesAnyEventWithoutBlocker(F, CI.BlockId, CI.OpIdx, ReturnEvents,
-                                        DefiniteFrees))
-        S.ReturnsHeap = true;
+      bool DefiniteReturnProofIncomplete = false;
+      const bool ReachesDefiniteReturn = reachesAnyEventWithoutBlocker(
+          F, CI.BlockId, CI.OpIdx, ReturnEvents.Definite, DefiniteFrees,
+          /*FollowExceptional=*/true, &DefiniteReturnProofIncomplete);
+      const bool ReachesPotentialReturn = reachesAnyEventWithoutBlocker(
+          F, CI.BlockId, CI.OpIdx, ReturnEvents.Potential, DefiniteFrees);
+      const bool ReachesNonOwnedNonNullReturn = reachesAnyEventWithoutBlocker(
+          F, CI.BlockId, CI.OpIdx, ReturnEvents.NonOwnedNonNull, {});
+      if (!ReachesDefiniteReturn && !ReachesPotentialReturn)
+        continue;
+
+      const auto canReachAliasReturnAfter = [&](const FreeEvent &Free) {
+        const std::vector<FreeEvent> FreeTarget{Free};
+        if (!reachesAnyEventWithoutBlocker(F, CI.BlockId, CI.OpIdx, FreeTarget,
+                                           {}))
+          return false;
+        return reachesAnyEventWithoutBlocker(F, Free.BlockId, Free.OpIdx,
+                                             ReturnEvents.Definite, {}) ||
+               reachesAnyEventWithoutBlocker(F, Free.BlockId, Free.OpIdx,
+                                             ReturnEvents.Potential, {});
+      };
+      const bool MayReturnFreedAlias =
+          std::any_of(DefiniteFrees.begin(), DefiniteFrees.end(),
+                      canReachAliasReturnAfter) ||
+          std::any_of(PotentialFrees.begin(), PotentialFrees.end(),
+                      canReachAliasReturnAfter);
+
+      const HeapReturnState Candidate =
+          ReachesDefiniteReturn && !ReachesPotentialReturn &&
+                  !ReachesNonOwnedNonNullReturn && !MayReturnFreedAlias &&
+                  !DefiniteReturnProofIncomplete &&
+                  pointerContractCompatible(HeapContract) &&
+                  Allocation == HeapReturnState::Yes
+              ? HeapReturnState::Yes
+              : HeapReturnState::May;
+      S.ReturnsHeap = combineHeapReturnCandidates(S.ReturnsHeap, Candidate);
     }
     return S;
   }
@@ -1327,23 +2021,23 @@ private:
           break;
         }
       if (!Blk)
-        continue;
+        return true;
       if (FollowExceptional && ExpandedExceptional.insert(BlkId).second)
         for (const ExceptionalEdge &Edge : Blk->ExceptionalSuccs) {
           if (Edge.BlockId < 0)
             return true;
           enqueue(Edge.BlockId, 0);
         }
+      if (isEventSite(BlkId, OpIdx, Events)) {
+        if (ReachedEvent)
+          *ReachedEvent = true;
+        continue;
+      }
       if (OpIdx >= static_cast<int>(Blk->Ops.size())) {
         if (Blk->Succs.empty())
           return true;
         for (int S : Blk->Succs)
           enqueue(S, 0);
-        continue;
-      }
-      if (isEventSite(BlkId, OpIdx, Events)) {
-        if (ReachedEvent)
-          *ReachedEvent = true;
         continue;
       }
       if (Blk->Ops[OpIdx].Opcode == NdOp::RETURN)
@@ -1369,11 +2063,12 @@ private:
     return ReachedEvent && !HasUncoveredExit;
   }
 
-  bool reachesAnyEventWithoutBlocker(const MedFunc &F, int StartBlock,
-                                     int StartOp,
-                                     const std::vector<FreeEvent> &Targets,
-                                     const std::vector<FreeEvent> &Blockers,
-                                     bool FollowExceptional = true) const {
+  bool
+  reachesAnyEventWithoutBlocker(const MedFunc &F, int StartBlock, int StartOp,
+                                const std::vector<FreeEvent> &Targets,
+                                const std::vector<FreeEvent> &Blockers,
+                                bool FollowExceptional = true,
+                                bool *TraversalIncomplete = nullptr) const {
     if (Targets.empty())
       return false;
     llvm::DenseSet<ValueKey> SeenPts;
@@ -1384,6 +2079,7 @@ private:
         Work.emplace_back(BlockId, OpIdx);
     };
     enqueue(StartBlock, StartOp + 1);
+    bool ReachedTarget = false;
     while (!Work.empty()) {
       const auto [BlockId, OpIdx] = Work.front();
       Work.pop_front();
@@ -1393,25 +2089,37 @@ private:
           Block = &Candidate;
           break;
         }
-      if (!Block)
+      if (!Block) {
+        if (TraversalIncomplete)
+          *TraversalIncomplete = true;
         continue;
+      }
       if (FollowExceptional && ExpandedExceptional.insert(BlockId).second)
-        for (const ExceptionalEdge &Edge : Block->ExceptionalSuccs)
+        for (const ExceptionalEdge &Edge : Block->ExceptionalSuccs) {
           if (Edge.BlockId >= 0)
             enqueue(Edge.BlockId, 0);
+          else if (TraversalIncomplete)
+            *TraversalIncomplete = true;
+        }
+      if (isEventSite(BlockId, OpIdx, Blockers))
+        continue;
+      if (isEventSite(BlockId, OpIdx, Targets)) {
+        ReachedTarget = true;
+        if (!TraversalIncomplete)
+          return true;
+        continue;
+      }
       if (OpIdx >= static_cast<int>(Block->Ops.size())) {
+        if (Block->Succs.empty() && TraversalIncomplete)
+          *TraversalIncomplete = true;
         for (int Succ : Block->Succs)
           enqueue(Succ, 0);
         continue;
       }
-      if (isEventSite(BlockId, OpIdx, Blockers))
-        continue;
-      if (isEventSite(BlockId, OpIdx, Targets))
-        return true;
       if (Block->Ops[OpIdx].Opcode != NdOp::RETURN)
         enqueue(BlockId, OpIdx + 1);
     }
-    return false;
+    return ReachedTarget;
   }
 
   bool shouldReportLeak(const MedFunc &F, const MedCallInfo &Alloc,
@@ -1683,8 +2391,19 @@ private:
 
     for (size_t I = 0; I < F.CallInfos.size(); ++I) {
       const MedCallInfo &CI = F.CallInfos[I];
-      if (!allocates(CI))
+      const HeapReturnState Allocation = allocationState(CI);
+      if (Allocation == HeapReturnState::No)
         continue;
+      const auto emitAllocationFinding = [&](Finding Fn) {
+        if (Allocation == HeapReturnState::May) {
+          if (Fn.TheVerdict != Verdict::Unknown) {
+            Fn.TheVerdict = Verdict::Unknown;
+            Fn.TheConfidence = Confidence::Low;
+          }
+          Fn.Detail = "callee may return heap ownership; " + Fn.Detail;
+        }
+        Out.push_back(std::move(Fn));
+      };
       if (const SinkEntry *E = catalogSink(CI);
           E && E->Kind == SinkKind::Alloc && E->HandleArg >= 0) {
         Finding Fn = baseFinding(F, VulnClass::HeapLeak, callVA(F, CI),
@@ -1692,7 +2411,7 @@ private:
         Fn.TheVerdict = Verdict::Unknown;
         Fn.TheConfidence = Confidence::Low;
         Fn.Detail = "allocation output handle was not recovered";
-        Out.push_back(std::move(Fn));
+        emitAllocationFinding(std::move(Fn));
         continue;
       }
       const MedOp *AllocOp = opAt(F, CI.BlockId, CI.OpIdx);
@@ -1702,7 +2421,7 @@ private:
         Fn.TheVerdict = Verdict::Unknown;
         Fn.TheConfidence = Confidence::Low;
         Fn.Detail = "allocation result was not recovered";
-        Out.push_back(std::move(Fn));
+        emitAllocationFinding(std::move(Fn));
         continue;
       }
       if (!valueHasPointerWidth(AllocOp->Output)) {
@@ -1711,7 +2430,7 @@ private:
         Fn.TheVerdict = Verdict::Unknown;
         Fn.TheConfidence = Confidence::Low;
         Fn.Detail = "allocation result has incompatible target pointer width";
-        Out.push_back(std::move(Fn));
+        emitAllocationFinding(std::move(Fn));
         continue;
       }
 
@@ -1787,7 +2506,7 @@ private:
               };
               Fn.RequireNonNullCallVA = AllocVA;
             }
-            Out.push_back(std::move(Fn));
+            emitAllocationFinding(std::move(Fn));
             ReportedDouble = true;
             break;
           }
@@ -1822,7 +2541,7 @@ private:
             Fn.TheConfidence = Confidence::Low;
             Fn.Detail = "a conditional release may have occurred before a "
                         "later release";
-            Out.push_back(std::move(Fn));
+            emitAllocationFinding(std::move(Fn));
             ReportedDouble = true;
             break;
           }
@@ -1862,7 +2581,7 @@ private:
               };
               Fn.RequireNonNullCallVA = AllocVA;
             }
-            Out.push_back(std::move(Fn));
+            emitAllocationFinding(std::move(Fn));
             ReportedUAF = true;
             break;
           }
@@ -1886,7 +2605,7 @@ private:
                     ? "a derived address may access a handle after it "
                       "was released"
                     : "callee may access a handle after it was released";
-            Out.push_back(std::move(Fn));
+            emitAllocationFinding(std::move(Fn));
             ReportedPossibleUAF = true;
             break;
           }
@@ -1909,7 +2628,7 @@ private:
             Fn.TheConfidence = Confidence::Low;
             Fn.Detail = "a conditional release may have occurred before this "
                         "handle use";
-            Out.push_back(std::move(Fn));
+            emitAllocationFinding(std::move(Fn));
             return true;
           };
           for (const UseEvent &U : Uses.Definite)
@@ -1942,7 +2661,8 @@ private:
                        ? "heap lifetime depends on a conditional release"
                        : "heap lifetime depends on a call with unrecovered "
                          "arguments")
-                : "heap handle reaches a call without a retention summary";
+                : "heap handle may escape without an authenticated return or "
+                  "retention contract";
         if (MayLeakOnNormalPath) {
           Fn.RequiredPathEvents = {
               findingEvent(F, CI.BlockId, CI.OpIdx, callVA(F, CI))};
@@ -1952,7 +2672,7 @@ private:
           Fn.RequireReturnedPath = true;
           Fn.RequireNonNullCallVA = AllocVA;
         }
-        Out.push_back(std::move(Fn));
+        emitAllocationFinding(std::move(Fn));
       } else if (MayLeak && Escape == EscapeState::No) {
         Finding Fn = baseFinding(F, VulnClass::HeapLeak, callVA(F, CI),
                                  callName(CI), CI.TargetAddr, CI.IsIndirect);
@@ -1972,7 +2692,7 @@ private:
           Fn.RequireReturnedPath = true;
           Fn.RequireNonNullCallVA = AllocVA;
         }
-        Out.push_back(std::move(Fn));
+        emitAllocationFinding(std::move(Fn));
       }
     }
   }
@@ -2376,14 +3096,20 @@ private:
       for (int Oi = 0; Oi < static_cast<int>(B.Ops.size()); ++Oi) {
         const MedOp &Op = B.Ops[Oi];
         if (Op.Opcode == NdOp::LOAD || detail::isStackMemoryWrite(Op.Opcode)) {
-          const MedVar *Addr = detail::memoryAddress(Op);
+          // StackSlotFlow deliberately rejects FS/GS operands because their
+          // numeric offsets cannot identify the default stack domain.  A
+          // lifetime use still needs the raw address carrier: if it aliases a
+          // freed allocation, an unknown segment base makes the dereference
+          // possible rather than impossible.
+          const MedVar *Addr = detail::rawMemoryAddress(Op);
           if (!Addr || Addr->isConst())
             continue;
           const ValueKey AddrKey = keyOf(*Addr);
           if (!Alias.count(AddrKey))
             continue;
           UseEvent Event{B.Id, Oi, Op.Addr, 0, "memory_access", false};
-          (MustAlias.count(AddrKey) && valueHasPointerWidth(*Addr)
+          (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+                   MustAlias.count(AddrKey) && valueHasPointerWidth(*Addr)
                ? Uses.Definite
                : Uses.Possible)
               .push_back(std::move(Event));
@@ -2423,43 +3149,23 @@ private:
                       const llvm::DenseSet<ValueKey> &Alias,
                       const llvm::DenseSet<ValueKey> &MustAlias,
                       const MedCallInfo &Alloc) const {
-    bool Unknown = false;
+    const ReturnContract Contract = returnContract(F);
+    ReturnEscapeEvents ReturnEvents =
+        returnEscapeEvents(F, Mem, Alias, MustAlias, Contract);
+    std::vector<FreeEvent> DefiniteEscapes = std::move(ReturnEvents.Definite);
+    std::vector<FreeEvent> PotentialEscapes = std::move(ReturnEvents.Potential);
     for (const MedBlock &B : F.Blocks)
-      for (const MedOp &Op : B.Ops) {
-        if (Op.Opcode == NdOp::RETURN && returnsValue(F)) {
-          for (unsigned I = 0; I < Op.NumInputs; ++I) {
-            if (Op.Inputs[I].isConst())
-              continue;
-            const ValueKey InputKey = keyOf(Op.Inputs[I]);
-            if (!Alias.count(InputKey))
-              continue;
-            if (MustAlias.count(InputKey)) {
-              if (valueHasPointerWidth(Op.Inputs[I]))
-                return EscapeState::Yes;
-              Unknown = true;
-              continue;
-            }
-            Unknown = true;
-          }
-        } else if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2) {
-          const MedVar &Addr = Op.Inputs[Op.NumInputs >= 3 ? 1 : 0];
-          const MedVar &Val = Op.Inputs[Op.NumInputs >= 3 ? 2 : 1];
-          // Spilling the handle into its own stack frame is not an escape; only
-          // a write through a non-stack address publishes it.
-          if (Val.isConst() ||
-              (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
-               Mem.stackOffset(Addr)))
-            continue;
-          const ValueKey StoredKey = keyOf(Val);
-          if (!Alias.count(StoredKey))
-            continue;
-          if (MustAlias.count(StoredKey)) {
-            if (valueHasPointerWidth(Val))
-              return EscapeState::Yes;
-            Unknown = true;
-            continue;
-          }
-          Unknown = true;
+      for (int OI = 0; OI < static_cast<int>(B.Ops.size()); ++OI) {
+        const MedOp &Op = B.Ops[OI];
+        switch (publicationEscape(Op, Mem, Alias, MustAlias)) {
+        case EscapeState::Yes:
+          DefiniteEscapes.push_back({B.Id, OI});
+          break;
+        case EscapeState::Unknown:
+          PotentialEscapes.push_back({B.Id, OI});
+          break;
+        case EscapeState::No:
+          break;
         }
       }
     for (const MedCallInfo &CI : F.CallInfos) {
@@ -2468,6 +3174,8 @@ private:
       llvm::DenseSet<int> FreeArgs;
       for (int FA : freeArgsOf(CI))
         FreeArgs.insert(FA);
+      bool CallDefinitelyEscapes = false;
+      bool CallMayEscape = false;
       for (int I = 0; I < static_cast<int>(CI.Args.size()); ++I) {
         if (FreeArgs.count(I) || CI.Args[I].isConst())
           continue;
@@ -2476,18 +3184,37 @@ private:
         switch (callArgEscape(CI, I)) {
         case EscapeState::Yes:
           if (MustAlias.count(keyOf(CI.Args[I])))
-            return EscapeState::Yes;
-          Unknown = true;
+            CallDefinitelyEscapes = true;
+          else
+            CallMayEscape = true;
           break;
         case EscapeState::Unknown:
-          Unknown = true;
+          CallMayEscape = true;
           break;
         case EscapeState::No:
           break;
         }
       }
+      if (CallDefinitelyEscapes)
+        DefiniteEscapes.push_back({CI.BlockId, CI.OpIdx});
+      else if (CallMayEscape)
+        PotentialEscapes.push_back({CI.BlockId, CI.OpIdx});
     }
-    return Unknown ? EscapeState::Unknown : EscapeState::No;
+
+    // Ownership has definitely left this function only when every exit
+    // reachable after the allocation crosses a proven transfer event.  A
+    // transfer on one sibling branch must not suppress a leak on another.
+    bool ReachedDefiniteEscape = false;
+    const bool HasUncoveredExit = reachesExitWithoutEvent(
+        F, Alloc.BlockId, Alloc.OpIdx, DefiniteEscapes, &ReachedDefiniteEscape);
+    if (ReachedDefiniteEscape && !HasUncoveredExit)
+      return EscapeState::Yes;
+
+    const bool ReachedPotentialEscape = reachesAnyEventWithoutBlocker(
+        F, Alloc.BlockId, Alloc.OpIdx, PotentialEscapes, {});
+    return ReachedDefiniteEscape || ReachedPotentialEscape
+               ? EscapeState::Unknown
+               : EscapeState::No;
   }
 };
 

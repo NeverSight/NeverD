@@ -119,9 +119,61 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 
 ---
 
+## قابلية الوصول بين الإجراءات من مداخل معروفة
+
+يحمل كل اكتشاف ثلاث عبارات مستقلة لا يجوز دمجها:
+
+| الحقل | السؤال | القيم |
+|-------|--------|-------|
+| `verdict` | ماذا أثبت تحليل السلامة المحلي عن العملية؟ | `SAFE` و`UNSAFE` و`UNKNOWN` |
+| `reachability.status` | هل تقع الدالة الحاوية على مسار تحكم مستعاد من مدخل أصلي معروف؟ | `REACHABLE` و`UNREACHABLE` و`UNKNOWN` |
+| `reachability.attacker_control` | ماذا أثبت slice الوسيط عن تأثير المهاجم عند هذا الاكتشاف؟ | `TAINTED` و`BOUNDED` و`UNKNOWN` |
+
+قابلية الوصول دليل إضافي؛ لا تعيد كتابة `verdict` للاكتشاف ولا الحكم الإجمالي ولا
+رمز خروج CLI. لذلك قد يحمل فيضان مثبت محليًا `verdict=UNSAFE` مع
+`reachability.status=UNREACHABLE`. وعلى المستهلك الذي يشترط مسار هجوم قابلًا
+للتنفيذ أن يفحص الحقلين معًا.
+
+الجذور هي مداخل التطبيق المعروفة (`application` مثل `main` أو `WinMain`)، ومدخل
+الصورة (`image`)، والروتينات المصدّرة (`export`). وإذا كان للدالة أكثر من هوية جذر
+فالترتيب الحتمي هو `application` ثم `image` ثم `export`. يسجل
+`reachability.entry` الحقول `va` و`name` و`kind`. ويحمل الاكتشاف القابل للوصول
+غير الجذر أيضًا أقصر `call_chain` حتمي من حواف داخلية دقيقة؛ وتسجل كل حافة
+`caller_va` وموضع الاستدعاء `call_va` و`callee_va`، و`kind` بقيمة `direct` أو
+`indirect`.
+
+لا يصدر `UNREACHABLE` إلا عند وجود جذر واكتمال جرد الاستدعاءات الداخلية وعدم
+استنفاد ميزانية العمق مع غياب أي مسار. أما للدالة التي لم يثبت الوصول إليها بدليل
+إيجابي آخر، فإن غياب الجذور، أو هويات الدوال المكررة أو الملتبسة، أو عدم اتساق
+جرد CFG والاستدعاءات، أو الأهداف الداخلية التنفيذية غير المحلولة، أو استنفاد
+العمق، يمنع الإثبات السلبي وينتج `reachability.status=UNKNOWN` مع `reason`
+و`budget_hit` عند اللزوم. كما تُبقي ABI المجهولة، أو عدم تطابق عرض الوسيط، أو
+خانة variadic فقط، أو slice غير مكتمل، أو استنفاد ميزانية العمق أو الملخص، تحكم
+المهاجم غير المثبت UNKNOWN؛ وتبقى الحقائق المثبتة صالحة ولا يخترع التحليل انتقالًا.
+
+تعد عدادات التقرير الاكتشافات لا الدوال ولا المسارات. يعد `control_reachable`
+الحالات ذات `status=REACHABLE`، و`attacker_reachable` هو الجزء منها الذي يحمل
+أيضًا `attacker_control=TAINTED`. ويعد `reachability_unknown` و`unreachable`
+حالتي التحكم الأخريين. وهذه العدادات منفصلة عن `safe` و`unsafe` و`unknown` التي
+تعد الأحكام.
+
+---
+
 ## الميزانيات والخرج والارتباطات
 
-استكشاف الصيد والمحلّل محدودان (`--max-paths` و`--max-steps` و`--max-loop` و`--solver-conflicts`)؛ استنفاد الميزانية يعطي UNKNOWN. يطبع الأمران JSON ويحترمان `-o`. رمز الخروج هو `0` لـ SAFE و`2` لـ UNSAFE و`1` لـ UNKNOWN أو الخطأ.
+استكشاف الصيد والمحلّل محدودان (`--max-paths` و`--max-steps` و`--max-loop` و`--solver-conflicts`). وفي العمل بين الإجراءات يحد `max_call_depth` عدد حواف الاستدعاء الداخلية من مدخل معروف، ويحد `max_summary_iterations` جولات النقطة الثابتة لتحكم المهاجم. القيمتان الافتراضيتان هما 64 حافة، وعدد جولات يساوي حد العمق الفعال زائد واحد. يفشل استنفاد الميزانية مغلقًا كما سبق. قد يترك استنفاد `max_call_depth` دالة لم يُوصل إليها بعد بحالة `status=UNKNOWN`؛ ولا يمحو استنفاد `max_summary_iterations` شاهد البنية، لذلك قد تجتمع `status=REACHABLE` مع `attacker_control=UNKNOWN` و`budget_hit=true`. يطبع الأمران JSON ويحترمان `-o`. رمز الخروج هو `0` لـ SAFE و`2` لـ UNSAFE و`1` لـ UNKNOWN أو الخطأ.
+
+تختار القيمة صفر افتراضي المحرك على كل واجهة عامة:
+
+| الواجهة | عمق التحكم | ملخص المهاجم |
+|---------|------------|---------------|
+| CLI (`audit` و`hunt`) | `--max-call-depth <n>` | `--max-summary-iterations <n>` |
+| C (`neverd_safety_options`) | `max_call_depth` | `max_summary_iterations` |
+| Python (`Session.audit()` / `Session.hunt()`) | `max_call_depth=<n>` | `max_summary_iterations=<n>` |
+
+يصفّر مستدعي C البنية `neverd_safety_options` ويضبط
+`struct_size=sizeof(neverd_safety_options)`؛ وتحتفظ أحجام البنية الأقدم بالقيم
+الافتراضية. يتحقق Python من القيمتين كعددين صحيحين غير موقّعين بعرض 32 بت.
 
 التحليلان نفسهما متاحان عبر واجهة C (`neverd_session_audit_json` / `neverd_session_hunt_json` مع `neverd_safety_options` ذي إصدار) وSDK بايثون (`Session.audit()` / `Session.hunt()`).
 
@@ -143,11 +195,12 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
   "capacity": 16,
   "capacity_kind": "exact",
   "corroboration": "path predicate and overflow are jointly satisfiable",
+  "reachability": { "status": "REACHABLE", "attacker_control": "TAINTED", "budget_hit": false, "entry": { "va": "0x1000", "name": "main", "kind": "application" }, "call_chain": [{ "caller_va": "0x1000", "call_va": "0x1080", "callee_va": "0x1100", "kind": "direct" }] },
   "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" }, "candidate_values": [{ "name": "copy_length", "value": "17" }, { "name": "argv[1]", "value": "16 bytes" }], "replayable": false, "replay": { "adapter": "process-input-v1", "reason": "argv input is not supported by process-input-v1" }, "symbolic_model": [{ "id": 0, "name": "copy_len", "width": 64, "value_hex": "0x11", "origin": "input" }] }
 }
 ```
 
-الحقل `replayable` مشتق وليس وعدًا مستقلًا: يكون `true` فقط عندما يحتوي `replay` على خطة إدخال مكتملة للمحوّل `process-input-v1`. تسجل الخطة بايتات البيئة الدقيقة، وأول تسلسل بايتات للدخل القياسي عند استخدامه، وربط معرّفات إسنادات المحلّل بهذه المدخلات؛ وعند غيابها يشرح `replay.reason` السبب. الحقول الجديدة إضافية؛ يبقى `schema_version` الأعلى مساويًا `1`.
+الحقل `replayable` مشتق وليس وعدًا مستقلًا: يكون `true` فقط عندما يحتوي `replay` على خطة إدخال مكتملة للمحوّل `process-input-v1`. تسجل الخطة بايتات البيئة الدقيقة، وأول تسلسل بايتات للدخل القياسي عند استخدامه، وربط معرّفات إسنادات المحلّل بهذه المدخلات؛ وعند غيابها يشرح `replay.reason` السبب. حقول إعادة التشغيل وقابلية الوصول إضافية؛ يبقى `schema_version` الأعلى مساويًا `1`.
 
 ---
 
@@ -158,4 +211,4 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 - تبقى نسخ المحارف العريضة وعمليات الإلحاق المسجّلة في الكتالوج UNKNOWN حتى استعادة عرض العنصر والطول الحالي للوجهة. كما تبقى مخصّصات وسيط الخرج وملكية `realloc` الشرطية UNKNOWN عندما يتعذر إثبات انتقال المقبض.
 - **P0** (هذا الإصدار، الصيغ الثلاث): كتالوج المصارف، مرشح الوسائط المسبق، صيد فيضان النسخ، تدقيق عمر الكومة. يشغّل كل مضيف ست fixtures لـ PE وELF وMach-O على x86-64 وAArch64.
 - **P1**: تتوفر فحوص فيضان المكدس/العالمي والقراءات المحلية غير المهيأة وسلاسل التنسيق؛ وتبقى أنواع مكدس PDB الأغنى ومخصِّصات المنصة الإضافية تغطية تزايدية، ويظل غياب الملخص الدقيق UNKNOWN.
-- **P2**: فحوصات وقت تشغيل يدرجها patch، قابلية وصول المهاجم بين الإجراءات.
+- يغطي slice الحالي المداخل المعروفة وقابلية الوصول البنيوية بين الإجراءات والانتقال الرتيب لمعاملات المهاجم. ويوفّر محوّل `lowir-concolic-v1` التجريبي والمنفصل الآن قلبات فروع ببذور سجلات متحقق منها بإعادة التشغيل على مصفوفة الصيغ والمعماريات الأصلية الإلزامية؛ ويظل غير شامل ولا يغيّر أحكام السلامة. يوفّر `binary-sanitizer-v1` التجريبي الآن على Darwin حراس counted-write لكل المواقع أو الرفض ونشرًا موثّقًا، لكن receipt يوثّق كائن الدليل المحتفظ به أثناء المعاملة فقط، لا ارتباطًا دائمًا وقابلًا لإعادة التحقق بالـ pathname الأصلي. ويبقى `process-replay-v1` الأوسع محصورًا في حد Phase 0 بنمط fail-closed للخطة والمنسق والتوافر؛ ولا ينفذ أي مضيف replay أصليًا حاليًا.

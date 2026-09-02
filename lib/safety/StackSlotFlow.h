@@ -27,6 +27,105 @@ struct ReachingStackValues {
   std::vector<MedVar> Values;
 };
 
+/// Validates the normal-edge predecessor relation used by exact PHI proofs.
+/// A malformed or partial CFG must never turn a subset of incoming values into
+/// an exact fact.
+class ExactPhiGraph {
+public:
+  explicit ExactPhiGraph(const MedFunc &F) : F(F) {
+    for (const MedBlock &Block : F.Blocks)
+      if (!Blocks.emplace(Block.Id, &Block).second)
+        UniqueBlockIds = false;
+
+    for (const MedBlock &Block : F.Blocks) {
+      std::set<int> Seen;
+      for (int SuccId : Block.Succs) {
+        if (!Seen.insert(SuccId).second)
+          DuplicateIncomingEdges.insert(SuccId);
+        ReversePredecessors[SuccId].insert(Block.Id);
+      }
+    }
+  }
+
+  bool hasCompleteNormalPredecessors(const MedBlock &Block) const {
+    if (!UniqueBlockIds || Blocks.find(Block.Id) == Blocks.end() ||
+        Blocks.at(Block.Id) != &Block || DuplicateIncomingEdges.count(Block.Id))
+      return false;
+
+    std::set<int> Declared;
+    for (int PredId : Block.Preds) {
+      if (Blocks.find(PredId) == Blocks.end() ||
+          !Declared.insert(PredId).second)
+        return false;
+    }
+
+    auto It = ReversePredecessors.find(Block.Id);
+    return It == ReversePredecessors.end() ? Declared.empty()
+                                           : It->second == Declared;
+  }
+
+  bool hasCompleteIncoming(int BlockIndex, const PhiNode &Phi) const {
+    if (BlockIndex < 0 || BlockIndex >= static_cast<int>(F.Blocks.size()) ||
+        Phi.Output.Size == 0 || Phi.Args.empty())
+      return false;
+    const MedBlock &Block = F.Blocks[BlockIndex];
+    if (!hasCompleteNormalPredecessors(Block) || Block.Preds.empty() ||
+        Phi.Args.size() != Block.Preds.size())
+      return false;
+
+    const std::set<int> Expected(Block.Preds.begin(), Block.Preds.end());
+    std::set<int> Actual;
+    for (const auto &[PredId, Arg] : Phi.Args)
+      if (!Expected.count(PredId) || !Actual.insert(PredId).second ||
+          Arg.Size != Phi.Output.Size)
+        return false;
+    return Actual == Expected;
+  }
+
+private:
+  const MedFunc &F;
+  std::map<int, const MedBlock *> Blocks;
+  std::map<int, std::set<int>> ReversePredecessors;
+  std::set<int> DuplicateIncomingEdges;
+  bool UniqueBlockIds = true;
+};
+
+inline bool sameRegisterOccurrence(const MedVar &Left, const MedVar &Right) {
+  return Left.Kind == MedVar::Reg && Right.Kind == MedVar::Reg &&
+         Left.Id == Right.Id && Left.SSAVer == Right.SSAVer &&
+         Left.RegOff == Right.RegOff && Left.Size == Right.Size &&
+         Left.TheArch == Right.TheArch && Left.RenameTag == Right.RenameTag;
+}
+
+/// Recognizes the canonical MedIR marker for an incoming machine register.
+/// The marker must be a self-copy in the unique entry block's leading COPY
+/// prefix; a same-shaped copy later in the function is an ordinary definition.
+inline bool isAuthenticatedEntryRegisterLiveIn(const MedFunc &F,
+                                               const MedVar &Value) {
+  if (Value.Kind != MedVar::Reg || Value.SSAVer != 0 || Value.Size == 0)
+    return false;
+
+  const MedBlock *Entry = nullptr;
+  for (const MedBlock &Block : F.Blocks) {
+    if (Block.StartAddr != F.Entry)
+      continue;
+    if (Entry)
+      return false;
+    Entry = &Block;
+  }
+  if (!Entry)
+    return false;
+
+  for (const MedOp &Op : Entry->Ops) {
+    if (Op.Opcode != NdOp::COPY)
+      break;
+    if (Op.NumInputs == 1 && sameRegisterOccurrence(Op.Output, Value) &&
+        sameRegisterOccurrence(Op.Inputs[0], Op.Output))
+      return true;
+  }
+  return false;
+}
+
 inline bool isAtomicMemoryAccess(NdOp Opcode) {
   return Opcode == NdOp::ATOMIC_XCHG || Opcode == NdOp::ATOMIC_ADD ||
          Opcode == NdOp::ATOMIC_CMPXCHG;
@@ -40,15 +139,22 @@ inline bool isStackMemoryWrite(NdOp Opcode) {
   return Opcode == NdOp::STORE || isAtomicMemoryAccess(Opcode);
 }
 
-inline const MedVar *memoryAddress(const MedOp &Op) {
-  if (Op.NumInputs == 0 ||
-      Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+inline const MedVar *rawMemoryAddress(const MedOp &Op) {
+  if (Op.NumInputs == 0)
     return nullptr;
   if (Op.Opcode == NdOp::LOAD)
     return &Op.Inputs[Op.NumInputs >= 2 ? 1 : 0];
   if (Op.Opcode == NdOp::STORE)
     return &Op.Inputs[Op.NumInputs >= 3 ? 1 : 0];
-  return &Op.Inputs[0];
+  if (isAtomicMemoryAccess(Op.Opcode))
+    return &Op.Inputs[0];
+  return nullptr;
+}
+
+inline const MedVar *memoryAddress(const MedOp &Op) {
+  if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+    return nullptr;
+  return rawMemoryAddress(Op);
 }
 
 inline const MedVar *storedValue(const MedOp &Op) {

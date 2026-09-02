@@ -867,7 +867,8 @@ target_compile_definitions(NeverDX86EVEXCryptoTests PRIVATE
 
 target_compile_definitions(NeverDLiftTests PRIVATE
   NEVERD_BINARY="$<TARGET_FILE:neverd>"
-  NEVERD_TEST_CLANG="${_neverd_test_clang}"
+  NEVERD_RUNTIME_FIXTURE_COMPILER="${NEVERD_HOST_RUNTIME_FIXTURE_COMPILER_EXECUTABLE}"
+  NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}"
   TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
   TEST_OBJ_DIR="${CMAKE_CURRENT_BINARY_DIR}"
 )
@@ -890,6 +891,50 @@ add_neverd_unittest(NeverDMachOARM64RelocationTests
 )
 
 target_include_directories(NeverDMachOARM64RelocationTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps strict embedded-signature parsing and automatic ad-hoc re-sign
+# eligibility independently runnable.  The real arm64 fixture is a linker
+# generated SHA-256 CodeDirectory and therefore exercises LLVM's Mach-O view
+# in addition to the deliberately malformed synthetic containers.
+add_neverd_unittest(NeverDMachOSignaturePolicyTests
+  format/MachOSignaturePolicyTests.cpp
+
+  LINK_COMPONENTS
+  CodeGen
+)
+
+target_compile_definitions(NeverDMachOSignaturePolicyTests PRIVATE
+  NEVERD_MACHO_SIGNATURE_FIXTURE="${CMAKE_SOURCE_DIR}/unittests/safety/fixtures/binaries/safety_cases_macho_arm64"
+)
+
+target_include_directories(NeverDMachOSignaturePolicyTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+add_neverd_unittest(NeverDMachOSignerTests
+  format/MachOSignerTests.cpp
+
+  LINK_COMPONENTS
+  CodeGen
+)
+
+target_include_directories(NeverDMachOSignerTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+add_neverd_unittest(NeverDPESignaturePolicyTests
+  format/PESignaturePolicyTests.cpp
+
+  LINK_COMPONENTS
+  CodeGen
+)
+
+target_include_directories(NeverDPESignaturePolicyTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include
   ${LLVM_INCLUDE_DIRS}
 )
@@ -1045,6 +1090,22 @@ target_include_directories(NeverDMachOLLVMNameBoundaryTests PRIVATE
   ${LLVM_INCLUDE_DIRS}
 )
 
+# Pins persistent memory-operation callsite identity at the public LLVM
+# emitter boundary without relinking the aggregate lift suite during TDD.
+add_neverd_unittest(NeverDSafetyCallsiteMetadataTests
+  core/SafetyCallsiteMetadataTests.cpp
+
+  LINK_COMPONENTS
+  BackendLLVM
+  LibC
+  Lift
+)
+
+target_include_directories(NeverDSafetyCallsiteMetadataTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
 # Pins exact import-veneer identity at the loader-to-LLVM code-pointer
 # boundary without relinking the aggregate lift suite during local iterations.
 add_neverd_unittest(NeverDLLVMImportVeneerBoundaryTests
@@ -1095,7 +1156,7 @@ add_neverd_unittest(NeverDNativePointerRelocationBoundaryTests
 
 target_compile_definitions(NeverDNativePointerRelocationBoundaryTests PRIVATE
   NEVERD_BINARY="$<TARGET_FILE:neverd>"
-  NEVERD_TEST_CLANG="${_neverd_test_clang}"
+  NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}"
   TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
   TEST_OBJ_DIR="${CMAKE_CURRENT_BINARY_DIR}"
 )
@@ -1506,10 +1567,53 @@ if(TARGET neverd_shared)
   )
 
   add_dependencies(NeverDSemanticCAPITests neverd_shared)
+
+  add_neverd_unittest(NeverDSafetyPatchCAPITests
+    sdk/SafetyPatchCAPIHeaderC.c
+    sdk/SafetyPatchCAPITests.cpp
+  )
+  if(MSVC)
+    set_source_files_properties(sdk/SafetyPatchCAPIHeaderC.c PROPERTIES
+      COMPILE_OPTIONS /std:c11)
+  endif()
+
+  target_include_directories(NeverDSafetyPatchCAPITests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/lib/sdk/capi
+    ${LLVM_INCLUDE_DIRS}
+  )
+
+  target_compile_definitions(NeverDSafetyPatchCAPITests PRIVATE
+    NEVERD_SANITIZE_FIXTURE_ROOT="${CMAKE_SOURCE_DIR}/unittests/concolic/fixtures/binaries"
+    NEVERD_SAFETY_FIXTURE_ROOT="${CMAKE_SOURCE_DIR}/unittests/safety/fixtures/binaries"
+    NEVERD_SANITIZE_RUNTIME_SOURCE="${CMAKE_SOURCE_DIR}/unittests/safety/fixtures/runtime_sanitizer_cli.c"
+    NEVERD_SANITIZE_EMPTY_SOURCE="${CMAKE_SOURCE_DIR}/unittests/safety/fixtures/runtime_sanitizer_empty.c"
+    NEVERD_RUNTIME_FIXTURE_COMPILER="${NEVERD_HOST_RUNTIME_FIXTURE_COMPILER_EXECUTABLE}"
+  )
+
+  if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    set_source_files_properties(sdk/SafetyPatchCAPIHeaderC.c PROPERTIES
+      COMPILE_OPTIONS "-fshort-enums"
+    )
+  endif()
+
+  target_link_libraries(NeverDSafetyPatchCAPITests PRIVATE
+    neverd_shared
+    LLVMSupport
+  )
+
+  add_dependencies(NeverDSafetyPatchCAPITests neverd_shared)
 endif()
 
 # --- Cross-compile test .c sources into .o objects at build time ---
-find_program(CLANG_EXEC clang)
+set(CLANG_EXEC "${NEVERD_TEST_CLANG_EXECUTABLE}")
+if(NOT CLANG_EXEC)
+  message(FATAL_ERROR
+    "Building NeverD cross-target test fixtures requires a GNU-style Clang "
+    "driver. Install clang or provide the bundled LLVM tools before enabling "
+    "the test suite.")
+endif()
 
 set(X86_64_TEST_SOURCES
   x86_64/test_arith.c

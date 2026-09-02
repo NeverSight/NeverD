@@ -67,35 +67,7 @@ std::string detectMacOSSDKPath() {
 void applySessionObfuscation(Session *S, llvm::Module &Mod) {
   if (!S)
     return;
-  Pipeline::ObfuscationConfig Cfg;
-  Cfg.InstSubstitution = S->InstSubstitution;
-  Cfg.InstSubstitutionRounds = S->InstSubstitutionRounds;
-  Cfg.ConstantEncryption = S->ConstantEncryption;
-  Cfg.OpaquePredicate = S->OpaquePredicate;
-  Cfg.BogusControlFlow = S->BogusControlFlow;
-  Cfg.ControlFlowFlattening = S->ControlFlowFlattening;
-  Cfg.IndirectBranch = S->IndirectBranch;
-  Cfg.IndirectCall = S->IndirectCall;
-  Cfg.MBA = S->MBA;
-  Cfg.IndirectGlobal = S->IndirectGlobal;
-  Cfg.ValueLaunder = S->ValueLaunder;
-  Cfg.ConstantPooling = S->ConstantPooling;
-  Cfg.BitMasking = S->BitMasking;
-
-  auto C = Pipeline::runObfuscationPasses(Mod, Cfg);
-
-  S->LastSubstitutionCount = C.Substitution;
-  S->LastConstEncCount = C.ConstEnc;
-  S->LastOpaquePredCount = C.OpaquePred;
-  S->LastBogusCount = C.Bogus;
-  S->LastFlattenCount = C.Flatten;
-  S->LastIndirectBranchCount = C.IndirectBranch;
-  S->LastIndirectCallCount = C.IndirectCall;
-  S->LastMBACount = C.MBA;
-  S->LastIndirectGlobalCount = C.IndirectGlobal;
-  S->LastValueLaunderCount = C.ValueLaunder;
-  S->LastConstPoolCount = C.ConstPool;
-  S->LastBitMaskCount = C.BitMask;
+  S->commitObfuscationCounts(S->runSessionObfuscation(Mod));
 }
 
 } // namespace

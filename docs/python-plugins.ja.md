@@ -137,6 +137,12 @@ EVM および SBF セッションではこれらの呼び出しは拒否され�
 
 終了後に使う目的で `Session` を保存しないでください。ネイティブ capsule は `on_term` の開始前、かつネイティブセッションを解放できるようになる前に無効化されます。それ以降の呼び出しは古いメモリを参照せず、`RuntimeError` で失敗します。
 
+### 厳格なバイナリ sanitizer 公開
+
+`session.sanitize()` は全サイトを保護できなければ拒否する実験的 `binary-sanitizer-v1` トランザクションを実行し、完全で整合した認証済み receipt を検証した場合だけ不変の `SanitizeResult` を返します。Darwin 以外のホストは lifting、guard 生成、候補作成、namespace 変更より前に拒否します。`PUBLISH_INDETERMINATE` と `PUBLISHED_INCOMPLETE` は失敗であり、宛先が存在する可能性があるため使用または再試行前の確認が必要です。
+
+完全な Darwin receipt が認証するのはトランザクション中に保持した宛先ディレクトリ object だけです。open 後に rename できるため、元の pathname が処理中または返却後もその object を指すことを保証せず、永続的で独立に再検証可能な path binding でもありません。後で path を開き直すコードは外部 anchor を保持し、object を再認証する必要があります。Python にネイティブな whole-process replay メソッドはまだありません。`NativeProcessReplayAdapter` は fail-closed な Phase 0 C++ 可用性/factory 境界にすぎず、全ホストが全能力を false とし、操作 table を返しません。
+
 ### 証明ゲート付き合成と LLVM 最適化
 
 `synthesize_expression` は、ABI 互換性のために残された MBA 専用の

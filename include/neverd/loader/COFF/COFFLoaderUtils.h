@@ -17,11 +17,73 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Object/COFF.h"
+#include "llvm/Support/Error.h"
 
 #include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <string>
 
 namespace neverd {
 namespace coff_loader {
+
+namespace detail {
+
+/// One PE section's two address spaces.  A trusted RVA mapping must be owned
+/// by exactly one such section and fit completely in both its virtual and raw
+/// extents; PointerToRawData alone is not an RVA proof.
+struct RawBackedSectionRange {
+  uint32_t RVA = 0;
+  uint32_t VirtualSize = 0;
+  uint32_t FileOffset = 0;
+  uint32_t RawSize = 0;
+};
+
+/// Map a complete RVA range to its unique section-relative file offset.
+/// Overlapping virtual owners, a virtual/raw tail crossing, malformed section
+/// file ranges, and arithmetic overflow are errors.
+llvm::Expected<uint64_t>
+resolveUniqueRawBackedFileOffset(llvm::ArrayRef<RawBackedSectionRange> Sections,
+                                 uint64_t FileSize, uint32_t RVA,
+                                 uint32_t Size);
+
+/// Resolve one CodeView payload.  If the debug entry supplies both an RVA and
+/// PointerToRawData, they must resolve to the exact same file offset; equal
+/// bytes at two different offsets are not the same artifact occurrence.
+llvm::Expected<llvm::ArrayRef<uint8_t>>
+resolveCodeViewPayload(llvm::ArrayRef<uint8_t> FileData,
+                       llvm::ArrayRef<RawBackedSectionRange> Sections,
+                       uint32_t RVA, uint32_t RawFileOffset, uint32_t Size);
+
+struct CodeViewRSDSRecord {
+  PDBBuildIdentity Identity;
+  std::string Path;
+};
+
+/// Parse one complete IMAGE_DEBUG_TYPE_CODEVIEW payload as an RSDS record.
+/// Unknown signatures, truncated data, unterminated paths, and invalid
+/// identities are errors so callers cannot silently downgrade them to absence.
+llvm::Expected<CodeViewRSDSRecord>
+parseCodeViewRSDS(llvm::ArrayRef<uint8_t> Bytes);
+
+/// Order-independent reduction of all CodeView records in one image.  Once a
+/// malformed or conflicting record is observed, the result remains Ambiguous.
+class CodeViewIdentityRegistry {
+public:
+  void observe(const CodeViewRSDSRecord &Record);
+  void observeMalformed();
+
+  PDBIdentityState state() const { return State; }
+  const std::optional<PDBBuildIdentity> &identity() const { return Identity; }
+  const std::string &path() const { return Path; }
+
+private:
+  PDBIdentityState State = PDBIdentityState::Absent;
+  std::optional<PDBBuildIdentity> Identity;
+  std::string Path;
+};
+
+} // namespace detail
 
 /// Parse the PE exception directory (.pdata) RUNTIME_FUNCTION entries
 /// and register functions.  Applies to x64, ARM32, and AArch64.
@@ -61,8 +123,8 @@ void parseTLSDirectory(const llvm::object::COFFObjectFile &Obj,
 void parseBaseRelocations(const llvm::object::COFFObjectFile &Obj,
                           BinaryImage &Img, uint64_t ImageBase);
 
-/// Parse the PE debug directory and extract PDB path from CodeView
-/// entries.  Stores the path in Img.DynInfo.PDBPath.
+/// Parse the PE debug directory and reduce all bounded CodeView RSDS entries
+/// to one typed build identity.  The path is retained only as a discovery hint.
 void parseDebugDirectory(const llvm::object::COFFObjectFile &Obj,
                          BinaryImage &Img);
 

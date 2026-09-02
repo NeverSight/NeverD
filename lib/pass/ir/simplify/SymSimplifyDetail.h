@@ -219,16 +219,16 @@ private:
 
       do {
         Name = "nd$" + std::to_string(AnonymousCount++);
-      } while (Ctx.findVar(Name).has_value() || ConflictsWithNamedValue(Name));
+      } while (Ctx.hasVarName(Name) || ConflictsWithNamedValue(Name));
     }
 
     // LLVM's local symbol table makes named values unique.  The defensive
     // fallback handles hand-built malformed IR, and remains deterministic.
-    if (Ctx.findVar(Name).has_value()) {
+    if (Ctx.hasVarName(Name)) {
       const std::string Prefix = Name + "$";
       do {
         Name = Prefix + std::to_string(AnonymousCount++);
-      } while (Ctx.findVar(Name).has_value());
+      } while (Ctx.hasVarName(Name));
     }
 
     sym::SymRef R = Ctx.mkVar(Name, Width);

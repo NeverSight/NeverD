@@ -36,6 +36,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -4394,6 +4395,8 @@ TEST(MachOPatchTransaction,
 
   ASSERT_TRUE(Result.Success);
   EXPECT_EQ(Result.TrampolineCount, 1u);
+  EXPECT_EQ(Result.PatchedOriginalEntries,
+            (std::vector<va_t>{kTransactionFunctionVA}));
   const std::vector<uint8_t> Output = readFixtureFile(OutputPath);
   expectStrictInjectedSegmentLayout(Output, kDefaultNdTextSegment,
                                     Arch::AArch64);
@@ -4401,6 +4404,63 @@ TEST(MachOPatchTransaction,
   ASSERT_TRUE(static_cast<bool>(CompactRegion))
       << llvm::toString(CompactRegion.takeError());
   EXPECT_FALSE(CompactRegion->has_value());
+}
+
+TEST(MachOPatchTransaction,
+     PreservedExactNoOpPublishesNoInstalledOriginalEntries) {
+  MachOPatchTransactionFixture Fixture =
+      makeMachOPatchTransactionFixture(/*CompactCapacity=*/0x2000);
+  ASSERT_FALSE(Fixture.Binary.empty());
+  Fixture.Image.VerifiedFunctionEntries.insert(kTransactionFunctionVA + 1);
+
+  llvm::SmallString<128> InputPath;
+  llvm::SmallString<128> OutputPath;
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile(
+      "neverd-macho-patch-preserved-input", "macho", InputPath));
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile(
+      "neverd-macho-patch-preserved-output", "macho", OutputPath));
+  llvm::FileRemover RemoveInput(InputPath);
+  llvm::FileRemover RemoveOutput(OutputPath);
+  ASSERT_TRUE(writeFixtureFile(InputPath, Fixture.Binary));
+
+  llvm::LLVMContext Context;
+  auto Module = makeMachOPatchNoUnwindModule(Context);
+  MachOPatcher Patcher;
+  Patcher.setImageContext(&Fixture.Image);
+  PatchResult Result = Patcher.patch(
+      InputPath.str().str(), OutputPath.str().str(), *Module, Arch::AArch64);
+
+  ASSERT_TRUE(Result.Success);
+  EXPECT_EQ(Result.TrampolineCount, 0u);
+  EXPECT_TRUE(Result.PatchedOriginalEntries.empty());
+  EXPECT_EQ(readFixtureFile(OutputPath), Fixture.Binary);
+}
+
+TEST(MachOPatchTransaction,
+     OutputCommitFailurePublishesNoInstalledOriginalEntries) {
+  MachOPatchTransactionFixture Fixture =
+      makeMachOPatchTransactionFixture(/*CompactCapacity=*/0x2000);
+  ASSERT_FALSE(Fixture.Binary.empty());
+
+  llvm::SmallString<128> InputPath;
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile(
+      "neverd-macho-patch-receipt-input", "macho", InputPath));
+  llvm::FileRemover RemoveInput(InputPath);
+  ASSERT_TRUE(writeFixtureFile(InputPath, Fixture.Binary));
+  const std::filesystem::path OutputPath =
+      std::filesystem::path(InputPath.str().str() + ".missing") / "output";
+
+  llvm::LLVMContext Context;
+  auto Module = makeMachOPatchNoUnwindModule(Context);
+  MachOPatcher Patcher;
+  Patcher.setImageContext(&Fixture.Image);
+  PatchResult Result =
+      Patcher.patch(InputPath.str().str(), OutputPath, *Module, Arch::AArch64);
+
+  EXPECT_FALSE(Result.Success);
+  EXPECT_EQ(Result.TrampolineCount, 1u);
+  EXPECT_TRUE(Result.PatchedOriginalEntries.empty());
+  EXPECT_FALSE(std::filesystem::exists(OutputPath));
 }
 
 TEST(MachOPatchTransaction,
@@ -4435,6 +4495,8 @@ TEST(MachOPatchTransaction,
   EXPECT_EQ(Result.TrampolineCount, 1u);
   EXPECT_GT(Result.CodeSize, 0u);
   EXPECT_EQ(Result.OutputPath, OutputPath.str().str());
+  EXPECT_EQ(Result.PatchedOriginalEntries,
+            (std::vector<va_t>{kTransactionFunctionVA}));
   EXPECT_EQ(readFixtureFile(InputPath), Fixture.Binary);
   const std::vector<uint8_t> Output = readFixtureFile(OutputPath);
   ASSERT_GT(Output.size(), Fixture.Binary.size());

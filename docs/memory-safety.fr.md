@@ -119,9 +119,68 @@ La machine à états du tas produit d’abord une séquence d’événements can
 
 ---
 
+## Atteignabilité interprocédurale depuis les entrées connues
+
+Chaque découverte porte trois affirmations indépendantes qu’il ne faut pas
+confondre :
+
+| Champ | Question | Valeurs |
+|-------|----------|---------|
+| `verdict` | Que prouve l’analyse de sûreté locale sur l’opération ? | `SAFE`, `UNSAFE`, `UNKNOWN` |
+| `reachability.status` | La fonction englobante se trouve-t-elle sur un chemin de contrôle reconstruit depuis une entrée native connue ? | `REACHABLE`, `UNREACHABLE`, `UNKNOWN` |
+| `reachability.attacker_control` | Que prouve la tranche de l’argument sur l’influence de l’attaquant à cette découverte ? | `TAINTED`, `BOUNDED`, `UNKNOWN` |
+
+L’atteignabilité est une preuve additive : elle ne modifie ni le `verdict` de la
+découverte, ni le verdict agrégé, ni le code de sortie CLI. Un débordement prouvé
+localement peut donc porter `verdict=UNSAFE` et
+`reachability.status=UNREACHABLE`. Un consommateur qui exige un chemin d’attaque
+exécutable doit tester les deux champs.
+
+Les racines sont les entrées d’application reconnues (`application`, par
+exemple `main` ou `WinMain`), l’entrée de l’image (`image`) et les routines
+exportées (`export`). Si une fonction possède plusieurs identités, la priorité
+déterministe est `application`, puis `image`, puis `export`.
+`reachability.entry` enregistre `va`, `name` et `kind`. Pour une découverte
+atteignable hors racine, `call_chain` contient aussi le plus court chemin
+déterministe d’arêtes internes exactes, avec `caller_va`, le site `call_va`,
+`callee_va` et un `kind` `direct` ou `indirect`.
+
+`UNREACHABLE` n’est émis que si une racine existe, que l’inventaire des appels
+internes est complet et que la profondeur n’a pas été épuisée. Pour une fonction
+qui n’est pas déjà positivement atteinte, racines absentes, identités de
+fonction dupliquées ou ambiguës, inventaires CFG/appels incohérents, cibles
+internes exécutables non résolues et épuisement de la profondeur empêchent la
+preuve négative et donnent `reachability.status=UNKNOWN`, avec `reason` et
+`budget_hit` le cas échéant. ABI inconnue, largeur d’argument incompatible, slot seulement
+variadique, tranche incomplète ou budget de profondeur/résumé épuisé laissent
+aussi à UNKNOWN tout contrôle attaquant encore non prouvé ; les faits déjà
+établis restent valides et aucune propagation n’est inventée.
+
+Les compteurs du rapport dénombrent les découvertes, pas les fonctions ni les
+chemins. `control_reachable` compte `status=REACHABLE` ;
+`attacker_reachable` est le sous-ensemble qui a aussi
+`attacker_control=TAINTED`. `reachability_unknown` et `unreachable` comptent les
+autres états de contrôle. Ils sont distincts de `safe`, `unsafe` et `unknown`,
+qui comptent les verdicts.
+
+---
+
 ## Budgets, sortie et liaisons
 
-L’exploration de chasse et le solveur sont bornés (`--max-paths`, `--max-steps`, `--max-loop`, `--solver-conflicts`) ; l’épuisement du budget donne UNKNOWN. Les deux commandes impriment du JSON et honorent `-o`. Le code de sortie est `0` pour SAFE, `2` pour UNSAFE et `1` pour UNKNOWN ou une erreur.
+L’exploration de chasse et le solveur sont bornés (`--max-paths`, `--max-steps`, `--max-loop`, `--solver-conflicts`). Pour l’interprocédural, `max_call_depth` borne le nombre d’arêtes d’appel internes depuis une entrée connue et `max_summary_iterations` borne les tours de point fixe du contrôle attaquant. Les valeurs par défaut sont 64 arêtes et la profondeur effective plus un tour. L’épuisement échoue fermé comme décrit ci-dessus. Épuiser `max_call_depth` peut laisser `status=UNKNOWN` pour une fonction pas encore atteinte ; épuiser `max_summary_iterations` n’efface pas le témoin structurel, si bien que `status=REACHABLE` peut coexister avec `attacker_control=UNKNOWN` et `budget_hit=true`. Les deux commandes impriment du JSON et honorent `-o`. Le code de sortie est `0` pour SAFE, `2` pour UNSAFE et `1` pour UNKNOWN ou une erreur.
+
+Zéro sélectionne la valeur par défaut du moteur sur toutes les interfaces :
+
+| Interface | Profondeur de contrôle | Résumé attaquant |
+|-----------|-------------------------|------------------|
+| CLI (`audit` et `hunt`) | `--max-call-depth <n>` | `--max-summary-iterations <n>` |
+| C (`neverd_safety_options`) | `max_call_depth` | `max_summary_iterations` |
+| Python (`Session.audit()` / `Session.hunt()`) | `max_call_depth=<n>` | `max_summary_iterations=<n>` |
+
+L’appelant C initialise `neverd_safety_options` à zéro et fixe
+`struct_size=sizeof(neverd_safety_options)` ; les anciennes tailles conservent
+les valeurs par défaut. Python valide les deux valeurs comme entiers non signés
+sur 32 bits.
 
 Les mêmes analyses sont disponibles via l’API C (`neverd_session_audit_json` / `neverd_session_hunt_json`, `neverd_safety_options` versionnées) et le SDK Python (`Session.audit()` / `Session.hunt()`).
 
@@ -143,11 +202,12 @@ Les mêmes analyses sont disponibles via l’API C (`neverd_session_audit_json` 
   "capacity": 16,
   "capacity_kind": "exact",
   "corroboration": "path predicate and overflow are jointly satisfiable",
+  "reachability": { "status": "REACHABLE", "attacker_control": "TAINTED", "budget_hit": false, "entry": { "va": "0x1000", "name": "main", "kind": "application" }, "call_chain": [{ "caller_va": "0x1000", "call_va": "0x1080", "callee_va": "0x1100", "kind": "direct" }] },
   "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" }, "candidate_values": [{ "name": "copy_length", "value": "17" }, { "name": "argv[1]", "value": "16 bytes" }], "replayable": false, "replay": { "adapter": "process-input-v1", "reason": "argv input is not supported by process-input-v1" }, "symbolic_model": [{ "id": 0, "name": "copy_len", "width": 64, "value_hex": "0x11", "origin": "input" }] }
 }
 ```
 
-`replayable` est une preuve dérivée, pas une promesse indépendante : il n’est vrai que si `replay` contient un plan d’entrée complet pour l’adaptateur `process-input-v1`. Le plan enregistre les octets exacts de l’environnement, la première séquence d’entrée standard si elle est utilisée et les liaisons depuis les identifiants d’affectation du solveur ; sinon `replay.reason` en explique la raison. Ces champs sont additifs ; le `schema_version` de tête reste `1`.
+`replayable` est une preuve dérivée, pas une promesse indépendante : il n’est vrai que si `replay` contient un plan d’entrée complet pour l’adaptateur `process-input-v1`. Le plan enregistre les octets exacts de l’environnement, la première séquence d’entrée standard si elle est utilisée et les liaisons depuis les identifiants d’affectation du solveur ; sinon `replay.reason` en explique la raison. Les champs de rejeu et d’atteignabilité sont additifs ; le `schema_version` de tête reste `1`.
 
 ---
 
@@ -158,4 +218,4 @@ Les mêmes analyses sont disponibles via l’API C (`neverd_session_audit_json` 
 - Les copies cataloguées de caractères larges et d’ajout restent UNKNOWN jusqu’au recouvrement de la largeur d’élément et de l’étendue actuelle de la destination. Les allocateurs par paramètre de sortie et la propriété conditionnelle de `realloc` restent aussi UNKNOWN si la transition du handle ne peut être prouvée.
 - **P0** (cette version, les trois formats) : catalogue de puits, préfiltre d’arguments, chasse de débordement de copie, audit de durée de vie du tas. Chaque hôte teste les six fixtures PE, ELF et Mach-O pour x86-64 et AArch64.
 - **P1** : les débordements pile/global, les lectures locales non initialisées et les contrôles de chaînes de format sont disponibles ; les types de pile PDB plus riches et les allocateurs de plateforme supplémentaires restent une couverture incrémentale, et l’absence de résumé exact reste UNKNOWN.
-- **P2** : contrôles runtime insérés par patch, atteignabilité interprocédurale de l’attaquant.
+- La tranche actuelle couvre les entrées connues, l’atteignabilité interprocédurale structurelle et la propagation monotone des paramètres attaquants. L’adaptateur expérimental distinct `lowir-concolic-v1` fournit désormais des inversions de branche, alimentées par des graines de registres et vérifiées par rejeu, sur la matrice native obligatoire de formats et d’architectures ; il reste non exhaustif et ne modifie pas les verdicts de sûreté. Le `binary-sanitizer-v1` expérimental fournit maintenant sur Darwin des gardes d’écriture comptée tout-ou-refus et une publication authentifiée ; son receipt authentifie l’objet répertoire conservé pendant la transaction, et non une liaison durable et revérifiable du pathname d’origine. Le `process-replay-v1` élargi reste limité à une frontière fail-closed de Phase 0 pour le plan, le coordinateur et la disponibilité ; aucun hôte n’exécute actuellement de rejeu natif.

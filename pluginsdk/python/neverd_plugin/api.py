@@ -22,6 +22,8 @@ from .abi import (
     NeverDOptimizeLLVMResult,
     NeverDLowIRConcolicOptionsV1,
     NeverDLowIRConcolicRegisterSeedV1,
+    NeverDSanitizeOptionsV1,
+    NeverDSanitizeResultV1,
     NeverDSimplifyOptions,
     NeverDSimplifyResult,
     NeverDSynthesizeOptions,
@@ -35,6 +37,12 @@ from .abi import (
     OutputLanguage,
     PluginType,
     ProofStatus,
+    SanitizePublicationGuarantee,
+    SanitizePublicationNamespace,
+    SanitizePublicationOperandBinding,
+    SanitizePublicationOutcome,
+    SanitizeStatus,
+    SanitizeStrategy,
     SimplifyEvidence,
     SimplifyOutcome,
     SynthesisOutcome,
@@ -44,7 +52,6 @@ from .abi import (
     TranslationSemanticStop,
 )
 from .ffi import HostAPI
-
 
 _LOWIR_CONCOLIC_MAX_REGISTER_SEEDS_V1 = 4096
 
@@ -72,6 +79,182 @@ _TRANSFORM_COUNT_FUNCTIONS = {
     "constant_pooling": "neverd_patch_constant_pooling_count",
     "bit_masking": "neverd_patch_bit_masking_count",
 }
+
+
+def _sanitize_success_error(result: NeverDSanitizeResultV1) -> str | None:
+    if int(result.struct_size) != ctypes.sizeof(NeverDSanitizeResultV1):
+        return "native sanitizer changed result struct_size"
+    if int(result.plan_version) != 1:
+        return (
+            "strict sanitize returned unsupported plan version "
+            f"{result.plan_version}; expected 1"
+        )
+    if int(result.unsupported_sites) != 0:
+        return "native sanitizer reported success with unsupported sites"
+    if int(result.guarded_sites) != int(result.findings):
+        return "native sanitizer guarded-site count does not match findings"
+    if int(result.patched_functions) < int(result.guarded_functions):
+        return "native sanitizer patched fewer functions than it guarded"
+    if int(result.findings) != 0 and int(result.guarded_functions) == 0:
+        return "native sanitizer guarded findings without a guarded function"
+    if int(result.findings) == 0 and any(
+        int(value) != 0
+        for value in (
+            result.guarded_functions,
+            result.patched_functions,
+            result.code_size,
+            result.trampoline_count,
+        )
+    ):
+        return "native sanitizer returned nonzero patch telemetry for an empty plan"
+    return None
+
+
+def _sanitize_publication_receipt(
+    result: NeverDSanitizeResultV1,
+) -> "SanitizePublicationReceipt":
+    complete = int(result.publication_receipt_complete)
+    if complete not in (0, 1):
+        raise ValueError("publication_receipt_complete must be zero or one")
+    guarantee_flags = int(result.publication_guarantee_flags)
+    known_guarantees = int(
+        SanitizePublicationGuarantee.NAMESPACE_ATOMIC
+        | SanitizePublicationGuarantee.DESTINATION_CREATE_EXCLUSIVE
+        | SanitizePublicationGuarantee.COMPARE_AND_SWAP
+        | SanitizePublicationGuarantee.CRASH_DURABLE
+    )
+    if guarantee_flags & ~known_guarantees:
+        raise ValueError("publication_guarantee_flags has unknown bits")
+    return SanitizePublicationReceipt(
+        outcome=SanitizePublicationOutcome(int(result.publication_outcome)),
+        version=int(result.publication_receipt_version),
+        complete=bool(complete),
+        namespace=SanitizePublicationNamespace(
+            int(result.publication_namespace_disposition)
+        ),
+        guarantees=SanitizePublicationGuarantee(guarantee_flags),
+        operand_binding=SanitizePublicationOperandBinding(
+            int(result.publication_operand_binding)
+        ),
+    )
+
+
+def _sanitize_publication_receipt_error(
+    receipt: "SanitizePublicationReceipt",
+) -> str | None:
+    if receipt.version != 1:
+        return (
+            f"strict sanitize returned publication receipt version "
+            f"{receipt.version}; expected 1"
+        )
+    if not receipt.complete:
+        if receipt.guarantees != SanitizePublicationGuarantee.NONE:
+            return "incomplete publication receipt cannot claim publication guarantees"
+        if receipt.operand_binding is not SanitizePublicationOperandBinding.NONE:
+            return "incomplete publication receipt cannot claim an operand binding"
+        return None
+    if receipt.outcome not in (
+        SanitizePublicationOutcome.NOT_PUBLISHED,
+        SanitizePublicationOutcome.PUBLISHED,
+    ):
+        return "complete receipt outcome must be published or not-published"
+    if receipt.namespace is SanitizePublicationNamespace.NONE:
+        return "complete publication receipt has no namespace disposition"
+    if receipt.namespace is SanitizePublicationNamespace.CREATE_EXCLUSIVE:
+        if receipt.outcome is not SanitizePublicationOutcome.PUBLISHED:
+            return "create-exclusive outcome must be published"
+        required = (
+            SanitizePublicationGuarantee.NAMESPACE_ATOMIC
+            | SanitizePublicationGuarantee.DESTINATION_CREATE_EXCLUSIVE
+        )
+        if receipt.guarantees & required != required:
+            return (
+                "create-exclusive guarantees must include namespace-atomic "
+                "and destination-create-exclusive"
+            )
+        if receipt.guarantees & SanitizePublicationGuarantee.COMPARE_AND_SWAP:
+            return (
+                "binary-sanitizer-v1 create-exclusive publication cannot claim "
+                "replacement compare-and-swap"
+            )
+        if receipt.guarantees & SanitizePublicationGuarantee.CRASH_DURABLE:
+            return (
+                "binary-sanitizer-v1 create-exclusive publication cannot claim "
+                "crash-durable replacement"
+            )
+        if receipt.operand_binding is SanitizePublicationOperandBinding.NONE:
+            return "create-exclusive receipt requires a non-none operand binding"
+        return None
+    if receipt.namespace is SanitizePublicationNamespace.NO_CHANGE:
+        if receipt.outcome is not SanitizePublicationOutcome.NOT_PUBLISHED:
+            return "no-change outcome must be not-published"
+        if receipt.guarantees != SanitizePublicationGuarantee.NONE:
+            return "no-change receipt cannot claim publication guarantees"
+        if receipt.operand_binding is not SanitizePublicationOperandBinding.NONE:
+            return "no-change receipt cannot claim an operand binding"
+        return None
+    return "complete publication receipt has an invalid namespace disposition"
+
+
+def _sanitize_terminal_error(
+    call_result: int,
+    ok: int,
+    status: SanitizeStatus,
+    receipt: "SanitizePublicationReceipt",
+) -> str | None:
+    if call_result not in (0, 1):
+        return f"strict sanitize returned invalid call result {call_result}"
+    if ok not in (0, 1):
+        return f"strict sanitize returned invalid ok flag {ok}"
+    if call_result != ok:
+        return "strict sanitize call result and ok flag disagree"
+
+    succeeded = call_result == 1
+    if succeeded:
+        if status is not SanitizeStatus.OK:
+            return (
+                "strict sanitize returned success with non-OK status "
+                + status.name.lower().replace("_", "-")
+            )
+        if not receipt.complete:
+            return (
+                "strict sanitize reported success but its publication receipt "
+                "is incomplete"
+            )
+        return None
+
+    if status is SanitizeStatus.OK:
+        return "strict sanitize failed transaction returned OK status"
+    if receipt.complete:
+        return "strict sanitize failed transaction cannot carry a complete publication receipt"
+    if status is SanitizeStatus.PUBLISH_INDETERMINATE:
+        if receipt.outcome is not SanitizePublicationOutcome.INDETERMINATE:
+            return "publish-indeterminate status requires an indeterminate outcome"
+    elif status is SanitizeStatus.PUBLISHED_INCOMPLETE:
+        if receipt.outcome is not SanitizePublicationOutcome.PUBLISHED:
+            return "published-incomplete status requires a published outcome"
+    elif status is SanitizeStatus.PUBLISH_FAILED:
+        if receipt.outcome not in (
+            SanitizePublicationOutcome.NOT_ATTEMPTED,
+            SanitizePublicationOutcome.NOT_PUBLISHED,
+        ):
+            return (
+                "publish-failed status requires a not-attempted or "
+                "not-published outcome"
+            )
+    elif receipt.outcome is SanitizePublicationOutcome.INDETERMINATE:
+        return "indeterminate publication outcome requires publish-indeterminate status"
+    elif receipt.outcome is SanitizePublicationOutcome.PUBLISHED:
+        return "published outcome requires published-incomplete status"
+    return None
+
+
+def _sanitize_unknown_destination_message(message: str, output_path: str) -> str:
+    return (
+        f"{message}; destination state is unknown for requested output path "
+        f"{output_path!r} and the destination may exist; inspect it before use, "
+        "retrying, or deleting anything"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -953,17 +1136,21 @@ class Session:
         solver_conflicts: int,
         sinks: str | None,
         sources: str | None,
+        max_call_depth: int,
+        max_summary_iterations: int,
     ) -> "NeverDSafetyOptions":
         options = NeverDSafetyOptions()
         options.struct_size = ctypes.sizeof(NeverDSafetyOptions)
         options.max_paths = _unsigned("max_paths", max_paths, 32)
         options.max_steps = _unsigned("max_steps", max_steps, 32)
         options.max_loop = _unsigned("max_loop", max_loop, 32)
-        options.solver_conflicts = _unsigned(
-            "solver_conflicts", solver_conflicts, 64
-        )
+        options.solver_conflicts = _unsigned("solver_conflicts", solver_conflicts, 64)
         options.sinks_path = sinks.encode("utf-8") if sinks else None
         options.sources_path = sources.encode("utf-8") if sources else None
+        options.max_call_depth = _unsigned("max_call_depth", max_call_depth, 32)
+        options.max_summary_iterations = _unsigned(
+            "max_summary_iterations", max_summary_iterations, 32
+        )
         return options
 
     def audit(
@@ -975,6 +1162,8 @@ class Session:
         solver_conflicts: int = 0,
         sinks: str | None = None,
         sources: str | None = None,
+        max_call_depth: int = 0,
+        max_summary_iterations: int = 0,
     ) -> Mapping[str, object]:
         """Audit heap-object lifetimes and uninitialized local stack reads,
         and return the parsed JSON report."""
@@ -986,6 +1175,8 @@ class Session:
             solver_conflicts=solver_conflicts,
             sinks=sinks,
             sources=sources,
+            max_call_depth=max_call_depth,
+            max_summary_iterations=max_summary_iterations,
         )
         report = self._json(
             "neverd_session_audit_json", "safety audit", ctypes.byref(options)
@@ -1008,6 +1199,8 @@ class Session:
         solver_conflicts: int = 0,
         sinks: str | None = None,
         sources: str | None = None,
+        max_call_depth: int = 0,
+        max_summary_iterations: int = 0,
     ) -> Mapping[str, object]:
         """Hunt dangerous-copy overflows and return the parsed JSON report.
 
@@ -1029,6 +1222,8 @@ class Session:
             solver_conflicts=solver_conflicts,
             sinks=sinks,
             sources=sources,
+            max_call_depth=max_call_depth,
+            max_summary_iterations=max_summary_iterations,
         )
         report = self._json(
             "neverd_session_hunt_json", "overflow hunt", ctypes.byref(options)
@@ -1236,6 +1431,163 @@ class Session:
         )
         return self.patch_result
 
+    def sanitize(
+        self,
+        output_path: os.PathLike[str] | str,
+        *,
+        strategy: SanitizeStrategy | int = SanitizeStrategy.SECTION,
+        max_paths: int = 0,
+        max_steps: int = 0,
+        max_loop: int = 0,
+        solver_conflicts: int = 0,
+        max_call_depth: int = 0,
+        max_summary_iterations: int = 0,
+    ) -> "SanitizeResult":
+        """Strictly guard every supported dangerous write and publish atomically.
+
+        This operates on the binary already loaded in the session.  Zero
+        budgets select bounded engine defaults.  The native pipeline always
+        preserves sanitizer callsite metadata, independently of ordinary patch
+        optimization settings, and refuses partial coverage.  The SDK probes
+        publication ABI v1 before the native transaction can mutate the
+        namespace and returns only after validating a complete receipt.
+        """
+
+        requested_output = os.fspath(output_path)
+        encoded_output = _utf8_argument(
+            "output path", requested_output, allow_empty=False
+        )
+        options = NeverDSanitizeOptionsV1()
+        options.struct_size = ctypes.sizeof(NeverDSanitizeOptionsV1)
+        options.strategy = _enum_value("sanitize strategy", strategy, SanitizeStrategy)
+        options.max_paths = _unsigned("max_paths", max_paths, 32)
+        options.max_steps = _unsigned("max_steps", max_steps, 32)
+        options.max_loop = _unsigned("max_loop", max_loop, 32)
+        options.solver_conflicts = _unsigned("solver_conflicts", solver_conflicts, 64)
+        options.max_call_depth = _unsigned("max_call_depth", max_call_depth, 32)
+        options.max_summary_iterations = _unsigned(
+            "max_summary_iterations", max_summary_iterations, 32
+        )
+
+        native_result = NeverDSanitizeResultV1()
+        native_result.struct_size = ctypes.sizeof(NeverDSanitizeResultV1)
+        self._pointer()
+        try:
+            publication_abi_version = int(
+                self._host_api().call("neverd_sanitize_publication_abi_version")
+            )
+        except (AttributeError, RuntimeError, TypeError, ValueError) as error:
+            raise SanitizeError(
+                "native host does not provide sanitizer publication ABI v1; "
+                "refusing before publication",
+                status=None,
+                receipt=None,
+            ) from error
+        if publication_abi_version != 1:
+            raise SanitizeError(
+                "native host reports sanitizer publication ABI version "
+                f"{publication_abi_version}; exactly version 1 is required",
+                status=None,
+                receipt=None,
+            )
+        call_succeeded = int(
+            self._call(
+                "neverd_session_sanitize",
+                encoded_output,
+                ctypes.byref(options),
+                ctypes.byref(native_result),
+            )
+        )
+        try:
+            receipt = _sanitize_publication_receipt(native_result)
+        except (TypeError, ValueError) as error:
+            raise SanitizeError(
+                _sanitize_unknown_destination_message(
+                    "strict sanitize returned an invalid publication receipt",
+                    requested_output,
+                ),
+                status=None,
+                receipt=None,
+            ) from error
+        try:
+            status = SanitizeStatus(int(native_result.status))
+        except (TypeError, ValueError) as error:
+            message = self._owned_string("neverd_last_error")
+            raise SanitizeError(
+                _sanitize_unknown_destination_message(
+                    message
+                    or f"strict sanitize returned invalid status {native_result.status}",
+                    requested_output,
+                ),
+                status=None,
+                receipt=receipt,
+            ) from error
+
+        receipt_error = _sanitize_publication_receipt_error(receipt)
+        if receipt_error is not None:
+            raise SanitizeError(
+                _sanitize_unknown_destination_message(receipt_error, requested_output),
+                status=status,
+                receipt=receipt,
+            )
+
+        ok = int(native_result.ok)
+        terminal_error = _sanitize_terminal_error(call_succeeded, ok, status, receipt)
+        if terminal_error is not None:
+            raise SanitizeError(
+                _sanitize_unknown_destination_message(terminal_error, requested_output),
+                status=status,
+                receipt=receipt,
+            )
+
+        if call_succeeded == 0:
+            message = self._owned_string("neverd_last_error")
+            spelling = status.name.lower().replace("_", "-")
+            detail = message or f"strict sanitize failed: {spelling}"
+            if status in (
+                SanitizeStatus.PUBLISH_INDETERMINATE,
+                SanitizeStatus.PUBLISHED_INCOMPLETE,
+            ):
+                detail = _sanitize_unknown_destination_message(detail, requested_output)
+            raise SanitizeError(
+                detail,
+                status=status,
+                receipt=receipt,
+            )
+        integrity_error = _sanitize_success_error(native_result)
+        if integrity_error is not None:
+            raise SanitizeError(
+                _sanitize_unknown_destination_message(
+                    integrity_error, requested_output
+                ),
+                status=status,
+                receipt=receipt,
+            )
+
+        published_path = self._owned_string("neverd_patch_output_path")
+        if not published_path:
+            raise SanitizeError(
+                _sanitize_unknown_destination_message(
+                    "strict sanitize succeeded without an output path",
+                    requested_output,
+                ),
+                status=status,
+                receipt=receipt,
+            )
+        return SanitizeResult(
+            output_path=published_path,
+            status=status,
+            plan_version=int(native_result.plan_version),
+            findings=int(native_result.findings),
+            guarded_sites=int(native_result.guarded_sites),
+            guarded_functions=int(native_result.guarded_functions),
+            unsupported_sites=int(native_result.unsupported_sites),
+            patched_functions=int(native_result.patched_functions),
+            code_size=int(native_result.code_size),
+            trampoline_count=int(native_result.trampoline_count),
+            receipt=receipt,
+        )
+
     def patch_from_c(
         self,
         source: str,
@@ -1316,6 +1668,50 @@ class Session:
 
 class NeverDError(RuntimeError):
     """A failure reported by NeverD's public C API."""
+
+
+class SanitizeError(NeverDError):
+    """A typed refusal from the strict sanitizer transaction."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: SanitizeStatus | None,
+        receipt: "SanitizePublicationReceipt | None" = None,
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.receipt = receipt
+
+
+@dataclass(frozen=True, slots=True)
+class SanitizePublicationReceipt:
+    """Authenticated namespace-publication facts returned by the native host."""
+
+    outcome: SanitizePublicationOutcome
+    version: int
+    complete: bool
+    namespace: SanitizePublicationNamespace
+    guarantees: SanitizePublicationGuarantee
+    operand_binding: SanitizePublicationOperandBinding
+
+
+@dataclass(frozen=True, slots=True)
+class SanitizeResult:
+    """A strict sanitizer success with its complete publication receipt."""
+
+    output_path: str
+    status: SanitizeStatus
+    plan_version: int
+    findings: int
+    guarded_sites: int
+    guarded_functions: int
+    unsupported_sites: int
+    patched_functions: int
+    code_size: int
+    trampoline_count: int
+    receipt: SanitizePublicationReceipt
 
 
 @dataclass(frozen=True, slots=True)
@@ -1949,8 +2345,6 @@ def _validate_concolic_report_consistency(report: ConcolicReport) -> None:
                     "report.trace_reason",
                     "invalid decision history evidence is inconsistent",
                 )
-
-
 def _parse_concolic_report(
     value: object,
     *,
@@ -2939,9 +3333,7 @@ def translate_x86_64_block_to_aarch64_object(
     result = NeverDTranslateObjectResultV1()
     result.struct_size = ctypes.sizeof(NeverDTranslateObjectResultV1)
     library = host if host is not None else _simplify_host()
-    translate = library.function(
-        "neverd_translate_x86_64_block_to_aarch64_object_v1"
-    )
+    translate = library.function("neverd_translate_x86_64_block_to_aarch64_object_v1")
     dispose = library.function("neverd_translate_object_result_dispose")
     try:
         status = translate(
@@ -3106,6 +3498,15 @@ __all__ = [
     "PluginSpec",
     "PluginType",
     "ProofStatus",
+    "SanitizePublicationGuarantee",
+    "SanitizePublicationNamespace",
+    "SanitizePublicationOperandBinding",
+    "SanitizePublicationOutcome",
+    "SanitizePublicationReceipt",
+    "SanitizeError",
+    "SanitizeResult",
+    "SanitizeStatus",
+    "SanitizeStrategy",
     "RawSessionAPI",
     "Session",
     "SimplifyEvidence",

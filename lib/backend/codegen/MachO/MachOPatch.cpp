@@ -1472,7 +1472,8 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
   }
   BinaryImage AuthenticatedImage = std::move(*LoadedImage);
 
-  return readPatchWrite(
+  std::vector<PatchedFunctionEntry> InstalledFunctions;
+  PatchResult Patch = readPatchWrite(
       InputPath, OutputPath, /*SetExecPerm=*/true, "macho_patch",
       [&](std::vector<uint8_t> &Binary, PatchResult &Result) -> bool {
         PatchLayout Layout;
@@ -1821,7 +1822,6 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
         }
 
         size_t TrampolineCount = 0;
-        std::vector<PatchedFunctionEntry> PatchedFunctions;
         if (Layout.TextSectVA != 0 && Layout.TextSectSize != 0) {
           if (!TrampolinePlan.OriginalVAs.empty())
             TrampolineCount = installTrampolines(
@@ -1832,11 +1832,11 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
                 &AuthenticatedImage.KnownCodeRanges,
                 &AuthenticatedImage.Exports,
                 /*PatchedOriginalEntries=*/nullptr,
-                /*PatchedEntryMappings=*/nullptr, &PatchedFunctions,
+                /*PatchedEntryMappings=*/nullptr, &InstalledFunctions,
                 TrampolinePlan.Owners, TrampolinePlan.OriginalVAs);
         }
         if (llvm::Error Error = validateSourceFunctionTrampolineClosure(
-                TrampolinePlan, PatchedFunctions, TrampolineCount)) {
+                TrampolinePlan, InstalledFunctions, TrampolineCount)) {
           llvm::WithColor::error() << llvm::toString(std::move(Error)) << "\n";
           return false;
         }
@@ -1844,7 +1844,7 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
         std::vector<MachOCompactUnwindRangeMapping> RangeMappings;
         if (InstallGeneratedCompact) {
           auto BuiltMappings = buildMachOCompactUnwindRangeMappings(
-              Candidate, TargetArch, GeneratedCompact, PatchedFunctions,
+              Candidate, TargetArch, GeneratedCompact, InstalledFunctions,
               llvm::endianness::little);
           if (!BuiltMappings) {
             llvm::WithColor::error()
@@ -1882,6 +1882,11 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
         Result.CodeSize = TextSize;
         return true;
       });
+  patch_receipt_detail::publishCommitted(
+      Patch, InstalledFunctions, [](const PatchedFunctionEntry &Installed) {
+        return Installed.OriginalVA;
+      });
+  return Patch;
 }
 
 } // namespace neverd

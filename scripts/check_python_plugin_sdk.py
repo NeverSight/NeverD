@@ -12,6 +12,7 @@ from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
 C_API_HEADER = ROOT / "include" / "neverd" / "sdk" / "NeverDCAPI.h"
+SANITIZER_HEADER = ROOT / "include" / "neverd" / "sdk" / "NeverDCAPIPatch.h"
 SYMBOLIC_HEADER = ROOT / "include" / "neverd" / "sdk" / "NeverDCAPISymbolic.h"
 TRANSLATE_HEADER = ROOT / "include" / "neverd" / "sdk" / "NeverDCAPITranslate.h"
 PLUGIN_HEADER = ROOT / "include" / "neverd" / "sdk" / "NeverDPlugin.h"
@@ -100,6 +101,47 @@ def parse_c_api_header(path: Path) -> dict[str, tuple[str, tuple[str, ...]]]:
     return parse_c_api("\n".join(sources))
 
 
+def _parse_c_integer_literal(value: str) -> int:
+    match = re.fullmatch(r"(-?)(0[xX][0-9A-Fa-f]+|[0-9]+)[uUlL]*", value.strip())
+    if match is None:
+        raise ValueError(f"unsupported explicit C integer value {value!r}")
+    magnitude = int(match.group(2), 0)
+    return -magnitude if match.group(1) else magnitude
+
+
+def _parse_c_enum_entries(body: str, label: str) -> dict[str, int]:
+    entries: dict[str, int] = {}
+    for name, expression in re.findall(
+        r"\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^,}]+)", body
+    ):
+        operands = expression.strip().split("<<")
+        if len(operands) == 1:
+            value = _parse_c_integer_literal(operands[0])
+        elif len(operands) == 2:
+            value = _parse_c_integer_literal(operands[0]) << _parse_c_integer_literal(
+                operands[1]
+            )
+        else:
+            raise ValueError(
+                f"unsupported explicit C integer expression {expression!r} in {label}"
+            )
+        entries[name] = value
+    if not entries:
+        raise ValueError(f"C enum {label} has no explicit values")
+    return entries
+
+
+def parse_c_enum_tag(source: str, tag_name: str) -> dict[str, int]:
+    match = re.search(
+        r"\benum\s+" + re.escape(tag_name) + r"\s*\{([^}]*)\}\s*;",
+        _without_comments(source),
+        flags=re.DOTALL,
+    )
+    if match is None:
+        raise ValueError(f"cannot find C enum tag {tag_name}")
+    return _parse_c_enum_entries(match.group(1), tag_name)
+
+
 def parse_c_enum(source: str, typedef_name: str) -> dict[str, int]:
     pattern = re.compile(
         r"\btypedef\s+enum(?:\s+[A-Za-z_][A-Za-z0-9_]*)?\s*"
@@ -121,16 +163,7 @@ def parse_c_enum(source: str, typedef_name: str) -> dict[str, int]:
         if fixed_width is None or tag is None:
             raise ValueError(f"cannot find C enum contract {typedef_name}")
         match = tag
-    entries = {
-        name: int(value)
-        for name, value in re.findall(
-            r"\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(-?[0-9]+)\s*,?",
-            match.group(1),
-        )
-    }
-    if not entries:
-        raise ValueError(f"C enum typedef {typedef_name} has no explicit values")
-    return entries
+    return _parse_c_enum_entries(match.group(1), typedef_name)
 
 
 def parse_c_struct_layout(
@@ -155,9 +188,7 @@ def parse_c_struct_layout(
                 f"cannot parse a field in C struct typedef {typedef_name}: "
                 f"{declaration!r}"
             )
-        fields.append(
-            (field.group(1), normalize_c_type(declaration[: field.start()]))
-        )
+        fields.append((field.group(1), normalize_c_type(declaration[: field.start()])))
     if not fields:
         raise ValueError(f"C struct typedef {typedef_name} has no fields")
     return tuple(fields)
@@ -171,6 +202,7 @@ BORROWED_STRING_FUNCTIONS = frozenset(
     {
         "neverd_optimization_stop_name",
         "neverd_proof_status_name",
+        "neverd_sanitize_status_name",
         "neverd_synthesis_outcome_name",
         "neverd_translate_error_code_name",
     }
@@ -204,8 +236,7 @@ def check_abi(errors: list[str]) -> None:
         spec = abi.FUNCTION_SPECS[name]
         if spec.c_result != result:
             errors.append(
-                f"{name} result mismatch: header={result!r}, "
-                f"Python={spec.c_result!r}"
+                f"{name} result mismatch: header={result!r}, Python={spec.c_result!r}"
             )
         if spec.c_arguments != arguments:
             errors.append(
@@ -351,8 +382,110 @@ def check_translation_abi(errors: list[str]) -> None:
             expected_ctype = native_ctypes.get(c_type)
             if expected_ctype is None:
                 errors.append(
-                    f"{typedef_name}.{field_name} has an unaudited C type "
-                    f"{c_type!r}"
+                    f"{typedef_name}.{field_name} has an unaudited C type {c_type!r}"
+                )
+
+
+def check_sanitizer_abi(errors: list[str]) -> None:
+    import ctypes
+
+    from neverd_plugin import abi
+
+    source = SANITIZER_HEADER.read_text(encoding="utf-8")
+    enum_contracts = (
+        (
+            "neverd_sanitize_strategy_t",
+            "neverd_sanitize_strategy",
+            "NEVERD_SANITIZE_STRATEGY_",
+            abi.SanitizeStrategy,
+        ),
+        (
+            "neverd_sanitize_status_t",
+            "neverd_sanitize_status",
+            "NEVERD_SANITIZE_STATUS_",
+            abi.SanitizeStatus,
+        ),
+        (
+            "neverd_sanitize_publication_outcome_t",
+            "neverd_sanitize_publication_outcome",
+            "NEVERD_SANITIZE_PUBLICATION_OUTCOME_",
+            abi.SanitizePublicationOutcome,
+        ),
+        (
+            "neverd_sanitize_publication_namespace_t",
+            "neverd_sanitize_publication_namespace",
+            "NEVERD_SANITIZE_PUBLICATION_NAMESPACE_",
+            abi.SanitizePublicationNamespace,
+        ),
+        (
+            "neverd_sanitize_publication_guarantees_t",
+            "neverd_sanitize_publication_guarantee",
+            "NEVERD_SANITIZE_PUBLICATION_GUARANTEE_",
+            abi.SanitizePublicationGuarantee,
+        ),
+        (
+            "neverd_sanitize_publication_operand_binding_t",
+            "neverd_sanitize_publication_operand_binding",
+            "NEVERD_SANITIZE_PUBLICATION_OPERAND_BINDING_",
+            abi.SanitizePublicationOperandBinding,
+        ),
+    )
+    for typedef_name, tag_name, prefix, python_enum in enum_contracts:
+        if not re.search(
+            r"\btypedef\s+uint32_t\s+" + re.escape(typedef_name) + r"\s*;",
+            _without_comments(source),
+        ):
+            errors.append(f"{typedef_name} must use fixed uint32_t storage")
+        native = {
+            name.removeprefix(prefix): value
+            for name, value in parse_c_enum_tag(source, tag_name).items()
+        }
+        python = {member.name: member.value for member in python_enum}
+        if native != python:
+            errors.append(
+                f"{typedef_name} mismatch: native={native!r}, Python={python!r}"
+            )
+
+    version = re.search(
+        r"\bNEVERD_SANITIZE_PUBLICATION_ABI_VERSION\s*=\s*([0-9]+)",
+        _without_comments(source),
+    )
+    if version is None or int(version.group(1)) != 1:
+        errors.append("sanitizer publication ABI version must be 1")
+
+    native_ctypes = {
+        "size_t": ctypes.c_size_t,
+        "int": ctypes.c_int,
+        "uint32_t": ctypes.c_uint32,
+        "uint64_t": ctypes.c_uint64,
+        "neverd_sanitize_status_t": ctypes.c_uint32,
+        "neverd_sanitize_publication_outcome_t": ctypes.c_uint32,
+        "neverd_sanitize_publication_namespace_t": ctypes.c_uint32,
+        "neverd_sanitize_publication_guarantees_t": ctypes.c_uint32,
+        "neverd_sanitize_publication_operand_binding_t": ctypes.c_uint32,
+    }
+    struct_contracts = (
+        ("neverd_sanitize_options_v1", abi.NeverDSanitizeOptionsV1),
+        ("neverd_sanitize_result_v1", abi.NeverDSanitizeResultV1),
+    )
+    for typedef_name, python_struct in struct_contracts:
+        native_layout = parse_c_struct_layout(source, typedef_name)
+        python_layout = tuple(python_struct._fields_)
+        native_fields = tuple(name for name, _c_type in native_layout)
+        python_fields = tuple(name for name, _ctype in python_layout)
+        if native_fields != python_fields:
+            errors.append(
+                f"{typedef_name} field mismatch: native={native_fields!r}, "
+                f"Python={python_fields!r}"
+            )
+            continue
+        for (field_name, c_type), (_python_name, python_ctype) in zip(
+            native_layout, python_layout, strict=True
+        ):
+            expected_ctype = native_ctypes.get(c_type)
+            if expected_ctype is None:
+                errors.append(
+                    f"{typedef_name}.{field_name} has an unaudited C type {c_type!r}"
                 )
             elif python_ctype is not expected_ctype:
                 errors.append(
@@ -360,7 +493,6 @@ def check_translation_abi(errors: list[str]) -> None:
                     f"header={c_type!r}, Python={python_ctype!r}, "
                     f"expected={expected_ctype!r}"
                 )
-
 
 def check_concolic_abi(errors: list[str]) -> None:
     """Audit the frozen concolic-v1 ctypes layout and owned result contract."""
@@ -638,6 +770,7 @@ def audit_repository(*, include_workflows: bool = True) -> list[str]:
     check_plugin_enums(errors)
     check_output_languages(errors)
     check_translation_abi(errors)
+    check_sanitizer_abi(errors)
     check_concolic_abi(errors)
     check_versions(errors)
     check_documentation(errors)

@@ -82,6 +82,11 @@ using OptionalStringList =
     llvm::cl::list<std::string, bool, OptionalStringParser>;
 using ConcolicStringList = OptionalStringList;
 
+#define NEVERD_CLI_LITERAL(OPTION, SPELLING)                                   \
+  inline constexpr llvm::StringLiteral OPTION##RequiredValue = SPELLING;
+#include "NeverDCLIValues.def"
+#undef NEVERD_CLI_LITERAL
+
 //===----------------------------------------------------------------------===//
 // Shared helpers
 //===----------------------------------------------------------------------===//
@@ -245,6 +250,8 @@ extern llvm::cl::opt<std::string> SafetySources;
 extern llvm::cl::opt<unsigned> SafetyMaxPaths;
 extern llvm::cl::opt<unsigned> SafetyMaxSteps;
 extern llvm::cl::opt<unsigned> SafetyMaxLoop;
+extern llvm::cl::opt<unsigned> SafetyMaxCallDepth;
+extern llvm::cl::opt<unsigned> SafetyMaxSummaryIterations;
 extern llvm::cl::opt<unsigned long long> SafetySolverConflicts;
 
 // LowIR concolic branch flipping.  Strings are parsed by the handler so
@@ -312,6 +319,7 @@ extern llvm::cl::opt<std::string> CgSvg;
 extern llvm::cl::opt<std::string> PatchFromIR;
 extern llvm::cl::opt<std::string> PatchFromC;
 extern llvm::cl::opt<std::string> PatchFuncAddr;
+extern OptionalStringList PatchSanitize;
 
 // Patch strategy.
 extern llvm::cl::opt<PatchStrategy> PatchStrat;

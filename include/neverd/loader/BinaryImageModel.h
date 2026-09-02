@@ -171,6 +171,37 @@ struct AppliedI386GOTPCField {
   bool operator==(const AppliedI386GOTPCField &Other) const = default;
 };
 
+/// Loader- or debug-authenticated byte extent of one data object.  This is
+/// deliberately separate from Symbol: Mach-O nlist and ordinary COFF symbols
+/// do not carry object sizes, and a distance to the next symbol is padding,
+/// not proof of a C object boundary.  This is an internal image-model enum,
+/// not a serialized or ABI-facing contract.
+enum class ExactDataObjectEvidence : uint8_t {
+  ELFObjectSymbol = 0,
+  AuthenticatedDebug = 1,
+};
+
+/// What an authenticated extent proves to a counted-write consumer.  A
+/// storage-object boundary is an upper bound only: it may describe a struct
+/// containing a smaller writable member.  Only occurrence-authenticated typed
+/// buffer evidence may establish an exact safety capacity; a typed non-buffer
+/// is retained as authoritative negative evidence.  This is likewise internal
+/// to the image model and is never emitted directly as an ABI value.
+enum class ExactDataObjectPrecision : uint8_t {
+  Storage = 0,
+  TypedBuffer = 1,
+  TypedNonBuffer = 2,
+};
+
+struct ExactDataObjectExtent {
+  va_t Base = InvalidVA;
+  uint64_t Size = 0;
+  ExactDataObjectEvidence Evidence = ExactDataObjectEvidence::ELFObjectSymbol;
+  ExactDataObjectPrecision Precision = ExactDataObjectPrecision::Storage;
+
+  bool operator==(const ExactDataObjectExtent &Other) const = default;
+};
+
 // ===--------------------------------------------------------------------===//
 // BinaryImage — the unified output of all loaders
 // ===--------------------------------------------------------------------===//
@@ -191,6 +222,9 @@ struct BinaryImage {
   std::vector<Import> Imports;
   std::vector<Export> Exports;
   std::vector<Symbol> Symbols;
+  /// Exact data-object boundaries.  Conflicting entries are retained so a
+  /// consumer can fail closed; producers must never collapse them by order.
+  std::vector<ExactDataObjectExtent> ExactDataObjects;
   std::vector<RelocationEntry> Relocations;
   std::vector<BaseRelocation> BaseRelocations;
   /// Present only for Solana SBF ELF inputs.  The dedicated loader owns ELF
@@ -859,8 +893,7 @@ struct BinaryImage {
   /// being loaded.
   bool hasRelocationProvenanceAt(va_t Address) const {
     if (CodePtrRelocSlots.count(Address) || DataPtrRelocSlots.count(Address) ||
-        RelDataPtrRelocSlots.count(Address) ||
-        RelCodeRelocSlots.count(Address))
+        RelDataPtrRelocSlots.count(Address) || RelCodeRelocSlots.count(Address))
       return true;
     if (auto It = ImportStorageSlots.find(Address);
         It != ImportStorageSlots.end() &&
@@ -1333,10 +1366,10 @@ struct BinaryImage {
   /// Merge one already-validated record into an import-storage view.  Keeping
   /// this policy shared by loader mutation and compatibility collection makes
   /// the result independent of parser and consumer order.
-  static bool mergeImportStorageSlot(
-      std::map<va_t, ImportStorageSlot> &Slots, std::set<va_t> &Conflicts,
-      va_t SlotVA, llvm::StringRef Name, int64_t Addend,
-      ImportStorageEvidence Evidence) {
+  static bool mergeImportStorageSlot(std::map<va_t, ImportStorageSlot> &Slots,
+                                     std::set<va_t> &Conflicts, va_t SlotVA,
+                                     llvm::StringRef Name, int64_t Addend,
+                                     ImportStorageEvidence Evidence) {
     if (Conflicts.count(SlotVA))
       return false;
 
@@ -1352,10 +1385,8 @@ struct BinaryImage {
       return false;
     }
 
-    const unsigned ExistingStrength =
-        static_cast<unsigned>(Existing.Evidence);
-    const unsigned IncomingStrength =
-        static_cast<unsigned>(Incoming.Evidence);
+    const unsigned ExistingStrength = static_cast<unsigned>(Existing.Evidence);
+    const unsigned IncomingStrength = static_cast<unsigned>(Incoming.Evidence);
     if (Existing.Addend == Incoming.Addend) {
       if (IncomingStrength > ExistingStrength)
         Existing.Evidence = Incoming.Evidence;
@@ -1378,8 +1409,7 @@ struct BinaryImage {
   /// disagreement or equal-strength addend disagreement permanently poisons
   /// the slot so downstream code fails closed instead of choosing by order.
   bool recordImportStorageSlot(va_t SlotVA, llvm::StringRef Name,
-                               int64_t Addend,
-                               ImportStorageEvidence Evidence) {
+                               int64_t Addend, ImportStorageEvidence Evidence) {
     if (!isValidImportStorageSlot(SlotVA, Name) ||
         ConflictingImportStorageSlots.count(SlotVA))
       return false;

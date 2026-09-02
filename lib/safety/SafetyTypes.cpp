@@ -80,6 +80,20 @@ const char *toString(ArgFlow F) {
   llvm_unreachable("unknown safety argument flow");
 }
 
+const char *toString(CapacityPrecision P) {
+  switch (P) {
+  case CapacityPrecision::Unknown:
+    return "unknown";
+  case CapacityPrecision::ContainerUpperBound:
+    return "container_upper_bound";
+  case CapacityPrecision::StorageExact:
+    return "storage_exact";
+  case CapacityPrecision::TypedBufferExact:
+    return "typed_buffer_exact";
+  }
+  llvm_unreachable("unknown capacity precision");
+}
+
 const char *toString(ReplayInputKind K) {
   switch (K) {
 #define SAFETY_REPLAY_INPUT_KIND(ID, SPELLING)                                 \
@@ -98,6 +112,26 @@ const char *toString(ReplayBindingRole R) {
 #include "neverd/safety/SafetyEnums.def"
   }
   llvm_unreachable("unknown replay binding role");
+}
+
+const char *toString(ReachabilityStatus S) {
+  switch (S) {
+#define SAFETY_REACHABILITY_STATUS(ID, SPELLING)                               \
+  case ReachabilityStatus::ID:                                                 \
+    return SPELLING;
+#include "neverd/safety/SafetyEnums.def"
+  }
+  llvm_unreachable("unknown safety reachability status");
+}
+
+const char *toString(SafetyEntryKind K) {
+  switch (K) {
+#define SAFETY_ENTRY_KIND(ID, SPELLING)                                        \
+  case SafetyEntryKind::ID:                                                    \
+    return SPELLING;
+#include "neverd/safety/SafetyEnums.def"
+  }
+  llvm_unreachable("unknown safety entry kind");
 }
 
 } // namespace neverd::safety

@@ -11199,9 +11199,9 @@ TEST(LLVMCodePointerInvariantBoundary,
       makeExactMixedPointerSlotIndirectCaller(Arch::X64, SlotOffset);
 
   llvm::LLVMContext Context;
-  auto Module = MedLLVMEmitter().emit(
-      {Caller}, Context, "runtime-callable-null-slot", Arch::X64, {}, &Image,
-      BinaryFormat::COFF);
+  auto Module =
+      MedLLVMEmitter().emit({Caller}, Context, "runtime-callable-null-slot",
+                            Arch::X64, {}, &Image, BinaryFormat::COFF);
   ASSERT_NE(Module, nullptr);
   expectValidModule(*Module);
 
@@ -11237,8 +11237,7 @@ TEST(LLVMCodePointerInvariantBoundary,
       SlotVA, RuntimeCallablePointerSlotKind::GuardMemcpy));
   MedFunc Caller =
       makeExactMixedPointerSlotIndirectCaller(Arch::X64, SlotOffset);
-  MedFunc Callee =
-      makeReturnFunction("runtime_callable_code_fallback", CodeVA);
+  MedFunc Callee = makeReturnFunction("runtime_callable_code_fallback", CodeVA);
 
   llvm::LLVMContext Context;
   auto Module = MedLLVMEmitter().emit(
@@ -11265,8 +11264,7 @@ TEST(LLVMCodePointerInvariantBoundary,
                                             OriginalRun, Seen));
 }
 
-TEST(LLVMCodePointerInvariantBoundary,
-     RuntimeCallableDataOverlapFailsClosed) {
+TEST(LLVMCodePointerInvariantBoundary, RuntimeCallableDataOverlapFailsClosed) {
   constexpr uint64_t SlotOffset = 8;
   constexpr va_t SlotVA = DataVA + SlotOffset;
   BinaryImage Image =
@@ -11282,9 +11280,9 @@ TEST(LLVMCodePointerInvariantBoundary,
 
   llvm::LLVMContext Context;
   testing::internal::CaptureStderr();
-  auto Module = MedLLVMEmitter().emit(
-      {Caller}, Context, "runtime-callable-data-overlap", Arch::X64, {}, &Image,
-      BinaryFormat::COFF);
+  auto Module =
+      MedLLVMEmitter().emit({Caller}, Context, "runtime-callable-data-overlap",
+                            Arch::X64, {}, &Image, BinaryFormat::COFF);
   std::string Diagnostic = testing::internal::GetCapturedStderr();
   EXPECT_EQ(Module, nullptr);
   EXPECT_NE(Diagnostic.find("runtime-callable pointer slot"), std::string::npos)
@@ -14771,8 +14769,8 @@ MedFunc makeMergedExactAddressReturn(ExactAddressMergeKind Kind,
                                      va_t SecondTarget) {
   const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
   const uint16_t PointerSize = static_cast<uint16_t>(TRI.PointerSize);
-  MedFunc Func = makeMergedExactAddressIndirectCaller(
-      Kind, FirstTarget, SecondTarget, TargetArch);
+  MedFunc Func = makeMergedExactAddressIndirectCaller(Kind, FirstTarget,
+                                                      SecondTarget, TargetArch);
   Func.Name = Kind == ExactAddressMergeKind::Phi
                   ? "merged_exact_address_phi_return"
                   : "merged_exact_address_select_return";
@@ -16596,9 +16594,9 @@ TEST(LLVMCodePointerInvariantBoundary,
           "same_owner_blockaddress_target", CodeVA, FirstInteriorVA,
           SecondInteriorVA);
       llvm::LLVMContext Context;
-      auto Module = MedLLVMEmitter().emit(
-          {Caller, Owner}, Context, "same-owner-blockaddress-value-merge",
-          TargetArch, {}, &Image, Format);
+      auto Module = MedLLVMEmitter().emit({Caller, Owner}, Context,
+                                          "same-owner-blockaddress-value-merge",
+                                          TargetArch, {}, &Image, Format);
       ASSERT_NE(Module, nullptr);
       expectValidModule(*Module);
 
@@ -16677,14 +16675,14 @@ TEST(LLVMCodePointerInvariantBoundary,
             SecondInteriorVA);
         llvm::LLVMContext Context;
         testing::internal::CaptureStderr();
-        auto Module = MedLLVMEmitter().emit(
-            {Caller, Owner}, Context, "invalid-blockaddress-value-merge",
-            TargetArch, {}, &Image, Format);
+        auto Module = MedLLVMEmitter().emit({Caller, Owner}, Context,
+                                            "invalid-blockaddress-value-merge",
+                                            TargetArch, {}, &Image, Format);
         std::string Diagnostic = testing::internal::GetCapturedStderr();
         EXPECT_EQ(Module, nullptr);
-        const char *ExpectedDiagnostic =
-            Kind == ExactAddressMergeKind::Phi ? Current.PhiDiagnostic
-                                                : Current.SelectDiagnostic;
+        const char *ExpectedDiagnostic = Kind == ExactAddressMergeKind::Phi
+                                             ? Current.PhiDiagnostic
+                                             : Current.SelectDiagnostic;
         EXPECT_NE(Diagnostic.find(ExpectedDiagnostic), std::string::npos)
             << Diagnostic;
       }
@@ -16715,10 +16713,10 @@ TEST(LLVMCodePointerInvariantBoundary,
           CodeVA + 0x60);
       llvm::LLVMContext Context;
       testing::internal::CaptureStderr();
-      auto Module = MedLLVMEmitter().emit(
-          {Caller, FirstOwner, SecondOwner}, Context,
-          "cross-owner-blockaddress-value-merge", TargetArch, {}, &Image,
-          Format);
+      auto Module =
+          MedLLVMEmitter().emit({Caller, FirstOwner, SecondOwner}, Context,
+                                "cross-owner-blockaddress-value-merge",
+                                TargetArch, {}, &Image, Format);
       std::string Diagnostic = testing::internal::GetCapturedStderr();
       EXPECT_EQ(Module, nullptr);
       EXPECT_NE(Diagnostic.find("no unique lifted code identity"),
@@ -16742,18 +16740,18 @@ TEST(LLVMCodePointerInvariantBoundary,
 
       MedFunc Caller = makeMergedExactAddressReturn(
           Kind, TargetArch, ConflictingInteriorVA, ConflictingInteriorVA);
-      MedFunc FirstOwner = makeInteriorCodeIdentityOwner(
-          "first_conflicting_block_owner", CodeVA, ConflictingInteriorVA,
-          CodeVA + 0x20);
+      MedFunc FirstOwner =
+          makeInteriorCodeIdentityOwner("first_conflicting_block_owner", CodeVA,
+                                        ConflictingInteriorVA, CodeVA + 0x20);
       MedFunc SecondOwner = makeInteriorCodeIdentityOwner(
           "second_conflicting_block_owner", CodeVA + 0x40,
           ConflictingInteriorVA, CodeVA + 0x60);
       llvm::LLVMContext Context;
       testing::internal::CaptureStderr();
-      auto Module = MedLLVMEmitter().emit(
-          {Caller, FirstOwner, SecondOwner}, Context,
-          "conflicting-block-owner-value-merge", TargetArch, {}, &Image,
-          Format);
+      auto Module =
+          MedLLVMEmitter().emit({Caller, FirstOwner, SecondOwner}, Context,
+                                "conflicting-block-owner-value-merge",
+                                TargetArch, {}, &Image, Format);
       std::string Diagnostic = testing::internal::GetCapturedStderr();
       EXPECT_EQ(Module, nullptr);
       EXPECT_NE(Diagnostic.find("no unique lifted code identity"),

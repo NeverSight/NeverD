@@ -20,6 +20,8 @@
 
 #include "neverd/sdk/NeverDCAPITypes.h"
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -37,6 +39,137 @@ extern "C" {
 // ===--------------------------------------------------------------------===//
 // Patch operations
 // ===--------------------------------------------------------------------===//
+
+/// Native patch installation strategy used by binary-sanitizer-v1.  The enum
+/// supplies names only; the public carrier is fixed-width even when a consumer
+/// is compiled with -fshort-enums.
+enum neverd_sanitize_strategy {
+  NEVERD_SANITIZE_STRATEGY_SECTION = 0,
+  NEVERD_SANITIZE_STRATEGY_INPLACE = 1
+};
+typedef uint32_t neverd_sanitize_strategy_t;
+
+/// Stable terminal status for one sanitizer publication transaction.
+enum neverd_sanitize_status {
+  NEVERD_SANITIZE_STATUS_OK = 0,
+  NEVERD_SANITIZE_STATUS_INVALID_ARGUMENT = 1,
+  NEVERD_SANITIZE_STATUS_INVALID_SESSION = 2,
+  NEVERD_SANITIZE_STATUS_NOT_LOADED = 3,
+  NEVERD_SANITIZE_STATUS_UNSUPPORTED_TARGET = 4,
+  NEVERD_SANITIZE_STATUS_PIPELINE_FAILED = 5,
+  NEVERD_SANITIZE_STATUS_INCOMPLETE_COVERAGE = 6,
+  NEVERD_SANITIZE_STATUS_HUNT_INCOMPLETE = 7,
+  NEVERD_SANITIZE_STATUS_METADATA_INVALID = 8,
+  NEVERD_SANITIZE_STATUS_PLAN_INCOMPLETE = 9,
+  NEVERD_SANITIZE_STATUS_GUARD_FAILED = 10,
+  NEVERD_SANITIZE_STATUS_IO_FAILED = 11,
+  NEVERD_SANITIZE_STATUS_PATCH_FAILED = 12,
+  NEVERD_SANITIZE_STATUS_RECEIPT_MISMATCH = 13,
+  NEVERD_SANITIZE_STATUS_RELOAD_FAILED = 14,
+  NEVERD_SANITIZE_STATUS_AUTHENTICATION_FAILED = 15,
+  NEVERD_SANITIZE_STATUS_PUBLISH_FAILED = 16,
+  NEVERD_SANITIZE_STATUS_SIGNATURE_UNSUPPORTED = 17,
+  NEVERD_SANITIZE_STATUS_SIGNING_FAILED = 18,
+  NEVERD_SANITIZE_STATUS_PUBLISH_INDETERMINATE = 19,
+  NEVERD_SANITIZE_STATUS_PUBLISHED_INCOMPLETE = 20
+};
+/// Fixed-width ABI carrier; the enum above supplies only named constants.
+typedef uint32_t neverd_sanitize_status_t;
+
+/// Public outcome of the one allowed namespace publication attempt.  A
+/// successful authenticated no-change receipt is NOT_PUBLISHED, not failure.
+enum neverd_sanitize_publication_outcome {
+  NEVERD_SANITIZE_PUBLICATION_OUTCOME_NOT_ATTEMPTED = 0,
+  NEVERD_SANITIZE_PUBLICATION_OUTCOME_NOT_PUBLISHED = 1,
+  NEVERD_SANITIZE_PUBLICATION_OUTCOME_PUBLISHED = 2,
+  NEVERD_SANITIZE_PUBLICATION_OUTCOME_INDETERMINATE = 3
+};
+typedef uint32_t neverd_sanitize_publication_outcome_t;
+
+enum neverd_sanitize_publication_namespace {
+  NEVERD_SANITIZE_PUBLICATION_NAMESPACE_NONE = 0,
+  NEVERD_SANITIZE_PUBLICATION_NAMESPACE_CREATE_EXCLUSIVE = 1,
+  NEVERD_SANITIZE_PUBLICATION_NAMESPACE_NO_CHANGE = 2
+};
+typedef uint32_t neverd_sanitize_publication_namespace_t;
+
+enum neverd_sanitize_publication_guarantee {
+  NEVERD_SANITIZE_PUBLICATION_GUARANTEE_NAMESPACE_ATOMIC = 1u << 0,
+  NEVERD_SANITIZE_PUBLICATION_GUARANTEE_DESTINATION_CREATE_EXCLUSIVE = 1u << 1,
+  NEVERD_SANITIZE_PUBLICATION_GUARANTEE_COMPARE_AND_SWAP = 1u << 2,
+  NEVERD_SANITIZE_PUBLICATION_GUARANTEE_CRASH_DURABLE = 1u << 3
+};
+typedef uint32_t neverd_sanitize_publication_guarantees_t;
+
+enum neverd_sanitize_publication_operand_binding {
+  NEVERD_SANITIZE_PUBLICATION_OPERAND_BINDING_NONE = 0,
+  NEVERD_SANITIZE_PUBLICATION_OPERAND_BINDING_ACCESS_CONTROL_CONFINED_DISTINCT_CREDENTIALS =
+      1,
+  NEVERD_SANITIZE_PUBLICATION_OPERAND_BINDING_KERNEL_HELD_OBJECT = 2
+};
+typedef uint32_t neverd_sanitize_publication_operand_binding_t;
+
+enum { NEVERD_SANITIZE_PUBLICATION_ABI_VERSION = 1 };
+
+/// Append-only strict sanitizer options.  Zero-valued budgets select bounded
+/// engine defaults.  `struct_size == sizeof(size_t)` is the smallest valid
+/// prefix and selects section patching plus all defaults.
+typedef struct neverd_sanitize_options_v1 {
+  size_t struct_size;
+  uint32_t strategy;
+  uint32_t max_paths;
+  uint32_t max_steps;
+  uint32_t max_loop;
+  uint64_t solver_conflicts;
+  uint32_t max_call_depth;
+  uint32_t max_summary_iterations;
+} neverd_sanitize_options_v1;
+
+/// Size-gated binary-sanitizer-v1 result.  The caller initializes
+/// `struct_size`; the library preserves it and clears only reached later
+/// fields at the start of every call.  No field owns heap memory.
+typedef struct neverd_sanitize_result_v1 {
+  size_t struct_size;
+  int ok;
+  neverd_sanitize_status_t status;
+  uint32_t plan_version;
+  uint64_t findings;
+  uint64_t guarded_sites;
+  uint64_t guarded_functions;
+  uint64_t unsupported_sites;
+  uint64_t patched_functions;
+  uint64_t code_size;
+  uint64_t trampoline_count;
+  neverd_sanitize_publication_outcome_t publication_outcome;
+  uint32_t publication_receipt_version;
+  uint32_t publication_receipt_complete;
+  neverd_sanitize_publication_namespace_t publication_namespace_disposition;
+  neverd_sanitize_publication_guarantees_t publication_guarantee_flags;
+  neverd_sanitize_publication_operand_binding_t publication_operand_binding;
+} neverd_sanitize_result_v1;
+
+/// Version of the append-only publication receipt contract implemented by this
+/// library.  Callers that require authenticated publication must probe this
+/// symbol before invoking neverd_session_sanitize so an older library cannot
+/// mutate the namespace before the ABI mismatch is discovered.
+NEVERD_API uint32_t neverd_sanitize_publication_abi_version(void);
+
+/// Stable non-owned spelling for a sanitizer status.  Unknown values return
+/// "invalid".
+NEVERD_API const char *
+neverd_sanitize_status_name(neverd_sanitize_status_t Status);
+
+/// Analyze and patch the binary already loaded in `Sess`, then publish to
+/// `OutputPath` under the receipt contract above.  Returns one only after a
+/// complete authenticated publication (or authenticated no-change).  Every
+/// failure returns zero and records an actionable message in
+/// neverd_last_error().  Existing destinations are never replaced by v1, but
+/// PUBLISH_INDETERMINATE and PUBLISHED_INCOMPLETE mean a newly created
+/// destination may exist and must be inspected by the caller.
+NEVERD_API int
+neverd_session_sanitize(neverd_session_t Sess, const char *OutputPath,
+                        const neverd_sanitize_options_v1 *Options,
+                        neverd_sanitize_result_v1 *Result);
 
 NEVERD_API int neverd_patch_from_ir(neverd_session_t Sess, const char *IRText,
                                     int Strategy, const char *OutputPath);

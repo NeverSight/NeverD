@@ -350,7 +350,8 @@ PatchResult ELFPatcher::patch(const std::filesystem::path &InputPath,
     return PatchResult{};
   }
 
-  return readPatchWrite(
+  std::vector<PatchedFunctionEntry> InstalledFunctions;
+  PatchResult Patch = readPatchWrite(
       InputPath, OutputPath, /*SetExecPerm=*/true, "elf_patch",
       [&](std::vector<uint8_t> &Binary, PatchResult &Result) -> bool {
         PatchLayout Layout;
@@ -484,7 +485,6 @@ PatchResult ELFPatcher::patch(const std::filesystem::path &InputPath,
             authenticatedFunctionExports(CachedImage);
         const std::vector<Export> *TrampolineExports =
             CachedImage ? &AuthenticatedExports : CachedExports;
-        std::vector<PatchedFunctionEntry> PatchedFunctions;
         const bool HasExactSourcePlan = SourcePreparation.HasExactSources;
         if (HasExactSourcePlan &&
             !validateSourceFunctionPatchPlan(Img, CachedImage, SourceDetail)) {
@@ -511,10 +511,11 @@ PatchResult ELFPatcher::patch(const std::filesystem::path &InputPath,
                 Layout.TextFileOff, /*ImageBase=*/0, TargetArch, CachedMode,
                 CachedSymbols, CachedCodeRanges, TrampolineExports,
                 /*PatchedOriginalEntries=*/nullptr,
-                /*PatchedEntryMappings=*/nullptr, &PatchedFunctions,
+                /*PatchedEntryMappings=*/nullptr, &InstalledFunctions,
                 TrampolinePlan.Owners, TrampolinePlan.OriginalVAs);
           if (!validatePatchedSourceTrampolineClosure(
-                  TrampolinePlan, PatchedFunctions, TrampCount, SourceDetail)) {
+                  TrampolinePlan, InstalledFunctions, TrampCount,
+                  SourceDetail)) {
             llvm::WithColor::error()
                 << "elf_patch: source trampoline closure failed: "
                 << SourceDetail << "\n";
@@ -524,7 +525,9 @@ PatchResult ELFPatcher::patch(const std::filesystem::path &InputPath,
           TrampCount = installTrampolines(
               Binary, Img.SymbolAddrs, Layout.TextVA, Layout.TextSize,
               Layout.TextFileOff, /*ImageBase=*/0, TargetArch, CachedMode,
-              CachedSymbols, CachedCodeRanges, TrampolineExports);
+              CachedSymbols, CachedCodeRanges, TrampolineExports,
+              /*PatchedOriginalEntries=*/nullptr,
+              /*PatchedEntryMappings=*/nullptr, &InstalledFunctions);
         }
 
         Result.Success = true;
@@ -532,6 +535,11 @@ PatchResult ELFPatcher::patch(const std::filesystem::path &InputPath,
         Result.TrampolineCount = TrampCount;
         return true;
       });
+  patch_receipt_detail::publishCommitted(
+      Patch, InstalledFunctions, [](const PatchedFunctionEntry &Installed) {
+        return Installed.OriginalVA;
+      });
+  return Patch;
 }
 
 } // namespace neverd

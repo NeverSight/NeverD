@@ -119,9 +119,61 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 
 ---
 
+## 既知エントリからの手続き間到達可能性
+
+各発見には、混同してはならない 3 つの独立した主張があります。
+
+| フィールド | 問い | 値 |
+|------------|------|----|
+| `verdict` | ローカルな安全性解析は操作について何を証明したか | `SAFE`, `UNSAFE`, `UNKNOWN` |
+| `reachability.status` | その関数は既知のネイティブエントリから復元した制御経路上にあるか | `REACHABLE`, `UNREACHABLE`, `UNKNOWN` |
+| `reachability.attacker_control` | 引数スライスはこの発見での攻撃者影響について何を証明したか | `TAINTED`, `BOUNDED`, `UNKNOWN` |
+
+到達可能性は追加証拠であり、発見の `verdict`、集約判定、CLI 終了コードを
+書き換えません。そのため、ローカルに証明された越境が
+`verdict=UNSAFE` と `reachability.status=UNREACHABLE` を同時に持つことが
+あります。実行可能な攻撃経路を必要とする利用側は両方を検査します。
+
+ルートは、認識済みアプリケーションエントリ（`application`、例：`main`、
+`WinMain`）、イメージエントリ（`image`）、エクスポート関数（`export`）です。
+同一関数が複数の識別を持つ場合の決定的な優先順は `application`、`image`、
+`export` です。`reachability.entry` は `va`、`name`、`kind` を記録します。
+到達可能な非ルート発見では、`call_chain` も正確な内部エッジの最短かつ決定的な
+経路を示し、各エッジは `caller_va`、呼び出し位置 `call_va`、`callee_va`、
+`direct` または `indirect` の `kind` を持ちます。
+
+`UNREACHABLE` は、ルートが存在し、内部呼び出しインベントリが完全で、深さ予算を
+使い切っておらず、それでも経路がない場合だけ出力します。他の正の証拠でまだ到達して
+いない関数では、ルート欠落、重複・曖昧な関数識別、不整合な CFG／呼び出し
+インベントリ、未解決の実行可能な内部対象、深さ予算切れによって否定証明ができず、
+`reachability.status=UNKNOWN` となり、該当時は `reason` と
+`budget_hit` を伴います。未知 ABI、引数幅不一致、可変長部分だけの slot、不完全な
+スライス、深さまたは要約予算切れでも、未証明の攻撃者制御は UNKNOWN のままです。
+すでに証明した事実は有効なままで、伝播を推測で補いません。
+
+レポートのカウンタは関数や経路ではなく発見を数えます。`control_reachable` は
+`status=REACHABLE` を数え、`attacker_reachable` はさらに
+`attacker_control=TAINTED` である部分集合です。`reachability_unknown` と
+`unreachable` は残りの制御状態を数えます。これらは判定を数える `safe`、`unsafe`、
+`unknown` とは別です。
+
+---
+
 ## 予算、出力、バインディング
 
-ハントの探索とソルバは予算で制限します（`--max-paths`、`--max-steps`、`--max-loop`、`--solver-conflicts`）。予算切れは UNKNOWN です。両コマンドは JSON を出力し、`-o` を尊重します。終了コードは SAFE が `0`、UNSAFE が `2`、UNKNOWN またはエラーが `1` です。
+ハントの探索とソルバは予算で制限します（`--max-paths`、`--max-steps`、`--max-loop`、`--solver-conflicts`）。手続き間解析では、`max_call_depth` が既知エントリからの内部呼び出しエッジ数を、`max_summary_iterations` が攻撃者制御の固定点反復数を制限します。既定値はそれぞれ 64 エッジと、有効な深さ制限に 1 を加えた反復数です。予算切れは上記のとおり fail closed です。`max_call_depth` の枯渇では未到達関数が `status=UNKNOWN` になり得ます。`max_summary_iterations` の枯渇は構造的な証人を消さないため、`status=REACHABLE` と `attacker_control=UNKNOWN`、`budget_hit=true` が共存できます。両コマンドは JSON を出力し、`-o` を尊重します。終了コードは SAFE が `0`、UNSAFE が `2`、UNKNOWN またはエラーが `1` です。
+
+どの公開インターフェイスでも 0 はエンジン既定値を選びます。
+
+| インターフェイス | 制御深さ | 攻撃者要約 |
+|------------------|----------|------------|
+| CLI（`audit` / `hunt`） | `--max-call-depth <n>` | `--max-summary-iterations <n>` |
+| C（`neverd_safety_options`） | `max_call_depth` | `max_summary_iterations` |
+| Python（`Session.audit()` / `Session.hunt()`） | `max_call_depth=<n>` | `max_summary_iterations=<n>` |
+
+C の呼び出し側は `neverd_safety_options` をゼロ初期化し、
+`struct_size=sizeof(neverd_safety_options)` を設定します。以前の構造体サイズでは既定値を
+維持します。Python は両値を符号なし 32-bit 整数として検証します。
 
 同じ解析は C API（`neverd_session_audit_json` / `neverd_session_hunt_json`、版付き `neverd_safety_options`）と Python SDK（`Session.audit()` / `Session.hunt()`）でも使えます。
 
@@ -143,11 +195,12 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
   "capacity": 16,
   "capacity_kind": "exact",
   "corroboration": "path predicate and overflow are jointly satisfiable",
+  "reachability": { "status": "REACHABLE", "attacker_control": "TAINTED", "budget_hit": false, "entry": { "va": "0x1000", "name": "main", "kind": "application" }, "call_chain": [{ "caller_va": "0x1000", "call_va": "0x1080", "callee_va": "0x1100", "kind": "direct" }] },
   "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" }, "candidate_values": [{ "name": "copy_length", "value": "17" }, { "name": "argv[1]", "value": "16 bytes" }], "replayable": false, "replay": { "adapter": "process-input-v1", "reason": "argv input is not supported by process-input-v1" }, "symbolic_model": [{ "id": 0, "name": "copy_len", "width": 64, "value_hex": "0x11", "origin": "input" }] }
 }
 ```
 
-`replayable` は独立した約束ではなく導出された証拠です。`replay` に `process-input-v1` アダプタ向けの完全な入力プランがある場合に限り真です。プランには正確な環境バイト、使用する場合は最初の標準入力バイト列、ソルバ割り当て ID から各入力への対応を記録し、作れない場合は `replay.reason` が理由を示します。これらのフィールドは追加的で、トップレベルの `schema_version` は `1` のままです。
+`replayable` は独立した約束ではなく導出された証拠です。`replay` に `process-input-v1` アダプタ向けの完全な入力プランがある場合に限り真です。プランには正確な環境バイト、使用する場合は最初の標準入力バイト列、ソルバ割り当て ID から各入力への対応を記録し、作れない場合は `replay.reason` が理由を示します。再生と到達可能性のフィールドは追加的で、トップレベルの `schema_version` は `1` のままです。
 
 ---
 
@@ -158,4 +211,4 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 - カタログ済みのワイド文字コピーと追加コピーは、要素幅と既存の宛先長を復元できるまで UNKNOWN です。出力引数型アロケータと条件付き `realloc` の所有権も、ハンドル遷移を証明できなければ UNKNOWN のままです。
 - **P0**（本リリース、三形式すべて）：シンクカタログ、引数事前フィルタ、コピー越境ハント、ヒープ寿命監査。全テストホストで PE、ELF、Mach-O × x86-64、AArch64 の 6 fixture を実行します。
 - **P1**：スタック/グローバル越境、未初期化ローカル読み、書式文字列検査は利用可能です。より豊かな PDB スタック型と追加のプラットフォーム確保 API は段階的なカバレッジであり、正確な要約がなければ UNKNOWN のままです。
-- **P2**：patch で挿入する実行時検査、手続き間の攻撃者到達可能性。
+- 現在のスライスは既知エントリ、構造的な手続き間到達可能性、攻撃者パラメータの単調伝播を対象にします。独立した実験的アダプタ `lowir-concolic-v1` は、必須のネイティブ形式／アーキテクチャ行列で、レジスタ seed によるリプレイ検証済みのブランチ反転を提供します。これは常に非網羅的であり、安全性 verdict を変更しません。実験的 `binary-sanitizer-v1` は Darwin で全サイトを保護できなければ拒否する counted-write ガードと認証済み公開を提供しますが、receipt が認証するのはトランザクション中に保持したディレクトリ object であり、元の pathname の永続的かつ再検証可能な binding ではありません。より広い `process-replay-v1` は引き続き plan、coordinator、可用性の fail-closed な Phase 0 境界だけで、ネイティブ replay を実行するホストはありません。

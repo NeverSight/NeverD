@@ -76,9 +76,40 @@ Analyser un binaire levé pour les défauts de durée de vie du tas (fuite, doub
 |---------|--------|
 | Piste `audit` | Machine d’état du tas sur l’IR + résumés d’évasion : fuite, double libération, utilisation après libération |
 | Piste `hunt` | Catalogue de puits + préfiltre d’arguments + capacité de destination + témoin du solveur |
+| Preuve d’atteignabilité | État de contrôle depuis des entrées connues, point fixe attaquant indépendant et témoin exact racine/chaîne d’appels |
 | Contrat d’identité | Résolution des puits par format (IAT PE, PLT ELF, bind dyld Mach-O) et sources de noms PDB / DWARF / MAP |
 
-**État :** La Phase 1 est implémentée pour PE, ELF et Mach-O. P0 comprend les analyses en monde fermé du cycle de vie du tas et des copies dangereuses, ainsi que la preuve additive du schéma v1 avec rejeu `process-input-v1` des valeurs littérales exactes de l’environnement et de la première consommation de l’entrée standard ; les autres types restent non rejouables avec une raison. P1 couvre les débordements pile/global, les lectures locales non initialisées et les chaînes de format. Les effets d’appel inconnus ou partiellement applicables restent UNKNOWN. La couverture des verdicts et de l’identité est verrouillée par [`unittests/safety`](../../unittests/safety) et le bout-en-bout [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp), qui exécute sur chaque hôte la matrice obligatoire PE/ELF/Mach-O × x86-64/AArch64. Voir [Audit et chasse de sûreté mémoire](../memory-safety.fr.md). Une fondation P2 est désormais implémentée : la version `lowir-concolic-v1` suit une trace LowIR native bornée et ne publie que des graines de registres vérifiées par rejeu, avec des preuves PE/ELF/Mach-O × x86-64/AArch64 via C, CLI et Python. L’insertion de contrôles binaires, l’ordonnancement et la mutation de corpus pour le fuzzing hybride, la projection des entrées mémoire et la portée interprocédurale élargie restent des travaux ultérieurs, hors acceptation de la Phase 1.
+**État :** La Phase 1 est implémentée pour PE, ELF et Mach-O. P0 comprend les analyses en monde fermé du cycle de vie du tas et des copies dangereuses, ainsi que la preuve additive du schéma v1 avec rejeu `process-input-v1` des valeurs littérales exactes de l’environnement et de la première consommation de l’entrée standard ; les autres types restent non rejouables avec une raison. P1 couvre les débordements pile/global, les lectures locales non initialisées et les chaînes de format. Les effets d’appel inconnus ou partiellement applicables restent UNKNOWN. La couverture des verdicts et de l’identité est verrouillée par [`unittests/safety`](../../unittests/safety) et le bout-en-bout [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp), qui exécute sur chaque hôte la matrice obligatoire PE/ELF/Mach-O × x86-64/AArch64. Voir [Audit et chasse de sûreté mémoire](../memory-safety.fr.md).
+
+La tranche interprocédurale actuelle ajoute `reachability.status` et
+`reachability.attacker_control` au schéma v1 sans modifier le `verdict`
+indépendant. Elle rapporte les racines `application`, `image` ou `export`, les
+chaînes d’appels internes exactes et les états UNKNOWN à échec fermé. Les
+budgets `max_call_depth` et `max_summary_iterations` sont disponibles via l’API
+C, les deux commandes CLI et les deux méthodes Python. `control_reachable` et
+`attacker_reachable` sont donc des totaux d’atteignabilité, pas d’autres totaux
+de verdicts.
+
+Les surfaces d’analyse et les plans P2 utilisent des limites versionnées avec un état explicite :
+
+| Plan | Périmètre | État |
+|------|-----------|------|
+| `lowir-concolic-v1` | Exploration hybride/concolique de LowIR et génération de graines | Expérimental ; graines de registres vérifiées par rejeu sur PE/ELF/Mach-O × x86-64/AArch64 |
+| `binary-sanitizer-v1` | Contrôles runtime insérés dans un binaire natif réécrit | Expérimental sur Darwin : gardes d’écriture comptée tout-ou-refus et publication authentifiée create-exclusive ou no-change sur la même source |
+| `process-replay-v1` | Rejeu de processus élargi pour argv, fichiers, réseau et lectures répétées, au-delà de `process-input-v1` | Limite Phase 0 uniquement : validation du plan/coordinateur et requête fail-closed de disponibilité native ; aucun hôte ne fournit d’opérations de rejeu natif |
+
+L’adaptateur concolique est une surface d’analyse distincte, et non une
+extension du contrat d’acceptation des rapports de sûreté de la Phase 1. Le
+sanitizer expérimental est exposé par `neverd_session_sanitize`,
+`neverd patch --sanitize=strict` et Python `Session.sanitize` ; les hôtes non
+Darwin refusent avant le lifting ou toute mutation du namespace. Un receipt
+complet authentifie seulement l’objet répertoire de destination conservé
+pendant la transaction. Comme ce répertoire peut être renommé après son
+ouverture, il ne prouve pas que le pathname d’origine continue de désigner cet
+objet pendant ou après le retour et ne constitue pas une liaison de chemin
+durable. `NativeProcessReplayAdapter` reste une limite Phase 0 de
+requête/factory à capacités tout-ou-rien ; tous les hôtes renvoient actuellement
+toutes les capacités à false et aucune table d’opérations.
 
 ---
 
@@ -96,7 +127,8 @@ Analyser un binaire levé pour les défauts de durée de vie du tas (fuite, doub
 ## Calendrier
 
 Les formats natifs, le décodage/lifting EVM legacy jusqu’à Fusaka, Solana SBF et
-la sûreté mémoire Phase 1 sont couverts par régression. La reconstruction source EVM
+la sûreté mémoire Phase 1, y compris la tranche actuelle d’atteignabilité depuis
+les entrées connues, sont couverts par régression. La reconstruction source EVM
 prudente reste en cours. Pas de dates promises.
 
 | Fonctionnalité | Statut |
@@ -105,5 +137,5 @@ prudente reste en cours. Pas de dates promises.
 | Décodage/lifting EVM legacy | Terminé jusqu’à Fusaka ; couvert par régression |
 | Reconstruction source EVM | En cours — étayée et prudente |
 | Décompilation Solana eBPF (SBF) | Terminée — v0-v4, C, Rust et LLVM ; couverte par régression |
-| Audit et chasse de sûreté mémoire | Phase 1 terminée — analyses P0/P1 et preuve de rejeu présentes ; les graines de registres LowIR concolic vérifiées par rejeu constituent désormais la fondation P2, dont l’orchestration restante demeure planifiée |
+| Audit et chasse de sûreté mémoire | Phase 1 et tranche d’atteignabilité depuis les entrées connues terminées ; `lowir-concolic-v1` et `binary-sanitizer-v1` sur Darwin sont expérimentaux ; le `process-replay-v1` natif reste indisponible derrière son adaptateur fail-closed de Phase 0 |
 | Renforcement moteur & produit | Continu |

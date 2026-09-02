@@ -89,9 +89,27 @@ Review/development 的显式 opt-in target；`latest` 仍为 Fusaka。EOFv1/EIP-
 |------|------|
 | `audit` 轨道 | IR 上的堆状态机 + 逃逸摘要：泄漏、重复释放、释放后使用 |
 | `hunt` 轨道 | 汇目录 + 参数预过滤 + 目标容量 + 求解器见证 |
+| 可达性证据 | 从已知入口出发的控制状态、独立的攻击者控制不动点，以及精确的根／调用链见证 |
 | 身份契约 | 按格式解析汇（PE IAT、ELF PLT、Mach-O dyld bind）以及 PDB / DWARF / MAP 名称来源 |
 
-**状态：** PE、ELF、Mach-O 的 Phase 1 已实现。P0 包含闭世界堆生命周期与危险拷贝分析；schema v1 的增量证据可为精确字面环境值及第一次受支持的 `read(0)` 系列标准输入消费提供 `process-input-v1` 重放，其他输入类型保持不可重放并附带原因。P1 已覆盖栈/全局越界、未初始化局部读取与格式串。未知或只能部分适用的调用效果保持 UNKNOWN。判定与身份覆盖由 [`unittests/safety`](../../unittests/safety)（目录、扫描器、参数预过滤、对象模型、hunt、audit）以及在每个主机上强制运行 PE/ELF/Mach-O × x86-64/AArch64 六单元 fixture 矩阵的端到端 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) 锁定。详见 [内存安全审计与猎取](../memory-safety.zh-CN.md)。P2 的一项基础能力现已落地：版本化的 `lowir-concolic-v1` 沿一条有界原生 LowIR 轨迹执行，只发布经重放验证的寄存器种子，并通过 C、CLI 与 Python 在 PE/ELF/Mach-O × x86-64/AArch64 矩阵上取证。二进制检查插入、混合模糊测试的语料调度与变异、内存输入投影及更广的跨过程可达性仍属于后续路线图，不在 Phase-1 验收契约内。
+**状态：** PE、ELF、Mach-O 的 Phase 1 已实现。P0 包含闭世界堆生命周期与危险拷贝分析；schema v1 的增量证据可为精确字面环境值及第一次受支持的 `read(0)` 系列标准输入消费提供 `process-input-v1` 重放，其他输入类型保持不可重放并附带原因。P1 已覆盖栈/全局越界、未初始化局部读取与格式串。未知或只能部分适用的调用效果保持 UNKNOWN。判定与身份覆盖由 [`unittests/safety`](../../unittests/safety)（目录、扫描器、参数预过滤、对象模型、hunt、audit）以及在每个主机上强制运行 PE/ELF/Mach-O × x86-64/AArch64 六单元 fixture 矩阵的端到端 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) 锁定。详见 [内存安全审计与猎取](../memory-safety.zh-CN.md)。
+
+当前过程间切片在不改变独立 `verdict` 的前提下，为 schema v1 增加
+`reachability.status` 与 `reachability.attacker_control`。它报告
+`application`、`image` 或 `export` 根、精确内部调用链，以及闭合失败的 UNKNOWN
+状态。`max_call_depth` 与 `max_summary_iterations` 预算可通过 C API、两条 CLI 命令和
+两个 Python 方法配置。因此，
+`control_reachable` 与 `attacker_reachable` 是可达性计数，而非另一套裁决计数。
+
+P2 分析面与计划采用带明确状态的版本化边界：
+
+| 计划 | 范围 | 状态 |
+|------|------|------|
+| `lowir-concolic-v1` | LowIR 混合／concolic 探索与种子生成 | 实验性；在 PE/ELF/Mach-O × x86-64/AArch64 上生成经重放验证的寄存器种子 |
+| `binary-sanitizer-v1` | 向重写后的原生二进制插入运行时检查 | Darwin 上为实验性：全点位或拒绝的计数写入防护，以及经认证的排他创建或同源无更改发布 |
+| `process-replay-v1` | 覆盖 argv、文件、网络和重复读取、超出 `process-input-v1` 的更广进程重放 | 仅 Phase 0 边界：计划／协调器校验与故障关闭的原生可用性查询；当前没有主机提供原生重放操作 |
+
+concolic 适配器是独立分析面，并非对 Phase 1 安全报告验收契约的扩展。实验性 sanitizer 通过 `neverd_session_sanitize`、`neverd patch --sanitize=strict` 和 Python `Session.sanitize` 暴露；非 Darwin 主机在 lifting 或命名空间变更前拒绝。完整 receipt 只认证事务期间持有的目标目录对象；目录可在打开后改名，因此它不证明原始路径名在事务中或返回后仍指向该对象，也不是持久路径绑定。`NativeProcessReplayAdapter` 仍是能力全有或全无的 Phase 0 查询／工厂边界，所有主机当前都返回能力全 false 且没有操作表。
 
 ---
 
@@ -112,8 +130,9 @@ Review/development 的显式 opt-in target；`latest` 仍为 Fusaka。EOFv1/EIP-
 
 ## 时间线
 
-原生格式补齐、Fusaka 及以前的传统 EVM 解码/lifting、Solana SBF 反编译与内存安全 Phase 1
-已有回归覆盖；保守的 EVM 源码重建仍在进行。不承诺具体发布日期。
+原生格式补齐、Fusaka 及以前的传统 EVM 解码/lifting、Solana SBF 反编译、内存安全
+Phase 1 与当前已知入口可达性切片已有回归覆盖；保守的 EVM 源码重建仍在进行。不承诺
+具体发布日期。
 
 
 | 功能                          | 状态        |
@@ -122,5 +141,5 @@ Review/development 的显式 opt-in target；`latest` 仍为 Fusaka。EOFv1/EIP-
 | EVM 传统解码/lifting              | 到 Fusaka 已完成；有回归测试覆盖 |
 | EVM 源码重建                      | 持续进行 — 有证据才报告，保持保守 |
 | Solana eBPF（SBF）反编译         | 已完成 — v0-v4、C、Rust 与 LLVM；有回归测试覆盖 |
-| 内存安全审计与猎取                   | Phase 1 完成 — P0/P1 分析与重放证据已具备；经重放验证的 LowIR concolic 寄存器种子已作为 P2 基础落地，其余 P2 编排仍待规划 |
+| 内存安全审计与猎取                   | Phase 1 与已知入口可达性切片已完成；`lowir-concolic-v1` 与 Darwin `binary-sanitizer-v1` 发布为实验性能力；原生 `process-replay-v1` 仍停留在故障关闭的 Phase 0 适配器后且不可用 |
 | 引擎与产品加固                     | 持续进行      |

@@ -11,12 +11,12 @@
 #include "StackSlotFlow.h"
 
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/safety/EntryInputPolicy.h"
 #include "neverd/safety/SinkScanner.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringSwitch.h"
 
 #include <algorithm>
 #include <limits>
@@ -55,14 +55,6 @@ uint64_t numericConstantValue(const MedVar &V) {
 bool isExactValue(const MedVar &A, const MedVar &B) {
   return A == B && A.Size == B.Size && A.TheArch == B.TheArch &&
          A.RenameTag == B.RenameTag;
-}
-
-bool isMainLike(llvm::StringRef Name) {
-  return llvm::StringSwitch<bool>(stripLeadingUnderscores(Name))
-#define SAFETY_ENTRY_NAME(NAME) .Case(NAME, true)
-#include "neverd/safety/SafetyEntryNames.inc"
-#undef SAFETY_ENTRY_NAME
-      .Default(false);
 }
 
 bool hasSymbolicPathSemantics(const MedOp &Op) {
@@ -117,23 +109,44 @@ bool hasSymbolicPathSemantics(const MedOp &Op) {
 struct DefIndex {
   llvm::DenseMap<ValueKey, std::pair<int, int>> OpDef;  ///< value -> (blk,op).
   llvm::DenseMap<ValueKey, std::pair<int, int>> PhiDef; ///< value -> (blk,phi).
+  llvm::DenseSet<ValueKey> AmbiguousDef;
+  llvm::DenseSet<ValueKey> ExplicitRegDef;
   llvm::DenseSet<ValueKey> CallDefined; ///< implicit caller-saved definitions.
+
+  void addDefinition(llvm::DenseMap<ValueKey, std::pair<int, int>> &Target,
+                     const ValueKey &Key, std::pair<int, int> Location) {
+    if (AmbiguousDef.contains(Key))
+      return;
+    if (OpDef.contains(Key) || PhiDef.contains(Key)) {
+      OpDef.erase(Key);
+      PhiDef.erase(Key);
+      AmbiguousDef.insert(Key);
+      return;
+    }
+    Target[Key] = Location;
+  }
 
   explicit DefIndex(const MedFunc &F) {
     for (int Bi = 0; Bi < static_cast<int>(F.Blocks.size()); ++Bi) {
       const MedBlock &B = F.Blocks[Bi];
       for (int Pi = 0; Pi < static_cast<int>(B.Phis.size()); ++Pi)
-        if (!B.Phis[Pi].Output.isConst() && B.Phis[Pi].Output.Size > 0)
-          PhiDef[keyOf(B.Phis[Pi].Output)] = {Bi, Pi};
+        if (!B.Phis[Pi].Output.isConst())
+          addDefinition(PhiDef, keyOf(B.Phis[Pi].Output), {Bi, Pi});
       for (int Oi = 0; Oi < static_cast<int>(B.Ops.size()); ++Oi) {
         const MedOp &O = B.Ops[Oi];
+        if (O.Output.Kind == MedVar::Reg)
+          ExplicitRegDef.insert(keyOf(O.Output));
         if (!O.Output.isConst() && O.Output.Size > 0)
-          OpDef[keyOf(O.Output)] = {Bi, Oi};
+          addDefinition(OpDef, keyOf(O.Output), {Bi, Oi});
       }
     }
     for (const MedCallClobber &Clobber : F.CallClobbers)
       if (!Clobber.Value.isConst() && Clobber.Value.Size > 0)
         CallDefined.insert(keyOf(Clobber.Value));
+  }
+
+  bool isAmbiguous(const MedVar &V) const {
+    return AmbiguousDef.contains(keyOf(V));
   }
 };
 
@@ -141,7 +154,8 @@ class Slicer {
 public:
   Slicer(const AnalysisInput &In, const SinkCatalog &Cat, const MedFunc &F,
          size_t SinkCallInfoIndex)
-      : In(In), Cat(Cat), F(F), Defs(F), SinkCallInfoIndex(SinkCallInfoIndex) {
+      : In(In), Cat(Cat), F(F), Defs(F), PhiGraph(F),
+        SinkCallInfoIndex(SinkCallInfoIndex) {
     indexSourceOutputs(SinkCallInfoIndex);
   }
 
@@ -172,6 +186,7 @@ private:
   const SinkCatalog &Cat;
   const MedFunc &F;
   DefIndex Defs;
+  detail::ExactPhiGraph PhiGraph;
   size_t SinkCallInfoIndex = 0;
   llvm::DenseMap<ValueKey, ArgFlow> ClassificationCache;
   llvm::DenseSet<ValueKey> ClassificationActive;
@@ -199,6 +214,8 @@ private:
     if (V.isConst())
       return false;
     const ValueKey Key = keyOf(V);
+    if (Defs.AmbiguousDef.contains(Key))
+      return true;
     if (Depth > 64 || Remaining == 0 || !Active.insert(Key).second)
       return true;
     struct PopActive {
@@ -213,6 +230,8 @@ private:
 
     if (auto It = Defs.PhiDef.find(Key); It != Defs.PhiDef.end()) {
       const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];
+      if (!PhiGraph.hasCompleteIncoming(It->second.first, Phi))
+        return true;
       return std::any_of(Phi.Args.begin(), Phi.Args.end(),
                          [&](const auto &Incoming) {
                            return requiresPathValidationImpl(
@@ -277,19 +296,80 @@ private:
                : &F.Blocks[It->second.first].Ops[It->second.second];
   }
 
+  std::optional<size_t> formalParameterIndexFor(const MedVar &V) const {
+    const auto uniqueFormal =
+        [&](const auto &Matches) -> std::optional<size_t> {
+      std::optional<size_t> Result;
+      for (size_t Index = 0; Index < F.Params.size(); ++Index) {
+        if (!Matches(F.Params[Index]))
+          continue;
+        if (Result)
+          return std::nullopt;
+        Result = Index;
+      }
+      return Result;
+    };
+
+    if (V.Kind == MedVar::Param)
+      return uniqueFormal([&](const MedVar &Candidate) {
+        return Candidate.Kind == MedVar::Param && isExactValue(V, Candidate) &&
+               Candidate.RegOff == V.RegOff;
+      });
+    if (V.Kind != MedVar::Reg || V.SSAVer != 0 || F.Blocks.empty())
+      return std::nullopt;
+
+    if (!detail::isAuthenticatedEntryRegisterLiveIn(F, V))
+      return std::nullopt;
+
+    return uniqueFormal([&](const MedVar &Candidate) {
+      return Candidate.Kind == MedVar::Param &&
+             Candidate.RegOff != kNoParamReg && Candidate.RegOff == V.RegOff &&
+             Candidate.Id == V.Id && Candidate.SSAVer == V.SSAVer &&
+             Candidate.Size == V.Size && Candidate.TheArch == V.TheArch &&
+             Candidate.RenameTag == V.RenameTag;
+    });
+  }
+
   // Signed offset of a pointer from the incoming stack pointer, or nullopt.
   std::optional<int64_t> stackOffset(const MedVar &V, int Depth,
                                      llvm::DenseSet<ValueKey> &Seen) const {
     if (!In.StackRegsKnown || V.isConst() || Depth > 48)
       return std::nullopt;
-    if (!Seen.insert(keyOf(V)).second)
+    const ValueKey Key = keyOf(V);
+    if (Defs.AmbiguousDef.contains(Key) || Defs.CallDefined.contains(Key))
       return std::nullopt;
+    if (!Seen.insert(Key).second)
+      return std::nullopt;
+    struct PopSeen {
+      llvm::DenseSet<ValueKey> &Set;
+      ValueKey Key;
+      ~PopSeen() { Set.erase(Key); }
+    } Guard{Seen, Key};
+
+    if (auto It = Defs.PhiDef.find(Key); It != Defs.PhiDef.end()) {
+      const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];
+      if (!PhiGraph.hasCompleteIncoming(It->second.first, Phi))
+        return std::nullopt;
+      std::optional<int64_t> Result;
+      for (const auto &[Pred, Arg] : Phi.Args) {
+        (void)Pred;
+        const std::optional<int64_t> Incoming =
+            stackOffset(Arg, Depth + 1, Seen);
+        if (!Incoming || (Result && *Result != *Incoming))
+          return std::nullopt;
+        Result = Incoming;
+      }
+      return Result;
+    }
 
     const MedOp *Op = defOp(V);
     if (V.Kind == MedVar::Reg && V.RegOff == In.StackPointerReg) {
       if (Op && (Op->Opcode == NdOp::INT_ADD || Op->Opcode == NdOp::INT_SUB))
         return affineOffset(*Op, Depth, Seen);
-      return 0;
+      if (detail::isAuthenticatedEntryRegisterLiveIn(F, V))
+        return 0;
+      if (!Op && V.SSAVer == 0 && !Defs.ExplicitRegDef.contains(Key))
+        return 0;
     }
     if (V.Kind == MedVar::Reg && V.RegOff == In.FramePointerReg) {
       if (Op && (Op->Opcode == NdOp::INT_ADD || Op->Opcode == NdOp::INT_SUB))
@@ -343,6 +423,10 @@ private:
     if (!In.StackRegsKnown || V.isConst())
       return false;
     const ValueKey Key = keyOf(V);
+    if (Defs.AmbiguousDef.contains(Key) || Defs.CallDefined.contains(Key)) {
+      Incomplete = true;
+      return true;
+    }
     if (auto It = Cache.find(Key); It != Cache.end())
       return It->second;
     if (V.Kind == MedVar::Reg &&
@@ -364,6 +448,10 @@ private:
     bool Result = false;
     if (auto It = Defs.PhiDef.find(Key); It != Defs.PhiDef.end()) {
       const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];
+      if (!PhiGraph.hasCompleteIncoming(It->second.first, Phi)) {
+        Incomplete = true;
+        return true;
+      }
       for (const auto &[Pred, Arg] : Phi.Args) {
         (void)Pred;
         if (mayBeStackAddressImpl(Arg, Depth + 1, Cache, Active, Remaining,
@@ -433,10 +521,19 @@ private:
         return false;
       auto FindOp = [&](const MedVar &Current) { return defOp(Current); };
       auto FindPhi = [&](const MedVar &Current) -> const PhiNode * {
+        if (Defs.isAmbiguous(Current) ||
+            Defs.CallDefined.contains(keyOf(Current))) {
+          static const PhiNode AmbiguousPhi{};
+          return &AmbiguousPhi;
+        }
         auto It = Defs.PhiDef.find(keyOf(Current));
-        return It == Defs.PhiDef.end()
-                   ? nullptr
-                   : &F.Blocks[It->second.first].Phis[It->second.second];
+        if (It == Defs.PhiDef.end())
+          return nullptr;
+        const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];
+        if (PhiGraph.hasCompleteIncoming(It->second.first, Phi))
+          return &Phi;
+        static const PhiNode IncompletePhi{};
+        return &IncompletePhi;
       };
       return detail::aliasesWholeFrame(V, In.StackPointerReg,
                                        In.FramePointerReg, FindOp, FindPhi);
@@ -734,6 +831,8 @@ private:
                  : std::nullopt;
 
     const ValueKey Key = keyOf(V);
+    if (Defs.AmbiguousDef.contains(Key))
+      return std::nullopt;
     if (auto It = UpperBoundCache.find(Key); It != UpperBoundCache.end())
       return It->second;
     if (Depth > 64 || UpperBoundProofBudget == 0 ||
@@ -756,6 +855,8 @@ private:
 
     if (auto It = Defs.PhiDef.find(Key); It != Defs.PhiDef.end()) {
       const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];
+      if (!PhiGraph.hasCompleteIncoming(It->second.first, Phi))
+        return finish(std::nullopt);
       std::optional<uint64_t> Max;
       for (const auto &[Pred, Arg] : Phi.Args) {
         (void)Pred;
@@ -924,6 +1025,8 @@ private:
     }
 
     ValueKey K = keyOf(V);
+    if (Defs.AmbiguousDef.contains(K))
+      return ArgFlow::Unknown;
     if (auto It = ClassificationCache.find(K); It != ClassificationCache.end())
       return It->second;
     if (Depth > 64 || ClassificationProofBudget == 0 ||
@@ -944,29 +1047,50 @@ private:
       return Result;
     };
 
-    if (V.Kind == MedVar::Param) {
-      if (isMainLike(F.Name)) {
-        if (Top.TaintSource.empty()) {
-          Top.TaintSource = "argv";
-          Top.Reason = "reaches program arguments";
+    const std::optional<size_t> FormalIndex = formalParameterIndexFor(V);
+    if (V.Kind == MedVar::Param || FormalIndex) {
+      if (!FormalIndex)
+        return finish(ArgFlow::Unknown);
+      if (In.ParameterFlows) {
+        const ParameterFlowKey Key{F.Entry, *FormalIndex};
+        if (auto It = In.ParameterFlows->find(Key);
+            It != In.ParameterFlows->end() &&
+            It->second.Flow == ArgFlow::Tainted) {
+          if (Top.TaintSource.empty()) {
+            Top.TaintSource = It->second.Source;
+            Top.Reason = "reaches attacker-controlled entry parameter";
+            Top.AttackerWitness = It->second.Witness;
+          }
+          return finish(ArgFlow::Tainted);
         }
-        return finish(ArgFlow::Tainted);
       }
-      return finish(ArgFlow::Unknown);
+      const std::optional<llvm::StringRef> Source =
+          applicationEntryParameterSource(In, F, *FormalIndex);
+      if (!Source)
+        return finish(ArgFlow::Unknown);
+      if (Top.TaintSource.empty()) {
+        Top.TaintSource = Source->str();
+        Top.Reason = "reaches application entry parameter " + Top.TaintSource;
+      }
+      return finish(ArgFlow::Tainted);
     }
 
     if (auto It = Defs.PhiDef.find(K); It != Defs.PhiDef.end()) {
       const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];
       if (Phi.Args.empty())
         return finish(ArgFlow::Unknown);
+      const bool Complete = PhiGraph.hasCompleteIncoming(It->second.first, Phi);
       ArgFlow Acc = ArgFlow::Bounded;
       bool First = true;
       for (const auto &[Pred, Val] : Phi.Args) {
+        (void)Pred;
         ArgFlow Sub = classify(Val, Depth + 1, Top);
         Acc = First ? Sub : merge(Acc, Sub);
         First = false;
       }
-      return finish(Acc);
+      return finish(Acc == ArgFlow::Tainted
+                        ? ArgFlow::Tainted
+                        : (Complete ? Acc : ArgFlow::Unknown));
     }
 
     auto It = Defs.OpDef.find(K);

@@ -40,8 +40,9 @@ struct DestObject {
   ObjectRegion Region = ObjectRegion::Unknown;
   /// Upper bound on the object's byte capacity, when recoverable.
   std::optional<uint64_t> Capacity;
-  /// True only when Capacity is the object's recovered size rather than a
-  /// containing-frame upper bound.
+  CapacityPrecision Precision = CapacityPrecision::Unknown;
+  /// Compatibility projection for existing static-analysis decisions.  It is
+  /// true exactly when Precision is TypedBufferExact.
   bool CapacityExact = false;
   int64_t StackOffset = 0; ///< signed offset from the incoming stack pointer.
   std::string Detail;      ///< where the capacity came from.

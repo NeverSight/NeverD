@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "JSONText.h"
 #include "SessionImpl.h"
 
 #include "neverd/ir/TargetRegInfo.h"
@@ -11,7 +12,12 @@
 #include "neverd/safety/Safety.h"
 #include "neverd/sdk/NeverDCAPI.h"
 
+#include "llvm/ADT/StringRef.h"
+
 #include <cstddef>
+#include <exception>
+#include <new>
+#include <string>
 using namespace neverd;
 using namespace neverd::sdk;
 
@@ -38,6 +44,12 @@ safety::SafetyBudgets readBudgets(const neverd_safety_options *In) {
   if (reaches(Size, FIELD_END(neverd_safety_options, solver_conflicts)) &&
       In->solver_conflicts)
     B.SolverConflicts = In->solver_conflicts;
+  if (reaches(Size, FIELD_END(neverd_safety_options, max_call_depth)) &&
+      In->max_call_depth)
+    B.MaxCallDepth = In->max_call_depth;
+  if (reaches(Size, FIELD_END(neverd_safety_options, max_summary_iterations)) &&
+      In->max_summary_iterations)
+    B.MaxSummaryIterations = In->max_summary_iterations;
   return B;
 }
 
@@ -121,26 +133,86 @@ std::string runSafety(Session *S, const neverd_safety_options *Options,
   return safety::toJson(Report);
 }
 
+void setSafetyBoundaryErrorNoThrow(Session *S,
+                                   llvm::StringRef Message) noexcept {
+  if (!S)
+    return;
+  try {
+    S->clearError();
+    S->setError(Message.str());
+  } catch (...) {
+  }
+}
+
+const char *internalSafetyErrorReportNoThrow(Session *S, safety::Track Track,
+                                             llvm::StringRef Message) noexcept {
+  try {
+    std::string Detail = "internal_error: unexpected native ";
+    Detail += safety::toString(Track);
+    Detail += " failure";
+    if (!Message.empty()) {
+      Detail += ": ";
+      Detail += jsonSafeText(Message);
+    }
+    setSafetyBoundaryErrorNoThrow(S, Detail);
+    const char *Owned = dupStr(errorReport(Track, Detail));
+    if (!Owned)
+      setSafetyBoundaryErrorNoThrow(
+          S, "safety allocation failed while reporting an internal error");
+    return Owned;
+  } catch (const std::bad_alloc &) {
+    setSafetyBoundaryErrorNoThrow(
+        S, "safety allocation failed while reporting an internal error");
+  } catch (...) {
+    setSafetyBoundaryErrorNoThrow(S, "safety internal error reporting failed");
+  }
+  return nullptr;
+}
+
+const char *runSafetyJSONImpl(neverd_session_t Sess,
+                              const neverd_safety_options *Options,
+                              safety::Track Track) {
+  auto *S = toSession(Sess);
+  if (!S)
+    return dupStr(errorReport(Track, "invalid session"));
+  S->clearError();
+  if (S->SafetyBeforeRunForTesting)
+    S->SafetyBeforeRunForTesting();
+  return dupStr(runSafety(S, Options, Track));
+}
+
+const char *runSafetyJSONBoundary(neverd_session_t Sess,
+                                  const neverd_safety_options *Options,
+                                  safety::Track Track) noexcept {
+  Session *S = toSession(Sess);
+  try {
+    const char *Owned = runSafetyJSONImpl(Sess, Options, Track);
+    if (!Owned)
+      setSafetyBoundaryErrorNoThrow(S, "safety report allocation failed");
+    return Owned;
+  } catch (const std::bad_alloc &) {
+    setSafetyBoundaryErrorNoThrow(S, "safety analysis allocation failed");
+    return nullptr;
+  } catch (const std::exception &Exception) {
+    return internalSafetyErrorReportNoThrow(S, Track, Exception.what());
+  } catch (...) {
+    return internalSafetyErrorReportNoThrow(S, Track,
+                                            "non-standard native exception");
+  }
+}
+
 } // namespace
 
 extern "C" {
 
 const char *neverd_session_audit_json(neverd_session_t Sess,
                                       const neverd_safety_options *Options) {
-  auto *S = toSession(Sess);
-  if (!S)
-    return dupStr(errorReport(safety::Track::Audit, "invalid session"));
-  S->clearError();
-  return dupStr(runSafety(S, Options, safety::Track::Audit));
+  return runSafetyJSONBoundary(Sess, Options, safety::Track::Audit);
 }
 
 const char *neverd_session_hunt_json(neverd_session_t Sess,
                                      const neverd_safety_options *Options) {
-  auto *S = toSession(Sess);
-  if (!S)
-    return dupStr(errorReport(safety::Track::Hunt, "invalid session"));
-  S->clearError();
-  return dupStr(runSafety(S, Options, safety::Track::Hunt));
+  return runSafetyJSONBoundary(Sess, Options, safety::Track::Hunt);
 }
 
 } // extern "C"

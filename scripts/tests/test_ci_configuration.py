@@ -65,20 +65,19 @@ class CiConfigurationTests(unittest.TestCase):
             1,
         )
         self.assertIn("NEVERD_COMPUTED_GOTO_STRUCTURAL_ONLY=1", semantic)
-        self.assertNotIn("ComputedGoto", "\n".join(
-            line for line in workflow.splitlines() if "exclude_labels:" in line
-        ))
+        self.assertNotIn(
+            "ComputedGoto",
+            "\n".join(
+                line for line in workflow.splitlines() if "exclude_labels:" in line
+            ),
+        )
 
     def test_workflow_executes_this_configuration_contract(self):
         source = WORKFLOW.read_text(encoding="utf-8")
         step_marker = "      - name: Verify Debug and Release target flags\n"
         self.assertEqual(source.count(step_marker), 1)
-        verify_step = source.split(step_marker, 1)[1].split(
-            "\n      - name:", 1
-        )[0]
-        self.assertEqual(
-            verify_step.count("scripts.tests.test_ci_configuration"), 1
-        )
+        verify_step = source.split(step_marker, 1)[1].split("\n      - name:", 1)[0]
+        self.assertEqual(verify_step.count("scripts.tests.test_ci_configuration"), 1)
         self.assertEqual(
             verify_step.count("scripts.tests.test_neverd_bench_harness"), 1
         )
@@ -160,16 +159,12 @@ class CiConfigurationTests(unittest.TestCase):
 
     def test_workflow_stops_each_failed_profile_but_keeps_other_hosts_running(self):
         source = WORKFLOW.read_text(encoding="utf-8")
-        strategy = source.split("    strategy:\n", 1)[1].split(
-            "\n    steps:", 1
-        )[0]
+        strategy = source.split("    strategy:\n", 1)[1].split("\n    steps:", 1)[0]
         self.assertIn("      fail-fast: false\n", strategy)
 
         step_marker = "      - name: Run selected test profile\n"
         self.assertEqual(source.count(step_marker), 1)
-        run_step = source.split(step_marker, 1)[1].split(
-            "\n      - name:", 1
-        )[0]
+        run_step = source.split(step_marker, 1)[1].split("\n      - name:", 1)[0]
         self.assertIn("set -o pipefail", run_step)
         self.assertIn("--stop-on-failure", run_step)
         self.assertIn("--output-on-failure", run_step)
@@ -183,9 +178,7 @@ class CiConfigurationTests(unittest.TestCase):
 
         verify_marker = "      - name: Verify the pinned binary corpus\n"
         self.assertEqual(source.count(verify_marker), 1)
-        verify_step = source.split(verify_marker, 1)[1].split(
-            "\n      - name:", 1
-        )[0]
+        verify_step = source.split(verify_marker, 1)[1].split("\n      - name:", 1)[0]
         for line in ("windows-eh", "rust-eh", "go-eh", "cxx-itanium-eh", "objc-eh"):
             with self.subTest(line=line):
                 self.assertIn(line, verify_step)
@@ -195,14 +188,10 @@ class CiConfigurationTests(unittest.TestCase):
         configure_step = source.split(configure_marker, 1)[1].split(
             "\n      - name:", 1
         )[0]
-        self.assertIn(
-            "-DNEVERD_ENABLE_BINARY_CORPUS_TESTS=ON", configure_step
-        )
+        self.assertIn("-DNEVERD_ENABLE_BINARY_CORPUS_TESTS=ON", configure_step)
         # Placed before the configure that depends on it, so a checkout which
         # did not bring the submodule says so instead of failing in CMake.
-        self.assertLess(
-            source.index(verify_marker), source.index(configure_marker)
-        )
+        self.assertLess(source.index(verify_marker), source.index(configure_marker))
 
     def test_workflow_configures_and_explicitly_smokes_the_native_example_plugin(self):
         source = WORKFLOW.read_text(encoding="utf-8")
@@ -237,10 +226,10 @@ class CiConfigurationTests(unittest.TestCase):
         helper_contract = (
             "function(set_neverd_plugin_output_directories target)",
             "if(CMAKE_CONFIGURATION_TYPES)",
-            '${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>/plugins',
-            '${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/$<CONFIG>/plugins',
-            '${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins',
-            '${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/plugins',
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>/plugins",
+            "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/$<CONFIG>/plugins",
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins",
+            "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/plugins",
             'LIBRARY_OUTPUT_DIRECTORY "${_library_dir}"',
             'RUNTIME_OUTPUT_DIRECTORY "${_runtime_dir}"',
         )
@@ -282,13 +271,12 @@ class CiConfigurationTests(unittest.TestCase):
 
     def test_workflow_still_builds_the_unfiltered_default_target(self):
         source = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn(
-            'run: cmake --build build-ci --config Release --parallel "$BUILD_PARALLEL"',
-            source,
-        )
-        build_section = source.split("- name: Build default targets", 1)[1].split(
-            "- name:", 1
-        )[0]
+        step_marker = "      - name: Build default targets\n"
+        command = 'cmake --build build-ci --config Release --parallel "$BUILD_PARALLEL"'
+        self.assertEqual(source.count(step_marker), 1)
+        self.assertEqual(source.count(command), 1)
+        build_section = source.split(step_marker, 1)[1].split("\n      - name:", 1)[0]
+        self.assertEqual(build_section.count(command), 1)
         self.assertNotIn("--target", build_section)
 
     def test_workflow_caches_but_still_source_builds_llvm(self):
@@ -298,10 +286,9 @@ class CiConfigurationTests(unittest.TestCase):
         self.assertIn("mozilla-actions/sccache-action@", source)
         self.assertIn("-DCMAKE_C_COMPILER_LAUNCHER=sccache", source)
         self.assertIn("-DCMAKE_CXX_COMPILER_LAUNCHER=sccache", source)
-        self.assertIn(
-            "-DNEVERD_LLVM_PREBUILT=\"$NEVERD_LLVM_PREBUILT_MODE\"", source
-        )
+        self.assertIn('-DNEVERD_LLVM_PREBUILT="$NEVERD_LLVM_PREBUILT_MODE"', source)
         self.assertEqual(
-            source.count("-DNEVERD_LLVM_PREBUILT="), 1,
+            source.count("-DNEVERD_LLVM_PREBUILT="),
+            1,
             "the compiler cache must not introduce a prebuilt-LLVM fast path",
         )

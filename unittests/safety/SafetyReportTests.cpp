@@ -16,6 +16,7 @@
 #include "llvm/Support/JSON.h"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 
 using namespace neverd::safety;
@@ -554,6 +555,81 @@ TEST(SafetyReport, JsonCarriesSchemaAndAggregateVerdict) {
   EXPECT_EQ(Root->getString("confidence"), "HIGH");
 }
 
+TEST(SafetyReport, JsonCarriesReachabilityWithoutChangingVerdict) {
+  SafetyReport Report;
+  Report.AnalysisComplete = true;
+  Report.Origin = Track::Hunt;
+
+  Finding Unsafe;
+  Unsafe.TheVerdict = Verdict::Unsafe;
+  Unsafe.Flow = ArgFlow::Tainted;
+  Unsafe.Reachability.Status = ReachabilityStatus::Reachable;
+  Unsafe.Reachability.AttackerControl = ArgFlow::Tainted;
+  Unsafe.Reachability.EntryVA = 0x1000;
+  Unsafe.Reachability.EntryName = "main";
+  Unsafe.Reachability.Kind = SafetyEntryKind::Application;
+  Unsafe.Reachability.CallChain.push_back({0x1000, 0x1010, 0x2000, false});
+  Report.Findings.push_back(std::move(Unsafe));
+
+  Finding Bounded;
+  Bounded.TheVerdict = Verdict::Safe;
+  Bounded.Flow = ArgFlow::Bounded;
+  Bounded.Reachability.Status = ReachabilityStatus::Reachable;
+  Bounded.Reachability.AttackerControl = ArgFlow::Bounded;
+  Report.Findings.push_back(std::move(Bounded));
+
+  Finding Dead;
+  Dead.TheVerdict = Verdict::Unsafe;
+  Dead.Reachability.Status = ReachabilityStatus::Unreachable;
+  Dead.Reachability.Reason = "no path from a known entry";
+  Report.Findings.push_back(std::move(Dead));
+
+  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Report));
+  ASSERT_TRUE(static_cast<bool>(Parsed));
+  const llvm::json::Object *Root = Parsed->getAsObject();
+  ASSERT_NE(Root, nullptr);
+  EXPECT_EQ(Root->getString("verdict"), "UNSAFE");
+  EXPECT_EQ(Root->getInteger("control_reachable"), 2);
+  EXPECT_EQ(Root->getInteger("attacker_reachable"), 1);
+  EXPECT_EQ(Root->getInteger("unreachable"), 1);
+  EXPECT_EQ(Root->getInteger("reachability_unknown"), 0);
+
+  const llvm::json::Array *Findings = Root->getArray("findings");
+  ASSERT_NE(Findings, nullptr);
+  const llvm::json::Object *Reach =
+      (*Findings)[0].getAsObject()->getObject("reachability");
+  ASSERT_NE(Reach, nullptr);
+  EXPECT_EQ(Reach->getString("status"), "REACHABLE");
+  EXPECT_EQ(Reach->getString("attacker_control"), "TAINTED");
+  EXPECT_EQ(Reach->getObject("entry")->getString("kind"), "application");
+  ASSERT_EQ(Reach->getArray("call_chain")->size(), 1u);
+}
+
+TEST(SafetyReport, ReachabilityEntryAtVirtualAddressZeroIsSerialized) {
+  SafetyReport Report;
+  Report.AnalysisComplete = true;
+  Finding FindingAtZero;
+  FindingAtZero.FuncEntry = 0;
+  FindingAtZero.Reachability.Status = ReachabilityStatus::Reachable;
+  FindingAtZero.Reachability.EntryVA = 0;
+  FindingAtZero.Reachability.EntryName = "start";
+  FindingAtZero.Reachability.Kind = SafetyEntryKind::Image;
+  Report.Findings.push_back(std::move(FindingAtZero));
+
+  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Report));
+  ASSERT_TRUE(static_cast<bool>(Parsed));
+  const llvm::json::Array *Findings =
+      Parsed->getAsObject()->getArray("findings");
+  ASSERT_NE(Findings, nullptr);
+  const llvm::json::Object *Entry = (*Findings)[0]
+                                        .getAsObject()
+                                        ->getObject("reachability")
+                                        ->getObject("entry");
+  ASSERT_NE(Entry, nullptr);
+  EXPECT_EQ(Entry->getString("va"), "0x0");
+  EXPECT_EQ(Entry->getString("name"), "start");
+}
+
 TEST(SafetyReport, UnknownDominatesSafeAtTheRoot) {
   SafetyReport Report;
   Report.AnalysisComplete = true;
@@ -666,7 +742,7 @@ TEST(SafetyReport, SymbolicWitnessStatesWhetherItIsReplayable) {
 
 TEST(SafetyReport, SerializesValidatedLiteralProcessInputReplay) {
   ReplayPlan Candidate;
-  Candidate.QueryVariables = {10, 11, 12};
+  Candidate.QueryVariables = {12, 10, 11};
 
   ReplayInput Environment;
   Environment.Kind = ReplayInputKind::Environment;
@@ -730,6 +806,15 @@ TEST(SafetyReport, SerializesValidatedLiteralProcessInputReplay) {
   ASSERT_NE(Replay, nullptr);
   EXPECT_EQ(Replay->getString("adapter"), "process-input-v1");
   EXPECT_EQ(Replay->get("reason"), nullptr);
+  const llvm::json::Array *QueryVariables = Replay->getArray("query_variables");
+  ASSERT_NE(QueryVariables, nullptr);
+  ASSERT_EQ(QueryVariables->size(), 3u);
+  ASSERT_TRUE((*QueryVariables)[0].getAsInteger().has_value());
+  ASSERT_TRUE((*QueryVariables)[1].getAsInteger().has_value());
+  ASSERT_TRUE((*QueryVariables)[2].getAsInteger().has_value());
+  EXPECT_EQ(*(*QueryVariables)[0].getAsInteger(), 10);
+  EXPECT_EQ(*(*QueryVariables)[1].getAsInteger(), 11);
+  EXPECT_EQ(*(*QueryVariables)[2].getAsInteger(), 12);
   const llvm::json::Array *Inputs = Replay->getArray("inputs");
   ASSERT_NE(Inputs, nullptr);
   ASSERT_EQ(Inputs->size(), 2u);
@@ -898,11 +983,42 @@ TEST(SafetyReport, PreservesUnsignedCapacityRange) {
   EXPECT_EQ(Capacity->getAsUINT64(), std::numeric_limits<uint64_t>::max());
 }
 
+TEST(SafetyReport, CapacityPrecisionIsStableAndStorageIsNotReportedExact) {
+  SafetyReport Report;
+  for (const CapacityPrecision Precision :
+       {CapacityPrecision::Unknown, CapacityPrecision::ContainerUpperBound,
+        CapacityPrecision::StorageExact, CapacityPrecision::TypedBufferExact}) {
+    Finding F;
+    F.Capacity = 8;
+    F.CapacityKind = Precision;
+    F.CapacityExact = Precision == CapacityPrecision::TypedBufferExact;
+    Report.Findings.push_back(std::move(F));
+  }
+
+  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Report));
+  ASSERT_TRUE(static_cast<bool>(Parsed));
+  const llvm::json::Array *Findings =
+      Parsed->getAsObject()->getArray("findings");
+  ASSERT_NE(Findings, nullptr);
+  ASSERT_EQ(Findings->size(), 4u);
+  constexpr std::array<const char *, 4> Precisions = {
+      "unknown", "container_upper_bound", "storage_exact",
+      "typed_buffer_exact"};
+  for (size_t Index = 0; Index < Findings->size(); ++Index) {
+    const llvm::json::Object *Object = (*Findings)[Index].getAsObject();
+    ASSERT_NE(Object, nullptr);
+    EXPECT_EQ(Object->getString("capacity_precision"), Precisions[Index]);
+    EXPECT_EQ(Object->getString("capacity_kind"),
+              Index == 3 ? "exact" : "upper_bound");
+  }
+}
+
 TEST(SafetyReport, AuditScannedCountsAllocationSitesNotOnlyFindings) {
   neverd::BinaryImage Img;
   neverd::MedFunc F;
   F.Entry = 0x100;
   F.Name = "f";
+  F.ReturnValueEvidence = neverd::MedReturnValueEvidence::ReturnsNoValue;
   neverd::MedBlock B;
   B.Id = 0;
 
@@ -993,6 +1109,7 @@ TEST(SafetyReport, ReachableAuditCandidateIsSymbolicallyCorroborated) {
   neverd::MedFunc F;
   F.Entry = 0x400;
   F.Name = "leak";
+  F.ReturnValueEvidence = neverd::MedReturnValueEvidence::ReturnsNoValue;
   neverd::MedBlock MB;
   MB.Id = 0;
   neverd::MedOp Alloc;

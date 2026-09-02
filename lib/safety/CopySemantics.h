@@ -7,8 +7,7 @@
 #ifndef NEVERD_LIB_SAFETY_COPYSEMANTICS_H
 #define NEVERD_LIB_SAFETY_COPYSEMANTICS_H
 
-#include "neverd/loader/BinaryImageModel.h"
-#include "neverd/safety/SinkCatalog.h"
+#include "neverd/safety/CountedWriteSemantics.h"
 
 #include "llvm/ADT/StringRef.h"
 
@@ -20,42 +19,29 @@
 namespace neverd::safety::detail {
 
 inline std::string copySemanticName(llvm::StringRef Name) {
-  std::string Normalized = SinkCatalog::normalize(Name);
-  if (Normalized == "aeabi_memcpy" || Normalized == "aeabi_memcpy4" ||
-      Normalized == "aeabi_memcpy8")
-    return "memcpy";
-  if (Normalized == "aeabi_memmove" || Normalized == "aeabi_memmove4" ||
-      Normalized == "aeabi_memmove8")
-    return "memmove";
-  if (Normalized == "aeabi_memset" || Normalized == "aeabi_memset4" ||
-      Normalized == "aeabi_memset8")
-    return "memset";
-  if (Normalized == "aeabi_memclr" || Normalized == "aeabi_memclr4" ||
-      Normalized == "aeabi_memclr8")
-    return "bzero";
-  return Normalized;
+  return counted_write::canonicalSemanticName(Name);
 }
 
 inline bool usesWideElements(llvm::StringRef Name) {
+  if (const std::optional<counted_write::Layout> Shape =
+          counted_write::classifyLayout(Name))
+    if (Shape->UsesWideElements)
+      return true;
   const std::string Normalized = copySemanticName(Name);
-  return Normalized == "wmemcpy" || Normalized == "wmemmove" ||
-         Normalized == "wcscpy" || Normalized == "wcscat";
+  return Normalized == "wcscpy" || Normalized == "wcscat";
 }
 
-inline std::optional<uint64_t>
-countedWideElementBytes(llvm::StringRef Name, BinaryFormat Format) {
-  const std::string Normalized = copySemanticName(Name);
-  if (Normalized != "wmemcpy" && Normalized != "wmemmove")
+inline std::optional<uint64_t> countedWideElementBytes(llvm::StringRef Name,
+                                                       BinaryFormat Format) {
+  const std::optional<counted_write::Layout> Shape =
+      counted_write::classifyLayout(Name);
+  if (!Shape || !Shape->UsesWideElements)
     return std::nullopt;
-  switch (Format) {
-  case BinaryFormat::COFF:
-    return 2;
-  case BinaryFormat::ELF:
-  case BinaryFormat::MachO:
-    return 4;
-  default:
+  const std::optional<counted_write::Semantics> Semantics =
+      counted_write::classify(Name, Format);
+  if (!Semantics)
     return std::nullopt;
-  }
+  return Semantics->ElementBytes;
 }
 
 inline bool requiresStringExtents(llvm::StringRef Name) {
@@ -71,12 +57,7 @@ inline bool usesTotalDestinationBound(llvm::StringRef Name) {
 }
 
 inline bool isExactCountedMemoryAccess(llvm::StringRef Name) {
-  const std::string Normalized = copySemanticName(Name);
-  return Normalized == "memcpy" || Normalized == "memmove" ||
-         Normalized == "wmemcpy" || Normalized == "wmemmove" ||
-         Normalized == "bcopy" || Normalized == "memset" ||
-         Normalized == "bzero" || Normalized == "memcpy_chk" ||
-         Normalized == "memmove_chk" || Normalized == "memset_chk";
+  return counted_write::classifyLayout(Name).has_value();
 }
 
 inline bool copyAccessRequiresPositiveCount(llvm::StringRef Name,
@@ -95,20 +76,15 @@ inline bool copyAccessRequiresPositiveCount(llvm::StringRef Name,
 inline std::optional<uint64_t> exactCountedMemoryBytes(llvm::StringRef Name,
                                                        BinaryFormat Format,
                                                        uint64_t Count) {
-  const std::string Normalized = copySemanticName(Name);
-  if (!isExactCountedMemoryAccess(Normalized))
+  const std::optional<counted_write::Semantics> Semantics =
+      counted_write::classify(Name, Format);
+  if (!Semantics)
     return std::nullopt;
   if (Count == 0)
     return 0;
-  if (Normalized == "wmemcpy" || Normalized == "wmemmove") {
-    std::optional<uint64_t> ElementBytes =
-        countedWideElementBytes(Normalized, Format);
-    if (!ElementBytes ||
-        Count > std::numeric_limits<uint64_t>::max() / *ElementBytes)
-      return std::nullopt;
-    return Count * *ElementBytes;
-  }
-  return Count;
+  if (Count > std::numeric_limits<uint64_t>::max() / Semantics->ElementBytes)
+    return std::nullopt;
+  return Count * Semantics->ElementBytes;
 }
 
 inline bool fortifiedCountedAccessIsRejected(llvm::StringRef Name,
@@ -123,11 +99,11 @@ inline bool fortifiedCountedAccessIsRejected(llvm::StringRef Name,
 }
 
 inline bool isExactCopySourceRead(llvm::StringRef Name) {
-  const std::string Normalized = copySemanticName(Name);
-  return Normalized == "memcpy" || Normalized == "memmove" ||
-         Normalized == "wmemcpy" || Normalized == "wmemmove" ||
-         Normalized == "bcopy" || Normalized == "memcpy_chk" ||
-         Normalized == "memmove_chk";
+  const std::optional<counted_write::Layout> Shape =
+      counted_write::classifyLayout(Name);
+  return Shape && (Shape->Kind == counted_write::SemanticKind::Memcpy ||
+                   Shape->Kind == counted_write::SemanticKind::Memmove ||
+                   Shape->Kind == counted_write::SemanticKind::Bcopy);
 }
 
 inline std::optional<uint64_t>

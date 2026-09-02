@@ -170,6 +170,40 @@ print(audit.get("ok"), hunt.get("findings"))
 
 EVM and SBF sessions reject these calls.
 
+### Strict binary sanitizer publication
+
+`session.sanitize()` runs the experimental all-sites-or-refuse
+`binary-sanitizer-v1` transaction and returns a frozen `SanitizeResult` only
+after validating a complete authenticated publication receipt.
+
+The SDK probes publication ABI v1 before the native transaction can mutate the
+namespace. It rejects malformed terminal tuples, unknown receipt values,
+incomplete success, and inconsistent guarantees with `SanitizeError`; a failed
+call's `status` and available incomplete `receipt` remain attached to that
+exception. `PUBLISH_INDETERMINATE` and `PUBLISHED_INCOMPLETE` mean a destination
+may exist and must be inspected before use or retry.
+
+Native authenticated publication is currently Darwin-only. An absent output is
+created exclusively. An empty plan may instead authenticate the already loaded
+source and return a read-only `NO_CHANGE` receipt; a guarded plan cannot replace
+that source. A distinct existing output is preserved because v1 has no
+replacement CAS, and no receipt claims crash durability. Non-Darwin calls fail
+before lifting, guard generation, candidate creation, or namespace mutation.
+The Darwin create-exclusive operand binding is transaction-local and
+access-control-confined: it does not defend against the same effective uid,
+root/DAC-bypass authority, or a filesystem that lies about its semantics.
+The held destination-directory object may be renamed after it is opened, so a
+complete receipt authenticates publication in that object but not continuous
+or post-return ownership of the original pathname.
+`SanitizePublicationReceipt` is an attestation summary rather than a durable,
+independently verifiable path binding; code that later reopens the pathname must
+keep an external anchor and authenticate the reopened object again.
+
+There is no Python native whole-process replay method. The C++
+`NativeProcessReplayAdapter` is only a fail-closed phase-0 availability/factory
+boundary: every host currently reports all executor capabilities false and
+returns no operations table.
+
 ### Proof-gated synthesis and LLVM optimization
 
 `synthesize_expression` is deliberately separate from the legacy MBA-only

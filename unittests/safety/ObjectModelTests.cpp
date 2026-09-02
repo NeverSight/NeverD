@@ -62,6 +62,33 @@ void push(MedFunc &F, NdOp Op, MedVar Out, std::vector<MedVar> Ins) {
   F.Blocks[0].Ops.push_back(O);
 }
 
+void push(MedBlock &B, NdOp Op, MedVar Out, std::vector<MedVar> Ins) {
+  MedOp O;
+  O.Opcode = Op;
+  O.Output = Out;
+  for (auto &I : Ins)
+    O.addInput(I);
+  B.Ops.push_back(O);
+}
+
+size_t pushCall(MedFunc &F, MedBlock &B, const std::string &Name, MedVar Ret,
+                std::vector<MedVar> Args, va_t Target = 0x9000) {
+  const int OpIdx = static_cast<int>(B.Ops.size());
+  MedOp O;
+  O.Opcode = NdOp::CALL;
+  O.Output = Ret;
+  O.addInput(MedVar::makeConst(Target, 8));
+  B.Ops.push_back(O);
+  MedCallInfo CI;
+  CI.BlockId = B.Id;
+  CI.OpIdx = OpIdx;
+  CI.TargetAddr = Target;
+  CI.TargetName = Name;
+  CI.Args = std::move(Args);
+  F.CallInfos.push_back(CI);
+  return F.CallInfos.size() - 1;
+}
+
 size_t pushCall(MedFunc &F, const std::string &Name, MedVar Ret,
                 std::vector<MedVar> Args, va_t Target = 0x9000) {
   int OpIdx = static_cast<int>(F.Blocks[0].Ops.size());
@@ -80,9 +107,26 @@ size_t pushCall(MedFunc &F, const std::string &Name, MedVar Ret,
   return F.CallInfos.size() - 1;
 }
 
+TypeRef byteArray(uint32_t Count) {
+  auto Type = std::make_shared<NdType>();
+  Type->Kind = NdTypeKind::Array;
+  Type->ArrayCount = Count;
+  Type->ElemType = NdType::makeInt(1, false);
+  Type->Size = static_cast<uint16_t>(Count);
+  return Type;
+}
+
+void addTypedLocal(MedFunc &F, const char *Name, int64_t Base, TypeRef Type) {
+  MedTypedLocal Local;
+  Local.Name = Name;
+  Local.StackOff = Base;
+  Local.Type = std::move(Type);
+  F.TypedLocals.push_back(std::move(Local));
+}
+
 } // namespace
 
-TEST(ObjectModel, HeapAllocationExactSize) {
+TEST(ObjectModel, HeapAllocationIsAnInexactStorageBound) {
   BinaryImage Img;
   Img.Arch = Arch::X64;
   AnalysisInput In;
@@ -97,7 +141,8 @@ TEST(ObjectModel, HeapAllocationExactSize) {
   EXPECT_EQ(D.Region, ObjectRegion::Heap);
   ASSERT_TRUE(D.Capacity.has_value());
   EXPECT_EQ(*D.Capacity, 16u);
-  EXPECT_TRUE(D.CapacityExact);
+  EXPECT_EQ(D.Precision, CapacityPrecision::StorageExact);
+  EXPECT_FALSE(D.CapacityExact);
 }
 
 TEST(ObjectModel, DeepForwardingKeepsHeapAllocationCapacity) {
@@ -121,7 +166,8 @@ TEST(ObjectModel, DeepForwardingKeepsHeapAllocationCapacity) {
   EXPECT_EQ(D.Region, ObjectRegion::Heap);
   ASSERT_TRUE(D.Capacity.has_value());
   EXPECT_EQ(*D.Capacity, 16u);
-  EXPECT_TRUE(D.CapacityExact);
+  EXPECT_EQ(D.Precision, CapacityPrecision::StorageExact);
+  EXPECT_FALSE(D.CapacityExact);
 }
 
 TEST(ObjectModel, InteriorHeapPointerUsesRemainingCapacity) {
@@ -143,7 +189,8 @@ TEST(ObjectModel, InteriorHeapPointerUsesRemainingCapacity) {
     EXPECT_EQ(D.Region, ObjectRegion::Heap);
     ASSERT_TRUE(D.Capacity.has_value());
     EXPECT_EQ(*D.Capacity, Remaining);
-    EXPECT_TRUE(D.CapacityExact);
+    EXPECT_EQ(D.Precision, CapacityPrecision::StorageExact);
+    EXPECT_FALSE(D.CapacityExact);
   }
 }
 
@@ -165,7 +212,8 @@ TEST(ObjectModel, NarrowEncodedHeapOffsetPreservesRemainingCapacity) {
   EXPECT_EQ(D.Region, ObjectRegion::Heap);
   ASSERT_TRUE(D.Capacity.has_value());
   EXPECT_EQ(*D.Capacity, 8u);
-  EXPECT_TRUE(D.CapacityExact);
+  EXPECT_EQ(D.Precision, CapacityPrecision::StorageExact);
+  EXPECT_FALSE(D.CapacityExact);
 }
 
 TEST(ObjectModel, RelocationAddressCannotBecomeAHeapOffset) {
@@ -218,7 +266,8 @@ TEST(ObjectModel, SharedConstantDiamondKeepsAllocationProofLinear) {
   EXPECT_EQ(D.Region, ObjectRegion::Heap);
   ASSERT_TRUE(D.Capacity.has_value());
   EXPECT_EQ(*D.Capacity, 64u);
-  EXPECT_TRUE(D.CapacityExact);
+  EXPECT_EQ(D.Precision, CapacityPrecision::StorageExact);
+  EXPECT_FALSE(D.CapacityExact);
 }
 
 TEST(ObjectModel, SharedScalarAddressDiamondFailsClosedInBoundedWork) {
@@ -269,7 +318,8 @@ TEST(ObjectModel, CompletedConstantProofSurvivesADeepSharedAlias) {
   EXPECT_EQ(D.Region, ObjectRegion::Heap);
   ASSERT_TRUE(D.Capacity.has_value());
   EXPECT_EQ(*D.Capacity, 64u);
-  EXPECT_TRUE(D.CapacityExact);
+  EXPECT_EQ(D.Precision, CapacityPrecision::StorageExact);
+  EXPECT_FALSE(D.CapacityExact);
 }
 
 TEST(ObjectModel, UnprovenHeapPointerOffsetsDoNotInventCapacity) {
@@ -325,7 +375,7 @@ TEST(ObjectModel, WidthChangingForwardDoesNotPreserveAllocationCapacity) {
   EXPECT_FALSE(D.Capacity.has_value());
 }
 
-TEST(ObjectModel, ReallocationResultHasExactNewCapacity) {
+TEST(ObjectModel, ReallocationResultHasAStorageBound) {
   for (const char *Name : {"realloc", "reallocf"}) {
     SCOPED_TRACE(Name);
     BinaryImage Img;
@@ -342,7 +392,8 @@ TEST(ObjectModel, ReallocationResultHasExactNewCapacity) {
     EXPECT_EQ(D.Region, ObjectRegion::Heap);
     ASSERT_TRUE(D.Capacity.has_value());
     EXPECT_EQ(*D.Capacity, 24u);
-    EXPECT_TRUE(D.CapacityExact);
+    EXPECT_EQ(D.Precision, CapacityPrecision::StorageExact);
+    EXPECT_FALSE(D.CapacityExact);
   }
 }
 
@@ -361,10 +412,11 @@ TEST(ObjectModel, StackAllocationKeepsItsObjectRegion) {
   EXPECT_EQ(D.Region, ObjectRegion::Stack);
   ASSERT_TRUE(D.Capacity.has_value());
   EXPECT_EQ(*D.Capacity, 24u);
-  EXPECT_TRUE(D.CapacityExact);
+  EXPECT_EQ(D.Precision, CapacityPrecision::StorageExact);
+  EXPECT_FALSE(D.CapacityExact);
 }
 
-TEST(ObjectModel, SizedGlobalSymbolHasExactRemainingCapacityAcrossFormats) {
+TEST(ObjectModel, AuthenticatedGlobalExtentHasRemainingCapacityAcrossFormats) {
   constexpr std::array<std::pair<BinaryFormat, Arch>, 6> Targets = {{
       {BinaryFormat::ELF, Arch::X64},
       {BinaryFormat::ELF, Arch::AArch64},
@@ -388,6 +440,12 @@ TEST(ObjectModel, SizedGlobalSymbolHasExactRemainingCapacityAcrossFormats) {
     Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
     Img.Segments.push_back(std::move(Data));
     Img.Symbols.push_back(Symbol{"buffer", 0x1010, 16, false});
+    Img.ExactDataObjects.push_back(ExactDataObjectExtent{
+        0x1010, 16, ExactDataObjectEvidence::AuthenticatedDebug,
+        ExactDataObjectPrecision::TypedBuffer});
+    Img.ExactDataObjects.push_back(ExactDataObjectExtent{
+        0x1010, 16, ExactDataObjectEvidence::ELFObjectSymbol,
+        ExactDataObjectPrecision::Storage});
 
     AnalysisInput In;
     In.Img = &Img;
@@ -402,7 +460,224 @@ TEST(ObjectModel, SizedGlobalSymbolHasExactRemainingCapacityAcrossFormats) {
     EXPECT_EQ(D.Region, ObjectRegion::Global);
     ASSERT_TRUE(D.Capacity.has_value());
     EXPECT_EQ(*D.Capacity, 12u);
+    EXPECT_EQ(D.Precision, CapacityPrecision::TypedBufferExact);
     EXPECT_TRUE(D.CapacityExact);
+  }
+}
+
+TEST(ObjectModel, GenericAddressBindsUniqueAuthenticatedObjectExtent) {
+  constexpr std::array<std::pair<BinaryFormat, Arch>, 6> Targets = {{
+      {BinaryFormat::ELF, Arch::X64},
+      {BinaryFormat::ELF, Arch::AArch64},
+      {BinaryFormat::COFF, Arch::X64},
+      {BinaryFormat::COFF, Arch::AArch64},
+      {BinaryFormat::MachO, Arch::X64},
+      {BinaryFormat::MachO, Arch::AArch64},
+  }};
+  for (const auto &[Format, A] : Targets) {
+    SCOPED_TRACE(static_cast<int>(Format));
+    SCOPED_TRACE(static_cast<int>(A));
+    BinaryImage Img;
+    Img.Arch = A;
+    Img.Format = Format;
+    Segment Data;
+    Data.Name = "data";
+    Data.VA = 0x1000;
+    Data.Size = 0x40;
+    Data.FileSz = 0x40;
+    Data.Data.resize(0x40);
+    Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Img.Segments.push_back(std::move(Data));
+    Img.ExactDataObjects.push_back(ExactDataObjectExtent{
+        0x1010, 8, ExactDataObjectEvidence::AuthenticatedDebug,
+        ExactDataObjectPrecision::TypedBuffer});
+
+    AnalysisInput In;
+    In.Img = &Img;
+    MedFunc F = newFunc(A);
+    const size_t Sink = pushCall(
+        F, "memcpy", temp(0),
+        {MedVar::makeConst(0x1013, 8, ConstantAddressProvenance::Address),
+         temp(2), MedVar::makeConst(6, 8)});
+
+    const DestObject D =
+        resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+    EXPECT_EQ(D.Region, ObjectRegion::Global);
+    ASSERT_TRUE(D.Capacity.has_value());
+    EXPECT_EQ(*D.Capacity, 5u);
+    EXPECT_EQ(D.Precision, CapacityPrecision::TypedBufferExact);
+    EXPECT_TRUE(D.CapacityExact);
+    EXPECT_EQ(D.Detail, "authenticated typed buffer");
+  }
+}
+
+TEST(ObjectModel, ELFStorageExtentIsOnlyAnUpperBoundForCountedWrites) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Format = BinaryFormat::ELF;
+  Segment Data;
+  Data.VA = 0x1000;
+  Data.Size = 0x40;
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Img.Segments.push_back(std::move(Data));
+  Img.ExactDataObjects.push_back(ExactDataObjectExtent{
+      0x1010, 16, ExactDataObjectEvidence::ELFObjectSymbol,
+      ExactDataObjectPrecision::Storage});
+
+  AnalysisInput In;
+  In.Img = &Img;
+  MedFunc F = newFunc(Arch::X64);
+  const size_t Sink = pushCall(
+      F, "memcpy", temp(0),
+      {MedVar::makeConst(0x1013, 8, ConstantAddressProvenance::Address),
+       temp(2), MedVar::makeConst(6, 8)});
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  EXPECT_EQ(D.Region, ObjectRegion::Global);
+  ASSERT_TRUE(D.Capacity.has_value());
+  EXPECT_EQ(*D.Capacity, 13u);
+  EXPECT_EQ(D.Precision, CapacityPrecision::StorageExact);
+  EXPECT_FALSE(D.CapacityExact);
+  EXPECT_EQ(D.Detail, "storage object upper bound");
+}
+
+TEST(ObjectModel, TypedMemberCannotNarrowOverlappingELFContainerByValueAlone) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Format = BinaryFormat::ELF;
+  Segment Data;
+  Data.VA = 0x1000;
+  Data.Size = 0x40;
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Img.Segments.push_back(std::move(Data));
+  Img.ExactDataObjects.push_back(ExactDataObjectExtent{
+      0x1010, 16, ExactDataObjectEvidence::ELFObjectSymbol,
+      ExactDataObjectPrecision::Storage});
+  Img.ExactDataObjects.push_back(ExactDataObjectExtent{
+      0x1010, 8, ExactDataObjectEvidence::AuthenticatedDebug,
+      ExactDataObjectPrecision::TypedBuffer});
+
+  AnalysisInput In;
+  In.Img = &Img;
+  MedFunc F = newFunc(Arch::X64);
+  const size_t Sink = pushCall(
+      F, "memcpy", temp(0),
+      {MedVar::makeConst(0x1013, 8, ConstantAddressProvenance::Address),
+       temp(2), MedVar::makeConst(9, 8)});
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  EXPECT_EQ(D.Region, ObjectRegion::Global);
+  ASSERT_TRUE(D.Capacity.has_value());
+  EXPECT_EQ(*D.Capacity, 13u);
+  EXPECT_EQ(D.Precision, CapacityPrecision::ContainerUpperBound);
+  EXPECT_FALSE(D.CapacityExact);
+  EXPECT_EQ(D.Detail, "ambiguous object upper bound");
+}
+
+TEST(ObjectModel, NumericConstantsCannotBorrowAuthenticatedObjectExtent) {
+  for (const ConstantAddressProvenance Provenance :
+       {ConstantAddressProvenance::Unknown, ConstantAddressProvenance::Scalar,
+        ConstantAddressProvenance::AddressFragment,
+        ConstantAddressProvenance::CodeAddress}) {
+    SCOPED_TRACE(static_cast<int>(Provenance));
+    BinaryImage Img;
+    Img.Arch = Arch::X64;
+    Segment Data;
+    Data.VA = 0x1000;
+    Data.Size = 0x40;
+    Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Img.Segments.push_back(std::move(Data));
+    Img.ExactDataObjects.push_back(ExactDataObjectExtent{
+        0x1010, 8, ExactDataObjectEvidence::ELFObjectSymbol});
+
+    AnalysisInput In;
+    In.Img = &Img;
+    MedFunc F = newFunc(Arch::X64);
+    const size_t Sink = pushCall(F, "memcpy", temp(0),
+                                 {MedVar::makeConst(0x1013, 8, Provenance),
+                                  temp(2), MedVar::makeConst(1, 8)});
+
+    const DestObject D =
+        resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+    EXPECT_EQ(D.Region, ObjectRegion::Unknown);
+    EXPECT_FALSE(D.Capacity.has_value());
+  }
+}
+
+TEST(ObjectModel, ConflictingAuthenticatedObjectExtentsFailClosed) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Segment Data;
+  Data.VA = 0x1000;
+  Data.Size = 0x40;
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Img.Segments.push_back(std::move(Data));
+  Img.ExactDataObjects.push_back(ExactDataObjectExtent{
+      0x1010, 8, ExactDataObjectEvidence::ELFObjectSymbol});
+  Img.ExactDataObjects.push_back(ExactDataObjectExtent{
+      0x1012, 8, ExactDataObjectEvidence::AuthenticatedDebug,
+      ExactDataObjectPrecision::TypedBuffer});
+
+  AnalysisInput In;
+  In.Img = &Img;
+  MedFunc F = newFunc(Arch::X64);
+  const size_t Sink = pushCall(
+      F, "memcpy", temp(0),
+      {MedVar::makeConst(0x1011, 8, ConstantAddressProvenance::Address),
+       temp(2), MedVar::makeConst(1, 8)});
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  EXPECT_EQ(D.Region, ObjectRegion::Global);
+  ASSERT_TRUE(D.Capacity.has_value());
+  EXPECT_EQ(*D.Capacity, 7u);
+  EXPECT_EQ(D.Precision, CapacityPrecision::ContainerUpperBound);
+  EXPECT_FALSE(D.CapacityExact);
+}
+
+TEST(ObjectModel, UniqueOnePastObjectExtentIsZeroButAdjacentBaseIsAmbiguous) {
+  for (const bool HasAdjacentObject : {false, true}) {
+    for (const va_t Address : {va_t{0x1013}, va_t{0x1018}}) {
+      SCOPED_TRACE(HasAdjacentObject);
+      SCOPED_TRACE(Address);
+      BinaryImage Img;
+      Img.Arch = Arch::AArch64;
+      Segment Data;
+      Data.VA = 0x1000;
+      Data.Size = 0x40;
+      Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+      Img.Segments.push_back(std::move(Data));
+      Img.ExactDataObjects.push_back(ExactDataObjectExtent{
+          0x1010, 8, ExactDataObjectEvidence::AuthenticatedDebug,
+          ExactDataObjectPrecision::TypedBuffer});
+      if (HasAdjacentObject)
+        Img.ExactDataObjects.push_back(ExactDataObjectExtent{
+            0x1018, 8, ExactDataObjectEvidence::AuthenticatedDebug,
+            ExactDataObjectPrecision::TypedBuffer});
+
+      AnalysisInput In;
+      In.Img = &Img;
+      MedFunc F = newFunc(Arch::AArch64);
+      const size_t Sink = pushCall(
+          F, "memcpy", temp(0),
+          {MedVar::makeConst(Address, 8, ConstantAddressProvenance::Address),
+           temp(2), MedVar::makeConst(1, 8)});
+      const DestObject D =
+          resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+      EXPECT_EQ(D.Region, ObjectRegion::Global);
+      ASSERT_TRUE(D.Capacity.has_value());
+      if (HasAdjacentObject) {
+        EXPECT_EQ(*D.Capacity, Address == 0x1018 ? 8u : 5u);
+        EXPECT_EQ(D.Precision, CapacityPrecision::ContainerUpperBound);
+        EXPECT_FALSE(D.CapacityExact);
+      } else {
+        EXPECT_EQ(*D.Capacity, Address == 0x1018 ? 0u : 5u);
+        EXPECT_EQ(D.Precision, CapacityPrecision::TypedBufferExact);
+        EXPECT_TRUE(D.CapacityExact);
+      }
+    }
   }
 }
 
@@ -483,6 +758,9 @@ TEST(ObjectModel, OnlyExactDataOccurrenceCanNameZeroVAGlobal) {
   Foreign.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
   Img.Segments.push_back(std::move(Foreign));
   Img.Symbols.push_back(Symbol{"zero_buffer", 0, 16, false});
+  Img.ExactDataObjects.push_back(
+      ExactDataObjectExtent{0, 16, ExactDataObjectEvidence::AuthenticatedDebug,
+                            ExactDataObjectPrecision::TypedBuffer});
 
   AnalysisInput In;
   In.Img = &Img;
@@ -571,7 +849,7 @@ TEST(ObjectModel, GlobalCapacityUsesWritableSectionOwnership) {
                    .Capacity.has_value());
 }
 
-TEST(ObjectModel, ExactOnePastDestinationKeepsItsRelocationOwnerAcrossFormats) {
+TEST(ObjectModel, OnePastDestinationKeepsItsContainerOwnerAcrossFormats) {
   constexpr std::array<std::pair<BinaryFormat, Arch>, 6> Targets = {{
       {BinaryFormat::ELF, Arch::X64},
       {BinaryFormat::ELF, Arch::AArch64},
@@ -622,7 +900,8 @@ TEST(ObjectModel, ExactOnePastDestinationKeepsItsRelocationOwnerAcrossFormats) {
     EXPECT_EQ(D.Region, ObjectRegion::Global);
     ASSERT_TRUE(D.Capacity.has_value());
     EXPECT_EQ(*D.Capacity, 0u);
-    EXPECT_TRUE(D.CapacityExact);
+    EXPECT_EQ(D.Precision, CapacityPrecision::ContainerUpperBound);
+    EXPECT_FALSE(D.CapacityExact);
   }
 }
 
@@ -685,7 +964,7 @@ TEST(ObjectModel, AdjacentSameSectionSymbolsDoNotTurnOnePastIntoExactCapacity) {
 }
 
 TEST(ObjectModel,
-     ComputedOnePastDestinationKeepsItsRelocationOwnerAcrossFormats) {
+     ComputedOnePastDestinationKeepsItsContainerOwnerAcrossFormats) {
   constexpr std::array<std::pair<BinaryFormat, Arch>, 12> Targets = {{
       {BinaryFormat::ELF, Arch::X64},
       {BinaryFormat::ELF, Arch::AArch64},
@@ -775,7 +1054,8 @@ TEST(ObjectModel,
       EXPECT_EQ(D.Region, ObjectRegion::Global);
       ASSERT_TRUE(D.Capacity.has_value());
       EXPECT_EQ(*D.Capacity, 0u);
-      EXPECT_TRUE(D.CapacityExact);
+      EXPECT_EQ(D.Precision, CapacityPrecision::ContainerUpperBound);
+      EXPECT_FALSE(D.CapacityExact);
     }
   }
 }
@@ -827,7 +1107,8 @@ TEST(ObjectModel, NarrowEncodedGlobalOffsetKeepsItsOwnerAcross64BitFormats) {
       EXPECT_EQ(D.Region, ObjectRegion::Global);
       ASSERT_TRUE(D.Capacity.has_value());
       EXPECT_EQ(*D.Capacity, 0u);
-      EXPECT_TRUE(D.CapacityExact);
+      EXPECT_EQ(D.Precision, CapacityPrecision::ContainerUpperBound);
+      EXPECT_FALSE(D.CapacityExact);
     }
   }
 }
@@ -854,7 +1135,54 @@ TEST(ObjectModel, HeapAllocationSurvivesStackSpillReload) {
   DestObject D = resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
   ASSERT_TRUE(D.Capacity.has_value());
   EXPECT_EQ(*D.Capacity, 16u);
-  EXPECT_TRUE(D.CapacityExact);
+  EXPECT_EQ(D.Precision, CapacityPrecision::StorageExact);
+  EXPECT_FALSE(D.CapacityExact);
+}
+
+TEST(ObjectModel, NonDefaultLoadCannotRecoverAllocationSpill) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+
+  MedFunc F = newFunc(Arch::X64);
+  push(F, NdOp::INT_SUB, temp(10), {mkReg(kSP, 0), MedVar::makeConst(0x10, 8)});
+  pushCall(F, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  push(F, NdOp::STORE, MedVar{}, {temp(10), temp(1)});
+  push(F, NdOp::LOAD, temp(2), {temp(10)});
+  F.Blocks[0].Ops.back().MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+  const size_t Sink = pushCall(F, "memcpy", temp(0),
+                               {temp(2), temp(3), MedVar::makeConst(8, 8)});
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  EXPECT_EQ(D.Region, ObjectRegion::Unknown);
+  EXPECT_FALSE(D.Capacity.has_value());
+}
+
+TEST(ObjectModel, NonDefaultStoreCannotCreateAllocationSpill) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+
+  MedFunc F = newFunc(Arch::X64);
+  push(F, NdOp::INT_SUB, temp(10), {mkReg(kSP, 0), MedVar::makeConst(0x10, 8)});
+  pushCall(F, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  push(F, NdOp::STORE, MedVar{}, {temp(10), temp(1)});
+  F.Blocks[0].Ops.back().MemoryAddressSpace = NdMemoryAddressSpace::X86GS;
+  push(F, NdOp::LOAD, temp(2), {temp(10)});
+  const size_t Sink = pushCall(F, "memcpy", temp(0),
+                               {temp(2), temp(3), MedVar::makeConst(8, 8)});
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  EXPECT_EQ(D.Region, ObjectRegion::Unknown);
+  EXPECT_FALSE(D.Capacity.has_value());
 }
 
 TEST(ObjectModel, CallAliasesInvalidateAllocationSpills) {
@@ -911,6 +1239,33 @@ TEST(ObjectModel, CallAliasesInvalidateAllocationSpills) {
     EXPECT_EQ(D.Region, ObjectRegion::Unknown);
     EXPECT_FALSE(D.Capacity.has_value());
   }
+}
+
+TEST(ObjectModel, IncompletePhiAddressInvalidatesAllocationSpill) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+  MedFunc F = newFunc(Arch::X64);
+  push(F, NdOp::INT_SUB, temp(10), {mkReg(kSP, 0), MedVar::makeConst(0x10, 8)});
+  pushCall(F, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  push(F, NdOp::STORE, MedVar{}, {temp(10), temp(1)});
+  PhiNode Phi;
+  Phi.Output = temp(20);
+  Phi.Args = {{9, MedVar::makeConst(0x5000, 8)}};
+  F.Blocks[0].Phis.push_back(Phi);
+  push(F, NdOp::STORE, MedVar{}, {Phi.Output, temp(9)});
+  push(F, NdOp::LOAD, temp(2), {temp(10)});
+  const size_t Sink = pushCall(F, "memcpy", temp(0),
+                               {temp(2), temp(3), MedVar::makeConst(8, 8)});
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  EXPECT_EQ(D.Region, ObjectRegion::Unknown);
+  EXPECT_FALSE(D.Capacity.has_value());
 }
 
 TEST(ObjectModel, DeepUnresolvedFrameStoreInvalidatesAllocationSpill) {
@@ -1016,7 +1371,8 @@ TEST(ObjectModel, SharedNonFrameDiamondPreservesAllocationSpill) {
   EXPECT_EQ(D.Region, ObjectRegion::Heap);
   ASSERT_TRUE(D.Capacity.has_value());
   EXPECT_EQ(*D.Capacity, 16u);
-  EXPECT_TRUE(D.CapacityExact);
+  EXPECT_EQ(D.Precision, CapacityPrecision::StorageExact);
+  EXPECT_FALSE(D.CapacityExact);
 }
 
 TEST(ObjectModel, StoreAfterLoadDoesNotSupplyHeapCapacity) {
@@ -1057,7 +1413,8 @@ TEST(ObjectModel, HeapAllocationUsesResolvedImportIdentity) {
   DestObject D = resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
   ASSERT_TRUE(D.Capacity.has_value());
   EXPECT_EQ(*D.Capacity, 16u);
-  EXPECT_TRUE(D.CapacityExact);
+  EXPECT_EQ(D.Precision, CapacityPrecision::StorageExact);
+  EXPECT_FALSE(D.CapacityExact);
 }
 
 TEST(ObjectModel, HeapAllocationSizeFollowsConstantSSA) {
@@ -1075,7 +1432,8 @@ TEST(ObjectModel, HeapAllocationSizeFollowsConstantSSA) {
   DestObject D = resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
   ASSERT_TRUE(D.Capacity.has_value());
   EXPECT_EQ(*D.Capacity, 16u);
-  EXPECT_TRUE(D.CapacityExact);
+  EXPECT_EQ(D.Precision, CapacityPrecision::StorageExact);
+  EXPECT_FALSE(D.CapacityExact);
 }
 
 TEST(ObjectModel, NarrowAllocationSizeIsNotAnExactCapacity) {
@@ -1220,7 +1578,8 @@ TEST(ObjectModel, CallocCapacityIsProduct) {
   EXPECT_EQ(D.Region, ObjectRegion::Heap);
   ASSERT_TRUE(D.Capacity.has_value());
   EXPECT_EQ(*D.Capacity, 32u);
-  EXPECT_TRUE(D.CapacityExact);
+  EXPECT_EQ(D.Precision, CapacityPrecision::StorageExact);
+  EXPECT_FALSE(D.CapacityExact);
 }
 
 TEST(ObjectModel, OverflowingCallocSizeDoesNotBecomeSmallCapacity) {
@@ -1280,6 +1639,368 @@ TEST(ObjectModel, StackDestinationUpperBound) {
   ASSERT_TRUE(D.Capacity.has_value());
   EXPECT_EQ(*D.Capacity, 0x28u); // sound upper bound to the incoming SP.
   EXPECT_FALSE(D.CapacityExact);
+}
+
+TEST(ObjectModel, EntrySelfCopyAuthenticatesIncomingStackPointer) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+
+  MedFunc F = newFunc(Arch::X64);
+  F.Blocks[0].StartAddr = F.Entry;
+  push(F, NdOp::COPY, mkReg(kSP, 0), {mkReg(kSP, 0)});
+  push(F, NdOp::INT_SUB, temp(10), {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  const size_t Sink = pushCall(F, "memcpy", temp(0),
+                               {temp(10), temp(2), MedVar::makeConst(8, 8)});
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  EXPECT_EQ(D.Region, ObjectRegion::Stack);
+  EXPECT_EQ(D.StackOffset, -0x20);
+  ASSERT_TRUE(D.Capacity.has_value());
+  EXPECT_EQ(*D.Capacity, 0x20u);
+}
+
+TEST(ObjectModel, EntrySelfCopyAuthenticationRejectsStructuralAmbiguity) {
+  enum class Case { AfterNonCopy, NonEntryBlock, DuplicateEntryAddress };
+  for (const Case Kind :
+       {Case::AfterNonCopy, Case::NonEntryBlock, Case::DuplicateEntryAddress}) {
+    SCOPED_TRACE(static_cast<unsigned>(Kind));
+    BinaryImage Img;
+    Img.Arch = Arch::X64;
+    AnalysisInput In;
+    In.Img = &Img;
+    In.StackPointerReg = kSP;
+    In.StackRegsKnown = true;
+
+    MedFunc F = newFunc(Arch::X64);
+    F.Blocks[0].StartAddr = F.Entry;
+    size_t BodyIndex = 0;
+    if (Kind != Case::AfterNonCopy) {
+      MedBlock Other;
+      Other.Id = 1;
+      Other.StartAddr =
+          Kind == Case::DuplicateEntryAddress ? F.Entry : F.Entry + 0x10;
+      F.Blocks.push_back(std::move(Other));
+      if (Kind == Case::NonEntryBlock)
+        BodyIndex = 1;
+    }
+
+    MedBlock &Body = F.Blocks[BodyIndex];
+    if (Kind == Case::AfterNonCopy) {
+      push(Body, NdOp::INT_XOR, temp(99),
+           {MedVar::makeConst(0, 8), MedVar::makeConst(0, 8)});
+    }
+
+    push(Body, NdOp::COPY, mkReg(kSP, 0), {mkReg(kSP, 0)});
+    push(Body, NdOp::INT_SUB, temp(10),
+         {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+    const size_t Sink = pushCall(F, Body, "memcpy", temp(0),
+                                 {temp(10), temp(2), MedVar::makeConst(8, 8)});
+
+    const DestObject D =
+        resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+    EXPECT_EQ(D.Region, ObjectRegion::Unknown);
+    EXPECT_FALSE(D.Capacity.has_value());
+  }
+}
+
+TEST(ObjectModel, StackPointerPhiWithDifferentOffsetsCannotPublishCapacity) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+
+  MedFunc F = newFunc(Arch::X64);
+  F.Blocks.resize(4);
+  for (int I = 0; I < 4; ++I)
+    F.Blocks[I].Id = I;
+  F.Blocks[0].Succs = {1, 2};
+  F.Blocks[1].Preds = {0};
+  F.Blocks[1].Succs = {3};
+  F.Blocks[2].Preds = {0};
+  F.Blocks[2].Succs = {3};
+  F.Blocks[3].Preds = {1, 2};
+
+  push(F.Blocks[1], NdOp::INT_SUB, temp(10),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  push(F.Blocks[2], NdOp::INT_SUB, temp(11),
+       {mkReg(kSP, 0), MedVar::makeConst(0x30, 8)});
+  PhiNode Phi;
+  Phi.Output = mkReg(kSP, 2);
+  Phi.Args = {{1, temp(10)}, {2, temp(11)}};
+  F.Blocks[3].Phis.push_back(Phi);
+  push(F.Blocks[3], NdOp::INT_SUB, temp(12),
+       {Phi.Output, MedVar::makeConst(0x10, 8)});
+  const size_t Sink = pushCall(F, F.Blocks[3], "memcpy", temp(0),
+                               {temp(12), temp(2), MedVar::makeConst(8, 8)});
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  EXPECT_EQ(D.Region, ObjectRegion::Unknown);
+  EXPECT_FALSE(D.Capacity.has_value());
+}
+
+TEST(ObjectModel, CompleteStackPointerPhiWithEqualOffsetsPublishesCapacity) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+
+  MedFunc F = newFunc(Arch::X64);
+  F.Blocks.resize(4);
+  for (int I = 0; I < 4; ++I)
+    F.Blocks[I].Id = I;
+  F.Blocks[0].Succs = {1, 2};
+  F.Blocks[1].Preds = {0};
+  F.Blocks[1].Succs = {3};
+  F.Blocks[2].Preds = {0};
+  F.Blocks[2].Succs = {3};
+  F.Blocks[3].Preds = {1, 2};
+  push(F.Blocks[1], NdOp::INT_SUB, temp(10),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  push(F.Blocks[2], NdOp::INT_SUB, temp(11),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  PhiNode Phi;
+  Phi.Output = mkReg(kSP, 2);
+  Phi.Args = {{1, temp(10)}, {2, temp(11)}};
+  F.Blocks[3].Phis.push_back(Phi);
+  push(F.Blocks[3], NdOp::INT_SUB, temp(12),
+       {Phi.Output, MedVar::makeConst(0x10, 8)});
+  const size_t Sink = pushCall(F, F.Blocks[3], "memcpy", temp(0),
+                               {temp(12), temp(2), MedVar::makeConst(8, 8)});
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  EXPECT_EQ(D.Region, ObjectRegion::Stack);
+  ASSERT_TRUE(D.Capacity.has_value());
+  EXPECT_EQ(*D.Capacity, 0x30u);
+  EXPECT_EQ(D.Precision, CapacityPrecision::ContainerUpperBound);
+}
+
+TEST(ObjectModel, StackPointerPhiRequiresCompleteNormalPredecessorGraph) {
+  constexpr std::array<const char *, 9> Scenarios = {
+      "missing-pred",   "forged-pred",     "duplicate-pred",
+      "missing-arg",    "forged-arg",      "duplicate-arg",
+      "duplicate-edge", "duplicate-block", "non-stack-arm"};
+  for (size_t Scenario = 0; Scenario < Scenarios.size(); ++Scenario) {
+    SCOPED_TRACE(Scenarios[Scenario]);
+    BinaryImage Img;
+    Img.Arch = Arch::X64;
+    Img.Bits = Bitness::Bits64;
+    AnalysisInput In;
+    In.Img = &Img;
+    In.StackPointerReg = kSP;
+    In.StackRegsKnown = true;
+
+    MedFunc F = newFunc(Arch::X64);
+    F.Blocks.resize(Scenario == 7 ? 5 : 4);
+    for (int I = 0; I < static_cast<int>(F.Blocks.size()); ++I)
+      F.Blocks[I].Id = I;
+    if (Scenario == 7)
+      F.Blocks[4].Id = 2;
+    F.Blocks[0].Succs = {1, 2};
+    F.Blocks[1].Preds = {0};
+    F.Blocks[1].Succs =
+        Scenario == 6 ? std::vector<int>{3, 3} : std::vector<int>{3};
+    F.Blocks[2].Preds = {0};
+    F.Blocks[2].Succs = {3};
+    F.Blocks[3].Preds = {1, 2};
+    if (Scenario == 0)
+      F.Blocks[3].Preds = {1};
+    else if (Scenario == 1)
+      F.Blocks[3].Preds = {1, 9};
+    else if (Scenario == 2)
+      F.Blocks[3].Preds = {1, 2, 2};
+
+    push(F.Blocks[1], NdOp::INT_SUB, temp(10),
+         {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+    push(F.Blocks[2], NdOp::INT_SUB, temp(11),
+         {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+    PhiNode Phi;
+    Phi.Output = mkReg(kSP, 2);
+    Phi.Args = {{1, temp(10)}, {2, temp(11)}};
+    if (Scenario == 3)
+      Phi.Args.pop_back();
+    else if (Scenario == 4)
+      Phi.Args[1].first = 9;
+    else if (Scenario == 5)
+      Phi.Args[1].first = 1;
+    else if (Scenario == 8)
+      Phi.Args[1].second = temp(99);
+    F.Blocks[3].Phis.push_back(Phi);
+    push(F.Blocks[3], NdOp::INT_SUB, temp(12),
+         {Phi.Output, MedVar::makeConst(0x10, 8)});
+    const size_t Sink = pushCall(F, F.Blocks[3], "memcpy", temp(0),
+                                 {temp(12), temp(2), MedVar::makeConst(8, 8)});
+
+    const DestObject D =
+        resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+    EXPECT_EQ(D.Region, ObjectRegion::Unknown);
+    EXPECT_FALSE(D.Capacity.has_value());
+  }
+}
+
+TEST(ObjectModel, UndefinedNonLiveInStackPointerVersionHasNoCapacity) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+  MedFunc F = newFunc(Arch::X64);
+  push(F, NdOp::INT_SUB, temp(10), {mkReg(kSP, 9), MedVar::makeConst(0x20, 8)});
+  const size_t Sink = pushCall(F, "memcpy", temp(0),
+                               {temp(10), temp(2), MedVar::makeConst(8, 8)});
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  EXPECT_EQ(D.Region, ObjectRegion::Unknown);
+  EXPECT_FALSE(D.Capacity.has_value());
+}
+
+TEST(ObjectModel, ZeroWidthStackPointerPhiCannotAuthenticateALiveIn) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+  MedFunc F = newFunc(Arch::X64);
+  PhiNode Phi;
+  Phi.Output = mkReg(kSP, 0, 0);
+  Phi.Args = {{9, MedVar::makeConst(0, 0)}};
+  F.Blocks[0].Phis.push_back(Phi);
+  push(F, NdOp::INT_SUB, temp(10), {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  const size_t Sink = pushCall(F, "memcpy", temp(0),
+                               {temp(10), temp(2), MedVar::makeConst(8, 8)});
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  EXPECT_EQ(D.Region, ObjectRegion::Unknown);
+  EXPECT_FALSE(D.Capacity.has_value());
+}
+
+TEST(ObjectModel, ZeroWidthStackPointerOpCannotAuthenticateALiveIn) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+  MedFunc F = newFunc(Arch::X64);
+  push(F, NdOp::INT_ADD, mkReg(kSP, 0, 0),
+       {MedVar::makeConst(0, 0), MedVar::makeConst(0, 0)});
+  push(F, NdOp::INT_SUB, temp(10), {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  const size_t Sink = pushCall(F, "memcpy", temp(0),
+                               {temp(10), temp(2), MedVar::makeConst(8, 8)});
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  EXPECT_EQ(D.Region, ObjectRegion::Unknown);
+  EXPECT_FALSE(D.Capacity.has_value());
+}
+
+TEST(ObjectModel, CallClobberedStackPointerCannotAuthenticateALiveIn) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+  MedFunc F = newFunc(Arch::X64);
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.CallSiteId = 1;
+  Call.addInput(MedVar::makeConst(0x9000, 8));
+  F.Blocks[0].Ops.push_back(Call);
+  MedCallInfo CallInfo;
+  CallInfo.BlockId = 0;
+  CallInfo.OpIdx = 0;
+  CallInfo.TargetName = "opaque_external";
+  F.CallInfos.push_back(CallInfo);
+  MedCallClobber Clobber;
+  Clobber.Value = mkReg(kSP, 0);
+  Clobber.CallSiteId = 1;
+  F.CallClobbers.push_back(Clobber);
+  push(F, NdOp::INT_SUB, temp(10), {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  const size_t Sink = pushCall(F, "memcpy", temp(0),
+                               {temp(10), temp(2), MedVar::makeConst(8, 8)});
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  EXPECT_EQ(D.Region, ObjectRegion::Unknown);
+  EXPECT_FALSE(D.Capacity.has_value());
+}
+
+TEST(ObjectModel, DuplicateStackAddressDefinitionsHaveNoCapacity) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+  MedFunc F = newFunc(Arch::X64);
+  push(F, NdOp::INT_SUB, temp(10), {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  push(F, NdOp::INT_SUB, temp(10), {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  const size_t Sink = pushCall(F, "memcpy", temp(0),
+                               {temp(10), temp(2), MedVar::makeConst(8, 8)});
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  EXPECT_EQ(D.Region, ObjectRegion::Unknown);
+  EXPECT_FALSE(D.Capacity.has_value());
+}
+
+TEST(ObjectModel, PhiAndOpCannotBothDefineAStackCapacity) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+  MedFunc F = newFunc(Arch::X64);
+  F.Blocks.resize(4);
+  for (int I = 0; I < 4; ++I)
+    F.Blocks[I].Id = I;
+  F.Blocks[0].Succs = {1, 2};
+  F.Blocks[1].Preds = {0};
+  F.Blocks[1].Succs = {3};
+  F.Blocks[2].Preds = {0};
+  F.Blocks[2].Succs = {3};
+  F.Blocks[3].Preds = {1, 2};
+  push(F.Blocks[1], NdOp::INT_SUB, temp(10),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  push(F.Blocks[2], NdOp::INT_SUB, temp(11),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  PhiNode Phi;
+  Phi.Output = temp(12);
+  Phi.Args = {{1, temp(10)}, {2, temp(11)}};
+  F.Blocks[3].Phis.push_back(Phi);
+  push(F.Blocks[3], NdOp::INT_SUB, Phi.Output,
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  const size_t Sink = pushCall(F, F.Blocks[3], "memcpy", temp(0),
+                               {Phi.Output, temp(2), MedVar::makeConst(8, 8)});
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  EXPECT_EQ(D.Region, ObjectRegion::Unknown);
+  EXPECT_FALSE(D.Capacity.has_value());
 }
 
 TEST(ObjectModel, RelocationAddressCannotBecomeAStackOffset) {
@@ -1396,6 +2117,7 @@ public:
     V.StackOffset = Off;
     return V;
   }
+  bool hasAuthenticatedObjectExtents() const override { return true; }
   bool hasInfo() const override { return true; }
 
 private:
@@ -1416,7 +2138,7 @@ TEST(ObjectModel, OverflowingDebugArraySizeIsNotAnExactCapacity) {
 
   BinaryImage Img;
   Img.Arch = Arch::X64;
-  TypeDebug Dbg(0x100, 8, Outer);
+  TypeDebug Dbg(0x100, 0, Outer);
   AnalysisInput In;
   In.Img = &Img;
   In.Dbg = &Dbg;
@@ -1441,7 +2163,7 @@ TEST(ObjectModel, CyclicDebugArrayTypeIsNotAnExactCapacity) {
 
   BinaryImage Img;
   Img.Arch = Arch::X64;
-  TypeDebug Dbg(0x100, 8, Cycle);
+  TypeDebug Dbg(0x100, 0, Cycle);
   AnalysisInput In;
   In.Img = &Img;
   In.Dbg = &Dbg;
@@ -1478,6 +2200,7 @@ public:
     V.StackOffset = Off;
     return V;
   }
+  bool hasAuthenticatedObjectExtents() const override { return true; }
   bool hasInfo() const override { return true; }
 
 private:
@@ -1508,6 +2231,7 @@ public:
     V.StackOffset = Off;
     return V;
   }
+  bool hasAuthenticatedObjectExtents() const override { return true; }
   bool hasInfo() const override { return true; }
 
 private:
@@ -1516,10 +2240,96 @@ private:
   TypeRef Type;
 };
 
+class OccurrenceArrayDebug : public NullDebugContext {
+public:
+  OccurrenceArrayDebug(va_t Func, va_t UsePC, int64_t Base, uint32_t Count)
+      : Func(Func), UsePC(UsePC), Base(Base) {
+    Type = std::make_shared<NdType>();
+    Type->Kind = NdTypeKind::Array;
+    Type->ArrayCount = Count;
+    Type->ElemType = NdType::makeInt(1, false);
+    Type->Size = static_cast<uint16_t>(Count);
+  }
+
+  VariableExtentLookup resolveVariableAt(va_t F, va_t PC,
+                                         int64_t Offset) const override {
+    if (F != Func || PC != UsePC || Offset < Base ||
+        static_cast<uint64_t>(Offset) - static_cast<uint64_t>(Base) >
+            Type->ArrayCount)
+      return VariableExtentLookup::notFound();
+    VariableSym V;
+    V.Name = "buf";
+    V.Type = Type;
+    V.StackOffset = Base;
+    return VariableExtentLookup::unique(std::move(V));
+  }
+  bool hasAuthenticatedObjectExtents() const override { return true; }
+  bool hasInfo() const override { return true; }
+
+private:
+  va_t Func;
+  va_t UsePC;
+  int64_t Base;
+  TypeRef Type;
+};
+
+VariableExtentLookup uniqueLocal(const char *Name, int64_t Base, TypeRef Type) {
+  VariableSym Variable;
+  Variable.Name = Name;
+  Variable.StackOffset = Base;
+  Variable.Type = std::move(Type);
+  return VariableExtentLookup::unique(std::move(Variable));
+}
+
+class CoordinateExtentDebug : public NullDebugContext {
+public:
+  CoordinateExtentDebug(va_t Func, va_t UsePC, VariableExtentLookup FrameLookup,
+                        VariableExtentLookup StackPointerLookup,
+                        bool Authenticated = true,
+                        VariableExtentLookup FramePointerLookup =
+                            VariableExtentLookup::notFound())
+      : Func(Func), UsePC(UsePC), FrameLookup(std::move(FrameLookup)),
+        StackPointerLookup(std::move(StackPointerLookup)),
+        FramePointerLookup(std::move(FramePointerLookup)),
+        Authenticated(Authenticated) {}
+
+  VariableExtentLookup resolveVariableAt(va_t F, va_t PC,
+                                         int64_t) const override {
+    if (F != Func || PC != UsePC)
+      return VariableExtentLookup::notFound();
+    return FrameLookup;
+  }
+
+  VariableExtentLookup resolveStackPointerVariableAt(va_t F, va_t PC,
+                                                     int64_t) const override {
+    if (F != Func || PC != UsePC)
+      return VariableExtentLookup::notFound();
+    return StackPointerLookup;
+  }
+
+  VariableExtentLookup resolveFramePointerVariableAt(va_t F, va_t PC,
+                                                     int64_t) const override {
+    if (F != Func || PC != UsePC)
+      return VariableExtentLookup::notFound();
+    return FramePointerLookup;
+  }
+
+  bool hasAuthenticatedObjectExtents() const override { return Authenticated; }
+  bool hasInfo() const override { return true; }
+
+private:
+  va_t Func;
+  va_t UsePC;
+  VariableExtentLookup FrameLookup;
+  VariableExtentLookup StackPointerLookup;
+  VariableExtentLookup FramePointerLookup;
+  bool Authenticated;
+};
+
 TEST(ObjectModel, DebugArrayPreferredOverFrameBound) {
   BinaryImage Img;
   Img.Arch = Arch::X64;
-  ArrayDebug Dbg(0x100, -0x28, 16);
+  ArrayDebug Dbg(0x100, -0x30, 16);
   AnalysisInput In;
   In.Img = &Img;
   In.Dbg = &Dbg;
@@ -1538,6 +2348,140 @@ TEST(ObjectModel, DebugArrayPreferredOverFrameBound) {
   EXPECT_EQ(*D.Capacity, 16u);
   EXPECT_EQ(D.Detail, "declared array");
   EXPECT_TRUE(D.CapacityExact);
+}
+
+TEST(ObjectModel, DebugArrayInteriorUsesOccurrenceAndRemainingExtent) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  OccurrenceArrayDebug Dbg(0x100, 0x155, -0x30, 8);
+  AnalysisInput In;
+  In.Img = &Img;
+  In.Dbg = &Dbg;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+
+  MedFunc F = newFunc(Arch::X64);
+  push(F, NdOp::INT_SUB, temp(10), {mkReg(kSP, 0), MedVar::makeConst(0x25, 8)});
+  const size_t Sink = pushCall(F, "strcpy", temp(0), {temp(10), temp(2)});
+  F.Blocks[0].Ops.back().Addr = 0x155;
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  ASSERT_TRUE(D.Capacity.has_value());
+  EXPECT_EQ(*D.Capacity, 5u);
+  EXPECT_TRUE(D.CapacityExact);
+  EXPECT_EQ(D.Detail, "declared array");
+}
+
+TEST(ObjectModel, UnauthenticatedDebugCannotPublishExactObjectExtent) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  CoordinateExtentDebug Dbg(0x100, 0x155,
+                            uniqueLocal("buf", -0x28, byteArray(8)),
+                            VariableExtentLookup::notFound(), false);
+  AnalysisInput In;
+  In.Img = &Img;
+  In.Dbg = &Dbg;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+
+  MedFunc F = newFunc(Arch::X64);
+  push(F, NdOp::INT_SUB, temp(10), {mkReg(kSP, 0), MedVar::makeConst(0x25, 8)});
+  const size_t Sink = pushCall(F, "strcpy", temp(0), {temp(10), temp(2)});
+  F.Blocks[0].Ops.back().Addr = 0x155;
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  ASSERT_TRUE(D.Capacity.has_value());
+  EXPECT_EQ(*D.Capacity, 0x25u);
+  EXPECT_FALSE(D.CapacityExact);
+  EXPECT_EQ(D.Detail, "stack frame bound");
+}
+
+TEST(ObjectModel, AmbiguousDebugExtentCannotFallThroughToTypedLocal) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  CoordinateExtentDebug Dbg(0x100, 0x155, VariableExtentLookup::ambiguous(),
+                            VariableExtentLookup::notFound());
+  AnalysisInput In;
+  In.Img = &Img;
+  In.Dbg = &Dbg;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+
+  MedFunc F = newFunc(Arch::X64);
+  addTypedLocal(F, "buf", -0x28, byteArray(8));
+  push(F, NdOp::INT_SUB, temp(10), {mkReg(kSP, 0), MedVar::makeConst(0x25, 8)});
+  const size_t Sink = pushCall(F, "strcpy", temp(0), {temp(10), temp(2)});
+  F.Blocks[0].Ops.back().Addr = 0x155;
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  ASSERT_TRUE(D.Capacity.has_value());
+  EXPECT_EQ(*D.Capacity, 0x25u);
+  EXPECT_FALSE(D.CapacityExact);
+  EXPECT_EQ(D.Detail, "stack frame bound");
+}
+
+TEST(ObjectModel, AuthenticatedNonBufferIsAuthoritativeAgainstTypedArray) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  CoordinateExtentDebug Dbg(
+      0x100, 0x155, uniqueLocal("scalar", -0x30, NdType::makeInt(8, false)),
+      VariableExtentLookup::notFound());
+  AnalysisInput In;
+  In.Img = &Img;
+  In.Dbg = &Dbg;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+
+  MedFunc F = newFunc(Arch::X64);
+  addTypedLocal(F, "buf", -0x28, byteArray(8));
+  push(F, NdOp::INT_SUB, temp(10), {mkReg(kSP, 0), MedVar::makeConst(0x25, 8)});
+  const size_t Sink = pushCall(F, "strcpy", temp(0), {temp(10), temp(2)});
+  F.Blocks[0].Ops.back().Addr = 0x155;
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  ASSERT_TRUE(D.Capacity.has_value());
+  EXPECT_EQ(*D.Capacity, 0x25u);
+  EXPECT_FALSE(D.CapacityExact);
+}
+
+TEST(ObjectModel, DebugCoordinateSystemsMustAgreeOnCanonicalExtent) {
+  for (const bool Agree : {true, false}) {
+    SCOPED_TRACE(Agree);
+    BinaryImage Img;
+    Img.Arch = Arch::X64;
+    CoordinateExtentDebug Dbg(
+        0x100, 0x155, uniqueLocal("cfa_buf", -0x30, byteArray(16)),
+        uniqueLocal("sp_buf", Agree ? 0x8 : 0x5, byteArray(16)));
+    AnalysisInput In;
+    In.Img = &Img;
+    In.Dbg = &Dbg;
+    In.StackPointerReg = kSP;
+    In.StackRegsKnown = true;
+
+    MedFunc F = newFunc(Arch::X64);
+    F.FrameSize = 0x30;
+    push(F, NdOp::INT_SUB, temp(10),
+         {mkReg(kSP, 0), MedVar::makeConst(0x25, 8)});
+    const size_t Sink = pushCall(F, "strcpy", temp(0), {temp(10), temp(2)});
+    F.Blocks[0].Ops.back().Addr = 0x155;
+
+    const DestObject D =
+        resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+    ASSERT_TRUE(D.Capacity.has_value());
+    if (Agree) {
+      EXPECT_EQ(*D.Capacity, 13u);
+      EXPECT_TRUE(D.CapacityExact);
+      EXPECT_EQ(D.Detail, "declared array");
+    } else {
+      EXPECT_EQ(*D.Capacity, 0x25u);
+      EXPECT_FALSE(D.CapacityExact);
+      EXPECT_EQ(D.Detail, "stack frame bound");
+    }
+  }
 }
 
 TEST(ObjectModel, StackPointerRelativeDebugArrayUsesAdjustedFrameOffset) {
@@ -1567,7 +2511,9 @@ TEST(ObjectModel, StackPointerRelativeDebugArrayUsesAdjustedFrameOffset) {
 TEST(ObjectModel, FrameBaseRelativeDebugArrayUsesRecoveredFramePointer) {
   BinaryImage Img;
   Img.Arch = Arch::X64;
-  ArrayDebug Dbg(0x100, -0x40, 64);
+  CoordinateExtentDebug Dbg(0x100, 0, VariableExtentLookup::notFound(),
+                            VariableExtentLookup::notFound(), true,
+                            uniqueLocal("fp_buf", -0x40, byteArray(64)));
   AnalysisInput In;
   In.Img = &Img;
   In.Dbg = &Dbg;
@@ -1617,7 +2563,7 @@ TEST(ObjectModel, ConflictingFrameBasesDoNotSelectDebugCapacityByOrder) {
   EXPECT_EQ(D.Detail, "stack frame bound");
 }
 
-TEST(ObjectModel, TypedLocalCapacity) {
+TEST(ObjectModel, TypedLocalArrayWithoutEvidenceIsOnlyAFrameBound) {
   BinaryImage Img;
   Img.Arch = Arch::X64;
   AnalysisInput In;
@@ -1644,8 +2590,140 @@ TEST(ObjectModel, TypedLocalCapacity) {
 
   DestObject D = resolveDestination(In, Cat, F, Sink, 0);
   ASSERT_TRUE(D.Capacity.has_value());
-  EXPECT_EQ(*D.Capacity, 8u);
-  EXPECT_TRUE(D.CapacityExact);
+  EXPECT_EQ(*D.Capacity, 0x28u);
+  EXPECT_EQ(D.Precision, CapacityPrecision::ContainerUpperBound);
+  EXPECT_FALSE(D.CapacityExact);
+}
+
+TEST(ObjectModel, TypedLocalArrayInteriorWithoutEvidenceIsOnlyAFrameBound) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+
+  MedFunc F = newFunc(Arch::X64);
+  MedTypedLocal L;
+  L.Name = "buf";
+  L.StackOff = -0x28;
+  L.Type = std::make_shared<NdType>();
+  L.Type->Kind = NdTypeKind::Array;
+  L.Type->ArrayCount = 8;
+  L.Type->ElemType = NdType::makeInt(1, false);
+  L.Type->Size = 8;
+  F.TypedLocals.push_back(std::move(L));
+  push(F, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x30, 8)});
+  push(F, NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(0xb, 8)});
+  const size_t Sink = pushCall(F, "strcpy", temp(0), {temp(10), temp(2)});
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  EXPECT_EQ(D.Region, ObjectRegion::Stack);
+  ASSERT_TRUE(D.Capacity.has_value());
+  EXPECT_EQ(*D.Capacity, 0x25u);
+  EXPECT_EQ(D.Precision, CapacityPrecision::ContainerUpperBound);
+  EXPECT_FALSE(D.CapacityExact);
+  EXPECT_EQ(D.Detail, "stack frame bound");
+}
+
+TEST(ObjectModel, AdjacentArrayAndScalarMakeSharedBoundaryAmbiguous) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+
+  MedFunc F = newFunc(Arch::X64);
+  addTypedLocal(F, "array", -0x28, byteArray(8));
+  addTypedLocal(F, "scalar", -0x20, NdType::makeInt(8, false));
+  push(F, NdOp::INT_SUB, temp(10), {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  const size_t Sink = pushCall(F, "strcpy", temp(0), {temp(10), temp(2)});
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  EXPECT_EQ(D.Region, ObjectRegion::Stack);
+  ASSERT_TRUE(D.Capacity.has_value());
+  EXPECT_EQ(*D.Capacity, 0x20u);
+  EXPECT_EQ(D.Precision, CapacityPrecision::ContainerUpperBound);
+  EXPECT_FALSE(D.CapacityExact);
+  EXPECT_EQ(D.Detail, "stack frame bound");
+}
+
+TEST(ObjectModel, OverlappingDifferentTypedLocalKindsFailClosed) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+
+  MedFunc F = newFunc(Arch::X64);
+  addTypedLocal(F, "array", -0x28, byteArray(16));
+  auto Record = std::make_shared<NdType>();
+  Record->Kind = NdTypeKind::Struct;
+  Record->Size = 8;
+  addTypedLocal(F, "record", -0x24, std::move(Record));
+  push(F, NdOp::INT_SUB, temp(10), {mkReg(kSP, 0), MedVar::makeConst(0x22, 8)});
+  const size_t Sink = pushCall(F, "strcpy", temp(0), {temp(10), temp(2)});
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  EXPECT_EQ(D.Region, ObjectRegion::Stack);
+  ASSERT_TRUE(D.Capacity.has_value());
+  EXPECT_EQ(*D.Capacity, 0x22u);
+  EXPECT_EQ(D.Precision, CapacityPrecision::ContainerUpperBound);
+  EXPECT_FALSE(D.CapacityExact);
+  EXPECT_EQ(D.Detail, "stack frame bound");
+}
+
+TEST(ObjectModel, IdenticalTypedArrayAliasesDoNotCreateAuthenticatedEvidence) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+
+  MedFunc F = newFunc(Arch::X64);
+  addTypedLocal(F, "first", -0x28, byteArray(8));
+  addTypedLocal(F, "alias", -0x28, byteArray(8));
+  push(F, NdOp::INT_SUB, temp(10), {mkReg(kSP, 0), MedVar::makeConst(0x25, 8)});
+  const size_t Sink = pushCall(F, "strcpy", temp(0), {temp(10), temp(2)});
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  EXPECT_EQ(D.Region, ObjectRegion::Stack);
+  ASSERT_TRUE(D.Capacity.has_value());
+  EXPECT_EQ(*D.Capacity, 0x25u);
+  EXPECT_EQ(D.Precision, CapacityPrecision::ContainerUpperBound);
+  EXPECT_FALSE(D.CapacityExact);
+  EXPECT_EQ(D.Detail, "stack frame bound");
+}
+
+TEST(ObjectModel, UniqueTypedArrayOnePastStillNeedsAuthenticatedEvidence) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+
+  MedFunc F = newFunc(Arch::X64);
+  addTypedLocal(F, "array", -0x28, byteArray(8));
+  push(F, NdOp::INT_SUB, temp(10), {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  const size_t Sink = pushCall(F, "strcpy", temp(0), {temp(10), temp(2)});
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  EXPECT_EQ(D.Region, ObjectRegion::Stack);
+  ASSERT_TRUE(D.Capacity.has_value());
+  EXPECT_EQ(*D.Capacity, 0x20u);
+  EXPECT_EQ(D.Precision, CapacityPrecision::ContainerUpperBound);
+  EXPECT_FALSE(D.CapacityExact);
+  EXPECT_EQ(D.Detail, "stack frame bound");
 }
 
 TEST(ObjectModel, InferredScalarLocalIsNotAnExactObjectCapacity) {

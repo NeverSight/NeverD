@@ -137,6 +137,12 @@ EVM 與 SBF 工作階段會拒絕這些呼叫。
 
 切勿儲存 `Session` 並在終止後繼續使用。原生 capsule 會在 `on_term` 開始前及原生工作階段釋放前失效。後續呼叫會擲出 `RuntimeError`，而不會取消參照過期記憶體。
 
+### 嚴格二進位 sanitizer 發佈
+
+`session.sanitize()` 執行實驗性的全點位或拒絕 `binary-sanitizer-v1` 交易；只有完整且一致的驗證 receipt 通過檢查後才回傳凍結的 `SanitizeResult`。非 Darwin 主機會在 lifting、guard 產生、候選建立或命名空間變更前拒絕。`PUBLISH_INDETERMINATE` 與 `PUBLISHED_INCOMPLETE` 都是失敗，且表示目的可能已存在，使用或重試前必須檢查。
+
+Darwin 的完整 receipt 只驗證交易期間持有的目的目錄物件。該目錄可在開啟後重新命名，因此 receipt 不保證原始路徑在交易中或回傳後仍指向該物件，也不是持久且可獨立複核的路徑綁定；稍後重新開啟路徑的程式必須保留外部錨點並重新驗證物件。Python 目前沒有原生全處理程序重播方法；`NativeProcessReplayAdapter` 只是故障關閉的 Phase 0 C++ 可用性／工廠邊界，所有主機都回報能力全 false 且沒有操作表。
+
 ### 證明閘控的合成與 LLVM 最佳化
 
 `synthesize_expression` 與為 ABI 相容而保留、僅處理 MBA 的

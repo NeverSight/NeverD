@@ -1,10 +1,19 @@
 add_neverd_component_library(NeverDSafety
   SafetyTypes.cpp
   ProcessInputReplay.cpp
+  ProcessReplay.cpp
+  ProcessReplayExecutor.cpp
+  NativeProcessReplayAdapter.cpp
+  SanitizerPublicationMetadata.cpp
+  SanitizerPublicationExecutor.cpp
+  DarwinSanitizerPublicationAdapter.cpp
+  RuntimeSanitizer.cpp
   CallEffects.cpp
   SinkCatalog.cpp
   SinkScanner.cpp
+  EntryInputPolicy.cpp
   ArgSlicer.cpp
+  InterprocReachability.cpp
   ObjectModel.cpp
   HuntEngine.cpp
   AllocLifetime.cpp

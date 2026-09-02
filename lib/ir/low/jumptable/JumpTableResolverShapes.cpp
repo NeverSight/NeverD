@@ -85,8 +85,7 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
     return true;
   };
   auto consumeProduct = [&](size_t Count, size_t Cost) {
-    if (Count != 0 &&
-        Cost > std::numeric_limits<size_t>::max() / Count) {
+    if (Count != 0 && Cost > std::numeric_limits<size_t>::max() / Count) {
       *CandidateEvidenceBudget = 0;
       Complete = false;
       return false;
@@ -122,11 +121,10 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
     const size_t Required = Values.size() + Additional;
     if (Required <= Values.capacity())
       return true;
-    const size_t Doubled = Values.capacity() == 0
-                               ? size_t{1}
-                               : (Values.capacity() > Max / 2
-                                      ? Max
-                                      : Values.capacity() * 2);
+    const size_t Doubled =
+        Values.capacity() == 0
+            ? size_t{1}
+            : (Values.capacity() > Max / 2 ? Max : Values.capacity() * 2);
     const size_t NewCapacity = std::max(Required, Doubled);
     if (NewCapacity == Max || !consumeProduct(NewCapacity, 2) ||
         !consumeWork(Values.size())) {
@@ -216,8 +214,7 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
       if (!Value.isTemp())
         return InvalidVA;
       const int Def = budgetedReachingDefIdx(FromIdx, Value);
-      if (Def < 0 || Ops[Def].Opcode != NdOp::COPY ||
-          Ops[Def].NumInputs < 1)
+      if (Def < 0 || Ops[Def].Opcode != NdOp::COPY || Ops[Def].NumInputs < 1)
         return InvalidVA;
       Value = Ops[Def].Inputs[0];
       FromIdx = Def - 1;
@@ -225,9 +222,8 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
     Complete = false;
     return InvalidVA;
   };
-  auto budgetedScaledIndexReg = [&](int FromIdx, NdVar Value,
-                                    NdVar *IndexValue, va_t *IndexUseAddr,
-                                    int *IndexUseSeq) {
+  auto budgetedScaledIndexReg = [&](int FromIdx, NdVar Value, NdVar *IndexValue,
+                                    va_t *IndexUseAddr, int *IndexUseSeq) {
     for (int Depth = 0; Depth < limits::kMaxQuasiCopyDepth; ++Depth) {
       if (!consumeWork())
         return InvalidVA;
@@ -237,19 +233,17 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
       if (Def < 0)
         return InvalidVA;
       const LowOp &Op = Ops[Def];
-      const bool Scaled =
-          (Op.Opcode == NdOp::INT_MULT && Op.NumInputs >= 2 &&
-           Op.Inputs[1].isConst() && Op.Inputs[1].Offset > 1) ||
-          (Op.Opcode == NdOp::INT_LEFT && Op.NumInputs >= 2 &&
-           Op.Inputs[1].isConst() && Op.Inputs[1].Offset >= 1);
+      const bool Scaled = (Op.Opcode == NdOp::INT_MULT && Op.NumInputs >= 2 &&
+                           Op.Inputs[1].isConst() && Op.Inputs[1].Offset > 1) ||
+                          (Op.Opcode == NdOp::INT_LEFT && Op.NumInputs >= 2 &&
+                           Op.Inputs[1].isConst() && Op.Inputs[1].Offset >= 1);
       if (Scaled) {
         NdVar ExactIndex = Op.Inputs[0];
         va_t ExactUseAddr = Op.Addr;
         int ExactUseSeq = Op.Seq;
         const int WidenDef = budgetedReachingDefIdx(Def - 1, Op.Inputs[0]);
         if (WidenDef >= 0 && Ops[WidenDef].Opcode == NdOp::INT_ZEXT &&
-            Ops[WidenDef].NumInputs >= 1 &&
-            Ops[WidenDef].Inputs[0].Size != 0 &&
+            Ops[WidenDef].NumInputs >= 1 && Ops[WidenDef].Inputs[0].Size != 0 &&
             Ops[WidenDef].Inputs[0].Size < Ops[WidenDef].Output.Size) {
           ExactIndex = Ops[WidenDef].Inputs[0];
           ExactUseAddr = Ops[WidenDef].Addr;
@@ -313,9 +307,9 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
   // certificate remains authoritative for publication.
   auto twoTableFrameSlotKey = [&](NdVar Address, int From, uint64_t &Base,
                                   int64_t &Offset) {
-    auto signedFrameDelta = [](const NdVar &Value,
-                               uint16_t ArithmeticSize)
-        -> std::optional<int64_t> {
+    auto signedFrameDelta =
+        [](const NdVar &Value,
+           uint16_t ArithmeticSize) -> std::optional<int64_t> {
       if (!Value.isConst() || Value.Size == 0 ||
           Value.Size > sizeof(uint64_t) || ArithmeticSize == 0 ||
           ArithmeticSize > sizeof(uint64_t) ||
@@ -324,12 +318,12 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
       const unsigned SourceBits = static_cast<unsigned>(Value.Size) * CHAR_BIT;
       const unsigned ArithmeticBits =
           static_cast<unsigned>(ArithmeticSize) * CHAR_BIT;
-      const uint64_t SourceMask =
-          SourceBits == 64 ? std::numeric_limits<uint64_t>::max()
-                           : (uint64_t{1} << SourceBits) - 1;
-      const uint64_t ArithmeticMask =
-          ArithmeticBits == 64 ? std::numeric_limits<uint64_t>::max()
-                               : (uint64_t{1} << ArithmeticBits) - 1;
+      const uint64_t SourceMask = SourceBits == 64
+                                      ? std::numeric_limits<uint64_t>::max()
+                                      : (uint64_t{1} << SourceBits) - 1;
+      const uint64_t ArithmeticMask = ArithmeticBits == 64
+                                          ? std::numeric_limits<uint64_t>::max()
+                                          : (uint64_t{1} << ArithmeticBits) - 1;
       const uint64_t Raw = (Value.Offset & SourceMask) & ArithmeticMask;
       const uint64_t Sign = uint64_t{1} << (ArithmeticBits - 1);
       if ((Raw & Sign) == 0)
@@ -419,13 +413,12 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
         continue;
       }
       if (Def.Opcode == NdOp::INT_ADD && Def.NumInputs >= 2) {
-        const int ConstantSide = Def.Inputs[1].isConst()
-                                     ? 1
-                                     : (Def.Inputs[0].isConst() ? 0 : -1);
+        const int ConstantSide =
+            Def.Inputs[1].isConst() ? 1 : (Def.Inputs[0].isConst() ? 0 : -1);
         if (ConstantSide < 0)
           return false;
-        if (budgetedScaledIndexReg(D - 1, Def.Inputs[1 - ConstantSide],
-                                   nullptr, nullptr, nullptr) != InvalidVA)
+        if (budgetedScaledIndexReg(D - 1, Def.Inputs[1 - ConstantSide], nullptr,
+                                   nullptr, nullptr) != InvalidVA)
           return false;
         if (!Complete)
           return false;
@@ -712,11 +705,10 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
       if (!Complete)
         return false;
       int BaseCopyDepth = 0;
-      for (;
-           BDef >= 0 && Ops[BDef].Opcode == NdOp::COPY &&
-           Ops[BDef].NumInputs >= 1 &&
-           (Ops[BDef].Inputs[0].isReg() || Ops[BDef].Inputs[0].isTemp()) &&
-           BaseCopyDepth < limits::kMaxQuasiCopyDepth;
+      for (; BDef >= 0 && Ops[BDef].Opcode == NdOp::COPY &&
+             Ops[BDef].NumInputs >= 1 &&
+             (Ops[BDef].Inputs[0].isReg() || Ops[BDef].Inputs[0].isTemp()) &&
+             BaseCopyDepth < limits::kMaxQuasiCopyDepth;
            ++BaseCopyDepth) {
         if (!consumeWork())
           return false;
@@ -763,10 +755,9 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
           if (!Complete)
             return false;
           int BlendCopyDepth = 0;
-          for (;
-               AndD >= 0 && Ops[AndD].Opcode == NdOp::COPY &&
-               Ops[AndD].NumInputs >= 1 &&
-               BlendCopyDepth < limits::kMaxQuasiCopyDepth;
+          for (; AndD >= 0 && Ops[AndD].Opcode == NdOp::COPY &&
+                 Ops[AndD].NumInputs >= 1 &&
+                 BlendCopyDepth < limits::kMaxQuasiCopyDepth;
                ++BlendCopyDepth) {
             if (!consumeWork())
               return false;
@@ -776,8 +767,7 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
           }
           if (BlendCopyDepth == limits::kMaxQuasiCopyDepth && AndD >= 0 &&
               Ops[AndD].Opcode == NdOp::COPY && Ops[AndD].NumInputs >= 1 &&
-              (Ops[AndD].Inputs[0].isReg() ||
-               Ops[AndD].Inputs[0].isTemp())) {
+              (Ops[AndD].Inputs[0].isReg() || Ops[AndD].Inputs[0].isTemp())) {
             Complete = false;
             return false;
           }
@@ -796,7 +786,8 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
             if (!Complete)
               return false;
             const std::optional<bool> HasRelocation =
-                Cand ? relocationSlotPresent(*Cand) : std::optional<bool>(false);
+                Cand ? relocationSlotPresent(*Cand)
+                     : std::optional<bool>(false);
             if (!HasRelocation)
               return false;
             if (*HasRelocation) {
@@ -869,9 +860,8 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
       va_t IndexUseAddr = InvalidVA;
       int IndexUseSeq = -1;
       bool IndexIsPreScaled = false;
-      uint64_t IdxReg =
-          budgetedScaledIndexReg(AddIdx - 1, IdxV, &ExactIndex,
-                                 &IndexUseAddr, &IndexUseSeq);
+      uint64_t IdxReg = budgetedScaledIndexReg(AddIdx - 1, IdxV, &ExactIndex,
+                                               &IndexUseAddr, &IndexUseSeq);
       if (!Complete)
         return false;
       if (IdxReg == InvalidVA) {
@@ -918,9 +908,8 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
         if (Mask.Opcode != NdOp::INT_AND || Mask.NumInputs < 2 ||
             (!Mask.Output.isReg() && !Mask.Output.isTemp()))
           return std::nullopt;
-        const int ConstantSide = Mask.Inputs[0].isConst()
-                                     ? 0
-                                     : (Mask.Inputs[1].isConst() ? 1 : -1);
+        const int ConstantSide =
+            Mask.Inputs[0].isConst() ? 0 : (Mask.Inputs[1].isConst() ? 1 : -1);
         if (ConstantSide < 0)
           return std::nullopt;
         const uint64_t M = Mask.Inputs[ConstantSide].Offset;
@@ -959,8 +948,8 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
           if (!Bound)
             continue;
           const size_t Group = llvm::Log2_64(*Bound);
-          if (Group >= MaskGroupCount || MaskCounts[Group] ==
-                                             std::numeric_limits<size_t>::max()) {
+          if (Group >= MaskGroupCount ||
+              MaskCounts[Group] == std::numeric_limits<size_t>::max()) {
             *CandidateEvidenceBudget = 0;
             Complete = false;
             return false;
@@ -996,7 +985,7 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
             continue;
           const size_t Group = llvm::Log2_64(*Bound);
           MaskGroups[Group].push_back({Mask.Output, Mask.Addr, Mask.Seq,
-                                      /*DefinedAtPoint=*/true});
+                                       /*DefinedAtPoint=*/true});
         }
       }
 
@@ -1048,9 +1037,9 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
         QueryBounds.push_back(uint32_t{1} << Group);
       }
       bool MatchComplete = false;
-      const std::vector<bool> Matches = tableValuesMatchAtUses(
-          Queries, &MatchComplete, nullptr, InvalidVA, nullptr,
-          CandidateEvidenceBudget);
+      const std::vector<bool> Matches =
+          tableValuesMatchAtUses(Queries, &MatchComplete, nullptr, InvalidVA,
+                                 nullptr, CandidateEvidenceBudget);
       if (!MatchComplete || Matches.size() != QueryBounds.size()) {
         Complete = false;
         return false;
@@ -1092,8 +1081,7 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
           orderedLookupWork(Img.ImportStubIndices.size());
       const size_t FragmentLookup =
           orderedLookupWork(Img.ExceptionMetadata.Functions.size());
-      if (FragmentLookup >
-          (std::numeric_limits<size_t>::max() - 3) / 2) {
+      if (FragmentLookup > (std::numeric_limits<size_t>::max() - 3) / 2) {
         *CandidateEvidenceBudget = 0;
         Complete = false;
         return false;
@@ -1135,8 +1123,7 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
           if (Offset > std::numeric_limits<va_t>::max() - Base)
             return false;
           Slot = Base + Offset;
-          const std::optional<bool> HasRelocation =
-              relocationSlotPresent(Slot);
+          const std::optional<bool> HasRelocation = relocationSlotPresent(Slot);
           if (!HasRelocation)
             return false;
           if (!*HasRelocation)
@@ -1451,10 +1438,10 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
           }
           uint64_t FrameRegister =
               FrameAddress.isReg() ? FrameAddress.Offset : InvalidVA;
-          const int AddDef = FrameAddress.Size == Img.getPointerSize()
-                                 ? reachingDefIdx(BlockOps, BeforeAdd,
-                                                  FrameAddress)
-                                 : -1;
+          const int AddDef =
+              FrameAddress.Size == Img.getPointerSize()
+                  ? reachingDefIdx(BlockOps, BeforeAdd, FrameAddress)
+                  : -1;
           if (AddDef >= 0 && BlockOps[AddDef].Opcode == NdOp::COPY &&
               BlockOps[AddDef].NumInputs >= 1 &&
               BlockOps[AddDef].Inputs[0].isReg())
@@ -1526,9 +1513,9 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
         if (!Candidate.IsBranch || Candidate.IsCall)
           continue;
         const bool DirectTarget = Candidate.BranchTarget == *BranchBlock;
-        const bool FallthroughTarget =
-            Candidate.IsCond && Candidate.Size <= InvalidVA - Addr &&
-            Addr + Candidate.Size == *BranchBlock;
+        const bool FallthroughTarget = Candidate.IsCond &&
+                                       Candidate.Size <= InvalidVA - Addr &&
+                                       Addr + Candidate.Size == *BranchBlock;
         if (!DirectTarget && !FallthroughTarget)
           continue;
         if (!consume(orderedLookupWork(BlockStarts.size())))
@@ -1548,8 +1535,7 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
 
       size_t LoadBearingPredecessors = 0;
       for (va_t PredStart : PredecessorBlocks) {
-        if (!consume() ||
-            !consume(orderedLookupWork(BlockStarts.size())) ||
+        if (!consume() || !consume(orderedLookupWork(BlockStarts.size())) ||
             !consume(orderedLookupWork(Insns.size())))
           return false;
         const auto PredEndIt = BlockStarts.upper_bound(PredStart);
@@ -1560,12 +1546,12 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
              It != Insns.end() && It->first < PredEnd; ++It) {
           if (!consume() || !consume(It->second.Ops.size()))
             return false;
-          const bool InstructionHasPointerLoad = std::any_of(
-              It->second.Ops.begin(), It->second.Ops.end(),
-              [](const LowOp &Op) {
-                return Op.Opcode == NdOp::LOAD &&
-                       (Op.Output.Size == 4 || Op.Output.Size == 8);
-              });
+          const bool InstructionHasPointerLoad =
+              std::any_of(It->second.Ops.begin(), It->second.Ops.end(),
+                          [](const LowOp &Op) {
+                            return Op.Opcode == NdOp::LOAD &&
+                                   (Op.Output.Size == 4 || Op.Output.Size == 8);
+                          });
           if (!InstructionHasPointerLoad)
             continue;
           HasPointerLoad = true;
@@ -1644,8 +1630,7 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
   // range exists, retain every such direct consumer so the bounds resolver can
   // prove their union as one atomic candidate group.  Loads from ordinary
   // instructions remain excluded from that group.
-  const bool ScanWholeFunction =
-      WantsExactGroupInventory;
+  const bool ScanWholeFunction = WantsExactGroupInventory;
   std::vector<std::pair<va_t, va_t>> InstructionLocalConsumers;
   std::vector<LowOp> Ops;
   auto appendOps = [&](const std::vector<LowOp> &Source) {
@@ -1810,8 +1795,7 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
         !addProduct(2, Img.ImportStubRanges.size()) ||
         !addProduct(2, Img.Imports.size()) ||
         !addProduct(3, orderedLookupWork(Img.RuntimeFunctionAddrs.size())) ||
-        !addProduct(1,
-                    orderedLookupWork(Img.VerifiedFunctionEntries.size())) ||
+        !addProduct(1, orderedLookupWork(Img.VerifiedFunctionEntries.size())) ||
         !addProduct(1, Img.KnownCodeRanges.size()) ||
         !addProduct(1, Img.Symbols.size()) ||
         !addProduct(1, orderedLookupWork(Img.RodataAnchorSeg.size())))
@@ -1821,8 +1805,7 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
          {size_t{1}, orderedLookupWork(Img.DataAddressRelocOperands.size())},
          {Img.DataAddressRelocOperands.size(), 1},
          {Occurrences, 1},
-         {Occurrences,
-          orderedLookupWork(Img.DataAddressRelocOperands.size())},
+         {Occurrences, orderedLookupWork(Img.DataAddressRelocOperands.size())},
          {Occurrences, OwnerQueryWork}});
   };
 
@@ -1870,9 +1853,8 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
   uint32_t ModelRun = 0;
   std::optional<JumpTableValueOccurrence> ModelZeroOccurrence;
   bool AllowI386GOTOFFRelay = false;
-  if (!HasInstructionLocalPointerLoad && Img.Arch == Arch::X86 &&
-      Img.isELF() && Img.getPointerSize() == 4 &&
-      !Img.I386GOTPCFields.empty() &&
+  if (!HasInstructionLocalPointerLoad && Img.Arch == Arch::X86 && Img.isELF() &&
+      Img.getPointerSize() == 4 && !Img.I386GOTPCFields.empty() &&
       !RelocatedInstructionScalarModelOccurrences.empty()) {
     if (!consume(Img.DataAddressRelocOperands.size()))
       return false;
@@ -1911,8 +1893,7 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
             break;
           const LowOp &Producer = Ops[*Def];
           if (Producer.Opcode == NdOp::LOAD) {
-            AllowI386GOTOFFRelay =
-                Producer.Output.Size == Img.getPointerSize();
+            AllowI386GOTOFFRelay = Producer.Output.Size == Img.getPointerSize();
             break;
           }
           if ((Producer.Opcode != NdOp::COPY &&
@@ -2104,8 +2085,7 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
                             {size_t{1}, AnchorLookup},
                             {AnchorUpper, CodePtrLookup + 1}});
   };
-  const size_t I386GOTOFFPriorityCount =
-      AllowI386GOTOFFRelay ? Ops.size() : 0;
+  const size_t I386GOTOFFPriorityCount = AllowI386GOTOFFRelay ? Ops.size() : 0;
   for (size_t OrderIndex = 0; OrderIndex < LoadScanOrder.size(); ++OrderIndex) {
     if (ScanWholeFunction && OrderIndex < I386GOTOFFPriorityCount &&
         FoundModel) {
@@ -2115,8 +2095,7 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
     if (OrderIndex == I386GOTOFFPriorityCount && FoundModel &&
         !ScanWholeFunction)
       break;
-    const bool ExactI386GOTOFFOnly =
-        OrderIndex < I386GOTOFFPriorityCount;
+    const bool ExactI386GOTOFFOnly = OrderIndex < I386GOTOFFPriorityCount;
     const int I = LoadScanOrder[OrderIndex];
     if (!consume())
       return false;
@@ -2137,8 +2116,7 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
       // branch consumer.  Keep every selector occurrence in the atomic group
       // while projecting presence onto that authenticated branch; the direct
       // multi-consumer path below retains its two-distinct-branch threshold.
-      va_t ConsumerBranchAddr =
-          HasBranchLocalFrameRelay ? Rec.Addr : L.Addr;
+      va_t ConsumerBranchAddr = HasBranchLocalFrameRelay ? Rec.Addr : L.Addr;
       if (ScanWholeFunction && ExactConsumerGroup && !LiteralCoordinate &&
           !AllowI386GOTOFFRelay) {
         if (!consume(InstructionLocalConsumers.size()))
@@ -2152,9 +2130,9 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
       JumpTableValueOccurrence IndexOccurrence{ExactIndex, IndexUseAddr,
                                                IndexUseSeq,
                                                /*DefinedAtPoint=*/false};
-      JumpTableValueOccurrence RoleIndexOccurrence{
-          RoleIndex, RoleIndexUseAddr, RoleIndexUseSeq,
-          /*DefinedAtPoint=*/false};
+      JumpTableValueOccurrence RoleIndexOccurrence{RoleIndex, RoleIndexUseAddr,
+                                                   RoleIndexUseSeq,
+                                                   /*DefinedAtPoint=*/false};
       JumpTableValueOccurrence LoadOccurrence{L.Output, L.Addr, L.Seq,
                                               /*DefinedAtPoint=*/true};
       if (ShapeClaimed)
@@ -2244,8 +2222,8 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
     std::optional<va_t> ExactI386GOTOFFBase;
     std::optional<va_t> ExactI386GOTOFFOwner;
     bool ExactI386GOTOFFHasScaledInner = false;
-    for (int ConstantSide = 0;
-         AllowI386GOTOFFRelay && ConstantSide < 2; ++ConstantSide) {
+    for (int ConstantSide = 0; AllowI386GOTOFFRelay && ConstantSide < 2;
+         ++ConstantSide) {
       const NdVar &Constant = Ops[AddIdx].Inputs[ConstantSide];
       if (!Constant.isConst() || Constant.Size != 4 ||
           Constant.Provenance != ConstantAddressProvenance::DataAddress ||
@@ -2283,8 +2261,7 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
         ModelZeroOccurrence) {
       const va_t SlotAddress = *ExactI386GOTOFFBase;
       const uint64_t Span = uint64_t(ModelRun) * ModelWidth;
-      if (W == ModelWidth && SlotAddress >= ModelBase &&
-          ExactI386GOTOFFOwner &&
+      if (W == ModelWidth && SlotAddress >= ModelBase && ExactI386GOTOFFOwner &&
           *ExactI386GOTOFFOwner == ModelOwnerVA &&
           SlotAddress - ModelBase < Span &&
           (SlotAddress - ModelBase) % ModelWidth == 0) {
@@ -2292,8 +2269,7 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
         if (!appendOccurrence(
                 ModelBase, NdVar::scalar(Slot, W), InvalidVA, -1, SlotAddress,
                 ModelZeroOccurrence->Value, ModelZeroOccurrence->Addr,
-                ModelZeroOccurrence->Seq, 1,
-                static_cast<uint32_t>(Slot), {}))
+                ModelZeroOccurrence->Seq, 1, static_cast<uint32_t>(Slot), {}))
           return false;
       }
       continue;
@@ -2327,9 +2303,8 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
         if (!consumeProducts(
                 {{Img.Segments.size(), 4}, {Img.Sections.size(), 2}}))
           return std::nullopt;
-        return foldRegConstant(Img, Rec, Register, At, [&](size_t Amount) {
-          return consume(Amount);
-        });
+        return foldRegConstant(Img, Rec, Register, At,
+                               [&](size_t Amount) { return consume(Amount); });
       };
 
       if (Ops[AddressAddIdx].Output.isReg())
@@ -2349,9 +2324,9 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
             continue;
           if (!chargeRegisterTrace())
             return false;
-          const uint64_t BaseRegister = traceToRegister(
-              Ops, AddressAddIdx - 1,
-              Ops[AddressAddIdx].Inputs[1 - ConstantSide]);
+          const uint64_t BaseRegister =
+              traceToRegister(Ops, AddressAddIdx - 1,
+                              Ops[AddressAddIdx].Inputs[1 - ConstantSide]);
           if (BaseRegister == InvalidVA)
             continue;
           const std::optional<va_t> FoldedBase =
@@ -2370,10 +2345,10 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
           (*LiteralAddress - ModelBase) % ModelWidth == 0) {
         const uint64_t ByteOffset = *LiteralAddress - ModelBase;
         const uint64_t Slot = ByteOffset / ModelWidth;
-        if (!appendOccurrence(
-                ModelBase, NdVar::scalar(Slot, W), InvalidVA, -1, ModelBase,
-                NdVar::scalar(ByteOffset, AddrV.Size), InvalidVA, -1, 1,
-                static_cast<uint32_t>(Slot), {}))
+        if (!appendOccurrence(ModelBase, NdVar::scalar(Slot, W), InvalidVA, -1,
+                              ModelBase, NdVar::scalar(ByteOffset, AddrV.Size),
+                              InvalidVA, -1, 1, static_cast<uint32_t>(Slot),
+                              {}))
           return false;
         continue;
       }
@@ -2385,10 +2360,9 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
       NdVar ExactIndex;
       va_t IndexUseAddr = InvalidVA;
       int IndexUseSeq = -1;
-      uint64_t Idx =
-          scaledIndexReg(Ops, AddressAddIdx - 1,
-                         Ops[AddressAddIdx].Inputs[Side], &ExactIndex,
-                         &IndexUseAddr, &IndexUseSeq);
+      uint64_t Idx = scaledIndexReg(Ops, AddressAddIdx - 1,
+                                    Ops[AddressAddIdx].Inputs[Side],
+                                    &ExactIndex, &IndexUseAddr, &IndexUseSeq);
       if (Idx == InvalidVA)
         continue;
       // AArch64 permits XZR as the register-offset operand of a memory access.
@@ -2420,8 +2394,7 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
         // retained runtime address, so a frame reload or unrelated base cannot
         // borrow the model merely because the displacement bytes match.
         if (FoundModel &&
-            (*ExactI386GOTOFFBase != ModelBase ||
-             !ExactI386GOTOFFOwner ||
+            (*ExactI386GOTOFFBase != ModelBase || !ExactI386GOTOFFOwner ||
              *ExactI386GOTOFFOwner != ModelOwnerVA))
           continue;
         const bool ReusesAuthenticatedTableBase = FoundModel;
@@ -2442,11 +2415,9 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
           if (!consumeProducts(
                   {{Img.Segments.size(), 4}, {Img.Sections.size(), 2}}))
             return false;
-          auto F = foldRegConstant(Img, Rec, BReg,
-                                   Ops[AddressAddIdx].Addr,
-                                   [&](size_t Amount) {
-                                     return consume(Amount);
-                                   });
+          auto F =
+              foldRegConstant(Img, Rec, BReg, Ops[AddressAddIdx].Addr,
+                              [&](size_t Amount) { return consume(Amount); });
           if (BudgetExhausted)
             return false;
           if (F && Img.getSegmentFor(*F))
@@ -2458,15 +2429,15 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
               continue;
             std::vector<JumpTableFrameInitializerChunk> Initializers;
             const va_t StackSource = resolveStackMaterializedTableSource(
-                Img, Rec, Ops, I, BReg, W, /*TableDisp=*/0,
-                &StackTableMutated, &Initializers, &StackStorageConsumers);
+                Img, Rec, Ops, I, BReg, W, /*TableDisp=*/0, &StackTableMutated,
+                &Initializers, &StackStorageConsumers);
             if (StackTableEvidenceIncompleteBranches.count(Rec.Addr))
               return false;
             if (StackSource != InvalidVA) {
-              FrameStorage.RuntimeBase = {
-                  {BaseV, Ops[AddressAddIdx].Addr, Ops[AddressAddIdx].Seq,
-                   /*DefinedAtPoint=*/false},
-                  /*ByteAddend=*/0};
+              FrameStorage.RuntimeBase = {{BaseV, Ops[AddressAddIdx].Addr,
+                                           Ops[AddressAddIdx].Seq,
+                                           /*DefinedAtPoint=*/false},
+                                          /*ByteAddend=*/0};
               FrameStorage.CompleteAddress = {
                   Ops[AddressAddIdx].Output, Ops[AddressAddIdx].Addr,
                   Ops[AddressAddIdx].Seq, /*DefinedAtPoint=*/true};
@@ -2538,12 +2509,10 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
         const uint64_t ObjectSize = Img.dataObjectSizeAt(ResolvedBase);
         if (ObjectSize >= W && OwnerEnd &&
             ObjectSize <= InvalidVA - ResolvedBase &&
-            ResolvedBase + ObjectSize <= *OwnerEnd &&
-            ObjectSize % W == 0) {
+            ResolvedBase + ObjectSize <= *OwnerEnd && ObjectSize % W == 0) {
           const uint64_t ExactSlots = ObjectSize / W;
           if (ExactSlots >= limits::kMinJumpTableEntries &&
-              ExactSlots <= limits::kMaxJumpTableEntries &&
-              ExactSlots <= Run) {
+              ExactSlots <= limits::kMaxJumpTableEntries && ExactSlots <= Run) {
             Run = static_cast<uint32_t>(ExactSlots);
             HasExactSizedObject = true;
           }
@@ -2608,20 +2577,18 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
               return false;
             StaticSourceCount += Initializer.StaticSources.size();
           }
-          if (!consumeProducts(
-                  {{FrameStorage.Initializers.size(), 5},
-                   {StaticSourceCount, 3},
-                   {StackStorageConsumers.size(), 3}}))
+          if (!consumeProducts({{FrameStorage.Initializers.size(), 5},
+                                {StaticSourceCount, 3},
+                                {StackStorageConsumers.size(), 3}}))
             return false;
           Info.AuthenticatedFrameStorage = FrameStorage;
           Info.AuthenticatedStorageConsumers = StackStorageConsumers;
           Info.MutatedUnsafe = StackTableMutated;
         }
       }
-      if (!appendOccurrence(ResolvedBase, ExactIndex, IndexUseAddr,
-                            IndexUseSeq, ResolvedBase, ExactIndex,
-                            IndexUseAddr, IndexUseSeq, W, std::nullopt,
-                            std::move(FrameStorage)))
+      if (!appendOccurrence(ResolvedBase, ExactIndex, IndexUseAddr, IndexUseSeq,
+                            ResolvedBase, ExactIndex, IndexUseAddr, IndexUseSeq,
+                            W, std::nullopt, std::move(FrameStorage)))
         return false;
       LLVM_DEBUG(llvm::dbgs() << "  const-base-abs: decoupled absolute table 0x"
                               << llvm::utohexstr(ResolvedBase) << " (W=" << W

@@ -240,12 +240,82 @@ the entry stack pointer are excluded from this check.
 
 ---
 
+## Known-entry interprocedural reachability
+
+Every finding carries three independent statements. They answer different
+questions and must not be collapsed into one another:
+
+| Field | Question | Values |
+|-------|----------|--------|
+| `verdict` | What did the local safety analysis prove about the operation? | `SAFE`, `UNSAFE`, `UNKNOWN` |
+| `reachability.status` | Is the containing function on a recovered control path from a known native entry? | `REACHABLE`, `UNREACHABLE`, `UNKNOWN` |
+| `reachability.attacker_control` | What did the argument slice prove about attacker influence at this finding? | `TAINTED`, `BOUNDED`, `UNKNOWN` |
+
+Reachability is additive evidence and does not rewrite a finding's `verdict`,
+the report's aggregate `verdict`, or the CLI exit code. For example, a locally
+proved overflow can remain `verdict=UNSAFE` while
+`reachability.status=UNREACHABLE`; consumers that require an executable attack
+path should test both the verdict and the reachability fields.
+
+The interprocedural pass starts from recovered native roots. An `application`
+root is a recognized application entry such as `main` or `WinMain`; an `image`
+root is the entry recorded by the loaded image; and an `export` root is an
+exported routine. If one function has more than one root identity, the
+deterministic preference is `application`, then `image`, then `export`.
+`reachability.entry` records that root's `va`, `name`, and `kind`. A reachable
+non-root also carries a shortest deterministic `call_chain`; each exact internal
+edge records `caller_va`, the call-site `call_va`, `callee_va`, and whether its
+`kind` is `direct` or `indirect`.
+
+`UNREACHABLE` is emitted only when at least one root exists, the internal call
+inventory is complete, the call-depth budget was not exhausted, and no root can
+reach the function. For a function not otherwise positively reached, missing
+roots, duplicate or ambiguous function identities, inconsistent CFG/call
+inventories, unresolved executable internal targets, and call-depth exhaustion
+prevent an `UNREACHABLE` proof and produce `reachability.status=UNKNOWN`, with
+`reason` and `budget_hit` where applicable. The attacker-control fixed point
+likewise does not invent propagation across an unknown ABI, mismatched argument
+width, variadic-only slot, incomplete slice, depth boundary, or exhausted
+summary budget; any flow not already proved stays `UNKNOWN`, while facts proved
+before a later budget boundary remain valid.
+
+The report-level counters count findings, not functions or distinct paths.
+`control_reachable` counts findings with `status=REACHABLE`;
+`attacker_reachable` is the subset that also has
+`attacker_control=TAINTED`. `reachability_unknown` and `unreachable` count the
+other two control statuses. These counters are separate from `safe`, `unsafe`,
+and `unknown`, which tally verdicts.
+
+---
+
 ## Budgets, output, and bindings
 
 Hunt exploration and the solver are bounded (`--max-paths`, `--max-steps`,
-`--max-loop`, `--solver-conflicts`); budget exhaustion yields UNKNOWN. Both
-commands print JSON and honour `-o`. The exit code is `0` for SAFE, `2` for
-UNSAFE, and `1` for UNKNOWN or an error.
+`--max-loop`, `--solver-conflicts`). Interprocedural work has two independent
+limits: `max_call_depth` is the maximum number of internal call edges in a
+known-entry witness, while `max_summary_iterations` bounds attacker-control
+fixed-point rounds. Their defaults are 64 edges and the effective call-depth
+limit plus one round, respectively. Budget exhaustion fails closed as described
+above. Exhausting `max_call_depth` can leave a not-yet-reached function's
+`status=UNKNOWN`; exhausting `max_summary_iterations` does not erase a
+structural witness, so `status=REACHABLE` can coexist with
+`attacker_control=UNKNOWN` and `budget_hit=true`. Both commands print JSON and
+honour `-o`. The exit code is `0` for SAFE, `2` for UNSAFE, and `1` for UNKNOWN
+or an error.
+
+The same two limits are exposed at every public entry point; zero selects the
+engine default:
+
+| Surface | Control-depth option | Attacker-summary option |
+|---------|----------------------|-------------------------|
+| CLI (`audit` and `hunt`) | `--max-call-depth <n>` | `--max-summary-iterations <n>` |
+| C (`neverd_safety_options`) | `max_call_depth` | `max_summary_iterations` |
+| Python (`Session.audit()` / `Session.hunt()`) | `max_call_depth=<n>` | `max_summary_iterations=<n>` |
+
+For C callers, zero-initialize `neverd_safety_options`, set `struct_size` to
+`sizeof(neverd_safety_options)`, and then set either appended field as needed;
+older structure sizes retain the defaults. Python validates both values as
+unsigned 32-bit integers before calling the C API.
 
 The same analyses are available through the C API
 (`neverd_session_audit_json` / `neverd_session_hunt_json` with a versioned
@@ -270,6 +340,16 @@ The same analyses are available through the C API
   "capacity": 16,
   "capacity_kind": "exact",
   "corroboration": "path predicate and overflow are jointly satisfiable",
+  "reachability": {
+    "status": "REACHABLE",
+    "attacker_control": "TAINTED",
+    "budget_hit": false,
+    "entry": { "va": "0x1000", "name": "main", "kind": "application" },
+    "call_chain": [
+      { "caller_va": "0x1000", "call_va": "0x1080",
+        "callee_va": "0x1100", "kind": "direct" }
+    ]
+  },
   "evidence": {
     "concrete_input": { "copy_length": "17", "argv[1]": "16 bytes" },
     "candidate_values": [
@@ -299,8 +379,96 @@ leave `replayable=false`; `replay.reason` explains why no exact plan exists.
 Candidate values remain useful symbolic evidence but are not a runnable
 reproducer.
 
-The replay fields are additive. The top-level `schema_version` remains `1`, so
-schema-v1 consumers must continue to ignore fields they do not understand.
+The replay and reachability fields are additive. The top-level `schema_version`
+remains `1`, so schema-v1 consumers must continue to ignore fields they do not
+understand.
+
+---
+
+## Strict runtime guards and authenticated publication
+
+`binary-sanitizer-v1` is a separate experimental mutation transaction; it does
+not change an audit or hunt verdict. A completed strict hunt must map every
+finding to one exact counted-write occurrence with exact remaining capacity and
+matching compiler-emitted call-site metadata. Any unsupported finding, stale or
+ambiguous identity, incomplete lift, exhausted budget, guard-generation error,
+or target/signature gate rejects the whole transaction. There is no partial
+success. Relocatable objects, dynamic libraries, universal Mach-O images, and
+guarded Mach-O bundle members are among the inputs that fail closed.
+
+The public entry points are the C `neverd_session_sanitize` transaction, the
+`neverd patch --sanitize=strict` CLI mode, and Python `Session.sanitize`. C
+callers that require authenticated publication must first probe
+`neverd_sanitize_publication_abi_version()` before invoking the mutation entry
+point. All three surfaces accept success only after publication receipt v1 is
+complete and internally coherent.
+
+On non-Darwin hosts the entry point authenticates and normalizes its input but
+then returns `UNSUPPORTED_TARGET` before lifting, guard generation, candidate
+creation, or namespace mutation. On Darwin there are only two successful
+namespace dispositions:
+
+- `CREATE_EXCLUSIVE` publishes a newly created same-directory candidate to an
+  absent destination with one atomic no-replace operation. Its receipt states
+  namespace atomicity, destination create-exclusivity, and the actual operand
+  binding, but does not claim replacement compare-and-swap or crash durability.
+- `NO_CHANGE` is read-only. It is available when an empty guard plan names the
+  held loaded-source object, authenticates that object again, reports
+  `NOT_PUBLISHED`, and claims neither publication guarantees nor an operand
+  binding. A guarded plan cannot use the loaded source as its output.
+
+A distinct existing destination is never replaced: publication v1 has no
+replacement CAS, so callers must choose a new path. An indeterminate publish or
+a destination created without a complete final receipt is a failed transaction,
+not degraded success; the destination may exist and must be inspected before
+use, retry, or deletion.
+
+The trust boundary is deliberately narrower than the pathname wording. Source
+bytes are matched to the session's external digest and then observed through a
+held descriptor, while the source and destination-directory objects remain
+anchored for the transaction. Source metadata and stable object identity are
+transaction-time observations, not proof that they were unchanged since the
+session originally loaded the image. The held destination-directory object may
+be renamed after it is opened: a complete receipt authenticates publication in
+that held object, but does not prove that the original destination pathname
+continued to name it during or after the transaction. The public receipt is an
+attestation summary, not a self-contained durable path binding; a caller that
+later reopens a pathname must retain an external anchor and authenticate the
+reopened object again. Darwin's rename primitive names a source
+path rather than a held candidate descriptor, so create-exclusive publication
+also requires a destination directory owned by the effective uid, without an
+extended ACL or group/other write access, on a volume that attests normal POSIX
+ownership. Those facts are reauthenticated before candidate creation and
+publish. The operand-binding claim excludes an equally privileged process,
+root/DAC-bypass authority, and an adversarial filesystem or server; it assumes
+the kernel, VFS, and mounted filesystem honor their reported semantics.
+
+---
+
+## Native process replay: phase 0 only
+
+The platform-neutral `process-replay-v1` plan and executor coordinator define
+what a future authenticated run would have to prove, but no current host can
+perform that native execution. `NativeProcessReplayAdapter` phase 0 is a C++
+availability/factory boundary, not a C, Python, CLI, or JSON execution surface.
+
+Its availability query is mutation-free: it validates the complete plan,
+execution limits, absolute executable locator, and unique physical call-site
+map without opening a target, invoking a backend callback, or launching a
+process. The locator is only a future object locator and must never become a
+post-authentication pathname execution authority. Availability is
+all-or-nothing across the complete executor capability record. If any required
+confinement, identity, input-interposition, occurrence-attestation, limit, or
+cleanup guarantee is unavailable, `Available` remains false, every capability
+remains false, and the factory returns an error without an operations table.
+
+That is the result on every host today. Linux reports an incomplete backend
+until trusted static-ELF instrumentation, a persistent supervisor, complete
+containment, limits, and runtime attestation exist. macOS is unsupported because
+its supported public primitives cannot supply held-object execution, an
+arbitrary-target sandbox installed before target code, and race-free
+process-tree containment. Other platforms are unsupported. Unit-test operation tables
+exercise the coordinator contract but are not evidence of native availability.
 
 ---
 
@@ -323,5 +491,13 @@ schema-v1 consumers must continue to ignore fields they do not understand.
   host.
 - Richer PDB stack types and additional platform allocators remain incremental
   coverage areas; absence of an exact summary stays UNKNOWN.
-- **P2**: patch-inserted runtime checks, hybrid fuzzing, and broader
-  interprocedural attacker reachability.
+- The current known-entry slice covers structural interprocedural reachability
+  and monotone attacker-parameter propagation. The separate experimental
+  `lowir-concolic-v1` adapter now provides replay-verified, register-seeded
+  branch flips on the mandatory native format/architecture matrix; it remains
+  non-exhaustive and does not change safety verdicts. The separate experimental
+  `binary-sanitizer-v1` now supplies strict counted-write guards and
+  authenticated publication on Darwin within the limits above. Broader native
+  `process-replay-v1` execution remains unavailable behind its fail-closed
+  phase-0 adapter, including input kinds and repeated consumptions beyond
+  today's `process-input-v1` evidence.

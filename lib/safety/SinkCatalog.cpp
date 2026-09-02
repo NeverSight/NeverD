@@ -7,6 +7,7 @@
 #include "neverd/safety/SinkCatalog.h"
 
 #include "neverd/Common.h"
+#include "neverd/safety/CountedWriteSemantics.h"
 
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Demangle/Demangle.h"
@@ -22,34 +23,7 @@ using namespace neverd;
 using namespace neverd::safety;
 
 std::string SinkCatalog::normalize(llvm::StringRef StatedName) {
-  llvm::StringRef S = StatedName;
-  if (auto Bang = S.rfind('!'); Bang != llvm::StringRef::npos)
-    S = S.drop_front(Bang + 1);
-  // A platform decoration can precede MinGW's `__imp_` marker.  Remove only
-  // that extra underscore before consuming the import prefix; stripping every
-  // underscore first would leave the non-canonical `imp_foo` spelling.
-  while (S.starts_with("___imp_"))
-    S = S.drop_front();
-  while (S.starts_with("__imp_"))
-    S = S.drop_front(6);
-  S = stripLeadingUnderscores(S);
-  if (const size_t At = S.rfind('@');
-      At != llvm::StringRef::npos && At > 0 && At + 1 < S.size()) {
-    bool IsStdcallSuffix = true;
-    for (const char C : S.drop_front(At + 1))
-      if (C < '0' || C > '9') {
-        IsStdcallSuffix = false;
-        break;
-      }
-    if (IsStdcallSuffix) {
-      S = S.take_front(At);
-      if (S.starts_with('@'))
-        S = S.drop_front();
-      if (S.ends_with('@'))
-        S = S.drop_back();
-    }
-  }
-  return S.str();
+  return counted_write::normalizeCABIName(StatedName);
 }
 
 static std::string demangledKey(llvm::StringRef StatedName) {
