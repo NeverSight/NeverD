@@ -2966,12 +2966,6 @@ class RepositoryCapabilityTests(unittest.TestCase):
                 ],
                 "json": ["neverd_lowir_concolic_json_v1"],
             },
-            "symbolic.execution.lowir-concolic": {
-                "c": ["neverd_lowir_concolic_json_v1"],
-                "python": ["lowir_concolic"],
-                "cli": ["neverd concolic"],
-                "json": ["neverd_lowir_concolic_json_v1"],
-            },
             "translation.executable-engine": no_surfaces,
             "translation.runtime-contract": {
                 "c": ["neverd_translate_x86_64_block_to_aarch64_object_v1"],
