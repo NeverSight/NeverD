@@ -195,14 +195,21 @@ protected:
     const std::string StandardOutputPath = StandardOutput.string();
     const std::string StandardErrorPath = StandardError.string();
 #ifdef _WIN32
+    const fs::path ScriptPath = Directory / "command.cmd";
+    std::ofstream ScriptStream(ScriptPath, std::ios::binary | std::ios::trunc);
+    ScriptStream << "@echo off\r\n" << Command.str() << "\r\n";
+    ScriptStream.close();
+    if (!ScriptStream)
+      return {-1, {}, "cannot write command script"};
+
     llvm::ErrorOr<std::string> FoundShell =
         llvm::sys::findProgramByName("cmd.exe");
     if (!FoundShell)
       return {-1, {}, "cannot locate cmd.exe"};
     const std::string Shell = *FoundShell;
-    const std::string Script = Command.str();
-    const std::vector<llvm::StringRef> Arguments = {Shell, "/d", "/s", "/c",
-                                                    Script};
+    const std::string Script = ScriptPath.string();
+    const std::vector<llvm::StringRef> Arguments = {Shell, "/d",   "/s",
+                                                    "/c",  "call", Script};
 #else
     const std::string Shell = "/bin/sh";
     // Replacing the shell makes the timeout own the actual child rather than
