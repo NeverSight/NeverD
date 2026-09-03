@@ -4,12 +4,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CMAKE_HELPERS = ROOT / "cmake" / "AddNeverD.cmake"
+CLANG_FORMAT_CONFIG = ROOT / ".clang-format"
 EXAMPLE_PLUGIN_CMAKE = ROOT / "plugins" / "example" / "CMakeLists.txt"
 EXAMPLE_PLUGIN_SOURCE = ROOT / "plugins" / "example" / "example_plugin.c"
 SDK_CMAKE = ROOT / "lib" / "sdk" / "CMakeLists.txt"
 SEMANTIC_CMAKE = ROOT / "unittests" / "semantic" / "CMakeLists.txt"
 SEMANTIC_PLUGIN_CMAKE = ROOT / "plugins" / "semantic" / "CMakeLists.txt"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+STYLE_WORKFLOW = ROOT / ".github" / "workflows" / "llvm-style.yml"
 
 
 class CiConfigurationTests(unittest.TestCase):
@@ -21,6 +23,41 @@ class CiConfigurationTests(unittest.TestCase):
         if step_end == -1:
             step_end = len(source)
         return source[step_start:step_end]
+
+    def test_llvm_style_workflow_pins_formatter_and_checks_event_diff(self):
+        source = STYLE_WORKFLOW.read_text(encoding="utf-8")
+
+        for expected in (
+            "name: LLVM Style",
+            "    branches:\n      - dev",
+            "  pull_request:",
+            "  workflow_dispatch:",
+            "  contents: read",
+            "runs-on: ubuntu-24.04",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "fetch-depth: 0",
+            "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+            "python-version: '3.12'",
+            "timeout-minutes: 5",
+            "clang-format==22.1.2",
+            "python -m unittest scripts.tests.test_check_clang_format -v",
+            "FORMAT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}",
+            "FORMAT_HEAD: ${{ github.sha }}",
+            'python scripts/check_clang_format.py --base "$FORMAT_BASE" --head "$FORMAT_HEAD"',
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, source)
+
+        self.assertNotIn("submodules:", source)
+        self.assertNotIn("cmake --build", source)
+        checkout_step = self.workflow_step_containing(source, "actions/checkout@")
+        self.assertIn("persist-credentials: false", checkout_step)
+
+    def test_clang_format_configuration_is_based_on_llvm_style(self):
+        source = CLANG_FORMAT_CONFIG.read_text(encoding="utf-8")
+
+        self.assertEqual(source.count("BasedOnStyle: LLVM\n"), 1)
+        self.assertNotIn("DisableFormat: true", source)
 
     def test_google_test_discovery_is_serial_configurable_and_bounded(self):
         source = CMAKE_HELPERS.read_text(encoding="utf-8")
