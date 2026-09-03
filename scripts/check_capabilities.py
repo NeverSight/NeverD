@@ -2259,6 +2259,7 @@ def audit_configured_evidence(
     *,
     build_config: str | None = None,
     manifest_path: Path | None = None,
+    ctest_inventory_path: Path | None = None,
 ) -> list[str]:
     """Execute active evidence against one fresh configured build snapshot."""
 
@@ -2285,27 +2286,47 @@ def audit_configured_evidence(
     diagnostics.extend(configured_diagnostics)
     if configured_diagnostics:
         return sorted(diagnostics)
-    command = ["ctest", "--test-dir", str(build_directory)]
-    if build_config is not None:
-        command.extend(("--build-config", build_config))
-    command.append("--show-only=json-v1")
-    completed, process_error = _run_bounded_process(
-        command,
-        timeout=CTEST_INVENTORY_TIMEOUT,
-        output_limit=CTEST_INVENTORY_OUTPUT_LIMIT,
-    )
-    if process_error is not None or completed is None:
-        return [
-            "build audit: cannot read CTest inventory: "
-            f"{process_error or 'unknown process error'}"
-        ]
-    if completed.returncode != 0:
-        return [
-            "build audit: CTest inventory failed: "
-            + (completed.stderr.strip() or f"exit {completed.returncode}")
-        ]
+    ctest_output: str
+    if ctest_inventory_path is not None:
+        resolved_inventory = ctest_inventory_path.resolve(strict=False)
+        try:
+            resolved_inventory.relative_to(build_directory)
+        except ValueError:
+            return [
+                "build audit: saved CTest inventory is outside the configured "
+                f"build directory: {resolved_inventory}"
+            ]
+        try:
+            ctest_output = _read_utf8_with_limit(
+                resolved_inventory,
+                limit=CTEST_INVENTORY_OUTPUT_LIMIT,
+                description="CTest inventory",
+            )
+        except (OSError, UnicodeError, ValueError) as error:
+            return [f"build audit: cannot read saved CTest inventory: {error}"]
+    else:
+        command = ["ctest", "--test-dir", str(build_directory)]
+        if build_config is not None:
+            command.extend(("--build-config", build_config))
+        command.append("--show-only=json-v1")
+        completed, process_error = _run_bounded_process(
+            command,
+            timeout=CTEST_INVENTORY_TIMEOUT,
+            output_limit=CTEST_INVENTORY_OUTPUT_LIMIT,
+        )
+        if process_error is not None or completed is None:
+            return [
+                "build audit: cannot read CTest inventory: "
+                f"{process_error or 'unknown process error'}"
+            ]
+        if completed.returncode != 0:
+            return [
+                "build audit: CTest inventory failed: "
+                + (completed.stderr.strip() or f"exit {completed.returncode}")
+            ]
+        ctest_output = completed.stdout
     try:
-        ctest_document = json.loads(completed.stdout)
+        ctest_document = json.loads(ctest_output)
     except json.JSONDecodeError as error:
         return [f"build audit: invalid CTest JSON inventory: {error}"]
     ctest_tests = (
@@ -3330,7 +3351,15 @@ def main(argv: list[str] | None = None, *, root: Path = REPO_ROOT) -> int:
         "--build-config",
         help="CMake configuration name for a multi-config build",
     )
+    parser.add_argument(
+        "--ctest-inventory",
+        type=Path,
+        help="reuse a saved CTest JSON inventory from inside the build directory",
+    )
     arguments = parser.parse_args(argv)
+
+    if arguments.ctest_inventory is not None and arguments.build_dir is None:
+        parser.error("--ctest-inventory requires --build-dir")
 
     try:
         document = json.loads(arguments.manifest.read_text(encoding="utf-8"))
@@ -3354,6 +3383,7 @@ def main(argv: list[str] | None = None, *, root: Path = REPO_ROOT) -> int:
                 arguments.build_dir,
                 build_config=arguments.build_config,
                 manifest_path=arguments.manifest.resolve(strict=False),
+                ctest_inventory_path=arguments.ctest_inventory,
             )
         )
     if diagnostics:

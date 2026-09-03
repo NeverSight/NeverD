@@ -2050,6 +2050,76 @@ class CapabilitySchemaTests(unittest.TestCase):
             )
             self.assertGreaterEqual(run.call_args.kwargs["timeout"], 10 * 60)
 
+    def test_configured_audit_reuses_saved_ctest_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            root = temporary / "source"
+            build = temporary / "build"
+            root.mkdir()
+            build.mkdir()
+            inventory = build / "ctest-inventory.json"
+            inventory.write_text('{"tests": []}\n', encoding="utf-8")
+
+            with (
+                mock.patch.object(
+                    capabilities, "audit_configured_build_identity", return_value=[]
+                ),
+                mock.patch.object(
+                    capabilities, "build_configured_evidence", return_value=[]
+                ),
+                mock.patch.object(capabilities, "audit_build_freshness", return_value=[]),
+                mock.patch.object(
+                    capabilities, "collect_configured_targets", return_value=({}, [])
+                ),
+                mock.patch.object(
+                    capabilities,
+                    "_run_bounded_process",
+                    side_effect=AssertionError("CTest must not be rediscovered"),
+                ) as run,
+            ):
+                diagnostics = capabilities.audit_configured_evidence(
+                    {"schema": 2, "capabilities": []},
+                    root,
+                    build,
+                    ctest_inventory_path=inventory,
+                )
+
+            self.assertEqual(diagnostics, [])
+            run.assert_not_called()
+
+    def test_saved_ctest_inventory_uses_the_capture_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            root = temporary / "source"
+            build = temporary / "build"
+            root.mkdir()
+            build.mkdir()
+            inventory = build / "ctest-inventory.json"
+            inventory.write_text('{"tests": []}\n', encoding="utf-8")
+
+            with (
+                mock.patch.object(
+                    capabilities, "audit_configured_build_identity", return_value=[]
+                ),
+                mock.patch.object(
+                    capabilities, "build_configured_evidence", return_value=[]
+                ),
+                mock.patch.object(capabilities, "audit_build_freshness", return_value=[]),
+                mock.patch.object(
+                    capabilities, "collect_configured_targets", return_value=({}, [])
+                ),
+                mock.patch.object(capabilities, "CTEST_INVENTORY_OUTPUT_LIMIT", 8),
+            ):
+                diagnostics = capabilities.audit_configured_evidence(
+                    {"schema": 2, "capabilities": []},
+                    root,
+                    build,
+                    ctest_inventory_path=inventory,
+                )
+
+            self.assertEqual(len(diagnostics), 1)
+            self.assertIn("CTest inventory exceeds 8-byte limit", diagnostics[0])
+
     @unittest.skipUnless(os.name == "posix", "POSIX process-group assertion")
     def test_evidence_output_flood_terminates_parent_and_child(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3097,12 +3167,16 @@ class RepositoryCapabilityTests(unittest.TestCase):
         query = "build-ci/.cmake/api/v1/query/codemodel-v2"
         cmake_files_query = "build-ci/.cmake/api/v1/query/cmakeFiles-v1"
         completion_stamp = "build-ci/.neverd-capability-build-complete"
+        inventory_path = "build-ci/ctest-inventory.json"
+        inventory_capture = f"tee {inventory_path}"
         configured_check = "--build-dir build-ci --build-config Release"
+        configured_inventory = f"--ctest-inventory {inventory_path}"
         self.assertIn(query, workflow)
         self.assertIn(cmake_files_query, workflow)
         self.assertLess(workflow.index(query), workflow.index("cmake -S"))
         self.assertLess(workflow.index(cmake_files_query), workflow.index("cmake -S"))
         self.assertIn(completion_stamp, workflow)
+        self.assertIn(inventory_capture, workflow)
         main_build = next(
             line for line in workflow.splitlines() if "cmake --build build-ci" in line
         )
@@ -3111,9 +3185,13 @@ class RepositoryCapabilityTests(unittest.TestCase):
             workflow.index(completion_stamp), workflow.index("cmake --build build-ci")
         )
         self.assertIn(configured_check, workflow)
+        self.assertIn(configured_inventory, workflow)
         self.assertGreater(
             workflow.index(configured_check),
             workflow.index("Run selected test profile"),
+        )
+        self.assertLess(
+            workflow.index(inventory_capture), workflow.index(configured_inventory)
         )
         self.assertLess(
             workflow.index(completion_stamp), workflow.index(configured_check)

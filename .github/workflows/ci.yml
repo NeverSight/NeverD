@@ -301,6 +301,7 @@ jobs:
         run: |
           set -o pipefail
           ctest --test-dir build-ci --build-config Release --show-only=json-v1 |
+            tee build-ci/ctest-inventory.json |
             "$PYTHON" scripts/audit_ci_test_inventory.py \
               --profile "$TEST_PROFILE" \
               --exclude-label-regex "$EXCLUDE_LABELS" \
@@ -336,7 +337,8 @@ jobs:
         shell: bash
         run: |
           "$PYTHON" scripts/check_capabilities.py \
-            --build-dir build-ci --build-config Release
+            --build-dir build-ci --build-config Release \
+            --ctest-inventory build-ci/ctest-inventory.json
         env:
           PYTHON: ${{ matrix.python }}
 
