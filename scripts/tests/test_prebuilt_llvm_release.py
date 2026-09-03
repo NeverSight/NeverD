@@ -22,6 +22,7 @@ RELEASE_WORKFLOW = (
 CONSUMER = ROOT / "cmake" / "NeverDLLVMPrebuilt.cmake"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 README = ROOT / "README.md"
+TESTING_DOC = ROOT / "docs" / "testing.md"
 
 
 class PrebuiltLlvmReleaseWorkflowTests(unittest.TestCase):
@@ -144,6 +145,74 @@ class PrebuiltLlvmReleaseWorkflowTests(unittest.TestCase):
 
 
 class PrebuiltLlvmPackageResolutionTests(unittest.TestCase):
+    def test_legacy_mutable_default_is_migrated_to_the_revisioned_pin(self):
+        with tempfile.TemporaryDirectory(prefix="neverd-prebuilt-migration-") as tmp:
+            script = Path(tmp) / "migrate.cmake"
+            script.write_text(
+                f"""
+set(NEVERD_LLVM_PREBUILT_TAG "neverd-llvm-v23.0.0" CACHE STRING "" FORCE)
+include("{CONSUMER.as_posix()}")
+message(STATUS "MIGRATED_TAG=${{NEVERD_LLVM_PREBUILT_TAG}}")
+""".lstrip(),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                ["cmake", "-P", str(script)],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn(
+            "MIGRATED_TAG=neverd-llvm-v23.0.0-r1", result.stdout
+        )
+
+    def run_buildinfo_validator(
+        self, buildinfo: str | None, expected_commit: str
+    ) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory(prefix="neverd-prebuilt-buildinfo-") as tmp:
+            prefix = Path(tmp) / "package"
+            prefix.mkdir()
+            if buildinfo is not None:
+                (prefix / "BUILDINFO.txt").write_text(buildinfo, encoding="utf-8")
+            script = Path(tmp) / "validate.cmake"
+            script.write_text(
+                f"""
+include("{CONSUMER.as_posix()}")
+_neverd_validate_prebuilt_llvm_buildinfo(
+  "{prefix.as_posix()}" "{expected_commit}")
+""".lstrip(),
+                encoding="utf-8",
+            )
+            return subprocess.run(
+                ["cmake", "-P", str(script)],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                check=False,
+            )
+
+    def test_pinned_package_buildinfo_must_name_the_expected_commit(self):
+        expected_commit = "a" * 40
+        valid = self.run_buildinfo_validator(
+            f"name: package\nllvm_commit: {expected_commit}\n", expected_commit
+        )
+        self.assertEqual(valid.returncode, 0, valid.stdout)
+
+        wrong = self.run_buildinfo_validator(
+            f"llvm_commit: {'b' * 40}\n", expected_commit
+        )
+        self.assertNotEqual(wrong.returncode, 0, wrong.stdout)
+        self.assertIn("BUILDINFO LLVM commit mismatch", wrong.stdout)
+
+        missing = self.run_buildinfo_validator(None, expected_commit)
+        self.assertNotEqual(missing.returncode, 0, missing.stdout)
+        self.assertIn("missing BUILDINFO.txt", missing.stdout)
+
     def run_resolver(
         self,
         system_name: str,
@@ -550,6 +619,37 @@ message(STATUS "PIN=[${{resolved}}]")
                     self.resolve_pin(tag.group(1), package), r"^[0-9a-f]{64}$"
                 )
 
+    def test_default_tag_and_pinned_commit_match_the_llvm_gitlink(self):
+        source = CONSUMER.read_text(encoding="utf-8")
+        default_tag = re.search(
+            r'set\(NEVERD_LLVM_PREBUILT_TAG "([^"]+)"', source
+        )
+        pinned_tag = re.search(
+            r'set\(NEVERD_LLVM_PREBUILT_PINNED_TAG "([^"]+)"\)', source
+        )
+        pinned_commit = re.search(
+            r'set\(NEVERD_LLVM_PREBUILT_PINNED_COMMIT\s+"([0-9a-f]{40})"\)',
+            source,
+        )
+        self.assertIsNotNone(default_tag, source)
+        self.assertIsNotNone(pinned_tag, source)
+        self.assertIsNotNone(pinned_commit, source)
+        self.assertEqual(default_tag.group(1), pinned_tag.group(1))
+
+        gitlink = subprocess.run(
+            ["git", "ls-tree", "HEAD", "third_party/llvm-project"],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(gitlink.returncode, 0, gitlink.stdout)
+        fields = gitlink.stdout.split()
+        self.assertGreaterEqual(len(fields), 3, gitlink.stdout)
+        self.assertEqual(fields[1], "commit", gitlink.stdout)
+        self.assertEqual(pinned_commit.group(1), fields[2])
+
     # A caller who overrode the tag is asking for a build this file makes no
     # claim about, so the pins must not be applied to it: doing so would reject
     # a perfectly good archive for failing to match a digest describing an
@@ -561,6 +661,15 @@ message(STATUS "PIN=[${{resolved}}]")
 
 
 class PrebuiltLlvmDocumentationTests(unittest.TestCase):
+    def test_sanitizer_profile_includes_the_prebuilt_integration_target(self):
+        source = TESTING_DOC.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "NeverDSBFSolanaModelTests NeverDSBFIntegrationTests", source
+        )
+        self.assertNotIn("-E 'SBFIntegration'", source)
+        self.assertNotIn("prebuilt package also omits", source)
+
     def test_readme_documents_hosts_rebuilds_and_caches(self):
         source = README.read_text(encoding="utf-8")
 
@@ -568,12 +677,14 @@ class PrebuiltLlvmDocumentationTests(unittest.TestCase):
             "macOS arm64",
             "Linux x86_64",
             "Windows x64",
-            "overwrite_existing_assets",
             "neverd-llvm-v23.0.0-r1",
+            "neverd-llvm-v23.0.0-r2",
             "cmake/NeverDLLVMPrebuilt.cmake",
+            "scripts/audit_prebuilt_llvm_release.py",
+            "every six hours",
             "sccache",
             "GitHub Actions cache",
-            ".cache/neverd-llvm/neverd-llvm-v23.0.0",
+            ".cache/neverd-llvm/neverd-llvm-v23.0.0-r1",
             "use_prebuilt_llvm",
             "push and pull-request CI",
         ):
@@ -581,6 +692,12 @@ class PrebuiltLlvmDocumentationTests(unittest.TestCase):
                 self.assertIn(expected, source)
 
         self.assertRegex(source, r"only a manually\s+selected `true`")
+        self.assertIn(
+            "-DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r1", source
+        )
+        self.assertNotIn(
+            "-DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0\n", source
+        )
 
 
 if __name__ == "__main__":

@@ -616,13 +616,10 @@ Build and run the focused SBF targets listed below with
 `ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:strict_string_checks=1` and
 `UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1`. macOS ASan does not support
 LeakSanitizer, hence the explicit `detect_leaks=0`; use a Linux sanitizer shard
-for leak coverage. The prebuilt package also omits the NeverD LLVM fork's
-`llvm/MC/BinaryRewrite.h`, so `NeverDSBFIntegrationTests` must be linked and run
-in the normal integrated-LLVM build. This is a packaging boundary, not a
-sanitizer waiver: the focused core targets run with fail-fast ASan/UBSan
-settings and the public integration binary runs in the normal integrated
-build. Release evidence records named targets and their results rather than a
-brittle aggregate case count.
+for leak coverage. The pinned, revisioned prebuilt package includes the NeverD
+LLVM fork's `llvm/MC/BinaryRewrite.h`, so `NeverDSBFIntegrationTests` runs in
+the same fail-fast ASan/UBSan profile. Release evidence records named targets
+and their results rather than a brittle aggregate case count.
 
 ```bash
 cmake --build build-sbf-asan-ubsan --parallel 4 --target \
@@ -632,7 +629,7 @@ cmake --build build-sbf-asan-ubsan --parallel 4 --target \
   NeverDSBFSemanticTests NeverDSBFEmitterTests NeverDSBFLLVMEmitterTests \
   NeverDSBFLLVMDifferentialTests NeverDSBFSourceDifferentialTests \
   NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests \
-  NeverDSBFSolanaModelTests
+  NeverDSBFSolanaModelTests NeverDSBFIntegrationTests
 
 ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:strict_string_checks=1 \
 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
@@ -640,7 +637,7 @@ NEVERD_SBPF_ROOT=/path/to/sbpf \
 NEVERD_AGAVE_CONFORMANCE_ROOT=/path/to/firedancer-test-vectors \
 NEVERD_AGAVE_CONFORMANCE_REVISION=68bb4af40235562e8852fa23d5727e49c2a0b862 \
 ctest --test-dir build-sbf-asan-ubsan --output-on-failure --parallel 4 \
-  -L '^NeverDSBF' -E 'SBFIntegration'
+  -L '^NeverDSBF'
 ```
 
 ## One-shot targets

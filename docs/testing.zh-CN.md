@@ -528,9 +528,9 @@ CI 在 Linux、macOS 和 Windows 上以 Release 开启测试构建，先审核�
 loader、analyzer、semantic、emitter、integration target。integrated profile 记录
 命名 target 与结果，不冻结快速变化的汇总 case 数。
 
-sanitizer profile 单独构建在 `build-sbf-asan-ubsan`。focused target 以 fail-fast
-方式运行且没有 ASan/UBSan report；prebuilt package 缺少所需的
-fork-only header，因此 integration 在 integrated LLVM build 中运行。
+sanitizer profile 单独构建在 `build-sbf-asan-ubsan`。按 revision 锁定的 prebuilt
+package 已包含所需的 fork-only header，因此 integration 也在同一个 fail-fast
+ASan/UBSan profile 中运行。
 
 ```bash
 cmake --build build-sbf-asan-ubsan --parallel 4 --target \
@@ -540,7 +540,7 @@ cmake --build build-sbf-asan-ubsan --parallel 4 --target \
   NeverDSBFSemanticTests NeverDSBFEmitterTests NeverDSBFLLVMEmitterTests \
   NeverDSBFLLVMDifferentialTests NeverDSBFSourceDifferentialTests \
   NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests \
-  NeverDSBFSolanaModelTests
+  NeverDSBFSolanaModelTests NeverDSBFIntegrationTests
 
 ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:strict_string_checks=1 \
 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
@@ -548,7 +548,7 @@ NEVERD_SBPF_ROOT=/path/to/sbpf \
 NEVERD_AGAVE_CONFORMANCE_ROOT=/path/to/firedancer-test-vectors \
 NEVERD_AGAVE_CONFORMANCE_REVISION=68bb4af40235562e8852fa23d5727e49c2a0b862 \
 ctest --test-dir build-sbf-asan-ubsan --output-on-failure --parallel 4 \
-  -L '^NeverDSBF' -E 'SBFIntegration'
+  -L '^NeverDSBF'
 ```
 
 ### 固定的 SBF 证据快照（2026-08-24）

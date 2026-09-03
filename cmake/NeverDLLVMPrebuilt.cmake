@@ -22,30 +22,41 @@
 
 set(NEVERD_LLVM_PREBUILT_REPO "NeverSight/llvm-project"
     CACHE STRING "GitHub owner/repo that hosts the prebuilt LLVM releases")
-set(NEVERD_LLVM_PREBUILT_TAG "neverd-llvm-v23.0.0"
+set(NEVERD_LLVM_PREBUILT_TAG "neverd-llvm-v23.0.0-r1"
     CACHE STRING "Release tag of the prebuilt LLVM package to download")
 set(NEVERD_LLVM_PREBUILT_BASE_URL ""
     CACHE STRING "Override the release base URL (advanced/mirror). Empty = GitHub releases")
 set(NEVERD_LLVM_PREBUILT_SHA256 ""
     CACHE STRING "Override the expected SHA256 of the archive. Empty = use the pinned digest")
 
-# The fork republishes this tag in place whenever its sources change, so the
-# tag names a stream of builds rather than one build, and a cache keyed on the
-# tag cannot tell which of them it holds.  These digests are what names a
-# particular build, and pinning them here is what ties a NeverD revision to the
-# LLVM package it was written against.
+# The revisioned tag, exact fork commit, and these three digests together name
+# one package set. Pinning all of them here ties a NeverD revision to the LLVM
+# build it was written against instead of trusting a mutable release name.
 #
-# Refresh all three together after republishing the release.  A stale entry
-# stops the configure with a checksum mismatch that says which digest it
-# wanted, rather than resurfacing later as a header the older package happened
-# not to contain.
-set(NEVERD_LLVM_PREBUILT_PINNED_TAG "neverd-llvm-v23.0.0")
+# Publish a new -rN tag and refresh the commit plus all three digests together.
+# A stale entry stops configure at the source boundary instead of resurfacing
+# later as a header or behavior the older package happened not to contain.
+set(NEVERD_LLVM_PREBUILT_PINNED_TAG "neverd-llvm-v23.0.0-r1")
+set(NEVERD_LLVM_PREBUILT_PINNED_COMMIT
+    "c0b3b002628e33d3fa46f5f28b9890cfef3f54b9")
 set(_NEVERD_LLVM_PIN_LINUX_X86_64
-    "276681075adb557c3a8dc77548f30a187b79fb987084a1e23c47423c77b9fa39")
+    "3febf0b4b24bfe8ad62dc8bb3a9c2332f433453a09a22239d206dcb971868a08")
 set(_NEVERD_LLVM_PIN_MACOS_ARM64
-    "443a8c2d712bf40f449ffa4bac3f81d940821d5ad76c8244ab94fc12c9c346e5")
+    "3b5b0442962954602ce5e2bf41704b1ae6d6c46b0013b13497eac8c97277d50e")
 set(_NEVERD_LLVM_PIN_WINDOWS_X64
-    "bf9bc30c800f15ec8341a5db6599095854918aed351f0acb89d1ddf268f32d63")
+    "7c48873f8666d57059a2f606b94c3cef4448564fbd9acdbb06ba8e01a80a8cc0")
+
+# CMake preserves cache values across source upgrades. Move an old build tree
+# off the legacy mutable default unless its caller supplied an explicit digest
+# that already pins those bytes. Other custom tags remain caller-owned.
+if(NEVERD_LLVM_PREBUILT_TAG STREQUAL "neverd-llvm-v23.0.0" AND
+   NOT NEVERD_LLVM_PREBUILT_SHA256)
+  message(STATUS
+    "NeverD prebuilt LLVM: migrating legacy mutable tag to "
+    "${NEVERD_LLVM_PREBUILT_PINNED_TAG}")
+  set(NEVERD_LLVM_PREBUILT_TAG "${NEVERD_LLVM_PREBUILT_PINNED_TAG}"
+      CACHE STRING "Release tag of the prebuilt LLVM package to download" FORCE)
+endif()
 if(DEFINED ENV{HOME} AND NOT "$ENV{HOME}" STREQUAL "")
   set(_neverd_llvm_default_cache "$ENV{HOME}/.cache/neverd-llvm")
 elseif(DEFINED ENV{USERPROFILE} AND NOT "$ENV{USERPROFILE}" STREQUAL "")
@@ -156,6 +167,41 @@ function(_neverd_cached_llvm_sha256 out_sha stamp_path archive_path)
   set(${out_sha} "${_sha}" PARENT_SCOPE)
 endfunction()
 
+function(_neverd_validate_prebuilt_llvm_buildinfo prefix expected_commit)
+  if(NOT expected_commit)
+    return()
+  endif()
+
+  set(_buildinfo "${prefix}/BUILDINFO.txt")
+  if(NOT EXISTS "${_buildinfo}")
+    message(FATAL_ERROR
+      "NeverD prebuilt LLVM package is missing BUILDINFO.txt: ${prefix}")
+  endif()
+
+  file(STRINGS "${_buildinfo}" _commit_lines REGEX "^llvm_commit: ")
+  list(LENGTH _commit_lines _commit_line_count)
+  if(NOT _commit_line_count EQUAL 1)
+    message(FATAL_ERROR
+      "NeverD prebuilt LLVM BUILDINFO.txt must contain exactly one "
+      "llvm_commit entry: ${_buildinfo}")
+  endif()
+  list(GET _commit_lines 0 _commit_line)
+  string(REGEX REPLACE "^llvm_commit: " "" _actual_commit "${_commit_line}")
+  string(TOLOWER "${_actual_commit}" _actual_commit)
+  string(LENGTH "${_actual_commit}" _actual_commit_length)
+  if(NOT _actual_commit_length EQUAL 40 OR
+     NOT _actual_commit MATCHES "^[0-9a-f]+$")
+    message(FATAL_ERROR
+      "NeverD prebuilt LLVM BUILDINFO.txt has an invalid llvm_commit: "
+      "'${_actual_commit}'")
+  endif()
+  if(NOT _actual_commit STREQUAL expected_commit)
+    message(FATAL_ERROR
+      "NeverD prebuilt LLVM BUILDINFO LLVM commit mismatch\n"
+      "  expected: ${expected_commit}\n  actual:   ${_actual_commit}")
+  endif()
+endfunction()
+
 function(neverd_fetch_prebuilt_llvm)
   _neverd_resolve_prebuilt_llvm_package(
     _platform _arch _pkg _archive_extension)
@@ -167,6 +213,10 @@ function(neverd_fetch_prebuilt_llvm)
   set(_archive_name "${_pkg}.${_archive_extension}")
   set(_archive_path "${_root}/${_archive_name}")
   set(_stamp_path "${_root}/${_archive_name}.stamp")
+  set(_expected_commit "")
+  if(_tag STREQUAL NEVERD_LLVM_PREBUILT_PINNED_TAG)
+    set(_expected_commit "${NEVERD_LLVM_PREBUILT_PINNED_COMMIT}")
+  endif()
 
   # Knowing the digest before reaching the network is what lets a cache hit be
   # checked without one, and what turns a republished tag into a mismatch the
@@ -202,14 +252,6 @@ function(neverd_fetch_prebuilt_llvm)
 
   if(_reuse_cache)
     message(STATUS "NeverD prebuilt LLVM: reusing cached ${_prefix}")
-    # Recording what a pre-stamp cache turned out to hold keeps the next
-    # configure from rehashing the archive, and keeps the tree identifiable
-    # once that archive is deleted to reclaim the space.  Nothing is recorded
-    # for a tag with no expected digest, because then the reuse above was an
-    # assumption rather than a check.
-    if(_expected AND NOT EXISTS "${_stamp_path}")
-      file(WRITE "${_stamp_path}" "${_expected}\n")
-    endif()
   else()
     if(NEVERD_LLVM_PREBUILT_BASE_URL)
       set(_base "${NEVERD_LLVM_PREBUILT_BASE_URL}")
@@ -267,11 +309,10 @@ function(neverd_fetch_prebuilt_llvm)
       message(FATAL_ERROR
         "SHA256 mismatch for ${_archive_name}\n"
         "  expected: ${_expected}\n  actual:   ${_actual}\n"
-        "The expectation came from ${_expected_source}. Release ${_tag} is "
-        "republished in place, so a package rebuilt after that digest was "
-        "recorded lands here: refresh the pins in "
-        "cmake/NeverDLLVMPrebuilt.cmake to ${_actual} if this archive is the "
-        "one NeverD should build against.")
+        "The expectation came from ${_expected_source}. Do not trust or "
+        "repin unexpected bytes. If this is an intentional LLVM rebuild, "
+        "publish a new -rN tag and update its commit plus all three archive "
+        "pins in cmake/NeverDLLVMPrebuilt.cmake together.")
     endif()
     message(STATUS "NeverD prebuilt LLVM: checksum OK (${_actual})")
 
@@ -283,7 +324,14 @@ function(neverd_fetch_prebuilt_llvm)
       message(FATAL_ERROR
         "Extraction did not produce ${_cfg}; the package layout may have changed.")
     endif()
+  endif()
 
+  _neverd_validate_prebuilt_llvm_buildinfo("${_prefix}" "${_expected_commit}")
+  if(_reuse_cache AND _expected AND NOT EXISTS "${_stamp_path}")
+    # Identify a verified cache even after its archive is removed to reclaim
+    # space. A tag without a source pin remains an assumption and gets no stamp.
+    file(WRITE "${_stamp_path}" "${_expected}\n")
+  elseif(NOT _reuse_cache)
     file(WRITE "${_stamp_path}" "${_actual}\n")
   endif()
 

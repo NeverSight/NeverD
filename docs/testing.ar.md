@@ -594,9 +594,9 @@ differential إلى `rustc` بالإضافة إلى clang؛ تخطي compiler ي
 emitter/integration. يسجل profile المتكامل الأهداف المسماة ونتائجها ولا يثبت
 عدداً تجميعياً سريع التغيّر.
 
-يجب بناء profile sanitizer في `build-sbf-asan-ubsan` منفصلًا. تعمل الأهداف
-المركزة fail-fast بلا ASan أو UBSan report؛ ويظل integration في build LLVM
-المتكامل لأن package الجاهزة لا تحتوي fork-only header المطلوب.
+يجب بناء profile sanitizer في `build-sbf-asan-ubsan` منفصلًا. تحتوي package
+الجاهزة المثبتة ذات الإصدار المحدد الآن fork-only header المطلوب، لذلك يعمل
+integration في profile نفسه بإعدادات ASan وUBSan بنمط fail-fast.
 
 ```bash
 cmake --build build-sbf-asan-ubsan --parallel 4 --target \
@@ -606,7 +606,7 @@ cmake --build build-sbf-asan-ubsan --parallel 4 --target \
   NeverDSBFSemanticTests NeverDSBFEmitterTests NeverDSBFLLVMEmitterTests \
   NeverDSBFLLVMDifferentialTests NeverDSBFSourceDifferentialTests \
   NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests \
-  NeverDSBFSolanaModelTests
+  NeverDSBFSolanaModelTests NeverDSBFIntegrationTests
 
 ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:strict_string_checks=1 \
 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
@@ -614,7 +614,7 @@ NEVERD_SBPF_ROOT=/path/to/sbpf \
 NEVERD_AGAVE_CONFORMANCE_ROOT=/path/to/firedancer-test-vectors \
 NEVERD_AGAVE_CONFORMANCE_REVISION=68bb4af40235562e8852fa23d5727e49c2a0b862 \
 ctest --test-dir build-sbf-asan-ubsan --output-on-failure --parallel 4 \
-  -L '^NeverDSBF' -E 'SBFIntegration'
+  -L '^NeverDSBF'
 ```
 
 ### لقطة أدلة SBF المثبتة (2026-08-24)

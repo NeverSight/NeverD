@@ -153,7 +153,7 @@ cmake --build build
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DNEVERD_LLVM_PREBUILT=ON \
-  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0
+  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r1
 cmake --build build
 ```
 

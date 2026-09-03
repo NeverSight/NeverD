@@ -648,10 +648,9 @@ coverage ausente. El agregado completo incluye `NeverDSBFProgramImageTests`,
 analyzer, semantic, emitter e integration. El perfil integrado registra targets
 y resultados nombrados, no un total que cambia con frecuencia.
 
-El perfil sanitizer se construye por separado en `build-sbf-asan-ubsan`. Los
-targets enfocados se ejecutan fail-fast sin informes ASan o UBSan; integration
-permanece en la build LLVM integrada porque al paquete prebuilt le falta el
-header fork-only requerido.
+El perfil sanitizer se construye por separado en `build-sbf-asan-ubsan`. El
+paquete prebuilt fijado por revisión incluye el header fork-only requerido, así
+que integration se ejecuta en el mismo perfil ASan/UBSan fail-fast.
 
 ```bash
 cmake --build build-sbf-asan-ubsan --parallel 4 --target \
@@ -661,7 +660,7 @@ cmake --build build-sbf-asan-ubsan --parallel 4 --target \
   NeverDSBFSemanticTests NeverDSBFEmitterTests NeverDSBFLLVMEmitterTests \
   NeverDSBFLLVMDifferentialTests NeverDSBFSourceDifferentialTests \
   NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests \
-  NeverDSBFSolanaModelTests
+  NeverDSBFSolanaModelTests NeverDSBFIntegrationTests
 
 ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:strict_string_checks=1 \
 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
@@ -669,7 +668,7 @@ NEVERD_SBPF_ROOT=/path/to/sbpf \
 NEVERD_AGAVE_CONFORMANCE_ROOT=/path/to/firedancer-test-vectors \
 NEVERD_AGAVE_CONFORMANCE_REVISION=68bb4af40235562e8852fa23d5727e49c2a0b862 \
 ctest --test-dir build-sbf-asan-ubsan --output-on-failure --parallel 4 \
-  -L '^NeverDSBF' -E 'SBFIntegration'
+  -L '^NeverDSBF'
 ```
 
 ### Instantánea de evidencia SBF fijada (2026-08-24)

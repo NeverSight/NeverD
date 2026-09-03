@@ -596,9 +596,9 @@ clang に加えて `rustc` が必要で、compiler skip は coverage 欠落で�
 loader、analyzer、semantic、emitter、integration target が含まれます。integrated
 profile は変動する総数ではなく、named target と結果を記録します。
 
-sanitizer profile は `build-sbf-asan-ubsan` に分離して build します。focused target
-を fail-fast で実行し ASan/UBSan report がないことを確認します。prebuilt package に必要な
-fork-only header がないため、integration は integrated LLVM build で実行します。
+sanitizer profile は `build-sbf-asan-ubsan` に分離して build します。revision を固定した
+prebuilt package は必要な fork-only header を含むため、integration も同じ fail-fast
+ASan/UBSan profile で実行します。
 
 ```bash
 cmake --build build-sbf-asan-ubsan --parallel 4 --target \
@@ -608,7 +608,7 @@ cmake --build build-sbf-asan-ubsan --parallel 4 --target \
   NeverDSBFSemanticTests NeverDSBFEmitterTests NeverDSBFLLVMEmitterTests \
   NeverDSBFLLVMDifferentialTests NeverDSBFSourceDifferentialTests \
   NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests \
-  NeverDSBFSolanaModelTests
+  NeverDSBFSolanaModelTests NeverDSBFIntegrationTests
 
 ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:strict_string_checks=1 \
 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
@@ -616,7 +616,7 @@ NEVERD_SBPF_ROOT=/path/to/sbpf \
 NEVERD_AGAVE_CONFORMANCE_ROOT=/path/to/firedancer-test-vectors \
 NEVERD_AGAVE_CONFORMANCE_REVISION=68bb4af40235562e8852fa23d5727e49c2a0b862 \
 ctest --test-dir build-sbf-asan-ubsan --output-on-failure --parallel 4 \
-  -L '^NeverDSBF' -E 'SBFIntegration'
+  -L '^NeverDSBF'
 ```
 
 ### pinned SBF evidence snapshot（2026-08-24）

@@ -586,9 +586,9 @@ audit한 다음 플랫폼별 label 제외를 적용합니다. 프로필은
 loader, analyzer, semantic, emitter, integration target이 포함됩니다. integrated
 profile은 변동하는 총계 대신 named target과 결과를 기록합니다.
 
-sanitizer profile은 `build-sbf-asan-ubsan`에 별도로 build합니다. focused target을
-fail-fast로 실행해 ASan/UBSan report가 없음을 확인합니다. prebuilt package에 필요한
-fork-only header가 없으므로 integration은 integrated LLVM build에서 실행합니다.
+sanitizer profile은 `build-sbf-asan-ubsan`에 별도로 build합니다. revision이 고정된
+prebuilt package에 필요한 fork-only header가 포함되므로 integration도 같은 fail-fast
+ASan/UBSan profile에서 실행합니다.
 
 ```bash
 cmake --build build-sbf-asan-ubsan --parallel 4 --target \
@@ -598,7 +598,7 @@ cmake --build build-sbf-asan-ubsan --parallel 4 --target \
   NeverDSBFSemanticTests NeverDSBFEmitterTests NeverDSBFLLVMEmitterTests \
   NeverDSBFLLVMDifferentialTests NeverDSBFSourceDifferentialTests \
   NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests \
-  NeverDSBFSolanaModelTests
+  NeverDSBFSolanaModelTests NeverDSBFIntegrationTests
 
 ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:strict_string_checks=1 \
 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
@@ -606,7 +606,7 @@ NEVERD_SBPF_ROOT=/path/to/sbpf \
 NEVERD_AGAVE_CONFORMANCE_ROOT=/path/to/firedancer-test-vectors \
 NEVERD_AGAVE_CONFORMANCE_REVISION=68bb4af40235562e8852fa23d5727e49c2a0b862 \
 ctest --test-dir build-sbf-asan-ubsan --output-on-failure --parallel 4 \
-  -L '^NeverDSBF' -E 'SBFIntegration'
+  -L '^NeverDSBF'
 ```
 
 ### pinned SBF evidence snapshot (2026-08-24)

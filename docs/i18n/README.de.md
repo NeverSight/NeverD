@@ -154,7 +154,7 @@ Erste Konfiguration baut den LLVM-Fork lokal (oft 30–60 Minuten). Spätere Bui
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DNEVERD_LLVM_PREBUILT=ON \
-  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0
+  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r1
 cmake --build build
 ```
 

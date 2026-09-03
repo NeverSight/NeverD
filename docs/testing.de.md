@@ -664,10 +664,9 @@ die Metadata-/Loader-/Analyzer-/Semantic-/Emitter-/Integration-Targets. Das
 integrierte Profil protokolliert benannte Targets und Ergebnisse statt einer
 schnell driftenden Summenzahl.
 
-Das Sanitizer-Profil wird separat in `build-sbf-asan-ubsan` gebaut. Die
-fokussierten Targets laufen fail-fast ohne ASan- oder UBSan-Report; Integration
-bleibt im integrierten LLVM-Build, weil dem Prebuilt-Paket der benötigte
-fork-only Header fehlt.
+Das Sanitizer-Profil wird separat in `build-sbf-asan-ubsan` gebaut. Das
+gepinnte, revisionsgebundene Prebuilt-Paket enthält den benötigten fork-only
+Header; daher läuft auch Integration im selben fail-fast ASan/UBSan-Profil.
 
 ```bash
 cmake --build build-sbf-asan-ubsan --parallel 4 --target \
@@ -677,7 +676,7 @@ cmake --build build-sbf-asan-ubsan --parallel 4 --target \
   NeverDSBFSemanticTests NeverDSBFEmitterTests NeverDSBFLLVMEmitterTests \
   NeverDSBFLLVMDifferentialTests NeverDSBFSourceDifferentialTests \
   NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests \
-  NeverDSBFSolanaModelTests
+  NeverDSBFSolanaModelTests NeverDSBFIntegrationTests
 
 ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:strict_string_checks=1 \
 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
@@ -685,7 +684,7 @@ NEVERD_SBPF_ROOT=/path/to/sbpf \
 NEVERD_AGAVE_CONFORMANCE_ROOT=/path/to/firedancer-test-vectors \
 NEVERD_AGAVE_CONFORMANCE_REVISION=68bb4af40235562e8852fa23d5727e49c2a0b862 \
 ctest --test-dir build-sbf-asan-ubsan --output-on-failure --parallel 4 \
-  -L '^NeverDSBF' -E 'SBFIntegration'
+  -L '^NeverDSBF'
 ```
 
 ### Gepinnter SBF-Evidenzsnapshot (2026-08-24)
