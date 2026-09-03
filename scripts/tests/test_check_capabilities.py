@@ -2007,7 +2007,7 @@ class CapabilitySchemaTests(unittest.TestCase):
             "combined output exceeded 64-byte limit (65 bytes)",
         )
 
-    def test_ctest_inventory_uses_its_own_bounded_output_limit(self) -> None:
+    def test_ctest_inventory_uses_dedicated_resource_bounds(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             temporary = Path(directory)
             root = temporary / "source"
@@ -2048,6 +2048,7 @@ class CapabilitySchemaTests(unittest.TestCase):
                 run.call_args.kwargs["output_limit"],
                 capabilities.CTEST_INVENTORY_OUTPUT_LIMIT,
             )
+            self.assertGreaterEqual(run.call_args.kwargs["timeout"], 10 * 60)
 
     @unittest.skipUnless(os.name == "posix", "POSIX process-group assertion")
     def test_evidence_output_flood_terminates_parent_and_child(self) -> None:

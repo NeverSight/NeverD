@@ -27,6 +27,7 @@ BUILD_COMPLETION_STAMP = ".neverd-capability-build-complete"
 EVIDENCE_OUTPUT_LIMIT = 4 * 1024 * 1024
 BUILD_OUTPUT_LIMIT = 64 * 1024 * 1024
 CTEST_INVENTORY_OUTPUT_LIMIT = 64 * 1024 * 1024
+CTEST_INVENTORY_TIMEOUT = 10 * 60
 GTEST_XML_OUTPUT_LIMIT = EVIDENCE_OUTPUT_LIMIT
 CMAKE_GTEST_SKIP_PATTERNS = frozenset(
     {r"\[  SKIPPED \]", r"\\[  SKIPPED \\]"}
@@ -2290,7 +2291,7 @@ def audit_configured_evidence(
     command.append("--show-only=json-v1")
     completed, process_error = _run_bounded_process(
         command,
-        timeout=180,
+        timeout=CTEST_INVENTORY_TIMEOUT,
         output_limit=CTEST_INVENTORY_OUTPUT_LIMIT,
     )
     if process_error is not None or completed is None:
