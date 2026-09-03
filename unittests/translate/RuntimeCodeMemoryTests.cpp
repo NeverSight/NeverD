@@ -115,14 +115,15 @@ TEST(RuntimeCodeMemory, BoundsChecksWritesAndEntryOffsetsWithoutOverflow) {
 }
 
 TEST(RuntimeCodeMemory, ExecutesOnlyAfterHostInstructionsArePublished) {
-#if defined(__aarch64__)
+#if defined(__aarch64__) || defined(_M_ARM64)
   // mov w0, #42; ret
   constexpr std::array<uint8_t, 8> Code = {0x40, 0x05, 0x80, 0x52,
                                            0xC0, 0x03, 0x5F, 0xD6};
-#elif defined(__x86_64__) || defined(__i386__)
+#elif defined(__x86_64__) || defined(__i386__) || defined(_M_X64) ||           \
+    defined(_M_IX86)
   // mov eax, 42; ret
   constexpr std::array<uint8_t, 6> Code = {0xB8, 0x2A, 0x00, 0x00, 0x00, 0xC3};
-#elif defined(__arm__)
+#elif defined(__arm__) || defined(_M_ARM)
   // mov r0, #42; bx lr
   constexpr std::array<uint8_t, 8> Code = {0x2A, 0x00, 0xA0, 0xE3,
                                            0x1E, 0xFF, 0x2F, 0xE1};
