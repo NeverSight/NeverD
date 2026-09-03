@@ -172,17 +172,17 @@ Jedes Archiv wird gegen den in `cmake/NeverDLLVMPrebuilt.cmake` fixierten Digest
 
 Der Release-Tag versioniert das NeverD-Paket, während `BUILDINFO.txt` den genauen Commit des LLVM-Forks festhält. Meldet LLVM weiterhin `23.0.0`, obwohl sich die Fork-Quellen geändert haben, ist die übliche unveränderliche Wahl eine Paketrevision wie `neverd-llvm-v23.0.0-r1` (dann `-r2`) — nicht `23.0.1`, solange sich nicht LLVMs eigene Patch-Version geändert hat. Richten Sie `NEVERD_LLVM_PREBUILT_TAG` auf diese neue Revision.
 
-Um das bestehende veränderliche Release `neverd-llvm-v23.0.0` an Ort und Stelle zu reparieren, starten Sie den Workflow `NeverD LLVM Release` vom `main`-Branch von llvm-project und aktivieren Sie `overwrite_existing_assets`:
+Um die nächste unveränderliche Revision zu veröffentlichen, starten Sie den Workflow `NeverD LLVM Release` vom `main`-Branch von llvm-project und lassen `overwrite_existing_assets` deaktiviert:
 
 ```bash
 gh workflow run neverd-release.yml \
   --repo NeverSight/llvm-project \
   --ref main \
-  -f release_tag=neverd-llvm-v23.0.0 \
-  -f overwrite_existing_assets=true
+  -f release_tag=neverd-llvm-v23.0.0-r2 \
+  -f overwrite_existing_assets=false
 ```
 
-Das ersetzt gleichnamige Assets, verschiebt den bestehenden Git-Tag aber bewusst nicht. Aktualisieren Sie im selben Zug die in `cmake/NeverDLLVMPrebuilt.cmake` fixierten Digests: Diese Digests, nicht der Tag, benennen den Build, den eine NeverD-Revision erwartet. Ein veraltetes `~/.cache/neverd-llvm/neverd-llvm-v23.0.0/` wird dadurch beim nächsten Konfigurieren ersetzt, und ein Archiv, das zu keinem fixierten Digest passt, hält dieses Konfigurieren mit einer Prüfsummenabweichung an, statt später als ein Header aufzutauchen, den das ältere Paket nicht enthielt. Ein neuer `-rN`-Tag vermeidet das Überschreiben ganz. Der Workflow lehnt versehentliches Ersetzen ab, solange die Checkbox nicht gesetzt ist, und lehnt es vollständig ab, wenn GitHub das Release als unveränderlich markiert.
+Aktualisieren Sie nach erfolgreichem Workflow den Standard-Tag, den fixierten Commit und alle drei Archiv-Digests gemeinsam in `cmake/NeverDLLVMPrebuilt.cmake`. Ersetzen Sie kein bestehendes Release; `overwrite_existing_assets` ist nur für die Wiederherstellung alter Releases vorgesehen.
 
 **Artefakte**
 

@@ -23,6 +23,7 @@ CONSUMER = ROOT / "cmake" / "NeverDLLVMPrebuilt.cmake"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 README = ROOT / "README.md"
 TESTING_DOC = ROOT / "docs" / "testing.md"
+LOCALIZED_READMES = tuple(sorted((ROOT / "docs" / "i18n").glob("README.*.md")))
 
 
 class PrebuiltLlvmReleaseWorkflowTests(unittest.TestCase):
@@ -661,6 +662,20 @@ message(STATUS "PIN=[${{resolved}}]")
 
 
 class PrebuiltLlvmDocumentationTests(unittest.TestCase):
+    def test_localized_readmes_use_revisioned_release_workflow(self):
+        self.assertEqual(len(LOCALIZED_READMES), 10)
+        for readme in LOCALIZED_READMES:
+            source = readme.read_text(encoding="utf-8")
+            with self.subTest(readme=readme.name):
+                self.assertIn(
+                    "-f release_tag=neverd-llvm-v23.0.0-r2", source
+                )
+                self.assertIn("-f overwrite_existing_assets=false", source)
+                self.assertNotIn(
+                    "-f release_tag=neverd-llvm-v23.0.0 \\", source
+                )
+                self.assertNotIn("-f overwrite_existing_assets=true", source)
+
     def test_sanitizer_profile_includes_the_prebuilt_integration_target(self):
         source = TESTING_DOC.read_text(encoding="utf-8")
 

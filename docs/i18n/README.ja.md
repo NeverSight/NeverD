@@ -170,17 +170,17 @@ NeverD の通常の push および pull request CI は、意図的に LLVM submo
 
 リリース tag は NeverD パッケージのバージョンを表し、`BUILDINFO.txt` が正確な LLVM fork commit を記録します。LLVM が `23.0.0` を報告し続けていても fork のソースが変わった場合、通常の不変な選択は `neverd-llvm-v23.0.0-r1`（次は `-r2`）のようなパッケージリビジョンであり、LLVM 自身の patch バージョンが変わらない限り `23.0.1` ではありません。`NEVERD_LLVM_PREBUILT_TAG` をその新しいリビジョンに向けてください。
 
-既存の可変な `neverd-llvm-v23.0.0` リリースをその場で修復するには、llvm-project の `main` ブランチから `NeverD LLVM Release` ワークフローを実行し、`overwrite_existing_assets` を有効にします:
+次の不変 package revision を公開するには、llvm-project の `main` ブランチから `NeverD LLVM Release` ワークフローを実行し、`overwrite_existing_assets` は無効のままにします:
 
 ```bash
 gh workflow run neverd-release.yml \
   --repo NeverSight/llvm-project \
   --ref main \
-  -f release_tag=neverd-llvm-v23.0.0 \
-  -f overwrite_existing_assets=true
+  -f release_tag=neverd-llvm-v23.0.0-r2 \
+  -f overwrite_existing_assets=false
 ```
 
-これは同名の資産を置き換えますが、既存の Git tag は意図的に強制移動しません。同じ変更で `cmake/NeverDLLVMPrebuilt.cmake` に固定されたダイジェストを更新してください。ある NeverD リビジョンが期待するビルドを名指すのは tag ではなくそれらのダイジェストであり、そのおかげで古い `~/.cache/neverd-llvm/neverd-llvm-v23.0.0/` は次の configure で置き換えられ、どの pin とも一致しないアーカイブはその configure をチェックサム不一致で止めます。古いパッケージに無かったヘッダとして後から表面化することはありません。新しい `-rN` tag を使えば、その場での書き換え自体が不要になります。ワークフローはチェックボックスが有効でない限り誤った置き換えを拒否し、GitHub がリリースを immutable と印付けている場合は置き換えを完全に拒否します。
+ワークフローが成功したら、`cmake/NeverDLLVMPrebuilt.cmake` の既定 tag、固定 commit、3 つの archive digest を同時に更新します。既存 release は置き換えず、`overwrite_existing_assets` は legacy recovery にのみ使用します。
 
 **成果物**
 

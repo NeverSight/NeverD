@@ -170,17 +170,17 @@ NeverD 常规的 push 与 pull request CI 刻意从源码编译 LLVM submodule�
 
 发布 tag 标识 NeverD 包的版本，`BUILDINFO.txt` 记录确切的 LLVM fork commit。若 LLVM 仍报告 `23.0.0` 但 fork 源码已变，常规的不可变做法是发布包修订版，如 `neverd-llvm-v23.0.0-r1`（再 `-r2`），而不是 `23.0.1`——除非 LLVM 自身的 patch 版本变了。把 `NEVERD_LLVM_PREBUILT_TAG` 指向该新修订版即可。
 
-要就地修复现有的可变 release `neverd-llvm-v23.0.0`，从 llvm-project 的 `main` 分支运行 `NeverD LLVM Release` 工作流并启用 `overwrite_existing_assets`：
+要发布下一个不可变包修订版，从 llvm-project 的 `main` 分支运行 `NeverD LLVM Release` 工作流，并保持 `overwrite_existing_assets` 关闭：
 
 ```bash
 gh workflow run neverd-release.yml \
   --repo NeverSight/llvm-project \
   --ref main \
-  -f release_tag=neverd-llvm-v23.0.0 \
-  -f overwrite_existing_assets=true
+  -f release_tag=neverd-llvm-v23.0.0-r2 \
+  -f overwrite_existing_assets=false
 ```
 
-这会替换同名产物，但刻意不强制移动现有的 Git tag。请在同一次改动中刷新 `cmake/NeverDLLVMPrebuilt.cmake` 里钉住的摘要：标识某个 NeverD 修订所期望的构建的是这些摘要而非 tag，因此下次 configure 会替换掉过期的 `~/.cache/neverd-llvm/neverd-llvm-v23.0.0/`，而与任何 pin 都对不上的压缩包会让该次 configure 以校验和不匹配停下，不会拖到后来才表现为旧包里没有的某个头文件。改用新的 `-rN` tag 则可完全避免就地覆盖。除非勾选该选项，工作流会拒绝意外替换；若 GitHub 将 release 标记为不可变，则完全拒绝替换。
+工作流成功后，同时更新 `cmake/NeverDLLVMPrebuilt.cmake` 中的默认 tag、锁定 commit 和三个归档摘要。不要替换现有 release；`overwrite_existing_assets` 仅用于旧版恢复。
 
 **产物**
 

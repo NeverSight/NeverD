@@ -171,17 +171,17 @@ Ogni archivio viene confrontato con il digest fissato in `cmake/NeverDLLVMPrebui
 
 Il tag di release versiona il pacchetto NeverD, mentre `BUILDINFO.txt` registra l'esatto commit del fork LLVM. Se LLVM continua a riportare `23.0.0` ma i sorgenti del fork sono cambiati, la scelta immutabile consueta è una revisione di pacchetto come `neverd-llvm-v23.0.0-r1` (poi `-r2`), non `23.0.1`, a meno che non sia cambiata la patch version di LLVM stesso. Puntare `NEVERD_LLVM_PREBUILT_TAG` a quella nuova revisione.
 
-Per riparare sul posto la release mutabile `neverd-llvm-v23.0.0`, eseguire il workflow `NeverD LLVM Release` dal branch `main` di llvm-project abilitando `overwrite_existing_assets`:
+Per pubblicare la prossima revisione immutabile, eseguire il workflow `NeverD LLVM Release` dal branch `main` di llvm-project lasciando disabilitato `overwrite_existing_assets`:
 
 ```bash
 gh workflow run neverd-release.yml \
   --repo NeverSight/llvm-project \
   --ref main \
-  -f release_tag=neverd-llvm-v23.0.0 \
-  -f overwrite_existing_assets=true
+  -f release_tag=neverd-llvm-v23.0.0-r2 \
+  -f overwrite_existing_assets=false
 ```
 
-Questo sostituisce gli artefatti omonimi ma deliberatamente non sposta il tag Git esistente. Aggiornare nello stesso cambiamento i digest fissati in `cmake/NeverDLLVMPrebuilt.cmake`: sono quei digest, non il tag, a nominare la build che una revisione di NeverD si aspetta, così una `~/.cache/neverd-llvm/neverd-llvm-v23.0.0/` obsoleta viene sostituita alla configurazione successiva e un archivio che non corrisponde ad alcun digest fissato ferma quella configurazione con una discrepanza di checksum, invece di riaffiorare più tardi come un header che il pacchetto precedente non conteneva. Un nuovo tag `-rN` evita del tutto la riscrittura sul posto. Il workflow rifiuta una sostituzione accidentale finché la casella non è attiva e la rifiuta del tutto se GitHub marca la release come immutabile.
+Dopo il successo del workflow, aggiornare insieme in `cmake/NeverDLLVMPrebuilt.cmake` il tag predefinito, il commit fissato e tutti e tre i digest degli archivi. Non sostituire una release esistente; `overwrite_existing_assets` è riservato al recupero legacy.
 
 **Artefatti**
 

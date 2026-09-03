@@ -171,17 +171,17 @@ cmake --build build
 
 Тег релиза версионирует пакет NeverD, а `BUILDINFO.txt` фиксирует точный commit форка LLVM. Если LLVM по-прежнему сообщает `23.0.0`, но исходники форка изменились, обычный неизменяемый выбор — ревизия пакета вроде `neverd-llvm-v23.0.0-r1` (затем `-r2`), а не `23.0.1`, если только не изменилась собственная patch-версия LLVM. Направьте `NEVERD_LLVM_PREBUILT_TAG` на эту новую ревизию.
 
-Чтобы починить существующий изменяемый релиз `neverd-llvm-v23.0.0` на месте, запустите workflow `NeverD LLVM Release` из ветки `main` репозитория llvm-project и включите `overwrite_existing_assets`:
+Чтобы опубликовать следующую неизменяемую ревизию, запустите workflow `NeverD LLVM Release` из ветки `main` репозитория llvm-project, оставив `overwrite_existing_assets` выключенным:
 
 ```bash
 gh workflow run neverd-release.yml \
   --repo NeverSight/llvm-project \
   --ref main \
-  -f release_tag=neverd-llvm-v23.0.0 \
-  -f overwrite_existing_assets=true
+  -f release_tag=neverd-llvm-v23.0.0-r2 \
+  -f overwrite_existing_assets=false
 ```
 
-Это заменяет одноимённые артефакты, но намеренно не передвигает существующий тег Git. Тем же изменением обновите дайджесты, закреплённые в `cmake/NeverDLLVMPrebuilt.cmake`: именно они, а не тег, называют сборку, которую ожидает ревизия NeverD, поэтому устаревший `~/.cache/neverd-llvm/neverd-llvm-v23.0.0/` заменяется при следующей конфигурации, а архив, не совпадающий ни с одним закреплённым дайджестом, останавливает эту конфигурацию расхождением контрольной суммы — вместо того чтобы всплыть позже отсутствующим заголовком, которого в старом пакете не было. Новый тег `-rN` полностью избавляет от перезаписи на месте. Workflow отклоняет случайную замену, пока флажок не установлен, и отклоняет её полностью, если GitHub пометил релиз как неизменяемый.
+После успешного workflow одновременно обновите в `cmake/NeverDLLVMPrebuilt.cmake` тег по умолчанию, закреплённый commit и все три дайджеста архивов. Не заменяйте существующий релиз; `overwrite_existing_assets` остаётся только для legacy recovery.
 
 **Артефакты**
 

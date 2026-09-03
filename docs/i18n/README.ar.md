@@ -170,17 +170,17 @@ cmake --build build
 
 يحدد tag الإصدار نسخة حزمة NeverD، بينما يسجّل `BUILDINFO.txt` الـcommit الدقيق لفرع LLVM. وإذا ظل LLVM يبلّغ عن `23.0.0` بينما تغيّر مصدر الفرع، فالخيار الثابت المعتاد هو مراجعة حزمة مثل `neverd-llvm-v23.0.0-r1` (ثم `-r2`) لا `23.0.1`، ما لم تتغير نسخة الترقيع الخاصة بـLLVM نفسه. وجّه `NEVERD_LLVM_PREBUILT_TAG` إلى تلك المراجعة الجديدة.
 
-ولإصلاح الإصدار المتغيّر `neverd-llvm-v23.0.0` في مكانه، شغّل سير عمل `NeverD LLVM Release` من فرع `main` في llvm-project مع تفعيل `overwrite_existing_assets`:
+لنشر المراجعة التالية غير القابلة للتغيير، شغّل سير عمل `NeverD LLVM Release` من فرع `main` في llvm-project مع إبقاء `overwrite_existing_assets` معطلًا:
 
 ```bash
 gh workflow run neverd-release.yml \
   --repo NeverSight/llvm-project \
   --ref main \
-  -f release_tag=neverd-llvm-v23.0.0 \
-  -f overwrite_existing_assets=true
+  -f release_tag=neverd-llvm-v23.0.0-r2 \
+  -f overwrite_existing_assets=false
 ```
 
-يستبدل هذا المخرجات المتطابقة الاسم لكنه لا يحرّك tag الـGit القائم عمدًا. حدِّث ضمن التغيير نفسه البصمات المثبَّتة في `cmake/NeverDLLVMPrebuilt.cmake`: فهذه البصمات، لا الـtag، هي ما يسمّي البناء الذي تتوقعه مراجعة معينة من NeverD، ولذلك يُستبدل أي `~/.cache/neverd-llvm/neverd-llvm-v23.0.0/` قديم عند التكوين التالي، ويوقف أي أرشيف لا يطابق أي بصمة مثبَّتة ذلك التكوين باختلاف في المجموع الاختباري بدل أن يظهر لاحقًا على هيئة ترويسة لم تكن الحزمة الأقدم تحملها. أما tag جديد بالصيغة `-rN` فيتفادى الكتابة في المكان تمامًا. ويرفض سير العمل الاستبدال العَرَضي ما لم يُفعَّل الخيار، ويرفضه كليًا إن وسم GitHub الإصدار بأنه غير قابل للتغيير.
+بعد نجاح سير العمل، حدّث معًا tag الافتراضي وcommit المثبت وبصمات الأرشيفات الثلاثة في `cmake/NeverDLLVMPrebuilt.cmake`. لا تستبدل release موجودًا؛ خيار `overwrite_existing_assets` مخصص للاسترداد القديم فقط.
 
 **المخرجات**
 
