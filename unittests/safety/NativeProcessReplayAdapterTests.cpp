@@ -51,7 +51,11 @@ ProcessReplayPlanCandidateV1 minimalPlan() {
 
 NativeProcessReplayAdapterOptionsV1 options() {
   NativeProcessReplayAdapterOptionsV1 Options;
+#ifdef _WIN32
+  Options.ExecutablePath = R"(C:\authenticated\target)";
+#else
   Options.ExecutablePath = "/authenticated/target";
+#endif
   return Options;
 }
 
