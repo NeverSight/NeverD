@@ -19,9 +19,11 @@ add_neverd_tool(neverd
   neverd_shared
 )
 
-# Internal C++ helpers are ordinary dylib exports on ELF/Mach-O.  Windows does
-# not auto-export component-library symbols from neverd_shared, so link the
-# shared atomic-output implementation's component archive into the CLI there.
-if(WIN32)
+# The CLI uses internal support helpers that are not part of libneverd's C ABI.
+# ELF shared-library links only retain archive objects needed by the library
+# itself, and Windows does not auto-export them.  Link the implementation into
+# the CLI on both platforms.  macOS instead resolves support helpers through
+# the dylib to preserve its single LLVM command-line registry.
+if(NOT APPLE)
   target_link_libraries(neverd PRIVATE NeverDSupport)
 endif()

@@ -11,6 +11,7 @@ SYMBOLIC_CMAKE = ROOT / "lib" / "symbolic" / "CMakeLists.txt"
 SOLVER_CMAKE = ROOT / "lib" / "solver" / "CMakeLists.txt"
 PASS_IR_CMAKE = ROOT / "lib" / "pass" / "ir" / "CMakeLists.txt"
 SDK_CMAKE = ROOT / "lib" / "sdk" / "CMakeLists.txt"
+CLI_CMAKE = ROOT / "tools" / "neverd" / "CMakeLists.txt"
 
 
 def _without_comments(source: str) -> str:
@@ -142,6 +143,17 @@ class ComponentDependencyTests(unittest.TestCase):
         self.assertIn(("NeverDSolver", "PRIVATE"), links)
         self.assertNotIn(("NeverDSolver", "PUBLIC"), links)
         self.assertNotIn(("NeverDSolver", "INTERFACE"), links)
+
+    def test_cli_links_support_archive_except_on_apple(self) -> None:
+        source = _without_comments(CLI_CMAKE.read_text(encoding="utf-8"))
+        self.assertRegex(
+            source,
+            re.compile(
+                r"if\(NOT APPLE\)\s+"
+                r"target_link_libraries\(neverd PRIVATE NeverDSupport\)\s+"
+                r"endif\(\)"
+            ),
+        )
 
 
 if __name__ == "__main__":
