@@ -2899,6 +2899,31 @@ class CapabilityCommandTests(unittest.TestCase):
 
 
 class RepositoryCapabilityTests(unittest.TestCase):
+    def test_native_translation_evidence_matches_ci_host_architectures(self) -> None:
+        document = json.loads(
+            (ROOT / "docs" / "capabilities.json").read_text(encoding="utf-8")
+        )
+        executable_engine = next(
+            row
+            for row in document["capabilities"]
+            if row["id"] == "translation.executable-engine"
+        )
+        portable_filters = {
+            "NativeTranslationSession."
+            "AcceptedCancellationWinsTheSuccessfulCommitLinearizationPoint",
+            "NativeTranslationSession."
+            "ValidatesAResolvedConditionalBranchAgainstBothManifestSuccessors",
+        }
+
+        for evidence in executable_engine["tests"]:
+            expected = (
+                ["darwin", "linux", "windows"]
+                if evidence["filter"] in portable_filters
+                else ["darwin"]
+            )
+            with self.subTest(test_filter=evidence["filter"]):
+                self.assertEqual(evidence["platforms"], expected)
+
     def test_repository_manifest_is_honest_and_executable(self) -> None:
         document = json.loads(
             (ROOT / "docs" / "capabilities.json").read_text(encoding="utf-8")
