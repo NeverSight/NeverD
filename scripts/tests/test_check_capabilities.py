@@ -2761,6 +2761,99 @@ int main(int argc, char **argv) {
             self.assertIsNone(decoy_key)
             self.assertIsNone(decoy_error)
 
+    def test_cmake_44_gtest_launcher_is_replayable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            build = Path(directory)
+            artifact = build / "TargetTests"
+            artifact.touch()
+            launcher = (
+                build
+                / "share"
+                / "cmake-4.4"
+                / "Modules"
+                / "GoogleTest"
+                / "LaunchTest.cmake"
+            )
+            command = [
+                str(build / "bin" / "cmake"),
+                "-D",
+                f"TEST_EXECUTABLE={artifact}",
+                "-D",
+                "TEST_EXECUTOR=",
+                "-D",
+                "TEST_FILTER=Suite.Proof",
+                "-D",
+                "TEST_XML_OUTPUT=",
+                "-D",
+                "TEST_EXTRA_ARGS=",
+                "-P",
+                str(launcher),
+            ]
+            entry = {
+                "command": command,
+                "properties": [
+                    {
+                        "name": "SKIP_REGULAR_EXPRESSION",
+                        "value": [r"\\[  SKIPPED \\]"],
+                    },
+                    {"name": "WORKING_DIRECTORY", "value": str(build)},
+                ],
+            }
+
+            filters = capabilities._ctest_gtest_filters(entry)
+            execution_key, error = capabilities._ctest_gtest_execution_key(
+                entry,
+                build,
+                frozenset({artifact.resolve()}),
+            )
+
+            self.assertEqual(filters, ("Suite.Proof",))
+            self.assertIsNone(error)
+            self.assertIsNotNone(execution_key)
+            self.assertEqual(execution_key[0], artifact.resolve())
+            self.assertEqual(execution_key[2], ())
+
+    def test_cmake_44_gtest_launcher_rejects_extra_execution_layers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            build = Path(directory)
+            artifact = build / "TargetTests"
+            artifact.touch()
+            launcher = build / "GoogleTest" / "LaunchTest.cmake"
+            base_command = [
+                str(build / "cmake"),
+                "-D",
+                f"TEST_EXECUTABLE={artifact}",
+                "-D",
+                "TEST_EXECUTOR=",
+                "-D",
+                "TEST_FILTER=Suite.Proof",
+                "-D",
+                "TEST_XML_OUTPUT=",
+                "-D",
+                "TEST_EXTRA_ARGS=",
+                "-P",
+                str(launcher),
+            ]
+
+            for definition in ("TEST_EXECUTOR=emulator", "TEST_EXTRA_ARGS=--flag"):
+                with self.subTest(definition=definition):
+                    command = list(base_command)
+                    name = definition.split("=", 1)[0] + "="
+                    index = next(
+                        index
+                        for index, argument in enumerate(command)
+                        if argument.startswith(name)
+                    )
+                    command[index] = definition
+                    execution_key, error = capabilities._ctest_gtest_execution_key(
+                        {"command": command, "properties": []},
+                        build,
+                        frozenset({artifact.resolve()}),
+                    )
+
+                    self.assertIsNone(execution_key)
+                    self.assertIn(name.removesuffix("="), error or "")
+
     def test_gtest_list_parser_preserves_parameterized_runtime_names(self) -> None:
         inventory = capabilities.parse_gtest_list_tests(
             "SixFormatMatrix/LowIRConcolicIntegration.\n"

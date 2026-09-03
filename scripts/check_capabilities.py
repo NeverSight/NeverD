@@ -199,6 +199,13 @@ class TestExecutionContext:
     timeout: float
 
 
+@dataclass(frozen=True)
+class GTestCommand:
+    artifact: Path
+    filters: tuple[str, ...]
+    base_arguments: tuple[str, ...]
+
+
 GTestSupport = dict[tuple[str, str, str], dict[str, frozenset[str]]]
 
 
@@ -1936,6 +1943,85 @@ def _ctest_execution_context(
     )
 
 
+def _parse_ctest_gtest_command(
+    entry: dict[str, Any],
+) -> tuple[GTestCommand | None, str | None]:
+    command = entry.get("command")
+    if not isinstance(command, list) or not command or not all(
+        isinstance(argument, str) for argument in command
+    ):
+        return None, "CTest command is invalid"
+
+    def portable_basename(value: str) -> str:
+        return value.replace("\\", "/").rsplit("/", 1)[-1]
+
+    is_cmake_launcher = (
+        len(command) >= 3
+        and command[-2] == "-P"
+        and portable_basename(command[-1]) == "LaunchTest.cmake"
+    )
+    if is_cmake_launcher:
+        if portable_basename(command[0]).lower() not in {"cmake", "cmake.exe"}:
+            return None, "CTest GoogleTest launcher does not use CMake"
+        definition_arguments = command[1:-2]
+        if len(definition_arguments) % 2 != 0:
+            return None, "CTest GoogleTest launcher definitions are malformed"
+        definitions: dict[str, str] = {}
+        for index in range(0, len(definition_arguments), 2):
+            flag = definition_arguments[index]
+            definition = definition_arguments[index + 1]
+            if flag != "-D" or "=" not in definition:
+                return None, "CTest GoogleTest launcher definitions are malformed"
+            name, value = definition.split("=", 1)
+            if name in definitions:
+                return None, f"CTest GoogleTest launcher repeats {name}"
+            definitions[name] = value
+        expected = {
+            "TEST_EXECUTABLE",
+            "TEST_EXECUTOR",
+            "TEST_FILTER",
+            "TEST_XML_OUTPUT",
+            "TEST_EXTRA_ARGS",
+        }
+        if set(definitions) != expected:
+            return None, "CTest GoogleTest launcher definitions are incomplete"
+        if not definitions["TEST_EXECUTABLE"]:
+            return None, "CTest GoogleTest launcher has no TEST_EXECUTABLE"
+        if not definitions["TEST_FILTER"]:
+            return None, "CTest GoogleTest launcher has no TEST_FILTER"
+        for name in ("TEST_EXECUTOR", "TEST_EXTRA_ARGS"):
+            if definitions[name]:
+                return None, f"CTest GoogleTest launcher {name} is not replayable"
+        return (
+            GTestCommand(
+                artifact=Path(definitions["TEST_EXECUTABLE"]),
+                filters=(definitions["TEST_FILTER"],),
+                base_arguments=(),
+            ),
+            None,
+        )
+
+    filters = tuple(
+        argument.removeprefix("--gtest_filter=")
+        for argument in command[1:]
+        if argument.startswith("--gtest_filter=")
+    )
+    base_arguments = tuple(
+        argument
+        for argument in command[1:]
+        if not argument.startswith("--gtest_filter=")
+        and argument != "--gtest_also_run_disabled_tests"
+        and not argument.startswith("--gtest_output=")
+        and not argument.startswith("--gtest_color=")
+    )
+    return GTestCommand(Path(command[0]), filters, base_arguments), None
+
+
+def _ctest_gtest_filters(entry: dict[str, Any]) -> tuple[str, ...]:
+    command, _error = _parse_ctest_gtest_command(entry)
+    return command.filters if command is not None else ()
+
+
 def _ctest_gtest_execution_key(
     entry: dict[str, Any],
     build_directory: Path,
@@ -1946,13 +2032,11 @@ def _ctest_gtest_execution_key(
 ]:
     """Resolve one replayable CTest entry owned by the exact target artifact."""
 
-    command = entry.get("command")
-    if not isinstance(command, list) or not command or not all(
-        isinstance(argument, str) for argument in command
-    ):
-        return None, "CTest command is invalid"
+    command, command_error = _parse_ctest_gtest_command(entry)
+    if command_error is not None or command is None:
+        return None, command_error or "CTest command is invalid"
 
-    raw_artifact = Path(command[0])
+    raw_artifact = command.artifact
     if raw_artifact.is_absolute():
         artifact = raw_artifact.resolve(strict=False)
         # Duplicate GoogleTest names can accumulate labels from an aggregate
@@ -1977,15 +2061,7 @@ def _ctest_gtest_execution_key(
     )
     if artifact not in configured_artifacts:
         return None, None
-    base_arguments = tuple(
-        argument
-        for argument in command[1:]
-        if not argument.startswith("--gtest_filter=")
-        and argument != "--gtest_also_run_disabled_tests"
-        and not argument.startswith("--gtest_output=")
-        and not argument.startswith("--gtest_color=")
-    )
-    return (artifact, context, base_arguments), None
+    return (artifact, context, command.base_arguments), None
 
 
 def _execution_environment(context: TestExecutionContext) -> dict[str, str]:
@@ -2454,11 +2530,7 @@ def audit_configured_evidence(
                 isinstance(argument, str) for argument in entry_command
             ):
                 continue
-            runtime_filters = [
-                argument.removeprefix("--gtest_filter=")
-                for argument in entry_command
-                if argument.startswith("--gtest_filter=")
-            ]
+            runtime_filters = _ctest_gtest_filters(entry)
             if any(
                 fnmatch.fnmatchcase(runtime_filter, test_filter)
                 for runtime_filter in runtime_filters
