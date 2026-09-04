@@ -15,7 +15,7 @@
 #include "SemanticRoundTripFixture.h"
 
 class X64SSELogicMovRT : public SemanticRoundTripFixture,
-                          public ::testing::WithParamInterface<RoundTripTC> {};
+                         public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(X64SSELogicMovRT, Verify) { roundTripX64(GetParam()); }
 
 // clang-format off
@@ -211,15 +211,14 @@ static const std::vector<RoundTripTC> kSSELogicMov = {
    "}\n",
    {10}, "LogicMov", 1, "-msse2"},
 
-  // TODO: remaining SIMD vector-const roundtrip failures — different root cause than AND mask
-  /*{"movaps_copy",
+  {"movaps_copy",
    "typedef float v4sf __attribute__((vector_size(16)));\n"
    "long movaps_copy(long a) {\n"
    "  v4sf va = {(float)(int)a, 2.0f, 3.0f, 4.0f};\n"
    "  v4sf vb = va;\n"
    "  return (long)(int)(vb[0] + vb[1] + vb[2] + vb[3]);\n"
    "}\n",
-   {10}, "LogicMov", 1, "-msse"},*/
+   {10}, "LogicMov", 1, "-msse"},
 
   {"movdqa_copy",
    "typedef int v4si __attribute__((vector_size(16)));\n"
@@ -230,7 +229,7 @@ static const std::vector<RoundTripTC> kSSELogicMov = {
    "}\n",
    {100}, "LogicMov", 1, "-msse2"},
 
-  /*{"psignb_negate",
+  {"psignb_negate",
    "typedef signed char v16qi __attribute__((vector_size(16)));\n"
    "long psignb_negate(long a) {\n"
    "  signed char s = (signed char)a;\n"
@@ -386,7 +385,7 @@ static const std::vector<RoundTripTC> kSSELogicMov = {
    "  for (int i = 0; i < 8; i++) sum += vr[i];\n"
    "  return sum;\n"
    "}\n",
-   {42}, "LogicMov", 1, "-msse4.1"},*/
+   {42}, "LogicMov", 1, "-msse4.1"},
 
 };
 

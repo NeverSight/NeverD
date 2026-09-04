@@ -1,4 +1,5 @@
-//===- ARM32_NEONPerLaneRTTests.cpp - ARM32 NEON per-lane roundtrip -*- C++ -*-===//
+//===- ARM32_NEONPerLaneRTTests.cpp - ARM32 NEON per-lane roundtrip -*- C++
+//-*-===//
 //
 // NeverD Decompiler
 //
@@ -165,9 +166,6 @@ static const std::vector<RoundTripTC> kARM32NEONPerLane = {
    "}\n",
    {100}, "NEONPerLane", 1, "-mfpu=neon"},
 
-  // ARM32 NEON packed FP needs per-lane decomposition (similar to AArch64 bug #28).
-  // Scalar VFP works; packed VADD.F32/VMUL.F32 doesn't yet.
-
   // ===== NEON FP: scalar VFP add =====
   {"neon_vfp_scalar_add",
    "int neon_vfp_scalar_add(int a, int b) {\n"
@@ -179,7 +177,25 @@ static const std::vector<RoundTripTC> kARM32NEONPerLane = {
    "}\n",
    {0x40A00000u, 0x40400000u}, "NEONPerLane"},
 
-  // TODO: packed VADD.F32/VMUL.F32 needs per-lane FP decomposition
+  {"neon_vadd_4f",
+   V4F
+   "int neon_vadd_4f(int a, int b) {\n"
+   "  v4f va = {(float)a, 2.0f, 3.0f, 4.0f};\n"
+   "  v4f vb = {(float)b, 5.0f, 6.0f, 7.0f};\n"
+   "  v4f vr = va + vb;\n"
+   "  return (int)(vr[0] + vr[1] + vr[2] + vr[3]);\n"
+   "}\n",
+   {10, 20}, "NEONPerLane", 1, "-mfpu=neon"},
+
+  {"neon_vmul_4f",
+   V4F
+   "int neon_vmul_4f(int a, int b) {\n"
+   "  v4f va = {(float)a, 2.0f, 3.0f, 4.0f};\n"
+   "  v4f vb = {(float)b, 5.0f, 6.0f, 7.0f};\n"
+   "  v4f vr = va * vb;\n"
+   "  return (int)(vr[0] + vr[1] + vr[2] + vr[3]);\n"
+   "}\n",
+   {3, 4}, "NEONPerLane", 1, "-mfpu=neon"},
 
   {"neon_vfp_scalar_mul",
    "int neon_vfp_scalar_mul(int a, int b) {\n"
