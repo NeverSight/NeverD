@@ -100,9 +100,8 @@ struct EvexIntegerLogicInfo {
   NdOp Operation = NdOp::INT_AND;
 };
 
-bool getEvexIntegerLogicEncoding(unsigned InsnId, uint8_t &Opcode,
-                                 bool &W, bool &AndNot,
-                                 NdOp &Operation) {
+bool getEvexIntegerLogicEncoding(unsigned InsnId, uint8_t &Opcode, bool &W,
+                                 bool &AndNot, NdOp &Operation) {
   AndNot = false;
   switch (InsnId) {
   case X86_INS_VPANDD:
@@ -153,12 +152,12 @@ bool getEvexIntegerLogicEncoding(unsigned InsnId, uint8_t &Opcode,
 }
 
 bool validateEvexIntegerLogic(X86Lifter &L, const cs_insn *Insn,
-                              const cs_x86 &X86,
-                              EvexIntegerLogicInfo &Info) {
+                              const cs_x86 &X86, EvexIntegerLogicInfo &Info) {
   uint8_t Opcode = 0;
   bool W = false;
-  if (!Insn || !getEvexIntegerLogicEncoding(
-                   Insn->id, Opcode, W, Info.AndNot, Info.Operation) ||
+  if (!Insn ||
+      !getEvexIntegerLogicEncoding(Insn->id, Opcode, W, Info.AndNot,
+                                   Info.Operation) ||
       !parseCanonicalEvexEncodingInfo(Insn, X86, L.targetArch(),
                                       Info.Encoding) ||
       (Info.Encoding.P0 & 0x07) != 0x01 ||
@@ -209,15 +208,14 @@ bool validateEvexIntegerLogic(X86Lifter &L, const cs_insn *Insn,
 
   const uint8_t EncodedMask = Info.Encoding.P2 & 7;
   if (Info.MaskOperand) {
-    const RegInfo MaskInfo = mapCapstoneReg(
-        static_cast<x86_reg>(Info.MaskOperand->reg));
+    const RegInfo MaskInfo =
+        mapCapstoneReg(static_cast<x86_reg>(Info.MaskOperand->reg));
     if (!isX86OpmaskOperand(*Info.MaskOperand) ||
         Info.MaskOperand->reg == X86_REG_K0 ||
         Info.MaskOperand->size != Info.MaskSize ||
         EncodedMask !=
             static_cast<uint8_t>(Info.MaskOperand->reg - X86_REG_K0) ||
-        Info.ZeroMask !=
-            static_cast<bool>(Info.MaskOperand->avx_zero_opmask) ||
+        Info.ZeroMask != static_cast<bool>(Info.MaskOperand->avx_zero_opmask) ||
         MaskInfo.Offset == UINT64_C(0xffff) || MaskInfo.Size < Info.MaskSize)
       return false;
   } else if (EncodedMask != 0 || Info.ZeroMask) {
@@ -240,9 +238,9 @@ bool validateEvexIntegerLogic(X86Lifter &L, const cs_insn *Insn,
   if (Info.MemoryForm) {
     const uint16_t TupleSize =
         Info.Broadcast ? Info.ElementSize : Info.VectorSize;
-    return Right.size == TupleSize && validateCanonicalEvexMemoryTail(
-                                          Insn, X86, Info.Encoding, Right,
-                                          TupleSize);
+    return Right.size == TupleSize &&
+           validateCanonicalEvexMemoryTail(Insn, X86, Info.Encoding, Right,
+                                           TupleSize);
   }
   if (!isX86VectorRegisterOfSize(Right, Info.VectorSize) ||
       decodeEvexVectorRMIndex(Info.Encoding.P0, Info.Encoding.ModRM) !=
@@ -283,23 +281,19 @@ struct EvexUnaryIntegerInfo {
 bool getEvexUnaryIntegerSpec(unsigned InsnId, EvexUnaryIntegerSpec &Spec) {
   switch (InsnId) {
   case X86_INS_VPOPCNTB:
-    Spec = {EvexUnaryIntegerOperation::PopulationCount, 0x54, 1, false,
-            false};
+    Spec = {EvexUnaryIntegerOperation::PopulationCount, 0x54, 1, false, false};
     return true;
   case X86_INS_VPOPCNTW:
-    Spec = {EvexUnaryIntegerOperation::PopulationCount, 0x54, 2, true,
-            false};
+    Spec = {EvexUnaryIntegerOperation::PopulationCount, 0x54, 2, true, false};
     return true;
   case X86_INS_VPOPCNTD:
-    Spec = {EvexUnaryIntegerOperation::PopulationCount, 0x55, 4, false,
-            true};
+    Spec = {EvexUnaryIntegerOperation::PopulationCount, 0x55, 4, false, true};
     return true;
   case X86_INS_VPOPCNTQ:
     Spec = {EvexUnaryIntegerOperation::PopulationCount, 0x55, 8, true, true};
     return true;
   case X86_INS_VPLZCNTD:
-    Spec = {EvexUnaryIntegerOperation::LeadingZeroCount, 0x44, 4, false,
-            true};
+    Spec = {EvexUnaryIntegerOperation::LeadingZeroCount, 0x44, 4, false, true};
     return true;
   case X86_INS_VPLZCNTQ:
     Spec = {EvexUnaryIntegerOperation::LeadingZeroCount, 0x44, 8, true, true};
@@ -319,8 +313,7 @@ bool getEvexUnaryIntegerSpec(unsigned InsnId, EvexUnaryIntegerSpec &Spec) {
 }
 
 bool validateEvexUnaryInteger(X86Lifter &L, const cs_insn *Insn,
-                              const cs_x86 &X86,
-                              EvexUnaryIntegerInfo &Info) {
+                              const cs_x86 &X86, EvexUnaryIntegerInfo &Info) {
   if (!Insn || !getEvexUnaryIntegerSpec(Insn->id, Info.Spec) ||
       !parseCanonicalEvexEncodingInfo(Insn, X86, L.targetArch(),
                                       Info.Encoding) ||
@@ -341,8 +334,7 @@ bool validateEvexUnaryInteger(X86Lifter &L, const cs_insn *Insn,
   const cs_x86_op &Destination = X86.operands[0];
   const cs_x86_op &Source = X86.operands[Info.SourceIndex];
   Info.VectorSize = static_cast<uint16_t>(Destination.size);
-  if (Info.VectorSize != 16 && Info.VectorSize != 32 &&
-      Info.VectorSize != 64)
+  if (Info.VectorSize != 16 && Info.VectorSize != 32 && Info.VectorSize != 64)
     return false;
   Info.LaneCount = Info.VectorSize / Info.Spec.ElementSize;
   Info.MaskSize =
@@ -362,8 +354,7 @@ bool validateEvexUnaryInteger(X86Lifter &L, const cs_insn *Insn,
       decodeEvexVectorRegIndex(Info.Encoding.P0, Info.Encoding.ModRM) !=
           x86VectorRegisterIndex(Destination))
     return false;
-  if (L.targetArch() == Arch::X86 &&
-      x86VectorRegisterIndex(Destination) >= 8)
+  if (L.targetArch() == Arch::X86 && x86VectorRegisterIndex(Destination) >= 8)
     return false;
 
   const uint8_t EncodedMask = Info.Encoding.P2 & 7;
@@ -373,8 +364,7 @@ bool validateEvexUnaryInteger(X86Lifter &L, const cs_insn *Insn,
         Info.MaskOperand->size != Info.MaskSize ||
         EncodedMask !=
             static_cast<uint8_t>(Info.MaskOperand->reg - X86_REG_K0) ||
-        Info.ZeroMask !=
-            static_cast<bool>(Info.MaskOperand->avx_zero_opmask))
+        Info.ZeroMask != static_cast<bool>(Info.MaskOperand->avx_zero_opmask))
       return false;
     const RegInfo MaskInfo =
         mapCapstoneReg(static_cast<x86_reg>(Info.MaskOperand->reg));
@@ -419,9 +409,8 @@ NdVar evexUnaryActiveMask(const EvexUnaryIntegerInfo &Info) {
     return NdVar::reg(MaskInfo.Offset, Info.MaskSize);
   }
   const uint64_t AllActive =
-      Info.LaneCount == 64
-          ? UINT64_MAX
-          : ((UINT64_C(1) << Info.LaneCount) - UINT64_C(1));
+      Info.LaneCount == 64 ? UINT64_MAX
+                           : ((UINT64_C(1) << Info.LaneCount) - UINT64_C(1));
   return NdVar::cst(AllActive, Info.MaskSize);
 }
 
@@ -465,8 +454,10 @@ bool liftEvexUnaryInteger(X86Lifter &L, X86Lifter::LiftState &S,
   NdVar Raw = S.makeTemp(0);
   for (unsigned Lane = 0; Lane < Info.LaneCount; ++Lane) {
     NdVar InputLane = S.makeTemp(Info.Spec.ElementSize);
-    S.emit(NdOp::SUBBYTES, InputLane,
-           {Source, NdVar::cst(Lane * Info.Spec.ElementSize, 4)});
+    S.emit(
+        NdOp::SUBBYTES, InputLane,
+        {Source,
+         NdVar::cst(static_cast<uint64_t>(Lane) * Info.Spec.ElementSize, 4)});
     NdVar ResultLane;
     switch (Info.Spec.Operation) {
     case EvexUnaryIntegerOperation::PopulationCount:
@@ -485,8 +476,7 @@ bool liftEvexUnaryInteger(X86Lifter &L, X86Lifter::LiftState &S,
       S.emit(NdOp::INT_SUB, Negated,
              {NdVar::cst(0, Info.Spec.ElementSize), InputLane});
       ResultLane = S.makeTemp(Info.Spec.ElementSize);
-      S.emit(NdOp::SELECT, ResultLane,
-             {IsNegative, Negated, InputLane});
+      S.emit(NdOp::SELECT, ResultLane, {IsNegative, Negated, InputLane});
       break;
     }
     case EvexUnaryIntegerOperation::Conflict: {
@@ -494,7 +484,9 @@ bool liftEvexUnaryInteger(X86Lifter &L, X86Lifter::LiftState &S,
       for (unsigned Prior = 0; Prior < Lane; ++Prior) {
         NdVar Previous = S.makeTemp(Info.Spec.ElementSize);
         S.emit(NdOp::SUBBYTES, Previous,
-               {Source, NdVar::cst(Prior * Info.Spec.ElementSize, 4)});
+               {Source,
+                NdVar::cst(static_cast<uint64_t>(Prior) * Info.Spec.ElementSize,
+                           4)});
         NdVar Equal = S.makeTemp(1);
         S.emit(NdOp::INT_EQUAL, Equal, {InputLane, Previous});
         NdVar Bit = S.makeTemp(Info.Spec.ElementSize);
@@ -523,8 +515,8 @@ bool liftEvexUnaryInteger(X86Lifter &L, X86Lifter::LiftState &S,
   }
 
   if (Info.MaskOperand)
-    return emitMaskedVectorResult(L, S, X86.operands[0], *Info.MaskOperand,
-                                  Raw, Info.Spec.ElementSize);
+    return emitMaskedVectorResult(L, S, X86.operands[0], *Info.MaskOperand, Raw,
+                                  Info.Spec.ElementSize);
   S.emit(NdOp::COPY, L.operandWrite(X86.operands[0]), {Raw});
   return true;
 }
@@ -584,8 +576,8 @@ bool getEvexRotateSpec(unsigned InsnId, EvexRotateSpec &Spec) {
   }
 }
 
-bool validateEvexRotate(X86Lifter &L, const cs_insn *Insn,
-                        const cs_x86 &X86, EvexRotateInfo &Info) {
+bool validateEvexRotate(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
+                        EvexRotateInfo &Info) {
   if (!Insn || !getEvexRotateSpec(Insn->id, Info.Spec) ||
       !parseCanonicalEvexEncodingInfo(Insn, X86, L.targetArch(),
                                       Info.Encoding) ||
@@ -596,8 +588,7 @@ bool validateEvexRotate(X86Lifter &L, const cs_insn *Insn,
       X86.avx_rm != X86_AVX_RM_INVALID)
     return false;
 
-  const bool HasMask =
-      X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
+  const bool HasMask = X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
   const unsigned ExpectedOperands =
       Info.Spec.Immediate ? (HasMask ? 4 : 3) : (HasMask ? 4 : 3);
   if (X86.op_count != ExpectedOperands)
@@ -608,11 +599,9 @@ bool validateEvexRotate(X86Lifter &L, const cs_insn *Insn,
   const cs_x86_op &Destination = X86.operands[0];
   const cs_x86_op &Value = X86.operands[Info.ValueIndex];
   const cs_x86_op &TailOperand = X86.operands[Info.CountIndex];
-  const cs_x86_op &MemoryOrRegister =
-      Info.Spec.Immediate ? Value : TailOperand;
+  const cs_x86_op &MemoryOrRegister = Info.Spec.Immediate ? Value : TailOperand;
   Info.VectorSize = static_cast<uint16_t>(Destination.size);
-  if (Info.VectorSize != 16 && Info.VectorSize != 32 &&
-      Info.VectorSize != 64)
+  if (Info.VectorSize != 16 && Info.VectorSize != 32 && Info.VectorSize != 64)
     return false;
   Info.LaneCount = Info.VectorSize / Info.Spec.ElementSize;
   Info.MaskSize =
@@ -639,8 +628,7 @@ bool validateEvexRotate(X86Lifter &L, const cs_insn *Insn,
         TailOperand.type != X86_OP_IMM || TailOperand.size != 1 ||
         X86.encoding.imm_size != 1 ||
         X86.encoding.imm_offset != Insn->size - 1 ||
-        Insn->bytes[Insn->size - 1] !=
-            static_cast<uint8_t>(TailOperand.imm))
+        Insn->bytes[Insn->size - 1] != static_cast<uint8_t>(TailOperand.imm))
       return false;
   } else {
     if (!isX86VectorRegisterOfSize(Value, Info.VectorSize) ||
@@ -662,8 +650,7 @@ bool validateEvexRotate(X86Lifter &L, const cs_insn *Insn,
         Info.MaskOperand->size != Info.MaskSize ||
         EncodedMask !=
             static_cast<uint8_t>(Info.MaskOperand->reg - X86_REG_K0) ||
-        Info.ZeroMask !=
-            static_cast<bool>(Info.MaskOperand->avx_zero_opmask))
+        Info.ZeroMask != static_cast<bool>(Info.MaskOperand->avx_zero_opmask))
       return false;
     const RegInfo MaskInfo =
         mapCapstoneReg(static_cast<x86_reg>(Info.MaskOperand->reg));
@@ -705,8 +692,8 @@ bool validateEvexRotate(X86Lifter &L, const cs_insn *Insn,
          x86VectorRegisterIndex(MemoryOrRegister) < 8;
 }
 
-bool liftEvexRotate(X86Lifter &L, X86Lifter::LiftState &S,
-                    const cs_insn *Insn, const cs_x86 &X86) {
+bool liftEvexRotate(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
+                    const cs_x86 &X86) {
   EvexRotateInfo Info;
   if (!validateEvexRotate(L, Insn, X86, Info))
     return false;
@@ -717,8 +704,7 @@ bool liftEvexRotate(X86Lifter &L, X86Lifter::LiftState &S,
         mapCapstoneReg(static_cast<x86_reg>(Info.MaskOperand->reg));
     ActiveMask = NdVar::reg(MaskInfo.Offset, Info.MaskSize);
   } else {
-    const uint64_t AllActive =
-        (UINT64_C(1) << Info.LaneCount) - UINT64_C(1);
+    const uint64_t AllActive = (UINT64_C(1) << Info.LaneCount) - UINT64_C(1);
     ActiveMask = NdVar::cst(AllActive, Info.MaskSize);
   }
 
@@ -740,8 +726,7 @@ bool liftEvexRotate(X86Lifter &L, X86Lifter::LiftState &S,
                  ? emitEvexMaskedMemoryLoad(
                        S, CountOperand, ActiveMask, Info.VectorSize,
                        Info.Spec.ElementSize,
-                       Info.Broadcast ? Info.Spec.ElementSize
-                                      : Info.VectorSize,
+                       Info.Broadcast ? Info.Spec.ElementSize : Info.VectorSize,
                        Info.Broadcast)
                  : L.operandRead(S, CountOperand);
   }
@@ -757,9 +742,9 @@ bool liftEvexRotate(X86Lifter &L, X86Lifter::LiftState &S,
     S.emit(NdOp::SUBBYTES, InputLane, {Value, NdVar::cst(Offset, 4)});
     NdVar MaskedCount;
     if (Info.Spec.Immediate) {
-      MaskedCount = NdVar::cst(
-          static_cast<uint64_t>(CountOperand.imm) & (LaneBits - 1),
-          Info.Spec.ElementSize);
+      MaskedCount =
+          NdVar::cst(static_cast<uint64_t>(CountOperand.imm) & (LaneBits - 1),
+                     Info.Spec.ElementSize);
     } else {
       NdVar CountLane = S.makeTemp(Info.Spec.ElementSize);
       S.emit(NdOp::SUBBYTES, CountLane, {Counts, NdVar::cst(Offset, 4)});
@@ -791,8 +776,8 @@ bool liftEvexRotate(X86Lifter &L, X86Lifter::LiftState &S,
   }
 
   if (Info.MaskOperand)
-    return emitMaskedVectorResult(L, S, X86.operands[0], *Info.MaskOperand,
-                                  Raw, Info.Spec.ElementSize);
+    return emitMaskedVectorResult(L, S, X86.operands[0], *Info.MaskOperand, Raw,
+                                  Info.Spec.ElementSize);
   S.emit(NdOp::COPY, L.operandWrite(X86.operands[0]), {Raw});
   return true;
 }
@@ -819,8 +804,7 @@ struct EvexVariableShiftInfo {
   bool ZeroMask = false;
 };
 
-bool getEvexVariableShiftSpec(unsigned InsnId,
-                              EvexVariableShiftSpec &Spec) {
+bool getEvexVariableShiftSpec(unsigned InsnId, EvexVariableShiftSpec &Spec) {
   switch (InsnId) {
   case X86_INS_VPSLLVW:
     Spec = {0x12, 2, true, false, NdOp::INT_LEFT};
@@ -855,8 +839,7 @@ bool getEvexVariableShiftSpec(unsigned InsnId,
 }
 
 bool validateEvexVariableShift(X86Lifter &L, const cs_insn *Insn,
-                               const cs_x86 &X86,
-                               EvexVariableShiftInfo &Info) {
+                               const cs_x86 &X86, EvexVariableShiftInfo &Info) {
   if (!Insn || !getEvexVariableShiftSpec(Insn->id, Info.Spec) ||
       !parseCanonicalEvexEncodingInfo(Insn, X86, L.targetArch(),
                                       Info.Encoding) ||
@@ -868,8 +851,7 @@ bool validateEvexVariableShift(X86Lifter &L, const cs_insn *Insn,
       X86.avx_sae || X86.avx_rm != X86_AVX_RM_INVALID)
     return false;
 
-  const bool HasMask =
-      X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
+  const bool HasMask = X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
   if (X86.op_count != (HasMask ? 4 : 3))
     return false;
   Info.MaskOperand = HasMask ? &X86.operands[1] : nullptr;
@@ -879,8 +861,7 @@ bool validateEvexVariableShift(X86Lifter &L, const cs_insn *Insn,
   const cs_x86_op &Value = X86.operands[Info.ValueIndex];
   const cs_x86_op &Count = X86.operands[Info.CountIndex];
   Info.VectorSize = static_cast<uint16_t>(Destination.size);
-  if (Info.VectorSize != 16 && Info.VectorSize != 32 &&
-      Info.VectorSize != 64)
+  if (Info.VectorSize != 16 && Info.VectorSize != 32 && Info.VectorSize != 64)
     return false;
   Info.LaneCount = Info.VectorSize / Info.Spec.ElementSize;
   Info.MaskSize =
@@ -914,8 +895,7 @@ bool validateEvexVariableShift(X86Lifter &L, const cs_insn *Insn,
         Info.MaskOperand->size != Info.MaskSize ||
         EncodedMask !=
             static_cast<uint8_t>(Info.MaskOperand->reg - X86_REG_K0) ||
-        Info.ZeroMask !=
-            static_cast<bool>(Info.MaskOperand->avx_zero_opmask))
+        Info.ZeroMask != static_cast<bool>(Info.MaskOperand->avx_zero_opmask))
       return false;
     const RegInfo MaskInfo =
         mapCapstoneReg(static_cast<x86_reg>(Info.MaskOperand->reg));
@@ -965,20 +945,19 @@ bool liftEvexVariableShift(X86Lifter &L, X86Lifter::LiftState &S,
         mapCapstoneReg(static_cast<x86_reg>(Info.MaskOperand->reg));
     ActiveMask = NdVar::reg(MaskInfo.Offset, Info.MaskSize);
   } else {
-    const uint64_t AllActive =
-        (UINT64_C(1) << Info.LaneCount) - UINT64_C(1);
+    const uint64_t AllActive = (UINT64_C(1) << Info.LaneCount) - UINT64_C(1);
     ActiveMask = NdVar::cst(AllActive, Info.MaskSize);
   }
   const cs_x86_op &CountOperand = X86.operands[Info.CountIndex];
   const NdVar Value = L.operandRead(S, X86.operands[Info.ValueIndex]);
-  const NdVar Counts = Info.MemoryForm
-                           ? emitEvexMaskedMemoryLoad(
-                                 S, CountOperand, ActiveMask, Info.VectorSize,
-                                 Info.Spec.ElementSize,
-                                 Info.Broadcast ? Info.Spec.ElementSize
-                                                : Info.VectorSize,
-                                 Info.Broadcast)
-                           : L.operandRead(S, CountOperand);
+  const NdVar Counts =
+      Info.MemoryForm
+          ? emitEvexMaskedMemoryLoad(S, CountOperand, ActiveMask,
+                                     Info.VectorSize, Info.Spec.ElementSize,
+                                     Info.Broadcast ? Info.Spec.ElementSize
+                                                    : Info.VectorSize,
+                                     Info.Broadcast)
+          : L.operandRead(S, CountOperand);
   if (Value.Size != Info.VectorSize || Counts.Size != Info.VectorSize)
     return false;
 
@@ -1019,8 +998,8 @@ bool liftEvexVariableShift(X86Lifter &L, X86Lifter::LiftState &S,
   }
 
   if (Info.MaskOperand)
-    return emitMaskedVectorResult(L, S, X86.operands[0], *Info.MaskOperand,
-                                  Raw, Info.Spec.ElementSize);
+    return emitMaskedVectorResult(L, S, X86.operands[0], *Info.MaskOperand, Raw,
+                                  Info.Spec.ElementSize);
   S.emit(NdOp::COPY, L.operandWrite(X86.operands[0]), {Raw});
   return true;
 }
@@ -1085,8 +1064,7 @@ bool getEvexUniformShiftSpec(unsigned InsnId, EvexUniformShiftSpec &Spec) {
 }
 
 bool validateEvexUniformShift(X86Lifter &L, const cs_insn *Insn,
-                              const cs_x86 &X86,
-                              EvexUniformShiftInfo &Info) {
+                              const cs_x86 &X86, EvexUniformShiftInfo &Info) {
   if (!Insn || !getEvexUniformShiftSpec(Insn->id, Info.Spec) ||
       !parseCanonicalEvexEncodingInfo(Insn, X86, L.targetArch(),
                                       Info.Encoding) ||
@@ -1096,8 +1074,7 @@ bool validateEvexUniformShift(X86Lifter &L, const cs_insn *Insn,
       X86.avx_sae || X86.avx_rm != X86_AVX_RM_INVALID)
     return false;
 
-  const bool HasMask =
-      X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
+  const bool HasMask = X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
   if (X86.op_count != (HasMask ? 4 : 3))
     return false;
   Info.MaskOperand = HasMask ? &X86.operands[1] : nullptr;
@@ -1114,15 +1091,14 @@ bool validateEvexUniformShift(X86Lifter &L, const cs_insn *Insn,
     return false;
 
   Info.VectorSize = static_cast<uint16_t>(Destination.size);
-  if (Info.VectorSize != 16 && Info.VectorSize != 32 &&
-      Info.VectorSize != 64)
+  if (Info.VectorSize != 16 && Info.VectorSize != 32 && Info.VectorSize != 64)
     return false;
   Info.LaneCount = Info.VectorSize / Info.Spec.ElementSize;
   Info.MaskSize =
       static_cast<uint16_t>(std::max(1u, (Info.LaneCount + 7u) / 8u));
   Info.MemoryForm = MemoryOrRegister.type == X86_OP_MEM;
-  Info.Broadcast = Info.Immediate && Info.MemoryForm &&
-                   (Info.Encoding.P2 & 0x10) != 0;
+  Info.Broadcast =
+      Info.Immediate && Info.MemoryForm && (Info.Encoding.P2 & 0x10) != 0;
   Info.ZeroMask = (Info.Encoding.P2 & 0x80) != 0;
 
   const uint8_t EncodedLength = Info.Encoding.P2 & 0x60;
@@ -1166,8 +1142,7 @@ bool validateEvexUniformShift(X86Lifter &L, const cs_insn *Insn,
         Info.MaskOperand->size != Info.MaskSize ||
         EncodedMask !=
             static_cast<uint8_t>(Info.MaskOperand->reg - X86_REG_K0) ||
-        Info.ZeroMask !=
-            static_cast<bool>(Info.MaskOperand->avx_zero_opmask))
+        Info.ZeroMask != static_cast<bool>(Info.MaskOperand->avx_zero_opmask))
       return false;
     const RegInfo MaskInfo =
         mapCapstoneReg(static_cast<x86_reg>(Info.MaskOperand->reg));
@@ -1224,8 +1199,7 @@ bool liftEvexUniformShift(X86Lifter &L, X86Lifter::LiftState &S,
         mapCapstoneReg(static_cast<x86_reg>(Info.MaskOperand->reg));
     ActiveMask = NdVar::reg(MaskInfo.Offset, Info.MaskSize);
   } else {
-    const uint64_t AllActive =
-        (UINT64_C(1) << Info.LaneCount) - UINT64_C(1);
+    const uint64_t AllActive = (UINT64_C(1) << Info.LaneCount) - UINT64_C(1);
     ActiveMask = NdVar::cst(AllActive, Info.MaskSize);
   }
 
@@ -1250,8 +1224,7 @@ bool liftEvexUniformShift(X86Lifter &L, X86Lifter::LiftState &S,
     if (CountVector.Size != 16)
       return false;
     RawCount = S.makeTemp(8);
-    S.emit(NdOp::SUBBYTES, RawCount,
-           {CountVector, NdVar::cst(0, 4)});
+    S.emit(NdOp::SUBBYTES, RawCount, {CountVector, NdVar::cst(0, 4)});
   }
   if (Value.Size != Info.VectorSize || RawCount.Size != 8)
     return false;
@@ -1261,8 +1234,7 @@ bool liftEvexUniformShift(X86Lifter &L, X86Lifter::LiftState &S,
   NdVar InRange = S.makeTemp(1);
   S.emit(NdOp::INT_LESS, InRange, {RawCount, NdVar::cst(LaneBits, 8)});
   NdVar LaneCountValue = S.makeTemp(Info.Spec.ElementSize);
-  S.emit(NdOp::SUBBYTES, LaneCountValue,
-         {RawCount, NdVar::cst(0, 4)});
+  S.emit(NdOp::SUBBYTES, LaneCountValue, {RawCount, NdVar::cst(0, 4)});
   if (Arithmetic) {
     NdVar Clamped = S.makeTemp(Info.Spec.ElementSize);
     S.emit(NdOp::SELECT, Clamped,
@@ -1274,8 +1246,10 @@ bool liftEvexUniformShift(X86Lifter &L, X86Lifter::LiftState &S,
   NdVar Raw = S.makeTemp(0);
   for (unsigned Lane = 0; Lane < Info.LaneCount; ++Lane) {
     NdVar InputLane = S.makeTemp(Info.Spec.ElementSize);
-    S.emit(NdOp::SUBBYTES, InputLane,
-           {Value, NdVar::cst(Lane * Info.Spec.ElementSize, 4)});
+    S.emit(
+        NdOp::SUBBYTES, InputLane,
+        {Value,
+         NdVar::cst(static_cast<uint64_t>(Lane) * Info.Spec.ElementSize, 4)});
     NdVar Shifted = S.makeTemp(Info.Spec.ElementSize);
     S.emit(Info.Spec.Operation, Shifted, {InputLane, LaneCountValue});
     NdVar ResultLane = Shifted;
@@ -1294,8 +1268,8 @@ bool liftEvexUniformShift(X86Lifter &L, X86Lifter::LiftState &S,
   }
 
   if (Info.MaskOperand)
-    return emitMaskedVectorResult(L, S, X86.operands[0], *Info.MaskOperand,
-                                  Raw, Info.Spec.ElementSize);
+    return emitMaskedVectorResult(L, S, X86.operands[0], *Info.MaskOperand, Raw,
+                                  Info.Spec.ElementSize);
   S.emit(NdOp::COPY, L.operandWrite(X86.operands[0]), {Raw});
   return true;
 }
@@ -1332,8 +1306,7 @@ struct EvexPackedMultiplyInfo {
   bool ZeroMask = false;
 };
 
-bool getEvexPackedMultiplySpec(unsigned InsnId,
-                               EvexPackedMultiplySpec &Spec) {
+bool getEvexPackedMultiplySpec(unsigned InsnId, EvexPackedMultiplySpec &Spec) {
   switch (InsnId) {
   case X86_INS_VPMULLW:
     Spec = {EvexPackedMultiplyOperation::Low, 1, 0xd5, 2, 2, false, false};
@@ -1345,20 +1318,25 @@ bool getEvexPackedMultiplySpec(unsigned InsnId,
     Spec = {EvexPackedMultiplyOperation::Low, 2, 0x40, 8, 8, true, true};
     return true;
   case X86_INS_VPMULHW:
-    Spec = {EvexPackedMultiplyOperation::SignedHigh, 1, 0xe5, 2, 2, false,
-            false};
+    Spec = {
+        EvexPackedMultiplyOperation::SignedHigh, 1, 0xe5, 2, 2, false, false};
     return true;
   case X86_INS_VPMULHUW:
-    Spec = {EvexPackedMultiplyOperation::UnsignedHigh, 1, 0xe4, 2, 2,
-            false, false};
+    Spec = {
+        EvexPackedMultiplyOperation::UnsignedHigh, 1, 0xe4, 2, 2, false, false};
     return true;
   case X86_INS_VPMULDQ:
-    Spec = {EvexPackedMultiplyOperation::SignedWidening, 2, 0x28, 8, 4,
-            true, true};
+    Spec = {
+        EvexPackedMultiplyOperation::SignedWidening, 2, 0x28, 8, 4, true, true};
     return true;
   case X86_INS_VPMULUDQ:
-    Spec = {EvexPackedMultiplyOperation::UnsignedWidening, 1, 0xf4, 8, 4,
-            true, true};
+    Spec = {EvexPackedMultiplyOperation::UnsignedWidening,
+            1,
+            0xf4,
+            8,
+            4,
+            true,
+            true};
     return true;
   default:
     return false;
@@ -1379,8 +1357,7 @@ bool validateEvexPackedMultiply(X86Lifter &L, const cs_insn *Insn,
       X86.avx_sae || X86.avx_rm != X86_AVX_RM_INVALID)
     return false;
 
-  const bool HasMask =
-      X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
+  const bool HasMask = X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
   if (X86.op_count != (HasMask ? 4 : 3))
     return false;
   Info.MaskOperand = HasMask ? &X86.operands[1] : nullptr;
@@ -1390,8 +1367,7 @@ bool validateEvexPackedMultiply(X86Lifter &L, const cs_insn *Insn,
   const cs_x86_op &Left = X86.operands[Info.LeftIndex];
   const cs_x86_op &Right = X86.operands[Info.RightIndex];
   Info.VectorSize = static_cast<uint16_t>(Destination.size);
-  if (Info.VectorSize != 16 && Info.VectorSize != 32 &&
-      Info.VectorSize != 64)
+  if (Info.VectorSize != 16 && Info.VectorSize != 32 && Info.VectorSize != 64)
     return false;
   Info.LaneCount = Info.VectorSize / Info.Spec.OutputElementSize;
   Info.MaskSize =
@@ -1425,8 +1401,7 @@ bool validateEvexPackedMultiply(X86Lifter &L, const cs_insn *Insn,
         Info.MaskOperand->size != Info.MaskSize ||
         EncodedMask !=
             static_cast<uint8_t>(Info.MaskOperand->reg - X86_REG_K0) ||
-        Info.ZeroMask !=
-            static_cast<bool>(Info.MaskOperand->avx_zero_opmask))
+        Info.ZeroMask != static_cast<bool>(Info.MaskOperand->avx_zero_opmask))
       return false;
     const RegInfo MaskInfo =
         mapCapstoneReg(static_cast<x86_reg>(Info.MaskOperand->reg));
@@ -1476,20 +1451,19 @@ bool liftEvexPackedMultiply(X86Lifter &L, X86Lifter::LiftState &S,
         mapCapstoneReg(static_cast<x86_reg>(Info.MaskOperand->reg));
     ActiveMask = NdVar::reg(MaskInfo.Offset, Info.MaskSize);
   } else {
-    const uint64_t AllActive =
-        (UINT64_C(1) << Info.LaneCount) - UINT64_C(1);
+    const uint64_t AllActive = (UINT64_C(1) << Info.LaneCount) - UINT64_C(1);
     ActiveMask = NdVar::cst(AllActive, Info.MaskSize);
   }
   const NdVar Left = L.operandRead(S, X86.operands[Info.LeftIndex]);
   const cs_x86_op &RightOperand = X86.operands[Info.RightIndex];
-  const NdVar Right = Info.MemoryForm
-                          ? emitEvexMaskedMemoryLoad(
-                                S, RightOperand, ActiveMask, Info.VectorSize,
-                                Info.Spec.OutputElementSize,
-                                Info.Broadcast ? Info.Spec.OutputElementSize
-                                               : Info.VectorSize,
-                                Info.Broadcast)
-                          : L.operandRead(S, RightOperand);
+  const NdVar Right =
+      Info.MemoryForm
+          ? emitEvexMaskedMemoryLoad(
+                S, RightOperand, ActiveMask, Info.VectorSize,
+                Info.Spec.OutputElementSize,
+                Info.Broadcast ? Info.Spec.OutputElementSize : Info.VectorSize,
+                Info.Broadcast)
+          : L.operandRead(S, RightOperand);
   if (Left.Size != Info.VectorSize || Right.Size != Info.VectorSize)
     return false;
 
@@ -1515,8 +1489,7 @@ bool liftEvexPackedMultiply(X86Lifter &L, X86Lifter::LiftState &S,
       NdVar WideLeft = S.makeTemp(WideSize);
       NdVar WideRight = S.makeTemp(WideSize);
       S.emit(Signed ? NdOp::INT_SEXT : NdOp::INT_ZEXT, WideLeft, {LeftLane});
-      S.emit(Signed ? NdOp::INT_SEXT : NdOp::INT_ZEXT, WideRight,
-             {RightLane});
+      S.emit(Signed ? NdOp::INT_SEXT : NdOp::INT_ZEXT, WideRight, {RightLane});
       NdVar Product = S.makeTemp(WideSize);
       S.emit(NdOp::INT_MULT, Product, {WideLeft, WideRight});
       ResultLane = S.makeTemp(Info.Spec.OutputElementSize);
@@ -1526,13 +1499,12 @@ bool liftEvexPackedMultiply(X86Lifter &L, X86Lifter::LiftState &S,
     }
     case EvexPackedMultiplyOperation::SignedWidening:
     case EvexPackedMultiplyOperation::UnsignedWidening: {
-      const bool Signed = Info.Spec.Operation ==
-                          EvexPackedMultiplyOperation::SignedWidening;
+      const bool Signed =
+          Info.Spec.Operation == EvexPackedMultiplyOperation::SignedWidening;
       NdVar WideLeft = S.makeTemp(Info.Spec.OutputElementSize);
       NdVar WideRight = S.makeTemp(Info.Spec.OutputElementSize);
       S.emit(Signed ? NdOp::INT_SEXT : NdOp::INT_ZEXT, WideLeft, {LeftLane});
-      S.emit(Signed ? NdOp::INT_SEXT : NdOp::INT_ZEXT, WideRight,
-             {RightLane});
+      S.emit(Signed ? NdOp::INT_SEXT : NdOp::INT_ZEXT, WideRight, {RightLane});
       ResultLane = S.makeTemp(Info.Spec.OutputElementSize);
       S.emit(NdOp::INT_MULT, ResultLane, {WideLeft, WideRight});
       break;
@@ -1548,17 +1520,19 @@ bool liftEvexPackedMultiply(X86Lifter &L, X86Lifter::LiftState &S,
   }
 
   if (Info.MaskOperand)
-    return emitMaskedVectorResult(L, S, X86.operands[0], *Info.MaskOperand,
-                                  Raw, Info.Spec.OutputElementSize);
+    return emitMaskedVectorResult(L, S, X86.operands[0], *Info.MaskOperand, Raw,
+                                  Info.Spec.OutputElementSize);
   S.emit(NdOp::COPY, L.operandWrite(X86.operands[0]), {Raw});
   return true;
 }
 
-bool hasCanonicalTernaryLogicEncoding(
-    const cs_insn *Insn, const cs_x86 &X86, Arch TargetArch,
-    const cs_x86_op &SecondSource, const cs_x86_op &Immediate,
-    uint16_t VectorSize, uint16_t ElementSize, bool W,
-    CanonicalEvexEncodingInfo &Encoding) {
+bool hasCanonicalTernaryLogicEncoding(const cs_insn *Insn, const cs_x86 &X86,
+                                      Arch TargetArch,
+                                      const cs_x86_op &SecondSource,
+                                      const cs_x86_op &Immediate,
+                                      uint16_t VectorSize, uint16_t ElementSize,
+                                      bool W,
+                                      CanonicalEvexEncodingInfo &Encoding) {
   if (!parseCanonicalEvexEncodingInfo(Insn, X86, TargetArch, Encoding))
     return false;
 
@@ -1569,8 +1543,7 @@ bool hasCanonicalTernaryLogicEncoding(
   if ((Encoding.P0 & 0x07) != 0x03 ||
       ((Encoding.P1 | 0x04) & 0x87) !=
           static_cast<uint8_t>((W ? 0x80 : 0) | 0x05) ||
-      Encoding.Opcode != 0x25 ||
-      (Encoding.P2 & 0x60) != ExpectedLength ||
+      Encoding.Opcode != 0x25 || (Encoding.P2 & 0x60) != ExpectedLength ||
       (Encoding.P2 & 0x60) == 0x60 ||
       (!MemoryForm && (Encoding.P2 & 0x10) != 0) || X86.avx_sae ||
       X86.avx_rm != X86_AVX_RM_INVALID || Immediate.type != X86_OP_IMM ||
@@ -1613,8 +1586,7 @@ bool hasCanonicalMaskConversionEncoding(
   const bool SmallElement = ElementSize == 1 || ElementSize == 2;
   const uint8_t ExpectedOpcode = static_cast<uint8_t>(
       (SmallElement ? 0x28 : 0x38) + (MaskToVector ? 0 : 1));
-  if (Encoding.Opcode != ExpectedOpcode ||
-      (Encoding.ModRM & 0xc0) != 0xc0 ||
+  if (Encoding.Opcode != ExpectedOpcode || (Encoding.ModRM & 0xc0) != 0xc0 ||
       !validateCanonicalEvexRegisterTail(Insn, X86, Encoding))
     return false;
 
@@ -1624,16 +1596,16 @@ bool hasCanonicalMaskConversionEncoding(
                x86VectorRegisterIndex(VectorOperand) &&
            (Encoding.ModRM & 7) == MaskOperand.reg - X86_REG_K0;
   return (Encoding.P0 & 0x90) == 0x90 &&
-         ((Encoding.ModRM >> 3) & 7) ==
-             MaskOperand.reg - X86_REG_K0 &&
+         ((Encoding.ModRM >> 3) & 7) == MaskOperand.reg - X86_REG_K0 &&
          decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) ==
              x86VectorRegisterIndex(VectorOperand);
 }
 
-bool hasCanonicalMaskBroadcastEncoding(
-    const cs_insn *Insn, const cs_x86 &X86, Arch TargetArch,
-    const cs_x86_op &Destination, const cs_x86_op &Source,
-    uint16_t VectorSize, bool WordSource) {
+bool hasCanonicalMaskBroadcastEncoding(const cs_insn *Insn, const cs_x86 &X86,
+                                       Arch TargetArch,
+                                       const cs_x86_op &Destination,
+                                       const cs_x86_op &Source,
+                                       uint16_t VectorSize, bool WordSource) {
   CanonicalEvexEncodingInfo Encoding;
   if (!parseCanonicalEvexEncodingInfo(Insn, X86, TargetArch, Encoding) ||
       (Encoding.P0 & 0x07) != 0x02 || (Encoding.P0 & 0x60) != 0x60 ||
@@ -1724,8 +1696,7 @@ bool getEvexDoubleShiftSpec(unsigned InsnId, EvexDoubleShiftSpec &Spec) {
 }
 
 bool validateEvexDoubleShift(X86Lifter &L, const cs_insn *Insn,
-                             const cs_x86 &X86,
-                             EvexDoubleShiftInfo &Info) {
+                             const cs_x86 &X86, EvexDoubleShiftInfo &Info) {
   if (!Insn || !getEvexDoubleShiftSpec(Insn->id, Info.Spec) ||
       !parseCanonicalEvexEncodingInfo(Insn, X86, L.targetArch(),
                                       Info.Encoding) ||
@@ -1735,11 +1706,9 @@ bool validateEvexDoubleShift(X86Lifter &L, const cs_insn *Insn,
       X86.avx_rm != X86_AVX_RM_INVALID)
     return false;
 
-  const bool HasMask =
-      X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
-  const unsigned ExpectedOperands = Info.Spec.Variable
-                                        ? (HasMask ? 4 : 3)
-                                        : (HasMask ? 5 : 4);
+  const bool HasMask = X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
+  const unsigned ExpectedOperands =
+      Info.Spec.Variable ? (HasMask ? 4 : 3) : (HasMask ? 5 : 4);
   if (X86.op_count != ExpectedOperands)
     return false;
   Info.MaskOperand = HasMask ? &X86.operands[1] : nullptr;
@@ -1750,8 +1719,7 @@ bool validateEvexDoubleShift(X86Lifter &L, const cs_insn *Insn,
   const cs_x86_op &FirstSource = X86.operands[Info.FirstSourceIndex];
   const cs_x86_op &SecondSource = X86.operands[Info.SecondSourceIndex];
   Info.VectorSize = static_cast<uint16_t>(Destination.size);
-  if (Info.VectorSize != 16 && Info.VectorSize != 32 &&
-      Info.VectorSize != 64)
+  if (Info.VectorSize != 16 && Info.VectorSize != 32 && Info.VectorSize != 64)
     return false;
   Info.LaneCount = Info.VectorSize / Info.Spec.ElementSize;
   Info.MaskSize =
@@ -1798,8 +1766,7 @@ bool validateEvexDoubleShift(X86Lifter &L, const cs_insn *Insn,
         Info.MaskOperand->size != Info.MaskSize ||
         EncodedMask !=
             static_cast<uint8_t>(Info.MaskOperand->reg - X86_REG_K0) ||
-        Info.ZeroMask !=
-            static_cast<bool>(Info.MaskOperand->avx_zero_opmask))
+        Info.ZeroMask != static_cast<bool>(Info.MaskOperand->avx_zero_opmask))
       return false;
     const RegInfo MaskInfo =
         mapCapstoneReg(static_cast<x86_reg>(Info.MaskOperand->reg));
@@ -1896,8 +1863,7 @@ bool validateEvexVbmi(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
       X86.avx_sae || X86.avx_rm != X86_AVX_RM_INVALID)
     return false;
 
-  const bool HasMask =
-      X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
+  const bool HasMask = X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
   if (X86.op_count != (HasMask ? 4 : 3))
     return false;
   Info.MaskOperand = HasMask ? &X86.operands[1] : nullptr;
@@ -1907,8 +1873,7 @@ bool validateEvexVbmi(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
   const cs_x86_op &FirstSource = X86.operands[Info.FirstSourceIndex];
   const cs_x86_op &SecondSource = X86.operands[Info.SecondSourceIndex];
   Info.VectorSize = static_cast<uint16_t>(Destination.size);
-  if (Info.VectorSize != 16 && Info.VectorSize != 32 &&
-      Info.VectorSize != 64)
+  if (Info.VectorSize != 16 && Info.VectorSize != 32 && Info.VectorSize != 64)
     return false;
   Info.LaneCount = Info.VectorSize / Info.Spec.ElementSize;
   Info.MaskSize =
@@ -1942,8 +1907,7 @@ bool validateEvexVbmi(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
         Info.MaskOperand->size != Info.MaskSize ||
         EncodedMask !=
             static_cast<uint8_t>(Info.MaskOperand->reg - X86_REG_K0) ||
-        Info.ZeroMask !=
-            static_cast<bool>(Info.MaskOperand->avx_zero_opmask))
+        Info.ZeroMask != static_cast<bool>(Info.MaskOperand->avx_zero_opmask))
       return false;
     const RegInfo MaskInfo =
         mapCapstoneReg(static_cast<x86_reg>(Info.MaskOperand->reg));
@@ -1994,17 +1958,15 @@ struct EvexBitShuffleInfo {
 };
 
 bool validateEvexBitShuffle(X86Lifter &L, const cs_insn *Insn,
-                            const cs_x86 &X86,
-                            EvexBitShuffleInfo &Info) {
+                            const cs_x86 &X86, EvexBitShuffleInfo &Info) {
   if (!Insn || Insn->id != X86_INS_VPSHUFBITQMB ||
       !parseCanonicalEvexEncodingInfo(Insn, X86, L.targetArch(),
                                       Info.Encoding) ||
-      (Info.Encoding.P0 & 0x0f) != 0x02 ||
-      (Info.Encoding.P0 & 0x90) != 0x90 ||
-      (Info.Encoding.P1 & 0x87) != 0x05 ||
-      Info.Encoding.Opcode != 0x8f || X86.encoding.imm_offset != 0 ||
-      X86.encoding.imm_size != 0 || X86.avx_sae ||
-      X86.avx_rm != X86_AVX_RM_INVALID || (Info.Encoding.P2 & 0x90) != 0)
+      (Info.Encoding.P0 & 0x0f) != 0x02 || (Info.Encoding.P0 & 0x90) != 0x90 ||
+      (Info.Encoding.P1 & 0x87) != 0x05 || Info.Encoding.Opcode != 0x8f ||
+      X86.encoding.imm_offset != 0 || X86.encoding.imm_size != 0 ||
+      X86.avx_sae || X86.avx_rm != X86_AVX_RM_INVALID ||
+      (Info.Encoding.P2 & 0x90) != 0)
     return false;
 
   const bool HasWriteMask =
@@ -2017,12 +1979,10 @@ bool validateEvexBitShuffle(X86Lifter &L, const cs_insn *Insn,
   const cs_x86_op &Destination = X86.operands[0];
   const cs_x86_op &Data = X86.operands[Info.DataIndex];
   const cs_x86_op &Controls = X86.operands[Info.ControlIndex];
-  if (!isX86OpmaskOperand(Destination) ||
-      !isX86VectorRegisterOperand(Data))
+  if (!isX86OpmaskOperand(Destination) || !isX86VectorRegisterOperand(Data))
     return false;
   Info.VectorSize = static_cast<uint16_t>(Data.size);
-  if (Info.VectorSize != 16 && Info.VectorSize != 32 &&
-      Info.VectorSize != 64)
+  if (Info.VectorSize != 16 && Info.VectorSize != 32 && Info.VectorSize != 64)
     return false;
   Info.LaneCount = Info.VectorSize;
   Info.MaskSize =
@@ -2038,8 +1998,7 @@ bool validateEvexBitShuffle(X86Lifter &L, const cs_insn *Insn,
   const uint8_t ExpectedLength =
       Info.VectorSize == 16 ? 0 : (Info.VectorSize == 32 ? 0x20 : 0x40);
   if (EncodedLength == 0x60 || EncodedLength != ExpectedLength ||
-      ((Info.Encoding.ModRM >> 3) & 7) !=
-          Destination.reg - X86_REG_K0 ||
+      ((Info.Encoding.ModRM >> 3) & 7) != Destination.reg - X86_REG_K0 ||
       decodeEvexVectorVvvvIndex(Info.Encoding.P1, Info.Encoding.P2) !=
           x86VectorRegisterIndex(Data))
     return false;
@@ -2050,11 +2009,11 @@ bool validateEvexBitShuffle(X86Lifter &L, const cs_insn *Insn,
   if (Info.WriteMaskOperand) {
     if (Info.WriteMaskOperand->reg == X86_REG_K0 ||
         Info.WriteMaskOperand->size != Info.MaskSize ||
-        EncodedMask != static_cast<uint8_t>(Info.WriteMaskOperand->reg -
-                                           X86_REG_K0))
+        EncodedMask !=
+            static_cast<uint8_t>(Info.WriteMaskOperand->reg - X86_REG_K0))
       return false;
-    const RegInfo MaskInfo = mapCapstoneReg(
-        static_cast<x86_reg>(Info.WriteMaskOperand->reg));
+    const RegInfo MaskInfo =
+        mapCapstoneReg(static_cast<x86_reg>(Info.WriteMaskOperand->reg));
     if (MaskInfo.Offset == UINT64_C(0xffff) || MaskInfo.Size < Info.MaskSize)
       return false;
   } else if (EncodedMask != 0) {
@@ -2073,8 +2032,7 @@ bool validateEvexBitShuffle(X86Lifter &L, const cs_insn *Insn,
           x86VectorRegisterIndex(Controls) ||
       !validateCanonicalEvexRegisterTail(Insn, X86, Info.Encoding))
     return false;
-  return L.targetArch() != Arch::X86 ||
-         x86VectorRegisterIndex(Controls) < 8;
+  return L.targetArch() != Arch::X86 || x86VectorRegisterIndex(Controls) < 8;
 }
 
 struct EvexBlendSpec {
@@ -2129,8 +2087,7 @@ bool validateEvexBlend(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
       X86.avx_sae || X86.avx_rm != X86_AVX_RM_INVALID)
     return false;
 
-  const bool HasMask =
-      X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
+  const bool HasMask = X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
   if (X86.op_count != (HasMask ? 4 : 3))
     return false;
   Info.SelectionMaskOperand = HasMask ? &X86.operands[1] : nullptr;
@@ -2140,8 +2097,7 @@ bool validateEvexBlend(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
   const cs_x86_op &FirstSource = X86.operands[Info.FirstSourceIndex];
   const cs_x86_op &SecondSource = X86.operands[Info.SecondSourceIndex];
   Info.VectorSize = static_cast<uint16_t>(Destination.size);
-  if (Info.VectorSize != 16 && Info.VectorSize != 32 &&
-      Info.VectorSize != 64)
+  if (Info.VectorSize != 16 && Info.VectorSize != 32 && Info.VectorSize != 64)
     return false;
   Info.LaneCount = Info.VectorSize / Info.Spec.ElementSize;
   Info.MaskSize =
@@ -2173,13 +2129,13 @@ bool validateEvexBlend(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
   if (Info.SelectionMaskOperand) {
     if (Info.SelectionMaskOperand->reg == X86_REG_K0 ||
         Info.SelectionMaskOperand->size != Info.MaskSize ||
-        EncodedMask != static_cast<uint8_t>(
-                           Info.SelectionMaskOperand->reg - X86_REG_K0) ||
-        Info.ZeroMask != static_cast<bool>(
-                             Info.SelectionMaskOperand->avx_zero_opmask))
+        EncodedMask !=
+            static_cast<uint8_t>(Info.SelectionMaskOperand->reg - X86_REG_K0) ||
+        Info.ZeroMask !=
+            static_cast<bool>(Info.SelectionMaskOperand->avx_zero_opmask))
       return false;
-    const RegInfo MaskInfo = mapCapstoneReg(
-        static_cast<x86_reg>(Info.SelectionMaskOperand->reg));
+    const RegInfo MaskInfo =
+        mapCapstoneReg(static_cast<x86_reg>(Info.SelectionMaskOperand->reg));
     if (MaskInfo.Offset == UINT64_C(0xffff) || MaskInfo.Size < Info.MaskSize)
       return false;
   } else if (EncodedMask != 0 || Info.ZeroMask) {
@@ -2191,8 +2147,8 @@ bool validateEvexBlend(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
                      : X86_AVX_BCAST_INVALID;
   for (unsigned Index = 0; Index < X86.op_count; ++Index) {
     const cs_x86_op &Operand = X86.operands[Index];
-    const bool IsMask = Info.SelectionMaskOperand &&
-                        &Operand == Info.SelectionMaskOperand;
+    const bool IsMask =
+        Info.SelectionMaskOperand && &Operand == Info.SelectionMaskOperand;
     const bool IsSecondSource = &Operand == &SecondSource;
     if (Operand.avx_zero_opmask != (IsMask && Info.ZeroMask) ||
         Operand.avx_bcast !=
@@ -2253,15 +2209,13 @@ bool validateEvexIfma(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
   if (!Insn || !getEvexIfmaSpec(Insn->id, Info.Spec) ||
       !parseCanonicalEvexEncodingInfo(Insn, X86, L.targetArch(),
                                       Info.Encoding) ||
-      (Info.Encoding.P0 & 0x0f) != 0x02 ||
-      (Info.Encoding.P1 & 0x87) != 0x85 ||
+      (Info.Encoding.P0 & 0x0f) != 0x02 || (Info.Encoding.P1 & 0x87) != 0x85 ||
       Info.Encoding.Opcode != Info.Spec.Opcode ||
       X86.encoding.imm_offset != 0 || X86.encoding.imm_size != 0 ||
       X86.avx_sae || X86.avx_rm != X86_AVX_RM_INVALID)
     return false;
 
-  const bool HasMask =
-      X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
+  const bool HasMask = X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
   if (X86.op_count != (HasMask ? 4 : 3))
     return false;
   Info.MaskOperand = HasMask ? &X86.operands[1] : nullptr;
@@ -2271,8 +2225,7 @@ bool validateEvexIfma(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
   const cs_x86_op &FirstSource = X86.operands[Info.FirstSourceIndex];
   const cs_x86_op &SecondSource = X86.operands[Info.SecondSourceIndex];
   Info.VectorSize = static_cast<uint16_t>(Destination.size);
-  if (Info.VectorSize != 16 && Info.VectorSize != 32 &&
-      Info.VectorSize != 64)
+  if (Info.VectorSize != 16 && Info.VectorSize != 32 && Info.VectorSize != 64)
     return false;
   Info.LaneCount = Info.VectorSize / 8;
   Info.MemoryForm = SecondSource.type == X86_OP_MEM;
@@ -2303,8 +2256,7 @@ bool validateEvexIfma(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
         Info.MaskOperand->size != Info.MaskSize ||
         EncodedMask !=
             static_cast<uint8_t>(Info.MaskOperand->reg - X86_REG_K0) ||
-        Info.ZeroMask !=
-            static_cast<bool>(Info.MaskOperand->avx_zero_opmask))
+        Info.ZeroMask != static_cast<bool>(Info.MaskOperand->avx_zero_opmask))
       return false;
     const RegInfo MaskInfo =
         mapCapstoneReg(static_cast<x86_reg>(Info.MaskOperand->reg));
@@ -2393,8 +2345,7 @@ bool validateEvexVnni(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
       X86.avx_sae || X86.avx_rm != X86_AVX_RM_INVALID)
     return false;
 
-  const bool HasMask =
-      X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
+  const bool HasMask = X86.op_count >= 2 && isX86OpmaskOperand(X86.operands[1]);
   if (X86.op_count != (HasMask ? 4 : 3))
     return false;
   Info.MaskOperand = HasMask ? &X86.operands[1] : nullptr;
@@ -2404,8 +2355,7 @@ bool validateEvexVnni(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
   const cs_x86_op &FirstSource = X86.operands[Info.FirstSourceIndex];
   const cs_x86_op &SecondSource = X86.operands[Info.SecondSourceIndex];
   Info.VectorSize = static_cast<uint16_t>(Destination.size);
-  if (Info.VectorSize != 16 && Info.VectorSize != 32 &&
-      Info.VectorSize != 64)
+  if (Info.VectorSize != 16 && Info.VectorSize != 32 && Info.VectorSize != 64)
     return false;
   Info.LaneCount = Info.VectorSize / 4;
   Info.MaskSize =
@@ -2438,8 +2388,7 @@ bool validateEvexVnni(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
         Info.MaskOperand->size != Info.MaskSize ||
         EncodedMask !=
             static_cast<uint8_t>(Info.MaskOperand->reg - X86_REG_K0) ||
-        Info.ZeroMask !=
-            static_cast<bool>(Info.MaskOperand->avx_zero_opmask))
+        Info.ZeroMask != static_cast<bool>(Info.MaskOperand->avx_zero_opmask))
       return false;
     const RegInfo MaskInfo =
         mapCapstoneReg(static_cast<x86_reg>(Info.MaskOperand->reg));
@@ -2517,8 +2466,7 @@ bool getEvexMaskTestSpec(unsigned InsnId, EvexMaskTestSpec &Spec) {
 }
 
 bool liftEvexMaskTest(X86Lifter &L, X86Lifter::LiftState &S,
-                      const cs_insn *Insn, const cs_x86 &X86,
-                      unsigned InsnId) {
+                      const cs_insn *Insn, const cs_x86 &X86, unsigned InsnId) {
   EvexMaskTestSpec Spec{};
   if (!getEvexMaskTestSpec(InsnId, Spec))
     return false;
@@ -2578,13 +2526,11 @@ bool liftEvexMaskTest(X86Lifter &L, X86Lifter::LiftState &S,
   }
 
   const x86_avx_bcast ExpectedBroadcast =
-      Broadcast ? evexBroadcastForLaneCount(LaneCount)
-                : X86_AVX_BCAST_INVALID;
+      Broadcast ? evexBroadcastForLaneCount(LaneCount) : X86_AVX_BCAST_INVALID;
   for (unsigned Index = 0; Index < X86.op_count; ++Index) {
     const cs_x86_op &Operand = X86.operands[Index];
     if (Operand.avx_zero_opmask ||
-        (&Operand != &Second &&
-         Operand.avx_bcast != X86_AVX_BCAST_INVALID))
+        (&Operand != &Second && Operand.avx_bcast != X86_AVX_BCAST_INVALID))
       return false;
   }
 
@@ -2615,12 +2561,10 @@ bool liftEvexMaskTest(X86Lifter &L, X86Lifter::LiftState &S,
     ActiveMask = L.operandRead(S, X86.operands[1]);
   NdVar FirstValue = L.operandRead(S, First);
   NdVar SecondValue =
-      MemoryForm
-          ? emitEvexMaskedMemoryLoad(S, Second, ActiveMask, VectorSize,
-                                     Spec.ElementSize,
-                                     Broadcast ? Spec.ElementSize : VectorSize,
-                                     Broadcast)
-          : L.operandRead(S, Second);
+      MemoryForm ? emitEvexMaskedMemoryLoad(
+                       S, Second, ActiveMask, VectorSize, Spec.ElementSize,
+                       Broadcast ? Spec.ElementSize : VectorSize, Broadcast)
+                 : L.operandRead(S, Second);
   if (ActiveMask.Size != MaskSize || FirstValue.Size != VectorSize ||
       SecondValue.Size != VectorSize)
     return false;
@@ -2630,9 +2574,11 @@ bool liftEvexMaskTest(X86Lifter &L, X86Lifter::LiftState &S,
     NdVar FirstLane = S.makeTemp(Spec.ElementSize);
     NdVar SecondLane = S.makeTemp(Spec.ElementSize);
     S.emit(NdOp::SUBBYTES, FirstLane,
-           {FirstValue, NdVar::cst(Lane * Spec.ElementSize, 4)});
+           {FirstValue,
+            NdVar::cst(static_cast<uint64_t>(Lane) * Spec.ElementSize, 4)});
     S.emit(NdOp::SUBBYTES, SecondLane,
-           {SecondValue, NdVar::cst(Lane * Spec.ElementSize, 4)});
+           {SecondValue,
+            NdVar::cst(static_cast<uint64_t>(Lane) * Spec.ElementSize, 4)});
     NdVar Intersection = S.makeTemp(Spec.ElementSize);
     S.emit(NdOp::INT_AND, Intersection, {FirstLane, SecondLane});
     NdVar Matches = S.makeTemp(1);
@@ -2642,8 +2588,7 @@ bool liftEvexMaskTest(X86Lifter &L, X86Lifter::LiftState &S,
     S.emit(NdOp::INT_ZEXT, Bit, {Matches});
     if (Lane != 0) {
       NdVar Shifted = S.makeTemp(MaskSize);
-      S.emit(NdOp::INT_LEFT, Shifted,
-             {Bit, NdVar::cst(Lane, MaskSize)});
+      S.emit(NdOp::INT_LEFT, Shifted, {Bit, NdVar::cst(Lane, MaskSize)});
       Bit = Shifted;
     }
     NdVar Next = S.makeTemp(MaskSize);
@@ -2670,9 +2615,9 @@ bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   bool IntegerLogicW = false;
   bool IntegerLogicAndNot = false;
   NdOp IntegerLogicOperation = NdOp::INT_AND;
-  const bool IsEvexIntegerLogic = getEvexIntegerLogicEncoding(
-      InsnId, IntegerLogicOpcode, IntegerLogicW, IntegerLogicAndNot,
-      IntegerLogicOperation);
+  const bool IsEvexIntegerLogic =
+      getEvexIntegerLogicEncoding(InsnId, IntegerLogicOpcode, IntegerLogicW,
+                                  IntegerLogicAndNot, IntegerLogicOperation);
   EvexUnaryIntegerSpec UnaryIntegerSpec{};
   const bool IsEvexUnaryInteger =
       getEvexUnaryIntegerSpec(InsnId, UnaryIntegerSpec);
@@ -2703,8 +2648,7 @@ bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       !IsEvexMaskTest && !IsEvexIntegerLogic && !IsEvexUnaryInteger &&
       !IsEvexRotate && !IsEvexVariableShift && !IsEvexUniformShift &&
       !IsEvexPackedMultiply && !IsEvexVnni && !IsEvexIfma &&
-      !IsEvexDoubleShift && !IsEvexVbmi && !IsEvexBitShuffle &&
-      !IsEvexBlend &&
+      !IsEvexDoubleShift && !IsEvexVbmi && !IsEvexBitShuffle && !IsEvexBlend &&
       hasUnsupportedEvexValueModifier(X86))
     return false;
   switch (InsnId) {
@@ -2726,13 +2670,12 @@ bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     if (!validateEvexIntegerLogic(L, Insn, X86, Info))
       return false;
 
-    NdVar ActiveMask = NdVar::cst(
-        (UINT64_C(1) << Info.LaneCount) - UINT64_C(1), Info.MaskSize);
+    NdVar ActiveMask = NdVar::cst((UINT64_C(1) << Info.LaneCount) - UINT64_C(1),
+                                  Info.MaskSize);
     if (Info.MaskOperand) {
-      const RegInfo MaskInfo = mapCapstoneReg(
-          static_cast<x86_reg>(Info.MaskOperand->reg));
-      if (MaskInfo.Offset == UINT64_C(0xffff) ||
-          MaskInfo.Size < Info.MaskSize)
+      const RegInfo MaskInfo =
+          mapCapstoneReg(static_cast<x86_reg>(Info.MaskOperand->reg));
+      if (MaskInfo.Offset == UINT64_C(0xffff) || MaskInfo.Size < Info.MaskSize)
         return false;
       ActiveMask = NdVar::reg(MaskInfo.Offset, Info.MaskSize);
     }
@@ -2802,9 +2745,8 @@ bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
             x86VectorRegisterIndex(DestinationOperand) ||
         decodeEvexVectorVvvvIndex(Encoding.P1, Encoding.P2) !=
             x86VectorRegisterIndex(FirstSourceOperand) ||
-        (!MemoryForm &&
-         decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) !=
-             x86VectorRegisterIndex(SecondSourceOperand)))
+        (!MemoryForm && decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) !=
+                            x86VectorRegisterIndex(SecondSourceOperand)))
       return false;
 
     const x86_avx_bcast ExpectedBroadcast =
@@ -3105,17 +3047,15 @@ bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       return false;
     const uint16_t ElementSize = Info.Spec.ElementSize;
     const cs_x86_op &DestinationOperand = X86.operands[0];
-    const cs_x86_op &FirstSourceOperand =
-        X86.operands[Info.FirstSourceIndex];
-    const cs_x86_op &SecondSourceOperand =
-        X86.operands[Info.SecondSourceIndex];
+    const cs_x86_op &FirstSourceOperand = X86.operands[Info.FirstSourceIndex];
+    const cs_x86_op &SecondSourceOperand = X86.operands[Info.SecondSourceIndex];
 
     NdVar Dst = L.operandWrite(DestinationOperand);
     NdVar First = L.operandRead(S, FirstSourceOperand);
     NdVar ActiveMask;
     if (Info.SelectionMaskOperand) {
-      const RegInfo MaskInfo = mapCapstoneReg(
-          static_cast<x86_reg>(Info.SelectionMaskOperand->reg));
+      const RegInfo MaskInfo =
+          mapCapstoneReg(static_cast<x86_reg>(Info.SelectionMaskOperand->reg));
       ActiveMask = NdVar::reg(MaskInfo.Offset, Info.MaskSize);
     } else {
       const uint64_t AllLanes = Info.LaneCount == 64
@@ -3127,8 +3067,7 @@ bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
         Info.MemoryForm
             ? emitEvexMaskedMemoryLoad(
                   S, SecondSourceOperand, ActiveMask, Info.VectorSize,
-                  ElementSize,
-                  Info.Broadcast ? ElementSize : Info.VectorSize,
+                  ElementSize, Info.Broadcast ? ElementSize : Info.VectorSize,
                   Info.Broadcast)
             : L.operandRead(S, SecondSourceOperand);
     if (Dst.Size != Info.VectorSize || First.Size != Dst.Size ||
@@ -3230,9 +3169,9 @@ bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     const unsigned LaneCount = VectorSize / ElementSize;
     const uint16_t MaskSize = static_cast<uint16_t>((LaneCount + 7u) / 8u);
     if (MaskOperand.size != MaskSize ||
-        !hasCanonicalMaskConversionEncoding(
-            Insn, X86, L.targetArch(), DestinationOperand, MaskOperand,
-            VectorSize, ElementSize, true))
+        !hasCanonicalMaskConversionEncoding(Insn, X86, L.targetArch(),
+                                            DestinationOperand, MaskOperand,
+                                            VectorSize, ElementSize, true))
       return false;
 
     const NdVar Dst = L.operandWrite(DestinationOperand);
@@ -3299,9 +3238,9 @@ bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     const unsigned LaneCount = VectorSize / ElementSize;
     const uint16_t MaskSize = static_cast<uint16_t>((LaneCount + 7u) / 8u);
     if (MaskOperand.size != MaskSize ||
-        !hasCanonicalMaskConversionEncoding(
-            Insn, X86, L.targetArch(), SourceOperand, MaskOperand, VectorSize,
-            ElementSize, false))
+        !hasCanonicalMaskConversionEncoding(Insn, X86, L.targetArch(),
+                                            SourceOperand, MaskOperand,
+                                            VectorSize, ElementSize, false))
       return false;
 
     const NdVar Dst = L.operandWrite(MaskOperand);
@@ -3353,9 +3292,9 @@ bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     const uint16_t VectorSize = static_cast<uint16_t>(DestinationOperand.size);
     if ((VectorSize != 16 && VectorSize != 32 && VectorSize != 64) ||
         VectorSize % ElementSize != 0 ||
-        !hasCanonicalMaskBroadcastEncoding(
-            Insn, X86, L.targetArch(), DestinationOperand, X86.operands[1],
-            VectorSize, WordSource))
+        !hasCanonicalMaskBroadcastEncoding(Insn, X86, L.targetArch(),
+                                           DestinationOperand, X86.operands[1],
+                                           VectorSize, WordSource))
       return false;
 
     const RegInfo SourceInfo =
@@ -3393,15 +3332,13 @@ bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     const uint16_t ElementSize = Info.Spec.ElementSize;
     const bool IsLeft = Info.Spec.Left;
     const cs_x86_op &DestinationOperand = X86.operands[0];
-    const cs_x86_op &FirstSourceOperand =
-        X86.operands[Info.FirstSourceIndex];
-    const cs_x86_op &SecondSourceOperand =
-        X86.operands[Info.SecondSourceIndex];
+    const cs_x86_op &FirstSourceOperand = X86.operands[Info.FirstSourceIndex];
+    const cs_x86_op &SecondSourceOperand = X86.operands[Info.SecondSourceIndex];
 
     NdVar Dst = L.operandWrite(DestinationOperand);
     NdVar First = L.operandRead(S, FirstSourceOperand);
-    NdVar ActiveMask = NdVar::cst(
-        (UINT64_C(1) << Info.LaneCount) - UINT64_C(1), Info.MaskSize);
+    NdVar ActiveMask = NdVar::cst((UINT64_C(1) << Info.LaneCount) - UINT64_C(1),
+                                  Info.MaskSize);
     if (Info.MaskOperand) {
       const RegInfo MaskInfo =
           mapCapstoneReg(static_cast<x86_reg>(Info.MaskOperand->reg));
@@ -3411,8 +3348,7 @@ bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
         Info.MemoryForm
             ? emitEvexMaskedMemoryLoad(
                   S, SecondSourceOperand, ActiveMask, Info.VectorSize,
-                  ElementSize,
-                  Info.Broadcast ? ElementSize : Info.VectorSize,
+                  ElementSize, Info.Broadcast ? ElementSize : Info.VectorSize,
                   Info.Broadcast)
             : L.operandRead(S, SecondSourceOperand);
     if (Dst.Size != Info.VectorSize || First.Size != Dst.Size ||
@@ -3450,8 +3386,8 @@ bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       }
     }
     if (Info.MaskOperand) {
-      if (!emitMaskedVectorResult(L, S, DestinationOperand,
-                                  *Info.MaskOperand, Raw, ElementSize))
+      if (!emitMaskedVectorResult(L, S, DestinationOperand, *Info.MaskOperand,
+                                  Raw, ElementSize))
         return false;
     } else {
       S.emit(NdOp::COPY, Dst, {Raw});
@@ -3478,8 +3414,8 @@ bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     NdVar Dst = L.operandWrite(DestinationOperand);
     NdVar OldDst = L.operandRead(S, DestinationOperand);
     NdVar Source = L.operandRead(S, SourceOperand);
-    NdVar ActiveMask = NdVar::cst(
-        (UINT64_C(1) << Info.LaneCount) - UINT64_C(1), Info.MaskSize);
+    NdVar ActiveMask = NdVar::cst((UINT64_C(1) << Info.LaneCount) - UINT64_C(1),
+                                  Info.MaskSize);
     if (Info.MaskOperand) {
       const RegInfo MaskInfo =
           mapCapstoneReg(static_cast<x86_reg>(Info.MaskOperand->reg));
@@ -3537,8 +3473,8 @@ bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       }
     }
     if (Info.MaskOperand) {
-      if (!emitMaskedVectorResult(L, S, DestinationOperand,
-                                  *Info.MaskOperand, Raw, ElementSize))
+      if (!emitMaskedVectorResult(L, S, DestinationOperand, *Info.MaskOperand,
+                                  Raw, ElementSize))
         return false;
     } else {
       S.emit(NdOp::COPY, Dst, {Raw});
@@ -3555,18 +3491,16 @@ bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     if (!validateEvexVnni(L, Insn, X86, Info))
       return false;
     const cs_x86_op &DestinationOperand = X86.operands[0];
-    const cs_x86_op &FirstSourceOperand =
-        X86.operands[Info.FirstSourceIndex];
-    const cs_x86_op &SecondSourceOperand =
-        X86.operands[Info.SecondSourceIndex];
+    const cs_x86_op &FirstSourceOperand = X86.operands[Info.FirstSourceIndex];
+    const cs_x86_op &SecondSourceOperand = X86.operands[Info.SecondSourceIndex];
     NdVar ActiveMask;
     if (Info.MaskOperand) {
       const RegInfo MaskInfo =
           mapCapstoneReg(static_cast<x86_reg>(Info.MaskOperand->reg));
       ActiveMask = NdVar::reg(MaskInfo.Offset, Info.MaskSize);
     } else {
-      ActiveMask = NdVar::cst(
-          (UINT64_C(1) << Info.LaneCount) - UINT64_C(1), Info.MaskSize);
+      ActiveMask = NdVar::cst((UINT64_C(1) << Info.LaneCount) - UINT64_C(1),
+                              Info.MaskSize);
     }
     const NdVar OldDestination = L.operandRead(S, DestinationOperand);
     const NdVar FirstSource = L.operandRead(S, FirstSourceOperand);
@@ -3603,8 +3537,7 @@ bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
         NdVar WideFirst = S.makeTemp(8);
         NdVar WideSecond = S.makeTemp(8);
         S.emit(Info.Spec.WordElements ? NdOp::INT_SEXT : NdOp::INT_ZEXT,
-               WideFirst,
-               {FirstLane});
+               WideFirst, {FirstLane});
         S.emit(NdOp::INT_SEXT, WideSecond, {SecondLane});
         NdVar Product = S.makeTemp(8);
         S.emit(NdOp::INT_MULT, Product, {WideFirst, WideSecond});
@@ -3644,8 +3577,8 @@ bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     }
 
     if (Info.MaskOperand)
-      return emitMaskedVectorResult(L, S, DestinationOperand,
-                                    *Info.MaskOperand, Raw, 4);
+      return emitMaskedVectorResult(L, S, DestinationOperand, *Info.MaskOperand,
+                                    Raw, 4);
     S.emit(NdOp::COPY, L.operandWrite(DestinationOperand), {Raw});
     return true;
   }
@@ -3657,16 +3590,14 @@ bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     if (!validateEvexIfma(L, Insn, X86, Info))
       return false;
     const cs_x86_op &DestinationOperand = X86.operands[0];
-    const cs_x86_op &FirstSourceOperand =
-        X86.operands[Info.FirstSourceIndex];
-    const cs_x86_op &SecondSourceOperand =
-        X86.operands[Info.SecondSourceIndex];
+    const cs_x86_op &FirstSourceOperand = X86.operands[Info.FirstSourceIndex];
+    const cs_x86_op &SecondSourceOperand = X86.operands[Info.SecondSourceIndex];
 
     NdVar Dst = L.operandWrite(DestinationOperand);
     NdVar OldDst = L.operandRead(S, DestinationOperand);
     NdVar First = L.operandRead(S, FirstSourceOperand);
-    NdVar ActiveMask = NdVar::cst(
-        (UINT64_C(1) << Info.LaneCount) - UINT64_C(1), Info.MaskSize);
+    NdVar ActiveMask = NdVar::cst((UINT64_C(1) << Info.LaneCount) - UINT64_C(1),
+                                  Info.MaskSize);
     if (Info.MaskOperand) {
       const RegInfo MaskInfo =
           mapCapstoneReg(static_cast<x86_reg>(Info.MaskOperand->reg));
@@ -3748,8 +3679,8 @@ bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       }
     }
     if (Info.MaskOperand) {
-      if (!emitMaskedVectorResult(L, S, DestinationOperand,
-                                  *Info.MaskOperand, Raw, 8))
+      if (!emitMaskedVectorResult(L, S, DestinationOperand, *Info.MaskOperand,
+                                  Raw, 8))
         return false;
     } else {
       S.emit(NdOp::COPY, Dst, {Raw});
@@ -3769,8 +3700,8 @@ bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     NdVar Data = L.operandRead(S, DataOperand);
     NdVar ActiveMask;
     if (Info.WriteMaskOperand) {
-      const RegInfo MaskInfo = mapCapstoneReg(
-          static_cast<x86_reg>(Info.WriteMaskOperand->reg));
+      const RegInfo MaskInfo =
+          mapCapstoneReg(static_cast<x86_reg>(Info.WriteMaskOperand->reg));
       ActiveMask = NdVar::reg(MaskInfo.Offset, Info.MaskSize);
     } else {
       const uint64_t AllLanes = Info.LaneCount == 64
@@ -3779,9 +3710,9 @@ bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       ActiveMask = NdVar::cst(AllLanes, Info.MaskSize);
     }
     NdVar Controls = Info.MemoryForm
-                         ? emitEvexMaskedMemoryLoad(
-                               S, ControlOperand, ActiveMask, Info.VectorSize,
-                               1, Info.VectorSize, false)
+                         ? emitEvexMaskedMemoryLoad(S, ControlOperand,
+                                                    ActiveMask, Info.VectorSize,
+                                                    1, Info.VectorSize, false)
                          : L.operandRead(S, ControlOperand);
     if (Dst.Size != Info.MaskSize || Data.Size != Info.VectorSize ||
         Controls.Size != Info.VectorSize)
@@ -3839,10 +3770,8 @@ bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       return false;
     const uint16_t ElementSize = Info.Spec.ElementSize;
     const cs_x86_op &DestinationOperand = X86.operands[0];
-    const cs_x86_op &IndexSourceOperand =
-        X86.operands[Info.FirstSourceIndex];
-    const cs_x86_op &DataSourceOperand =
-        X86.operands[Info.SecondSourceIndex];
+    const cs_x86_op &IndexSourceOperand = X86.operands[Info.FirstSourceIndex];
+    const cs_x86_op &DataSourceOperand = X86.operands[Info.SecondSourceIndex];
 
     NdVar Dst = L.operandWrite(DestinationOperand);
     NdVar Indices = L.operandRead(S, IndexSourceOperand);
@@ -3876,8 +3805,8 @@ bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       }
     }
     if (Info.MaskOperand) {
-      if (!emitMaskedVectorResult(L, S, DestinationOperand,
-                                  *Info.MaskOperand, Raw, ElementSize))
+      if (!emitMaskedVectorResult(L, S, DestinationOperand, *Info.MaskOperand,
+                                  Raw, ElementSize))
         return false;
     } else {
       S.emit(NdOp::COPY, Dst, {Raw});
@@ -3943,8 +3872,8 @@ bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       }
     }
     if (Info.MaskOperand) {
-      if (!emitMaskedVectorResult(L, S, DestinationOperand,
-                                  *Info.MaskOperand, Raw, 1))
+      if (!emitMaskedVectorResult(L, S, DestinationOperand, *Info.MaskOperand,
+                                  Raw, 1))
         return false;
     } else {
       S.emit(NdOp::COPY, Dst, {Raw});

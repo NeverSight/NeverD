@@ -39,23 +39,22 @@ bool liftLegacySSEInt(X86Lifter &L, X86Lifter::LiftState &S,
       const unsigned LaneBase = (I / ElementsPerLane) * ElementsPerLane;
       const unsigned InLane = I % ElementsPerLane;
       unsigned Selected = InLane;
-      if (InLane >= FirstShuffledElement &&
-          InLane < FirstShuffledElement + 4) {
+      if (InLane >= FirstShuffledElement && InLane < FirstShuffledElement + 4) {
         const unsigned ControlIndex = InLane - FirstShuffledElement;
-        Selected = FirstShuffledElement +
-                   ((Imm >> (ControlIndex * 2)) & 3);
+        Selected = FirstShuffledElement + ((Imm >> (ControlIndex * 2)) & 3);
       }
       Elements[I] = S.makeTemp(ElementSize);
       S.emit(NdOp::SUBBYTES, Elements[I],
-             {Src, NdVar::cst((LaneBase + Selected) * ElementSize, 4)});
+             {Src, NdVar::cst(static_cast<uint64_t>(LaneBase + Selected) *
+                                  ElementSize,
+                              4)});
     }
     unsigned Count = NumElements;
     unsigned Width = ElementSize;
     while (Count > 1) {
       for (unsigned I = 0; I < Count / 2; ++I) {
         NdVar Pair = S.makeTemp(Width * 2);
-        S.emit(NdOp::CONCAT, Pair,
-               {Elements[I * 2 + 1], Elements[I * 2]});
+        S.emit(NdOp::CONCAT, Pair, {Elements[I * 2 + 1], Elements[I * 2]});
         Elements[I] = Pair;
       }
       Count /= 2;
@@ -350,8 +349,7 @@ bool liftLegacySSEInt(X86Lifter &L, X86Lifter::LiftState &S,
     NdVar Src = L.operandRead(S, X86.operands[1]);
     const uint8_t Imm = static_cast<uint8_t>(X86.operands[2].imm);
     const unsigned ElementSize = InsnId == X86_INS_PSHUFD ? 4 : 2;
-    const unsigned FirstShuffledElement =
-        InsnId == X86_INS_PSHUFHW ? 4 : 0;
+    const unsigned FirstShuffledElement = InsnId == X86_INS_PSHUFHW ? 4 : 0;
     if (!EmitImmediateLaneShuffle(Dst, Src, Imm, ElementSize,
                                   FirstShuffledElement))
       return false;

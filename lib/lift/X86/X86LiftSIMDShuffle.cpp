@@ -325,7 +325,9 @@ bool liftSIMDShuffle(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       }
       Elements[I] = S.makeTemp(ElementSize);
       S.emit(NdOp::SUBBYTES, Elements[I],
-             {Src, NdVar::cst((LaneBase + Selected) * ElementSize, 4)});
+             {Src, NdVar::cst(static_cast<uint64_t>(LaneBase + Selected) *
+                                  ElementSize,
+                              4)});
     }
     unsigned Count = NumElements;
     unsigned Width = ElementSize;

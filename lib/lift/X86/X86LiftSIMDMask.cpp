@@ -59,8 +59,7 @@ NdVar expandCompactLaneMask(X86Lifter::LiftState &S, NdVar CompactMask,
              {CompactMask, NdVar::cst(Lane, CompactMask.Size)});
     }
     NdVar BitWide = S.makeTemp(CompactMask.Size);
-    S.emit(NdOp::INT_AND, BitWide,
-           {Shifted, NdVar::cst(1, CompactMask.Size)});
+    S.emit(NdOp::INT_AND, BitWide, {Shifted, NdVar::cst(1, CompactMask.Size)});
     NdVar Bit = BitWide;
     if (CompactMask.Size != 1) {
       Bit = S.makeTemp(1);
@@ -68,8 +67,7 @@ NdVar expandCompactLaneMask(X86Lifter::LiftState &S, NdVar CompactMask,
     }
     NdVar LaneMask = S.makeTemp(ElementSize);
     S.emit(NdOp::SELECT, LaneMask,
-           {Bit, NdVar::cst(SignBit, ElementSize),
-            NdVar::cst(0, ElementSize)});
+           {Bit, NdVar::cst(SignBit, ElementSize), NdVar::cst(0, ElementSize)});
     if (Lane == 0) {
       Result = LaneMask;
       continue;
@@ -163,11 +161,9 @@ bool liftEvexCompressExpandRegister(X86Lifter &L, X86Lifter::LiftState &S,
   CanonicalEvexEncodingInfo Encoding;
   if (!parseCanonicalEvexEncodingInfo(Insn, X86, L.targetArch(), Encoding) ||
       (Encoding.P0 & 0x07) != 0x02 ||
-      (Encoding.P1 | 0x04) !=
-          static_cast<uint8_t>((W ? 0x80 : 0) | 0x7d) ||
+      (Encoding.P1 | 0x04) != static_cast<uint8_t>((W ? 0x80 : 0) | 0x7d) ||
       Encoding.Opcode != Opcode || X86.encoding.imm_offset != 0 ||
-      X86.encoding.imm_size != 0 ||
-      hasUnsupportedEvexValueModifier(X86) ||
+      X86.encoding.imm_size != 0 || hasUnsupportedEvexValueModifier(X86) ||
       (X86.op_count != 2 && X86.op_count != 3))
     return false;
 
@@ -196,12 +192,11 @@ bool liftEvexCompressExpandRegister(X86Lifter &L, X86Lifter::LiftState &S,
   const bool MemoryForm = Compress ? DestinationOperand.type == X86_OP_MEM
                                    : SourceOperand.type == X86_OP_MEM;
   if (MemoryForm) {
-    const cs_x86_op &VectorOperand = Compress ? SourceOperand
-                                              : DestinationOperand;
-    const cs_x86_op &MemoryOperand = Compress ? DestinationOperand
-                                              : SourceOperand;
-    if ((Encoding.ModRM & 0xc0) == 0xc0 ||
-        !IsVectorRegister(VectorOperand) ||
+    const cs_x86_op &VectorOperand =
+        Compress ? SourceOperand : DestinationOperand;
+    const cs_x86_op &MemoryOperand =
+        Compress ? DestinationOperand : SourceOperand;
+    if ((Encoding.ModRM & 0xc0) == 0xc0 || !IsVectorRegister(VectorOperand) ||
         MemoryOperand.type != X86_OP_MEM ||
         VectorOperand.size % ElementSize != 0 ||
         (VectorOperand.size != 16 && VectorOperand.size != 32 &&
@@ -226,8 +221,8 @@ bool liftEvexCompressExpandRegister(X86Lifter &L, X86Lifter::LiftState &S,
           mapCapstoneReg(static_cast<x86_reg>(MaskOperand.reg));
       const unsigned Lanes = VectorSize / ElementSize;
       const uint16_t Required = std::max(1u, (Lanes + 7u) / 8u);
-      if (!isX86OpmaskOperand(MaskOperand) ||
-          MaskOperand.reg == X86_REG_K0 || MaskInfo.Size < Required ||
+      if (!isX86OpmaskOperand(MaskOperand) || MaskOperand.reg == X86_REG_K0 ||
+          MaskInfo.Size < Required ||
           (Encoding.P2 & 7) != MaskOperand.reg - X86_REG_K0 ||
           ((Encoding.P2 & 0x80) != 0) != MaskOperand.avx_zero_opmask)
         return false;
@@ -243,20 +238,16 @@ bool liftEvexCompressExpandRegister(X86Lifter &L, X86Lifter::LiftState &S,
     if (Compress) {
       const NdVar Source = L.operandRead(S, VectorOperand);
       S.emitIntrinsic(Intrinsic::EVEXCompressStore, {},
-                      {Address, Mask, Source,
-                       NdVar::cst(ElementSize, 1)},
+                      {Address, Mask, Source, NdVar::cst(ElementSize, 1)},
                       NdMemoryOrdering::None, AddressSpace);
     } else {
       const NdVar OldDestination = L.operandRead(S, VectorOperand);
       const NdVar Destination = L.operandWrite(VectorOperand);
-      const uint8_t Control =
-          static_cast<uint8_t>(ElementSize |
-                               (HasMask && X86.operands[1].avx_zero_opmask
-                                    ? 0x80
-                                    : 0));
+      const uint8_t Control = static_cast<uint8_t>(
+          ElementSize |
+          (HasMask && X86.operands[1].avx_zero_opmask ? 0x80 : 0));
       S.emitIntrinsic(Intrinsic::EVEXExpandLoad, Destination,
-                      {Address, Mask, OldDestination,
-                       NdVar::cst(Control, 1)},
+                      {Address, Mask, OldDestination, NdVar::cst(Control, 1)},
                       NdMemoryOrdering::None, AddressSpace);
     }
     return true;
@@ -269,13 +260,11 @@ bool liftEvexCompressExpandRegister(X86Lifter &L, X86Lifter::LiftState &S,
       DestinationOperand.size != SourceOperand.size ||
       DestinationOperand.size % ElementSize != 0)
     return false;
-  const uint16_t VectorSize =
-      static_cast<uint16_t>(DestinationOperand.size);
+  const uint16_t VectorSize = static_cast<uint16_t>(DestinationOperand.size);
 
   const uint8_t ExpectedLength =
       VectorSize == 16 ? 0 : (VectorSize == 32 ? 0x20 : 0x40);
-  if ((Encoding.P2 & 0x60) != ExpectedLength ||
-      (Encoding.P2 & 0x18) != 0x08)
+  if ((Encoding.P2 & 0x60) != ExpectedLength || (Encoding.P2 & 0x18) != 0x08)
     return false;
 
   const unsigned DestinationIndex = VectorIndex(DestinationOperand);
@@ -302,8 +291,7 @@ bool liftEvexCompressExpandRegister(X86Lifter &L, X86Lifter::LiftState &S,
     const unsigned LaneCount = VectorSize / ElementSize;
     const uint16_t RequiredMaskSize =
         static_cast<uint16_t>(std::max(1u, (LaneCount + 7u) / 8u));
-    if (!isX86OpmaskOperand(MaskOperand) ||
-        MaskOperand.reg == X86_REG_K0 ||
+    if (!isX86OpmaskOperand(MaskOperand) || MaskOperand.reg == X86_REG_K0 ||
         MaskOperand.size == 0 || MaskOperand.size > 8 ||
         MaskInfo.Size < RequiredMaskSize ||
         (Encoding.P2 & 7) != MaskOperand.reg - X86_REG_K0)
@@ -316,8 +304,7 @@ bool liftEvexCompressExpandRegister(X86Lifter &L, X86Lifter::LiftState &S,
     return false;
   }
   for (unsigned Index = 0; Index < X86.op_count; ++Index)
-    if (X86.operands[Index].avx_zero_opmask &&
-        (!HasMask || Index != 1))
+    if (X86.operands[Index].avx_zero_opmask && (!HasMask || Index != 1))
       return false;
 
   const NdVar Source = L.operandRead(S, SourceOperand);
@@ -351,7 +338,8 @@ bool liftEvexCompressExpandRegister(X86Lifter &L, X86Lifter::LiftState &S,
       } else {
         NdVar OldLane = S.makeTemp(ElementSize);
         S.emit(NdOp::SUBBYTES, OldLane,
-               {OldDestination, NdVar::cst(Lane * ElementSize, 4)});
+               {OldDestination,
+                NdVar::cst(static_cast<uint64_t>(Lane) * ElementSize, 4)});
         ResultLanes.push_back(OldLane);
       }
     }
@@ -363,7 +351,8 @@ bool liftEvexCompressExpandRegister(X86Lifter &L, X86Lifter::LiftState &S,
       NdVar SourceLane = S.makeTemp(ElementSize);
       S.emit(NdOp::SUBBYTES, SourceLane,
              {Source,
-              NdVar::cst(SourceLaneIndex * ElementSize, sizeof(uint32_t))});
+              NdVar::cst(static_cast<uint64_t>(SourceLaneIndex) * ElementSize,
+                         sizeof(uint32_t))});
       for (unsigned OutputLane = 0; OutputLane < LaneCount; ++OutputLane) {
         NdVar IsOutputLane = S.makeTemp(1);
         S.emit(NdOp::INT_EQUAL, IsOutputLane,
@@ -385,7 +374,8 @@ bool liftEvexCompressExpandRegister(X86Lifter &L, X86Lifter::LiftState &S,
     for (unsigned Lane = 0; Lane < LaneCount; ++Lane) {
       NdVar SourceLane = S.makeTemp(ElementSize);
       S.emit(NdOp::SUBBYTES, SourceLane,
-             {Source, NdVar::cst(Lane * ElementSize, sizeof(uint32_t))});
+             {Source, NdVar::cst(static_cast<uint64_t>(Lane) * ElementSize,
+                                 sizeof(uint32_t))});
       SourceLanes.push_back(SourceLane);
     }
 
@@ -406,12 +396,13 @@ bool liftEvexCompressExpandRegister(X86Lifter &L, X86Lifter::LiftState &S,
       NdVar Inactive = NdVar::cst(0, ElementSize);
       if (!ZeroInactive) {
         Inactive = S.makeTemp(ElementSize);
-        S.emit(NdOp::SUBBYTES, Inactive,
-               {OldDestination, NdVar::cst(OutputLane * ElementSize, 4)});
+        S.emit(
+            NdOp::SUBBYTES, Inactive,
+            {OldDestination,
+             NdVar::cst(static_cast<uint64_t>(OutputLane) * ElementSize, 4)});
       }
       NdVar ResultLane = S.makeTemp(ElementSize);
-      S.emit(NdOp::SELECT, ResultLane,
-             {MaskBit, ActiveValue, Inactive});
+      S.emit(NdOp::SELECT, ResultLane, {MaskBit, ActiveValue, Inactive});
       ResultLanes.push_back(ResultLane);
 
       NdVar NextIndex = S.makeTemp(1);
