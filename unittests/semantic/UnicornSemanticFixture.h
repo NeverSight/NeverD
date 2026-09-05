@@ -1,4 +1,5 @@
-//===- UnicornSemanticFixture.h - LLVM MC + Unicorn test fixture -*- C++ -*-===//
+//===- UnicornSemanticFixture.h - LLVM MC + Unicorn test fixture -*- C++
+//-*-===//
 //
 // NeverD Decompiler — Semantic Verification Tests
 //
@@ -22,8 +23,6 @@
 
 #include "neverd/object/SectionNames.h"
 
-#include <unicorn/unicorn.h>
-
 #include "llvm/MC/MCAsmBackend.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCCodeEmitter.h"
@@ -43,6 +42,8 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
+
+#include <unicorn/unicorn.h>
 
 extern "C" {
 void LLVMInitializeX86TargetInfo();
@@ -174,9 +175,9 @@ public:
   /// Assemble \p AsmText for \p TripleStr and return the raw .text bytes.
   /// Returns empty vector on failure. \p Features is an optional comma-
   /// separated feature string (e.g. "+avx,+bmi").
-  static std::vector<uint8_t>
-  assemble(llvm::StringRef AsmText, llvm::StringRef TripleStr,
-           llvm::StringRef Features = "") {
+  static std::vector<uint8_t> assemble(llvm::StringRef AsmText,
+                                       llvm::StringRef TripleStr,
+                                       llvm::StringRef Features = "") {
     initTargets();
 
     llvm::Triple Triple(TripleStr);
@@ -187,8 +188,7 @@ public:
       return {};
 
     llvm::MCTargetOptions MCOpts;
-    std::unique_ptr<llvm::MCRegisterInfo> MRI(
-        Tgt->createMCRegInfo(Triple));
+    std::unique_ptr<llvm::MCRegisterInfo> MRI(Tgt->createMCRegInfo(Triple));
     std::unique_ptr<llvm::MCAsmInfo> MAI(
         Tgt->createMCAsmInfo(*MRI, Triple, MCOpts));
     std::unique_ptr<llvm::MCInstrInfo> MCII(Tgt->createMCInstrInfo());
@@ -244,8 +244,8 @@ public:
     // Parse the generated object and extract .text bytes
     auto MemBufOrErr = llvm::MemoryBuffer::getMemBuffer(
         llvm::StringRef(ObjBuf.data(), ObjBuf.size()), "", false);
-    auto ObjOrErr =
-        llvm::object::ObjectFile::createObjectFile(MemBufOrErr->getMemBufferRef());
+    auto ObjOrErr = llvm::object::ObjectFile::createObjectFile(
+        MemBufOrErr->getMemBufferRef());
     if (!ObjOrErr)
       return {};
 
@@ -266,9 +266,9 @@ public:
 
   /// Assemble \p AsmText for \p TripleStr and return the complete ELF
   /// object file bytes (for writing to disk and feeding to NeverD).
-  static std::vector<uint8_t>
-  assembleToObj(llvm::StringRef AsmText, llvm::StringRef TripleStr,
-                llvm::StringRef Features = "") {
+  static std::vector<uint8_t> assembleToObj(llvm::StringRef AsmText,
+                                            llvm::StringRef TripleStr,
+                                            llvm::StringRef Features = "") {
     initTargets();
 
     llvm::Triple Triple(TripleStr);
@@ -279,8 +279,7 @@ public:
       return {};
 
     llvm::MCTargetOptions MCOpts;
-    std::unique_ptr<llvm::MCRegisterInfo> MRI(
-        Tgt->createMCRegInfo(Triple));
+    std::unique_ptr<llvm::MCRegisterInfo> MRI(Tgt->createMCRegInfo(Triple));
     std::unique_ptr<llvm::MCAsmInfo> MAI(
         Tgt->createMCAsmInfo(*MRI, Triple, MCOpts));
     std::unique_ptr<llvm::MCInstrInfo> MCII(Tgt->createMCInstrInfo());
@@ -454,12 +453,22 @@ public:
                 const std::vector<std::pair<std::string, uint64_t>> &InitRegs,
                 const std::vector<MemInit> &InitMem,
                 int (*RegLookup)(const std::string &), int SPReg,
-                bool IsARM32 = false) {
+                bool IsARM32 = false, int UcCpuModel = -1) {
     EmulState S;
     uc_err Err = uc_open(Arch, Mode, &UC);
     if (Err != UC_ERR_OK) {
       S.Error = std::string("uc_open: ") + uc_strerror(Err);
       return S;
+    }
+
+    // Unicorn requires the CPU model to be selected immediately after
+    // uc_open(), before any other engine operation.
+    if (UcCpuModel >= 0) {
+      Err = uc_ctl_set_cpu_model(UC, UcCpuModel);
+      if (Err != UC_ERR_OK) {
+        S.Error = std::string("uc_ctl_set_cpu_model: ") + uc_strerror(Err);
+        return S;
+      }
     }
 
     // Map memory regions
@@ -504,7 +513,8 @@ public:
 
     // Emulate
     uint64_t EndAddr = CODE_BASE + Code.size();
-    Err = uc_emu_start(UC, CODE_BASE, EndAddr, /*timeout=*/5000000, /*count=*/0);
+    Err =
+        uc_emu_start(UC, CODE_BASE, EndAddr, /*timeout=*/5000000, /*count=*/0);
     if (Err != UC_ERR_OK) {
       S.Error = std::string("uc_emu_start: ") + uc_strerror(Err);
       return S;
@@ -568,16 +578,14 @@ protected:
   }
 
   void runAArch64(const SemTC &TC) {
-    runImpl(TC, "aarch64-linux-gnu",
-            "+neon,+fp-armv8,+crc,+crypto,+lse",
+    runImpl(TC, "aarch64-linux-gnu", "+neon,+fp-armv8,+crc,+crypto,+lse",
             UC_ARCH_ARM64, static_cast<uc_mode>(0), uc_regs::lookupA64,
             UC_ARM64_REG_SP);
   }
 
   void runARM32(const SemTC &TC) {
-    runImpl(TC, "armv7-linux-gnueabi",
-            "+vfp2,+vfp3,+neon",
-            UC_ARCH_ARM, UC_MODE_ARM, uc_regs::lookupARM32, UC_ARM_REG_SP,
+    runImpl(TC, "armv7-linux-gnueabi", "+vfp2,+vfp3,+neon", UC_ARCH_ARM,
+            UC_MODE_ARM, uc_regs::lookupARM32, UC_ARM_REG_SP,
             /*IsARM32=*/true);
   }
 
@@ -588,14 +596,12 @@ private:
                bool IsARM32 = false) {
     // 1. Assemble
     auto Code = LLVMMCAssembler::assemble(TC.Asm, Triple, Features);
-    ASSERT_FALSE(Code.empty())
-        << "LLVM MC assembly failed for: " << TC.Asm;
+    ASSERT_FALSE(Code.empty()) << "LLVM MC assembly failed for: " << TC.Asm;
 
     // 2. Emulate
     UnicornEmulator Emu;
-    auto State =
-        Emu.run(UcArch, UcMode, Code, TC.InitRegs, TC.InitMem,
-                RegLookup, SPReg, IsARM32);
+    auto State = Emu.run(UcArch, UcMode, Code, TC.InitRegs, TC.InitMem,
+                         RegLookup, SPReg, IsARM32);
     ASSERT_TRUE(State.OK) << "Emulation failed: " << State.Error
                           << "\n  ASM: " << TC.Asm;
 
