@@ -8751,6 +8751,9 @@ TEST(MachOLLVMDataPointerBoundary,
       Arch::AArch64, {}, &PageZeroImage, BinaryFormat::MachO);
   ASSERT_NE(PageZeroModule, nullptr);
   expectValidModule(*PageZeroModule);
+  MedLLVMProvenanceTestPeer::prepareFreshAnalysis(
+      PageZeroEmitter, PageZeroLookup, PageZeroImage, Arch::AArch64,
+      BinaryFormat::MachO);
   EXPECT_FALSE(MedLLVMProvenanceTestPeer::symbolizesDataConstant(
       PageZeroEmitter, Mask32, PointerSize));
   EXPECT_FALSE(MedLLVMProvenanceTestPeer::mayRelocateConstant(
@@ -8766,6 +8769,8 @@ TEST(MachOLLVMDataPointerBoundary,
       Arch::AArch64, {}, &LowImage, BinaryFormat::MachO);
   ASSERT_NE(LowModule, nullptr);
   expectValidModule(*LowModule);
+  MedLLVMProvenanceTestPeer::prepareFreshAnalysis(
+      LowEmitter, LowLookup, LowImage, Arch::AArch64, BinaryFormat::MachO);
   EXPECT_FALSE(MedLLVMProvenanceTestPeer::symbolizesDataConstant(
       LowEmitter, LowSpilledConstTableVA, PointerSize));
   LowImage.RelocDataAddrs.insert(LowSpilledConstTableVA);
@@ -8886,6 +8891,8 @@ TEST(MachOLLVMDataPointerBoundary,
         llvm::dyn_cast<llvm::ConstantInt>(Calls.front()->getArgOperand(0));
     ASSERT_NE(Argument, nullptr);
     EXPECT_EQ(Argument->getZExtValue(), Mask32);
+    MedLLVMProvenanceTestPeer::prepareFreshAnalysis(
+        Emitter, Caller, Image, Arch::AArch64, BinaryFormat::MachO);
     EXPECT_FALSE(MedLLVMProvenanceTestPeer::symbolizesDataConstant(
         Emitter, Mask32, /*Size=*/8));
     EXPECT_FALSE(MedLLVMProvenanceTestPeer::mayRelocateConstant(Emitter, Mask32,
@@ -8923,6 +8930,9 @@ TEST(MachOLLVMDataPointerBoundary,
       llvm::dyn_cast<llvm::ConstantInt>(SparseCalls.front()->getArgOperand(0));
   ASSERT_NE(SparseArgument, nullptr);
   EXPECT_EQ(SparseArgument->getZExtValue(), Mask32);
+  MedLLVMProvenanceTestPeer::prepareFreshAnalysis(SparseEmitter, SparseCaller,
+                                                  SparseImage, Arch::AArch64,
+                                                  BinaryFormat::MachO);
   EXPECT_FALSE(MedLLVMProvenanceTestPeer::mayRelocateConstant(
       SparseEmitter, Mask32, /*Size=*/8));
 }
