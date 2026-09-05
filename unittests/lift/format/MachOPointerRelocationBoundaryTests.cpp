@@ -293,6 +293,14 @@ public:
            MedLLVMEmitter::addressProvenanceVarKey(B);
   }
 
+  static std::optional<std::pair<std::pair<int, int>, int64_t>>
+  fallbackSlotKey(MedLLVMEmitter &Emitter, const MedFunc &Func, Arch TargetArch,
+                  const MedVar &Address) {
+    Emitter.TargetArch = TargetArch;
+    Emitter.CurMedFunc = &Func;
+    return Emitter.addrSlotKey(Address);
+  }
+
   static bool collectFrameReloadSources(MedLLVMEmitter &Emitter,
                                         const MedFunc &Func, Arch TargetArch,
                                         const MedOp &Load,
@@ -9542,6 +9550,131 @@ TEST(MachOLLVMDataPointerBoundary,
   MedLLVMEmitter LateEmitter;
   EXPECT_FALSE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
       LateEmitter, Late, Arch::X86, *LateReload, Sources));
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FallbackSlotKeyUsesGuestWidthAddressArithmetic) {
+  auto makeVar = [](MedVar::VarKind Kind, int Id, uint16_t Size,
+                    uint64_t RegOff = 0) {
+    MedVar V;
+    V.Kind = Kind;
+    V.TheArch = Arch::X86;
+    V.Id = Id;
+    V.SSAVer = 1;
+    V.Size = Size;
+    V.RegOff = RegOff;
+    return V;
+  };
+
+  const TargetRegInfo &TRI = getTargetRegInfo(Arch::X86);
+  MedVar Base = makeVar(MedVar::Reg, 7100, 4, TRI.FramePointer);
+  MedVar MinusOne = makeVar(MedVar::Temp, 7101, 4);
+  MedVar WrappedAdd = makeVar(MedVar::Temp, 7102, 4);
+  MedVar ReversedAdd = makeVar(MedVar::Temp, 7103, 4);
+  MedVar WrappedSub = makeVar(MedVar::Temp, 7104, 4);
+  MedVar PlusOne = makeVar(MedVar::Temp, 7105, 4);
+
+  MedBlock Block;
+  Block.Id = 0;
+  auto appendBinary = [&](NdOp Opcode, const MedVar &Output, const MedVar &Left,
+                          const MedVar &Right) {
+    MedOp Op;
+    Op.Opcode = Opcode;
+    Op.Output = Output;
+    Op.addInput(Left);
+    Op.addInput(Right);
+    Block.Ops.push_back(std::move(Op));
+  };
+  appendBinary(NdOp::INT_ADD, MinusOne, Base, MedVar::makeConst(UINT32_MAX, 4));
+  appendBinary(NdOp::INT_ADD, WrappedAdd, MinusOne, MedVar::makeConst(1, 4));
+  appendBinary(NdOp::INT_ADD, ReversedAdd, MedVar::makeConst(1, 4), MinusOne);
+  appendBinary(NdOp::INT_SUB, WrappedSub, Base,
+               MedVar::makeConst(UINT32_MAX, 4));
+  appendBinary(NdOp::INT_ADD, PlusOne, Base, MedVar::makeConst(1, 4));
+
+  MedFunc Func;
+  Func.Entry = CallerVA;
+  Func.Name = "fallback_slot_key_i386_wrap";
+  Func.Blocks.push_back(std::move(Block));
+
+  MedLLVMEmitter Emitter;
+  const auto BaseKey = MedLLVMProvenanceTestPeer::fallbackSlotKey(
+      Emitter, Func, Arch::X86, Base);
+  ASSERT_TRUE(BaseKey.has_value());
+  EXPECT_EQ(MedLLVMProvenanceTestPeer::fallbackSlotKey(Emitter, Func, Arch::X86,
+                                                       WrappedAdd),
+            BaseKey);
+  EXPECT_EQ(MedLLVMProvenanceTestPeer::fallbackSlotKey(Emitter, Func, Arch::X86,
+                                                       ReversedAdd),
+            BaseKey);
+  EXPECT_EQ(MedLLVMProvenanceTestPeer::fallbackSlotKey(Emitter, Func, Arch::X86,
+                                                       WrappedSub),
+            MedLLVMProvenanceTestPeer::fallbackSlotKey(Emitter, Func, Arch::X86,
+                                                       PlusOne));
+
+  auto makeWideVar = [](MedVar::VarKind Kind, int Id, uint64_t RegOff = 0) {
+    MedVar V;
+    V.Kind = Kind;
+    V.TheArch = Arch::AArch64;
+    V.Id = Id;
+    V.SSAVer = 1;
+    V.Size = 8;
+    V.RegOff = RegOff;
+    return V;
+  };
+  const TargetRegInfo &WideTRI = getTargetRegInfo(Arch::AArch64);
+  MedVar WideBase = makeWideVar(MedVar::Reg, 7110, WideTRI.FramePointer);
+  MedVar Maximum = makeWideVar(MedVar::Temp, 7111);
+  MedVar Minimum = makeWideVar(MedVar::Temp, 7112);
+  MedVar OverflowedAdd = makeWideVar(MedVar::Temp, 7113);
+  MedVar ReversedOverflowedAdd = makeWideVar(MedVar::Temp, 7114);
+  MedVar UnderflowedSub = makeWideVar(MedVar::Temp, 7115);
+  MedBlock WideBlock;
+  WideBlock.Id = 0;
+  auto appendWideBinary = [&](NdOp Opcode, const MedVar &Output,
+                              const MedVar &Left, const MedVar &Right) {
+    MedOp Op;
+    Op.Opcode = Opcode;
+    Op.Output = Output;
+    Op.addInput(Left);
+    Op.addInput(Right);
+    WideBlock.Ops.push_back(std::move(Op));
+  };
+  const uint64_t SignedMaximum =
+      static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
+  const uint64_t SignedMinimum = uint64_t{1} << 63;
+  appendWideBinary(NdOp::INT_ADD, Maximum, WideBase,
+                   MedVar::makeConst(SignedMaximum, 8));
+  appendWideBinary(NdOp::INT_ADD, Minimum, WideBase,
+                   MedVar::makeConst(SignedMinimum, 8));
+  appendWideBinary(NdOp::INT_ADD, OverflowedAdd, Maximum,
+                   MedVar::makeConst(1, 8));
+  appendWideBinary(NdOp::INT_ADD, ReversedOverflowedAdd,
+                   MedVar::makeConst(1, 8), Maximum);
+  appendWideBinary(NdOp::INT_SUB, UnderflowedSub, Minimum,
+                   MedVar::makeConst(1, 8));
+
+  MedFunc WideFunc;
+  WideFunc.Entry = CallerVA;
+  WideFunc.Name = "fallback_slot_key_aarch64_wrap";
+  WideFunc.Blocks.push_back(std::move(WideBlock));
+
+  MedLLVMEmitter WideEmitter;
+  const auto MinimumKey = MedLLVMProvenanceTestPeer::fallbackSlotKey(
+      WideEmitter, WideFunc, Arch::AArch64, Minimum);
+  const auto MaximumKey = MedLLVMProvenanceTestPeer::fallbackSlotKey(
+      WideEmitter, WideFunc, Arch::AArch64, Maximum);
+  ASSERT_TRUE(MinimumKey.has_value());
+  ASSERT_TRUE(MaximumKey.has_value());
+  EXPECT_EQ(MedLLVMProvenanceTestPeer::fallbackSlotKey(
+                WideEmitter, WideFunc, Arch::AArch64, OverflowedAdd),
+            MinimumKey);
+  EXPECT_EQ(MedLLVMProvenanceTestPeer::fallbackSlotKey(
+                WideEmitter, WideFunc, Arch::AArch64, ReversedOverflowedAdd),
+            MinimumKey);
+  EXPECT_EQ(MedLLVMProvenanceTestPeer::fallbackSlotKey(
+                WideEmitter, WideFunc, Arch::AArch64, UnderflowedSub),
+            MaximumKey);
 }
 
 TEST(MachOLLVMDataPointerBoundary,

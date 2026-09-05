@@ -27,6 +27,7 @@
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -363,6 +364,24 @@ MedLLVMEmitter::addrSlotKey(const MedVar &V, int Depth,
   const MedOp *Def = lookupDef(V);
   if (!Def || Def->NumInputs < 1)
     return std::make_pair(std::make_pair(V.Id, V.SSAVer), int64_t{0});
+  // Slot identity follows the guest operation's modular width.  Accumulate as
+  // raw bits so 64-bit wrap is defined and narrow guests do not become i64.
+  auto applyConstantOffset = [&](const auto &Base, uint64_t Constant,
+                                 bool Subtract) -> decltype(addrSlotKey(V)) {
+    const unsigned Bytes = Def->Output.Size;
+    if (Bytes == 0 || Bytes > sizeof(uint64_t))
+      return std::nullopt;
+    uint64_t Bits = std::bit_cast<uint64_t>(Base.second);
+    Bits = Subtract ? Bits - Constant : Bits + Constant;
+    if (Bytes < sizeof(uint64_t)) {
+      const unsigned Width = Bytes * 8;
+      const uint64_t Mask = (uint64_t{1} << Width) - 1;
+      Bits &= Mask;
+      if (Bits & (uint64_t{1} << (Width - 1)))
+        Bits |= ~Mask;
+    }
+    return std::make_pair(Base.first, std::bit_cast<int64_t>(Bits));
+  };
   switch (Def->Opcode) {
   case NdOp::COPY:
   case NdOp::INT_ZEXT:
@@ -376,23 +395,20 @@ MedLLVMEmitter::addrSlotKey(const MedVar &V, int Depth,
   case NdOp::INT_ADD:
     if (Def->NumInputs >= 2 && Def->Inputs[1].isConst()) {
       if (auto B = addrSlotKey(Def->Inputs[0], Depth + 1, ThroughRegs))
-        return std::make_pair(
-            B->first,
-            B->second + static_cast<int64_t>(Def->Inputs[1].ConstVal));
+        return applyConstantOffset(*B, Def->Inputs[1].ConstVal,
+                                   /*Subtract=*/false);
     }
     if (Def->NumInputs >= 2 && Def->Inputs[0].isConst()) {
       if (auto B = addrSlotKey(Def->Inputs[1], Depth + 1, ThroughRegs))
-        return std::make_pair(
-            B->first,
-            B->second + static_cast<int64_t>(Def->Inputs[0].ConstVal));
+        return applyConstantOffset(*B, Def->Inputs[0].ConstVal,
+                                   /*Subtract=*/false);
     }
     return std::nullopt;
   case NdOp::INT_SUB:
     if (Def->NumInputs >= 2 && Def->Inputs[1].isConst()) {
       if (auto B = addrSlotKey(Def->Inputs[0], Depth + 1, ThroughRegs))
-        return std::make_pair(
-            B->first,
-            B->second - static_cast<int64_t>(Def->Inputs[1].ConstVal));
+        return applyConstantOffset(*B, Def->Inputs[1].ConstVal,
+                                   /*Subtract=*/true);
     }
     return std::nullopt;
   default:
