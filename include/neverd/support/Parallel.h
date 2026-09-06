@@ -12,6 +12,8 @@
 #ifndef NEVERD_SUPPORT_PARALLEL_H
 #define NEVERD_SUPPORT_PARALLEL_H
 
+#include "neverd/support/StackSizeMain.h"
+
 #include <algorithm>
 #include <atomic>
 #include <charconv>
@@ -104,18 +106,14 @@ inline unsigned workerThreadCount() {
 template <typename Fn> void parallelForEach(size_t Total, Fn ThreadBody) {
   if (Total == 0)
     return;
-  const unsigned NumThreads = static_cast<unsigned>(
-      std::min<size_t>(workerThreadCount(), Total));
+  const unsigned NumThreads =
+      static_cast<unsigned>(std::min<size_t>(workerThreadCount(), Total));
   std::atomic<size_t> NextIdx{0};
   auto Claim = [&]() -> size_t {
     return NextIdx.fetch_add(1, std::memory_order_relaxed);
   };
-  std::vector<std::thread> Threads;
-  Threads.reserve(NumThreads);
-  for (unsigned T = 0; T < NumThreads; ++T)
-    Threads.emplace_back([&] { ThreadBody(Claim, Total); });
-  for (auto &T : Threads)
-    T.join();
+  auto Worker = [&] { ThreadBody(Claim, Total); };
+  runWithLargeStackThreads(NumThreads, Worker);
 }
 
 /// Parallel work-stealing loop that hands out indices heaviest-first.
@@ -141,8 +139,8 @@ void parallelForEachWeighted(const std::vector<uint64_t> &Weight,
     return Weight[A] != Weight[B] ? Weight[A] > Weight[B] : A < B;
   });
 
-  const unsigned NumThreads = static_cast<unsigned>(
-      std::min<size_t>(workerThreadCount(), Total));
+  const unsigned NumThreads =
+      static_cast<unsigned>(std::min<size_t>(workerThreadCount(), Total));
   std::atomic<size_t> NextPos{0};
   // Claim returns the next real element index (mapped through the heaviest-
   // first order), or a value >= Total once the work is exhausted — matching the
@@ -151,12 +149,8 @@ void parallelForEachWeighted(const std::vector<uint64_t> &Weight,
     size_t P = NextPos.fetch_add(1, std::memory_order_relaxed);
     return P < Total ? Order[P] : Total;
   };
-  std::vector<std::thread> Threads;
-  Threads.reserve(NumThreads);
-  for (unsigned T = 0; T < NumThreads; ++T)
-    Threads.emplace_back([&] { ThreadBody(Claim, Total); });
-  for (auto &T : Threads)
-    T.join();
+  auto Worker = [&] { ThreadBody(Claim, Total); };
+  runWithLargeStackThreads(NumThreads, Worker);
 }
 
 } // namespace neverd
