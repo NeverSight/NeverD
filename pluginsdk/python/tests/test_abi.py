@@ -302,6 +302,25 @@ class ABIInventoryTests(unittest.TestCase):
             ],
         )
 
+        synth_result_fields = dict(abi.NeverDSynthesizeResult._fields_)
+        for name in ("outcome", "proof_status"):
+            with self.subTest(struct="synthesis result", field=name):
+                self.assertIs(synth_result_fields[name], ctypes.c_uint32)
+        self.assertIs(
+            dict(abi.NeverDOptimizeLLVMResult._fields_)["stop"],
+            ctypes.c_uint32,
+        )
+        for function in (
+            "neverd_proof_status_name",
+            "neverd_synthesis_outcome_name",
+            "neverd_optimization_stop_name",
+        ):
+            with self.subTest(function=function):
+                self.assertIs(
+                    abi.FUNCTION_SPECS[function].argtypes[0],
+                    ctypes.c_uint32,
+                )
+
     def test_safety_options_mirror_the_versioned_c_layout(self) -> None:
         from neverd_plugin import abi
 

@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 namespace {
@@ -74,6 +75,9 @@ neverd_synthesize_options quickSynthesisOptions() {
 }
 
 TEST(NeverDSemanticCAPI, StableEnumsAndNamesArePinned) {
+  static_assert(std::is_same_v<neverd_proof_status_t, uint32_t>);
+  static_assert(std::is_same_v<neverd_synthesis_outcome_t, uint32_t>);
+  static_assert(std::is_same_v<neverd_optimization_stop_t, uint32_t>);
   static_assert(NEVERD_PROOF_NOT_RUN == 0);
   static_assert(NEVERD_PROOF_EQUIVALENT == 1);
   static_assert(NEVERD_PROOF_DIFFERENT == 2);

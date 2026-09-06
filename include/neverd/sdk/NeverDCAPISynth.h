@@ -39,8 +39,8 @@ extern "C" {
 
 /// Final verification disposition.  A concrete sample may establish
 /// Different without a solver query; samples can never establish Equivalent.
-/// These values are append-only.
-typedef enum neverd_proof_status {
+/// These values are append-only and use fixed-width public storage.
+enum neverd_proof_status {
   NEVERD_PROOF_NOT_RUN = 0,
   NEVERD_PROOF_EQUIVALENT = 1,
   NEVERD_PROOF_DIFFERENT = 2,
@@ -48,11 +48,13 @@ typedef enum neverd_proof_status {
   /// The proof question itself was malformed.  This is a terminal,
   /// fail-closed disposition rather than a resource-budget result.
   NEVERD_PROOF_INVALID = 4
-} neverd_proof_status_t;
+};
+typedef uint32_t neverd_proof_status_t;
 
 /// Why synthesis did or did not return a shorter expression.  These values
-/// are append-only and match the semantic simplifier's public contract.
-typedef enum neverd_synthesis_outcome {
+/// are append-only, use fixed-width public storage, and match the semantic
+/// simplifier's public contract.
+enum neverd_synthesis_outcome {
   NEVERD_SYNTHESIS_NOT_APPLICABLE = 0,
   NEVERD_SYNTHESIS_ALREADY_SHORTEST = 1,
   NEVERD_SYNTHESIS_TOO_MANY_INPUTS = 2,
@@ -60,7 +62,8 @@ typedef enum neverd_synthesis_outcome {
   NEVERD_SYNTHESIS_COUNTEREXAMPLE = 4,
   NEVERD_SYNTHESIS_PROOF_INCOMPLETE = 5,
   NEVERD_SYNTHESIS_REWRITTEN = 6
-} neverd_synthesis_outcome_t;
+};
+typedef uint32_t neverd_synthesis_outcome_t;
 
 /// Stable, non-owned spellings.  An out-of-range value returns "invalid".
 NEVERD_API const char *neverd_proof_status_name(neverd_proof_status_t Status);

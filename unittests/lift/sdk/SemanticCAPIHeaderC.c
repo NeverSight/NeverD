@@ -12,9 +12,15 @@
 _Static_assert(NEVERD_PROOF_NOT_RUN == 0, "proof ABI drift");
 _Static_assert(NEVERD_PROOF_UNKNOWN == 3, "proof ABI drift");
 _Static_assert(NEVERD_PROOF_INVALID == 4, "proof ABI drift");
+_Static_assert(sizeof(neverd_proof_status_t) == sizeof(uint32_t),
+               "proof status carrier must stay uint32_t");
 _Static_assert(NEVERD_SYNTHESIS_REWRITTEN == 6, "synthesis ABI drift");
+_Static_assert(sizeof(neverd_synthesis_outcome_t) == sizeof(uint32_t),
+               "synthesis outcome carrier must stay uint32_t");
 _Static_assert(NEVERD_OPTIMIZATION_INPUT_INVALID == 4,
                "optimization ABI drift");
+_Static_assert(sizeof(neverd_optimization_stop_t) == sizeof(uint32_t),
+               "optimization stop carrier must stay uint32_t");
 _Static_assert(offsetof(neverd_simplify_options, exhaustive) ==
                    offsetof(neverd_simplify_options, allow_growth) +
                        sizeof(int),

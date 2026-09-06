@@ -31,14 +31,16 @@ extern "C" {
 #define NEVERD_API __attribute__((visibility("default")))
 #endif
 
-/// Observable reason module optimization stopped.  Values are append-only.
-typedef enum neverd_optimization_stop {
+/// Observable reason module optimization stopped.  Values are append-only and
+/// use fixed-width public storage.
+enum neverd_optimization_stop {
   NEVERD_OPTIMIZATION_STABLE = 0,
   NEVERD_OPTIMIZATION_CYCLE_DETECTED = 1,
   NEVERD_OPTIMIZATION_BUDGET_EXHAUSTED = 2,
   NEVERD_OPTIMIZATION_VERIFICATION_FAILED = 3,
   NEVERD_OPTIMIZATION_INPUT_INVALID = 4
-} neverd_optimization_stop_t;
+};
+typedef uint32_t neverd_optimization_stop_t;
 
 /// Pipeline shape.  DEFAULT keeps zero-initialized options on Deep mode.
 typedef enum neverd_optimization_mode {
