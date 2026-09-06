@@ -378,7 +378,7 @@ void RCP14D(unsigned int mxcsr, type64 *dst, type64 arg) {
                     // computation
     db = 256 * (double)b; // multiply by 2^8 to make up for the difference
                           // between 18 bits in a and 10 bits in b
-    dpr = (db * xmy); // product b[i] * (x - y), exact in double precision
+    dpr = (db * xmy);     // product b[i] * (x - y), exact in double precision
     rcp14 = da - dpr;
     // rcp14 = a[i] - b[i] * (x - y), exact in double precision
     ui64 = *((unsigned long long *)&rcp14); // rcp14, viewed as a 64-bit integer
@@ -497,6 +497,16 @@ unsigned int RSQRT14_Coeff[128] = {
     285,  271882, 393, 381307, 279, 269625, 385, 378194, 271, 267425,
     375,  375155, 265, 265276, 367, 372190, 259, 263178};
 
+/* Scale can be negative.  Enter the destination's unsigned domain before the
+   shift so the IEEE exponent adjustment uses defined modulo arithmetic. */
+static uint32_t adjustRSQRT14SExponent(uint32_t Bits, int Scale) {
+  return Bits - ((uint32_t)Scale << 23);
+}
+
+static uint64_t adjustRSQRT14DExponent(uint64_t Bits, int64_t Scale) {
+  return Bits - ((uint64_t)Scale << 52);
+}
+
 void RSQRT14S(unsigned int mxcsr, type32 *dst, type32 arg) {
   unsigned int i, c, d;               // i, c[i], d[i] - used when 1 <= x < 4
   float x, y, xmy, rsqrt14;           // x (input), y, x - y, recp14 (result)
@@ -598,13 +608,13 @@ void RSQRT14S(unsigned int mxcsr, type32 *dst, type32 arg) {
       arg.u = FP32_PLUS_TWO_AS_UINT32 | (signif & FP32_SIGNIF_MASK);
       // scaled x between 2.0 and 4.0
       RSQRT14S(mxcsr, dst, arg);
-      dst->u = dst->u - (n << 23); // rsqrt14
+      dst->u = adjustRSQRT14SExponent(dst->u, n); // rsqrt14
     } else {         // even exponent, scaled x between 1.0 and 2.0
       n = expon / 2; // even expon in -149, -128
       arg.u = FP32_PLUS_ONE_AS_UINT32 | (signif & FP32_SIGNIF_MASK);
       // scaled x between 1.0 and 2.0
       RSQRT14S(mxcsr, dst, arg);
-      dst->u = dst->u - (n << 23); // rsqrt14
+      dst->u = adjustRSQRT14SExponent(dst->u, n); // rsqrt14
     }
   } else { // normal not between 1.0 and 4.0; find n such that 1<=2^(2n)*x<4
     expon = ((arg.u & FP32_EXP_MASK) >> 23) - 0x7f;
@@ -614,13 +624,13 @@ void RSQRT14S(unsigned int mxcsr, type32 *dst, type32 arg) {
       arg.u = FP32_PLUS_TWO_AS_UINT32 | (signif & FP32_SIGNIF_MASK);
       // scaled x between 2.0 and 4.0
       RSQRT14S(mxcsr, dst, arg);
-      dst->u = dst->u - (n << 23); // rsqrt14
+      dst->u = adjustRSQRT14SExponent(dst->u, n); // rsqrt14
     } else {         // even exponent, scaled x between 1.0 and 2.0
       n = expon / 2; // even expon in -126, 127
       arg.u = FP32_PLUS_ONE_AS_UINT32 | (signif & FP32_SIGNIF_MASK);
       // scaled x between 1.0 and 2.0
       RSQRT14S(mxcsr, dst, arg);
-      dst->u = dst->u - (n << 23); // rsqrt14
+      dst->u = adjustRSQRT14SExponent(dst->u, n); // rsqrt14
     }
   }
 }
@@ -723,13 +733,13 @@ void RSQRT14D(unsigned int mxcsr, type64 *dst, type64 arg) {
       arg.u = FP64_PLUS_TWO_AS_UINT64 | (signif & FP64_SIGNIF_MASK);
       // scaled x between 2.0 and 4.0
       RSQRT14D(mxcsr, dst, arg);
-      dst->u = dst->u - (n << 52); // rsqrt14
+      dst->u = adjustRSQRT14DExponent(dst->u, n); // rsqrt14
     } else {         // even exponent, scaled x between 1.0 and 2.0
       n = expon / 2; // even expon in -149, -128
       arg.u = FP64_PLUS_ONE_AS_UINT64 | (signif & FP64_SIGNIF_MASK);
       // scaled x between 1.0 and 2.0
       RSQRT14D(mxcsr, dst, arg);
-      dst->u = dst->u - (n << 52); // rsqrt14
+      dst->u = adjustRSQRT14DExponent(dst->u, n); // rsqrt14
     }
   } else { // normal not between 1.0 and 4.0; find n such that 1<=2^(2n)*x<4
     expon = ((arg.u & FP64_EXP_MASK) >> 52) - 0x3ff;
@@ -739,13 +749,13 @@ void RSQRT14D(unsigned int mxcsr, type64 *dst, type64 arg) {
       arg.u = FP64_PLUS_TWO_AS_UINT64 | (signif & FP64_SIGNIF_MASK);
       // scaled x between 2.0 and 4.0
       RSQRT14D(mxcsr, dst, arg);
-      dst->u = dst->u - (n << 52); // rsqrt14
+      dst->u = adjustRSQRT14DExponent(dst->u, n); // rsqrt14
     } else {         // even exponent, scaled x between 1.0 and 2.0
       n = expon / 2; // even expon in -126, 127
       arg.u = FP64_PLUS_ONE_AS_UINT64 | (signif & FP64_SIGNIF_MASK);
       // scaled x between 1.0 and 2.0
       RSQRT14D(mxcsr, dst, arg);
-      dst->u = dst->u - (n << 52); // rsqrt14
+      dst->u = adjustRSQRT14DExponent(dst->u, n); // rsqrt14
     }
   }
 }

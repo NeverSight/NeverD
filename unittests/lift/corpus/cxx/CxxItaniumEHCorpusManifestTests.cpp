@@ -229,15 +229,15 @@ TEST(CxxItaniumEHCorpusManifest, NamesTheValidationLevelEachTargetEarns) {
   EXPECT_EQ(Cfi->front().ValidationLevel,
             CxxItaniumCorpusValidationLevel::CfiOnly);
 
-  EXPECT_EQ(getCxxItaniumValidationLevelName(
-                CxxItaniumCorpusValidationLevel::LsdaGraph),
-            "lsda-graph");
-  EXPECT_EQ(
+  EXPECT_STREQ(getCxxItaniumValidationLevelName(
+                   CxxItaniumCorpusValidationLevel::LsdaGraph),
+               "lsda-graph");
+  EXPECT_STREQ(
       getCxxItaniumValidationLevelName(CxxItaniumCorpusValidationLevel::Ehabi),
       "ehabi");
-  EXPECT_EQ(getCxxItaniumValidationLevelName(
-                CxxItaniumCorpusValidationLevel::CfiOnly),
-            "cfi-only");
+  EXPECT_STREQ(getCxxItaniumValidationLevelName(
+                   CxxItaniumCorpusValidationLevel::CfiOnly),
+               "cfi-only");
 }
 
 // The level is derived from the target and the exception setting, so a

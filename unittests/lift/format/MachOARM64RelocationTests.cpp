@@ -41,7 +41,7 @@ struct RawRelocation {
 
 struct SymbolSpec {
   uint64_t Address = 0;
-  uint8_t Type = static_cast<uint8_t>(N_SECT | N_EXT);
+  uint8_t Type = static_cast<uint8_t>(N_SECT) | static_cast<uint8_t>(N_EXT);
   uint8_t Section = 1;
 };
 
@@ -87,8 +87,9 @@ makeObjectWithSymbols(uint32_t CPUType, llvm::ArrayRef<uint8_t> SectionData,
   mach_header_64 Header{};
   Header.magic = MH_MAGIC_64;
   Header.cputype = CPUType;
-  Header.cpusubtype = CPUType == CPU_TYPE_ARM64 ? CPU_SUBTYPE_ARM64_ALL
-                                                : CPU_SUBTYPE_X86_64_ALL;
+  Header.cpusubtype = CPUType == CPU_TYPE_ARM64
+                          ? static_cast<uint32_t>(CPU_SUBTYPE_ARM64_ALL)
+                          : static_cast<uint32_t>(CPU_SUBTYPE_X86_64_ALL);
   Header.filetype = MH_OBJECT;
   Header.ncmds = 2;
   Header.sizeofcmds = CommandsSize;
@@ -115,8 +116,9 @@ makeObjectWithSymbols(uint32_t CPUType, llvm::ArrayRef<uint8_t> SectionData,
   Section.align = 2;
   Section.reloff = RelocationOffset;
   Section.nreloc = Relocations.size();
-  Section.flags =
-      S_REGULAR | S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS;
+  Section.flags = static_cast<uint32_t>(S_REGULAR) |
+                  static_cast<uint32_t>(S_ATTR_PURE_INSTRUCTIONS) |
+                  static_cast<uint32_t>(S_ATTR_SOME_INSTRUCTIONS);
   writeObject(Bytes, HeaderSize + sizeof(segment_command_64), Section);
 
   symtab_command Symtab{};
@@ -429,8 +431,8 @@ TEST(MachOARM64Relocation, InvalidInstructionMetadataFailsClosed) {
 TEST(MachOARM64Relocation, UndefinedExternalDoesNotPatchInstruction) {
   std::vector<uint8_t> Data(0x3000);
   writeInstruction(Data, 0x20, 0x90000008u);
-  const std::vector<SymbolSpec> Symbols = {
-      SymbolSpec{0, static_cast<uint8_t>(N_UNDF | N_EXT), 0}};
+  const std::vector<SymbolSpec> Symbols = {SymbolSpec{
+      0, static_cast<uint8_t>(N_UNDF) | static_cast<uint8_t>(N_EXT), 0}};
   auto Patched = applyRelocationsWithSymbols(
       Arch::AArch64, CPU_TYPE_ARM64, Data,
       {arm64InstructionRelocation(0x20, ARM64_RELOC_PAGE21)}, Symbols);

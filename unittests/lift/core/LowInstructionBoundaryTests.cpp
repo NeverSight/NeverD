@@ -269,8 +269,9 @@ TEST(LowInstructionBoundary,
   Code.Size = 0x40;
   Code.FileSz = Code.Size;
   Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
-  Code.Type = llvm::MachO::S_REGULAR | llvm::MachO::S_ATTR_PURE_INSTRUCTIONS |
-              llvm::MachO::S_ATTR_SOME_INSTRUCTIONS;
+  Code.Type = static_cast<uint32_t>(llvm::MachO::S_REGULAR) |
+              static_cast<uint32_t>(llvm::MachO::S_ATTR_PURE_INSTRUCTIONS) |
+              static_cast<uint32_t>(llvm::MachO::S_ATTR_SOME_INSTRUCTIONS);
   Image.Sections.push_back(Code);
 
   Section CString;
@@ -830,7 +831,7 @@ TEST(LowInstructionBoundary,
   for (const llvm::Function &Function : *Module)
     for (const llvm::BasicBlock &Block : Function)
       for (const llvm::Instruction &Instruction : Block) {
-        if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction))
+        if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction)) {
           if (unsigned AddressSpace = Load->getPointerOperand()
                                           ->getType()
                                           ->getPointerAddressSpace();
@@ -838,6 +839,7 @@ TEST(LowInstructionBoundary,
             ++FSLoads;
           else if (AddressSpace == 256)
             ++GSLoads;
+        }
         if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&Instruction))
           GSStores +=
               Store->getPointerOperand()->getType()->getPointerAddressSpace() ==
