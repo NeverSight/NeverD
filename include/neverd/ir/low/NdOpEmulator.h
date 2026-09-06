@@ -30,6 +30,7 @@
 
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -78,6 +79,7 @@ struct EmulatorSkips {
 class NdOpEmulator {
 public:
   explicit NdOpEmulator(const BinaryImage &Img);
+  explicit NdOpEmulator(BinaryImage &&Img);
 
   void reset();
 
@@ -104,8 +106,7 @@ public:
   /// privilege level or an IA32_PASID value on its own.  LinearAddressBits is
   /// 48 or 57, matching the two x86-64 canonical-address widths.  Like other
   /// emulator configuration, this survives reset().
-  bool setX86EnqueueContext(uint8_t CurrentPrivilegeLevel,
-                            uint32_t IA32Pasid,
+  bool setX86EnqueueContext(uint8_t CurrentPrivilegeLevel, uint32_t IA32Pasid,
                             uint8_t LinearAddressBits);
 
   /// Declare the registers that survive a call by ABI (the stack pointer, frame
@@ -182,6 +183,9 @@ public:
   void clearSkips() { Skips = EmulatorSkips(); }
 
 private:
+  /// Owns an image supplied as a temporary.  Keep this member before Img so
+  /// the referenced object outlives the reference during destruction.
+  std::shared_ptr<const BinaryImage> OwnedImg;
   const BinaryImage &Img;
   std::map<uint64_t, uint64_t> Registers;
   std::map<uint64_t, std::vector<uint8_t>> WideRegisters;
@@ -211,8 +215,8 @@ private:
                                                uint64_t Offset) const;
   void writeOutput(const NdVar &Output, uint64_t Value);
   void writeOutputBytes(const NdVar &Output, llvm::ArrayRef<uint8_t> Value);
-  std::optional<std::vector<uint8_t>>
-  loadMemoryBytes(uint64_t Addr, uint16_t Size) const;
+  std::optional<std::vector<uint8_t>> loadMemoryBytes(uint64_t Addr,
+                                                      uint16_t Size) const;
   std::optional<uint64_t> loadMemory(uint64_t Addr, uint16_t Size) const;
   bool canWriteMemoryBytes(uint64_t Addr, uint16_t Size) const;
   /// Returns false when the write-back store had no room, which is recorded

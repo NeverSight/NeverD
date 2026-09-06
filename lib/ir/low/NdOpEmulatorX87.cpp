@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <cstring>
 #include <optional>
+#include <utility>
 
 namespace neverd {
 
@@ -126,6 +127,12 @@ uint16_t quotientConditionCodes(uint8_t Quotient) {
 } // namespace
 
 NdOpEmulator::NdOpEmulator(const BinaryImage &Image) : Img(Image) {
+  resetX87State();
+}
+
+NdOpEmulator::NdOpEmulator(BinaryImage &&Image)
+    : OwnedImg(std::make_shared<BinaryImage>(std::move(Image))),
+      Img(*OwnedImg) {
   resetX87State();
 }
 
