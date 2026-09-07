@@ -641,8 +641,8 @@ llvm::Value *MedLLVMEmitter::getPhiIncomingValue(const MedVar &V,
   return getVar(V, Builder);
 }
 
-llvm::Value *MedLLVMEmitter::getRawSegmentOffset(
-    const MedVar &V, llvm::IRBuilder<> &Builder) {
+llvm::Value *MedLLVMEmitter::getRawSegmentOffset(const MedVar &V,
+                                                 llvm::IRBuilder<> &Builder) {
   using Key = std::tuple<int, int, int, uint16_t>;
   std::set<Key> Active;
   int Budget = 256;
@@ -714,9 +714,8 @@ llvm::Value *MedLLVMEmitter::getRawSegmentOffset(
     // that edge would manufacture a cycle for register-based FS/GS offsets.
     if (Def->Opcode == NdOp::COPY && Def->NumInputs >= 1) {
       const MedVar &Input = Def->Inputs[0];
-      const Key InputKey =
-          std::make_tuple(static_cast<int>(Input.Kind), Input.Id, Input.SSAVer,
-                          Input.Size);
+      const Key InputKey = std::make_tuple(static_cast<int>(Input.Kind),
+                                           Input.Id, Input.SSAVer, Input.Size);
       if (InputKey == K) {
         llvm::Value *Value = getVar(Cur, Builder);
         if (!Value || !Value->getType()->isIntegerTy() ||
@@ -772,16 +771,28 @@ llvm::Value *MedLLVMEmitter::getRawSegmentOffset(
         return Builder.CreateXor(L, R, "segment_offset_xor");
       });
     case NdOp::INT_LEFT:
-      return binary([&](llvm::Value *L, llvm::Value *R) {
-        return Builder.CreateShl(L, R, "segment_offset_shl");
-      });
     case NdOp::INT_RIGHT:
       return binary([&](llvm::Value *L, llvm::Value *R) {
-        return Builder.CreateLShr(L, R, "segment_offset_lshr");
+        // Rebuilding a segment offset must preserve NdOp's saturating
+        // shifts, including byte/word x86 shifts with a masked count >= width.
+        auto *Limit = llvm::ConstantInt::get(OutTy, OutTy->getBitWidth());
+        auto *InRange = Builder.CreateICmpULT(R, Limit);
+        auto *Count = Builder.CreateURem(R, Limit);
+        auto *Shifted =
+            Def->Opcode == NdOp::INT_LEFT
+                ? Builder.CreateShl(L, Count, "segment_offset_shl")
+                : Builder.CreateLShr(L, Count, "segment_offset_lshr");
+        return Builder.CreateSelect(InRange, Shifted,
+                                    llvm::ConstantInt::get(OutTy, 0));
       });
     case NdOp::INT_ASHR:
       return binary([&](llvm::Value *L, llvm::Value *R) {
-        return Builder.CreateAShr(L, R, "segment_offset_ashr");
+        auto *Limit = llvm::ConstantInt::get(OutTy, OutTy->getBitWidth());
+        auto *MaxShift =
+            llvm::ConstantInt::get(OutTy, OutTy->getBitWidth() - 1);
+        auto *Count =
+            Builder.CreateSelect(Builder.CreateICmpULT(R, Limit), R, MaxShift);
+        return Builder.CreateAShr(L, Count, "segment_offset_ashr");
       });
     case NdOp::SUBBYTES: {
       if (Def->NumInputs < 2 || !Def->Inputs[1].isConst())
@@ -802,9 +813,9 @@ llvm::Value *MedLLVMEmitter::getRawSegmentOffset(
         llvm::report_fatal_error("malformed SELECT in an FS/GS offset");
       llvm::Value *Cond = getVar(Def->Inputs[0], Builder);
       if (!Cond->getType()->isIntegerTy(1))
-        Cond = Builder.CreateICmpNE(
-            Cond, llvm::ConstantInt::get(Cond->getType(), 0),
-            "segment_offset_cond");
+        Cond = Builder.CreateICmpNE(Cond,
+                                    llvm::ConstantInt::get(Cond->getType(), 0),
+                                    "segment_offset_cond");
       llvm::Value *T = asInteger(materialize(Def->Inputs[1]), OutTy, false);
       llvm::Value *F = asInteger(materialize(Def->Inputs[2]), OutTy, false);
       return Builder.CreateSelect(Cond, T, F, "segment_offset_select");

@@ -19,6 +19,8 @@
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/SmallString.h"
+#include "llvm/Analysis/ConstantFolding.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
@@ -31,6 +33,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Utils/PromoteMemToReg.h"
 
 #include <algorithm>
 #include <array>
@@ -663,6 +666,75 @@ const LowBlock *findBlock(const LowFunc &Function, va_t Address) {
     if (Block.StartAddr == Address)
       return &Block;
   return nullptr;
+}
+
+TEST(LowInstructionBoundary, SegmentOffsetsPreserveNarrowShiftSemantics) {
+  for (uint8_t Shift : {uint8_t(0xe0), uint8_t(0xe8), uint8_t(0xf8)}) {
+    for (uint8_t Segment : {uint8_t(0x64), uint8_t(0x65)}) {
+      for (unsigned Count : {0u, 1u, 8u, 31u, 32u}) {
+        SCOPED_TRACE(testing::Message() << unsigned(Shift) << ":"
+                                        << unsigned(Segment) << ":" << Count);
+        // mov eax,edi; mov ecx,esi; shl/shr/sar al,cl; movzx eax,al;
+        // mov eax,fs/gs:[rax]; ret. Counts 8..31 exceed the byte width.
+        LowFunc Low = buildFunction(Arch::X64, InstructionMode::Default,
+                                    {0x89, 0xf8, 0x89, 0xf1, 0xd2, Shift, 0x0f,
+                                     0xb6, 0xc0, Segment, 0x8b, 0x00, 0xc3});
+        MedFunc Med =
+            LowToMedConverter().convert(Low, Arch::X64, BinaryFormat::ELF);
+        llvm::LLVMContext Context;
+        auto Module =
+            MedLLVMEmitter().emit({Med}, Context, "segment-shift", Arch::X64);
+        ASSERT_NE(Module, nullptr);
+        ASSERT_TRUE(validLLVMModule(*Module));
+        llvm::Function *Function = Module->getFunction(Med.Name);
+        ASSERT_NE(Function, nullptr);
+        ASSERT_EQ(Function->arg_size(), 2u);
+        // Eliminate register backing allocas before specializing the inputs.
+        llvm::SmallVector<llvm::AllocaInst *> Allocas;
+        for (llvm::Instruction &Instruction : Function->getEntryBlock())
+          if (auto *Alloca = llvm::dyn_cast<llvm::AllocaInst>(&Instruction))
+            if (llvm::isAllocaPromotable(Alloca))
+              Allocas.push_back(Alloca);
+        llvm::DominatorTree DT(*Function);
+        llvm::PromoteMemToReg(Allocas, DT);
+        Function->getArg(0)->replaceAllUsesWith(
+            llvm::ConstantInt::get(Function->getArg(0)->getType(), 0x80));
+        Function->getArg(1)->replaceAllUsesWith(
+            llvm::ConstantInt::get(Function->getArg(1)->getType(), Count));
+        const unsigned MaskedCount = Count & 31;
+        const unsigned Expected =
+            Shift == 0xf8
+                ? (MaskedCount >= 8 ? 0xff
+                                    : (0xffffff80u >> MaskedCount) & 0xff)
+            : MaskedCount >= 8 ? 0
+            : Shift == 0xe0    ? (0x80u << MaskedCount) & 0xff
+                               : 0x80u >> MaskedCount;
+        unsigned Loads = 0;
+        for (llvm::BasicBlock &Block : *Function) {
+          for (llvm::Instruction &Instruction : Block) {
+            if (auto *Folded = llvm::ConstantFoldInstruction(
+                    &Instruction, Module->getDataLayout()))
+              Instruction.replaceAllUsesWith(Folded);
+            if (auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction)) {
+              if (Load->getPointerAddressSpace() !=
+                  (Segment == 0x64 ? 257u : 256u))
+                continue;
+              ++Loads;
+              auto *ExpectedPointer = llvm::ConstantExpr::getIntToPtr(
+                  llvm::ConstantInt::get(llvm::Type::getInt64Ty(Context),
+                                         Expected),
+                  Load->getPointerOperand()->getType());
+              std::string Actual;
+              llvm::raw_string_ostream OS(Actual);
+              Load->getPointerOperand()->print(OS);
+              EXPECT_EQ(Load->getPointerOperand(), ExpectedPointer) << Actual;
+            }
+          }
+        }
+        EXPECT_EQ(Loads, 1u);
+      }
+    }
+  }
 }
 
 TEST(LowInstructionBoundary,
