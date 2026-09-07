@@ -89,6 +89,25 @@ set_tests_properties(NeverDSimplifySurfaceAgreement PROPERTIES
 )
 
 add_subdirectory(symbolic)
+
+add_test(
+  NAME NeverDMobileTests
+  COMMAND "${CMAKE_COMMAND}" -E env
+          "NEVERD_BUILD_DIR=${CMAKE_BINARY_DIR}"
+          "${Python3_EXECUTABLE}" -m unittest discover
+          -s "${CMAKE_SOURCE_DIR}/scripts/tests" -p "test_mobile_*.py" -v
+)
+set_tests_properties(NeverDMobileTests PROPERTIES
+  LABELS NeverDMobileTests
+  TIMEOUT 180
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+add_custom_target(check-neverd-mobile
+  COMMAND ${CMAKE_CTEST_COMMAND} --test-dir ${CMAKE_BINARY_DIR}
+          -R ^NeverDMobileTests$ --output-on-failure -C $<CONFIG>
+  DEPENDS neverd
+  USES_TERMINAL
+)
 add_subdirectory(solver)
 add_subdirectory(concolic)
 add_subdirectory(safety)

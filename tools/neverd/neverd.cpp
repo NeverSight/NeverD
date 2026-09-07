@@ -89,6 +89,8 @@ static int realMain(int Argc, char *Argv[]) {
     return runTranslateObject();
   if (ConcolicCmd)
     return runConcolic();
+  if (MobileCmd)
+    return runMobile(Argv[0]);
 
   // The active subcommand's registered name feeds the banner below.  Plugins
   // and diff returned already, so exactly one of the remaining named

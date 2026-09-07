@@ -3114,12 +3114,33 @@ class RepositoryCapabilityTests(unittest.TestCase):
                 "symbolic.execution.lowir-concolic": "experimental",
                 "symbolic.execution.path-exploration": "experimental",
                 "llvm.semantic.synthesis-rewrite": "supported",
+                "mobile.source-recovery": "experimental",
                 "translation.executable-engine": "experimental",
                 "translation.runtime-contract": "experimental",
             },
         )
         no_surfaces = {"c": [], "python": [], "cli": [], "json": []}
         expected_surfaces = {
+            "mobile.source-recovery": {
+                "c": [],
+                "python": [],
+                "cli": [
+                    "neverd mobile",
+                    "neverd mobile --arch",
+                    "neverd mobile --artifact",
+                    "neverd mobile --jadx",
+                    "neverd mobile --json",
+                    "neverd mobile --max-bytes",
+                    "neverd mobile --max-files",
+                    "neverd mobile --max-func",
+                    "neverd mobile --metadata-only",
+                    "neverd mobile --o",
+                    "neverd mobile --platform",
+                    "neverd mobile --python",
+                    "neverd mobile --timeout",
+                ],
+                "json": [],
+            },
             "debug.hardware": no_surfaces,
             "debug.local": no_surfaces,
             "debug.remote": no_surfaces,

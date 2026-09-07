@@ -1,0 +1,77 @@
+name: Mobile Decompilation
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - '.github/workflows/mobile.yml'
+      - 'tools/neverd/mobile/**'
+      - 'tools/neverd/cmd/NeverDCmdMobile.cpp'
+      - 'tools/neverd/CMakeLists.txt'
+      - 'scripts/tests/test_mobile_*.py'
+      - 'scripts/tests/fixtures/mobile/**'
+      - 'scripts/test_mobile_android_backend.py'
+  pull_request:
+    paths:
+      - '.github/workflows/mobile.yml'
+      - 'tools/neverd/mobile/**'
+      - 'tools/neverd/cmd/NeverDCmdMobile.cpp'
+      - 'tools/neverd/CMakeLists.txt'
+      - 'scripts/tests/test_mobile_*.py'
+      - 'scripts/tests/fixtures/mobile/**'
+      - 'scripts/test_mobile_android_backend.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  components:
+    name: Components (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+        python: ['3.10', '3.13']
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Verify importers and process boundaries without a decompiler dependency
+        run: python -m unittest discover -s scripts/tests -p "test_mobile_*.py" -v
+
+  android-backend:
+    name: Real Android recovery and Java execution
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      JADX_SHA256: '545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.10'
+      - name: Set up JDK
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Download and verify the fixed backend release
+        shell: bash
+        run: |
+          curl --fail --location --retry 3 https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip --output "$RUNNER_TEMP/jadx.zip"
+          printf '%s  %s\n' "$JADX_SHA256" "$RUNNER_TEMP/jadx.zip" | sha256sum --check -
+          unzip -q "$RUNNER_TEMP/jadx.zip" -d "$RUNNER_TEMP/jadx"
+      - name: Recover and execute single smali, cross-class smali, DEX and multidex APK fixtures
+        run: python scripts/test_mobile_android_backend.py --jadx "$RUNNER_TEMP/jadx/bin/jadx"

@@ -3254,6 +3254,92 @@
           "neverd_synthesize_expr_json_v1"
         ]
       }
+    },
+    {
+      "id": "mobile.source-recovery",
+      "kind": "analysis",
+      "status": "experimental",
+      "owner": "mobile",
+      "targets": [
+        "android",
+        "ios"
+      ],
+      "docs": [
+        "docs/mobile.md",
+        "docs/mobile.zh-CN.md"
+      ],
+      "limitations": [
+        "CLI workflow only; Python 3.10+ and a separately installed JADX 1.5.6+ backend are required for Android.",
+        "Android emits reconstructed Java for DEX/smali code; resources and native libraries are excluded.",
+        "iOS emits native C pseudocode and available Objective-C/Swift metadata, not original Swift or Objective-C method bodies.",
+        "Encrypted native slices and unsupported metadata pointer encodings cannot be recovered."
+      ],
+      "tests": [
+        {
+          "runner": "python-unittest",
+          "target": "NeverDMobileTests",
+          "source": "scripts/tests/test_mobile_android.py",
+          "filter": "AndroidTests.test_multidex_apk_passes_every_root_dex_together",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDMobileTests",
+          "source": "scripts/tests/test_mobile_common.py",
+          "filter": "MobileCommonTests.test_unsafe_paths_rejected_before_any_write",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDMobileTests",
+          "source": "scripts/tests/test_mobile_ios.py",
+          "filter": "MachOTests.test_class_instance_and_class_method_signatures",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDMobileTests",
+          "source": "scripts/tests/test_mobile_cli.py",
+          "filter": "MobileCLITests.test_ios_metadata_from_ipa_outside_checkout",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
+      ],
+      "public_surfaces": {
+        "c": [],
+        "python": [],
+        "cli": [
+          "neverd mobile",
+          "neverd mobile --arch",
+          "neverd mobile --artifact",
+          "neverd mobile --jadx",
+          "neverd mobile --json",
+          "neverd mobile --max-bytes",
+          "neverd mobile --max-files",
+          "neverd mobile --max-func",
+          "neverd mobile --metadata-only",
+          "neverd mobile --o",
+          "neverd mobile --platform",
+          "neverd mobile --python",
+          "neverd mobile --timeout"
+        ],
+        "json": []
+      }
     }
   ]
 }

@@ -175,6 +175,18 @@ extern llvm::cl::SubCommand TranslateObjectCmd;
 extern llvm::cl::SubCommand AuditCmd;
 extern llvm::cl::SubCommand HuntCmd;
 extern llvm::cl::SubCommand ConcolicCmd;
+extern llvm::cl::SubCommand MobileCmd;
+
+int runMobile(const char *Argv0);
+extern llvm::cl::opt<std::string> MobilePlatform;
+extern llvm::cl::opt<std::string> MobileBackend;
+extern llvm::cl::opt<std::string> MobileArch;
+extern llvm::cl::opt<std::string> MobileArtifact;
+extern llvm::cl::opt<std::string> MobilePython;
+extern llvm::cl::opt<bool> MobileMetadataOnly;
+extern llvm::cl::opt<unsigned> MobileTimeout;
+extern llvm::cl::opt<unsigned> MobileMaxFiles;
+extern llvm::cl::opt<uint64_t> MobileMaxBytes;
 
 //===----------------------------------------------------------------------===//
 // Options (defined in NeverDCLIOptions.cpp)

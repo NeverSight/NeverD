@@ -37,6 +37,43 @@ std::optional<uint64_t> parseAddrArg(StringRef Ref) {
 //===----------------------------------------------------------------------===//
 
 cl::SubCommand LiftCmd("lift", "Lift binary to LLVM IR");
+cl::SubCommand
+    MobileCmd("mobile",
+              "Recover Android Java and iOS native sources and metadata");
+
+cl::opt<std::string> MobilePlatform("platform",
+                                    cl::desc("auto, android, or ios"),
+                                    cl::init("auto"), cl::sub(MobileCmd));
+cl::opt<std::string>
+    MobileBackend("jadx",
+                  cl::desc("Android Java backend executable (or NEVERD_JADX)"),
+                  cl::init(""), cl::sub(MobileCmd));
+cl::opt<std::string>
+    MobileArch("arch", cl::desc("iOS slice: auto, arm64, arm, x86_64, or i386"),
+               cl::init("auto"), cl::sub(MobileCmd));
+cl::opt<std::string>
+    MobileArtifact("artifact",
+                   cl::desc("iOS executable path relative to the app bundle"),
+                   cl::init(""), cl::sub(MobileCmd));
+cl::opt<std::string>
+    MobilePython("python",
+                 cl::desc("Python 3.10+ executable (or NEVERD_PYTHON)"),
+                 cl::init(""), cl::sub(MobileCmd));
+cl::opt<bool> MobileMetadataOnly(
+    "metadata-only",
+    cl::desc("Export iOS metadata without native C decompilation"),
+    cl::sub(MobileCmd));
+cl::opt<unsigned>
+    MobileTimeout("timeout", cl::desc("Timeout in seconds per backend process"),
+                  cl::init(300), cl::sub(MobileCmd));
+cl::opt<unsigned>
+    MobileMaxFiles("max-files",
+                   cl::desc("Maximum mobile input/output file count"),
+                   cl::init(20000), cl::sub(MobileCmd));
+cl::opt<uint64_t> MobileMaxBytes("max-bytes",
+                                 cl::desc("Maximum mobile input/output bytes"),
+                                 cl::init(2ULL * 1024 * 1024 * 1024),
+                                 cl::sub(MobileCmd));
 cl::SubCommand DecompileCmd("decompile",
                             "Decompile binary to C, Rust, or Solidity");
 cl::SubCommand PatchCmd("patch", "Patch binary with modified IR");
@@ -116,12 +153,12 @@ cl::opt<std::string>
               cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
               cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
               cl::sub(DashboardCmd), cl::sub(SigsCmd), cl::sub(SymbolicCmd),
-              cl::sub(AuditCmd), cl::sub(HuntCmd));
+              cl::sub(AuditCmd), cl::sub(HuntCmd), cl::sub(MobileCmd));
 
 cl::opt<std::string> OutputFile("o", cl::desc("Output file"), cl::init(""),
                                 cl::sub(LiftCmd), cl::sub(DecompileCmd),
                                 cl::sub(PatchCmd), cl::sub(AuditCmd),
-                                cl::sub(HuntCmd));
+                                cl::sub(HuntCmd), cl::sub(MobileCmd));
 
 cl::opt<bool>
     Verbose("v", cl::desc("Verbose output"), cl::sub(LiftCmd),
@@ -278,7 +315,7 @@ cl::opt<bool> NoOpt("no-opt", cl::desc("Skip LLVM optimization passes"),
 
 cl::opt<size_t> MaxFunc("max-func", cl::desc("Limit to first N functions"),
                         cl::init(0), cl::sub(LiftCmd), cl::sub(DecompileCmd),
-                        cl::sub(PatchCmd));
+                        cl::sub(PatchCmd), cl::sub(MobileCmd));
 
 //===----------------------------------------------------------------------===//
 // Lift-specific options
@@ -566,18 +603,17 @@ ConcolicStringList ConcolicSolverGates(
 // JSON output option (shared)
 //===----------------------------------------------------------------------===//
 
-cl::opt<bool> JsonOutput("json", cl::desc("Output as JSON"), cl::sub(InfoCmd),
-                         cl::sub(FuncsCmd), cl::sub(DisasmCmd), cl::sub(CfgCmd),
-                         cl::sub(HexCmd), cl::sub(StringsCmd),
-                         cl::sub(XrefsCmd), cl::sub(ImportsCmd),
-                         cl::sub(ExportsCmd), cl::sub(SegmentsCmd),
-                         cl::sub(PluginsCmd), cl::sub(BookmarksCmd),
-                         cl::sub(AnnotateCmd), cl::sub(CallGraphCmd),
-                         cl::sub(RenameCmd), cl::sub(SearchCmd),
-                         cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
-                         cl::sub(RelocsCmd), cl::sub(HeadersCmd),
-                         cl::sub(EntryPointsCmd), cl::sub(DashboardCmd),
-                         cl::sub(SigsCmd), cl::sub(AuditCmd), cl::sub(HuntCmd));
+cl::opt<bool>
+    JsonOutput("json", cl::desc("Output as JSON"), cl::sub(InfoCmd),
+               cl::sub(FuncsCmd), cl::sub(DisasmCmd), cl::sub(CfgCmd),
+               cl::sub(HexCmd), cl::sub(StringsCmd), cl::sub(XrefsCmd),
+               cl::sub(ImportsCmd), cl::sub(ExportsCmd), cl::sub(SegmentsCmd),
+               cl::sub(PluginsCmd), cl::sub(BookmarksCmd), cl::sub(AnnotateCmd),
+               cl::sub(CallGraphCmd), cl::sub(RenameCmd), cl::sub(SearchCmd),
+               cl::sub(SectionsCmd), cl::sub(SymbolsCmd), cl::sub(RelocsCmd),
+               cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
+               cl::sub(DashboardCmd), cl::sub(SigsCmd), cl::sub(AuditCmd),
+               cl::sub(HuntCmd), cl::sub(MobileCmd));
 
 //===----------------------------------------------------------------------===//
 // Plugins-specific options
