@@ -631,6 +631,49 @@ TEST(MedABIPass, X86CdeclRecoversLoopCarriedCallSpRelativeSlots) {
   EXPECT_EQ(Func.CallInfos[0].Args[1].ConstVal, 22u);
 }
 
+TEST(MedABIPass, PartialPointerOverwriteDoesNotRemoveAnIndirectCallArgument) {
+  // Preserve exact spills and disjoint writes; reject partial overlapping
+  // writes and a store too narrow to define the complete pointer load.
+  for (unsigned Mode = 0; Mode < 4; ++Mode) {
+    SCOPED_TRACE(Mode);
+    constexpr Arch A = Arch::AArch64;
+    const auto &TRI = getTargetRegInfo(A);
+    MedFunc F;
+    F.Entry = 0x1000;
+    F.Blocks.resize(1);
+    auto &B = F.Blocks[0];
+    B.Id = 0;
+    B.StartAddr = F.Entry;
+    const MedVar Arg = reg(1, 0, 8, TRI.IntParamRegs[0], A);
+    addLiveIn(B, Arg);
+    MedOp Store;
+    Store.Opcode = NdOp::STORE;
+    Store.addInput(MedVar::makeConst(0x9000, 8));
+    MedVar Stored = Arg;
+    if (Mode == 3)
+      Stored.Size = 4;
+    Store.addInput(Stored);
+    B.Ops.push_back(Store);
+    if (Mode == 1 || Mode == 2) {
+      MedOp Partial = Store;
+      Partial.Inputs[0] = MedVar::makeConst(Mode == 1 ? 0x9001 : 0x9010, 8);
+      Partial.Inputs[1] = MedVar::makeConst(0x42, 1);
+      B.Ops.push_back(Partial);
+    }
+    const MedVar Target = temp(2, 0, 8, A);
+    B.Ops.push_back(unary(NdOp::LOAD, Target, MedVar::makeConst(0x9000, 8)));
+    MedOp Call;
+    Call.Opcode = NdOp::INDIR_CALL;
+    Call.addInput(Target);
+    B.Ops.push_back(Call);
+
+    recoverCallAbi(F, A, {});
+
+    ASSERT_EQ(F.CallInfos.size(), 1u);
+    EXPECT_EQ(F.CallInfos[0].Args.size(), Mode == 1 || Mode == 3 ? 1u : 0u);
+  }
+}
+
 TEST(MedABIPass,
      AArch64IndirectCallRecoversFloatOverflowFromScratchVectorRegs) {
   constexpr Arch TheArch = Arch::AArch64;

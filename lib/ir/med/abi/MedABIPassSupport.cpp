@@ -12,6 +12,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../../../safety/StackSlotFlow.h"
 #include "MedABIPassDetail.h"
 
 #include "neverd/Common.h"
@@ -105,6 +106,49 @@ static bool sameReducedAddr(const std::pair<MedVar, int64_t> &A,
          A.first.RegOff == B.first.RegOff;
 }
 
+// Prove a complete same-block store reaches this load. A partial overwrite,
+// unknown alias, atomic access or call invalidates the earlier stored value.
+static std::optional<int> reachingStore(const MedBlock &Blk, int LoadIndex) {
+  const MedOp &Load = Blk.Ops[LoadIndex];
+  const MedVar *Address = safety::detail::memoryAddress(Load);
+  if (!Address || Load.Output.Size == 0 ||
+      Load.MemoryOrdering != NdMemoryOrdering::None)
+    return std::nullopt;
+  const auto Target = reduceAddr(Blk, *Address, 0, 0);
+  for (int I = LoadIndex - 1; I >= 0; --I) {
+    const MedOp &Op = Blk.Ops[I];
+    if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
+        Op.Opcode == NdOp::INTRINSIC)
+      return std::nullopt;
+    if (!safety::detail::isStackMemoryWrite(Op.Opcode))
+      continue;
+    const MedVar *StoreAddress = safety::detail::memoryAddress(Op);
+    const MedVar *Value = safety::detail::storedValue(Op);
+    if (!StoreAddress || !Value || Value->Size == 0 ||
+        Op.MemoryOrdering != NdMemoryOrdering::None)
+      return std::nullopt;
+    const auto Source = reduceAddr(Blk, *StoreAddress, 0, 0);
+    if (Source.first.isConst() && Target.first.isConst() &&
+        Source.second == 0 && Target.second == 0 &&
+        Source.first.Size == Target.first.Size) {
+      const uint64_t S = Source.first.ConstVal, T = Target.first.ConstVal;
+      if ((S < T && T - S >= Value->Size) ||
+          (T < S && S - T >= Load.Output.Size))
+        continue;
+    }
+    if (Source.first.Size != Target.first.Size ||
+        !sameReducedAddr({Source.first, 0}, {Target.first, 0}))
+      return std::nullopt;
+    if (!safety::detail::stackRangesOverlap(Source.second, Value->Size,
+                                            Target.second, Load.Output.Size))
+      continue;
+    if (Source.second == Target.second && Value->Size == Load.Output.Size)
+      return I;
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
+
 // Resolve an indirect call target to a constant code address when the call goes
 // through a function pointer that provably holds a known function (`fp = &F;
 // ...; fp(...)`).  Follows COPY / width-cast chains and a single stack-slot
@@ -146,20 +190,11 @@ va_t resolveIndirectTargetAddr(const MedBlock &Blk, int FromIdx,
                                            Depth + 1)
                : 0;
   case NdOp::LOAD: {
-    if (Def.NumInputs < 1 ||
-        Def.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+    const auto Store = reachingStore(Blk, DefIdx);
+    if (!Store)
       return 0;
-    auto LoadAddr = reduceAddr(Blk, Def.Inputs[0], 0, 0);
-    // Nearest prior store to the same slot (memory is not SSA; scan backward).
-    for (int J = DefIdx - 1; J >= 0; --J) {
-      const auto &O = Blk.Ops[J];
-      if (O.Opcode != NdOp::STORE || O.NumInputs < 2 ||
-          O.MemoryAddressSpace != NdMemoryAddressSpace::Default)
-        continue;
-      if (sameReducedAddr(LoadAddr, reduceAddr(Blk, O.Inputs[0], 0, 0)))
-        return resolveIndirectTargetAddr(Blk, J, O.Inputs[1], Depth + 1);
-    }
-    return 0;
+    return resolveIndirectTargetAddr(
+        Blk, *Store, *safety::detail::storedValue(Blk.Ops[*Store]), Depth + 1);
   }
   default:
     return 0;
@@ -212,20 +247,12 @@ std::optional<int> resolveIndirectTargetArgIdx(const MedBlock &Blk, int FromIdx,
                                              IsWin64, Depth + 1)
                : std::nullopt;
   case NdOp::LOAD: {
-    if (Def.NumInputs < 1 ||
-        Def.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+    const auto Store = reachingStore(Blk, DefIdx);
+    if (!Store)
       return std::nullopt;
-    auto LoadAddr = reduceAddr(Blk, Def.Inputs[0], 0, 0);
-    for (int J = DefIdx - 1; J >= 0; --J) {
-      const auto &O = Blk.Ops[J];
-      if (O.Opcode != NdOp::STORE || O.NumInputs < 2 ||
-          O.MemoryAddressSpace != NdMemoryAddressSpace::Default)
-        continue;
-      if (sameReducedAddr(LoadAddr, reduceAddr(Blk, O.Inputs[0], 0, 0)))
-        return resolveIndirectTargetArgIdx(Blk, J, TRI, O.Inputs[1], IsWin64,
-                                           Depth + 1);
-    }
-    return std::nullopt;
+    return resolveIndirectTargetArgIdx(
+        Blk, *Store, TRI, *safety::detail::storedValue(Blk.Ops[*Store]),
+        IsWin64, Depth + 1);
   }
   default:
     return std::nullopt;
@@ -358,32 +385,13 @@ std::optional<int64_t> stackPtrDelta(const MedFunc &Func,
     return Def->Opcode == NdOp::INT_ADD ? *Base + K : *Base - K;
   }
   case NdOp::LOAD: {
-    // Store-to-load forwarding for a spilled-and-reloaded stack pointer.  Clang
-    // at -O0 with a long outgoing-argument list parks the argument-area base (a
-    // copy of ESP) in a frame slot and reloads it before the call; the reloaded
-    // base is otherwise opaque, so every argument addressed through it would be
-    // dropped and the recovered call truncated at the first gap.  Match the
-    // load against the nearest prior store to the *same* address (compared
-    // structurally, so a frame-pointer-relative spill slot resolves without
-    // tracing the cross-block frame pointer to an entry-SP offset) and forward
-    // that store's value, yielding the spilled SP delta.
-    if (Def->NumInputs < 1 ||
-        Def->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+    const int LoadIndex = static_cast<int>(Def - DefBlock.Ops.data());
+    const auto Store = reachingStore(DefBlock, LoadIndex);
+    if (!Store)
       return std::nullopt;
-    auto LoadAddr = reduceAddr(DefBlock, Def->Inputs[0], 0, 0);
-    size_t DefIdx = static_cast<size_t>(Def - DefBlock.Ops.data());
-    for (size_t I = DefIdx; I-- > 0;) {
-      const MedOp &S = DefBlock.Ops[I];
-      if (S.Opcode != NdOp::STORE || S.NumInputs < 2 ||
-          S.MemoryAddressSpace != NdMemoryAddressSpace::Default)
-        continue;
-      if (!sameReducedAddr(reduceAddr(DefBlock, S.Inputs[0], 0, 0), LoadAddr))
-        continue; // a store to a different slot does not define this load
-      // The nearest prior store to this slot defines the loaded value: forward
-      // its SP delta (nullopt when the slot holds a non-pointer).
-      return stackPtrDelta(Func, TRI, S.Inputs[1], Depth + 1);
-    }
-    return std::nullopt;
+    return stackPtrDelta(Func, TRI,
+                         *safety::detail::storedValue(DefBlock.Ops[*Store]),
+                         Depth + 1);
   }
   default:
     return std::nullopt;
