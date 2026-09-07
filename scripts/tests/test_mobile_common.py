@@ -29,7 +29,17 @@ class MobileCommonTests(unittest.TestCase):
         archive = self.root / "input.zip"
         with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as out:
             for name, data in entries:
-                out.writestr(name, data)
+                # Preserve raw member names: ZipInfo normally replaces the
+                # host separator on Windows, accidentally repairing hostile
+                # fixture paths before the importer can test them.
+                if isinstance(name, str):
+                    entry = zipfile.ZipInfo("fixture")
+                    entry.filename = name
+                    entry.orig_filename = name
+                    entry.compress_type = zipfile.ZIP_DEFLATED
+                else:
+                    entry = name
+                out.writestr(entry, data)
         return archive
 
     def test_extract_nested_binary_and_empty_file(self):
@@ -40,13 +50,22 @@ class MobileCommonTests(unittest.TestCase):
         self.assertEqual((output / "data/a").read_bytes(), b"\x00\xff")
 
     def test_unsafe_paths_rejected_before_any_write(self):
-        for name in ("../escape", "/absolute", "C:/escape", "a/../b", "a\\b", "a//b", "./a", "CON.txt", "a./x"):
+        for index, name in enumerate(("../escape", "/absolute", "C:/escape", "a/../b", "a\\b", "a//b", "./a", "CON.txt", "a./x")):
             with self.subTest(name=name):
                 source = self.archive([("good", b"ok"), (name, b"bad")])
-                output = self.root / "output"
+                output = self.root / f"output-{index}"
                 with self.assertRaises(MobileError):
                     extract_zip(source, output, Limits())
                 self.assertFalse(output.exists())
+
+    def test_raw_separator_is_rejected_when_zip_reader_normalizes_it(self):
+        source = self.archive([("a\\b", b"x")])
+        self.assertIn(b"a\\b", source.read_bytes())
+        # Exercise the Windows reader's normalization on every test host.
+        with patch.object(zipfile.os, "sep", "\\"):
+            with self.assertRaises(MobileError):
+                extract_zip(source, self.root / "output", Limits())
+        self.assertFalse((self.root / "output").exists())
 
     def test_symlink_archive_rejected(self):
         link = zipfile.ZipInfo("link")

@@ -105,7 +105,7 @@ def extract_zip(source: Path, dest: Path, limits: Limits) -> list[Path]:
             members = []
             for entry in entries:
                 if entry.orig_filename != entry.filename:
-                    raise MobileError("archive path contains a NUL character")
+                    raise MobileError("archive path contains NUL or a nonportable separator")
                 path = relative_member(entry.filename)
                 for part in (path, *path.parents):
                     key_part = part.as_posix().casefold()
