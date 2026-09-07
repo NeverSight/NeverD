@@ -229,9 +229,12 @@ void parseGoExceptions(BinaryImage &Img) {
       NextOffset = *SentinelOffset;
     G.CodeRange = ExceptionAddressRange{toAddress(G.Raw.EntryOffset),
                                         toAddress(NextOffset)};
-    if (std::optional<std::string> Name = R.cstring(
-            Header->FuncNameTab + static_cast<va_t>(G.Raw.NameOffset)))
-      G.Name = std::move(*Name);
+    const va_t NameOffset = static_cast<va_t>(G.Raw.NameOffset);
+    if (NameOffset <= InvalidVA - Header->FuncNameTab) {
+      if (std::optional<std::string> Name =
+              R.cstring(Header->FuncNameTab + NameOffset))
+        G.Name = std::move(*Name);
+    }
     Funcs.push_back(std::move(G));
   }
 

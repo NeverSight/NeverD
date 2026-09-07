@@ -4,9 +4,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "gtest/gtest.h"
-
 #include "GoRuntimeEHTestsDetail.h"
+#include "gtest/gtest.h"
 
 namespace {
 
@@ -60,6 +59,40 @@ TEST(GoMalformedRecords, RejectsAHeaderWhosePointerSizeContradictsTheImage) {
   T.installPclnTab(Tab.Bytes);
 
   EXPECT_FALSE(hasGoRuntimeMetadata(T.Img));
+}
+
+TEST(GoMalformedRecords, RejectsAFunctionNameAddressThatWraps) {
+  GoTestImage T;
+  GoFuncSpec Work = makeDeferringFunc("main.work", kTextVA + 0x100);
+  BuiltPclnTab Tab = buildPclnTab(kGo116Magic, {Work}, kTextVA + 0x200);
+
+  constexpr va_t WrappedNameBase = InvalidVA - 3;
+  Tab.put64(24, WrappedNameBase - kPclnVA);
+  Tab.put32(Tab.RecordOffsets[0] + 8, 8);
+  T.installPclnTab(Tab.Bytes);
+
+  Segment High;
+  High.Name = ".high";
+  High.VA = WrappedNameBase;
+  High.Size = 3;
+  High.Flags = SegmentFlags::Readable;
+  High.Data.assign(3, 'x');
+  T.Img.Segments.push_back(std::move(High));
+
+  Segment Low;
+  Low.Name = ".low";
+  Low.VA = 4;
+  Low.Size = 8;
+  Low.Flags = SegmentFlags::Readable;
+  Low.Data = {'w', 'r', 'a', 'p', 'p', 'e', 'd', 0};
+  T.Img.Segments.push_back(std::move(Low));
+
+  parseGoExceptions(T.Img);
+
+  const ExceptionFunction *F =
+      findRecord(T.Img.ExceptionMetadata, kTextVA + 0x100);
+  ASSERT_NE(F, nullptr);
+  EXPECT_TRUE(F->Go->Name.empty());
 }
 
 TEST(GoMalformedRecords, LeavesAnImageWithNoPclnTabAlone) {
