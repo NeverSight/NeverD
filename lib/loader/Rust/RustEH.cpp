@@ -156,7 +156,7 @@ bool isCatchAllIndex(const ItaniumEHInfo &Info, int64_t Filter) {
 bool isEmptySpecificationIndex(const ItaniumEHInfo &Info, int64_t Filter) {
   if (Filter >= 0)
     return false;
-  const uint64_t Index = static_cast<uint64_t>(-Filter);
+  const uint64_t Index = uint64_t{0} - static_cast<uint64_t>(Filter);
   for (const ItaniumExceptionSpec &Spec : Info.ExceptionSpecs)
     if (Spec.Index == Index)
       return Spec.TypeIndices.empty();

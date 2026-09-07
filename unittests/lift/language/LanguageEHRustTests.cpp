@@ -7,6 +7,8 @@
 #include "LanguageEHTestsDetail.h"
 #include "gtest/gtest.h"
 
+#include <limits>
+
 namespace {
 
 using namespace neverd;
@@ -18,7 +20,7 @@ using namespace neverd::language_eh_test;
 /// boundary.  All three pad kinds appear, which is the whole point: they are
 /// spelled with the same structures C++ uses and are told apart only by what
 /// the action chain selects.
-std::vector<uint8_t> buildRustLSDA() {
+std::vector<uint8_t> buildRustLSDA(int64_t SpecificationFilter = -1) {
   ByteBuilder B;
   B.u8(0xff); // landing pad base defaults to the function start
   B.u8(0x00); // DW_EH_PE_absptr type table entries
@@ -52,7 +54,7 @@ std::vector<uint8_t> buildRustLSDA() {
     Body.sleb(1);
     Body.sleb(0);
     // Offset 2: exception-specification list 1, end of chain.
-    Body.sleb(-1);
+    Body.sleb(SpecificationFilter);
     Body.sleb(0);
   }
 
@@ -147,6 +149,34 @@ TEST(RustEH, ClassifiesEveryLandingPadKindItSharesWithCxx) {
   EXPECT_EQ(RT.CatchUnwindFrames, 1u);
   EXPECT_EQ(RT.NoUnwindGuardFrames, 1u);
   EXPECT_FALSE(RT.UsesMSVCUnwinding);
+}
+
+TEST(RustEH, MinimumSignedFilterDoesNotOverflowOrInventANoUnwindGuard) {
+  const va_t FuncVA = kTextVA + 0x100;
+  BinaryImage Img = makeRustImage(FuncVA, kTextVA + 0x900, "rust_begin_unwind");
+  writeData(Img, kDataVA + 0x400,
+            buildRustLSDA(std::numeric_limits<int64_t>::min()));
+  LSDAParseRequest Request;
+  Request.LSDAVA = kDataVA + 0x400;
+  Request.FunctionStart = FuncVA;
+  Request.FunctionEnd = FuncVA + 0x80;
+  auto Decoded = parseLSDA(Img, Request, PointerBases{});
+  EXPECT_EQ(Decoded.ParseStatus, ExceptionParseStatus::Partial);
+  ASSERT_TRUE(Decoded.Info.has_value());
+  EXPECT_TRUE(Decoded.Info->ExceptionSpecs.empty());
+  parseItaniumExceptions(Img);
+  rust_eh::parseRustExceptions(Img);
+  ASSERT_EQ(Img.ExceptionMetadata.Functions.size(), 1u);
+  const ExceptionFunction &F = Img.ExceptionMetadata.Functions[0];
+  ASSERT_TRUE(F.Itanium.has_value());
+  EXPECT_EQ(F.ParseStatus, ExceptionParseStatus::Partial);
+  ASSERT_EQ(F.Itanium->Actions.size(), 2u);
+  EXPECT_EQ(F.Itanium->Actions[1].TypeFilter,
+            std::numeric_limits<int64_t>::min());
+  EXPECT_TRUE(F.Itanium->ExceptionSpecs.empty());
+  ASSERT_TRUE(F.Rust.has_value());
+  EXPECT_FALSE(F.Rust->guardsAgainstUnwind());
+  EXPECT_TRUE(F.Rust->catchesUnwind());
 }
 
 TEST(RustEH, DoesNotTreatAnIncompleteSpecificationAsANoUnwindGuard) {

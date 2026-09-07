@@ -436,7 +436,7 @@ LSDAParseResult parseLSDA(const BinaryImage &Img, const LSDAParseRequest &Req,
     for (const ItaniumAction &A : Info.Actions) {
       if (!A.isExceptionSpecification())
         continue;
-      const uint64_t Index = static_cast<uint64_t>(-A.TypeFilter);
+      const uint64_t Index = uint64_t{0} - static_cast<uint64_t>(A.TypeFilter);
       bool Known = false;
       for (const ItaniumExceptionSpec &S : Info.ExceptionSpecs)
         if (S.Index == Index)
