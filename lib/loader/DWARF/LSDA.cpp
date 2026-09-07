@@ -335,11 +335,15 @@ LSDAParseResult parseLSDA(const BinaryImage &Img, const LSDAParseRequest &Req,
     if (NextOffset != 0) {
       // The chain link is self-relative: measured from the position of the
       // link field itself.
-      const int64_t Target = static_cast<int64_t>(LinkFieldOffset) + NextOffset;
-      if (Target < 0 ||
-          static_cast<uint64_t>(Target) >= ActionTableEnd - ActionTableStart) {
+      // These offsets are bounded by kMaxLSDABytes. Check the displacement
+      // before adding it: even a valid SLEB can overflow signed arithmetic.
+      const int64_t LinkBase = static_cast<int64_t>(LinkFieldOffset);
+      const int64_t Remaining = static_cast<int64_t>(
+          ActionTableEnd - ActionTableStart - LinkFieldOffset);
+      if (NextOffset < -LinkBase || NextOffset >= Remaining) {
         partial("Itanium LSDA action chain leaves its table");
       } else {
+        const int64_t Target = LinkBase + NextOffset;
         Action.NextActionOffset = static_cast<uint64_t>(Target);
         Pending.push_back(static_cast<uint64_t>(Target));
       }

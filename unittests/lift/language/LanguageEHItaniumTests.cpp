@@ -4,9 +4,10 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "LanguageEHTestsDetail.h"
 #include "gtest/gtest.h"
 
-#include "LanguageEHTestsDetail.h"
+#include <limits>
 
 namespace {
 
@@ -277,6 +278,48 @@ TEST(ItaniumLSDA, ReportsCleanupOnlyRecords) {
   ASSERT_EQ(Result.Info->CallSites.size(), 1u);
   EXPECT_EQ(Result.Info->CallSites[0].LandingPadVA, FuncVA + 0x40);
   EXPECT_TRUE(Result.Info->TypeTable.empty());
+}
+
+TEST(ItaniumLSDA, BoundsActionLinksBeforeApplyingSignedDisplacements) {
+  for (int64_t Link :
+       {std::numeric_limits<int64_t>::max(),
+        std::numeric_limits<int64_t>::min(), int64_t(1), int64_t(-1)}) {
+    SCOPED_TRACE(Link);
+    BinaryImage Img = makeImage();
+    const va_t LSDAVA = kDataVA + 0x200;
+    ByteBuilder B;
+    B.u8(0xff); // default landing-pad base
+    B.u8(0xff); // no type table
+    B.u8(0x01); // ULEB call sites
+    B.uleb(4);
+    B.uleb(0);
+    B.uleb(1);
+    B.uleb(1);
+    B.uleb(1); // action at table offset zero
+    B.sleb(0);
+    B.sleb(Link); // relative to table offset one
+    B.sleb(0);
+    B.sleb(0);
+    writeData(Img, LSDAVA, B.data());
+
+    LSDAParseRequest Req;
+    Req.LSDAVA = LSDAVA;
+    Req.FunctionStart = kTextVA;
+    Req.FunctionEnd = kTextVA + 0x100;
+    auto Result = parseLSDA(Img, Req, PointerBases{});
+    ASSERT_TRUE(Result.Info.has_value());
+    ASSERT_FALSE(Result.Info->Actions.empty());
+    if (Link == 1 || Link == -1) {
+      EXPECT_EQ(Result.ParseStatus, ExceptionParseStatus::Complete);
+      EXPECT_EQ(Result.Info->Actions[0].NextActionOffset,
+                static_cast<uint64_t>(1 + Link));
+      EXPECT_EQ(Result.Info->Actions.size(), Link == 1 ? 2u : 1u);
+    } else {
+      EXPECT_EQ(Result.ParseStatus, ExceptionParseStatus::Partial);
+      EXPECT_FALSE(Result.Info->Actions[0].NextActionOffset.has_value());
+      EXPECT_EQ(Result.Info->Actions.size(), 1u);
+    }
+  }
 }
 
 TEST(ItaniumLSDA, RecognizesCatchAllTypeSlot) {
