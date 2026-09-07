@@ -154,6 +154,9 @@ public:
     uint32_t Value = 0;
     unsigned Shift = 0;
     for (unsigned I = 0; I < 5; ++I) {
+      // Both the byte address and the cursor past it must be representable.
+      if (I + 1 > InvalidVA - VA)
+        return std::nullopt;
       std::optional<uint8_t> Byte = u8(VA + I);
       if (!Byte)
         return std::nullopt;
@@ -177,6 +180,9 @@ public:
   std::optional<std::string> cstring(va_t VA) const {
     std::string Result;
     for (size_t I = 0; I < MaxSymbolNameLength; ++I) {
+      // A missing terminator must not make the read wrap to a low segment.
+      if (I > InvalidVA - VA)
+        return std::nullopt;
       std::optional<uint8_t> Byte = u8(VA + I);
       if (!Byte)
         return std::nullopt;
