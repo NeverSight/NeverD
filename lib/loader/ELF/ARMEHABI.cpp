@@ -63,6 +63,20 @@ struct IndexEntry {
   uint32_t Word = 0;
 };
 
+/// Normalize both inline and out-of-line opcode streams with one failure
+/// policy.
+void decodeFrameOpcodes(llvm::ArrayRef<uint8_t> Opcodes, ExceptionFunction &F) {
+  bool Refuses = false;
+  if (!decodeUnwindOpcodes(Opcodes, F.UnwindOperations, Refuses)) {
+    F.UnwindOperations.clear();
+    F.ParseStatus = mergeExceptionParseStatus(F.ParseStatus,
+                                              ExceptionParseStatus::Malformed);
+    F.Diagnostics.emplace_back("ARM EHABI opcodes are truncated or overflow");
+  }
+  if (Refuses)
+    F.Diagnostics.emplace_back("ARM EHABI opcodes refuse to unwind this frame");
+}
+
 } // namespace
 
 void parseARMEHABIExceptions(BinaryImage &Img) {
@@ -212,13 +226,7 @@ void parseARMEHABIExceptions(BinaryImage &Img) {
         std::vector<uint8_t> Opcodes;
         appendWordOpcodes(Opcodes, Entry.Word, 3);
         F.NativeUnwindBytes = Opcodes;
-        bool Refuses = false;
-        if (!decodeUnwindOpcodes(Opcodes, F.UnwindOperations, Refuses))
-          F.Diagnostics.emplace_back(
-              "ARM EHABI inline opcodes end without a finish");
-        if (Refuses)
-          F.Diagnostics.emplace_back(
-              "ARM EHABI opcodes refuse to unwind this frame");
+        decodeFrameOpcodes(Opcodes, F);
       }
     } else {
       const va_t TableVA = resolvePrel31(Entry.Word, Entry.EntryVA + kWordSize);
@@ -238,12 +246,7 @@ void parseARMEHABIExceptions(BinaryImage &Img) {
                          ? ExceptionEncoding::ARMEHABICompact
                          : ExceptionEncoding::ARMEHABIGeneric;
         F.NativeUnwindBytes = Table.Opcodes;
-        bool Refuses = false;
-        if (!decodeUnwindOpcodes(Table.Opcodes, F.UnwindOperations, Refuses))
-          F.Diagnostics.emplace_back("ARM EHABI opcodes end without a finish");
-        if (Refuses)
-          F.Diagnostics.emplace_back(
-              "ARM EHABI opcodes refuse to unwind this frame");
+        decodeFrameOpcodes(Table.Opcodes, F);
 
         if (Table.PersonalityIndex) {
           F.Personality = static_cast<ExceptionPersonality>(

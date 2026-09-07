@@ -15,6 +15,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace neverd::arm_ehabi {
@@ -194,15 +195,18 @@ bool decodeUnwindOpcodes(llvm::ArrayRef<uint8_t> Bytes,
       const size_t Start = I;
       while (I < N) {
         const uint8_t Byte = Bytes[I++];
-        if (Shift < 64)
-          Value |= uint64_t(Byte & 0x7F) << Shift;
+        if (Shift >= 64 || uint64_t(Byte & 0x7F) >
+                               (std::numeric_limits<uint64_t>::max() >> Shift))
+          return false;
+        Value |= uint64_t(Byte & 0x7F) << Shift;
         Shift += 7;
         if ((Byte & 0x80) == 0) {
           Complete = true;
           break;
         }
       }
-      if (!Complete)
+      if (!Complete ||
+          Value > (std::numeric_limits<uint64_t>::max() - 0x204) / 4)
         return false;
       Builder.add(UnwindOperationKind::AllocateStack, Offset, 1 + (I - Start))
           .StackOffset = 0x204 + (Value << 2);
