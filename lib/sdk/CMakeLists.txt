@@ -166,11 +166,17 @@ add_custom_command(TARGET neverd_shared POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/include/neverd/OutputLanguages.def"
         "${NEVERD_STAGED_SDK_DIRECTORY}/neverd"
-    COMMENT "Copying SDK headers next to libneverd")
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/LICENSE"
+        "${CMAKE_SOURCE_DIR}/NOTICE"
+        "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
+        "${NEVERD_STAGED_SDK_DIRECTORY}"
+    COMMENT "Copying SDK headers and legal notices next to libneverd")
 
 if(NEVERD_PYTHON_PLUGIN_HOST_ENABLED)
   set(NEVERD_PYTHON_SDK_ROOT_FILES
     "${CMAKE_SOURCE_DIR}/pluginsdk/python/LICENSE"
+    "${CMAKE_SOURCE_DIR}/pluginsdk/python/NOTICE"
     "${CMAKE_SOURCE_DIR}/pluginsdk/python/README.md"
     "${CMAKE_SOURCE_DIR}/pluginsdk/python/pyproject.toml")
   set(NEVERD_PYTHON_SDK_PACKAGE_FILES

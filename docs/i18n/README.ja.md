@@ -319,4 +319,6 @@ typed SDK と package workflow は [Python プラグインガイド](../python-p
 
 [AGPL-3.0](../../LICENSE)
 
+AGPL の対象となる NeverD コードの複製物や改変物を再配布する場合は、AGPL に従って著作権表示とライセンス表示を保持する必要があります。これは、AI/LLM を利用した再利用や LLVM による変換にも適用されます。出典を追跡できるよう、リポジトリ、ファイル、使用したバージョンも明記することを推奨します。[帰属表示と引用のガイド](../../ATTRIBUTION.md)、[NOTICE](../../NOTICE)、[CITATION.cff](../../CITATION.cff) を参照してください。
+
 LLVM コンポーネントは Apache-2.0 WITH LLVM-exception ライセンスを保持します。Capstone は独自のライセンスを保持します。

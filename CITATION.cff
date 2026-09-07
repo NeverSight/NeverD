@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: >-
+  Please cite NeverD when using it in research, software, or technical work.
+  Include the release or commit you used. See ATTRIBUTION.md for code-reuse
+  notices and citation examples; citation does not replace license compliance.
+type: software
+title: 'NeverD: Binary analysis and decompilation engine'
+authors:
+  - name: NeverD contributors
+    website: 'https://github.com/NeverSight/NeverD'
+repository-code: 'https://github.com/NeverSight/NeverD'
+url: 'https://github.com/NeverSight/NeverD'
+license: AGPL-3.0-only
+keywords:
+  - binary analysis
+  - decompilation
+  - LLVM
+  - reverse engineering

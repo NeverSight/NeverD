@@ -1,0 +1,27 @@
+NeverD — binary analysis and decompilation engine
+Copyright (C) 2026 NeverD contributors (https://github.com/NeverSight/NeverD)
+SPDX-License-Identifier: AGPL-3.0-only
+
+Source repository: https://github.com/NeverSight/NeverD
+License text: LICENSE
+Attribution guide: https://github.com/NeverSight/NeverD/blob/dev/ATTRIBUTION.md
+
+This is the project copyright and license notice for NeverD's original
+material. Individual authors retain copyright in their contributions;
+preserve any more specific copyright and license notices as well.
+
+When conveying covered copies or adaptations, retain the applicable
+copyright, license, and warranty notices under the GNU Affero General
+Public License, version 3. AI/LLM-assisted copying or adaptation, and
+transformation through LLVM IR, compilation, or another language, do not
+by themselves remove these obligations. Identify NeverD as the source
+of reused NeverD material, rather than crediting only the tool used.
+
+NeverD is provided WITHOUT ANY WARRANTY, including the implied warranties
+of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See LICENSE for
+the complete terms. Attribution alone does not satisfy the AGPL's other
+conditions, including applicable source-availability requirements.
+
+Third-party material and files with separate license notices retain
+their respective licenses. This notice does not replace those notices
+or impose additional license conditions.

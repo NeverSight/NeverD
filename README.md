@@ -348,6 +348,14 @@ common changes to their owning code and verification suites.
 
 ## License
 
-[AGPL-3.0](LICENSE)
+[GNU AGPL version 3 only](LICENSE). When redistributing covered NeverD code or
+adaptations, retain its copyright, license, and warranty notices, including
+the project attribution and source in [NOTICE](NOTICE). This also applies to
+AI/LLM-assisted reuse and LLVM-based code transformations.
+
+See [Attribution and citation](ATTRIBUTION.md) for requirements, scope, and
+examples. For traceable references, we recommend citing the source file and
+exact version or commit. [CITATION.cff](CITATION.cff) provides software citation
+metadata; citation alone does not replace license compliance.
 
 LLVM components retain their Apache-2.0 WITH LLVM-exception license. Capstone retains its own license.

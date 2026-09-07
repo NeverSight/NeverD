@@ -1,3 +1,35 @@
+NeverD licensing and attribution notice
+======================================
+
+Copyright (C) 2026 NeverD contributors (https://github.com/NeverSight/NeverD)
+SPDX-License-Identifier: AGPL-3.0-only
+
+NeverD's original material is licensed under the GNU Affero General Public
+License, version 3 only, reproduced verbatim below. Individual authors
+retain copyright in their contributions. Third-party material and files
+with separate license notices remain under their respective licenses.
+
+When conveying covered copies or adaptations of NeverD code, preserve the
+applicable copyright, license, and warranty notices under the AGPL. The
+project copyright notice above identifies NeverD and its source repository;
+see NOTICE for the distributable project notice. Preserve individual and
+third-party notices as well. Modified covered source must prominently
+identify the modifications and their relevant date.
+
+These obligations also apply to covered copies or adaptations produced
+with AI assistants, large language models (LLMs), LLVM transformations,
+compilation, decompilation, or language translation. Such tools do not by
+themselves remove the applicable obligations or replace NeverD's authorship.
+
+See ATTRIBUTION.md in the source repository for scope and citation examples,
+and CITATION.cff for software citation metadata. Attribution alone does not
+replace the AGPL's other conditions, including applicable source-availability
+requirements. This project notice summarizes the existing AGPL obligations;
+it does not add license restrictions or additional terms under section 7.
+
+The following is the unmodified GNU AGPL version 3 license text.
+-----------------------------------------------------------------------
+
                     GNU AFFERO GENERAL PUBLIC LICENSE
                        Version 3, 19 November 2007
 

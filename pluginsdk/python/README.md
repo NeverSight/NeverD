@@ -118,4 +118,12 @@ proof-gated synthesis and the transactional LLVM pipeline through the same API
 available to third-party plugins.
 
 Python 3.10 or newer is supported. This package and NeverD are licensed under
-the GNU Affero General Public License, version 3 only.
+the [GNU Affero General Public License, version 3 only](LICENSE).
+When sharing copied or adapted NeverD material, preserve its author credit,
+source attribution, and applicable legal notices, including the [NOTICE](NOTICE),
+and comply with the AGPL's source and modification-notice requirements. These
+obligations also apply when AI/LLM assistance or LLVM transformations produce a
+copy or adaptation of covered NeverD material. See the
+[attribution guide](https://github.com/NeverSight/NeverD/blob/dev/ATTRIBUTION.md)
+for source-credit examples and the distinction between covered material and
+independent output.

@@ -6,6 +6,12 @@ NeverD is a semantics-first binary analysis project. A useful contribution is
 focused, keeps unsupported behavior fail-loud, and includes the smallest test
 that proves the changed contract.
 
+Preserve copyright, license, and source notices when incorporating existing
+code, including code copied or adapted with AI/LLM tools. Follow the
+[attribution guide](ATTRIBUTION.md), identify the original source and revision
+for reused material, and check its license before submitting. Keep third-party
+notices under their original licenses.
+
 Before editing, read the [architecture guide](docs/architecture.md). Use the
 [testing guide](docs/testing.md) for suite selection and the
 [roadmap](docs/roadmap/README.md) for planned product work.
