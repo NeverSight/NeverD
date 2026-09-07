@@ -11,6 +11,21 @@
 
 namespace neverd::go_loader::detail {
 
+namespace {
+
+// Validate the entire field before forming its address. Checking only the
+// starting record or mapped bytes would let an offset wrap into a low segment.
+std::optional<va_t> fieldAddress(va_t Base, uint64_t Offset, uint64_t Size) {
+  if (Size == 0 || Offset > InvalidVA - Base)
+    return std::nullopt;
+  const va_t Address = Base + Offset;
+  if (Size - 1 > InvalidVA - Address)
+    return std::nullopt;
+  return Address;
+}
+
+} // namespace
+
 FuncLayout getFuncLayout(uint32_t Magic, unsigned PtrSize) {
   FuncLayout L;
   if (Magic == Go12Magic) {
@@ -45,6 +60,8 @@ FuncLayout getFuncLayout(uint32_t Magic, unsigned PtrSize) {
 
 std::optional<RawFunc> decodeFunc(const ImageReader &R, const FuncLayout &L,
                                   va_t RecordVA) {
+  if (!fieldAddress(RecordVA, 0, L.HeaderSize))
+    return std::nullopt;
   RawFunc F;
   F.RecordVA = RecordVA;
   if (L.EntryIsOffset) {
@@ -100,7 +117,11 @@ std::optional<uint32_t> getPCDataOffset(const ImageReader &R,
                                         unsigned Index) {
   if (Index >= F.PCDataCount)
     return std::nullopt;
-  std::optional<uint32_t> Offset = R.u32(F.RecordVA + L.HeaderSize + Index * 4);
+  std::optional<va_t> Slot = fieldAddress(
+      F.RecordVA, L.HeaderSize + static_cast<uint64_t>(Index) * 4, 4);
+  if (!Slot)
+    return std::nullopt;
+  std::optional<uint32_t> Offset = R.u32(*Slot);
   if (!Offset || *Offset == 0)
     return std::nullopt;
   return *Offset;
@@ -113,12 +134,16 @@ std::optional<va_t> getFuncRecordAddress(const ImageReader &R,
   if (Index > (InvalidVA - H.FuncTab) / L.FuncTabEntrySize)
     return std::nullopt;
   const va_t Slot = H.FuncTab + Index * L.FuncTabEntrySize;
+  const unsigned FieldSize = L.EntryIsOffset ? 4 : R.pointerSize();
+  std::optional<va_t> OffsetVA = fieldAddress(Slot, FieldSize, FieldSize);
+  if (!OffsetVA)
+    return std::nullopt;
   std::optional<uint64_t> Offset;
   if (L.EntryIsOffset) {
-    if (std::optional<uint32_t> Narrow = R.u32(Slot + 4))
+    if (std::optional<uint32_t> Narrow = R.u32(*OffsetVA))
       Offset = *Narrow;
   } else {
-    Offset = R.wordAt(Slot, 1);
+    Offset = R.word(*OffsetVA);
   }
   if (!Offset || *Offset > InvalidVA - H.FuncRecordBase)
     return std::nullopt;
@@ -146,7 +171,7 @@ bool usesPreGo112Record(const ImageReader &R, const FuncLayout &L,
   const uint64_t Limit = std::min<uint64_t>(H.FuncCount, FuncLayoutVoteTarget);
   for (uint64_t I = 0; I < Limit; ++I) {
     std::optional<va_t> RecordVA = getFuncRecordAddress(R, L, H, I);
-    if (!RecordVA)
+    if (!RecordVA || !fieldAddress(*RecordVA, 0, L.HeaderSize))
       break;
     std::optional<uint32_t> Word = R.u32(*RecordVA + L.FuncIDOffset);
     // A zero word reads as no funcdata under either shape, so it is not a
@@ -172,19 +197,29 @@ std::optional<va_t> getFuncDataAddress(const ImageReader &R,
                                        unsigned Index, va_t GoFuncBase) {
   if (Index >= F.FuncDataCount)
     return std::nullopt;
-  const va_t ArrayStart = F.RecordVA + L.HeaderSize + F.PCDataCount * 4;
+  std::optional<va_t> ArrayStart = fieldAddress(
+      F.RecordVA, L.HeaderSize + static_cast<uint64_t>(F.PCDataCount) * 4, 1);
+  if (!ArrayStart)
+    return std::nullopt;
   if (L.FuncDataIsPointer) {
     const unsigned PtrSize = R.pointerSize();
     // `runtime.funcdata` rounds the array up to a pointer boundary, because
     // the pcdata array ahead of it is 32-bit and can leave it half aligned.
-    const va_t Aligned =
-        PtrSize == 8 && (ArrayStart & 4) != 0 ? ArrayStart + 4 : ArrayStart;
-    std::optional<uint64_t> Pointer = R.wordAt(Aligned, Index);
+    const unsigned Padding = PtrSize == 8 && (*ArrayStart & 4) != 0 ? 4 : 0;
+    std::optional<va_t> Slot = fieldAddress(
+        *ArrayStart, Padding + static_cast<uint64_t>(Index) * PtrSize, PtrSize);
+    if (!Slot)
+      return std::nullopt;
+    std::optional<uint64_t> Pointer = R.word(*Slot);
     if (!Pointer || *Pointer == 0)
       return std::nullopt;
     return static_cast<va_t>(*Pointer);
   }
-  std::optional<uint32_t> Offset = R.u32(ArrayStart + Index * 4);
+  std::optional<va_t> Slot =
+      fieldAddress(*ArrayStart, static_cast<uint64_t>(Index) * 4, 4);
+  if (!Slot)
+    return std::nullopt;
+  std::optional<uint32_t> Offset = R.u32(*Slot);
   if (!Offset || *Offset == NoFuncDataOffset)
     return std::nullopt;
   if (*Offset > InvalidVA - GoFuncBase)

@@ -17,6 +17,122 @@ using namespace neverd::go_eh_test;
 // Malformed records
 //===----------------------------------------------------------------------===//
 
+// Relocate the single record so HighBytes end at the address limit, with the
+// remaining bytes mapped at zero. Only the functab pointer changes; names,
+// pc-value tables, and stack-map payloads keep their valid original addresses.
+void installRecordAtAddressLimit(GoTestImage &T, BuiltPclnTab Tab,
+                                 uint32_t Magic, size_t HighBytes) {
+  const size_t RecordOffset = Tab.RecordOffsets[0];
+  ASSERT_GT(HighBytes, 0u);
+  ASSERT_LE(HighBytes, Tab.Bytes.size() - RecordOffset);
+  const va_t RecordVA = InvalidVA - (HighBytes - 1);
+  uint64_t FuncTabOffset = 16;
+  if (Magic != kGo12Magic)
+    std::memcpy(&FuncTabOffset, Tab.Bytes.data() + 56, sizeof(FuncTabOffset));
+  const va_t RecordBase = kPclnVA + (Magic == kGo12Magic ? 0 : FuncTabOffset);
+  Tab.put64(FuncTabOffset + 8, RecordVA - RecordBase);
+  T.installPclnTab(Tab.Bytes);
+
+  Segment High;
+  High.VA = RecordVA;
+  High.Size = HighBytes;
+  High.Data.assign(Tab.Bytes.begin() + RecordOffset,
+                   Tab.Bytes.begin() + RecordOffset + HighBytes);
+  T.Img.Segments.push_back(std::move(High));
+  if (RecordOffset + HighBytes < Tab.Bytes.size()) {
+    Segment Low;
+    Low.VA = 0;
+    Low.Data.assign(Tab.Bytes.begin() + RecordOffset + HighBytes,
+                    Tab.Bytes.end());
+    Low.Size = Low.Data.size();
+    T.Img.Segments.push_back(std::move(Low));
+  }
+}
+
+TEST(GoMalformedRecords, DoesNotReadAFixedRecordAcrossTheAddressLimit) {
+  for (uint32_t Magic : {kGo12Magic, kGo116Magic}) {
+    const size_t HeaderSize = Magic == kGo12Magic ? 40 : 44;
+    for (size_t HighBytes : {size_t(8), HeaderSize - 4, HeaderSize}) {
+      for (BinaryFormat Format :
+           {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO}) {
+        SCOPED_TRACE(Magic);
+        SCOPED_TRACE(HighBytes);
+        SCOPED_TRACE(static_cast<unsigned>(Format));
+        GoTestImage T;
+        T.Img.Format = Format;
+        GoFuncSpec Work = makeDeferringFunc("main.work", kTextVA + 0x100);
+        installRecordAtAddressLimit(
+            T, buildPclnTab(Magic, {Work}, kTextVA + 0x200), Magic, HighBytes);
+
+        parseGoExceptions(T.Img);
+
+        EXPECT_EQ(T.Img.ExceptionMetadata.GoModule.has_value(),
+                  HighBytes == HeaderSize);
+        const ExceptionFunction *F =
+            findRecord(T.Img.ExceptionMetadata, kTextVA + 0x100);
+        if (HighBytes == HeaderSize) {
+          ASSERT_NE(F, nullptr);
+          ASSERT_TRUE(F->Go.has_value());
+          EXPECT_EQ(F->Go->Name, "main.work");
+        } else {
+          EXPECT_EQ(F, nullptr);
+        }
+      }
+    }
+  }
+}
+
+TEST(GoMalformedRecords, DoesNotReadPCDataSlotsAcrossTheAddressLimit) {
+  for (size_t HighBytes : {size_t(44), size_t(48)}) {
+    SCOPED_TRACE(HighBytes);
+    GoTestImage T;
+    GoFuncSpec Work = makeDeferringFunc("main.work", kTextVA + 0x100);
+    PCValueTable UnsafePoints;
+    UnsafePoints.Steps = {{-2, 16}};
+    Work.PCData = {UnsafePoints};
+    installRecordAtAddressLimit(
+        T, buildPclnTab(kGo116Magic, {Work}, kTextVA + 0x200), kGo116Magic,
+        HighBytes);
+
+    parseGoExceptions(T.Img);
+
+    const ExceptionFunction *F =
+        findRecord(T.Img.ExceptionMetadata, kTextVA + 0x100);
+    ASSERT_NE(F, nullptr);
+    ASSERT_TRUE(F->Go.has_value());
+    EXPECT_EQ(F->Go->UnsafePointRanges.size(), HighBytes == 48 ? 1u : 0u);
+  }
+}
+
+TEST(GoMalformedRecords, DoesNotReadFuncDataSlotsAcrossTheAddressLimit) {
+  for (uint32_t Magic : {kGo12Magic, kGo116Magic}) {
+    const size_t ArrayOffset = Magic == kGo12Magic ? 40 : 48;
+    for (size_t HighBytes : {ArrayOffset, ArrayOffset + 8}) {
+      SCOPED_TRACE(Magic);
+      SCOPED_TRACE(HighBytes);
+      GoTestImage T;
+      const va_t ArgsVA = T.addPayload(buildStackMap(1, {{1}}));
+      GoFuncSpec Work = makeDeferringFunc("main.work", kTextVA + 0x100);
+      Work.FuncData = {ArgsVA};
+      // Go 1.16 needs four bytes of pointer alignment after its header. In
+      // the negative case that alignment itself would wrap to address zero.
+      installRecordAtAddressLimit(
+          T, buildPclnTab(Magic, {Work}, kTextVA + 0x200), Magic, HighBytes);
+
+      parseGoExceptions(T.Img);
+
+      const ExceptionFunction *F =
+          findRecord(T.Img.ExceptionMetadata, kTextVA + 0x100);
+      ASSERT_NE(F, nullptr);
+      ASSERT_TRUE(F->Go.has_value());
+      EXPECT_EQ(F->Go->ArgsPointerMap.has_value(),
+                HighBytes == ArrayOffset + 8);
+      if (F->Go->ArgsPointerMap)
+        EXPECT_EQ(F->Go->ArgsPointerMap->RecordVA, ArgsVA);
+    }
+  }
+}
+
 TEST(GoMalformedRecords, RejectsARecordDeclaringMorePCDataTablesThanExist) {
   GoTestImage T;
   GoFuncSpec Work = makeDeferringFunc("main.work", kTextVA + 0x100);
