@@ -4,9 +4,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "LanguageEHTestsDetail.h"
 #include "gtest/gtest.h"
 
-#include "LanguageEHTestsDetail.h"
+#include <array>
+#include <limits>
 
 namespace {
 
@@ -53,6 +55,57 @@ TEST(DwarfEHPrimitives, RejectsOverlongLEB128) {
   uint64_t Value = 0;
   EXPECT_FALSE(readULEB128(Bytes, sizeof(Bytes), Cursor, Value));
   EXPECT_EQ(Cursor, 0u);
+}
+
+TEST(DwarfEHPrimitives, RejectsAnEleventhLEBGroup) {
+  std::array<uint8_t, 11> Bytes;
+  Bytes.fill(0x80);
+  Bytes.back() = 0;
+  size_t Cursor = 0;
+  uint64_t Unsigned = 42;
+  EXPECT_FALSE(readULEB128(Bytes.data(), Bytes.size(), Cursor, Unsigned));
+  EXPECT_EQ(Cursor, 0u);
+  EXPECT_EQ(Unsigned, 42u);
+  int64_t Signed = 42;
+  EXPECT_FALSE(readSLEB128(Bytes.data(), Bytes.size(), Cursor, Signed));
+  EXPECT_EQ(Cursor, 0u);
+  EXPECT_EQ(Signed, 42);
+}
+
+TEST(DwarfEHPrimitives, ValidatesTheFinal64BitLEBGroup) {
+  for (uint8_t Low : {uint8_t(0x80), uint8_t(0xff)}) {
+    for (unsigned Last = 0; Last < 128; ++Last) {
+      SCOPED_TRACE(testing::Message() << unsigned(Low) << ":" << Last);
+      std::array<uint8_t, 11> Bytes;
+      Bytes.fill(Low);
+      Bytes[0] = 0x42; // decoding begins after an unrelated byte
+      Bytes.back() = static_cast<uint8_t>(Last);
+      size_t Cursor = 1;
+      uint64_t Unsigned = 42;
+      const bool ValidUnsigned = Last <= 1;
+      EXPECT_EQ(readULEB128(Bytes.data(), Bytes.size(), Cursor, Unsigned),
+                ValidUnsigned);
+      EXPECT_EQ(Cursor, ValidUnsigned ? Bytes.size() : 1u);
+      const uint64_t LowBits =
+          Low == 0xff
+              ? static_cast<uint64_t>(std::numeric_limits<int64_t>::max())
+              : 0;
+      EXPECT_EQ(Unsigned,
+                ValidUnsigned ? LowBits | (uint64_t(Last) << 63) : 42);
+
+      Cursor = 1;
+      int64_t Signed = 42;
+      const bool ValidSigned = Last == 0 || Last == 0x7f;
+      EXPECT_EQ(readSLEB128(Bytes.data(), Bytes.size(), Cursor, Signed),
+                ValidSigned);
+      EXPECT_EQ(Cursor, ValidSigned ? Bytes.size() : 1u);
+      const int64_t Expected = Last == 0 ? static_cast<int64_t>(LowBits)
+                               : Low == 0xff
+                                   ? -1
+                                   : std::numeric_limits<int64_t>::min();
+      EXPECT_EQ(Signed, ValidSigned ? Expected : 42);
+    }
+  }
 }
 
 //===----------------------------------------------------------------------===//

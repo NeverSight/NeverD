@@ -32,20 +32,17 @@ bool readULEB128(const uint8_t *Buf, size_t Size, size_t &Cursor,
     // Ten 7-bit groups is the most that can contribute to a 64-bit value; the
     // tenth may only carry the single remaining bit.  Rejecting past that
     // keeps a padded or hostile encoding from silently wrapping.
-    if (Shift >= 64) {
-      if ((Byte & 0x7f) != 0) {
-        Cursor = Start;
-        return false;
-      }
-    } else {
-      Result |= static_cast<uint64_t>(Byte & 0x7f) << Shift;
+    if (Shift == 63 && (Byte & 0x7f) > 1) {
+      Cursor = Start;
+      return false;
     }
+    Result |= static_cast<uint64_t>(Byte & 0x7f) << Shift;
     Shift += 7;
     if ((Byte & 0x80) == 0) {
       Out = Result;
       return true;
     }
-    if (Cursor - Start > 10) {
+    if (Cursor - Start >= 10) {
       Cursor = Start;
       return false;
     }
@@ -62,8 +59,14 @@ bool readSLEB128(const uint8_t *Buf, size_t Size, size_t &Cursor,
   uint8_t Byte = 0;
   while (Cursor < Size) {
     Byte = Buf[Cursor++];
-    if (Shift < 64)
-      Result |= static_cast<uint64_t>(Byte & 0x7f) << Shift;
+    // The final group contributes only the sign bit. All remaining payload
+    // bits must repeat that sign rather than being discarded by the shift.
+    const uint8_t Payload = Byte & 0x7f;
+    if (Shift == 63 && Payload != 0 && Payload != 0x7f) {
+      Cursor = Start;
+      return false;
+    }
+    Result |= static_cast<uint64_t>(Payload) << Shift;
     Shift += 7;
     if ((Byte & 0x80) == 0) {
       if (Shift < 64 && (Byte & 0x40))
@@ -71,7 +74,7 @@ bool readSLEB128(const uint8_t *Buf, size_t Size, size_t &Cursor,
       Out = static_cast<int64_t>(Result);
       return true;
     }
-    if (Cursor - Start > 10) {
+    if (Cursor - Start >= 10) {
       Cursor = Start;
       return false;
     }
