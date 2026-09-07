@@ -287,6 +287,48 @@ TEST(RustEH, TrustsTheImageWideDetectionWhenNoSymbolSurvives) {
   EXPECT_TRUE(Img.ExceptionMetadata.RustRuntime.has_value());
 }
 
+TEST(RustEH, ChecksMSVCTypeNameBoundaries) {
+  for (unsigned Case = 0; Case < 6; ++Case) {
+    SCOPED_TRACE(Case);
+    const unsigned Mode = Case % 3;
+    const unsigned PointerSize = Case < 3 ? 8 : 4;
+    BinaryImage Img = makeImage();
+    Img.Arch = PointerSize == 8 ? Arch::X64 : Arch::X86;
+    Img.Bits = PointerSize == 8 ? Bitness::Bits64 : Bitness::Bits32;
+    Img.Format = BinaryFormat::COFF;
+    Img.ExceptionMetadata.Runtime.Runtime = SourceLanguageRuntime::Rust;
+    constexpr va_t DescriptorVA = 0x8000;
+    Segment Names;
+    Names.VA = Mode == 2 ? 4 : DescriptorVA + 2 * PointerSize;
+    Names.Data = {'r', 'u', 's', 't', '_', 'p', 'a', 'n', 'i', 'c', 0};
+    if (Mode == 1)
+      Names.Data.pop_back();
+    if (Mode == 2)
+      Names.Data.resize(256);
+    Names.Size = Names.Data.size();
+    Img.Segments.push_back(std::move(Names));
+
+    ExceptionFunction F;
+    F.CodeRange = {kTextVA, kTextVA + 0x100};
+    F.Cxx.emplace();
+    CxxCatchHandler Catch;
+    Catch.TypeDescriptorVA =
+        Mode == 2 ? InvalidVA - (2 * PointerSize - 5) : DescriptorVA;
+    Catch.HandlerVA = kTextVA + 0x40;
+    CxxTryBlock Try;
+    Try.Handlers.push_back(Catch);
+    F.Cxx->TryBlocks.push_back(std::move(Try));
+    Img.ExceptionMetadata.Functions.push_back(std::move(F));
+
+    rust_eh::parseRustExceptions(Img);
+
+    const ExceptionFunction &Parsed = Img.ExceptionMetadata.Functions[0];
+    EXPECT_EQ(Parsed.Rust.has_value(), Mode == 0);
+    ASSERT_TRUE(Img.ExceptionMetadata.RustRuntime.has_value());
+    EXPECT_EQ(Img.ExceptionMetadata.RustRuntime->UsesMSVCUnwinding, Mode == 0);
+  }
+}
+
 TEST(RustEH, TrustsRustAsASecondaryRuntimeToo) {
   // A `cdylib` linked into a C++ program leaves both runtimes' evidence, and
   // which one detection calls primary depends on how much of each it found.

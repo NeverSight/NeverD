@@ -6,9 +6,9 @@
 
 #include "neverd/loader/Rust/RustEH.h"
 
-#include "neverd/support/BinaryEncoding.h"
 #include "neverd/loader/DirectBranch.h"
 #include "neverd/loader/LanguageRuntime.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringRef.h"
@@ -58,8 +58,7 @@ std::optional<RustPanicKind> classifyPanicName(llvm::StringRef Path) {
     return RustPanicKind::Resume;
 
   llvm::StringRef Leaf = Path;
-  if (size_t Separator = Leaf.rfind("::");
-      Separator != llvm::StringRef::npos)
+  if (size_t Separator = Leaf.rfind("::"); Separator != llvm::StringRef::npos)
     Leaf = Leaf.substr(Separator + 2);
   Leaf.consume_front("__");
   Leaf.consume_front("_");
@@ -208,15 +207,23 @@ std::string readTypeDescriptorName(const BinaryImage &Img, va_t DescriptorVA) {
   if (DescriptorVA == 0)
     return {};
   const size_t PointerSize = Img.is64Bit() ? 8 : 4;
+  if (DescriptorVA > InvalidVA - 2 * PointerSize)
+    return {};
   const va_t NameVA = DescriptorVA + 2 * PointerSize;
   // A type descriptor name is a short identifier; a longer read would only
   // walk off into whatever follows the record.
   constexpr size_t MaxNameBytes = 256;
-  const uint8_t *Bytes = nullptr;
-  for (size_t Length = MaxNameBytes; Length > 0; Length /= 2)
-    if ((Bytes = Img.readVA(NameVA, Length)) != nullptr)
-      return std::string(reinterpret_cast<const char *>(Bytes),
-                         strnlen(reinterpret_cast<const char *>(Bytes), Length));
+  std::string Name;
+  for (size_t I = 0; I < MaxNameBytes; ++I) {
+    if (I > InvalidVA - NameVA)
+      return {};
+    const uint8_t *Byte = Img.readVA(NameVA + I, 1);
+    if (!Byte)
+      return {};
+    if (*Byte == 0)
+      return Name;
+    Name.push_back(static_cast<char>(*Byte));
+  }
   return {};
 }
 
@@ -344,7 +351,8 @@ bool hasRustRuntime(const BinaryImage &Img) {
       return true;
   for (const Symbol &S : Img.Symbols) {
     llvm::StringRef Name(S.Name);
-    if (Name.contains("rust_eh_personality") || Name.contains("rust_begin_unwind"))
+    if (Name.contains("rust_eh_personality") ||
+        Name.contains("rust_begin_unwind"))
       return true;
     if (isRustMangledName(Name)) {
       llvm::StringRef Bare = Name;
@@ -376,10 +384,9 @@ void parseRustExceptions(BinaryImage &Img) {
     if (F.ParseStatus == ExceptionParseStatus::Malformed)
       continue;
     RustFunctionEH EH;
-    const bool FromTables =
-        annotateItanium(F, EH) |
-        static_cast<int>(
-            annotateMSVC(F, Img, EH, Runtime.PanicTypeDescriptorVA));
+    const bool FromTables = annotateItanium(F, EH) |
+                            static_cast<int>(annotateMSVC(
+                                F, Img, EH, Runtime.PanicTypeDescriptorVA));
     collectPanicSites(Img, F.CodeRange, Targets, EH);
     // A frame that names no personality has declared no language, and calling
     // the panic runtime is then evidence enough that it is Rust's.  Under
@@ -390,8 +397,8 @@ void parseRustExceptions(BinaryImage &Img) {
     // that does name one has already said whose it is, and a `throw()`
     // specification under the C++ personality is not a Rust nounwind guard
     // however much the two look alike.
-    if (!FromTables && (F.Personality != ExceptionPersonality::None ||
-                        !EH.raisesAPanic()))
+    if (!FromTables &&
+        (F.Personality != ExceptionPersonality::None || !EH.raisesAPanic()))
       continue;
     Runtime.UsesMSVCUnwinding |= EH.UsesMSVCTables;
     Runtime.CleanupFrames += EH.runsDropGlue();
@@ -415,13 +422,12 @@ void parseRustExceptions(BinaryImage &Img) {
     Runtime.Strategy = RustPanicStrategy::Abort;
 
   Info.RustRuntime = Runtime;
-  LLVM_DEBUG(llvm::dbgs()
-             << "rust-eh: strategy "
-             << getRustPanicStrategyName(Runtime.Strategy) << ", "
-             << Runtime.CleanupFrames << " cleanup, "
-             << Runtime.CatchUnwindFrames << " catch_unwind, "
-             << Runtime.NoUnwindGuardFrames << " nounwind, "
-             << Runtime.PanicSites << " panic sites\n");
+  LLVM_DEBUG(llvm::dbgs() << "rust-eh: strategy "
+                          << getRustPanicStrategyName(Runtime.Strategy) << ", "
+                          << Runtime.CleanupFrames << " cleanup, "
+                          << Runtime.CatchUnwindFrames << " catch_unwind, "
+                          << Runtime.NoUnwindGuardFrames << " nounwind, "
+                          << Runtime.PanicSites << " panic sites\n");
 }
 
 } // namespace neverd::rust_eh
