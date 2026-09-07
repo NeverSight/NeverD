@@ -9,6 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "JSONText.h"
 #include "SessionImpl.h"
 
 #include "llvm/Support/JSON.h"
@@ -100,7 +101,7 @@ const char *neverd_search_string(neverd_session_t Sess, const char *Pattern,
         for (auto &C : Ctx)
           if (static_cast<unsigned char>(C) < 0x20 || C == 0x7f)
             C = '.';
-        Hit["context"] = Ctx;
+        Hit["context"] = jsonSafeText(Ctx);
         Arr.push_back(std::move(Hit));
         if (static_cast<int>(Arr.size()) >= Limit)
           break;

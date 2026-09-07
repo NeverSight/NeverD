@@ -307,6 +307,50 @@ TEST(NeverDMetadataJSON, MalformedPENamesRemainParseable) {
   expectParseableJSON("relocations", neverd_relocs_json(Session));
 }
 
+TEST(NeverDMetadataJSON, SearchRepairsBinaryContextWithoutChangingMatches) {
+  auto Bytes = makeMalformedMetadataPE();
+  constexpr size_t TextHeaderOffset = kPEOffset + 4 + sizeof(coff_file_header) +
+                                      sizeof(pe32plus_header) +
+                                      16 * sizeof(data_directory);
+  coff_section Text{};
+  std::memcpy(&Text, Bytes.data() + TextHeaderOffset, sizeof(Text));
+  Text.VirtualSize = 7;
+  writeObject(Bytes, TextHeaderOffset, Text);
+  writeBytes(Bytes, kTextFileOffset, {'N', 'e', 'e', 'd', 'l', 'e', 0xff});
+  TemporaryPE Input(Bytes);
+  ASSERT_FALSE(Input.error()) << Input.error().message();
+  SessionGuard Session;
+  ASSERT_TRUE(neverd_session_load(Session, Input.path().c_str()))
+      << takeString(neverd_last_error(Session));
+
+  for (int CaseSensitive : {0, 1}) {
+    const char *Pattern = CaseSensitive ? "Needle" : "needle";
+    auto Parsed = json::parse(
+        takeString(neverd_search_string(Session, Pattern, CaseSensitive, 1)));
+    ASSERT_TRUE(static_cast<bool>(Parsed)) << toString(Parsed.takeError());
+    const auto *Hits = Parsed->getAsArray();
+    ASSERT_NE(Hits, nullptr);
+    ASSERT_EQ(Hits->size(), 1u);
+    const auto *Hit = (*Hits)[0].getAsObject();
+    ASSERT_NE(Hit, nullptr);
+    EXPECT_EQ(Hit->getString("segment"), ".text");
+    ASSERT_TRUE(Hit->getString("context").has_value());
+    EXPECT_TRUE(Hit->getString("context")->starts_with("Needle\xef\xbf\xbd"));
+  }
+  const unsigned char Pattern[] = {'f', 'i', 'x', 't', 'u', 'r', 'e'};
+  for (const char *Result :
+       {neverd_search_bytes(Session, Pattern, sizeof(Pattern), 1),
+        neverd_search_string(Session, "fixture", 1, 1)}) {
+    auto Parsed = json::parse(takeString(Result));
+    ASSERT_TRUE(static_cast<bool>(Parsed)) << toString(Parsed.takeError());
+    const auto *Hits = Parsed->getAsArray();
+    ASSERT_NE(Hits, nullptr);
+    ASSERT_EQ(Hits->size(), 1u);
+    ASSERT_NE((*Hits)[0].getAsObject(), nullptr);
+    EXPECT_EQ((*Hits)[0].getAsObject()->getString("segment"), ".r\\xFFd");
+  }
+}
+
 TEST(NeverDMetadataJSON, CoverageReportReconcilesEveryPipelineStage) {
   json::Object Root = runBench(makeMalformedMetadataPE());
   const json::Object *Audit = Root.getObject("audit");
