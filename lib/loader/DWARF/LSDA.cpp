@@ -6,9 +6,9 @@
 
 #include "neverd/loader/DWARF/LSDA.h"
 
+#include "neverd/loader/LanguageRuntime.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/DwarfEH.h"
-#include "neverd/loader/LanguageRuntime.h"
 
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -118,8 +118,7 @@ LSDAParseResult parseLSDA(const BinaryImage &Img, const LSDAParseRequest &Req,
 
   ItaniumEHInfo Info;
   Info.LSDAVA = Req.LSDAVA;
-  Info.TypeTableEntryKind =
-      getItaniumTypeTableEntryKind(Req.Personality);
+  Info.TypeTableEntryKind = getItaniumTypeTableEntryKind(Req.Personality);
   Info.IsCallSiteAddressForm = !Req.IsSJLJ;
 
   size_t Cursor = 0;
@@ -418,9 +417,8 @@ LSDAParseResult parseLSDA(const BinaryImage &Img, const LSDAParseRequest &Req,
         if (TypeInfo != 0 &&
             Info.TypeTableEntryKind == ItaniumTypeTableEntryKind::CxxRTTI)
           Entry.TypeName = readItaniumTypeName(Img, TypeInfo);
-        else if (TypeInfo != 0 &&
-                 Info.TypeTableEntryKind ==
-                     ItaniumTypeTableEntryKind::DirectCString)
+        else if (TypeInfo != 0 && Info.TypeTableEntryKind ==
+                                      ItaniumTypeTableEntryKind::DirectCString)
           Entry.TypeName = readMappedCString(Img, TypeInfo);
         if (Entry.TypeName.empty()) {
           Entry.TypeName = resolveRoutineName(Img, TypeInfo, IndirectSlot);
@@ -456,21 +454,29 @@ LSDAParseResult parseLSDA(const BinaryImage &Img, const LSDAParseRequest &Req,
         continue;
       }
       size_t ListCursor = 0;
+      bool Terminated = false;
       while (ListCursor < ListAvailable) {
         uint64_t TypeIndex = 0;
         if (!readULEB128(List, ListAvailable, ListCursor, TypeIndex)) {
           partial("truncated Itanium LSDA exception specification list");
           break;
         }
-        if (TypeIndex == 0)
+        if (TypeIndex == 0) {
+          Terminated = true;
           break;
+        }
         if (Spec.TypeIndices.size() >= Req.MaxRecords) {
           partial("Itanium LSDA exception specification exceeds budget");
           break;
         }
         Spec.TypeIndices.push_back(TypeIndex);
       }
-      Info.ExceptionSpecs.push_back(std::move(Spec));
+      // A failed first read is not an empty specification: Rust interprets
+      // a proven empty list as a nounwind guard. Publish only complete lists.
+      if (Terminated)
+        Info.ExceptionSpecs.push_back(std::move(Spec));
+      else
+        partial("Itanium LSDA exception specification has no valid terminator");
     }
   }
 

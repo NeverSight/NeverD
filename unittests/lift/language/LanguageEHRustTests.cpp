@@ -4,9 +4,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "gtest/gtest.h"
-
 #include "LanguageEHTestsDetail.h"
+#include "gtest/gtest.h"
 
 namespace {
 
@@ -96,8 +95,8 @@ BinaryImage makeRustImage(va_t FuncVA, va_t PanicVA, const char *PanicName) {
   Panic.IsFunc = true;
   Img.Symbols.push_back(std::move(Panic));
 
-  FrameBytes Frame = buildSimpleFrame(SectionVA, FuncVA, 0x80, "zPLR",
-                                      PersonalityVA, LSDAVA);
+  FrameBytes Frame =
+      buildSimpleFrame(SectionVA, FuncVA, 0x80, "zPLR", PersonalityVA, LSDAVA);
   writeData(Img, SectionVA, Frame.Bytes);
 
   Section EhFrame;
@@ -113,16 +112,15 @@ BinaryImage makeRustImage(va_t FuncVA, va_t PanicVA, const char *PanicName) {
   ByteBuilder Call;
   Call.u8(0xe8);
   Call.i32(static_cast<int32_t>(static_cast<int64_t>(PanicVA) -
-                               static_cast<int64_t>(FuncVA + 5)));
+                                static_cast<int64_t>(FuncVA + 5)));
   writeData(Img, FuncVA, Call.data());
   return Img;
 }
 
 TEST(RustEH, ClassifiesEveryLandingPadKindItSharesWithCxx) {
   const va_t FuncVA = kTextVA + 0x100;
-  BinaryImage Img =
-      makeRustImage(FuncVA, kTextVA + 0x900,
-                    "_ZN4core9panicking5panic17h0123456789abcdefE");
+  BinaryImage Img = makeRustImage(
+      FuncVA, kTextVA + 0x900, "_ZN4core9panicking5panic17h0123456789abcdefE");
   parseItaniumExceptions(Img);
   rust_eh::parseRustExceptions(Img);
 
@@ -151,13 +149,45 @@ TEST(RustEH, ClassifiesEveryLandingPadKindItSharesWithCxx) {
   EXPECT_FALSE(RT.UsesMSVCUnwinding);
 }
 
+TEST(RustEH, DoesNotTreatAnIncompleteSpecificationAsANoUnwindGuard) {
+  for (uint8_t LastByte : {uint8_t(0x80), uint8_t(1)}) {
+    SCOPED_TRACE(static_cast<unsigned>(LastByte));
+    const va_t FuncVA = kTextVA + 0x100;
+    BinaryImage Img =
+        makeRustImage(FuncVA, kTextVA + 0x900, "rust_begin_unwind");
+    std::vector<uint8_t> LSDA = buildRustLSDA();
+    LSDA.back() = LastByte;
+    constexpr va_t LSDAVA = kDataVA + 0x400;
+    writeData(Img, LSDAVA, LSDA);
+    // End mapped data at the unfinished list: 0x80 is an unterminated ULEB,
+    // while 1 is a complete type index with no list terminator after it.
+    for (Segment &Seg : Img.Segments)
+      if (Seg.contains(LSDAVA)) {
+        Seg.Size = LSDAVA - Seg.VA + LSDA.size();
+        Seg.Data.resize(static_cast<size_t>(Seg.Size));
+      }
+
+    parseItaniumExceptions(Img);
+    rust_eh::parseRustExceptions(Img);
+
+    ASSERT_EQ(Img.ExceptionMetadata.Functions.size(), 1u);
+    const ExceptionFunction &F = Img.ExceptionMetadata.Functions[0];
+    ASSERT_TRUE(F.Itanium.has_value());
+    EXPECT_EQ(F.ParseStatus, ExceptionParseStatus::Partial);
+    EXPECT_TRUE(F.Itanium->ExceptionSpecs.empty());
+    ASSERT_TRUE(F.Rust.has_value());
+    EXPECT_FALSE(F.Rust->guardsAgainstUnwind());
+    ASSERT_TRUE(Img.ExceptionMetadata.RustRuntime.has_value());
+    EXPECT_EQ(Img.ExceptionMetadata.RustRuntime->NoUnwindGuardFrames, 0u);
+  }
+}
+
 TEST(RustEH, ClassifiesPanicSitesByWhatTheCheckIs) {
   struct Case {
     const char *Symbol;
     RustPanicKind Kind;
   } const Cases[] = {
-      {"_ZN4core9panicking5panic17h0123456789abcdefE",
-       RustPanicKind::Explicit},
+      {"_ZN4core9panicking5panic17h0123456789abcdefE", RustPanicKind::Explicit},
       {"_ZN4core9panicking18panic_bounds_check17h0123456789abcdefE",
        RustPanicKind::BoundsCheck},
       {"_ZN4core9panicking11panic_const23panic_const_div_by_zero17h012345678"
@@ -207,8 +237,7 @@ TEST(RustEH, LeavesANonRustFrameAlone) {
   // `throw()` specification, which are not Rust's semantics at all.
   const va_t FuncVA = kTextVA + 0x100;
   BinaryImage Img = makeRustImage(
-      FuncVA, kTextVA + 0x940,
-      "_ZN4core9panicking5panic17h0123456789abcdefE");
+      FuncVA, kTextVA + 0x940, "_ZN4core9panicking5panic17h0123456789abcdefE");
   for (Symbol &S : Img.Symbols)
     if (S.Name == "rust_eh_personality")
       S.Name = "__gxx_personality_v0";
@@ -250,7 +279,8 @@ TEST(RustEH, IgnoresAnImageWithoutTheRustRuntime) {
 TEST(RustEH, TrustsTheImageWideDetectionWhenNoSymbolSurvives) {
   BinaryImage Img = makeImage();
   Img.ExceptionMetadata.Runtime.Runtime = SourceLanguageRuntime::Rust;
-  Img.ExceptionMetadata.Runtime.Evidence.push_back("rust standard library path");
+  Img.ExceptionMetadata.Runtime.Evidence.push_back(
+      "rust standard library path");
 
   EXPECT_TRUE(rust_eh::hasRustRuntime(Img));
   rust_eh::parseRustExceptions(Img);
