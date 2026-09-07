@@ -126,9 +126,8 @@ static void propagateForwardedCallArities(
 
     const int PreviousRegArity = CalleeRegArity[Funcs[I].Entry];
     const int PreviousTotalArity = CalleeTotalArity[Funcs[I].Entry];
-    const bool PreviousVariadic =
-        CalleeIsVariadic.count(Funcs[I].Entry) != 0 &&
-        CalleeIsVariadic.at(Funcs[I].Entry);
+    const bool PreviousVariadic = CalleeIsVariadic.count(Funcs[I].Entry) != 0 &&
+                                  CalleeIsVariadic.at(Funcs[I].Entry);
     MedFunc Probe = Funcs[I];
     recoverCallAbi(Probe, TheArch, FuncNames, &Img, &CalleeRegArity,
                    &CalleeTotalArity, &CalleeFPArity, &CalleeFPReturnSize,
@@ -155,18 +154,17 @@ static void propagateForwardedCallArities(
 
     const int RegArity = MaxRegIdx + 1;
     const bool IsVariadicPublic =
-        Probe.IsVariadic ||
-        (CalleeIsVariadic.count(Probe.Entry) != 0 &&
-         CalleeIsVariadic.at(Probe.Entry));
-    const int TotalArity = IsVariadicPublic ? MaxIdx + 1
-                                            : callRecoveryTotalArity(Probe, MaxIdx);
+        Probe.IsVariadic || (CalleeIsVariadic.count(Probe.Entry) != 0 &&
+                             CalleeIsVariadic.at(Probe.Entry));
+    const int TotalArity =
+        IsVariadicPublic ? MaxIdx + 1 : callRecoveryTotalArity(Probe, MaxIdx);
     const int FPArity = static_cast<int>(FPRegs.size());
     if (IsVariadicPublic)
       CalleeIsVariadic[Probe.Entry] = true;
     bool Grew = CalleeRegArity[Probe.Entry] > PreviousRegArity ||
-                 CalleeTotalArity[Probe.Entry] > PreviousTotalArity ||
-                 (CalleeIsVariadic.count(Probe.Entry) != 0 &&
-                  CalleeIsVariadic.at(Probe.Entry) != PreviousVariadic);
+                CalleeTotalArity[Probe.Entry] > PreviousTotalArity ||
+                (CalleeIsVariadic.count(Probe.Entry) != 0 &&
+                 CalleeIsVariadic.at(Probe.Entry) != PreviousVariadic);
     if (RegArity > CalleeRegArity[Probe.Entry]) {
       CalleeRegArity[Probe.Entry] = RegArity;
       Grew = true;
@@ -355,8 +353,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
           if (Op.Opcode == NdOp::CALL && Op.NumInputs >= 1 &&
               Op.Inputs[0].isConst()) {
             if (const Import *Imp = Img.findImportAt(Op.Inputs[0].ConstVal)) {
-              if (libc::isVaListConsumer(
-                      stripLeadingUnderscores(Imp->Name)))
+              if (libc::isVaListConsumer(stripLeadingUnderscores(Imp->Name)))
                 ConsumesVaList = true;
             }
           }
@@ -530,11 +527,15 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
                                 CalleeFPReturnSize, CalleeFPRegs, CalleeHasSret,
                                 CalleeIsVariadic, CalleeConsumesVaList);
 
+  const auto FrameLocalLeafCallees =
+      Img.isMachO() && Img.Arch == Arch::AArch64
+          ? findFrameLocalLeafCallees(Result.MedFuncs, Img.Arch)
+          : std::set<va_t>{};
   for (auto &MF : Result.MedFuncs)
     recoverCallAbi(MF, Img.Arch, AllFuncNames, &Img, &CalleeRegArity,
                    &CalleeTotalArity, &CalleeFPArity, &CalleeFPReturnSize,
                    &CalleeFPRegs, &CalleeHasSret, &CalleeIsVariadic,
-                   &CalleeConsumesVaList);
+                   &CalleeConsumesVaList, &FrameLocalLeafCallees);
 
   remodelStructReturnForwarderCalls(Img, Result);
 

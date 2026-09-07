@@ -631,6 +631,139 @@ TEST(MedABIPass, X86CdeclRecoversLoopCarriedCallSpRelativeSlots) {
   EXPECT_EQ(Func.CallInfos[0].Args[1].ConstVal, 22u);
 }
 
+TEST(MedABIPass, DarwinVariadicTargetSurvivesFrameLocalLeafCall) {
+  constexpr Arch A = Arch::AArch64;
+  const auto &TRI = getTargetRegInfo(A);
+  MedFunc F;
+  F.Entry = 0x1000;
+  F.Blocks.resize(1);
+  auto &B = F.Blocks[0];
+  B.Id = 0;
+  B.StartAddr = F.Entry;
+  const auto SP = reg(10, 0, 8, TRI.StackPointer, A);
+  const auto CallSP = reg(10, 1, 8, TRI.StackPointer, A);
+  addLiveIn(B, SP);
+  B.Ops.push_back(binary(NdOp::INT_SUB, CallSP, SP, MedVar::makeConst(64, 4)));
+  const auto Slot = temp(20, 0, 8, A);
+  B.Ops.push_back(
+      binary(NdOp::INT_ADD, Slot, CallSP, MedVar::makeConst(48, 8)));
+  MedOp Spill;
+  Spill.Opcode = NdOp::STORE;
+  Spill.addInput(Slot);
+  Spill.addInput(MedVar::makeConst(0x3000, 8));
+  B.Ops.push_back(Spill);
+  MedOp First;
+  First.Opcode = NdOp::CALL;
+  First.addInput(MedVar::makeConst(0x2000, 8));
+  B.Ops.push_back(First);
+  B.Ops.push_back(unary(NdOp::COPY, reg(30, 1, 16, TRI.FPParamRegs[0], A),
+                        MedVar::makeConst(7, 16)));
+  const auto Target = temp(21, 0, 8, A);
+  B.Ops.push_back(unary(NdOp::LOAD, Target, Slot));
+  B.Ops.push_back(unary(NdOp::COPY, reg(1, 1, 8, TRI.IntParamRegs[0], A),
+                        MedVar::makeConst(1, 8)));
+  MedOp Arg = Spill;
+  Arg.Inputs[0] = CallSP;
+  Arg.Inputs[1] = MedVar::makeConst(42, 8);
+  B.Ops.push_back(Arg);
+  MedOp Call;
+  Call.Opcode = NdOp::INDIR_CALL;
+  Call.addInput(Target);
+  B.Ops.push_back(Call);
+  BinaryImage Img;
+  Img.Arch = A;
+  Img.Format = BinaryFormat::MachO;
+  std::map<va_t, int> Arity{{0x2000, 0}, {0x3000, 1}};
+  std::map<va_t, bool> Variadic{{0x3000, true}};
+  MedFunc Leaf;
+  Leaf.Entry = 0x2000;
+  Leaf.Blocks.resize(1);
+  Leaf.Blocks[0].StartAddr = Leaf.Entry;
+  addLiveIn(Leaf.Blocks[0], SP);
+  Leaf.Blocks[0].Ops.push_back(
+      binary(NdOp::INT_SUB, CallSP, SP, MedVar::makeConst(16, 8)));
+  MedOp Local = Spill;
+  Local.Inputs[0] = CallSP;
+  Leaf.Blocks[0].Ops.push_back(Local);
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Leaf.Blocks[0].Ops.push_back(Return);
+  const auto Leaves = findFrameLocalLeafCallees({Leaf}, A);
+  ASSERT_EQ(Leaves.count(Leaf.Entry), 1u);
+  for (unsigned Mode = 0; Mode < 5; ++Mode) {
+    SCOPED_TRACE(Mode);
+    MedFunc Probe = F;
+    auto &Ops = Probe.Blocks[0].Ops;
+    if (Mode == 2)
+      Ops[4].Inputs[0] = MedVar::makeConst(0x4000, 8);
+    if (Mode == 3)
+      Ops[2].Inputs[1] = MedVar::makeConst(static_cast<uint64_t>(-16), 8);
+    if (Mode == 4) {
+      MedOp Partial = Spill;
+      Partial.Inputs[1] = MedVar::makeConst(0, 1);
+      Ops.insert(Ops.begin() + 5, Partial);
+    }
+    recoverCallAbi(Probe, A, {}, &Img, &Arity, nullptr, nullptr, nullptr,
+                   nullptr, nullptr, &Variadic, nullptr,
+                   Mode == 1 ? nullptr : &Leaves);
+    ASSERT_EQ(Probe.CallInfos.size(), 2u);
+    EXPECT_EQ(Probe.CallInfos.back().VarArgFixedCount, Mode == 0 ? 1 : -1);
+    if (Mode == 0) {
+      ASSERT_EQ(Probe.CallInfos.back().Args.size(), 2u);
+      EXPECT_EQ(Probe.CallInfos.back().Args.back().ConstVal, 42u);
+    }
+  }
+}
+
+TEST(MedABIPass, FrameLocalLeafSummaryRejectsUnprovenWrites) {
+  constexpr Arch A = Arch::AArch64;
+  const auto &TRI = getTargetRegInfo(A);
+  for (unsigned Mode = 0; Mode < 13; ++Mode) {
+    SCOPED_TRACE(Mode);
+    MedFunc F;
+    F.Entry = 0x2000;
+    F.Blocks.resize(1);
+    auto &B = F.Blocks[0];
+    B.StartAddr = F.Entry;
+    const auto SP = reg(10, 0, 8, TRI.StackPointer, A);
+    if (Mode != 1)
+      addLiveIn(B, SP);
+    auto Slot = temp(20, 0, Mode == 2 ? 4 : 8, A);
+    B.Ops.push_back(binary(NdOp::INT_SUB, Slot, SP,
+                           MedVar::makeConst(Mode == 3 ? 4 : 16, 8)));
+    if (Mode == 9)
+      B.Ops.back().Inputs[1] = MedVar::makeConst(16, 4);
+    if (Mode == 10)
+      B.Ops.back().Inputs[1] = MedVar::makeConst(0xFFFFFFFF, 4);
+    if (Mode == 11) {
+      B.Ops.back().Inputs[1] = MedVar::makeConst(uint64_t{1} << 63, 8);
+    }
+    MedOp Write;
+    Write.Opcode = NdOp::STORE;
+    Write.addInput(Mode == 4 ? MedVar::makeConst(0x9000, 8) : Slot);
+    Write.addInput(MedVar::makeConst(42, 8));
+    if (Mode == 5)
+      Write.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+    if (Mode == 6)
+      Write.MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+    B.Ops.push_back(Write);
+    if (Mode == 7 || Mode == 8) {
+      MedOp Unknown;
+      Unknown.Opcode = Mode == 7 ? NdOp::CALL : NdOp::INTRINSIC;
+      Unknown.addInput(MedVar::makeConst(0x4000, 8));
+      B.Ops.push_back(Unknown);
+    }
+    if (Mode != 12) {
+      MedOp Return;
+      Return.Opcode = NdOp::RETURN;
+      B.Ops.push_back(Return);
+    }
+    EXPECT_EQ(findFrameLocalLeafCallees({F}, A).count(F.Entry),
+              Mode == 0 || Mode == 9 ? 1u : 0u);
+    EXPECT_TRUE(findFrameLocalLeafCallees({F, F}, A).empty());
+  }
+}
+
 TEST(MedABIPass, PartialPointerOverwriteDoesNotRemoveAnIndirectCallArgument) {
   // Preserve exact spills and disjoint writes; reject partial overlapping
   // writes and a store too narrow to define the complete pointer load.

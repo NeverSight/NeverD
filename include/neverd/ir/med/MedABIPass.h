@@ -17,10 +17,17 @@
 #include "neverd/loader/BinaryImage.h"
 
 #include <map>
+#include <set>
 
 namespace neverd {
 
 int regToArgIdx(uint64_t RegOff, Arch TheArch);
+
+/// Entries whose leaf bodies only write below their own entry stack pointer.
+/// Compute before ABI recovery mutates the functions. Unknown effects fail
+/// closed.
+std::set<va_t> findFrameLocalLeafCallees(const std::vector<MedFunc> &Funcs,
+                                         Arch TheArch);
 
 // \p CalleeRegArity maps a callee entry address to its integer
 // register-argument count (recovered from that callee's own parameters).  It
@@ -52,6 +59,10 @@ int regToArgIdx(uint64_t RegOff, Arch TheArch);
 // recovered as arguments (CalleeRegArgs + k) -- the same Darwin treatment
 // applied to the libc printf/scanf family -- instead of being mapped past the 8
 // register slots and dropped at the first gap.
+// \p FrameLocalLeafCallees is an immutable summary from
+// findFrameLocalLeafCallees for these same bodies, before ABI mutation. It lets
+// Darwin indirect-target recovery preserve a caller-frame spill across a call
+// only when the caller slot and the callee writes are provably disjoint.
 void recoverCallAbi(
     MedFunc &Func, Arch TheArch, const std::map<va_t, std::string> &FuncNames,
     const BinaryImage *Img = nullptr,
@@ -62,7 +73,8 @@ void recoverCallAbi(
     const std::map<va_t, std::vector<uint64_t>> *CalleeFPRegs = nullptr,
     const std::map<va_t, bool> *CalleeHasSret = nullptr,
     std::map<va_t, bool> *CalleeIsVariadic = nullptr,
-    const std::map<va_t, bool> *CalleeConsumesVaList = nullptr);
+    const std::map<va_t, bool> *CalleeConsumesVaList = nullptr,
+    const std::set<va_t> *FrameLocalLeafCallees = nullptr);
 
 // Finalize the overflow stack parameters of every variadic callee once all call
 // sites have been recovered.  A variadic function's va_arg overflow reads land

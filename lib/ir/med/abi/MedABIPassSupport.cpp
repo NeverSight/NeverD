@@ -16,6 +16,7 @@
 #include "MedABIPassDetail.h"
 
 #include "neverd/Common.h"
+#include "neverd/ir/med/MedABIPass.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/BinaryImage.h"
 
@@ -106,20 +107,39 @@ static bool sameReducedAddr(const std::pair<MedVar, int64_t> &A,
          A.first.RegOff == B.first.RegOff;
 }
 
-// Prove a complete same-block store reaches this load. A partial overwrite,
-// unknown alias, atomic access or call invalidates the earlier stored value.
-static std::optional<int> reachingStore(const MedBlock &Blk, int LoadIndex) {
+static bool preservesSpillAcrossCall(const MedBlock &Blk, int CallIndex,
+                                     const MedVar &Address, uint16_t Size,
+                                     const AbiSpillContext &Context, int Depth);
+static std::optional<int64_t> authenticatedStackOffset(const MedFunc &Func,
+                                                       const TargetRegInfo &TRI,
+                                                       const MedVar &V,
+                                                       unsigned Depth = 0);
+
+// Prove a complete same-block store reaches this load. Unknown calls, aliases,
+// partial overwrites and atomic accesses invalidate the earlier stored value.
+static std::optional<int>
+reachingStore(const MedBlock &Blk, int LoadIndex,
+              const AbiSpillContext *Context = nullptr, int Depth = 0) {
   const MedOp &Load = Blk.Ops[LoadIndex];
   const MedVar *Address = safety::detail::memoryAddress(Load);
   if (!Address || Load.Output.Size == 0 ||
       Load.MemoryOrdering != NdMemoryOrdering::None)
     return std::nullopt;
-  const auto Target = reduceAddr(Blk, *Address, 0, 0);
+  const auto StackOffset =
+      Context ? authenticatedStackOffset(Context->Func, Context->TRI, *Address)
+              : std::nullopt;
+  const auto Target = StackOffset ? std::pair<MedVar, int64_t>{*Address, 0}
+                                  : reduceAddr(Blk, *Address, 0, 0);
   for (int I = LoadIndex - 1; I >= 0; --I) {
     const MedOp &Op = Blk.Ops[I];
-    if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
-        Op.Opcode == NdOp::INTRINSIC)
+    if (Op.Opcode == NdOp::INTRINSIC)
       return std::nullopt;
+    if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+      if (!Context || !preservesSpillAcrossCall(
+                          Blk, I, *Address, Load.Output.Size, *Context, Depth))
+        return std::nullopt;
+      continue;
+    }
     if (!safety::detail::isStackMemoryWrite(Op.Opcode))
       continue;
     const MedVar *StoreAddress = safety::detail::memoryAddress(Op);
@@ -127,6 +147,18 @@ static std::optional<int> reachingStore(const MedBlock &Blk, int LoadIndex) {
     if (!StoreAddress || !Value || Value->Size == 0 ||
         Op.MemoryOrdering != NdMemoryOrdering::None)
       return std::nullopt;
+    if (StackOffset) {
+      const auto SourceOffset =
+          authenticatedStackOffset(Context->Func, Context->TRI, *StoreAddress);
+      if (!SourceOffset)
+        return std::nullopt;
+      if (!safety::detail::stackRangesOverlap(*SourceOffset, Value->Size,
+                                              *StackOffset, Load.Output.Size))
+        continue;
+      return *SourceOffset == *StackOffset && Value->Size == Load.Output.Size
+                 ? std::optional<int>(I)
+                 : std::nullopt;
+    }
     const auto Source = reduceAddr(Blk, *StoreAddress, 0, 0);
     if (Source.first.isConst() && Target.first.isConst() &&
         Source.second == 0 && Target.second == 0 &&
@@ -159,8 +191,9 @@ static std::optional<int> reachingStore(const MedBlock &Blk, int LoadIndex) {
 // behavior unless the target is proven, so non-resolvable indirect calls keep
 // their existing (heuristic) handling.
 va_t resolveIndirectTargetAddr(const MedBlock &Blk, int FromIdx,
-                               const MedVar &V, int Depth) {
-  if (Depth > 16)
+                               const MedVar &V, int Depth,
+                               const AbiSpillContext *Context) {
+  if (Depth > 16 || (Context && V.Size != Context->TRI.PointerSize))
     return 0;
   if (V.isConst())
     return V.ConstVal;
@@ -176,25 +209,29 @@ va_t resolveIndirectTargetAddr(const MedBlock &Blk, int FromIdx,
   if (DefIdx < 0)
     return 0;
   const MedOp &Def = Blk.Ops[DefIdx];
+  if (Context && Def.Output.Size != V.Size)
+    return 0;
   switch (Def.Opcode) {
   case NdOp::COPY:
   case NdOp::INT_ZEXT:
   case NdOp::INT_SEXT:
-    return Def.NumInputs >= 1 ? resolveIndirectTargetAddr(
-                                    Blk, DefIdx, Def.Inputs[0], Depth + 1)
-                              : 0;
+    return Def.NumInputs >= 1
+               ? resolveIndirectTargetAddr(Blk, DefIdx, Def.Inputs[0],
+                                           Depth + 1, Context)
+               : 0;
   case NdOp::SUBBYTES:
     return (Def.NumInputs >= 2 && Def.Inputs[1].isConst() &&
             Def.Inputs[1].ConstVal == 0)
                ? resolveIndirectTargetAddr(Blk, DefIdx, Def.Inputs[0],
-                                           Depth + 1)
+                                           Depth + 1, Context)
                : 0;
   case NdOp::LOAD: {
-    const auto Store = reachingStore(Blk, DefIdx);
+    const auto Store = reachingStore(Blk, DefIdx, Context, Depth);
     if (!Store)
       return 0;
     return resolveIndirectTargetAddr(
-        Blk, *Store, *safety::detail::storedValue(Blk.Ops[*Store]), Depth + 1);
+        Blk, *Store, *safety::detail::storedValue(Blk.Ops[*Store]), Depth + 1,
+        Context);
   }
   default:
     return 0;
@@ -311,6 +348,125 @@ static MedDefSite findFuncDef(const MedFunc &Func, const MedVar &V) {
       }
   }
   return Site;
+}
+
+// Unlike the heuristic argument scanner, call-boundary alias proofs may not
+// accept truncation, guessed live-ins, loads, PHIs or overflowing arithmetic.
+static std::optional<int64_t> authenticatedStackOffset(const MedFunc &Func,
+                                                       const TargetRegInfo &TRI,
+                                                       const MedVar &V,
+                                                       unsigned Depth) {
+  if (Depth > 128 || V.Size != TRI.PointerSize || V.isConst())
+    return std::nullopt;
+  const auto Site = findFuncDef(Func, V);
+  if (Site.Ambiguous || !Site.Op || Site.Op->Output.Size != V.Size ||
+      Site.Op->Output.TheArch != V.TheArch ||
+      Site.Op->Output.RenameTag != V.RenameTag)
+    return std::nullopt;
+  const auto &Op = *Site.Op;
+  if (V.Kind == MedVar::Reg && V.RegOff == TRI.StackPointer &&
+      safety::detail::isAuthenticatedEntryRegisterLiveIn(Func, V))
+    return 0;
+  if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1)
+    return authenticatedStackOffset(Func, TRI, Op.Inputs[0], Depth + 1);
+  if ((Op.Opcode != NdOp::INT_ADD && Op.Opcode != NdOp::INT_SUB) ||
+      Op.NumInputs != 2)
+    return std::nullopt;
+  unsigned BaseIndex = 0;
+  if (Op.Opcode == NdOp::INT_ADD && Op.Inputs[0].isConst())
+    BaseIndex = 1;
+  const auto &Constant = Op.Inputs[1 - BaseIndex];
+  if (Constant.Size > TRI.PointerSize)
+    return std::nullopt;
+  auto Delta = safety::detail::signedStackConstant(Constant);
+  // AArch64 stack adjustments carry narrow positive immediates. Accept only
+  // those whose sign and zero extensions agree; never narrow the base pointer.
+  if (!Delta ||
+      (Constant.Size < TRI.PointerSize &&
+       (*Delta < 0 || static_cast<uint64_t>(*Delta) != Constant.ConstVal)))
+    return std::nullopt;
+  auto Base =
+      authenticatedStackOffset(Func, TRI, Op.Inputs[BaseIndex], Depth + 1);
+  if (!Base || !Delta)
+    return std::nullopt;
+  return safety::detail::checkedStackOffset(*Base, *Delta,
+                                            Op.Opcode == NdOp::INT_SUB);
+}
+
+std::set<va_t> findFrameLocalLeafCallees(const std::vector<MedFunc> &Funcs,
+                                         Arch TheArch) {
+  const auto &TRI = getTargetRegInfo(TheArch);
+  std::set<va_t> Result, Seen, Duplicates;
+  for (const auto &F : Funcs) {
+    if (!Seen.insert(F.Entry).second)
+      Duplicates.insert(F.Entry);
+    bool Safe = !F.Blocks.empty();
+    std::set<va_t> BlockEntries;
+    for (const auto &B : F.Blocks)
+      BlockEntries.insert(B.StartAddr);
+    for (const auto &B : F.Blocks) {
+      if (B.Ops.empty() ||
+          (B.Succs.empty() && B.Ops.back().Opcode != NdOp::RETURN))
+        Safe = false;
+      for (const auto &Op : B.Ops) {
+        if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
+            Op.Opcode == NdOp::INTRINSIC || Op.Opcode == NdOp::INDIR_BR ||
+            Op.Opcode >= NdOp::_COUNT ||
+            safety::detail::isAtomicMemoryAccess(Op.Opcode)) {
+          Safe = false;
+          continue;
+        }
+        if ((Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR) &&
+            (Op.NumInputs == 0 || !Op.Inputs[0].isConst() ||
+             !BlockEntries.count(Op.Inputs[0].ConstVal)))
+          Safe = false;
+        if (Op.Opcode != NdOp::STORE)
+          continue;
+        const auto *Address = safety::detail::memoryAddress(Op);
+        const auto *Value = safety::detail::storedValue(Op);
+        auto Offset =
+            Address ? authenticatedStackOffset(F, TRI, *Address) : std::nullopt;
+        if (!Offset || !Value || Value->Size == 0 ||
+            Op.MemoryOrdering != NdMemoryOrdering::None ||
+            *Offset > -static_cast<int64_t>(Value->Size))
+          Safe = false;
+      }
+    }
+    if (Safe)
+      Result.insert(F.Entry);
+  }
+  for (va_t Entry : Duplicates)
+    Result.erase(Entry);
+  return Result;
+}
+
+static bool preservesSpillAcrossCall(const MedBlock &Blk, int CallIndex,
+                                     const MedVar &Address, uint16_t Size,
+                                     const AbiSpillContext &Context,
+                                     int Depth) {
+  if (Depth >= 16 || !Context.FrameLocalLeafCallees ||
+      Context.TRI.TheArch != Arch::AArch64)
+    return false;
+  auto Offset = authenticatedStackOffset(Context.Func, Context.TRI, Address);
+  if (!Offset || Size == 0 || *Offset > -static_cast<int64_t>(Size))
+    return false;
+  // Require an explicit same-block call SP; do not guess across CFG edges.
+  std::optional<int64_t> CallSP;
+  for (int I = CallIndex - 1; I >= 0; --I) {
+    const auto &Out = Blk.Ops[I].Output;
+    if (Out.Kind == MedVar::Reg && Out.RegOff == Context.TRI.StackPointer) {
+      CallSP = authenticatedStackOffset(Context.Func, Context.TRI, Out);
+      break;
+    }
+  }
+  if (!CallSP || *Offset < *CallSP)
+    return false;
+  const auto &Call = Blk.Ops[CallIndex];
+  if (Call.NumInputs == 0)
+    return false;
+  const va_t Target = resolveIndirectTargetAddr(Blk, CallIndex, Call.Inputs[0],
+                                                Depth + 1, &Context);
+  return Target && Context.FrameLocalLeafCallees->count(Target);
 }
 
 std::optional<int64_t> stackPtrDelta(const MedFunc &Func,

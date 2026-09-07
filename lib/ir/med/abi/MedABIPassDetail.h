@@ -27,12 +27,19 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <tuple>
 
 namespace neverd {
 
 struct BinaryImage;
+
+struct AbiSpillContext {
+  const MedFunc &Func;
+  const TargetRegInfo &TRI;
+  const std::set<va_t> *FrameLocalLeafCallees;
+};
 
 //===----------------------------------------------------------------------===//
 // Indirect-target resolution
@@ -42,7 +49,8 @@ struct BinaryImage;
 /// goes through a function pointer that provably holds a known function.
 /// Returns the resolved address, or 0 when not provable.
 va_t resolveIndirectTargetAddr(const MedBlock &Blk, int FromIdx,
-                               const MedVar &V, int Depth);
+                               const MedVar &V, int Depth,
+                               const AbiSpillContext *Context = nullptr);
 
 /// Resolve an indirect-call target (or another value) back to the incoming
 /// integer argument register from which it originated.  Follows the same

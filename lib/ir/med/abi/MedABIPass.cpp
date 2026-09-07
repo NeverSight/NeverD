@@ -312,10 +312,12 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
                     const std::map<va_t, std::vector<uint64_t>> *CalleeFPRegs,
                     const std::map<va_t, bool> *CalleeHasSret,
                     std::map<va_t, bool> *CalleeIsVariadic,
-                    const std::map<va_t, bool> *CalleeConsumesVaList) {
+                    const std::map<va_t, bool> *CalleeConsumesVaList,
+                    const std::set<va_t> *FrameLocalLeafCallees) {
   Func.CallInfos.clear();
 
   const auto &TRI = getTargetRegInfo(TheArch);
+  const AbiSpillContext SpillContext{Func, TRI, FrameLocalLeafCallees};
   const bool IsWin64 = TheArch == Arch::X64 && Func.CC == CallingConv::Win64;
   const llvm::ArrayRef<uint64_t> IntParamRegs =
       IsWin64 && !TRI.Win64ParamRegs.empty() ? TRI.Win64ParamRegs
@@ -623,8 +625,8 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       if (Img && Img->isMachO() && TheArch == Arch::AArch64 && CI.IsIndirect &&
           DarwinVarArgBase < 0 && CalleeRegArity && CalleeIsVariadic &&
           Op.NumInputs >= 1) {
-        va_t Resolved = resolveIndirectTargetAddr(Blk, static_cast<int>(OI),
-                                                  Op.Inputs[0], 0);
+        va_t Resolved = resolveIndirectTargetAddr(
+            Blk, static_cast<int>(OI), Op.Inputs[0], 0, &SpillContext);
         if (Resolved) {
           auto VIt = CalleeIsVariadic->find(Resolved);
           auto AIt = CalleeRegArity->find(Resolved);
@@ -719,8 +721,8 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         }
       }
       if (!HaveCallSpBasis || !HaveCallSpDelta) {
-        ReachingStackPtrResult Reaching = findReachingStackPtr(
-            Func, TRI, Blk.Id, static_cast<int>(OI));
+        ReachingStackPtrResult Reaching =
+            findReachingStackPtr(Func, TRI, Blk.Id, static_cast<int>(OI));
         if (!HaveCallSpBasis && Reaching.Basis) {
           buildCallSpOffsets(Func, TRI, *Reaching.Basis, 0, CallSpOffsets, 0);
           HaveCallSpBasis = true;
