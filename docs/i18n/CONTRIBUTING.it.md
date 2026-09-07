@@ -6,6 +6,13 @@ NeverD è un progetto di analisi binaria che mette la semantica al primo posto.
 Un contributo utile è mirato, fa fallire in modo esplicito i comportamenti non
 supportati e include il test minimo che dimostra il contratto modificato.
 
+Conserva gli avvisi di copyright, licenza e fonte quando incorpori codice
+esistente, incluso il codice copiato o adattato con strumenti di IA/LLM.
+Segui la [guida all’attribuzione](ATTRIBUTION.it.md), indica la fonte e la
+revisione originali del materiale riutilizzato e verificane la licenza prima
+di inviare il contributo. Mantieni gli avvisi di terzi sotto le loro licenze
+originali.
+
 Prima di apportare modifiche, leggi la
 [guida all’architettura](../architecture.it.md). Usa la
 [guida ai test](../testing.it.md) per scegliere la suite e la

@@ -6,6 +6,13 @@ NeverD ist ein semantikzentriertes Binäranalyseprojekt. Ein sinnvoller Beitrag
 ist klar abgegrenzt, lässt nicht unterstütztes Verhalten sichtbar fehlschlagen
 und enthält den kleinsten Test, der den geänderten Vertrag belegt.
 
+Bewahren Sie beim Einbinden bestehenden Codes die Urheberrechts-, Lizenz- und
+Quellenhinweise, auch wenn der Code mit KI-/LLM-Werkzeugen kopiert oder
+bearbeitet wurde. Befolgen Sie den [Leitfaden zu Quellenangaben](ATTRIBUTION.de.md),
+geben Sie für wiederverwendetes Material die ursprüngliche Quelle und Revision
+an und prüfen Sie vor dem Einreichen dessen Lizenz. Behalten Sie Hinweise
+Dritter unter ihren ursprünglichen Lizenzen bei.
+
 Lesen Sie vor der Bearbeitung den
 [Architekturleitfaden](../architecture.de.md). Nutzen Sie den
 [Testleitfaden](../testing.de.md) zur Auswahl der Suite und die

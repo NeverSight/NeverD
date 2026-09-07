@@ -7,6 +7,13 @@ Une contribution utile reste ciblée, fait échouer explicitement les
 comportements non pris en charge et inclut le plus petit test qui prouve le
 contrat modifié.
 
+Conservez les mentions de droit d’auteur, de licence et de source lorsque vous
+intégrez du code existant, y compris du code copié ou adapté avec des outils
+d’IA/LLM. Suivez le [guide d’attribution](ATTRIBUTION.fr.md), indiquez la source
+et la révision d’origine des éléments réutilisés, et vérifiez leur licence
+avant de soumettre votre contribution. Conservez les mentions tierces sous
+leurs licences d’origine.
+
 Avant toute modification, lisez le [guide d’architecture](../architecture.fr.md).
 Consultez le [guide des tests](../testing.fr.md) pour choisir une suite et la
 [feuille de route](../roadmap/README.fr.md) pour les travaux produit planifiés.

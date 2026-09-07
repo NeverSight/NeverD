@@ -62,6 +62,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
             {
                 Path("README.md"),
                 Path("CONTRIBUTING.md"),
+                Path("ATTRIBUTION.md"),
                 Path("docs/README.md"),
                 Path("docs/architecture.md"),
                 Path("docs/memory-safety.md"),

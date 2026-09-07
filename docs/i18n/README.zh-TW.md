@@ -317,6 +317,6 @@ package 工作流程見 [Python 外掛指南](../python-plugins.zh-TW.md)。兩�
 
 [AGPL-3.0](../../LICENSE)
 
-再散布受 AGPL 規範的 NeverD 程式碼副本或改作版本時，必須依照 AGPL 保留著作權與授權聲明；這同樣適用於藉助 AI/LLM 重用程式碼或透過 LLVM 轉換程式碼的情況。為方便追溯來源，我們也建議註明儲存庫、檔案和使用的版本。詳見[署名與來源引用指南](../../ATTRIBUTION.md)、[NOTICE](../../NOTICE) 和 [CITATION.cff](../../CITATION.cff)。
+再散布受 AGPL 規範的 NeverD 程式碼副本或改作版本時，必須依照 AGPL 保留著作權與授權聲明；這同樣適用於藉助 AI/LLM 重用程式碼或透過 LLVM 轉換程式碼的情況。為方便追溯來源，我們也建議註明儲存庫、檔案和使用的版本。詳見[署名與來源引用指南](ATTRIBUTION.zh-TW.md)、[NOTICE](../../NOTICE) 和 [CITATION.cff](../../CITATION.cff)。
 
 LLVM 元件保留 Apache-2.0 WITH LLVM-exception 授權條款。Capstone 保留其自身授權條款。

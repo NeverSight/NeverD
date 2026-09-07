@@ -671,6 +671,7 @@ MEMORY_SAFETY_REQUIRED_TOKENS = (
 ENGLISH_DOCS = (
     Path("README.md"),
     Path("CONTRIBUTING.md"),
+    Path("ATTRIBUTION.md"),
     Path("docs/README.md"),
     Path("docs/architecture.md"),
     Path("docs/memory-safety.md"),
@@ -687,6 +688,7 @@ def localized_paths(locale: str) -> tuple[Path, ...]:
     return (
         Path(f"docs/i18n/README.{locale}.md"),
         Path(f"docs/i18n/CONTRIBUTING.{locale}.md"),
+        Path(f"docs/i18n/ATTRIBUTION.{locale}.md"),
         Path(f"docs/README.{locale}.md"),
         Path(f"docs/architecture.{locale}.md"),
         Path(f"docs/memory-safety.{locale}.md"),
@@ -2028,6 +2030,7 @@ def validate_matrix(errors: list[str], view: RepositoryView) -> None:
         (
             project_readme,
             _contributing,
+            _attribution,
             index,
             _architecture,
             memory_safety,

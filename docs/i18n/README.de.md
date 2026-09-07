@@ -322,6 +322,6 @@ Beiträge werden in den Branch **`dev`** integriert. Einrichtung, Release-/Debug
 
 [AGPL-3.0](../../LICENSE)
 
-Bei der Weitergabe von Kopien oder Bearbeitungen des unter die AGPL fallenden NeverD-Codes müssen die Urheberrechts- und Lizenzhinweise gemäß der AGPL erhalten bleiben; dies gilt auch bei KI-/LLM-gestützter Wiederverwendung und Transformationen mit LLVM. Für eine nachvollziehbare Quellenangabe empfehlen wir zusätzlich, Repository, Dateien und verwendete Version zu nennen. Siehe den [Leitfaden zu Quellenangaben](../../ATTRIBUTION.md), [NOTICE](../../NOTICE) und [CITATION.cff](../../CITATION.cff).
+Bei der Weitergabe von Kopien oder Bearbeitungen des unter die AGPL fallenden NeverD-Codes müssen die Urheberrechts- und Lizenzhinweise gemäß der AGPL erhalten bleiben; dies gilt auch bei KI-/LLM-gestützter Wiederverwendung und Transformationen mit LLVM. Für eine nachvollziehbare Quellenangabe empfehlen wir zusätzlich, Repository, Dateien und verwendete Version zu nennen. Siehe den [Leitfaden zu Quellenangaben](ATTRIBUTION.de.md), [NOTICE](../../NOTICE) und [CITATION.cff](../../CITATION.cff).
 
 LLVM-Komponenten behalten ihre Apache-2.0 WITH LLVM-exception-Lizenz. Capstone behält seine eigene Lizenz.

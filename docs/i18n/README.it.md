@@ -321,6 +321,6 @@ I contributi vengono integrati nel branch **`dev`**. Consulta la [guida per cont
 
 [AGPL-3.0](../../LICENSE)
 
-Quando si ridistribuiscono copie o adattamenti del codice di NeverD coperto dalla AGPL, gli avvisi di copyright e di licenza devono essere mantenuti secondo la AGPL; ciò include il riuso assistito da IA/LLM e le trasformazioni tramite LLVM. Per rendere tracciabile la provenienza, consigliamo inoltre di citare il repository, i file e la versione utilizzata. Consulta la [guida all’attribuzione e alle fonti](../../ATTRIBUTION.md), [NOTICE](../../NOTICE) e [CITATION.cff](../../CITATION.cff).
+Quando si ridistribuiscono copie o adattamenti del codice di NeverD coperto dalla AGPL, gli avvisi di copyright e di licenza devono essere mantenuti secondo la AGPL; ciò include il riuso assistito da IA/LLM e le trasformazioni tramite LLVM. Per rendere tracciabile la provenienza, consigliamo inoltre di citare il repository, i file e la versione utilizzata. Consulta la [guida all’attribuzione e alle fonti](ATTRIBUTION.it.md), [NOTICE](../../NOTICE) e [CITATION.cff](../../CITATION.cff).
 
 I componenti LLVM mantengono la licenza Apache-2.0 WITH LLVM-exception. Capstone mantiene la propria licenza.

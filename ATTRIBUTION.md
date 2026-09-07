@@ -1,3 +1,5 @@
+**Languages**: [English](ATTRIBUTION.md) | [简体中文](docs/i18n/ATTRIBUTION.zh-CN.md) | [繁體中文](docs/i18n/ATTRIBUTION.zh-TW.md) | [日本語](docs/i18n/ATTRIBUTION.ja.md) | [한국어](docs/i18n/ATTRIBUTION.ko.md) | [Français](docs/i18n/ATTRIBUTION.fr.md) | [Deutsch](docs/i18n/ATTRIBUTION.de.md) | [Español](docs/i18n/ATTRIBUTION.es.md) | [Italiano](docs/i18n/ATTRIBUTION.it.md) | [Русский](docs/i18n/ATTRIBUTION.ru.md) | [العربية](docs/i18n/ATTRIBUTION.ar.md)
+
 # Attribution and citation
 
 NeverD is developed by **NeverD contributors**. Its source repository is
@@ -86,17 +88,3 @@ and any directory-specific license, including the
 Preserve the original third-party credits and comply with those licenses
 when reusing that material. This guide does not relicense third-party
 material or revoke permissions previously granted for earlier copies.
-
-## 中文说明
-
-NeverD 原创代码采用 [AGPLv3](LICENSE)。分发受该许可证约束的代码副本或修改版时，
-必须按许可证保留版权、许可和免责声明，包括 [NOTICE](NOTICE) 中的项目署名和来源信息；
-已有的个人作者声明也应保留。发布修改后的受保护源码，还须明确说明修改及相关日期。
-通过 AI/LLM 复制或改写代码，或借助 LLVM IR、编译、反编译、语言转换处理代码，
-本身不会免除这些义务；只署名 AI 工具或 LLVM 不能代替 NeverD 的来源声明。
-
-建议引用时同时写明原始文件或符号、实际使用的提交或版本，以及修改说明。
-论文、评测和技术文档可以使用 [CITATION.cff](CITATION.cff) 和上面的引用模板。
-仅参考思想、算法，或处理不包含 NeverD 受保护内容的输出时，引用属于项目倡议，
-并非新增的许可限制。署名也不能代替 AGPL 要求的其他义务，例如适用的源码提供义务。
-第三方代码继续遵循其各自的许可证；本指南不改变既有授权。

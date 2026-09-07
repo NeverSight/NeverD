@@ -7,6 +7,12 @@ contribución útil tiene un alcance concreto, hace que el comportamiento no
 soportado falle de forma visible e incluye la prueba mínima que demuestra el
 contrato modificado.
 
+Conserve los avisos de derechos de autor, licencia y procedencia al incorporar
+código existente, incluido el copiado o adaptado con herramientas de IA/LLM.
+Siga la [guía de atribución](ATTRIBUTION.es.md), identifique la fuente original
+y la revisión del material reutilizado, y compruebe su licencia antes de enviarlo.
+Mantenga los avisos de terceros bajo sus licencias originales.
+
 Antes de editar, lea la [guía de arquitectura](../architecture.es.md). Use la
 [guía de pruebas](../testing.es.md) para elegir suites y la
 [hoja de ruta](../roadmap/README.es.md) para consultar el trabajo de producto
