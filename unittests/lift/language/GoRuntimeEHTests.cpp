@@ -4,9 +4,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "gtest/gtest.h"
-
 #include "GoRuntimeEHTestsDetail.h"
+#include "gtest/gtest.h"
 
 namespace {
 
@@ -25,13 +24,12 @@ TEST(GoPCValue, DecodesUnsafePointRangesWithEveryDefinedKind) {
   UnsafePoints.Steps = {{-1, 0x10}, {-2, 0x08}, {-3, 0x04},
                         {-4, 0x04}, {-5, 0x04}, {7, 0x08}};
   Work.PCData = {UnsafePoints};
-  T.installPclnTab(
-      buildPclnTab(kGo116Magic, {Work}, kTextVA + 0x200).Bytes);
+  T.installPclnTab(buildPclnTab(kGo116Magic, {Work}, kTextVA + 0x200).Bytes);
 
   parseGoExceptions(T.Img);
 
-  const ExceptionFunction *F = findRecord(T.Img.ExceptionMetadata,
-                                          kTextVA + 0x100);
+  const ExceptionFunction *F =
+      findRecord(T.Img.ExceptionMetadata, kTextVA + 0x100);
   ASSERT_NE(F, nullptr);
   const std::vector<GoUnsafePointRange> &Ranges = F->Go->UnsafePointRanges;
   ASSERT_EQ(Ranges.size(), 6u);
@@ -69,8 +67,8 @@ TEST(GoPCValue, ScalesProgramCounterDeltasByMinLC) {
 
   parseGoExceptions(T.Img);
 
-  const ExceptionFunction *F = findRecord(T.Img.ExceptionMetadata,
-                                          kTextVA + 0x100);
+  const ExceptionFunction *F =
+      findRecord(T.Img.ExceptionMetadata, kTextVA + 0x100);
   ASSERT_NE(F, nullptr);
   ASSERT_EQ(F->Go->UnsafePointRanges.size(), 2u);
   EXPECT_EQ(F->Go->UnsafePointRanges[0].Range.End, kTextVA + 0x110);
@@ -91,13 +89,13 @@ TEST(GoPCValue, ReportsATableThatRunsOffTheImage) {
 
   parseGoExceptions(T.Img);
 
-  const ExceptionFunction *F = findRecord(T.Img.ExceptionMetadata,
-                                          kTextVA + 0x100);
+  const ExceptionFunction *F =
+      findRecord(T.Img.ExceptionMetadata, kTextVA + 0x100);
   ASSERT_NE(F, nullptr);
   EXPECT_TRUE(F->Go->UnsafePointRanges.empty());
   EXPECT_EQ(F->ParseStatus, ExceptionParseStatus::Partial);
-  EXPECT_TRUE(anyDiagnosticContains(F->Diagnostics,
-                                    "not a readable pc-value table"));
+  EXPECT_TRUE(
+      anyDiagnosticContains(F->Diagnostics, "not a readable pc-value table"));
 }
 
 TEST(GoPCValue, RejectsAValueDeltaThatOverflowsTheAccumulator) {
@@ -114,16 +112,42 @@ TEST(GoPCValue, RejectsAValueDeltaThatOverflowsTheAccumulator) {
   PCValueTable UnsafePoints;
   UnsafePoints.RawBytes = Raw.data();
   Work.PCData = {UnsafePoints};
-  T.installPclnTab(
-      buildPclnTab(kGo116Magic, {Work}, kTextVA + 0x200).Bytes);
+  T.installPclnTab(buildPclnTab(kGo116Magic, {Work}, kTextVA + 0x200).Bytes);
 
   parseGoExceptions(T.Img);
 
-  const ExceptionFunction *F = findRecord(T.Img.ExceptionMetadata,
-                                          kTextVA + 0x100);
+  const ExceptionFunction *F =
+      findRecord(T.Img.ExceptionMetadata, kTextVA + 0x100);
   ASSERT_NE(F, nullptr);
   EXPECT_TRUE(F->Go->UnsafePointRanges.empty());
   EXPECT_EQ(F->ParseStatus, ExceptionParseStatus::Partial);
+}
+
+TEST(GoPCValue, RejectsAVarintThatExceeds32Bits) {
+  // An overflowing value delta would alias -1; an overflowing PC delta
+  // would alias 16. Both would otherwise describe a valid unsafe range.
+  for (bool OverflowValue : {false, true}) {
+    SCOPED_TRACE(OverflowValue);
+    GoTestImage T;
+    GoFuncSpec Work = makeDeferringFunc("main.work", kTextVA + 0x100);
+    PCValueTable UnsafePoints;
+    UnsafePoints.RawBytes =
+        OverflowValue
+            ? std::vector<uint8_t>{0x81, 0x80, 0x80, 0x80, 0x10, 0x10, 0x00}
+            : std::vector<uint8_t>{0x01, 0x90, 0x80, 0x80, 0x80, 0x10, 0x00};
+    Work.PCData = {UnsafePoints};
+    T.installPclnTab(buildPclnTab(kGo116Magic, {Work}, kTextVA + 0x200).Bytes);
+
+    parseGoExceptions(T.Img);
+
+    const ExceptionFunction *F =
+        findRecord(T.Img.ExceptionMetadata, kTextVA + 0x100);
+    ASSERT_NE(F, nullptr);
+    EXPECT_TRUE(F->Go->UnsafePointRanges.empty());
+    EXPECT_EQ(F->ParseStatus, ExceptionParseStatus::Partial);
+    EXPECT_TRUE(
+        anyDiagnosticContains(F->Diagnostics, "not a readable pc-value table"));
+  }
 }
 
 TEST(GoPCValue, RejectsAnUnterminatedVarint) {
@@ -132,13 +156,12 @@ TEST(GoPCValue, RejectsAnUnterminatedVarint) {
   PCValueTable UnsafePoints;
   UnsafePoints.RawBytes = {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00};
   Work.PCData = {UnsafePoints};
-  T.installPclnTab(
-      buildPclnTab(kGo116Magic, {Work}, kTextVA + 0x200).Bytes);
+  T.installPclnTab(buildPclnTab(kGo116Magic, {Work}, kTextVA + 0x200).Bytes);
 
   parseGoExceptions(T.Img);
 
-  const ExceptionFunction *F = findRecord(T.Img.ExceptionMetadata,
-                                          kTextVA + 0x100);
+  const ExceptionFunction *F =
+      findRecord(T.Img.ExceptionMetadata, kTextVA + 0x100);
   ASSERT_NE(F, nullptr);
   EXPECT_TRUE(F->Go->UnsafePointRanges.empty());
   EXPECT_EQ(F->ParseStatus, ExceptionParseStatus::Partial);
@@ -148,13 +171,12 @@ TEST(GoPCValue, LeavesUnsafePointsEmptyWhenTheRecordDeclaresNoTable) {
   GoTestImage T;
   GoFuncSpec Work = makeDeferringFunc("main.work", kTextVA + 0x100);
   Work.PCData = {std::nullopt};
-  T.installPclnTab(
-      buildPclnTab(kGo116Magic, {Work}, kTextVA + 0x200).Bytes);
+  T.installPclnTab(buildPclnTab(kGo116Magic, {Work}, kTextVA + 0x200).Bytes);
 
   parseGoExceptions(T.Img);
 
-  const ExceptionFunction *F = findRecord(T.Img.ExceptionMetadata,
-                                          kTextVA + 0x100);
+  const ExceptionFunction *F =
+      findRecord(T.Img.ExceptionMetadata, kTextVA + 0x100);
   ASSERT_NE(F, nullptr);
   EXPECT_TRUE(F->Go->UnsafePointRanges.empty());
   EXPECT_EQ(F->ParseStatus, ExceptionParseStatus::Complete);

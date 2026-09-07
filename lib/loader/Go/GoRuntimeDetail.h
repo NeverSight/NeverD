@@ -157,6 +157,10 @@ public:
       std::optional<uint8_t> Byte = u8(VA + I);
       if (!Byte)
         return std::nullopt;
+      // Only four payload bits remain in the fifth byte of a uint32.
+      // Reject overflow before shifting, which would discard the high bits.
+      if (I == 4 && (*Byte & 0xF0) != 0)
+        return std::nullopt;
       Value |= static_cast<uint32_t>(*Byte & 0x7F) << Shift;
       if ((*Byte & 0x80) == 0) {
         VA += I + 1;
