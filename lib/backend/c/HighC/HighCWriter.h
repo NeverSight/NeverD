@@ -103,6 +103,9 @@ public:
   std::string exprStr(const HighExpr &Expr, int ParentPrec = 0);
   std::string renderUnaryOp(const HighExpr &E, int ParentPrec);
   std::string renderCallExpr(const HighExpr &E);
+  std::string renderSourceCallExpr(const HighExpr &E);
+  const HighFunc *sourceCallDefinition(const SourceCallTypeHint &Hint,
+                                       llvm::StringRef Name) const;
   std::string varName(const MedVar &V);
   TypeRef declaredParamType(const MedVar &V) const;
   std::string constStr(uint64_t Val);
@@ -121,6 +124,7 @@ public:
 
   std::set<std::string> ExternFuncs;
   std::map<std::string, const HighFunc *> DefinedFuncs;
+  std::map<va_t, const HighFunc *> DefinedFunctionsByAddress;
   CProjectionIdentifierAllocator GlobalIdentifierAllocator;
   std::map<const HighFunc *, std::string> FunctionIdentifiers;
   std::map<std::string, std::string> FunctionIdentifiersBySourceName;
@@ -129,6 +133,13 @@ public:
   bool HasCIntrinsics = false;
   bool NeedsFEnvAccess = false;
   std::set<std::string> CIntrinsicNames;
+  bool NeedsObjCRuntime = false;
+  bool NeedsObjCSuper2 = false;
+  std::set<std::string> SourceBlockAddressHelpers;
+  std::set<std::string> SourceBlockIsaNames;
+  std::set<const HighFunc *> SourceAddressDefinitions;
+  std::map<std::string, const SourceFunctionTypeHint *> SourceNativeSignatures;
+  std::set<std::string> ConflictingSourceNativeSignatures;
   std::map<std::string, unsigned> MemoryTypes;
   std::set<std::pair<std::string, NdMemoryAddressSpace>> SegmentedMemoryTypes;
   std::set<std::tuple<std::string, NdMemoryOrdering, NdMemoryAddressSpace>>

@@ -225,6 +225,7 @@ struct BinaryImage {
   std::vector<Symbol> Symbols;
   std::vector<ObjCClass> ObjCClasses;
   std::vector<ObjCMethod> ObjCMethods;
+  std::map<va_t, ObjCSourceReference> ObjCSourceReferences;
   std::vector<std::string> ObjCMetadataDiagnostics;
   /// Exact slots decoded by the supported chained-fixup reader. A raw nonzero
   /// slot in a chained image is not a pointer merely because it looks mapped.

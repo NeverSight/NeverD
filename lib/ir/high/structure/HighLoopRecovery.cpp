@@ -60,12 +60,16 @@ void detectAndConvertLoops(HighFunc &Func,
 
       va_t Target = 0;
       ExprPtr LatchCond;
+      std::vector<HighStmt> LatchCopies;
       if (GotoStmt.Kind == StmtKind::Goto) {
         Target = GotoStmt.GotoTarget;
-      } else if (GotoStmt.Kind == StmtKind::If && GotoStmt.Body.size() == 1 &&
-                 GotoStmt.Body[0].Kind == StmtKind::Goto) {
-        Target = GotoStmt.Body[0].GotoTarget;
+      } else if (GotoStmt.Kind == StmtKind::If && !GotoStmt.Body.empty() &&
+                 GotoStmt.Body.back().Kind == StmtKind::Goto &&
+                 std::all_of(GotoStmt.Body.begin(), GotoStmt.Body.end() - 1,
+                             [](const HighStmt &S) { return S.IsPhiCopy; })) {
+        Target = GotoStmt.Body.back().GotoTarget;
         LatchCond = GotoStmt.Cond;
+        LatchCopies.assign(GotoStmt.Body.begin(), GotoStmt.Body.end() - 1);
       }
       if (Target == 0 || Target == InvalidVA)
         continue;
@@ -103,6 +107,7 @@ void detectAndConvertLoops(HighFunc &Func,
         ExitGoto.GotoTarget = ExitAddr;
         ExitCheck.Body.push_back(ExitGoto);
         LoopBody.push_back(ExitCheck);
+        LoopBody.insert(LoopBody.end(), LatchCopies.begin(), LatchCopies.end());
       } else if (!LoopBody.empty() && LoopBody[0].Kind == StmtKind::If &&
                  LoopBody[0].Body.size() == 1 &&
                  LoopBody[0].Body[0].Kind == StmtKind::Goto) {
@@ -180,125 +185,9 @@ void detectAndConvertLoops(HighFunc &Func,
       }
       WhileStmt.Cond = WhileCond;
 
-      {
-        std::vector<HighStmt> NonPhi, PhiStmts;
-        for (auto &S : LoopBody) {
-          if (S.IsPhiCopy)
-            PhiStmts.push_back(std::move(S));
-          else
-            NonPhi.push_back(std::move(S));
-        }
-
-        auto GetWritten = [](const HighStmt &S) -> std::string {
-          if (S.Dst && S.Dst->Kind == ExprKind::Var)
-            return S.Dst->Var.display();
-          return {};
-        };
-        std::function<void(const ExprPtr &, std::set<std::string> &)>
-            CollectReads;
-        CollectReads = [&](const ExprPtr &E, std::set<std::string> &Out) {
-          if (!E)
-            return;
-          if (E->Kind == ExprKind::Var)
-            Out.insert(E->Var.display());
-          for (auto &Op : E->Operands)
-            CollectReads(Op, Out);
-        };
-
-        std::set<std::string> AllWritten;
-        for (auto &PS : PhiStmts)
-          if (auto W = GetWritten(PS); !W.empty())
-            AllWritten.insert(W);
-
-        std::vector<HighStmt> Ordered;
-        std::vector<bool> Placed(PhiStmts.size(), false);
-        for (size_t Round = 0; Round < PhiStmts.size() + 1; ++Round) {
-          bool Progress = false;
-          for (size_t PI = 0; PI < PhiStmts.size(); ++PI) {
-            if (Placed[PI])
-              continue;
-            std::set<std::string> Reads;
-            CollectReads(PhiStmts[PI].Val, Reads);
-            bool Blocked = false;
-            for (size_t PJ = 0; PJ < PhiStmts.size(); ++PJ) {
-              if (PI == PJ || Placed[PJ])
-                continue;
-              auto W = GetWritten(PhiStmts[PJ]);
-              if (!W.empty() && Reads.count(W)) {
-                Blocked = true;
-                break;
-              }
-            }
-            if (!Blocked) {
-              Ordered.push_back(std::move(PhiStmts[PI]));
-              Placed[PI] = true;
-              Progress = true;
-            }
-          }
-          if (!Progress)
-            break;
-        }
-        for (size_t PI = 0; PI < PhiStmts.size(); ++PI)
-          if (!Placed[PI])
-            Ordered.push_back(std::move(PhiStmts[PI]));
-
-        auto FindLastExitIf = [](std::vector<HighStmt> &Stmts) -> int {
-          for (int K = static_cast<int>(Stmts.size()) - 1; K >= 0; --K) {
-            auto &S = Stmts[K];
-            if ((S.Kind == StmtKind::If || S.Kind == StmtKind::IfElse) &&
-                !S.Body.empty() &&
-                (S.Body[0].Kind == StmtKind::Break ||
-                 S.Body[0].Kind == StmtKind::Continue ||
-                 S.Body[0].Kind == StmtKind::Goto))
-              return K;
-            if (S.Kind != StmtKind::Assign)
-              break;
-          }
-          return -1;
-        };
-
-        int BreakIdx = LatchCond ? FindLastExitIf(NonPhi) : -1;
-        if (BreakIdx >= 0 && !Ordered.empty()) {
-          auto &BreakIf = NonPhi[BreakIdx];
-
-          std::function<bool(const ExprPtr &)> HasLoad;
-          HasLoad = [&](const ExprPtr &E) -> bool {
-            if (!E)
-              return false;
-            if (E->Kind == ExprKind::Load)
-              return true;
-            for (auto &Op : E->Operands)
-              if (HasLoad(Op))
-                return true;
-            return false;
-          };
-
-          std::vector<HighStmt> PreBreakCopies;
-          for (auto &PC : Ordered) {
-            if (HasLoad(PC.Val))
-              continue;
-            HighStmt Dup;
-            Dup.Kind = PC.Kind;
-            Dup.Addr = PC.Addr;
-            Dup.IsPhiCopy = true;
-            if (PC.Dst)
-              Dup.Dst = std::make_shared<HighExpr>(*PC.Dst);
-            if (PC.Val)
-              Dup.Val = std::make_shared<HighExpr>(*PC.Val);
-            PreBreakCopies.push_back(std::move(Dup));
-          }
-          if (!PreBreakCopies.empty()) {
-            PreBreakCopies.insert(PreBreakCopies.end(),
-                                  std::make_move_iterator(BreakIf.Body.begin()),
-                                  std::make_move_iterator(BreakIf.Body.end()));
-            BreakIf.Body = std::move(PreBreakCopies);
-          }
-        }
-
-        NonPhi.insert(NonPhi.end(), std::make_move_iterator(Ordered.begin()),
-                      std::make_move_iterator(Ordered.end()));
-        LoopBody = std::move(NonPhi);
-      }
+      // Edge copies already have predecessor snapshots and exact branch
+      // ownership. Preserve that order; moving every copy to the latch would
+      // execute exit-edge values on backedges and break parallel PHI updates.
 
       WhileStmt.Body = std::move(LoopBody);
 

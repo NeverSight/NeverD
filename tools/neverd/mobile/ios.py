@@ -67,7 +67,7 @@ def _main_executable(bundle: Path, info: dict) -> Path:
 
 def decompile_ios(source: Path, output: Path, *, neverd: str, arch: str,
                   artifact: str | None, metadata_only: bool, max_func: int,
-                  limits: Limits) -> dict:
+                  limits: Limits, swift_demangle: str | None = None) -> dict:
     if max_func < 0:
         raise MobileError("max-func must not be negative")
     staged = output / "input"
@@ -116,6 +116,7 @@ def decompile_ios(source: Path, output: Path, *, neverd: str, arch: str,
                "objc_declarations": "metadata/objc.h", "swift_metadata": "metadata/swift.json"}
     native_function_count = None
     method_recovery = None
+    swift_recovery = None
     native_limitations: list[str] = []
     if not metadata_only:
         sources = output / "sources"
@@ -166,8 +167,14 @@ def decompile_ios(source: Path, output: Path, *, neverd: str, arch: str,
         batch_path.unlink()
         outputs["native_source"] = "sources/native.c"
         outputs["native_log"] = "logs/native.log"
+        from .swift_source import recover_swift_sources
+        swift_recovery, swift_outputs = recover_swift_sources(
+            thin_path, output, symbols=swift["symbols"], neverd=neverd,
+            demangler=swift_demangle, pointer_size=image.pointer_size,
+            max_func=max_func, limits=limits)
+        outputs.update(swift_outputs)
     (metadata / "objc.json").write_text(json.dumps(objc, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
-    (metadata / "objc.h").write_text(objc_header(objc), encoding="utf-8")
+    (metadata / "objc.h").write_text(objc_header({**objc, "pointer_size": image.pointer_size}), encoding="utf-8")
     bundle = {key: value for key, value in bundle_info.items()
               if key in ("CFBundleIdentifier", "CFBundleName", "CFBundleExecutable", "CFBundleVersion",
                          "CFBundleShortVersionString", "MinimumOSVersion") and isinstance(value, (str, int, bool))}
@@ -178,14 +185,17 @@ def decompile_ios(source: Path, output: Path, *, neverd: str, arch: str,
             "metadata_only": metadata_only, "outputs": outputs,
             "native_function_count": native_function_count,
             "objc_method_recovery": method_recovery,
+            "swift_method_recovery": swift_recovery,
             "objc_class_count": len(objc["classes"]), "swift_type_count": len(swift["types"]),
             "swift_symbol_count": len(swift["symbols"]),
             "limitations": ["Original comments, formatting, removed names and source constructs lost during compilation cannot be restored.",
                             "Objective-C method coverage lists reconstructed bodies and omissions; it is not a proof of semantic equivalence.",
-                            "Swift method source is not reconstructed. Native C types and calling conventions remain approximations outside supported runtime signatures.",
+                            "Swift method coverage separates recovered native bodies, unsupported callable signatures and non-callable metadata; stripped or unclassified symbols can leave coverage unknown.",
+                            "Native C types and calling conventions remain approximations outside supported source signatures.",
                             "Only the selected executable is analyzed; use --artifact for embedded frameworks or extensions.",
                             *native_limitations,
                             *(method_recovery["limitations"] if method_recovery else []),
+                            *(swift_recovery["limitations"] if swift_recovery else []),
                             *objc["limitations"], *swift["limitations"]]}
     shutil.rmtree(staged)
     return report

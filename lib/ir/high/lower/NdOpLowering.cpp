@@ -134,6 +134,9 @@ void MedToHighConverter::lowerCall(HighFunc &Func, const MedBlock &CurBlock,
   if (Callee == "___error")
     Args.clear();
   auto CallExpr = HighExpr::makeCall(Callee, Target, std::move(Args));
+  CallExpr->SourceCallHint = CurOp.SourceCallHint;
+  if (CurOp.SourceCallHint && CurOp.Output.Size)
+    CallExpr->Type = NdType::makeInt(CurOp.Output.Size, false);
 
   if (CurOp.Output.Id >= 0 && CurOp.Output.Size > 0) {
     HighStmt S;

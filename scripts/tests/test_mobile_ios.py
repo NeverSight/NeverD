@@ -316,13 +316,16 @@ class IOSPackageTests(unittest.TestCase):
         return ipa
 
     def test_app_binary_plist_metadata_only(self):
-        with patch("mobile.ios.run_tool") as run:
-            report = self.run_ios(self.bundle())
+        with patch("mobile.ios.run_tool") as run, \
+                patch("mobile.swift_source.recover_swift_sources") as swift:
+            report = self.run_ios(self.bundle(), swift_demangle="missing-explicit-tool")
             run.assert_not_called()
+            swift.assert_not_called()
         self.assertEqual(report["bundle"]["CFBundleIdentifier"], "test.demo")
         self.assertEqual(report["selected_artifact"], "Demo")
         self.assertEqual(report["objc_class_count"], 1)
         self.assertFalse((self.output / "input").exists())
+        self.assertIsNone(report["swift_method_recovery"])
         metadata = json.loads((self.output / "metadata" / "objc.json").read_text())
         self.assertEqual(metadata["classes"][0]["name"], "Calculator")
 

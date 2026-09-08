@@ -74,6 +74,9 @@ private:
 
   ExprPtr medOpToExpr(const MedOp &Op);
   ExprPtr medvarToExpr(const MedVar &V);
+  ExprPtr sourceBitSlice(const ExprPtr &Value, uint64_t ByteOffset,
+                         uint16_t Bytes, unsigned Depth = 0);
+  ExprPtr sourceFloatValue(const MedVar &Value, uint16_t Bytes);
   ExprPtr inlineableDefinition(VarKey Key) const;
   ExprPtr forceInlineExpr(const ExprPtr &E);
 
@@ -110,7 +113,8 @@ private:
                           const VarKeySet &PhiArgVars);
   void insertPhiCopies(
       HighFunc &Func, const MedBlock &CurBlock, int BlkIdx, size_t BlkBodyStart,
-      const std::map<int, std::vector<std::pair<MedVar, MedVar>>> &PhiCopies);
+      const std::map<std::pair<int, int>,
+                     std::vector<std::pair<MedVar, MedVar>>> &PhiCopies);
 
   CallIndTarget resolveCallIndTarget(const MedBlock &CurBlock,
                                      const MedOp &CurOp,
@@ -132,6 +136,7 @@ private:
   const std::map<va_t, std::string> *FuncNames = nullptr;
   std::vector<JumpTable> JumpTables;
   std::set<int> JtConsumedBlocks;
+  int NextHighTempId = 0;
   int ExprRecurseDepth = 0;
   static constexpr int kMaxExprDepth = limits::kMaxExprDepth;
 };

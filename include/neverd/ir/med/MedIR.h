@@ -16,10 +16,14 @@
 
 #include "neverd/Common.h"
 #include "neverd/ir/NdTypes.h"
+#include "neverd/ir/SourceCallTypeHint.h"
 #include "neverd/ir/SourceTypeHint.h"
 #include "neverd/ir/low/LowIR.h"
 
+#include "llvm/ADT/SmallVector.h"
+
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -161,7 +165,9 @@ struct MedOp {
   NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None;
   NdMemoryAddressSpace MemoryAddressSpace = NdMemoryAddressSpace::Default;
   MedVar Output = {};
-  MedVar Inputs[6] = {};
+  // Ordinary operations retain six inline slots. Source-bound calls may carry
+  // their full scalar argument list through the same SSA/liveness operands.
+  llvm::SmallVector<MedVar, 6> Inputs = llvm::SmallVector<MedVar, 6>(6);
   uint8_t NumInputs = 0;
   va_t Addr = 0;
   /// Sequence number of the original LowOp.  Synthetic MedOps keep -1, so a
@@ -169,6 +175,7 @@ struct MedOp {
   /// all SSA/fixup/propagation passes have completed.
   int OriginSeq = -1;
   uint32_t CallSiteId = 0;
+  std::shared_ptr<const SourceCallTypeHint> SourceCallHint;
   bool Dead = false;
   bool PreservesCallerSaved = false;
   /// The source instruction is a proven no-return call.  This is explicit MedIR
@@ -176,8 +183,13 @@ struct MedOp {
   bool DoesNotReturn = false;
 
   void addInput(MedVar V) {
-    if (NumInputs < 6)
-      Inputs[NumInputs++] = V;
+    if (NumInputs < 65) {
+      if (NumInputs == Inputs.size())
+        Inputs.push_back(V);
+      else
+        Inputs[NumInputs] = V;
+      ++NumInputs;
+    }
   }
 };
 
@@ -270,6 +282,7 @@ struct MedCallInfo {
   va_t TargetAddr = 0;
   std::string TargetName;
   std::vector<MedVar> Args;
+  std::shared_ptr<const SourceCallTypeHint> SourceCallHint;
   bool IsIndirect = false;
   /// Darwin AArch64 indirect variadic call: number of fixed (register-prefix)
   /// arguments before the stack-passed variadic tail.  -1 = not variadic.
@@ -299,6 +312,9 @@ struct MedFunc {
 
   /// Source projection only; never an authenticated semantic return contract.
   std::optional<SourceFunctionTypeHint> SourceTypeHint;
+  /// Internal bookkeeping: Param operands already use source declaration
+  /// indices, rather than generic ABI register / pointer-sized stack slots.
+  bool SourceParametersBound = false;
 
   /// Trusted return-value evidence for consumers that need declaration
   /// semantics rather than a code-generation type.  Debug providers remain

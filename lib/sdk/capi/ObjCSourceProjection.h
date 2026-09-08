@@ -7,6 +7,7 @@
 #ifndef NEVERD_SDK_CAPI_OBJCSOURCEPROJECTION_H
 #define NEVERD_SDK_CAPI_OBJCSOURCEPROJECTION_H
 
+#include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/HighIR.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -14,6 +15,7 @@
 
 #include "llvm/ADT/StringRef.h"
 
+#include <functional>
 #include <map>
 #include <set>
 #include <string>
@@ -50,6 +52,8 @@ inline bool sameType(const TypeRef &Left, const TypeRef &Right,
   case NdTypeKind::Int:
     return Left->Size == 1 || Left->Size == 2 || Left->Size == 4 ||
            Left->Size == 8;
+  case NdTypeKind::Float:
+    return Left->Size == 4 || Left->Size == 8;
   case NdTypeKind::Ptr:
     return Left->Size == 8 &&
            sameType(Left->Pointee, Right->Pointee, Depth + 1);
@@ -58,16 +62,29 @@ inline bool sameType(const TypeRef &Left, const TypeRef &Right,
   }
 }
 
+inline bool sameLocation(const SourceABIValueLocation &Left,
+                         const SourceABIValueLocation &Right) {
+  return Left.Kind == Right.Kind &&
+         Left.RegisterOffset == Right.RegisterOffset &&
+         Left.EntryStackOffset == Right.EntryStackOffset &&
+         Left.ValueBytes == Right.ValueBytes;
+}
+
 inline bool sameHint(const SourceFunctionTypeHint &Left,
                      const SourceFunctionTypeHint &Right) {
-  if (Left.Origin != SourceFunctionTypeHint::OriginKind::ObjCRuntime ||
-      Left.Origin != Right.Origin ||
+  if (Left.Origin != Right.Origin || Left.Architecture != Right.Architecture ||
+      Left.HasExplicitABI != Right.HasExplicitABI ||
+      (Left.HasExplicitABI &&
+       !sameLocation(Left.ReturnLocation, Right.ReturnLocation)) ||
       !sameType(Left.ReturnType, Right.ReturnType) ||
       Left.Parameters.size() != Right.Parameters.size())
     return false;
   for (size_t Index = 0; Index < Left.Parameters.size(); ++Index)
     if (Left.Parameters[Index].Name != Right.Parameters[Index].Name ||
-        !sameType(Left.Parameters[Index].Type, Right.Parameters[Index].Type))
+        !sameType(Left.Parameters[Index].Type, Right.Parameters[Index].Type) ||
+        (Left.HasExplicitABI &&
+         !sameLocation(Left.Parameters[Index].Location,
+                       Right.Parameters[Index].Location)))
       return false;
   return true;
 }
@@ -103,16 +120,23 @@ inline bool isPlainUnwind(const ExceptionFunction &Metadata) {
 
 /// Empty means the projection has a complete supported source representation.
 /// This checks coverage and binding consistency, not semantic equivalence.
-inline std::string
-objcSourceBodyLimitation(const HighFunc &Func,
-                         const SourceFunctionTypeHint &Hint,
-                         const PipelineFunctionAudit *Audit) {
+inline std::string sourceBodyLimitation(
+    const HighFunc &Func, const SourceFunctionTypeHint &Hint,
+    const PipelineFunctionAudit *Audit,
+    const std::function<bool(const HighExpr &)> &CallAllowed = {}) {
   using namespace objc_projection_detail;
   if (!Func.SourceTypeHint || !sameHint(*Func.SourceTypeHint, Hint) ||
       !sameType(Func.ReturnType, Hint.ReturnType) ||
       Func.Params.size() != Hint.Parameters.size() ||
-      Hint.Parameters.size() < 2 || Hint.Parameters.size() > 8)
+      Hint.Parameters.size() > 64)
     return "method source signature disagrees with its runtime type hint";
+  std::string ABILimitation;
+  if (Hint.HasExplicitABI && !validateSourceABI(Hint, ABILimitation))
+    return ABILimitation;
+  if (!Hint.HasExplicitABI &&
+      (Hint.Origin != SourceFunctionTypeHint::OriginKind::ObjCRuntime ||
+       Hint.Parameters.size() < 2 || Hint.Parameters.size() > 8))
+    return "method has no explicit source ABI binding";
   for (size_t Index = 0; Index < Func.Params.size(); ++Index) {
     const auto &Parameter = Func.Params[Index];
     if (Parameter.Name != Hint.Parameters[Index].Name ||
@@ -198,6 +222,7 @@ objcSourceBodyLimitation(const HighFunc &Func,
     if (Expression->Kind == ExprKind::Undef)
       return "method contains an unresolved value";
     if (Expression->Kind == ExprKind::Call &&
+        !(CallAllowed && CallAllowed(*Expression)) &&
         (Expression->IntrinsicId == Intrinsic::None ||
          !intrinsicCName(Expression->IntrinsicId) ||
          Expression->IsIndirectCall ||
@@ -210,13 +235,27 @@ objcSourceBodyLimitation(const HighFunc &Func,
         if (Variable.Id < 0 ||
             static_cast<size_t>(Variable.Id) >= Hint.Parameters.size() ||
             Variable.RenameTag >= 0 ||
+            (Hint.HasExplicitABI && Variable.TheArch != Hint.Architecture) ||
             (Variable.TheArch != Arch::X64 &&
              Variable.TheArch != Arch::AArch64))
           return "method references an unbound source parameter";
-        const auto &Registers = getTargetRegInfo(Variable.TheArch).IntParamRegs;
-        if (static_cast<size_t>(Variable.Id) >= Registers.size() ||
-            Registers[Variable.Id] != Variable.RegOff)
-          return "method source parameter occupies the wrong ABI position";
+        if (Hint.HasExplicitABI) {
+          const auto &Location = Hint.Parameters[Variable.Id].Location;
+          if (Location.Kind == SourceABICarrierKind::Stack) {
+            if (Variable.StackOff != Location.EntryStackOffset)
+              return "method source parameter occupies the wrong stack "
+                     "position";
+          } else if (Variable.RegOff != Location.RegisterOffset) {
+            return "method source parameter occupies the wrong register "
+                   "position";
+          }
+        } else {
+          const auto &Registers =
+              getTargetRegInfo(Variable.TheArch).IntParamRegs;
+          if (static_cast<size_t>(Variable.Id) >= Registers.size() ||
+              Registers[Variable.Id] != Variable.RegOff)
+            return "method source parameter occupies the wrong ABI position";
+        }
       } else if ((Variable.Kind == MedVar::Reg ||
                   Variable.Kind == MedVar::Flag) &&
                  Variable.SSAVer == 0 && Variable.RenameTag < 0) {
@@ -226,7 +265,7 @@ objcSourceBodyLimitation(const HighFunc &Func,
              Variable.TheArch == Arch::AArch64) &&
             (Func.FrameSize > 0 || Func.FrameHeadroom > 0) &&
             Variable.RegOff == getTargetRegInfo(Variable.TheArch).StackPointer;
-        if (!FramePointer)
+        if (!FramePointer && !DefinedLocals.count(localIdentity(Variable)))
           return "method contains an unexplained incoming register value";
       } else if (Variable.Kind == MedVar::EHException ||
                  Variable.Kind == MedVar::EHSelector) {
@@ -245,6 +284,15 @@ objcSourceBodyLimitation(const HighFunc &Func,
     }
   }
   return {};
+}
+
+inline std::string objcSourceBodyLimitation(
+    const HighFunc &Func, const SourceFunctionTypeHint &Hint,
+    const PipelineFunctionAudit *Audit,
+    const std::function<bool(const HighExpr &)> &CallAllowed = {}) {
+  if (Hint.Origin != SourceFunctionTypeHint::OriginKind::ObjCRuntime)
+    return "Objective-C method has a different source declaration origin";
+  return sourceBodyLimitation(Func, Hint, Audit, CallAllowed);
 }
 
 /// HighC currently returns success even when it emits a diagnostic placeholder.

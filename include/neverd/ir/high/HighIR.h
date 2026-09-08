@@ -70,7 +70,11 @@ enum class ExprKind : uint8_t {
   Addr,
   Cast,
   Field,
-  Phi
+  Phi,
+  /// Reinterpret the bits of Operands[0] as Type. Both scalar types have the
+  /// same byte size; this never performs an integer/floating numeric
+  /// conversion.
+  BitCast
 };
 
 struct HighExpr {
@@ -94,6 +98,7 @@ struct HighExpr {
   va_t CallAddr = 0;
   bool IsIndirectCall = false;
   int IndirectParamIdx = -1;
+  std::shared_ptr<const SourceCallTypeHint> SourceCallHint;
   Intrinsic IntrinsicId = Intrinsic::None;
   std::vector<MedVar> IntrinsicOutputs;
 
@@ -107,6 +112,8 @@ struct HighExpr {
   static std::shared_ptr<HighExpr> makeVar(MedVar V, TypeRef Ty = nullptr);
   static std::shared_ptr<HighExpr> makeConst(uint64_t Val, uint16_t Size);
   static std::shared_ptr<HighExpr> makeUndef(uint16_t Size);
+  static std::shared_ptr<HighExpr> makeBitCast(std::shared_ptr<HighExpr> Value,
+                                               TypeRef Type);
   static std::shared_ptr<HighExpr>
   makeBinop(NdOp Op, std::shared_ptr<HighExpr> L, std::shared_ptr<HighExpr> R);
   static std::shared_ptr<HighExpr> makeUnary(NdOp Op,

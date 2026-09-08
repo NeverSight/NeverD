@@ -8,6 +8,7 @@ add_neverd_component_library(NeverDIRMed
   flags/MedFlagsARM.cpp
   flags/MedFlagsX86.cpp
   lower/LowToMed.cpp
+  lower/LowToMedSourceCalls.cpp
   lower/LowToMedARM.cpp
   lower/LowToMedCallReturnFP.cpp
   lower/LowToMedCallReturnStruct.cpp

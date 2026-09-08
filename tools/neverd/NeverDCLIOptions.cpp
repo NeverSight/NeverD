@@ -48,6 +48,10 @@ cl::opt<std::string>
     MobileBackend("jadx",
                   cl::desc("Android Java backend executable (or NEVERD_JADX)"),
                   cl::init(""), cl::sub(MobileCmd));
+cl::opt<std::string> MobileSwiftDemangle(
+    "swift-demangle",
+    cl::desc("Swift demangler executable (or NEVERD_SWIFT_DEMANGLE)"),
+    cl::init(""), cl::sub(MobileCmd));
 cl::opt<std::string>
     MobileArch("arch", cl::desc("iOS slice: auto, arm64, arm, x86_64, or i386"),
                cl::init("auto"), cl::sub(MobileCmd));
@@ -701,8 +705,14 @@ cl::opt<ExportFormat> ExportFmt(
         clEnumValN(FmtExports, "exports", "Export table (JSON)"),
         clEnumValN(FmtStrings, "strings", "String table (JSON)"),
         clEnumValN(FmtObjCMethods, "objc-methods",
-                   "Mach-O native source and Objective-C methods (JSON)")),
+                   "Mach-O native source and Objective-C methods (JSON)"),
+        clEnumValN(FmtSwiftMethods, "swift-methods",
+                   "Mach-O Swift method source and coverage (JSON)")),
     cl::sub(ExportCmd));
+
+cl::opt<std::string> ExportSourceSignatures(
+    "source-signatures", cl::desc("Structured Swift source signature JSON"),
+    cl::value_desc("file"), cl::init(""), cl::sub(ExportCmd));
 
 cl::opt<std::string> ExportOutput("o", cl::desc("Output file path"),
                                   cl::Required, cl::sub(ExportCmd));

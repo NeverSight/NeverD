@@ -97,7 +97,8 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
       Raw = E.Operands[0].get();
     }
     if (Converted && Raw && Converted->Operands.size() == 1 && Raw->Type &&
-        Raw->Type->Size == 8 && Converted->Operands[0]->Type &&
+        Raw->Type->Kind == NdTypeKind::Int && Raw->Type->Size == 8 &&
+        Converted->Operands[0]->Type &&
         Converted->Operands[0]->Type->Size == 4) {
       return "__builtin_bit_cast(double, (uint64_t)(" + exprStr(*Raw) +
              ")) == (double)(int32_t)(" + exprStr(*Converted->Operands[0]) +

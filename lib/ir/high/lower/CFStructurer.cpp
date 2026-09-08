@@ -29,95 +29,96 @@ namespace neverd {
 
 void MedToHighConverter::insertPhiCopies(
     HighFunc &Func, const MedBlock &CurBlock, int BlkIdx, size_t BlkBodyStart,
-    const std::map<int, std::vector<std::pair<MedVar, MedVar>>> &PhiCopies) {
-  auto PIt = PhiCopies.find(BlkIdx);
-  if (PIt == PhiCopies.end())
-    return;
-
-  size_t InsertPos = Func.Body.size();
-  for (size_t K = Func.Body.size(); K > BlkBodyStart; --K) {
-    auto &S = Func.Body[K - 1];
-    if (S.Kind == StmtKind::Goto || S.Kind == StmtKind::Return ||
-        (S.Kind == StmtKind::If && !S.Body.empty() &&
-         S.Body[0].Kind == StmtKind::Goto)) {
-      InsertPos = K - 1;
-      break;
-    }
-  }
-
-  std::set<uint64_t> TermRegOffs;
-  if (InsertPos < Func.Body.size()) {
-    auto &Term = Func.Body[InsertPos];
-    std::set<std::pair<int, int>> Visited;
-    std::function<void(const ExprPtr &)> Collect;
-    Collect = [&](const ExprPtr &E) {
-      if (!E)
-        return;
-      if (E->Kind == ExprKind::Var) {
-        if (E->Var.Kind == MedVar::Reg)
-          TermRegOffs.insert(E->Var.RegOff);
-        auto Key = std::make_pair(E->Var.Id, E->Var.SSAVer);
-        if (Key.first >= 0 && Visited.insert(Key).second) {
-          auto DIt = DefExpr.find(Key);
-          if (DIt != DefExpr.end())
-            Collect(DIt->second);
-        }
+    const std::map<std::pair<int, int>, std::vector<std::pair<MedVar, MedVar>>>
+        &PhiCopies) {
+  auto CopiesFor = [&](int Successor) {
+    std::vector<HighStmt> Copies;
+    auto It = PhiCopies.find({BlkIdx, Successor});
+    if (It == PhiCopies.end())
+      return Copies;
+    VarKeySet Destinations;
+    for (const auto &[Output, Argument] : It->second)
+      if (Output.Kind != MedVar::Flag)
+        Destinations.insert(varKey(Output));
+    std::vector<HighStmt> Writes;
+    for (const auto &[Output, Argument] : It->second) {
+      if (Output.Kind == MedVar::Flag || Output == Argument)
+        continue;
+      HighStmt Copy;
+      Copy.Kind = StmtKind::Assign;
+      Copy.Addr =
+          CurBlock.Ops.empty() ? CurBlock.StartAddr : CurBlock.Ops.back().Addr;
+      Copy.IsPhiCopy = true;
+      Copy.Dst = HighExpr::makeVar(Output);
+      Copy.Val = medvarToExpr(Argument);
+      bool ReadsDestination = false;
+      std::set<const HighExpr *> Seen;
+      std::function<void(const ExprPtr &)> Visit =
+          [&](const ExprPtr &Expression) {
+            if (!Expression || !Seen.insert(Expression.get()).second)
+              return;
+            if (Expression->Kind == ExprKind::Var &&
+                Destinations.count(varKey(Expression->Var)))
+              ReadsDestination = true;
+            for (const auto &Operand : Expression->Operands)
+              Visit(Operand);
+          };
+      Visit(Copy.Val);
+      if (ReadsDestination) {
+        // PHIs read their predecessor values simultaneously. Capture any
+        // expression using an overwritten PHI before publishing edge writes;
+        // this also handles cycles such as a <- b, b <- a.
+        MedVar Snapshot;
+        Snapshot.Kind = MedVar::Temp;
+        Snapshot.Id = NextHighTempId++;
+        Snapshot.Size = Output.Size;
+        HighStmt Capture = Copy;
+        Capture.Dst = HighExpr::makeVar(Snapshot, Copy.Val->Type);
+        Copies.push_back(Capture);
+        Copy.Val = Capture.Dst;
       }
-      for (auto &Op : E->Operands)
-        Collect(Op);
-    };
-    Collect(Term.Cond);
-  }
+      Writes.push_back(std::move(Copy));
+    }
+    Copies.insert(Copies.end(), Writes.begin(), Writes.end());
+    return Copies;
+  };
 
-  std::vector<HighStmt> PhiStmts;
-  for (auto &[PhiOut, PhiArg] : PIt->second) {
-    if (PhiOut.Kind == MedVar::Flag)
-      continue;
-
-    HighStmt S;
-    S.Kind = StmtKind::Assign;
-    S.Addr = CurBlock.Ops.empty() ? 0 : CurBlock.Ops.back().Addr;
-    S.Dst = HighExpr::makeVar(PhiOut);
-    S.Val = medvarToExpr(PhiArg);
-    S.IsPhiCopy = true;
-    PhiStmts.push_back(std::move(S));
-  }
-
-  bool HasConflict = false;
-  for (auto &PS : PhiStmts) {
-    if (!PS.Dst || PS.Dst->Kind != ExprKind::Var)
-      continue;
-    if (PS.Dst->Var.Kind == MedVar::Reg &&
-        TermRegOffs.count(PS.Dst->Var.RegOff)) {
-      HasConflict = true;
+  size_t BranchIndex = Func.Body.size();
+  for (size_t I = Func.Body.size(); I > BlkBodyStart; --I)
+    if (Func.Body[I - 1].Kind == StmtKind::Goto ||
+        Func.Body[I - 1].Kind == StmtKind::If) {
+      BranchIndex = I - 1;
       break;
     }
+  for (int Successor : CurBlock.Succs) {
+    if (!CurMed || Successor < 0 || Successor >= int(CurMed->Blocks.size()))
+      continue;
+    auto Copies = CopiesFor(Successor);
+    if (Copies.empty())
+      continue;
+    const auto &TargetBlock = CurMed->Blocks[Successor];
+    va_t Target = TargetBlock.StartAddr;
+    if (!Target && !TargetBlock.Ops.empty())
+      Target = TargetBlock.Ops.front().Addr;
+    if (BranchIndex < Func.Body.size()) {
+      auto &Branch = Func.Body[BranchIndex];
+      if (Branch.Kind == StmtKind::If && !Branch.Body.empty() &&
+          Branch.Body.back().Kind == StmtKind::Goto &&
+          Branch.Body.back().GotoTarget == Target) {
+        Branch.Body.insert(Branch.Body.end() - 1, Copies.begin(), Copies.end());
+        continue;
+      }
+      if (Branch.Kind == StmtKind::Goto && Branch.GotoTarget == Target) {
+        Func.Body.insert(Func.Body.begin() + BranchIndex, Copies.begin(),
+                         Copies.end());
+        BranchIndex += Copies.size();
+        continue;
+      }
+    }
+    // The untaken conditional edge (or the sole fallthrough edge) executes
+    // its copies after the branch. No loop-backedge write occurs on an exit.
+    Func.Body.insert(Func.Body.end(), Copies.begin(), Copies.end());
   }
-
-  if (HasConflict && InsertPos < Func.Body.size() &&
-      Func.Body[InsertPos].Kind == StmtKind::If && Func.Body[InsertPos].Cond) {
-    auto &Term = Func.Body[InsertPos];
-    MedVar TmpVar;
-    TmpVar.Kind = MedVar::Temp;
-    TmpVar.Id = limits::kPhiCondTempId;
-    TmpVar.SSAVer = BlkIdx;
-    TmpVar.Size = 1;
-
-    HighStmt CondSave;
-    CondSave.Kind = StmtKind::Assign;
-    CondSave.Addr = Term.Addr;
-    CondSave.Dst = HighExpr::makeVar(TmpVar);
-    CondSave.Val = Term.Cond;
-
-    Term.Cond = HighExpr::makeVar(TmpVar);
-
-    Func.Body.insert(Func.Body.begin() + static_cast<long>(InsertPos),
-                     std::move(CondSave));
-    InsertPos++;
-  }
-
-  Func.Body.insert(Func.Body.begin() + static_cast<long>(InsertPos),
-                   PhiStmts.begin(), PhiStmts.end());
 }
 
 //===----------------------------------------------------------------------===//
@@ -126,11 +127,12 @@ void MedToHighConverter::insertPhiCopies(
 
 void MedToHighConverter::structureControlFlow(HighFunc &Func,
                                               const MedFunc &Med) {
-  std::map<int, std::vector<std::pair<MedVar, MedVar>>> PhiCopies;
+  std::map<std::pair<int, int>, std::vector<std::pair<MedVar, MedVar>>>
+      PhiCopies;
   for (auto &Block : Med.Blocks)
     for (auto &Phi : Block.Phis)
       for (auto &[PredId, Arg] : Phi.Args)
-        PhiCopies[PredId].push_back({Phi.Output, Arg});
+        PhiCopies[{PredId, Block.Id}].push_back({Phi.Output, Arg});
 
   JtConsumedBlocks.clear();
 

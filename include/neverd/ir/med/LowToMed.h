@@ -41,6 +41,16 @@ public:
   /// image-independent folding policy.
   void setBinaryImage(const BinaryImage *I) { Image = I; }
 
+  /// Source rendering only. The pipeline must keep this disabled for patching
+  /// and lifting: these declarations are not authenticated semantic evidence.
+  void setSourceCallHintsEnabled(bool Enabled) {
+    SourceCallHintsEnabled = Enabled;
+  }
+  void setSourceCalleeTypeHints(
+      const std::map<va_t, SourceFunctionTypeHint> *Hints) {
+    SourceCalleeTypeHints = Hints;
+  }
+
   /// Provide the per-callee callee-cleanup pop map (entry VA -> x86 `ret imm`
   /// bytes).  When set, a direct CALL to such a callee gets a post-call stack-
   /// pointer increment so the caller's later stack accesses use the corrected
@@ -102,6 +112,7 @@ private:
   using RegWriteMap = std::map<std::pair<uint64_t, uint16_t>, RegWriteInfo>;
 
   void analyzeStack(const LowFunc &Low);
+  void bindSourceCalls(MedFunc &Func, const LowFunc &Low, BinaryFormat Fmt);
   MedVar ndVarToMedVar(const NdVar &VN);
   void fixupSubRegisters(MedFunc &Func);
 
@@ -184,8 +195,9 @@ private:
   void resolveScalarAddressModels(
       MedFunc &Func,
       const std::vector<RelocatedInstructionScalarModelOccurrence> &Models);
-  void resolveI386GetPcModels(
-      MedFunc &Func, const std::vector<I386GetPcOccurrence> &Occurrences);
+  void
+  resolveI386GetPcModels(MedFunc &Func,
+                         const std::vector<I386GetPcOccurrence> &Occurrences);
   void resolveCxxContinuationExits(MedFunc &Func, const LowFunc &Low,
                                    uint16_t PointerSize);
   void detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt);
@@ -205,6 +217,8 @@ private:
   Arch TargetArch = Arch::Unknown;
 
   const BinaryImage *Image = nullptr;
+  bool SourceCallHintsEnabled = false;
+  const std::map<va_t, SourceFunctionTypeHint> *SourceCalleeTypeHints = nullptr;
 
   std::vector<StackSlot> StackSlots;
 

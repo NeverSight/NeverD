@@ -319,8 +319,26 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
       if (LOp.Output.Size > 0)
         MOp.Output = ndVarToMedVar(LOp.Output);
 
-      for (uint8_t I = 0; I < LOp.NumInputs; ++I)
-        MOp.addInput(ndVarToMedVar(LOp.Inputs[I]));
+      // A register/temp XOR with itself is a machine zero idiom, including
+      // 128/256/512-bit vector containers. Eliminate the read before liveness
+      // and SSA: folding only in HighIR leaves a false incoming FP parameter.
+      // Keep effect-bearing operations and mismatched-width slices intact.
+      const bool SelfXor =
+          LOp.Opcode == NdOp::INT_XOR && LOp.NumInputs == 2 &&
+          LOp.MemoryOrdering == NdMemoryOrdering::None &&
+          LOp.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+          (LOp.Output.isReg() || LOp.Output.isTemp()) && LOp.Output.Size &&
+          (LOp.Inputs[0].isReg() || LOp.Inputs[0].isTemp()) &&
+          LOp.Inputs[0] == LOp.Inputs[1] &&
+          LOp.Output.Size == LOp.Inputs[0].Size;
+      if (SelfXor) {
+        MOp.Opcode = NdOp::COPY;
+        MOp.addInput(MedVar::makeConst(0, LOp.Output.Size,
+                                       ConstantAddressProvenance::Scalar));
+      } else {
+        for (uint8_t I = 0; I < LOp.NumInputs; ++I)
+          MOp.addInput(ndVarToMedVar(LOp.Inputs[I]));
+      }
 
       MB.Ops.push_back(MOp);
 
@@ -379,6 +397,7 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
   // pre-call value. buildSsa then creates the loop-carried high-half PHI for a
   // threaded i64 accumulator.  No-op unless the pipeline set the i64-callee set
   // (only known after whole-program return-type inference).
+  bindSourceCalls(Func, Low, Fmt);
   modelKnownWideCallReturns(Func);
   debugVerifyMedFunc(Func, "modelKnownWideCallReturns");
 
@@ -666,8 +685,8 @@ void LowToMedConverter::resolveI386GetPcModels(
   Func.I386GetPcModels.clear();
   using Key = std::tuple<int, int, int, uint16_t, int>;
   auto keyFor = [](const MedVar &Value) {
-    return Key{static_cast<int>(Value.Kind), Value.Id, Value.SSAVer,
-               Value.Size, Value.RegOff};
+    return Key{static_cast<int>(Value.Kind), Value.Id, Value.SSAVer, Value.Size,
+               Value.RegOff};
   };
   std::map<Key, MedI386GetPcModel> BoundModels;
   std::set<Key> Ambiguous;
@@ -714,8 +733,8 @@ void LowToMedConverter::resolveI386GetPcModels(
           Multiple = true;
           break;
         }
-        Bound = MedI386GetPcModel{Candidate, CandidateInput,
-                                  Occurrence.PCValue};
+        Bound =
+            MedI386GetPcModel{Candidate, CandidateInput, Occurrence.PCValue};
       }
       if (Multiple)
         break;
@@ -726,8 +745,7 @@ void LowToMedConverter::resolveI386GetPcModels(
     const Key BoundKey = keyFor(Bound->Output);
     if (Ambiguous.count(BoundKey))
       continue;
-    auto [It, Inserted] = BoundModels.emplace(
-        BoundKey, *Bound);
+    auto [It, Inserted] = BoundModels.emplace(BoundKey, *Bound);
     if (!Inserted && It->second.PCValue != Occurrence.PCValue) {
       BoundModels.erase(It);
       Ambiguous.insert(BoundKey);

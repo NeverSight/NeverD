@@ -18,6 +18,8 @@
 
 #include "HighCFSimplifyDetail.h"
 
+#include "neverd/ir/med/MedIR.h"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -42,7 +44,8 @@ struct ElseTargetInfo {
 /// statements between the if and the else-goto contain a return, the
 /// HasEarlyReturn flag and FallthroughIndices are populated.
 static ElseTargetInfo findElseTarget(const std::vector<HighStmt> &Body,
-                                     size_t NextI, va_t IfTarget) {
+                                     size_t NextI, va_t IfTarget,
+                                     size_t TargetIndex) {
   ElseTargetInfo Info;
   if (Body[NextI].Kind == StmtKind::Goto) {
     Info.Target = Body[NextI].GotoTarget;
@@ -50,7 +53,7 @@ static ElseTargetInfo findElseTarget(const std::vector<HighStmt> &Body,
     return Info;
   }
 
-  for (size_t K = NextI; K < Body.size(); ++K) {
+  for (size_t K = NextI; K < Body.size() && K != TargetIndex; ++K) {
     auto &S = Body[K];
     if (S.Kind == StmtKind::While || S.Kind == StmtKind::If)
       break;
@@ -152,7 +155,7 @@ static void trimMergeGoto(std::vector<HighStmt> &Body, va_t MergeTarget) {
 // structureIfElse — fold if(cond){goto} patterns into if/else trees
 //===----------------------------------------------------------------------===//
 
-void structureIfElse(HighFunc &Func, int MaxPasses) {
+void structureIfElse(HighFunc &Func, int MaxPasses, const MedFunc *Med) {
   AddrMap AM;
   bool Changed = true;
   int Pass = 0;
@@ -164,10 +167,16 @@ void structureIfElse(HighFunc &Func, int MaxPasses) {
       auto &Stmt = Func.Body[I];
       if (Stmt.Kind != StmtKind::If)
         continue;
-      if (Stmt.Body.size() != 1 || Stmt.Body[0].Kind != StmtKind::Goto)
+      if (Stmt.Body.empty() || Stmt.Body.back().Kind != StmtKind::Goto ||
+          !std::all_of(Stmt.Body.begin(), Stmt.Body.end() - 1,
+                       [](const HighStmt &S) { return S.IsPhiCopy; }))
         continue;
+      std::vector<HighStmt> TakenCopies(Stmt.Body.begin(), Stmt.Body.end() - 1);
 
-      va_t IfTarget = Stmt.Body[0].GotoTarget;
+      // Earlier folds in this same pass may erase statements after I.
+      // Address ownership must describe the current list, not stale indices.
+      AM.rebuild(Func.Body);
+      va_t IfTarget = Stmt.Body.back().GotoTarget;
       if (IfTarget == 0 || IfTarget == InvalidVA)
         continue;
 
@@ -175,10 +184,14 @@ void structureIfElse(HighFunc &Func, int MaxPasses) {
       if (NextI >= Func.Body.size())
         continue;
 
-      auto Else = findElseTarget(Func.Body, NextI, IfTarget);
+      // A block can start before its first surviving HighIR statement (for
+      // example COPY return-register, RET). Its own return is never part of
+      // the conditional's fallthrough arm.
+      auto TargetRun = collectStmtsForTarget(Func.Body, AM, IfTarget, 0);
+      auto Else = findElseTarget(Func.Body, NextI, IfTarget, TargetRun.Start);
 
       // Early-return fold.
-      if (Else.HasEarlyReturn && Else.Target == 0 &&
+      if (TakenCopies.empty() && Else.HasEarlyReturn && Else.Target == 0 &&
           Else.ReturnIdx != SIZE_MAX) {
         Stmt.Cond = HighExpr::makeUnary(NdOp::BOOL_NOT, Stmt.Cond);
         Stmt.Body.clear();
@@ -193,10 +206,17 @@ void structureIfElse(HighFunc &Func, int MaxPasses) {
 
       // Same-target fold: both branches goto the same address.
       if (IfTarget == Else.Target) {
-        Stmt.Cond = HighExpr::makeUnary(NdOp::BOOL_NOT, Stmt.Cond);
-        Stmt.Body.clear();
-        for (size_t K = NextI; K < Else.GotoIdx; ++K)
-          Stmt.Body.push_back(std::move(Func.Body[K]));
+        if (TakenCopies.empty()) {
+          Stmt.Cond = HighExpr::makeUnary(NdOp::BOOL_NOT, Stmt.Cond);
+          Stmt.Body.clear();
+          for (size_t K = NextI; K < Else.GotoIdx; ++K)
+            Stmt.Body.push_back(std::move(Func.Body[K]));
+        } else {
+          Stmt.Kind = StmtKind::IfElse;
+          Stmt.Body = std::move(TakenCopies);
+          for (size_t K = NextI; K < Else.GotoIdx; ++K)
+            Stmt.ElseBody.push_back(std::move(Func.Body[K]));
+        }
         Func.Body.erase(Func.Body.begin() + static_cast<long>(NextI),
                         Func.Body.begin() +
                             static_cast<long>(Else.GotoIdx + 1));
@@ -233,6 +253,8 @@ void structureIfElse(HighFunc &Func, int MaxPasses) {
       if (IfResult.Stmts.empty() && ElseBody.empty())
         continue;
 
+      IfResult.Stmts.insert(IfResult.Stmts.begin(), TakenCopies.begin(),
+                            TakenCopies.end());
       trimMergeGoto(IfResult.Stmts, MergeTarget);
       trimMergeGoto(ElseBody, MergeTarget);
 
@@ -246,8 +268,50 @@ void structureIfElse(HighFunc &Func, int MaxPasses) {
 
       // Erase inlined ranges (largest-first to preserve indices).
       std::vector<std::pair<size_t, size_t>> Ranges;
-      if (IfResult.Start != SIZE_MAX && IfResult.End != SIZE_MAX &&
-          IfResult.Start > static_cast<size_t>(I))
+      // Inlining one incoming edge does not consume the target's other
+      // incoming edges. In particular a shared return after a loop remains
+      // reachable by fallthrough even after a preceding conditional has an
+      // inline copy of it.
+      bool SharedTarget = false;
+      if (IfResult.Start != SIZE_MAX && IfResult.Start > 0) {
+        const auto &Previous = Func.Body[IfResult.Start - 1];
+        SharedTarget = Previous.Kind != StmtKind::Goto &&
+                       Previous.Kind != StmtKind::Return &&
+                       Previous.Kind != StmtKind::Break &&
+                       Previous.Kind != StmtKind::Continue &&
+                       IfResult.Start != NextI;
+      }
+      for (size_t K = 0; K < Func.Body.size() && !SharedTarget; ++K) {
+        if (K == static_cast<size_t>(I) ||
+            (IfResult.Start != SIZE_MAX && K >= IfResult.Start &&
+             K < IfResult.End))
+          continue;
+        const auto &Other = Func.Body[K];
+        auto Check = [&](const HighStmt &Candidate) {
+          if (Candidate.Kind == StmtKind::Goto &&
+              Candidate.GotoTarget == IfTarget)
+            SharedTarget = true;
+        };
+        Check(Other);
+        walkStmts(Other.Body, Check);
+        walkStmts(Other.ElseBody, Check);
+      }
+      if (Med) {
+        // The original CFG is authoritative even after a neighboring block
+        // has been folded and its terminating goto removed.
+        for (const auto &Block : Med->Blocks) {
+          const va_t Start =
+              Block.StartAddr
+                  ? Block.StartAddr
+                  : (Block.Ops.empty() ? 0 : Block.Ops.front().Addr);
+          if (Start == IfTarget) {
+            SharedTarget = Block.Preds.size() > 1;
+            break;
+          }
+        }
+      }
+      if (!SharedTarget && IfResult.Start != SIZE_MAX &&
+          IfResult.End != SIZE_MAX && IfResult.Start > static_cast<size_t>(I))
         Ranges.push_back({IfResult.Start, IfResult.End});
       if (InlineEnd > InlineStart)
         Ranges.push_back({InlineStart, InlineEnd});

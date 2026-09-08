@@ -13,6 +13,7 @@
 
 #include "neverd/ir/med/MedTypePass.h"
 
+#include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 
@@ -674,33 +675,164 @@ void inferMedTypes(MedFunc &Func, Arch TheArch) {
 
   if (!Func.SourceTypeHint)
     return;
-  const auto &Hint = *Func.SourceTypeHint;
-  auto IsScalar = [](const TypeRef &Type) {
-    return Type && ((Type->Kind == NdTypeKind::Ptr && Type->Size == 8) ||
-                    (Type->Kind == NdTypeKind::Int &&
-                     (Type->Size == 1 || Type->Size == 2 || Type->Size == 4 ||
-                      Type->Size == 8)));
-  };
-  bool Valid = (TheArch == Arch::AArch64 || TheArch == Arch::X64) &&
-               Hint.ReturnType &&
-               (Hint.ReturnType->Kind == NdTypeKind::Void ||
-                IsScalar(Hint.ReturnType)) &&
-               Hint.Parameters.size() >= 2 &&
-               Hint.Parameters.size() <= TRI.IntParamRegs.size();
-  for (const auto &Param : Hint.Parameters)
-    Valid &= IsScalar(Param.Type);
-  // A declaration that leaves observed incoming carriers unexplained cannot
-  // supply a complete source parameter list. Do not silently drop such inputs.
-  for (const auto &Param : Func.Params) {
-    if (Param.Id < 0)
-      continue;
-    auto End = TRI.IntParamRegs.begin() +
-               std::min(Hint.Parameters.size(), TRI.IntParamRegs.size());
-    Valid &= std::find(TRI.IntParamRegs.begin(), End, Param.RegOff) != End;
+  SourceFunctionTypeHint Hint = *Func.SourceTypeHint;
+  std::string Diagnostic;
+  if ((!Hint.HasExplicitABI &&
+       !assignDarwinObjCSourceABI(Hint, TheArch, Diagnostic)) ||
+      Hint.Architecture != TheArch || !validateSourceABI(Hint, Diagnostic) ||
+      !Func.MutableStackParamHomes.empty()) {
+    Func.SourceTypeHint.reset();
+    return;
   }
+
+  auto RegisterParameter = [&](uint64_t Register) -> int {
+    for (size_t I = 0; I < Hint.Parameters.size(); ++I) {
+      const auto &L = Hint.Parameters[I].Location;
+      if (L.Kind != SourceABICarrierKind::Stack && L.RegisterOffset == Register)
+        return static_cast<int>(I);
+    }
+    return -1;
+  };
+  auto StackParameter = [&](int64_t Offset, uint16_t Bytes) -> int {
+    for (size_t I = 0; I < Hint.Parameters.size(); ++I) {
+      const auto &L = Hint.Parameters[I].Location;
+      if (L.Kind == SourceABICarrierKind::Stack &&
+          Offset >= L.EntryStackOffset &&
+          Offset - L.EntryStackOffset + Bytes <= L.ValueBytes)
+        return static_cast<int>(I);
+    }
+    return -1;
+  };
+  // Generic stack recovery uses pointer-sized slots and can place multiple
+  // Apple arm64 scalar arguments in one slot. Rebind each actual byte range,
+  // never the old slot index as if it were a source argument index.
+  const int RegisterCount = static_cast<int>(TRI.IntParamRegs.size());
+  const int64_t StackBase = TheArch == Arch::X64 ? 8 : 0;
+  struct Rewrite {
+    MedOp *Op;
+    uint8_t Input;
+    MedVar Parameter;
+    std::optional<uint64_t> SliceOffset;
+  };
+  std::vector<Rewrite> Rewrites;
+  bool Valid = true;
+  bool HasGenericStack = false;
+  for (const auto &P : Func.Params)
+    HasGenericStack |= P.RegOff == kNoParamReg;
+  for (const auto &P : Func.Params)
+    if (P.Id >= 0 && P.RegOff != kNoParamReg &&
+        RegisterParameter(P.RegOff) < 0 && !HasGenericStack)
+      Valid = false;
+  for (auto &Block : Func.Blocks) {
+    for (auto &Op : Block.Ops) {
+      for (uint8_t K = 0; K < Op.NumInputs; ++K) {
+        const auto &Old = Op.Inputs[K];
+        if (Old.Kind != MedVar::Param)
+          continue;
+        if (Func.SourceParametersBound) {
+          Valid &= Old.Id >= 0 &&
+                   static_cast<size_t>(Old.Id) < Hint.Parameters.size();
+          continue;
+        }
+        int Index = -1;
+        uint16_t Bytes = Old.Size;
+        int64_t Offset = 0;
+        bool Slice = false;
+        if (Old.RegOff != kNoParamReg) {
+          Index = RegisterParameter(Old.RegOff);
+        } else if (Old.Id >= RegisterCount && Old.Id <= RegisterCount + 512) {
+          Offset = StackBase + static_cast<int64_t>(Old.Id - RegisterCount) * 8;
+          if (K == 0 && Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
+              Op.Inputs[1].isConst() && Op.Inputs[1].ConstVal <= 8) {
+            Offset += static_cast<int64_t>(Op.Inputs[1].ConstVal);
+            Bytes = Op.Output.Size;
+            Slice = true;
+          }
+          Index = StackParameter(Offset, Bytes);
+        }
+        if (Index < 0 || !Bytes) {
+          Valid = false;
+          continue;
+        }
+        const auto &L = Hint.Parameters[Index].Location;
+        MedVar Parameter = Old;
+        Parameter.Id = Index;
+        Parameter.RegOff = L.Kind == SourceABICarrierKind::Stack
+                               ? kNoParamReg
+                               : L.RegisterOffset;
+        Parameter.Size = L.ValueBytes;
+        std::optional<uint64_t> SliceOffset;
+        if (Slice)
+          SliceOffset = static_cast<uint64_t>(Offset - L.EntryStackOffset);
+        else if (Bytes != L.ValueBytes) {
+          // A simple COPY can preserve a narrower low slice; a wider read or
+          // a whole-slot arithmetic use cannot manufacture padding bytes.
+          if (K != 0 || Op.Opcode != NdOp::COPY || Op.NumInputs != 1)
+            Valid = false;
+          else
+            SliceOffset = 0;
+        }
+        Rewrites.push_back({&Op, K, Parameter, SliceOffset});
+      }
+    }
+    for (const auto &Phi : Block.Phis)
+      for (const auto &[Pred, Arg] : Phi.Args)
+        if (Arg.Kind == MedVar::Param && !Func.SourceParametersBound)
+          Valid = false; // Incoming slot PHIs require explicit range tracking.
+  }
+  // Check observed register live-ins rather than synthesized generic ABI
+  // placeholders: the latter can be created by stack recovery for unused GPRs.
+  // A stale entry seed can also outlive the operation that originally read it.
+  // Only actual SSA uses (including PHIs and recovered call arguments) make
+  // that seed evidence of an incoming parameter.
+  std::set<std::pair<int, int>> UsedRegisters;
+  auto RecordUse = [&](const MedVar &V) {
+    if (V.Kind == MedVar::Reg)
+      UsedRegisters.emplace(V.Id, V.SSAVer);
+  };
+  for (const auto &Block : Func.Blocks) {
+    for (const auto &Op : Block.Ops) {
+      const bool Seed = Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+                        Op.Output == Op.Inputs[0] &&
+                        Op.MemoryOrdering == NdMemoryOrdering::None &&
+                        Op.MemoryAddressSpace == NdMemoryAddressSpace::Default;
+      if (!Seed)
+        for (unsigned I = 0; I < Op.NumInputs; ++I)
+          RecordUse(Op.Inputs[I]);
+    }
+    for (const auto &Phi : Block.Phis)
+      for (const auto &[Pred, Arg] : Phi.Args)
+        RecordUse(Arg);
+  }
+  for (const auto &Call : Func.CallInfos)
+    for (const auto &Argument : Call.Args)
+      RecordUse(Argument);
+  if (!Func.Blocks.empty())
+    for (const auto &Op : Func.Blocks.front().Ops) {
+      if (Op.Opcode != NdOp::COPY)
+        break;
+      if (Op.NumInputs != 1 || Op.Output != Op.Inputs[0] ||
+          Op.Output.Kind != MedVar::Reg ||
+          !UsedRegisters.count({Op.Output.Id, Op.Output.SSAVer}))
+        continue;
+      const auto Register = Op.Output.RegOff;
+      if ((TRI.regToArgIdx(Register) >= 0 ||
+           std::find(TRI.FPParamRegs.begin(), TRI.FPParamRegs.end(),
+                     Register) != TRI.FPParamRegs.end()) &&
+          RegisterParameter(Register) < 0)
+        Valid = false;
+    }
   if (!Valid) {
     Func.SourceTypeHint.reset();
     return;
+  }
+  for (const auto &R : Rewrites) {
+    R.Op->Inputs[R.Input] = R.Parameter;
+    if (R.SliceOffset) {
+      R.Op->Opcode = NdOp::SUBBYTES;
+      R.Op->Inputs[1] = MedVar::makeConst(*R.SliceOffset, 4);
+      R.Op->NumInputs = 2;
+    }
   }
 
   std::vector<MedVar> BoundParams;
@@ -709,14 +841,23 @@ void inferMedTypes(MedFunc &Func, Arch TheArch) {
     const auto &Declared = Hint.Parameters[I];
     MedVar Param;
     Param.Kind = MedVar::Param;
-    Param.Id = -1; // An unused argument still occupies its ABI position.
+    Param.Id = -1; // An unused argument still occupies its declared position.
     Param.TheArch = TheArch;
-    Param.RegOff = TRI.IntParamRegs[I];
+    Param.RegOff = Declared.Location.Kind == SourceABICarrierKind::Stack
+                       ? kNoParamReg
+                       : Declared.Location.RegisterOffset;
     Param.Size = Declared.Type->Size;
-    for (const auto &Existing : Func.Params)
-      if (Existing.RegOff == Param.RegOff && Existing.Id >= 0) {
-        Param.Id = Existing.Id;
-        break;
+    if (Param.RegOff == kNoParamReg)
+      Param.Id = static_cast<int>(I);
+    else if (!Func.Blocks.empty())
+      for (const auto &Op : Func.Blocks.front().Ops) {
+        if (Op.Opcode != NdOp::COPY)
+          break;
+        if (Op.NumInputs == 1 && Op.Output.Kind == MedVar::Reg &&
+            Op.Output == Op.Inputs[0] && Op.Output.RegOff == Param.RegOff) {
+          Param.Id = Op.Output.Id;
+          break;
+        }
       }
     BoundParams.push_back(Param);
     BoundTypes.push_back({Declared.Name, Declared.Type});
@@ -724,6 +865,8 @@ void inferMedTypes(MedFunc &Func, Arch TheArch) {
   Func.Params = std::move(BoundParams);
   Func.TypedParams = std::move(BoundTypes);
   Func.ReturnType = Hint.ReturnType;
+  Func.SourceTypeHint = std::move(Hint);
+  Func.SourceParametersBound = true;
   Func.FPReturnViaX87 = false;
 }
 

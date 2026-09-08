@@ -70,6 +70,17 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
   S.Kind = StmtKind::Return;
   S.Addr = CurOp.Addr;
 
+  // An established void declaration has no return carrier. Searching the
+  // machine return register here would invent a value (and may move a prior
+  // call into that value), despite the source ABI already proving it absent.
+  if (Med.SourceParametersBound && Func.SourceTypeHint &&
+      Func.SourceTypeHint->HasExplicitABI && Func.SourceTypeHint->ReturnType &&
+      Func.SourceTypeHint->ReturnType->Kind == NdTypeKind::Void &&
+      Func.ReturnType && Func.ReturnType->Kind == NdTypeKind::Void) {
+    Func.Body.push_back(std::move(S));
+    return;
+  }
+
   ExprPtr RetVal;
   const auto &TRI = getTargetRegInfo(TargetArch);
   const bool UsesFPReturnReg = Func.ReturnType &&
@@ -77,11 +88,13 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
                                TRI.hasFPReturnReg() && !Med.FPReturnViaX87;
   const uint64_t ReturnReg =
       UsesFPReturnReg ? TRI.FPReturnReg : TRI.IntReturnReg;
+  const bool ExplicitABI =
+      Med.SourceTypeHint && Med.SourceTypeHint->HasExplicitABI;
 
   if (CurOp.NumInputs >= 1 && CurOp.Inputs[0].Id >= 0 &&
       CurOp.Inputs[0].Kind == MedVar::Reg) {
     uint64_t RO = CurOp.Inputs[0].RegOff;
-    if (!TRI.isFrameOrLinkReg(RO))
+    if (!TRI.isFrameOrLinkReg(RO) && (!ExplicitABI || RO == ReturnReg))
       RetVal = medvarToExpr(CurOp.Inputs[0]);
   }
 
@@ -99,24 +112,10 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
                  RIt->MemoryAddressSpace != NdMemoryAddressSpace::Default)
           RetVal = HighExpr::makeVar(RIt->Output);
         else {
-          bool FromCallind = false;
-          if (RIt->NumInputs >= 1) {
-            auto InKey =
-                std::make_pair(RIt->Inputs[0].Id, RIt->Inputs[0].SSAVer);
-            if (CallOutputs.count(InKey)) {
-              FromCallind = true;
-              for (auto SIt = Func.Body.rbegin(); SIt != Func.Body.rend();
-                   ++SIt) {
-                if (SIt->Kind == StmtKind::Call && SIt->CallExpr) {
-                  RetVal = SIt->CallExpr;
-                  Func.Body.erase(std::next(SIt).base());
-                  break;
-                }
-              }
-            }
-          }
-          if (!FromCallind)
-            RetVal = medOpToExpr(*RIt);
+          // Calls materialize their output once. A later operation may use
+          // that value as one operand without itself becoming the call: keep
+          // the complete return expression (including arithmetic and casts).
+          RetVal = medOpToExpr(*RIt);
         }
         if (RetVal)
           RetVal = forceInlineExpr(RetVal);
@@ -164,6 +163,13 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
     RV.Id = -1;
     RV.SSAVer = 0;
     RetVal = HighExpr::makeVar(RV);
+  }
+
+  if (ExplicitABI && UsesFPReturnReg &&
+      (!RetVal->Type || RetVal->Type->Kind != NdTypeKind::Float)) {
+    const auto Bytes = Med.SourceTypeHint->ReturnLocation.ValueBytes;
+    RetVal = HighExpr::makeBitCast(sourceBitSlice(RetVal, 0, Bytes),
+                                   Func.ReturnType);
   }
 
   S.RetVal = RetVal;

@@ -12,7 +12,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.tests.test_mobile_ios import native_fixture
+from scripts.tests.test_mobile_ios import native_fixture, source_report
 from mobile.common import MobileError
 from mobile.driver import parser, recover
 
@@ -20,6 +20,35 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class MobilePublicationTests(unittest.TestCase):
+    def test_swift_failure_does_not_publish_partial_native_sources(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "input.macho"
+            source.write_bytes(native_fixture())
+            output = root / "output"
+
+            def native(argv, log, timeout):
+                Path(argv[argv.index("-o") + 1]).write_text(source_report(
+                    "int example(void) { return 42; }\n"))
+                log.write_text("complete")
+
+            with patch("mobile.ios.run_tool", side_effect=native), \
+                    patch("mobile.swift_source.shutil.which", return_value=None), \
+                    self.assertRaisesRegex(MobileError, "configured Swift demangler"):
+                recover(parser().parse_args([str(source), "-o", str(output),
+                                             "--swift-demangle", "/missing/demangler"]))
+            self.assertFalse(output.exists())
+            self.assertEqual(list(root.glob(".neverd-mobile-*")), [])
+
+    def test_android_rejects_explicit_swift_demangler_option(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "input.smali"
+            source.write_text(".class public LInput;")
+            with self.assertRaisesRegex(MobileError, "apply only to iOS"):
+                recover(parser().parse_args([str(source), "-o", str(root / "output"),
+                                             "--swift-demangle", "tool"]))
+
     def test_failure_does_not_publish_partial_java(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

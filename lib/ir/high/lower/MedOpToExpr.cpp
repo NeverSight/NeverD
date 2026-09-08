@@ -18,6 +18,86 @@
 namespace neverd {
 
 ExprPtr MedToHighConverter::medOpToExpr(const MedOp &Op) {
+  if (CurMed && CurMed->SourceTypeHint &&
+      CurMed->SourceTypeHint->HasExplicitABI) {
+    auto FloatBits = [&](ExprPtr Value) {
+      Value->Type = NdType::makeFloat(Op.Output.Size);
+      return HighExpr::makeBitCast(Value,
+                                   NdType::makeInt(Op.Output.Size, false));
+    };
+    switch (Op.Opcode) {
+    case NdOp::FLOAT_ADD:
+    case NdOp::FLOAT_SUB:
+    case NdOp::FLOAT_MULT:
+    case NdOp::FLOAT_DIV:
+    case NdOp::FLOAT_EQUAL:
+    case NdOp::FLOAT_NOTEQUAL:
+    case NdOp::FLOAT_LESS:
+    case NdOp::FLOAT_LESSEQUAL: {
+      if (Op.NumInputs != 2 ||
+          (Op.Inputs[0].Size != 4 && Op.Inputs[0].Size != 8) ||
+          Op.Inputs[0].Size != Op.Inputs[1].Size)
+        return HighExpr::makeUndef(Op.Output.Size);
+      auto Value = HighExpr::makeBinop(
+          Op.Opcode, sourceFloatValue(Op.Inputs[0], Op.Inputs[0].Size),
+          sourceFloatValue(Op.Inputs[1], Op.Inputs[1].Size));
+      const bool Comparison =
+          Op.Opcode == NdOp::FLOAT_EQUAL || Op.Opcode == NdOp::FLOAT_NOTEQUAL ||
+          Op.Opcode == NdOp::FLOAT_LESS || Op.Opcode == NdOp::FLOAT_LESSEQUAL;
+      if (Comparison) {
+        Value->Type = NdType::makeInt(Op.Output.Size, false);
+        return Value;
+      }
+      return FloatBits(Value);
+    }
+    case NdOp::FLOAT_INT2FLOAT:
+    case NdOp::FLOAT_UINT2FLOAT: {
+      if (Op.NumInputs != 1 || (Op.Output.Size != 4 && Op.Output.Size != 8))
+        return HighExpr::makeUndef(Op.Output.Size);
+      auto Integer = std::make_shared<HighExpr>();
+      Integer->Kind = ExprKind::Cast;
+      Integer->Type = Integer->CastTo = NdType::makeInt(
+          Op.Inputs[0].Size, Op.Opcode == NdOp::FLOAT_INT2FLOAT);
+      Integer->Operands.push_back(medvarToExpr(Op.Inputs[0]));
+      return FloatBits(HighExpr::makeUnary(Op.Opcode, Integer));
+    }
+    case NdOp::FLOAT_NEG:
+    case NdOp::FLOAT_ABS:
+    case NdOp::FLOAT_SQRT:
+    case NdOp::FLOAT_CEIL:
+    case NdOp::FLOAT_FLOOR:
+    case NdOp::FLOAT_ROUND:
+    case NdOp::FLOAT_ROUNDEVEN:
+    case NdOp::FLOAT_ISNAN:
+    case NdOp::FLOAT_FLOAT2INT:
+    case NdOp::FLOAT_FLOAT2UINT:
+    case NdOp::FLOAT_TRUNC:
+    case NdOp::FLOAT_FLOAT2FLOAT: {
+      if (Op.NumInputs != 1 ||
+          (Op.Inputs[0].Size != 4 && Op.Inputs[0].Size != 8))
+        return HighExpr::makeUndef(Op.Output.Size);
+      auto Value = HighExpr::makeUnary(
+          Op.Opcode, sourceFloatValue(Op.Inputs[0], Op.Inputs[0].Size));
+      if (Op.Opcode == NdOp::FLOAT_ISNAN ||
+          Op.Opcode == NdOp::FLOAT_FLOAT2INT ||
+          Op.Opcode == NdOp::FLOAT_FLOAT2UINT ||
+          Op.Opcode == NdOp::FLOAT_TRUNC) {
+        Value->Type = NdType::makeInt(Op.Output.Size,
+                                      Op.Opcode != NdOp::FLOAT_FLOAT2UINT &&
+                                          Op.Opcode != NdOp::FLOAT_ISNAN);
+        return Value;
+      }
+      return FloatBits(Value);
+    }
+    case NdOp::SUBBYTES:
+      if (Op.NumInputs == 2 && Op.Inputs[1].isConst())
+        return sourceBitSlice(medvarToExpr(Op.Inputs[0]), Op.Inputs[1].ConstVal,
+                              Op.Output.Size);
+      break;
+    default:
+      break;
+    }
+  }
   switch (Op.Opcode) {
   case NdOp::COPY:
     if (Op.NumInputs >= 1)

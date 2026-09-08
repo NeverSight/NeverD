@@ -1,6 +1,10 @@
 #include "neverd/loader/ObjC/ObjCMethods.h"
 
+#include "ObjCRuntimeData.h"
+
+#include "neverd/ir/SourceABI.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/ObjC/ObjCEncoding.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/MachO.h"
@@ -10,6 +14,7 @@
 #include <cctype>
 #include <map>
 #include <set>
+#include <tuple>
 
 namespace neverd {
 namespace {
@@ -116,66 +121,6 @@ class RuntimeReader {
     return Name ? string(*Name) : std::nullopt;
   }
 
-  // Deliberately small source-projection grammar. It preserves scalar widths
-  // and signedness, but does not invent aggregate, block, or Swift ABI rules.
-  static TypeRef type(llvm::StringRef Encoding, size_t &I, unsigned Depth = 0) {
-    if (Depth > 16)
-      return nullptr;
-    while (I < Encoding.size() &&
-           llvm::StringRef("rnNoORV").contains(Encoding[I]))
-      ++I;
-    if (I == Encoding.size())
-      return nullptr;
-    const char C = Encoding[I++];
-    switch (C) {
-    case 'v':
-      return NdType::makeVoid();
-    case 'c':
-      return NdType::makeInt(1, true);
-    case 'C':
-    case 'B':
-      return NdType::makeInt(1, false);
-    case 's':
-      return NdType::makeInt(2, true);
-    case 'S':
-      return NdType::makeInt(2, false);
-    case 'i':
-      return NdType::makeInt(4, true);
-    case 'I':
-      return NdType::makeInt(4, false);
-    // Darwin uses q/Q for 64-bit long; legacy l/L encodings remain 32 bits.
-    case 'l':
-      return NdType::makeInt(4, true);
-    case 'L':
-      return NdType::makeInt(4, false);
-    case 'q':
-      return NdType::makeInt(8, true);
-    case 'Q':
-      return NdType::makeInt(8, false);
-    case '#':
-    case ':':
-      return NdType::makePtr(NdType::makeVoid());
-    case '*':
-      return NdType::makePtr(NdType::makeInt(1));
-    case '@':
-      if (I < Encoding.size() && Encoding[I] == '?')
-        return nullptr; // Blocks need their own callable ABI model.
-      if (I < Encoding.size() && Encoding[I] == '"') {
-        const auto End = Encoding.find('"', ++I);
-        if (End == llvm::StringRef::npos)
-          return nullptr;
-        I = End + 1;
-      }
-      return NdType::makePtr(NdType::makeVoid());
-    case '^': {
-      auto Pointee = type(Encoding, I, Depth + 1);
-      return Pointee ? NdType::makePtr(Pointee) : nullptr;
-    }
-    default:
-      return nullptr;
-    }
-  }
-
   static bool skipOffset(llvm::StringRef Encoding, size_t &I) {
     const size_t Begin = I;
     while (I < Encoding.size() && Encoding[I] >= '0' && Encoding[I] <= '9')
@@ -189,16 +134,18 @@ class RuntimeReader {
     llvm::StringRef Encoding(Method.TypeEncoding);
     size_t I = 0;
     SourceFunctionTypeHint Hint;
-    Hint.ReturnType = type(Encoding, I);
+    Hint.ReturnType = parseObjCScalarType(Encoding, I);
     bool Valid = Hint.ReturnType && skipOffset(Encoding, I);
     std::vector<char> Codes;
-    while (Valid && I < Encoding.size() && Hint.Parameters.size() < 16) {
+    while (Valid && I < Encoding.size() && Hint.Parameters.size() < 64) {
       size_t Start = I;
       while (Start < Encoding.size() &&
              llvm::StringRef("rnNoORV").contains(Encoding[Start]))
         ++Start;
-      Codes.push_back(Start < Encoding.size() ? Encoding[Start] : '\0');
-      auto T = type(Encoding, I);
+      Codes.push_back(Encoding.substr(Start).starts_with("@?") ? '?'
+                      : Start < Encoding.size()                ? Encoding[Start]
+                                                               : '\0');
+      auto T = parseObjCScalarType(Encoding, I);
       if (!T || T->Kind == NdTypeKind::Void || !skipOffset(Encoding, I)) {
         Valid = false;
         break;
@@ -220,11 +167,10 @@ class RuntimeReader {
           "Unsupported or inconsistent Objective-C type encoding");
       return;
     }
-    const size_t RegisterCount = Img.Arch == Arch::AArch64 ? 8 : 6;
-    if (Hint.Parameters.size() > RegisterCount) {
+    std::string ABIDiagnostic;
+    if (!assignDarwinObjCSourceABI(Hint, Img.Arch, ABIDiagnostic)) {
       Method.Status = "unsupported_abi";
-      Method.Diagnostics.push_back(
-          "Stack-passed method parameters are not projected");
+      Method.Diagnostics.push_back(std::move(ABIDiagnostic));
       return;
     }
     Method.TypeHint = std::move(Hint);
@@ -233,16 +179,11 @@ class RuntimeReader {
                                  "parameters only, variadic tail unknown");
   }
 
-  void methods(const ObjCClass &Class, va_t RO, bool ClassMethod) {
-    auto List = pointer(RO + 32);
-    if (!List) {
-      diagnostic("Objective-C method-list pointer is unavailable");
+  void methodList(const ObjCClass &Class, va_t List, bool ClassMethod) {
+    if (!List)
       return;
-    }
-    if (!*List)
-      return;
-    auto Flags = u32(*List);
-    auto Count = *List <= InvalidVA - 4 ? u32(*List + 4) : std::nullopt;
+    auto Flags = u32(List);
+    auto Count = List <= InvalidVA - 4 ? u32(List + 4) : std::nullopt;
     if (!Flags || !Count) {
       diagnostic("Truncated Objective-C method list");
       return;
@@ -252,13 +193,13 @@ class RuntimeReader {
     const uint32_t EntrySize = (*Flags & 0xffffU) & ~3U;
     if (EntrySize < (Small ? 12U : 24U) || EntrySize > 4096 ||
         *Count > Remaining ||
-        !bytes(*List, 8ULL + uint64_t(*Count) * EntrySize)) {
+        !bytes(List, 8ULL + uint64_t(*Count) * EntrySize)) {
       diagnostic("Invalid or excessive Objective-C method list");
       return;
     }
     Remaining -= *Count;
     for (uint32_t N = 0; N < *Count; ++N) {
-      const va_t Entry = *List + 8 + uint64_t(N) * EntrySize;
+      const va_t Entry = List + 8 + uint64_t(N) * EntrySize;
       auto Selector = Small ? relative(Entry) : pointer(Entry);
       if (Small && !DirectSelectors && Selector)
         Selector = pointer(*Selector);
@@ -291,6 +232,15 @@ class RuntimeReader {
       }
       Img.ObjCMethods.push_back(std::move(Method));
     }
+  }
+
+  void methods(const ObjCClass &Class, va_t RO, bool ClassMethod) {
+    auto List = pointer(RO + 32);
+    if (!List) {
+      diagnostic("Objective-C method-list pointer is unavailable");
+      return;
+    }
+    methodList(Class, *List, ClassMethod);
   }
 
   void readClass(va_t VA) {
@@ -334,17 +284,92 @@ class RuntimeReader {
     }
   }
 
+  void readCategory(va_t VA, const ImportStorageSlotCollection &Imports,
+                    std::set<va_t> &Classes) {
+    const objc::RuntimeData Data(Img);
+    // The non-fragile category ABI has six common pointer fields. The seventh
+    // (class properties) and newer compiler size fields are optional on disk;
+    // do not infer their presence from sizeof a current runtime structure.
+    constexpr uint64_t CommonPrefixBytes = 6 * 8;
+    if (!Data.bytes(VA, CommonPrefixBytes)) {
+      diagnostic("Truncated or non-file-backed Objective-C category record");
+      return;
+    }
+    const auto NamePointer = Data.pointer(VA);
+    const auto Name = NamePointer ? Data.string(*NamePointer) : std::nullopt;
+    if (!Name) {
+      diagnostic("Objective-C category name is unavailable");
+      return;
+    }
+    ObjCClass Owner;
+    const va_t ClassSlot = VA + 8;
+    if (Imports.Conflicts.count(ClassSlot)) {
+      diagnostic("Objective-C category class has conflicting import bindings");
+      return;
+    }
+    if (auto Bound = Imports.Slots.find(ClassSlot);
+        Bound != Imports.Slots.end()) {
+      llvm::StringRef ClassName(Bound->second.Name);
+      if (Bound->second.Addend != 0 ||
+          !ClassName.consume_front("_OBJC_CLASS_$_") || ClassName.empty()) {
+        diagnostic("Objective-C category target is not an exact class binding");
+        return;
+      }
+      Owner.Name = ClassName.str();
+      // An imported class is an external dependency. Preserve its name on the
+      // category methods without fabricating a local class or instance layout.
+    } else {
+      const auto ClassPointer = Data.pointer(ClassSlot);
+      const auto RO = ClassPointer ? Data.classRO(*ClassPointer) : std::nullopt;
+      const auto Flags = RO ? Data.u32(*RO) : std::nullopt;
+      const auto ClassName =
+          ClassPointer ? Data.className(*ClassPointer) : std::nullopt;
+      if (!ClassPointer || !*ClassPointer || !Flags || (*Flags & 1) ||
+          !ClassName) {
+        diagnostic(
+            "Objective-C category target class is unresolved or a metaclass");
+        return;
+      }
+      if (Classes.insert(*ClassPointer).second) {
+        if (Classes.size() > MaxRecords) {
+          diagnostic("Objective-C class count exceeds the parsing budget");
+          return;
+        }
+        readClass(*ClassPointer);
+      }
+      auto Existing =
+          std::find_if(Img.ObjCClasses.begin(), Img.ObjCClasses.end(),
+                       [&](const ObjCClass &Class) {
+                         return Class.Address == *ClassPointer;
+                       });
+      if (Existing == Img.ObjCClasses.end()) {
+        diagnostic("Objective-C category target class metadata is incomplete");
+        return;
+      }
+      Owner = *Existing;
+    }
+    const size_t FirstMethod = Img.ObjCMethods.size();
+    for (const auto &[Offset, IsClassMethod] :
+         {std::pair<uint64_t, bool>{16, false}, {24, true}}) {
+      auto List = Data.pointer(VA + Offset);
+      if (!List) {
+        diagnostic("Objective-C category method-list pointer is unavailable");
+        continue;
+      }
+      methodList(Owner, *List, IsClassMethod);
+    }
+    for (size_t I = FirstMethod; I < Img.ObjCMethods.size(); ++I) {
+      Img.ObjCMethods[I].CategoryName = *Name;
+      Img.ObjCMethods[I].CategoryAddress = VA;
+    }
+  }
+
 public:
   explicit RuntimeReader(BinaryImage &Image) : Img(Image) {}
 
   void run() {
     std::set<va_t> Classes;
     for (const Section &Sec : Img.Sections) {
-      if (Sec.Name == "__objc_catlist" || Sec.Name == "__objc_nlcatlist") {
-        if (Sec.Size)
-          diagnostic("Objective-C category methods are not yet projected");
-        continue;
-      }
       if (Sec.Name != "__objc_classlist" && Sec.Name != "__objc_nlclslist")
         continue;
       if (Sec.Size % 8 || Sec.Size / 8 > MaxRecords ||
@@ -361,6 +386,34 @@ public:
           }
           readClass(*Class);
         }
+      }
+    }
+    // Categories may precede their classes in section order, and +load entries
+    // appear in both lists. Resolve classes first and visit each category once.
+    const auto Imports = Img.collectImportStorageSlots();
+    const objc::RuntimeData Data(Img);
+    std::set<va_t> Categories;
+    for (const Section &Sec : Img.Sections) {
+      if (Sec.Name != "__objc_catlist" && Sec.Name != "__objc_nlcatlist")
+        continue;
+      if (Sec.Size % 8 || Sec.Size / 8 > MaxRecords ||
+          Img.getSectionFor(Sec.VA) != &Sec || !Data.bytes(Sec.VA, Sec.Size)) {
+        diagnostic("Invalid or non-file-backed Objective-C category list");
+        continue;
+      }
+      for (size_t I = 0; I < Sec.Size / 8; ++I) {
+        auto Category = Data.pointer(Sec.VA + I * 8);
+        if (!Category || !*Category) {
+          diagnostic("Objective-C category address is unavailable");
+          continue;
+        }
+        if (!Categories.insert(*Category).second)
+          continue;
+        if (Categories.size() > MaxRecords) {
+          diagnostic("Objective-C category count exceeds the parsing budget");
+          break;
+        }
+        readCategory(*Category, Imports, Classes);
       }
     }
   }
@@ -404,6 +457,25 @@ void parseObjCMethods(BinaryImage &Img) {
     return;
   }
   RuntimeReader(Img).run();
+  // Class and category lists do not establish a unique runtime override order
+  // for colliding declarations. Keep every record and its category identity,
+  // but never emit several candidate bodies as one selected method.
+  std::map<std::tuple<std::string, bool, std::string>,
+           std::vector<ObjCMethod *>>
+      BySelector;
+  for (auto &Method : Img.ObjCMethods)
+    if (!Method.Selector.empty())
+      BySelector[{Method.ClassName, Method.IsClassMethod, Method.Selector}]
+          .push_back(&Method);
+  for (auto &[Identity, Methods] : BySelector)
+    if (Methods.size() > 1)
+      for (auto *Method : Methods) {
+        Method->TypeHint.reset();
+        Method->Status = "ambiguous_dispatch";
+        Method->Diagnostics.push_back(
+            "Duplicate class/category selector declarations have no unique "
+            "recovered dispatch order");
+      }
   std::map<va_t, std::vector<ObjCMethod *>> ByIMP;
   for (auto &Method : Img.ObjCMethods)
     if (Method.Implementation)

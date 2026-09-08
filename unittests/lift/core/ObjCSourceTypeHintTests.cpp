@@ -446,12 +446,17 @@ TEST(ObjCSourceTypeHints, RegisterBoundaryIncludesHiddenParameters) {
       parseObjCMethods(Img);
       ASSERT_EQ(Img.ObjCMethods.size(), 1U);
       const auto &Method = Img.ObjCMethods[0];
-      EXPECT_EQ(Method.Status,
-                Count == Registers ? "supported" : "unsupported_abi");
-      EXPECT_EQ(Method.TypeHint.has_value(), Count == Registers);
+      EXPECT_EQ(Method.Status, "supported");
+      ASSERT_TRUE(Method.TypeHint);
       if (Method.TypeHint) {
-        EXPECT_EQ(Method.TypeHint->Parameters.size(), Registers);
+        EXPECT_EQ(Method.TypeHint->Parameters.size(), Count);
         EXPECT_TRUE(Method.TypeHint->ReturnType->IsSigned);
+        const auto &Last = Method.TypeHint->Parameters.back().Location;
+        EXPECT_EQ(Last.Kind, Count == Registers
+                                 ? SourceABICarrierKind::IntegerRegister
+                                 : SourceABICarrierKind::Stack);
+        if (Count > Registers)
+          EXPECT_EQ(Last.EntryStackOffset, TheArch == Arch::X64 ? 8 : 0);
       }
     }
   }
@@ -459,6 +464,7 @@ TEST(ObjCSourceTypeHints, RegisterBoundaryIncludesHiddenParameters) {
 
 TEST(ObjCSourceTypeHints, PreservesDeclaredParameterOrderAndNamesInBody) {
   auto Img = runtimeImage();
+  Img.Arch = Arch::X64;
   const char Selector[] = "plusOne:";
   const char Encoding[] = "q24@0:8q16";
   std::memcpy(Img.Segments[0].Data.data() + 0x620, Selector, sizeof(Selector));
@@ -554,4 +560,49 @@ TEST(ObjCSourceTypeHints,
   EXPECT_EQ(Func.Params.size(), 1U);
   EXPECT_EQ(Func.ReturnValueEvidence, MedReturnValueEvidence::Unknown);
 }
+TEST(ObjCSourceTypeHints, Arm64RuntimeFloatAndMixedEncodingsReachTypedBodies) {
+  struct Sample {
+    std::initializer_list<uint32_t> Code;
+    const char *Selector;
+    const char *Encoding;
+    unsigned Parameters;
+    unsigned ReturnBytes;
+  };
+  const Sample Samples[] = {
+      {{0xd65f03c0}, "identity:", "f20@0:8f16", 3, 4},
+      {{0x1e212800, 0xd65f03c0}, "sum:second:", "f24@0:8f16f20", 4, 4},
+      {{0x1e620042, 0x1e602840, 0x9e620062, 0x1e622800, 0x1e22c021, 0x1e612800,
+        0xd65f03c0},
+       "mixed:first:second:last:",
+       "d40@0:8i16d20q28f36",
+       6,
+       8}};
+  for (const auto &Sample : Samples) {
+    SCOPED_TRACE(Sample.Selector);
+    auto Func =
+        recoverMethodCode(Sample.Code, Sample.Selector, Sample.Encoding);
+    ASSERT_TRUE(Func);
+    ASSERT_TRUE(Func->SourceTypeHint);
+    ASSERT_EQ(Func->Params.size(), Sample.Parameters);
+    EXPECT_EQ(Func->ReturnType->Kind, NdTypeKind::Float);
+    EXPECT_EQ(Func->ReturnType->Size, Sample.ReturnBytes);
+    bool HasReturn = false;
+    std::function<void(const std::vector<HighStmt> &)> Check =
+        [&](const std::vector<HighStmt> &Body) {
+          for (const auto &S : Body) {
+            if (S.Kind == StmtKind::Return) {
+              HasReturn = true;
+              ASSERT_TRUE(S.RetVal);
+              ASSERT_TRUE(S.RetVal->Type);
+              EXPECT_EQ(S.RetVal->Type->Kind, NdTypeKind::Float);
+            }
+            Check(S.Body);
+            Check(S.ElseBody);
+          }
+        };
+    Check(Func->Body);
+    EXPECT_TRUE(HasReturn);
+  }
+}
+
 } // namespace

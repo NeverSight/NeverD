@@ -435,6 +435,26 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       if (Op.NumInputs >= 1 && Op.Inputs[0].isConst())
         CI.TargetAddr = Op.Inputs[0].ConstVal;
 
+      if (Op.SourceCallHint) {
+        const auto &Hint = *Op.SourceCallHint;
+        // These are actual operands renamed by SSA and visited by every
+        // liveness/propagation pass, not a later physical-register guess.
+        if (Op.NumInputs == Hint.Signature.Parameters.size() + 1) {
+          CI.SourceCallHint = Op.SourceCallHint;
+          CI.TargetAddr = Hint.TargetAddress;
+          auto Name = FuncNames.find(CI.TargetAddr);
+          CI.TargetName =
+              !Hint.TargetName.empty() ? Hint.TargetName
+              : Name != FuncNames.end()
+                  ? Name->second
+                  : (kAutoFuncPrefix + llvm::utohexstr(CI.TargetAddr)).str();
+          CI.Args.assign(Op.Inputs.begin() + 1,
+                         Op.Inputs.begin() + Op.NumInputs);
+          Func.CallInfos.push_back(std::move(CI));
+          continue;
+        }
+      }
+
       auto FnIt = FuncNames.find(CI.TargetAddr);
       CI.TargetName =
           FnIt != FuncNames.end()

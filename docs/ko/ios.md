@@ -61,6 +61,8 @@ Fat 바이너리에서 `--arch=auto`는 arm64, arm, x86_64, i386 순으로 우�
 
 클래스 메타데이터는 상위 클래스, 인스턴스 시작/크기, 오프셋·폭·정렬을 검증한 스칼라/포인터 ivar를 유지하며 필요한 패딩을 선언에 삽입합니다. 필요한 인스턴스 배치를 알 수 없는 메서드는 미복원입니다. 카테고리는 클래스/카테고리/주소 식별자와 구현을 분리하며 클래스·카테고리 목록에서 완전히 같은 중복 기록은 한 번만 셉니다. 지원되는 외부 카테고리는 기존 Foundation 클래스 선언을 이용합니다. 알려지지 않은 외부 헤더는 누락 의존성으로 보고하며 대체 클래스 배치를 만들어 내지 않습니다.
 
+지원하는 Objective-C Block 호출에는 숨겨진 Block 객체와 모든 인수 및 반환값의 전달 위치를 포함하는 완전한 고정 스칼라 호출 ABI가 필요합니다. 런타임 인코딩 `@?`를 `id`로 넓히는 것은 선언에만 적용되며 호출 원형을 제공하지 않습니다. 전역 Block 참조는 공유 객체의 동일성을 유지합니다. 지원하는 동기 스칼라 캡처는 네이티브 캡처 저장소와 호출 흐름이 입증되어야 합니다. 이스케이프 또는 비동기 캡처, 모델에 없는 객체/byref 소유권, copy/dispose 도우미와 알 수 없는 레이아웃은 미복원으로 남습니다.
+
 런타임 정보 복원은 제한적입니다. 완전한 프로퍼티·프로토콜, 원래 소유권 주석, 임의 집합형, 가변 인자 꼬리, 예외 의존 본문, 모델에 없는 Block/캡처 배치를 보장하지 않습니다. 런타임 인코딩은 고정 인자만 설명하며 원 선언에 생략 부호가 없었다고 증명할 수 없습니다. 체인 포인터는 로더가 해당 슬롯을 해결한 경우에만 사용하며 나머지 형식에는 진단을 남깁니다.
 
 ## Swift 소스와 저장 배치
@@ -68,6 +70,10 @@ Fat 바이너리에서 `--arch=auto`는 arm64, arm, x86_64, i386 순으로 우�
 구조화된 demangler 출력은 호출 가능한 서명과 호출 불가능한 메타데이터를 분리합니다. 지원되는 서명은 본문 출력 전에 선택한 바이너리의 심볼, 진입점, 명시적인 기계 ABI와 연결합니다. Swift 수신자는 Swift ABI를 따르며 Objective-C 숨김 인자로 대체하지 않습니다. 사용자가 제공한 서명 파일도 검증해야 하는 힌트입니다.
 
 실험적 출력기는 지원되는 자유 함수, 클래스 메서드, 지정 초기화 메서드, 고정 배치 struct 메서드를 구성하며 지원되는 mutating 수신자 형태를 포함합니다. 클래스/struct 선언과 저장 필드는 복원된 배치 메타데이터가 필요합니다. 필요한 선언과 본문이 지원되는 완전한 의존성 그룹일 때만 네이티브 호출을 출력합니다. 소스 단위는 선언과 메서드를 함께 포함하며 원래 바이너리를 호출하는 브리지를 만들지 않습니다.
+
+지원하는 Swift getter/setter 본문은 네이티브 구현에서 복원하여 프로퍼티로 조립합니다. 비공개 backing storage는 확인된 필드 레이아웃을 유지하며 초기화 함수와 다른 메서드도 같은 저장소 이름을 사용합니다. 프로퍼티 선언이나 필드 기록만으로 접근자 본문이 복원되었다고 판단하지 않습니다.
+
+지원하는 할당 초기화 함수, 단순 소멸자/해제 함수, 타입 메타데이터 접근자와 `_modify`/resume 진입점은 출력된 타입 단위로 투영할 수 있습니다. 각 항목에는 전체 네이티브 흐름과 효과에 대한 제한된 증명, 실제 복원된 컨텍스트/초기화 함수/프로퍼티 의존성, 관련 본문의 예외 처리 및 IR 검사가 필요합니다. 할당 함수의 쓰기는 실제 초기화 함수와 일치해야 하고 `_modify`는 정확한 가변 필드와 재개 진입점을 연결해야 합니다. 런타임 메타데이터 호출은 복원된 타입 안에서 모델링된 의미를 유지합니다. 이 항목들은 컴파일러 소스 투영으로 명시되며, 각각 복원된 일반 메서드 본문이나 원래 소스 텍스트를 뜻하지 않습니다.
 
 제네릭 또는 resilient 배치, async/throwing 함수, 알 수 없는 호출 규약, 미지원 accessor/allocator/thunk, 불완전한 초기화와 연결되지 않은 네이티브/런타임 의존성은 개별 `unrecovered`로 남습니다. 맹글링된 심볼이나 명목 타입 이름만으로 메서드 복원이 되지는 않습니다. 제거된 심볼과 미분류 demangler 노드는 범위를 불완전하거나 알 수 없게 만듭니다.
 
@@ -112,6 +118,8 @@ recovered-ios/
     "coverage_status": "partial",
     "method_count": 4,
     "recovered_method_count": 2,
+    "source_body_method_count": 1,
+    "compiler_projection_method_count": 1,
     "unrecovered_method_count": 2,
     "metadata_symbol_count": 5,
     "unclassified_symbol_count": 1
@@ -122,6 +130,8 @@ recovered-ios/
 바깥쪽 `status: "success"`는 검증한 출력을 게시했다는 뜻입니다. `recovered`, `partial`, `unrecovered`, `no-methods`는 발견한 목록에 대한 상태이며 의미 동등성이나 원 프로그램 완전성이 아닙니다. 각 미복원 메서드에는 이유가 있습니다. Objective-C의 `recovered`는 완전한 런타임 메타데이터도 요구합니다. 빈 목록이 메서드가 없었다는 증거는 아닙니다.
 
 Swift `coverage_status`는 분류된 호출 가능 항목만 셉니다. 전체 Swift `status`는 알 수 없는 심볼도 고려하여 `unavailable`, `unclassified`, `unsupported-architecture`, `no-symbols`일 수 있습니다. 호출 불가능 메타데이터는 `non_method_symbols`에 `not-callable`, 알 수 없는 심볼은 `unclassified`로 저장합니다. `types`, `type_metadata_count`, `source_type_count`는 타입 메타데이터와 출력 타입 단위를 별도로 세며 메서드 수를 부풀리는 데 사용하면 안 됩니다.
+
+복원된 Swift 행의 `source_representation`은 `native-method-body` 또는 `compiler-generated-from-type`입니다. 컴파일러 투영에는 `compiler_projection_kind`와 `compiler_projection_evidence`도 보존합니다. `source_body_method_count`는 복원된 네이티브 메서드 본문 수, `compiler_projection_method_count`는 증명된 컴파일러 투영 수이며 합계는 `recovered_method_count`와 같습니다. 컴파일러 진입점도 `method_count` 분모에 남고 정확한 식별 정보가 대응하는 하나의 `type` 소스 단위에 포함되어야 합니다. 타입 메타데이터나 의존성 이름만으로 복원 수를 늘리지 않습니다. 네이티브 일괄 JSON의 컴파일러 행과 타입 단위에는 `source`가 있지만, mobile의 `source_units`는 `source` 없이 설명만 보존하며 전체 소스는 `sources/swift.swift`에 저장됩니다.
 
 Swift 배치 `source_units`는 `{kind, module, name, source, method_entries, method_identities}`를 기록합니다. kind는 `function` 또는 `type`, identity는 `{entry, mangled_symbol}`입니다. 다른 심볼은 같은 진입점을 공유하면서 별도의 ABI 출력을 유지할 수 있습니다. 각 복원 identity는 정확히 한 번 포함되고 미복원 identity는 포함되지 않아야 합니다. `method_entries`는 `method_identities`의 진입점을 순서대로 투영한 목록과 일치하며 중복 주소를 허용합니다. 완전히 같은 중복 identity를 조용히 합치면 안 됩니다. 배치 `source`는 각 단위 소스와 줄바꿈을 순서대로 연결한 값입니다. Mobile은 전체 소스를 `sources/swift.swift`에, 단위 설명을 범위 JSON에 보관합니다. 개별 메서드 `source`는 검사 용도이며 단순 연결로 클래스 선언을 올바르게 복원할 수 없습니다.
 
@@ -141,15 +151,21 @@ Mach-O를 이미 로드한 세션에서 `neverd_objc_methods_json(session, max_f
 
 ## 검증과 문제 해결
 
+macOS에서 `BUILD_TESTING`을 활성화한 빌드는 `check-neverd-mobile-ios`를 제공하며, CTest로 세 네이티브 복원 테스트 모음을 실행합니다.
+
 ```sh
+cmake --build build --target check-neverd-mobile-ios
 NEVERD_BUILD_DIR=build python3 -m unittest discover -s scripts/tests -p 'test_mobile_*.py' -v
 python3 scripts/test_mobile_ios_backend.py --neverd build/bin/neverd
+python3 scripts/test_mobile_ios_calls_backend.py --neverd build/bin/neverd
 python3 scripts/test_mobile_swift_backend.py --neverd build/bin/neverd
 ```
 
-macOS의 자체 Objective-C 검증 스크립트는 원본 샘플을 컴파일하고 `.m`을 복원한 뒤 생성 소스만 독립 호출 하네스와 링크합니다. 정수 경계, 분기, 반복, 포인터 읽기/쓰기, 숨김 인자, float/double 비트 동일성, 혼합/스택 인자를 검사합니다. Swift 스크립트는 원래 dylib·모듈·브리지·수동 대체 선언 없이 생성 `.swift`와 하네스를 재컴파일합니다. 스칼라/네이티브 호출, 클래스 초기화/저장, struct 값/mutating 메서드, 부동소수점, 스택, 포인터, 반복을 확인합니다. 이 엄격한 검사는 미지원 범위를 드러낼 수 있으며 스크립트의 존재만으로 모든 빌드가 모든 사례를 통과했다는 뜻은 아닙니다.
+macOS의 Objective-C 검증 스크립트는 원본 샘플을 컴파일하고 `.m`을 복원한 뒤 생성 소스만 독립 호출 하네스와 링크합니다. 스칼라 스크립트는 정수 경계, 분기, 루프, 포인터 읽기/쓰기, 숨겨진 인수, float/double 비트 동일성, 혼합 인수와 스택 인수를 검사합니다. 호출 스크립트는 메시지 디스패치, 상속, Category, 인스턴스 변수 저장소, 네이티브 도우미와 Block 호출/캡처/공유 동일성도 검사합니다. 호출 샘플에는 메서드 21개와 변형별 독립 예상 결과 134개가 있으며, 기록된 arm64/x86_64 × classic/default 네 조합 모두 21/21 메서드를 복원하고 134/134 결과와 일치했습니다.
 
-두 스크립트는 `--arch all|arm64|x86_64`, `--fixups both|classic|default`, `--timeout N`, `--work-dir NEW_DIRECTORY`를 지원합니다. `--setup-only`는 원본만 검증하고 복원을 검사하지 않습니다. 호스트가 실행할 수 없는 아키텍처는 허용될 때 명시적으로 건너뛰며 통과로 세지 않습니다. 보관한 실패 산출물로 소스 범위 부족, 컴파일 오류, 동작 차이를 구분할 수 있습니다. 검증된 지원이라고 말하기 전에 현재 결과를 확인하세요.
+엄격한 Swift 스크립트는 사용자 선언 22개, getter/setter 진입점 3개, 컴파일러가 생성한 호출 가능 진입점 7개를 검사하며 어떤 항목도 목록에서 빠질 수 없습니다. 변형마다 원본 프로그램의 독립 예상 결과 855개를 확인합니다. 생성된 `.swift`와 하네스를 독립적으로 컴파일하며 원본 dylib, 모듈, 브리지 또는 수동 대체 선언을 사용하지 않습니다. 스칼라/네이티브 호출, 클래스 초기화와 저장소, 구조체 값 전달/mutating 메서드, 부동소수점과 스택 인수, 포인터 및 루프를 포함합니다. 이 자체 제작 샘플의 공식 CLI 인수 테스트는 arm64/x86_64 × classic/default 네 조합에서 건너뛴 항목 없이 모두 통과했습니다. 각 조합은 네이티브 메서드 본문 25개와 컴파일러 투영 7개를 복원하여 호출 가능한 식별 정보 32개를 모두 보존했습니다. 원본 프로그램과 독립적으로 컴파일한 생성 Swift 모두 조합별 855/855 예상 결과 검사에 통과했습니다. 이 결과는 해당 샘플에 한정되며 임의 애플리케이션이나 원래 소스 텍스트의 복원을 보장하지 않습니다. 스크립트는 커버리지 누락, 소스 컴파일 실패와 동작 불일치를 거부합니다.
+
+세 스크립트 모두 `--arch all|arm64|x86_64`, `--fixups both|classic|default`, `--timeout N`, `--work-dir NEW_DIRECTORY`를 지원합니다. `--setup-only`는 원본만 검증하며 복원은 테스트하지 않습니다. 호스트가 실행할 수 없는 아키텍처는 허용되는 경우 명시적으로 건너뛰며, 건너뛰기는 통과가 아닙니다. 보존된 실패 산출물로 소스 커버리지 누락, 컴파일 오류와 동작 차이를 구분하고 검증된 지원을 주장하기 전에 현재 테스트 출력을 확인하십시오.
 
 게시는 트랜잭션 방식입니다. 새 디렉터리를 선택하고 종료 상태부터 확인하며 리디렉션 JSON은 그 밖에 저장하세요. 실패 시 임시 출력을 삭제하고 기존 결과를 보존합니다. 백엔드의 비정상 종료에는 제한된 로그 끝부분이 포함되며 시간 초과와 예산 초과는 별도 메시지입니다. `--json`의 처리된 도우미 오류는 `status: "error"`지만 인자 파싱, 도우미/인터프리터 부재, Python 3.10 미만, 중단은 더 일찍 stderr에서 실패할 수 있습니다.
 

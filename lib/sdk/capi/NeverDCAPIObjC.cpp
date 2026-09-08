@@ -5,6 +5,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "JSONText.h"
+#include "ObjCBlockSources.h"
+#include "ObjCNativeDependencies.h"
+#include "ObjCSourceBindings.h"
 #include "ObjCSourceProjection.h"
 #include "SessionImpl.h"
 
@@ -31,6 +34,8 @@ llvm::json::Object methodIdentity(const ObjCMethod &Method) {
       {"class_name", jsonSafeText(Method.ClassName)},
       {"selector", jsonSafeText(Method.Selector)},
       {"class_method", Method.IsClassMethod},
+      {"category_name", jsonSafeText(Method.CategoryName)},
+      {"category_address", addressText(Method.CategoryAddress)},
       {"implementation", addressText(Method.Implementation)},
       {"type_encoding", jsonSafeText(Method.TypeEncoding)}};
 }
@@ -46,8 +51,18 @@ llvm::json::Object metadataJSON(const BinaryImage &Image) {
           {"selector", jsonSafeText(Method.Selector)},
           {"type_encoding", jsonSafeText(Method.TypeEncoding)},
           {"implementation", addressText(Method.Implementation)},
-          {"class_method", Method.IsClassMethod}});
+          {"class_method", Method.IsClassMethod},
+          {"category_name", jsonSafeText(Method.CategoryName)},
+          {"category_address", addressText(Method.CategoryAddress)}});
     }
+    llvm::json::Array Ivars;
+    for (const auto &Ivar : Class.Ivars)
+      Ivars.push_back(llvm::json::Object{
+          {"name", jsonSafeText(Ivar.Name)},
+          {"type_encoding", jsonSafeText(Ivar.TypeEncoding)},
+          {"offset", static_cast<int64_t>(Ivar.Offset)},
+          {"size", static_cast<int64_t>(Ivar.Size)},
+          {"alignment", static_cast<int64_t>(Ivar.Alignment)}});
     Classes.push_back(llvm::json::Object{
         {"name", jsonSafeText(Class.Name)},
         {"address", addressText(Class.Address)},
@@ -57,12 +72,37 @@ llvm::json::Object metadataJSON(const BinaryImage &Image) {
              ? llvm::json::Value(nullptr)
              : llvm::json::Value(jsonSafeText(Class.SuperclassName))},
         {"root_class", Class.RootClass},
+        {"instance_start", static_cast<int64_t>(Class.InstanceStart)},
+        {"instance_size", static_cast<int64_t>(Class.InstanceSize)},
+        {"ivar_status", Class.IvarStatus},
+        {"ivars", std::move(Ivars)},
         {"inheritance_status", jsonSafeText(Class.InheritanceStatus)},
         {"methods", std::move(Methods)}});
   }
+  llvm::json::Array Categories;
+  std::map<va_t, std::vector<const ObjCMethod *>> CategoryMethods;
+  for (const auto &Method : Image.ObjCMethods)
+    if (Method.CategoryAddress && !Method.CategoryName.empty())
+      CategoryMethods[Method.CategoryAddress].push_back(&Method);
+  for (const auto &[Address, Methods] : CategoryMethods) {
+    llvm::json::Array Members;
+    for (const auto *Method : Methods)
+      Members.push_back(llvm::json::Object{
+          {"selector", jsonSafeText(Method->Selector)},
+          {"type_encoding", jsonSafeText(Method->TypeEncoding)},
+          {"implementation", addressText(Method->Implementation)},
+          {"class_method", Method->IsClassMethod},
+          {"category_name", jsonSafeText(Method->CategoryName)},
+          {"category_address", addressText(Address)}});
+    Categories.push_back(llvm::json::Object{
+        {"name", jsonSafeText(Methods.front()->CategoryName)},
+        {"class_name", jsonSafeText(Methods.front()->ClassName)},
+        {"address", addressText(Address)},
+        {"methods", std::move(Members)}});
+  }
   llvm::json::Array Limitations;
   Limitations.push_back(
-      "Runtime metadata does not recover properties, protocols, categories, or "
+      "Runtime metadata does not recover properties, protocols, or "
       "dynamically registered classes.");
   for (const std::string &Diagnostic : Image.ObjCMetadataDiagnostics)
     Limitations.push_back(jsonSafeText(Diagnostic));
@@ -71,6 +111,7 @@ llvm::json::Object metadataJSON(const BinaryImage &Image) {
                                                               : "recovered";
   return llvm::json::Object{{"status", Status},
                             {"classes", std::move(Classes)},
+                            {"categories", std::move(Categories)},
                             {"limitations", std::move(Limitations)}};
 }
 
@@ -100,6 +141,28 @@ const char *neverd_objc_methods_json(neverd_session_t Sess,
       return nullptr;
     }
 
+    std::map<va_t, std::string> NativeDependencies;
+    ObjCBlockSourcePlan BlockPlan;
+    for (unsigned Depth = 0; Depth < 16; ++Depth) {
+      const bool NativeChanged = inferObjCNativeDependencies(
+          S->Img, Result, Options, NativeDependencies);
+      BlockPlan = discoverObjCBlockSources(S->Img, Result);
+      const bool BlocksChanged =
+          applyObjCBlockInvokeHints(BlockPlan, Options) != 0;
+      if (!NativeChanged && !BlocksChanged)
+        break;
+      Result = Engine.run(S->Img, Context, Options, S->Dbg.get());
+      if (!Result.Success) {
+        S->setError(Result.Error.empty()
+                        ? "native dependency source pipeline failed"
+                        : Result.Error);
+        return nullptr;
+      }
+    }
+
+    // Stack expression identities belong to the final pipeline result.
+    BlockPlan = discoverObjCBlockSources(S->Img, Result);
+
     CEmitterOptions COptions;
     COptions.TheArch = S->Img.Arch;
     COptions.Format = S->Img.Format;
@@ -124,6 +187,55 @@ const char *neverd_objc_methods_json(neverd_session_t Sess,
     for (const PipelineFunctionAudit &Audit : Result.FunctionAudits)
       Audits.emplace(Audit.Entry, &Audit);
 
+    std::map<va_t, ObjCSourceBindingResult> Projections;
+    std::map<va_t, ObjCBlockSourceBindingResult> BlockProjections;
+    std::map<va_t, std::string> ProjectionReasons;
+    std::set<va_t> Closed;
+    for (const auto &[Entry, Func] : Functions) {
+      if (!Func->SourceTypeHint)
+        continue;
+      auto BlockBinding =
+          bindObjCBlockSourceReferences(*Func, S->Img, BlockPlan, Functions);
+      auto Binding = bindObjCSourceReferences(BlockBinding.Function, S->Img);
+      Binding.Dependencies.insert(BlockBinding.Dependencies.begin(),
+                                  BlockBinding.Dependencies.end());
+      std::string Reason = BlockBinding.Limitation.empty()
+                               ? Binding.Limitation
+                               : BlockBinding.Limitation;
+      if (Reason.empty()) {
+        const auto Audit = Audits.find(Entry);
+        Reason = sourceBodyLimitation(
+            Binding.Function, *Func->SourceTypeHint,
+            Audit == Audits.end() ? nullptr : Audit->second,
+            [&](const HighExpr &Expression) {
+              return objcSourceCallBound(Expression, S->Img, Functions) ||
+                     objcBlockSourceCallBound(Expression, S->Img, BlockPlan,
+                                              Functions);
+            });
+      }
+      if (Reason.empty())
+        Closed.insert(Entry);
+      ProjectionReasons.emplace(Entry, std::move(Reason));
+      Projections.emplace(Entry, std::move(Binding));
+      BlockProjections.emplace(Entry, std::move(BlockBinding));
+    }
+    bool Changed;
+    do {
+      Changed = false;
+      for (const auto &[Entry, Projection] : Projections) {
+        if (!Closed.count(Entry))
+          continue;
+        for (va_t Dependency : Projection.Dependencies)
+          if (!Closed.count(Dependency)) {
+            Closed.erase(Entry);
+            ProjectionReasons[Entry] = "method depends on native source that "
+                                       "was not completely recovered";
+            Changed = true;
+            break;
+          }
+      }
+    } while (Changed);
+
     llvm::json::Array Methods;
     size_t Recovered = 0;
     for (const ObjCMethod &Method : S->Img.ObjCMethods) {
@@ -146,7 +258,20 @@ const char *neverd_objc_methods_json(neverd_session_t Sess,
       else {
         auto It = Audits.find(Method.Implementation);
         Reason = objcSourceBodyLimitation(
-            *Func, *Method.TypeHint, It == Audits.end() ? nullptr : It->second);
+            Projections.at(Method.Implementation).Function, *Method.TypeHint,
+            It == Audits.end() ? nullptr : It->second,
+            [&](const HighExpr &Expression) {
+              return objcSourceCallBound(Expression, S->Img, Functions) ||
+                     objcBlockSourceCallBound(Expression, S->Img, BlockPlan,
+                                              Functions);
+            });
+        if (Reason.empty()) {
+          if (auto Projection = ProjectionReasons.find(Method.Implementation);
+              Projection != ProjectionReasons.end())
+            Reason = Projection->second;
+          else
+            Reason = "method has no complete relocatable source projection";
+        }
       }
       if (!Reason.empty()) {
         Row["status"] = "unrecovered";
@@ -155,7 +280,7 @@ const char *neverd_objc_methods_json(neverd_session_t Sess,
         continue;
       }
 
-      HighFunc Projection = *Func;
+      HighFunc Projection = Projections.at(Method.Implementation).Function;
       Projection.Name =
           "neverd_objc_imp_" +
           llvm::utohexstr(Method.Implementation, /*LowerCase=*/true);
@@ -163,7 +288,32 @@ const char *neverd_objc_methods_json(neverd_session_t Sess,
       Projection.SourceFile.clear();
       std::string Source;
       llvm::raw_string_ostream SourceOS(Source);
-      if (!Emitter.emit({Projection}, SourceOS, COptions)) {
+      std::vector<HighFunc> Unit{Projection};
+      std::set<va_t> Included{Projection.Entry};
+      std::vector<va_t> Pending(
+          Projections.at(Projection.Entry).Dependencies.begin(),
+          Projections.at(Projection.Entry).Dependencies.end());
+      while (!Pending.empty()) {
+        const va_t Entry = Pending.back();
+        Pending.pop_back();
+        if (!Included.insert(Entry).second)
+          continue;
+        const auto &Dependency = Projections.at(Entry);
+        Unit.push_back(Dependency.Function);
+        Pending.insert(Pending.end(), Dependency.Dependencies.begin(),
+                       Dependency.Dependencies.end());
+      }
+      std::set<va_t> BlockDescriptors;
+      for (va_t Entry : Included) {
+        const auto &Descriptors = BlockProjections.at(Entry).Descriptors;
+        BlockDescriptors.insert(Descriptors.begin(), Descriptors.end());
+      }
+      std::set<std::string> SharedBlockFunctions;
+      const std::string BlockHelpers = renderObjCBlockSourceHelpers(
+          BlockPlan, BlockDescriptors, SharedBlockFunctions);
+      const bool Emitted = Emitter.emit(Unit, SourceOS, COptions);
+      SourceOS << BlockHelpers;
+      if (!Emitted) {
         Row["status"] = "unrecovered";
         Row["reason"] = "method C source projection failed";
       } else if (auto Limitation = objcSourceTextLimitation(Source);
@@ -176,10 +326,25 @@ const char *neverd_objc_methods_json(neverd_session_t Sess,
           Parameters.push_back(llvm::json::Object{
               {"name", Parameter.Name}, {"type", typeToC(Parameter.Type)}});
         Row["status"] = "recovered";
+        std::set<std::string> LayoutClasses;
+        for (va_t Entry : Included) {
+          const auto &Classes = Projections.at(Entry).InstanceLayoutClasses;
+          LayoutClasses.insert(Classes.begin(), Classes.end());
+        }
+        if (!Method.IsClassMethod && Method.ClassAddress)
+          LayoutClasses.insert(Method.ClassName);
+        llvm::json::Array Layouts;
+        for (const auto &ClassName : LayoutClasses)
+          Layouts.push_back(ClassName);
+        Row["instance_layout_classes"] = std::move(Layouts);
         Row["return_type"] = typeToC(Projection.ReturnType);
         Row["parameters"] = std::move(Parameters);
         Row["function_name"] = Projection.Name;
         Row["source"] = jsonSafeText(Source);
+        llvm::json::Array SharedFunctions;
+        for (const auto &Name : SharedBlockFunctions)
+          SharedFunctions.push_back(Name);
+        Row["shared_block_functions"] = std::move(SharedFunctions);
         ++Recovered;
       }
       Methods.push_back(std::move(Row));
@@ -191,9 +356,9 @@ const char *neverd_objc_methods_json(neverd_session_t Sess,
     Limitations.push_back("Only fixed scalar/pointer Objective-C signatures "
                           "with supported ABI bindings are projected; variadic "
                           "tails are not described by runtime encodings.");
-    Limitations.push_back("Swift method source, native/dynamic call bindings, "
-                          "and exception-dependent method bodies are not "
-                          "reconstructed by this exporter.");
+    Limitations.push_back(
+        "Unresolved native dependencies and exception-dependent method bodies "
+        "remain individually unrecovered.");
     llvm::json::Object Report{
         {"schema_version", 1},
         {"status", "success"},

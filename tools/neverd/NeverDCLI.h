@@ -48,7 +48,8 @@ enum ExportFormat {
   FmtImports,
   FmtExports,
   FmtStrings,
-  FmtObjCMethods
+  FmtObjCMethods,
+  FmtSwiftMethods
 };
 
 /// How the `patch` subcommand rewrites the binary.
@@ -181,6 +182,7 @@ extern llvm::cl::SubCommand MobileCmd;
 int runMobile(const char *Argv0);
 extern llvm::cl::opt<std::string> MobilePlatform;
 extern llvm::cl::opt<std::string> MobileBackend;
+extern llvm::cl::opt<std::string> MobileSwiftDemangle;
 extern llvm::cl::opt<std::string> MobileArch;
 extern llvm::cl::opt<std::string> MobileArtifact;
 extern llvm::cl::opt<std::string> MobilePython;
@@ -312,6 +314,7 @@ extern llvm::cl::opt<std::string> AnnotateRemove;
 extern llvm::cl::opt<ExportFormat> ExportFmt;
 extern llvm::cl::opt<std::string> ExportOutput;
 extern llvm::cl::opt<std::string> ExportFunc;
+extern llvm::cl::opt<std::string> ExportSourceSignatures;
 
 // Rename.
 extern llvm::cl::opt<std::string> RenameFrom;

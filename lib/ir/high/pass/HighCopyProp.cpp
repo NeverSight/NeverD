@@ -77,8 +77,74 @@ void resolveCopyChains(VarKeyMap<ExprPtr> &Map) {
   }
 }
 
+// Source SSA operations become ordinary mutable assignments after PHIs are
+// lowered. A one-definition expression can still read a loop-carried value;
+// duplicating that expression after an edge write changes its value. All copy
+// and expression inlining owners use this same conservative stability proof.
+void filterStableCopyCandidates(const std::vector<HighStmt> &Stmts,
+                                VarKeyMap<ExprPtr> &Candidates) {
+  VarKeyMap<int> Definitions;
+  VarKeyMap<VarKeySet> Dependents;
+  VarKeySet Unstable;
+  walkStmts(Stmts, [&](const HighStmt &S) {
+    if (S.Kind != StmtKind::Assign || !S.Dst || S.Dst->Kind != ExprKind::Var)
+      return;
+    auto Key = VK(S.Dst->Var);
+    if (++Definitions[Key] > 1 || S.IsPhiCopy)
+      Unstable.insert(Key);
+    std::vector<ExprPtr> Work{S.Val};
+    std::unordered_set<const HighExpr *> Seen;
+    while (!Work.empty()) {
+      auto E = Work.back();
+      Work.pop_back();
+      if (!E || !Seen.insert(E.get()).second)
+        continue;
+      if (E->Kind == ExprKind::Var) {
+        auto Input = VK(E->Var);
+        Dependents[Input].insert(Key);
+        if (Input == Key)
+          Unstable.insert(Key);
+      }
+      Work.insert(Work.end(), E->Operands.begin(), E->Operands.end());
+    }
+  });
+  auto ReadsUnstable = [&](const ExprPtr &Root) {
+    std::vector<ExprPtr> Work{Root};
+    std::unordered_set<const HighExpr *> Seen;
+    while (!Work.empty()) {
+      auto E = Work.back();
+      Work.pop_back();
+      if (!E || !Seen.insert(E.get()).second)
+        continue;
+      if (E->Kind == ExprKind::Var && Unstable.count(VK(E->Var)))
+        return true;
+      Work.insert(Work.end(), E->Operands.begin(), E->Operands.end());
+    }
+    return false;
+  };
+  std::vector<VarKey> Work(Unstable.begin(), Unstable.end());
+  while (!Work.empty()) {
+    auto Key = Work.back();
+    Work.pop_back();
+    auto Users = Dependents.find(Key);
+    if (Users == Dependents.end())
+      continue;
+    for (auto User : Users->second)
+      if (Unstable.insert(User).second)
+        Work.push_back(User);
+  }
+  for (auto I = Candidates.begin(); I != Candidates.end();)
+    if (Definitions[I->first] != 1 || Unstable.count(I->first) ||
+        ReadsUnstable(I->second))
+      I = Candidates.erase(I);
+    else
+      ++I;
+}
+
 void rewriteRhsVars(std::vector<HighStmt> &Stmts,
-                    const VarKeyMap<ExprPtr> &Map) {
+                    const VarKeyMap<ExprPtr> &Candidates) {
+  auto Map = Candidates;
+  filterStableCopyCandidates(Stmts, Map);
   std::unordered_set<const HighExpr *> Seen;
   std::function<void(ExprPtr &)> Rewrite = [&](ExprPtr &E) {
     if (!E)
@@ -109,7 +175,9 @@ void countExprVarUses(const ExprPtr &E, VarKeyMap<int> &Uses,
 }
 
 void inlineSingleDefs(std::vector<HighStmt> &Stmts,
-                      const VarKeyMap<ExprPtr> &Defs) {
+                      const VarKeyMap<ExprPtr> &Candidates) {
+  auto Defs = Candidates;
+  filterStableCopyCandidates(Stmts, Defs);
   std::unordered_set<const HighExpr *> Seen;
   std::function<void(ExprPtr &)> DoInline = [&](ExprPtr &E) {
     if (!E)
@@ -153,10 +221,10 @@ void resolveRegAliases(std::vector<HighStmt> &Stmts) {
         !S.Val->Operands.empty() && S.Val->Operands[0]->Kind == ExprKind::Var &&
         S.Val->Operands[0]->Var.Kind == MedVar::Reg &&
         S.Dst->Var.RegOff == S.Val->Operands[0]->Var.RegOff)
-      AliasMap[VK(S.Dst->Var)] = S.Val->Operands[0];
+      AliasMap[VK(S.Dst->Var)] = S.Val;
     if (S.Val->Kind == ExprKind::Var && S.Val->Var.Kind == MedVar::Reg &&
         S.Dst->Var.RegOff == S.Val->Var.RegOff &&
-        S.Dst->Var.Size > S.Val->Var.Size)
+        S.Dst->Var.Size == S.Val->Var.Size)
       AliasMap[VK(S.Dst->Var)] = S.Val;
   });
   if (!AliasMap.empty())
@@ -210,6 +278,13 @@ void foldCopyChains(HighFunc &Func) {
     FoldMap[DstKey] = It->second;
     FoldSources.insert(SrcKey);
   }
+  filterStableCopyCandidates(Func.Body, FoldMap);
+  FoldSources.clear();
+  for (const auto &S : Func.Body)
+    if (S.Kind == StmtKind::Assign && S.Dst && S.Val &&
+        S.Dst->Kind == ExprKind::Var && S.Val->Kind == ExprKind::Var &&
+        FoldMap.count(VK(S.Dst->Var)))
+      FoldSources.insert(VK(S.Val->Var));
   if (!FoldMap.empty()) {
     for (auto &S : Func.Body) {
       if (S.Kind != StmtKind::Assign || !S.Dst || !S.Val)
@@ -299,6 +374,7 @@ void foldMultiUseCopies(std::vector<HighStmt> &Stmts) {
     if (TotalIt->second == CopyIt->second)
       PropMap[Key] = Val;
   }
+  filterStableCopyCandidates(Stmts, PropMap);
   if (!PropMap.empty()) {
     walkStmts(Stmts, [&](HighStmt &S) {
       if (S.Kind == StmtKind::Assign && S.Val && S.Val->Kind == ExprKind::Var) {
@@ -434,7 +510,7 @@ void eliminateRegAliasCopies(HighFunc &Func) {
     if (S.Val->Kind == ExprKind::Var)
       Src = S.Val;
     else if (S.Val->Kind == ExprKind::UnaryOp && !S.Val->Operands.empty())
-      Src = S.Val->Operands[0];
+      Src = S.Val;
     if (Src && Src->Kind == ExprKind::Var && AllDefs[VK(Src->Var)] > 1)
       continue;
     if (Src)
@@ -508,10 +584,11 @@ void eliminateLoopAliases(std::vector<HighStmt> &Stmts) {
                  BodyStmt.Val->Operands[0]->Var.Kind == MedVar::Reg &&
                  BodyStmt.Val->Operands[0]->Var.RegOff ==
                      BodyStmt.Dst->Var.RegOff)
-          Src = BodyStmt.Val->Operands[0];
+          Src = BodyStmt.Val;
         if (Src)
           SafeAliases[DstKey] = Src;
       }
+      filterStableCopyCandidates(S.Body, SafeAliases);
       if (!SafeAliases.empty()) {
         std::unordered_set<const HighExpr *> Seen;
         std::function<void(ExprPtr &)> RewriteAlias;

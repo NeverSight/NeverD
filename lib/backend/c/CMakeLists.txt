@@ -2,6 +2,7 @@ add_neverd_component_library(NeverDBackendC
   HighC/HighCEmitter.cpp
   HighC/HighCExprBinOp.cpp
   HighC/HighCExprWriter.cpp
+  HighC/HighCSourceCalls.cpp
   HighC/HighCFuncWriter.cpp
   HighC/HighCStmtWriter.cpp
   LLVMC/LLVMCEmitter.cpp

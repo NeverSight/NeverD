@@ -29,6 +29,8 @@ inline VarKey VK(const MedVar &V) { return varKey(V); }
 // Shared helpers  (defined in HighCopyProp.cpp)
 //===----------------------------------------------------------------------===//
 
+void filterStableCopyCandidates(const std::vector<HighStmt> &Stmts,
+                                VarKeyMap<ExprPtr> &Candidates);
 void resolveCopyChains(VarKeyMap<ExprPtr> &Map);
 void rewriteRhsVars(std::vector<HighStmt> &Stmts,
                     const VarKeyMap<ExprPtr> &Map);

@@ -400,7 +400,7 @@ void MedToHighConverter::simplifyControlFlow(HighFunc &Func,
     recoverSwitchStatements(Func);
 
   int IfElseMaxPasses = IsMega ? 0 : (Med.Blocks.size() > 500) ? 3 : 10;
-  structureIfElse(Func, IfElseMaxPasses);
+  structureIfElse(Func, IfElseMaxPasses, &Med);
 
   removeTrivialGotos(Func.Body);
   simplifyNestedGotos(Func.Body);

@@ -61,6 +61,8 @@ Fat 二進位檔案的 `--arch=auto` 優先順序是 arm64、arm、x86_64、i386
 
 類中繼資料保留父類身份、例項起始位置/大小，以及偏移、寬度和對齊已校驗的標量/指標例項變數；宣告在必要處插入填充。依賴不可用例項佈局的方法仍標記為未恢復。Category 保留獨立的類/分類/地址身份和實現；類與分類清單中重複出現的完全相同記錄只計一次。外部 Category 在受支援時使用已有 Foundation 類宣告；未知外部類標頭檔案會報告為缺失依賴，不會虛構替代類佈局。
 
+支援的 Objective-C Block 呼叫必須具備完整的固定純量呼叫 ABI，包括隱藏的 Block 物件，以及所有參數和回傳值的載體。執行階段編碼 `@?` 只在宣告中擴大為 `id`，不能提供呼叫原型。全域 Block 參照保留共用物件身分。支援的同步純量擷取需要證明原生擷取儲存與呼叫流程。逸出或非同步擷取、模型未涵蓋的物件/byref 所有權、copy/dispose 輔助函式及未知配置仍列為未還原。
+
 這只是對執行階段資訊的有限重建，不承諾完整恢復屬性、協議、原始所有權標註、任意聚合型別、可變引數尾部、依賴異常的方法本體和模型未覆蓋的 Block/捕獲佈局。執行階段編碼只描述固定引數，不能證明原宣告不存在省略號。只有原生載入器已解析相關槽時才使用鏈式指標；未解析格式會保留診斷。
 
 ## Swift 原始碼與儲存佈局
@@ -68,6 +70,10 @@ Fat 二進位檔案的 `--arch=auto` 優先順序是 arm64、arm、x86_64、i386
 結構化 demangler 輸出將可呼叫簽名與不可呼叫中繼資料分別分類。受支援簽名在恢復原生方法本體前，必須繫結選中二進位檔案的符號、入口和明確的機器 ABI。Swift 接收者遵循 Swift ABI，不替換成 Objective-C 隱藏引數。使用者提供的簽名檔案也只是需要驗證的提示。
 
 實驗性輸出器可以建置受支援的自由函式、類方法、指定初始化器和固定佈局結構體方法，包括受支援的 mutating 接收者形式。類/結構體宣告和儲存欄位需要恢復出的佈局中繼資料。只有所需原始碼宣告和方法本體組成完整且受支援的依賴組時，才輸出原生呼叫。恢復的原始碼單元將宣告與方法放在一起，不通過橋接程式碼呼叫原始二進位檔案。
+
+支援的 Swift getter/setter 本體來自原生實作，再組合為屬性。私有 backing storage 保留已確認的欄位配置，初始化器和其他方法使用同一組儲存名稱。只有屬性宣告或欄位紀錄，不能證明已還原存取器本體。
+
+支援的配置式初始化器、平凡解構器/釋放器、型別中繼資料存取器和 `_modify`/resume 入口可以投影至已輸出的型別單元。每項都需要對完整原生流程與效果進行有界證明、實際已還原的環境/初始化器/屬性相依項，以及相關本體的例外處理與 IR 稽核。配置器的寫入必須與真實初始化器一致；`_modify` 必須綁定確切的可變欄位及繼續執行入口。執行階段中繼資料呼叫在還原型別內保留其模型語意。這些入口明確報告為編譯器原始碼投影，不代表個別還原出的普通方法本體或原始程式文字。
 
 泛型或 resilient 佈局、async/throwing 函式、未知呼叫約定、不支援的訪問器/分配器/thunk、不完整初始化及未繫結的原生或執行階段依賴，會逐項保留為 `unrecovered`。僅有 mangled 符號或名義型別名稱不等於恢復了方法。符號裁剪和未分類的 demangler 節點會使覆蓋不完整或未知。
 
@@ -112,6 +118,8 @@ recovered-ios/
     "coverage_status": "partial",
     "method_count": 4,
     "recovered_method_count": 2,
+    "source_body_method_count": 1,
+    "compiler_projection_method_count": 1,
     "unrecovered_method_count": 2,
     "metadata_symbol_count": 5,
     "unclassified_symbol_count": 1
@@ -122,6 +130,8 @@ recovered-ios/
 最外層 `status: "success"` 表示已釋出通過校驗的輸出。方法覆蓋 `recovered`、`partial`、`unrecovered`、`no-methods` 描述的是已發現清單，不是語義等價或原程式完整性。每個未恢復方法都有原因。Objective-C 的 `recovered` 還要求執行階段中繼資料完整。空清單不能證明原程式沒有方法。
 
 Swift 的 `coverage_status` 只統計已分類的可呼叫項。整體 Swift `status` 還考慮未知符號，可為 `unavailable`、`unclassified`、`unsupported-architecture` 或 `no-symbols`。不可呼叫中繼資料位於 `non_method_symbols`，狀態為 `not-callable`；未知符號使用 `unclassified`。`types`、`type_metadata_count`、`source_type_count` 分別記錄型別中繼資料/輸出型別單元，不得用來增加方法數量。
+
+每個已還原 Swift 項目的 `source_representation` 為 `native-method-body` 或 `compiler-generated-from-type`。編譯器投影另保留 `compiler_projection_kind` 和 `compiler_projection_evidence`。`source_body_method_count` 計算已還原原生方法本體，`compiler_projection_method_count` 計算通過證明的編譯器投影，兩者相加等於 `recovered_method_count`。編譯器入口仍計入 `method_count` 分母，其確切身分必須出現在唯一對應的 `type` 原始碼單元中。只有型別中繼資料或相依項名稱不能增加已還原涵蓋率。 原生批次 JSON 的編譯器項目和型別單元包含 `source`；mobile 的 `source_units` 僅保留描述、不含 `source`，完整原始碼請見 `sources/swift.swift`。
 
 原生 Swift 批次報告的 `source_units` 記錄 `{kind, module, name, source, method_entries, method_identities}`，kind 為 `function` 或 `type`，每個 identity 為 `{entry, mangled_symbol}`。不同符號可以共用入口並保留各自的 ABI 輸出；每個已還原 identity 必須且只能出現一次，未還原 identity 不得出現。`method_entries` 必須精確等於 `method_identities` 的有序入口投影，允許重複位址；不能默默合併完全相同的重複 identity。批次 `source` 等於依序串接每個單元原始碼再加一個換行。Mobile 在 `sources/swift.swift` 儲存完整原始碼，在覆蓋率 JSON 保留單元描述。逐方法 `source` 用於檢視，直接串接無法正確重建類別宣告。
 
@@ -141,15 +151,21 @@ Swift 匯出使用正常 mobile 流程通過 demangler 生成的結構化簽名�
 
 ## 驗證與故障排查
 
+macOS 上啟用 `BUILD_TESTING` 的建置提供 `check-neverd-mobile-ios`，透過 CTest 執行三組原生還原驗證。
+
 ```sh
+cmake --build build --target check-neverd-mobile-ios
 NEVERD_BUILD_DIR=build python3 -m unittest discover -s scripts/tests -p 'test_mobile_*.py' -v
 python3 scripts/test_mobile_ios_backend.py --neverd build/bin/neverd
+python3 scripts/test_mobile_ios_calls_backend.py --neverd build/bin/neverd
 python3 scripts/test_mobile_swift_backend.py --neverd build/bin/neverd
 ```
 
-macOS 上的自有 Objective-C 驗證指令碼先編譯原樣本，再恢復 `.m`，最後只把生成原始碼與獨立呼叫程式連結。覆蓋整數邊界、分支、迴圈、指標讀寫、隱藏引數、float/double 位身份、混合引數和棧引數。Swift 指令碼獨立編譯生成的 `.swift` 與呼叫程式，不使用原始 dylib、模組、橋接或手寫替代宣告；檢查標量/原生呼叫、類初始化與儲存、結構體按值/mutating 方法、浮點、棧引數、指標和迴圈。這些嚴格檢查可能暴露尚未支援的覆蓋；存在指令碼不等於每個版本的所有樣例都已通過。
+macOS 上的 Objective-C 驗證腳本先編譯原始樣本，再還原 `.m`，最後只將產生的原始碼與獨立呼叫程式連結。純量腳本涵蓋整數邊界、分支、迴圈、指標讀寫、隱藏參數、float/double 位元身分、混合參數和堆疊參數。呼叫腳本另涵蓋訊息分派、繼承、Category、執行個體變數儲存、原生輔助函式及 Block 呼叫/擷取/共用身分。該樣本有 21 個方法，每個變體有 134 個獨立預期結果；已記錄的 arm64/x86_64 × classic/default 四組執行均還原 21/21 方法，並符合 134/134 結果。
 
-兩個指令碼都支援 `--arch all|arm64|x86_64`、`--fixups both|classic|default`、`--timeout N` 和 `--work-dir NEW_DIRECTORY`。`--setup-only` 只驗證原樣本，不測試恢復。宿主無法執行的架構會在允許時明確跳過，跳過不等於通過。保留的失敗產物可用於區分原始碼覆蓋缺失、編譯錯誤和行為差異；聲稱已驗證前應檢視當前測試結果。
+嚴格 Swift 腳本檢查 22 個使用者宣告、3 個 getter/setter 入口和 7 個編譯器產生的可呼叫入口，任何項目都不能從清單消失。每個變體有 855 個原程式獨立預期結果檢查。腳本獨立編譯產生的 `.swift` 與呼叫程式，不使用原始 dylib、模組、橋接或手寫替代宣告。案例涵蓋純量/原生呼叫、類別初始化與儲存、結構按值/mutating 方法、浮點及堆疊參數、指標與迴圈。此自建樣本的正式 CLI 驗收已通過 arm64/x86_64 × classic/default 四個變體，零略過：每組還原 25 個原生方法本體和 7 個編譯器投影，保留全部 32 個可呼叫身分。原程式與獨立編譯的產生 Swift 每組均通過 855/855 項獨立預期結果檢查。這些結果僅適用於此樣本，不保證任意應用程式或原始程式文字的還原。腳本會拒絕涵蓋缺漏、原始碼編譯失敗及行為差異。
+
+三個腳本都支援 `--arch all|arm64|x86_64`、`--fixups both|classic|default`、`--timeout N` 和 `--work-dir NEW_DIRECTORY`。`--setup-only` 只驗證原始樣本，不測試還原。主機無法執行的架構會在允許時明確略過，略過不等於通過。保留失敗產物可區分原始碼涵蓋缺漏、編譯錯誤與行為差異；宣稱已驗證前應查看目前測試結果。
 
 結果釋出具有事務性：選擇新目錄，先檢查程序退出狀態，並把重定向的 JSON 放在該目錄外。失敗會刪除暫存輸出並保留已有結果。後端非零退出附帶長度受限的日誌尾部；超時與預算失敗有獨立訊息。`--json` 下已處理的輔助程式錯誤輸出 `status: "error"`；引數解析、輔助程式/直譯器缺失、Python 低於 3.10 或中斷可能更早在 stderr 失敗。
 

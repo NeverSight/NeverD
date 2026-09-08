@@ -39,6 +39,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--neverd", default="neverd", help=argparse.SUPPRESS)
     result.add_argument("--arch", choices=("auto", "arm64", "arm", "x86_64", "i386"), default="auto")
     result.add_argument("--artifact", help="iOS executable path relative to application bundle")
+    result.add_argument("--swift-demangle", help="iOS Swift demangler executable (default: NEVERD_SWIFT_DEMANGLE, PATH, or Apple toolchain)")
     result.add_argument("--metadata-only", action="store_true", help="recover iOS metadata without native decompilation")
     result.add_argument("--max-func", type=int, default=0, help="maximum native functions; 0 means all")
     result.add_argument("--timeout", type=int, default=300, help="seconds per backend process")
@@ -65,8 +66,8 @@ def recover(args: argparse.Namespace) -> dict:
     if source.is_dir() and (source == output or source in output.parents):
         raise MobileError("output must be outside the input directory")
     platform = detect_platform(source) if args.platform == "auto" else args.platform
-    if platform == "android" and (args.metadata_only or args.artifact or args.arch != "auto" or args.max_func):
-        raise MobileError("--metadata-only, --artifact, --arch and --max-func apply only to iOS")
+    if platform == "android" and (args.metadata_only or args.artifact or args.arch != "auto" or args.max_func or args.swift_demangle is not None):
+        raise MobileError("--metadata-only, --artifact, --arch, --max-func and --swift-demangle apply only to iOS")
     output.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".neverd-mobile-", dir=output.parent))
     try:
@@ -78,7 +79,8 @@ def recover(args: argparse.Namespace) -> dict:
                 from .ios import decompile_ios
                 report = decompile_ios(source, staging, neverd=args.neverd, arch=args.arch,
                                        artifact=args.artifact, metadata_only=args.metadata_only,
-                                       max_func=args.max_func, limits=limits)
+                                       max_func=args.max_func, limits=limits,
+                                       swift_demangle=args.swift_demangle)
         # Do not publish transient paths or private input locations in reports.
         report.update(schema_version=1, source=source.name, platform=platform, status="success")
         (staging / "report.json").write_text(json.dumps(report, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")

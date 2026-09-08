@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "tools/neverd"))
 
 from mobile.common import MobileError
 from mobile.objc_source import render_objc_sources
+from mobile.macho import _types, objc_header
 
 
 def fixture(body: str = "return arg0 + arg1;") -> tuple[dict, dict]:
@@ -114,6 +115,115 @@ return arg0 + arg1;'''
         definitions = [line for line in source.splitlines() if line.startswith("static inline")]
         self.assertEqual(len(definitions), 2)
         self.assertNotEqual(definitions[0].split("(")[0], definitions[1].split("(")[0])
+
+    def test_block_object_encoding_preserves_pointer_abi_without_inventing_prototype(self) -> None:
+        encoding = "q32@0:8@?16q24"
+        self.assertEqual(_types(encoding), ["long long", "id", "SEL", "id", "long long"])
+        self.assertIsNone(_types("q32@0:8@??16q24"))
+        report, metadata = fixture("return ((int64_t (^)(int64_t))arg0)(arg1);")
+        native = report["methods"][0]
+        native["parameters"][2]["type"] = "void*"
+        native["source"] = native["source"].replace("int64_t arg0,", "void* arg0,")
+        native["type_encoding"] = encoding
+        metadata["classes"][0]["methods"][0]["type_encoding"] = encoding
+        source, coverage = render_objc_sources(report, metadata)
+        self.assertEqual(coverage["status"], "recovered", coverage)
+        self.assertIn("add:(id)", objc_header(metadata))
+        self.assertIn("((int64_t (^)(int64_t))arg0)(arg1)", source)
+        self.assertEqual(native["type_encoding"], encoding)
+        self.assertTrue(any("original invoke prototype is not encoded" in text for text in coverage["limitations"]))
+        native["status"] = "unrecovered"
+        native["reason"] = "method calls a native or dynamic target without a source binding"
+        _, coverage = render_objc_sources(report, metadata)
+        self.assertEqual(coverage["status"], "unrecovered")
+
+    def test_runtime_block_array_allowlist_is_exact(self) -> None:
+        for declaration, accepted in [
+            ("extern void *_NSConcreteStackBlock[];", True),
+            ("extern void *_NSConcreteGlobalBlock[];", True),
+            ("extern int *_NSConcreteStackBlock[];", False),
+            ("extern void *_NSConcreteStackBlock[12];", False),
+            ("extern void *_NSConcreteOtherBlock[];", False),
+        ]:
+            with self.subTest(declaration=declaration):
+                report, metadata = fixture()
+                report["methods"][0]["source"] = declaration + "\n" + report["methods"][0]["source"]
+                _, coverage = render_objc_sources(report, metadata)
+                self.assertEqual(coverage["status"] == "recovered", accepted)
+
+    @staticmethod
+    def shared_block_fixture() -> tuple[dict, dict]:
+        report, metadata = fixture("return (int64_t)neverd_block_literal_2100_address();")
+        helper = """
+int32_t neverd_block_invoke_1100(void *block, int32_t value) { return value - 9; }
+uintptr_t neverd_block_descriptor_2200_address(void) {
+  extern void *_NSConcreteGlobalBlock[];
+  struct descriptor { uint64_t reserved, size; const char *signature; };
+  struct literal { void *isa; uint32_t flags, reserved; void (*invoke)(void); const struct descriptor *descriptor; };
+  struct storage { struct descriptor descriptor; struct literal literal; };
+  static const struct storage data = {{0, 32, "i12@?0i8"},
+    {(void *)_NSConcreteGlobalBlock, 0x50000000, 0, (void (*)(void))neverd_block_invoke_1100, &data.descriptor}};
+  return (uintptr_t)&data.descriptor;
+}
+uintptr_t neverd_block_literal_2100_address(void) { return neverd_block_descriptor_2200_address() + 24; }
+"""
+        native = report["methods"][0]
+        native["class_method"] = True
+        metadata["classes"][0]["methods"][0]["class_method"] = True
+        native["source"] = "uintptr_t neverd_block_literal_2100_address(void);\n" + native["source"] + helper
+        native["shared_block_functions"] = ["neverd_block_invoke_1100", "neverd_block_descriptor_2200_address", "neverd_block_literal_2100_address"]
+        second = copy.deepcopy(native)
+        second.update(selector="identity:to:", implementation="0x1010", function_name="neverd_objc_imp_1010")
+        second["source"] = second["source"].replace("neverd_objc_imp_1000", "neverd_objc_imp_1010")
+        report["methods"].append(second)
+        runtime = copy.deepcopy(metadata["classes"][0]["methods"][0])
+        runtime.update(selector="identity:to:", implementation="0x1010")
+        metadata["classes"][0]["methods"].append(runtime)
+        return report, metadata
+
+    def test_shared_block_functions_have_one_definition_and_conflicts_reject_all_users(self) -> None:
+        report, metadata = self.shared_block_fixture()
+        source, coverage = render_objc_sources(report, metadata)
+        self.assertEqual(coverage["recovered_method_count"], 2, coverage)
+        self.assertEqual(source.count("static const struct storage data ="), 1)
+        self.assertEqual(source.count("return value - 9;"), 1)
+        report["methods"][1]["source"] = report["methods"][1]["source"].replace("return value - 9;", "return value - 8;")
+        _, coverage = render_objc_sources(report, metadata)
+        self.assertEqual(coverage["recovered_method_count"], 0)
+        self.assertTrue(all("conflicting shared Block" in item["reason"] for item in coverage["methods"]))
+
+    def test_shared_block_inventory_requires_actual_generated_definitions(self) -> None:
+        for names in [["missing"], ["neverd_block_literal_999_address"], [42], "name", ["neverd_objc_imp_1000"],
+                      ["neverd_block_invoke_1100", "neverd_block_invoke_1100"]]:
+            with self.subTest(names=names):
+                report, metadata = self.shared_block_fixture()
+                report["methods"] = report["methods"][:1]
+                metadata["classes"][0]["methods"] = metadata["classes"][0]["methods"][:1]
+                report["methods"][0]["shared_block_functions"] = names
+                _, coverage = render_objc_sources(report, metadata)
+                self.assertEqual(coverage["status"], "unrecovered")
+
+    @unittest.skipUnless(sys.platform == "darwin" and shutil.which("clang"), "requires Darwin Objective-C runtime and clang")
+    def test_two_methods_share_one_real_global_block_and_execute_original_invoke(self) -> None:
+        source, coverage = render_objc_sources(*self.shared_block_fixture())
+        self.assertEqual(coverage["recovered_method_count"], 2, coverage)
+        source += """
+int main(void) {
+  uintptr_t a = (uintptr_t)[Calculator add:1 to:2];
+  uintptr_t b = (uintptr_t)[Calculator identity:3 to:4];
+  int (^block)(int) = (int (^)(int))a;
+  return a == b && block(31) == 22 && block(-8) == -17 ? 0 : 1;
+}
+"""
+        with tempfile.TemporaryDirectory(prefix="neverd-objc-block-source-") as temporary:
+            path = Path(temporary)
+            (path / "source.m").write_text(source)
+            built = subprocess.run(["clang", "-fblocks", "-x", "objective-c", str(path / "source.m"),
+                                    "-framework", "Foundation", "-o", str(path / "verify")],
+                                   capture_output=True, text=True, timeout=30, check=False)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            executed = subprocess.run([str(path / "verify")], capture_output=True, text=True, timeout=10, check=False)
+            self.assertEqual(executed.returncode, 0, executed.stderr)
 
     def test_unsigned_native_parameter_is_explicitly_rebound(self) -> None:
         report, metadata = fixture("return arg0 / arg1;")

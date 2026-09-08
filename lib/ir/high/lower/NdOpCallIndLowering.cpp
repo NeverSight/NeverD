@@ -201,8 +201,18 @@ void MedToHighConverter::lowerCallInd(HighFunc &Func, const MedBlock &CurBlock,
   auto Call = HighExpr::makeCall(Target.Name, CurOp.Addr, std::move(Args));
   Call->IsIndirectCall = Target.IsIndirect;
   Call->IndirectParamIdx = Target.IndirectParam;
+  Call->SourceCallHint = CurOp.SourceCallHint;
+  if (CurOp.SourceCallHint)
+    Call->CallAddr = CurOp.SourceCallHint->TargetAddress;
+  if (CurOp.Output.Id >= 0 && CurOp.Output.Size > 0) {
+    Call->Type = NdType::makeInt(CurOp.Output.Size, false);
+    S.Kind = StmtKind::Assign;
+    S.Dst = HighExpr::makeVar(CurOp.Output);
+    S.Val = Call;
+  }
   CallOutputs.insert({CurOp.Output.Id, CurOp.Output.SSAVer});
-  S.CallExpr = Call;
+  if (S.Kind == StmtKind::Call)
+    S.CallExpr = Call;
   Func.Body.push_back(std::move(S));
 }
 

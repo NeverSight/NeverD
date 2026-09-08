@@ -201,6 +201,34 @@ TEST(HighCPointerAddresses, EmittedCExecutesByteLoadsStoresAndPointerResults) {
   returnValue(Assign, HighExpr::makeLoad(parameter(0), I32));
   Functions.push_back(std::move(Assign));
 
+  for (unsigned Form = 0; Form < 3; ++Form) {
+    auto PointerStore = pointerFunction("pointer_store", I32Ptr);
+    PointerStore.Name += std::to_string(Form);
+    PointerStore.Params = {{"arg0", NdType::makePtr(I32Ptr)}, {"arg1", I32Ptr}};
+    HighStmt WritePointer;
+    auto Address = parameter(0, PointerStore.Params[0].Type);
+    auto Value = parameter(1, I32Ptr);
+    if (Form == 0) {
+      WritePointer.Kind = StmtKind::Store;
+      WritePointer.StoreAddr = Address;
+      WritePointer.StoreVal = Value;
+      WritePointer.MemoryOrdering = NdMemoryOrdering::Release;
+    } else if (Form == 1) {
+      WritePointer.Kind = StmtKind::Assign;
+      WritePointer.Dst = HighExpr::makeLoad(Address, I32Ptr);
+      WritePointer.Val = Value;
+    } else {
+      WritePointer.Kind = StmtKind::ExprStmt;
+      WritePointer.Val = std::make_shared<HighExpr>();
+      WritePointer.Val->Kind = ExprKind::Store;
+      WritePointer.Val->Type = I32Ptr;
+      WritePointer.Val->Operands = {Address, Value};
+    }
+    PointerStore.Body.push_back(std::move(WritePointer));
+    returnValue(PointerStore, HighExpr::makeLoad(Address, I32Ptr));
+    Functions.push_back(std::move(PointerStore));
+  }
+
   std::string Source = emitFunctions(Functions);
   Source += R"(
 int main(void) {
@@ -213,6 +241,13 @@ int main(void) {
     indexed_store(values, 1);
     if (values[1] != 91 || values[4] != 53) return 6;
     if (assign_then_load(values, 2) != 29) return 7;
+    int32_t *slot = 0;
+    if (pointer_store0(&slot, &values[3]) != &values[3] || slot != &values[3]) return 8;
+    if (pointer_store1(&slot, &values[7]) != &values[7] || slot != &values[7]) return 9;
+    if (pointer_store2(&slot, &values[2]) != &values[2] || slot != &values[2]) return 10;
+    if (pointer_store0(&slot, 0) || slot) return 11;
+    if (pointer_store1(&slot, 0) || slot) return 12;
+    if (pointer_store2(&slot, 0) || slot) return 13;
     return 0;
 }
 )";

@@ -48,29 +48,17 @@ void elimConsecutiveDeadStores(std::vector<HighStmt> &Stmts) {
         NextStmt.Dst->Kind != ExprKind::Var)
       continue;
 
-    bool SameVar = CurrStmt.Dst->structuralEq(*NextStmt.Dst);
-    if (!SameVar) {
-      SameVar = (CurrStmt.Dst->Var.Kind == NextStmt.Dst->Var.Kind &&
-                 CurrStmt.Dst->Var.Id == NextStmt.Dst->Var.Id &&
-                 CurrStmt.Dst->Var.RegOff == NextStmt.Dst->Var.RegOff &&
-                 CurrStmt.Dst->Var.Size == NextStmt.Dst->Var.Size &&
-                 CurrStmt.Dst->Var.SSAVer == NextStmt.Dst->Var.SSAVer);
-    }
-    if (!SameVar && CurrStmt.Dst->Var.Kind == MedVar::Reg &&
-        NextStmt.Dst->Var.Kind == MedVar::Reg &&
-        CurrStmt.Dst->Var.RegOff == NextStmt.Dst->Var.RegOff && CurrStmt.Val &&
-        NextStmt.Val) {
-      bool Equivalent = CurrStmt.Val->structuralEq(*NextStmt.Val);
-      if (!Equivalent && NextStmt.Val->Kind == ExprKind::UnaryOp &&
-          (NextStmt.Val->Op == NdOp::INT_ZEXT ||
-           NextStmt.Val->Op == NdOp::INT_SEXT) &&
-          !NextStmt.Val->Operands.empty())
-        Equivalent = CurrStmt.Val->structuralEq(*NextStmt.Val->Operands[0]);
-      if (Equivalent)
-        SameVar = true;
-    }
-
-    if (!SameVar)
+    const auto &Current = CurrStmt.Dst->Var;
+    const auto &Next = NextStmt.Dst->Var;
+    // Physical registers are reused by distinct SSA values. Equal right-hand
+    // sides do not make those destinations one mutable local, and a widening
+    // conversion does not make the narrow and wide values interchangeable.
+    const bool SameVariable =
+        Current.Kind == Next.Kind && Current.TheArch == Next.TheArch &&
+        Current.Id == Next.Id && Current.SSAVer == Next.SSAVer &&
+        Current.RenameTag == Next.RenameTag && Current.Size == Next.Size &&
+        Current.RegOff == Next.RegOff;
+    if (!SameVariable || !CurrStmt.Val || !NextStmt.Val)
       continue;
 
     bool NextUsesCurr = false;
@@ -89,36 +77,27 @@ void elimConsecutiveDeadStores(std::vector<HighStmt> &Stmts) {
     if (NextUsesCurr)
       continue;
 
-    bool IsTrueAlias = (!CurrStmt.Dst->structuralEq(*NextStmt.Dst) &&
-                        CurrStmt.Dst->Var.Kind == MedVar::Reg &&
-                        NextStmt.Dst->Var.Kind == MedVar::Reg &&
-                        CurrStmt.Dst->Var.RegOff == NextStmt.Dst->Var.RegOff &&
-                        CurrStmt.Dst->Var.Size != NextStmt.Dst->Var.Size);
-
-    if (IsTrueAlias) {
-      ExprPtr OldDst = NextStmt.Dst;
-      ExprPtr Replacement = CurrStmt.Dst;
-      std::unordered_set<const HighExpr *> RewriteSeen;
-      std::function<void(ExprPtr &)> RewriteRef = [&](ExprPtr &E) {
-        if (!E)
-          return;
-        if (E->Kind == ExprKind::Var && E->structuralEq(*OldDst)) {
-          E = Replacement;
-          return;
-        }
-        if (!RewriteSeen.insert(E.get()).second)
-          return;
-        for (auto &Op : E->Operands)
-          RewriteRef(Op);
-      };
-      walkStmts(Stmts, [&](HighStmt &St) { forEachRhsExpr(St, RewriteRef); });
-      Stmts.erase(Stmts.begin() + static_cast<long>(I) + 1);
-      --I;
-    } else if (CurrStmt.Val && CurrStmt.Val->Kind == ExprKind::Call) {
+    bool HasEffect = false;
+    std::vector<const HighExpr *> Pending{CurrStmt.Val.get()};
+    std::unordered_set<const HighExpr *> EffectSeen;
+    while (!Pending.empty()) {
+      const auto *Expression = Pending.back();
+      Pending.pop_back();
+      if (!Expression || !EffectSeen.insert(Expression).second)
+        continue;
+      HasEffect |= Expression->Kind == ExprKind::Call ||
+                   Expression->Kind == ExprKind::Store;
+      for (const auto &Operand : Expression->Operands)
+        Pending.push_back(Operand.get());
+    }
+    if (CurrStmt.Val->Kind == ExprKind::Call) {
       CurrStmt.Kind = StmtKind::Call;
       CurrStmt.CallExpr = CurrStmt.Val;
       CurrStmt.Dst = nullptr;
       CurrStmt.Val = nullptr;
+    } else if (HasEffect) {
+      CurrStmt.Kind = StmtKind::ExprStmt;
+      CurrStmt.Dst = nullptr;
     } else {
       Stmts.erase(Stmts.begin() + static_cast<long>(I));
       --I;

@@ -106,9 +106,31 @@ add_neverd_unittest(NeverDLiftTests
   core/LiftCommonTests.cpp
   core/MedSSAMultiRootTests.cpp
   core/ObjCSourceTypeHintTests.cpp
+  core/SourceABITests.cpp
+  core/SourceCallReturnTests.cpp
+  core/HighSSADefinitionTests.cpp
+  core/ObjCCallHintTests.cpp
+  core/ObjCCategoryTests.cpp
+  core/HighCSourceCallTests.cpp
+  core/NativeSourceHintsTests.cpp
+  core/ObjCBlocksTests.cpp
+  core/ObjCBlockCallHintTests.cpp
+  core/HighFrameTemporaryTests.cpp
+  core/HighControlFlowSemanticsTests.cpp
+  core/LowZeroIdiomTests.cpp
+  ../backend/HighSwiftEmitterTests.cpp
+  ../loader/SwiftMetadataTests.cpp
+  ../loader/SwiftRuntimeSourceTests.cpp
   core/HighCPointerAddressTests.cpp
   core/HighCIntegerWidthTests.cpp
   sdk/ObjCSourceProjectionTests.cpp
+  sdk/ObjCSourceBindingTests.cpp
+  sdk/ObjCBlockSourceTests.cpp
+  sdk/SwiftSourceNamespaceTests.cpp
+  sdk/SwiftSourceSignatureTests.cpp
+  sdk/SwiftABIProjectionPlanTests.cpp
+  sdk/SwiftSourcePropertyTests.cpp
+  sdk/SwiftRuntimeProjectionTests.cpp
   format/MachOARM64RelocationTests.cpp
   format/MachOI386RelocationTests.cpp
   format/MachOI386RelocationExternalTests.cpp
@@ -945,6 +967,7 @@ target_include_directories(NeverDPESignaturePolicyTests PRIVATE
 
 target_link_libraries(NeverDLiftTests PRIVATE
   NeverDBackendC
+  NeverDBackendSwift
   NeverDBackendLLVM
   NeverDCodeGen
   NeverDDecode

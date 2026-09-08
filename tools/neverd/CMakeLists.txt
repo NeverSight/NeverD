@@ -42,6 +42,8 @@ add_custom_target(neverd-mobile-runtime
           ${CMAKE_CURRENT_SOURCE_DIR}/mobile/ios.py
           ${CMAKE_CURRENT_SOURCE_DIR}/mobile/macho.py
           ${CMAKE_CURRENT_SOURCE_DIR}/mobile/objc_source.py
+          ${CMAKE_CURRENT_SOURCE_DIR}/mobile/swift_signatures.py
+          ${CMAKE_CURRENT_SOURCE_DIR}/mobile/swift_source.py
           ${CMAKE_CURRENT_SOURCE_DIR}/mobile/windows_job.py
           $<TARGET_FILE_DIR:neverd>/mobile
   COMMENT "Copying NeverD mobile runtime"

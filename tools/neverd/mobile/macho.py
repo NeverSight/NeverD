@@ -401,26 +401,173 @@ def _types(encoding: str) -> list[str] | None:
             # `id` is accurate for object encodings and needs no external declarations.
             cursor = end + 1
         if marker == "@" and cursor < len(encoding) and encoding[cursor] == "?":
-            return None
+            # @? establishes an object pointer, but does not encode the
+            # invoke prototype. Keep that distinction in source coverage.
+            cursor += 1
         result.append(value + " *" * pointers)
     return result
+
+
+_IVAR_SIZES = {"signed char": 1, "unsigned char": 1, "BOOL": 1, "short": 2,
+               "unsigned short": 2, "int": 4, "unsigned int": 4, "float": 4,
+               "long long": 8, "unsigned long long": 8, "double": 8}
+_IVAR_RESERVED = frozenset("auto break case char const continue default do double else enum extern float for goto if inline int long register restrict return short signed sizeof static struct switch typedef union unsigned void volatile while _Alignas _Alignof _Atomic _Bool _Complex _Generic _Imaginary _Noreturn _Static_assert _Thread_local id Class SEL BOOL self super".split())
+
+
+def objc_ivar_layout(entry: dict, classes: dict[str, dict], pointer_size: int = 8) -> tuple[list[str], str | None]:
+    """Validate scalar ivars and return declarations preserving byte offsets."""
+    if pointer_size != 8 or entry.get("ivar_status") != "recovered":
+        return [], "Instance-variable layout metadata is unavailable or incomplete."
+    start, size, ivars = entry.get("instance_start"), entry.get("instance_size"), entry.get("ivars")
+    if (type(start) is not int or type(size) is not int or not 0 <= start <= size <= 1 << 24 or
+            not isinstance(ivars, list) or len(ivars) > _MAX_ITEMS):
+        return [], "Invalid instance size or instance-variable inventory."
+    parent = entry.get("superclass")
+    if (parent is not None and not isinstance(parent, str)) or type(entry.get("root_class")) is not bool:
+        return [], "Invalid superclass identity or root-class flag."
+    if entry.get("root_class"):
+        if start != 0 or parent:
+            return [], "Root-class instance layout has inconsistent inheritance."
+    elif parent in classes:
+        if type(classes[parent].get("instance_size")) is not int or classes[parent]["instance_size"] != start:
+            return [], "Subclass storage does not follow the known superclass instance size."
+    elif not isinstance(parent, str) or not _IDENTIFIER.fullmatch(parent):
+        return [], "Superclass layout is unresolved."
+    elif parent == "NSObject" and start != pointer_size:
+        return [], "NSObject subclass storage does not follow the object header."
+    elif parent != "NSObject":
+        return [], "Superclass instance-variable layout is unavailable."
+    names = set()
+    ancestors = {entry.get("name")}
+    ancestor = parent
+    while ancestor in classes:
+        if ancestor in ancestors:
+            return [], "Cyclic superclass instance layout."
+        ancestors.add(ancestor)
+        inherited = classes[ancestor].get("ivars", [])
+        if isinstance(inherited, list):
+            names.update(ivar.get("name") for ivar in inherited
+                         if isinstance(ivar, dict) and isinstance(ivar.get("name"), str))
+        ancestor = classes[ancestor].get("superclass")
+        if ancestor is not None and not isinstance(ancestor, str):
+            return [], "Invalid superclass identity in the ancestor layout."
+    fields = []
+    for ivar in ivars:
+        if not isinstance(ivar, dict):
+            return [], "Invalid instance-variable record."
+        name, encoding = ivar.get("name"), ivar.get("type_encoding")
+        if (not isinstance(name, str) or not _IDENTIFIER.fullmatch(name) or
+                name in _IVAR_RESERVED or name in names or not isinstance(encoding, str)):
+            return [], "Invalid or duplicate instance-variable name."
+        names.add(name)
+        types = _types(encoding)
+        if not types or len(types) != 1:
+            return [], "Unsupported instance-variable type encoding."
+        spelling = types[0]
+        width = pointer_size if "*" in spelling or spelling in ("id", "Class", "SEL") else _IVAR_SIZES.get(spelling)
+        offset, declared_size, alignment = ivar.get("offset"), ivar.get("size"), ivar.get("alignment")
+        if (width is None or type(offset) is not int or type(declared_size) is not int or
+                type(alignment) is not int or declared_size != width or alignment != width or
+                not start <= offset <= size - width or offset % alignment):
+            return [], "Instance-variable type, width, alignment or offset is inconsistent."
+        fields.append((offset, width, name, spelling))
+    fields.sort()
+    lines = []
+    cursor = start
+    def padding(count: int) -> str:
+        name = f"neverd_objc_padding_{cursor:x}"
+        while name in names:
+            name += "_"
+        names.add(name)
+        return f"    unsigned char {name}[{count}];"
+    for offset, width, name, spelling in fields:
+        if offset < cursor:
+            return [], "Overlapping instance-variable storage."
+        if offset > cursor:
+            lines.append(padding(offset - cursor))
+        lines.append(f"    {spelling} {name};")
+        cursor = offset + width
+    if size > cursor:
+        lines.append(padding(size - cursor))
+    return lines, None
+
+
+def _objc_method_declarations(methods: list[dict]) -> list[str]:
+    lines = []
+    for method in methods:
+        selector = method["selector"]
+        parts = selector.split(":")
+        arguments = selector.count(":")
+        types = _types(method["type_encoding"])
+        identifiers = parts[:-1] if arguments else parts
+        if (not types or len(types) != arguments + 3 or
+                types[1] not in ("id", "Class") or types[2] != "SEL" or
+                (arguments and parts[-1]) or
+                not all(_IDENTIFIER.fullmatch(part) for part in identifiers)):
+            lines.append("// Method declaration omitted: unsupported selector or type encoding; see objc.json.")
+            continue
+        prefix = "+" if method["class_method"] else "-"
+        signature = selector if not arguments else " ".join(
+            f"{part}:({types[index + 3]})arg{index}" for index, part in enumerate(parts[:-1]))
+        lines.append(f"{prefix} ({types[0]}){signature};")
+    return lines
+
+
+_FOUNDATION_CATEGORY_CLASSES = frozenset("NSObject NSString NSMutableString NSNumber NSArray NSMutableArray NSDictionary NSMutableDictionary NSData NSMutableData NSSet NSMutableSet NSDate NSError NSException NSValue NSURL NSOperation NSOperationQueue NSProcessInfo NSFileManager NSPredicate NSRegularExpression NSJSONSerialization NSNull NSLock NSRecursiveLock NSCondition".split())
+
+
+def objc_category_inventory(metadata: dict) -> tuple[list[dict], list[dict]]:
+    """Deduplicate the same category record exposed through both inventories."""
+    classes = []
+    for entry in metadata["classes"]:
+        if (not isinstance(entry, dict) or not isinstance(entry.get("name"), str) or
+                not isinstance(entry.get("methods"), list)):
+            raise MobileError("invalid Objective-C class metadata")
+        classes.append({**entry, "methods": list(entry["methods"])})
+    categories = metadata.get("categories", [])
+    if not isinstance(categories, list):
+        raise MobileError("invalid Objective-C category inventory")
+    external = []
+    for category in categories:
+        if (not isinstance(category, dict) or not isinstance(category.get("name"), str) or
+                not isinstance(category.get("class_name"), str) or not isinstance(category.get("address"), str) or
+                not isinstance(category.get("methods"), list)):
+            raise MobileError("invalid Objective-C category metadata")
+        for method in category["methods"]:
+            if (not isinstance(method, dict) or method.get("category_name") != category["name"] or
+                    method.get("category_address") != category["address"] or
+                    not isinstance(method.get("selector"), str) or
+                    not isinstance(method.get("type_encoding"), str) or
+                    not isinstance(method.get("implementation"), str) or
+                    type(method.get("class_method")) is not bool):
+                raise MobileError("Objective-C category method identity disagrees with its owner")
+        owners = [entry for entry in classes if entry.get("name") == category["class_name"]]
+        if not owners:
+            if category not in external:
+                external.append(category)
+        for owner in owners:
+            for method in category["methods"]:
+                if method not in owner["methods"]:
+                    owner["methods"].append(method)
+    return classes, external
 
 
 def objc_header(metadata: dict) -> str:
     lines = ["// Recovered Objective-C declarations. See objc.json for coverage and raw encodings.",
              "#import <Foundation/Foundation.h>", ""]
     by_name: dict[str, dict] = {}
-    for entry in metadata["classes"]:
+    local_classes, external_categories = objc_category_inventory(metadata)
+    for entry in local_classes:
         if _IDENTIFIER.fullmatch(entry["name"]):
             by_name.setdefault(entry["name"], entry)
     children: dict[str, list[str]] = {}
     parents: dict[str, str | None] = {}
     for name, entry in by_name.items():
         parent = entry.get("superclass")
-        parents[name] = parent if parent in by_name and parent != name else None
-        if parents[name]:
+        parents[name] = parent if isinstance(parent, str) and _IDENTIFIER.fullmatch(parent) and parent != name else None
+        if parents[name] in by_name:
             children.setdefault(parent, []).append(name)
-    ordered = [name for name in by_name if not parents[name]]
+    ordered = [name for name in by_name if parents[name] not in by_name]
     cursor = 0
     while cursor < len(ordered):
         ordered.extend(children.get(ordered[cursor], []))
@@ -428,33 +575,47 @@ def objc_header(metadata: dict) -> str:
     present = set(ordered)
     for name in by_name:
         if name not in present:
-            # Corrupt inheritance cycles must not make headers recurse forever.
             parents[name] = None
             ordered.append(name)
     for entry in by_name.values():
         lines.append(f"@class {entry['name']};")
+    categories = []
     for name in ordered:
         entry = by_name[name]
         superclass = parents[name]
         suffix = f" : {superclass}" if superclass else ""
         if not superclass and not entry.get("root_class", False):
             lines.append("// Superclass could not be resolved; inheritance is omitted.")
-        lines.extend(["", f"@interface {name}{suffix}"])
+        lines.append("")
+        if entry.get("root_class") and not superclass:
+            lines.append("__attribute__((objc_root_class))")
+        lines.append(f"@interface {name}{suffix}")
+        ivar_lines, layout_error = objc_ivar_layout(entry, by_name, metadata.get("pointer_size", 8))
+        if ivar_lines:
+            lines.extend(["{", "@protected", *ivar_lines, "}"])
+        elif layout_error and "ivar_status" in entry:
+            lines.append("// Instance-variable declarations omitted: " + layout_error)
+        base_methods = []
+        grouped_categories: dict[str, list[dict]] = {}
         for method in entry["methods"]:
-            selector = method["selector"]
-            parts = selector.split(":")
-            arguments = selector.count(":")
-            types = _types(method["type_encoding"])
-            identifiers = parts[:-1] if arguments else parts
-            if (not types or len(types) != arguments + 3 or
-                    types[1] not in ("id", "Class") or types[2] != "SEL" or
-                    (arguments and parts[-1]) or
-                    not all(_IDENTIFIER.fullmatch(part) for part in identifiers)):
-                lines.append("// Method declaration omitted: unsupported selector or type encoding; see objc.json.")
-                continue
-            prefix = "+" if method["class_method"] else "-"
-            signature = selector if not arguments else " ".join(
-                f"{part}:({types[index + 3]})arg{index}" for index, part in enumerate(parts[:-1]))
-            lines.append(f"{prefix} ({types[0]}){signature};")
+            category = method.get("category_name") or ""
+            if not category:
+                base_methods.append(method)
+            elif isinstance(category, str) and _IDENTIFIER.fullmatch(category):
+                grouped_categories.setdefault(category, []).append(method)
+        lines.extend(_objc_method_declarations(base_methods))
         lines.append("@end")
-    return "\n".join(lines) + "\n"
+        for category, methods in grouped_categories.items():
+            categories.extend(["", f"@interface {name} ({category})", *_objc_method_declarations(methods), "@end"])
+    external_names = sorted({category["class_name"] for category in external_categories
+                             if _IDENTIFIER.fullmatch(category["class_name"])})
+    for name in external_names:
+        lines.append(f"@class {name};")
+    for category in external_categories:
+        name, category_name = category["class_name"], category["name"]
+        if name in _FOUNDATION_CATEGORY_CLASSES and _IDENTIFIER.fullmatch(category_name):
+            categories.extend(["", f"@interface {name} ({category_name})",
+                               *_objc_method_declarations(category["methods"]), "@end"])
+        else:
+            categories.append("// External category declaration omitted: its class declaration is unavailable.")
+    return "\n".join([*lines, *categories]) + "\n"

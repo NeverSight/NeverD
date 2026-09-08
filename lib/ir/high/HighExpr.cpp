@@ -62,6 +62,22 @@ ExprPtr HighExpr::makeUndef(uint16_t Size) {
   return E;
 }
 
+ExprPtr HighExpr::makeBitCast(ExprPtr Value, TypeRef Type) {
+  if (!Value || !Value->Type || !Type || !Type->Size ||
+      Value->Type->Size != Type->Size)
+    return makeUndef(Type ? Type->Size : 0);
+  // Inverse bit reinterpretations cancel without any numeric conversion.
+  if (Value->Kind == ExprKind::BitCast && Value->Operands.size() == 1 &&
+      Value->Operands[0] && Value->Operands[0]->Type &&
+      Value->Operands[0]->Type->str() == Type->str())
+    return Value->Operands[0];
+  auto E = std::make_shared<HighExpr>();
+  E->Kind = ExprKind::BitCast;
+  E->Type = std::move(Type);
+  E->Operands.push_back(std::move(Value));
+  return E;
+}
+
 ExprPtr HighExpr::makeBinop(NdOp Op, ExprPtr LHS, ExprPtr RHS) {
   auto E = std::make_shared<HighExpr>();
   E->Kind = ExprKind::BinOp;

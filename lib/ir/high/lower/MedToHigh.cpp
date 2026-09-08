@@ -82,6 +82,27 @@ ExprPtr MedToHighConverter::medvarToExpr(const MedVar &V) {
     return HighExpr::makeConst(V.ConstVal, V.Size);
   }
 
+  auto SourceParameter = [&](MedVar Parameter, size_t Index) -> ExprPtr {
+    const auto Type = CurMed->TypedParams[Index].Type;
+    Parameter.Size = Type->Size;
+    if (CurMed->SourceTypeHint->HasExplicitABI &&
+        Index < CurMed->SourceTypeHint->Parameters.size()) {
+      const auto &Location = CurMed->SourceTypeHint->Parameters[Index].Location;
+      // MedIR uses RegOff == kNoParamReg to distinguish logical stack
+      // arguments during register recovery. RegOff and StackOff share storage;
+      // only the source-level expression carries the checked entry-SP offset.
+      if (Location.Kind == SourceABICarrierKind::Stack)
+        Parameter.StackOff = Location.EntryStackOffset;
+    }
+    auto Value = HighExpr::makeVar(Parameter, Type);
+    if (Type->Kind == NdTypeKind::Float)
+      return HighExpr::makeBitCast(Value, NdType::makeInt(Type->Size, false));
+    return Value;
+  };
+  if (CurMed && CurMed->SourceTypeHint && V.Kind == MedVar::Param &&
+      V.Id >= 0 && static_cast<size_t>(V.Id) < CurMed->TypedParams.size())
+    return SourceParameter(V, static_cast<size_t>(V.Id));
+
   if (CurMed && V.Kind == MedVar::Reg) {
     for (size_t I = 0; I < CurMed->Params.size(); ++I) {
       const MedVar &P = CurMed->Params[I];
@@ -93,7 +114,7 @@ ExprPtr MedToHighConverter::medvarToExpr(const MedVar &V) {
       Param.Id = static_cast<int>(I);
       TypeRef Type;
       if (CurMed->SourceTypeHint && I < CurMed->TypedParams.size())
-        Type = CurMed->TypedParams[I].Type;
+        return SourceParameter(Param, I);
       return HighExpr::makeVar(Param, Type);
     }
   }
@@ -121,6 +142,59 @@ ExprPtr MedToHighConverter::medvarToExpr(const MedVar &V) {
       return Definition;
 
   return HighExpr::makeVar(V);
+}
+
+ExprPtr MedToHighConverter::sourceBitSlice(const ExprPtr &Value,
+                                           uint64_t ByteOffset, uint16_t Bytes,
+                                           unsigned Depth) {
+  if (!Value || !Bytes || Depth > 40)
+    return HighExpr::makeUndef(Bytes);
+  if (Value->Kind == ExprKind::Var && Value->Var.Kind != MedVar::Param)
+    if (auto Definition = inlineableDefinition(varKey(Value->Var)))
+      if (Definition.get() != Value.get())
+        return sourceBitSlice(Definition, ByteOffset, Bytes, Depth + 1);
+  // A source scalar describes only the low lane of its SIMD carrier. Reading
+  // an upper lane cannot silently manufacture zeroes or adjacent parameters.
+  if (!Value->Type || ByteOffset > Value->Type->Size ||
+      Bytes > Value->Type->Size - ByteOffset)
+    return HighExpr::makeUndef(Bytes);
+  if (Value->Kind == ExprKind::BinOp && Value->Operands.size() >= 2) {
+    if (Value->Op == NdOp::CONCAT && Value->Operands[1] &&
+        Value->Operands[1]->Type) {
+      const auto LowBytes = Value->Operands[1]->Type->Size;
+      if (ByteOffset + Bytes <= LowBytes)
+        return sourceBitSlice(Value->Operands[1], ByteOffset, Bytes, Depth + 1);
+      if (ByteOffset >= LowBytes)
+        return sourceBitSlice(Value->Operands[0], ByteOffset - LowBytes, Bytes,
+                              Depth + 1);
+    }
+    if (Value->Op == NdOp::SUBBYTES && Value->Operands[1] &&
+        Value->Operands[1]->Kind == ExprKind::Const &&
+        Value->Operands[1]->ConstVal <= 16)
+      return sourceBitSlice(Value->Operands[0],
+                            ByteOffset + Value->Operands[1]->ConstVal, Bytes,
+                            Depth + 1);
+  }
+  if (Value->Kind == ExprKind::UnaryOp &&
+      (Value->Op == NdOp::INT_ZEXT || Value->Op == NdOp::INT_SEXT) &&
+      Value->Operands.size() == 1 && Value->Operands[0] &&
+      Value->Operands[0]->Type &&
+      ByteOffset + Bytes <= Value->Operands[0]->Type->Size)
+    return sourceBitSlice(Value->Operands[0], ByteOffset, Bytes, Depth + 1);
+  if (ByteOffset == 0 && Value->Type->Size == Bytes)
+    return Value;
+  auto Slice = HighExpr::makeBinop(NdOp::SUBBYTES, Value,
+                                   HighExpr::makeConst(ByteOffset, 4));
+  Slice->Type = NdType::makeInt(Bytes, false);
+  return Slice;
+}
+
+ExprPtr MedToHighConverter::sourceFloatValue(const MedVar &Value,
+                                             uint16_t Bytes) {
+  auto Bits = sourceBitSlice(medvarToExpr(Value), 0, Bytes);
+  if (Bits->Type && Bits->Type->Kind == NdTypeKind::Float)
+    return Bits;
+  return HighExpr::makeBitCast(Bits, NdType::makeFloat(Bytes));
 }
 
 ExprPtr MedToHighConverter::forceInlineExpr(const ExprPtr &E) {
@@ -165,6 +239,23 @@ void MedToHighConverter::buildExpressions(const MedFunc &Med) {
   CallOutputs.clear();
   PhiOutputVars.clear();
   MemoryReadOutputs.clear();
+  NextHighTempId = 0;
+  auto ReserveIdentity = [&](const MedVar &Value) {
+    if (Value.Id >= NextHighTempId && Value.Id < INT_MAX)
+      NextHighTempId = Value.Id + 1;
+  };
+  for (const auto &Block : Med.Blocks) {
+    for (const auto &Operation : Block.Ops) {
+      ReserveIdentity(Operation.Output);
+      for (unsigned I = 0; I < Operation.NumInputs; ++I)
+        ReserveIdentity(Operation.Inputs[I]);
+    }
+    for (const auto &Phi : Block.Phis) {
+      ReserveIdentity(Phi.Output);
+      for (const auto &[Pred, Value] : Phi.Args)
+        ReserveIdentity(Value);
+    }
+  }
 
   for (const MedCallClobber &Clobber : Med.CallClobbers)
     if (Clobber.PreservedPrefixSize > 0 && Clobber.PreservedInput.Id >= 0)

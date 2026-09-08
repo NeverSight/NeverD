@@ -147,13 +147,30 @@ if(APPLE)
             --neverd $<TARGET_FILE:neverd>
   )
   set_tests_properties(NeverDMobileIOSBackend PROPERTIES
-    LABELS NeverDMobileIOSBackend
+    LABELS "NeverDMobileIOSBackend;NeverDMobileIOSRecovery"
     TIMEOUT 360
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  add_test(
+    NAME NeverDMobileIOSCallsBackend
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_SOURCE_DIR}/scripts/test_mobile_ios_calls_backend.py"
+            --neverd $<TARGET_FILE:neverd>
+  )
+  add_test(
+    NAME NeverDMobileSwiftBackend
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_SOURCE_DIR}/scripts/test_mobile_swift_backend.py"
+            --neverd $<TARGET_FILE:neverd>
+  )
+  set_tests_properties(NeverDMobileIOSCallsBackend NeverDMobileSwiftBackend PROPERTIES
+    LABELS "NeverDMobileIOSBackend;NeverDMobileIOSRecovery"
+    TIMEOUT 1800
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
   add_custom_target(check-neverd-mobile-ios
     COMMAND ${CMAKE_CTEST_COMMAND} --test-dir ${CMAKE_BINARY_DIR}
-            -R ^NeverDMobileIOSBackend$ --output-on-failure -C $<CONFIG>
+            -L ^NeverDMobileIOSRecovery$ --output-on-failure -C $<CONFIG>
     DEPENDS neverd
     USES_TERMINAL
   )

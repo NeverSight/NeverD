@@ -61,6 +61,8 @@ Fat バイナリの `--arch=auto` は arm64、arm、x86_64、i386 の順に優�
 
 クラスメタデータは親クラス、インスタンス開始位置/サイズ、オフセット・幅・アラインメントを検証したスカラー/ポインター ivar を保持します。宣言には必要なパディングを挿入します。必要なインスタンス配置が不明なメソッドは未復元です。Category はクラス/カテゴリ/アドレスの識別情報と実装を分離し、クラスとカテゴリ一覧に重複する完全に同じ記録は一度だけ数えます。対応する外部カテゴリは既存の Foundation クラス宣言を使用します。未知の外部ヘッダーは不足依存として報告し、代替クラス配置を捏造しません。
 
+対応する Objective-C Block 呼び出しには、暗黙の Block オブジェクトと全引数・戻り値の格納位置を含む、完全な固定スカラー呼び出し ABI が必要です。実行時エンコーディング `@?` を `id` に広げるのは宣言だけであり、呼び出しプロトタイプは確定しません。グローバル Block の参照は共有オブジェクトの同一性を維持します。対応する同期スカラーキャプチャでは、実際の格納位置と呼び出しフローを証明します。エスケープするキャプチャ、非同期キャプチャ、モデル化されていないオブジェクト/byref の所有権、copy/dispose ヘルパー、未知のレイアウトは未復元のままです。
+
 ランタイム情報の復元は限定的です。完全なプロパティ・プロトコル、元の所有権注釈、任意の集約型、可変引数末尾、例外に依存する本体、モデル外の Block/キャプチャ配置は保証しません。ランタイム型記述は固定引数のみを示し、元の宣言に省略記号がなかったとは証明できません。Chained Pointer はローダーが対象スロットを解決した場合のみ利用し、未解決形式は診断を残します。
 
 ## Swift ソースと記憶配置
@@ -68,6 +70,10 @@ Fat バイナリの `--arch=auto` は arm64、arm、x86_64、i386 の順に優�
 構造化 demangler 出力は呼び出せる署名と呼び出せないメタデータを分離します。対応する署名は本体復元前に選択バイナリのシンボル、入口、明示的な機械 ABI と照合されます。Swift レシーバーは Swift ABI に従い、Objective-C の隠れた引数で代用しません。利用者が渡す署名ファイルも検証が必要なヒントです。
 
 実験的エミッターは対応する自由関数、クラスメソッド、指定イニシャライザー、固定配置 struct のメソッドを構築し、一部の mutating レシーバーにも対応します。クラス/struct 宣言と格納フィールドには復元した配置メタデータが必要です。必要な宣言と本体が完全な対応済み依存グループを構成する場合にのみネイティブ呼び出しを出力します。ソース単位には宣言とメソッドをまとめ、元のバイナリを呼ぶブリッジは生成しません。
+
+対応する Swift getter/setter の本体はネイティブ実装から復元し、プロパティに組み込みます。非公開の backing storage は確認済みのフィールド配置を保ち、初期化子や他のメソッドも同じ格納名を使います。プロパティ宣言やフィールド記録だけでは、アクセサー本体の復元を証明できません。
+
+対応する割り当て初期化子、単純なデストラクター/解放処理、型メタデータアクセサー、`_modify`/resume エントリーは、出力済みの型単位に投影できます。各項目には、ネイティブの全フローと効果の有界な証明、実際に復元されたコンテキスト・初期化子・プロパティの依存関係、および関連本体の例外処理と IR の監査が必要です。割り当て側の書き込みは実際の初期化子と一致し、`_modify` は正確な可変フィールドと継続エントリーに結び付かなければなりません。実行時メタデータ呼び出しのモデル上の意味は復元された型内で維持します。これらはコンパイラーのソース投影として明示され、個別に復元した通常のメソッド本体や元のソース文字列を意味しません。
 
 ジェネリック/resilient 配置、async/throwing 関数、不明な呼び出し規約、未対応 accessor/allocator/thunk、不完全な初期化、結合できないネイティブ/ランタイム依存は個別に `unrecovered` です。mangled シンボルや型名だけではメソッド復元ではありません。削除されたシンボルや未分類 demangler ノードはカバレッジを不完全または不明にします。
 
@@ -112,6 +118,8 @@ recovered-ios/
     "coverage_status": "partial",
     "method_count": 4,
     "recovered_method_count": 2,
+    "source_body_method_count": 1,
+    "compiler_projection_method_count": 1,
     "unrecovered_method_count": 2,
     "metadata_symbol_count": 5,
     "unclassified_symbol_count": 1
@@ -122,6 +130,8 @@ recovered-ios/
 外側の `status: "success"` は検証済み出力の公開を意味します。`recovered`、`partial`、`unrecovered`、`no-methods` は検出一覧に対する状態であり、意味的同等性や元プログラムの完全性ではありません。未復元メソッドには理由があります。Objective-C の `recovered` はランタイムメタデータの完全性も必要です。空一覧はメソッドが存在しなかった証拠にはなりません。
 
 Swift の `coverage_status` は分類済みの呼び出し可能項目のみを数えます。全体の Swift `status` は未知シンボルも考慮し、`unavailable`、`unclassified`、`unsupported-architecture`、`no-symbols` になる場合があります。呼び出せないメタデータは `non_method_symbols` に `not-callable`、未知項目は `unclassified` として保存します。`types`、`type_metadata_count`、`source_type_count` は型情報と出力型単位を別に数え、メソッド数を増やす用途には使いません。
+
+復元済み Swift 行の `source_representation` は `native-method-body` または `compiler-generated-from-type` です。コンパイラー投影には `compiler_projection_kind` と `compiler_projection_evidence` も残します。`source_body_method_count` は復元したネイティブメソッド本体、`compiler_projection_method_count` は証明済みのコンパイラー投影を数え、合計は `recovered_method_count` と一致します。コンパイラーのエントリーも `method_count` の分母に残り、正確な識別情報を対応する一つの `type` ソース単位に記録します。型メタデータや依存先の名前だけで復元数を増やすことはありません。 ネイティブの一括 JSON ではコンパイラーの行と型単位に `source` を含みますが、mobile の `source_units` は説明のみを保持して `source` を含まず、完全なソースは `sources/swift.swift` に保存されます。
 
 Swift バッチの `source_units` は `{kind, module, name, source, method_entries, method_identities}` を持ち、kind は `function` または `type`、各 identity は `{entry, mangled_symbol}` です。異なるシンボルは同じ入口を共有しつつ個別の ABI 出力を保持できます。各復元済み identity は一度だけ現れ、未復元 identity は含めません。`method_entries` は `method_identities` の入口を順に並べたものと一致し、アドレス重複を許します。同一 identity の重複を黙って統合してはいけません。バッチ `source` は各単位のソースと改行を順に結合したものです。Mobile は全体を `sources/swift.swift` に、単位の説明をカバレッジ JSON に保存します。個別メソッドの `source` は閲覧用で、単純連結ではクラス宣言を正しく構成できません。
 
@@ -141,15 +151,21 @@ Mach-O 読み込み済みセッションでは `neverd_objc_methods_json(session
 
 ## 検証とトラブルシューティング
 
+macOS で `BUILD_TESTING` を有効にしたビルドには `check-neverd-mobile-ios` があり、CTest で三つのネイティブ復元テストスイートを実行します。
+
 ```sh
+cmake --build build --target check-neverd-mobile-ios
 NEVERD_BUILD_DIR=build python3 -m unittest discover -s scripts/tests -p 'test_mobile_*.py' -v
 python3 scripts/test_mobile_ios_backend.py --neverd build/bin/neverd
+python3 scripts/test_mobile_ios_calls_backend.py --neverd build/bin/neverd
 python3 scripts/test_mobile_swift_backend.py --neverd build/bin/neverd
 ```
 
-macOS の自作 Objective-C 検証スクリプトは原サンプルをコンパイルし、`.m` を復元して、生成ソースだけを独立した呼び出しハーネスとリンクします。整数境界、分岐、ループ、ポインター読み書き、隠れた引数、float/double ビット同一性、混合/スタック引数を検証します。Swift スクリプトは生成 `.swift` とハーネスだけを再コンパイルし、原 dylib、モジュール、ブリッジ、手書き代替宣言を使いません。スカラー/ネイティブ呼び出し、クラス初期化/格納、struct の値/mutating メソッド、浮動小数点、スタック、ポインター、ループを調べます。厳格な検証は未対応ケースを検出する場合があり、スクリプトの存在自体は全ビルドでの全項目合格を意味しません。
+macOS の Objective-C 検証スクリプトは元のサンプルをコンパイルし、`.m` を復元した後、生成ソースだけを独立した呼び出しハーネスとリンクします。スカラー用スクリプトは整数境界、分岐、ループ、ポインター読み書き、暗黙引数、float/double のビット同一性、混合引数、スタック引数を扱います。呼び出し用スクリプトはメッセージ配送、継承、Category、インスタンス変数、ネイティブヘルパー、Block 呼び出し・キャプチャ・共有同一性も扱います。このサンプルは 21 メソッドと各バリアント 134 個の独立した期待結果を持ち、記録済みの arm64/x86_64 × classic/default の四構成では各 21/21 メソッドを復元し、134/134 結果が一致しました。
 
-両スクリプトは `--arch all|arm64|x86_64`、`--fixups both|classic|default`、`--timeout N`、`--work-dir NEW_DIRECTORY` を受け付けます。`--setup-only` は原サンプルのみを検証し、復元を検証しません。ホストが実行できないアーキテクチャは許容される場合に明示的にスキップし、合格とは数えません。保存した失敗成果物でカバレッジ不足、コンパイル失敗、動作差異を区別できます。検証済みと主張する前に現在の結果を確認してください。
+厳格な Swift スクリプトは、ユーザー宣言 22 件、getter/setter エントリー 3 件、コンパイラー生成の呼び出し可能エントリー 7 件を確認し、一覧からの欠落を許しません。各バリアントで元のプログラムに対して 855 件の独立した期待結果を確認します。生成した `.swift` とハーネスを独立にコンパイルし、元の dylib、モジュール、ブリッジ、手書きの代替宣言は使用しません。スカラー/ネイティブ呼び出し、クラス初期化と格納、構造体の値渡し/mutating メソッド、浮動小数点とスタック引数、ポインター、ループを扱います。この自作サンプルの正式 CLI 受け入れテストは、arm64/x86_64 × classic/default の四構成すべてでスキップなしに成功しました。各構成でネイティブメソッド本体 25 件とコンパイラー投影 7 件を復元し、32 件すべての呼び出し可能な識別情報を保持しました。元のプログラムと独立にコンパイルした生成 Swift は、各構成で 855/855 件の期待結果に一致しました。この結果は当該サンプルに限られ、任意のアプリケーションや元のソース文字列の復元を保証しません。スクリプトはカバレッジ欠落、ソースのコンパイル失敗、動作の不一致を拒否します。
+
+三つのスクリプトは `--arch all|arm64|x86_64`、`--fixups both|classic|default`、`--timeout N`、`--work-dir NEW_DIRECTORY` に対応します。`--setup-only` は元のサンプルだけを検証し、復元はテストしません。ホストで実行できないアーキテクチャは、許可される場合に明示的にスキップされます。スキップは成功ではありません。保存された失敗成果物でソースの欠落、コンパイルエラー、動作の差を区別し、検証済みと主張する前に現在のテスト結果を確認してください。
 
 公開はトランザクション方式です。新規ディレクトリを選び、最初に終了状態を確認し、リダイレクトする JSON はその外に置いてください。失敗時は一時出力を削除し既存結果を保持します。バックエンドの非ゼロ終了は制限付きログ末尾を含み、タイムアウトと予算超過には個別のメッセージがあります。`--json` の処理済みヘルパーエラーは `status: "error"` ですが、引数解析、ヘルパー/インタープリター不足、Python 3.10 未満、中断は先に stderr で失敗することがあります。
 

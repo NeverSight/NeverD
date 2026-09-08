@@ -61,6 +61,8 @@ Fat 二进制的 `--arch=auto` 优先顺序是 arm64、arm、x86_64、i386。缺
 
 类元数据保留父类身份、实例起始位置/大小，以及偏移、宽度和对齐已校验的标量/指针实例变量；声明在必要处插入填充。依赖不可用实例布局的方法仍标记为未恢复。Category 保留独立的类/分类/地址身份和实现；类与分类清单中重复出现的完全相同记录只计一次。外部 Category 在受支持时使用已有 Foundation 类声明；未知外部类头文件会报告为缺失依赖，不会虚构替代类布局。
 
+受支持的 Objective-C Block 调用必须具备完整的固定标量调用 ABI，包括隐藏的 Block 对象及全部参数和返回值载体。运行时编码 `@?` 只在声明中宽化为 `id`，不能提供调用原型。全局 Block 引用保留共享对象身份。受支持的同步标量捕获需要证明原生捕获存储和调用流程。逃逸或异步捕获、模型未覆盖的对象/byref 所有权、copy/dispose 辅助函数和未知布局仍保留为未恢复。
+
 这只是对运行时信息的有限重建，不承诺完整恢复属性、协议、原始所有权标注、任意聚合类型、可变参数尾部、依赖异常的方法体和模型未覆盖的 Block/捕获布局。运行时编码只描述固定参数，不能证明原声明不存在省略号。只有原生加载器已解析相关槽时才使用链式指针；未解析格式会保留诊断。
 
 ## Swift 源码与存储布局
@@ -68,6 +70,10 @@ Fat 二进制的 `--arch=auto` 优先顺序是 arm64、arm、x86_64、i386。缺
 结构化 demangler 输出将可调用签名与不可调用元数据分别分类。受支持签名在恢复原生方法体前，必须绑定选中二进制的符号、入口和明确的机器 ABI。Swift 接收者遵循 Swift ABI，不替换成 Objective-C 隐藏参数。用户提供的签名文件也只是需要验证的提示。
 
 实验性输出器可以构建受支持的自由函数、类方法、指定初始化器和固定布局结构体方法，包括受支持的 mutating 接收者形式。类/结构体声明和存储字段需要恢复出的布局元数据。只有所需源码声明和方法体组成完整且受支持的依赖组时，才输出原生调用。恢复的源码单元将声明与方法放在一起，不通过桥接代码调用原始二进制。
+
+受支持的 Swift getter/setter 方法体来自原生实现，再组装为属性。私有 backing storage 保留已确认的字段布局，初始化器和其他方法使用同一套存储名称。仅有属性声明或字段记录，不能证明已经恢复访问器方法体。
+
+受支持的分配式初始化器、平凡析构器/释放器、类型元数据访问器和 `_modify`/resume 入口可以投影到已输出的类型单元。每项都需要对完整原生流程与效果进行有界证明，实际已恢复的上下文/初始化器/属性依赖，以及相关方法体的异常处理和 IR 审计。分配器写入必须与真实初始化器一致；`_modify` 必须绑定准确的可变字段及继续执行入口。运行时元数据调用在恢复类型内保留其建模语义。这些入口明确报告为编译器源码投影，不代表单独恢复出的普通方法体或原始源码文本。
 
 泛型或 resilient 布局、async/throwing 函数、未知调用约定、不支持的访问器/分配器/thunk、不完整初始化及未绑定的原生或运行时依赖，会逐项保留为 `unrecovered`。仅有 mangled 符号或名义类型名称不等于恢复了方法。符号裁剪和未分类的 demangler 节点会使覆盖不完整或未知。
 
@@ -112,6 +118,8 @@ recovered-ios/
     "coverage_status": "partial",
     "method_count": 4,
     "recovered_method_count": 2,
+    "source_body_method_count": 1,
+    "compiler_projection_method_count": 1,
     "unrecovered_method_count": 2,
     "metadata_symbol_count": 5,
     "unclassified_symbol_count": 1
@@ -122,6 +130,8 @@ recovered-ios/
 最外层 `status: "success"` 表示已发布通过校验的输出。方法覆盖 `recovered`、`partial`、`unrecovered`、`no-methods` 描述的是已发现清单，不是语义等价或原程序完整性。每个未恢复方法都有原因。Objective-C 的 `recovered` 还要求运行时元数据完整。空清单不能证明原程序没有方法。
 
 Swift 的 `coverage_status` 只统计已分类的可调用项。整体 Swift `status` 还考虑未知符号，可为 `unavailable`、`unclassified`、`unsupported-architecture` 或 `no-symbols`。不可调用元数据位于 `non_method_symbols`，状态为 `not-callable`；未知符号使用 `unclassified`。`types`、`type_metadata_count`、`source_type_count` 分别记录类型元数据/输出类型单元，不得用来增加方法数量。
+
+每个已恢复 Swift 条目的 `source_representation` 为 `native-method-body` 或 `compiler-generated-from-type`。编译器投影还保留 `compiler_projection_kind` 和 `compiler_projection_evidence`。`source_body_method_count` 统计已恢复原生方法体，`compiler_projection_method_count` 统计通过证明的编译器投影，两者之和等于 `recovered_method_count`。编译器入口继续计入 `method_count` 分母，其准确身份必须出现在唯一对应的 `type` 源码单元中。仅有类型元数据或依赖名称不能增加已恢复覆盖。 原生批量 JSON 的编译器条目和类型单元包含 `source`；mobile 的 `source_units` 仅保留描述、不含 `source`，完整源码见 `sources/swift.swift`。
 
 原生 Swift 批量报告的 `source_units` 记录 `{kind, module, name, source, method_entries, method_identities}`，kind 为 `function` 或 `type`，每个 identity 为 `{entry, mangled_symbol}`。不同符号可以共享入口并保留各自 ABI 输出；每个已恢复 identity 必须且只能出现一次，未恢复 identity 不得出现。`method_entries` 必须精确等于 `method_identities` 的有序入口投影，允许重复地址；不能静默合并完全相同的重复 identity。批量 `source` 等于按顺序拼接每个单元源码再加一个换行。Mobile 在 `sources/swift.swift` 保存完整源码，在覆盖 JSON 保留单元描述。逐方法 `source` 用于查看，直接拼接无法正确重建类声明。
 
@@ -141,15 +151,21 @@ Swift 导出使用正常 mobile 流程通过 demangler 生成的结构化签名�
 
 ## 验证与故障排查
 
+macOS 上启用 `BUILD_TESTING` 的构建提供 `check-neverd-mobile-ios`，通过 CTest 运行三组原生恢复验证。
+
 ```sh
+cmake --build build --target check-neverd-mobile-ios
 NEVERD_BUILD_DIR=build python3 -m unittest discover -s scripts/tests -p 'test_mobile_*.py' -v
 python3 scripts/test_mobile_ios_backend.py --neverd build/bin/neverd
+python3 scripts/test_mobile_ios_calls_backend.py --neverd build/bin/neverd
 python3 scripts/test_mobile_swift_backend.py --neverd build/bin/neverd
 ```
 
-macOS 上的自有 Objective-C 验证脚本先编译原样本，再恢复 `.m`，最后只把生成源码与独立调用程序链接。覆盖整数边界、分支、循环、指针读写、隐藏参数、float/double 位身份、混合参数和栈参数。Swift 脚本独立编译生成的 `.swift` 与调用程序，不使用原始 dylib、模块、桥接或手写替代声明；检查标量/原生调用、类初始化与存储、结构体按值/mutating 方法、浮点、栈参数、指针和循环。这些严格检查可能暴露尚未支持的覆盖；存在脚本不等于每个版本的所有样例都已通过。
+macOS 上的 Objective-C 验证脚本先编译原样本，再恢复 `.m`，最后只把生成源码与独立调用程序链接。标量脚本覆盖整数边界、分支、循环、指针读写、隐藏参数、float/double 位身份、混合参数和栈参数。调用脚本另覆盖消息分派、继承、Category、实例变量存储、原生辅助函数及 Block 调用/捕获/共享身份。该调用样本包含 21 个方法，每个变体有 134 个独立预期结果；已记录的 arm64/x86_64 × classic/default 四组运行均恢复 21/21 方法，并匹配 134/134 结果。
 
-两个脚本都支持 `--arch all|arm64|x86_64`、`--fixups both|classic|default`、`--timeout N` 和 `--work-dir NEW_DIRECTORY`。`--setup-only` 只验证原样本，不测试恢复。宿主无法执行的架构会在允许时明确跳过，跳过不等于通过。保留的失败产物可用于区分源码覆盖缺失、编译错误和行为差异；声称已验证前应查看当前测试结果。
+严格 Swift 脚本检查 22 个用户声明、3 个 getter/setter 入口和 7 个编译器生成的可调用入口，任何一项都不能从清单中消失。每个变体有 855 个原程序独立预期结果检查。脚本独立编译生成的 `.swift` 与调用程序，不使用原始 dylib、模块、桥接或手写替代声明。覆盖标量/原生调用、类初始化与存储、结构体按值/mutating 方法、浮点和栈参数、指针及循环。该自建样本的正式 CLI 验收已通过 arm64/x86_64 × classic/default 四个变体，零跳过：每组恢复 25 个原生方法体和 7 个编译器投影，保留全部 32 个可调用身份。原程序与独立编译的生成 Swift 每组均通过 855/855 项独立预期结果检查。这些结果限于该样本，不保证任意应用或原始源码文本的恢复。脚本会拒绝覆盖缺失、源码编译失败及行为差异。
+
+三个脚本都支持 `--arch all|arm64|x86_64`、`--fixups both|classic|default`、`--timeout N` 和 `--work-dir NEW_DIRECTORY`。`--setup-only` 只验证原样本，不测试恢复。宿主无法执行的架构会在允许时明确跳过，跳过不等于通过。保留的失败产物可用于区分源码覆盖缺失、编译错误和行为差异；声称已验证前应查看当前测试结果。
 
 结果发布具有事务性：选择新目录，先检查进程退出状态，并把重定向的 JSON 放在该目录外。失败会删除暂存输出并保留已有结果。后端非零退出附带长度受限的日志尾部；超时与预算失败有独立消息。`--json` 下已处理的辅助程序错误输出 `status: "error"`；参数解析、辅助程序/解释器缺失、Python 低于 3.10 或中断可能更早在 stderr 失败。
 

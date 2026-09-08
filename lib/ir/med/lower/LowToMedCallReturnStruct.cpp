@@ -87,7 +87,7 @@ void LowToMedConverter::modelCallStructReturn(MedFunc &Func) {
       // body (recoverMultiReturnFromBody), so this remodel only rewrites the
       // call site.
       if ((Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL) ||
-          Op.NumInputs < 1)
+          Op.NumInputs < 1 || Op.SourceCallHint)
         continue;
       // A call already remodeled (FP/x87/wide produce a non-register output) is
       // left alone; the default-modeled call writes the integer return

@@ -61,6 +61,8 @@ The native loader binds a runtime method record, executable IMP address, and sup
 
 Class metadata retains superclass identity, instance start/size, and scalar/pointer ivars with checked offsets, widths, and alignments. Declarations use padding where necessary. A method requiring unavailable instance layout remains unrecovered. Categories retain separate class/category/address identities and separate implementations; identical entries repeated in class/category inventories are counted once. External categories use an existing Foundation class declaration where supported. Unknown external class headers are reported as missing dependencies; no substitute class layout is invented.
 
+Supported Objective-C Block calls use a complete fixed scalar invocation ABI, including the hidden Block object and every argument and return carrier. The runtime encoding `@?` is widened to `id` only in declarations; it does not supply an invocation prototype. Global Block references preserve shared object identity. Supported synchronous scalar captures require proven native capture storage and invocation flow. Escaping or asynchronous captures, unmodeled object/byref ownership, copy/dispose helpers, and unknown layouts remain unrecovered.
+
 This is a limited reconstruction of runtime information. Complete properties, protocols, original ownership annotations, arbitrary aggregates, variadic tails, exception-dependent bodies, and unmodelled Block/capture layouts are not promised. Runtime encoding describes fixed arguments and cannot prove that the original declaration had no variadic tail. Chained pointers are used only where the native loader resolved the relevant slots; unresolved formats retain diagnostics.
 
 ## Swift source and storage
@@ -68,6 +70,10 @@ This is a limited reconstruction of runtime information. Complete properties, pr
 Structured demangler output classifies callable signatures separately from non-callable metadata. Supported signatures are bound to the selected binary's symbols, entries, and explicit machine ABI before native body projection. Swift receivers use Swift ABI rules; Objective-C hidden arguments are not substituted. A user-supplied signature file is a hint that still requires validation.
 
 The experimental emitter can construct supported free functions, class methods, designated initializers, and fixed-layout struct methods, including supported mutating receiver forms. Class/struct declarations and stored fields require recovered layout metadata. Native calls are emitted only when the required source declarations and bodies form a complete supported dependency group. Recovered source units contain those declarations and methods together, rather than a bridge that calls the original binary.
+
+Supported Swift getter and setter bodies come from the native implementation and are assembled into properties. Private backing storage preserves the established field layout; initializers and other methods use the same storage names. A property declaration or field record alone cannot establish a recovered accessor body.
+
+Supported allocating constructors, trivial destructors/deallocators, type metadata accessors, and `_modify`/resume entries can project into an emitted type unit. Each requires a bounded proof of the complete native flow and effects, actual recovered context/initializer/property dependencies, and exception-handling and IR audits of the related bodies. Allocator writes must match the actual initializing constructor; `_modify` must bind the exact mutable field and continuation. Runtime metadata calls retain their modeled semantics within the recovered type. These entries are explicitly reported as compiler source projections; they do not constitute separately recovered ordinary method bodies or original source text.
 
 Generic or resilient layouts, async/throwing functions, unknown calling conventions, unsupported accessors/allocators/thunks, incomplete initialization, and unbound native or runtime dependencies remain individually `unrecovered`. A mangled symbol or nominal type name alone is not a recovered method. Stripped symbols and unclassified demangler nodes make coverage incomplete or unknown.
 
@@ -112,6 +118,8 @@ A shortened illustrative report deliberately shows partial recovery:
     "coverage_status": "partial",
     "method_count": 4,
     "recovered_method_count": 2,
+    "source_body_method_count": 1,
+    "compiler_projection_method_count": 1,
     "unrecovered_method_count": 2,
     "metadata_symbol_count": 5,
     "unclassified_symbol_count": 1
@@ -122,6 +130,8 @@ A shortened illustrative report deliberately shows partial recovery:
 Outer `status: "success"` means validated output was published. Method coverage `recovered`, `partial`, `unrecovered`, or `no-methods` describes the discovered inventory, not semantic equivalence or original-program completeness. Every unrecovered method has a reason. Objective-C `recovered` additionally requires complete runtime metadata. An empty inventory cannot prove there were no methods.
 
 Swift `coverage_status` counts classified callables only. Overall Swift `status` also accounts for unknown symbols and can be `unavailable`, `unclassified`, `unsupported-architecture`, or `no-symbols`. Non-callable metadata is listed under `non_method_symbols` with `not-callable`; unknown symbols use `unclassified`. `types`, `type_metadata_count`, and `source_type_count` count type metadata/emitted type units independently and must not inflate method counts.
+
+Each recovered Swift row reports `source_representation` as `native-method-body` or `compiler-generated-from-type`. Compiler projections also retain `compiler_projection_kind` and `compiler_projection_evidence`. `source_body_method_count` counts recovered native method bodies; `compiler_projection_method_count` counts proven compiler projections. Their sum equals `recovered_method_count`. Compiler entries remain in the `method_count` denominator and retain their exact identity in one corresponding `type` source unit. Neither type metadata nor a dependency name alone increases recovered coverage. Native batch JSON includes `source` on compiler rows and type units; mobile `source_units` retain descriptions without `source`, and the complete source is in `sources/swift.swift`.
 
 Native Swift batch `source_units` records `{kind, module, name, source, method_entries, method_identities}`; kind is `function` or `type`. Each identity is `{entry, mangled_symbol}`. Different symbols may share one entry and retain distinct ABI projections; every recovered identity must appear exactly once and no unrecovered identity may appear. `method_entries` must equal the ordered entry projection of `method_identities`, including repeated addresses. Repeated identical identities cannot be silently merged. Batch `source` equals the ordered concatenation of each unit’s source plus a newline. Mobile retains aggregate source in `sources/swift.swift` and unit descriptions in coverage JSON. Standalone method `source` is for inspection; concatenating those rows does not reconstruct class declarations correctly.
 
@@ -141,15 +151,21 @@ For an already loaded Mach-O session, `neverd_objc_methods_json(session, max_fun
 
 ## Verification and troubleshooting
 
+On macOS, builds with `BUILD_TESTING` enabled provide `check-neverd-mobile-ios`, which runs all three native recovery suites through CTest.
+
 ```sh
+cmake --build build --target check-neverd-mobile-ios
 NEVERD_BUILD_DIR=build python3 -m unittest discover -s scripts/tests -p 'test_mobile_*.py' -v
 python3 scripts/test_mobile_ios_backend.py --neverd build/bin/neverd
+python3 scripts/test_mobile_ios_calls_backend.py --neverd build/bin/neverd
 python3 scripts/test_mobile_swift_backend.py --neverd build/bin/neverd
 ```
 
-On macOS, the self-owned Objective-C runner compiles originals, recovers `.m`, and links only generated source with an independent calling harness. It covers integer boundaries, branches, loops, pointer reads/writes, hidden parameters, float/double identity bits, mixed parameters, and stack arguments. The Swift runner independently recompiles generated `.swift` with its harness, without the original dylib, module, bridge, or handcrafted replacement declarations. It checks scalar/native calls, class initialization/storage, struct value/mutating methods, floating, stack, pointer, and loop cases. These scripts are strict checks that may expose unsupported coverage; their existence is not evidence that every case passes on every build.
+On macOS, the Objective-C runners compile originals, recover `.m`, and link only generated source with an independent calling harness. The scalar runner covers integer boundaries, branches, loops, pointer reads/writes, hidden parameters, float/double identity bits, mixed parameters, and stack arguments. The calls runner adds message dispatch, inheritance, categories, ivar storage, native helpers, and Block invocation/captures/shared identity. Its 21-method corpus has 134 independent expected results per variant; the recorded arm64/x86_64 × classic/default runs recovered 21/21 methods and matched 134/134 results in each variant.
 
-Both scripts support `--arch all|arm64|x86_64`, `--fixups both|classic|default`, `--timeout N`, and `--work-dir NEW_DIRECTORY`. `--setup-only` validates originals and does not test recovery. Architectures the host cannot execute are explicitly skipped where permitted; a skip is not a pass. Use retained failure artifacts to distinguish missing source coverage, compilation errors, and behavior mismatches. Check current test output before claiming verified support.
+The strict Swift runner checks 22 user declarations, three getter/setter entries, and seven compiler-generated callable entries; none may disappear from the inventory. Each variant has 855 original-program oracle checks. It independently compiles generated `.swift` and its harness, without the original dylib, module, bridge, or handcrafted replacement declarations. Cases include scalar/native calls, class initialization/storage, struct value/mutating methods, floating and stack parameters, pointers, and loops. Formal CLI acceptance on this self-owned corpus passed all four arm64/x86_64 × classic/default variants with no skips: each recovered 25 native method bodies plus seven compiler projections, preserving all 32 callable identities. Both the originals and independently compiled generated Swift passed 855/855 oracle checks per variant. These results are limited to this corpus and do not guarantee recovery of arbitrary applications or original source text. The runner rejects missing coverage, source compilation failures, and behavior mismatches.
+
+All three scripts support `--arch all|arm64|x86_64`, `--fixups both|classic|default`, `--timeout N`, and `--work-dir NEW_DIRECTORY`. `--setup-only` validates originals and does not test recovery. Architectures the host cannot execute are explicitly skipped where permitted; a skip is not a pass. Use retained failure artifacts to distinguish missing source coverage, compilation errors, and behavior mismatches. Check current test output before claiming verified support.
 
 Publication is transactional: choose a new output directory, inspect process exit status first, and keep redirected JSON outside that directory. Failures remove staged output and preserve existing output. Backend nonzero exits include a bounded log tail; timeouts and budget failures have separate messages. With `--json`, handled helper failures produce `status: "error"`; argument parsing, missing helpers/interpreters, Python below 3.10, and interruption may fail earlier on stderr.
 

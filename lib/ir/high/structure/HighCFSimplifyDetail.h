@@ -65,7 +65,9 @@ void recoverSwitchStatements(HighFunc &Func);
 
 /// Fold if(cond){goto} patterns into if/else trees, up to \p MaxPasses
 /// iterations.  Defined in HighCFSimplifyIfElse.cpp.
-void structureIfElse(HighFunc &Func, int MaxPasses);
+struct MedFunc;
+void structureIfElse(HighFunc &Func, int MaxPasses,
+                     const MedFunc *Med = nullptr);
 
 } // namespace neverd
 

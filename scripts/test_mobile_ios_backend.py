@@ -33,6 +33,9 @@ METHODS = {
         "constant42", "echo:", "unsignedEcho:", "wideEcho:", "add:right:",
         "subtract:right:", "choose:", "sum:count:", "read:", "write:value:",
         "combine:ignored:last:", "selfValue", "commandValue",
+        "floatIdentity:", "doubleIdentity:", "floatAdd:right:", "doubleAdd:right:",
+        "mixed:doubleValue:wide:floatValue:", "manyIntegers:b:c:d:e:f:g:h:",
+        "manyDoubles:b:c:d:e:f:g:h:i:", "packedIntegers:b:c:d:e:f:g:h:i:",
     )),
 }
 SCALARS = (-(2**31), -(2**31) + 1, -32769, -1, 0, 1, 32768, 2**31 - 1)
@@ -48,6 +51,8 @@ HARNESS = r"""
 #include <objc/runtime.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stdint.h>
+#include <string.h>
 
 static void emit(const char *name, unsigned index, long long value) {
     printf("%s:%u=%lld\n", name, index, value);
@@ -92,6 +97,41 @@ int main(void) {
     emit("sum-null", 0, [object sum:0 count:0]);
     emit("selfValue", 0, [object selfValue] == object);
     emit("commandValue", 0, [object commandValue] == @selector(commandValue));
+    const uint32_t floatBits[] = {0, 0x80000000U, 0x7f800000U, 0xff800000U,
+                                  0x7fc12345U, 1, 0xc0f00000U};
+    const uint64_t doubleBits[] = {0, UINT64_C(0x8000000000000000),
+                                   UINT64_C(0x7ff0000000000000),
+                                   UINT64_C(0xfff0000000000000),
+                                   UINT64_C(0x7ff8000000001234), 1,
+                                   UINT64_C(0xc020800000000000)};
+    for (unsigned index = 0; index < sizeof(floatBits)/sizeof(floatBits[0]); ++index) {
+        float input; memcpy(&input, &floatBits[index], 4);
+        float output = [object floatIdentity:input];
+        uint32_t bits; memcpy(&bits, &output, 4);
+        emit("floatIdentityBits", index, bits);
+    }
+    for (unsigned index = 0; index < sizeof(doubleBits)/sizeof(doubleBits[0]); ++index) {
+        double input; memcpy(&input, &doubleBits[index], 8);
+        double output = [object doubleIdentity:input];
+        int64_t bits; memcpy(&bits, &output, 8);
+        emit("doubleIdentityBits", index, bits);
+    }
+    for (int index = -3; index <= 3; ++index) {
+        emit("floatAdd", (unsigned)(index + 3),
+             [object floatAdd:index * 2.25f right:-7.5f] * 4);
+        emit("doubleAdd", (unsigned)(index + 3),
+             [object doubleAdd:index * 3.125 right:-1024.5] * 8);
+        emit("mixed", (unsigned)(index + 3),
+             [object mixed:index doubleValue:-13.25 wide:10000000000LL
+                     floatValue:2.5f] * 4);
+        emit("manyIntegers", (unsigned)(index + 3),
+             [object manyIntegers:index b:-3 c:5 d:-7 e:11 f:-13 g:17 h:10000000000LL]);
+        emit("manyDoubles", (unsigned)(index + 3),
+             [object manyDoubles:index b:-3.25 c:5.5 d:-7.75 e:11.25
+                      f:-13.5 g:17.75 h:-19.25 i:23.5] * 4);
+        emit("packedIntegers", (unsigned)(index + 3),
+             [object packedIntegers:index b:-3 c:5 d:-7 e:11 f:-13 g:-127 h:-32767 i:65537]);
+    }
     object_dispose(object);
     return 0;
 }
@@ -125,6 +165,21 @@ def expected_results() -> dict[str, int]:
         result[f"choose:{index}"] = value + 11 if value < 0 else value - 3 if value > 7 else value + 5
     for count in range(-1, 6):
         result[f"sum:{count + 1}"] = sum(ARRAY[:max(count, 0)])
+    float_bits = (0, 0x80000000, 0x7f800000, 0xff800000, 0x7fc12345, 1, 0xc0f00000)
+    double_bits = (0, 0x8000000000000000, 0x7ff0000000000000, 0xfff0000000000000,
+                   0x7ff8000000001234, 1, 0xc020800000000000)
+    for index, bits in enumerate(float_bits):
+        result[f"floatIdentityBits:{index}"] = bits
+    for index, bits in enumerate(double_bits):
+        result[f"doubleIdentityBits:{index}"] = bits if bits < 2**63 else bits - 2**64
+    for index in range(-3, 4):
+        suffix = index + 3
+        result[f"floatAdd:{suffix}"] = int((index * 2.25 - 7.5) * 4)
+        result[f"doubleAdd:{suffix}"] = int((index * 3.125 - 1024.5) * 8)
+        result[f"mixed:{suffix}"] = int((index - 13.25 + 10000000000 + 2.5) * 4)
+        result[f"manyIntegers:{suffix}"] = index - 3 + 5 - 7 + 11 - 13 + 17 + 10000000000
+        result[f"manyDoubles:{suffix}"] = int((index - 3.25 + 5.5 - 7.75 + 11.25 - 13.5 + 17.75 - 19.25 + 23.5) * 4)
+        result[f"packedIntegers:{suffix}"] = index - 3 + 5 - 7 + 11 - 13 - 127 - 32767 + 65537
     return result
 
 

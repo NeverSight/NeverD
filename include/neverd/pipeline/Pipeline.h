@@ -56,6 +56,9 @@ struct PipelineOptions {
   bool PatchMode = false;
   bool LiftMode = false;
   size_t MaxFunctions = 0;
+  /// Explicit declarations for source rendering only; never consumed in
+  /// PatchMode or LiftMode and never promoted to transformation evidence.
+  std::map<va_t, SourceFunctionTypeHint> SourceTypeHints;
   std::string OutputFile;
   evm::Hardfork EVMFork = evm::Hardfork::Latest;
   bool EVMStrict = true;

@@ -17,7 +17,9 @@
 #include "neverd/Common.h"
 
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -29,8 +31,14 @@ using namespace llvm;
 namespace neverd::cli {
 
 int runExport(neverd_session_t Sess) {
-  if (ExportFmt == FmtObjCMethods && !ExportFunc.empty()) {
-    WithColor::error() << "--func does not apply to objc-methods export\n";
+  if ((ExportFmt == FmtObjCMethods || ExportFmt == FmtSwiftMethods) &&
+      !ExportFunc.empty()) {
+    WithColor::error() << "--func does not apply to method-source export\n";
+    return 1;
+  }
+  if ((ExportFmt == FmtSwiftMethods) != !ExportSourceSignatures.empty()) {
+    WithColor::error()
+        << "--source-signatures is required for swift-methods export only\n";
     return 1;
   }
   int FuncIdx = -1;
@@ -104,6 +112,26 @@ int runExport(neverd_session_t Sess) {
       if (!Json) {
         WithColor::error() << "Objective-C export failed: "
                            << takeLastError(Sess) << "\n";
+        return 1;
+      }
+    } else if (ExportFmt == FmtSwiftMethods) {
+      uint64_t Bytes = 0;
+      if (sys::fs::file_size(ExportSourceSignatures, Bytes) ||
+          Bytes > 32 * 1024 * 1024) {
+        WithColor::error() << "Swift signature file is unreadable or exceeds "
+                              "its byte budget\n";
+        return 1;
+      }
+      auto Input = MemoryBuffer::getFile(ExportSourceSignatures);
+      if (!Input) {
+        WithColor::error() << "Unable to read Swift signature file\n";
+        return 1;
+      }
+      Json =
+          neverd_swift_methods_json(Sess, (*Input)->getBufferStart(), MaxFunc);
+      if (!Json) {
+        WithColor::error() << "Swift export failed: " << takeLastError(Sess)
+                           << "\n";
         return 1;
       }
     }

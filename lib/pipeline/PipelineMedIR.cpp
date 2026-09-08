@@ -48,10 +48,17 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
   // Runtime metadata is a source-rendering hint, not a rewrite ABI contract.
   // Patch/lift and safety evidence keep their existing independent semantics.
   std::map<va_t, const SourceFunctionTypeHint *> SourceHints;
-  if (!Opts.PatchMode && !Opts.LiftMode)
+  if (!Opts.PatchMode && !Opts.LiftMode) {
+    for (const auto &[Entry, Hint] : Opts.SourceTypeHints)
+      SourceHints.emplace(Entry, &Hint);
     for (const auto &Method : Img.ObjCMethods)
       if (Method.Status == "supported" && Method.TypeHint)
         SourceHints.emplace(Method.Implementation, &*Method.TypeHint);
+  }
+
+  std::map<va_t, SourceFunctionTypeHint> SourceCalleeHints;
+  for (const auto &[Entry, Hint] : SourceHints)
+    SourceCalleeHints.emplace(Entry, *Hint);
 
   // Per-callee callee-cleanup pop (x86 `ret imm`, the i386 SysV sret hidden-
   // pointer pop) so each caller's CALL to such a callee gets a post-call stack-
@@ -88,6 +95,8 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
   parallelForEachWeighted(Weight, [&](auto Claim, size_t N) {
     LowToMedConverter Local;
     Local.setBinaryImage(&Img);
+    Local.setSourceCallHintsEnabled(!Opts.PatchMode && !Opts.LiftMode);
+    Local.setSourceCalleeTypeHints(&SourceCalleeHints);
     Local.setCalleePopMap(&CalleePop);
     Local.setStackProbeSlots(&StackProbeSlots);
     for (size_t I; (I = Claim()) < N;) {

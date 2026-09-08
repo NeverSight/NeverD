@@ -68,8 +68,8 @@ static const char *binopSymbol(NdOp Op) {
   }
 }
 
-static const char *memoryAddressSpaceQualifier(
-    NdMemoryAddressSpace AddressSpace) {
+static const char *
+memoryAddressSpaceQualifier(NdMemoryAddressSpace AddressSpace) {
   switch (AddressSpace) {
   case NdMemoryAddressSpace::Default:
     return "";
@@ -143,6 +143,10 @@ std::string HighExpr::str() const {
     if (!Operands.empty() && CastTo)
       return "(" + CastTo->str() + ")" + Operands[0]->str();
     return "?cast?";
+  case ExprKind::BitCast:
+    if (Operands.size() == 1 && Type)
+      return "bitcast<" + Type->str() + ">(" + Operands[0]->str() + ")";
+    return "?bitcast?";
   default:
     return "?";
   }
@@ -170,13 +174,24 @@ bool HighExpr::structuralEq(const HighExpr &Other) const {
     return (!Type && !Other.Type) ||
            (Type && Other.Type && Type->Size == Other.Type->Size);
   case ExprKind::Call:
-    if (CallTarget != Other.CallTarget || CallAddr != Other.CallAddr)
+    if (CallTarget != Other.CallTarget || CallAddr != Other.CallAddr ||
+        SourceCallHint != Other.SourceCallHint ||
+        IsIndirectCall != Other.IsIndirectCall ||
+        IndirectParamIdx != Other.IndirectParamIdx ||
+        IntrinsicId != Other.IntrinsicId)
       return false;
     break;
   case ExprKind::Cast:
     if ((CastTo == nullptr) != (Other.CastTo == nullptr))
       return false;
     if (CastTo && Other.CastTo && CastTo->str() != Other.CastTo->str())
+      return false;
+    break;
+  case ExprKind::BitCast:
+    if (!Type || !Other.Type || Type->str() != Other.Type->str() ||
+        Operands.size() != 1 || Other.Operands.size() != 1 || !Operands[0] ||
+        !Other.Operands[0] || !Operands[0]->Type || !Other.Operands[0]->Type ||
+        Operands[0]->Type->str() != Other.Operands[0]->Type->str())
       return false;
     break;
   default:

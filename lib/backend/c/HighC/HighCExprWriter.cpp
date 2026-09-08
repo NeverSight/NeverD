@@ -133,6 +133,9 @@ std::string HighCWriter::renderUnaryOp(const HighExpr &E, int ParentPrec) {
   case NdOp::FLOAT_ISNAN:
     return "__builtin_isnan(" + exprStr(*E.Operands[0]) + ")";
   case NdOp::FLOAT_INT2FLOAT:
+  case NdOp::FLOAT_UINT2FLOAT:
+  case NdOp::FLOAT_FLOAT2INT:
+  case NdOp::FLOAT_FLOAT2UINT:
   case NdOp::FLOAT_FLOAT2FLOAT:
     return "(" + typeToC(E.Type) + ")" + exprStr(*E.Operands[0], 99);
   default:
@@ -142,6 +145,8 @@ std::string HighCWriter::renderUnaryOp(const HighExpr &E, int ParentPrec) {
 }
 
 std::string HighCWriter::renderCallExpr(const HighExpr &E) {
+  if (E.SourceCallHint)
+    return renderSourceCallExpr(E);
   if (E.MemoryAddressSpace != NdMemoryAddressSpace::Default)
     llvm::report_fatal_error(
         "HighC cannot safely render a segmented-memory intrinsic");
@@ -269,6 +274,15 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec) {
       return "/* bad cast */";
     std::string Ty = E.CastTo ? typeToC(E.CastTo) : typeToC(E.Type);
     return "(" + Ty + ")" + exprStr(*E.Operands[0], 99);
+  }
+  case ExprKind::BitCast: {
+    if (E.Operands.size() != 1 || !E.Operands[0] || !E.Type ||
+        !E.Operands[0]->Type || E.Type->Size != E.Operands[0]->Type->Size)
+      llvm::report_fatal_error("HighC cannot render an invalid bit cast");
+    // The explicit source cast prevents integer promotions (or an unsuffixed
+    // constant) from changing the operand's byte width inside the builtin.
+    return "__builtin_bit_cast(" + typeToC(E.Type) + ", (" +
+           typeToC(E.Operands[0]->Type) + ")(" + exprStr(*E.Operands[0]) + "))";
   }
   case ExprKind::Addr: {
     if (E.Operands.empty())

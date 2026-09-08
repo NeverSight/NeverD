@@ -13,7 +13,8 @@ import json
 import re
 
 from .common import MobileError
-from .macho import _IDENTIFIER, _types, objc_header
+from .macho import (_FOUNDATION_CATEGORY_CLASSES, _IDENTIFIER, _types,
+                    objc_category_inventory, objc_header, objc_ivar_layout)
 
 
 _KEYWORDS = frozenset("auto break case char const continue default do double else enum extern float for goto if inline int long register restrict return short signed sizeof static struct switch typedef union unsigned void volatile while _Alignas _Alignof _Atomic _Bool _Complex _Generic _Imaginary _Noreturn _Static_assert _Thread_local self _cmd super id Class SEL BOOL nil YES NO".split())
@@ -233,7 +234,8 @@ def _declaration_words(tokens: list[_Token]) -> list[str]:
 
 
 def _identity(method: dict, class_name: object | None = None) -> tuple:
-    return (method.get("class_name", class_name), method.get("selector"), method.get("class_method"))
+    return (method.get("class_name", class_name), method.get("selector"), method.get("class_method"),
+            method.get("category_name") or "", method.get("category_address") or "0x0")
 
 
 def _fingerprint(value: object) -> str:
@@ -258,10 +260,13 @@ def _rewrite(source: str, tokens: list[_Token], names: dict[str, str]) -> str:
     return "".join(chunks)
 
 
-def _render_method(native: dict, runtime: dict, class_name: str, pointer_size: int | None) -> tuple[str, str, dict[str, tuple[str, ...]]]:
+def _render_method(native: dict, runtime: dict, class_name: str, pointer_size: int | None) -> tuple[str, str, dict[str, tuple[str, ...]], dict[str, tuple[str, str]]]:
     selector = runtime.get("selector")
     if not _safe_identifier(class_name) or not isinstance(selector, str):
         raise _Unrecovered("unsafe Objective-C class or selector identifier")
+    category = runtime.get("category_name") or ""
+    if category and not _safe_identifier(category):
+        raise _Unrecovered("unsafe Objective-C category identifier")
     parts = selector.split(":")
     arguments = selector.count(":")
     if (arguments and parts[-1]) or not all(_safe_identifier(part) for part in (parts[:-1] if arguments else parts)):
@@ -272,7 +277,8 @@ def _render_method(native: dict, runtime: dict, class_name: str, pointer_size: i
     types = _types(encoding) if isinstance(encoding, str) else None
     if not types or len(types) != arguments + 3 or types[1] not in {"id", "Class"} or types[2] != "SEL" or any(value == "void" for value in types[3:]):
         raise _Unrecovered("unsupported Objective-C ABI or type encoding")
-    if any(native.get(key) != runtime.get(key) for key in ("selector", "class_method", "implementation", "type_encoding")) or native.get("class_name") != class_name:
+    if (any(native.get(key) != runtime.get(key) for key in ("selector", "class_method", "implementation", "type_encoding")) or
+            _identity(native) != _identity(runtime, class_name)):
         raise _Unrecovered("native method identity disagrees with runtime metadata")
     if native.get("status") != "recovered":
         raise _Unrecovered(str(native.get("reason") or "native backend did not recover this method"))
@@ -347,13 +353,38 @@ def _render_method(native: dict, runtime: dict, class_name: str, pointer_size: i
                 declaring = False
     if len({definition.name for definition in definitions}) != len(definitions):
         raise _Unrecovered("duplicate inconsistent C function definitions")
-    tag = hashlib.sha256(_fingerprint([class_name, selector, runtime["class_method"], runtime.get("implementation")]).encode()).hexdigest()[:16]
-    names = {definition.name: f"neverd_objc_{tag}_{definition.name}" for definition in definitions}
+    tag = hashlib.sha256(_fingerprint([*_identity(runtime, class_name), runtime.get("implementation")]).encode()).hexdigest()[:16]
+    shared_names = native.get("shared_block_functions", [])
+    if (not isinstance(shared_names, list) or any(not isinstance(name, str) for name in shared_names)
+            or len(shared_names) != len(set(shared_names))):
+        raise _Unrecovered("invalid shared Block function inventory")
+    defined_names = {definition.name for definition in definitions}
+    for name in shared_names:
+        if (name not in defined_names or name == target.name
+                or not re.fullmatch(r"neverd_block_(?:invoke_[0-9a-f]+|(?:descriptor|literal)_[0-9a-f]+_address)", name)):
+            raise _Unrecovered("shared Block function has no exact generated definition")
+    names = {definition.name: f"neverd_objc_{tag}_{definition.name}" for definition in definitions
+             if definition.name not in shared_names}
     if any(token.value in names.values() for token in tokens):
         raise _Unrecovered("native identifiers collide with generated support names")
     # Keep the original C definitions as well as their extracted method body.
     # This preserves helpers and exact direct-recursion/function-pointer targets.
-    support = _rewrite(source, tokens, names)
+    shared: dict[str, tuple[str, str]] = {}
+    chunks = []
+    cursor = 0
+    for definition in definitions:
+        if definition.name not in shared_names:
+            continue
+        start, end = tokens[definition.start].start, tokens[definition.body_close].end
+        prototype = source[start:tokens[definition.body_open].start].rstrip() + ";"
+        complete = source[start:end]
+        shared[definition.name] = (_rewrite(prototype, _tokens(prototype), names),
+                                   _rewrite(complete, _tokens(complete), names))
+        chunks.extend((source[cursor:start], prototype))
+        cursor = end
+    chunks.append(source[cursor:])
+    support_text = "".join(chunks)
+    support = _rewrite(support_text, _tokens(support_text), names)
     body_start, body_end = tokens[target.body_open].end, tokens[target.body_close].start
     body = source[body_start:body_end]
     body = _rewrite(body, _tokens(body), names)
@@ -401,6 +432,14 @@ def _render_method(native: dict, runtime: dict, class_name: str, pointer_size: i
                     if symbol in declarations and declarations[symbol] != spelling:
                         raise _Unrecovered("conflicting external declarations")
                     declarations[symbol] = spelling
+            elif (len(unit) == 6 and [token.value for token in unit[:3]] == ["extern", "void", "*"]
+                  and unit[3].value in {"_NSConcreteStackBlock", "_NSConcreteGlobalBlock"}
+                  and [token.value for token in unit[4:]] == ["[", "]"]):
+                symbol = unit[3].value
+                spelling = tuple(token.value for token in unit)
+                if symbol in declarations and declarations[symbol] != spelling:
+                    raise _Unrecovered("conflicting external declarations")
+                declarations[symbol] = spelling
             elif unit[0].value == "extern" and _safe_identifier(unit[-1].value):
                 symbol = unit[-1].value
                 spelling = tuple(token.value for token in unit)
@@ -412,7 +451,7 @@ def _render_method(native: dict, runtime: dict, class_name: str, pointer_size: i
                 # renaming function tokens; leave them explicitly unsupported.
                 raise _Unrecovered("unsupported non-function C support declaration")
         cursor = end + 1
-    return method_source, support, declarations
+    return method_source, support, declarations, shared
 
 
 def render_objc_sources(report: dict, objc_metadata: dict) -> tuple[str, dict]:
@@ -421,6 +460,14 @@ def render_objc_sources(report: dict, objc_metadata: dict) -> tuple[str, dict]:
         raise MobileError("unsupported Objective-C native method report schema")
     if not isinstance(objc_metadata, dict) or not isinstance(objc_metadata.get("classes"), list):
         raise MobileError("invalid Objective-C runtime metadata")
+    local_classes, external_categories = objc_category_inventory(objc_metadata)
+    runtime_entries = list(local_classes)
+    external_owners: dict[str, dict] = {}
+    for category in external_categories:
+        owner = external_owners.setdefault(category["class_name"],
+            {"name": category["class_name"], "methods": [], "_external_category_owner": True})
+        owner["methods"].extend(category["methods"])
+    runtime_entries.extend(external_owners.values())
     pointer_size = report.get("pointer_size")
     if pointer_size is not None and (type(pointer_size) is not int or pointer_size not in {4, 8}):
         raise MobileError("invalid Objective-C native pointer_size")
@@ -437,8 +484,9 @@ def render_objc_sources(report: dict, objc_metadata: dict) -> tuple[str, dict]:
     safe_classes = []
     encountered = set()
     class_definitions: dict[str, str] = {}
+    classes: dict[str, dict] = {}
     conflicting_classes = set()
-    for entry in objc_metadata["classes"]:
+    for entry in local_classes:
         if not isinstance(entry, dict) or not isinstance(entry.get("methods"), list) or not isinstance(entry.get("name"), str):
             raise MobileError("invalid Objective-C class metadata")
         name = entry["name"]
@@ -446,9 +494,18 @@ def render_objc_sources(report: dict, objc_metadata: dict) -> tuple[str, dict]:
         if name in class_definitions and class_definitions[name] != fingerprint:
             conflicting_classes.add(name)
         class_definitions[name] = fingerprint
-    for entry in objc_metadata["classes"]:
+        classes[name] = entry
+    layouts = {name: objc_ivar_layout(entry, classes, pointer_size or 8)[1]
+               for name, entry in classes.items()}
+    category_addresses: dict[tuple[str, str], set[str]] = {}
+    for entry in runtime_entries:
         name = entry["name"]
-        if _safe_identifier(name) and name not in conflicting_classes:
+        for method in entry["methods"]:
+            if isinstance(method, dict) and isinstance(method.get("category_name"), str) and method["category_name"]:
+                category_addresses.setdefault((name, method["category_name"]), set()).add(str(method.get("category_address") or "0x0"))
+    for entry in runtime_entries:
+        name = entry["name"]
+        if _safe_identifier(name) and name not in conflicting_classes and not entry.get("_external_category_owner"):
             safe_classes.append({**entry, "methods": [method for method in entry["methods"]
                 if isinstance(method, dict) and isinstance(method.get("selector"), str)
                 and isinstance(method.get("type_encoding"), str) and isinstance(method.get("class_method"), bool)]})
@@ -466,26 +523,51 @@ def render_objc_sources(report: dict, objc_metadata: dict) -> tuple[str, dict]:
                 continue
             encountered.add(key)
             item = {"class_name": name, "selector": runtime.get("selector"), "class_method": runtime.get("class_method"),
+                    "category_name": runtime.get("category_name") or "", "category_address": runtime.get("category_address") or "0x0",
                     "implementation": runtime.get("implementation"), "status": "unrecovered", "diagnostics": []}
             coverage.append(item)
             try:
+                if entry.get("_external_category_owner") and name not in _FOUNDATION_CATEGORY_CLASSES:
+                    raise _Unrecovered("external category requires an unavailable class declaration: " + name)
                 if name in conflicting_classes:
                     raise _Unrecovered("duplicate inconsistent Objective-C class definitions")
+                if len(category_addresses.get((name, runtime.get("category_name") or ""), set())) > 1:
+                    raise _Unrecovered("duplicate Objective-C category names have distinct runtime definitions")
                 native_entries = batches.get(key, [])
                 if not native_entries:
                     raise _Unrecovered("native method report is missing")
                 if len({_fingerprint(value) for value in native_entries}) != 1:
                     raise _Unrecovered("duplicate inconsistent native method records")
                 item["diagnostics"] = _diagnostics(native_entries[0])
-                method, support, declarations = _render_method(native_entries[0], runtime, name, pointer_size)
+                dependencies = native_entries[0].get("instance_layout_classes", [])
+                if not isinstance(dependencies, list) or any(not isinstance(value, str) for value in dependencies):
+                    raise _Unrecovered("invalid instance-layout dependency inventory")
+                # Old batches do not identify individual ivar uses. An explicit
+                # but invalid class layout cannot back a reconstructed body.
+                if "instance_layout_classes" not in native_entries[0] and "ivar_status" in entry and layouts[name]:
+                    dependencies = [name]
+                checked = set()
+                while dependencies:
+                    dependency = dependencies[0]
+                    dependencies = dependencies[1:]
+                    if dependency in checked:
+                        continue
+                    checked.add(dependency)
+                    if dependency not in classes or dependency in conflicting_classes or layouts[dependency]:
+                        raise _Unrecovered("required instance-variable layout is unavailable: " + dependency)
+                    parent = classes[dependency].get("superclass")
+                    if parent in classes:
+                        dependencies.append(parent)
+                method, support, declarations, shared = _render_method(native_entries[0], runtime, name, pointer_size)
                 item["status"] = "recovered"
-                candidates.append((item, method, support, declarations))
+                candidates.append((item, method, support, declarations, shared))
             except _Unrecovered as error:
                 item["reason"] = str(error)
     for key, entries in batches.items():
         if key not in encountered:
             native = entries[0]
             item = {"class_name": native.get("class_name"), "selector": native.get("selector"), "class_method": native.get("class_method"),
+                    "category_name": native.get("category_name") or "", "category_address": native.get("category_address") or "0x0",
                     "implementation": native.get("implementation"), "status": "unrecovered", "diagnostics": [],
                     "reason": "native method has no matching runtime metadata"}
             try:
@@ -494,22 +576,37 @@ def render_objc_sources(report: dict, objc_metadata: dict) -> tuple[str, dict]:
                 item["reason"] += f"; {error}"
             coverage.append(item)
     externals: dict[str, list[tuple[dict, tuple[str, ...]]]] = {}
-    for item, _, _, declarations in candidates:
+    for item, _, _, declarations, _ in candidates:
         for symbol, spelling in declarations.items():
             externals.setdefault(symbol, []).append((item, spelling))
     for occurrences in externals.values():
         if len({spelling for _, spelling in occurrences}) > 1:
             for item, _ in occurrences:
                 item.update(status="unrecovered", reason="conflicting external declarations across methods")
+    shared_occurrences: dict[str, list[tuple[dict, tuple[str, str]]]] = {}
+    for item, _, _, _, shared in candidates:
+        for symbol, definition in shared.items():
+            shared_occurrences.setdefault(symbol, []).append((item, definition))
+    for occurrences in shared_occurrences.values():
+        if len({definition for _, definition in occurrences}) != 1:
+            for item, _ in occurrences:
+                item.update(status="unrecovered", reason="conflicting shared Block function definitions")
     lines = ["// Objective-C bodies reconstructed from native code; see objc-methods.json for coverage.",
-             "#include <stdint.h>", "#include <stdbool.h>", objc_header({"classes": safe_classes})]
-    methods_by_class: dict[str, list[str]] = {}
-    for item, method, support, _ in candidates:
+             "#include <stdint.h>", "#include <stdbool.h>", objc_header({"classes": safe_classes, "categories": external_categories, "pointer_size": pointer_size or 8})]
+    methods_by_class: dict[tuple[str, str], list[str]] = {}
+    shared_output: dict[str, tuple[str, str]] = {}
+    for item, method, support, _, shared in candidates:
         if item["status"] == "recovered":
             lines.extend([support, ""])
-            methods_by_class.setdefault(item["class_name"], []).append(method)
-    for name, methods in methods_by_class.items():
-        lines.extend([f"@implementation {name}", *methods, "@end", ""])
+            shared_output.update(shared)
+            methods_by_class.setdefault((item["class_name"], item["category_name"]), []).append(method)
+    # Publish prototypes first so the shared literal/descriptor/invoke graph
+    # retains one storage identity even when several methods reference it.
+    lines.extend(prototype for prototype, _ in shared_output.values())
+    lines.extend(definition for _, definition in shared_output.values())
+    for (name, category), methods in methods_by_class.items():
+        suffix = f" ({category})" if category else ""
+        lines.extend([f"@implementation {name}{suffix}", *methods, "@end", ""])
     recovered = sum(item["status"] == "recovered" for item in coverage)
     metadata_incomplete = objc_metadata.get("status") != "recovered"
     status = "no-methods" if not coverage else "unrecovered" if not recovered else "partial" if recovered != len(coverage) or metadata_incomplete else "recovered"
@@ -518,7 +615,8 @@ def render_objc_sources(report: dict, objc_metadata: dict) -> tuple[str, dict]:
               "methods": coverage, "limitations": [
                   "Objective-C method bodies are projections of native C; original source and method-level semantic equivalence are not guaranteed.",
                   "Only supported scalar and pointer runtime signatures with a verified native definition are emitted.",
+                  "Runtime @? Block parameters are declared as id; their original invoke prototype is not encoded there. Block calls require a separately verified native signature.",
                   "Coverage applies only to the discovered runtime method inventory; an empty inventory does not prove that no methods exist.",
-                  "Recovered C helper definitions and direct-call targets are retained under method-specific names; external dependencies may require manual linking.",
+                  "Recovered C helper definitions and direct-call targets are retained; verified identical Block storage helpers share their object identity across methods. External dependencies may require manual linking.",
               ]}
     return "\n".join(lines).rstrip() + "\n", result

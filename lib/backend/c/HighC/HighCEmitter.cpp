@@ -19,6 +19,7 @@
 #define DEBUG_TYPE "neverd-highc-emitter"
 #include "neverd/libc/LibCNames.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/WithColor.h"
@@ -160,10 +161,20 @@ void HighCWriter::prepareFunctionIdentifiers(
   FunctionIdentifiers.clear();
   FunctionIdentifiersBySourceName.clear();
   ExternalFunctionIdentifiers.clear();
+  DefinedFuncs.clear();
+  DefinedFunctionsByAddress.clear();
 
   for (const HighFunc &Func : Funcs) {
     if (Func.Name.empty())
       continue;
+    DefinedFuncs[Func.Name] = &Func;
+    if (Func.Name.front() == '_')
+      DefinedFuncs[Func.Name.substr(1)] = &Func;
+    if (Func.Entry) {
+      auto [It, Added] = DefinedFunctionsByAddress.emplace(Func.Entry, &Func);
+      if (!Added)
+        It->second = nullptr;
+    }
     llvm::StringRef SourceName(Func.Name);
     llvm::StringRef RenderedName = SourceName;
     RenderedName.consume_front("_");
@@ -410,8 +421,14 @@ HighCWriter::memoryStoreExpr(const TypeRef &Ty, llvm::StringRef Addr,
   unsigned Index = It->second;
   if (Ordering != NdMemoryOrdering::None)
     validateAtomicStoreOrdering(Ordering);
+  // exprStr projects pointer parameters to their machine-sized address bits.
+  // Convert those bits back to the helper's declared value type at this typed
+  // boundary, including ordered stores and stores expressed as assignments.
+  const std::string Value = Ty && Ty->Kind == NdTypeKind::Ptr
+                                ? "(" + Type + ")(uintptr_t)(" + Val.str() + ")"
+                                : Val.str();
   return memoryHelperName("store", Index, Ordering, AddressSpace) +
-         "((uintptr_t)(" + Addr.str() + "), " + Val.str() + ")";
+         "((uintptr_t)(" + Addr.str() + "), " + Value + ")";
 }
 
 std::string
@@ -464,6 +481,62 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
     if (!Seen.insert(&Ex).second)
       return;
     if (Ex.Kind == ExprKind::Call) {
+      if (Ex.SourceCallHint) {
+        const auto &Hint = *Ex.SourceCallHint;
+        if (Hint.CallKind == SourceCallTypeHint::Kind::Native) {
+          llvm::StringRef Name =
+              !Ex.CallTarget.empty() ? Ex.CallTarget : Hint.TargetName;
+          if (const auto *Definition = sourceCallDefinition(Hint, Name))
+            Name = Definition->Name;
+          Name.consume_front("_");
+          if (!Name.empty()) {
+            Targets.insert(Name.str());
+            auto [It, Added] =
+                SourceNativeSignatures.emplace(Name.str(), &Hint.Signature);
+            auto TypeSpelling = [](const SourceFunctionTypeHint &Signature) {
+              std::string Result = typeToC(Signature.ReturnType) + "(";
+              for (const auto &Parameter : Signature.Parameters)
+                Result += typeToC(Parameter.Type) + ",";
+              return Result + ")";
+            };
+            if (!Added &&
+                TypeSpelling(*It->second) != TypeSpelling(Hint.Signature))
+              ConflictingSourceNativeSignatures.insert(Name.str());
+          }
+        } else if (Hint.CallKind == SourceCallTypeHint::Kind::NativeAddress) {
+          if (Hint.TargetAddress)
+            if (const auto *Definition = sourceCallDefinition(Hint, {}))
+              SourceAddressDefinitions.insert(Definition);
+        } else if (Hint.CallKind == SourceCallTypeHint::Kind::RuntimeBlockIsa) {
+          llvm::StringRef Name(Hint.TargetName);
+          if (Name.starts_with("__"))
+            Name = Name.drop_front();
+          if (Name == "_NSConcreteStackBlock" ||
+              Name == "_NSConcreteGlobalBlock")
+            SourceBlockIsaNames.insert(Name.str());
+        } else if (Hint.CallKind ==
+                       SourceCallTypeHint::Kind::RuntimeBlockDescriptor ||
+                   Hint.CallKind ==
+                       SourceCallTypeHint::Kind::RuntimeBlockLiteral) {
+          if (Hint.TargetAddress)
+            SourceBlockAddressHelpers.insert(
+                "neverd_block_" +
+                std::string(
+                    Hint.CallKind ==
+                            SourceCallTypeHint::Kind::RuntimeBlockDescriptor
+                        ? "descriptor_"
+                        : "literal_") +
+                llvm::utohexstr(Hint.TargetAddress, true) + "_address");
+        } else if (Hint.CallKind != SourceCallTypeHint::Kind::BlockInvoke) {
+          NeedsObjCRuntime = true;
+          NeedsObjCSuper2 |=
+              Hint.CallKind == SourceCallTypeHint::Kind::ObjCSuper2;
+        }
+        for (const auto &Operand : Ex.Operands)
+          if (Operand)
+            Visit(*Operand);
+        return;
+      }
       if (Ex.IntrinsicId == Intrinsic::A64_Frinti)
         NeedsFEnvAccess = true;
       if (Ex.IntrinsicId != Intrinsic::None && intrinsicCName(Ex.IntrinsicId))
@@ -529,6 +602,10 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
     if (const char *Hdr = libc::headerFor(Name))
       Headers.insert(Hdr);
   }
+  if (NeedsObjCRuntime) {
+    Headers.insert("objc/message.h");
+    Headers.insert("objc/runtime.h");
+  }
 
   if (HasCIntrinsics)
     for (const char *Hdr : getArchIntrinsicHeaders(Opts.TheArch))
@@ -565,6 +642,62 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
     collectCallTargets(F.Body, CallTargets);
   }
 
+  if (NeedsObjCSuper2)
+    OS << "extern void objc_msgSendSuper2(void);\n";
+  for (const auto &Name : SourceBlockIsaNames)
+    OS << "extern void *" << Name << "[];\n";
+  for (const auto &Name : SourceBlockAddressHelpers)
+    OS << "extern uintptr_t " << Name << "(void);\n";
+
+  // A source-bound native helper can appear after its caller in the emitted
+  // module. Declare its actual recovered function signature before any body.
+  std::set<const HighFunc *> Prototyped;
+  for (const auto &[Name, Signature] : SourceNativeSignatures) {
+    auto Definition = DefinedFuncs.find(Name);
+    if (Definition == DefinedFuncs.end() ||
+        !Prototyped.insert(Definition->second).second)
+      continue;
+    const auto &Function = *Definition->second;
+    if (GuardAnalysisOnlyFunctions && isAnalysisOnlyFunction(Function))
+      continue;
+    CurrentFunc = &Function;
+    Analysis = {};
+    runAnalysisPasses(Function);
+    const auto ReturnType =
+        InferredVoid ? NdType::makeVoid() : Function.ReturnType;
+    if (typeToC(ReturnType) != typeToC(Signature->ReturnType))
+      ConflictingSourceNativeSignatures.insert(Name);
+    if (Function.DoesNotReturn)
+      OS << "_Noreturn ";
+    OS << typeToC(ReturnType) << " " << functionIdentifier(Function) << "(";
+    for (size_t I = 0; I < Function.Params.size(); ++I) {
+      if (I)
+        OS << ", ";
+      OS << typeToC(Function.Params[I].Type);
+    }
+    if (Function.Params.empty())
+      OS << "void";
+    OS << ");\n";
+  }
+  CurrentFunc = nullptr;
+  Analysis = {};
+  for (const auto *Function : SourceAddressDefinitions) {
+    if (!Prototyped.insert(Function).second)
+      continue;
+    if (GuardAnalysisOnlyFunctions && isAnalysisOnlyFunction(*Function))
+      continue;
+    OS << typeToC(Function->ReturnType) << " " << functionIdentifier(*Function)
+       << "(";
+    for (size_t I = 0; I < Function->Params.size(); ++I) {
+      if (I)
+        OS << ", ";
+      OS << typeToC(Function->Params[I].Type);
+    }
+    if (Function->Params.empty())
+      OS << "void";
+    OS << ");\n";
+  }
+
   for (auto &Name : CallTargets) {
     if (DefinedFuncs.count(Name))
       continue;
@@ -589,7 +722,23 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
         GlobalIdentifierAllocator.allocate(RenderedName, "nd_external");
     ExternalFunctionIdentifiers.emplace(Name, Identifier);
     ExternalFunctionIdentifiers.try_emplace(RenderedName.str(), Identifier);
-    OS << "extern int " << Identifier << "();\n";
+    auto SourceSignature = SourceNativeSignatures.find(Name);
+    if (SourceSignature != SourceNativeSignatures.end() &&
+        !ConflictingSourceNativeSignatures.count(Name)) {
+      const auto &Signature = *SourceSignature->second;
+      OS << "extern " << typeToC(Signature.ReturnType) << " " << Identifier
+         << "(";
+      for (size_t I = 0; I < Signature.Parameters.size(); ++I) {
+        if (I)
+          OS << ", ";
+        OS << typeToC(Signature.Parameters[I].Type);
+      }
+      if (Signature.Parameters.empty())
+        OS << "void";
+      OS << ");\n";
+    } else if (!ConflictingSourceNativeSignatures.count(Name)) {
+      OS << "extern int " << Identifier << "();\n";
+    }
   }
 
   if (!ExternFuncs.empty())

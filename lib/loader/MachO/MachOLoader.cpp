@@ -425,6 +425,7 @@ MachOLoader::load(const std::filesystem::path &Path) {
   macho_loader::parseBuildVersion(Obj, Img);
 
   parseObjCMethods(Img);
+  parseObjCStorage(Img);
 
   runPostLoadDiscovery(Img, "macho: loaded " + Path.filename().string());
   // Classified before any table is read: a compact-unwind entry names a

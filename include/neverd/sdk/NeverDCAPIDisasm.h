@@ -79,6 +79,15 @@ NEVERD_API const char *neverd_decompile(neverd_session_t Sess,
 NEVERD_API const char *neverd_objc_methods_json(neverd_session_t Sess,
                                                 size_t MaxFunctions);
 
+/// Emit actual Swift bodies from structured source signature hints. The
+/// schema_version=1 input must bind each mangled symbol to its image entry.
+/// The report retains unsupported methods. NULL indicates an export failure;
+/// free successful JSON with neverd_free_string. Source hints are not proof of
+/// semantic equivalence or authenticated ABI metadata.
+NEVERD_API const char *neverd_swift_methods_json(neverd_session_t Sess,
+                                                 const char *SignaturesJson,
+                                                 size_t MaxFunctions);
+
 // ===--------------------------------------------------------------------===//
 // Multi-stage IR
 // ===--------------------------------------------------------------------===//

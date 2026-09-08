@@ -7,6 +7,7 @@ set(NEVERD_SDK_SOURCES
     capi/NeverDCAPIConcolic.cpp
     capi/NeverDCAPIDecompile.cpp
     capi/NeverDCAPIObjC.cpp
+    capi/NeverDCAPISwift.cpp
     capi/NeverDCAPIDisasm.cpp
     capi/NeverDCAPIGraph.cpp
     capi/NeverDCAPIInfo.cpp
@@ -60,6 +61,7 @@ target_compile_features(neverd_shared PUBLIC cxx_std_20)
 target_link_libraries(neverd_shared PRIVATE
     NeverDPipeline
     NeverDBackendC
+    NeverDBackendSwift
     NeverDBackendLLVM
     NeverDCodeGen
     NeverDDecode

@@ -54,24 +54,23 @@ void MedToHighConverter::stripStackCanary(HighFunc &Func) {
                                  }),
                   Func.Body.end());
 
-  Func.Body.erase(std::remove_if(Func.Body.begin(), Func.Body.end(),
-                                 [](const HighStmt &S) {
-                                   if (S.Kind != StmtKind::Store || !S.StoreVal)
-                                     return false;
-                                   if (S.MemoryOrdering !=
-                                           NdMemoryOrdering::None ||
-                                       S.MemoryAddressSpace !=
-                                           NdMemoryAddressSpace::Default ||
-                                       S.StoreVal->hasOrderedMemoryAccess())
-                                     return false;
-                                   if (S.StoreVal->Kind != ExprKind::Load)
-                                     return false;
-                                   if (S.StoreVal->Operands.empty())
-                                     return false;
-                                   return S.StoreVal->Operands[0]->Kind ==
-                                          ExprKind::Load;
-                                 }),
-                  Func.Body.end());
+  Func.Body.erase(
+      std::remove_if(Func.Body.begin(), Func.Body.end(),
+                     [](const HighStmt &S) {
+                       if (S.Kind != StmtKind::Store || !S.StoreVal)
+                         return false;
+                       if (S.MemoryOrdering != NdMemoryOrdering::None ||
+                           S.MemoryAddressSpace !=
+                               NdMemoryAddressSpace::Default ||
+                           S.StoreVal->hasOrderedMemoryAccess())
+                         return false;
+                       if (S.StoreVal->Kind != ExprKind::Load)
+                         return false;
+                       if (S.StoreVal->Operands.empty())
+                         return false;
+                       return S.StoreVal->Operands[0]->Kind == ExprKind::Load;
+                     }),
+      Func.Body.end());
 
   for (size_t I = 0; I < Func.Body.size(); ++I) {
     auto &S = Func.Body[I];
@@ -167,8 +166,6 @@ void MedToHighConverter::stripPrologueEpilogue(HighFunc &Func) {
   for (auto &S : Func.Body)
     CollectStmtRefsPE(S);
 
-  std::set<std::string> FrameTemps;
-
   auto IsPrologueEpilogue = [&](const HighStmt &S) -> bool {
     if (S.Kind == StmtKind::Assign && S.Dst && S.Val) {
       if (S.Val->hasOrderedMemoryAccess())
@@ -184,16 +181,9 @@ void MedToHighConverter::stripPrologueEpilogue(HighFunc &Func) {
       }
       if (S.Dst->Kind == ExprKind::Var && IsFPReg(S.Dst->Var))
         return UsedFrameVars.count(S.Dst->str()) == 0;
-      if (S.Dst->Kind == ExprKind::Var && S.Dst->Var.Kind == MedVar::Temp &&
-          S.Val->Kind == ExprKind::BinOp && S.Val->Op == NdOp::INT_ADD &&
-          S.Val->Operands.size() == 2 &&
-          S.Val->Operands[0]->Kind == ExprKind::Var) {
-        auto &Base = S.Val->Operands[0]->Var;
-        if (IsSPReg(Base) || FrameTemps.count(S.Val->Operands[0]->str())) {
-          FrameTemps.insert(S.Dst->str());
-          return true;
-        }
-      }
+      // A temporary derived from SP may address live local storage, including
+      // block captures. Its origin does not make its definition a prologue.
+      // The following liveness-based DCE removes unused address computations.
     }
     if (S.Kind == StmtKind::Store && S.StoreVal && S.StoreAddr &&
         S.StoreVal->Kind == ExprKind::Var) {

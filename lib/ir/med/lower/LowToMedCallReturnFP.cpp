@@ -238,7 +238,7 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
       auto &Op = Blk.Ops[OI];
       if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
         continue;
-      if (Op.PreservesCallerSaved)
+      if (Op.PreservesCallerSaved || Op.SourceCallHint)
         continue;
       // A call already remodeled as a multi-register struct return (its output
       // is the flat aggregate temp, its FP return register claimed by an

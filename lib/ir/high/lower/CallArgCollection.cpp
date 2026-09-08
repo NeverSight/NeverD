@@ -28,6 +28,20 @@ std::vector<ExprPtr>
 MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx) {
 
   const auto &Ops = CurBlock.Ops;
+  if (CallIdx < Ops.size() && Ops[CallIdx].SourceCallHint) {
+    const auto &Call = Ops[CallIdx];
+    const size_t Count = Call.SourceCallHint->Signature.Parameters.size();
+    // These operands are the reaching SSA values bound before liveness and
+    // register cleanup. A second register scan loses forwarded arguments,
+    // independent FP carriers, and values supplied by a selector veneer.
+    if (Count > 64 || Call.NumInputs != Count + 1)
+      return {};
+    std::vector<ExprPtr> Arguments;
+    Arguments.reserve(Count);
+    for (size_t Index = 0; Index < Count; ++Index)
+      Arguments.push_back(medvarToExpr(Call.Inputs[Index + 1]));
+    return Arguments;
+  }
   constexpr int MaxArgs = 8;
   std::vector<ExprPtr> Found(MaxArgs);
 

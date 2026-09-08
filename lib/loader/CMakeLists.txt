@@ -60,6 +60,14 @@ add_neverd_component_library(NeverDLoader
   MachO/MachORelocations.cpp
   ObjC/ObjCEH.cpp
   ObjC/ObjCMethods.cpp
+  ObjC/ObjCStorage.cpp
+  ObjC/ObjCEncoding.cpp
+  ObjC/ObjCBlocks.cpp
+  ObjC/ObjCBlockCallHints.cpp
+  ObjC/ObjCCallHints.cpp
+  Swift/SwiftMetadata.cpp
+  Swift/SwiftABI.cpp
+  Swift/SwiftRuntimeSource.cpp
   Rust/RustEH.cpp
   discovery/FunctionDiscovery.cpp
   discovery/FunctionDiscoveryAArch64.cpp

@@ -18,10 +18,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/Limits.h"
-#include "neverd/support/Diagnostic.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"
+#include "neverd/support/Diagnostic.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
@@ -399,7 +399,7 @@ bool liveInOnlyFeedsScratch(const MedFunc &Func, uint64_t ParamRegOff) {
   }
 
   auto propagateOp = [&](const MedOp &Op) {
-    uint64_t InputMasks[6] = {};
+    llvm::SmallVector<uint64_t, 6> InputMasks(Op.NumInputs, 0);
     bool HasTaint = false;
     for (uint8_t I = 0; I < Op.NumInputs; ++I) {
       InputMasks[I] = taintMask(Op.Inputs[I]);
@@ -549,9 +549,10 @@ std::set<uint64_t> findLiveInParamRegs(const MedBlock &Entry,
 // Architecture-generic register-passed parameter detection
 //===----------------------------------------------------------------------===//
 
-void detectRegisterParams(
-    MedFunc &Func, const TargetRegInfo &TRI, llvm::ArrayRef<uint64_t> ParamRegs,
-    const std::set<uint64_t> &UsedParamRegs, Arch TargetArch) {
+void detectRegisterParams(MedFunc &Func, const TargetRegInfo &TRI,
+                          llvm::ArrayRef<uint64_t> ParamRegs,
+                          const std::set<uint64_t> &UsedParamRegs,
+                          Arch TargetArch) {
   // No parameter register is live-in: the function takes no register arguments
   // (a leaf with stack-only or no arguments).  Returning keeps Func.Params
   // empty so the cdecl/stack detector numbers arguments from arg0 rather than
@@ -651,8 +652,7 @@ void collectStackLocals(
 }
 
 void computeFrameBounds(
-    MedFunc &Func,
-    const std::vector<LowToMedConverter::StackSlot> &Slots) {
+    MedFunc &Func, const std::vector<LowToMedConverter::StackSlot> &Slots) {
   Func.FrameSize = 0;
   Func.FrameHeadroom = 0;
   constexpr uint64_t MaxFrame = static_cast<uint64_t>(kMaxFrameSize);

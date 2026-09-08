@@ -75,6 +75,10 @@ int runMobile(const char *Argv0) {
     Arguments.push_back("--jadx");
     Arguments.push_back(MobileBackend);
   }
+  if (!MobileSwiftDemangle.empty()) {
+    Arguments.push_back("--swift-demangle");
+    Arguments.push_back(MobileSwiftDemangle);
+  }
   if (!MobileArtifact.empty()) {
     Arguments.push_back("--artifact");
     Arguments.push_back(MobileArtifact);

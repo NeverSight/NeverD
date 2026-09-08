@@ -1,5 +1,6 @@
 add_neverd_component_library(NeverDPipeline
   Pipeline.cpp
+  NativeSourceHints.cpp
   PipelineDump.cpp
   PipelineFuncDetect.cpp
   PipelineHighIR.cpp
