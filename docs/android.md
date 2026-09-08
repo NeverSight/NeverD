@@ -1,4 +1,4 @@
-**Languages**: [English](android.md) | [简体中文](android.zh-CN.md) | [繁體中文](android.zh-TW.md) | [日本語](android.ja.md) | [한국어](android.ko.md) | [Français](android.fr.md) | [Deutsch](android.de.md) | [Español](android.es.md) | [Italiano](android.it.md) | [Русский](android.ru.md) | [العربية](android.ar.md)
+**Languages**: [English](android.md) | [简体中文](zh-CN/android.md) | [繁體中文](zh-TW/android.md) | [日本語](ja/android.md) | [한국어](ko/android.md) | [Français](fr/android.md) | [Deutsch](de/android.md) | [Español](es/android.md) | [Italiano](it/android.md) | [Русский](ru/android.md) | [العربية](ar/android.md)
 
 # Android Java recovery
 

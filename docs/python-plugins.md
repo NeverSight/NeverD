@@ -1,4 +1,4 @@
-**Languages**: [English](python-plugins.md) | [简体中文](python-plugins.zh-CN.md) | [繁體中文](python-plugins.zh-TW.md) | [日本語](python-plugins.ja.md) | [한국어](python-plugins.ko.md) | [Français](python-plugins.fr.md) | [Deutsch](python-plugins.de.md) | [Español](python-plugins.es.md) | [Italiano](python-plugins.it.md) | [Русский](python-plugins.ru.md) | [العربية](python-plugins.ar.md)
+**Languages**: [English](python-plugins.md) | [简体中文](zh-CN/python-plugins.md) | [繁體中文](zh-TW/python-plugins.md) | [日本語](ja/python-plugins.md) | [한국어](ko/python-plugins.md) | [Français](fr/python-plugins.md) | [Deutsch](de/python-plugins.md) | [Español](es/python-plugins.md) | [Italiano](it/python-plugins.md) | [Русский](ru/python-plugins.md) | [العربية](ar/python-plugins.md)
 
 [← Documentation Index](README.md)
 

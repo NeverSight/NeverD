@@ -1,4 +1,4 @@
-**Languages**: [English](README.md) | [简体中文](docs/i18n/README.zh-CN.md) | [繁體中文](docs/i18n/README.zh-TW.md) | [日本語](docs/i18n/README.ja.md) | [한국어](docs/i18n/README.ko.md) | [Français](docs/i18n/README.fr.md) | [Deutsch](docs/i18n/README.de.md) | [Español](docs/i18n/README.es.md) | [Italiano](docs/i18n/README.it.md) | [Русский](docs/i18n/README.ru.md) | [العربية](docs/i18n/README.ar.md)
+**Languages**: [English](README.md) | [简体中文](docs/zh-CN/project.md) | [繁體中文](docs/zh-TW/project.md) | [日本語](docs/ja/project.md) | [한국어](docs/ko/project.md) | [Français](docs/fr/project.md) | [Deutsch](docs/de/project.md) | [Español](docs/es/project.md) | [Italiano](docs/it/project.md) | [Русский](docs/ru/project.md) | [العربية](docs/ar/project.md)
 
 <div align="center">
 
@@ -37,6 +37,8 @@ CLI tools, integrators, and AI agents use one engine — **`libneverd`** — thr
 Input formats, host contracts, and limitations are documented in the [EVM guide](docs/evm.md) and [Solana SBF guide](docs/sbf.md).
 
 Android Java recovery is available through the separate `neverd mobile` CLI workflow: APK, multidex, DEX, and smali inputs produce Java using an installed JADX backend. See the [Android guide](docs/android.md) for runtime setup, supported inputs, output reports, and recovery limits.
+
+The experimental iOS workflow `neverd mobile App.ipa -o recovered-ios` exports native C and supported Objective-C/Swift sources from IPA, `.app`, or Mach-O. Runtime layouts, source units, and per-method omissions remain explicit; generated source does not use a bridge to the original binary. See the [iOS guide](docs/ios.md) for setup, coverage semantics, and independent compilation checks.
 
 ## Why NeverD?
 
@@ -259,7 +261,7 @@ neverd <command> [options] <binary>
 | `lift` | `.ll` | Lift to LLVM IR |
 | `decompile` | `.c` / `.sol` / `.rs` | C, EVM Solidity, or SBF Rust selected with `--language` |
 | `decompile -llvm` | `.c` | Via LLVM IR + optimizer |
-| `mobile` | Java directory + JSON report | Android APK/DEX/smali recovery; [setup and limits](docs/android.md) |
+| `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | Experimental: [Android](docs/android.md), [iOS](docs/ios.md) |
 | `patch` | binary | Rewrite machine code |
 
 ```bash

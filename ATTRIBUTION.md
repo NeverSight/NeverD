@@ -1,4 +1,4 @@
-**Languages**: [English](ATTRIBUTION.md) | [简体中文](docs/i18n/ATTRIBUTION.zh-CN.md) | [繁體中文](docs/i18n/ATTRIBUTION.zh-TW.md) | [日本語](docs/i18n/ATTRIBUTION.ja.md) | [한국어](docs/i18n/ATTRIBUTION.ko.md) | [Français](docs/i18n/ATTRIBUTION.fr.md) | [Deutsch](docs/i18n/ATTRIBUTION.de.md) | [Español](docs/i18n/ATTRIBUTION.es.md) | [Italiano](docs/i18n/ATTRIBUTION.it.md) | [Русский](docs/i18n/ATTRIBUTION.ru.md) | [العربية](docs/i18n/ATTRIBUTION.ar.md)
+**Languages**: [English](ATTRIBUTION.md) | [简体中文](docs/zh-CN/ATTRIBUTION.md) | [繁體中文](docs/zh-TW/ATTRIBUTION.md) | [日本語](docs/ja/ATTRIBUTION.md) | [한국어](docs/ko/ATTRIBUTION.md) | [Français](docs/fr/ATTRIBUTION.md) | [Deutsch](docs/de/ATTRIBUTION.md) | [Español](docs/es/ATTRIBUTION.md) | [Italiano](docs/it/ATTRIBUTION.md) | [Русский](docs/ru/ATTRIBUTION.md) | [العربية](docs/ar/ATTRIBUTION.md)
 
 # Attribution and citation
 

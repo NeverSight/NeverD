@@ -1,0 +1,156 @@
+**Languages**: [English](../ios.md) | [简体中文](ios.md) | [繁體中文](../zh-TW/ios.md) | [日本語](../ja/ios.md) | [한국어](../ko/ios.md) | [Français](../fr/ios.md) | [Deutsch](../de/ios.md) | [Español](../es/ios.md) | [Italiano](../it/ios.md) | [Русский](../ru/ios.md) | [العربية](../ar/ios.md)
+
+# iOS 原生代码与源码恢复
+
+[← 文档索引](README.md) · [移动应用概览](mobile.md)
+
+`neverd mobile` 接受 IPA、`.app` 和 Mach-O，输出原生 C、运行时元数据，以及受支持原生方法体的实验性 Objective-C `.m` 和 Swift `.swift` 源码。发布成功的结果仍可能包含未恢复方法，使用源码前请检查覆盖报告。移动应用容器由 CLI 处理；原生 C SDK 可单独加载选中的 Mach-O。
+
+编译会丢失注释、排版、标识符和源语言结构。此流程重建源码表示，无法还原原始文本，也不能为任意应用证明行为等价。静态恢复流程不会启动被分析的应用。
+
+## 开始使用与依赖
+
+```sh
+cmake --build build --target neverd
+python3 --version
+neverd mobile App.ipa -o recovered-ios
+neverd mobile App.app -o recovered-arm64 --arch=arm64
+neverd mobile executable -o metadata --metadata-only
+neverd mobile App.app -o recovered-framework --artifact Frameworks/Example.framework/Example
+```
+
+正常构建 NeverD，分发可执行文件时保留同级 `mobile/` 目录。需要 Python 3.10+，选择顺序是 `--python PATH`、`NEVERD_PYTHON`，最后是 PATH 中的 `python3`/`python`。不会自动下载依赖。在 macOS 上独立编译生成的 Apple 平台语言源码，还需要 Apple Clang、SDK 和 Swift 工具链；这些要求与静态原生分析相互独立。
+
+Swift 签名恢复依次选择 `--swift-demangle PATH`、`NEVERD_SWIFT_DEMANGLE` 和 PATH 中的 `swift-demangle`。macOS 最后会尝试有时间限制的 `xcrun --find swift-demangle`。显式指定的工具不存在会失败；自动查找不可用时保留未分类符号并报告 `unavailable`。没有 Swift 符号的输入不需要 demangler。`--metadata-only` 不调用原生后端或 demangler。
+
+```sh
+neverd mobile App.ipa -o recovered-swift \
+  --python python3 --swift-demangle /path/to/swift-demangle --timeout=600 --json
+```
+
+## 输入与选择
+
+IPA 必须包含唯一的顶层 `Payload/*.app`。`.app` 和 IPA 均通过 `Info.plist` 的 `CFBundleExecutable` 选择主程序。两种容器中的 `--artifact` 都相对于该应用目录，只选择一个内嵌可执行文件，不递归分析所有 Framework 或 Extension。原始 Mach-O 输入不接受 `--artifact`。
+
+Fat 二进制的 `--arch=auto` 优先顺序是 arm64、arm、x86_64、i386。缺失或不支持的切片会明确失败。目前源语言输出面向 arm64 和 x86_64；选择其他架构不代表支持 Objective-C/Swift 源码恢复。选中切片若 `cryptid != 0` 会被拒绝，需要提供已经解密且可读的分析输入。归档和目录输入会拒绝不安全路径、符号链接、特殊文件及冲突条目。
+
+## 选项与资源限制
+
+| 选项 | 默认值 | 含义 |
+|------|--------|------|
+| `-o DIRECTORY` | 必填 | 不存在且位于目录输入之外的输出目录；保留已有输出 |
+| `--platform=auto\|ios` | `auto` | 推断平台或明确选择 iOS |
+| `--arch=auto\|arm64\|arm\|x86_64\|i386` | `auto` | 选择一个 Mach-O 切片 |
+| `--artifact PATH` | 主程序 | 相对于应用目录的可执行文件路径 |
+| `--metadata-only` | 关闭 | 只读元数据，不恢复源码或调用工具 |
+| `--max-func N` | `0` | 原生函数数量上限；零表示所有发现的函数；元数据模式忽略此项 |
+| `--python PATH` | 环境/PATH | Python 3.10+ 辅助程序解释器 |
+| `--swift-demangle PATH` | 环境/PATH/工具链 | Swift 签名 demangler |
+| `--timeout N` | `300` | 每个后端进程的正整数秒数上限 |
+| `--max-files N` | `20000` | 正整数条目预算；Swift 符号清单也有数量限制 |
+| `--max-bytes N` | `2147483648` | 输入、解包数据和最终输出的正整数字节预算 |
+| `--json` | 关闭 | 以 JSON 输出带版本的报告 |
+
+工作区会被监测，暂存输入和中间输出可使用配置条目/字节预算的最多三倍。每个进程的日志上限为 16 MiB，Swift 签名 JSON 还受 32 MiB 限制。这些是资源控制，不是进程隔离。增加超时不会取消字节或条目限制。因 `--max-func` 被排除但仍在元数据清单中的方法会保留为未恢复项。
+
+## Objective-C 源码与运行时结构
+
+原生加载器把运行时方法记录、可执行 IMP 地址和受支持的类型编码绑定到明确的源码 ABI 位置。固定标量/指针绑定包含隐藏的 `self`/`_cmd`、未使用参数、独立的整数/浮点寄存器组，以及受支持的栈参数位置。float/double 的位重解释与数值转换分别处理。类型提示只是源码输出的输入，不是经过认证的 ABI 证据，也不授权修改可执行代码。
+
+`sources/objc.m` 将实际恢复语句放入 `@implementation` 方法体，保留必要的 C 辅助函数和具有类型绑定的调用。可输出的调用目标必须有受支持的源码绑定；未知目标或不完整依赖组仍是未恢复项。缺失定义、无效可执行地址、冲突编码、不支持的 ABI 映射、不完整解码和被 IR 校验拒绝的结果，不会仅因存在声明就被标为已恢复。
+
+类元数据保留父类身份、实例起始位置/大小，以及偏移、宽度和对齐已校验的标量/指针实例变量；声明在必要处插入填充。依赖不可用实例布局的方法仍标记为未恢复。Category 保留独立的类/分类/地址身份和实现；类与分类清单中重复出现的完全相同记录只计一次。外部 Category 在受支持时使用已有 Foundation 类声明；未知外部类头文件会报告为缺失依赖，不会虚构替代类布局。
+
+这只是对运行时信息的有限重建，不承诺完整恢复属性、协议、原始所有权标注、任意聚合类型、可变参数尾部、依赖异常的方法体和模型未覆盖的 Block/捕获布局。运行时编码只描述固定参数，不能证明原声明不存在省略号。只有原生加载器已解析相关槽时才使用链式指针；未解析格式会保留诊断。
+
+## Swift 源码与存储布局
+
+结构化 demangler 输出将可调用签名与不可调用元数据分别分类。受支持签名在恢复原生方法体前，必须绑定选中二进制的符号、入口和明确的机器 ABI。Swift 接收者遵循 Swift ABI，不替换成 Objective-C 隐藏参数。用户提供的签名文件也只是需要验证的提示。
+
+实验性输出器可以构建受支持的自由函数、类方法、指定初始化器和固定布局结构体方法，包括受支持的 mutating 接收者形式。类/结构体声明和存储字段需要恢复出的布局元数据。只有所需源码声明和方法体组成完整且受支持的依赖组时，才输出原生调用。恢复的源码单元将声明与方法放在一起，不通过桥接代码调用原始二进制。
+
+泛型或 resilient 布局、async/throwing 函数、未知调用约定、不支持的访问器/分配器/thunk、不完整初始化及未绑定的原生或运行时依赖，会逐项保留为 `unrecovered`。仅有 mangled 符号或名义类型名称不等于恢复了方法。符号裁剪和未分类的 demangler 节点会使覆盖不完整或未知。
+
+## 输出与覆盖口径
+
+```text
+recovered-ios/
+  artifacts/selected.macho
+  sources/native.c
+  sources/objc.m
+  sources/swift.swift
+  metadata/objc.h
+  metadata/objc.json
+  metadata/objc-methods.json
+  metadata/swift.json
+  metadata/swift-signatures.json
+  metadata/swift-methods.json
+  logs/
+  report.json
+```
+
+只有能够输出源码时，才生成对应源语言文件。`objc.json` 保存类、Category、实例变量和原始方法编码，`objc.h` 保存受支持声明；`swift.json` 保存名义类型元数据及 mangled 符号。签名和方法 JSON 保留分类、省略项、原因及数量。日志包含原生诊断，以及实际使用时的 Swift 工具链发现、demangling 和原生 Swift 导出诊断。`report.json` 中的输出路径相对于其目录。选中的二进制是分析产物，生成源码不会把它作为恢复桥接依赖来链接。
+
+临时包副本和中间后端 JSON 会被删除。正常运行若没有原生函数体，即使存在元数据也会失败。元数据模式仅生成选中的文件、`objc.h`、`objc.json`、`swift.json` 和 `report.json`，没有源码目录或方法覆盖/签名文件；`native_function_count`、`objc_method_recovery`、`swift_method_recovery` 均为 `null`。该模式的 Python Objective-C 读取器不解析链式指针或可重定位对象指针；完整恢复改用原生加载器已解析的 Objective-C 元数据。原始 Swift 元数据读取器仍可能把不支持的引用标为部分恢复。
+
+下面的缩略示例明确展示部分恢复：
+
+```json
+{
+  "schema_version": 1,
+  "status": "success",
+  "platform": "ios",
+  "architecture": "arm64",
+  "objc_method_recovery": {
+    "status": "partial",
+    "method_count": 3,
+    "recovered_method_count": 2,
+    "unrecovered_method_count": 1
+  },
+  "swift_method_recovery": {
+    "status": "partial",
+    "coverage_status": "partial",
+    "method_count": 4,
+    "recovered_method_count": 2,
+    "unrecovered_method_count": 2,
+    "metadata_symbol_count": 5,
+    "unclassified_symbol_count": 1
+  }
+}
+```
+
+最外层 `status: "success"` 表示已发布通过校验的输出。方法覆盖 `recovered`、`partial`、`unrecovered`、`no-methods` 描述的是已发现清单，不是语义等价或原程序完整性。每个未恢复方法都有原因。Objective-C 的 `recovered` 还要求运行时元数据完整。空清单不能证明原程序没有方法。
+
+Swift 的 `coverage_status` 只统计已分类的可调用项。整体 Swift `status` 还考虑未知符号，可为 `unavailable`、`unclassified`、`unsupported-architecture` 或 `no-symbols`。不可调用元数据位于 `non_method_symbols`，状态为 `not-callable`；未知符号使用 `unclassified`。`types`、`type_metadata_count`、`source_type_count` 分别记录类型元数据/输出类型单元，不得用来增加方法数量。
+
+原生 Swift 批量报告的 `source_units` 记录 `{kind, module, name, source, method_entries, method_identities}`，kind 为 `function` 或 `type`，每个 identity 为 `{entry, mangled_symbol}`。不同符号可以共享入口并保留各自 ABI 输出；每个已恢复 identity 必须且只能出现一次，未恢复 identity 不得出现。`method_entries` 必须精确等于 `method_identities` 的有序入口投影，允许重复地址；不能静默合并完全相同的重复 identity。批量 `source` 等于按顺序拼接每个单元源码再加一个换行。Mobile 在 `sources/swift.swift` 保存完整源码，在覆盖 JSON 保留单元描述。逐方法 `source` 用于查看，直接拼接无法正确重建类声明。
+
+## 直接原生导出与 SDK
+
+```sh
+neverd export recovered-ios/artifacts/selected.macho \
+  --format=objc-methods --max-func=20 -o objc-batch.json
+neverd export recovered-ios/artifacts/selected.macho \
+  --format=swift-methods \
+  --source-signatures=recovered-ios/metadata/swift-signatures.json -o swift-batch.json
+```
+
+Swift 导出使用正常 mobile 流程通过 demangler 生成的结构化签名清单。Objective-C 批量 JSON 包含 `native_source`、`native_function_count`、`objc_metadata`，以及逐方法 C 源码、函数名、返回类型和参数。Mobile 在生成 `.m` 前还会校验声明、方法体和布局，因此最终方法覆盖可能少于批量 C 覆盖。原生导出成功也可能没有任何已恢复方法。
+
+对已加载 Mach-O 的会话，`neverd_objc_methods_json(session, max_functions)` 和 `neverd_swift_methods_json(session, signatures_json, max_functions)` 返回相应报告。零表示所有发现的函数。成功返回的字符串用 `neverd_free_string` 释放；`NULL` 表示失败，原因见会话错误。这些 API 不加载 IPA 或 `.app` 容器。
+
+## 验证与故障排查
+
+```sh
+NEVERD_BUILD_DIR=build python3 -m unittest discover -s scripts/tests -p 'test_mobile_*.py' -v
+python3 scripts/test_mobile_ios_backend.py --neverd build/bin/neverd
+python3 scripts/test_mobile_swift_backend.py --neverd build/bin/neverd
+```
+
+macOS 上的自有 Objective-C 验证脚本先编译原样本，再恢复 `.m`，最后只把生成源码与独立调用程序链接。覆盖整数边界、分支、循环、指针读写、隐藏参数、float/double 位身份、混合参数和栈参数。Swift 脚本独立编译生成的 `.swift` 与调用程序，不使用原始 dylib、模块、桥接或手写替代声明；检查标量/原生调用、类初始化与存储、结构体按值/mutating 方法、浮点、栈参数、指针和循环。这些严格检查可能暴露尚未支持的覆盖；存在脚本不等于每个版本的所有样例都已通过。
+
+两个脚本都支持 `--arch all|arm64|x86_64`、`--fixups both|classic|default`、`--timeout N` 和 `--work-dir NEW_DIRECTORY`。`--setup-only` 只验证原样本，不测试恢复。宿主无法执行的架构会在允许时明确跳过，跳过不等于通过。保留的失败产物可用于区分源码覆盖缺失、编译错误和行为差异；声称已验证前应查看当前测试结果。
+
+结果发布具有事务性：选择新目录，先检查进程退出状态，并把重定向的 JSON 放在该目录外。失败会删除暂存输出并保留已有结果。后端非零退出附带长度受限的日志尾部；超时与预算失败有独立消息。`--json` 下已处理的辅助程序错误输出 `status: "error"`；参数解析、辅助程序/解释器缺失、Python 低于 3.10 或中断可能更早在 stderr 失败。
+
+加密切片需要可读输入；缺少架构时检查可用切片；缺少 Swift 工具时指定实际 demangler；方法被省略时查看其准确原因和元数据诊断。增加 `--max-func` 只对因数量上限被排除的函数有帮助。缺少布局、签名、外部头文件、异常支持或 ABI 行为支持，需要补充实现或有效元数据，不能直接宣称完整恢复。分发工具或生成的软件包时保留适用的依赖许可证声明。

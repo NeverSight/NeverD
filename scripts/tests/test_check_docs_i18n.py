@@ -74,6 +74,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                 Path("docs/evm.md"),
                 Path("docs/sbf.md"),
                 Path("docs/android.md"),
+                Path("docs/ios.md"),
             },
         )
 
@@ -91,9 +92,9 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         view = i18n.RepositoryView(use_index=False)
         for path, token in (
             (Path("README.md"), "docs/android.md"),
-            (Path("docs/README.zh-CN.md"), "android.zh-CN.md"),
+            (Path("docs/zh-CN/README.md"), "android.md"),
             (Path("docs/android.md"), "--max-bytes"),
-            (Path("docs/android.zh-CN.md"), "java_source_count"),
+            (Path("docs/zh-CN/android.md"), "java_source_count"),
         ):
             with self.subTest(path=path, token=token):
                 self.assertIn(token, view.read_text(path))
@@ -107,7 +108,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         links = (
             (Path("README.md"), "docs/android.md"),
             *(
-                (Path(f"docs/i18n/README.{locale}.md"), f"../android.{locale}.md")
+                (Path(f"docs/{locale}/project.md"), "android.md")
                 for locale in i18n.LOCALES
             ),
         )
@@ -124,14 +125,14 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
     def test_android_readme_rows_require_their_own_guide_link(self) -> None:
         complete = self._android_readme_examples()
         errors: list[str] = []
-        i18n.validate_android_readme_entries(errors, _PathTextView(complete))
+        i18n.validate_mobile_readme_entries(errors, _PathTextView(complete))
         self.assertEqual(errors, [])
         for path, text in complete.items():
             row = next(
                 line for line in text.splitlines() if line.startswith("| `mobile` |")
             )
             wrong_target = (
-                "docs/android.zh-CN.md" if path == Path("README.md") else "../android.md"
+                "docs/zh-CN/android.md" if path == Path("README.md") else "../android.md"
             )
             for mutation, replacement, diagnostic in (
                 ("missing", "", "expected one mobile CLI table row, found 0"),
@@ -151,7 +152,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                 with self.subTest(path=path, mutation=mutation):
                     texts = {**complete, path: text.replace(row, replacement)}
                     errors = []
-                    i18n.validate_android_readme_entries(errors, _PathTextView(texts))
+                    i18n.validate_mobile_readme_entries(errors, _PathTextView(texts))
                     self.assertEqual(len(errors), 1, errors)
                     self.assertIn(f"{path.as_posix()}: {diagnostic}", errors[0])
 
@@ -159,7 +160,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         english_path = Path("docs/android.md")
         english = i18n.RepositoryView(use_index=False).read_text(english_path)
         localized_paths = tuple(
-            Path(f"docs/android.{locale}.md") for locale in i18n.LOCALES
+            Path(f"docs/{locale}/android.md") for locale in i18n.LOCALES
         )
         complete = {path: english for path in (english_path, *localized_paths)}
         first_path = localized_paths[0]
@@ -168,7 +169,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         )
         complete[first_path] = english.replace(directory_body, "translated directory descriptions")
         errors: list[str] = []
-        i18n.validate_android_examples(errors, _PathTextView(complete))
+        i18n.validate_mobile_examples(errors, _PathTextView(complete))
         self.assertEqual(errors, [])
 
         for path in localized_paths:
@@ -182,10 +183,48 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                     self.assertIn(original, english)
                     texts = {**complete, path: english.replace(original, replacement, 1)}
                     errors = []
-                    i18n.validate_android_examples(errors, _PathTextView(texts))
+                    i18n.validate_mobile_examples(errors, _PathTextView(texts))
                     self.assertEqual(len(errors), 1, errors)
                     self.assertIn(path.as_posix(), errors[0])
                     self.assertIn("must match docs/android.md", errors[0])
+
+    def test_ios_identity_schema_and_localized_links_are_required(self) -> None:
+        view = i18n.RepositoryView(use_index=False)
+        for path, token in (
+            (Path("README.md"), "docs/ios.md"),
+            (Path("docs/zh-CN/README.md"), "ios.md"),
+            (Path("docs/ios.md"), "method_identities"),
+            (Path("docs/zh-TW/ios.md"), "{entry, mangled_symbol}"),
+        ):
+            with self.subTest(path=path, token=token):
+                original = view.read_text(path)
+                self.assertIn(token, original)
+                errors: list[str] = []
+                i18n.validate_matrix(errors, _OverlayView({
+                    path: original.replace(token, "removed-ios-contract")
+                }))
+                self.assertTrue(any(token in error for error in errors), errors)
+
+    def test_ios_translated_examples_and_mobile_rows_do_not_drift(self) -> None:
+        view = i18n.RepositoryView(use_index=False)
+        for locale in i18n.LOCALES:
+            path = Path(f"docs/{locale}/ios.md")
+            original = view.read_text(path)
+            errors: list[str] = []
+            i18n.validate_mobile_examples(errors, _OverlayView({
+                path: original.replace("--format=swift-methods", "--format=swift-incorrect", 1)
+            }), "ios")
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn(path.as_posix(), errors[0])
+            project = Path(f"docs/{locale}/project.md")
+            original = view.read_text(project)
+            row = next(line for line in original.splitlines() if line.startswith("| `mobile` |"))
+            errors = []
+            i18n.validate_mobile_readme_entries(errors, _OverlayView({
+                project: original.replace(row, row.replace("ios.md", "../ios.md"))
+            }), "ios")
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn("ios.md", errors[0])
 
     def test_every_english_document_has_a_counterpart_in_every_locale(self) -> None:
         self.assertEqual(
@@ -197,7 +236,8 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
             with self.subTest(locale=locale):
                 self.assertEqual(len(localized), len(i18n.ENGLISH_DOCS))
                 for path in localized:
-                    self.assertTrue(path.name.endswith(f".{locale}.md"), path)
+                    self.assertTrue(path.is_relative_to(Path("docs") / locale), path)
+                    self.assertFalse(path.name.endswith(f".{locale}.md"), path)
                     self.assertIn(path, i18n.MARKDOWN_DOCS)
 
     def test_every_architecture_locale_rejects_each_missing_semantic_token(
@@ -232,7 +272,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         }
         architecture_paths = (
             Path("docs/architecture.md"),
-            *(Path(f"docs/architecture.{locale}.md") for locale in i18n.LOCALES),
+            *(Path(f"docs/{locale}/architecture.md") for locale in i18n.LOCALES),
         )
         self.assertEqual(i18n.ARCHITECTURE_CAPABILITY_TOKENS, capability_tokens)
         self.assertEqual(i18n.ARCHITECTURE_DOCS, architecture_paths)
@@ -267,7 +307,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                         )
 
     def test_matrix_runs_the_architecture_semantic_guard(self) -> None:
-        path = Path("docs/architecture.zh-CN.md")
+        path = Path("docs/zh-CN/architecture.md")
         token = "`neverd translate-object`"
         text = i18n.RepositoryView(use_index=False).read_text(path)
         self.assertIn(token, text)
@@ -822,7 +862,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         )
 
     def test_sbf_rust_prose_mutation_is_wired_into_matrix(self) -> None:
-        path = Path("docs/sbf.zh-CN.md")
+        path = Path("docs/zh-CN/sbf.md")
         source = i18n.RepositoryView(use_index=False).read_text(path)
         marker = "`v1-result-abi`"
         self.assertEqual(source.count(marker), 1)
@@ -835,7 +875,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         )
 
     def test_sbf_conformance_command_mutation_is_wired_into_matrix(self) -> None:
-        path = Path("docs/sbf.zh-CN.md")
+        path = Path("docs/zh-CN/sbf.md")
         source = i18n.RepositoryView(use_index=False).read_text(path)
         line = i18n.SBF_CONFORMANCE_COMMAND_LINES[1]
         self.assertEqual(source.count(line), 1)
@@ -848,7 +888,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         )
 
     def test_sbf_ownership_section_mutation_is_wired_into_matrix(self) -> None:
-        path = Path("docs/testing.zh-CN.md")
+        path = Path("docs/zh-CN/testing.md")
         source = i18n.RepositoryView(use_index=False).read_text(path)
         headings = list(
             i18n.re.finditer(r"^(#{1,6})\s+([^\n]+)\n", source, flags=i18n.re.MULTILINE)
@@ -884,7 +924,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         )
 
     def test_sbf_c_host_prose_mutation_cannot_be_satisfied_by_code(self) -> None:
-        path = Path("docs/sbf.zh-CN.md")
+        path = Path("docs/zh-CN/sbf.md")
         source = i18n.RepositoryView(use_index=False).read_text(path)
         heading = i18n.re.search(
             r"^## [^\n]*C[^\n]*host[^\n]*\n",
@@ -925,7 +965,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         self.assertTrue(c_errors)
 
     def test_sbf_c_idl_setter_must_stay_inside_the_c_fence(self) -> None:
-        path = Path("docs/sbf.zh-CN.md")
+        path = Path("docs/zh-CN/sbf.md")
         source = i18n.RepositoryView(use_index=False).read_text(path)
         setter = "neverd_sbf_set_idl(session, idl_json);"
         self.assertEqual(source.count(setter), 1)
@@ -938,7 +978,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         )
 
     def test_sbf_scratch_policy_mutation_rejects_missing_stable_marker(self) -> None:
-        path = Path("docs/sbf.zh-CN.md")
+        path = Path("docs/zh-CN/sbf.md")
         source = i18n.RepositoryView(use_index=False).read_text(path)
         marker = "ScratchFlowRetainedByteBudget"
         self.assertEqual(source.count(marker), 1)
@@ -951,7 +991,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         )
 
     def test_sbf_testing_evidence_requires_accept_reject_counts_together(self) -> None:
-        path = Path("docs/testing.zh-CN.md")
+        path = Path("docs/zh-CN/testing.md")
         source = i18n.RepositoryView(use_index=False).read_text(path)
         marker = "1,399"
         self.assertEqual(source.count(marker), 1)
@@ -1050,7 +1090,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         token = "git fetch"
         testing_paths = (
             Path("docs/testing.md"),
-            *(Path(f"docs/testing.{locale}.md") for locale in i18n.LOCALES),
+            *(Path(f"docs/{locale}/testing.md") for locale in i18n.LOCALES),
         )
         self.assertIn(token, i18n.TESTING_REQUIRED_TOKENS)
 
@@ -1074,11 +1114,11 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
     ) -> None:
         guide_paths = (
             Path("docs/evm.md"),
-            *(Path(f"docs/evm.{locale}.md") for locale in i18n.LOCALES),
+            *(Path(f"docs/{locale}/evm.md") for locale in i18n.LOCALES),
         )
         testing_paths = (
             Path("docs/testing.md"),
-            *(Path(f"docs/testing.{locale}.md") for locale in i18n.LOCALES),
+            *(Path(f"docs/{locale}/testing.md") for locale in i18n.LOCALES),
         )
         view = i18n.RepositoryView(use_index=False)
 
@@ -1143,8 +1183,8 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         paths = (
             Path("docs/evm.md"),
             Path("docs/testing.md"),
-            *(Path(f"docs/evm.{locale}.md") for locale in i18n.LOCALES),
-            *(Path(f"docs/testing.{locale}.md") for locale in i18n.LOCALES),
+            *(Path(f"docs/{locale}/evm.md") for locale in i18n.LOCALES),
+            *(Path(f"docs/{locale}/testing.md") for locale in i18n.LOCALES),
         )
         view = i18n.RepositoryView(use_index=False)
         for path in paths:
@@ -1159,7 +1199,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
             with self.subTest(path=path, removed=removed_shared_cache):
                 self.assertNotIn(removed_shared_cache, view.read_text(path))
 
-        guarded_path = Path("docs/evm.zh-CN.md")
+        guarded_path = Path("docs/zh-CN/evm.md")
         guarded_token = "operation.undefined"
         guarded_text = view.read_text(guarded_path)
         errors: list[str] = []

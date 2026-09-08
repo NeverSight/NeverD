@@ -1,4 +1,4 @@
-**Languages**: [English](plugins.md) | [简体中文](plugins.zh-CN.md) | [繁體中文](plugins.zh-TW.md) | [日本語](plugins.ja.md) | [한국어](plugins.ko.md) | [Français](plugins.fr.md) | [Deutsch](plugins.de.md) | [Español](plugins.es.md) | [Italiano](plugins.it.md) | [Русский](plugins.ru.md) | [العربية](plugins.ar.md)
+**Languages**: [English](plugins.md) | [简体中文](zh-CN/plugins.md) | [繁體中文](zh-TW/plugins.md) | [日本語](ja/plugins.md) | [한국어](ko/plugins.md) | [Français](fr/plugins.md) | [Deutsch](de/plugins.md) | [Español](es/plugins.md) | [Italiano](it/plugins.md) | [Русский](ru/plugins.md) | [العربية](ar/plugins.md)
 
 [← Documentation Index](README.md)
 

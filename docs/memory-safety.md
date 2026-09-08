@@ -1,4 +1,4 @@
-**Languages**: [English](memory-safety.md) | [简体中文](memory-safety.zh-CN.md) | [繁體中文](memory-safety.zh-TW.md) | [日本語](memory-safety.ja.md) | [한국어](memory-safety.ko.md) | [Français](memory-safety.fr.md) | [Deutsch](memory-safety.de.md) | [Español](memory-safety.es.md) | [Italiano](memory-safety.it.md) | [Русский](memory-safety.ru.md) | [العربية](memory-safety.ar.md)
+**Languages**: [English](memory-safety.md) | [简体中文](zh-CN/memory-safety.md) | [繁體中文](zh-TW/memory-safety.md) | [日本語](ja/memory-safety.md) | [한국어](ko/memory-safety.md) | [Français](fr/memory-safety.md) | [Deutsch](de/memory-safety.md) | [Español](es/memory-safety.md) | [Italiano](it/memory-safety.md) | [Русский](ru/memory-safety.md) | [العربية](ar/memory-safety.md)
 
 [← Documentation Index](README.md)
 

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import re
 import sys
@@ -22,16 +23,16 @@ SDK_WORKFLOW = ROOT / ".github" / "workflows" / "python-plugin-sdk.yml"
 MAIN_CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 DOCUMENT_LOCALES = (
     "",
-    ".zh-CN",
-    ".zh-TW",
-    ".ja",
-    ".ko",
-    ".fr",
-    ".de",
-    ".es",
-    ".it",
-    ".ru",
-    ".ar",
+    "zh-CN",
+    "zh-TW",
+    "ja",
+    "ko",
+    "fr",
+    "de",
+    "es",
+    "it",
+    "ru",
+    "ar",
 )
 CONCOLIC_V1_REGISTER_SEED_CEILING = 4096
 
@@ -662,7 +663,10 @@ def _fenced_code_blocks(source: str) -> tuple[tuple[str, str], ...]:
 
 def check_documentation(errors: list[str]) -> None:
     docs = ROOT / "docs"
-    document_names = tuple(f"python-plugins{locale}.md" for locale in DOCUMENT_LOCALES)
+    document_names = tuple(
+        (Path(locale) / "python-plugins.md").as_posix()
+        for locale in DOCUMENT_LOCALES
+    )
     english_path = docs / document_names[0]
     if not english_path.is_file():
         errors.append("missing docs/python-plugins.md")
@@ -684,20 +688,21 @@ def check_documentation(errors: list[str]) -> None:
     )
     for locale, document_name in zip(DOCUMENT_LOCALES, document_names):
         document = docs / document_name
-        index = docs / f"README{locale}.md"
+        index = docs / locale / "README.md"
         if not document.is_file():
             errors.append(f"missing docs/{document_name}")
             continue
         if not index.is_file():
-            errors.append(f"missing docs/{index.name}")
+            errors.append(f"missing {index.relative_to(ROOT).as_posix()}")
             continue
 
         source = document.read_text(encoding="utf-8")
         index_source = index.read_text(encoding="utf-8")
-        if f"]({document_name})" not in index_source:
-            errors.append(f"docs/{index.name} does not link to {document_name}")
+        if f"]({document.name})" not in index_source:
+            errors.append(f"{index.relative_to(ROOT).as_posix()} does not link to {document.name}")
         for linked_name in document_names:
-            if f"]({linked_name})" not in source:
+            target = Path(os.path.relpath(docs / linked_name, document.parent)).as_posix()
+            if f"]({target})" not in source:
                 errors.append(f"docs/{document_name} does not link to {linked_name}")
         for token in required_tokens:
             if token not in source:

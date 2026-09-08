@@ -1,0 +1,25 @@
+**اللغات**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](README.md)
+
+[← مشروع NeverD](project.md)
+
+# توثيق NeverD
+
+نظرة عامة على المشروع والبناء وCLI موجودة في README المستودع. تُجمع هنا مراجع التصميم والاختبار الخاصة بالمساهمين.
+
+| المستند | الوصف |
+|---------|--------|
+| [README (العربية)](project.md) | نظرة عامة، بداية سريعة، بناء، SDK، CLI |
+| [المساهمة](CONTRIBUTING.md) | البيئة، وملفات البناء، وسير العمل، والنمط، ومتطلبات PR |
+| [العمارة](architecture.md) | مسارات IR، وحدود المكونات، والرفع الصارم، وعمق الدعم، ومواقع التعديل |
+| [الاختبارات](testing.md) | المجموعات، وfixtures المولدة، ودورات Unicorn، والأوامر التزايدية |
+| [إعادة بناء استثناءات Windows](windows-exception-reconstruction.md) | مصفوفة دعم SEH/C++، وعقد IR، وقواعد patch الأصلية، والتحقق من PE |
+| [تدقيق وصيد أمان الذاكرة](memory-safety.md) | تحليل عمر الكومة وفيضان النسخ: عقد الهوية حسب الصيغة، وكتالوج المصارف/المصادر، والأحكام، والميزانيات، ومخطط JSON |
+| [الإضافات الأصلية](plugins.md) | ABI واصف بلغة C الخالصة، والاستدعاءات والأحداث، ومسار البناء/الربط، والاكتشاف، وقواعد التوافق |
+| [إضافات Python](python-plugins.md) | تأليف الإضافات، وواجهة الجلسة والأحداث، والعزل، والاختبارات، والنشر |
+| [فك تجميع EVM](evm.md) | المدخلات وhardforks وIR المرحلي وعقدا C/LLVM واستعادة Solidity والحدود |
+| [تفكيك Solana SBF](sbf.md) | ‏SBF v0-v4، وLLVM IR، ومخرجات C/Rust، والتحقق، والقيود المعروفة |
+| [استعادة Java من Android](android.md) | APK وDEX وsmali؛ إعداد JADX/Python، وواجهة سطر الأوامر، وتقارير JSON، والقيود والتحقق |
+| [استعادة مصادر iOS](ios.md) | اختيار IPA/.app/Mach-O وأجسام وتخطيطات Objective-C/Swift وCLI/export والتغطية والحدود والتحقق بالتنفيذ |
+| [خارطة الطريق](roadmap/README.md) | الحالة: الصيغ الأصلية وEVM وSolana SBF مكتملة |
+| [English README](../../README.md) | النسخة الإنجليزية |
+| [لغات أخرى](../README.md) | بقية الإصدارات المترجمة |

@@ -1,4 +1,4 @@
-**Languages**: [English](evm.md) | [简体中文](evm.zh-CN.md) | [繁體中文](evm.zh-TW.md) | [日本語](evm.ja.md) | [한국어](evm.ko.md) | [Français](evm.fr.md) | [Deutsch](evm.de.md) | [Español](evm.es.md) | [Italiano](evm.it.md) | [Русский](evm.ru.md) | [العربية](evm.ar.md)
+**Languages**: [English](evm.md) | [简体中文](zh-CN/evm.md) | [繁體中文](zh-TW/evm.md) | [日本語](ja/evm.md) | [한국어](ko/evm.md) | [Français](fr/evm.md) | [Deutsch](de/evm.md) | [Español](es/evm.md) | [Italiano](it/evm.md) | [Русский](ru/evm.md) | [العربية](ar/evm.md)
 
 # EVM decompilation
 

@@ -1,4 +1,4 @@
-**Languages**: [English](CONTRIBUTING.md) | [简体中文](docs/i18n/CONTRIBUTING.zh-CN.md) | [繁體中文](docs/i18n/CONTRIBUTING.zh-TW.md) | [日本語](docs/i18n/CONTRIBUTING.ja.md) | [한국어](docs/i18n/CONTRIBUTING.ko.md) | [Français](docs/i18n/CONTRIBUTING.fr.md) | [Deutsch](docs/i18n/CONTRIBUTING.de.md) | [Español](docs/i18n/CONTRIBUTING.es.md) | [Italiano](docs/i18n/CONTRIBUTING.it.md) | [Русский](docs/i18n/CONTRIBUTING.ru.md) | [العربية](docs/i18n/CONTRIBUTING.ar.md)
+**Languages**: [English](CONTRIBUTING.md) | [简体中文](docs/zh-CN/CONTRIBUTING.md) | [繁體中文](docs/zh-TW/CONTRIBUTING.md) | [日本語](docs/ja/CONTRIBUTING.md) | [한국어](docs/ko/CONTRIBUTING.md) | [Français](docs/fr/CONTRIBUTING.md) | [Deutsch](docs/de/CONTRIBUTING.md) | [Español](docs/es/CONTRIBUTING.md) | [Italiano](docs/it/CONTRIBUTING.md) | [Русский](docs/ru/CONTRIBUTING.md) | [العربية](docs/ar/CONTRIBUTING.md)
 
 # Contributing to NeverD
 

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import posixpath
 import re
 import subprocess
 import sys
@@ -28,7 +29,7 @@ LOCALES = (
 )
 ARCHITECTURE_DOCS = (
     Path("docs/architecture.md"),
-    *(Path(f"docs/architecture.{locale}.md") for locale in LOCALES),
+    *(Path(f"docs/{locale}/architecture.md") for locale in LOCALES),
 )
 ARCHITECTURE_CAPABILITY_TOKENS = {
     "translation.runtime-contract": (
@@ -57,14 +58,14 @@ ARCHITECTURE_CAPABILITY_TOKENS = {
         "`landingpad`",
     ),
 }
-GUIDE_STEMS = ("evm", "sbf", "android")
+GUIDE_STEMS = ("evm", "sbf", "android", "ios")
 SBF_GUIDE_DOCS = (
     Path("docs/sbf.md"),
-    *(Path(f"docs/sbf.{locale}.md") for locale in LOCALES),
+    *(Path(f"docs/{locale}/sbf.md") for locale in LOCALES),
 )
 SBF_TESTING_DOCS = (
     Path("docs/testing.md"),
-    *(Path(f"docs/testing.{locale}.md") for locale in LOCALES),
+    *(Path(f"docs/{locale}/testing.md") for locale in LOCALES),
 )
 SBF_UPSTREAM_SOURCES_PATH = Path("include/neverd/sbf/runtime/SBFUpstreamSources.def")
 SBF_PROTOCOL_LIMITS_PATH = Path("include/neverd/sbf/SBFProtocolLimits.def")
@@ -486,6 +487,21 @@ EVM_FUNCTION_SCOPE_TEST_TOKENS = (
     "`region`",
 )
 GUIDE_REQUIRED_TOKENS = {
+    "ios": (
+        "neverd mobile", "IPA", ".app", "Mach-O", "3.10", "--python",
+        "NEVERD_PYTHON", "--swift-demangle", "NEVERD_SWIFT_DEMANGLE",
+        "xcrun --find swift-demangle", "--artifact", "CFBundleExecutable",
+        "--arch", "--metadata-only", "--max-func", "--timeout", "--max-files",
+        "--max-bytes", "--json", "cryptid != 0", "2147483648", "20000", "300",
+        "sources/objc.m", "sources/swift.swift", "metadata/objc-methods.json",
+        "metadata/swift-signatures.json", "metadata/swift-methods.json",
+        "schema_version", "unrecovered_method_count", "coverage_status",
+        "unclassified_symbol_count", "not-callable", "source_units",
+        "method_entries", "method_identities", "{entry, mangled_symbol}",
+        "--format=objc-methods", "--format=swift-methods", "--source-signatures",
+        "neverd_objc_methods_json", "neverd_swift_methods_json", "neverd_free_string",
+        "test_mobile_ios_backend.py", "test_mobile_swift_backend.py", "--setup-only",
+    ),
     "android": (
         "neverd mobile", ".apk", ".dex", ".smali", "JADX", "1.5.6", "3.10",
         "--jadx", "--python", "NEVERD_JADX", "NEVERD_PYTHON", "JAVA_HOME",
@@ -695,25 +711,27 @@ ENGLISH_DOCS = (
 
 def localized_paths(locale: str) -> tuple[Path, ...]:
     return (
-        Path(f"docs/i18n/README.{locale}.md"),
-        Path(f"docs/i18n/CONTRIBUTING.{locale}.md"),
-        Path(f"docs/i18n/ATTRIBUTION.{locale}.md"),
-        Path(f"docs/README.{locale}.md"),
-        Path(f"docs/architecture.{locale}.md"),
-        Path(f"docs/memory-safety.{locale}.md"),
-        Path(f"docs/plugins.{locale}.md"),
-        Path(f"docs/python-plugins.{locale}.md"),
-        Path(f"docs/roadmap/README.{locale}.md"),
-        Path(f"docs/testing.{locale}.md"),
-        Path(f"docs/windows-exception-reconstruction.{locale}.md"),
-        Path(f"docs/evm.{locale}.md"),
-        Path(f"docs/sbf.{locale}.md"),
-        Path(f"docs/android.{locale}.md"),
+        Path(f"docs/{locale}/project.md"),
+        Path(f"docs/{locale}/CONTRIBUTING.md"),
+        Path(f"docs/{locale}/ATTRIBUTION.md"),
+        Path(f"docs/{locale}/README.md"),
+        Path(f"docs/{locale}/architecture.md"),
+        Path(f"docs/{locale}/memory-safety.md"),
+        Path(f"docs/{locale}/plugins.md"),
+        Path(f"docs/{locale}/python-plugins.md"),
+        Path(f"docs/{locale}/roadmap/README.md"),
+        Path(f"docs/{locale}/testing.md"),
+        Path(f"docs/{locale}/windows-exception-reconstruction.md"),
+        Path(f"docs/{locale}/evm.md"),
+        Path(f"docs/{locale}/sbf.md"),
+        Path(f"docs/{locale}/android.md"),
+        Path(f"docs/{locale}/ios.md"),
     )
 
 
 LOCALIZED_DOCS = tuple(path for locale in LOCALES for path in localized_paths(locale))
-MARKDOWN_DOCS = ENGLISH_DOCS + LOCALIZED_DOCS
+PARTIAL_TRANSLATION_DOCS = (Path("docs/mobile.md"), Path("docs/zh-CN/mobile.md"))
+MARKDOWN_DOCS = ENGLISH_DOCS + LOCALIZED_DOCS + PARTIAL_TRANSLATION_DOCS
 PROHIBITED_STAGED_PREFIXES = ("docs/superpowers/",)
 EVM_TESTS_CMAKE = Path("unittests/evm/CMakeLists.txt")
 
@@ -1560,14 +1578,14 @@ def without_markdown_fences(text: str) -> str:
     return "\n".join(output)
 
 
-def validate_android_readme_entries(
-    errors: list[str], view: RepositoryView
+def validate_mobile_readme_entries(
+    errors: list[str], view: RepositoryView, stem: str = "android"
 ) -> None:
-    """Keep the mobile CLI row linked to each README's Android guide."""
+    """Keep the mobile CLI row linked to each README's platform guide."""
     links = (
-        (Path("README.md"), "docs/android.md"),
+        (Path("README.md"), f"docs/{stem}.md"),
         *(
-            (Path(f"docs/i18n/README.{locale}.md"), f"../android.{locale}.md")
+            (Path(f"docs/{locale}/project.md"), f"{stem}.md")
             for locale in LOCALES
         ),
     )
@@ -1591,7 +1609,9 @@ def validate_android_readme_entries(
             )
 
 
-def validate_android_examples(errors: list[str], view: RepositoryView) -> None:
+def validate_mobile_examples(
+    errors: list[str], view: RepositoryView, stem: str = "android"
+) -> None:
     """Preserve command and JSON samples exactly while allowing translated text."""
     languages = {"sh", "bash", "shell", "powershell", "json"}
 
@@ -1602,14 +1622,14 @@ def validate_android_examples(errors: list[str], view: RepositoryView) -> None:
             if info in languages
         )
 
-    expected = examples(Path("docs/android.md"))
+    expected = examples(Path(f"docs/{stem}.md"))
     for locale in LOCALES:
-        path = Path(f"docs/android.{locale}.md")
+        path = Path(f"docs/{locale}/{stem}.md")
         if examples(path) != expected:
             report(
                 errors,
-                f"{display_path(path)}: Android command and JSON fenced blocks "
-                "must match docs/android.md exactly",
+                f"{display_path(path)}: {stem} command and JSON fenced blocks "
+                f"must match docs/{stem}.md exactly",
             )
 
 
@@ -2068,15 +2088,16 @@ def validate_matrix(errors: list[str], view: RepositoryView) -> None:
     validate_sbf_testing_ownership(errors, view)
     validate_sbf_testing_evidence_prose(errors, view)
     validate_sbf_testing_release_commands(errors, view)
-    validate_android_readme_entries(errors, view)
-    validate_android_examples(errors, view)
+    for stem in ("android", "ios"):
+        validate_mobile_readme_entries(errors, view, stem)
+        validate_mobile_examples(errors, view, stem)
     registered_evm_tests = evm_test_targets(errors, view)
 
-    require_tokens(Path("README.md"), ("docs/android.md", "neverd mobile"), errors, view)
-    require_tokens(Path("docs/README.md"), ("android.md",), errors, view)
+    require_tokens(Path("README.md"), ("docs/android.md", "docs/ios.md", "neverd mobile"), errors, view)
+    require_tokens(Path("docs/README.md"), ("android.md", "ios.md"), errors, view)
 
     selector_tokens = {
-        stem: (f"{stem}.md", *(f"{stem}.{locale}.md" for locale in LOCALES))
+        stem: (f"{stem}.md", *(f"{locale}/{stem}.md" for locale in LOCALES))
         for stem in GUIDE_STEMS
     }
     for stem in GUIDE_STEMS:
@@ -2110,6 +2131,7 @@ def validate_matrix(errors: list[str], view: RepositoryView) -> None:
             evm_guide,
             sbf_guide,
             android_guide,
+            ios_guide,
         ) = localized_paths(locale)
         require_tokens(
             project_readme,
@@ -2119,9 +2141,10 @@ def validate_matrix(errors: list[str], view: RepositoryView) -> None:
                 "v0-v4",
                 "--language=solidity",
                 "--language=rust",
-                f"../evm.{locale}.md",
-                f"../sbf.{locale}.md",
-                f"../android.{locale}.md",
+                "evm.md",
+                "sbf.md",
+                "android.md",
+                "ios.md",
                 "neverd mobile",
             ),
             errors,
@@ -2129,7 +2152,7 @@ def validate_matrix(errors: list[str], view: RepositoryView) -> None:
         )
         require_tokens(
             index,
-            (f"evm.{locale}.md", f"sbf.{locale}.md", f"android.{locale}.md"),
+            ("evm.md", "sbf.md", "android.md", "ios.md"),
             errors,
             view,
         )
@@ -2139,8 +2162,8 @@ def validate_matrix(errors: list[str], view: RepositoryView) -> None:
                 "v0-v4",
                 "Solidity",
                 "Rust",
-                f"../evm.{locale}.md",
-                f"../sbf.{locale}.md",
+                "../evm.md",
+                "../sbf.md",
             ),
             errors,
             view,
@@ -2164,24 +2187,16 @@ def validate_matrix(errors: list[str], view: RepositoryView) -> None:
             errors,
             view,
         )
-        require_tokens(
-            evm_guide,
-            (*selector_tokens["evm"], *GUIDE_REQUIRED_TOKENS["evm"]),
-            errors,
-            view,
-        )
-        require_tokens(
-            sbf_guide,
-            (*selector_tokens["sbf"], *GUIDE_REQUIRED_TOKENS["sbf"]),
-            errors,
-            view,
-        )
-        require_tokens(
-            android_guide,
-            (*selector_tokens["android"], *GUIDE_REQUIRED_TOKENS["android"]),
-            errors,
-            view,
-        )
+        for stem, guide in zip(
+            GUIDE_STEMS, (evm_guide, sbf_guide, android_guide, ios_guide)
+        ):
+            targets = tuple(
+                posixpath.relpath(f"docs/{target}", guide.parent.as_posix())
+                for target in selector_tokens[stem]
+            )
+            require_tokens(
+                guide, (*targets, *GUIDE_REQUIRED_TOKENS[stem]), errors, view
+            )
 
 
 def validate_staged(errors: list[str]) -> None:
