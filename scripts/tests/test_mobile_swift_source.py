@@ -283,18 +283,19 @@ class SwiftSourceWorkflowTests(unittest.TestCase):
     def test_apple_toolchain_fallback_is_bounded_and_preserves_discovery_log(self):
         declared = inventory(metadata=True)
         declared.update(methods=[], method_count=0, symbol_count=1, supported_signature_count=0)
+        candidate = str(self.root / "apple toolchain" / "swift-demangle")
         def which(name):
-            return {"xcrun": "/usr/bin/xcrun", "/apple toolchain/swift-demangle": name}.get(name)
+            return {"xcrun": "/usr/bin/xcrun", candidate: name}.get(name)
         def finder(argv, log, timeout):
             self.assertEqual(argv, ["/usr/bin/xcrun", "--find", "swift-demangle"])
             self.assertEqual(timeout, 10)
-            log.write_text("/apple toolchain/swift-demangle\n")
+            log.write_text(candidate + "\n")
         with patch("mobile.swift_source.sys.platform", "darwin"), \
                 patch("mobile.swift_source.shutil.which", side_effect=which), \
                 patch("mobile.swift_source.run_tool", side_effect=finder), \
                 patch("mobile.swift_source.recover_swift_signatures", return_value=declared) as recover:
             report, outputs = self.recover()
-        self.assertEqual(recover.call_args.kwargs["demangler"], "/apple toolchain/swift-demangle")
+        self.assertEqual(recover.call_args.kwargs["demangler"], candidate)
         self.assertEqual(report["metadata_symbol_count"], 1)
         self.assertEqual(outputs["swift_toolchain_log"], "logs/swift-toolchain.log")
 
