@@ -27,4 +27,8 @@ add_neverd_component_library(NeverDIRMed
   pass/MedSSA.cpp
   pass/MedTypePass.cpp
   pass/MedVerifier.cpp
+
+  LINK_COMPONENTS
+  IR
+  Loader
 )

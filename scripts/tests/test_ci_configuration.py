@@ -17,6 +17,33 @@ STYLE_WORKFLOW = ROOT / ".github" / "workflows" / "llvm-style.yml"
 
 
 class CiConfigurationTests(unittest.TestCase):
+    def test_med_ir_exports_source_abi_and_objc_dependencies(self):
+        with tempfile.TemporaryDirectory(prefix="neverd-med-ir-link-") as directory:
+            root = Path(directory)
+            (root / "CMakeLists.txt").write_text(
+                'cmake_minimum_required(VERSION 3.20)\n'
+                'project(MedIRDependencies LANGUAGES CXX)\n'
+                'foreach(component capstone_static NeverDIR NeverDLoader)\n'
+                '  add_library(${component} INTERFACE)\n'
+                'endforeach()\n'
+                f'include("{CMAKE_HELPERS.as_posix()}")\n'
+                f'add_subdirectory("{(ROOT / "lib/ir/med").as_posix()}" med)\n'
+                'get_target_property(dependencies NeverDIRMed INTERFACE_LINK_LIBRARIES)\n'
+                'foreach(required NeverDIR NeverDLoader)\n'
+                '  if(NOT required IN_LIST dependencies)\n'
+                '    message(SEND_ERROR "IRMed must export ${required}")\n'
+                '  endif()\n'
+                'endforeach()\n',
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                ["cmake", "-S", str(root), "-B", str(root / "build")],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_loader_exports_its_source_abi_component_dependency(self):
         with tempfile.TemporaryDirectory(prefix="neverd-loader-link-") as directory:
             root = Path(directory)
