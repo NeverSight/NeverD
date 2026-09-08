@@ -344,6 +344,47 @@ TEST(HighCIntegerWidths, CarryUsesUnsignedOperandWidthAtRuntime) {
   compileAndExecute(emitFunctions(Functions) + executionHarness(Checks), false);
 }
 
+TEST(HighCIntegerWidths, SignedComparisonsFollowOpcodeAtRuntime) {
+  std::vector<HighFunc> Functions;
+  std::string Checks;
+  for (uint16_t Width : {1, 2, 4, 8}) {
+    const unsigned Bits = Width * 8;
+    const uint64_t Max = UINT64_MAX >> (64 - Bits);
+    const uint64_t Values[] = {0, 1, Max >> 1, (Max >> 1) + 1, Max};
+    for (bool LeftSigned : {false, true}) {
+      for (bool RightSigned : {false, true}) {
+        for (NdOp Op : {NdOp::INT_SLESS, NdOp::INT_SLESSEQUAL}) {
+          auto LeftType = NdType::makeInt(Width, LeftSigned);
+          auto RightType = NdType::makeInt(Width, RightSigned);
+          HighFunc Func;
+          Func.Name = "signed_cmp" + std::to_string(Bits) +
+                      (LeftSigned ? "_s" : "_u") + (RightSigned ? "s" : "u") +
+                      (Op == NdOp::INT_SLESS ? "_lt" : "_le");
+          Func.ReturnType = NdType::makeInt(1, false);
+          Func.Params = {{"arg0", LeftType}, {"arg1", RightType}};
+          auto Comparison = HighExpr::makeBinop(Op, parameter(0, LeftType),
+                                                parameter(1, RightType));
+          Comparison->Type = Func.ReturnType;
+          returnValue(Func, Comparison);
+          for (uint64_t Left : Values) {
+            for (uint64_t Right : Values) {
+              const llvm::APInt A(Bits, Left), B(Bits, Right);
+              const bool Expected = Op == NdOp::INT_SLESS ? A.slt(B) : A.sle(B);
+              appendCheck(
+                  Checks, Func.Name,
+                  argument(LeftType, std::to_string(Left).c_str()) + ", " +
+                      argument(RightType, std::to_string(Right).c_str()),
+                  Expected ? "1" : "0");
+            }
+          }
+          Functions.push_back(std::move(Func));
+        }
+      }
+    }
+  }
+  compileAndExecute(emitFunctions(Functions) + executionHarness(Checks), false);
+}
+
 TEST(HighCIntegerWidths, RightShiftsFollowOpcodeAndBoundCountsAtRuntime) {
   std::vector<HighFunc> Functions;
   std::string Checks;

@@ -214,6 +214,7 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
 
   const char *OpSym = nullptr;
   bool NeedsUnsignedCast = false;
+  bool NeedsSignedCast = false;
   switch (E.Op) {
   case NdOp::INT_ADD:
     OpSym = " + ";
@@ -273,9 +274,11 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
     NeedsUnsignedCast = true;
     break;
   case NdOp::INT_SLESS:
+    NeedsSignedCast = true;
     OpSym = " < ";
     break;
   case NdOp::INT_SLESSEQUAL:
+    NeedsSignedCast = true;
     OpSym = " <= ";
     break;
   case NdOp::BOOL_AND:
@@ -321,8 +324,9 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
   std::string LHS = exprStr(*E.Operands[0], MyPrec);
   std::string RHS = exprStr(*E.Operands[1], MyPrec);
 
-  if (NeedsUnsignedCast && E.Operands[0]->Type) {
-    auto UTy = typeToC(NdType::makeInt(E.Operands[0]->Type->Size, false));
+  if ((NeedsUnsignedCast || NeedsSignedCast) && E.Operands[0]->Type) {
+    auto UTy =
+        typeToC(NdType::makeInt(E.Operands[0]->Type->Size, NeedsSignedCast));
     LHS = "(" + UTy + ")" + exprStr(*E.Operands[0], 99);
     RHS = "(" + UTy + ")" + exprStr(*E.Operands[1], 99);
   }
