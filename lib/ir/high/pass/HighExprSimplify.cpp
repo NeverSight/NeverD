@@ -140,7 +140,7 @@ static void simplifyExprRecursive(ExprPtr &E,
     if (SignedVal < 0) {
       E->Op = NdOp::INT_SUB;
       E->Operands[1] = HighExpr::makeConst(
-          static_cast<uint64_t>(-SignedVal),
+          uint64_t(0) - static_cast<uint64_t>(SignedVal),
           E->Operands[1]->Type ? E->Operands[1]->Type->Size : 8);
     }
   }

@@ -11,6 +11,7 @@ namespace neverd {
 void structureIfElse(HighFunc &, int, const MedFunc * = nullptr);
 void inlineSingleDefSingleUse(std::vector<HighStmt> &);
 void resolveRegAliases(std::vector<HighStmt> &);
+void simplifyAllExprs(std::vector<HighStmt> &);
 void eliminateRegAliasCopies(HighFunc &);
 } // namespace neverd
 using namespace neverd;
@@ -357,5 +358,25 @@ TEST(HighControlFlowSemantics, SameRegisterAliasesPreserveExtensionSemantics) {
         resolveRegAliases(F.Body);
       EXPECT_EQ(execute(F, 0), Expected);
     }
+}
+
+TEST(HighControlFlowSemantics, NegativeConstantFoldingPreservesBoundaryValues) {
+  for (uint64_t Constant : {UINT64_C(0x8000000000000000),
+                            UINT64_C(0x8000000000000001), UINT64_MAX}) {
+    for (uint64_t Input :
+         {UINT64_C(0), UINT64_C(1), UINT64_C(0x7fffffffffffffff), UINT64_MAX}) {
+      SCOPED_TRACE(Constant);
+      SCOPED_TRACE(Input);
+      HighFunc F;
+      F.Body = {assign(0x1000, 1, Input),
+                result(0x1004,
+                       HighExpr::makeBinop(NdOp::INT_ADD, local(1),
+                                           HighExpr::makeConst(Constant, 8)))};
+      const uint64_t Expected = Input + Constant;
+      ASSERT_EQ(execute(F, 0), Expected);
+      simplifyAllExprs(F.Body);
+      EXPECT_EQ(execute(F, 0), Expected);
+    }
+  }
 }
 } // namespace
