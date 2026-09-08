@@ -1385,10 +1385,13 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
   case X86_INS_PUSHAL: {
     uint16_t PtSz = (InsnId == X86_INS_PUSHAL) ? 4 : 2;
     NdVar Rsp = NdVar::reg(x86reg::RSP, PtSz);
+    NdVar EntrySP = S.makeTemp(PtSz);
+    S.emit(NdOp::COPY, EntrySP, {Rsp});
     for (uint64_t Reg : {x86reg::RAX, x86reg::RCX, x86reg::RDX, x86reg::RBX,
                          x86reg::RSP, x86reg::RBP, x86reg::RSI, x86reg::RDI}) {
       S.emit(NdOp::INT_SUB, Rsp, {Rsp, NdVar::scalar(PtSz, PtSz)});
-      S.emit(NdOp::STORE, {}, {Rsp, NdVar::reg(Reg, PtSz)});
+      S.emit(NdOp::STORE, {},
+             {Rsp, Reg == x86reg::RSP ? EntrySP : NdVar::reg(Reg, PtSz)});
     }
     break;
   }
