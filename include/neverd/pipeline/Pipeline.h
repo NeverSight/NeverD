@@ -415,6 +415,8 @@ public:
 private:
   friend class PipelineTestPeer;
 
+  struct LLVMEmissionResult;
+
   /// Interior basic-block addresses are module-local LLVM blockaddress
   /// constants and cannot be split from their owner into another emission
   /// shard.  Function-entry-only pointer tables remain shard-safe.
@@ -450,10 +452,9 @@ private:
   /// The result is semantically identical to the serial path: every function is
   /// defined in exactly one shard and per-address globals (crucially the
   /// writable .data/.bss segment globals) merge to one shared object at link
-  /// time.  Returns null if any shard cannot be emitted, parsed, or linked, so
-  /// callers never mistake an incomplete module for a complete lift.
-  /// LLVMVerifierFailed distinguishes invalid shard IR or a transactional
-  /// optimizer rejection from the other null-return paths.
+  /// time. A failed result owns a diagnostic and no module, so callers never
+  /// mistake an incomplete module for a complete lift. LLVMVerifierFailed
+  /// distinguishes invalid shard IR or a transactional optimizer rejection.
   ///
   /// The shard count is derived from the total MedIR work rather than pinned to
   /// \p NumThreads: peak memory is (in-flight shards) x (slice size), so
@@ -463,11 +464,22 @@ private:
   /// indivisible scheduling unit.  Such a group may exceed the soft slice
   /// budget, because splitting it would make later group-level EH lowering
   /// impossible to validate or commit atomically.
-  static std::unique_ptr<llvm::Module> emitLLVMSharded(
-      const std::vector<MedFunc> &Funcs, llvm::LLVMContext &Ctx, Arch TheArch,
-      const std::vector<std::pair<va_t, std::string>> &Imports,
-      const BinaryImage &Img, BinaryFormat Fmt, bool NoOpt, unsigned NumThreads,
-      uint64_t &UnhandledValueIntrinsics, bool &LLVMVerifierFailed);
+  static LLVMEmissionResult
+  emitLLVMSharded(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &Ctx,
+                  Arch TheArch,
+                  const std::vector<std::pair<va_t, std::string>> &Imports,
+                  const BinaryImage &Img, BinaryFormat Fmt, bool NoOpt,
+                  unsigned NumThreads);
+
+  /// Execute the common shard lifecycle. The emitter creates each module in
+  /// its worker's context; only a complete linked module is returned in the
+  /// caller's context. All workers finish before diagnostics or output are
+  /// published.
+  static LLVMEmissionResult runLLVMShardPipeline(
+      const std::vector<MedFunc> &Funcs, llvm::LLVMContext &Ctx,
+      unsigned NumShards, unsigned NumThreads, bool NoOpt,
+      llvm::function_ref<LLVMEmissionResult(unsigned, llvm::LLVMContext &)>
+          Emit);
 
   /// Phase 3: convert MedIR -> HighIR in parallel.
   void buildHighIR(const BinaryImage &Img, const PipelineOptions &Opts,

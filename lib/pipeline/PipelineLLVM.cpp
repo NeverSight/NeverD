@@ -15,6 +15,7 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
+#include "neverd/support/StackSizeMain.h"
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Bitcode/BitcodeReader.h"
@@ -33,6 +34,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <functional>
 #include <limits>
 #include <map>
@@ -40,7 +42,6 @@
 #include <mutex>
 #include <queue>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -159,162 +160,218 @@ pipeline_detail::planLLVMEmissionShards(const std::vector<MedFunc> &Funcs,
 // Parallel LLVM emission + optimization
 //===----------------------------------------------------------------------===//
 
-std::unique_ptr<llvm::Module> Pipeline::emitLLVMSharded(
+Pipeline::LLVMEmissionResult Pipeline::emitLLVMSharded(
     const std::vector<MedFunc> &Funcs, llvm::LLVMContext &Ctx, Arch TheArch,
     const std::vector<std::pair<va_t, std::string>> &Imports,
-    const BinaryImage &Img, BinaryFormat Fmt, bool NoOpt, unsigned NumThreads,
-    uint64_t &UnhandledValueIntrinsics, bool &LLVMVerifierFailed) {
-  UnhandledValueIntrinsics = 0;
-  LLVMVerifierFailed = false;
+    const BinaryImage &Img, BinaryFormat Fmt, bool NoOpt, unsigned NumThreads) {
   const size_t N = Funcs.size();
   NumThreads = std::max(
       1u, std::min<unsigned>(NumThreads, static_cast<unsigned>(N ? N : 1)));
   const pipeline_detail::LLVMShardPlan ShardPlan =
       pipeline_detail::planLLVMEmissionShards(Funcs, NumThreads);
-  const unsigned NumShards = ShardPlan.NumShards;
-  const std::vector<unsigned> &ShardOf = ShardPlan.ShardOf;
-  NumThreads = std::min(NumThreads, NumShards);
-
-  // Warm up LLVM's lazily-initialized global state (pass registries, managed
-  // statics) single-threaded before the parallel region touches it from many
-  // threads at once through optimizeModule.  Once per process suffices.
-  static std::once_flag WarmupOnce;
-  std::call_once(WarmupOnce, [] {
-    llvm::LLVMContext WarmCtx;
-    llvm::Module Warm("neverd_warmup", WarmCtx);
-    OptimizationOptions Options;
-    OptimizationResult Result = optimizeModule(Warm, Options);
-    if (isFatalOptimizationStop(Result.Stop))
-      llvm::WithColor::warning()
-          << "pipeline: LLVM optimizer warmup failed: "
-          << optimizationStopReasonName(Result.Stop) << "\n";
-    promoteScaffoldingAllocas(Warm);
-  });
-
-  // Each shard emits its slice + all declarations, verifies, optimizes, and
-  // serializes to bitcode in its own context (LLVMContext is not thread-safe,
-  // so cross-context transfer goes through bitcode).  Work is claimed
-  // atomically, so an uneven shard never idles a worker and only NumThreads
-  // shard modules exist at any instant.
-  std::vector<std::string> BC(NumShards);
-  std::vector<uint64_t> ShardUnhandled(NumShards, 0);
-  std::atomic<bool> HadLLVMVerifierFailure{false};
-  auto runShard = [&](unsigned S) {
+  auto EmitShard = [&](unsigned S, llvm::LLVMContext &ShardCtx) {
     std::vector<char> Mask(N, 0);
     for (size_t I = 0; I < N; ++I)
-      Mask[I] = (ShardOf[I] == S);
-    llvm::LLVMContext ShardCtx;
-    MedLLVMEmitter Em;
-    auto M = Em.emit(Funcs, ShardCtx, "neverd_output", TheArch, Imports, &Img,
-                     Fmt, /*MergeableGlobals=*/true, &Mask);
-    ShardUnhandled[S] = Em.unhandledValueIntrinsicCount();
-    if (!M)
-      return;
-    std::string VErr;
-    llvm::raw_string_ostream VOS(VErr);
-    if (llvm::verifyModule(*M, &VOS)) {
-      HadLLVMVerifierFailure.store(true, std::memory_order_relaxed);
-      return;
-    }
-    if (!NoOpt) {
-      OptimizationOptions Options;
-      OptimizationResult Result = optimizeModule(*M, Options);
-      if (isFatalOptimizationStop(Result.Stop)) {
-        HadLLVMVerifierFailure.store(true, std::memory_order_relaxed);
-        return;
-      }
-    } else
-      promoteScaffoldingAllocas(*M);
-    llvm::raw_string_ostream OS(BC[S]);
-    llvm::WriteBitcodeToFile(*M, OS);
+      Mask[I] = (ShardPlan.ShardOf[I] == S);
+    MedLLVMEmitter Emitter;
+    LLVMEmissionResult Result;
+    Result.Module = Emitter.emit(Funcs, ShardCtx, "neverd_output", TheArch,
+                                 Imports, &Img, Fmt,
+                                 /*MergeableGlobals=*/true, &Mask);
+    Result.UnhandledValueIntrinsics = Emitter.unhandledValueIntrinsicCount();
+    return Result;
   };
-  if (NumThreads <= 1) {
-    for (unsigned S = 0; S < NumShards; ++S)
-      runShard(S);
-  } else {
-    std::atomic<unsigned> Next{0};
-    std::vector<std::thread> Pool;
-    Pool.reserve(NumThreads);
-    for (unsigned T = 0; T < NumThreads; ++T)
-      Pool.emplace_back([&] {
+  return runLLVMShardPipeline(Funcs, Ctx, ShardPlan.NumShards, NumThreads,
+                              NoOpt, EmitShard);
+}
+
+Pipeline::LLVMEmissionResult Pipeline::runLLVMShardPipeline(
+    const std::vector<MedFunc> &Funcs, llvm::LLVMContext &Ctx,
+    unsigned NumShards, unsigned NumThreads, bool NoOpt,
+    llvm::function_ref<LLVMEmissionResult(unsigned, llvm::LLVMContext &)>
+        Emit) {
+  LLVMEmissionResult Result;
+  if (NumShards == 0) {
+    Result.Error = "LLVM shard planning failed: no shards";
+    return Result;
+  }
+  NumThreads = std::max(1u, std::min(NumThreads, NumShards));
+  struct ShardResult {
+    std::string Bitcode;
+    uint64_t UnhandledValueIntrinsics = 0;
+    bool LLVMVerifierFailed = false;
+    std::string Error;
+  };
+  std::vector<ShardResult> Shards(NumShards);
+  auto appendError = [&](const std::string &Error) {
+    if (!Result.Error.empty())
+      Result.Error += "\n";
+    Result.Error += Error;
+  };
+  std::string Phase = "initialization";
+  try {
+    // Warm up LLVM's lazily-initialized global state (pass registries, managed
+    // statics) single-threaded before the parallel region touches it from many
+    // threads at once through optimizeModule.  Once per process suffices.
+    static std::once_flag WarmupOnce;
+    std::call_once(WarmupOnce, [] {
+      llvm::LLVMContext WarmCtx;
+      llvm::Module Warm("neverd_warmup", WarmCtx);
+      OptimizationOptions Options;
+      OptimizationResult Result = optimizeModule(Warm, Options);
+      if (isFatalOptimizationStop(Result.Stop))
+        llvm::WithColor::warning()
+            << "pipeline: LLVM optimizer warmup failed: "
+            << optimizationStopReasonName(Result.Stop) << "\n";
+      promoteScaffoldingAllocas(Warm);
+    });
+
+    // A shard owns its context, module, counters and diagnostic slot. Cross-
+    // context transfer goes through bitcode, and at most NumThreads modules are
+    // live at once. Worker callbacks never publish a partial linked module.
+    auto runShard = [&](unsigned S) {
+      ShardResult &Shard = Shards[S];
+      const char *ShardPhase = "emission";
+      auto fail = [&](const std::string &Detail) {
+        Shard.Error = "LLVM shard " + std::to_string(S) + " " + ShardPhase +
+                      " failed: " + Detail;
+      };
+      try {
+        llvm::LLVMContext ShardCtx;
+        LLVMEmissionResult Emission = Emit(S, ShardCtx);
+        Shard.UnhandledValueIntrinsics = Emission.UnhandledValueIntrinsics;
+        Shard.LLVMVerifierFailed = Emission.LLVMVerifierFailed;
+        auto M = std::move(Emission.Module);
+        if (!Emission.Error.empty()) {
+          fail(Emission.Error);
+          return;
+        }
+        if (!M) {
+          fail("emitter returned no module");
+          return;
+        }
+        ShardPhase = "verification";
+        std::string VerifyError;
+        llvm::raw_string_ostream VerifyStream(VerifyError);
+        if (llvm::verifyModule(*M, &VerifyStream)) {
+          Shard.LLVMVerifierFailed = true;
+          fail(VerifyError);
+          return;
+        }
+        if (!NoOpt) {
+          ShardPhase = "optimization";
+          OptimizationOptions Options;
+          OptimizationResult Optimization = optimizeModule(*M, Options);
+          if (isFatalOptimizationStop(Optimization.Stop)) {
+            Shard.LLVMVerifierFailed = true;
+            fail(optimizationStopReasonName(Optimization.Stop));
+            return;
+          }
+        } else {
+          ShardPhase = "canonicalization";
+          promoteScaffoldingAllocas(*M);
+        }
+        ShardPhase = "serialization";
+        llvm::raw_string_ostream Stream(Shard.Bitcode);
+        llvm::WriteBitcodeToFile(*M, Stream);
+        if (Shard.Bitcode.empty())
+          fail("empty bitcode");
+      } catch (const std::exception &Error) {
+        fail(Error.what());
+      } catch (...) {
+        fail("unknown exception");
+      }
+    };
+    Phase = "worker execution";
+    if (NumThreads == 1) {
+      for (unsigned S = 0; S < NumShards; ++S)
+        runShard(S);
+    } else {
+      std::atomic<unsigned> Next{0};
+      auto Worker = [&] {
         for (unsigned S;
              (S = Next.fetch_add(1, std::memory_order_relaxed)) < NumShards;)
           runShard(S);
-      });
-    for (auto &T : Pool)
-      T.join();
-  }
-
-  for (uint64_t Count : ShardUnhandled)
-    UnhandledValueIntrinsics += Count;
-  LLVMVerifierFailed = HadLLVMVerifierFailure.load(std::memory_order_relaxed);
-
-  bool HadShardFailure = false;
-  for (unsigned S = 0; S < NumShards; ++S)
-    if (BC[S].empty()) {
-      llvm::WithColor::warning()
-          << "pipeline: shard " << S << " emission failed\n";
-      HadShardFailure = true;
+      };
+      runWithLargeStackThreads(NumThreads, Worker);
     }
 
-  // Serial link into the caller's context, in shard order for determinism.
-  // Each shard's bitcode is released as soon as it is linked: all of them
-  // together are a second copy of the program that would otherwise stay
-  // resident until the whole link finishes.
-  auto Linked = std::make_unique<llvm::Module>("neverd_output", Ctx);
-  llvm::Linker L(*Linked);
-  unsigned LinkedShards = 0;
-  for (unsigned S = 0; S < NumShards; ++S) {
-    std::string ShardBC = std::move(BC[S]);
-    BC[S].clear();
-    BC[S].shrink_to_fit();
-    if (ShardBC.empty())
-      continue;
-    auto Buf = llvm::MemoryBufferRef(ShardBC, "neverd_shard");
-    auto MOr = llvm::parseBitcodeFile(Buf, Ctx);
-    if (!MOr) {
-      llvm::WithColor::warning()
-          << "pipeline: shard " << S
-          << " bitcode parse failed: " << llvm::toString(MOr.takeError())
-          << "\n";
-      HadShardFailure = true;
-      continue;
+    // Collect owned outcomes only after every worker has finished. Keep errors
+    // in shard order, regardless of which worker completed first.
+    for (unsigned S = 0; S < NumShards; ++S) {
+      const ShardResult &Shard = Shards[S];
+      Result.UnhandledValueIntrinsics += Shard.UnhandledValueIntrinsics;
+      Result.LLVMVerifierFailed |= Shard.LLVMVerifierFailed;
+      if (!Shard.Error.empty())
+        appendError(Shard.Error);
+      else if (Shard.Bitcode.empty())
+        appendError("LLVM shard " + std::to_string(S) +
+                    " serialization failed: missing bitcode");
     }
-    if (L.linkInModule(std::move(*MOr))) {
-      llvm::WithColor::warning() << "pipeline: shard " << S << " link failed\n";
-      return nullptr;
-    } else {
+    if (!Result.Error.empty())
+      return Result;
+
+    // Serial link into the caller's context, in shard order for determinism.
+    // Each shard's bitcode is released as soon as it is linked.
+    auto Linked = std::make_unique<llvm::Module>("neverd_output", Ctx);
+    llvm::Linker Linker(*Linked);
+    unsigned LinkedShards = 0;
+    for (unsigned S = 0; S < NumShards; ++S) {
+      std::string ShardBC = std::move(Shards[S].Bitcode);
+      Shards[S].Bitcode.clear();
+      Shards[S].Bitcode.shrink_to_fit();
+      Phase = "shard " + std::to_string(S) + " bitcode parsing";
+      auto Buffer = llvm::MemoryBufferRef(ShardBC, "neverd_shard");
+      auto Module = llvm::parseBitcodeFile(Buffer, Ctx);
+      if (!Module) {
+        Result.Error =
+            "LLVM " + Phase + " failed: " + llvm::toString(Module.takeError());
+        return Result;
+      }
+      Phase = "shard " + std::to_string(S) + " linking";
+      if (Linker.linkInModule(std::move(*Module))) {
+        Result.Error = "LLVM " + Phase + " failed";
+        return Result;
+      }
       ++LinkedShards;
     }
+    if (LinkedShards != NumShards) {
+      Result.Error = "LLVM shard linking failed: incomplete module";
+      return Result;
+    }
+    Phase = "function ordering";
+
+    // Restore the original (address-order) function layout.  Sharding + link
+    // order interleaves definitions by shard, but the serial path emits them in
+    // Funcs order and downstream consumers rely on that — notably the
+    // recompiled object's .text starts with the entry function, which the
+    // round-trip harness executes from offset 0.  Stable-sort the module's
+    // function list by original index; declarations not in Funcs
+    // (imports/stubs) keep their relative order at the end.  This makes the
+    // linked module's layout match the serial path.
+    {
+      std::map<llvm::StringRef, size_t> OrigIdx;
+      for (size_t I = 0; I < Funcs.size(); ++I)
+        if (!Funcs[I].Name.empty())
+          OrigIdx.emplace(llvm::StringRef(Funcs[I].Name), I);
+      auto rank = [&](const llvm::Function &F) -> size_t {
+        auto It = OrigIdx.find(F.getName());
+        return It == OrigIdx.end() ? std::numeric_limits<size_t>::max()
+                                   : It->second;
+      };
+      Linked->getFunctionList().sort(
+          [&](const llvm::Function &A, const llvm::Function &B) {
+            return rank(A) < rank(B);
+          });
+    }
+
+    Result.Module = std::move(Linked);
+  } catch (const std::exception &Error) {
+    appendError("LLVM " + Phase + " failed: " + Error.what());
+  } catch (...) {
+    appendError("LLVM " + Phase + " failed: unknown exception");
   }
-
-  if (HadShardFailure || LinkedShards != NumShards)
-    return nullptr;
-
-  // Restore the original (address-order) function layout.  Sharding + link
-  // order interleaves definitions by shard, but the serial path emits them in
-  // Funcs order and downstream consumers rely on that — notably the recompiled
-  // object's .text starts with the entry function, which the round-trip harness
-  // executes from offset 0.  Stable-sort the module's function list by original
-  // index; declarations not in Funcs (imports/stubs) keep their relative order
-  // at the end.  This makes the linked module's layout match the serial path.
-  {
-    std::map<llvm::StringRef, size_t> OrigIdx;
-    for (size_t I = 0; I < Funcs.size(); ++I)
-      if (!Funcs[I].Name.empty())
-        OrigIdx.emplace(llvm::StringRef(Funcs[I].Name), I);
-    auto rank = [&](const llvm::Function &F) -> size_t {
-      auto It = OrigIdx.find(F.getName());
-      return It == OrigIdx.end() ? std::numeric_limits<size_t>::max()
-                                 : It->second;
-    };
-    Linked->getFunctionList().sort(
-        [&](const llvm::Function &A, const llvm::Function &B) {
-          return rank(A) < rank(B);
-        });
-  }
-
-  return Linked;
+  return Result;
 }
 
 } // namespace neverd

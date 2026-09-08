@@ -7,11 +7,20 @@
 #ifndef NEVERD_LIB_PIPELINE_PIPELINELLVMDETAIL_H
 #define NEVERD_LIB_PIPELINE_PIPELINELLVMDETAIL_H
 
-#include "neverd/ir/med/MedIR.h"
+#include "neverd/pipeline/Pipeline.h"
 
 #include <vector>
 
-namespace neverd::pipeline_detail {
+namespace neverd {
+
+struct Pipeline::LLVMEmissionResult {
+  std::unique_ptr<llvm::Module> Module;
+  uint64_t UnhandledValueIntrinsics = 0;
+  bool LLVMVerifierFailed = false;
+  std::string Error;
+};
+
+namespace pipeline_detail {
 
 struct LLVMShardPlan {
   unsigned NumShards = 1;
@@ -23,6 +32,7 @@ struct LLVMShardPlan {
 LLVMShardPlan planLLVMEmissionShards(const std::vector<MedFunc> &Funcs,
                                      unsigned NumThreads);
 
-} // namespace neverd::pipeline_detail
+} // namespace pipeline_detail
+} // namespace neverd
 
 #endif // NEVERD_LIB_PIPELINE_PIPELINELLVMDETAIL_H

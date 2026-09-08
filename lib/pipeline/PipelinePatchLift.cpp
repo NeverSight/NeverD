@@ -9,6 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "PipelineLLVMDetail.h"
 #include "PipelineMedAudit.h"
 #include "PipelineReturnModelingDetail.h"
 
@@ -601,15 +602,14 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
                    !requiresSerialLLVMEmission(Result.MedFuncs, Img);
 
   if (UseShards) {
-    bool LLVMVerifierFailed = false;
-    Result.LlvmModule = emitLLVMSharded(
-        Result.MedFuncs, Ctx, Img.Arch, ImportMap, Img, Img.Format, Opts.NoOpt,
-        Workers, Result.BackendUnhandledValueIntrinsics, LLVMVerifierFailed);
+    LLVMEmissionResult Emission =
+        emitLLVMSharded(Result.MedFuncs, Ctx, Img.Arch, ImportMap, Img,
+                        Img.Format, Opts.NoOpt, Workers);
+    Result.BackendUnhandledValueIntrinsics = Emission.UnhandledValueIntrinsics;
+    Result.LLVMVerifierFailed = Emission.LLVMVerifierFailed;
+    Result.LlvmModule = std::move(Emission.Module);
     if (!Result.LlvmModule) {
-      Result.LLVMVerifierFailed = LLVMVerifierFailed;
-      Result.Error = LLVMVerifierFailed
-                         ? "LLVM shard verification or optimization failed"
-                         : "LLVM shard emission or linking failed";
+      Result.Error = std::move(Emission.Error);
       return false;
     }
   } else {

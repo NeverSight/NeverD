@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PipelineHighIRDetail.h"
+#include "PipelineLLVMDetail.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
@@ -12,12 +13,16 @@
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/Parallel.h"
 
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <atomic>
+#include <chrono>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -25,6 +30,25 @@ namespace neverd {
 
 class PipelineTestPeer {
 public:
+  using LLVMEmissionResult = Pipeline::LLVMEmissionResult;
+
+  static LLVMEmissionResult runShards(
+      const std::vector<MedFunc> &Functions, llvm::LLVMContext &Context,
+      unsigned Shards, unsigned Threads, bool NoOpt,
+      llvm::function_ref<LLVMEmissionResult(unsigned, llvm::LLVMContext &)>
+          Emit) {
+    return Pipeline::runLLVMShardPipeline(Functions, Context, Shards, Threads,
+                                          NoOpt, Emit);
+  }
+
+  static LLVMEmissionResult emitShards(const std::vector<MedFunc> &Functions,
+                                       llvm::LLVMContext &Context,
+                                       const BinaryImage &Image,
+                                       unsigned Threads) {
+    return Pipeline::emitLLVMSharded(Functions, Context, Image.Arch, {}, Image,
+                                     Image.Format, true, Threads);
+  }
+
   static void buildHighIR(const BinaryImage &Image, PipelineResult &Result) {
     Pipeline().buildHighIR(Image, {}, Result);
   }
@@ -265,6 +289,235 @@ TEST(PipelineOutcome,
                 std::string::npos)
           << Source;
   }
+}
+
+std::unique_ptr<llvm::Module> shardModule(llvm::LLVMContext &Context,
+                                          const std::string &Name,
+                                          bool Valid = true) {
+  auto Module = std::make_unique<llvm::Module>("shard", Context);
+  auto *Function = llvm::Function::Create(
+      llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false),
+      llvm::GlobalValue::ExternalLinkage, Name, *Module);
+  auto *Entry = llvm::BasicBlock::Create(Context, "entry", Function);
+  if (Valid)
+    llvm::IRBuilder<>(Entry).CreateRetVoid();
+  return Module;
+}
+
+TEST(PipelineOutcome, ShardExceptionsReturnAfterEveryWorkerFinishes) {
+  for (unsigned Threads : {1u, 2u}) {
+    SCOPED_TRACE(Threads);
+    // An explicit executor count must not be replaced by the global setting.
+    ScopedThreadCount GlobalThreads(8);
+    llvm::LLVMContext Context;
+    std::atomic<unsigned> Started{0}, Finished{0}, Active{0}, Peak{0};
+    std::atomic<bool> WrongInlineThread{false};
+    const std::thread::id Caller = std::this_thread::get_id();
+    auto Result = PipelineTestPeer::runShards(
+        {}, Context, 8, Threads, true,
+        [&](unsigned Shard, llvm::LLVMContext &ShardContext)
+            -> PipelineTestPeer::LLVMEmissionResult {
+          Started.fetch_add(1);
+          if (Threads == 1 && std::this_thread::get_id() != Caller)
+            WrongInlineThread.store(true);
+          const unsigned Now = Active.fetch_add(1) + 1;
+          unsigned Previous = Peak.load();
+          while (Previous < Now && !Peak.compare_exchange_weak(Previous, Now)) {
+          }
+          struct Completion {
+            std::atomic<unsigned> &Active;
+            std::atomic<unsigned> &Finished;
+            ~Completion() {
+              Active.fetch_sub(1);
+              Finished.fetch_add(1);
+            }
+          } OnExit{Active, Finished};
+          // A bounded delay encourages overlap without requiring another
+          // worker to exist: native launch failure can fall back to inline.
+          std::this_thread::sleep_for(std::chrono::milliseconds(2));
+          if (Shard == 1)
+            throw std::runtime_error("original emitter detail");
+          if (Shard == 6)
+            throw 73;
+          PipelineTestPeer::LLVMEmissionResult Emission;
+          Emission.Module =
+              shardModule(ShardContext, "finished_" + std::to_string(Shard));
+          Emission.UnhandledValueIntrinsics = 2;
+          return Emission;
+        });
+    EXPECT_EQ(Started.load(), 8u);
+    EXPECT_EQ(Finished.load(), 8u);
+    EXPECT_EQ(Active.load(), 0u);
+    EXPECT_LE(Peak.load(), Threads);
+    EXPECT_FALSE(WrongInlineThread.load());
+    EXPECT_EQ(Result.Module, nullptr);
+    EXPECT_FALSE(Result.LLVMVerifierFailed);
+    EXPECT_EQ(Result.UnhandledValueIntrinsics, 12u);
+    const size_t Standard = Result.Error.find(
+        "LLVM shard 1 emission failed: original emitter detail");
+    const size_t NonStandard =
+        Result.Error.find("LLVM shard 6 emission failed: unknown exception");
+    ASSERT_NE(Standard, std::string::npos) << Result.Error;
+    ASSERT_NE(NonStandard, std::string::npos) << Result.Error;
+    EXPECT_LT(Standard, NonStandard);
+  }
+}
+
+TEST(PipelineOutcome,
+     ShardVerifierRetainsOriginalDiagnosticAndRejectsPartialOutput) {
+  llvm::LLVMContext Context;
+  std::atomic<unsigned> Finished{0};
+  auto Result = PipelineTestPeer::runShards(
+      {}, Context, 3, 2, true,
+      [&](unsigned Shard, llvm::LLVMContext &ShardContext) {
+        PipelineTestPeer::LLVMEmissionResult Emission;
+        Emission.Module = shardModule(
+            ShardContext, "function_" + std::to_string(Shard), Shard != 1);
+        Emission.UnhandledValueIntrinsics = Shard + 1;
+        Finished.fetch_add(1);
+        return Emission;
+      });
+  EXPECT_EQ(Finished.load(), 3u);
+  EXPECT_EQ(Result.Module, nullptr);
+  EXPECT_TRUE(Result.LLVMVerifierFailed);
+  EXPECT_EQ(Result.UnhandledValueIntrinsics, 6u);
+  EXPECT_NE(Result.Error.find("LLVM shard 1 verification failed"),
+            std::string::npos)
+      << Result.Error;
+  EXPECT_NE(Result.Error.find("does not have terminator"), std::string::npos)
+      << Result.Error;
+  EXPECT_NE(Result.Error.find("function_1"), std::string::npos) << Result.Error;
+}
+
+TEST(PipelineOutcome, MissingShardModuleHasAnOwnedDiagnostic) {
+  llvm::LLVMContext Context;
+  auto Result = PipelineTestPeer::runShards(
+      {}, Context, 3, 2, true,
+      [&](unsigned Shard, llvm::LLVMContext &ShardContext) {
+        PipelineTestPeer::LLVMEmissionResult Emission;
+        if (Shard != 1)
+          Emission.Module =
+              shardModule(ShardContext, "function_" + std::to_string(Shard));
+        return Emission;
+      });
+  EXPECT_EQ(Result.Module, nullptr);
+  EXPECT_FALSE(Result.LLVMVerifierFailed);
+  EXPECT_EQ(Result.Error,
+            "LLVM shard 1 emission failed: emitter returned no module");
+}
+
+TEST(PipelineOutcome,
+     SuccessfulShardsLinkInCallerContextAndRestoreSourceOrder) {
+  for (bool NoOpt : {false, true}) {
+    SCOPED_TRACE(NoOpt);
+    llvm::LLVMContext Context;
+    std::vector<MedFunc> Functions;
+    for (unsigned I = 0; I < 5; ++I)
+      Functions.push_back(
+          sourceFunction(I * 16, "source_" + std::to_string(I)));
+    auto Result = PipelineTestPeer::runShards(
+        Functions, Context, 5, 2, NoOpt,
+        [&](unsigned Shard, llvm::LLVMContext &ShardContext) {
+          PipelineTestPeer::LLVMEmissionResult Emission;
+          Emission.Module =
+              shardModule(ShardContext, Functions[4 - Shard].Name);
+          Emission.UnhandledValueIntrinsics = 1u << Shard;
+          return Emission;
+        });
+    ASSERT_NE(Result.Module, nullptr) << Result.Error;
+    EXPECT_EQ(&Result.Module->getContext(), &Context);
+    EXPECT_FALSE(llvm::verifyModule(*Result.Module, &llvm::errs()));
+    EXPECT_EQ(Result.UnhandledValueIntrinsics, 31u);
+    EXPECT_FALSE(Result.LLVMVerifierFailed);
+    EXPECT_TRUE(Result.Error.empty());
+    unsigned Index = 0;
+    for (const auto &Function : *Result.Module) {
+      ASSERT_LT(Index, Functions.size());
+      EXPECT_FALSE(Function.isDeclaration());
+      EXPECT_EQ(Function.getName(), Functions[Index++].Name);
+    }
+    EXPECT_EQ(Index, Functions.size());
+  }
+}
+
+TEST(PipelineOutcome, RealShardedEmissionDefinesEverySourceFunction) {
+  llvm::LLVMContext Context;
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::ELF;
+  std::vector<MedFunc> Functions;
+  for (unsigned I = 0; I < 8; ++I) {
+    MedFunc Function =
+        sourceFunction(0x1000 + I * 16, "source_" + std::to_string(I));
+    MedBlock Block;
+    Block.Id = 0;
+    Block.StartAddr = Function.Entry;
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Block.Ops.push_back(Return);
+    Function.Blocks.push_back(std::move(Block));
+    Functions.push_back(std::move(Function));
+  }
+  auto Result = PipelineTestPeer::emitShards(Functions, Context, Image, 2);
+  ASSERT_NE(Result.Module, nullptr) << Result.Error;
+  EXPECT_TRUE(Result.Error.empty());
+  EXPECT_FALSE(Result.LLVMVerifierFailed);
+  EXPECT_FALSE(llvm::verifyModule(*Result.Module, &llvm::errs()));
+  size_t Index = 0;
+  for (const auto &Function : *Result.Module) {
+    if (Function.isDeclaration())
+      continue;
+    ASSERT_LT(Index, Functions.size());
+    EXPECT_EQ(Function.getName(), Functions[Index++].Name);
+  }
+  EXPECT_EQ(Index, Functions.size());
+}
+
+TEST(PipelineOutcome, LiftPreservesTheFailedShardDiagnostic) {
+  ScopedThreadCount Threads(2);
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::ELF;
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = 0x1000;
+  Text.Size = 0x100;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(Text.Size);
+  Image.Segments.push_back(std::move(Text));
+  PipelineResult Result;
+  for (unsigned I = 0; I < 8; ++I) {
+    MedFunc Function =
+        sourceFunction(0x1000 + I * 16, "source_" + std::to_string(I));
+    MedBlock Block;
+    Block.Id = 0;
+    Block.StartAddr = Function.Entry;
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    if (I == 1) {
+      Function.ReturnType = NdType::makeInt(8);
+      Return.addInput(
+          MedVar::makeConst(0x10e0, 8, ConstantAddressProvenance::CodeAddress));
+    }
+    Block.Ops.push_back(Return);
+    Function.Blocks.push_back(std::move(Block));
+    LowFunc Low;
+    Low.Entry = Function.Entry;
+    Low.Name = Function.Name;
+    Result.LowFuncs.push_back(std::move(Low));
+    Result.MedFuncs.push_back(std::move(Function));
+  }
+  llvm::LLVMContext Context;
+  EXPECT_FALSE(PipelineTestPeer::runLift(Image, Context, Result));
+  EXPECT_EQ(Result.LlvmModule, nullptr);
+  EXPECT_FALSE(Result.LLVMVerifierFailed);
+  EXPECT_NE(Result.Error.find("LLVM shard "), std::string::npos)
+      << Result.Error;
+  EXPECT_NE(Result.Error.find("emission failed: emitter returned no module"),
+            std::string::npos)
+      << Result.Error;
 }
 
 } // namespace
