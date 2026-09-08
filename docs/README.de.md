@@ -18,6 +18,7 @@ Projektüberblick, Build und CLI stehen in der Repository-README. Architektur- u
 | [Python-Plugins](python-plugins.de.md) | Plugin-Entwicklung, Session-/Event-API, Isolation, Tests und Veröffentlichung |
 | [EVM-Dekompilation](evm.de.md) | Eingaben, Hardforks, IR-Stufen, C-/LLVM-Host-ABI, Solidity-Rekonstruktion und Grenzen |
 | [Solana-SBF-Dekompilation](sbf.de.md) | SBF v0-v4, LLVM IR, C-/Rust-Ausgabe, Verifikation und bekannte Grenzen |
+| [Java-Rekonstruktion für Android](android.de.md) | Experimentelle APK-/DEX-/Smali-CLI, Laufzeitumgebungen, Multidex, JSON-Bericht, Fehlerbehandlung und Grenzen |
 | [Roadmap](roadmap/README.de.md) | Status: Native Formate, EVM und Solana SBF implementiert |
 | [English README](../README.md) | Englische Version |
 | [Andere Sprachen](i18n/) | Weitere lokalisierte Versionen |

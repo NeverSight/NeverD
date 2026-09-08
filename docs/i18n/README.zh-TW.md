@@ -220,6 +220,8 @@ cmake --build build --target check-neverd
 
 ## CLI
 
+Android 的實驗性 CLI 支援以 `neverd mobile app.apk -o recovered-app` 將 APK、DEX 或 smali 還原為 Java，並產生 `report.json`。需另外準備 Python 3.10 以上、JADX 1.5.6 以上與 Java 11 以上；不解碼 APK 資源，也不保證完整還原。安裝、選項與錯誤處理請參閱 [Android Java 還原指南](../android.zh-TW.md)。
+
 ```text
 neverd <command> [options] <binary>
 ```
@@ -231,6 +233,7 @@ neverd <command> [options] <binary>
 | `lift` | `.ll` | 提升到 LLVM IR |
 | `decompile` | `.c` / `.sol` / `.rs` | 透過 `--language` 選擇 C、EVM Solidity 或 SBF Rust |
 | `decompile -llvm` | `.c` | 經 LLVM IR + 最佳化器 |
+| `mobile` | Java 目錄與 JSON 報告 | [Android APK／DEX／smali 還原](../android.zh-TW.md)（實驗性） |
 | `patch` | 二進位 | 重寫機器碼 |
 
 ```bash

@@ -18,6 +18,7 @@
 | [إضافات Python](python-plugins.ar.md) | تأليف الإضافات، وواجهة الجلسة والأحداث، والعزل، والاختبارات، والنشر |
 | [فك تجميع EVM](evm.ar.md) | المدخلات وhardforks وIR المرحلي وعقدا C/LLVM واستعادة Solidity والحدود |
 | [تفكيك Solana SBF](sbf.ar.md) | ‏SBF v0-v4، وLLVM IR، ومخرجات C/Rust، والتحقق، والقيود المعروفة |
+| [استعادة Java من Android](android.ar.md) | APK وDEX وsmali؛ إعداد JADX/Python، وواجهة سطر الأوامر، وتقارير JSON، والقيود والتحقق |
 | [خارطة الطريق](roadmap/README.ar.md) | الحالة: الصيغ الأصلية وEVM وSolana SBF مكتملة |
 | [English README](../README.md) | النسخة الإنجليزية |
 | [لغات أخرى](i18n/) | بقية الإصدارات المترجمة |

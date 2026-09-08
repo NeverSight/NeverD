@@ -1,5 +1,7 @@
 # Mobile application recovery
 
+[← Documentation index](README.md) · [Complete Android guide](android.md)
+
 `neverd mobile` recovers readable Java from Android APK, DEX, and smali inputs. For iOS IPA, `.app`, and Mach-O inputs, it exports available runtime metadata and uses NeverD's native decompiler to produce C pseudocode. This is an experimental CLI workflow; mobile containers are not accepted by the native C SDK or GUI loader.
 
 ## Setup

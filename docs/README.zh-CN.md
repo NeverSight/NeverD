@@ -16,6 +16,7 @@
 | [内存安全审计与猎取](memory-safety.zh-CN.md) | 堆对象生命周期与拷贝越界分析：各格式身份契约、汇/源目录、判定、预算与 JSON 模式 |
 | [原生插件](plugins.zh-CN.md) | 纯 C 描述符 ABI、回调与事件、构建/链接流程、发现顺序及兼容性规则 |
 | [Python 插件](python-plugins.zh-CN.md) | 插件编写、会话与事件 API、隔离、测试及发布 |
+| [Android Java 代码恢复](android.zh-CN.md) | APK/DEX/smali 环境配置、多 DEX 与类上下文、CLI 参数、JSON 报告、排查与验证 |
 | [EVM 反编译](evm.zh-CN.md) | EVM 输入、硬分叉、分级 IR、C/LLVM host ABI、Solidity 重建与限制 |
 | [Solana SBF 反编译](sbf.zh-CN.md) | SBF v0-v4、LLVM IR、C/Rust 输出、验证与已知限制 |
 | [路线图](roadmap/README.zh-CN.md) | 状态：原生格式、EVM 与 Solana SBF 均已实现 |

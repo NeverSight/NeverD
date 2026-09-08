@@ -220,6 +220,8 @@ cmake --build build --target check-neverd
 
 ## CLI
 
+Android 向けの実験的な CLI は、`neverd mobile app.apk -o recovered-app` により APK、DEX、smali から Java と `report.json` を生成します。Python 3.10 以降、JADX 1.5.6 以降、Java 11 以降を別途用意してください。APK リソースはデコードせず、完全な復元も保証しません。導入手順、オプション、エラー処理は [Android の Java 復元ガイド](../android.ja.md)を参照してください。
+
 ```text
 neverd <command> [options] <binary>
 ```
@@ -231,6 +233,7 @@ neverd <command> [options] <binary>
 | `lift` | `.ll` | LLVM IR へリフト |
 | `decompile` | `.c` / `.sol` / `.rs` | `--language` で C、EVM Solidity、SBF Rust を選択 |
 | `decompile -llvm` | `.c` | LLVM IR + 最適化経由 |
+| `mobile` | Java ディレクトリと JSON レポート | [Android APK／DEX／smali の復元](../android.ja.md)（実験的） |
 | `patch` | バイナリ | 機械語の書き換え |
 
 ```bash

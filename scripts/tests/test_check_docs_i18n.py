@@ -73,6 +73,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                 Path("docs/windows-exception-reconstruction.md"),
                 Path("docs/evm.md"),
                 Path("docs/sbf.md"),
+                Path("docs/android.md"),
             },
         )
 
@@ -85,6 +86,106 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         i18n.validate_links(existing, errors, view)
         i18n.validate_markdown_structure(existing, errors, view)
         self.assertEqual(errors, [])
+
+    def test_android_index_and_command_contract_cannot_silently_drift(self) -> None:
+        view = i18n.RepositoryView(use_index=False)
+        for path, token in (
+            (Path("README.md"), "docs/android.md"),
+            (Path("docs/README.zh-CN.md"), "android.zh-CN.md"),
+            (Path("docs/android.md"), "--max-bytes"),
+            (Path("docs/android.zh-CN.md"), "java_source_count"),
+        ):
+            with self.subTest(path=path, token=token):
+                self.assertIn(token, view.read_text(path))
+                broken = view.read_text(path).replace(token, "removed-contract-token")
+                errors: list[str] = []
+                i18n.validate_matrix(errors, _OverlayView({path: broken}))
+                self.assertTrue(any(token in error for error in errors), errors)
+
+    @staticmethod
+    def _android_readme_examples() -> dict[Path, str]:
+        links = (
+            (Path("README.md"), "docs/android.md"),
+            *(
+                (Path(f"docs/i18n/README.{locale}.md"), f"../android.{locale}.md")
+                for locale in i18n.LOCALES
+            ),
+        )
+        return {
+            path: (
+                f"Use `neverd mobile`; see [Android]({target}).\n\n"
+                "| Command | Guide |\n"
+                "|---------|-------|\n"
+                f"| `mobile` | [Android]({target}) |\n"
+            )
+            for path, target in links
+        }
+
+    def test_android_readme_rows_require_their_own_guide_link(self) -> None:
+        complete = self._android_readme_examples()
+        errors: list[str] = []
+        i18n.validate_android_readme_entries(errors, _PathTextView(complete))
+        self.assertEqual(errors, [])
+        for path, text in complete.items():
+            row = next(
+                line for line in text.splitlines() if line.startswith("| `mobile` |")
+            )
+            wrong_target = (
+                "docs/android.zh-CN.md" if path == Path("README.md") else "../android.md"
+            )
+            for mutation, replacement, diagnostic in (
+                ("missing", "", "expected one mobile CLI table row, found 0"),
+                (
+                    "fenced", f"```text\n{row}\n```",
+                    "expected one mobile CLI table row, found 0",
+                ),
+                (
+                    "duplicate", f"{row}\n{row}",
+                    "expected one mobile CLI table row, found 2",
+                ),
+                (
+                    "wrong guide", f"| `mobile` | [Android]({wrong_target}) |",
+                    "mobile CLI table row must link to",
+                ),
+            ):
+                with self.subTest(path=path, mutation=mutation):
+                    texts = {**complete, path: text.replace(row, replacement)}
+                    errors = []
+                    i18n.validate_android_readme_entries(errors, _PathTextView(texts))
+                    self.assertEqual(len(errors), 1, errors)
+                    self.assertIn(f"{path.as_posix()}: {diagnostic}", errors[0])
+
+    def test_android_translated_commands_and_json_match_english(self) -> None:
+        english_path = Path("docs/android.md")
+        english = i18n.RepositoryView(use_index=False).read_text(english_path)
+        localized_paths = tuple(
+            Path(f"docs/android.{locale}.md") for locale in i18n.LOCALES
+        )
+        complete = {path: english for path in (english_path, *localized_paths)}
+        first_path = localized_paths[0]
+        directory_body = next(
+            body for info, body in i18n.markdown_fenced_blocks(english) if info == "text"
+        )
+        complete[first_path] = english.replace(directory_body, "translated directory descriptions")
+        errors: list[str] = []
+        i18n.validate_android_examples(errors, _PathTextView(complete))
+        self.assertEqual(errors, [])
+
+        for path in localized_paths:
+            for original, replacement in (
+                ("--max-bytes=4294967296", "--max-byte=4294967296"),
+                (r"C:\Tools\Python\python.exe", r"C:\Tools\Python\python-wrong.exe"),
+                ('"java_source_count": 2', '"java_source_count": 3'),
+                ("```powershell", "```text"),
+            ):
+                with self.subTest(path=path, mutation=original):
+                    self.assertIn(original, english)
+                    texts = {**complete, path: english.replace(original, replacement, 1)}
+                    errors = []
+                    i18n.validate_android_examples(errors, _PathTextView(texts))
+                    self.assertEqual(len(errors), 1, errors)
+                    self.assertIn(path.as_posix(), errors[0])
+                    self.assertIn("must match docs/android.md", errors[0])
 
     def test_every_english_document_has_a_counterpart_in_every_locale(self) -> None:
         self.assertEqual(

@@ -36,6 +36,8 @@ CLI tools, integrators, and AI agents use one engine — **`libneverd`** — thr
 
 Input formats, host contracts, and limitations are documented in the [EVM guide](docs/evm.md) and [Solana SBF guide](docs/sbf.md).
 
+Android Java recovery is available through the separate `neverd mobile` CLI workflow: APK, multidex, DEX, and smali inputs produce Java using an installed JADX backend. See the [Android guide](docs/android.md) for runtime setup, supported inputs, output reports, and recovery limits.
+
 ## Why NeverD?
 
 - **1:1 semantics** — hand-written lifters; unsupported opcodes throw under default strict mode
@@ -257,6 +259,7 @@ neverd <command> [options] <binary>
 | `lift` | `.ll` | Lift to LLVM IR |
 | `decompile` | `.c` / `.sol` / `.rs` | C, EVM Solidity, or SBF Rust selected with `--language` |
 | `decompile -llvm` | `.c` | Via LLVM IR + optimizer |
+| `mobile` | Java directory + JSON report | Android APK/DEX/smali recovery; [setup and limits](docs/android.md) |
 | `patch` | binary | Rewrite machine code |
 
 ```bash

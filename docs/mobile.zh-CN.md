@@ -1,5 +1,7 @@
 # 移动应用逆向支持
 
+[← 文档索引](README.zh-CN.md) · [完整 Android 指南](android.zh-CN.md)
+
 `neverd mobile` 支持将 Android APK、DEX、smali 恢复为可读 Java。对 iOS IPA、`.app` 和 Mach-O，命令导出可恢复的运行时元数据，并复用 NeverD 原生反编译器输出 C 伪代码。目前这是实验性的 CLI 功能；原生 C SDK 和 GUI 加载器尚不支持移动应用容器。
 
 ## 环境

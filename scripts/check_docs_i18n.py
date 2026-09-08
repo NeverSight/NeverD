@@ -57,7 +57,7 @@ ARCHITECTURE_CAPABILITY_TOKENS = {
         "`landingpad`",
     ),
 }
-GUIDE_STEMS = ("evm", "sbf")
+GUIDE_STEMS = ("evm", "sbf", "android")
 SBF_GUIDE_DOCS = (
     Path("docs/sbf.md"),
     *(Path(f"docs/sbf.{locale}.md") for locale in LOCALES),
@@ -486,6 +486,15 @@ EVM_FUNCTION_SCOPE_TEST_TOKENS = (
     "`region`",
 )
 GUIDE_REQUIRED_TOKENS = {
+    "android": (
+        "neverd mobile", ".apk", ".dex", ".smali", "JADX", "1.5.6", "3.10",
+        "--jadx", "--python", "NEVERD_JADX", "NEVERD_PYTHON", "JAVA_HOME",
+        "--platform=android", "--timeout", "--max-files", "--max-bytes", "--json",
+        "report.json", "schema_version", "input_code_files", "dex_count",
+        "smali_count", "java_source_count", "java_sources", "logs/jadx.log",
+        "--metadata-only", "check-neverd-mobile", "test_mobile_android_backend.py",
+        "2147483648", "20000", "300",
+    ),
     "evm": (
         "frontier",
         "fusaka",
@@ -699,6 +708,7 @@ def localized_paths(locale: str) -> tuple[Path, ...]:
         Path(f"docs/windows-exception-reconstruction.{locale}.md"),
         Path(f"docs/evm.{locale}.md"),
         Path(f"docs/sbf.{locale}.md"),
+        Path(f"docs/android.{locale}.md"),
     )
 
 
@@ -1550,6 +1560,59 @@ def without_markdown_fences(text: str) -> str:
     return "\n".join(output)
 
 
+def validate_android_readme_entries(
+    errors: list[str], view: RepositoryView
+) -> None:
+    """Keep the mobile CLI row linked to each README's Android guide."""
+    links = (
+        (Path("README.md"), "docs/android.md"),
+        *(
+            (Path(f"docs/i18n/README.{locale}.md"), f"../android.{locale}.md")
+            for locale in LOCALES
+        ),
+    )
+    for path, target in links:
+        prose = without_markdown_fences(view.read_text(path))
+        rows = re.findall(
+            r"^[ \t]*\|[ \t]*`mobile`[ \t]*\|[^\n]*\|[ \t]*$",
+            prose,
+            re.MULTILINE,
+        )
+        if len(rows) != 1:
+            report(
+                errors,
+                f"{display_path(path)}: expected one mobile CLI table row, "
+                f"found {len(rows)}",
+            )
+        elif target not in {link_target(raw) for raw in LINK_RE.findall(rows[0])}:
+            report(
+                errors,
+                f"{display_path(path)}: mobile CLI table row must link to {target!r}",
+            )
+
+
+def validate_android_examples(errors: list[str], view: RepositoryView) -> None:
+    """Preserve command and JSON samples exactly while allowing translated text."""
+    languages = {"sh", "bash", "shell", "powershell", "json"}
+
+    def examples(path: Path) -> tuple[tuple[str, str], ...]:
+        return tuple(
+            (info, body)
+            for info, body in markdown_fenced_blocks(view.read_text(path))
+            if info in languages
+        )
+
+    expected = examples(Path("docs/android.md"))
+    for locale in LOCALES:
+        path = Path(f"docs/android.{locale}.md")
+        if examples(path) != expected:
+            report(
+                errors,
+                f"{display_path(path)}: Android command and JSON fenced blocks "
+                "must match docs/android.md exactly",
+            )
+
+
 def rust_host_prose(text: str) -> str | None:
     match = re.search(
         r"^## [^\n]*Rust[^\n]*\n(.*?)(?=^## |\Z)",
@@ -2005,7 +2068,12 @@ def validate_matrix(errors: list[str], view: RepositoryView) -> None:
     validate_sbf_testing_ownership(errors, view)
     validate_sbf_testing_evidence_prose(errors, view)
     validate_sbf_testing_release_commands(errors, view)
+    validate_android_readme_entries(errors, view)
+    validate_android_examples(errors, view)
     registered_evm_tests = evm_test_targets(errors, view)
+
+    require_tokens(Path("README.md"), ("docs/android.md", "neverd mobile"), errors, view)
+    require_tokens(Path("docs/README.md"), ("android.md",), errors, view)
 
     selector_tokens = {
         stem: (f"{stem}.md", *(f"{stem}.{locale}.md" for locale in LOCALES))
@@ -2041,6 +2109,7 @@ def validate_matrix(errors: list[str], view: RepositoryView) -> None:
             _windows_exception,
             evm_guide,
             sbf_guide,
+            android_guide,
         ) = localized_paths(locale)
         require_tokens(
             project_readme,
@@ -2052,13 +2121,15 @@ def validate_matrix(errors: list[str], view: RepositoryView) -> None:
                 "--language=rust",
                 f"../evm.{locale}.md",
                 f"../sbf.{locale}.md",
+                f"../android.{locale}.md",
+                "neverd mobile",
             ),
             errors,
             view,
         )
         require_tokens(
             index,
-            (f"evm.{locale}.md", f"sbf.{locale}.md"),
+            (f"evm.{locale}.md", f"sbf.{locale}.md", f"android.{locale}.md"),
             errors,
             view,
         )
@@ -2102,6 +2173,12 @@ def validate_matrix(errors: list[str], view: RepositoryView) -> None:
         require_tokens(
             sbf_guide,
             (*selector_tokens["sbf"], *GUIDE_REQUIRED_TOKENS["sbf"]),
+            errors,
+            view,
+        )
+        require_tokens(
+            android_guide,
+            (*selector_tokens["android"], *GUIDE_REQUIRED_TOKENS["android"]),
             errors,
             view,
         )

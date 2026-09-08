@@ -36,6 +36,8 @@ CLI, integratori e agent AI usano un solo motore — **`libneverd`** — tramite
 
 Formati di input, contratti host e limiti sono documentati nelle guide [EVM](../evm.it.md) e [Solana SBF](../sbf.it.md).
 
+Il comando CLI sperimentale `neverd mobile app.apk -o recovered-app` ricostruisce Java da APK, DEX e smali tramite un backend JADX installato separatamente. Questo flusso è disponibile solo dalla CLI, senza integrazione nell’SDK C nativo o nell’SDK dei plugin Python. La [guida Android](../android.it.md) descrive configurazione, multidex, report di output e limiti.
+
 ## Perché NeverD?
 
 - **Semantica 1:1** — lifter scritti a mano; gli opcode non supportati lanciano eccezione in strict di default
@@ -232,6 +234,7 @@ neverd <command> [options] <binary>
 | `lift` | `.ll` | Lift a LLVM IR |
 | `decompile` | `.c` / `.sol` / `.rs` | C, Solidity EVM o Rust SBF selezionato con `--language` |
 | `decompile -llvm` | `.c` | Via LLVM IR + ottimizzatore |
+| `mobile` | Directory Java + report JSON | Ricostruzione Java sperimentale da APK/DEX/smali; vedi [Android](../android.it.md) |
 | `patch` | binario | Riscrittura del codice macchina |
 
 ```bash

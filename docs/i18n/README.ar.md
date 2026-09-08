@@ -36,6 +36,8 @@ CLI والمكاملون ووكلاء الذكاء الاصطناعي يستخد
 
 توثق أدلة [EVM](../evm.ar.md) و[Solana SBF](../sbf.ar.md) صيغ الإدخال وعقود host والحدود.
 
+يستعيد الأمر التجريبي `neverd mobile app.apk -o recovered-app` شيفرة Java من APK وDEX وsmali باستخدام JADX 1.5.6+ مثبّت بشكل مستقل وPython 3.10+. لا تضيف هذه الميزة دعم APK أو Java إلى SDK أو محمّل الواجهة الرسومية. راجع [دليل استعادة Java من Android](../android.ar.md) لإعداد بيئات التشغيل واختيار المدخلات وفهم التقارير وحدودها.
+
 ## لماذا NeverD؟
 
 - **دلالات 1:1** — lifter مكتوب يدويًا؛ العمليات غير المدعومة ترمي استثناءً في strict الافتراضي
@@ -232,6 +234,7 @@ neverd <command> [options] <binary>
 | `decompile` | `.c` / `.sol` / `.rs` | C أو Solidity لـEVM أو Rust لـSBF عبر `--language` |
 | `decompile -llvm` | `.c` | عبر LLVM IR + المحسّن |
 | `patch` | ثنائي | إعادة كتابة شفرة الآلة |
+| `mobile` | `.java` / `report.json` | استعادة تجريبية لشيفرة Java من APK/DEX/smali باستخدام JADX؛ [دليل Android](../android.ar.md) |
 
 ```bash
 neverd patch -hello -o patched binary

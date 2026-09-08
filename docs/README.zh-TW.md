@@ -18,6 +18,7 @@
 | [Python 外掛](python-plugins.zh-TW.md) | 外掛撰寫、工作階段與事件 API、隔離、測試及發佈 |
 | [EVM 反編譯](evm.zh-TW.md) | EVM 輸入、硬分叉、分級 IR、C/LLVM host ABI、Solidity 重建與限制 |
 | [Solana SBF 反編譯](sbf.zh-TW.md) | SBF v0-v4、LLVM IR、C/Rust 輸出、驗證與已知限制 |
+| [Android Java 還原](android.zh-TW.md) | APK、DEX、smali 的 CLI 流程、執行環境、選項、JSON 報告、錯誤處理與驗證限制 |
 | [路線圖](roadmap/README.zh-TW.md) | 狀態：原生格式、EVM 與 Solana SBF 均已實作 |
 | [English README](../README.md) | 英文版主文件 |
 | [其他語言 README](i18n/) | 其餘在地化版本 |

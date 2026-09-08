@@ -18,6 +18,7 @@
 | [Плагины Python](python-plugins.ru.md) | Разработка, API сессий и событий, изоляция, тестирование и публикация |
 | [Декомпиляция EVM](evm.ru.md) | Входы, hardforks, стадии IR, C/LLVM host ABI, реконструкция Solidity и ограничения |
 | [Декомпиляция Solana SBF](sbf.ru.md) | SBF v0-v4, LLVM IR, вывод C/Rust, проверка и известные ограничения |
+| [Восстановление Java для Android](android.ru.md) | APK, DEX и smali; настройка JADX/Python, CLI, отчёты JSON, ограничения и проверка |
 | [Дорожная карта](roadmap/README.ru.md) | Статус: нативные форматы, EVM и Solana SBF реализованы |
 | [English README](../README.md) | Английская версия |
 | [Другие языки](i18n/) | Остальные локализации |

@@ -36,6 +36,8 @@ CLI, интеграторы и ИИ-агенты используют один �
 
 Форматы входа, host-контракты и ограничения описаны в руководствах [EVM](../evm.ru.md) и [Solana SBF](../sbf.ru.md).
 
+Экспериментальная команда `neverd mobile app.apk -o recovered-app` восстанавливает Java из APK, DEX и smali с помощью отдельно установленного JADX 1.5.6+ и Python 3.10+. Эта возможность не добавляет поддержку APK и Java в SDK или загрузчик GUI. Настройка сред выполнения, выбор входов, отчёты и ограничения описаны в [руководстве по восстановлению Java для Android](../android.ru.md).
+
 ## Почему NeverD?
 
 - **Семантика 1:1** — рукописные lifter’ы; неподдерживаемые опкоды бросают исключение в strict по умолчанию
@@ -233,6 +235,7 @@ neverd <command> [options] <binary>
 | `decompile` | `.c` / `.sol` / `.rs` | C, EVM Solidity или SBF Rust через `--language` |
 | `decompile -llvm` | `.c` | Через LLVM IR + оптимизатор |
 | `patch` | бинарник | Перезапись машинного кода |
+| `mobile` | `.java` / `report.json` | Экспериментальное восстановление Java из APK/DEX/smali через JADX; [руководство Android](../android.ru.md) |
 
 ```bash
 neverd patch -hello -o patched binary

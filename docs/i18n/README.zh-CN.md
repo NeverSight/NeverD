@@ -36,6 +36,8 @@ CLI、集成方与 AI 智能体通过 **纯 C API** 使用同一个引擎 **`lib
 
 输入格式、host 契约与限制详见 [EVM 指南](../evm.zh-CN.md)和 [Solana SBF 指南](../sbf.zh-CN.md)。
 
+Android Java 代码恢复通过独立的 `neverd mobile` CLI 流程提供：使用已安装的 JADX 后端，将 APK、多 DEX、DEX 和 smali 输入恢复为 Java。[Android 指南](../android.zh-CN.md)介绍运行环境、支持范围、输出报告和恢复限制。
+
 ## 为什么选 NeverD？
 
 - **1:1 语义** — 手写 lifter；默认 strict 下未支持指令抛出异常
@@ -231,6 +233,7 @@ neverd <command> [options] <binary>
 | `lift` | `.ll` | 提升到 LLVM IR |
 | `decompile` | `.c` / `.sol` / `.rs` | 通过 `--language` 选择 C、EVM Solidity 或 SBF Rust |
 | `decompile -llvm` | `.c` | 经 LLVM IR + 优化器 |
+| `mobile` | Java 目录 + JSON 报告 | Android APK/DEX/smali 恢复；[配置与限制](../android.zh-CN.md) |
 | `patch` | 二进制 | 重写机器码 |
 
 ```bash

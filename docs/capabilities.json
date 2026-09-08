@@ -3266,7 +3266,9 @@
       ],
       "docs": [
         "docs/mobile.md",
-        "docs/mobile.zh-CN.md"
+        "docs/mobile.zh-CN.md",
+        "docs/android.md",
+        "docs/android.zh-CN.md"
       ],
       "limitations": [
         "CLI workflow only; Python 3.10+ and a separately installed JADX 1.5.6+ backend are required for Android.",

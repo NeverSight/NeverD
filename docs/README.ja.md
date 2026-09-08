@@ -18,6 +18,7 @@
 | [Python プラグイン](python-plugins.ja.md) | プラグイン作成、セッション／イベント API、分離、テスト、公開 |
 | [EVM 逆コンパイル](evm.ja.md) | 入力、hardfork、段階 IR、C/LLVM host ABI、Solidity 復元、制限 |
 | [Solana SBF 逆コンパイル](sbf.ja.md) | SBF v0-v4、LLVM IR、C/Rust 出力、検証、既知の制限 |
+| [Android の Java 復元](android.ja.md) | APK・DEX・smali の CLI 手順、実行環境、オプション、JSON レポート、エラー処理、検証の限界 |
 | [ロードマップ](roadmap/README.ja.md) | 状態：native format、EVM、Solana SBF を実装済み |
 | [English README](../README.md) | 英語版 |
 | [他言語 README](i18n/) | その他のローカライズ版 |

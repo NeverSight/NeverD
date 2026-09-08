@@ -18,6 +18,7 @@
 | [Python 플러그인](python-plugins.ko.md) | 플러그인 작성, 세션·이벤트 API, 격리, 테스트 및 배포 |
 | [EVM 디컴파일](evm.ko.md) | 입력, hardfork, 단계별 IR, C/LLVM host ABI, Solidity 복구 및 제한 |
 | [Solana SBF 디컴파일](sbf.ko.md) | SBF v0-v4, LLVM IR, C/Rust 출력, 검증 및 알려진 제한 사항 |
+| [Android Java 복구](android.ko.md) | APK·DEX·smali CLI 흐름, 실행 환경, 옵션, JSON 보고서, 오류 처리 및 검증 제한 |
 | [로드맵](roadmap/README.ko.md) | 상태: native format, EVM, Solana SBF 구현 완료 |
 | [English README](../README.md) | 영어 버전 |
 | [기타 언어 README](i18n/) | 나머지 현지화 버전 |
