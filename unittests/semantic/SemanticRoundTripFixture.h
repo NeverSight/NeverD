@@ -34,18 +34,25 @@
 #include "neverd/object/SectionNames.h"
 #include "neverd/sdk/NeverDCAPI.h"
 
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/ObjectFile.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Program.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string_view>
+#include <system_error>
 #include <thread>
 
 namespace fs = std::filesystem;
@@ -242,13 +249,10 @@ private:
   // process churn of a full suite run (not a real tool diagnostic).
   static constexpr int kSpawnRetries = 5;
 
-  // Number of times a REQUIRED link (ld.lld) is retried before giving up.  A
-  // needed link that fails is almost always a transient disruption — e.g. the
-  // linker child killed by a process-group signal during a full parallel run,
-  // exactly the event that simultaneously kills whole shards — not a malformed
-  // object.  Retrying with backoff recovers from it; the unlinked object is
-  // NEVER used as a fallback (its unresolved relocations read wrong/unmapped
-  // memory and masquerade as a semantic failure).
+  // Bound retries of a REQUIRED link (ld.lld), including temporary process
+  // disruption. Exhausting retries is a failed execution, regardless of its
+  // cause. Never use the unlinked object as a fallback: unresolved relocations
+  // would masquerade as a semantic failure during emulation.
   static constexpr int kLinkRetries = 5;
 
   static inline neverd_session_t Sess = nullptr;
@@ -391,24 +395,19 @@ private:
         }
       }
       if (NeedLink) {
-        bool OriginalLinkFailed = false;
-        auto Linked = linkAndExtract(ObjPath, TC.Name + "_orig", UcArch, UcMode,
-                                     &OriginalLinkFailed);
+        auto Linked =
+            linkAndExtract(ObjPath, TC.Name + "_orig", UcArch, UcMode);
         // The object has relocations/data or split text — only the LINKED image
         // has correct addresses and section layout.  Do NOT fall back to the
         // unlinked object: unresolved relocations emulate to wrong/unmapped
-        // memory and would surface as a bogus semantic failure.  A link still
-        // failing after retries is a transient infrastructure problem, so skip
-        // honestly.
-        if (OriginalLinkFailed) {
-          GTEST_SKIP() << "original link failed after retries (transient infra)"
+        // memory and would surface as a bogus semantic failure.
+        if (Linked.State == LinkState::Unavailable)
+          GTEST_SKIP() << "original link unavailable: " << Linked.diagnostic()
                        << "\n  Test: " << TC.Name;
-          return;
-        }
-        ASSERT_FALSE(Linked.Text.empty())
-            << "linked original has no executable text"
+        ASSERT_EQ(Linked.State, LinkState::Ready)
+            << "original link failed: " << Linked.diagnostic()
             << "\n  Test: " << TC.Name;
-        OrigSections = std::move(Linked);
+        OrigSections = std::move(Linked.Sections);
       } else {
         OrigSections = std::move(PlainSD);
       }
@@ -470,14 +469,14 @@ private:
     const unsigned char *ObjData = neverd_roundtrip_obj(Sess, &ObjLen);
     ASSERT_NE(ObjData, nullptr) << "No recompiled object data";
 
-    bool RecompLinkFailed = false;
-    auto RecompSections =
-        extractSectionsWithLink(ObjData, ObjLen, TC.Name, RecompLinkFailed);
-    if (RecompLinkFailed) {
-      GTEST_SKIP() << "recompiled link failed after retries (transient infra)"
+    auto Recompiled = extractSectionsWithLink(ObjData, ObjLen, TC.Name);
+    if (Recompiled.State == LinkState::Unavailable)
+      GTEST_SKIP() << "recompiled link unavailable: " << Recompiled.diagnostic()
                    << "\n  Test: " << TC.Name;
-      return;
-    }
+    ASSERT_EQ(Recompiled.State, LinkState::Ready)
+        << "recompiled object preparation failed: " << Recompiled.diagnostic()
+        << "\n  Test: " << TC.Name;
+    auto RecompSections = std::move(Recompiled.Sections);
     ASSERT_FALSE(RecompSections.Text.empty())
         << "Could not extract executable text from recompiled object"
         << "\n  Test: " << TC.Name;
@@ -683,6 +682,34 @@ private:
     bool requiresLink() const { return HasSplitText || hasData(); }
   };
 
+  enum class LinkState { Ready, Unavailable, Failed };
+
+  // Own execution evidence alongside the sections it produced. Execution is
+  // absent when linking was unnecessary or no linker could be found; this is
+  // distinct from a tool that ran and returned a nonzero status.
+  struct LinkOutcome {
+    LinkState State = LinkState::Failed;
+    SectionData Sections;
+    std::optional<ExecResult> Execution;
+    std::string Command;
+    std::string Error;
+
+    std::string diagnostic() const {
+      std::ostringstream OS;
+      OS << Error;
+      if (!Command.empty())
+        OS << "\n  Command: " << Command;
+      if (Execution) {
+        OS << "\n  Exit status: " << Execution->Code;
+        if (!Execution->Out.empty())
+          OS << "\n  stdout: " << Execution->Out;
+        if (!Execution->Err.empty())
+          OS << "\n  stderr: " << Execution->Err;
+      }
+      return OS.str();
+    }
+  };
+
   // Collect .text and every allocated data section (read-only and writable)
   // from an object/linked file.  \p AddrBias is subtracted from each section
   // VMA so the result is relative to the text base (0 for a relocatable .o,
@@ -838,51 +865,31 @@ private:
     return SD;
   }
 
-  static std::vector<uint8_t> extractTextFromFile(const std::string &Path) {
-    auto BufOrErr = llvm::MemoryBuffer::getFile(Path);
-    if (!BufOrErr)
-      return {};
-    auto ObjOrErr = llvm::object::ObjectFile::createObjectFile(
-        (*BufOrErr)->getMemBufferRef());
-    if (!ObjOrErr)
-      return {};
-    for (const auto &Sec : (*ObjOrErr)->sections()) {
-      auto NameOrErr = Sec.getName();
-      if (!NameOrErr)
-        continue;
-      if (*NameOrErr == neverd::section_names::elf::Text) {
-        auto ContentsOrErr = Sec.getContents();
-        if (!ContentsOrErr)
-          continue;
-        return {ContentsOrErr->begin(), ContentsOrErr->end()};
-      }
+  LinkOutcome linkAndExtract(const std::string &ObjPath, const std::string &Tag,
+                             uc_arch Arch, uc_mode Mode = UC_MODE_64) {
+    LinkOutcome Result;
+    // Resolve lazily: some originals need no link while their recompiled
+    // objects do. Cache per process, without launching a probe for each case.
+    // A found tool's execution failure is never evidence that it is absent.
+    static const auto Linker = []() -> llvm::ErrorOr<std::string> {
+      const char *SearchPath = std::getenv("PATH");
+      if (!SearchPath)
+        return std::make_error_code(std::errc::no_such_file_or_directory);
+      llvm::SmallVector<llvm::StringRef, 16> Paths;
+      llvm::StringRef(SearchPath).split(Paths, llvm::sys::EnvPathSeparator);
+      for (auto &Path : Paths)
+        if (Path.empty())
+          Path = ".";
+      // Explicit paths avoid Windows' additional implicit executable search
+      // locations and keep availability tied to the configured tool PATH.
+      return llvm::sys::findProgramByName("ld.lld", Paths);
+    }();
+    if (!Linker) {
+      Result.State = LinkState::Unavailable;
+      Result.Error =
+          "ld.lld executable unavailable: " + Linker.getError().message();
+      return Result;
     }
-    return {};
-  }
-
-  static std::vector<uint8_t> extractTextSection(const unsigned char *Data,
-                                                 size_t Len) {
-    auto SD = extractSections(Data, Len);
-    return SD.Text;
-  }
-
-  static SectionData extractSections(const unsigned char *Data, size_t Len) {
-    SectionData SD;
-    auto BufOrErr = llvm::MemoryBuffer::getMemBuffer(
-        llvm::StringRef(reinterpret_cast<const char *>(Data), Len), "", false);
-    auto ObjOrErr =
-        llvm::object::ObjectFile::createObjectFile(BufOrErr->getMemBufferRef());
-    if (!ObjOrErr)
-      return SD;
-    captureSections(**ObjOrErr, SD, /*AddrBias=*/0);
-    return SD;
-  }
-
-  SectionData linkAndExtract(const std::string &ObjPath, const std::string &Tag,
-                             uc_arch Arch, uc_mode Mode = UC_MODE_64,
-                             bool *LinkFailed = nullptr) {
-    if (LinkFailed)
-      *LinkFailed = false;
     auto LinkedFile = (Work / (Tag + "_linked.elf")).string();
 
     std::string Emul;
@@ -900,72 +907,75 @@ private:
     // The main object is linked first so its function lands at CODE_BASE (the
     // emulation entry); the mem* helper, when present, follows and is reached
     // only via call.
-    std::string LinkCmd = "ld.lld -m " + Emul + " --image-base=" + HexBuf +
-                          " -Ttext=" + HexBuf +
+    std::string LinkCmd = neverd::test::shellQuote(*Linker) + " -m " + Emul +
+                          " --image-base=" + HexBuf + " -Ttext=" + HexBuf +
                           " --oformat=elf -nostdlib --no-dynamic-linker"
                           " --noinhibit-exec -o " +
                           neverd::test::shellQuote(LinkedFile) + " " +
                           neverd::test::shellQuote(ObjPath);
     if (!MemHelperObj.empty())
       LinkCmd += " " + neverd::test::shellQuote(MemHelperObj);
-    LinkCmd += neverd::test::silenceStderr();
-    // A required link almost never fails for a real reason (NeverD codegen and
-    // clang both emit well-formed objects); a failure is a transient infra
-    // disruption, so retry with backoff before giving up.  runCmd already
-    // retries the "ran but produced no output" case; this loop additionally
-    // retries a genuine nonzero exit (e.g. the linker child was signalled).
-    ExecResult LR;
+    Result.Command = LinkCmd;
+    // Preserve bounded recovery from temporary process disruption, but retain
+    // the final command result rather than assuming any failure is transient.
     for (int Attempt = 0; Attempt < kLinkRetries; ++Attempt) {
-      LR = runCmd(LinkCmd);
-      if (LR.ok())
+      Result.Execution = runCmd(LinkCmd);
+      if (Result.Execution->ok())
         break;
       std::this_thread::sleep_for(
           std::chrono::milliseconds(30 * (Attempt + 1)));
     }
-    if (!LR.ok()) {
-      if (LinkFailed)
-        *LinkFailed = true;
-      return {};
+    if (!Result.Execution->ok()) {
+      Result.Error =
+          "linker failed after " + std::to_string(kLinkRetries) + " attempts";
+      return Result;
     }
 
     auto LinkedBufOrErr = llvm::MemoryBuffer::getFile(LinkedFile);
-    if (!LinkedBufOrErr)
-      return {};
+    if (!LinkedBufOrErr) {
+      Result.Error = "could not read linked image " + LinkedFile + ": " +
+                     LinkedBufOrErr.getError().message();
+      return Result;
+    }
     auto LinkedObjOrErr = llvm::object::ObjectFile::createObjectFile(
         (*LinkedBufOrErr)->getMemBufferRef());
-    if (!LinkedObjOrErr)
-      return {};
-
-    SectionData SD;
-    captureSections(**LinkedObjOrErr, SD, /*AddrBias=*/CODE_BASE);
-    return SD;
-  }
-
-  // \p LinkFailed is set when the object REQUIRED linking but the link failed
-  // (after retries).  In that case the returned SectionData is empty and the
-  // caller must skip — never emulate the unlinked object, whose unresolved
-  // relocations read wrong/unmapped memory and look like a semantic failure.
-  SectionData extractSectionsWithLink(const unsigned char *Data, size_t Len,
-                                      const std::string &Name,
-                                      bool &LinkFailed) {
-    LinkFailed = false;
-    auto PlainSD = extractSections(Data, Len);
-    if (!PlainSD.hasText())
-      return PlainSD;
-
-    auto ObjFile = (Work / (Name + "_recomp.o")).string();
-    {
-      std::ofstream F(ObjFile, std::ios::binary);
-      F.write(reinterpret_cast<const char *>(Data), Len);
+    if (!LinkedObjOrErr) {
+      Result.Error = "could not parse linked image " + LinkedFile + ": " +
+                     llvm::toString(LinkedObjOrErr.takeError());
+      return Result;
     }
 
-    auto BufOrErr = llvm::MemoryBuffer::getFile(ObjFile);
-    if (!BufOrErr)
-      return PlainSD;
-    auto ObjOrErr = llvm::object::ObjectFile::createObjectFile(
-        (*BufOrErr)->getMemBufferRef());
-    if (!ObjOrErr)
-      return PlainSD;
+    captureSections(**LinkedObjOrErr, Result.Sections, /*AddrBias=*/CODE_BASE);
+    if (Result.Sections.Text.empty()) {
+      Result.Sections = {};
+      Result.Error = "linked image has no executable text: " + LinkedFile;
+      return Result;
+    }
+    Result.State = LinkState::Ready;
+    return Result;
+  }
+
+  // Parse the SDK's owned bytes before deciding whether linking is required.
+  // A failed write, parse or required link never falls back to relocatable
+  // sections whose unresolved addresses cannot be emulated correctly.
+  LinkOutcome extractSectionsWithLink(const unsigned char *Data, size_t Len,
+                                      const std::string &Name) {
+    LinkOutcome Result;
+    auto Buffer = llvm::MemoryBuffer::getMemBuffer(
+        llvm::StringRef(reinterpret_cast<const char *>(Data), Len), "", false);
+    auto ObjOrErr =
+        llvm::object::ObjectFile::createObjectFile(Buffer->getMemBufferRef());
+    if (!ObjOrErr) {
+      Result.Error = "could not parse recompiled object: " +
+                     llvm::toString(ObjOrErr.takeError());
+      return Result;
+    }
+    SectionData PlainSD;
+    captureSections(**ObjOrErr, PlainSD, /*AddrBias=*/0);
+    if (!PlainSD.hasText()) {
+      Result.Error = "recompiled object has no executable text";
+      return Result;
+    }
 
     uc_arch Arch = UC_ARCH_X86;
     uc_mode Mode = UC_MODE_64;
@@ -981,11 +991,22 @@ private:
       // Split `.text.*` is a required-link input even without data or explicit
       // relocations: only the linker owns its placement relative to the entry
       // image.  A successful link that still exposes no executable text is an
-      // invalid roundtrip result, not transient infrastructure; leave
-      // LinkFailed false so the caller reports an assertion failure.
-      return linkAndExtract(ObjFile, Name + "_recomp", Arch, Mode, &LinkFailed);
+      // invalid roundtrip result, not a reason to skip execution.
+      auto ObjFile = (Work / (Name + "_recomp.o")).string();
+      {
+        std::ofstream F(ObjFile, std::ios::binary);
+        F.write(reinterpret_cast<const char *>(Data), Len);
+        F.close();
+        if (!F) {
+          Result.Error = "could not write recompiled object: " + ObjFile;
+          return Result;
+        }
+      }
+      return linkAndExtract(ObjFile, Name + "_recomp", Arch, Mode);
     }
-    return PlainSD;
+    Result.State = LinkState::Ready;
+    Result.Sections = std::move(PlainSD);
+    return Result;
   }
 };
 

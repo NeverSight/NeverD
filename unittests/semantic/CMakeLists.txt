@@ -1424,6 +1424,17 @@ endif()
 add_neverd_unittest(NeverDSemanticFixtureTests
   SemanticRoundTripFixtureTests.cpp
 )
+add_executable(NeverDSemanticFixtureToolProxy
+  SemanticFixtureToolProxy.cpp
+)
+target_compile_features(NeverDSemanticFixtureToolProxy PRIVATE cxx_std_20)
+target_include_directories(NeverDSemanticFixtureToolProxy PRIVATE
+  ${CMAKE_SOURCE_DIR}/unittests
+)
+target_compile_definitions(NeverDSemanticFixtureTests PRIVATE
+  NEVERD_FIXTURE_TOOL_PROXY="$<TARGET_FILE:NeverDSemanticFixtureToolProxy>"
+)
+add_dependencies(NeverDSemanticFixtureTests NeverDSemanticFixtureToolProxy)
 target_include_directories(NeverDSemanticFixtureTests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_SOURCE_DIR}/include
