@@ -1035,3 +1035,68 @@ TEST(X86APXBMISemantics, DuplicateSegmentOrAddressPrefixFailsBeforeLowState) {
 }
 
 } // namespace
+
+TEST(X86APXBMISemantics, DestructiveBitResetUsesOriginalSourceForCarry) {
+  struct Form {
+    unsigned Id;
+    std::vector<uint8_t> Bytes;
+    x86_reg Register;
+    unsigned Width;
+    bool NF;
+  };
+  const Form Forms[] = {
+      {X86_INS_BLSR, {0xc4, 0xe2, 0xf8, 0xf3, 0xc8}, X86_REG_RAX, 8, false},
+      {X86_INS_BLSMSK, {0xc4, 0xe2, 0xf8, 0xf3, 0xd0}, X86_REG_RAX, 8, false},
+      {X86_INS_BLSR, {0xc4, 0xe2, 0x78, 0xf3, 0xc8}, X86_REG_EAX, 4, false},
+      {X86_INS_BLSMSK, {0xc4, 0xe2, 0x78, 0xf3, 0xd0}, X86_REG_EAX, 4, false},
+      {X86_INS_BLSR,
+       {0x62, 0xfa, 0xe4, 0x00, 0xf3, 0xcb},
+       X86_REG_R19,
+       8,
+       false},
+      {X86_INS_BLSMSK,
+       {0x62, 0xfa, 0xe4, 0x00, 0xf3, 0xd3},
+       X86_REG_R19,
+       8,
+       false},
+      {X86_INS_BLSR,
+       {0x62, 0xfa, 0xe4, 0x04, 0xf3, 0xcb},
+       X86_REG_R19,
+       8,
+       true},
+      {X86_INS_BLSMSK,
+       {0x62, 0xfa, 0xe4, 0x04, 0xf3, 0xd3},
+       X86_REG_R19,
+       8,
+       true},
+  };
+  for (const Form &F : Forms) {
+    const auto Lifted = liftX64(F.Bytes);
+    ASSERT_EQ(Lifted.Id, F.Id);
+    for (uint64_t Seed :
+         {0ULL, 1ULL, 0x80000000ULL, 0x8000000000000000ULL, 0x31ULL})
+      for (bool Carry : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << F.Id << '/' << F.Width << '/' << F.NF << '/' << Seed
+                     << '/' << Carry);
+        const uint64_t Source = Seed & widthMask(F.Width);
+        const uint64_t Result = (F.Id == X86_INS_BLSR ? Source & (Source - 1)
+                                                      : Source ^ (Source - 1)) &
+                                widthMask(F.Width);
+        Flags Expected{Carry, true, true, true, true, true, true};
+        NdOpEmulator Emulator(emptyImage());
+        Emulator.setStrictMode(true);
+        setFlags(Emulator, Expected);
+        setGpr(Emulator, F.Register, Seed);
+        ASSERT_EQ(Emulator.run(Lifted.Ops), Lifted.Ops.size());
+        EXPECT_EQ(getGpr(Emulator, F.Register) & widthMask(F.Width), Result);
+        if (!F.NF) {
+          Expected.CF = Source == 0;
+          Expected.ZF = F.Id == X86_INS_BLSR && Result == 0;
+          Expected.SF = (Result >> (F.Width * 8 - 1)) != 0;
+          Expected.OF = false;
+        }
+        expectFlags(Emulator, Expected);
+      }
+  }
+}

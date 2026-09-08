@@ -689,14 +689,16 @@ bool liftExtBMI(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     const unsigned SrcIndex = Apx.Present ? Apx.Source : 1;
     NdVar Src = L.operandRead(S, X86.operands[SrcIndex]);
     NdVar Dst = L.operandWrite(X86.operands[DstIndex]);
+    // CF depends on the source before a possibly aliased destination write.
+    if (!Apx.NF)
+      S.emit(NdOp::INT_EQUAL, NdVar::reg(x86reg::CF, 1),
+             {Src, NdVar::scalar(0, Dst.Size)});
     NdVar Dec = S.makeTemp(Dst.Size);
     S.emit(NdOp::INT_SUB, Dec, {Src, NdVar::scalar(1, Dst.Size)});
     S.emit(NdOp::INT_XOR, Dst, {Dec, Src});
     if (!Apx.NF) {
       S.emit(NdOp::INT_SLESS, NdVar::reg(x86reg::SF, 1),
              {Dst, NdVar::scalar(0, Dst.Size)});
-      S.emit(NdOp::INT_EQUAL, NdVar::reg(x86reg::CF, 1),
-             {Src, NdVar::scalar(0, Dst.Size)});
       S.emit(NdOp::COPY, NdVar::reg(x86reg::ZF, 1), {NdVar::scalar(0, 1)});
       S.emit(NdOp::COPY, NdVar::reg(x86reg::OF, 1), {NdVar::scalar(0, 1)});
     }
@@ -709,6 +711,10 @@ bool liftExtBMI(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     const unsigned SrcIndex = Apx.Present ? Apx.Source : 1;
     NdVar Src = L.operandRead(S, X86.operands[SrcIndex]);
     NdVar Dst = L.operandWrite(X86.operands[DstIndex]);
+    // CF depends on the source before a possibly aliased destination write.
+    if (!Apx.NF)
+      S.emit(NdOp::INT_EQUAL, NdVar::reg(x86reg::CF, 1),
+             {Src, NdVar::scalar(0, Dst.Size)});
     NdVar Dec = S.makeTemp(Dst.Size);
     S.emit(NdOp::INT_SUB, Dec, {Src, NdVar::scalar(1, Dst.Size)});
     S.emit(NdOp::INT_AND, Dst, {Dec, Src});
@@ -717,8 +723,6 @@ bool liftExtBMI(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
              {Dst, NdVar::scalar(0, Dst.Size)});
       S.emit(NdOp::INT_SLESS, NdVar::reg(x86reg::SF, 1),
              {Dst, NdVar::scalar(0, Dst.Size)});
-      S.emit(NdOp::INT_EQUAL, NdVar::reg(x86reg::CF, 1),
-             {Src, NdVar::scalar(0, Dst.Size)});
       S.emit(NdOp::COPY, NdVar::reg(x86reg::OF, 1), {NdVar::scalar(0, 1)});
     }
     break;
