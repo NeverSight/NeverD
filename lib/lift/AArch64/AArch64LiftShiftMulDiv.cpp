@@ -47,9 +47,13 @@ bool liftShiftMulDiv(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       auto RmReg = a64native::gpr(RmIdx, Is64);
       auto RnRI = mapCapstoneReg(RnReg);
       auto RmRI = mapCapstoneReg(RmReg);
-      A = (RnRI.Size > 0) ? NdVar::reg(RnRI.Offset, RnRI.Size)
+      A = (RnRI.Size > 0) ? (RnRI.Offset == a64reg::XZR
+                                 ? NdVar::cst(0, RnRI.Size)
+                                 : NdVar::reg(RnRI.Offset, RnRI.Size))
                           : L.operandRead(S, ARM64.operands[0]);
-      B = (RmRI.Size > 0) ? NdVar::reg(RmRI.Offset, RmRI.Size)
+      B = (RmRI.Size > 0) ? (RmRI.Offset == a64reg::XZR
+                                 ? NdVar::cst(0, RmRI.Size)
+                                 : NdVar::reg(RmRI.Offset, RmRI.Size))
                           : NdVar::cst(0, Dst.Size);
       IsRegShift = true;
     } else {
@@ -88,9 +92,13 @@ bool liftShiftMulDiv(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       auto RmReg = a64native::gpr(RmIdx, Is64);
       auto RnRI = mapCapstoneReg(RnReg);
       auto RmRI = mapCapstoneReg(RmReg);
-      A = (RnRI.Size > 0) ? NdVar::reg(RnRI.Offset, RnRI.Size)
+      A = (RnRI.Size > 0) ? (RnRI.Offset == a64reg::XZR
+                                 ? NdVar::cst(0, RnRI.Size)
+                                 : NdVar::reg(RnRI.Offset, RnRI.Size))
                           : L.operandRead(S, ARM64.operands[0]);
-      B = (RmRI.Size > 0) ? NdVar::reg(RmRI.Offset, RmRI.Size)
+      B = (RmRI.Size > 0) ? (RmRI.Offset == a64reg::XZR
+                                 ? NdVar::cst(0, RmRI.Size)
+                                 : NdVar::reg(RmRI.Offset, RmRI.Size))
                           : NdVar::cst(0, Dst.Size);
       IsRegShift = true;
     } else {
@@ -129,9 +137,13 @@ bool liftShiftMulDiv(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       auto RmReg = a64native::gpr(RmIdx, Is64);
       auto RnRI = mapCapstoneReg(RnReg);
       auto RmRI = mapCapstoneReg(RmReg);
-      A = (RnRI.Size > 0) ? NdVar::reg(RnRI.Offset, RnRI.Size)
+      A = (RnRI.Size > 0) ? (RnRI.Offset == a64reg::XZR
+                                 ? NdVar::cst(0, RnRI.Size)
+                                 : NdVar::reg(RnRI.Offset, RnRI.Size))
                           : L.operandRead(S, ARM64.operands[0]);
-      B = (RmRI.Size > 0) ? NdVar::reg(RmRI.Offset, RmRI.Size)
+      B = (RmRI.Size > 0) ? (RmRI.Offset == a64reg::XZR
+                                 ? NdVar::cst(0, RmRI.Size)
+                                 : NdVar::reg(RmRI.Offset, RmRI.Size))
                           : NdVar::cst(0, Dst.Size);
       IsRegShift = true;
     } else {

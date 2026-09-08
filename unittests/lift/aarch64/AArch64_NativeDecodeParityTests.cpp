@@ -1,17 +1,63 @@
-//===- AArch64_NativeDecodeParityTests.cpp - integer data processing parity -===//
+//===- AArch64_NativeDecodeParityTests.cpp - integer data processing parity
+//-===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 
+#include "AArch64_NativeDecodeParityTestsDetail.h"
 #include "gtest/gtest.h"
 
-#include "AArch64_NativeDecodeParityTestsDetail.h"
+#include "neverd/ir/low/NdOpEmulator.h"
+
+#include "llvm/ADT/APInt.h"
 
 namespace {
 
 using namespace neverd;
 using namespace neverd::a64_parity_test;
+
+TEST_F(A64NativeParity, VariableShiftsHonorZeroRegisters) {
+  for (unsigned Bits : {32u, 64u})
+    for (unsigned Opcode = 8; Opcode <= 11; ++Opcode)
+      for (unsigned Rn : {1u, 31u})
+        for (unsigned Rm : {2u, 31u}) {
+          const uint32_t Word = ((Bits == 64 ? 1u : 0u) << 31) |
+                                (0x0D6u << 21) | (Rm << 16) | (Opcode << 10) |
+                                (Rn << 5) | 3u;
+          SCOPED_TRACE(Word);
+          llvm::APInt Source(Bits, Rn == 31 ? 0 : 0x8000000080000009ULL);
+          const unsigned Count = Rm == 31 ? 0 : 5;
+          llvm::APInt Expected = Opcode == 8    ? Source.shl(Count)
+                                 : Opcode == 9  ? Source.lshr(Count)
+                                 : Opcode == 10 ? Source.ashr(Count)
+                                                : Source.rotr(Count);
+          for (bool Native : {false, true}) {
+            SCOPED_TRACE(Native);
+            std::vector<LowOp> Ops;
+            if (Native) {
+              cs_insn Insn{};
+              cs_detail Detail{};
+              ASSERT_TRUE(a64native::tryDecode(Word, 0x1000, Insn, Detail));
+              nativeLift(Word, 0x1000, Insn, Ops);
+            } else {
+              ASSERT_TRUE(O.lift(Word, 0x1000, Ops));
+            }
+            BinaryImage Img;
+            Img.Arch = Arch::AArch64;
+            NdOpEmulator Emu(Img);
+            Emu.setRegister(mapCapstoneReg(AARCH64_REG_X1).Offset,
+                            0x8000000080000009ULL);
+            Emu.setRegister(mapCapstoneReg(AARCH64_REG_X2).Offset, 5);
+            // A zero-register operand must not depend on emulator storage.
+            Emu.setRegister(a64reg::XZR, 13);
+            for (const LowOp &Op : Ops)
+              ASSERT_TRUE(Emu.step(Op));
+            EXPECT_EQ(Emu.getRegister(mapCapstoneReg(AARCH64_REG_X3).Offset),
+                      Expected.getZExtValue());
+          }
+        }
+}
 
 TEST_F(A64NativeParity, EdgeEncodings) {
   const va_t A = 0x100000;
@@ -53,7 +99,7 @@ TEST_F(A64NativeParity, EdgeEncodings) {
 
 TEST_F(A64NativeParity, AdrAdrpSweep) {
   const va_t A = 0x210000; // deliberately not page-aligned
-  const uint32_t ImmHiSamples[] = {0u,     1u,      2u,      0x3FFFEu,
+  const uint32_t ImmHiSamples[] = {0u,       1u,       2u,       0x3FFFEu,
                                    0x3FFFFu, 0x40000u, 0x7FFFEu, 0x7FFFFu};
   for (uint32_t Op = 0; Op < 2; ++Op)
     for (uint32_t Rd = 0; Rd < 32; ++Rd)
@@ -73,13 +119,13 @@ TEST_F(A64NativeParity, MoveWideSweep) {
   const va_t A = 0x300000;
   const uint32_t Imm16Samples[] = {0u,      1u,      2u,      0x1234u,
                                    0x7FFFu, 0x8000u, 0xABCDu, 0xFFFFu};
-  for (uint32_t Opc = 0; Opc < 4; ++Opc)      // 01 must be declined
+  for (uint32_t Opc = 0; Opc < 4; ++Opc) // 01 must be declined
     for (uint32_t Sf = 0; Sf < 2; ++Sf)
-      for (uint32_t Hw = 0; Hw < 4; ++Hw)     // hw>=2 w/ sf=0 must be declined
+      for (uint32_t Hw = 0; Hw < 4; ++Hw) // hw>=2 w/ sf=0 must be declined
         for (uint32_t Rd = 0; Rd < 32; ++Rd)
           for (uint32_t Imm : Imm16Samples) {
-            uint32_t W = (Sf << 31) | (Opc << 29) | (0x25u << 23) |
-                         (Hw << 21) | ((Imm & 0xFFFF) << 5) | Rd;
+            uint32_t W = (Sf << 31) | (Opc << 29) | (0x25u << 23) | (Hw << 21) |
+                         ((Imm & 0xFFFF) << 5) | Rd;
             std::string D = checkOne(O, W, A);
             EXPECT_TRUE(D.empty()) << D;
           }
@@ -98,8 +144,8 @@ TEST_F(A64NativeParity, AddSubImmSweep) {
             for (uint32_t Rn : {0u, 5u, 31u})
               for (uint32_t Imm : Imm12Samples) {
                 uint32_t W = (Sf << 31) | (Op << 30) | (S << 29) |
-                             (0x11u << 24) | (Sh << 22) | ((Imm & 0xFFF) << 10) |
-                             (Rn << 5) | Rd;
+                             (0x11u << 24) | (Sh << 22) |
+                             ((Imm & 0xFFF) << 10) | (Rn << 5) | Rd;
                 std::string D = checkOne(O, W, A);
                 EXPECT_TRUE(D.empty()) << D;
               }
@@ -172,7 +218,9 @@ TEST_F(A64NativeParity, CondSelectAndMulDivSweep) {
       for (uint32_t Op2 = 0; Op2 < 2; ++Op2)
         for (uint32_t Cond = 0; Cond < 16; ++Cond)
           for (auto RmRn : {std::pair<uint32_t, uint32_t>{2u, 3u},
-                            {31u, 31u}, {5u, 5u}, {31u, 7u}}) {
+                            {31u, 31u},
+                            {5u, 5u},
+                            {31u, 7u}}) {
             uint32_t W = (Sf << 31) | (Op << 30) | (0xD4u << 21) |
                          (RmRn.first << 16) | (Cond << 12) | (Op2 << 10) |
                          (RmRn.second << 5) | 1u;
@@ -211,9 +259,8 @@ TEST_F(A64NativeParity, BitfieldSweep) {
       for (uint32_t Rn : {1u, 31u})
         for (uint32_t Immr = 0; Immr < Hi; ++Immr)
           for (uint32_t Imms = 0; Imms < Hi; ++Imms) {
-            uint32_t W = (Sf << 31) | (Opc << 29) | (0x26u << 23) |
-                         (Sf << 22) | (Immr << 16) | (Imms << 10) | (Rn << 5) |
-                         2u;
+            uint32_t W = (Sf << 31) | (Opc << 29) | (0x26u << 23) | (Sf << 22) |
+                         (Immr << 16) | (Imms << 10) | (Rn << 5) | 2u;
             std::string D = checkOne(O, W, A);
             EXPECT_TRUE(D.empty()) << D;
           }
@@ -268,14 +315,15 @@ TEST_F(A64NativeParity, AddSubExtendedRegSweep) {
 // op31/o0 selector, and the accumulator register.
 TEST_F(A64NativeParity, WideningMulAddSweep) {
   const va_t A = 0xB80000;
-  for (uint32_t Sf = 0; Sf < 2; ++Sf)      // sf==0 must be declined
+  for (uint32_t Sf = 0; Sf < 2; ++Sf) // sf==0 must be declined
     for (uint32_t Op31 = 0; Op31 < 8; ++Op31)
       for (uint32_t O0 = 0; O0 < 2; ++O0)
         for (uint32_t Rm : {0u, 2u, 31u})
           for (uint32_t Ra : {0u, 4u, 31u})
             for (uint32_t Rn : {1u, 31u}) {
               uint32_t W = (Sf << 31) | (0x1Bu << 24) | (Op31 << 21) |
-                           (Rm << 16) | (O0 << 15) | (Ra << 10) | (Rn << 5) | 5u;
+                           (Rm << 16) | (O0 << 15) | (Ra << 10) | (Rn << 5) |
+                           5u;
               std::string D = checkOne(O, W, A);
               EXPECT_TRUE(D.empty()) << D;
             }

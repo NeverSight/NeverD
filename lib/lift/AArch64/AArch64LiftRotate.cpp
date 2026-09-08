@@ -92,9 +92,13 @@ bool liftRotate(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       auto RmReg = a64native::gpr(RmIdx, Is64);
       auto RnRI = mapCapstoneReg(RnReg);
       auto RmRI = mapCapstoneReg(RmReg);
-      Src = (RnRI.Size > 0) ? NdVar::reg(RnRI.Offset, RnRI.Size)
+      Src = (RnRI.Size > 0) ? (RnRI.Offset == a64reg::XZR
+                                   ? NdVar::cst(0, RnRI.Size)
+                                   : NdVar::reg(RnRI.Offset, RnRI.Size))
                             : L.operandRead(S, ARM64.operands[0]);
-      Amt = (RmRI.Size > 0) ? NdVar::reg(RmRI.Offset, RmRI.Size)
+      Amt = (RmRI.Size > 0) ? (RmRI.Offset == a64reg::XZR
+                                   ? NdVar::cst(0, RmRI.Size)
+                                   : NdVar::reg(RmRI.Offset, RmRI.Size))
                             : NdVar::cst(0, Dst.Size);
       IsRegRot = true;
     } else {
