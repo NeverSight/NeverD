@@ -44,7 +44,9 @@ add_neverd_component_library(NeverDIRLow
   jumptable/JumpTableResolverTwoLevel.cpp
 
   LINK_COMPONENTS
+  Decode
   IRLowValidation
+  LibC
   Solver
   Symbolic
 )

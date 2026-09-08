@@ -51,6 +51,34 @@ class CiConfigurationTests(unittest.TestCase):
             step_end = len(source)
         return source[step_start:step_end]
 
+    def test_low_ir_exports_decoder_and_libc_dependencies(self):
+        with tempfile.TemporaryDirectory(prefix="neverd-low-ir-link-") as directory:
+            root = Path(directory)
+            (root / "CMakeLists.txt").write_text(
+                'cmake_minimum_required(VERSION 3.20)\n'
+                'project(LowIRDependencies LANGUAGES C CXX)\n'
+                'foreach(component capstone_static NeverDDecode NeverDLibC '
+                'NeverDSolver NeverDSymbolic)\n'
+                '  add_library(${component} INTERFACE)\n'
+                'endforeach()\n'
+                f'include("{CMAKE_HELPERS.as_posix()}")\n'
+                f'add_subdirectory("{(ROOT / "lib/ir/low").as_posix()}" low)\n'
+                'get_target_property(dependencies NeverDIRLow INTERFACE_LINK_LIBRARIES)\n'
+                'foreach(required NeverDDecode NeverDLibC)\n'
+                '  if(NOT required IN_LIST dependencies)\n'
+                '    message(SEND_ERROR "IRLow must export ${required}")\n'
+                '  endif()\n'
+                'endforeach()\n',
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                ["cmake", "-S", str(root), "-B", str(root / "build")],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_llvm_style_workflow_pins_formatter_and_checks_event_diff(self):
         source = STYLE_WORKFLOW.read_text(encoding="utf-8")
 
