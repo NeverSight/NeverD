@@ -45,8 +45,8 @@ parsePersistedAddress(const llvm::json::Value &Value) {
   }
 
   if (auto Num = Value.getAsNumber()) {
-    if (!std::isfinite(*Num) || *Num < 0.0 ||
-        *Num >= 18446744073709551616.0 || std::trunc(*Num) != *Num)
+    if (!std::isfinite(*Num) || *Num < 0.0 || *Num >= 18446744073709551616.0 ||
+        std::trunc(*Num) != *Num)
       return std::nullopt;
     return static_cast<va_t>(*Num);
   }
@@ -225,6 +225,13 @@ int neverd_renames_load(neverd_session_t Sess) {
   auto *Arr = Parsed->getAsArray();
   if (!Arr)
     return -1;
+  for (auto &F : S->Functions) {
+    if (S->Renames.find(F.Entry) == S->Renames.end())
+      continue;
+    if (auto Original = S->OriginalNames.find(F.Entry);
+        Original != S->OriginalNames.end())
+      F.Name = Original->second;
+  }
   S->Renames.clear();
   for (const auto &V : *Arr) {
     auto *Obj = V.getAsObject();

@@ -115,6 +115,22 @@ protected:
   neverd_session_t Session = nullptr;
 };
 
+TEST_F(SessionCAPITest, ReloadingRenamesRestoresNamesRemovedFromTheSidecar) {
+  const std::string Original = write("original.evm", "6001600055");
+  ASSERT_EQ(neverd_session_load(Session, Original.c_str()), 1);
+  ASSERT_EQ(neverd_rename_func(Session, "evm_entry", "reviewed_entry"), 0);
+  ASSERT_EQ(takeString(neverd_func_name(Session, 0)), "reviewed_entry");
+
+  write("original.evm.neverd-renames.json", "invalid JSON");
+  EXPECT_NE(neverd_renames_load(Session), 0);
+  EXPECT_EQ(takeString(neverd_func_name(Session, 0)), "reviewed_entry");
+
+  write("original.evm.neverd-renames.json", "[]");
+  ASSERT_EQ(neverd_renames_load(Session), 0);
+  EXPECT_EQ(takeString(neverd_renames_json(Session)), "[]");
+  EXPECT_EQ(takeString(neverd_func_name(Session, 0)), "evm_entry");
+}
+
 TEST_F(SessionCAPITest, FailedDebugReloadPreservesLoadedImageAnalysisAndEdits) {
   const std::string Original = write("original.evm", "6001600055");
   const std::string Replacement = write("replacement.evm", "6002600055");
