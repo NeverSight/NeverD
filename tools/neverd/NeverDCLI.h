@@ -185,7 +185,6 @@ extern llvm::cl::opt<std::string> MobileBackend;
 extern llvm::cl::opt<std::string> MobileSwiftDemangle;
 extern llvm::cl::opt<std::string> MobileArch;
 extern llvm::cl::opt<std::string> MobileArtifact;
-extern llvm::cl::opt<std::string> MobilePython;
 extern llvm::cl::opt<bool> MobileMetadataOnly;
 extern llvm::cl::opt<unsigned> MobileTimeout;
 extern llvm::cl::opt<unsigned> MobileMaxFiles;

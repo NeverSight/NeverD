@@ -18,7 +18,7 @@
 | [Плагины Python](python-plugins.md) | Разработка, API сессий и событий, изоляция, тестирование и публикация |
 | [Декомпиляция EVM](evm.md) | Входы, hardforks, стадии IR, C/LLVM host ABI, реконструкция Solidity и ограничения |
 | [Декомпиляция Solana SBF](sbf.md) | SBF v0-v4, LLVM IR, вывод C/Rust, проверка и известные ограничения |
-| [Восстановление Java для Android](android.md) | APK, DEX и smali; встроенный движок и Python 3.10+, необязательный JADX, CLI, отчёты JSON, ограничения и проверка |
+| [Восстановление Java для Android](android.md) | APK, DEX и smali; встроенный нативный движок на C++20, необязательный JADX, CLI, отчёты JSON, ограничения и проверка |
 | [Восстановление исходников iOS](ios.md) | IPA/.app/Mach-O, тела и раскладки Objective-C/Swift, CLI/export, покрытие, ограничения и проверки выполнения |
 | [Дорожная карта](roadmap.md) | Статус: нативные форматы, EVM и Solana SBF реализованы |
 | [English README](../../README.md) | Английская версия |

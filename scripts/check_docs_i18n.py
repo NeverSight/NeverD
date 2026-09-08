@@ -488,8 +488,8 @@ EVM_FUNCTION_SCOPE_TEST_TOKENS = (
 )
 GUIDE_REQUIRED_TOKENS = {
     "ios": (
-        "neverd mobile", "IPA", ".app", "Mach-O", "3.10", "--python",
-        "NEVERD_PYTHON", "--swift-demangle", "NEVERD_SWIFT_DEMANGLE",
+        "neverd mobile", "IPA", ".app", "Mach-O", "C++20",
+        "NeverDMobileTests", "--swift-demangle", "NEVERD_SWIFT_DEMANGLE",
         "xcrun --find swift-demangle", "--artifact", "CFBundleExecutable",
         "--arch", "--metadata-only", "--max-func", "--timeout", "--max-files",
         "--max-bytes", "--json", "cryptid != 0", "2147483648", "20000", "300",
@@ -503,12 +503,14 @@ GUIDE_REQUIRED_TOKENS = {
         "test_mobile_ios_backend.py", "test_mobile_swift_backend.py", "--setup-only",
     ),
     "android": (
-        "neverd mobile", ".apk", ".dex", ".smali", "JADX", "1.5.6", "3.10",
-        "--jadx", "--python", "NEVERD_JADX", "NEVERD_PYTHON", "JAVA_HOME",
+        "neverd mobile", ".apk", ".dex", ".smali", "JADX", "1.5.6", "C++20",
+        "NeverDMobileTests", "--jadx", "NEVERD_JADX", "JAVA_HOME",
         "--platform=android", "--timeout", "--max-files", "--max-bytes", "--json",
         "report.json", "schema_version", "input_code_files", "dex_count",
         "smali_count", "java_source_count", "java_sources", "logs/jadx.log",
         "--metadata-only", "check-neverd-mobile", "test_mobile_android_backend.py",
+        "test_mobile_android_internal.py", "metadata/android-methods.json",
+        "android_method_recovery", "declaration_only_method_count",
         "2147483648", "20000", "300",
     ),
     "evm": (
@@ -1633,6 +1635,39 @@ def validate_mobile_examples(
             )
 
 
+def validate_mobile_native_runtime(errors: list[str], view: RepositoryView) -> None:
+    """Reject obsolete helper deployment and interpreter options in mobile docs."""
+    guides = tuple(
+        Path("docs") / directory / f"{stem}.md"
+        for directory in ("", *LOCALES)
+        for stem in ("android", "ios")
+    )
+    overviews = (Path("docs/mobile.md"), Path("docs/zh-CN/mobile.md"))
+    entries = (
+        Path("README.md"), Path("docs/README.md"),
+        *(Path(f"docs/{locale}/{name}.md")
+          for locale in LOCALES for name in ("project", "README")),
+    )
+    obsolete = ("--python", "NEVERD_PYTHON", "`mobile/`")
+    for path in (*guides, *overviews, *entries):
+        text = view.read_text(path)
+        for token in obsolete:
+            if token in text:
+                report(errors, f"{display_path(path)}: obsolete mobile runtime token {token!r}")
+        if path in guides or path in overviews:
+            if "C++20" not in without_markdown_fences(text):
+                report(errors, f"{display_path(path)}: native mobile runtime requires C++20 prose")
+        # Python plugin/SDK documentation remains valid elsewhere in a README.
+        # Interpreter versions in the actual mobile introduction are obsolete.
+        for line in without_markdown_fences(text).splitlines():
+            mobile_entry = "neverd mobile" in line or (
+                "android.md)" in line and line.lstrip().startswith("|")
+            )
+            python_component = path in guides and re.match(r"\s*\|\s*Python\s*\|", line)
+            if python_component or (mobile_entry and re.search(r"\bPython\s+3\.10", line)):
+                report(errors, f"{display_path(path)}: mobile introduction requires the native CLI, not Python 3.10")
+
+
 def rust_host_prose(text: str) -> str | None:
     match = re.search(
         r"^## [^\n]*Rust[^\n]*\n(.*?)(?=^## |\Z)",
@@ -2091,6 +2126,7 @@ def validate_matrix(errors: list[str], view: RepositoryView) -> None:
     for stem in ("android", "ios"):
         validate_mobile_readme_entries(errors, view, stem)
         validate_mobile_examples(errors, view, stem)
+    validate_mobile_native_runtime(errors, view)
     registered_evm_tests = evm_test_targets(errors, view)
 
     require_tokens(Path("README.md"), ("docs/android.md", "docs/ios.md", "neverd mobile"), errors, view)

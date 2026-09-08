@@ -175,7 +175,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         for path in localized_paths:
             for original, replacement in (
                 ("--max-bytes=4294967296", "--max-byte=4294967296"),
-                (r"C:\Tools\Python\python.exe", r"C:\Tools\Python\python-wrong.exe"),
+                (r".\build\bin\neverd.exe", r".\build\bin\neverd-wrong.exe"),
                 ('"java_source_count": 2', '"java_source_count": 3'),
                 ("```powershell", "```text"),
             ):
@@ -187,6 +187,51 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                     self.assertEqual(len(errors), 1, errors)
                     self.assertIn(path.as_posix(), errors[0])
                     self.assertIn("must match docs/android.md", errors[0])
+
+    def test_mobile_runtime_rejects_obsolete_interpreter_and_helper_contracts(self) -> None:
+        view = i18n.RepositoryView(use_index=False)
+        examples = (
+            (Path("docs/android.md"), "\nneverd mobile app.apk --python python3\n"),
+            (Path("docs/ru/ios.md"), "\n`NEVERD_PYTHON`\n"),
+            (Path("docs/mobile.md"), "\nDistribute the sibling `mobile/` directory.\n"),
+            (Path("docs/zh-CN/mobile.md"), "\n```sh\nneverd mobile a.apk --python python3\n```\n"),
+            (Path("docs/es/project.md"), "\n`neverd mobile` requires Python 3.10+.\n"),
+            (Path("docs/ja/android.md"), "\n| Python | Python 3.10+ | PATH |\n"),
+            (Path("docs/es/README.md"), "\n| [Android](android.md) | Python 3.10+ |\n"),
+            (Path("docs/ar/README.md"), "\n`NEVERD_PYTHON`\n"),
+        )
+        for path, addition in examples:
+            with self.subTest(path=path):
+                errors: list[str] = []
+                i18n.validate_mobile_native_runtime(errors, _OverlayView({
+                    path: view.read_text(path) + addition,
+                }))
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn(path.as_posix(), errors[0])
+
+    def test_mobile_native_runtime_marker_must_be_in_localized_prose(self) -> None:
+        view = i18n.RepositoryView(use_index=False)
+        for stem in ("android", "ios"):
+            for locale in i18n.LOCALES:
+                path = Path(f"docs/{locale}/{stem}.md")
+                text = view.read_text(path)
+                self.assertIn("C++20", text)
+                errors: list[str] = []
+                i18n.validate_mobile_native_runtime(errors, _OverlayView({
+                    path: text.replace("C++20", "C++") + "\n```text\nC++20\n```\n",
+                }))
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn("requires C++20 prose", errors[0])
+
+    def test_mobile_native_runtime_guard_preserves_python_plugin_and_test_docs(self) -> None:
+        path = Path("README.md")
+        text = i18n.RepositoryView(use_index=False).read_text(path)
+        errors: list[str] = []
+        i18n.validate_mobile_native_runtime(errors, _OverlayView({
+            path: text + "\nThe optional Python 3.10 plugin SDK remains available.\n"
+            "\n```sh\npython3 scripts/test_mobile_android_internal.py --d8 PATH --neverd build/bin/neverd\n```\n",
+        }))
+        self.assertEqual(errors, [])
 
     def test_ios_identity_schema_and_localized_links_are_required(self) -> None:
         view = i18n.RepositoryView(use_index=False)

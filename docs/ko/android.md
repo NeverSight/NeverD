@@ -25,30 +25,27 @@ neverd mobile decoded/smali -o recovered-java
 
 | 구성 요소 | 요구 사항 | 선택 순서 |
 |-----------|-----------|-----------|
-| NeverD | `neverd` 타깃을 빌드하고 실행 파일과 같은 위치의 `mobile/` 디렉터리도 함께 배포 | `build/bin/neverd` 또는 PATH의 실행 파일 |
-| Python | Python 3.10 이상. 내장 플러그인 호스트의 Python 환경과는 별개 | `--python`, `NEVERD_PYTHON`, PATH의 `python3`/`python` 순서 |
+| NeverD | C++20을 지원하는 도구 체인으로 `neverd` 대상을 빌드합니다. 모바일 작업 흐름은 네이티브 CLI에 포함되며 Python 인터프리터를 호출하지 않습니다. 배포할 때 해당 빌드에 필요한 네이티브 라이브러리를 함께 제공하세요. | `build/bin/neverd` / PATH |
 
-기본 엔진은 Python 표준 라이브러리만 사용하며 실행 시 Java나 JADX가 필요하지 않습니다. DEX 035, 037–040 및 smali에서 표현할 수 있는 일반 선언과 연산을 처리합니다. DEX 041, `invoke-custom` 같은 동적 호출, 일부 초기화 경로, 알 수 없는 의미적 어노테이션이나 연산, Java로 표현할 수 없는 식별자는 명시적으로 실패합니다. 파일 형식을 받는다고 그 형식의 모든 명령과 선언을 지원하는 것은 아닙니다.
+기본 엔진은 C++20으로 구현되며 실행 시 Python, Java 또는 JADX가 필요하지 않습니다. DEX 035, 037–040 및 smali에서 표현할 수 있는 일반 선언과 연산을 처리합니다. DEX 041, `invoke-custom` 같은 동적 호출, 일부 초기화 경로, 알 수 없는 의미적 어노테이션이나 연산, Java로 표현할 수 없는 식별자는 명시적으로 실패합니다. 파일 형식을 받는다고 그 형식의 모든 명령과 선언을 지원하는 것은 아닙니다.
 
 ### Linux와 macOS
 
 ```sh
 cmake --build build --target neverd
-python3 --version
 
-./build/bin/neverd mobile app.apk -o recovered-app --python python3
+./build/bin/neverd mobile app.apk -o recovered-app
 ```
 
-반복 실행에 사용할 인터프리터는 `NEVERD_PYTHON`으로 지정할 수 있습니다. `NEVERD_JADX`나 PATH의 `jadx`는 외부 엔진을 선택하지 않습니다. 외부 어댑터는 명시적인 `--jadx PATH`로만 선택하며 자동 대체는 없습니다. 공백이 있는 경로는 따옴표로 감싸세요.
+`NEVERD_JADX`와 PATH의 `jadx`는 외부 엔진을 선택하지 않습니다. 명시적인 `--jadx PATH`만 호환 어댑터를 선택하며 자동 전환은 없습니다. 공백이 있는 경로는 따옴표로 감싸세요.
 
 ### Windows PowerShell
 
 ```powershell
-& .\build\bin\neverd.exe mobile .\app.apk -o .\recovered-app `
-  --python 'C:\Tools\Python\python.exe'
+& .\build\bin\neverd.exe mobile .\app.apk -o .\recovered-app
 ```
 
-다중 구성 빌드에서는 실행 파일이 `build/bin/Release/`에 있을 수 있습니다. 파일을 옮길 때 같은 위치의 `mobile/` 디렉터리도 유지하세요. 실행 파일만 옮기면 도우미 누락 오류가 발생합니다.
+다중 구성 빌드는 실행 파일을 `build/bin/Release/`에 배치할 수 있습니다. 해당 빌드의 일반적인 네이티브 라이브러리 배포 요구 사항을 따르세요.
 
 ## 지원 입력과 범위
 
@@ -77,7 +74,6 @@ neverd mobile app.apk -o recovered-app --platform=android \
 | `-o DIRECTORY` | 필수 | 디렉터리 입력 바깥에 위치한 새 출력 디렉터리. 기존 출력은 덮어쓰지 않음 |
 | `--platform=auto\|android` | `auto` | Android를 명시적으로 선택하거나 입력에서 플랫폼을 추론 |
 | `--jadx PATH` | 미설정: 내장 엔진 | 별도로 설치한 JADX 호환 어댑터를 명시적으로 선택. 환경 변수로 선택하거나 자동 대체하지 않음 |
-| `--python PATH` | 환경 변수/PATH | 동봉된 도우미를 실행할 인터프리터. 명시한 옵션이 우선 |
 | `--timeout N` | `300` | 내장 분석의 양수 시간 예산. 외부 백엔드는 버전 확인을 포함한 각 프로세스의 초 단위 제한 |
 | `--max-files N` | `20000` | 실제로 생성되는 디렉터리를 포함한 항목 수 상한. 양수 지정 |
 | `--max-bytes N` | `2147483648` | 입력, 압축 해제 데이터, 최종 출력에 적용되는 바이트 상한. 양수 지정 |
@@ -144,7 +140,7 @@ recovered-app/
 neverd mobile app.apk -o recovered-app --json > recovery-result.json
 ```
 
-도우미 실행이 성공하면 0을, 복구에 실패하면 0이 아닌 값을 반환합니다. 도우미가 시작된 뒤에는 `--json`이 `schema_version`, `status: "error"`, `error`를 포함하는 오류 객체를 생성합니다. 네이티브 인자 파싱, Python 누락이나 3.10 미만 버전, 도우미 누락은 그보다 앞서 실패하여 JSON 대신 stderr로 보고될 수 있습니다. 실행 중단도 stderr로 보고될 수 있으므로 사용 측에서 이러한 경우를 처리해야 합니다.
+네이티브 CLI는 성공 시 0, 복구 실패 시 0이 아닌 값을 반환합니다. `--json`은 처리된 실패에 `schema_version`, `status: "error"`, `error`를 포함합니다. 인수 분석, 네이티브 실행 파일이나 라이브러리 시작 실패, 중단은 stderr로만 보고될 수 있습니다. 호출자는 먼저 종료 상태를 확인해야 합니다.
 
 ## 실패 처리와 문제 해결
 
@@ -152,7 +148,6 @@ neverd mobile app.apk -o recovered-app --json > recovery-result.json
 
 | 증상 | 조치 |
 |------|------|
-| Python 또는 도우미 누락 | Python 3.10 이상을 선택하고 같은 위치의 `mobile/`을 유지 |
 | 지원하지 않는 DEX·명령·선언·초기화 | 명시적 진단과 지원 범위를 확인. 별도의 호환 어댑터를 의도적으로 선택할 때만 `--jadx PATH` 사용 |
 | 유효하지 않은 입력 또는 중복 클래스 | 입력 바이트코드나 클래스 구성을 수정. 지원하지 않는 본문은 조용히 생략되지 않음 |
 | 시간 또는 자원 예산 초과 | 입력을 줄이거나 가용 자원에 맞게 `--timeout`, `--max-files`, `--max-bytes` 조정 |
@@ -171,9 +166,11 @@ python3 scripts/test_mobile_android_backend.py --jadx /opt/jadx/bin/jadx --never
 
 ## 검증과 지원 수준
 
+Python은 아래 개발 테스트 스크립트에만 사용합니다. 내장 모바일 복구는 네이티브 C++20 CLI에서 실행됩니다.
+
 ```sh
 cmake --build build --target check-neverd-mobile
-NEVERD_BUILD_DIR=build python3 -m unittest discover -s scripts/tests -p 'test_mobile_*.py' -v
+ctest --test-dir build -L NeverDMobileTests --output-on-failure
 python3 scripts/test_mobile_android_internal.py --d8 PATH --neverd build/bin/neverd
 ```
 

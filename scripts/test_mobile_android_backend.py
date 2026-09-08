@@ -2,7 +2,7 @@
 """Exercise real smali/DEX/multidex recovery, then compile and run recovered Java.
 
 Requires JADX 1.5.6+ distribution and a JDK. Nothing is downloaded or installed.
-Example: python3 scripts/test_mobile_android_backend.py --jadx /opt/jadx/bin/jadx
+Example: python3 scripts/test_mobile_android_backend.py --neverd build/bin/neverd --jadx /opt/jadx/bin/jadx
 """
 
 from __future__ import annotations
@@ -19,10 +19,6 @@ import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools" / "neverd"))
-
-from mobile.android import decompile_android
-from mobile.common import Limits, MobileError
 
 
 ASSEMBLER = """
@@ -94,9 +90,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--jadx", required=True, type=Path)
     parser.add_argument("--jadx-jar", type=Path, help="distribution all.jar for fixture assembly")
-    parser.add_argument("--neverd", type=Path, help="also exercise the built NeverD CLI")
+    parser.add_argument("--neverd", type=Path, required=True, help="native C++ NeverD CLI under test")
     arguments = parser.parse_args()
     jadx = arguments.jadx.resolve()
+    neverd = arguments.neverd.resolve()
+    if not neverd.is_file():
+        raise RuntimeError("--neverd must point to the built CLI")
     jars = [arguments.jadx_jar.resolve()] if arguments.jadx_jar else list((jadx.parent.parent / "lib").glob("jadx-*-all.jar"))
     if len(jars) != 1:
         raise RuntimeError("Pass --jadx-jar or use the bin/jadx launcher from a full distribution")
@@ -115,7 +114,8 @@ def main() -> int:
 
         def verify(source: Path, name: str, *, single: bool = False) -> dict:
             output = work / name
-            report = decompile_android(source, output, jadx=str(jadx), limits=Limits())
+            run([str(neverd), "mobile", str(source), "-o", str(output), "--jadx", str(jadx)])
+            report = json.loads((output / "report.json").read_text())
             harness = output / "VerifyRecovered.java"
             harness.write_text(SINGLE_HARNESS if single else HARNESS)
             compiled = output / "compiled"
@@ -146,35 +146,27 @@ def main() -> int:
         broken.mkdir()
         shutil.copyfile(fixtures / "Peer.smali", broken / "Peer.smali")
         (broken / "Broken.smali").write_text(".class public Lfixture/Broken;\n.super Ljava/lang/Object;\n.method public bad()I\nnot-an-opcode\n.end method\n")
-        try:
-            decompile_android(broken, work / "broken-output", jadx=str(jadx), limits=Limits())
-        except MobileError:
-            print("PASS malformed smali mixed with valid code rejects partial success")
-        else:
-            raise AssertionError("Malformed smali was silently omitted")
         duplicate = work / "duplicate-smali"
         duplicate.mkdir()
         shutil.copyfile(fixtures / "Peer.smali", duplicate / "Peer.smali")
         shutil.copyfile(fixtures / "Peer.smali", duplicate / "PeerCopy.smali")
-        try:
-            decompile_android(duplicate, work / "duplicate-output", jadx=str(jadx), limits=Limits())
-        except MobileError:
-            print("PASS duplicate class omission rejects partial success")
-        else:
-            raise AssertionError("Duplicate class definitions were silently omitted")
-        if arguments.neverd:
-            cli_output = work / "cli-output"
-            run([str(arguments.neverd.resolve()), "mobile", str(apk), "-o", str(cli_output), "--jadx", str(jadx)])
-            cli_report = json.loads((cli_output / "report.json").read_text())
-            if cli_report["dex_count"] != 2 or cli_report["java_source_count"] < 2:
-                raise AssertionError("CLI did not recover the multidex fixture")
-            print("PASS built NeverD CLI multidex recovery")
+        for label, source in (("malformed", broken), ("duplicate", duplicate)):
+            output = work / (label + "-output")
+            result = subprocess.run([str(neverd), "mobile", str(source), "-o",
+                                     str(output), "--jadx", str(jadx), "--json"],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    text=True, timeout=120)
+            if result.returncode != 1 or json.loads(result.stdout).get("status") != "error":
+                raise AssertionError(f"{label} input did not produce a structured recovery error")
+            if output.exists():
+                raise AssertionError(f"{label} recovery published partial output")
+            print(f"PASS {label} input rejects partial success through native CLI")
     return 0
 
 
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (MobileError, OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
         print(f"error: {error}", file=sys.stderr)
         raise SystemExit(1)

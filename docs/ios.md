@@ -12,20 +12,19 @@ Compilation removes comments, formatting, identifiers, and source constructs. Th
 
 ```sh
 cmake --build build --target neverd
-python3 --version
 neverd mobile App.ipa -o recovered-ios
 neverd mobile App.app -o recovered-arm64 --arch=arm64
 neverd mobile executable -o metadata --metadata-only
 neverd mobile App.app -o recovered-framework --artifact Frameworks/Example.framework/Example
 ```
 
-Build NeverD normally and retain the sibling `mobile/` directory when distributing the executable. Python 3.10+ is required: selection is `--python PATH`, `NEVERD_PYTHON`, then `python3`/`python` on PATH. Dependencies are not downloaded automatically. Apple Clang, the SDK, and the Swift toolchain are required to independently compile the generated Apple-language source on macOS; they are separate from static native analysis.
+Build the `neverd` target with C++20 support. The mobile workflow is compiled into the native CLI and does not use a Python interpreter. Distribute the executable with the native libraries required by your build. Apple Clang, the SDK, and the Swift toolchain are needed to independently compile generated Apple-language source on macOS. They are separate from static analysis; optional external tools are not downloaded automatically.
 
 Swift signature recovery selects `--swift-demangle PATH`, then `NEVERD_SWIFT_DEMANGLE`, then `swift-demangle` on PATH. On macOS, a bounded `xcrun --find swift-demangle` lookup is the final automatic fallback. An explicitly configured missing tool fails; an unavailable automatic tool leaves Swift symbols unclassified and reports `unavailable`. Inputs without Swift symbols require no demangler. `--metadata-only` invokes neither the native backend nor a demangler.
 
 ```sh
 neverd mobile App.ipa -o recovered-swift \
-  --python python3 --swift-demangle /path/to/swift-demangle --timeout=600 --json
+  --swift-demangle /path/to/swift-demangle --timeout=600 --json
 ```
 
 ## Inputs and selection
@@ -44,9 +43,8 @@ For fat binaries, `--arch=auto` prefers arm64, arm, x86_64, then i386. Missing o
 | `--artifact PATH` | Main executable | Application-relative executable path |
 | `--metadata-only` | Off | Read metadata without source recovery or tool invocation |
 | `--max-func N` | `0` | Native function limit; zero means all discovered functions; ignored in metadata-only mode |
-| `--python PATH` | Environment/PATH | Python 3.10+ helper interpreter |
 | `--swift-demangle PATH` | Environment/PATH/toolchain | Swift signature demangler |
-| `--timeout N` | `300` | Positive seconds per backend process |
+| `--timeout N` | `300` | Positive total analysis budget in seconds; child processes use the remaining budget |
 | `--max-files N` | `20000` | Positive entry budget; Swift symbol inventory is also bounded |
 | `--max-bytes N` | `2147483648` | Positive input, extracted-data, and final-output byte budget |
 | `--json` | Off | Print the versioned report as JSON |
@@ -97,7 +95,7 @@ recovered-ios/
 
 Source-language files exist only when source can be emitted. `objc.json` contains classes, categories, ivars, and raw method encodings; `objc.h` contains supported declarations. `swift.json` contains nominal-type metadata and mangled symbols. Signature and method JSON files preserve classification, omissions, reasons, and counts. Logs include native diagnostics and, when used, Swift toolchain discovery, demangling, and native Swift export diagnostics. Output paths in `report.json` are relative to its directory. The selected binary is an analysis artifact; generated source does not link it as a recovery bridge.
 
-Temporary package copies and intermediate backend JSON are removed. A normal run with no native function bodies fails even when metadata exists. Metadata-only output contains the selected artifact, `objc.h`, `objc.json`, `swift.json`, and `report.json`; source directories and method-coverage/signature files are absent, and `native_function_count`, `objc_method_recovery`, and `swift_method_recovery` are `null`. Its Python Objective-C reader does not resolve chained or relocatable-object pointers. Full recovery instead uses the native loader's resolved Objective-C metadata. The raw Swift metadata reader may still report unsupported references as partial.
+Temporary package copies and intermediate backend JSON are removed. A normal run with no native function bodies fails even when metadata exists. Metadata-only output contains the selected artifact, `objc.h`, `objc.json`, `swift.json`, and `report.json`; source directories and method-coverage/signature files are absent, and `native_function_count`, `objc_method_recovery`, and `swift_method_recovery` are `null`. All modes use the native loader’s resolved Objective-C metadata. Swift metadata uses bounded native-image reads; unsupported fixups, relocatable layouts, or references retain partial diagnostics.
 
 A shortened illustrative report deliberately shows partial recovery:
 
@@ -153,20 +151,22 @@ For an already loaded Mach-O session, `neverd_objc_methods_json(session, max_fun
 
 On macOS, builds with `BUILD_TESTING` enabled provide `check-neverd-mobile-ios`, which runs all three native recovery suites through CTest.
 
+Python is used only by the development test harnesses below; built-in mobile recovery runs in the native C++20 CLI.
+
 ```sh
 cmake --build build --target check-neverd-mobile-ios
-NEVERD_BUILD_DIR=build python3 -m unittest discover -s scripts/tests -p 'test_mobile_*.py' -v
+ctest --test-dir build -L NeverDMobileTests --output-on-failure
 python3 scripts/test_mobile_ios_backend.py --neverd build/bin/neverd
 python3 scripts/test_mobile_ios_calls_backend.py --neverd build/bin/neverd
 python3 scripts/test_mobile_swift_backend.py --neverd build/bin/neverd
 ```
 
-On macOS, the Objective-C runners compile originals, recover `.m`, and link only generated source with an independent calling harness. The scalar runner covers integer boundaries, branches, loops, pointer reads/writes, hidden parameters, float/double identity bits, mixed parameters, and stack arguments. The calls runner adds message dispatch, inheritance, categories, ivar storage, native helpers, and Block invocation/captures/shared identity. Its 21-method corpus has 134 independent expected results per variant; the recorded arm64/x86_64 × classic/default runs recovered 21/21 methods and matched 134/134 results in each variant.
+On macOS, the Objective-C runners compile originals, recover `.m`, and link only generated source with an independent calling harness. The scalar runner covers integer boundaries, branches, loops, pointer reads/writes, hidden parameters, float/double identity bits, mixed parameters, and stack arguments. The calls runner adds message dispatch, inheritance, categories, ivar storage, native helpers, and Block invocation/captures/shared identity. The calls corpus requires 21/21 recovered methods and 134/134 independent expected results for each arm64/x86_64 × classic/default variant. Run these checks against the current native CLI build.
 
-The strict Swift runner checks 22 user declarations, three getter/setter entries, and seven compiler-generated callable entries; none may disappear from the inventory. Each variant has 855 original-program oracle checks. It independently compiles generated `.swift` and its harness, without the original dylib, module, bridge, or handcrafted replacement declarations. Cases include scalar/native calls, class initialization/storage, struct value/mutating methods, floating and stack parameters, pointers, and loops. Formal CLI acceptance on this self-owned corpus passed all four arm64/x86_64 × classic/default variants with no skips: each recovered 25 native method bodies plus seven compiler projections, preserving all 32 callable identities. Both the originals and independently compiled generated Swift passed 855/855 oracle checks per variant. These results are limited to this corpus and do not guarantee recovery of arbitrary applications or original source text. The runner rejects missing coverage, source compilation failures, and behavior mismatches.
+The strict Swift runner checks 22 user declarations, three getter/setter entries, and seven compiler-generated callable entries; none may disappear from the inventory. Each variant has 855 original-program oracle checks. It independently compiles generated `.swift` and its harness, without the original dylib, module, bridge, or handcrafted replacement declarations. Cases include scalar/native calls, class initialization/storage, struct value/mutating methods, floating and stack parameters, pointers, and loops. The native C++20 CLI must pass all four arm64/x86_64 × classic/default variants without skips: each must recover 25 native method bodies plus seven compiler projections, preserve all 32 callable identities, and match 855/855 oracle checks for both originals and independently compiled generated Swift. These results are limited to this corpus and do not guarantee recovery of arbitrary applications or original source text. The runner rejects missing coverage, source compilation failures, and behavior mismatches.
 
 All three scripts support `--arch all|arm64|x86_64`, `--fixups both|classic|default`, `--timeout N`, and `--work-dir NEW_DIRECTORY`. `--setup-only` validates originals and does not test recovery. Architectures the host cannot execute are explicitly skipped where permitted; a skip is not a pass. Use retained failure artifacts to distinguish missing source coverage, compilation errors, and behavior mismatches. Check current test output before claiming verified support.
 
-Publication is transactional: choose a new output directory, inspect process exit status first, and keep redirected JSON outside that directory. Failures remove staged output and preserve existing output. Backend nonzero exits include a bounded log tail; timeouts and budget failures have separate messages. With `--json`, handled helper failures produce `status: "error"`; argument parsing, missing helpers/interpreters, Python below 3.10, and interruption may fail earlier on stderr.
+Publication is transactional: choose a new output directory, inspect process exit status first, and keep redirected JSON outside that directory. Failures remove staged output and preserve existing output. Backend nonzero exits include a bounded log tail; timeouts and budget failures have separate messages. Successful native CLI runs return zero. Recovery failures return nonzero; `--json` reports handled failures with `schema_version`, `status: "error"`, and `error`. Argument parsing, native executable or library startup failures, and interruptions can instead report on stderr. Consumers must inspect the exit status first.
 
 For an encrypted slice, supply readable input; for an absent architecture, inspect available slices; for missing Swift tools, select the actual demangler; for omitted methods, read their exact reasons and metadata diagnostics. Increasing `--max-func` helps only functions excluded by the limit. Missing layouts, signatures, external headers, exception support, or unsupported ABI behavior require implementation or additional valid metadata, not a claim of complete recovery. Preserve applicable dependency license notices when distributing tools or generated packages.

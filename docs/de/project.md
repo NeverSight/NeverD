@@ -36,7 +36,7 @@ CLI, Integratoren und KI-Agenten nutzen eine Engine — **`libneverd`** — übe
 
 Eingabeformate, Host-Verträge und Grenzen stehen in den Leitfäden für [EVM](evm.md) und [Solana SBF](sbf.md).
 
-Der experimentelle CLI-Befehl `neverd mobile app.apk -o recovered-app` stellt Java aus APK, DEX und smali standardmäßig mit der integrierten NeverD-Engine und Python 3.10+ wieder her; Java und JADX werden zur Ausführung nicht benötigt. Ein explizites `--jadx PATH` wählt den optionalen externen Kompatibilitätsadapter; es gibt keinen automatischen Rückgriff. Der Ablauf ist nur über die CLI verfügbar und gehört nicht zum nativen C- oder Python-Plugin-SDK. Der [Android-Leitfaden](android.md) beschreibt Einrichtung, Multidex, Berichte und Grenzen.
+Die experimentelle CLI `neverd mobile app.apk -o recovered-app` stellt Java aus APK, DEX und smali wieder her und erzeugt `report.json`. Die Standard-Engine ist in C++20 implementiert und benötigt zur Ausführung weder Python noch Java oder JADX. Weder `NEVERD_JADX` noch ein `jadx` im PATH wählen die externe Engine aus; dies geschieht ausschließlich durch ein explizites `--jadx PATH`. Es gibt keinen automatischen Rückgriff. Pfade mit Leerzeichen müssen in Anführungszeichen stehen. Unterstützte Eingaben, Berichte und Grenzen erläutert der [Android-Leitfaden](android.md).
 
 Der experimentelle iOS-Ablauf `neverd mobile App.ipa -o recovered-ios` exportiert natives C und unterstützte Objective-C-/Swift-Quellen aus IPA, `.app` oder Mach-O. Laufzeitlayouts, Quelltexteinheiten und Auslassungen pro Methode bleiben sichtbar; generierter Code verwendet keine Brücke zur Originalbinärdatei. Einrichtung, Abdeckung und unabhängige Kompilierprüfungen stehen im [iOS-Leitfaden](ios.md).
 

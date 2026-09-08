@@ -246,7 +246,7 @@ def verify(arguments: argparse.Namespace, work: Path) -> None:
                 if not arguments.setup_only:
                     output = variant / 'recovered'
                     run([str(arguments.neverd.resolve()), 'mobile', str(library), '-o', str(output),
-                         '--platform=ios', f'--arch={architecture}', '--python', sys.executable,
+                         '--platform=ios', f'--arch={architecture}',
                          '--swift-demangle', demangler, f'--timeout={arguments.timeout}'], timeout=arguments.timeout * 3 + 60)
                     coverage = validate_coverage(output, library, architecture)
                     source = output / 'sources/swift.swift'

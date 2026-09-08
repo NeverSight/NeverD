@@ -12,20 +12,19 @@ La compilazione elimina commenti, formattazione, identificatori e costrutti del 
 
 ```sh
 cmake --build build --target neverd
-python3 --version
 neverd mobile App.ipa -o recovered-ios
 neverd mobile App.app -o recovered-arm64 --arch=arm64
 neverd mobile executable -o metadata --metadata-only
 neverd mobile App.app -o recovered-framework --artifact Frameworks/Example.framework/Example
 ```
 
-Compilare NeverD normalmente e conservare la cartella adiacente `mobile/` distribuendo l’eseguibile. Serve Python 3.10+, selezionato tramite `--python PATH`, poi `NEVERD_PYTHON`, infine `python3`/`python` in PATH. Le dipendenze non vengono scaricate automaticamente. Per compilare indipendentemente i sorgenti Apple generati su macOS servono Apple Clang, SDK e toolchain Swift; questi requisiti sono distinti dall’analisi nativa statica.
+Compilare il target `neverd` con una toolchain compatibile con C++20. Il flusso mobile è integrato nella CLI nativa e non richiama un interprete Python. Distribuire l’eseguibile con le librerie native richieste dalla propria compilazione. Per compilare indipendentemente i sorgenti Apple generati su macOS servono Apple Clang, SDK e toolchain Swift. Questi requisiti sono distinti dall’analisi statica; gli strumenti esterni opzionali non vengono scaricati automaticamente.
 
 Le firme Swift usano, nell’ordine, `--swift-demangle PATH`, `NEVERD_SWIFT_DEMANGLE`, `swift-demangle` in PATH. Su macOS l’ultimo tentativo automatico è `xcrun --find swift-demangle` con tempo limitato. Un percorso esplicito non disponibile causa errore; una ricerca automatica fallita conserva i simboli non classificati con `unavailable`. In assenza di simboli Swift non serve il demangler. `--metadata-only` non invoca né backend nativo né demangler.
 
 ```sh
 neverd mobile App.ipa -o recovered-swift \
-  --python python3 --swift-demangle /path/to/swift-demangle --timeout=600 --json
+  --swift-demangle /path/to/swift-demangle --timeout=600 --json
 ```
 
 ## Input e selezione
@@ -44,9 +43,8 @@ Per i binari fat, `--arch=auto` preferisce arm64, arm, x86_64, poi i386. Slice a
 | `--artifact PATH` | Programma principale | Percorso eseguibile relativo al bundle |
 | `--metadata-only` | Disattivato | Solo metadati, senza recupero sorgenti o invocazione di strumenti |
 | `--max-func N` | `0` | Limite di funzioni native; zero significa tutte quelle scoperte; ignorato in modalità metadati |
-| `--python PATH` | Ambiente/PATH | Interprete Python 3.10+ dell’helper |
 | `--swift-demangle PATH` | Ambiente/PATH/toolchain | Demangler delle firme Swift |
-| `--timeout N` | `300` | Secondi positivi per processo backend |
+| `--timeout N` | `300` | Budget totale positivo di analisi in secondi; i processi figli usano il tempo rimanente |
 | `--max-files N` | `20000` | Budget positivo di voci; anche l’inventario Swift è limitato |
 | `--max-bytes N` | `2147483648` | Budget positivo in byte per input, estrazione e output finale |
 | `--json` | Disattivato | Stampare il rapporto versionato come JSON |
@@ -97,7 +95,7 @@ recovered-ios/
 
 I file del linguaggio sorgente esistono soltanto se può essere emesso codice. `objc.json` contiene classi, categorie, ivar e codifiche grezze; `objc.h` le dichiarazioni supportate. `swift.json` contiene tipi nominali e simboli mangled. JSON di firme/metodi mantengono classificazione, omissioni, motivi e conteggi. I log comprendono diagnostica nativa e, quando usati, ricerca della toolchain, demangling ed export Swift nativo. I percorsi in `report.json` sono relativi alla sua directory. Il binario selezionato è un artefatto d’analisi, non viene collegato come ponte di recupero al codice generato.
 
-Copie temporanee del pacchetto e JSON intermedi vengono rimossi. Una normale esecuzione senza corpi nativi fallisce anche con metadati disponibili. La modalità metadati produce soltanto slice selezionata, `objc.h`, `objc.json`, `swift.json`, `report.json`; mancano sorgenti e file di firme/copertura, mentre `native_function_count`, `objc_method_recovery`, `swift_method_recovery` sono `null`. Il reader Objective-C Python non risolve puntatori concatenati o di oggetti rilocabili. Il recupero completo usa i metadati Objective-C risolti dal loader nativo. Il reader Swift grezzo può ancora segnalare riferimenti non supportati come parziali.
+Copie temporanee del pacchetto e JSON intermedi vengono rimossi. Una normale esecuzione senza corpi nativi fallisce anche con metadati disponibili. La modalità metadati produce soltanto slice selezionata, `objc.h`, `objc.json`, `swift.json`, `report.json`; mancano sorgenti e file di firme/copertura, mentre `native_function_count`, `objc_method_recovery`, `swift_method_recovery` sono `null`. Tutte le modalità usano i metadati Objective-C risolti dal loader nativo. I metadati Swift vengono letti dall’immagine nativa entro limiti verificati; fixup, layout rilocabili o riferimenti non supportati mantengono diagnosi di risultati parziali.
 
 Questo rapporto illustrativo abbreviato mostra volutamente un recupero parziale:
 
@@ -153,20 +151,22 @@ Per una sessione con Mach-O già caricato, `neverd_objc_methods_json(session, ma
 
 Su macOS, le build con `BUILD_TESTING` attivo offrono `check-neverd-mobile-ios`, che esegue tutte e tre le suite di recupero nativo tramite CTest.
 
+Python serve soltanto agli script di test di sviluppo riportati sotto; il recupero mobile integrato viene eseguito nella CLI nativa C++20.
+
 ```sh
 cmake --build build --target check-neverd-mobile-ios
-NEVERD_BUILD_DIR=build python3 -m unittest discover -s scripts/tests -p 'test_mobile_*.py' -v
+ctest --test-dir build -L NeverDMobileTests --output-on-failure
 python3 scripts/test_mobile_ios_backend.py --neverd build/bin/neverd
 python3 scripts/test_mobile_ios_calls_backend.py --neverd build/bin/neverd
 python3 scripts/test_mobile_swift_backend.py --neverd build/bin/neverd
 ```
 
-Su macOS, gli script Objective-C compilano gli originali, recuperano `.m` e collegano soltanto il sorgente generato a un programma di chiamata indipendente. Lo script scalare verifica limiti interi, rami, cicli, letture/scritture tramite puntatori, parametri impliciti, identità dei bit float/double, parametri misti e argomenti sullo stack. Lo script delle chiamate aggiunge dispatch dei messaggi, ereditarietà, Category, memoria delle variabili d’istanza, funzioni native ausiliarie e invocazione/catture/identità condivisa dei Block. Il corpus comprende 21 metodi e 134 risultati attesi indipendenti per variante; le quattro esecuzioni registrate arm64/x86_64 × classic/default hanno recuperato 21/21 metodi e ottenuto 134/134 risultati corrispondenti in ogni variante.
+Su macOS, gli script Objective-C compilano gli originali, recuperano `.m` e collegano soltanto il sorgente generato a un programma di chiamata indipendente. Lo script scalare verifica limiti interi, rami, cicli, letture/scritture tramite puntatori, parametri impliciti, identità dei bit float/double, parametri misti e argomenti sullo stack. Lo script delle chiamate aggiunge dispatch dei messaggi, ereditarietà, Category, memoria delle variabili d’istanza, funzioni native ausiliarie e invocazione/catture/identità condivisa dei Block. Il corpus delle chiamate richiede 21/21 metodi recuperati e 134/134 risultati indipendenti per ogni variante arm64/x86_64 × classic/default. Eseguire i controlli con la compilazione corrente della CLI nativa.
 
-Lo script Swift rigoroso controlla 22 dichiarazioni utente, tre ingressi getter/setter e sette ingressi invocabili generati dal compilatore; nessuno può scomparire dall’inventario. Ogni variante contiene 855 verifiche indipendenti dei risultati del programma originale. Compila separatamente il `.swift` generato e il programma di chiamata, senza dylib, modulo, bridge originali o dichiarazioni sostitutive scritte a mano. I casi includono chiamate scalari/native, inizializzazione e memoria delle classi, metodi di struct per valore/mutating, parametri floating point e sullo stack, puntatori e cicli. La verifica formale tramite CLI di questo corpus creato per i test ha superato tutte e quattro le varianti arm64/x86_64 × classic/default senza casi saltati: ciascuna ha recuperato 25 corpi nativi e sette proiezioni del compilatore, conservando tutte le 32 identità invocabili. Sia gli originali sia il Swift generato e compilato indipendentemente hanno superato 855/855 verifiche dei risultati per variante. Questi risultati si limitano al corpus e non garantiscono il recupero di applicazioni arbitrarie o del testo sorgente originale. Lo script rifiuta copertura mancante, errori di compilazione del sorgente e differenze di comportamento.
+Lo script Swift rigoroso controlla 22 dichiarazioni utente, tre ingressi getter/setter e sette ingressi invocabili generati dal compilatore; nessuno può scomparire dall’inventario. Ogni variante contiene 855 verifiche indipendenti dei risultati del programma originale. Compila separatamente il `.swift` generato e il programma di chiamata, senza dylib, modulo, bridge originali o dichiarazioni sostitutive scritte a mano. I casi includono chiamate scalari/native, inizializzazione e memoria delle classi, metodi di struct per valore/mutating, parametri floating point e sullo stack, puntatori e cicli. La CLI nativa C++20 deve superare tutte e quattro le varianti arm64/x86_64 × classic/default senza casi saltati: ciascuna deve recuperare 25 corpi nativi e sette proiezioni del compilatore, conservare le 32 identità invocabili e superare 855/855 verifiche sia per gli originali sia per il Swift generato compilato indipendentemente. Questi risultati si limitano al corpus e non garantiscono il recupero di applicazioni arbitrarie o del testo sorgente originale. Lo script rifiuta copertura mancante, errori di compilazione del sorgente e differenze di comportamento.
 
 Tutti e tre gli script supportano `--arch all|arm64|x86_64`, `--fixups both|classic|default`, `--timeout N` e `--work-dir NEW_DIRECTORY`. `--setup-only` convalida gli originali e non verifica il recupero. Le architetture non eseguibili sull’host vengono esplicitamente saltate quando consentito; un caso saltato non è un successo. Gli artefatti di errore conservati consentono di distinguere copertura sorgente mancante, errori di compilazione e differenze di comportamento. Consultare l’output corrente prima di dichiarare il supporto verificato.
 
-La pubblicazione è transazionale: scegliere una directory nuova, controllare prima lo stato d’uscita e salvare altrove il JSON rediretto. Gli errori eliminano l’output temporaneo e preservano quello esistente. L’uscita non zero del backend include una coda di log limitata; timeout e budget hanno messaggi distinti. Con `--json`, gli errori gestiti dell’helper producono `status: "error"`; parsing, helper/interprete mancante, Python sotto 3.10 e interruzioni possono fallire prima su stderr.
+La pubblicazione è transazionale: scegliere una directory nuova, controllare prima lo stato d’uscita e salvare altrove il JSON rediretto. Gli errori eliminano l’output temporaneo e preservano quello esistente. L’uscita non zero del backend include una coda di log limitata; timeout e budget hanno messaggi distinti. La CLI nativa restituisce zero in caso di successo e un valore non nullo in caso di errore. Con `--json`, gli errori gestiti includono `schema_version`, `status: "error"` ed `error`. Parsing degli argomenti, errori di avvio dell’eseguibile o delle librerie native e interruzioni possono essere segnalati soltanto su stderr. Controllare prima lo stato di uscita.
 
 Per slice cifrate fornire input leggibili; per architetture assenti controllare le slice disponibili; per Swift selezionare il demangler effettivo. Leggere motivi esatti e diagnostica dei metodi omessi. Aumentare `--max-func` aiuta soltanto le funzioni escluse dal limite. Layout, firme, header esterni, eccezioni o ABI mancanti richiedono implementazione o ulteriori metadati validi, non una dichiarazione di recupero completo. Conservare gli avvisi di licenza applicabili distribuendo strumenti o pacchetti generati.

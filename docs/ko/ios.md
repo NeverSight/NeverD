@@ -12,20 +12,19 @@
 
 ```sh
 cmake --build build --target neverd
-python3 --version
 neverd mobile App.ipa -o recovered-ios
 neverd mobile App.app -o recovered-arm64 --arch=arm64
 neverd mobile executable -o metadata --metadata-only
 neverd mobile App.app -o recovered-framework --artifact Frameworks/Example.framework/Example
 ```
 
-NeverD를 정상적으로 빌드하고 실행 파일을 배포할 때 같은 위치의 `mobile/` 디렉터리를 유지하세요. Python 3.10+가 필요하며 `--python PATH`, `NEVERD_PYTHON`, PATH의 `python3`/`python` 순으로 선택합니다. 의존성은 자동 다운로드하지 않습니다. 생성된 Apple 언어 소스를 macOS에서 독립적으로 컴파일하려면 Apple Clang, SDK, Swift 도구 체인이 필요하며 이는 정적 네이티브 분석과 별도 요구사항입니다.
+C++20을 지원하는 도구 체인으로 `neverd` 대상을 빌드합니다. 모바일 작업 흐름은 네이티브 CLI에 포함되며 Python 인터프리터를 호출하지 않습니다. 배포할 때 해당 빌드에 필요한 네이티브 라이브러리를 함께 제공하세요. macOS에서 생성된 Apple 언어 소스를 독립적으로 컴파일하려면 Apple Clang, SDK 및 Swift 도구 체인이 필요합니다. 이는 정적 분석과 별도의 요구 사항이며 선택적 외부 도구는 자동으로 다운로드하지 않습니다.
 
 Swift 서명 복원은 `--swift-demangle PATH`, `NEVERD_SWIFT_DEMANGLE`, PATH의 `swift-demangle` 순서로 도구를 선택합니다. macOS에서는 마지막으로 시간 제한이 있는 `xcrun --find swift-demangle`을 시도합니다. 명시적으로 설정한 도구가 없으면 실패하며, 자동 검색 실패 시 미분류 심볼을 유지하고 `unavailable`을 보고합니다. Swift 심볼이 없는 입력에는 demangler가 필요 없습니다. `--metadata-only`는 네이티브 백엔드와 demangler를 모두 호출하지 않습니다.
 
 ```sh
 neverd mobile App.ipa -o recovered-swift \
-  --python python3 --swift-demangle /path/to/swift-demangle --timeout=600 --json
+  --swift-demangle /path/to/swift-demangle --timeout=600 --json
 ```
 
 ## 입력과 선택
@@ -44,9 +43,8 @@ Fat 바이너리에서 `--arch=auto`는 arm64, arm, x86_64, i386 순으로 우�
 | `--artifact PATH` | 주 실행 파일 | 앱 기준 실행 파일 상대 경로 |
 | `--metadata-only` | 꺼짐 | 소스 복원이나 도구 호출 없이 메타데이터 읽기 |
 | `--max-func N` | `0` | 네이티브 함수 제한. 0은 발견한 모든 함수이며 메타데이터 모드에서는 무시 |
-| `--python PATH` | 환경/PATH | 도우미용 Python 3.10+ 인터프리터 |
 | `--swift-demangle PATH` | 환경/PATH/도구 체인 | Swift 서명 demangler |
-| `--timeout N` | `300` | 백엔드 프로세스마다 적용할 양의 초 단위 제한 |
+| `--timeout N` | `300` | 전체 분석의 양수 시간 예산(초). 자식 프로세스는 남은 예산 사용 |
 | `--max-files N` | `20000` | 양의 항목 예산. Swift 심볼 목록도 제한 대상 |
 | `--max-bytes N` | `2147483648` | 입력, 압축 해제 데이터, 최종 출력의 양의 바이트 예산 |
 | `--json` | 꺼짐 | 버전이 있는 보고서를 JSON으로 출력 |
@@ -97,7 +95,7 @@ recovered-ios/
 
 소스 언어 파일은 코드를 출력할 수 있을 때만 존재합니다. `objc.json`은 클래스, 카테고리, ivar, 원시 메서드 인코딩을 저장하고 `objc.h`는 지원되는 선언을 담습니다. `swift.json`은 명목 타입과 맹글링된 심볼을 포함합니다. 서명/메서드 JSON은 분류, 생략, 이유, 개수를 유지합니다. 로그에는 네이티브 진단과 사용된 경우 Swift 도구 탐색·demangling·네이티브 Swift 내보내기 진단이 들어갑니다. `report.json`의 경로는 해당 디렉터리 기준입니다. 선택한 바이너리는 분석 산출물이며 생성 소스에 복원 브리지로 링크하지 않습니다.
 
-임시 패키지 복사본과 중간 JSON을 삭제합니다. 일반 실행에서 네이티브 본문이 없으면 메타데이터가 있어도 실패합니다. 메타데이터 모드는 선택 파일, `objc.h`, `objc.json`, `swift.json`, `report.json`만 만들며 소스와 서명/메서드 범위 파일은 없습니다. `native_function_count`, `objc_method_recovery`, `swift_method_recovery`는 `null`입니다. 이 모드의 Python Objective-C 판독기는 체인 포인터나 재배치 가능 객체 포인터를 해결하지 않습니다. 전체 복원은 네이티브 로더가 해결한 정보를 사용합니다. 원시 Swift 메타데이터는 미지원 참조를 여전히 부분 상태로 보고할 수 있습니다.
+임시 패키지 복사본과 중간 JSON을 삭제합니다. 일반 실행에서 네이티브 본문이 없으면 메타데이터가 있어도 실패합니다. 메타데이터 모드는 선택 파일, `objc.h`, `objc.json`, `swift.json`, `report.json`만 만들며 소스와 서명/메서드 범위 파일은 없습니다. `native_function_count`, `objc_method_recovery`, `swift_method_recovery`는 `null`. 모든 모드는 네이티브 로더가 해석한 Objective-C 메타데이터를 사용합니다. Swift 메타데이터는 범위를 확인한 네이티브 이미지 읽기를 사용하며 지원하지 않는 fixup, 재배치 가능 레이아웃 또는 참조는 부분 분석 진단을 유지합니다.
 
 다음 축약 예시는 의도적으로 부분 복원을 보여 줍니다.
 
@@ -153,20 +151,22 @@ Mach-O를 이미 로드한 세션에서 `neverd_objc_methods_json(session, max_f
 
 macOS에서 `BUILD_TESTING`을 활성화한 빌드는 `check-neverd-mobile-ios`를 제공하며, CTest로 세 네이티브 복원 테스트 모음을 실행합니다.
 
+Python은 아래 개발 테스트 스크립트에만 사용합니다. 내장 모바일 복구는 네이티브 C++20 CLI에서 실행됩니다.
+
 ```sh
 cmake --build build --target check-neverd-mobile-ios
-NEVERD_BUILD_DIR=build python3 -m unittest discover -s scripts/tests -p 'test_mobile_*.py' -v
+ctest --test-dir build -L NeverDMobileTests --output-on-failure
 python3 scripts/test_mobile_ios_backend.py --neverd build/bin/neverd
 python3 scripts/test_mobile_ios_calls_backend.py --neverd build/bin/neverd
 python3 scripts/test_mobile_swift_backend.py --neverd build/bin/neverd
 ```
 
-macOS의 Objective-C 검증 스크립트는 원본 샘플을 컴파일하고 `.m`을 복원한 뒤 생성 소스만 독립 호출 하네스와 링크합니다. 스칼라 스크립트는 정수 경계, 분기, 루프, 포인터 읽기/쓰기, 숨겨진 인수, float/double 비트 동일성, 혼합 인수와 스택 인수를 검사합니다. 호출 스크립트는 메시지 디스패치, 상속, Category, 인스턴스 변수 저장소, 네이티브 도우미와 Block 호출/캡처/공유 동일성도 검사합니다. 호출 샘플에는 메서드 21개와 변형별 독립 예상 결과 134개가 있으며, 기록된 arm64/x86_64 × classic/default 네 조합 모두 21/21 메서드를 복원하고 134/134 결과와 일치했습니다.
+macOS의 Objective-C 검증 스크립트는 원본 샘플을 컴파일하고 `.m`을 복원한 뒤 생성 소스만 독립 호출 하네스와 링크합니다. 스칼라 스크립트는 정수 경계, 분기, 루프, 포인터 읽기/쓰기, 숨겨진 인수, float/double 비트 동일성, 혼합 인수와 스택 인수를 검사합니다. 호출 스크립트는 메시지 디스패치, 상속, Category, 인스턴스 변수 저장소, 네이티브 도우미와 Block 호출/캡처/공유 동일성도 검사합니다. 호출 샘플은 arm64/x86_64 × classic/default 조합마다 21/21 메서드 복구와 134/134 독립 예상 결과 일치를 요구합니다. 현재 네이티브 CLI 빌드로 검증하세요.
 
-엄격한 Swift 스크립트는 사용자 선언 22개, getter/setter 진입점 3개, 컴파일러가 생성한 호출 가능 진입점 7개를 검사하며 어떤 항목도 목록에서 빠질 수 없습니다. 변형마다 원본 프로그램의 독립 예상 결과 855개를 확인합니다. 생성된 `.swift`와 하네스를 독립적으로 컴파일하며 원본 dylib, 모듈, 브리지 또는 수동 대체 선언을 사용하지 않습니다. 스칼라/네이티브 호출, 클래스 초기화와 저장소, 구조체 값 전달/mutating 메서드, 부동소수점과 스택 인수, 포인터 및 루프를 포함합니다. 이 자체 제작 샘플의 공식 CLI 인수 테스트는 arm64/x86_64 × classic/default 네 조합에서 건너뛴 항목 없이 모두 통과했습니다. 각 조합은 네이티브 메서드 본문 25개와 컴파일러 투영 7개를 복원하여 호출 가능한 식별 정보 32개를 모두 보존했습니다. 원본 프로그램과 독립적으로 컴파일한 생성 Swift 모두 조합별 855/855 예상 결과 검사에 통과했습니다. 이 결과는 해당 샘플에 한정되며 임의 애플리케이션이나 원래 소스 텍스트의 복원을 보장하지 않습니다. 스크립트는 커버리지 누락, 소스 컴파일 실패와 동작 불일치를 거부합니다.
+엄격한 Swift 스크립트는 사용자 선언 22개, getter/setter 진입점 3개, 컴파일러가 생성한 호출 가능 진입점 7개를 검사하며 어떤 항목도 목록에서 빠질 수 없습니다. 변형마다 원본 프로그램의 독립 예상 결과 855개를 확인합니다. 생성된 `.swift`와 하네스를 독립적으로 컴파일하며 원본 dylib, 모듈, 브리지 또는 수동 대체 선언을 사용하지 않습니다. 스칼라/네이티브 호출, 클래스 초기화와 저장소, 구조체 값 전달/mutating 메서드, 부동소수점과 스택 인수, 포인터 및 루프를 포함합니다. 네이티브 C++20 CLI 인수 조건은 arm64/x86_64 × classic/default 네 조합을 건너뛰지 않고 통과하는 것입니다. 조합마다 네이티브 본문 25개와 컴파일러 투영 7개를 복원하고 호출 가능한 식별 정보 32개를 보존해야 하며, 원본과 독립적으로 컴파일한 생성 Swift가 각각 855/855 예상 결과 검사에 통과해야 합니다. 이 결과는 해당 샘플에 한정되며 임의 애플리케이션이나 원래 소스 텍스트의 복원을 보장하지 않습니다. 스크립트는 커버리지 누락, 소스 컴파일 실패와 동작 불일치를 거부합니다.
 
 세 스크립트 모두 `--arch all|arm64|x86_64`, `--fixups both|classic|default`, `--timeout N`, `--work-dir NEW_DIRECTORY`를 지원합니다. `--setup-only`는 원본만 검증하며 복원은 테스트하지 않습니다. 호스트가 실행할 수 없는 아키텍처는 허용되는 경우 명시적으로 건너뛰며, 건너뛰기는 통과가 아닙니다. 보존된 실패 산출물로 소스 커버리지 누락, 컴파일 오류와 동작 차이를 구분하고 검증된 지원을 주장하기 전에 현재 테스트 출력을 확인하십시오.
 
-게시는 트랜잭션 방식입니다. 새 디렉터리를 선택하고 종료 상태부터 확인하며 리디렉션 JSON은 그 밖에 저장하세요. 실패 시 임시 출력을 삭제하고 기존 결과를 보존합니다. 백엔드의 비정상 종료에는 제한된 로그 끝부분이 포함되며 시간 초과와 예산 초과는 별도 메시지입니다. `--json`의 처리된 도우미 오류는 `status: "error"`지만 인자 파싱, 도우미/인터프리터 부재, Python 3.10 미만, 중단은 더 일찍 stderr에서 실패할 수 있습니다.
+게시는 트랜잭션 방식입니다. 새 디렉터리를 선택하고 종료 상태부터 확인하며 리디렉션 JSON은 그 밖에 저장하세요. 실패 시 임시 출력을 삭제하고 기존 결과를 보존합니다. 백엔드의 비정상 종료에는 제한된 로그 끝부분이 포함되며 시간 초과와 예산 초과는 별도 메시지입니다. 네이티브 CLI는 성공 시 0, 복구 실패 시 0이 아닌 값을 반환합니다. `--json`은 처리된 실패에 `schema_version`, `status: "error"`, `error`를 포함합니다. 인수 분석, 네이티브 실행 파일이나 라이브러리 시작 실패, 중단은 stderr로만 보고될 수 있습니다. 호출자는 먼저 종료 상태를 확인해야 합니다.
 
 암호화된 슬라이스에는 읽을 수 있는 입력을, 아키텍처 부재에는 사용 가능한 슬라이스 확인을, Swift 도구 부재에는 실제 demangler 선택을 적용하세요. 생략된 메서드의 정확한 이유와 메타데이터 진단을 확인합니다. `--max-func`를 늘리는 것은 개수 제한으로 제외된 함수에만 유효합니다. 배치·서명·외부 헤더·예외·ABI 지원 누락은 구현이나 추가 유효 메타데이터가 필요하며 완전 복원이라는 주장으로 해결되지 않습니다. 배포할 때 적용되는 의존성 라이선스 고지를 보존하세요.

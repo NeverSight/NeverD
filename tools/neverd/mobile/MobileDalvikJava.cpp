@@ -1,0 +1,1582 @@
+// Typed Dalvik verification and standalone Java source generation.
+// This is a native translation of NeverD's first-party Dalvik source engine.
+#include "MobileDalvik.h"
+
+#include "llvm/Support/JSON.h"
+
+#include <algorithm>
+#include <cstdint>
+#include <deque>
+#include <functional>
+#include <initializer_list>
+#include <iomanip>
+#include <map>
+#include <optional>
+#include <regex>
+#include <set>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <type_traits>
+#include <utility>
+#include <vector>
+
+namespace neverd::mobile::dalvik {
+namespace {
+using Strings = std::set<std::string>;
+using State = std::vector<Strings>;
+
+[[noreturn]] void javaError(const std::string &Message) {
+  throw std::runtime_error(Message);
+}
+
+bool starts(std::string_view Text, std::string_view Prefix) {
+  return Text.starts_with(Prefix);
+}
+bool anyPrefix(std::string_view Text,
+               std::initializer_list<std::string_view> Prefixes) {
+  return std::any_of(Prefixes.begin(), Prefixes.end(),
+                     [&](auto Prefix) { return starts(Text, Prefix); });
+}
+std::string join(const std::vector<std::string> &Values,
+                 std::string_view Separator) {
+  std::string Result;
+  for (const auto &Value : Values) {
+    if (!Result.empty())
+      Result += Separator;
+    Result += Value;
+  }
+  return Result;
+}
+std::vector<std::string> split(std::string_view Text, char Separator) {
+  std::vector<std::string> Result;
+  size_t Begin = 0;
+  for (;;) {
+    size_t End = Text.find(Separator, Begin);
+    Result.emplace_back(
+        Text.substr(Begin, End == Text.npos ? End : End - Begin));
+    if (End == Text.npos)
+      return Result;
+    Begin = End + 1;
+  }
+}
+std::string baseOpcode(std::string_view Opcode) {
+  return std::string(Opcode.substr(0, Opcode.find('/')));
+}
+const std::map<std::string, std::string> Primitives = {
+    {"V", "void"}, {"Z", "boolean"}, {"B", "byte"},
+    {"C", "char"}, {"S", "short"},   {"I", "int"},
+    {"J", "long"}, {"F", "float"},   {"D", "double"}};
+const std::map<std::string, std::string> ArithmeticTypes = {
+    {"int", "I"},  {"long", "J"}, {"float", "F"}, {"double", "D"},
+    {"byte", "B"}, {"char", "C"}, {"short", "S"}};
+
+std::string javaIdentifier(const std::string &Value) {
+  static const Strings Keywords = [] {
+    Strings Result;
+    std::istringstream Words("abstract assert boolean break byte case catch "
+                             "char class const continue default "
+                             "do double else enum extends final finally float "
+                             "for goto if implements import "
+                             "instanceof int interface long native new package "
+                             "private protected public return "
+                             "short static strictfp super switch synchronized "
+                             "this throw throws transient try "
+                             "void volatile while true false null _ record "
+                             "sealed permits yield var");
+    for (std::string Word; Words >> Word;)
+      Result.insert(Word);
+    return Result;
+  }();
+  auto First = [](unsigned char C) {
+    return (C >= 'A' && C <= 'Z') || (C >= 'a' && C <= 'z') || C == '_' ||
+           C == '$';
+  };
+  if (Value.empty() || !First(Value[0]) || Keywords.contains(Value) ||
+      !std::all_of(Value.begin() + 1, Value.end(), [&](unsigned char C) {
+        return First(C) || (C >= '0' && C <= '9');
+      }))
+    javaError("Android identifier cannot be represented in Java: " + Value);
+  return Value;
+}
+
+std::string hexLiteral(uint64_t Value, unsigned Bits) {
+  if (Bits == 32)
+    Value &= UINT64_C(0xffffffff);
+  std::ostringstream Out;
+  Out << "0x" << std::hex << std::setfill('0') << std::setw(Bits / 4) << Value;
+  if (Bits == 64)
+    Out << 'L';
+  return Out.str();
+}
+
+// The readers retain lone UTF-16 surrogates as WTF-8. Java source must retain
+// those exact code units rather than replacing them through a UTF-8 serializer.
+std::string javaString(const std::string &Value) {
+  std::string Out = "\"";
+  auto Unit = [&](uint32_t U) {
+    constexpr char Digits[] = "0123456789abcdef";
+    Out += "\\u";
+    for (int Shift = 12; Shift >= 0; Shift -= 4)
+      Out += Digits[(U >> Shift) & 15];
+  };
+  for (size_t I = 0; I < Value.size();) {
+    uint8_t Byte = static_cast<uint8_t>(Value[I++]);
+    uint32_t Code = Byte;
+    unsigned Extra = 0;
+    uint32_t Minimum = 0;
+    if (Byte >= 0xc2 && Byte <= 0xdf) {
+      Code = Byte & 31;
+      Extra = 1;
+      Minimum = 0x80;
+    } else if (Byte >= 0xe0 && Byte <= 0xef) {
+      Code = Byte & 15;
+      Extra = 2;
+      Minimum = 0x800;
+    } else if (Byte >= 0xf0 && Byte <= 0xf4) {
+      Code = Byte & 7;
+      Extra = 3;
+      Minimum = 0x10000;
+    } else if (Byte >= 0x80)
+      javaError("invalid UTF-8/WTF-8 Java string");
+    if (Extra > Value.size() - I)
+      javaError("truncated UTF-8/WTF-8 Java string");
+    for (unsigned J = 0; J < Extra; ++J) {
+      uint8_t Continuation = static_cast<uint8_t>(Value[I++]);
+      if ((Continuation & 0xc0) != 0x80)
+        javaError("invalid UTF-8/WTF-8 Java string continuation");
+      Code = (Code << 6) | (Continuation & 63);
+    }
+    if (Code < Minimum || Code > 0x10ffff)
+      javaError("invalid UTF-8/WTF-8 Java string value");
+    switch (Code) {
+    case '"':
+      Out += "\\\"";
+      break;
+    case '\\':
+      Out += "\\\\";
+      break;
+    case '\b':
+      Out += "\\b";
+      break;
+    case '\f':
+      Out += "\\f";
+      break;
+    case '\n':
+      Out += "\\n";
+      break;
+    case '\r':
+      Out += "\\r";
+      break;
+    case '\t':
+      Out += "\\t";
+      break;
+    default:
+      if (Code >= 0x20 && Code <= 0x7e)
+        Out += static_cast<char>(Code);
+      else if (Code <= 0xffff)
+        Unit(Code);
+      else {
+        Code -= 0x10000;
+        Unit(0xd800 + (Code >> 10));
+        Unit(0xdc00 + (Code & 1023));
+      }
+    }
+  }
+  return Out + '"';
+}
+
+bool isReference(std::string_view Type) {
+  return anyPrefix(Type, {"L", "[", "self:"});
+}
+bool isWide(std::string_view Type) {
+  return Type == "J" || Type == "D" || Type == "bits64";
+}
+unsigned wordWidth(std::string_view Type) {
+  return Type == "J" || Type == "D" ? 2 : 1;
+}
+
+class Lines {
+  Budget &budget;
+  bool cumulative;
+  uint64_t bytes = 0;
+  std::vector<std::string> values;
+
+public:
+  explicit Lines(Budget &B, bool Cumulative = false)
+      : budget(B), cumulative(Cumulative) {}
+  void append(std::string Value) {
+    uint64_t Size = Value.size() + 1;
+    if (Size > budget.limits.max_bytes ||
+        bytes > budget.limits.max_bytes - Size)
+      javaError("Android generated source exceeded its byte budget");
+    bytes += Size;
+    if (cumulative)
+      budget.output(Size);
+    values.push_back(std::move(Value));
+  }
+  void extend(std::initializer_list<std::string> Values) {
+    for (const auto &Value : Values)
+      append(Value);
+  }
+  const std::vector<std::string> &get() const { return values; }
+  std::string text() const { return join(values, "\n"); }
+};
+
+std::string typeName(const std::string &Type, const ClassMap &Classes) {
+  if (starts(Type, "["))
+    return typeName(Type.substr(1), Classes) + "[]";
+  if (auto I = Primitives.find(Type); I != Primitives.end())
+    return I->second;
+  if (!starts(Type, "L") || Type.size() < 3 || Type.back() != ';')
+    javaError("invalid Java projection type");
+  if (auto I = Classes.find(Type); I != Classes.end() && I->second.enclosing) {
+    const auto &C = I->second;
+    if (!C.inner_name || C.inner_name->empty() ||
+        !Classes.contains(*C.enclosing))
+      javaError("nested Android type has no available enclosing declaration");
+    return typeName(*C.enclosing, Classes) + "." +
+           javaIdentifier(*C.inner_name);
+  }
+  auto Parts = split(std::string_view(Type).substr(1, Type.size() - 2), '/');
+  for (auto &Part : Parts)
+    Part = javaIdentifier(Part);
+  return join(Parts, ".");
+}
+
+template <typename Ref>
+auto member(const Ref &Reference, const ClassMap &Classes, Budget &B) -> const
+    std::conditional_t<std::is_same_v<Ref, MethodRef>, Method, Field> * {
+  if (!Classes.contains(Reference.owner))
+    return nullptr;
+  std::deque<std::string> Pending{Reference.owner};
+  Strings Seen;
+  while (!Pending.empty()) {
+    B.tick();
+    std::string Owner = std::move(Pending.front());
+    Pending.pop_front();
+    auto I = Classes.find(Owner);
+    if (I == Classes.end() || !Seen.insert(Owner).second)
+      continue;
+    const auto &C = I->second;
+    if constexpr (std::is_same_v<Ref, MethodRef>) {
+      for (const auto &M : C.methods) {
+        const auto &Actual = M.reference;
+        if (Actual.name != Reference.name ||
+            Actual.parameters != Reference.parameters)
+          continue;
+        if (Actual.returns != Reference.returns)
+          javaError(
+              Reference.owner +
+              ": member type differs from the exact referenced declaration");
+        return &M;
+      }
+      if (Reference.name == "<init>")
+        break;
+    } else {
+      for (const auto &F : C.fields) {
+        const auto &Actual = F.reference;
+        if (Actual.name != Reference.name)
+          continue;
+        if (Actual.type != Reference.type)
+          javaError(
+              Reference.owner +
+              ": member type differs from the exact referenced declaration");
+        return &F;
+      }
+    }
+    if (C.superclass)
+      Pending.push_back(*C.superclass);
+    for (const auto &Interface : C.interfaces)
+      Pending.push_back(Interface);
+  }
+  javaError(Reference.owner +
+            ": referenced member has no proven local declaration");
+}
+
+std::string helperName(const Class &C, std::string Base) {
+  Strings Names;
+  for (const auto &M : C.methods)
+    Names.insert(M.reference.name);
+  while (Names.contains(Base))
+    Base += '_';
+  return Base;
+}
+bool constructorThrows(const Method &Input, const ClassMap &Classes,
+                       Budget &B) {
+  const Method *M = &Input;
+  std::set<MethodRef> Seen;
+  for (;;) {
+    B.tick();
+    if (!Seen.insert(M->reference).second)
+      javaError("recursive constructor delegation");
+    const auto *R = M->instructions.empty()
+                        ? nullptr
+                        : std::get_if<MethodRef>(&M->instructions[0].reference);
+    if (!R || R->name != "<init>")
+      return false;
+    const auto *Target = member(*R, Classes, B);
+    if (!Target)
+      return *R != MethodRef{"Ljava/lang/Object;", "<init>", {}, "V"};
+    M = Target;
+  }
+}
+
+bool sameHandlers(const std::vector<Handler> &A,
+                  const std::vector<Handler> &B) {
+  if (A.size() != B.size())
+    return false;
+  for (size_t I = 0; I < A.size(); ++I)
+    if (A[I].type != B[I].type || A[I].target != B[I].target)
+      return false;
+  return true;
+}
+
+class Body {
+  const Method &method;
+  const ClassMap &classes;
+  Budget &budget;
+  const std::vector<Instruction> &code;
+  std::map<uint32_t, size_t> by_pc;
+  std::map<uint32_t, State> states;
+  std::string prefix;
+  size_t first = 0;
+  std::map<uint32_t, std::string> pending_results;
+  std::map<uint32_t, uint32_t> constructors;
+
+  [[noreturn]] void fail(const std::string &Message) const {
+    javaError(method.reference.identity() + ": " + Message);
+  }
+  const Class &ownerClass() const {
+    auto I = classes.find(method.reference.owner);
+    if (I == classes.end())
+      fail("method owner has no local declaration");
+    return I->second;
+  }
+  const std::string &referenceType(const Instruction &Op) const {
+    if (auto *T = std::get_if<std::string>(&Op.reference))
+      return *T;
+    fail("instruction has no type descriptor");
+  }
+  uint32_t target(const Instruction &Op) const {
+    if (!Op.target)
+      fail("branch has no destination");
+    return *Op.target;
+  }
+  const std::vector<Handler> &handlers(uint32_t PC) const {
+    for (const auto &R : method.tries)
+      if (R.start <= PC && PC < R.end)
+        return R.handlers;
+    static const std::vector<Handler> Empty;
+    return Empty;
+  }
+  void validateShape();
+  const Method *validateInvocation(const Instruction &Op);
+  std::vector<uint32_t> successors(size_t Index) const;
+  bool compatible(std::string Kind, const std::string &Wanted) const;
+  std::string read(const State &S, unsigned Reg, const std::string &Type,
+                   bool Strict) const;
+  std::string write(State &S, unsigned Reg, const std::string &Type,
+                    const std::string &Expression) const;
+  std::string staticOwner(const std::string &Owner, bool Field = false);
+  std::string arrayType(const State &S, unsigned Reg, bool Strict) const;
+  std::pair<State, std::vector<std::string>>
+  operation(const Instruction &Op, const State &Incoming, bool Strict);
+  std::string condition(const Instruction &Op, const State &S,
+                        bool Strict) const;
+  State initial() const;
+  void verify();
+  static std::string resultRead(const std::string &Type);
+  static std::string resultWrite(const std::string &Type,
+                                 const std::string &Value);
+  std::string throwHelper() const {
+    return helperName(ownerClass(), "__neverdThrow");
+  }
+
+public:
+  Body(const Method &M, const ClassMap &C, Budget &B)
+      : method(M), classes(C), budget(B), code(M.instructions) {
+    for (size_t I = 0; I < code.size(); ++I)
+      by_pc.emplace(code[I].pc, I);
+    validateShape();
+  }
+  std::string emit();
+};
+
+void Body::validateShape() {
+  if (code.empty() || by_pc.size() != code.size())
+    fail("missing or duplicate instruction positions");
+  for (size_t I = 1; I < code.size(); ++I)
+    if (code[I - 1].pc >= code[I].pc)
+      fail("invalid method code boundaries");
+  if (method.code_end <= code.back().pc)
+    fail("invalid method code boundaries");
+  if (method.registers > 1024)
+    fail("register frame exceeds the bounded Java projection limit");
+  if (method.incomingWords() > method.registers)
+    fail("incoming arguments exceed the register frame");
+  for (const auto &Op : code) {
+    budget.tick();
+    for (unsigned R : Op.registers)
+      if (R >= method.registers)
+        fail("instruction register is outside its frame");
+    std::vector<uint32_t> Targets;
+    if (Op.opcode.find("switch") != std::string::npos)
+      Targets = Op.targets;
+    else if (anyPrefix(Op.opcode, {"goto", "if-"}))
+      Targets.push_back(target(Op));
+    for (uint32_t T : Targets)
+      if (!by_pc.contains(T))
+        fail("branch does not target an executable instruction");
+    if (Op.opcode.find("switch") != std::string::npos &&
+        (Op.keys.size() != Op.targets.size() ||
+         std::set<int32_t>(Op.keys.begin(), Op.keys.end()).size() !=
+             Op.keys.size()))
+      fail("switch keys and destinations disagree");
+  }
+  uint32_t PreviousEnd = 0;
+  for (const auto &R : method.tries) {
+    if (!by_pc.contains(R.start) ||
+        (!by_pc.contains(R.end) && R.end != method.code_end) ||
+        R.start >= R.end || R.start < PreviousEnd || R.handlers.empty())
+      fail("invalid or overlapping exception regions");
+    PreviousEnd = R.end;
+    for (size_t I = 0; I < R.handlers.size(); ++I) {
+      const auto &H = R.handlers[I];
+      if (!by_pc.contains(H.target) ||
+          code[by_pc.at(H.target)].opcode != "move-exception")
+        fail("exception handler must start with move-exception");
+      if (!H.type && I + 1 != R.handlers.size())
+        fail("catch-all must be the final exception handler");
+    }
+  }
+  for (size_t I = 0; I < code.size(); ++I) {
+    const auto &Op = code[I];
+    if (!starts(Op.opcode, "move-result"))
+      continue;
+    if (!I || !anyPrefix(code[I - 1].opcode, {"invoke-", "filled-new-array"}))
+      fail("move-result does not immediately follow its producer");
+    std::string Type;
+    if (auto *M = std::get_if<MethodRef>(&code[I - 1].reference))
+      Type = M->returns;
+    else if (auto *T = std::get_if<std::string>(&code[I - 1].reference))
+      Type = *T;
+    if (Type.empty() || Type == "V")
+      fail("move-result has no value-producing signature");
+    std::string Wanted = isReference(Type)      ? "move-result-object"
+                         : wordWidth(Type) == 2 ? "move-result-wide"
+                                                : "move-result";
+    if (Op.opcode != Wanted)
+      fail("move-result carrier disagrees with the native prototype");
+    pending_results[Op.pc] = Type;
+  }
+  if (method.reference.name != "<init>")
+    return;
+  const auto &Head = code.front();
+  const auto *Ref = std::get_if<MethodRef>(&Head.reference);
+  unsigned SelfReg = method.registers - method.incomingWords();
+  if ((Head.opcode != "invoke-direct" &&
+       Head.opcode != "invoke-direct/range") ||
+      !Ref || Ref->name != "<init>" || Head.registers.empty() ||
+      Head.registers[0] != SelfReg)
+    fail("constructor requires a representable leading super/this call");
+  const auto &C = ownerClass();
+  if (Ref->owner != C.name && (!C.superclass || Ref->owner != *C.superclass))
+    fail("constructor receiver does not match its owner or superclass");
+  validateInvocation(Head);
+  std::map<unsigned, std::pair<std::string, std::string>> Original;
+  unsigned Reg = SelfReg + 1;
+  for (size_t I = 0; I < method.reference.parameters.size(); ++I) {
+    const auto &T = method.reference.parameters[I];
+    Original[Reg] = {T, "arg" + std::to_string(I)};
+    Reg += wordWidth(T);
+  }
+  std::vector<std::string> Args;
+  size_t Cursor = 1;
+  for (const auto &T : Ref->parameters) {
+    if (Cursor >= Head.registers.size() ||
+        !Original.contains(Head.registers[Cursor]))
+      fail("constructor prefix requires unavailable argument evaluation");
+    const auto &[Actual, Name] = Original.at(Head.registers[Cursor]);
+    if (Actual != T)
+      fail("constructor prefix argument types disagree");
+    Args.push_back(Name);
+    if (wordWidth(T) == 2 &&
+        (Cursor + 1 >= Head.registers.size() ||
+         Head.registers[Cursor + 1] != Head.registers[Cursor] + 1))
+      fail("constructor prefix has a broken wide register pair");
+    Cursor += wordWidth(T);
+  }
+  if (Cursor != Head.registers.size())
+    fail("constructor prefix argument count disagrees");
+  prefix = std::string(Ref->owner == C.name ? "this" : "super") + "(" +
+           join(Args, ", ") + ");";
+  first = 1;
+  if (first == code.size())
+    fail("constructor has no return boundary");
+  if (!method.tries.empty() && method.tries[0].start == Head.pc)
+    fail("constructor prefix has unrepresentable exception handling");
+}
+
+std::vector<uint32_t> Body::successors(size_t Index) const {
+  const auto &Op = code[Index];
+  if (anyPrefix(Op.opcode, {"return", "throw"}))
+    return {};
+  if (starts(Op.opcode, "goto"))
+    return {target(Op)};
+  if (Index + 1 == code.size())
+    fail("method can fall through its code boundary");
+  std::vector<uint32_t> Result{code[Index + 1].pc};
+  if (starts(Op.opcode, "if-"))
+    Result.push_back(target(Op));
+  else if (Op.opcode.find("switch") != std::string::npos)
+    Result.insert(Result.end(), Op.targets.begin(), Op.targets.end());
+  std::set<uint32_t> Seen;
+  std::erase_if(Result, [&](uint32_t P) { return !Seen.insert(P).second; });
+  return Result;
+}
+
+bool Body::compatible(std::string Kind, const std::string &Wanted) const {
+  if (starts(Kind, "self:"))
+    Kind = Kind.substr(5);
+  if (Kind == "?")
+    return false;
+  if (Wanted == "I")
+    return Strings{"I", "Z", "B", "S", "C", "bits32", "zero"}.contains(Kind);
+  if (Strings{"Z", "B", "S", "C"}.contains(Wanted))
+    return compatible(Kind, "I");
+  if (Wanted == "F")
+    return Kind == "F" || Kind == "bits32" || Kind == "zero";
+  if (Wanted == "J" || Wanted == "D")
+    return Kind == Wanted || Kind == "bits64";
+  if (isReference(Wanted)) {
+    if (Kind == "zero" || Kind == "null")
+      return true;
+    if (!isReference(Kind))
+      return false;
+    if (Wanted == "Ljava/lang/Object;" || Wanted == Kind)
+      return true;
+    Strings Seen;
+    for (;;) {
+      auto I = classes.find(Kind);
+      if (I == classes.end() || !Seen.insert(Kind).second)
+        break;
+      const auto &C = I->second;
+      if (std::find(C.interfaces.begin(), C.interfaces.end(), Wanted) !=
+          C.interfaces.end())
+        return true;
+      if (!C.superclass)
+        break;
+      Kind = *C.superclass;
+      if (Kind == Wanted)
+        return true;
+    }
+    return false;
+  }
+  return Kind == Wanted;
+}
+
+std::string Body::read(const State &S, unsigned Reg, const std::string &Type,
+                       bool Strict) const {
+  if (Reg >= S.size())
+    fail("instruction register is outside its frame");
+  const auto &Kinds = S[Reg];
+  if (Strict &&
+      (!std::all_of(Kinds.begin(), Kinds.end(),
+                    [&](const auto &K) { return compatible(K, Type); }) ||
+       (wordWidth(Type) == 2 &&
+        (Reg + 1 >= S.size() || S[Reg + 1] != Strings{"wide-high"}))))
+    fail("undefined or incompatible register v" + std::to_string(Reg) +
+         " for " + Type);
+  auto R = std::to_string(Reg);
+  if (isReference(Type))
+    return "((" + typeName(Type, classes) + ") o" + R + ")";
+  if (Type == "F")
+    return "((java.lang.Float) null).intBitsToFloat(v" + R + ")";
+  if (Type == "D")
+    return "((java.lang.Double) null).longBitsToDouble(w" + R + ")";
+  if (Type == "J")
+    return "w" + R;
+  if (Type == "Z")
+    return "(v" + R + " != 0)";
+  if (Type == "B" || Type == "S" || Type == "C")
+    return "((" + Primitives.at(Type) + ") v" + R + ")";
+  return "v" + R;
+}
+
+std::string Body::write(State &S, unsigned Reg, const std::string &Type,
+                        const std::string &Expression) const {
+  unsigned Size = wordWidth(Type) == 2 || Type == "bits64" ? 2 : 1;
+  if (Reg >= S.size() || Size > S.size() - Reg)
+    fail("wide result exceeds its register frame");
+  std::vector<unsigned> Pairs;
+  for (unsigned Low = Reg ? Reg - 1 : 0;
+       Low < std::min<size_t>(S.size() - 1, Reg + Size); ++Low)
+    if (std::any_of(S[Low].begin(), S[Low].end(),
+                    [](const auto &K) { return isWide(K); }))
+      Pairs.push_back(Low);
+  for (unsigned Low : Pairs)
+    S[Low] = S[Low + 1] = Strings{"?"};
+  if (Size == 2)
+    S[Reg + 1] = Strings{"wide-high"};
+  S[Reg] = Strings{Type};
+  auto R = std::to_string(Reg);
+  if (isReference(Type) || starts(Type, "new:") || Type == "null")
+    return "o" + R + " = " + Expression + ";";
+  if (Type == "F")
+    return "v" + R + " = ((java.lang.Float) null).floatToRawIntBits(" +
+           Expression + ");";
+  if (Type == "D")
+    return "w" + R + " = ((java.lang.Double) null).doubleToRawLongBits(" +
+           Expression + ");";
+  if (Type == "J" || Type == "bits64")
+    return "w" + R + " = " + Expression + ";";
+  if (Type == "Z")
+    return "v" + R + " = (" + Expression + ") ? 1 : 0;";
+  if (Type == "zero")
+    return "v" + R + " = 0; o" + R + " = null;";
+  return "v" + R + " = " + Expression + ";";
+}
+
+const Method *Body::validateInvocation(const Instruction &Op) {
+  const auto *Ref = std::get_if<MethodRef>(&Op.reference);
+  if (!Ref)
+    fail("invocation has no method identity");
+  std::string Style = baseOpcode(Op.opcode);
+  if (!Strings{"invoke-static", "invoke-virtual", "invoke-interface",
+               "invoke-direct", "invoke-super"}
+           .contains(Style))
+    fail("unsupported invocation dispatch");
+  if (Ref->name == "<init>" &&
+      (Style != "invoke-direct" || Ref->returns != "V"))
+    fail("constructor has invalid dispatch or return type");
+  const Method *Declaration = member(*Ref, classes, budget);
+  if (Declaration) {
+    bool Static = Declaration->access.contains("static");
+    if (Static != (Style == "invoke-static"))
+      fail("invocation dispatch disagrees with the declared static/instance "
+           "kind");
+    bool Private = Declaration->access.contains("private");
+    if (Style == "invoke-direct" && Ref->name != "<init>" && !Private)
+      fail("direct invocation requires a private method or constructor");
+    if (Private && Style != "invoke-direct" && Style != "invoke-static")
+      fail("virtual invocation cannot dispatch to a private method");
+    bool Interface = classes.at(Ref->owner).access.contains("interface");
+    if ((Style == "invoke-interface" || Style == "invoke-virtual") &&
+        Interface != (Style == "invoke-interface"))
+      fail("invocation dispatch disagrees with the declared class/interface "
+           "kind");
+  }
+  if (Style == "invoke-super" &&
+      (!ownerClass().superclass || Ref->owner != *ownerClass().superclass))
+    fail("super invocation cannot be proven to bind the immediate superclass");
+  return Declaration;
+}
+
+std::string Body::staticOwner(const std::string &Owner, bool Field) {
+  std::string Qualified = typeName(Owner, classes);
+  auto I = classes.find(Owner);
+  if (Field || (I != classes.end() && !I->second.access.contains("interface")))
+    return "((" + Qualified + ") null)";
+  std::string Root = Qualified.substr(0, Qualified.find('.'));
+  Strings Names{"pc",       "caught",   "failure",
+                "result32", "result64", "resultObject"};
+  for (size_t N = 0; N < method.reference.parameters.size(); ++N)
+    Names.insert("arg" + std::to_string(N));
+  for (unsigned N = 0; N < method.registers; ++N)
+    for (const auto *P : {"v", "w", "o"})
+      Names.insert(P + std::to_string(N));
+  std::string Current = method.reference.owner;
+  Strings Seen;
+  for (;;) {
+    auto C = classes.find(Current);
+    if (C == classes.end() || !Seen.insert(Current).second)
+      break;
+    budget.tick();
+    for (const auto &F : C->second.fields)
+      Names.insert(F.reference.name);
+    if (!C->second.superclass)
+      break;
+    Current = *C->second.superclass;
+  }
+  if (Names.contains(Root))
+    fail("static method type qualifier is shadowed without a proven class "
+         "binding");
+  return Qualified;
+}
+
+std::string Body::arrayType(const State &S, unsigned Reg, bool Strict) const {
+  Strings Kinds = S.at(Reg);
+  for (const auto *K : {"zero", "null", "?"})
+    Kinds.erase(K);
+  if (Kinds.size() == 1 && starts(*Kinds.begin(), "["))
+    return *Kinds.begin();
+  if (Strict)
+    fail("array operation lacks one proven element type");
+  return "[I";
+}
+
+std::pair<State, std::vector<std::string>>
+Body::operation(const Instruction &Op, const State &Incoming, bool Strict) {
+  budget.tick();
+  State S = Incoming;
+  Lines Out(budget);
+  const auto &Name = Op.opcode;
+  const auto &Regs = Op.registers;
+  const auto Base = baseOpcode(Name);
+  auto arity = [&](size_t N) {
+    if (Regs.size() != N)
+      fail("wrong register count for " + Name);
+  };
+  auto get = [&](unsigned R, const std::string &T) {
+    return read(Incoming, R, T, Strict);
+  };
+  auto put = [&](unsigned R, const std::string &T, const std::string &V) {
+    Out.append(write(S, R, T, V));
+  };
+  if (Name == "nop") {
+    arity(0);
+  } else if (Base == "move" || Base == "move-object" || Base == "move-wide") {
+    arity(2);
+    const auto &Kinds = Incoming[Regs[1]];
+    if (Base == "move-object") {
+      if (Strict && !std::all_of(Kinds.begin(), Kinds.end(), [](const auto &K) {
+            return isReference(K) || K == "zero" || K == "null" ||
+                   starts(K, "new:");
+          }))
+        fail("move-object reads an undefined or scalar carrier");
+      put(Regs[0], "Ljava/lang/Object;", "o" + std::to_string(Regs[1]));
+    } else if (Base == "move-wide") {
+      if (Strict && (!std::all_of(Kinds.begin(), Kinds.end(),
+                                  [](const auto &K) { return isWide(K); }) ||
+                     Regs[1] + 1 >= Incoming.size() ||
+                     Incoming[Regs[1] + 1] != Strings{"wide-high"}))
+        fail("move-wide reads an undefined or broken wide carrier");
+      put(Regs[0], "bits64", "w" + std::to_string(Regs[1]));
+    } else {
+      static const Strings Allowed{"I", "B", "C",      "S",
+                                   "Z", "F", "bits32", "zero"};
+      if (Strict &&
+          !std::all_of(Kinds.begin(), Kinds.end(),
+                       [&](const auto &K) { return Allowed.contains(K); }))
+        fail("move reads an undefined or incompatible carrier");
+      put(Regs[0], "bits32", "v" + std::to_string(Regs[1]));
+      if (Kinds.contains("zero"))
+        Out.append("o" + std::to_string(Regs[0]) + " = o" +
+                   std::to_string(Regs[1]) + ";");
+    }
+    S[Regs[0]] = Kinds;
+  } else if (starts(Name, "move-result")) {
+    arity(1);
+    const auto &T = pending_results.at(Op.pc);
+    put(Regs[0], T, resultRead(T));
+  } else if (Name == "move-exception") {
+    arity(1);
+    Strings Catches;
+    for (const auto &R : method.tries)
+      for (const auto &H : R.handlers)
+        if (H.target == Op.pc)
+          Catches.insert(H.type.value_or("Ljava/lang/Throwable;"));
+    if (Catches.empty())
+      fail("move-exception is outside a handler entry");
+    put(Regs[0], "Ljava/lang/Throwable;", "caught");
+    S[Regs[0]] = std::move(Catches);
+  } else if (starts(Name, "const-string")) {
+    arity(1);
+    const auto *V = std::get_if<std::string>(&Op.literal);
+    if (!V)
+      fail("const-string lacks its decoded string");
+    put(Regs[0], "Ljava/lang/String;", javaString(*V));
+  } else if (Name == "const-class") {
+    arity(1);
+    put(Regs[0], "Ljava/lang/Class;",
+        typeName(referenceType(Op), classes) + ".class");
+  } else if (starts(Name, "const")) {
+    arity(1);
+    const auto *V = std::get_if<int64_t>(&Op.literal);
+    if (!V)
+      fail("constant has no exact integer bits");
+    bool Wide = starts(Name, "const-wide");
+    put(Regs[0],
+        Wide      ? "bits64"
+        : *V == 0 ? "zero"
+                  : "bits32",
+        hexLiteral(static_cast<uint64_t>(*V), Wide ? 64 : 32));
+  } else if (starts(Base, "return")) {
+    const auto &T = method.reference.returns;
+    if (Name == "return-void") {
+      arity(0);
+      if (T != "V")
+        fail("void return disagrees with method signature");
+      Out.append(method.reference.name == "<clinit>" ? "break dispatch;"
+                                                     : "return;");
+    } else {
+      arity(1);
+      std::string Expected = isReference(T)      ? "return-object"
+                             : wordWidth(T) == 2 ? "return-wide"
+                                                 : "return";
+      if (T == "V" || Name != Expected)
+        fail("return carrier disagrees with method signature");
+      Out.append("return " + get(Regs[0], T) + ";");
+    }
+  } else if (Name == "array-length") {
+    arity(2);
+    std::string T = arrayType(Incoming, Regs[1], Strict);
+    put(Regs[0], "I", get(Regs[1], T) + ".length");
+  } else if (Name == "new-array") {
+    arity(2);
+    const auto &T = referenceType(Op);
+    if (!starts(T, "["))
+      fail("new-array has no array type");
+    size_t Dimensions = T.find_first_not_of('[');
+    if (Dimensions == std::string::npos)
+      fail("new-array has no element type");
+    std::string Expr = "new " + typeName(T.substr(Dimensions), classes) + "[" +
+                       get(Regs[1], "I") + "]";
+    for (size_t I = 1; I < Dimensions; ++I)
+      Expr += "[]";
+    put(Regs[0], T, Expr);
+  } else if (Name == "filled-new-array" || Name == "filled-new-array/range") {
+    const auto &T = referenceType(Op);
+    if (!starts(T, "[") || T.substr(1) == "J" || T.substr(1) == "D")
+      fail("filled-new-array requires single-word elements");
+    std::vector<std::string> Values;
+    for (unsigned R : Regs)
+      Values.push_back(get(R, T.substr(1)));
+    Out.append("resultObject = new " + typeName(T, classes) + " {" +
+               join(Values, ", ") + "};");
+  } else if (Name == "new-instance") {
+    arity(1);
+    const auto &T = referenceType(Op);
+    if (!starts(T, "L"))
+      fail("new-instance requires a class descriptor");
+    size_t Index = by_pc.at(Op.pc);
+    if (Index + 1 >= code.size())
+      fail("new-instance has no initializing invocation");
+    const auto &Next = code[Index + 1];
+    const auto *R = std::get_if<MethodRef>(&Next.reference);
+    if ((Next.opcode != "invoke-direct" &&
+         Next.opcode != "invoke-direct/range") ||
+        !R || R->name != "<init>" || Next.registers.empty() ||
+        Next.registers[0] != Regs[0] || R->owner != T ||
+        !sameHandlers(handlers(Op.pc), handlers(Next.pc)))
+      fail("allocation requires an adjacent initializer in the same exception "
+           "region");
+    write(S, Regs[0], "new:" + std::to_string(Op.pc) + ":" + T, "null");
+    constructors[Next.pc] = Op.pc;
+  } else if (Name == "fill-array-data") {
+    arity(1);
+    const auto T = arrayType(Incoming, Regs[0], Strict);
+    const auto Element = T.substr(1);
+    static const std::map<std::string, unsigned> Widths{
+        {"Z", 1}, {"B", 1}, {"C", 2}, {"S", 2},
+        {"I", 4}, {"F", 4}, {"J", 8}, {"D", 8}};
+    auto W = Widths.find(Element);
+    if (W == Widths.end() || Op.element_width != W->second)
+      fail("array payload element width disagrees with its array type");
+    const auto Address = get(Regs[0], T);
+    Out.append("if (" + Address + ".length < " +
+               std::to_string(Op.data.size()) +
+               ") throw new java.lang.ArrayIndexOutOfBoundsException();");
+    for (size_t I = 0; I < Op.data.size(); ++I) {
+      budget.tick();
+      uint64_t V = Op.data[I];
+      std::string Expr;
+      if (Element == "F")
+        Expr = "((java.lang.Float) null).intBitsToFloat(" + hexLiteral(V, 32) +
+               ")";
+      else if (Element == "D")
+        Expr = "((java.lang.Double) null).longBitsToDouble(" +
+               hexLiteral(V, 64) + ")";
+      else if (Element == "Z") {
+        if (V > 1)
+          fail("boolean array payload contains a non-boolean value");
+        Expr = V ? "true" : "false";
+      } else
+        Expr = "(" + Primitives.at(Element) + ") " +
+               hexLiteral(V, Element == "J" ? 64 : 32);
+      Out.append(Address + "[" + std::to_string(I) + "] = " + Expr + ";");
+    }
+  } else if (anyPrefix(Name, {"aget", "aput"})) {
+    arity(3);
+    const auto T = arrayType(Incoming, Regs[1], Strict);
+    const auto Element = T.substr(1);
+    std::string Suffix;
+    if (isReference(Element))
+      Suffix = "-object";
+    else if (Element == "J" || Element == "D")
+      Suffix = "-wide";
+    else if (Element == "Z")
+      Suffix = "-boolean";
+    else if (Element == "B")
+      Suffix = "-byte";
+    else if (Element == "C")
+      Suffix = "-char";
+    else if (Element == "S")
+      Suffix = "-short";
+    if (Strict && Name != Name.substr(0, 4) + Suffix)
+      fail("array opcode disagrees with its element width/type");
+    const auto Address = get(Regs[1], T) + "[" + get(Regs[2], "I") + "]";
+    if (starts(Name, "aget"))
+      put(Regs[0], Element, Address);
+    else
+      Out.append(Address + " = " + get(Regs[0], Element) + ";");
+  } else if (Name == "check-cast") {
+    arity(1);
+    get(Regs[0], "Ljava/lang/Object;");
+    const auto &T = referenceType(Op);
+    put(Regs[0], T,
+        "((" + typeName(T, classes) + ") o" + std::to_string(Regs[0]) + ")");
+  } else if (Name == "instance-of") {
+    arity(2);
+    put(Regs[0], "Z",
+        get(Regs[1], "Ljava/lang/Object;") + " instanceof " +
+            typeName(referenceType(Op), classes));
+  } else if (anyPrefix(Name, {"iget", "iput", "sget", "sput"})) {
+    const auto *R = std::get_if<FieldRef>(&Op.reference);
+    if (!R)
+      fail("field instruction has no field reference");
+    bool Static = starts(Name, "s");
+    arity(Static ? 1 : 2);
+    std::string Suffix;
+    if (isReference(R->type))
+      Suffix = "-object";
+    else if (wordWidth(R->type) == 2)
+      Suffix = "-wide";
+    else if (R->type == "Z")
+      Suffix = "-boolean";
+    else if (R->type == "B")
+      Suffix = "-byte";
+    else if (R->type == "C")
+      Suffix = "-char";
+    else if (R->type == "S")
+      Suffix = "-short";
+    if (Name.substr(4) != Suffix)
+      fail("field opcode disagrees with its type");
+    const auto *Declaration = member(*R, classes, budget);
+    if (Declaration && Static != Declaration->access.contains("static"))
+      fail("field opcode disagrees with the declared static/instance kind");
+    const auto Address =
+        (Static ? staticOwner(R->owner, true) : get(Regs[1], R->owner)) + "." +
+        javaIdentifier(R->name);
+    if (Name.substr(1, 3) == "get")
+      put(Regs[0], R->type, Address);
+    else {
+      if (Declaration && Declaration->access.contains("final"))
+        fail("final field assignment requires a structured initialization "
+             "proof");
+      Out.append(Address + " = " + get(Regs[0], R->type) + ";");
+    }
+  } else if (starts(Name, "invoke-")) {
+    const auto *R = std::get_if<MethodRef>(&Op.reference);
+    if (!R || (starts(R->name, "<") && R->name != "<init>"))
+      fail("unmodelled constructor or dynamic invocation");
+    validateInvocation(Op);
+    bool Static = starts(Name, "invoke-static");
+    size_t Cursor = Static ? 0 : 1;
+    if (!Static && Regs.empty())
+      fail("instance invocation lacks its receiver");
+    std::vector<std::string> Args;
+    for (const auto &T : R->parameters) {
+      if (Cursor >= Regs.size())
+        fail("invocation has too few argument words");
+      Args.push_back(get(Regs[Cursor], T));
+      if (wordWidth(T) == 2 &&
+          (Cursor + 1 >= Regs.size() || Regs[Cursor + 1] != Regs[Cursor] + 1))
+        fail("invocation has a broken wide argument");
+      Cursor += wordWidth(T);
+    }
+    if (Cursor != Regs.size())
+      fail("invocation has too many argument words");
+    if (R->name == "<init>") {
+      auto N = constructors.find(Op.pc);
+      if (N == constructors.end())
+        fail("initializer is not bound to its uninitialized allocation");
+      std::string Expected =
+          "new:" + std::to_string(N->second) + ":" + R->owner;
+      if (Incoming[Regs[0]] != Strings{Expected} || R->returns != "V")
+        fail("initializer is not bound to its uninitialized allocation");
+      put(Regs[0], R->owner,
+          "new " + typeName(R->owner, classes) + "(" + join(Args, ", ") + ")");
+      return {std::move(S), Out.get()};
+    }
+    std::string Owner;
+    if (starts(Name, "invoke-super")) {
+      if (method.access.contains("static") ||
+          Incoming[Regs[0]] != Strings{"self:" + method.reference.owner})
+        fail("super invocation lacks its actual receiver");
+      Owner = "super";
+    } else
+      Owner = Static ? staticOwner(R->owner) : get(Regs[0], R->owner);
+    std::string Call =
+        Owner + "." + javaIdentifier(R->name) + "(" + join(Args, ", ") + ")";
+    Out.append(R->returns == "V" ? Call + ";" : resultWrite(R->returns, Call));
+  } else if (anyPrefix(Name, {"goto", "if-"}) ||
+             Name.find("switch") != std::string::npos) {
+    if (starts(Name, "if-"))
+      condition(Op, Incoming, Strict);
+    else if (Name.find("switch") != std::string::npos) {
+      arity(1);
+      get(Regs[0], "I");
+    }
+  } else if (Name == "throw") {
+    arity(1);
+    std::string Value = get(Regs[0], "Ljava/lang/Object;");
+    Out.append("throw " + throwHelper() + "((java.lang.Throwable) " + Value +
+               ");");
+  } else {
+    static const std::regex Unary("(neg|not)-(int|long|float|double)");
+    static const std::regex Conversion(
+        "(int|long|float|double)-to-(int|long|float|double|byte|char|short)");
+    static const std::regex Arithmetic(
+        "(add|sub|rsub|mul|div|rem|and|or|xor|shl|shr|ushr)-(int|long|float|"
+        "double)(/2addr|/lit8|/lit16)?");
+    std::smatch Match;
+    if (std::regex_match(Name, Match, Unary)) {
+      arity(2);
+      std::string Type = ArithmeticTypes.at(Match[2].str());
+      bool Not = Match[1] == "not";
+      if (Not && Type != "I" && Type != "J")
+        fail("invalid floating bitwise negation");
+      put(Regs[0], Type,
+          std::string(Not ? "~" : "-") + "(" + get(Regs[1], Type) + ")");
+    } else if (std::regex_match(Name, Match, Conversion)) {
+      arity(2);
+      const auto &Source = ArithmeticTypes.at(Match[1].str());
+      const auto &Dest = ArithmeticTypes.at(Match[2].str());
+      put(Regs[0], Dest,
+          "((" + Primitives.at(Dest) + ") (" + get(Regs[1], Source) + "))");
+    } else if (anyPrefix(Name, {"cmp-long", "cmpl-", "cmpg-"})) {
+      arity(3);
+      std::string Type = Name == "cmp-long"        ? "J"
+                         : Name.ends_with("float") ? "F"
+                                                   : "D";
+      auto A = get(Regs[1], Type), B = get(Regs[2], Type);
+      auto Expr = "((" + A + ") > (" + B + ") ? 1 : (" + A + ") == (" + B +
+                  ") ? 0 : -1)";
+      if (starts(Name, "cmpg"))
+        Expr = "((" + A + ") < (" + B + ") ? -1 : (" + A + ") == (" + B +
+               ") ? 0 : 1)";
+      put(Regs[0], "I", Expr);
+    } else {
+      if (!std::regex_match(Name, Match, Arithmetic))
+        fail("unsupported instruction: " + Name);
+      std::string Operator = Match[1].str(),
+                  Type = ArithmeticTypes.at(Match[2].str()),
+                  Form = Match[3].str();
+      if (Operator == "rsub" && Form.empty() &&
+          !std::holds_alternative<std::monostate>(Op.literal))
+        Form = "/lit16";
+      if (Strings{"and", "or", "xor", "shl", "shr", "ushr", "rsub"}.contains(
+              Operator) &&
+          Type != "I" && Type != "J")
+        fail("invalid arithmetic carrier");
+      arity(Form.empty() ? 3 : 2);
+      std::string Left = get(Form == "/2addr" ? Regs[0] : Regs[1], Type), Right;
+      if (Form == "/lit8" || Form == "/lit16") {
+        const auto *V = std::get_if<int64_t>(&Op.literal);
+        if (Type != "I" || !V)
+          fail("literal operation has no signed integer literal");
+        Right = hexLiteral(static_cast<uint64_t>(*V), 32);
+      } else {
+        std::string RightType =
+            Operator == "shl" || Operator == "shr" || Operator == "ushr" ? "I"
+                                                                         : Type;
+        Right = get(Form == "/2addr" ? Regs[1] : Regs[2], RightType);
+      }
+      if (Operator == "rsub")
+        std::swap(Left, Right);
+      static const std::map<std::string, std::string> Symbols = {
+          {"add", "+"}, {"sub", "-"},  {"rsub", "-"}, {"mul", "*"},
+          {"div", "/"}, {"rem", "%"},  {"and", "&"},  {"or", "|"},
+          {"xor", "^"}, {"shl", "<<"}, {"shr", ">>"}, {"ushr", ">>>"}};
+      put(Regs[0], Type,
+          "((" + Left + ") " + Symbols.at(Operator) + " (" + Right + "))");
+    }
+  }
+  return {std::move(S), Out.get()};
+}
+
+std::string Body::condition(const Instruction &Op, const State &S,
+                            bool Strict) const {
+  bool Zero = Op.opcode.ends_with('z');
+  const auto &Regs = Op.registers;
+  if (Regs.size() != (Zero ? 1 : 2))
+    fail("conditional branch register count disagrees");
+  std::string Relation =
+      Op.opcode.substr(3, Op.opcode.size() - 3 - (Zero ? 1 : 0));
+  static const std::map<std::string, std::string> Symbols{
+      {"eq", "=="}, {"ne", "!="}, {"lt", "<"},
+      {"ge", ">="}, {"gt", ">"},  {"le", "<="}};
+  auto Symbol = Symbols.find(Relation);
+  if (Symbol == Symbols.end())
+    fail("unsupported conditional relation");
+  Strings Kinds = S.at(Regs[0]);
+  if (!Zero)
+    Kinds.insert(S.at(Regs[1]).begin(), S.at(Regs[1]).end());
+  bool Reference = std::any_of(Kinds.begin(), Kinds.end(), [](const auto &K) {
+    return isReference(K) || K == "null";
+  });
+  std::string Left, Right;
+  if (Reference) {
+    if (Relation != "eq" && Relation != "ne")
+      fail("ordered comparison of object references");
+    Left = read(S, Regs[0], "Ljava/lang/Object;", Strict);
+    Right = Zero ? "null" : read(S, Regs[1], "Ljava/lang/Object;", Strict);
+  } else {
+    Left = read(S, Regs[0], "I", Strict);
+    Right = Zero ? "0" : read(S, Regs[1], "I", Strict);
+  }
+  return Left + " " + Symbol->second + " " + Right;
+}
+
+State Body::initial() const {
+  State S(method.registers, Strings{"?"});
+  unsigned Reg = method.registers - method.incomingWords();
+  if (!method.access.contains("static"))
+    S.at(Reg++) = Strings{"self:" + method.reference.owner};
+  for (const auto &T : method.reference.parameters) {
+    S.at(Reg) = Strings{T};
+    if (wordWidth(T) == 2)
+      S.at(Reg + 1) = Strings{"wide-high"};
+    Reg += wordWidth(T);
+  }
+  return S;
+}
+
+void Body::verify() {
+  uint32_t Start = code[first].pc;
+  states[Start] = initial();
+  std::deque<uint32_t> Queue{Start};
+  std::set<uint32_t> Queued{Start};
+  std::map<uint32_t, std::set<uint32_t>> NormalPredecessors;
+  while (!Queue.empty()) {
+    budget.tick(method.registers + 1);
+    uint32_t PC = Queue.front();
+    Queue.pop_front();
+    Queued.erase(PC);
+    size_t Index = by_pc.at(PC);
+    State Incoming = states.at(PC);
+    State Outgoing = operation(code[Index], Incoming, false).first;
+    auto edge = [&](uint32_t Target, const State &S, bool Normal) {
+      if (first && Target == code[0].pc)
+        fail("control flow re-enters its constructor prefix");
+      if (Normal)
+        NormalPredecessors[Target].insert(PC);
+      auto Old = states.find(Target);
+      State Merged = S;
+      if (Old != states.end()) {
+        for (size_t I = 0; I < Merged.size(); ++I)
+          Merged[I].insert(Old->second[I].begin(), Old->second[I].end());
+        if (Merged == Old->second)
+          return;
+      }
+      states[Target] = std::move(Merged);
+      if (Queued.insert(Target).second)
+        Queue.push_back(Target);
+    };
+    for (auto T : successors(Index))
+      edge(T, Outgoing, true);
+    if (anyPrefix(code[Index].opcode, {"invoke-",
+                                       "new-",
+                                       "filled-",
+                                       "aget",
+                                       "aput",
+                                       "iget",
+                                       "iput",
+                                       "sget",
+                                       "sput",
+                                       "array-length",
+                                       "fill-array-data",
+                                       "check-cast",
+                                       "throw",
+                                       "div-int",
+                                       "rem-int",
+                                       "div-long",
+                                       "rem-long",
+                                       "monitor-",
+                                       "const-string",
+                                       "const-class"}))
+      for (const auto &H : handlers(PC))
+        edge(H.target, Incoming, false);
+  }
+  for (const auto &[PC, S] : states) {
+    size_t Index = by_pc.at(PC);
+    const auto &Op = code[Index];
+    const auto &Predecessors = NormalPredecessors[PC];
+    if (Op.opcode == "move-exception" && (PC == Start || !Predecessors.empty()))
+      fail("normal flow enters an exception-only value");
+    if (starts(Op.opcode, "move-result") &&
+        Predecessors != std::set<uint32_t>{code[Index - 1].pc})
+      fail("branch bypasses an invocation result producer");
+    if (auto I = constructors.find(PC);
+        I != constructors.end() &&
+        Predecessors != std::set<uint32_t>{I->second})
+      fail("branch bypasses an uninitialized allocation");
+    operation(Op, S, true);
+  }
+  for (size_t I = first; I < code.size(); ++I)
+    if (!states.contains(code[I].pc) && code[I].opcode != "nop")
+      fail("unreachable instructions have no verified source projection");
+}
+
+std::string Body::resultRead(const std::string &Type) {
+  if (isReference(Type))
+    return "resultObject";
+  if (Type == "F")
+    return "((java.lang.Float) null).intBitsToFloat(result32)";
+  if (Type == "D")
+    return "((java.lang.Double) null).longBitsToDouble(result64)";
+  if (Type == "J")
+    return "result64";
+  if (Type == "Z")
+    return "(result32 != 0)";
+  return "result32";
+}
+std::string Body::resultWrite(const std::string &Type,
+                              const std::string &Value) {
+  if (isReference(Type))
+    return "resultObject = " + Value + ";";
+  if (Type == "F")
+    return "result32 = ((java.lang.Float) null).floatToRawIntBits(" + Value +
+           ");";
+  if (Type == "D")
+    return "result64 = ((java.lang.Double) null).doubleToRawLongBits(" + Value +
+           ");";
+  return std::string(Type == "J" ? "result64" : "result32") + " = " +
+         (Type == "Z" ? "(" + Value + ") ? 1 : 0" : Value) + ";";
+}
+
+std::string Body::emit() {
+  verify();
+  Lines Out(budget, true);
+  if (!prefix.empty())
+    Out.append(prefix);
+  for (unsigned Reg = 0; Reg < method.registers; ++Reg) {
+    std::string R = std::to_string(Reg);
+    Out.extend({"int v" + R + " = 0;", "long w" + R + " = 0L;",
+                "java.lang.Object o" + R + " = null;"});
+  }
+  unsigned Reg = method.registers - method.incomingWords();
+  State Initial = initial();
+  if (!method.access.contains("static"))
+    Out.append("o" + std::to_string(Reg++) + " = this;");
+  for (size_t I = 0; I < method.reference.parameters.size(); ++I) {
+    const auto &T = method.reference.parameters[I];
+    Out.append(write(Initial, Reg, T, "arg" + std::to_string(I)));
+    Reg += wordWidth(T);
+  }
+  Out.extend({"int result32 = 0;", "long result64 = 0L;",
+              "java.lang.Object resultObject = null;",
+              "java.lang.Throwable caught = null;",
+              "int pc = " + std::to_string(code[first].pc) + ";",
+              "dispatch: while (true) {", "  try {", "    switch (pc) {"});
+  for (size_t Index = first; Index < code.size(); ++Index) {
+    const auto &Op = code[Index];
+    auto S = states.find(Op.pc);
+    if (S == states.end())
+      continue;
+    auto Statements = operation(Op, S->second, true).second;
+    Out.append("      case " + std::to_string(Op.pc) + ": {");
+    for (const auto &Statement : Statements)
+      Out.append("        " + Statement);
+    if (starts(Op.opcode, "if-")) {
+      auto Condition = condition(Op, S->second, true);
+      Out.append("        pc = (" + Condition + ") ? " +
+                 std::to_string(target(Op)) + " : " +
+                 std::to_string(code.at(Index + 1).pc) + ";");
+    } else if (Op.opcode.find("switch") != std::string::npos) {
+      Out.append("        switch (v" + std::to_string(Op.registers[0]) + ") {");
+      for (size_t I = 0; I < Op.keys.size(); ++I)
+        Out.append("          case " +
+                   hexLiteral(static_cast<uint64_t>(Op.keys[I]), 32) +
+                   ": pc = " + std::to_string(Op.targets[I]) + "; break;");
+      Out.extend({"          default: pc = " +
+                      std::to_string(code.at(Index + 1).pc) + ";",
+                  "        }"});
+    } else if (starts(Op.opcode, "goto"))
+      Out.append("        pc = " + std::to_string(target(Op)) + ";");
+    else if (!anyPrefix(Op.opcode, {"return", "throw"}))
+      Out.append("        pc = " + std::to_string(code.at(Index + 1).pc) + ";");
+    if (!anyPrefix(Op.opcode, {"return", "throw"}))
+      Out.append("        continue dispatch;");
+    Out.append("      }");
+  }
+  Out.extend({"      default: throw new java.lang.AssertionError(\"Invalid "
+              "recovered control flow\");",
+              "    }", "  } catch (java.lang.Throwable failure) {"});
+  for (const auto &R : method.tries) {
+    Out.append("    if (pc >= " + std::to_string(R.start) + " && pc < " +
+               std::to_string(R.end) + ") {");
+    for (const auto &H : R.handlers) {
+      auto Test =
+          H.type ? "failure instanceof " + typeName(*H.type, classes) : "true";
+      Out.append("      if (" + Test + ") { caught = failure; pc = " +
+                 std::to_string(H.target) + "; continue dispatch; }");
+    }
+    Out.append("    }");
+  }
+  Out.extend({"    throw " + throwHelper() + "(failure);", "  }", "}"});
+  return Out.text();
+}
+
+std::optional<std::string> fieldValue(const FieldValue &Value,
+                                      const std::string &Type) {
+  if (std::holds_alternative<std::monostate>(Value))
+    return std::nullopt;
+  if (const auto *Bits = std::get_if<FloatBits>(&Value)) {
+    if (!Bits->wide && Type == "F")
+      return "((java.lang.Float) null).intBitsToFloat(" +
+             hexLiteral(Bits->bits, 32) + ")";
+    if (Bits->wide && Type == "D")
+      return "((java.lang.Double) null).longBitsToDouble(" +
+             hexLiteral(Bits->bits, 64) + ")";
+    javaError("unsupported encoded static field value");
+  }
+  if (const auto *Text = std::get_if<std::string>(&Value);
+      Text && Type == "Ljava/lang/String;")
+    return javaString(*Text);
+  if (Type == "Z") {
+    if (const auto *V = std::get_if<bool>(&Value))
+      return *V ? "true" : "false";
+    if (const auto *V = std::get_if<int64_t>(&Value))
+      return *V ? "true" : "false";
+  }
+  if (const auto *V = std::get_if<int64_t>(&Value);
+      V && Strings{"B", "C", "S", "I", "J"}.contains(Type)) {
+    auto Text = hexLiteral(static_cast<uint64_t>(*V), Type == "J" ? 64 : 32);
+    return Type == "B" || Type == "C" || Type == "S"
+               ? "(" + Primitives.at(Type) + ") " + Text
+               : Text;
+  }
+  javaError("static field value disagrees with its declared type");
+}
+
+std::vector<std::string> modifiers(const Access &Flags,
+                                   std::initializer_list<const char *> Order) {
+  std::vector<std::string> Result;
+  for (const auto *Flag : Order)
+    if (Flags.contains(Flag))
+      Result.emplace_back(Flag);
+  return Result;
+}
+
+} // namespace
+
+llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
+  llvm::json::Array Units, Methods;
+  uint64_t Recovered = 0, Declared = 0;
+  std::map<std::string, std::vector<const Class *>> Enclosing;
+  for (const auto &[Name, C] : Classes) {
+    B.tick();
+    if (C.enclosing) {
+      if (*C.enclosing == Name || !Classes.contains(*C.enclosing) ||
+          !C.inner_name || C.inner_name->empty())
+        javaError("unresolved or recursive nested class");
+      Enclosing[*C.enclosing].push_back(&C);
+    }
+  }
+  for (const auto &[Name, C] : Classes) {
+    std::optional<std::string> Current = Name;
+    Strings Seen;
+    while (Current) {
+      B.tick();
+      if (!Seen.insert(*Current).second)
+        javaError("recursive nested-class ownership");
+      if (Seen.size() > 128)
+        javaError("nested-class ownership exceeds the source depth limit");
+      Current = Classes.at(*Current).enclosing;
+    }
+  }
+  Strings Emitting;
+  std::function<std::string(const Class &, bool)> emitClass;
+  emitClass = [&](const Class &C, bool Nested) -> std::string {
+    B.tick();
+    if (!Emitting.insert(C.name).second)
+      javaError("recursive nested-class ownership");
+    if (C.access.contains("annotation") || C.access.contains("enum"))
+      javaError("unsupported Java declaration shape: " + C.name);
+    const auto &Flags = Nested ? C.inner_access : C.access;
+    if (Nested && !Flags.contains("static"))
+      javaError("non-static inner class requires an outer-instance "
+                "initialization proof");
+    auto Slash = C.name.rfind('/');
+    std::string Name = javaIdentifier(
+        Nested ? *C.inner_name
+               : C.name.substr(
+                     Slash == std::string::npos ? 1 : Slash + 1,
+                     C.name.size() -
+                         (Slash == std::string::npos ? 1 : Slash + 1) - 1));
+    if (Name == "java")
+      javaError("class name shadows the required Java runtime package");
+    auto Mods = modifiers(Flags, {"public", "protected", "private", "static",
+                                  "abstract", "final", "strictfp"});
+    if (!Nested)
+      std::erase(Mods, "static");
+    std::string Kind = C.access.contains("interface") ? "interface" : "class";
+    Mods.push_back(Kind);
+    Mods.push_back(Name);
+    std::string Header = join(Mods, " ");
+    if (Kind == "class" && C.superclass &&
+        *C.superclass != "Ljava/lang/Object;")
+      Header += " extends " + typeName(*C.superclass, Classes);
+    if (!C.interfaces.empty()) {
+      std::vector<std::string> Interfaces;
+      for (const auto &T : C.interfaces)
+        Interfaces.push_back(typeName(T, Classes));
+      Header += (Kind == "interface" ? " extends " : " implements ") +
+                join(Interfaces, ", ");
+    }
+    Lines BodyLines(B, true);
+    BodyLines.append(Header + " {");
+    Strings MemberNames, ConstantTypes;
+    for (const auto &F : C.fields) {
+      B.tick();
+      if (!MemberNames.insert(F.reference.name).second)
+        javaError("Java cannot represent field names overloaded only by type");
+      auto FieldMods =
+          modifiers(F.access, {"public", "protected", "private", "static",
+                               "final", "volatile", "transient"});
+      auto Value = fieldValue(F.value, F.reference.type);
+      if (F.access.contains("final") && !Value)
+        javaError("final field needs a verified initialization expression");
+      if (Value && F.access.contains("static") && F.access.contains("final")) {
+        ConstantTypes.insert(F.reference.type);
+        *Value = helperName(C, "__neverdConstant") + "(" + *Value + ")";
+      }
+      FieldMods.push_back(typeName(F.reference.type, Classes));
+      FieldMods.push_back(javaIdentifier(F.reference.name));
+      BodyLines.append("  " + join(FieldMods, " ") +
+                       (Value ? " = " + *Value : "") + ";");
+    }
+    std::set<std::pair<std::string, std::vector<std::string>>> JavaSignatures;
+    for (const auto &M : C.methods) {
+      B.tick();
+      const auto &R = M.reference;
+      if (!JavaSignatures.emplace(R.name, R.parameters).second)
+        javaError(
+            "Java cannot represent methods overloaded only by return type");
+      llvm::json::Object Row{
+          {"identity", R.identity()},
+          {"class", C.name},
+          {"name", R.name},
+          {"prototype", R.signature()},
+          {"input", C.source_id},
+          {"instruction_count", static_cast<int64_t>(M.instructions.size())}};
+      auto MethodMods = modifiers(M.access, {"public", "protected", "private",
+                                             "static", "final", "synchronized",
+                                             "native", "abstract", "strictfp"});
+      std::vector<std::string> Params;
+      for (size_t I = 0; I < R.parameters.size(); ++I)
+        Params.push_back(typeName(R.parameters[I], Classes) + " arg" +
+                         std::to_string(I));
+      std::string Declaration;
+      if (R.name == "<clinit>") {
+        if (!R.parameters.empty() || R.returns != "V" ||
+            !M.access.contains("static"))
+          javaError("invalid class initializer signature");
+        Declaration = "static";
+      } else if (R.name == "<init>") {
+        if (R.returns != "V" || M.access.contains("static"))
+          javaError("invalid instance initializer signature");
+        MethodMods.push_back(Name);
+        Declaration = join(MethodMods, " ") + "(" + join(Params, ", ") + ")";
+        if (constructorThrows(M, Classes, B))
+          Declaration += " throws java.lang.Throwable";
+      } else {
+        MethodMods.push_back(typeName(R.returns, Classes));
+        MethodMods.push_back(javaIdentifier(R.name));
+        Declaration = join(MethodMods, " ") + "(" + join(Params, ", ") + ")";
+      }
+      if (M.access.contains("abstract") || M.access.contains("native")) {
+        BodyLines.append("  " + Declaration + ";");
+        Row["status"] = "declaration-only";
+        Row["reason"] =
+            "original abstract/native declaration has no Dalvik body";
+        ++Declared;
+      } else {
+        if (Kind == "interface")
+          javaError("interface method body requires a compatible Java "
+                    "default/static declaration");
+        Body Emitter(M, Classes, B);
+        std::string Source = Emitter.emit();
+        auto SourceLines = split(Source, '\n');
+        for (auto &Line : SourceLines)
+          Line = "    " + Line;
+        BodyLines.append("  " + Declaration + " {\n" + join(SourceLines, "\n") +
+                         "\n  }");
+        Row["status"] = "recovered";
+        ++Recovered;
+      }
+      Methods.push_back(std::move(Row));
+    }
+    if (Kind == "class") {
+      bool HasConstructor =
+          std::any_of(C.methods.begin(), C.methods.end(), [](const auto &M) {
+            return M.reference.name == "<init>";
+          });
+      if (!HasConstructor)
+        BodyLines.append("  private " + Name + "() {}");
+      std::string Helper = helperName(C, "__neverdThrow");
+      BodyLines.extend({"  @java.lang.SuppressWarnings(\"unchecked\")",
+                        "  private static <E extends java.lang.Throwable> "
+                        "java.lang.RuntimeException " +
+                            Helper + "(java.lang.Throwable failure) throws E {",
+                        "    if (failure == null) throw new "
+                        "java.lang.NullPointerException();",
+                        "    throw (E) failure;", "  }"});
+    }
+    for (const auto &T : ConstantTypes) {
+      auto NameType = typeName(T, Classes);
+      BodyLines.append("  private static " + NameType + " " +
+                       helperName(C, "__neverdConstant") + "(" + NameType +
+                       " value) { return value; }");
+    }
+    if (auto I = Enclosing.find(C.name); I != Enclosing.end()) {
+      auto Children = I->second;
+      std::sort(Children.begin(), Children.end(),
+                [](const auto *A, const auto *B) { return A->name < B->name; });
+      for (const auto *Child : Children)
+        for (const auto &Line : split(emitClass(*Child, true), '\n'))
+          BodyLines.append("  " + Line);
+    }
+    BodyLines.append("}");
+    Emitting.erase(C.name);
+    return BodyLines.text();
+  };
+  uint64_t MethodCount = 0;
+  for (const auto &[Name, C] : Classes) {
+    MethodCount += C.methods.size();
+    if (C.enclosing)
+      continue;
+    std::string Path = C.name.substr(1, C.name.size() - 2);
+    size_t Slash = Path.rfind('/');
+    std::string Prefix;
+    if (Slash != std::string::npos) {
+      auto Package = split(std::string_view(Path).substr(0, Slash), '/');
+      for (auto &Part : Package)
+        Part = javaIdentifier(Part);
+      Prefix = "package " + join(Package, ".") + ";\n\n";
+    }
+    std::string Source = Prefix + emitClass(C, false) + "\n";
+    Units.push_back(llvm::json::Object{{"path", Path + ".java"},
+                                       {"class", C.name},
+                                       {"source", std::move(Source)}});
+  }
+  if (Methods.size() != MethodCount)
+    javaError("Android class ownership omitted declared methods");
+  if (Units.empty())
+    javaError("Android input contains no source classes");
+  return llvm::json::Object{
+      {"schema_version", 1},
+      {"status", "recovered"},
+      {"class_count", static_cast<int64_t>(Classes.size())},
+      {"method_count", static_cast<int64_t>(Methods.size())},
+      {"recovered_method_count", static_cast<int64_t>(Recovered)},
+      {"declaration_only_method_count", static_cast<int64_t>(Declared)},
+      {"unrecovered_method_count", 0},
+      {"methods", std::move(Methods)},
+      {"source_units", std::move(Units)}};
+}
+} // namespace neverd::mobile::dalvik

@@ -6,9 +6,11 @@
 
 ## Setup
 
-Build the `neverd` target normally. Keep the generated `mobile/` directory beside the executable when moving or distributing the build. Python 3.10 or newer must be on PATH; select another interpreter with `--python PATH` or `NEVERD_PYTHON`.
+Build the `neverd` target with C++20 support. The mobile workflow is compiled into the native CLI and does not use a Python interpreter. Distribute the executable with the native libraries required by your build.
 
-Android defaults to NeverD’s built-in engine, which uses the Python standard library and needs no Java or JADX runtime. Only an explicit `--jadx PATH` selects the separately installed compatibility adapter; `NEVERD_JADX` and PATH do not select it automatically, and there is no automatic fallback. The optional adapter requires JADX 1.5.6+ with standard DEX/smali input plugins and Java 11+. Its report names the actual `jadx` engine and version. Installation and dependency licenses remain documented in the [Android guide](android.md#optional-jadx-compatibility-adapter).
+Native ZIP handling uses zlib for CRC-32 and DEFLATE. CMake prefers an installed library via `find_package`; otherwise it downloads zlib 1.3.2 with a pinned SHA256 and builds it statically. This mobile ZIP implementation needs no Python helper tools on Windows. Preserve the dependency notices in [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
+
+The default engine is implemented in C++20 and needs no Python, Java, or JADX runtime. Only an explicit `--jadx PATH` selects the separately installed compatibility adapter; `NEVERD_JADX` and PATH do not select it automatically, and there is no automatic fallback. The optional adapter requires JADX 1.5.6+ with standard DEX/smali input plugins and Java 11+. Its report names the actual `jadx` engine and version. Installation and dependency licenses remain documented in the [Android guide](android.md#optional-jadx-compatibility-adapter).
 
 ## Android
 
@@ -42,23 +44,25 @@ Swift recovery classifies demangled signatures, binds them to native entries and
 
 Normal output includes `sources/native.c`, optional `sources/objc.m` and `sources/swift.swift`, declarations and runtime metadata, method/signature coverage JSON, logs, `artifacts/selected.macho`, and `report.json`. Generated source does not call the original binary as a recovery bridge. Swift `source_units` groups type declarations and methods; standalone method rows must not be concatenated to rebuild classes. Outer `status: "success"` means output publication, not complete method coverage or semantic equivalence.
 
-`--metadata-only` invokes no backend/demangler and emits no source or method coverage. Its Python Objective-C reader does not resolve chained or relocatable-object pointers; full recovery uses native resolved metadata. Swift raw metadata may retain unsupported references as partial. `--max-func` limits native function recovery and is ignored in metadata-only mode. Missing native function bodies fail a normal run. Temporary unpacked inputs are removed.
+`--metadata-only` invokes no backend/demangler and emits no source or method coverage. All modes use the native loader’s resolved Objective-C metadata. Swift metadata uses bounded native-image reads; unsupported fixups, relocatable layouts, or references retain partial diagnostics. `--max-func` limits native function recovery and is ignored in metadata-only mode. Missing native function bodies fail a normal run. Temporary unpacked inputs are removed.
 
 Original comments, formatting, removed identifiers, and compilation-lost source structures cannot be reconstructed exactly. Read each method's recovery status and reason, the separate Swift callable/non-callable/unclassified counts, and the documented limitations before using the output.
 
 ## Limits and failures
 
-`-o` must name a new directory outside any directory input. Existing output is never overwritten. Work is staged and published only after successful recovery and output validation. `--json` prints a versioned report for automation; handled recovery failures return nonzero and a JSON error. Startup failures, missing helpers/interpreters, Python older than 3.10, argument parsing errors and interruptions can instead report plain text on stderr.
+`-o` must name a new directory outside any directory input. Existing output is never overwritten. Work is staged and published only after successful recovery and output validation. Successful native CLI runs return zero. Recovery failures return nonzero; `--json` reports handled failures with `schema_version`, `status: "error"`, and `error`. Argument parsing, native executable or library startup failures, and interruptions can instead report on stderr. Consumers must inspect the exit status first.
 
-The defaults are 20,000 entries, 2 GiB of input/extracted or final output data, and 300 seconds for the built-in Android analysis budget or each external backend process. The built-in reader and emitter also enforce a bounded work budget. Set `--max-files`, `--max-bytes`, and `--timeout` to adjust these positive limits. The temporary work area is monitored while backends run, with up to three times the entry/byte limits to allow staged input and intermediate output to coexist. Diagnostics are capped at 16 MiB per process. Archives with traversal paths, links, special files, case collisions, or encrypted ZIP entries are rejected. Directory inputs also reject symbolic links and special files.
+The defaults are 20,000 entries, 2 GiB of input/extracted or final output data, and 300 seconds for built-in Android/iOS analysis or each explicit JADX process. iOS child processes receive the remaining total analysis budget. The built-in reader and emitter also enforce a bounded work budget. Set `--max-files`, `--max-bytes`, and `--timeout` to adjust these positive limits. The temporary work area is monitored while backends run, with up to three times the entry/byte limits to allow staged input and intermediate output to coexist. Diagnostics are capped at 16 MiB per process. Archives with traversal paths, links, special files, case collisions, or encrypted ZIP entries are rejected. Directory inputs also reject symbolic links and special files.
 
 These limits are robustness controls, not a sandbox for third-party backend code. Backend dependencies run as local processes. Failed staging output is removed. A backend's nonzero exit includes the bounded diagnostic tail; launch failures, timeouts and budget violations have their own error messages.
 
 ## Validation
 
+Python is used only by the development test harnesses below; built-in mobile recovery runs in the native C++20 CLI.
+
 ```sh
 cmake --build build --target check-neverd-mobile
-python3 -m unittest discover -s scripts/tests -p 'test_mobile_*.py' -v
+ctest --test-dir build -L NeverDMobileTests --output-on-failure
 python3 scripts/test_mobile_android_internal.py --d8 PATH --neverd build/bin/neverd
 python3 scripts/test_mobile_android_backend.py --jadx /opt/jadx/bin/jadx --neverd build/bin/neverd
 ```

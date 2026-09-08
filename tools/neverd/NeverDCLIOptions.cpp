@@ -58,10 +58,6 @@ cl::opt<std::string>
     MobileArtifact("artifact",
                    cl::desc("iOS executable path relative to the app bundle"),
                    cl::init(""), cl::sub(MobileCmd));
-cl::opt<std::string>
-    MobilePython("python",
-                 cl::desc("Python 3.10+ executable (or NEVERD_PYTHON)"),
-                 cl::init(""), cl::sub(MobileCmd));
 cl::opt<bool> MobileMetadataOnly(
     "metadata-only",
     cl::desc("Export iOS metadata without native C decompilation"),

@@ -25,30 +25,27 @@ neverd mobile decoded/smali -o recovered-java
 
 | 组件 | 要求 | 选择顺序 |
 |------|------|----------|
-| NeverD | 构建 `neverd` 目标，分发时保留可执行文件旁的 `mobile/` 目录 | `build/bin/neverd` 或 PATH 中的可执行文件 |
-| Python | Python 3.10 或更高版本，独立于嵌入式插件宿主 | `--python`、`NEVERD_PYTHON`、PATH 中的 `python3`/`python` |
+| NeverD | 使用支持 C++20 的工具链构建 `neverd` 目标。移动端工作流已编译进原生 CLI，不调用 Python 解释器。分发时携带当前构建所需的原生依赖库。| `build/bin/neverd` / PATH |
 
-默认引擎仅使用 Python 标准库，运行时不需要 Java 或 JADX。它接受 DEX 035、037–040 和 smali 中可表示的常规声明与操作。DEX 041、`invoke-custom` 等动态调用、部分初始化路径、未知的语义注解或操作，以及无法用 Java 表示的标识符都会明确失败。接受某种文件格式，不意味着支持该格式中的所有指令和声明。
+默认引擎以 C++20 实现，运行时不需要 Python、Java 或 JADX。它接受 DEX 035、037–040 和 smali 中可表示的常规声明与操作。DEX 041、`invoke-custom` 等动态调用、部分初始化路径、未知的语义注解或操作，以及无法用 Java 表示的标识符都会明确失败。接受某种文件格式，不意味着支持该格式中的所有指令和声明。
 
 ### Linux 与 macOS
 
 ```sh
 cmake --build build --target neverd
-python3 --version
 
-./build/bin/neverd mobile app.apk -o recovered-app --python python3
+./build/bin/neverd mobile app.apk -o recovered-app
 ```
 
-可用 `NEVERD_PYTHON` 为后续运行指定解释器。`NEVERD_JADX` 和 PATH 中的 `jadx` 不会选择外部引擎；只有显式 `--jadx PATH` 才会启用外部适配器。没有自动回退。包含空格的路径需要加引号。
+`NEVERD_JADX` 和 PATH 中的 `jadx` 不会选择外部引擎；只有显式 `--jadx PATH` 才会启用外部适配器。没有自动回退。包含空格的路径需要加引号。
 
 ### Windows PowerShell
 
 ```powershell
-& .\build\bin\neverd.exe mobile .\app.apk -o .\recovered-app `
-  --python 'C:\Tools\Python\python.exe'
+& .\build\bin\neverd.exe mobile .\app.apk -o .\recovered-app
 ```
 
-多配置构建可能将可执行文件放在 `build/bin/Release/`。移动时请保留同级 `mobile/` 目录；只移动可执行文件会导致辅助程序缺失。
+多配置构建可能将可执行文件放在 `build/bin/Release/`。分发时请遵循该构建的常规原生依赖库部署要求。
 
 ## 支持的输入与范围
 
@@ -77,7 +74,6 @@ neverd mobile app.apk -o recovered-app --platform=android \
 | `-o DIRECTORY` | 必填 | 尚不存在的输出目录，不能位于目录输入内部；不覆盖已有输出 |
 | `--platform=auto\|android` | `auto` | 明确选择 Android，或自动识别输入平台 |
 | `--jadx PATH` | 未设置：内置引擎 | 显式选择单独安装的 JADX 兼容适配器；不通过环境变量选择，也不自动回退 |
-| `--python PATH` | 环境变量/PATH | 运行辅助程序的解释器，命令行显式参数优先 |
 | `--timeout N` | `300` | 内置分析的正数时间预算；外部后端则为每个进程的秒数上限，包括版本探测 |
 | `--max-files N` | `20000` | 条目数量上限，包含实际创建的目录，必须为正 |
 | `--max-bytes N` | `2147483648` | 输入、解包数据和最终输出的字节上限，必须为正 |
@@ -144,7 +140,7 @@ recovered-app/
 neverd mobile app.apk -o recovered-app --json > recovery-result.json
 ```
 
-辅助程序成功返回零，恢复失败返回非零。在受支持的解释器上启动辅助程序后，`--json` 的错误对象包含 `schema_version`、值为 `"error"` 的 `status` 和 `error`。原生参数解析、Python 缺失、Python 版本低于 3.10 或辅助程序缺失可能在更早阶段失败，仅输出 stderr；中断也可能通过 stderr 报告。调用方必须兼容这些情况。
+原生 CLI 成功返回零，恢复失败返回非零。使用 `--json` 时，已处理的失败包含 `schema_version`、`status: "error"` 和 `error`。参数解析、原生程序或依赖库启动失败以及中断仍可能只报告 stderr。调用方应先检查退出状态。
 
 ## 失败处理与排查
 
@@ -152,7 +148,6 @@ neverd mobile app.apk -o recovered-app --json > recovery-result.json
 
 | 现象 | 处理 |
 |------|------|
-| Python 或辅助程序缺失 | 选择 Python 3.10+，保留同级 `mobile/` 目录 |
 | 不支持的 DEX、指令、声明或初始化 | 阅读明确诊断并核对支持范围；只有主动选择独立兼容适配器时才使用 `--jadx PATH` |
 | 输入无效或重复类 | 修正输入字节码或类集合；不支持的方法体不会被静默省略 |
 | 超时或超出预算 | 缩小输入，或按可用资源调整 `--timeout`、`--max-files`、`--max-bytes` |
@@ -171,9 +166,11 @@ python3 scripts/test_mobile_android_backend.py --jadx /opt/jadx/bin/jadx --never
 
 ## 验证与支持深度
 
+Python 仅用于下面的开发测试脚本；内置移动端恢复在原生 C++20 CLI 中运行。
+
 ```sh
 cmake --build build --target check-neverd-mobile
-NEVERD_BUILD_DIR=build python3 -m unittest discover -s scripts/tests -p 'test_mobile_*.py' -v
+ctest --test-dir build -L NeverDMobileTests --output-on-failure
 python3 scripts/test_mobile_android_internal.py --d8 PATH --neverd build/bin/neverd
 ```
 

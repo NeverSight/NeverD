@@ -12,20 +12,19 @@ Beim Kompilieren gehen Kommentare, Formatierung, Bezeichner und Sprachkonstrukte
 
 ```sh
 cmake --build build --target neverd
-python3 --version
 neverd mobile App.ipa -o recovered-ios
 neverd mobile App.app -o recovered-arm64 --arch=arm64
 neverd mobile executable -o metadata --metadata-only
 neverd mobile App.app -o recovered-framework --artifact Frameworks/Example.framework/Example
 ```
 
-Bauen Sie NeverD wie üblich und verteilen Sie das benachbarte Verzeichnis `mobile/` zusammen mit der ausführbaren Datei. Python 3.10+ ist erforderlich; die Auswahl erfolgt über `--python PATH`, `NEVERD_PYTHON`, anschließend `python3`/`python` im PATH. Abhängigkeiten werden nicht automatisch heruntergeladen. Zum unabhängigen Kompilieren des erzeugten Apple-Quelltexts unter macOS werden Apple Clang, SDK und Swift-Toolchain benötigt; dies ist von der statischen nativen Analyse getrennt.
+Bauen Sie das Ziel `neverd` mit einer C++20-fähigen Toolchain. Der mobile Ablauf ist in die native CLI eingebaut und ruft keinen Python-Interpreter auf. Verteilen Sie die ausführbare Datei zusammen mit den nativen Bibliotheken, die Ihr Build benötigt. Zum unabhängigen Kompilieren erzeugter Apple-Quelltexte auf macOS sind Apple Clang, SDK und Swift-Toolchain erforderlich. Diese Anforderungen sind von der statischen Analyse getrennt; optionale externe Werkzeuge werden nicht automatisch heruntergeladen.
 
 Für Swift-Signaturen gilt: `--swift-demangle PATH`, dann `NEVERD_SWIFT_DEMANGLE`, dann `swift-demangle` im PATH. Unter macOS folgt als letzte automatische Suche ein zeitlich begrenztes `xcrun --find swift-demangle`. Ein fehlendes explizit konfiguriertes Werkzeug führt zum Fehler; eine erfolglose automatische Suche erhält unklassifizierte Symbole mit Status `unavailable`. Ohne Swift-Symbole wird kein Demangler benötigt. `--metadata-only` ruft weder natives Backend noch Demangler auf.
 
 ```sh
 neverd mobile App.ipa -o recovered-swift \
-  --python python3 --swift-demangle /path/to/swift-demangle --timeout=600 --json
+  --swift-demangle /path/to/swift-demangle --timeout=600 --json
 ```
 
 ## Eingaben und Auswahl
@@ -44,9 +43,8 @@ Bei Fat-Binärdateien bevorzugt `--arch=auto` arm64, arm, x86_64 und dann i386. 
 | `--artifact PATH` | Hauptprogramm | Ausführbarer Pfad relativ zur Anwendung |
 | `--metadata-only` | Aus | Nur Metadaten, ohne Quelltextrekonstruktion oder Werkzeugaufruf |
 | `--max-func N` | `0` | Limit nativer Funktionen; null bedeutet alle gefundenen; im Metadatenmodus ignoriert |
-| `--python PATH` | Umgebung/PATH | Python-3.10+-Interpreter des Hilfsprogramms |
 | `--swift-demangle PATH` | Umgebung/PATH/Toolchain | Demangler für Swift-Signaturen |
-| `--timeout N` | `300` | Positive Sekunden pro Backend-Prozess |
+| `--timeout N` | `300` | Positives Gesamtzeitbudget der Analyse in Sekunden; Kindprozesse verwenden das verbleibende Budget |
 | `--max-files N` | `20000` | Positives Eintragsbudget; auch das Swift-Symbolinventar ist begrenzt |
 | `--max-bytes N` | `2147483648` | Positives Bytebudget für Eingabe, entpackte Daten und endgültige Ausgabe |
 | `--json` | Aus | Versionierten Bericht als JSON ausgeben |
@@ -97,7 +95,7 @@ recovered-ios/
 
 Quellsprachendateien entstehen nur bei möglicher Ausgabe. `objc.json` enthält Klassen, Kategorien, Ivars und rohe Methodenkodierungen, `objc.h` die unterstützten Deklarationen. `swift.json` enthält nominale Typmetadaten und Mangling-Symbole. Signatur-/Methoden-JSON bewahren Klassifizierung, Auslassungen, Gründe und Zähler. Logs enthalten native Diagnosen sowie bei Bedarf Swift-Toolchainsuche, Demangling und nativen Swift-Export. Ausgabepfade in `report.json` sind relativ zu dessen Verzeichnis. Der ausgewählte Binärcode ist ein Analyseartefakt und wird nicht als Wiederherstellungsbrücke in generierten Quelltext gelinkt.
 
-Temporäre Paketkopien und Backend-Zwischenberichte werden gelöscht. Ohne native Funktionskörper schlägt ein normaler Lauf auch bei vorhandenen Metadaten fehl. Der reine Metadatenmodus erzeugt nur den ausgewählten Slice, `objc.h`, `objc.json`, `swift.json` und `report.json`; Quelltext- und Methoden-/Signaturdateien fehlen, und `native_function_count`, `objc_method_recovery`, `swift_method_recovery` sind `null`. Sein Python-Objective-C-Reader löst weder Chained Pointer noch Zeiger relocatabler Objekte auf. Vollständige Analyse verwendet stattdessen aufgelöste native Objective-C-Metadaten. Der rohe Swift-Reader kann nicht unterstützte Referenzen weiterhin als teilweise rekonstruierbar melden.
+Temporäre Paketkopien und Backend-Zwischenberichte werden gelöscht. Ohne native Funktionskörper schlägt ein normaler Lauf auch bei vorhandenen Metadaten fehl. Der reine Metadatenmodus erzeugt nur den ausgewählten Slice, `objc.h`, `objc.json`, `swift.json` und `report.json`; Quelltext- und Methoden-/Signaturdateien fehlen, und `native_function_count`, `objc_method_recovery`, `swift_method_recovery` sind `null`. Alle Modi verwenden die vom nativen Loader aufgelösten Objective-C-Metadaten. Swift-Metadaten werden durch begrenzte Zugriffe auf das native Abbild gelesen; nicht unterstützte Fixups, relokierbare Layouts oder Referenzen behalten Diagnosen für Teilergebnisse.
 
 Dieser verkürzte Beispielbericht zeigt bewusst eine teilweise Rekonstruktion:
 
@@ -153,20 +151,22 @@ Für eine Sitzung mit geladener Mach-O-Datei liefern `neverd_objc_methods_json(s
 
 Unter macOS bieten Builds mit aktiviertem `BUILD_TESTING` das Ziel `check-neverd-mobile-ios`, das alle drei nativen Wiederherstellungstestsuiten über CTest ausführt.
 
+Python dient nur den folgenden Entwicklungstests; die integrierte mobile Wiederherstellung läuft in der nativen C++20-CLI.
+
 ```sh
 cmake --build build --target check-neverd-mobile-ios
-NEVERD_BUILD_DIR=build python3 -m unittest discover -s scripts/tests -p 'test_mobile_*.py' -v
+ctest --test-dir build -L NeverDMobileTests --output-on-failure
 python3 scripts/test_mobile_ios_backend.py --neverd build/bin/neverd
 python3 scripts/test_mobile_ios_calls_backend.py --neverd build/bin/neverd
 python3 scripts/test_mobile_swift_backend.py --neverd build/bin/neverd
 ```
 
-Unter macOS kompilieren die Objective-C-Prüfskripte die Originale, stellen `.m` wieder her und linken ausschließlich den erzeugten Quellcode mit einem unabhängigen Aufrufprogramm. Das Skalarskript prüft Ganzzahlgrenzen, Verzweigungen, Schleifen, Zeigerzugriffe, verborgene Parameter, float/double-Bitidentität, gemischte Parameter und Stack-Argumente. Das Aufrufskript ergänzt Nachrichtenverteilung, Vererbung, Category, Instanzvariablenspeicher, native Hilfsfunktionen sowie Block-Aufrufe, Captures und gemeinsame Identität. Sein Korpus umfasst 21 Methoden und je Variante 134 unabhängige Sollwerte; die dokumentierten vier Läufe arm64/x86_64 × classic/default stellten jeweils 21/21 Methoden wieder her und erreichten 134/134 passende Ergebnisse.
+Unter macOS kompilieren die Objective-C-Prüfskripte die Originale, stellen `.m` wieder her und linken ausschließlich den erzeugten Quellcode mit einem unabhängigen Aufrufprogramm. Das Skalarskript prüft Ganzzahlgrenzen, Verzweigungen, Schleifen, Zeigerzugriffe, verborgene Parameter, float/double-Bitidentität, gemischte Parameter und Stack-Argumente. Das Aufrufskript ergänzt Nachrichtenverteilung, Vererbung, Category, Instanzvariablenspeicher, native Hilfsfunktionen sowie Block-Aufrufe, Captures und gemeinsame Identität. Der Aufrufkorpus erfordert 21/21 wiederhergestellte Methoden und 134/134 unabhängige Sollwerte je Variante arm64/x86_64 × classic/default. Führen Sie die Prüfung mit dem aktuellen nativen CLI-Build aus.
 
-Das strenge Swift-Prüfskript kontrolliert 22 Benutzerdeklarationen, drei Getter-/Setter-Einstiegspunkte und sieben vom Compiler erzeugte aufrufbare Einträge; keiner darf aus dem Inventar verschwinden. Pro Variante werden 855 unabhängige Sollwerte des Originalprogramms geprüft. Erzeugtes `.swift` und Aufrufprogramm werden unabhängig kompiliert, ohne ursprüngliche dylib, Modul, Bridge oder handgeschriebene Ersatzdeklarationen. Die Fälle umfassen skalare/native Aufrufe, Klasseninitialisierung und -speicher, Strukturmethoden mit Wertübergabe/mutating, Gleitkomma- und Stack-Argumente, Zeiger und Schleifen. Die formale CLI-Abnahme dieses selbst erstellten Testkorpus bestand alle vier Varianten arm64/x86_64 × classic/default ohne übersprungene Fälle: Jede stellte 25 native Methodenrümpfe und sieben Compiler-Projektionen wieder her und bewahrte alle 32 aufrufbaren Identitäten. Sowohl die Originale als auch der unabhängig kompilierte erzeugte Swift-Code bestanden pro Variante 855/855 Sollwertprüfungen. Diese Ergebnisse gelten nur für diesen Korpus und garantieren keine Wiederherstellung beliebiger Anwendungen oder des ursprünglichen Quelltexts. Das Skript weist fehlende Abdeckung, Quellcode-Kompilierfehler und Verhaltensabweichungen zurück.
+Das strenge Swift-Prüfskript kontrolliert 22 Benutzerdeklarationen, drei Getter-/Setter-Einstiegspunkte und sieben vom Compiler erzeugte aufrufbare Einträge; keiner darf aus dem Inventar verschwinden. Pro Variante werden 855 unabhängige Sollwerte des Originalprogramms geprüft. Erzeugtes `.swift` und Aufrufprogramm werden unabhängig kompiliert, ohne ursprüngliche dylib, Modul, Bridge oder handgeschriebene Ersatzdeklarationen. Die Fälle umfassen skalare/native Aufrufe, Klasseninitialisierung und -speicher, Strukturmethoden mit Wertübergabe/mutating, Gleitkomma- und Stack-Argumente, Zeiger und Schleifen. Die native C++20-CLI muss alle vier Varianten arm64/x86_64 × classic/default ohne übersprungene Fälle bestehen: jeweils 25 native Methodenrümpfe und sieben Compiler-Projektionen wiederherstellen, alle 32 aufrufbaren Identitäten bewahren und für Originale sowie unabhängig kompilierten erzeugten Swift-Code 855/855 Sollwertprüfungen erfüllen. Diese Ergebnisse gelten nur für diesen Korpus und garantieren keine Wiederherstellung beliebiger Anwendungen oder des ursprünglichen Quelltexts. Das Skript weist fehlende Abdeckung, Quellcode-Kompilierfehler und Verhaltensabweichungen zurück.
 
 Alle drei Skripte unterstützen `--arch all|arm64|x86_64`, `--fixups both|classic|default`, `--timeout N` und `--work-dir NEW_DIRECTORY`. `--setup-only` prüft die Originale und nicht die Wiederherstellung. Auf dem Host nicht ausführbare Architekturen werden, soweit erlaubt, ausdrücklich übersprungen; übersprungen bedeutet nicht bestanden. Gesicherte Fehlerartefakte helfen, fehlende Quellcodeabdeckung, Kompilierfehler und Verhaltensabweichungen zu unterscheiden. Prüfen Sie die aktuellen Ergebnisse, bevor Sie Unterstützung als verifiziert bezeichnen.
 
-Die Veröffentlichung ist transaktional: neues Verzeichnis wählen, zuerst den Exitstatus prüfen und umgeleitetes JSON außerhalb speichern. Fehler entfernen temporäre Ausgabe und erhalten vorhandene Ergebnisse. Nichtnull-Backend-Exits enthalten einen begrenzten Log-Ausschnitt; Timeouts und Budgetverletzungen haben eigene Meldungen. Mit `--json` liefern behandelte Helper-Fehler `status: "error"`; Argumentverarbeitung, fehlende Helper/Interpreter, Python unter 3.10 und Unterbrechungen können früher auf stderr scheitern.
+Die Veröffentlichung ist transaktional: neues Verzeichnis wählen, zuerst den Exitstatus prüfen und umgeleitetes JSON außerhalb speichern. Fehler entfernen temporäre Ausgabe und erhalten vorhandene Ergebnisse. Nichtnull-Backend-Exits enthalten einen begrenzten Log-Ausschnitt; Timeouts und Budgetverletzungen haben eigene Meldungen. Die native CLI liefert bei Erfolg null und bei Wiederherstellungsfehlern einen Wert ungleich null. Mit `--json` enthalten behandelte Fehler `schema_version`, `status: "error"` und `error`. Argumentprüfung, Startfehler nativer Programme oder Bibliotheken und Unterbrechungen können ausschließlich auf stderr erscheinen. Prüfen Sie zuerst den Exitstatus.
 
 Bei verschlüsselten Slices lesbare Eingaben liefern, bei fehlender Architektur verfügbare Slices prüfen, bei fehlendem Swift-Werkzeug den tatsächlichen Demangler auswählen. Für ausgelassene Methoden genaue Gründe und Metadatendiagnosen lesen. Ein größeres `--max-func` hilft nur bei durch das Limit ausgeschlossenen Funktionen. Fehlende Layouts, Signaturen, externe Header, Ausnahme- oder ABI-Unterstützung benötigen Implementierung oder zusätzliche gültige Metadaten, keine Behauptung vollständiger Wiederherstellung. Anwendbare Lizenzhinweise von Abhängigkeiten bei der Weitergabe erhalten.

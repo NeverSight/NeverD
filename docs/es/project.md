@@ -36,7 +36,7 @@ CLI, integradores y agentes de IA usan un solo motor — **`libneverd`** — med
 
 Los formatos de entrada, contratos host y límites se documentan en las guías de [EVM](evm.md) y [Solana SBF](sbf.md).
 
-La CLI experimental `neverd mobile app.apk -o recovered-app` recupera Java de APK, DEX y smali con el motor integrado de NeverD y Python 3.10+ de forma predeterminada, sin necesitar Java ni JADX en ejecución. Un `--jadx PATH` explícito selecciona el adaptador externo opcional; no hay cambio automático de motor. Esta función no expone APK ni Java a través del SDK o del cargador GUI. Consulte la [guía de recuperación de Java para Android](android.md) para conocer la configuración, las entradas, los informes y sus límites.
+La CLI experimental `neverd mobile app.apk -o recovered-app` recupera Java de APK, DEX y smali y genera `report.json`. El motor predeterminado está implementado en C++20 y no necesita Python, Java ni JADX en tiempo de ejecución. Ni `NEVERD_JADX` ni un ejecutable `jadx` en PATH seleccionan el motor externo: solo lo hace un `--jadx PATH` explícito. No hay cambio automático a otro motor. Ponga entre comillas las rutas con espacios. Las entradas admitidas, los informes y los límites se describen en la [guía de Android](android.md).
 
 El flujo iOS experimental `neverd mobile App.ipa -o recovered-ios` exporta C nativo y fuentes Objective-C/Swift compatibles desde IPA, `.app` o Mach-O. Conserva disposiciones runtime, unidades fuente y omisiones por método; el código generado no usa puentes al binario original. Consulte la [guía iOS](ios.md) para configuración, cobertura y recompilación independiente.
 

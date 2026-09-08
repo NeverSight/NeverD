@@ -3273,7 +3273,7 @@
         "docs/zh-CN/ios.md"
       ],
       "limitations": [
-        "Mobile containers use the shipped CLI helper and Python 3.10+. Android defaults to NeverD builtin DEX/smali readers, register verification and Java emission; it needs no external decompiler or JVM at runtime. Only explicit --jadx selects the separately installed compatibility backend.",
+        "Mobile recovery runs in the C++ CLI, with no Python interpreter or deployed helper directory. Android defaults to NeverD builtin DEX/smali readers, register verification and Java emission; it needs no external decompiler or JVM at runtime. Only explicit --jadx selects the separately installed compatibility backend. ZIP decompression uses zlib.",
         "Builtin Android emits verified Java dispatch bodies for its supported DEX/smali subset, with complete per-input method accounting and separate native/abstract declarations. Unsupported bodies reject the transaction; no backend fallback or placeholder body is used. Resources and native libraries are excluded.",
         "Builtin Android is experimental, not a guarantee for arbitrary APKs or all bytecode. Generic/dynamic invocation, monitor operations, unproven initialization, unsupported annotations, unavailable local member bindings, and non-representable Java declarations are rejected. Original source text and compilation-lost information cannot be recovered. Generation uses conservative byte, work and time budgets.",
         "Android acceptance recompiles generated source without original classes and compares behavior against independently compiled owned fixtures. JDK and D8 are test tools only. iOS retains LLVM/Capstone dependencies and swift-demangle for Swift signatures; these dependencies are not the NeverD-owned recovery implementation.",
@@ -3287,10 +3287,10 @@
       ],
       "tests": [
         {
-          "runner": "python-unittest",
+          "runner": "gtest",
           "target": "NeverDMobileTests",
-          "source": "scripts/tests/test_mobile_dalvik_semantics.py",
-          "filter": "DalvikSemanticsTests.test_local_callee_identity_includes_its_return_type",
+          "source": "unittests/mobile/MobileDalvikJavaTests.cpp",
+          "filter": "MobileDalvikJava.LocalCalleeIdentityIncludesReturnTypeAndStaticKind",
           "platforms": [
             "darwin",
             "linux",
@@ -3298,10 +3298,10 @@
           ]
         },
         {
-          "runner": "python-unittest",
+          "runner": "gtest",
           "target": "NeverDMobileTests",
-          "source": "scripts/tests/test_mobile_dalvik_java.py",
-          "filter": "DalvikJavaTests.test_undefined_register_is_rejected_before_source_publication",
+          "source": "unittests/mobile/MobileDalvikJavaTests.cpp",
+          "filter": "MobileDalvikJava.RejectsUndefinedRegisterBeforePublication",
           "platforms": [
             "darwin",
             "linux",
@@ -3309,10 +3309,10 @@
           ]
         },
         {
-          "runner": "python-unittest",
+          "runner": "gtest",
           "target": "NeverDMobileTests",
-          "source": "scripts/tests/test_mobile_builtin_android.py",
-          "filter": "BuiltinAndroidTests.test_default_engine_recovers_every_smali_method_without_external_tools",
+          "source": "unittests/mobile/MobileAndroidTests.cpp",
+          "filter": "MobileAndroid.BuiltinSourceAndMetadataDescribeExactRecoveredInventory",
           "platforms": [
             "darwin",
             "linux",
@@ -3320,10 +3320,10 @@
           ]
         },
         {
-          "runner": "python-unittest",
+          "runner": "gtest",
           "target": "NeverDMobileTests",
-          "source": "scripts/tests/test_mobile_android.py",
-          "filter": "AndroidTests.test_multidex_apk_passes_every_root_dex_together",
+          "source": "unittests/mobile/MobileDalvikReaderTests.cpp",
+          "filter": "MobileDalvikReader.DexVersionsAndExactMethodInventory",
           "platforms": [
             "darwin",
             "linux",
@@ -3331,10 +3331,10 @@
           ]
         },
         {
-          "runner": "python-unittest",
+          "runner": "gtest",
           "target": "NeverDMobileTests",
-          "source": "scripts/tests/test_mobile_common.py",
-          "filter": "MobileCommonTests.test_unsafe_paths_rejected_before_any_write",
+          "source": "unittests/mobile/MobileCommonTests.cpp",
+          "filter": "MobileCommonTest.ArchivePreflightRejectsAllPathAndInventoryConflicts",
           "platforms": [
             "darwin",
             "linux",
@@ -3342,10 +3342,10 @@
           ]
         },
         {
-          "runner": "python-unittest",
+          "runner": "gtest",
           "target": "NeverDMobileTests",
-          "source": "scripts/tests/test_mobile_ios.py",
-          "filter": "MachOTests.test_class_instance_and_class_method_signatures",
+          "source": "unittests/mobile/MobileIOSTests.cpp",
+          "filter": "MobileIOSNative.KeepsActualObjCBodyAndImplicitBinding",
           "platforms": [
             "darwin",
             "linux",
@@ -3353,10 +3353,10 @@
           ]
         },
         {
-          "runner": "python-unittest",
+          "runner": "gtest",
           "target": "NeverDMobileTests",
-          "source": "scripts/tests/test_mobile_cli.py",
-          "filter": "MobileCLITests.test_ios_metadata_from_ipa_outside_checkout",
+          "source": "unittests/mobile/MobileIOSTests.cpp",
+          "filter": "MobileIOSNative.MetadataOnlyAppUsesAppRelativeArtifactWithoutTools",
           "platforms": [
             "darwin",
             "linux",
@@ -3393,7 +3393,6 @@
           "neverd mobile --metadata-only",
           "neverd mobile --o",
           "neverd mobile --platform",
-          "neverd mobile --python",
           "neverd mobile --swift-demangle",
           "neverd mobile --timeout",
           "neverd export --max-func",

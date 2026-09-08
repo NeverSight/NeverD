@@ -220,7 +220,7 @@ cmake --build build --target check-neverd
 
 ## CLI
 
-Android 的實驗性 CLI 可用 `neverd mobile app.apk -o recovered-app` 將 APK、DEX 或 smali 還原為 Java，並產生 `report.json`。預設使用 NeverD 內建引擎與 Python 3.10+，執行時不需要 Java 或 JADX。明確指定 `--jadx PATH` 可選用外部相容轉接器，不會自動切換。不解碼 APK 資源，也不保證完整還原。詳見 [Android Java 還原指南](android.md)。
+實驗性 CLI `neverd mobile app.apk -o recovered-app` 可從 APK、DEX 與 smali 還原 Java，並產生 `report.json`。預設引擎以 C++20 實作，執行時不需要 Python、Java 或 JADX。`NEVERD_JADX` 與 PATH 中的 `jadx` 不會選用外部引擎；只有明確指定 `--jadx PATH` 才會啟用外部轉接器。沒有自動後備機制。包含空格的路徑必須加上引號。支援的輸入、報告與還原限制請見 [Android 指南](android.md)。
 
 實驗性 iOS 流程 `neverd mobile App.ipa -o recovered-ios` 從 IPA、`.app` 或 Mach-O 輸出原生 C 和受支援的 Objective-C/Swift 原始碼，保留執行階段配置、原始碼單元和逐方法省略原因；生成程式碼不透過橋接呼叫原始二進位檔。環境、覆蓋率與獨立編譯驗證請見 [iOS 指南](ios.md)。
 

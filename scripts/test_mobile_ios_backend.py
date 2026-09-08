@@ -290,7 +290,7 @@ def verify(arguments: argparse.Namespace, work: Path) -> None:
             if not arguments.setup_only:
                 output = variant / "recovered"
                 run([str(arguments.neverd.resolve()), "mobile", str(original), "-o", str(output),
-                     "--platform=ios", f"--arch={architecture}", "--python", sys.executable,
+                     "--platform=ios", f"--arch={architecture}",
                      f"--timeout={arguments.timeout}"], timeout=arguments.timeout + 30)
                 validate_coverage(output, architecture)
                 recovered = output / "sources/objc.m"

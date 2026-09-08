@@ -7,21 +7,25 @@ on:
       - '.github/workflows/mobile.yml'
       - 'tools/neverd/mobile/**'
       - 'tools/neverd/cmd/NeverDCmdMobile.cpp'
+      - 'tools/neverd/NeverDCLI*'
       - 'tools/neverd/CMakeLists.txt'
+      - 'unittests/mobile/**'
+      - 'unittests/CMakeLists.txt'
       - 'scripts/tests/test_mobile_*.py'
       - 'scripts/tests/fixtures/mobile/**'
-      - 'scripts/test_mobile_android_backend.py'
-      - 'scripts/test_mobile_android_internal.py'
+      - 'scripts/test_mobile_*.py'
   pull_request:
     paths:
       - '.github/workflows/mobile.yml'
       - 'tools/neverd/mobile/**'
       - 'tools/neverd/cmd/NeverDCmdMobile.cpp'
+      - 'tools/neverd/NeverDCLI*'
       - 'tools/neverd/CMakeLists.txt'
+      - 'unittests/mobile/**'
+      - 'unittests/CMakeLists.txt'
       - 'scripts/tests/test_mobile_*.py'
       - 'scripts/tests/fixtures/mobile/**'
-      - 'scripts/test_mobile_android_backend.py'
-      - 'scripts/test_mobile_android_internal.py'
+      - 'scripts/test_mobile_*.py'
   workflow_dispatch:
 
 permissions:
@@ -32,42 +36,96 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  components:
-    name: Components (${{ matrix.os }}, Python ${{ matrix.python }})
+  native:
+    name: C++ mobile (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15, windows-2025]
-        python: ['3.10', '3.13']
+        include:
+          - os: ubuntu-24.04
+            cc: clang
+            cxx: clang++
+            executable: neverd
+          - os: macos-15
+            cc: clang
+            cxx: clang++
+            executable: neverd
+          - os: windows-2025
+            cc: cl
+            cxx: cl
+            executable: neverd.exe
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Set up Python
+        with:
+          submodules: recursive
+      - name: Set up Python for build scripts and independent test oracles
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: ${{ matrix.python }}
-      - name: Verify importers and process boundaries without a decompiler dependency
-        run: python -m unittest discover -s scripts/tests -p "test_mobile_*.py" -v
-
-  android-internal:
-    name: Builtin Android recovery and independent Java execution
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+          python-version: '3.12'
+      - name: Enable compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
-          python-version: '3.10'
-      - name: Set up JDK for the independent source oracle
+          version: 'v0.16.0'
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes clang cmake ninja-build zlib1g-dev
+      - name: Install macOS build dependencies
+        if: runner.os == 'macOS'
+        run: brew install cmake ninja
+      - name: Install Windows build dependencies
+        if: runner.os == 'Windows'
+        run: choco install ninja --yes --no-progress
+      - name: Enable the MSVC x64 toolchain
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+      - name: Configure native mobile without the optional Python plugin host
+        shell: bash
+        run: |
+          cmake -S . -B build-mobile -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            -DNEVERD_LLVM_PREBUILT=ON \
+            -DNEVERD_BUILD_PLUGINS=OFF \
+            -DNEVERD_ENABLE_PYTHON_PLUGINS=OFF \
+            -DBUILD_TESTING=ON
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+      - name: Build the actual C++ CLI and mobile tests
+        run: cmake --build build-mobile --config Release --target neverd NeverDMobileTests --parallel 3
+      - name: Run native readers, emitters, archives, process and CLI tests
+        run: ctest --test-dir build-mobile/unittests/mobile -C Release --output-on-failure --no-tests=error
+      - name: Verify the independent acceptance gates reject false coverage
+        run: python -m unittest scripts.tests.test_mobile_android_internal_runner scripts.tests.test_mobile_swift_backend -v
+      - name: Verify runtime with no interpreter on PATH
+        shell: bash
+        run: |
+          test -z "$(find tools/neverd/mobile -name '*.py' -print -quit)"
+          test ! -e build-mobile/bin/mobile
+          mkdir -p "$RUNNER_TEMP/mobile-empty-path"
+          PATH="$RUNNER_TEMP/mobile-empty-path" NEVERD_PYTHON=unavailable \
+            "$GITHUB_WORKSPACE/build-mobile/bin/$EXECUTABLE" mobile \
+            "$GITHUB_WORKSPACE/scripts/tests/fixtures/mobile/Peer.smali" \
+            -o "$RUNNER_TEMP/mobile-no-interpreter" --json
+        env:
+          EXECUTABLE: ${{ matrix.executable }}
+      - name: Set up JDK for Android source compilation and execution
+        if: runner.os == 'Linux'
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: '21'
-      - name: Prepare the fixed D8 compiler for test input generation
+      - name: Prepare D8 for self-owned Android fixtures
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           if [ ! -x "$ANDROID_HOME/build-tools/35.0.0/d8" ]; then
@@ -75,34 +133,37 @@ jobs:
           fi
           test -x "$ANDROID_HOME/build-tools/35.0.0/d8"
           printf 'NEVERD_D8=%s\n' "$ANDROID_HOME/build-tools/35.0.0/d8" >> "$GITHUB_ENV"
-      - name: Verify bounded readers, register semantics and source publication
-        run: python -m unittest discover -s scripts/tests -p "test_mobile_*.py" -v
-      - name: Recover and independently execute DEX, multidex and smali fixtures
-        run: python scripts/test_mobile_android_internal.py --d8 "$NEVERD_D8" --work-dir "$RUNNER_TEMP/android-internal" --timeout 120
-
-  android-backend:
-    name: Explicit external Android compatibility and Java execution
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    env:
-      JADX_SHA256: '545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974'
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.10'
-      - name: Set up JDK
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
-        with:
-          distribution: temurin
-          java-version: '21'
-      - name: Download and verify the fixed backend release
+      - name: Recover and independently execute Android sources through C++ CLI
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          python scripts/test_mobile_android_internal.py \
+            --neverd build-mobile/bin/neverd --d8 "$NEVERD_D8" \
+            --work-dir "$RUNNER_TEMP/android-native" --timeout 120
+      - name: Prepare the pinned optional Android compatibility backend
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           curl --fail --location --retry 3 https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip --output "$RUNNER_TEMP/jadx.zip"
           printf '%s  %s\n' "$JADX_SHA256" "$RUNNER_TEMP/jadx.zip" | sha256sum --check -
           unzip -q "$RUNNER_TEMP/jadx.zip" -d "$RUNNER_TEMP/jadx"
-      - name: Recover and execute single smali, cross-class smali, DEX and multidex APK fixtures
-        run: python scripts/test_mobile_android_backend.py --jadx "$RUNNER_TEMP/jadx/bin/jadx"
+        env:
+          JADX_SHA256: '545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974'
+      - name: Verify explicit external compatibility through C++ CLI
+        if: runner.os == 'Linux'
+        shell: bash
+        run: python scripts/test_mobile_android_backend.py --neverd build-mobile/bin/neverd --jadx "$RUNNER_TEMP/jadx/bin/jadx"
+      - name: Recover and independently execute Objective-C and Swift sources
+        if: runner.os == 'macOS'
+        run: ctest --test-dir build-mobile -L ^NeverDMobileIOSRecovery$ -C Release --output-on-failure --no-tests=error
+      - name: Preserve validation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-mobile-${{ matrix.os }}
+          path: |
+            build-mobile/Testing/Temporary/
+            build-mobile/unittests/mobile/Testing/Temporary/
+            ${{ runner.temp }}/android-native/acceptance.json
+            ${{ runner.temp }}/android-native/logs/
+          if-no-files-found: ignore

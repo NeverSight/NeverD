@@ -6,9 +6,11 @@
 
 ## 环境
 
-正常构建 `neverd` 即可。移动构建产物时，保留可执行文件旁边的 `mobile/` 目录。需要 Python 3.10 或更高版本，可通过 `--python PATH` 或 `NEVERD_PYTHON` 指定。
+使用支持 C++20 的工具链构建 `neverd` 目标。移动端工作流已编译进原生 CLI，不调用 Python 解释器。分发时携带当前构建所需的原生依赖库。
 
-Android 默认使用 NeverD 内置引擎，仅依赖 Python 标准库，运行时不需要 Java 或 JADX。只有显式 `--jadx PATH` 才会选择单独安装的兼容适配器；`NEVERD_JADX` 和 PATH 不会自动选择它，也没有自动回退。可选适配器需要带标准 DEX/smali 输入插件的 JADX 1.5.6+ 和 Java 11+，报告记录实际 `jadx` 引擎与版本。安装方式及依赖许可证见 [Android 指南](android.md#可选-jadx-兼容适配器)。
+原生 ZIP 处理使用 zlib 完成 CRC-32 和 DEFLATE。CMake 优先通过 `find_package` 使用已安装的库；缺失时按固定 SHA256 下载 zlib 1.3.2，并静态构建。移动端 ZIP 实现在 Windows 上也不需要 Python 辅助工具。分发时请保留 [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md) 中的依赖声明。
+
+默认引擎以 C++20 实现，运行时不需要 Python、Java 或 JADX。只有显式 `--jadx PATH` 才会选择单独安装的兼容适配器；`NEVERD_JADX` 和 PATH 不会自动选择它，也没有自动回退。可选适配器需要带标准 DEX/smali 输入插件的 JADX 1.5.6+ 和 Java 11+，报告记录实际 `jadx` 引擎与版本。安装方式及依赖许可证见 [Android 指南](android.md#可选-jadx-兼容适配器)。
 
 ## Android 用法
 
@@ -42,23 +44,25 @@ Swift 恢复会分类 demangled 签名，将其绑定原生入口和 ABI 位置�
 
 正常输出包含 `sources/native.c`、可选的 `sources/objc.m` 与 `sources/swift.swift`、声明和运行时元数据、方法/签名覆盖 JSON、日志、`artifacts/selected.macho` 和 `report.json`。生成源码不会通过桥接调用原始二进制。Swift `source_units` 将类型声明与方法成组组织，不能直接拼接逐方法源码来重建类。最外层 `status: "success"` 表示结果发布成功，不代表方法全部恢复或已证明语义等价。
 
-`--metadata-only` 不调用后端或 demangler，也不生成源码和方法覆盖。其 Python Objective-C 读取器不解析链式或可重定位对象指针，完整恢复则使用原生加载器解析的元数据。原始 Swift 元数据中的不支持引用可能仍标为部分恢复。`--max-func` 限制原生函数数量，元数据模式忽略此项。正常运行若没有原生函数体会失败，临时解包输入会被清理。
+`--metadata-only` 不调用后端或 demangler，也不生成源码和方法覆盖。所有模式均使用原生加载器解析的 Objective-C 元数据。Swift 元数据通过有界的原生映像读取获取；不支持的修正、可重定位布局或引用会保留部分恢复诊断。 `--max-func` 限制原生函数数量，元数据模式忽略此项。正常运行若没有原生函数体会失败，临时解包输入会被清理。
 
 原始注释、排版、已删除标识符和编译丢失的源语言结构无法精确还原。使用输出前请检查每个方法的状态与原因、Swift 的可调用/不可调用/未分类统计，以及文档列出的限制。
 
 ## 限制与失败处理
 
-`-o` 必须指定不存在的目录，且不能位于目录输入内部。已有输出不会覆盖，只有恢复和验证成功后才发布结果。`--json` 输出带版本的报告；已捕获的恢复错误返回非零状态和 JSON 错误。启动失败、辅助程序或解释器缺失、Python 低于 3.10、参数解析错误和中断也可能只在 stderr 输出纯文本。
+`-o` 必须指定不存在的目录，且不能位于目录输入内部。已有输出不会覆盖，只有恢复和验证成功后才发布结果。原生 CLI 成功返回零，恢复失败返回非零。使用 `--json` 时，已处理的失败包含 `schema_version`、`status: "error"` 和 `error`。参数解析、原生程序或依赖库启动失败以及中断仍可能只报告 stderr。调用方应先检查退出状态。
 
-默认最多 20,000 个条目、2 GiB 输入/解包或最终输出数据，内置 Android 分析时间预算或每个外部后端进程上限为 300 秒。内置读取器和生成器还实施有界工作量预算。可用 `--max-files`、`--max-bytes` 和 `--timeout` 调整，均必须大于零。后台运行期间会监测临时工作区，允许暂存输入与中间产物共存，条目数和字节数上限为配置值的三倍。每个进程的诊断最多 16 MiB。解包拒绝路径穿越、符号链接、特殊文件、大小写路径冲突和加密 ZIP 条目；目录输入也拒绝链接和特殊文件。
+默认最多 20,000 个条目、2 GiB 输入/解包或最终输出数据，内置 Android/iOS 分析时间预算或每个显式 JADX 进程上限为 300 秒。iOS 子进程使用总分析预算的剩余时间。内置读取器和生成器还实施有界工作量预算。可用 `--max-files`、`--max-bytes` 和 `--timeout` 调整，均必须大于零。后台运行期间会监测临时工作区，允许暂存输入与中间产物共存，条目数和字节数上限为配置值的三倍。每个进程的诊断最多 16 MiB。解包拒绝路径穿越、符号链接、特殊文件、大小写路径冲突和加密 ZIP 条目；目录输入也拒绝链接和特殊文件。
 
 这些限制用于增强健壮性，不是第三方后端的安全沙箱。失败的临时结果会清理。后端非零退出时会附带长度受限的诊断尾部；启动失败、超时和超出预算会使用各自的错误信息。
 
 ## 验证
 
+Python 仅用于下面的开发测试脚本；内置移动端恢复在原生 C++20 CLI 中运行。
+
 ```sh
 cmake --build build --target check-neverd-mobile
-python3 -m unittest discover -s scripts/tests -p 'test_mobile_*.py' -v
+ctest --test-dir build -L NeverDMobileTests --output-on-failure
 python3 scripts/test_mobile_android_internal.py --d8 PATH --neverd build/bin/neverd
 python3 scripts/test_mobile_android_backend.py --jadx /opt/jadx/bin/jadx --neverd build/bin/neverd
 ```

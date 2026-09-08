@@ -5,7 +5,7 @@ A JDK and D8 prepare the self-owned inputs and execution oracle. They are not
 used by the built-in decompiler. No downloads occur. Every declared input
 method is checked, including constructors, static initializers, abstract and
 native declarations. Rebuilt execution uses only recovered Java and the
-independent harness. --neverd repeats the same checks through the actual CLI.
+independent harness. --neverd selects the required native C++ CLI.
 """
 from __future__ import annotations
 
@@ -16,15 +16,12 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
-from unittest.mock import patch
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools" / "neverd"))
-from mobile.android import decompile_android
-from mobile.common import Limits, MobileError, run_tool
 
 FIXTURES = ROOT / "scripts/tests/fixtures/mobile/android"
 SMALI = ROOT / "scripts/tests/fixtures/mobile"
@@ -247,7 +244,12 @@ class Verify:
     def run(self, arguments, label: str) -> str:
         self.log_index += 1
         log = self.work / "logs" / f"{self.log_index:03d}-{label}.log"
-        run_tool(list(map(str, arguments)), log, self.timeout, env=self.environment)
+        with log.open("x", encoding="utf-8") as stream:
+            result = subprocess.run(list(map(str, arguments)), stdout=stream,
+                                    stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                    timeout=self.timeout, env=self.environment, check=False)
+        if result.returncode:
+            raise RuntimeError(f"{label} exited {result.returncode}: {log.read_text(errors='replace')}")
         return log.read_text(encoding="utf-8", errors="replace")
 
     def compile(self, sources, output: Path, *, classpath: Path | None = None):
@@ -289,14 +291,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--d8", type=Path, help="D8 launcher/JAR, then NEVERD_D8, PATH, or installed Android SDK")
     parser.add_argument("--java-home", type=Path, help="JDK used for fixture compilation and execution")
-    parser.add_argument("--neverd", type=Path, help="also compile and execute outputs from the built CLI")
+    parser.add_argument("--neverd", type=Path, required=True, help="native C++ NeverD CLI under test")
     parser.add_argument("--work-dir", type=Path, help="new directory retaining all input, output, logs and failure evidence")
     parser.add_argument("--timeout", type=int, default=300, help="positive seconds per tool process/recovery budget")
     args = parser.parse_args()
     if args.timeout <= 0: raise RuntimeError("--timeout must be positive")
     jdk, d8 = choose_jdk(args.java_home), choose_d8(args.d8)
-    neverd = args.neverd.resolve() if args.neverd else None
-    if neverd and not neverd.is_file(): raise RuntimeError("--neverd must point to the built CLI")
+    neverd = args.neverd.resolve()
+    if not neverd.is_file(): raise RuntimeError("--neverd must point to the built CLI")
     if args.work_dir:
         args.work_dir = args.work_dir.resolve()
         args.work_dir.mkdir(parents=True, exist_ok=False)
@@ -333,24 +335,19 @@ def main() -> int:
         ]
         failures, passed = [], []
         for name, source, expected_classes, expected_methods, inputs, harness, kind, oracle, dex_count, smali_count in cases:
-            for route in ("builtin", "cli") if neverd else ("builtin",):
+            for route in ("native-cli",):
                 label = name + "-" + route
                 output = work / label
                 try:
-                    if route == "builtin":
-                        with patch("mobile.android.run_tool", side_effect=RuntimeError("Built-in recovery attempted an external backend")):
-                            report = decompile_android(source, output, limits=Limits(timeout=args.timeout))
-                        (output / "engine-report.json").write_text(json.dumps(report, indent=2, ensure_ascii=True) + "\n")
-                    else:
-                        verify.run([neverd, "mobile", source, "-o", output, "--python", sys.executable, "--timeout", str(args.timeout), "--json"], label)
-                        report = json.loads((output / "report.json").read_text())
+                    verify.run([neverd, "mobile", source, "-o", output, "--timeout", str(args.timeout), "--json"], label)
+                    report = json.loads((output / "report.json").read_text())
                     if report.get("dex_count") != dex_count or report.get("smali_count") != smali_count:
                         raise RuntimeError("Input code inventory changed")
                     counts = validate_coverage(report, output, expected_classes, expected_methods, inputs)
                     matched = verify.rebuilt(output, harness, kind, oracle)
                     passed.append({"case": label, **counts, "matched_results": matched})
                     print(f"PASS {label}: {counts['recovered_method_count']} bodies, {counts['declaration_only_method_count']} declarations, {matched} behavior results", flush=True)
-                except (MobileError, OSError, RuntimeError, ValueError) as error:
+                except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
                     failure = {"case": label, "error": str(error)}
                     failures.append(failure)
                     (work / (label + "-failure.json")).write_text(json.dumps(failure, indent=2) + "\n")
@@ -364,13 +361,13 @@ def main() -> int:
         for name in ("Peer.smali", "PeerCopy.smali"): shutil.copyfile(SMALI / "Peer.smali", duplicate / name)
         for label, source in (("malformed", broken), ("duplicate", duplicate)):
             output = work / (label + "-output")
-            try:
-                with patch("mobile.android.run_tool", side_effect=RuntimeError("Built-in recovery attempted an external backend")):
-                    decompile_android(source, output, limits=Limits(timeout=args.timeout))
-            except MobileError:
-                if list(output.rglob("*.java")): failures.append({"case": label, "error": "Failed recovery left partial Java sources"})
+            result = subprocess.run([str(neverd), "mobile", str(source), "-o", str(output), "--json"],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                    timeout=args.timeout, env=verify.environment)
+            if result.returncode == 1 and json.loads(result.stdout).get("status") == "error":
+                if output.exists(): failures.append({"case": label, "error": "Failed recovery published an output directory"})
                 else: print(f"PASS {label}: rejects partial recovery", flush=True)
-            else: failures.append({"case": label, "error": "Invalid input was reported as recovered"})
+            else: failures.append({"case": label, "error": "Invalid input did not produce a structured recovery error"})
         summary = {"schema_version": 1, "passed": passed, "failures": failures}
         (work / "acceptance.json").write_text(json.dumps(summary, indent=2) + "\n")
         if failures: raise RuntimeError(f"{len(failures)} built-in Android acceptance cases failed; evidence: {work}")
@@ -380,6 +377,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     try: raise SystemExit(main())
-    except (MobileError, OSError, RuntimeError, ValueError) as error:
+    except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
         print(f"error: {error}", file=sys.stderr)
         raise SystemExit(1)

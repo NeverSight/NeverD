@@ -236,7 +236,7 @@ def verify(arguments: argparse.Namespace, work: Path) -> None:
             elif not arguments.setup_only:
                 output = variant / "recovered"
                 run([str(arguments.neverd.resolve()), "mobile", str(original), "-o", str(output),
-                     "--platform=ios", f"--arch={architecture}", "--python", sys.executable,
+                     "--platform=ios", f"--arch={architecture}",
                      f"--timeout={arguments.timeout}"], timeout=arguments.timeout + 30)
                 report = json.loads((output / "report.json").read_text())
                 if (report.get("status"), report.get("platform"), report.get("architecture")) != (

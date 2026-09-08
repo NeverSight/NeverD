@@ -25,30 +25,27 @@ Java ファイルは `recovered-app/sources/`、入力一覧と制限事項は `
 
 | コンポーネント | 要件 | 選択方法 |
 |----------------|------|----------|
-| NeverD | `neverd` ターゲットをビルドし、実行ファイルと同じ階層の `mobile/` ディレクトリも配布する | `build/bin/neverd` または PATH 上の実行ファイル |
-| Python | Python 3.10 以降。組み込みプラグインホストの Python 環境とは独立 | `--python`、`NEVERD_PYTHON`、PATH 上の `python3`/`python` の順に選択 |
+| NeverD | C++20 対応のツールチェーンで `neverd` ターゲットをビルドします。モバイル処理はネイティブ CLI に組み込まれており、Python インタープリターを呼び出しません。配布時は、そのビルドが必要とするネイティブライブラリを添付してください。| `build/bin/neverd` / PATH |
 
-既定のエンジンは Python 標準ライブラリのみを使用し、実行時に Java や JADX を必要としません。DEX 035、037–040 と smali のうち、表現可能な通常の宣言や操作を受け付けます。DEX 041、`invoke-custom` などの動的呼び出し、一部の初期化経路、未知の意味的な注釈や操作、Java で表現できない識別子は明示的に失敗します。ファイル形式への対応は、その形式のすべての命令や宣言への対応を意味しません。
+既定のエンジンは C++20 で実装されており、実行時に Python、Java、JADX は不要です。DEX 035、037–040 と smali のうち、表現可能な通常の宣言や操作を受け付けます。DEX 041、`invoke-custom` などの動的呼び出し、一部の初期化経路、未知の意味的な注釈や操作、Java で表現できない識別子は明示的に失敗します。ファイル形式への対応は、その形式のすべての命令や宣言への対応を意味しません。
 
 ### Linux と macOS
 
 ```sh
 cmake --build build --target neverd
-python3 --version
 
-./build/bin/neverd mobile app.apk -o recovered-app --python python3
+./build/bin/neverd mobile app.apk -o recovered-app
 ```
 
-継続して使用するインタープリターは `NEVERD_PYTHON` で指定できます。`NEVERD_JADX` や PATH 上の `jadx` によって外部エンジンが選択されることはありません。外部アダプターは明示的な `--jadx PATH` でのみ選択され、自動的な切り替えはありません。空白を含むパスは引用符で囲んでください。
+`NEVERD_JADX` や PATH 上の `jadx` は外部エンジンを選択しません。明示的な `--jadx PATH` のみが互換アダプターを選びます。自動切り替えはありません。空白を含むパスは引用符で囲んでください。
 
 ### Windows PowerShell
 
 ```powershell
-& .\build\bin\neverd.exe mobile .\app.apk -o .\recovered-app `
-  --python 'C:\Tools\Python\python.exe'
+& .\build\bin\neverd.exe mobile .\app.apk -o .\recovered-app
 ```
 
-複数構成のビルドでは実行ファイルが `build/bin/Release/` に置かれることがあります。移動時は同じ階層の `mobile/` ディレクトリも保持してください。実行ファイルだけを移すとヘルパー不足のエラーになります。
+複数構成のビルドでは、実行ファイルが `build/bin/Release/` に置かれる場合があります。そのビルドの通常のネイティブライブラリ配布要件に従ってください。
 
 ## 対応する入力と範囲
 
@@ -77,7 +74,6 @@ neverd mobile app.apk -o recovered-app --platform=android \
 | `-o DIRECTORY` | 必須 | 入力がディレクトリの場合はその外部に置く、新しい出力ディレクトリ。既存の出力は上書きしない |
 | `--platform=auto\|android` | `auto` | Android を明示的に選択するか、入力からプラットフォームを推定 |
 | `--jadx PATH` | 未指定：内蔵エンジン | 別途インストールした JADX 互換アダプターを明示的に選択。環境変数による選択や自動切り替えはない |
-| `--python PATH` | 環境変数／PATH | 同梱ヘルパー用のインタープリター。明示したオプションを優先 |
 | `--timeout N` | `300` | 内蔵解析の正の時間上限。外部バックエンドではバージョン確認を含む各プロセスの秒数上限 |
 | `--max-files N` | `20000` | 実際に作成されるディレクトリを含む、正のエントリー数上限 |
 | `--max-bytes N` | `2147483648` | 入力、展開データ、最終出力のバイト数上限。正の値を指定 |
@@ -144,7 +140,7 @@ recovered-app/
 neverd mobile app.apk -o recovered-app --json > recovery-result.json
 ```
 
-ヘルパーの実行が成功するとゼロ、復元に失敗するとゼロ以外を返します。ヘルパーの起動後は、`--json` により `schema_version`、`status: "error"`、`error` を含むエラーオブジェクトが生成されます。ネイティブ側の引数解析、Python の不足や 3.10 未満のバージョン、ヘルパーの欠落は、それ以前の段階で失敗し、JSON ではなく stderr に出力される場合があります。中断も stderr に報告されることがあります。利用側はこれらにも対応する必要があります。
+ネイティブ CLI は成功時にゼロ、復元失敗時に非ゼロを返します。`--json` では処理済みの失敗に `schema_version`、`status: "error"`、`error` が含まれます。引数解析、ネイティブ実行ファイルやライブラリの起動失敗、中断は stderr のみで報告される場合があります。まず終了状態を確認してください。
 
 ## 失敗時の処理とトラブルシューティング
 
@@ -152,7 +148,6 @@ neverd mobile app.apk -o recovered-app --json > recovery-result.json
 
 | 症状 | 対処 |
 |------|------|
-| Python またはヘルパーがない | Python 3.10 以降を選び、同じ階層の `mobile/` を保持する |
 | 未対応の DEX・命令・宣言・初期化 | 診断と対応範囲を確認する。独立した互換アダプターを意図して選ぶ場合のみ `--jadx PATH` を使う |
 | 不正な入力や重複クラス | 入力バイトコードやクラス集合を修正する。未対応の本体が黙って省略されることはない |
 | タイムアウトや処理上限超過 | 入力を絞るか、利用可能なリソースに合わせて `--timeout`、`--max-files`、`--max-bytes` を調整する |
@@ -171,9 +166,11 @@ python3 scripts/test_mobile_android_backend.py --jadx /opt/jadx/bin/jadx --never
 
 ## 検証とサポートの深さ
 
+Python は以下の開発用テストスクリプトでのみ使用します。内蔵のモバイル復元はネイティブ C++20 CLI で実行されます。
+
 ```sh
 cmake --build build --target check-neverd-mobile
-NEVERD_BUILD_DIR=build python3 -m unittest discover -s scripts/tests -p 'test_mobile_*.py' -v
+ctest --test-dir build -L NeverDMobileTests --output-on-failure
 python3 scripts/test_mobile_android_internal.py --d8 PATH --neverd build/bin/neverd
 ```
 

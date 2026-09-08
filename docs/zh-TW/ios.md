@@ -12,20 +12,19 @@
 
 ```sh
 cmake --build build --target neverd
-python3 --version
 neverd mobile App.ipa -o recovered-ios
 neverd mobile App.app -o recovered-arm64 --arch=arm64
 neverd mobile executable -o metadata --metadata-only
 neverd mobile App.app -o recovered-framework --artifact Frameworks/Example.framework/Example
 ```
 
-正常建置 NeverD，分發執行檔時保留同級 `mobile/` 目錄。需要 Python 3.10+，選擇順序是 `--python PATH`、`NEVERD_PYTHON`，最後是 PATH 中的 `python3`/`python`。不會自動下載依賴。在 macOS 上獨立編譯生成的 Apple 平臺語言原始碼，還需要 Apple Clang、SDK 和 Swift 工具鏈；這些要求與靜態原生分析相互獨立。
+使用支援 C++20 的工具鏈建置 `neverd` 目標。行動端工作流程已編譯進原生 CLI，不呼叫 Python 直譯器。發佈時請附上目前建置所需的原生相依函式庫。在 macOS 上獨立編譯產生的 Apple 語言原始碼需要 Apple Clang、SDK 與 Swift 工具鏈。這些要求與靜態分析分開；選用的外部工具不會自動下載。
 
 Swift 簽名恢復依次選擇 `--swift-demangle PATH`、`NEVERD_SWIFT_DEMANGLE` 和 PATH 中的 `swift-demangle`。macOS 最後會嘗試有時間限制的 `xcrun --find swift-demangle`。顯式指定的工具不存在會失敗；自動查詢不可用時保留未分類符號並報告 `unavailable`。沒有 Swift 符號的輸入不需要 demangler。`--metadata-only` 不呼叫原生後端或 demangler。
 
 ```sh
 neverd mobile App.ipa -o recovered-swift \
-  --python python3 --swift-demangle /path/to/swift-demangle --timeout=600 --json
+  --swift-demangle /path/to/swift-demangle --timeout=600 --json
 ```
 
 ## 輸入與選擇
@@ -44,9 +43,8 @@ Fat 二進位檔案的 `--arch=auto` 優先順序是 arm64、arm、x86_64、i386
 | `--artifact PATH` | 主程式 | 相對於應用目錄的執行檔路徑 |
 | `--metadata-only` | 關閉 | 只讀中繼資料，不恢復原始碼或呼叫工具 |
 | `--max-func N` | `0` | 原生函式數量上限；零表示所有發現的函式；中繼資料模式忽略此項 |
-| `--python PATH` | 環境/PATH | Python 3.10+ 輔助程式直譯器 |
 | `--swift-demangle PATH` | 環境/PATH/工具鏈 | Swift 簽名 demangler |
-| `--timeout N` | `300` | 每個後端程序的正整數秒數上限 |
+| `--timeout N` | `300` | 正值總分析時間預算（秒）；子程序使用剩餘預算 |
 | `--max-files N` | `20000` | 正整數條目預算；Swift 符號清單也有數量限制 |
 | `--max-bytes N` | `2147483648` | 輸入、解包資料和最終輸出的正整數位元組預算 |
 | `--json` | 關閉 | 以 JSON 輸出帶版本的報告 |
@@ -97,7 +95,7 @@ recovered-ios/
 
 只有能夠輸出原始碼時，才生成對應來源語言檔案。`objc.json` 儲存類、Category、例項變數和原始方法編碼，`objc.h` 儲存受支援宣告；`swift.json` 儲存名義型別中繼資料及 mangled 符號。簽名和方法 JSON 保留分類、省略項、原因及數量。日誌包含原生診斷，以及實際使用時的 Swift 工具鏈發現、demangling 和原生 Swift 匯出診斷。`report.json` 中的輸出路徑相對於其目錄。選中的二進位檔案是分析產物，生成原始碼不會把它作為恢復橋接依賴來連結。
 
-臨時包副本和中間後端 JSON 會被刪除。正常執行若沒有原生函式體，即使存在中繼資料也會失敗。中繼資料模式僅生成選中的檔案、`objc.h`、`objc.json`、`swift.json` 和 `report.json`，沒有原始碼目錄或方法覆蓋/簽名檔案；`native_function_count`、`objc_method_recovery`、`swift_method_recovery` 均為 `null`。該模式的 Python Objective-C 讀取器不解析鏈式指標或可重定位物件指標；完整恢復改用原生載入器已解析的 Objective-C 中繼資料。原始 Swift 中繼資料讀取器仍可能把不支援的引用標為部分恢復。
+臨時包副本和中間後端 JSON 會被刪除。正常執行若沒有原生函式體，即使存在中繼資料也會失敗。中繼資料模式僅生成選中的檔案、`objc.h`、`objc.json`、`swift.json` 和 `report.json`，沒有原始碼目錄或方法覆蓋/簽名檔案；`native_function_count`、`objc_method_recovery`、`swift_method_recovery` 均為 `null`。所有模式均使用原生載入器解析的 Objective-C 中繼資料。Swift 中繼資料透過有界的原生映像讀取取得；不支援的修正、可重定位配置或參照會保留部分還原診斷。
 
 下面的縮略示例明確展示部分恢復：
 
@@ -131,7 +129,7 @@ recovered-ios/
 
 Swift 的 `coverage_status` 只統計已分類的可呼叫項。整體 Swift `status` 還考慮未知符號，可為 `unavailable`、`unclassified`、`unsupported-architecture` 或 `no-symbols`。不可呼叫中繼資料位於 `non_method_symbols`，狀態為 `not-callable`；未知符號使用 `unclassified`。`types`、`type_metadata_count`、`source_type_count` 分別記錄型別中繼資料/輸出型別單元，不得用來增加方法數量。
 
-每個已還原 Swift 項目的 `source_representation` 為 `native-method-body` 或 `compiler-generated-from-type`。編譯器投影另保留 `compiler_projection_kind` 和 `compiler_projection_evidence`。`source_body_method_count` 計算已還原原生方法本體，`compiler_projection_method_count` 計算通過證明的編譯器投影，兩者相加等於 `recovered_method_count`。編譯器入口仍計入 `method_count` 分母，其確切身分必須出現在唯一對應的 `type` 原始碼單元中。只有型別中繼資料或相依項名稱不能增加已還原涵蓋率。 原生批次 JSON 的編譯器項目和型別單元包含 `source`；mobile 的 `source_units` 僅保留描述、不含 `source`，完整原始碼請見 `sources/swift.swift`。
+每個已還原 Swift 項目的 `source_representation` 為 `native-method-body` 或 `compiler-generated-from-type`。編譯器投影另保留 `compiler_projection_kind` 和 `compiler_projection_evidence`。`source_body_method_count` 計算已還原原生方法本體，`compiler_projection_method_count` 計算通過證明的編譯器投影，兩者相加等於 `recovered_method_count`。編譯器入口仍計入 `method_count` 分母，其確切身分必須出現在唯一對應的 `type` 原始碼單元中。只有型別中繼資料或相依項名稱不能增加已還原涵蓋率。原生批次 JSON 的編譯器項目和型別單元包含 `source`；mobile 的 `source_units` 僅保留描述、不含 `source`，完整原始碼請見 `sources/swift.swift`。
 
 原生 Swift 批次報告的 `source_units` 記錄 `{kind, module, name, source, method_entries, method_identities}`，kind 為 `function` 或 `type`，每個 identity 為 `{entry, mangled_symbol}`。不同符號可以共用入口並保留各自的 ABI 輸出；每個已還原 identity 必須且只能出現一次，未還原 identity 不得出現。`method_entries` 必須精確等於 `method_identities` 的有序入口投影，允許重複位址；不能默默合併完全相同的重複 identity。批次 `source` 等於依序串接每個單元原始碼再加一個換行。Mobile 在 `sources/swift.swift` 儲存完整原始碼，在覆蓋率 JSON 保留單元描述。逐方法 `source` 用於檢視，直接串接無法正確重建類別宣告。
 
@@ -153,20 +151,22 @@ Swift 匯出使用正常 mobile 流程通過 demangler 生成的結構化簽名�
 
 macOS 上啟用 `BUILD_TESTING` 的建置提供 `check-neverd-mobile-ios`，透過 CTest 執行三組原生還原驗證。
 
+Python 僅用於下列開發測試腳本；內建行動端還原在原生 C++20 CLI 中執行。
+
 ```sh
 cmake --build build --target check-neverd-mobile-ios
-NEVERD_BUILD_DIR=build python3 -m unittest discover -s scripts/tests -p 'test_mobile_*.py' -v
+ctest --test-dir build -L NeverDMobileTests --output-on-failure
 python3 scripts/test_mobile_ios_backend.py --neverd build/bin/neverd
 python3 scripts/test_mobile_ios_calls_backend.py --neverd build/bin/neverd
 python3 scripts/test_mobile_swift_backend.py --neverd build/bin/neverd
 ```
 
-macOS 上的 Objective-C 驗證腳本先編譯原始樣本，再還原 `.m`，最後只將產生的原始碼與獨立呼叫程式連結。純量腳本涵蓋整數邊界、分支、迴圈、指標讀寫、隱藏參數、float/double 位元身分、混合參數和堆疊參數。呼叫腳本另涵蓋訊息分派、繼承、Category、執行個體變數儲存、原生輔助函式及 Block 呼叫/擷取/共用身分。該樣本有 21 個方法，每個變體有 134 個獨立預期結果；已記錄的 arm64/x86_64 × classic/default 四組執行均還原 21/21 方法，並符合 134/134 結果。
+macOS 上的 Objective-C 驗證腳本先編譯原始樣本，再還原 `.m`，最後只將產生的原始碼與獨立呼叫程式連結。純量腳本涵蓋整數邊界、分支、迴圈、指標讀寫、隱藏參數、float/double 位元身分、混合參數和堆疊參數。呼叫腳本另涵蓋訊息分派、繼承、Category、執行個體變數儲存、原生輔助函式及 Block 呼叫/擷取/共用身分。呼叫樣本要求 arm64/x86_64 × classic/default 每個變體還原 21/21 個方法，並通過 134/134 項獨立預期結果檢查。請對目前的原生 CLI 建置執行這些驗證。
 
-嚴格 Swift 腳本檢查 22 個使用者宣告、3 個 getter/setter 入口和 7 個編譯器產生的可呼叫入口，任何項目都不能從清單消失。每個變體有 855 個原程式獨立預期結果檢查。腳本獨立編譯產生的 `.swift` 與呼叫程式，不使用原始 dylib、模組、橋接或手寫替代宣告。案例涵蓋純量/原生呼叫、類別初始化與儲存、結構按值/mutating 方法、浮點及堆疊參數、指標與迴圈。此自建樣本的正式 CLI 驗收已通過 arm64/x86_64 × classic/default 四個變體，零略過：每組還原 25 個原生方法本體和 7 個編譯器投影，保留全部 32 個可呼叫身分。原程式與獨立編譯的產生 Swift 每組均通過 855/855 項獨立預期結果檢查。這些結果僅適用於此樣本，不保證任意應用程式或原始程式文字的還原。腳本會拒絕涵蓋缺漏、原始碼編譯失敗及行為差異。
+嚴格 Swift 腳本檢查 22 個使用者宣告、3 個 getter/setter 入口和 7 個編譯器產生的可呼叫入口，任何項目都不能從清單消失。每個變體有 855 個原程式獨立預期結果檢查。腳本獨立編譯產生的 `.swift` 與呼叫程式，不使用原始 dylib、模組、橋接或手寫替代宣告。案例涵蓋純量/原生呼叫、類別初始化與儲存、結構按值/mutating 方法、浮點及堆疊參數、指標與迴圈。原生 C++20 CLI 的驗收要求是 arm64/x86_64 × classic/default 四個變體零略過：每組必須還原 25 個原生方法本體和 7 個編譯器投影，保留全部 32 個可呼叫身分，原程式與獨立編譯的產生 Swift 均須通過 855/855 項獨立預期結果檢查。這些結果僅適用於此樣本，不保證任意應用程式或原始程式文字的還原。腳本會拒絕涵蓋缺漏、原始碼編譯失敗及行為差異。
 
 三個腳本都支援 `--arch all|arm64|x86_64`、`--fixups both|classic|default`、`--timeout N` 和 `--work-dir NEW_DIRECTORY`。`--setup-only` 只驗證原始樣本，不測試還原。主機無法執行的架構會在允許時明確略過，略過不等於通過。保留失敗產物可區分原始碼涵蓋缺漏、編譯錯誤與行為差異；宣稱已驗證前應查看目前測試結果。
 
-結果釋出具有事務性：選擇新目錄，先檢查程序退出狀態，並把重定向的 JSON 放在該目錄外。失敗會刪除暫存輸出並保留已有結果。後端非零退出附帶長度受限的日誌尾部；超時與預算失敗有獨立訊息。`--json` 下已處理的輔助程式錯誤輸出 `status: "error"`；引數解析、輔助程式/直譯器缺失、Python 低於 3.10 或中斷可能更早在 stderr 失敗。
+結果釋出具有事務性：選擇新目錄，先檢查程序退出狀態，並把重定向的 JSON 放在該目錄外。失敗會刪除暫存輸出並保留已有結果。後端非零退出附帶長度受限的日誌尾部；超時與預算失敗有獨立訊息。原生 CLI 成功時回傳零，還原失敗時回傳非零。使用 `--json` 時，已處理的失敗包含 `schema_version`、`status: "error"` 與 `error`。參數解析、原生程式或相依函式庫啟動失敗，以及中斷仍可能只透過 stderr 回報。使用端應先檢查結束狀態。
 
 加密切片需要可讀輸入；缺少架構時檢查可用切片；缺少 Swift 工具時指定實際 demangler；方法被省略時檢視其準確原因和中繼資料診斷。增加 `--max-func` 只對因數量上限被排除的函式有幫助。缺少佈局、簽名、外部標頭檔案、異常支援或 ABI 行為支援，需要補充實現或有效中繼資料，不能直接宣稱完整恢復。分發工具或生成的軟體包時保留適用的依賴許可證宣告。

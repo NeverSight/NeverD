@@ -1,5 +1,13 @@
 # Third-Party Notices
 
+## zlib
+
+Mobile ZIP extraction links zlib for DEFLATE and CRC-32. CMake uses an installed
+library when available, or builds the unchanged, hash-pinned zlib 1.3.2 source
+archive as a static dependency. Its copyright and license remain in the source
+distribution. See the [zlib license](https://zlib.net/zlib_license.html) and
+[source releases](https://zlib.net/fossils/).
+
 ## Intel x86 approximation reference implementations
 
 The following files incorporate publicly released x86 approximation reference

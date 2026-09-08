@@ -1,3 +1,54 @@
+# Prefer the platform's compression library. Windows source builds can use
+# the pinned static fallback without a separately installed package manager.
+find_package(ZLIB QUIET)
+if(NOT TARGET ZLIB::ZLIB)
+  include(FetchContent)
+  function(neverd_mobile_fetch_zlib)
+    if(POLICY CMP0135)
+      cmake_policy(SET CMP0135 NEW)
+    endif()
+    set(ZLIB_BUILD_TESTING OFF)
+    set(ZLIB_BUILD_SHARED OFF)
+    set(ZLIB_BUILD_STATIC ON)
+    set(ZLIB_INSTALL OFF)
+    FetchContent_Declare(neverd_mobile_zlib
+      URL https://zlib.net/fossils/zlib-1.3.2.tar.gz
+      URL_HASH SHA256=bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16
+      TIMEOUT 180)
+    FetchContent_MakeAvailable(neverd_mobile_zlib)
+  endfunction()
+  neverd_mobile_fetch_zlib()
+  add_library(ZLIB::ZLIB ALIAS zlibstatic)
+endif()
+add_library(NeverDMobile STATIC
+  mobile/MobileCommon.cpp
+  mobile/MobileArchive.cpp
+  mobile/MobileProcess.cpp
+  mobile/MobileRecovery.cpp
+  mobile/MobileAndroid.cpp
+  mobile/MobileDalvikModel.cpp
+  mobile/MobileDalvikDex.cpp
+  mobile/MobileDalvikSmali.cpp
+  mobile/MobileDalvikJava.cpp
+  mobile/MobileIOS.cpp
+  mobile/MobileIOSMetadata.cpp
+  mobile/MobileIOSPlist.cpp
+  mobile/MobileIOSObjC.cpp
+  mobile/MobileIOSSwiftSignatures.cpp
+  mobile/MobileIOSSwift.cpp
+)
+target_compile_features(NeverDMobile PUBLIC cxx_std_20)
+target_include_directories(NeverDMobile PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/mobile
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS})
+target_link_libraries(NeverDMobile PUBLIC ZLIB::ZLIB neverd_shared)
+if(NOT APPLE)
+  # Internal loader symbols are not exported by the Windows C ABI DLL.
+  # macOS resolves these through libneverd, preserving one LLVM registry.
+  target_link_libraries(NeverDMobile PUBLIC NeverDLoader NeverDSupport)
+endif()
+
 add_neverd_tool(neverd
   neverd.cpp
   NeverDCLIOptions.cpp
@@ -18,6 +69,7 @@ add_neverd_tool(neverd
 
   LINK_LIBS
   neverd_shared
+  NeverDMobile
 )
 
 # The CLI uses internal support helpers that are not part of libneverd's C ABI.
@@ -28,29 +80,3 @@ add_neverd_tool(neverd
 if(NOT APPLE)
   target_link_libraries(neverd PRIVATE NeverDSupport)
 endif()
-
-# Refresh helpers even if only Python sources changed. Keep the runtime beside
-# the executable for relocatable build artifacts and multi-config generators.
-add_custom_target(neverd-mobile-runtime
-  COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:neverd>/mobile
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-          ${CMAKE_CURRENT_SOURCE_DIR}/mobile/__init__.py
-          ${CMAKE_CURRENT_SOURCE_DIR}/mobile/__main__.py
-          ${CMAKE_CURRENT_SOURCE_DIR}/mobile/common.py
-          ${CMAKE_CURRENT_SOURCE_DIR}/mobile/driver.py
-          ${CMAKE_CURRENT_SOURCE_DIR}/mobile/android.py
-          ${CMAKE_CURRENT_SOURCE_DIR}/mobile/dalvik_model.py
-          ${CMAKE_CURRENT_SOURCE_DIR}/mobile/dalvik_dex.py
-          ${CMAKE_CURRENT_SOURCE_DIR}/mobile/dalvik_smali.py
-          ${CMAKE_CURRENT_SOURCE_DIR}/mobile/dalvik_java.py
-          ${CMAKE_CURRENT_SOURCE_DIR}/mobile/ios.py
-          ${CMAKE_CURRENT_SOURCE_DIR}/mobile/macho.py
-          ${CMAKE_CURRENT_SOURCE_DIR}/mobile/objc_source.py
-          ${CMAKE_CURRENT_SOURCE_DIR}/mobile/swift_signatures.py
-          ${CMAKE_CURRENT_SOURCE_DIR}/mobile/swift_source.py
-          ${CMAKE_CURRENT_SOURCE_DIR}/mobile/windows_job.py
-          $<TARGET_FILE_DIR:neverd>/mobile
-  COMMENT "Copying NeverD mobile runtime"
-  VERBATIM
-)
-add_dependencies(neverd neverd-mobile-runtime)

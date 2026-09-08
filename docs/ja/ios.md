@@ -12,20 +12,19 @@
 
 ```sh
 cmake --build build --target neverd
-python3 --version
 neverd mobile App.ipa -o recovered-ios
 neverd mobile App.app -o recovered-arm64 --arch=arm64
 neverd mobile executable -o metadata --metadata-only
 neverd mobile App.app -o recovered-framework --artifact Frameworks/Example.framework/Example
 ```
 
-NeverD を通常どおりビルドし、実行ファイルを配布する際は隣接する `mobile/` も保持してください。Python 3.10+ が必要です。選択順は `--python PATH`、`NEVERD_PYTHON`、PATH の `python3`/`python` です。依存関係は自動ダウンロードしません。生成した Apple 言語のソースを macOS で独立してコンパイルするには Apple Clang、SDK、Swift ツールチェーンが必要で、静的ネイティブ解析とは別の要件です。
+C++20 対応のツールチェーンで `neverd` ターゲットをビルドします。モバイル処理はネイティブ CLI に組み込まれており、Python インタープリターを呼び出しません。配布時は、そのビルドが必要とするネイティブライブラリを添付してください。生成した Apple 言語のソースを macOS で独立してコンパイルするには Apple Clang、SDK、Swift ツールチェーンが必要です。静的解析とは別の要件であり、任意の外部ツールは自動ダウンロードされません。
 
 Swift の署名復元は `--swift-demangle PATH`、`NEVERD_SWIFT_DEMANGLE`、PATH の `swift-demangle` の順で選択します。macOS では最後に時間制限付きの `xcrun --find swift-demangle` を試します。明示指定したツールがなければ失敗し、自動検索で見つからなければ未分類シンボルを残して `unavailable` と報告します。Swift シンボルがない入力には demangler は不要です。`--metadata-only` はネイティブバックエンドも demangler も呼びません。
 
 ```sh
 neverd mobile App.ipa -o recovered-swift \
-  --python python3 --swift-demangle /path/to/swift-demangle --timeout=600 --json
+  --swift-demangle /path/to/swift-demangle --timeout=600 --json
 ```
 
 ## 入力と選択
@@ -44,9 +43,8 @@ Fat バイナリの `--arch=auto` は arm64、arm、x86_64、i386 の順に優�
 | `--artifact PATH` | メイン実行ファイル | アプリ基準の実行ファイル相対パス |
 | `--metadata-only` | 無効 | ソース復元やツール呼び出しをせずメタデータを読む |
 | `--max-func N` | `0` | ネイティブ関数上限。ゼロは検出した全関数。メタデータモードでは無視 |
-| `--python PATH` | 環境/PATH | ヘルパー用 Python 3.10+ |
 | `--swift-demangle PATH` | 環境/PATH/ツールチェーン | Swift 署名 demangler |
-| `--timeout N` | `300` | バックエンドプロセスごとの正の秒数上限 |
+| `--timeout N` | `300` | 解析全体の正の時間上限（秒）。子プロセスには残りの時間を割り当てる |
 | `--max-files N` | `20000` | 正の項目数予算。Swift シンボル一覧も制限対象 |
 | `--max-bytes N` | `2147483648` | 入力、展開データ、最終出力の正のバイト予算 |
 | `--json` | 無効 | バージョン付きレポートを JSON で出力 |
@@ -97,7 +95,7 @@ recovered-ios/
 
 ソース言語のファイルはコードを出力できる場合だけ存在します。`objc.json` はクラス、カテゴリ、ivar、生のメソッド型記述を、`objc.h` は対応する宣言を保存します。`swift.json` は名義型メタデータと mangled シンボルです。署名/メソッド JSON は分類、省略、理由、件数を保持します。ログはネイティブ診断と、利用した場合の Swift ツール検索・demangling・ネイティブ Swift エクスポート診断を含みます。`report.json` の出力パスは同じディレクトリ基準です。選択バイナリは解析成果物であり、生成コードの復元ブリッジとしてリンクしません。
 
-パッケージの一時コピーと中間 JSON は削除します。通常実行でネイティブ本体がなければ、メタデータがあっても失敗します。メタデータモードは選択ファイル、`objc.h`、`objc.json`、`swift.json`、`report.json` のみを生成し、ソースや署名/メソッドカバレッジはありません。`native_function_count`、`objc_method_recovery`、`swift_method_recovery` は `null` です。その Python Objective-C 読み取り器は chained pointer や再配置可能オブジェクトのポインターを解決しません。完全解析はネイティブローダーの解決済み情報を利用します。生の Swift メタデータは未対応参照を部分的と報告する場合があります。
+パッケージの一時コピーと中間 JSON は削除します。通常実行でネイティブ本体がなければ、メタデータがあっても失敗します。メタデータモードは選択ファイル、`objc.h`、`objc.json`、`swift.json`、`report.json` のみを生成し、ソースや署名/メソッドカバレッジはありません。`native_function_count`、`objc_method_recovery`、`swift_method_recovery` は `null`。すべてのモードで、ネイティブローダーが解決した Objective-C メタデータを使用します。Swift メタデータは範囲を検証したネイティブイメージ読み取りを使用し、未対応の fixup、再配置可能レイアウト、参照には部分的な解析の診断が残ります。
 
 以下は部分復元を示す短縮した例です。
 
@@ -131,7 +129,7 @@ recovered-ios/
 
 Swift の `coverage_status` は分類済みの呼び出し可能項目のみを数えます。全体の Swift `status` は未知シンボルも考慮し、`unavailable`、`unclassified`、`unsupported-architecture`、`no-symbols` になる場合があります。呼び出せないメタデータは `non_method_symbols` に `not-callable`、未知項目は `unclassified` として保存します。`types`、`type_metadata_count`、`source_type_count` は型情報と出力型単位を別に数え、メソッド数を増やす用途には使いません。
 
-復元済み Swift 行の `source_representation` は `native-method-body` または `compiler-generated-from-type` です。コンパイラー投影には `compiler_projection_kind` と `compiler_projection_evidence` も残します。`source_body_method_count` は復元したネイティブメソッド本体、`compiler_projection_method_count` は証明済みのコンパイラー投影を数え、合計は `recovered_method_count` と一致します。コンパイラーのエントリーも `method_count` の分母に残り、正確な識別情報を対応する一つの `type` ソース単位に記録します。型メタデータや依存先の名前だけで復元数を増やすことはありません。 ネイティブの一括 JSON ではコンパイラーの行と型単位に `source` を含みますが、mobile の `source_units` は説明のみを保持して `source` を含まず、完全なソースは `sources/swift.swift` に保存されます。
+復元済み Swift 行の `source_representation` は `native-method-body` または `compiler-generated-from-type` です。コンパイラー投影には `compiler_projection_kind` と `compiler_projection_evidence` も残します。`source_body_method_count` は復元したネイティブメソッド本体、`compiler_projection_method_count` は証明済みのコンパイラー投影を数え、合計は `recovered_method_count` と一致します。コンパイラーのエントリーも `method_count` の分母に残り、正確な識別情報を対応する一つの `type` ソース単位に記録します。型メタデータや依存先の名前だけで復元数を増やすことはありません。ネイティブの一括 JSON ではコンパイラーの行と型単位に `source` を含みますが、mobile の `source_units` は説明のみを保持して `source` を含まず、完全なソースは `sources/swift.swift` に保存されます。
 
 Swift バッチの `source_units` は `{kind, module, name, source, method_entries, method_identities}` を持ち、kind は `function` または `type`、各 identity は `{entry, mangled_symbol}` です。異なるシンボルは同じ入口を共有しつつ個別の ABI 出力を保持できます。各復元済み identity は一度だけ現れ、未復元 identity は含めません。`method_entries` は `method_identities` の入口を順に並べたものと一致し、アドレス重複を許します。同一 identity の重複を黙って統合してはいけません。バッチ `source` は各単位のソースと改行を順に結合したものです。Mobile は全体を `sources/swift.swift` に、単位の説明をカバレッジ JSON に保存します。個別メソッドの `source` は閲覧用で、単純連結ではクラス宣言を正しく構成できません。
 
@@ -153,20 +151,22 @@ Mach-O 読み込み済みセッションでは `neverd_objc_methods_json(session
 
 macOS で `BUILD_TESTING` を有効にしたビルドには `check-neverd-mobile-ios` があり、CTest で三つのネイティブ復元テストスイートを実行します。
 
+Python は以下の開発用テストスクリプトでのみ使用します。内蔵のモバイル復元はネイティブ C++20 CLI で実行されます。
+
 ```sh
 cmake --build build --target check-neverd-mobile-ios
-NEVERD_BUILD_DIR=build python3 -m unittest discover -s scripts/tests -p 'test_mobile_*.py' -v
+ctest --test-dir build -L NeverDMobileTests --output-on-failure
 python3 scripts/test_mobile_ios_backend.py --neverd build/bin/neverd
 python3 scripts/test_mobile_ios_calls_backend.py --neverd build/bin/neverd
 python3 scripts/test_mobile_swift_backend.py --neverd build/bin/neverd
 ```
 
-macOS の Objective-C 検証スクリプトは元のサンプルをコンパイルし、`.m` を復元した後、生成ソースだけを独立した呼び出しハーネスとリンクします。スカラー用スクリプトは整数境界、分岐、ループ、ポインター読み書き、暗黙引数、float/double のビット同一性、混合引数、スタック引数を扱います。呼び出し用スクリプトはメッセージ配送、継承、Category、インスタンス変数、ネイティブヘルパー、Block 呼び出し・キャプチャ・共有同一性も扱います。このサンプルは 21 メソッドと各バリアント 134 個の独立した期待結果を持ち、記録済みの arm64/x86_64 × classic/default の四構成では各 21/21 メソッドを復元し、134/134 結果が一致しました。
+macOS の Objective-C 検証スクリプトは元のサンプルをコンパイルし、`.m` を復元した後、生成ソースだけを独立した呼び出しハーネスとリンクします。スカラー用スクリプトは整数境界、分岐、ループ、ポインター読み書き、暗黙引数、float/double のビット同一性、混合引数、スタック引数を扱います。呼び出し用スクリプトはメッセージ配送、継承、Category、インスタンス変数、ネイティブヘルパー、Block 呼び出し・キャプチャ・共有同一性も扱います。呼び出しサンプルは、arm64/x86_64 × classic/default の各構成で 21/21 件のメソッド復元と 134/134 件の独立した期待結果への一致を要求します。現在のネイティブ CLI ビルドで検証してください。
 
-厳格な Swift スクリプトは、ユーザー宣言 22 件、getter/setter エントリー 3 件、コンパイラー生成の呼び出し可能エントリー 7 件を確認し、一覧からの欠落を許しません。各バリアントで元のプログラムに対して 855 件の独立した期待結果を確認します。生成した `.swift` とハーネスを独立にコンパイルし、元の dylib、モジュール、ブリッジ、手書きの代替宣言は使用しません。スカラー/ネイティブ呼び出し、クラス初期化と格納、構造体の値渡し/mutating メソッド、浮動小数点とスタック引数、ポインター、ループを扱います。この自作サンプルの正式 CLI 受け入れテストは、arm64/x86_64 × classic/default の四構成すべてでスキップなしに成功しました。各構成でネイティブメソッド本体 25 件とコンパイラー投影 7 件を復元し、32 件すべての呼び出し可能な識別情報を保持しました。元のプログラムと独立にコンパイルした生成 Swift は、各構成で 855/855 件の期待結果に一致しました。この結果は当該サンプルに限られ、任意のアプリケーションや元のソース文字列の復元を保証しません。スクリプトはカバレッジ欠落、ソースのコンパイル失敗、動作の不一致を拒否します。
+厳格な Swift スクリプトは、ユーザー宣言 22 件、getter/setter エントリー 3 件、コンパイラー生成の呼び出し可能エントリー 7 件を確認し、一覧からの欠落を許しません。各バリアントで元のプログラムに対して 855 件の独立した期待結果を確認します。生成した `.swift` とハーネスを独立にコンパイルし、元の dylib、モジュール、ブリッジ、手書きの代替宣言は使用しません。スカラー/ネイティブ呼び出し、クラス初期化と格納、構造体の値渡し/mutating メソッド、浮動小数点とスタック引数、ポインター、ループを扱います。ネイティブ C++20 CLI の受け入れ条件は、arm64/x86_64 × classic/default の四構成ですべてスキップなしに成功することです。各構成でネイティブ本体 25 件とコンパイラー投影 7 件を復元し、呼び出し可能な識別情報 32 件を保持し、元のプログラムと独立にコンパイルした生成 Swift がそれぞれ 855/855 件の期待結果に一致する必要があります。この結果は当該サンプルに限られ、任意のアプリケーションや元のソース文字列の復元を保証しません。スクリプトはカバレッジ欠落、ソースのコンパイル失敗、動作の不一致を拒否します。
 
 三つのスクリプトは `--arch all|arm64|x86_64`、`--fixups both|classic|default`、`--timeout N`、`--work-dir NEW_DIRECTORY` に対応します。`--setup-only` は元のサンプルだけを検証し、復元はテストしません。ホストで実行できないアーキテクチャは、許可される場合に明示的にスキップされます。スキップは成功ではありません。保存された失敗成果物でソースの欠落、コンパイルエラー、動作の差を区別し、検証済みと主張する前に現在のテスト結果を確認してください。
 
-公開はトランザクション方式です。新規ディレクトリを選び、最初に終了状態を確認し、リダイレクトする JSON はその外に置いてください。失敗時は一時出力を削除し既存結果を保持します。バックエンドの非ゼロ終了は制限付きログ末尾を含み、タイムアウトと予算超過には個別のメッセージがあります。`--json` の処理済みヘルパーエラーは `status: "error"` ですが、引数解析、ヘルパー/インタープリター不足、Python 3.10 未満、中断は先に stderr で失敗することがあります。
+公開はトランザクション方式です。新規ディレクトリを選び、最初に終了状態を確認し、リダイレクトする JSON はその外に置いてください。失敗時は一時出力を削除し既存結果を保持します。バックエンドの非ゼロ終了は制限付きログ末尾を含み、タイムアウトと予算超過には個別のメッセージがあります。ネイティブ CLI は成功時にゼロ、復元失敗時に非ゼロを返します。`--json` では処理済みの失敗に `schema_version`、`status: "error"`、`error` が含まれます。引数解析、ネイティブ実行ファイルやライブラリの起動失敗、中断は stderr のみで報告される場合があります。まず終了状態を確認してください。
 
 暗号化スライスには読み取り可能な入力を、架構不足には利用可能スライスの確認を、Swift ツール不足には実在する demangler の指定を行ってください。省略メソッドの正確な理由とメタデータ診断を確認します。`--max-func` の増加が有効なのは上限で除外された関数だけです。配置、署名、外部ヘッダー、例外、ABI 対応不足には実装や追加の有効メタデータが必要で、完全復元という主張では解消しません。配布時には適用される依存ライセンス通知を保持してください。

@@ -25,30 +25,27 @@ Ouvrez `recovered-app/sources/` pour lire les fichiers Java et `recovered-app/re
 
 | Composant | Exigence | Sélection |
 |-----------|----------|-----------|
-| NeverD | Compiler la cible `neverd` ; distribuer aussi le répertoire `mobile/` placé à côté de l’exécutable | `build/bin/neverd` ou un exécutable dans PATH |
-| Python | Python 3.10 ou ultérieur, indépendamment de l’hôte de plugins intégré | `--python`, puis `NEVERD_PYTHON`, puis `python3`/`python` dans PATH |
+| NeverD | Compilez la cible `neverd` avec une chaîne compatible C++20. Le traitement mobile est intégré à la CLI native et n’appelle aucun interpréteur Python. Distribuez l’exécutable avec les bibliothèques natives nécessaires à votre compilation. | `build/bin/neverd` / PATH |
 
-Le moteur par défaut utilise uniquement la bibliothèque standard Python : aucun environnement Java ou JADX n’est nécessaire. Il accepte les déclarations et opérations ordinaires représentables de DEX 035, 037–040 et smali. DEX 041, les appels dynamiques tels que `invoke-custom`, certains chemins d’initialisation, les annotations sémantiques ou opérations inconnues et les identifiants impossibles à exprimer en Java échouent explicitement. Accepter un format ne signifie pas en prendre en charge toutes les instructions ou déclarations.
+Le moteur par défaut est implémenté en C++20 et ne nécessite aucun environnement Python, Java ou JADX à l’exécution. Il accepte les déclarations et opérations ordinaires représentables de DEX 035, 037–040 et smali. DEX 041, les appels dynamiques tels que `invoke-custom`, certains chemins d’initialisation, les annotations sémantiques ou opérations inconnues et les identifiants impossibles à exprimer en Java échouent explicitement. Accepter un format ne signifie pas en prendre en charge toutes les instructions ou déclarations.
 
 ### Linux et macOS
 
 ```sh
 cmake --build build --target neverd
-python3 --version
 
-./build/bin/neverd mobile app.apk -o recovered-app --python python3
+./build/bin/neverd mobile app.apk -o recovered-app
 ```
 
-Utilisez `NEVERD_PYTHON` pour choisir un interpréteur lors des exécutions suivantes. Ni `NEVERD_JADX` ni un exécutable `jadx` dans PATH ne sélectionnent le moteur externe : seul `--jadx PATH` explicite le fait. Aucun repli automatique n’est effectué. Entourez de guillemets les chemins contenant des espaces.
+Ni `NEVERD_JADX` ni un exécutable `jadx` dans PATH ne sélectionnent le moteur externe : seul `--jadx PATH` explicite le fait. Aucun repli automatique n’est effectué. Entourez de guillemets les chemins contenant des espaces.
 
 ### Windows PowerShell
 
 ```powershell
-& .\build\bin\neverd.exe mobile .\app.apk -o .\recovered-app `
-  --python 'C:\Tools\Python\python.exe'
+& .\build\bin\neverd.exe mobile .\app.apk -o .\recovered-app
 ```
 
-Une compilation multiconfiguration peut placer l’exécutable dans `build/bin/Release/`. Conservez son répertoire voisin `mobile/` lors d’un déplacement ; déplacer uniquement l’exécutable provoque une erreur d’auxiliaire manquant.
+Une compilation multiconfiguration peut placer l’exécutable dans `build/bin/Release/`. Respectez les règles habituelles de déploiement des bibliothèques natives de cette compilation.
 
 ## Entrées prises en charge et limites
 
@@ -77,7 +74,6 @@ neverd mobile app.apk -o recovered-app --platform=android \
 | `-o DIRECTORY` | Obligatoire | Nouveau répertoire de sortie, extérieur à toute entrée de type répertoire ; ne jamais écraser une sortie existante |
 | `--platform=auto\|android` | `auto` | Choisir Android explicitement ou déduire la plateforme de l’entrée |
 | `--jadx PATH` | Non défini : moteur intégré | Sélection explicite de l’adaptateur de compatibilité JADX installé séparément ; aucune sélection par l’environnement ni aucun repli automatique |
-| `--python PATH` | Environnement/PATH | Interpréteur de l’outil auxiliaire fourni ; l’option explicite est prioritaire |
 | `--timeout N` | `300` | Budget de temps positif pour l’analyse intégrée ; limite en secondes par processus externe, vérification de version comprise |
 | `--max-files N` | `20000` | Limite positive du nombre d’entrées, répertoires créés compris |
 | `--max-bytes N` | `2147483648` | Limite positive en octets pour l’entrée, les données extraites et la sortie finale |
@@ -144,7 +140,7 @@ Pour l’automatisation, vérifiez le code de sortie du processus avant d’expl
 neverd mobile app.apk -o recovered-app --json > recovery-result.json
 ```
 
-Les exécutions réussies de l’outil auxiliaire renvoient zéro. Les échecs de reconstruction renvoient une valeur non nulle ; dès que la gestion des erreurs de l’outil auxiliaire est active, `--json` produit un objet d’erreur contenant `schema_version`, `status: "error"` et `error`. L’analyse native des arguments, l’absence de Python, une version de Python antérieure à 3.10 ou l’absence de l’outil auxiliaire peuvent échouer plus tôt et produire un message sur stderr plutôt que du JSON. Une interruption peut aussi être signalée sur stderr. Les outils consommateurs doivent gérer ces cas.
+La CLI native renvoie zéro en cas de succès et une valeur non nulle en cas d’échec. Avec `--json`, les erreurs traitées comprennent `schema_version`, `status: "error"` et `error`. L’analyse des arguments, le démarrage de l’exécutable ou des bibliothèques natives et les interruptions peuvent être signalés uniquement sur stderr. Vérifiez d’abord le code de sortie.
 
 ## Gestion des échecs et dépannage
 
@@ -152,7 +148,6 @@ La publication est transactionnelle : la sortie existante est préservée et les
 
 | Symptôme | Action |
 |----------|--------|
-| Python ou auxiliaire absent | Choisir Python 3.10+ et conserver le répertoire voisin `mobile/` |
 | DEX, instruction, déclaration ou initialisation non pris en charge | Lire le diagnostic et vérifier le sous-ensemble accepté. Utiliser `--jadx PATH` uniquement pour choisir délibérément l’adaptateur distinct |
 | Entrée invalide ou classe dupliquée | Corriger le bytecode ou l’ensemble de classes ; aucun corps non pris en charge n’est omis silencieusement |
 | Délai ou budget dépassé | Réduire l’entrée ou ajuster `--timeout`, `--max-files` et `--max-bytes` selon les ressources disponibles |
@@ -171,9 +166,11 @@ python3 scripts/test_mobile_android_backend.py --jadx /opt/jadx/bin/jadx --never
 
 ## Vérification et profondeur de prise en charge
 
+Python sert uniquement aux scripts de test de développement ci-dessous ; la récupération mobile intégrée s’exécute dans la CLI native C++20.
+
 ```sh
 cmake --build build --target check-neverd-mobile
-NEVERD_BUILD_DIR=build python3 -m unittest discover -s scripts/tests -p 'test_mobile_*.py' -v
+ctest --test-dir build -L NeverDMobileTests --output-on-failure
 python3 scripts/test_mobile_android_internal.py --d8 PATH --neverd build/bin/neverd
 ```
 
