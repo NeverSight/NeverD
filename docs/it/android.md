@@ -4,7 +4,7 @@
 
 [← Indice della documentazione](README.md)
 
-`neverd mobile` ricostruisce Java leggibile da input APK, DEX e smali tramite un backend JADX installato separatamente. Il flusso convalida il bytecode, prepara copie di lavoro, analizza insieme le classi correlate, controlla l’output generato e pubblica una directory di sorgenti con un report leggibile dalle applicazioni. È una funzionalità CLI sperimentale. I contenitori APK e l’output Java non sono disponibili tramite l’SDK C nativo, l’SDK dei plugin Python, il loader della GUI o `neverd decompile --language`.
+`neverd mobile` recupera Java leggibile da APK, DEX e smali usando per impostazione predefinita il motore integrato di NeverD. I lettori, implementati in modo indipendente, condividono un modello Dalvik tipizzato e un generatore Java con lavoro limitato. Questa funzione CLI sperimentale non promette parità funzionale con JADX né il recupero completo di qualsiasi APK. I contenitori APK e l’output Java non sono disponibili tramite SDK C nativo, SDK dei plugin Python, caricatore GUI o `neverd decompile --language`.
 
 Il Java prodotto è una ricostruzione del bytecode. Commenti, formattazione, scelte del linguaggio sorgente originale e identificatori rimossi non sono disponibili; anche il bytecode Kotlin produce Java. Un’esecuzione riuscita non dimostra l’equivalenza semantica e non garantisce che ogni metodo possa essere ricompilato. Questo flusso non avvia le applicazioni analizzate.
 
@@ -27,42 +27,35 @@ Apri `recovered-app/sources/` per leggere i file Java e `recovered-app/report.js
 |------------|-----------|-----------|
 | NeverD | Compilare il target `neverd`; distribuire anche la directory `mobile/` accanto all’eseguibile | `build/bin/neverd` o un eseguibile nel PATH |
 | Python | Python 3.10 o successivo, indipendente dall’host dei plugin incorporato | `--python`, poi `NEVERD_PYTHON`, poi `python3`/`python` nel PATH |
-| Backend Java | JADX 1.5.6 o successivo con i plugin standard per input DEX e smali | `--jadx`, poi `NEVERD_JADX`, poi `jadx` nel PATH |
-| Runtime Java | Java 11 o successivo; per la verifica tramite compilazione ed esecuzione serve un JDK | `JAVA_HOME` o Java nel PATH |
 
-NeverD non scarica automaticamente le dipendenze. Procurati la [distribuzione JADX](https://github.com/skylot/jadx/releases/tag/v1.5.6) completa, mantieni la struttura `bin/` e `lib/` e conserva le licenze incluse quando la ridistribuisci. La versione del backend verificata è la 1.5.6; le versioni successive devono rispettare lo stesso contratto CLI. La preparazione delle dipendenze è separata dalla compilazione della pipeline LLVM di NeverD.
+Il motore predefinito usa solo la libreria standard Python e non richiede Java o JADX durante l’esecuzione. Accetta dichiarazioni e operazioni comuni rappresentabili di DEX 035, 037–040 e smali. DEX 041, chiamate dinamiche come `invoke-custom`, alcuni percorsi di inizializzazione, annotazioni semantiche od operazioni sconosciute e identificatori non esprimibili in Java falliscono esplicitamente. Accettare un formato non significa supportarne tutte le istruzioni e dichiarazioni.
 
 ### Linux e macOS
 
 ```sh
 cmake --build build --target neverd
 python3 --version
-java -version
-/opt/jadx/bin/jadx --version
 
-./build/bin/neverd mobile app.apk -o recovered-app \
-  --python python3 --jadx /opt/jadx/bin/jadx
+./build/bin/neverd mobile app.apk -o recovered-app --python python3
 ```
 
-Per l’uso ripetuto, imposta `NEVERD_JADX=/opt/jadx/bin/jadx` e, se necessario, indica il percorso dell’interprete in `NEVERD_PYTHON`. Se Java non è già disponibile, fai puntare `JAVA_HOME` alla directory di installazione del JDK. I percorsi che contengono spazi vanno racchiusi tra virgolette.
+Usare `NEVERD_PYTHON` per scegliere l’interprete nelle esecuzioni successive. Né `NEVERD_JADX` né un eseguibile `jadx` nel PATH selezionano il motore esterno: serve un `--jadx PATH` esplicito. Non esiste un ripiego automatico. Racchiudere tra virgolette i percorsi con spazi.
 
 ### Windows PowerShell
 
 ```powershell
-$env:JAVA_HOME = 'C:\Tools\jdk'
 & .\build\bin\neverd.exe mobile .\app.apk -o .\recovered-app `
-  --python 'C:\Tools\Python\python.exe' `
-  --jadx 'C:\Tools\jadx\bin\jadx.bat'
+  --python 'C:\Tools\Python\python.exe'
 ```
 
-Il percorso `.bat`/`.cmd` del backend viene usato per individuare l’unico `lib/jadx-*-all.jar` della distribuzione; NeverD invoca Java direttamente. Puoi anche passare quel JAR a `--jadx`. I percorsi delle applicazioni non vengono mai inseriti in un comando shell. Le build con più configurazioni possono collocare l’eseguibile in `build/bin/Release/`. Spostare solo l’eseguibile senza la sua directory `mobile/` provoca un errore di helper mancante.
+Le build con più configurazioni possono collocare l’eseguibile in `build/bin/Release/`. Quando lo si sposta, conservare la directory adiacente `mobile/`; spostare solo l’eseguibile provoca un errore di helper mancante.
 
 ## Input supportati e confini
 
 | Input | Comportamento | Limite importante |
 |-------|---------------|-------------------|
 | `.apk` | Convalidare l’intero ZIP, quindi analizzare insieme tutti i `classes.dex`, `classes2.dex` e i successivi DEX numerati nella radice dell’archivio | Solo codice; nessuna decodifica di risorse o manifest |
-| `.dex` | Convalidare la firma DEX e lasciare al backend la decodifica del contenuto | Un file rinominato o troncato non è bytecode valido |
+| `.dex` | Validazione e analisi di DEX 035 o 037–040 tramite il lettore integrato | DEX 041 e dichiarazioni od operazioni non supportate falliscono; rinominare o troncare un file non produce bytecode valido |
 | `.smali` | Analizzare la classe fornita | Le classi adiacenti referenziate non vengono caricate implicitamente |
 | Directory smali | Raccogliere ricorsivamente i file `.smali` e analizzarli insieme | Includere le classi annidate e le radici smali dipendenti nella directory di input |
 
@@ -76,38 +69,36 @@ Le risorse APK, `AndroidManifest.xml`, gli asset, le librerie JNI/native e il co
 
 ```sh
 neverd mobile app.apk -o recovered-app --platform=android \
-  --jadx /opt/jadx/bin/jadx --timeout=600 \
-  --max-files=30000 --max-bytes=4294967296 --json
+  --timeout=600 --max-files=30000 --max-bytes=4294967296 --json
 ```
 
 | Opzione | Valore predefinito | Significato |
 |---------|-------------------|-------------|
 | `-o DIRECTORY` | Obbligatoria | Nuova directory di output esterna a qualsiasi directory di input; non sovrascrivere mai un output esistente |
 | `--platform=auto\|android` | `auto` | Selezionare Android esplicitamente o dedurre la piattaforma dall’input |
-| `--jadx PATH` | Ambiente/PATH | Launcher del backend o JAR della distribuzione; l’opzione esplicita ha precedenza |
+| `--jadx PATH` | Non impostato: motore integrato | Seleziona esplicitamente l’adattatore di compatibilità JADX installato separatamente; nessuna selezione dall’ambiente né ripiego automatico |
 | `--python PATH` | Ambiente/PATH | Interprete per l’helper incluso; l’opzione esplicita ha precedenza |
-| `--timeout N` | `300` | Numero positivo di secondi per processo backend, compreso il rilevamento della versione |
+| `--timeout N` | `300` | Budget di tempo positivo per l’analisi integrata; secondi per processo esterno, inclusa la verifica della versione |
 | `--max-files N` | `20000` | Limite positivo del numero di voci, comprese le directory create |
 | `--max-bytes N` | `2147483648` | Limite positivo in byte per input, dati estratti e output finale |
 | `--json` | Disattivato | Stampare il report in JSON anziché come riepilogo per l’utente |
 
-Un valore di `--arch` diverso da quello predefinito, `--artifact`, `--metadata-only` e un valore non nullo di `--max-func` appartengono a iOS e vengono rifiutati per Android; `--arch=auto` è accettato anche quando viene indicato esplicitamente. Non esiste un inoltro arbitrario di opzioni al backend. Le directory di configurazione, cache e file temporanei del backend sono isolate per ogni esecuzione; impostazioni preesistenti e configurazioni dei plugin non vengono importate nel processo.
+Una selezione `--arch` diversa da quella predefinita, `--artifact`, `--metadata-only` e un `--max-func` diverso da zero appartengono a iOS e vengono rifiutati per Android; `--arch=auto` esplicito è accettato. Non è previsto l’inoltro di opzioni arbitrarie al backend. L’adattatore JADX esplicito isola configurazione, cache e directory temporanee, senza importare impostazioni ambientali del backend o configurazioni dei plugin.
 
-I limiti controllano le risorse, ma non costituiscono una sandbox per il processo backend. Anche l’area di lavoro temporanea viene monitorata, con spazio per input, dati estratti e output fino a tre volte i budget configurati di voci e byte. I log sono limitati a 16 MiB per processo. Gli input grandi possono comunque richiedere più heap Java o un timeout maggiore; aumentare un limite non disattiva gli altri.
+Input, dati estratti e output finale conservano i budget di file e byte. I lettori e il generatore integrati controllano anche lavoro limitato e tempo trascorso. Le aree di lavoro esterne consentono fino al triplo dei budget di voci e byte per ospitare input preparati e risultati intermedi; i log sono limitati a 16 MiB per processo. Sono controlli delle risorse, non una sandbox. Aumentare un limite non disattiva gli altri.
 
 ## Struttura dell’output e report JSON
 
 ```text
 recovered-app/
-  sources/                 package e classi Java ricostruiti
-  logs/jadx-version.log    rilevamento della versione del backend
-  logs/jadx.log            diagnostica del backend
-  report.json              inventario con versione e limiti di ricostruzione
+  sources/                       package e classi Java recuperati
+  metadata/android-methods.json  copertura dei metodi del motore integrato
+  report.json                    inventario con versione e limiti
 ```
 
-Le copie temporanee e le cache del backend vengono rimosse. I nomi esatti dei file Java e il loro numero dipendono dalla ricostruzione del backend; le classi annidate possono condividere il file sorgente della classe esterna. Il numero di sorgenti Java non coincide quindi con quello delle classi DEX.
+Gli input temporanei vengono rimossi. Le classi annidate possono condividere il file della classe esterna, quindi il numero di file Java non equivale al numero di classi DEX. I metodi generati possono usare un ciclo di dispatch Java; non eseguono il DEX originale né lo richiamano tramite un ponte a runtime.
 
-Un report illustrativo abbreviato:
+Il report integrato include `android_method_recovery`, scritto anche in `metadata/android-methods.json`. Prima della pubblicazione deve valere `method_count = recovered_method_count + declaration_only_method_count`, con `unrecovered_method_count` pari a zero. I metodi originali `native` e `abstract` hanno stato `declaration-only` e non contano come corpi recuperati. Segue un esempio abbreviato; il file di copertura contiene anche l’inventario per metodo:
 
 ```json
 {
@@ -116,14 +107,32 @@ Un report illustrativo abbreviato:
   "platform": "android",
   "source": "app.apk",
   "input_kind": "apk",
-  "backend": {"name": "jadx", "version": "1.5.6"},
-  "input_code_files": ["classes.dex", "classes2.dex"],
+  "backend": {
+    "name": "neverd",
+    "version": "1",
+    "execution": "builtin"
+  },
+  "input_code_files": [
+    "classes.dex",
+    "classes2.dex"
+  ],
   "dex_count": 2,
   "smali_count": 0,
   "java_source_count": 2,
-  "java_sources": ["sources/example/Main.java", "sources/example/Peer.java"],
-  "logs": ["logs/jadx-version.log", "logs/jadx.log"],
-  "limitations": ["Java is reconstructed from bytecode; original comments, formatting, and stripped names cannot be restored."]
+  "java_sources": [
+    "sources/example/Main.java",
+    "sources/example/Peer.java"
+  ],
+  "logs": [],
+  "android_method_recovery": {
+    "schema_version": 1,
+    "status": "recovered",
+    "class_count": 2,
+    "method_count": 6,
+    "recovered_method_count": 5,
+    "declaration_only_method_count": 1,
+    "unrecovered_method_count": 0
+  }
 }
 ```
 
@@ -139,29 +148,35 @@ Le esecuzioni riuscite dell’helper restituiscono zero. Gli errori di ricostruz
 
 ## Gestione degli errori e risoluzione dei problemi
 
-La pubblicazione è transazionale: l’output esistente viene preservato e l’output temporaneo dei tentativi falliti viene rimosso. Codici di uscita non nulli del backend, errori di assemblaggio o decompilazione nei log, classi omesse a causa di duplicati, marcatori espliciti di codice incompleto, file Java vuoti e risultati senza Java fanno tutti fallire il comando. Un successo segnalato dal backend non dimostra da solo la correttezza dei singoli metodi.
+La pubblicazione è transazionale: l’output esistente viene conservato e i risultati temporanei falliti vengono rimossi. Operazioni non supportate, flussi di registri irrisolti, dichiarazioni non rappresentabili, gestione delle eccezioni malformata e budget esauriti fanno fallire il motore integrato anziché pubblicare corpi mancanti. L’adattatore esterno rifiuta anche uscite non nulle, errori di assemblaggio o decompilazione nei log, omissioni di classi duplicate, marcatori di codice incompleto, file Java vuoti e assenza di Java. Un recupero riuscito non prova l’equivalenza semantica.
 
 | Sintomo | Azione |
 |---------|--------|
-| Python/helper mancante | Installare o selezionare Python 3.10+ e mantenere la directory `mobile/` accanto a NeverD |
-| Backend non eseguibile o versione non supportata | Verificare `--jadx`, la struttura completa della distribuzione, Java e la versione minima del backend |
-| Header DEX non valido / nessun DEX nella radice | Controllare il formato effettivo dell’input; usare un APK contenente codice, un DEX ordinario o smali |
-| Nessun file smali | Indicare una directory con file `.smali`, non sorgenti Java o un albero contenente solo asset |
-| Classe duplicata o ricostruzione parziale | Rimuovere le definizioni duplicate o analizzare separatamente l’insieme di bytecode pertinente; correggere lo smali malformato invece di accettare un risultato incompleto |
-| Timeout / limite di byte o voci | Usare un input più piccolo e pertinente oppure aumentare consapevolmente il limite corrispondente |
-| Percorso di archivio o link non sicuro | Ricreare un input regolare e portabile, senza nomi con attraversamento di directory, link, file speciali o percorsi in conflitto |
-| Output già esistente | Scegliere un’altra directory di output; non riutilizzare quella di una precedente esecuzione riuscita |
+| Python o helper mancante | Selezionare Python 3.10+ e conservare la directory adiacente `mobile/` |
+| DEX, istruzione, dichiarazione o inizializzazione non supportati | Leggere il messaggio diagnostico e verificare il sottoinsieme supportato. Usare `--jadx PATH` solo scegliendo deliberatamente l’adattatore separato |
+| Input non valido o classe duplicata | Correggere bytecode o insieme di classi; i corpi non supportati non vengono omessi silenziosamente |
+| Tempo o budget superato | Ridurre l’input o adattare `--timeout`, `--max-files` e `--max-bytes` alle risorse disponibili |
+| Output già esistente | Scegliere una nuova directory di output |
 
-Le esecuzioni riuscite conservano i log del backend. Le directory temporanee dei tentativi falliti, compresi i loro log, vengono eliminate. Un codice di uscita non nullo del backend include nell’errore un estratto limitato della parte finale della diagnostica; i timeout e il superamento dei budget di risorse producono messaggi specifici. Per indagini specifiche sul backend, riproduci il problema su un input isolato con la CLI del backend e una directory diagnostica separata. Non dedurre mai il successo dalla sola comparsa di file Java prima di un errore.
+## Adattatore opzionale di compatibilità JADX
+
+`--jadx PATH` seleziona JADX esterno, non l’implementazione integrata. Installare JADX 1.5.6 o successivo con i plugin standard di input DEX/smali e Java 11 o successivo. Ottenere la [distribuzione completa di JADX](https://github.com/skylot/jadx/releases/tag/v1.5.6), conservarne la struttura `bin/` e `lib/` e, in caso di ridistribuzione, le licenze delle dipendenze incluse. Nulla viene scaricato automaticamente. Il report dell’adattatore identifica il motore effettivo `jadx` e la versione rilevata; non dichiara la copertura dei metodi del motore integrato.
+
+Su Windows, indicare il launcher `.bat`/`.cmd` della distribuzione oppure `lib/jadx-*-all.jar`. NeverD individua il JAR e avvia Java direttamente: i percorsi dell’applicazione non passano per una shell di comandi. `JAVA_HOME` o PATH selezionano Java. Le esecuzioni riuscite conservano `logs/jadx-version.log` e `logs/jadx.log`; directory temporanee e log dei tentativi falliti vengono rimossi. Solo un’uscita non nulla del backend include una coda limitata del log. Errori di avvio, timeout e superamenti dei budget hanno messaggi specifici.
+
+```sh
+neverd mobile app.apk -o recovered-jadx --jadx /opt/jadx/bin/jadx
+python3 scripts/test_mobile_android_backend.py --jadx /opt/jadx/bin/jadx --neverd build/bin/neverd
+```
 
 ## Verifica e profondità del supporto
 
 ```sh
 cmake --build build --target check-neverd-mobile
 NEVERD_BUILD_DIR=build python3 -m unittest discover -s scripts/tests -p 'test_mobile_*.py' -v
-python3 scripts/test_mobile_android_backend.py --jadx /opt/jadx/bin/jadx --neverd build/bin/neverd
+python3 scripts/test_mobile_android_internal.py --d8 PATH --neverd build/bin/neverd
 ```
 
-I primi due comandi verificano i componenti mobili e i contratti della CLI compilata; i requisiti delle fixture specifici della piattaforma possono comportare esclusioni esplicite. Il runner con il backend reale richiede anche un JDK (`java` e `javac`). Costruisce casi con un solo file smali, riferimenti tra classi e classi annidate, DEX e APK realmente multidex, quindi compila ed esegue il Java ricostruito. I casi coprono diramazioni, cicli, array, gestione delle eccezioni, riferimenti a classi, input malformati e omissioni di classi duplicate. Questo fornisce evidenza per tali fixture, non una promessa di ricostruzione completa per applicazioni arbitrarie.
+I test dei componenti e della CLI controllano parsing, contratti di output e pulizia dopo gli errori. Il runner interno di confronto usa un JDK (`java` e `javac`) e D8 per costruire esempi DEX/APK indipendenti, poi compilare ed eseguire il Java recuperato. Sono dipendenze di test, non requisiti per il recupero integrato. Eseguirlo sulla build attuale ed esaminarne i risultati prima di dichiarare verificato un caso. Il runner di compatibilità separato richiede anche JADX e verifica quell’adattatore. Il successo degli esempi non dimostra il recupero completo di qualsiasi applicazione.
 
-Il [workflow Mobile Decompilation](../../.github/workflows/mobile.yml) esegue i test dei componenti su Linux, macOS e Windows con Python 3.10 e 3.13, oltre a un job Linux con un backend Android reale fissato tramite checksum. Consulta la [panoramica mobile](../mobile.md) per il flusso iOS separato e i suoi limiti attuali.
+Vedere la [panoramica mobile](../mobile.md) per il flusso iOS correlato.

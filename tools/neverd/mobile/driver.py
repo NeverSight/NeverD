@@ -35,14 +35,14 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("input", type=Path)
     result.add_argument("-o", "--output", required=True, type=Path, help="new output directory")
     result.add_argument("--platform", choices=("auto", "android", "ios"), default="auto")
-    result.add_argument("--jadx", default=os.environ.get("NEVERD_JADX", "jadx"), help="Android backend executable")
+    result.add_argument("--jadx", help="explicit external Android backend executable; default uses the builtin engine")
     result.add_argument("--neverd", default="neverd", help=argparse.SUPPRESS)
     result.add_argument("--arch", choices=("auto", "arm64", "arm", "x86_64", "i386"), default="auto")
     result.add_argument("--artifact", help="iOS executable path relative to application bundle")
     result.add_argument("--swift-demangle", help="iOS Swift demangler executable (default: NEVERD_SWIFT_DEMANGLE, PATH, or Apple toolchain)")
     result.add_argument("--metadata-only", action="store_true", help="recover iOS metadata without native decompilation")
     result.add_argument("--max-func", type=int, default=0, help="maximum native functions; 0 means all")
-    result.add_argument("--timeout", type=int, default=300, help="seconds per backend process")
+    result.add_argument("--timeout", type=int, default=300, help="seconds for builtin analysis or each backend process")
     result.add_argument("--max-files", type=int, default=20000)
     result.add_argument("--max-bytes", type=int, default=2 * 1024 * 1024 * 1024)
     result.add_argument("--json", action="store_true", help="print the report as JSON")
@@ -83,7 +83,11 @@ def recover(args: argparse.Namespace) -> dict:
                                        swift_demangle=args.swift_demangle)
         # Do not publish transient paths or private input locations in reports.
         report.update(schema_version=1, source=source.name, platform=platform, status="success")
-        (staging / "report.json").write_text(json.dumps(report, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+        payload = json.dumps(report, indent=2, ensure_ascii=True) + "\n"
+        if (staging / "report.json").exists():
+            raise MobileError("backend output conflicts with the recovery report")
+        validate_tree(staging, limits, extra_bytes=len(payload.encode("utf-8")), extra_files=1)
+        (staging / "report.json").write_text(payload, encoding="utf-8")
         validate_tree(staging, limits)
         if os.name == "nt":
             # Windows rename refuses an existing destination atomically.

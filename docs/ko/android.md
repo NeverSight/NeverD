@@ -4,7 +4,7 @@
 
 [← 문서 목록](README.md)
 
-`neverd mobile`은 별도로 설치한 JADX 백엔드를 통해 APK, DEX, smali 입력에서 읽기 쉬운 Java를 복구합니다. 바이트코드를 검증해 작업 영역에 복사하고, 관련 클래스를 함께 분석한 다음, 생성된 출력을 검사하여 소스 디렉터리와 기계가 읽을 수 있는 보고서를 게시합니다. 이는 실험적인 CLI 기능입니다. APK 컨테이너와 Java 출력은 네이티브 C SDK, Python 플러그인 SDK, GUI 로더 또는 `neverd decompile --language`에서 제공하지 않습니다.
+`neverd mobile`은 기본적으로 NeverD 내장 엔진을 사용해 APK, DEX, smali에서 읽기 쉬운 Java를 복원합니다. 독립적으로 구현한 판독기가 타입 정보를 갖춘 Dalvik 모델과 처리량이 제한된 Java 생성기를 공유합니다. 실험적인 CLI 기능이며 JADX와 동일한 기능이나 임의 APK의 완전한 복원을 보장하지 않습니다. 네이티브 C SDK, Python 플러그인 SDK, GUI 로더, `neverd decompile --language`는 APK 컨테이너와 Java 출력의 진입점을 제공하지 않습니다.
 
 복구된 Java는 바이트코드를 재구성한 결과입니다. 원래 주석, 서식, 원본 소스 언어의 선택, 제거된 식별자는 되살릴 수 없습니다. Kotlin 바이트코드도 Java로 출력됩니다. 실행 성공이 의미적 동등성을 증명하거나 모든 메서드의 재컴파일을 보장하지는 않습니다. 이 과정에서 분석 대상 애플리케이션을 실행하지 않습니다.
 
@@ -27,42 +27,35 @@ neverd mobile decoded/smali -o recovered-java
 |-----------|-----------|-----------|
 | NeverD | `neverd` 타깃을 빌드하고 실행 파일과 같은 위치의 `mobile/` 디렉터리도 함께 배포 | `build/bin/neverd` 또는 PATH의 실행 파일 |
 | Python | Python 3.10 이상. 내장 플러그인 호스트의 Python 환경과는 별개 | `--python`, `NEVERD_PYTHON`, PATH의 `python3`/`python` 순서 |
-| Java 백엔드 | 표준 DEX 및 smali 입력 플러그인을 포함한 JADX 1.5.6 이상 | `--jadx`, `NEVERD_JADX`, PATH의 `jadx` 순서 |
-| Java 실행 환경 | Java 11 이상. 컴파일 및 실행 검증에는 JDK 필요 | `JAVA_HOME` 또는 PATH의 Java |
 
-NeverD는 의존성을 자동으로 다운로드하지 않습니다. 전체 [JADX 배포 패키지](https://github.com/skylot/jadx/releases/tag/v1.5.6)를 받아 `bin/`과 `lib/` 디렉터리 구조를 유지하고, 재배포할 때는 동봉된 라이선스 문서도 보존하세요. 검증된 백엔드 버전은 1.5.6이며, 이후 버전도 같은 CLI 계약을 충족해야 합니다. 이 의존성 설정은 NeverD LLVM 파이프라인 빌드와 별도로 진행합니다.
+기본 엔진은 Python 표준 라이브러리만 사용하며 실행 시 Java나 JADX가 필요하지 않습니다. DEX 035, 037–040 및 smali에서 표현할 수 있는 일반 선언과 연산을 처리합니다. DEX 041, `invoke-custom` 같은 동적 호출, 일부 초기화 경로, 알 수 없는 의미적 어노테이션이나 연산, Java로 표현할 수 없는 식별자는 명시적으로 실패합니다. 파일 형식을 받는다고 그 형식의 모든 명령과 선언을 지원하는 것은 아닙니다.
 
 ### Linux와 macOS
 
 ```sh
 cmake --build build --target neverd
 python3 --version
-java -version
-/opt/jadx/bin/jadx --version
 
-./build/bin/neverd mobile app.apk -o recovered-app \
-  --python python3 --jadx /opt/jadx/bin/jadx
+./build/bin/neverd mobile app.apk -o recovered-app --python python3
 ```
 
-반복해서 사용한다면 `NEVERD_JADX=/opt/jadx/bin/jadx`를 설정하고, 필요에 따라 `NEVERD_PYTHON`을 인터프리터 경로로 지정합니다. 아직 Java를 사용할 수 없다면 `JAVA_HOME`을 JDK 설치 디렉터리로 설정하세요. 공백이 포함된 경로는 따옴표로 감싸야 합니다.
+반복 실행에 사용할 인터프리터는 `NEVERD_PYTHON`으로 지정할 수 있습니다. `NEVERD_JADX`나 PATH의 `jadx`는 외부 엔진을 선택하지 않습니다. 외부 어댑터는 명시적인 `--jadx PATH`로만 선택하며 자동 대체는 없습니다. 공백이 있는 경로는 따옴표로 감싸세요.
 
 ### Windows PowerShell
 
 ```powershell
-$env:JAVA_HOME = 'C:\Tools\jdk'
 & .\build\bin\neverd.exe mobile .\app.apk -o .\recovered-app `
-  --python 'C:\Tools\Python\python.exe' `
-  --jadx 'C:\Tools\jadx\bin\jadx.bat'
+  --python 'C:\Tools\Python\python.exe'
 ```
 
-백엔드의 `.bat`/`.cmd` 경로에서 배포 패키지에 있는 단일 `lib/jadx-*-all.jar`를 찾아 NeverD가 Java를 직접 호출합니다. 이 JAR를 `--jadx`에 직접 전달할 수도 있습니다. 애플리케이션 경로를 명령 셸에 삽입하지 않습니다. 다중 구성 빌드에서는 실행 파일이 `build/bin/Release/`에 놓일 수 있습니다. 같은 위치의 `mobile/` 디렉터리 없이 실행 파일만 이동하면 도우미가 없다는 오류가 발생합니다.
+다중 구성 빌드에서는 실행 파일이 `build/bin/Release/`에 있을 수 있습니다. 파일을 옮길 때 같은 위치의 `mobile/` 디렉터리도 유지하세요. 실행 파일만 옮기면 도우미 누락 오류가 발생합니다.
 
 ## 지원 입력과 범위
 
 | 입력 | 동작 | 주요 제한 |
 |------|------|-----------|
 | `.apk` | 전체 ZIP을 검증한 뒤 루트의 `classes.dex`, `classes2.dex` 및 이후 번호의 DEX 파일을 함께 분석 | 코드만 처리하며 리소스나 매니페스트는 디코딩하지 않음 |
-| `.dex` | DEX 매직 값을 검증한 뒤 백엔드가 내용을 디코딩 | 확장자를 바꾸거나 잘린 파일은 유효한 바이트코드가 아님 |
+| `.dex` | 내장 판독기로 DEX 035 또는 037–040 검증 및 파싱 | DEX 041과 지원하지 않는 선언·연산은 실패하며, 이름을 바꾸거나 잘린 파일은 유효한 바이트코드가 아님 |
 | `.smali` | 제공한 클래스 분석 | 참조하는 다른 클래스를 암묵적으로 불러오지 않음 |
 | smali 디렉터리 | `.smali` 파일을 재귀적으로 수집하여 함께 분석 | 입력 디렉터리에 중첩 클래스와 의존하는 smali 루트들을 포함해야 함 |
 
@@ -76,38 +69,36 @@ APK 리소스, `AndroidManifest.xml`, 에셋, JNI/네이티브 라이브러리, 
 
 ```sh
 neverd mobile app.apk -o recovered-app --platform=android \
-  --jadx /opt/jadx/bin/jadx --timeout=600 \
-  --max-files=30000 --max-bytes=4294967296 --json
+  --timeout=600 --max-files=30000 --max-bytes=4294967296 --json
 ```
 
 | 옵션 | 기본값 | 의미 |
 |------|--------|------|
 | `-o DIRECTORY` | 필수 | 디렉터리 입력 바깥에 위치한 새 출력 디렉터리. 기존 출력은 덮어쓰지 않음 |
 | `--platform=auto\|android` | `auto` | Android를 명시적으로 선택하거나 입력에서 플랫폼을 추론 |
-| `--jadx PATH` | 환경 변수/PATH | 백엔드 실행기 또는 배포 JAR. 명시한 옵션이 우선 |
+| `--jadx PATH` | 미설정: 내장 엔진 | 별도로 설치한 JADX 호환 어댑터를 명시적으로 선택. 환경 변수로 선택하거나 자동 대체하지 않음 |
 | `--python PATH` | 환경 변수/PATH | 동봉된 도우미를 실행할 인터프리터. 명시한 옵션이 우선 |
-| `--timeout N` | `300` | 버전 확인을 포함한 백엔드 프로세스별 제한 시간. 초 단위의 양수 |
+| `--timeout N` | `300` | 내장 분석의 양수 시간 예산. 외부 백엔드는 버전 확인을 포함한 각 프로세스의 초 단위 제한 |
 | `--max-files N` | `20000` | 실제로 생성되는 디렉터리를 포함한 항목 수 상한. 양수 지정 |
 | `--max-bytes N` | `2147483648` | 입력, 압축 해제 데이터, 최종 출력에 적용되는 바이트 상한. 양수 지정 |
 | `--json` | 꺼짐 | 사람이 읽는 요약 대신 JSON 보고서 출력 |
 
-`--arch`의 기본값이 아닌 값, `--artifact`, `--metadata-only`, 0이 아닌 `--max-func`는 iOS용이므로 Android에서는 거부됩니다. `--arch=auto`를 명시적으로 지정하는 것은 허용됩니다. 임의의 백엔드 옵션을 그대로 전달하는 기능은 없습니다. 백엔드 설정, 캐시, 임시 디렉터리는 실행마다 격리되며 기존 백엔드 설정이나 플러그인 설정을 가져오지 않습니다.
+기본값 이외의 `--arch`, `--artifact`, `--metadata-only`, 0이 아닌 `--max-func`는 iOS용이므로 Android에서 거부됩니다. 명시적인 `--arch=auto`는 허용됩니다. 임의의 백엔드 옵션을 전달하는 기능은 없습니다. 명시적으로 선택한 JADX 어댑터는 실행별 설정·캐시·임시 디렉터리를 격리하며 기존 환경의 백엔드 설정이나 플러그인 구성을 가져오지 않습니다.
 
-이 제한은 리소스 제어 수단이며 백엔드 프로세스를 위한 샌드박스가 아닙니다. 작업 영역도 모니터링되며, 입력·압축 해제 데이터·출력을 위한 공간으로 설정한 항목 수/바이트 예산의 최대 3배까지 허용합니다. 로그는 프로세스마다 16 MiB로 제한됩니다. 큰 입력에는 더 많은 Java 힙이나 더 긴 제한 시간이 필요할 수 있습니다. 한 제한을 늘려도 다른 제한이 해제되지는 않습니다.
+입력, 압축 해제 데이터, 최종 출력에는 파일 수와 바이트 예산이 적용됩니다. 내장 판독기와 생성기는 처리량 및 경과 시간도 검사합니다. 외부 백엔드 작업 공간은 임시 입력과 중간 출력을 함께 보관하도록 설정한 항목 수·바이트 예산의 최대 3배까지 허용합니다. 로그는 프로세스당 16 MiB로 제한됩니다. 이는 자원 제한이며 샌드박스가 아닙니다. 한 제한을 높여도 다른 제한이 해제되지 않습니다.
 
 ## 출력 구조와 JSON 보고서
 
 ```text
 recovered-app/
-  sources/                 복구된 Java 패키지와 클래스
-  logs/jadx-version.log    백엔드 버전 확인
-  logs/jadx.log            백엔드 진단 정보
-  report.json              버전이 지정된 목록과 복구 제한 사항
+  sources/                       복원한 Java 패키지와 클래스
+  metadata/android-methods.json  내장 엔진의 메서드 복원 현황
+  report.json                    버전이 명시된 목록과 복원 한계
 ```
 
-임시 복사본과 백엔드 캐시는 삭제됩니다. Java 파일의 구체적인 이름과 수는 백엔드 재구성 결과에 따라 달라지며, 중첩 클래스가 외부 클래스와 소스 파일 하나를 공유할 수 있습니다. 따라서 Java 소스 파일 수와 DEX 클래스 수는 같지 않습니다.
+임시 입력은 삭제됩니다. 중첩 클래스가 외부 클래스의 소스 파일을 공유할 수 있으므로 Java 파일 수는 DEX 클래스 수와 다릅니다. 생성한 메서드는 Java 디스패치 루프를 사용할 수 있습니다. 원본 DEX를 실행하거나 런타임 브리지로 호출하지 않습니다.
 
-다음은 일부 내용을 생략한 보고서 예시입니다.
+내장 보고서는 `android_method_recovery`를 포함하고 같은 내용을 `metadata/android-methods.json`에 저장합니다. 게시 전에 `method_count = recovered_method_count + declaration_only_method_count`를 만족하고 `unrecovered_method_count`가 0이어야 합니다. 원래의 `native`, `abstract` 메서드는 `declaration-only` 상태이며 복원한 본문 수에 포함하지 않습니다. 아래는 축약한 예시이며, 복원 현황 파일에는 메서드별 목록도 있습니다.
 
 ```json
 {
@@ -116,14 +107,32 @@ recovered-app/
   "platform": "android",
   "source": "app.apk",
   "input_kind": "apk",
-  "backend": {"name": "jadx", "version": "1.5.6"},
-  "input_code_files": ["classes.dex", "classes2.dex"],
+  "backend": {
+    "name": "neverd",
+    "version": "1",
+    "execution": "builtin"
+  },
+  "input_code_files": [
+    "classes.dex",
+    "classes2.dex"
+  ],
   "dex_count": 2,
   "smali_count": 0,
   "java_source_count": 2,
-  "java_sources": ["sources/example/Main.java", "sources/example/Peer.java"],
-  "logs": ["logs/jadx-version.log", "logs/jadx.log"],
-  "limitations": ["Java is reconstructed from bytecode; original comments, formatting, and stripped names cannot be restored."]
+  "java_sources": [
+    "sources/example/Main.java",
+    "sources/example/Peer.java"
+  ],
+  "logs": [],
+  "android_method_recovery": {
+    "schema_version": 1,
+    "status": "recovered",
+    "class_count": 2,
+    "method_count": 6,
+    "recovered_method_count": 5,
+    "declaration_only_method_count": 1,
+    "unrecovered_method_count": 0
+  }
 }
 ```
 
@@ -139,29 +148,35 @@ neverd mobile app.apk -o recovered-app --json > recovery-result.json
 
 ## 실패 처리와 문제 해결
 
-결과 게시는 트랜잭션 방식으로 이루어집니다. 기존 출력은 보존하고 실패한 작업 영역의 출력은 삭제합니다. 백엔드의 0이 아닌 종료 코드, 로그에 기록된 어셈블/디컴파일 오류, 중복 클래스 때문에 생긴 누락, 명시적인 불완전 코드 표시, 빈 Java 파일, Java가 전혀 생성되지 않은 결과는 모두 명령 실패로 처리됩니다. 백엔드의 성공 보고만으로 메서드별 정확성을 독립적으로 증명할 수는 없습니다.
+결과 게시는 트랜잭션 방식으로 이루어집니다. 기존 출력은 보존하고 실패한 임시 출력은 삭제합니다. 지원하지 않는 연산, 해결하지 못한 레지스터 흐름, 표현할 수 없는 선언, 잘못된 예외 처리, 예산 소진은 내장 실행을 실패하게 하며 누락된 본문을 게시하지 않습니다. 외부 어댑터도 0이 아닌 종료, 로그의 어셈블·디컴파일 오류, 중복 클래스 누락, 불완전한 코드 표시, 빈 Java 파일과 Java 출력 누락을 거부합니다. 복원 성공은 의미적 동등성의 증명이 아닙니다.
 
 | 증상 | 조치 |
 |------|------|
-| Python/도우미 없음 | Python 3.10 이상을 설치하거나 선택하고, `mobile/` 디렉터리를 NeverD 실행 파일과 같은 위치에 유지 |
-| 백엔드 실행 불가 또는 지원하지 않는 버전 | `--jadx`, 전체 배포 패키지 구조, Java, 백엔드 최소 버전 확인 |
-| 잘못된 DEX 헤더/루트 DEX 없음 | 실제 입력 형식을 확인하고 코드가 있는 APK, 일반 DEX 또는 smali 사용 |
-| smali 파일 없음 | Java 소스나 에셋만 있는 트리가 아닌, `.smali` 파일이 포함된 디렉터리 지정 |
-| 중복 클래스 또는 부분 복구 | 중복된 입력 정의를 제거하거나 관련 바이트코드 집합을 나누어 분석. 불완전한 결과를 받아들이지 말고 잘못된 smali 수정 |
-| 시간 초과/바이트 또는 항목 수 초과 | 관련된 작은 입력으로 범위를 줄이거나 해당 제한을 의도적으로 상향 |
-| 안전하지 않은 아카이브 경로나 링크 | 경로 탐색 이름, 링크, 특수 파일, 충돌 경로가 없는 일반적이고 이식 가능한 입력으로 다시 구성 |
-| 출력이 이미 존재함 | 다른 출력 디렉터리를 선택하고 이전에 성공한 결과 디렉터리는 재사용하지 않음 |
+| Python 또는 도우미 누락 | Python 3.10 이상을 선택하고 같은 위치의 `mobile/`을 유지 |
+| 지원하지 않는 DEX·명령·선언·초기화 | 명시적 진단과 지원 범위를 확인. 별도의 호환 어댑터를 의도적으로 선택할 때만 `--jadx PATH` 사용 |
+| 유효하지 않은 입력 또는 중복 클래스 | 입력 바이트코드나 클래스 구성을 수정. 지원하지 않는 본문은 조용히 생략되지 않음 |
+| 시간 또는 자원 예산 초과 | 입력을 줄이거나 가용 자원에 맞게 `--timeout`, `--max-files`, `--max-bytes` 조정 |
+| 출력이 이미 존재 | 새로운 출력 디렉터리 선택 |
 
-성공한 실행에서는 백엔드 로그가 보존됩니다. 실패한 작업 디렉터리는 로그를 포함해 삭제됩니다. 백엔드가 0이 아닌 코드로 종료하면 오류에 길이가 제한된 진단 로그 끝부분이 포함되며, 시간 초과와 리소스 예산 오류에는 각각의 메시지가 표시됩니다. 백엔드별 문제를 조사하려면 분리한 입력과 별도 진단 디렉터리를 사용해 백엔드 자체 CLI에서 재현하세요. 실패 전에 일부 Java가 생성되었다는 이유만으로 성공했다고 판단해서는 안 됩니다.
+## 선택 사항인 JADX 호환 어댑터
+
+`--jadx PATH`는 내장 구현이 아닌 외부 JADX를 선택합니다. 표준 DEX/smali 입력 플러그인이 포함된 JADX 1.5.6 이상과 Java 11 이상을 설치하세요. 완전한 [JADX 배포본](https://github.com/skylot/jadx/releases/tag/v1.5.6)을 받고 `bin/`, `lib/` 구조를 유지하며 재배포 시 동봉된 의존성 라이선스를 보존하세요. 자동 다운로드는 없습니다. 어댑터 보고서는 실제 `jadx` 엔진과 감지한 버전을 기록하며 내장 메서드 복원 현황을 제공한다고 주장하지 않습니다.
+
+Windows에서는 배포본의 `.bat`/`.cmd` 실행기 또는 `lib/jadx-*-all.jar`를 지정하세요. NeverD는 배포본 JAR을 찾아 Java를 직접 호출하므로 애플리케이션 경로가 명령 셸에 들어가지 않습니다. Java는 `JAVA_HOME` 또는 PATH로 선택합니다. 어댑터 실행이 성공하면 `logs/jadx-version.log`, `logs/jadx.log`를 보관하고 실패한 임시 디렉터리와 로그는 삭제합니다. 백엔드가 0이 아닌 값으로 종료할 때만 길이가 제한된 로그 끝부분이 오류에 포함됩니다. 실행 실패, 시간 초과, 예산 초과는 별도의 진단을 제공합니다.
+
+```sh
+neverd mobile app.apk -o recovered-jadx --jadx /opt/jadx/bin/jadx
+python3 scripts/test_mobile_android_backend.py --jadx /opt/jadx/bin/jadx --neverd build/bin/neverd
+```
 
 ## 검증과 지원 수준
 
 ```sh
 cmake --build build --target check-neverd-mobile
 NEVERD_BUILD_DIR=build python3 -m unittest discover -s scripts/tests -p 'test_mobile_*.py' -v
-python3 scripts/test_mobile_android_backend.py --jadx /opt/jadx/bin/jadx --neverd build/bin/neverd
+python3 scripts/test_mobile_android_internal.py --d8 PATH --neverd build/bin/neverd
 ```
 
-첫 두 명령은 mobile 구성 요소와 빌드된 CLI의 계약을 검증합니다. 플랫폼별 테스트 픽스처 요구 사항에 따라 일부 테스트가 명시적으로 건너뛰어질 수 있습니다. 실제 백엔드 테스트 실행기에는 JDK(`java`와 `javac`)도 필요합니다. 단일 smali, 클래스 간 참조/중첩 smali, DEX, 실제 multidex APK 사례를 만든 뒤 복구된 Java를 컴파일하고 실행합니다. 분기, 반복문, 배열, 예외 처리, 클래스 참조, 잘못된 입력, 중복 클래스 누락을 검증합니다. 이는 해당 픽스처에 대한 검증 근거이며 임의의 애플리케이션을 완전히 복구한다는 보장은 아닙니다.
+컴포넌트와 CLI 테스트는 파싱, 출력 계약, 실패 시 정리를 확인합니다. 내장 실행 비교 러너는 JDK(`java`, `javac`)와 D8로 독립 DEX/APK 예제를 만들고 복원한 Java를 컴파일·실행합니다. 이는 테스트 의존성이며 내장 복원의 실행 요구 사항이 아닙니다. 현재 빌드로 실행하고 결과를 확인한 뒤에만 해당 사례를 검증했다고 판단하세요. 별도의 호환성 러너는 추가로 JADX가 필요하며 외부 어댑터를 검증합니다. 예제 성공은 임의 애플리케이션의 완전한 복원을 입증하지 않습니다.
 
-[Mobile Decompilation 워크플로](../../.github/workflows/mobile.yml)는 Linux, macOS, Windows에서 Python 3.10 및 3.13으로 구성 요소 테스트를 실행하고, Linux에서 체크섬으로 버전을 고정한 실제 Android 백엔드 작업도 수행합니다. 별도의 iOS 흐름과 현재 제한 사항은 [mobile 개요](../mobile.md)(영어)를 참조하세요.
+관련 iOS 작업 흐름은 [모바일 개요](../mobile.md)를 참고하세요.

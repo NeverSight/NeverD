@@ -11,6 +11,7 @@ on:
       - 'scripts/tests/test_mobile_*.py'
       - 'scripts/tests/fixtures/mobile/**'
       - 'scripts/test_mobile_android_backend.py'
+      - 'scripts/test_mobile_android_internal.py'
   pull_request:
     paths:
       - '.github/workflows/mobile.yml'
@@ -20,6 +21,7 @@ on:
       - 'scripts/tests/test_mobile_*.py'
       - 'scripts/tests/fixtures/mobile/**'
       - 'scripts/test_mobile_android_backend.py'
+      - 'scripts/test_mobile_android_internal.py'
   workflow_dispatch:
 
 permissions:
@@ -49,8 +51,37 @@ jobs:
       - name: Verify importers and process boundaries without a decompiler dependency
         run: python -m unittest discover -s scripts/tests -p "test_mobile_*.py" -v
 
+  android-internal:
+    name: Builtin Android recovery and independent Java execution
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.10'
+      - name: Set up JDK for the independent source oracle
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Prepare the fixed D8 compiler for test input generation
+        shell: bash
+        run: |
+          if [ ! -x "$ANDROID_HOME/build-tools/35.0.0/d8" ]; then
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "build-tools;35.0.0"
+          fi
+          test -x "$ANDROID_HOME/build-tools/35.0.0/d8"
+          printf 'NEVERD_D8=%s\n' "$ANDROID_HOME/build-tools/35.0.0/d8" >> "$GITHUB_ENV"
+      - name: Verify bounded readers, register semantics and source publication
+        run: python -m unittest discover -s scripts/tests -p "test_mobile_*.py" -v
+      - name: Recover and independently execute DEX, multidex and smali fixtures
+        run: python scripts/test_mobile_android_internal.py --d8 "$NEVERD_D8" --work-dir "$RUNNER_TEMP/android-internal" --timeout 120
+
   android-backend:
-    name: Real Android recovery and Java execution
+    name: Explicit external Android compatibility and Java execution
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:

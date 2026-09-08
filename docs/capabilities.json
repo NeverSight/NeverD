@@ -3273,8 +3273,10 @@
         "docs/zh-CN/ios.md"
       ],
       "limitations": [
-        "Mobile containers use the CLI helper; Python 3.10+ and a separately installed JADX 1.5.6+ backend are required for Android.",
-        "Android emits reconstructed Java for DEX/smali code; resources and native libraries are excluded.",
+        "Mobile containers use the shipped CLI helper and Python 3.10+. Android defaults to NeverD builtin DEX/smali readers, register verification and Java emission; it needs no external decompiler or JVM at runtime. Only explicit --jadx selects the separately installed compatibility backend.",
+        "Builtin Android emits verified Java dispatch bodies for its supported DEX/smali subset, with complete per-input method accounting and separate native/abstract declarations. Unsupported bodies reject the transaction; no backend fallback or placeholder body is used. Resources and native libraries are excluded.",
+        "Builtin Android is experimental, not a guarantee for arbitrary APKs or all bytecode. Generic/dynamic invocation, monitor operations, unproven initialization, unsupported annotations, unavailable local member bindings, and non-representable Java declarations are rejected. Original source text and compilation-lost information cannot be recovered. Generation uses conservative byte, work and time budgets.",
+        "Android acceptance recompiles generated source without original classes and compares behavior against independently compiled owned fixtures. JDK and D8 are test tools only. iOS retains LLVM/Capstone dependencies and swift-demangle for Swift signatures; these dependencies are not the NeverD-owned recovery implementation.",
         "iOS emits native C and reconstructs supported Objective-C and Swift bodies from actual HighIR on arm64 and x86_64, with independently reported callable and metadata coverage.",
         "Proven Swift compiler-generated entries project into recovered type source and remain in the callable inventory. Native method bodies and compiler projections have separate counts and explicit source-representation evidence.",
         "Source recovery requires supported scalar/stack ABI bindings, storage layouts, and complete native dependency groups. Unsupported aggregate, variadic, generic, asynchronous, throwing, or unresolved runtime paths remain explicitly unrecovered.",
@@ -3284,6 +3286,39 @@
         "Metadata-only emits declarations, metadata and the selected binary, without native C, Objective-C bodies or method-body coverage. Full recovery analyzes one selected native artifact, and max-func can leave discovered methods unrecovered."
       ],
       "tests": [
+        {
+          "runner": "python-unittest",
+          "target": "NeverDMobileTests",
+          "source": "scripts/tests/test_mobile_dalvik_semantics.py",
+          "filter": "DalvikSemanticsTests.test_local_callee_identity_includes_its_return_type",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDMobileTests",
+          "source": "scripts/tests/test_mobile_dalvik_java.py",
+          "filter": "DalvikJavaTests.test_undefined_register_is_rejected_before_source_publication",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDMobileTests",
+          "source": "scripts/tests/test_mobile_builtin_android.py",
+          "filter": "BuiltinAndroidTests.test_default_engine_recovers_every_smali_method_without_external_tools",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
         {
           "runner": "python-unittest",
           "target": "NeverDMobileTests",

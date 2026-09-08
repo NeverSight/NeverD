@@ -93,6 +93,21 @@ class MobileCommonTests(unittest.TestCase):
         with self.assertRaisesRegex(MobileError, "file-count"):
             extract_zip(source, self.root / "output", Limits(max_files=1))
 
+    def test_pending_report_is_bounded_before_it_is_written(self):
+        source = self.root / "source"
+        source.mkdir()
+        (source / "body.java").write_bytes(b"12345")
+        validate_tree(source, Limits(max_files=2, max_bytes=8), extra_bytes=3, extra_files=1)
+        for limits, extra_bytes, extra_files in (
+            (Limits(max_bytes=8), 4, 1),
+            (Limits(max_files=1), 3, 1),
+            (Limits(max_bytes=1), 2, 0),
+        ):
+            with self.subTest(limits=limits):
+                with self.assertRaisesRegex(MobileError, "limits"):
+                    validate_tree(source, limits, extra_bytes=extra_bytes, extra_files=extra_files)
+        self.assertEqual([p.name for p in source.iterdir()], ["body.java"])
+
     @unittest.skipIf(os.name == "nt", "POSIX directory permissions")
     def test_unreadable_directories_do_not_disappear(self):
         source = self.root / "source"

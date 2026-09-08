@@ -8,7 +8,7 @@
 
 正常构建 `neverd` 即可。移动构建产物时，保留可执行文件旁边的 `mobile/` 目录。需要 Python 3.10 或更高版本，可通过 `--python PATH` 或 `NEVERD_PYTHON` 指定。
 
-Android 还需要单独安装 JADX 1.5.6 或更新版本、标准 DEX/smali 输入插件及 Java 11 或更新版本。使用 `--jadx PATH`、`NEVERD_JADX`，或把 `jadx` 放进 PATH。Windows 请指定发行包中 `jadx.bat` 的完整路径或 `lib/jadx-*-all.jar`；NeverD 使用 Java 直接启动 JAR，不通过命令解释器传递应用路径。JAR 启动方式支持 `JAVA_HOME`。不会自动下载依赖。安装方法和依赖许可证见 [JADX 发行说明](https://github.com/skylot/jadx#download)。
+Android 默认使用 NeverD 内置引擎，仅依赖 Python 标准库，运行时不需要 Java 或 JADX。只有显式 `--jadx PATH` 才会选择单独安装的兼容适配器；`NEVERD_JADX` 和 PATH 不会自动选择它，也没有自动回退。可选适配器需要带标准 DEX/smali 输入插件的 JADX 1.5.6+ 和 Java 11+，报告记录实际 `jadx` 引擎与版本。安装方式及依赖许可证见 [Android 指南](android.md#可选-jadx-兼容适配器)。
 
 ## Android 用法
 
@@ -16,14 +16,14 @@ Android 还需要单独安装 JADX 1.5.6 或更新版本、标准 DEX/smali 输�
 neverd mobile app.apk -o recovered-app
 neverd mobile classes.dex -o recovered-dex
 neverd mobile MainActivity.smali -o recovered-class
-neverd mobile decoded/smali -o recovered-java --jadx /opt/jadx/bin/jadx
+neverd mobile decoded/smali -o recovered-java
 ```
 
 APK 根目录中的 `classes.dex`、`classes2.dex` 等字节码会一起分析。smali 目录会递归收集类，在同一次调用中处理嵌套类和跨类引用；单个 smali 文件仅提供该类的上下文。
 
-输出包括 `sources/`、`logs/` 和 `report.json`。报告记录后端版本、输入代码、生成的 Java 文件和限制。此流程不恢复 APK 资源、Manifest、原生库和动态下载代码；原生库可单独提取后用 `neverd decompile` 分析。
+内置输出包括 `sources/`、`metadata/android-methods.json` 和 `report.json`，其中 `backend: {"name": "neverd", "version": "1", "execution": "builtin"}`。报告包含 `android_method_recovery`：`method_count = recovered_method_count + declaration_only_method_count`，且发布前 `unrecovered_method_count` 必须为零。原有 `native`、`abstract` 声明与恢复的方法体分开计数。显式外部适配器保留自己的后端日志。此 Java 流程不恢复 APK 资源、Manifest、原生库或动态加载代码；原生库可另用 `neverd decompile` 分析。
 
-原始注释、排版和已删除名称无法还原。后端错误、明确的代码恢复失败标记或没有生成 Java 都会使命令失败。成功输出仍属于恢复代码，不代表已证明语义等价，也不保证每个方法都能重新编译。
+内置读取器共用独立实现的带类型 Dalvik 模型和有界 Java 生成器，面向 DEX 035/037–040 与 smali 中可表示的常规代码。DEX 041、`invoke-custom` 等动态调用、部分初始化路径、未知操作和无法用 Java 表示的标识符都会明确失败。生成的 Java 可能使用分派循环，不执行原始 DEX，也不通过运行时桥接调用它。原始注释、排版和已删除名称无法还原。这个实验性引擎不承诺与 JADX 功能等价、语义等价或任意 APK 的完整恢复。
 
 ## iOS 用法
 
@@ -50,7 +50,7 @@ Swift 恢复会分类 demangled 签名，将其绑定原生入口和 ABI 位置�
 
 `-o` 必须指定不存在的目录，且不能位于目录输入内部。已有输出不会覆盖，只有恢复和验证成功后才发布结果。`--json` 输出带版本的报告；已捕获的恢复错误返回非零状态和 JSON 错误。启动失败、辅助程序或解释器缺失、Python 低于 3.10、参数解析错误和中断也可能只在 stderr 输出纯文本。
 
-默认最多 20,000 个条目、2 GiB 输入/解包或最终输出数据，每个后端进程最多 300 秒。可用 `--max-files`、`--max-bytes` 和 `--timeout` 调整，均必须大于零。后台运行期间会监测临时工作区，允许暂存输入与中间产物共存，条目数和字节数上限为配置值的三倍。每个进程的诊断最多 16 MiB。解包拒绝路径穿越、符号链接、特殊文件、大小写路径冲突和加密 ZIP 条目；目录输入也拒绝链接和特殊文件。
+默认最多 20,000 个条目、2 GiB 输入/解包或最终输出数据，内置 Android 分析时间预算或每个外部后端进程上限为 300 秒。内置读取器和生成器还实施有界工作量预算。可用 `--max-files`、`--max-bytes` 和 `--timeout` 调整，均必须大于零。后台运行期间会监测临时工作区，允许暂存输入与中间产物共存，条目数和字节数上限为配置值的三倍。每个进程的诊断最多 16 MiB。解包拒绝路径穿越、符号链接、特殊文件、大小写路径冲突和加密 ZIP 条目；目录输入也拒绝链接和特殊文件。
 
 这些限制用于增强健壮性，不是第三方后端的安全沙箱。失败的临时结果会清理。后端非零退出时会附带长度受限的诊断尾部；启动失败、超时和超出预算会使用各自的错误信息。
 
@@ -59,10 +59,11 @@ Swift 恢复会分类 demangled 签名，将其绑定原生入口和 ABI 位置�
 ```sh
 cmake --build build --target check-neverd-mobile
 python3 -m unittest discover -s scripts/tests -p 'test_mobile_*.py' -v
+python3 scripts/test_mobile_android_internal.py --d8 PATH --neverd build/bin/neverd
 python3 scripts/test_mobile_android_backend.py --jadx /opt/jadx/bin/jadx --neverd build/bin/neverd
 ```
 
-测试覆盖不安全容器、损坏或加密的原生输入、后端失败、Java 恢复不完整、架构选择和已有输出保护。真实 CLI 测试通过 `NEVERD_BUILD_DIR` 选择构建目录。真实 Android smoke runner 还需要后端和 JDK，会恢复自建 smali/DEX/多 DEX APK，然后编译运行生成的 Java。
+组件测试覆盖解析、不安全容器、后端失败、输出清理、架构选择和已有输出保护。真实 CLI 测试通过 `NEVERD_BUILD_DIR` 选择构建目录。内置 Android 对照脚本使用 JDK（`java`、`javac`）和 D8 构建独立 DEX/APK 样例，再编译运行恢复的 Java；这些是验证依赖，不是内置恢复的运行要求。请针对当前构建执行并检查结果，再将某个样例视为已验证。独立兼容测试还需要 JADX；样例成功不证明任意应用都能恢复。
 
 在具备 Apple Clang、SDK 和已构建 NeverD 的 macOS 上，运行真实 Objective-C 执行对照：
 

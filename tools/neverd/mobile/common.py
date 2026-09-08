@@ -38,7 +38,8 @@ def walk_error(error: OSError) -> None:
     raise MobileError(f"cannot enumerate input/output directory: {error}") from error
 
 
-def validate_tree(root: Path, limits: Limits, *, live: bool = False) -> None:
+def validate_tree(root: Path, limits: Limits, *, live: bool = False,
+                  extra_bytes: int = 0, extra_files: int = 0) -> None:
     """Check generated files too: a backend must not publish links or devices."""
     if not stat.S_ISDIR(root.lstat().st_mode):
         raise MobileError("output root must remain a directory")
@@ -48,7 +49,9 @@ def validate_tree(root: Path, limits: Limits, *, live: bool = False) -> None:
             return
         walk_error(error)
 
-    count = size = 0
+    count, size = extra_files, extra_bytes
+    if min(count, size) < 0 or count > limits.max_files or size > limits.max_bytes:
+        raise MobileError("generated output exceeds the configured limits")
     for current, dirs, files in os.walk(root, followlinks=False, onerror=scan_error):
         for name in dirs + files:
             path = Path(current) / name

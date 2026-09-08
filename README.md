@@ -36,7 +36,7 @@ CLI tools, integrators, and AI agents use one engine — **`libneverd`** — thr
 
 Input formats, host contracts, and limitations are documented in the [EVM guide](docs/evm.md) and [Solana SBF guide](docs/sbf.md).
 
-Android Java recovery is available through the separate `neverd mobile` CLI workflow: APK, multidex, DEX, and smali inputs produce Java using an installed JADX backend. See the [Android guide](docs/android.md) for runtime setup, supported inputs, output reports, and recovery limits.
+Android Java recovery is available through the experimental `neverd mobile` CLI: APK, multidex, DEX, and smali inputs use NeverD’s built-in engine with Python 3.10+ by default, without Java or JADX runtime dependencies. An explicit `--jadx PATH` selects the optional external compatibility adapter; there is no automatic fallback. See the [Android guide](docs/android.md) for supported inputs, reports, and recovery limits.
 
 The experimental iOS workflow `neverd mobile App.ipa -o recovered-ios` exports native C and supported Objective-C/Swift sources from IPA, `.app`, or Mach-O. Runtime layouts, source units, and per-method omissions remain explicit; generated source does not use a bridge to the original binary. See the [iOS guide](docs/ios.md) for setup, coverage semantics, and independent compilation checks.
 

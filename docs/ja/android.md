@@ -4,7 +4,7 @@
 
 [← ドキュメント一覧](README.md)
 
-`neverd mobile` は、別途インストールした JADX バックエンドを使い、APK、DEX、smali の入力から読みやすい Java を復元します。バイトコードを検証して作業領域に配置し、関連するクラスをまとめて解析したうえで、生成結果を検査し、ソースディレクトリと機械可読のレポートを出力します。これは実験的な CLI 機能です。APK コンテナと Java 出力は、ネイティブ C SDK、Python プラグイン SDK、GUI ローダー、`neverd decompile --language` からは利用できません。
+`neverd mobile` は既定で NeverD の内蔵エンジンを使用し、APK、DEX、smali から読みやすい Java を復元します。独自実装の読み取り器が、型付き Dalvik モデルと処理量に上限のある Java 生成器を共有します。実験的な CLI 機能であり、JADX と同等の機能や、任意の APK の完全復元を保証しません。ネイティブ C SDK、Python プラグイン SDK、GUI ローダー、`neverd decompile --language` は APK コンテナと Java 出力に対応していません。
 
 復元された Java は、バイトコードを再構成したものです。元のコメント、書式、記述に使われたソース言語、削除された識別子は取り戻せません。Kotlin のバイトコードからも Java が生成されます。処理の成功は意味的等価性の証明ではなく、すべてのメソッドが再コンパイルできる保証でもありません。この処理で解析対象のアプリケーションが起動されることはありません。
 
@@ -27,42 +27,35 @@ Java ファイルは `recovered-app/sources/`、入力一覧と制限事項は `
 |----------------|------|----------|
 | NeverD | `neverd` ターゲットをビルドし、実行ファイルと同じ階層の `mobile/` ディレクトリも配布する | `build/bin/neverd` または PATH 上の実行ファイル |
 | Python | Python 3.10 以降。組み込みプラグインホストの Python 環境とは独立 | `--python`、`NEVERD_PYTHON`、PATH 上の `python3`/`python` の順に選択 |
-| Java バックエンド | 標準の DEX および smali 入力プラグインを含む JADX 1.5.6 以降 | `--jadx`、`NEVERD_JADX`、PATH 上の `jadx` の順に選択 |
-| Java 実行環境 | Java 11 以降。コンパイルと実行による検証には JDK が必要 | `JAVA_HOME` または PATH 上の Java |
 
-NeverD は依存ソフトウェアを自動ダウンロードしません。完全な [JADX 配布パッケージ](https://github.com/skylot/jadx/releases/tag/v1.5.6)を入手し、`bin/` と `lib/` の構成を維持してください。再配布時は同梱のライセンス文書も保持してください。検証済みのバックエンドは 1.5.6 です。それ以降のバージョンにも同じ CLI 契約への適合が必要です。これらの依存ソフトウェアの準備は、NeverD の LLVM パイプラインのビルドとは別に行います。
+既定のエンジンは Python 標準ライブラリのみを使用し、実行時に Java や JADX を必要としません。DEX 035、037–040 と smali のうち、表現可能な通常の宣言や操作を受け付けます。DEX 041、`invoke-custom` などの動的呼び出し、一部の初期化経路、未知の意味的な注釈や操作、Java で表現できない識別子は明示的に失敗します。ファイル形式への対応は、その形式のすべての命令や宣言への対応を意味しません。
 
 ### Linux と macOS
 
 ```sh
 cmake --build build --target neverd
 python3 --version
-java -version
-/opt/jadx/bin/jadx --version
 
-./build/bin/neverd mobile app.apk -o recovered-app \
-  --python python3 --jadx /opt/jadx/bin/jadx
+./build/bin/neverd mobile app.apk -o recovered-app --python python3
 ```
 
-継続して使用する場合は `NEVERD_JADX=/opt/jadx/bin/jadx` を設定し、必要に応じて `NEVERD_PYTHON` にインタープリターのパスを設定します。Java がまだ利用できない場合は、`JAVA_HOME` を JDK のインストールディレクトリに向けてください。空白を含むパスは引用符で囲む必要があります。
+継続して使用するインタープリターは `NEVERD_PYTHON` で指定できます。`NEVERD_JADX` や PATH 上の `jadx` によって外部エンジンが選択されることはありません。外部アダプターは明示的な `--jadx PATH` でのみ選択され、自動的な切り替えはありません。空白を含むパスは引用符で囲んでください。
 
 ### Windows PowerShell
 
 ```powershell
-$env:JAVA_HOME = 'C:\Tools\jdk'
 & .\build\bin\neverd.exe mobile .\app.apk -o .\recovered-app `
-  --python 'C:\Tools\Python\python.exe' `
-  --jadx 'C:\Tools\jadx\bin\jadx.bat'
+  --python 'C:\Tools\Python\python.exe'
 ```
 
-バックエンドの `.bat`/`.cmd` パスから、配布パッケージにある唯一の `lib/jadx-*-all.jar` を特定し、NeverD が Java を直接起動します。この JAR 自体を `--jadx` に渡すこともできます。アプリケーションのパスがコマンドシェルに埋め込まれることはありません。マルチ構成ビルドでは、実行ファイルが `build/bin/Release/` に配置される場合があります。実行ファイルだけを移動し、同じ階層の `mobile/` ディレクトリを伴わない場合は、ヘルパーが見つからないというエラーになります。
+複数構成のビルドでは実行ファイルが `build/bin/Release/` に置かれることがあります。移動時は同じ階層の `mobile/` ディレクトリも保持してください。実行ファイルだけを移すとヘルパー不足のエラーになります。
 
 ## 対応する入力と範囲
 
 | 入力 | 動作 | 重要な制限 |
 |------|------|------------|
 | `.apk` | ZIP 全体を検証し、ルートの `classes.dex`、`classes2.dex` および後続番号の DEX ファイルをまとめて解析 | コードのみ。リソースやマニフェストはデコードしない |
-| `.dex` | DEX のマジック値を検証した後、バックエンドが内容をデコード | 拡張子を変えたファイルや途中で切れたファイルは、有効なバイトコードにはならない |
+| `.dex` | 内蔵の読み取り器で DEX 035 または 037–040 を検証・解析 | DEX 041 と未対応の宣言・操作は失敗。名前変更や切り詰めでは有効なバイトコードにならない |
 | `.smali` | 指定されたクラスを解析 | 参照先のほかのクラスは暗黙には読み込まない |
 | smali ディレクトリ | `.smali` ファイルを再帰的に収集し、まとめて解析 | 入力ディレクトリにネストしたクラスと依存先の smali ルートを含める |
 
@@ -76,38 +69,36 @@ APK のリソース、`AndroidManifest.xml`、アセット、JNI／ネイティ�
 
 ```sh
 neverd mobile app.apk -o recovered-app --platform=android \
-  --jadx /opt/jadx/bin/jadx --timeout=600 \
-  --max-files=30000 --max-bytes=4294967296 --json
+  --timeout=600 --max-files=30000 --max-bytes=4294967296 --json
 ```
 
 | オプション | 既定値 | 意味 |
 |------------|--------|------|
 | `-o DIRECTORY` | 必須 | 入力がディレクトリの場合はその外部に置く、新しい出力ディレクトリ。既存の出力は上書きしない |
 | `--platform=auto\|android` | `auto` | Android を明示的に選択するか、入力からプラットフォームを推定 |
-| `--jadx PATH` | 環境変数／PATH | バックエンドのランチャーまたは配布 JAR。明示したオプションを優先 |
+| `--jadx PATH` | 未指定：内蔵エンジン | 別途インストールした JADX 互換アダプターを明示的に選択。環境変数による選択や自動切り替えはない |
 | `--python PATH` | 環境変数／PATH | 同梱ヘルパー用のインタープリター。明示したオプションを優先 |
-| `--timeout N` | `300` | バックエンドの各プロセスに対する正の秒数による制限。バージョン確認も対象 |
+| `--timeout N` | `300` | 内蔵解析の正の時間上限。外部バックエンドではバージョン確認を含む各プロセスの秒数上限 |
 | `--max-files N` | `20000` | 実際に作成されるディレクトリを含む、正のエントリー数上限 |
 | `--max-bytes N` | `2147483648` | 入力、展開データ、最終出力のバイト数上限。正の値を指定 |
 | `--json` | 無効 | 人向けの要約ではなく、JSON でレポートを出力 |
 
-`--arch` の既定値以外、`--artifact`、`--metadata-only`、ゼロ以外の `--max-func` は iOS 用であり、Android では拒否されます。`--arch=auto` の明示指定は可能です。任意のバックエンドオプションをそのまま渡す機能はありません。バックエンドの設定、キャッシュ、一時ディレクトリは実行ごとに分離され、既存のバックエンド設定やプラグイン設定は取り込まれません。
+既定以外の `--arch`、`--artifact`、`--metadata-only`、ゼロ以外の `--max-func` は iOS 用であり、Android では拒否されます。明示的な `--arch=auto` は使用できます。任意のバックエンドオプションの転送には対応しません。明示的に選択した JADX アダプターは実行ごとに設定・キャッシュ・一時ディレクトリを隔離し、既存のバックエンド設定やプラグイン設定を読み込みません。
 
-これらの上限はリソース制御であり、バックエンドプロセスのサンドボックスではありません。作業領域も監視され、入力、展開データ、出力のために、設定したエントリー数／バイト数予算の最大 3 倍まで使用できます。ログはプロセスごとに 16 MiB までです。大きな入力では、Java のヒープやタイムアウトの追加が必要な場合があります。ある上限を引き上げても、ほかの上限は無効になりません。
+入力、展開データ、最終出力にはファイル数とバイト数の上限が適用されます。内蔵の読み取り器と生成器は処理量と経過時間も検査します。外部バックエンドの作業領域では入力と中間出力を併存させるため、設定した項目数・バイト数の最大 3 倍まで許可します。ログはプロセスごとに 16 MiB までです。これらはリソース制御であり、サンドボックスではありません。一つの上限を増やしても他の制限は無効になりません。
 
 ## 出力構成と JSON レポート
 
 ```text
 recovered-app/
-  sources/                 復元された Java のパッケージとクラス
-  logs/jadx-version.log    バックエンドのバージョン確認
-  logs/jadx.log            バックエンドの診断情報
-  report.json              バージョン付きの一覧と復元の制限
+  sources/                       復元した Java のパッケージとクラス
+  metadata/android-methods.json  内蔵エンジンのメソッド網羅状況
+  report.json                    バージョン付き一覧と復元の制約
 ```
 
-一時コピーとバックエンドのキャッシュは削除されます。Java ファイルの具体的な名前や数はバックエンドの再構成によって変わり、ネストしたクラスが外側のクラスとソースファイルを共有することもあります。そのため、Java ソースファイル数は DEX のクラス数とは異なります。
+一時入力は削除されます。ネストしたクラスが外側のクラスのソースファイルを共有することがあるため、Java ファイル数と DEX クラス数は一致しません。生成したメソッドでは Java のディスパッチループを使うことがあります。元の DEX を実行したり、実行時のブリッジから呼び出したりはしません。
 
-以下は一部を省略したレポート例です。
+内蔵エンジンのレポートは `android_method_recovery` を含み、同じ内容を `metadata/android-methods.json` に書き込みます。公開前に `method_count = recovered_method_count + declaration_only_method_count` を満たし、`unrecovered_method_count` がゼロである必要があります。元の `native`・`abstract` メソッドは `declaration-only` として記録し、復元した本体には数えません。以下は省略した例です。網羅状況ファイルにはメソッドごとの一覧も含まれます。
 
 ```json
 {
@@ -116,14 +107,32 @@ recovered-app/
   "platform": "android",
   "source": "app.apk",
   "input_kind": "apk",
-  "backend": {"name": "jadx", "version": "1.5.6"},
-  "input_code_files": ["classes.dex", "classes2.dex"],
+  "backend": {
+    "name": "neverd",
+    "version": "1",
+    "execution": "builtin"
+  },
+  "input_code_files": [
+    "classes.dex",
+    "classes2.dex"
+  ],
   "dex_count": 2,
   "smali_count": 0,
   "java_source_count": 2,
-  "java_sources": ["sources/example/Main.java", "sources/example/Peer.java"],
-  "logs": ["logs/jadx-version.log", "logs/jadx.log"],
-  "limitations": ["Java is reconstructed from bytecode; original comments, formatting, and stripped names cannot be restored."]
+  "java_sources": [
+    "sources/example/Main.java",
+    "sources/example/Peer.java"
+  ],
+  "logs": [],
+  "android_method_recovery": {
+    "schema_version": 1,
+    "status": "recovered",
+    "class_count": 2,
+    "method_count": 6,
+    "recovered_method_count": 5,
+    "declaration_only_method_count": 1,
+    "unrecovered_method_count": 0
+  }
 }
 ```
 
@@ -139,29 +148,35 @@ neverd mobile app.apk -o recovered-app --json > recovery-result.json
 
 ## 失敗時の処理とトラブルシューティング
 
-結果はトランザクションとして公開されます。既存の出力は保持され、失敗した作業領域の出力は削除されます。バックエンドのゼロ以外の終了コード、ログに記録されたアセンブル／逆コンパイルエラー、クラス重複による省略、不完全なコードを示す明示的なマーカー、空の Java ファイル、Java が生成されなかった結果は、いずれもコマンドの失敗となります。バックエンドの成功報告だけでは、各メソッドの正しさを独立に証明できません。
+出力の公開はトランザクションとして扱い、既存出力を保持し、失敗した一時出力を削除します。未対応の操作、未解決のレジスターデータフロー、表現できない宣言、不正な例外処理、処理上限超過では、欠落した本体を公開せず内蔵処理を失敗させます。外部アダプターも、非ゼロ終了、ログ上のアセンブル・逆コンパイルエラー、重複クラスの省略、不完全なコードのマーカー、空の Java ファイル、Java 出力の欠落を拒否します。復元成功は意味的等価性の証明ではありません。
 
 | 症状 | 対処 |
 |------|------|
-| Python／ヘルパーが見つからない | Python 3.10 以降をインストールまたは選択し、NeverD と同じ階層に `mobile/` ディレクトリを置く |
-| バックエンドを起動できない、またはバージョンが未対応 | `--jadx`、完全な配布パッケージの構成、Java、バックエンドの最低バージョンを確認 |
-| 不正な DEX ヘッダー／ルートに DEX がない | 実際の入力形式を確認し、コードを含む APK、通常の DEX、smali を使う |
-| smali ファイルがない | Java ソースやアセットだけのツリーではなく、`.smali` ファイルを含むディレクトリを指定 |
-| クラスの重複、または部分的な復元 | 重複する入力定義を除くか、関連するバイトコードの集合を分けて解析する。不完全な結果を受け入れず、不正な smali を修正する |
-| タイムアウト／バイト数・エントリー数超過 | 関連する小さな入力に絞るか、対応する上限を意図的に引き上げる |
-| 安全でないアーカイブパスやリンク | パストラバーサル名、リンク、特殊ファイル、競合するパスを含まない通常の可搬な入力を作り直す |
-| 出力がすでに存在する | 別の出力ディレクトリを選び、過去に成功した出力先を再利用しない |
+| Python またはヘルパーがない | Python 3.10 以降を選び、同じ階層の `mobile/` を保持する |
+| 未対応の DEX・命令・宣言・初期化 | 診断と対応範囲を確認する。独立した互換アダプターを意図して選ぶ場合のみ `--jadx PATH` を使う |
+| 不正な入力や重複クラス | 入力バイトコードやクラス集合を修正する。未対応の本体が黙って省略されることはない |
+| タイムアウトや処理上限超過 | 入力を絞るか、利用可能なリソースに合わせて `--timeout`、`--max-files`、`--max-bytes` を調整する |
+| 出力が既に存在する | 新しい出力ディレクトリを選ぶ |
 
-成功した実行ではバックエンドのログが残ります。失敗した作業ディレクトリはログも含めて削除されます。バックエンドがゼロ以外で終了した場合は、エラーに長さを制限した診断ログ末尾が含まれ、タイムアウトやリソース予算のエラーにはそれぞれのメッセージが表示されます。バックエンド固有の調査をする場合は、対象を切り分けた入力と別の診断ディレクトリを使い、バックエンド自身の CLI で再現してください。失敗の前に一部の Java が生成されただけで、成功と判断してはいけません。
+## 任意の JADX 互換アダプター
+
+`--jadx PATH` は内蔵実装ではなく外部 JADX を選択します。標準の DEX/smali 入力プラグインを含む JADX 1.5.6 以降と Java 11 以降が必要です。完全な [JADX 配布パッケージ](https://github.com/skylot/jadx/releases/tag/v1.5.6)を取得し、`bin/` と `lib/` の構成を保ち、再配布時は同梱の依存ソフトウェアのライセンスも保持してください。自動ダウンロードは行いません。アダプターのレポートには実際の `jadx` エンジンと検出したバージョンを記録し、内蔵エンジンのメソッド網羅情報を提供するとは主張しません。
+
+Windows では配布パッケージの `.bat`/`.cmd` または `lib/jadx-*-all.jar` を指定できます。NeverD は配布 JAR を解決して Java を直接起動し、アプリケーションのパスをコマンドシェルに渡しません。Java は `JAVA_HOME` または PATH で選択します。成功時は `logs/jadx-version.log` と `logs/jadx.log` を保持し、失敗した一時領域とログは削除します。長さを制限したログ末尾がエラーに付くのはバックエンドの非ゼロ終了時だけです。起動失敗、タイムアウト、処理上限超過には専用の診断があります。
+
+```sh
+neverd mobile app.apk -o recovered-jadx --jadx /opt/jadx/bin/jadx
+python3 scripts/test_mobile_android_backend.py --jadx /opt/jadx/bin/jadx --neverd build/bin/neverd
+```
 
 ## 検証とサポートの深さ
 
 ```sh
 cmake --build build --target check-neverd-mobile
 NEVERD_BUILD_DIR=build python3 -m unittest discover -s scripts/tests -p 'test_mobile_*.py' -v
-python3 scripts/test_mobile_android_backend.py --jadx /opt/jadx/bin/jadx --neverd build/bin/neverd
+python3 scripts/test_mobile_android_internal.py --d8 PATH --neverd build/bin/neverd
 ```
 
-最初の 2 つのコマンドは、mobile コンポーネントとビルド済み CLI の契約を検証します。プラットフォーム固有のテストフィクスチャ要件により、一部のテストが明示的にスキップされることがあります。実バックエンドのテストランナーには、さらに JDK（`java` と `javac`）が必要です。単一 smali、クラス間参照／ネストを含む smali、DEX、実際の multidex APK を作成し、復元した Java をコンパイルして実行します。分岐、ループ、配列、例外処理、クラス参照、不正な入力、クラス重複による省略を検証します。これは該当フィクスチャについての検証結果であり、任意のアプリケーションを完全に復元できるという約束ではありません。
+コンポーネントと CLI のテストでは、解析、出力契約、失敗時の削除を確認します。内蔵エンジンの実行比較ランナーは JDK（`java` と `javac`）と D8 で独立した DEX/APK サンプルを作り、復元した Java をコンパイルして実行します。これらは検証用の依存関係であり、内蔵復元の実行要件ではありません。現在のビルドで実行結果を確認してから、各ケースを検証済みとしてください。別の互換性ランナーはさらに JADX を必要とし、外部アダプターを検証します。サンプルの成功は任意のアプリケーションの完全復元を意味しません。
 
-[Mobile Decompilation ワークフロー](../../.github/workflows/mobile.yml)では、Linux、macOS、Windows 上の Python 3.10 と 3.13 でコンポーネントテストを実行し、さらに Linux でチェックサムによりバージョンを固定した実 Android バックエンドのジョブを実行します。別系統の iOS ワークフローと現時点の制限については、[mobile の概要](../mobile.md)（英語）を参照してください。
+関連する iOS の処理は [モバイル概要](../mobile.md)を参照してください。

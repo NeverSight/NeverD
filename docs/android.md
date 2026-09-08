@@ -4,7 +4,7 @@
 
 [← Documentation index](README.md)
 
-`neverd mobile` recovers readable Java from APK, DEX, and smali inputs through a separately installed JADX backend. The workflow validates and stages bytecode, analyzes related classes together, checks the generated output, and publishes a source directory with a machine-readable report. It is an experimental CLI feature. APK containers and Java output are not exposed through the native C SDK, Python plugin SDK, GUI loader, or `neverd decompile --language`.
+`neverd mobile` recovers readable Java from APK, DEX, and smali using NeverD’s built-in engine by default. Independently implemented readers share a typed Dalvik model and a bounded Java emitter. This experimental CLI feature does not claim feature parity with JADX or complete recovery of arbitrary APKs. APK containers and Java output are not exposed through the native C SDK, Python plugin SDK, GUI loader, or `neverd decompile --language`.
 
 Recovered Java is a reconstruction of bytecode. Original comments, formatting, source-language choices, and removed identifiers are unavailable; Kotlin bytecode also produces Java. A successful run does not prove semantic equivalence or guarantee that every method recompiles. No analyzed application is launched by this workflow.
 
@@ -27,42 +27,35 @@ Open `recovered-app/sources/` to read the Java files and `recovered-app/report.j
 |-----------|-------------|-----------|
 | NeverD | Build the `neverd` target; distribute its sibling `mobile/` directory too | `build/bin/neverd` or an executable on PATH |
 | Python | Python 3.10 or newer, independent of the embedded plugin host | `--python`, then `NEVERD_PYTHON`, then `python3`/`python` on PATH |
-| Java backend | JADX 1.5.6 or newer with the standard DEX and smali input plugins | `--jadx`, then `NEVERD_JADX`, then `jadx` on PATH |
-| Java runtime | Java 11 or newer; a JDK is required for compile/run verification | `JAVA_HOME` or Java on PATH |
 
-NeverD does not download dependencies automatically. Obtain the complete [JADX distribution](https://github.com/skylot/jadx/releases/tag/v1.5.6), keep its `bin/` and `lib/` layout, and retain its included licenses when redistributing it. The tested backend release is 1.5.6; later versions must satisfy the same CLI contract. Dependency setup is separate from building NeverD's LLVM pipeline.
+The default engine uses Python’s standard library and needs no Java or JADX runtime. It accepts representable ordinary declarations and operations from DEX 035 and 037–040 and from smali. DEX 041, dynamic calls such as `invoke-custom`, some initialization paths, unknown semantic annotations or operations, and identifiers that Java cannot represent fail explicitly. File-format acceptance does not mean every instruction or declaration in that format is supported.
 
 ### Linux and macOS
 
 ```sh
 cmake --build build --target neverd
 python3 --version
-java -version
-/opt/jadx/bin/jadx --version
 
-./build/bin/neverd mobile app.apk -o recovered-app \
-  --python python3 --jadx /opt/jadx/bin/jadx
+./build/bin/neverd mobile app.apk -o recovered-app --python python3
 ```
 
-For repeated use, set `NEVERD_JADX=/opt/jadx/bin/jadx` and optionally `NEVERD_PYTHON` to an interpreter path. Point `JAVA_HOME` at the JDK installation directory if Java is not already available. Paths containing spaces must be quoted.
+Use `NEVERD_PYTHON` to select an interpreter for repeated runs. `NEVERD_JADX` and a `jadx` executable on PATH do not select the external engine; only an explicit `--jadx PATH` does. There is no automatic fallback. Quote paths containing spaces.
 
 ### Windows PowerShell
 
 ```powershell
-$env:JAVA_HOME = 'C:\Tools\jdk'
 & .\build\bin\neverd.exe mobile .\app.apk -o .\recovered-app `
-  --python 'C:\Tools\Python\python.exe' `
-  --jadx 'C:\Tools\jadx\bin\jadx.bat'
+  --python 'C:\Tools\Python\python.exe'
 ```
 
-The backend's `.bat`/`.cmd` path resolves the distribution's single `lib/jadx-*-all.jar`; NeverD invokes Java directly. You can also pass that JAR to `--jadx`. Application paths are never inserted into a command shell. Multi-configuration builds may put the executable under `build/bin/Release/` instead. Moving only the executable without its `mobile/` directory produces a helper-missing error.
+Multi-configuration builds may put the executable under `build/bin/Release/`. Keep its sibling `mobile/` directory when moving the executable; moving only the executable produces a helper-missing error.
 
 ## Supported inputs and boundaries
 
 | Input | Behavior | Important boundary |
 |-------|----------|--------------------|
 | `.apk` | Validate the complete ZIP, then analyze all root `classes.dex`, `classes2.dex`, and later numbered DEX files together | Code only; no resources or manifest decoding |
-| `.dex` | Validate the DEX magic and let the backend decode its contents | A renamed or truncated file is not valid bytecode |
+| `.dex` | Validate and parse DEX 035 or 037–040 with the built-in reader | DEX 041 and unsupported declarations or operations fail; renamed or truncated files are not valid bytecode |
 | `.smali` | Analyze the supplied class | Referenced sibling classes are not implicitly loaded |
 | Smali directory | Recursively collect `.smali` files and analyze them together | Include nested classes and dependent smali roots in the input directory |
 
@@ -76,38 +69,36 @@ APK resources, `AndroidManifest.xml`, assets, JNI/native libraries, and code dow
 
 ```sh
 neverd mobile app.apk -o recovered-app --platform=android \
-  --jadx /opt/jadx/bin/jadx --timeout=600 \
-  --max-files=30000 --max-bytes=4294967296 --json
+  --timeout=600 --max-files=30000 --max-bytes=4294967296 --json
 ```
 
 | Option | Default | Meaning |
 |--------|---------|---------|
 | `-o DIRECTORY` | Required | New output directory outside any directory input; never overwrite existing output |
 | `--platform=auto\|android` | `auto` | Select Android explicitly or infer the platform from the input |
-| `--jadx PATH` | Environment/PATH | Backend launcher or distribution JAR; explicit option takes precedence |
+| `--jadx PATH` | Not set: built-in engine | Explicitly select the separately installed JADX compatibility adapter; no environment-based selection or automatic fallback |
 | `--python PATH` | Environment/PATH | Interpreter for the bundled helper; explicit option takes precedence |
-| `--timeout N` | `300` | Positive seconds per backend process, including version probing |
+| `--timeout N` | `300` | Positive analysis-time budget for the built-in engine; positive seconds per external backend process, including version probing |
 | `--max-files N` | `20000` | Positive entry limit, including materialized directories |
 | `--max-bytes N` | `2147483648` | Positive input, extracted-data, and final-output byte limit |
 | `--json` | Off | Print the report as JSON rather than a human summary |
 
-Non-default `--arch` selection, `--artifact`, `--metadata-only`, and a nonzero `--max-func` belong to iOS and are rejected for Android; explicit `--arch=auto` is accepted. There is no arbitrary backend-option passthrough. Backend config/cache/temp directories are isolated for each run; ambient backend settings and plugin configuration are not imported into the run.
+Non-default `--arch` selection, `--artifact`, `--metadata-only`, and a nonzero `--max-func` belong to iOS and are rejected for Android; explicit `--arch=auto` is accepted. There is no arbitrary backend-option passthrough. The explicit JADX adapter isolates config/cache/temp directories and does not import ambient backend settings or plugin configuration.
 
-Limits are resource controls, not a sandbox for the backend process. The staging work area is also monitored with room for input, extracted data, and output, up to three times the configured entry/byte budgets. Logs are capped at 16 MiB per process. Large inputs may still need more Java heap or a larger timeout; increasing one limit does not disable the others.
+Input, extraction, and final output retain the configured file and byte budgets. The built-in reader and emitter also enforce bounded work and elapsed-time checks. External backend work areas allow up to three times the configured entry/byte budgets for staged inputs and intermediate output; logs are capped at 16 MiB per process. These are resource controls, not a sandbox. Raising one limit does not disable the others.
 
 ## Output layout and JSON report
 
 ```text
 recovered-app/
-  sources/                 recovered Java packages and classes
-  logs/jadx-version.log    backend version probe
-  logs/jadx.log            backend diagnostics
-  report.json              versioned inventory and recovery limits
+  sources/                       recovered Java packages and classes
+  metadata/android-methods.json  built-in method coverage
+  report.json                    versioned inventory and recovery limits
 ```
 
-Temporary copies and backend caches are removed. The exact Java filenames and their count depend on backend reconstruction; nested classes can share an outer-class source file. Java source count is therefore not DEX class count.
+Temporary inputs are removed. Nested classes can share an outer-class source file, so Java source count is not DEX class count. Generated methods may use a Java dispatch loop; they do not execute the original DEX or use a runtime bridge to it.
 
-A shortened illustrative report:
+The built-in report embeds `android_method_recovery`, also written to `metadata/android-methods.json`. Its invariant is `method_count = recovered_method_count + declaration_only_method_count`, with `unrecovered_method_count` equal to zero before publication. Original `native` and `abstract` methods have status `declaration-only`; they are not counted as recovered bodies. A shortened illustrative report follows; the coverage file also contains the per-method inventory:
 
 ```json
 {
@@ -116,14 +107,32 @@ A shortened illustrative report:
   "platform": "android",
   "source": "app.apk",
   "input_kind": "apk",
-  "backend": {"name": "jadx", "version": "1.5.6"},
-  "input_code_files": ["classes.dex", "classes2.dex"],
+  "backend": {
+    "name": "neverd",
+    "version": "1",
+    "execution": "builtin"
+  },
+  "input_code_files": [
+    "classes.dex",
+    "classes2.dex"
+  ],
   "dex_count": 2,
   "smali_count": 0,
   "java_source_count": 2,
-  "java_sources": ["sources/example/Main.java", "sources/example/Peer.java"],
-  "logs": ["logs/jadx-version.log", "logs/jadx.log"],
-  "limitations": ["Java is reconstructed from bytecode; original comments, formatting, and stripped names cannot be restored."]
+  "java_sources": [
+    "sources/example/Main.java",
+    "sources/example/Peer.java"
+  ],
+  "logs": [],
+  "android_method_recovery": {
+    "schema_version": 1,
+    "status": "recovered",
+    "class_count": 2,
+    "method_count": 6,
+    "recovered_method_count": 5,
+    "declaration_only_method_count": 1,
+    "unrecovered_method_count": 0
+  }
 }
 ```
 
@@ -139,29 +148,35 @@ Successful helper runs return zero. Recovery failures return nonzero; once the h
 
 ## Failure handling and troubleshooting
 
-Publication is transactional: existing output is preserved, and failed staging output is removed. Backend nonzero exits, logged assembly/decompilation errors, duplicate-class omissions, explicit incomplete-code markers, empty Java files, and no-Java results all fail the command. A backend reporting success does not independently prove method-level correctness.
+Publication is transactional: existing output is preserved, and failed staging output is removed. Unsupported operations, unresolved register flows, unrepresentable declarations, malformed exception handling, and exhausted budgets fail the built-in run instead of publishing missing method bodies. The external adapter also rejects nonzero exits, logged assembly/decompilation errors, duplicate-class omissions, incomplete-code markers, empty Java files, and missing Java output. Recovery success is not a proof of semantic equivalence.
 
 | Symptom | Action |
 |---------|--------|
-| Python/helper missing | Install/select Python 3.10+ and keep the sibling `mobile/` directory with NeverD |
-| Backend cannot execute or version unsupported | Verify `--jadx`, the complete distribution layout, Java, and the minimum backend version |
-| Invalid DEX header / no root DEX | Check the actual input format; use a code-containing APK, ordinary DEX, or smali |
-| No smali files | Point at a directory containing `.smali` files, not Java source or an assets-only tree |
-| Duplicate class or partial recovery | Remove duplicate input definitions or analyze the relevant bytecode set separately; fix malformed smali rather than accepting an incomplete result |
-| Timeout / byte or entry limit | Use a smaller relevant input or deliberately increase the corresponding limit |
-| Unsafe archive path or link | Recreate a regular, portable input without traversal names, links, special files, or conflicting paths |
-| Output already exists | Choose another output directory; do not reuse a previous success directory |
+| Python/helper missing | Select Python 3.10+ and retain the sibling `mobile/` directory |
+| Unsupported DEX, instruction, declaration, or initialization | Read the explicit diagnostic; check the supported subset. Use `--jadx PATH` only if you deliberately choose the separate compatibility adapter |
+| Invalid input or duplicate class | Correct the supplied bytecode/class set; unsupported bodies are not silently omitted |
+| Timeout or budget exceeded | Narrow the input or adjust `--timeout`, `--max-files`, and `--max-bytes` within available resources |
+| Output already exists | Choose a new output directory |
 
-Successful runs retain backend logs. Failed staging directories, including their logs, are deleted; nonzero backend exits include a bounded diagnostic tail in the error. Timeouts and resource-limit failures report their own diagnostic messages. For backend-specific investigation, reproduce on an isolated input with the backend's own CLI and a separate diagnostic directory. Never infer success just because some Java appeared before a failure.
+## Optional JADX compatibility adapter
+
+`--jadx PATH` selects external JADX, not the built-in implementation. Install JADX 1.5.6 or newer with standard DEX/smali input plugins and Java 11 or newer. Obtain the complete [JADX distribution](https://github.com/skylot/jadx/releases/tag/v1.5.6), retain its `bin/` and `lib/` layout and included dependency licenses when redistributing it. Nothing is downloaded automatically. The adapter report identifies the actual `jadx` engine and detected version; it does not claim built-in method coverage.
+
+On Windows, pass the distribution’s `.bat`/`.cmd` launcher or `lib/jadx-*-all.jar`. NeverD resolves the distribution JAR and invokes Java directly; application paths do not enter a command shell. `JAVA_HOME` or PATH selects Java. Successful adapter runs keep `logs/jadx-version.log` and `logs/jadx.log`; failed staging directories and logs are removed. Only a nonzero backend exit includes a bounded log tail. Launch failures, timeouts, and budget violations have their own diagnostics.
+
+```sh
+neverd mobile app.apk -o recovered-jadx --jadx /opt/jadx/bin/jadx
+python3 scripts/test_mobile_android_backend.py --jadx /opt/jadx/bin/jadx --neverd build/bin/neverd
+```
 
 ## Verification and support depth
 
 ```sh
 cmake --build build --target check-neverd-mobile
 NEVERD_BUILD_DIR=build python3 -m unittest discover -s scripts/tests -p 'test_mobile_*.py' -v
-python3 scripts/test_mobile_android_backend.py --jadx /opt/jadx/bin/jadx --neverd build/bin/neverd
+python3 scripts/test_mobile_android_internal.py --d8 PATH --neverd build/bin/neverd
 ```
 
-The first two commands exercise the mobile component and built CLI contracts; platform-specific fixture requirements can produce explicit skips. The real backend runner additionally needs a JDK (`java` and `javac`). It constructs single-smali, cross-class/nested smali, DEX, and true multidex APK cases, then compiles and executes the recovered Java. Its cases cover branches, loops, arrays, exception handling, class references, malformed input, and duplicate-class omissions. This is evidence for those fixtures, not a promise of complete recovery for arbitrary applications.
+The component and CLI tests check parsing, output contracts, and failure cleanup. The internal execution runner uses a JDK (`java` and `javac`) and D8 to build independent DEX/APK fixtures and compile/run recovered Java; these are test dependencies, not requirements for built-in recovery. Run it against the current build and inspect its results before claiming a case is verified. The separate compatibility runner additionally requires JADX and exercises that adapter. Fixture success does not establish complete recovery of arbitrary applications.
 
-The [Mobile Decompilation workflow](../.github/workflows/mobile.yml) runs component tests on Linux, macOS, and Windows with Python 3.10 and 3.13, plus a checksum-pinned real Android backend job on Linux. See the [mobile overview](mobile.md) for the separate iOS workflow and its current limits.
+See the [mobile overview](mobile.md) for the related iOS workflow.

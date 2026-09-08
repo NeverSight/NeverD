@@ -18,7 +18,7 @@ La visión general, la compilación y el CLI están en el README del repositorio
 | [Plugins de Python](python-plugins.md) | Autoría, API de sesión y eventos, aislamiento, pruebas y publicación |
 | [Descompilación EVM](evm.md) | Entradas, hardforks, IR por fases, ABI host C/LLVM, reconstrucción Solidity y límites |
 | [Descompilación de Solana SBF](sbf.md) | SBF v0-v4, LLVM IR, salida C/Rust, verificación y límites conocidos |
-| [Recuperación de Java para Android](android.md) | APK, DEX y smali; configuración de JADX/Python, CLI, informes JSON, límites y verificación |
+| [Recuperación de Java para Android](android.md) | APK, DEX y smali; motor integrado y Python 3.10+, JADX opcional, CLI, informes JSON, límites y verificación |
 | [Recuperación de fuentes iOS](ios.md) | IPA/.app/Mach-O, cuerpos y disposiciones Objective-C/Swift, CLI/export, cobertura, límites y pruebas ejecutables |
 | [Hoja de ruta](roadmap.md) | Estado: formatos nativos, EVM y Solana SBF implementados |
 | [English README](../../README.md) | Versión en inglés |

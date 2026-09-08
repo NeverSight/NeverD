@@ -36,7 +36,7 @@ CLI、集成方与 AI 智能体通过 **纯 C API** 使用同一个引擎 **`lib
 
 输入格式、host 契约与限制详见 [EVM 指南](evm.md)和 [Solana SBF 指南](sbf.md)。
 
-Android Java 代码恢复通过独立的 `neverd mobile` CLI 流程提供：使用已安装的 JADX 后端，将 APK、多 DEX、DEX 和 smali 输入恢复为 Java。[Android 指南](android.md)介绍运行环境、支持范围、输出报告和恢复限制。
+Android Java 恢复通过实验性的 `neverd mobile` CLI 提供：APK、多 DEX、DEX 和 smali 默认使用 NeverD 内置引擎与 Python 3.10+，运行时不依赖 Java 或 JADX。显式 `--jadx PATH` 可选择外部兼容适配器，没有自动回退。[Android 指南](android.md)介绍支持范围、输出报告与恢复限制。
 
 实验性 iOS 流程 `neverd mobile App.ipa -o recovered-ios` 从 IPA、`.app` 或 Mach-O 输出原生 C 和受支持的 Objective-C/Swift 源码，保留运行时布局、源码单元和逐方法省略原因；生成代码不通过桥接调用原始二进制。环境、覆盖口径和独立编译验证见 [iOS 指南](ios.md)。
 

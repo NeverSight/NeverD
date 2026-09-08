@@ -44,10 +44,9 @@ cl::SubCommand
 cl::opt<std::string> MobilePlatform("platform",
                                     cl::desc("auto, android, or ios"),
                                     cl::init("auto"), cl::sub(MobileCmd));
-cl::opt<std::string>
-    MobileBackend("jadx",
-                  cl::desc("Android Java backend executable (or NEVERD_JADX)"),
-                  cl::init(""), cl::sub(MobileCmd));
+cl::opt<std::string> MobileBackend(
+    "jadx", cl::desc("Explicit external Android backend (default: builtin)"),
+    cl::init(""), cl::sub(MobileCmd));
 cl::opt<std::string> MobileSwiftDemangle(
     "swift-demangle",
     cl::desc("Swift demangler executable (or NEVERD_SWIFT_DEMANGLE)"),
@@ -67,9 +66,9 @@ cl::opt<bool> MobileMetadataOnly(
     "metadata-only",
     cl::desc("Export iOS metadata without native C decompilation"),
     cl::sub(MobileCmd));
-cl::opt<unsigned>
-    MobileTimeout("timeout", cl::desc("Timeout in seconds per backend process"),
-                  cl::init(300), cl::sub(MobileCmd));
+cl::opt<unsigned> MobileTimeout(
+    "timeout", cl::desc("Seconds for builtin analysis or each backend process"),
+    cl::init(300), cl::sub(MobileCmd));
 cl::opt<unsigned>
     MobileMaxFiles("max-files",
                    cl::desc("Maximum mobile input/output file count"),

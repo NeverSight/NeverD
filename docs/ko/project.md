@@ -220,7 +220,7 @@ cmake --build build --target check-neverd
 
 ## CLI
 
-Android용 실험적 CLI는 `neverd mobile app.apk -o recovered-app`으로 APK, DEX, smali에서 Java와 `report.json`을 생성합니다. Python 3.10 이상, JADX 1.5.6 이상, Java 11 이상을 별도로 준비해야 합니다. APK 리소스는 디코딩하지 않으며 완전한 복구를 보장하지 않습니다. 설치, 옵션, 오류 처리는 [Android Java 복구 가이드](android.md)를 참조하세요.
+Android용 실험적 CLI는 `neverd mobile app.apk -o recovered-app`으로 APK, DEX, smali에서 Java와 `report.json`을 생성합니다. 기본적으로 NeverD 내장 엔진과 Python 3.10 이상을 사용하며 실행 시 Java나 JADX가 필요하지 않습니다. 명시적인 `--jadx PATH`로 외부 호환 어댑터를 선택할 수 있으며 자동 대체는 없습니다. APK 리소스는 디코딩하지 않으며 완전한 복원을 보장하지 않습니다. 자세한 내용은 [Android Java 복구 가이드](android.md)를 참조하세요.
 
 실험적 iOS 흐름 `neverd mobile App.ipa -o recovered-ios`는 IPA, `.app`, Mach-O에서 네이티브 C와 지원되는 Objective-C/Swift 소스를 출력합니다. 런타임 배치, 소스 단위, 메서드별 생략 이유를 유지하며 원래 바이너리를 호출하는 브리지를 사용하지 않습니다. 설정, 범위 계산, 독립 컴파일 검증은 [iOS 가이드](ios.md)를 참조하세요.
 

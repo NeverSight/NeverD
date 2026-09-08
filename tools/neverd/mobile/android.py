@@ -1,4 +1,4 @@
-"""Recover Java from Android bytecode using a separately installed JADX."""
+"""Package validation and explicit Android source-backend selection."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import shutil
 import stat
 import tempfile
 
-from .common import Limits, MobileError, extract_zip, run_tool, safe_copy_tree, walk_error
+from .common import Limits, MobileError, extract_zip, relative_member, run_tool, safe_copy_tree, walk_error, validate_tree
 
 
 _DEX_NAME = re.compile(r"classes(?:[2-9]|[1-9][0-9]+)?\.dex\Z")
@@ -136,7 +136,9 @@ def _check_output(sources: Path, limits: Limits) -> list[Path]:
     return sorted(java_files)
 
 
-def decompile_android(source: Path, output: Path, *, jadx: str, limits: Limits) -> dict:
+def decompile_android(source: Path, output: Path, *, jadx: str | None = None, limits: Limits) -> dict:
+    if jadx is None:
+        return _decompile_builtin(source, output, limits=limits)
     """Populate an empty staging directory; failures never constitute success."""
     source = source.absolute()
     output = output.absolute()
@@ -196,4 +198,92 @@ def decompile_android(source: Path, output: Path, *, jadx: str, limits: Limits) 
         "java_sources": [p.relative_to(output).as_posix() for p in sources],
         "logs": ["logs/jadx-version.log", "logs/jadx.log"],
         "limitations": limitations,
+    }
+
+
+def _decompile_builtin(source: Path, output: Path, *, limits: Limits) -> dict:
+    from .dalvik_model import Budget, link_classes
+    from .dalvik_dex import parse_dex
+    from .dalvik_smali import parse_smali
+    from .dalvik_java import recover_java
+    import json
+
+    budget = Budget(limits)
+    output.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".android-input-", dir=output) as temporary:
+        kind, code, names = _stage_inputs(source, Path(temporary), limits)
+        classes = []
+        paths = sorted(p for p in code.iterdir() if p.is_file())
+        if len(paths) != len(names):
+            raise MobileError("Android staged input inventory is inconsistent")
+        for path, input_id in zip(paths, names):
+            budget.tick(path.stat().st_size)
+            if kind in {"apk", "dex"}:
+                classes.extend(parse_dex(path.read_bytes(), input_id=input_id, budget=budget))
+            else:
+                try:
+                    text = path.read_text(encoding="utf-8")
+                except UnicodeError as error:
+                    raise MobileError("smali input is not valid UTF-8") from error
+                classes.append(parse_smali(text, input_id=input_id, budget=budget))
+        coverage = recover_java(link_classes(classes, budget), budget=budget)
+    units = coverage.pop("source_units")
+    metadata_path = Path("metadata/android-methods.json")
+    metadata_bytes = (json.dumps(coverage, indent=2, ensure_ascii=True) + "\n").encode("utf-8")
+    budget.output(len(metadata_bytes))
+    entries = {}
+    pending = []
+    total_bytes = len(metadata_bytes)
+
+    def reserve(path: Path, directory: bool) -> None:
+        name = path.as_posix()
+        key = name.casefold()
+        previous = entries.get(key)
+        if previous is not None and (previous != (name, directory) or not directory):
+            raise MobileError("Android Java output has conflicting class or directory paths")
+        entries[key] = (name, directory)
+        if len(entries) > limits.max_files:
+            raise MobileError("Android output exceeds the file-count limit including directories")
+
+    reserve(metadata_path.parent, True)
+    reserve(metadata_path, False)
+    for unit in units:
+        relative = Path("sources") / relative_member(unit["path"])
+        for parent in relative.parents:
+            if parent != Path("."):
+                reserve(parent, True)
+        reserve(relative, False)
+        encoded = unit["source"].encode("utf-8")
+        budget.tick(len(encoded))
+        total_bytes += len(encoded)
+        if total_bytes > limits.max_bytes:
+            raise MobileError("Android source and metadata output exceed the byte limit")
+        pending.append((relative, encoded))
+    if total_bytes > limits.max_bytes:
+        raise MobileError("Android metadata output exceeds the byte limit")
+    # Validate the complete output set before any source directory or file is
+    # created. A late bad class must not leave earlier classes in staging.
+    for relative, encoded in pending:
+        destination = output / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(encoded)
+    (output / metadata_path.parent).mkdir(exist_ok=True)
+    (output / metadata_path).write_bytes(metadata_bytes)
+    sources = [relative.as_posix() for relative, _ in pending]
+    validate_tree(output, limits)
+    return {
+        "status": "success", "platform": "android", "input_kind": kind,
+        "backend": {"name": "neverd", "version": "1", "execution": "builtin"},
+        "input_code_files": names, "dex_count": len(names) if kind in {"apk", "dex"} else 0,
+        "smali_count": len(names) if kind in {"smali", "smali-directory"} else 0,
+        "java_source_count": len(sources), "java_sources": sources, "logs": [],
+        "android_method_recovery": coverage,
+        "limitations": [
+            "Java is reconstructed from bytecode; compilation-lost source text and identifiers cannot be restored.",
+            "Unsupported instructions, declarations and unproven register flows reject the input instead of publishing missing bodies.",
+            "Generated method control flow can use a Java dispatch loop; it does not execute the input DEX or call an external decompiler.",
+            "Native and abstract declarations remain declaration-only and are counted separately from recovered bodies.",
+            "Android resources, manifests and native libraries are outside this Java recovery workflow.",
+            "Successful recovery does not certify behavior for arbitrary applications."
+        ],
     }

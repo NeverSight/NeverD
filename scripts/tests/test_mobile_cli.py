@@ -66,6 +66,20 @@ class MobilePublicationTests(unittest.TestCase):
             self.assertFalse(output.exists())
             self.assertEqual(list(root.glob(".neverd-mobile-*")), [])
 
+    def test_oversized_report_is_rejected_before_any_report_write(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "input.smali"
+            source.write_text(".class public LInput;")
+            output = root / "output"
+            args = parser().parse_args([str(source), "-o", str(output), "--max-bytes", "100"])
+            with patch("mobile.android.decompile_android", return_value={"detail": "x" * 101}), \
+                    patch.object(Path, "write_text", side_effect=AssertionError("report written before preflight")):
+                with self.assertRaisesRegex(MobileError, "limits"):
+                    recover(args)
+            self.assertFalse(output.exists())
+            self.assertEqual(list(root.glob(".neverd-mobile-*")), [])
+
 
 @unittest.skipUnless(os.environ.get("NEVERD_BUILD_DIR"), "set NEVERD_BUILD_DIR for native CLI tests")
 class MobileCLITests(unittest.TestCase):
@@ -130,6 +144,17 @@ class MobileCLITests(unittest.TestCase):
         result = self.cli(self.source, "-o", self.root / "relocated output", "--metadata-only", "--json", binary=relocated)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(json.loads(result.stdout)["status"], "success")
+        android = self.root / "owned.smali"
+        android.write_text(".class public LOwned;\n.super Ljava/lang/Object;\n"
+                           ".method public static value()I\n.registers 1\n"
+                           "const/4 v0, 7\nreturn v0\n.end method\n")
+        recovered = self.root / "relocated android"
+        result = self.cli(android, "-o", recovered, "--json", "--python", sys.executable, binary=relocated)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["backend"]["execution"], "builtin")
+        self.assertEqual(report["android_method_recovery"]["recovered_method_count"], 1)
+        self.assertTrue((recovered / "sources" / "Owned.java").is_file())
 
 
 if __name__ == "__main__":

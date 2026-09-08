@@ -39,6 +39,10 @@ add_custom_target(neverd-mobile-runtime
           ${CMAKE_CURRENT_SOURCE_DIR}/mobile/common.py
           ${CMAKE_CURRENT_SOURCE_DIR}/mobile/driver.py
           ${CMAKE_CURRENT_SOURCE_DIR}/mobile/android.py
+          ${CMAKE_CURRENT_SOURCE_DIR}/mobile/dalvik_model.py
+          ${CMAKE_CURRENT_SOURCE_DIR}/mobile/dalvik_dex.py
+          ${CMAKE_CURRENT_SOURCE_DIR}/mobile/dalvik_smali.py
+          ${CMAKE_CURRENT_SOURCE_DIR}/mobile/dalvik_java.py
           ${CMAKE_CURRENT_SOURCE_DIR}/mobile/ios.py
           ${CMAKE_CURRENT_SOURCE_DIR}/mobile/macho.py
           ${CMAKE_CURRENT_SOURCE_DIR}/mobile/objc_source.py
