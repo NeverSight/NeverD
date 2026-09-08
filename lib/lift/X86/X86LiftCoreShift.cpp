@@ -398,9 +398,14 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     // this is `& (Bits-1)`.  Without it, e.g. `rolb $9` feeds x<<9 into the
     // saturating INT_LEFT (over-shift -> 0), dropping the high half.  32/64-bit
     // need no step (the 5/6-bit mask already yields a count < size).
-    if (Bits < 32)
-      S.emit(NdOp::INT_AND, MaskedCnt,
+    // Flag updates use the architectural masked count even when a whole
+    // byte/word rotation leaves the operand unchanged.
+    NdVar RotateCnt = MaskedCnt;
+    if (Bits < 32) {
+      RotateCnt = S.makeTemp(Sz);
+      S.emit(NdOp::INT_AND, RotateCnt,
              {MaskedCnt, NdVar::scalar(Bits - 1, Sz)});
+    }
 
     // Rotates affect only CF and OF; snapshot CF so a zero count preserves it.
     NdVar OldCF;
@@ -413,8 +418,8 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       NdVar Shl = S.makeTemp(Sz);
       NdVar Comp = S.makeTemp(Sz);
       NdVar Shr = S.makeTemp(Sz);
-      S.emit(NdOp::INT_LEFT, Shl, {DstR, MaskedCnt});
-      S.emit(NdOp::INT_SUB, Comp, {NdVar::scalar(Bits, Sz), MaskedCnt});
+      S.emit(NdOp::INT_LEFT, Shl, {DstR, RotateCnt});
+      S.emit(NdOp::INT_SUB, Comp, {NdVar::scalar(Bits, Sz), RotateCnt});
       S.emit(NdOp::INT_AND, Comp, {Comp, NdVar::scalar(Bits - 1, Sz)});
       S.emit(NdOp::INT_RIGHT, Shr, {DstR, Comp});
       S.emit(NdOp::INT_OR, Result, {Shl, Shr});
@@ -428,8 +433,8 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       NdVar Shr = S.makeTemp(Sz);
       NdVar Comp = S.makeTemp(Sz);
       NdVar Shl = S.makeTemp(Sz);
-      S.emit(NdOp::INT_RIGHT, Shr, {DstR, MaskedCnt});
-      S.emit(NdOp::INT_SUB, Comp, {NdVar::scalar(Bits, Sz), MaskedCnt});
+      S.emit(NdOp::INT_RIGHT, Shr, {DstR, RotateCnt});
+      S.emit(NdOp::INT_SUB, Comp, {NdVar::scalar(Bits, Sz), RotateCnt});
       S.emit(NdOp::INT_AND, Comp, {Comp, NdVar::scalar(Bits - 1, Sz)});
       S.emit(NdOp::INT_LEFT, Shl, {DstR, Comp});
       S.emit(NdOp::INT_OR, Result, {Shr, Shl});
