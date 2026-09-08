@@ -15,6 +15,7 @@
 
 #include "../plugin/PluginManager.h"
 
+#include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/codegen/CodeGen.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
@@ -32,6 +33,7 @@
 
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -332,6 +334,40 @@ struct Session {
     return nullptr;
   }
 
+  /// Native function identity is its original source address, independently of
+  /// debug names or emitter-generated symbol suffixes. Declarations and
+  /// untagged helpers do not represent source definitions.
+  const llvm::Function *findNativeLlvmFunction(va_t Addr) {
+    if (!PipeResult.LlvmModule) {
+      setError("LLVM module is not available");
+      return nullptr;
+    }
+    const llvm::Function *Match = nullptr;
+    for (const auto &Function : *PipeResult.LlvmModule) {
+      if (Function.isDeclaration())
+        continue;
+      auto OriginalVA = rewrite_source::getOriginalVA(Function);
+      if (!OriginalVA) {
+        setError("invalid LLVM source identity for function '" +
+                 Function.getName().str() +
+                 "': " + llvm::toString(OriginalVA.takeError()));
+        return nullptr;
+      }
+      if (!*OriginalVA || **OriginalVA != Addr)
+        continue;
+      if (Match) {
+        setError("ambiguous LLVM source identity at 0x" +
+                 llvm::utohexstr(Addr) + ": '" + Match->getName().str() +
+                 "' and '" + Function.getName().str() + "'");
+        return nullptr;
+      }
+      Match = &Function;
+    }
+    if (!Match)
+      setError("LLVM function not found at 0x" + llvm::utohexstr(Addr));
+    return Match;
+  }
+
   bool ensureLlvmModule() {
     if (PipeResult.LlvmModule)
       return true;
@@ -355,16 +391,31 @@ struct Session {
       PipeResult.LlvmModule = std::move(*Module);
       return true;
     }
-    if (PipeResult.MedFuncs.empty())
+    if (PipeResult.MedFuncs.empty()) {
+      setError("no native functions available for LLVM emission");
       return false;
+    }
     std::vector<std::pair<va_t, std::string>> ImportMap;
     for (const auto &[Addr, Name] : Img.getImportAddressNames())
       ImportMap.emplace_back(Addr, Name);
     MedLLVMEmitter Emitter;
-    PipeResult.LlvmModule =
+    auto Candidate =
         Emitter.emit(PipeResult.MedFuncs, *LLVMCtx, "neverd_output", Img.Arch,
                      ImportMap, &Img, Img.Format);
-    return PipeResult.LlvmModule != nullptr;
+    if (!Candidate) {
+      setError("native LLVM emission failed");
+      return false;
+    }
+    // The native emitter can return a module after reporting verifier errors.
+    // Reject optional LLVM output without invalidating completed analysis.
+    std::string VerifyError;
+    llvm::raw_string_ostream VerifyStream(VerifyError);
+    if (llvm::verifyModule(*Candidate, &VerifyStream)) {
+      setError("native LLVM verification failed: " + VerifyError);
+      return false;
+    }
+    PipeResult.LlvmModule = std::move(Candidate);
+    return true;
   }
 };
 

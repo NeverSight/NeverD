@@ -779,8 +779,9 @@ The required execution policy follows existing CI ownership:
   execute all selected `NeverDPatchFullTests` cases.
 - Every host must execute the mandatory safety, native example plugin,
   concolic, binary corpus, and failure-integrity suites. The integrity suites
-  cover worker exception transport, SDK session state, the semantic fixture,
-  and pipeline outcome publication.
+  cover worker exception transport, SDK session state, exact native LLVM
+  function identity and verified caching, the semantic fixture, and pipeline
+  outcome publication.
 - Linux must also execute the SBF external oracle, upstream conformance, and
   Agave conformance suites because that leg installs their pinned dependencies.
 - The only platform exceptions within these required suites are

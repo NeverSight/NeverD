@@ -51,6 +51,7 @@ CONCOLIC_LABELS = (
 INTEGRITY_LABELS = (
     "NeverDSupportThreadTests",
     "NeverDSessionCAPITests",
+    "NeverDSessionLLVMTests",
     "NeverDSemanticFixtureTests",
     "NeverDPipelineOutcomeTests",
 )

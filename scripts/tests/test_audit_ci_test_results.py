@@ -184,7 +184,15 @@ class OutcomePolicyTests(unittest.TestCase):
         self.assertIn("NeverDSemanticTests", required_labels("linux-semantic"))
         self.assertIn("NeverDPatchFullTests", required_labels("macos-patch"))
         for profile in ("linux-semantic", "macos-patch", "windows-focused"):
-            self.assertIn("NeverDPipelineOutcomeTests", required_labels(profile))
+            for label in (
+                "NeverDSupportThreadTests",
+                "NeverDSessionCAPITests",
+                "NeverDSessionLLVMTests",
+                "NeverDSemanticFixtureTests",
+                "NeverDPipelineOutcomeTests",
+            ):
+                with self.subTest(profile=profile, label=label):
+                    self.assertIn(label, required_labels(profile))
 
     def test_a_skip_in_every_mandatory_label_is_missing_evidence(self):
         for profile in ("linux-semantic", "macos-patch", "windows-focused"):

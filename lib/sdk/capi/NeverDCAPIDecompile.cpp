@@ -225,22 +225,9 @@ const char *neverd_ir_llvm(neverd_session_t Sess, neverd_va_t FuncEntry) {
   if (S->PipeResult.SBF)
     return dupStr(sbf::emitLLVMText(*S->PipeResult.LlvmModule));
 
-  std::string FuncName = "sub_" + llvm::utohexstr(FuncEntry);
-
-  llvm::Function *LF = S->PipeResult.LlvmModule->getFunction(FuncName);
-  if (!LF) {
-    for (auto &F : *S->PipeResult.LlvmModule) {
-      if (F.getName().starts_with(FuncName)) {
-        LF = &F;
-        break;
-      }
-    }
-  }
-
-  if (!LF) {
-    S->setError("LLVM function not found");
+  const llvm::Function *LF = S->findNativeLlvmFunction(FuncEntry);
+  if (!LF)
     return dupStr(std::string());
-  }
 
   std::string Out;
   llvm::raw_string_ostream OS(Out);

@@ -70,6 +70,14 @@ add_neverd_unittest(NeverDPipelineOutcomeTests
 target_include_directories(NeverDPipelineOutcomeTests PRIVATE
   "${CMAKE_SOURCE_DIR}/lib/pipeline")
 
+add_neverd_unittest(NeverDSessionLLVMTests
+  SessionLLVMTests.cpp
+  LINK_COMPONENTS Pipeline
+  LINK_LIBS neverd-plugin-runtime-test-support
+)
+target_include_directories(NeverDSessionLLVMTests PRIVATE
+  "${CMAKE_SOURCE_DIR}/lib/sdk/capi")
+
 if(TARGET neverd_shared)
   add_neverd_unittest(NeverDSessionCAPITests
     SessionCAPITests.cpp

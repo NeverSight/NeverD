@@ -265,4 +265,57 @@ TEST_F(SessionCAPITest, FailedNativeReloadPreservesDecoderAndDebugSelection) {
   EXPECT_NE(NewDisassembly, Disassembly);
 }
 
+TEST_F(SessionCAPITest,
+       NativeLLVMQueryUsesOriginalAddressForDebugNamedFunction) {
+  const std::string Path = write("named.elf", makeNativeELF(false));
+  const std::string Map =
+      write("named.map", "VMA LMA Size Align Out In Symbol\n"
+                         "00400078 00400078 00000006 1 .text\n"
+                         "00400078 00400078 00000006 1 meaningful_name\n");
+  neverd_session_set_map_path(Session, Map.c_str());
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1)
+      << takeString(neverd_last_error(Session));
+  const neverd_va_t Entry = neverd_session_entry_addr(Session);
+  ASSERT_EQ(takeString(neverd_func_name(Session, 0)), "meaningful_name");
+
+  const std::string LLVMIR = takeString(neverd_ir_llvm(Session, Entry));
+  ASSERT_FALSE(LLVMIR.empty()) << takeString(neverd_last_error(Session));
+  EXPECT_NE(LLVMIR.find("define "), std::string::npos) << LLVMIR;
+  EXPECT_NE(LLVMIR.find("@meaningful_name("), std::string::npos) << LLVMIR;
+  EXPECT_TRUE(takeString(neverd_last_error(Session)).empty());
+  EXPECT_EQ(takeString(neverd_ir_llvm(Session, Entry)), LLVMIR);
+}
+
+TEST_F(SessionCAPITest, NativeLLVMQueryRejectsAnAddressThatOnlyMatchesAPrefix) {
+  const std::string Path = write("anonymous.elf", makeNativeELF(false));
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1)
+      << takeString(neverd_last_error(Session));
+  const neverd_va_t Entry = neverd_session_entry_addr(Session);
+  const std::string LLVMIR = takeString(neverd_ir_llvm(Session, Entry));
+  ASSERT_FALSE(LLVMIR.empty()) << takeString(neverd_last_error(Session));
+
+  EXPECT_TRUE(takeString(neverd_ir_llvm(Session, Entry >> 4)).empty());
+  EXPECT_NE(takeString(neverd_last_error(Session)).find("not found"),
+            std::string::npos);
+  EXPECT_EQ(takeString(neverd_ir_llvm(Session, Entry)), LLVMIR);
+  EXPECT_TRUE(takeString(neverd_last_error(Session)).empty());
+}
+
+TEST_F(SessionCAPITest, TargetOptionChangesInvalidatePreviouslyCachedLLVM) {
+  const std::string Path = write("requires-shanghai.evm", "5f00");
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  ASSERT_EQ(neverd_evm_set_hardfork(Session, "shanghai"), 1);
+  const std::string LLVMIR = takeString(neverd_ir_llvm(Session, 0));
+  ASSERT_FALSE(LLVMIR.empty()) << takeString(neverd_last_error(Session));
+
+  ASSERT_EQ(neverd_evm_set_hardfork(Session, "london"), 1);
+  EXPECT_TRUE(takeString(neverd_ir_llvm(Session, 0)).empty());
+  EXPECT_NE(takeString(neverd_last_error(Session)).find("inactive opcode"),
+            std::string::npos);
+
+  ASSERT_EQ(neverd_evm_set_hardfork(Session, "shanghai"), 1);
+  EXPECT_EQ(takeString(neverd_ir_llvm(Session, 0)), LLVMIR);
+  EXPECT_TRUE(takeString(neverd_last_error(Session)).empty());
+}
+
 } // namespace
