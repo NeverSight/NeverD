@@ -38,6 +38,10 @@ extern "C" {
 
 NEVERD_API neverd_session_t neverd_session_create(void);
 NEVERD_API void neverd_session_destroy(neverd_session_t Sess);
+/// Returns 1 on success, replacing the image, analysis, and per-image edits.
+/// Returns 0 when preparation fails; a previously loaded session remains
+/// usable with its existing image, analysis, and edits. See
+/// neverd_last_error().
 NEVERD_API int neverd_session_load(neverd_session_t Sess, const char *Path);
 NEVERD_API int neverd_session_is_loaded(neverd_session_t Sess);
 

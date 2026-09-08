@@ -116,6 +116,9 @@ class CiConfigurationTests(unittest.TestCase):
         verify_step = source.split(step_marker, 1)[1].split("\n      - name:", 1)[0]
         self.assertEqual(verify_step.count("scripts.tests.test_ci_configuration"), 1)
         self.assertEqual(
+            verify_step.count("scripts.tests.test_audit_ci_test_inventory"), 1
+        )
+        self.assertEqual(
             verify_step.count("scripts.tests.test_neverd_bench_harness"), 1
         )
 

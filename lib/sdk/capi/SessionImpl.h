@@ -281,30 +281,34 @@ struct Session {
     }
   }
 
-  void invalidatePipeline() {
+  void clearPipeline() {
     PipeResult = {};
     LLVMCtx.reset();
     PipeRan = false;
     SBFFunctionsSynchronized = false;
+  }
+
+  void invalidatePipeline() {
+    clearPipeline();
     resetFunctionsFromImage();
   }
 
   bool ensurePipeline() {
-    if (PipeRan)
-      return PipeResult.Success;
     if (!Loaded) {
       setError("no binary loaded");
       return false;
     }
-    LLVMCtx = std::make_unique<llvm::LLVMContext>();
-    PipelineOptions Opts;
-    applyAnalysisOptions(Opts);
-    Pipeline ThePipeline;
-    // Debug names already reached Img.Symbols at load time; handing the context
-    // to the pipeline as well is what carries the rest of what it knows —
-    // source file and line, declared sizes, parameter names — into the IR.
-    PipeResult = ThePipeline.run(Img, *LLVMCtx, Opts, Dbg.get());
-    PipeRan = true;
+    if (!PipeRan) {
+      LLVMCtx = std::make_unique<llvm::LLVMContext>();
+      PipelineOptions Opts;
+      applyAnalysisOptions(Opts);
+      Pipeline ThePipeline;
+      // Debug names already reached Img.Symbols at load time; handing the
+      // context to the pipeline also carries source locations, declared sizes,
+      // and parameter names into the IR.
+      PipeResult = ThePipeline.run(Img, *LLVMCtx, Opts, Dbg.get());
+      PipeRan = true;
+    }
     if (!PipeResult.Success)
       setError(PipeResult.Error.empty() ? "pipeline failed" : PipeResult.Error);
     return PipeResult.Success;

@@ -14,6 +14,7 @@
 #define NEVERD_SUPPORT_STACKSIZEMAIN_H
 
 #include <cstddef>
+#include <exception>
 #include <vector>
 
 #ifdef _WIN32
@@ -55,35 +56,53 @@ struct LargeStackMainArgs {
   int Argc;
   char **Argv;
   int Result;
+  std::exception_ptr Failure;
+
+  void run() noexcept {
+    try {
+      Result = Fn(Argc, Argv);
+    } catch (...) {
+      Failure = std::current_exception();
+    }
+  }
 };
 
 template <typename Fn> struct LargeStackWorkerArgs {
   Fn *Worker;
+  std::exception_ptr Failure;
+
+  void run() noexcept {
+    try {
+      (*Worker)();
+    } catch (...) {
+      Failure = std::current_exception();
+    }
+  }
 };
 
 #ifdef _WIN32
 inline unsigned __stdcall largeStackThreadEntry(void *Arg) {
   auto *A = static_cast<LargeStackMainArgs *>(Arg);
-  A->Result = A->Fn(A->Argc, A->Argv);
+  A->run();
   return 0;
 }
 
 template <typename Fn>
 inline unsigned __stdcall largeStackWorkerEntry(void *Arg) {
   auto *A = static_cast<LargeStackWorkerArgs<Fn> *>(Arg);
-  (*A->Worker)();
+  A->run();
   return 0;
 }
 #else
 inline void *largeStackThreadEntry(void *Arg) {
   auto *A = static_cast<LargeStackMainArgs *>(Arg);
-  A->Result = A->Fn(A->Argc, A->Argv);
+  A->run();
   return nullptr;
 }
 
 template <typename Fn> inline void *largeStackWorkerEntry(void *Arg) {
   auto *A = static_cast<LargeStackWorkerArgs<Fn> *>(Arg);
-  (*A->Worker)();
+  A->run();
   return nullptr;
 }
 #endif
@@ -93,21 +112,26 @@ template <typename Fn> inline void *largeStackWorkerEntry(void *Arg) {
 /// Run \p Count copies of \p Worker concurrently on large-stack threads.
 /// If native thread creation stops early, the caller drains the shared work
 /// queue after joining the workers that started, preserving correct results
-/// with reduced parallelism.
+/// with reduced parallelism. If a worker throws, all started workers are joined
+/// before one original exception is rethrown on the caller. Work already done
+/// is not rolled back, and the caller does not drain more work after a failure.
 template <typename Fn>
 void runWithLargeStackThreads(unsigned Count, Fn &Worker) {
   if (Count == 0)
     return;
-  detail::LargeStackWorkerArgs<Fn> Args{&Worker};
+  // Each worker owns its exception slot. Allocate stable storage before
+  // starting threads and read it only after joining, without a shared exception
+  // lock.
+  std::vector<detail::LargeStackWorkerArgs<Fn>> Args(Count, {&Worker, {}});
+  bool NeedsInlineWorker = false;
 
 #ifdef _WIN32
   std::vector<HANDLE> Threads;
   Threads.reserve(Count);
-  bool NeedsInlineWorker = false;
   for (unsigned I = 0; I < Count; ++I) {
     auto Thread = ::_beginthreadex(
         nullptr, static_cast<unsigned>(kDecompilerWorkerStackSize),
-        detail::largeStackWorkerEntry<Fn>, &Args,
+        detail::largeStackWorkerEntry<Fn>, &Args[I],
         STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
     if (Thread == 0) {
       NeedsInlineWorker = true;
@@ -119,9 +143,9 @@ void runWithLargeStackThreads(unsigned Count, Fn &Worker) {
     ::WaitForSingleObject(Thread, INFINITE);
     ::CloseHandle(Thread);
   }
-  if (NeedsInlineWorker)
-    Worker();
 #else
+  std::vector<pthread_t> Threads;
+  Threads.reserve(Count);
   pthread_attr_t Attr;
   if (pthread_attr_init(&Attr) != 0) {
     Worker();
@@ -133,13 +157,10 @@ void runWithLargeStackThreads(unsigned Count, Fn &Worker) {
     return;
   }
 
-  std::vector<pthread_t> Threads;
-  Threads.reserve(Count);
-  bool NeedsInlineWorker = false;
   for (unsigned I = 0; I < Count; ++I) {
     pthread_t Thread;
     if (pthread_create(&Thread, &Attr, detail::largeStackWorkerEntry<Fn>,
-                       &Args) != 0) {
+                       &Args[I]) != 0) {
       NeedsInlineWorker = true;
       break;
     }
@@ -148,16 +169,20 @@ void runWithLargeStackThreads(unsigned Count, Fn &Worker) {
   pthread_attr_destroy(&Attr);
   for (pthread_t Thread : Threads)
     pthread_join(Thread, nullptr);
+#endif
+  for (const auto &Arg : Args)
+    if (Arg.Failure)
+      std::rethrow_exception(Arg.Failure);
   if (NeedsInlineWorker)
     Worker();
-#endif
 }
 
 /// Run \p RealMain on a thread with a 128 MiB stack.  Falls back to a
-/// direct call if thread creation fails.
+/// direct call if thread creation fails. Exceptions propagate to the caller
+/// after the thread is joined, just as they do for the direct call.
 inline int runWithLargeStack(int (*RealMain)(int, char *[]), int Argc,
                              char *Argv[]) {
-  detail::LargeStackMainArgs A{RealMain, Argc, Argv, 0};
+  detail::LargeStackMainArgs A{RealMain, Argc, Argv, 0, {}};
 
 #ifdef _WIN32
   auto Thread =
@@ -186,6 +211,8 @@ inline int runWithLargeStack(int (*RealMain)(int, char *[]), int Argc,
   pthread_attr_destroy(&Attr);
   pthread_join(Tid, nullptr);
 #endif
+  if (A.Failure)
+    std::rethrow_exception(A.Failure);
   return A.Result;
 }
 

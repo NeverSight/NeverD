@@ -843,7 +843,7 @@ class Session:
         value = self._owned_string(
             "neverd_decompile", _unsigned("address", address, 64)
         )
-        if value is None:
+        if not value:
             raise NeverDError(
                 self._owned_string("neverd_last_error") or "decompile failed"
             )
@@ -861,7 +861,7 @@ class Session:
         except (AttributeError, KeyError) as error:
             raise ValueError("IR level must be low, med, high, or llvm") from error
         value = self._owned_string(function, _unsigned("address", address, 64))
-        if value is None:
+        if not value:
             raise NeverDError(self.last_error or f"{level} IR is unavailable")
         return value
 

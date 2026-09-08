@@ -1421,7 +1421,29 @@ if(TARGET neverd)
   add_dependencies(NeverDFPSRTests neverd)
 endif()
 
+add_neverd_unittest(NeverDSemanticFixtureTests
+  SemanticRoundTripFixtureTests.cpp
+)
+target_include_directories(NeverDSemanticFixtureTests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+  ${CMAKE_SOURCE_DIR}/third_party/unicorn/include
+)
+target_link_libraries(NeverDSemanticFixtureTests PRIVATE
+  unicorn
+  neverd_shared
+  LLVMMC
+  LLVMMCParser
+  LLVMObject
+  LLVMX86AsmParser LLVMX86Desc LLVMX86Info
+  LLVMAArch64AsmParser LLVMAArch64Desc LLVMAArch64Info
+  LLVMARMAsmParser LLVMARMDesc LLVMARMInfo
+  LLVMSupport
+)
+
 set(_neverd_semantic_fixture_targets
+    NeverDSemanticFixtureTests
     NeverDSemanticTests
     NeverDComputedGotoTests
     NeverDSwitchXformTests

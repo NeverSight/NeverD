@@ -629,6 +629,47 @@ class _SanitizeHost:
 
 
 class SessionTests(unittest.TestCase):
+    def test_decompile_and_ir_surface_empty_native_failures(self) -> None:
+        from neverd_plugin import NeverDError, Session
+
+        operations = ("decompile", "low", "med", "high", "llvm")
+        for operation in operations:
+            for output in (None, ""):
+                for diagnostic in ("function not found", "", None):
+                    with self.subTest(
+                        operation=operation, output=output, diagnostic=diagnostic
+                    ):
+                        host = mock.Mock()
+                        host.owned_string.side_effect = [output, diagnostic]
+                        session = Session(
+                            object(), _native=_FakeNativeBridge(), _host=host
+                        )
+                        expected = diagnostic or (
+                            "decompile failed"
+                            if operation == "decompile"
+                            else f"{operation} IR is unavailable"
+                        )
+                        with self.assertRaisesRegex(NeverDError, expected):
+                            if operation == "decompile":
+                                session.decompile(0x401000)
+                            else:
+                                session.ir(0x401000, operation)
+
+    def test_decompile_and_ir_preserve_successful_native_text(self) -> None:
+        from neverd_plugin import Session
+
+        for operation in ("decompile", "low", "med", "high", "llvm"):
+            with self.subTest(operation=operation):
+                host = mock.Mock()
+                host.owned_string.return_value = "function body\n"
+                session = Session(object(), _native=_FakeNativeBridge(), _host=host)
+                actual = (
+                    session.decompile(0x401000)
+                    if operation == "decompile"
+                    else session.ir(0x401000, operation)
+                )
+                self.assertEqual(actual, "function body\n")
+
     def test_default_host_is_lazy_and_cached(self) -> None:
         import neverd_plugin.api as api_module
         from neverd_plugin import Session

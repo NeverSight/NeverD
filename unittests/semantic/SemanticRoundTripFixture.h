@@ -192,6 +192,17 @@ protected:
     }
   }
 
+  // Fixture integrity tests override only the SDK boundary, after successful
+  // source compilation and original emulation, to verify failure reporting.
+  virtual int liftToObject(neverd_session_t Session, const char *ObjectPath,
+                           int NoOpt) {
+    return neverd_lift_to_obj(Session, ObjectPath, NoOpt, /*MaxFunctions=*/0);
+  }
+
+  virtual int roundTripFunctionCount(neverd_session_t Session) {
+    return neverd_roundtrip_func_count(Session);
+  }
+
   // --- Architecture-specific roundtrip runners ---
 
   void roundTripX64(const RoundTripTC &TC) {
@@ -416,14 +427,14 @@ private:
         << "\n  Test: " << TC.Name;
 
     // ---- Step 5: Lift and recompile with NeverD ----
-    int Ret =
-        neverd_lift_to_obj(Sess, ObjPath.c_str(),
-                           /*NoOpt=*/TC.NoOpt ? 1 : 0, /*MaxFunctions=*/0);
+    int Ret = liftToObject(Sess, ObjPath.c_str(), /*NoOpt=*/TC.NoOpt ? 1 : 0);
     if (Ret != 0) {
       const char *Err = neverd_last_error(Sess);
-      GTEST_SKIP() << "Lift-to-obj failed: " << (Err ? Err : "unknown")
-                   << "\n  Test: " << TC.Name;
-      return;
+      const std::string Diagnostic = Err ? Err : "unknown";
+      neverd_free_string(Err);
+      FAIL() << "Lift-to-obj failed: " << Diagnostic
+             << "\n  Status: " << Ret << "\n  Test: " << TC.Name
+             << "\n  Object: " << ObjPath;
     }
 
     if (TC.RecoveredSwitch != RecoveredSwitchExpectation::Unspecified) {
@@ -450,12 +461,10 @@ private:
       }
     }
 
-    int FuncCount = neverd_roundtrip_func_count(Sess);
-    if (FuncCount == 0) {
-      GTEST_SKIP() << "No functions in roundtrip result"
-                   << "\n  Test: " << TC.Name;
-      return;
-    }
+    int FuncCount = roundTripFunctionCount(Sess);
+    ASSERT_GT(FuncCount, 0)
+        << "No functions in roundtrip result"
+        << "\n  Test: " << TC.Name << "\n  Object: " << ObjPath;
 
     // ---- Step 6: Extract recompiled .text + .rodata ----
     unsigned long long ObjLen = 0;

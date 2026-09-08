@@ -175,7 +175,7 @@ int neverd_session_load(neverd_session_t Sess, const char *Path) {
   // load boundary.  Keep P unchanged: FilePath is an older public contract
   // used by sidecar discovery and must preserve the caller's spelling.
   std::error_code CanonicalError;
-  const std::filesystem::path SanitizeSourcePath =
+  std::filesystem::path SanitizeSourcePath =
       std::filesystem::canonical(P, CanonicalError);
   if (CanonicalError) {
     S->setError("cannot canonicalize input path: " + CanonicalError.message());
@@ -191,40 +191,38 @@ int neverd_session_load(neverd_session_t Sess, const char *Path) {
     return 0;
   }
 
+  // Prepare the complete replacement before changing the current image, its
+  // analysis, or the user's edits. An authoritative debug-file failure must
+  // leave a previously loaded session usable.
+  auto Found = loadDebugInfo(P, *ImgOrErr, S->DbgRequest);
+  if (!Found.Error.empty()) {
+    S->setError(Found.Error);
+    return 0;
+  }
+  if (Found)
+    applyDebugSymbols(*ImgOrErr, *Found.Context);
+
+  // Decoder::init retains its existing state on failure, so it is the final
+  // preparation step before publishing the replacement.
+  if (ImgOrErr->Arch != Arch::EVM && ImgOrErr->Arch != Arch::SBF &&
+      !S->Dec.init(ImgOrErr->Arch, ImgOrErr->Mode)) {
+    S->setError("failed to init decoder for arch");
+    return 0;
+  }
+
+  // Dispose analysis while the image/debug objects it was built from still
+  // exist. clearPipeline also releases LLVM modules before their context.
+  S->clearPipeline();
   S->Img = std::move(*ImgOrErr);
-  S->FilePath = P;
-  S->SanitizeSourcePath = SanitizeSourcePath;
+  S->FilePath = std::move(P);
+  S->SanitizeSourcePath = std::move(SanitizeSourcePath);
+  S->Dbg = std::move(Found.Context);
+  S->DbgKind = Found.Kind;
+  S->DbgPath = std::move(Found.Path);
   S->Loaded = true;
   S->Annotations.clear();
   S->Renames.clear();
-
-  // Debug names are published into the image before the function list is built
-  // from it, so everything downstream reads one symbol table instead of having
-  // to reconcile the image's names with a debug context of its own.
-  S->Dbg.reset();
-  S->DbgKind = DebugInfoKind::None;
-  S->DbgPath.clear();
-  auto Found = loadDebugInfo(P, S->Img, S->DbgRequest);
-  if (!Found.Error.empty()) {
-    S->setError(Found.Error);
-    S->Loaded = false;
-    return 0;
-  }
-  if (Found) {
-    applyDebugSymbols(S->Img, *Found.Context);
-    S->Dbg = std::move(Found.Context);
-    S->DbgKind = Found.Kind;
-    S->DbgPath = std::move(Found.Path);
-  }
-
-  S->invalidatePipeline();
-
-  if (S->Img.Arch != Arch::EVM && S->Img.Arch != Arch::SBF &&
-      !S->Dec.init(S->Img.Arch, S->Img.Mode)) {
-    S->setError("failed to init decoder for arch");
-    S->Loaded = false;
-    return 0;
-  }
+  S->resetFunctionsFromImage();
 
   neverd_annotations_load(Sess);
   neverd_renames_load(Sess);

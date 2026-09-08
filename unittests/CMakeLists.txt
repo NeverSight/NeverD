@@ -57,6 +57,22 @@ add_neverd_unittest(NeverDTestProcessTests
   TestProcessTests.cpp
 )
 
+add_neverd_unittest(NeverDSupportThreadTests
+  SupportThreadTests.cpp
+)
+target_include_directories(NeverDSupportThreadTests PRIVATE
+  "${CMAKE_SOURCE_DIR}/include")
+
+if(TARGET neverd_shared)
+  add_neverd_unittest(NeverDSessionCAPITests
+    SessionCAPITests.cpp
+    LINK_LIBS neverd_shared
+  )
+  target_include_directories(NeverDSessionCAPITests PRIVATE
+    "${CMAKE_SOURCE_DIR}/include"
+    ${LLVM_INCLUDE_DIRS})
+endif()
+
 # Capability evidence is bound to CTest registrations, not to workflow text.
 # These runners therefore remain discoverable in the configured test graph on
 # every platform and cannot be made to disappear behind a disabled CI step.
