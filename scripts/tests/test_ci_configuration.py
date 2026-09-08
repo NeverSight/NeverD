@@ -1,3 +1,5 @@
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -15,6 +17,31 @@ STYLE_WORKFLOW = ROOT / ".github" / "workflows" / "llvm-style.yml"
 
 
 class CiConfigurationTests(unittest.TestCase):
+    def test_loader_exports_its_source_abi_component_dependency(self):
+        with tempfile.TemporaryDirectory(prefix="neverd-loader-link-") as directory:
+            root = Path(directory)
+            (root / "CMakeLists.txt").write_text(
+                'cmake_minimum_required(VERSION 3.20)\n'
+                'project(LoaderDependency LANGUAGES CXX)\n'
+                'foreach(component capstone_static NeverDIR NeverDEVM NeverDSBF)\n'
+                '  add_library(${component} INTERFACE)\n'
+                'endforeach()\n'
+                f'include("{CMAKE_HELPERS.as_posix()}")\n'
+                f'add_subdirectory("{(ROOT / "lib/loader").as_posix()}" loader)\n'
+                'get_target_property(dependencies NeverDLoader INTERFACE_LINK_LIBRARIES)\n'
+                'if(NOT "NeverDIR" IN_LIST dependencies)\n'
+                '  message(FATAL_ERROR "Loader must export its SourceABI dependency")\n'
+                'endif()\n',
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                ["cmake", "-S", str(root), "-B", str(root / "build")],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def workflow_step_containing(self, source: str, needle: str) -> str:
         command_index = source.index(needle)
         step_start = source.rfind("      - name:", 0, command_index)
