@@ -29,6 +29,9 @@ struct HighCAnalysisState {
   std::set<const HighStmt *> DeadStmts;
   std::set<std::string> DeadVars;
   std::map<const HighExpr *, std::string> AddressKeys;
+  // True only when every memory access is an exact, nonoverlapping slot in
+  // the function's private frame and no frame address escapes.
+  bool CanElideFrameStores = false;
   std::map<std::string, std::string> StoreFwd;
   std::map<std::string, std::set<std::string>> StoreFwdDeps;
   std::map<std::string, std::set<std::string>> ForwardedAddressDeps;

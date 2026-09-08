@@ -376,7 +376,8 @@ static void iterativeDCE(HighFunc &Func) {
           S.Dst->Kind == ExprKind::Var) {
         auto Key = VK(S.Dst->Var);
         InlineDefCount[Key]++;
-        if (S.Val->Kind != ExprKind::Call && !S.Val->hasOrderedMemoryAccess())
+        if (S.Val->Kind != ExprKind::Call && !S.Val->hasOrderedMemoryAccess() &&
+            !containsMemoryRead(S.Val))
           InlineDefs[Key] = S.Val;
       }
       forEachRhsExpr(S, [&](const ExprPtr &E) {

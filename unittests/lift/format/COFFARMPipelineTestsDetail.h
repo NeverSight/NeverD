@@ -17,7 +17,7 @@
 namespace neverd::coff_arm_test {
 
 inline std::optional<std::string> lowFunctionBody(llvm::StringRef Output,
-                                           llvm::StringRef Name) {
+                                                  llvm::StringRef Name) {
   std::string Header = (llvm::Twine("func ") + Name + " @").str();
   size_t Begin = Output.find(Header);
   if (Begin == llvm::StringRef::npos)
@@ -28,7 +28,7 @@ inline std::optional<std::string> lowFunctionBody(llvm::StringRef Output,
 }
 
 inline std::optional<std::string> cFunctionBody(llvm::StringRef Output,
-                                         llvm::StringRef Name) {
+                                                llvm::StringRef Name) {
   std::string Header = (llvm::Twine(Name) + "(").str();
   size_t SearchFrom = 0;
   while (true) {
@@ -64,10 +64,10 @@ inline void expectLeafSemantics(llvm::StringRef Body) {
 }
 
 inline void expectStackySemantics(llvm::StringRef Body) {
-  for (llvm::StringRef Opcode : {"LOAD", "STORE", "INT_ADD", "CALL",
-                                 "RETURN"})
+  for (llvm::StringRef Opcode : {"LOAD", "STORE", "INT_ADD", "CALL", "RETURN"})
     EXPECT_TRUE(Body.contains(Opcode))
-        << "expected " << Opcode.str() << " in pe_stacky:\n" << Body.str();
+        << "expected " << Opcode.str() << " in pe_stacky:\n"
+        << Body.str();
 }
 
 inline void expectNoOddFunctionAddresses(llvm::StringRef Output) {
@@ -175,23 +175,12 @@ inline void expectLeafCallResultStored(llvm::StringRef Body) {
                       << Body.str();
 }
 
-inline void expectLeafCallUsesParameter(llvm::StringRef Body,
-                                 llvm::StringRef Parameter) {
-  size_t Call = Body.find("pe_leaf(");
-  ASSERT_NE(Call, llvm::StringRef::npos) << Body.str();
-  size_t CallEnd = Body.find(';', Call);
-  ASSERT_NE(CallEnd, llvm::StringRef::npos) << Body.str();
-  llvm::StringRef Statement = Body.slice(Call, CallEnd);
-  EXPECT_TRUE(Statement.contains(Parameter))
-      << "pe_leaf call does not use " << Parameter.str() << ":\n"
-      << Statement.str();
-}
-
 inline bool isCIdentifierChar(char C) {
   return std::isalnum(static_cast<unsigned char>(C)) || C == '_';
 }
 
-inline size_t findIdentifier(llvm::StringRef Text, llvm::StringRef Name, size_t From) {
+inline size_t findIdentifier(llvm::StringRef Text, llvm::StringRef Name,
+                             size_t From) {
   while (true) {
     size_t Pos = Text.find(Name, From);
     if (Pos == llvm::StringRef::npos)
@@ -203,6 +192,24 @@ inline size_t findIdentifier(llvm::StringRef Text, llvm::StringRef Name, size_t 
       return Pos;
     From = End;
   }
+}
+
+inline bool isInitialLocalDefinition(llvm::StringRef Body, llvm::StringRef Name,
+                                     size_t Use) {
+  // A preceding block may have just ended. Including its closing brace is
+  // essential for assignments after an if or loop, including LOAD snapshots.
+  size_t StatementStart = Body.find_last_of(";{}", Use);
+  StatementStart =
+      StatementStart == llvm::StringRef::npos ? 0 : StatementStart + 1;
+  size_t StatementEnd = Body.find(';', Use);
+  size_t Equals = Body.find('=', StatementStart);
+  if (StatementEnd == llvm::StringRef::npos || Equals >= StatementEnd ||
+      Use >= Equals || Body.slice(StatementStart, Equals).trim() != Name ||
+      Body[Equals + 1] == '=')
+    return false;
+  // An assignment is not an initial definition when its RHS reads the same
+  // still-uninitialized local, such as v0 = v0 + 1.
+  return findIdentifier(Body, Name, Equals + 1) >= StatementEnd;
 }
 
 inline void expectNoLocalReadBeforeDefinition(llvm::StringRef Body) {
@@ -264,19 +271,7 @@ inline void expectNoLocalReadBeforeDefinition(llvm::StringRef Body) {
     size_t Use = findIdentifier(Body, Local.Name, Local.End);
     if (Use == llvm::StringRef::npos)
       continue;
-    size_t StatementStart = Body.rfind(';', Use);
-    size_t OpenBrace = Body.rfind('{', Use);
-    if (StatementStart == llvm::StringRef::npos ||
-        (OpenBrace != llvm::StringRef::npos && OpenBrace > StatementStart))
-      StatementStart = OpenBrace;
-    StatementStart =
-        StatementStart == llvm::StringRef::npos ? 0 : StatementStart + 1;
-    size_t StatementEnd = Body.find(';', Use);
-    size_t Equals = Body.find('=', StatementStart);
-    bool IsDefinition = StatementEnd != llvm::StringRef::npos &&
-                        Equals < StatementEnd && Use < Equals &&
-                        Body.slice(StatementStart, Equals).trim() == Local.Name;
-    if (!IsDefinition)
+    if (!isInitialLocalDefinition(Body, Local.Name, Use))
       ReadBeforeDefinition.push_back(Local.Name);
   }
 
@@ -328,6 +323,38 @@ inline std::string readTextFile(const fs::path &Path) {
 
 class COFFARMPipeline : public NeverDLiftTest {
 protected:
+  void expectLeafAndStackyExecute(const fs::path &CPath) {
+    // The call argument can reach pe_leaf through a frame slot and a LOAD
+    // snapshot. Execute the fixture semantics instead of demanding that arg0
+    // appear textually in the call expression.
+    const fs::path Driver = tmpFile("pe_semantics.c");
+    const fs::path Program = tmpFile("pe_semantics.exe");
+    std::ofstream Out(Driver);
+    Out << "#include <stdint.h>\n"
+           "int32_t pe_leaf(int32_t);\n"
+           "int32_t pe_stacky(int32_t);\n"
+           "int main(void) {\n"
+           "  const int32_t inputs[] = {-103, -2, -1, 0, 1, 7, 97};\n"
+           "  for (unsigned i = 0; i < sizeof(inputs)/sizeof(inputs[0]); ++i) "
+           "{\n"
+           "    int32_t x = inputs[i];\n"
+           "    if (pe_leaf(x) != x * 3 + 1) return 1;\n"
+           "    if (pe_stacky(x) != x * 4 + 7) return 2;\n"
+           "  }\n"
+           "  return 0;\n"
+           "}\n";
+    Out.close();
+    ASSERT_TRUE(Out.good());
+    RunResult Compile =
+        exec("clang", {"-std=c11", "-O2", CPath.string(), Driver.string(), "-o",
+                       Program.string()});
+    ASSERT_EQ(Compile.exitCode, 0) << Compile.err;
+    RunResult Execute = exec(Program.string(), {});
+    EXPECT_EQ(Execute.exitCode, 0)
+        << "generated PE fixture changed parameter or call-result semantics\n"
+        << Execute.err;
+  }
+
   void expectGeneratedCCompiles(const fs::path &CPath,
                                 llvm::StringRef TargetTriple) {
     const fs::path IncludeDir = tmpFile("windows-arm-include");

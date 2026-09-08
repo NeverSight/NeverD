@@ -3271,10 +3271,14 @@
         "docs/android.zh-CN.md"
       ],
       "limitations": [
-        "CLI workflow only; Python 3.10+ and a separately installed JADX 1.5.6+ backend are required for Android.",
+        "Mobile containers use the CLI helper; Python 3.10+ and a separately installed JADX 1.5.6+ backend are required for Android.",
         "Android emits reconstructed Java for DEX/smali code; resources and native libraries are excluded.",
-        "iOS emits native C pseudocode and available Objective-C/Swift metadata, not original Swift or Objective-C method bodies.",
-        "Encrypted native slices and unsupported metadata pointer encodings cannot be recovered."
+        "iOS exports native C and reconstructs supported fixed integer/pointer Objective-C method bodies, including void returns, on arm64 and x86_64; coverage reports retain unsupported or missing discovered methods.",
+        "Swift method source, variadic tails, floating-point/aggregate signatures, stack-passed arguments, native/dynamic call bindings and exception-dependent method bodies remain unsupported.",
+        "Runtime type hints guide source projection; they do not authenticate an ABI or prove semantic equivalence. Original comments and compilation-lost information cannot be recovered.",
+        "Encrypted native slices are rejected. Unresolved metadata pointer encodings reduce metadata and method-body coverage; metadata-only and native Objective-C analysis have different pointer decoding coverage, while Swift remains Python metadata inspection in both modes.",
+        "Overall success records output publication, not complete method recovery. Method coverage can be partial, unrecovered or no-methods; recovered requires all inventoried bodies and recovered metadata, and does not prove that the inventory is exhaustive.",
+        "Metadata-only emits declarations, metadata and the selected binary, without native C, Objective-C bodies or method-body coverage. Full recovery analyzes one selected native artifact, and max-func can leave discovered methods unrecovered."
       ],
       "tests": [
         {
@@ -3320,10 +3324,23 @@
             "linux",
             "windows"
           ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLiftTests",
+          "source": "unittests/lift/core/ObjCSourceTypeHintTests.cpp",
+          "filter": "ObjCSourceTypeHints.PreservesConstantReturnAndUnusedHiddenParameters",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
         }
       ],
       "public_surfaces": {
-        "c": [],
+        "c": [
+          "neverd_objc_methods_json"
+        ],
         "python": [],
         "cli": [
           "neverd mobile",
@@ -3338,9 +3355,12 @@
           "neverd mobile --o",
           "neverd mobile --platform",
           "neverd mobile --python",
-          "neverd mobile --timeout"
+          "neverd mobile --timeout",
+          "neverd export --max-func"
         ],
-        "json": []
+        "json": [
+          "neverd_objc_methods_json"
+        ]
       }
     }
   ]

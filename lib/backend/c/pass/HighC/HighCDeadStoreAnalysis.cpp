@@ -10,6 +10,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/backend/c/pass/HighC/HighCPasses.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 
 #include <algorithm>
@@ -50,7 +51,8 @@ void walkExprNodes(const HighExpr &Root, Visitor &&Visit) {
 
 bool sameMedVar(const MedVar &A, const MedVar &B) {
   return A.Kind == B.Kind && A.Id == B.Id && A.SSAVer == B.SSAVer &&
-         A.RegOff == B.RegOff;
+         A.RegOff == B.RegOff && A.RenameTag == B.RenameTag &&
+         A.TheArch == B.TheArch;
 }
 
 const HighExpr *findUniqueDef(const std::vector<ExprDef> &Defs,
@@ -136,7 +138,10 @@ std::string reducedAddrKey(const ReducedAddr &Addr) {
   return "reduced:" + std::to_string(static_cast<unsigned>(Addr.Base.Kind)) +
          ":" + std::to_string(Addr.Base.Id) + ":" +
          std::to_string(Addr.Base.SSAVer) + ":" +
-         std::to_string(Addr.Base.RegOff) + ":" + std::to_string(Addr.Offset);
+         std::to_string(Addr.Base.RegOff) + ":" +
+         std::to_string(Addr.Base.RenameTag) + ":" +
+         std::to_string(static_cast<unsigned>(Addr.Base.TheArch)) + ":" +
+         std::to_string(Addr.Offset);
 }
 
 bool matchesReducedAddr(const HighExpr &Expr, const std::vector<ExprDef> &Defs,
@@ -166,6 +171,139 @@ void collectLoadAddrVars(const HighExpr &E, std::set<std::string> &Out,
   });
 }
 
+// Memory is observable through a parameter, a global, or an escaped frame
+// address even when this function never reloads it. Only private frame slots
+// can participate in this emitter's store elimination. Reject unknown aliases,
+// partial overlaps, calls, and address escapes rather than infer ownership
+// from the absence of a matching load.
+bool hasOnlyPrivateFrameMemory(const HighFunc &Func,
+                               const std::vector<ExprDef> &Defs) {
+  if (Func.FrameSize <= 0)
+    return false;
+  bool HasNonlocalControl = false;
+  walkStmts(Func.Body, [&](const HighStmt &Stmt) {
+    HasNonlocalControl |=
+        Stmt.Kind == StmtKind::Goto || Stmt.Kind == StmtKind::SEHTry ||
+        Stmt.Kind == StmtKind::CxxTry || Stmt.Kind == StmtKind::ItaniumTry;
+  });
+  if (HasNonlocalControl)
+    return false;
+  std::vector<std::pair<int64_t, int64_t>> Slots;
+  // A global unique definition is not a reaching definition. Only preceding
+  // top-level assignments can establish a frame alias for subsequent uses.
+  std::vector<ExprDef> DominatingDefs;
+  std::set<const HighStmt *> TopLevel;
+  for (const auto &Stmt : Func.Body)
+    TopLevel.insert(&Stmt);
+  auto IsFrameBase = [](const MedVar &Var) {
+    return Var.Kind == MedVar::Reg && Var.SSAVer == 0 && Var.RenameTag < 0 &&
+           (Var.TheArch == Arch::X64 || Var.TheArch == Arch::X86 ||
+            Var.TheArch == Arch::AArch64 || Var.TheArch == Arch::ARM) &&
+           Var.Size == getTargetRegInfo(Var.TheArch).PointerSize &&
+           Var.RegOff == getTargetRegInfo(Var.TheArch).StackPointer;
+  };
+  std::function<bool(const HighExpr &, uint16_t, unsigned)> FullWidth =
+      [&](const HighExpr &Expr, uint16_t Width, unsigned Depth) {
+        if (Depth > 128 || !Expr.Type || Expr.Type->Size != Width)
+          return false;
+        if (Expr.Kind == ExprKind::Var) {
+          if (Expr.Var.Size != Width)
+            return false;
+          if (const auto *Def = findUniqueDef(Defs, Expr.Var))
+            return FullWidth(*Def, Width, Depth + 1);
+        }
+        for (const auto &Operand : Expr.Operands)
+          if (!Operand || (Operand->Kind != ExprKind::Const &&
+                           !FullWidth(*Operand, Width, Depth + 1)))
+            return false;
+        return true;
+      };
+  auto CheckAddress = [&](const HighExpr &Address, const TypeRef &Type) {
+    const auto Reduced = reduceAddr(Address, DominatingDefs);
+    if (!Reduced || !Type || !Type->Size || !IsFrameBase(Reduced->Base) ||
+        !FullWidth(Address, Reduced->Base.Size, 0) ||
+        Reduced->Offset < -Func.FrameSize ||
+        Reduced->Offset > -static_cast<int64_t>(Type->Size))
+      return false;
+    const std::pair<int64_t, int64_t> Slot{Reduced->Offset,
+                                           Reduced->Offset + Type->Size};
+    for (const auto &Other : Slots)
+      if (Slot != Other && Slot.first < Other.second &&
+          Other.first < Slot.second)
+        return false;
+    Slots.push_back(Slot);
+    return true;
+  };
+  std::function<bool(const HighExpr &, unsigned)> CheckValue =
+      [&](const HighExpr &Expr, unsigned Depth) {
+        if (Depth > 128 || Expr.Kind == ExprKind::Call ||
+            Expr.Kind == ExprKind::Addr || Expr.Kind == ExprKind::Store ||
+            Expr.MemoryOrdering != NdMemoryOrdering::None ||
+            Expr.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+          return false;
+        if (Expr.Kind == ExprKind::Load)
+          return Expr.Operands.size() == 1 && Expr.Operands[0] &&
+                 CheckAddress(*Expr.Operands[0], Expr.Type);
+        if (Expr.Kind == ExprKind::Var) {
+          if (IsFrameBase(Expr.Var))
+            return false;
+          if (const auto *Def = findUniqueDef(Defs, Expr.Var))
+            return CheckValue(*Def, Depth + 1);
+        }
+        for (const auto &Operand : Expr.Operands)
+          if (!Operand || !CheckValue(*Operand, Depth + 1))
+            return false;
+        return true;
+      };
+  bool Valid = true;
+  walkStmts(Func.Body, [&](const HighStmt &Stmt) {
+    if (!Valid)
+      return;
+    if (Stmt.MemoryOrdering != NdMemoryOrdering::None ||
+        Stmt.MemoryAddressSpace != NdMemoryAddressSpace::Default) {
+      Valid = false;
+      return;
+    }
+    if (Stmt.Kind == StmtKind::Store) {
+      Valid = Stmt.StoreAddr && Stmt.StoreVal &&
+              CheckAddress(*Stmt.StoreAddr, Stmt.StoreVal->Type) &&
+              CheckValue(*Stmt.StoreVal, 0);
+      return;
+    }
+    if (Stmt.Kind == StmtKind::Assign && Stmt.Dst && Stmt.Val) {
+      if (Stmt.Dst->Kind == ExprKind::Load) {
+        Valid = CheckValue(*Stmt.Dst, 0) && CheckValue(*Stmt.Val, 0);
+        return;
+      }
+      if (Stmt.Dst->Kind == ExprKind::Var &&
+          (Stmt.Dst->Var.Kind == MedVar::Param ||
+           (Stmt.Dst->Var.Kind == MedVar::Reg && Stmt.Dst->Var.SSAVer == 0 &&
+            Stmt.Dst->Var.RenameTag < 0))) {
+        Valid = false;
+        return;
+      }
+      // A canonical frame address can be held in a local temporary. Its
+      // consumers below must still use it solely as a memory address.
+      const auto Address = reduceAddr(*Stmt.Val, DominatingDefs);
+      if (Stmt.Dst->Kind == ExprKind::Var && Address &&
+          IsFrameBase(Address->Base)) {
+        if (!TopLevel.count(&Stmt) ||
+            findUniqueDef(Defs, Stmt.Dst->Var) != Stmt.Val.get()) {
+          Valid = false;
+          return;
+        }
+        DominatingDefs.push_back({Stmt.Dst->Var, Stmt.Val.get()});
+        return;
+      }
+    }
+    forEachRhsExpr(Stmt, [&](const ExprPtr &Expr) {
+      if (Expr)
+        Valid &= CheckValue(*Expr, 0);
+    });
+  });
+  return Valid && !Slots.empty();
+}
+
 } // anonymous namespace
 
 void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
@@ -173,6 +311,7 @@ void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
   State.DeadStmts.clear();
   State.DeadVars.clear();
   State.AddressKeys.clear();
+  State.CanElideFrameStores = false;
 
   bool HasOrderedMemory = false;
   walkStmts(Func.Body, [&](const HighStmt &S) {
@@ -196,6 +335,8 @@ void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
         S.Dst->Kind == ExprKind::Var)
       Defs.push_back({S.Dst->Var, S.Val.get()});
   });
+  State.CanElideFrameStores =
+      !HasOrderedMemory && hasOnlyPrivateFrameMemory(Func, Defs);
 
   auto RecordAddress = [&](const HighExpr &Addr) {
     auto Reduced = reduceAddr(Addr, Defs);
@@ -240,7 +381,7 @@ void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
   walkStmts(Func.Body, [&](const HighStmt &S) {
     if (S.Kind != StmtKind::Store || !S.StoreAddr)
       return;
-    if (HasOrderedMemory)
+    if (!State.CanElideFrameStores)
       return;
     if (S.MemoryOrdering != NdMemoryOrdering::None)
       return;
@@ -275,7 +416,7 @@ void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
       return;
     if (S.Kind != StmtKind::Store || !S.StoreAddr)
       return;
-    if (HasOrderedMemory)
+    if (!State.CanElideFrameStores)
       return;
     if (S.MemoryOrdering != NdMemoryOrdering::None)
       return;

@@ -65,6 +65,7 @@ void MedToHighConverter::lowerGenericAssign(HighFunc &Func, const MedOp &CurOp,
   bool IsCallResult = CallOutputs.count(Key) > 0;
   bool FeedsPhi = PhiArgVars.count(Key) > 0;
   bool HasMemoryEffect =
+      CurOp.Opcode == NdOp::LOAD ||
       CurOp.MemoryOrdering != NdMemoryOrdering::None ||
       CurOp.MemoryAddressSpace != NdMemoryAddressSpace::Default;
   if (!MultiUse && !IsCallResult && !FeedsPhi && !HasMemoryEffect)
@@ -90,14 +91,8 @@ void MedToHighConverter::lowerStore(HighFunc &Func, const MedOp &CurOp) {
   if (CurOp.NumInputs >= 2) {
     auto &AddrVar = CurOp.Inputs[0];
     ExprPtr AddrExpr;
-    if (AddrVar.Id >= 0) {
-      auto AKey = std::make_pair(AddrVar.Id, AddrVar.SSAVer);
-      auto DIt = DefExpr.find(AKey);
-      if (DIt != DefExpr.end() && DIt->second->Kind != ExprKind::Call &&
-          DIt->second->MemoryOrdering == NdMemoryOrdering::None &&
-          DIt->second->MemoryAddressSpace == NdMemoryAddressSpace::Default)
-        AddrExpr = DIt->second;
-    }
+    if (AddrVar.Id >= 0)
+      AddrExpr = inlineableDefinition(varKey(AddrVar));
     S.StoreAddr = AddrExpr ? AddrExpr : medvarToExpr(AddrVar);
 
     auto ValKey = std::make_pair(CurOp.Inputs[1].Id, CurOp.Inputs[1].SSAVer);

@@ -21,6 +21,7 @@
 #include "neverd/loader/MachO/MachOExceptions.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/loader/ObjC/ObjCEH.h"
+#include "neverd/loader/ObjC/ObjCMethods.h"
 #include "neverd/loader/Rust/RustEH.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -275,6 +276,8 @@ MachOLoader::load(const std::filesystem::path &Path) {
 
     if (LC.C.cmd == LC_DYLD_CHAINED_FIXUPS &&
         LC.C.cmdsize >= sizeof(linkedit_data_command)) {
+      Img.MachOChainedFixupsAmbiguous |= Img.MachOHasChainedFixups;
+      Img.MachOHasChainedFixups = true;
       auto LDC = Obj.getLinkeditDataLoadCommand(LC);
       ChainedFixups.DataOff = LDC.dataoff;
       ChainedFixups.DataSize = LDC.datasize;
@@ -420,6 +423,8 @@ MachOLoader::load(const std::filesystem::path &Path) {
   macho_loader::parseExportTrie(BasePtr, FileSize, DyldInfo, TextVMAddr, Img);
   macho_loader::parseUUID(Obj, Img);
   macho_loader::parseBuildVersion(Obj, Img);
+
+  parseObjCMethods(Img);
 
   runPostLoadDiscovery(Img, "macho: loaded " + Path.filename().string());
   // Classified before any table is read: a compact-unwind entry names a

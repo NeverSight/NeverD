@@ -1,6 +1,6 @@
-#include "NeverDLiftFixture.h"
+#include "AArch64HighCBehavior.h"
 
-class AArch64_FP : public NeverDLiftTest {
+class AArch64_FP : public AArch64HighCBehaviorTest {
 protected:
   void expectPairedClangSyntax(const fs::path &CFile,
                                const std::string &Source) {
@@ -11,9 +11,7 @@ protected:
   }
 };
 
-static fs::path testObj() {
-    return fs::path(TEST_OBJ_DIR) / "test_fp_a64.o";
-}
+static fs::path testObj() { return fs::path(TEST_OBJ_DIR) / "test_fp_a64.o"; }
 
 static std::string functionIR(const std::string &IR, const std::string &Name) {
   auto NamePos = IR.find("@" + Name + "(");
@@ -40,48 +38,46 @@ static std::string functionSource(const std::string &Source,
 }
 
 TEST_F(AArch64_FP, AllStagesPass) {
-    ASSERT_TRUE(fs::exists(testObj())) << "test_fp_a64.o not built";
-    verifyAllStages(testObj());
+  ASSERT_TRUE(fs::exists(testObj())) << "test_fp_a64.o not built";
+  verifyAllStages(testObj());
 }
 
-TEST_F(AArch64_FP, NoUnlifted) {
-    verifyNoUnlifted(testObj());
-}
+TEST_F(AArch64_FP, NoUnlifted) { verifyNoUnlifted(testObj()); }
 
 TEST_F(AArch64_FP, FaddLifts) {
-    verifyLowIRContains(testObj(), "test_fadd_a64", "FLOAT_ADD");
+  verifyLowIRContains(testObj(), "test_fadd_a64", "FLOAT_ADD");
 }
 
 TEST_F(AArch64_FP, FsubLifts) {
-    verifyLowIRContains(testObj(), "test_fsub_a64", "FLOAT_SUB");
+  verifyLowIRContains(testObj(), "test_fsub_a64", "FLOAT_SUB");
 }
 
 TEST_F(AArch64_FP, FmulLifts) {
-    verifyLowIRContains(testObj(), "test_fmul_a64", "FLOAT_MULT");
+  verifyLowIRContains(testObj(), "test_fmul_a64", "FLOAT_MULT");
 }
 
 TEST_F(AArch64_FP, FdivLifts) {
-    verifyLowIRContains(testObj(), "test_fdiv_a64", "FLOAT_DIV");
+  verifyLowIRContains(testObj(), "test_fdiv_a64", "FLOAT_DIV");
 }
 
 TEST_F(AArch64_FP, FsqrtLifts) {
-    verifyLowIRContains(testObj(), "test_fsqrt_a64", "FLOAT_SQRT");
+  verifyLowIRContains(testObj(), "test_fsqrt_a64", "FLOAT_SQRT");
 }
 
 TEST_F(AArch64_FP, FnegLifts) {
-    verifyLowIRContains(testObj(), "test_fneg_a64", "FLOAT_NEG");
+  verifyLowIRContains(testObj(), "test_fneg_a64", "FLOAT_NEG");
 }
 
 TEST_F(AArch64_FP, FabsLifts) {
-    verifyLowIRContains(testObj(), "test_fabs_a64", "FLOAT_ABS");
+  verifyLowIRContains(testObj(), "test_fabs_a64", "FLOAT_ABS");
 }
 
 TEST_F(AArch64_FP, ScvtfLifts) {
-    verifyLowIRContains(testObj(), "test_scvtf_a64", "FLOAT_INT2FLOAT");
+  verifyLowIRContains(testObj(), "test_scvtf_a64", "FLOAT_INT2FLOAT");
 }
 
 TEST_F(AArch64_FP, FcvtzsLifts) {
-    verifyLowIRContains(testObj(), "test_fcvtzs_a64", "FLOAT_FLOAT2INT");
+  verifyLowIRContains(testObj(), "test_fcvtzs_a64", "FLOAT_FLOAT2INT");
 }
 
 TEST_F(AArch64_FP, FjcvtzsUpdatesExactnessFlag) {
@@ -113,9 +109,81 @@ TEST_F(AArch64_FP, FjcvtzsHighCUsesBuiltinAndCompiles) {
   auto F = functionSource(source, "test_fjcvtzs_z_a64");
   ASSERT_FALSE(F.empty()) << source;
   EXPECT_NE(F.find("int32_t test_fjcvtzs_z_a64"), std::string::npos) << F;
-  EXPECT_NE(F.find("return ("), std::string::npos) << F;
-
   expectPairedClangSyntax(cFile, source);
+
+  llvm::LLVMContext Context;
+  auto Module = compileHighCFlow(cFile, "armv8.6-a+bf16", Context);
+  ASSERT_TRUE(Module);
+  const auto *Function = Module->getFunction("test_fjcvtzs_z_a64");
+  ASSERT_TRUE(Function);
+  ASSERT_EQ(Function->arg_size(), 1u);
+  a64_highc_test::ValueFlow Flow(*Function);
+  ASSERT_TRUE(Flow.valid());
+  auto Converted = a64_highc_test::calls(*Function, "llvm.aarch64.fjcvtzs");
+  ASSERT_EQ(Converted.size(), 1u);
+  EXPECT_EQ(Flow.origin(Converted[0]->getArgOperand(0)), Function->getArg(0));
+  const llvm::Value *SignedConversion = nullptr;
+  const llvm::Value *Comparison = nullptr;
+  for (const auto &Instruction : Function->front()) {
+    if (const auto *Convert = llvm::dyn_cast<llvm::SIToFPInst>(&Instruction)) {
+      ASSERT_FALSE(SignedConversion);
+      SignedConversion = Convert;
+      EXPECT_EQ(Flow.origin(Convert->getOperand(0)), Converted[0]);
+    } else if (const auto *Call =
+                   llvm::dyn_cast<llvm::CallBase>(&Instruction)) {
+      if (Call->getCalledFunction()->getName().starts_with(
+              "llvm.experimental.constrained.sitofp")) {
+        ASSERT_FALSE(SignedConversion);
+        SignedConversion = Call;
+        EXPECT_EQ(Flow.origin(Call->getArgOperand(0)), Converted[0]);
+      }
+    }
+  }
+  ASSERT_TRUE(SignedConversion);
+  for (const auto &Instruction : Function->front()) {
+    const llvm::Value *Left = nullptr, *Right = nullptr;
+    if (const auto *Compare = llvm::dyn_cast<llvm::FCmpInst>(&Instruction)) {
+      EXPECT_EQ(Compare->getPredicate(), llvm::CmpInst::FCMP_OEQ);
+      Left = Compare->getOperand(0);
+      Right = Compare->getOperand(1);
+    } else if (const auto *Call =
+                   llvm::dyn_cast<llvm::CallBase>(&Instruction)) {
+      if (Call->getCalledFunction()->getName().starts_with(
+              "llvm.experimental.constrained.fcmp")) {
+        EXPECT_TRUE(
+            a64_highc_test::metadataText(Call->getArgOperand(2), "oeq"));
+        Left = Call->getArgOperand(0);
+        Right = Call->getArgOperand(1);
+      }
+    }
+    if (Left && Right) {
+      ASSERT_FALSE(Comparison);
+      Comparison = &Instruction;
+      EXPECT_TRUE((Flow.origin(Left) == Function->getArg(0) &&
+                   Flow.origin(Right) == SignedConversion) ||
+                  (Flow.origin(Right) == Function->getArg(0) &&
+                   Flow.origin(Left) == SignedConversion));
+    }
+  }
+  ASSERT_TRUE(Comparison);
+  const auto *Return =
+      llvm::dyn_cast<llvm::ReturnInst>(Function->front().getTerminator());
+  ASSERT_TRUE(Return);
+  // Ordered equality must control the result, except that negative zero is
+  // never exact. This exercises both truth values through the actual return
+  // expression and catches a constant return or a disconnected flag value.
+  for (uint64_t Bits :
+       {UINT64_C(0), UINT64_C(0x3ff0000000000000), UINT64_C(0xbff0000000000000),
+        UINT64_C(0x8000000000000000)}) {
+    for (bool Equal : {false, true}) {
+      auto Result = Flow.integer(Return->getReturnValue(),
+                                 {{Function->getArg(0), llvm::APInt(64, Bits)},
+                                  {Comparison, llvm::APInt(1, Equal)}});
+      ASSERT_TRUE(Result);
+      EXPECT_EQ(*Result,
+                llvm::APInt(32, Equal && Bits != UINT64_C(0x8000000000000000)));
+    }
+  }
 }
 
 TEST_F(AArch64_FP, FrecpxUsesDedicatedLLVMIntrinsic) {
@@ -210,11 +278,56 @@ TEST_F(AArch64_FP, FrintiHighCUsesClangBuiltinsAndCompiles) {
   EXPECT_NE(F.find("__builtin_arm_wsr64(\"FPCR\""), std::string::npos) << F;
   EXPECT_NE(F.find("__builtin_elementwise_nearbyint"), std::string::npos) << F;
   EXPECT_EQ(F.find("__neverd"), std::string::npos) << F;
-  EXPECT_EQ(F.find("neverd_mem_load_"), std::string::npos) << F;
-
   expectPairedClangSyntax(cFile, source);
+
+  llvm::LLVMContext Context;
+  auto Module = compileHighCFlow(cFile, "armv8.6-a+bf16", Context);
+  ASSERT_TRUE(Module);
+  const auto *Function = Module->getFunction("test_frinti_fpcr_a64");
+  ASSERT_TRUE(Function);
+  ASSERT_EQ(Function->arg_size(), 1u);
+  a64_highc_test::ValueFlow Flow(*Function);
+  ASSERT_TRUE(Flow.valid());
+  auto Reads = a64_highc_test::calls(*Function, "llvm.read_volatile_register");
+  if (Reads.empty())
+    Reads = a64_highc_test::calls(*Function, "llvm.read_register");
+  auto Writes = a64_highc_test::calls(*Function, "llvm.write_register");
+  auto Rounds = a64_highc_test::calls(*Function, "llvm.nearbyint");
+  if (Rounds.empty())
+    Rounds = a64_highc_test::calls(*Function,
+                                   "llvm.experimental.constrained.nearbyint");
+  ASSERT_EQ(Reads.size(), 1u);
+  ASSERT_EQ(Writes.size(), 2u);
+  ASSERT_EQ(Rounds.size(), 1u);
+  EXPECT_TRUE(a64_highc_test::metadataText(Reads[0]->getArgOperand(0), "fpcr"));
+  for (const auto *Write : Writes)
+    EXPECT_TRUE(a64_highc_test::metadataText(Write->getArgOperand(0), "fpcr"));
+  EXPECT_TRUE(Reads[0]->comesBefore(Writes[0]));
+  EXPECT_TRUE(Writes[0]->comesBefore(Rounds[0]));
+  EXPECT_TRUE(Rounds[0]->comesBefore(Writes[1]));
+  EXPECT_EQ(Flow.origin(Rounds[0]->getArgOperand(0)), Function->getArg(0));
+  EXPECT_EQ(Flow.origin(Writes[1]->getArgOperand(1)), Reads[0]);
+  if (Rounds[0]->getCalledFunction()->getName().starts_with(
+          "llvm.experimental.constrained."))
+    EXPECT_TRUE(a64_highc_test::metadataText(Rounds[0]->getArgOperand(1),
+                                             "round.dynamic"));
+  // Setting toward-zero rounding changes only FPCR[23:22]; every other bit
+  // must survive, and the subsequent write must restore the original value.
+  for (uint64_t Saved : {UINT64_C(0), UINT64_MAX, UINT64_C(0x123456789abcdef0),
+                         UINT64_C(1) << 22, UINT64_C(2) << 22}) {
+    auto Mode = Flow.integer(Writes[0]->getArgOperand(1),
+                             {{Reads[0], llvm::APInt(64, Saved)}});
+    ASSERT_TRUE(Mode);
+    EXPECT_EQ(*Mode, llvm::APInt(64, Saved | (UINT64_C(3) << 22)));
+  }
+  const auto *Return =
+      llvm::dyn_cast<llvm::ReturnInst>(Function->front().getTerminator());
+  ASSERT_TRUE(Return);
+  EXPECT_TRUE(Writes[1]->comesBefore(Return));
+  EXPECT_EQ(Flow.origin(Return->getReturnValue()), Rounds[0])
+      << "return must use the rounding snapshot taken before FPCR restoration";
 }
 
 TEST_F(AArch64_FP, NoUnreachableInFunctions) {
-    verifyLLVMIRNotContains(testObj(), "", "unreachable");
+  verifyLLVMIRNotContains(testObj(), "", "unreachable");
 }

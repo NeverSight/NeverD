@@ -16,6 +16,8 @@ namespace neverd {
 
 bool analyzeVoidReturn(const HighCAnalysisState &State, const HighFunc &Func,
                        VarNameFn VarFn, ExprStrFn ExprFn) {
+  if (Func.SourceTypeHint && Func.SourceTypeHint->ReturnType)
+    return Func.SourceTypeHint->ReturnType->Kind == NdTypeKind::Void;
   if (Func.ReturnType && Func.ReturnType->Kind == NdTypeKind::Void)
     return true;
 
@@ -113,6 +115,11 @@ bool analyzeVoidReturn(const HighCAnalysisState &State, const HighFunc &Func,
     if (E.Kind == ExprKind::Cast && !E.Operands.empty())
       return IsVoidExpr(*E.Operands[0]);
     if (E.Kind == ExprKind::Load && !E.Operands.empty()) {
+      // A retained private-frame load is a value boundary. Its address may
+      // depend only on SP after bounded forwarding stops expanding a chain;
+      // that does not make the loaded value an incidental incoming register.
+      if (State.CanElideFrameStores)
+        return false;
       const HighExpr &AddrExpr = *E.Operands[0];
       std::string Rendered = ExprFn(AddrExpr);
       std::string Key = AddressKey(AddrExpr);

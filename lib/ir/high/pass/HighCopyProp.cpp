@@ -42,6 +42,25 @@ namespace neverd {
 // Shared helpers
 //===----------------------------------------------------------------------===//
 
+bool containsMemoryRead(const ExprPtr &E) {
+  std::vector<const HighExpr *> Worklist;
+  if (E)
+    Worklist.push_back(E.get());
+  std::unordered_set<const HighExpr *> Seen;
+  while (!Worklist.empty()) {
+    const HighExpr *Current = Worklist.back();
+    Worklist.pop_back();
+    if (!Seen.insert(Current).second)
+      continue;
+    if (Current->Kind == ExprKind::Load)
+      return true;
+    for (const auto &Operand : Current->Operands)
+      if (Operand)
+        Worklist.push_back(Operand.get());
+  }
+  return false;
+}
+
 void resolveCopyChains(VarKeyMap<ExprPtr> &Map) {
   for (auto &[Key, Val] : Map) {
     VarKeySet Visited{Key};
@@ -186,7 +205,7 @@ void foldCopyChains(HighFunc &Func) {
     if (It == VarDefValue.end() || !It->second)
       continue;
     if (It->second->Kind == ExprKind::Call ||
-        It->second->hasOrderedMemoryAccess())
+        It->second->hasOrderedMemoryAccess() || containsMemoryRead(It->second))
       continue;
     FoldMap[DstKey] = It->second;
     FoldSources.insert(SrcKey);
@@ -269,7 +288,7 @@ void foldMultiUseCopies(std::vector<HighStmt> &Stmts) {
     if (NumDefs != 1 || DefIsCall[Key])
       continue;
     auto Val = MultiDefValue[Key];
-    if (!Val || Val->hasOrderedMemoryAccess())
+    if (!Val || Val->hasOrderedMemoryAccess() || containsMemoryRead(Val))
       continue;
     auto TotalIt = TotalUseCount.find(Key);
     auto CopyIt = CopyUseCount.find(Key);
@@ -308,7 +327,8 @@ void inlineSingleDefSingleUse(std::vector<HighStmt> &Stmts) {
       bool IsInlineable =
           S.Val->Kind == ExprKind::BinOp || S.Val->Kind == ExprKind::UnaryOp ||
           S.Val->Kind == ExprKind::Var || S.Val->Kind == ExprKind::Const;
-      if (IsInlineable && !S.Val->hasOrderedMemoryAccess())
+      if (IsInlineable && !S.Val->hasOrderedMemoryAccess() &&
+          !containsMemoryRead(S.Val))
         SingleUseDefs[Key] = S.Val;
     }
     forEachRhsExpr(S, [&](const ExprPtr &E) {

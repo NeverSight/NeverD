@@ -71,6 +71,14 @@ NEVERD_API const char *neverd_disasm_json(neverd_session_t Sess,
 NEVERD_API const char *neverd_decompile(neverd_session_t Sess,
                                         neverd_va_t FuncEntry);
 
+/// Reconstruct Mach-O native C and supported Objective-C method bodies as a
+/// schema_version=1 JSON report. MaxFunctions=0 analyzes all discovered native
+/// functions. Runtime signatures are source projection hints, not a semantic
+/// equivalence certificate. Unsupported and missing methods remain explicit.
+/// Returns NULL on failure; free successful results with neverd_free_string.
+NEVERD_API const char *neverd_objc_methods_json(neverd_session_t Sess,
+                                                size_t MaxFunctions);
+
 // ===--------------------------------------------------------------------===//
 // Multi-stage IR
 // ===--------------------------------------------------------------------===//

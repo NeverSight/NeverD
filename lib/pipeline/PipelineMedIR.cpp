@@ -38,13 +38,20 @@ namespace neverd {
 // buildMedIR — Phase 2
 //===----------------------------------------------------------------------===//
 
-void Pipeline::buildMedIR(const BinaryImage &Img,
-                          const PipelineOptions & /*Opts*/,
+void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
                           PipelineResult &Result) {
   auto Phase2Start = std::chrono::steady_clock::now();
 
   const size_t Total = Result.LowFuncs.size();
   Result.MedFuncs.resize(Total);
+
+  // Runtime metadata is a source-rendering hint, not a rewrite ABI contract.
+  // Patch/lift and safety evidence keep their existing independent semantics.
+  std::map<va_t, const SourceFunctionTypeHint *> SourceHints;
+  if (!Opts.PatchMode && !Opts.LiftMode)
+    for (const auto &Method : Img.ObjCMethods)
+      if (Method.Status == "supported" && Method.TypeHint)
+        SourceHints.emplace(Method.Implementation, &*Method.TypeHint);
 
   // Per-callee callee-cleanup pop (x86 `ret imm`, the i386 SysV sret hidden-
   // pointer pop) so each caller's CALL to such a callee gets a post-call stack-
@@ -94,6 +101,9 @@ void Pipeline::buildMedIR(const BinaryImage &Img,
         MF.DebugName = LF.DebugName;
         MF.SourceFile = LF.SourceFile;
         MF.SourceLine = LF.SourceLine;
+        auto Hint = SourceHints.find(MF.Entry);
+        if (Hint != SourceHints.end())
+          MF.SourceTypeHint = *Hint->second;
         inferMedTypes(MF, Img.Arch);
       } catch (...) {
         syncWarning() << "pipeline: low->med threw on "

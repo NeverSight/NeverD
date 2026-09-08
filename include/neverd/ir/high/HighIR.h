@@ -396,6 +396,7 @@ struct HighFunc {
   uint32_t SourceLine = 0;
   bool DoesNotReturn = false;
   TypeRef ReturnType;
+  std::optional<SourceFunctionTypeHint> SourceTypeHint;
   std::vector<HighParam> Params;
   std::vector<HighLocal> Locals;
   std::vector<HighStmt> Body;

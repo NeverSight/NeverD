@@ -16,6 +16,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/ir/NdTypes.h"
+#include "neverd/ir/SourceTypeHint.h"
 #include "neverd/ir/low/LowIR.h"
 
 #include <map>
@@ -295,6 +296,9 @@ struct MedFunc {
   int64_t FrameHeadroom = 0;
 
   TypeRef ReturnType;
+
+  /// Source projection only; never an authenticated semantic return contract.
+  std::optional<SourceFunctionTypeHint> SourceTypeHint;
 
   /// Trusted return-value evidence for consumers that need declaration
   /// semantics rather than a code-generation type.  Debug providers remain

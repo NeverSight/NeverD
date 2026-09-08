@@ -369,9 +369,10 @@ def swift_metadata(image: MachO) -> dict:
 
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z_0-9]*$")
+# Legacy l/L encodings are 32 bits even on Darwin LP64; 64-bit long uses q/Q.
 _PRIMITIVES = {"v": "void", "c": "signed char", "C": "unsigned char", "s": "short",
-               "S": "unsigned short", "i": "int", "I": "unsigned int", "l": "long",
-               "L": "unsigned long", "q": "long long", "Q": "unsigned long long", "f": "float",
+               "S": "unsigned short", "i": "int", "I": "unsigned int", "l": "int",
+               "L": "unsigned int", "q": "long long", "Q": "unsigned long long", "f": "float",
                "d": "double", "B": "BOOL", "@": "id", "#": "Class", ":": "SEL", "*": "char *"}
 
 

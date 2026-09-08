@@ -104,6 +104,7 @@ public:
   std::string renderUnaryOp(const HighExpr &E, int ParentPrec);
   std::string renderCallExpr(const HighExpr &E);
   std::string varName(const MedVar &V);
+  TypeRef declaredParamType(const MedVar &V) const;
   std::string constStr(uint64_t Val);
   std::string formatReturnExpr(const HighExpr &Expr);
   std::string collapseHiLo(const HighExpr &Expr);

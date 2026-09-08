@@ -33,6 +33,9 @@ std::string HighCWriter::varName(const MedVar &V) {
     return "var_" + llvm::utohexstr(static_cast<uint64_t>(
                         V.StackOff < 0 ? -V.StackOff : V.StackOff));
   case MedVar::Param:
+    if (CurrentFunc && CurrentFunc->SourceTypeHint && V.Id >= 0 &&
+        static_cast<size_t>(V.Id) < CurrentFunc->Params.size())
+      return CurrentFunc->Params[V.Id].Name;
     return "arg" + std::to_string(V.Id);
   case MedVar::RetVal:
     return "retval";
@@ -90,6 +93,10 @@ std::string HighCWriter::renderUnaryOp(const HighExpr &E, int ParentPrec) {
       return "0";
     if (Inner.Type && E.Type && Inner.Type->Size == E.Type->Size)
       return exprStr(Inner, ParentPrec);
+    if (Inner.Type)
+      return "(" + typeToC(E.Type) + ")(" +
+             typeToC(NdType::makeInt(Inner.Type->Size, false)) + ")" +
+             exprStr(Inner, 99);
     return "(" + typeToC(E.Type) + ")" + exprStr(Inner, 99);
   }
   case NdOp::INT_SEXT: {
@@ -99,8 +106,9 @@ std::string HighCWriter::renderUnaryOp(const HighExpr &E, int ParentPrec) {
     if (Inner.Type && E.Type && Inner.Type->Size == E.Type->Size)
       return exprStr(Inner, ParentPrec);
     return "(" + typeToC(E.Type) + ")(" +
-           (Inner.Type ? typeToC(Inner.Type) : "uint32_t") + ")" +
-           exprStr(Inner, 99);
+           (Inner.Type ? typeToC(NdType::makeInt(Inner.Type->Size, true))
+                       : "int32_t") +
+           ")" + exprStr(Inner, 99);
   }
   case NdOp::FLOAT_TRUNC:
     return "(" + typeToC(E.Type) + ")" + exprStr(*E.Operands[0], 99);
@@ -194,6 +202,13 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   return S;
 }
 
+TypeRef HighCWriter::declaredParamType(const MedVar &V) const {
+  if (!CurrentFunc || V.Kind != MedVar::Param || V.RenameTag >= 0 || V.Id < 0 ||
+      static_cast<size_t>(V.Id) >= CurrentFunc->Params.size())
+    return nullptr;
+  return CurrentFunc->Params[V.Id].Type;
+}
+
 std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec) {
   static thread_local int Depth = 0;
   struct Guard {
@@ -207,7 +222,17 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec) {
 
   switch (E.Kind) {
   case ExprKind::Var:
+  case ExprKind::Phi: {
+    // HighIR arithmetic still operates on machine bytes when source type
+    // recovery gives an ABI parameter a pointed-to type.  Convert the value
+    // before any operation: casting the final load address is too late to
+    // prevent C's element-scaled pointer arithmetic.  Consult the declaration
+    // because a machine-width expression can retain its original integer type.
+    auto DeclaredType = declaredParamType(E.Var);
+    if (DeclaredType && DeclaredType->Kind == NdTypeKind::Ptr)
+      return "(uintptr_t)" + varName(E.Var);
     return varName(E.Var);
+  }
   case ExprKind::Const:
     return constStr(E.ConstVal);
   case ExprKind::Undef:
@@ -225,7 +250,7 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec) {
         E.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
       auto Fwd = Analysis.StoreFwd.find(Addr);
       if (Fwd != Analysis.StoreFwd.end())
-        return Fwd->second;
+        return "(" + typeToC(E.Type) + ")(" + Fwd->second + ")";
     }
     return memoryLoadExpr(E.Type, Addr, E.MemoryOrdering, E.MemoryAddressSpace);
   }
@@ -253,6 +278,8 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec) {
       return "(" + typeToC(Operand.Type) + " *)(uintptr_t)(" +
              exprStr(*Operand.Operands[0]) + ")";
     }
+    if (Operand.Kind == ExprKind::Var || Operand.Kind == ExprKind::Phi)
+      return "&" + varName(Operand.Var);
     return "&" + exprStr(*E.Operands[0], 99);
   }
   case ExprKind::Field:
@@ -262,8 +289,6 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec) {
       return "(" + exprStr(*E.Operands[0]) + ").field_" +
              std::to_string(E.ConstVal);
     return exprStr(*E.Operands[0]);
-  case ExprKind::Phi:
-    return varName(E.Var);
   default:
     return "/* unknown expr */";
   }
@@ -278,7 +303,7 @@ std::string HighCWriter::unwrapCastVar(const HighExpr &E) {
     std::string Addr = exprStr(*E.Operands[0]);
     auto Fwd = Analysis.StoreFwd.find(Addr);
     if (Fwd != Analysis.StoreFwd.end())
-      return Fwd->second;
+      return "(" + typeToC(E.Type) + ")(" + Fwd->second + ")";
   }
   if (E.Kind == ExprKind::UnaryOp &&
       (E.Op == NdOp::INT_ZEXT || E.Op == NdOp::INT_SEXT) && !E.Operands.empty())
@@ -301,6 +326,10 @@ std::string HighCWriter::collapseHiLo(const HighExpr &Expr) {
 }
 
 std::string HighCWriter::formatReturnExpr(const HighExpr &Expr) {
+  if (FuncReturnType && FuncReturnType->Kind == NdTypeKind::Ptr)
+    return "(" + typeToC(FuncReturnType) + ")(uintptr_t)(" + exprStr(Expr) +
+           ")";
+
   auto HiLo = collapseHiLo(Expr);
   if (!HiLo.empty())
     return HiLo;
@@ -329,7 +358,10 @@ std::string HighCWriter::formatReturnExpr(const HighExpr &Expr) {
     if (Inner.Type && Inner.Type->Kind == NdTypeKind::Int) {
       if (Inner.Type->Size == FuncReturnType->Size)
         return exprStr(Inner);
-      return "(" + typeToC(FuncReturnType) + ")" + exprStr(Inner, 99);
+      // Keep the source-width interpretation of zext/sext when narrowing the
+      // final C return type; a direct C cast from a signed input would turn
+      // zero extension into sign extension.
+      return "(" + typeToC(FuncReturnType) + ")(" + exprStr(Expr) + ")";
     }
   }
 

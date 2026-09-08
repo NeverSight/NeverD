@@ -105,6 +105,10 @@ add_neverd_unittest(NeverDLiftTests
   core/LowInstructionBoundaryTests.cpp
   core/LiftCommonTests.cpp
   core/MedSSAMultiRootTests.cpp
+  core/ObjCSourceTypeHintTests.cpp
+  core/HighCPointerAddressTests.cpp
+  core/HighCIntegerWidthTests.cpp
+  sdk/ObjCSourceProjectionTests.cpp
   format/MachOARM64RelocationTests.cpp
   format/MachOI386RelocationTests.cpp
   format/MachOI386RelocationExternalTests.cpp

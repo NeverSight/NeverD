@@ -195,10 +195,8 @@ TEST(HighSymSimplify, LeavesAnOrdinaryExpressionAlone) {
 }
 
 TEST(HighSymSimplify, KeepsWhatItCannotSeeInsideOf) {
-  // A memory read sits inside the sum.  The engine has nothing to say about
-  // one, so it has to stand an opaque input in front of it, measure what
-  // surrounds it, and put the read back exactly as it was.  Dropping it would
-  // be the worst thing this pass could do, and the quietest.
+  // A memory read contributes to the sum. It must survive as a snapshot at
+  // its original statement while the surrounding arithmetic is simplified.
   FunctionBuilder B;
   MedVar Addr = B.param(0, 0x38);
   MedVar X = B.param(1, 0x30);
@@ -209,10 +207,46 @@ TEST(HighSymSimplify, KeepsWhatItCannotSeeInsideOf) {
   MedVar Scaled = B.emit(NdOp::INT_MULT, {And, FunctionBuilder::constant(2)});
   MedVar Sum = B.emit(NdOp::INT_ADD, {Xor, Scaled});
 
-  std::string Expr = returnedExpr(B.finish(NdOp::INT_ADD, {Sum, Loaded}));
+  HighFunc Func = B.finish(NdOp::INT_ADD, {Sum, Loaded});
+  std::string Expr = returnedExpr(Func);
   EXPECT_EQ(Expr.find('^'), std::string::npos) << Expr;
   EXPECT_EQ(Expr.find('&'), std::string::npos) << Expr;
-  EXPECT_NE(Expr.find('*'), std::string::npos) << Expr;
+
+  const HighStmt *Snapshot = nullptr;
+  const HighStmt *Return = nullptr;
+  unsigned ReadCount = 0;
+  for (const HighStmt &Stmt : Func.Body) {
+    if (Stmt.Kind == StmtKind::Assign && Stmt.Val &&
+        Stmt.Val->Kind == ExprKind::Load) {
+      EXPECT_EQ(Return, nullptr) << "memory read moved after its use";
+      Snapshot = &Stmt;
+      ++ReadCount;
+    }
+    if (Stmt.Kind == StmtKind::Return)
+      Return = &Stmt;
+  }
+  ASSERT_EQ(ReadCount, 1U);
+  ASSERT_NE(Snapshot, nullptr);
+  ASSERT_TRUE(Snapshot->Dst);
+  ASSERT_EQ(Snapshot->Val->Operands.size(), 1U);
+  ASSERT_EQ(Snapshot->Val->Operands[0]->Kind, ExprKind::Var);
+  EXPECT_EQ(Snapshot->Val->Operands[0]->Var, Addr);
+  ASSERT_TRUE(Snapshot->Val->Type);
+  EXPECT_EQ(Snapshot->Val->Type->Size, kWordBytes);
+  ASSERT_NE(Return, nullptr);
+  bool UsesSnapshot = false;
+  std::vector<ExprPtr> Worklist{Return->RetVal};
+  while (!Worklist.empty()) {
+    ExprPtr Current = Worklist.back();
+    Worklist.pop_back();
+    ASSERT_TRUE(Current);
+    EXPECT_NE(Current->Kind, ExprKind::Load)
+        << "return must use the saved value without repeating the read";
+    UsesSnapshot |= Current->structuralEq(*Snapshot->Dst);
+    Worklist.insert(Worklist.end(), Current->Operands.begin(),
+                    Current->Operands.end());
+  }
+  EXPECT_TRUE(UsesSnapshot) << Expr;
 }
 
 TEST(HighSymSimplify, ReachesAnIdentityBelowSixtyFourExpressionLevels) {

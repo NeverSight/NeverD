@@ -59,6 +59,7 @@ add_neverd_component_library(NeverDLoader
   MachO/MachOLoaderUtils.cpp
   MachO/MachORelocations.cpp
   ObjC/ObjCEH.cpp
+  ObjC/ObjCMethods.cpp
   Rust/RustEH.cpp
   discovery/FunctionDiscovery.cpp
   discovery/FunctionDiscoveryAArch64.cpp

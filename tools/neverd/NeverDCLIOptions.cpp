@@ -315,7 +315,8 @@ cl::opt<bool> NoOpt("no-opt", cl::desc("Skip LLVM optimization passes"),
 
 cl::opt<size_t> MaxFunc("max-func", cl::desc("Limit to first N functions"),
                         cl::init(0), cl::sub(LiftCmd), cl::sub(DecompileCmd),
-                        cl::sub(PatchCmd), cl::sub(MobileCmd));
+                        cl::sub(PatchCmd), cl::sub(MobileCmd),
+                        cl::sub(ExportCmd));
 
 //===----------------------------------------------------------------------===//
 // Lift-specific options
@@ -692,12 +693,15 @@ cl::opt<std::string>
 
 cl::opt<ExportFormat> ExportFmt(
     "format", cl::desc("What to export"), cl::Required,
-    cl::values(clEnumValN(FmtDecompile, "decompile", "Decompiled C code"),
-               clEnumValN(FmtIR, "ir", "LLVM IR"),
-               clEnumValN(FmtFuncs, "funcs", "Function list (JSON)"),
-               clEnumValN(FmtImports, "imports", "Import table (JSON)"),
-               clEnumValN(FmtExports, "exports", "Export table (JSON)"),
-               clEnumValN(FmtStrings, "strings", "String table (JSON)")),
+    cl::values(
+        clEnumValN(FmtDecompile, "decompile", "Decompiled C code"),
+        clEnumValN(FmtIR, "ir", "LLVM IR"),
+        clEnumValN(FmtFuncs, "funcs", "Function list (JSON)"),
+        clEnumValN(FmtImports, "imports", "Import table (JSON)"),
+        clEnumValN(FmtExports, "exports", "Export table (JSON)"),
+        clEnumValN(FmtStrings, "strings", "String table (JSON)"),
+        clEnumValN(FmtObjCMethods, "objc-methods",
+                   "Mach-O native source and Objective-C methods (JSON)")),
     cl::sub(ExportCmd));
 
 cl::opt<std::string> ExportOutput("o", cl::desc("Output file path"),

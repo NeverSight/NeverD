@@ -47,7 +47,8 @@ enum ExportFormat {
   FmtFuncs,
   FmtImports,
   FmtExports,
-  FmtStrings
+  FmtStrings,
+  FmtObjCMethods
 };
 
 /// How the `patch` subcommand rewrites the binary.

@@ -6,6 +6,7 @@ set(NEVERD_SDK_SOURCES
     capi/NeverDCAPIBenchDecode.cpp
     capi/NeverDCAPIConcolic.cpp
     capi/NeverDCAPIDecompile.cpp
+    capi/NeverDCAPIObjC.cpp
     capi/NeverDCAPIDisasm.cpp
     capi/NeverDCAPIGraph.cpp
     capi/NeverDCAPIInfo.cpp

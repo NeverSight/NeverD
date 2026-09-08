@@ -4,14 +4,34 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "gtest/gtest.h"
-
 #include "COFFARMPipelineTestsDetail.h"
+#include "gtest/gtest.h"
 
 namespace {
 
 using namespace neverd;
 using namespace neverd::coff_arm_test;
+
+TEST(COFFARMPipelineReaders, RecognizesDefinitionsAfterClosingBlocks) {
+  for (llvm::StringRef Body :
+       {"{ if (arg0) { return 1; } t12_3 = neverd_mem_load_0(arg1); }",
+        "{ while (arg0) { break; } t12_7 = neverd_mem_load_0(arg1); }"}) {
+    llvm::StringRef Name = Body.contains("t12_3") ? "t12_3" : "t12_7";
+    size_t Use = findIdentifier(Body, Name, 0);
+    ASSERT_NE(Use, llvm::StringRef::npos);
+    EXPECT_TRUE(isInitialLocalDefinition(Body, Name, Use)) << Body.str();
+  }
+}
+
+TEST(COFFARMPipelineReaders, RejectsReadsAndSelfDependentInitialAssignments) {
+  for (llvm::StringRef Body : {"{ if (arg0) { return 1; } return t12_3; }",
+                               "{ while (arg0) { break; } other = t12_3; }",
+                               "{ t12_3 = t12_3 + 1; }"}) {
+    size_t Use = findIdentifier(Body, "t12_3", 0);
+    ASSERT_NE(Use, llvm::StringRef::npos);
+    EXPECT_FALSE(isInitialLocalDefinition(Body, "t12_3", Use)) << Body.str();
+  }
+}
 
 TEST_F(COFFARMPipeline, ARM32ThumbLiftAndDecompile) {
   const fs::path Path = fixture("test_patch_coff_arm.exe");
@@ -106,7 +126,7 @@ TEST_F(COFFARMPipeline, AArch64LiftAndDecompile) {
   ASSERT_TRUE(StackyC.has_value()) << C;
   EXPECT_NE(StackyC->find("pe_leaf("), std::string::npos) << *StackyC;
   expectLeafCallResultStored(*StackyC);
-  expectLeafCallUsesParameter(*StackyC, "arg0");
+  expectLeafAndStackyExecute(CPath);
   expectNoLocalReadBeforeDefinition(*StackyC);
   expectFrameBaseInitializedOnce(*StackyC);
   expectGeneratedCCompiles(CPath, "aarch64-pc-windows-msvc");

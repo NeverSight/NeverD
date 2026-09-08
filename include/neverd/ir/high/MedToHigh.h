@@ -74,6 +74,7 @@ private:
 
   ExprPtr medOpToExpr(const MedOp &Op);
   ExprPtr medvarToExpr(const MedVar &V);
+  ExprPtr inlineableDefinition(VarKey Key) const;
   ExprPtr forceInlineExpr(const ExprPtr &E);
 
   int regToArgIdx(uint64_t RegOff) const;
@@ -119,6 +120,9 @@ private:
   VarKeyMap<ExprPtr> DefExpr;
   VarKeySet CallOutputs;
   VarKeySet PhiOutputVars;
+  /// A native read is evaluated at its statement, then used as an SSA value.
+  /// Re-expanding it at a use could cross an aliasing write or repeat the read.
+  VarKeySet MemoryReadOutputs;
   /// The function currently being converted; set at the top of convert() so
   /// collectCallArgs can resolve a register argument that is live-in to the
   /// call block (loop-carried via a header PHI) rather than written before the

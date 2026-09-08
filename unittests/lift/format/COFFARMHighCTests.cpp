@@ -4,9 +4,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "gtest/gtest.h"
-
 #include "COFFARMPipelineTestsDetail.h"
+#include "gtest/gtest.h"
 
 namespace {
 
@@ -25,8 +24,8 @@ TEST_F(COFFARMPipeline, HighCX64StackBaseHasNativeEntryResidue) {
   SP.Id = 1;
   SP.Size = 8;
   SP.RegOff = getTargetRegInfo(Arch::X64).StackPointer;
-  auto Addr = HighExpr::makeBinop(
-      NdOp::INT_SUB, HighExpr::makeVar(SP), HighExpr::makeConst(4, 8));
+  auto Addr = HighExpr::makeBinop(NdOp::INT_SUB, HighExpr::makeVar(SP),
+                                  HighExpr::makeConst(4, 8));
   HighStmt Ret;
   Ret.Kind = StmtKind::Return;
   Ret.RetVal = HighExpr::makeLoad(Addr, NdType::makeInt(4));
@@ -42,8 +41,7 @@ TEST_F(COFFARMPipeline, HighCX64StackBaseHasNativeEntryResidue) {
   EXPECT_NE(C.find("_Alignas(16) uint8_t stack_storage[24];"),
             std::string::npos)
       << C;
-  EXPECT_NE(C.find("(uintptr_t)(stack_storage + 24);"), std::string::npos)
-      << C;
+  EXPECT_NE(C.find("(uintptr_t)(stack_storage + 24);"), std::string::npos) << C;
 }
 
 TEST_F(COFFARMPipeline, HighCI386StackBaseUsesBinaryFormatResidue) {
@@ -59,8 +57,8 @@ TEST_F(COFFARMPipeline, HighCI386StackBaseUsesBinaryFormatResidue) {
     SP.Id = 1;
     SP.Size = 4;
     SP.RegOff = getTargetRegInfo(Arch::X86).StackPointer;
-    auto Addr = HighExpr::makeBinop(
-        NdOp::INT_SUB, HighExpr::makeVar(SP), HighExpr::makeConst(4, 4));
+    auto Addr = HighExpr::makeBinop(NdOp::INT_SUB, HighExpr::makeVar(SP),
+                                    HighExpr::makeConst(4, 4));
     HighStmt Ret;
     Ret.Kind = StmtKind::Return;
     Ret.RetVal = HighExpr::makeLoad(Addr, Func.ReturnType);
@@ -124,7 +122,9 @@ TEST_F(COFFARMPipeline, HighCLoadLvaluesAndAddressesRemainValidC) {
   OS.flush();
 
   EXPECT_NE(C.find("neverd_mem_store_"), std::string::npos) << C;
-  EXPECT_NE(C.find("(int32_t *)(uintptr_t)(arg0)"), std::string::npos) << C;
+  EXPECT_NE(C.find("(int32_t *)(uintptr_t)((uintptr_t)arg0)"),
+            std::string::npos)
+      << C;
   EXPECT_EQ(C.find("&neverd_mem_load_"), std::string::npos) << C;
 
   const fs::path CPath = tmpFile("load_lvalue.c");
@@ -132,8 +132,8 @@ TEST_F(COFFARMPipeline, HighCLoadLvaluesAndAddressesRemainValidC) {
   Out << C;
   Out.close();
   ASSERT_TRUE(Out.good());
-  RunResult Syntax = exec("clang", {"-std=c11", "-fsyntax-only",
-                                    CPath.string()});
+  RunResult Syntax =
+      exec("clang", {"-std=c11", "-fsyntax-only", CPath.string()});
   EXPECT_EQ(Syntax.exitCode, 0) << Syntax.err << "\n" << C;
 }
 
@@ -174,7 +174,10 @@ TEST_F(COFFARMPipeline, HighCForwardedParameterReturnDoesNotBecomeVoid) {
 
   auto Body = cFunctionBody(C, "forwarded_parameter");
   ASSERT_TRUE(Body.has_value()) << C;
-  EXPECT_NE(Body->find("return arg0;"), std::string::npos) << *Body;
+  // The pointer is caller-owned: both its write and subsequent read remain
+  // observable even when their values happen to match.
+  EXPECT_NE(Body->find("neverd_mem_store_"), std::string::npos) << *Body;
+  EXPECT_NE(Body->find("neverd_mem_load_"), std::string::npos) << *Body;
   EXPECT_EQ(C.find("void forwarded_parameter("), std::string::npos) << C;
 
   const fs::path CPath = tmpFile("forwarded_parameter.c");
@@ -295,7 +298,8 @@ TEST_F(COFFARMPipeline, HighCAddressOfLoadDoesNotDeleteStore) {
   ASSERT_TRUE(Body.has_value()) << C;
   EXPECT_NE(Body->find("neverd_mem_store_"), std::string::npos) << *Body;
   EXPECT_NE(Body->find(", 7);"), std::string::npos) << *Body;
-  EXPECT_NE(Body->find("return (int32_t *)(uintptr_t)(arg0);"),
+  EXPECT_NE(Body->find("return (int32_t*)(uintptr_t)((int32_t "
+                       "*)(uintptr_t)((uintptr_t)arg0));"),
             std::string::npos)
       << *Body;
 

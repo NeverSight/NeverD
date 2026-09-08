@@ -29,6 +29,10 @@ using namespace llvm;
 namespace neverd::cli {
 
 int runExport(neverd_session_t Sess) {
+  if (ExportFmt == FmtObjCMethods && !ExportFunc.empty()) {
+    WithColor::error() << "--func does not apply to objc-methods export\n";
+    return 1;
+  }
   int FuncIdx = -1;
   if (ExportFmt == FmtDecompile || ExportFmt == FmtIR) {
     if (!ExportFunc.empty()) {
@@ -39,8 +43,7 @@ int runExport(neverd_session_t Sess) {
           FuncIdx = neverd_func_find_by_addr(Sess, Addr);
       } else {
         FuncIdx = neverd_func_find_by_name(Sess, ExportFunc.c_str());
-        if (FuncIdx < 0 && !FuncRef.empty() &&
-            !FuncRef.getAsInteger(16, Addr))
+        if (FuncIdx < 0 && !FuncRef.empty() && !FuncRef.getAsInteger(16, Addr))
           FuncIdx = neverd_func_find_by_addr(Sess, Addr);
       }
     } else {
@@ -96,6 +99,13 @@ int runExport(neverd_session_t Sess) {
       Json = neverd_exports_json(Sess);
     } else if (ExportFmt == FmtStrings) {
       Json = neverd_strings_json(Sess, 4);
+    } else if (ExportFmt == FmtObjCMethods) {
+      Json = neverd_objc_methods_json(Sess, MaxFunc);
+      if (!Json) {
+        WithColor::error() << "Objective-C export failed: "
+                           << takeLastError(Sess) << "\n";
+        return 1;
+      }
     }
 
     if (Json) {

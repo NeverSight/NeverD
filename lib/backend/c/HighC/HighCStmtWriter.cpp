@@ -75,7 +75,20 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
       break;
     }
     emitIndent(Indent);
-    OS << exprStr(*Stmt.Dst) << " = " << exprStr(*Stmt.Val) << ";\n";
+    if (Stmt.Dst->Kind == ExprKind::Var || Stmt.Dst->Kind == ExprKind::Phi) {
+      // Variable destinations are lvalues, unlike exprStr's machine-value
+      // projection of typed pointer parameters.
+      OS << varName(Stmt.Dst->Var) << " = ";
+      auto DeclaredType = declaredParamType(Stmt.Dst->Var);
+      if (DeclaredType && DeclaredType->Kind == NdTypeKind::Ptr)
+        OS << "(" << typeToC(DeclaredType) << ")(uintptr_t)("
+           << exprStr(*Stmt.Val) << ")";
+      else
+        OS << exprStr(*Stmt.Val);
+    } else {
+      OS << exprStr(*Stmt.Dst) << " = " << exprStr(*Stmt.Val);
+    }
+    OS << ";\n";
     break;
   }
 

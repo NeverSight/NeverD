@@ -22,6 +22,7 @@
 #include "neverd/loader/BinaryImageRelocation.h"
 #include "neverd/loader/BinaryImageSection.h"
 #include "neverd/loader/ExceptionTable.h"
+#include "neverd/loader/ObjC/ObjCMethods.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/sbf/SBFMetadata.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -222,6 +223,14 @@ struct BinaryImage {
   std::vector<Import> Imports;
   std::vector<Export> Exports;
   std::vector<Symbol> Symbols;
+  std::vector<ObjCClass> ObjCClasses;
+  std::vector<ObjCMethod> ObjCMethods;
+  std::vector<std::string> ObjCMetadataDiagnostics;
+  /// Exact slots decoded by the supported chained-fixup reader. A raw nonzero
+  /// slot in a chained image is not a pointer merely because it looks mapped.
+  bool MachOHasChainedFixups = false;
+  bool MachOChainedFixupsAmbiguous = false;
+  std::set<va_t> MachOResolvedChainedPointerSlots;
   /// Exact data-object boundaries.  Conflicting entries are retained so a
   /// consumer can fail closed; producers must never collapse them by order.
   std::vector<ExactDataObjectExtent> ExactDataObjects;

@@ -111,31 +111,63 @@ def decompile_ios(source: Path, output: Path, *, neverd: str, arch: str,
     thin_path.write_bytes(image.data)
     objc = objc_metadata(image)
     swift = swift_metadata(image)
-    (metadata / "objc.json").write_text(json.dumps(objc, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
     (metadata / "swift.json").write_text(json.dumps(swift, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
-    (metadata / "objc.h").write_text(objc_header(objc), encoding="utf-8")
     outputs = {"selected_binary": "artifacts/selected.macho", "objc_metadata": "metadata/objc.json",
                "objc_declarations": "metadata/objc.h", "swift_metadata": "metadata/swift.json"}
     native_function_count = None
+    method_recovery = None
+    native_limitations: list[str] = []
     if not metadata_only:
         sources = output / "sources"
         sources.mkdir()
         log = output / "logs" / "native.log"
         log.parent.mkdir(exist_ok=True)
         native = sources / "native.c"
-        command = [neverd, "decompile", str(thin_path), "--language=c", "-o", str(native)]
+        batch_path = artifacts / "native-recovery.json"
+        command = [neverd, "export", str(thin_path), "--format=objc-methods", "-o", str(batch_path)]
         if max_func:
             command.append(f"--max-func={max_func}")
         run_tool(command, log, limits.timeout)
-        if not native.is_file() or not native.stat().st_size:
-            raise MobileError("native decompiler did not produce C output")
-        if native.stat().st_size > limits.max_bytes:
-            raise MobileError("native decompiler output exceeds the byte limit")
-        native_function_count = _native_function_count(native.read_text(encoding="utf-8"))
+        if not batch_path.is_file() or not batch_path.stat().st_size:
+            raise MobileError("native decompiler did not produce a source report")
+        if batch_path.stat().st_size > limits.max_bytes:
+            raise MobileError("native decompiler source report exceeds the byte limit")
+        try:
+            batch = json.loads(batch_path.read_text(encoding="utf-8"))
+        except (ValueError, UnicodeError, RecursionError) as exc:
+            raise MobileError("native decompiler produced an invalid source report") from exc
+        if (not isinstance(batch, dict) or batch.get("schema_version") != 1 or
+                batch.get("status") != "success" or not isinstance(batch.get("native_source"), str) or
+                not isinstance(batch.get("methods"), list) or
+                not isinstance(batch.get("objc_metadata"), dict) or
+                not isinstance(batch.get("limitations"), list) or
+                not all(isinstance(item, str) for item in batch["limitations"])):
+            raise MobileError("native decompiler source report has an unsupported schema")
+        native_limitations = batch["limitations"]
+        native_function_count = _native_function_count(batch["native_source"])
         if not native_function_count:
             raise MobileError("native decompiler recovered no function bodies; use --metadata-only for metadata inspection")
+        if (type(batch.get("native_function_count")) is not int or
+                native_function_count != batch["native_function_count"]):
+            raise MobileError("native source report disagrees with its emitted function count")
+        native.write_text(batch["native_source"], encoding="utf-8")
+        objc = batch["objc_metadata"]
+        if (not isinstance(objc.get("classes"), list) or
+                not isinstance(objc.get("limitations"), list)):
+            raise MobileError("native source report has invalid Objective-C metadata")
+        from .objc_source import render_objc_sources
+        method_source, method_recovery = render_objc_sources(batch, objc)
+        if method_recovery["recovered_method_count"]:
+            (sources / "objc.m").write_text(method_source, encoding="utf-8")
+            outputs["objc_source"] = "sources/objc.m"
+        (metadata / "objc-methods.json").write_text(
+            json.dumps(method_recovery, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+        outputs["objc_method_coverage"] = "metadata/objc-methods.json"
+        batch_path.unlink()
         outputs["native_source"] = "sources/native.c"
         outputs["native_log"] = "logs/native.log"
+    (metadata / "objc.json").write_text(json.dumps(objc, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+    (metadata / "objc.h").write_text(objc_header(objc), encoding="utf-8")
     bundle = {key: value for key, value in bundle_info.items()
               if key in ("CFBundleIdentifier", "CFBundleName", "CFBundleExecutable", "CFBundleVersion",
                          "CFBundleShortVersionString", "MinimumOSVersion") and isinstance(value, (str, int, bool))}
@@ -145,11 +177,15 @@ def decompile_ios(source: Path, output: Path, *, neverd: str, arch: str,
             "available_architectures": available, "encrypted": False, "bundle": bundle,
             "metadata_only": metadata_only, "outputs": outputs,
             "native_function_count": native_function_count,
+            "objc_method_recovery": method_recovery,
             "objc_class_count": len(objc["classes"]), "swift_type_count": len(swift["types"]),
             "swift_symbol_count": len(swift["symbols"]),
-            "limitations": ["Native output is recovered C pseudocode; original Objective-C or Swift source is not available.",
-                            "Native function types and calling conventions are approximations; emitted C may require manual ABI corrections.",
+            "limitations": ["Original comments, formatting, removed names and source constructs lost during compilation cannot be restored.",
+                            "Objective-C method coverage lists reconstructed bodies and omissions; it is not a proof of semantic equivalence.",
+                            "Swift method source is not reconstructed. Native C types and calling conventions remain approximations outside supported runtime signatures.",
                             "Only the selected executable is analyzed; use --artifact for embedded frameworks or extensions.",
+                            *native_limitations,
+                            *(method_recovery["limitations"] if method_recovery else []),
                             *objc["limitations"], *swift["limitations"]]}
     shutil.rmtree(staged)
     return report

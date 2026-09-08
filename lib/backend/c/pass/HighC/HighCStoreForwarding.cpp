@@ -10,14 +10,98 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/backend/c/pass/HighC/HighCPasses.h"
+#include "neverd/backend/c/render/CTypeFormat.h"
+
+#include <algorithm>
 
 namespace neverd {
+
+namespace {
+
+bool isForwardableInteger(const TypeRef &Type) {
+  return Type && Type->Kind == NdTypeKind::Int &&
+         (Type->Size == 1 || Type->Size == 2 || Type->Size == 4 ||
+          Type->Size == 8);
+}
+
+std::string storedIntegerValue(const HighExpr &Value, ExprStrFn ExprFn) {
+  // C promotes byte/short arithmetic to int. Preserve the truncation that
+  // the actual memory write performed before a later load interprets it.
+  return "(" + typeToC(Value.Type) + ")(" + ExprFn(Value) + ")";
+}
+
+// This renderer substitutes loads by address across the entire function. That
+// is valid only for immutable private slots initialized before every use in a
+// straight-line body. It has no CFG reaching-definition/alias analysis for
+// mutable memory. Preserve those accesses instead of moving a later store
+// backward across an earlier load, branch, call, or loop iteration.
+bool hasImmutableReachingStores(const HighCAnalysisState &State,
+                                const HighFunc &Func, VarNameFn VarFn,
+                                ExprStrFn ExprFn) {
+  if (!State.CanElideFrameStores)
+    return false;
+  std::set<std::string> InitializedSlots;
+  std::set<std::string> DefinedVars;
+  auto AddressKey = [&](const HighExpr &Address) {
+    const auto It = State.AddressKeys.find(&Address);
+    return It == State.AddressKeys.end() ? ExprFn(Address) : It->second;
+  };
+  std::function<bool(const HighExpr &, unsigned)> CheckValue =
+      [&](const HighExpr &Expr, unsigned Depth) {
+        if (Depth > 128 || Expr.Kind == ExprKind::Call ||
+            Expr.Kind == ExprKind::Addr || Expr.Kind == ExprKind::Store)
+          return false;
+        if (Expr.Kind == ExprKind::Load)
+          return Expr.Operands.size() == 1 && Expr.Operands[0] &&
+                 InitializedSlots.count(AddressKey(*Expr.Operands[0])) != 0;
+        if (Expr.Kind == ExprKind::Var)
+          return Expr.Var.Kind == MedVar::Param ||
+                 DefinedVars.count(VarFn(Expr.Var)) != 0;
+        for (const auto &Operand : Expr.Operands)
+          if (!Operand || !CheckValue(*Operand, Depth + 1))
+            return false;
+        return true;
+      };
+  for (const auto &Stmt : Func.Body) {
+    if (State.DeadStmts.count(&Stmt))
+      continue;
+    if (!Stmt.Body.empty() || !Stmt.ElseBody.empty() || !Stmt.Cases.empty() ||
+        !Stmt.DefaultBody.empty() || !Stmt.EHClauseBodies.empty())
+      return false;
+    if (Stmt.Kind == StmtKind::Store) {
+      if (!Stmt.StoreAddr || !Stmt.StoreVal || !CheckValue(*Stmt.StoreVal, 0) ||
+          !InitializedSlots.insert(AddressKey(*Stmt.StoreAddr)).second)
+        return false;
+    } else if (Stmt.Kind == StmtKind::Assign) {
+      if (!Stmt.Dst || Stmt.Dst->Kind != ExprKind::Var || !Stmt.Val ||
+          Stmt.Dst->Var.Kind == MedVar::Param || !CheckValue(*Stmt.Val, 0) ||
+          !DefinedVars.insert(VarFn(Stmt.Dst->Var)).second)
+        return false;
+    } else if (Stmt.Kind == StmtKind::Return ||
+               Stmt.Kind == StmtKind::ExprStmt) {
+      bool Valid = true;
+      forEachRhsExpr(Stmt, [&](const ExprPtr &Expr) {
+        if (Expr)
+          Valid &= CheckValue(*Expr, 0);
+      });
+      if (!Valid)
+        return false;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+} // namespace
 
 void analyzeStoreForwarding(HighCAnalysisState &State, const HighFunc &Func,
                             VarNameFn VarFn, ExprStrFn ExprFn) {
   State.StoreFwd.clear();
   State.StoreFwdDeps.clear();
   State.ForwardedAddressDeps.clear();
+  if (!hasImmutableReachingStores(State, Func, VarFn, ExprFn))
+    return;
 
   bool HasOrderedMemory = false;
   walkStmts(Func.Body, [&](const HighStmt &S) {
@@ -49,6 +133,7 @@ void analyzeStoreForwarding(HighCAnalysisState &State, const HighFunc &Func,
   std::map<std::string, const HighExpr *> AddrToValExpr;
   std::map<std::string, std::string> AddrToKey;
   std::set<std::string> LoadedAddrs;
+  std::map<std::string, std::vector<std::pair<std::string, TypeRef>>> SlotLoads;
   auto AddressKey = [&](const HighExpr &Addr) {
     auto It = State.AddressKeys.find(&Addr);
     return It == State.AddressKeys.end() ? ExprFn(Addr) : It->second;
@@ -63,8 +148,11 @@ void analyzeStoreForwarding(HighCAnalysisState &State, const HighFunc &Func,
       return;
     }
     if (E.Kind == ExprKind::Load && !E.Operands.empty() &&
-        E.MemoryOrdering == NdMemoryOrdering::None)
-      LoadedAddrs.insert(ExprFn(*E.Operands[0]));
+        E.MemoryOrdering == NdMemoryOrdering::None) {
+      const std::string Addr = ExprFn(*E.Operands[0]);
+      LoadedAddrs.insert(Addr);
+      SlotLoads[AddressKey(*E.Operands[0])].emplace_back(Addr, E.Type);
+    }
     for (const ExprPtr &Operand : E.Operands)
       if (Operand)
         ScanValueLoads(*Operand);
@@ -92,51 +180,40 @@ void analyzeStoreForwarding(HighCAnalysisState &State, const HighFunc &Func,
   });
 
   std::map<std::string, std::string> CandidateValues;
+  std::map<std::string, size_t> ReadCastBytes;
   for (const std::string &Addr : LoadedAddrs) {
     auto It = AddrToVal.find(Addr);
-    if (It != AddrToVal.end())
-      CandidateValues.emplace(Addr, It->second);
+    if (It == AddrToVal.end())
+      continue;
+    const HighExpr &Value = *AddrToValExpr.at(Addr);
+    if (!isForwardableInteger(Value.Type))
+      continue;
+
+    auto Loads = SlotLoads.find(AddrToKey.at(Addr));
+    if (Loads == SlotLoads.end())
+      continue;
+    bool Compatible = true;
+    size_t MaxReadCastBytes = 0;
+    for (const auto &[LoadAddr, LoadType] : Loads->second) {
+      // Every alias must be substituted before removing the only store.
+      // Float/integer or pointer reinterpretation requires a bitcast, not a
+      // numeric conversion; retain those memory boundaries conservatively.
+      if (LoadAddr != Addr || !isForwardableInteger(LoadType) ||
+          LoadType->Size != Value.Type->Size) {
+        Compatible = false;
+        break;
+      }
+      MaxReadCastBytes =
+          std::max(MaxReadCastBytes, typeToC(LoadType).size() + 4);
+    }
+    if (Compatible) {
+      CandidateValues.emplace(Addr, storedIntegerValue(Value, ExprFn));
+      ReadCastBytes.emplace(Addr, MaxReadCastBytes);
+    }
   }
 
   if (CandidateValues.empty())
     return;
-
-  std::set<std::string> CallResults;
-  walkStmts(Func.Body, [&](const HighStmt &S) {
-    if (S.Kind == StmtKind::Assign && S.Dst && S.Val &&
-        S.Dst->Kind == ExprKind::Var && S.Val->Kind == ExprKind::Call)
-      CallResults.insert(VarFn(S.Dst->Var));
-  });
-
-  std::set<std::string> UsedParams;
-  std::set<std::string> ParamForwardedAddrs;
-  std::map<std::string, std::string> ParamSourceVars;
-  for (auto &[Addr, Val] : CandidateValues) {
-    auto ExprIt = AddrToValExpr.find(Addr);
-    if (ExprIt != AddrToValExpr.end() &&
-        ExprIt->second->Kind == ExprKind::Var &&
-        ExprIt->second->Var.Kind != MedVar::Param) {
-      std::string VName = VarFn(ExprIt->second->Var);
-      // A call/intrinsic result spilled to the stack is a newly produced
-      // value, not a recoverable incoming parameter.  Substituting a same-size
-      // parameter here silently discards the call result on reload.
-      if (CallResults.count(VName))
-        continue;
-      for (auto &P : Func.Params) {
-        if (UsedParams.count(P.Name))
-          continue;
-        bool TypeOk = (!P.Type || !ExprIt->second->Type ||
-                       P.Type->Size == ExprIt->second->Type->Size);
-        if (TypeOk) {
-          UsedParams.insert(P.Name);
-          Val = P.Name;
-          ParamForwardedAddrs.insert(Addr);
-          ParamSourceVars.emplace(Addr, std::move(VName));
-          break;
-        }
-      }
-    }
-  }
 
   // The C writer serializes expression DAGs as trees.  Repeatedly rendering a
   // chain such as slot[n] = load(slot[n-1]) + load(slot[n-1]) therefore doubles
@@ -145,18 +222,14 @@ void analyzeStoreForwarding(HighCAnalysisState &State, const HighFunc &Func,
   // rejected candidate is deliberately absent from StoreFwd, so its original
   // store and every load from it remain an executable memory boundary.
   constexpr size_t MaxForwardedExpressionBytes = 16 * 1024;
+  constexpr size_t MaxTotalForwardedBytes = 16 * 1024;
   constexpr size_t MaxDependencyWalkNodes = MaxForwardedExpressionBytes;
 
   std::map<std::string, std::vector<std::string>> DirectDeps;
   std::set<std::string> Eligible;
   for (const auto &[Addr, RawValue] : CandidateValues) {
-    if (RawValue.size() > MaxForwardedExpressionBytes)
+    if (RawValue.size() + ReadCastBytes.at(Addr) > MaxForwardedExpressionBytes)
       continue;
-    if (ParamForwardedAddrs.count(Addr)) {
-      Eligible.insert(Addr);
-      continue;
-    }
-
     auto ExprIt = AddrToValExpr.find(Addr);
     if (ExprIt == AddrToValExpr.end() || !ExprIt->second)
       continue;
@@ -215,34 +288,46 @@ void analyzeStoreForwarding(HighCAnalysisState &State, const HighFunc &Func,
     if (Pending == 0)
       Ready.insert(Addr);
 
+  size_t TotalForwardedBytes = 0;
   while (!Ready.empty()) {
     std::string Addr = *Ready.begin();
     Ready.erase(Ready.begin());
 
-    size_t UpperBound = CandidateValues[Addr].size();
+    // Account for the actual store cast, each substituted load cast, and the
+    // largest final load cast before rendering an expanded expression tree.
+    size_t UpperBound = CandidateValues[Addr].size() + ReadCastBytes.at(Addr);
     bool WithinBudget = UpperBound <= MaxForwardedExpressionBytes;
     for (const std::string &Dep : DirectDeps[Addr]) {
       auto FwdIt = State.StoreFwd.find(Dep);
       if (FwdIt == State.StoreFwd.end())
         continue;
-      if (FwdIt->second.size() > MaxForwardedExpressionBytes - UpperBound) {
+      const size_t AddedBytes = FwdIt->second.size() + ReadCastBytes.at(Dep);
+      if (AddedBytes > MaxForwardedExpressionBytes - UpperBound) {
         WithinBudget = false;
         break;
       }
-      UpperBound += FwdIt->second.size();
+      UpperBound += AddedBytes;
     }
 
     if (WithinBudget) {
       std::string Expanded;
-      if (ParamForwardedAddrs.count(Addr)) {
-        Expanded = CandidateValues[Addr];
-      } else {
-        auto ExprIt = AddrToValExpr.find(Addr);
-        if (ExprIt != AddrToValExpr.end() && ExprIt->second)
-          Expanded = ExprFn(*ExprIt->second);
-      }
-      if (!Expanded.empty() && Expanded.size() <= MaxForwardedExpressionBytes)
+      auto ExprIt = AddrToValExpr.find(Addr);
+      if (ExprIt != AddrToValExpr.end() && ExprIt->second)
+        Expanded = storedIntegerValue(*ExprIt->second, ExprFn);
+      const size_t ReadBytes = Expanded.size() + ReadCastBytes.at(Addr);
+      const size_t ReadCount = SlotLoads.at(AddrToKey.at(Addr)).size();
+      // A rejected parent stays as a real store, but each of its loads can
+      // still expand an accepted child. Charge every raw reader, including
+      // readers in stores that may later disappear, so neither this boundary
+      // nor many independent readers can multiply the function's output
+      // beyond the total budget. Counting deleted readers is conservative.
+      if (!Expanded.empty() && ReadBytes <= MaxForwardedExpressionBytes &&
+          ReadCount != 0 &&
+          ReadBytes <=
+              (MaxTotalForwardedBytes - TotalForwardedBytes) / ReadCount) {
+        TotalForwardedBytes += ReadBytes * ReadCount;
         State.StoreFwd.emplace(Addr, std::move(Expanded));
+      }
     }
 
     for (const std::string &User : Users[Addr]) {
@@ -261,13 +346,6 @@ void analyzeStoreForwarding(HighCAnalysisState &State, const HighFunc &Func,
     return;
 
   for (const auto &[Addr, _] : State.StoreFwd) {
-    if (ParamForwardedAddrs.count(Addr)) {
-      State.StoreFwdDeps[Addr] = {CandidateValues[Addr]};
-      auto SourceIt = ParamSourceVars.find(Addr);
-      if (SourceIt != ParamSourceVars.end())
-        State.DeadVars.insert(SourceIt->second);
-      continue;
-    }
     auto ExprIt = AddrToValExpr.find(Addr);
     if (ExprIt == AddrToValExpr.end() || !ExprIt->second)
       continue;
@@ -308,8 +386,7 @@ void analyzeStoreForwarding(HighCAnalysisState &State, const HighFunc &Func,
   for (size_t Iter = 0; Iter <= State.StoreFwd.size(); ++Iter) {
     bool Changed = false;
     for (const auto &[Addr, ValueExpr] : AddrToValExpr) {
-      if (!State.StoreFwd.count(Addr) || !ValueExpr ||
-          ParamForwardedAddrs.count(Addr))
+      if (!State.StoreFwd.count(Addr) || !ValueExpr)
         continue;
       auto ExpandedDeps = CollectForwardedDeps(*ValueExpr);
       if (ExpandedDeps != State.StoreFwdDeps[Addr]) {

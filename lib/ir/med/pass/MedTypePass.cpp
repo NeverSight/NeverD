@@ -16,6 +16,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 
+#include <algorithm>
 #include <map>
 #include <set>
 #include <string>
@@ -581,8 +582,7 @@ static void inferParamTypes(MedFunc &Func, const TargetRegInfo &TRI) {
       }
       const MedVar *MemoryAddress = nullptr;
       if ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE ||
-           Op.Opcode == NdOp::ATOMIC_XCHG ||
-           Op.Opcode == NdOp::ATOMIC_ADD ||
+           Op.Opcode == NdOp::ATOMIC_XCHG || Op.Opcode == NdOp::ATOMIC_ADD ||
            Op.Opcode == NdOp::ATOMIC_CMPXCHG) &&
           Op.NumInputs >= 1)
         MemoryAddress = &Op.Inputs[0];
@@ -594,11 +594,11 @@ static void inferParamTypes(MedFunc &Func, const TargetRegInfo &TRI) {
                    static_cast<Intrinsic>(Op.Inputs[0].ConstVal)))
         MemoryAddress = &Op.Inputs[1];
       if (MemoryAddress) {
-        recordAddressLiveIns(
-            *MemoryAddress,
-            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default
-                ? PtrParamRegOffs
-                : SegmentOffsetParamRegOffs);
+        recordAddressLiveIns(*MemoryAddress,
+                             Op.MemoryAddressSpace ==
+                                     NdMemoryAddressSpace::Default
+                                 ? PtrParamRegOffs
+                                 : SegmentOffsetParamRegOffs);
       }
     }
   }
@@ -671,6 +671,60 @@ void inferMedTypes(MedFunc &Func, Arch TheArch) {
   Func.FPReturnViaX87 = ReturnViaX87;
   inferParamTypes(Func, TRI);
   inferLocalTypes(Func);
+
+  if (!Func.SourceTypeHint)
+    return;
+  const auto &Hint = *Func.SourceTypeHint;
+  auto IsScalar = [](const TypeRef &Type) {
+    return Type && ((Type->Kind == NdTypeKind::Ptr && Type->Size == 8) ||
+                    (Type->Kind == NdTypeKind::Int &&
+                     (Type->Size == 1 || Type->Size == 2 || Type->Size == 4 ||
+                      Type->Size == 8)));
+  };
+  bool Valid = (TheArch == Arch::AArch64 || TheArch == Arch::X64) &&
+               Hint.ReturnType &&
+               (Hint.ReturnType->Kind == NdTypeKind::Void ||
+                IsScalar(Hint.ReturnType)) &&
+               Hint.Parameters.size() >= 2 &&
+               Hint.Parameters.size() <= TRI.IntParamRegs.size();
+  for (const auto &Param : Hint.Parameters)
+    Valid &= IsScalar(Param.Type);
+  // A declaration that leaves observed incoming carriers unexplained cannot
+  // supply a complete source parameter list. Do not silently drop such inputs.
+  for (const auto &Param : Func.Params) {
+    if (Param.Id < 0)
+      continue;
+    auto End = TRI.IntParamRegs.begin() +
+               std::min(Hint.Parameters.size(), TRI.IntParamRegs.size());
+    Valid &= std::find(TRI.IntParamRegs.begin(), End, Param.RegOff) != End;
+  }
+  if (!Valid) {
+    Func.SourceTypeHint.reset();
+    return;
+  }
+
+  std::vector<MedVar> BoundParams;
+  std::vector<MedTypedParam> BoundTypes;
+  for (size_t I = 0; I < Hint.Parameters.size(); ++I) {
+    const auto &Declared = Hint.Parameters[I];
+    MedVar Param;
+    Param.Kind = MedVar::Param;
+    Param.Id = -1; // An unused argument still occupies its ABI position.
+    Param.TheArch = TheArch;
+    Param.RegOff = TRI.IntParamRegs[I];
+    Param.Size = Declared.Type->Size;
+    for (const auto &Existing : Func.Params)
+      if (Existing.RegOff == Param.RegOff && Existing.Id >= 0) {
+        Param.Id = Existing.Id;
+        break;
+      }
+    BoundParams.push_back(Param);
+    BoundTypes.push_back({Declared.Name, Declared.Type});
+  }
+  Func.Params = std::move(BoundParams);
+  Func.TypedParams = std::move(BoundTypes);
+  Func.ReturnType = Hint.ReturnType;
+  Func.FPReturnViaX87 = false;
 }
 
 } // namespace neverd

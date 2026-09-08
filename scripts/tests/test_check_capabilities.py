@@ -3122,7 +3122,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
         no_surfaces = {"c": [], "python": [], "cli": [], "json": []}
         expected_surfaces = {
             "mobile.source-recovery": {
-                "c": [],
+                "c": ["neverd_objc_methods_json"],
                 "python": [],
                 "cli": [
                     "neverd mobile",
@@ -3138,8 +3138,9 @@ class RepositoryCapabilityTests(unittest.TestCase):
                     "neverd mobile --platform",
                     "neverd mobile --python",
                     "neverd mobile --timeout",
+                    "neverd export --max-func",
                 ],
-                "json": [],
+                "json": ["neverd_objc_methods_json"],
             },
             "debug.hardware": no_surfaces,
             "debug.local": no_surfaces,

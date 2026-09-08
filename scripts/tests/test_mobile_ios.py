@@ -24,6 +24,13 @@ from mobile.ios import decompile_ios
 from mobile.macho import MachO, objc_header, objc_metadata, select_slice, swift_metadata
 
 
+def source_report(source, *, count=1, limitations=()):
+    return json.dumps({"schema_version": 1, "status": "success",
+                       "native_source": source, "native_function_count": count,
+                       "methods": [], "limitations": list(limitations), "objc_metadata": {"classes": [],
+                           "status": "section-absent", "limitations": []}})
+
+
 def native_fixture(*, is64=True, relative=False, indirect=False, encrypted=False, chained=False):
     """Build original fixture bytes with a class, metaclass, methods and Swift type."""
     cpu = 0x0100000C if is64 else 12
@@ -141,6 +148,11 @@ class MachOTests(unittest.TestCase):
             image = MachO(native_fixture(relative=True, indirect=indirect))
             metadata = objc_metadata(image)
             self.assertEqual(metadata["classes"][0]["methods"][0]["selector"], "add:to:")
+
+    def test_legacy_long_encoding_keeps_32_bit_declarations_on_lp64(self):
+        metadata = objc_metadata(MachO(native_fixture()))
+        metadata["classes"][0]["methods"][0]["type_encoding"] = "l32@0:8l16L24"
+        self.assertIn("- (int)add:(int)arg0 to:(unsigned int)arg1;", objc_header(metadata))
 
     def test_swift_nominal_type_and_mangled_symbols(self):
         metadata = swift_metadata(MachO(native_fixture()))
@@ -369,16 +381,21 @@ class IOSPackageTests(unittest.TestCase):
         source.write_bytes(universal_fixture())
 
         def backend(argv, log, timeout):
-            self.assertEqual(argv[:2], ["fake-neverd", "decompile"])
+            self.assertEqual(argv[:2], ["fake-neverd", "export"])
+            self.assertIn("--format=objc-methods", argv)
             self.assertEqual(MachO(Path(argv[2]).read_bytes()).architecture, "arm")
             self.assertIn("--max-func=7", argv)
             self.assertEqual(timeout, 300)
-            Path(argv[argv.index("-o") + 1]).write_text("int example(void) { return 42; }\n")
+            Path(argv[argv.index("-o") + 1]).write_text(source_report(
+                "int example(void) { return 42; }\n", limitations=["Variadic tails are not described by runtime encodings."]))
             log.write_text("complete\n")
 
         with patch("mobile.ios.run_tool", side_effect=backend):
             report = self.run_ios(source, arch="arm", metadata_only=False, max_func=7)
         self.assertEqual(report["outputs"]["native_source"], "sources/native.c")
+        self.assertEqual(report["objc_method_recovery"]["method_count"], 0)
+        self.assertIn("Variadic tails are not described by runtime encodings.", report["limitations"])
+        self.assertFalse((self.output / "artifacts/native-recovery.json").exists())
 
     def test_native_success_without_source_is_failure(self):
         source = self.root / "Demo"
@@ -391,13 +408,35 @@ class IOSPackageTests(unittest.TestCase):
         source.write_bytes(native_fixture())
 
         def backend(argv, log, timeout):
-            Path(argv[argv.index("-o") + 1]).write_text(
+            Path(argv[argv.index("-o") + 1]).write_text(source_report(
                 '#include <stdint.h>\n/* int fake(void) { return 42; } */\n'
                 'const char *example = "int fake(void) { return 42; }";\n'
-                'static inline int helper(void) { return 1; }\n')
+                'static inline int helper(void) { return 1; }\n', count=0))
 
         with patch("mobile.ios.run_tool", side_effect=backend), self.assertRaisesRegex(MobileError, "no function bodies"):
             self.run_ios(source, metadata_only=False)
+
+    def test_native_report_rejects_invalid_schema_and_function_counts(self):
+        source = self.root / "Demo"
+        source.write_bytes(native_fixture())
+        valid = json.loads(source_report("int example(void) { return 42; }\n"))
+        for report, diagnostic in (
+            ([], "schema"),
+            ({**valid, "schema_version": 99}, "schema"),
+            ({**valid, "native_source": 1}, "schema"),
+            ({**valid, "native_function_count": 2}, "function count"),
+            ({**valid, "native_function_count": True}, "function count"),
+            ({**valid, "limitations": "unsupported"}, "schema"),
+            ({**valid, "limitations": [None]}, "schema"),
+        ):
+            with self.subTest(report=report):
+                shutil.rmtree(self.output, ignore_errors=True)
+
+                def backend(argv, log, timeout):
+                    Path(argv[argv.index("-o") + 1]).write_text(json.dumps(report))
+
+                with patch("mobile.ios.run_tool", side_effect=backend), self.assertRaisesRegex(MobileError, diagnostic):
+                    self.run_ios(source, metadata_only=False)
 
     def test_real_native_data_only_image_is_not_source_recovery(self):
         build = Path(os.environ.get("NEVERD_BUILD_DIR", ROOT / "build"))

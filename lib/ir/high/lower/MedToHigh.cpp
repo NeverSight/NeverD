@@ -19,8 +19,8 @@
 #include "neverd/ir/high/MedToHigh.h"
 
 #include "neverd/Limits.h"
-#include "neverd/support/Diagnostic.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/support/Diagnostic.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
@@ -37,8 +37,7 @@ namespace neverd {
 
 namespace {
 
-bool isEntryLiveInValue(const MedFunc &Func, const MedVar &V,
-                        uint64_t RegOff) {
+bool isEntryLiveInValue(const MedFunc &Func, const MedVar &V, uint64_t RegOff) {
   if (Func.Blocks.empty())
     return false;
   for (const MedOp &Op : Func.Blocks.front().Ops) {
@@ -66,6 +65,18 @@ const MedCallClobber *findCallClobber(const MedFunc &Func, const MedVar &V) {
 // MedToHighConverter — expression helpers
 //===----------------------------------------------------------------------===//
 
+ExprPtr MedToHighConverter::inlineableDefinition(VarKey Key) const {
+  if (PhiOutputVars.count(Key) || MemoryReadOutputs.count(Key))
+    return nullptr;
+  auto It = DefExpr.find(Key);
+  if (It == DefExpr.end() || !It->second ||
+      It->second->Kind == ExprKind::Call ||
+      It->second->MemoryOrdering != NdMemoryOrdering::None ||
+      It->second->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+    return nullptr;
+  return It->second;
+}
+
 ExprPtr MedToHighConverter::medvarToExpr(const MedVar &V) {
   if (V.isConst()) {
     return HighExpr::makeConst(V.ConstVal, V.Size);
@@ -80,7 +91,10 @@ ExprPtr MedToHighConverter::medvarToExpr(const MedVar &V) {
       MedVar Param = V;
       Param.Kind = MedVar::Param;
       Param.Id = static_cast<int>(I);
-      return HighExpr::makeVar(Param);
+      TypeRef Type;
+      if (CurMed->SourceTypeHint && I < CurMed->TypedParams.size())
+        Type = CurMed->TypedParams[I].Type;
+      return HighExpr::makeVar(Param, Type);
     }
   }
 
@@ -101,19 +115,10 @@ ExprPtr MedToHighConverter::medvarToExpr(const MedVar &V) {
 
   auto Key = varKey(V);
 
-  if (PhiOutputVars.count(Key))
-    return HighExpr::makeVar(V);
-
-  auto DIt = DefExpr.find(Key);
-  if (DIt != DefExpr.end()) {
-    auto UIt = UseCount.find(Key);
-    if (UIt != UseCount.end() && UIt->second == 1) {
-      if (DIt->second->Kind != ExprKind::Call &&
-          DIt->second->MemoryOrdering == NdMemoryOrdering::None &&
-          DIt->second->MemoryAddressSpace == NdMemoryAddressSpace::Default)
-        return DIt->second;
-    }
-  }
+  auto UIt = UseCount.find(Key);
+  if (UIt != UseCount.end() && UIt->second == 1)
+    if (auto Definition = inlineableDefinition(Key))
+      return Definition;
 
   return HighExpr::makeVar(V);
 }
@@ -140,14 +145,9 @@ ExprPtr MedToHighConverter::forceInlineExpr(const ExprPtr &E) {
 
   if (E->Kind == ExprKind::Var && E->Var.Id >= 0 && !E->Var.isConst()) {
     auto Key = varKey(E->Var);
-    if (!PhiOutputVars.count(Key)) {
-      auto DIt = DefExpr.find(Key);
-      if (DIt != DefExpr.end() && DIt->second->Kind != ExprKind::Call &&
-          DIt->second->MemoryOrdering == NdMemoryOrdering::None &&
-          DIt->second->MemoryAddressSpace == NdMemoryAddressSpace::Default &&
-          DIt->second.get() != E.get())
-        return forceInlineExpr(DIt->second);
-    }
+    if (auto Definition = inlineableDefinition(Key))
+      if (Definition.get() != E.get())
+        return forceInlineExpr(Definition);
   }
   auto Result = std::make_shared<HighExpr>(*E);
   for (size_t I = 0; I < Result->Operands.size(); ++I)
@@ -164,6 +164,7 @@ void MedToHighConverter::buildExpressions(const MedFunc &Med) {
   DefExpr.clear();
   CallOutputs.clear();
   PhiOutputVars.clear();
+  MemoryReadOutputs.clear();
 
   for (const MedCallClobber &Clobber : Med.CallClobbers)
     if (Clobber.PreservedPrefixSize > 0 && Clobber.PreservedInput.Id >= 0)
@@ -171,6 +172,8 @@ void MedToHighConverter::buildExpressions(const MedFunc &Med) {
 
   for (auto &Blk : Med.Blocks) {
     for (auto &Op : Blk.Ops) {
+      if (Op.Opcode == NdOp::LOAD && Op.Output.Id >= 0 && Op.Output.Size > 0)
+        MemoryReadOutputs.insert(varKey(Op.Output));
       for (uint8_t I = 0; I < Op.NumInputs; ++I)
         if (Op.Inputs[I].Id >= 0)
           UseCount[varKey(Op.Inputs[I])]++;
@@ -231,6 +234,7 @@ HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
   Func.ExceptionMetadata = Med.ExceptionMetadata;
   Func.ReturnType =
       Med.ReturnType ? Med.ReturnType : NdType::makeInt(inferReturnSize(Med));
+  Func.SourceTypeHint = Med.SourceTypeHint;
 
   for (auto &ML : Med.Locals) {
     HighLocal HL;
@@ -247,7 +251,11 @@ HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
     auto &MP = Med.Params[PI];
     HighParam HP;
     HP.Name = "arg" + std::to_string(PI);
-    if (PtrParamRegOffs.count(MP.RegOff) && !TRI.isFrameOrLinkReg(MP.RegOff))
+    if (Med.SourceTypeHint && PI < Med.TypedParams.size()) {
+      HP.Name = Med.TypedParams[PI].Name;
+      HP.Type = Med.TypedParams[PI].Type;
+    } else if (PtrParamRegOffs.count(MP.RegOff) &&
+               !TRI.isFrameOrLinkReg(MP.RegOff))
       HP.Type = NdType::makePtr();
     else
       HP.Type = NdType::makeInt(MP.Size);

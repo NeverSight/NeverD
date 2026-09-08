@@ -314,8 +314,7 @@ void parseChainedFixupsRebases(const uint8_t *BasePtr, size_t FileSize,
               detail::clearLocalPointerClassification(Img, ChainVA);
               Img.DyldBindSlots[ChainVA] =
                   ImportBindSlot{Record.Name, EffectiveAddend};
-              Img.recordImportStorageSlot(ChainVA, Record.Name,
-                                          EffectiveAddend,
+              Img.recordImportStorageSlot(ChainVA, Record.Name, EffectiveAddend,
                                           ImportStorageEvidence::LoaderBind);
               joinImportSlot(Img, Record.Name, Record.Module, ChainVA);
               ++NumRecorded;
@@ -343,6 +342,7 @@ void parseChainedFixupsRebases(const uint8_t *BasePtr, size_t FileSize,
           // and what the ELF loader does when it applies relocations.  Without
           // this the table entries read back as garbage (`target | next<<51`).
           Img.patchPtr(ChainVA, static_cast<uint64_t>(TargetVA));
+          Img.MachOResolvedChainedPointerSlots.insert(ChainVA);
         }
         if (Next == 0)
           break;

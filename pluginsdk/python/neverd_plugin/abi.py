@@ -607,6 +607,7 @@ _C_TYPES: dict[str, object] = {
     "void": None,
     "int": ctypes.c_int,
     "uint32_t": ctypes.c_uint32,
+    "size_t": ctypes.c_size_t,
     "unsigned": ctypes.c_uint,
     "unsigned short": ctypes.c_ushort,
     "unsigned long long": ctypes.c_ulonglong,
@@ -772,6 +773,12 @@ _declare(
     "neverd_decompile",
     "const char *",
     ["neverd_session_t", "neverd_va_t"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_objc_methods_json",
+    "const char *",
+    ["neverd_session_t", "size_t"],
     ownership=Ownership.OWNED_STRING,
 )
 _declare(

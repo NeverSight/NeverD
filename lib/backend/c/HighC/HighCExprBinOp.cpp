@@ -106,6 +106,29 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
   }
 
   switch (E.Op) {
+  case NdOp::INT_LEFT: {
+    const uint16_t Size = E.Type ? E.Type->Size : 0;
+    if (Size != 1 && Size != 2 && Size != 4 && Size != 8 && Size != 16)
+      break;
+    const uint16_t SourceSize =
+        E.Operands[0]->Type ? E.Operands[0]->Type->Size : Size;
+    const auto ResultType = typeToC(NdType::makeInt(Size, false));
+    const auto SourceType = typeToC(NdType::makeInt(SourceSize, false));
+    // uint8_t/uint16_t still undergo integer promotion in C. Shift in at
+    // least unsigned int, then restore the operation's exact result width.
+    const auto CarrierType =
+        typeToC(NdType::makeInt(Size < 4 ? 4 : Size, false));
+    const std::string Left = exprStr(*E.Operands[0]);
+    const std::string Right = exprStr(*E.Operands[1]);
+    const auto Shift = "(" + ResultType + ")((" + CarrierType + ")(" +
+                       SourceType + ")(" + Left + ") << (" + Right + "))";
+    if (E.Operands[1]->Kind == ExprKind::Const)
+      return E.Operands[1]->ConstVal < Size * 8u ? Shift : "0";
+    const auto CountType = typeToC(NdType::makeInt(
+        E.Operands[1]->Type ? E.Operands[1]->Type->Size : 8, false));
+    return "((" + CountType + ")(" + Right + ") < " +
+           std::to_string(Size * 8u) + " ? " + Shift + " : 0)";
+  }
   case NdOp::SUBBYTES: {
     std::string Src = exprStr(*E.Operands[0], 99);
     uint64_t ByteOff = 0;
@@ -119,7 +142,9 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
   case NdOp::CONCAT: {
     std::string Hi = exprStr(*E.Operands[0], 99);
     std::string Lo = exprStr(*E.Operands[1], 99);
-    std::string Ty = typeToC(E.Type);
+    // Concatenation shifts bit patterns, including a high half whose sign bit
+    // is set. Use an unsigned result-width carrier before the left shift.
+    std::string Ty = typeToC(NdType::makeInt(E.Type ? E.Type->Size : 8, false));
     int LoBits = E.Operands[1]->Type ? E.Operands[1]->Type->Size * 8 : 32;
     auto unsignedOperandType = [](const ExprPtr &Operand) {
       uint16_t Size = Operand->Type ? Operand->Type->Size : 4;
@@ -183,6 +208,7 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
     break;
   case NdOp::INT_LEFT:
     OpSym = " << ";
+    NeedsUnsignedCast = true;
     break;
   case NdOp::INT_RIGHT:
     OpSym = " >> ";
@@ -256,8 +282,8 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
 
   if (NeedsUnsignedCast && E.Operands[0]->Type) {
     auto UTy = typeToC(NdType::makeInt(E.Operands[0]->Type->Size, false));
-    LHS = "(" + UTy + ")" + LHS;
-    RHS = "(" + UTy + ")" + RHS;
+    LHS = "(" + UTy + ")" + exprStr(*E.Operands[0], 99);
+    RHS = "(" + UTy + ")" + exprStr(*E.Operands[1], 99);
   }
 
   std::string Result = LHS + OpSym + RHS;

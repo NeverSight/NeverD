@@ -1,6 +1,6 @@
-#include "NeverDLiftFixture.h"
+#include "AArch64HighCBehavior.h"
 
-class AArch64_Atomic : public NeverDLiftTest {
+class AArch64_Atomic : public AArch64HighCBehaviorTest {
 protected:
   void expectPairedClangSyntax(const fs::path &CFile,
                                const std::string &Source) {
@@ -12,7 +12,7 @@ protected:
 };
 
 static fs::path testObj() {
-    return fs::path(TEST_OBJ_DIR) / "test_atomic_a64.o";
+  return fs::path(TEST_OBJ_DIR) / "test_atomic_a64.o";
 }
 
 static std::string functionIR(const std::string &IR, const std::string &Name) {
@@ -40,21 +40,19 @@ static std::string functionC(const std::string &Source,
 }
 
 TEST_F(AArch64_Atomic, AllStagesPass) {
-    ASSERT_TRUE(fs::exists(testObj())) << "test_atomic_a64.o not built";
-    verifyAllStages(testObj());
+  ASSERT_TRUE(fs::exists(testObj())) << "test_atomic_a64.o not built";
+  verifyAllStages(testObj());
 }
 
-TEST_F(AArch64_Atomic, NoUnlifted) {
-    verifyNoUnlifted(testObj());
-}
+TEST_F(AArch64_Atomic, NoUnlifted) { verifyNoUnlifted(testObj()); }
 
 TEST_F(AArch64_Atomic, LdxrStxrLifted) {
-    auto r = liftToLowIR(testObj());
-    ASSERT_EQ(r.exitCode, 0);
-    bool has_load = r.out.find("LOAD") != std::string::npos;
-    bool has_store = r.out.find("STORE") != std::string::npos;
-    EXPECT_TRUE(has_load) << "Expected LOAD for LDXR";
-    EXPECT_TRUE(has_store) << "Expected STORE for STXR";
+  auto r = liftToLowIR(testObj());
+  ASSERT_EQ(r.exitCode, 0);
+  bool has_load = r.out.find("LOAD") != std::string::npos;
+  bool has_store = r.out.find("STORE") != std::string::npos;
+  EXPECT_TRUE(has_load) << "Expected LOAD for LDXR";
+  EXPECT_TRUE(has_store) << "Expected STORE for STXR";
 }
 
 TEST_F(AArch64_Atomic, ExclusiveOpsRemainTargetIntrinsics) {
@@ -133,76 +131,76 @@ TEST_F(AArch64_Atomic, HighCExclusiveOpsUseStandardBuiltinsAndCompile) {
 }
 
 TEST_F(AArch64_Atomic, BarrierLifted) {
-    auto r = liftToLowIR(testObj());
-    ASSERT_EQ(r.exitCode, 0);
+  auto r = liftToLowIR(testObj());
+  ASSERT_EQ(r.exitCode, 0);
 }
 
 TEST_F(AArch64_Atomic, LLVMIRNoVerifierErrors) {
-    verifyLLVMIRNoVerifierErrors(testObj());
+  verifyLLVMIRNoVerifierErrors(testObj());
 }
 
 TEST_F(AArch64_Atomic, LdarStlrKeepAcquireReleaseOrdering) {
-    auto r = liftToLLVMIR(testObj());
-    ASSERT_EQ(r.exitCode, 0) << r.err;
-    auto acquireLoad = r.out.find("load atomic i64");
-    ASSERT_NE(acquireLoad, std::string::npos) << r.out;
-    EXPECT_NE(r.out.find("load atomic i64", acquireLoad + 1),
-              std::string::npos)
-        << "An unused LDAR must remain observable:\n" << r.out;
-    EXPECT_NE(r.out.find("acquire, align 8"), std::string::npos) << r.out;
-    EXPECT_NE(r.out.find("store atomic i64"), std::string::npos) << r.out;
-    EXPECT_NE(r.out.find("release, align 8"), std::string::npos) << r.out;
+  auto r = liftToLLVMIR(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+  auto acquireLoad = r.out.find("load atomic i64");
+  ASSERT_NE(acquireLoad, std::string::npos) << r.out;
+  EXPECT_NE(r.out.find("load atomic i64", acquireLoad + 1), std::string::npos)
+      << "An unused LDAR must remain observable:\n"
+      << r.out;
+  EXPECT_NE(r.out.find("acquire, align 8"), std::string::npos) << r.out;
+  EXPECT_NE(r.out.find("store atomic i64"), std::string::npos) << r.out;
+  EXPECT_NE(r.out.find("release, align 8"), std::string::npos) << r.out;
 }
 
 TEST_F(AArch64_Atomic, HighCKeepsLdarStlrOrderingAndCompiles) {
-    auto r = decompileToHighC(testObj());
-    ASSERT_EQ(r.exitCode, 0) << r.err;
+  auto r = decompileToHighC(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
 
-    auto cFile = tmpFile("decompiled_high.c");
-    ASSERT_TRUE(fs::exists(cFile));
-    std::ifstream input(cFile);
-    ASSERT_TRUE(input.good());
-    std::string source((std::istreambuf_iterator<char>(input)),
-                       std::istreambuf_iterator<char>());
-    EXPECT_NE(source.find("__atomic_load_n"), std::string::npos) << source;
-    EXPECT_NE(source.find("__ATOMIC_ACQUIRE"), std::string::npos) << source;
-    EXPECT_NE(source.find("__atomic_store_n"), std::string::npos) << source;
-    EXPECT_NE(source.find("__ATOMIC_RELEASE"), std::string::npos) << source;
+  auto cFile = tmpFile("decompiled_high.c");
+  ASSERT_TRUE(fs::exists(cFile));
+  std::ifstream input(cFile);
+  ASSERT_TRUE(input.good());
+  std::string source((std::istreambuf_iterator<char>(input)),
+                     std::istreambuf_iterator<char>());
+  EXPECT_NE(source.find("__atomic_load_n"), std::string::npos) << source;
+  EXPECT_NE(source.find("__ATOMIC_ACQUIRE"), std::string::npos) << source;
+  EXPECT_NE(source.find("__atomic_store_n"), std::string::npos) << source;
+  EXPECT_NE(source.find("__ATOMIC_RELEASE"), std::string::npos) << source;
 
-    expectPairedClangSyntax(cFile, source);
+  expectPairedClangSyntax(cFile, source);
 }
 
 TEST_F(AArch64_Atomic, HighCUsesStandardOrderedI128Exchange) {
-    auto r = decompileToHighC(testObj());
-    ASSERT_EQ(r.exitCode, 0) << r.err;
+  auto r = decompileToHighC(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
 
-    auto cFile = tmpFile("decompiled_high.c");
-    ASSERT_TRUE(fs::exists(cFile));
-    std::ifstream input(cFile);
-    ASSERT_TRUE(input.good());
-    std::string source((std::istreambuf_iterator<char>(input)),
-                       std::istreambuf_iterator<char>());
-    EXPECT_NE(source.find("__atomic_exchange_n"), std::string::npos) << source;
-    EXPECT_NE(source.find("unsigned __int128"), std::string::npos) << source;
-    EXPECT_NE(source.find("__ATOMIC_RELAXED"), std::string::npos) << source;
-    EXPECT_NE(source.find("__ATOMIC_ACQUIRE"), std::string::npos) << source;
-    EXPECT_NE(source.find("__ATOMIC_RELEASE"), std::string::npos) << source;
-    EXPECT_NE(source.find("__ATOMIC_ACQ_REL"), std::string::npos) << source;
-    EXPECT_EQ(source.find("neverd_a64_swpp"), std::string::npos) << source;
+  auto cFile = tmpFile("decompiled_high.c");
+  ASSERT_TRUE(fs::exists(cFile));
+  std::ifstream input(cFile);
+  ASSERT_TRUE(input.good());
+  std::string source((std::istreambuf_iterator<char>(input)),
+                     std::istreambuf_iterator<char>());
+  EXPECT_NE(source.find("__atomic_exchange_n"), std::string::npos) << source;
+  EXPECT_NE(source.find("unsigned __int128"), std::string::npos) << source;
+  EXPECT_NE(source.find("__ATOMIC_RELAXED"), std::string::npos) << source;
+  EXPECT_NE(source.find("__ATOMIC_ACQUIRE"), std::string::npos) << source;
+  EXPECT_NE(source.find("__ATOMIC_RELEASE"), std::string::npos) << source;
+  EXPECT_NE(source.find("__ATOMIC_ACQ_REL"), std::string::npos) << source;
+  EXPECT_EQ(source.find("neverd_a64_swpp"), std::string::npos) << source;
 
-    expectPairedClangSyntax(cFile, source);
+  expectPairedClangSyntax(cFile, source);
 }
 
 TEST_F(AArch64_Atomic, SwppUsesOrderedAtomicI128Exchange) {
-    auto r = liftToLLVMIR(testObj());
-    ASSERT_EQ(r.exitCode, 0) << r.err;
+  auto r = liftToLLVMIR(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
 
-    EXPECT_NE(r.out.find("atomicrmw xchg ptr"), std::string::npos) << r.out;
-    EXPECT_NE(r.out.find("i128"), std::string::npos) << r.out;
-    EXPECT_NE(r.out.find("monotonic, align 16"), std::string::npos) << r.out;
-    EXPECT_NE(r.out.find("acquire, align 16"), std::string::npos) << r.out;
-    EXPECT_NE(r.out.find("release, align 16"), std::string::npos) << r.out;
-    EXPECT_NE(r.out.find("acq_rel, align 16"), std::string::npos) << r.out;
+  EXPECT_NE(r.out.find("atomicrmw xchg ptr"), std::string::npos) << r.out;
+  EXPECT_NE(r.out.find("i128"), std::string::npos) << r.out;
+  EXPECT_NE(r.out.find("monotonic, align 16"), std::string::npos) << r.out;
+  EXPECT_NE(r.out.find("acquire, align 16"), std::string::npos) << r.out;
+  EXPECT_NE(r.out.find("release, align 16"), std::string::npos) << r.out;
+  EXPECT_NE(r.out.find("acq_rel, align 16"), std::string::npos) << r.out;
 }
 
 TEST_F(AArch64_Atomic, LdclrpUsesOrderedAtomicI128And) {
@@ -256,12 +254,6 @@ TEST_F(AArch64_Atomic, LdclrpHighCUsesStandardAtomicFetchAndAndCompiles) {
     ASSERT_NE(Atomic, std::string::npos) << F;
     auto LineEnd = F.find('\n', Atomic);
     auto Call = F.substr(Atomic, LineEnd - Atomic);
-    const bool UsesParams = Call.find("arg1") != std::string::npos &&
-                            Call.find("arg2") != std::string::npos;
-    const bool UsesSavedParams = Call.find("v0 + 16") != std::string::npos &&
-                                 Call.find("v0 + 8") != std::string::npos;
-    EXPECT_TRUE(UsesParams || UsesSavedParams) << Call;
-
     auto LineBegin = F.rfind('\n', Atomic);
     LineBegin = LineBegin == std::string::npos ? 0 : LineBegin + 1;
     auto Equals = F.find('=', LineBegin);
@@ -274,6 +266,65 @@ TEST_F(AArch64_Atomic, LdclrpHighCUsesStandardAtomicFetchAndAndCompiles) {
   }
 
   expectPairedClangSyntax(cFile, source);
+
+  llvm::LLVMContext Context;
+  auto Module =
+      compileHighCFlow(cFile, "armv9.4-a+lse128+the+d128+rcpc3", Context);
+  ASSERT_TRUE(Module);
+  const struct {
+    const char *Name;
+    llvm::AtomicOrdering Ordering;
+  } Cases[] = {{"test_ldclrp", llvm::AtomicOrdering::Monotonic},
+               {"test_ldclrpa", llvm::AtomicOrdering::Acquire},
+               {"test_ldclrpal", llvm::AtomicOrdering::AcquireRelease},
+               {"test_ldclrpl", llvm::AtomicOrdering::Release}};
+  for (const auto &Case : Cases) {
+    SCOPED_TRACE(Case.Name);
+    const auto *Function = Module->getFunction(Case.Name);
+    ASSERT_TRUE(Function);
+    ASSERT_EQ(Function->arg_size(), 3u);
+    a64_highc_test::ValueFlow Flow(*Function);
+    ASSERT_TRUE(Flow.valid()) << "unresolved compiled memory value flow";
+    const llvm::AtomicRMWInst *RMW = nullptr;
+    for (const auto &Instruction : Function->front()) {
+      if (const auto *Candidate =
+              llvm::dyn_cast<llvm::AtomicRMWInst>(&Instruction)) {
+        ASSERT_FALSE(RMW) << "expected exactly one paired atomic operation";
+        RMW = Candidate;
+      }
+    }
+    ASSERT_TRUE(RMW);
+    EXPECT_EQ(RMW->getOperation(), llvm::AtomicRMWInst::And);
+    EXPECT_EQ(RMW->getOrdering(), Case.Ordering);
+    ASSERT_TRUE(RMW->getValOperand()->getType()->isIntegerTy(128));
+    EXPECT_EQ(Flow.origin(RMW->getPointerOperand()), Function->getArg(0));
+
+    // All 128 one-bit masks, zero and all ones distinguish each input bit's
+    // lane and complement. No RMW result is bound while evaluating the mask,
+    // so an accidental dependency on its own result cannot pass this oracle.
+    for (unsigned CaseIndex = 0; CaseIndex < 130; ++CaseIndex) {
+      llvm::APInt Combined(128, 0);
+      if (CaseIndex < 128)
+        Combined.setBit(CaseIndex);
+      else if (CaseIndex == 129)
+        Combined.setAllBits();
+      const auto Low = Combined.trunc(64);
+      const auto High = Combined.lshr(64).trunc(64);
+      a64_highc_test::ValueFlow::Bindings Inputs{{Function->getArg(1), Low},
+                                                 {Function->getArg(2), High}};
+      auto Mask = Flow.integer(RMW->getValOperand(), Inputs);
+      ASSERT_TRUE(Mask) << "mask depends on an unbound value";
+      EXPECT_EQ(*Mask, ~Combined) << "mask case " << CaseIndex;
+    }
+    const auto *Return =
+        llvm::dyn_cast<llvm::ReturnInst>(Function->front().getTerminator());
+    ASSERT_TRUE(Return);
+    // The current C projection returns the low half of the old memory value.
+    const auto Old = llvm::APInt(128, UINT64_C(0xfedcba9876543210));
+    auto Result = Flow.integer(Return->getReturnValue(), {{RMW, Old}});
+    ASSERT_TRUE(Result);
+    EXPECT_EQ(*Result, Old.trunc(64));
+  }
 }
 
 TEST_F(AArch64_Atomic, LdsetpUsesOrderedAtomicI128Or) {
@@ -438,8 +489,7 @@ TEST_F(AArch64_Atomic, RemainingLseRmwUsesOrderedAtomicInstructions) {
         << F;
     EXPECT_NE(F.find(std::string(", ") + Case.Type + " "), std::string::npos)
         << F;
-    EXPECT_NE(F.find(std::string(Case.Ordering) + ", align"),
-              std::string::npos)
+    EXPECT_NE(F.find(std::string(Case.Ordering) + ", align"), std::string::npos)
         << F;
     EXPECT_EQ(F.find("load i"), std::string::npos) << F;
     EXPECT_EQ(F.find("store i"), std::string::npos) << F;
