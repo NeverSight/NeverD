@@ -3111,6 +3111,14 @@ MedLLVMEmitter::traceTableBaseConst(const MedVar &V, int Depth, bool *SawLoad,
   if (!CurMedFunc || Depth > 8)
     return std::nullopt;
 
+  // Emission replaces this exact certified SSA occurrence with numeric zero.
+  // Its original call/pop computation need not be a foldable literal load.
+  if (valueIsAuthenticatedModelZero(V)) {
+    if (OriginSize)
+      *OriginSize = V.Size;
+    return uint64_t(0);
+  }
+
   const MedOp *Def = lookupDef(V);
   if (!Def)
     return std::nullopt;

@@ -16103,6 +16103,113 @@ TEST(LLVMCodePointerInvariantBoundary,
 }
 
 TEST(LLVMCodePointerInvariantBoundary,
+     AuthenticatedGOTZeroCompletesFrameReloadedFunctionIdentity) {
+  enum class Certificate { Exact, Missing, WrongSSA, DataAddress };
+  for (Certificate C : {Certificate::Missing, Certificate::WrongSSA,
+                        Certificate::DataAddress, Certificate::Exact}) {
+    SCOPED_TRACE(static_cast<int>(C));
+    constexpr va_t TargetVA = 0x1500;
+    BinaryImage Image;
+    Image.Arch = Arch::X86;
+    Image.Format = BinaryFormat::ELF;
+    Image.Bits = Bitness::Bits32;
+    Image.Base = 0x1000;
+    Segment Text;
+    Text.Name = ".text";
+    Text.VA = 0x1000;
+    Text.Size = 0x1000;
+    Text.FileSz = Text.Size;
+    Text.Data.resize(Text.Size);
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Image.Segments.push_back(std::move(Text));
+    ASSERT_EQ(Image.getPointerSize(), 4u);
+    ASSERT_TRUE(Image.isCodeAddress(TargetVA));
+    MedFunc Caller = makeFrameReloadedExactAddressIndirectCaller(Arch::X86);
+    Caller.Entry = 0x1420;
+    auto &Block = Caller.Blocks.front();
+    Block.StartAddr = Caller.Entry;
+    Block.EndAddr = Caller.Entry + 0x14;
+    auto &Ops = Caller.Blocks.front().Ops;
+    for (MedOp &Op : Ops)
+      Op.Addr = Op.Addr - TextVA + 0x1000;
+    auto makeTemp = [](int Id, uint16_t Size) {
+      MedVar V;
+      V.Kind = MedVar::Temp;
+      V.TheArch = Arch::X86;
+      V.Id = Id;
+      V.SSAVer = 1;
+      V.Size = Size;
+      return V;
+    };
+    MedVar Input = makeTemp(90, 4);
+    Input.Kind = MedVar::Param;
+    Input.Id = 0;
+    Caller.Params.push_back(Input);
+    MedVar GOT = makeTemp(91, 4);
+    MedVar Address = makeTemp(92, 4);
+    MedVar Wide = makeTemp(93, 8);
+    MedVar Narrow = makeTemp(94, 4);
+    std::vector<MedOp> Prefix;
+    auto append = [&](NdOp Opcode, MedVar Output,
+                      std::initializer_list<MedVar> Inputs) {
+      MedOp Op;
+      Op.Opcode = Opcode;
+      Op.Output = Output;
+      for (const auto &Value : Inputs)
+        Op.addInput(Value);
+      Prefix.push_back(std::move(Op));
+    };
+    append(NdOp::INT_ADD, GOT,
+           {Input, MedVar::makeConst(1, 4, ConstantAddressProvenance::Scalar)});
+    append(
+        NdOp::INT_ADD, Address,
+        {GOT, MedVar::makeConst(TargetVA, 4,
+                                C == Certificate::DataAddress
+                                    ? ConstantAddressProvenance::DataAddress
+                                    : ConstantAddressProvenance::CodeAddress)});
+    append(NdOp::INT_ZEXT, Wide, {Address});
+    append(NdOp::SUBBYTES, Narrow,
+           {Wide, MedVar::makeConst(0, 4, ConstantAddressProvenance::Scalar)});
+    Ops[1].Inputs[1] = Narrow;
+    Ops.insert(Ops.begin() + 1, Prefix.begin(), Prefix.end());
+    if (C != Certificate::Missing) {
+      MedVar Witness = GOT;
+      if (C == Certificate::WrongSSA)
+        ++Witness.SSAVer;
+      Caller.ScalarAddressModels.push_back(
+          {RelocatedInstructionScalarModelOccurrence::ModelKind::
+               I386ELFGOTBaseZero,
+           Witness});
+    }
+    MedFunc Callee = makeReturnFunction("got_zero_function", TargetVA);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit({Caller, Callee}, Context,
+                                        "got-zero-function-identity", Arch::X86,
+                                        {}, &Image, BinaryFormat::ELF);
+    const std::string Diagnostic = testing::internal::GetCapturedStderr();
+    if (C != Certificate::Exact) {
+      EXPECT_EQ(Module, nullptr) << Diagnostic;
+      continue;
+    }
+    ASSERT_NE(Module, nullptr) << Diagnostic;
+    expectValidModule(*Module);
+    auto *EmittedCaller = Module->getFunction(Caller.Name);
+    auto *EmittedCallee = Module->getFunction(Callee.Name);
+    ASSERT_NE(EmittedCaller, nullptr);
+    ASSERT_NE(EmittedCallee, nullptr);
+    auto Calls = callsIn(*EmittedCaller);
+    ASSERT_EQ(Calls.size(), 1u);
+    std::set<const llvm::Value *> Seen;
+    EXPECT_TRUE(valueReferencesTarget(Calls.front()->getCalledOperand(),
+                                      EmittedCallee, Seen));
+    std::set<const llvm::Value *> SeenIntegers;
+    EXPECT_FALSE(valueReferencesInteger(Calls.front()->getCalledOperand(),
+                                        TargetVA, SeenIntegers));
+  }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
      MaterializesFrameReloadedInteriorAddressAtOrdinaryReturnAcrossFormats) {
   for (BinaryFormat Format :
        {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF}) {
