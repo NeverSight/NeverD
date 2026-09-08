@@ -156,9 +156,18 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
            std::to_string(LoBits) + " | (" + Ty + ")((" + LoTy + ")(" + Lo +
            ")))";
   }
-  case NdOp::INT_CARRY:
-    return "((" + exprStr(*E.Operands[0]) + " + " + exprStr(*E.Operands[1]) +
-           ") < " + exprStr(*E.Operands[0]) + ")";
+  case NdOp::INT_CARRY: {
+    const uint16_t Size = E.Operands[0]->Type ? E.Operands[0]->Type->Size : 8;
+    const auto OperandType = typeToC(NdType::makeInt(Size, false));
+    const auto CarrierType =
+        typeToC(NdType::makeInt(Size < 4 ? 4 : Size, false));
+    const auto Left = "(" + OperandType + ")(" + exprStr(*E.Operands[0]) + ")";
+    const auto Right = "(" + OperandType + ")(" + exprStr(*E.Operands[1]) + ")";
+    // Carry uses unsigned bit patterns and the operand width, not the boolean
+    // result width. Restore that width after C promotes narrow operands.
+    return "((" + OperandType + ")((" + CarrierType + ")(" + Left + ") + (" +
+           CarrierType + ")(" + Right + ")) < (" + Left + "))";
+  }
   case NdOp::INT_SOVF:
     return "__builtin_add_overflow_p(" + exprStr(*E.Operands[0]) + ", " +
            exprStr(*E.Operands[1]) + ", (" + typeToC(E.Operands[0]->Type) +

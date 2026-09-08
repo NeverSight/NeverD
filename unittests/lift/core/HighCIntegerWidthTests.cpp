@@ -300,4 +300,47 @@ TEST(HighCIntegerWidths, ConcatAndLeftShiftExecuteWithoutSignedShiftUB) {
   compileAndExecute(emitFunctions(Functions) + executionHarness(Checks), true);
 }
 
+TEST(HighCIntegerWidths, CarryUsesUnsignedOperandWidthAtRuntime) {
+  std::vector<HighFunc> Functions;
+  std::string Checks;
+  for (uint16_t Width : {1, 2, 4, 8}) {
+    const uint64_t Max = UINT64_MAX >> (64 - Width * 8);
+    const uint64_t Sign = (Max >> 1) + 1;
+    struct Sample {
+      uint64_t Left;
+      uint64_t Right;
+      bool Carry;
+    };
+    const Sample Samples[] = {{0, 0, false},        {Max, 0, false},
+                              {Max, 1, true},       {1, Max, true},
+                              {Sign - 1, 1, false}, {Sign, Sign, true},
+                              {Max, Max, true},     {Sign, 1, false}};
+    for (bool LeftSigned : {false, true}) {
+      for (bool RightSigned : {false, true}) {
+        auto LeftType = NdType::makeInt(Width, LeftSigned);
+        auto RightType = NdType::makeInt(Width, RightSigned);
+        HighFunc Func;
+        Func.Name = "carry" + std::to_string(Width * 8) +
+                    (LeftSigned ? "_s" : "_u") + (RightSigned ? "s" : "u");
+        Func.ReturnType = NdType::makeInt(1, false);
+        Func.Params = {{"arg0", LeftType}, {"arg1", RightType}};
+        auto Carry = HighExpr::makeBinop(
+            NdOp::INT_CARRY, parameter(0, LeftType), parameter(1, RightType));
+        Carry->Type = Func.ReturnType;
+        returnValue(Func, Carry);
+        for (const auto &Sample : Samples) {
+          const auto Left = std::to_string(Sample.Left);
+          const auto Right = std::to_string(Sample.Right);
+          appendCheck(Checks, Func.Name,
+                      argument(LeftType, Left.c_str()) + ", " +
+                          argument(RightType, Right.c_str()),
+                      Sample.Carry ? "1" : "0");
+        }
+        Functions.push_back(std::move(Func));
+      }
+    }
+  }
+  compileAndExecute(emitFunctions(Functions) + executionHarness(Checks), false);
+}
+
 } // namespace
