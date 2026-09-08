@@ -12,6 +12,8 @@ void structureIfElse(HighFunc &, int, const MedFunc * = nullptr);
 void inlineSingleDefSingleUse(std::vector<HighStmt> &);
 void resolveRegAliases(std::vector<HighStmt> &);
 void simplifyAllExprs(std::vector<HighStmt> &);
+void recoverSwitchStatements(HighFunc &);
+void removeUnreachableCode(std::vector<HighStmt> &);
 void eliminateRegAliasCopies(HighFunc &);
 } // namespace neverd
 using namespace neverd;
@@ -136,6 +138,18 @@ std::optional<uint64_t> execute(const HighFunc &F, uint64_t Condition) {
       if (S.Kind == StmtKind::If || S.Kind == StmtKind::IfElse) {
         auto R = Run(Value(S.Cond) ? S.Body : S.ElseBody);
         if (R.Return || R.Target || R.Break || R.Continue)
+          return R;
+      }
+      if (S.Kind == StmtKind::Switch) {
+        const auto Selector = Value(S.SwitchExpr);
+        const std::vector<HighStmt> *Selected = &S.DefaultBody;
+        for (const auto &Case : S.Cases)
+          if (Case.Value == Selector) {
+            Selected = &Case.Body;
+            break;
+          }
+        auto R = Run(*Selected);
+        if (R.Return || R.Target || R.Continue)
           return R;
       }
       if (S.Kind == StmtKind::While) {
@@ -376,6 +390,56 @@ TEST(HighControlFlowSemantics, NegativeConstantFoldingPreservesBoundaryValues) {
       ASSERT_EQ(execute(F, 0), Expected);
       simplifyAllExprs(F.Body);
       EXPECT_EQ(execute(F, 0), Expected);
+    }
+  }
+}
+
+TEST(HighControlFlowSemantics, RecoveredSwitchPreservesUnmatchedReturn) {
+  HighFunc F;
+  for (unsigned Case = 0; Case < 3; ++Case) {
+    auto Branch = conditional(0x1000 + 4 * Case, 0x1100 + 0x100 * Case);
+    Branch.Cond = HighExpr::makeBinop(NdOp::INT_EQUAL, local(0),
+                                      HighExpr::makeConst(Case, 8));
+    F.Body.push_back(std::move(Branch));
+  }
+  F.Body.push_back(result(0x1010, HighExpr::makeConst(99, 8)));
+  for (unsigned Case = 0; Case < 3; ++Case)
+    F.Body.push_back(
+        result(0x1100 + 0x100 * Case, HighExpr::makeConst(Case + 10, 8)));
+  for (uint64_t Input : {0, 1, 2, 3, 255})
+    ASSERT_EQ(execute(F, Input), Input < 3 ? Input + 10 : 99);
+  recoverSwitchStatements(F);
+  for (uint64_t Input : {0, 1, 2, 3, 255}) {
+    SCOPED_TRACE(Input);
+    EXPECT_EQ(execute(F, Input), Input < 3 ? Input + 10 : 99);
+  }
+}
+
+TEST(HighControlFlowSemantics, SwitchCleanupPreservesContinuationPaths) {
+  for (StmtKind Exit : {StmtKind::Break, StmtKind::Goto, StmtKind::Return}) {
+    for (bool HasDefault : {false, true}) {
+      HighFunc F;
+      HighStmt Switch;
+      Switch.Kind = StmtKind::Switch;
+      Switch.SwitchExpr = local(0);
+      HighStmt End;
+      End.Kind = Exit;
+      End.GotoTarget = 0x1200;
+      End.RetVal = HighExpr::makeConst(10, 8);
+      SwitchCase Case;
+      Case.Value = 0;
+      Case.Body = {End};
+      Switch.Cases.push_back(Case);
+      if (HasDefault)
+        Switch.DefaultBody = {End};
+      F.Body = {Switch, result(0x1200, HighExpr::makeConst(99, 8))};
+      const auto Matching = execute(F, 0);
+      const auto Unmatched = execute(F, 1);
+      removeUnreachableCode(F.Body);
+      EXPECT_EQ(execute(F, 0), Matching);
+      EXPECT_EQ(execute(F, 1), Unmatched);
+      if (Exit == StmtKind::Return && HasDefault)
+        EXPECT_EQ(F.Body.size(), 1u);
     }
   }
 }

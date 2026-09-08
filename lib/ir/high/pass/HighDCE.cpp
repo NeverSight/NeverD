@@ -182,31 +182,14 @@ static bool eliminateDeadAssigns(std::vector<HighStmt> &Stmts,
 // Phase 0: Remove unreachable code after terminators
 //===----------------------------------------------------------------------===//
 
-static void removeUnreachableCode(std::vector<HighStmt> &Stmts) {
+void removeUnreachableCode(std::vector<HighStmt> &Stmts) {
   for (size_t I = 0; I < Stmts.size(); ++I) {
     bool IsTerminator = (Stmts[I].Kind == StmtKind::Return ||
                          Stmts[I].Kind == StmtKind::Break ||
                          Stmts[I].Kind == StmtKind::Continue);
 
-    if (!IsTerminator && Stmts[I].Kind == StmtKind::Switch) {
-      auto &SwitchStmt = Stmts[I];
-      bool AllTerminate = !SwitchStmt.Cases.empty();
-      for (auto &C : SwitchStmt.Cases) {
-        if (C.Body.empty() || (C.Body.back().Kind != StmtKind::Return &&
-                               C.Body.back().Kind != StmtKind::Break &&
-                               C.Body.back().Kind != StmtKind::Goto)) {
-          AllTerminate = false;
-          break;
-        }
-      }
-      if (AllTerminate && !SwitchStmt.DefaultBody.empty()) {
-        if (SwitchStmt.DefaultBody.back().Kind != StmtKind::Return &&
-            SwitchStmt.DefaultBody.back().Kind != StmtKind::Break &&
-            SwitchStmt.DefaultBody.back().Kind != StmtKind::Goto)
-          AllTerminate = false;
-      }
-      IsTerminator = AllTerminate;
-    }
+    if (!IsTerminator)
+      IsTerminator = switchAlwaysReturns(Stmts[I]);
 
     if (IsTerminator && I + 1 < Stmts.size()) {
       Stmts.erase(Stmts.begin() + static_cast<long>(I + 1), Stmts.end());

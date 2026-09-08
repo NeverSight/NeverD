@@ -203,22 +203,7 @@ void recoverSwitchStatements(HighFunc &Func) {
 
     if (I + 1 < Func.Body.size() && Func.Body[I].Kind == StmtKind::Switch) {
       auto &SwitchRef = Func.Body[I];
-      bool AllCasesTerminate = true;
-      for (auto &C : SwitchRef.Cases) {
-        if (C.Body.empty() || (C.Body.back().Kind != StmtKind::Return &&
-                               C.Body.back().Kind != StmtKind::Break &&
-                               C.Body.back().Kind != StmtKind::Goto)) {
-          AllCasesTerminate = false;
-          break;
-        }
-      }
-      if (!SwitchRef.DefaultBody.empty()) {
-        if (SwitchRef.DefaultBody.back().Kind != StmtKind::Return &&
-            SwitchRef.DefaultBody.back().Kind != StmtKind::Break &&
-            SwitchRef.DefaultBody.back().Kind != StmtKind::Goto)
-          AllCasesTerminate = false;
-      }
-      if (AllCasesTerminate) {
+      if (switchAlwaysReturns(SwitchRef)) {
         size_t J = I + 1;
         while (J < Func.Body.size()) {
           auto &Dead = Func.Body[J];

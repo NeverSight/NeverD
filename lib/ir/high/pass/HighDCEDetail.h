@@ -67,6 +67,7 @@ void eliminateRedundantStackStores(HighFunc &Func, Arch TargetArch);
 //===----------------------------------------------------------------------===//
 
 void simplifyAllExprs(std::vector<HighStmt> &Stmts);
+void removeUnreachableCode(std::vector<HighStmt> &Stmts);
 
 //===----------------------------------------------------------------------===//
 // Variable renaming and post-rename cleanup  (defined in HighVarRename.cpp)

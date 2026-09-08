@@ -380,6 +380,30 @@ void walkStmts(const std::vector<HighStmt> &Stmts, F &&Fn) {
 // High-level function
 //===----------------------------------------------------------------------===//
 
+/// Prove that a switch returns on every selector value. A missing default,
+/// a switch break, or a goto can still reach the following statements.
+inline bool switchAlwaysReturns(const HighStmt &Stmt) {
+  if (Stmt.Kind != StmtKind::Switch || Stmt.Cases.empty() ||
+      Stmt.DefaultBody.empty())
+    return false;
+  auto Returns = [](const std::vector<HighStmt> &Body) {
+    if (Body.empty() || Body.back().Kind != StmtKind::Return)
+      return false;
+    bool HasTransfer = false;
+    walkStmts(Body, [&](const HighStmt &S) {
+      HasTransfer |= S.Kind == StmtKind::Goto || S.Kind == StmtKind::Break ||
+                     S.Kind == StmtKind::Continue;
+    });
+    return !HasTransfer;
+  };
+  if (!Returns(Stmt.DefaultBody))
+    return false;
+  for (const auto &Case : Stmt.Cases)
+    if (!Returns(Case.Body))
+      return false;
+  return true;
+}
+
 struct HighParam {
   std::string Name;
   TypeRef Type;
