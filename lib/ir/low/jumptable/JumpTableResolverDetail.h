@@ -58,6 +58,11 @@ bool jumpTableTargetLoadUsesDefaultAddressSpace(llvm::ArrayRef<LowOp> Ops,
                                                 va_t Address, int Sequence,
                                                 const NdVar &Output);
 
+/// Interpret a scalar frame displacement after coercion to the LowIR arithmetic
+/// width; unsupported widths and address-provenance constants are rejected.
+std::optional<int64_t> stackSignedDelta(const NdVar &Value,
+                                        uint16_t ArithmeticSize);
+
 /// Checked signed frame-offset arithmetic used by stack-table proofs.  A
 /// failure is evidence incompleteness, never a wrapping offset.
 std::optional<int64_t> stackCheckedOffset(int64_t Base, int64_t Delta,

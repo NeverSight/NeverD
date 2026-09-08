@@ -108,47 +108,6 @@ bool intrinsicMayClobberFrameMemory(const LowOp &Op) {
   }
 }
 
-std::optional<int64_t> signedFrameDelta(const NdVar &Value,
-                                        uint16_t ArithmeticSize) {
-  if (!Value.isConst() || Value.Size == 0 || Value.Size > sizeof(uint64_t) ||
-      ArithmeticSize == 0 || ArithmeticSize > sizeof(uint64_t) ||
-      Value.Provenance != ConstantAddressProvenance::Scalar)
-    return std::nullopt;
-  const unsigned SourceBits = static_cast<unsigned>(Value.Size) * 8;
-  const unsigned ArithmeticBits = static_cast<unsigned>(ArithmeticSize) * 8;
-  const uint64_t SourceMask = SourceBits == 64
-                                  ? std::numeric_limits<uint64_t>::max()
-                                  : (uint64_t{1} << SourceBits) - 1;
-  const uint64_t ArithmeticMask = ArithmeticBits == 64
-                                      ? std::numeric_limits<uint64_t>::max()
-                                      : (uint64_t{1} << ArithmeticBits) - 1;
-
-  // LowIR arithmetic zero-extends the narrower operand to the operation's
-  // width before applying ADD/SUB.  Interpret signedness only after that
-  // coercion: i8(0xf0) in a 32-bit SP add is +240, while i32(0xfffffff0) is
-  // the genuine -16 frame displacement.  Sign-extending at the literal's own
-  // width would merge two different runtime frame epochs.
-  const uint64_t Raw = (Value.Offset & SourceMask) & ArithmeticMask;
-  const uint64_t Sign = uint64_t{1} << (ArithmeticBits - 1);
-  if ((Raw & Sign) == 0)
-    return static_cast<int64_t>(Raw);
-  return -1 - static_cast<int64_t>((~Raw) & ArithmeticMask);
-}
-
-std::optional<int64_t> checkedFrameOffset(int64_t Base, int64_t Delta,
-                                          bool Subtract) {
-  constexpr int64_t Min = std::numeric_limits<int64_t>::min();
-  constexpr int64_t Max = std::numeric_limits<int64_t>::max();
-  if (!Subtract) {
-    if ((Delta > 0 && Base > Max - Delta) || (Delta < 0 && Base < Min - Delta))
-      return std::nullopt;
-    return Base + Delta;
-  }
-  if ((Delta > 0 && Base < Min + Delta) || (Delta < 0 && Base > Max + Delta))
-    return std::nullopt;
-  return Base - Delta;
-}
-
 /// Architecture-neutral snapshot of the instruction facts needed by the
 /// jump-table provenance proof.  Keeping this separate from CFGBuilder's
 /// private InsnRecord lets the graph/data-flow implementation stay local to
@@ -3577,7 +3536,7 @@ bool CFGBuilder::analyzeTableLoadAddr(
       uint64_t Reg =
           traceToRegister(Ops, InnerIdx - 1, Ops[InnerIdx].Inputs[1 - W2]);
       if (Reg != InvalidVA) {
-        std::optional<int64_t> SignedDisp = signedFrameDelta(
+        std::optional<int64_t> SignedDisp = stackSignedDelta(
             Ops[AddIdx].Inputs[Which], Ops[AddIdx].Output.Size);
         const bool ExactModelReaches =
             ExactGOTOFF && exactI386ModelZeroReaches(Ops[InnerIdx], 1 - W2, D);
@@ -4265,11 +4224,11 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     if (Base.Kind == FrameResultKind::Invalid)
       return frameInvalid();
     const std::optional<int64_t> Delta =
-        signedFrameDelta(Constant, ArithmeticSize);
+        stackSignedDelta(Constant, ArithmeticSize);
     if (!Delta)
       return frameInvalid();
     const std::optional<int64_t> Offset =
-        checkedFrameOffset(Base.Offset, *Delta, Subtract);
+        stackCheckedOffset(Base.Offset, *Delta, Subtract);
     if (!Offset)
       return frameInvalid();
     // Preserve the affine delta while traversing a recursive frame cycle.  A
@@ -5063,9 +5022,9 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                 static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
           const int64_t ByteCount =
               static_cast<int64_t>(LengthValue.Value->Constant);
-          const std::optional<int64_t> DestinationEnd = checkedFrameOffset(
+          const std::optional<int64_t> DestinationEnd = stackCheckedOffset(
               DestinationOffset, ByteCount, /*Subtract=*/false);
-          const std::optional<int64_t> SlotEnd = checkedFrameOffset(
+          const std::optional<int64_t> SlotEnd = stackCheckedOffset(
               SlotOffset, static_cast<int64_t>(Size), /*Subtract=*/false);
           ExactDisjointMemset =
               DestinationEnd && SlotEnd &&
@@ -5137,10 +5096,10 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         Result = resolverInvalid();
         break;
       }
-      const std::optional<int64_t> StoreEndOpt = checkedFrameOffset(
+      const std::optional<int64_t> StoreEndOpt = stackCheckedOffset(
           StoreOffset, static_cast<int64_t>(StoredSize), false);
       const std::optional<int64_t> LoadEndOpt =
-          checkedFrameOffset(SlotOffset, static_cast<int64_t>(Size), false);
+          stackCheckedOffset(SlotOffset, static_cast<int64_t>(Size), false);
       if (!StoreEndOpt || !LoadEndOpt) {
         Found = true;
         Result = resolverInvalid();
@@ -6377,32 +6336,31 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         std::optional<ResolverValueExpr::Kind> EnvelopeKind;
         uint16_t EnvelopeInputSize = 0;
         std::function<bool(const ResolverValue &, unsigned)>
-            CollectUniformExtensionEnvelope =
-                [&](const ResolverValue &Arm, unsigned EnvelopeDepth) {
-                  if (!Arm || Arm->Size != Node->Size ||
-                      EnvelopeDepth > MaxResolverDepth || !consumeSymbolWork())
-                    return false;
-                  if ((Arm->K == ResolverValueExpr::Kind::ZeroExtend ||
-                       Arm->K == ResolverValueExpr::Kind::SignExtend) &&
-                      Arm->Input && Arm->Input->Size < Arm->Size) {
-                    if (!EnvelopeKind) {
-                      EnvelopeKind = Arm->K;
-                      EnvelopeInputSize = Arm->Input->Size;
-                      return true;
-                    }
-                    return *EnvelopeKind == Arm->K &&
-                           EnvelopeInputSize == Arm->Input->Size;
-                  }
-                  if (Arm->K != ResolverValueExpr::Kind::Merge ||
-                      Arm->Inputs.empty() ||
-                      !consumeSymbolWork(Arm->Inputs.size()))
-                    return false;
-                  return std::all_of(Arm->Inputs.begin(), Arm->Inputs.end(),
-                                     [&](const ResolverValue &Nested) {
-                                       return CollectUniformExtensionEnvelope(
-                                           Nested, EnvelopeDepth + 1);
-                                     });
-                };
+            CollectUniformExtensionEnvelope = [&](const ResolverValue &Arm,
+                                                  unsigned EnvelopeDepth) {
+              if (!Arm || Arm->Size != Node->Size ||
+                  EnvelopeDepth > MaxResolverDepth || !consumeSymbolWork())
+                return false;
+              if ((Arm->K == ResolverValueExpr::Kind::ZeroExtend ||
+                   Arm->K == ResolverValueExpr::Kind::SignExtend) &&
+                  Arm->Input && Arm->Input->Size < Arm->Size) {
+                if (!EnvelopeKind) {
+                  EnvelopeKind = Arm->K;
+                  EnvelopeInputSize = Arm->Input->Size;
+                  return true;
+                }
+                return *EnvelopeKind == Arm->K &&
+                       EnvelopeInputSize == Arm->Input->Size;
+              }
+              if (Arm->K != ResolverValueExpr::Kind::Merge ||
+                  Arm->Inputs.empty() || !consumeSymbolWork(Arm->Inputs.size()))
+                return false;
+              return std::all_of(Arm->Inputs.begin(), Arm->Inputs.end(),
+                                 [&](const ResolverValue &Nested) {
+                                   return CollectUniformExtensionEnvelope(
+                                       Nested, EnvelopeDepth + 1);
+                                 });
+            };
         const bool ExactHoistExtension =
             ExactModuloRecipeOnly && !Node->Root.empty() &&
             std::all_of(Node->Inputs.begin(), Node->Inputs.end(),
@@ -6995,9 +6953,9 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
           markIncomplete(QueryIndex);
         continue;
       }
-      const std::optional<int64_t> AdjustedCandidate = checkedFrameOffset(
+      const std::optional<int64_t> AdjustedCandidate = stackCheckedOffset(
           CandidateOffset, Query.FrameByteAddend, /*Subtract=*/false);
-      const std::optional<int64_t> AdjustedAlternative = checkedFrameOffset(
+      const std::optional<int64_t> AdjustedAlternative = stackCheckedOffset(
           AlternativeOffset, Query.AlternativeFrameByteAddend,
           /*Subtract=*/false);
       Results[QueryIndex] = AdjustedCandidate && AdjustedAlternative &&
@@ -7045,7 +7003,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
           markIncomplete(QueryIndex);
         continue;
       }
-      const std::optional<int64_t> AdjustedOffset = checkedFrameOffset(
+      const std::optional<int64_t> AdjustedOffset = stackCheckedOffset(
           SlotOffset, Query.FrameByteAddend, /*Subtract=*/false);
       if (!AdjustedOffset)
         continue;
@@ -9578,7 +9536,7 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
           CompleteAdd->Inputs[ConstantSide].Provenance !=
               ConstantAddressProvenance::Scalar)
         return false;
-      const std::optional<int64_t> Delta = signedFrameDelta(
+      const std::optional<int64_t> Delta = stackSignedDelta(
           CompleteAdd->Inputs[ConstantSide], CompleteAdd->Output.Size);
       const std::optional<va_t> ExpectedTable =
           checkedVAOffset(Displaced.ExpectedRuntimeBase, Displaced.ByteAddend);
@@ -9945,7 +9903,7 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
         if (SlotDelta >
             static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
           return false;
-        const std::optional<int64_t> FrameDelta = checkedFrameOffset(
+        const std::optional<int64_t> FrameDelta = stackCheckedOffset(
             FrameStorage.RuntimeBase.ByteAddend,
             static_cast<int64_t>(SlotDelta), /*Subtract=*/false);
         if (!FrameDelta)
@@ -10004,11 +9962,11 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
             CompleteAdd->Inputs[ConstantSide].Provenance !=
                 ConstantAddressProvenance::Scalar)
           return false;
-        const std::optional<int64_t> RawDelta = signedFrameDelta(
+        const std::optional<int64_t> RawDelta = stackSignedDelta(
             CompleteAdd->Inputs[ConstantSide], CompleteAdd->Output.Size);
         if (!RawDelta)
           return false;
-        const std::optional<int64_t> EffectiveDelta = checkedFrameOffset(
+        const std::optional<int64_t> EffectiveDelta = stackCheckedOffset(
             0, *RawDelta, CompleteAdd->Opcode == NdOp::INT_SUB);
         if (!EffectiveDelta ||
             *EffectiveDelta != FrameStorage.RuntimeBase.ByteAddend)
@@ -10866,11 +10824,11 @@ bool frameSlotKey(const std::vector<LowOp> &Ops, int FromIdx, NdVar AddrV,
       if (scaledIndexReg(Ops, D - 1, A.Inputs[1 - CW]) != InvalidVA)
         return false;
       const std::optional<int64_t> Delta =
-          signedFrameDelta(A.Inputs[CW], A.Output.Size);
+          stackSignedDelta(A.Inputs[CW], A.Output.Size);
       if (!Delta)
         return false;
       const std::optional<int64_t> Next =
-          checkedFrameOffset(Off, *Delta, false);
+          stackCheckedOffset(Off, *Delta, false);
       if (!Next)
         return false;
       Off = *Next;
@@ -10881,10 +10839,10 @@ bool frameSlotKey(const std::vector<LowOp> &Ops, int FromIdx, NdVar AddrV,
     if (A.Opcode == NdOp::INT_SUB && A.NumInputs >= 2 &&
         A.Inputs[1].isConst()) {
       const std::optional<int64_t> Delta =
-          signedFrameDelta(A.Inputs[1], A.Output.Size);
+          stackSignedDelta(A.Inputs[1], A.Output.Size);
       if (!Delta)
         return false;
-      const std::optional<int64_t> Next = checkedFrameOffset(Off, *Delta, true);
+      const std::optional<int64_t> Next = stackCheckedOffset(Off, *Delta, true);
       if (!Next)
         return false;
       Off = *Next;

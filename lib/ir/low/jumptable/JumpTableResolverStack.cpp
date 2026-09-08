@@ -35,8 +35,6 @@
 
 namespace neverd {
 
-namespace {
-
 std::optional<int64_t> stackSignedDelta(const NdVar &Value,
                                         uint16_t ArithmeticSize) {
   if (!Value.isConst() || Value.Size == 0 || Value.Size > sizeof(uint64_t) ||
@@ -51,14 +49,18 @@ std::optional<int64_t> stackSignedDelta(const NdVar &Value,
   const uint64_t ArithmeticMask = ArithmeticBits == 64
                                       ? std::numeric_limits<uint64_t>::max()
                                       : (uint64_t{1} << ArithmeticBits) - 1;
+
+  // LowIR arithmetic zero-extends the narrower operand to the operation's
+  // width before applying ADD/SUB.  Interpret signedness only after that
+  // coercion: i8(0xf0) in a 32-bit SP add is +240, while i32(0xfffffff0) is
+  // the genuine -16 frame displacement.  Sign-extending at the literal's own
+  // width would merge two different runtime frame epochs.
   const uint64_t Raw = (Value.Offset & SourceMask) & ArithmeticMask;
   const uint64_t Sign = uint64_t{1} << (ArithmeticBits - 1);
   if ((Raw & Sign) == 0)
     return static_cast<int64_t>(Raw);
   return -1 - static_cast<int64_t>((~Raw) & ArithmeticMask);
 }
-
-} // namespace
 
 std::optional<int64_t> stackCheckedOffset(int64_t Base, int64_t Delta,
                                           bool Subtract) {
@@ -87,9 +89,9 @@ std::optional<va_t> checkedVAOffset(va_t Base, int64_t Delta) {
   return Base - Amount;
 }
 
-std::optional<va_t>
-exactImmutableDataSpanOwner(const BinaryImage &Img, va_t Start, uint64_t Size,
-                            va_t ExpectedOwner) {
+std::optional<va_t> exactImmutableDataSpanOwner(const BinaryImage &Img,
+                                                va_t Start, uint64_t Size,
+                                                va_t ExpectedOwner) {
   if (Size == 0 || Size - 1 > InvalidVA - Start)
     return std::nullopt;
   const va_t Last = Start + Size - 1;
@@ -332,10 +334,9 @@ va_t CFGBuilder::resolveStackMaterializedTableSource(
     const auto DefsIt = IndexIt->second.find({Value.Space, Value.Offset});
     if (DefsIt == IndexIt->second.end())
       return -1;
-    const int Cutoff =
-        std::min(FromIdx, static_cast<int>(TraceOps.size()) - 1);
-    auto Def = std::upper_bound(DefsIt->second.begin(), DefsIt->second.end(),
-                                Cutoff);
+    const int Cutoff = std::min(FromIdx, static_cast<int>(TraceOps.size()) - 1);
+    auto Def =
+        std::upper_bound(DefsIt->second.begin(), DefsIt->second.end(), Cutoff);
     if (Def == DefsIt->second.begin())
       return -1;
     --Def;
@@ -422,7 +423,7 @@ va_t CFGBuilder::resolveStackMaterializedTableSource(
   int LoadPosInFunc = -1;
   const LowOp *DispatchLoad =
       LoadIdx >= 0 && LoadIdx < static_cast<int>(Ops.size()) ? &Ops[LoadIdx]
-                                                              : nullptr;
+                                                             : nullptr;
   for (auto It = Insns.lower_bound(CurrentFuncEntry);
        It != Insns.end() && It->first <= Rec.Addr; ++It) {
     if (!chargeEvidence())
@@ -798,40 +799,41 @@ va_t CFGBuilder::resolveStackMaterializedTableSource(
   };
   auto hasUsableAddressAuthority =
       [&](const RelocatedInstructionAddressOccurrence &Occurrence) {
-    if (Occurrence.Authority ==
-        RelocatedInstructionAddressProofKind::LoaderField)
-      return Occurrence.FieldVA != InvalidVA;
-    if (Occurrence.Authority != RelocatedInstructionAddressProofKind::
-                                    AArch64RelocationFreeDataDereference)
-      return false;
-    return Img.Arch == Arch::AArch64 && !Img.IsRelocatable &&
-           Occurrence.FieldVA == InvalidVA && Occurrence.DefinesOutput &&
-           !Occurrence.OutputMayDepend &&
-           Occurrence.Provenance == ConstantAddressProvenance::DataAddress &&
-           Occurrence.Width == Img.getPointerSize() &&
-           Occurrence.SeedInstructionAddr != InvalidVA &&
-           Occurrence.SeedOpSeq >= 0 &&
-           Occurrence.SeedOpcode == NdOp::COPY &&
-           Occurrence.SeedInputWitness.isConst() &&
-           Occurrence.SeedInputWitness.Provenance ==
-               ConstantAddressProvenance::AddressFragment &&
-           Occurrence.SeedInputWitness.Size == Img.getPointerSize() &&
-           Occurrence.SeedOutputWitness.isReg() &&
-           Occurrence.SeedOutputWitness.Size == Img.getPointerSize() &&
-           !Occurrence.ArithmeticProof.empty() &&
-           Occurrence.ArithmeticProof.back().InstructionAddr ==
-               Occurrence.InstructionAddr &&
-           Occurrence.ArithmeticProof.back().OpSeq == Occurrence.OpSeq &&
-           Occurrence.ArithmeticProof.back().Opcode ==
-               Occurrence.OutputOpcode &&
-           Occurrence.ArithmeticProof.back().OutputWitness ==
-               Occurrence.OutputWitness &&
-           Occurrence.DereferenceInstructionAddr != InvalidVA &&
-           Occurrence.DereferenceOpSeq >= 0 &&
-           (Occurrence.DereferenceOpcode == NdOp::LOAD ||
-            Occurrence.DereferenceOpcode == NdOp::STORE) &&
-           Occurrence.DereferenceAccessSize != 0;
-  };
+        if (Occurrence.Authority ==
+            RelocatedInstructionAddressProofKind::LoaderField)
+          return Occurrence.FieldVA != InvalidVA;
+        if (Occurrence.Authority != RelocatedInstructionAddressProofKind::
+                                        AArch64RelocationFreeDataDereference)
+          return false;
+        return Img.Arch == Arch::AArch64 && !Img.IsRelocatable &&
+               Occurrence.FieldVA == InvalidVA && Occurrence.DefinesOutput &&
+               !Occurrence.OutputMayDepend &&
+               Occurrence.Provenance ==
+                   ConstantAddressProvenance::DataAddress &&
+               Occurrence.Width == Img.getPointerSize() &&
+               Occurrence.SeedInstructionAddr != InvalidVA &&
+               Occurrence.SeedOpSeq >= 0 &&
+               Occurrence.SeedOpcode == NdOp::COPY &&
+               Occurrence.SeedInputWitness.isConst() &&
+               Occurrence.SeedInputWitness.Provenance ==
+                   ConstantAddressProvenance::AddressFragment &&
+               Occurrence.SeedInputWitness.Size == Img.getPointerSize() &&
+               Occurrence.SeedOutputWitness.isReg() &&
+               Occurrence.SeedOutputWitness.Size == Img.getPointerSize() &&
+               !Occurrence.ArithmeticProof.empty() &&
+               Occurrence.ArithmeticProof.back().InstructionAddr ==
+                   Occurrence.InstructionAddr &&
+               Occurrence.ArithmeticProof.back().OpSeq == Occurrence.OpSeq &&
+               Occurrence.ArithmeticProof.back().Opcode ==
+                   Occurrence.OutputOpcode &&
+               Occurrence.ArithmeticProof.back().OutputWitness ==
+                   Occurrence.OutputWitness &&
+               Occurrence.DereferenceInstructionAddr != InvalidVA &&
+               Occurrence.DereferenceOpSeq >= 0 &&
+               (Occurrence.DereferenceOpcode == NdOp::LOAD ||
+                Occurrence.DereferenceOpcode == NdOp::STORE) &&
+               Occurrence.DereferenceAccessSize != 0;
+      };
   auto exactStaticAddressMetadata =
       [&](const LowOp &Load, va_t StaticAddress,
           uint64_t AccessSize) -> std::optional<ExactStaticAddressMetadata> {
@@ -910,8 +912,7 @@ va_t CFGBuilder::resolveStackMaterializedTableSource(
   };
 
   auto exactStaticAddressMetadataAtUse =
-      [&](NdVar Value, int From,
-          va_t StaticAddress,
+      [&](NdVar Value, int From, va_t StaticAddress,
           uint64_t AccessSize) -> std::optional<ExactStaticAddressMetadata> {
     const RelocatedInstructionAddressOccurrence *Exact = nullptr;
     JumpTableValueOccurrence ExactProducer;
@@ -1233,9 +1234,8 @@ va_t CFGBuilder::resolveStackMaterializedTableSource(
           checkedVAOffset(ConstBaseVA, AddrDisp);
       if (!StaticAddress)
         return std::nullopt;
-      const auto StaticMetadata =
-          exactStaticAddressMetadataAtUse(AddrV, LdD - 1, *StaticAddress,
-                                          Ld.Output.Size);
+      const auto StaticMetadata = exactStaticAddressMetadataAtUse(
+          AddrV, LdD - 1, *StaticAddress, Ld.Output.Size);
       if (!StaticMetadata)
         return std::nullopt;
       if (Consumers) {
@@ -1267,9 +1267,8 @@ va_t CFGBuilder::resolveStackMaterializedTableSource(
           checkedVAOffset(*ExactRelocatedBase, AddrDisp);
       if (!StaticAddress)
         return std::nullopt;
-      const auto StaticMetadata =
-          exactStaticAddressMetadataAtUse(AddrV, LdD - 1, *StaticAddress,
-                                          Ld.Output.Size);
+      const auto StaticMetadata = exactStaticAddressMetadataAtUse(
+          AddrV, LdD - 1, *StaticAddress, Ld.Output.Size);
       if (!StaticMetadata)
         return std::nullopt;
       if (Consumers) {
@@ -1300,9 +1299,8 @@ va_t CFGBuilder::resolveStackMaterializedTableSource(
           checkedVAOffset(*Folded, AddrDisp);
       if (!StaticAddress)
         return std::nullopt;
-      const auto StaticMetadata =
-          exactStaticAddressMetadataAtUse(AddrV, LdD - 1, *StaticAddress,
-                                          Ld.Output.Size);
+      const auto StaticMetadata = exactStaticAddressMetadataAtUse(
+          AddrV, LdD - 1, *StaticAddress, Ld.Output.Size);
       if (!StaticMetadata)
         return std::nullopt;
       if (Consumers) {
@@ -1333,9 +1331,8 @@ va_t CFGBuilder::resolveStackMaterializedTableSource(
     const va_t I386Candidate = static_cast<uint32_t>(AddrDisp);
     if (std::optional<va_t> Exact =
             exactI386DataAddressAt(nullptr, -1, Ld.Addr, I386Candidate)) {
-      const auto StaticMetadata =
-          exactStaticAddressMetadataAtUse(AddrV, LdD - 1, *Exact,
-                                          Ld.Output.Size);
+      const auto StaticMetadata = exactStaticAddressMetadataAtUse(
+          AddrV, LdD - 1, *Exact, Ld.Output.Size);
       if (!StaticMetadata)
         return std::nullopt;
       if (Consumers) {
@@ -1715,8 +1712,7 @@ va_t CFGBuilder::resolveStackMaterializedTableSource(
         if (auto F = addrToConstVA(RegisterSource, I - 1);
             F && Img.getSegmentFor(*F)) {
           Folded = *F;
-          CopyLength =
-              scalarConstantAt(RegisterLength, I - 1, &LengthProducer);
+          CopyLength = scalarConstantAt(RegisterLength, I - 1, &LengthProducer);
           if (CopyLength)
             SourceMetadata = exactStaticAddressMetadataAtUse(
                 RegisterSource, I - 1, *F, *CopyLength);

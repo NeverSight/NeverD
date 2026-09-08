@@ -307,45 +307,6 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
   // certificate remains authoritative for publication.
   auto twoTableFrameSlotKey = [&](NdVar Address, int From, uint64_t &Base,
                                   int64_t &Offset) {
-    auto signedFrameDelta =
-        [](const NdVar &Value,
-           uint16_t ArithmeticSize) -> std::optional<int64_t> {
-      if (!Value.isConst() || Value.Size == 0 ||
-          Value.Size > sizeof(uint64_t) || ArithmeticSize == 0 ||
-          ArithmeticSize > sizeof(uint64_t) ||
-          Value.Provenance != ConstantAddressProvenance::Scalar)
-        return std::nullopt;
-      const unsigned SourceBits = static_cast<unsigned>(Value.Size) * CHAR_BIT;
-      const unsigned ArithmeticBits =
-          static_cast<unsigned>(ArithmeticSize) * CHAR_BIT;
-      const uint64_t SourceMask = SourceBits == 64
-                                      ? std::numeric_limits<uint64_t>::max()
-                                      : (uint64_t{1} << SourceBits) - 1;
-      const uint64_t ArithmeticMask = ArithmeticBits == 64
-                                          ? std::numeric_limits<uint64_t>::max()
-                                          : (uint64_t{1} << ArithmeticBits) - 1;
-      const uint64_t Raw = (Value.Offset & SourceMask) & ArithmeticMask;
-      const uint64_t Sign = uint64_t{1} << (ArithmeticBits - 1);
-      if ((Raw & Sign) == 0)
-        return static_cast<int64_t>(Raw);
-      return -1 - static_cast<int64_t>((~Raw) & ArithmeticMask);
-    };
-    auto checkedFrameOffset = [](int64_t Current, int64_t Delta,
-                                 bool Subtract) -> std::optional<int64_t> {
-      constexpr int64_t Min = std::numeric_limits<int64_t>::min();
-      constexpr int64_t Max = std::numeric_limits<int64_t>::max();
-      if (!Subtract) {
-        if ((Delta > 0 && Current > Max - Delta) ||
-            (Delta < 0 && Current < Min - Delta))
-          return std::nullopt;
-        return Current + Delta;
-      }
-      if ((Delta > 0 && Current < Min + Delta) ||
-          (Delta < 0 && Current > Max + Delta))
-        return std::nullopt;
-      return Current - Delta;
-    };
-
     // Preserve the legacy two-phase contract: first peel the guest-address
     // COPY/ZEXT envelope, then resolve the frame expression itself.  Each phase
     // has its own bounded depth and charges the same candidate transaction.
@@ -423,11 +384,11 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
         if (!Complete)
           return false;
         const std::optional<int64_t> Delta =
-            signedFrameDelta(Def.Inputs[ConstantSide], Def.Output.Size);
+            stackSignedDelta(Def.Inputs[ConstantSide], Def.Output.Size);
         if (!Delta)
           return false;
         const std::optional<int64_t> Next =
-            checkedFrameOffset(Offset, *Delta, false);
+            stackCheckedOffset(Offset, *Delta, false);
         if (!Next)
           return false;
         Offset = *Next;
@@ -438,11 +399,11 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
       if (Def.Opcode == NdOp::INT_SUB && Def.NumInputs >= 2 &&
           Def.Inputs[1].isConst()) {
         const std::optional<int64_t> Delta =
-            signedFrameDelta(Def.Inputs[1], Def.Output.Size);
+            stackSignedDelta(Def.Inputs[1], Def.Output.Size);
         if (!Delta)
           return false;
         const std::optional<int64_t> Next =
-            checkedFrameOffset(Offset, *Delta, true);
+            stackCheckedOffset(Offset, *Delta, true);
         if (!Next)
           return false;
         Offset = *Next;
