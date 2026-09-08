@@ -166,6 +166,58 @@ TEST_F(SemanticRoundTripIntegrity, ARM32StillComparesExecutedRoundtrip) {
   EXPECT_TRUE(FunctionCountCalled);
 }
 
+TEST_F(SemanticRoundTripIntegrity, CrossTargetIntrinsicsIgnoreHostLibcHeaders) {
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(
+      (fs::temp_directory_path() / "neverd host libc headers").string(),
+      Directory));
+  struct Cleanup {
+    fs::path Path;
+    ~Cleanup() {
+      std::error_code Error;
+      fs::remove_all(Path, Error);
+    }
+  } Guard{Directory.str().str()};
+  const fs::path HostHeaders = Guard.Path / "usr" / "include";
+  fs::create_directories(HostHeaders);
+  {
+    std::ofstream Header(HostHeaders / "stdint.h");
+    Header << "#error incompatible host libc header\n";
+    Header.close();
+    ASSERT_TRUE(Header);
+  }
+  RoundTripTC TC;
+  TC.Name = "fixture_cross_neon";
+  TC.CSrc = "#include <arm_neon.h>\n"
+            "#if !__STDC_HOSTED__\n"
+            "#error fixture must preserve hosted builtin semantics\n"
+            "#endif\n"
+            "unsigned fixture_cross_neon(unsigned a) {"
+            " return vget_lane_u32(vadd_u32(vdup_n_u32(a),"
+            " vdup_n_u32(1)), 0); }";
+  TC.Args = {41};
+  TC.OptLevel = 1;
+  TC.ExtraFlags = "--sysroot=" + neverd::test::shellQuote(Guard.Path.string());
+  for (bool ARM32 : {false, true}) {
+    SCOPED_TRACE(ARM32 ? "ARM32" : "AArch64");
+    FunctionCountCalled = false;
+    ::testing::TestPartResultArray Results;
+    {
+      ::testing::ScopedFakeTestPartResultReporter Reporter(
+          ::testing::ScopedFakeTestPartResultReporter::
+              INTERCEPT_ONLY_CURRENT_THREAD,
+          &Results);
+      if (ARM32)
+        roundTripARM32(TC);
+      else
+        roundTripAArch64(TC);
+    }
+    ASSERT_EQ(Results.size(), 0)
+        << (Results.size() ? Results.GetTestPartResult(0).message() : "");
+    EXPECT_TRUE(FunctionCountCalled);
+  }
+}
+
 TEST_F(SemanticRoundTripIntegrity, DataBearingRoundtripLinksBothArtifacts) {
   roundTripX64(dataSample());
 }

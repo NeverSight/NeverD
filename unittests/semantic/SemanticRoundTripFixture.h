@@ -342,9 +342,11 @@ private:
     std::string EffTarget =
         TC.ClangTargetOverride.empty() ? ClangTarget : TC.ClangTargetOverride;
     std::string CompileCmd =
-        "clang -target " + EffTarget + " -nostdlib -c " + OptFlag +
+        "clang -target " + EffTarget + " -nostdlib -nostdlibinc -c " + OptFlag +
         " -fno-stack-protector -fno-exceptions"
         " -fno-unwind-tables -fno-asynchronous-unwind-tables";
+    // Use Clang's target intrinsic headers without falling through to the
+    // host libc. Keep hosted builtin optimization semantics unchanged.
     // Normalize cross-target defaults across Clang distributions.  Apple Clang
     // enables Cortex-A15 FP/NEON instructions for gnueabi and selects Pentium 4
     // (SSE2) for i386, while Ubuntu Clang defaults those targets to soft-float
