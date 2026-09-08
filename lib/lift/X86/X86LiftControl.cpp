@@ -1358,7 +1358,7 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
   case X86_INS_LOOPNE: {
     if (X86.op_count < 1)
       break;
-    uint16_t CxSize = (TargetArch == Arch::X64) ? 8 : 4;
+    uint16_t CxSize = S.AddressSize;
     NdVar Rcx = NdVar::reg(x86reg::RCX, CxSize);
     S.emit(NdOp::INT_SUB, Rcx, {Rcx, NdVar::scalar(1, CxSize)});
     NdVar NZ = S.makeTemp(1);
