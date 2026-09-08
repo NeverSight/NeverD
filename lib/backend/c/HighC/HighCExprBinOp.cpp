@@ -230,6 +230,7 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
     NeedsUnsignedCast = true;
     break;
   case NdOp::INT_SDIV:
+    NeedsSignedCast = true;
     OpSym = " / ";
     break;
   case NdOp::INT_REM:
@@ -237,6 +238,7 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
     NeedsUnsignedCast = true;
     break;
   case NdOp::INT_SREM:
+    NeedsSignedCast = true;
     OpSym = " % ";
     break;
   case NdOp::INT_AND:

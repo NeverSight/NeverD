@@ -385,6 +385,56 @@ TEST(HighCIntegerWidths, SignedComparisonsFollowOpcodeAtRuntime) {
   compileAndExecute(emitFunctions(Functions) + executionHarness(Checks), false);
 }
 
+TEST(HighCIntegerWidths, DivisionAndRemainderFollowOpcodeAtRuntime) {
+  std::vector<HighFunc> Functions;
+  std::string Checks;
+  for (uint16_t Width : {1, 2, 4, 8}) {
+    const unsigned Bits = Width * 8;
+    const uint64_t Max = UINT64_MAX >> (64 - Bits);
+    const uint64_t Values[] = {0, 1, Max >> 1, (Max >> 1) + 1, Max};
+    for (bool LeftSigned : {false, true}) {
+      for (bool RightSigned : {false, true}) {
+        for (NdOp Op :
+             {NdOp::INT_SDIV, NdOp::INT_SREM, NdOp::INT_DIV, NdOp::INT_REM}) {
+          const bool SignedOp = Op == NdOp::INT_SDIV || Op == NdOp::INT_SREM;
+          const bool Remainder = Op == NdOp::INT_SREM || Op == NdOp::INT_REM;
+          auto LeftType = NdType::makeInt(Width, LeftSigned);
+          auto RightType = NdType::makeInt(Width, RightSigned);
+          HighFunc Func;
+          Func.Name = "divrem" + std::to_string(Bits) +
+                      (LeftSigned ? "_s" : "_u") + (RightSigned ? "s" : "u") +
+                      (SignedOp ? "_signed" : "_unsigned") +
+                      (Remainder ? "_rem" : "_div");
+          Func.ReturnType = NdType::makeInt(Width, false);
+          Func.Params = {{"arg0", LeftType}, {"arg1", RightType}};
+          auto Comparison = HighExpr::makeBinop(Op, parameter(0, LeftType),
+                                                parameter(1, RightType));
+          Comparison->Type = Func.ReturnType;
+          returnValue(Func, Comparison);
+          for (uint64_t Left : Values) {
+            for (uint64_t Right : Values) {
+              const llvm::APInt A(Bits, Left), B(Bits, Right);
+              if (B.isZero() || (A.isMinSignedValue() && B.isAllOnes()))
+                continue;
+              const auto Expected = std::to_string(
+                  (SignedOp ? (Remainder ? A.srem(B) : A.sdiv(B))
+                            : (Remainder ? A.urem(B) : A.udiv(B)))
+                      .getZExtValue());
+              appendCheck(
+                  Checks, Func.Name,
+                  argument(LeftType, std::to_string(Left).c_str()) + ", " +
+                      argument(RightType, std::to_string(Right).c_str()),
+                  Expected.c_str());
+            }
+          }
+          Functions.push_back(std::move(Func));
+        }
+      }
+    }
+  }
+  compileAndExecute(emitFunctions(Functions) + executionHarness(Checks), false);
+}
+
 TEST(HighCIntegerWidths, RightShiftsFollowOpcodeAndBoundCountsAtRuntime) {
   std::vector<HighFunc> Functions;
   std::string Checks;
