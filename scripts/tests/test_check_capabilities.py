@@ -1930,7 +1930,34 @@ class CapabilitySchemaTests(unittest.TestCase):
                 "CHILD_PID_FILE": str(child_pid_file),
             }
 
-            with mock.patch.dict(os.environ, environment):
+            real_popen = subprocess.Popen
+
+            def start_ready_process(*args, **kwargs):
+                process = real_popen(*args, **kwargs)
+                try:
+                    # Test group cleanup after both processes exist, not the
+                    # host scheduler's ability to start a shell in two seconds.
+                    deadline = time.monotonic() + 30.0
+                    while not all(
+                        path.is_file() and path.stat().st_size > 0
+                        for path in (parent_pid_file, child_pid_file)
+                    ):
+                        if process.poll() is not None:
+                            self.fail("process-group fixture exited before readiness")
+                        if time.monotonic() >= deadline:
+                            self.fail("process-group fixture did not become ready")
+                        time.sleep(0.01)
+                except BaseException:
+                    capabilities._terminate_build_process_tree(process)
+                    raise
+                return process
+
+            with (
+                mock.patch.dict(os.environ, environment),
+                mock.patch.object(
+                    capabilities.subprocess, "Popen", side_effect=start_ready_process
+                ),
+            ):
                 diagnostics = capabilities.build_configured_evidence(
                     {"schema": 2, "capabilities": []},
                     temporary / "build",
