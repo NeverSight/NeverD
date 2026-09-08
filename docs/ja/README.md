@@ -20,6 +20,6 @@
 | [Solana SBF 逆コンパイル](sbf.md) | SBF v0-v4、LLVM IR、C/Rust 出力、検証、既知の制限 |
 | [Android の Java 復元](android.md) | APK・DEX・smali の CLI 手順、実行環境、オプション、JSON レポート、エラー処理、検証の限界 |
 | [iOS ソース復元](ios.md) | IPA/.app/Mach-O 選択、Objective-C/Swift 本体と配置、CLI/export、カバレッジ、制限と実行検証 |
-| [ロードマップ](roadmap/README.md) | 状態：native format、EVM、Solana SBF を実装済み |
+| [ロードマップ](roadmap.md) | 状態：native format、EVM、Solana SBF を実装済み |
 | [English README](../../README.md) | 英語版 |
 | [他言語 README](../README.md) | その他のローカライズ版 |

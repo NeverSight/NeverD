@@ -20,6 +20,6 @@
 | [Декомпиляция Solana SBF](sbf.md) | SBF v0-v4, LLVM IR, вывод C/Rust, проверка и известные ограничения |
 | [Восстановление Java для Android](android.md) | APK, DEX и smali; настройка JADX/Python, CLI, отчёты JSON, ограничения и проверка |
 | [Восстановление исходников iOS](ios.md) | IPA/.app/Mach-O, тела и раскладки Objective-C/Swift, CLI/export, покрытие, ограничения и проверки выполнения |
-| [Дорожная карта](roadmap/README.md) | Статус: нативные форматы, EVM и Solana SBF реализованы |
+| [Дорожная карта](roadmap.md) | Статус: нативные форматы, EVM и Solana SBF реализованы |
 | [English README](../../README.md) | Английская версия |
 | [Другие языки](../README.md) | Остальные локализации |

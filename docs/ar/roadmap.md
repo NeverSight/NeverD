@@ -1,6 +1,6 @@
-**اللغات**: [English](../../roadmap/README.md) | [简体中文](../../zh-CN/roadmap/README.md) | [繁體中文](../../zh-TW/roadmap/README.md) | [日本語](../../ja/roadmap/README.md) | [한국어](../../ko/roadmap/README.md) | [Français](../../fr/roadmap/README.md) | [Deutsch](../../de/roadmap/README.md) | [Español](../../es/roadmap/README.md) | [Italiano](../../it/roadmap/README.md) | [Русский](../../ru/roadmap/README.md) | [العربية](README.md)
+**اللغات**: [English](../roadmap.md) | [简体中文](../zh-CN/roadmap.md) | [繁體中文](../zh-TW/roadmap.md) | [日本語](../ja/roadmap.md) | [한국어](../ko/roadmap.md) | [Français](../fr/roadmap.md) | [Deutsch](../de/roadmap.md) | [Español](../es/roadmap.md) | [Italiano](../it/roadmap.md) | [Русский](../ru/roadmap.md) | [العربية](roadmap.md)
 
-[← فهرس التوثيق](../README.md)
+[← فهرس التوثيق](README.md)
 
 # خارطة طريق NeverD
 
@@ -43,7 +43,7 @@ function selectors وABI variants الخاصة بكل standard وأشكال retu
 type غير متوافق. Amsterdam هدف
 Review/development صريح opt-in، ويبقى `latest` هو Fusaka. EOFv1/EIP-7692 غير
 مجدول وEIP-3540 في حالة Stagnant، فلا يُقدمان كسلوك mainnet نهائي. راجع
-[فك تجميع EVM](../evm.md).
+[فك تجميع EVM](evm.md).
 
 ### لماذا EVM
 
@@ -59,7 +59,7 @@ Review/development صريح opt-in، ويبقى `latest` هو Fusaka. EOFv1/EIP-
 
 - محمّل SBF · lifter eBPF/SBF 1:1 · Account/CPI · نفس الأنبوب · API موحّدة
 
-**الحالة:** اكتمل دعم عقود Anza `sbpf` الحالية من v0-v4. يدعم التنفيذ ملفات ELF القديمة ذات sections/relocations وملفات ELF الصارمة المعتمدة على program headers فقط، وقاعدة تعليمات كاملة حسب الإصدار، والتحقق الصارم، ومراحل Low/Med/High IR، ومراقبة syscall/CPI/account، وLLVM متحققًا منه، وC11 محمولًا، وRust مستقرًا وآمنًا، وتكامل CLI/C API، وoracle دلاليًا مستقلًا ومحدودًا للبايتكود الخام. يتتبع v4 المنبع؛ وتظل إمكانية نشره أو تشغيله على cluster معين معتمدة على feature activation لذلك cluster. راجع [تفكيك Solana SBF](../sbf.md).
+**الحالة:** اكتمل دعم عقود Anza `sbpf` الحالية من v0-v4. يدعم التنفيذ ملفات ELF القديمة ذات sections/relocations وملفات ELF الصارمة المعتمدة على program headers فقط، وقاعدة تعليمات كاملة حسب الإصدار، والتحقق الصارم، ومراحل Low/Med/High IR، ومراقبة syscall/CPI/account، وLLVM متحققًا منه، وC11 محمولًا، وRust مستقرًا وآمنًا، وتكامل CLI/C API، وoracle دلاليًا مستقلًا ومحدودًا للبايتكود الخام. يتتبع v4 المنبع؛ وتظل إمكانية نشره أو تشغيله على cluster معين معتمدة على feature activation لذلك cluster. راجع [تفكيك Solana SBF](sbf.md).
 
 ### لماذا Solana eBPF
 
@@ -78,7 +78,7 @@ Review/development صريح opt-in، ويبقى `latest` هو Fusaka. EOFv1/EIP-
 | دليل قابلية الوصول | حالة التحكم من مداخل معروفة مع نقطة ثابتة مستقلة لتحكم المهاجم وشاهد دقيق للجذر/سلسلة الاستدعاءات |
 | عقد الهوية | حلّ المصارف حسب الصيغة (IAT لـ PE وPLT لـ ELF وربط dyld لـ Mach-O) ومصادر الأسماء PDB / DWARF / MAP |
 
-**الحالة:** اكتملت Phase 1 لـ PE وELF وMach-O. يتضمن P0 تحليلًا مغلق العالم لدورة حياة الكومة والنسخ الخطر، ودليل schema-v1 إضافيًا مع إعادة تشغيل `process-input-v1` لقيم البيئة الحرفية الدقيقة ولأول استهلاك للدخل القياسي؛ وتبقى أنواع الإدخال الأخرى غير قابلة للإعادة مع سبب. يغطي P1 فيضان المكدس/العالمي والقراءات المحلية غير المهيأة وسلاسل التنسيق. تبقى تأثيرات الاستدعاء المجهولة أو القابلة للتطبيق جزئيًا UNKNOWN. تغطية الأحكام والهوية مثبتة بـ [`unittests/safety`](../../../unittests/safety) واختبار الطرف إلى الطرف [`SafetyIntegrationTests.cpp`](../../../unittests/safety/SafetyIntegrationTests.cpp) الذي يشغّل على كل مضيف مصفوفة PE/ELF/Mach-O × x86-64/AArch64 الإلزامية. انظر [تدقيق وصيد أمان الذاكرة](../memory-safety.md).
+**الحالة:** اكتملت Phase 1 لـ PE وELF وMach-O. يتضمن P0 تحليلًا مغلق العالم لدورة حياة الكومة والنسخ الخطر، ودليل schema-v1 إضافيًا مع إعادة تشغيل `process-input-v1` لقيم البيئة الحرفية الدقيقة ولأول استهلاك للدخل القياسي؛ وتبقى أنواع الإدخال الأخرى غير قابلة للإعادة مع سبب. يغطي P1 فيضان المكدس/العالمي والقراءات المحلية غير المهيأة وسلاسل التنسيق. تبقى تأثيرات الاستدعاء المجهولة أو القابلة للتطبيق جزئيًا UNKNOWN. تغطية الأحكام والهوية مثبتة بـ [`unittests/safety`](../../unittests/safety) واختبار الطرف إلى الطرف [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) الذي يشغّل على كل مضيف مصفوفة PE/ELF/Mach-O × x86-64/AArch64 الإلزامية. انظر [تدقيق وصيد أمان الذاكرة](memory-safety.md).
 
 يضيف slice الحالي بين الإجراءات `reachability.status` و
 `reachability.attacker_control` إلى schema v1 من دون تغيير `verdict` المستقل.
@@ -106,7 +106,7 @@ Review/development صريح opt-in، ويبقى `latest` هو Fusaka. EOFv1/EIP-
 |--------|---------|
 | تغطية الـ lifter | سد فجوات الأصلي دون إرخاء strict |
 | اختبارات دلالية | توسيع Unicorn / roundtrip |
-| ABI الإضافات | صيانة [ABI الإضافات الأصلية](../plugins.md) بوصفه عقد توسعة داخل العملية؛ تبقى قيم Loader وUI بيانات وصفية حتى تتوفر واجهات مضيف صريحة |
+| ABI الإضافات | صيانة [ABI الإضافات الأصلية](plugins.md) بوصفه عقد توسعة داخل العملية؛ تبقى قيم Loader وUI بيانات وصفية حتى تتوفر واجهات مضيف صريحة |
 | التوثيق / المصفوفة | تحديث README بعد الاختبارات فقط |
 
 ---

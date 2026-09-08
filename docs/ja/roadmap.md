@@ -1,6 +1,6 @@
-**Languages**: [English](../../roadmap/README.md) | [简体中文](../../zh-CN/roadmap/README.md) | [繁體中文](../../zh-TW/roadmap/README.md) | [日本語](README.md) | [한국어](../../ko/roadmap/README.md) | [Français](../../fr/roadmap/README.md) | [Deutsch](../../de/roadmap/README.md) | [Español](../../es/roadmap/README.md) | [Italiano](../../it/roadmap/README.md) | [Русский](../../ru/roadmap/README.md) | [العربية](../../ar/roadmap/README.md)
+**Languages**: [English](../roadmap.md) | [简体中文](../zh-CN/roadmap.md) | [繁體中文](../zh-TW/roadmap.md) | [日本語](roadmap.md) | [한국어](../ko/roadmap.md) | [Français](../fr/roadmap.md) | [Deutsch](../de/roadmap.md) | [Español](../es/roadmap.md) | [Italiano](../it/roadmap.md) | [Русский](../ru/roadmap.md) | [العربية](../ar/roadmap.md)
 
-[← ドキュメント索引](../README.md)
+[← ドキュメント索引](README.md)
 
 # NeverD ロードマップ
 
@@ -49,7 +49,7 @@ selector が standard を捏造したり非互換な return type を借用した
 Amsterdam は Review/development の
 explicit opt-in target で、`latest` は Fusaka のままです。EOFv1/EIP-7692 は未予定、
 EIP-3540 は Stagnant であり、確定 mainnet behavior として扱いません。詳細は
-[EVM 逆コンパイル](../evm.md)を参照してください。
+[EVM 逆コンパイル](evm.md)を参照してください。
 
 ### なぜ EVM か
 
@@ -71,7 +71,7 @@ EIP-3540 は Stagnant であり、確定 mainnet behavior として扱いませ�
 - **CFG と構造化出力** — ネイティブと同じパイプライン
 - **CLI / C API** — 統一 session API
 
-**状況：** 現行 Anza `sbpf` v0-v4 コントラクトへの対応は完了しています。従来の section/relocation ELF と厳格な program-header-only ELF、完全なバージョン別命令データベース、厳格な検証、段階化された Low/Med/High IR、syscall/CPI/account の観測、検証済み LLVM、移植可能な C11、安全な stable Rust、CLI/C API 統合、および独立した有界 raw-bytecode セマンティック oracle を実装済みです。v4 は upstream に追従しますが、特定クラスターでのデプロイ・実行可否は、そのクラスターの feature activation に依存します。詳しくは [Solana SBF 逆コンパイル](../sbf.md) を参照してください。
+**状況：** 現行 Anza `sbpf` v0-v4 コントラクトへの対応は完了しています。従来の section/relocation ELF と厳格な program-header-only ELF、完全なバージョン別命令データベース、厳格な検証、段階化された Low/Med/High IR、syscall/CPI/account の観測、検証済み LLVM、移植可能な C11、安全な stable Rust、CLI/C API 統合、および独立した有界 raw-bytecode セマンティック oracle を実装済みです。v4 は upstream に追従しますが、特定クラスターでのデプロイ・実行可否は、そのクラスターの feature activation に依存します。詳しくは [Solana SBF 逆コンパイル](sbf.md) を参照してください。
 
 ### なぜ Solana eBPF か
 
@@ -92,7 +92,7 @@ EIP-3540 は Stagnant であり、確定 mainnet behavior として扱いませ�
 | 到達可能性証拠 | 既知エントリからの制御状態、独立した攻撃者制御の固定点、正確なルート／呼び出し鎖の証人 |
 | 識別契約 | 形式ごとのシンク解決（PE IAT、ELF PLT、Mach-O dyld bind）と PDB / DWARF / MAP の名前出所 |
 
-**状態：** PE、ELF、Mach-O の Phase 1 は実装済みです。P0 はヒープ寿命と危険なコピーの閉世界解析、および正確なリテラル環境値と最初の標準入力消費に対する schema v1 の追加的な `process-input-v1` 再生証拠を含みます。その他の入力種別は理由付きで再生不能のままです。P1 はスタック／グローバル越境、未初期化ローカル読み、書式文字列をカバーします。未知または部分的にしか適用できない呼び出し効果は UNKNOWN のままです。判定と識別の被覆は [`unittests/safety`](../../../unittests/safety) と、全ホストで必須の PE/ELF/Mach-O × x86-64/AArch64 6 セル fixture 行列を実行するエンドツーエンド [`SafetyIntegrationTests.cpp`](../../../unittests/safety/SafetyIntegrationTests.cpp) で固定。詳細は [メモリ安全性の監査とハント](../memory-safety.md)。
+**状態：** PE、ELF、Mach-O の Phase 1 は実装済みです。P0 はヒープ寿命と危険なコピーの閉世界解析、および正確なリテラル環境値と最初の標準入力消費に対する schema v1 の追加的な `process-input-v1` 再生証拠を含みます。その他の入力種別は理由付きで再生不能のままです。P1 はスタック／グローバル越境、未初期化ローカル読み、書式文字列をカバーします。未知または部分的にしか適用できない呼び出し効果は UNKNOWN のままです。判定と識別の被覆は [`unittests/safety`](../../unittests/safety) と、全ホストで必須の PE/ELF/Mach-O × x86-64/AArch64 6 セル fixture 行列を実行するエンドツーエンド [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) で固定。詳細は [メモリ安全性の監査とハント](memory-safety.md)。
 
 現在の手続き間スライスは、独立した `verdict` を変えずに schema v1 へ
 `reachability.status` と `reachability.attacker_control` を追加します。
@@ -120,7 +120,7 @@ concolic アダプタは独立した解析面であり、Phase 1 の安全性レ
 |------|------|
 | Lifter カバレッジ | strict を緩めずネイティブ缺口を縮める |
 | セマンティック試験 | 新 ISA とともに Unicorn / roundtrip を拡大 |
-| プラグイン ABI | [ネイティブプラグイン ABI](../plugins.md) をプロセス内 extension contract として維持する。Loader と UI の値は明示的な host API ができるまで metadata のみ |
+| プラグイン ABI | [ネイティブプラグイン ABI](plugins.md) をプロセス内 extension contract として維持する。Loader と UI の値は明示的な host API ができるまで metadata のみ |
 | 文書 / 行列 | 試験通過後にのみ README を更新 |
 
 ---

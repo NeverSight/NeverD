@@ -20,6 +20,6 @@
 | [Solana SBF 디컴파일](sbf.md) | SBF v0-v4, LLVM IR, C/Rust 출력, 검증 및 알려진 제한 사항 |
 | [Android Java 복구](android.md) | APK·DEX·smali CLI 흐름, 실행 환경, 옵션, JSON 보고서, 오류 처리 및 검증 제한 |
 | [iOS 소스 복원](ios.md) | IPA/.app/Mach-O 선택, Objective-C/Swift 본문과 배치, CLI/export, 범위, 제한 및 실행 검증 |
-| [로드맵](roadmap/README.md) | 상태: native format, EVM, Solana SBF 구현 완료 |
+| [로드맵](roadmap.md) | 상태: native format, EVM, Solana SBF 구현 완료 |
 | [English README](../../README.md) | 영어 버전 |
 | [기타 언어 README](../README.md) | 나머지 현지화 버전 |

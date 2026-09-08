@@ -1,6 +1,6 @@
-**Languages**: [English](README.md) | [简体中文](../zh-CN/roadmap/README.md) | [繁體中文](../zh-TW/roadmap/README.md) | [日本語](../ja/roadmap/README.md) | [한국어](../ko/roadmap/README.md) | [Français](../fr/roadmap/README.md) | [Deutsch](../de/roadmap/README.md) | [Español](../es/roadmap/README.md) | [Italiano](../it/roadmap/README.md) | [Русский](../ru/roadmap/README.md) | [العربية](../ar/roadmap/README.md)
+**Languages**: [English](roadmap.md) | [简体中文](zh-CN/roadmap.md) | [繁體中文](zh-TW/roadmap.md) | [日本語](ja/roadmap.md) | [한국어](ko/roadmap.md) | [Français](fr/roadmap.md) | [Deutsch](de/roadmap.md) | [Español](es/roadmap.md) | [Italiano](it/roadmap.md) | [Русский](ru/roadmap.md) | [العربية](ar/roadmap.md)
 
-[← Documentation Index](../README.md)
+[← Documentation Index](README.md)
 
 # NeverD Roadmap
 
@@ -19,10 +19,10 @@ Finish container-level support for targets the loaders already partially recogni
 | Mach-O i386 | Apply common clang relocations; thin objects first |
 
 **Status:** Complete. Format-level coverage is locked by
-[`COFFARMFormatTests.cpp`](../../unittests/lift/format/COFFARMFormatTests.cpp),
-[`MachOI386RelocationTests.cpp`](../../unittests/lift/format/MachOI386RelocationTests.cpp),
+[`COFFARMFormatTests.cpp`](../unittests/lift/format/COFFARMFormatTests.cpp),
+[`MachOI386RelocationTests.cpp`](../unittests/lift/format/MachOI386RelocationTests.cpp),
 and the PE/Mach-O cases in
-[`PatchFormatTests.cpp`](../../unittests/lift/format/PatchFormatTests.cpp). Mach-O i386
+[`PatchFormatTests.cpp`](../unittests/lift/format/PatchFormatTests.cpp). Mach-O i386
 uses PIC and no-PIC thin objects because modern macOS hosts cannot link
 historical i386 executables.
 
@@ -62,7 +62,7 @@ invent a standard or borrow an incompatible return type. Amsterdam is an
 explicit opt-in Review/development target;
 `latest` remains Fusaka. EOFv1/EIP-7692 is unscheduled and EIP-3540 is Stagnant,
 so neither is represented as finalized mainnet behavior. See
-[EVM decompilation](../evm.md) for the host
+[EVM decompilation](evm.md) for the host
 ABI and the intentionally explicit limits around dynamic jumps, external host
 effects, heuristic high-level naming, and EOF bytecode.
 
@@ -93,7 +93,7 @@ verification, staged Low/Med/High IR, syscall/CPI/account observations,
 verified LLVM, portable C11, safe stable Rust, CLI/C API integration, and an
 independent bounded raw-bytecode semantic oracle. v4 is tracked from upstream;
 whether it can be deployed or executed on a particular cluster still depends
-on that cluster's feature activation. See [Solana SBF decompilation](../sbf.md).
+on that cluster's feature activation. See [Solana SBF decompilation](sbf.md).
 
 ### Why Solana eBPF in NeverD?
 
@@ -134,12 +134,12 @@ commands, and both Python methods. Report-level `control_reachable` and
 `attacker_reachable` counts are
 therefore reachability tallies, not alternate verdict counts.
 Verdict and identity coverage is locked by
-[`unittests/safety`](../../unittests/safety) (catalog, scanner, argument
+[`unittests/safety`](../unittests/safety) (catalog, scanner, argument
 prefilter, object model, hunt, audit) and an end-to-end
-[`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp)
+[`SafetyIntegrationTests.cpp`](../unittests/safety/SafetyIntegrationTests.cpp)
 that runs the mandatory PE/ELF/Mach-O × x86-64/AArch64 fixture matrix on every
 host. See
-[Memory-safety audit & hunt](../memory-safety.md).
+[Memory-safety audit & hunt](memory-safety.md).
 
 P2 work is deliberately decomposed into versioned boundaries:
 
@@ -183,7 +183,7 @@ Cross-cutting work that unblocks the items above and improves today’s native e
 |------|-----------|
 | Lifter coverage | Close remaining native opcode gaps without relaxing strict mode |
 | Semantic tests | Expand Unicorn / roundtrip coverage as new ISAs land |
-| Plugin ABI | Maintain the [native plugin ABI](../plugins.md) as an in-process extension contract; Loader and UI values remain metadata until explicit host APIs exist |
+| Plugin ABI | Maintain the [native plugin ABI](plugins.md) as an in-process extension contract; Loader and UI values remain metadata until explicit host APIs exist |
 | Docs / matrix | Update README support tables only after tests land |
 
 ---

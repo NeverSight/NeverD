@@ -11,7 +11,7 @@ NeverD 是一个语义优先的二进制分析项目。有价值的贡献应当�
 
 开始修改前，请阅读[架构指南](architecture.md)。测试套件的选择请参考
 [测试指南](testing.md)，产品规划请参考
-[路线图](roadmap/README.md)。
+[路线图](roadmap.md)。
 
 ## 前置条件
 

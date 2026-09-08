@@ -20,6 +20,6 @@ Projektüberblick, Build und CLI stehen in der Repository-README. Architektur- u
 | [Solana-SBF-Dekompilation](sbf.md) | SBF v0-v4, LLVM IR, C-/Rust-Ausgabe, Verifikation und bekannte Grenzen |
 | [Java-Rekonstruktion für Android](android.md) | Experimentelle APK-/DEX-/Smali-CLI, Laufzeitumgebungen, Multidex, JSON-Bericht, Fehlerbehandlung und Grenzen |
 | [iOS-Quelltextrekonstruktion](ios.md) | IPA/.app/Mach-O, Objective-C-/Swift-Körper und Layouts, CLI/Export, Abdeckung, Grenzen und Ausführungstests |
-| [Roadmap](roadmap/README.md) | Status: Native Formate, EVM und Solana SBF implementiert |
+| [Roadmap](roadmap.md) | Status: Native Formate, EVM und Solana SBF implementiert |
 | [English README](../../README.md) | Englische Version |
 | [Andere Sprachen](../README.md) | Weitere lokalisierte Versionen |

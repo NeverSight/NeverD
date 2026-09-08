@@ -27,7 +27,7 @@ class CapabilitySchemaTests(unittest.TestCase):
             "status": "experimental",
             "owner": "pass-ir",
             "targets": ["x86_64"],
-            "docs": ["docs/roadmap/README.md"],
+            "docs": ["docs/roadmap.md"],
             "limitations": [],
             "tests": [],
             "public_surfaces": {

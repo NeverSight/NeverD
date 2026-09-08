@@ -848,7 +848,7 @@
         "aarch64"
       ],
       "docs": [
-        "docs/roadmap/README.md",
+        "docs/roadmap.md",
         "docs/memory-safety.md",
         "docs/python-plugins.md"
       ],
@@ -1011,7 +1011,7 @@
         "aarch64"
       ],
       "docs": [
-        "docs/roadmap/README.md",
+        "docs/roadmap.md",
         "docs/memory-safety.md"
       ],
       "limitations": [

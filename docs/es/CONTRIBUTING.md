@@ -15,7 +15,7 @@ Mantenga los avisos de terceros bajo sus licencias originales.
 
 Antes de editar, lea la [guía de arquitectura](architecture.md). Use la
 [guía de pruebas](testing.md) para elegir suites y la
-[hoja de ruta](roadmap/README.md) para consultar el trabajo de producto
+[hoja de ruta](roadmap.md) para consultar el trabajo de producto
 planificado.
 
 ## Requisitos previos

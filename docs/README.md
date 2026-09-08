@@ -10,7 +10,7 @@ English guides live directly in `docs/`. Translations are grouped in language
 directories: `ar/`, `de/`, `es/`, `fr/`, `it/`, `ja/`, `ko/`, `ru/`, `zh-CN/`,
 and `zh-TW/`. Each language directory contains a `README.md` documentation index,
 a `project.md` project overview, topic guides, `CONTRIBUTING.md`, `ATTRIBUTION.md`,
-and `roadmap/README.md`. Shared images remain in `assets/`.
+and `roadmap.md`. Shared images remain in `assets/`.
 
 | Document | Description |
 |----------|-------------|
@@ -26,5 +26,5 @@ and `roadmap/README.md`. Shared images remain in `assets/`.
 | [iOS source recovery](ios.md) | IPA/.app/Mach-O selection, Objective-C/Swift bodies and layouts, CLI/export, coverage, limitations, and execution checks |
 | [EVM decompilation](evm.md) | EVM inputs, hardforks, staged IR, C/LLVM host ABI, Solidity reconstruction, and limitations |
 | [Solana SBF decompilation](sbf.md) | SBF v0-v4 ELF rules, staged IR, syscalls, C/Rust/LLVM backends, and host contracts |
-| [Roadmap](roadmap/README.md) | Status: native formats, EVM, and Solana SBF implemented |
+| [Roadmap](roadmap.md) | Status: native formats, EVM, and Solana SBF implemented |
 | Localized documentation | Use the language links above to open each language's index and project overview |

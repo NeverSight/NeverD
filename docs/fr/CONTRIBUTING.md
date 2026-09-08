@@ -16,7 +16,7 @@ leurs licences d’origine.
 
 Avant toute modification, lisez le [guide d’architecture](architecture.md).
 Consultez le [guide des tests](testing.md) pour choisir une suite et la
-[feuille de route](roadmap/README.md) pour les travaux produit planifiés.
+[feuille de route](roadmap.md) pour les travaux produit planifiés.
 
 ## Prérequis
 

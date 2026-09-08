@@ -18,7 +18,7 @@ PE · ELF · Mach-O · EVM · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64
 ![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-informational.svg)
 [![SDK](https://img.shields.io/badge/SDK-C%20%2B%20Python-orange.svg)](#sdk-and-plugins)
 
-[Documentation](docs/README.md) · [Roadmap](docs/roadmap/README.md) · [Contributing](CONTRIBUTING.md)
+[Documentation](docs/README.md) · [Roadmap](docs/roadmap.md) · [Contributing](CONTRIBUTING.md)
 
 </div>
 

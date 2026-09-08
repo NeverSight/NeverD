@@ -1,6 +1,6 @@
-**語言**: [English](../../roadmap/README.md) | [简体中文](../../zh-CN/roadmap/README.md) | [繁體中文](README.md) | [日本語](../../ja/roadmap/README.md) | [한국어](../../ko/roadmap/README.md) | [Français](../../fr/roadmap/README.md) | [Deutsch](../../de/roadmap/README.md) | [Español](../../es/roadmap/README.md) | [Italiano](../../it/roadmap/README.md) | [Русский](../../ru/roadmap/README.md) | [العربية](../../ar/roadmap/README.md)
+**語言**: [English](../roadmap.md) | [简体中文](../zh-CN/roadmap.md) | [繁體中文](roadmap.md) | [日本語](../ja/roadmap.md) | [한국어](../ko/roadmap.md) | [Français](../fr/roadmap.md) | [Deutsch](../de/roadmap.md) | [Español](../es/roadmap.md) | [Italiano](../it/roadmap.md) | [Русский](../ru/roadmap.md) | [العربية](../ar/roadmap.md)
 
-[← 文件索引](../README.md)
+[← 文件索引](README.md)
 
 # NeverD 路線圖
 
@@ -47,7 +47,7 @@ selector、逐標準 ABI variant 與成功 return shape 彼此分離，因此共
 既不能憑空證明某個標準，也不會借用不相容的 return type。Amsterdam 僅是明確
 opt-in 的 Review/development target；`latest` 仍為 Fusaka。EOFv1/EIP-7692 尚未排程，
 EIP-3540 為 Stagnant，兩者都不冒充已定案 mainnet 行為。host ABI 與限制見
-[EVM 反編譯](../evm.md)。
+[EVM 反編譯](evm.md)。
 
 ### 為什麼做 EVM？
 
@@ -69,7 +69,7 @@ EIP-3540 為 Stagnant，兩者都不冒充已定案 mainnet 行為。host ABI �
 - **CFG 與結構化輸出** — 與原生相同管線
 - **CLI / C API** — 統一的 session 入口
 
-**狀態：** 目前 Anza `sbpf` v0-v4 合約支援已完成。實作支援舊式 section/relocation ELF 與嚴格的僅 program-header ELF、完整的版本化指令資料庫、嚴格驗證、分階段 Low/Med/High IR、syscall/CPI/account 觀察、已驗證的 LLVM、可攜式 C11、安全的穩定版 Rust、CLI/C API 整合，以及獨立且有界的原始位元組碼語意 oracle。v4 會跟隨上游維護；能否在特定叢集部署或執行仍取決於該叢集的 feature activation。詳見 [Solana SBF 反編譯](../sbf.md)。
+**狀態：** 目前 Anza `sbpf` v0-v4 合約支援已完成。實作支援舊式 section/relocation ELF 與嚴格的僅 program-header ELF、完整的版本化指令資料庫、嚴格驗證、分階段 Low/Med/High IR、syscall/CPI/account 觀察、已驗證的 LLVM、可攜式 C11、安全的穩定版 Rust、CLI/C API 整合，以及獨立且有界的原始位元組碼語意 oracle。v4 會跟隨上游維護；能否在特定叢集部署或執行仍取決於該叢集的 feature activation。詳見 [Solana SBF 反編譯](sbf.md)。
 
 ### 為什麼做 Solana eBPF？
 
@@ -90,7 +90,7 @@ EIP-3540 為 Stagnant，兩者都不冒充已定案 mainnet 行為。host ABI �
 | 可達性證據 | 從已知進入點出發的控制狀態、獨立的攻擊者控制固定點，以及精確的根／呼叫鏈見證 |
 | 身分契約 | 依格式解析匯（PE IAT、ELF PLT、Mach-O dyld bind）以及 PDB / DWARF / MAP 名稱來源 |
 
-**狀態：** PE、ELF、Mach-O 的 Phase 1 已實作。P0 包含封閉世界堆積生命週期與危險複製分析；schema v1 的增量證據可為精確字面環境值及第一次受支援的 `read(0)` 系列標準輸入消耗提供 `process-input-v1` 重播，其他輸入類型保持不可重播並附帶原因。P1 已涵蓋堆疊／全域越界、未初始化區域讀取與格式字串。未知或只能部分套用的呼叫效果保持 UNKNOWN。判定與身分覆蓋由 [`unittests/safety`](../../../unittests/safety) 以及在每個主機強制執行 PE/ELF/Mach-O × x86-64/AArch64 六單元 fixture 矩陣的端到端 [`SafetyIntegrationTests.cpp`](../../../unittests/safety/SafetyIntegrationTests.cpp) 鎖定。詳見 [記憶體安全稽核與獵取](../memory-safety.md)。
+**狀態：** PE、ELF、Mach-O 的 Phase 1 已實作。P0 包含封閉世界堆積生命週期與危險複製分析；schema v1 的增量證據可為精確字面環境值及第一次受支援的 `read(0)` 系列標準輸入消耗提供 `process-input-v1` 重播，其他輸入類型保持不可重播並附帶原因。P1 已涵蓋堆疊／全域越界、未初始化區域讀取與格式字串。未知或只能部分套用的呼叫效果保持 UNKNOWN。判定與身分覆蓋由 [`unittests/safety`](../../unittests/safety) 以及在每個主機強制執行 PE/ELF/Mach-O × x86-64/AArch64 六單元 fixture 矩陣的端到端 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) 鎖定。詳見 [記憶體安全稽核與獵取](memory-safety.md)。
 
 目前程序間切片在不改變獨立 `verdict` 的前提下，為 schema v1 加入
 `reachability.status` 與 `reachability.attacker_control`。它報告
@@ -117,7 +117,7 @@ concolic 轉接器是獨立分析面，並非對 Phase 1 安全報告驗收契�
 |------|------|
 | Lifter 覆蓋 | 在不放鬆 strict 的前提下縮小原生操作碼缺口 |
 | 語意測試 | 新 ISA 落地時擴展 Unicorn / roundtrip 覆蓋 |
-| 外掛 ABI | 維護[原生外掛 ABI](../plugins.md)這項處理程序內擴充契約；在出現明確的宿主 API 前，Loader 與 UI 值仍僅是中繼資料 |
+| 外掛 ABI | 維護[原生外掛 ABI](plugins.md)這項處理程序內擴充契約；在出現明確的宿主 API 前，Loader 與 UI 值仍僅是中繼資料 |
 | 文件 / 矩陣 | 僅在測試落地後更新 README 支援表 |
 
 ---

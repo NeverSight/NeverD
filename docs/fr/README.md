@@ -20,6 +20,6 @@ L’aperçu du projet, la compilation et le CLI se trouvent dans le README du d�
 | [Décompilation Solana SBF](sbf.md) | SBF v0-v4, LLVM IR, sorties C/Rust, vérification et limites connues |
 | [Reconstruction Java pour Android](android.md) | CLI expérimentale APK/DEX/smali, environnements d’exécution, multidex, rapport JSON, dépannage et limites |
 | [Récupération des sources iOS](ios.md) | IPA/.app/Mach-O, corps et dispositions Objective-C/Swift, CLI/export, couverture, limites et tests exécutés |
-| [Feuille de route](roadmap/README.md) | État : formats natifs, EVM et Solana SBF implémentés |
+| [Feuille de route](roadmap.md) | État : formats natifs, EVM et Solana SBF implémentés |
 | [English README](../../README.md) | Version anglaise |
 | [Autres langues](../README.md) | Autres versions localisées |

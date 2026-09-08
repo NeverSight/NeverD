@@ -20,6 +20,6 @@
 | [تفكيك Solana SBF](sbf.md) | ‏SBF v0-v4، وLLVM IR، ومخرجات C/Rust، والتحقق، والقيود المعروفة |
 | [استعادة Java من Android](android.md) | APK وDEX وsmali؛ إعداد JADX/Python، وواجهة سطر الأوامر، وتقارير JSON، والقيود والتحقق |
 | [استعادة مصادر iOS](ios.md) | اختيار IPA/.app/Mach-O وأجسام وتخطيطات Objective-C/Swift وCLI/export والتغطية والحدود والتحقق بالتنفيذ |
-| [خارطة الطريق](roadmap/README.md) | الحالة: الصيغ الأصلية وEVM وSolana SBF مكتملة |
+| [خارطة الطريق](roadmap.md) | الحالة: الصيغ الأصلية وEVM وSolana SBF مكتملة |
 | [English README](../../README.md) | النسخة الإنجليزية |
 | [لغات أخرى](../README.md) | بقية الإصدارات المترجمة |

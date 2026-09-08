@@ -1,6 +1,6 @@
-**Sprachen**: [English](../../roadmap/README.md) | [简体中文](../../zh-CN/roadmap/README.md) | [繁體中文](../../zh-TW/roadmap/README.md) | [日本語](../../ja/roadmap/README.md) | [한국어](../../ko/roadmap/README.md) | [Français](../../fr/roadmap/README.md) | [Deutsch](README.md) | [Español](../../es/roadmap/README.md) | [Italiano](../../it/roadmap/README.md) | [Русский](../../ru/roadmap/README.md) | [العربية](../../ar/roadmap/README.md)
+**Sprachen**: [English](../roadmap.md) | [简体中文](../zh-CN/roadmap.md) | [繁體中文](../zh-TW/roadmap.md) | [日本語](../ja/roadmap.md) | [한국어](../ko/roadmap.md) | [Français](../fr/roadmap.md) | [Deutsch](roadmap.md) | [Español](../es/roadmap.md) | [Italiano](../it/roadmap.md) | [Русский](../ru/roadmap.md) | [العربية](../ar/roadmap.md)
 
-[← Dokumentationsindex](../README.md)
+[← Dokumentationsindex](README.md)
 
 # NeverD-Roadmap
 
@@ -44,7 +44,7 @@ Formen bleiben getrennt; ein geteilter ERC-Selector kann weder einen Standard
 erfinden noch einen unvereinbaren Rückgabetyp übernehmen. Amsterdam ist ein
 explizites opt-in Review-/Development-Target; `latest` bleibt Fusaka.
 EOFv1/EIP-7692 ist nicht geplant und EIP-3540 Stagnant, also keine finale
-Mainnet-Semantik. Siehe [EVM-Dekompilation](../evm.md).
+Mainnet-Semantik. Siehe [EVM-Dekompilation](evm.md).
 
 ### Warum EVM
 
@@ -60,7 +60,7 @@ Mainnet-Semantik. Siehe [EVM-Dekompilation](../evm.md).
 
 - SBF-Loader · 1:1-eBPF/SBF-Lifter · Account/CPI · gleiche Pipeline · einheitliche API
 
-**Status:** Die Unterstützung für die aktuellen Anza-`sbpf`-Verträge v0-v4 ist abgeschlossen. Implementiert sind ältere Section-/Relocation-ELFs und strikte Program-Header-only-ELFs, eine vollständige versionierte Instruktionsdatenbank, strikte Verifikation, gestufte Low/Med/High IR, Syscall-/CPI-/Account-Beobachtungen, verifiziertes LLVM, portables C11, sicheres stabiles Rust, CLI-/C-API-Integration sowie ein unabhängiges, begrenztes semantisches Raw-Bytecode-Oracle. v4 wird gemäß Upstream nachgeführt; ob es auf einem bestimmten Cluster deployt oder ausgeführt werden kann, hängt weiterhin von dessen Feature-Aktivierung ab. Siehe [Solana-SBF-Dekompilation](../sbf.md).
+**Status:** Die Unterstützung für die aktuellen Anza-`sbpf`-Verträge v0-v4 ist abgeschlossen. Implementiert sind ältere Section-/Relocation-ELFs und strikte Program-Header-only-ELFs, eine vollständige versionierte Instruktionsdatenbank, strikte Verifikation, gestufte Low/Med/High IR, Syscall-/CPI-/Account-Beobachtungen, verifiziertes LLVM, portables C11, sicheres stabiles Rust, CLI-/C-API-Integration sowie ein unabhängiges, begrenztes semantisches Raw-Bytecode-Oracle. v4 wird gemäß Upstream nachgeführt; ob es auf einem bestimmten Cluster deployt oder ausgeführt werden kann, hängt weiterhin von dessen Feature-Aktivierung ab. Siehe [Solana-SBF-Dekompilation](sbf.md).
 
 ### Warum Solana eBPF
 
@@ -79,7 +79,7 @@ Ein geliftetes Binärfile auf Heap-Lebensdauerfehler (Leak, Double-Free, Use-aft
 | Erreichbarkeitsevidenz | Kontrollstatus ab bekannten Einstiegen plus unabhängiger Angreifer-Fixpunkt und exakter Wurzel-/Aufrufkettenzeuge |
 | Identitätsvertrag | Senkenauflösung je Format (PE-IAT, ELF-PLT, Mach-O-dyld-Bind) und PDB-/DWARF-/MAP-Namensquellen |
 
-**Status:** Phase 1 ist für PE, ELF und Mach-O implementiert. P0 umfasst Closed-World-Analysen für Heap-Lebensdauer und gefährliche Kopien sowie additive Schema-v1-Evidenz mit `process-input-v1`-Replay für exakte literale Umgebungswerte und den ersten unterstützten `read(0)`-Familienaufruf auf der Standardeingabe; andere Eingabearten bleiben mit Begründung nicht abspielbar. P1 deckt Stack-/Global-Überläufe, uninitialisierte lokale Reads und Formatstrings ab. Unbekannte oder nur teilweise anwendbare Aufrufeffekte bleiben UNKNOWN. Urteils- und Identitätsabdeckung ist durch [`unittests/safety`](../../../unittests/safety) und den End-to-End-[`SafetyIntegrationTests.cpp`](../../../unittests/safety/SafetyIntegrationTests.cpp) festgeschrieben, der auf jedem Host die verpflichtende PE/ELF/Mach-O × x86-64/AArch64-Matrix ausführt. Siehe [Speicher-Audit und Hunt](../memory-safety.md).
+**Status:** Phase 1 ist für PE, ELF und Mach-O implementiert. P0 umfasst Closed-World-Analysen für Heap-Lebensdauer und gefährliche Kopien sowie additive Schema-v1-Evidenz mit `process-input-v1`-Replay für exakte literale Umgebungswerte und den ersten unterstützten `read(0)`-Familienaufruf auf der Standardeingabe; andere Eingabearten bleiben mit Begründung nicht abspielbar. P1 deckt Stack-/Global-Überläufe, uninitialisierte lokale Reads und Formatstrings ab. Unbekannte oder nur teilweise anwendbare Aufrufeffekte bleiben UNKNOWN. Urteils- und Identitätsabdeckung ist durch [`unittests/safety`](../../unittests/safety) und den End-to-End-[`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) festgeschrieben, der auf jedem Host die verpflichtende PE/ELF/Mach-O × x86-64/AArch64-Matrix ausführt. Siehe [Speicher-Audit und Hunt](memory-safety.md).
 
 Der aktuelle interprozedurale Slice ergänzt `reachability.status` und
 `reachability.attacker_control` in Schema v1, ohne den unabhängigen `verdict` zu
@@ -118,7 +118,7 @@ false und liefern keine Operationstabelle.
 |---------|----------|
 | Lifter-Abdeckung | Native Lücken schließen ohne Strict zu lockern |
 | Semantiktests | Unicorn / Roundtrip ausbauen |
-| Plugin-ABI | Die [native Plugin-ABI](../plugins.md) als In-Process-Erweiterungsvertrag pflegen; Loader- und UI-Werte bleiben Metadaten, bis explizite Host-APIs existieren |
+| Plugin-ABI | Die [native Plugin-ABI](plugins.md) als In-Process-Erweiterungsvertrag pflegen; Loader- und UI-Werte bleiben Metadaten, bis explizite Host-APIs existieren |
 | Docs / Matrix | README erst nach Tests aktualisieren |
 
 ---

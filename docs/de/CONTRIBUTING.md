@@ -16,7 +16,7 @@ Dritter unter ihren ursprünglichen Lizenzen bei.
 Lesen Sie vor der Bearbeitung den
 [Architekturleitfaden](architecture.md). Nutzen Sie den
 [Testleitfaden](testing.md) zur Auswahl der Suite und die
-[Roadmap](roadmap/README.md) für geplante Produktarbeit.
+[Roadmap](roadmap.md) für geplante Produktarbeit.
 
 ## Voraussetzungen
 

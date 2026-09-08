@@ -16,7 +16,7 @@ originali.
 Prima di apportare modifiche, leggi la
 [guida all’architettura](architecture.md). Usa la
 [guida ai test](testing.md) per scegliere la suite e la
-[roadmap](roadmap/README.md) per il lavoro di prodotto pianificato.
+[roadmap](roadmap.md) per il lavoro di prodotto pianificato.
 
 ## Prerequisiti
 

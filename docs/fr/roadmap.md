@@ -1,6 +1,6 @@
-**Langues**: [English](../../roadmap/README.md) | [简体中文](../../zh-CN/roadmap/README.md) | [繁體中文](../../zh-TW/roadmap/README.md) | [日本語](../../ja/roadmap/README.md) | [한국어](../../ko/roadmap/README.md) | [Français](README.md) | [Deutsch](../../de/roadmap/README.md) | [Español](../../es/roadmap/README.md) | [Italiano](../../it/roadmap/README.md) | [Русский](../../ru/roadmap/README.md) | [العربية](../../ar/roadmap/README.md)
+**Langues**: [English](../roadmap.md) | [简体中文](../zh-CN/roadmap.md) | [繁體中文](../zh-TW/roadmap.md) | [日本語](../ja/roadmap.md) | [한국어](../ko/roadmap.md) | [Français](roadmap.md) | [Deutsch](../de/roadmap.md) | [Español](../es/roadmap.md) | [Italiano](../it/roadmap.md) | [Русский](../ru/roadmap.md) | [العربية](../ar/roadmap.md)
 
-[← Index documentation](../README.md)
+[← Index documentation](README.md)
 
 # Feuille de route NeverD
 
@@ -44,7 +44,7 @@ restent séparés : un selector ERC partagé ne peut ni inventer un standard ni
 emprunter un type de retour incompatible. Amsterdam est une cible
 Review/development opt-in ; `latest` reste Fusaka. EOFv1/EIP-7692 n’est pas
 planifié et EIP-3540 est Stagnant, donc aucun n’est présenté comme mainnet final.
-Voir [décompilation EVM](../evm.md) pour les limites.
+Voir [décompilation EVM](evm.md) pour les limites.
 
 ### Pourquoi EVM
 
@@ -60,7 +60,7 @@ Programmes **Solana eBPF / SBF** avec la même sémantique strict.
 
 - Loader SBF · lifter eBPF/SBF 1:1 · Account/CPI · même pipeline · API unifiée
 
-**État :** La prise en charge des contrats Anza `sbpf` v0-v4 actuels est terminée. L’implémentation couvre les anciens ELF à sections/relocations et les ELF stricts reposant uniquement sur les program headers, une base d’instructions versionnée complète, une vérification stricte, les IR Low/Med/High par étapes, les observations syscall/CPI/account, LLVM vérifié, du C11 portable, du Rust stable sûr, l’intégration CLI/C API et un oracle sémantique indépendant et borné pour le bytecode brut. v4 suit l’upstream ; son déploiement ou son exécution sur un cluster donné dépend toujours de l’activation des fonctionnalités de ce cluster. Voir [Décompilation Solana SBF](../sbf.md).
+**État :** La prise en charge des contrats Anza `sbpf` v0-v4 actuels est terminée. L’implémentation couvre les anciens ELF à sections/relocations et les ELF stricts reposant uniquement sur les program headers, une base d’instructions versionnée complète, une vérification stricte, les IR Low/Med/High par étapes, les observations syscall/CPI/account, LLVM vérifié, du C11 portable, du Rust stable sûr, l’intégration CLI/C API et un oracle sémantique indépendant et borné pour le bytecode brut. v4 suit l’upstream ; son déploiement ou son exécution sur un cluster donné dépend toujours de l’activation des fonctionnalités de ce cluster. Voir [Décompilation Solana SBF](sbf.md).
 
 ### Pourquoi Solana eBPF
 
@@ -79,7 +79,7 @@ Analyser un binaire levé pour les défauts de durée de vie du tas (fuite, doub
 | Preuve d’atteignabilité | État de contrôle depuis des entrées connues, point fixe attaquant indépendant et témoin exact racine/chaîne d’appels |
 | Contrat d’identité | Résolution des puits par format (IAT PE, PLT ELF, bind dyld Mach-O) et sources de noms PDB / DWARF / MAP |
 
-**État :** La Phase 1 est implémentée pour PE, ELF et Mach-O. P0 comprend les analyses en monde fermé du cycle de vie du tas et des copies dangereuses, ainsi que la preuve additive du schéma v1 avec rejeu `process-input-v1` des valeurs littérales exactes de l’environnement et de la première consommation de l’entrée standard ; les autres types restent non rejouables avec une raison. P1 couvre les débordements pile/global, les lectures locales non initialisées et les chaînes de format. Les effets d’appel inconnus ou partiellement applicables restent UNKNOWN. La couverture des verdicts et de l’identité est verrouillée par [`unittests/safety`](../../../unittests/safety) et le bout-en-bout [`SafetyIntegrationTests.cpp`](../../../unittests/safety/SafetyIntegrationTests.cpp), qui exécute sur chaque hôte la matrice obligatoire PE/ELF/Mach-O × x86-64/AArch64. Voir [Audit et chasse de sûreté mémoire](../memory-safety.md).
+**État :** La Phase 1 est implémentée pour PE, ELF et Mach-O. P0 comprend les analyses en monde fermé du cycle de vie du tas et des copies dangereuses, ainsi que la preuve additive du schéma v1 avec rejeu `process-input-v1` des valeurs littérales exactes de l’environnement et de la première consommation de l’entrée standard ; les autres types restent non rejouables avec une raison. P1 couvre les débordements pile/global, les lectures locales non initialisées et les chaînes de format. Les effets d’appel inconnus ou partiellement applicables restent UNKNOWN. La couverture des verdicts et de l’identité est verrouillée par [`unittests/safety`](../../unittests/safety) et le bout-en-bout [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp), qui exécute sur chaque hôte la matrice obligatoire PE/ELF/Mach-O × x86-64/AArch64. Voir [Audit et chasse de sûreté mémoire](memory-safety.md).
 
 La tranche interprocédurale actuelle ajoute `reachability.status` et
 `reachability.attacker_control` au schéma v1 sans modifier le `verdict`
@@ -119,7 +119,7 @@ toutes les capacités à false et aucune table d’opérations.
 |---------|-----------|
 | Couverture lifter | Combler les trous natifs sans relâcher strict |
 | Tests sémantiques | Étendre Unicorn / roundtrip |
-| ABI plugins | Maintenir l’[ABI des plugins natifs](../plugins.md) comme contrat d’extension dans le processus ; les valeurs Loader et UI restent des métadonnées jusqu’à ce que des API hôte explicites existent |
+| ABI plugins | Maintenir l’[ABI des plugins natifs](plugins.md) comme contrat d’extension dans le processus ; les valeurs Loader et UI restent des métadonnées jusqu’à ce que des API hôte explicites existent |
 | Docs / matrice | Mettre à jour le README seulement après tests |
 
 ---

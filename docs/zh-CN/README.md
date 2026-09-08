@@ -20,6 +20,6 @@
 | [iOS 源码恢复](ios.md) | IPA/.app/Mach-O 选择、Objective-C/Swift 方法与布局、CLI/export、覆盖口径、限制及执行验证 |
 | [EVM 反编译](evm.md) | EVM 输入、硬分叉、分级 IR、C/LLVM host ABI、Solidity 重建与限制 |
 | [Solana SBF 反编译](sbf.md) | SBF v0-v4、LLVM IR、C/Rust 输出、验证与已知限制 |
-| [路线图](roadmap/README.md) | 状态：原生格式、EVM 与 Solana SBF 均已实现 |
+| [路线图](roadmap.md) | 状态：原生格式、EVM 与 Solana SBF 均已实现 |
 | [English README](../../README.md) | 英文版主文档 |
 | [其他语言 README](../README.md) | 其余本地化版本 |

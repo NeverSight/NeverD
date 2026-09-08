@@ -11,7 +11,7 @@ NeverD 是一個語意優先的二進位分析專案。有價值的貢獻應聚�
 
 開始修改前，請閱讀[架構指南](architecture.md)。測試套件的選擇請參考
 [測試指南](testing.md)，產品規劃請參考
-[路線圖](roadmap/README.md)。
+[路線圖](roadmap.md)。
 
 ## 必要條件
 

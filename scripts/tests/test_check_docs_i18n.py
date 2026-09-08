@@ -68,7 +68,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                 Path("docs/memory-safety.md"),
                 Path("docs/plugins.md"),
                 Path("docs/python-plugins.md"),
-                Path("docs/roadmap/README.md"),
+                Path("docs/roadmap.md"),
                 Path("docs/testing.md"),
                 Path("docs/windows-exception-reconstruction.md"),
                 Path("docs/evm.md"),

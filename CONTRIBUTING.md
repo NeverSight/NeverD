@@ -14,7 +14,7 @@ notices under their original licenses.
 
 Before editing, read the [architecture guide](docs/architecture.md). Use the
 [testing guide](docs/testing.md) for suite selection and the
-[roadmap](docs/roadmap/README.md) for planned product work.
+[roadmap](docs/roadmap.md) for planned product work.
 
 ## Prerequisites
 
