@@ -11841,6 +11841,99 @@ TEST(LLVMCodePointerInvariantBoundary,
       }
 }
 
+TEST(LLVMCodePointerInvariantBoundary,
+     DeepMaskedIndexRetainsItsNumericRangeAndRoleChecks) {
+  enum class Variant { Scalar, DataSeed, CodeSeed, DataSlot, UnknownSlot };
+  struct Case {
+    int Depth;
+    Variant Kind;
+  };
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (BinaryFormat Format :
+         {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+      for (const Case &C :
+           {Case{32, Variant::Scalar}, Case{72, Variant::Scalar},
+            Case{96, Variant::Scalar}, Case{140, Variant::Scalar},
+            Case{72, Variant::DataSeed}, Case{72, Variant::CodeSeed},
+            Case{72, Variant::DataSlot}, Case{72, Variant::UnknownSlot}}) {
+        SCOPED_TRACE(std::string(formatTraceName(Format)) + "/" +
+                     std::to_string(static_cast<int>(TargetArch)) + "/" +
+                     std::to_string(C.Depth) + "/" +
+                     std::to_string(static_cast<int>(C.Kind)));
+        BinaryImage Image = makeMixedPointerRecordImage(TargetArch, Format);
+        Image.CodePtrRelocSlots = {DataVA, DataVA + 8};
+        Image.DataPtrRelocSlots.clear();
+        writeObject(Image.Segments[1].Data, 0, CodeVA);
+        writeObject(Image.Segments[1].Data, 8, CodeVA);
+        if (C.Kind == Variant::DataSlot || C.Kind == Variant::UnknownSlot) {
+          Image.CodePtrRelocSlots.erase(DataVA + 8);
+          writeObject(Image.Segments[1].Data, 8, CStringVA);
+          if (C.Kind == Variant::DataSlot)
+            Image.DataPtrRelocSlots.insert(DataVA + 8);
+        }
+        MedFunc Caller =
+            makeIndexedPointerTableIndirectCaller(TargetArch, DataVA);
+        auto &Ops = Caller.Blocks.front().Ops;
+        auto Scale = std::find_if(Ops.begin(), Ops.end(), [](const MedOp &Op) {
+          return Op.Opcode == NdOp::INT_MULT;
+        });
+        ASSERT_NE(Scale, Ops.end());
+        MedVar Current = Caller.Params.front();
+        std::vector<MedOp> Chain;
+        auto append = [&](NdOp Opcode, MedVar Right) {
+          MedVar Next = Current;
+          Next.Kind = MedVar::Temp;
+          Next.Id = 1000 + static_cast<int>(Chain.size());
+          Next.SSAVer = 1;
+          MedOp Op;
+          Op.Opcode = Opcode;
+          Op.Output = Next;
+          Op.addInput(Current);
+          Op.addInput(Right);
+          Chain.push_back(std::move(Op));
+          Current = Next;
+        };
+        if (C.Kind == Variant::DataSeed || C.Kind == Variant::CodeSeed)
+          append(NdOp::INT_ADD,
+                 MedVar::makeConst(
+                     C.Kind == Variant::DataSeed ? DataVA : CodeVA, 8,
+                     C.Kind == Variant::DataSeed
+                         ? ConstantAddressProvenance::DataAddress
+                         : ConstantAddressProvenance::CodeAddress));
+        for (int I = 0; I < C.Depth; ++I)
+          append(NdOp::INT_ADD,
+                 MedVar::makeConst(1, 8, ConstantAddressProvenance::Scalar));
+        append(NdOp::INT_AND,
+               MedVar::makeConst(1, 8, ConstantAddressProvenance::Scalar));
+        Scale->Inputs[0] = Current;
+        Ops.insert(Scale, std::make_move_iterator(Chain.begin()),
+                   std::make_move_iterator(Chain.end()));
+        const bool Expected = C.Kind == Variant::Scalar && C.Depth < 128;
+        const auto Load =
+            std::find_if(Ops.begin(), Ops.end(), [](const MedOp &Op) {
+              return Op.Opcode == NdOp::LOAD;
+            });
+        ASSERT_NE(Load, Ops.end());
+        MedLLVMEmitter Classifier;
+        MedLLVMProvenanceTestPeer::prepareFreshAnalysis(
+            Classifier, Caller, Image, TargetArch, Format);
+        EXPECT_EQ(MedLLVMProvenanceTestPeer::stableOffset(Classifier, Current,
+                                                          nullptr),
+                  C.Depth < 128 && C.Kind != Variant::DataSeed &&
+                      C.Kind != Variant::CodeSeed);
+        EXPECT_EQ(MedLLVMProvenanceTestPeer::pointerTableLoadIsCallableOnly(
+                      Classifier, Load->Output),
+                  Expected);
+        llvm::LLVMContext Context;
+        auto Module = MedLLVMEmitter().emit(
+            {Caller, makeReturnFunction("deep_index_target", CodeVA)}, Context,
+            "deep-masked-index", TargetArch, {}, &Image, Format);
+        EXPECT_EQ(Module != nullptr, Expected);
+        if (Module)
+          expectValidModule(*Module);
+      }
+}
+
 TEST(LLVMDataPointerInvariantBoundary,
      IndexedWritableArgumentBypassesReadOnlyMergeOwner) {
   constexpr uint64_t LowWritableTableVA = 0xc0;

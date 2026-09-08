@@ -300,8 +300,11 @@ IndexedPointerLaneSummary analyzeIndexedPointerLane(
   std::function<OffsetCongruence(const MedVar &, int, std::set<Key>)> walk =
       [&](const MedVar &Value, int Depth,
           std::set<Key> Seen) -> OffsetCongruence {
+    // A bounded walk loses numeric precision, not the surrounding operation's
+    // range: an outer mask can still bound an arbitrarily deep scalar chain.
+    // Consumers independently prove index provenance before trusting the lane.
     if (Depth > 64)
-      return {};
+      return dynamic(0, 1);
     if (auto Folded = foldedConstant(Value))
       return exact(*Folded);
     if (!Seen.insert(keyOf(Value)).second)
