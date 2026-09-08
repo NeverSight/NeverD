@@ -125,7 +125,9 @@ void collectRelocations(const llvm::object::ELFFile<ELFT> &ELF,
 
       if (SymSH && SymIdx > 0 && !StrTab.empty()) {
         auto SymsOr = ELF.symbols(SymSH);
-        if (SymsOr && SymIdx < SymsOr->size()) {
+        if (!SymsOr) {
+          llvm::consumeError(SymsOr.takeError());
+        } else if (SymIdx < SymsOr->size()) {
           auto SymNameOr = (*SymsOr)[SymIdx].getName(StrTab);
           if (SymNameOr)
             RE.SymbolName = SymNameOr->str();
@@ -404,12 +406,11 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
             !rangeInBounds(RelocSH.sh_offset, RelocSH.sh_size, Size))
           continue;
 
-        const Elf_Shdr *PreApplySH =
-            getShdr<ELFT>(Sections, RelocSH.sh_info);
+        const Elf_Shdr *PreApplySH = getShdr<ELFT>(Sections, RelocSH.sh_info);
         if (!PreApplySH || !(PreApplySH->sh_flags & SHF_ALLOC))
           continue;
-        const va_t PreApplyVA = sectionVA<ELFT>(
-            IsRelocatable, SecBase, *PreApplySH, RelocSH.sh_info);
+        const va_t PreApplyVA = sectionVA<ELFT>(IsRelocatable, SecBase,
+                                                *PreApplySH, RelocSH.sh_info);
         const Segment *PreApplySeg = nullptr;
         for (const Segment &Seg : Img.Segments)
           if (Seg.VA == PreApplyVA && !Seg.Data.empty()) {
@@ -423,8 +424,7 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
             static_cast<size_t>(RelocSH.sh_size / RelocSH.sh_entsize);
         for (size_t I = 0; I < PreCount; ++I) {
           const uint64_t EntryOff =
-              RelocSH.sh_offset +
-              static_cast<uint64_t>(I) * RelocSH.sh_entsize;
+              RelocSH.sh_offset + static_cast<uint64_t>(I) * RelocSH.sh_entsize;
           va_t FieldOffset = 0;
           uint32_t Type = R_386_NONE;
           if (PreIsRela) {
@@ -479,7 +479,8 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
       for (va_t FieldVA : I386GOTPCWriterStarts) {
         bool HasUniqueFourByteOwner = true;
         for (size_t Byte = 0; Byte < 4; ++Byte) {
-          const auto Count = I386RelocationByteWriterCounts.find(FieldVA + Byte);
+          const auto Count =
+              I386RelocationByteWriterCounts.find(FieldVA + Byte);
           if (Count == I386RelocationByteWriterCounts.end() ||
               Count->second != 1) {
             HasUniqueFourByteOwner = false;
@@ -492,7 +493,8 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
       for (va_t FieldVA : I386GOTOFFWriterStarts) {
         bool HasUniqueFourByteOwner = true;
         for (size_t Byte = 0; Byte < 4; ++Byte) {
-          const auto Count = I386RelocationByteWriterCounts.find(FieldVA + Byte);
+          const auto Count =
+              I386RelocationByteWriterCounts.find(FieldVA + Byte);
           if (Count == I386RelocationByteWriterCounts.end() ||
               Count->second != 1) {
             HasUniqueFourByteOwner = false;
@@ -561,7 +563,9 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
       va_t SymOwnerVA = InvalidVA;
       if (SymSH2 && RSym > 0) {
         auto SymsOr = ELF.symbols(SymSH2);
-        if (SymsOr && RSym < SymsOr->size()) {
+        if (!SymsOr) {
+          llvm::consumeError(SymsOr.takeError());
+        } else if (RSym < SymsOr->size()) {
           const Elf_Sym &Sym = (*SymsOr)[RSym];
           SymVal = Sym.st_value;
           if (Sym.st_shndx != SHN_UNDEF && Sym.st_shndx < SHN_LORESERVE) {
@@ -926,8 +930,7 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
           }
           const bool HasUniqueValueWriter =
               Field != I386RelocationFields.end() &&
-              Field->second.ValueWriterCount == 1 &&
-              HasUniqueFourByteSpan &&
+              Field->second.ValueWriterCount == 1 && HasUniqueFourByteSpan &&
               !Img.AmbiguousI386GOTPCFields.count(P) &&
               !Img.AmbiguousI386GOTOFFFields.count(P);
           // i386 PIC: model _GLOBAL_OFFSET_TABLE_ at base 0.  The get-PC seed
@@ -973,7 +976,10 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
               RecordDataTarget(Folded);
               RecordWritableDataTarget(Folded);
               Img.DataAddressRelocOperands[P] = {
-                  Folded, Folded, 4, SymbolOwnerAnchor,
+                  Folded,
+                  Folded,
+                  4,
+                  SymbolOwnerAnchor,
                   /*PCRelativeFromInstructionEnd=*/false,
                   RelocatedAddressFieldKind::I386ELFGOTOFF};
               // `leal table@GOTOFF(%ebx)` anchors a PIC switch table's base in
@@ -998,11 +1004,13 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
                 !SymSeg->isWritable() &&
                 Img.hasObjectDataProvenance(SymbolVA) &&
                 !SymSeg->Data.empty() && AnchorBackDistance != 0 &&
-                AnchorBackDistance <=
-                    limits::kMaxRodataAnchorBackDistance) {
+                AnchorBackDistance <= limits::kMaxRodataAnchorBackDistance) {
               Img.RodataAnchorSeg[Folded] = SymSeg->VA;
               Img.DataAddressRelocOperands[P] = {
-                  Folded, Folded, 4, SymbolOwnerAnchor,
+                  Folded,
+                  Folded,
+                  4,
+                  SymbolOwnerAnchor,
                   /*PCRelativeFromInstructionEnd=*/false,
                   RelocatedAddressFieldKind::I386ELFGOTOFF};
             }
