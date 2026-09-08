@@ -39,6 +39,93 @@ struct IndexedPointerLaneSummary {
   bool Complete = false;
 };
 
+template <typename LookupDefFn, typename TraceConstFn, typename FrameSourcesFn>
+std::optional<uint64_t>
+traceIndexedLaneConstant(const MedVar &Value, LookupDefFn &&lookupDef,
+                         TraceConstFn &&traceSSAConst,
+                         FrameSourcesFn &&collectFrameReloadSources) {
+  using Key = std::tuple<int, int, int>;
+  auto keyOf = [](const MedVar &V) {
+    return Key{static_cast<int>(V.Kind), V.Id, V.SSAVer};
+  };
+  auto sizeMask = [](uint16_t Size) {
+    return Size == 0 || Size >= 8 ? ~uint64_t(0)
+                                  : (uint64_t(1) << (Size * 8)) - 1;
+  };
+  std::function<std::optional<uint64_t>(const MedVar &, int, std::set<Key>)>
+      traceLaneConstImpl =
+          [&](const MedVar &Value, int TraceDepth,
+              std::set<Key> Visited) -> std::optional<uint64_t> {
+    if (TraceDepth > 32)
+      return std::nullopt;
+    if (auto Constant = traceSSAConst(Value))
+      return *Constant & sizeMask(Value.Size);
+    if (Value.isConst() || !Visited.insert(keyOf(Value)).second)
+      return std::nullopt;
+    const MedOp *ValueDef = lookupDef(Value);
+    if (!ValueDef || ValueDef->NumInputs < 1)
+      return std::nullopt;
+    if (ValueDef->Opcode == NdOp::LOAD) {
+      if (ValueDef->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+        return std::nullopt;
+      std::vector<MedVar> Sources;
+      const bool CompleteSources =
+          collectFrameReloadSources(*ValueDef, Sources);
+      if (!CompleteSources || Sources.empty())
+        return std::nullopt;
+      std::optional<uint64_t> Common;
+      for (const MedVar &Source : Sources) {
+        auto Constant = traceLaneConstImpl(Source, TraceDepth + 1, Visited);
+        if (!Constant || (Common && *Common != *Constant))
+          return std::nullopt;
+        Common = *Constant;
+      }
+      return Common;
+    }
+    if ((ValueDef->Opcode == NdOp::INT_ADD ||
+         ValueDef->Opcode == NdOp::INT_SUB) &&
+        ValueDef->NumInputs >= 2) {
+      auto Left =
+          traceLaneConstImpl(ValueDef->Inputs[0], TraceDepth + 1, Visited);
+      auto Right =
+          traceLaneConstImpl(ValueDef->Inputs[1], TraceDepth + 1, Visited);
+      if (!Left || !Right)
+        return std::nullopt;
+      const uint64_t Result =
+          ValueDef->Opcode == NdOp::INT_ADD ? *Left + *Right : *Left - *Right;
+      return Result & sizeMask(ValueDef->Output.Size);
+    }
+    if (ValueDef->Opcode != NdOp::COPY && ValueDef->Opcode != NdOp::INT_ZEXT &&
+        ValueDef->Opcode != NdOp::INT_SEXT &&
+        ValueDef->Opcode != NdOp::SUBBYTES)
+      return std::nullopt;
+    auto Constant =
+        traceLaneConstImpl(ValueDef->Inputs[0], TraceDepth + 1, Visited);
+    if (!Constant)
+      return std::nullopt;
+    if (ValueDef->Opcode == NdOp::INT_ZEXT)
+      return *Constant & sizeMask(ValueDef->Inputs[0].Size);
+    if (ValueDef->Opcode == NdOp::INT_SEXT) {
+      const unsigned SourceBits = ValueDef->Inputs[0].Size * 8;
+      uint64_t Extended = *Constant & sizeMask(ValueDef->Inputs[0].Size);
+      if (SourceBits != 0 && SourceBits < 64 &&
+          (Extended & (uint64_t(1) << (SourceBits - 1))) != 0)
+        Extended |= ~sizeMask(ValueDef->Inputs[0].Size);
+      return Extended & sizeMask(ValueDef->Output.Size);
+    }
+    if (ValueDef->Opcode == NdOp::SUBBYTES) {
+      if (ValueDef->NumInputs < 2 || !ValueDef->Inputs[1].isConst() ||
+          ValueDef->Inputs[1].ConstVal >= 8)
+        return std::nullopt;
+      return (*Constant >> (ValueDef->Inputs[1].ConstVal * 8)) &
+             sizeMask(ValueDef->Output.Size);
+    }
+    return *Constant & sizeMask(ValueDef->Output.Size);
+  };
+
+  return traceLaneConstImpl(Value, 0, {});
+}
+
 struct OffsetCongruence {
   bool Valid = false;
   uint64_t Residue = 0;
@@ -1451,8 +1538,7 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
     }
     if (Def->Opcode == NdOp::SELECT && Def->NumInputs >= 3)
       return scalarValueReaches(Def->Inputs[1], Target, Depth + 1, Seen) ||
-             scalarValueReaches(Def->Inputs[2], Target, Depth + 1,
-                                Seen);
+             scalarValueReaches(Def->Inputs[2], Target, Depth + 1, Seen);
     if (Def->Opcode == NdOp::INT_OR) {
       MedVar Cond, ArmT, ArmF;
       if (isMaskedSelectOr(*Def, Cond, ArmT, ArmF))
@@ -2192,84 +2278,13 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
       // index terms in this same DFS: if a later iteration feeds this scalar
       // field back into the index, the already-active PHI/frame recurrence is
       // observed here rather than lost through a fresh top-level proof.
-      auto sizeMask = [](uint16_t Size) {
-        return Size == 0 || Size >= 8 ? ~uint64_t(0)
-                                      : (uint64_t(1) << (Size * 8)) - 1;
-      };
-      std::function<std::optional<uint64_t>(const MedVar &, int, std::set<Key>)>
-          traceLaneConstImpl =
-              [&](const MedVar &Value, int TraceDepth,
-                  std::set<Key> Visited) -> std::optional<uint64_t> {
-        if (TraceDepth > 32)
-          return std::nullopt;
-        if (auto Constant = traceSSAConst(Value))
-          return *Constant & sizeMask(Value.Size);
-        if (Value.isConst() || !Visited.insert(keyOf(Value)).second)
-          return std::nullopt;
-        const MedOp *ValueDef = lookupDef(Value);
-        if (!ValueDef || ValueDef->NumInputs < 1)
-          return std::nullopt;
-        if (ValueDef->Opcode == NdOp::LOAD) {
-          if (ValueDef->MemoryAddressSpace != NdMemoryAddressSpace::Default)
-            return std::nullopt;
-          std::vector<MedVar> Sources;
-          const bool CompleteSources =
-              collectFrameReloadSources(*ValueDef, Sources);
-          if (!CompleteSources || Sources.empty())
-            return std::nullopt;
-          std::optional<uint64_t> Common;
-          for (const MedVar &Source : Sources) {
-            auto Constant = traceLaneConstImpl(Source, TraceDepth + 1, Visited);
-            if (!Constant || (Common && *Common != *Constant))
-              return std::nullopt;
-            Common = *Constant;
-          }
-          return Common;
-        }
-        if ((ValueDef->Opcode == NdOp::INT_ADD ||
-             ValueDef->Opcode == NdOp::INT_SUB) &&
-            ValueDef->NumInputs >= 2) {
-          auto Left =
-              traceLaneConstImpl(ValueDef->Inputs[0], TraceDepth + 1, Visited);
-          auto Right =
-              traceLaneConstImpl(ValueDef->Inputs[1], TraceDepth + 1, Visited);
-          if (!Left || !Right)
-            return std::nullopt;
-          const uint64_t Result = ValueDef->Opcode == NdOp::INT_ADD
-                                      ? *Left + *Right
-                                      : *Left - *Right;
-          return Result & sizeMask(ValueDef->Output.Size);
-        }
-        if (ValueDef->Opcode != NdOp::COPY &&
-            ValueDef->Opcode != NdOp::INT_ZEXT &&
-            ValueDef->Opcode != NdOp::INT_SEXT &&
-            ValueDef->Opcode != NdOp::SUBBYTES)
-          return std::nullopt;
-        auto Constant =
-            traceLaneConstImpl(ValueDef->Inputs[0], TraceDepth + 1, Visited);
-        if (!Constant)
-          return std::nullopt;
-        if (ValueDef->Opcode == NdOp::INT_ZEXT)
-          return *Constant & sizeMask(ValueDef->Inputs[0].Size);
-        if (ValueDef->Opcode == NdOp::INT_SEXT) {
-          const unsigned SourceBits = ValueDef->Inputs[0].Size * 8;
-          uint64_t Extended = *Constant & sizeMask(ValueDef->Inputs[0].Size);
-          if (SourceBits != 0 && SourceBits < 64 &&
-              (Extended & (uint64_t(1) << (SourceBits - 1))) != 0)
-            Extended |= ~sizeMask(ValueDef->Inputs[0].Size);
-          return Extended & sizeMask(ValueDef->Output.Size);
-        }
-        if (ValueDef->Opcode == NdOp::SUBBYTES) {
-          if (ValueDef->NumInputs < 2 || !ValueDef->Inputs[1].isConst() ||
-              ValueDef->Inputs[1].ConstVal >= 8)
-            return std::nullopt;
-          return (*Constant >> (ValueDef->Inputs[1].ConstVal * 8)) &
-                 sizeMask(ValueDef->Output.Size);
-        }
-        return *Constant & sizeMask(ValueDef->Output.Size);
-      };
       auto traceLaneConst = [&](const MedVar &Value) {
-        return traceLaneConstImpl(Value, 0, {});
+        return traceIndexedLaneConstant(
+            Value, [&](const MedVar &V) { return lookupDef(V); },
+            [&](const MedVar &V) { return traceSSAConst(V); },
+            [&](const MedOp &Load, std::vector<MedVar> &Sources) {
+              return collectFrameReloadSources(Load, Sources);
+            });
       };
       const IndexedPointerLaneSummary ScalarLane = analyzeIndexedPointerLane(
           Def->Inputs[0], Img, PointerSize,
@@ -3781,7 +3796,14 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V,
     return analyzeIndexedPointerLane(
         LoadAddress, Img, PtrSize,
         [&](const MedVar &Value) { return lookupDef(Value); },
-        [&](const MedVar &Value) { return traceSSAConst(Value); },
+        [&](const MedVar &Value) {
+          return traceIndexedLaneConstant(
+              Value, [&](const MedVar &V) { return lookupDef(V); },
+              [&](const MedVar &V) { return traceSSAConst(V); },
+              [&](const MedOp &Load, std::vector<MedVar> &Sources) {
+                return collectFrameReloadSources(Load, Sources);
+              });
+        },
         [&](const MedVar &Value, uint64_t &Base, bool &HaveBase,
             std::vector<MedVar> &Terms) {
           if (collectIndexedGlobalBase(Value, Base, HaveBase, Terms) &&
@@ -3923,8 +3945,7 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V,
     const bool IsCode = Img->CodePtrRelocSlots.count(Slot) != 0;
     const bool IsData = Img->DataPtrRelocSlots.count(Slot) != 0;
     const bool IsImport = EffectiveImportStorageSlots.count(Slot) != 0;
-    const bool IsRuntimeCallable =
-        Img->hasRuntimeCallablePointerSlotAt(Slot);
+    const bool IsRuntimeCallable = Img->hasRuntimeCallablePointerSlotAt(Slot);
     const unsigned StaticKinds = static_cast<unsigned>(IsCode) +
                                  static_cast<unsigned>(IsData) +
                                  static_cast<unsigned>(IsImport);
@@ -4029,8 +4050,7 @@ bool MedLLVMEmitter::recoverAbsoluteDataPointerLoadIdentities(
     }
     return false;
   }
-  if (!Load ||
-      Load->MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+  if (!Load || Load->MemoryAddressSpace != NdMemoryAddressSpace::Default ||
       Load->NumInputs < 1 || PtrSize == 0 || PtrSize > 8 ||
       Load->Output.Size != PtrSize)
     return false;
