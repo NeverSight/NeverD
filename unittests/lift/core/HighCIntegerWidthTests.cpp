@@ -9,6 +9,7 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
 
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/FileSystem.h"
@@ -341,6 +342,83 @@ TEST(HighCIntegerWidths, CarryUsesUnsignedOperandWidthAtRuntime) {
     }
   }
   compileAndExecute(emitFunctions(Functions) + executionHarness(Checks), false);
+}
+
+TEST(HighCIntegerWidths, RightShiftsFollowOpcodeAndBoundCountsAtRuntime) {
+  std::vector<HighFunc> Functions;
+  std::string Checks;
+  for (uint16_t Width : {1, 2, 4, 8}) {
+    const unsigned Bits = Width * 8;
+    const uint64_t Max = UINT64_MAX >> (64 - Bits);
+    const uint64_t Values[] = {0, Max >> 1, (Max >> 1) + 1, Max};
+    const unsigned Counts[] = {0, 1, Bits - 1, Bits, Bits + 1, 256};
+    for (bool Signed : {false, true}) {
+      for (bool Arithmetic : {false, true}) {
+        for (bool Constant : {false, true}) {
+          for (unsigned Count : Counts) {
+            auto Type = NdType::makeInt(Width, Signed);
+            auto CountType = NdType::makeInt(4, false);
+            HighFunc Func;
+            Func.Name = std::string(Arithmetic ? "ashr" : "lshr") +
+                        std::to_string(Bits) + (Signed ? "_s" : "_u") +
+                        (Constant ? "_const" : "_var") + std::to_string(Count);
+            Func.ReturnType = NdType::makeInt(Width, false);
+            Func.Params = {{"arg0", Type}, {"arg1", CountType}};
+            returnValue(Func, HighExpr::makeBinop(
+                                  Arithmetic ? NdOp::INT_ASHR : NdOp::INT_RIGHT,
+                                  parameter(0, Type),
+                                  Constant ? HighExpr::makeConst(Count, 4)
+                                           : parameter(1, CountType)));
+            for (uint64_t Value : Values) {
+              const llvm::APInt Input(Bits, Value);
+              const auto Expected =
+                  Arithmetic ? Input.ashr(Count < Bits ? Count : Bits - 1)
+                             : (Count < Bits ? Input.lshr(Count)
+                                             : llvm::APInt(Bits, 0));
+              const auto InputText = std::to_string(Value);
+              const auto ExpectedText = std::to_string(Expected.getZExtValue());
+              appendCheck(Checks, Func.Name,
+                          argument(Type, InputText.c_str()) + ", " +
+                              std::to_string(Count),
+                          ExpectedText.c_str());
+            }
+            Functions.push_back(std::move(Func));
+          }
+        }
+      }
+    }
+  }
+  compileAndExecute(emitFunctions(Functions) + executionHarness(Checks), true);
+}
+
+TEST(HighCIntegerWidths, ArithmeticRightShiftRestoresTypeBeforeComparison) {
+  std::vector<HighFunc> Functions;
+  std::string Checks;
+  for (uint16_t Width : {1, 2, 4, 8}) {
+    for (bool Constant : {false, true}) {
+      auto Type = NdType::makeInt(Width, false);
+      auto CountType = NdType::makeInt(4, false);
+      HighFunc Func;
+      Func.Name = "ashr_compare" + std::to_string(Width * 8) +
+                  (Constant ? "_const" : "_var");
+      Func.ReturnType = NdType::makeInt(1, false);
+      Func.Params = {{"arg0", Type}, {"arg1", CountType}};
+      const uint64_t Sign = UINT64_C(1) << (Width * 8 - 1);
+      auto Shifted = HighExpr::makeBinop(NdOp::INT_ASHR, parameter(0, Type),
+                                         Constant ? HighExpr::makeConst(1, 4)
+                                                  : parameter(1, CountType));
+      auto Equal =
+          HighExpr::makeBinop(NdOp::INT_EQUAL, Shifted,
+                              HighExpr::makeConst(Sign | (Sign >> 1), Width));
+      Equal->Type = Func.ReturnType;
+      returnValue(Func, Equal);
+      const auto Input = std::to_string(Sign);
+      appendCheck(Checks, Func.Name, argument(Type, Input.c_str()) + ", 1",
+                  "1");
+      Functions.push_back(std::move(Func));
+    }
+  }
+  compileAndExecute(emitFunctions(Functions) + executionHarness(Checks), true);
 }
 
 } // namespace

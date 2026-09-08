@@ -106,6 +106,37 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
   }
 
   switch (E.Op) {
+  case NdOp::INT_RIGHT:
+  case NdOp::INT_ASHR: {
+    const uint16_t Size = E.Operands[0]->Type ? E.Operands[0]->Type->Size : 0;
+    if (Size != 1 && Size != 2 && Size != 4 && Size != 8 && Size != 16)
+      break;
+    const bool Arithmetic = E.Op == NdOp::INT_ASHR;
+    const auto SourceType = typeToC(NdType::makeInt(Size, Arithmetic));
+    const auto ResultType =
+        typeToC(E.Type ? E.Type : NdType::makeInt(Size, false));
+    const auto RestoreType = [&](const std::string &Value) {
+      return "(" + ResultType + ")(" + Value + ")";
+    };
+    const auto Left = "(" + SourceType + ")(" + exprStr(*E.Operands[0]) + ")";
+    const auto Limit = std::to_string(Size * 8u);
+    // The opcode determines sign extension independently of inferred types.
+    // Preserve the count's own width, then guard C's undefined overshifts.
+    const auto Fallback =
+        Arithmetic ? "((" + Left + ") >> " + std::to_string(Size * 8u - 1) + ")"
+                   : "0";
+    if (E.Operands[1]->Kind == ExprKind::Const) {
+      const uint64_t Count = E.Operands[1]->ConstVal;
+      return RestoreType(Count < Size * 8u ? "((" + Left + ") >> " +
+                                                 std::to_string(Count) + ")"
+                                           : Fallback);
+    }
+    const auto CountType = typeToC(NdType::makeInt(
+        E.Operands[1]->Type ? E.Operands[1]->Type->Size : 8, false));
+    const auto Right = "(" + CountType + ")(" + exprStr(*E.Operands[1]) + ")";
+    return RestoreType("((" + Right + ") < " + Limit + " ? ((" + Left +
+                       ") >> (" + Right + ")) : " + Fallback + ")");
+  }
   case NdOp::INT_LEFT: {
     const uint16_t Size = E.Type ? E.Type->Size : 0;
     if (Size != 1 && Size != 2 && Size != 4 && Size != 8 && Size != 16)
