@@ -7,6 +7,7 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from unittest import mock
 
 from scripts.audit_ci_test_inventory import TestRecord, parse_inventory
 from scripts.audit_ci_test_results import (
@@ -66,6 +67,82 @@ def junit(records, changes=None):
         ET.SubElement(case, "system-out").text = output
     root.attrib.update({name: str(value) for name, value in counts.items()})
     return root
+
+
+def workflow_bash():
+    if sys.platform != "win32":
+        bash = shutil.which("bash")
+        if bash:
+            return bash
+        raise unittest.SkipTest("the CI bash shell is unavailable")
+
+    # PATH can resolve bash to the WSL launcher, not the native CI shell.
+    git = shutil.which("git")
+    if git:
+        root = Path(git).resolve().parent.parent
+        if root.name.lower() in ("mingw32", "mingw64", "usr"):
+            root = root.parent
+        for relative in ("bin/bash.exe", "usr/bin/bash.exe"):
+            bash = root / relative
+            if bash.is_file():
+                return str(bash)
+    raise RuntimeError("Git Bash is required to exercise the Windows CI script")
+
+
+class WorkflowShellTests(unittest.TestCase):
+    def test_windows_uses_git_bash_even_when_wsl_is_first_on_path(self):
+        with tempfile.TemporaryDirectory(prefix="neverd git shell ") as directory:
+            root = Path(directory)
+            bash = root / "bin" / "bash.exe"
+            bash.parent.mkdir()
+            bash.touch()
+            for layout in ("bin", "cmd", "mingw32/bin", "mingw64/bin", "usr/bin"):
+                with self.subTest(layout=layout), mock.patch.object(
+                    sys, "platform", "win32"
+                ), mock.patch.object(
+                    shutil,
+                    "which",
+                    side_effect={
+                        "git": str(root / layout / "git.exe"),
+                        "bash": "C:/Windows/System32/bash.exe",
+                    }.get,
+                ) as which:
+                    self.assertEqual(workflow_bash(), str(bash.resolve()))
+                    which.assert_called_once_with("git")
+
+    def test_windows_accepts_git_usr_bin_layout(self):
+        with tempfile.TemporaryDirectory(prefix="neverd git shell ") as directory:
+            root = Path(directory)
+            bash = root / "usr" / "bin" / "bash.exe"
+            bash.parent.mkdir(parents=True)
+            bash.touch()
+            with mock.patch.object(sys, "platform", "win32"), mock.patch.object(
+                shutil, "which", return_value=str(root / "cmd" / "git.exe")
+            ):
+                self.assertEqual(workflow_bash(), str(bash.resolve()))
+
+    def test_windows_missing_git_bash_fails_instead_of_using_wsl_or_skipping(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for git in (None, str(Path(directory) / "cmd" / "git.exe")):
+                with self.subTest(git=git), mock.patch.object(
+                    sys, "platform", "win32"
+                ), mock.patch.object(shutil, "which", return_value=git):
+                    with self.assertRaisesRegex(RuntimeError, "Git Bash"):
+                        workflow_bash()
+
+    def test_unix_uses_path_bash(self):
+        with mock.patch.object(sys, "platform", "linux"), mock.patch.object(
+            shutil, "which", return_value="/bin/bash"
+        ) as which:
+            self.assertEqual(workflow_bash(), "/bin/bash")
+            which.assert_called_once_with("bash")
+
+    def test_unix_without_bash_retains_optional_tool_skip(self):
+        with mock.patch.object(sys, "platform", "darwin"), mock.patch.object(
+            shutil, "which", return_value=None
+        ):
+            with self.assertRaises(unittest.SkipTest):
+                workflow_bash()
 
 
 class JUnitParsingTests(unittest.TestCase):
@@ -442,10 +519,10 @@ class RealCTestOutcomeTests(unittest.TestCase):
         self.assertEqual(report["counts"]["missing"], 1)
         self.assertFalse(report["ok"])
 
-    @unittest.skipUnless(shutil.which("bash"), "the CI bash shell is unavailable")
     def test_workflow_run_script_preserves_failure_status_and_removes_stale_evidence(
         self,
     ):
+        bash = workflow_bash()
         repository = Path(__file__).resolve().parents[2]
         workflow = (repository / ".github/workflows/ci.yml").read_text()
         step = workflow.split("      - name: Run selected test profile\n", 1)[1].split(
@@ -468,7 +545,7 @@ class RealCTestOutcomeTests(unittest.TestCase):
             ):
                 (build / name).write_text("stale success")
             run = subprocess.run(
-                ["bash", "-e", "-o", "pipefail", "-c", body],
+                [bash, "-e", "-o", "pipefail", "-c", body],
                 cwd=root,
                 env=dict(os.environ, EXCLUDE_LABELS="^excluded$", TEST_PARALLEL="1"),
                 capture_output=True,
