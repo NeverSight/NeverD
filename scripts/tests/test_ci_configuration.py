@@ -119,6 +119,9 @@ class CiConfigurationTests(unittest.TestCase):
             verify_step.count("scripts.tests.test_audit_ci_test_inventory"), 1
         )
         self.assertEqual(
+            verify_step.count("scripts.tests.test_audit_ci_test_results"), 1
+        )
+        self.assertEqual(
             verify_step.count("scripts.tests.test_neverd_bench_harness"), 1
         )
 
@@ -187,15 +190,47 @@ class CiConfigurationTests(unittest.TestCase):
         run_step = named_step("Run selected test profile")
         run_contract = (
             '--label-exclude "$EXCLUDE_LABELS"',
-            'if [[ "$executed" != "$EXPECTED_TESTS" ]]; then',
-            'echo "CTest executed $executed tests; expected $EXPECTED_TESTS" >&2',
+            '--output-junit "$PWD/build-ci/ctest-results.xml"',
+            '--output-log "$PWD/ctest.log"',
+            'ctest_status="$?"',
+            'printf \'%s\\n\' "$ctest_status" > build-ci/ctest-exit-status.txt',
+            'exit "$ctest_status"',
             "EXCLUDE_LABELS: ${{ steps.inventory.outputs.label_exclude }}",
-            "EXPECTED_TESTS: ${{ steps.inventory.outputs.count }}",
             "TEST_PARALLEL: ${{ matrix.parallel }}",
         )
         for expected in run_contract:
             with self.subTest(step="run", expected=expected):
                 self.assertIn(expected, run_step)
+
+        self.assertNotIn("EXPECTED_TESTS", run_step)
+        self.assertNotIn("sed -nE", run_step)
+        self.assertIn("cmake -E rm -f", run_step)
+        self.assertLess(run_step.index("cmake -E rm -f"), run_step.index("ctest --test-dir"))
+        for stale_file in ("ctest-results.xml", "ctest-exit-status.txt", "ctest-outcomes.json"):
+            self.assertIn(stale_file, run_step.split("set +e", 1)[0])
+
+        outcome_step = named_step("Audit selected test outcomes")
+        self.assertIn("always() && steps.inventory.outcome == 'success'", outcome_step)
+        for expected in (
+            '"$PYTHON" scripts/audit_ci_test_results.py audit',
+            "--inventory build-ci/ctest-inventory.json",
+            "--junit build-ci/ctest-results.xml",
+            "--ctest-status build-ci/ctest-exit-status.txt",
+            "--output build-ci/ctest-outcomes.json",
+            '--profile "$TEST_PROFILE"',
+            '--exclude-label-regex "$EXCLUDE_LABELS"',
+        ):
+            self.assertIn(expected, outcome_step)
+
+        tool_step = named_step("Verify CTest outcome tooling")
+        self.assertIn('"$PYTHON" scripts/audit_ci_test_results.py check-tool', tool_step)
+        self.assertLess(source.index("Verify CTest outcome tooling"), source.index("Verify Debug and Release target flags"))
+
+        artifact_step = named_step("Upload CTest execution evidence")
+        self.assertIn("always() && steps.inventory.outcome == 'success'", artifact_step)
+        for expected in ("ctest-inventory.json", "ctest-results.xml", "ctest-exit-status.txt", "ctest-outcomes.json", "ctest.log"):
+            self.assertIn(expected, artifact_step)
+        self.assertNotIn("continue-on-error", run_step)
 
     def test_workflow_stops_each_failed_profile_but_keeps_other_hosts_running(self):
         source = WORKFLOW.read_text(encoding="utf-8")

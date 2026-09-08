@@ -619,8 +619,10 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     Result.BackendUnhandledValueIntrinsics =
         MedEmitter.unhandledValueIntrinsicCount();
 
-    if (!Result.LlvmModule)
+    if (!Result.LlvmModule) {
+      Result.Error = "LLVM emission failed";
       return false;
+    }
 
     std::string VerifyErr;
     llvm::raw_string_ostream VES(VerifyErr);
@@ -675,9 +677,8 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   Result.LLVMVerifierFailed =
       llvm::verifyModule(*Result.LlvmModule, &FinalVerifyStream);
   if (Result.LLVMVerifierFailed) {
-    llvm::WithColor::warning()
-        << "pipeline: final LLVM verification failed: " << FinalVerifyError
-        << "\n";
+    Result.Error = "final LLVM verification failed: " + FinalVerifyError;
+    llvm::WithColor::warning() << "pipeline: " << Result.Error << "\n";
     return false;
   }
 

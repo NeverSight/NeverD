@@ -128,6 +128,12 @@ jobs:
           where.exe ld.lld
           where.exe lld-link
 
+      - name: Verify CTest outcome tooling
+        shell: bash
+        run: '"$PYTHON" scripts/audit_ci_test_results.py check-tool'
+        env:
+          PYTHON: ${{ matrix.python }}
+
       - name: Verify Debug and Release target flags
         shell: bash
         run: |
@@ -135,6 +141,7 @@ jobs:
             scripts.tests.test_debug_build_configuration \
             scripts.tests.test_ci_configuration \
             scripts.tests.test_audit_ci_test_inventory \
+            scripts.tests.test_audit_ci_test_results \
             scripts.tests.test_neverd_bench_harness \
             scripts.tests.test_audit_evm_opcode_metadata \
             scripts.tests.test_eh_signature_generation \
@@ -314,25 +321,61 @@ jobs:
           TEST_PROFILE: ${{ matrix.test_profile }}
 
       - name: Run selected test profile
+        id: ctest
         shell: bash
         run: |
           set -o pipefail
+          cmake -E rm -f build-ci/ctest-results.xml \
+            build-ci/ctest-exit-status.txt build-ci/ctest-outcomes.json ctest.log
+          set +e
           ctest --test-dir build-ci \
             --build-config Release \
             --label-exclude "$EXCLUDE_LABELS" \
+            --output-junit "$PWD/build-ci/ctest-results.xml" \
+            --output-log "$PWD/ctest.log" \
+            --no-tests=error \
             --stop-on-failure \
             --output-on-failure \
             --progress \
-            --parallel "$TEST_PARALLEL" 2>&1 | tee ctest.log
-          executed="$(tr -d '\r' < ctest.log | sed -nE 's/^100% tests passed(, 0 tests failed)? out of ([0-9]+)$/\2/p' | tail -n 1)"
-          if [[ "$executed" != "$EXPECTED_TESTS" ]]; then
-            echo "CTest executed $executed tests; expected $EXPECTED_TESTS" >&2
-            exit 1
-          fi
+            --parallel "$TEST_PARALLEL"
+          ctest_status="$?"
+          set -e
+          printf '%s\n' "$ctest_status" > build-ci/ctest-exit-status.txt
+          exit "$ctest_status"
         env:
           EXCLUDE_LABELS: ${{ steps.inventory.outputs.label_exclude }}
-          EXPECTED_TESTS: ${{ steps.inventory.outputs.count }}
           TEST_PARALLEL: ${{ matrix.parallel }}
+
+      - name: Audit selected test outcomes
+        if: ${{ always() && steps.inventory.outcome == 'success' }}
+        shell: bash
+        run: |
+          "$PYTHON" scripts/audit_ci_test_results.py audit \
+            --inventory build-ci/ctest-inventory.json \
+            --junit build-ci/ctest-results.xml \
+            --ctest-status build-ci/ctest-exit-status.txt \
+            --profile "$TEST_PROFILE" \
+            --exclude-label-regex "$EXCLUDE_LABELS" \
+            --matrix-name "$MATRIX_NAME" \
+            --output build-ci/ctest-outcomes.json
+        env:
+          EXCLUDE_LABELS: ${{ steps.inventory.outputs.label_exclude }}
+          TEST_PROFILE: ${{ matrix.test_profile }}
+          MATRIX_NAME: ${{ matrix.name }}
+          PYTHON: ${{ matrix.python }}
+
+      - name: Upload CTest execution evidence
+        if: ${{ always() && steps.inventory.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ctest-evidence-${{ matrix.test_profile }}
+          path: |
+            build-ci/ctest-inventory.json
+            build-ci/ctest-results.xml
+            build-ci/ctest-exit-status.txt
+            build-ci/ctest-outcomes.json
+            ctest.log
+          if-no-files-found: error
 
       - name: Audit configured and executable capability evidence
         shell: bash

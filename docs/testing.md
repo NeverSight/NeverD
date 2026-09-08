@@ -761,3 +761,53 @@ such run reads the same checked-in PE, ELF, and Mach-O fixtures for both native
 architectures. Because no single matrix shard represents every expensive
 suite, a local `check-neverd` remains the clearest complete pre-merge signal
 when the machine has all required cross tools.
+
+Discovery is not execution evidence. CI writes a CTest JUnit report and the
+original CTest exit status, then `scripts/audit_ci_test_results.py` reconciles
+every selected `(test name, labels)` identity with its result. Passed, skipped,
+disabled, infrastructure-not-run, failed, and missing results remain separate.
+In particular, CTest can encode a missing executable as a JUnit `<skipped>`;
+that is an execution failure, not an optional-backend skip. A stopped run can
+omit unstarted tests entirely, so matching only the XML summary count is not
+sufficient either. The audit runs even after CTest fails and preserves that
+failure. Each matrix leg uploads its inventory, JUnit, exit status, outcome
+JSON, and log as `ctest-evidence-<profile>`.
+
+The required execution policy follows existing CI ownership:
+
+- Linux must execute all selected `NeverDSemanticTests` cases; macOS must
+  execute all selected `NeverDPatchFullTests` cases.
+- Every host must execute the mandatory safety, native example plugin,
+  concolic, binary corpus, and failure-integrity suites. The integrity suites
+  cover worker exception transport, SDK session state, the semantic fixture,
+  and pipeline outcome publication.
+- Linux must also execute the SBF external oracle, upstream conformance, and
+  Agave conformance suites because that leg installs their pinned dependencies.
+- The only platform exceptions within these required suites are
+  `ObjCEHCorpus.HonorsHostMachORewriteContractForEveryVariant` and
+  `CxxItaniumEHCorpus.HonorsHostMachORewriteContractForEveryProbeVariant` on
+  non-macOS hosts. Both execute native Mach-O probes; their exact identities
+  and existing skip reasons are checked. Portable corpus-reading cases remain
+  required everywhere.
+
+A missing toolchain still appears as skipped, but a skip in a required suite
+fails the CI evidence gate: the promised execution was not obtained. Optional
+suite skips, such as an unavailable external Solidity toolchain, stay visible
+in the JSON and JUnit artifacts and never contribute to the passed count.
+Disabled tests and infrastructure-not-run results are never optional success.
+
+The unit being audited is a **CTest registration**. A passed Python aggregate
+runner does not prove that every child unittest executed; the separate
+capability-evidence audit remains responsible for its more specific contracts.
+Neither report is a claim of complete code coverage.
+
+CI outcome auditing requires CTest 3.28 or newer for JUnit labels. This is a
+CI-only tooling requirement; the project's minimum build version is unchanged.
+The parser, policy, actual CTest outcomes, and workflow failure handling can be
+verified without compiling NeverD:
+
+```bash
+python3 scripts/audit_ci_test_results.py check-tool
+python3 -m unittest scripts.tests.test_audit_ci_test_inventory \
+  scripts.tests.test_audit_ci_test_results scripts.tests.test_ci_configuration -v
+```

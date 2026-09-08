@@ -48,6 +48,12 @@ CONCOLIC_LABELS = (
     "NeverDConcolicCLITests",
     "NeverDConcolicPythonIntegration",
 )
+INTEGRITY_LABELS = (
+    "NeverDSupportThreadTests",
+    "NeverDSessionCAPITests",
+    "NeverDSemanticFixtureTests",
+    "NeverDPipelineOutcomeTests",
+)
 PROFILE_EXCLUSIONS = {
     "linux-semantic": r"^NeverDPatchFullTests$",
     "macos-patch": r"^NeverDSemanticTests$",
@@ -79,7 +85,11 @@ class AuditResult:
     patch_count: int
     selected_count: int
     excluded_count: int
-    selected_names: tuple[str, ...]
+    selected_records: tuple[TestRecord, ...]
+
+    @property
+    def selected_names(self) -> tuple[str, ...]:
+        return tuple(sorted(record.name for record in self.selected_records))
 
 
 def _parse_test(index: int, raw_test: object) -> TestRecord:
@@ -209,6 +219,15 @@ def audit_inventory(
             "concolic suites"
         )
 
+    absent_integrity = [
+        label for label in INTEGRITY_LABELS if label not in present_labels
+    ]
+    if absent_integrity:
+        raise InventoryError(
+            "failure-integrity tests are not under test: "
+            + ", ".join(absent_integrity)
+        )
+
     semantic_names = {
         record.name for record in records if SEMANTIC_LABEL in record.labels
     }
@@ -236,7 +255,6 @@ def audit_inventory(
         for record in records
         if not any(excluded_pattern.search(label) for label in record.labels)
     )
-    selected_names = tuple(sorted(record.name for record in selected))
     if not selected:
         raise InventoryError(f"profile {profile!r} selected zero tests")
 
@@ -257,6 +275,15 @@ def audit_inventory(
         raise InventoryError(
             f"profile {profile!r} does not select required concolic tests: "
             + ", ".join(unselected_concolic)
+        )
+
+    unselected_integrity = [
+        label for label in INTEGRITY_LABELS if label not in selected_labels
+    ]
+    if unselected_integrity:
+        raise InventoryError(
+            f"profile {profile!r} does not select required failure-integrity tests: "
+            + ", ".join(unselected_integrity)
         )
 
     heavy_sets = {
@@ -289,7 +316,7 @@ def audit_inventory(
         patch_count=len(patch_names),
         selected_count=len(selected),
         excluded_count=len(excluded),
-        selected_names=selected_names,
+        selected_records=selected,
     )
 
 

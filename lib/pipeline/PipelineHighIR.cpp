@@ -12,12 +12,16 @@
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
-#include "neverd/support/Diagnostic.h"
 #include "neverd/support/Parallel.h"
+
+#include "llvm/ADT/StringExtras.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <exception>
+#include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace neverd {
@@ -34,7 +38,9 @@ void Pipeline::buildHighIR(const BinaryImage &Img,
   detectThunkStubs(Result.LowFuncs, AllFuncNames);
 
   const size_t Total = Result.MedFuncs.size();
-  Result.HighFuncs.resize(Total);
+  // A worker failure invalidates the whole stage. Keep output private until
+  // every worker has joined so callers never receive a partially built batch.
+  std::vector<HighFunc> Pending(Total);
 
   // Weight each function by its MedIR op count so the heaviest structurings
   // start first and the tail stays balanced (see parallelForEachWeighted).
@@ -50,25 +56,30 @@ void Pipeline::buildHighIR(const BinaryImage &Img,
     MedToHighConverter Local;
     Local.setFuncNames(&AllFuncNames);
     for (size_t FI; (FI = Claim()) < N;) {
-      if (FI < Result.LowFuncs.size())
-        Local.setJumpTables(Result.LowFuncs[FI].JumpTables);
-      else
-        Local.setJumpTables({});
+      const MedFunc &MF = Result.MedFuncs[FI];
       try {
-        Result.HighFuncs[FI] = Local.convert(Result.MedFuncs[FI], Img.Arch);
-        auto &HF = Result.HighFuncs[FI];
-        auto &MF = Result.MedFuncs[FI];
+        if (FI < Result.LowFuncs.size())
+          Local.setJumpTables(Result.LowFuncs[FI].JumpTables);
+        else
+          Local.setJumpTables({});
+        Pending[FI] = Local.convert(MF, Img.Arch);
+        auto &HF = Pending[FI];
         HF.OriginalSize = MF.OriginalSize;
         HF.DebugName = MF.DebugName;
         HF.SourceFile = MF.SourceFile;
         HF.SourceLine = MF.SourceLine;
+      } catch (const std::exception &Error) {
+        throw std::runtime_error("function '" + MF.Name + "' at 0x" +
+                                 llvm::utohexstr(MF.Entry) + ": " +
+                                 Error.what());
       } catch (...) {
-        syncWarning() << "pipeline: med->high threw on "
-                      << Result.MedFuncs[FI].Name << "\n";
-        Result.HighFuncs[FI] = HighFunc{};
+        throw std::runtime_error("function '" + MF.Name + "' at 0x" +
+                                 llvm::utohexstr(MF.Entry) +
+                                 ": unknown exception");
       }
     }
   });
+  Result.HighFuncs = std::move(Pending);
 }
 
 } // namespace neverd

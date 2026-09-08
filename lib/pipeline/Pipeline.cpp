@@ -11,6 +11,8 @@
 
 #include "neverd/pipeline/Pipeline.h"
 
+#include "PipelineHighIRDetail.h"
+
 #include "neverd/decode/Decoder.h"
 #include "neverd/evm/analysis/EVMAnalyzer.h"
 #include "neverd/evm/bytecode/EVMBytecode.h"
@@ -29,6 +31,7 @@
 #include <cstddef>
 #include <memory>
 #include <set>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -135,7 +138,9 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
 
   Decoder Dec;
   if (!Dec.init(Img.Arch, Img.Mode)) {
-    llvm::WithColor::error() << "pipeline: failed to init decoder\n";
+    Result.Error = "failed to initialize decoder for architecture " +
+                   std::string(getArchName(Img.Arch));
+    llvm::WithColor::error() << "pipeline: " << Result.Error << "\n";
     return Result;
   }
 
@@ -227,7 +232,9 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   }
 
   // Phase 3: MedIR -> HighIR (parallel).
-  buildHighIR(Img, Opts, Result);
+  if (!pipeline_detail::runHighIRStage(Result,
+                                       [&] { buildHighIR(Img, Opts, Result); }))
+    return Result;
 
   if (Opts.DumpHigh && Opts.EmitDumpOutput)
     dumpHighIR(Result.HighFuncs);

@@ -63,6 +63,13 @@ add_neverd_unittest(NeverDSupportThreadTests
 target_include_directories(NeverDSupportThreadTests PRIVATE
   "${CMAKE_SOURCE_DIR}/include")
 
+add_neverd_unittest(NeverDPipelineOutcomeTests
+  PipelineOutcomeTests.cpp
+  LINK_COMPONENTS Pipeline BackendC
+)
+target_include_directories(NeverDPipelineOutcomeTests PRIVATE
+  "${CMAKE_SOURCE_DIR}/lib/pipeline")
+
 if(TARGET neverd_shared)
   add_neverd_unittest(NeverDSessionCAPITests
     SessionCAPITests.cpp
