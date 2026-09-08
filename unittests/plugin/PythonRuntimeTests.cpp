@@ -137,6 +137,25 @@ TEST_F(PythonRuntimeTest, DispatchesLifecycleAndInvalidatesBeforeTerm) {
       << Manager.lastError();
 }
 
+TEST_F(PythonRuntimeTest, PreservesImportFailureAfterModuleUnregistersItself) {
+  const fs::path PluginPath = TempDir / "UnregisterAndRaise.py";
+  {
+    std::ofstream Plugin(PluginPath);
+    ASSERT_TRUE(Plugin.is_open());
+    Plugin << "import sys\n"
+              "del sys.modules[__name__]\n"
+              "raise ValueError('original import failure')\n";
+  }
+  EXPECT_FALSE(Manager.loadPluginFile(PluginPath.string()));
+  const std::string Error = Manager.lastError();
+  EXPECT_NE(Error.find("Traceback (most recent call last)"), std::string::npos)
+      << Error;
+  EXPECT_NE(Error.find("UnregisterAndRaise.py"), std::string::npos) << Error;
+  EXPECT_NE(Error.find("ValueError: original import failure"),
+            std::string::npos)
+      << Error;
+}
+
 TEST_F(PythonRuntimeTest, CapturesFullTracebackAtTheNativeBoundary) {
   ASSERT_TRUE(Manager.loadPluginFile(NEVERD_PYTHON_RAISING_FIXTURE))
       << Manager.lastError();

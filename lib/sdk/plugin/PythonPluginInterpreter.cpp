@@ -147,8 +147,15 @@ PyObject *importPluginModule(const std::string &Path,
   PyRef Executed(
       PyObject_CallFunctionObjArgs(Execute.get(), Module.get(), nullptr));
   if (!Executed) {
+    // A plugin can unregister itself before raising. Preserve its exception
+    // across cleanup, whose missing-key error must not replace the traceback.
+    PyObject *Type = nullptr;
+    PyObject *Value = nullptr;
+    PyObject *Traceback = nullptr;
+    PyErr_Fetch(&Type, &Value, &Traceback);
     if (PyDict_DelItemString(Modules, ModuleName.c_str()) < 0)
       PyErr_Clear();
+    PyErr_Restore(Type, Value, Traceback);
     return nullptr;
   }
   return Module.release();
