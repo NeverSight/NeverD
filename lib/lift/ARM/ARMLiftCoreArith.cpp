@@ -117,11 +117,13 @@ bool liftCoreArith(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
     break;
   }
   case ARM_INS_ADC: {
-    if (ARM.op_count < 3)
+    if (ARM.op_count < 2)
       break;
     NdVar Dst = L.operandWrite(ARM.operands[0]);
-    NdVar A = readArithmeticOperand(ARM.operands[1]);
-    NdVar B = readArithmeticOperand(ARM.operands[2]);
+    // Thumb two-operand forms read the old destination as their first source.
+    const unsigned FirstSource = ARM.op_count == 2 ? 0 : 1;
+    NdVar A = readArithmeticOperand(ARM.operands[FirstSource]);
+    NdVar B = readArithmeticOperand(ARM.operands[FirstSource + 1]);
     if (ARM.update_flags) {
       A = L.snapForFlags(S, Dst, A);
       B = L.snapForFlags(S, Dst, B);
@@ -151,11 +153,13 @@ bool liftCoreArith(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
   }
   case ARM_INS_SBC: {
     // SBC: Dst = a - b - NOT(C) = a + ~b + C
-    if (ARM.op_count < 3)
+    if (ARM.op_count < 2)
       break;
     NdVar Dst = L.operandWrite(ARM.operands[0]);
-    NdVar A = readArithmeticOperand(ARM.operands[1]);
-    NdVar B = readArithmeticOperand(ARM.operands[2]);
+    // Thumb two-operand forms read the old destination as their first source.
+    const unsigned FirstSource = ARM.op_count == 2 ? 0 : 1;
+    NdVar A = readArithmeticOperand(ARM.operands[FirstSource]);
+    NdVar B = readArithmeticOperand(ARM.operands[FirstSource + 1]);
     if (ARM.update_flags) {
       A = L.snapForFlags(S, Dst, A);
       B = L.snapForFlags(S, Dst, B);
