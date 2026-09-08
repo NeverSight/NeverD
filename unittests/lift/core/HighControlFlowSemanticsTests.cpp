@@ -62,12 +62,17 @@ HighStmt result(va_t Address, ExprPtr Value) {
 // shape.
 std::optional<uint64_t> execute(const HighFunc &F, uint64_t Condition) {
   std::map<VarKey, uint64_t> Values{{{0, 0}, Condition}, {{0, -1}, Condition}};
+  std::map<uint64_t, uint64_t> Memory;
   std::function<uint64_t(const ExprPtr &)> Value = [&](const ExprPtr &E) {
     if (E->Kind == ExprKind::Const)
       return E->ConstVal;
     if (E->Kind == ExprKind::Var) {
       auto I = Values.find(varKey(E->Var));
       if (I == Values.end()) {
+        if (E->Var.Kind == MedVar::Reg &&
+            getTargetRegInfo(E->Var.TheArch).isFrameReg(E->Var.RegOff))
+          return UINT64_C(0x8000);
+
         std::string Description = "undefined " + E->str() + " identity " +
                                   std::to_string(E->Var.Id) + ":" +
                                   std::to_string(E->Var.SSAVer) + "\n";
@@ -77,6 +82,12 @@ std::optional<uint64_t> execute(const HighFunc &F, uint64_t Condition) {
       }
       return I->second;
     }
+    if (E->Kind == ExprKind::Load)
+      return Memory.at(Value(E->Operands.at(0)));
+    if (E->Kind == ExprKind::Cast)
+      return Value(E->Operands.at(0));
+    if (E->Kind == ExprKind::Call && E->CallTarget == "observe")
+      return Memory.at(Value(E->Operands.at(1)));
     if (E->Kind == ExprKind::UnaryOp && E->Op == NdOp::BOOL_NOT)
       return uint64_t(!Value(E->Operands.at(0)));
     if (E->Kind == ExprKind::UnaryOp &&
@@ -133,6 +144,10 @@ std::optional<uint64_t> execute(const HighFunc &F, uint64_t Condition) {
         return {Value(S.RetVal), 0};
       if (S.Kind == StmtKind::Goto)
         return {{}, S.GotoTarget};
+      if (S.Kind == StmtKind::Store)
+        Memory[Value(S.StoreAddr)] = Value(S.StoreVal);
+      if (S.Kind == StmtKind::Call)
+        (void)Value(S.CallExpr);
       if (S.Kind == StmtKind::Assign)
         Values[varKey(S.Dst->Var)] = Value(S.Val);
       if (S.Kind == StmtKind::If || S.Kind == StmtKind::IfElse) {
@@ -440,6 +455,62 @@ TEST(HighControlFlowSemantics, SwitchCleanupPreservesContinuationPaths) {
       EXPECT_EQ(execute(F, 1), Unmatched);
       if (Exit == StmtKind::Return && HasDefault)
         EXPECT_EQ(F.Body.size(), 1u);
+    }
+  }
+}
+
+TEST(HighControlFlowSemantics, ArgumentValueDoesNotMakeFrameStoreDead) {
+  for (Arch Architecture : {Arch::X64, Arch::AArch64}) {
+    const auto &TRI = getTargetRegInfo(Architecture);
+    for (uint64_t FrameRegister : {TRI.StackPointer, TRI.FramePointer}) {
+      for (bool ReadAfterCall : {false, true}) {
+        for (uint64_t Argument : {5, 7}) {
+          SCOPED_TRACE(static_cast<int>(Architecture));
+          SCOPED_TRACE(FrameRegister);
+          SCOPED_TRACE(ReadAfterCall);
+          SCOPED_TRACE(Argument);
+          MedFunc M;
+          M.Entry = 0x1000;
+          M.Name = "observable_frame_store";
+          M.ReturnType = NdType::makeInt(8, false);
+          auto Frame = machineValue(20, Architecture);
+          Frame.Kind = MedVar::Reg;
+          Frame.RegOff = FrameRegister;
+          auto Return = machineValue(21, Architecture);
+          Return.Kind = MedVar::Reg;
+          Return.RegOff = TRI.IntReturnReg;
+          MedBlock Block;
+          Block.Id = 0;
+          Block.StartAddr = M.Entry;
+          Block.Ops.push_back(operation(NdOp::STORE, 0x1000, {},
+                                        {Frame, MedVar::makeConst(99, 8)}));
+          Block.Ops.push_back(operation(NdOp::STORE, 0x1004, {},
+                                        {Frame, MedVar::makeConst(5, 8)}));
+          auto Call = operation(NdOp::CALL, 0x1008, Return,
+                                {MedVar::makeConst(0x2000, 8),
+                                 MedVar::makeConst(Argument, 8), Frame});
+          auto Hint = std::make_shared<SourceCallTypeHint>();
+          Hint->Signature.ReturnType = M.ReturnType;
+          Hint->Signature.Parameters = {
+              {"value", M.ReturnType, {}},
+              {"address", NdType::makePtr(M.ReturnType), {}}};
+          Call.SourceCallHint = Hint;
+          Block.Ops.push_back(Call);
+          if (ReadAfterCall) {
+            auto Loaded = Return;
+            Loaded.Id = 22;
+            Block.Ops.push_back(operation(NdOp::LOAD, 0x100c, Loaded, {Frame}));
+            Return = Loaded;
+          }
+          Block.Ops.push_back(operation(NdOp::RETURN, 0x1010, {}, {Return}));
+          M.Blocks.push_back(std::move(Block));
+          const std::map<va_t, std::string> Names{{0x2000, "observe"}};
+          MedToHighConverter Converter;
+          Converter.setFuncNames(&Names);
+          auto F = Converter.convert(M, Architecture);
+          EXPECT_EQ(execute(F, 0), 5u);
+        }
+      }
     }
   }
 }

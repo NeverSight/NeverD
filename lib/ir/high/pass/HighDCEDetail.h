@@ -60,7 +60,6 @@ void eliminateLoopAliases(std::vector<HighStmt> &Stmts);
 //===----------------------------------------------------------------------===//
 
 void elimConsecutiveDeadStores(std::vector<HighStmt> &Stmts);
-void eliminateRedundantStackStores(HighFunc &Func, Arch TargetArch);
 
 //===----------------------------------------------------------------------===//
 // Expression simplification  (defined in HighExprSimplify.cpp)

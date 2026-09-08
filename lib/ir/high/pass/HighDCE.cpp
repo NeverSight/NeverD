@@ -430,10 +430,8 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
 
   eliminateDeadConditions(Func.Body);
 
-  LLVM_DEBUG(llvm::dbgs() << "    dce phase 9: redundant stack store ("
-                          << Func.Name << ", " << Func.Body.size()
-                          << " stmts)\n");
-  eliminateRedundantStackStores(Func, TargetArch);
+  // A call argument equal to a stored value does not make the memory write
+  // dead: the callee or a later load may still observe the frame slot.
 
   LLVM_DEBUG(llvm::dbgs() << "    dce phase 10: consec dead store ("
                           << Func.Name << ", " << Func.Body.size()

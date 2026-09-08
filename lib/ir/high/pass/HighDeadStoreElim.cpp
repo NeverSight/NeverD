@@ -16,7 +16,6 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/HighIR.h"
 
 #include <algorithm>
@@ -110,58 +109,6 @@ void elimConsecutiveDeadStores(std::vector<HighStmt> &Stmts) {
     for (auto &C : S.Cases)
       elimConsecutiveDeadStores(C.Body);
     elimConsecutiveDeadStores(S.DefaultBody);
-  }
-}
-
-//===----------------------------------------------------------------------===//
-// Redundant stack store elimination
-//===----------------------------------------------------------------------===//
-
-void eliminateRedundantStackStores(HighFunc &Func, Arch TargetArch) {
-  const auto &TRI = getTargetRegInfo(TargetArch);
-  for (size_t I = 0; I + 1 < Func.Body.size(); ++I) {
-    auto &StoreStmt = Func.Body[I];
-    auto &NextStmt = Func.Body[I + 1];
-    if (StoreStmt.Kind != StmtKind::Store)
-      continue;
-    if (StoreStmt.MemoryOrdering != NdMemoryOrdering::None ||
-        StoreStmt.MemoryAddressSpace != NdMemoryAddressSpace::Default)
-      continue;
-    if (NextStmt.Kind != StmtKind::Assign && NextStmt.Kind != StmtKind::Call)
-      continue;
-    ExprPtr CallExpr;
-    if (NextStmt.Kind == StmtKind::Assign && NextStmt.Val &&
-        NextStmt.Val->Kind == ExprKind::Call)
-      CallExpr = NextStmt.Val;
-    else if (NextStmt.Kind == StmtKind::Call)
-      CallExpr = NextStmt.CallExpr;
-    if (!CallExpr || !StoreStmt.StoreAddr || !StoreStmt.StoreVal)
-      continue;
-    bool IsStackPtrStore = false;
-    if (StoreStmt.StoreAddr->Kind == ExprKind::BinOp &&
-        StoreStmt.StoreAddr->Op == NdOp::INT_SUB &&
-        !StoreStmt.StoreAddr->Operands.empty() &&
-        StoreStmt.StoreAddr->Operands[0]->Kind == ExprKind::Var &&
-        StoreStmt.StoreAddr->Operands[0]->Var.Kind == MedVar::Reg)
-      IsStackPtrStore =
-          TRI.isFrameReg(StoreStmt.StoreAddr->Operands[0]->Var.RegOff);
-    if (StoreStmt.StoreAddr->Kind == ExprKind::Var &&
-        StoreStmt.StoreAddr->Var.Kind == MedVar::Reg)
-      IsStackPtrStore = TRI.isFrameReg(StoreStmt.StoreAddr->Var.RegOff);
-    if (IsStackPtrStore) {
-      bool ValInArgs = false;
-      for (auto &Arg : CallExpr->Operands) {
-        if (Arg && StoreStmt.StoreVal &&
-            Arg->structuralEq(*StoreStmt.StoreVal)) {
-          ValInArgs = true;
-          break;
-        }
-      }
-      if (ValInArgs) {
-        Func.Body.erase(Func.Body.begin() + static_cast<long>(I));
-        --I;
-      }
-    }
   }
 }
 
