@@ -182,7 +182,7 @@ void postRenameCleanup(std::vector<HighStmt> &Stmts) {
       std::function<void(const ExprPtr &)> CheckRef = [&](const ExprPtr &E) {
         if (!E || CurrUsesPrev || !CheckSeen.insert(E.get()).second)
           return;
-        if (E->Kind == ExprKind::Var && E->structuralEq(*Prev.Dst))
+        if (E->Kind == ExprKind::Var && E->Var == Prev.Dst->Var)
           CurrUsesPrev = true;
         for (auto &Op : E->Operands)
           CheckRef(Op);

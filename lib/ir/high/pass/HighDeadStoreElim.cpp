@@ -65,7 +65,7 @@ void elimConsecutiveDeadStores(std::vector<HighStmt> &Stmts) {
     std::function<void(const ExprPtr &)> CheckRef = [&](const ExprPtr &E) {
       if (!E || NextUsesCurr || !Seen.insert(E.get()).second)
         return;
-      if (E->Kind == ExprKind::Var && E->structuralEq(*CurrStmt.Dst))
+      if (E->Kind == ExprKind::Var && E->Var == CurrStmt.Dst->Var)
         NextUsesCurr = true;
       for (auto &Op : E->Operands)
         CheckRef(Op);

@@ -4,6 +4,8 @@
 #include "neverd/ir/high/HighIR.h"
 #include "neverd/ir/high/MedToHigh.h"
 
+#include "llvm/ADT/APInt.h"
+
 #include <optional>
 #include <stdexcept>
 
@@ -15,6 +17,8 @@ void simplifyAllExprs(std::vector<HighStmt> &);
 void recoverSwitchStatements(HighFunc &);
 void removeUnreachableCode(std::vector<HighStmt> &);
 void eliminateRegAliasCopies(HighFunc &);
+void elimConsecutiveDeadStores(std::vector<HighStmt> &);
+void postRenameCleanup(std::vector<HighStmt> &);
 } // namespace neverd
 using namespace neverd;
 
@@ -93,15 +97,11 @@ std::optional<uint64_t> execute(const HighFunc &F, uint64_t Condition) {
     if (E->Kind == ExprKind::UnaryOp &&
         (E->Op == NdOp::INT_ZEXT || E->Op == NdOp::INT_SEXT)) {
       auto Input = E->Operands[0];
-      auto Bits = unsigned(Input->Type->Size * 8);
-      uint64_t V = Value(Input);
-      if (Bits < 64) {
-        auto Mask = (uint64_t(1) << Bits) - 1;
-        V &= Mask;
-        if (E->Op == NdOp::INT_SEXT && (V & (uint64_t(1) << (Bits - 1))))
-          V |= ~Mask;
-      }
-      return V;
+      const llvm::APInt V(Input->Type->Size * 8, Value(Input));
+      const unsigned OutputBits = E->Type->Size * 8;
+      return (E->Op == NdOp::INT_SEXT ? V.sextOrTrunc(OutputBits)
+                                      : V.zextOrTrunc(OutputBits))
+          .getZExtValue();
     }
     if (E->Kind == ExprKind::BinOp && E->Operands.size() == 2) {
       auto A = Value(E->Operands[0]), B = Value(E->Operands[1]);
@@ -513,5 +513,123 @@ TEST(HighControlFlowSemantics, ArgumentValueDoesNotMakeFrameStoreDead) {
       }
     }
   }
+}
+
+MedFunc extensionConditionFunction(Arch Architecture, uint16_t FirstWidth,
+                                   uint16_t SecondWidth, uint64_t Compared) {
+  const auto &TRI = getTargetRegInfo(Architecture);
+  MedFunc M;
+  M.Entry = 0x1000;
+  M.Name = "extension_condition_widths";
+  M.ReturnType = NdType::makeInt(8, false);
+  auto P = machineValue(0, Architecture);
+  P.Kind = MedVar::Param;
+  P.Size = 1;
+  P.RegOff = TRI.IntParamRegs[0];
+  M.Params = {P};
+  auto Frame = machineValue(20, Architecture);
+  Frame.Kind = MedVar::Reg;
+  Frame.RegOff = TRI.StackPointer;
+  M.Blocks.resize(5);
+  for (int I = 0; I < 5; ++I) {
+    M.Blocks[I].Id = I;
+    M.Blocks[I].StartAddr = 0x1000 + I * 0x100;
+    M.Blocks[I].EndAddr = M.Blocks[I].StartAddr + 0x40;
+  }
+  M.Blocks[0].Ops.push_back(
+      operation(NdOp::STORE, 0x1000, {}, {Frame, MedVar::makeConst(0, 8)}));
+  for (int I = 0; I < 2; ++I) {
+    auto &Check = M.Blocks[I * 2];
+    auto Extended = machineValue(1 + I * 2, Architecture);
+    Extended.Size = I == 0 ? FirstWidth : SecondWidth;
+    auto Condition = machineValue(2 + I * 2, Architecture);
+    Condition.Size = 1;
+    Check.Succs = {I * 2 + 1, I * 2 + 2};
+    if (I)
+      Check.Preds = {0, 1};
+    Check.Ops.push_back(
+        operation(NdOp::INT_SEXT, Check.StartAddr + 4, Extended, {P}));
+    Check.Ops.push_back(
+        operation(NdOp::INT_NOTEQUAL, Check.StartAddr + 8, Condition,
+                  {Extended, MedVar::makeConst(Compared, Extended.Size)}));
+    Check.Ops.push_back(
+        operation(NdOp::COND_BR, Check.StartAddr + 12, {},
+                  {MedVar::makeConst(Check.StartAddr + 0x200, 8), Condition}));
+    auto &Body = M.Blocks[I * 2 + 1];
+    Body.Preds = {I * 2};
+    Body.Succs = {I * 2 + 2};
+    Body.Ops.push_back(operation(NdOp::STORE, Body.StartAddr, {},
+                                 {Frame, MedVar::makeConst(I + 1, 8)}));
+    Body.Ops.push_back(
+        operation(NdOp::BRANCH, Body.StartAddr + 4, {},
+                  {MedVar::makeConst(Body.StartAddr + 0x100, 8)}));
+  }
+  auto R = machineValue(10, Architecture);
+  R.Kind = MedVar::Reg;
+  R.RegOff = TRI.IntReturnReg;
+  auto &Exit = M.Blocks[4];
+  Exit.Preds = {2, 3};
+  Exit.Ops = {operation(NdOp::LOAD, 0x1400, R, {Frame}),
+              operation(NdOp::RETURN, 0x1404, {}, {R})};
+  return M;
+}
+
+TEST(HighControlFlowSemantics, ExtensionWidthsKeepConditionsDistinct) {
+  for (Arch Architecture : {Arch::X64, Arch::AArch64})
+    for (auto [FirstWidth, SecondWidth] :
+         {std::pair<uint16_t, uint16_t>{2, 4}, {4, 8}, {2, 8}, {4, 4}})
+      for (bool Reverse : {false, true}) {
+        if (Reverse)
+          std::swap(FirstWidth, SecondWidth);
+        const uint64_t Compared =
+            llvm::APInt::getAllOnes(std::min(FirstWidth, SecondWidth) * 8)
+                .getZExtValue();
+        auto F = MedToHighConverter().convert(
+            extensionConditionFunction(Architecture, FirstWidth, SecondWidth,
+                                       Compared),
+            Architecture);
+        for (unsigned Input = 0; Input < 256; ++Input) {
+          SCOPED_TRACE(static_cast<int>(Architecture));
+          SCOPED_TRACE(FirstWidth);
+          SCOPED_TRACE(SecondWidth);
+          SCOPED_TRACE(Input);
+          const llvm::APInt Value(8, Input);
+          uint64_t Expected =
+              Value.sext(FirstWidth * 8).getZExtValue() == Compared ? 1 : 0;
+          if (Value.sext(SecondWidth * 8).getZExtValue() == Compared)
+            Expected = 2;
+          EXPECT_EQ(execute(F, Input), Expected);
+        }
+      }
+}
+
+TEST(HighControlFlowSemantics, StructuralEqualityIncludesExpressionWidth) {
+  auto Value = HighExpr::makeConst(0xff, 1);
+  auto First = HighExpr::makeUnary(NdOp::INT_SEXT, Value);
+  auto Second = HighExpr::makeUnary(NdOp::INT_SEXT, Value);
+  First->Type = NdType::makeInt(4);
+  Second->Type = NdType::makeInt(4);
+  EXPECT_TRUE(First->structuralEq(*Second));
+  Second->Type = NdType::makeInt(8);
+  EXPECT_FALSE(First->structuralEq(*Second));
+  EXPECT_FALSE(HighExpr::makeConst(0xff, 1)->structuralEq(
+      *HighExpr::makeConst(0xff, 4)));
+}
+
+TEST(HighControlFlowSemantics, TypedViewsStillReferenceTheirVariable) {
+  for (auto Cleanup : {elimConsecutiveDeadStores, postRenameCleanup})
+    for (bool HasType : {false, true}) {
+      HighFunc F;
+      auto View = local(1);
+      View->Var.Size = 4;
+      View->Type = HasType ? NdType::makeInt(4) : nullptr;
+      auto Update = assign(0x1004, 1, 0);
+      Update.Val =
+          HighExpr::makeBinop(NdOp::INT_ADD, View, HighExpr::makeConst(9, 4));
+      F.Body = {assign(0x1000, 1, 7), Update, result(0x1008, local(1))};
+      ASSERT_EQ(execute(F, 0), 16u);
+      Cleanup(F.Body);
+      EXPECT_NO_THROW({ EXPECT_EQ(execute(F, 0), 16u); });
+    }
 }
 } // namespace

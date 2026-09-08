@@ -159,6 +159,11 @@ std::string HighExpr::str() const {
 bool HighExpr::structuralEq(const HighExpr &Other) const {
   if (Kind != Other.Kind)
     return false;
+  // Equal operands can still produce different values at different widths,
+  // notably when sign extension feeds a condition that may be merged.
+  if (static_cast<bool>(Type) != static_cast<bool>(Other.Type) ||
+      (Type && Type->Size != Other.Type->Size))
+    return false;
   if (Op != Other.Op)
     return false;
   if (MemoryOrdering != Other.MemoryOrdering)
@@ -171,8 +176,7 @@ bool HighExpr::structuralEq(const HighExpr &Other) const {
   case ExprKind::Const:
     return ConstVal == Other.ConstVal;
   case ExprKind::Undef:
-    return (!Type && !Other.Type) ||
-           (Type && Other.Type && Type->Size == Other.Type->Size);
+    return true;
   case ExprKind::Call:
     if (CallTarget != Other.CallTarget || CallAddr != Other.CallAddr ||
         SourceCallHint != Other.SourceCallHint ||
