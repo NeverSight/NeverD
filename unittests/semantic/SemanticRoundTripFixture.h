@@ -432,9 +432,8 @@ private:
       const char *Err = neverd_last_error(Sess);
       const std::string Diagnostic = Err ? Err : "unknown";
       neverd_free_string(Err);
-      FAIL() << "Lift-to-obj failed: " << Diagnostic
-             << "\n  Status: " << Ret << "\n  Test: " << TC.Name
-             << "\n  Object: " << ObjPath;
+      FAIL() << "Lift-to-obj failed: " << Diagnostic << "\n  Status: " << Ret
+             << "\n  Test: " << TC.Name << "\n  Object: " << ObjPath;
     }
 
     if (TC.RecoveredSwitch != RecoveredSwitchExpectation::Unspecified) {
