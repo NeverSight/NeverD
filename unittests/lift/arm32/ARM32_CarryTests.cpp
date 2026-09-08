@@ -90,3 +90,53 @@ TEST(ARM32ThumbCarry, TwoOperandResultsAndNZCV) {
           }
     }
 }
+
+TEST(ARM32ThumbCarry, ModifiedImmediateCarryRespectsInstructionMode) {
+  using namespace neverd;
+  struct Case {
+    InstructionMode Mode;
+    uint8_t Code[4];
+    uint32_t Immediate;
+    bool PreservesCarry;
+  };
+  const Case Cases[] = {
+      {InstructionMode::Thumb, {0x5f, 0xf4, 0x00, 0x00}, 0x800000u, false},
+      {InstructionMode::Thumb, {0x5f, 0xf0, 0x00, 0x40}, 0x80000000u, false},
+      {InstructionMode::Thumb, {0x5f, 0xf0, 0x80, 0x40}, 0x40000000u, false},
+      {InstructionMode::Thumb, {0x5f, 0xf0, 0xab, 0x30}, 0xababababu, true},
+      {InstructionMode::Thumb, {0x5f, 0xf0, 0xab, 0x00}, 0xabu, true},
+      {InstructionMode::Thumb, {0x11, 0xf0, 0x00, 0x40}, 0x80000000u, false},
+      {InstructionMode::ARM, {0x02, 0x01, 0xb0, 0xe3}, 0x80000000u, false},
+      {InstructionMode::ARM, {0x01, 0x01, 0xb0, 0xe3}, 0x40000000u, false},
+      {InstructionMode::ARM, {0xab, 0x00, 0xb0, 0xe3}, 0xabu, true},
+  };
+  for (const auto &C : Cases) {
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(Arch::ARM, C.Mode));
+    DecodedInsn Insn{};
+    ASSERT_EQ(Dec.decodeOne(C.Code, sizeof(C.Code), 0x1000, Insn), 4);
+    SCOPED_TRACE(Insn.Raw->mnemonic);
+    SCOPED_TRACE(Insn.Raw->op_str);
+    ARMLifter L(Arch::ARM, C.Mode);
+    std::vector<LowOp> Ops;
+    L.lift(Insn.Raw, Ops);
+    for (uint32_t Carry : {0u, 1u}) {
+      SCOPED_TRACE(Carry);
+      BinaryImage Img;
+      Img.Arch = Arch::ARM;
+      NdOpEmulator Emu(Img);
+      Emu.setRegister(armreg::R0, 0);
+      Emu.setRegister(armreg::R1, 0xffffffffu);
+      Emu.setRegister(armreg::CFLAG, Carry);
+      Emu.setRegister(armreg::VFLAG, 1);
+      for (const auto &Op : Ops)
+        ASSERT_TRUE(Emu.step(Op));
+      EXPECT_EQ(Emu.getRegister(armreg::R0), C.Immediate);
+      EXPECT_EQ(Emu.getRegister(armreg::NFLAG), C.Immediate >> 31);
+      EXPECT_EQ(Emu.getRegister(armreg::ZFLAG), C.Immediate == 0);
+      EXPECT_EQ(Emu.getRegister(armreg::CFLAG),
+                C.PreservesCarry ? Carry : C.Immediate >> 31);
+      EXPECT_EQ(Emu.getRegister(armreg::VFLAG), 1u);
+    }
+  }
+}

@@ -11,10 +11,9 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/lift/ARMLifter.h"
-
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/lift/ARMLifter.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
@@ -171,8 +170,7 @@ void ARMLifter::emitMsrNzcv(LiftState &S, NdVar Src) {
   setFlag(armreg::CpsrVBit, armreg::VFLAG);
 }
 
-NdVar ARMLifter::snapForFlags(LiftState &S, const NdVar &Dst,
-                                const NdVar &Op) {
+NdVar ARMLifter::snapForFlags(LiftState &S, const NdVar &Dst, const NdVar &Op) {
   if (Dst.Space == VnodeSpace::REG && Op.Space == VnodeSpace::REG &&
       Dst.Offset == Op.Offset) {
     NdVar T = S.makeTemp(Op.Size);
@@ -222,7 +220,7 @@ void ARMLifter::emitRegShifterCarry(LiftState &S, unsigned ShType, NdVar Src,
 }
 
 void ARMLifter::emitLogicalOpCarry(LiftState &S, const cs_insn *Insn,
-                                   const cs_arm_op &Op) {
+                                   const cs_arm_op &Op) const {
   if (Op.type == ARM_OP_REG && Op.shift.type != ARM_SFT_INVALID) {
     auto RI = mapCapstoneReg(static_cast<arm_reg>(Op.reg));
     if (RI.Size == 0)
@@ -268,14 +266,17 @@ void ARMLifter::emitLogicalOpCarry(LiftState &S, const cs_insn *Insn,
     return;
   }
   if (Op.type == ARM_OP_IMM && Insn->size == 4) {
-    // A modified immediate encoded with a nonzero rotation sets C to bit 31 of
-    // the constant; a plain 0-255 immediate (rotation 0) leaves C unchanged.
+    // Rotated modified immediates set C to bit 31 of the expanded constant.
+    // Thumb's plain and replicated-byte forms preserve C; its imm12[11:10]
+    // selector is split across the two instruction halfwords.
     uint32_t Enc;
     std::memcpy(&Enc, Insn->bytes, 4);
-    if (((Enc >> 25) & 0x1) == 0x1 && ((Enc >> 8) & 0xF) != 0) {
+    bool Rotated = ((Enc >> 25) & 0x1) == 0x1 && ((Enc >> 8) & 0xF) != 0;
+    if (SourceMode == InstructionMode::Thumb)
+      Rotated = (Insn->bytes[1] & 0x04) != 0 || (Insn->bytes[3] & 0x40) != 0;
+    if (Rotated) {
       unsigned Cbit = (static_cast<uint32_t>(Op.imm) >> 31) & 0x1;
-      S.emit(NdOp::COPY, NdVar::reg(armreg::CFLAG, 1),
-             {NdVar::cst(Cbit, 1)});
+      S.emit(NdOp::COPY, NdVar::reg(armreg::CFLAG, 1), {NdVar::cst(Cbit, 1)});
     }
   }
 }

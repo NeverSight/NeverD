@@ -147,8 +147,8 @@ public:
   // register, or bit 31 of a rotated modified immediate.  A bare register or a
   // non-rotated immediate leaves C unchanged.  Call before the result writes
   // the destination (a shifted source may alias it).
-  static void emitLogicalOpCarry(LiftState &S, const cs_insn *Insn,
-                                 const cs_arm_op &Op);
+  void emitLogicalOpCarry(LiftState &S, const cs_insn *Insn,
+                          const cs_arm_op &Op) const;
 
 private:
   bool liftCore(LiftState &S, const cs_insn *Insn, const cs_arm &ARM);
