@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -19,6 +20,7 @@ import sys
 # SDK 26.5's complete Messages import produces about 263 MiB of JSON. Keep
 # the full declaration closure and a finite ceiling above that measured input.
 MAX_AST_BYTES = 384 * 1024 * 1024
+MAX_MACRO_BYTES = 16 * 1024 * 1024
 IMPORTS = {"Messages/Messages.h": "MSStickerBrowserViewController",
            "UserNotifications/UserNotifications.h": "UNNotificationServiceExtension"}
 
@@ -59,6 +61,35 @@ def declarations(ast, required_class):
     return {"interface_declarations": sorted(classes), "ordinary_identifiers": sorted(names)}
 
 
+def macro_identifiers(text):
+    """Read the names in Clang's complete -dM output, without evaluating macros."""
+    if len(text.encode("utf-8")) > MAX_MACRO_BYTES:
+        raise ValueError("SDK macro evidence exceeds its parsing budget")
+    names, logical, continued = set(), "", False
+    for line in text.splitlines():
+        logical += line
+        continued = logical.endswith("\\")
+        if continued:
+            logical = logical[:-1]
+            continue
+        if not logical.strip():
+            logical = ""
+            continue
+        match = re.match(r"^#define[ \t]+([A-Za-z_][A-Za-z0-9_]*)(?=[ \t(]|$)", logical)
+        if not match:
+            raise ValueError("Clang macro evidence has an unrecognized definition")
+        name = match.group(1)
+        if name in names:
+            raise ValueError("Clang macro evidence has a duplicate definition")
+        names.add(name)
+        logical = ""
+    if logical or continued:
+        raise ValueError("Clang macro evidence has a truncated continuation")
+    if not {"__APPLE__", "__OBJC__"}.issubset(names):
+        raise ValueError("Clang macro evidence does not identify the Apple Objective-C target")
+    return sorted(names)
+
+
 def collect(output, sdk_version):
     if os.environ.get("GITHUB_ACTIONS") != "true" or sys.platform != "darwin":
         raise RuntimeError("SDK declaration collection must run on macOS GitHub Actions")
@@ -96,8 +127,9 @@ def collect(output, sdk_version):
             root = Path(command(sdk + "-root", [*prefix, "--show-sdk-path"]).read_text().strip())
             clang = Path(command(sdk + "-clang", [*prefix, "--find", "clang"]).read_text().strip())
             command(sdk + "-compiler-version", [clang, "--version"])
-            args = [clang, "-x", "objective-c", "-std=gnu11", "-fobjc-arc", "-fno-modules",
-                    "-target", target, "-isysroot", root, "-fsyntax-only"]
+            target_args = [clang, "-x", "objective-c", "-std=gnu11", "-fobjc-arc", "-fno-modules",
+                           "-target", target, "-isysroot", root]
+            args = [*target_args, "-fsyntax-only"]
             for header, superclass in IMPORTS.items():
                 # Keep each import's closure separate: a UserNotifications-only
                 # source must not inherit false conflicts from UIKit/Messages.
@@ -106,6 +138,12 @@ def collect(output, sdk_version):
                 source.write_text(f"#import <{header}>\n", encoding="utf-8")
                 ast_path = command(name + "-ast", [*args, "-Xclang", "-ast-dump=json", source])
                 inventory = declarations(json.loads(ast_path.read_text(encoding="utf-8")), superclass)
+                macros_path = command(name + "-macros", [*target_args, "-E", "-dM", source])
+                if macros_path.stat().st_size > MAX_MACRO_BYTES:
+                    raise RuntimeError("SDK macro evidence exceeds its parsing budget")
+                inventory["macro_identifiers"] = macro_identifiers(macros_path.read_text(encoding="utf-8"))
+                inventory["macro_evidence"] = {"path": macros_path.name, "sha256": digest(macros_path),
+                                               "scope": "preprocessor-identifiers-only"}
                 probe = output / (name + "-subclass.m")
                 probe.write_text(f"#import <{header}>\n"
                                  f"@interface NeverDSDKDeclarationProbe : {superclass}\n@end\n",
