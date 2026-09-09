@@ -203,9 +203,9 @@ void checkFlags(const Access &flags, const Access &allowed,
     throw Error("conflicting declaration visibility: " + id);
 }
 [[noreturn]] void scopeError(const Class &cls, const std::string &message) {
-  std::string context = "Android class " + cls.name + " from " +
-                        (cls.source_id.empty() ? "<unspecified>"
-                                               : cls.source_id);
+  std::string context =
+      "Android class " + cls.name + " from " +
+      (cls.source_id.empty() ? "<unspecified>" : cls.source_id);
   if (cls.enclosing_method)
     context += " enclosing " + cls.enclosing_method->identity();
   else if (cls.enclosing)
@@ -213,22 +213,19 @@ void checkFlags(const Access &flags, const Access &allowed,
   throw Error(context + ": " + message);
 }
 bool scalarType(const std::string &type, bool allow_void = false) {
-  return type.size() == 1 &&
-         (std::string_view("ZBCSIJFD").find(type[0]) !=
-              std::string_view::npos ||
-          (allow_void && type == "V"));
+  return type.size() == 1 && (std::string_view("ZBCSIJFD").find(type[0]) !=
+                                  std::string_view::npos ||
+                              (allow_void && type == "V"));
 }
-void scalarSignature(const Class &cls, const MethodRef &ref,
-                     Budget &budget) {
+void scalarSignature(const Class &cls, const MethodRef &ref, Budget &budget) {
   if (!scalarType(ref.returns, true))
     scopeError(cls, "method-local projection requires a scalar return: " +
                         ref.identity());
   for (const auto &parameter : ref.parameters) {
     budget.tick();
     if (!scalarType(parameter))
-      scopeError(cls,
-                 "method-local projection requires scalar parameters: " +
-                     ref.identity());
+      scopeError(cls, "method-local projection requires scalar parameters: " +
+                          ref.identity());
   }
 }
 void checkSourceScope(const Class &cls, Budget &budget) {
@@ -269,7 +266,8 @@ void checkSourceScope(const Class &cls, Budget &budget) {
                         "access flags");
     }
   if (has(cls.access, "final") != has(cls.inner_access, "final"))
-    scopeError(cls, "local class final flag disagrees with InnerClass metadata");
+    scopeError(cls,
+               "local class final flag disagrees with InnerClass metadata");
   if (cls.superclass != "Ljava/lang/Object;" || !cls.interfaces.empty())
     scopeError(cls, "method-local projection requires direct Object "
                     "inheritance without interfaces");
@@ -295,8 +293,8 @@ void checkSourceScope(const Class &cls, Budget &budget) {
                         "captured constructor arguments are unsupported");
     } else {
       if (ref.name.empty() || ref.name.starts_with('<'))
-        scopeError(cls, "invalid ordinary local method identity: " +
-                            ref.identity());
+        scopeError(cls,
+                   "invalid ordinary local method identity: " + ref.identity());
       scalarSignature(cls, ref, budget);
     }
   }
@@ -457,24 +455,22 @@ void linkLocalScopes(const ClassMap &classes, Budget &budget) {
                              const std::string &where) {
     if (const auto *local = localType(type))
       scopeError(*local, "local type is unavailable in a declaration or "
-                         "handler: " + where);
+                         "handler: " +
+                             where);
   };
   for (const auto &[name, cls] : classes) {
     budget.tick();
     if (cls.enclosing) {
-      if (const auto found = locals.find(*cls.enclosing);
-          found != locals.end())
+      if (const auto found = locals.find(*cls.enclosing); found != locals.end())
         scopeError(*found->second,
-                   "method-local nested descendants are unsupported: " +
-                       name);
+                   "method-local nested descendants are unsupported: " + name);
     }
     if (cls.superclass)
       declarationType(*cls.superclass, name + " superclass");
     for (const auto &interface : cls.interfaces)
       declarationType(interface, name + " interface");
     for (const auto &field : cls.fields)
-      declarationType(field.reference.type,
-                      name + "->" + field.reference.name);
+      declarationType(field.reference.type, name + "->" + field.reference.name);
     for (const auto &method : cls.methods) {
       budget.tick();
       const auto identity = method.reference.identity();
@@ -491,7 +487,8 @@ void linkLocalScopes(const ClassMap &classes, Budget &budget) {
               (cls.name != local->enclosing_method->owner ||
                method.reference != *local->enclosing_method))
             scopeError(*local, "local type reference is outside its exact "
-                               "method scope: " + identity);
+                               "method scope: " +
+                                   identity);
       };
       for (const auto &instruction : method.instructions) {
         budget.tick();

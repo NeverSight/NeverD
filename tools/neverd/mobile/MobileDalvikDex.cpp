@@ -696,8 +696,8 @@ class Dex {
               if (kind == 0) {
                 const auto &field = at(fields, index, "annotated field");
                 requireUnannotated(annotationSet(annotation_off),
-                                   "field " + field.owner + "->" +
-                                       field.name + ":" + field.type);
+                                   "field " + field.owner + "->" + field.name +
+                                       ":" + field.type);
               } else if (kind == 1) {
                 const auto &method = at(methods, index, "annotated method");
                 requireUnannotated(annotationSet(annotation_off),
@@ -766,8 +766,8 @@ class Dex {
     }
     if (enclosing_method) {
       auto entry = enclosing_method->find("value");
-      if (enclosing_method->size() != 1 ||
-          entry == enclosing_method->end() || entry->second.kind != 0x1a)
+      if (enclosing_method->size() != 1 || entry == enclosing_method->end() ||
+          entry->second.kind != 0x1a)
         bad("invalid EnclosingMethod annotation for " + cls.name);
       auto ref = methodRef(std::get<std::string>(entry->second.value));
       if (!ref.owner.starts_with('L'))

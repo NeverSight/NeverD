@@ -187,6 +187,11 @@ jobs:
             build-mobile/unittests/mobile/Testing/Temporary/
             ${{ runner.temp }}/android-native/acceptance.json
             ${{ runner.temp }}/android-native/logs/
+            ${{ runner.temp }}/android-native/original-local/
+            ${{ runner.temp }}/android-native/local-dex/
+            ${{ runner.temp }}/android-native/local-multidex-outer-first/
+            ${{ runner.temp }}/android-native/local-multidex-overload-first/
+            ${{ runner.temp }}/android-native/local-preparation-failure.json
             ${{ runner.temp }}/ios-native/scalar/
             ${{ runner.temp }}/ios-native/calls/
             ${{ runner.temp }}/ios-native/swift/

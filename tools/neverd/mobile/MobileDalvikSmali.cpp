@@ -1282,8 +1282,7 @@ public:
     }
     if (!superclass && cls.name != "Ljava/lang/Object;")
       fail("smali class has no superclass declaration");
-    if (cls.inner_class_present !=
-        bool(cls.enclosing || cls.enclosing_method))
+    if (cls.inner_class_present != bool(cls.enclosing || cls.enclosing_method))
       fail("incomplete inner class metadata for " + cls.name);
     budget.tick();
     return cls;

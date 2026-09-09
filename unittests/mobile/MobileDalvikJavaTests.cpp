@@ -81,9 +81,9 @@ void rejected(const std::function<void()> &Run, std::string_view Fragment) {
 
 // The binary descriptor is deliberately unrelated to the source local name.
 // These direct-emitter fixtures also exercise validation without linkClasses.
-std::vector<Class> localClasses(std::string Entry = "run",
-                               std::string Parameter = "I",
-                               std::string Binary = "Lfixture/Core$17Worker;") {
+std::vector<Class>
+localClasses(std::string Entry = "run", std::string Parameter = "I",
+             std::string Binary = "Lfixture/Core$17Worker;") {
   MethodRef Init{Binary, "<init>", {}, "V"};
   MethodRef Value{Binary, "value", {"I"}, "I"};
   auto Run = method(Entry, {Parameter}, "I", 3,
@@ -175,7 +175,8 @@ TEST(MobileDalvikJava, LocalBodiesAndEnclosingMethodRemainExplicitProjections) {
   EXPECT_EQ((*Enclosing->getArray("parameters"))[0].getAsString(), "I");
 }
 
-TEST(MobileDalvikJava, SameLocalNameInDifferentOverloadsHasExactLexicalBinding) {
+TEST(MobileDalvikJava,
+     SameLocalNameInDifferentOverloadsHasExactLexicalBinding) {
   auto First = localClasses();
   auto Second = localClasses("run", "B", "Lfixture/Core$91Worker;");
   First[0].methods.push_back(Second[0].methods[0]);
@@ -224,12 +225,11 @@ TEST(MobileDalvikJava, ProjectedExportsAccountForEveryAuxiliaryDeclaration) {
       ASSERT_TRUE(Helper->getString(Key).has_value());
     ASSERT_TRUE(Helper->getBoolean("static").has_value());
     EXPECT_EQ(Helper->getString("source_unit"), "fixture/Core.java");
-    Actual.emplace(Helper->getString("class")->str(),
-                   Helper->getString("name")->str(),
-                   Helper->getString("prototype")->str(),
-                   *Helper->getBoolean("static"));
+    Actual.emplace(
+        Helper->getString("class")->str(), Helper->getString("name")->str(),
+        Helper->getString("prototype")->str(), *Helper->getBoolean("static"));
     EXPECT_EQ(Helper->getString("kind"),
-              Helper->getString("name") == "<init>" ? "default-constructor"
+              Helper->getString("name") == "<init>"     ? "default-constructor"
               : Helper->getString("name") == "<clinit>" ? "field-initializer"
               : Helper->getString("name") == "__neverdConstant"
                   ? "constant-helper"
@@ -239,8 +239,10 @@ TEST(MobileDalvikJava, ProjectedExportsAccountForEveryAuxiliaryDeclaration) {
       "(Ljava/lang/Throwable;)Ljava/lang/RuntimeException;";
   EXPECT_TRUE(Actual.contains({Input[0].name, "<init>", "()V", false}));
   EXPECT_TRUE(Actual.contains({Input[0].name, "<clinit>", "()V", true}));
-  EXPECT_TRUE(Actual.contains({Input[0].name, "__neverdThrow", ThrowType, true}));
-  EXPECT_TRUE(Actual.contains({Input[0].name, "__neverdConstant", "(I)I", true}));
+  EXPECT_TRUE(
+      Actual.contains({Input[0].name, "__neverdThrow", ThrowType, true}));
+  EXPECT_TRUE(
+      Actual.contains({Input[0].name, "__neverdConstant", "(I)I", true}));
   EXPECT_TRUE(
       Actual.contains({Input[1].name, "__neverdThrow_", ThrowType, false}));
   EXPECT_EQ(R.getInteger("method_count"), 4);
@@ -287,7 +289,8 @@ TEST(MobileDalvikJava, OriginalClassInitializerNeverBecomesAnAuxiliaryMethod) {
     if (Value.getAsObject()->getString("name") == "<clinit>") {
       ++Original;
       EXPECT_EQ(Value.getAsObject()->getString("status"), "recovered");
-      EXPECT_EQ(Value.getAsObject()->getString("identity"), Init.reference.identity());
+      EXPECT_EQ(Value.getAsObject()->getString("identity"),
+                Init.reference.identity());
     }
   EXPECT_EQ(Original, 1u);
 }
@@ -297,10 +300,12 @@ TEST(MobileDalvikJava,
   auto Input = localClasses();
   auto &Value = Input[1].methods[1];
   Value.registers = 4;
-  Value.instructions = {
-      op(0, "const/4", {0}, int64_t(7)), op(1, "div-int", {0, 0, 3}),
-      op(2, "return", {0}), op(3, "move-exception", {1}),
-      op(4, "move-object", {0, 1}), op(5, "throw", {0})};
+  Value.instructions = {op(0, "const/4", {0}, int64_t(7)),
+                        op(1, "div-int", {0, 0, 3}),
+                        op(2, "return", {0}),
+                        op(3, "move-exception", {1}),
+                        op(4, "move-object", {0, 1}),
+                        op(5, "throw", {0})};
   Value.tries = {{1, 2, {{std::string("Ljava/lang/ArithmeticException;"), 3}}}};
   Value.code_end = 6;
   auto R = recover(Input);
@@ -315,7 +320,8 @@ TEST(MobileDalvikJava, LocalProjectionRejectsUnprovedObjectEffects) {
            op(2, "check-cast", {0}, {}, std::string("Ljava/lang/Object;")),
            op(2, "instance-of", {1, 0}, {}, std::string("Ljava/lang/Object;")),
            op(2, "invoke-static", {0}, {},
-              MethodRef{"Lexternal/Sink;", "take", {"Ljava/lang/Object;"}, "V"}),
+              MethodRef{
+                  "Lexternal/Sink;", "take", {"Ljava/lang/Object;"}, "V"}),
            op(2, "invoke-virtual", {0}, {},
               MethodRef{"Ljava/lang/Object;", "hashCode", {}, "I"}),
            op(2, "new-array", {1, 2}, {}, std::string("[I")),
@@ -345,14 +351,15 @@ TEST(MobileDalvikJava, LocalOriginsJoinAllNormalPredecessors) {
   auto &Run = Input[0].methods[0];
   const MethodRef Init{Input[1].name, "<init>", {}, "V"};
   const MethodRef Value{Input[1].name, "value", {"I"}, "I"};
-  Run.instructions = {
-      op(0, "if-eqz", {2}, {}, {}, 4),
-      op(1, "new-instance", {0}, {}, Input[1].name),
-      op(2, "invoke-direct", {0}, {}, Init), op(3, "goto", {}, {}, {}, 6),
-      op(4, "new-instance", {0}, {}, Input[1].name),
-      op(5, "invoke-direct", {0}, {}, Init),
-      op(6, "invoke-virtual", {0, 2}, {}, Value),
-      op(7, "move-result", {1}), op(8, "return", {1})};
+  Run.instructions = {op(0, "if-eqz", {2}, {}, {}, 4),
+                      op(1, "new-instance", {0}, {}, Input[1].name),
+                      op(2, "invoke-direct", {0}, {}, Init),
+                      op(3, "goto", {}, {}, {}, 6),
+                      op(4, "new-instance", {0}, {}, Input[1].name),
+                      op(5, "invoke-direct", {0}, {}, Init),
+                      op(6, "invoke-virtual", {0, 2}, {}, Value),
+                      op(7, "move-result", {1}),
+                      op(8, "return", {1})};
   Run.code_end = 9;
   auto R = recover(Input);
   EXPECT_EQ(R.getInteger("projected_method_count"), 3);
@@ -367,15 +374,16 @@ TEST(MobileDalvikJava, LocalOriginsJoinAllNormalPredecessors) {
 TEST(MobileDalvikJava, LocalOriginsUsePreWriteStateOnExceptionalEdges) {
   auto Input = localClasses();
   auto &Run = Input[0].methods[0];
-  Run.instructions = {
-      op(0, "new-instance", {0}, {}, Input[1].name),
-      op(1, "invoke-direct", {0}, {},
-         MethodRef{Input[1].name, "<init>", {}, "V"}),
-      op(2, "div-int", {0, 2, 2}), op(3, "return", {0}),
-      op(4, "move-exception", {1}),
-      op(5, "invoke-virtual", {0, 2}, {},
-         MethodRef{Input[1].name, "value", {"I"}, "I"}),
-      op(6, "move-result", {1}), op(7, "return", {1})};
+  Run.instructions = {op(0, "new-instance", {0}, {}, Input[1].name),
+                      op(1, "invoke-direct", {0}, {},
+                         MethodRef{Input[1].name, "<init>", {}, "V"}),
+                      op(2, "div-int", {0, 2, 2}),
+                      op(3, "return", {0}),
+                      op(4, "move-exception", {1}),
+                      op(5, "invoke-virtual", {0, 2}, {},
+                         MethodRef{Input[1].name, "value", {"I"}, "I"}),
+                      op(6, "move-result", {1}),
+                      op(7, "return", {1})};
   Run.tries = {{2, 3, {{std::string("Ljava/lang/ArithmeticException;"), 4}}}};
   Run.code_end = 8;
   auto R = recover(Input);
@@ -386,16 +394,18 @@ TEST(MobileDalvikJava, LocalOriginsUsePreWriteStateOnExceptionalEdges) {
 TEST(MobileDalvikJava, LocalOriginsJoinEveryThrowingSiteInOneHandler) {
   auto Input = localClasses();
   auto &Run = Input[0].methods[0];
-  Run.instructions = {
-      op(0, "new-instance", {0}, {}, Input[1].name),
-      op(1, "invoke-direct", {0}, {},
-         MethodRef{Input[1].name, "<init>", {}, "V"}),
-      op(2, "div-int", {1, 2, 2}), op(3, "const/4", {0}, int64_t(0)),
-      op(4, "div-int", {1, 2, 0}), op(5, "return", {1}),
-      op(6, "move-exception", {1}),
-      op(7, "invoke-virtual", {0, 2}, {},
-         MethodRef{Input[1].name, "value", {"I"}, "I"}),
-      op(8, "move-result", {1}), op(9, "return", {1})};
+  Run.instructions = {op(0, "new-instance", {0}, {}, Input[1].name),
+                      op(1, "invoke-direct", {0}, {},
+                         MethodRef{Input[1].name, "<init>", {}, "V"}),
+                      op(2, "div-int", {1, 2, 2}),
+                      op(3, "const/4", {0}, int64_t(0)),
+                      op(4, "div-int", {1, 2, 0}),
+                      op(5, "return", {1}),
+                      op(6, "move-exception", {1}),
+                      op(7, "invoke-virtual", {0, 2}, {},
+                         MethodRef{Input[1].name, "value", {"I"}, "I"}),
+                      op(8, "move-result", {1}),
+                      op(9, "return", {1})};
   Run.tries = {{2, 5, {{std::string("Ljava/lang/ArithmeticException;"), 6}}}};
   Run.code_end = 10;
   rejected([&] { recover(Input); }, "local-class object receiver");

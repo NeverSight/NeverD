@@ -273,7 +273,8 @@ class JavaTypeNames {
     Strings types;
     bool unknown_inheritance = false;
   };
-  mutable std::map<std::tuple<std::string, std::string, std::string, bool>, Lookup>
+  mutable std::map<std::tuple<std::string, std::string, std::string, bool>,
+                   Lookup>
       cache;
 
   static std::string package(const std::string &Type) {
@@ -369,7 +370,8 @@ class JavaTypeNames {
       else
         Scope = nullptr;
     }
-    if (auto P = packages.find(package(Context.owner.name)); P != packages.end())
+    if (auto P = packages.find(package(Context.owner.name));
+        P != packages.end())
       if (auto I = P->second.find(Name); I != P->second.end())
         Result.types.insert(I->second);
     return cache.emplace(std::move(Key), std::move(Result)).first->second;
@@ -404,7 +406,8 @@ public:
                   Type + " in " + Context.owner.name);
       const auto &Binding = lookup(Context, *C.inner_name, InSupertypeHeader);
       if (Binding.unknown_inheritance || Binding.types != Strings{Type})
-        javaError("local-class reference has no unique source binding: " + Type);
+        javaError("local-class reference has no unique source binding: " +
+                  Type);
       return javaIdentifier(*C.inner_name);
     }
     auto Full = qualifiedTypeName(Type, classes);
@@ -550,9 +553,10 @@ struct LocalProjection {
   std::set<MethodRef> projected_methods;
 
   [[noreturn]] static void fail(const Class &C, const std::string &Reason) {
-    javaError(C.name + " [" + C.source_id + "] enclosing " +
-              (C.enclosing_method ? C.enclosing_method->identity() : "unknown") +
-              ": local-class source shape: " + Reason);
+    javaError(
+        C.name + " [" + C.source_id + "] enclosing " +
+        (C.enclosing_method ? C.enclosing_method->identity() : "unknown") +
+        ": local-class source shape: " + Reason);
   }
   static bool scalar(const std::string &Type, bool Void = false) {
     return Primitives.contains(Type) && (Void || Type != "V");
@@ -585,8 +589,8 @@ struct LocalProjection {
           fail(C, "invalid enclosing class chain");
         auto Start = Ancestor->name.rfind('/');
         Start = Start == std::string::npos ? 1 : Start + 1;
-        auto Simple = Ancestor->inner_name.value_or(Ancestor->name.substr(
-            Start, Ancestor->name.size() - Start - 1));
+        auto Simple = Ancestor->inner_name.value_or(
+            Ancestor->name.substr(Start, Ancestor->name.size() - Start - 1));
         if (*C.inner_name == Simple)
           fail(C, "local source name repeats an enclosing class name");
         if (!Ancestor->enclosing)
@@ -631,8 +635,8 @@ class Body {
     if (local_closure) {
       auto I = classes.find(method.reference.owner);
       if (I != classes.end())
-        javaError(I->second.name + " [" + I->second.source_id +
-                  "] enclosing " + local_closure->identity() + ": " +
+        javaError(I->second.name + " [" + I->second.source_id + "] enclosing " +
+                  local_closure->identity() + ": " +
                   method.reference.identity() + ": " + Message);
     }
     javaError(method.reference.identity() + ": " + Message);
@@ -1453,11 +1457,11 @@ void Body::validateLocalOperations() const {
     budget.tick();
     const auto &Op = code[I];
     const auto &Name = Op.opcode;
-    if (anyPrefix(Name, {"check-cast", "instance-of", "const-string",
-                         "const-class", "new-array", "filled-new-array",
-                         "fill-array-data", "array-length", "aget", "aput",
-                         "iget", "iput", "monitor-", "return-object",
-                         "move-result-object"}))
+    if (anyPrefix(Name,
+                  {"check-cast", "instance-of", "const-string", "const-class",
+                   "new-array", "filled-new-array", "fill-array-data",
+                   "array-length", "aget", "aput", "iget", "iput", "monitor-",
+                   "return-object", "move-result-object"}))
       fail("local-class object operation is outside the bounded projection: " +
            Name);
     if (Name == "new-instance") {
@@ -1490,15 +1494,14 @@ void Body::validateLocalOperations() const {
   }
 }
 
-Body::Origins Body::localOrigins(const Instruction &Op,
-                                 const Origins &Incoming, bool Strict) const {
+Body::Origins Body::localOrigins(const Instruction &Op, const Origins &Incoming,
+                                 bool Strict) const {
   Origins Out = Incoming;
   const auto &Name = Op.opcode;
   const auto Base = baseOpcode(Name);
   const auto &Regs = Op.registers;
   auto require = [&](unsigned Reg, uint8_t Allowed, const char *Reason) {
-    if (Strict &&
-        (Incoming.at(Reg) == 0 || (Incoming.at(Reg) & ~Allowed) != 0))
+    if (Strict && (Incoming.at(Reg) == 0 || (Incoming.at(Reg) & ~Allowed) != 0))
       fail(std::string("local-class object ") + Reason);
   };
   if (Base == "move-object") {
@@ -1828,11 +1831,11 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
       return;
     B.tick();
     Helpers.push_back(llvm::json::Object{{"class", C.name},
-                                        {"name", Name},
-                                        {"prototype", Prototype},
-                                        {"static", Static},
-                                        {"source_unit", Unit},
-                                        {"kind", Kind}});
+                                         {"name", Name},
+                                         {"prototype", Prototype},
+                                         {"static", Static},
+                                         {"source_unit", Unit},
+                                         {"kind", Kind}});
   };
   std::function<std::string(const Class &, DeclarationSite,
                             const std::string &)>
@@ -1897,14 +1900,14 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
                                          {"prototype", R.signature()},
                                          {"parameters", std::move(Parameters)},
                                          {"returns", R.returns}};
-      Bindings.push_back(llvm::json::Object{
-          {"class", C.name},
-          {"input", C.source_id},
-          {"enclosing_method", std::move(EnclosingMethod)},
-          {"source_unit", Unit},
-          {"source_name", Name},
-          {"binding_kind", "named-method-local"},
-          {"binary_name_status", "unverified"}});
+      Bindings.push_back(
+          llvm::json::Object{{"class", C.name},
+                             {"input", C.source_id},
+                             {"enclosing_method", std::move(EnclosingMethod)},
+                             {"source_unit", Unit},
+                             {"source_name", Name},
+                             {"binding_kind", "named-method-local"},
+                             {"binary_name_status", "unverified"}});
     }
     Strings MemberNames, ConstantTypes;
     bool HasStaticFieldInitializer = false;
@@ -2037,8 +2040,9 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
                         "    if (failure == null) throw new "
                         "java.lang.NullPointerException();",
                         "    throw (E) failure;", "  }"});
-      auxiliary(C, Helper, "(Ljava/lang/Throwable;)Ljava/lang/RuntimeException;",
-                !Local, Unit, "throw-helper");
+      auxiliary(C, Helper,
+                "(Ljava/lang/Throwable;)Ljava/lang/RuntimeException;", !Local,
+                Unit, "throw-helper");
     }
     for (const auto &T : ConstantTypes) {
       auto NameType = TypeNames.render(T, C);

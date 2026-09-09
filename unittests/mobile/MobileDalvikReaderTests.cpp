@@ -401,10 +401,14 @@ Fixture fixture(FixtureOptions options = {}) {
     patch(out, at["protos"] + 12 * i + 8,
           proto.second.empty() ? 0 : parameter_offsets.at(proto.second));
   }
-  std::array<uint32_t, 8> cls{
-      typeIndex(owner), 1, typeIndex(parent), 0, UINT32_MAX,
-      uint32_t(at["annotations"]), uint32_t(at["class_data"]),
-      uint32_t(at["values"])};
+  std::array<uint32_t, 8> cls{typeIndex(owner),
+                              1,
+                              typeIndex(parent),
+                              0,
+                              UINT32_MAX,
+                              uint32_t(at["annotations"]),
+                              uint32_t(at["class_data"]),
+                              uint32_t(at["values"])};
   for (size_t i = 0; i < cls.size(); ++i)
     patch(out, at["class"] + i * 4, cls[i]);
   out = seal(std::move(out));
@@ -488,9 +492,9 @@ FixtureAnnotation innerClassAnnotation(unsigned access = 9) {
   };
   return result;
 }
-FixtureAnnotation typeArrayAnnotation(
-    std::string type = "Ldalvik/annotation/MemberClasses;",
-    std::vector<std::string> values = {}) {
+FixtureAnnotation
+typeArrayAnnotation(std::string type = "Ldalvik/annotation/MemberClasses;",
+                    std::vector<std::string> values = {}) {
   FixtureAnnotation result{std::move(type), 2};
   result.extra_types = values;
   result.extra_strings = {u"value"};
@@ -585,9 +589,11 @@ Class localClassModel(const std::string &owner, const MethodRef &enclosing,
                       std::string_view source = "local.smali",
                       bool anonymous = false) {
   const std::string text =
-      ".class final " + owner + "\n.super Ljava/lang/Object;\n"
+      ".class final " + owner +
+      "\n.super Ljava/lang/Object;\n"
       ".annotation system Ldalvik/annotation/EnclosingMethod;\nvalue = " +
-      enclosing.identity() + "\n.end annotation\n"
+      enclosing.identity() +
+      "\n.end annotation\n"
       ".annotation system Ldalvik/annotation/InnerClass;\nname = " +
       (anonymous ? "null" : "\"Worker\"") +
       "\naccessFlags = 0x10\n.end annotation\n"
@@ -1307,10 +1313,10 @@ TEST(MobileDalvikReader, DexSystemClassAnnotationsKeepStructureAndVisibility) {
       changed.annotations[index].visibility = visibility;
       const auto &type = changed.annotations[index].type;
       SCOPED_TRACE(type + " visibility " + std::to_string(visibility));
-      expectDexError(
-          fixture(changed).data,
-          "Invalid DEX: structural annotation " + type + " on class " +
-              options.owner + " requires system visibility");
+      expectDexError(fixture(changed).data,
+                     "Invalid DEX: structural annotation " + type +
+                         " on class " + options.owner +
+                         " requires system visibility");
     }
   }
 }
@@ -1324,15 +1330,14 @@ TEST(MobileDalvikReader, DexKnownClassAnnotationsDoNotAuthorizeMemberUses) {
   for (size_t set : {size_t(0), size_t(1)}) {
     // Also attach the class's exact nonempty set to the method.
     options.method_annotations = set;
-    expectDexError(
-        fixture(options).data,
-        "Invalid DEX: unsupported annotation "
-        "Ldalvik/annotation/MemberClasses; "
-        "on method Lfixture/Sample;->value(I)I");
+    expectDexError(fixture(options).data,
+                   "Invalid DEX: unsupported annotation "
+                   "Ldalvik/annotation/MemberClasses; "
+                   "on method Lfixture/Sample;->value(I)I");
   }
 
-  options.annotations = {typeArrayAnnotation(
-      "Ldalvik/annotation/Throws;", {"Ljava/io/IOException;"})};
+  options.annotations = {typeArrayAnnotation("Ldalvik/annotation/Throws;",
+                                             {"Ljava/io/IOException;"})};
   options.class_annotations.reset();
   expectDexError(
       fixture(options).data,
@@ -1366,8 +1371,7 @@ TEST(MobileDalvikReader, DexSharedEmptyAnnotationSetsKeepCompleteMethods) {
   FixtureOptions no_parameters;
   no_parameters.params.clear();
   no_parameters.words = {0x1012, 0x000f};
-  no_parameters.parameter_annotations =
-      std::vector<std::optional<size_t>>{};
+  no_parameters.parameter_annotations = std::vector<std::optional<size_t>>{};
   auto zero = parse(fixture(no_parameters).data);
   ASSERT_EQ(zero.size(), 1u);
   ASSERT_EQ(zero[0].methods.size(), 1u);
@@ -1384,15 +1388,13 @@ TEST(MobileDalvikReader, DexParameterAnnotationsUseLogicalSlotsAndExactCounts) {
   options.annotation_sets = {{0}};
   options.parameter_annotations =
       std::vector<std::optional<size_t>>{std::nullopt, 0};
-  expectDexError(
-      fixture(options).data,
-      "Invalid DEX: unsupported annotation Ljava/lang/Deprecated; "
-      "on parameter 1 of method Lfixture/Sample;->value(JI)I");
+  expectDexError(fixture(options).data,
+                 "Invalid DEX: unsupported annotation Ljava/lang/Deprecated; "
+                 "on parameter 1 of method Lfixture/Sample;->value(JI)I");
   options.parameter_annotations = std::vector<std::optional<size_t>>{0};
   expectDexError(fixture(options).data,
                  "Invalid DEX: parameter annotation count mismatch");
-  options.parameter_annotations =
-      std::vector<std::optional<size_t>>{0, 0, 0};
+  options.parameter_annotations = std::vector<std::optional<size_t>>{0, 0, 0};
   expectDexError(fixture(options).data,
                  "Invalid DEX: parameter annotation count mismatch");
 }
@@ -1427,17 +1429,16 @@ TEST(MobileDalvikReader, DexOrphanAnnotationsRetainNestedFormatChecks) {
                  "Invalid DEX: annotation types are duplicate or unordered");
 }
 
-TEST(MobileDalvikReader, DexEnclosingMethodRetainsTypedContextWithoutSourceClaim) {
+TEST(MobileDalvikReader,
+     DexEnclosingMethodRetainsTypedContextWithoutSourceClaim) {
   FixtureOptions options;
   options.owner = "Lfixture/Outer$1Nested;";
   options.flags = 1;
   options.registers = 2;
   options.words = {0x010f};
-  options.referenced_method =
-      MethodRef{"Lfixture/Outer;", "factory", {}, "V"};
-  options.annotations = {
-      enclosingMethodAnnotation(*options.referenced_method),
-      innerClassAnnotation(0)};
+  options.referenced_method = MethodRef{"Lfixture/Outer;", "factory", {}, "V"};
+  options.annotations = {enclosingMethodAnnotation(*options.referenced_method),
+                         innerClassAnnotation(0)};
   options.annotation_sets = {{0, 1}};
   options.class_annotations = 0;
   auto parsed = parse(fixture(options).data);
@@ -1453,13 +1454,13 @@ TEST(MobileDalvikReader, DexEnclosingMethodRetainsTypedContextWithoutSourceClaim
             "Lfixture/Outer$1Nested;->value(I)I");
   ASSERT_EQ(parsed[0].methods[0].instructions.size(), 1u);
   EXPECT_EQ(parsed[0].methods[0].instructions[0].opcode, "return");
-  auto text = smali(
-      ".class public Lfixture/Outer$1Nested;\n.super Ljava/lang/Object;\n"
-      ".annotation system Ldalvik/annotation/EnclosingMethod;\n"
-      "value = Lfixture/Outer;->factory()V\n.end annotation\n"
-      ".annotation system Ldalvik/annotation/InnerClass;\n"
-      "name = \"Nested\"\naccessFlags = 0\n.end annotation\n"
-      ".method public value(I)I\n.registers 2\nreturn p1\n.end method\n");
+  auto text =
+      smali(".class public Lfixture/Outer$1Nested;\n.super Ljava/lang/Object;\n"
+            ".annotation system Ldalvik/annotation/EnclosingMethod;\n"
+            "value = Lfixture/Outer;->factory()V\n.end annotation\n"
+            ".annotation system Ldalvik/annotation/InnerClass;\n"
+            "name = \"Nested\"\naccessFlags = 0\n.end annotation\n"
+            ".method public value(I)I\n.registers 2\nreturn p1\n.end method\n");
   EXPECT_EQ(parsed[0].enclosing_method, text.enclosing_method);
   EXPECT_EQ(parsed[0].inner_class_present, text.inner_class_present);
   EXPECT_EQ(parsed[0].inner_name, text.inner_name);
@@ -1486,9 +1487,8 @@ TEST(MobileDalvikReader, DexEnclosingMethodRequiresSystemTypedMetadata) {
   options.owner = "Lfixture/Outer$1Nested;";
   options.referenced_method =
       MethodRef{"Lfixture/Outer;", "factory", {"J"}, "I"};
-  options.annotations = {
-      enclosingMethodAnnotation(*options.referenced_method),
-      innerClassAnnotation(0)};
+  options.annotations = {enclosingMethodAnnotation(*options.referenced_method),
+                         innerClassAnnotation(0)};
   options.annotation_sets = {{0, 1}};
   options.class_annotations = 0;
   for (unsigned visibility : {0u, 1u}) {
@@ -1546,8 +1546,8 @@ TEST(MobileDalvikReader, DexInnerClassAbsentAndNullAreDifferentModelStates) {
     uleb(out, fixtureStringIndex(f, "name"));
     append(out, 0x1e, 1); // VALUE_NULL, not a missing annotation.
   };
-  options.annotations = {
-      enclosingMethodAnnotation(*options.referenced_method), inner};
+  options.annotations = {enclosingMethodAnnotation(*options.referenced_method),
+                         inner};
   options.annotation_sets = {{0, 1}};
   options.class_annotations = 0;
   auto anonymous = parse(fixture(options).data);
@@ -1631,8 +1631,8 @@ TEST(MobileDalvikReader, SmaliLocalMetadataRetainsExactMethodAndPresence) {
   EXPECT_FALSE(ordinary.inner_class_present);
   EXPECT_FALSE(ordinary.inner_name);
   EXPECT_FALSE(ordinary.enclosing_method);
-  auto anonymous = localClassModel("Lfixture/Outer$1;", enclosing,
-                                   "anonymous.smali", true);
+  auto anonymous =
+      localClassModel("Lfixture/Outer$1;", enclosing, "anonymous.smali", true);
   EXPECT_TRUE(anonymous.inner_class_present);
   EXPECT_FALSE(anonymous.inner_name);
   EXPECT_EQ(anonymous.enclosing_method, local.enclosing_method);
@@ -1648,7 +1648,8 @@ TEST(MobileDalvikReader, SmaliEnclosingMethodRequiresOneTypedSystemContext) {
       "name = \"Worker\"\naccessFlags = 0x10\n.end annotation\n";
   const auto annotation = [](std::string_view value) {
     return ".annotation system Ldalvik/annotation/EnclosingMethod;\n"
-           "value = " + std::string(value) + "\n.end annotation\n";
+           "value = " +
+           std::string(value) + "\n.end annotation\n";
   };
   const auto rejected = [&](const std::string &text, std::string_view reason) {
     try {
@@ -1660,8 +1661,8 @@ TEST(MobileDalvikReader, SmaliEnclosingMethodRequiresOneTypedSystemContext) {
           << error.what();
     }
   };
-  for (auto value : {"null", "Ljava/lang/Object;", "I->first(I)I",
-                      "Lfixture/Outer;->first"})
+  for (auto value :
+       {"null", "Ljava/lang/Object;", "I->first(I)I", "Lfixture/Outer;->first"})
     rejected(header + annotation(value) + inner,
              "invalid EnclosingMethod reference for "
              "Lfixture/Outer$1Worker;");
@@ -1686,10 +1687,10 @@ TEST(MobileDalvikReader, SmaliEnclosingMethodRequiresOneTypedSystemContext) {
 TEST(MobileDalvikReader, NamedLocalScopesLinkExactMethodsAcrossInputFiles) {
   const MethodRef first{"Lfixture/Outer;", "first", {"I"}, "I"};
   const MethodRef second{"Lfixture/Outer;", "second", {"I"}, "I"};
-  auto local = localClassModel("Lfixture/Outer$37Worker;", first,
-                               "first-local.smali");
-  auto other = localClassModel("Lfixture/Outer$2Worker;", second,
-                               "second-local.smali");
+  auto local =
+      localClassModel("Lfixture/Outer$37Worker;", first, "first-local.smali");
+  auto other =
+      localClassModel("Lfixture/Outer$2Worker;", second, "second-local.smali");
   auto outer = localOwnerModel("first", local.name);
   outer.methods.push_back(localOwnerModel("second", other.name).methods[0]);
   Budget budget;
@@ -1713,10 +1714,8 @@ TEST(MobileDalvikReader, NamedLocalScopesLinkExactMethodsAcrossInputFiles) {
   EXPECT_EQ(std::get<std::string>(
                 linked.at(outer.name).methods[0].instructions[0].reference),
             local.name);
-  EXPECT_EQ(std::get<MethodRef>(linked.at(outer.name)
-                                   .methods[1]
-                                   .instructions[2]
-                                   .reference)
+  EXPECT_EQ(std::get<MethodRef>(
+                linked.at(outer.name).methods[1].instructions[2].reference)
                 .owner,
             other.name);
 }
@@ -1738,15 +1737,15 @@ TEST(MobileDalvikReader, LocalScopesRejectMissingOverloadedOrDuplicateOwners) {
   auto duplicate = outer;
   duplicate.methods.push_back(duplicate.methods[0]);
   expectLocalScopeError({duplicate, local}, local,
-                        "exact enclosing method definition is duplicated", true);
+                        "exact enclosing method definition is duplicated",
+                        true);
   auto namesake = localClassModel("Lfixture/Outer$99Worker;", first,
                                   "duplicate-local.smali");
   expectLocalScopeError({outer, local, namesake}, namesake,
                         "duplicate local source name in one enclosing method");
   changed = local;
   changed.enclosing_method->name = "<init>";
-  expectLocalScopeError({outer, changed}, changed,
-                        "ordinary enclosing method");
+  expectLocalScopeError({outer, changed}, changed, "ordinary enclosing method");
 }
 
 TEST(MobileDalvikReader, SameNamedLocalClassesUseTheWholeEnclosingPrototype) {
@@ -1756,13 +1755,13 @@ TEST(MobileDalvikReader, SameNamedLocalClassesUseTheWholeEnclosingPrototype) {
   auto other = localClassModel("Lfixture/Outer$4Worker;", overload,
                                "overloaded-local.smali");
   auto outer = localOwnerModel("first", local.name);
-  auto overloaded = smali(
-      ".class public Lfixture/Outer;\n.super Ljava/lang/Object;\n"
-      ".method public static first(II)I\n.registers 3\n"
-      "new-instance v0,Lfixture/Outer$4Worker;\n"
-      "invoke-direct {v0},Lfixture/Outer$4Worker;-><init>()V\n"
-      "invoke-virtual {v0,p1},Lfixture/Outer$4Worker;->apply(I)I\n"
-      "move-result v0\nreturn v0\n.end method\n");
+  auto overloaded =
+      smali(".class public Lfixture/Outer;\n.super Ljava/lang/Object;\n"
+            ".method public static first(II)I\n.registers 3\n"
+            "new-instance v0,Lfixture/Outer$4Worker;\n"
+            "invoke-direct {v0},Lfixture/Outer$4Worker;-><init>()V\n"
+            "invoke-virtual {v0,p1},Lfixture/Outer$4Worker;->apply(I)I\n"
+            "move-result v0\nreturn v0\n.end method\n");
   outer.methods.push_back(overloaded.methods[0]);
   Budget budget;
   auto linked = linkClasses({other, outer, local}, budget);
@@ -1770,10 +1769,8 @@ TEST(MobileDalvikReader, SameNamedLocalClassesUseTheWholeEnclosingPrototype) {
   EXPECT_EQ(linked.at(local.name).enclosing_method, first);
   EXPECT_EQ(linked.at(other.name).enclosing_method, overload);
   ASSERT_EQ(linked.at(outer.name).methods.size(), 2u);
-  EXPECT_EQ(std::get<MethodRef>(linked.at(outer.name)
-                                   .methods[1]
-                                   .instructions[2]
-                                   .reference)
+  EXPECT_EQ(std::get<MethodRef>(
+                linked.at(outer.name).methods[1].instructions[2].reference)
                 .owner,
             other.name);
 }
@@ -1844,7 +1841,8 @@ TEST(MobileDalvikReader, LocalScopeRejectsEveryTypedReferenceOutsideItsMethod) {
   // The shared scope validator examines all reference components, independent
   // of the later opcode/register verifier. Each case isolates one component.
   std::vector<Reference> references{
-      local.name, "[" + local.name,
+      local.name,
+      "[" + local.name,
       FieldRef{"Lfixture/Foreign;", "value", local.name},
       FieldRef{local.name, "value", "I"},
       MethodRef{"Lfixture/Foreign;", "consume", {local.name}, "V"},
@@ -1893,17 +1891,17 @@ TEST(MobileDalvikReader, LocalScopeRejectsEveryTypedReferenceOutsideItsMethod) {
                         "outside its exact method scope", true);
 }
 
-TEST(MobileDalvikReader, LocalScopeRejectsNestedDescendantsAndHeaderReferences) {
+TEST(MobileDalvikReader,
+     LocalScopeRejectsNestedDescendantsAndHeaderReferences) {
   const MethodRef first{"Lfixture/Outer;", "first", {"I"}, "I"};
   auto local = localClassModel("Lfixture/Outer$1Worker;", first);
   auto outer = localOwnerModel("first", local.name);
-  auto member = smali(
-      ".class public Lfixture/Outer$1Worker$Child;\n"
-      ".super Ljava/lang/Object;\n"
-      ".annotation system Ldalvik/annotation/EnclosingClass;\n"
-      "value = Lfixture/Outer$1Worker;\n.end annotation\n"
-      ".annotation system Ldalvik/annotation/InnerClass;\n"
-      "name = \"Child\"\naccessFlags = 9\n.end annotation\n");
+  auto member = smali(".class public Lfixture/Outer$1Worker$Child;\n"
+                      ".super Ljava/lang/Object;\n"
+                      ".annotation system Ldalvik/annotation/EnclosingClass;\n"
+                      "value = Lfixture/Outer$1Worker;\n.end annotation\n"
+                      ".annotation system Ldalvik/annotation/InnerClass;\n"
+                      "name = \"Child\"\naccessFlags = 9\n.end annotation\n");
   expectLocalScopeError({outer, member, local}, local,
                         "method-local nested descendants are unsupported");
   member.enclosing.reset();

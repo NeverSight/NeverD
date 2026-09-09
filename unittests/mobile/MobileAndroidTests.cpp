@@ -133,7 +133,8 @@ return p1
 )";
 }
 
-TEST(MobileAndroid, LocalClassPublishesOneSourceUnitWithPartialMirroredCoverage) {
+TEST(MobileAndroid,
+     LocalClassPublishesOneSourceUnitWithPartialMirroredCoverage) {
   Temporary temporary;
   auto source = temporary.path / "smali", output = temporary.path / "output";
   writeFile(source / "outer.smali", localOuter());
