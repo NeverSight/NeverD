@@ -68,6 +68,22 @@ struct Bytes {
     return v;
   }
 };
+std::string_view symbolName(const Bytes &bytes, uint64_t strings,
+                            uint64_t string_size, uint64_t index,
+                            Budget &budget) {
+  if (index >= string_size)
+    throw Error("Mach-O symbol string index is out of bounds");
+  auto name = bytes.d.substr(
+      strings + index, std::min<uint64_t>(16384, string_size - index));
+  auto end = name.find('\0');
+  // Account for repeated references to long strings without allocating copies.
+  // Each search is bounded even when the name is malformed.
+  auto scanned = end == name.npos ? name.size() : end + 1;
+  budget.tick((scanned + 63) / 64);
+  if (end == name.npos)
+    throw Error("unterminated or oversized Mach-O symbol name");
+  return name.substr(0, end);
+}
 std::string arch(uint32_t cpu) {
   switch (cpu) {
   case 0x100000c:
@@ -158,8 +174,8 @@ Selection thin(std::string_view bytes, Budget &budget) {
         throw Error("invalid Mach-O symbol-table command");
       symtab = true;
       auto count = b.get(p + 12, 4);
-      if (count > 100000)
-        throw Error("Mach-O symbol count exceeds metadata limit");
+      // nsyms is a 32-bit field. Validate the complete table before iteration;
+      // file size and the shared work budget bound large, legitimate tables.
       b.range(b.get(p + 8, 4), count * (wide ? 16 : 12));
       b.range(b.get(p + 16, 4), b.get(p + 20, 4));
       auto symbols = b.get(p + 8, 4), strings = b.get(p + 16, 4),
@@ -170,12 +186,7 @@ Selection thin(std::string_view bytes, Budget &budget) {
         auto index = b.get(entry, 4), type = b.get(entry + 4, 1);
         if (!index || (type & 0xe0))
           continue;
-        if (index >= string_size)
-          throw Error("Mach-O symbol string index is out of bounds");
-        auto name = bytes.substr(
-            strings + index, std::min<uint64_t>(16384, string_size - index));
-        if (name.find('\0') == name.npos)
-          throw Error("unterminated or oversized Mach-O symbol name");
+        symbolName(b, strings, string_size, index, budget);
       }
     } else if (cmd == 0x80000034) {
       if (len < 16 || chained)
@@ -205,6 +216,9 @@ Object methodMetadata(const ObjCMethod &m) {
 } // namespace
 Selection selectSlice(std::string_view bytes, std::string_view architecture,
                       Budget &budget) {
+  budget.check();
+  if (bytes.size() > budget.limits.max_bytes)
+    throw Error("Mach-O input exceeds its byte budget");
   static const std::vector<std::string> preference = {"arm64", "arm", "x86_64",
                                                       "i386"};
   if (architecture != "auto" && std::find(preference.begin(), preference.end(),
@@ -335,6 +349,7 @@ Object objcMetadata(const BinaryImage &image) {
 }
 Object swiftMetadata(const BinaryImage &image, Budget &budget) {
   Array symbols, types;
+  uint64_t metadata_bytes = 0;
   Array limitations{
       "Swift symbol names are preserved in their mangled form.",
       "Only nominal type names are recovered; original Swift source and method "
@@ -343,12 +358,28 @@ Object swiftMetadata(const BinaryImage &image, Budget &budget) {
                         bool defined) {
     auto name = llvm::StringRef(raw_name.data(), raw_name.size()).ltrim('_');
     if (name.starts_with("$s") || name.starts_with("$S") ||
-        name.starts_with("T0"))
+        name.starts_with("T0")) {
+      if (raw_name.size() >= 16384)
+        throw Error("oversized Swift symbol name");
+      // Charge before constructing strings or JSON nodes. Six bytes per input
+      // byte covers JSON escaping and UTF-8 replacement; fixed overhead covers
+      // this record's keys, address, boolean, punctuation and indentation.
+      // This bounds construction independently of the actual publication bytes
+      // that publishJSON charges later. Repeated names each consume a record.
+      budget.check();
+      const uint64_t record_bytes = raw_name.size() * 6 + 256;
+      if (record_bytes > budget.limits.max_bytes - metadata_bytes)
+        throw Error("metadata construction exceeds byte budget");
+      metadata_bytes += record_bytes;
       symbols.push_back(Object{{"name", presentation(raw_name)},
                                {"address", hex(address)},
                                {"defined", defined}});
+    }
   };
   if (!image.Raw.empty()) {
+    budget.check();
+    if (image.Raw.size() > budget.limits.max_bytes)
+      throw Error("Mach-O input exceeds its byte budget");
     // The loader's function-oriented Symbol view deliberately omits undefined
     // zero-address entries. Coverage describes the complete nlist inventory,
     // including imported metadata witnesses.
@@ -377,8 +408,6 @@ Object swiftMetadata(const BinaryImage &image, Budget &budget) {
         found = true;
         auto offset = raw.get(cursor + 8, 4), count = raw.get(cursor + 12, 4),
              strings = raw.get(cursor + 16, 4), bytes = raw.get(cursor + 20, 4);
-        if (count > 100000)
-          throw Error("Swift symbol table exceeds the metadata limit");
         raw.range(offset, count * (wide ? 16 : 12));
         raw.range(strings, bytes);
         for (uint64_t j = 0; j < count; ++j) {
@@ -387,14 +416,8 @@ Object swiftMetadata(const BinaryImage &image, Budget &budget) {
           auto index = raw.get(entry, 4), type = raw.get(entry + 4, 1);
           if (!index || (type & 0xe0))
             continue;
-          if (index >= bytes)
-            throw Error("Swift symbol name index is out of bounds");
-          auto name = raw.d.substr(strings + index,
-                                   std::min<uint64_t>(16384, bytes - index));
-          auto end = name.find('\0');
-          if (end == name.npos)
-            throw Error("unterminated Swift symbol name");
-          add_symbol(name.substr(0, end), raw.get(entry + 8, wide ? 8 : 4),
+          auto name = symbolName(raw, strings, bytes, index, budget);
+          add_symbol(name, raw.get(entry + 8, wide ? 8 : 4),
                      (type & 0x0e) != 0);
         }
       }

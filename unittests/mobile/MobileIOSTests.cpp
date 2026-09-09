@@ -82,6 +82,31 @@ std::string loadableThin() {
   integer(data, 92, 5);
   return data;
 }
+std::string symbolTable(uint32_t count, bool wide = true,
+                        const std::string &name = "_$s4Demo3fooyyF") {
+  auto data = thin(wide ? 0x100000c : 12);
+  const unsigned header = wide ? 32 : 28;
+  const unsigned entry_size = wide ? 16 : 12;
+  const uint32_t symbols = 4096, strings = symbols + count * entry_size;
+  data.resize(strings + name.size() + 2, '\0');
+  integer(data, 16, 1);
+  integer(data, 20, 24);
+  integer(data, header, 2);
+  integer(data, header + 4, 24);
+  integer(data, header + 8, symbols);
+  integer(data, header + 12, count);
+  integer(data, header + 16, strings);
+  integer(data, header + 20, name.size() + 2);
+  data.replace(strings + 1, name.size(), name);
+  for (uint32_t i = 0; i < count; ++i) {
+    const auto entry = symbols + i * entry_size;
+    integer(data, entry, 1);
+    integer(data, entry + 4, i + 1 == count ? 1 : 0x0f, 1);
+    integer(data, entry + 8, i + 1 == count ? 0 : 0x1000 + i * 4,
+            wide ? 8 : 4);
+  }
+  return data;
+}
 std::pair<Object, Object> objcFixture(std::string body = "return arg0 + arg1;",
                                       bool class_method = false) {
   Object method{{"selector", "add:to:"},
@@ -818,6 +843,106 @@ TEST(MobileIOSNative,
   EXPECT_FALSE(flag(undefined, "defined"));
   EXPECT_EQ(str(object(symbols[1], "symbol"), "address"), "0x1000");
   EXPECT_TRUE(flag(object(symbols[1], "symbol"), "defined"));
+}
+
+TEST(MobileIOSNative, SymbolInventoryAboveFormerLimitPreservesAllRecords) {
+  constexpr uint32_t count = 100001;
+  for (bool wide : {false, true}) {
+    SCOPED_TRACE(wide);
+    auto data = symbolTable(count, wide);
+    Budget budget;
+    budget.output_bytes = 17;
+    auto selected = selectSlice(data, "auto", budget);
+    EXPECT_EQ(selected.bytes, data);
+    EXPECT_EQ(selected.pointer_size, wide ? 8u : 4u);
+    neverd::BinaryImage image;
+    image.Raw.assign(data.begin(), data.end());
+    auto result = swiftMetadata(image, budget);
+    const auto &symbols = array(result, "symbols");
+    ASSERT_EQ(symbols.size(), count);
+    const auto &first = object(symbols.front(), "symbol");
+    const auto &penultimate = object(symbols[count - 2], "symbol");
+    const auto &last = object(symbols.back(), "symbol");
+    EXPECT_EQ(str(first, "name"), "_$s4Demo3fooyyF");
+    EXPECT_EQ(str(first, "address"), "0x1000");
+    EXPECT_TRUE(flag(first, "defined"));
+    EXPECT_EQ(str(penultimate, "address"), hex(0x1000 + (count - 2) * 4));
+    EXPECT_EQ(str(last, "name"), str(first, "name"));
+    EXPECT_EQ(str(last, "address"), "0x0");
+    EXPECT_FALSE(flag(last, "defined"));
+    EXPECT_EQ(budget.output_bytes, 17u);
+  }
+}
+
+TEST(MobileIOSNative, SymbolInventoryStillRejectsMalformedRangesAndNames) {
+  for (unsigned mutation = 0; mutation < 4; ++mutation) {
+    SCOPED_TRACE(mutation);
+    auto data = symbolTable(1);
+    if (mutation == 0)
+      integer(data, 44, 0xffffffffu); // Declared nlist storage is absent.
+    else if (mutation == 1)
+      integer(data, 4096, 0xffffffffu); // Invalid string-table index.
+    else if (mutation == 2)
+      data.back() = 'x'; // No NUL terminator within the string table.
+    else
+      data = symbolTable(1, true, "_$s" + std::string(16384, 'x'));
+    Budget selection_budget, metadata_budget;
+    EXPECT_THROW(selectSlice(data, "auto", selection_budget), Error);
+    neverd::BinaryImage image;
+    image.Raw.assign(data.begin(), data.end());
+    EXPECT_THROW(swiftMetadata(image, metadata_budget), Error);
+  }
+}
+
+TEST(MobileIOSNative, SymbolInventoryHonorsInputWorkAndDeadlineBudgets) {
+  auto data = symbolTable(8);
+  neverd::BinaryImage image;
+  image.Raw.assign(data.begin(), data.end());
+  for (unsigned limit = 0; limit < 3; ++limit) {
+    SCOPED_TRACE(limit);
+    Limits limits;
+    if (limit == 0)
+      limits.max_bytes = data.size() - 1;
+    Budget selection_budget(limits), metadata_budget(limits);
+    if (limit == 1) {
+      selection_budget.remaining = metadata_budget.remaining = 3;
+    } else if (limit == 2) {
+      selection_budget.deadline = metadata_budget.deadline =
+          std::chrono::steady_clock::now() - std::chrono::seconds(1);
+    }
+    EXPECT_THROW(selectSlice(data, "auto", selection_budget), Error);
+    EXPECT_THROW(swiftMetadata(image, metadata_budget), Error);
+  }
+}
+
+TEST(MobileIOSNative, SymbolMetadataDoesNotConsumePublicationBudget) {
+  auto data = symbolTable(8);
+  Limits limits;
+  limits.max_bytes = data.size();
+  Budget budget(limits);
+  budget.output_bytes = limits.max_bytes - 1;
+  neverd::BinaryImage image;
+  image.Raw.assign(data.begin(), data.end());
+  auto result = swiftMetadata(image, budget);
+  EXPECT_EQ(array(result, "symbols").size(), 8u);
+  EXPECT_EQ(budget.output_bytes, limits.max_bytes - 1);
+}
+
+TEST(MobileIOSNative, RepeatedSymbolNamesCannotAmplifyBeyondConstructionBudget) {
+  auto data = symbolTable(4000, true, "_$s" + std::string(900, 'x'));
+  Limits limits;
+  limits.max_bytes = data.size();
+  Budget budget(limits);
+  budget.output_bytes = 17;
+  neverd::BinaryImage image;
+  image.Raw.assign(data.begin(), data.end());
+  try {
+    swiftMetadata(image, budget);
+    FAIL() << "repeated names exceeded the metadata construction byte limit";
+  } catch (const Error &error) {
+    EXPECT_STREQ(error.what(), "metadata construction exceeds byte budget");
+  }
+  EXPECT_EQ(budget.output_bytes, 17u);
 }
 
 TEST(MobileIOSNative, DuplicateRuntimeClassRecordsRemainInMethodDenominator) {
