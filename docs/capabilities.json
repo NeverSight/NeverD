@@ -635,6 +635,59 @@
   },
   "capabilities": [
     {
+      "id": "analysis.ir-view.instruction-anchors",
+      "kind": "analysis",
+      "status": "experimental",
+      "owner": "sdk",
+      "targets": [
+        "x86_64",
+        "aarch64"
+      ],
+      "docs": [
+        "docs/gui.md",
+        "tools/neverd-worker/PROTOCOL.md"
+      ],
+      "limitations": [
+        "native LowIR and MedIR pages expose exact retained instruction anchors, not complete contributing-instruction provenance",
+        "synthetic operations and structural rows have no instruction address; C, HighIR, LLVM IR, and VM mappings are explicitly unsupported",
+        "object identifiers are scoped to the analysis revision and rendered pages are bounded to 2048 lines and 2 MiB"
+      ],
+      "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDSessionCAPITests",
+          "source": "unittests/SessionCAPITests.cpp",
+          "filter": "SessionCAPITest.NativeIRViewPagesPreserveTextAndExactInstructionAnchors",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDSessionCAPITests",
+          "source": "unittests/SessionCAPITests.cpp",
+          "filter": "SessionCAPITest.IRViewRejectsInvalidPagesAndReportsUnsupportedMappings",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
+      ],
+      "public_surfaces": {
+        "c": [
+          "neverd_ir_view_json"
+        ],
+        "python": [],
+        "cli": [],
+        "json": [
+          "neverd_ir_view_json"
+        ]
+      }
+    },
+    {
       "id": "symbolic.execution.path-exploration",
       "kind": "analysis",
       "status": "experimental",

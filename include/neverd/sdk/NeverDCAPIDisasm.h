@@ -101,6 +101,23 @@ NEVERD_API const char *neverd_ir_high(neverd_session_t Sess,
 NEVERD_API const char *neverd_ir_llvm(neverd_session_t Sess,
                                       neverd_va_t FuncEntry);
 
+/// Return a schema_version=1 page of native Low/Med IR with instruction
+/// anchors. Representation is "low" or "med"; Offset is an absolute zero-based
+/// rendered line and Limit is 1..2048. Text is byte-for-byte the corresponding
+/// legacy IR dump slice. Rows carry line, object_id, kind, mapping_status,
+/// addresses (hex strings), and origin_seq when available. An instruction
+/// anchor identifies the originating instruction, not every contributing
+/// instruction after data propagation. Headers, PHIs and synthetic/unbound
+/// operations remain unmapped. Unsupported representations/architectures return
+/// an explicit mapping_status with empty rows and no text. Errors return NULL
+/// and set neverd_last_error. The page text is capped at 2 MiB; no whole IR
+/// string is retained for paging. Object IDs are stable for a fixed analysis
+/// snapshot, not across revisions. Free the result with neverd_free_string().
+NEVERD_API const char *neverd_ir_view_json(neverd_session_t Sess,
+                                           neverd_va_t FuncEntry,
+                                           const char *Representation,
+                                           size_t Offset, size_t Limit);
+
 #ifdef __cplusplus
 }
 #endif

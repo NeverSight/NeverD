@@ -36,9 +36,8 @@ using namespace llvm;
 namespace neverd::cli {
 
 int runBookmarks() {
-  std::string BmPath =
-      std::filesystem::path(InputFile.getValue()).string() +
-      ".neverd-bookmarks.json";
+  std::string BmPath = std::filesystem::path(InputFile.getValue()).string() +
+                       ".neverd-bookmarks.json";
 
   using Bookmark = std::tuple<uint64_t, std::string, std::string>;
 
@@ -79,8 +78,8 @@ int runBookmarks() {
           continue;
         Addr = *ParsedAddr;
       } else if (std::optional<double> N = A->getAsNumber()) {
-        if (!std::isfinite(*N) || *N < 0.0 ||
-            *N >= 18446744073709551616.0 || std::trunc(*N) != *N)
+        if (!std::isfinite(*N) || *N < 0.0 || *N >= 18446744073709551616.0 ||
+            std::trunc(*N) != *N)
           continue;
         Addr = static_cast<uint64_t>(*N);
       } else {
@@ -137,8 +136,7 @@ int runBookmarks() {
     Bms.emplace_back(*Addr, Name, "");
     if (!saveBm(Bms))
       return 1;
-    outs() << "Added bookmark: " << Name << " @ 0x" << utohexstr(*Addr)
-           << "\n";
+    outs() << "Added bookmark: " << Name << " @ 0x" << utohexstr(*Addr) << "\n";
     return 0;
   }
 
@@ -209,7 +207,11 @@ int runAnnotate(neverd_session_t Sess) {
     }
 
     neverd_annotation_set(Sess, *Addr, AnnotateText.getValue().c_str());
-    neverd_annotations_save(Sess);
+    if (neverd_annotations_save(Sess) != 0) {
+      WithColor::error() << "annotation save failed: " << takeLastError(Sess)
+                         << "\n";
+      return 1;
+    }
     if (!JsonOutput)
       outs() << "Added annotation at 0x" << utohexstr(*Addr) << ": "
              << AnnotateText.getValue() << "\n";
@@ -229,7 +231,11 @@ int runAnnotate(neverd_session_t Sess) {
       return 1;
     }
     neverd_annotation_remove(Sess, *Addr);
-    neverd_annotations_save(Sess);
+    if (neverd_annotations_save(Sess) != 0) {
+      WithColor::error() << "annotation save failed: " << takeLastError(Sess)
+                         << "\n";
+      return 1;
+    }
     if (!JsonOutput)
       outs() << "Removed annotation at 0x" << utohexstr(*Addr) << "\n";
     return 0;

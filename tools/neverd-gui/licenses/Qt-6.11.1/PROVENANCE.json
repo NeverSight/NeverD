@@ -1,0 +1,196 @@
+{
+  "component": "Qt base",
+  "version": "6.11.1",
+  "files": [
+    {
+      "file": "AFL-2.1.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/AFL-2.1.txt",
+      "sha256": "93bb4f7417aa775bab9026cc3d0af28aeb64451fc5a8ec651876785edd8eaf9b"
+    },
+    {
+      "file": "Apache-2.0.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/Apache-2.0.txt",
+      "sha256": "e3ba223bb1423f0aad8c3dfce0fe3148db48926d41e6fbc3afbbf5ff9e1c89cb"
+    },
+    {
+      "file": "BSD-2-Clause.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/BSD-2-Clause.txt",
+      "sha256": "8fda146749ca071ac9cdce2e24d25444676ea48d1f9dccc2b7c15c054b717db8"
+    },
+    {
+      "file": "BSD-3-Clause.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/BSD-3-Clause.txt",
+      "sha256": "9f0490f18656c6f2435bd14f603ef0c96434d1825615363dce43abb42ed1dcce"
+    },
+    {
+      "file": "BSD-4-Clause.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/BSD-4-Clause.txt",
+      "sha256": "83faa0d205c316ce3efeafee465b6a165914fb29595968c08dc6437021b7b6fd"
+    },
+    {
+      "file": "BSL-1.0.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/BSL-1.0.txt",
+      "sha256": "3abd6471b9a9a08d65ce771143f8e278bb4c1aeb10c1c2d476935a6b049653f5"
+    },
+    {
+      "file": "Bitstream-Vera.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/Bitstream-Vera.txt",
+      "sha256": "7a083b136e64d064794c3419751e5c7dd10d2f64c108fe5ba161eae5e5958a93"
+    },
+    {
+      "file": "CC0-1.0.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/CC0-1.0.txt",
+      "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+    },
+    {
+      "file": "FTL.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/FTL.txt",
+      "sha256": "08c135755dd589039470f1fdbb400daaabaaa50d0b366d19cebff4d22986baa1"
+    },
+    {
+      "file": "GFDL-1.3-no-invariants-only.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/GFDL-1.3-no-invariants-only.txt",
+      "sha256": "110535522396708cea37c72a802c5e7e81391139f5f7985631c93ef242b206a4"
+    },
+    {
+      "file": "GPL-2.0-only.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/GPL-2.0-only.txt",
+      "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+    },
+    {
+      "file": "GPL-2.0-or-later.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/GPL-2.0-or-later.txt",
+      "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+    },
+    {
+      "file": "GPL-3.0-only.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/GPL-3.0-only.txt",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+    },
+    {
+      "file": "HPND.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/HPND.txt",
+      "sha256": "67ac968431270291f5e9cd3ed76705e1169f57082ee102093b2543b28cef63cf"
+    },
+    {
+      "file": "IJG.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/IJG.txt",
+      "sha256": "1cb448f5e2e6d3aca60943f4eee1a04675628dc0266a074a42bc1560ebc28d61"
+    },
+    {
+      "file": "IPL-1.0.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/IPL-1.0.txt",
+      "sha256": "d5328e672fb1bff47ee18e890784541453380081cf3771bb7b3c06fc19c7d503"
+    },
+    {
+      "file": "Imlib2.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/Imlib2.txt",
+      "sha256": "8846f2baba1a7f4c36f7ca19a923a000d8a21afa37cf0fe006f6ce88a6058a89"
+    },
+    {
+      "file": "LGPL-2.1-or-later.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/LGPL-2.1-or-later.txt",
+      "sha256": "1ccf09bf2f598308df4bed9cd8e9657dc5cd0973d2800318f2e241486e2edf3f"
+    },
+    {
+      "file": "LGPL-3.0-only.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/LGPL-3.0-only.txt",
+      "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768"
+    },
+    {
+      "file": "Libpng.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/Libpng.txt",
+      "sha256": "58fe669792f9b4e0740bf75ecfe90b5326128bb2ce7e27e1c342abd9db4d8ea6"
+    },
+    {
+      "file": "LicenseRef-BSD-3-Clause-with-PCRE2-Binary-Like-Packages-Exception.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/LicenseRef-BSD-3-Clause-with-PCRE2-Binary-Like-Packages-Exception.txt",
+      "sha256": "0526625fcc746a42d3f19a0ab357d3dc8479fdbe3bfd168825498f50215c7a63"
+    },
+    {
+      "file": "LicenseRef-ICC-License.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/LicenseRef-ICC-License.txt",
+      "sha256": "9e34ff47b3a44814e183342e7e198d127a6740e29d20e8381fba7688dafc79dd"
+    },
+    {
+      "file": "LicenseRef-Lcs-Telegraphics.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/LicenseRef-Lcs-Telegraphics.txt",
+      "sha256": "c10225ebbd5191bfdd761b0d7752c785f2453ab665d6c454473fb12d254668aa"
+    },
+    {
+      "file": "LicenseRef-Qt-Commercial.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/LicenseRef-Qt-Commercial.txt",
+      "sha256": "9b1f50aae6267f9d5e0ceb6775ee86450262c25ec7c0573e151fe5d3f18a4700"
+    },
+    {
+      "file": "LicenseRef-SHA1-Public-Domain.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/LicenseRef-SHA1-Public-Domain.txt",
+      "sha256": "65d86b8ec6b1cd8b8f6e64fd8710274ba00d6a3c520e00dfdcd1c3d2071f3305"
+    },
+    {
+      "file": "Linux-syscall-note.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/Linux-syscall-note.txt",
+      "sha256": "3f9e477523febab58de8b716ccfbcf02e6ef1c8e7728953905e8558637abe2a9"
+    },
+    {
+      "file": "MIT-Khronos-old.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/MIT-Khronos-old.txt",
+      "sha256": "3c58021633974f9ed3c3d445a374240a5244fd039628f4d7f6f3e674bc8e6694"
+    },
+    {
+      "file": "MIT-open-group.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/MIT-open-group.txt",
+      "sha256": "c55d2ab72d8a4f9e9cd8fbd1379268e575e8cfa16874affa5899b75a6d754514"
+    },
+    {
+      "file": "MIT.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/MIT.txt",
+      "sha256": "d040359701c01996a017d5c515678929cd1b0625e64cb86db44025fbb6cdf1fc"
+    },
+    {
+      "file": "MPL-2.0.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/MPL-2.0.txt",
+      "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04"
+    },
+    {
+      "file": "Qt-GPL-exception-1.0.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/Qt-GPL-exception-1.0.txt",
+      "sha256": "40678d338ce53cd93f8b22b281a2ecbcaa3ee65ce60b25ffb0c462b0530846b2"
+    },
+    {
+      "file": "SPL-1.0.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/SPL-1.0.txt",
+      "sha256": "f58f2f30909982445f97f1a61667261920a7caeab21ef5bea1b740f5b144d141"
+    },
+    {
+      "file": "Unicode-3.0.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/Unicode-3.0.txt",
+      "sha256": "80bb6294022d8764adb36a9d65ebb6bd94efb1865918a71e31e6c247607d7634"
+    },
+    {
+      "file": "X11.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/X11.txt",
+      "sha256": "e2936c6509784b4f0ec27bac74182393866fad9422b29a70e085ff14aba87193"
+    },
+    {
+      "file": "Xerox.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/Xerox.txt",
+      "sha256": "b6bc52205d01e10cf43dbb7b8aec06dcaa3b21d1486e7c9c0bec329ee8244d8d"
+    },
+    {
+      "file": "Zlib.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/Zlib.txt",
+      "sha256": "d7e3139972874dc8abdbbfce27ec1e6f942b28279dd7d27453630a8b4610e080"
+    },
+    {
+      "file": "blessing.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/blessing.txt",
+      "sha256": "592db1199aab67aafe4515db9808b420db122083807c5329b2f061951e79acbe"
+    },
+    {
+      "file": "libpng-2.0.txt",
+      "source": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/libpng-2.0.txt",
+      "sha256": "7317e078e2d3b5d7ba5a6159e650945153262b44b76f6700f8e9edb261c5143e"
+    }
+  ]
+}
