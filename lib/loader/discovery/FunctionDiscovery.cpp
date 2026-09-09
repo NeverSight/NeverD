@@ -63,7 +63,16 @@ void scanImportThunks(BinaryImage &Img) {
 }
 
 bool checkPrologueAtOffset(const Segment &Seg, size_t Off, Arch A) {
-  if (Off >= Seg.Data.size())
+  if (Off >= Seg.Data.size() || Off > InvalidVA - Seg.VA)
+    return false;
+  const va_t Address = Seg.VA + Off;
+  // Byte-wise padding scans can stop inside an instruction. Check the guest
+  // address, not the buffer offset. ARM probing accepts both ARM and Thumb,
+  // so retain halfword-aligned Thumb entries without clearing candidate bits.
+  const size_t Alignment = A == Arch::AArch64 ? aarch64::kInsnSize
+                           : A == Arch::ARM   ? arm::kThumbInsnSize
+                                              : 1;
+  if (Address == InvalidVA || Address % Alignment != 0)
     return false;
   return isPrologueAt(Seg.Data.data() + Off, Seg.Data.size() - Off, A);
 }
