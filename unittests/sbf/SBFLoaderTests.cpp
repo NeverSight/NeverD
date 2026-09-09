@@ -14,14 +14,134 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <string>
 #include <tuple>
+#include <vector>
 
 namespace neverd {
 namespace {
+
+struct DebugSymbolRecord {
+  llvm::StringRef Name;
+  size_t EntrySlot;
+  uint64_t Size;
+  uint8_t Type = llvm::ELF::STT_FUNC;
+};
+
+std::vector<uint8_t>
+buildDebugSymbolELF(bool Strict, llvm::ArrayRef<DebugSymbolRecord> Records) {
+  using ELFT = llvm::object::ELF64LE;
+  using namespace llvm::ELF;
+  std::vector<uint8_t> Text(2 * sbf::kInstructionSize, 0);
+  for (size_t Slot = 0; Slot < 2; ++Slot)
+    Text[Slot * sbf::kInstructionSize] =
+        sbf::getOpcodeInfo(sbf::Opcode::EXIT)->Encoding;
+
+  std::vector<uint8_t> Bytes;
+  if (Strict) {
+    sbf::test::StrictELFOptions Options;
+    Options.AddDebugSymbols = true;
+    Options.Text = Text;
+    for (const DebugSymbolRecord &Record : Records)
+      Options.FunctionSymbols.push_back(
+          {Record.Name.str(), Record.EntrySlot, 0});
+    Bytes = sbf::test::buildStrictELF(Options);
+  } else {
+    sbf::test::LegacyELFOptions Options;
+    Options.Text = Text;
+    Bytes = sbf::test::buildLegacyELF(Options);
+    ELFT::Ehdr Header;
+    std::memcpy(&Header, Bytes.data(), sizeof(Header));
+    std::vector<ELFT::Shdr> Sections(Header.e_shnum);
+    std::memcpy(Sections.data(), Bytes.data() + Header.e_shoff,
+                Sections.size() * sizeof(ELFT::Shdr));
+    const auto OriginalNames = Sections[Header.e_shstrndx];
+    std::string SectionNames(
+        reinterpret_cast<const char *>(Bytes.data() + OriginalNames.sh_offset),
+        OriginalNames.sh_size);
+    const uint32_t StringTableName = static_cast<uint32_t>(SectionNames.size());
+    SectionNames.append(".strtab", sizeof(".strtab"));
+    const uint32_t SymbolTableName = static_cast<uint32_t>(SectionNames.size());
+    SectionNames.append(".symtab", sizeof(".symtab"));
+    std::string SymbolNames(1, '\0');
+    std::vector<ELFT::Sym> Symbols(Records.size() + 1);
+    for (size_t Index = 0; Index < Records.size(); ++Index) {
+      Symbols[Index + 1].st_name = static_cast<uint32_t>(SymbolNames.size());
+      SymbolNames.append(Records[Index].Name.data(),
+                         Records[Index].Name.size());
+      SymbolNames.push_back('\0');
+    }
+
+    // Keep the legacy fixture's section spans in file order. The optional
+    // debug tables live after its existing text and section-name data.
+    const uint64_t NamesOffset = OriginalNames.sh_offset;
+    const uint64_t StringsOffset = NamesOffset + SectionNames.size();
+    const uint64_t SymbolsOffset = llvm::alignTo(
+        StringsOffset + SymbolNames.size(), kELF64RecordAlignment);
+    const uint64_t HeadersOffset =
+        llvm::alignTo(SymbolsOffset + Symbols.size() * sizeof(ELFT::Sym),
+                      kELF64RecordAlignment);
+    Sections[Header.e_shstrndx].sh_size = SectionNames.size();
+    ELFT::Shdr Strings{};
+    Strings.sh_name = StringTableName;
+    Strings.sh_type = SHT_STRTAB;
+    Strings.sh_offset = StringsOffset;
+    Strings.sh_size = SymbolNames.size();
+    Strings.sh_addralign = 1;
+    ELFT::Shdr SymbolTable{};
+    SymbolTable.sh_name = SymbolTableName;
+    SymbolTable.sh_type = SHT_SYMTAB;
+    SymbolTable.sh_offset = SymbolsOffset;
+    SymbolTable.sh_size = Symbols.size() * sizeof(ELFT::Sym);
+    SymbolTable.sh_link = static_cast<uint32_t>(Sections.size());
+    SymbolTable.sh_info = 1;
+    SymbolTable.sh_addralign = kELF64RecordAlignment;
+    SymbolTable.sh_entsize = sizeof(ELFT::Sym);
+    Sections.push_back(Strings);
+    Sections.push_back(SymbolTable);
+    Header.e_shoff = HeadersOffset;
+    Header.e_shnum = static_cast<uint16_t>(Sections.size());
+    Bytes.resize(NamesOffset);
+    Bytes.resize(HeadersOffset + Sections.size() * sizeof(ELFT::Shdr), 0);
+    std::memcpy(Bytes.data(), &Header, sizeof(Header));
+    std::memcpy(Bytes.data() + NamesOffset, SectionNames.data(),
+                SectionNames.size());
+    std::memcpy(Bytes.data() + StringsOffset, SymbolNames.data(),
+                SymbolNames.size());
+    std::memcpy(Bytes.data() + SymbolsOffset, Symbols.data(),
+                Symbols.size() * sizeof(ELFT::Sym));
+    std::memcpy(Bytes.data() + HeadersOffset, Sections.data(),
+                Sections.size() * sizeof(ELFT::Shdr));
+  }
+
+  ELFT::Ehdr Header;
+  std::memcpy(&Header, Bytes.data(), sizeof(Header));
+  ELFT::Shdr SymbolTable;
+  std::memcpy(&SymbolTable,
+              Bytes.data() + Header.e_shoff +
+                  (Header.e_shnum - 1) * sizeof(ELFT::Shdr),
+              sizeof(SymbolTable));
+  for (size_t Index = 0; Index < Records.size(); ++Index) {
+    const uint64_t Offset =
+        SymbolTable.sh_offset + (Index + 1) * sizeof(ELFT::Sym);
+    ELFT::Sym Symbol;
+    std::memcpy(&Symbol, Bytes.data() + Offset, sizeof(Symbol));
+    Symbol.setBindingAndType(STB_GLOBAL, Records[Index].Type);
+    Symbol.st_shndx = Strict ? SHN_ABS : 1;
+    Symbol.st_value = (Strict ? sbf::kBytecodeStart : 0) +
+                      Records[Index].EntrySlot * sbf::kInstructionSize;
+    Symbol.st_size = Records[Index].Size;
+    std::memcpy(Bytes.data() + Offset, &Symbol, sizeof(Symbol));
+  }
+  return Bytes;
+}
 
 class SBFLoaderTest : public ::testing::Test {
 protected:
@@ -409,6 +529,116 @@ TEST_F(SBFLoaderTest, EnrichesStrictProgramsFromValidOptionalSymbols) {
   ASSERT_NE(Entry, nullptr);
   EXPECT_TRUE(Entry->IsFunc);
   EXPECT_EQ(Entry->Addr, sbf::kBytecodeStart);
+}
+
+TEST_F(SBFLoaderTest, DeduplicatesDebugSymbolsByNameAddressAndRawType) {
+  using namespace llvm::ELF;
+  const std::array<DebugSymbolRecord, 8> Records = {{
+      {"named_entry", 0, 8},
+      {"named_entry", 0, 8},
+      {"entry_alias", 0, 8},
+      {"named_entry", 1, 8},
+      {"named_entry", 0, 8, STT_OBJECT},
+      {"named_entry", 0, 8, STT_OBJECT},
+      {"named_entry", 0, 8, STT_NOTYPE},
+      {"named_entry", 0, 8, STT_GNU_IFUNC},
+  }};
+  for (bool Strict : {false, true}) {
+    SCOPED_TRACE(Strict ? "strict" : "legacy");
+    auto Image = loadBinary(
+        write("debug-identities.so", buildDebugSymbolELF(Strict, Records)));
+    ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
+    ASSERT_TRUE(Image->SBF.has_value());
+    EXPECT_EQ(Image->SBF->DebugEnrichment,
+              sbf::DebugEnrichmentStatus::Complete);
+    EXPECT_EQ(Image->Symbols.size(), 6u);
+    const auto Functions = Image->getFunctionSymbols();
+    ASSERT_EQ(Functions.size(), 3u);
+    EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
+                            [](const Symbol *Symbol) {
+                              return Symbol->Name == "named_entry" &&
+                                     Symbol->Addr == sbf::kBytecodeStart;
+                            }),
+              1);
+    EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
+                            [](const Symbol *Symbol) {
+                              return Symbol->Name == "named_entry" &&
+                                     Symbol->Addr == sbf::kBytecodeStart +
+                                                         sbf::kInstructionSize;
+                            }),
+              1);
+    const Symbol *Alias = Image->findSymbol("entry_alias");
+    ASSERT_NE(Alias, nullptr);
+    EXPECT_TRUE(Alias->IsFunc);
+    EXPECT_EQ(Alias->Addr, sbf::kBytecodeStart);
+    // SBF still classifies only STT_FUNC as a function. In particular,
+    // distinct non-function raw types must not collapse into one record.
+    EXPECT_EQ(std::count_if(Image->Symbols.begin(), Image->Symbols.end(),
+                            [](const Symbol &Symbol) {
+                              return Symbol.Name == "named_entry" &&
+                                     Symbol.Addr == sbf::kBytecodeStart &&
+                                     !Symbol.IsFunc;
+                            }),
+              3);
+    EXPECT_EQ(Image->findSymbol(sbf::kEntrySymbolName), nullptr);
+  }
+}
+
+TEST_F(SBFLoaderTest,
+       CompletesUnknownDebugSymbolSizeWithoutReplacingKnownSize) {
+  const std::array<DebugSymbolRecord, 7> Records = {{
+      {"unknown_then_known", 0, 0},
+      {"unknown_then_known", 0, 16},
+      {"unknown_then_known", 0, 8},
+      {"unknown_then_known", 0, 0},
+      {"known_then_unknown", 1, 8},
+      {"known_then_unknown", 1, 0},
+      {"known_then_unknown", 1, 16},
+  }};
+  for (bool Strict : {false, true}) {
+    SCOPED_TRACE(Strict ? "strict" : "legacy");
+    auto Image = loadBinary(
+        write("debug-sizes.so", buildDebugSymbolELF(Strict, Records)));
+    ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
+    ASSERT_EQ(Image->getFunctionSymbols().size(), 2u);
+    const Symbol *Completed = Image->findSymbol("unknown_then_known");
+    ASSERT_NE(Completed, nullptr);
+    EXPECT_EQ(Completed->Size, 16u);
+    const Symbol *Preserved = Image->findSymbol("known_then_unknown");
+    ASSERT_NE(Preserved, nullptr);
+    EXPECT_EQ(Preserved->Size, 8u);
+  }
+}
+
+TEST_F(SBFLoaderTest, AddsSingleEntryUnlessDebugFunctionAlreadyCoversIt) {
+  for (bool Strict : {false, true}) {
+    SCOPED_TRACE(Strict ? "strict" : "legacy");
+    for (bool CoversEntry : {false, true}) {
+      SCOPED_TRACE(CoversEntry ? "named entry" : "synthetic entry");
+      const size_t Slot = CoversEntry ? 0 : 1;
+      const std::array<DebugSymbolRecord, 4> Records = {{
+          {"named_function", Slot, 8},
+          {"named_function", Slot, 8},
+          {"entry_data", 0, 8, llvm::ELF::STT_OBJECT},
+          {"entry_data", 0, 8, llvm::ELF::STT_OBJECT},
+      }};
+      auto Image = loadBinary(
+          write("debug-entry.so", buildDebugSymbolELF(Strict, Records)));
+      ASSERT_TRUE(static_cast<bool>(Image))
+          << llvm::toString(Image.takeError());
+      EXPECT_EQ(Image->Entry, sbf::kBytecodeStart);
+      EXPECT_EQ(Image->Symbols.size(), CoversEntry ? 2u : 3u);
+      EXPECT_EQ(Image->getFunctionSymbols().size(), CoversEntry ? 1u : 2u);
+      const Symbol *Entry = Image->findSymbol(sbf::kEntrySymbolName);
+      if (CoversEntry) {
+        EXPECT_EQ(Entry, nullptr);
+      } else {
+        ASSERT_NE(Entry, nullptr);
+        EXPECT_TRUE(Entry->IsFunc);
+        EXPECT_EQ(Entry->Addr, Image->Entry);
+      }
+    }
+  }
 }
 
 TEST_F(SBFLoaderTest, AppliesTheOfficialStrictDebugSymbolNameLimit) {

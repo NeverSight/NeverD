@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "ELFLoaderDetail.h"
+#include "ELFSymbolCollector.h"
 
 #include "neverd/loader/BinaryImageFlags.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -22,6 +23,7 @@
 #include "llvm/Support/Error.h"
 
 #include <limits>
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -86,6 +88,11 @@ void collectSymbols(const llvm::object::ELFFile<ELFT> &ELF,
   using Elf_Shdr = typename ELFT::Shdr;
   using Elf_Sym = typename ELFT::Sym;
 
+  // A definition may be present in both .symtab and .dynsym. Keep aliases
+  // distinct by name, and retain different symbol types at the same address.
+  ELFSymbolCollector Symbols(Img);
+  std::set<std::pair<va_t, llvm::StringRef>> ExportKeys;
+
   // --- Symbol tables ---
   auto AddSymbolsFrom = [&](const Elf_Shdr &SH) {
     if (SH.sh_type != SHT_SYMTAB && SH.sh_type != SHT_DYNSYM)
@@ -137,12 +144,7 @@ void collectSymbols(const llvm::object::ELFFile<ELFT> &ELF,
       if (Img.Arch == Arch::ARM && IsFunction)
         Value = clearThumbBit(Value);
 
-      Symbol S;
-      S.Name = NameOr->str();
-      S.Addr = Value;
-      S.Size = Sym.st_size;
-      S.IsFunc = IsFunction;
-      Img.Symbols.push_back(std::move(S));
+      Symbols.add(*NameOr, Value, Sym.st_size, Type, IsFunction);
 
       // st_size is an object boundary only for a defined STT_OBJECT whose
       // complete range belongs to one allocated section.  STT_NOTYPE,
@@ -168,7 +170,8 @@ void collectSymbols(const llvm::object::ELFFile<ELFT> &ELF,
       if (Type == STT_GNU_IFUNC)
         Img.recordRuntimeFunction(Value);
 
-      if (IsFunction && (Bind == STB_GLOBAL || Bind == STB_WEAK)) {
+      if (IsFunction && (Bind == STB_GLOBAL || Bind == STB_WEAK) &&
+          ExportKeys.emplace(Value, *NameOr).second) {
         Export Exp;
         Exp.Name = NameOr->str();
         Exp.Addr = Value;

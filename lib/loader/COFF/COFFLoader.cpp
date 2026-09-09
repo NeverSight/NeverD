@@ -841,11 +841,13 @@ COFFLoader::load(const std::filesystem::path &Path) {
   // --- Debug Directory (PDB path) ---
   coff_loader::parseDebugDirectory(Obj, Img);
 
+  // Named definitions own their entries before unwind discovery supplies
+  // ranges. Otherwise .pdata creates an anonymous duplicate for every typed
+  // symbol at the same address.
+  coff_loader::parseSymbolTable(Obj, Img, ImageBase, SectionVAs);
+
   // --- Exceptions (.pdata) ---
   coff_loader::parseExceptions(Obj, Img, ImageBase);
-
-  // --- COFF Symbol table ---
-  coff_loader::parseSymbolTable(Obj, Img, ImageBase, SectionVAs);
 
   // --- TLS callbacks ---
   coff_loader::parseTLSDirectory(Obj, Img, ImageBase);

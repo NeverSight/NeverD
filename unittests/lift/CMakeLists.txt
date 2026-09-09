@@ -138,6 +138,8 @@ add_neverd_unittest(NeverDLiftTests
   format/MachOI386RelocationPipelineTests.cpp
   format/MachOI386RelocationScatteredTests.cpp
   format/MachOFunctionListingTests.cpp
+  format/ELFFunctionListingTests.cpp
+  format/COFFFunctionListingTests.cpp
   format/MachOLLVMNameBoundaryTests.cpp
   format/COFFImportStorageBoundaryTests.cpp
   format/LLVMImportVeneerBoundaryTests.cpp

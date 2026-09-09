@@ -6,6 +6,8 @@
 
 #include "neverd/loader/ELF/SBFELFLoader.h"
 
+#include "ELFSymbolCollector.h"
+
 #include "neverd/object/SectionNames.h"
 #include "neverd/sbf/SBFConstants.h"
 #include "neverd/sbf/image/SBFRelocations.h"
@@ -338,6 +340,7 @@ addStrictDebugSymbols(llvm::ArrayRef<Elf_Shdr> Sections,
   const llvm::StringRef SymbolNames(
       reinterpret_cast<const char *>(Bytes.data() + SymbolNameTable->sh_offset),
       static_cast<size_t>(SymbolNameTable->sh_size));
+  elf_loader::detail::ELFSymbolCollector Collector(Image);
   const size_t Count =
       static_cast<size_t>(SymbolTable->sh_size / sizeof(Elf_Sym));
   for (size_t Index = 0; Index < Count; ++Index) {
@@ -358,12 +361,8 @@ addStrictDebugSymbols(llvm::ArrayRef<Elf_Shdr> Sections,
     if (Name->empty())
       continue;
 
-    Symbol Symbol;
-    Symbol.Name = Name->str();
-    Symbol.Addr = RawSymbol.st_value;
-    Symbol.Size = RawSymbol.st_size;
-    Symbol.IsFunc = RawSymbol.getType() == STT_FUNC;
-    Image.Symbols.push_back(std::move(Symbol));
+    Collector.add(*Name, RawSymbol.st_value, RawSymbol.st_size,
+                  RawSymbol.getType(), RawSymbol.getType() == STT_FUNC);
   }
   return SawMalformedName ? sbf::DebugEnrichmentStatus::Malformed
                           : sbf::DebugEnrichmentStatus::Complete;
@@ -397,6 +396,7 @@ addLegacyDebugSymbols(const LegacySectionCatalog &Catalog,
     return sbf::DebugEnrichmentStatus::Malformed;
 
   bool SawMalformedLabel = false;
+  elf_loader::detail::ELFSymbolCollector Collector(Image);
   const size_t Count =
       static_cast<size_t>(SymbolTable->sh_size / sizeof(Elf_Sym));
   for (size_t Index = 0; Index < Count; ++Index) {
@@ -430,12 +430,8 @@ addLegacyDebugSymbols(const LegacySectionCatalog &Catalog,
         continue;
     }
 
-    Symbol Symbol;
-    Symbol.Name = Name->str();
-    Symbol.Addr = Address;
-    Symbol.Size = RawSymbol.st_size;
-    Symbol.IsFunc = RawSymbol.getType() == STT_FUNC;
-    Image.Symbols.push_back(std::move(Symbol));
+    Collector.add(*Name, Address, RawSymbol.st_size, RawSymbol.getType(),
+                  RawSymbol.getType() == STT_FUNC);
   }
   return SawMalformedLabel ? sbf::DebugEnrichmentStatus::Malformed
                            : sbf::DebugEnrichmentStatus::Complete;

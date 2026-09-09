@@ -22,9 +22,11 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
+#include <vector>
 
 #define DEBUG_TYPE "neverd-coff-loader"
 
@@ -35,6 +37,29 @@ using namespace llvm::COFF;
 using namespace llvm::object;
 
 namespace {
+
+using FunctionSymbolIndex = std::map<va_t, std::vector<size_t>>;
+
+FunctionSymbolIndex indexFunctionSymbols(const BinaryImage &Img) {
+  // A section or data label must not suppress independent unwind discovery.
+  FunctionSymbolIndex Result;
+  for (size_t I = 0; I < Img.Symbols.size(); ++I)
+    if (Img.Symbols[I].IsFunc)
+      Result[Img.Symbols[I].Addr].push_back(I);
+  return Result;
+}
+
+// Preserve every typed alias, enriching only absent sizes. Indices stay valid
+// when unnamed unwind functions append to Img.Symbols and reallocate it.
+void completeFunctionSizes(BinaryImage &Img, const FunctionSymbolIndex &Index,
+                           va_t Addr, uint64_t Size) {
+  auto It = Index.find(Addr);
+  if (It == Index.end())
+    return;
+  for (size_t I : It->second)
+    if (Img.Symbols[I].IsFunc && Img.Symbols[I].Size == 0)
+      Img.Symbols[I].Size = Size;
+}
 
 void parseX64Exceptions(const COFFObjectFile &Obj, BinaryImage &Img,
                         uint64_t ImageBase) {
@@ -70,7 +95,10 @@ void parseX64Exceptions(const COFFObjectFile &Obj, BinaryImage &Img,
   }
   const auto *RFBytes = reinterpret_cast<const uint8_t *>(ExcPtr);
 
-  auto Seen = Img.getSymbolAddresses();
+  const auto FunctionSymbols = indexFunctionSymbols(Img);
+  std::set<va_t> Seen;
+  for (const auto &Entry : FunctionSymbols)
+    Seen.insert(Entry.first);
 
   [[maybe_unused]] size_t Added = 0;
   bool SawZeroEntry = false;
@@ -112,8 +140,7 @@ void parseX64Exceptions(const COFFObjectFile &Obj, BinaryImage &Img,
 
     if (IsChained)
       continue;
-    if (!Seen.insert(Addr).second)
-      continue;
+    const bool AlreadySeen = !Seen.insert(Addr).second;
 
     const auto *SegPtr = Img.getSegmentFor(Addr);
     if (!SegPtr || !SegPtr->isExecutable())
@@ -125,6 +152,10 @@ void parseX64Exceptions(const COFFObjectFile &Obj, BinaryImage &Img,
         continue;
     }
 
+    if (AlreadySeen) {
+      completeFunctionSizes(Img, FunctionSymbols, Addr, End - Addr);
+      continue;
+    }
     Img.Symbols.push_back(
         Symbol::makeFunc(Addr, RF.EndAddress - RF.BeginAddress));
     ++Added;
@@ -246,7 +277,10 @@ void parseARMExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
         "truncated or misaligned ARM exception directory");
   }
   const auto *RFBytes = reinterpret_cast<const uint8_t *>(ExcPtr);
-  auto Seen = Img.getSymbolAddresses();
+  const auto FunctionSymbols = indexFunctionSymbols(Img);
+  std::set<va_t> Seen;
+  for (const auto &Entry : FunctionSymbols)
+    Seen.insert(Entry.first);
   const bool IsAArch64 = Img.Arch == Arch::AArch64;
   [[maybe_unused]] const char *ArchName = IsAArch64 ? "ARM64" : "ARM32";
   auto DiagnoseEntry = [&](size_t Index, llvm::StringRef Message) {
@@ -496,8 +530,7 @@ void parseARMExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
                          Structural.slice(UnwindCodeOffset, UnwindCodeLength),
                          Scopes, SingleEpilogueIndex);
         if (IsAArch64 &&
-            std::any_of(EF.UnwindOperations.begin(),
-                        EF.UnwindOperations.end(),
+            std::any_of(EF.UnwindOperations.begin(), EF.UnwindOperations.end(),
                         [](const UnwindOperation &Op) {
                           return Op.Kind == UnwindOperationKind::EndChained;
                         })) {
@@ -539,11 +572,16 @@ void parseARMExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
     Img.ExceptionMetadata.Functions.push_back(std::move(EF));
 
     Img.KnownCodeRanges.emplace_back(Addr, End);
-    if (IsFragment || !IsSymbolEligible || !Seen.insert(Addr).second)
+    if (IsFragment || !IsSymbolEligible)
       continue;
+    const bool AlreadySeen = !Seen.insert(Addr).second;
     size_t Off = static_cast<size_t>(Addr - Seg->VA);
     if (!checkPrologueAtOffset(*Seg, Off, Img.Arch))
       continue;
+    if (AlreadySeen) {
+      completeFunctionSizes(Img, FunctionSymbols, Addr, Length);
+      continue;
+    }
     Img.Symbols.push_back(Symbol::makeFunc(Addr, Length));
     ++Added;
   }
