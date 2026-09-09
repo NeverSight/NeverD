@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from scripts.qualify_mobile_swift_toolchain import (
-    SIGNER, bundle_identifier, installed_tool, trusted_package_signature,
+    SIGNER, bundle_identifier, installed_bundle, installed_tool, trusted_package_signature,
 )
 
 
@@ -70,6 +70,37 @@ class SwiftToolchainIdentityTests(unittest.TestCase):
             for path in (str(outside), str(escape), str(bundle), "swiftc"):
                 with self.subTest(path=path), self.assertRaises(ValueError):
                     installed_tool(bundle, path)
+
+    def test_latest_alias_selects_only_the_real_new_snapshot_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle = root / "snapshot.xctoolchain"
+            bundle.mkdir()
+            selected, aliases = installed_bundle(root, set(), {bundle.name})
+            self.assertEqual(selected, bundle.resolve())
+            self.assertEqual(aliases, [])
+            latest = root / "swift-latest.xctoolchain"
+            latest.symlink_to(bundle.name)
+            selected, aliases = installed_bundle(root, set(), {bundle.name, latest.name})
+            self.assertEqual(selected, bundle.resolve())
+            self.assertEqual(aliases, [{"path": str(latest), "link_target": bundle.name,
+                                        "resolved_target": str(bundle.resolve())}])
+
+    def test_multiple_bundles_or_unrelated_aliases_do_not_pick_an_arbitrary_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first, second = root / "first.xctoolchain", root / "second.xctoolchain"
+            first.mkdir()
+            second.mkdir()
+            latest = root / "swift-latest.xctoolchain"
+            latest.symlink_to(second.name)
+            cases = ((set(), {first.name, second.name, latest.name}),
+                     ({second.name}, {first.name, second.name, latest.name}),
+                     ({first.name}, {second.name}),
+                     (set(), {latest.name}))
+            for before, after in cases:
+                with self.subTest(before=before, after=after), self.assertRaises(ValueError):
+                    installed_bundle(root, before, after)
 
 
 if __name__ == "__main__":

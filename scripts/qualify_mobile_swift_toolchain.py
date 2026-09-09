@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Collect a fixed Swift snapshot's installation identity in macOS Actions.
 
-The first signed download supplies an observed SHA, not a previously pinned
-package identity. Successful installation does not qualify app compilation,
-method recovery, or behavior. Production NeverD never invokes this script.
+The package digest is pinned from the signed download in Actions run
+34342548149. Successful installation does not qualify app compilation, method
+recovery, or behavior. Production NeverD never invokes this script.
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ import sys
 
 SNAPSHOT = "swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-09-04-a"
 PACKAGE_URL = f"https://download.swift.org/swift-6.4.x-branch/xcode/{SNAPSHOT}/{SNAPSHOT}-osx.pkg"
+PACKAGE_SHA256 = "264a82a3c876ccf821e7fd593bb1256b125136a709497f9ce6bc884f598b195f"
 SOURCE_REFERENCE = "d2e983b81b18217da61b818e06e58589ecbfd67f"
 SIGNER = "Developer ID Installer: Swift Open Source (V9AUD2URP3)"
 TRUSTED_SIGNATURE_STATUSES = {
@@ -72,6 +73,24 @@ def installed_tool(bundle, reported):
     return resolved
 
 
+def installed_bundle(root, before, after):
+    added = after - before
+    bundles = [root / name for name in added
+               if (root / name).is_dir() and not (root / name).is_symlink()]
+    if len(bundles) != 1 or not before.issubset(after):
+        raise ValueError("Installation did not add exactly one new user toolchain bundle")
+    bundle = bundles[0].resolve(strict=True)
+    aliases = []
+    for name in sorted(added - {bundles[0].name}):
+        path = root / name
+        if not path.is_symlink() or path.resolve(strict=True) != bundle:
+            raise ValueError("New toolchain alias does not resolve to the installed snapshot")
+        aliases.append({"path": str(path), "link_target": os.readlink(path),
+                        "resolved_target": str(bundle)})
+    # Select the actual directory, never the mutable swift-latest alias.
+    return bundle, aliases
+
+
 def qualify(work):
     if os.environ.get("GITHUB_ACTIONS") != "true" or sys.platform != "darwin":
         raise RuntimeError("Swift toolchain qualification runs only in macOS GitHub Actions")
@@ -86,7 +105,9 @@ def qualify(work):
                "runner_os": os.environ.get("RUNNER_OS"),
                "runner_arch": os.environ.get("RUNNER_ARCH"),
                "package": {"snapshot": SNAPSHOT, "url": PACKAGE_URL,
-                           "identity_status": "observed-signed-download-not-preexisting-pin",
+                           "identity_status": "pinned-package-verification-pending",
+                           "expected_sha256": PACKAGE_SHA256,
+                           "pin_evidence_run_id": 34342548149,
                            "observed_sha256": None,
                            "source_reference": SOURCE_REFERENCE,
                            "package_build_source_verified": False},
@@ -143,11 +164,15 @@ def qualify(work):
         package_sha = digest(package)
         receipt["package"].update({"observed_sha256": package_sha, "size": size,
                                    "effective_url": download[0]})
+        if package_sha != PACKAGE_SHA256:
+            raise RuntimeError("The package SHA-256 differs from the previously signed download")
+        receipt["package"]["identity_status"] = "sha256-matched"
         signature = command("package-signature", ["/usr/sbin/pkgutil", "--check-signature", package])
         receipt["package"]["signature"] = trusted_package_signature(signature)
         command("gatekeeper", ["/usr/sbin/spctl", "--assess", "--type", "install",
                                "--verbose=4", package], timeout=300)
         receipt["package"]["gatekeeper"] = "accepted"
+        receipt["package"]["identity_status"] = "sha256-and-system-signature-verified"
         if digest(package) != package_sha:
             raise RuntimeError("The package changed during signature assessment")
 
@@ -160,12 +185,8 @@ def qualify(work):
                             "-pkg", package], timeout=900)
         after = {path.name for path in root.glob("*.xctoolchain")}
         receipt["toolchain_directories_after"] = sorted(after)
-        added = after - before
-        if len(added) != 1 or not before.issubset(after):
-            raise RuntimeError("Installation did not add exactly one new user toolchain")
-        bundle = root / next(iter(added))
-        if bundle.is_symlink() or not bundle.is_dir():
-            raise RuntimeError("The installed toolchain is not a standalone bundle directory")
+        bundle, aliases = installed_bundle(root, before, after)
+        receipt["toolchain_aliases"] = aliases
         info_path = bundle / "Info.plist"
         info_bytes = info_path.read_bytes()
         if len(info_bytes) > 1024 * 1024:
