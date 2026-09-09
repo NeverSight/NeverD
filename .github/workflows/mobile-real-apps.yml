@@ -95,8 +95,10 @@ jobs:
           python -m unittest \
             scripts.tests.test_mobile_real_apps_android \
             scripts.tests.test_mobile_real_apps_android_build \
+            scripts.tests.test_mobile_real_apps_android_recompile \
             scripts.tests.test_mobile_real_apps_common \
             scripts.tests.test_mobile_real_apps_ios \
+            scripts.tests.test_mobile_real_apps_objc_inventory \
             scripts.tests.test_mobile_real_apps_matrix \
             scripts.tests.test_mobile_real_apps_trigger \
             scripts.tests.test_mobile_release_gate \
@@ -188,6 +190,22 @@ jobs:
             build-real-apps/CMakeFiles/CMakeConfigureLog.yaml
             build-real-apps/compile_commands.json
             build-real-apps/bin/consumer-build.json
+          retention-days: 7
+
+      - name: Collect actual iOS SDK declaration and import dependencies
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        env:
+          CONSUMER_COMMIT: ${{ needs.trigger.outputs.consumer_commit }}
+        run: |
+          python scripts/collect_mobile_ios_sdk_declarations.py \
+            --sdk-version 26.5 --output "$RUNNER_TEMP/ios-sdk-declarations"
+      - name: Preserve SDK declaration evidence for native source recovery
+        if: ${{ always() && runner.os == 'macOS' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mobile-ios-sdk-declarations
+          path: ${{ runner.temp }}/ios-sdk-declarations
+          if-no-files-found: error
           retention-days: 7
 
   android:

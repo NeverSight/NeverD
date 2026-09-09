@@ -2,8 +2,8 @@
 
 This is CI orchestration, not a production decompiler. Apple tool output is an
 independent observation; it is never substituted with NeverD's own inventory.
-Raw native/Objective-C inventories are not yet reconciled into complete callable
-denominators. Independent source rebuild and behavioral comparison are also
+The supported on-disk Objective-C subinventory is reconciled independently;
+native/Swift callable completeness, source rebuild, and behavioral comparison are
 explicitly incomplete, even when every command and upstream app build succeeds.
 """
 from __future__ import annotations
@@ -15,6 +15,8 @@ from pathlib import Path, PurePosixPath
 import re
 import stat
 import time
+
+from mobile_real_apps_objc_inventory import nonlazy_sections, objc_inventory
 
 
 REQUIRED_STAGES = ("provenance", "original_build", "inventory", "recovery", "recompile", "behavior")
@@ -331,10 +333,12 @@ def artifact_inventory(session, item, index, architecture):
         "function-starts": ["xcrun", "dyld_info", "-arch", architecture, "-function_starts", binary],
         "objc": ["xcrun", "dyld_info", "-arch", architecture, "-objc", binary],
         "objc-otool": ["xcrun", "otool", "-arch", architecture, "-ov", binary],
+        "fixups": ["xcrun", "dyld_info", "-arch", architecture, "-fixups", binary],
         "dependencies": ["xcrun", "otool", "-arch", architecture, "-L", binary],
         "imports": ["xcrun", "dyld_info", "-arch", architecture, "-imports", binary],
         "uuid": ["xcrun", "dwarfdump", "--uuid", binary],
     }
+    command_names = {label: prefix + "-" + label for label in commands}
     for label, command in commands.items():
         try:
             result = session.command(prefix + "-" + label, command, cap=30, deadline=deadline, optional=True)
@@ -344,6 +348,31 @@ def artifact_inventory(session, item, index, architecture):
                 outputs[label] = bounded_text(result)
         except Exception as error:
             issues.append(f"Apple {label}: {error}")
+    # otool -ov does not enumerate nonlazy declaration slots. Capture every
+    # declared nonlazy section independently, including slots that alias a
+    # normal class/category list. Missing evidence must not suppress recovery.
+    try:
+        sections = nonlazy_sections(outputs.get("load-commands", ""), lambda: session.remaining(deadline))
+        if len(sections) > 64:
+            raise EvidenceError("nonlazy raw-section command budget exceeded")
+        for raw_index, (segment, section) in enumerate(sections):
+            label = "objc-raw:" + segment + ":" + section
+            command_names[label] = prefix + f"-objc-raw-{raw_index:02d}"
+            try:
+                result = session.command(command_names[label],
+                                         ["xcrun", "otool", "-arch", architecture, "-s", segment, section, binary],
+                                         cap=20, deadline=deadline, optional=True)
+                if result.returncode:
+                    issues.append(f"Apple {label} exited {result.returncode}")
+                else:
+                    outputs[label] = bounded_text(result)
+            except Exception as error:
+                issues.append(f"Apple {label}: {error}")
+    except Exception as error:
+        issues.append(f"Apple nonlazy section enumeration: {error}")
+    objc = objc_inventory(item, architecture, outputs, binary, lambda: session.remaining(deadline))
+    objc["evidence_command_names"] = {label: command_names[label] for label in objc["evidence_commands"]}
+    issues.extend("Objective-C disk inventory: " + issue for issue in objc["issues"])
     starts = sorted({hex(int(value, 16)) for value in
                      re.findall(r"(?m)^\s*(0x[0-9A-Fa-f]+)\s+", outputs.get("function-starts", ""))})
     if not starts:
@@ -385,15 +414,12 @@ def artifact_inventory(session, item, index, architecture):
     unknown = sum(row["classification"] == "unknown" for row in symbols)
     if unknown:
         issues.append(f"{unknown} Swift symbol identities have unknown independent roles")
-    # Neither raw text nor LC_FUNCTION_STARTS alone certifies an exhaustive
-    # native/Objective-C callable identity inventory (aliases, methods, thunks).
-    issues.extend([
-        "native function-start observations are not yet an exhaustive callable denominator",
-        "exact Objective-C method identities from Apple metadata are not yet reconciled",
-    ])
+    # This narrower disk method contract never certifies native/Swift coverage
+    # or methods registered dynamically after loading the application.
+    issues.append("native function-start observations are not yet an exhaustive callable denominator")
     return {"artifact": item["path"], "status": "incomplete", "issues": issues,
             "native_function_start_addresses": starts, "native_denominator_known": False,
-            "objc_denominator_known": False, "swift_symbols": symbols,
+            "objc_denominator_known": objc["denominator_known"], "objc_inventory": objc, "swift_symbols": symbols,
             "swift_unclassified_count": unknown, "swift_denominator_known": False,
             "arc_runtime_import_observed": bool(re.search(r"_objc_(?:retain|release|storeStrong|storeWeak)",
                                                          outputs.get("imports", ""))),
@@ -567,7 +593,7 @@ def run_ios(ctx):
             ctx.write_json(f"ios-artifact-{index:04d}-recovery.json", recovery)
         session.stage("inventory", "incomplete", artifact_count=len(artifacts),
                       enumeration_issues=enumeration_issues, artifacts=inventories,
-                      reason="exhaustive independent native and Objective-C callable denominators are not implemented")
+                      reason="native/Swift callable completeness remains unproven; Objective-C disk coverage is reported per artifact")
         phase = "recovery"
         recovery_status = "failed" if any(row["status"] == "failed" for row in recoveries) else "incomplete"
         session.stage("recovery", recovery_status, artifacts=recoveries,

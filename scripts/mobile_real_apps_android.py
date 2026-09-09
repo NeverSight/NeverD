@@ -25,8 +25,10 @@ import zipfile
 
 try:
     from .mobile_real_apps_android_build import build_source_apk
+    from .mobile_real_apps_android_recompile import attempt_java_recompile
 except ImportError:
     from mobile_real_apps_android_build import build_source_apk
+    from mobile_real_apps_android_recompile import attempt_java_recompile
 
 
 STAGES = ("provenance", "original_build", "inventory", "recovery", "recompile", "behavior")
@@ -470,6 +472,69 @@ def _read_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=pairs)
 
 
+def recover_and_compile(ctx, apk, inventory):
+    """Retain recovery failures while compiling any fully inventoried Java set."""
+    output = ctx.work / "recovered"
+    artifacts, report, qualified, evidence = None, None, False, []
+    try:
+        env = {"NEVERD_JADX": str(ctx.work / "external-decompiler-must-not-run")}
+        cli = ctx.command("android-neverd-mobile", [str(ctx.neverd), "mobile", str(apk), "-o", str(output),
+                          "--timeout", str(ctx.timeout), "--json"], env=env, allow_failure=True)
+        if cli.returncode != 0:
+            ctx.write_json("android-recovery-failure.json", {"returncode": cli.returncode,
+                           "published_output": output.exists(), "independent_denominator_known": inventory is not None,
+                           "expected_method_count": len(inventory["methods"]) if inventory is not None else None,
+                           "expected_body_count": inventory["body_count"] if inventory is not None else None})
+            evidence.append("android-recovery-failure.json")
+            require(output.exists(), "NeverD rejected the complete application APK; see android-neverd-mobile logs")
+        report = _read_json(output / "report.json")
+        coverage = _read_json(output / "metadata/android-methods.json")
+        require(isinstance(report, dict) and type(report.get("schema_version")) is int
+                and report["schema_version"] == 1 and report.get("platform") == "android"
+                and report.get("input_kind") == "apk" and report.get("status") in ("success", "partial"),
+                "NeverD returned an invalid complete-APK report")
+        backend = report.get("backend")
+        require(isinstance(backend, dict) and backend.get("name") == "neverd"
+                and backend.get("execution") == "builtin", "Recovery did not use the builtin Android implementation")
+        require(isinstance(coverage, dict) and report.get("android_method_recovery") == coverage,
+                "NeverD recovery report and method metadata disagree")
+        evidence.extend(["recovered/report.json", "recovered/metadata/android-methods.json"])
+        artifacts = source_artifacts(report, output)
+        ctx.write_json("android-source-artifacts.json", artifacts)
+        evidence.append("android-source-artifacts.json")
+        # A publication on a nonzero native exit is still a recovery failure.
+        # Its complete Java inventory can be used for a diagnostic compilation,
+        # without converting that failure into accepted recovery or maturity.
+        require(cli.returncode == 0, "Failed recovery published an output directory; Java compilation is diagnostic only")
+        if inventory is None:
+            ctx.stage("recovery", "incomplete", returncode=cli.returncode, report_status=report["status"],
+                      independent_denominator_known=False,
+                      reason="NeverD analyzed the complete APK, but independent inventory failed; coverage is unverified",
+                      evidence=evidence)
+        else:
+            counts = compare_recovery(report, coverage, inventory)
+            qualified = True
+            ctx.stage("recovery", "success", **counts, java_source_count=len(artifacts),
+                      scope="all method definitions across every inventoried DEX", evidence=evidence)
+    except Exception as error:
+        ctx.stage("recovery", "failed", reason=str(error), evidence=evidence)
+        ctx.fail(f"Android recovery evidence failed: {error}")
+
+    if artifacts:
+        attempt = attempt_java_recompile(ctx, apk=apk, output=output, report=report,
+                                         sources=artifacts, recovery_qualified=qualified)
+        status = "failed" if attempt["status"] == "failed" else "incomplete"
+        ctx.stage("recompile", status, attempt_status=attempt["status"],
+                  compile_complete=attempt["compile_complete"], independent=False,
+                  maturity_qualified=False, reason=attempt["reason"], evidence=attempt["evidence"])
+        if status == "failed":
+            ctx.fail("Android generated-Java compilation attempt failed: " + attempt["reason"])
+    else:
+        ctx.stage("recompile", "incomplete", reason="No complete, verified generated Java inventory is available")
+    ctx.stage("behavior", "incomplete", reason="Original/reconstructed APK ART business behavior comparison is not implemented")
+    ctx.fail("Android compiler attempts cannot establish application maturity: trusted recompilation, complete APK reconstruction and behavior remain incomplete")
+
+
 def run_android(ctx) -> None:
     """Run evidence stages; incomplete rebuild/behavior can never pass maturity."""
     profile = ctx.variant.get("profile")
@@ -569,39 +634,7 @@ def run_android(ctx) -> None:
             ctx.fail(f"Android inventory evidence failed: {error}")
         completed.add(stage)
         stage = "recovery"
-        output = ctx.work / "recovered"
-        env = os.environ.copy()
-        env["NEVERD_JADX"] = str(ctx.work / "external-decompiler-must-not-run")
-        cli = ctx.command("android-neverd-mobile", [str(ctx.neverd), "mobile", str(apk), "-o", str(output),
-                          "--timeout", str(ctx.timeout), "--json"], env=env, allow_failure=True)
-        if cli.returncode != 0:
-            ctx.write_json("android-recovery-failure.json", {"returncode": cli.returncode,
-                           "published_output": output.exists(), "independent_denominator_known": inventory is not None,
-                           "expected_method_count": len(inventory["methods"]) if inventory is not None else None,
-                           "expected_body_count": inventory["body_count"] if inventory is not None else None})
-            require(not output.exists(), "Failed recovery published an output directory")
-            raise AndroidEvidenceError("NeverD rejected the complete application APK; see android-neverd-mobile logs")
-        report = _read_json(output / "report.json")
-        coverage = _read_json(output / "metadata/android-methods.json")
-        if inventory is None:
-            require(isinstance(report, dict) and report.get("platform") == "android"
-                    and report.get("input_kind") == "apk" and report.get("status") in ("success", "partial"),
-                    "NeverD returned an invalid complete-APK report")
-            require(isinstance(coverage, dict) and report.get("android_method_recovery") == coverage,
-                    "NeverD recovery report and method metadata disagree")
-            ctx.stage(stage, "incomplete", returncode=cli.returncode, report_status=report["status"],
-                      independent_denominator_known=False,
-                      reason="NeverD analyzed the complete APK, but independent inventory failed; coverage is unverified",
-                      evidence=["recovered/report.json", "recovered/metadata/android-methods.json"])
-        else:
-            counts = compare_recovery(report, coverage, inventory)
-            artifacts = source_artifacts(report, output)
-            ctx.write_json("android-source-artifacts.json", artifacts)
-            ctx.stage(stage, "success", **counts, java_source_count=len(artifacts),
-                      scope="all method definitions across every inventoried DEX",
-                      evidence=["recovered/report.json", "recovered/metadata/android-methods.json",
-                                "android-source-artifacts.json"])
-        completed.add(stage)
+        recover_and_compile(ctx, apk, inventory)
     except Exception as error:
         ctx.stage(stage, "failed", reason=str(error))
         for name in STAGES:
@@ -609,7 +642,3 @@ def run_android(ctx) -> None:
                 ctx.stage(name, "incomplete", reason=f"Blocked by {stage} failure")
         ctx.fail(f"Android {stage} evidence failed: {error}")
         return
-
-    ctx.stage("recompile", "incomplete", reason="Independent Java-only compilation and complete APK reconstruction are not implemented")
-    ctx.stage("behavior", "incomplete", reason="Original/reconstructed APK ART business behavior comparison is not implemented")
-    ctx.fail("Android recovery inventory alone cannot establish application maturity: recompile and behavior are incomplete")

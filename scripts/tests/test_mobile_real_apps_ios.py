@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -15,7 +16,8 @@ SPEC = importlib.util.spec_from_file_location(
     "mobile_real_apps_ios", Path(__file__).resolve().parents[1] / "mobile_real_apps_ios.py"
 )
 ios = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(ios)
+with patch.object(sys, "path", [str(Path(__file__).resolve().parents[1]), *sys.path]):
+    SPEC.loader.exec_module(ios)
 
 
 class Context:
@@ -57,6 +59,7 @@ class Context:
         self.extra_bundle_files = {}
         self.omit_framework = False
         self.after_recovery = None
+        self.load_commands = "cmd LC_FUNCTION_STARTS\ncmd LC_BUILD_VERSION\nplatform 7\n"
 
     def write_json(self, name, data):
         self.documents[name] = data
@@ -120,7 +123,7 @@ class Context:
         if "-function_starts" in argv:
             return subprocess.CompletedProcess(argv, 0, "-function_starts:\n  0x100001000 foo\n", "")
         if "-l" in argv and "otool" in argv:
-            return subprocess.CompletedProcess(argv, 0, "cmd LC_FUNCTION_STARTS\ncmd LC_BUILD_VERSION\nplatform 7\n", "")
+            return subprocess.CompletedProcess(argv, 0, self.load_commands, "")
         if "--expand" in argv:
             symbols = argv[argv.index("--tree-only") + 1:]
             return subprocess.CompletedProcess(argv, 0, "".join(
@@ -223,6 +226,42 @@ class IOSRealAppOrchestrationTests(unittest.TestCase):
         self.assertTrue(any("exited 1" in issue for issue in first["issues"]))
         self.assertFalse(first["native_denominator_known"])
         self.assertFalse(first["objc_denominator_known"])
+
+    def test_fixups_and_all_nonlazy_sections_are_collected_without_false_green(self):
+        sections = "".join(
+            f"Section\n  sectname {name}\n   segname {segment}\n"
+            f"      addr {hex(address)}\n      size 0x8\n    offset 4096\n     flags 0x0\n"
+            for segment, name, address in (("__DATA_CONST", "__objc_nlcatlist", 0x100001000),
+                                           ("__DATA", "__objc_nlclslist", 0x100002000))
+        )
+        ctx = self.run_context(load_commands=sections)
+        self.assertEqual(len([argv for _, argv, _ in ctx.commands if "-fixups" in argv]), 2)
+        raw = [argv for _, argv, _ in ctx.commands if "-s" in argv and "otool" in argv]
+        self.assertEqual(len(raw), 4)
+        self.assertEqual({tuple(argv[argv.index("-s") + 1:argv.index("-s") + 3]) for argv in raw},
+                         {("__DATA_CONST", "__objc_nlcatlist"), ("__DATA", "__objc_nlclslist")})
+        self.assertTrue(all(timeout <= ios.ARTIFACT_INVENTORY_SECONDS for name, _, timeout in ctx.commands
+                            if "objc-raw" in name))
+        self.assertEqual(len([argv for _, argv, _ in ctx.commands if "mobile" in argv]), 2)
+        self.assertEqual(ctx.stages["inventory"]["status"], "incomplete")
+        self.assertTrue(ctx.failures)
+
+    def test_known_objc_disk_inventory_does_not_certify_native_or_app_recovery(self):
+        ctx = self.context()
+        with patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}), patch.object(ios, "objc_inventory", return_value={
+            "scope": "on-disk-objc-method-records", "denominator_known": True, "status": "known",
+            "method_count": 8, "methods": [], "issues": [], "evidence_commands": [],
+        }):
+            ios.run_ios(ctx)
+        inventories = [value for name, value in ctx.documents.items() if "artifact-" in name and "inventory" in name]
+        self.assertEqual(len(inventories), 2)
+        for row in inventories:
+            self.assertTrue(row["objc_denominator_known"])
+            self.assertFalse(row["native_denominator_known"])
+            self.assertFalse(row["swift_denominator_known"])
+            self.assertEqual(row["status"], "incomplete")
+        self.assertEqual(ctx.stages["recovery"]["status"], "incomplete")
+        self.assertTrue(ctx.failures)
 
     def test_missing_required_framework_is_visible_while_existing_main_is_analyzed(self):
         ctx = self.run_context(omit_framework=True)

@@ -89,6 +89,19 @@ jobs:
         run: ctest --test-dir build-mobile/unittests/mobile -C Release --output-on-failure --no-tests=error
       - name: Verify the independent acceptance gates reject false coverage
         run: python -m unittest scripts.tests.test_mobile_android_internal_runner scripts.tests.test_mobile_ios_backend scripts.tests.test_mobile_swift_backend -v
+      - name: Verify real-app evidence changes before the downstream build matrix
+        if: runner.os == 'Linux'
+        run: |
+          python -m unittest \
+            scripts.tests.test_mobile_real_apps_android \
+            scripts.tests.test_mobile_real_apps_android_build \
+            scripts.tests.test_mobile_real_apps_android_recompile \
+            scripts.tests.test_mobile_real_apps_common \
+            scripts.tests.test_mobile_real_apps_ios \
+            scripts.tests.test_mobile_real_apps_objc_inventory \
+            scripts.tests.test_mobile_real_apps_matrix \
+            scripts.tests.test_mobile_real_apps_trigger \
+            scripts.tests.test_mobile_release_gate -v
       - name: Verify runtime with no interpreter on PATH
         shell: bash
         run: |

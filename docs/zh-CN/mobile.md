@@ -83,3 +83,5 @@ cmake --build build --target check-neverd-mobile-ios
 独立 Swift 恢复脚本为 `python3 scripts/test_mobile_swift_backend.py --neverd build/bin/neverd`，它只重新编译生成的 Swift 与调用程序，不链接原始二进制；未支持可调用项和行为差异都会失败。覆盖口径和失败证据保留方式见 [iOS 指南](ios.md)。
 
 [Mobile Real Applications 工作流](../../.github/workflows/mobile-real-apps.yml) 使用[样本清单](../../scripts/mobile_real_apps.json)中固定版本的公开应用。验收要求独立列出每个 APK 的全部 DEX 和每个完整 iOS bundle 的全部 Mach-O，独立重建原版与生成源码，并对照行为。阶段缺失、清单覆盖未知或必需 case 缺失都会使验收失败。真实应用的 recompile 和 behavior 阶段目前仍未完成，因此保留 Experimental 标记；测试框架的守卫测试通过不代表真实应用验收通过。
+
+Android case 会尝试用 javac 和 D8 编译清单中的全部生成 Java，外部声明仅来自 Android SDK；不使用原应用字节码、依赖实现或替代 stub 补齐恢复缺口。部分恢复及编译错误会保留在证据中；编译成功仍需独立复核、完整 APK 重建和 ART 行为对照。iOS 独立清单将磁盘中的 Objective-C 方法记录与 Apple 工具输出逐项核对，保留类、元类、category、方法表和序号身份；指针未解析或声明槽缺失时仍标记为未知。设备与模拟器分别采集 SDK 声明目录，为框架导入提供依据，头文件不作为实例布局或行为正确性的证明。

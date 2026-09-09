@@ -368,6 +368,7 @@ class FakeContext:
         self.variant = {"profile": "official-release"}
         self.stages, self.failures, self.commands = {}, [], []
         self.cli_exit, self.sdk_text = 0, SDK_TEXT
+        self.publish_on_failure, self.report_mutator, self.extra_java = False, None, False
         tool = root / "sdk/build-tools/35.0.0/dexdump"
         tool.parent.mkdir(parents=True)
         tool.write_bytes(b"self-owned simulated SDK executable")
@@ -385,14 +386,18 @@ class FakeContext:
         elif name.startswith("android-dexdump-"): stdout = self.sdk_text
         elif name == "android-neverd-mobile":
             code = self.cli_exit
-            if not code:
+            if not code or self.publish_on_failure:
                 report, coverage = reports()
+                if self.report_mutator:
+                    self.report_mutator(report, coverage)
                 output = self.work / "recovered"
                 (output / "metadata").mkdir(parents=True)
                 (output / "sources/owned").mkdir(parents=True)
                 (output / "report.json").write_text(json.dumps(report))
                 (output / "metadata/android-methods.json").write_text(json.dumps(coverage))
                 (output / "sources/owned/Example.java").write_text("class Example {}\n")
+                if self.extra_java:
+                    (output / "sources/owned/Unlisted.java").write_text("class Unlisted {}\n")
                 stdout = json.dumps(report)
             else:
                 stdout = '{"status":"error","error":"Unsupported source body"}'
@@ -400,6 +405,21 @@ class FakeContext:
 
 
 class WorkflowStageTests(unittest.TestCase):
+    def setUp(self):
+        # Compiler behavior and isolation are tested in the dedicated helper
+        # module. These tests only exercise recovery/stage integration.
+        def compilation(context, **kwargs):
+            attempt = {"schema_version": 1, "kind": "generated-java-compilation", "status": "success",
+                       "compile_complete": True, "independent": False, "maturity_qualified": False,
+                       "recovery_qualified": kwargs["recovery_qualified"],
+                       "reason": "Simulated compiler completion; independent reconstruction is incomplete",
+                       "evidence": ["android-java-compilation-attempt.json"]}
+            context.write_json(attempt["evidence"][0], attempt)
+            return attempt
+        patcher = patch("scripts.mobile_real_apps_android.attempt_java_recompile", side_effect=compilation)
+        self.compilation = patcher.start()
+        self.addCleanup(patcher.stop)
+
     def context(self, root):
         ctx = FakeContext(root)
         # Fake command handling is portable; the platform-specific executable
@@ -419,6 +439,11 @@ class WorkflowStageTests(unittest.TestCase):
                 self.assertTrue(ctx.stages[name]["evidence"])
                 self.assertTrue(all((ctx.work / item).is_file() for item in ctx.stages[name]["evidence"]))
             self.assertEqual(ctx.stages["recompile"]["status"], "incomplete")
+            self.assertTrue(ctx.stages["recompile"]["compile_complete"])
+            self.assertFalse(ctx.stages["recompile"]["independent"])
+            self.assertFalse(ctx.stages["recompile"]["maturity_qualified"])
+            self.compilation.assert_called_once()
+            self.assertTrue(self.compilation.call_args.kwargs["recovery_qualified"])
             self.assertEqual(ctx.stages["behavior"]["status"], "incomplete")
             self.assertTrue(ctx.failures)
             self.assertFalse(ctx.stages["original_build"]["source_build"])
@@ -426,6 +451,62 @@ class WorkflowStageTests(unittest.TestCase):
             dump = next(argv for name, argv, _ in ctx.commands if name.startswith("android-dexdump-"))
             self.assertEqual(dump[1:5], ["-f", "-h", "-l", "plain"])
             self.assertFalse(any(flag in dump for flag in ("-e", "-i", "-j")))
+
+    def test_partial_java_is_compiled_without_erasing_recovery_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            ctx = self.context(Path(temporary))
+            def partial(report, coverage):
+                report["status"] = "partial"
+                coverage["status"] = "partial"
+                coverage["methods"][0]["status"] = "unrecovered"
+                coverage["methods"][0]["reason"] = "Unsupported original body"
+                coverage["recovered_method_count"] -= 1
+                coverage["unrecovered_method_count"] += 1
+            ctx.report_mutator = partial
+            with patch.dict(os.environ, {"ANDROID_SDK_ROOT": str(ctx.sdk_root)}): run_android(ctx)
+            self.assertEqual(ctx.stages["inventory"]["status"], "success")
+            self.assertEqual(ctx.stages["recovery"]["status"], "failed")
+            self.assertEqual(ctx.stages["recompile"]["status"], "incomplete")
+            self.assertEqual(ctx.stages["behavior"]["status"], "incomplete")
+            self.compilation.assert_called_once()
+            arguments = self.compilation.call_args.kwargs
+            self.assertFalse(arguments["recovery_qualified"])
+            self.assertEqual(arguments["report"]["status"], "partial")
+            self.assertEqual(len(arguments["sources"]), 1)
+            self.assertTrue(any("recovery" in reason for reason in ctx.failures))
+
+    def test_nonzero_publication_is_still_failed_but_valid_java_gets_diagnostic_attempt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            ctx = self.context(Path(temporary))
+            ctx.cli_exit, ctx.publish_on_failure = 1, True
+            with patch.dict(os.environ, {"ANDROID_SDK_ROOT": str(ctx.sdk_root)}): run_android(ctx)
+            self.assertEqual(ctx.stages["recovery"]["status"], "failed")
+            self.assertIn("published an output", ctx.stages["recovery"]["reason"])
+            self.assertEqual(ctx.stages["recompile"]["status"], "incomplete")
+            self.compilation.assert_called_once()
+            self.assertFalse(self.compilation.call_args.kwargs["recovery_qualified"])
+            self.assertTrue(json.loads((ctx.work / "android-recovery-failure.json").read_text())["published_output"])
+
+    def test_unlisted_java_prevents_compilation_instead_of_compiling_a_subset(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            ctx = self.context(Path(temporary))
+            ctx.extra_java = True
+            with patch.dict(os.environ, {"ANDROID_SDK_ROOT": str(ctx.sdk_root)}): run_android(ctx)
+            self.assertEqual(ctx.stages["recovery"]["status"], "failed")
+            self.assertEqual(ctx.stages["recompile"]["status"], "incomplete")
+            self.compilation.assert_not_called()
+
+    def test_compile_failure_does_not_overwrite_independent_recovery_result(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            ctx = self.context(Path(temporary))
+            self.compilation.side_effect = None
+            self.compilation.return_value = {"status": "failed", "compile_complete": False,
+                                             "reason": "javac rejected generated sources", "evidence": []}
+            with patch.dict(os.environ, {"ANDROID_SDK_ROOT": str(ctx.sdk_root)}): run_android(ctx)
+            self.assertEqual(ctx.stages["recovery"]["status"], "success")
+            self.assertEqual(ctx.stages["recompile"]["status"], "failed")
+            self.assertEqual(ctx.stages["behavior"]["status"], "incomplete")
+            self.assertTrue(any("compilation attempt failed" in reason for reason in ctx.failures))
 
     def test_real_rejection_keeps_independent_inventory_and_never_becomes_success(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -439,6 +520,7 @@ class WorkflowStageTests(unittest.TestCase):
             self.assertTrue((ctx.work / "android-recovery-failure.json").is_file())
             self.assertFalse((ctx.work / "recovered").exists())
             self.assertTrue(ctx.failures)
+            self.compilation.assert_not_called()
 
     def test_checksum_failure_does_not_run_inventory_or_recovery(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -476,6 +558,7 @@ class WorkflowStageTests(unittest.TestCase):
                 self.assertTrue((ctx.work / "recovered/report.json").is_file())
                 self.assertTrue((ctx.work / "recovered/metadata/android-methods.json").is_file())
                 self.assertTrue(ctx.failures)
+                self.assertFalse(self.compilation.call_args.kwargs["recovery_qualified"])
 
     def test_inventory_failure_and_native_rejection_both_remain_visible(self):
         with tempfile.TemporaryDirectory() as temporary:
