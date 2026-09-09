@@ -1343,6 +1343,10 @@ std::optional<uint64_t> MedLLVMEmitter::traceValueVA(const MedVar &V,
       [&](const MedVar &Cur) -> std::optional<uint64_t> {
     if (Cur.isConst())
       return Cur.ConstVal;
+    // Match emission and table-base tracing for this exact certified SSA
+    // occurrence; its original call/pop expression need not be foldable.
+    if (valueIsAuthenticatedModelZero(Cur))
+      return uint64_t{0};
     Key K = std::make_tuple(static_cast<int>(Cur.Kind), Cur.Id, Cur.SSAVer,
                             Cur.Size);
     if (auto It = Memo.find(K); It != Memo.end())

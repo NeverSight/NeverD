@@ -10780,6 +10780,104 @@ TEST(MachOLLVMDataPointerBoundary,
 }
 
 TEST(LLVMDataPointerInvariantBoundary,
+     ImmutableVectorScalarLoadRequiresExactModelAndCompleteStorage) {
+  enum class Case {
+    Exact,
+    Missing,
+    WrongSSA,
+    WrongWidth,
+    LeadingOverlap,
+    FirstRelocation,
+    LastRelocation,
+    Writable,
+    Truncated
+  };
+  for (Case Kind :
+       {Case::Exact, Case::Missing, Case::WrongSSA, Case::WrongWidth,
+        Case::LeadingOverlap, Case::FirstRelocation, Case::LastRelocation,
+        Case::Writable, Case::Truncated}) {
+    SCOPED_TRACE(static_cast<int>(Kind));
+    constexpr uint64_t Table = 0x1000;
+    BinaryImage Image;
+    Image.Arch = Arch::X86;
+    Image.Format = BinaryFormat::ELF;
+    Image.Bits = Bitness::Bits32;
+    Segment Data;
+    Data.Name = ".rodata.cst16";
+    Data.VA = Table;
+    Data.Size = 16;
+    Data.FileSz = Kind == Case::Truncated ? 12 : 16;
+    Data.Data.resize(Data.FileSz, 8);
+    Data.Flags = SegmentFlags::Readable;
+    if (Kind == Case::Writable)
+      Data.Flags = Data.Flags | SegmentFlags::Writable;
+    Image.Segments.push_back(std::move(Data));
+    if (Kind == Case::LeadingOverlap)
+      Image.DataPtrRelocSlots.insert(Table - 1);
+    if (Kind == Case::FirstRelocation || Kind == Case::LastRelocation)
+      Image.DataPtrRelocSlots.insert(Table +
+                                     (Kind == Case::FirstRelocation ? 0 : 12));
+
+    MedFunc Func;
+    Func.Name = "got_model_vector_initializer";
+    Func.Entry = 0x100;
+    Func.ReturnType = NdType::makeVoid();
+    MedBlock Block;
+    Block.Id = 0;
+    Block.StartAddr = Func.Entry;
+    Block.EndAddr = Func.Entry + 16;
+    auto temp = [](int Id, uint16_t Size) {
+      MedVar V;
+      V.Kind = MedVar::Temp;
+      V.TheArch = Arch::X86;
+      V.Id = Id;
+      V.SSAVer = 1;
+      V.Size = Size;
+      return V;
+    };
+    const MedVar Input = temp(1, 4);
+    const MedVar GOT = temp(2, 4);
+    const MedVar Address = temp(3, 4);
+    const MedVar WideAddress = temp(4, 8);
+    const MedVar Loaded = temp(5, 16);
+    auto append = [&](NdOp Opcode, MedVar Output,
+                      std::initializer_list<MedVar> Inputs) {
+      MedOp Op;
+      Op.Addr = Func.Entry + Block.Ops.size();
+      Op.Opcode = Opcode;
+      Op.Output = Output;
+      for (const auto &Value : Inputs)
+        Op.addInput(Value);
+      Block.Ops.push_back(std::move(Op));
+    };
+    append(NdOp::INT_ADD, GOT,
+           {Input, MedVar::makeConst(1, 4, ConstantAddressProvenance::Scalar)});
+    append(NdOp::INT_ADD, Address,
+           {GOT, MedVar::makeConst(Table, 4,
+                                   ConstantAddressProvenance::DataAddress)});
+    append(NdOp::INT_ZEXT, WideAddress, {Address});
+    append(NdOp::LOAD, Loaded, {WideAddress});
+    Func.Blocks.push_back(std::move(Block));
+    if (Kind != Case::Missing) {
+      MedVar Witness = GOT;
+      if (Kind == Case::WrongSSA)
+        ++Witness.SSAVer;
+      if (Kind == Case::WrongWidth)
+        Witness.Size = 8;
+      Func.ScalarAddressModels.push_back(
+          {RelocatedInstructionScalarModelOccurrence::ModelKind::
+               I386ELFGOTBaseZero,
+           Witness});
+    }
+    MedLLVMEmitter Emitter;
+    MedLLVMProvenanceTestPeer::prepareFreshAnalysis(
+        Emitter, Func, Image, Arch::X86, BinaryFormat::ELF);
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::stableOffset(Emitter, Loaded, nullptr),
+              Kind == Case::Exact);
+  }
+}
+
+TEST(LLVMDataPointerInvariantBoundary,
      SmallScalarAndMaskDoesNotEraseUnstableAddressOffsetLineage) {
   BinaryImage Image = makeSpilledConstTableImage(Arch::X64, BinaryFormat::ELF);
   auto StableAnd = [&](const MedVar &Left, const MedVar &Right) {
