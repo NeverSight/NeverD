@@ -1,0 +1,2 @@
+# Preserve upstream license bytes so the provenance digests remain valid.
+Qt-6.11.1/*.txt -whitespace

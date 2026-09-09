@@ -811,6 +811,12 @@ _declare(
     ["neverd_session_t", "neverd_va_t"],
     ownership=Ownership.OWNED_STRING,
 )
+_declare(
+    "neverd_ir_view_json",
+    "const char *",
+    ["neverd_session_t", "neverd_va_t", "const char *", "size_t", "size_t"],
+    ownership=Ownership.OWNED_STRING,
+)
 _declare("neverd_func_find_by_name", "int", ["neverd_session_t", "const char *"])
 _declare("neverd_func_find_by_addr", "int", ["neverd_session_t", "neverd_va_t"])
 _declare(

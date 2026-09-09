@@ -3129,6 +3129,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
         self.assertEqual(
             {row["id"]: row["status"] for row in document["capabilities"]},
             {
+                "analysis.ir-view.instruction-anchors": "experimental",
                 "debug.hardware": "unsupported",
                 "debug.local": "unsupported",
                 "debug.remote": "unsupported",
@@ -3148,6 +3149,12 @@ class RepositoryCapabilityTests(unittest.TestCase):
         )
         no_surfaces = {"c": [], "python": [], "cli": [], "json": []}
         expected_surfaces = {
+            "analysis.ir-view.instruction-anchors": {
+                "c": ["neverd_ir_view_json"],
+                "python": [],
+                "cli": [],
+                "json": ["neverd_ir_view_json"],
+            },
             "mobile.source-recovery": {
                 "c": ["neverd_objc_methods_json", "neverd_swift_methods_json"],
                 "python": [],

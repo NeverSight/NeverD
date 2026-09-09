@@ -1,3 +1,13 @@
 add_subdirectory(neverd-bench)
 add_subdirectory(neverd)
 add_subdirectory(neverd-sigmaker)
+
+if(NEVERD_BUILD_GUI OR NEVERD_BUILD_WORKER)
+  if(NOT NEVERD_BUILD_SHARED)
+    message(FATAL_ERROR "The GUI/worker requires NEVERD_BUILD_SHARED=ON")
+  endif()
+  add_subdirectory(neverd-worker)
+endif()
+if(NEVERD_BUILD_GUI)
+  add_subdirectory(neverd-gui)
+endif()

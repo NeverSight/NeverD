@@ -1,0 +1,89 @@
+{
+  "schema": 1,
+  "kind": "real-worker-ipc",
+  "platform": "macOS-15.6.1-arm64-arm-64bit-Mach-O",
+  "machine": "arm64",
+  "python": "3.14.5",
+  "samples": 100,
+  "clock": "time.perf_counter_ns",
+  "caveats": [
+    "Round-trip completion is not input-to-display latency.",
+    "RSS is resident process memory, not private/PSS; no child-process tree aggregation.",
+    "Default fixture is tiny EVM arithmetic; large native pipeline performance is not implied."
+  ],
+  "startup_to_hello_ms": 84.255791,
+  "engine_version": "3389.0.1",
+  "open_to_metadata_ms": 3.296041,
+  "image": {
+    "architecture": "evm",
+    "format": "EVM",
+    "file_size": "14",
+    "bitness": 256
+  },
+  "rss_after_open_bytes": 17891328,
+  "first_analysis_ms": 4.362875,
+  "operations": {
+    "metadata": {
+      "samples": 100,
+      "p50_ms": 0.042416,
+      "p95_ms": 0.062292,
+      "p99_ms": 0.088792,
+      "min_ms": 0.0375,
+      "max_ms": 0.105792,
+      "mean_ms": 0.04505796,
+      "response_json_bytes_max": 548
+    },
+    "functions": {
+      "samples": 100,
+      "p50_ms": 0.037541,
+      "p95_ms": 0.050959,
+      "p99_ms": 0.069292,
+      "min_ms": 0.036208,
+      "max_ms": 0.082167,
+      "mean_ms": 0.03930288,
+      "response_json_bytes_max": 259
+    },
+    "disasm": {
+      "samples": 100,
+      "p50_ms": 0.076292,
+      "p95_ms": 0.104,
+      "p99_ms": 0.123959,
+      "min_ms": 0.055834,
+      "max_ms": 0.135667,
+      "mean_ms": 0.07553048,
+      "response_json_bytes_max": 771
+    },
+    "bytes": {
+      "samples": 100,
+      "p50_ms": 0.045333,
+      "p95_ms": 0.056208,
+      "p99_ms": 0.0585,
+      "min_ms": 0.033708,
+      "max_ms": 0.067417,
+      "mean_ms": 0.04457079,
+      "response_json_bytes_max": 283
+    },
+    "decompile": {
+      "samples": 100,
+      "p50_ms": 0.059584,
+      "p95_ms": 0.100084,
+      "p99_ms": 0.131167,
+      "min_ms": 0.054042,
+      "max_ms": 0.13375,
+      "mean_ms": 0.06568511,
+      "response_json_bytes_max": 5512
+    },
+    "cfg": {
+      "samples": 100,
+      "p50_ms": 0.049625,
+      "p95_ms": 0.064292,
+      "p99_ms": 0.07575,
+      "min_ms": 0.039458,
+      "max_ms": 0.080125,
+      "mean_ms": 0.0504441,
+      "response_json_bytes_max": 429
+    }
+  },
+  "rss_after_queries_bytes": 19660800,
+  "acceptance": "recorded measurement only; no P0 acceptance decision"
+}
