@@ -97,11 +97,9 @@ void makeDylib(std::string &data) {
     return value;
   };
   const auto count = read(16), bytes = read(20);
-  if (read(0) != 0xfeedfacf ||
-      count == std::numeric_limits<uint32_t>::max() ||
+  if (read(0) != 0xfeedfacf || count == std::numeric_limits<uint32_t>::max() ||
       bytes > std::numeric_limits<uint32_t>::max() - length ||
-      bytes > data.size() - header ||
-      length > data.size() - header - bytes)
+      bytes > data.size() - header || length > data.size() - header - bytes)
     throw Error("dylib fixture lacks bounded load-command space");
   // Use existing header padding without changing the __TEXT file/VM extent.
   const size_t p = header + bytes;

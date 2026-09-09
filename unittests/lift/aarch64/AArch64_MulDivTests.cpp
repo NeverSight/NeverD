@@ -9,30 +9,28 @@
 
 class AArch64_MulDiv : public NeverDLiftTest {};
 
-static fs::path obj(const char* name) {
-    return fs::path(TEST_OBJ_DIR) / name;
-}
+static fs::path obj(const char *name) { return fs::path(TEST_OBJ_DIR) / name; }
 
 TEST_F(AArch64_MulDiv, AllStages) { verifyAllStages(obj("test_muldiv_a64.o")); }
 
 TEST_F(AArch64_MulDiv, NoVerifierErrors) {
-    verifyLLVMIRNoVerifierErrors(obj("test_muldiv_a64.o"));
+  verifyLLVMIRNoVerifierErrors(obj("test_muldiv_a64.o"));
 }
 
 TEST_F(AArch64_MulDiv, NoUnreachable) {
-    verifyLLVMIRNoUnreachable(obj("test_muldiv_a64.o"));
+  verifyLLVMIRNoUnreachable(obj("test_muldiv_a64.o"));
 }
 
 TEST_F(AArch64_MulDiv, PreservesMulSemantic) {
-    verifyLLVMIRContains(obj("test_muldiv_a64.o"), "test_mul_a64", "mul");
+  verifyLLVMIRContains(obj("test_muldiv_a64.o"), "test_mul_a64", "mul");
 }
 
 TEST_F(AArch64_MulDiv, PreservesDivSemantic) {
-    verifyLLVMIRContains(obj("test_muldiv_a64.o"), "test_udiv_a64", "udiv");
+  verifyLLVMIRContains(obj("test_muldiv_a64.o"), "test_udiv_a64", "udiv");
 }
 
 TEST_F(AArch64_MulDiv, DecompileC) {
-    verifyDecompileProducesOutput(obj("test_muldiv_a64.o"));
+  verifyDecompileProducesOutput(obj("test_muldiv_a64.o"));
 }
 
 namespace {
@@ -41,12 +39,13 @@ using namespace neverd;
 
 constexpr va_t MulHighAddress = 0x1000;
 
-int decodeMulHigh(Decoder &Dec, uint32_t Word, bool ForLift, DecodedInsn &Insn) {
+int decodeMulHigh(Decoder &Dec, uint32_t Word, bool ForLift,
+                  DecodedInsn &Insn) {
   uint8_t Bytes[4];
   writeLE<uint32_t>(Bytes, Word);
-  return ForLift ? Dec.decodeOneForLift(Bytes, sizeof(Bytes), MulHighAddress,
-                                        Insn)
-                 : Dec.decodeOne(Bytes, sizeof(Bytes), MulHighAddress, Insn);
+  return ForLift
+             ? Dec.decodeOneForLift(Bytes, sizeof(Bytes), MulHighAddress, Insn)
+             : Dec.decodeOne(Bytes, sizeof(Bytes), MulHighAddress, Insn);
 }
 
 TEST(AArch64MulHigh, RejectsVectorFormsThroughBothRealDecodePaths) {
@@ -194,21 +193,26 @@ TEST(AArch64MulHigh, RejectsMalformedOperandShapesWithoutPartialIR) {
   };
   const Mutation Mutations[] = {
       {"w-register", [](cs_aarch64_op &O) { O.reg = AARCH64_REG_W0; }},
-      {"same-width-fp-register", [](cs_aarch64_op &O) { O.reg = AARCH64_REG_D0; }},
+      {"same-width-fp-register",
+       [](cs_aarch64_op &O) { O.reg = AARCH64_REG_D0; }},
       {"vector-register", [](cs_aarch64_op &O) { O.reg = AARCH64_REG_Q0; }},
       {"scalable-register", [](cs_aarch64_op &O) { O.reg = AARCH64_REG_Z0; }},
       {"stack-pointer", [](cs_aarch64_op &O) { O.reg = AARCH64_REG_SP; }},
-      {"invalid-register", [](cs_aarch64_op &O) { O.reg = AARCH64_REG_INVALID; }},
-      {"immediate", [](cs_aarch64_op &O) {
+      {"invalid-register",
+       [](cs_aarch64_op &O) { O.reg = AARCH64_REG_INVALID; }},
+      {"immediate",
+       [](cs_aarch64_op &O) {
          O.type = AARCH64_OP_IMM;
          O.imm = 1;
        }},
-      {"memory", [](cs_aarch64_op &O) {
+      {"memory",
+       [](cs_aarch64_op &O) {
          O.type = AARCH64_OP_MEM;
          O.mem = {};
          O.mem.base = AARCH64_REG_X1;
        }},
-      {"predicate", [](cs_aarch64_op &O) {
+      {"predicate",
+       [](cs_aarch64_op &O) {
          O.type = AARCH64_OP_PRED;
          O.pred = {};
          O.pred.reg = AARCH64_REG_P0;
