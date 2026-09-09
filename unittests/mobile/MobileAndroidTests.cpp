@@ -140,7 +140,9 @@ TEST(MobileAndroid, SmaliFilesShareOneReaderBudgetWithoutDuplicateByteCharges) {
     (void)recoverAndroid(options, limited_output, limited);
     FAIL() << "multiple smali files escaped their shared work budget";
   } catch (const Error &error) {
-    EXPECT_STREQ(error.what(), "mobile analysis exceeded its work budget");
+    EXPECT_STREQ(
+        error.what(),
+        "smali Second.smali:1: mobile analysis exceeded its work budget");
   }
   EXPECT_TRUE(fs::is_empty(limited_output));
   EXPECT_EQ(readFile(source / "First.smali", 100000), first);
