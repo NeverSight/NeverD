@@ -301,6 +301,15 @@ public:
     return Emitter.addrSlotKey(Address);
   }
 
+  static bool frameAccessesProvenDisjoint(MedLLVMEmitter &Emitter,
+                                          const MedFunc &Func, Arch TargetArch,
+                                          const MedVar &A, uint16_t ASize,
+                                          const MedVar &B, uint16_t BSize) {
+    Emitter.TargetArch = TargetArch;
+    Emitter.CurMedFunc = &Func;
+    return Emitter.frameAccessesProvenDisjoint(A, ASize, B, BSize);
+  }
+
   static bool collectFrameReloadSources(MedLLVMEmitter &Emitter,
                                         const MedFunc &Func, Arch TargetArch,
                                         const MedOp &Load,
@@ -9340,6 +9349,166 @@ TEST(MachOLLVMDataPointerBoundary, ReusesPositiveAndNegativeFrameReloadProofs) {
   EXPECT_EQ(
       MedLLVMProvenanceTestPeer::frameReloadSourceWork(NegativeEmitter),
       std::make_tuple(QueryCount, uint64_t{1}, QueryCount - 1, uint64_t{1}));
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     PreservesSpilledBaseAcrossBoundedDynamicFrameWrites) {
+  for (unsigned Variant = 0; Variant != 9; ++Variant) {
+    SCOPED_TRACE(Variant);
+    MedFunc Func;
+    Func.Entry = CallerVA;
+    Func.Name = "bounded_dynamic_frame_write";
+    Func.FrameSize = 32;
+    auto variable = [](MedVar::VarKind Kind, int Id, uint16_t Size = 4) {
+      MedVar Value;
+      Value.Kind = Kind;
+      Value.TheArch = Arch::X86;
+      Value.Id = Id;
+      Value.SSAVer = Kind == MedVar::Param ? 0 : 1;
+      Value.Size = Size;
+      return Value;
+    };
+    MedVar SP = variable(MedVar::Reg, 100);
+    SP.RegOff = getTargetRegInfo(Arch::X86).StackPointer;
+    SP.SSAVer = 0;
+    MedVar Input = variable(MedVar::Param, 0);
+    MedVar OtherInput = variable(MedVar::Param, 1);
+    Func.Params = {Input, OtherInput};
+    auto Temp = [&](int Id, uint16_t Size = 4) {
+      return variable(MedVar::Temp, Id, Size);
+    };
+    auto Constant = [](uint64_t Value) { return MedVar::makeConst(Value, 4); };
+    auto append = [](MedBlock &Block, NdOp Opcode, MedVar Output,
+                     std::initializer_list<MedVar> Inputs) {
+      MedOp Op;
+      Op.Opcode = Opcode;
+      Op.Output = Output;
+      for (const MedVar &Input : Inputs)
+        Op.addInput(Input);
+      Block.Ops.push_back(std::move(Op));
+    };
+    Func.Blocks.resize(Variant >= 7 ? 5 : 4);
+    for (unsigned I = 0; I != Func.Blocks.size(); ++I) {
+      Func.Blocks[I].Id = I;
+      Func.Blocks[I].StartAddr = CallerVA + I * 0x10;
+      Func.Blocks[I].EndAddr = CallerVA + (I + 1) * 0x10;
+    }
+    MedBlock &Entry = Func.Blocks[0];
+    MedBlock &Header = Func.Blocks[1];
+    MedBlock &Latch = Func.Blocks[2];
+    MedBlock &Exit = Func.Blocks[3];
+    Entry.Succs = {1};
+    Header.Preds = {0, 2};
+    Header.Succs = {2};
+    Latch.Preds = {1};
+    Latch.Succs = {1, 3};
+    Exit.Preds = {2};
+    if (Variant >= 7) {
+      Entry.Succs.push_back(4);
+      Func.Blocks[4].Preds = {0};
+      // Deliberately omit this actual incoming edge from Header's metadata.
+      if (Variant == 7) {
+        Func.Blocks[4].Succs = {Header.Id};
+        append(Func.Blocks[4], NdOp::BRANCH, {},
+               {MedVar::makeConst(Header.StartAddr, 4)});
+      } else {
+        ExceptionalEdge Edge;
+        Edge.BlockId = Header.Id;
+        Func.Blocks[4].ExceptionalSuccs.push_back(Edge);
+        append(Func.Blocks[4], NdOp::RETURN, {}, {});
+      }
+    }
+    if (Variant == 6) {
+      ExceptionalEdge Incoming;
+      Incoming.BlockId = Entry.Id;
+      Header.ExceptionalPreds.push_back(Incoming);
+      ExceptionalEdge Outgoing;
+      Outgoing.BlockId = Header.Id;
+      Entry.ExceptionalSuccs.push_back(Outgoing);
+    }
+
+    const MedVar Slot = Temp(1);
+    const MedVar Seed = Temp(2);
+    const MedVar Allocation = Temp(5);
+    const MedVar InitialCount = Temp(7);
+    const MedVar InitialPointer = Temp(11);
+    const MedVar Pointer = Temp(12);
+    const MedVar Count = Temp(13);
+    const MedVar NextPointer = Temp(16);
+    const MedVar NextCount = Temp(17);
+    const MedVar Reloaded = Temp(20);
+    const MedVar Saved = Constant(0x12345678);
+    append(Entry, NdOp::COPY, SP, {SP});
+    append(Entry, NdOp::INT_ADD, Slot, {SP, Constant(uint32_t(-24))});
+    append(Entry, NdOp::STORE, {}, {Slot, Saved});
+    append(Entry, NdOp::INT_AND, Seed, {Input, Constant(7)});
+    // Equal masks on different SSA inputs do not establish correlation.
+    append(Entry, NdOp::INT_AND, Temp(21), {OtherInput, Constant(7)});
+    append(Entry, NdOp::INT_MULT, Temp(3),
+           {Variant == 3 ? Temp(21) : Seed, Constant(4)});
+    append(Entry, NdOp::INT_ADD, Temp(4), {Temp(3), Constant(23)});
+    append(Entry, NdOp::INT_AND, Allocation,
+           {Temp(4), Constant(uint32_t(-16))});
+    append(Entry, NdOp::INT_ADD, Temp(6), {Seed, Constant(3)});
+    append(Entry, NdOp::INT_AND, InitialCount,
+           {Temp(6), Constant(uint32_t(-2))});
+    append(Entry, NdOp::INT_ADD, Temp(8),
+           {SP, Constant(uint32_t(Variant == 5 ? -32 : -28))});
+    // An i8 negation of 0xfc produces 4 before widening to i32, so this
+    // variant's first write clobbers the saved slot at entry SP - 24.
+    append(Entry, NdOp::INT_NEG2, Temp(9),
+           {Variant == 5 ? MedVar::makeConst(0xFC, 1) : Allocation});
+    append(Entry, NdOp::INT_ADD, Temp(10), {Temp(8), Temp(9)});
+    append(Entry, NdOp::INT_ADD, InitialPointer, {Temp(10), Constant(4)});
+    if (Variant >= 7)
+      append(Entry, NdOp::COND_BR, {},
+             {MedVar::makeConst(Header.StartAddr, 4), Input});
+    else
+      append(Entry, NdOp::BRANCH, {}, {MedVar::makeConst(Header.StartAddr, 4)});
+
+    PhiNode PointerPhi;
+    PointerPhi.Output = Pointer;
+    PointerPhi.Args = {{Variant == 4 ? 2 : 0, InitialPointer},
+                       {2, NextPointer}};
+    Header.Phis.push_back(std::move(PointerPhi));
+    PhiNode CountPhi;
+    CountPhi.Output = Count;
+    CountPhi.Args = {{Variant == 4 ? 2 : 0, InitialCount}, {2, NextCount}};
+    Header.Phis.push_back(std::move(CountPhi));
+    // Moving only the write footprint by five bytes makes the last write
+    // partially overlap the otherwise identically initialized GOT slot.
+    append(Header, NdOp::INT_ADD, Temp(14),
+           {Pointer, Constant(Variant == 1 ? 5 : 0)});
+    append(Header, NdOp::INT_ZEXT, Temp(15, 8), {Temp(14)});
+    append(Header, NdOp::STORE, {}, {Temp(15, 8), Constant(42)});
+    append(Header, NdOp::BRANCH, {}, {MedVar::makeConst(Latch.StartAddr, 4)});
+    append(Latch, NdOp::INT_ADD, NextPointer, {Pointer, Constant(8)});
+    append(Latch, NdOp::INT_ADD, NextCount, {Count, Constant(uint32_t(-2))});
+    append(Latch, NdOp::INT_EQUAL, Temp(18, 1),
+           {Variant == 2 ? Count : NextCount, Constant(0)});
+    append(Latch, NdOp::COND_BR, {},
+           {MedVar::makeConst(Exit.StartAddr, 4), Temp(18, 1)});
+    append(Exit, NdOp::LOAD, Reloaded, {Slot});
+    append(Exit, NdOp::RETURN, {}, {Reloaded});
+
+    MedLLVMEmitter Emitter;
+    std::vector<MedVar> Sources = {Constant(0xBAD)};
+    const bool Complete = MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+        Emitter, Func, Arch::X86, Exit.Ops.front(), Sources);
+    EXPECT_EQ(Complete, Variant == 0);
+    if (Variant == 0) {
+      EXPECT_EQ(Sources.size(), 1u);
+      if (Sources.size() == 1)
+        EXPECT_EQ(Sources.front(), Saved);
+    } else {
+      EXPECT_TRUE(Sources.empty());
+    }
+    // The alias helper also has callers without a reaching-store CFG index.
+    MedLLVMEmitter AliasEmitter;
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::frameAccessesProvenDisjoint(
+                  AliasEmitter, Func, Arch::X86, Temp(15, 8), 4, Slot, 4),
+              Variant == 0);
+  }
 }
 
 TEST(MachOLLVMDataPointerBoundary,

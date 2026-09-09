@@ -201,13 +201,15 @@ bool MedLLVMEmitter::frameAccessesProvenDisjoint(const MedVar &A,
     return static_cast<int64_t>(Result);
   };
 
+  size_t RemainingAffineNodes = 8192;
   std::function<std::optional<int64_t>(const MedVar &, const MedVar &,
                                        std::set<AddressProvenanceVarKey>)>
       affineStepTo = [&](const MedVar &Start, const MedVar &Root,
                          std::set<AddressProvenanceVarKey> Seen)
       -> std::optional<int64_t> {
-    if (Start.isConst())
+    if (RemainingAffineNodes == 0 || Seen.size() >= 64 || Start.isConst())
       return std::nullopt;
+    --RemainingAffineNodes;
     if (sameValue(Start, Root))
       return int64_t{0};
     if (!Seen.insert(addressProvenanceVarKey(Start)).second)
@@ -620,6 +622,285 @@ bool MedLLVMEmitter::frameAccessesProvenDisjoint(const MedVar &A,
 
   auto ARange = frameOffsetRange(A);
   auto BRange = frameOffsetRange(B);
+
+  // A dynamic allocation and its loop count often share a small masked
+  // input. Independent intervals lose that correlation. Enumerate the full
+  // masked domain only after certifying the pointer/count recurrence pair.
+  size_t RemainingCorrelatedNodes = 8192;
+  auto charge = [&]() {
+    if (RemainingCorrelatedNodes == 0)
+      return false;
+    --RemainingCorrelatedNodes;
+    return true;
+  };
+  auto correlatedRange =
+      [&](const MedVar &Address) -> std::optional<FrameOffsetRange> {
+    MedVar Pointer = Address;
+    int64_t AddressDelta = 0;
+    for (unsigned Depth = 0; Depth != 64; ++Depth) {
+      if (!charge())
+        return std::nullopt;
+      if (lookupPhi(Pointer))
+        break;
+      const MedOp *Def = lookupDef(Pointer);
+      if (!Def)
+        return std::nullopt;
+      if (auto Input = pointerPreservingInput(*Def)) {
+        Pointer = *Input;
+        continue;
+      }
+      if (Def->NumInputs < 2 || Def->Output.Size != PointerBytes ||
+          (Def->Opcode != NdOp::INT_ADD && Def->Opcode != NdOp::INT_SUB))
+        return std::nullopt;
+      const MedVar *Base = &Def->Inputs[0];
+      const MedVar *Offset = &Def->Inputs[1];
+      if (Def->Opcode == NdOp::INT_ADD && Base->isConst())
+        std::swap(Base, Offset);
+      auto Delta = signedConstant(*Offset, PointerBytes);
+      if (!Delta || Base->Size != PointerBytes)
+        return std::nullopt;
+      const llvm::APInt Sum =
+          wideSigned(AddressDelta) + (Def->Opcode == NdOp::INT_SUB
+                                          ? -wideSigned(*Delta)
+                                          : wideSigned(*Delta));
+      if (!Sum.isSignedIntN(64))
+        return std::nullopt;
+      AddressDelta = Sum.getSExtValue();
+      Pointer = *Base;
+    }
+    const PhiNode *PointerPhi = lookupPhi(Pointer);
+    const MedBlock *Header = PointerPhi ? phiBlock(*PointerPhi) : nullptr;
+    if (!Header || Pointer.Size != PointerBytes ||
+        PointerPhi->Args.size() != 2 || Header->Preds.size() != 2 ||
+        !Header->ExceptionalPreds.empty() ||
+        Header->Preds[0] == Header->Preds[1])
+      return std::nullopt;
+    std::set<int> ActualPreds;
+    for (const MedBlock &Block : CurMedFunc->Blocks) {
+      if (!charge())
+        return std::nullopt;
+      for (int Successor : Block.Succs) {
+        if (!charge())
+          return std::nullopt;
+        if (Successor == Header->Id)
+          ActualPreds.insert(Block.Id);
+      }
+      for (const ExceptionalEdge &Edge : Block.ExceptionalSuccs) {
+        if (!charge() || Edge.BlockId == Header->Id)
+          return std::nullopt;
+      }
+    }
+    if (ActualPreds !=
+        std::set<int>(Header->Preds.begin(), Header->Preds.end()))
+      return std::nullopt;
+    int EntryPred = -1;
+    int BackPred = -1;
+    MedVar InitialPointer;
+    int64_t PointerStep = 0;
+    for (const auto &[Pred, Arg] : PointerPhi->Args) {
+      if (!charge() || Arg.Size != Pointer.Size ||
+          std::find(Header->Preds.begin(), Header->Preds.end(), Pred) ==
+              Header->Preds.end() ||
+          classifyPhiIncomingEdge(*PointerPhi, Pred) !=
+              PhiEdgeFeasibility::ProvenFeasible)
+        return std::nullopt;
+      auto Step = affineStepTo(Arg, Pointer, {});
+      if (Step) {
+        if (BackPred != -1 || *Step <= 0)
+          return std::nullopt;
+        BackPred = Pred;
+        PointerStep = *Step;
+      } else {
+        if (EntryPred != -1)
+          return std::nullopt;
+        EntryPred = Pred;
+        InitialPointer = Arg;
+      }
+    }
+    if (EntryPred == -1 || BackPred == -1 || EntryPred == BackPred)
+      return std::nullopt;
+
+    for (const PhiNode &CountPhi : Header->Phis) {
+      if (!charge())
+        return std::nullopt;
+      if (CountPhi.Args.size() != 2 || !maskForSize(CountPhi.Output.Size))
+        continue;
+      const MedVar *InitialCount = nullptr;
+      const MedVar *NextCount = nullptr;
+      bool Valid = true;
+      for (const auto &[Pred, Arg] : CountPhi.Args) {
+        if (Arg.Size != CountPhi.Output.Size ||
+            classifyPhiIncomingEdge(CountPhi, Pred) !=
+                PhiEdgeFeasibility::ProvenFeasible) {
+          Valid = false;
+          break;
+        }
+        if (Pred == EntryPred && !InitialCount)
+          InitialCount = &Arg;
+        else if (Pred == BackPred && !NextCount)
+          NextCount = &Arg;
+        else
+          Valid = false;
+      }
+      if (!Valid || !InitialCount || !NextCount)
+        continue;
+      auto Step = affineStepTo(*NextCount, CountPhi.Output, {});
+      if (!Step || *Step >= 0 || *Step == std::numeric_limits<int64_t>::min() ||
+          recurrenceEdgeExcludes(BackPred, *Header, *NextCount) !=
+              std::optional<uint64_t>(0))
+        continue;
+
+      std::vector<std::pair<MedVar, uint64_t>> Seeds;
+      std::set<AddressProvenanceVarKey> Seen;
+      std::function<void(const MedVar &, unsigned)> findSeeds =
+          [&](const MedVar &Value, unsigned Depth) {
+            if (!charge() || Depth == 64 || Value.isConst() ||
+                !Seen.insert(addressProvenanceVarKey(Value)).second)
+              return;
+            const MedOp *Def = lookupDef(Value);
+            if (!Def)
+              return;
+            if (Def->Opcode == NdOp::INT_AND && Def->NumInputs == 2)
+              for (unsigned I = 0; I != 2; ++I)
+                if (auto Mask = constantValue(Def->Inputs[I]);
+                    Mask && *Mask <= 31 && Def->Output.Size == Value.Size &&
+                    Def->Inputs[1 - I].Size == Value.Size)
+                  Seeds.emplace_back(Value, *Mask);
+            for (unsigned I = 0; I < Def->NumInputs; ++I)
+              findSeeds(Def->Inputs[I], Depth + 1);
+          };
+      findSeeds(*InitialCount, 0);
+      for (const auto &[Seed, Mask] : Seeds) {
+        std::optional<FrameOffsetRange> Result;
+        bool Complete = true;
+        for (uint64_t Binding = 0; Binding <= Mask; ++Binding) {
+          std::function<std::optional<uint64_t>(const MedVar &, unsigned)>
+              eval = [&](const MedVar &Value,
+                         unsigned Depth) -> std::optional<uint64_t> {
+            auto WidthMask = maskForSize(Value.Size);
+            if (!charge() || Depth == 64 || !WidthMask)
+              return std::nullopt;
+            if (sameValue(Value, Seed))
+              return Binding;
+            if (auto Constant = constantValue(Value))
+              return Constant;
+            const MedOp *Def = lookupDef(Value);
+            if (!Def || Def->NumInputs < 1)
+              return std::nullopt;
+            auto Left = eval(Def->Inputs[0], Depth + 1);
+            if (!Left)
+              return std::nullopt;
+            switch (Def->Opcode) {
+            case NdOp::COPY:
+            case NdOp::INT_ZEXT:
+              return *Left & *WidthMask;
+            case NdOp::SUBBYTES:
+              if (Def->NumInputs == 2 &&
+                  constantValue(Def->Inputs[1]) == std::optional<uint64_t>(0))
+                return *Left & *WidthMask;
+              return std::nullopt;
+            case NdOp::INT_NEG2:
+              if (Def->Inputs[0].Size != Value.Size)
+                return std::nullopt;
+              return (uint64_t{0} - *Left) & *WidthMask;
+            default:
+              break;
+            }
+            if (Def->NumInputs != 2 || Def->Inputs[0].Size != Value.Size)
+              return std::nullopt;
+            auto Right = eval(Def->Inputs[1], Depth + 1);
+            if (!Right)
+              return std::nullopt;
+            switch (Def->Opcode) {
+            case NdOp::INT_ADD:
+              return (*Left + *Right) & *WidthMask;
+            case NdOp::INT_SUB:
+              return (*Left - *Right) & *WidthMask;
+            case NdOp::INT_MULT:
+              return (*Left * *Right) & *WidthMask;
+            case NdOp::INT_AND:
+              return (*Left & *Right) & *WidthMask;
+            case NdOp::INT_LEFT:
+              return *Right >= Value.Size * 8 ? 0
+                                              : (*Left << *Right) & *WidthMask;
+            case NdOp::INT_RIGHT:
+              return *Right >= Value.Size * 8 ? 0 : *Left >> *Right;
+            default:
+              return std::nullopt;
+            }
+          };
+          std::function<std::optional<FrameOffsetRange>(const MedVar &,
+                                                        unsigned)>
+              frame = [&](const MedVar &Value,
+                          unsigned Depth) -> std::optional<FrameOffsetRange> {
+            if (!charge() || Depth == 64 || Value.isConst())
+              return std::nullopt;
+            if (auto Exact = canonicalFrameSlotKey(Value))
+              return FrameOffsetRange{Exact->first, Exact->second,
+                                      Exact->second};
+            const MedOp *Def = lookupDef(Value);
+            if (!Def)
+              return std::nullopt;
+            if (auto Input = pointerPreservingInput(*Def))
+              return frame(*Input, Depth + 1);
+            if (Def->NumInputs != 2 || Def->Output.Size < PointerBytes ||
+                (Def->Opcode != NdOp::INT_ADD && Def->Opcode != NdOp::INT_SUB))
+              return std::nullopt;
+            for (unsigned I = 0; I != (Def->Opcode == NdOp::INT_ADD ? 2u : 1u);
+                 ++I) {
+              auto Base = frame(Def->Inputs[I], Depth + 1);
+              if (!Base)
+                continue;
+              auto Raw = eval(Def->Inputs[1 - I], Depth + 1);
+              if (!Raw)
+                continue;
+              const llvm::APInt Delta(PointerBytes * 8, *Raw);
+              const llvm::APInt Offset = wideSigned(Base->Min) +
+                                         (Def->Opcode == NdOp::INT_SUB
+                                              ? -Delta.sext(WideArithmeticBits)
+                                              : Delta.sext(WideArithmeticBits));
+              if (!Offset.isSignedIntN(64))
+                return std::nullopt;
+              return FrameOffsetRange{Base->Root, Offset.getSExtValue(),
+                                      Offset.getSExtValue()};
+            }
+            return std::nullopt;
+          };
+          auto Count = eval(*InitialCount, 0);
+          auto Initial = frame(InitialPointer, 0);
+          const uint64_t Decrement = static_cast<uint64_t>(-*Step);
+          if (!Count || !Initial || *Count == 0 || *Count % Decrement != 0 ||
+              *Count / Decrement > 4096) {
+            Complete = false;
+            break;
+          }
+          const llvm::APInt Min =
+              wideSigned(Initial->Min) + wideSigned(AddressDelta);
+          const llvm::APInt Max =
+              Min +
+              wideSigned(PointerStep) * wideUnsigned(*Count / Decrement - 1);
+          if (!Min.isSignedIntN(64) || !Max.isSignedIntN(64) ||
+              (Result && Result->Root != Initial->Root)) {
+            Complete = false;
+            break;
+          }
+          FrameOffsetRange Arm{Initial->Root, Min.getSExtValue(),
+                               Max.getSExtValue()};
+          Result = Result ? FrameOffsetRange{Result->Root,
+                                             std::min(Result->Min, Arm.Min),
+                                             std::max(Result->Max, Arm.Max)}
+                          : Arm;
+        }
+        if (Complete && Result && RemainingCorrelatedNodes != 0)
+          return Result;
+      }
+    }
+    return std::nullopt;
+  };
+  if (!ARange)
+    ARange = correlatedRange(A);
+  if (!BRange)
+    BRange = correlatedRange(B);
   if (!ARange || !BRange || ARange->Root != BRange->Root)
     return false;
 
@@ -727,8 +1008,8 @@ void MedLLVMEmitter::ensureFrameReloadAnalysis() const {
   };
   std::map<int, std::set<int>> DeclaredPreds;
   for (const MedBlock &Block : Func.Blocks) {
-    auto [It, Inserted] = FrameReloadIndex.Blocks.emplace(
-        Block.Id, FrameReloadBlock{});
+    auto [It, Inserted] =
+        FrameReloadIndex.Blocks.emplace(Block.Id, FrameReloadBlock{});
     if (!Inserted)
       return;
     FrameReloadBlock &Indexed = It->second;
@@ -977,8 +1258,8 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
       if (!WriteKey || WriteKey->first != Target->first) {
         const bool ProvenDisjoint =
             !WriteKey &&
-            frameAccessesProvenDisjoint(WriteAddr, WriteSize,
-                                         Load.Inputs[0], Load.Output.Size);
+            frameAccessesProvenDisjoint(WriteAddr, WriteSize, Load.Inputs[0],
+                                        Load.Output.Size);
         if (ProvenDisjoint)
           continue;
         State.Invalid = true;
@@ -989,8 +1270,7 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
                     Load.Output.Size))
         continue;
       if (Write.IsStore && Write.HasValue && WriteSize != 0 &&
-          WriteKey->second == Target->second &&
-          WriteSize == Load.Output.Size) {
+          WriteKey->second == Target->second && WriteSize == Load.Output.Size) {
         State.Uninitialized = false;
         State.Invalid = false;
         State.Values.clear();
@@ -1020,16 +1300,14 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
     if (BlockIt == FrameReloadIndex.Blocks.end())
       return false;
     const FrameReloadBlock &Block = BlockIt->second;
-    ReachingState Next =
-        transfer(Block, std::numeric_limits<std::size_t>::max(),
-                 InStates[BlockId]);
+    ReachingState Next = transfer(
+        Block, std::numeric_limits<std::size_t>::max(), InStates[BlockId]);
     if (sameState(OutStates[BlockId], Next))
       continue;
     OutStates[BlockId] = Next;
 
     for (int SuccId : Block.Successors) {
-      if (FrameReloadIndex.Blocks.find(SuccId) ==
-          FrameReloadIndex.Blocks.end())
+      if (FrameReloadIndex.Blocks.find(SuccId) == FrameReloadIndex.Blocks.end())
         return false;
       if (mergeInto(InStates[SuccId], Next))
         Work.push_back(SuccId);
