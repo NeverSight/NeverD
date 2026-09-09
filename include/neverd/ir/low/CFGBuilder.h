@@ -86,7 +86,7 @@ constexpr bool provisionalRelativeRuntimeCertificateRequiresCompleteCFGReplay(
 /// Conservative fixed-work charges for provisional relative proposal and
 /// runtime-certificate comparisons.  Variable target-vector passes and
 /// ordered-container lookups are charged separately at their call sites.
-inline constexpr size_t kProvisionalRelativeProposalFixedComparisonWork = 18;
+inline constexpr size_t kProvisionalRelativeProposalFixedComparisonWork = 19;
 inline constexpr size_t kStableRelativeRuntimeCertificateFixedWork = 17;
 inline constexpr size_t kSiblingRelativeRuntimeCertificateFixedWork = 37;
 inline constexpr size_t kSiblingRelativeRuntimeCertificateTargetPasses = 2;
@@ -1942,6 +1942,8 @@ private:
     bool operator==(const StrongJumpTableRoleProposal &Other) const = default;
   };
   struct ProvisionalRelativeEdgeProposal {
+    enum class Kind : uint8_t { Relative, RelocatedAbsolute };
+    Kind EdgeKind = Kind::Relative;
     JumpTableStorageRange Storage;
     /// True only when Storage names a complete, independently bounded local
     /// object.  Edge-only inline-table certificates leave this false and may
@@ -1998,7 +2000,7 @@ private:
   std::map<va_t, StrongJumpTableRoleProposal> PriorStrongJumpTableProposals;
   std::map<va_t, StrongJumpTableRoleProposal> NextStrongJumpTableProposals;
   /// Immutable, lower-rank CFG edges used only by reaching-definition proofs
-  /// while a relative table closes its proposal fixed point.  Unlike strong
+  /// while a table closes its proposal fixed point. Unlike strong
   /// role proposals, these edges grant no storage ownership, relocation-root
   /// suppression, selector domain, or publication authority.
   std::map<va_t, ProvisionalRelativeEdgeProposal> PriorProvisionalRelativeEdges;

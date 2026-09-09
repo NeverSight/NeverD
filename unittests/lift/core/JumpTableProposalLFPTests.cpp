@@ -879,8 +879,8 @@ TEST_F(JumpTableProposalLFP,
 TEST_F(JumpTableProposalLFP,
        ProvisionalProposalComparisonPreflightChargesDualRuntimeRanges) {
   // Primary range (4) + flags (3) + optional presence (1) + runtime range
-  // (4) + anchor/scale/sign, vector sizes, and proof rank (6) = 18.
-  constexpr size_t DualRuntimeFixedWork = 18;
+  // (4) + anchor/scale/sign, vector sizes, and proof rank (6) + kind (1) = 19.
+  constexpr size_t DualRuntimeFixedWork = 19;
   const auto Work =
       neverd::detail::provisionalRelativeProposalComparisonWork(0, 0, 0, 0);
   ASSERT_EQ(Work, std::optional<size_t>{DualRuntimeFixedWork});
@@ -913,7 +913,7 @@ TEST_F(JumpTableProposalLFP,
   ExpectExactBoundary(neverd::detail::provisionalRelativeProposalComparisonWork(
                           /*LeftRoleCount=*/2, /*RightRoleCount=*/3,
                           /*LeftTargetCount=*/4, /*RightTargetCount=*/1),
-                      49);
+                      50);
   ExpectExactBoundary(neverd::detail::priorOccurrenceCertificateComparisonWork(
                           /*StorageCount=*/3, /*RoleCount=*/2),
                       52);
@@ -997,7 +997,7 @@ TEST_F(JumpTableProposalLFP,
       19);
   ExpectExactBoundary(
       neverd::detail::provisionalRelativeProposalComparisonWork(0, 0, 0, 0),
-      18);
+      19);
 
   EXPECT_FALSE(neverd::detail::provisionalRelativeProposalComparisonWork(
                    std::numeric_limits<size_t>::max(), 0, 0, 0)

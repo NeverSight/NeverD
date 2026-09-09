@@ -3314,6 +3314,40 @@ bool CFGBuilder::exactI386ModelZeroReaches(const LowOp &Use, int BaseSide,
                              ActiveJumpTableProofRoots->end());
   }
   const NdVar &BaseInput = Use.Inputs[BaseSide];
+  // A later dispatch may be unreachable until an earlier dispatch closes its
+  // finite edge set. Borrow only immutable, strictly lower-rank CFG facts.
+  // Published edges take precedence: an older provisional subset must never
+  // replace the ordinary graph. Neither query may borrow storage authority.
+  std::map<va_t, std::vector<va_t>> ModelReachEdgeOverrides;
+  if (CandidateProposalStageActive) {
+    if (!ConsumeProduct(PriorProvisionalRelativeEdges.size(), 8)) {
+      RestoreProofRoots();
+      return false;
+    }
+    for (const auto &[Addr, Proposal] : PriorProvisionalRelativeEdges) {
+      if (Proposal.CompleteRuntimeStorageRange ||
+          Proposal.StablePublishedTargetReplay ||
+          !detail::canBorrowProvisionalRelativeEdge(
+              ActiveJumpTableCandidateAddr,
+              ActiveJumpTableCandidateDependencyRank, Addr, Proposal.ProofRank))
+        continue;
+      if (!consumeI386GOTOFFProposalEvidence(OrderedLookupWork(Insns.size()))) {
+        RestoreProofRoots();
+        return false;
+      }
+      const auto Donor = Insns.find(Addr);
+      if (Donor == Insns.end() || !Donor->second.JumpTableTargets.empty() ||
+          Proposal.Targets.empty())
+        continue;
+      if (!ConsumeProduct(Proposal.Targets.size(), 3) ||
+          !consumeI386GOTOFFProposalEvidence(
+              OrderedLookupWork(ModelReachEdgeOverrides.size()) + 3)) {
+        RestoreProofRoots();
+        return false;
+      }
+      ModelReachEdgeOverrides.emplace(Addr, Proposal.Targets);
+    }
+  }
   I386GOTOFFModelReachCacheKey CacheKey = std::make_tuple(
       ActiveJumpTableCandidateAddr, Use.Addr, Use.Seq, BaseSide, TableBase,
       static_cast<uint8_t>(BaseInput.Space), BaseInput.Offset, BaseInput.Size,
@@ -3347,7 +3381,10 @@ bool CFGBuilder::exactI386ModelZeroReaches(const LowOp &Use, int BaseSide,
     RestoreProofRoots();
     return false;
   }
-  const auto Cached = I386GOTOFFModelReachCache.find(CacheKey);
+  // The cache key describes the ordinary graph, not a provisional overlay.
+  const auto Cached = ModelReachEdgeOverrides.empty()
+                          ? I386GOTOFFModelReachCache.find(CacheKey)
+                          : I386GOTOFFModelReachCache.end();
   if (Cached != I386GOTOFFModelReachCache.end()) {
     if (!PublishCompletedAmbiguousQuery(Cached->second)) {
       RestoreProofRoots();
@@ -3397,15 +3434,16 @@ bool CFGBuilder::exactI386ModelZeroReaches(const LowOp &Use, int BaseSide,
   // query cross the expanded dispatch graph before its memoized cycle closes.
   // Keep the stricter generic limit elsewhere; this proposal proof continues
   // to debit the same dedicated and candidate-wide evidence accounts.
-  const std::vector<bool> Matches =
-      tableValuesMatchAtUses(Queries, &AnalysisComplete, &QueryAnalysisComplete,
-                             /*CandidateBranchOverride=*/InvalidVA,
-                             /*CandidateTargetsOverride=*/nullptr,
-                             &I386GOTOFFProposalEvidenceRemaining,
-                             /*LocalMatchEvidenceLimit=*/0,
-                             /*CandidateBranchesSharingTargets=*/nullptr,
-                             /*QueryUnsignedFeasibleMasks=*/nullptr,
-                             limits::kMaxJumpTableExpandedResolverDepth);
+  const std::vector<bool> Matches = tableValuesMatchAtUses(
+      Queries, &AnalysisComplete, &QueryAnalysisComplete,
+      /*CandidateBranchOverride=*/InvalidVA,
+      /*CandidateTargetsOverride=*/nullptr,
+      &I386GOTOFFProposalEvidenceRemaining,
+      /*LocalMatchEvidenceLimit=*/0,
+      /*CandidateBranchesSharingTargets=*/nullptr,
+      /*QueryUnsignedFeasibleMasks=*/nullptr,
+      limits::kMaxJumpTableExpandedResolverDepth,
+      ModelReachEdgeOverrides.empty() ? nullptr : &ModelReachEdgeOverrides);
   auto QueryComplete = [&](size_t Index) {
     return Index < Matches.size() && Index < QueryAnalysisComplete.size() &&
            QueryAnalysisComplete[Index];
@@ -3459,7 +3497,8 @@ bool CFGBuilder::exactI386ModelZeroReaches(const LowOp &Use, int BaseSide,
     I386GOTOFFAmbiguousModelReach = true;
   I386GOTOFFPrivateFrameModelAuthenticated |=
       Result.Authenticated && !Result.AmbiguousReach;
-  I386GOTOFFModelReachCache.emplace(std::move(CacheKey), Result);
+  if (ModelReachEdgeOverrides.empty())
+    I386GOTOFFModelReachCache.emplace(std::move(CacheKey), Result);
   RestoreProofRoots();
   return Result.Authenticated && !Result.AmbiguousReach;
 }

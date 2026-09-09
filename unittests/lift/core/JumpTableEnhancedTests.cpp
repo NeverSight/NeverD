@@ -552,6 +552,112 @@ TEST_F(JTE_X86_32, GOTOFFSwitchRequiresExactCallPopAndDataFieldOccurrences) {
          "not borrow GOTOFF semantics";
 }
 
+TEST_F(JTE_X86_32, GOTOFFPeeledLoopKeepsPerDispatchDomains) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const auto &Image = *ImageOrErr;
+  const auto *Function = Image.findSymbol("jt_i386_gotoff_peeled_loop");
+  const auto *First = Image.findSymbol("jt_i386_gotoff_peeled_first_branch");
+  const auto *Loop = Image.findSymbol("jt_i386_gotoff_peeled_loop_branch");
+  const auto *Storage = Image.findSymbol("jt_i386_gotoff_peeled_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(First, nullptr);
+  ASSERT_NE(Loop, nullptr);
+  ASSERT_NE(Storage, nullptr);
+  ASSERT_EQ(Storage->Size, 32u);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const auto Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Low.JumpTables.size(), 2u);
+  std::set<neverd::va_t> Dispatches;
+  for (const auto &Table : Low.JumpTables) {
+    EXPECT_TRUE(Dispatches.insert(Table.InsnAddr).second);
+    EXPECT_EQ(Table.BaseAddr, Storage->Addr);
+    EXPECT_TRUE(Table.HasDispatchSlotMap);
+    ASSERT_EQ(Table.Targets.size(), Table.SlotIndices.size());
+    for (size_t I = 0; I < Table.Targets.size(); ++I) {
+      ASSERT_LT(Table.SlotIndices[I], 8u);
+      const uint8_t *Bytes =
+          Image.readVA(Storage->Addr + 4 * Table.SlotIndices[I], 4);
+      ASSERT_NE(Bytes, nullptr);
+      const uint32_t Target = uint32_t{Bytes[0]} | uint32_t{Bytes[1]} << 8 |
+                              uint32_t{Bytes[2]} << 16 |
+                              uint32_t{Bytes[3]} << 24;
+      EXPECT_EQ(Table.Targets[I], Target);
+    }
+    if (Table.InsnAddr == First->Addr) {
+      EXPECT_EQ(Table.Targets.size(), 4u);
+      EXPECT_EQ(Table.CaseLabels, (std::vector<int64_t>{1, 3, 5, 7}));
+      EXPECT_EQ(Table.SlotIndices, (std::vector<uint32_t>{1, 3, 5, 7}));
+    } else {
+      EXPECT_EQ(Table.InsnAddr, Loop->Addr);
+      EXPECT_EQ(Table.Targets.size(), 8u);
+      EXPECT_EQ(Table.CaseLabels,
+                (std::vector<int64_t>{0, 1, 2, 3, 4, 5, 6, 7}));
+      EXPECT_EQ(Table.SlotIndices,
+                (std::vector<uint32_t>{0, 1, 2, 3, 4, 5, 6, 7}));
+    }
+  }
+  EXPECT_EQ(Dispatches, (std::set<neverd::va_t>{First->Addr, Loop->Addr}));
+  EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+}
+
+TEST_F(JTE_X86_32, GOTOFFPeeledLoopRequiresExactOwnerAndModel) {
+  for (unsigned Variant = 0; Variant != 3; ++Variant) {
+    SCOPED_TRACE(Variant);
+    auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
+    ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+        << llvm::toString(ImageOrErr.takeError());
+    auto &Image = *ImageOrErr;
+    const auto *Function = Image.findSymbol("jt_i386_gotoff_peeled_loop");
+    const auto *Storage = Image.findSymbol("jt_i386_gotoff_peeled_table");
+    ASSERT_NE(Function, nullptr);
+    ASSERT_NE(Storage, nullptr);
+    const auto FunctionAddr = Function->Addr;
+    const auto FunctionEnd = FunctionAddr + Function->Size;
+    const auto StorageAddr = Storage->Addr;
+    size_t Mutations = 0;
+    if (Variant == 0) {
+      // A sized object extending beyond its mapped owner cannot fall back to
+      // an otherwise exact relocation-run boundary at the section end.
+      for (auto &Symbol : Image.Symbols)
+        if (Symbol.Name == "jt_i386_gotoff_peeled_table") {
+          Symbol.Size += 4;
+          ++Mutations;
+        }
+    } else if (Variant == 1) {
+      for (auto It = Image.I386GOTPCFields.begin();
+           It != Image.I386GOTPCFields.end();) {
+        if (It->first >= FunctionAddr && It->first < FunctionEnd) {
+          It = Image.I386GOTPCFields.erase(It);
+          ++Mutations;
+        } else {
+          ++It;
+        }
+      }
+    } else {
+      for (auto &[Addr, Field] : Image.DataAddressRelocOperands)
+        if (Addr >= FunctionAddr && Addr < FunctionEnd &&
+            Field.TargetVA == StorageAddr) {
+          Field.Kind = neverd::RelocatedAddressFieldKind::Generic;
+          ++Mutations;
+        }
+    }
+    ASSERT_EQ(Mutations, Variant == 2 ? 2u : 1u);
+    neverd::Decoder Decoder;
+    ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    const auto Low = Builder.build(Image, Decoder, FunctionAddr,
+                                   "jt_i386_gotoff_peeled_loop");
+    EXPECT_TRUE(Low.JumpTables.empty());
+    EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
+  }
+}
+
 TEST_F(JTE_X86_32, DirectGOTOFFGroupsRetainDistinctTableBases) {
   auto ImageOrErr = neverd::loadBinary(
       (fs::path(TEST_OBJ_DIR) / "test_i386_direct_gotoff_group.o").string());

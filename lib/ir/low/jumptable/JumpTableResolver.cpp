@@ -768,6 +768,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       if (CurrentEdge != PriorProvisionalRelativeEdges.end()) {
         const ProvisionalRelativeEdgeProposal &Proposal = CurrentEdge->second;
         const bool CompletePhysicalCoordinateToken =
+            Proposal.EdgeKind ==
+                ProvisionalRelativeEdgeProposal::Kind::Relative &&
             Proposal.AuthenticatesPhysicalStorage &&
             Proposal.CompleteDenseRuntimeCoordinates &&
             !Proposal.CompleteRuntimeStorageRange &&
@@ -857,40 +859,39 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // be removed by an incomplete outer proposal stage.  Reserve that future
   // deep destruction before the map copy exists, so rollback never performs
   // attacker-shaped vector cleanup after the shared balance is exhausted.
-  auto consumeJumpTableInfoDestruction =
-      [&](const JumpTableInfo &Candidate) {
-        if (!consumeCandidateProducts(
-                {{Candidate.AuthenticatedMaskCoordinates.size(), 1},
-                 {Candidate.AuthenticatedMaskKnownOneWitnesses.size(), 1},
-                 {Candidate.StorageRanges.size(), 1},
-                 {Candidate.SuppressibleRelocationSlots.size(), 1},
-                 {Candidate.IndexValueAlternatives.size(), 1},
-                 {Candidate.TargetLoads.size(), 1},
-                 {Candidate.AuthenticatedFrameStorage.Initializers.size(), 1},
-                 {Candidate.AuthenticatedStorageConsumers.size(), 1},
-                 {Candidate.LoadRoles.size(), 1},
-                 {Candidate.EntryIndices.size(), 1},
-                 {Candidate.RuntimeCaseLabels.size(), 1},
-                 {Candidate.RuntimeSlotIndices.size(), 1},
-                 {Candidate.ExplicitTargets.size(), 1}}))
+  auto consumeJumpTableInfoDestruction = [&](const JumpTableInfo &Candidate) {
+    if (!consumeCandidateProducts(
+            {{Candidate.AuthenticatedMaskCoordinates.size(), 1},
+             {Candidate.AuthenticatedMaskKnownOneWitnesses.size(), 1},
+             {Candidate.StorageRanges.size(), 1},
+             {Candidate.SuppressibleRelocationSlots.size(), 1},
+             {Candidate.IndexValueAlternatives.size(), 1},
+             {Candidate.TargetLoads.size(), 1},
+             {Candidate.AuthenticatedFrameStorage.Initializers.size(), 1},
+             {Candidate.AuthenticatedStorageConsumers.size(), 1},
+             {Candidate.LoadRoles.size(), 1},
+             {Candidate.EntryIndices.size(), 1},
+             {Candidate.RuntimeCaseLabels.size(), 1},
+             {Candidate.RuntimeSlotIndices.size(), 1},
+             {Candidate.ExplicitTargets.size(), 1}}))
+      return false;
+    for (const JumpTableFrameInitializerChunk &Initializer :
+         Candidate.AuthenticatedFrameStorage.Initializers)
+      if (!consumeCandidateEvidence(Initializer.StaticSources.size()))
+        return false;
+    for (const JumpTableLoadRole &Role : Candidate.LoadRoles) {
+      if (!consumeCandidateProducts(
+              {{Role.AllowedBases.size(), 1},
+               {Role.Indices.size(), 1},
+               {Role.FrameStorage.Initializers.size(), 1}}))
+        return false;
+      for (const JumpTableFrameInitializerChunk &Initializer :
+           Role.FrameStorage.Initializers)
+        if (!consumeCandidateEvidence(Initializer.StaticSources.size()))
           return false;
-        for (const JumpTableFrameInitializerChunk &Initializer :
-             Candidate.AuthenticatedFrameStorage.Initializers)
-          if (!consumeCandidateEvidence(Initializer.StaticSources.size()))
-            return false;
-        for (const JumpTableLoadRole &Role : Candidate.LoadRoles) {
-          if (!consumeCandidateProducts(
-                  {{Role.AllowedBases.size(), 1},
-                   {Role.Indices.size(), 1},
-                   {Role.FrameStorage.Initializers.size(), 1}}))
-            return false;
-          for (const JumpTableFrameInitializerChunk &Initializer :
-               Role.FrameStorage.Initializers)
-            if (!consumeCandidateEvidence(Initializer.StaticSources.size()))
-              return false;
-        }
-        return consumeCandidateEvidence(1);
-      };
+    }
+    return consumeCandidateEvidence(1);
+  };
   auto reservePublishedTargetCleanup = [&](size_t Count) {
     if (!CandidateProposalStageActive)
       return true;
@@ -1575,6 +1576,10 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize;
   const bool InspectRelativeRun = !Info.RelocAbsolute && Info.IsRelative &&
                                   Info.HasBaseAddr && Info.EntrySize > 0;
+  const bool InspectProvisionalEdges =
+      InspectRelativeRun ||
+      (Info.RelocAbsolute && !Info.IsRelative && Info.HasBaseAddr &&
+       Info.EntrySize == 4 && Img.Arch == Arch::X86 && Img.isELF());
   bool RelativeRunInspected = false;
   bool PhysicalRawRelCodeRunComplete = true;
   uint32_t PhysicalRawRelCodeRun = 0;
@@ -2132,7 +2137,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   std::optional<ProvisionalRelativeEdgeProposal>
       ProvisionalRelativeEdgeTemplate;
   bool HasExactTargetLoadOccurrences = false;
-  if (CandidateProposalStageActive && InspectRelativeRun &&
+  if (CandidateProposalStageActive && InspectProvisionalEdges &&
       PhysicalEntryStride >= Info.EntrySize) {
     if (!consumeCandidateEvidence(3) ||
         !consumeCandidateProducts(
@@ -2231,7 +2236,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     DurableDemandStorage = JumpTableStorageRange{Info.BaseAddr, Info.EntrySize,
                                                  PhysicalEntryStride, 1};
   }
-  if (CandidateProposalStageActive && InspectRelativeRun) {
+  if (CandidateProposalStageActive && InspectProvisionalEdges) {
     if (!consumeCandidateEvidence(PriorProvisionalRelativeEdges.size()))
       return {};
     for (const auto &[Addr, Proposal] : PriorProvisionalRelativeEdges) {
@@ -2239,11 +2244,16 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
         return {};
       const bool Durable = Proposal.CompleteRuntimeStorageRange.has_value() ||
                            Proposal.StablePublishedTargetReplay;
+      const bool RelativeProposal =
+          Proposal.EdgeKind == ProvisionalRelativeEdgeProposal::Kind::Relative;
+      if ((!InspectRelativeRun || !RelativeProposal) &&
+          (Durable || Addr == Rec.Addr))
+        continue;
       if (Addr == Rec.Addr) {
         // This pass may reconstruct its template only after the prior-edge
         // scan; retain the already-paid self fact independently of that order.
         RetainPriorDurableSelfCertificate |= Durable;
-      } else if (!Durable && DurableDemandStorage) {
+      } else if (RelativeProposal && !Durable && DurableDemandStorage) {
         // This scan already owns the immutable proposal traversal.  Charge
         // the conservative four-field storage-comparison ceiling before the
         // later durable-certificate gate instead of rescanning the entire map
@@ -2355,6 +2365,13 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
         BorrowEdge = detail::canBorrowProvisionalRelativeEdge(
             Rec.Addr, ActiveJumpTableCandidateDependencyRank, Addr,
             Proposal.ProofRank);
+        if (!InspectRelativeRun || !RelativeProposal) {
+          if (!consumeCandidateEvidence(orderedLookupWork(Insns.size())))
+            return {};
+          const auto Donor = Insns.find(Addr);
+          if (Donor == Insns.end() || !Donor->second.JumpTableTargets.empty())
+            continue;
+        }
       }
       if (Proposal.CompleteRuntimeStorageRange) {
         // A complete runtime certificate is useful only while its producer's
@@ -2578,7 +2595,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // only an address identity for that edge certificate.  In particular, this
   // template grants no storage ownership, root suppression, selector domain,
   // or singleton-publication authority.
-  if (CandidateProposalStageActive && InspectRelativeRun &&
+  if (CandidateProposalStageActive && InspectProvisionalEdges &&
       !ProvisionalRelativeEdgeTemplate && HasExactTargetLoadOccurrences &&
       Info.EntrySize > 0 && PhysicalEntryStride >= Info.EntrySize) {
     if (!consumeCandidateEvidence(8) ||
@@ -2588,8 +2605,13 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     Proposal.Storage = JumpTableStorageRange{Info.BaseAddr, Info.EntrySize,
                                              PhysicalEntryStride, 1};
     Proposal.AuthenticatesPhysicalStorage = false;
+    Proposal.EdgeKind =
+        Info.IsRelative
+            ? ProvisionalRelativeEdgeProposal::Kind::Relative
+            : ProvisionalRelativeEdgeProposal::Kind::RelocatedAbsolute;
     Proposal.TargetAnchor =
-        Info.HasTargetBase ? Info.TargetBase : Info.BaseAddr;
+        Info.IsRelative ? (Info.HasTargetBase ? Info.TargetBase : Info.BaseAddr)
+                        : InvalidVA;
     Proposal.EntryScale = Info.EntryScale;
     Proposal.IsSigned = Info.IsSigned;
     Proposal.LoadRoles = PrePruningLoadRoles;
@@ -3356,6 +3378,140 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       !ExactFiniteRelativeSingletonTargetValue.has_value());
   if (!MaskGraphGrowth || *MaskGraphGrowth)
     return {};
+  // Use the same exact owner and storage-envelope proof at both boundaries.
+  // A complete query may have no identity; exhaustion remains a failure.
+  auto ProveExactPhysicalStorage =
+      [&](const JumpTableInfo &Candidate,
+          std::optional<JumpTableStorageRange> &ExactRange) -> bool {
+    ExactRange.reset();
+    if (Candidate.RelocAbsolute && !Candidate.IsRelative &&
+        Candidate.HasBaseAddr && Candidate.EntrySize != 0 &&
+        Candidate.PhysicalCapacity != 0) {
+      const uint64_t PhysicalStride = Candidate.EntryStride != 0
+                                          ? Candidate.EntryStride
+                                          : Candidate.EntrySize;
+      if (PhysicalStride >= Candidate.EntrySize) {
+        // Reserve the owner-inventory traversal for the sized-object check
+        // below, together with the symbol scan performed by dataObjectSizeAt.
+        // The broader anchor-helper inventory is charged separately only if the
+        // owner/symbol evidence cannot establish an exact boundary directly.
+        if (!consumeCandidateProducts(
+                {{Img.Segments.size(), 3}, {Img.Sections.size(), 3}}) ||
+            !consumeCandidateEvidence(Img.Symbols.size()))
+          return false;
+        uint32_t ExactPhysicalSlotCount = Candidate.PhysicalCapacity;
+        bool ExactOwnerBoundary = false;
+        bool AllowAnchorBoundary = true;
+        auto ExactSlotsForExtent =
+            [&](uint64_t ByteExtent) -> std::optional<uint32_t> {
+          if (ByteExtent < Candidate.EntrySize ||
+              (ByteExtent - Candidate.EntrySize) % PhysicalStride != 0)
+            return std::nullopt;
+          const uint64_t Slots =
+              (ByteExtent - Candidate.EntrySize) / PhysicalStride + 1;
+          if (Slots == 0 || Slots > std::numeric_limits<uint32_t>::max())
+            return std::nullopt;
+          return static_cast<uint32_t>(Slots);
+        };
+        const std::optional<va_t> OwnerEnd =
+            Img.mappedObjectOwnerEnd(Candidate.BaseAddr);
+        const uint64_t DataObjectSize =
+            Img.dataObjectSizeAt(Candidate.BaseAddr);
+        if (DataObjectSize == 0 &&
+            (!PhysicalRawAbsCodePtrRunComplete ||
+             PhysicalRawAbsCodePtrRun > Candidate.PhysicalCapacity))
+          AllowAnchorBoundary = false;
+        if (DataObjectSize != 0) {
+          // A sized symbol is the narrowest available object identity.  It is
+          // exact only when it is wholly contained by its mapped owner and the
+          // complete sized object fits the authenticated relocation capacity.
+          // Never replace a rejected sized-object boundary with an interior
+          // anchor: that would certify only a prefix of the same object.
+          AllowAnchorBoundary = false;
+          if (!OwnerEnd || DataObjectSize > InvalidVA - Candidate.BaseAddr ||
+              Candidate.BaseAddr + DataObjectSize > *OwnerEnd) {
+            ExactPhysicalSlotCount = 0;
+          } else if (const std::optional<uint32_t> SizedSlots =
+                         ExactSlotsForExtent(DataObjectSize);
+                     SizedSlots && *SizedSlots <= Candidate.PhysicalCapacity) {
+            ExactPhysicalSlotCount = *SizedSlots;
+            ExactOwnerBoundary = true;
+          } else {
+            ExactPhysicalSlotCount = 0;
+          }
+        } else if (OwnerEnd && *OwnerEnd >= Candidate.BaseAddr) {
+          if (const std::optional<uint32_t> OwnerSlots =
+                  ExactSlotsForExtent(*OwnerEnd - Candidate.BaseAddr);
+              OwnerSlots && *OwnerSlots <= Candidate.PhysicalCapacity) {
+            ExactPhysicalSlotCount = *OwnerSlots;
+            ExactOwnerBoundary = true;
+          }
+        }
+        bool HasExactBoundary = ExactOwnerBoundary;
+        if (ExactPhysicalSlotCount != 0 && !HasExactBoundary &&
+            AllowAnchorBoundary) {
+          if (!consumeExactBoundaryInventory(Img, DecodedTableAnchors.size()))
+            return false;
+          HasExactBoundary = codePtrRelocRunHasExactBoundary(
+              Img, Candidate.BaseAddr, PhysicalStride, ExactPhysicalSlotCount,
+              DecodedTableAnchors);
+        }
+        if (ExactPhysicalSlotCount != 0 && HasExactBoundary) {
+          const JumpTableStorageRange CandidatePhysical{
+              Candidate.BaseAddr, Candidate.EntrySize, PhysicalStride,
+              ExactPhysicalSlotCount};
+          // Exact physical identity must contain every runtime storage range.
+          // Traverse the full inventory without early exit: a malformed or
+          // out-of-envelope alternative anywhere in the candidate invalidates
+          // the certificate, even when the first range is well formed.
+          if (!consumeCandidateProducts(
+                  {{Candidate.StorageRanges.size(), 16}, {1, 8}}))
+            return false;
+          const std::optional<va_t> CandidateEnd =
+              CandidatePhysical.storageEnd();
+          bool CoversAllStorage = CandidateEnd.has_value();
+          bool HasStorage = false;
+          va_t StorageEnvelopeBase = InvalidVA;
+          va_t StorageEnvelopeEnd = 0;
+          for (const JumpTableStorageRange &Range : Candidate.StorageRanges) {
+            const std::optional<va_t> RangeEnd = Range.storageEnd();
+            HasStorage = true;
+            StorageEnvelopeBase = std::min(StorageEnvelopeBase, Range.BaseAddr);
+            if (RangeEnd)
+              StorageEnvelopeEnd = std::max(StorageEnvelopeEnd, *RangeEnd);
+
+            bool RangeCovered = RangeEnd.has_value();
+            RangeCovered &= Range.BaseAddr >= CandidatePhysical.BaseAddr;
+            RangeCovered &= CandidateEnd.has_value() && RangeEnd.has_value();
+            if (CandidateEnd && RangeEnd)
+              RangeCovered &= *RangeEnd <= *CandidateEnd;
+            RangeCovered &= Range.EntrySize == CandidatePhysical.EntrySize;
+            if (Range.BaseAddr >= CandidatePhysical.BaseAddr) {
+              const uint64_t Offset =
+                  Range.BaseAddr - CandidatePhysical.BaseAddr;
+              RangeCovered &= Offset % CandidatePhysical.EntryStride == 0;
+            } else {
+              RangeCovered = false;
+            }
+            if (Range.PhysicalSlotCount > 1)
+              RangeCovered &=
+                  Range.EntryStride % CandidatePhysical.EntryStride == 0;
+            CoversAllStorage &= RangeCovered;
+          }
+          if (HasStorage) {
+            CoversAllStorage &=
+                StorageEnvelopeBase >= CandidatePhysical.BaseAddr;
+            CoversAllStorage &= CandidateEnd.has_value();
+            if (CandidateEnd)
+              CoversAllStorage &= StorageEnvelopeEnd <= *CandidateEnd;
+          }
+          if (CoversAllStorage)
+            ExactRange = CandidatePhysical;
+        }
+      }
+    }
+    return true;
+  };
   auto RecordAuthenticatedRelativeClosureProposal = [&]() {
     if (!CandidateProposalStageActive)
       return true;
@@ -3366,7 +3522,32 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     // exact physical certificate may carry its independently authenticated
     // storage role across a lower-rank edge overlay; the overlay still grants
     // no singleton or stable-publication authority.
-    if (!ProvisionalRelativeEdgeTemplate->AuthenticatesPhysicalStorage)
+    std::optional<JumpTableStorageRange> ClosureStorage;
+    if (ProvisionalRelativeEdgeTemplate->AuthenticatesPhysicalStorage) {
+      ClosureStorage = ProvisionalRelativeEdgeTemplate->Storage;
+    } else if (ProvisionalRelativeEdgeTemplate->EdgeKind ==
+                   ProvisionalRelativeEdgeProposal::Kind::RelocatedAbsolute &&
+               ActiveJumpTableCandidateProofRank == 0 &&
+               !TargetRoleEdgeOverrides) {
+      if (!ProveExactPhysicalStorage(Info, ClosureStorage))
+        return false;
+      if (ClosureStorage) {
+        if (!consumeCandidateEvidence(8))
+          return false;
+        JumpTableInfo PhysicalProbe;
+        PhysicalProbe.setBaseAddr(ClosureStorage->BaseAddr);
+        PhysicalProbe.RelocAbsolute = true;
+        PhysicalProbe.EntrySize = ClosureStorage->EntrySize;
+        PhysicalProbe.EntryStride = ClosureStorage->EntryStride;
+        PhysicalProbe.MaxEntries = ClosureStorage->PhysicalSlotCount;
+        PhysicalProbe.PhysicalCapacity = ClosureStorage->PhysicalSlotCount;
+        PhysicalProbe.StorageRanges = {*ClosureStorage};
+        if (!HasValidatedLocalPhysicalTargetOwnership(
+                PhysicalProbe, /*RequireWholePhysicalLocalSet=*/true))
+          ClosureStorage.reset();
+      }
+    }
+    if (!ClosureStorage)
       return true;
     if (!consumeCandidateProducts({{1, 3}, {PrePruningLoadRoles.size(), 3}}) ||
         !consumeCandidateEvidence(
@@ -3375,9 +3556,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
             orderedLookupWork(EverStrongJumpTableProposalBranches.size()) + 1))
       return false;
     StrongJumpTableRoleProposal Proposal;
-    Proposal.StorageRanges = {ProvisionalRelativeEdgeTemplate->Storage};
-    Proposal.ExactPhysicalStorageRange =
-        ProvisionalRelativeEdgeTemplate->Storage;
+    Proposal.StorageRanges = {*ClosureStorage};
+    Proposal.ExactPhysicalStorageRange = *ClosureStorage;
     Proposal.LoadRoles = PrePruningLoadRoles;
     Proposal.ProofRank = ActiveJumpTableCandidateProofRank;
     NextStrongJumpTableProposals.insert_or_assign(Rec.Addr,
@@ -4014,127 +4194,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // deliberately leaves the certificate absent.  This identity is not a
   // suppression permission; the final reachable-consumer audit below may
   // only derive such a permission after inspecting the complete object.
-  Info.ExactPhysicalStorageRange.reset();
-  if (Info.RelocAbsolute && !Info.IsRelative && Info.HasBaseAddr &&
-      Info.EntrySize != 0 && Info.PhysicalCapacity != 0) {
-    const uint64_t PhysicalStride =
-        Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize;
-    if (PhysicalStride >= Info.EntrySize) {
-      // Reserve the owner-inventory traversal for the sized-object check below,
-      // together with the symbol scan performed by dataObjectSizeAt.  The
-      // broader anchor-helper inventory is charged separately only if the
-      // owner/symbol evidence cannot establish an exact boundary directly.
-      if (!consumeCandidateProducts(
-              {{Img.Segments.size(), 3}, {Img.Sections.size(), 3}}) ||
-          !consumeCandidateEvidence(Img.Symbols.size()))
-        return {};
-      uint32_t ExactPhysicalSlotCount = Info.PhysicalCapacity;
-      bool ExactOwnerBoundary = false;
-      bool AllowAnchorBoundary = true;
-      auto ExactSlotsForExtent =
-          [&](uint64_t ByteExtent) -> std::optional<uint32_t> {
-        if (ByteExtent < Info.EntrySize ||
-            (ByteExtent - Info.EntrySize) % PhysicalStride != 0)
-          return std::nullopt;
-        const uint64_t Slots =
-            (ByteExtent - Info.EntrySize) / PhysicalStride + 1;
-        if (Slots == 0 || Slots > std::numeric_limits<uint32_t>::max())
-          return std::nullopt;
-        return static_cast<uint32_t>(Slots);
-      };
-      const std::optional<va_t> OwnerEnd =
-          Img.mappedObjectOwnerEnd(Info.BaseAddr);
-      const uint64_t DataObjectSize = Img.dataObjectSizeAt(Info.BaseAddr);
-      if (DataObjectSize == 0 &&
-          (!PhysicalRawAbsCodePtrRunComplete ||
-           PhysicalRawAbsCodePtrRun > Info.PhysicalCapacity))
-        AllowAnchorBoundary = false;
-      if (DataObjectSize != 0) {
-        // A sized symbol is the narrowest available object identity.  It is
-        // exact only when it is wholly contained by its mapped owner and the
-        // complete sized object fits the authenticated relocation capacity.
-        // Never replace a rejected sized-object boundary with an interior
-        // anchor: that would certify only a prefix of the same object.
-        AllowAnchorBoundary = false;
-        if (!OwnerEnd || DataObjectSize > InvalidVA - Info.BaseAddr ||
-            Info.BaseAddr + DataObjectSize > *OwnerEnd) {
-          ExactPhysicalSlotCount = 0;
-        } else if (const std::optional<uint32_t> SizedSlots =
-                       ExactSlotsForExtent(DataObjectSize);
-                   SizedSlots && *SizedSlots <= Info.PhysicalCapacity) {
-          ExactPhysicalSlotCount = *SizedSlots;
-          ExactOwnerBoundary = true;
-        } else {
-          ExactPhysicalSlotCount = 0;
-        }
-      } else if (OwnerEnd && *OwnerEnd >= Info.BaseAddr) {
-        if (const std::optional<uint32_t> OwnerSlots =
-                ExactSlotsForExtent(*OwnerEnd - Info.BaseAddr);
-            OwnerSlots && *OwnerSlots <= Info.PhysicalCapacity) {
-          ExactPhysicalSlotCount = *OwnerSlots;
-          ExactOwnerBoundary = true;
-        }
-      }
-      bool HasExactBoundary = ExactOwnerBoundary;
-      if (ExactPhysicalSlotCount != 0 && !HasExactBoundary &&
-          AllowAnchorBoundary) {
-        if (!consumeExactBoundaryInventory(Img, DecodedTableAnchors.size()))
-          return {};
-        HasExactBoundary = codePtrRelocRunHasExactBoundary(
-            Img, Info.BaseAddr, PhysicalStride, ExactPhysicalSlotCount,
-            DecodedTableAnchors);
-      }
-      if (ExactPhysicalSlotCount != 0 && HasExactBoundary) {
-        const JumpTableStorageRange CandidatePhysical{
-            Info.BaseAddr, Info.EntrySize, PhysicalStride,
-            ExactPhysicalSlotCount};
-        // Exact physical identity must contain every runtime storage range.
-        // Traverse the full inventory without early exit: a malformed or
-        // out-of-envelope alternative anywhere in the candidate invalidates
-        // the certificate, even when the first range is well formed.
-        if (!consumeCandidateProducts(
-                {{Info.StorageRanges.size(), 16}, {1, 8}}))
-          return {};
-        const std::optional<va_t> CandidateEnd = CandidatePhysical.storageEnd();
-        bool CoversAllStorage = CandidateEnd.has_value();
-        bool HasStorage = false;
-        va_t StorageEnvelopeBase = InvalidVA;
-        va_t StorageEnvelopeEnd = 0;
-        for (const JumpTableStorageRange &Range : Info.StorageRanges) {
-          const std::optional<va_t> RangeEnd = Range.storageEnd();
-          HasStorage = true;
-          StorageEnvelopeBase = std::min(StorageEnvelopeBase, Range.BaseAddr);
-          if (RangeEnd)
-            StorageEnvelopeEnd = std::max(StorageEnvelopeEnd, *RangeEnd);
-
-          bool RangeCovered = RangeEnd.has_value();
-          RangeCovered &= Range.BaseAddr >= CandidatePhysical.BaseAddr;
-          RangeCovered &= CandidateEnd.has_value() && RangeEnd.has_value();
-          if (CandidateEnd && RangeEnd)
-            RangeCovered &= *RangeEnd <= *CandidateEnd;
-          RangeCovered &= Range.EntrySize == CandidatePhysical.EntrySize;
-          if (Range.BaseAddr >= CandidatePhysical.BaseAddr) {
-            const uint64_t Offset = Range.BaseAddr - CandidatePhysical.BaseAddr;
-            RangeCovered &= Offset % CandidatePhysical.EntryStride == 0;
-          } else {
-            RangeCovered = false;
-          }
-          if (Range.PhysicalSlotCount > 1)
-            RangeCovered &=
-                Range.EntryStride % CandidatePhysical.EntryStride == 0;
-          CoversAllStorage &= RangeCovered;
-        }
-        if (HasStorage) {
-          CoversAllStorage &= StorageEnvelopeBase >= CandidatePhysical.BaseAddr;
-          CoversAllStorage &= CandidateEnd.has_value();
-          if (CandidateEnd)
-            CoversAllStorage &= StorageEnvelopeEnd <= *CandidateEnd;
-        }
-        if (CoversAllStorage)
-          Info.ExactPhysicalStorageRange = CandidatePhysical;
-      }
-    }
-  }
+  if (!ProveExactPhysicalStorage(Info, Info.ExactPhysicalStorageRange))
+    return {};
   bool ImportedPriorRelativePhysicalIdentity = false;
   const size_t PreReadRootCount = ActiveJumpTableProofRoots
                                       ? ActiveJumpTableProofRoots->size()
@@ -4206,7 +4267,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     }
   }
   const bool CanRecordStrongProposal =
-      !ProvisionalRelativeEdgeTemplate ||
+      !Info.IsRelative || !ProvisionalRelativeEdgeTemplate ||
       ProvisionalRelativeEdgeTemplate->AuthenticatesPhysicalStorage;
   bool CarryPriorStrongProposal = false;
   uint32_t CarriedPriorStrongProofRank = 0;
@@ -4616,64 +4677,65 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
                            return Range.BaseAddr == Address;
                          });
     };
-    auto isAuthenticatedStaticSourceRelocation =
-        [&](va_t StaticAddress, va_t FieldVA, va_t OwnerVA, va_t InsnAddr,
-            bool &AnalysisComplete) {
-          const size_t InitializerCount =
-              Info.AuthenticatedFrameStorage.Initializers.size();
-          const std::optional<size_t> InitializerWork =
-              detail::staticSourceRelocationComparisonWork(InitializerCount, 0);
-          if (!consumeCandidateEvidence(InitializerWork.value_or(
-                  std::numeric_limits<size_t>::max()))) {
-            AnalysisComplete = false;
-            return false;
-          }
-          size_t StaticSourceCount = 0;
-          for (const JumpTableFrameInitializerChunk &Initializer :
-               Info.AuthenticatedFrameStorage.Initializers) {
-            if (Initializer.StaticSources.size() >
-                std::numeric_limits<size_t>::max() - StaticSourceCount) {
-              consumeCandidateEvidence(std::numeric_limits<size_t>::max());
-              AnalysisComplete = false;
-              return false;
-            }
-            StaticSourceCount += Initializer.StaticSources.size();
-          }
-          const std::optional<size_t> StaticSourceWork =
-              detail::staticSourceRelocationComparisonWork(
-                  /*InitializerCount=*/0, StaticSourceCount);
-          if (!consumeCandidateEvidence(StaticSourceWork.value_or(
-                  std::numeric_limits<size_t>::max()))) {
-            AnalysisComplete = false;
-            return false;
-          }
-          for (const JumpTableFrameInitializerChunk &Initializer :
-               Info.AuthenticatedFrameStorage.Initializers) {
-            if (Initializer.IsMemcpy &&
-                Initializer.StaticSourceProvenance ==
-                    ConstantAddressProvenance::DataAddress &&
-                Initializer.StaticSourceOwnerVA != InvalidVA &&
-                Initializer.StaticSourceProducerTargetVA == StaticAddress &&
-                Initializer.StaticSourceFieldVA == FieldVA &&
-                Initializer.StaticSourceOwnerVA == OwnerVA &&
-                Initializer.StaticSourceProducer.Addr == InsnAddr &&
-                Initializer.StaticSourceProducer.Seq >= 0)
-              return true;
-            for (const auto &Source : Initializer.StaticSources) {
-              const JumpTableValueOccurrence &Producer =
-                  Source.StaticAddressProducer;
-              if (Source.StaticAddressProvenance ==
-                      ConstantAddressProvenance::DataAddress &&
-                  Source.StaticAddressOwnerVA != InvalidVA &&
-                  Source.StaticAddressProducerTargetVA == StaticAddress &&
-                  Source.StaticAddressFieldVA == FieldVA &&
-                  Source.StaticAddressOwnerVA == OwnerVA &&
-                  Producer.Addr == InsnAddr && Producer.Seq >= 0)
-                return true;
-            }
-          }
+    auto isAuthenticatedStaticSourceRelocation = [&](va_t StaticAddress,
+                                                     va_t FieldVA, va_t OwnerVA,
+                                                     va_t InsnAddr,
+                                                     bool &AnalysisComplete) {
+      const size_t InitializerCount =
+          Info.AuthenticatedFrameStorage.Initializers.size();
+      const std::optional<size_t> InitializerWork =
+          detail::staticSourceRelocationComparisonWork(InitializerCount, 0);
+      if (!consumeCandidateEvidence(
+              InitializerWork.value_or(std::numeric_limits<size_t>::max()))) {
+        AnalysisComplete = false;
+        return false;
+      }
+      size_t StaticSourceCount = 0;
+      for (const JumpTableFrameInitializerChunk &Initializer :
+           Info.AuthenticatedFrameStorage.Initializers) {
+        if (Initializer.StaticSources.size() >
+            std::numeric_limits<size_t>::max() - StaticSourceCount) {
+          consumeCandidateEvidence(std::numeric_limits<size_t>::max());
+          AnalysisComplete = false;
           return false;
-        };
+        }
+        StaticSourceCount += Initializer.StaticSources.size();
+      }
+      const std::optional<size_t> StaticSourceWork =
+          detail::staticSourceRelocationComparisonWork(
+              /*InitializerCount=*/0, StaticSourceCount);
+      if (!consumeCandidateEvidence(
+              StaticSourceWork.value_or(std::numeric_limits<size_t>::max()))) {
+        AnalysisComplete = false;
+        return false;
+      }
+      for (const JumpTableFrameInitializerChunk &Initializer :
+           Info.AuthenticatedFrameStorage.Initializers) {
+        if (Initializer.IsMemcpy &&
+            Initializer.StaticSourceProvenance ==
+                ConstantAddressProvenance::DataAddress &&
+            Initializer.StaticSourceOwnerVA != InvalidVA &&
+            Initializer.StaticSourceProducerTargetVA == StaticAddress &&
+            Initializer.StaticSourceFieldVA == FieldVA &&
+            Initializer.StaticSourceOwnerVA == OwnerVA &&
+            Initializer.StaticSourceProducer.Addr == InsnAddr &&
+            Initializer.StaticSourceProducer.Seq >= 0)
+          return true;
+        for (const auto &Source : Initializer.StaticSources) {
+          const JumpTableValueOccurrence &Producer =
+              Source.StaticAddressProducer;
+          if (Source.StaticAddressProvenance ==
+                  ConstantAddressProvenance::DataAddress &&
+              Source.StaticAddressOwnerVA != InvalidVA &&
+              Source.StaticAddressProducerTargetVA == StaticAddress &&
+              Source.StaticAddressFieldVA == FieldVA &&
+              Source.StaticAddressOwnerVA == OwnerVA &&
+              Producer.Addr == InsnAddr && Producer.Seq >= 0)
+            return true;
+        }
+      }
+      return false;
+    };
     auto isAuthenticatedStaticSourceLowOccurrence =
         [&](va_t StaticAddress, const LowOp &Op, const NdVar &Value,
             bool &AnalysisComplete) {
@@ -4894,25 +4956,25 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
         return AuthenticatesSibling(PriorStrongJumpTableProposals);
       return AuthenticatesSibling(ResolvedTableInfo);
     };
-    auto instructionHasAuthenticatedTargetLoad =
-        [&](va_t Addr, bool &AnalysisComplete) {
-          if (!consumeCandidateEvidence(orderedLookupWork(Insns.size()))) {
-            AnalysisComplete = false;
-            return false;
-          }
-          const auto It = Insns.find(Addr);
-          if (It == Insns.end())
-            return false;
-          if (!consumeCandidateEvidence(It->second.Ops.size())) {
-            AnalysisComplete = false;
-            return false;
-          }
-          for (const LowOp &Op : It->second.Ops)
-            if (Op.Opcode == NdOp::LOAD &&
-                isAuthenticatedTargetLoad(Op, AnalysisComplete))
-              return true;
-          return false;
-        };
+    auto instructionHasAuthenticatedTargetLoad = [&](va_t Addr,
+                                                     bool &AnalysisComplete) {
+      if (!consumeCandidateEvidence(orderedLookupWork(Insns.size()))) {
+        AnalysisComplete = false;
+        return false;
+      }
+      const auto It = Insns.find(Addr);
+      if (It == Insns.end())
+        return false;
+      if (!consumeCandidateEvidence(It->second.Ops.size())) {
+        AnalysisComplete = false;
+        return false;
+      }
+      for (const LowOp &Op : It->second.Ops)
+        if (Op.Opcode == NdOp::LOAD &&
+            isAuthenticatedTargetLoad(Op, AnalysisComplete))
+          return true;
+      return false;
+    };
     auto isAuthenticatedStorageConsumer =
         [&](const LowOp &Op, const NdVar &Value, bool &AnalysisComplete) {
           if (!consumeCandidateEvidence(
@@ -5698,7 +5760,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // extra slots.  Sparse or partial domains publish no such certificate.  This
   // never upgrades the proposal to strong storage ownership and never
   // authorizes relocation-root suppression.
-  if (CandidateProposalStageActive && ProvisionalRelativeEdgeTemplate &&
+  if (CandidateProposalStageActive && Info.IsRelative &&
+      ProvisionalRelativeEdgeTemplate &&
       (HasDistinctSameStorageSiblingDemand ||
        RetainPriorDurableSelfCertificate) &&
       JumpTableProofContextComplete && Info.IndexDomainAuthenticated &&

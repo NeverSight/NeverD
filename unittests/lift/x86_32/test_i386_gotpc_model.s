@@ -896,4 +896,83 @@ jt_i386_gotoff_escaped_spill_table:
   .long .Lesescaped_spill_case1 - .Lgotpc_text_base
 .size jt_i386_gotoff_escaped_spill_table, .-jt_i386_gotoff_escaped_spill_table
 
+.text
+.p2align 2
+.globl jt_i386_gotoff_peeled_loop
+.type jt_i386_gotoff_peeled_loop, @function
+jt_i386_gotoff_peeled_loop:
+  pushl %ebx
+  pushl %esi
+  movl 12(%esp), %eax
+  call .Lpeeled_pc
+.Lpeeled_pc:
+  popl %ecx
+  .byte 0x81, 0xc1
+.Lpeeled_gotpc_field:
+  .long .Lpeeled_gotpc_field - .Lpeeled_pc
+  .reloc .Lpeeled_gotpc_field, R_386_GOTPC, _GLOBAL_OFFSET_TABLE_
+  movl $4, %esi
+  orl $1, %eax
+  movl %eax, %ebx
+  andl $7, %ebx
+  movl jt_i386_gotoff_peeled_table@GOTOFF(%ecx,%ebx,4), %ebx
+  addl %ecx, %ebx
+.globl jt_i386_gotoff_peeled_first_branch
+jt_i386_gotoff_peeled_first_branch:
+  jmp *%ebx
+.Lpeeled_loop:
+  addl %esi, %eax
+  movl %eax, %ebx
+  andl $7, %ebx
+  movl jt_i386_gotoff_peeled_table@GOTOFF(%ecx,%ebx,4), %ebx
+  addl %ecx, %ebx
+.globl jt_i386_gotoff_peeled_loop_branch
+jt_i386_gotoff_peeled_loop_branch:
+  jmp *%ebx
+.Lpeeled_case0:
+  addl $11, %eax
+  jmp .Lpeeled_join
+.Lpeeled_case1:
+  xorl $17, %eax
+  jmp .Lpeeled_join
+.Lpeeled_case2:
+  addl $31, %eax
+  jmp .Lpeeled_join
+.Lpeeled_case3:
+  xorl $33, %eax
+  jmp .Lpeeled_join
+.Lpeeled_case4:
+  addl $59, %eax
+  jmp .Lpeeled_join
+.Lpeeled_case5:
+  xorl $65, %eax
+  jmp .Lpeeled_join
+.Lpeeled_case6:
+  addl $79, %eax
+  jmp .Lpeeled_join
+.Lpeeled_case7:
+  xorl $81, %eax
+.Lpeeled_join:
+  decl %esi
+  jnz .Lpeeled_loop
+  popl %esi
+  popl %ebx
+  ret
+.size jt_i386_gotoff_peeled_loop, .-jt_i386_gotoff_peeled_loop
+
+.section .rodata
+.p2align 2
+.globl jt_i386_gotoff_peeled_table
+.type jt_i386_gotoff_peeled_table, @object
+jt_i386_gotoff_peeled_table:
+  .long .Lpeeled_case0@GOTOFF
+  .long .Lpeeled_case1@GOTOFF
+  .long .Lpeeled_case2@GOTOFF
+  .long .Lpeeled_case3@GOTOFF
+  .long .Lpeeled_case4@GOTOFF
+  .long .Lpeeled_case5@GOTOFF
+  .long .Lpeeled_case6@GOTOFF
+  .long .Lpeeled_case7@GOTOFF
+.size jt_i386_gotoff_peeled_table, .-jt_i386_gotoff_peeled_table
+
 .section .note.GNU-stack,"",@progbits
