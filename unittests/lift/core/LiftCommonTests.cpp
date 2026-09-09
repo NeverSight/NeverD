@@ -66,12 +66,13 @@ TEST(LiftStateBase, NarrowingExtensionIsFatal) {
         {
           // Keep the fatal boundary observable without asking a platform crash
           // reporter to retain an aborting death-test child.
-          llvm::install_fatal_error_handler([](void *, const char *Reason, bool) {
-            std::fputs(Reason, stderr);
-            std::fputc('\n', stderr);
-            std::fflush(stderr);
-            std::_Exit(1);
-          });
+          llvm::install_fatal_error_handler(
+              [](void *, const char *Reason, bool) {
+                std::fputs(Reason, stderr);
+                std::fputc('\n', stderr);
+                std::fflush(stderr);
+                std::_Exit(1);
+              });
           std::vector<LowOp> Ops;
           LiftStateBase State(0x1000, 1, Ops);
           State.emit(Opcode, NdVar::tmp(TmpBase, 1),

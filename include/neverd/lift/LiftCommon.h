@@ -127,7 +127,7 @@ struct LiftStateBase {
   /// must be a constant in 1..ElemSz*8; the value is read from / written to a
   /// LaneSz-byte nd-var.
   NdVar emitRoundedShr(NdVar Lane, uint16_t LaneSz, unsigned ShAmt,
-                         bool IsSigned) {
+                       bool IsSigned) {
     uint16_t WideSz = LaneSz * 2;
     NdVar Wide = makeTemp(WideSz);
     emit(IsSigned ? NdOp::INT_SEXT : NdOp::INT_ZEXT, Wide, {Lane});
