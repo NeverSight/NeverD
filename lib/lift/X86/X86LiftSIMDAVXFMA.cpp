@@ -30,7 +30,7 @@ namespace neverd {
 // (FNMADD/FNMSUB); SubAdd subtracts the addend (FMSUB/FNMSUB).  Scalar SS/SD
 // forms compute only the low ElemSz element and copy the upper XMM lanes from
 // ScalarUpper; packed PS/PD forms fuse every ElemSz-wide lane. Fa/Fb/Fc are the
-// full-width operands.
+// register-width operands, except for element-sized scalar memory inputs.
 static NdVar buildX86FmaResult(LiftStateBase &S, uint16_t ResultSize, NdVar Fa,
                                NdVar Fb, NdVar Fc, bool NegProd, bool SubAdd,
                                bool Scalar, unsigned ElemSz,
@@ -84,9 +84,8 @@ static NdVar buildX86FmaResult(LiftStateBase &S, uint16_t ResultSize, NdVar Fa,
   return Acc;
 }
 
-static NdVar buildX86AlternatingFmaResult(LiftStateBase &S,
-                                          uint16_t ResultSize, NdVar Fa,
-                                          NdVar Fb, NdVar Fc,
+static NdVar buildX86AlternatingFmaResult(LiftStateBase &S, uint16_t ResultSize,
+                                          NdVar Fa, NdVar Fb, NdVar Fc,
                                           bool SubtractEven,
                                           unsigned ElementSize) {
   auto Lane = [&](NdVar Value, unsigned Offset) {
@@ -104,9 +103,9 @@ static NdVar buildX86AlternatingFmaResult(LiftStateBase &S,
       Addend = Negated;
     }
     NdVar ResultLane = S.makeTemp(ElementSize);
-    S.emit(NdOp::FLOAT_FMA, ResultLane,
-           {Lane(Fa, Index * ElementSize),
-            Lane(Fb, Index * ElementSize), Addend});
+    S.emit(
+        NdOp::FLOAT_FMA, ResultLane,
+        {Lane(Fa, Index * ElementSize), Lane(Fb, Index * ElementSize), Addend});
     if (Index == 0) {
       Packed = ResultLane;
     } else {
@@ -118,19 +117,21 @@ static NdVar buildX86AlternatingFmaResult(LiftStateBase &S,
   return Packed;
 }
 
-static NdVar buildExactX86FmaResult(
-    LiftStateBase &S, uint16_t ResultSize, NdVar A, NdVar B, NdVar C,
-    NdVar ActiveMask, bool NegateProduct, bool SubtractAddend, bool Scalar,
-    uint16_t ElementSize, NdVar ScalarUpper, X86FPRounding Rounding,
-    bool SuppressExceptions, bool AlternatingAddend = false,
-    bool SubtractEven = false) {
+static NdVar buildExactX86FmaResult(LiftStateBase &S, uint16_t ResultSize,
+                                    NdVar A, NdVar B, NdVar C, NdVar ActiveMask,
+                                    bool NegateProduct, bool SubtractAddend,
+                                    bool Scalar, uint16_t ElementSize,
+                                    NdVar ScalarUpper, X86FPRounding Rounding,
+                                    bool SuppressExceptions,
+                                    bool AlternatingAddend = false,
+                                    bool SubtractEven = false) {
   if (ResultSize == 0 || A.Size != ResultSize || B.Size != ResultSize ||
       C.Size != ResultSize || ActiveMask.Size == 0)
     return {};
-  const uint16_t Control = makeX86FPArithControl(
-      X86FPArithKind::FusedMultiplyAdd, ElementSize == 8, Scalar,
-      SuppressExceptions, Rounding, NegateProduct, SubtractAddend,
-      AlternatingAddend, SubtractEven);
+  const uint16_t Control =
+      makeX86FPArithControl(X86FPArithKind::FusedMultiplyAdd, ElementSize == 8,
+                            Scalar, SuppressExceptions, Rounding, NegateProduct,
+                            SubtractAddend, AlternatingAddend, SubtractEven);
   NdVar Raw = S.makeTemp(ResultSize);
   S.emitIntrinsic(Intrinsic::X86FPArith, Raw,
                   {NdVar::cst(Control, 2), A, B, C, ActiveMask});
@@ -141,8 +142,7 @@ static NdVar buildExactX86FmaResult(
   NdVar Low = S.makeTemp(ElementSize);
   S.emit(NdOp::SUBBYTES, Low, {Raw, NdVar::cst(0, 4)});
   NdVar High = S.makeTemp(ResultSize - ElementSize);
-  S.emit(NdOp::SUBBYTES, High,
-         {ScalarUpper, NdVar::cst(ElementSize, 4)});
+  S.emit(NdOp::SUBBYTES, High, {ScalarUpper, NdVar::cst(ElementSize, 4)});
   NdVar Result = S.makeTemp(ResultSize);
   S.emit(NdOp::CONCAT, Result, {High, Low});
   return Result;
@@ -209,8 +209,7 @@ static bool validateCanonicalEvexFma3(
   const bool EncodedB = (Encoding.P2 & 0x10) != 0;
   const bool EmbeddedRounding = !MemoryForm && EncodedB;
   Broadcast = MemoryForm && EncodedB;
-  if (MemoryForm != (SecondSource.type == X86_OP_MEM) ||
-      (Scalar && Broadcast))
+  if (MemoryForm != (SecondSource.type == X86_OP_MEM) || (Scalar && Broadcast))
     return false;
   if (!MemoryForm && !isVectorRegisterOfSize(SecondSource, VectorSize))
     return false;
@@ -224,9 +223,8 @@ static bool validateCanonicalEvexFma3(
     return false;
 
   SuppressExceptions = EmbeddedRounding;
-  Rounding = EmbeddedRounding
-                 ? static_cast<X86FPRounding>(EncodedLength >> 5)
-                 : X86FPRounding::MXCSR;
+  Rounding = EmbeddedRounding ? static_cast<X86FPRounding>(EncodedLength >> 5)
+                              : X86FPRounding::MXCSR;
   const x86_avx_rm ExpectedRounding =
       EmbeddedRounding
           ? static_cast<x86_avx_rm>(X86_AVX_RM_RN + (EncodedLength >> 5))
@@ -243,8 +241,7 @@ static bool validateCanonicalEvexFma3(
     const RegInfo MaskInfo = mapCapstoneReg(static_cast<x86_reg>(Mask.reg));
     if (!isX86OpmaskOperand(Mask) || Mask.reg == X86_REG_K0 ||
         Mask.size != MaskSize || MaskInfo.Offset == UINT64_C(0xffff) ||
-        MaskInfo.Size < MaskSize ||
-        EncodedMask != Mask.reg - X86_REG_K0 ||
+        MaskInfo.Size < MaskSize || EncodedMask != Mask.reg - X86_REG_K0 ||
         Mask.avx_zero_opmask != ((Encoding.P2 & 0x80) != 0))
       return false;
   } else if (EncodedMask != 0 || (Encoding.P2 & 0x80) != 0) {
@@ -277,8 +274,7 @@ static bool validateCanonicalEvexFma3(
     const cs_x86_op &Operand = X86.operands[Index];
     const bool IsMask = HasWriteMask && Index == 1;
     const bool IsSecondSource = &Operand == &SecondSource;
-    if (Operand.avx_zero_opmask !=
-            (IsMask && (Encoding.P2 & 0x80) != 0) ||
+    if (Operand.avx_zero_opmask != (IsMask && (Encoding.P2 & 0x80) != 0) ||
         Operand.avx_bcast !=
             (IsSecondSource ? ExpectedBroadcast : X86_AVX_BCAST_INVALID))
       return false;
@@ -286,23 +282,21 @@ static bool validateCanonicalEvexFma3(
   return true;
 }
 
-static bool isVexVectorRegisterOfSize(const cs_x86_op &Operand,
-                                      uint16_t Size) {
+static bool isVexVectorRegisterOfSize(const cs_x86_op &Operand, uint16_t Size) {
   return isVectorRegisterOfSize(Operand, Size) &&
          vectorRegisterIndex(Operand) < 16;
 }
 
-static bool validateCanonicalVexFma4(
-    const cs_insn *Insn, const cs_x86 &X86, Arch TargetArch, bool Scalar,
-    uint16_t ElementSize, uint8_t ExpectedOpcode) {
+static bool validateCanonicalVexFma4(const cs_insn *Insn, const cs_x86 &X86,
+                                     Arch TargetArch, bool Scalar,
+                                     uint16_t ElementSize,
+                                     uint8_t ExpectedOpcode) {
   CanonicalVex3EncodingInfo Encoding;
   if (!parseCanonicalVex3EncodingInfo(Insn, X86, TargetArch, Encoding) ||
       (Encoding.P0 & 0x1f) != 0x03 || (Encoding.P1 & 0x03) != 0x01 ||
       Encoding.Opcode != ExpectedOpcode || X86.op_count != 4 ||
-      X86.encoding.imm_size != 1 ||
-      X86.encoding.imm_offset + 1 != Insn->size ||
-      X86.xop_cc != X86_XOP_CC_INVALID ||
-      X86.sse_cc != X86_SSE_CC_INVALID ||
+      X86.encoding.imm_size != 1 || X86.encoding.imm_offset + 1 != Insn->size ||
+      X86.xop_cc != X86_XOP_CC_INVALID || X86.sse_cc != X86_SSE_CC_INVALID ||
       X86.avx_cc != X86_AVX_CC_INVALID || X86.avx_sae ||
       X86.avx_rm != X86_AVX_RM_INVALID || X86.eflags != 0)
     return false;
@@ -310,8 +304,7 @@ static bool validateCanonicalVexFma4(
   const uint16_t VectorSize = X86.operands[0].size;
   if (!isVexVectorRegisterOfSize(X86.operands[0], VectorSize) ||
       !isVexVectorRegisterOfSize(X86.operands[1], VectorSize) ||
-      (Scalar ? VectorSize != 16
-              : (VectorSize != 16 && VectorSize != 32)) ||
+      (Scalar ? VectorSize != 16 : (VectorSize != 16 && VectorSize != 32)) ||
       ((Encoding.P1 & 0x04) != 0) != (VectorSize == 32))
     return false;
 
@@ -324,8 +317,8 @@ static bool validateCanonicalVexFma4(
       ((Encoding.P0 & 0x20) == 0 ? 8 : 0) | (Encoding.ModRM & 7);
   const uint8_t Is4 = Insn->bytes[X86.encoding.imm_offset];
   const unsigned Is4RegisterIndex = Is4 >> 4;
-  if (DestinationIndex >= RegisterLimit ||
-      FirstSourceIndex >= RegisterLimit || Is4RegisterIndex >= RegisterLimit ||
+  if (DestinationIndex >= RegisterLimit || FirstSourceIndex >= RegisterLimit ||
+      Is4RegisterIndex >= RegisterLimit ||
       DestinationIndex != vectorRegisterIndex(X86.operands[0]) ||
       FirstSourceIndex != vectorRegisterIndex(X86.operands[1]))
     return false;
@@ -383,17 +376,17 @@ bool liftSIMDAVXFMA(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     X86FPRounding Rounding = X86FPRounding::MXCSR;
     bool SuppressExceptions = false;
     if (IsEvex) {
-      uint8_t ExpectedOpcode = Order == FmaOrder::Order132 ? 0x98
+      uint8_t ExpectedOpcode = Order == FmaOrder::Order132   ? 0x98
                                : Order == FmaOrder::Order213 ? 0xa8
                                                              : 0xb8;
-      ExpectedOpcode = static_cast<uint8_t>(
-          ExpectedOpcode + (NegProd ? 4 : 0) + (SubAdd ? 2 : 0) +
-          (Scalar ? 1 : 0));
-      if (!validateCanonicalEvexFma3(
-              Insn, X86, L.targetArch(), X86.operands[0],
-              X86.operands[Source1Index], X86.operands[Source2Index],
-              HasWriteMask, Scalar, ElemSz, ExpectedOpcode, MemoryForm,
-              Broadcast, Rounding, SuppressExceptions))
+      ExpectedOpcode =
+          static_cast<uint8_t>(ExpectedOpcode + (NegProd ? 4 : 0) +
+                               (SubAdd ? 2 : 0) + (Scalar ? 1 : 0));
+      if (!validateCanonicalEvexFma3(Insn, X86, L.targetArch(), X86.operands[0],
+                                     X86.operands[Source1Index],
+                                     X86.operands[Source2Index], HasWriteMask,
+                                     Scalar, ElemSz, ExpectedOpcode, MemoryForm,
+                                     Broadcast, Rounding, SuppressExceptions))
         return false;
     }
 
@@ -403,8 +396,7 @@ bool liftSIMDAVXFMA(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     const uint16_t RequiredMaskSize =
         static_cast<uint16_t>(std::max(1u, (LaneCount + 7u) / 8u));
     const uint64_t RelevantMask =
-        LaneCount == 64 ? UINT64_MAX
-                        : (UINT64_C(1) << LaneCount) - UINT64_C(1);
+        LaneCount == 64 ? UINT64_MAX : (UINT64_C(1) << LaneCount) - UINT64_C(1);
     NdVar ActiveMask = NdVar::cst(RelevantMask, RequiredMaskSize);
     if (HasWriteMask) {
       MaskInfo = mapCapstoneReg(static_cast<x86_reg>(X86.operands[1].reg));
@@ -428,17 +420,21 @@ bool liftSIMDAVXFMA(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
           LoadMask = NdVar::cst(1, 8);
         }
       }
-      const uint16_t MemoryTupleSize =
-          Scalar || Broadcast ? ElemSz : Dst.Size;
-      Source2 = emitEvexMaskedMemoryLoad(
-          S, X86.operands[Source2Index], LoadMask, Dst.Size, ElemSz,
-          MemoryTupleSize, Broadcast);
+      const uint16_t MemoryTupleSize = Scalar || Broadcast ? ElemSz : Dst.Size;
+      Source2 = emitEvexMaskedMemoryLoad(S, X86.operands[Source2Index],
+                                         LoadMask, Dst.Size, ElemSz,
+                                         MemoryTupleSize, Broadcast);
     } else {
       Source2 = L.operandRead(S, X86.operands[Source2Index]);
     }
+    // VEX scalar memory operands supply only the low FP element. EVEX masked
+    // loads above already materialize a full vector, as do register operands.
+    const bool ScalarMemorySource =
+        !IsEvex && !HasWriteMask && Scalar &&
+        X86.operands[Source2Index].type == X86_OP_MEM && Source2.Size == ElemSz;
     if (Dst.Size < ElemSz || Dst.Size % ElemSz != 0 ||
         OldDst.Size != Dst.Size || Source1.Size != Dst.Size ||
-        Source2.Size != Dst.Size)
+        (Source2.Size != Dst.Size && !ScalarMemorySource))
       return false;
 
     NdVar Fa;
@@ -462,13 +458,12 @@ bool liftSIMDAVXFMA(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       break;
     }
 
-    NdVar Raw = IsEvex
-                    ? buildExactX86FmaResult(
-                          S, Dst.Size, Fa, Fb, Fc, ActiveMask, NegProd, SubAdd,
-                          Scalar, ElemSz, Source1, Rounding,
-                          SuppressExceptions)
-                    : buildX86FmaResult(S, Dst.Size, Fa, Fb, Fc, NegProd,
-                                        SubAdd, Scalar, ElemSz, Source1);
+    NdVar Raw =
+        IsEvex ? buildExactX86FmaResult(S, Dst.Size, Fa, Fb, Fc, ActiveMask,
+                                        NegProd, SubAdd, Scalar, ElemSz, OldDst,
+                                        Rounding, SuppressExceptions)
+               : buildX86FmaResult(S, Dst.Size, Fa, Fb, Fc, NegProd, SubAdd,
+                                   Scalar, ElemSz, OldDst);
     if (Raw.Size != Dst.Size)
       return false;
     if (!HasWriteMask) {
@@ -521,11 +516,11 @@ bool liftSIMDAVXFMA(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     X86FPRounding Rounding = X86FPRounding::MXCSR;
     bool SuppressExceptions = false;
     if (IsEvex) {
-      uint8_t ExpectedOpcode = Order == FmaOrder::Order132 ? 0x90
+      uint8_t ExpectedOpcode = Order == FmaOrder::Order132   ? 0x90
                                : Order == FmaOrder::Order213 ? 0xa0
                                                              : 0xb0;
-      ExpectedOpcode = static_cast<uint8_t>(
-          ExpectedOpcode + (SubtractEven ? 0x06 : 0x07));
+      ExpectedOpcode =
+          static_cast<uint8_t>(ExpectedOpcode + (SubtractEven ? 0x06 : 0x07));
       if (!validateCanonicalEvexFma3(
               Insn, X86, L.targetArch(), X86.operands[0],
               X86.operands[Source1Index], X86.operands[Source2Index],
@@ -539,8 +534,7 @@ bool liftSIMDAVXFMA(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     const uint16_t RequiredMaskSize =
         static_cast<uint16_t>(std::max(1u, (LaneCount + 7u) / 8u));
     const uint64_t RelevantMask =
-        LaneCount == 64 ? UINT64_MAX
-                        : (UINT64_C(1) << LaneCount) - UINT64_C(1);
+        LaneCount == 64 ? UINT64_MAX : (UINT64_C(1) << LaneCount) - UINT64_C(1);
     NdVar ActiveMask = NdVar::cst(RelevantMask, RequiredMaskSize);
     if (HasWriteMask) {
       const RegInfo MaskInfo =
@@ -555,8 +549,8 @@ bool liftSIMDAVXFMA(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     const NdVar FirstSource = L.operandRead(S, X86.operands[Source1Index]);
     NdVar SecondSource;
     if (MemoryForm) {
-      const uint16_t MemoryTupleSize = Broadcast ? ElementSize
-                                                 : Destination.Size;
+      const uint16_t MemoryTupleSize =
+          Broadcast ? ElementSize : Destination.Size;
       SecondSource = emitEvexMaskedMemoryLoad(
           S, X86.operands[Source2Index], ActiveMask, Destination.Size,
           ElementSize, MemoryTupleSize, Broadcast);
@@ -590,18 +584,17 @@ bool liftSIMDAVXFMA(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       break;
     }
     const NdVar Raw =
-        IsEvex
-            ? buildExactX86FmaResult(
-                  S, Destination.Size, A, B, C, ActiveMask, false, false,
-                  false, ElementSize, FirstSource, Rounding,
-                  SuppressExceptions, true, SubtractEven)
-            : buildX86AlternatingFmaResult(
-                  S, Destination.Size, A, B, C, SubtractEven, ElementSize);
+        IsEvex ? buildExactX86FmaResult(S, Destination.Size, A, B, C,
+                                        ActiveMask, false, false, false,
+                                        ElementSize, FirstSource, Rounding,
+                                        SuppressExceptions, true, SubtractEven)
+               : buildX86AlternatingFmaResult(S, Destination.Size, A, B, C,
+                                              SubtractEven, ElementSize);
     if (Raw.Size != Destination.Size)
       return false;
     if (HasWriteMask)
-      return emitMaskedVectorResult(L, S, X86.operands[0], X86.operands[1],
-                                    Raw, ElementSize);
+      return emitMaskedVectorResult(L, S, X86.operands[0], X86.operands[1], Raw,
+                                    ElementSize);
     S.emit(NdOp::COPY, Destination, {Raw});
     return true;
   };
@@ -621,11 +614,9 @@ bool liftSIMDAVXFMA(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       return Source.Size == Destination.Size ||
              (Scalar && Source.Size == ElementSize);
     };
-    if (Destination.Size < ElementSize ||
-        Destination.Size % ElementSize != 0 ||
+    if (Destination.Size < ElementSize || Destination.Size % ElementSize != 0 ||
         FirstSource.Size != Destination.Size ||
-        !IsValidSourceSize(SecondSource) ||
-        !IsValidSourceSize(ThirdSource))
+        !IsValidSourceSize(SecondSource) || !IsValidSourceSize(ThirdSource))
       return false;
 
     const NdVar Raw = buildX86FmaResult(
@@ -635,11 +626,10 @@ bool liftSIMDAVXFMA(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     return true;
   };
 
-  const auto EmitAlternatingFma4 = [&](bool SubtractEven,
-                                       unsigned ElementSize,
+  const auto EmitAlternatingFma4 = [&](bool SubtractEven, unsigned ElementSize,
                                        uint8_t ExpectedOpcode) {
-    if (!validateCanonicalVexFma4(Insn, X86, L.targetArch(), false,
-                                  ElementSize, ExpectedOpcode))
+    if (!validateCanonicalVexFma4(Insn, X86, L.targetArch(), false, ElementSize,
+                                  ExpectedOpcode))
       return false;
 
     const NdVar Destination = L.operandWrite(X86.operands[0]);
@@ -707,9 +697,9 @@ bool liftSIMDAVXFMA(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
         InsnId == X86_INS_VFMADDSS || InsnId == X86_INS_VFMADDSD;
     const bool Double =
         InsnId == X86_INS_VFMADDPD || InsnId == X86_INS_VFMADDSD;
-    return EmitFma4(false, false, Scalar, Double ? 8 : 4,
-                    static_cast<uint8_t>(0x68 + (Double ? 1 : 0) +
-                                         (Scalar ? 2 : 0)));
+    return EmitFma4(
+        false, false, Scalar, Double ? 8 : 4,
+        static_cast<uint8_t>(0x68 + (Double ? 1 : 0) + (Scalar ? 2 : 0)));
   }
   case X86_INS_VFMSUB132PD:
   case X86_INS_VFMSUB132PS:
@@ -749,9 +739,9 @@ bool liftSIMDAVXFMA(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
         InsnId == X86_INS_VFMSUBSS || InsnId == X86_INS_VFMSUBSD;
     const bool Double =
         InsnId == X86_INS_VFMSUBPD || InsnId == X86_INS_VFMSUBSD;
-    return EmitFma4(false, true, Scalar, Double ? 8 : 4,
-                    static_cast<uint8_t>(0x6c + (Double ? 1 : 0) +
-                                         (Scalar ? 2 : 0)));
+    return EmitFma4(
+        false, true, Scalar, Double ? 8 : 4,
+        static_cast<uint8_t>(0x6c + (Double ? 1 : 0) + (Scalar ? 2 : 0)));
   }
   case X86_INS_VFNMADD132PD:
   case X86_INS_VFNMADD132PS:
@@ -791,9 +781,9 @@ bool liftSIMDAVXFMA(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
         InsnId == X86_INS_VFNMADDSS || InsnId == X86_INS_VFNMADDSD;
     const bool Double =
         InsnId == X86_INS_VFNMADDPD || InsnId == X86_INS_VFNMADDSD;
-    return EmitFma4(true, false, Scalar, Double ? 8 : 4,
-                    static_cast<uint8_t>(0x78 + (Double ? 1 : 0) +
-                                         (Scalar ? 2 : 0)));
+    return EmitFma4(
+        true, false, Scalar, Double ? 8 : 4,
+        static_cast<uint8_t>(0x78 + (Double ? 1 : 0) + (Scalar ? 2 : 0)));
   }
   case X86_INS_VFNMSUB132PD:
   case X86_INS_VFNMSUB132PS:
@@ -833,41 +823,35 @@ bool liftSIMDAVXFMA(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
         InsnId == X86_INS_VFNMSUBSS || InsnId == X86_INS_VFNMSUBSD;
     const bool Double =
         InsnId == X86_INS_VFNMSUBPD || InsnId == X86_INS_VFNMSUBSD;
-    return EmitFma4(true, true, Scalar, Double ? 8 : 4,
-                    static_cast<uint8_t>(0x7c + (Double ? 1 : 0) +
-                                         (Scalar ? 2 : 0)));
+    return EmitFma4(
+        true, true, Scalar, Double ? 8 : 4,
+        static_cast<uint8_t>(0x7c + (Double ? 1 : 0) + (Scalar ? 2 : 0)));
   }
   // FMADDSUB/FMSUBADD: fused alternating add/subtract per lane.
   case X86_INS_VFMADDSUB132PD:
   case X86_INS_VFMADDSUB132PS:
-    return EmitAlternatingFma3(
-        FmaOrder::Order132, true,
-        InsnId == X86_INS_VFMADDSUB132PD ? 8 : 4);
+    return EmitAlternatingFma3(FmaOrder::Order132, true,
+                               InsnId == X86_INS_VFMADDSUB132PD ? 8 : 4);
   case X86_INS_VFMADDSUB213PD:
   case X86_INS_VFMADDSUB213PS:
-    return EmitAlternatingFma3(
-        FmaOrder::Order213, true,
-        InsnId == X86_INS_VFMADDSUB213PD ? 8 : 4);
+    return EmitAlternatingFma3(FmaOrder::Order213, true,
+                               InsnId == X86_INS_VFMADDSUB213PD ? 8 : 4);
   case X86_INS_VFMADDSUB231PD:
   case X86_INS_VFMADDSUB231PS:
-    return EmitAlternatingFma3(
-        FmaOrder::Order231, true,
-        InsnId == X86_INS_VFMADDSUB231PD ? 8 : 4);
+    return EmitAlternatingFma3(FmaOrder::Order231, true,
+                               InsnId == X86_INS_VFMADDSUB231PD ? 8 : 4);
   case X86_INS_VFMSUBADD132PD:
   case X86_INS_VFMSUBADD132PS:
-    return EmitAlternatingFma3(
-        FmaOrder::Order132, false,
-        InsnId == X86_INS_VFMSUBADD132PD ? 8 : 4);
+    return EmitAlternatingFma3(FmaOrder::Order132, false,
+                               InsnId == X86_INS_VFMSUBADD132PD ? 8 : 4);
   case X86_INS_VFMSUBADD213PD:
   case X86_INS_VFMSUBADD213PS:
-    return EmitAlternatingFma3(
-        FmaOrder::Order213, false,
-        InsnId == X86_INS_VFMSUBADD213PD ? 8 : 4);
+    return EmitAlternatingFma3(FmaOrder::Order213, false,
+                               InsnId == X86_INS_VFMSUBADD213PD ? 8 : 4);
   case X86_INS_VFMSUBADD231PD:
   case X86_INS_VFMSUBADD231PS:
-    return EmitAlternatingFma3(
-        FmaOrder::Order231, false,
-        InsnId == X86_INS_VFMSUBADD231PD ? 8 : 4);
+    return EmitAlternatingFma3(FmaOrder::Order231, false,
+                               InsnId == X86_INS_VFMSUBADD231PD ? 8 : 4);
 
   case X86_INS_VFMADDSUBPD:
     return EmitAlternatingFma4(true, 8, 0x5d);

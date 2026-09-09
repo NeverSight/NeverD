@@ -80,7 +80,7 @@ static std::vector<RoundTripTC> makeFMATC(const char *prefix, const char *T,
      "  return ("+t+")acc; }\n",
      {0x3456u}, "FMARounding", 2, fl, false, tov, ucCpu},
 
-    // double FMA chain: s = fma(x,y,s), bit-accumulated (i386/ARM32 use low 32b).
+    // double FMA chain: fold both 32-bit halves on every target.
     {p+"_fma_chain",
      t+" "+p+"_fma_chain("+t+" a){ unsigned h=(unsigned)a; unsigned acc=0; double s=1.0;\n"
      "  for(int i=0;i<64;i++){ h=h*1103515245u+12345u;\n"
@@ -88,7 +88,7 @@ static std::vector<RoundTripTC> makeFMATC(const char *prefix, const char *T,
      "    double y=(double)(int)((h>>8)&0x1FFFF)*0.0000071+1.0;\n"
      "    s=__builtin_fma(x,y,s);\n"
      "    if(s>1e9||s<-1e9) s*=0.0009765625;\n"
-     "    unsigned long bb; __builtin_memcpy(&bb,&s,8);\n"
+     "    unsigned long long bb; __builtin_memcpy(&bb,&s,8);\n"
      "    acc=acc*131u+(unsigned)bb+(unsigned)(bb>>32); }\n"
      "  return ("+t+")acc; }\n",
      {0x4567u}, "FMARounding", 2, fl, false, tov, ucCpu},
@@ -130,11 +130,16 @@ static std::vector<RoundTripTC> makeA64FMATC() {
   auto Cases = makeFMATC("a64fma", "long", "-fno-math-errno", "", -1);
   RoundTripTC Directed{
       "a64_fnmadd_upward",
-      "long a64_fnmadd_upward(long a){ double one=1.0,tail,r; unsigned long bits;\n"
+      "long a64_fnmadd_upward(long a){ double one=1.0,tail,r; unsigned long "
+      "bits;\n"
       "  __builtin_memcpy(&tail,&a,8);\n"
-      "  __asm__ volatile(\"fnmadd %d0,%d1,%d2,%d3\":\"=w\"(r):\"w\"(one),\"w\"(one),\"w\"(tail));\n"
+      "  __asm__ volatile(\"fnmadd "
+      "%d0,%d1,%d2,%d3\":\"=w\"(r):\"w\"(one),\"w\"(one),\"w\"(tail));\n"
       "  __builtin_memcpy(&bits,&r,8); return (long)bits; }\n",
-      {0x3CA8000000000000ULL}, "FMARounding", 0, "-fno-math-errno"};
+      {0x3CA8000000000000ULL},
+      "FMARounding",
+      0,
+      "-fno-math-errno"};
   // FPCR.RMode = 01: round toward positive infinity.  The exact result is
   // -(1.0 + 0.75 ulp), which FNMADD rounds to -1.0 in one step.
   Directed.InitialAArch64FPCR = 1ULL << 22;
@@ -142,11 +147,14 @@ static std::vector<RoundTripTC> makeA64FMATC() {
   return Cases;
 }
 static const std::vector<RoundTripTC> kA64 = makeA64FMATC();
-static const std::vector<RoundTripTC> kARM =
-    makeFMATC("armfma", "int", "-mfpu=neon-vfpv4 -fno-math-errno", "",
-              UC_CPU_ARM_MAX);
+static const std::vector<RoundTripTC> kARM = makeFMATC(
+    "armfma", "int", "-mfpu=neon-vfpv4 -fno-math-errno", "", UC_CPU_ARM_MAX);
 
-INSTANTIATE_TEST_SUITE_P(FMARounding, X64FMARoundingRT, ::testing::ValuesIn(kX64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(FMARounding, X86FMARoundingRT, ::testing::ValuesIn(kX86), rtTCName);
-INSTANTIATE_TEST_SUITE_P(FMARounding, A64FMARoundingRT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(FMARounding, ARM32FMARoundingRT, ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(FMARounding, X64FMARoundingRT,
+                         ::testing::ValuesIn(kX64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(FMARounding, X86FMARoundingRT,
+                         ::testing::ValuesIn(kX86), rtTCName);
+INSTANTIATE_TEST_SUITE_P(FMARounding, A64FMARoundingRT,
+                         ::testing::ValuesIn(kA64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(FMARounding, ARM32FMARoundingRT,
+                         ::testing::ValuesIn(kARM), rtTCName);

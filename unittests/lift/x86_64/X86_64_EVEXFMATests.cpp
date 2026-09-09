@@ -19,9 +19,10 @@ namespace {
 
 constexpr va_t kAddress = 0x1000;
 
-std::vector<LowOp> liftX64(const std::vector<uint8_t> &Bytes) {
+std::vector<LowOp> liftForArch(const std::vector<uint8_t> &Bytes,
+                               Arch Target = Arch::X64) {
   Decoder Dec;
-  if (!Dec.init(Arch::X64)) {
+  if (!Dec.init(Target)) {
     ADD_FAILURE() << "x86-64 decoder initialization failed";
     return {};
   }
@@ -122,7 +123,7 @@ template <typename Float>
 void expectPackedFma(FmaFamily Family, FmaOrder Order, size_t VectorBytes,
                      bool Masked = false, bool ZeroMask = false) {
   const bool IsDouble = sizeof(Float) == sizeof(double);
-  const std::vector<LowOp> Ops = liftX64(
+  const std::vector<LowOp> Ops = liftForArch(
       fmaEncoding(Family, Order, IsDouble, VectorBytes, Masked, ZeroMask));
   ASSERT_FALSE(Ops.empty());
 
@@ -175,7 +176,7 @@ void expectScalarFma(FmaFamily Family, FmaOrder Order, bool Masked,
                      bool ZeroMask, bool MaskBit) {
   const bool IsDouble = sizeof(Float) == sizeof(double);
   const std::vector<LowOp> Ops =
-      liftX64(scalarFmaEncoding(Family, Order, IsDouble, Masked, ZeroMask));
+      liftForArch(scalarFmaEncoding(Family, Order, IsDouble, Masked, ZeroMask));
   ASSERT_FALSE(Ops.empty());
 
   const size_t Lanes = 64 / sizeof(Float);
@@ -193,7 +194,7 @@ void expectScalarFma(FmaFamily Family, FmaOrder Order, bool Masked,
   else if (!ZeroMask)
     Expected[0] = Destination[0];
   for (size_t Lane = 1; Lane < XmmLanes; ++Lane)
-    Expected[Lane] = Source1[Lane];
+    Expected[Lane] = Destination[Lane];
 
   const auto ToBytes = [](const std::vector<Float> &Values) {
     std::vector<uint8_t> Bytes(Values.size() * sizeof(Float));
@@ -224,7 +225,8 @@ void expectScalarFma(FmaFamily Family, FmaOrder Order, bool Masked,
 
 TEST(X86EVEXFMA, Vfmadd132psZmmUsesEveryLaneAndSingleRounding) {
   // vfmadd132ps zmm0, zmm2, zmm19
-  const std::vector<LowOp> Ops = liftX64({0x62, 0xb2, 0x6d, 0x48, 0x98, 0xc3});
+  const std::vector<LowOp> Ops =
+      liftForArch({0x62, 0xb2, 0x6d, 0x48, 0x98, 0xc3});
   ASSERT_FALSE(Ops.empty());
 
   std::vector<float> Destination(16), Source1(16), Source2(16), Expected(16);
@@ -263,7 +265,8 @@ TEST(X86EVEXFMA, Vfmadd132psZmmUsesEveryLaneAndSingleRounding) {
 
 TEST(X86EVEXFMA, Vfmadd132pdZmmUsesSingleRounding) {
   // vfmadd132pd zmm0, zmm2, zmm19
-  const std::vector<LowOp> Ops = liftX64({0x62, 0xb2, 0xed, 0x48, 0x98, 0xc3});
+  const std::vector<LowOp> Ops =
+      liftForArch({0x62, 0xb2, 0xed, 0x48, 0x98, 0xc3});
   ASSERT_FALSE(Ops.empty());
 
   std::vector<double> Destination(8), Source1(8), Source2(8), Expected(8);
@@ -351,7 +354,7 @@ TEST(X86EVEXFMA, PackedMergeAndZeroMasksApplyAfterEveryFusedOperation) {
 }
 
 TEST(X86EVEXFMA,
-     ScalarOrdersSignsAndMasksPreserveSource1XmmAndClearUpperVectorState) {
+     ScalarOrdersSignsAndMasksPreserveDestinationXmmAndClearUpperVectorState) {
   constexpr FmaFamily Families[] = {
       FmaFamily::Add,
       FmaFamily::Sub,
@@ -397,7 +400,7 @@ TEST(X86EVEXFMA, EmbeddedRoundingOverridesMXCSRAndSuppressesInexactState) {
     // value despite MXCSR requesting round-toward-zero, and SAE preserves
     // MXCSR.
     const std::vector<LowOp> Ops =
-        liftX64({0x62, 0xb2, 0xed, 0x18, 0xbc, 0xc3});
+        liftForArch({0x62, 0xb2, 0xed, 0x18, 0xbc, 0xc3});
     ASSERT_FALSE(Ops.empty());
     const std::vector<double> DestinationValues(
         8, std::bit_cast<double>(UINT64_C(0x3ff0000000000001)));
@@ -426,9 +429,9 @@ TEST(X86EVEXFMA, EmbeddedRoundingOverridesMXCSRAndSuppressesInexactState) {
     // result is halfway above an odd significand; round-toward-zero retains
     // that lower value even though MXCSR requests nearest-even.
     const std::vector<LowOp> Ops =
-        liftX64({0x62, 0xb2, 0x6d, 0x79, 0x9f, 0xc3});
+        liftForArch({0x62, 0xb2, 0x6d, 0x79, 0x9f, 0xc3});
     ASSERT_FALSE(Ops.empty());
-    std::vector<float> DestinationValues(16, 0.0f);
+    std::vector<float> DestinationValues(16, 17.0f);
     std::vector<float> Source1Values(16, 0.0f);
     std::vector<float> Source2Values(16, 0.0f);
     std::vector<float> Expected(16, 0.0f);
@@ -438,7 +441,7 @@ TEST(X86EVEXFMA, EmbeddedRoundingOverridesMXCSRAndSuppressesInexactState) {
     Expected[0] = std::bit_cast<float>(UINT32_C(0x3f800001));
     for (size_t Lane = 1; Lane < 4; ++Lane) {
       Source1Values[Lane] = static_cast<float>(10 + Lane);
-      Expected[Lane] = Source1Values[Lane];
+      Expected[Lane] = DestinationValues[Lane];
     }
     constexpr uint32_t InitialMXCSR = UINT32_C(0x1f80);
 
@@ -455,6 +458,82 @@ TEST(X86EVEXFMA, EmbeddedRoundingOverridesMXCSRAndSuppressesInexactState) {
               floatVector(Expected));
     EXPECT_EQ(Emulator.getMXCSR(), InitialMXCSR);
   }
+}
+
+template <typename Float>
+void expectVexScalarFma(Arch Target, FmaFamily Family, FmaOrder Order,
+                        bool Memory) {
+  const std::vector<uint8_t> Bytes = {
+      0xc4, 0xe2, static_cast<uint8_t>(sizeof(Float) == 8 ? 0xe9 : 0x69),
+      fmaOpcode(Family, Order, true),
+      static_cast<uint8_t>(Memory ? 0x00 : 0xc3)};
+  std::vector<LowOp> Ops;
+  ASSERT_NO_THROW(Ops = liftForArch(Bytes, Target));
+  ASSERT_FALSE(Ops.empty());
+  const auto ToBytes = [](const std::vector<Float> &Values) {
+    std::vector<uint8_t> Result(Values.size() * sizeof(Float));
+    std::memcpy(Result.data(), Values.data(), Result.size());
+    return Result;
+  };
+  std::vector<Float> Destination(64 / sizeof(Float), Float(17));
+  std::vector<Float> Source1(Destination.size(), Float(29));
+  std::vector<Float> Source2(Destination.size(), Float(41));
+  Destination[0] = Float(1.25);
+  Source1[0] = Float(-0.75);
+  Source2[0] = Float(2.5);
+  std::vector<Float> Expected(Destination.size(), Float{});
+  Expected[0] =
+      expectedFma(Family, Order, Destination[0], Source1[0], Source2[0]);
+  for (size_t I = 1; I < 16 / sizeof(Float); ++I)
+    Expected[I] = Destination[I];
+
+  BinaryImage Image;
+  Image.Arch = Target;
+  Image.Bits = Target == Arch::X64 ? Bitness::Bits64 : Bitness::Bits32;
+  Segment Data;
+  Data.VA = 0x4000;
+  Data.Size = sizeof(Float);
+  Data.Flags = SegmentFlags::Readable;
+  Data.Data = ToBytes({Source2[0]});
+  Image.Segments.push_back(std::move(Data));
+  NdOpEmulator Emulator(Image);
+  Emulator.setStrictMode(true);
+  const RegInfo DestinationReg = mapCapstoneReg(X86_REG_ZMM0);
+  Emulator.setRegisterBytes(DestinationReg.Offset, ToBytes(Destination));
+  Emulator.setRegisterBytes(mapCapstoneReg(X86_REG_ZMM2).Offset,
+                            ToBytes(Source1));
+  Emulator.setRegisterBytes(mapCapstoneReg(X86_REG_ZMM3).Offset,
+                            ToBytes(Source2));
+  Emulator.setRegister(mapCapstoneReg(X86_REG_RAX).Offset, 0x4000);
+  if (Memory) {
+    size_t Loads = 0;
+    for (const LowOp &Op : Ops)
+      if (Op.Opcode == NdOp::LOAD) {
+        ++Loads;
+        EXPECT_EQ(Op.Output.Size, sizeof(Float));
+      }
+    EXPECT_EQ(Loads, 1u);
+  }
+  EXPECT_EQ(Emulator.run(Ops), Ops.size());
+  const auto Result = Emulator.getRegisterBytes(DestinationReg.Offset);
+  ASSERT_TRUE(Result);
+  EXPECT_EQ(*Result, ToBytes(Expected));
+}
+
+TEST(X86VEXFMA, ScalarRegisterAndMemoryFormsPreserveDestinationLanes) {
+  for (Arch Target : {Arch::X86, Arch::X64})
+    for (FmaFamily Family :
+         {FmaFamily::Add, FmaFamily::Sub, FmaFamily::NegAdd, FmaFamily::NegSub})
+      for (FmaOrder Order :
+           {FmaOrder::Order132, FmaOrder::Order213, FmaOrder::Order231})
+        for (bool Memory : {false, true}) {
+          SCOPED_TRACE(std::to_string(static_cast<int>(Target)) + "/" +
+                       std::to_string(static_cast<int>(Family)) + "/" +
+                       std::to_string(static_cast<int>(Order)) + "/" +
+                       std::to_string(Memory));
+          expectVexScalarFma<float>(Target, Family, Order, Memory);
+          expectVexScalarFma<double>(Target, Family, Order, Memory);
+        }
 }
 
 } // namespace
