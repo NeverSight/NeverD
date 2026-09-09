@@ -109,19 +109,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: python scripts/check_docs_i18n.py
 
-  build:
-    name: Build NeverD (${{ matrix.host }})
+  # A matrix-level dependency waits for every host, including queued siblings.
+  # Independent jobs let each platform use its CLI as soon as its build ends.
+  build-linux:
+    name: Build NeverD (linux-x86_64)
     needs: trigger
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - host: linux-x86_64
-            runner: ubuntu-24.04
-          - host: macos-arm64
-            runner: macos-26
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -132,14 +126,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Linux dependencies
-        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install --yes clang cmake ninja-build zlib1g-dev
-      - name: macOS dependencies and pinned compiler
-        if: runner.os == 'macOS'
-        run: |
-          brew install cmake ninja
-          test -d /Applications/Xcode_26.5.app/Contents/Developer
-          echo 'DEVELOPER_DIR=/Applications/Xcode_26.5.app/Contents/Developer' >> "$GITHUB_ENV"
       - name: Configure current C++ recovery against the pinned LLVM
         run: |
           cmake -S . -B build-real-apps -G Ninja \
@@ -154,7 +141,7 @@ jobs:
       - name: Bind binary artifact to this exact source
         env:
           CONSUMER_COMMIT: ${{ needs.trigger.outputs.consumer_commit }}
-          BUILD_HOST: ${{ matrix.host }}
+          BUILD_HOST: linux-x86_64
         run: |
           python - <<'PY'
           import hashlib, json, os
@@ -178,7 +165,7 @@ jobs:
       - name: Publish native CLI and runtime libraries
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: neverd-real-apps-${{ matrix.host }}
+          name: neverd-real-apps-linux-x86_64
           path: ${{ runner.temp }}/neverd-host.tar.gz
           if-no-files-found: error
           retention-days: 7
@@ -186,7 +173,80 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: real-app-build-${{ matrix.host }}
+          name: real-app-build-linux-x86_64
+          path: |
+            build-real-apps/CMakeCache.txt
+            build-real-apps/CMakeFiles/CMakeConfigureLog.yaml
+            build-real-apps/compile_commands.json
+            build-real-apps/bin/consumer-build.json
+          retention-days: 7
+
+  build-macos:
+    name: Build NeverD (macos-arm64)
+    needs: trigger
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.trigger.outputs.consumer_commit }}
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: macOS dependencies and pinned compiler
+        run: |
+          brew install cmake ninja
+          test -d /Applications/Xcode_26.5.app/Contents/Developer
+          echo 'DEVELOPER_DIR=/Applications/Xcode_26.5.app/Contents/Developer' >> "$GITHUB_ENV"
+      - name: Configure current C++ recovery against the pinned LLVM
+        run: |
+          cmake -S . -B build-real-apps -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DNEVERD_LLVM_PREBUILT=ON \
+            -DNEVERD_BUILD_PLUGINS=OFF \
+            -DNEVERD_ENABLE_PYTHON_PLUGINS=OFF \
+            -DBUILD_TESTING=OFF
+      - name: Build CLI
+        run: cmake --build build-real-apps --target neverd --parallel 3
+      - name: Bind binary artifact to this exact source
+        env:
+          CONSUMER_COMMIT: ${{ needs.trigger.outputs.consumer_commit }}
+          BUILD_HOST: macos-arm64
+        run: |
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          binary = Path('build-real-apps/bin/neverd')
+          receipt = {'schema_version': 1, 'consumer_commit': os.environ['CONSUMER_COMMIT'],
+                     'host': os.environ['BUILD_HOST'],
+                     'neverd_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+                     'runtime_files': []}
+          for path in sorted(binary.parent.rglob('*')):
+              if path.is_symlink():
+                  raise SystemExit(f'Runtime artifact must be standalone: {path}')
+              if path.is_file():
+                  receipt['runtime_files'].append({
+                      'path': path.relative_to(binary.parent).as_posix(),
+                      'size': path.stat().st_size,
+                      'sha256': hashlib.sha256(path.read_bytes()).hexdigest()})
+          binary.with_name('consumer-build.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          PY
+          tar -czf "$RUNNER_TEMP/neverd-host.tar.gz" -C build-real-apps bin
+      - name: Publish native CLI and runtime libraries
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: neverd-real-apps-macos-arm64
+          path: ${{ runner.temp }}/neverd-host.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+      - name: Preserve build evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: real-app-build-macos-arm64
           path: |
             build-real-apps/CMakeCache.txt
             build-real-apps/CMakeFiles/CMakeConfigureLog.yaml
@@ -195,14 +255,14 @@ jobs:
           retention-days: 7
 
       - name: Collect actual iOS SDK declaration and import dependencies
-        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        if: ${{ !cancelled() }}
         env:
           CONSUMER_COMMIT: ${{ needs.trigger.outputs.consumer_commit }}
         run: |
           python scripts/collect_mobile_ios_sdk_declarations.py \
             --sdk-version 26.5 --output "$RUNNER_TEMP/ios-sdk-declarations"
       - name: Preserve SDK declaration evidence for native source recovery
-        if: ${{ always() && runner.os == 'macOS' }}
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mobile-ios-sdk-declarations
@@ -212,9 +272,9 @@ jobs:
 
   android:
     name: Android ${{ matrix.case_id }}
-    needs: [trigger, guards, build]
-    # A failed sibling host build does not discard the available host's app
-    # evidence. A missing own-host artifact still fails its download and case.
+    needs: [trigger, guards, build-linux]
+    # Each platform waits only for its own host. A missing own-host artifact
+    # still fails its download and case; both builds remain release gates.
     if: ${{ !cancelled() && needs.trigger.result == 'success' && needs.guards.outputs.android_matrix != '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 80
@@ -276,7 +336,7 @@ jobs:
 
   ios:
     name: iOS ${{ matrix.case_id }}
-    needs: [trigger, guards, build]
+    needs: [trigger, guards, build-macos]
     if: ${{ !cancelled() && needs.trigger.result == 'success' && needs.guards.outputs.ios_matrix != '' }}
     runs-on: macos-26
     timeout-minutes: ${{ matrix.job_timeout_minutes }}
@@ -361,7 +421,7 @@ jobs:
   release-gate:
     name: Complete mobile release qualification
     if: ${{ always() && needs.trigger.result == 'success' }}
-    needs: [trigger, producer, guards, build, android, ios]
+    needs: [trigger, producer, guards, build-linux, build-macos, android, ios]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:

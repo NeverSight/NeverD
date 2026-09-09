@@ -43,6 +43,8 @@ class MobileRealAppsMatrixTests(unittest.TestCase):
         self.assertEqual(generated["required_case_count"], 22)
         self.assertEqual(generated["baseline_case_count"], 6)
         self.assertEqual(set(generated["required_case_ids"]), {case["id"] for case in manifest["required_cases"]})
+        self.assertEqual(Counter(manifest["required_jobs"]), Counter(
+            ("trigger", "producer", "guards", "build-linux", "build-macos", "android", "ios")))
         self.assertEqual({row["java_version"] for row in android}, {"21"})
         expected_packages = {"build-tools;35.0.0", "build-tools;36.0.0", "platforms;android-35", "platforms;android-36"}
         self.assertTrue(all(set(row["sdk_packages"]) == expected_packages for row in android))
@@ -289,21 +291,77 @@ class MobileRealAppsMatrixTests(unittest.TestCase):
             self.assertEqual(result, 1)
             self.assertFalse(output.exists())
 
-    def test_workflow_consumes_full_outputs_and_does_not_require_sibling_build_success(self):
-        workflow = WORKFLOW.read_text(encoding="utf-8")
-        for platform in ("android", "ios"):
-            job = re.search(rf"(?ms)^  {platform}:\n(.*?)(?=^  \S|\Z)", workflow)
+    def assert_host_routing(self, workflow):
+        active = "\n".join(line for line in workflow.splitlines() if not line.lstrip().startswith("#"))
+
+        def artifact_names(body, action):
+            names = []
+            for step in re.findall(r"(?ms)^      - (.*?)(?=^      - |\Z)", body):
+                if f"uses: actions/{action}-artifact@" in step:
+                    name = re.search(r"(?m)^          name: ([^\n]+)$", step)
+                    self.assertIsNotNone(name)
+                    names.append(name[1])
+            return names
+
+        for platform, host, runner, build_name in (
+                ("android", "linux-x86_64", "ubuntu-24.04", "build-linux"),
+                ("ios", "macos-arm64", "macos-26", "build-macos")):
+            build = re.search(rf"(?ms)^  {build_name}:\n(.*?)(?=^  \S|\Z)", active)
+            self.assertIsNotNone(build, f"missing {build_name} job")
+            build = build[1]
+            self.assertRegex(build, rf"(?m)^    runs-on: {re.escape(runner)}$")
+            self.assertRegex(build, r"(?m)^    needs: trigger$")
+            self.assertNotRegex(build, r"(?m)^    strategy:")
+            self.assertNotIn("matrix.", build)
+            self.assertEqual(re.findall(r"(?m)^          BUILD_HOST: ([^\n]+)$", build), [host])
+            self.assertIn("'host': os.environ['BUILD_HOST']", build)
+            expected_uploads = [f"neverd-real-apps-{host}", f"real-app-build-{host}"]
+            if platform == "ios":
+                expected_uploads.append("mobile-ios-sdk-declarations")
+                self.assertIn("python scripts/collect_mobile_ios_sdk_declarations.py", build)
+            else:
+                self.assertNotIn("collect_mobile_ios_sdk_declarations.py", build)
+            self.assertEqual(artifact_names(build, "upload"), expected_uploads)
+
+            job = re.search(rf"(?ms)^  {platform}:\n(.*?)(?=^  \S|\Z)", active)
             self.assertIsNotNone(job, f"missing {platform} job")
             body = job.group(1)
             self.assertIn(f"matrix: ${{{{ fromJSON(needs.guards.outputs.{platform}_matrix) }}}}", body)
-            self.assertIn("needs: [trigger, guards, build]", body)
+            self.assertIn(f"needs: [trigger, guards, {build_name}]", body)
+            self.assertRegex(body, rf"(?m)^    runs-on: {re.escape(runner)}$")
+            self.assertEqual(artifact_names(body, "download"), [f"neverd-real-apps-{host}"])
             self.assertIn("needs.trigger.result == 'success'", body)
             self.assertIn(f"needs.guards.outputs.{platform}_matrix != ''", body)
-            self.assertNotIn("needs.build.result == 'success'", body)
+            self.assertNotIn(f"needs.{build_name}.result == 'success'", body)
             self.assertIn("ref: ${{ matrix.source_commit }}", body)
             self.assertIn("name: real-app-evidence-${{ matrix.case_id }}", body)
             self.assertNotIn("-official-release\n", body)
         self.assertIn("python scripts/check_docs_i18n.py", workflow)
+
+    def test_workflow_consumes_full_outputs_without_waiting_for_the_sibling_host(self):
+        self.assert_host_routing(WORKFLOW.read_text(encoding="utf-8"))
+
+    def test_host_runner_receipt_and_artifact_exchange_mutations_fail(self):
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        for platform, build, host, runner, other_host, other_runner in (
+                ("android", "build-linux", "linux-x86_64", "ubuntu-24.04", "macos-arm64", "macos-26"),
+                ("ios", "build-macos", "macos-arm64", "macos-26", "linux-x86_64", "ubuntu-24.04")):
+            mutations = (
+                (build, f"runs-on: {runner}", f"runs-on: {other_runner}"),
+                (build, f"BUILD_HOST: {host}", f"BUILD_HOST: {other_host}"),
+                (build, f"name: neverd-real-apps-{host}", f"name: neverd-real-apps-{other_host}"),
+                (build, f"name: real-app-build-{host}", f"name: real-app-build-{other_host}"),
+                (platform, f"name: neverd-real-apps-{host}", f"name: neverd-real-apps-{other_host}"),
+            )
+            for name, before, after in mutations:
+                job = re.search(rf"(?ms)^  {name}:\n(.*?)(?=^  \S|\Z)", workflow)
+                self.assertIsNotNone(job)
+                self.assertEqual(job[1].count(before), 1)
+                body = job[1].replace(before, after, 1)
+                changed = workflow[:job.start(1)] + body + workflow[job.end(1):]
+                self.assertNotEqual(changed, workflow)
+                with self.subTest(job=name, before=before), self.assertRaises(AssertionError):
+                    self.assert_host_routing(changed)
 
     def test_comparison_installation_is_fresh_separate_and_does_not_consume_the_app_budget(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")

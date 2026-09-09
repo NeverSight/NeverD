@@ -226,15 +226,25 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("sccache", active.lower())
         self.assertNotRegex(active, r"(?m)^\s*[\w-]+:\s*(?:write|write-all)\s*$")
         jobs = dict(re.findall(r"(?ms)^  ([\w-]+):\n(.*?)(?=^  \S|\Z)", active.split("\njobs:\n", 1)[1]))
-        self.assertEqual(set(jobs), {"trigger", "producer", "guards", "build", "android", "ios", "release-gate"})
+        dependencies = {
+            "producer": ["trigger"],
+            "guards": ["trigger"],
+            "build-linux": ["trigger"],
+            "build-macos": ["trigger"],
+            "android": ["trigger", "guards", "build-linux"],
+            "ios": ["trigger", "guards", "build-macos"],
+            "release-gate": ["trigger", "producer", "guards", "build-linux", "build-macos", "android", "ios"],
+        }
+        self.assertEqual(set(jobs), {"trigger", *dependencies})
         for name, body in jobs.items():
             if name == "trigger":
+                self.assertNotRegex(body, r"(?m)^    needs:")
                 self.assertIn("actions: read", body)
                 self.assertIn("GH_TOKEN: ${{ github.token }}", body)
             else:
                 needs = re.search(r"(?m)^    needs:\s*([^\n]+)", body)
                 self.assertIsNotNone(needs)
-                self.assertIn("trigger", re.findall(r"[\w-]+", needs[1]))
+                self.assertEqual(sorted(re.findall(r"[\w-]+", needs[1])), sorted(dependencies[name]), name)
                 condition = re.search(r"(?m)^    if:\s*([^\n]+)", body)
                 if condition:
                     self.assertIn("needs.trigger.result == 'success'", condition[1])
@@ -250,7 +260,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("PRODUCER_CONCLUSION: ${{ needs.trigger.outputs.producer_conclusion }}", jobs["producer"])
         self.assertIn('test "$PRODUCER_CONCLUSION" = success', jobs["producer"])
         gate_needs = re.search(r"(?m)^    needs:\s*([^\n]+)", jobs["release-gate"])
-        self.assertEqual(set(re.findall(r"[\w-]+", gate_needs[1])), {"trigger", "producer", "guards", "build", "android", "ios"})
+        self.assertEqual(set(re.findall(r"[\w-]+", gate_needs[1])),
+                         {"trigger", "producer", "guards", "build-linux", "build-macos", "android", "ios"})
         self.assertIn("needs.trigger.result == 'success'", jobs["release-gate"])
 
     def test_actual_workflow_preserves_read_only_trigger_and_same_consumer_identity(self):
@@ -268,6 +279,32 @@ class WorkflowContractTests(unittest.TestCase):
         for index, changed in enumerate(mutations):
             self.assertNotEqual(changed, text)
             with self.subTest(mutation=index), self.assertRaises(AssertionError):
+                self.assert_contract(changed)
+
+    def test_sibling_or_transitive_host_waits_and_missing_gate_builds_fail(self):
+        text = self.workflow()
+        mutations = (
+            ("build-linux", "[trigger, build-macos]"),
+            ("build-macos", "[trigger, build-linux]"),
+            # Case jobs also depend on guards, so adding either build here
+            # recreates the cross-host queue barrier through a different job.
+            ("guards", "[trigger, build-linux]"),
+            ("guards", "[trigger, build-macos]"),
+            ("android", "[trigger, guards, build-linux, build-macos]"),
+            ("android", "[trigger, guards, build-macos]"),
+            ("ios", "[trigger, guards, build-macos, build-linux]"),
+            ("ios", "[trigger, guards, build-linux]"),
+            ("release-gate", "[trigger, producer, guards, build-macos, android, ios]"),
+            ("release-gate", "[trigger, producer, guards, build-linux, android, ios]"),
+        )
+        for name, needs in mutations:
+            job = re.search(rf"(?ms)^  {name}:\n(.*?)(?=^  \S|\Z)", text)
+            self.assertIsNotNone(job)
+            body, count = re.subn(r"(?m)^    needs: [^\n]+", "    needs: " + needs, job[1])
+            self.assertEqual(count, 1)
+            changed = text[:job.start(1)] + body + text[job.end(1):]
+            self.assertNotEqual(changed, text)
+            with self.subTest(job=name, needs=needs), self.assertRaises(AssertionError):
                 self.assert_contract(changed)
 
 

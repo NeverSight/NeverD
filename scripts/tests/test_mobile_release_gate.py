@@ -43,7 +43,7 @@ class Fixture:
                                        "acceptance_dependencies": dependency_locks or []}},
             "required_cases": self.cases,
             "baseline_cases": [row["id"] for row in self.cases[:6]],
-            "required_jobs": ["guards", "build", "android", "ios"],
+            "required_jobs": ["guards", "build-linux", "build-macos", "android", "ios"],
             # Production keeps its two incomplete requirements. Only this
             # independent protocol fixture has no additional qualification scope.
             "qualification_requirements": qualification or {},
@@ -198,18 +198,32 @@ class MobileReleaseGateTests(unittest.TestCase):
                 self.assert_rejected(fixture, f"case {field} differs")
 
     def test_required_github_jobs_cannot_be_omitted_skipped_or_cancelled(self):
-        for mutation in ("omit", "empty", "failure", "skipped", "cancelled", "missing-result"):
-            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory(dir=self.root) as temporary:
+        mutations = [("ios", mutation) for mutation in
+                     ("omit", "empty", "failure", "skipped", "cancelled", "missing-result")]
+        mutations += [(host, mutation) for host in ("build-linux", "build-macos")
+                      for mutation in ("omit", "failure", "skipped")]
+        mutations.append(("build-linux", "aggregate-build"))
+        for job, mutation in mutations:
+            with self.subTest(job=job, mutation=mutation), tempfile.TemporaryDirectory(dir=self.root) as temporary:
                 fixture = Fixture(Path(temporary))
                 needs = json.loads(fixture.needs_path.read_text())
                 if mutation == "omit":
-                    needs.pop("ios")
+                    needs.pop(job)
                 elif mutation == "empty":
                     needs.clear()
+                elif mutation == "aggregate-build":
+                    needs.pop("build-linux")
+                    needs.pop("build-macos")
+                    needs["build"] = {"result": "success"}
                 else:
-                    needs["ios"] = {} if mutation == "missing-result" else {"result": mutation}
+                    needs[job] = {} if mutation == "missing-result" else {"result": mutation}
                 write_json(fixture.needs_path, needs)
-                self.assert_rejected(fixture, "GitHub")
+                reason = ("GitHub needs omitted or substituted required jobs"
+                          if mutation in ("omit", "empty", "aggregate-build") else f"GitHub job {job}")
+                report = self.assert_rejected(fixture, reason)
+                # The complete case still qualifies: it is the independent
+                # prerequisite result, not missing app evidence, that failed.
+                self.assertEqual(report["qualified_cases"], ["case-00"])
 
     def test_incomplete_qualifications_keep_an_otherwise_green_case_red(self):
         for name in ("independent_holdouts", "toolchain_variation"):
@@ -412,7 +426,7 @@ class MobileReleaseGateTests(unittest.TestCase):
 
     def test_duplicate_json_keys_are_rejected(self):
         fixture = Fixture(self.root)
-        fixture.needs_path.write_text('{"build":{"result":"failure"},"build":{"result":"success"}}')
+        fixture.needs_path.write_text('{"build-linux":{"result":"failure"},"build-linux":{"result":"success"}}')
         with self.assertRaisesRegex(gate.GateError, "duplicate JSON key"):
             fixture.audit()
 
