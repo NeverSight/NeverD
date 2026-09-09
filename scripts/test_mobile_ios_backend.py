@@ -2,8 +2,8 @@
 """Compile, recover, rebuild, and execute a self-owned Objective-C fixture.
 
 Requires macOS, Apple Clang with its SDK, and a built NeverD CLI. No dependencies
-are downloaded. Both arm64 and x86_64 are attempted by default; an architecture
-the host cannot execute is explicitly skipped, never counted as verified.
+are downloaded. Every requested arm64/x86_64 and classic/default variant must
+complete; an architecture the host cannot execute is a failure, never a skip.
 
 Example: python3 scripts/test_mobile_ios_backend.py --neverd build/bin/neverd
 Use --setup-only to verify compilation and original execution before recovery.
@@ -241,53 +241,74 @@ def validate_coverage(output: Path, architecture: str) -> dict:
     return coverage
 
 
+def requested_variants(architecture: str, fixups: str) -> list[tuple[str, str]]:
+    if architecture not in ("all", "arm64", "x86_64") or fixups not in ("both", "classic", "default"):
+        raise RuntimeError("Invalid requested architecture/fixup matrix")
+    architectures = ("arm64", "x86_64") if architecture == "all" else (architecture,)
+    variants = ("classic", "default") if fixups == "both" else (fixups,)
+    return [(arch, variant) for arch in architectures for variant in variants]
+
+
 def verify(arguments: argparse.Namespace, work: Path) -> None:
     clang = shutil.which("clang")
     if sys.platform != "darwin" or not clang:
         raise RuntimeError("This execution test requires macOS, Apple Clang, and its SDK")
     if not arguments.setup_only and not arguments.neverd:
         raise RuntimeError("Pass --neverd PATH, or use --setup-only for original-fixture validation")
+    variants = requested_variants(arguments.arch, arguments.fixups)
+    requested = {f"{architecture}-{fixup}" for architecture, fixup in variants}
+    if not requested or len(requested) != len(variants):
+        raise RuntimeError("Requested Objective-C execution matrix is empty or duplicated")
     fixture = FIXTURE.read_text()
     declarations, marker, _ = fixture.partition("@implementation")
     if not marker:
         raise RuntimeError("The self-owned fixture has no Objective-C implementation")
     # The harness gets declarations only. Recovered builds never link FIXTURE.
     (work / "fixture.h").write_text(declarations)
+    original_fixture = work / "original-fixture.m"
+    original_fixture.write_text(fixture)
     harness = work / "harness.m"
     harness.write_text(HARNESS)
-    architectures = ("arm64", "x86_64") if arguments.arch == "all" else (arguments.arch,)
-    fixups = ("classic", "default") if arguments.fixups == "both" else (arguments.fixups,)
-    host = platform.machine()
     expected = expected_results()
-    completed = 0
-    skipped: list[str] = []
-    for architecture in architectures:
-        for fixup in fixups:
-            label = f"{architecture}-{fixup}"
-            variant = work / label
-            variant.mkdir()
+    if not expected or not METHODS:
+        raise RuntimeError("Objective-C fixture has no required behavior or method inventory")
+    (work / "expected.json").write_text(json.dumps(expected, indent=2) + "\n")
+    completed: set[str] = set()
+    failures: dict[str, str] = {}
+    mode = "original-only" if arguments.setup_only else "recovered"
+
+    def record(status: str) -> None:
+        (work / "acceptance.json").write_text(json.dumps({
+            "schema_version": 1, "status": status, "mode": mode,
+            "requested": sorted(requested), "completed": sorted(completed),
+            "failures": failures, "expected_method_count": len(METHODS),
+            "expected_behavior_count": len(expected),
+        }, indent=2) + "\n")
+
+    record("incomplete")
+    for architecture, fixup in variants:
+        label = f"{architecture}-{fixup}"
+        variant = work / label
+        variant.mkdir()
+        phase = "compile original"
+        try:
             original = variant / "original"
             flags = [clang, "-arch", architecture, "-O1", "-g0", "-fno-objc-arc",
                      "-fno-vectorize", "-fno-slp-vectorize", "-fno-unroll-loops",
                      "-Werror=return-type", "-lobjc"]
             if fixup == "classic":
                 flags.append("-Wl,-no_fixup_chains")
-            run([*flags, str(FIXTURE), str(harness), "-o", str(original)])
+            run([*flags, str(original_fixture), str(harness), "-o", str(original)])
             chained = chained_fixups(original)
             if fixup == "classic" and chained:
                 raise RuntimeError("The classic-fixup fixture unexpectedly uses chained fixups")
-            try:
-                baseline = execution_results(original)
-            except OSError as exc:
-                if (arguments.arch == "all" and architecture != host and
-                        exc.errno in (errno.ENOEXEC, 86)):
-                    print(f"SKIP {label}: host cannot execute {architecture} ({exc.strerror})")
-                    skipped.append(label)
-                    break
-                raise
+            phase = "execute original"
+            baseline = execution_results(original)
+            (variant / "original-results.json").write_text(json.dumps(baseline, indent=2) + "\n")
             assert_results(baseline, expected, f"Original {label}")
             print(f"PASS original {label}: {len(baseline)} execution results; chained_fixups={chained}", flush=True)
             if not arguments.setup_only:
+                phase = "recover source"
                 output = variant / "recovered"
                 run([str(arguments.neverd.resolve()), "mobile", str(original), "-o", str(output),
                      "--platform=ios", f"--arch={architecture}",
@@ -296,15 +317,31 @@ def verify(arguments: argparse.Namespace, work: Path) -> None:
                 recovered = output / "sources/objc.m"
                 if not recovered.is_file():
                     raise RuntimeError("Mobile recovery produced no sources/objc.m")
+                phase = "compile recovered source"
                 rebuilt = variant / "rebuilt"
                 run([*flags, str(recovered), str(harness), "-o", str(rebuilt)])
-                assert_results(execution_results(rebuilt), baseline, f"Recovered {label}")
+                phase = "execute recovered source"
+                actual = execution_results(rebuilt)
+                (variant / "rebuilt-results.json").write_text(json.dumps(actual, indent=2) + "\n")
+                assert_results(actual, baseline, f"Recovered {label}")
                 print(f"PASS recovered {label}: {len(METHODS)} methods, {len(baseline)} matching execution results", flush=True)
-            completed += 1
-    if not completed:
-        raise RuntimeError("No fixture architecture was executed")
-    print(f"Verified {completed} {'original' if arguments.setup_only else 'recovered'} variants; "
-          f"skipped architectures: {', '.join(skipped) or 'none'}")
+            completed.add(label)
+        except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired, struct.error) as error:
+            reason = str(error)
+            if isinstance(error, OSError) and error.errno in (errno.ENOEXEC, 86):
+                reason = f"Requested {label} cannot execute on this host ({platform.machine()}): {error}"
+            failures[label] = f"{phase}: {reason}"
+            (variant / "failure.txt").write_text(failures[label] + "\n")
+            print(f"FAIL {label}: {failures[label]}", file=sys.stderr, flush=True)
+        record("incomplete")
+    if failures or completed != requested:
+        record("error")
+        missing = sorted(requested - completed)
+        details = "\n".join(f"{label}: {reason}" for label, reason in failures.items())
+        raise RuntimeError(f"Incomplete Objective-C execution matrix ({len(completed)}/{len(requested)} completed); "
+                           f"missing variants: {missing}; evidence: {work}\n{details}")
+    record("success")
+    print(f"Verified {len(completed)} {mode} variants; skipped architectures: none")
 
 
 def main() -> int:

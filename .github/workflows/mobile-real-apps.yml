@@ -1,0 +1,313 @@
+name: Mobile Real Applications
+
+# The initial corpus measures real gaps. The final release gate always checks
+# the complete manifest, including variants not yet implemented in this
+# baseline. A baseline run is not a promotion to mature mobile support.
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-real-apps-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guards:
+    name: Acceptance integrity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Check omissions, partial output, provenance and behavior mutations
+        run: |
+          python -m unittest \
+            scripts.tests.test_mobile_real_apps_android \
+            scripts.tests.test_mobile_real_apps_common \
+            scripts.tests.test_mobile_real_apps_ios \
+            scripts.tests.test_mobile_release_gate \
+            scripts.tests.test_mobile_ios_backend -v
+
+  build:
+    name: Build NeverD (${{ matrix.host }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: linux-x86_64
+            runner: ubuntu-24.04
+          - host: macos-arm64
+            runner: macos-26
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: 'v0.16.0'
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes clang cmake ninja-build zlib1g-dev
+      - name: macOS dependencies and pinned compiler
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake ninja
+          test -d /Applications/Xcode_26.5.app/Contents/Developer
+          echo 'DEVELOPER_DIR=/Applications/Xcode_26.5.app/Contents/Developer' >> "$GITHUB_ENV"
+      - name: Configure current C++ recovery against the pinned LLVM
+        run: |
+          cmake -S . -B build-real-apps -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            -DNEVERD_LLVM_PREBUILT=ON \
+            -DNEVERD_BUILD_PLUGINS=OFF \
+            -DNEVERD_ENABLE_PYTHON_PLUGINS=OFF \
+            -DBUILD_TESTING=OFF
+      - name: Build CLI
+        run: cmake --build build-real-apps --target neverd --parallel 3
+      - name: Bind binary artifact to this exact source
+        env:
+          CONSUMER_COMMIT: ${{ github.sha }}
+          BUILD_HOST: ${{ matrix.host }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          binary = Path('build-real-apps/bin/neverd')
+          receipt = {'schema_version': 1, 'consumer_commit': os.environ['CONSUMER_COMMIT'],
+                     'host': os.environ['BUILD_HOST'],
+                     'neverd_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+                     'runtime_files': []}
+          for path in sorted(binary.parent.rglob('*')):
+              if path.is_symlink():
+                  raise SystemExit(f'Runtime artifact must be standalone: {path}')
+              if path.is_file():
+                  receipt['runtime_files'].append({
+                      'path': path.relative_to(binary.parent).as_posix(),
+                      'size': path.stat().st_size,
+                      'sha256': hashlib.sha256(path.read_bytes()).hexdigest()})
+          binary.with_name('consumer-build.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          PY
+          tar -czf "$RUNNER_TEMP/neverd-host.tar.gz" -C build-real-apps bin
+      - name: Publish native CLI and runtime libraries
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: neverd-real-apps-${{ matrix.host }}
+          path: ${{ runner.temp }}/neverd-host.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+      - name: Preserve build evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: real-app-build-${{ matrix.host }}
+          path: |
+            build-real-apps/CMakeCache.txt
+            build-real-apps/CMakeFiles/CMakeConfigureLog.yaml
+            build-real-apps/compile_commands.json
+            build-real-apps/bin/consumer-build.json
+          retention-days: 7
+
+  android:
+    name: Android ${{ matrix.app }} official release
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 80
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - app: markor
+            repository: gsantner/markor
+            commit: f33eb6a8dfb210f27bfe7294430d4d39b795bd0f
+          - app: calculator
+            repository: FossifyOrg/Calculator
+            commit: 77e2490684d5722e25d177608792b8e35610e990
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ matrix.repository }}
+          ref: ${{ matrix.commit }}
+          path: upstream-app
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: neverd-real-apps-linux-x86_64
+          path: ${{ runner.temp }}/neverd-download
+      - name: Prepare native CLI and independent SDK inventory tools
+        run: |
+          mkdir -p "$RUNNER_TEMP/neverd-host"
+          tar -xzf "$RUNNER_TEMP/neverd-download/neverd-host.tar.gz" -C "$RUNNER_TEMP/neverd-host"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
+            'build-tools;35.0.0' 'build-tools;36.0.0' 'platforms;android-35' 'platforms;android-36'
+      - name: Recover the complete pinned APK and collect acceptance evidence
+        env:
+          CONSUMER_COMMIT: ${{ github.sha }}
+          CASE_ID: ${{ matrix.app }}-official-release
+          LD_LIBRARY_PATH: ${{ runner.temp }}/neverd-host/bin
+        run: |
+          python scripts/test_mobile_real_apps.py \
+            --case "$CASE_ID" --source "$GITHUB_WORKSPACE/upstream-app" \
+            --neverd "$RUNNER_TEMP/neverd-host/bin/neverd" \
+            --consumer-commit "$CONSUMER_COMMIT" \
+            --work-dir "$RUNNER_TEMP/real-app-evidence/$CASE_ID" --timeout 4200
+      - name: Preserve all input, inventory, recovery and failure evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: real-app-evidence-${{ matrix.app }}-official-release
+          path: ${{ runner.temp }}/real-app-evidence/${{ matrix.app }}-official-release
+          if-no-files-found: error
+          retention-days: 14
+
+  ios:
+    name: iOS ${{ matrix.app }} ${{ matrix.sdk }} arm64 Release
+    needs: build
+    runs-on: macos-26
+    timeout-minutes: 80
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - app: icecubes
+            repository: Dimillian/IceCubesApp
+            commit: b2db3033fbf67a97b54d25d6dac2df8a029b26b1
+            sdk: iphonesimulator
+            case_id: icecubes-release-arm64-simulator
+          - app: icecubes
+            repository: Dimillian/IceCubesApp
+            commit: b2db3033fbf67a97b54d25d6dac2df8a029b26b1
+            sdk: iphoneos
+            case_id: icecubes-release-arm64-device
+          - app: wikipedia
+            repository: wikimedia/wikipedia-ios
+            commit: 86e78a9e5766d89f3d4c44abe9efce30b950d4d4
+            sdk: iphonesimulator
+            case_id: wikipedia-release-arm64-simulator
+          - app: wikipedia
+            repository: wikimedia/wikipedia-ios
+            commit: 86e78a9e5766d89f3d4c44abe9efce30b950d4d4
+            sdk: iphoneos
+            case_id: wikipedia-release-arm64-device
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ matrix.repository }}
+          ref: ${{ matrix.commit }}
+          path: upstream-app
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: neverd-real-apps-macos-arm64
+          path: ${{ runner.temp }}/neverd-download
+      - name: Prepare native CLI and fixed Xcode installation
+        run: |
+          test -d "$DEVELOPER_DIR"
+          mkdir -p "$RUNNER_TEMP/neverd-host"
+          tar -xzf "$RUNNER_TEMP/neverd-download/neverd-host.tar.gz" -C "$RUNNER_TEMP/neverd-host"
+      - name: Build genuine iOS Release input and recover every bundled Mach-O
+        env:
+          CONSUMER_COMMIT: ${{ github.sha }}
+          CASE_ID: ${{ matrix.case_id }}
+          DYLD_LIBRARY_PATH: ${{ runner.temp }}/neverd-host/bin
+        run: |
+          python scripts/test_mobile_real_apps.py \
+            --case "$CASE_ID" --source "$GITHUB_WORKSPACE/upstream-app" \
+            --neverd "$RUNNER_TEMP/neverd-host/bin/neverd" \
+            --consumer-commit "$CONSUMER_COMMIT" \
+            --work-dir "$RUNNER_TEMP/real-app-evidence/$CASE_ID" --timeout 4200
+      - name: Preserve complete bundle, Apple inventory and recovery evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: real-app-evidence-${{ matrix.case_id }}
+          path: ${{ runner.temp }}/real-app-evidence/${{ matrix.case_id }}
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+
+  release-gate:
+    name: Complete mobile release qualification
+    if: always()
+    needs: [guards, build, android, ios]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Collect all case artifacts without merging their identities
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: real-app-evidence-*
+          path: ${{ runner.temp }}/real-app-results
+      - name: Save actual prerequisite job results
+        if: always()
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/real-app-results"
+          printf '%s\n' "$NEEDS_JSON" > "$RUNNER_TEMP/real-app-needs.json"
+      - name: Require the full matrix, independent rebuilt behavior and holdouts
+        if: always()
+        env:
+          CONSUMER_COMMIT: ${{ github.sha }}
+        run: |
+          python scripts/check_mobile_release_gate.py \
+            --manifest scripts/mobile_real_apps.json \
+            --results "$RUNNER_TEMP/real-app-results" \
+            --consumer-commit "$CONSUMER_COMMIT" \
+            --needs-json "$RUNNER_TEMP/real-app-needs.json" \
+            --output "$RUNNER_TEMP/mobile-release-gate.json"
+      - name: Preserve the release decision and missing obligations
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mobile-release-gate
+          path: |
+            ${{ runner.temp }}/mobile-release-gate.json
+            ${{ runner.temp }}/real-app-needs.json
+          if-no-files-found: error
+          retention-days: 14

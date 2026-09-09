@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "description": "Pinned public applications for functional recovery qualification. Test inputs retain their own licenses; they are not NeverD implementation dependencies.",
+  "apps": {
+    "markor": {
+      "repository": "gsantner/markor",
+      "source_commit": "f33eb6a8dfb210f27bfe7294430d4d39b795bd0f",
+      "license": "Apache-2.0",
+      "license_path": "LICENSE.txt",
+      "release": "v2.16.1",
+      "official_apk": {
+        "url": "https://github.com/gsantner/markor/releases/download/v2.16.1/net.gsantner.markor-v163-2.16.1-flavorDefault-release.apk",
+        "sha256": "e88cdcced7aa3dca25e6b9c7a9bdcfad3e3988ee545be951f42bf9441b5e46bf"
+      },
+      "android": {
+        "compile_sdk": 35,
+        "build_tools": "35.0.0",
+        "java": "21",
+        "release_task": ":app:assembleFlavorDefaultRelease",
+        "debug_task": ":app:assembleFlavorDefaultDebug",
+        "package_name": "net.gsantner.markor",
+        "behavior_obligations": ["create-edit-save-reopen", "markdown-preview", "todo-state"]
+      }
+    },
+    "calculator": {
+      "repository": "FossifyOrg/Calculator",
+      "source_commit": "77e2490684d5722e25d177608792b8e35610e990",
+      "license": "GPL-3.0",
+      "license_path": "LICENSE",
+      "release": "1.4.0",
+      "official_apk": {
+        "url": "https://github.com/FossifyOrg/Calculator/releases/download/1.4.0/calculator-10-foss-release.apk",
+        "sha256": "7c5443c22d6d62c67dfe80df33ea9161ff0fa440f92590bcb45d7008b57613ed"
+      },
+      "android": {
+        "compile_sdk": 36,
+        "build_tools": "36.0.0",
+        "java": "17",
+        "release_task": ":app:assembleFossRelease",
+        "debug_task": ":app:assembleFossDebug",
+        "package_name": "org.fossify.math",
+        "behavior_obligations": ["arithmetic-precision", "percent", "history", "rotation-state"]
+      }
+    },
+    "icecubes": {
+      "repository": "Dimillian/IceCubesApp",
+      "source_commit": "b2db3033fbf67a97b54d25d6dac2df8a029b26b1",
+      "license": "AGPL-3.0",
+      "license_path": "LICENSE",
+      "ios": {
+        "xcode": "26.5",
+        "project": "IceCubesApp.xcodeproj",
+        "scheme": "IceCubesApp",
+        "product": "Ice Cubes.app",
+        "package_resolved": "IceCubesApp.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved",
+        "xcconfig_template": "IceCubesApp.xcconfig.template",
+        "required_artifacts": ["Ice Cubes"],
+        "behavior_obligations": ["async-post-edit-result-and-side-effects", "swiftdata-metrics-update-and-cleanup", "async-throws-cancellation", "system-framework-calls"]
+      }
+    },
+    "wikipedia": {
+      "repository": "wikimedia/wikipedia-ios",
+      "source_commit": "86e78a9e5766d89f3d4c44abe9efce30b950d4d4",
+      "license": "MIT",
+      "license_path": "LICENSE.txt",
+      "ios": {
+        "xcode": "26.5",
+        "project": "Wikipedia.xcodeproj",
+        "scheme": "Wikipedia",
+        "product": "Wikipedia.app",
+        "package_resolved": "Wikipedia.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved",
+        "required_artifacts": ["Wikipedia", "Frameworks/WMF.framework/WMF"],
+        "behavior_obligations": ["query-parameter-nil-empty-add-preserve", "arc-weak-and-block-lifetime", "system-framework-calls"]
+      }
+    }
+  },
+  "required_cases": [
+    {"id":"markor-official-release", "app":"markor", "platform":"android", "profile":"official-release", "architecture":"dex", "sdk":"35"},
+    {"id":"markor-gradle-release", "app":"markor", "platform":"android", "profile":"gradle-release", "architecture":"dex", "sdk":"35"},
+    {"id":"markor-gradle-debug", "app":"markor", "platform":"android", "profile":"gradle-debug", "architecture":"dex", "sdk":"35"},
+    {"id":"calculator-official-release", "app":"calculator", "platform":"android", "profile":"official-release", "architecture":"dex", "sdk":"36"},
+    {"id":"calculator-gradle-release", "app":"calculator", "platform":"android", "profile":"gradle-release", "architecture":"dex", "sdk":"36"},
+    {"id":"calculator-gradle-debug", "app":"calculator", "platform":"android", "profile":"gradle-debug", "architecture":"dex", "sdk":"36"},
+    {"id":"icecubes-release-arm64-simulator", "app":"icecubes", "platform":"ios", "profile":"release", "architecture":"arm64", "sdk":"iphonesimulator"},
+    {"id":"icecubes-size-arm64-simulator", "app":"icecubes", "platform":"ios", "profile":"size", "architecture":"arm64", "sdk":"iphonesimulator"},
+    {"id":"icecubes-release-arm64-device", "app":"icecubes", "platform":"ios", "profile":"release", "architecture":"arm64", "sdk":"iphoneos"},
+    {"id":"icecubes-size-arm64-device", "app":"icecubes", "platform":"ios", "profile":"size", "architecture":"arm64", "sdk":"iphoneos"},
+    {"id":"icecubes-release-x86_64-simulator", "app":"icecubes", "platform":"ios", "profile":"release", "architecture":"x86_64", "sdk":"iphonesimulator"},
+    {"id":"icecubes-size-x86_64-simulator", "app":"icecubes", "platform":"ios", "profile":"size", "architecture":"x86_64", "sdk":"iphonesimulator"},
+    {"id":"wikipedia-release-arm64-simulator", "app":"wikipedia", "platform":"ios", "profile":"release", "architecture":"arm64", "sdk":"iphonesimulator"},
+    {"id":"wikipedia-size-arm64-simulator", "app":"wikipedia", "platform":"ios", "profile":"size", "architecture":"arm64", "sdk":"iphonesimulator"},
+    {"id":"wikipedia-release-arm64-device", "app":"wikipedia", "platform":"ios", "profile":"release", "architecture":"arm64", "sdk":"iphoneos"},
+    {"id":"wikipedia-size-arm64-device", "app":"wikipedia", "platform":"ios", "profile":"size", "architecture":"arm64", "sdk":"iphoneos"},
+    {"id":"wikipedia-release-x86_64-simulator", "app":"wikipedia", "platform":"ios", "profile":"release", "architecture":"x86_64", "sdk":"iphonesimulator"},
+    {"id":"wikipedia-size-x86_64-simulator", "app":"wikipedia", "platform":"ios", "profile":"size", "architecture":"x86_64", "sdk":"iphonesimulator"}
+  ],
+  "baseline_cases": [
+    "markor-official-release", "calculator-official-release",
+    "icecubes-release-arm64-simulator", "icecubes-release-arm64-device",
+    "wikipedia-release-arm64-simulator", "wikipedia-release-arm64-device"
+  ],
+  "required_jobs": ["guards", "build", "android", "ios"],
+  "qualification_requirements": {
+    "independent_holdouts": {
+      "status": "incomplete",
+      "reason": "An additional pinned holdout application per platform must pass the same complete recovery, independent rebuild and behavior contract before promotion."
+    },
+    "toolchain_variation": {
+      "status": "incomplete",
+      "reason": "Repeat the complete acceptance contract with independently pinned additional supported SDK/compiler versions before promotion."
+    }
+  }
+}

@@ -1,35 +1,13 @@
 name: Mobile Decompilation
 
+# These self-owned regression suites run entirely in Actions. The separate
+# real-application workflow supplies the stricter release qualification gate.
+# Core loader/IR/backend changes also affect mobile recovery, so do not filter
+# this workflow to mobile frontend paths.
 on:
   push:
     branches: [dev]
-    paths:
-      - '.github/workflows/mobile.yml'
-      - 'tools/neverd/mobile/**'
-      - 'tools/neverd/cmd/NeverDCmdMobile.cpp'
-      - 'tools/neverd/NeverDCLI*'
-      - 'tools/neverd/CMakeLists.txt'
-      - 'third_party/llvm-project'
-      - 'cmake/NeverDLLVMPrebuilt.cmake'
-      - 'unittests/mobile/**'
-      - 'unittests/CMakeLists.txt'
-      - 'scripts/tests/test_mobile_*.py'
-      - 'scripts/tests/fixtures/mobile/**'
-      - 'scripts/test_mobile_*.py'
   pull_request:
-    paths:
-      - '.github/workflows/mobile.yml'
-      - 'tools/neverd/mobile/**'
-      - 'tools/neverd/cmd/NeverDCmdMobile.cpp'
-      - 'tools/neverd/NeverDCLI*'
-      - 'tools/neverd/CMakeLists.txt'
-      - 'third_party/llvm-project'
-      - 'cmake/NeverDLLVMPrebuilt.cmake'
-      - 'unittests/mobile/**'
-      - 'unittests/CMakeLists.txt'
-      - 'scripts/tests/test_mobile_*.py'
-      - 'scripts/tests/fixtures/mobile/**'
-      - 'scripts/test_mobile_*.py'
   workflow_dispatch:
 
 permissions:
@@ -105,11 +83,12 @@ jobs:
           CC: ${{ matrix.cc }}
           CXX: ${{ matrix.cxx }}
       - name: Build the actual C++ CLI and mobile tests
+        id: build_mobile
         run: cmake --build build-mobile --config Release --target neverd NeverDMobileTests --parallel 3
       - name: Run native readers, emitters, archives, process and CLI tests
         run: ctest --test-dir build-mobile/unittests/mobile -C Release --output-on-failure --no-tests=error
       - name: Verify the independent acceptance gates reject false coverage
-        run: python -m unittest scripts.tests.test_mobile_android_internal_runner scripts.tests.test_mobile_swift_backend -v
+        run: python -m unittest scripts.tests.test_mobile_android_internal_runner scripts.tests.test_mobile_ios_backend scripts.tests.test_mobile_swift_backend -v
       - name: Verify runtime with no interpreter on PATH
         shell: bash
         run: |
@@ -157,9 +136,32 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: python scripts/test_mobile_android_backend.py --neverd build-mobile/bin/neverd --jadx "$RUNNER_TEMP/jadx/bin/jadx"
-      - name: Recover and independently execute Objective-C and Swift sources
-        if: runner.os == 'macOS'
-        run: ctest --test-dir build-mobile -L ^NeverDMobileIOSRecovery$ -C Release --output-on-failure --no-tests=error
+      # Attempt every suite even when an earlier test fails. No failure is
+      # ignored; separate steps retain diagnostics for all requested corpora.
+      - name: Recover and independently execute Objective-C scalar sources
+        if: ${{ !cancelled() && runner.os == 'macOS' && steps.build_mobile.outcome == 'success' }}
+        timeout-minutes: 6
+        shell: bash
+        run: |
+          python scripts/test_mobile_ios_backend.py \
+            --neverd "$GITHUB_WORKSPACE/build-mobile/bin/neverd" \
+            --arch all --fixups both --work-dir "$RUNNER_TEMP/ios-native/scalar"
+      - name: Recover and independently execute Objective-C calls and Blocks
+        if: ${{ !cancelled() && runner.os == 'macOS' && steps.build_mobile.outcome == 'success' }}
+        timeout-minutes: 30
+        shell: bash
+        run: |
+          python scripts/test_mobile_ios_calls_backend.py \
+            --neverd "$GITHUB_WORKSPACE/build-mobile/bin/neverd" \
+            --arch all --fixups both --work-dir "$RUNNER_TEMP/ios-native/calls"
+      - name: Recover and independently execute Swift sources
+        if: ${{ !cancelled() && runner.os == 'macOS' && steps.build_mobile.outcome == 'success' }}
+        timeout-minutes: 30
+        shell: bash
+        run: |
+          python scripts/test_mobile_swift_backend.py \
+            --neverd "$GITHUB_WORKSPACE/build-mobile/bin/neverd" \
+            --arch all --fixups both --work-dir "$RUNNER_TEMP/ios-native/swift"
       - name: Preserve validation evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -170,4 +172,7 @@ jobs:
             build-mobile/unittests/mobile/Testing/Temporary/
             ${{ runner.temp }}/android-native/acceptance.json
             ${{ runner.temp }}/android-native/logs/
+            ${{ runner.temp }}/ios-native/scalar/
+            ${{ runner.temp }}/ios-native/calls/
+            ${{ runner.temp }}/ios-native/swift/
           if-no-files-found: ignore
