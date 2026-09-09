@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <limits>
 
 using namespace neverd::mobile;
 using namespace neverd::mobile::ios;
@@ -81,6 +82,39 @@ std::string loadableThin() {
   integer(data, 88, 7);
   integer(data, 92, 5);
   return data;
+}
+void makeDylib(std::string &data) {
+  constexpr size_t header = 32;
+  constexpr char name[] = "@rpath/libMobileFixture.dylib";
+  // sizeof(name) includes its NUL; Mach-O 64-bit commands align to 8 bytes.
+  constexpr uint32_t length = (24 + sizeof(name) + 7) & ~size_t(7);
+  if (data.size() < header)
+    throw Error("dylib fixture lacks a Mach-O header");
+  auto read = [&](size_t p) {
+    uint32_t value = 0;
+    for (unsigned i = 0; i < 4; ++i)
+      value |= uint32_t(static_cast<unsigned char>(data[p + i])) << (i * 8);
+    return value;
+  };
+  const auto count = read(16), bytes = read(20);
+  if (read(0) != 0xfeedfacf ||
+      count == std::numeric_limits<uint32_t>::max() ||
+      bytes > std::numeric_limits<uint32_t>::max() - length ||
+      bytes > data.size() - header ||
+      length > data.size() - header - bytes)
+    throw Error("dylib fixture lacks bounded load-command space");
+  // Use existing header padding without changing the __TEXT file/VM extent.
+  const size_t p = header + bytes;
+  std::fill_n(data.begin() + p, length, '\0');
+  integer(data, p, 0x0d); // LC_ID_DYLIB
+  integer(data, p + 4, length);
+  integer(data, p + 8, 24); // dylib.name offset within this command
+  integer(data, p + 16, 0x00010000); // current_version 1.0.0
+  integer(data, p + 20, 0x00010000); // compatibility_version 1.0.0
+  data.replace(p + 24, sizeof(name), name, sizeof(name));
+  integer(data, 12, 6); // MH_DYLIB
+  integer(data, 16, count + 1);
+  integer(data, 20, bytes + length);
 }
 void appendTarget(std::string &data, uint32_t platform,
                   uint32_t minos = 0x00120000, uint32_t sdk = 0x001a0500,
@@ -345,7 +379,7 @@ TEST(MobileIOSNative, MultipleBuildTargetsRemainAmbiguousWithoutLastWins) {
         {1u, 0x00130000u, 0x32u}, {0u, 0x00120000u, 0x24u}}) {
     Budget budget;
     auto data = thin();
-    integer(data, 12, 6); // MH_DYLIB
+    makeDylib(data);
     appendTarget(data, 1);
     appendTarget(data, platform, minos, 0x001a0500, {}, command);
     auto selected = selectSlice(data, "auto", budget);
@@ -1203,7 +1237,7 @@ TEST(MobileIOSNative, MetadataOnlyPreservesMissingAndZipperedBuildTargets) {
     TemporaryDirectory directory;
     auto data = loadableThin();
     if (zippered) {
-      integer(data, 12, 6); // MH_DYLIB
+      makeDylib(data);
       appendTarget(data, 1, 0x000e0000, 0x001a0500);
       appendTarget(data, 6, 0x00120000, 0x001a0500);
     }
