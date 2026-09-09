@@ -231,10 +231,10 @@ TEST_F(MobileCommonTest, ArchiveCorruptionAndLimitsReject) {
 TEST_F(MobileCommonTest, SelectedCodeKeepsCaseDistinctResourcesInTheArchive) {
   auto archive = root / "release.apk", output = root / "code";
   writeFile(archive, zip({{"classes.dex", "bytecode"},
-                         {"res/-A.xml", "first resource", true},
-                         {"res/-a.xml", "second resource", true},
-                         {"res/2F.xml", "third resource"},
-                         {"res/2f.xml", "fourth resource"}}));
+                          {"res/-A.xml", "first resource", true},
+                          {"res/-a.xml", "second resource", true},
+                          {"res/2F.xml", "third resource"},
+                          {"res/2f.xml", "fourth resource"}}));
   auto files = extractZip(archive, output, {}, [](const fs::path &Path) {
     return Path == "classes.dex";
   });
@@ -246,14 +246,15 @@ TEST_F(MobileCommonTest, SelectedCodeKeepsCaseDistinctResourcesInTheArchive) {
   EXPECT_THROW(extractZip(archive, root / "whole-archive", {}), Error);
   EXPECT_FALSE(fs::exists(root / "whole-archive"));
 }
-TEST_F(MobileCommonTest, SelectionStillValidatesUnwrittenPayloadsAndNamespaces) {
+TEST_F(MobileCommonTest,
+       SelectionStillValidatesUnwrittenPayloadsAndNamespaces) {
   auto SelectCode = [](const fs::path &Path) { return Path == "classes.dex"; };
   auto bytes = zip({{"resource", "payload"}, {"classes.dex", "bytecode"}});
   bytes[30 + std::string("resource").size()] ^= 1;
   writeFile(root / "bad-resource.apk", bytes);
-  EXPECT_THROW(extractZip(root / "bad-resource.apk", root / "bad-crc", {},
-                          SelectCode),
-               Error);
+  EXPECT_THROW(
+      extractZip(root / "bad-resource.apk", root / "bad-crc", {}, SelectCode),
+      Error);
   EXPECT_FALSE(fs::exists(root / "bad-crc/resource"));
   EXPECT_FALSE(fs::exists(root / "bad-crc/classes.dex"));
   unsigned Index = 0;
@@ -262,14 +263,14 @@ TEST_F(MobileCommonTest, SelectionStillValidatesUnwrittenPayloadsAndNamespaces) 
            {{"res/item", "file"}, {"res/item/child", "child"}}}) {
     auto ArchivePath = root / ("duplicate-" + std::to_string(Index++) + ".apk");
     writeFile(ArchivePath, zip(Items));
-    EXPECT_THROW(extractZip(ArchivePath, root / "bad-namespace", {}, SelectCode),
-                 Error);
+    EXPECT_THROW(
+        extractZip(ArchivePath, root / "bad-namespace", {}, SelectCode), Error);
     EXPECT_FALSE(fs::exists(root / "bad-namespace"));
   }
   writeFile(root / "selected-case.zip",
             zip({{"Code.dex", "one"}, {"code.dex", "two"}}));
-  EXPECT_THROW(extractZip(root / "selected-case.zip", root / "case-conflict", {},
-                          [](const fs::path &) { return true; }),
+  EXPECT_THROW(extractZip(root / "selected-case.zip", root / "case-conflict",
+                          {}, [](const fs::path &) { return true; }),
                Error);
   EXPECT_FALSE(fs::exists(root / "case-conflict"));
 }

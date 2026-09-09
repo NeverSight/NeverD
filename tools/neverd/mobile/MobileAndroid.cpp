@@ -133,9 +133,11 @@ Inputs stageInputs(const fs::path &source, const fs::path &work,
     if (result.kind == "apk") {
       auto archive = work / "input.apk", tree = work / "archive";
       copyInput(source, archive, limits);
-      auto extracted = extractZip(archive, tree, limits, [](const fs::path &Path) {
-        return Path.parent_path().empty() && dexName(pathText(Path.filename()));
-      });
+      auto extracted =
+          extractZip(archive, tree, limits, [](const fs::path &Path) {
+            return Path.parent_path().empty() &&
+                   dexName(pathText(Path.filename()));
+          });
       std::vector<fs::path> paths;
       for (auto &path : extracted)
         if (path.parent_path() == tree && dexName(pathText(path.filename())))
