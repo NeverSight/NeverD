@@ -527,7 +527,11 @@ class Dex {
         unsigned owner = r.u16(), typ = r.u16();
         uint32_t name = r.u32();
         auto owner_name = type(owner), member = string(name);
-        if (!owner_name.starts_with('L') || member.empty())
+        // A method ID may name an array's clone or inherited Object method.
+        // Field IDs still require a class owner; type() validates descriptors.
+        bool valid_owner = owner_name.starts_with('L') ||
+                           (kind == 5 && owner_name.starts_with('['));
+        if (!valid_owner || member.empty())
           bad("invalid member owner/name");
         auto key = std::tuple{owner, name, typ};
         if (previous_member && key <= *previous_member)
@@ -957,6 +961,9 @@ class Dex {
         ins.reference = at(fields, index, "field");
       else if (spec.pool == 'm') {
         auto ref = at(methods, index, "method");
+        if (ref.owner.starts_with('[') &&
+            (ref.name == "<init>" || ref.name == "<clinit>"))
+          bad("array type cannot own an initializer invocation");
         size_t expected = !name.starts_with("invoke-static");
         for (auto &typ : ref.parameters)
           expected += width(typ);

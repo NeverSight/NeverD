@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <tuple>
 
 using namespace neverd::mobile;
 using namespace neverd::mobile::dalvik;
@@ -73,26 +74,47 @@ struct FixtureOptions {
   std::vector<std::u16string> extras;
   std::optional<std::string> static_value;
   std::string field_type = "I";
+  std::optional<MethodRef> referenced_method;
 };
 struct Fixture {
   std::string data;
   std::map<std::string, size_t> at;
   std::vector<std::u16string> strings;
+  std::vector<std::string> types;
+  std::vector<MethodRef> methods;
 };
 Fixture fixture(FixtureOptions options = {}) {
-  std::string owner = "Lfixture/Sample;", parent = "Ljava/lang/Object;", shorty;
+  std::string owner = "Lfixture/Sample;", parent = "Ljava/lang/Object;";
   auto shortType = [](const std::string &t) {
     return t.starts_with('L') || t.starts_with('[') ? "L" : t;
   };
-  shorty = shortType(options.returns);
-  for (auto &p : options.params)
-    shorty += shortType(p);
-  std::set<std::u16string> names{utf16(owner), utf16(parent), u"value",
-                                 utf16(options.returns), utf16(shorty)};
-  std::set<std::string> type_set{owner, parent, options.returns};
-  for (auto &p : options.params) {
-    names.insert(utf16(p));
-    type_set.insert(p);
+  using Proto = std::pair<std::string, std::vector<std::string>>;
+  auto shortyFor = [&](const Proto &proto) {
+    std::string shorty = shortType(proto.first);
+    for (auto &p : proto.second)
+      shorty += shortType(p);
+    return shorty;
+  };
+  MethodRef definition{owner, "value", options.params, options.returns};
+  std::vector<MethodRef> method_refs{definition};
+  if (options.referenced_method)
+    method_refs.push_back(*options.referenced_method);
+  std::set<std::u16string> names{utf16(parent)};
+  std::set<std::string> type_set{parent};
+  std::set<Proto> proto_set;
+  for (const auto &ref : method_refs) {
+    names.insert(utf16(ref.name));
+    for (const auto &typ : {ref.owner, ref.returns}) {
+      names.insert(utf16(typ));
+      type_set.insert(typ);
+    }
+    for (const auto &typ : ref.parameters) {
+      names.insert(utf16(typ));
+      type_set.insert(typ);
+    }
+    Proto proto{ref.returns, ref.parameters};
+    names.insert(utf16(shortyFor(proto)));
+    proto_set.insert(std::move(proto));
   }
   for (auto &extra : options.extras)
     names.insert(extra);
@@ -110,12 +132,40 @@ Fixture fixture(FixtureOptions options = {}) {
         std::find(fixture.strings.begin(), fixture.strings.end(), utf16(s)) -
         fixture.strings.begin());
   };
-  std::vector<std::string> types(type_set.begin(), type_set.end());
+  auto &types = fixture.types;
+  types.assign(type_set.begin(), type_set.end());
   std::sort(types.begin(), types.end(),
             [&](auto &a, auto &b) { return stringIndex(a) < stringIndex(b); });
   auto typeIndex = [&](const std::string &s) {
     return unsigned(std::find(types.begin(), types.end(), s) - types.begin());
   };
+  std::vector<Proto> protos(proto_set.begin(), proto_set.end());
+  auto protoKey = [&](const Proto &proto) {
+    std::vector<unsigned> args;
+    for (const auto &arg : proto.second)
+      args.push_back(typeIndex(arg));
+    return std::pair{typeIndex(proto.first), args};
+  };
+  std::sort(protos.begin(), protos.end(), [&](const auto &a, const auto &b) {
+    return protoKey(a) < protoKey(b);
+  });
+  auto protoIndex = [&](const MethodRef &ref) {
+    return unsigned(std::find(protos.begin(), protos.end(),
+                              Proto{ref.returns, ref.parameters}) -
+                    protos.begin());
+  };
+  auto methodKey = [&](const MethodRef &ref) {
+    return std::tuple{typeIndex(ref.owner), stringIndex(ref.name),
+                      protoIndex(ref)};
+  };
+  std::sort(method_refs.begin(), method_refs.end(),
+            [&](const auto &a, const auto &b) {
+              return methodKey(a) < methodKey(b);
+            });
+  fixture.methods = method_refs;
+  unsigned definition_index = unsigned(
+      std::find(method_refs.begin(), method_refs.end(), definition) -
+      method_refs.begin());
   unsigned incoming = !(options.flags & 8);
   for (auto &p : options.params)
     incoming += p == "J" || p == "D" ? 2 : 1;
@@ -137,7 +187,7 @@ Fixture fixture(FixtureOptions options = {}) {
   for (auto &typ : types)
     append(raw, stringIndex(typ), 4);
   at["types"] = section(2, types.size(), raw);
-  at["protos"] = section(3, 1, std::string(12, '\0'));
+  at["protos"] = section(3, protos.size(), std::string(12 * protos.size(), '\0'));
   if (options.static_value) {
     raw.clear();
     append(raw, typeIndex(owner), 2);
@@ -146,10 +196,13 @@ Fixture fixture(FixtureOptions options = {}) {
     at["fields"] = section(4, 1, raw);
   }
   raw.clear();
-  append(raw, typeIndex(owner), 2);
-  append(raw, 0, 2);
-  append(raw, stringIndex("value"), 4);
-  at["methods"] = section(5, 1, raw);
+  for (const auto &ref : method_refs) {
+    append(raw, typeIndex(ref.owner), 2);
+    append(raw, protoIndex(ref), 2);
+    append(raw, stringIndex(ref.name), 4);
+  }
+  at["methods"] = section(5, method_refs.size(), raw);
+  at["defined_method"] = at["methods"] + definition_index * 8;
   at["class"] = section(6, 1, std::string(32, '\0'));
   size_t data_off = out.size();
   at["string_data"] = out.size();
@@ -159,15 +212,19 @@ Fixture fixture(FixtureOptions options = {}) {
   }
   sections.push_back({0x2002, at["string_data"], fixture.strings.size()});
   align();
-  size_t parameters = 0;
-  if (!options.params.empty()) {
-    raw.clear();
-    append(raw, options.params.size(), 4);
-    for (auto &p : options.params)
-      append(raw, typeIndex(p), 2);
-    parameters = section(0x1001, 1, raw);
+  std::map<std::vector<std::string>, size_t> parameter_offsets;
+  size_t first_parameters = out.size();
+  for (const auto &proto : protos) {
+    if (proto.second.empty() || parameter_offsets.contains(proto.second))
+      continue;
+    parameter_offsets[proto.second] = out.size();
+    append(out, proto.second.size(), 4);
+    for (const auto &p : proto.second)
+      append(out, typeIndex(p), 2);
     align();
   }
+  if (!parameter_offsets.empty())
+    sections.push_back({0x1001, first_parameters, parameter_offsets.size()});
   bool no_code = options.flags & (0x100 | 0x400);
   size_t code = 0;
   if (!no_code) {
@@ -201,7 +258,7 @@ Fixture fixture(FixtureOptions options = {}) {
     uleb(raw, 0);
     uleb(raw, 0x19);
   }
-  uleb(raw, 0);
+  uleb(raw, definition_index);
   uleb(raw, options.flags);
   uleb(raw, code);
   at["class_data"] = section(0x2000, 1, raw);
@@ -228,18 +285,22 @@ Fixture fixture(FixtureOptions options = {}) {
   for (auto [kind, count, offset] : std::vector<std::array<size_t, 3>>{
            {1, fixture.strings.size(), at["strings"]},
            {2, types.size(), at["types"]},
-           {3, 1, at["protos"]},
+           {3, protos.size(), at["protos"]},
            {4, size_t(bool(options.static_value)), at["fields"]},
-           {5, 1, at["methods"]},
+           {5, method_refs.size(), at["methods"]},
            {6, 1, at["class"]}}) {
     patch(out, 56 + (kind - 1) * 8, count);
     patch(out, 60 + (kind - 1) * 8, offset);
   }
   patch(out, 104, out.size() - data_off);
   patch(out, 108, data_off);
-  patch(out, at["protos"], stringIndex(shorty));
-  patch(out, at["protos"] + 4, typeIndex(options.returns));
-  patch(out, at["protos"] + 8, parameters);
+  for (size_t i = 0; i < protos.size(); ++i) {
+    const auto &proto = protos[i];
+    patch(out, at["protos"] + 12 * i, stringIndex(shortyFor(proto)));
+    patch(out, at["protos"] + 12 * i + 4, typeIndex(proto.first));
+    patch(out, at["protos"] + 12 * i + 8,
+          proto.second.empty() ? 0 : parameter_offsets.at(proto.second));
+  }
   std::array<uint32_t, 8> cls{
       typeIndex(owner), 1, typeIndex(parent),          0,
       UINT32_MAX,       0, uint32_t(at["class_data"]), uint32_t(at["values"])};
@@ -251,6 +312,44 @@ Fixture fixture(FixtureOptions options = {}) {
 std::vector<Class> parse(const std::string &data) {
   Budget budget;
   return parseDex(data, "classes2.dex", budget);
+}
+void expectDexError(const std::string &data, std::string_view reason) {
+  try {
+    (void)parse(data);
+    ADD_FAILURE() << "Expected DEX rejection: " << reason;
+  } catch (const Error &error) {
+    EXPECT_EQ(std::string_view(error.what()), reason);
+  }
+}
+unsigned fixtureTypeIndex(const Fixture &f, const std::string &type) {
+  auto found = std::find(f.types.begin(), f.types.end(), type);
+  EXPECT_NE(found, f.types.end());
+  return unsigned(found - f.types.begin());
+}
+// The first instruction is an invoke whose method index is patched from the
+// actual sorted method table, not an assumed index or an unused reference.
+Fixture invokingFixture(const MethodRef &callee, uint8_t opcode = 0x6e) {
+  FixtureOptions o;
+  o.params = {callee.owner};
+  o.returns = callee.returns;
+  o.registers = 2;
+  o.referenced_method = callee;
+  o.words = {uint16_t(0x1000 | opcode), 0, 1};
+  if (callee.returns == "V")
+    o.words.push_back(0x000e);
+  else if (callee.returns.starts_with('L') || callee.returns.starts_with('[')) {
+    o.words.push_back(0x000c);
+    o.words.push_back(0x0011);
+  } else {
+    o.words.push_back(0x000a);
+    o.words.push_back(0x000f);
+  }
+  auto f = fixture(o);
+  auto found = std::find(f.methods.begin(), f.methods.end(), callee);
+  EXPECT_NE(found, f.methods.end());
+  patch(f.data, f.at["code"] + 18, found - f.methods.begin(), 2);
+  f.data = seal(std::move(f.data));
+  return f;
 }
 Class smali(std::string_view body) {
   Budget budget;
@@ -372,6 +471,114 @@ TEST(MobileDalvikReader, DexInvokesValidateReferencesAndArgumentWords) {
                                           {0x00fa, 0, 0, 0, 0x000f}}) {
     o.words = code;
     EXPECT_THROW(parse(fixture(o).data), Error);
+  }
+}
+TEST(MobileDalvikReader, DexArrayCloneCallsAgreeWithSmali) {
+  for (const std::string owner : {"[I", "[Ljava/lang/reflect/Type;", "[[I"}) {
+    SCOPED_TRACE(owner);
+    MethodRef callee{owner, "clone", {}, "Ljava/lang/Object;"};
+    auto f = invokingFixture(callee);
+    auto classes = parse(f.data);
+    ASSERT_EQ(classes.size(), 1u);
+    ASSERT_EQ(classes[0].methods.size(), 1u);
+    const auto &dex_method = classes[0].methods[0];
+    // The external array method must not enter the definition inventory.
+    EXPECT_EQ(dex_method.reference.identity(),
+              "Lfixture/Sample;->value(" + owner + ")Ljava/lang/Object;");
+    ASSERT_EQ(dex_method.instructions.size(), 3u);
+    EXPECT_EQ(dex_method.instructions[0].opcode, "invoke-virtual");
+    EXPECT_EQ(dex_method.instructions[0].registers, (std::vector<unsigned>{1}));
+    EXPECT_EQ(std::get<MethodRef>(dex_method.instructions[0].reference), callee);
+    EXPECT_EQ(dex_method.instructions[1].opcode, "move-result-object");
+    EXPECT_EQ(dex_method.instructions[2].opcode, "return-object");
+    auto smali_class = smali(methodText(
+        "invoke-virtual {p0}, " + callee.identity() +
+            "\nmove-result-object v0\nreturn-object v0",
+        "value(" + owner + ")Ljava/lang/Object;", 2));
+    const auto &smali_method = smali_class.methods[0];
+    ASSERT_EQ(smali_method.instructions.size(), dex_method.instructions.size());
+    EXPECT_EQ(smali_method.code_end, dex_method.code_end);
+    EXPECT_EQ(smali_method.registers, dex_method.registers);
+    for (size_t i = 0; i < dex_method.instructions.size(); ++i) {
+      const auto &a = dex_method.instructions[i];
+      const auto &b = smali_method.instructions[i];
+      EXPECT_EQ(a.pc, b.pc);
+      EXPECT_EQ(a.opcode, b.opcode);
+      EXPECT_EQ(a.registers, b.registers);
+      EXPECT_EQ(a.reference, b.reference);
+    }
+  }
+}
+TEST(MobileDalvikReader, DexArrayOwnersAreNotRestrictedToClone) {
+  MethodRef callee{"[I", "hashCode", {}, "I"};
+  auto classes = parse(invokingFixture(callee).data);
+  ASSERT_EQ(classes.size(), 1u);
+  ASSERT_EQ(classes[0].methods.size(), 1u);
+  const auto &ins = classes[0].methods[0].instructions;
+  ASSERT_EQ(ins.size(), 3u);
+  EXPECT_EQ(std::get<MethodRef>(ins[0].reference), callee);
+  EXPECT_EQ(ins[1].opcode, "move-result");
+  EXPECT_EQ(ins[2].opcode, "return");
+}
+TEST(MobileDalvikReader, DexMemberOwnerKindsRemainStrict) {
+  FixtureOptions o;
+  o.params = {"I", "[I"};
+  o.registers = 2;
+  o.static_value = std::string("\x04\0", 2);
+  auto f = fixture(o);
+  ASSERT_NO_THROW(parse(f.data));
+  for (const std::string owner : {"I", "[I"}) {
+    SCOPED_TRACE(owner);
+    auto broken = f.data;
+    patch(broken, f.at["fields"], fixtureTypeIndex(f, owner), 2);
+    expectDexError(seal(std::move(broken)),
+                   "Invalid DEX: invalid member owner/name");
+  }
+  auto broken = f.data;
+  patch(broken, f.at["defined_method"], fixtureTypeIndex(f, "I"), 2);
+  expectDexError(seal(std::move(broken)),
+                 "Invalid DEX: invalid member owner/name");
+
+  o.returns = "V";
+  o.words = {0x000e};
+  f = fixture(o);
+  ASSERT_NO_THROW(parse(f.data));
+  for (const std::string table : {"fields", "defined_method"}) {
+    SCOPED_TRACE(table);
+    broken = f.data;
+    patch(broken, f.at[table], fixtureTypeIndex(f, "V"), 2);
+    expectDexError(seal(std::move(broken)),
+                   "Invalid DEX: void outside return type");
+  }
+}
+TEST(MobileDalvikReader, DexArrayMethodReferencesCannotBecomeDefinitions) {
+  FixtureOptions o;
+  o.params = {"[I"};
+  o.returns = "[I";
+  o.words = {0x0011};
+  auto f = fixture(o);
+  ASSERT_NO_THROW(parse(f.data));
+  unsigned array_index = fixtureTypeIndex(f, "[I");
+  auto broken = f.data;
+  patch(broken, f.at["class"], array_index);
+  expectDexError(seal(std::move(broken)),
+                 "Invalid DEX: invalid/duplicate class definition");
+  broken = f.data;
+  patch(broken, f.at["defined_method"], array_index, 2);
+  expectDexError(seal(std::move(broken)),
+                 "Invalid DEX: class-data member owner mismatch");
+}
+TEST(MobileDalvikReader, DexArrayInitializerCallsRemainInvalid) {
+  for (const std::string name : {"<init>", "<clinit>"}) {
+    SCOPED_TRACE(name);
+    MethodRef callee{"[I", name, {}, "V"};
+    auto f = invokingFixture(callee, 0x70);
+    expectDexError(f.data,
+                   "Invalid DEX: array type cannot own an initializer invocation");
+    EXPECT_THROW(smali(methodText("invoke-direct {p0}, " + callee.identity() +
+                                      "\nreturn-void",
+                                  "value([I)V", 2)),
+                 Error);
   }
 }
 TEST(MobileDalvikReader, DexSwitchAndArrayPayloadsAreNotExecutable) {
