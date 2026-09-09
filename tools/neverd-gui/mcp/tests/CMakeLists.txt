@@ -1,0 +1,13 @@
+cmake_minimum_required(VERSION 3.24)
+project(NeverDMcpTests LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_AUTOMOC ON)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Core Network Test)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+enable_testing()
+add_executable(neverd-mcp-qt-tests test_mcp.cpp ../McpConnectionManager.cpp ../GuiSessionBroker.cpp)
+target_include_directories(neverd-mcp-qt-tests PRIVATE ..)
+target_compile_definitions(neverd-mcp-qt-tests PRIVATE
+  TEST_PYTHON="${Python3_EXECUTABLE}" TEST_SERVER="${CMAKE_CURRENT_SOURCE_DIR}/fake_mcp.py")
+target_link_libraries(neverd-mcp-qt-tests PRIVATE Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME neverd-mcp-qt-tests COMMAND neverd-mcp-qt-tests)

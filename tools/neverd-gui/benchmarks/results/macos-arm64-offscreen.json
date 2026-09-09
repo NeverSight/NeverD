@@ -1,0 +1,295 @@
+{
+    "architecture": "arm64",
+    "build_type": "Release",
+    "cases": [
+        {
+            "before_to_after_rendering": {
+                "max_ms": 0.612542,
+                "min_ms": 0.457292,
+                "p50_ms": 0.503291,
+                "p95_ms": 0.567458,
+                "p99_ms": 0.598542,
+                "samples": 120
+            },
+            "bounded_objects_observed": true,
+            "frames": 120,
+            "logical_count": 100000,
+            "model_data_requests": 4512,
+            "model_update": {
+                "max_ms": 1.63575,
+                "min_ms": 1.166209,
+                "p50_ms": 1.295792,
+                "p95_ms": 1.46425,
+                "p99_ms": 1.559708,
+                "samples": 120
+            },
+            "peak_graph_scene_nodes": 0,
+            "peak_live_qml_row_delegates": 33,
+            "peak_visible_graph_nodes": 0,
+            "qt_frame_swapped_interval": {
+                "max_ms": 8.387042,
+                "min_ms": 6.984667,
+                "p50_ms": 7.851459,
+                "p95_ms": 8.1595,
+                "p99_ms": 8.299625,
+                "samples": 120
+            },
+            "qt_model_rows": 100000,
+            "queued_dispatch": {
+                "max_ms": 0.089041,
+                "min_ms": 0.003375,
+                "p50_ms": 0.005541,
+                "p95_ms": 0.067834,
+                "p99_ms": 0.078667,
+                "samples": 120
+            },
+            "request_to_frame_swapped": {
+                "max_ms": 8.383084,
+                "min_ms": 6.980375,
+                "p50_ms": 7.84775,
+                "p95_ms": 8.155541,
+                "p99_ms": 8.295625,
+                "samples": 120
+            },
+            "rss_end_bytes": 56360960,
+            "scenario": "100k-functions-sparse-model",
+            "warmup_frames": 20
+        },
+        {
+            "before_to_after_rendering": {
+                "max_ms": 0.653417,
+                "min_ms": 0.459625,
+                "p50_ms": 0.524916,
+                "p95_ms": 0.618625,
+                "p99_ms": 0.64375,
+                "samples": 120
+            },
+            "bounded_objects_observed": true,
+            "frames": 120,
+            "logical_count": 1000000,
+            "model_data_requests": 4512,
+            "model_update": {
+                "max_ms": 1.752625,
+                "min_ms": 1.176583,
+                "p50_ms": 1.331166,
+                "p95_ms": 1.560708,
+                "p99_ms": 1.712709,
+                "samples": 120
+            },
+            "peak_graph_scene_nodes": 0,
+            "peak_live_qml_row_delegates": 33,
+            "peak_visible_graph_nodes": 0,
+            "qt_frame_swapped_interval": {
+                "max_ms": 8.715459,
+                "min_ms": 6.909625,
+                "p50_ms": 8.019667,
+                "p95_ms": 8.254167,
+                "p99_ms": 8.441375,
+                "samples": 120
+            },
+            "qt_model_rows": 1000000,
+            "queued_dispatch": {
+                "max_ms": 0.082916,
+                "min_ms": 0.003666,
+                "p50_ms": 0.005416,
+                "p95_ms": 0.070542,
+                "p99_ms": 0.082,
+                "samples": 120
+            },
+            "request_to_frame_swapped": {
+                "max_ms": 8.710667,
+                "min_ms": 6.90675,
+                "p50_ms": 8.015458,
+                "p95_ms": 8.249833,
+                "p99_ms": 8.4375,
+                "samples": 120
+            },
+            "rss_end_bytes": 56852480,
+            "scenario": "1m-functions-sparse-model",
+            "warmup_frames": 20
+        },
+        {
+            "before_to_after_rendering": {
+                "max_ms": 1.081292,
+                "min_ms": 0.59825,
+                "p50_ms": 0.687167,
+                "p95_ms": 0.776291,
+                "p99_ms": 1.047042,
+                "samples": 120
+            },
+            "bounded_objects_observed": true,
+            "frames": 120,
+            "logical_count": 10000000,
+            "model_data_requests": 5849,
+            "model_update": {
+                "max_ms": 2.905833,
+                "min_ms": 1.558667,
+                "p50_ms": 1.748792,
+                "p95_ms": 2.02425,
+                "p99_ms": 2.782625,
+                "samples": 120
+            },
+            "peak_graph_scene_nodes": 0,
+            "peak_live_qml_row_delegates": 41,
+            "peak_visible_graph_nodes": 0,
+            "qt_frame_swapped_interval": {
+                "max_ms": 9.86525,
+                "min_ms": 8.019084,
+                "p50_ms": 9.076708,
+                "p95_ms": 9.438667,
+                "p99_ms": 9.477667,
+                "samples": 120
+            },
+            "qt_model_rows": 512,
+            "queued_dispatch": {
+                "max_ms": 0.075958,
+                "min_ms": 0.002959,
+                "p50_ms": 0.005166,
+                "p95_ms": 0.064833,
+                "p99_ms": 0.071125,
+                "samples": 120
+            },
+            "request_to_frame_swapped": {
+                "max_ms": 9.862167,
+                "min_ms": 8.016167,
+                "p50_ms": 9.073333,
+                "p95_ms": 9.435334,
+                "p99_ms": 9.472667,
+                "samples": 120
+            },
+            "rss_end_bytes": 58671104,
+            "scenario": "10m-logical-text-window",
+            "warmup_frames": 20
+        },
+        {
+            "before_to_after_rendering": {
+                "max_ms": 3.712959,
+                "min_ms": 0.996041,
+                "p50_ms": 2.222542,
+                "p95_ms": 2.89475,
+                "p99_ms": 3.189208,
+                "samples": 120
+            },
+            "bounded_objects_observed": true,
+            "frames": 120,
+            "logical_count": 1000,
+            "model_data_requests": 0,
+            "model_update": {
+                "max_ms": 0.038458,
+                "min_ms": 0.001833,
+                "p50_ms": 0.013083,
+                "p95_ms": 0.022125,
+                "p99_ms": 0.026042,
+                "samples": 120
+            },
+            "peak_graph_scene_nodes": 168,
+            "peak_live_qml_row_delegates": 0,
+            "peak_visible_graph_nodes": 56,
+            "qt_frame_swapped_interval": {
+                "max_ms": 10.41125,
+                "min_ms": 6.96625,
+                "p50_ms": 8.68525,
+                "p95_ms": 9.564083,
+                "p99_ms": 9.89275,
+                "samples": 120
+            },
+            "qt_model_rows": 0,
+            "queued_dispatch": {
+                "max_ms": 0.022917,
+                "min_ms": 0.002125,
+                "p50_ms": 0.005833,
+                "p95_ms": 0.009042,
+                "p99_ms": 0.010542,
+                "samples": 120
+            },
+            "request_to_frame_swapped": {
+                "max_ms": 10.405084,
+                "min_ms": 6.963333,
+                "p50_ms": 8.6785,
+                "p95_ms": 9.556875,
+                "p99_ms": 9.886084,
+                "samples": 120
+            },
+            "rss_end_bytes": 67223552,
+            "scenario": "1k-graph-overview",
+            "warmup_frames": 20
+        },
+        {
+            "before_to_after_rendering": {
+                "max_ms": 3.856833,
+                "min_ms": 0.918459,
+                "p50_ms": 2.148833,
+                "p95_ms": 2.801084,
+                "p99_ms": 3.382667,
+                "samples": 120
+            },
+            "bounded_objects_observed": true,
+            "frames": 120,
+            "logical_count": 10000,
+            "model_data_requests": 0,
+            "model_update": {
+                "max_ms": 0.156583,
+                "min_ms": 0.002,
+                "p50_ms": 0.014458,
+                "p95_ms": 0.023167,
+                "p99_ms": 0.032458,
+                "samples": 120
+            },
+            "peak_graph_scene_nodes": 168,
+            "peak_live_qml_row_delegates": 0,
+            "peak_visible_graph_nodes": 56,
+            "qt_frame_swapped_interval": {
+                "max_ms": 15.295917,
+                "min_ms": 6.69975,
+                "p50_ms": 8.668459,
+                "p95_ms": 9.433333,
+                "p99_ms": 12.9125,
+                "samples": 120
+            },
+            "qt_model_rows": 0,
+            "queued_dispatch": {
+                "max_ms": 0.017166,
+                "min_ms": 0.002083,
+                "p50_ms": 0.005959,
+                "p95_ms": 0.008333,
+                "p99_ms": 0.009833,
+                "samples": 120
+            },
+            "request_to_frame_swapped": {
+                "max_ms": 15.293334,
+                "min_ms": 6.693083,
+                "p50_ms": 8.662917,
+                "p95_ms": 9.431208,
+                "p99_ms": 12.909917,
+                "samples": 120
+            },
+            "rss_end_bytes": 72105984,
+            "scenario": "10k-graph-overview",
+            "warmup_frames": 20
+        }
+    ],
+    "caveats": [
+        "Synthetic data/windowing harness, not the production workbench and not a real recovered million-function image.",
+        "frameSwapped is a Qt signal, not independently measured hardware presentation; offscreen runs are not display-frame acceptance.",
+        "queued_dispatch is synthetic event-loop delivery, not keyboard/IME/input-to-display latency.",
+        "Graph workload is analytical grid culling and overview rectangles/edges; it excludes graph layout and full CFG text.",
+        "RSS covers this Qt process only, not a simultaneous worker, plugins, private/PSS memory or GPU allocations.",
+        "No P0 acceptance decision; compare same hardware, Qt version, backend, viewport, font and build configuration."
+    ],
+    "device_pixel_ratio": 1,
+    "font_family": "monospace",
+    "font_pixel_size": 14,
+    "graphics_api": "software",
+    "kind": "synthetic-qt-viewport",
+    "platform": "macOS Sequoia (15.6.1)",
+    "platform_plugin": "offscreen",
+    "qt_version": "6.11.1",
+    "rendering_thread_is_gui": true,
+    "requested_render_loop": "Qt default",
+    "rss_start_bytes": 49037312,
+    "schema": 1,
+    "seed": 3389,
+    "text_window_rows": 512,
+    "window_height": 700,
+    "window_width": 1100
+}

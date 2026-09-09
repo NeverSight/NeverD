@@ -7,9 +7,12 @@
 #include "gtest/gtest.h"
 
 #include "neverd/sdk/NeverDCAPI.h"
+#include "neverd/support/ProjectWriteLock.h"
 
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Object/ELFTypes.h"
+#include "llvm/Support/Error.h"
+#include "llvm/Support/JSON.h"
 
 #include <array>
 #include <atomic>
@@ -17,8 +20,14 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <string>
 #include <string_view>
+#ifndef _WIN32
+#include <csignal>
+#include <sys/resource.h>
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -32,14 +41,13 @@ std::string takeString(const char *Value) {
 
 // A sectionless executable with one RX segment and a two-instruction body.
 // Keeping both ISAs in the fixture makes decoder state observable on reload.
-std::string makeNativeELF(bool AArch64) {
+std::string makeNativeELF(bool AArch64, uint64_t Base = 0x400000) {
   using ELF = llvm::object::ELF64LE;
   using namespace llvm::ELF;
   const std::string Code =
       AArch64 ? std::string("\xe0\x00\x80\x52\xc0\x03\x5f\xd6", 8)
               : std::string("\xb8\x07\x00\x00\x00\xc3", 6);
   const size_t CodeOffset = sizeof(ELF::Ehdr) + sizeof(ELF::Phdr);
-  constexpr uint64_t Base = 0x400000;
   std::string Bytes(CodeOffset + Code.size(), '\0');
   ELF::Ehdr Header{};
   std::memcpy(Header.e_ident, ElfMagic, sizeof(ElfMagic) - 1);
@@ -115,6 +123,30 @@ protected:
   neverd_session_t Session = nullptr;
 };
 
+TEST_F(SessionCAPITest, SidecarWritesRespectWorkerOwnership) {
+  const std::string Input = write("owned.evm", "6001600055");
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  ASSERT_EQ(takeString(neverd_func_name(Session, 0)), "evm_entry");
+  neverd_annotation_set(Session, 0, "staged note");
+  {
+    neverd::ProjectWriteLock Writer(Input);
+    ASSERT_TRUE(static_cast<bool>(Writer)) << Writer.error();
+    EXPECT_NE(neverd_annotations_save(Session), 0);
+    EXPECT_FALSE(std::filesystem::exists(Input + ".neverd-annotations.json"));
+    EXPECT_NE(neverd_rename_func(Session, "evm_entry", "blocked_name"), 0);
+    EXPECT_EQ(takeString(neverd_func_name(Session, 0)), "evm_entry");
+    EXPECT_EQ(takeString(neverd_renames_json(Session)), "[]");
+    EXPECT_FALSE(std::filesystem::exists(Input + ".neverd-renames.json"));
+    // Read-only views remain usable while another writer owns the input.
+    EXPECT_EQ(takeString(neverd_annotation_get(Session, 0)), "staged note");
+  }
+  ASSERT_EQ(neverd_annotations_save(Session), 0);
+  ASSERT_EQ(neverd_rename_func(Session, "evm_entry", "saved_name"), 0);
+  EXPECT_EQ(takeString(neverd_func_name(Session, 0)), "saved_name");
+  EXPECT_TRUE(std::filesystem::exists(Input + ".neverd-annotations.json"));
+  EXPECT_TRUE(std::filesystem::exists(Input + ".neverd-renames.json"));
+}
+
 TEST_F(SessionCAPITest, ReloadingRenamesRestoresNamesRemovedFromTheSidecar) {
   const std::string Original = write("original.evm", "6001600055");
   ASSERT_EQ(neverd_session_load(Session, Original.c_str()), 1);
@@ -130,6 +162,62 @@ TEST_F(SessionCAPITest, ReloadingRenamesRestoresNamesRemovedFromTheSidecar) {
   EXPECT_EQ(takeString(neverd_renames_json(Session)), "[]");
   EXPECT_EQ(takeString(neverd_func_name(Session, 0)), "evm_entry");
 }
+
+TEST_F(SessionCAPITest,
+       ReloadingAbsentSidecarsDiscardsStagedNotesAndDeletedRenames) {
+  const std::string Path = write("reload.evm", "6001600055");
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  neverd_annotation_set(Session, 0, "discard this unsaved note");
+  ASSERT_FALSE(std::filesystem::exists(Path + ".neverd-annotations.json"));
+  ASSERT_EQ(neverd_annotations_load(Session), 0);
+  EXPECT_TRUE(takeString(neverd_annotation_get(Session, 0)).empty());
+
+  ASSERT_EQ(neverd_rename_func(Session, "evm_entry", "reviewed_entry"), 0);
+  ASSERT_TRUE(std::filesystem::remove(Path + ".neverd-renames.json"));
+  ASSERT_EQ(neverd_renames_load(Session), 0);
+  EXPECT_EQ(takeString(neverd_func_name(Session, 0)), "evm_entry");
+  EXPECT_EQ(takeString(neverd_renames_json(Session)), "[]");
+}
+
+#ifndef _WIN32
+TEST_F(SessionCAPITest,
+       FailedSidecarWritesReturnErrorsAndPreservePreviousFiles) {
+  const std::string Path = write("write-failure.evm", "6001600055");
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  ASSERT_EQ(neverd_annotations_save(Session), 0);
+  ASSERT_EQ(neverd_renames_save(Session), 0);
+  ASSERT_EQ(neverd_func_count(Session), 1);
+  ASSERT_EXIT(
+      {
+        struct rlimit Limit;
+        if (getrlimit(RLIMIT_FSIZE, &Limit) != 0)
+          _exit(2);
+        Limit.rlim_cur = 1;
+        if (setrlimit(RLIMIT_FSIZE, &Limit) != 0)
+          _exit(3);
+        std::signal(SIGXFSZ, SIG_IGN);
+        neverd_annotation_set(Session, 0, "staged note");
+        if (neverd_annotations_save(Session) == 0)
+          _exit(4);
+        if (takeString(neverd_last_error(Session)).empty())
+          _exit(5);
+        if (neverd_rename_func(Session, "evm_entry", "failed_name") == 0)
+          _exit(6);
+        if (takeString(neverd_func_name(Session, 0)) != "evm_entry")
+          _exit(7);
+        for (const char *Suffix :
+             {".neverd-annotations.json", ".neverd-renames.json"}) {
+          std::ifstream Input(Path + Suffix);
+          std::string Text((std::istreambuf_iterator<char>(Input)),
+                           std::istreambuf_iterator<char>());
+          if (Text != "[]")
+            _exit(8);
+        }
+        _exit(0);
+      },
+      ::testing::ExitedWithCode(0), ".*");
+}
+#endif
 
 TEST_F(SessionCAPITest, FailedDebugReloadPreservesLoadedImageAnalysisAndEdits) {
   const std::string Original = write("original.evm", "6001600055");
@@ -332,6 +420,111 @@ TEST_F(SessionCAPITest, TargetOptionChangesInvalidatePreviouslyCachedLLVM) {
   ASSERT_EQ(neverd_evm_set_hardfork(Session, "shanghai"), 1);
   EXPECT_EQ(takeString(neverd_ir_llvm(Session, 0)), LLVMIR);
   EXPECT_TRUE(takeString(neverd_last_error(Session)).empty());
+}
+
+llvm::json::Object takeView(const char *Text) {
+  EXPECT_NE(Text, nullptr);
+  const auto Owned = takeString(Text);
+  auto Parsed = llvm::json::parse(Owned);
+  EXPECT_TRUE(static_cast<bool>(Parsed)) << Owned;
+  if (!Parsed) {
+    llvm::consumeError(Parsed.takeError());
+    return {};
+  }
+  auto *Object = Parsed->getAsObject();
+  EXPECT_NE(Object, nullptr);
+  return Object ? std::move(*Object) : llvm::json::Object{};
+}
+
+TEST_F(SessionCAPITest,
+       NativeIRViewPagesPreserveTextAndExactInstructionAnchors) {
+  for (bool AArch64 : {false, true}) {
+    SCOPED_TRACE(AArch64 ? "AArch64 high VA" : "x86_64");
+    const uint64_t Base = AArch64 ? 0xffff800000400000ULL : 0x400000;
+    const std::string Path = write("mapped.elf", makeNativeELF(AArch64, Base));
+    ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1)
+        << takeString(neverd_last_error(Session));
+    const auto Entry = neverd_session_entry_addr(Session);
+    const uint64_t ReturnAddress = Entry + (AArch64 ? 4 : 5);
+    for (const char *Stage : {"low", "med"}) {
+      SCOPED_TRACE(Stage);
+      const std::string Legacy = takeString(
+          std::strcmp(Stage, "low") == 0 ? neverd_ir_low(Session, Entry)
+                                         : neverd_ir_med(Session, Entry));
+      ASSERT_FALSE(Legacy.empty()) << takeString(neverd_last_error(Session));
+      size_t Offset = 0, Anchors = 0;
+      std::string Reassembled;
+      std::set<std::string> ObjectIds;
+      for (;;) {
+        auto Page =
+            takeView(neverd_ir_view_json(Session, Entry, Stage, Offset, 2));
+        ASSERT_EQ(Page.getString("mapping_status"), "instruction_anchors");
+        EXPECT_EQ(Page.getBoolean("provenance_complete"), false);
+        ASSERT_TRUE(Page.getString("text"));
+        Reassembled += Page.getString("text")->str();
+        const auto *Rows = Page.getArray("rows");
+        ASSERT_NE(Rows, nullptr);
+        ASSERT_LE(Rows->size(), 2U);
+        for (size_t I = 0; I < Rows->size(); ++I) {
+          const auto *Row = (*Rows)[I].getAsObject();
+          ASSERT_NE(Row, nullptr);
+          EXPECT_EQ(Row->getInteger("line"), Offset + I);
+          ASSERT_TRUE(Row->getString("object_id"));
+          EXPECT_TRUE(
+              ObjectIds.insert(Row->getString("object_id")->str()).second);
+          const auto *Addresses = Row->getArray("addresses");
+          ASSERT_NE(Addresses, nullptr);
+          if (Row->getString("mapping_status") == "instruction_anchor") {
+            ASSERT_EQ(Addresses->size(), 1U);
+            ASSERT_TRUE((*Addresses)[0].getAsString());
+            const auto Address =
+                std::stoull((*Addresses)[0].getAsString()->str(), nullptr, 16);
+            EXPECT_TRUE(Address == Entry || Address == ReturnAddress);
+            EXPECT_EQ(Row->getString("kind"), "operation");
+            EXPECT_GE(Row->getInteger("origin_seq").value_or(-1), 0);
+            ++Anchors;
+          } else
+            EXPECT_TRUE(Addresses->empty());
+        }
+        if (Page.getBoolean("complete").value_or(false)) {
+          EXPECT_EQ(Page.getInteger("total_lines"), Offset + Rows->size());
+          break;
+        }
+        ASSERT_TRUE(Page.getInteger("next_offset"));
+        const auto Next = *Page.getInteger("next_offset");
+        ASSERT_GT(Next, static_cast<int64_t>(Offset));
+        Offset = static_cast<size_t>(Next);
+        ASSERT_LT(Offset, 1000U);
+      }
+      EXPECT_GT(Anchors, 0U);
+      EXPECT_EQ(Reassembled, Legacy);
+      auto Beyond =
+          takeView(neverd_ir_view_json(Session, Entry, Stage, 10000, 2));
+      EXPECT_EQ(Beyond.getString("text"), "");
+      EXPECT_TRUE(Beyond.getBoolean("complete").value_or(false));
+      EXPECT_TRUE(Beyond.getArray("rows")->empty());
+    }
+  }
+}
+
+TEST_F(SessionCAPITest,
+       IRViewRejectsInvalidPagesAndReportsUnsupportedMappings) {
+  EXPECT_EQ(neverd_ir_view_json(Session, 0, "low", 0, 0), nullptr);
+  EXPECT_FALSE(takeString(neverd_last_error(Session)).empty());
+  EXPECT_EQ(neverd_ir_view_json(Session, 0, nullptr, 0, 1), nullptr);
+  EXPECT_EQ(neverd_ir_view_json(Session, 0, "med", 0, 2049), nullptr);
+  const std::string Path = write("mapped.evm", "600160020100");
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  auto VM = takeView(neverd_ir_view_json(Session, 0, "low", 0, 2));
+  EXPECT_EQ(VM.getString("mapping_status"), "unsupported_architecture");
+  EXPECT_TRUE(VM.getArray("rows")->empty());
+  EXPECT_FALSE(VM.getString("text"));
+  for (const char *Stage : {"c", "high", "llvm"}) {
+    auto Unsupported = takeView(neverd_ir_view_json(Session, 0, Stage, 0, 2));
+    EXPECT_EQ(Unsupported.getString("mapping_status"),
+              "unsupported_representation");
+    EXPECT_TRUE(Unsupported.getArray("rows")->empty());
+  }
 }
 
 } // namespace
