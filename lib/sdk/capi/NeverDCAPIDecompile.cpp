@@ -306,6 +306,10 @@ const char *neverd_ir_view_json(neverd_session_t Sess, neverd_va_t FuncEntry,
       return nullptr;
     }
     const llvm::StringRef Stage(Representation);
+    if (!llvm::json::isUTF8(Stage)) {
+      S->setError("IR view representation is not valid UTF-8");
+      return nullptr;
+    }
     llvm::json::Object Result;
     Result["schema_version"] = 1;
     Result["address"] = vaHex(FuncEntry);
@@ -369,6 +373,10 @@ const char *neverd_ir_view_json(neverd_session_t Sess, neverd_va_t FuncEntry,
       emitLowView(*Low, Sink, true);
     else
       emitMedView(*Med, Low, Sink);
+    if (!llvm::json::isUTF8(Text)) {
+      S->setError("IR view page text is not valid UTF-8");
+      return nullptr;
+    }
     const size_t End = std::min(Offset, Total) + Rows.size();
     Result["mapping_status"] = "instruction_anchors";
     Result["provenance_complete"] = false;

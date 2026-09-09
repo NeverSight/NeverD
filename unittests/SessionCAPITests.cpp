@@ -77,6 +77,64 @@ std::string makeNativeELF(bool AArch64, uint64_t Base = 0x400000) {
   return Bytes;
 }
 
+// Give the native function a loader-provided name without passing it through
+// another JSON API before the IR page boundary under test.
+std::string makeNamedNativeELF(const std::string &Name) {
+  using ELF = llvm::object::ELF64LE;
+  using namespace llvm::ELF;
+  std::string Bytes = makeNativeELF(false);
+  ELF::Ehdr Header{};
+  std::memcpy(&Header, Bytes.data(), sizeof(Header));
+  std::array<ELF::Shdr, 5> Sections{};
+  Sections[1].sh_name = 1;
+  Sections[1].sh_type = SHT_PROGBITS;
+  Sections[1].sh_flags = SHF_ALLOC | SHF_EXECINSTR;
+  Sections[1].sh_addr = Header.e_entry;
+  Sections[1].sh_offset = sizeof(ELF::Ehdr) + sizeof(ELF::Phdr);
+  Sections[1].sh_size = 6;
+  Sections[1].sh_addralign = 1;
+
+  Bytes.resize((Bytes.size() + 7) & ~size_t(7), '\0');
+  std::array<ELF::Sym, 2> Symbols{};
+  Symbols[1].st_name = 1;
+  Symbols[1].setBindingAndType(STB_GLOBAL, STT_FUNC);
+  Symbols[1].st_shndx = 1;
+  Symbols[1].st_value = Header.e_entry;
+  Symbols[1].st_size = 6;
+  Sections[2].sh_name = 7;
+  Sections[2].sh_type = SHT_SYMTAB;
+  Sections[2].sh_offset = Bytes.size();
+  Sections[2].sh_size = sizeof(Symbols);
+  Sections[2].sh_link = 3;
+  Sections[2].sh_info = 1;
+  Sections[2].sh_addralign = 8;
+  Sections[2].sh_entsize = sizeof(ELF::Sym);
+  Bytes.append(reinterpret_cast<const char *>(Symbols.data()), sizeof(Symbols));
+
+  const std::string Names = std::string(1, '\0') + Name + '\0';
+  Sections[3].sh_name = 15;
+  Sections[3].sh_type = SHT_STRTAB;
+  Sections[3].sh_offset = Bytes.size();
+  Sections[3].sh_size = Names.size();
+  Sections[3].sh_addralign = 1;
+  Bytes += Names;
+  constexpr char SectionNames[] = "\0.text\0.symtab\0.strtab\0.shstrtab";
+  Sections[4].sh_name = 23;
+  Sections[4].sh_type = SHT_STRTAB;
+  Sections[4].sh_offset = Bytes.size();
+  Sections[4].sh_size = sizeof(SectionNames);
+  Sections[4].sh_addralign = 1;
+  Bytes.append(SectionNames, sizeof(SectionNames));
+  Bytes.resize((Bytes.size() + 7) & ~size_t(7), '\0');
+  Header.e_shoff = Bytes.size();
+  Header.e_shnum = Sections.size();
+  Header.e_shstrndx = 4;
+  Bytes.append(reinterpret_cast<const char *>(Sections.data()),
+               sizeof(Sections));
+  std::memcpy(Bytes.data(), &Header, sizeof(Header));
+  return Bytes;
+}
+
 class SessionCAPITest : public ::testing::Test {
 protected:
   void SetUp() override {
@@ -524,6 +582,92 @@ TEST_F(SessionCAPITest,
     EXPECT_EQ(Unsupported.getString("mapping_status"),
               "unsupported_representation");
     EXPECT_TRUE(Unsupported.getArray("rows")->empty());
+  }
+}
+
+TEST_F(SessionCAPITest, IRViewRejectsInvalidUTF8Representation) {
+  EXPECT_EQ(neverd_ir_view_json(Session, 0, "\xff", 0, 1), nullptr);
+  EXPECT_NE(takeString(neverd_last_error(Session)).find("UTF-8"),
+            std::string::npos);
+  auto Unsupported = takeView(neverd_ir_view_json(Session, 0, "high", 0, 1));
+  EXPECT_EQ(Unsupported.getString("mapping_status"),
+            "unsupported_representation");
+  EXPECT_TRUE(takeString(neverd_last_error(Session)).empty());
+}
+
+TEST_F(SessionCAPITest, IRViewPreservesEscapedLoaderNames) {
+  const std::string Name = std::string("entry_") + '\xff';
+  const std::string Expected = "entry_\\xFF";
+  const auto Path = write("named.elf", makeNamedNativeELF(Name));
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1)
+      << takeString(neverd_last_error(Session));
+  const auto Entry = neverd_session_entry_addr(Session);
+  int FunctionIndex = -1;
+  const int FunctionCount = neverd_func_count(Session);
+  for (int I = 0; I < FunctionCount; ++I)
+    if (neverd_func_entry(Session, I) == Entry) {
+      FunctionIndex = I;
+      break;
+    }
+  ASSERT_GE(FunctionIndex, 0) << takeString(neverd_last_error(Session));
+  ASSERT_EQ(takeString(neverd_func_name(Session, FunctionIndex)), Expected);
+  for (const char *Stage : {"low", "med"}) {
+    SCOPED_TRACE(Stage);
+    const std::string Legacy = takeString(std::strcmp(Stage, "low") == 0
+                                              ? neverd_ir_low(Session, Entry)
+                                              : neverd_ir_med(Session, Entry));
+    const std::string LegacyError = takeString(neverd_last_error(Session));
+    ASSERT_FALSE(Legacy.empty()) << ::testing::PrintToString(LegacyError);
+    ASSERT_NE(Legacy.find(Expected), std::string::npos)
+        << "IR: " << ::testing::PrintToString(Legacy)
+        << " error: " << ::testing::PrintToString(LegacyError);
+    ASSERT_NE(Legacy.find('\n'), std::string::npos);
+    auto First = takeView(neverd_ir_view_json(Session, Entry, Stage, 0, 1));
+    ASSERT_TRUE(First.getString("text"));
+    EXPECT_EQ(First.getString("text"), Legacy.substr(0, Legacy.find('\n') + 1));
+    EXPECT_TRUE(llvm::json::isUTF8(*First.getString("text")));
+    EXPECT_TRUE(takeString(neverd_last_error(Session)).empty());
+    auto Next = takeView(neverd_ir_view_json(Session, Entry, Stage, 1, 1));
+    ASSERT_TRUE(Next.getString("text"));
+    EXPECT_FALSE(Next.getString("text")->empty());
+    EXPECT_TRUE(takeString(neverd_last_error(Session)).empty());
+  }
+}
+
+TEST_F(SessionCAPITest, IRViewPreservesMultibyteUTF8AcrossPhysicalPages) {
+  const std::string Name = "entry_\xc3\xa9\n\xe4\xb8\xad_\xf0\x9f\x98\x80";
+  const auto Path = write("unicode.elf", makeNamedNativeELF(Name));
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1)
+      << takeString(neverd_last_error(Session));
+  const auto Entry = neverd_session_entry_addr(Session);
+  for (const char *Stage : {"low", "med"}) {
+    SCOPED_TRACE(Stage);
+    const std::string Legacy = takeString(std::strcmp(Stage, "low") == 0
+                                              ? neverd_ir_low(Session, Entry)
+                                              : neverd_ir_med(Session, Entry));
+    ASSERT_NE(Legacy.find(Name), std::string::npos);
+    size_t Offset = 0;
+    std::string Reassembled;
+    for (;;) {
+      auto Page =
+          takeView(neverd_ir_view_json(Session, Entry, Stage, Offset, 1));
+      ASSERT_TRUE(Page.getString("text"));
+      EXPECT_TRUE(llvm::json::isUTF8(*Page.getString("text")));
+      Reassembled += Page.getString("text")->str();
+      const auto *Rows = Page.getArray("rows");
+      ASSERT_NE(Rows, nullptr);
+      ASSERT_EQ(Rows->size(), 1U);
+      ASSERT_NE((*Rows)[0].getAsObject(), nullptr);
+      EXPECT_EQ((*Rows)[0].getAsObject()->getInteger("line"), Offset);
+      if (Page.getBoolean("complete").value_or(false)) {
+        EXPECT_EQ(Page.getInteger("total_lines"), Offset + 1);
+        break;
+      }
+      ASSERT_EQ(Page.getInteger("next_offset"), Offset + 1);
+      ASSERT_LT(++Offset, 1000U);
+    }
+    EXPECT_EQ(Reassembled, Legacy);
+    EXPECT_TRUE(takeString(neverd_last_error(Session)).empty());
   }
 }
 
