@@ -76,6 +76,20 @@ if(BUILD_TESTING)
     add_test(NAME NeverDGuiController COMMAND neverd-gui-tests)
     set_tests_properties(NeverDGuiController PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
   endif()
+  qt_add_executable(neverd-gui-text-position-tests
+    tests/TextPanePositionTests.cpp NativeCodeHighlighter.cpp)
+  target_link_libraries(neverd-gui-text-position-tests PRIVATE
+    neverd_gui_core Qt6::Quick Qt6::QuickControls2 Qt6::Test)
+  target_compile_definitions(neverd-gui-text-position-tests PRIVATE
+    TEST_QML_DIR="${CMAKE_CURRENT_SOURCE_DIR}/qml")
+  if(TARGET neverd-worker-test-server)
+    target_compile_definitions(neverd-gui-text-position-tests PRIVATE
+      TEST_WORKER="$<TARGET_FILE:neverd-worker-test-server>")
+    add_dependencies(neverd-gui-text-position-tests neverd-worker-test-server)
+  endif()
+  add_test(NAME NeverDGuiTextPosition COMMAND neverd-gui-text-position-tests)
+  set_tests_properties(NeverDGuiTextPosition PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
   qt_add_executable(neverd-gui-graph-tests tests/NativeGraphItemTests.cpp NativeGraphItem.cpp)
   target_link_libraries(neverd-gui-graph-tests PRIVATE Qt6::Quick Qt6::Test)
   target_include_directories(neverd-gui-graph-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -115,7 +129,8 @@ if(BUILD_TESTING)
   # These are console test runners, even though they exercise Qt GUI objects.
   # Keep their diagnostics connected to CTest's stdout on Windows.
   foreach(_neverd_gui_test IN ITEMS neverd-gui-tests neverd-gui-graph-tests
-      neverd-gui-page-tests neverd-mcp-qt-tests neverd-gui-language-tests)
+      neverd-gui-text-position-tests neverd-gui-page-tests neverd-mcp-qt-tests
+      neverd-gui-language-tests)
     if(TARGET ${_neverd_gui_test})
       set_target_properties(${_neverd_gui_test} PROPERTIES WIN32_EXECUTABLE FALSE)
     endif()
