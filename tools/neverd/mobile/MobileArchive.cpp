@@ -85,11 +85,17 @@ struct Entry {
 };
 
 void zip64(std::string_view extra, uint64_t &uncompressed, uint64_t &compressed,
-           uint64_t &local, uint64_t &disk) {
+           uint64_t &local, uint64_t &disk, bool local_padding = false) {
   bool required = uncompressed == 0xffffffff || compressed == 0xffffffff ||
                   local == 0xffffffff || disk == 0xffff;
   bool found = false;
   for (size_t offset = 0; offset < extra.size();) {
+    // Android zipalign appends zero bytes to the local extra area, including
+    // tails shorter than a four-byte extra-field header. Central records do
+    // not carry this padding. Required ZIP64 values must still be present.
+    if (local_padding && extra.size() - offset < 4 &&
+        extra.substr(offset).find_first_not_of('\0') == std::string_view::npos)
+      break;
     unsigned kind = integer(extra, offset, 2),
              length = integer(extra, offset + 2, 2);
     offset += 4;
@@ -355,7 +361,7 @@ extractZip(const fs::path &source, const fs::path &dest, const Limits &limits,
                uncompressed = integer(header, 22, 4);
       uint64_t local = 0, disk = 0;
       zip64(std::string_view(fields).substr(length), uncompressed, compressed,
-            local, disk);
+            local, disk, true);
       if (compressed != entry.compressed ||
           uncompressed != entry.uncompressed ||
           integer(header, 14, 4) != entry.crc)

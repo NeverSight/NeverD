@@ -32,6 +32,7 @@ struct ZipItem {
   std::string name, bytes;
   bool deflate = false;
   uint32_t attributes = 0100600u << 16;
+  std::string local_extra = {}, central_extra = {};
 };
 std::string zip(const std::vector<ZipItem> &items, bool wide = false) {
   std::string result, directory;
@@ -67,8 +68,9 @@ std::string zip(const std::vector<ZipItem> &items, bool wide = false) {
     put(result, compressed.size(), 4);
     put(result, item.bytes.size(), 4);
     put(result, item.name.size(), 2);
-    put(result, 0, 2);
+    put(result, item.local_extra.size(), 2);
     result += item.name;
+    result += item.local_extra;
     result += compressed;
     put(directory, 0x02014b50, 4);
     put(directory, 0x314, 2);
@@ -80,13 +82,14 @@ std::string zip(const std::vector<ZipItem> &items, bool wide = false) {
     put(directory, compressed.size(), 4);
     put(directory, item.bytes.size(), 4);
     put(directory, item.name.size(), 2);
-    put(directory, 0, 2);
+    put(directory, item.central_extra.size(), 2);
     put(directory, 0, 2);
     put(directory, 0, 2);
     put(directory, 0, 2);
     put(directory, item.attributes, 4);
     put(directory, local, 4);
     directory += item.name;
+    directory += item.central_extra;
   }
   auto offset = result.size();
   result += directory;
@@ -228,6 +231,98 @@ TEST_F(MobileCommonTest, ArchiveCorruptionAndLimitsReject) {
   EXPECT_THROW(extractZip(root / "truncated.zip", root / "truncated", {}),
                Error);
 }
+TEST_F(MobileCommonTest, LocalAlignmentPaddingPreservesPayloadValidation) {
+  unsigned index = 0;
+  for (bool deflated : {false, true})
+    for (unsigned count : {1u, 2u, 3u, 4u, 5u, 4095u}) {
+      auto stem = "aligned-" + std::to_string(index++);
+      auto archive = root / (stem + ".apk");
+      ZipItem code{"classes.dex", "bytecode", deflated},
+          resource{"resources.arsc", "resource", deflated};
+      code.local_extra.assign(count, '\0');
+      // A normal extra record can precede the zero alignment tail.
+      put(resource.local_extra, 0x1234, 2);
+      put(resource.local_extra, 3, 2);
+      resource.local_extra += "abc";
+      resource.local_extra.append(count, '\0');
+      auto bytes = zip({code, resource});
+      writeFile(archive, bytes);
+      auto output = root / stem;
+      auto files = extractZip(archive, output, {}, [](const fs::path &path) {
+        return path == "classes.dex";
+      });
+      ASSERT_EQ(files.size(), 1u);
+      EXPECT_EQ(readFile(files[0], 1024), "bytecode");
+      EXPECT_FALSE(fs::exists(output / "resources.arsc"));
+      // Padding acceptance cannot bypass checksums of unwritten resources.
+      auto central = bytes.rfind(std::string("PK\1\2", 4));
+      ASSERT_NE(central, std::string::npos);
+      bytes[central + 16] ^= 1;
+      auto local = bytes.find(std::string("PK\3\4", 4), 1);
+      ASSERT_NE(local, std::string::npos);
+      bytes[local + 14] ^= 1;
+      auto corrupt = root / (stem + "-bad-crc.apk");
+      writeFile(corrupt, bytes);
+      EXPECT_THROW(extractZip(corrupt, root / (stem + "-bad-crc"), {},
+                              [](const fs::path &) { return false; }),
+                   Error);
+    }
+  ZipItem large{"resources.arsc", std::string(1024, 'r'), true};
+  large.local_extra.assign(2, '\0');
+  auto compressed = zip({large});
+  ASSERT_LT(compressed.size(), large.bytes.size());
+  writeFile(root / "aligned-budget.zip", compressed);
+  Limits limits;
+  limits.max_bytes = compressed.size();
+  EXPECT_THROW(extractZip(root / "aligned-budget.zip", root / "budget", limits,
+                          [](const fs::path &) { return false; }),
+               Error);
+}
+
+TEST_F(MobileCommonTest, AlignmentPaddingDoesNotHideMissingExtraMetadata) {
+  unsigned index = 0;
+  for (const auto &tail : {std::string("\1", 1), std::string("\0\1", 2),
+                           std::string("\0\0\1", 3),
+                           std::string("\x34\x12\x10\0", 4)}) {
+    ZipItem item{"classes.dex", "bytecode"};
+    item.local_extra = tail;
+    auto archive = root / ("bad-extra-" + std::to_string(index++) + ".zip");
+    writeFile(archive, zip({item}));
+    EXPECT_THROW(extractZip(archive, root / archive.stem(), {}), Error);
+  }
+  ZipItem item{"classes.dex", "bytecode"};
+  item.central_extra.assign(2, '\0');
+  writeFile(root / "central-padding.zip", zip({item}));
+  EXPECT_THROW(extractZip(root / "central-padding.zip", root / "central", {}),
+               Error);
+  item.central_extra.clear();
+  item.local_extra.assign(2, '\0');
+  auto missing = zip({item});
+  // A ZIP64 sentinel still requires an actual ZIP64 extra-field value.
+  for (unsigned i = 18; i < 22; ++i)
+    missing[i] = char(0xff);
+  writeFile(root / "missing-zip64.zip", missing);
+  EXPECT_THROW(extractZip(root / "missing-zip64.zip", root / "missing", {}),
+               Error);
+  item.local_extra.clear();
+  put(item.local_extra, 1, 2);
+  put(item.local_extra, 16, 2);
+  put(item.local_extra, item.bytes.size(), 8);
+  put(item.local_extra, item.bytes.size(), 8);
+  item.local_extra.append(2, '\0');
+  auto resolved = zip({item});
+  resolved[4] = 45;
+  auto central = resolved.find(std::string("PK\1\2", 4));
+  ASSERT_NE(central, std::string::npos);
+  resolved[central + 6] = 45;
+  for (unsigned i = 18; i < 26; ++i)
+    resolved[i] = char(0xff);
+  writeFile(root / "padded-zip64.zip", resolved);
+  auto files = extractZip(root / "padded-zip64.zip", root / "padded-zip64", {});
+  ASSERT_EQ(files.size(), 1u);
+  EXPECT_EQ(readFile(files[0], 1024), "bytecode");
+}
+
 TEST_F(MobileCommonTest, SelectedCodeKeepsCaseDistinctResourcesInTheArchive) {
   auto archive = root / "release.apk", output = root / "code";
   writeFile(archive, zip({{"classes.dex", "bytecode"},
