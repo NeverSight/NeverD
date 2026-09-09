@@ -86,6 +86,11 @@ if(TARGET neverd_shared)
   target_include_directories(NeverDSessionCAPITests PRIVATE
     "${CMAKE_SOURCE_DIR}/include"
     ${LLVM_INCLUDE_DIRS})
+  if(WIN32)
+    # Windows exports only the public C ABI from the engine. The test uses the
+    # JSON parser to validate mapped pages; no GUI/worker links LLVM here.
+    target_link_libraries(NeverDSessionCAPITests PRIVATE LLVMSupport)
+  endif()
 endif()
 
 # Capability evidence is bound to CTest registrations, not to workflow text.

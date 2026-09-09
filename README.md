@@ -263,6 +263,16 @@ See [Testing NeverD](docs/testing.md) for focused targets, CTest labels, fixture
 
 </details>
 
+## Desktop workbench
+
+The optional [Qt Quick desktop workbench](docs/gui.md) provides dockable
+instruction, CFG, Hex, C and IR views, all 11 UI languages, saved annotations and
+MCP connections. Analysis runs in a separate Qt-free worker; CLI-only builds
+remain independent. See the [qualification record](docs/gui-qualification.md)
+for supported workflows and platform validation still required before release.
+
+![NeverD desktop workbench showing linked CFG and intermediate representations](docs/assets/neverd-gui-workbench.png)
+
 ## CLI
 
 ```text
