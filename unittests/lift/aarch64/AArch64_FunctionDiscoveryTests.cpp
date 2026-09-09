@@ -93,7 +93,8 @@ TEST(AArch64FunctionDiscovery,
       0u);
 }
 
-TEST(AArch64FunctionDiscovery, VerifiesZeroSizedTypedFunctionStartInsideKnownRange) {
+TEST(AArch64FunctionDiscovery,
+     VerifiesZeroSizedTypedFunctionStartInsideKnownRange) {
   constexpr va_t ImageVA = 0x5000;
   constexpr va_t TypedStartVA = ImageVA + 0x8;
 
@@ -111,8 +112,7 @@ TEST(AArch64FunctionDiscovery, VerifiesZeroSizedTypedFunctionStartInsideKnownRan
   Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
   Text.Data.assign(Text.Size, 0);
   writeLE<uint32_t>(Text.Data.data(), 0xD65F03C0u);
-  writeLE<uint32_t>(Text.Data.data() + (TypedStartVA - ImageVA),
-                    0xD65F03C0u);
+  writeLE<uint32_t>(Text.Data.data() + (TypedStartVA - ImageVA), 0xD65F03C0u);
   Img.Segments.push_back(std::move(Text));
   Img.Sections.push_back(
       makeMachOSection("__text", ImageVA, 0x10, /*ContainsInstructions=*/true));
@@ -124,9 +124,10 @@ TEST(AArch64FunctionDiscovery, VerifiesZeroSizedTypedFunctionStartInsideKnownRan
   FuncDetector Detector;
   const auto Functions = Detector.detect(Img, Dec);
 
-  EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
-                          [](const auto &F) { return F.first == TypedStartVA; }),
-            1u);
+  EXPECT_EQ(
+      std::count_if(Functions.begin(), Functions.end(),
+                    [](const auto &F) { return F.first == TypedStartVA; }),
+      1u);
 }
 
 TEST(AArch64FunctionDiscovery, RejectsZeroSizedTypedFunctionStartWithBadCode) {
@@ -158,9 +159,10 @@ TEST(AArch64FunctionDiscovery, RejectsZeroSizedTypedFunctionStartWithBadCode) {
   FuncDetector Detector;
   const auto Functions = Detector.detect(Img, Dec);
 
-  EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
-                          [](const auto &F) { return F.first == TypedStartVA; }),
-            0u);
+  EXPECT_EQ(
+      std::count_if(Functions.begin(), Functions.end(),
+                    [](const auto &F) { return F.first == TypedStartVA; }),
+      0u);
 }
 
 TEST(AArch64FunctionDiscovery, RejectsMisalignedCandidatesBeforeTrialLifting) {

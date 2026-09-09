@@ -106,13 +106,14 @@ void accountBuildTarget(size_t tools, uint64_t &bytes, const Budget &budget) {
   if (bytes > budget.limits.max_bytes ||
       record_bytes > budget.limits.max_bytes - bytes ||
       tools > (budget.limits.max_bytes - bytes - record_bytes) / tool_bytes)
-    throw Error("Mach-O build-target metadata construction exceeds byte budget");
+    throw Error(
+        "Mach-O build-target metadata construction exceeds byte budget");
   bytes += record_bytes + uint64_t(tools) * tool_bytes;
 }
 std::string_view buildPlatform(uint32_t platform) {
   switch (platform) {
 #define PLATFORM(symbol, id, name, build_name, target, tapi_target, marketing) \
-  case id:                                                                  \
+  case id:                                                                     \
     return #tapi_target;
 #include "llvm/BinaryFormat/MachO.def"
   default:
@@ -252,7 +253,8 @@ Selection thin(std::string_view bytes, Budget &budget) {
         throw Error("truncated Mach-O build-version command");
       const auto count = b.get(p + 20, 4);
       if ((len - 24) % 8 || count != (len - 24) / 8)
-        throw Error("Mach-O build-version tool count disagrees with command size");
+        throw Error(
+            "Mach-O build-version tool count disagrees with command size");
       accountBuildTarget(count, target_metadata_bytes, budget);
       BuildTarget target;
       target.command = cmd;
@@ -263,8 +265,8 @@ Selection thin(std::string_view bytes, Budget &budget) {
       for (uint64_t j = 0; j < count; ++j) {
         budget.tick();
         const auto entry = p + 24 + j * 8;
-        target.tools.push_back({uint32_t(b.get(entry, 4)),
-                                uint32_t(b.get(entry + 4, 4))});
+        target.tools.push_back(
+            {uint32_t(b.get(entry, 4)), uint32_t(b.get(entry + 4, 4))});
       }
       s.build_targets.push_back(std::move(target));
     } else if (cmd == llvm::MachO::LC_VERSION_MIN_MACOSX ||
@@ -407,22 +409,18 @@ Object buildTargetMetadata(const Selection &selection, Budget &budget) {
         {"command", std::string(buildCommand(target.command))},
         {"load_command_index", target.load_command_index},
         {"platform_id", modern ? Value(target.platform) : Value(nullptr)},
-        {"platform", modern ? std::string(buildPlatform(target.platform))
-                             : "unknown"},
+        {"platform",
+         modern ? std::string(buildPlatform(target.platform)) : "unknown"},
         {"minos_raw", target.minos},
         {"minos", buildVersion(target.minos)},
         {"sdk_raw", target.sdk},
         {"sdk", buildVersion(target.sdk)},
         {"tools", std::move(tools)}});
   }
-  Object report{{"status", "unknown"},
-                {"platform", "unknown"},
-                {"platform_id", nullptr},
-                {"minos_raw", nullptr},
-                {"minos", nullptr},
-                {"sdk_raw", nullptr},
-                {"sdk", nullptr},
-                {"commands", std::move(commands)}};
+  Object report{{"status", "unknown"},    {"platform", "unknown"},
+                {"platform_id", nullptr}, {"minos_raw", nullptr},
+                {"minos", nullptr},       {"sdk_raw", nullptr},
+                {"sdk", nullptr},         {"commands", std::move(commands)}};
   if (selection.build_targets.empty()) {
     report["reason"] = "no explicit Mach-O build-target command";
     return report;
@@ -431,8 +429,9 @@ Object buildTargetMetadata(const Selection &selection, Budget &budget) {
   // every command, including identical duplicates, without choosing a target
   // from command order, CPU architecture, bundle suffix, or the host platform.
   if (selection.build_targets.size() != 1) {
-    report["reason"] = "multiple Mach-O build-target commands; target selection "
-                       "is ambiguous";
+    report["reason"] =
+        "multiple Mach-O build-target commands; target selection "
+        "is ambiguous";
     return report;
   }
   const auto &target = selection.build_targets.front();

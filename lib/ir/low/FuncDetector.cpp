@@ -214,8 +214,8 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
       const uint8_t *Bytes = Img.readVA(Slot, PointerSize);
       if (!Bytes)
         continue;
-      const va_t Target = normalizeCodeAddress(
-          readPtr(Bytes, Img.is64Bit()), Img.Arch, Img.Mode);
+      const va_t Target = normalizeCodeAddress(readPtr(Bytes, Img.is64Bit()),
+                                               Img.Arch, Img.Mode);
       if (Img.hasExecutableCodeOwnerAt(Target) && !IsMachOLocalLabel(Target))
         Entries.insert(Target);
     }

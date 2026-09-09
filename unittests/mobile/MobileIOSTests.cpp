@@ -108,7 +108,7 @@ void makeDylib(std::string &data) {
   std::fill_n(data.begin() + p, length, '\0');
   integer(data, p, 0x0d); // LC_ID_DYLIB
   integer(data, p + 4, length);
-  integer(data, p + 8, 24); // dylib.name offset within this command
+  integer(data, p + 8, 24);          // dylib.name offset within this command
   integer(data, p + 16, 0x00010000); // current_version 1.0.0
   integer(data, p + 20, 0x00010000); // compatibility_version 1.0.0
   data.replace(p + 24, sizeof(name), name, sizeof(name));
@@ -297,9 +297,9 @@ TEST(MobileIOSNative, BuildTargetKeepsExplicitPlatformAndToolVersions) {
        {std::pair{1u, "macos"}, {2u, "ios"}, {7u, "ios-simulator"}}) {
     Budget budget;
     auto data = thin();
-    appendTarget(data, platform, 0x00120003, 0x001a0500,
-                 {{1, 0x00110002}, {2, 0x00060302}, {3, 0x03f50101},
-                  {999, 0xfffffeff}});
+    appendTarget(
+        data, platform, 0x00120003, 0x001a0500,
+        {{1, 0x00110002}, {2, 0x00060302}, {3, 0x03f50101}, {999, 0xfffffeff}});
     auto selected = selectSlice(data, "arm64", budget);
     ASSERT_EQ(selected.build_targets.size(), 1u);
     const auto &target = selected.build_targets.front();
@@ -343,7 +343,8 @@ TEST(MobileIOSNative, FatBuildTargetComesFromTheSelectedSlice) {
 }
 TEST(MobileIOSNative, BuildTargetPreservesMissingUnknownAndLegacyFacts) {
   Budget budget;
-  auto missing = buildTargetMetadata(selectSlice(thin(), "auto", budget), budget);
+  auto missing =
+      buildTargetMetadata(selectSlice(thin(), "auto", budget), budget);
   EXPECT_EQ(str(missing, "status"), "unknown");
   EXPECT_EQ(str(missing, "platform"), "unknown");
   EXPECT_TRUE(array(missing, "commands").empty());
@@ -374,9 +375,10 @@ TEST(MobileIOSNative, BuildTargetPreservesMissingUnknownAndLegacyFacts) {
 TEST(MobileIOSNative, MultipleBuildTargetsRemainAmbiguousWithoutLastWins) {
   // A zippered dylib legitimately records macOS and Mac Catalyst. Preserve
   // repeated and conflicting records too, without selecting an SDK profile.
-  for (auto [platform, minos, command] :
-       {std::tuple{6u, 0x00120000u, 0x32u}, {1u, 0x00120000u, 0x32u},
-        {1u, 0x00130000u, 0x32u}, {0u, 0x00120000u, 0x24u}}) {
+  for (auto [platform, minos, command] : {std::tuple{6u, 0x00120000u, 0x32u},
+                                          {1u, 0x00120000u, 0x32u},
+                                          {1u, 0x00130000u, 0x32u},
+                                          {0u, 0x00120000u, 0x24u}}) {
     Budget budget;
     auto data = thin();
     makeDylib(data);
@@ -436,8 +438,9 @@ TEST(MobileIOSNative, BuildTargetToolsRespectWorkAndConstructionBudgets) {
   Budget budget;
   auto selected = selectSlice(data, "auto", budget);
   auto report = buildTargetMetadata(selected, budget);
-  EXPECT_EQ(array(object(array(report, "commands")[0], "target"), "tools").size(),
-            4u);
+  EXPECT_EQ(
+      array(object(array(report, "commands")[0], "target"), "tools").size(),
+      4u);
   EXPECT_EQ(budget.output_bytes, 0u);
   Limits limits;
   limits.max_bytes = 1024;
