@@ -25,34 +25,31 @@ const std::set<std::string> keywords = {
     "self",       "_cmd",      "super",          "id",
     "Class",      "SEL",       "BOOL",           "nil",
     "YES",        "NO"};
-const std::set<std::string> foundation = {"NSObject",
-                                          "NSString",
-                                          "NSMutableString",
-                                          "NSNumber",
-                                          "NSArray",
-                                          "NSMutableArray",
-                                          "NSDictionary",
-                                          "NSMutableDictionary",
-                                          "NSData",
-                                          "NSMutableData",
-                                          "NSSet",
-                                          "NSMutableSet",
-                                          "NSDate",
-                                          "NSError",
-                                          "NSException",
-                                          "NSValue",
-                                          "NSURL",
-                                          "NSOperation",
-                                          "NSOperationQueue",
-                                          "NSProcessInfo",
-                                          "NSFileManager",
-                                          "NSPredicate",
-                                          "NSRegularExpression",
-                                          "NSJSONSerialization",
-                                          "NSNull",
-                                          "NSLock",
-                                          "NSRecursiveLock",
-                                          "NSCondition"};
+const std::set<std::string> foundation = {
+#define NEVERD_FOUNDATION_COMMON_CLASS(Name) #Name,
+#define NEVERD_FOUNDATION_PLATFORM_CLASS(Name)
+#include "MobileFoundationClasses.inc"
+#undef NEVERD_FOUNDATION_COMMON_CLASS
+#undef NEVERD_FOUNDATION_PLATFORM_CLASS
+};
+const std::set<std::string> importedFoundation = {
+#define NEVERD_FOUNDATION_COMMON_CLASS(Name) #Name,
+#define NEVERD_FOUNDATION_PLATFORM_CLASS(Name) #Name,
+#include "MobileFoundationClasses.inc"
+#undef NEVERD_FOUNDATION_COMMON_CLASS
+#undef NEVERD_FOUNDATION_PLATFORM_CLASS
+};
+// These imported scalar and geometry typedefs occupy the same identifier
+// namespace as Objective-C classes. Even a forward @class would conflict.
+const std::set<std::string> importedValueTypes = {
+    "NSInteger",    "NSUInteger",     "NSTimeInterval", "NSComparisonResult",
+    "NSRange",      "NSRangePointer", "NSPoint",        "NSPointPointer",
+    "NSPointArray", "NSSize",         "NSSizePointer",  "NSSizeArray",
+    "NSRect",       "NSRectPointer",  "NSRectArray",    "NSZone",
+    "CGFloat",      "unichar",        "int8_t",         "uint8_t",
+    "int16_t",      "uint16_t",       "int32_t",        "uint32_t",
+    "int64_t",      "uint64_t",       "intptr_t",       "uintptr_t",
+    "size_t",       "ptrdiff_t"};
 bool safe(const std::string &s) { return identifier(s) && !keywords.count(s); }
 const std::set<std::string> qualifiers = {"const", "volatile", "restrict",
                                           "__restrict", "__restrict__"};
@@ -359,6 +356,216 @@ Inventory inventory(const Object &metadata) {
     }
   return out;
 }
+struct DeclarationPlan {
+  std::vector<std::string> ordered;
+  std::map<std::string, std::string> errors;
+};
+
+// A method's source needs its complete class declaration even when it never
+// accesses instance storage. Resolve this separately from ivar-layout proofs,
+// and share the same plan with the header to avoid emitting an unusable class
+// alongside otherwise recoverable methods.
+DeclarationPlan declarationPlan(const Inventory &inv) {
+  DeclarationPlan plan;
+  std::set<std::string> available;
+  for (const auto &[name, ignored] : inv.classes) {
+    if (available.count(name) || plan.errors.count(name))
+      continue;
+    std::vector<std::string> chain;
+    std::set<std::string> pending;
+    std::string current = name, error;
+    for (;;) {
+      if (available.count(current))
+        break;
+      if (auto it = plan.errors.find(current); it != plan.errors.end()) {
+        error = it->second;
+        break;
+      }
+      if (!pending.insert(current).second) {
+        error = "cyclic superclass declarations";
+        break;
+      }
+      chain.push_back(current);
+      const auto &cls = inv.classes.at(current);
+      auto parent = str(cls, "superclass");
+      if (!safe(current) || inv.conflicts.count(current)) {
+        error = "invalid or conflicting class declaration";
+        break;
+      }
+      if (importedFoundation.count(current) ||
+          importedValueTypes.count(current)) {
+        error = "class declaration conflicts with an imported Foundation type";
+        break;
+      }
+      auto root = cls.getBoolean("root_class");
+      if (!root || (*root && !parent.empty())) {
+        error = "class declaration has inconsistent inheritance metadata";
+        break;
+      }
+      if (*root)
+        break;
+      if (!safe(parent)) {
+        error = "superclass declaration is unresolved or invalid";
+        break;
+      }
+      if (!inv.classes.count(parent)) {
+        if (!foundation.count(parent))
+          error = "superclass declaration is unavailable: " + parent;
+        break;
+      }
+      current = std::move(parent);
+    }
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+      if (!error.empty()) {
+        plan.errors[*it] = error;
+      } else {
+        available.insert(*it);
+        plan.ordered.push_back(*it);
+      }
+    }
+  }
+  return plan;
+}
+
+// A local superclass needs an actual class definition at link time. Resolve
+// that obligation after method-level conflicts: losing the only ordinary
+// implementation can invalidate descendants and other class dependencies.
+// Each class/edge/method is queued at most once; ancestor chains are shared.
+std::set<std::string> closeClassDefinitions(
+    const Inventory &inv, const DeclarationPlan &declarations,
+    bool complete_metadata,
+    const std::map<std::string, std::string> &layout_errors,
+    const std::map<size_t, std::set<std::string>> &dependencies,
+    Array &coverage, Budget &budget) {
+  struct ClassState {
+    std::string parent, reason;
+    std::vector<std::string> children;
+    std::vector<size_t> users;
+    size_t bodies = 0;
+    bool shell = false, available = false;
+  };
+  std::map<std::string, ClassState> classes;
+  std::map<std::string, bool> complete_layout;
+  for (const auto &name : declarations.ordered) {
+    budget.tick();
+    auto parent = str(inv.classes.at(name), "superclass");
+    complete_layout[name] =
+        !layout_errors.count(name) &&
+        (!inv.classes.count(parent) || complete_layout[parent]);
+  }
+  for (const auto &[name, record] : inv.classes) {
+    budget.tick();
+    auto &state = classes[name];
+    auto parent = str(record, "superclass");
+    if (inv.classes.count(parent))
+      state.parent = parent;
+    bool has_methods = false;
+    for (const auto &method : array(record, "methods")) {
+      budget.tick();
+      has_methods |= str(object(method, "method"), "category_name").empty();
+    }
+    if (auto it = declarations.errors.find(name);
+        it != declarations.errors.end())
+      state.reason = it->second;
+    else if (has_methods)
+      state.reason = "local class has no recovered ordinary implementation";
+    else if (!complete_metadata)
+      state.reason = "local class method inventory is incomplete";
+    else if (!complete_layout[name])
+      state.reason = "local class or ancestor layout is unavailable";
+    else
+      state.shell = true;
+  }
+  std::vector<bool> active(coverage.size());
+  std::map<size_t, std::string> body_owner;
+  for (const auto &[row, required] : dependencies) {
+    budget.tick();
+    const auto &method = object(coverage[row], "method coverage");
+    if (str(method, "status") != "recovered")
+      continue;
+    active[row] = true;
+    auto owner = str(method, "class_name");
+    if (classes.count(owner) && str(method, "category_name").empty()) {
+      ++classes.at(owner).bodies;
+      body_owner.emplace(row, owner);
+    }
+    for (const auto &name : required) {
+      budget.tick();
+      classes.at(name).users.push_back(row);
+    }
+  }
+  std::vector<std::string> missing;
+  for (auto &[name, state] : classes) {
+    budget.tick();
+    state.available =
+        !declarations.errors.count(name) && (state.shell || state.bodies != 0);
+    if (!state.parent.empty())
+      classes.at(state.parent).children.push_back(name);
+    if (!state.available)
+      missing.push_back(name);
+  }
+  auto invalidate = [&](const std::string &name, const std::string &reason) {
+    auto &state = classes.at(name);
+    if (state.available) {
+      state.available = false;
+      state.reason = reason;
+      missing.push_back(name);
+    }
+  };
+  for (size_t next = 0; next < missing.size(); ++next) {
+    budget.tick();
+    // Copy before pushing further missing classes can reallocate the queue.
+    const auto name = missing[next];
+    const auto &state = classes.at(name);
+    const auto reason =
+        "required local class definition is unavailable: " + name + ": " +
+        state.reason;
+    for (const auto &child : state.children) {
+      budget.tick();
+      invalidate(child, "local ancestor definition is unavailable: " + name);
+    }
+    for (size_t row : state.users) {
+      budget.tick();
+      if (!active[row])
+        continue;
+      active[row] = false;
+      auto &method = *coverage[row].getAsObject();
+      method["status"] = "unrecovered";
+      method["reason"] = reason;
+      if (auto owner = body_owner.find(row); owner != body_owner.end()) {
+        auto &defining = classes.at(owner->second);
+        --defining.bodies;
+        if (!defining.bodies && !defining.shell)
+          invalidate(owner->second,
+                     "local class has no recovered ordinary implementation");
+      }
+    }
+  }
+  std::set<std::string> needed, shells;
+  std::vector<std::string> pending;
+  for (const auto &[row, required] : dependencies) {
+    budget.tick();
+    if (active[row])
+      for (const auto &name : required) {
+        budget.tick();
+        pending.push_back(name);
+      }
+  }
+  while (!pending.empty()) {
+    budget.tick();
+    auto name = std::move(pending.back());
+    pending.pop_back();
+    if (!needed.insert(name).second)
+      continue;
+    const auto &state = classes.at(name);
+    if (state.available && state.shell && !state.bodies)
+      shells.insert(name);
+    if (!state.parent.empty())
+      pending.push_back(state.parent);
+  }
+  return shells;
+}
+
 std::vector<std::string> layout(const Object &c,
                                 const std::map<std::string, Object> &classes,
                                 unsigned ptr) {
@@ -772,37 +979,17 @@ std::vector<std::string> objcTypes(std::string_view e) {
 }
 std::string objcHeader(const Object &metadata, unsigned ptr) {
   auto inv = inventory(metadata);
+  auto declarations = declarationPlan(inv);
   std::string
       out = "// Recovered Objective-C declarations. See objc.json for coverage "
             "and raw encodings.\n#import <Foundation/Foundation.h>\n\n",
       categories;
-  std::map<std::string, std::string> parent;
-  std::vector<std::string> ordered;
-  std::set<std::string> pending;
   for (const auto &[name, c] : inv.classes)
-    if (identifier(name)) {
+    if (safe(name) && !declarations.errors.count(name))
       out += "@class " + name + ";\n";
-      auto p = str(c, "superclass");
-      parent[name] = identifier(p) && p != name ? p : "";
-      pending.insert(name);
-    }
-  while (!pending.empty()) {
-    bool progress = false;
-    for (auto it = pending.begin(); it != pending.end();)
-      if (!pending.count(parent[*it])) {
-        ordered.push_back(*it);
-        it = pending.erase(it);
-        progress = true;
-      } else
-        ++it;
-    if (!progress) {
-      for (const auto &name : pending) {
-        parent[name] = "";
-        ordered.push_back(name);
-      }
-      break;
-    }
-  }
+  for (const auto &[name, error] : declarations.errors)
+    out += "// Class declaration omitted" + (safe(name) ? " for " + name : "") +
+           ": " + error + ".\n";
   auto methods = [&](const Array &ms) {
     std::string text;
     for (const auto &m : ms)
@@ -814,12 +1001,10 @@ std::string objcHeader(const Object &metadata, unsigned ptr) {
       }
     return text;
   };
-  for (const auto &name : ordered) {
+  for (const auto &name : declarations.ordered) {
     const auto &c = inv.classes.at(name);
-    auto p = parent[name];
+    auto p = str(c, "superclass");
     out += '\n';
-    if (p.empty() && !flag(c, "root_class"))
-      out += "// Superclass could not be resolved; inheritance is omitted.\n";
     if (p.empty() && flag(c, "root_class"))
       out += "__attribute__((objc_root_class))\n";
     out += "@interface " + name + (p.empty() ? "" : " : " + p) + "\n";
@@ -852,7 +1037,7 @@ std::string objcHeader(const Object &metadata, unsigned ptr) {
   for (const auto &v : inv.external) {
     const auto &c = object(v, "category");
     auto name = str(c, "class_name"), cat = str(c, "name");
-    if (identifier(name))
+    if (safe(name) && !importedValueTypes.count(name))
       out += "@class " + name + ";\n";
     if (foundation.count(name) && identifier(cat))
       categories += "\n@interface " + name + " (" + cat + ")\n" +
@@ -887,6 +1072,7 @@ SourceResult objcSources(const Object &batch, const Object &metadata,
     throw Error(
         "native Objective-C pointer size disagrees with selected image");
   auto inv = inventory(metadata);
+  auto declarations = declarationPlan(inv);
   std::map<Identity, std::vector<Object>> batches;
   for (const auto &v : array(batch, "methods")) {
     const auto &m = object(v, "native method");
@@ -919,6 +1105,7 @@ SourceResult objcSources(const Object &batch, const Object &metadata,
     Rendered render;
   };
   std::vector<Candidate> candidates;
+  std::map<size_t, std::set<std::string>> class_dependencies;
   Array coverage;
   std::set<Identity> encountered;
   std::map<std::pair<std::string, std::string>, std::set<std::string>>
@@ -948,6 +1135,10 @@ SourceResult objcSources(const Object &batch, const Object &metadata,
           throw Error("duplicate runtime method identity");
         if (inv.conflicts.count(name))
           throw Error("duplicate inconsistent runtime class records");
+        if (auto it = declarations.errors.find(name);
+            it != declarations.errors.end())
+          throw Error("required class declaration is unavailable: " + name +
+                      ": " + it->second);
         if (flag(c, "external") && !foundation.count(name))
           throw Error("external category class declaration is unavailable");
         if (!str(m, "category_name").empty() &&
@@ -970,11 +1161,15 @@ SourceResult objcSources(const Object &batch, const Object &metadata,
           row["diagnostics"] = Array(*d);
         }
         std::vector<std::string> deps;
+        std::set<std::string> required_classes;
+        if (inv.classes.count(name))
+          required_classes.insert(name);
         if (auto *a = native.getArray("instance_layout_classes")) {
           for (const auto &d : *a) {
             if (!d.getAsString())
               throw Error("invalid instance-layout dependency");
             deps.push_back(d.getAsString()->str());
+            required_classes.insert(deps.back());
           }
         } else if (native.get("instance_layout_classes"))
           throw Error("invalid instance-layout dependency inventory");
@@ -996,6 +1191,8 @@ SourceResult objcSources(const Object &batch, const Object &metadata,
         }
         auto r = render(native, m, name, ptr);
         row["status"] = "recovered";
+        class_dependencies.emplace(coverage.size(),
+                                   std::move(required_classes));
         candidates.push_back({coverage.size(), std::move(r)});
       } catch (const Error &e) {
         row["reason"] = std::string(e.what());
@@ -1020,17 +1217,26 @@ SourceResult objcSources(const Object &batch, const Object &metadata,
       shared[name].push_back({c.row, def.first + "\n" + def.second});
   }
   auto conflicts = [&](const auto &all, const char *reason) {
-    for (const auto &[name, uses] : all)
-      for (const auto &use : uses)
-        if (use.second != uses[0].second)
-          for (const auto &u : uses) {
-            auto *r = coverage[u.first].getAsObject();
-            (*r)["status"] = "unrecovered";
-            (*r)["reason"] = reason;
-          }
+    for (const auto &[name, uses] : all) {
+      bool mismatch = false;
+      for (const auto &use : uses) {
+        budget.tick();
+        mismatch |= use.second != uses[0].second;
+      }
+      if (mismatch)
+        for (const auto &use : uses) {
+          budget.tick();
+          auto *r = coverage[use.first].getAsObject();
+          (*r)["status"] = "unrecovered";
+          (*r)["reason"] = reason;
+        }
+    }
   };
   conflicts(external, "conflicting external declarations across methods");
   conflicts(shared, "conflicting shared Block function definitions");
+  auto shells = closeClassDefinitions(
+      inv, declarations, str(metadata, "status") == "recovered", errors,
+      class_dependencies, coverage, budget);
   std::string source = "// Objective-C bodies reconstructed from native code; "
                        "see objc-methods.json for coverage.\n#include "
                        "<stdint.h>\n#include <stdbool.h>\n" +
@@ -1053,6 +1259,8 @@ SourceResult objcSources(const Object &batch, const Object &metadata,
     source += def.first + "\n";
   for (const auto &[name, def] : sharedout)
     source += def.second + "\n";
+  for (const auto &name : shells)
+    methods.try_emplace({name, ""});
   for (const auto &[owner, ms] : methods) {
     source += "@implementation " + owner.first +
               (owner.second.empty() ? "" : " (" + owner.second + ")") + "\n";

@@ -7,6 +7,8 @@
 #ifndef NEVERD_SDK_CAPI_OBJCSOURCEPROJECTION_H
 #define NEVERD_SDK_CAPI_OBJCSOURCEPROJECTION_H
 
+#include "SourceProjectionFlow.h"
+
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/HighIR.h"
@@ -25,21 +27,6 @@
 
 namespace neverd::sdk {
 namespace objc_projection_detail {
-
-using LocalIdentity = std::tuple<int, int, int, int64_t>;
-
-inline LocalIdentity localIdentity(const MedVar &Variable) {
-  // Phi cleanup can merge different SSA values/kinds into one emitted local.
-  // Conversely, unrenamed temporaries, registers, and stack slots must not
-  // lend definitions to one another merely because their numeric IDs match.
-  if (Variable.RenameTag >= 0)
-    return {-1, Variable.RenameTag, 0, 0};
-  if (Variable.Kind == MedVar::Stack)
-    return {MedVar::Stack, 0, 0, Variable.StackOff};
-  if (Variable.Kind == MedVar::RetVal)
-    return {MedVar::RetVal, 0, 0, 0};
-  return {Variable.Kind, Variable.Id, Variable.SSAVer, 0};
-}
 
 inline bool sameType(const TypeRef &Left, const TypeRef &Right,
                      unsigned Depth = 0) {
@@ -158,6 +145,10 @@ inline std::string sourceBodyLimitation(
   if ((Func.ExceptionMetadata && !isPlainUnwind(*Func.ExceptionMetadata)) ||
       Func.StructuredExceptionRegions || Func.UnstructuredExceptionRegions)
     return "exception-dependent method projection is not supported";
+  if (auto Limitation = SourceProjectionFlow(Func).limitation(
+          Hint.ReturnType->Kind != NdTypeKind::Void);
+      !Limitation.empty())
+    return Limitation;
 
   // Iterate explicitly so malformed/deep HighIR cannot overflow this check's
   // own stack. HighC's expression renderer truncates beyond depth 200.
@@ -169,7 +160,6 @@ inline std::string sourceBodyLimitation(
       Statements.emplace_back(&Statement, Depth);
   };
   AddStatements(Func.Body, 1);
-  bool HasValueReturn = false;
   while (!Statements.empty()) {
     const auto [Statement, Depth] = Statements.back();
     Statements.pop_back();
@@ -183,7 +173,6 @@ inline std::string sourceBodyLimitation(
         Hint.ReturnType->Kind != NdTypeKind::Void) {
       if (!Statement->RetVal)
         return "non-void method has a return without a recovered value";
-      HasValueReturn = true;
     }
     if (Statement->Kind == StmtKind::Assign && Statement->Dst &&
         Statement->Val &&
@@ -205,10 +194,6 @@ inline std::string sourceBodyLimitation(
     for (const auto &Clause : Statement->EHClauseBodies)
       AddStatements(Clause, Depth + 1);
   }
-  if (Hint.ReturnType->Kind != NdTypeKind::Void && !Func.DoesNotReturn &&
-      !HasValueReturn)
-    return "non-void method has no recovered return value";
-
   std::map<const HighExpr *, unsigned> SeenDepth;
   while (!Expressions.empty()) {
     const auto [Expression, Depth] = Expressions.back();
@@ -259,21 +244,15 @@ inline std::string sourceBodyLimitation(
       } else if ((Variable.Kind == MedVar::Reg ||
                   Variable.Kind == MedVar::Flag) &&
                  Variable.SSAVer == 0 && Variable.RenameTag < 0) {
-        const bool FramePointer =
-            Variable.Kind == MedVar::Reg &&
-            (Variable.TheArch == Arch::X64 ||
-             Variable.TheArch == Arch::AArch64) &&
-            (Func.FrameSize > 0 || Func.FrameHeadroom > 0) &&
-            Variable.RegOff == getTargetRegInfo(Variable.TheArch).StackPointer;
-        if (!FramePointer && !DefinedLocals.count(localIdentity(Variable)))
+        if (!sourceFrameBase(Func, Variable) &&
+            !DefinedLocals.count(localIdentity(Variable)))
           return "method contains an unexplained incoming register value";
       } else if (Variable.Kind == MedVar::EHException ||
                  Variable.Kind == MedVar::EHSelector) {
         return "exception-dependent method projection is not supported";
       } else if (!DefinedLocals.count(localIdentity(Variable))) {
-        // The MedIR audit predates HighIR cleanup. It cannot establish that
-        // every local survived lowering with a definition. This is a minimal
-        // source completeness check, not an all-path definite-assignment proof.
+        // Keep checking even unreachable expressions that HighC still emits.
+        // Reachable reads also passed the source CFG's must-defined analysis.
         return "method reads a local value without a recovered definition";
       }
     }

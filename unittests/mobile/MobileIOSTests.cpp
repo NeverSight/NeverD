@@ -82,10 +82,10 @@ std::string loadableThin() {
   integer(data, 92, 5);
   return data;
 }
-std::pair<Object, Object>
-objcFixture(std::string body = "return arg0 + arg1;") {
+std::pair<Object, Object> objcFixture(std::string body = "return arg0 + arg1;",
+                                      bool class_method = false) {
   Object method{{"selector", "add:to:"},
-                {"class_method", false},
+                {"class_method", class_method},
                 {"implementation", "0x1000"},
                 {"type_encoding", "q32@0:8q16q24"}};
   Object cls{{"name", "Calculator"},
@@ -113,6 +113,17 @@ objcFixture(std::string body = "return arg0 + arg1;") {
                  {"pointer_size", 8},
                  {"methods", Array{std::move(native)}}},
           std::move(metadata)};
+}
+Object emptyLocalClass(const std::string &name) {
+  return Object{{"name", name},
+                {"address", "0x3000"},
+                {"root_class", false},
+                {"superclass", "NSObject"},
+                {"instance_start", 8},
+                {"instance_size", 8},
+                {"ivar_status", "recovered"},
+                {"ivars", Array{}},
+                {"methods", Array{}}};
 }
 std::pair<Object, Object> swiftFixture(bool alias = false) {
   Array supplied, rows, units;
@@ -374,6 +385,272 @@ TEST(MobileIOSNative, IvarOffsetsAndSuperclassRemainInHeader) {
   EXPECT_NE(h.find("@interface Calculator : NSObject"), h.npos);
   EXPECT_NE(h.find("neverd_objc_padding_8[8]"), h.npos);
   EXPECT_NE(h.find("long long value;"), h.npos);
+}
+TEST(MobileIOSNative, UnavailableSuperclassDeclarationCannotRecoverScalarBody) {
+  // A class method needs its owner's declaration even without instance data.
+  auto [batch, metadata] = objcFixture("return arg0 + arg1;", true);
+  auto &cls = *metadata.getArray("classes")->front().getAsObject();
+  cls["root_class"] = false;
+  cls["superclass"] = "ExternalBase";
+  (*batch.getArray("methods")
+        ->front()
+        .getAsObject())["instance_layout_classes"] = Array{};
+  Budget budget;
+  auto result = objcSources(batch, metadata, 8, budget);
+  EXPECT_EQ(number(result.coverage, "method_count"), 1);
+  EXPECT_EQ(number(result.coverage, "recovered_method_count"), 0);
+  const auto &row = object(array(result.coverage, "methods")[0], "method");
+  EXPECT_NE(str(row, "reason").find("declaration"), std::string::npos);
+  EXPECT_EQ(result.source.find("@interface Calculator"), std::string::npos);
+  EXPECT_EQ(result.source.find("@implementation Calculator"),
+            std::string::npos);
+  EXPECT_EQ(objcHeader(metadata).find("@interface Calculator"),
+            std::string::npos);
+}
+
+TEST(MobileIOSNative,
+     UnavailableAncestorDeclarationDoesNotPoisonIndependentClass) {
+  auto [batch, metadata] = objcFixture();
+  auto &cls = *metadata.getArray("classes")->front().getAsObject();
+  Object independent(cls);
+  independent["name"] = "Independent";
+  cls["root_class"] = false;
+  cls["superclass"] = "Intermediate";
+  metadata.getArray("classes")->push_back(Object{{"name", "Intermediate"},
+                                                 {"root_class", false},
+                                                 {"superclass", "ExternalBase"},
+                                                 {"methods", Array{}}});
+  metadata.getArray("classes")->push_back(std::move(independent));
+  auto &native = *batch.getArray("methods")->front().getAsObject();
+  native["instance_layout_classes"] = Array{};
+  Object independent_method(native);
+  independent_method["class_name"] = "Independent";
+  batch.getArray("methods")->push_back(std::move(independent_method));
+  Budget budget;
+  auto result = objcSources(batch, metadata, 8, budget);
+  EXPECT_EQ(number(result.coverage, "method_count"), 2);
+  EXPECT_EQ(number(result.coverage, "recovered_method_count"), 1);
+  EXPECT_EQ(str(result.coverage, "status"), "partial");
+  EXPECT_EQ(result.source.find("@interface Calculator"), std::string::npos);
+  EXPECT_EQ(result.source.find("@interface Intermediate"), std::string::npos);
+  EXPECT_EQ(result.source.find("@implementation Calculator"),
+            std::string::npos);
+  EXPECT_NE(result.source.find("@implementation Independent"),
+            std::string::npos);
+}
+
+TEST(MobileIOSNative, InvalidInheritanceDeclarationCannotInventRootClass) {
+  for (const std::string parent : {"", "Calculator", "Cycle", "int"}) {
+    SCOPED_TRACE(parent);
+    auto [batch, metadata] = objcFixture();
+    auto &cls = *metadata.getArray("classes")->front().getAsObject();
+    cls["root_class"] = false;
+    cls["superclass"] = parent;
+    if (parent == "Cycle")
+      metadata.getArray("classes")->push_back(
+          Object{{"name", "Cycle"},
+                 {"root_class", false},
+                 {"superclass", "Calculator"},
+                 {"methods", Array{}}});
+    (*batch.getArray("methods")
+          ->front()
+          .getAsObject())["instance_layout_classes"] = Array{};
+    Budget budget;
+    auto result = objcSources(batch, metadata, 8, budget);
+    EXPECT_EQ(number(result.coverage, "recovered_method_count"), 0);
+    EXPECT_EQ(result.source.find("@interface Calculator"), std::string::npos);
+    EXPECT_EQ(result.source.find("@interface Cycle"), std::string::npos);
+  }
+}
+
+TEST(MobileIOSNative, AvailableSuperclassDeclarationKeepsScalarRecovery) {
+  for (const std::string parent :
+       {"NSObject", "NSProxy", "NSCache", "NSDateFormatter", "NSURLSession",
+        "LocalBase"}) {
+    SCOPED_TRACE(parent);
+    auto [batch, metadata] = objcFixture("return arg0 + arg1;", true);
+    auto &cls = *metadata.getArray("classes")->front().getAsObject();
+    cls["root_class"] = false;
+    cls["superclass"] = parent;
+    if (parent == "LocalBase")
+      metadata.getArray("classes")->push_back(emptyLocalClass("LocalBase"));
+    (*batch.getArray("methods")
+          ->front()
+          .getAsObject())["instance_layout_classes"] = Array{};
+    Budget budget;
+    auto result = objcSources(batch, metadata, 8, budget);
+    EXPECT_EQ(number(result.coverage, "recovered_method_count"), 1);
+    EXPECT_NE(result.source.find("@interface Calculator : " + parent),
+              std::string::npos);
+    EXPECT_NE(result.source.find("@implementation Calculator"),
+              std::string::npos);
+    if (parent == "LocalBase") {
+      EXPECT_LT(result.source.find("@interface LocalBase"),
+                result.source.find("@interface Calculator"));
+      EXPECT_NE(result.source.find("@implementation LocalBase\n@end"),
+                std::string::npos);
+    }
+  }
+}
+
+TEST(MobileIOSNative, EmptyLocalSuperclassNeedsCompleteInventoryAndLayout) {
+  for (const std::string failure :
+       {"metadata", "layout", "unrecovered-method", "ancestor-layout"}) {
+    SCOPED_TRACE(failure);
+    auto [batch, metadata] = objcFixture("return arg0 + arg1;", true);
+    auto &child = *metadata.getArray("classes")->front().getAsObject();
+    child["root_class"] = false;
+    child["superclass"] = "LocalBase";
+    auto parent = emptyLocalClass("LocalBase");
+    if (failure == "metadata")
+      metadata["status"] = "partial";
+    else if (failure == "layout")
+      parent["ivar_status"] = "unresolved";
+    else if (failure == "unrecovered-method")
+      parent["methods"] = Array{array(child, "methods")[0]};
+    else {
+      parent["superclass"] = "GrandBase";
+      auto grandparent = emptyLocalClass("GrandBase");
+      grandparent["ivar_status"] = "unresolved";
+      metadata.getArray("classes")->push_back(std::move(grandparent));
+    }
+    metadata.getArray("classes")->push_back(std::move(parent));
+    (*batch.getArray("methods")
+          ->front()
+          .getAsObject())["instance_layout_classes"] = Array{};
+    Budget budget;
+    auto result = objcSources(batch, metadata, 8, budget);
+    EXPECT_EQ(number(result.coverage, "method_count"),
+              failure == "unrecovered-method" ? 2 : 1);
+    EXPECT_EQ(number(result.coverage, "recovered_method_count"), 0);
+    const auto &row = object(array(result.coverage, "methods")[0], "method");
+    EXPECT_NE(str(row, "reason").find("class definition"), std::string::npos);
+    EXPECT_EQ(result.source.find("@implementation Calculator"),
+              std::string::npos);
+    EXPECT_EQ(result.source.find("@implementation LocalBase"),
+              std::string::npos);
+  }
+}
+
+TEST(MobileIOSNative, CategoryOnlyLocalOwnerNeedsItsOwnClassDefinition) {
+  for (bool complete : {true, false}) {
+    SCOPED_TRACE(complete);
+    auto [batch, metadata] = objcFixture("return arg0 + arg1;", true);
+    auto &native = *batch.getArray("methods")->front().getAsObject();
+    native["category_name"] = "Arithmetic";
+    native["category_address"] = "0x4000";
+    native["instance_layout_classes"] = Array{};
+    auto cls = emptyLocalClass("Calculator");
+    auto method = object(
+        array(object(array(metadata, "classes")[0], "class"), "methods")[0],
+        "method");
+    method["category_name"] = "Arithmetic";
+    method["category_address"] = "0x4000";
+    cls["methods"] = Array{std::move(method)};
+    metadata["classes"] = Array{std::move(cls)};
+    metadata["status"] = complete ? "recovered" : "partial";
+    Budget budget;
+    auto result = objcSources(batch, metadata, 8, budget);
+    EXPECT_EQ(number(result.coverage, "method_count"), 1);
+    EXPECT_EQ(number(result.coverage, "recovered_method_count"),
+              complete ? 1 : 0);
+    if (complete) {
+      EXPECT_NE(result.source.find("@implementation Calculator\n@end"),
+                std::string::npos);
+      EXPECT_NE(result.source.find("@implementation Calculator (Arithmetic)"),
+                std::string::npos);
+    } else {
+      EXPECT_EQ(result.source.find("@implementation Calculator"),
+                std::string::npos);
+    }
+  }
+}
+
+TEST(MobileIOSNative, RecoveredSuperclassBodyIsReusedWithoutInventingAShell) {
+  auto [batch, metadata] = objcFixture("return arg0 + arg1;", true);
+  auto &child = *metadata.getArray("classes")->front().getAsObject();
+  child["root_class"] = false;
+  child["superclass"] = "LocalBase";
+  auto parent = emptyLocalClass("LocalBase");
+  parent["methods"] = Array{array(child, "methods")[0]};
+  metadata.getArray("classes")->push_back(std::move(parent));
+  metadata["status"] = "partial";
+  auto &native = *batch.getArray("methods")->front().getAsObject();
+  native["instance_layout_classes"] = Array{};
+  Object parent_native(native);
+  parent_native["class_name"] = "LocalBase";
+  batch.getArray("methods")->push_back(std::move(parent_native));
+  Budget budget;
+  auto result = objcSources(batch, metadata, 8, budget);
+  EXPECT_EQ(number(result.coverage, "method_count"), 2);
+  EXPECT_EQ(number(result.coverage, "recovered_method_count"), 2);
+  auto definition = result.source.find("@implementation LocalBase\n");
+  ASSERT_NE(definition, std::string::npos);
+  EXPECT_EQ(result.source.find("@implementation LocalBase\n", definition + 1),
+            std::string::npos);
+  EXPECT_EQ(result.source.find("@implementation LocalBase\n@end"),
+            std::string::npos);
+}
+
+TEST(MobileIOSNative, ConflictingSuperclassBodiesInvalidateTheirDescendants) {
+  auto [batch, metadata] = objcFixture("return arg0 + arg1;", true);
+  auto &child = *metadata.getArray("classes")->front().getAsObject();
+  child["root_class"] = false;
+  child["superclass"] = "LocalBase";
+  auto parent = emptyLocalClass("LocalBase");
+  parent["methods"] = Array{array(child, "methods")[0]};
+  auto independent = emptyLocalClass("Independent");
+  independent["address"] = "0x4000";
+  independent["methods"] = Array{array(child, "methods")[0]};
+  metadata.getArray("classes")->push_back(std::move(parent));
+  metadata.getArray("classes")->push_back(std::move(independent));
+  auto &native = *batch.getArray("methods")->front().getAsObject();
+  native["instance_layout_classes"] = Array{};
+  Object parent_native(native), independent_native(native);
+  parent_native["class_name"] = "LocalBase";
+  independent_native["class_name"] = "Independent";
+  parent_native["source"] =
+      "extern int shared_dependency(void);\n" + str(parent_native, "source");
+  independent_native["source"] = "extern double shared_dependency(void);\n" +
+                                 str(independent_native, "source");
+  batch.getArray("methods")->push_back(std::move(parent_native));
+  batch.getArray("methods")->push_back(std::move(independent_native));
+  Budget budget;
+  auto result = objcSources(batch, metadata, 8, budget);
+  EXPECT_EQ(number(result.coverage, "method_count"), 3);
+  EXPECT_EQ(number(result.coverage, "recovered_method_count"), 0);
+  const auto &row = object(array(result.coverage, "methods")[0], "method");
+  EXPECT_NE(str(row, "reason").find("class definition"), std::string::npos);
+  EXPECT_EQ(result.source.find("@implementation"), std::string::npos);
+}
+
+TEST(MobileIOSNative, ImportedDeclarationConflictDoesNotPoisonOtherClasses) {
+  // NSTask is platform-specific; it must not evade the imported-name check
+  // merely because it is absent from the portable superclass directory.
+  for (const std::string name :
+       {"NSObject", "NSTask", "NSRange", "NSUInteger", "int64_t", "size_t"}) {
+    SCOPED_TRACE(name);
+    auto [batch, metadata] = objcFixture("return arg0 + arg1;", true);
+    auto &cls = *metadata.getArray("classes")->front().getAsObject();
+    Object independent(cls);
+    cls["name"] = name;
+    metadata.getArray("classes")->push_back(std::move(independent));
+    auto &native = *batch.getArray("methods")->front().getAsObject();
+    native["instance_layout_classes"] = Array{};
+    Object independent_method(native);
+    native["class_name"] = name;
+    batch.getArray("methods")->push_back(std::move(independent_method));
+    Budget budget;
+    auto result = objcSources(batch, metadata, 8, budget);
+    EXPECT_EQ(number(result.coverage, "method_count"), 2);
+    EXPECT_EQ(number(result.coverage, "recovered_method_count"), 1);
+    EXPECT_EQ(str(result.coverage, "status"), "partial");
+    EXPECT_EQ(result.source.find("@interface " + name), std::string::npos);
+    EXPECT_EQ(result.source.find("@class " + name + ";"), std::string::npos);
+    EXPECT_EQ(result.source.find("@implementation " + name), std::string::npos);
+    EXPECT_NE(result.source.find("@implementation Calculator"),
+              std::string::npos);
+  }
 }
 TEST(MobileIOSNative, ParsesStructuredSwiftFunction) {
   auto s = swiftSignature("0x1000", "$s4Demo6answers5Int32VyF");

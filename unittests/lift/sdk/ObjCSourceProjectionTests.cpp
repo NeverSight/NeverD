@@ -280,6 +280,332 @@ TEST(ObjCSourceProjection, MissingLocalDefinitionsCannotBeRecovered) {
   }
 }
 
+MedVar flowLocal() {
+  MedVar Local;
+  Local.Kind = MedVar::Temp;
+  Local.TheArch = Arch::X64;
+  Local.Id = 99;
+  Local.SSAVer = 1;
+  Local.Size = 4;
+  return Local;
+}
+
+ExprPtr flowCondition() {
+  MedVar Parameter;
+  Parameter.Kind = MedVar::Param;
+  Parameter.TheArch = Arch::X64;
+  Parameter.Id = 2;
+  Parameter.Size = 4;
+  Parameter.RegOff = getTargetRegInfo(Arch::X64).IntParamRegs[2];
+  return HighExpr::makeVar(Parameter);
+}
+
+HighStmt flowAssignment(uint64_t Value = 42) {
+  HighStmt Statement;
+  Statement.Kind = StmtKind::Assign;
+  Statement.Dst = HighExpr::makeVar(flowLocal());
+  Statement.Val = HighExpr::makeConst(Value, 4);
+  return Statement;
+}
+
+HighStmt flowReturn(ExprPtr Value = HighExpr::makeVar(flowLocal())) {
+  HighStmt Statement;
+  Statement.Kind = StmtKind::Return;
+  Statement.RetVal = std::move(Value);
+  return Statement;
+}
+
+TEST(ObjCSourceProjection, OneBranchDefinitionDoesNotCoverTheOtherPath) {
+  Projection P;
+  HighStmt Branch;
+  Branch.Kind = StmtKind::If;
+  Branch.Cond = flowCondition();
+  Branch.Body = {flowAssignment()};
+  P.Func.Body = {Branch, flowReturn()};
+  EXPECT_FALSE(P.limitation().empty())
+      << "A reachable return reads a local undefined on the false branch";
+
+  Branch.Kind = StmtKind::IfElse;
+  Branch.ElseBody = {flowAssignment(7)};
+  P.Func.Body = {Branch, flowReturn()};
+  EXPECT_TRUE(P.limitation().empty()) << P.limitation();
+}
+
+TEST(ObjCSourceProjection, AReadCannotBorrowALaterOrUnreachableDefinition) {
+  Projection P;
+  P.Func.Body = {flowReturn(), flowAssignment()};
+  EXPECT_FALSE(P.limitation().empty())
+      << "A definition after return cannot initialize its operand";
+
+  P.Func.Body = {flowAssignment(), flowReturn()};
+  EXPECT_TRUE(P.limitation().empty()) << P.limitation();
+}
+
+TEST(ObjCSourceProjection, EveryReachableNonVoidExitNeedsAReturn) {
+  Projection P;
+  HighStmt Branch;
+  Branch.Kind = StmtKind::If;
+  Branch.Cond = flowCondition();
+  Branch.Body = {flowReturn(HighExpr::makeConst(42, 4))};
+  P.Func.Body = {Branch};
+  EXPECT_FALSE(P.limitation().empty())
+      << "A return in one arm does not cover the fallthrough exit";
+
+  P.Func.Body.push_back(flowReturn(HighExpr::makeConst(7, 4)));
+  EXPECT_TRUE(P.limitation().empty()) << P.limitation();
+  Branch.Kind = StmtKind::IfElse;
+  Branch.ElseBody = {flowReturn(HighExpr::makeConst(7, 4))};
+  P.Func.Body = {Branch};
+  EXPECT_TRUE(P.limitation().empty()) << P.limitation();
+}
+
+TEST(ObjCSourceProjection, EarlyReturnDoesNotPolluteTheContinuingPath) {
+  Projection P;
+  HighStmt Branch;
+  Branch.Kind = StmtKind::IfElse;
+  Branch.Cond = flowCondition();
+  Branch.Body = {flowReturn(HighExpr::makeConst(7, 4))};
+  Branch.ElseBody = {flowAssignment()};
+  P.Func.Body = {Branch, flowReturn()};
+  EXPECT_TRUE(P.limitation().empty()) << P.limitation();
+}
+
+TEST(ObjCSourceProjection, LoopDefinitionsRespectWhetherTheBodyExecutes) {
+  for (const auto Kind : {StmtKind::While, StmtKind::For}) {
+    SCOPED_TRACE(static_cast<unsigned>(Kind));
+    Projection P;
+    HighStmt Loop;
+    Loop.Kind = Kind;
+    Loop.Cond = flowCondition();
+    Loop.Body = {flowAssignment()};
+    P.Func.Body = {Loop, flowReturn()};
+    EXPECT_FALSE(P.limitation().empty())
+        << "A possibly zero-iteration loop cannot initialize an exit value";
+
+    P.Func.Body.insert(P.Func.Body.begin(), flowAssignment(7));
+    EXPECT_TRUE(P.limitation().empty()) << P.limitation();
+    Loop.Kind = StmtKind::DoWhile;
+    P.Func.Body = {Loop, flowReturn()};
+    EXPECT_TRUE(P.limitation().empty()) << P.limitation();
+  }
+}
+
+TEST(ObjCSourceProjection, ContinueCannotSkipARequiredLoopDefinition) {
+  Projection P;
+  HighStmt Continue;
+  Continue.Kind = StmtKind::Continue;
+  HighStmt Branch;
+  Branch.Kind = StmtKind::If;
+  Branch.Cond = flowCondition();
+  Branch.Body = {Continue};
+  HighStmt Loop;
+  Loop.Kind = StmtKind::DoWhile;
+  Loop.Cond = flowCondition();
+  Loop.Body = {Branch, flowAssignment()};
+  P.Func.Body = {Loop, flowReturn()};
+  EXPECT_FALSE(P.limitation().empty())
+      << "continue reaches the loop test without defining the exit value";
+
+  P.Func.Body.insert(P.Func.Body.begin(), flowAssignment(7));
+  EXPECT_TRUE(P.limitation().empty()) << P.limitation();
+}
+
+TEST(ObjCSourceProjection, BreakPreservesDefinitionsFromAnEnteredLoop) {
+  Projection P;
+  HighStmt Break;
+  Break.Kind = StmtKind::Break;
+  HighStmt Loop;
+  Loop.Kind = StmtKind::While;
+  Loop.Cond = HighExpr::makeConst(1, 1);
+  Loop.Body = {flowAssignment(), Break};
+  P.Func.Body = {Loop, flowReturn()};
+  EXPECT_TRUE(P.limitation().empty()) << P.limitation();
+}
+
+TEST(ObjCSourceProjection, SwitchDefinitionsNeedToCoverTheDefaultPath) {
+  Projection P;
+  HighStmt Switch;
+  Switch.Kind = StmtKind::Switch;
+  Switch.SwitchExpr = flowCondition();
+  Switch.Cases.push_back({0, {flowAssignment()}});
+  P.Func.Body = {Switch, flowReturn()};
+  EXPECT_FALSE(P.limitation().empty())
+      << "An unmatched case reaches return without defining its value";
+
+  Switch.DefaultBody = {flowAssignment(7)};
+  P.Func.Body = {Switch, flowReturn()};
+  EXPECT_TRUE(P.limitation().empty()) << P.limitation();
+}
+
+TEST(ObjCSourceProjection, GotoCannotSkipARequiredDefinition) {
+  Projection P;
+  HighStmt Jump;
+  Jump.Kind = StmtKind::Goto;
+  Jump.GotoTarget = 0x2000;
+  auto Return = flowReturn();
+  Return.Addr = Jump.GotoTarget;
+  P.Func.Body = {Jump, flowAssignment(), Return};
+  EXPECT_FALSE(P.limitation().empty())
+      << "The only path jumps over the local definition";
+
+  auto Definition = flowAssignment();
+  Definition.Addr = Jump.GotoTarget;
+  Return.Addr = 0;
+  P.Func.Body = {Jump, Definition, Return};
+  EXPECT_TRUE(P.limitation().empty()) << P.limitation();
+}
+
+TEST(ObjCSourceProjection, BackwardGotoRetainsAReachingDefinition) {
+  Projection P;
+  HighStmt Label;
+  Label.Kind = StmtKind::Nop;
+  Label.Addr = 0x2000;
+  HighStmt Jump;
+  Jump.Kind = StmtKind::Goto;
+  Jump.GotoTarget = Label.Addr;
+  HighStmt Branch;
+  Branch.Kind = StmtKind::If;
+  Branch.Cond = flowCondition();
+  Branch.Body = {Jump};
+  P.Func.Body = {flowAssignment(), Label, Branch, flowReturn()};
+  EXPECT_TRUE(P.limitation().empty()) << P.limitation();
+}
+
+TEST(ObjCSourceProjection, GotoRequiresOneEmittableTarget) {
+  Projection P;
+  HighStmt Jump;
+  Jump.Kind = StmtKind::Goto;
+  Jump.GotoTarget = 0x2000;
+  P.Func.Body.insert(P.Func.Body.begin(), Jump);
+  EXPECT_FALSE(P.limitation().empty())
+      << "A goto with no emitted target cannot be recovered";
+
+  P.Func.Body.back().Addr = Jump.GotoTarget;
+  EXPECT_TRUE(P.limitation().empty()) << P.limitation();
+  auto Duplicate = flowAssignment();
+  Duplicate.Addr = Jump.GotoTarget;
+  P.Func.Body.insert(P.Func.Body.begin(), Duplicate);
+  EXPECT_FALSE(P.limitation().empty())
+      << "Distinct statements cannot emit the same goto label twice";
+}
+
+TEST(ObjCSourceProjection, NoReturnMetadataCannotHideSourceFallthrough) {
+  Projection P;
+  P.Func.DoesNotReturn = true;
+  P.Func.Body = {flowAssignment()};
+  EXPECT_FALSE(P.limitation().empty())
+      << "_Noreturn is a declaration, not an actual terminating operation";
+
+  P.Func.Body = {flowReturn(HighExpr::makeConst(42, 4))};
+  EXPECT_FALSE(P.limitation().empty())
+      << "A reachable return contradicts the emitted _Noreturn declaration";
+}
+
+TEST(ObjCSourceProjection, ActualInfiniteControlFlowDoesNotNeedAReturnValue) {
+  Projection P;
+  HighStmt Loop;
+  Loop.Kind = StmtKind::While;
+  Loop.Cond = HighExpr::makeConst(1, 1);
+  P.Func.Body = {Loop};
+  EXPECT_TRUE(P.limitation().empty()) << P.limitation();
+  P.Func.DoesNotReturn = true;
+  EXPECT_TRUE(P.limitation().empty()) << P.limitation();
+
+  HighStmt Jump;
+  Jump.Kind = StmtKind::Goto;
+  Jump.Addr = Jump.GotoTarget = 0x2000;
+  P.Func.Body = {Jump};
+  EXPECT_TRUE(P.limitation().empty()) << P.limitation();
+}
+
+TEST(ObjCSourceProjection, OnlyAnActualUnconditionalTrapTerminatesThePath) {
+  Projection P;
+  P.Func.DoesNotReturn = true;
+  HighStmt Call;
+  Call.Kind = StmtKind::Call;
+  Call.CallExpr = HighExpr::makeCall("trap", 0, {});
+  Call.CallExpr->IntrinsicId = Intrinsic::Ud2;
+  P.Func.Body = {Call};
+  EXPECT_TRUE(P.limitation().empty()) << P.limitation();
+
+  // A debugger can resume after a breakpoint. Its spelling is not proof of
+  // a terminating path, even when the containing native function is flagged.
+  Call.CallExpr->IntrinsicId = Intrinsic::Int3;
+  P.Func.Body = {Call};
+  EXPECT_FALSE(P.limitation().empty());
+
+  Call.CallExpr->IntrinsicId = Intrinsic::Ud2;
+  Call.CallExpr->SourceCallHint = std::make_shared<SourceCallTypeHint>();
+  P.Func.Body = {Call};
+  EXPECT_FALSE(P.limitation().empty())
+      << "The emitter's explicit source binding takes precedence over the "
+         "intrinsic tag; it is not proof that the emitted call traps";
+}
+
+TEST(ObjCSourceProjection, ReachingDefinitionsAlsoCoverCallAndStoreOperands) {
+  for (const auto Kind :
+       {StmtKind::ExprStmt, StmtKind::Store, StmtKind::Call}) {
+    SCOPED_TRACE(static_cast<unsigned>(Kind));
+    Projection P;
+    HighStmt Branch;
+    Branch.Kind = StmtKind::If;
+    Branch.Cond = flowCondition();
+    Branch.Body = {flowAssignment()};
+    HighStmt Use;
+    Use.Kind = Kind;
+    if (Kind == StmtKind::ExprStmt)
+      Use.Val = HighExpr::makeVar(flowLocal());
+    else if (Kind == StmtKind::Store) {
+      Use.StoreAddr = HighExpr::makeConst(0x3000, 8);
+      Use.StoreVal = HighExpr::makeVar(flowLocal());
+    } else {
+      Use.CallExpr = HighExpr::makeCall("bound_helper", 0x4000,
+                                        {HighExpr::makeVar(flowLocal())});
+    }
+    P.Func.Body = {Branch, Use, flowReturn(HighExpr::makeConst(42, 4))};
+    auto Check = [&] {
+      return sourceBodyLimitation(P.Func, P.Hint, &P.Audit,
+                                  [](const HighExpr &) { return true; });
+    };
+    EXPECT_FALSE(Check().empty());
+    HighStmt Block;
+    Block.Kind = StmtKind::Block;
+    Block.Body = {flowAssignment()};
+    P.Func.Body.insert(P.Func.Body.begin(), Block);
+    EXPECT_TRUE(Check().empty()) << Check();
+  }
+}
+
+TEST(ObjCSourceProjection, SourceFlowGraphRejectsExcessiveStatements) {
+  Projection P;
+  P.Func.Body.assign(100001, HighStmt{});
+  P.Func.Body.push_back(flowReturn(HighExpr::makeConst(42, 4)));
+  EXPECT_NE(P.limitation().find("limit"), std::string::npos);
+}
+
+TEST(ObjCSourceProjection, EmptySwitchArmsStillHaveABoundedFanout) {
+  Projection P;
+  HighStmt Switch;
+  Switch.Kind = StmtKind::Switch;
+  Switch.SwitchExpr = flowCondition();
+  for (unsigned Value = 0; Value < 4097; ++Value)
+    Switch.Cases.push_back({Value, {}});
+  P.Func.Body = {Switch, flowReturn(HighExpr::makeConst(42, 4))};
+  EXPECT_NE(P.limitation().find("switch-case limit"), std::string::npos);
+}
+
+TEST(ObjCSourceProjection, LocalInventoryIsBoundedBeforeDataflowAllocation) {
+  Projection P;
+  P.Func.Body.clear();
+  for (unsigned Index = 0; Index < 8193; ++Index) {
+    auto Definition = flowAssignment();
+    Definition.Dst->Var.Id = Index;
+    P.Func.Body.push_back(std::move(Definition));
+  }
+  P.Func.Body.push_back(flowReturn(HighExpr::makeConst(42, 4)));
+  EXPECT_NE(P.limitation().find("local-value limit"), std::string::npos);
+}
+
 TEST(ObjCSourceProjection, RenamedPhiUsesItsEmittedLocalIdentity) {
   Projection P;
   MedVar Destination;
