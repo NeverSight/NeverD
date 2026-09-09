@@ -98,6 +98,7 @@ jobs:
             scripts.tests.test_mobile_real_apps_android_recompile \
             scripts.tests.test_mobile_real_apps_common \
             scripts.tests.test_mobile_real_apps_ios \
+            scripts.tests.test_mobile_swift_toolchain \
             scripts.tests.test_mobile_ios_sdk_declarations \
             scripts.tests.test_mobile_real_apps_objc_inventory \
             scripts.tests.test_mobile_real_apps_matrix \
@@ -278,7 +279,7 @@ jobs:
     needs: [trigger, guards, build]
     if: ${{ !cancelled() && needs.trigger.result == 'success' && needs.guards.outputs.ios_matrix != '' }}
     runs-on: macos-26
-    timeout-minutes: 80
+    timeout-minutes: ${{ matrix.job_timeout_minutes }}
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -309,6 +310,24 @@ jobs:
           test -d "$DEVELOPER_DIR"
           mkdir -p "$RUNNER_TEMP/neverd-host"
           tar -xzf "$RUNNER_TEMP/neverd-download/neverd-host.tar.gz" -C "$RUNNER_TEMP/neverd-host"
+      - name: Independently install and verify the fixed comparison toolchain
+        if: ${{ matrix.install_toolchain }}
+        timeout-minutes: 50
+        env:
+          CONSUMER_COMMIT: ${{ needs.trigger.outputs.consumer_commit }}
+          CASE_ID: ${{ matrix.case_id }}
+        run: |
+          python scripts/qualify_mobile_swift_toolchain.py \
+            --consumer-commit "$CONSUMER_COMMIT" --case-id "$CASE_ID" \
+            --work-dir "$RUNNER_TEMP/real-app-toolchains/$CASE_ID"
+      - name: Preserve this comparison runner's installation identity
+        if: ${{ always() && matrix.install_toolchain }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: real-app-toolchain-${{ matrix.case_id }}
+          path: ${{ runner.temp }}/real-app-toolchains/${{ matrix.case_id }}/evidence
+          if-no-files-found: error
+          retention-days: 14
       # Cross-compilation and analysis on this arm64 host do not establish
       # x86_64 simulator or device execution; runtime obligations remain open.
       - name: Build the pinned iOS variant and recover every bundled Mach-O
@@ -316,12 +335,18 @@ jobs:
         env:
           CONSUMER_COMMIT: ${{ needs.trigger.outputs.consumer_commit }}
           CASE_ID: ${{ matrix.case_id }}
+          TOOLCHAIN_ID: ${{ matrix.toolchain }}
           DYLD_LIBRARY_PATH: ${{ runner.temp }}/neverd-host/bin
         run: |
+          receipt_args=()
+          if [[ "$TOOLCHAIN_ID" != XcodeDefault ]]; then
+            receipt_args=(--toolchain-receipt "$RUNNER_TEMP/real-app-toolchains/$CASE_ID/evidence/qualification.json")
+          fi
           python scripts/test_mobile_real_apps.py \
             --case "$CASE_ID" --source "$GITHUB_WORKSPACE/upstream-app" \
             --neverd "$RUNNER_TEMP/neverd-host/bin/neverd" \
             --consumer-commit "$CONSUMER_COMMIT" \
+            "${receipt_args[@]}" \
             --work-dir "$RUNNER_TEMP/real-app-evidence/$CASE_ID" --timeout 4200
       - name: Preserve complete bundle, Apple inventory and recovery evidence
         if: always()

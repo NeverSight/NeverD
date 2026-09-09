@@ -9,6 +9,7 @@ explicitly incomplete, even when every command and upstream app build succeeds.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -17,6 +18,9 @@ import stat
 import time
 
 from mobile_real_apps_objc_inventory import nonlazy_sections, objc_inventory
+from qualify_mobile_swift_toolchain import (
+    BUNDLE_IDENTIFIER, DEVELOPER_DIR, REQUIRED_INSTALLATION_COMMANDS, verify_installation,
+)
 
 
 REQUIRED_STAGES = ("provenance", "original_build", "inventory", "recovery", "recompile", "behavior")
@@ -60,6 +64,7 @@ class Session:
         self.deadline = min(time.monotonic() + float(ctx.timeout), getattr(ctx, "deadline", float("inf")))
         self.stages = {}
         self.preserved_bytes = 0
+        self.toolchain = ctx.variant.get("toolchain")
 
     def remaining(self, deadline=None):
         remaining = min(self.deadline, deadline or self.deadline) - time.monotonic()
@@ -70,8 +75,13 @@ class Session:
     def command(self, name, argv, *, cwd=None, cap=60, deadline=None, optional=False):
         timeout = min(cap, self.remaining(deadline))
         if argv[0] == "xcrun":
-            argv = ["xcrun", "--toolchain", "XcodeDefault", *argv[1:]]
+            swift_tool = any(value in ("swiftc", "swift-frontend", "swift-demangle") for value in argv[1:])
+            selected = self.toolchain if swift_tool else "XcodeDefault"
+            argv = ["xcrun", "--toolchain", selected, *argv[1:]]
+        if argv[0] == "xcodebuild" and "-toolchain" not in argv:
+            argv = ["xcodebuild", "-toolchain", self.toolchain, *argv[1:]]
         result = self.ctx.command(name, [str(arg) for arg in argv], cwd=cwd,
+                                  env={"DEVELOPER_DIR": DEVELOPER_DIR, "TOOLCHAINS": self.toolchain or "XcodeDefault"},
                                   timeout=timeout, allow_failure=True)
         if result.returncode and not optional:
             raise EvidenceError(f"{name} exited {result.returncode}; see saved command logs")
@@ -149,10 +159,13 @@ def build_arguments(ctx, derived, packages):
         raise EvidenceError("unsupported explicit iOS SDK/architecture")
     if sdk == "iphoneos" and architecture != "arm64":
         raise EvidenceError("x86_64 is not an iOS device architecture")
+    toolchain = variant.get("toolchain")
+    if toolchain not in ("XcodeDefault", BUNDLE_IDENTIFIER):
+        raise EvidenceError("unknown or missing explicit iOS toolchain")
     project = relative_path(ctx.source, ctx.app["ios"]["project"])
     destination = "generic/platform=iOS" if sdk == "iphoneos" else "generic/platform=iOS Simulator"
     argv = [
-        "xcodebuild", "-project", project, "-scheme", ctx.app["ios"]["scheme"],
+        "xcodebuild", "-toolchain", toolchain, "-project", project, "-scheme", ctx.app["ios"]["scheme"],
         "-configuration", "Release", "-sdk", sdk, "-destination", destination,
         "-derivedDataPath", derived, "-clonedSourcePackagesDirPath", packages,
         # Keep SwiftPM's bare repositories in the case's checkout directory too;
@@ -168,6 +181,88 @@ def build_arguments(ctx, derived, packages):
     if profile == "size":
         argv.append("GCC_OPTIMIZATION_LEVEL=s")
     return argv
+
+
+def comparison_receipt(session, path, consumer_commit):
+    if session.toolchain == "XcodeDefault":
+        if path is not None:
+            raise EvidenceError("XcodeDefault baseline cannot consume a comparison toolchain receipt")
+        return None
+    if session.toolchain != BUNDLE_IDENTIFIER or path is None:
+        raise EvidenceError("Swift comparison requires this runner's installation receipt")
+    path = Path(path)
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 4 * 1024 * 1024:
+        raise EvidenceError("toolchain installation receipt is missing or unsafe")
+    # Keep the failed receipt too. The application evidence must not depend on
+    # the separate installation artifact remaining downloadable indefinitely.
+    session.preserve(path, session.ctx.work / "toolchain/qualification.json")
+    receipt = read_json(path)
+    verify_installation(receipt, consumer_commit, os.environ.get("GITHUB_RUN_ID"),
+                        os.environ.get("GITHUB_RUN_ATTEMPT"), session.remaining,
+                        case_id=session.ctx.variant["id"], workflow_commit=os.environ.get("GITHUB_SHA"))
+    commands = receipt.get("commands")
+    if not isinstance(commands, list) or not 1 <= len(commands) <= 128:
+        raise EvidenceError("toolchain receipt lacks bounded installation command evidence")
+    names, files = set(), {path.name}
+    for command in commands:
+        name = command.get("name") if isinstance(command, dict) else None
+        if not isinstance(name, str) or name in names or command.get("exitcode") != 0:
+            raise EvidenceError("toolchain installation command evidence is incomplete or duplicated")
+        names.add(name)
+        for key in ("stdout", "stderr"):
+            member = command.get(key)
+            if not isinstance(member, str) or "/" in member or member in files:
+                raise EvidenceError("toolchain installation log identity is invalid or duplicated")
+            original = relative_path(path.parent, member)
+            if original.is_symlink() or not original.is_file() or original.stat().st_size > 4 * 1024 * 1024:
+                raise EvidenceError("toolchain installation log is missing or oversized")
+            if digest(original, session) != command.get(key + "_sha256"):
+                raise EvidenceError("toolchain installation log bytes differ from the receipt")
+            files.add(member)
+            session.preserve(original, session.ctx.work / "toolchain" / member)
+    if not REQUIRED_INSTALLATION_COMMANDS <= names:
+        raise EvidenceError("toolchain receipt omits required installation steps")
+    return receipt
+
+
+def verify_comparison_build_settings(output, receipt, profile):
+    rows = json.loads(output)
+    if not isinstance(rows, list) or not rows:
+        raise EvidenceError("comparison build settings lack target records")
+    swiftc = next(row["reported_path"] for row in receipt["tools"] if row["name"] == "swiftc")
+    expected_opt = "-Osize" if profile == "size" else "-O"
+    observed = 0
+    for row in rows:
+        settings = row.get("buildSettings") if isinstance(row, dict) else None
+        if not isinstance(settings, dict):
+            raise EvidenceError("comparison build settings contain an invalid target")
+        if settings.get("SWIFT_EXEC") != swiftc or settings.get("SWIFT_OPTIMIZATION_LEVEL") != expected_opt:
+            raise EvidenceError("comparison build settings changed the qualified compiler or requested optimization")
+        observed += 1
+    return observed
+
+
+def verify_comparison_build_commands(output, receipt, profile):
+    tools = {row["reported_path"] for row in receipt["tools"] if row["name"] in ("swiftc", "swift-frontend")}
+    expected_opt = "-Osize" if profile == "size" else "-O"
+    found = 0
+    for line in io.StringIO(output):
+        if "-module-name" not in line:
+            continue
+        paths = re.findall(r"(?:^|[ \t])(/[^\s]+/swift(?:c|-frontend))(?=[ \t])", line)
+        for path in paths:
+            if path not in tools:
+                raise EvidenceError("actual comparison compile command used a different Swift compiler")
+            opts = re.findall(r"(?:^|[ \t])(-O(?:none|size|unchecked)?)(?=[ \t]|$)", line)
+            if not opts or any(option != expected_opt for option in opts):
+                raise EvidenceError("actual comparison compile command changed the requested optimization")
+            # A separate emit-module invocation has no object-code body. The
+            # actual Xcode SwiftDriver line carries -c as well as -emit-module.
+            if re.search(r"(?:^|[ \t])(?:-c|-emit-object)(?=[ \t]|$)", line):
+                found += 1
+    if not found:
+        raise EvidenceError("build log lacks actual qualified Swift compiler and optimization evidence")
+    return found
 
 
 def preserve_bundle(bundle, destination, session):
@@ -484,7 +579,7 @@ def retained_build_files(derived, session):
     return records, issues
 
 
-def run_ios(ctx):
+def run_ios(ctx, toolchain_receipt=None, consumer_commit=None):
     """Run the pinned app baseline; every unimplemented acceptance gate stays red."""
     session = Session(ctx)
     phase = "provenance"
@@ -494,10 +589,16 @@ def run_ios(ctx):
         expected_version = ctx.app["ios"].get("xcode")
         if expected_version != "26.5":
             raise EvidenceError("this corpus requires manifest ios.xcode to be 26.5")
+        if session.toolchain not in ("XcodeDefault", BUNDLE_IDENTIFIER):
+            raise EvidenceError("unknown or missing explicit iOS toolchain")
+        installation = comparison_receipt(session, toolchain_receipt, consumer_commit)
         scratch = ctx.work.parent / (ctx.work.name + "-ios-build")
         scratch.mkdir(parents=True, exist_ok=False)
         derived, packages = scratch / "derived-data", scratch / "source-packages"
         argv = build_arguments(ctx, derived, packages)
+        if installation:
+            compiler = next(row for row in installation["tools"] if row["name"] == "swiftc")
+            argv.append("SWIFT_EXEC=" + compiler["reported_path"])
         head = session.command("source-head", ["git", "rev-parse", "HEAD"], cwd=ctx.source).stdout.strip()
         if not re.fullmatch(r"[0-9a-f]{40,64}", head) or head != ctx.app["source_commit"]:
             raise EvidenceError("source checkout does not match the immutable manifest commit")
@@ -512,10 +613,18 @@ def run_ios(ctx):
                 raise EvidenceError("selected SDK identity is empty")
         if sdk["version"] != expected_version:
             raise EvidenceError("selected iOS SDK version differs from required 26.5")
+        if installation:
+            qualified_sdk = next(row for row in installation["sdks"] if row["name"] == ctx.variant["sdk"])
+            if sdk["path"] != qualified_sdk["path"] or sdk["version"] != qualified_sdk["version"]:
+                raise EvidenceError("actual xcrun SDK differs from this runner's qualified SDK")
         tools = {}
-        for tool in ("clang", "swiftc", "swift-demangle", "dyld_info", "otool", "nm"):
+        for tool in ("clang", "swiftc", "swift-frontend", "swift-demangle", "dyld_info", "otool", "nm"):
             result = session.command("tool-" + tool, ["xcrun", "--sdk", ctx.variant["sdk"], "--find", tool], optional=True)
             tools[tool] = {"path": result.stdout.strip(), "returncode": result.returncode}
+            if installation and tool in ("swiftc", "swift-frontend", "swift-demangle"):
+                expected = next(row for row in installation["tools"] if row["name"] == tool)
+                if result.returncode or result.stdout.strip() != expected["reported_path"]:
+                    raise EvidenceError("actual xcrun Swift tool differs from this runner's qualified installation")
         for tool in ("clang", "swiftc", "swift-demangle"):
             session.command("tool-version-" + tool, ["xcrun", tool, "--version"], optional=True)
         config = ctx.app["ios"]
@@ -543,17 +652,31 @@ def run_ios(ctx):
         session.preserve(lock_path, ctx.work / "Package.resolved")
         provenance = {"repository": ctx.app["repository"], "source_commit": head, "license": ctx.app["license"],
                       "variant": ctx.variant, "xcode": xcode, "sdk": sdk, "apple_tools": tools,
+                      "toolchain": session.toolchain, "comparison_of": ctx.variant.get("comparison_of"),
+                      "toolchain_installation_receipt": "toolchain/qualification.json" if installation else None,
                       "package_resolved_sha256": lock_hash, "dependencies": dependencies,
                       "issues": dependency_issues, "generated_configuration_files": preparation,
                       "license_evidence": license_evidence}
         ctx.write_json("ios-provenance.json", provenance)
         session.stage("provenance", "incomplete" if dependency_issues else "success", **provenance,
-                      evidence=["ios-provenance.json", "Package.resolved"])
+                      evidence=["ios-provenance.json", "Package.resolved"]
+                      + (["toolchain/qualification.json"] if installation else []))
         phase = "original_build"
-        session.command("build-settings", [*argv, "-showBuildSettings", "-json"], cwd=ctx.source, cap=180)
+        settings = session.command("build-settings", [*argv, "-showBuildSettings", "-json"], cwd=ctx.source, cap=180)
+        if installation:
+            verify_comparison_build_settings(bounded_text(settings), installation, ctx.variant["profile"])
         # Leave room for actual artifact analysis even on a slow initial build.
         build_cap = min(2700, max(1, session.remaining() - 300))
-        session.command("original-release-build", [*argv, "build"], cwd=ctx.source, cap=build_cap)
+        built = session.command("original-release-build", [*argv, "build"], cwd=ctx.source, cap=build_cap)
+        if installation:
+            observations = verify_comparison_build_commands(built.stdout, installation, ctx.variant["profile"])
+            verify_installation(installation, consumer_commit, os.environ.get("GITHUB_RUN_ID"),
+                                os.environ.get("GITHUB_RUN_ATTEMPT"), session.remaining, case_id=ctx.variant["id"],
+                                workflow_commit=os.environ.get("GITHUB_SHA"))
+            ctx.write_json("ios-toolchain-build-observation.json", {
+                "toolchain": session.toolchain, "comparison_of": ctx.variant["comparison_of"],
+                "compile_command_count": observations, "profile": ctx.variant["profile"],
+                "installation_rechecked_after_build": True, "application_behavior_verified": False})
         if digest(lock_path, session) != lock_hash:
             raise EvidenceError("Package.resolved changed during the supposedly locked build")
         bundle = relative_path(derived / "Build/Products" / ("Release-" + ctx.variant["sdk"]), config["product"])
@@ -567,7 +690,8 @@ def run_ios(ctx):
         session.stage("original_build", "incomplete" if retained_issues else "success", bundle=str(bundle), profile=ctx.variant["profile"],
                       architecture=ctx.variant["architecture"], sdk=ctx.variant["sdk"],
                       retained_files=retained, evidence_issues=retained_issues,
-                      evidence=["ios-build-artifacts.json", *[row["path"] for row in retained]])
+                      evidence=["ios-build-artifacts.json", *[row["path"] for row in retained]]
+                      + (["ios-toolchain-build-observation.json"] if installation else []))
         phase = "inventory"
         artifacts, enumeration_issues = bundle_artifacts(bundle, session)
         discovered = {name for row in artifacts for name in (row["path"], *row["aliases"])}

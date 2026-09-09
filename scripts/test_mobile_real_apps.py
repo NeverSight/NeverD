@@ -11,8 +11,10 @@ import sys
 
 try:
     from .mobile_real_apps_common import CaseContext, digest, load_json, safe_relative
+    from .mobile_real_apps_matrix import generate
 except ImportError:
     from mobile_real_apps_common import CaseContext, digest, load_json, safe_relative
+    from mobile_real_apps_matrix import generate
 
 
 def main(argv=None) -> int:
@@ -24,6 +26,8 @@ def main(argv=None) -> int:
     parser.add_argument("--neverd", type=Path, required=True)
     parser.add_argument("--consumer-commit", required=True)
     parser.add_argument("--timeout", type=int, default=4200)
+    parser.add_argument("--toolchain-receipt", type=Path,
+                        help="This runner's fresh Swift comparison installation receipt")
     args = parser.parse_args(argv)
     # This entry point is intentionally cloud-only. Unit tests exercise pure
     # parsers/mocked boundaries; app downloads and executions happen in Actions.
@@ -34,6 +38,7 @@ def main(argv=None) -> int:
     manifest = load_json(args.manifest)
     if manifest.get("schema_version") != 1:
         parser.error("Unsupported manifest schema")
+    generate(manifest)
     variants = [row for row in manifest["required_cases"] if row["id"] == args.case]
     if len(variants) != 1:
         parser.error("Case must occur exactly once in required_cases")
@@ -83,6 +88,8 @@ def main(argv=None) -> int:
                        "consumer_commit": head, "neverd_sha256": digest(ctx.neverd),
                        "manifest_sha256": digest(args.manifest), "license_sha256": digest(license_file)})
         if variant["platform"] == "android":
+            if args.toolchain_receipt:
+                raise ValueError("Swift toolchain receipt cannot be applied to an Android case")
             try:
                 from .mobile_real_apps_android import run_android
             except ImportError:
@@ -93,7 +100,7 @@ def main(argv=None) -> int:
                 from .mobile_real_apps_ios import run_ios
             except ImportError:
                 from mobile_real_apps_ios import run_ios
-            run_ios(ctx)
+            run_ios(ctx, toolchain_receipt=args.toolchain_receipt, consumer_commit=args.consumer_commit)
         else:
             raise ValueError("Unsupported application platform")
     except Exception as error:

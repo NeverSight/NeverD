@@ -16,6 +16,7 @@ import plistlib
 import re
 import subprocess
 import sys
+import time
 
 
 SNAPSHOT = "swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-09-04-a"
@@ -29,12 +30,139 @@ TRUSTED_SIGNATURE_STATUSES = {
 }
 DEVELOPER_DIR = "/Applications/Xcode_26.5.app/Contents/Developer"
 MAX_PACKAGE_BYTES = 3 * 1024 * 1024 * 1024
+QUALIFICATION_RUN_ID = 34344298423
+BUNDLE_IDENTIFIER = "org.swift.64202609041a"
+INFO_PLIST_SHA256 = "84ac4795ba5d9c9ce58729c0101908dd619df7fcb586f65e3e4be46781e08b29"
+TOOL_SHA256 = {
+    "swiftc": "70c364e10c4d5201f77f5cb9568d68abb48f38a726ccffb52c451e2b51329dde",
+    "swift-frontend": "dc1046434e4dff77d0afcbe45e77cd3921af1a34bddf94c1ed0e5d4f4ab2f8e5",
+    "swift-demangle": "09904ae84f7af1b5250b2aaf729807296a1432babb800dec04d798bf57b265a1",
+}
+SDK_SETTINGS_SHA256 = {
+    "iphoneos": "6d01ffc01efe09ccb1bbaf5e90a96a34b07bfe049ee77e7352303984193f83f0",
+    "iphonesimulator": "038a8a5fb9ac4ba60db102748ed117bf674cf64545cce8092eec0c6c44048adc",
+}
+INSTALLATION_SECONDS = 2700
+REQUIRED_INSTALLATION_COMMANDS = {
+    "consumer-source-head", "xcode-version", "macos-version", "download", "package-signature",
+    "gatekeeper", "install", "xcode-toolchain-selection",
+    *(name + "-" + operation for name in TOOL_SHA256
+      for operation in ("path", "signature", "signature-details", "version")),
+    *(name + "-" + operation for name in SDK_SETTINGS_SHA256 for operation in ("path", "version")),
+}
 
 
-def digest(path):
+def consumer_identity(explicit, environment):
+    # workflow_run's GITHUB_SHA identifies workflow code, not the verified
+    # producer revision. The dispatch-only qualification entry remains usable.
+    value = explicit
+    if value is None and environment.get("GITHUB_EVENT_NAME") == "workflow_dispatch":
+        value = environment.get("GITHUB_SHA")
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
+        raise ValueError("An explicit exact consumer commit is required")
+    return value
+
+
+def verify_installation(receipt, consumer_commit, run_id, run_attempt, check=lambda: None, case_id=None,
+                        *, workflow_commit):
+    """Reconcile this job's receipt against pinned identities and current files.
+
+    This validates installation identity only; it never certifies app builds.
+    Callers copy the receipt into their own evidence before executing app code.
+    """
+    def require(condition, message):
+        if not condition:
+            raise ValueError(message)
+
+    require(isinstance(receipt, dict) and receipt.get("schema_version") == 1
+            and receipt.get("scope") == "swift-toolchain-installation-identity"
+            and receipt.get("status") == "success"
+            and receipt.get("installation_pin_evidence_run_id") == QUALIFICATION_RUN_ID,
+            "Toolchain installation receipt is incomplete")
+    require(re.fullmatch(r"[0-9a-f]{40}", consumer_commit or "") is not None
+            and receipt.get("consumer_commit") == consumer_commit,
+            "Toolchain receipt differs from the current consumer commit")
+    require(isinstance(workflow_commit, str)
+            and re.fullmatch(r"[0-9a-f]{40}", workflow_commit) is not None
+            and receipt.get("workflow_commit") == workflow_commit,
+            "Toolchain receipt differs from the current workflow source identity")
+    require(all(isinstance(value, str) and re.fullmatch(r"[1-9][0-9]*", value)
+                for value in (run_id, run_attempt))
+            and receipt.get("run_id") == run_id and receipt.get("run_attempt") == run_attempt,
+            "Toolchain receipt is from another workflow run or attempt")
+    if case_id is not None:
+        require(receipt.get("case_id") == case_id, "Toolchain receipt belongs to another application case")
+    require(receipt.get("runner_os") == "macOS" and receipt.get("runner_arch") == "ARM64",
+            "Toolchain receipt does not identify the qualified macOS ARM64 host")
+    package = receipt.get("package", {})
+    require(isinstance(package, dict) and package.get("snapshot") == SNAPSHOT
+            and package.get("url") == PACKAGE_URL
+            and package.get("expected_sha256") == PACKAGE_SHA256
+            and package.get("observed_sha256") == PACKAGE_SHA256
+            and package.get("source_reference") == SOURCE_REFERENCE
+            and package.get("identity_status") == "sha256-and-system-signature-verified"
+            and package.get("gatekeeper") == "accepted",
+            "Toolchain package identity differs from the fixed signed package")
+    signature = package.get("signature", {})
+    require(isinstance(signature, dict) and signature.get("leaf") == SIGNER
+            and signature.get("status") in TRUSTED_SIGNATURE_STATUSES
+            and signature.get("certificate_chain") == [SIGNER, "Developer ID Certification Authority", "Apple Root CA"],
+            "Toolchain receipt lacks the required installer signature chain")
+    identity = receipt.get("toolchain", {})
+    require(isinstance(identity, dict) and identity.get("bundle_identifier") == BUNDLE_IDENTIFIER
+            and identity.get("info_plist_sha256") == INFO_PLIST_SHA256,
+            "Toolchain bundle identity differs from the qualified snapshot")
+    bundle = Path(identity.get("path", ""))
+    expected = Path.home() / "Library/Developer/Toolchains" / (SNAPSHOT + ".xctoolchain")
+    require(bundle == expected and bundle.is_dir() and not bundle.is_symlink(),
+            "Toolchain is not the installed fixed user bundle")
+    check()
+    require(digest(bundle / "Info.plist", check) == INFO_PLIST_SHA256,
+            "Installed toolchain Info.plist changed")
+    records = receipt.get("tools")
+    require(isinstance(records, list) and len(records) == len(TOOL_SHA256),
+            "Toolchain receipt lacks the complete Swift tool set")
+    seen = set()
+    for row in records:
+        require(isinstance(row, dict) and row.get("name") in TOOL_SHA256
+                and row["name"] not in seen, "Duplicate or unknown Swift tool identity")
+        name = row["name"]
+        seen.add(name)
+        reported = row.get("reported_path")
+        require(reported == str(bundle / "usr/bin" / name), "Swift tool path differs from its fixed bundle member")
+        executable = installed_tool(bundle, reported)
+        require(row.get("resolved_path") == str(executable), "Swift tool symlink target changed")
+        check()
+        require(row.get("sha256") == TOOL_SHA256[name] and digest(executable, check) == TOOL_SHA256[name],
+                "Installed Swift tool bytes differ from the qualified snapshot")
+    xcode = receipt.get("xcode", {})
+    require(isinstance(xcode, dict) and xcode.get("developer_dir") == DEVELOPER_DIR
+            and xcode.get("version", "").startswith("Xcode 26.5\n"),
+            "Toolchain receipt changed the pinned Xcode installation")
+    sdks = receipt.get("sdks")
+    require(isinstance(sdks, list) and len(sdks) == len(SDK_SETTINGS_SHA256),
+            "Toolchain receipt lacks both pinned SDK identities")
+    seen = set()
+    for row in sdks:
+        require(isinstance(row, dict) and row.get("name") in SDK_SETTINGS_SHA256
+                and row["name"] not in seen, "Duplicate or unknown toolchain SDK identity")
+        name = row["name"]
+        seen.add(name)
+        path = Path(row.get("path", ""))
+        require(path.is_absolute() and path.resolve(strict=True).is_relative_to(Path(DEVELOPER_DIR).resolve(strict=True))
+                and row.get("version") == "26.5", "Toolchain SDK path or version changed")
+        check()
+        require(row.get("settings_sha256") == SDK_SETTINGS_SHA256[name]
+                and digest(path / "SDKSettings.json", check) == SDK_SETTINGS_SHA256[name],
+                "Installed SDK identity differs from the qualified SDK")
+    return receipt
+
+
+def digest(path, check=lambda: None):
     result = hashlib.sha256()
     with path.open("rb") as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
+            check()
             result.update(block)
     return result.hexdigest()
 
@@ -91,15 +219,22 @@ def installed_bundle(root, before, after):
     return bundle, aliases
 
 
-def qualify(work):
+def qualify(work, consumer_commit=None, case_id=None):
     if os.environ.get("GITHUB_ACTIONS") != "true" or sys.platform != "darwin":
         raise RuntimeError("Swift toolchain qualification runs only in macOS GitHub Actions")
+    consumer_commit = consumer_identity(consumer_commit, os.environ)
+    if case_id is not None and not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", case_id):
+        raise ValueError("Invalid toolchain installation case identity")
+    deadline = time.monotonic() + INSTALLATION_SECONDS
     work.mkdir(parents=True, exist_ok=False)
     output = work / "evidence"
     output.mkdir()
     receipt = {"schema_version": 1, "scope": "swift-toolchain-installation-identity",
                "status": "incomplete", "application_build_verified": False,
-               "consumer_commit": os.environ.get("GITHUB_SHA"),
+               "installation_pin_evidence_run_id": QUALIFICATION_RUN_ID,
+               "consumer_commit": consumer_commit,
+               "workflow_commit": os.environ.get("GITHUB_SHA"),
+               "case_id": case_id,
                "run_id": os.environ.get("GITHUB_RUN_ID"),
                "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
                "runner_os": os.environ.get("RUNNER_OS"),
@@ -117,7 +252,14 @@ def qualify(work):
     environment.update({"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C", "LC_ALL": "C",
                         "DEVELOPER_DIR": DEVELOPER_DIR})
 
+    def remaining():
+        value = deadline - time.monotonic()
+        if value <= 0:
+            raise RuntimeError("Toolchain installation deadline exhausted")
+        return value
+
     def command(name, argv, timeout=120):
+        timeout = min(timeout, remaining())
         stdout, stderr = output / (name + ".stdout"), output / (name + ".stderr")
         record = {"name": name, "argv": [str(value) for value in argv],
                   "stdout": stdout.name, "stderr": stderr.name, "exitcode": None}
@@ -141,6 +283,10 @@ def qualify(work):
         return stdout.read_text(encoding="utf-8")
 
     try:
+        head = command("consumer-source-head", ["/usr/bin/git", "-C", Path(__file__).resolve().parent.parent,
+                                                "rev-parse", "HEAD"]).strip()
+        if head != consumer_commit:
+            raise RuntimeError("Toolchain installer script checkout differs from the requested consumer commit")
         if not Path(DEVELOPER_DIR).is_dir():
             raise RuntimeError("The pinned Xcode 26.5 installation is unavailable")
         xcode = command("xcode-version", ["/usr/bin/xcodebuild", "-version"])
@@ -161,7 +307,7 @@ def qualify(work):
         size = package.stat().st_size
         if not 0 < size <= MAX_PACKAGE_BYTES:
             raise RuntimeError("The downloaded package exceeds its byte budget")
-        package_sha = digest(package)
+        package_sha = digest(package, remaining)
         receipt["package"].update({"observed_sha256": package_sha, "size": size,
                                    "effective_url": download[0]})
         if package_sha != PACKAGE_SHA256:
@@ -173,7 +319,7 @@ def qualify(work):
                                "--verbose=4", package], timeout=300)
         receipt["package"]["gatekeeper"] = "accepted"
         receipt["package"]["identity_status"] = "sha256-and-system-signature-verified"
-        if digest(package) != package_sha:
+        if digest(package, remaining) != package_sha:
             raise RuntimeError("The package changed during signature assessment")
 
         root = Path(environment["HOME"]) / "Library/Developer/Toolchains"
@@ -193,6 +339,8 @@ def qualify(work):
             raise RuntimeError("Toolchain Info.plist exceeds its parsing budget")
         info = plistlib.loads(info_bytes)
         identifier = bundle_identifier(info)
+        if identifier != BUNDLE_IDENTIFIER or digest(info_path) != INFO_PLIST_SHA256:
+            raise RuntimeError("Installed bundle differs from the previously qualified snapshot")
         (output / "toolchain-Info.plist").write_bytes(info_bytes)
         receipt["toolchain"] = {"path": str(bundle), "bundle_identifier": identifier,
                                  "info_plist_sha256": digest(info_path)}
@@ -212,6 +360,8 @@ def qualify(work):
             receipt["tools"].append({"name": name, "reported_path": reported.strip(),
                                       "resolved_path": str(executable),
                                       "sha256": digest(executable), "version": version.strip()})
+            if receipt["tools"][-1]["sha256"] != TOOL_SHA256[name]:
+                raise RuntimeError("Installed Swift tool differs from its qualified byte identity")
         for sdk in ("iphoneos", "iphonesimulator"):
             prefix = ["/usr/bin/xcrun", "--toolchain", identifier, "--sdk", sdk]
             version = command(sdk + "-version", [*prefix, "--show-sdk-version"]).strip()
@@ -220,7 +370,12 @@ def qualify(work):
                 raise RuntimeError("Toolchain selection changed the pinned iOS SDK")
             receipt["sdks"].append({"name": sdk, "version": version, "path": str(sdk_root),
                                      "settings_sha256": digest(sdk_root / "SDKSettings.json")})
+            if receipt["sdks"][-1]["settings_sha256"] != SDK_SETTINGS_SHA256[sdk]:
+                raise RuntimeError("Installed SDK differs from its qualified byte identity")
         receipt["status"] = "success"
+        verify_installation(receipt, consumer_commit, os.environ.get("GITHUB_RUN_ID"),
+                            os.environ.get("GITHUB_RUN_ATTEMPT"), remaining, case_id=case_id,
+                            workflow_commit=os.environ.get("GITHUB_SHA"))
     except Exception as error:
         receipt["status"], receipt["error"] = "failed", str(error)
         raise
@@ -231,9 +386,11 @@ def qualify(work):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work-dir", required=True, type=Path)
+    parser.add_argument("--consumer-commit", help="Exact verified consumer SHA; required for workflow_run")
+    parser.add_argument("--case-id", help="Independent application comparison case receiving this installation")
     args = parser.parse_args()
     try:
-        qualify(args.work_dir.resolve())
+        qualify(args.work_dir.resolve(), args.consumer_commit, args.case_id)
     except Exception as error:
         print(f"Swift toolchain qualification failed: {error}", file=sys.stderr)
         return 1

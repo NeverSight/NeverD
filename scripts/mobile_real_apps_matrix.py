@@ -14,6 +14,11 @@ from pathlib import Path
 import re
 import sys
 
+try:
+    from .qualify_mobile_swift_toolchain import BUNDLE_IDENTIFIER
+except ImportError:
+    from qualify_mobile_swift_toolchain import BUNDLE_IDENTIFIER
+
 
 class MatrixError(ValueError):
     pass
@@ -81,7 +86,17 @@ def ios_row(case, app):
         ("arm64", "iphonesimulator"), ("x86_64", "iphonesimulator"), ("arm64", "iphoneos")},
         "unsupported iOS SDK/architecture combination")
     xcode = token(config.get("xcode"), r"[0-9]+\.[0-9]+(?:\.[0-9]+)?", "Xcode version")
-    return {"xcode": xcode, "developer_dir": f"/Applications/Xcode_{xcode}.app/Contents/Developer"}
+    toolchain = case.get("toolchain")
+    require(toolchain in ("XcodeDefault", BUNDLE_IDENTIFIER), "unknown or missing pinned iOS toolchain")
+    comparison = toolchain != "XcodeDefault"
+    if comparison:
+        require(xcode == "26.5" and case["architecture"] == "arm64" and case["app"] == "icecubes",
+                "Swift snapshot comparison requires IceCubes arm64 with the qualified Xcode 26.5 SDK")
+    else:
+        require("comparison_of" not in case, "XcodeDefault baseline cannot replace a toolchain comparison")
+    return {"xcode": xcode, "developer_dir": f"/Applications/Xcode_{xcode}.app/Contents/Developer",
+            "toolchain": toolchain, "install_toolchain": comparison,
+            "job_timeout_minutes": 135 if comparison else 80}
 
 
 def generate(manifest):
@@ -120,6 +135,17 @@ def generate(manifest):
         # whether a required case is scheduled. Such cases report their gaps.
         matrices[platform].append(row)
     require(used == set(apps), "manifest app has no required case")
+    cases_by_id = {case["id"]: case for case in cases}
+    for case in cases:
+        if case.get("toolchain") != BUNDLE_IDENTIFIER:
+            continue
+        parent = token(case.get("comparison_of"), r"[a-z0-9][a-z0-9_-]*", "toolchain comparison_of")
+        require(parent in cases_by_id and parent != case["id"], "toolchain comparison omits its baseline case")
+        baseline = cases_by_id[parent]
+        require(baseline.get("toolchain") == "XcodeDefault" and "comparison_of" not in baseline,
+                "toolchain comparison must reference an unchanged XcodeDefault baseline")
+        require(all(case[key] == baseline[key] for key in ("app", "platform", "profile", "architecture", "sdk")),
+                "toolchain comparison changes its app source, optimization, architecture or SDK")
     require(all(0 < len(rows) <= 256 for rows in matrices.values()),
             "each platform requires 1..256 cases; do not silently truncate the Actions matrix")
     baseline = manifest.get("baseline_cases")

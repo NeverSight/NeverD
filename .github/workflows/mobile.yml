@@ -99,6 +99,7 @@ jobs:
             scripts.tests.test_mobile_real_apps_common \
             scripts.tests.test_mobile_real_apps_ios \
             scripts.tests.test_mobile_ios_sdk_declarations \
+            scripts.tests.test_mobile_swift_toolchain \
             scripts.tests.test_mobile_real_apps_objc_inventory \
             scripts.tests.test_mobile_real_apps_matrix \
             scripts.tests.test_mobile_real_apps_trigger \

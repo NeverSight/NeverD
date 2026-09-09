@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,8 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+
+from scripts.tests.test_mobile_swift_toolchain import installed_identity_fixture
 
 
 SPEC = importlib.util.spec_from_file_location(
@@ -44,10 +47,12 @@ class Context:
         self.variant = {
             "id": "actual-release-arm64-sim", "app": "actual", "platform": "ios",
             "profile": "release", "architecture": "arm64", "sdk": "iphonesimulator",
+            "toolchain": "XcodeDefault",
         }
         (self.source / "Actual.xcodeproj").mkdir()
         (self.source / "Package.resolved").write_text('{"pins": [], "version": 3}')
         self.commands = []
+        self.environments = {}
         self.stages = {}
         self.documents = {}
         self.failures = []
@@ -56,6 +61,10 @@ class Context:
         self.report_status = "success"
         self.xcode_version = "26.5"
         self.sdk_version = "26.5"
+        self.sdk_path = "/Applications/Xcode.app/SDKs/iPhoneSimulator.sdk"
+        self.swift_paths = {}
+        self.build_log = "real build boundary mocked"
+        self.settings_optimization = None
         self.extra_bundle_files = {}
         self.omit_framework = False
         self.after_recovery = None
@@ -78,24 +87,27 @@ class Context:
     def command(self, name, argv, cwd=None, env=None, timeout=None, allow_failure=False):
         argv = [str(x) for x in argv]
         self.commands.append((name, argv, timeout))
+        self.environments[name] = env
         if self.tool_failure and self.tool_failure in argv:
             return subprocess.CompletedProcess(argv, 1, "", "intentional tool failure")
         if argv[:3] == ["git", "rev-parse", "HEAD"]:
             return subprocess.CompletedProcess(argv, 0, "a" * 40 + "\n", "")
-        if argv[:2] == ["xcodebuild", "-version"]:
+        if argv[0] == "xcodebuild" and "-version" in argv:
             return subprocess.CompletedProcess(argv, 0, f"Xcode {self.xcode_version}\nBuild version TEST\n", "")
         if "--show-sdk-path" in argv:
-            return subprocess.CompletedProcess(argv, 0, "/Applications/Xcode.app/SDKs/iPhoneSimulator.sdk\n", "")
+            return subprocess.CompletedProcess(argv, 0, self.sdk_path + "\n", "")
         if "--show-sdk-version" in argv:
             return subprocess.CompletedProcess(argv, 0, self.sdk_version + "\n", "")
         if "--show-sdk-build-version" in argv:
             return subprocess.CompletedProcess(argv, 0, "TESTSDK\n", "")
         if "--find" in argv:
-            return subprocess.CompletedProcess(argv, 0, "/Apple/" + argv[-1] + "\n", "")
+            return subprocess.CompletedProcess(argv, 0, self.swift_paths.get(argv[-1], "/Apple/" + argv[-1]) + "\n", "")
         if "-showBuildSettings" in argv:
             return subprocess.CompletedProcess(argv, 0, json.dumps([{
                 "target": "Actual", "buildSettings": {
-                    "CLANG_ENABLE_OBJC_ARC": "YES", "SWIFT_OPTIMIZATION_LEVEL": "-O",
+                    "CLANG_ENABLE_OBJC_ARC": "YES",
+                    "SWIFT_OPTIMIZATION_LEVEL": self.settings_optimization or ("-Osize" if self.variant["profile"] == "size" else "-O"),
+                    "SWIFT_EXEC": self.swift_paths.get("swiftc", "/Apple/swiftc"),
                     "SDKROOT": "/Apple/iPhoneSimulator.sdk", "ARCHS": self.variant["architecture"],
                 },
             }]), "")
@@ -117,7 +129,7 @@ class Context:
             dwarf.write_bytes(b"independent build debug evidence")
             (support / "Actual-arm64-Release-LinkMap.txt").write_text("# Object files:\n# Symbols:\n")
             (support / "Actual.common-args.resp").write_text("-fobjc-arc -O\n")
-            return subprocess.CompletedProcess(argv, 0, "real build boundary mocked", "")
+            return subprocess.CompletedProcess(argv, 0, self.build_log, "")
         if "nm" in argv:
             return subprocess.CompletedProcess(argv, 0, "0000000100001000 (__TEXT,__text) external _$s4Demo3fooyyF\n", "")
         if "-function_starts" in argv:
@@ -165,6 +177,144 @@ class IOSRealAppOrchestrationTests(unittest.TestCase):
             ios.run_ios(ctx)
         return ctx
 
+    def comparison_context(self, profile="release"):
+        ctx = self.context()
+        ctx.variant.update(id=f"actual-{profile}-arm64-sim-swift64", profile=profile,
+                           toolchain=ios.BUNDLE_IDENTIFIER, comparison_of=f"actual-{profile}-arm64-sim")
+        qualifier = sys.modules["qualify_mobile_swift_toolchain"]
+        receipt = self.enterContext(installed_identity_fixture(
+            ctx.work.parent, module=qualifier, case_id=ctx.variant["id"]))
+        self.enterContext(patch.object(ios, "DEVELOPER_DIR", receipt["xcode"]["developer_dir"]))
+        self.enterContext(patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "GITHUB_RUN_ID": "123",
+                                                "GITHUB_RUN_ATTEMPT": "2", "GITHUB_SHA": "d" * 40}))
+        ctx.swift_paths = {row["name"]: row["reported_path"] for row in receipt["tools"]}
+        ctx.sdk_path = next(row["path"] for row in receipt["sdks"] if row["name"] == ctx.variant["sdk"])
+        opt = "-Osize" if profile == "size" else "-O"
+        ctx.build_log = (f'    builtin-SwiftDriver -- {ctx.swift_paths["swiftc"]} -module-name Actual {opt} '
+                         '@Actual.SwiftFileList -c -emit-module -target arm64-apple-ios18.0-simulator\n'
+                         f'    {ctx.swift_paths["swift-frontend"]} -frontend -emit-module -module-name Actual {opt}\n')
+        folder = ctx.work.parent / "installation/evidence"
+        folder.mkdir(parents=True)
+        receipt["commands"] = []
+        for name in sorted(ios.REQUIRED_INSTALLATION_COMMANDS):
+            row = {"name": name, "argv": ["mocked-installation-boundary", name], "exitcode": 0}
+            for stream in ("stdout", "stderr"):
+                value = (("c" * 40 + "\n") if name == "consumer-source-head" else f"retained {name} {stream}\n").encode()
+                member = name + "." + stream
+                (folder / member).write_bytes(value)
+                row[stream] = member
+                row[stream + "_sha256"] = hashlib.sha256(value).hexdigest()
+            receipt["commands"].append(row)
+        path = folder / "qualification.json"
+        path.write_text(json.dumps(receipt))
+        return ctx, path, receipt
+
+    def test_snapshot_cases_revalidate_current_files_route_three_tools_and_keep_acceptance_incomplete(self):
+        for profile in ("release", "size"):
+            with self.subTest(profile=profile):
+                ctx, path, receipt = self.comparison_context(profile)
+                ios.run_ios(ctx, toolchain_receipt=path, consumer_commit="c" * 40)
+                self.assertEqual(ctx.stages["provenance"]["status"], "success")
+                self.assertEqual(ctx.stages["original_build"]["status"], "success")
+                self.assertEqual(set(ctx.stages), set(ios.REQUIRED_STAGES))
+                self.assertTrue(ctx.failures)
+                for name in ("inventory", "recovery", "recompile", "behavior"):
+                    self.assertEqual(ctx.stages[name]["status"], "incomplete")
+                self.assertEqual(ctx.timeout, 4200)
+                self.assertFalse(any(name in ios.REQUIRED_INSTALLATION_COMMANDS - {"xcode-version"}
+                                     for name, _, _ in ctx.commands))
+                self.assertEqual((ctx.work / "toolchain/qualification.json").read_bytes(), path.read_bytes())
+                self.assertTrue((ctx.work / "toolchain/install.stdout").is_file())
+                self.assertEqual(ctx.documents["ios-toolchain-build-observation.json"]["compile_command_count"], 1)
+                self.assertFalse(ctx.documents["ios-toolchain-build-observation.json"]["application_behavior_verified"])
+                for name, argv, timeout in ctx.commands:
+                    self.assertLessEqual(timeout, 4200)
+                    if argv[0] == "xcodebuild":
+                        self.assertEqual(argv[argv.index("-toolchain") + 1], ios.BUNDLE_IDENTIFIER)
+                        if name != "xcode-version":
+                            self.assertIn("SWIFT_EXEC=" + ctx.swift_paths["swiftc"], argv)
+                            self.assertIn("SWIFT_OPTIMIZATION_LEVEL=" + ("-Osize" if profile == "size" else "-O"), argv)
+                    if argv[0] == "xcrun":
+                        expected = ios.BUNDLE_IDENTIFIER if any(tool in argv for tool in ctx.swift_paths) else "XcodeDefault"
+                        self.assertEqual(argv[argv.index("--toolchain") + 1], expected)
+                    self.assertEqual(ctx.environments[name]["TOOLCHAINS"], ios.BUNDLE_IDENTIFIER)
+
+    def test_failed_stale_or_missing_installation_stops_only_its_case_and_retains_six_stage_failure(self):
+        for mutation in ("missing", "failed", "consumer", "workflow", "run", "attempt", "case", "malformed"):
+            with self.subTest(mutation=mutation):
+                ctx, path, receipt = self.comparison_context()
+                if mutation == "failed":
+                    receipt["status"] = "failed"
+                    receipt["error"] = "installer rejected package"
+                elif mutation == "workflow":
+                    receipt["workflow_commit"] = "e" * 40
+                elif mutation in ("consumer", "run", "attempt", "case"):
+                    key = {"consumer": "consumer_commit", "run": "run_id", "attempt": "run_attempt", "case": "case_id"}[mutation]
+                    receipt[key] = "different"
+                path.write_text("{" if mutation == "malformed" else json.dumps(receipt))
+                ios.run_ios(ctx, toolchain_receipt=None if mutation == "missing" else path, consumer_commit="c" * 40)
+                self.assertEqual(ctx.commands, [])
+                self.assertEqual(set(ctx.stages), set(ios.REQUIRED_STAGES))
+                self.assertEqual(ctx.stages["provenance"]["status"], "failed")
+                self.assertTrue(ctx.failures)
+                if mutation != "missing":
+                    self.assertEqual((ctx.work / "toolchain/qualification.json").read_bytes(), path.read_bytes())
+                self.assertFalse((ctx.work / "original").exists())
+
+    def test_installation_logs_are_required_and_byte_bound_to_the_current_receipt(self):
+        for mutation in ("modified", "missing", "duplicate", "failed-step", "omitted-verification"):
+            with self.subTest(mutation=mutation):
+                ctx, path, receipt = self.comparison_context()
+                row = receipt["commands"][0]
+                if mutation == "modified":
+                    (path.parent / row["stdout"]).write_text("modified installation evidence")
+                elif mutation == "missing":
+                    (path.parent / row["stderr"]).unlink()
+                elif mutation == "duplicate":
+                    receipt["commands"].append(dict(row))
+                elif mutation == "failed-step":
+                    row["exitcode"] = 1
+                else:
+                    receipt["commands"] = [row for row in receipt["commands"] if row["name"] != "swift-frontend-signature"]
+                path.write_text(json.dumps(receipt))
+                ios.run_ios(ctx, toolchain_receipt=path, consumer_commit="c" * 40)
+                self.assertEqual(ctx.commands, [])
+                self.assertEqual(ctx.stages["provenance"]["status"], "failed")
+                self.assertTrue(ctx.failures)
+
+    def test_actual_compiler_sdk_fallback_or_lower_optimization_cannot_claim_build_success(self):
+        for mutation in ("xcrun", "sdk", "settings", "command-tool", "command-optimization", "module-only"):
+            with self.subTest(mutation=mutation):
+                ctx, path, receipt = self.comparison_context()
+                if mutation == "xcrun":
+                    ctx.swift_paths["swift-demangle"] = "/Apple/swift-demangle"
+                elif mutation == "sdk":
+                    ctx.sdk_path = "/Apple/unqualified.sdk"
+                elif mutation == "settings":
+                    ctx.settings_optimization = "-Onone"
+                elif mutation == "command-tool":
+                    ctx.build_log = ctx.build_log.replace(ctx.swift_paths["swiftc"], "/Apple/swiftc")
+                elif mutation == "command-optimization":
+                    ctx.build_log = ctx.build_log.replace(" -O ", " -Onone ")
+                else:
+                    ctx.build_log = f'{ctx.swift_paths["swift-frontend"]} -frontend -emit-module -module-name Actual -O\n'
+                ios.run_ios(ctx, toolchain_receipt=path, consumer_commit="c" * 40)
+                self.assertEqual(set(ctx.stages), set(ios.REQUIRED_STAGES))
+                self.assertTrue(ctx.failures)
+                self.assertNotEqual(ctx.stages["original_build"]["status"], "success")
+                self.assertFalse(any("mobile" in argv for _, argv, _ in ctx.commands))
+
+    def test_baseline_rejects_snapshot_receipt_and_missing_toolchain_without_running_commands(self):
+        for mode in ("receipt", "missing-toolchain"):
+            ctx = self.context()
+            if mode == "missing-toolchain":
+                ctx.variant.pop("toolchain")
+            with patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}):
+                ios.run_ios(ctx, toolchain_receipt=ctx.work / "snapshot.json" if mode == "receipt" else None)
+            self.assertEqual(ctx.commands, [])
+            self.assertEqual(ctx.stages["provenance"]["status"], "failed")
+            self.assertTrue(ctx.failures)
+
     def test_successful_tools_cannot_claim_unimplemented_source_acceptance(self):
         ctx = self.run_context()
         self.assertEqual(set(ctx.stages), set(ios.REQUIRED_STAGES))
@@ -198,6 +348,8 @@ class IOSRealAppOrchestrationTests(unittest.TestCase):
         for name, argv in commands:
             with self.subTest(command=name):
                 self.assertIn("-disablePackageRepositoryCache", argv)
+                self.assertEqual(argv[argv.index("-toolchain") + 1], "XcodeDefault")
+                self.assertEqual(ctx.environments[name]["TOOLCHAINS"], "XcodeDefault")
                 self.assertIn("-onlyUsePackageVersionsFromResolvedFile", argv)
                 self.assertIn("SWIFT_OPTIMIZATION_LEVEL=-O", argv)
                 self.assertNotIn("SWIFT_OPTIMIZATION_LEVEL=-Onone", argv)
@@ -299,6 +451,7 @@ class IOSRealAppOrchestrationTests(unittest.TestCase):
                     ctx.variant.update(profile=profile, architecture=architecture, sdk=sdk)
                     argv = ios.build_arguments(ctx, ctx.work / "derived", ctx.work / "packages")
                     self.assertEqual(argv[argv.index("-sdk") + 1], sdk)
+                    self.assertEqual(argv[argv.index("-toolchain") + 1], "XcodeDefault")
                     self.assertIn("ARCHS=" + architecture, argv)
                     self.assertIn("SWIFT_OPTIMIZATION_LEVEL=" + ("-Osize" if profile == "size" else "-O"), argv)
                     self.assertIn("-onlyUsePackageVersionsFromResolvedFile", argv)

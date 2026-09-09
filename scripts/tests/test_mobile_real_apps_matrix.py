@@ -26,7 +26,7 @@ class MobileRealAppsMatrixTests(unittest.TestCase):
     def rows(self, generated):
         return [*generated["android_matrix"]["include"], *generated["ios_matrix"]["include"]]
 
-    def test_current_full_scope_schedules_six_android_and_twelve_ios_cases(self):
+    def test_full_scope_preserves_eighteen_baselines_and_adds_four_swift_comparisons(self):
         manifest = self.manifest()
         generated = matrix.generate(manifest)
         expected_android = {f"{app}-{profile}" for app in ("markor", "calculator")
@@ -34,11 +34,13 @@ class MobileRealAppsMatrixTests(unittest.TestCase):
         expected_ios = {f"{app}-{profile}-{target}" for app in ("icecubes", "wikipedia")
                         for profile in ("release", "size")
                         for target in ("arm64-simulator", "arm64-device", "x86_64-simulator")}
+        expected_ios |= {f"icecubes-{profile}-arm64-{target}-swift64"
+                         for profile in ("release", "size") for target in ("simulator", "device")}
         android = generated["android_matrix"]["include"]
         ios = generated["ios_matrix"]["include"]
         self.assertEqual(Counter(row["case_id"] for row in android), Counter(expected_android))
         self.assertEqual(Counter(row["case_id"] for row in ios), Counter(expected_ios))
-        self.assertEqual(generated["required_case_count"], 18)
+        self.assertEqual(generated["required_case_count"], 22)
         self.assertEqual(generated["baseline_case_count"], 6)
         self.assertEqual(set(generated["required_case_ids"]), {case["id"] for case in manifest["required_cases"]})
         self.assertEqual({row["java_version"] for row in android}, {"21"})
@@ -68,7 +70,7 @@ class MobileRealAppsMatrixTests(unittest.TestCase):
                 actual = matrix.generate(changed)
                 self.assertEqual(actual["android_matrix"], original["android_matrix"])
                 self.assertEqual(actual["ios_matrix"], original["ios_matrix"])
-                self.assertEqual(actual["required_case_count"], 18)
+                self.assertEqual(actual["required_case_count"], 22)
 
     def test_incomplete_implementation_or_qualification_does_not_hide_cases(self):
         manifest = self.manifest()
@@ -76,7 +78,7 @@ class MobileRealAppsMatrixTests(unittest.TestCase):
             case["implementation_status"] = "incomplete"
         manifest["apps"]["icecubes"]["status"] = "unsupported"
         generated = matrix.generate(manifest)
-        self.assertEqual(len(self.rows(generated)), 18)
+        self.assertEqual(len(self.rows(generated)), 22)
         self.assertTrue(all(row["variant"]["implementation_status"] == "incomplete"
                             for row in self.rows(generated)))
 
@@ -94,13 +96,67 @@ class MobileRealAppsMatrixTests(unittest.TestCase):
         config = manifest["apps"]["markor"]["android"]
         config["java"] = "25"
         config["source_build"]["jdk_major"] = 25
-        manifest["apps"]["icecubes"]["ios"]["xcode"] = "26.4"
+        manifest["apps"]["wikipedia"]["ios"]["xcode"] = "26.4"
         for row in self.rows(matrix.generate(manifest)):
             if row["app"] == "markor":
                 self.assertEqual(row["source_commit"], "a" * 40)
                 self.assertEqual(row["java_version"], "25")
-            elif row["app"] == "icecubes":
+            elif row["app"] == "wikipedia":
                 self.assertEqual(row["developer_dir"], "/Applications/Xcode_26.4.app/Contents/Developer")
+
+    def test_comparisons_keep_baseline_source_optimization_and_target_with_separate_budget(self):
+        manifest = self.manifest()
+        rows = {row["case_id"]: row for row in self.rows(matrix.generate(manifest))}
+        comparisons = [case for case in manifest["required_cases"] if "comparison_of" in case]
+        self.assertEqual(len(comparisons), 4)
+        self.assertEqual(sum("comparison_of" not in case for case in manifest["required_cases"]), 18)
+        for case in comparisons:
+            row, baseline = rows[case["id"]], rows[case["comparison_of"]]
+            with self.subTest(case=case["id"]):
+                self.assertEqual(row["toolchain"], matrix.BUNDLE_IDENTIFIER)
+                self.assertEqual(baseline["toolchain"], "XcodeDefault")
+                self.assertTrue(row["install_toolchain"])
+                self.assertFalse(baseline["install_toolchain"])
+                self.assertEqual((row["job_timeout_minutes"], baseline["job_timeout_minutes"]), (135, 80))
+                for field in ("app", "source_commit", "repository", "profile", "architecture", "sdk"):
+                    self.assertEqual(row[field], baseline[field])
+
+    def test_missing_floating_or_mismatched_toolchain_comparisons_are_not_scheduled(self):
+        for mutation in ("toolchain-missing", "toolchain-floating", "baseline-missing", "self",
+                         "baseline-toolchain", "app", "profile", "sdk", "architecture", "xcode"):
+            with self.subTest(mutation=mutation):
+                manifest = self.manifest()
+                case = next(case for case in manifest["required_cases"] if "comparison_of" in case)
+                baseline = next(row for row in manifest["required_cases"] if row["id"] == case["comparison_of"])
+                if mutation == "toolchain-missing":
+                    case.pop("toolchain")
+                elif mutation == "toolchain-floating":
+                    case["toolchain"] = "swift-latest"
+                elif mutation == "baseline-missing":
+                    case["comparison_of"] = "missing-baseline"
+                elif mutation == "self":
+                    case["comparison_of"] = case["id"]
+                elif mutation == "baseline-toolchain":
+                    baseline["toolchain"] = matrix.BUNDLE_IDENTIFIER
+                elif mutation == "app":
+                    case["app"] = "wikipedia"
+                elif mutation == "profile":
+                    case["profile"] = "size" if case["profile"] == "release" else "release"
+                elif mutation == "sdk":
+                    case["sdk"] = "iphoneos" if case["sdk"] == "iphonesimulator" else "iphonesimulator"
+                elif mutation == "architecture":
+                    case["architecture"] = "x86_64"
+                else:
+                    manifest["apps"]["icecubes"]["ios"]["xcode"] = "26.4"
+                with self.assertRaises(matrix.MatrixError):
+                    matrix.generate(manifest)
+
+    def test_default_baseline_cannot_be_relabelled_as_a_comparison(self):
+        manifest = self.manifest()
+        baseline = next(case for case in manifest["required_cases"] if case.get("toolchain") == "XcodeDefault")
+        baseline["comparison_of"] = "icecubes-release-arm64-simulator"
+        with self.assertRaisesRegex(matrix.MatrixError, "baseline"):
+            matrix.generate(manifest)
 
     def test_gradle_tasks_are_derived_from_the_same_manifest_as_the_case_profile(self):
         manifest = self.manifest()
@@ -248,6 +304,21 @@ class MobileRealAppsMatrixTests(unittest.TestCase):
             self.assertIn("name: real-app-evidence-${{ matrix.case_id }}", body)
             self.assertNotIn("-official-release\n", body)
         self.assertIn("python scripts/check_docs_i18n.py", workflow)
+
+    def test_comparison_installation_is_fresh_separate_and_does_not_consume_the_app_budget(self):
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        ios = re.search(r"(?ms)^  ios:\n(.*?)(?=^  \S|\Z)", workflow).group(1)
+        self.assertIn("timeout-minutes: ${{ matrix.job_timeout_minutes }}", ios)
+        self.assertIn("if: ${{ matrix.install_toolchain }}", ios)
+        self.assertIn("timeout-minutes: 50", ios)
+        self.assertIn('--consumer-commit "$CONSUMER_COMMIT" --case-id "$CASE_ID"', ios)
+        self.assertIn('"$RUNNER_TEMP/real-app-toolchains/$CASE_ID/evidence/qualification.json"', ios)
+        self.assertIn('"${receipt_args[@]}"', ios)
+        self.assertIn('--work-dir "$RUNNER_TEMP/real-app-evidence/$CASE_ID" --timeout 4200', ios)
+        self.assertIn("name: real-app-toolchain-${{ matrix.case_id }}", ios)
+        self.assertIn("always() && matrix.install_toolchain", ios)
+        self.assertIn("scripts.tests.test_mobile_swift_toolchain", workflow)
+        self.assertNotIn("continue-on-error", ios)
 
 
 if __name__ == "__main__":
