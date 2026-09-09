@@ -20,6 +20,7 @@
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/BinaryImage.h"
 
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/StringRef.h"
 
 #include <cstdint>
@@ -47,64 +48,123 @@ static int integerArgIndex(const TargetRegInfo &TRI, uint64_t RegOff,
   return -1;
 }
 
-// Canonical (base value, constant byte offset) of an address \p V, following
-// the offset-preserving casts (COPY / ZEXT / SEXT / SUBBYTES@0) and the
-// constant add/sub chain.  Bottoms out at the deepest value with no in-block
-// definition (a live-in register such as a frame pointer).  Lets a spill and
-// its reload be recognized as the *same* stack slot by structural address
-// equality, without resolving a (possibly cross-block) frame-pointer base to an
-// entry-SP offset.
-static std::pair<MedVar, int64_t>
-reduceAddr(const MedBlock &Blk, const MedVar &V, int64_t Off, int Depth) {
-  if (Depth > 128 || V.isConst())
-    return {V, Off};
-  const MedOp *Def = nullptr;
-  for (auto &Op : Blk.Ops)
-    if (Op.Output.Kind == V.Kind && Op.Output.Id == V.Id &&
-        Op.Output.SSAVer == V.SSAVer && Op.Output.RegOff == V.RegOff) {
-      Def = &Op;
-      break;
-    }
-  if (!Def)
-    return {V, Off};
-  switch (Def->Opcode) {
-  case NdOp::COPY:
-  case NdOp::INT_ZEXT:
-  case NdOp::INT_SEXT:
-    return Def->NumInputs >= 1 ? reduceAddr(Blk, Def->Inputs[0], Off, Depth + 1)
-                               : std::pair<MedVar, int64_t>{V, Off};
-  case NdOp::SUBBYTES:
-    return (Def->NumInputs >= 2 && Def->Inputs[1].isConst() &&
-            Def->Inputs[1].ConstVal == 0)
-               ? reduceAddr(Blk, Def->Inputs[0], Off, Depth + 1)
-               : std::pair<MedVar, int64_t>{V, Off};
-  case NdOp::INT_ADD:
-    for (uint8_t I = 0; I < Def->NumInputs; ++I)
-      if (Def->Inputs[I].isConst())
-        for (uint8_t J = 0; J < Def->NumInputs; ++J)
-          if (!Def->Inputs[J].isConst())
-            return reduceAddr(
-                Blk, Def->Inputs[J],
-                Off + static_cast<int64_t>(Def->Inputs[I].ConstVal), Depth + 1);
-    return {V, Off};
-  case NdOp::INT_SUB:
-    if (Def->NumInputs >= 2 && Def->Inputs[1].isConst())
-      return reduceAddr(Blk, Def->Inputs[0],
-                        Off - static_cast<int64_t>(Def->Inputs[1].ConstVal),
-                        Depth + 1);
-    return {V, Off};
-  default:
-    return {V, Off};
-  }
+// Address = Base + Offset modulo the original address width. Offset owns the
+// width; no rewrite may change it or peel a width-changing conversion.
+struct ReducedAddress {
+  MedVar Base;
+  llvm::APInt Offset;
+};
+
+static bool sameAddressValue(const MedVar &A, const MedVar &B) {
+  return A.Kind == B.Kind && A.Id == B.Id && A.SSAVer == B.SSAVer &&
+         A.RegOff == B.RegOff && A.Size == B.Size && A.TheArch == B.TheArch &&
+         A.RenameTag == B.RenameTag;
 }
 
-// Whether two reduced addresses name the same memory: identical base value
-// (kind/id/version/register) and identical byte offset.
-static bool sameReducedAddr(const std::pair<MedVar, int64_t> &A,
-                            const std::pair<MedVar, int64_t> &B) {
-  return A.second == B.second && A.first.Kind == B.first.Kind &&
-         A.first.Id == B.first.Id && A.first.SSAVer == B.first.SSAVer &&
-         A.first.RegOff == B.first.RegOff;
+// Stop at an opaque value when the next operation cannot be peeled exactly.
+// The already-proven suffix remains usable, including when two accesses share
+// the same conversion result. Invalid widths and conflicting definitions fail.
+static std::optional<ReducedAddress> reduceAddr(const MedBlock &Blk,
+                                                const MedVar &V) {
+  if (V.Size == 0 || V.Size > 8)
+    return std::nullopt;
+  ReducedAddress Result{V, llvm::APInt(V.Size * 8u, 0)};
+  for (unsigned Depth = 0; Depth <= 128; ++Depth) {
+    const MedVar &Cur = Result.Base;
+    if (Cur.isConst())
+      break;
+    const MedOp *Def = nullptr;
+    for (const auto &Op : Blk.Ops) {
+      // STOREs and control-flow operations have no defining output. Their
+      // default Temp/id=0 must not conflict with a real temporary definition.
+      if (Op.Output.Size == 0 || Op.Output.Kind != Cur.Kind ||
+          Op.Output.Id != Cur.Id || Op.Output.SSAVer != Cur.SSAVer ||
+          Op.Output.RegOff != Cur.RegOff)
+        continue;
+      if (Def || !sameAddressValue(Op.Output, Cur))
+        return std::nullopt;
+      Def = &Op;
+    }
+    if (!Def)
+      break;
+
+    const MedVar *Next = nullptr;
+    switch (Def->Opcode) {
+    case NdOp::COPY:
+      if (Def->NumInputs == 1 && Def->Inputs[0].Size == Cur.Size)
+        Next = &Def->Inputs[0];
+      break;
+    case NdOp::SUBBYTES:
+      if (Def->NumInputs == 2 && Def->Inputs[0].Size == Cur.Size &&
+          Def->Inputs[1].isConst() && Def->Inputs[1].ConstVal == 0)
+        Next = &Def->Inputs[0];
+      break;
+    case NdOp::INT_ADD:
+    case NdOp::INT_SUB: {
+      if (Def->NumInputs != 2)
+        break;
+      const unsigned C = Def->Inputs[1].isConst() ? 1 : 0;
+      const MedVar &Constant = Def->Inputs[C];
+      const MedVar &Base = Def->Inputs[1 - C];
+      if (!Constant.isConst() || Base.isConst() || Base.Size != Cur.Size ||
+          Constant.Size == 0 || Constant.Size > 8 ||
+          (Def->Opcode == NdOp::INT_SUB && C != 1))
+        break;
+      // Match arithmetic Coerce: truncate the constant at its own width,
+      // then zero-extend or truncate to the operation's fixed output width.
+      llvm::APInt Delta(Constant.Size * 8u, Constant.ConstVal,
+                        /*isSigned=*/false, /*implicitTrunc=*/true);
+      Delta = Delta.zextOrTrunc(Result.Offset.getBitWidth());
+      if (Def->Opcode == NdOp::INT_ADD)
+        Result.Offset += Delta;
+      else
+        Result.Offset -= Delta;
+      Next = &Base;
+      break;
+    }
+    default:
+      break;
+    }
+    // Entry live-ins use self-COPY markers. Keep that exact value as the root
+    // instead of spending the whole bound repeatedly visiting the marker.
+    if (!Next || sameAddressValue(*Next, Cur))
+      break;
+    Result.Base = *Next;
+  }
+  return Result;
+}
+
+// To - From in one finite address domain, or unknown for unrelated bases.
+// Constant bases are absolute bit patterns; all other bases require the same
+// complete value identity. A zero distance proves equal starting addresses.
+static std::optional<llvm::APInt>
+reducedAddressDistance(const ReducedAddress &From, const ReducedAddress &To) {
+  const unsigned Width = From.Offset.getBitWidth();
+  if (Width != To.Offset.getBitWidth())
+    return std::nullopt;
+  llvm::APInt Distance = To.Offset - From.Offset;
+  if (From.Base.isConst() && To.Base.isConst()) {
+    Distance += llvm::APInt(Width, To.Base.ConstVal,
+                            /*isSigned=*/false, /*implicitTrunc=*/true);
+    Distance -= llvm::APInt(Width, From.Base.ConstVal,
+                            /*isSigned=*/false, /*implicitTrunc=*/true);
+  } else if (!sameAddressValue(From.Base, To.Base)) {
+    return std::nullopt;
+  }
+  return Distance;
+}
+
+// Project byte ranges into the address ring only to prove disjointness. This
+// is a conservative may-alias model, not a claim that a hardware access wraps.
+static bool reducedRangesDisjoint(const llvm::APInt &Distance,
+                                  uint16_t FromSize, uint16_t ToSize) {
+  if (FromSize == 0 || ToSize == 0)
+    return false;
+  const unsigned Width = Distance.getBitWidth();
+  if (Width < 64 &&
+      (FromSize >= (uint64_t{1} << Width) || ToSize >= (uint64_t{1} << Width)))
+    return false;
+  return Distance.uge(FromSize) && (-Distance).uge(ToSize);
 }
 
 static bool preservesSpillAcrossCall(const MedBlock &Blk, int CallIndex,
@@ -128,8 +188,10 @@ reachingStore(const MedBlock &Blk, int LoadIndex,
   const auto StackOffset =
       Context ? authenticatedStackOffset(Context->Func, Context->TRI, *Address)
               : std::nullopt;
-  const auto Target = StackOffset ? std::pair<MedVar, int64_t>{*Address, 0}
-                                  : reduceAddr(Blk, *Address, 0, 0);
+  const auto Target =
+      StackOffset ? std::optional<ReducedAddress>{} : reduceAddr(Blk, *Address);
+  if (!StackOffset && !Target)
+    return std::nullopt;
   for (int I = LoadIndex - 1; I >= 0; --I) {
     const MedOp &Op = Blk.Ops[I];
     if (Op.Opcode == NdOp::INTRINSIC)
@@ -159,22 +221,15 @@ reachingStore(const MedBlock &Blk, int LoadIndex,
                  ? std::optional<int>(I)
                  : std::nullopt;
     }
-    const auto Source = reduceAddr(Blk, *StoreAddress, 0, 0);
-    if (Source.first.isConst() && Target.first.isConst() &&
-        Source.second == 0 && Target.second == 0 &&
-        Source.first.Size == Target.first.Size) {
-      const uint64_t S = Source.first.ConstVal, T = Target.first.ConstVal;
-      if ((S < T && T - S >= Value->Size) ||
-          (T < S && S - T >= Load.Output.Size))
-        continue;
-    }
-    if (Source.first.Size != Target.first.Size ||
-        !sameReducedAddr({Source.first, 0}, {Target.first, 0}))
+    const auto Source = reduceAddr(Blk, *StoreAddress);
+    if (!Source)
       return std::nullopt;
-    if (!safety::detail::stackRangesOverlap(Source.second, Value->Size,
-                                            Target.second, Load.Output.Size))
+    const auto Distance = reducedAddressDistance(*Source, *Target);
+    if (!Distance)
+      return std::nullopt;
+    if (reducedRangesDisjoint(*Distance, Value->Size, Load.Output.Size))
       continue;
-    if (Source.second == Target.second && Value->Size == Load.Output.Size)
+    if (Distance->isZero() && Value->Size == Load.Output.Size)
       return I;
     return std::nullopt;
   }
@@ -186,7 +241,7 @@ reachingStore(const MedBlock &Blk, int LoadIndex,
 // ...; fp(...)`).  Follows COPY / width-cast chains and a single stack-slot
 // store/load round trip (the pointer parked in a local), matching the load's
 // address to a prior store's address by structural equality (reduceAddr /
-// sameReducedAddr).  Returns the resolved address, or 0 when not provable -- a
+// reducedAddressDistance). Returns the address, or 0 when not provable -- a
 // conservative best effort within the call's own block that never changes
 // behavior unless the target is proven, so non-resolvable indirect calls keep
 // their existing (heuristic) handling.

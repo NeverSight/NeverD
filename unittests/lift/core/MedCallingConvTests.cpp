@@ -807,6 +807,193 @@ TEST(MedABIPass, PartialPointerOverwriteDoesNotRemoveAnIndirectCallArgument) {
   }
 }
 
+// Exercise spill provenance through the ABI consumer, without exposing the
+// private address reducer. These are post-fix bit-vector contract tests.
+struct SpillAddressCase {
+  static constexpr Arch A = Arch::AArch64;
+  MedFunc F;
+  MedVar Argument;
+  MedVar Base;
+  int NextId = 100;
+
+  explicit SpillAddressCase(uint16_t AddressSize) {
+    F.Entry = 0x1000;
+    F.Blocks.resize(1);
+    F.Blocks[0].Id = 0;
+    F.Blocks[0].StartAddr = F.Entry;
+    const auto &TRI = getTargetRegInfo(A);
+    Argument = reg(1, 0, 8, TRI.IntParamRegs[0], A);
+    // A non-argument live-in keeps address provenance separate from the
+    // function pointer argument whose recovery is being tested.
+    Base = reg(2, 0, AddressSize, TRI.FramePointer, A);
+    addLiveIn(block(), Argument);
+    addLiveIn(block(), Base);
+  }
+
+  MedBlock &block() { return F.Blocks[0]; }
+
+  MedVar convert(NdOp Opcode, MedVar Input, uint16_t Size) {
+    const auto Out = temp(NextId++, 0, Size, A);
+    block().Ops.push_back(
+        Opcode == NdOp::SUBBYTES
+            ? binary(Opcode, Out, Input, MedVar::makeConst(0, 1))
+            : unary(Opcode, Out, Input));
+    return Out;
+  }
+
+  MedVar offset(MedVar Input, uint64_t Value, uint16_t ConstantSize,
+                NdOp Opcode = NdOp::INT_ADD) {
+    const auto Out = temp(NextId++, 0, Input.Size, A);
+    block().Ops.push_back(
+        binary(Opcode, Out, Input, MedVar::makeConst(Value, ConstantSize)));
+    return Out;
+  }
+
+  void store(MedVar Address, MedVar Value) {
+    MedOp Op;
+    Op.Opcode = NdOp::STORE;
+    Op.addInput(Address);
+    Op.addInput(Value);
+    block().Ops.push_back(Op);
+  }
+
+  void expectRecovery(MedVar Address, bool Recovered) {
+    const auto Target = temp(NextId++, 0, 8, A);
+    block().Ops.push_back(unary(NdOp::LOAD, Target, Address));
+    MedOp Call;
+    Call.Opcode = NdOp::INDIR_CALL;
+    Call.addInput(Target);
+    block().Ops.push_back(Call);
+    recoverCallAbi(F, A, {});
+    ASSERT_EQ(F.CallInfos.size(), 1U);
+    const auto &Info = F.CallInfos[0];
+    ASSERT_TRUE(Info.IsIndirect);
+    ASSERT_GE(Info.OpIdx, 0);
+    ASSERT_LT(static_cast<size_t>(Info.OpIdx), block().Ops.size());
+    const auto &RecoveredCall = block().Ops[Info.OpIdx];
+    ASSERT_EQ(RecoveredCall.Opcode, NdOp::INDIR_CALL);
+    ASSERT_GE(RecoveredCall.NumInputs, 1);
+    EXPECT_EQ(RecoveredCall.Inputs[0].Kind, Target.Kind);
+    EXPECT_EQ(RecoveredCall.Inputs[0].Id, Target.Id);
+    EXPECT_EQ(RecoveredCall.Inputs[0].SSAVer, Target.SSAVer);
+    EXPECT_EQ(RecoveredCall.Inputs[0].Size, Target.Size);
+    const auto &Args = Info.Args;
+    ASSERT_EQ(Args.size(), Recovered ? 0U : 1U);
+    if (!Recovered) {
+      EXPECT_EQ(Args[0].Kind, Argument.Kind);
+      EXPECT_EQ(Args[0].Id, Argument.Id);
+      EXPECT_EQ(Args[0].SSAVer, Argument.SSAVer);
+      EXPECT_EQ(Args[0].RegOff, Argument.RegOff);
+      EXPECT_EQ(Args[0].Size, Argument.Size);
+      EXPECT_EQ(Args[0].TheArch, Argument.TheArch);
+      EXPECT_EQ(Args[0].RenameTag, Argument.RenameTag);
+    }
+  }
+};
+
+TEST(MedABIPass, SameWidthSpillAddressesPreserveArgumentRecovery) {
+  for (uint16_t Width : {1, 2, 4, 8}) {
+    SCOPED_TRACE(Width);
+    SpillAddressCase C(Width);
+    const auto StoredAddress = C.offset(C.Base, 8, Width);
+    C.store(StoredAddress, C.Argument);
+    C.store(C.offset(C.Base, 16, Width), MedVar::makeConst(42, 1));
+    const auto Added = C.offset(C.Base, 24, Width);
+    const auto Subtracted = C.offset(Added, 16, Width, NdOp::INT_SUB);
+    C.expectRecovery(C.convert(NdOp::COPY, Subtracted, Width), true);
+  }
+}
+
+TEST(MedABIPass, WidthChangingSpillAddressesStayOpaque) {
+  for (auto Opcode : {NdOp::INT_ZEXT, NdOp::INT_SEXT, NdOp::SUBBYTES})
+    for (bool ReuseOutput : {false, true}) {
+      SCOPED_TRACE(static_cast<unsigned>(Opcode));
+      SCOPED_TRACE(ReuseOutput);
+      const uint16_t InputSize = Opcode == NdOp::SUBBYTES ? 8 : 4;
+      const uint16_t OutputSize = Opcode == NdOp::SUBBYTES ? 4 : 8;
+      SpillAddressCase C(InputSize);
+      const auto Converted = C.convert(Opcode, C.Base, OutputSize);
+      C.store(Converted, C.Argument);
+      // Separate conversion results remain opaque even when their source
+      // happens to be the same. Exact reuse must retain useful precision.
+      C.expectRecovery(ReuseOutput ? Converted
+                                   : C.convert(Opcode, C.Base, OutputSize),
+                       ReuseOutput);
+    }
+}
+
+TEST(MedABIPass, ModularSpillOffsetsUseConstantOperandWidth) {
+  for (uint16_t Width : {1, 2, 4, 8})
+    for (bool SameAddress : {false, true}) {
+      SCOPED_TRACE(Width);
+      SCOPED_TRACE(SameAddress);
+      SpillAddressCase C(Width);
+      // The one-byte constant denotes 1, not its untruncated backing bits.
+      const auto Added = C.offset(C.Base, 0x101, 1);
+      const auto Restored = C.offset(Added, 1, Width, NdOp::INT_SUB);
+      C.store(Restored, C.Argument);
+      C.expectRecovery(SameAddress ? C.Base : C.offset(C.Base, 8, Width),
+                       SameAddress);
+    }
+  SpillAddressCase C(8);
+  const auto High = C.offset(C.Base, 0x7fffffffffffffffULL, 8);
+  const auto Next = C.offset(High, 1, 8);
+  C.store(Next, C.Argument);
+  C.expectRecovery(C.offset(C.Base, 0x8000000000000000ULL, 8), true);
+}
+
+TEST(MedABIPass, SpillRangesRespectModularBoundaries) {
+  for (bool Absolute : {false, true})
+    for (unsigned Mode = 0; Mode < 3; ++Mode) {
+      SCOPED_TRACE(Absolute);
+      SCOPED_TRACE(Mode);
+      SpillAddressCase C(1);
+      auto At = [&](uint64_t Offset) {
+        return Absolute ? MedVar::makeConst(Offset, 1)
+                        : C.offset(C.Base, Offset, 1);
+      };
+      // The original eight-byte spill starts at 252. Coordinates model
+      // possible aliasing, not hardware behavior at an address-space edge.
+      const auto Slot = At(252);
+      C.store(Slot, C.Argument);
+      // 4 is adjacent, 0 overlaps across the modular boundary, and 256 bytes
+      // cover the complete one-byte address domain.
+      C.store(At(Mode == 0 ? 4 : 0), MedVar::makeConst(0, Mode == 2 ? 256 : 1));
+      C.expectRecovery(Slot, Mode == 0);
+    }
+}
+
+TEST(MedABIPass, SpillAddressIdentityMustBeUnambiguous) {
+  // Defensive malformed-IR cases: an address use disagrees with its defining
+  // value. These do not claim coverage of ordinary well-formed lowering.
+  for (unsigned Mode = 0; Mode < 3; ++Mode) {
+    SCOPED_TRACE(Mode);
+    SpillAddressCase C(8);
+    const auto Address = C.convert(NdOp::COPY, C.Base, 8);
+    C.store(Address, C.Argument);
+    auto Other = Address;
+    if (Mode == 0)
+      Other.RenameTag = 1;
+    else if (Mode == 1)
+      Other.Size = 4;
+    else
+      Other.TheArch = Arch::X64;
+    // Do not turn partial identifier agreement into an address proof.
+    C.expectRecovery(Other, false);
+  }
+}
+
+TEST(MedABIPass, ExactSpillRecoveryStillRequiresEqualAccessSize) {
+  for (uint16_t Size : {4, 8, 16}) {
+    SCOPED_TRACE(Size);
+    SpillAddressCase C(8);
+    auto Value = C.Argument;
+    Value.Size = Size;
+    C.store(C.Base, Value);
+    C.expectRecovery(C.Base, Size == 8);
+  }
+}
+
 TEST(MedABIPass,
      AArch64IndirectCallRecoversFloatOverflowFromScratchVectorRegs) {
   constexpr Arch TheArch = Arch::AArch64;
