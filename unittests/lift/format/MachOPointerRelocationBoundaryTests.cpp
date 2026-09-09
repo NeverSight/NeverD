@@ -11947,6 +11947,212 @@ TEST(LLVMCodePointerInvariantBoundary,
       }
 }
 
+TEST(LLVMDataPointerInvariantBoundary, ScalarTableBoundsBelongToTheLoadSite) {
+  enum class Case {
+    Less,
+    ExcludeLast,
+    Reversed,
+    Loose,
+    OtherSSA,
+    Narrow,
+    Updated,
+    Bypass,
+    Outside,
+    Exceptional,
+    ZeroTarget,
+    Wide
+  };
+  for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::AArch64})
+    for (Case Kind :
+         {Case::Less, Case::ExcludeLast, Case::Reversed, Case::Loose,
+          Case::OtherSSA, Case::Narrow, Case::Updated, Case::Bypass,
+          Case::Outside, Case::Exceptional, Case::ZeroTarget, Case::Wide}) {
+      if (Kind == Case::Wide && TargetArch != Arch::X86)
+        continue;
+      SCOPED_TRACE(std::to_string(static_cast<int>(TargetArch)) + "/" +
+                   std::to_string(static_cast<int>(Kind)));
+      const uint16_t Width = getTargetRegInfo(TargetArch).PointerSize;
+      const bool Equality = Kind == Case::ExcludeLast || Kind == Case::Wide;
+      const unsigned Count = Equality ? 3 : 6;
+      constexpr uint64_t Table = 0x4000;
+      BinaryImage Image;
+      Image.Arch = TargetArch;
+      Image.Format = BinaryFormat::ELF;
+      Image.Bits = Width == 8 ? Bitness::Bits64 : Bitness::Bits32;
+      Segment Data;
+      Data.Name = ".rodata";
+      Data.VA = Table;
+      Data.Flags = SegmentFlags::Readable;
+      Data.Data.resize(Count * Width);
+      Data.Size = Data.FileSz = Data.Data.size();
+      Image.Segments.push_back(Data);
+      Section Section;
+      Section.Name = ".rodata";
+      Section.SegmentName = Data.Name;
+      Section.VA = Table;
+      Section.Size = Section.FileSz = Data.Data.size();
+      Section.Flags = Data.Flags;
+      Image.Sections.push_back(Section);
+      Image.RelocDataAddrs.insert(Table);
+      ASSERT_NE(Image.getSegmentFor(Table), nullptr);
+      ASSERT_NE(Image.getSegmentFor(Table + (Count - 1) * Width), nullptr);
+      ASSERT_NE(Image.readVA(Table, Width), nullptr);
+      ASSERT_NE(Image.readVA(Table + (Count - 1) * Width, Width), nullptr);
+      MedFunc Func;
+      Func.Name = "guarded_scalar_table";
+      Func.Entry = 0x100;
+      Func.ReturnType = NdType::makeInt(Width);
+      auto temp = [&](int Id, uint16_t Size) {
+        MedVar V;
+        V.Kind = MedVar::Temp;
+        V.TheArch = TargetArch;
+        V.Id = Id;
+        V.SSAVer = 1;
+        V.Size = Size;
+        return V;
+      };
+      auto number = [&](uint64_t Value) {
+        return MedVar::makeConst(Value, Width,
+                                 ConstantAddressProvenance::Scalar);
+      };
+      MedVar Arg = temp(0, Width);
+      Arg.Kind = MedVar::Param;
+      if (Kind == Case::Wide)
+        Arg.Size = 8;
+      Func.Params.push_back(Arg);
+      MedVar Index = temp(1, Width), Compared = Index;
+      MedVar Condition = temp(2, 1), Difference = temp(3, Width);
+      if (Kind == Case::Wide) {
+        Index.Size = Compared.Size = Difference.Size = 8;
+      }
+      MedVar Scaled = temp(4, Width), Address = temp(5, Width);
+      MedVar Loaded = temp(6, Width);
+      Func.Blocks.resize(3);
+      for (int I = 0; I != 3; ++I) {
+        Func.Blocks[I].Id = I;
+        Func.Blocks[I].StartAddr = 0x100 + I * 0x40;
+        Func.Blocks[I].EndAddr = Func.Blocks[I].StartAddr + 0x40;
+      }
+      auto append = [&](int Block, NdOp Opcode, MedVar Output,
+                        std::initializer_list<MedVar> Inputs) {
+        MedOp Op;
+        Op.Opcode = Opcode;
+        Op.Output = Output;
+        Op.Addr = Func.Blocks[Block].StartAddr + Func.Blocks[Block].Ops.size();
+        for (const MedVar &Input : Inputs)
+          Op.addInput(Input);
+        Func.Blocks[Block].Ops.push_back(Op);
+      };
+      MedVar Mask = number(Kind == Case::Narrow ? 0x1ff : Equality ? 3 : 7);
+      if (Kind == Case::Wide) {
+        Mask.Size = 8;
+        Mask.ConstVal = 0x100000003ULL;
+      }
+      append(0, NdOp::INT_AND, Index, {Arg, Mask});
+      if (Kind == Case::OtherSSA) {
+        Compared.SSAVer = 2;
+        append(0, NdOp::INT_AND, Compared, {Arg, number(3)});
+      } else if (Kind == Case::Narrow) {
+        Compared = temp(7, 1);
+        append(0, NdOp::SUBBYTES, Compared, {Index, number(0)});
+      }
+      if (Equality) {
+        MedVar Bound = number(3), Zero = number(0);
+        Bound.Size = Zero.Size = Compared.Size;
+        append(0, NdOp::INT_SUB, Difference, {Compared, Bound});
+        append(0, NdOp::INT_EQUAL, Condition, {Difference, Zero});
+      } else {
+        MedVar Bound = number(Kind == Case::Loose ? 6 : 5);
+        Bound.Size = Compared.Size;
+        append(0, NdOp::INT_LESS, Condition, {Bound, Compared});
+      }
+      Func.Blocks[0].Succs = {1, 2};
+      Func.Blocks[1].Preds = {0};
+      Func.Blocks[2].Preds = {0};
+      append(0, NdOp::COND_BR, {},
+             {number(Kind == Case::Reversed ? 0x140 : 0x180), Condition});
+      if (Kind == Case::ZeroTarget) {
+        Func.Blocks[0].Succs = {2, 1};
+        Func.Blocks[2].StartAddr = 0;
+        Func.Blocks[0].Ops.back().Inputs[0] = number(0);
+      }
+      if (Kind == Case::Wide) {
+        MedVar Narrowed = temp(7, Width);
+        append(1, NdOp::SUBBYTES, Narrowed, {Index, number(0)});
+        Index = Narrowed;
+      }
+      if (Kind == Case::Updated) {
+        MedVar Next = temp(8, Width);
+        append(1, NdOp::INT_ADD, Next, {Index, number(1)});
+        Index = Next;
+      }
+      if (Kind == Case::Bypass) {
+        Func.Blocks[2].Succs = {1};
+        Func.Blocks[1].Preds.push_back(2);
+        append(2, NdOp::BRANCH, {}, {number(0x140)});
+      } else {
+        append(2, NdOp::RETURN, {}, {number(0)});
+      }
+      if (Kind == Case::Exceptional) {
+        ExceptionalEdge Edge;
+        Edge.BlockId = 1;
+        Func.Blocks[2].ExceptionalSuccs.push_back(Edge);
+      }
+      const int LoadBlock = Kind == Case::Outside ? 0 : 1;
+      append(LoadBlock, NdOp::INT_MULT, Scaled, {Index, number(Width)});
+      append(LoadBlock, NdOp::INT_ADD, Address,
+             {MedVar::makeConst(Table, Width,
+                                ConstantAddressProvenance::DataAddress),
+              Scaled});
+      append(LoadBlock, NdOp::LOAD, Loaded, {Address});
+      if (Kind == Case::Outside) {
+        auto &Ops = Func.Blocks[0].Ops;
+        auto Branch = std::find_if(Ops.begin(), Ops.end(), [](const MedOp &Op) {
+          return Op.Opcode == NdOp::COND_BR;
+        });
+        std::rotate(Branch, Branch + 1, Ops.end());
+      }
+      append(1, NdOp::RETURN, {}, {Loaded});
+      MedLLVMEmitter Classifier;
+      MedLLVMProvenanceTestPeer::prepareFreshAnalysis(
+          Classifier, Func, Image, TargetArch, BinaryFormat::ELF);
+      EXPECT_EQ(
+          MedLLVMProvenanceTestPeer::stableOffset(Classifier, Loaded, nullptr),
+          Kind == Case::Less || Kind == Case::ExcludeLast);
+      if (Kind == Case::Less || Kind == Case::ExcludeLast) {
+        llvm::LLVMContext Context;
+        auto Module =
+            MedLLVMEmitter().emit({Func}, Context, "guarded-scalar-lut",
+                                  TargetArch, {}, &Image, BinaryFormat::ELF);
+        ASSERT_NE(Module, nullptr);
+        expectValidModule(*Module);
+
+        // The same selector also feeds a read outside the guard. Proving the
+        // guarded load must not publish its range for this other occurrence.
+        MedVar OtherScale = temp(20, Width), OtherAddress = temp(21, Width);
+        MedVar OtherLoad = temp(22, Width);
+        append(0, NdOp::INT_MULT, OtherScale, {Index, number(Width)});
+        append(0, NdOp::INT_ADD, OtherAddress,
+               {MedVar::makeConst(Table, Width,
+                                  ConstantAddressProvenance::DataAddress),
+                OtherScale});
+        append(0, NdOp::LOAD, OtherLoad, {OtherAddress});
+        auto &Ops = Func.Blocks[0].Ops;
+        auto Branch = std::find_if(Ops.begin(), Ops.end(), [](const MedOp &Op) {
+          return Op.Opcode == NdOp::COND_BR;
+        });
+        std::rotate(Branch, Branch + 1, Ops.end());
+        MedLLVMEmitter SharedSelector;
+        MedLLVMProvenanceTestPeer::prepareFreshAnalysis(
+            SharedSelector, Func, Image, TargetArch, BinaryFormat::ELF);
+        EXPECT_TRUE(MedLLVMProvenanceTestPeer::stableOffset(SharedSelector,
+                                                            Loaded, nullptr));
+        EXPECT_FALSE(MedLLVMProvenanceTestPeer::stableOffset(
+            SharedSelector, OtherLoad, nullptr));
+      }
+    }
+}
+
 TEST(LLVMCodePointerInvariantBoundary,
      DeepMaskedIndexRetainsItsNumericRangeAndRoleChecks) {
   enum class Variant { Scalar, DataSeed, CodeSeed, DataSlot, UnknownSlot };

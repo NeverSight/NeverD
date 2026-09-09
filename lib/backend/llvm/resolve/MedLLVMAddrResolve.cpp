@@ -139,6 +139,156 @@ struct OffsetCongruence {
   }
 };
 
+struct LoadIndexConstraint {
+  MedVar Value;
+  std::optional<uint64_t> Maximum;
+  std::optional<uint64_t> Excluded;
+};
+
+bool sameIndexValue(const MedVar &A, const MedVar &B) {
+  if (A.isConst() || B.isConst() || A.Kind != B.Kind ||
+      A.TheArch != B.TheArch || A.RenameTag != B.RenameTag || A.Id != B.Id ||
+      A.SSAVer != B.SSAVer || A.Size != B.Size)
+    return false;
+  if (A.Kind == MedVar::Reg || A.Kind == MedVar::Param)
+    return A.RegOff == B.RegOff;
+  return A.Kind != MedVar::Stack || A.StackOff == B.StackOff;
+}
+
+template <typename LookupDefFn, typename NumericFn>
+std::optional<LoadIndexConstraint>
+loadIndexConstraint(const MedFunc *Func, const MedOp *Load,
+                    LookupDefFn &&LookupDef, NumericFn &&IsNumeric) {
+  if (!Func || !Load || Load->Opcode != NdOp::LOAD)
+    return std::nullopt;
+  size_t Remaining = static_cast<size_t>(limits::kMaxSSANodes);
+  auto consume = [&]() {
+    if (Remaining == 0)
+      return false;
+    --Remaining;
+    return true;
+  };
+  std::map<int, const MedBlock *> Blocks;
+  const MedBlock *Site = nullptr;
+  for (const MedBlock &Block : Func->Blocks) {
+    if (!consume())
+      return std::nullopt;
+    if (!Blocks.emplace(Block.Id, &Block).second)
+      return std::nullopt;
+    for (const MedOp &Op : Block.Ops) {
+      if (!consume())
+        return std::nullopt;
+      if (&Op == Load)
+        Site = &Block;
+    }
+  }
+  if (!Site || Site == &Func->Blocks.front() || Site->Preds.size() != 1 ||
+      !Site->ExceptionalPreds.empty())
+    return std::nullopt;
+  auto Pred = Blocks.find(Site->Preds.front());
+  if (Pred == Blocks.end())
+    return std::nullopt;
+  const MedBlock &Guard = *Pred->second;
+  if (Guard.Succs.size() != 2 || Guard.Succs[0] == Guard.Succs[1] ||
+      !Guard.ExceptionalSuccs.empty() || Guard.Ops.empty())
+    return std::nullopt;
+  std::set<int> Incoming;
+  for (const auto &[Id, Block] : Blocks) {
+    for (int Succ : Block->Succs) {
+      if (!consume())
+        return std::nullopt;
+      if (Succ == Site->Id)
+        Incoming.insert(Id);
+    }
+    for (const ExceptionalEdge &Edge : Block->ExceptionalSuccs) {
+      if (!consume())
+        return std::nullopt;
+      if (Edge.BlockId == Site->Id)
+        return std::nullopt;
+    }
+  }
+  if (Incoming != std::set<int>{Guard.Id})
+    return std::nullopt;
+  auto terminates = [](const MedOp &Op) {
+    return Op.Opcode == NdOp::COND_BR || Op.Opcode == NdOp::BRANCH ||
+           Op.Opcode == NdOp::INDIR_BR || Op.Opcode == NdOp::RETURN;
+  };
+  for (const MedOp &Op : Site->Ops) {
+    if (&Op == Load)
+      break;
+    if (terminates(Op))
+      return std::nullopt;
+  }
+  const MedOp &Branch = Guard.Ops.back();
+  if (Branch.Opcode != NdOp::COND_BR || Branch.NumInputs != 2 ||
+      !Branch.Inputs[0].isConst() || Branch.Inputs[0].ConstVal == 0)
+    return std::nullopt;
+  for (const MedOp &Op : Guard.Ops)
+    if (&Op != &Branch && terminates(Op))
+      return std::nullopt;
+  std::optional<int> Taken;
+  for (int Succ : Guard.Succs) {
+    auto It = Blocks.find(Succ);
+    if (It == Blocks.end())
+      return std::nullopt;
+    const MedBlock &Block = *It->second;
+    const uint64_t Address = Block.StartAddr != 0 || Block.Ops.empty()
+                                 ? Block.StartAddr
+                                 : Block.Ops.front().Addr;
+    if (Address == Branch.Inputs[0].ConstVal) {
+      if (Taken)
+        return std::nullopt;
+      Taken = Succ;
+    }
+  }
+  if (!Taken)
+    return std::nullopt;
+  bool Truth = *Taken == Site->Id;
+  MedVar Condition = Branch.Inputs[1];
+  const MedOp *Compare = nullptr;
+  for (unsigned Depth = 0; Depth != 16; ++Depth) {
+    Compare = LookupDef(Condition);
+    if (!Compare || !sameIndexValue(Compare->Output, Condition))
+      return std::nullopt;
+    if ((Compare->Opcode == NdOp::COPY || Compare->Opcode == NdOp::BOOL_NOT) &&
+        Compare->NumInputs == 1 && Compare->Inputs[0].Size == Condition.Size) {
+      Truth ^= Compare->Opcode == NdOp::BOOL_NOT;
+      Condition = Compare->Inputs[0];
+      Compare = nullptr;
+      continue;
+    }
+    break;
+  }
+  if (!Compare || Compare->NumInputs != 2 || Compare->Output.Size != 1)
+    return std::nullopt;
+  MedVar Left = Compare->Inputs[0], Right = Compare->Inputs[1];
+  auto constant = [&](const MedVar &V) {
+    return V.isConst() && V.Size > 0 && V.Size <= 8 && IsNumeric(V) &&
+           (V.Size == 8 || V.ConstVal < (uint64_t(1) << (V.Size * 8)));
+  };
+  if (Left.Size == 0 || Left.Size > 8 || Left.Size != Right.Size)
+    return std::nullopt;
+  if (Compare->Opcode == NdOp::INT_LESS) {
+    if (!Truth && constant(Left) && !Right.isConst())
+      return LoadIndexConstraint{Right, Left.ConstVal, std::nullopt};
+    if (Truth && constant(Right) && Right.ConstVal != 0 && !Left.isConst())
+      return LoadIndexConstraint{Left, Right.ConstVal - 1, std::nullopt};
+    return std::nullopt;
+  }
+  if (Compare->Opcode != NdOp::INT_EQUAL || Truth || !constant(Right) ||
+      Right.ConstVal != 0)
+    return std::nullopt;
+  const MedOp *Difference = LookupDef(Left);
+  if (!Difference || Difference->Opcode != NdOp::INT_SUB ||
+      Difference->NumInputs != 2 || !sameIndexValue(Difference->Output, Left) ||
+      Difference->Inputs[0].Size != Left.Size ||
+      Difference->Inputs[1].Size != Left.Size ||
+      Difference->Inputs[0].isConst() || !constant(Difference->Inputs[1]))
+    return std::nullopt;
+  return LoadIndexConstraint{Difference->Inputs[0], std::nullopt,
+                             Difference->Inputs[1].ConstVal};
+}
+
 /// Recover the one record lane selected by a conventional `base + index`
 /// address without deciding whether the runtime index itself is relocatable.
 /// The modular result is purely algebraic: multiplying any bit-pattern by 16
@@ -154,7 +304,8 @@ IndexedPointerLaneSummary analyzeIndexedPointerLane(
     CollectBaseFn &&CollectBase, DiscoverRunFn &&DiscoverRun,
     ReadOnlyRunFn &&ReadOnlyRun, const std::set<uint64_t> *KnownBases = nullptr,
     const std::vector<MedVar> *KnownTerms = nullptr,
-    bool SubtractKnownTerms = false) {
+    bool SubtractKnownTerms = false,
+    const std::optional<LoadIndexConstraint> &Constraint = std::nullopt) {
   IndexedPointerLaneSummary Result;
   if (!Img || PtrSize == 0 || PtrSize > 8)
     return Result;
@@ -297,9 +448,9 @@ IndexedPointerLaneSummary analyzeIndexedPointerLane(
     return Key{static_cast<int>(Value.Kind), Value.Id, Value.SSAVer,
                Value.Size};
   };
-  std::function<OffsetCongruence(const MedVar &, int, std::set<Key>)> walk =
-      [&](const MedVar &Value, int Depth,
-          std::set<Key> Seen) -> OffsetCongruence {
+  std::function<OffsetCongruence(const MedVar &, int, std::set<Key>)> walk;
+  auto walkUnconstrained = [&](const MedVar &Value, int Depth,
+                               std::set<Key> Seen) -> OffsetCongruence {
     // A bounded walk loses numeric precision, not the surrounding operation's
     // range: an outer mask can still bound an arbitrarily deep scalar chain.
     // Consumers independently prove index provenance before trusting the lane.
@@ -418,6 +569,26 @@ IndexedPointerLaneSummary analyzeIndexedPointerLane(
       return merge(walk(Def->Inputs[1], Depth + 1, Seen),
                    walk(Def->Inputs[2], Depth + 1, Seen));
     return dynamic(0, 1);
+  };
+
+  walk = [&](const MedVar &Value, int Depth, std::set<Key> Seen) {
+    OffsetCongruence Result = walkUnconstrained(Value, Depth, std::move(Seen));
+    if (!Constraint || Value.Size > PtrSize ||
+        !sameIndexValue(Value, Constraint->Value) || !Result.Valid ||
+        !Result.hasFiniteRange())
+      return Result;
+    // The predecessor constrains this occurrence only. Keep the algebraic
+    // congruence, and never infer a bound from the backing section's size.
+    if (Constraint->Maximum)
+      Result.MaxValue = std::min(*Result.MaxValue, *Constraint->Maximum);
+    if (Constraint->Excluded && *Result.MaxValue == *Constraint->Excluded) {
+      if (*Result.MaxValue == 0)
+        return OffsetCongruence{};
+      --*Result.MaxValue;
+    }
+    if (*Result.MinValue > *Result.MaxValue)
+      return OffsetCongruence{};
+    return Result;
   };
 
   const std::optional<uint64_t> Run = DiscoverRun(Address);
@@ -2315,7 +2486,13 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
           },
           [&](const Segment *Segment, uint64_t &RunStart, uint64_t &RunEnd) {
             readOnlyAfterRelocRun(Segment, RunStart, RunEnd);
-          });
+          },
+          nullptr, nullptr, false,
+          loadIndexConstraint(
+              CurMedFunc, Def, [&](const MedVar &V) { return lookupDef(V); },
+              [&](const MedVar &V) {
+                return constantIsStableAddressOffset(V);
+              }));
       if (ScalarLane.Complete) {
         bool ScalarOnly = true;
         for (uint64_t Slot : ScalarLane.Slots) {
@@ -3839,7 +4016,11 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V,
         [&](const Segment *Segment, uint64_t &RunStart, uint64_t &RunEnd) {
           readOnlyAfterRelocRun(Segment, RunStart, RunEnd);
         },
-        KnownBases, KnownTerms, SubtractKnownTerms);
+        KnownBases, KnownTerms, SubtractKnownTerms,
+        loadIndexConstraint(
+            CurMedFunc, Result.Load,
+            [&](const MedVar &V) { return lookupDef(V); },
+            [&](const MedVar &V) { return isStableNumericOffset(V); }));
   };
   if (!Domain.Complete || Domain.Seeds.empty()) {
     IndexedPointerLaneSummary Lane;
