@@ -138,7 +138,18 @@ ApplicationWindow {
                 Layout.leftMargin: 9
                 Layout.rightMargin: 12
                 spacing: 6
-                Text { textFormat: Text.PlainText; text: "N"; color: Theme.foreground; font.pointSize: 17; font.weight: Font.DemiBold; Layout.leftMargin: 7; Layout.rightMargin: 8 }
+                Image {
+                    objectName: "neverdBrandLogo"
+                    source: "qrc:/brand/neverd-logo-dark.svg"
+                    sourceSize: Qt.size(32, 32)
+                    fillMode: Image.PreserveAspectFit
+                    Layout.preferredWidth: 32
+                    Layout.preferredHeight: 32
+                    Layout.leftMargin: 7
+                    Layout.rightMargin: 8
+                    Accessible.name: "NeverD"
+                    Accessible.role: Accessible.Graphic
+                }
                 WorkbenchButton { text: qsTr("Open Binary"); hint: openAction.text + " (" + openAction.shortcut + ")"; primary: !workbench.loaded; onClicked: fileDialog.open() }
                 Rectangle { width: 1; Layout.preferredHeight: 20; color: Theme.border; Layout.margins: 5 }
                 WorkbenchButton { text: "←"; hint: backAction.text; enabled: backAction.enabled; onClicked: workbench.goBack(); rotation: workbench.language === "ar" ? 180 : 0 }

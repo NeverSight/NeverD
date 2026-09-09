@@ -7,7 +7,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../neverd-worker" "${CMAKE_BINARY_DIR}/worker")
 endif()
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network LinguistTools)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network LinguistTools Svg)
 # Qt 6.8 exports private targets from the public module packages. Newer Qt
 # releases ship separate private packages; KDDockWidgets needs the matching
 # private headers in either layout.
@@ -39,10 +39,13 @@ target_compile_features(neverd_gui_core PUBLIC cxx_std_20)
 target_link_libraries(neverd_gui_core PUBLIC Qt6::Core Qt6::Gui Qt6::Qml Qt6::Network)
 
 qt_add_executable(neverd-gui main.cpp NativeCodeHighlighter.cpp NativeGraphItem.cpp)
-target_link_libraries(neverd-gui PRIVATE neverd_gui_core Qt6::Quick Qt6::QuickControls2 KDAB::kddockwidgets)
+target_link_libraries(neverd-gui PRIVATE neverd_gui_core Qt6::Quick Qt6::QuickControls2 Qt6::Svg KDAB::kddockwidgets)
 file(GLOB NEVERD_QML_FILES CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "qml/*.qml")
 set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 qt_add_qml_module(neverd-gui URI NeverD.Workbench VERSION 1.0 QML_FILES ${NEVERD_QML_FILES})
+qt_add_resources(neverd-gui "brand_assets" PREFIX /brand
+  BASE "${CMAKE_CURRENT_SOURCE_DIR}/../../docs/assets"
+  FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../docs/assets/neverd-logo-dark.svg")
 
 file(GLOB NEVERD_TRANSLATIONS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/i18n/*.ts")
 if(NEVERD_TRANSLATIONS)

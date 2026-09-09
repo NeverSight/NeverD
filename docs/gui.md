@@ -28,7 +28,7 @@ ctest --test-dir build-gui --output-on-failure
 build-gui/bin/neverd-gui /absolute/path/to/binary
 ```
 
-Requires C++20, CMake 3.24+, Qt 6.8+ Core/Gui/Qml/Quick/QuickControls2/Network/
+Requires C++20, CMake 3.24+, Qt 6.8+ Core/Gui/Qml/Quick/QuickControls2/Network/Svg/
 LinguistTools, GuiPrivate/QuickPrivate for the pinned KDDockWidgets frontend (Qt Test for tests), and Python 3.10+ for tests and the MCP adapter.
 The first configure downloads nlohmann/json 3.11.3 and KDDockWidgets 2.4.1 using pinned SHA-256 digests. Ship the exact Qt build used to compile its private headers.
 On Windows set `NEVERD_ENGINE_LIBRARY` to the runtime DLL and
