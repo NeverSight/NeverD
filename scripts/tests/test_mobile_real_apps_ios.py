@@ -186,6 +186,23 @@ class IOSRealAppOrchestrationTests(unittest.TestCase):
                 session.stage("provenance", "success", evidence=evidence)
         self.assertEqual(ctx.stages, {})
 
+    def test_all_package_commands_avoid_global_cache_and_keep_locked_versions(self):
+        ctx = self.run_context()
+        expected = {"resolve-packages", "build-settings", "original-release-build"}
+        commands = [(name, argv) for name, argv, _ in ctx.commands if name in expected]
+        self.assertEqual({name for name, _ in commands}, expected)
+        self.assertEqual(len(commands), 3)
+        for name, argv in commands:
+            with self.subTest(command=name):
+                self.assertIn("-disablePackageRepositoryCache", argv)
+                self.assertIn("-onlyUsePackageVersionsFromResolvedFile", argv)
+                self.assertIn("SWIFT_OPTIMIZATION_LEVEL=-O", argv)
+                self.assertNotIn("SWIFT_OPTIMIZATION_LEVEL=-Onone", argv)
+                packages = Path(argv[argv.index("-clonedSourcePackagesDirPath") + 1])
+                self.assertEqual(packages, ctx.work.parent / (ctx.work.name + "-ios-build") / "source-packages")
+        self.assertEqual((ctx.source / "Package.resolved").read_bytes(),
+                         (ctx.work / "Package.resolved").read_bytes())
+
     def test_embedded_framework_and_extension_are_attempted_after_main_failure(self):
         ctx = self.run_context(recovery_failure="Actual", extra_bundle_files={
             "PlugIns/Reader.appex/Reader": b"\xcf\xfa\xed\xfe" + bytes(60),
@@ -248,6 +265,7 @@ class IOSRealAppOrchestrationTests(unittest.TestCase):
                     self.assertIn("-onlyUsePackageVersionsFromResolvedFile", argv)
                     self.assertEqual(argv[argv.index("-clonedSourcePackagesDirPath") + 1], ctx.work / "packages")
                     self.assertNotIn("-clonedSourcePackagesDir", argv)
+                    self.assertIn("-disablePackageRepositoryCache", argv)
                     self.assertIn("CODE_SIGNING_ALLOWED=NO", argv)
                     self.assertEqual("GCC_OPTIMIZATION_LEVEL=s" in argv, profile == "size")
         ctx.variant["profile"] = "unknown"

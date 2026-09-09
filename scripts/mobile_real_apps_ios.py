@@ -153,6 +153,9 @@ def build_arguments(ctx, derived, packages):
         "xcodebuild", "-project", project, "-scheme", ctx.app["ios"]["scheme"],
         "-configuration", "Release", "-sdk", sdk, "-destination", destination,
         "-derivedDataPath", derived, "-clonedSourcePackagesDirPath", packages,
+        # Keep SwiftPM's bare repositories in the case's checkout directory too;
+        # isolated working copies alone still consult the runner's global cache.
+        "-disablePackageRepositoryCache",
         "-onlyUsePackageVersionsFromResolvedFile", f"ARCHS={architecture}", "ONLY_ACTIVE_ARCH=NO",
         "CODE_SIGNING_ALLOWED=NO", "CODE_SIGNING_REQUIRED=NO", "DEVELOPMENT_TEAM=",
         "BUNDLE_ID_PREFIX=org.neverd.realapps", "DEBUG_INFORMATION_FORMAT=dwarf-with-dsym",
