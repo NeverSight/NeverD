@@ -18,8 +18,12 @@ if(NOT TARGET ZLIB::ZLIB)
     set(ZLIB_BUILD_SHARED OFF)
     set(ZLIB_BUILD_STATIC ON)
     set(ZLIB_INSTALL OFF)
+    # Both maintainer-hosted archives have the same pinned bytes. Prefer the
+    # release asset so CI need not rely on the fossils endpoint being available.
     FetchContent_Declare(neverd_mobile_zlib
-      URL https://zlib.net/fossils/zlib-1.3.2.tar.gz
+      URL
+        https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz
+        https://zlib.net/fossils/zlib-1.3.2.tar.gz
       URL_HASH SHA256=bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16
       TIMEOUT 180)
     FetchContent_MakeAvailable(neverd_mobile_zlib)
