@@ -19,6 +19,19 @@
         "release_task": ":app:assembleFlavorDefaultRelease",
         "debug_task": ":app:assembleFlavorDefaultDebug",
         "package_name": "net.gsantner.markor",
+        "source_build": {
+          "gradle_version": "8.13",
+          "distribution_url": "https://services.gradle.org/distributions/gradle-8.13-bin.zip",
+          "distribution_sha256": "20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78",
+          "jdk_major": 21,
+          "agp_version": "8.13.2",
+          "build_tools": "35.0.0",
+          "module_path": "app",
+          "profiles": {
+            "gradle-release": {"variant": "flavorDefaultRelease", "application_id": "net.gsantner.markor", "minify": true, "shrink_resources": false},
+            "gradle-debug": {"variant": "flavorDefaultDebug", "application_id": "net.gsantner.markor", "minify": false, "shrink_resources": false}
+          }
+        },
         "behavior_obligations": ["create-edit-save-reopen", "markdown-preview", "todo-state"]
       }
     },
@@ -35,10 +48,23 @@
       "android": {
         "compile_sdk": 36,
         "build_tools": "36.0.0",
-        "java": "17",
+        "java": "21",
         "release_task": ":app:assembleFossRelease",
         "debug_task": ":app:assembleFossDebug",
         "package_name": "org.fossify.math",
+        "source_build": {
+          "gradle_version": "8.13",
+          "distribution_url": "https://services.gradle.org/distributions/gradle-8.13-bin.zip",
+          "distribution_sha256": "20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78",
+          "jdk_major": 21,
+          "agp_version": "8.11.1",
+          "build_tools": "35.0.0",
+          "module_path": "app",
+          "profiles": {
+            "gradle-release": {"variant": "fossRelease", "application_id": "org.fossify.math", "minify": true, "shrink_resources": true},
+            "gradle-debug": {"variant": "fossDebug", "application_id": "org.fossify.math.debug", "minify": false, "shrink_resources": false}
+          }
+        },
         "behavior_obligations": ["arithmetic-precision", "percent", "history", "rotation-state"]
       }
     },

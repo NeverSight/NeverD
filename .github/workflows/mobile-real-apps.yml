@@ -3,7 +3,8 @@ name: Mobile Real Applications
 # GitHub gives workflow_run read-only access to default-branch caches. Keep
 # third-party app builds out of push/workflow_dispatch cache-write contexts.
 # https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#cache-access-for-low-trust-workflow-triggers
-# The complete manifest remains required even while baseline cases collect gaps.
+# Schedule every required manifest case; the historical baseline never filters
+# execution. Missing implementation and qualification evidence still fail.
 on:
   workflow_run:
     workflows: [Mobile Decompilation]
@@ -75,6 +76,9 @@ jobs:
     needs: trigger
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    outputs:
+      android_matrix: ${{ steps.matrix.outputs.android_matrix }}
+      ios_matrix: ${{ steps.matrix.outputs.ios_matrix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -83,15 +87,23 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
+      - name: Generate every required case from the pinned manifest
+        id: matrix
+        run: python scripts/mobile_real_apps_matrix.py --manifest scripts/mobile_real_apps.json --github-output "$GITHUB_OUTPUT"
       - name: Check omissions, partial output, provenance and behavior mutations
         run: |
           python -m unittest \
             scripts.tests.test_mobile_real_apps_android \
+            scripts.tests.test_mobile_real_apps_android_build \
             scripts.tests.test_mobile_real_apps_common \
             scripts.tests.test_mobile_real_apps_ios \
+            scripts.tests.test_mobile_real_apps_matrix \
             scripts.tests.test_mobile_real_apps_trigger \
             scripts.tests.test_mobile_release_gate \
             scripts.tests.test_mobile_ios_backend -v
+      - name: Check documentation and localized mobile support contracts
+        if: ${{ !cancelled() }}
+        run: python scripts/check_docs_i18n.py
 
   build:
     name: Build NeverD (${{ matrix.host }})
@@ -179,21 +191,17 @@ jobs:
           retention-days: 7
 
   android:
-    name: Android ${{ matrix.app }} official release
-    needs: [trigger, build]
+    name: Android ${{ matrix.case_id }}
+    needs: [trigger, guards, build]
+    # A failed sibling host build does not discard the available host's app
+    # evidence. A missing own-host artifact still fails its download and case.
+    if: ${{ !cancelled() && needs.trigger.result == 'success' && needs.guards.outputs.android_matrix != '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 80
     strategy:
       fail-fast: false
       max-parallel: 2
-      matrix:
-        include:
-          - app: markor
-            repository: gsantner/markor
-            commit: f33eb6a8dfb210f27bfe7294430d4d39b795bd0f
-          - app: calculator
-            repository: FossifyOrg/Calculator
-            commit: 77e2490684d5722e25d177608792b8e35610e990
+      matrix: ${{ fromJSON(needs.guards.outputs.android_matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -202,7 +210,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ matrix.repository }}
-          ref: ${{ matrix.commit }}
+          ref: ${{ matrix.source_commit }}
           path: upstream-app
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -211,21 +219,24 @@ jobs:
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: ${{ matrix.java_version }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: neverd-real-apps-linux-x86_64
           path: ${{ runner.temp }}/neverd-download
       - name: Prepare native CLI and independent SDK inventory tools
+        env:
+          SDK_PACKAGES: ${{ join(matrix.sdk_packages, ' ') }}
         run: |
           mkdir -p "$RUNNER_TEMP/neverd-host"
           tar -xzf "$RUNNER_TEMP/neverd-download/neverd-host.tar.gz" -C "$RUNNER_TEMP/neverd-host"
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
-            'build-tools;35.0.0' 'build-tools;36.0.0' 'platforms;android-35' 'platforms;android-36'
-      - name: Recover the complete pinned APK and collect acceptance evidence
+          read -r -a packages <<< "$SDK_PACKAGES"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "${packages[@]}"
+      - name: Build or fetch the pinned Android variant and collect acceptance evidence
+        if: ${{ !cancelled() }}
         env:
           CONSUMER_COMMIT: ${{ needs.trigger.outputs.consumer_commit }}
-          CASE_ID: ${{ matrix.app }}-official-release
+          CASE_ID: ${{ matrix.case_id }}
           LD_LIBRARY_PATH: ${{ runner.temp }}/neverd-host/bin
         run: |
           python scripts/test_mobile_real_apps.py \
@@ -237,43 +248,24 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: real-app-evidence-${{ matrix.app }}-official-release
-          path: ${{ runner.temp }}/real-app-evidence/${{ matrix.app }}-official-release
+          name: real-app-evidence-${{ matrix.case_id }}
+          path: ${{ runner.temp }}/real-app-evidence/${{ matrix.case_id }}
           if-no-files-found: error
+          include-hidden-files: true
           retention-days: 14
 
   ios:
-    name: iOS ${{ matrix.app }} ${{ matrix.sdk }} arm64 Release
-    needs: [trigger, build]
+    name: iOS ${{ matrix.case_id }}
+    needs: [trigger, guards, build]
+    if: ${{ !cancelled() && needs.trigger.result == 'success' && needs.guards.outputs.ios_matrix != '' }}
     runs-on: macos-26
     timeout-minutes: 80
     strategy:
       fail-fast: false
       max-parallel: 2
-      matrix:
-        include:
-          - app: icecubes
-            repository: Dimillian/IceCubesApp
-            commit: b2db3033fbf67a97b54d25d6dac2df8a029b26b1
-            sdk: iphonesimulator
-            case_id: icecubes-release-arm64-simulator
-          - app: icecubes
-            repository: Dimillian/IceCubesApp
-            commit: b2db3033fbf67a97b54d25d6dac2df8a029b26b1
-            sdk: iphoneos
-            case_id: icecubes-release-arm64-device
-          - app: wikipedia
-            repository: wikimedia/wikipedia-ios
-            commit: 86e78a9e5766d89f3d4c44abe9efce30b950d4d4
-            sdk: iphonesimulator
-            case_id: wikipedia-release-arm64-simulator
-          - app: wikipedia
-            repository: wikimedia/wikipedia-ios
-            commit: 86e78a9e5766d89f3d4c44abe9efce30b950d4d4
-            sdk: iphoneos
-            case_id: wikipedia-release-arm64-device
+      matrix: ${{ fromJSON(needs.guards.outputs.ios_matrix) }}
     env:
-      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+      DEVELOPER_DIR: ${{ matrix.developer_dir }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -282,7 +274,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ matrix.repository }}
-          ref: ${{ matrix.commit }}
+          ref: ${{ matrix.source_commit }}
           path: upstream-app
           submodules: recursive
           persist-credentials: false
@@ -298,7 +290,10 @@ jobs:
           test -d "$DEVELOPER_DIR"
           mkdir -p "$RUNNER_TEMP/neverd-host"
           tar -xzf "$RUNNER_TEMP/neverd-download/neverd-host.tar.gz" -C "$RUNNER_TEMP/neverd-host"
-      - name: Build genuine iOS Release input and recover every bundled Mach-O
+      # Cross-compilation and analysis on this arm64 host do not establish
+      # x86_64 simulator or device execution; runtime obligations remain open.
+      - name: Build the pinned iOS variant and recover every bundled Mach-O
+        if: ${{ !cancelled() }}
         env:
           CONSUMER_COMMIT: ${{ needs.trigger.outputs.consumer_commit }}
           CASE_ID: ${{ matrix.case_id }}

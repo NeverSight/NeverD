@@ -494,10 +494,54 @@ class WorkflowStageTests(unittest.TestCase):
             self.assertTrue(any("inventory" in reason for reason in ctx.failures))
             self.assertTrue(any("recovery" in reason for reason in ctx.failures))
 
-    def test_source_profiles_are_explicitly_incomplete(self):
+    def test_source_profiles_use_built_apk_and_keep_dependency_qualification_incomplete(self):
+        for profile in ("gradle-release", "gradle-debug"):
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as temporary:
+                ctx = self.context(Path(temporary))
+                ctx.variant["profile"] = profile
+                del ctx.app["official_apk"]  # A source profile must not consult the published APK.
+                def source_build(context):
+                    apk = context.work / "source-built.apk"
+                    apk.write_bytes(context.apk)
+                    dependency = {"status": "incomplete", "lock_verified": False, "reason": "Dependency closure is not locked"}
+                    context.write_json("android-dependency-provenance.json", dependency)
+                    return {"apk": apk, "sha256": hashlib.sha256(context.apk).hexdigest(),
+                            "evidence": ["source-built.apk", "android-dependency-provenance.json"],
+                            "dependency_provenance": dependency,
+                            "details": {"input_kind": "source-build", "source_build": True}}
+                with patch("scripts.mobile_real_apps_android.build_source_apk", side_effect=source_build) as build, \
+                     patch.dict(os.environ, {"ANDROID_SDK_ROOT": str(ctx.sdk_root)}):
+                    run_android(ctx)
+                build.assert_called_once_with(ctx)
+                self.assertEqual(ctx.stages["original_build"]["status"], "success")
+                self.assertTrue(ctx.stages["original_build"]["source_build"])
+                self.assertEqual(ctx.stages["provenance"]["status"], "incomplete")
+                self.assertFalse(ctx.stages["provenance"]["dependency_lock_verified"])
+                self.assertEqual(ctx.stages["inventory"]["status"], "success")
+                self.assertEqual(ctx.stages["recovery"]["status"], "success")
+                self.assertEqual(ctx.stages["recompile"]["status"], "incomplete")
+                self.assertEqual(ctx.stages["behavior"]["status"], "incomplete")
+                self.assertTrue(ctx.failures)
+                calls = [argv for name, argv, _ in ctx.commands if name == "android-neverd-mobile"]
+                self.assertEqual(calls[0][1:3], ["mobile", str(ctx.work / "source-built.apk")])
+                self.assertFalse(any(name == "android-download-official-apk" for name, _, _ in ctx.commands))
+
+    def test_source_build_failure_does_not_substitute_the_official_apk(self):
         with tempfile.TemporaryDirectory() as temporary:
             ctx = self.context(Path(temporary))
             ctx.variant["profile"] = "gradle-release"
+            with patch("scripts.mobile_real_apps_android.build_source_apk", side_effect=RuntimeError("source task failed")):
+                run_android(ctx)
+            self.assertEqual(ctx.stages["original_build"]["status"], "failed")
+            self.assertEqual(ctx.stages["inventory"]["status"], "incomplete")
+            self.assertFalse(any(name in ("android-download-official-apk", "android-neverd-mobile")
+                                 for name, _, _ in ctx.commands))
+            self.assertTrue(ctx.failures)
+
+    def test_unknown_profiles_are_explicitly_incomplete(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            ctx = self.context(Path(temporary))
+            ctx.variant["profile"] = "gradle-unknown"
             run_android(ctx)
             self.assertTrue(all(item["status"] == "incomplete" for item in ctx.stages.values()))
             self.assertFalse(ctx.commands)

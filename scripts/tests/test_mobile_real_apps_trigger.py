@@ -149,6 +149,35 @@ class TriggerTests(unittest.TestCase):
             self.assertFalse(report.exists())
             self.assertNotIn(ENV["GH_TOKEN"], stderr.getvalue())
 
+    def test_last_remote_check_failure_cannot_publish_a_partially_verified_source(self):
+        for failure in ("sha-mismatch", "transport"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                event, output, report = root / "event.json", root / "github-output", root / "report.json"
+                event.write_text(json.dumps(EVENT))
+                attempts = []
+
+                def get(path):
+                    attempts.append(path)
+                    if path == "/repos/Owned/Application":
+                        return deepcopy(REPO)
+                    if path == "/repos/Owned/Application/actions/workflows/352466821":
+                        return deepcopy(WORKFLOW)
+                    self.assertEqual(path, "/repos/Owned/Application/actions/runs/456/attempts/2")
+                    if failure == "transport":
+                        raise trigger.TriggerError("GitHub metadata request failed")
+                    return {**deepcopy(RUN), "head_sha": "b" * 40}
+
+                stderr = io.StringIO()
+                with patch.dict(os.environ, ENV, clear=True), \
+                        patch.object(trigger, "GitHubAPI", return_value=get), redirect_stderr(stderr):
+                    result = trigger.main(["--event", str(event), "--github-output", str(output), "--output", str(report)])
+                self.assertEqual(result, 1)
+                self.assertEqual(len(attempts), 3)
+                self.assertFalse(output.exists())
+                self.assertFalse(report.exists())
+                self.assertNotIn(ENV["GH_TOKEN"], stderr.getvalue())
+
     def test_transport_is_get_only_bounded_and_never_follows_redirects(self):
         response = io.BytesIO(json.dumps(REPO).encode())
         response.status = 200

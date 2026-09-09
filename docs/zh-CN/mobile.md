@@ -52,7 +52,9 @@ Swift 恢复通过 NeverD LLVM fork 中的 `LLVMSwiftDemangle`，直接在 C++ �
 
 `-o` 必须指定不存在的目录，且不能位于目录输入内部。已有输出不会覆盖，只有恢复和验证成功后才发布结果。原生 CLI 成功返回零，恢复失败返回非零。使用 `--json` 时，已处理的失败包含 `schema_version`、`status: "error"` 和 `error`。参数解析、原生程序或依赖库启动失败以及中断仍可能只报告 stderr。调用方应先检查退出状态。
 
-默认最多 20,000 个条目、2 GiB 输入/解包或最终输出数据，内置 Android/iOS 分析时间预算或每个显式 JADX 进程上限为 300 秒。iOS 子进程使用总分析预算的剩余时间。内置读取器和生成器还实施有界工作量预算。可用 `--max-files`、`--max-bytes` 和 `--timeout` 调整，均必须大于零。后台运行期间会监测临时工作区，允许暂存输入与中间产物共存，条目数和字节数上限为配置值的三倍。每个进程的诊断最多 16 MiB。解包拒绝路径穿越、符号链接、特殊文件、大小写路径冲突和加密 ZIP 条目；目录输入也拒绝链接和特殊文件。
+默认最多 20,000 个条目、2 GiB 输入/解包或最终输出数据，内置 Android/iOS 分析时间预算或每个显式 JADX 进程上限为 300 秒。iOS 子进程使用总分析预算的剩余时间。内置读取器和生成器还实施有界工作量预算。可用 `--max-files`、`--max-bytes` 和 `--timeout` 调整，均必须大于零。后台运行期间会监测临时工作区，允许暂存输入与中间产物共存，条目数和字节数上限为配置值的三倍。每个进程的诊断最多 16 MiB。
+
+APK 暂存只写出根目录的 `classes.dex`、`classes2.dex` 和后续编号 DEX。所有 ZIP 成员仍须经过头部与范围校验、解压、长度和 CRC 验证，并计入归档条目数与解压后字节数限额。不写出的资源允许使用区分大小写的不同名称，例如 `res/-A.xml` 与 `res/-a.xml`。ZIP 精确重名及同一路径的文件/目录类型冲突仍会失败；跨平台文件系统的大小写冲突检查只针对实际写出的成员。包括 IPA 在内的全量提取仍拒绝这些输出路径冲突。整个归档中的路径穿越、链接、特殊文件和加密 ZIP 条目仍被拒绝；目录输入也拒绝链接和特殊文件。
 
 这些限制用于增强健壮性，不是第三方后端的安全沙箱。失败的临时结果会清理。后端非零退出时会附带长度受限的诊断尾部；启动失败、超时和超出预算会使用各自的错误信息。
 
@@ -76,6 +78,8 @@ python3 scripts/test_mobile_ios_backend.py --neverd build/bin/neverd
 cmake --build build --target check-neverd-mobile-ios
 ```
 
-脚本编译自有 Objective-C 样本，恢复方法实现，再仅将恢复出的 `.m` 与同一个独立调用程序链接。22 方法样本对比 141 项可观察结果，覆盖整数边界、分支、循环、指针读写、隐藏与未使用参数、float/double 位身份、混合参数和栈位置。只有当前实际运行通过后才能声称样例已验证。会尝试 arm64、x86_64 和传统/默认指针布局；宿主无法执行的架构会明确跳过，宿主架构必须实际执行。这些样例证据不代表任意 iOS 程序都能完整恢复。macOS 的 CTest 已注册 `NeverDMobileIOSBackend`，主 CI 的测试范围包含此项。
+脚本编译自有 Objective-C 样本，恢复方法实现，再仅将恢复出的 `.m` 与同一个独立调用程序链接。22 方法样本对比 141 项可观察结果，覆盖整数边界、分支、循环、指针读写、隐藏与未使用参数、float/double 位身份、混合参数和栈位置。只有当前实际运行通过后才能声称样例已验证。所有请求的架构和 fixup 变体都必须完成，默认覆盖 arm64/x86_64 × classic/default；缺少变体或宿主无法执行某个要求的架构均视为失败，不允许跳过。这些样例证据不代表任意 iOS 程序都能完整恢复。macOS 的 CTest 已注册 `NeverDMobileIOSBackend`，主 CI 的测试范围包含此项。
 
 独立 Swift 恢复脚本为 `python3 scripts/test_mobile_swift_backend.py --neverd build/bin/neverd`，它只重新编译生成的 Swift 与调用程序，不链接原始二进制；未支持可调用项和行为差异都会失败。覆盖口径和失败证据保留方式见 [iOS 指南](ios.md)。
+
+[Mobile Real Applications 工作流](../../.github/workflows/mobile-real-apps.yml) 使用[样本清单](../../scripts/mobile_real_apps.json)中固定版本的公开应用。验收要求独立列出每个 APK 的全部 DEX 和每个完整 iOS bundle 的全部 Mach-O，独立重建原版与生成源码，并对照行为。阶段缺失、清单覆盖未知或必需 case 缺失都会使验收失败。真实应用的 recompile 和 behavior 阶段目前仍未完成，因此保留 Experimental 标记；测试框架的守卫测试通过不代表真实应用验收通过。

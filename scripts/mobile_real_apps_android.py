@@ -23,6 +23,11 @@ import struct
 from urllib.parse import urlsplit
 import zipfile
 
+try:
+    from .mobile_real_apps_android_build import build_source_apk
+except ImportError:
+    from mobile_real_apps_android_build import build_source_apk
+
 
 STAGES = ("provenance", "original_build", "inventory", "recovery", "recompile", "behavior")
 MAX_APK_BYTES = 256 * 1024 * 1024
@@ -467,10 +472,11 @@ def _read_json(path: Path):
 
 def run_android(ctx) -> None:
     """Run evidence stages; incomplete rebuild/behavior can never pass maturity."""
-    if ctx.variant.get("profile") != "official-release":
+    profile = ctx.variant.get("profile")
+    if profile not in ("official-release", "gradle-release", "gradle-debug"):
         for name in STAGES:
-            ctx.stage(name, "incomplete", reason="Source-build profiles are not implemented")
-        ctx.fail("Android source-build profile has no complete acceptance implementation")
+            ctx.stage(name, "incomplete", reason="Unknown Android application profile")
+        ctx.fail("Android profile has no acceptance implementation")
         return
     stage, completed = "provenance", set()
     try:
@@ -480,28 +486,48 @@ def run_android(ctx) -> None:
         require(app.get("repository") and app.get("license"), "Missing application source/license provenance")
         original = ctx.command("android-source-head", ["git", "rev-parse", "HEAD"], cwd=ctx.source)
         require(original.stdout.strip() == commit, "Checked-out upstream source differs from its fixed commit")
-        asset = app.get("official_apk", {})
-        url, expected_sha = asset.get("url", ""), asset.get("sha256", "")
-        parsed = urlsplit(url)
-        require(parsed.scheme == "https" and parsed.hostname == "github.com" and not parsed.username
-                and not parsed.password and not parsed.query and not parsed.fragment
-                and "/releases/download/" in parsed.path, "Official APK needs a fixed HTTPS GitHub release URL")
-        require(isinstance(expected_sha, str) and re.fullmatch(r"[0-9a-f]{64}", expected_sha),
-                "Official APK needs a fixed SHA-256 digest")
-        ctx.write_json("android-provenance.json", {"repository": app["repository"], "source_commit": commit,
-                       "license": app["license"], "official_apk": asset, "variant": variant})
+        provenance = {"repository": app["repository"], "source_commit": commit,
+                      "license": app["license"], "variant": variant}
+        if profile == "official-release":
+            asset = app.get("official_apk", {})
+            url, expected_sha = asset.get("url", ""), asset.get("sha256", "")
+            parsed = urlsplit(url)
+            require(parsed.scheme == "https" and parsed.hostname == "github.com" and not parsed.username
+                    and not parsed.password and not parsed.query and not parsed.fragment
+                    and "/releases/download/" in parsed.path, "Official APK needs a fixed HTTPS GitHub release URL")
+            require(isinstance(expected_sha, str) and re.fullmatch(r"[0-9a-f]{64}", expected_sha),
+                    "Official APK needs a fixed SHA-256 digest")
+            provenance["official_apk"] = asset
+        else:
+            provenance["source_build"] = app.get("android", {}).get("source_build")
+        ctx.write_json("android-provenance.json", provenance)
         ctx.stage(stage, "success", source_commit=commit, repository=app["repository"], license=app["license"],
                   evidence=["android-provenance.json"])
         completed.add(stage)
         stage = "original_build"
-        apk = ctx.work / "official.apk"
-        ctx.command("android-download-official-apk", ["curl", "--fail", "--location", "--proto", "=https",
-                    "--proto-redir", "=https", "--max-time", str(ctx.timeout), "--max-filesize", str(MAX_APK_BYTES),
-                    "--output", str(apk), url])
-        actual_sha = sha256_file(apk, MAX_APK_BYTES)
-        require(actual_sha == expected_sha, "Official APK SHA-256 mismatch")
-        ctx.stage(stage, "success", input_kind="published-release", source_build=False,
-                  apk_sha256=actual_sha, original_apk="official.apk", evidence=["official.apk"])
+        if profile == "official-release":
+            apk = ctx.work / "official.apk"
+            ctx.command("android-download-official-apk", ["curl", "--fail", "--location", "--proto", "=https",
+                        "--proto-redir", "=https", "--max-time", str(ctx.timeout), "--max-filesize", str(MAX_APK_BYTES),
+                        "--output", str(apk), url])
+            actual_sha = sha256_file(apk, MAX_APK_BYTES)
+            require(actual_sha == expected_sha, "Official APK SHA-256 mismatch")
+            ctx.stage(stage, "success", input_kind="published-release", source_build=False,
+                      apk_sha256=actual_sha, original_apk="official.apk", evidence=["official.apk"])
+        else:
+            built = build_source_apk(ctx)
+            apk, actual_sha = built["apk"], built["sha256"]
+            ctx.stage(stage, "success", **built["details"], apk_sha256=actual_sha,
+                      original_apk=apk.relative_to(ctx.work).as_posix(), evidence=built["evidence"])
+            dependency = built["dependency_provenance"]
+            if not dependency.get("lock_verified"):
+                provenance["dependency_qualification"] = dependency
+                ctx.write_json("android-provenance.json", provenance)
+                ctx.stage("provenance", "incomplete", source_commit=commit,
+                          source_identity_verified=True, dependency_lock_verified=False,
+                          reason=dependency["reason"],
+                          evidence=["android-provenance.json", "android-dependency-provenance.json"])
+                ctx.fail("Android source dependency provenance is incomplete: " + dependency["reason"])
         completed.add(stage)
         stage = "inventory"
         inventory = None
@@ -533,7 +559,7 @@ def run_android(ctx) -> None:
                       evidence=["android-inventory.json", "android-dex-inputs.json"]
                       + [f"android-dex-mutation-checks-{index:04d}.json" for index in range(len(inputs))])
         except Exception as error:
-            # The original APK has already passed provenance and its fixed
+            # The original APK has an established source/release identity and
             # digest. An independent SDK/parser failure must not suppress the
             # native decoder evidence, but it leaves the denominator unknown.
             inventory = None
@@ -554,7 +580,7 @@ def run_android(ctx) -> None:
                            "expected_method_count": len(inventory["methods"]) if inventory is not None else None,
                            "expected_body_count": inventory["body_count"] if inventory is not None else None})
             require(not output.exists(), "Failed recovery published an output directory")
-            raise AndroidEvidenceError("NeverD rejected the complete official APK; see android-neverd-mobile logs")
+            raise AndroidEvidenceError("NeverD rejected the complete application APK; see android-neverd-mobile logs")
         report = _read_json(output / "report.json")
         coverage = _read_json(output / "metadata/android-methods.json")
         if inventory is None:
