@@ -619,10 +619,12 @@ bool liftSIMDAVXFMA(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
         !IsValidSourceSize(SecondSource) || !IsValidSourceSize(ThirdSource))
       return false;
 
+    // Scalar FMA4 clears all destination bits above the computed element.
+    const uint16_t ResultSize = Scalar ? ElementSize : Destination.Size;
     const NdVar Raw = buildX86FmaResult(
-        S, Destination.Size, FirstSource, SecondSource, ThirdSource,
-        NegateProduct, SubtractAddend, Scalar, ElementSize, FirstSource);
-    S.emit(NdOp::COPY, Destination, {Raw});
+        S, ResultSize, FirstSource, SecondSource, ThirdSource, NegateProduct,
+        SubtractAddend, Scalar, ElementSize, FirstSource);
+    S.emit(Scalar ? NdOp::INT_ZEXT : NdOp::COPY, Destination, {Raw});
     return true;
   };
 

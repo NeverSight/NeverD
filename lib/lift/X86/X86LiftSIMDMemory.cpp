@@ -304,11 +304,15 @@ bool parseCanonicalVex3EncodingInfo(const cs_insn *Insn, const cs_x86 &X86,
     return false;
   Encoding.AddressSize = Encoding.Is64Bit ? (Encoding.AddressOverride ? 4 : 8)
                                           : (Encoding.AddressOverride ? 2 : 4);
+  // Capstone synthesizes the VEX REX view only in 64-bit mode. The raw W bit
+  // remains in P1 for instruction families that use it in 32-bit mode.
   const uint8_t ExpectedRex =
-      static_cast<uint8_t>(0x40 | ((Encoding.P1 & 0x80) != 0 ? 0x08 : 0) |
-                           ((Encoding.P0 & 0x80) == 0 ? 0x04 : 0) |
-                           ((Encoding.P0 & 0x40) == 0 ? 0x02 : 0) |
-                           ((Encoding.P0 & 0x20) == 0 ? 0x01 : 0));
+      Encoding.Is64Bit
+          ? static_cast<uint8_t>(0x40 | ((Encoding.P1 & 0x80) != 0 ? 0x08 : 0) |
+                                 ((Encoding.P0 & 0x80) == 0 ? 0x04 : 0) |
+                                 ((Encoding.P0 & 0x40) == 0 ? 0x02 : 0) |
+                                 ((Encoding.P0 & 0x20) == 0 ? 0x01 : 0))
+          : 0;
   if (X86.prefix[0] != 0 || X86.prefix[1] != Encoding.SegmentPrefix ||
       X86.prefix[2] != 0 ||
       X86.prefix[3] != (Encoding.AddressOverride ? 0x67 : 0) ||

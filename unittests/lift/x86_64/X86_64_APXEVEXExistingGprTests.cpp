@@ -48,10 +48,10 @@ template <typename T> std::vector<uint8_t> bytes(const std::vector<T> &Values) {
   return Result;
 }
 
-std::vector<LowOp> liftX64(const std::vector<uint8_t> &Bytes) {
+std::vector<LowOp> liftForArch(const std::vector<uint8_t> &Bytes, Arch Target) {
   Decoder Dec;
-  if (!Dec.init(Arch::X64)) {
-    ADD_FAILURE() << "failed to initialize x86-64 decoder";
+  if (!Dec.init(Target)) {
+    ADD_FAILURE() << "failed to initialize x86 decoder";
     return {};
   }
   DecodedInsn Insn{};
@@ -70,11 +70,15 @@ std::vector<LowOp> liftX64(const std::vector<uint8_t> &Bytes) {
   return Ops;
 }
 
+std::vector<LowOp> liftX64(const std::vector<uint8_t> &Bytes) {
+  return liftForArch(Bytes, Arch::X64);
+}
+
 template <typename Mutator>
 void expectMutatedLiftFailsClosed(const std::vector<uint8_t> &Bytes,
-                                  Mutator Mutate) {
+                                  Mutator Mutate, Arch Target = Arch::X64) {
   Decoder Dec;
-  ASSERT_TRUE(Dec.init(Arch::X64));
+  ASSERT_TRUE(Dec.init(Target));
   DecodedInsn Insn{};
   ASSERT_EQ(Dec.decodeOneForLift(Bytes.data(), Bytes.size(),
                                  kInstructionAddress, Insn),
@@ -1940,8 +1944,8 @@ TEST(X86APXEVEXExistingGpr,
                                          UINT64_C(0x1122334455667788)};
     const std::vector<uint64_t> Source = {UINT64_C(0xfff0000000000000),
                                           UINT64_C(0xa5a5a5a5a5a5a5a5)};
-    std::vector<uint64_t> ExpectedLow = {
-        UINT64_C(0xfff8000000000000), Merge[1]};
+    std::vector<uint64_t> ExpectedLow = {UINT64_C(0xfff8000000000000),
+                                         Merge[1]};
     std::vector<uint8_t> Expected = bytes(ExpectedLow);
     Expected.resize(64, 0);
 
@@ -1964,8 +1968,7 @@ TEST(X86APXEVEXExistingGpr,
   // The minimum positive Float32 denormal therefore produces -149.0; SAE
   // suppresses the otherwise raised denormal status.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0x7d,
-                                           0x1b, 0x42, 0xca};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0x7d, 0x1b, 0x42, 0xca};
     std::vector<uint32_t> Source(16, UINT32_C(0x7f800001));
     Source[0] = 1;
     std::vector<uint32_t> Old(16), Expected(16);
@@ -1993,14 +1996,13 @@ TEST(X86APXEVEXExistingGpr,
   // Scalar VGETEXP quiets an active signaling NaN while SAE suppresses its
   // invalid status and the upper XMM bytes are copied from src1.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0xed,
-                                           0x1b, 0x43, 0xcb};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0xed, 0x1b, 0x43, 0xcb};
     const std::vector<uint64_t> Merge = {UINT64_C(0x0102030405060708),
                                          UINT64_C(0x1122334455667788)};
     const std::vector<uint64_t> Source = {UINT64_C(0x7ff0000000000001),
                                           UINT64_C(0xa5a5a5a5a5a5a5a5)};
-    std::vector<uint64_t> ExpectedLow = {
-        UINT64_C(0x7ff8000000000001), Merge[1]};
+    std::vector<uint64_t> ExpectedLow = {UINT64_C(0x7ff8000000000001),
+                                         Merge[1]};
     std::vector<uint8_t> Expected = bytes(ExpectedLow);
     Expected.resize(64, 0);
 
@@ -2162,8 +2164,7 @@ TEST(X86APXEVEXExistingGpr,
   // source-one denormals, and inactive signaling NaNs all have distinct
   // architectural behavior.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0x6d,
-                                           0x4b, 0x2c, 0xcb};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0x6d, 0x4b, 0x2c, 0xcb};
     std::vector<uint32_t> Left(16, UINT32_C(0x7f800001));
     std::vector<uint32_t> Right(16, UINT32_C(0x7f800001));
     Left[0] = UINT32_C(0x3fc00000);
@@ -2228,8 +2229,7 @@ TEST(X86APXEVEXExistingGpr,
   // minimum-denormal result while suppressing DE/UE/PE even with all MXCSR
   // masks clear.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0x6d,
-                                           0x5b, 0x2c, 0xcb};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0x6d, 0x5b, 0x2c, 0xcb};
     std::vector<uint32_t> Left(16, UINT32_C(0x7f800001));
     std::vector<uint32_t> Right(16, UINT32_C(0x7f800001));
     Left[0] = 1;
@@ -2262,8 +2262,7 @@ TEST(X86APXEVEXExistingGpr,
 
   // A zero writemask suppresses the packed broadcast memory access entirely.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0x6d,
-                                           0x5b, 0x2c, 0x08};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0x6d, 0x5b, 0x2c, 0x08};
     std::vector<uint32_t> Old(16), Left(16, UINT32_C(0x3f800000));
     for (unsigned Lane = 0; Lane < Old.size(); ++Lane)
       Old[Lane] = UINT32_C(0x42a50000) + Lane;
@@ -2285,8 +2284,7 @@ TEST(X86APXEVEXExistingGpr,
   // EVEX VANDN consumes the two vector sources after the explicit writemask;
   // the mask is not an ordinary data operand.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf1, 0x6c,
-                                           0x4b, 0x55, 0xcb};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf1, 0x6c, 0x4b, 0x55, 0xcb};
     constexpr uint64_t Mask = UINT64_C(0xa55a);
     std::vector<uint32_t> Left(16), Right(16), Old(16), Expected(16);
     for (unsigned Lane = 0; Lane < Left.size(); ++Lane) {
@@ -2315,8 +2313,7 @@ TEST(X86APXEVEXExistingGpr,
   // A masked EVEX bitwise broadcast reads its scalar memory source once and
   // applies it independently to every active dword.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf1, 0x6c,
-                                           0x5b, 0x56, 0x08};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf1, 0x6c, 0x5b, 0x56, 0x08};
     constexpr uint64_t Address = UINT64_C(0x31000);
     constexpr uint64_t Mask = UINT64_C(0xa55a);
     const uint32_t Memory = UINT32_C(0x00ff00ff);
@@ -2324,9 +2321,8 @@ TEST(X86APXEVEXExistingGpr,
     for (unsigned Lane = 0; Lane < Left.size(); ++Lane) {
       Left[Lane] = UINT32_C(0x55000000) + Lane;
       Old[Lane] = UINT32_C(0x42420000) + Lane;
-      Expected[Lane] = (Mask & (UINT64_C(1) << Lane)) != 0
-                           ? Left[Lane] | Memory
-                           : Old[Lane];
+      Expected[Lane] =
+          (Mask & (UINT64_C(1) << Lane)) != 0 ? Left[Lane] | Memory : Old[Lane];
     }
 
     const std::vector<LowOp> Ops = liftX64(Encoding);
@@ -2349,8 +2345,7 @@ TEST(X86APXEVEXExistingGpr,
   // Integer AND-NOT has the same masked broadcast contract and keeps its
   // element-granular merge behavior.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf1, 0x6d,
-                                           0x5b, 0xdf, 0x08};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf1, 0x6d, 0x5b, 0xdf, 0x08};
     constexpr uint64_t Address = UINT64_C(0x32000);
     constexpr uint64_t Mask = UINT64_C(0x5aa5);
     const uint32_t Memory = UINT32_C(0x00ff00ff);
@@ -2383,8 +2378,7 @@ TEST(X86APXEVEXExistingGpr,
   // Unary packed integer operations retain the same broadcast and merge
   // contract; every active lane receives the scalar popcount.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0x7d,
-                                           0x5b, 0x55, 0x08};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0x7d, 0x5b, 0x55, 0x08};
     constexpr uint64_t Address = UINT64_C(0x33000);
     constexpr uint64_t Mask = UINT64_C(0xa55a);
     const uint32_t Memory = UINT32_C(0xf0f00f03);
@@ -2424,8 +2418,8 @@ TEST(X86APXEVEXExistingGpr,
     std::vector<uint32_t> Old(16), Expected(16);
     for (unsigned Lane = 0; Lane < Old.size(); ++Lane) {
       Old[Lane] = UINT32_C(0x51510000) + Lane;
-      Expected[Lane] = (Mask & (UINT64_C(1) << Lane)) != 0 ? Rotated
-                                                           : Old[Lane];
+      Expected[Lane] =
+          (Mask & (UINT64_C(1) << Lane)) != 0 ? Rotated : Old[Lane];
     }
 
     const std::vector<LowOp> Ops = liftX64(Encoding);
@@ -2447,8 +2441,7 @@ TEST(X86APXEVEXExistingGpr,
   // Variable rotates use the memory operand as per-lane counts; a broadcast
   // count is fault-suppressed and replicated only for active lanes.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0x6d,
-                                           0x5b, 0x14, 0x08};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0x6d, 0x5b, 0x14, 0x08};
     constexpr uint64_t Address = UINT64_C(0x35000);
     constexpr uint64_t Mask = UINT64_C(0xa669);
     const uint32_t MemoryCount = 37;
@@ -2456,10 +2449,9 @@ TEST(X86APXEVEXExistingGpr,
     for (unsigned Lane = 0; Lane < Source.size(); ++Lane) {
       Source[Lane] = UINT32_C(0x81000003) + Lane * UINT32_C(0x10101);
       Old[Lane] = UINT32_C(0x61610000) + Lane;
-      const uint32_t Rotated =
-          (Source[Lane] >> 5) | (Source[Lane] << 27);
-      Expected[Lane] = (Mask & (UINT64_C(1) << Lane)) != 0 ? Rotated
-                                                           : Old[Lane];
+      const uint32_t Rotated = (Source[Lane] >> 5) | (Source[Lane] << 27);
+      Expected[Lane] =
+          (Mask & (UINT64_C(1) << Lane)) != 0 ? Rotated : Old[Lane];
     }
 
     const std::vector<LowOp> Ops = liftX64(Encoding);
@@ -2482,20 +2474,18 @@ TEST(X86APXEVEXExistingGpr,
   // Out-of-range arithmetic variable shifts saturate to a sign fill. The
   // broadcast count is loaded only when at least one qword lane is active.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0xed,
-                                           0x5b, 0x46, 0x08};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0xed, 0x5b, 0x46, 0x08};
     constexpr uint64_t Address = UINT64_C(0x36000);
     constexpr uint64_t Mask = UINT64_C(0xad);
     const uint64_t MemoryCount = 70;
     std::vector<uint64_t> Source(8), Old(8), Expected(8);
     for (unsigned Lane = 0; Lane < Source.size(); ++Lane) {
-      Source[Lane] = Lane % 2 == 0
-                         ? UINT64_C(0x8000000000000000) + Lane
-                         : UINT64_C(0x4000000000000000) + Lane;
+      Source[Lane] = Lane % 2 == 0 ? UINT64_C(0x8000000000000000) + Lane
+                                   : UINT64_C(0x4000000000000000) + Lane;
       Old[Lane] = UINT64_C(0x7171000000000000) + Lane;
       const uint64_t SignFill = Lane % 2 == 0 ? UINT64_MAX : 0;
-      Expected[Lane] = (Mask & (UINT64_C(1) << Lane)) != 0 ? SignFill
-                                                           : Old[Lane];
+      Expected[Lane] =
+          (Mask & (UINT64_C(1) << Lane)) != 0 ? SignFill : Old[Lane];
     }
 
     const std::vector<LowOp> Ops = liftX64(Encoding);
@@ -2548,8 +2538,7 @@ TEST(X86APXEVEXExistingGpr,
   // VPMULLQ is an EVEX packed multiply, not an insert/move. Its scalar
   // broadcast participates in ordinary qword masking and modular arithmetic.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0xed,
-                                           0x5b, 0x40, 0x08};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0xed, 0x5b, 0x40, 0x08};
     constexpr uint64_t Address = UINT64_C(0x38000);
     constexpr uint64_t Mask = UINT64_C(0xad);
     const uint64_t Memory = 3;
@@ -2582,11 +2571,10 @@ TEST(X86APXEVEXExistingGpr,
   // The xmm/m128 form has one shared count source that is read before the
   // destination mask is applied, even when every output lane is inactive.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf1, 0x6d,
-                                           0x4b, 0xf2, 0x08};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf1, 0x6d, 0x4b, 0xf2, 0x08};
     constexpr uint64_t Address = UINT64_C(0x39000);
-    const std::array<uint64_t, 2> MemoryCount = {
-        5, UINT64_C(0xdeadbeefcafebabe)};
+    const std::array<uint64_t, 2> MemoryCount = {5,
+                                                 UINT64_C(0xdeadbeefcafebabe)};
     std::vector<uint32_t> Source(16), Old(16);
     for (unsigned Lane = 0; Lane < Source.size(); ++Lane) {
       Source[Lane] = UINT32_C(0x10000001) + Lane;
@@ -2596,8 +2584,7 @@ TEST(X86APXEVEXExistingGpr,
     const std::vector<LowOp> Ops = liftX64(Encoding);
     ASSERT_FALSE(Ops.empty());
     BinaryImage Image = emptyImage();
-    addReadableBytes(Image, Address, MemoryCount.data(),
-                     sizeof(MemoryCount));
+    addReadableBytes(Image, Address, MemoryCount.data(), sizeof(MemoryCount));
     NdOpEmulator Emulator(Image);
     Emulator.setStrictMode(true);
     Emulator.setLoadCollect(true);
@@ -2614,8 +2601,7 @@ TEST(X86APXEVEXExistingGpr,
   // Widening signed multiplication consumes the low dword of each qword
   // source lane. A broadcast therefore reads one qword, not one dword.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0xed,
-                                           0x5b, 0x28, 0x08};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0xed, 0x5b, 0x28, 0x08};
     constexpr uint64_t Address = UINT64_C(0x3a000);
     constexpr uint64_t Mask = UINT64_C(0xb6);
     const uint64_t Memory = UINT64_C(0xfeedfacefffffffd);
@@ -2654,8 +2640,7 @@ TEST(X86APXEVEXExistingGpr,
   // VNNI byte dot products treat the first source as unsigned bytes and the
   // broadcast memory dword as four signed byte multipliers per result lane.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0x6d,
-                                           0x5b, 0x50, 0x08};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0x6d, 0x5b, 0x50, 0x08};
     constexpr uint64_t Address = UINT64_C(0x3b000);
     constexpr uint64_t Mask = UINT64_C(0x9a65);
     const std::array<int8_t, 4> Memory = {1, -2, 3, -4};
@@ -2664,16 +2649,14 @@ TEST(X86APXEVEXExistingGpr,
     for (unsigned Lane = 0; Lane < Old.size(); ++Lane) {
       int64_t Dot = 0;
       for (unsigned Element = 0; Element < 4; ++Element) {
-        const uint8_t Value =
-            static_cast<uint8_t>(Lane * 9 + Element * 17 + 1);
+        const uint8_t Value = static_cast<uint8_t>(Lane * 9 + Element * 17 + 1);
         Source[Lane * 4 + Element] = Value;
         Dot += static_cast<int64_t>(Value) * Memory[Element];
       }
       Old[Lane] = UINT32_C(0xc1c10000) + Lane;
-      Expected[Lane] =
-          (Mask & (UINT64_C(1) << Lane)) != 0
-              ? Old[Lane] + static_cast<uint32_t>(Dot)
-              : Old[Lane];
+      Expected[Lane] = (Mask & (UINT64_C(1) << Lane)) != 0
+                           ? Old[Lane] + static_cast<uint32_t>(Dot)
+                           : Old[Lane];
     }
 
     const std::vector<LowOp> Ops = liftX64(Encoding);
@@ -2708,8 +2691,7 @@ TEST(X86APXEVEXExistingGpr,
   // The signed-saturating byte form clamps after adding all four products to
   // the signed dword accumulator, while inactive lanes retain their value.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0x6d,
-                                           0x4b, 0x51, 0xcb};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0x6d, 0x4b, 0x51, 0xcb};
     constexpr uint64_t Mask = UINT64_C(0xd36b);
     std::vector<uint8_t> First(64);
     std::vector<int8_t> Second(64);
@@ -2724,9 +2706,8 @@ TEST(X86APXEVEXExistingGpr,
         else if (Lane % 3 == 1)
           Second[Lane * 4 + Element] = -128;
         else
-          Second[Lane * 4 + Element] =
-              static_cast<int8_t>(Element % 2 == 0 ? Element + 1
-                                                   : -int(Element + 1));
+          Second[Lane * 4 + Element] = static_cast<int8_t>(
+              Element % 2 == 0 ? Element + 1 : -int(Element + 1));
         Dot += static_cast<int64_t>(First[Lane * 4 + Element]) *
                Second[Lane * 4 + Element];
       }
@@ -2735,12 +2716,11 @@ TEST(X86APXEVEXExistingGpr,
                       : (Lane % 3 == 1 ? INT32_MIN + 4
                                        : static_cast<int32_t>(1000 + Lane));
       const int64_t Sum = static_cast<int64_t>(Old[Lane]) + Dot;
-      const int32_t Saturated = static_cast<int32_t>(std::clamp<int64_t>(
-          Sum, static_cast<int64_t>(INT32_MIN),
-          static_cast<int64_t>(INT32_MAX)));
-      Expected[Lane] = (Mask & (UINT64_C(1) << Lane)) != 0
-                           ? Saturated
-                           : Old[Lane];
+      const int32_t Saturated = static_cast<int32_t>(
+          std::clamp<int64_t>(Sum, static_cast<int64_t>(INT32_MIN),
+                              static_cast<int64_t>(INT32_MAX)));
+      Expected[Lane] =
+          (Mask & (UINT64_C(1) << Lane)) != 0 ? Saturated : Old[Lane];
     }
 
     const std::vector<LowOp> Ops = liftX64(Encoding);
@@ -2759,8 +2739,7 @@ TEST(X86APXEVEXExistingGpr,
   // Signed word pairs produce one wrapping dword accumulation per output
   // lane, including negative products and positive overflow.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0x6d,
-                                           0x4b, 0x52, 0xcb};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0x6d, 0x4b, 0x52, 0xcb};
     constexpr uint64_t Mask = UINT64_C(0xa95b);
     std::vector<int16_t> First(32), Second(32);
     std::vector<uint32_t> Old(16), Expected(16);
@@ -2774,15 +2753,12 @@ TEST(X86APXEVEXExistingGpr,
       Second[Lane * 2] = B0;
       Second[Lane * 2 + 1] = B1;
       Old[Lane] = UINT32_C(0x70000000) + Lane * UINT32_C(0x01010101);
-      const int64_t Dot = static_cast<int64_t>(A0) * B0 +
-                          static_cast<int64_t>(A1) * B1;
-      const uint32_t Accumulated =
-          static_cast<uint32_t>(static_cast<int64_t>(
-                                    static_cast<int32_t>(Old[Lane])) +
-                                Dot);
-      Expected[Lane] = (Mask & (UINT64_C(1) << Lane)) != 0
-                           ? Accumulated
-                           : Old[Lane];
+      const int64_t Dot =
+          static_cast<int64_t>(A0) * B0 + static_cast<int64_t>(A1) * B1;
+      const uint32_t Accumulated = static_cast<uint32_t>(
+          static_cast<int64_t>(static_cast<int32_t>(Old[Lane])) + Dot);
+      Expected[Lane] =
+          (Mask & (UINT64_C(1) << Lane)) != 0 ? Accumulated : Old[Lane];
     }
 
     const std::vector<LowOp> Ops = liftX64(Encoding);
@@ -2801,8 +2777,7 @@ TEST(X86APXEVEXExistingGpr,
   // The signed-saturating word form clamps both overflow directions after
   // the two products have been accumulated.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0x6d,
-                                           0x4b, 0x53, 0xcb};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0x6d, 0x4b, 0x53, 0xcb};
     constexpr uint64_t Mask = UINT64_C(0x6db7);
     std::vector<int16_t> First(32), Second(32);
     std::vector<int32_t> Old(16), Expected(16);
@@ -2815,15 +2790,13 @@ TEST(X86APXEVEXExistingGpr,
       Old[Lane] = Positive ? INT32_MAX - 8 : INT32_MIN + 8;
       const int64_t Dot =
           static_cast<int64_t>(First[Lane * 2]) * Second[Lane * 2] +
-          static_cast<int64_t>(First[Lane * 2 + 1]) *
-              Second[Lane * 2 + 1];
+          static_cast<int64_t>(First[Lane * 2 + 1]) * Second[Lane * 2 + 1];
       const int64_t Sum = static_cast<int64_t>(Old[Lane]) + Dot;
-      const int32_t Saturated = static_cast<int32_t>(std::clamp<int64_t>(
-          Sum, static_cast<int64_t>(INT32_MIN),
-          static_cast<int64_t>(INT32_MAX)));
-      Expected[Lane] = (Mask & (UINT64_C(1) << Lane)) != 0
-                           ? Saturated
-                           : Old[Lane];
+      const int32_t Saturated = static_cast<int32_t>(
+          std::clamp<int64_t>(Sum, static_cast<int64_t>(INT32_MIN),
+                              static_cast<int64_t>(INT32_MAX)));
+      Expected[Lane] =
+          (Mask & (UINT64_C(1) << Lane)) != 0 ? Saturated : Old[Lane];
     }
 
     const std::vector<LowOp> Ops = liftX64(Encoding);
@@ -2842,8 +2815,7 @@ TEST(X86APXEVEXExistingGpr,
   // The low IFMA form consumes only the low 52 bits of each qword and a
   // broadcast memory source is fault-suppressed when no qword is active.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0xed,
-                                           0x5b, 0xb4, 0x08};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0xed, 0x5b, 0xb4, 0x08};
     constexpr uint64_t Address = UINT64_C(0x3c000);
     constexpr uint64_t Mask = UINT64_C(0xad);
     constexpr uint64_t OperandMask = UINT64_C(0x000fffffffffffff);
@@ -2853,8 +2825,7 @@ TEST(X86APXEVEXExistingGpr,
       First[Lane] = UINT64_C(0xabc1234567890) + Lane * 19;
       Old[Lane] = UINT64_C(0xf1f1000000000000) + Lane;
       const uint64_t Contribution =
-          ((First[Lane] & OperandMask) * (Memory & OperandMask)) &
-          OperandMask;
+          ((First[Lane] & OperandMask) * (Memory & OperandMask)) & OperandMask;
       Expected[Lane] = (Mask & (UINT64_C(1) << Lane)) != 0
                            ? Old[Lane] + Contribution
                            : Old[Lane];
@@ -2891,8 +2862,7 @@ TEST(X86APXEVEXExistingGpr,
 
   // The high IFMA form adds bits 103:52 of the unsigned 52-by-52 product.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0xed,
-                                           0x4b, 0xb5, 0xcb};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0xed, 0x4b, 0xb5, 0xcb};
     constexpr uint64_t Mask = UINT64_C(0xb6);
     constexpr uint64_t OperandMask = UINT64_C(0x000fffffffffffff);
     constexpr uint64_t HalfMask = (UINT64_C(1) << 26) - 1;
@@ -2912,10 +2882,10 @@ TEST(X86APXEVEXExistingGpr,
       First[Lane] = UINT64_C(0xffedcba987654321) + Lane * 13;
       Second[Lane] = UINT64_C(0xeeabcde123456789) + Lane * 17;
       Old[Lane] = UINT64_C(0xd1d1000000000000) + Lane;
-      Expected[Lane] = (Mask & (UINT64_C(1) << Lane)) != 0
-                           ? Old[Lane] +
-                                 highProductHalf(First[Lane], Second[Lane])
-                           : Old[Lane];
+      Expected[Lane] =
+          (Mask & (UINT64_C(1) << Lane)) != 0
+              ? Old[Lane] + highProductHalf(First[Lane], Second[Lane])
+              : Old[Lane];
     }
 
     const std::vector<LowOp> Ops = liftX64(Encoding);
@@ -2944,12 +2914,10 @@ TEST(X86APXEVEXExistingGpr,
     for (unsigned Lane = 0; Lane < Old.size(); ++Lane) {
       First[Lane] = UINT32_C(0x10203040) + Lane * UINT32_C(0x01020408);
       Old[Lane] = UINT32_C(0xe1e10000) + Lane;
-      const uint32_t Shifted =
-          static_cast<uint32_t>((First[Lane] << Count) |
-                                (Memory >> (32 - Count)));
-      Expected[Lane] = (Mask & (UINT64_C(1) << Lane)) != 0
-                           ? Shifted
-                           : Old[Lane];
+      const uint32_t Shifted = static_cast<uint32_t>((First[Lane] << Count) |
+                                                     (Memory >> (32 - Count)));
+      Expected[Lane] =
+          (Mask & (UINT64_C(1) << Lane)) != 0 ? Shifted : Old[Lane];
     }
 
     const std::vector<LowOp> Ops = liftX64(Encoding);
@@ -2972,8 +2940,7 @@ TEST(X86APXEVEXExistingGpr,
   // Variable right double shifts read one count per active qword. A zero
   // count preserves the primary destination lane instead of shifting by 64.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0xed,
-                                           0x4b, 0x73, 0x08};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0xed, 0x4b, 0x73, 0x08};
     constexpr uint64_t Address = UINT64_C(0x3e000);
     constexpr uint64_t Mask = UINT64_C(0xad);
     const std::vector<uint64_t> Counts = {0, 1, 63, 64, 65, 17, 127, 32};
@@ -2985,9 +2952,8 @@ TEST(X86APXEVEXExistingGpr,
       const uint64_t Shifted =
           Count == 0 ? Old[Lane]
                      : (Old[Lane] >> Count) | (Source[Lane] << (64 - Count));
-      Expected[Lane] = (Mask & (UINT64_C(1) << Lane)) != 0
-                           ? Shifted
-                           : Old[Lane];
+      Expected[Lane] =
+          (Mask & (UINT64_C(1) << Lane)) != 0 ? Shifted : Old[Lane];
     }
 
     const std::vector<LowOp> Ops = liftX64(Encoding);
@@ -3023,8 +2989,7 @@ TEST(X86APXEVEXExistingGpr,
   // VPERMW has a full-vector, non-fault-suppressing memory source. The
   // writemask controls output words, but a zero mask still reads the tuple.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0xed,
-                                           0x4b, 0x8d, 0x08};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0xed, 0x4b, 0x8d, 0x08};
     constexpr uint64_t Address = UINT64_C(0x3f000);
     constexpr uint64_t Mask = UINT64_C(0x96a5c33c);
     std::vector<uint16_t> Indices(32), Data(32), Old(32), Expected(32);
@@ -3041,7 +3006,8 @@ TEST(X86APXEVEXExistingGpr,
     const std::vector<LowOp> Ops = liftX64(Encoding);
     ASSERT_FALSE(Ops.empty());
     BinaryImage Image = emptyImage();
-    addReadableBytes(Image, Address, Data.data(), Data.size() * sizeof(Data[0]));
+    addReadableBytes(Image, Address, Data.data(),
+                     Data.size() * sizeof(Data[0]));
     NdOpEmulator Emulator(Image);
     Emulator.setStrictMode(true);
     Emulator.setLoadCollect(true);
@@ -3070,8 +3036,7 @@ TEST(X86APXEVEXExistingGpr,
   // VPMULTISHIFTQB also has non-fault-suppressing memory semantics. A
   // broadcast qword supplies the wrapped 8-bit window for every output byte.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0xed,
-                                           0x5b, 0x83, 0x08};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0xed, 0x5b, 0x83, 0x08};
     constexpr uint64_t Address = UINT64_C(0x40000);
     constexpr uint64_t Mask = UINT64_C(0xa5c33c9669f00f5a);
     const uint64_t Data = UINT64_C(0xfedcba9876543210);
@@ -3119,16 +3084,15 @@ TEST(X86APXEVEXExistingGpr,
   // VPSHUFBITQMB writes one mask bit per control byte. Its optional mask is
   // zeroing-only and suppresses the corresponding byte loads from memory.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0x6d,
-                                           0x4b, 0x8f, 0x08};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0x6d, 0x4b, 0x8f, 0x08};
     constexpr uint64_t Address = UINT64_C(0x41000);
     constexpr uint64_t Mask = UINT64_C(0xa55ac33c9669f00f);
     std::vector<uint64_t> Data(8);
     std::vector<uint8_t> Controls(64);
     uint64_t Expected = 0;
     for (unsigned Qword = 0; Qword < Data.size(); ++Qword)
-      Data[Qword] = UINT64_C(0x8040201008040201) ^
-                    (UINT64_C(0x0101010101010101) * Qword);
+      Data[Qword] =
+          UINT64_C(0x8040201008040201) ^ (UINT64_C(0x0101010101010101) * Qword);
     for (unsigned Bit = 0; Bit < Controls.size(); ++Bit) {
       Controls[Bit] = static_cast<uint8_t>(Bit * 19 + 71);
       if ((Mask & (UINT64_C(1) << Bit)) != 0 &&
@@ -3168,8 +3132,7 @@ TEST(X86APXEVEXExistingGpr,
   // VPBLENDMD uses its opmask as a source selector. With EVEX.z, unselected
   // lanes become zero, while selected lanes consume one broadcast dword.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0x6d,
-                                           0xdb, 0x64, 0x08};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf2, 0x6d, 0xdb, 0x64, 0x08};
     constexpr uint64_t Address = UINT64_C(0x42000);
     constexpr uint64_t Mask = UINT64_C(0x96a5);
     const uint32_t Memory = UINT32_C(0x89abcdef);
@@ -3226,8 +3189,7 @@ TEST(X86APXEVEXExistingGpr,
       Indices[Lane] = static_cast<int32_t>(Lane * 4);
       Source[Lane] = UINT32_C(0x71820000) + Lane;
       const uint32_t Old = UINT32_C(0x31420000) + Lane;
-      std::memcpy(Initial.data() + Displacement + Lane * 16, &Old,
-                  sizeof(Old));
+      std::memcpy(Initial.data() + Displacement + Lane * 16, &Old, sizeof(Old));
     }
 
     const std::vector<LowOp> Ops = liftX64(Encoding);
@@ -3278,8 +3240,7 @@ TEST(X86APXEVEXExistingGpr,
   // VUNPCKHPD interleaves independently inside every 128-bit lane before
   // applying its qword writemask.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf1, 0xed,
-                                           0x4b, 0x15, 0xcb};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf1, 0xed, 0x4b, 0x15, 0xcb};
     constexpr uint64_t Mask = UINT64_C(0xb5);
     const std::vector<uint64_t> Left = {
         10, 11, 20, 21, 30, 31, 40, 41,
@@ -3293,9 +3254,8 @@ TEST(X86APXEVEXExistingGpr,
     std::vector<uint64_t> Old(8), Expected(8);
     for (unsigned Lane = 0; Lane < Old.size(); ++Lane) {
       Old[Lane] = UINT64_C(0x4242000000000000) + Lane;
-      Expected[Lane] = (Mask & (UINT64_C(1) << Lane)) != 0
-                           ? Raw[Lane]
-                           : Old[Lane];
+      Expected[Lane] =
+          (Mask & (UINT64_C(1) << Lane)) != 0 ? Raw[Lane] : Old[Lane];
     }
 
     const std::vector<LowOp> Ops = liftX64(Encoding);
@@ -3315,8 +3275,7 @@ TEST(X86APXEVEXExistingGpr,
   // A zero writemask also suppresses an unpack broadcast source when no
   // destination element consumes that source.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0xf1, 0x6c,
-                                           0x5b, 0x14, 0x08};
+    const std::vector<uint8_t> Encoding = {0x62, 0xf1, 0x6c, 0x5b, 0x14, 0x08};
     std::vector<uint32_t> Left(16, UINT32_C(0x3f800000));
     std::vector<uint32_t> Old(16);
     for (unsigned Lane = 0; Lane < Old.size(); ++Lane)
@@ -3353,20 +3312,19 @@ TEST(X86APXEVEXExistingGpr,
         true,  false, false, true,  true,  false, false, true,
     };
     std::vector<uint32_t> Left(16), Right(16);
-    Left[0] = UINT32_C(0x3f800000);  // less
+    Left[0] = UINT32_C(0x3f800000); // less
     Right[0] = UINT32_C(0x40000000);
-    Left[1] = UINT32_C(0x40000000);  // equal
+    Left[1] = UINT32_C(0x40000000); // equal
     Right[1] = UINT32_C(0x40000000);
-    Left[2] = UINT32_C(0x40400000);  // greater
+    Left[2] = UINT32_C(0x40400000); // greater
     Right[2] = UINT32_C(0x40000000);
-    Left[3] = UINT32_C(0x7fc00001);  // unordered quiet NaN
+    Left[3] = UINT32_C(0x7fc00001); // unordered quiet NaN
     Right[3] = UINT32_C(0x3f800000);
 
     for (unsigned Immediate = 0; Immediate < 256; ++Immediate) {
       SCOPED_TRACE(Immediate);
       const std::vector<uint8_t> Encoding = {
-          0x62, 0xf1, 0x6c, 0x4a, 0xc2, 0xcb,
-          static_cast<uint8_t>(Immediate)};
+          0x62, 0xf1, 0x6c, 0x4a, 0xc2, 0xcb, static_cast<uint8_t>(Immediate)};
       const std::vector<LowOp> Ops = liftX64(Encoding);
       ASSERT_FALSE(Ops.empty());
       BinaryImage Image = emptyImage();
@@ -3444,28 +3402,29 @@ TEST(X86APXEVEXExistingGpr,
       SCOPED_TRACE(Name);
       const std::vector<LowOp> Ops = liftX64(Encoding);
       ASSERT_FALSE(Ops.empty());
-      const auto Guard = std::find_if(Ops.begin(), Ops.end(), [](const LowOp &Op) {
-        return Op.Opcode == NdOp::INTRINSIC && Op.NumInputs == 4 &&
-               Op.Inputs[0].isConst() &&
-               static_cast<Intrinsic>(Op.Inputs[0].Offset) ==
-                   Intrinsic::X86RequireDivPrecondition;
-      });
-      const auto Divide = std::find_if(Ops.begin(), Ops.end(), [](const LowOp &Op) {
-        return Op.Opcode == NdOp::INT_DIV || Op.Opcode == NdOp::INT_SDIV;
-      });
+      const auto Guard =
+          std::find_if(Ops.begin(), Ops.end(), [](const LowOp &Op) {
+            return Op.Opcode == NdOp::INTRINSIC && Op.NumInputs == 4 &&
+                   Op.Inputs[0].isConst() &&
+                   static_cast<Intrinsic>(Op.Inputs[0].Offset) ==
+                       Intrinsic::X86RequireDivPrecondition;
+          });
+      const auto Divide =
+          std::find_if(Ops.begin(), Ops.end(), [](const LowOp &Op) {
+            return Op.Opcode == NdOp::INT_DIV || Op.Opcode == NdOp::INT_SDIV;
+          });
       ASSERT_NE(Guard, Ops.end());
       ASSERT_NE(Divide, Ops.end());
       EXPECT_LT(std::distance(Ops.begin(), Guard),
                 std::distance(Ops.begin(), Divide));
 
       const unsigned Bits = Size * 8;
-      const uint64_t Mask =
-          Bits == 64 ? UINT64_MAX : (UINT64_C(1) << Bits) - 1;
+      const uint64_t Mask = Bits == 64 ? UINT64_MAX : (UINT64_C(1) << Bits) - 1;
       uint64_t RaxBefore = UINT64_C(0x5a5a5a5a5a5a5a5a);
       uint64_t RdxBefore = UINT64_C(0xa5a5a5a5a5a5a5a5);
       if (Size == 1) {
-        RaxBefore = (RaxBefore & ~UINT64_C(0xffff)) |
-                    ((High & Mask) << 8) | (Low & Mask);
+        RaxBefore = (RaxBefore & ~UINT64_C(0xffff)) | ((High & Mask) << 8) |
+                    (Low & Mask);
       } else {
         RaxBefore = (RaxBefore & ~Mask) | (Low & Mask);
         RdxBefore = (RdxBefore & ~Mask) | (High & Mask);
@@ -3503,8 +3462,7 @@ TEST(X86APXEVEXExistingGpr,
             Lifted.getRegister(x86reg::RAX);
         ASSERT_TRUE(RaxAfter.has_value());
         if (Size == 1) {
-          EXPECT_EQ(*RaxAfter & UINT64_C(0xffff),
-                    ExpectedQuotient & Mask);
+          EXPECT_EQ(*RaxAfter & UINT64_C(0xffff), ExpectedQuotient & Mask);
         } else {
           const std::optional<uint64_t> RdxAfter =
               Lifted.getRegister(x86reg::RDX);
@@ -3530,8 +3488,7 @@ TEST(X86APXEVEXExistingGpr,
     };
     for (const DivWidthCase &Width : DivWidths) {
       const unsigned Bits = Width.Size * 8;
-      const uint64_t Mask =
-          Bits == 64 ? UINT64_MAX : (UINT64_C(1) << Bits) - 1;
+      const uint64_t Mask = Bits == 64 ? UINT64_MAX : (UINT64_C(1) << Bits) - 1;
       const uint64_t SignedLimit = UINT64_C(1) << (Bits - 1);
       RunLiftedDiv(Width.Name, Width.UnsignedEncoding, Width.Size, Mask, 0, 1,
                    true, Mask);
@@ -3541,8 +3498,8 @@ TEST(X86APXEVEXExistingGpr,
                    false, 0);
       RunLiftedDiv(Width.Name, Width.SignedEncoding, Width.Size,
                    SignedLimit - 1, 0, 1, true, SignedLimit - 1);
-      RunLiftedDiv(Width.Name, Width.SignedEncoding, Width.Size, SignedLimit,
-                   0, 1, false, 0);
+      RunLiftedDiv(Width.Name, Width.SignedEncoding, Width.Size, SignedLimit, 0,
+                   1, false, 0);
       RunLiftedDiv(Width.Name, Width.SignedEncoding, Width.Size, SignedLimit,
                    Mask, 1, true, SignedLimit);
       RunLiftedDiv(Width.Name, Width.SignedEncoding, Width.Size,
@@ -3591,12 +3548,10 @@ TEST(X86APXEVEXExistingGpr,
     Emulator.setRegisterBytes(0x71000120, Divisor256);
     ASSERT_TRUE(Emulator.step(arithmetic(NdOp::INT_DIV, 0x71000140, 32,
                                          0x71000100, 32, 0x71000120, 32)));
-    EXPECT_EQ(Emulator.getRegisterBytes(0x71000140),
-              limbs({0, 0, 1, 0}));
+    EXPECT_EQ(Emulator.getRegisterBytes(0x71000140), limbs({0, 0, 1, 0}));
     ASSERT_TRUE(Emulator.step(arithmetic(NdOp::INT_REM, 0x71000160, 32,
                                          0x71000100, 32, 0x71000120, 32)));
-    EXPECT_EQ(Emulator.getRegisterBytes(0x71000160),
-              limbs({123, 0, 0, 0}));
+    EXPECT_EQ(Emulator.getRegisterBytes(0x71000160), limbs({123, 0, 0, 0}));
 
     // Signed division truncates toward zero and the remainder keeps the
     // dividend's sign at both wide operand sizes.
@@ -3614,13 +3569,11 @@ TEST(X86APXEVEXExistingGpr,
       const uint64_t Base = UINT64_C(0x71000200) + Width;
       Emulator.setRegisterBytes(Base, NegativeFifteen);
       Emulator.setRegisterBytes(Base + 0x40, Four);
-      ASSERT_TRUE(Emulator.step(arithmetic(NdOp::INT_SDIV, Base + 0x80,
-                                           Width, Base, Width, Base + 0x40,
-                                           Width)));
+      ASSERT_TRUE(Emulator.step(arithmetic(NdOp::INT_SDIV, Base + 0x80, Width,
+                                           Base, Width, Base + 0x40, Width)));
       EXPECT_EQ(Emulator.getRegisterBytes(Base + 0x80), NegativeThree);
-      ASSERT_TRUE(Emulator.step(arithmetic(NdOp::INT_SREM, Base + 0xc0,
-                                           Width, Base, Width, Base + 0x40,
-                                           Width)));
+      ASSERT_TRUE(Emulator.step(arithmetic(NdOp::INT_SREM, Base + 0xc0, Width,
+                                           Base, Width, Base + 0x40, Width)));
       EXPECT_EQ(Emulator.getRegisterBytes(Base + 0xc0), NegativeThree);
     }
 
@@ -3700,8 +3653,8 @@ TEST(X86APXEVEXExistingGpr,
 
     Emulator.setRegister(x86reg::FPU_CW, 0x0c7f);
     Emulator.setRegister(x86reg::FPU_SW, 0xffff);
-    Emulator.setRegisterBytes(
-        x86reg::ST0, x87Value(UINT64_C(0x8000000000000000), 0x3fff));
+    Emulator.setRegisterBytes(x86reg::ST0,
+                              x87Value(UINT64_C(0x8000000000000000), 0x3fff));
     const std::vector<LowOp> FninitOps = liftX64({0xdb, 0xe3});
     ASSERT_FALSE(FninitOps.empty());
     ASSERT_EQ(Emulator.run(FninitOps), FninitOps.size());
@@ -3744,10 +3697,10 @@ TEST(X86APXEVEXExistingGpr,
     // 5 / 3 distinguishes truncating FPREM (+2) from nearest-even FPREM1
     // (-1), and also distinguishes their quotient condition-code encodings.
     Emulator.reset();
-    Emulator.setRegisterBytes(
-        x86reg::ST0, x87Value(UINT64_C(0xa000000000000000), 0x4001));
-    Emulator.setRegisterBytes(
-        x86reg::ST1, x87Value(UINT64_C(0xc000000000000000), 0x4000));
+    Emulator.setRegisterBytes(x86reg::ST0,
+                              x87Value(UINT64_C(0xa000000000000000), 0x4001));
+    Emulator.setRegisterBytes(x86reg::ST1,
+                              x87Value(UINT64_C(0xc000000000000000), 0x4000));
     const std::vector<LowOp> FpremOps = liftX64({0xd9, 0xf8});
     ASSERT_FALSE(FpremOps.empty());
     ASSERT_EQ(Emulator.run(FpremOps), FpremOps.size());
@@ -3757,10 +3710,10 @@ TEST(X86APXEVEXExistingGpr,
               UINT64_C(0x0200));
 
     Emulator.reset();
-    Emulator.setRegisterBytes(
-        x86reg::ST0, x87Value(UINT64_C(0xa000000000000000), 0x4001));
-    Emulator.setRegisterBytes(
-        x86reg::ST1, x87Value(UINT64_C(0xc000000000000000), 0x4000));
+    Emulator.setRegisterBytes(x86reg::ST0,
+                              x87Value(UINT64_C(0xa000000000000000), 0x4001));
+    Emulator.setRegisterBytes(x86reg::ST1,
+                              x87Value(UINT64_C(0xc000000000000000), 0x4000));
     const std::vector<LowOp> Fprem1Ops = liftX64({0xd9, 0xf5});
     ASSERT_FALSE(Fprem1Ops.empty());
     ASSERT_EQ(Emulator.run(Fprem1Ops), Fprem1Ops.size());
@@ -3772,10 +3725,10 @@ TEST(X86APXEVEXExistingGpr,
     // A large exponent delta performs a deterministic partial reduction and
     // reports C2=1.  X87ReadStatus must return that exact architectural word.
     Emulator.reset();
-    Emulator.setRegisterBytes(
-        x86reg::ST0, x87Value(UINT64_C(0x8000000000000001), 0x7ffe));
-    Emulator.setRegisterBytes(
-        x86reg::ST1, x87Value(UINT64_C(0x8000000000000003), 0xffbe));
+    Emulator.setRegisterBytes(x86reg::ST0,
+                              x87Value(UINT64_C(0x8000000000000001), 0x7ffe));
+    Emulator.setRegisterBytes(x86reg::ST1,
+                              x87Value(UINT64_C(0x8000000000000003), 0xffbe));
     ASSERT_EQ(Emulator.run(FpremOps), FpremOps.size());
     EXPECT_EQ(Emulator.getRegisterBytes(x86reg::ST0),
               x87Value(UINT64_C(0xc000000000000000), 0x7f82));
@@ -3884,9 +3837,9 @@ TEST(X86APXEVEXExistingGpr,
       EXPECT_EQ(Effect->Output, NdVar::reg(x86reg::ZF, 1));
       EXPECT_EQ(Effect->Inputs[1].Size, 8U);
       EXPECT_EQ(Effect->Inputs[2].Size, 8U);
-      EXPECT_EQ(std::count_if(Ops.begin(), Ops.end(), [](const LowOp &Op) {
-                  return Op.Opcode == NdOp::LOAD;
-                }),
+      EXPECT_EQ(std::count_if(
+                    Ops.begin(), Ops.end(),
+                    [](const LowOp &Op) { return Op.Opcode == NdOp::LOAD; }),
                 0);
 
       BinaryImage Image = imageWith(&Command, true);
@@ -3954,8 +3907,8 @@ TEST(X86APXEVEXExistingGpr,
     NdOpEmulator MissingSource(MissingSourceImage);
     MissingSource.setStrictMode(true);
     MissingSource.setLoadCollect(true);
-    ASSERT_TRUE(MissingSource.setX86EnqueueContext(
-        3, UINT32_C(0x8000002a), 48));
+    ASSERT_TRUE(
+        MissingSource.setX86EnqueueContext(3, UINT32_C(0x8000002a), 48));
     seedRegisters(MissingSource, PortalAddress);
     EXPECT_LT(MissingSource.run(Ops), Ops.size());
     EXPECT_TRUE(MissingSource.getLoadRecords().empty());
@@ -3969,8 +3922,8 @@ TEST(X86APXEVEXExistingGpr,
     NdOpEmulator InvalidHeader(InvalidHeaderImage);
     InvalidHeader.setStrictMode(true);
     InvalidHeader.setLoadCollect(true);
-    ASSERT_TRUE(InvalidHeader.setX86EnqueueContext(
-        3, UINT32_C(0x8000002a), 48));
+    ASSERT_TRUE(
+        InvalidHeader.setX86EnqueueContext(3, UINT32_C(0x8000002a), 48));
     seedRegisters(InvalidHeader, PortalAddress);
     EXPECT_LT(InvalidHeader.run(Ops), Ops.size());
     ASSERT_EQ(InvalidHeader.getLoadRecords().size(), 1U);
@@ -3981,8 +3934,7 @@ TEST(X86APXEVEXExistingGpr,
     NdOpEmulator Misaligned(MisalignedImage);
     Misaligned.setStrictMode(true);
     Misaligned.setLoadCollect(true);
-    ASSERT_TRUE(Misaligned.setX86EnqueueContext(
-        3, UINT32_C(0x8000002a), 48));
+    ASSERT_TRUE(Misaligned.setX86EnqueueContext(3, UINT32_C(0x8000002a), 48));
     seedRegisters(Misaligned, PortalAddress + 1);
     EXPECT_LT(Misaligned.run(Ops), Ops.size());
     ASSERT_EQ(Misaligned.getLoadRecords().size(), 1U);
@@ -3992,8 +3944,8 @@ TEST(X86APXEVEXExistingGpr,
     NdOpEmulator UnmappedPortal(UnmappedPortalImage);
     UnmappedPortal.setStrictMode(true);
     UnmappedPortal.setLoadCollect(true);
-    ASSERT_TRUE(UnmappedPortal.setX86EnqueueContext(
-        3, UINT32_C(0x8000002a), 48));
+    ASSERT_TRUE(
+        UnmappedPortal.setX86EnqueueContext(3, UINT32_C(0x8000002a), 48));
     seedRegisters(UnmappedPortal, PortalAddress);
     EXPECT_LT(UnmappedPortal.run(Ops), Ops.size());
     ASSERT_EQ(UnmappedPortal.getLoadRecords().size(), 1U);
@@ -4371,7 +4323,7 @@ TEST(X86APXEVEXExistingGpr,
 }
 
 TEST(X86APXEVEXExistingGpr,
-     FourSourceFmaUsesEverySourceAndCopiesScalarUpperLanes) {
+     FourSourceFmaUsesEverySourceAndClearsScalarUpperLanes) {
   const std::vector<uint8_t> PackedEncoding = {0xc4, 0xe3, 0x71,
                                                0x68, 0xd3, 0x4f};
   std::vector<float> FirstSource = {1.25f, -2.0f, 3.5f, -4.25f};
@@ -4398,11 +4350,11 @@ TEST(X86APXEVEXExistingGpr,
   EXPECT_EQ(PackedEmulator.getRegisterBytes(x86reg::XMM2), ExpectedBytes);
   EXPECT_FALSE(PackedEmulator.skips().any());
 
-  // The low is4 nibble is architecturally ignored. Scalar FMA4 copies bits
-  // 127:32 from src1, not from the old independent destination.
+  // The low is4 nibble is architecturally ignored. Scalar FMA4 clears every
+  // destination bit above the computed scalar element.
   const std::vector<uint8_t> ScalarEncoding = {0xc4, 0xe3, 0x71,
                                                0x6a, 0xd3, 0x4f};
-  Expected = FirstSource;
+  Expected.assign(FirstSource.size(), 0.0f);
   Expected[0] = std::fma(FirstSource[0], SecondSource[0], ThirdSource[0]);
   const std::vector<LowOp> ScalarOps = liftX64(ScalarEncoding);
   ASSERT_FALSE(ScalarOps.empty());
@@ -4418,6 +4370,104 @@ TEST(X86APXEVEXExistingGpr,
   ExpectedBytes.resize(64, 0);
   EXPECT_EQ(ScalarEmulator.getRegisterBytes(x86reg::XMM2), ExpectedBytes);
   EXPECT_FALSE(ScalarEmulator.skips().any());
+}
+
+template <typename Float>
+void expectScalarFourSourceFma(Arch Target, bool NegateProduct,
+                               bool SubtractAddend, bool W, bool Memory) {
+  SCOPED_TRACE(sizeof(Float));
+  const uint8_t Opcode = static_cast<uint8_t>(
+      0x6a + (sizeof(Float) == 8 ? 1 : 0) + (NegateProduct ? 0x10 : 0) +
+      (SubtractAddend ? 4 : 0));
+  const std::vector<uint8_t> Encoding = {
+      0xc4,
+      0xe3,
+      static_cast<uint8_t>(W ? 0xf1 : 0x71),
+      Opcode,
+      static_cast<uint8_t>(Memory ? 0x10 : 0xd3),
+      0x4f};
+  const std::vector<LowOp> Ops = liftForArch(Encoding, Target);
+  ASSERT_FALSE(Ops.empty());
+  std::vector<Float> First(64 / sizeof(Float), Float(29));
+  std::vector<Float> Second(First.size(), Float(41));
+  std::vector<Float> Third(First.size(), Float(53));
+  std::vector<Float> OldDestination(First.size(), Float(17));
+  First[0] = Float(1.25);
+  Second[0] = Float(2.5);
+  Third[0] = Float(-0.75);
+  std::vector<Float> Expected(First.size(), Float{});
+  Expected[0] = std::fma(NegateProduct ? -First[0] : First[0], Second[0],
+                         SubtractAddend ? -Third[0] : Third[0]);
+  BinaryImage Image = emptyImage();
+  Image.Arch = Target;
+  Image.Bits = Target == Arch::X64 ? Bitness::Bits64 : Bitness::Bits32;
+  const Float MemoryValue = W ? Third[0] : Second[0];
+  addReadableBytes(Image, 0x4000, &MemoryValue, sizeof(MemoryValue));
+  NdOpEmulator Emulator(Image);
+  Emulator.setStrictMode(true);
+  Emulator.setLoadCollect(true);
+  Emulator.setRegister(x86reg::RAX, 0x4000);
+  Emulator.setRegisterBytes(x86reg::XMM1, bytes(First));
+  Emulator.setRegisterBytes(x86reg::XMM2, bytes(OldDestination));
+  Emulator.setRegisterBytes(x86reg::XMM3, bytes(W ? Third : Second));
+  Emulator.setRegisterBytes(x86reg::XMM4, bytes(W ? Second : Third));
+  size_t Loads = 0;
+  for (const LowOp &Op : Ops)
+    if (Op.Opcode == NdOp::LOAD) {
+      ++Loads;
+      EXPECT_EQ(Op.Output.Size, sizeof(Float));
+    }
+  EXPECT_EQ(Loads, Memory ? 1u : 0u);
+  ASSERT_EQ(Emulator.run(Ops), Ops.size());
+  EXPECT_EQ(Emulator.getLoadRecords().size(), Memory ? 1u : 0u);
+  EXPECT_EQ(Emulator.getRegisterBytes(x86reg::XMM2), bytes(Expected));
+  EXPECT_FALSE(Emulator.skips().any());
+}
+
+TEST(X86APXEVEXExistingGpr,
+     ScalarFourSourceFmaClearsUpperStateAcrossEncodings) {
+  for (Arch Target : {Arch::X86, Arch::X64})
+    for (bool NegateProduct : {false, true})
+      for (bool SubtractAddend : {false, true})
+        for (bool W : {false, true})
+          for (bool Memory : {false, true}) {
+            SCOPED_TRACE(std::to_string(static_cast<int>(Target)) + "/" +
+                         std::to_string(NegateProduct) + "/" +
+                         std::to_string(SubtractAddend) + "/" +
+                         std::to_string(W) + "/" + std::to_string(Memory));
+            expectScalarFourSourceFma<float>(Target, NegateProduct,
+                                             SubtractAddend, W, Memory);
+            expectScalarFourSourceFma<double>(Target, NegateProduct,
+                                              SubtractAddend, W, Memory);
+          }
+}
+
+TEST(X86APXEVEXExistingGpr,
+     X86FourSourceFmaRejectsInconsistentDecoderMetadata) {
+  for (uint8_t ModRM : {uint8_t(0xd3), uint8_t(0x10)}) {
+    const std::vector<uint8_t> Encoding = {0xc4, 0xe3, 0x71, 0x6a, ModRM, 0x4f};
+    expectMutatedLiftFailsClosed(
+        Encoding,
+        [](cs_insn &, cs_x86 &Detail) {
+          Detail.rex = 0x40;
+          return true;
+        },
+        Arch::X86);
+    expectMutatedLiftFailsClosed(
+        Encoding,
+        [](cs_insn &, cs_x86 &Detail) {
+          Detail.addr_size = 8;
+          return true;
+        },
+        Arch::X86);
+    expectMutatedLiftFailsClosed(
+        Encoding,
+        [](cs_insn &, cs_x86 &Detail) {
+          Detail.operands[1].reg = X86_REG_XMM8;
+          return true;
+        },
+        Arch::X86);
+  }
 }
 
 TEST(X86APXEVEXExistingGpr,
@@ -4839,8 +4889,7 @@ void expectPackedConvertControlAndMemoryForms() {
   // vcvtuqq2pd zmm30 {k7}{z}, zmm29, {ru-sae}.  Embedded rounding must
   // override MXCSR and SAE must suppress the precision status update.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0x01, 0xfe,
-                                           0xdf, 0x7a, 0xf5};
+    const std::vector<uint8_t> Encoding = {0x62, 0x01, 0xfe, 0xdf, 0x7a, 0xf5};
     const std::vector<uint64_t> Source(8, UINT64_C(0x0020000000000001));
     const std::vector<uint64_t> Expected(8, UINT64_C(0x4340000000000001));
     const std::vector<LowOp> Ops = liftX64(Encoding);
@@ -4862,13 +4911,17 @@ void expectPackedConvertControlAndMemoryForms() {
   // toward zero, invalid lanes use the unsigned indefinite value, and SAE
   // hides both invalid and precision status.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0x01, 0x7d,
-                                           0x9f, 0x78, 0xf5};
-    const std::vector<uint32_t> Source = {
-        UINT32_C(0x40700000), UINT32_C(0xbf000000),
-        UINT32_C(0x7f800000), UINT32_C(0x7f800001), 0, 0, 0, 0};
-    const std::vector<uint64_t> Expected = {
-        3, 0, UINT64_MAX, UINT64_MAX, 0, 0, 0, 0};
+    const std::vector<uint8_t> Encoding = {0x62, 0x01, 0x7d, 0x9f, 0x78, 0xf5};
+    const std::vector<uint32_t> Source = {UINT32_C(0x40700000),
+                                          UINT32_C(0xbf000000),
+                                          UINT32_C(0x7f800000),
+                                          UINT32_C(0x7f800001),
+                                          0,
+                                          0,
+                                          0,
+                                          0};
+    const std::vector<uint64_t> Expected = {3, 0, UINT64_MAX, UINT64_MAX,
+                                            0, 0, 0,          0};
     const std::vector<LowOp> Ops = liftX64(Encoding);
     ASSERT_FALSE(Ops.empty());
 
@@ -4904,8 +4957,7 @@ void expectPackedConvertControlAndMemoryForms() {
       SCOPED_TRACE(Test.Broadcast ? "broadcast" : "full tuple");
       std::vector<uint64_t> Expected(8);
       for (unsigned Lane = 0; Lane < Expected.size(); ++Lane)
-        Expected[Lane] =
-            Test.Broadcast ? 9 : static_cast<uint64_t>(Lane + 1);
+        Expected[Lane] = Test.Broadcast ? 9 : static_cast<uint64_t>(Lane + 1);
 
       const std::vector<LowOp> Ops = liftX64(Test.Encoding);
       ASSERT_FALSE(Ops.empty());
@@ -4922,8 +4974,7 @@ void expectPackedConvertControlAndMemoryForms() {
       Emulator.setRegister(x86reg::RAX, Address);
       Emulator.setRegister(WriteMask.Offset, UINT64_C(0xff));
       ASSERT_EQ(Emulator.run(Ops), Ops.size());
-      EXPECT_EQ(Emulator.getRegisterBytes(Destination.Offset),
-                bytes(Expected));
+      EXPECT_EQ(Emulator.getRegisterBytes(Destination.Offset), bytes(Expected));
       EXPECT_EQ(Emulator.getLoadRecords().size(), Test.Broadcast ? 1U : 8U);
       EXPECT_FALSE(Emulator.skips().any());
     }
@@ -4931,8 +4982,7 @@ void expectPackedConvertControlAndMemoryForms() {
 
   // vcvtps2dq zmm30 {k7}{z}, zmm29 follows MXCSR when EVEX.b is clear.
   {
-    const std::vector<uint8_t> Encoding = {0x62, 0x01, 0x7d,
-                                           0xcf, 0x5b, 0xf5};
+    const std::vector<uint8_t> Encoding = {0x62, 0x01, 0x7d, 0xcf, 0x5b, 0xf5};
     std::vector<uint32_t> Source(16, 0);
     Source[0] = UINT32_C(0x3fa00000); // 1.25f
     Source[1] = UINT32_C(0xbfa00000); // -1.25f
@@ -4960,8 +5010,7 @@ void expectGenericRex2DecodeLiftAndEmulate() {
   // MAP0 REX2 instruction, rather than one of the dedicated APX decoders.
   // Decode detail, lifting, address formation, the memory read and the EGPR
   // write must all agree on the same five-bit register selections.
-  const std::vector<uint8_t> Encoding = {0xd5, 0x7f, 0x8b,
-                                         0x44, 0xb7, 0xe0};
+  const std::vector<uint8_t> Encoding = {0xd5, 0x7f, 0x8b, 0x44, 0xb7, 0xe0};
   Decoder Dec;
   ASSERT_TRUE(Dec.init(Arch::X64));
   DecodedInsn Insn{};
@@ -5015,16 +5064,14 @@ void expectGenericRex2DecodeLiftAndEmulate() {
   // decoded.  The resulting word move must preserve the upper destination
   // bits; an emulator must not turn this valid sequence into #UD.
   const std::vector<uint8_t> SeparatedRex = {0x4f, 0x66, 0xd5,
-                                              0x55, 0x89, 0xc7};
+                                             0x55, 0x89, 0xc7};
   const std::vector<LowOp> SeparatedOps = liftX64(SeparatedRex);
   ASSERT_FALSE(SeparatedOps.empty());
   BinaryImage RegisterImage = emptyImage();
   NdOpEmulator RegisterEmulator(RegisterImage);
   RegisterEmulator.setStrictMode(true);
-  RegisterEmulator.setRegister(x86reg::R24,
-                               UINT64_C(0x0123456789abcdef));
-  RegisterEmulator.setRegister(x86reg::R31,
-                               UINT64_C(0xfedcba9876543210));
+  RegisterEmulator.setRegister(x86reg::R24, UINT64_C(0x0123456789abcdef));
+  RegisterEmulator.setRegister(x86reg::R31, UINT64_C(0xfedcba9876543210));
   RegisterEmulator.setRegister(x86reg::CF, 1);
   ASSERT_EQ(RegisterEmulator.run(SeparatedOps), SeparatedOps.size());
   EXPECT_EQ(RegisterEmulator.getRegister(x86reg::R24),
@@ -5076,43 +5123,83 @@ void expectExplicitMsrInvalidateAndHighCFailClosed() {
     const std::vector<MsrCase> Cases = {
         {"rdmsr-imm",
          {0x62, 0xff, 0xff, 0x08, 0xf6, 0xc1, 0x78, 0x56, 0x34, 0x12},
-         X86MsrAccessKind::RdmsrImmediate, false, true, x86reg::R17, 0,
+         X86MsrAccessKind::RdmsrImmediate,
+         false,
+         true,
+         x86reg::R17,
+         0,
          UINT32_C(0x12345678)},
         {"wrmsrns-imm",
          {0x62, 0xff, 0xfe, 0x08, 0xf6, 0xc2, 0x78, 0x56, 0x34, 0x12},
-         X86MsrAccessKind::WrmsrnsImmediate, true, true, x86reg::R18, 0,
+         X86MsrAccessKind::WrmsrnsImmediate,
+         true,
+         true,
+         x86reg::R18,
+         0,
          UINT32_C(0x12345678)},
         {"urdmsr-evex-imm",
          {0x62, 0xff, 0x7f, 0x08, 0xf8, 0xc3, 0x00, 0x1b, 0x00, 0x00},
-         X86MsrAccessKind::UrdmsrEvexImmediate, false, true, x86reg::R19, 0,
+         X86MsrAccessKind::UrdmsrEvexImmediate,
+         false,
+         true,
+         x86reg::R19,
+         0,
          UINT32_C(0x1b00)},
         {"uwrmsr-evex-imm",
          {0x62, 0xff, 0x7e, 0x08, 0xf8, 0xc4, 0x01, 0x1b, 0x00, 0x00},
-         X86MsrAccessKind::UwrmsrEvexImmediate, true, true, x86reg::R20, 0,
+         X86MsrAccessKind::UwrmsrEvexImmediate,
+         true,
+         true,
+         x86reg::R20,
+         0,
          UINT32_C(0x1b01)},
         {"urdmsr-evex-reg",
          {0x62, 0xec, 0x7f, 0x08, 0xf8, 0xf5},
-         X86MsrAccessKind::UrdmsrEvexRegister, false, false, x86reg::R21,
-         x86reg::R22, 0},
+         X86MsrAccessKind::UrdmsrEvexRegister,
+         false,
+         false,
+         x86reg::R21,
+         x86reg::R22,
+         0},
         {"uwrmsr-evex-reg",
          {0x62, 0xcc, 0x7e, 0x08, 0xf8, 0xf8},
-         X86MsrAccessKind::UwrmsrEvexRegister, true, false, x86reg::R24,
-         x86reg::R23, 0},
+         X86MsrAccessKind::UwrmsrEvexRegister,
+         true,
+         false,
+         x86reg::R24,
+         x86reg::R23,
+         0},
         {"urdmsr-legacy-reg",
          {0xf2, 0x45, 0x0f, 0x38, 0xf8, 0xc7},
-         X86MsrAccessKind::UrdmsrLegacyRegister, false, false, x86reg::R15,
-         x86reg::R8, 0},
+         X86MsrAccessKind::UrdmsrLegacyRegister,
+         false,
+         false,
+         x86reg::R15,
+         x86reg::R8,
+         0},
         {"uwrmsr-legacy-reg",
          {0xf3, 0x45, 0x0f, 0x38, 0xf8, 0xc7},
-         X86MsrAccessKind::UwrmsrLegacyRegister, true, false, x86reg::R15,
-         x86reg::R8, 0},
+         X86MsrAccessKind::UwrmsrLegacyRegister,
+         true,
+         false,
+         x86reg::R15,
+         x86reg::R8,
+         0},
         {"urdmsr-vex-imm",
          {0xc4, 0x07, 0x7b, 0xf8, 0xc7, 0x00, 0x1b, 0x00, 0x00},
-         X86MsrAccessKind::UrdmsrVexImmediate, false, true, x86reg::R15, 0,
+         X86MsrAccessKind::UrdmsrVexImmediate,
+         false,
+         true,
+         x86reg::R15,
+         0,
          UINT32_C(0x1b00)},
         {"uwrmsr-vex-imm",
          {0xc4, 0x07, 0x7a, 0xf8, 0xc7, 0x01, 0x1b, 0x00, 0x00},
-         X86MsrAccessKind::UwrmsrVexImmediate, true, true, x86reg::R15, 0,
+         X86MsrAccessKind::UwrmsrVexImmediate,
+         true,
+         true,
+         x86reg::R15,
+         0,
          UINT32_C(0x1b01)},
     };
 
@@ -5186,21 +5273,19 @@ void expectExplicitMsrInvalidateAndHighCFailClosed() {
       EXPECT_FALSE(Emulator.skips().any());
     }
 
-    expectMutatedLiftFailsClosed(Cases[0].Encoding,
-                                 [](cs_insn &, cs_x86 &X86) {
-                                   X86.operands[0].reg = X86_REG_R18;
-                                   return true;
-                                 });
+    expectMutatedLiftFailsClosed(Cases[0].Encoding, [](cs_insn &, cs_x86 &X86) {
+      X86.operands[0].reg = X86_REG_R18;
+      return true;
+    });
     expectMutatedLiftFailsClosed(Cases[2].Encoding,
                                  [](cs_insn &Insn, cs_x86 &) {
                                    Insn.bytes[Insn.size - 1] ^= 1;
                                    return true;
                                  });
-    expectMutatedLiftFailsClosed(Cases[6].Encoding,
-                                 [](cs_insn &, cs_x86 &X86) {
-                                   X86.rex ^= 1;
-                                   return true;
-                                 });
+    expectMutatedLiftFailsClosed(Cases[6].Encoding, [](cs_insn &, cs_x86 &X86) {
+      X86.rex ^= 1;
+      return true;
+    });
   }
 
   // INVPCID owns descriptor validation and the architectural invalidation in
@@ -5209,13 +5294,15 @@ void expectExplicitMsrInvalidateAndHighCFailClosed() {
   {
     const std::vector<uint8_t> Encoding = {0x66, 0x0f, 0x38, 0x82, 0x10};
     const std::vector<LowOp> Ops = liftX64(Encoding);
-    ASSERT_EQ(std::count_if(Ops.begin(), Ops.end(), [](const LowOp &Op) {
-                return Op.Opcode == NdOp::INTRINSIC && Op.NumInputs > 0 &&
-                       Op.Inputs[0].isConst() &&
-                       static_cast<Intrinsic>(Op.Inputs[0].Offset) ==
-                           Intrinsic::X86Invalidate;
-              }),
-              1);
+    ASSERT_EQ(
+        std::count_if(Ops.begin(), Ops.end(),
+                      [](const LowOp &Op) {
+                        return Op.Opcode == NdOp::INTRINSIC &&
+                               Op.NumInputs > 0 && Op.Inputs[0].isConst() &&
+                               static_cast<Intrinsic>(Op.Inputs[0].Offset) ==
+                                   Intrinsic::X86Invalidate;
+                      }),
+        1);
     ASSERT_FALSE(Ops.empty());
     const LowOp &Op = Ops.front();
     ASSERT_EQ(Op.Opcode, NdOp::INTRINSIC);
@@ -5240,9 +5327,10 @@ void expectExplicitMsrInvalidateAndHighCFailClosed() {
     EXPECT_TRUE(intrinsicX86InvalidateShapeIsValid(
         Intrinsic::X86Invalidate, x86InvalidateLowShape(Op, Arch::X64)));
     EXPECT_TRUE(isSideeffectIntrinsic(Intrinsic::X86Invalidate));
-    EXPECT_TRUE(std::none_of(Ops.begin(), Ops.end(), [](const LowOp &Candidate) {
-      return Candidate.Opcode == NdOp::LOAD;
-    }));
+    EXPECT_TRUE(
+        std::none_of(Ops.begin(), Ops.end(), [](const LowOp &Candidate) {
+          return Candidate.Opcode == NdOp::LOAD;
+        }));
 
     BinaryImage Image = emptyImage();
     NdOpEmulator Emulator(Image);
