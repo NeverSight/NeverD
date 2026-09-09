@@ -82,18 +82,28 @@ def extract_dex_inputs(apk: Path, directory: Path) -> list[dict]:
     A recovery that silently ignores any such entry will fail comparison.
     """
     directory.mkdir(parents=True, exist_ok=False)
-    result, seen, total = [], set(), 0
+    result, explicit, node_types, total = [], set(), {}, 0
     with zipfile.ZipFile(apk) as archive:
         entries = archive.infolist()
         require(len(entries) <= MAX_ZIP_ENTRIES, "APK entry budget exceeded")
         for entry in entries:
             name = entry.filename
-            parts = name.rstrip("/").split("/")
+            parts = (name[:-1] if name.endswith("/") else name).split("/")
             require(name and not name.startswith("/") and "\\" not in name
                     and "\x00" not in name and not any(part in ("", ".", "..") for part in parts)
                     and not re.match(r"^[A-Za-z]:", name), "Unsafe APK entry name")
-            require(name.casefold() not in seen, "Duplicate or case-colliding APK entry")
-            seen.add(name.casefold())
+            # ZIP names are case-sensitive. Android resources routinely use
+            # both res/-A.xml and res/-a.xml; only numbered DEX copies reach
+            # the host filesystem, so resource names need no case folding.
+            canonical = "/".join(parts)
+            require(canonical not in explicit, "Duplicate APK entry")
+            explicit.add(canonical)
+            for index in range(1, len(parts) + 1):
+                node = "/".join(parts[:index])
+                directory_node = index < len(parts) or entry.is_dir()
+                require(node not in node_types or node_types[node] == directory_node,
+                        "APK file/directory path conflict")
+                node_types[node] = directory_node
             require(not stat.S_ISLNK(entry.external_attr >> 16), "APK contains a symlink")
             require(not entry.flag_bits & 1, "Encrypted ZIP entries are unsupported")
             if entry.is_dir() or not name.lower().endswith(".dex"):
@@ -110,7 +120,7 @@ def extract_dex_inputs(apk: Path, directory: Path) -> list[dict]:
                 stream.write(data)
             result.append({"input": name, "path": path, "sha256": hashlib.sha256(data).hexdigest(),
                            "header": header})
-    require(result, "Official APK contains no DEX input")
+    require(result, "Application APK contains no DEX input")
     return sorted(result, key=lambda item: item["input"])
 
 

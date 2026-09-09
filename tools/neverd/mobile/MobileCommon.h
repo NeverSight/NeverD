@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -63,8 +64,9 @@ void validateTree(const fs::path &root, const Limits &limits,
                   uint64_t extra_bytes = 0, uint64_t extra_files = 0);
 void copyTree(const fs::path &source, const fs::path &dest,
               const Limits &limits);
-std::vector<fs::path> extractZip(const fs::path &source, const fs::path &dest,
-                                 const Limits &limits);
+std::vector<fs::path>
+extractZip(const fs::path &source, const fs::path &dest, const Limits &limits,
+           const std::function<bool(const fs::path &)> &Select = {});
 std::optional<std::string> findProgram(std::string_view name);
 void runTool(
     const std::vector<std::string> &argv, const fs::path &log, uint64_t timeout,

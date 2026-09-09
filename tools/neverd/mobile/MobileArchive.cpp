@@ -81,6 +81,7 @@ struct Entry {
   uint32_t crc = 0;
   unsigned method = 0, flags = 0;
   bool directory = false;
+  bool selected = false;
 };
 
 void zip64(std::string_view extra, uint64_t &uncompressed, uint64_t &compressed,
@@ -115,13 +116,13 @@ void zip64(std::string_view extra, uint64_t &uncompressed, uint64_t &compressed,
     throw Error("ZIP64 entry is missing its size metadata");
 }
 
-void extractEntry(Archive &archive, const Entry &entry, const fs::path &dest,
-                  Budget &budget) {
+void extractEntry(Archive &archive, const Entry &entry,
+                  const std::optional<fs::path> &dest, Budget &budget) {
   // Directory entries can contain an encoded empty deflate stream. Validate
   // that stream and its CRC too, without opening a file at the directory path.
   std::optional<OutputFile> file;
-  if (!entry.directory)
-    file.emplace(dest);
+  if (dest && !entry.directory)
+    file.emplace(*dest);
   uint64_t read = 0, written = 0;
   uLong crc = crc32(0, nullptr, 0);
   auto write = [&](std::string_view bytes) {
@@ -186,8 +187,9 @@ void extractEntry(Archive &archive, const Entry &entry, const fs::path &dest,
 }
 } // namespace
 
-std::vector<fs::path> extractZip(const fs::path &source, const fs::path &dest,
-                                 const Limits &limits) {
+std::vector<fs::path>
+extractZip(const fs::path &source, const fs::path &dest, const Limits &limits,
+           const std::function<bool(const fs::path &)> &Select) {
   limits.validate();
   Budget budget(limits);
   Archive archive(source, limits.max_bytes);
@@ -247,19 +249,21 @@ std::vector<fs::path> extractZip(const fs::path &source, const fs::path &dest,
     throw Error("ZIP central directory exceeds its input");
 
   std::vector<Entry> entries;
-  std::map<std::string, std::pair<std::string, bool>> paths;
+  using PathMap = std::map<std::string, std::pair<std::string, bool>>;
+  PathMap ArchivePaths, OutputPaths;
   uint64_t cursor = directory, total = 0;
-  auto reserve = [&](const fs::path &path, bool directory,
-                     bool explicit_entry) {
+  auto reserve = [&](PathMap &Paths, const fs::path &path, bool directory,
+                     bool explicit_entry, bool Portable) {
     auto spelling = pathText(path);
-    auto [it, inserted] = paths.emplace(portableCaseKey(spelling),
-                                        std::make_pair(spelling, directory));
+    auto [it, inserted] =
+        Paths.emplace(Portable ? portableCaseKey(spelling) : spelling,
+                      std::make_pair(spelling, directory));
     if (!inserted &&
         (it->second.first != spelling || it->second.second != directory ||
          (!directory && explicit_entry)))
       throw Error("archive paths have conflicting case, duplicate files or "
                   "file/directory identities");
-    if (paths.size() > limits.max_files)
+    if (Paths.size() > limits.max_files)
       throw Error("archive exceeds the file-count limit including directories");
   };
   std::set<std::string> explicit_paths;
@@ -292,6 +296,7 @@ std::vector<fs::path> extractZip(const fs::path &source, const fs::path &dest,
     auto name = filename(entry.raw_name, entry.flags & 0x800);
     entry.directory = !name.empty() && name.back() == '/';
     entry.path = relativeMember(name);
+    entry.selected = !Select || (!entry.directory && Select(entry.path));
     zip64(std::string_view(fields).substr(name_length, extra_length),
           entry.uncompressed, entry.compressed, entry.local, entry_disk);
     if (entry_disk || (entry.flags & (1 | 0x40 | 0x2000)))
@@ -309,12 +314,20 @@ std::vector<fs::path> extractZip(const fs::path &source, const fs::path &dest,
     if (entry.uncompressed > limits.max_bytes - total)
       throw Error("archive exceeds the uncompressed byte limit");
     total += entry.uncompressed;
-    if (!explicit_paths.insert(portableCaseKey(pathText(entry.path))).second)
+    if (!explicit_paths.insert(pathText(entry.path)).second)
       throw Error("duplicate archive path");
     for (auto parent = entry.path.parent_path(); !parent.empty();
-         parent = parent.parent_path())
-      reserve(parent, true, false);
-    reserve(entry.path, entry.directory, true);
+         parent = parent.parent_path()) {
+      reserve(ArchivePaths, parent, true, false, false);
+      if (entry.selected)
+        reserve(OutputPaths, parent, true, false, true);
+    }
+    // ZIP identities are case-sensitive. Only entries written to host paths
+    // need the additional portable filesystem collision check. APK resources
+    // can legitimately differ only by case and remain in the original APK.
+    reserve(ArchivePaths, entry.path, entry.directory, true, false);
+    if (entry.selected)
+      reserve(OutputPaths, entry.path, entry.directory, true, true);
     entries.push_back(std::move(entry));
     cursor += 46 + name_length + extra_length + comment_length;
   }
@@ -362,7 +375,11 @@ std::vector<fs::path> extractZip(const fs::path &source, const fs::path &dest,
   std::vector<fs::path> written;
   for (const auto &entry : entries) {
     budget.check();
-    if (entry.directory) {
+    if (!entry.selected) {
+      // Unwritten members still undergo decompression, length and CRC checks;
+      // selecting code does not bypass whole-archive integrity validation.
+      extractEntry(archive, entry, std::nullopt, budget);
+    } else if (entry.directory) {
       extractEntry(archive, entry, dest / entry.path, budget);
       fs::create_directories(dest / entry.path);
     } else {

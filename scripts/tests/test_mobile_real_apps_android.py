@@ -17,6 +17,7 @@ import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
+import warnings
 import zipfile
 
 from scripts.mobile_real_apps_android import (
@@ -304,9 +305,41 @@ class APKInputTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             apk = root / "input.apk"
-            apk.write_bytes(apk_bytes([("classes.dex", dex_bytes()), ("CLASSES.dex", dex_bytes())]))
-            with self.assertRaisesRegex(AndroidEvidenceError, "case-colliding"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                apk.write_bytes(apk_bytes([("classes.dex", dex_bytes()), ("classes.dex", dex_bytes())]))
+            with self.assertRaisesRegex(AndroidEvidenceError, "Duplicate"):
                 extract_dex_inputs(apk, root / "dex")
+
+    def test_case_distinct_resource_names_do_not_block_complete_dex_inventory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            apk = root / "input.apk"
+            apk.write_bytes(apk_bytes([("res/-A.xml", b"upper"), ("res/-a.xml", b"lower"),
+                                       ("classes.dex", dex_bytes())]))
+            result = extract_dex_inputs(apk, root / "dex")
+            self.assertEqual([row["input"] for row in result], ["classes.dex"])
+
+    def test_case_distinct_dex_names_preserve_distinct_numbered_input_identities(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            apk = root / "input.apk"
+            apk.write_bytes(apk_bytes([("classes.dex", dex_bytes()), ("CLASSES.dex", dex_bytes())]))
+            result = extract_dex_inputs(apk, root / "dex")
+            self.assertEqual({row["input"] for row in result}, {"classes.dex", "CLASSES.dex"})
+            self.assertEqual(len({row["path"].name for row in result}), 2)
+            self.assertTrue(all(row["path"].read_bytes() == dex_bytes() for row in result))
+
+    def test_exact_file_directory_conflicts_fail_in_both_entry_orders(self):
+        for entries in ([("assets", b"file"), ("assets/code.dex", dex_bytes())],
+                        [("assets/code.dex", dex_bytes()), ("assets", b"file")],
+                        [("assets/", b""), ("assets", b"file")]):
+            with self.subTest(entries=[name for name, _ in entries]), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                apk = root / "input.apk"
+                apk.write_bytes(apk_bytes(entries))
+                with self.assertRaises(AndroidEvidenceError):
+                    extract_dex_inputs(apk, root / "dex")
 
     def test_zip_symlinks_are_rejected_without_following_them(self):
         with tempfile.TemporaryDirectory() as temporary:
