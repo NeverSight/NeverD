@@ -281,9 +281,9 @@ TEST_F(MobileCommonTest, LocalAlignmentPaddingPreservesPayloadValidation) {
 
 TEST_F(MobileCommonTest, AlignmentPaddingDoesNotHideMissingExtraMetadata) {
   unsigned index = 0;
-  for (const auto &tail : {std::string("\1", 1), std::string("\0\1", 2),
-                           std::string("\0\0\1", 3),
-                           std::string("\x34\x12\x10\0", 4)}) {
+  for (const auto &tail :
+       {std::string("\1", 1), std::string("\0\1", 2), std::string("\0\0\1", 3),
+        std::string("\x34\x12\x10\0", 4)}) {
     ZipItem item{"classes.dex", "bytecode"};
     item.local_extra = tail;
     auto archive = root / ("bad-extra-" + std::to_string(index++) + ".zip");
