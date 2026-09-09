@@ -99,7 +99,7 @@
     "icecubes-release-arm64-simulator", "icecubes-release-arm64-device",
     "wikipedia-release-arm64-simulator", "wikipedia-release-arm64-device"
   ],
-  "required_jobs": ["guards", "build", "android", "ios"],
+  "required_jobs": ["trigger", "producer", "guards", "build", "android", "ios"],
   "qualification_requirements": {
     "independent_holdouts": {
       "status": "incomplete",

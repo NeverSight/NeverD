@@ -1,28 +1,84 @@
 name: Mobile Real Applications
 
-# The initial corpus measures real gaps. The final release gate always checks
-# the complete manifest, including variants not yet implemented in this
-# baseline. A baseline run is not a promotion to mature mobile support.
+# GitHub gives workflow_run read-only access to default-branch caches. Keep
+# third-party app builds out of push/workflow_dispatch cache-write contexts.
+# https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#cache-access-for-low-trust-workflow-triggers
+# The complete manifest remains required even while baseline cases collect gaps.
 on:
-  push:
+  workflow_run:
+    workflows: [Mobile Decompilation]
+    types: [completed]
     branches: [dev]
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: mobile-real-apps-${{ github.ref }}
+  group: mobile-real-apps-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
   cancel-in-progress: true
 
 jobs:
+  trigger:
+    name: Verify the upstream run identity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      consumer_commit: ${{ steps.source.outputs.consumer_commit }}
+      producer_run_id: ${{ steps.source.outputs.producer_run_id }}
+      producer_run_attempt: ${{ steps.source.outputs.producer_run_attempt }}
+      producer_conclusion: ${{ steps.source.outputs.producer_conclusion }}
+    steps:
+      # workflow_run's github.sha names trusted default-branch code. Only this
+      # verifier runs before the event and REST source identity are reconciled.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Bind this run to the exact trusted dev revision and attempt
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/mobile_real_apps_trigger.py \
+            --event "$GITHUB_EVENT_PATH" --github-output "$GITHUB_OUTPUT" \
+            --output "$RUNNER_TEMP/mobile-trigger.json"
+      - name: Preserve the verified trigger identity
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mobile-trigger
+          path: ${{ runner.temp }}/mobile-trigger.json
+          if-no-files-found: error
+          retention-days: 14
+
+  producer:
+    name: Require the upstream regression result
+    needs: trigger
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      # A valid failed upstream run can still collect diagnostic app evidence.
+      # Its failure is an independent required prerequisite of the final gate.
+      - env:
+          PRODUCER_CONCLUSION: ${{ needs.trigger.outputs.producer_conclusion }}
+        run: test "$PRODUCER_CONCLUSION" = success
+
   guards:
     name: Acceptance integrity
+    needs: trigger
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.trigger.outputs.consumer_commit }}
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -33,11 +89,13 @@ jobs:
             scripts.tests.test_mobile_real_apps_android \
             scripts.tests.test_mobile_real_apps_common \
             scripts.tests.test_mobile_real_apps_ios \
+            scripts.tests.test_mobile_real_apps_trigger \
             scripts.tests.test_mobile_release_gate \
             scripts.tests.test_mobile_ios_backend -v
 
   build:
     name: Build NeverD (${{ matrix.host }})
+    needs: trigger
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
@@ -48,19 +106,15 @@ jobs:
             runner: ubuntu-24.04
           - host: macos-arm64
             runner: macos-26
-    env:
-      SCCACHE_GHA_ENABLED: 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.trigger.outputs.consumer_commit }}
           submodules: recursive
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
-      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: 'v0.16.0'
       - name: Linux dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install --yes clang cmake ninja-build zlib1g-dev
@@ -75,8 +129,6 @@ jobs:
           cmake -S . -B build-real-apps -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -DNEVERD_LLVM_PREBUILT=ON \
             -DNEVERD_BUILD_PLUGINS=OFF \
             -DNEVERD_ENABLE_PYTHON_PLUGINS=OFF \
@@ -85,7 +137,7 @@ jobs:
         run: cmake --build build-real-apps --target neverd --parallel 3
       - name: Bind binary artifact to this exact source
         env:
-          CONSUMER_COMMIT: ${{ github.sha }}
+          CONSUMER_COMMIT: ${{ needs.trigger.outputs.consumer_commit }}
           BUILD_HOST: ${{ matrix.host }}
         run: |
           python - <<'PY'
@@ -128,7 +180,7 @@ jobs:
 
   android:
     name: Android ${{ matrix.app }} official release
-    needs: build
+    needs: [trigger, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 80
     strategy:
@@ -145,6 +197,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.trigger.outputs.consumer_commit }}
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -171,7 +224,7 @@ jobs:
             'build-tools;35.0.0' 'build-tools;36.0.0' 'platforms;android-35' 'platforms;android-36'
       - name: Recover the complete pinned APK and collect acceptance evidence
         env:
-          CONSUMER_COMMIT: ${{ github.sha }}
+          CONSUMER_COMMIT: ${{ needs.trigger.outputs.consumer_commit }}
           CASE_ID: ${{ matrix.app }}-official-release
           LD_LIBRARY_PATH: ${{ runner.temp }}/neverd-host/bin
         run: |
@@ -191,7 +244,7 @@ jobs:
 
   ios:
     name: iOS ${{ matrix.app }} ${{ matrix.sdk }} arm64 Release
-    needs: build
+    needs: [trigger, build]
     runs-on: macos-26
     timeout-minutes: 80
     strategy:
@@ -224,6 +277,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.trigger.outputs.consumer_commit }}
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -246,7 +300,7 @@ jobs:
           tar -xzf "$RUNNER_TEMP/neverd-download/neverd-host.tar.gz" -C "$RUNNER_TEMP/neverd-host"
       - name: Build genuine iOS Release input and recover every bundled Mach-O
         env:
-          CONSUMER_COMMIT: ${{ github.sha }}
+          CONSUMER_COMMIT: ${{ needs.trigger.outputs.consumer_commit }}
           CASE_ID: ${{ matrix.case_id }}
           DYLD_LIBRARY_PATH: ${{ runner.temp }}/neverd-host/bin
         run: |
@@ -267,13 +321,14 @@ jobs:
 
   release-gate:
     name: Complete mobile release qualification
-    if: always()
-    needs: [guards, build, android, ios]
+    if: ${{ always() && needs.trigger.result == 'success' }}
+    needs: [trigger, producer, guards, build, android, ios]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.trigger.outputs.consumer_commit }}
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -293,7 +348,7 @@ jobs:
       - name: Require the full matrix, independent rebuilt behavior and holdouts
         if: always()
         env:
-          CONSUMER_COMMIT: ${{ github.sha }}
+          CONSUMER_COMMIT: ${{ needs.trigger.outputs.consumer_commit }}
         run: |
           python scripts/check_mobile_release_gate.py \
             --manifest scripts/mobile_real_apps.json \
