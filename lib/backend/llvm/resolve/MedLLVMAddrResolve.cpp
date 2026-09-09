@@ -1989,13 +1989,12 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
 
   std::function<bool(const MedVar &, int, std::set<Key>, std::set<FrameSlotKey>,
                      std::set<Key>)>
-      prove = [&](const MedVar &Start, int Depth, std::set<Key> Seen,
-                  std::set<FrameSlotKey> ActiveFrameSlots,
-                  std::set<Key> AnchoredPhis) -> bool {
-    if (Forbidden && sameVar(Start, *Forbidden))
-      return stableOffsetFailure("forbidden", Start, Depth);
-    if (valueIsAuthenticatedModelZero(Start))
-      return true;
+      prove;
+  std::function<bool(const MedVar &, int, std::set<Key>, std::set<FrameSlotKey>,
+                     std::set<Key>)>
+      proveUncached = [&](const MedVar &Start, int Depth, std::set<Key> Seen,
+                          std::set<FrameSlotKey> ActiveFrameSlots,
+                          std::set<Key> AnchoredPhis) -> bool {
     // Recognize a scalar recurrence before applying the acyclic-depth budget:
     // a long lowered arithmetic chain can return to its PHI only after dozens
     // nodes.  Every non-cyclic initialization arm is still audited below.
@@ -2561,6 +2560,48 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
                  AnchoredPhis))
         return stableOffsetFailure("unstable-input", Start, Depth);
     return true;
+  };
+  // Reuse only completed proofs independent of recurrence or memory authority.
+  // A context-dependent descendant invalidates every enclosing proof, including
+  // arithmetic parents; excluding only PHI and LOAD cache entries is not
+  // enough.
+  std::map<AddressProvenanceVarKey, int> IndependentProofs;
+  size_t ContextGeneration = 0;
+  prove = [&](const MedVar &Start, int Depth, std::set<Key> Seen,
+              std::set<FrameSlotKey> ActiveFrameSlots,
+              std::set<Key> AnchoredPhis) -> bool {
+    if (Forbidden && sameVar(Start, *Forbidden))
+      return stableOffsetFailure("forbidden", Start, Depth);
+    if (valueIsAuthenticatedModelZero(Start))
+      return true;
+    const bool Cycle = !Start.isConst() && Seen.count(keyOf(Start));
+    const auto CacheKey = addressProvenanceVarKey(Start);
+    if (!Cycle && Depth <= 128) {
+      auto It = IndependentProofs.find(CacheKey);
+      // A certificate obtained deeper in this same proof also fits here. A
+      // shallower certificate cannot discharge a deeper use's depth budget.
+      if (It != IndependentProofs.end() && Depth <= It->second) {
+        if (RemainingProofNodes-- <= 0)
+          return stableOffsetFailure("budget", Start, Depth);
+        return true;
+      }
+    }
+    const size_t GenerationBefore = ContextGeneration;
+    const MedOp *Def = Start.isConst() ? nullptr : lookupDef(Start);
+    if ((!Start.isConst() && lookupPhi(Start)) ||
+        (Def && Def->Opcode == NdOp::LOAD) ||
+        (Cycle && !isExactSelfCopy(Def, Start)))
+      ++ContextGeneration;
+    const bool Result =
+        proveUncached(Start, Depth, std::move(Seen),
+                      std::move(ActiveFrameSlots), std::move(AnchoredPhis));
+    if (Result && !Cycle && Depth <= 128 &&
+        GenerationBefore == ContextGeneration) {
+      auto [It, Inserted] = IndependentProofs.emplace(CacheKey, Depth);
+      if (!Inserted)
+        It->second = std::max(It->second, Depth);
+    }
+    return Result;
   };
   return prove(V, 0, {}, {}, {});
 }

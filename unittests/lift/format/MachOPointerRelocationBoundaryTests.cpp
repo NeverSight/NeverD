@@ -5962,6 +5962,15 @@ bool valueReferencesTarget(const llvm::Value *Root, const llvm::Value *Target,
     return false;
   if (Root == Target)
     return true;
+  // Follow lowered register and PHI slots as well as direct SSA operands.
+  if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(Root))
+    if (const auto *Slot = llvm::dyn_cast<llvm::AllocaInst>(
+            Load->getPointerOperand()->stripPointerCasts()))
+      for (const llvm::User *User : Slot->users())
+        if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(User);
+            Store && Store->getPointerOperand()->stripPointerCasts() == Slot &&
+            valueReferencesTarget(Store->getValueOperand(), Target, Seen))
+          return true;
   const auto *User = llvm::dyn_cast<llvm::User>(Root);
   if (!User)
     return false;
@@ -10137,7 +10146,15 @@ TEST(LLVMDataPointerInvariantBoundary,
               }
           ASSERT_NE(ObservedLoad, nullptr);
           ObservedValue = ObservedLoad->getPointerOperand();
-          EXPECT_EQ(ObservedValue->getName(), "wrptr.mixed");
+          if (Case == WritableOwnerMergeCase::SharedOffsetDiamondLoad) {
+            EXPECT_EQ(ObservedValue->getName(), "wrptr.symbolized");
+            ASSERT_EQ(Emitted->arg_size(), 2u);
+            std::set<const llvm::Value *> SeenOffset;
+            EXPECT_TRUE(valueReferencesTarget(ObservedValue, Emitted->getArg(1),
+                                              SeenOffset));
+          } else {
+            EXPECT_EQ(ObservedValue->getName(), "wrptr.mixed");
+          }
         } else {
           const llvm::StoreInst *ObservedStore = nullptr;
           for (const llvm::BasicBlock &Block : *Emitted)
@@ -12262,6 +12279,66 @@ TEST(LLVMCodePointerInvariantBoundary,
         EXPECT_EQ(Module != nullptr, Expected);
         if (Module)
           expectValidModule(*Module);
+      }
+}
+
+TEST(LLVMDataPointerInvariantBoundary,
+     SharedOffsetProofRetainsProvenanceAndDepthLimits) {
+  enum class Variant { Scalar, Data, Code, Forbidden, DeeperReuse };
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (BinaryFormat Format :
+         {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+      for (Variant Kind : {Variant::Scalar, Variant::Data, Variant::Code,
+                           Variant::Forbidden, Variant::DeeperReuse}) {
+        SCOPED_TRACE(std::string(formatTraceName(Format)) + "/" +
+                     std::to_string(static_cast<int>(TargetArch)) + "/" +
+                     std::to_string(static_cast<int>(Kind)));
+        BinaryImage Image = makeAdjacentWritableOwnerImage(TargetArch, Format);
+        MedFunc Func = makeWritableOwnerMerge(
+            TargetArch, WritableOwnerMergeCase::SharedOffsetDiamondLoad);
+        auto &Ops = Func.Blocks.front().Ops;
+        const MedVar Seed = Func.Params.back();
+        const MedVar Shared = Ops[27].Output;
+        MedVar Root = Shared;
+        if (Kind == Variant::Data || Kind == Variant::Code) {
+          // Equal numeric bits must not reuse a scalar occurrence's proof for
+          // an explicitly address-owned occurrence in the other SELECT arm.
+          Ops[0].Inputs[1] = MedVar::makeConst(
+              DataVA, Seed.Size, ConstantAddressProvenance::Scalar);
+          Ops[0].Inputs[2] = MedVar::makeConst(
+              DataVA, Seed.Size,
+              Kind == Variant::Data ? ConstantAddressProvenance::DataAddress
+                                    : ConstantAddressProvenance::CodeAddress);
+        } else if (Kind == Variant::DeeperReuse) {
+          std::vector<MedOp> Chain;
+          MedVar Current = Shared;
+          for (int I = 0; I < 110; ++I) {
+            MedOp Copy;
+            Copy.Opcode = NdOp::COPY;
+            Copy.Output = Shared;
+            Copy.Output.Id = 1000 + I;
+            Copy.addInput(Current);
+            Current = Copy.Output;
+            Chain.push_back(std::move(Copy));
+          }
+          MedOp Select;
+          Select.Opcode = NdOp::SELECT;
+          Select.Output = Shared;
+          Select.Output.Id = 2000;
+          Select.addInput(Func.Params.front());
+          Select.addInput(Shared);
+          Select.addInput(Current);
+          Root = Select.Output;
+          Chain.push_back(std::move(Select));
+          Ops.insert(Ops.begin() + 28, Chain.begin(), Chain.end());
+        }
+        MedLLVMEmitter Classifier;
+        MedLLVMProvenanceTestPeer::prepareFreshAnalysis(Classifier, Func, Image,
+                                                        TargetArch, Format);
+        EXPECT_EQ(
+            MedLLVMProvenanceTestPeer::stableOffset(
+                Classifier, Root, Kind == Variant::Forbidden ? &Seed : nullptr),
+            Kind == Variant::Scalar);
       }
 }
 
