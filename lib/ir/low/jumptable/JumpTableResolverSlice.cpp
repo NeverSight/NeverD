@@ -3672,6 +3672,11 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     std::vector<uint64_t> *QueryUnsignedFeasibleMasks,
     uint32_t ResolverDepthLimit,
     const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides) const {
+  if (GuardedGroupProofContext)
+    CertifiedEdgeOverrides =
+        CandidateTargetsOverride && CandidateTargetsOverride->empty()
+            ? &GuardedGroupProofContext->EmptyEdges
+            : &GuardedGroupProofContext->Edges;
   if (AnalysisComplete)
     *AnalysisComplete = false;
   if (QueryAnalysisComplete)
@@ -10475,6 +10480,10 @@ std::set<va_t> CFGBuilder::candidateReachableInstructions(
     size_t *GraphWorkBudget, bool *AnalysisComplete,
     const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides,
     bool *ClosedWorldControlFlow) const {
+  if (GuardedGroupProofContext)
+    CertifiedEdgeOverrides = CandidateTargets.empty()
+                                 ? &GuardedGroupProofContext->EmptyEdges
+                                 : &GuardedGroupProofContext->Edges;
   if (AnalysisComplete)
     *AnalysisComplete = false;
   if (ClosedWorldControlFlow)

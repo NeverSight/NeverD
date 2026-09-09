@@ -25,6 +25,8 @@ add_neverd_component_library(NeverDIRLow
   X86ApproxReference.c
   X86ApproxReference28.c
   jumptable/JumpTableResolver.cpp
+  jumptable/JumpTableProofState.cpp
+  jumptable/JumpTableResolverGroup.cpp
   jumptable/JumpTableResolverARM.cpp
   jumptable/JumpTableResolverBounds.cpp
   jumptable/JumpTableResolverEmu.cpp

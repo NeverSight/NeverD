@@ -24,6 +24,7 @@
 #include "llvm/ADT/DenseSet.h"
 
 #include <algorithm>
+#include <array>
 #include <functional>
 #include <limits>
 #include <map>
@@ -805,6 +806,25 @@ public:
   bool hasQuarantinedJumpTableProposalsForTesting() const {
     return !QuarantinedJumpTableProposals.empty();
   }
+  struct JumpTableGroupLifecycleStateForTesting {
+    size_t PublishedMemberCount = 0;
+    bool CommitTailInjected = false;
+    bool CommitTailRollbackClearedAllMembers = false;
+    bool OwnerRevocationInjected = false;
+    size_t OwnerCountBeforeRevocation = 0;
+    bool OwnerRevocationClearedAllMembers = false;
+  };
+  void setExhaustPublishedJumpTableGroupCommitTailForTesting(bool Enable) {
+    ExhaustPublishedJumpTableGroupCommitTailForTesting = Enable;
+  }
+  void setRevokePublishedJumpTableGroupOwnerForTesting(bool Enable) {
+    RevokePublishedJumpTableGroupOwnerForTesting = Enable;
+  }
+  const JumpTableGroupLifecycleStateForTesting &
+  jumpTableGroupLifecycleStateForTesting() const {
+    return JumpTableGroupLifecycleForTesting;
+  }
+
   struct ProposalCleanupEvidenceStateForTesting {
     bool OldStateReserved = false;
     bool OldStateExhausted = false;
@@ -1509,6 +1529,52 @@ private:
 
     bool operator==(const JumpTableInfo &Other) const = default;
   };
+
+  /// Scratch-only assumptions for the narrow i386 dense-guard group proof.
+  /// They are never published as prior role/storage certificates. EmptyEdges
+  /// removes every group edge for a hypothesis-free seed query.
+  struct GuardedJumpTableGroupProofContext {
+    std::set<va_t> Roots;
+    std::map<va_t, std::vector<va_t>> Edges;
+    std::map<va_t, std::vector<va_t>> EmptyEdges;
+  };
+  struct GuardedJumpTableGroupKey {
+    va_t OwnerBegin = InvalidVA;
+    va_t OwnerEnd = InvalidVA;
+    std::array<va_t, 8> Members{};
+    size_t MemberCount = 0;
+    bool operator==(const GuardedJumpTableGroupKey &) const = default;
+  };
+  struct GuardedJumpTableGroupState {
+    GuardedJumpTableGroupKey Key;
+    std::map<va_t, JumpTableInfo> Infos;
+    std::map<va_t, std::vector<va_t>> Targets;
+    bool Published = false;
+  };
+  std::optional<GuardedJumpTableGroupProofContext> GuardedGroupProofContext;
+  std::optional<GuardedJumpTableGroupKey> GuardedGroupIdentity;
+  std::optional<GuardedJumpTableGroupState> GuardedGroupState;
+  bool GuardedGroupRejected = false;
+  bool ExhaustPublishedJumpTableGroupCommitTailForTesting = false;
+  bool RevokePublishedJumpTableGroupOwnerForTesting = false;
+  JumpTableGroupLifecycleStateForTesting JumpTableGroupLifecycleForTesting;
+
+  std::optional<bool> compareJumpTableInfo(const JumpTableInfo &Left,
+                                           const JumpTableInfo &Right,
+                                           size_t &Remaining) const;
+  bool prepayJumpTableInfoCopy(const JumpTableInfo &Info, size_t Copies);
+  bool copyGuardedGroupProofSnapshot(
+      CFGBuilder &Scratch, const GuardedJumpTableGroupProofContext &Context);
+  bool recoverGuardedJumpTableGroup(const BinaryImage &Img, LowFunc &Func,
+                                    llvm::ArrayRef<va_t> Candidates,
+                                    bool &MadeProgress,
+                                    bool &MetadataRefreshed);
+  bool guardedGroupContains(va_t Branch) const;
+  bool guardedGroupIsComplete() const;
+  bool guardedGroupHasNoLiveMembers() const;
+  void closeGuardedGroupOwners(std::set<va_t> &Owners) const;
+  void withdrawGuardedJumpTableGroup(bool Reject);
+  void markGuardedJumpTableGroupIncomplete(llvm::ArrayRef<va_t> Members = {});
 
   bool sliceBackForTableBase(const InsnRecord &Rec, JumpTableInfo &Info);
   bool inferBoundsFromGuard(const InsnRecord &Rec, JumpTableInfo &Info);

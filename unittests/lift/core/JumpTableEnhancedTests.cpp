@@ -291,6 +291,10 @@ static fs::path i386GOTPCModelObj() {
   return fs::path(TEST_OBJ_DIR) / "test_i386_gotpc_model.o";
 }
 
+static fs::path i386GOTOFFStackGroupObj() {
+  return fs::path(TEST_OBJ_DIR) / "test_i386_gotoff_stack_group.o";
+}
+
 static fs::path i386RelocationWriterFootprintObj() {
   return fs::path(TEST_OBJ_DIR) / "test_i386_relocation_writer_footprint.o";
 }
@@ -604,6 +608,358 @@ TEST_F(JTE_X86_32, GOTOFFPeeledLoopKeepsPerDispatchDomains) {
   EXPECT_EQ(Dispatches, (std::set<neverd::va_t>{First->Addr, Loop->Addr}));
   EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
   EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+}
+
+TEST_F(JTE_X86_32, GOTOFFStackLoopKeepsDistinctTableDomains) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTOFFStackGroupObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const auto &Image = *ImageOrErr;
+  const auto *Function = Image.findSymbol("jt_i386_gotoff_two_stack_tables");
+  const auto *First = Image.findSymbol("jt_i386_gotoff_two_stack_first_table");
+  const auto *Second =
+      Image.findSymbol("jt_i386_gotoff_two_stack_second_table");
+  const auto *FirstBranch =
+      Image.findSymbol("jt_i386_gotoff_two_stack_first_branch");
+  const auto *SecondBranch =
+      Image.findSymbol("jt_i386_gotoff_two_stack_second_branch");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(First, nullptr);
+  ASSERT_NE(Second, nullptr);
+  ASSERT_NE(FirstBranch, nullptr);
+  ASSERT_NE(SecondBranch, nullptr);
+  ASSERT_EQ(Second->Addr, First->Addr + 28);
+  for (unsigned Slot = 0; Slot != 14; ++Slot)
+    ASSERT_TRUE(Image.CodePtrRelocSlots.count(First->Addr + 4 * Slot));
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const auto Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Low.RelocatedInstructionScalarModelOccurrences.size(), 1u);
+  EXPECT_TRUE(Builder.i386GOTOFFGraphQueryIssuedForTesting());
+  EXPECT_FALSE(Builder.i386GOTOFFGraphQueryBudgetExhaustedForTesting());
+  ASSERT_EQ(Low.JumpTables.size(), 2u);
+  std::set<neverd::va_t> Bases;
+  for (const auto &Table : Low.JumpTables) {
+    EXPECT_TRUE(Bases.insert(Table.BaseAddr).second);
+    if (Table.InsnAddr == FirstBranch->Addr)
+      EXPECT_EQ(Table.BaseAddr, First->Addr);
+    else {
+      EXPECT_EQ(Table.InsnAddr, SecondBranch->Addr);
+      EXPECT_EQ(Table.BaseAddr, Second->Addr);
+    }
+    EXPECT_TRUE(Table.HasDispatchSlotMap);
+    EXPECT_EQ(Table.SlotIndices, (std::vector<uint32_t>{0, 1, 2, 3, 4, 5, 6}));
+    // LowIR represents dense identity labels implicitly with an empty vector.
+    // Explicit labels must describe the same domain for each separate table.
+    if (!Table.CaseLabels.empty())
+      EXPECT_EQ(Table.CaseLabels, (std::vector<int64_t>{0, 1, 2, 3, 4, 5, 6}));
+    ASSERT_EQ(Table.Targets.size(), 7u);
+    for (unsigned Slot = 0; Slot != 7; ++Slot) {
+      const uint8_t *Bytes = Image.readVA(Table.BaseAddr + 4 * Slot, 4);
+      ASSERT_NE(Bytes, nullptr);
+      const uint32_t Target = uint32_t{Bytes[0]} | uint32_t{Bytes[1]} << 8 |
+                              uint32_t{Bytes[2]} << 16 |
+                              uint32_t{Bytes[3]} << 24;
+      EXPECT_EQ(Table.Targets[Slot], Target);
+    }
+  }
+  EXPECT_EQ(Bases, (std::set<neverd::va_t>{First->Addr, Second->Addr}));
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+  EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+}
+
+TEST_F(JTE_X86_32, GOTOFFStackLoopRejectsUninitializedModelAndStaleGuard) {
+  for (unsigned Variant = 0; Variant != 4; ++Variant) {
+    SCOPED_TRACE(Variant);
+    const bool StaleGuard = Variant != 0;
+    auto ImageOrErr = neverd::loadBinary(i386GOTOFFStackGroupObj());
+    ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+        << llvm::toString(ImageOrErr.takeError());
+    auto &Image = *ImageOrErr;
+    const auto *Function = Image.findSymbol("jt_i386_gotoff_two_stack_tables");
+    const auto *Branch = Image.findSymbol(
+        Variant == 2 ? "jt_i386_gotoff_two_stack_second_branch"
+                     : "jt_i386_gotoff_two_stack_first_branch");
+    const std::array<const char *, 4> MutationNames{
+        "jt_i386_gotoff_two_stack_got_store",
+        "jt_i386_gotoff_two_stack_first_guard",
+        "jt_i386_gotoff_two_stack_second_guard",
+        "jt_i386_gotoff_two_stack_first_guard"};
+    const auto *Mutation = Image.findSymbol(MutationNames[Variant]);
+    ASSERT_NE(Function, nullptr);
+    ASSERT_NE(Branch, nullptr);
+    ASSERT_NE(Mutation, nullptr);
+    const std::array<uint8_t, 3> Expected =
+        StaleGuard ? std::array<uint8_t, 3>{0x83, 0xf8, 0x06}
+                   : std::array<uint8_t, 3>{0x89, 0x45, 0xfc};
+    const uint8_t *Bytes = Image.readVA(Mutation->Addr, Expected.size());
+    ASSERT_NE(Bytes, nullptr);
+    ASSERT_TRUE(std::equal(Expected.begin(), Expected.end(), Bytes));
+    // SUB sets the same unsigned guard flags as CMP, but changes the LOAD's
+    // index from k to k-6. The old [0,6] bound is not a bound on that index.
+    const std::array<uint8_t, 3> Replacement =
+        Variant == 3 ? std::array<uint8_t, 3>{0x83, 0xf8, 0x07}
+        : StaleGuard ? std::array<uint8_t, 3>{0x83, 0xe8, 0x06}
+                     : std::array<uint8_t, 3>{0x90, 0x90, 0x90};
+    ASSERT_TRUE(
+        Image.writeVA(Mutation->Addr, Replacement.data(), Replacement.size()));
+    neverd::Decoder Decoder;
+    ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    const auto Low =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    ASSERT_EQ(Low.RelocatedInstructionScalarModelOccurrences.size(), 1u);
+    EXPECT_TRUE(Builder.i386GOTOFFGraphQueryIssuedForTesting());
+    EXPECT_FALSE(Builder.i386GOTOFFGraphQueryBudgetExhaustedForTesting());
+    EXPECT_TRUE(std::none_of(
+        Low.JumpTables.begin(), Low.JumpTables.end(),
+        [&](const auto &Table) { return Table.InsnAddr == Branch->Addr; }));
+    // Failure of the second member must not publish the successful prefix of
+    // a transaction that relied on both tables' provisional root removal.
+    if (Variant != 1)
+      EXPECT_TRUE(Low.JumpTables.empty());
+    EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
+  }
+}
+
+TEST_F(JTE_X86_32, GOTOFFStackLoopRetainsAdjacentIndependentPointer) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTOFFStackGroupObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  auto &Image = *ImageOrErr;
+  const auto *Function = Image.findSymbol("jt_i386_gotoff_two_stack_tables");
+  const auto *First = Image.findSymbol("jt_i386_gotoff_two_stack_first_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(First, nullptr);
+  const auto FunctionAddr = Function->Addr;
+  const auto FunctionName = Function->Name;
+  const auto FirstAddr = First->Addr;
+  const auto *Owner = Image.getSectionFor(FirstAddr);
+  ASSERT_NE(Owner, nullptr);
+  ASSERT_EQ(Owner->VA, FirstAddr);
+  ASSERT_EQ(Owner->Size, 56u);
+  const auto ExtraSlot = FirstAddr + Owner->Size;
+  const uint8_t *TargetBytes = Image.readVA(FirstAddr, 4);
+  ASSERT_NE(TargetBytes, nullptr);
+  const std::array<uint8_t, 4> Pointer{TargetBytes[0], TargetBytes[1],
+                                       TargetBytes[2], TargetBytes[3]};
+  size_t Changed = 0;
+  for (auto &Segment : Image.Segments) {
+    if (!Segment.contains(FirstAddr))
+      continue;
+    ASSERT_EQ(Segment.VA + Segment.Size, ExtraSlot);
+    ASSERT_EQ(Segment.Data.size(), Segment.Size);
+    Segment.Data.insert(Segment.Data.end(), Pointer.begin(), Pointer.end());
+    Segment.Size += Pointer.size();
+    Segment.FileSz += Pointer.size();
+    ++Changed;
+  }
+  ASSERT_EQ(Changed, 1u);
+  for (auto &Section : Image.Sections)
+    if (Section.VA == FirstAddr) {
+      Section.Size += Pointer.size();
+      Section.FileSz += Pointer.size();
+    }
+  neverd::Symbol Independent;
+  Independent.Name = "independent_case_pointer";
+  Independent.Addr = ExtraSlot;
+  Independent.Size = Pointer.size();
+  Image.Symbols.push_back(std::move(Independent));
+  ASSERT_TRUE(Image.CodePtrRelocSlots.insert(ExtraSlot).second);
+  // The same physical section is not ownership permission for this separate
+  // pointer object. Its reference keeps the shared case an independent root.
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const auto Low = Builder.build(Image, Decoder, FunctionAddr, FunctionName);
+  ASSERT_EQ(Low.RelocatedInstructionScalarModelOccurrences.size(), 1u);
+  EXPECT_TRUE(Builder.i386GOTOFFGraphQueryIssuedForTesting());
+  EXPECT_TRUE(Low.JumpTables.empty());
+  EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
+}
+
+TEST_F(JTE_X86_32, GOTOFFStackLoopRetainsReaderAfterSecondDispatch) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTOFFStackGroupObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const auto &Image = *ImageOrErr;
+  const auto *Function =
+      Image.findSymbol("jt_i386_gotoff_consumer_stack_tables");
+  ASSERT_NE(Function, nullptr);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const auto Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Low.RelocatedInstructionScalarModelOccurrences.size(), 1u);
+  EXPECT_TRUE(Builder.i386GOTOFFGraphQueryIssuedForTesting());
+  EXPECT_TRUE(Low.JumpTables.empty());
+  EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
+}
+
+TEST_F(JTE_X86_32, GOTOFFStackLoopDiscardsGroupOnEvidenceExhaustion) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTOFFStackGroupObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const auto &Image = *ImageOrErr;
+  const auto *Function = Image.findSymbol("jt_i386_gotoff_two_stack_tables");
+  ASSERT_NE(Function, nullptr);
+  for (size_t Budget : {size_t{0}, size_t{30000000}, size_t{60000000}}) {
+    SCOPED_TRACE(Budget);
+    neverd::Decoder Decoder;
+    ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    Builder.setMaskFixedPointEvidenceBudgetForTesting(Budget);
+    const auto Low =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    EXPECT_TRUE(Low.JumpTables.empty());
+    EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
+    EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
+    EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  }
+}
+
+TEST_F(JTE_X86_32, GOTOFFStackLoopFailsClosedOnDedicatedStackBudget) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTOFFStackGroupObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const auto &Image = *ImageOrErr;
+  const auto *Function = Image.findSymbol("jt_i386_gotoff_two_stack_tables");
+  const auto *First = Image.findSymbol("jt_i386_gotoff_two_stack_first_branch");
+  const auto *Second =
+      Image.findSymbol("jt_i386_gotoff_two_stack_second_branch");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(First, nullptr);
+  ASSERT_NE(Second, nullptr);
+  for (size_t Budget : {size_t{0}, size_t{1}}) {
+    SCOPED_TRACE(Budget);
+    neverd::Decoder Decoder;
+    ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    // Keep the stage and candidate budgets unchanged: this exercises the
+    // dedicated frame-analysis allowance used by the stack-loaded GOT base.
+    Builder.setStackTableEvidenceBudgetForTesting(Budget);
+    const auto Low =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    EXPECT_TRUE(Low.JumpTables.empty());
+    EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
+    EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+    for (neverd::va_t Branch : {First->Addr, Second->Addr}) {
+      SCOPED_TRACE(Branch);
+      bool Retained = false;
+      for (const auto &Block : Low.Blocks)
+        for (const auto &Op : Block.Ops)
+          Retained |= Op.Addr == Branch && Op.Opcode == neverd::NdOp::INDIR_BR;
+      EXPECT_TRUE(Retained);
+    }
+  }
+}
+
+static void verifyGOTOFFStackGroupPublicationLifecycle(bool RevokeOwner) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTOFFStackGroupObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const auto &Image = *ImageOrErr;
+  const auto *Function = Image.findSymbol("jt_i386_gotoff_two_stack_tables");
+  const auto *FirstBranch =
+      Image.findSymbol("jt_i386_gotoff_two_stack_first_branch");
+  const auto *SecondBranch =
+      Image.findSymbol("jt_i386_gotoff_two_stack_second_branch");
+  const auto *FirstTable =
+      Image.findSymbol("jt_i386_gotoff_two_stack_first_table");
+  const auto *SecondTable =
+      Image.findSymbol("jt_i386_gotoff_two_stack_second_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(FirstBranch, nullptr);
+  ASSERT_NE(SecondBranch, nullptr);
+  ASSERT_NE(FirstTable, nullptr);
+  ASSERT_NE(SecondTable, nullptr);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  if (RevokeOwner)
+    Builder.setRevokePublishedJumpTableGroupOwnerForTesting(true);
+  else
+    Builder.setExhaustPublishedJumpTableGroupCommitTailForTesting(true);
+  const auto Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  const auto &State = Builder.jumpTableGroupLifecycleStateForTesting();
+  ASSERT_EQ(State.PublishedMemberCount, 2u);
+  if (RevokeOwner) {
+    EXPECT_TRUE(State.OwnerRevocationInjected);
+    EXPECT_EQ(State.OwnerCountBeforeRevocation, 2u);
+    EXPECT_TRUE(State.OwnerRevocationClearedAllMembers);
+    EXPECT_FALSE(State.CommitTailInjected);
+    // Losing a suppression owner rejects this group for the rest of the
+    // build. The real closure must remove both members and retain their
+    // unresolved-jump identities rather than retrying the rejected proof.
+    EXPECT_TRUE(Low.JumpTables.empty());
+    EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
+    EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+    for (neverd::va_t Branch : {FirstBranch->Addr, SecondBranch->Addr}) {
+      SCOPED_TRACE(Branch);
+      EXPECT_EQ(Low.EverPublishedJumpTableBranchAddresses.count(Branch), 1u);
+      EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(Branch), 1u);
+      bool Retained = false;
+      for (const auto &Block : Low.Blocks)
+        for (const auto &Op : Block.Ops)
+          Retained |= Op.Addr == Branch && Op.Opcode == neverd::NdOp::INDIR_BR;
+      EXPECT_TRUE(Retained);
+    }
+    return;
+  } else {
+    EXPECT_TRUE(State.CommitTailInjected);
+    EXPECT_TRUE(State.CommitTailRollbackClearedAllMembers);
+    EXPECT_FALSE(State.OwnerRevocationInjected);
+  }
+
+  // Recovery after the one-shot resource fault does not replace the
+  // intermediate cleanup assertions above: both the rollback and the replay
+  // must succeed.
+  ASSERT_EQ(Low.JumpTables.size(), 2u);
+  std::set<neverd::va_t> Dispatches;
+  for (const auto &Table : Low.JumpTables) {
+    EXPECT_TRUE(Dispatches.insert(Table.InsnAddr).second);
+    if (Table.InsnAddr == FirstBranch->Addr)
+      EXPECT_EQ(Table.BaseAddr, FirstTable->Addr);
+    else {
+      EXPECT_EQ(Table.InsnAddr, SecondBranch->Addr);
+      EXPECT_EQ(Table.BaseAddr, SecondTable->Addr);
+    }
+    EXPECT_TRUE(Table.HasDispatchSlotMap);
+    EXPECT_EQ(Table.SlotIndices, (std::vector<uint32_t>{0, 1, 2, 3, 4, 5, 6}));
+    if (!Table.CaseLabels.empty())
+      EXPECT_EQ(Table.CaseLabels, (std::vector<int64_t>{0, 1, 2, 3, 4, 5, 6}));
+    ASSERT_EQ(Table.Targets.size(), 7u);
+    for (unsigned Slot = 0; Slot != 7; ++Slot) {
+      const uint8_t *Bytes = Image.readVA(Table.BaseAddr + 4 * Slot, 4);
+      ASSERT_NE(Bytes, nullptr);
+      const uint32_t Target = uint32_t{Bytes[0]} | uint32_t{Bytes[1]} << 8 |
+                              uint32_t{Bytes[2]} << 16 |
+                              uint32_t{Bytes[3]} << 24;
+      EXPECT_EQ(Table.Targets[Slot], Target);
+    }
+  }
+  EXPECT_EQ(Dispatches,
+            (std::set<neverd::va_t>{FirstBranch->Addr, SecondBranch->Addr}));
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+  EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+}
+
+TEST_F(JTE_X86_32, GOTOFFStackLoopReplaysAfterPublishedCommitTailExhaustion) {
+  ASSERT_NO_FATAL_FAILURE(
+      verifyGOTOFFStackGroupPublicationLifecycle(/*RevokeOwner=*/false));
+}
+
+TEST_F(JTE_X86_32, GOTOFFStackLoopRevokesWholeGroupWhenOneOwnerIsLost) {
+  ASSERT_NO_FATAL_FAILURE(
+      verifyGOTOFFStackGroupPublicationLifecycle(/*RevokeOwner=*/true));
 }
 
 TEST_F(JTE_X86_32, GOTOFFPeeledLoopRequiresExactOwnerAndModel) {

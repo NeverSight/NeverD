@@ -335,13 +335,26 @@ void CFGBuilder::rebuildBlocks(LowFunc &Func) {
     RefreshReachableInsns();
 
     bool OwnerAdded = false;
+    // Preserve the ordinary growth path. A published joint group needs an
+    // all-members-or-none owner update, using its prepaid bounded copy.
+    std::set<va_t> GroupOwners;
+    if (GuardedGroupState && GuardedGroupState->Published)
+      GroupOwners = ActiveTableOwners;
+    auto &NextOwners = GuardedGroupState && GuardedGroupState->Published
+                           ? GroupOwners
+                           : ActiveTableOwners;
     for (const auto &[BranchAddr, Info] : ResolvedTableInfo) {
       (void)Info;
       auto Rec = Insns.find(BranchAddr);
       if (Rec == Insns.end() || Rec->second.JumpTableTargets.empty() ||
           !CurrentReachableInsns.count(BranchAddr))
         continue;
-      OwnerAdded |= ActiveTableOwners.insert(BranchAddr).second;
+      OwnerAdded |= NextOwners.insert(BranchAddr).second;
+    }
+    if (GuardedGroupState && GuardedGroupState->Published) {
+      closeGuardedGroupOwners(GroupOwners);
+      OwnerAdded = GroupOwners != ActiveTableOwners;
+      ActiveTableOwners = std::move(GroupOwners);
     }
     if (!OwnerAdded)
       break;
@@ -401,7 +414,15 @@ void CFGBuilder::rebuildBlocks(LowFunc &Func) {
     std::set<va_t> SuppressedRelocationRoots;
   };
 
-  auto BuildEffectiveCFGView = [&](const std::set<va_t> &SuppressionOwners) {
+  auto BuildEffectiveCFGView = [&](const std::set<va_t> &RequestedOwners) {
+    std::set<va_t> GroupOwners;
+    if (GuardedGroupState && GuardedGroupState->Published) {
+      GroupOwners = RequestedOwners;
+      closeGuardedGroupOwners(GroupOwners);
+    }
+    const auto &SuppressionOwners =
+        GuardedGroupState && GuardedGroupState->Published ? GroupOwners
+                                                          : RequestedOwners;
     EffectiveCFGView Result;
     std::set<va_t> OwnedRelocationSlots;
     for (va_t BranchAddr : SuppressionOwners) {
@@ -553,9 +574,42 @@ void CFGBuilder::rebuildBlocks(LowFunc &Func) {
                   FinalView.ReachableInsns.count(BranchAddr))
                 ReachableOwners.insert(BranchAddr);
             }
+            // Only a subsequent rebuild of a genuinely published complete
+            // group may inject member loss. Normal owner closure performs the
+            // transitive withdrawal; the hook removes just one owner.
+            if (RevokePublishedJumpTableGroupOwnerForTesting &&
+                !JumpTableGroupLifecycleForTesting.OwnerRevocationInjected &&
+                JumpTableGroupLifecycleForTesting.PublishedMemberCount != 0 &&
+                guardedGroupIsComplete()) {
+              const auto &Key = GuardedGroupState->Key;
+              bool AllPresent = true;
+              for (size_t I = 0; I < Key.MemberCount; ++I)
+                AllPresent &= ReachableOwners.count(Key.Members[I]) != 0;
+              if (AllPresent) {
+                JumpTableGroupLifecycleForTesting.OwnerRevocationInjected =
+                    true;
+                JumpTableGroupLifecycleForTesting.OwnerCountBeforeRevocation =
+                    Key.MemberCount;
+                ReachableOwners.erase(Key.Members[0]);
+              }
+            }
+            closeGuardedGroupOwners(ReachableOwners);
             return ReachableOwners;
           });
-  (void)FinalSuppressionOwners;
+  if (GuardedGroupState && GuardedGroupState->Published) {
+    const auto &Key = GuardedGroupState->Key;
+    bool Complete = guardedGroupIsComplete();
+    for (size_t I = 0; I < Key.MemberCount; ++I)
+      Complete &= FinalSuppressionOwners.count(Key.Members[I]) != 0;
+    if (!Complete) {
+      withdrawGuardedJumpTableGroup(/*Reject=*/true);
+      if (JumpTableGroupLifecycleForTesting.OwnerRevocationInjected)
+        JumpTableGroupLifecycleForTesting.OwnerRevocationClearedAllMembers =
+            guardedGroupHasNoLiveMembers();
+      rebuildBlocks(Func);
+      return;
+    }
+  }
 
   // Relative relocation roots are deliberately absent from OrdinaryCFGRoots
   // during selector proof: a protected/excluded physical slot must not

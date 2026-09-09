@@ -126,6 +126,8 @@ bool jumpTableTargetLoadUsesDefaultAddressSpace(llvm::ArrayRef<LowOp> Ops,
 std::set<va_t> CFGBuilder::jumpTableProofRoots(
     const JumpTableInfo &Info,
     const std::set<va_t> *DecodedTableAnchorsOverride) const {
+  if (GuardedGroupProofContext)
+    return GuardedGroupProofContext->Roots;
   std::set<va_t> Roots = PersistentCFGRoots;
   if (!CurrentImg || RelocationCFGRootSources.empty())
     return Roots;
@@ -2395,6 +2397,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       TargetRoleEdgeOverrides = &RelativeEdgeOverrides;
   }
   bool TargetRoleComplete = false;
+  if (GuardedGroupProofContext)
+    TargetRoleEdgeOverrides = &GuardedGroupProofContext->Edges;
   bool TargetRole = branchTargetDependsOnTableLoad(
       Rec, Info, &CandidateEvidenceBudget, &TargetRoleComplete,
       /*UseDefinedAlternativesAsRoots=*/false, TargetRoleEdgeOverrides);
@@ -2824,15 +2828,92 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // table may already carry an independently authenticated index domain; a
   // relocation run by itself is only physical storage capacity and never
   // skips this search.
+  auto GroupHasSingleGuardedLoadAndSelector = [&](const JumpTableInfo &State) {
+    if (!GuardedGroupProofContext)
+      return true;
+    // The precise guard helper proves control of TableLoadAddr. It does not
+    // prove guard dominance for independent alternative LOADs. Keep this
+    // group lane to one effective LOAD and one exact selector occurrence;
+    // empty containers retain the existing implicit primary representation.
+    if (!consumeCandidateEvidence(128 + orderedLookupWork(Insns.size())))
+      return false;
+    if (State.TargetLoads.size() > 1 || State.LoadRoles.size() > 1 ||
+        State.IndexValueAlternatives.size() > 1 ||
+        State.TableLoadAddr == InvalidVA || State.TableLoadSeq < 0 ||
+        State.IndexUseAddr == InvalidVA || State.IndexUseSeq < 0 ||
+        State.IndexValueAtUse.Size == 0)
+      return false;
+    const auto LoadInsn = Insns.find(State.TableLoadAddr);
+    if (LoadInsn == Insns.end())
+      return false;
+    if (!consumeCandidateProducts({{LoadInsn->second.Ops.size(), 4}}))
+      return false;
+    const LowOp *Load = nullptr;
+    for (const LowOp &Op : LoadInsn->second.Ops) {
+      if (Op.Addr != State.TableLoadAddr || Op.Seq != State.TableLoadSeq)
+        continue;
+      if (Load || Op.Opcode != NdOp::LOAD)
+        return false;
+      Load = &Op;
+    }
+    if (!Load)
+      return false;
+    const JumpTableValueOccurrence PrimaryLoad{
+        Load->Output, State.TableLoadAddr, State.TableLoadSeq,
+        /*DefinedAtPoint=*/true};
+    const JumpTableValueOccurrence PrimaryIndex{
+        State.IndexValueAtUse, State.IndexUseAddr, State.IndexUseSeq,
+        State.IndexValueDefinedAtUse};
+    if ((!State.TargetLoads.empty() &&
+         State.TargetLoads.front() != PrimaryLoad) ||
+        (!State.IndexValueAlternatives.empty() &&
+         State.IndexValueAlternatives.front() != PrimaryIndex))
+      return false;
+    if (!State.LoadRoles.empty()) {
+      const JumpTableLoadRole &Role = State.LoadRoles.front();
+      if (Role.Load != PrimaryLoad || Role.IsLiteralCoordinate ||
+          Role.Indices.size() > 1 ||
+          (!Role.Indices.empty() && Role.Indices.front() != PrimaryIndex))
+        return false;
+    }
+    return true;
+  };
   bool GuardFound = Info.IndexDomainAuthenticated;
   bool AuthenticatedGuardUsesDefinedOccurrenceRoots = false;
-  if (!GuardFound) {
+  if (!GuardFound && !GuardedGroupProofContext) {
     GuardFound = provePreciseGuard(
         Info, /*UseDefinedAlternativesAsRoots=*/false, TargetRoleEdgeOverrides);
     if (GuardFound) {
       Info.IndexDomainAuthenticated = true;
       Info.AuthenticatedGuardBound = Info.MaxEntries;
     }
+  }
+  if (GuardedGroupProofContext) {
+    if (!GroupHasSingleGuardedLoadAndSelector(Info))
+      return {};
+    // A group hypothesis can support universal reaching-value proofs, but
+    // cannot seed an existential finite domain. Prove the complete unsigned
+    // prefix from its controlling guard, with no old capacity to clamp it.
+    Info.MaxEntries = 0;
+    Info.IndexDomainAuthenticated = false;
+    Info.AuthenticatedGuardBound = 0;
+    Info.AuthenticatedModuloBound = 0;
+    Info.AuthenticatedMaskCoordinates.clear();
+    Info.AuthenticatedMaskKnownOneWitnesses.clear();
+    Info.RuntimeCaseLabels.clear();
+    Info.RuntimeSlotIndices.clear();
+    Info.HasControllingGuard = false;
+    Info.IncompleteGuardDomain = false;
+    Info.SemanticGuardDomainAmbiguous = false;
+    GuardFound = inferBoundsFromPreciseGuards(
+        Rec, Info, &CandidateEvidenceBudget,
+        /*UseDefinedAlternativesAsRoots=*/false, TargetRoleEdgeOverrides);
+    CandidateEvidenceAnalysisIncomplete |= Info.IncompleteGuardDomain;
+    if (!GuardFound || Info.IncompleteGuardDomain ||
+        Info.SemanticGuardDomainAmbiguous || !Info.HasControllingGuard)
+      return {};
+    Info.IndexDomainAuthenticated = true;
+    Info.AuthenticatedGuardBound = Info.MaxEntries;
   }
   // Linked x64 PE RVA switches have no per-entry relocation run: the exact
   // unsigned range guard is their only slot-domain certificate.  Keep this
@@ -3356,23 +3437,28 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       CandidateProposalStageActive && ProvisionalRelativeEdgeTemplate
           ? &ExactFiniteRelativeClosureUnknownValue
           : nullptr;
-  const uint32_t MaskBound = inferBoundsFromMask(
-      Rec, Info, /*AllowNonContiguous=*/true, &IncompleteMaskDomain,
-      &UsedNonContiguousMask, &MaskCoordinates, &MaskKnownOneWitnesses,
-      /*RequireProducerReachability=*/
-      CurrentCandidateSelfReplayTargets != nullptr,
-      CurrentCandidateSelfReplayTargets,
-      CurrentCandidateSelfReplayReachable
-          ? &*CurrentCandidateSelfReplayReachable
-          : nullptr,
-      /*AllowFixedPointBootstrap=*/true,
-      /*AllowRawDenseShortcut=*/true, &CandidateEvidenceBudget,
-      &SemanticMaskDomainAmbiguous, &ExactConsumerGroup,
-      TargetRoleEdgeOverrides, CertifiedSiblingRuntimeStorage,
-      ExactFiniteRelativeSingletonTarget, ExactFiniteRelativeClosureUnknown,
-      /*RetainProvisionalRelativeEdges=*/
-      CandidateProposalStageActive &&
-          ProvisionalRelativeEdgeTemplate.has_value());
+  const uint32_t MaskBound =
+      GuardedGroupProofContext
+          ? 0
+          : inferBoundsFromMask(
+                Rec, Info, /*AllowNonContiguous=*/true, &IncompleteMaskDomain,
+                &UsedNonContiguousMask, &MaskCoordinates,
+                &MaskKnownOneWitnesses,
+                /*RequireProducerReachability=*/
+                CurrentCandidateSelfReplayTargets != nullptr,
+                CurrentCandidateSelfReplayTargets,
+                CurrentCandidateSelfReplayReachable
+                    ? &*CurrentCandidateSelfReplayReachable
+                    : nullptr,
+                /*AllowFixedPointBootstrap=*/true,
+                /*AllowRawDenseShortcut=*/true, &CandidateEvidenceBudget,
+                &SemanticMaskDomainAmbiguous, &ExactConsumerGroup,
+                TargetRoleEdgeOverrides, CertifiedSiblingRuntimeStorage,
+                ExactFiniteRelativeSingletonTarget,
+                ExactFiniteRelativeClosureUnknown,
+                /*RetainProvisionalRelativeEdges=*/
+                CandidateProposalStageActive &&
+                    ProvisionalRelativeEdgeTemplate.has_value());
   const std::optional<bool> MaskGraphGrowth = SuspendForPendingGraphGrowth(
       /*RetainNoGrowthProposal=*/
       !ExactFiniteRelativeSingletonTargetValue.has_value());
@@ -4054,6 +4140,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     ActiveJumpTableProofRoots = std::move(*Roots);
   }
   auto RevalidateIndexDomain = [&]() -> bool {
+    if (!GroupHasSingleGuardedLoadAndSelector(Info))
+      return false;
     bool Revalidated = false;
     if (Info.AuthenticatedGuardBound != 0) {
       if (!consumeJumpTableInfoTraversal(Info))
@@ -5594,13 +5682,18 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
         return {};
       ActiveJumpTableProofRoots = std::move(*Roots);
       bool ReachabilityComplete = false;
+      bool GroupClosedWorld = false;
       const std::set<va_t> Reachable = candidateReachableInstructions(
           Rec, Targets, *ActiveJumpTableProofRoots, ConsumerAuditStorageRanges,
-          &CandidateEvidenceBudget, &ReachabilityComplete);
+          &CandidateEvidenceBudget, &ReachabilityComplete,
+          GuardedGroupProofContext ? &GuardedGroupProofContext->Edges : nullptr,
+          GuardedGroupProofContext ? &GroupClosedWorld : nullptr);
       if (!ReachabilityComplete) {
         CandidateEvidenceAnalysisIncomplete = true;
         return {};
       }
+      if (GuardedGroupProofContext && !GroupClosedWorld)
+        return {};
       if (!Reachable.count(CurrentFuncEntry))
         return {};
 
@@ -5725,7 +5818,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     const bool DomainInputsUnchanged =
         !FinalAddressRoleDomainInputsChanged && ProofRootsUnchanged;
     const bool FinalIndexDomain =
-        DomainInputsUnchanged || RevalidateIndexDomain();
+        (!GuardedGroupProofContext && DomainInputsUnchanged) ||
+        RevalidateIndexDomain();
     const std::optional<bool> FinalRevalidationGraphGrowth =
         SuspendForPendingGraphGrowth();
     if (!FinalRevalidationGraphGrowth || *FinalRevalidationGraphGrowth)
