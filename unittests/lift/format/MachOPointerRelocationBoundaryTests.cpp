@@ -10832,6 +10832,112 @@ TEST(LLVMDataPointerInvariantBoundary,
       }
 }
 
+TEST(LLVMDataPointerInvariantBoundary,
+     NarrowFrameDomainRecognizesExactSelfCopyInitializer) {
+  enum class Scenario {
+    LiveIn,
+    SelfCopy,
+    CopyCycle,
+    SSACycle,
+    WidthMismatch,
+    AddressSource,
+  };
+  for (BinaryFormat Format :
+       {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+    for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+      for (Scenario Case : {Scenario::LiveIn, Scenario::SelfCopy,
+                            Scenario::CopyCycle, Scenario::SSACycle,
+                            Scenario::WidthMismatch, Scenario::AddressSource}) {
+        SCOPED_TRACE(formatTraceName(Format));
+        SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+        SCOPED_TRACE(static_cast<int>(Case));
+        const auto &TRI = getTargetRegInfo(TargetArch);
+        const uint16_t PointerSize = TRI.PointerSize;
+        auto makeVar = [&](MedVar::VarKind Kind, int Id, uint16_t Size) {
+          MedVar Value;
+          Value.Kind = Kind;
+          Value.TheArch = TargetArch;
+          Value.Id = Id;
+          Value.SSAVer = 0;
+          Value.Size = Size;
+          return Value;
+        };
+        MedVar Source = makeVar(MedVar::Param, 0, PointerSize);
+        Source.RegOff = TRI.IntParamRegs[0];
+        MedVar SP = makeVar(MedVar::Reg, 100, PointerSize);
+        SP.RegOff = TRI.StackPointer;
+        MedVar Slot = makeVar(MedVar::Temp, 1, PointerSize);
+        MedVar Reloaded = makeVar(MedVar::Temp, 2, 4);
+        MedFunc Func;
+        Func.Entry = CallerVA;
+        Func.Name = "narrow_frame_self_copy_initializer";
+        Func.ReturnType = NdType::makeVoid();
+        Func.FrameSize = 16;
+        Func.Params = {Source};
+        MedBlock Block;
+        Block.Id = 0;
+        Block.StartAddr = CallerVA;
+        Block.EndAddr = CallerVA + 0x18;
+        auto copy = [&](MedVar Output, MedVar Input) {
+          MedOp Op;
+          Op.Opcode = NdOp::COPY;
+          Op.Output = Output;
+          Op.addInput(Input);
+          Block.Ops.push_back(std::move(Op));
+        };
+        if (Case == Scenario::SelfCopy) {
+          copy(Source, Source);
+        } else if (Case == Scenario::CopyCycle) {
+          MedVar Other = makeVar(MedVar::Temp, 3, PointerSize);
+          copy(Source, Other);
+          copy(Other, Source);
+        } else if (Case == Scenario::SSACycle) {
+          MedVar Other = Source;
+          Other.SSAVer = 1;
+          copy(Source, Other);
+          copy(Other, Source);
+        } else if (Case == Scenario::WidthMismatch) {
+          MedVar NarrowSource = Source;
+          NarrowSource.Size = 4;
+          copy(Source, NarrowSource);
+        }
+        MedOp Address;
+        Address.Opcode = NdOp::INT_ADD;
+        Address.Output = Slot;
+        Address.addInput(SP);
+        Address.addInput(MedVar::makeConst(uint64_t(-8), PointerSize,
+                                           ConstantAddressProvenance::Scalar));
+        Block.Ops.push_back(std::move(Address));
+        MedOp Store;
+        Store.Opcode = NdOp::STORE;
+        Store.addInput(Slot);
+        Store.addInput(
+            Case == Scenario::AddressSource
+                ? MedVar::makeConst(SpilledConstTableVA, PointerSize,
+                                    ConstantAddressProvenance::DataAddress)
+                : Source);
+        Block.Ops.push_back(std::move(Store));
+        MedOp Load;
+        Load.Opcode = NdOp::LOAD;
+        Load.Output = Reloaded;
+        Load.addInput(Slot);
+        Block.Ops.push_back(std::move(Load));
+        Func.Blocks.push_back(std::move(Block));
+        BinaryImage Image = makeSpilledConstTableImage(TargetArch, Format);
+        MedLLVMEmitter Emitter;
+        MedLLVMProvenanceTestPeer::prepareFreshAnalysis(Emitter, Func, Image,
+                                                        TargetArch, Format);
+        std::vector<MedVar> Sources;
+        EXPECT_FALSE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+            Emitter, Func, TargetArch, Func.Blocks.front().Ops.back(),
+            Sources));
+        EXPECT_TRUE(Sources.empty());
+        EXPECT_EQ(
+            MedLLVMProvenanceTestPeer::stableOffset(Emitter, Reloaded, nullptr),
+            Case == Scenario::LiveIn || Case == Scenario::SelfCopy);
+      }
+}
+
 TEST(MachOLLVMDataPointerBoundary,
      ClearsProvenanceCachesAcrossFunctionsAndEmitterReuse) {
   {

@@ -1190,6 +1190,11 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
   using Key = std::tuple<int, int, int>;
   using FrameSlotKey = std::pair<std::pair<int, int>, int64_t>;
   using FrameRootKey = std::pair<int, int>;
+  auto isExactSelfCopy = [&](const MedOp *Def, const MedVar &Value) {
+    return Def && Def->Opcode == NdOp::COPY && Def->NumInputs == 1 &&
+           exactSameVar(Def->Output, Value) &&
+           exactSameVar(Def->Inputs[0], Value);
+  };
   auto keyOf = [](const MedVar &V) {
     return Key{static_cast<int>(V.Kind), V.Id, V.SSAVer};
   };
@@ -1409,6 +1414,11 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
     }
     const MedOp *Def = lookupDef(Start);
     if (!Def)
+      return {.HasIndependentAlternative = true};
+    // SSA live-ins use an exact self-COPY. The scalar proof accepts this
+    // source identity, so the frame-domain initializer audit must retain it
+    // rather than following the marker as a source-free recurrence.
+    if (isExactSelfCopy(Def, Start))
       return {.HasIndependentAlternative = true};
     if (Def->Opcode == NdOp::LOAD && Def->NumInputs >= 1) {
       if (Def->MemoryAddressSpace != NdMemoryAddressSpace::Default)
@@ -1841,10 +1851,7 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
              !ActiveFrameDomains.empty()))
           return true;
       }
-      const bool ExactSelfCopy = CycleDef && CycleDef->Opcode == NdOp::COPY &&
-                                 CycleDef->NumInputs == 1 &&
-                                 exactSameVar(CycleDef->Output, Start) &&
-                                 exactSameVar(CycleDef->Inputs[0], Start);
+      const bool ExactSelfCopy = isExactSelfCopy(CycleDef, Start);
       return ExactSelfCopy
                  ? true
                  : stableOffsetFailure("unanchored-cycle", Start, Depth);
