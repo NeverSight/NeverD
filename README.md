@@ -271,8 +271,6 @@ MCP connections. Analysis runs in a separate Qt-free worker; CLI-only builds
 remain independent. See the [qualification record](docs/gui-qualification.md)
 for supported workflows and platform validation still required before release.
 
-![NeverD desktop workbench showing linked CFG and intermediate representations](docs/assets/neverd-gui-workbench.png)
-
 ## CLI
 
 ```text

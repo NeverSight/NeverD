@@ -4,8 +4,6 @@ The desktop workbench uses Qt Quick/QML and a separate `neverd-worker` process.
 The worker uses NeverD's existing public C ABI. The GUI does not link the engine,
 LLVM, or the existing CLI, and no model service is required to browse binaries.
 
-![The native workbench with linked CFG, LowIR and instruction addresses](assets/neverd-gui-workbench.png)
-
 ## Build
 
 The normal engine/CLI configuration is unchanged. Qt is optional and is searched
