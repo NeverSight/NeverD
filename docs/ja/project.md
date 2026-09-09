@@ -18,7 +18,7 @@ PE · ELF · Mach-O · EVM · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64
 ![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-informational.svg)
 [![SDK](https://img.shields.io/badge/SDK-Pure%20C%20API-orange.svg)](#sdk-とプラグイン)
 
-[ドキュメント](README.md) · [ロードマップ](roadmap.md) · [貢献](CONTRIBUTING.md)
+[ドキュメント](README.md) · [Android](android.md) · [iOS](ios.md) · [ロードマップ](roadmap.md) · [貢献](CONTRIBUTING.md)
 
 </div>
 
@@ -61,6 +61,17 @@ legacy EVM bytecode は native container と独立して対応します。Fronti
 Solana SBF v0-v4 ELF プログラムは専用 strict loader、完全なバージョン別 ISA
 metadata、Low/Med/High IR、検証済み LLVM、portable C11、安全な stable Rust を
 使用します。[Solana SBF 逆コンパイル](sbf.md)を参照してください。
+
+### Android / iOS のソース復元
+
+実験的な `neverd mobile` CLI は、次のモバイル入力とソース出力に対応しています。
+
+| プラットフォーム | 入力 | 出力 |
+|------------------|------|------|
+| [Android](android.md) | APK（multidex を含む）、DEX、smali ファイル／ディレクトリ | Java と JSON レポート |
+| [iOS](ios.md) | IPA、`.app`、Mach-O（arm64 / x86_64） | ネイティブ C、対応する Objective-C / Swift ソース、JSON カバレッジレポート |
+
+復元範囲は、対応しているコードパターンによって異なります。制限事項は各ガイドを参照してください。
 
 ## 仕組み
 
@@ -118,6 +129,10 @@ cmake --build build
 ./build/bin/neverd lift program.so -o program.ll
 ./build/bin/neverd decompile --language=c program.so -o program.c
 ./build/bin/neverd decompile --language=rust program.so -o program.rs
+
+# Android / iOS のソース復元（実験的）
+./build/bin/neverd mobile app.apk -o recovered-android
+./build/bin/neverd mobile App.ipa -o recovered-ios
 
 # 分析
 ./build/bin/neverd funcs binary

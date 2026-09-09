@@ -18,7 +18,7 @@ PE · ELF · Mach-O · EVM · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64
 ![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-informational.svg)
 [![SDK](https://img.shields.io/badge/SDK-Pure%20C%20API-orange.svg)](#sdk-e-plugin)
 
-[Documentazione](README.md) · [Roadmap](roadmap.md) · [Contribuire](CONTRIBUTING.md)
+[Documentazione](README.md) · [Android](android.md) · [iOS](ios.md) · [Roadmap](roadmap.md) · [Contribuire](CONTRIBUTING.md)
 
 </div>
 
@@ -66,6 +66,17 @@ Il bytecode EVM legacy è supportato indipendentemente dai container nativi: i
 I programmi Solana SBF v0-v4 ELF usano un loader strict dedicato, metadata ISA
 versionati completi, Low/Med/High IR, LLVM verificato, C11 portabile e Rust
 stabile e sicuro. Vedi [decompilazione Solana SBF](sbf.md).
+
+### Android e iOS
+
+La CLI sperimentale `neverd mobile` supporta i seguenti input e output:
+
+| Piattaforma | Input | Output |
+|-------------|-------|--------|
+| [Android](android.md) | APK, incluso multidex, DEX, file o directory smali | Sorgenti Java e report JSON |
+| [iOS](ios.md) | IPA, `.app`, Mach-O (arm64/x86_64) | C nativo, sorgenti Objective-C/Swift supportati e report di copertura JSON |
+
+L’estensione del recupero dipende dai modelli di codice supportati; i limiti sono descritti nelle rispettive guide.
 
 ## Come funziona
 
@@ -123,6 +134,11 @@ cmake --build build
 ./build/bin/neverd lift program.so -o program.ll
 ./build/bin/neverd decompile --language=c program.so -o program.c
 ./build/bin/neverd decompile --language=rust program.so -o program.rs
+
+# Android: da APK a Java (sperimentale)
+./build/bin/neverd mobile app.apk -o recovered-android
+# iOS: da IPA ai sorgenti supportati (sperimentale)
+./build/bin/neverd mobile App.ipa -o recovered-ios
 
 # Analisi
 ./build/bin/neverd funcs binary

@@ -6,6 +6,8 @@
 
 L’aperçu du projet, la compilation et le CLI se trouvent dans le README du dépôt. Les références de conception et de test destinées aux contributeurs sont regroupées ici.
 
+NeverD prend en charge Android et iOS via la CLI expérimentale `neverd mobile` : APK (y compris multidex), DEX et fichiers ou répertoires smali vers Java avec un rapport JSON ; IPA, `.app` et Mach-O (arm64/x86_64) vers du C natif et des sources Objective-C/Swift prises en charge, avec un rapport de couverture JSON. L’étendue dépend des motifs de code pris en charge ; consultez les guides pour les limites.
+
 | Document | Description |
 |----------|-------------|
 | [README (français)](project.md) | Aperçu, démarrage rapide, compilation, SDK, CLI |
@@ -18,8 +20,9 @@ L’aperçu du projet, la compilation et le CLI se trouvent dans le README du d�
 | [Plugins Python](python-plugins.md) | Création, API de session et d’événements, isolation, tests et publication |
 | [Décompilation EVM](evm.md) | Entrées, hardforks, IR par étapes, ABI host C/LLVM, reconstruction Solidity et limites |
 | [Décompilation Solana SBF](sbf.md) | SBF v0-v4, LLVM IR, sorties C/Rust, vérification et limites connues |
-| [Reconstruction Java pour Android](android.md) | CLI expérimentale APK/DEX/smali, environnements d’exécution, multidex, rapport JSON, dépannage et limites |
-| [Récupération des sources iOS](ios.md) | IPA/.app/Mach-O, corps et dispositions Objective-C/Swift, CLI/export, couverture, limites et tests exécutés |
+| [Vue d’ensemble mobile (English)](../mobile.md) | CLI expérimentale Android/iOS, entrées, sorties, rapports et limites |
+| [Reconstruction Java pour Android](android.md) | APK (y compris multidex), DEX, fichiers/répertoires smali → Java ; CLI, rapport JSON, dépannage, limites et vérification |
+| [Récupération des sources iOS](ios.md) | IPA/.app/Mach-O (arm64/x86_64) → C natif et sources Objective-C/Swift prises en charge ; dispositions, CLI/export, couverture JSON, limites et tests exécutés |
 | [Feuille de route](roadmap.md) | État : formats natifs, EVM et Solana SBF implémentés |
 | [English README](../../README.md) | Version anglaise |
 | [Autres langues](../README.md) | Autres versions localisées |

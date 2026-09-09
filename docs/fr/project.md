@@ -18,7 +18,7 @@ PE · ELF · Mach-O · EVM · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64
 ![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-informational.svg)
 [![SDK](https://img.shields.io/badge/SDK-Pure%20C%20API-orange.svg)](#sdk-et-plugins)
 
-[Documentation](README.md) · [Feuille de route](roadmap.md) · [Contribution](CONTRIBUTING.md)
+[Documentation](README.md) · [Android](android.md) · [iOS](ios.md) · [Feuille de route](roadmap.md) · [Contribution](CONTRIBUTING.md)
 
 </div>
 
@@ -66,6 +66,17 @@ LLVM `i256` vérifié, C23 `_BitInt(256)` et Solidity. Voir
 Les programmes Solana SBF v0-v4 ELF utilisent un loader strict dédié, des
 métadonnées ISA versionnées complètes, Low/Med/High IR, LLVM vérifié, C11
 portable et Rust stable sûr. Voir la [décompilation Solana SBF](sbf.md).
+
+### Android et iOS
+
+La CLI expérimentale `neverd mobile` prend en charge les entrées et sorties suivantes :
+
+| Plateforme | Entrées | Sorties |
+|------------|---------|---------|
+| [Android](android.md) | APK, y compris multidex, DEX, fichiers ou répertoires smali | Sources Java et rapport JSON |
+| [iOS](ios.md) | IPA, `.app`, Mach-O (arm64/x86_64) | C natif, sources Objective-C/Swift prises en charge et rapport de couverture JSON |
+
+L’étendue de la récupération dépend des motifs de code pris en charge ; les limites figurent dans les guides respectifs.
 
 ## Fonctionnement
 
@@ -123,6 +134,11 @@ cmake --build build
 ./build/bin/neverd lift program.so -o program.ll
 ./build/bin/neverd decompile --language=c program.so -o program.c
 ./build/bin/neverd decompile --language=rust program.so -o program.rs
+
+# Android : APK vers Java (expérimental)
+./build/bin/neverd mobile app.apk -o recovered-android
+# iOS : IPA vers les sources prises en charge (expérimental)
+./build/bin/neverd mobile App.ipa -o recovered-ios
 
 # Analyse
 ./build/bin/neverd funcs binary

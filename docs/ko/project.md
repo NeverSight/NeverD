@@ -18,7 +18,7 @@ PE · ELF · Mach-O · EVM · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64
 ![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-informational.svg)
 [![SDK](https://img.shields.io/badge/SDK-Pure%20C%20API-orange.svg)](#sdk와-플러그인)
 
-[문서](README.md) · [로드맵](roadmap.md) · [기여](CONTRIBUTING.md)
+[문서](README.md) · [Android](android.md) · [iOS](ios.md) · [로드맵](roadmap.md) · [기여](CONTRIBUTING.md)
 
 </div>
 
@@ -61,6 +61,17 @@ assigned opcode 150개가 전용 Low/Med/High IR, verified LLVM `i256`, C23
 Solana SBF v0-v4 ELF 프로그램은 전용 strict loader, 완전한 버전별 ISA metadata,
 Low/Med/High IR, 검증된 LLVM, portable C11, 안전한 stable Rust를 사용합니다.
 [Solana SBF 디컴파일](sbf.md)을 참고하세요.
+
+### Android / iOS 소스 복원
+
+실험적 `neverd mobile` CLI는 다음 모바일 입력과 소스 출력을 지원합니다.
+
+| 플랫폼 | 입력 | 출력 |
+|--------|------|------|
+| [Android](android.md) | APK(multidex 포함), DEX, smali 파일/디렉터리 | Java 및 JSON 보고서 |
+| [iOS](ios.md) | IPA, `.app`, Mach-O(arm64 / x86_64) | 네이티브 C, 지원되는 Objective-C / Swift 소스 및 JSON 커버리지 보고서 |
+
+복원 범위는 지원되는 코드 패턴에 따라 달라집니다. 제한 사항은 각 가이드를 참조하세요.
 
 ## 동작 방식
 
@@ -118,6 +129,10 @@ cmake --build build
 ./build/bin/neverd lift program.so -o program.ll
 ./build/bin/neverd decompile --language=c program.so -o program.c
 ./build/bin/neverd decompile --language=rust program.so -o program.rs
+
+# Android / iOS 소스 복원 (실험적)
+./build/bin/neverd mobile app.apk -o recovered-android
+./build/bin/neverd mobile App.ipa -o recovered-ios
 
 # 분석
 ./build/bin/neverd funcs binary

@@ -6,6 +6,8 @@
 
 Project overview and build/CLI notes live in the repository README. Contributor-facing design and test references are indexed here.
 
+**Mobile support (experimental CLI):** `neverd mobile` supports [Android](android.md) APK, DEX, and smali inputs for Java recovery, and [iOS](ios.md) IPA, `.app`, and Mach-O inputs for native C and supported Objective-C/Swift source recovery. JSON reports describe recovery results and coverage. Start with the [mobile overview](mobile.md), then use the platform guides for commands and limitations.
+
 English guides live directly in `docs/`. Translations are grouped in language
 directories: `ar/`, `de/`, `es/`, `fr/`, `it/`, `ja/`, `ko/`, `ru/`, `zh-CN/`,
 and `zh-TW/`. Each language directory contains a `README.md` documentation index,
@@ -22,8 +24,9 @@ and `roadmap.md`. Shared images remain in `assets/`.
 | [Memory-safety audit & hunt](memory-safety.md) | Heap-lifetime and copy-overflow analysis: identity contract per format, sink/source catalog, verdicts, budgets, and JSON schema |
 | [Native plugins](plugins.md) | Pure-C descriptor ABI, callbacks and events, build/link workflow, discovery, and compatibility rules |
 | [Python plugins](python-plugins.md) | Typed authoring SDK, embedded host, lifecycle, loading, safety, tests, and publishing |
-| [Android Java recovery](android.md) | APK/DEX/smali setup, multidex and class context, CLI options, JSON reports, troubleshooting, and verification |
-| [iOS source recovery](ios.md) | IPA/.app/Mach-O selection, Objective-C/Swift bodies and layouts, CLI/export, coverage, limitations, and execution checks |
+| [Mobile overview](mobile.md) | Android and iOS support, input/output formats, quick start, and links to platform guides |
+| [Android Java recovery](android.md) | Supports APK (including multidex), DEX, and smali → Java; CLI options, JSON reports, verification, and recovery limits |
+| [iOS source recovery](ios.md) | Supports IPA/.app/Mach-O → native C and supported Objective-C/Swift sources; artifact selection, JSON coverage reports, verification, and recovery limits |
 | [EVM decompilation](evm.md) | EVM inputs, hardforks, staged IR, C/LLVM host ABI, Solidity reconstruction, and limitations |
 | [Solana SBF decompilation](sbf.md) | SBF v0-v4 ELF rules, staged IR, syscalls, C/Rust/LLVM backends, and host contracts |
 | [Roadmap](roadmap.md) | Status: native formats, EVM, and Solana SBF implemented |

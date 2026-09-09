@@ -6,6 +6,8 @@
 
 Projektüberblick, Build und CLI stehen in der Repository-README. Architektur- und Testreferenzen für Mitwirkende sind hier gebündelt.
 
+NeverD unterstützt Android und iOS über die experimentelle CLI `neverd mobile`: APK (einschließlich Multidex), DEX sowie smali-Dateien und -Verzeichnisse werden zu Java mit JSON-Bericht; IPA, `.app` und Mach-O (arm64/x86_64) zu nativem C und unterstützten Objective-C-/Swift-Quelltexten mit JSON-Abdeckungsbericht. Der Umfang hängt von den unterstützten Codemustern ab; Einzelheiten stehen in den Leitfäden.
+
 | Dokument | Beschreibung |
 |----------|--------------|
 | [README (Deutsch)](project.md) | Überblick, Schnellstart, Build, SDK, CLI |
@@ -18,8 +20,9 @@ Projektüberblick, Build und CLI stehen in der Repository-README. Architektur- u
 | [Python-Plugins](python-plugins.md) | Plugin-Entwicklung, Session-/Event-API, Isolation, Tests und Veröffentlichung |
 | [EVM-Dekompilation](evm.md) | Eingaben, Hardforks, IR-Stufen, C-/LLVM-Host-ABI, Solidity-Rekonstruktion und Grenzen |
 | [Solana-SBF-Dekompilation](sbf.md) | SBF v0-v4, LLVM IR, C-/Rust-Ausgabe, Verifikation und bekannte Grenzen |
-| [Java-Rekonstruktion für Android](android.md) | Experimentelle APK-/DEX-/Smali-CLI, Laufzeitumgebungen, Multidex, JSON-Bericht, Fehlerbehandlung und Grenzen |
-| [iOS-Quelltextrekonstruktion](ios.md) | IPA/.app/Mach-O, Objective-C-/Swift-Körper und Layouts, CLI/Export, Abdeckung, Grenzen und Ausführungstests |
+| [Mobile-Überblick (English)](../mobile.md) | Experimentelle Android-/iOS-CLI, Eingaben, Ausgaben, Berichte und Grenzen |
+| [Java-Rekonstruktion für Android](android.md) | APK (einschließlich Multidex), DEX, smali-Dateien/-Verzeichnisse → Java; CLI, JSON-Bericht, Fehlerbehandlung, Grenzen und Verifikation |
+| [iOS-Quelltextrekonstruktion](ios.md) | IPA/.app/Mach-O (arm64/x86_64) → natives C und unterstützte Objective-C-/Swift-Quelltexte; Layouts, CLI/Export, JSON-Abdeckung, Grenzen und Ausführungstests |
 | [Roadmap](roadmap.md) | Status: Native Formate, EVM und Solana SBF implementiert |
 | [English README](../../README.md) | Englische Version |
 | [Andere Sprachen](../README.md) | Weitere lokalisierte Versionen |

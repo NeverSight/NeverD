@@ -18,7 +18,7 @@ PE · ELF · Mach-O · EVM · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64
 ![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-informational.svg)
 [![SDK](https://img.shields.io/badge/SDK-Pure%20C%20API-orange.svg)](#sdk-والإضافات)
 
-[التوثيق](README.md) · [خارطة الطريق](roadmap.md) · [المساهمة](CONTRIBUTING.md)
+[التوثيق](README.md) · [Android](android.md) · [iOS](ios.md) · [خارطة الطريق](roadmap.md) · [المساهمة](CONTRIBUTING.md)
 
 </div>
 
@@ -65,6 +65,17 @@ CLI والمكاملون ووكلاء الذكاء الاصطناعي يستخد
 تستخدم برامج Solana SBF v0-v4 ELF loader صارماً مخصصاً، وmetadata ISA كاملة
 حسب الإصدار، وLow/Med/High IR، وLLVM متحققاً منه، وC11 محمولاً، وRust مستقراً
 وآمناً. راجع [فك ترجمة Solana SBF](sbf.md).
+
+### Android وiOS
+
+تدعم واجهة سطر الأوامر التجريبية `neverd mobile` المدخلات والمخرجات التالية:
+
+| المنصة | المدخلات | المخرجات |
+|--------|----------|----------|
+| [Android](android.md) | APK بما فيه multidex، وDEX، وملفات smali أو مجلداتها | شيفرة Java وتقرير JSON |
+| [iOS](ios.md) | IPA و`.app` وMach-O ‏(arm64/x86_64) | شيفرة C أصلية ومصادر Objective-C/Swift المدعومة وتقرير تغطية JSON |
+
+يتوقف نطاق الاستعادة على أنماط الشيفرة المدعومة؛ ترد القيود في دليل كل منصة.
 
 ## كيف يعمل
 
@@ -122,6 +133,11 @@ cmake --build build
 ./build/bin/neverd lift program.so -o program.ll
 ./build/bin/neverd decompile --language=c program.so -o program.c
 ./build/bin/neverd decompile --language=rust program.so -o program.rs
+
+# Android: من APK إلى Java (تجريبي)
+./build/bin/neverd mobile app.apk -o recovered-android
+# iOS: من IPA إلى الشيفرة المصدرية المدعومة (تجريبي)
+./build/bin/neverd mobile App.ipa -o recovered-ios
 
 # التحليل
 ./build/bin/neverd funcs binary

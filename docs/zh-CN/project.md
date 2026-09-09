@@ -18,7 +18,7 @@ PE · ELF · Mach-O · EVM · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64
 ![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-informational.svg)
 [![SDK](https://img.shields.io/badge/SDK-Pure%20C%20API-orange.svg)](#sdk-与插件)
 
-[文档](README.md) · [路线图](roadmap.md) · [贡献](CONTRIBUTING.md)
+[文档](README.md) · [Android](android.md) · [iOS](ios.md) · [路线图](roadmap.md) · [贡献](CONTRIBUTING.md)
 
 </div>
 
@@ -65,6 +65,17 @@ opcode 全部进入专用 Low/Med/High IR、已验证 LLVM `i256`、C23 `_BitInt
 Solana SBF v0-v4 ELF 程序使用专用 strict loader、完整版本化 ISA metadata、
 Low/Med/High IR、已验证 LLVM、可移植 C11 与安全 stable Rust。详见
 [Solana SBF 反编译](sbf.md)。
+
+### 移动端源码恢复
+
+实验性 **`neverd mobile` CLI 已支持 Android 和 iOS**：
+
+| 平台 | 支持的输入 | 源码输出 |
+|------|------------|----------|
+| [Android](android.md) | APK（含多 DEX）、DEX、smali 文件或目录 | Java + JSON 报告 |
+| [iOS](ios.md) | IPA、`.app`、Mach-O（arm64 / x86_64） | 原生 C 和受支持的 Objective-C / Swift 源码 + JSON 覆盖报告 |
+
+恢复范围取决于受支持的代码模式；覆盖范围与限制见[移动端总览](mobile.md)及各平台指南。
 
 ## 工作原理
 
@@ -122,6 +133,10 @@ cmake --build build
 ./build/bin/neverd lift program.so -o program.ll
 ./build/bin/neverd decompile --language=c program.so -o program.c
 ./build/bin/neverd decompile --language=rust program.so -o program.rs
+
+# 移动端源码恢复（实验性 CLI）
+./build/bin/neverd mobile app.apk -o recovered-android
+./build/bin/neverd mobile App.ipa -o recovered-ios
 
 # 分析
 ./build/bin/neverd funcs binary

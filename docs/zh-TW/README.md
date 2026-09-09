@@ -6,6 +6,8 @@
 
 專案概覽、建置與 CLI 說明見儲存庫 README。面向貢獻者的設計與測試資料統一收錄於此。
 
+實驗性 `neverd mobile` CLI 支援 Android 與 iOS 原始碼還原。Android 可從 APK（含 multidex）、DEX、smali 檔案／目錄產生 Java 與 JSON 報告；iOS 可從 IPA、`.app`、Mach-O（arm64 / x86_64）產生原生 C、受支援的 Objective-C / Swift 原始碼與 JSON 覆蓋率報告。還原範圍與限制詳見各平台指南。
+
 | 文件 | 說明 |
 |------|------|
 | [專案說明（繁體中文）](project.md) | 概覽、快速開始、建置、SDK、CLI |
@@ -18,8 +20,9 @@
 | [Python 外掛](python-plugins.md) | 外掛撰寫、工作階段與事件 API、隔離、測試及發佈 |
 | [EVM 反編譯](evm.md) | EVM 輸入、硬分叉、分級 IR、C/LLVM host ABI、Solidity 重建與限制 |
 | [Solana SBF 反編譯](sbf.md) | SBF v0-v4、LLVM IR、C/Rust 輸出、驗證與已知限制 |
-| [Android Java 還原](android.md) | APK、DEX、smali 的 CLI 流程、執行環境、選項、JSON 報告、錯誤處理與驗證限制 |
-| [iOS 原始碼還原](ios.md) | IPA/.app/Mach-O 選擇、Objective-C/Swift 方法與配置、CLI/export、覆蓋率、限制及執行驗證 |
+| [行動平台支援總覽（English）](../mobile.md) | Android / iOS 輸入、原始碼輸出、CLI 流程與限制 |
+| [Android Java 還原](android.md) | APK（multidex）、DEX、smali 檔案／目錄 → Java。CLI 流程、執行環境、選項、JSON 報告、錯誤處理與驗證限制 |
+| [iOS 原始碼還原](ios.md) | IPA、`.app`、Mach-O → 原生 C 與受支援的 Objective-C / Swift 原始碼。輸入選擇、方法與配置、CLI/export、JSON 覆蓋率報告、限制及執行驗證 |
 | [路線圖](roadmap.md) | 狀態：原生格式、EVM 與 Solana SBF 均已實作 |
 | [English README](../../README.md) | 英文版主文件 |
 | [其他語言 README](../README.md) | 其餘在地化版本 |

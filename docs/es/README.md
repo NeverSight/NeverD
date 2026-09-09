@@ -6,6 +6,8 @@
 
 La visión general, la compilación y el CLI están en el README del repositorio. Las referencias de diseño y pruebas para contribuidores se agrupan aquí.
 
+NeverD admite Android e iOS mediante la CLI experimental `neverd mobile`: APK (incluido multidex), DEX y archivos o directorios smali a Java con un informe JSON; IPA, `.app` y Mach-O (arm64/x86_64) a C nativo y código Objective-C/Swift compatible con un informe de cobertura JSON. El alcance depende de los patrones de código admitidos; las guías detallan los límites.
+
 | Documento | Descripción |
 |-----------|-------------|
 | [README (español)](project.md) | Resumen, inicio rápido, compilación, SDK, CLI |
@@ -18,8 +20,9 @@ La visión general, la compilación y el CLI están en el README del repositorio
 | [Plugins de Python](python-plugins.md) | Autoría, API de sesión y eventos, aislamiento, pruebas y publicación |
 | [Descompilación EVM](evm.md) | Entradas, hardforks, IR por fases, ABI host C/LLVM, reconstrucción Solidity y límites |
 | [Descompilación de Solana SBF](sbf.md) | SBF v0-v4, LLVM IR, salida C/Rust, verificación y límites conocidos |
-| [Recuperación de Java para Android](android.md) | APK, DEX y smali; motor nativo integrado en C++20, JADX opcional, CLI, informes JSON, límites y verificación |
-| [Recuperación de fuentes iOS](ios.md) | IPA/.app/Mach-O, cuerpos y disposiciones Objective-C/Swift, CLI/export, cobertura, límites y pruebas ejecutables |
+| [Resumen de mobile (English)](../mobile.md) | CLI experimental de Android/iOS, entradas, salidas, informes y límites |
+| [Recuperación de Java para Android](android.md) | APK (incluido multidex), DEX, archivos/directorios smali → Java; motor nativo integrado en C++20, JADX opcional, CLI, informes JSON, límites y verificación |
+| [Recuperación de fuentes iOS](ios.md) | IPA/.app/Mach-O (arm64/x86_64) → C nativo y código Objective-C/Swift compatible; disposiciones, CLI/export, cobertura JSON, límites y pruebas ejecutables |
 | [Hoja de ruta](roadmap.md) | Estado: formatos nativos, EVM y Solana SBF implementados |
 | [English README](../../README.md) | Versión en inglés |
 | [Otros idiomas](../README.md) | Resto de versiones localizadas |

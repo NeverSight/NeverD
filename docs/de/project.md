@@ -18,7 +18,7 @@ PE · ELF · Mach-O · EVM · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64
 ![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-informational.svg)
 [![SDK](https://img.shields.io/badge/SDK-Pure%20C%20API-orange.svg)](#sdk-und-plugins)
 
-[Dokumentation](README.md) · [Roadmap](roadmap.md) · [Mitwirken](CONTRIBUTING.md)
+[Dokumentation](README.md) · [Android](android.md) · [iOS](ios.md) · [Roadmap](roadmap.md) · [Mitwirken](CONTRIBUTING.md)
 
 </div>
 
@@ -67,6 +67,17 @@ Solana SBF v0-v4 ELF-Programme nutzen einen dedizierten Strict-Loader,
 vollständige versionierte ISA-Metadaten, Low/Med/High IR, verifiziertes LLVM,
 portables C11 und sicheres stabiles Rust. Siehe
 [Solana-SBF-Dekompilierung](sbf.md).
+
+### Android und iOS
+
+Die experimentelle CLI `neverd mobile` unterstützt folgende Eingaben und Ausgaben:
+
+| Plattform | Eingaben | Ausgaben |
+|----------|----------|----------|
+| [Android](android.md) | APK einschließlich Multidex, DEX, smali-Dateien oder -Verzeichnisse | Java-Quelltext und JSON-Bericht |
+| [iOS](ios.md) | IPA, `.app`, Mach-O (arm64/x86_64) | Natives C, unterstützte Objective-C-/Swift-Quelltexte und JSON-Abdeckungsbericht |
+
+Der Umfang der Rekonstruktion hängt von den unterstützten Codemustern ab; die Grenzen stehen in den jeweiligen Leitfäden.
 
 ## So funktioniert es
 
@@ -124,6 +135,11 @@ cmake --build build
 ./build/bin/neverd lift program.so -o program.ll
 ./build/bin/neverd decompile --language=c program.so -o program.c
 ./build/bin/neverd decompile --language=rust program.so -o program.rs
+
+# Android: APK zu Java (experimentell)
+./build/bin/neverd mobile app.apk -o recovered-android
+# iOS: IPA zu unterstützten Quelltexten (experimentell)
+./build/bin/neverd mobile App.ipa -o recovered-ios
 
 # Analyse
 ./build/bin/neverd funcs binary
