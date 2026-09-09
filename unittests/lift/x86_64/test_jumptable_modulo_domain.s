@@ -2316,4 +2316,48 @@ jt_modulo_signed_remainder_table:
         .quad .Lsigned_remainder_case4
         .size   jt_modulo_signed_remainder_table, .-jt_modulo_signed_remainder_table
 
+// A split post-shift clears the quotient's low bits before the odd factor.
+        .macro masked_backmultiply name, bound, magic, shift, mask, factor, dividend_factor=1
+        .text
+        .globl \name
+        .type \name,@function
+\name:
+        .if \dividend_factor != 1
+        imull $\dividend_factor, %edi
+        .endif
+        movl %edi, %eax
+        movl $\magic, %ecx
+        mull %ecx
+        shrl $\shift, %edx
+        andl $\mask, %edx
+        imull $\factor, %edx
+        subl %edx, %edi
+        leaq \name\()_table(%rip), %rcx
+        jmpq *(%rcx,%rdi,8)
+.L\name\()_0: movl $10, %eax; retq
+.L\name\()_1: movl $11, %eax; retq
+.L\name\()_2: movl $12, %eax; retq
+.L\name\()_3: movl $13, %eax; retq
+.L\name\()_4: movl $14, %eax; retq
+.L\name\()_5: movl $15, %eax; retq
+        .size \name, .-\name
+        .section .data.rel.ro,"aw",@progbits
+        .p2align 3
+        .type \name\()_table,@object
+\name\()_table:
+        .rept \bound / 6
+        .quad .L\name\()_0, .L\name\()_1, .L\name\()_2
+        .quad .L\name\()_3, .L\name\()_4, .L\name\()_5
+        .endr
+        .size \name\()_table, .-\name\()_table
+        .endm
+
+        masked_backmultiply jt_modulo_masked_six, 6, 0xaaaaaaab, 1, -2, 3
+        masked_backmultiply jt_modulo_masked_twelve, 12, 0xaaaaaaab, 1, -4, 3
+        masked_backmultiply jt_modulo_masked_product, 6, 0xaaaaaaab, 1, -2, 3, 3
+        masked_backmultiply jt_modulo_masked_wrong_mask, 6, 0xaaaaaaab, 1, -4, 3
+        masked_backmultiply jt_modulo_masked_wrong_magic, 6, 0xaaaaaaaa, 1, -2, 3
+        masked_backmultiply jt_modulo_masked_wrong_shift, 6, 0xaaaaaaab, 2, -2, 3
+        masked_backmultiply jt_modulo_masked_wrong_factor, 6, 0xaaaaaaab, 1, -2, 5
+
         .section .note.GNU-stack,"",@progbits

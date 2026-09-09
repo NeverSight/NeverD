@@ -1868,6 +1868,12 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
       }
     }
   }
+  // Direct LOAD-to-branch consumers need the same exact GOTOFF address
+  // proof. This does not grant the relay's broader producer scan permissions.
+  const bool AllowI386GOTOFFAddress =
+      AllowI386GOTOFFRelay ||
+      (HasInstructionLocalPointerLoad && Img.Arch == Arch::X86 && Img.isELF() &&
+       Img.getPointerSize() == 4);
   std::vector<int> LoadScanOrder;
   if (!consumeProducts(
           {{Ops.size(), ScanWholeFunction ? (AllowI386GOTOFFRelay ? 4 : 2)
@@ -2183,7 +2189,7 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
     std::optional<va_t> ExactI386GOTOFFBase;
     std::optional<va_t> ExactI386GOTOFFOwner;
     bool ExactI386GOTOFFHasScaledInner = false;
-    for (int ConstantSide = 0; AllowI386GOTOFFRelay && ConstantSide < 2;
+    for (int ConstantSide = 0; AllowI386GOTOFFAddress && ConstantSide < 2;
          ++ConstantSide) {
       const NdVar &Constant = Ops[AddIdx].Inputs[ConstantSide];
       if (!Constant.isConst() || Constant.Size != 4 ||

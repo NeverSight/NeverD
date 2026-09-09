@@ -2910,12 +2910,12 @@ uint32_t CFGBuilder::inferBoundsFromMask(
         continue;
       if (!consumeWork(KnownOneGroups.size()))
         return FailIncomplete();
-      auto Group = std::find_if(
-          KnownOneGroups.begin(), KnownOneGroups.end(),
-          [&](const KnownOneGroup &Known) {
-            return Known.CandidateIndex == CandidateIndex &&
-                   Known.RequiredBits == RequiredBits;
-          });
+      auto Group =
+          std::find_if(KnownOneGroups.begin(), KnownOneGroups.end(),
+                       [&](const KnownOneGroup &Known) {
+                         return Known.CandidateIndex == CandidateIndex &&
+                                Known.RequiredBits == RequiredBits;
+                       });
       if (Group == KnownOneGroups.end()) {
         if (!consumeWorkProducts({{1, 3}}))
           return FailIncomplete();
@@ -5793,6 +5793,11 @@ bool CFGBuilder::inferBoundsFromModulo(
         recordCandidateProducer(Magnitude - 1, Op, I, ProposalBudget);
     }
     recordCandidateProducer(Magnitude, Op, I, ProposalBudget);
+    // A masked reciprocal can retain part of N in the quotient, so the
+    // visible back-multiply coefficient need not equal the divisor. Include
+    // capacity for this filtered prefix producer as a proposal; the exact
+    // recipe and full-CFG selector replay still have to authenticate it.
+    recordCandidateProducer(Info.PhysicalCapacity, Op, I, ProposalBudget);
     if (ProposalBudget.exhausted())
       break;
   }

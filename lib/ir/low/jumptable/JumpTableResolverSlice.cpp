@@ -1511,8 +1511,13 @@ static bool provesExactUnsignedModuloRecipe(
   const llvm::ArrayRef<SymRef> RemainderTerms = Ctx.operands(Remainder);
   if (!consume(RemainderTerms.size()))
     return false;
+  // Even divisors admit the factored reciprocal recipes below. Defer their
+  // products so a negative back-multiply cannot seed an expensive nested
+  // reciprocal search before the flattened Add dividend is tried. Preserve
+  // the established order for odd divisors; all products remain fallbacks.
   for (SymRef Term : RemainderTerms)
-    if (!appendDividendCandidate(Term))
+    if ((Divisor % 2 != 0 || Ctx.op(Term) != SymOp::Mul) &&
+        !appendDividendCandidate(Term))
       return false;
   // Flattened back-subtracts can retain the original dividend as a sibling
   // Add node rather than as one of the remainder's direct terms.  Prefer all
@@ -2072,6 +2077,35 @@ static bool provesExactUnsignedModuloRecipe(
     };
     if (std::any_of(Quotients.begin(), Quotients.end(), matchesRemainder))
       return true;
+    // A backend can factor 2^k out of the back-multiply by retaining that
+    // scale in the quotient: ((high >> (s-k)) & ~((1<<k)-1)) ==
+    // (high >> s) * 2^k. Match only this exact unsigned identity, using the
+    // same LLVM reciprocal and requiring 2^k to divide the original divisor.
+    if (!Magic.IsAdd) {
+      const unsigned FactoredBits =
+          std::min<unsigned>(llvm::countr_zero(Divisor), Magic.PostShift);
+      for (unsigned Bits = 1; Bits <= FactoredBits; ++Bits)
+        for (SymRef High : HighForms) {
+          SymRef Shifted = shiftRight(High, Magic.PostShift - Bits);
+          // HighForms contain only Extract/Const nodes; the optional LShr
+          // cannot introduce an AND tree that would need a recursive charge.
+          if (!Shifted || !consume(8) || !consumeSortWork(2))
+            return false;
+          SymRef Mask =
+              Ctx.mkConst(llvm::APInt::getHighBitsSet(Width, Width - Bits));
+          SymRef ScaledQuotient = Ctx.mkAnd(Shifted, Mask);
+          SymRef Product = mkMul2Budgeted(ScaledQuotient,
+                                          Ctx.mkConst(Width, Divisor >> Bits));
+          SymRef Expected =
+              Product ? mkSubBudgeted(Dividend, Product) : SymRef{};
+          if (!Expected)
+            return false;
+          SymRef ActualRing = normalizeLowRing(Remainder, 0);
+          SymRef ExpectedRing = normalizeLowRing(Expected, 0);
+          if (ActualRing && ActualRing == ExpectedRing)
+            return true;
+        }
+    }
   }
   return false;
 }
