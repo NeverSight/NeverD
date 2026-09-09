@@ -103,8 +103,11 @@ Rectangle {
             onTextChanged: {
                 const appended = previousText.length > 0 && text.indexOf(previousText) === 0
                 if (appended) {
-                    if (root.appendViewport === null)
-                        root.appendViewport = root.readingViewport
+                    if (root.appendViewport === null) {
+                        // Qt 6.8 can retain a reference to a point property in
+                        // a var. Copy the coordinates before recording changes.
+                        root.appendViewport = Qt.point(root.readingViewport.x, root.readingViewport.y)
+                    }
                 } else {
                     // Replacements retire any deferred append restoration.
                     root.appendViewport = null
