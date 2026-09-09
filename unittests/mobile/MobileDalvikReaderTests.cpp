@@ -163,9 +163,10 @@ Fixture fixture(FixtureOptions options = {}) {
               return methodKey(a) < methodKey(b);
             });
   fixture.methods = method_refs;
-  unsigned definition_index = unsigned(
-      std::find(method_refs.begin(), method_refs.end(), definition) -
-      method_refs.begin());
+  auto definition_position =
+      std::find(method_refs.begin(), method_refs.end(), definition);
+  unsigned definition_index =
+      unsigned(definition_position - method_refs.begin());
   unsigned incoming = !(options.flags & 8);
   for (auto &p : options.params)
     incoming += p == "J" || p == "D" ? 2 : 1;
@@ -187,7 +188,8 @@ Fixture fixture(FixtureOptions options = {}) {
   for (auto &typ : types)
     append(raw, stringIndex(typ), 4);
   at["types"] = section(2, types.size(), raw);
-  at["protos"] = section(3, protos.size(), std::string(12 * protos.size(), '\0'));
+  at["protos"] =
+      section(3, protos.size(), std::string(12 * protos.size(), '\0'));
   if (options.static_value) {
     raw.clear();
     append(raw, typeIndex(owner), 2);
@@ -488,21 +490,27 @@ TEST(MobileDalvikReader, DexArrayCloneCallsAgreeWithSmali) {
     ASSERT_EQ(dex_method.instructions.size(), 3u);
     EXPECT_EQ(dex_method.instructions[0].opcode, "invoke-virtual");
     EXPECT_EQ(dex_method.instructions[0].registers, (std::vector<unsigned>{1}));
-    EXPECT_EQ(std::get<MethodRef>(dex_method.instructions[0].reference), callee);
+    const auto &invocation = dex_method.instructions[0];
+    EXPECT_EQ(std::get<MethodRef>(invocation.reference), callee);
     EXPECT_EQ(dex_method.instructions[1].opcode, "move-result-object");
     EXPECT_EQ(dex_method.instructions[2].opcode, "return-object");
-    auto smali_class = smali(methodText(
-        "invoke-virtual {p0}, " + callee.identity() +
-            "\nmove-result-object v0\nreturn-object v0",
-        "value(" + owner + ")Ljava/lang/Object;", 2));
+    auto smali_body = "invoke-virtual {p0}, " + callee.identity() +
+                      "\nmove-result-object v0\nreturn-object v0";
+    auto signature = "value(" + owner + ")Ljava/lang/Object;";
+    auto smali_class = smali(methodText(smali_body, signature, 2));
     const auto &smali_method = smali_class.methods[0];
     ASSERT_EQ(smali_method.instructions.size(), dex_method.instructions.size());
-    EXPECT_EQ(smali_method.code_end, dex_method.code_end);
+    // DEX positions count 16-bit code units; smali positions are logical
+    // instruction ordinals. The three-unit invoke has the same operation.
+    const std::array<uint32_t, 3> dex_positions{0, 3, 4};
+    EXPECT_EQ(dex_method.code_end, 5u);
+    EXPECT_EQ(smali_method.code_end, 3u);
     EXPECT_EQ(smali_method.registers, dex_method.registers);
     for (size_t i = 0; i < dex_method.instructions.size(); ++i) {
       const auto &a = dex_method.instructions[i];
       const auto &b = smali_method.instructions[i];
-      EXPECT_EQ(a.pc, b.pc);
+      EXPECT_EQ(a.pc, dex_positions[i]);
+      EXPECT_EQ(b.pc, i);
       EXPECT_EQ(a.opcode, b.opcode);
       EXPECT_EQ(a.registers, b.registers);
       EXPECT_EQ(a.reference, b.reference);
@@ -573,8 +581,9 @@ TEST(MobileDalvikReader, DexArrayInitializerCallsRemainInvalid) {
     SCOPED_TRACE(name);
     MethodRef callee{"[I", name, {}, "V"};
     auto f = invokingFixture(callee, 0x70);
-    expectDexError(f.data,
-                   "Invalid DEX: array type cannot own an initializer invocation");
+    constexpr std::string_view reason =
+        "Invalid DEX: array type cannot own an initializer invocation";
+    expectDexError(f.data, reason);
     EXPECT_THROW(smali(methodText("invoke-direct {p0}, " + callee.identity() +
                                       "\nreturn-void",
                                   "value([I)V", 2)),
