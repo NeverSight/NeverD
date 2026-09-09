@@ -82,6 +82,41 @@ std::string loadableThin() {
   integer(data, 92, 5);
   return data;
 }
+void appendTarget(std::string &data, uint32_t platform,
+                  uint32_t minos = 0x00120000, uint32_t sdk = 0x001a0500,
+                  const std::vector<std::pair<uint32_t, uint32_t>> &tools = {},
+                  uint32_t command = 0x32) {
+  const bool wide = (static_cast<unsigned char>(data[7]) & 1) != 0;
+  const size_t header = wide ? 32 : 28;
+  auto read = [&](size_t p) {
+    uint32_t value = 0;
+    for (unsigned i = 0; i < 4; ++i)
+      value |= uint32_t(static_cast<unsigned char>(data[p + i])) << (i * 8);
+    return value;
+  };
+  const auto count = read(16), bytes = read(20);
+  const uint32_t length = command == 0x32 ? 24 + tools.size() * 8 : 16;
+  const size_t p = header + bytes;
+  if (p + length > data.size())
+    data.resize(p + length, '\0');
+  integer(data, 16, count + 1);
+  integer(data, 20, bytes + length);
+  integer(data, p, command);
+  integer(data, p + 4, length);
+  if (command == 0x32) {
+    integer(data, p + 8, platform);
+    integer(data, p + 12, minos);
+    integer(data, p + 16, sdk);
+    integer(data, p + 20, tools.size());
+    for (size_t i = 0; i < tools.size(); ++i) {
+      integer(data, p + 24 + i * 8, tools[i].first);
+      integer(data, p + 28 + i * 8, tools[i].second);
+    }
+  } else {
+    integer(data, p + 8, minos);
+    integer(data, p + 12, sdk);
+  }
+}
 std::string symbolTable(uint32_t count, bool wide = true,
                         const std::string &name = "_$s4Demo3fooyyF") {
   auto data = thin(wide ? 0x100000c : 12);
@@ -221,6 +256,160 @@ TEST(MobileIOSNative, ValidatesUnselectedFatSlice) {
   auto d = fat();
   integer(d, 4096 + 16, 0xffffffff);
   EXPECT_THROW(selectSlice(d, "arm64", b), Error);
+}
+TEST(MobileIOSNative, BuildTargetKeepsExplicitPlatformAndToolVersions) {
+  // arm64 is shared by device, simulator and macOS; it is not a platform tag.
+  for (auto [platform, name] :
+       {std::pair{1u, "macos"}, {2u, "ios"}, {7u, "ios-simulator"}}) {
+    Budget budget;
+    auto data = thin();
+    appendTarget(data, platform, 0x00120003, 0x001a0500,
+                 {{1, 0x00110002}, {2, 0x00060302}, {3, 0x03f50101},
+                  {999, 0xfffffeff}});
+    auto selected = selectSlice(data, "arm64", budget);
+    ASSERT_EQ(selected.build_targets.size(), 1u);
+    const auto &target = selected.build_targets.front();
+    EXPECT_EQ(target.command, 0x32u);
+    EXPECT_EQ(target.platform, platform);
+    EXPECT_EQ(target.minos, 0x00120003u);
+    EXPECT_EQ(target.sdk, 0x001a0500u);
+    ASSERT_EQ(target.tools.size(), 4u);
+    EXPECT_EQ(target.tools[3].tool, 999u);
+    EXPECT_EQ(target.tools[3].version, 0xfffffeffu);
+    auto report = buildTargetMetadata(selected, budget);
+    EXPECT_EQ(str(report, "status"), "known");
+    EXPECT_EQ(str(report, "platform"), name);
+    EXPECT_EQ(str(report, "minos"), "18.0.3");
+    EXPECT_EQ(str(report, "sdk"), "26.5.0");
+    const auto &record = object(array(report, "commands").front(), "target");
+    const auto &unknown_tool = object(array(record, "tools")[3], "tool");
+    EXPECT_EQ(str(unknown_tool, "tool"), "unknown");
+    EXPECT_EQ(number(unknown_tool, "tool_id"), 999);
+    EXPECT_EQ(str(unknown_tool, "version"), "65535.254.255");
+  }
+}
+TEST(MobileIOSNative, FatBuildTargetComesFromTheSelectedSlice) {
+  for (bool wide : {false, true}) {
+    Budget budget;
+    auto data = fat(wide);
+    auto device = thin(12), simulator = thin();
+    appendTarget(device, 2, 0x000c0000, 0x00120000, {{3, 0x01020304}});
+    appendTarget(simulator, 7, 0x00120000, 0x001a0500, {{3, 0x05060708}});
+    data.replace(4096, 4096, device);
+    data.replace(8192, 4096, simulator);
+    auto automatic = selectSlice(data, "auto", budget);
+    auto explicit_arm = selectSlice(data, "arm", budget);
+    ASSERT_EQ(automatic.build_targets.size(), 1u);
+    ASSERT_EQ(explicit_arm.build_targets.size(), 1u);
+    EXPECT_EQ(automatic.build_targets[0].platform, 7u);
+    EXPECT_EQ(explicit_arm.build_targets[0].platform, 2u);
+    EXPECT_EQ(automatic.build_targets[0].tools[0].version, 0x05060708u);
+    EXPECT_EQ(explicit_arm.build_targets[0].tools[0].version, 0x01020304u);
+  }
+}
+TEST(MobileIOSNative, BuildTargetPreservesMissingUnknownAndLegacyFacts) {
+  Budget budget;
+  auto missing = buildTargetMetadata(selectSlice(thin(), "auto", budget), budget);
+  EXPECT_EQ(str(missing, "status"), "unknown");
+  EXPECT_EQ(str(missing, "platform"), "unknown");
+  EXPECT_TRUE(array(missing, "commands").empty());
+  ASSERT_NE(missing.get("platform_id"), nullptr);
+  EXPECT_EQ(*missing.get("platform_id"), Value(nullptr));
+  auto data = thin();
+  appendTarget(data, 999);
+  auto unknown = buildTargetMetadata(selectSlice(data, "auto", budget), budget);
+  EXPECT_EQ(str(unknown, "status"), "unknown");
+  EXPECT_EQ(str(unknown, "platform"), "unknown");
+  EXPECT_EQ(number(unknown, "platform_id"), 999);
+  EXPECT_FALSE(str(unknown, "reason").empty());
+  for (uint32_t cpu : {0x100000cu, 0x1000007u})
+    for (uint32_t command : {0x24u, 0x25u, 0x2fu, 0x30u}) {
+      data = thin(cpu);
+      appendTarget(data, 0, 0x000c0304, 0x00120506, {}, command);
+      auto selected = selectSlice(data, "auto", budget);
+      ASSERT_EQ(selected.build_targets.size(), 1u);
+      EXPECT_EQ(selected.build_targets[0].command, command);
+      auto legacy = buildTargetMetadata(selected, budget);
+      EXPECT_EQ(str(legacy, "status"), "unknown");
+      EXPECT_EQ(str(legacy, "platform"), "unknown");
+      EXPECT_EQ(str(legacy, "minos"), "12.3.4");
+      EXPECT_EQ(str(legacy, "sdk"), "18.5.6");
+      EXPECT_EQ(*legacy.get("platform_id"), Value(nullptr));
+    }
+}
+TEST(MobileIOSNative, MultipleBuildTargetsRemainAmbiguousWithoutLastWins) {
+  // A zippered dylib legitimately records macOS and Mac Catalyst. Preserve
+  // repeated and conflicting records too, without selecting an SDK profile.
+  for (auto [platform, minos, command] :
+       {std::tuple{6u, 0x00120000u, 0x32u}, {1u, 0x00120000u, 0x32u},
+        {1u, 0x00130000u, 0x32u}, {0u, 0x00120000u, 0x24u}}) {
+    Budget budget;
+    auto data = thin();
+    integer(data, 12, 6); // MH_DYLIB
+    appendTarget(data, 1);
+    appendTarget(data, platform, minos, 0x001a0500, {}, command);
+    auto selected = selectSlice(data, "auto", budget);
+    ASSERT_EQ(selected.build_targets.size(), 2u);
+    EXPECT_EQ(selected.build_targets[0].platform, 1u);
+    EXPECT_EQ(selected.build_targets[1].platform, platform);
+    EXPECT_EQ(selected.build_targets[1].minos, minos);
+    auto report = buildTargetMetadata(selected, budget);
+    EXPECT_EQ(str(report, "status"), "unknown");
+    EXPECT_EQ(str(report, "platform"), "unknown");
+    EXPECT_EQ(*report.get("platform_id"), Value(nullptr));
+    EXPECT_EQ(array(report, "commands").size(), 2u);
+    EXPECT_NE(str(report, "reason").find("multiple"), std::string::npos);
+  }
+}
+TEST(MobileIOSNative, RejectsBuildTargetCommandAndToolTableTruncation) {
+  Budget budget;
+  for (uint32_t length : {8u, 16u, 20u}) {
+    auto data = thin();
+    appendTarget(data, 2);
+    integer(data, 20, length);
+    integer(data, 36, length);
+    EXPECT_THROW(selectSlice(data, "auto", budget), Error);
+  }
+  for (uint32_t count : {0u, 2u, 0xffffffffu}) {
+    auto data = thin();
+    appendTarget(data, 2, 0x00120000, 0x001a0500, {{3, 1}});
+    integer(data, 52, count); // One complete entry must mean exactly ntools=1.
+    EXPECT_THROW(selectSlice(data, "auto", budget), Error);
+  }
+  auto data = thin();
+  appendTarget(data, 2, 0x00120000, 0x001a0500, {{3, 1}});
+  data.resize(32 + 24 + 4);
+  EXPECT_THROW(selectSlice(data, "auto", budget), Error);
+  data = thin();
+  appendTarget(data, 0, 0x00120000, 0x001a0500, {}, 0x25);
+  integer(data, 20, 8);
+  integer(data, 36, 8);
+  EXPECT_THROW(selectSlice(data, "auto", budget), Error);
+  data = fat();
+  auto malformed = thin(12);
+  appendTarget(malformed, 2);
+  integer(malformed, 28 + 20, 1);
+  data.replace(4096, 4096, malformed);
+  EXPECT_THROW(selectSlice(data, "arm64", budget), Error);
+}
+TEST(MobileIOSNative, BuildTargetToolsRespectWorkAndConstructionBudgets) {
+  auto data = thin();
+  appendTarget(data, 2, 0x00120000, 0x001a0500,
+               {{1, 1}, {2, 2}, {3, 3}, {999, 4}});
+  Budget exhausted;
+  exhausted.remaining = 3;
+  EXPECT_THROW(selectSlice(data, "auto", exhausted), Error);
+  Budget budget;
+  auto selected = selectSlice(data, "auto", budget);
+  auto report = buildTargetMetadata(selected, budget);
+  EXPECT_EQ(array(object(array(report, "commands")[0], "target"), "tools").size(),
+            4u);
+  EXPECT_EQ(budget.output_bytes, 0u);
+  Limits limits;
+  limits.max_bytes = 1024;
+  Budget small(limits);
+  EXPECT_THROW(buildTargetMetadata(selected, small), Error);
+  EXPECT_EQ(small.output_bytes, 0u);
 }
 TEST(MobileIOSNative, DetectsEncryptionAndRejectsTruncatedCommands) {
   Budget b;
@@ -979,7 +1168,9 @@ TEST(MobileIOSNative, MetadataOnlyAppUsesAppRelativeArtifactWithoutTools) {
       "<plist><dict><key>CFBundleExecutable</key><string>Main</"
       "string><key>CFBundleName</key><string>测试</string></dict></plist>");
   writeFile(bundle / "Main", thin(7));
-  writeFile(bundle / "Frameworks/Inside", loadableThin());
+  auto inside = loadableThin();
+  appendTarget(inside, 7, 0x00120000, 0x001a0500, {{3, 0x03f50101}});
+  writeFile(bundle / "Frameworks/Inside", inside);
   Options options;
   options.input = bundle;
   options.metadata_only = true;
@@ -992,9 +1183,48 @@ TEST(MobileIOSNative, MetadataOnlyAppUsesAppRelativeArtifactWithoutTools) {
   EXPECT_EQ(str(report, "architecture"), "arm64");
   EXPECT_EQ(str(report, "selected_artifact"), "Frameworks/Inside");
   EXPECT_EQ(str(*report.getObject("bundle"), "CFBundleName"), "测试");
+  const auto *target = report.getObject("build_target");
+  ASSERT_NE(target, nullptr);
+  EXPECT_EQ(str(*target, "status"), "known");
+  EXPECT_EQ(str(*target, "platform"), "ios-simulator");
+  EXPECT_EQ(number(*target, "platform_id"), 7);
+  EXPECT_EQ(str(*target, "minos"), "18.0.0");
+  EXPECT_EQ(str(*target, "sdk"), "26.5.0");
+  const auto &command = object(array(*target, "commands").front(), "target");
+  EXPECT_EQ(number(command, "load_command_index"), 1);
+  EXPECT_EQ(number(object(array(command, "tools")[0], "tool"), "tool_id"), 3);
   EXPECT_FALSE(fs::exists(staging / "input"));
   EXPECT_TRUE(fs::is_regular_file(staging / "metadata/objc.h"));
   EXPECT_FALSE(fs::exists(staging / "sources"));
+}
+
+TEST(MobileIOSNative, MetadataOnlyPreservesMissingAndZipperedBuildTargets) {
+  for (bool zippered : {false, true}) {
+    TemporaryDirectory directory;
+    auto data = loadableThin();
+    if (zippered) {
+      integer(data, 12, 6); // MH_DYLIB
+      appendTarget(data, 1, 0x000e0000, 0x001a0500);
+      appendTarget(data, 6, 0x00120000, 0x001a0500);
+    }
+    Options options;
+    options.input = directory.path / "input.macho";
+    options.metadata_only = true;
+    options.executable = "deliberately-unavailable-native-tool";
+    writeFile(options.input, data);
+    auto staging = directory.path / "output";
+    fs::create_directory(staging);
+    Budget budget;
+    auto report = recoverIOS(options, staging, budget);
+    const auto *target = report.getObject("build_target");
+    ASSERT_NE(target, nullptr);
+    EXPECT_EQ(str(*target, "status"), "unknown");
+    EXPECT_EQ(str(*target, "platform"), "unknown");
+    EXPECT_EQ(*target->get("platform_id"), Value(nullptr));
+    EXPECT_EQ(array(*target, "commands").size(), zippered ? 2u : 0u);
+    EXPECT_TRUE(fs::exists(staging / "metadata/objc.h"));
+    EXPECT_FALSE(fs::exists(staging / "sources"));
+  }
 }
 
 TEST(MobileIOSNative,

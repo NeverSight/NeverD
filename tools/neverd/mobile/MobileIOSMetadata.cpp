@@ -3,6 +3,7 @@
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/BinaryFormat/MachO.h"
 
 #include <algorithm>
 #include <limits>
@@ -98,6 +99,61 @@ std::string arch(uint32_t cpu) {
     return {};
   }
 }
+void accountBuildTarget(size_t tools, uint64_t &bytes, const Budget &budget) {
+  // Bound both the retained records and their JSON representation before
+  // allocation. This is construction accounting, not published output bytes.
+  constexpr uint64_t record_bytes = 1024, tool_bytes = 256;
+  if (bytes > budget.limits.max_bytes ||
+      record_bytes > budget.limits.max_bytes - bytes ||
+      tools > (budget.limits.max_bytes - bytes - record_bytes) / tool_bytes)
+    throw Error("Mach-O build-target metadata construction exceeds byte budget");
+  bytes += record_bytes + uint64_t(tools) * tool_bytes;
+}
+std::string_view buildPlatform(uint32_t platform) {
+  switch (platform) {
+#define PLATFORM(symbol, id, name, build_name, target, tapi_target, marketing) \
+  case id:                                                                  \
+    return #tapi_target;
+#include "llvm/BinaryFormat/MachO.def"
+  default:
+    return "unknown";
+  }
+}
+std::string_view buildCommand(uint32_t command) {
+  switch (command) {
+  case llvm::MachO::LC_BUILD_VERSION:
+    return "LC_BUILD_VERSION";
+  case llvm::MachO::LC_VERSION_MIN_MACOSX:
+    return "LC_VERSION_MIN_MACOSX";
+  case llvm::MachO::LC_VERSION_MIN_IPHONEOS:
+    return "LC_VERSION_MIN_IPHONEOS";
+  case llvm::MachO::LC_VERSION_MIN_TVOS:
+    return "LC_VERSION_MIN_TVOS";
+  case llvm::MachO::LC_VERSION_MIN_WATCHOS:
+    return "LC_VERSION_MIN_WATCHOS";
+  default:
+    return "unknown";
+  }
+}
+std::string_view buildTool(uint32_t tool) {
+  switch (tool) {
+  case llvm::MachO::TOOL_CLANG:
+    return "clang";
+  case llvm::MachO::TOOL_SWIFT:
+    return "swift";
+  case llvm::MachO::TOOL_LD:
+    return "ld";
+  case llvm::MachO::TOOL_LLD:
+    return "lld";
+  default:
+    return "unknown";
+  }
+}
+std::string buildVersion(uint32_t version) {
+  return std::to_string(version >> 16) + "." +
+         std::to_string((version >> 8) & 255) + "." +
+         std::to_string(version & 255);
+}
 Selection thin(std::string_view bytes, Budget &budget) {
   Bytes b{bytes};
   b.range(0, 28);
@@ -118,7 +174,8 @@ Selection thin(std::string_view bytes, Budget &budget) {
   if (n > 100000 || n > size / 8)
     throw Error("invalid Mach-O load-command count");
   b.range(header, size);
-  uint64_t p = header, end = header + size, total_sections = 0;
+  uint64_t p = header, end = header + size, total_sections = 0,
+           target_metadata_bytes = 0;
   bool symtab = false, chained = false;
   std::vector<std::pair<uint64_t, uint64_t>> mappings;
   for (uint64_t i = 0; i < n; ++i) {
@@ -188,6 +245,41 @@ Selection thin(std::string_view bytes, Budget &budget) {
           continue;
         symbolName(b, strings, string_size, index, budget);
       }
+    } else if (cmd == llvm::MachO::LC_BUILD_VERSION) {
+      // Apple's mach-o/loader.h defines a 24-byte command followed by exactly
+      // ntools 8-byte build_tool_version entries. Never read into the next LC.
+      if (len < 24)
+        throw Error("truncated Mach-O build-version command");
+      const auto count = b.get(p + 20, 4);
+      if ((len - 24) % 8 || count != (len - 24) / 8)
+        throw Error("Mach-O build-version tool count disagrees with command size");
+      accountBuildTarget(count, target_metadata_bytes, budget);
+      BuildTarget target;
+      target.command = cmd;
+      target.load_command_index = i;
+      target.platform = b.get(p + 8, 4);
+      target.minos = b.get(p + 12, 4);
+      target.sdk = b.get(p + 16, 4);
+      for (uint64_t j = 0; j < count; ++j) {
+        budget.tick();
+        const auto entry = p + 24 + j * 8;
+        target.tools.push_back({uint32_t(b.get(entry, 4)),
+                                uint32_t(b.get(entry + 4, 4))});
+      }
+      s.build_targets.push_back(std::move(target));
+    } else if (cmd == llvm::MachO::LC_VERSION_MIN_MACOSX ||
+               cmd == llvm::MachO::LC_VERSION_MIN_IPHONEOS ||
+               cmd == llvm::MachO::LC_VERSION_MIN_TVOS ||
+               cmd == llvm::MachO::LC_VERSION_MIN_WATCHOS) {
+      if (len != 16)
+        throw Error("invalid Mach-O legacy minimum-version command size");
+      accountBuildTarget(0, target_metadata_bytes, budget);
+      BuildTarget target;
+      target.command = cmd;
+      target.load_command_index = i;
+      target.minos = b.get(p + 8, 4);
+      target.sdk = b.get(p + 12, 4);
+      s.build_targets.push_back(std::move(target));
     } else if (cmd == 0x80000034) {
       if (len < 16 || chained)
         throw Error("invalid or duplicate Mach-O chained-fixup command");
@@ -293,6 +385,79 @@ Selection selectSlice(std::string_view bytes, std::string_view architecture,
   auto result = std::move(*matches[0]);
   result.available = std::move(available);
   return result;
+}
+Object buildTargetMetadata(const Selection &selection, Budget &budget) {
+  budget.check();
+  Array commands;
+  uint64_t metadata_bytes = 0;
+  for (const auto &target : selection.build_targets) {
+    budget.tick();
+    accountBuildTarget(target.tools.size(), metadata_bytes, budget);
+    const bool modern = target.command == llvm::MachO::LC_BUILD_VERSION;
+    Array tools;
+    for (const auto &tool : target.tools) {
+      budget.tick();
+      tools.push_back(Object{{"tool_id", tool.tool},
+                             {"tool", std::string(buildTool(tool.tool))},
+                             {"version_raw", tool.version},
+                             {"version", buildVersion(tool.version)}});
+    }
+    commands.push_back(Object{
+        {"command_id", target.command},
+        {"command", std::string(buildCommand(target.command))},
+        {"load_command_index", target.load_command_index},
+        {"platform_id", modern ? Value(target.platform) : Value(nullptr)},
+        {"platform", modern ? std::string(buildPlatform(target.platform))
+                             : "unknown"},
+        {"minos_raw", target.minos},
+        {"minos", buildVersion(target.minos)},
+        {"sdk_raw", target.sdk},
+        {"sdk", buildVersion(target.sdk)},
+        {"tools", std::move(tools)}});
+  }
+  Object report{{"status", "unknown"},
+                {"platform", "unknown"},
+                {"platform_id", nullptr},
+                {"minos_raw", nullptr},
+                {"minos", nullptr},
+                {"sdk_raw", nullptr},
+                {"sdk", nullptr},
+                {"commands", std::move(commands)}};
+  if (selection.build_targets.empty()) {
+    report["reason"] = "no explicit Mach-O build-target command";
+    return report;
+  }
+  // Multiple LC_BUILD_VERSION records are valid for zippered dylibs. Retain
+  // every command, including identical duplicates, without choosing a target
+  // from command order, CPU architecture, bundle suffix, or the host platform.
+  if (selection.build_targets.size() != 1) {
+    report["reason"] = "multiple Mach-O build-target commands; target selection "
+                       "is ambiguous";
+    return report;
+  }
+  const auto &target = selection.build_targets.front();
+  report["minos_raw"] = target.minos;
+  report["minos"] = buildVersion(target.minos);
+  report["sdk_raw"] = target.sdk;
+  report["sdk"] = buildVersion(target.sdk);
+  if (target.command != llvm::MachO::LC_BUILD_VERSION) {
+    report["reason"] = "legacy minimum-version command retained without "
+                       "inferring a device or simulator build target";
+    return report;
+  }
+  const auto platform = buildPlatform(target.platform);
+  report["platform_id"] = target.platform;
+  report["platform"] = std::string(platform);
+  if (platform == "unknown")
+    report["reason"] = "unrecognized LC_BUILD_VERSION platform value";
+  else if (!target.minos || !target.sdk)
+    report["reason"] = "LC_BUILD_VERSION has an unspecified minimum OS or SDK "
+                       "version";
+  else if (target.minos > target.sdk)
+    report["reason"] = "LC_BUILD_VERSION minimum OS exceeds its SDK version";
+  else
+    report["status"] = "known";
+  return report;
 }
 Object objcMetadata(const BinaryImage &image) {
   Array classes, categories, limitations;
