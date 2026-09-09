@@ -128,8 +128,24 @@ bool liftMulLong(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   // --- UMULH / SMULH (upper Half of 64×64 → 128 multiply) ---
   case AARCH64_INS_UMULH:
   case AARCH64_INS_SMULH: {
-    if (ARM64.op_count < 3)
-      break;
+    // Capstone shares these ids with SVE/SVE2 lane operations. This owner
+    // implements only the unmodified X-register form; reject other shapes
+    // before an operand read can emit IR or expose a wider vector carrier.
+    const auto IsPlainGPR64 = [](const cs_aarch64_op &Op) {
+      if (Op.type != AARCH64_OP_REG || Op.vector_index != -1 ||
+          Op.vas != AARCH64LAYOUT_INVALID ||
+          Op.shift.type != AARCH64_SFT_INVALID || Op.shift.value != 0 ||
+          Op.ext != AARCH64_EXT_INVALID || Op.is_vreg || Op.is_list_member)
+        return false;
+      return (Op.reg >= AARCH64_REG_X0 && Op.reg <= AARCH64_REG_X28) ||
+             Op.reg == AARCH64_REG_FP || Op.reg == AARCH64_REG_LR ||
+             Op.reg == AARCH64_REG_XZR;
+    };
+    if (ARM64.op_count != 3)
+      return false;
+    for (unsigned I = 0; I < 3; ++I)
+      if (!IsPlainGPR64(ARM64.operands[I]))
+        return false;
     NdVar Dst = L.operandWrite(ARM64.operands[0]);
     NdVar A = L.operandRead(S, ARM64.operands[1]);
     NdVar B = L.operandRead(S, ARM64.operands[2]);
