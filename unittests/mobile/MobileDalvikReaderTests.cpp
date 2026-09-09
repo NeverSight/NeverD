@@ -531,6 +531,103 @@ TEST(MobileDalvikReader, SmaliFieldRawBitsKeepNegativeZeroAndNaN) {
   EXPECT_EQ(std::get<int64_t>(cls.fields[4].value), 65);
   EXPECT_TRUE(std::get<bool>(cls.fields[5].value));
 }
+TEST(MobileDalvikReader, SmaliFloatLiteralsRoundDirectlyToTheirDeclaredWidth) {
+  struct Case {
+    const char *text;
+    uint32_t expected;
+  };
+  // Exact halfway values select the even significand. Values on either side
+  // must not first round to the halfway double and then round a second time.
+  const Case cases[] = {
+      {"1.000000059604644775390625f", 0x3f800000},
+      {"1.000000059604644775390625000000000000000000000000001f", 0x3f800001},
+      {"1.000000059604644775390624999999999999999999999999999f", 0x3f800000},
+      {"-1.000000059604644775390625f", 0xbf800000},
+      {"-1.000000059604644775390625000000000000000000000000001f", 0xbf800001},
+      {"-1.000000059604644775390624999999999999999999999999999f", 0xbf800000},
+      {"1.000000178813934326171875f", 0x3f800002},
+      {"1.000000178813934326171874999999999999999999999999999f", 0x3f800001},
+      {"-1.000000178813934326171875f", 0xbf800002},
+      {"-1.000000178813934326171874999999999999999999999999999f", 0xbf800001},
+      {"0x1p-150f", 0x00000000},
+      {"0x1.0000000000000000000000000000001p-150f", 0x00000001},
+      {"-0x1p-150f", 0x80000000},
+      {"-0x1.0000000000000000000000000000001p-150f", 0x80000001},
+      {"0x1p-149f", 0x00000001},
+      {"-0x1p-149f", 0x80000001},
+  };
+  for (const auto &entry : cases) {
+    SCOPED_TRACE(entry.text);
+    std::string literal = entry.text;
+    auto cls =
+        smali(".class public Lfixture/Rounding;\n.super Ljava/lang/Object;\n"
+              ".field public static value:F = " +
+              literal +
+              "\n.method public static scalar()F\n.registers 1\nconst v0, " +
+              literal +
+              "\nreturn v0\n.end method\n"
+              ".method public static array()[F\n.registers 2\nconst/4 v1, 1\n"
+              "new-array v0, v1, [F\nfill-array-data v0, :data\n"
+              "return-object v0\n:data\n.array-data 4\n" +
+              literal + "\n.end array-data\n.end method\n");
+    ASSERT_EQ(cls.fields.size(), 1u);
+    ASSERT_EQ(cls.methods.size(), 2u);
+    EXPECT_EQ(std::get<FloatBits>(cls.fields[0].value).bits, entry.expected);
+    EXPECT_EQ(static_cast<uint32_t>(
+                  std::get<int64_t>(cls.methods[0].instructions[0].literal)),
+              entry.expected);
+    ASSERT_EQ(cls.methods[1].instructions[2].data.size(), 1u);
+    EXPECT_EQ(static_cast<uint32_t>(cls.methods[1].instructions[2].data[0]),
+              entry.expected);
+  }
+}
+TEST(MobileDalvikReader,
+     SmaliFloatWidthParsingKeepsSpecialValuesAndBoundaries) {
+  struct Case {
+    const char *text;
+    const char *type;
+    uint64_t expected;
+  };
+  const Case cases[] = {
+      {"0.0f", "F", 0x00000000},
+      {"-0.0f", "F", 0x80000000},
+      {"Infinityf", "F", 0x7f800000},
+      {"-Infinityf", "F", 0xff800000},
+      {"NaNf", "F", 0x7fc00000},
+      {"-NaNf", "F", 0xffc00000},
+      {"0x1.fffffep127f", "F", 0x7f7fffff},
+      {"0.0", "D", 0x0000000000000000ULL},
+      {"-0.0", "D", 0x8000000000000000ULL},
+      {"Infinity", "D", 0x7ff0000000000000ULL},
+      {"-Infinity", "D", 0xfff0000000000000ULL},
+      {"NaN", "D", 0x7ff8000000000000ULL},
+      {"-NaN", "D", 0xfff8000000000000ULL},
+      {"0x1.fffffffffffffp1023", "D", 0x7fefffffffffffffULL},
+      {"0x1p-1074", "D", 0x0000000000000001ULL},
+      {"1.00000000000000011102230246251565404236316680908203125", "D",
+       0x3ff0000000000000ULL},
+      {"1.000000000000000111022302462515654042363166809082031251", "D",
+       0x3ff0000000000001ULL},
+  };
+  for (const auto &entry : cases) {
+    SCOPED_TRACE(entry.text);
+    auto cls =
+        smali(".class public Lfixture/Special;\n.super Ljava/lang/Object;\n"
+              ".field public static value:" +
+              std::string(entry.type) + " = " + entry.text + "\n");
+    ASSERT_EQ(cls.fields.size(), 1u);
+    const auto value = std::get<FloatBits>(cls.fields[0].value);
+    EXPECT_EQ(value.wide, std::string_view(entry.type) == "D");
+    EXPECT_EQ(value.bits, entry.expected);
+  }
+  for (const auto *text : {"3.5e38f", "-3.5e38f"}) {
+    SCOPED_TRACE(text);
+    EXPECT_THROW(smali(".class public Lfixture/Overflow;\n"
+                       ".super Ljava/lang/Object;\n.field static value:F = " +
+                       std::string(text) + "\n"),
+                 Error);
+  }
+}
 TEST(MobileDalvikReader, SmaliSwitchPayloadsAttachToActualInstructions) {
   auto cls = smali(
       methodText("packed-switch p0,:data\nconst/4 v0,-1\nreturn "

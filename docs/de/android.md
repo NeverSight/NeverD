@@ -29,6 +29,8 @@ Unter `recovered-app/sources/` finden Sie die Java-Dateien. `recovered-app/repor
 
 Die Standard-Engine ist in C++20 implementiert und benötigt zur Ausführung weder Python noch Java oder JADX. Sie verarbeitet darstellbare gewöhnliche Deklarationen und Operationen aus DEX 035, 037–040 und smali. DEX 041, dynamische Aufrufe wie `invoke-custom`, einige Initialisierungspfade, unbekannte semantische Annotationen oder Operationen sowie in Java nicht darstellbare Bezeichner führen ausdrücklich zum Fehler. Die Annahme eines Dateiformats bedeutet nicht, dass alle seine Anweisungen und Deklarationen unterstützt werden.
 
+Die Namensauflösung in Java unterscheidet zwischen Klassenkopf und Klassenrumpf und kann bekannte Namensverdeckungen innerhalb desselben Pakets auflösen; fehlen jedoch Deklarationen externer Oberklassen oder Interfaces, sodass sich Typnamen oder Verweise im erzeugten Java-Hilfscode nicht eindeutig zuordnen lassen, wird die Wiederherstellung ausdrücklich abgelehnt, wobei nur für `java.lang.Object` ohne vorliegende Deklaration angenommen wird, dass es keine vererbbaren Mitgliedstypen beiträgt. Gleitkommaliterale in smali werden direkt auf die einfache oder doppelte Zielgenauigkeit gerundet, wobei das resultierende Bitmuster erhalten bleibt.
+
 ### Linux und macOS
 
 ```sh

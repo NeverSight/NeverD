@@ -29,6 +29,8 @@ Apri `recovered-app/sources/` per leggere i file Java e `recovered-app/report.js
 
 Il motore predefinito è implementato in C++20 e non richiede Python, Java o JADX durante l’esecuzione. Accetta dichiarazioni e operazioni comuni rappresentabili di DEX 035, 037–040 e smali. DEX 041, chiamate dinamiche come `invoke-custom`, alcuni percorsi di inizializzazione, annotazioni semantiche od operazioni sconosciute e identificatori non esprimibili in Java falliscono esplicitamente. Accettare un formato non significa supportarne tutte le istruzioni e dichiarazioni.
 
+La risoluzione dei nomi Java distingue l’intestazione dal corpo della classe e può gestire i casi noti di oscuramento dei nomi nello stesso package; rifiuta esplicitamente i casi in cui mancano dichiarazioni di superclassi o interfacce esterne e non è possibile determinare i tipi o i riferimenti del codice ausiliario Java generato, assumendo soltanto per `java.lang.Object`, anche senza una dichiarazione disponibile, l’assenza di tipi membro ereditabili. I letterali in virgola mobile di smali vengono arrotondati direttamente alla precisione singola o doppia di destinazione, preservando la rappresentazione in bit risultante.
+
 ### Linux e macOS
 
 ```sh

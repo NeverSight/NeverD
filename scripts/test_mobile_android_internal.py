@@ -33,6 +33,10 @@ SMALI_METHODS = {
     "Lfixture/Peer;->twice(I)I": "body",
     "Lfixture/Peer;->greeting()Ljava/lang/String;": "body",
 }
+ROUNDING_METHODS = {
+    "Lfixture/FloatRounding;->scalar()F": "body",
+    "Lfixture/FloatRounding;->array()[F": "body",
+}
 
 
 class ClassFile:
@@ -148,12 +152,15 @@ def choose_d8(override: Path | None) -> Path:
 
 
 def expected_keys(kind: str) -> set[str]:
+    if kind == "rounding":
+        return {"rounding-field", "rounding-scalar", "rounding-length",
+                *(f"rounding-array:{i}" for i in range(10))}
     if kind == "single": return {*(f"twice:{i}" for i in range(7)), "greeting"}
     if kind == "legacy":
         return {*(f"{name}:{i}" for name in ("compute", "nested") for i in range(7)),
                 *(f"divide:{i}:{j}" for i in range(7) for j in range(7)),
                 *(f"sum-abs:{i}" for i in range(5)), "greeting"}
-    result = {f"{name}:{i}" for name in ("instance-get", "instance-add", "instance-exchange", "instance-after", "factory", "cross-class") for i in range(8)}
+    result = {f"{name}:{i}" for name in ("instance-get", "instance-add", "instance-exchange", "instance-after", "factory", "cross-class", "namespace-call") for i in range(8)}
     result |= {f"{name}:{i}:{j}" for name in ("scalar", "choose", "divide") for i in range(8) for j in range(8)}
     result |= {f"wide:{i}:{j}" for i in range(7) for j in range(7)}
     result |= {f"{name}:{i}" for name in ("float-bits", "double-bits") for i in range(7)}
@@ -165,7 +172,7 @@ def expected_keys(kind: str) -> set[str]:
     result |= {f"string-unit:{i}" for i in range(10)}  # UTF-16 units of neverd/NUL/lambda/emoji
     result |= {"array-length", "null-zero", "null-read", "array-bounds", "static-seed", "static-once",
                "static-float-zero", "static-double-zero", "static-wide", "string-length",
-               "abstract-declaration", "native-declaration", "abstract-subclass"}
+               "abstract-declaration", "native-declaration", "abstract-subclass", "namespace-identity", "namespace-null"}
     return result
 
 
@@ -321,6 +328,7 @@ def main() -> int:
             archive.writestr("assets/not-bytecode.txt", "not part of source recovery")
         _, legacy_baseline = verify.original(FIXTURES / "legacy", "LegacyHarness", "original-legacy", "legacy")
         _, single_baseline = verify.original(FIXTURES / "legacy", "SingleHarness", "original-single", "single")
+        _, rounding_baseline = verify.original(FIXTURES / "rounding", "RoundingHarness", "original-rounding", "rounding")
         smali_dir = work / "smali"
         smali_dir.mkdir()
         smali_inputs = {}
@@ -332,6 +340,7 @@ def main() -> int:
             ("multidex", apk, classes, methods, {name: "classes2.dex" if name == "Lfixture/AndroidPeer;" else "classes.dex" for name in classes}, "AndroidHarness", "full", baseline, 2, 0),
             ("smali-directory", smali_dir, set(smali_inputs), SMALI_METHODS, smali_inputs, "LegacyHarness", "legacy", legacy_baseline, 0, 3),
             ("single-smali", smali_dir / "Peer.smali", {"Lfixture/Peer;"}, {key: value for key, value in SMALI_METHODS.items() if key.startswith("Lfixture/Peer;")}, {"Lfixture/Peer;": "Peer.smali"}, "SingleHarness", "single", single_baseline, 0, 1),
+            ("rounding-smali", FIXTURES / "FloatRounding.smali", {"Lfixture/FloatRounding;"}, ROUNDING_METHODS, {"Lfixture/FloatRounding;": "FloatRounding.smali"}, "RoundingHarness", "rounding", rounding_baseline, 0, 1),
         ]
         failures, passed = [], []
         for name, source, expected_classes, expected_methods, inputs, harness, kind, oracle, dex_count, smali_count in cases:

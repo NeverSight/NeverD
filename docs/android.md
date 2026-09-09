@@ -29,6 +29,8 @@ Open `recovered-app/sources/` to read the Java files and `recovered-app/report.j
 
 The default engine is implemented in C++20 and needs no Python, Java, or JADX runtime. It accepts representable ordinary declarations and operations from DEX 035 and 037–040 and from smali. DEX 041, dynamic calls such as `invoke-custom`, some initialization paths, unknown semantic annotations or operations, and identifiers that Java cannot represent fail explicitly. File-format acceptance does not mean every instruction or declaration in that format is supported.
 
+Java name binding distinguishes class headers from class bodies and can resolve known same-package shadowing; it explicitly rejects cases where missing external superclass or interface declarations prevent it from establishing type or generated Java helper bindings, and only `java.lang.Object` is assumed to contribute no inherited member types without a supplied declaration. Smali floating-point literals are rounded directly to their target single or double precision, preserving the resulting bit patterns.
+
 ### Linux and macOS
 
 ```sh

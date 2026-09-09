@@ -358,7 +358,7 @@ int64_t integer(const std::string &text, unsigned bits = 64,
     raw |= (~uint64_t(0)) << bits;
   return std::bit_cast<int64_t>(raw);
 }
-double floating(const std::string &text) {
+uint64_t floatingBits(const std::string &text, unsigned size) {
   if (text.empty())
     fail("invalid smali floating literal");
   auto core = text;
@@ -369,34 +369,32 @@ double floating(const std::string &text) {
           R"([+-]?(?:(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?|0[xX][0-9a-fA-F]+(?:\.[0-9a-fA-F]*)?[pP][+-]?\d+|Infinity|NaN))"))
     fail("invalid smali floating literal");
   // LLVM's numeric parser is locale independent on all supported hosts.
+  const auto &semantics =
+      size == 4 ? llvm::APFloat::IEEEsingle() : llvm::APFloat::IEEEdouble();
   bool negative = core.starts_with('-');
   auto special = core;
   if (special.starts_with('+') || negative)
     special.erase(0, 1);
   if (special == "Infinity")
-    return negative ? -std::numeric_limits<double>::infinity()
-                    : std::numeric_limits<double>::infinity();
+    return llvm::APFloat::getInf(semantics, negative)
+        .bitcastToAPInt()
+        .getZExtValue();
   if (special == "NaN")
-    return std::copysign(std::numeric_limits<double>::quiet_NaN(),
-                         negative ? -1.0 : 1.0);
-  llvm::APFloat number(llvm::APFloat::IEEEdouble());
+    return llvm::APFloat::getQNaN(semantics, negative)
+        .bitcastToAPInt()
+        .getZExtValue();
+  // Parse into the requested IEEE format once. A double intermediate can
+  // erase which side of a single-precision halfway value the literal is on.
+  llvm::APFloat number(semantics);
   auto status =
       number.convertFromString(core, llvm::APFloat::rmNearestTiesToEven);
   if (!status) {
     llvm::consumeError(status.takeError());
     fail("invalid smali floating literal");
   }
-  return number.convertToDouble();
-}
-uint64_t floatingBits(const std::string &text, unsigned size) {
-  double value = floating(text);
-  if (size == 4) {
-    float small = float(value);
-    if (std::isfinite(value) && !std::isfinite(small))
-      fail("smali floating literal exceeds its width");
-    return std::bit_cast<uint32_t>(small);
-  }
-  return std::bit_cast<uint64_t>(value);
+  if (size == 4 && (*status & llvm::APFloat::opOverflow))
+    fail("smali floating literal exceeds its width");
+  return number.bitcastToAPInt().getZExtValue();
 }
 int64_t bits(const std::string &text, unsigned size) {
   bool looks = text.find('.') != std::string::npos ||

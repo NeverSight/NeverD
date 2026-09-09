@@ -29,6 +29,8 @@ Ouvrez `recovered-app/sources/` pour lire les fichiers Java et `recovered-app/re
 
 Le moteur par défaut est implémenté en C++20 et ne nécessite aucun environnement Python, Java ou JADX à l’exécution. Il accepte les déclarations et opérations ordinaires représentables de DEX 035, 037–040 et smali. DEX 041, les appels dynamiques tels que `invoke-custom`, certains chemins d’initialisation, les annotations sémantiques ou opérations inconnues et les identifiants impossibles à exprimer en Java échouent explicitement. Accepter un format ne signifie pas en prendre en charge toutes les instructions ou déclarations.
 
+La résolution des noms Java distingue l’en-tête du corps d’une classe et peut traiter les masquages connus au sein d’un même package ; elle refuse explicitement les cas où l’absence de déclarations d’une superclasse ou d’une interface externe empêche de déterminer les types ou les références du code auxiliaire Java généré, et seul `java.lang.Object` est supposé ne fournir aucun type membre héritable sans déclaration disponible. Les littéraux à virgule flottante smali sont arrondis directement à la précision simple ou double cible, en préservant la représentation binaire résultante.
+
 ### Linux et macOS
 
 ```sh

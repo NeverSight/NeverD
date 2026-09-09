@@ -1,11 +1,16 @@
 import fixture.AndroidBehavior;
+import fixture.AndroidPeer;
 import fixture.DeclarationOnly;
+import fixture.fixture;
 import java.lang.reflect.Modifier;
 
 public class AndroidHarness {
     private static void emit(String key, long value) { System.out.println(key + "=" + value); }
     public static void main(String[] arguments) throws Exception {
         int[] scalars = {Integer.MIN_VALUE, Integer.MIN_VALUE + 1, -32769, -1, 0, 1, 32768, Integer.MAX_VALUE};
+        AndroidPeer peer = new AndroidPeer();
+        emit("namespace-identity", fixture.identity(peer) == peer ? 1 : 0);
+        emit("namespace-null", fixture.identity(null) == null ? 1 : 0);
         for (int i = 0; i < scalars.length; i++) {
             int x = scalars[i];
             AndroidBehavior object = new AndroidBehavior(x);
@@ -15,6 +20,7 @@ public class AndroidHarness {
             emit("instance-after:" + i, object.get());
             emit("factory:" + i, AndroidBehavior.factory(x).get());
             emit("cross-class:" + i, AndroidBehavior.crossClass(x));
+            emit("namespace-call:" + i, fixture.twice(x));
             for (int j = 0; j < scalars.length; j++) {
                 emit("scalar:" + i + ":" + j, AndroidBehavior.scalar(x, scalars[j]));
                 emit("choose:" + i + ":" + j, AndroidBehavior.choose(x, scalars[j]));

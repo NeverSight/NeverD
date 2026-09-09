@@ -18,6 +18,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -224,9 +225,10 @@ public:
   std::string text() const { return join(values, "\n"); }
 };
 
-std::string typeName(const std::string &Type, const ClassMap &Classes) {
+std::string qualifiedTypeName(const std::string &Type,
+                              const ClassMap &Classes) {
   if (starts(Type, "["))
-    return typeName(Type.substr(1), Classes) + "[]";
+    return qualifiedTypeName(Type.substr(1), Classes) + "[]";
   if (auto I = Primitives.find(Type); I != Primitives.end())
     return I->second;
   if (!starts(Type, "L") || Type.size() < 3 || Type.back() != ';')
@@ -236,7 +238,7 @@ std::string typeName(const std::string &Type, const ClassMap &Classes) {
     if (!C.inner_name || C.inner_name->empty() ||
         !Classes.contains(*C.enclosing))
       javaError("nested Android type has no available enclosing declaration");
-    return typeName(*C.enclosing, Classes) + "." +
+    return qualifiedTypeName(*C.enclosing, Classes) + "." +
            javaIdentifier(*C.inner_name);
   }
   auto Parts = split(std::string_view(Type).substr(1, Type.size() - 2), '/');
@@ -244,6 +246,163 @@ std::string typeName(const std::string &Type, const ClassMap &Classes) {
     Part = javaIdentifier(Part);
   return join(Parts, ".");
 }
+
+// A fully qualified Java type can still be obscured by a type whose simple
+// name matches the first package component. Resolve names from descriptors
+// and lexical type scopes before producing source, never by rewriting text.
+class JavaTypeNames {
+  const ClassMap &classes;
+  Budget &budget;
+  std::map<std::string, std::map<std::string, const Class *>> members;
+  std::map<std::string, std::map<std::string, std::string>> packages;
+  struct Lookup {
+    Strings types;
+    bool unknown_inheritance = false;
+  };
+  mutable std::map<std::tuple<std::string, std::string, bool>, Lookup> cache;
+
+  static std::string package(const std::string &Type) {
+    auto End = Type.rfind('/');
+    return End == Type.npos ? "" : Type.substr(1, End - 1);
+  }
+  static std::string simple(const Class &C) {
+    if (C.enclosing && C.inner_name)
+      return *C.inner_name;
+    auto Start = C.name.rfind('/');
+    Start = Start == C.name.npos ? 1 : Start + 1;
+    return C.name.substr(Start, C.name.size() - Start - 1);
+  }
+  Lookup memberTypes(const Class &Scope, const std::string &Name) const {
+    Lookup Result;
+    std::deque<std::string> Pending{Scope.name};
+    Strings Seen;
+    while (!Pending.empty()) {
+      budget.tick();
+      auto Owner = std::move(Pending.front());
+      Pending.pop_front();
+      if (!Seen.insert(Owner).second)
+        continue;
+      auto C = classes.find(Owner);
+      if (C == classes.end()) {
+        // Object contributes no member types; other missing declarations
+        // cannot prove that a source name has no inherited namesake.
+        Result.unknown_inheritance |= Owner != "Ljava/lang/Object;";
+        continue;
+      }
+      auto M = members.find(Owner);
+      if (M != members.end()) {
+        auto Match = M->second.find(Name);
+        if (Match != M->second.end()) {
+          const auto &Child = *Match->second;
+          const auto &Flags = Child.inner_access;
+          bool Inherited = Owner != Scope.name;
+          bool Accessible =
+              !Inherited ||
+              (!Flags.contains("private") &&
+               (Flags.contains("public") || Flags.contains("protected") ||
+                package(Owner) == package(Scope.name)));
+          if (Accessible)
+            Result.types.insert(Child.name);
+          // A declaration in this class hides any inherited namesake.
+          continue;
+        }
+      }
+      if (C->second.superclass)
+        Pending.push_back(*C->second.superclass);
+      Pending.insert(Pending.end(), C->second.interfaces.begin(),
+                     C->second.interfaces.end());
+    }
+    return Result;
+  }
+  const Lookup &lookup(const Class &Context, const std::string &Name,
+                       bool InSupertypeHeader = false) const {
+    auto Key = std::tuple{Context.name, Name, InSupertypeHeader};
+    if (auto I = cache.find(Key); I != cache.end())
+      return I->second;
+    Lookup Result;
+    const Class *Scope = &Context;
+    while (Scope) {
+      budget.tick();
+      // Declared and inherited members are in scope within the class body,
+      // not within its own extends/implements clause. Enclosing class bodies
+      // still contribute their complete lexical scopes to a nested header.
+      auto Local = InSupertypeHeader && Scope == &Context
+                       ? Lookup{}
+                       : memberTypes(*Scope, Name);
+      Result.unknown_inheritance |= Local.unknown_inheritance;
+      if (simple(*Scope) == Name)
+        Local.types.insert(Scope->name);
+      if (!Local.types.empty()) {
+        Result.types = std::move(Local.types);
+        return cache.emplace(std::move(Key), std::move(Result)).first->second;
+      }
+      Scope = Scope->enclosing ? &classes.at(*Scope->enclosing) : nullptr;
+    }
+    if (auto P = packages.find(package(Context.name)); P != packages.end())
+      if (auto I = P->second.find(Name); I != P->second.end())
+        Result.types.insert(I->second);
+    return cache.emplace(std::move(Key), std::move(Result)).first->second;
+  }
+
+public:
+  JavaTypeNames(const ClassMap &Classes, Budget &B)
+      : classes(Classes), budget(B) {
+    for (const auto &[Name, C] : classes) {
+      budget.tick();
+      if (C.enclosing) {
+        if (!members[*C.enclosing].emplace(simple(C), &C).second)
+          javaError("ambiguous Java type: duplicate nested source name");
+      } else
+        packages[package(Name)].emplace(simple(C), Name);
+    }
+  }
+  std::string render(const std::string &Type, const Class &Context,
+                     bool InSupertypeHeader = false) const {
+    budget.tick();
+    if (starts(Type, "["))
+      return render(Type.substr(1), Context, InSupertypeHeader) + "[]";
+    auto Full = qualifiedTypeName(Type, classes);
+    if (Primitives.contains(Type))
+      return Full;
+    auto Top = Type;
+    while (classes.contains(Top) && classes.at(Top).enclosing) {
+      budget.tick();
+      Top = *classes.at(Top).enclosing;
+    }
+    auto Package = package(Top);
+    auto Root = Full.substr(0, Full.find('.'));
+    const auto &QualifiedBinding = lookup(Context, Root, InSupertypeHeader);
+    if (!QualifiedBinding.unknown_inheritance &&
+        (QualifiedBinding.types.empty() ||
+         (Package.empty() && QualifiedBinding.types == Strings{Top})))
+      return Full;
+    if (Package == package(Context.name) && classes.contains(Top)) {
+      const auto &Binding =
+          lookup(Context, simple(classes.at(Top)), InSupertypeHeader);
+      if (!Binding.unknown_inheritance && Binding.types == Strings{Top})
+        return Package.empty() ? Full : Full.substr(Package.size() + 1);
+    }
+    if (QualifiedBinding.unknown_inheritance)
+      javaError("unresolved inherited Java type: " + Type + " in " +
+                Context.name +
+                " (external declarations are required to prove source "
+                "name binding)");
+    javaError("ambiguous Java type: " + Type + " in " + Context.name +
+              " (package qualifier is shadowed and no unique source name "
+              "is proven)");
+  }
+  void requireRuntimePackage(const Class &Context) const {
+    const auto &Binding = lookup(Context, "java");
+    if (Binding.unknown_inheritance)
+      javaError("unresolved inherited Java type: java in " + Context.name +
+                " (external declarations are required to prove runtime "
+                "helper name binding)");
+    if (!Binding.types.empty())
+      javaError("ambiguous Java type: required Java runtime package is "
+                "shadowed in " +
+                Context.name);
+  }
+};
 
 template <typename Ref>
 auto member(const Ref &Reference, const ClassMap &Classes, Budget &B) -> const
@@ -337,6 +496,7 @@ class Body {
   const Method &method;
   const ClassMap &classes;
   Budget &budget;
+  const JavaTypeNames &type_names;
   const std::vector<Instruction> &code;
   std::map<uint32_t, size_t> by_pc;
   std::map<uint32_t, State> states;
@@ -353,6 +513,9 @@ class Body {
     if (I == classes.end())
       fail("method owner has no local declaration");
     return I->second;
+  }
+  std::string sourceType(const std::string &Type) const {
+    return type_names.render(Type, ownerClass());
   }
   const std::string &referenceType(const Instruction &Op) const {
     if (auto *T = std::get_if<std::string>(&Op.reference))
@@ -395,8 +558,10 @@ class Body {
   }
 
 public:
-  Body(const Method &M, const ClassMap &C, Budget &B)
-      : method(M), classes(C), budget(B), code(M.instructions) {
+  Body(const Method &M, const ClassMap &C, Budget &B,
+       const JavaTypeNames &TypeNames)
+      : method(M), classes(C), budget(B), type_names(TypeNames),
+        code(M.instructions) {
     for (size_t I = 0; I < code.size(); ++I)
       by_pc.emplace(code[I].pc, I);
     validateShape();
@@ -591,7 +756,7 @@ std::string Body::read(const State &S, unsigned Reg, const std::string &Type,
          " for " + Type);
   auto R = std::to_string(Reg);
   if (isReference(Type))
-    return "((" + typeName(Type, classes) + ") o" + R + ")";
+    return "((" + sourceType(Type) + ") o" + R + ")";
   if (Type == "F")
     return "((java.lang.Float) null).intBitsToFloat(v" + R + ")";
   if (Type == "D")
@@ -675,7 +840,7 @@ const Method *Body::validateInvocation(const Instruction &Op) {
 }
 
 std::string Body::staticOwner(const std::string &Owner, bool Field) {
-  std::string Qualified = typeName(Owner, classes);
+  std::string Qualified = sourceType(Owner);
   auto I = classes.find(Owner);
   if (Field || (I != classes.end() && !I->second.access.contains("interface")))
     return "((" + Qualified + ") null)";
@@ -790,8 +955,7 @@ Body::operation(const Instruction &Op, const State &Incoming, bool Strict) {
     put(Regs[0], "Ljava/lang/String;", javaString(*V));
   } else if (Name == "const-class") {
     arity(1);
-    put(Regs[0], "Ljava/lang/Class;",
-        typeName(referenceType(Op), classes) + ".class");
+    put(Regs[0], "Ljava/lang/Class;", sourceType(referenceType(Op)) + ".class");
   } else if (starts(Name, "const")) {
     arity(1);
     const auto *V = std::get_if<int64_t>(&Op.literal);
@@ -832,7 +996,7 @@ Body::operation(const Instruction &Op, const State &Incoming, bool Strict) {
     size_t Dimensions = T.find_first_not_of('[');
     if (Dimensions == std::string::npos)
       fail("new-array has no element type");
-    std::string Expr = "new " + typeName(T.substr(Dimensions), classes) + "[" +
+    std::string Expr = "new " + sourceType(T.substr(Dimensions)) + "[" +
                        get(Regs[1], "I") + "]";
     for (size_t I = 1; I < Dimensions; ++I)
       Expr += "[]";
@@ -844,7 +1008,7 @@ Body::operation(const Instruction &Op, const State &Incoming, bool Strict) {
     std::vector<std::string> Values;
     for (unsigned R : Regs)
       Values.push_back(get(R, T.substr(1)));
-    Out.append("resultObject = new " + typeName(T, classes) + " {" +
+    Out.append("resultObject = new " + sourceType(T) + " {" +
                join(Values, ", ") + "};");
   } else if (Name == "new-instance") {
     arity(1);
@@ -927,12 +1091,12 @@ Body::operation(const Instruction &Op, const State &Incoming, bool Strict) {
     get(Regs[0], "Ljava/lang/Object;");
     const auto &T = referenceType(Op);
     put(Regs[0], T,
-        "((" + typeName(T, classes) + ") o" + std::to_string(Regs[0]) + ")");
+        "((" + sourceType(T) + ") o" + std::to_string(Regs[0]) + ")");
   } else if (Name == "instance-of") {
     arity(2);
     put(Regs[0], "Z",
         get(Regs[1], "Ljava/lang/Object;") + " instanceof " +
-            typeName(referenceType(Op), classes));
+            sourceType(referenceType(Op)));
   } else if (anyPrefix(Name, {"iget", "iput", "sget", "sput"})) {
     const auto *R = std::get_if<FieldRef>(&Op.reference);
     if (!R)
@@ -998,7 +1162,7 @@ Body::operation(const Instruction &Op, const State &Incoming, bool Strict) {
       if (Incoming[Regs[0]] != Strings{Expected} || R->returns != "V")
         fail("initializer is not bound to its uninitialized allocation");
       put(Regs[0], R->owner,
-          "new " + typeName(R->owner, classes) + "(" + join(Args, ", ") + ")");
+          "new " + sourceType(R->owner) + "(" + join(Args, ", ") + ")");
       return {std::move(S), Out.get()};
     }
     std::string Owner;
@@ -1310,8 +1474,7 @@ std::string Body::emit() {
     Out.append("    if (pc >= " + std::to_string(R.start) + " && pc < " +
                std::to_string(R.end) + ") {");
     for (const auto &H : R.handlers) {
-      auto Test =
-          H.type ? "failure instanceof " + typeName(*H.type, classes) : "true";
+      auto Test = H.type ? "failure instanceof " + sourceType(*H.type) : "true";
       Out.append("      if (" + Test + ") { caught = failure; pc = " +
                  std::to_string(H.target) + "; continue dispatch; }");
     }
@@ -1389,6 +1552,7 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
       Current = Classes.at(*Current).enclosing;
     }
   }
+  JavaTypeNames TypeNames(Classes, B);
   Strings Emitting;
   std::function<std::string(const Class &, bool)> emitClass;
   emitClass = [&](const Class &C, bool Nested) -> std::string {
@@ -1420,11 +1584,11 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
     std::string Header = join(Mods, " ");
     if (Kind == "class" && C.superclass &&
         *C.superclass != "Ljava/lang/Object;")
-      Header += " extends " + typeName(*C.superclass, Classes);
+      Header += " extends " + TypeNames.render(*C.superclass, C, true);
     if (!C.interfaces.empty()) {
       std::vector<std::string> Interfaces;
       for (const auto &T : C.interfaces)
-        Interfaces.push_back(typeName(T, Classes));
+        Interfaces.push_back(TypeNames.render(T, C, true));
       Header += (Kind == "interface" ? " extends " : " implements ") +
                 join(Interfaces, ", ");
     }
@@ -1438,6 +1602,8 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
       auto FieldMods =
           modifiers(F.access, {"public", "protected", "private", "static",
                                "final", "volatile", "transient"});
+      if (std::holds_alternative<FloatBits>(F.value))
+        TypeNames.requireRuntimePackage(C);
       auto Value = fieldValue(F.value, F.reference.type);
       if (F.access.contains("final") && !Value)
         javaError("final field needs a verified initialization expression");
@@ -1445,7 +1611,7 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
         ConstantTypes.insert(F.reference.type);
         *Value = helperName(C, "__neverdConstant") + "(" + *Value + ")";
       }
-      FieldMods.push_back(typeName(F.reference.type, Classes));
+      FieldMods.push_back(TypeNames.render(F.reference.type, C));
       FieldMods.push_back(javaIdentifier(F.reference.name));
       BodyLines.append("  " + join(FieldMods, " ") +
                        (Value ? " = " + *Value : "") + ";");
@@ -1469,7 +1635,7 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
                                              "native", "abstract", "strictfp"});
       std::vector<std::string> Params;
       for (size_t I = 0; I < R.parameters.size(); ++I)
-        Params.push_back(typeName(R.parameters[I], Classes) + " arg" +
+        Params.push_back(TypeNames.render(R.parameters[I], C) + " arg" +
                          std::to_string(I));
       std::string Declaration;
       if (R.name == "<clinit>") {
@@ -1485,7 +1651,7 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
         if (constructorThrows(M, Classes, B))
           Declaration += " throws java.lang.Throwable";
       } else {
-        MethodMods.push_back(typeName(R.returns, Classes));
+        MethodMods.push_back(TypeNames.render(R.returns, C));
         MethodMods.push_back(javaIdentifier(R.name));
         Declaration = join(MethodMods, " ") + "(" + join(Params, ", ") + ")";
       }
@@ -1499,7 +1665,7 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
         if (Kind == "interface")
           javaError("interface method body requires a compatible Java "
                     "default/static declaration");
-        Body Emitter(M, Classes, B);
+        Body Emitter(M, Classes, B, TypeNames);
         std::string Source = Emitter.emit();
         auto SourceLines = split(Source, '\n');
         for (auto &Line : SourceLines)
@@ -1512,6 +1678,10 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
       Methods.push_back(std::move(Row));
     }
     if (Kind == "class") {
+      // Every emitted class contains runtime helper references, even when
+      // its methods only mention primitive types. Validate their fixed root
+      // just like descriptor-derived source types before publication.
+      TypeNames.requireRuntimePackage(C);
       bool HasConstructor =
           std::any_of(C.methods.begin(), C.methods.end(), [](const auto &M) {
             return M.reference.name == "<init>";
@@ -1528,7 +1698,7 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
                         "    throw (E) failure;", "  }"});
     }
     for (const auto &T : ConstantTypes) {
-      auto NameType = typeName(T, Classes);
+      auto NameType = TypeNames.render(T, C);
       BodyLines.append("  private static " + NameType + " " +
                        helperName(C, "__neverdConstant") + "(" + NameType +
                        " value) { return value; }");

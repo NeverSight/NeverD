@@ -226,7 +226,7 @@ TEST(MobileDalvikJava, SuperCallRequiresActualThisProvenance) {
   EXPECT_NE(source(R).find("result32 = super.hashCode();"), std::string::npos);
 }
 TEST(MobileDalvikJava,
-     ExternalSuperConstructorPreservesCheckedExceptionPropagation) {
+     ExternalSuperConstructorRequiresInheritedTypeDeclarations) {
   MethodRef Ref{
       "Ljava/io/FileInputStream;", "<init>", {"Ljava/lang/String;"}, "V"};
   Method M =
@@ -235,13 +235,36 @@ TEST(MobileDalvikJava,
   M.access = {"public", "constructor"};
   Class C = klass("Lfixture/Core;", {M});
   C.superclass = Ref.owner;
-  auto R = recover({C});
-  EXPECT_NE(
-      source(R).find("Core(java.lang.String arg0) throws java.lang.Throwable"),
-      std::string::npos);
-  EXPECT_NE(source(R).find("super(arg0);"), std::string::npos);
+  // The external superclass may contribute member types that obscure
+  // java.lang.String or the runtime helpers. Missing declarations do not
+  // establish that those qualified names retain their intended bindings.
+  rejected([&] { recover({C}); }, "unresolved inherited Java type");
+}
+TEST(MobileDalvikJava,
+     KnownSuperConstructorPreservesCheckedThrowableAndOriginalArguments) {
+  Method BaseInit =
+      method("<init>", {"Ljava/lang/Throwable;"}, "V", 2,
+             {op(0, "invoke-direct", {0}, {},
+                 MethodRef{"Ljava/lang/Object;", "<init>", {}, "V"}),
+              op(1, "if-eqz", {1}, {}, {}, 3), op(2, "throw", {1}),
+              op(3, "return-void")});
+  BaseInit.access = {"public", "constructor"};
+  Class Base = klass("Lfixture/CheckedBase;", {BaseInit});
+  Method M = method(
+      "<init>", {"Ljava/lang/Throwable;"}, "V", 2,
+      {op(0, "invoke-direct", {0, 1}, {},
+          MethodRef{Base.name, "<init>", {"Ljava/lang/Throwable;"}, "V"}),
+       op(1, "return-void")});
+  M.access = {"public", "constructor"};
+  Class C = klass("Lfixture/Core;", {M});
+  C.superclass = Base.name;
+  auto Report = recover({Base, C});
+  EXPECT_EQ(Report.getInteger("recovered_method_count"), 2);
+  EXPECT_NE(source(Report).find("throw __neverdThrow((java.lang.Throwable)"),
+            std::string::npos);
+  EXPECT_NE(source(Report, 1).find("super(arg0);"), std::string::npos);
   C.methods[0].instructions[0].registers = {0, 0};
-  rejected([&] { recover({C}); }, "unavailable argument");
+  rejected([&] { recover({Base, C}); }, "unavailable argument");
 }
 TEST(MobileDalvikJava,
      AllocationRequiresAdjacentMatchingInitializerAndNoBypass) {
@@ -457,5 +480,89 @@ TEST(MobileDalvikJava, StaticExternalTypeQualifierCannotBindToAShadowingField) {
                           MethodRef{"Ljava/lang/Math;", "abs", {"I"}, "I"}),
                        op(1, "move-result", {0}), op(2, "return", {0})})};
   rejected([&] { recover({C}); }, "shadowed");
+}
+TEST(MobileDalvikJava, SamePackageClassNameCannotObscureItsPackageQualifier) {
+  Class Core = klass(
+      "Lfixture/Core;",
+      {method("value", {}, "I", 1,
+              {op(0, "const/16", {0}, int64_t(17)), op(1, "return", {0})})});
+  Class Shadow =
+      klass("Lfixture/fixture;",
+            {method("identity", {Core.name}, Core.name, 1,
+                    {op(0, "return-object", {0})}),
+             method("value", {}, "I", 1,
+                    {op(0, "invoke-static", {}, {},
+                        MethodRef{Core.name, "value", {}, "I"}),
+                     op(1, "move-result", {0}), op(2, "return", {0})})});
+  // Fields do not shadow names in a type context. The resolution must not
+  // confuse this legal field with a member type named Core.
+  Shadow.fields.push_back(
+      {{Shadow.name, "Core", "I"}, {"public", "static"}, {}});
+  const auto report = recover({Core, Shadow});
+  EXPECT_EQ(report.getInteger("recovered_method_count"), 3);
+  const auto text = source(report, 1);
+  EXPECT_NE(text.find("Core identity(Core arg0)"), std::string::npos);
+  EXPECT_NE(text.find("return ((Core) o0);"), std::string::npos);
+  EXPECT_NE(text.find("((Core) null).value()"), std::string::npos);
+  EXPECT_EQ(text.find("fixture.Core"), std::string::npos);
+}
+TEST(MobileDalvikJava, ShortenedSamePackageNameCannotSelectANestedNamesake) {
+  Class Core = klass("Lfixture/Core;");
+  Class Shadow =
+      klass("Lfixture/fixture;", {method("identity", {Core.name}, Core.name, 1,
+                                         {op(0, "return-object", {0})})});
+  Class Nested = klass("Lfixture/fixture$Core;");
+  Nested.enclosing = Shadow.name;
+  Nested.inner_name = "Core";
+  Nested.inner_access = {"public", "static"};
+  rejected([&] { recover({Core, Shadow, Nested}); }, "ambiguous Java type");
+}
+TEST(MobileDalvikJava, UnknownInheritedMemberCannotValidateAPackageQualifier) {
+  // Map.Entry is inherited into the body of C. The original Java can name
+  // Peer through an import, but Entry.Peer binds Entry to the inherited type.
+  // Without Map's declarations, neither absence nor identity is proven.
+  Class Peer = klass("LEntry/Peer;");
+  Class C = klass("Limpl/C;", {method("identity", {Peer.name}, Peer.name, 1,
+                                      {op(0, "return-object", {0})})});
+  C.access.insert("abstract");
+  C.interfaces = {"Ljava/util/Map;"};
+  rejected([&] { recover({Peer, C}); }, "unresolved inherited Java type");
+
+  Class Base = klass("Limpl/Base;");
+  Base.access.insert("abstract");
+  Base.interfaces = C.interfaces;
+  C.interfaces.clear();
+  C.superclass = Base.name;
+  rejected([&] { recover({Peer, Base, C}); }, "unresolved inherited Java type");
+}
+TEST(MobileDalvikJava, OwnInheritedMembersAreOutsideTheSupertypeHeaderScope) {
+  Class C = klass("Limpl/Bridge;");
+  C.access = {"public", "interface", "abstract"};
+  C.interfaces = {"Ljava/util/Map;"};
+  auto Size = method("observedSize", {}, "I", 0, {});
+  Size.reference.owner = C.name;
+  Size.access = {"public", "abstract"};
+  C.methods = {Size};
+  auto Report = recover({C});
+  EXPECT_EQ(Report.getInteger("declaration_only_method_count"), 1);
+  EXPECT_EQ(Report.getInteger("recovered_method_count"), 0);
+  EXPECT_NE(source(Report).find("interface Bridge extends java.util.Map"),
+            std::string::npos);
+}
+TEST(MobileDalvikJava, ObjectInheritanceHasNoUnknownMemberTypeDeclarations) {
+  Class Peer = klass("LEntry/Peer;");
+  Class C = klass("Limpl/C;", {method("identity", {Peer.name}, Peer.name, 1,
+                                      {op(0, "return-object", {0})})});
+  auto Report = recover({Peer, C});
+  EXPECT_EQ(Report.getInteger("recovered_method_count"), 1);
+  EXPECT_NE(source(Report, 1).find("Entry.Peer identity(Entry.Peer arg0)"),
+            std::string::npos);
+}
+TEST(MobileDalvikJava, RuntimeHelperTypesAlsoRequireProvenPackageBindings) {
+  Class C = klass("Limpl/C;", {method("value", {}, "I", 1,
+                                      {op(0, "const/4", {0}, int64_t(17)),
+                                       op(1, "return", {0})})});
+  C.interfaces = {"Lexternal/Contract;"};
+  rejected([&] { recover({C}); }, "unresolved inherited Java type");
 }
 } // namespace
