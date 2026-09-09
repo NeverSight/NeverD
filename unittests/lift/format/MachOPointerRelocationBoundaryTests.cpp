@@ -11951,6 +11951,9 @@ TEST(LLVMDataPointerInvariantBoundary, ScalarTableBoundsBelongToTheLoadSite) {
   enum class Case {
     Less,
     ExcludeLast,
+    DirectExcludeLast,
+    DirectEqualityTaken,
+    DirectAddressConstant,
     Reversed,
     Loose,
     OtherSSA,
@@ -11962,17 +11965,22 @@ TEST(LLVMDataPointerInvariantBoundary, ScalarTableBoundsBelongToTheLoadSite) {
     ZeroTarget,
     Wide
   };
-  for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::AArch64})
-    for (Case Kind :
-         {Case::Less, Case::ExcludeLast, Case::Reversed, Case::Loose,
-          Case::OtherSSA, Case::Narrow, Case::Updated, Case::Bypass,
-          Case::Outside, Case::Exceptional, Case::ZeroTarget, Case::Wide}) {
+  for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::AArch64, Arch::ARM})
+    for (Case Kind : {Case::Less, Case::ExcludeLast, Case::DirectExcludeLast,
+                      Case::DirectEqualityTaken, Case::DirectAddressConstant,
+                      Case::Reversed, Case::Loose, Case::OtherSSA, Case::Narrow,
+                      Case::Updated, Case::Bypass, Case::Outside,
+                      Case::Exceptional, Case::ZeroTarget, Case::Wide}) {
       if (Kind == Case::Wide && TargetArch != Arch::X86)
         continue;
       SCOPED_TRACE(std::to_string(static_cast<int>(TargetArch)) + "/" +
                    std::to_string(static_cast<int>(Kind)));
       const uint16_t Width = getTargetRegInfo(TargetArch).PointerSize;
-      const bool Equality = Kind == Case::ExcludeLast || Kind == Case::Wide;
+      const bool DirectEquality = Kind == Case::DirectExcludeLast ||
+                                  Kind == Case::DirectEqualityTaken ||
+                                  Kind == Case::DirectAddressConstant;
+      const bool Equality =
+          DirectEquality || Kind == Case::ExcludeLast || Kind == Case::Wide;
       const unsigned Count = Equality ? 3 : 6;
       constexpr uint64_t Table = 0x4000;
       BinaryImage Image;
@@ -12059,8 +12067,14 @@ TEST(LLVMDataPointerInvariantBoundary, ScalarTableBoundsBelongToTheLoadSite) {
       if (Equality) {
         MedVar Bound = number(3), Zero = number(0);
         Bound.Size = Zero.Size = Compared.Size;
-        append(0, NdOp::INT_SUB, Difference, {Compared, Bound});
-        append(0, NdOp::INT_EQUAL, Condition, {Difference, Zero});
+        if (DirectEquality) {
+          if (Kind == Case::DirectAddressConstant)
+            Bound.Provenance = ConstantAddressProvenance::DataAddress;
+          append(0, NdOp::INT_EQUAL, Condition, {Compared, Bound});
+        } else {
+          append(0, NdOp::INT_SUB, Difference, {Compared, Bound});
+          append(0, NdOp::INT_EQUAL, Condition, {Difference, Zero});
+        }
       } else {
         MedVar Bound = number(Kind == Case::Loose ? 6 : 5);
         Bound.Size = Compared.Size;
@@ -12070,7 +12084,10 @@ TEST(LLVMDataPointerInvariantBoundary, ScalarTableBoundsBelongToTheLoadSite) {
       Func.Blocks[1].Preds = {0};
       Func.Blocks[2].Preds = {0};
       append(0, NdOp::COND_BR, {},
-             {number(Kind == Case::Reversed ? 0x140 : 0x180), Condition});
+             {number(Kind == Case::Reversed || Kind == Case::DirectEqualityTaken
+                         ? 0x140
+                         : 0x180),
+              Condition});
       if (Kind == Case::ZeroTarget) {
         Func.Blocks[0].Succs = {2, 1};
         Func.Blocks[2].StartAddr = 0;
@@ -12118,8 +12135,10 @@ TEST(LLVMDataPointerInvariantBoundary, ScalarTableBoundsBelongToTheLoadSite) {
           Classifier, Func, Image, TargetArch, BinaryFormat::ELF);
       EXPECT_EQ(
           MedLLVMProvenanceTestPeer::stableOffset(Classifier, Loaded, nullptr),
-          Kind == Case::Less || Kind == Case::ExcludeLast);
-      if (Kind == Case::Less || Kind == Case::ExcludeLast) {
+          Kind == Case::Less || Kind == Case::ExcludeLast ||
+              Kind == Case::DirectExcludeLast);
+      if (Kind == Case::Less || Kind == Case::ExcludeLast ||
+          Kind == Case::DirectExcludeLast) {
         llvm::LLVMContext Context;
         auto Module =
             MedLLVMEmitter().emit({Func}, Context, "guarded-scalar-lut",

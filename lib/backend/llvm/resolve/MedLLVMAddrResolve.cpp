@@ -275,18 +275,24 @@ loadIndexConstraint(const MedFunc *Func, const MedOp *Load,
       return LoadIndexConstraint{Left, Right.ConstVal - 1, std::nullopt};
     return std::nullopt;
   }
-  if (Compare->Opcode != NdOp::INT_EQUAL || Truth || !constant(Right) ||
-      Right.ConstVal != 0)
+  if (Compare->Opcode != NdOp::INT_EQUAL || Truth || !constant(Right))
     return std::nullopt;
-  const MedOp *Difference = LookupDef(Left);
-  if (!Difference || Difference->Opcode != NdOp::INT_SUB ||
-      Difference->NumInputs != 2 || !sameIndexValue(Difference->Output, Left) ||
-      Difference->Inputs[0].Size != Left.Size ||
-      Difference->Inputs[1].Size != Left.Size ||
-      Difference->Inputs[0].isConst() || !constant(Difference->Inputs[1]))
-    return std::nullopt;
-  return LoadIndexConstraint{Difference->Inputs[0], std::nullopt,
-                             Difference->Inputs[1].ConstVal};
+  // Keep the selector constraint when equality was lowered through SUB;
+  // constraining the difference first would lose the excluded selector value.
+  if (Right.ConstVal == 0) {
+    const MedOp *Difference = LookupDef(Left);
+    if (Difference && Difference->Opcode == NdOp::INT_SUB &&
+        Difference->NumInputs == 2 &&
+        sameIndexValue(Difference->Output, Left) &&
+        Difference->Inputs[0].Size == Left.Size &&
+        Difference->Inputs[1].Size == Left.Size &&
+        !Difference->Inputs[0].isConst() && constant(Difference->Inputs[1]))
+      return LoadIndexConstraint{Difference->Inputs[0], std::nullopt,
+                                 Difference->Inputs[1].ConstVal};
+  }
+  if (!Left.isConst())
+    return LoadIndexConstraint{Left, std::nullopt, Right.ConstVal};
+  return std::nullopt;
 }
 
 /// Recover the one record lane selected by a conventional `base + index`
