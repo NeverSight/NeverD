@@ -96,7 +96,13 @@ recovered-app/
 
 임시 입력은 삭제됩니다. 중첩 클래스가 외부 클래스의 소스 파일을 공유할 수 있으므로 Java 파일 수는 DEX 클래스 수와 다릅니다. 생성한 메서드는 Java 디스패치 루프를 사용할 수 있습니다. 원본 DEX를 실행하거나 런타임 브리지로 호출하지 않습니다.
 
-내장 보고서는 `android_method_recovery`를 포함하고 같은 내용을 `metadata/android-methods.json`에 저장합니다. 게시 전에 `method_count = recovered_method_count + declaration_only_method_count`를 만족하고 `unrecovered_method_count`가 0이어야 합니다. 원래의 `native`, `abstract` 메서드는 `declaration-only` 상태이며 복원한 본문 수에 포함하지 않습니다. 아래는 축약한 예시이며, 복원 현황 파일에는 메서드별 목록도 있습니다.
+내장 보고서는 `android_method_recovery`를 포함하고 같은 내용을 `metadata/android-methods.json`에 저장하며 원래의 모든 메서드를 유지합니다. `method_count = recovered_method_count + projected_method_count + declaration_only_method_count + unrecovered_method_count`를 만족해야 합니다. 생략된 `projected_method_count`는 0으로 처리하며 게시 전 `unrecovered_method_count`도 0이어야 합니다. 원래의 `native`, `abstract` 메서드는 `declaration-only` 상태이며 복원한 본문 수에 포함하지 않습니다.
+
+이름이 있고 외부 변수를 캡처하지 않는 일부 지역 클래스는 정확한 소속 static 메서드 안에 출력할 수 있습니다. 일반 스칼라 메서드, `Object`를 직접 상속하고 필드가 없는 클래스, 실제 무인자 생성자, 스칼라 인스턴스 메서드, 지원 범위 밖으로 유출되지 않는다고 검증된 객체 사용이 필요합니다. 익명 클래스, 변수 캡처, 지원하지 않는 제한자와 입증되지 않은 사용은 계속 명시적으로 실패합니다.
+
+이 출력에서 지역 클래스 메서드와 소속 메서드는 `source-projected`, `projection_kind: "named-method-local"`로 기록합니다. 바깥 처리 보고서가 `success`여도 메서드 복원 현황은 `partial`입니다. 재컴파일 후의 바이너리 이름과 접근 플래그는 모두 아직 검증되지 않았습니다. Java 컴파일러가 다른 바이너리 이름을 선택할 수 있으므로 `class_source_bindings`는 원래 클래스, 정확한 소속 메서드, 소스 경로와 지역 이름을 보존하고 `binary_name_status`를 `unverified`로 표시합니다.
+
+`generated_source_helpers`는 추가 메서드를 나열하며 정확한 종류는 `throw-helper`, `constant-helper`, `default-constructor`, `field-initializer`입니다. 마지막 종류는 원래 메서드 목록에 없었으며 추가로 생성된 `<clinit>`을 뜻합니다. 이 추가 메서드들은 원래 메서드 총수에 포함하지 않습니다. 컴파일 성공이나 한 번의 이름 일치로 완전 복원 상태가 되지는 않습니다. 아래 축약 예시는 투영 메서드를 포함하지 않습니다.
 
 ```json
 {

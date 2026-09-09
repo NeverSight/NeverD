@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import nullcontext
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,13 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+
+try:
+    from scripts import mobile_android_class_identity as class_identity
+except ModuleNotFoundError as error:
+    if error.name != "scripts":
+        raise
+    import mobile_android_class_identity as class_identity
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -39,71 +47,7 @@ ROUNDING_METHODS = {
 }
 
 
-class ClassFile:
-    """Read the independent compiler's declaration/Code attribute inventory."""
-    def __init__(self, data: bytes):
-        self.data, self.offset = data, 0
-
-    def take(self, count: int) -> bytes:
-        if count < 0 or self.offset + count > len(self.data):
-            raise RuntimeError("Truncated compiler class file")
-        result = self.data[self.offset:self.offset + count]
-        self.offset += count
-        return result
-
-    def number(self, count: int) -> int: return int.from_bytes(self.take(count), "big")
-
-    def inventory(self) -> tuple[str, dict[str, str]]:
-        if self.take(4) != b"\xca\xfe\xba\xbe": raise RuntimeError("Invalid compiler class file")
-        self.take(4)  # minor and major versions
-        count = self.number(2)
-        constants, index = {}, 1
-        while index < count:
-            tag = self.number(1)
-            if tag == 1:
-                raw = self.take(self.number(2))
-                value = raw.replace(b"\xc0\x80", b"\0").decode("utf-8", errors="surrogatepass")
-            elif tag in (7, 8, 16, 19, 20): value = self.number(2)
-            elif tag in (3, 4, 9, 10, 11, 12, 17, 18): value = self.take(4)
-            elif tag in (5, 6): value = self.take(8)
-            elif tag == 15: value = self.take(3)
-            else: raise RuntimeError(f"Unsupported compiler constant-pool tag {tag}")
-            constants[index] = tag, value
-            index += 2 if tag in (5, 6) else 1
-
-        def constant(index: int, tag: int):
-            entry = constants.get(index)
-            if entry is None or entry[0] != tag: raise RuntimeError("Invalid compiler constant reference")
-            return entry[1]
-
-        self.number(2)
-        owner = "L" + constant(constant(self.number(2), 7), 1) + ";"
-        self.number(2)
-        self.take(self.number(2) * 2)
-
-        def attributes():
-            names = []
-            for _ in range(self.number(2)):
-                names.append(constant(self.number(2), 1))
-                self.take(self.number(4))
-            return names
-
-        for _ in range(self.number(2)):
-            self.take(6); attributes()
-        methods = {}
-        for _ in range(self.number(2)):
-            flags, name, prototype = self.number(2), constant(self.number(2), 1), constant(self.number(2), 1)
-            attrs = attributes()
-            code = attrs.count("Code")
-            declaration_only = bool(flags & (0x100 | 0x400))
-            if code != (0 if declaration_only else 1):
-                raise RuntimeError("Compiler method has inconsistent Code/access metadata")
-            identity = owner + "->" + name + prototype
-            if identity in methods: raise RuntimeError("Compiler emitted a duplicate method")
-            methods[identity] = "declaration" if declaration_only else "body"
-        attributes()
-        if self.offset != len(self.data): raise RuntimeError("Compiler class file has unparsed trailing data")
-        return owner, methods
+ClassFile = class_identity.ClassFile
 
 
 def compiler_inventory(directory: Path) -> tuple[set[str], dict[str, str]]:
@@ -152,6 +96,12 @@ def choose_d8(override: Path | None) -> Path:
 
 
 def expected_keys(kind: str) -> set[str]:
+    if kind == "local":
+        return {*(f"{name}:{i}:{j}" for name in ("first", "first-count", "second", "second-count")
+                  for i in range(7) for j in range(7)),
+                *(f"{name}:{i}" for name in ("wide", "wide-count") for i in range(7)),
+                *("reflection:" + role for role in ("first-int", "second-int", "first-long")),
+                "final-first", "final-second", "final-wide", "constant-reflection"}
     if kind == "rounding":
         return {"rounding-field", "rounding-scalar", "rounding-length",
                 *(f"rounding-array:{i}" for i in range(10))}
@@ -189,14 +139,22 @@ def results(text: str, kind: str) -> dict[str, int]:
     return values
 
 
-def validate_coverage(report: dict, output: Path, classes: set[str], expected: dict[str, str], inputs: dict[str, str]) -> dict:
+def validate_coverage(report: dict, output: Path, classes: set[str], expected: dict[str, str], inputs: dict[str, str],
+                      *, expected_projection: set[str] | None = None) -> dict:
+    projected = set() if expected_projection is None else expected_projection
+    if expected_projection is not None and (not projected or not projected <= expected.keys()
+                                           or any(expected[key] != "body" for key in projected)):
+        raise RuntimeError("Invalid independent projection inventory")
     if report.get("status") != "success" or report.get("platform") != "android":
         raise RuntimeError("Recovery report does not identify a successful Android export")
     if report.get("backend") != {"name": "neverd", "version": "1", "execution": "builtin"}:
         raise RuntimeError("The default path did not use the built-in engine")
     coverage = json.loads((output / "metadata/android-methods.json").read_text())
-    if report.get("android_method_recovery") != coverage or coverage.get("status") != "recovered" or coverage.get("schema_version") != 1:
+    if report.get("android_method_recovery") != coverage or coverage.get("status") != ("partial" if projected else "recovered") or coverage.get("schema_version") != 1:
         raise RuntimeError("Standalone method coverage disagrees with the successful report")
+    if not projected and (coverage.get("projected_method_count", 0) != 0
+                          or coverage.get("class_source_bindings") or coverage.get("generated_source_helpers")):
+        raise RuntimeError("Ordinary recovery cannot conceal local source projection")
     rows = coverage.get("methods")
     if not isinstance(rows, list): raise RuntimeError("Missing method inventory")
     actual = {}
@@ -210,15 +168,23 @@ def validate_coverage(report: dict, output: Path, classes: set[str], expected: d
         if row.get("input") != inputs.get(row.get("class")): raise RuntimeError(f"Incorrect input ownership: {identity}")
         count = row.get("instruction_count")
         if type(count) is not int or count < 0: raise RuntimeError("Invalid instruction count")
-        wanted = "declaration-only" if expected[identity] == "declaration" else "recovered"
-        if row.get("status") != wanted or (count != 0) != (wanted == "recovered"):
+        wanted = "source-projected" if identity in projected else ("declaration-only" if expected[identity] == "declaration" else "recovered")
+        if row.get("status") != wanted or (count != 0) != (wanted != "declaration-only"):
             raise RuntimeError(f"Method body/declaration classification changed: {identity}: {row}")
         if wanted == "declaration-only" and not row.get("reason"): raise RuntimeError("Declaration-only method lacks its reason")
+        if wanted == "source-projected" and (row.get("projection_kind") != "named-method-local"
+                                            or not isinstance(row.get("reason"), str) or not row["reason"]):
+            raise RuntimeError("Source-projected method lacks its precise scope and reason")
+        if wanted != "source-projected" and "projection_kind" in row:
+            raise RuntimeError("Ordinary method carries an unexpected projection identity")
         actual[identity] = row
     if set(actual) != set(expected): raise RuntimeError(f"Missing methods: {sorted(expected.keys() - actual.keys())}")
-    recovered = sum(kind == "body" for kind in expected.values())
+    bodies = sum(kind == "body" for kind in expected.values())
+    recovered = bodies - len(projected)
     counts = {"class_count": len(classes), "method_count": len(expected), "recovered_method_count": recovered,
-              "declaration_only_method_count": len(expected) - recovered, "unrecovered_method_count": 0}
+              "declaration_only_method_count": len(expected) - bodies, "unrecovered_method_count": 0}
+    if projected:
+        counts["projected_method_count"] = len(projected)
     if any(type(coverage.get(key)) is not int or coverage.get(key) != value for key, value in counts.items()):
         raise RuntimeError("Aggregate method counts disagree with original compiler declarations")
     paths = sorted(path.relative_to(output).as_posix() for path in (output / "sources").rglob("*.java"))
@@ -235,6 +201,56 @@ def d8_command(d8: Path, java: str) -> list[str]:
     return [str(d8)]
 
 
+LOCAL_OWNER = "Lfixture/LocalClassBehavior;"
+LOCAL_ROLES = {"first-int": (LOCAL_OWNER, "first", "(II)I", "Worker"),
+               "second-int": (LOCAL_OWNER, "second", "(II)I", "Worker"),
+               "first-long": (LOCAL_OWNER, "first", "(J)J", "Worker")}
+LOCAL_CASES = ("local-dex", "local-multidex-outer-first", "local-multidex-overload-first")
+
+
+def local_roles(classes: dict) -> dict[str, str]:
+    locals_ = class_identity.local_classes(classes)
+    by_key = {}
+    for owner, facts in locals_.items():
+        key = class_identity.local_key(facts)
+        if key in by_key: raise RuntimeError("Ambiguous fixture lexical identity")
+        by_key[key] = owner
+    if set(by_key) != set(LOCAL_ROLES.values()):
+        raise RuntimeError("Fixture must contain the three independently specified Worker scopes")
+    return {role: by_key[key] for role, key in LOCAL_ROLES.items()}
+
+
+def reflection_manifest(classes: dict, path: Path):
+    roles = local_roles(classes)
+    path.write_text("".join(role + "\t" + owner[1:-1].replace("/", ".") + "\n"
+                            for role, owner in sorted(roles.items())), encoding="utf-8")
+
+
+def local_partitions(classes: dict) -> dict[str, list[list[str]]]:
+    roles = local_roles(classes)
+    if set(classes) != {LOCAL_OWNER, *roles.values()}:
+        raise RuntimeError("Unexpected original local fixture class inventory")
+    wide = roles["first-long"]
+    return {LOCAL_CASES[0]: [sorted(classes)],
+            LOCAL_CASES[1]: [[LOCAL_OWNER], sorted(roles.values())],
+            LOCAL_CASES[2]: [[wide], sorted(set(classes) - {wide}, reverse=True)]}
+
+
+def source_hashes(directory: Path) -> list[dict]:
+    return [{"path": path.relative_to(directory).as_posix(), "size": path.stat().st_size,
+             "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+            for path in sorted(directory.rglob("*.java"))]
+
+
+def compare_local_behavior(baseline: dict, actual: dict):
+    if set(baseline) != expected_keys("local") or set(actual) != expected_keys("local"):
+        raise RuntimeError("Local behavior comparison requires the complete independent key inventory")
+    if actual != baseline:
+        changes = {key: {"original": baseline[key], "recovered": actual[key]}
+                   for key in baseline if baseline[key] != actual[key]}
+        raise RuntimeError("Local Java projection changed behavior: " + json.dumps(changes))
+
+
 class Verify:
     def __init__(self, work: Path, jdk: Path, d8: Path, timeout: int):
         self.work, self.timeout = work, timeout
@@ -242,6 +258,8 @@ class Verify:
         self.environment["JAVA_HOME"] = str(jdk)
         self.environment["PATH"] = str(jdk / "bin") + os.pathsep + self.environment.get("PATH", "")
         self.environment["NEVERD_JADX"] = str(work / "external-decompiler-must-not-run")
+        for key in ("JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"):
+            self.environment.pop(key, None)
         suffix = ".exe" if os.name == "nt" else ""
         self.java, self.javac = str(jdk / "bin" / ("java" + suffix)), str(jdk / "bin" / ("javac" + suffix))
         self.d8 = d8_command(d8, self.java)
@@ -251,10 +269,22 @@ class Verify:
     def run(self, arguments, label: str) -> str:
         self.log_index += 1
         log = self.work / "logs" / f"{self.log_index:03d}-{label}.log"
-        with log.open("x", encoding="utf-8") as stream:
-            result = subprocess.run(list(map(str, arguments)), stdout=stream,
-                                    stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                    timeout=self.timeout, env=self.environment, check=False)
+        command = {"argv": list(map(str, arguments)), "cwd": os.getcwd(),
+                   "java_home": self.environment["JAVA_HOME"], "timeout": self.timeout,
+                   "log": log.relative_to(self.work).as_posix(), "status": "started"}
+        receipt = log.with_suffix(".command.json")
+        receipt.write_text(json.dumps(command, indent=2) + "\n")
+        try:
+            with log.open("x", encoding="utf-8") as stream:
+                result = subprocess.run(command["argv"], stdout=stream,
+                                        stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                        timeout=self.timeout, env=self.environment, check=False)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            command.update(status="failed", error=str(error))
+            receipt.write_text(json.dumps(command, indent=2) + "\n")
+            raise
+        command.update(status="success" if result.returncode == 0 else "failed", exit_code=result.returncode)
+        receipt.write_text(json.dumps(command, indent=2) + "\n")
         if result.returncode:
             raise RuntimeError(f"{label} exited {result.returncode}: {log.read_text(errors='replace')}")
         return log.read_text(encoding="utf-8", errors="replace")
@@ -264,6 +294,16 @@ class Verify:
         arguments = [self.javac, "-encoding", "UTF-8", "-g", "-d", output]
         if classpath: arguments += ["-classpath", classpath]
         self.run([*arguments, *sources], "javac")
+
+    def compile_local(self, sources, output: Path, *, classpath: Path | None = None):
+        empty = self.work / "local-empty-classpath"
+        empty.mkdir(exist_ok=True)
+        if any(empty.iterdir()): raise RuntimeError("Local fixture isolation directory is not empty")
+        output.mkdir(parents=True)
+        self.run([self.javac, "--release", "8", "-encoding", "UTF-8", "-g", "-proc:none",
+                  "-implicit:none", "-sourcepath", empty, "-processorpath", empty,
+                  "-classpath", classpath if classpath is not None else empty,
+                  "-d", output, *sources], "javac-local")
 
     def original(self, source: Path, harness: str, name: str, kind: str):
         directory = self.work / name
@@ -292,6 +332,107 @@ class Verify:
             changes = {key: {"original": baseline[key], "recovered": actual[key]} for key in baseline if baseline[key] != actual[key]}
             raise RuntimeError("Recovered Java changed behavior: " + json.dumps(changes))
         return len(actual)
+
+    def local_cases(self, neverd: Path) -> tuple[list[dict], list[dict]]:
+        passed, failures = [], []
+        directory = self.work / "original-local"
+        try:
+            self.run([self.javac, "-version"], "local-javac-version")
+            self.run([self.java, "-version"], "local-java-version")
+            source_dir = directory / "source"
+            for path in sorted((FIXTURES / "local/java").rglob("*.java")):
+                target = source_dir / path.relative_to(FIXTURES / "local/java")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, target)
+            harness_source = directory / "harness-source/LocalClassHarness.java"
+            harness_source.parent.mkdir(parents=True)
+            shutil.copyfile(FIXTURES / "harness/LocalClassHarness.java", harness_source)
+            classes_dir = directory / "classes"
+            self.compile_local(sorted(source_dir.rglob("*.java")), classes_dir)
+            original = class_identity.compiler_classes(classes_dir)
+            (directory / "class-inventory.json").write_text(json.dumps(original, indent=2) + "\n")
+            projected = class_identity.projected_methods(original)
+            methods = {identity: "body" if row["code"] else "declaration"
+                       for facts in original.values() for identity, row in facts["methods"].items()}
+            if len(methods) != 10 or len(projected) != 9:
+                raise RuntimeError("Owned local fixture must retain ten original bodies and nine projection roles")
+            partitions = local_partitions(original)
+            manifest = directory / "reflection.tsv"
+            reflection_manifest(original, manifest)
+            self.compile_local([harness_source], directory / "harness", classpath=classes_dir)
+            cp = os.pathsep.join(map(str, (directory / "harness", classes_dir)))
+            baseline = results(self.run([self.java, "-cp", cp, "LocalClassHarness", manifest], "original-local"), "local")
+            if any(baseline["reflection:" + role] != 1 for role in LOCAL_ROLES):
+                raise RuntimeError("Original reflection checks did not succeed")
+            if [baseline["final-first"], baseline["final-second"], baseline["final-wide"]] != [49, 49, 7]:
+                raise RuntimeError("Original fixture constructor side effects changed")
+            if baseline["constant-reflection"] != 7:
+                raise RuntimeError("Original fixture reflective constant value changed")
+            (directory / "baseline.json").write_text(json.dumps(baseline, indent=2) + "\n")
+            (directory / "source-hashes.json").write_text(json.dumps({"implementation": source_hashes(source_dir),
+                "harness": source_hashes(harness_source.parent)}, indent=2) + "\n")
+        except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+            for label in LOCAL_CASES:
+                failures.append({"case": label, "stage": "original-preparation", "error": str(error)})
+            (self.work / "local-preparation-failure.json").write_text(json.dumps(failures, indent=2) + "\n")
+            return passed, failures
+        for label in LOCAL_CASES:
+            case = self.work / label
+            case.mkdir()
+            try:
+                inputs, dexes = {}, []
+                for number, owners in enumerate(partitions[label], 1):
+                    dex_name = "classes.dex" if number == 1 else f"classes{number}.dex"
+                    paths = [classes_dir / original[owner]["path"] for owner in owners]
+                    dexes.append(self.dex(paths, case / ("partition-" + str(number)), classes_dir))
+                    inputs.update({owner: dex_name for owner in owners})
+                if len(dexes) == 1:
+                    source = dexes[0]
+                else:
+                    source = case / "input.apk"
+                    with zipfile.ZipFile(source, "w") as archive:
+                        for number, dex in enumerate(dexes, 1):
+                            archive.write(dex, "classes.dex" if number == 1 else f"classes{number}.dex")
+                (case / "input-inventory.json").write_text(json.dumps({"classes": original, "inputs": inputs,
+                    "projected_methods": sorted(projected), "partitions": partitions[label],
+                    "input_sha256": hashlib.sha256(source.read_bytes()).hexdigest()}, indent=2) + "\n")
+                output = case / "recovered"
+                self.run([neverd, "mobile", source, "-o", output, "--timeout", self.timeout, "--json"], label)
+                report = json.loads((output / "report.json").read_text())
+                if report.get("dex_count") != len(dexes) or report.get("smali_count") != 0:
+                    raise RuntimeError("Local DEX partition inventory changed")
+                counts = validate_coverage(report, output, set(original), methods, inputs, expected_projection=projected)
+                coverage = report["android_method_recovery"]
+                class_identity.validate_bindings(coverage, original, inputs)
+                if report["java_sources"] != ["sources/fixture/LocalClassBehavior.java"]:
+                    raise RuntimeError("Local source was flattened or emitted outside its enclosing unit")
+                (case / "generated-source-hashes.json").write_text(json.dumps(source_hashes(output / "sources"), indent=2) + "\n")
+                compiled = case / "compiled"
+                self.compile_local(sorted((output / "sources").rglob("*.java")), compiled)
+                rebuilt = class_identity.compiler_classes(compiled)
+                (case / "rebuilt-class-inventory.json").write_text(json.dumps(rebuilt, indent=2) + "\n")
+                mapping = class_identity.match_recompiled(original, rebuilt, coverage.get("generated_source_helpers"))
+                (case / "class-mapping.json").write_text(json.dumps(mapping, indent=2) + "\n")
+                rebuilt_manifest = case / "reflection.tsv"
+                reflection_manifest(rebuilt, rebuilt_manifest)
+                self.compile_local([harness_source], case / "harness", classpath=compiled)
+                cp = os.pathsep.join(map(str, (case / "harness", compiled)))
+                actual = results(self.run([self.java, "-cp", cp, "LocalClassHarness", rebuilt_manifest], label + "-execution"), "local")
+                (case / "execution.json").write_text(json.dumps(actual, indent=2) + "\n")
+                compare_local_behavior(baseline, actual)
+                passed.append({"case": label, **counts, "matched_results": len(actual),
+                               "acceptance_scope": "owned-local-source-projection", "native_coverage_status": "partial",
+                               "binary_identity_equivalence": False,
+                               "all_measured_binary_names_equal": mapping["all_measured_binary_names_equal"]})
+                print(f"PASS {label}: {len(projected)} projected original methods, {len(actual)} reflection/behavior results; native coverage remains partial", flush=True)
+            except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+                failure = {"case": label, "error": str(error)}
+                failures.append(failure)
+                (case / "failure.json").write_text(json.dumps(failure, indent=2) + "\n")
+                print(f"FAIL {label}: {error}", file=sys.stderr, flush=True)
+        if {row["case"] for row in passed + failures} != set(LOCAL_CASES) or len(passed + failures) != len(LOCAL_CASES):
+            raise RuntimeError("Local projection acceptance omitted a required partition")
+        return passed, failures
 
 
 def main() -> int:
@@ -361,6 +502,9 @@ def main() -> int:
                     failures.append(failure)
                     (work / (label + "-failure.json")).write_text(json.dumps(failure, indent=2) + "\n")
                     print(f"FAIL {label}: {error}", file=sys.stderr, flush=True)
+        local_passed, local_failures = verify.local_cases(neverd)
+        passed.extend(local_passed)
+        failures.extend(local_failures)
         broken = work / "broken-smali"
         broken.mkdir()
         shutil.copyfile(SMALI / "Peer.smali", broken / "Peer.smali")
@@ -380,7 +524,7 @@ def main() -> int:
         summary = {"schema_version": 1, "passed": passed, "failures": failures}
         (work / "acceptance.json").write_text(json.dumps(summary, indent=2) + "\n")
         if failures: raise RuntimeError(f"{len(failures)} built-in Android acceptance cases failed; evidence: {work}")
-        print(f"PASS all {len(passed)} source recovery/execution cases and 2 rejection cases", flush=True)
+        print(f"PASS all {len(passed)} source recovery/projection execution cases and 2 rejection cases", flush=True)
     return 0
 
 

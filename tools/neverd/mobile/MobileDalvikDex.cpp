@@ -736,10 +736,8 @@ class Dex {
     std::map<std::string, std::map<std::string, Encoded>> values;
     for (const auto &entry : all) {
       const auto &[name, elements] = entry.value;
-      if (name == "Ldalvik/annotation/EnclosingMethod;")
-        bad("method-local/anonymous class source context is unsupported: " +
-            cls.name + " annotation " + name);
       if (name != "Ldalvik/annotation/EnclosingClass;" &&
+          name != "Ldalvik/annotation/EnclosingMethod;" &&
           name != "Ldalvik/annotation/InnerClass;" &&
           name != "Ldalvik/annotation/MemberClasses;")
         bad("unsupported annotation " + name + " on class " + cls.name);
@@ -754,7 +752,10 @@ class Dex {
       return found == values.end() ? nullptr : &found->second;
     };
     auto enclosing = get("Ldalvik/annotation/EnclosingClass;"),
+         enclosing_method = get("Ldalvik/annotation/EnclosingMethod;"),
          inner = get("Ldalvik/annotation/InnerClass;");
+    if (enclosing && enclosing_method)
+      bad("conflicting enclosing annotations for " + cls.name);
     if (enclosing) {
       auto entry = enclosing->find("value");
       if (enclosing->size() != 1 || entry == enclosing->end() ||
@@ -763,7 +764,18 @@ class Dex {
         bad("invalid EnclosingClass annotation");
       cls.enclosing = std::get<std::string>(entry->second.value);
     }
+    if (enclosing_method) {
+      auto entry = enclosing_method->find("value");
+      if (enclosing_method->size() != 1 ||
+          entry == enclosing_method->end() || entry->second.kind != 0x1a)
+        bad("invalid EnclosingMethod annotation for " + cls.name);
+      auto ref = methodRef(std::get<std::string>(entry->second.value));
+      if (!ref.owner.starts_with('L'))
+        bad("EnclosingMethod owner is not a class for " + cls.name);
+      cls.enclosing_method = std::move(ref);
+    }
     if (inner) {
+      cls.inner_class_present = true;
       auto name = inner->find("name"), flags = inner->find("accessFlags");
       if (inner->size() != 2 || name == inner->end() ||
           (name->second.kind != 0x17 && name->second.kind != 0x1e) ||
@@ -774,7 +786,7 @@ class Dex {
       cls.inner_access =
           accessFlags(uint32_t(std::get<int64_t>(flags->second.value)));
     }
-    if (bool(inner) != bool(enclosing))
+    if (bool(inner) != bool(enclosing || enclosing_method))
       bad("incomplete inner class metadata");
     if (auto member = get("Ldalvik/annotation/MemberClasses;")) {
       auto value = member->find("value");

@@ -96,7 +96,13 @@ recovered-app/
 
 暫存輸入會被清除。巢狀類別可能共用外層類別的原始碼檔案，因此 Java 檔案數不等於 DEX 類別數。產生的方法可能使用 Java 分派迴圈，不執行原始 DEX，也不透過執行時橋接呼叫它。
 
-內建報告包含 `android_method_recovery`，相同內容會寫入 `metadata/android-methods.json`。發布前必須滿足 `method_count = recovered_method_count + declaration_only_method_count`，且 `unrecovered_method_count` 為零。原有 `native`、`abstract` 方法的狀態是 `declaration-only`，不計入已還原的方法本體。以下是簡化範例；覆蓋檔案也包含逐方法清單：
+內建報告包含 `android_method_recovery`，相同內容會寫入 `metadata/android-methods.json`，並保留每個原始方法。計數滿足 `method_count = recovered_method_count + projected_method_count + declaration_only_method_count + unrecovered_method_count`；未提供的 `projected_method_count` 視為零，發布前 `unrecovered_method_count` 仍須為零。原有 `native`、`abstract` 方法的狀態是 `declaration-only`，不計入已還原的方法本體。
+
+部分具名且不擷取外部變數的區域類別可以還原到其精確所屬的靜態方法內。目前要求外層為一般純量方法，區域類別直接繼承 `Object`、沒有欄位、具有真實無參數建構子，其他方法為純量執行個體方法，且物件用途經過驗證、不會逸出支援的範圍。匿名類別、變數擷取、不支援的修飾詞和無法證明的用途仍會明確失敗。
+
+這類輸出中的區域類別方法及所屬外層方法標記為 `source-projected`，`projection_kind` 為 `named-method-local`；即使外層流程報告為 `success`，方法涵蓋狀態仍為 `partial`。重新編譯後的二進位名稱和存取旗標均尚未驗證。Java 編譯器可能選擇不同的區域類別二進位名稱，因此 `class_source_bindings` 保留原始類別、精確所屬方法、原始碼路徑和區域名稱，並將 `binary_name_status` 標為 `unverified`。
+
+`generated_source_helpers` 另列額外方法，類型精確為 `throw-helper`、`constant-helper`、`default-constructor` 和 `field-initializer`。最後一種表示額外產生、原始方法清單中不存在的 `<clinit>`。這些額外方法不計入原始方法總數。編譯成功或單次名稱一致不會將其升級為完整還原。以下簡化範例不含這類投影方法：
 
 ```json
 {

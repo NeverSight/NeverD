@@ -96,7 +96,13 @@ recovered-app/
 
 Les entrées temporaires sont supprimées. Des classes imbriquées peuvent partager le fichier de leur classe englobante : le nombre de fichiers Java n’est donc pas celui des classes DEX. Les méthodes générées peuvent employer une boucle de répartition Java ; elles n’exécutent pas le DEX original et ne l’appellent pas via une passerelle d’exécution.
 
-Le rapport intégré contient `android_method_recovery`, également écrit dans `metadata/android-methods.json`. Avant publication, `method_count = recovered_method_count + declaration_only_method_count` doit être respecté et `unrecovered_method_count` doit valoir zéro. Les méthodes `native` et `abstract` d’origine portent le statut `declaration-only` et ne comptent pas comme corps restaurés. Voici un exemple abrégé ; le fichier de couverture contient aussi l’inventaire par méthode :
+Le rapport intégré contient `android_method_recovery`, également écrit dans `metadata/android-methods.json`, et conserve chaque méthode d’origine. L’invariant est `method_count = recovered_method_count + projected_method_count + declaration_only_method_count + unrecovered_method_count` ; un `projected_method_count` absent vaut zéro, et `unrecovered_method_count` reste nul avant publication. Les méthodes `native` et `abstract` d’origine portent le statut `declaration-only` et ne comptent pas comme corps restaurés.
+
+Un sous-ensemble de classes locales nommées sans capture peut être émis dans la méthode statique exacte qui les contient. Il exige une méthode ordinaire à types scalaires, une classe sans champs héritant directement d’`Object`, un véritable constructeur sans argument, des méthodes d’instance scalaires et des usages d’objets dont l’absence d’échappement hors du périmètre pris en charge est vérifiée. Les classes anonymes, captures, modificateurs non pris en charge et usages non prouvés échouent explicitement.
+
+Ces méthodes locales et leur méthode englobante reçoivent `source-projected`, avec `projection_kind: "named-method-local"`. La couverture reste `partial` même si le rapport global indique `success`. Les noms binaires et les indicateurs d’accès après recompilation restent non vérifiés. Le compilateur Java pouvant choisir un autre nom binaire local, `class_source_bindings` conserve la classe d’origine, la méthode englobante exacte, le chemin source et le nom local avec `binary_name_status: "unverified"`.
+
+`generated_source_helpers` inventorie les méthodes supplémentaires avec les types exacts `throw-helper`, `constant-helper`, `default-constructor` et `field-initializer`. Ce dernier désigne un `<clinit>` supplémentaire généré qui ne figurait pas dans l’inventaire des méthodes d’origine. Ces ajouts ne comptent pas dans le total des méthodes d’origine. Une compilation réussie ou une concordance ponctuelle des noms ne constitue pas une restauration complète. L’exemple abrégé suivant ne contient aucune méthode projetée :
 
 ```json
 {

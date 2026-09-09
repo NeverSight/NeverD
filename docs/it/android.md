@@ -96,7 +96,13 @@ recovered-app/
 
 Gli input temporanei vengono rimossi. Le classi annidate possono condividere il file della classe esterna, quindi il numero di file Java non equivale al numero di classi DEX. I metodi generati possono usare un ciclo di dispatch Java; non eseguono il DEX originale né lo richiamano tramite un ponte a runtime.
 
-Il report integrato include `android_method_recovery`, scritto anche in `metadata/android-methods.json`. Prima della pubblicazione deve valere `method_count = recovered_method_count + declaration_only_method_count`, con `unrecovered_method_count` pari a zero. I metodi originali `native` e `abstract` hanno stato `declaration-only` e non contano come corpi recuperati. Segue un esempio abbreviato; il file di copertura contiene anche l’inventario per metodo:
+Il report integrato include `android_method_recovery`, scritto anche in `metadata/android-methods.json`, e conserva ogni metodo originale. Vale `method_count = recovered_method_count + projected_method_count + declaration_only_method_count + unrecovered_method_count`; un `projected_method_count` assente vale zero e `unrecovered_method_count` resta zero prima della pubblicazione. I metodi originali `native` e `abstract` hanno stato `declaration-only` e non contano come corpi recuperati.
+
+Un sottoinsieme di classi locali con nome e senza catture può essere emesso nel metodo statico contenitore esatto. Sono richiesti un metodo ordinario con tipi scalari, una classe priva di campi che estenda direttamente `Object`, un vero costruttore senza argomenti, metodi di istanza scalari e usi degli oggetti verificati che non escano dall’ambito supportato. Classi anonime, catture, modificatori non supportati e usi non dimostrati continuano a fallire esplicitamente.
+
+I metodi locali e il metodo contenitore ricevono `source-projected`, con `projection_kind: "named-method-local"`; la copertura rimane `partial` anche quando il report generale indica `success`. I nomi binari e i flag di accesso dopo la ricompilazione restano non verificati. Il compilatore Java può scegliere un nome binario diverso, quindi `class_source_bindings` conserva classe originale, metodo contenitore esatto, percorso sorgente e nome locale con `binary_name_status: "unverified"`.
+
+`generated_source_helpers` elenca i metodi aggiuntivi con i tipi esatti `throw-helper`, `constant-helper`, `default-constructor` e `field-initializer`. L’ultimo indica un `<clinit>` generato aggiuntivo, assente dall’inventario dei metodi originali. Queste aggiunte non rientrano nel totale dei metodi originali. Una compilazione riuscita o una singola corrispondenza dei nomi non dimostra un recupero completo. L’esempio abbreviato seguente non contiene metodi proiettati:
 
 ```json
 {

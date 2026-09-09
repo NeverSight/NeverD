@@ -223,6 +223,51 @@ class RecoveryClaimTests(unittest.TestCase):
         self.assertEqual(counts["recovered_method_count"], 2)
         self.assertEqual(counts["declaration_only_method_count"], 2)
 
+    def test_projection_evidence_cannot_be_upgraded_by_relabeling_the_summary(self):
+        for mutation in ("partial", "projected-row", "projected-count", "source-binding"):
+            with self.subTest(mutation=mutation):
+                report, coverage = reports()
+                if mutation == "partial":
+                    coverage["status"] = "partial"
+                elif mutation == "projected-row":
+                    coverage["methods"][0]["status"] = "source-projected"
+                    coverage["methods"][0]["projection_kind"] = "named-method-local"
+                elif mutation == "projected-count":
+                    coverage["projected_method_count"] = 1
+                else:
+                    coverage["class_source_bindings"] = [{
+                        "class": "Lowned/Example;", "binding_kind": "named-method-local",
+                        "binary_name_status": "unverified",
+                    }]
+                with self.assertRaises(AndroidEvidenceError):
+                    compare_recovery(report, coverage, inventory())
+
+    def test_residual_projection_kind_rejects_every_method_role_even_when_empty(self):
+        for index in range(len(reports()[1]["methods"])):
+            for marker in ("named-method-local", "", None, False):
+                with self.subTest(row=index, marker=marker):
+                    report, coverage = reports()
+                    row = coverage["methods"][index]
+                    original_status = row["status"]
+                    row["projection_kind"] = marker
+                    self.assertEqual(coverage["status"], "recovered")
+                    self.assertEqual(row["status"], original_status)
+                    with self.assertRaisesRegex(AndroidEvidenceError, "Projected method metadata"):
+                        compare_recovery(report, coverage, inventory())
+
+    def test_residual_generated_helpers_reject_otherwise_complete_recovery(self):
+        report, coverage = reports()
+        coverage["generated_source_helpers"] = [{
+            "class": "Lowned/Example;", "name": "neverdThrow", "prototype": "(Ljava/lang/Throwable;)V",
+            "static": True, "source_unit": "owned/Example.java", "kind": "throw-helper",
+        }]
+        self.assertEqual(coverage["status"], "recovered")
+        self.assertNotIn("projected_method_count", coverage)
+        self.assertNotIn("class_source_bindings", coverage)
+        self.assertTrue(all("projection_kind" not in row for row in coverage["methods"]))
+        with self.assertRaisesRegex(AndroidEvidenceError, "Projected local-class source"):
+            compare_recovery(report, coverage, inventory())
+
     def test_report_tampering_cannot_drop_or_reclassify_methods(self):
         def missing(report, coverage): coverage["methods"].pop()
         def duplicate(report, coverage): coverage["methods"].append(copy.deepcopy(coverage["methods"][0]))
@@ -369,6 +414,7 @@ class FakeContext:
         self.stages, self.failures, self.commands = {}, [], []
         self.cli_exit, self.sdk_text = 0, SDK_TEXT
         self.publish_on_failure, self.report_mutator, self.extra_java = False, None, False
+        self.java_files = {"sources/owned/Example.java": "class Example {}\n"}
         tool = root / "sdk/build-tools/35.0.0/dexdump"
         tool.parent.mkdir(parents=True)
         tool.write_bytes(b"self-owned simulated SDK executable")
@@ -392,10 +438,12 @@ class FakeContext:
                     self.report_mutator(report, coverage)
                 output = self.work / "recovered"
                 (output / "metadata").mkdir(parents=True)
-                (output / "sources/owned").mkdir(parents=True)
                 (output / "report.json").write_text(json.dumps(report))
                 (output / "metadata/android-methods.json").write_text(json.dumps(coverage))
-                (output / "sources/owned/Example.java").write_text("class Example {}\n")
+                for name, source in self.java_files.items():
+                    path = output / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(source.encode("utf-8"))
                 if self.extra_java:
                     (output / "sources/owned/Unlisted.java").write_text("class Unlisted {}\n")
                 stdout = json.dumps(report)
@@ -473,6 +521,51 @@ class WorkflowStageTests(unittest.TestCase):
             self.assertFalse(arguments["recovery_qualified"])
             self.assertEqual(arguments["report"]["status"], "partial")
             self.assertEqual(len(arguments["sources"]), 1)
+            self.assertTrue(any("recovery" in reason for reason in ctx.failures))
+
+    def test_successful_pipeline_with_projected_bodies_keeps_all_sources_but_fails_qualification(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            ctx = self.context(Path(temporary))
+            ctx.java_files["sources/owned/nested/Peer.java"] = "package owned.nested;\nclass Peer {}\n"
+
+            def projected(report, coverage):
+                report["java_sources"] = list(reversed(sorted(ctx.java_files)))
+                report["java_source_count"] = len(ctx.java_files)
+                coverage["status"] = "partial"
+                coverage["projected_method_count"] = 1
+                coverage["recovered_method_count"] -= 1
+                coverage["methods"][0].update({
+                    "status": "source-projected", "projection_kind": "named-method-local",
+                    "reason": "Recompiled local-class binary identity is unverified.",
+                })
+
+            ctx.report_mutator = projected
+            with patch.dict(os.environ, {"ANDROID_SDK_ROOT": str(ctx.sdk_root)}):
+                run_android(ctx)
+            self.assertEqual(ctx.stages["inventory"]["status"], "success")
+            self.assertEqual(ctx.stages["recovery"]["status"], "failed")
+            self.assertEqual(ctx.stages["recompile"]["status"], "incomplete")
+            self.assertEqual(ctx.stages["behavior"]["status"], "incomplete")
+            self.compilation.assert_called_once()
+            arguments = self.compilation.call_args.kwargs
+            self.assertFalse(arguments["recovery_qualified"])
+            self.assertEqual(arguments["report"]["status"], "success")
+            coverage = arguments["report"]["android_method_recovery"]
+            self.assertEqual(coverage["status"], "partial")
+            self.assertEqual(len(coverage["methods"]), len(inventory()["methods"]))
+            self.assertEqual(coverage["method_count"], sum(coverage.get(key, 0) for key in (
+                "recovered_method_count", "projected_method_count",
+                "declaration_only_method_count", "unrecovered_method_count")))
+            sources = json.loads((ctx.work / "android-source-artifacts.json").read_text())
+            self.assertEqual(arguments["sources"], sources)
+            self.assertEqual(len(sources), 2)
+            self.assertEqual([row["path"] for row in sources], sorted(ctx.java_files))
+            self.assertEqual(set(arguments["report"]["java_sources"]), set(ctx.java_files))
+            for row in sources:
+                expected = ctx.java_files[row["path"]].encode("utf-8")
+                self.assertEqual(row["size"], len(expected))
+                self.assertEqual(row["sha256"], hashlib.sha256(expected).hexdigest())
+                self.assertEqual((ctx.work / "recovered" / row["path"]).read_bytes(), expected)
             self.assertTrue(any("recovery" in reason for reason in ctx.failures))
 
     def test_nonzero_publication_is_still_failed_but_valid_java_gets_diagnostic_attempt(self):

@@ -47,14 +47,15 @@ class AndroidInternalCoverageTests(unittest.TestCase):
                        "android_method_recovery": self.coverage,
                        "java_source_count": 1, "java_sources": ["sources/fixture/Sample.java"]}
 
-    def check(self, report=None, *, metadata=None):
+    def check(self, report=None, *, metadata=None, projection=None):
         report = self.report if report is None else report
         # Keep complete source artifacts and matching JSON in the negative
         # cases, so a later missing-file check cannot conceal a weak gate.
         self.assertTrue(self.source.is_file())
         (self.output / "metadata/android-methods.json").write_text(json.dumps(
             report["android_method_recovery"] if metadata is None else metadata))
-        return runner.validate_coverage(report, self.output, self.classes, self.expected, self.inputs)
+        return runner.validate_coverage(report, self.output, self.classes, self.expected, self.inputs,
+                                        expected_projection=projection)
 
     def test_complete_body_and_declaration_inventory_passes(self):
         self.assertEqual(self.check(), {"class_count": 1, "method_count": 4, "recovered_method_count": 2,
@@ -127,6 +128,143 @@ class AndroidInternalCoverageTests(unittest.TestCase):
             runner.results("\n".join(lines[:-1]), "single")
         with self.assertRaisesRegex(RuntimeError, "duplicate behavior"):
             runner.results("\n".join(lines + [lines[0]]), "single")
+
+    def projection(self):
+        row = self.coverage["methods"][1]
+        row.update(status="source-projected", projection_kind="named-method-local",
+                   reason="Lexical projection requires independent class identity validation")
+        self.coverage.update(status="partial", projected_method_count=1, recovered_method_count=1)
+        return {row["identity"]}
+
+    def test_only_explicit_independent_projection_inventory_accepts_partial(self):
+        projection = self.projection()
+        counts = self.check(projection=projection)
+        self.assertEqual(counts["method_count"], 4)
+        self.assertEqual(counts["projected_method_count"], 1)
+        self.assertEqual(counts["recovered_method_count"], 1)
+        with self.assertRaisesRegex(RuntimeError, "Standalone method coverage"):
+            self.check()
+
+    def test_projected_original_cannot_be_reclassified_as_recovered(self):
+        projection = self.projection()
+        self.coverage["methods"][1]["status"] = "recovered"
+        with self.assertRaisesRegex(RuntimeError, "classification changed"):
+            self.check(projection=projection)
+
+    def test_matching_totals_cannot_move_projection_to_a_different_method(self):
+        projection = self.projection()
+        self.coverage["methods"][0].update(status="source-projected", projection_kind="named-method-local", reason="scope")
+        self.coverage["methods"][1].update(status="recovered")
+        with self.assertRaisesRegex(RuntimeError, "classification changed"):
+            self.check(projection=projection)
+
+    def test_projection_requires_partial_summary_exact_count_and_explanation(self):
+        projection = self.projection()
+        for mutation in ("summary", "count", "reason", "kind", "omitted"):
+            report = copy.deepcopy(self.report)
+            coverage = report["android_method_recovery"]
+            if mutation == "summary": coverage["status"] = "recovered"
+            elif mutation == "count": coverage["projected_method_count"] = 0
+            elif mutation == "omitted": coverage["methods"].pop(1)
+            else: coverage["methods"][1].pop("reason" if mutation == "reason" else "projection_kind")
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(RuntimeError, "Standalone|Aggregate|precise scope|Missing methods"):
+                self.check(report, projection=projection)
+
+    def test_relabelled_ordinary_summary_cannot_hide_projection_metadata(self):
+        for key in ("class_source_bindings", "generated_source_helpers"):
+            report = copy.deepcopy(self.report)
+            report["android_method_recovery"][key] = [{"class": "Lfixture/Sample$1Worker;"}]
+            with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, "conceal local source projection"):
+                self.check(report)
+
+    def test_projection_cannot_consume_a_declaration_or_an_unknown_identity(self):
+        for projection in (set(), {"missing"}, {"Lfixture/Sample;->nativeValue(J)J"}):
+            with self.subTest(projection=projection), self.assertRaisesRegex(RuntimeError, "independent projection inventory"):
+                self.check(projection=projection)
+
+    def test_local_behavior_matrix_requires_every_scope_counter_and_boundary_key(self):
+        keys = runner.expected_keys("local")
+        self.assertEqual(len(keys), 217)
+        for key in ("reflection:first-long", "first:0:0", "first-count:6:6", "wide:6", "final-second", "constant-reflection"):
+            self.assertIn(key, keys)
+            text = "\n".join(name + "=0" for name in sorted(keys - {key}))
+            with self.subTest(missing=key), self.assertRaisesRegex(RuntimeError, "Behavior inventory changed"):
+                runner.results(text, "local")
+
+    def test_same_signature_worker_swap_and_lost_constructor_effect_cannot_pass_behavior(self):
+        baseline = {key: number for number, key in enumerate(sorted(runner.expected_keys("local")))}
+        runner.compare_local_behavior(baseline, dict(baseline))
+        changed = dict(baseline)
+        changed["first:0:0"], changed["second:0:0"] = changed["second:0:0"], changed["first:0:0"]
+        with self.assertRaisesRegex(RuntimeError, "changed behavior.*first:0:0"):
+            runner.compare_local_behavior(baseline, changed)
+        changed = dict(baseline, **{"first-count:6:6": -1})
+        with self.assertRaisesRegex(RuntimeError, "changed behavior.*first-count:6:6"):
+            runner.compare_local_behavior(baseline, changed)
+        changed = dict(baseline)
+        del changed["constant-reflection"]
+        with self.assertRaisesRegex(RuntimeError, "complete independent key"):
+            runner.compare_local_behavior(baseline, changed)
+
+
+class LocalCompilerIsolationTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.verify = runner.Verify(self.root, self.root / "JDK", self.root / "d8", 30)
+
+    def test_recompiled_java8_uses_only_sources_and_a_new_empty_classpath(self):
+        source = self.root / "recovered/LocalClassBehavior.java"
+        with patch.object(self.verify, "run") as command:
+            self.verify.compile_local([source], self.root / "classes")
+        argv = list(map(str, command.call_args.args[0]))
+        self.assertEqual(argv[argv.index("--release") + 1], "8")
+        self.assertIn("-proc:none", argv)
+        self.assertIn("-implicit:none", argv)
+        empty = str(self.root / "local-empty-classpath")
+        for flag in ("-classpath", "-sourcepath", "-processorpath"):
+            self.assertEqual(argv[argv.index(flag) + 1], empty)
+        self.assertEqual(argv[-1], str(source))
+        self.assertNotIn(str(self.root / "original-local/classes"), argv)
+
+    def test_harness_classpath_does_not_enable_implicit_original_source_compilation(self):
+        compiled = self.root / "compiled-generated-only"
+        with patch.object(self.verify, "run") as command:
+            self.verify.compile_local([self.root / "Harness.java"], self.root / "harness", classpath=compiled)
+        argv = list(map(str, command.call_args.args[0]))
+        self.assertEqual(argv[argv.index("-classpath") + 1], str(compiled))
+        self.assertEqual(argv[argv.index("-sourcepath") + 1], str(self.root / "local-empty-classpath"))
+
+    def test_nonempty_isolation_directory_is_a_failure_before_compilation(self):
+        empty = self.root / "local-empty-classpath"
+        empty.mkdir()
+        (empty / "Leaked.class").write_bytes(b"fixture")
+        with patch.object(self.verify, "run") as command, self.assertRaisesRegex(RuntimeError, "not empty"):
+            self.verify.compile_local([], self.root / "classes")
+        command.assert_not_called()
+
+    def test_local_partitions_are_complete_and_cross_dex_ownership_is_distinct(self):
+        from scripts.tests.test_mobile_android_class_identity import inventory
+        original = inventory()
+        partitions = runner.local_partitions(original)
+        self.assertEqual(set(partitions), set(runner.LOCAL_CASES))
+        self.assertEqual([len(partitions[name]) for name in runner.LOCAL_CASES], [1, 2, 2])
+        for groups in partitions.values():
+            flat = [owner for group in groups for owner in group]
+            self.assertEqual(set(flat), set(original))
+            self.assertEqual(len(flat), len(original))
+            self.assertTrue(all(groups))
+        self.assertEqual(partitions[runner.LOCAL_CASES[1]][0], [runner.LOCAL_OWNER])
+        wide = runner.local_roles(original)["first-long"]
+        self.assertEqual(partitions[runner.LOCAL_CASES[2]][0], [wide])
+
+    def test_original_preparation_failure_marks_all_three_required_cases(self):
+        with patch.object(self.verify, "run", side_effect=RuntimeError("compiler failed")):
+            passed, failures = self.verify.local_cases(self.root / "neverd")
+        self.assertEqual(passed, [])
+        self.assertEqual({row["case"] for row in failures}, set(runner.LOCAL_CASES))
+        self.assertEqual(len(failures), 3)
 
 
 class AndroidInternalPortabilityTests(unittest.TestCase):

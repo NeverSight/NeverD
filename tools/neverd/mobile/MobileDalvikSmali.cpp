@@ -500,6 +500,7 @@ class Reader {
       fail("duplicate smali structural annotation");
     if (type != "Ldalvik/annotation/InnerClass;" &&
         type != "Ldalvik/annotation/EnclosingClass;" &&
+        type != "Ldalvik/annotation/EnclosingMethod;" &&
         type != "Ldalvik/annotation/MemberClasses;")
       fail("smali annotation is not representable in the source model");
     std::vector<std::string> body;
@@ -507,6 +508,7 @@ class Reader {
       body.push_back(take());
     take();
     if (type.ends_with("/InnerClass;")) {
+      cls.inner_class_present = true;
       std::map<std::string, std::string> values;
       for (auto &part : body) {
         auto at = part.find('=');
@@ -535,11 +537,28 @@ class Reader {
         joined += part;
       }
       if (type.ends_with("/EnclosingClass;")) {
+        if (cls.enclosing_method)
+          fail("conflicting enclosing annotations for " + cls.name);
         if (!match(joined, m, R"(value\s*=\s*(\S+))"))
           fail("invalid EnclosingClass annotation");
         cls.enclosing = classType(m[1]);
         if (cls.enclosing == cls.name)
           fail("class cannot enclose itself");
+      } else if (type.ends_with("/EnclosingMethod;")) {
+        if (cls.enclosing)
+          fail("conflicting enclosing annotations for " + cls.name);
+        if (!match(joined, m, R"(value\s*=\s*(\S+))"))
+          fail("invalid EnclosingMethod annotation for " + cls.name);
+        MethodRef ref;
+        try {
+          ref = methodRef(m[1]);
+        } catch (const Error &error) {
+          fail("invalid EnclosingMethod reference for " + cls.name + ": " +
+               error.what());
+        }
+        if (!ref.owner.starts_with('L') || !nameValid(ref.name))
+          fail("invalid EnclosingMethod reference for " + cls.name);
+        cls.enclosing_method = std::move(ref);
       } else {
         if (!match(joined, m, R"(value\s*=\s*\{(.*)\})"))
           fail("invalid MemberClasses annotation");
@@ -1263,6 +1282,9 @@ public:
     }
     if (!superclass && cls.name != "Ljava/lang/Object;")
       fail("smali class has no superclass declaration");
+    if (cls.inner_class_present !=
+        bool(cls.enclosing || cls.enclosing_method))
+      fail("incomplete inner class metadata for " + cls.name);
     budget.tick();
     return cls;
   }

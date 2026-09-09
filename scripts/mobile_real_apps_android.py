@@ -387,6 +387,10 @@ def compare_recovery(report: dict, coverage: dict, inventory: dict) -> dict:
     require(report.get("android_method_recovery") == coverage and coverage.get("status") == "recovered"
             and type(coverage.get("schema_version")) is int and coverage["schema_version"] == 1,
             "Standalone method coverage disagrees with the main report")
+    require(integer(coverage.get("projected_method_count", 0), "projected_method_count") == 0
+            and not coverage.get("class_source_bindings")
+            and not coverage.get("generated_source_helpers"),
+            "Projected local-class source cannot qualify complete recovery")
     require(report.get("input_code_files") == inventory["inputs"]
             and integer(report.get("dex_count"), "dex_count") == len(inventory["inputs"])
             and integer(report.get("smali_count"), "smali_count") == 0,
@@ -395,6 +399,7 @@ def compare_recovery(report: dict, coverage: dict, inventory: dict) -> dict:
     require(isinstance(rows, list), "Missing reported method definitions")
     for row in rows:
         require(isinstance(row, dict), "Invalid reported method definition")
+        require("projection_kind" not in row, "Projected method metadata cannot qualify complete recovery")
         require(all(isinstance(row.get(key), str) for key in ("identity", "class", "name", "prototype", "input")),
                 "Missing reported method identity")
         identity = row["identity"]

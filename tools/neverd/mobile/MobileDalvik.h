@@ -94,8 +94,11 @@ struct Class {
   std::optional<std::string> enclosing;
   std::optional<std::string> inner_name;
   Access inner_access;
+  bool inner_class_present = false;
+  std::optional<MethodRef> enclosing_method;
 };
 using ClassMap = std::map<std::string, Class>;
+void validateSourceScopes(const ClassMap &classes, Budget &budget);
 ClassMap linkClasses(std::vector<Class> classes, Budget &budget);
 std::vector<Class> parseDex(std::string_view bytes, std::string_view input_id,
                             Budget &budget);

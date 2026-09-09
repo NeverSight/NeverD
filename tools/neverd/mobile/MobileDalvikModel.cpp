@@ -202,6 +202,108 @@ void checkFlags(const Access &flags, const Access &allowed,
   if (visible > 1)
     throw Error("conflicting declaration visibility: " + id);
 }
+[[noreturn]] void scopeError(const Class &cls, const std::string &message) {
+  std::string context = "Android class " + cls.name + " from " +
+                        (cls.source_id.empty() ? "<unspecified>"
+                                               : cls.source_id);
+  if (cls.enclosing_method)
+    context += " enclosing " + cls.enclosing_method->identity();
+  else if (cls.enclosing)
+    context += " enclosing " + *cls.enclosing;
+  throw Error(context + ": " + message);
+}
+bool scalarType(const std::string &type, bool allow_void = false) {
+  return type.size() == 1 &&
+         (std::string_view("ZBCSIJFD").find(type[0]) !=
+              std::string_view::npos ||
+          (allow_void && type == "V"));
+}
+void scalarSignature(const Class &cls, const MethodRef &ref,
+                     Budget &budget) {
+  if (!scalarType(ref.returns, true))
+    scopeError(cls, "method-local projection requires a scalar return: " +
+                        ref.identity());
+  for (const auto &parameter : ref.parameters) {
+    budget.tick();
+    if (!scalarType(parameter))
+      scopeError(cls,
+                 "method-local projection requires scalar parameters: " +
+                     ref.identity());
+  }
+}
+void checkSourceScope(const Class &cls, Budget &budget) {
+  if (cls.enclosing && cls.enclosing_method)
+    scopeError(cls, "conflicting class and method enclosing contexts");
+  if (!cls.inner_class_present) {
+    if (cls.enclosing || cls.enclosing_method || cls.inner_name ||
+        !cls.inner_access.empty())
+      scopeError(cls, "enclosing metadata requires an InnerClass annotation");
+    return;
+  }
+  if (!cls.enclosing && !cls.enclosing_method)
+    scopeError(cls, "InnerClass annotation has no enclosing context");
+  if (!cls.inner_name)
+    scopeError(cls, "anonymous class source context is unsupported");
+  if (cls.inner_name->empty())
+    scopeError(cls, "inner class source name is empty");
+  if (!cls.enclosing_method)
+    return;
+
+  const auto &enclosing = *cls.enclosing_method;
+  if (!enclosing.owner.starts_with('L') || enclosing.owner == cls.name ||
+      enclosing.name.empty() || enclosing.name.starts_with('<'))
+    scopeError(cls, "method-local class needs an ordinary enclosing method");
+  // A hand-constructed model must have the same typed identity as a reader.
+  bool valid_reference = false;
+  try {
+    valid_reference = methodRef(enclosing.identity()) == enclosing;
+  } catch (const Error &) {
+  }
+  if (!valid_reference)
+    scopeError(cls, "invalid typed EnclosingMethod reference");
+  for (const auto *flags : {&cls.access, &cls.inner_access})
+    for (const auto &flag : *flags) {
+      budget.tick();
+      if (flag != "final" && flag != "synthetic")
+        scopeError(cls, "Java 8 local class permits only final/synthetic "
+                        "access flags");
+    }
+  if (has(cls.access, "final") != has(cls.inner_access, "final"))
+    scopeError(cls, "local class final flag disagrees with InnerClass metadata");
+  if (cls.superclass != "Ljava/lang/Object;" || !cls.interfaces.empty())
+    scopeError(cls, "method-local projection requires direct Object "
+                    "inheritance without interfaces");
+  if (!cls.fields.empty())
+    scopeError(cls, "method-local fields or capture storage are unsupported");
+  unsigned constructors = 0;
+  for (const auto &method : cls.methods) {
+    budget.tick();
+    const auto &ref = method.reference;
+    if (ref.owner != cls.name)
+      scopeError(cls, "local method owner disagrees with its declaration: " +
+                          ref.identity());
+    if (ref.name == "<clinit>")
+      scopeError(cls, "method-local static initializer is unsupported");
+    if (any(method.access, {"static", "native", "abstract"}) ||
+        method.instructions.empty())
+      scopeError(cls, "method-local methods require real instance bodies: " +
+                          ref.identity());
+    if (ref.name == "<init>") {
+      ++constructors;
+      if (!ref.parameters.empty() || ref.returns != "V")
+        scopeError(cls, "method-local constructor must be no-argument; "
+                        "captured constructor arguments are unsupported");
+    } else {
+      if (ref.name.empty() || ref.name.starts_with('<'))
+        scopeError(cls, "invalid ordinary local method identity: " +
+                            ref.identity());
+      scalarSignature(cls, ref, budget);
+    }
+  }
+  if (constructors != 1)
+    scopeError(cls, "method-local class requires exactly one real "
+                    "no-argument constructor");
+}
 void checkClass(const Class &cls, Budget &budget) {
   checkFlags(cls.access, classFlags, cls.name);
   if (!descriptor(cls.name).starts_with('L'))
@@ -220,7 +322,7 @@ void checkClass(const Class &cls, Budget &budget) {
       throw Error("invalid or duplicate declared interface");
   }
   std::vector<const Access *> declarations = {&cls.access};
-  if (cls.enclosing) {
+  if (cls.enclosing || cls.enclosing_method) {
     checkFlags(cls.inner_access, classFlags, cls.name);
     declarations.push_back(&cls.inner_access);
   } else if (any(cls.access, {"private", "protected", "static"})) {
@@ -293,7 +395,135 @@ void checkClass(const Class &cls, Budget &budget) {
     }
   }
 }
+
+void linkLocalScopes(const ClassMap &classes, Budget &budget) {
+  std::map<std::string, const Class *> locals;
+  std::map<MethodRef, std::pair<const Method *, const Class *>> definitions;
+  std::map<MethodRef, std::set<std::string>> names;
+  std::set<std::string> owners;
+  for (const auto &[name, cls] : classes) {
+    budget.tick();
+    if (!cls.enclosing_method)
+      continue;
+    const auto &ref = *cls.enclosing_method;
+    locals.emplace(name, &cls);
+    definitions.emplace(ref, std::pair{nullptr, &cls});
+    owners.insert(ref.owner);
+    if (!names[ref].insert(*cls.inner_name).second)
+      scopeError(cls, "duplicate local source name in one enclosing method");
+  }
+  if (locals.empty())
+    return;
+  // Resolve each needed owner's method table once, including cross-DEX owners.
+  for (const auto &owner : owners) {
+    budget.tick();
+    const auto found = classes.find(owner);
+    if (found == classes.end())
+      continue;
+    for (const auto &method : found->second.methods) {
+      budget.tick();
+      if (auto entry = definitions.find(method.reference);
+          entry != definitions.end()) {
+        if (entry->second.first)
+          scopeError(*entry->second.second,
+                     "exact enclosing method definition is duplicated");
+        entry->second.first = &method;
+      }
+    }
+  }
+  for (const auto &[name, cls] : locals) {
+    budget.tick();
+    const auto &ref = *cls->enclosing_method;
+    const auto *method = definitions.at(ref).first;
+    if (!method)
+      scopeError(*cls, "exact enclosing method definition is unavailable");
+    if (classes.at(ref.owner).enclosing_method)
+      scopeError(*cls, "nested method-local contexts are unsupported");
+    if (!has(method->access, "static") ||
+        any(method->access, {"native", "abstract"}) ||
+        method->instructions.empty())
+      scopeError(*cls, "enclosing method must be ordinary static with a body");
+    scalarSignature(*cls, ref, budget);
+  }
+  auto localType = [&](const std::string &type) -> const Class * {
+    budget.tick();
+    auto start = type.find_first_not_of('[');
+    if (start == std::string::npos)
+      return nullptr;
+    auto found = locals.find(type.substr(start));
+    return found == locals.end() ? nullptr : found->second;
+  };
+  auto declarationType = [&](const std::string &type,
+                             const std::string &where) {
+    if (const auto *local = localType(type))
+      scopeError(*local, "local type is unavailable in a declaration or "
+                         "handler: " + where);
+  };
+  for (const auto &[name, cls] : classes) {
+    budget.tick();
+    if (cls.enclosing) {
+      if (const auto found = locals.find(*cls.enclosing);
+          found != locals.end())
+        scopeError(*found->second,
+                   "method-local nested descendants are unsupported: " +
+                       name);
+    }
+    if (cls.superclass)
+      declarationType(*cls.superclass, name + " superclass");
+    for (const auto &interface : cls.interfaces)
+      declarationType(interface, name + " interface");
+    for (const auto &field : cls.fields)
+      declarationType(field.reference.type,
+                      name + "->" + field.reference.name);
+    for (const auto &method : cls.methods) {
+      budget.tick();
+      const auto identity = method.reference.identity();
+      declarationType(method.reference.returns, identity);
+      for (const auto &type : method.reference.parameters)
+        declarationType(type, identity);
+      for (const auto &region : method.tries)
+        for (const auto &handler : region.handlers)
+          if (handler.type)
+            declarationType(*handler.type, identity + " exception handler");
+      auto instructionType = [&](const std::string &type) {
+        if (const auto *local = localType(type))
+          if (cls.name != local->name &&
+              (cls.name != local->enclosing_method->owner ||
+               method.reference != *local->enclosing_method))
+            scopeError(*local, "local type reference is outside its exact "
+                               "method scope: " + identity);
+      };
+      for (const auto &instruction : method.instructions) {
+        budget.tick();
+        if (const auto *type =
+                std::get_if<std::string>(&instruction.reference)) {
+          instructionType(*type);
+        } else if (const auto *field =
+                       std::get_if<FieldRef>(&instruction.reference)) {
+          instructionType(field->owner);
+          instructionType(field->type);
+        } else if (const auto *ref =
+                       std::get_if<MethodRef>(&instruction.reference)) {
+          instructionType(ref->owner);
+          instructionType(ref->returns);
+          for (const auto &type : ref->parameters)
+            instructionType(type);
+        }
+      }
+    }
+  }
+}
 } // namespace
+
+void validateSourceScopes(const ClassMap &classes, Budget &budget) {
+  for (const auto &[name, cls] : classes) {
+    budget.tick();
+    if (name != cls.name)
+      scopeError(cls, "class map key disagrees with its descriptor");
+    checkSourceScope(cls, budget);
+  }
+  linkLocalScopes(classes, budget);
+}
 
 ClassMap linkClasses(std::vector<Class> classes, Budget &budget) {
   ClassMap result;
@@ -357,6 +587,7 @@ ClassMap linkClasses(std::vector<Class> classes, Budget &budget) {
       }
     }
   }
+  validateSourceScopes(result, budget);
   return result;
 }
 } // namespace neverd::mobile::dalvik

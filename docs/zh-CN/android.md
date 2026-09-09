@@ -96,7 +96,13 @@ recovered-app/
 
 临时输入会被清理。嵌套类可能共用外层类的源码文件，因此 Java 文件数不等于 DEX 类数。生成的方法可能使用 Java 分派循环，不执行原始 DEX，也不通过运行时桥接调用它。
 
-内置报告包含 `android_method_recovery`，相同内容写入 `metadata/android-methods.json`。发布前必须满足 `method_count = recovered_method_count + declaration_only_method_count`，且 `unrecovered_method_count` 为零。原有 `native`、`abstract` 方法的状态为 `declaration-only`，不计入已恢复方法体。以下是缩略示例；覆盖文件还包含逐方法清单：
+内置报告包含 `android_method_recovery`，相同内容写入 `metadata/android-methods.json`，并保留每个原始方法。计数满足 `method_count = recovered_method_count + projected_method_count + declaration_only_method_count + unrecovered_method_count`；缺省的 `projected_method_count` 视为零，发布前 `unrecovered_method_count` 仍须为零。原有 `native`、`abstract` 方法的状态为 `declaration-only`，不计入已恢复方法体。
+
+部分具名且不捕获外部变量的局部类可以还原到其精确所属的静态方法内。当前要求外层是普通标量方法，局部类直接继承 `Object`、没有字段、具有真实无参构造方法，其他方法为标量实例方法，且对象用途经过验证、不会逸出支持的作用域。匿名类、变量捕获、不支持的修饰符和无法证明的对象用途仍会明确失败。
+
+此类输出中，局部类方法及所属外层方法标记为 `source-projected`，`projection_kind` 为 `named-method-local`；即使外层流程报告为 `success`，方法覆盖状态仍为 `partial`。重新编译后的二进制名称和访问标志均尚未验证。Java 编译器可能选择不同的局部类二进制名称，因此 `class_source_bindings` 保留原始类、精确所属方法、源码路径和局部名称，并将 `binary_name_status` 标为 `unverified`。
+
+`generated_source_helpers` 单独列出额外方法，类型精确为 `throw-helper`、`constant-helper`、`default-constructor` 和 `field-initializer`。最后一种表示额外生成、原始方法清单中不存在的 `<clinit>`。这些额外方法不计入原始方法总数。编译成功或某次名称一致不会将其升级为完整恢复。以下缩略示例不含这类投影方法：
 
 ```json
 {

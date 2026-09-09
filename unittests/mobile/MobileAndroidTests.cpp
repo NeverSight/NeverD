@@ -88,6 +88,106 @@ TEST(MobileAndroid, DirectoryInputKeepsOriginalClassOwnershipAndDeclarations) {
   EXPECT_EQ((*names)[1].getAsString(), "nested/Value.smali");
   EXPECT_FALSE(fs::exists(output / ".android-work"));
 }
+
+std::string localOuter(bool Escapes = false) {
+  std::string Source = R"(.class public Lfixture/Outer;
+.super Ljava/lang/Object;
+.field public static count:I
+.method public static run(I)I
+.registers 3
+new-instance v0, Lfixture/Outer$37Worker;
+invoke-direct {v0}, Lfixture/Outer$37Worker;-><init>()V
+)";
+  if (Escapes)
+    Source += "invoke-static {v0}, "
+              "Lexternal/Sink;->take(Ljava/lang/Object;)V\n";
+  return Source +
+         R"(invoke-virtual {v0, p0}, Lfixture/Outer$37Worker;->value(I)I
+move-result v1
+return v1
+.end method
+)";
+}
+std::string localWorker() {
+  return R"(.class final Lfixture/Outer$37Worker;
+.super Ljava/lang/Object;
+.annotation system Ldalvik/annotation/EnclosingMethod;
+value = Lfixture/Outer;->run(I)I
+.end annotation
+.annotation system Ldalvik/annotation/InnerClass;
+accessFlags = 0x10
+name = "Worker"
+.end annotation
+.method constructor <init>()V
+.registers 2
+invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+sget v0, Lfixture/Outer;->count:I
+add-int/lit8 v0, v0, 0x1
+sput v0, Lfixture/Outer;->count:I
+return-void
+.end method
+.method public value(I)I
+.registers 2
+return p1
+.end method
+)";
+}
+
+TEST(MobileAndroid, LocalClassPublishesOneSourceUnitWithPartialMirroredCoverage) {
+  Temporary temporary;
+  auto source = temporary.path / "smali", output = temporary.path / "output";
+  writeFile(source / "outer.smali", localOuter());
+  writeFile(source / "second/worker.smali", localWorker());
+  auto report = recover(source, output);
+  EXPECT_EQ(report.getString("status"), "success");
+  EXPECT_EQ(report.getInteger("java_source_count"), 1);
+  const auto *coverage = report.getObject("android_method_recovery");
+  ASSERT_NE(coverage, nullptr);
+  EXPECT_EQ(coverage->getString("status"), "partial");
+  EXPECT_EQ(coverage->getInteger("method_count"), 3);
+  EXPECT_EQ(coverage->getInteger("projected_method_count"), 3);
+  EXPECT_EQ(coverage->getInteger("recovered_method_count"), 0);
+  auto metadata =
+      parseJSON(readFile(output / "metadata/android-methods.json", 100000),
+                "local metadata");
+  EXPECT_EQ(jsonText(metadata),
+            jsonText(*report.get("android_method_recovery")));
+  const auto *bindings = coverage->getArray("class_source_bindings");
+  ASSERT_NE(bindings, nullptr);
+  ASSERT_EQ(bindings->size(), 1u);
+  EXPECT_EQ((*bindings)[0].getAsObject()->getString("input"),
+            "second/worker.smali");
+  EXPECT_EQ((*bindings)[0].getAsObject()->getString("source_unit"),
+            "fixture/Outer.java");
+  const auto java = readFile(output / "sources/fixture/Outer.java", 100000);
+  const auto method = java.find("int run(int arg0) {");
+  const auto local = java.find("final class Worker {");
+  ASSERT_NE(method, std::string::npos);
+  ASSERT_NE(local, std::string::npos);
+  EXPECT_LT(method, local);
+  EXPECT_NE(java.find("new Worker()"), std::string::npos);
+  EXPECT_NE(java.find(".count = v0;"), std::string::npos);
+  EXPECT_FALSE(fs::exists(output / "sources/fixture/Outer$37Worker.java"));
+  EXPECT_FALSE(fs::exists(output / ".android-work"));
+}
+
+TEST(MobileAndroid, UnprovedLocalObjectEscapeCannotPublishPartialBodies) {
+  Temporary temporary;
+  auto source = temporary.path / "smali", output = temporary.path / "output";
+  const auto original = localOuter(true);
+  writeFile(source / "outer.smali", original);
+  writeFile(source / "worker.smali", localWorker());
+  try {
+    (void)recover(source, output);
+    FAIL() << "an unproved receiver escape was published as a projection";
+  } catch (const std::runtime_error &error) {
+    EXPECT_NE(std::string(error.what()).find("local-class object invocation"),
+              std::string::npos)
+        << error.what();
+  }
+  EXPECT_TRUE(fs::is_empty(output));
+  EXPECT_EQ(readFile(source / "outer.smali", 100000), original);
+}
 TEST(MobileAndroid, SmaliFilesShareOneReaderBudgetWithoutDuplicateByteCharges) {
   Temporary temporary;
   auto source = temporary.path / "smali", output = temporary.path / "output";

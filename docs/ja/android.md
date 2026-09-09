@@ -96,7 +96,13 @@ recovered-app/
 
 一時入力は削除されます。ネストしたクラスが外側のクラスのソースファイルを共有することがあるため、Java ファイル数と DEX クラス数は一致しません。生成したメソッドでは Java のディスパッチループを使うことがあります。元の DEX を実行したり、実行時のブリッジから呼び出したりはしません。
 
-内蔵エンジンのレポートは `android_method_recovery` を含み、同じ内容を `metadata/android-methods.json` に書き込みます。公開前に `method_count = recovered_method_count + declaration_only_method_count` を満たし、`unrecovered_method_count` がゼロである必要があります。元の `native`・`abstract` メソッドは `declaration-only` として記録し、復元した本体には数えません。以下は省略した例です。網羅状況ファイルにはメソッドごとの一覧も含まれます。
+内蔵レポートは `android_method_recovery` を含み、同じ内容を `metadata/android-methods.json` に書き込み、元の全メソッドを保持します。計数は `method_count = recovered_method_count + projected_method_count + declaration_only_method_count + unrecovered_method_count` を満たします。省略された `projected_method_count` はゼロと扱い、公開前の `unrecovered_method_count` もゼロである必要があります。元の `native`・`abstract` メソッドは `declaration-only` として記録し、復元した本体には数えません。
+
+名前があり外部変数をキャプチャしないローカルクラスの一部は、正確な所属先の static メソッド内に出力できます。通常のスカラーメソッド、`Object` を直接継承するフィールドのないクラス、実際の引数なしコンストラクター、スカラーのインスタンスメソッド、および対応範囲から逸出しないと検証されたオブジェクト使用が必要です。匿名クラス、キャプチャ、未対応の修飾子、証明できない使用は引き続き明示的に失敗します。
+
+この出力ではローカルクラスのメソッドと所属先メソッドを `source-projected`、`projection_kind: "named-method-local"` と記録します。外側の処理結果が `success` でも網羅状況は `partial` です。再コンパイル後のバイナリ名とアクセスフラグは、いずれも未検証です。Java コンパイラーが異なるバイナリ名を選ぶ可能性があるため、`class_source_bindings` は元のクラス、正確な所属先メソッド、ソースパス、ローカル名を保持し、`binary_name_status` を `unverified` とします。
+
+`generated_source_helpers` は追加メソッドを列挙し、種別には正確に `throw-helper`、`constant-helper`、`default-constructor`、`field-initializer` を使用します。最後の種別は、元のメソッド一覧には存在せず、追加で生成された `<clinit>` を示します。これらの追加メソッドは元のメソッド総数に含めません。コンパイル成功や一度の名前一致で完全復元へ昇格させることはありません。以下の省略例には投影メソッドはありません。
 
 ```json
 {

@@ -225,6 +225,16 @@ public:
   std::string text() const { return join(values, "\n"); }
 };
 
+struct JavaScope {
+  const Class &owner;
+  const MethodRef *method = nullptr;
+};
+
+const MethodRef *localScope(const JavaScope &Scope) {
+  return Scope.owner.enclosing_method ? &*Scope.owner.enclosing_method
+                                      : Scope.method;
+}
+
 std::string qualifiedTypeName(const std::string &Type,
                               const ClassMap &Classes) {
   if (starts(Type, "["))
@@ -233,6 +243,9 @@ std::string qualifiedTypeName(const std::string &Type,
     return I->second;
   if (!starts(Type, "L") || Type.size() < 3 || Type.back() != ';')
     javaError("invalid Java projection type");
+  if (auto I = Classes.find(Type);
+      I != Classes.end() && I->second.enclosing_method)
+    javaError("local-class reference has no qualified source name: " + Type);
   if (auto I = Classes.find(Type); I != Classes.end() && I->second.enclosing) {
     const auto &C = I->second;
     if (!C.inner_name || C.inner_name->empty() ||
@@ -254,19 +267,21 @@ class JavaTypeNames {
   const ClassMap &classes;
   Budget &budget;
   std::map<std::string, std::map<std::string, const Class *>> members;
+  std::map<MethodRef, std::map<std::string, const Class *>> locals;
   std::map<std::string, std::map<std::string, std::string>> packages;
   struct Lookup {
     Strings types;
     bool unknown_inheritance = false;
   };
-  mutable std::map<std::tuple<std::string, std::string, bool>, Lookup> cache;
+  mutable std::map<std::tuple<std::string, std::string, std::string, bool>, Lookup>
+      cache;
 
   static std::string package(const std::string &Type) {
     auto End = Type.rfind('/');
     return End == Type.npos ? "" : Type.substr(1, End - 1);
   }
   static std::string simple(const Class &C) {
-    if (C.enclosing && C.inner_name)
+    if ((C.enclosing || C.enclosing_method) && C.inner_name)
       return *C.inner_name;
     auto Start = C.name.rfind('/');
     Start = Start == C.name.npos ? 1 : Start + 1;
@@ -314,19 +329,30 @@ class JavaTypeNames {
     }
     return Result;
   }
-  const Lookup &lookup(const Class &Context, const std::string &Name,
+  const Lookup &lookup(const JavaScope &Context, const std::string &Name,
                        bool InSupertypeHeader = false) const {
-    auto Key = std::tuple{Context.name, Name, InSupertypeHeader};
+    const MethodRef *Method = localScope(Context);
+    if (Method && !locals.contains(*Method))
+      Method = nullptr;
+    auto Key = std::tuple{Context.owner.name,
+                          Method ? Method->identity() : std::string(), Name,
+                          InSupertypeHeader};
     if (auto I = cache.find(Key); I != cache.end())
       return I->second;
     Lookup Result;
-    const Class *Scope = &Context;
+    if (Method)
+      if (auto I = locals.find(*Method); I != locals.end())
+        if (auto L = I->second.find(Name); L != I->second.end()) {
+          Result.types.insert(L->second->name);
+          return cache.emplace(std::move(Key), std::move(Result)).first->second;
+        }
+    const Class *Scope = &Context.owner;
     while (Scope) {
       budget.tick();
       // Declared and inherited members are in scope within the class body,
       // not within its own extends/implements clause. Enclosing class bodies
       // still contribute their complete lexical scopes to a nested header.
-      auto Local = InSupertypeHeader && Scope == &Context
+      auto Local = InSupertypeHeader && Scope == &Context.owner
                        ? Lookup{}
                        : memberTypes(*Scope, Name);
       Result.unknown_inheritance |= Local.unknown_inheritance;
@@ -336,9 +362,14 @@ class JavaTypeNames {
         Result.types = std::move(Local.types);
         return cache.emplace(std::move(Key), std::move(Result)).first->second;
       }
-      Scope = Scope->enclosing ? &classes.at(*Scope->enclosing) : nullptr;
+      if (Scope->enclosing)
+        Scope = &classes.at(*Scope->enclosing);
+      else if (Scope->enclosing_method)
+        Scope = &classes.at(Scope->enclosing_method->owner);
+      else
+        Scope = nullptr;
     }
-    if (auto P = packages.find(package(Context.name)); P != packages.end())
+    if (auto P = packages.find(package(Context.owner.name)); P != packages.end())
       if (auto I = P->second.find(Name); I != P->second.end())
         Result.types.insert(I->second);
     return cache.emplace(std::move(Key), std::move(Result)).first->second;
@@ -349,18 +380,33 @@ public:
       : classes(Classes), budget(B) {
     for (const auto &[Name, C] : classes) {
       budget.tick();
-      if (C.enclosing) {
+      if (C.enclosing_method) {
+        if (!locals[*C.enclosing_method].emplace(simple(C), &C).second)
+          javaError("ambiguous Java type: duplicate local source name");
+      } else if (C.enclosing) {
         if (!members[*C.enclosing].emplace(simple(C), &C).second)
           javaError("ambiguous Java type: duplicate nested source name");
       } else
         packages[package(Name)].emplace(simple(C), Name);
     }
   }
-  std::string render(const std::string &Type, const Class &Context,
+  std::string render(const std::string &Type, const JavaScope &Context,
                      bool InSupertypeHeader = false) const {
     budget.tick();
     if (starts(Type, "["))
       return render(Type.substr(1), Context, InSupertypeHeader) + "[]";
+    if (auto I = classes.find(Type);
+        I != classes.end() && I->second.enclosing_method) {
+      const auto &C = I->second;
+      const auto *Method = localScope(Context);
+      if (!Method || *Method != *C.enclosing_method || !C.inner_name)
+        javaError("local-class reference is outside its exact method scope: " +
+                  Type + " in " + Context.owner.name);
+      const auto &Binding = lookup(Context, *C.inner_name, InSupertypeHeader);
+      if (Binding.unknown_inheritance || Binding.types != Strings{Type})
+        javaError("local-class reference has no unique source binding: " + Type);
+      return javaIdentifier(*C.inner_name);
+    }
     auto Full = qualifiedTypeName(Type, classes);
     if (Primitives.contains(Type))
       return Full;
@@ -376,7 +422,7 @@ public:
         (QualifiedBinding.types.empty() ||
          (Package.empty() && QualifiedBinding.types == Strings{Top})))
       return Full;
-    if (Package == package(Context.name) && classes.contains(Top)) {
+    if (Package == package(Context.owner.name) && classes.contains(Top)) {
       const auto &Binding =
           lookup(Context, simple(classes.at(Top)), InSupertypeHeader);
       if (!Binding.unknown_inheritance && Binding.types == Strings{Top})
@@ -384,15 +430,19 @@ public:
     }
     if (QualifiedBinding.unknown_inheritance)
       javaError("unresolved inherited Java type: " + Type + " in " +
-                Context.name +
+                Context.owner.name +
                 " (external declarations are required to prove source "
                 "name binding)");
-    javaError("ambiguous Java type: " + Type + " in " + Context.name +
+    javaError("ambiguous Java type: " + Type + " in " + Context.owner.name +
               " (package qualifier is shadowed and no unique source name "
               "is proven)");
   }
+  std::string render(const std::string &Type, const Class &Context,
+                     bool InSupertypeHeader = false) const {
+    return render(Type, JavaScope{Context}, InSupertypeHeader);
+  }
   void requireRuntimePackage(const Class &Context) const {
-    const auto &Binding = lookup(Context, "java");
+    const auto &Binding = lookup(JavaScope{Context}, "java");
     if (Binding.unknown_inheritance)
       javaError("unresolved inherited Java type: java in " + Context.name +
                 " (external declarations are required to prove runtime "
@@ -492,11 +542,77 @@ bool sameHandlers(const std::vector<Handler> &A,
   return true;
 }
 
+// The shared model validates source shape and reference scope. This index adds
+// only lexical Java naming and emission/accounting facts.
+struct LocalProjection {
+  std::map<MethodRef, std::vector<const Class *>> by_method;
+  std::map<std::string, const Class *> by_class;
+  std::set<MethodRef> projected_methods;
+
+  [[noreturn]] static void fail(const Class &C, const std::string &Reason) {
+    javaError(C.name + " [" + C.source_id + "] enclosing " +
+              (C.enclosing_method ? C.enclosing_method->identity() : "unknown") +
+              ": local-class source shape: " + Reason);
+  }
+  static bool scalar(const std::string &Type, bool Void = false) {
+    return Primitives.contains(Type) && (Void || Type != "V");
+  }
+  LocalProjection(const ClassMap &Classes, Budget &B) {
+    for (const auto &[Name, C] : Classes) {
+      B.tick();
+      if (C.enclosing_method)
+        by_class.emplace(Name, &C);
+    }
+    if (by_class.empty())
+      return;
+    for (const auto &[Name, CP] : by_class) {
+      B.tick();
+      const auto &C = *CP;
+      try {
+        javaIdentifier(*C.inner_name);
+      } catch (const std::runtime_error &Error) {
+        fail(C, Error.what());
+      }
+      if (*C.inner_name == "java")
+        fail(C, "local name shadows the required Java runtime package");
+      auto Owner = Classes.find(C.enclosing_method->owner);
+      // A local class cannot have the same source name as an enclosing class.
+      const Class *Ancestor = &Owner->second;
+      Strings Seen;
+      while (Ancestor) {
+        B.tick();
+        if (!Seen.insert(Ancestor->name).second || Seen.size() > 128)
+          fail(C, "invalid enclosing class chain");
+        auto Start = Ancestor->name.rfind('/');
+        Start = Start == std::string::npos ? 1 : Start + 1;
+        auto Simple = Ancestor->inner_name.value_or(Ancestor->name.substr(
+            Start, Ancestor->name.size() - Start - 1));
+        if (*C.inner_name == Simple)
+          fail(C, "local source name repeats an enclosing class name");
+        if (!Ancestor->enclosing)
+          break;
+        auto Next = Classes.find(*Ancestor->enclosing);
+        if (Next == Classes.end())
+          fail(C, "unresolved enclosing class");
+        Ancestor = &Next->second;
+      }
+      for (const auto &Body : C.methods) {
+        B.tick();
+        projected_methods.insert(Body.reference);
+      }
+      by_method[*C.enclosing_method].push_back(&C);
+      projected_methods.insert(*C.enclosing_method);
+    }
+  }
+};
+
 class Body {
   const Method &method;
   const ClassMap &classes;
   Budget &budget;
   const JavaTypeNames &type_names;
+  const LocalProjection &local_projection;
+  const MethodRef *local_closure = nullptr;
   const std::vector<Instruction> &code;
   std::map<uint32_t, size_t> by_pc;
   std::map<uint32_t, State> states;
@@ -504,8 +620,21 @@ class Body {
   size_t first = 0;
   std::map<uint32_t, std::string> pending_results;
   std::map<uint32_t, uint32_t> constructors;
+  // This domain records origins, independently of the verifier's type sets.
+  // Only admitted producers introduce a local or exception object. Joins are
+  // bitwise unions, and exceptional edges retain the pre-instruction origins.
+  enum Origin : uint8_t { Scalar = 1, Local = 2, Exception = 4, Null = 8 };
+  using Origins = std::vector<uint8_t>;
+  std::map<uint32_t, Origins> origins;
 
   [[noreturn]] void fail(const std::string &Message) const {
+    if (local_closure) {
+      auto I = classes.find(method.reference.owner);
+      if (I != classes.end())
+        javaError(I->second.name + " [" + I->second.source_id +
+                  "] enclosing " + local_closure->identity() + ": " +
+                  method.reference.identity() + ": " + Message);
+    }
     javaError(method.reference.identity() + ": " + Message);
   }
   const Class &ownerClass() const {
@@ -515,7 +644,7 @@ class Body {
     return I->second;
   }
   std::string sourceType(const std::string &Type) const {
-    return type_names.render(Type, ownerClass());
+    return type_names.render(Type, JavaScope{ownerClass(), &method.reference});
   }
   const std::string &referenceType(const Instruction &Op) const {
     if (auto *T = std::get_if<std::string>(&Op.reference))
@@ -549,6 +678,9 @@ class Body {
   std::string condition(const Instruction &Op, const State &S,
                         bool Strict) const;
   State initial() const;
+  void validateLocalOperations() const;
+  Origins localOrigins(const Instruction &Op, const Origins &Incoming,
+                       bool Strict) const;
   void verify();
   static std::string resultRead(const std::string &Type);
   static std::string resultWrite(const std::string &Type,
@@ -559,12 +691,19 @@ class Body {
 
 public:
   Body(const Method &M, const ClassMap &C, Budget &B,
-       const JavaTypeNames &TypeNames)
+       const JavaTypeNames &TypeNames, const LocalProjection &Projection)
       : method(M), classes(C), budget(B), type_names(TypeNames),
-        code(M.instructions) {
+        local_projection(Projection), code(M.instructions) {
+    if (auto I = Projection.by_class.find(M.reference.owner);
+        I != Projection.by_class.end())
+      local_closure = &*I->second->enclosing_method;
+    else if (Projection.by_method.contains(M.reference))
+      local_closure = &M.reference;
     for (size_t I = 0; I < code.size(); ++I)
       by_pc.emplace(code[I].pc, I);
     validateShape();
+    if (local_closure)
+      validateLocalOperations();
   }
   std::string emit();
 };
@@ -1309,39 +1448,159 @@ State Body::initial() const {
   return S;
 }
 
+void Body::validateLocalOperations() const {
+  for (size_t I = 0; I < code.size(); ++I) {
+    budget.tick();
+    const auto &Op = code[I];
+    const auto &Name = Op.opcode;
+    if (anyPrefix(Name, {"check-cast", "instance-of", "const-string",
+                         "const-class", "new-array", "filled-new-array",
+                         "fill-array-data", "array-length", "aget", "aput",
+                         "iget", "iput", "monitor-", "return-object",
+                         "move-result-object"}))
+      fail("local-class object operation is outside the bounded projection: " +
+           Name);
+    if (Name == "new-instance") {
+      auto Local = local_projection.by_class.find(referenceType(Op));
+      if (Local == local_projection.by_class.end() ||
+          *Local->second->enclosing_method != *local_closure)
+        fail("local-class object allocation has no proven lexical owner");
+    }
+    if (anyPrefix(Name, {"sget", "sput"})) {
+      const auto *Ref = std::get_if<FieldRef>(&Op.reference);
+      if (!Ref || !LocalProjection::scalar(Ref->type))
+        fail("local-class object field access is unsupported");
+    }
+    if (!starts(Name, "invoke-"))
+      continue;
+    const auto *Ref = std::get_if<MethodRef>(&Op.reference);
+    if (!Ref || !LocalProjection::scalar(Ref->returns, true) ||
+        !std::all_of(Ref->parameters.begin(), Ref->parameters.end(),
+                     [](const auto &T) { return LocalProjection::scalar(T); }))
+      fail("local-class object invocation argument or return is unsupported");
+    if (baseOpcode(Name) == "invoke-static")
+      continue;
+    if (I == 0 && first == 1 &&
+        *Ref == MethodRef{"Ljava/lang/Object;", "<init>", {}, "V"})
+      continue;
+    auto Local = local_projection.by_class.find(Ref->owner);
+    if (Local == local_projection.by_class.end() ||
+        *Local->second->enclosing_method != *local_closure)
+      fail("local-class object invocation receiver has no proven local body");
+  }
+}
+
+Body::Origins Body::localOrigins(const Instruction &Op,
+                                 const Origins &Incoming, bool Strict) const {
+  Origins Out = Incoming;
+  const auto &Name = Op.opcode;
+  const auto Base = baseOpcode(Name);
+  const auto &Regs = Op.registers;
+  auto require = [&](unsigned Reg, uint8_t Allowed, const char *Reason) {
+    if (Strict &&
+        (Incoming.at(Reg) == 0 || (Incoming.at(Reg) & ~Allowed) != 0))
+      fail(std::string("local-class object ") + Reason);
+  };
+  if (Base == "move-object") {
+    require(Regs.at(1), Local | Exception | Null,
+            "copy has no proven local, exception, or null origin");
+    Out.at(Regs.at(0)) = Incoming.at(Regs.at(1));
+  } else if (Name == "move-exception")
+    Out.at(Regs.at(0)) = Exception;
+  else if (Name == "new-instance")
+    Out.at(Regs.at(0)) = Local;
+  else if (starts(Name, "invoke-")) {
+    if (Base != "invoke-static")
+      require(Regs.at(0), Local, "receiver is not a proven local instance");
+  } else if (Name == "throw")
+    require(Regs.at(0), Exception | Null,
+            "throw operand is not a proven exception carrier");
+  else if (starts(Name, "if-")) {
+    for (unsigned R : Regs)
+      require(R, Scalar | Null, "identity comparison is unsupported");
+  } else if (Name == "nop" || starts(Name, "goto") ||
+             Name.find("switch") != std::string::npos ||
+             starts(Name, "return") || starts(Name, "sput")) {
+    // No register write. Scalar compatibility and definedness are still
+    // checked by operation(), independently of this object-origin domain.
+  } else if (!Regs.empty()) {
+    unsigned Dest = Regs[0];
+    bool Wide = starts(Name, "const-wide") || Base == "move-wide" ||
+                Name == "move-result-wide" || Name == "sget-wide" ||
+                (!starts(Name, "cmp") &&
+                 (Base.ends_with("-long") || Base.ends_with("-double")));
+    Out.at(Dest) = Scalar;
+    if (Base == "move")
+      Out.at(Dest) = Incoming.at(Regs.at(1));
+    else if (starts(Name, "const") && !Wide) {
+      const auto *Value = std::get_if<int64_t>(&Op.literal);
+      if (Value && *Value == 0)
+        Out.at(Dest) = Null;
+    }
+    if (Wide)
+      Out.at(Dest + 1) = Scalar;
+  }
+  return Out;
+}
+
 void Body::verify() {
   uint32_t Start = code[first].pc;
   states[Start] = initial();
+  if (local_closure) {
+    Origins Entry(method.registers, Scalar);
+    if (!method.access.contains("static"))
+      Entry.at(method.registers - method.incomingWords()) = Local;
+    origins[Start] = std::move(Entry);
+  }
   std::deque<uint32_t> Queue{Start};
   std::set<uint32_t> Queued{Start};
   std::map<uint32_t, std::set<uint32_t>> NormalPredecessors;
   while (!Queue.empty()) {
-    budget.tick(method.registers + 1);
+    budget.tick(method.registers * (local_closure ? 2 : 1) + 1);
     uint32_t PC = Queue.front();
     Queue.pop_front();
     Queued.erase(PC);
     size_t Index = by_pc.at(PC);
     State Incoming = states.at(PC);
     State Outgoing = operation(code[Index], Incoming, false).first;
-    auto edge = [&](uint32_t Target, const State &S, bool Normal) {
+    Origins IncomingOrigins, OutgoingOrigins;
+    if (local_closure) {
+      IncomingOrigins = origins.at(PC);
+      OutgoingOrigins = localOrigins(code[Index], IncomingOrigins, false);
+    }
+    auto edge = [&](uint32_t Target, const State &S, const Origins &O,
+                    bool Normal) {
       if (first && Target == code[0].pc)
         fail("control flow re-enters its constructor prefix");
       if (Normal)
         NormalPredecessors[Target].insert(PC);
       auto Old = states.find(Target);
       State Merged = S;
+      bool Changed = Old == states.end();
       if (Old != states.end()) {
         for (size_t I = 0; I < Merged.size(); ++I)
           Merged[I].insert(Old->second[I].begin(), Old->second[I].end());
-        if (Merged == Old->second)
-          return;
+        Changed |= Merged != Old->second;
       }
+      if (local_closure) {
+        Origins MergedOrigins = O;
+        auto Previous = origins.find(Target);
+        if (Previous != origins.end()) {
+          for (size_t I = 0; I < O.size(); ++I)
+            MergedOrigins[I] |= Previous->second[I];
+          Changed |= MergedOrigins != Previous->second;
+        } else
+          Changed = true;
+        origins[Target] = std::move(MergedOrigins);
+      }
+      if (!Changed)
+        return;
       states[Target] = std::move(Merged);
       if (Queued.insert(Target).second)
         Queue.push_back(Target);
     };
     for (auto T : successors(Index))
-      edge(T, Outgoing, true);
+      edge(T, Outgoing, OutgoingOrigins, true);
     if (anyPrefix(code[Index].opcode, {"invoke-",
                                        "new-",
                                        "filled-",
@@ -1363,7 +1622,7 @@ void Body::verify() {
                                        "const-string",
                                        "const-class"}))
       for (const auto &H : handlers(PC))
-        edge(H.target, Incoming, false);
+        edge(H.target, Incoming, IncomingOrigins, false);
   }
   for (const auto &[PC, S] : states) {
     size_t Index = by_pc.at(PC);
@@ -1379,6 +1638,8 @@ void Body::verify() {
         Predecessors != std::set<uint32_t>{I->second})
       fail("branch bypasses an uninitialized allocation");
     operation(Op, S, true);
+    if (local_closure)
+      localOrigins(Op, origins.at(PC), true);
   }
   for (size_t I = first; I < code.size(); ++I)
     if (!states.contains(code[I].pc) && code[I].opcode != "nop")
@@ -1528,8 +1789,10 @@ std::vector<std::string> modifiers(const Access &Flags,
 } // namespace
 
 llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
-  llvm::json::Array Units, Methods;
-  uint64_t Recovered = 0, Declared = 0;
+  validateSourceScopes(Classes, B);
+  llvm::json::Array Units, Methods, Bindings, Helpers;
+  uint64_t Recovered = 0, Declared = 0, Projected = 0;
+  LocalProjection Projection(Classes, B);
   std::map<std::string, std::vector<const Class *>> Enclosing;
   for (const auto &[Name, C] : Classes) {
     B.tick();
@@ -1549,16 +1812,40 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
         javaError("recursive nested-class ownership");
       if (Seen.size() > 128)
         javaError("nested-class ownership exceeds the source depth limit");
-      Current = Classes.at(*Current).enclosing;
+      const auto &Parent = Classes.at(*Current);
+      Current = Parent.enclosing_method
+                    ? std::optional<std::string>(Parent.enclosing_method->owner)
+                    : Parent.enclosing;
     }
   }
   JavaTypeNames TypeNames(Classes, B);
-  Strings Emitting;
-  std::function<std::string(const Class &, bool)> emitClass;
-  emitClass = [&](const Class &C, bool Nested) -> std::string {
+  Strings Emitting, Emitted;
+  enum class DeclarationSite { TopLevel, Member, MethodLocal };
+  auto auxiliary = [&](const Class &C, const std::string &Name,
+                       const std::string &Prototype, bool Static,
+                       const std::string &Unit, const char *Kind) {
+    if (Projection.by_class.empty())
+      return;
+    B.tick();
+    Helpers.push_back(llvm::json::Object{{"class", C.name},
+                                        {"name", Name},
+                                        {"prototype", Prototype},
+                                        {"static", Static},
+                                        {"source_unit", Unit},
+                                        {"kind", Kind}});
+  };
+  std::function<std::string(const Class &, DeclarationSite,
+                            const std::string &)>
+      emitClass;
+  emitClass = [&](const Class &C, DeclarationSite Site,
+                  const std::string &Unit) -> std::string {
     B.tick();
     if (!Emitting.insert(C.name).second)
       javaError("recursive nested-class ownership");
+    if (!Emitted.insert(C.name).second)
+      javaError("Android class ownership emitted a declaration more than once");
+    bool Nested = Site == DeclarationSite::Member;
+    bool Local = Site == DeclarationSite::MethodLocal;
     if (C.access.contains("annotation") || C.access.contains("enum"))
       javaError("unsupported Java declaration shape: " + C.name);
     const auto &Flags = Nested ? C.inner_access : C.access;
@@ -1566,16 +1853,19 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
       javaError("non-static inner class requires an outer-instance "
                 "initialization proof");
     auto Slash = C.name.rfind('/');
-    std::string Name = javaIdentifier(
-        Nested ? *C.inner_name
-               : C.name.substr(
-                     Slash == std::string::npos ? 1 : Slash + 1,
-                     C.name.size() -
-                         (Slash == std::string::npos ? 1 : Slash + 1) - 1));
+    std::string Name;
+    if (Nested || Local)
+      Name = javaIdentifier(*C.inner_name);
+    else
+      Name = javaIdentifier(C.name.substr(
+          Slash == std::string::npos ? 1 : Slash + 1,
+          C.name.size() - (Slash == std::string::npos ? 1 : Slash + 1) - 1));
     if (Name == "java")
       javaError("class name shadows the required Java runtime package");
     auto Mods = modifiers(Flags, {"public", "protected", "private", "static",
                                   "abstract", "final", "strictfp"});
+    if (Local)
+      Mods = modifiers(Flags, {"final"});
     if (!Nested)
       std::erase(Mods, "static");
     std::string Kind = C.access.contains("interface") ? "interface" : "class";
@@ -1594,7 +1884,31 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
     }
     Lines BodyLines(B, true);
     BodyLines.append(Header + " {");
+    if (Local) {
+      const auto &R = *C.enclosing_method;
+      llvm::json::Array Parameters;
+      for (const auto &T : R.parameters) {
+        B.tick();
+        Parameters.push_back(T);
+      }
+      llvm::json::Object EnclosingMethod{{"identity", R.identity()},
+                                         {"owner", R.owner},
+                                         {"name", R.name},
+                                         {"prototype", R.signature()},
+                                         {"parameters", std::move(Parameters)},
+                                         {"returns", R.returns}};
+      Bindings.push_back(llvm::json::Object{
+          {"class", C.name},
+          {"input", C.source_id},
+          {"enclosing_method", std::move(EnclosingMethod)},
+          {"source_unit", Unit},
+          {"source_name", Name},
+          {"binding_kind", "named-method-local"},
+          {"binary_name_status", "unverified"}});
+    }
     Strings MemberNames, ConstantTypes;
+    bool HasStaticFieldInitializer = false;
+    bool HasClassInitializer = false;
     for (const auto &F : C.fields) {
       B.tick();
       if (!MemberNames.insert(F.reference.name).second)
@@ -1605,6 +1919,8 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
       if (std::holds_alternative<FloatBits>(F.value))
         TypeNames.requireRuntimePackage(C);
       auto Value = fieldValue(F.value, F.reference.type);
+      HasStaticFieldInitializer |=
+          Value.has_value() && F.access.contains("static");
       if (F.access.contains("final") && !Value)
         javaError("final field needs a verified initialization expression");
       if (Value && F.access.contains("static") && F.access.contains("final")) {
@@ -1620,6 +1936,7 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
     for (const auto &M : C.methods) {
       B.tick();
       const auto &R = M.reference;
+      HasClassInitializer |= R.name == "<clinit>";
       if (!JavaSignatures.emplace(R.name, R.parameters).second)
         javaError(
             "Java cannot represent methods overloaded only by return type");
@@ -1665,18 +1982,39 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
         if (Kind == "interface")
           javaError("interface method body requires a compatible Java "
                     "default/static declaration");
-        Body Emitter(M, Classes, B, TypeNames);
-        std::string Source = Emitter.emit();
+        Body Emitter(M, Classes, B, TypeNames, Projection);
+        std::string Source;
+        if (auto I = Projection.by_method.find(R);
+            I != Projection.by_method.end()) {
+          Lines MethodSource(B);
+          for (const auto *Child : I->second)
+            MethodSource.append(
+                emitClass(*Child, DeclarationSite::MethodLocal, Unit));
+          MethodSource.append(Emitter.emit());
+          Source = MethodSource.text();
+        } else
+          Source = Emitter.emit();
         auto SourceLines = split(Source, '\n');
         for (auto &Line : SourceLines)
           Line = "    " + Line;
         BodyLines.append("  " + Declaration + " {\n" + join(SourceLines, "\n") +
                          "\n  }");
-        Row["status"] = "recovered";
-        ++Recovered;
+        if (Projection.projected_methods.contains(R)) {
+          Row["status"] = "source-projected";
+          Row["projection_kind"] = "named-method-local";
+          Row["reason"] =
+              "Method body and lexical class scope were emitted; recompiled "
+              "local-class binary identity and access flags are unverified.";
+          ++Projected;
+        } else {
+          Row["status"] = "recovered";
+          ++Recovered;
+        }
       }
       Methods.push_back(std::move(Row));
     }
+    if (HasStaticFieldInitializer && !HasClassInitializer)
+      auxiliary(C, "<clinit>", "()V", true, Unit, "field-initializer");
     if (Kind == "class") {
       // Every emitted class contains runtime helper references, even when
       // its methods only mention primitive types. Validate their fixed root
@@ -1686,29 +2024,37 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
           std::any_of(C.methods.begin(), C.methods.end(), [](const auto &M) {
             return M.reference.name == "<init>";
           });
-      if (!HasConstructor)
+      if (!HasConstructor) {
         BodyLines.append("  private " + Name + "() {}");
+        auxiliary(C, "<init>", "()V", false, Unit, "default-constructor");
+      }
       std::string Helper = helperName(C, "__neverdThrow");
       BodyLines.extend({"  @java.lang.SuppressWarnings(\"unchecked\")",
-                        "  private static <E extends java.lang.Throwable> "
-                        "java.lang.RuntimeException " +
+                        std::string("  private ") + (Local ? "" : "static ") +
+                            "<E extends java.lang.Throwable> "
+                            "java.lang.RuntimeException " +
                             Helper + "(java.lang.Throwable failure) throws E {",
                         "    if (failure == null) throw new "
                         "java.lang.NullPointerException();",
                         "    throw (E) failure;", "  }"});
+      auxiliary(C, Helper, "(Ljava/lang/Throwable;)Ljava/lang/RuntimeException;",
+                !Local, Unit, "throw-helper");
     }
     for (const auto &T : ConstantTypes) {
       auto NameType = TypeNames.render(T, C);
       BodyLines.append("  private static " + NameType + " " +
                        helperName(C, "__neverdConstant") + "(" + NameType +
                        " value) { return value; }");
+      auxiliary(C, helperName(C, "__neverdConstant"), "(" + T + ")" + T, true,
+                Unit, "constant-helper");
     }
     if (auto I = Enclosing.find(C.name); I != Enclosing.end()) {
       auto Children = I->second;
       std::sort(Children.begin(), Children.end(),
                 [](const auto *A, const auto *B) { return A->name < B->name; });
       for (const auto *Child : Children)
-        for (const auto &Line : split(emitClass(*Child, true), '\n'))
+        for (const auto &Line :
+             split(emitClass(*Child, DeclarationSite::Member, Unit), '\n'))
           BodyLines.append("  " + Line);
     }
     BodyLines.append("}");
@@ -1718,7 +2064,7 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
   uint64_t MethodCount = 0;
   for (const auto &[Name, C] : Classes) {
     MethodCount += C.methods.size();
-    if (C.enclosing)
+    if (C.enclosing || C.enclosing_method)
       continue;
     std::string Path = C.name.substr(1, C.name.size() - 2);
     size_t Slash = Path.rfind('/');
@@ -1729,18 +2075,20 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
         Part = javaIdentifier(Part);
       Prefix = "package " + join(Package, ".") + ";\n\n";
     }
-    std::string Source = Prefix + emitClass(C, false) + "\n";
+    std::string Source =
+        Prefix + emitClass(C, DeclarationSite::TopLevel, Path + ".java") + "\n";
     Units.push_back(llvm::json::Object{{"path", Path + ".java"},
                                        {"class", C.name},
                                        {"source", std::move(Source)}});
   }
-  if (Methods.size() != MethodCount)
+  if (Methods.size() != MethodCount || Emitted.size() != Classes.size() ||
+      MethodCount != Recovered + Projected + Declared)
     javaError("Android class ownership omitted declared methods");
   if (Units.empty())
     javaError("Android input contains no source classes");
-  return llvm::json::Object{
+  llvm::json::Object Report{
       {"schema_version", 1},
-      {"status", "recovered"},
+      {"status", Projected ? "partial" : "recovered"},
       {"class_count", static_cast<int64_t>(Classes.size())},
       {"method_count", static_cast<int64_t>(Methods.size())},
       {"recovered_method_count", static_cast<int64_t>(Recovered)},
@@ -1748,5 +2096,14 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
       {"unrecovered_method_count", 0},
       {"methods", std::move(Methods)},
       {"source_units", std::move(Units)}};
+  if (!Projection.by_class.empty()) {
+    if (Bindings.size() != Projection.by_class.size() ||
+        Projected != Projection.projected_methods.size())
+      javaError("Android local-class projection omitted an original identity");
+    Report["projected_method_count"] = static_cast<int64_t>(Projected);
+    Report["class_source_bindings"] = std::move(Bindings);
+    Report["generated_source_helpers"] = std::move(Helpers);
+  }
+  return Report;
 }
 } // namespace neverd::mobile::dalvik

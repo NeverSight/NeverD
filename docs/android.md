@@ -96,7 +96,13 @@ recovered-app/
 
 Temporary inputs are removed. Nested classes can share an outer-class source file, so Java source count is not DEX class count. Generated methods may use a Java dispatch loop; they do not execute the original DEX or use a runtime bridge to it.
 
-The built-in report embeds `android_method_recovery`, also written to `metadata/android-methods.json`. Its invariant is `method_count = recovered_method_count + declaration_only_method_count`, with `unrecovered_method_count` equal to zero before publication. Original `native` and `abstract` methods have status `declaration-only`; they are not counted as recovered bodies. A shortened illustrative report follows; the coverage file also contains the per-method inventory:
+The built-in report embeds `android_method_recovery`, also written to `metadata/android-methods.json`. Every original method remains in the inventory. Its invariant is `method_count = recovered_method_count + projected_method_count + declaration_only_method_count + unrecovered_method_count`; an absent `projected_method_count` means zero, and `unrecovered_method_count` remains zero before publication. Original `native` and `abstract` methods have status `declaration-only` and are not counted as recovered bodies.
+
+A bounded subset of named, noncapturing local classes can be emitted inside their exact enclosing static method. This requires an ordinary scalar method, a fieldless class directly extending `Object`, a real no-argument constructor, scalar instance methods, and verified object uses that do not escape the supported scope. Anonymous classes, captures, unsupported modifiers, and unproved uses still fail explicitly.
+
+For these exports, the local methods and their enclosing method are `source-projected`, with `projection_kind: "named-method-local"`; coverage is `partial` even when the outer pipeline report says `success`. The recompiled binary names and access flags remain unverified. Java compilation can choose a different local-class binary name, so `class_source_bindings` preserves the original class, enclosing method, source path and local name with `binary_name_status: "unverified"`.
+
+`generated_source_helpers` lists extra methods with the exact kinds `throw-helper`, `constant-helper`, `default-constructor`, and `field-initializer`. The last kind identifies an additional generated `<clinit>` that was absent from the original method inventory. These extras do not count toward the original-method denominator. Compilation or one matching binary name does not upgrade this status to complete recovery. The following shortened example has no projected methods:
 
 ```json
 {
