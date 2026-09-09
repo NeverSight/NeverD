@@ -7,7 +7,15 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../neverd-worker" "${CMAKE_BINARY_DIR}/worker")
 endif()
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network LinguistTools GuiPrivate QuickPrivate)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network LinguistTools)
+# Qt 6.8 exports private targets from the public module packages. Newer Qt
+# releases ship separate private packages; KDDockWidgets needs the matching
+# private headers in either layout.
+foreach(_neverd_private_module Gui Quick)
+  if(NOT TARGET Qt6::${_neverd_private_module}Private)
+    find_package(Qt6 6.8 REQUIRED COMPONENTS ${_neverd_private_module}Private)
+  endif()
+endforeach()
 qt_standard_project_setup(REQUIRES 6.8)
 include(FetchContent)
 set(KDDockWidgets_FRONTENDS "qtquick" CACHE STRING "" FORCE)
