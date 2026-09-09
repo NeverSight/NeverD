@@ -17,6 +17,7 @@
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/LowIR.h"
 
+#include "llvm/ADT/Twine.h"
 #include "llvm/Support/ErrorHandling.h"
 
 #include <initializer_list>
@@ -56,8 +57,11 @@ struct LiftStateBase {
       const NdVar &In = *Ins.begin();
       if (In.Size > Out.Size)
         llvm::report_fatal_error(
-            "LiftStateBase: integer extension input must be narrower than "
-            "output");
+            llvm::Twine("LiftStateBase: integer extension input must be "
+                        "narrower than output") +
+            " (instruction address " + llvm::Twine(Addr) + ", input bytes " +
+            llvm::Twine(In.Size) + ", output bytes " + llvm::Twine(Out.Size) +
+            ")");
       if (In.Size == Out.Size)
         Opc = NdOp::COPY;
     }

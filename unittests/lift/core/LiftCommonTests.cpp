@@ -61,23 +61,26 @@ TEST(LiftStateBase, GenuineSextRemainsExtension) {
 }
 
 TEST(LiftStateBase, NarrowingExtensionIsFatal) {
-  EXPECT_EXIT(
-      {
-        // Keep the fatal boundary observable without asking a platform crash
-        // reporter to retain an aborting death-test child.
-        llvm::install_fatal_error_handler([](void *, const char *Reason, bool) {
-          std::fputs(Reason, stderr);
-          std::fputc('\n', stderr);
-          std::fflush(stderr);
-          std::_Exit(1);
-        });
-        std::vector<LowOp> Ops;
-        LiftStateBase State(0x1000, 1, Ops);
-        State.emit(NdOp::INT_ZEXT, NdVar::tmp(TmpBase, 1),
-                   {NdVar::tmp(TmpBase + TmpStride, 4)});
-      },
-      ::testing::ExitedWithCode(1),
-      "integer extension input must be narrower than output");
+  for (NdOp Opcode : {NdOp::INT_ZEXT, NdOp::INT_SEXT}) {
+    EXPECT_EXIT(
+        {
+          // Keep the fatal boundary observable without asking a platform crash
+          // reporter to retain an aborting death-test child.
+          llvm::install_fatal_error_handler([](void *, const char *Reason, bool) {
+            std::fputs(Reason, stderr);
+            std::fputc('\n', stderr);
+            std::fflush(stderr);
+            std::_Exit(1);
+          });
+          std::vector<LowOp> Ops;
+          LiftStateBase State(0x1000, 1, Ops);
+          State.emit(Opcode, NdVar::tmp(TmpBase, 1),
+                     {NdVar::tmp(TmpBase + TmpStride, 4)});
+        },
+        ::testing::ExitedWithCode(1),
+        "integer extension input must be narrower than output.*"
+        "instruction address 4096, input bytes 4, output bytes 1");
+  }
 }
 
 TEST(TextEncoding, EscapesOnlyMalformedUTF8Bytes) {
