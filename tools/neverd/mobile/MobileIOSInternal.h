@@ -41,6 +41,16 @@ bool hexAddress(std::string_view s);
 std::string hex(uint64_t v);
 void appendUnique(Array &to, const Array &from);
 
+struct BuildTool {
+  uint32_t tool = 0, version = 0;
+};
+struct BuildTarget {
+  // Preserve the original load-command order, including multiple targets in
+  // zippered images. A legacy version command has no explicit platform field.
+  uint32_t command = 0, load_command_index = 0;
+  uint32_t platform = 0, minos = 0, sdk = 0;
+  std::vector<BuildTool> tools;
+};
 struct Selection {
   std::string bytes;
   std::string architecture;
@@ -48,9 +58,11 @@ struct Selection {
   unsigned pointer_size = 0;
   bool encrypted = false;
   std::vector<std::string> available;
+  std::vector<BuildTarget> build_targets;
 };
 Selection selectSlice(std::string_view bytes, std::string_view architecture,
                       Budget &budget);
+Object buildTargetMetadata(const Selection &selection, Budget &budget);
 Object parsePlist(std::string_view bytes, Budget &budget);
 Object objcMetadata(const BinaryImage &image);
 Object swiftMetadata(const BinaryImage &image, Budget &budget);

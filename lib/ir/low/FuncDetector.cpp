@@ -240,6 +240,28 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
           {Addr, (kAutoFuncPrefix + llvm::utohexstr(Addr)).str()});
   }
 
+  // Every AArch64 entry must be four-byte aligned, regardless of whether it
+  // came from the image entry, a symbol, an export, a relocation or a scan.
+  // Reject misaligned candidates before either trusting metadata or trying
+  // to decode and lift their bytes: a mid-instruction probe can otherwise
+  // reach a lifter with operands that do not describe the real instruction.
+  // Apply this to images without an entry point too. Other architectures
+  // have different alignment and instruction-set address conventions.
+  if (Img.Arch == Arch::AArch64) {
+    std::vector<std::pair<va_t, std::string>> Aligned;
+    Aligned.reserve(Results.size());
+    for (auto &R : Results) {
+      if ((R.first & 0x3) != 0) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "func-detector: dropping misaligned AArch64 entry 0x"
+                   << llvm::utohexstr(R.first) << "\n");
+        continue;
+      }
+      Aligned.push_back(std::move(R));
+    }
+    Results = std::move(Aligned);
+  }
+
   if (Img.Entry != 0) {
     std::set<va_t> Trusted{Img.Entry};
     // PE exports are untyped: executable-section data can legally appear in
@@ -388,38 +410,8 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
     }
   }
 
-  // AArch64 instructions are unconditionally 4-byte aligned, so a function
-  // entry whose address is not 4-aligned is provably spurious.  These appear
-  // when the call-target scan resynchronises after an undecodable byte (or
-  // begins a worker chunk) mid-instruction and then decodes a `bl`/`b` at an
-  // unaligned PC, yielding an unaligned branch target that happens to land
-  // inside real code.  Without symbol sizes (e.g. Mach-O) neither the
-  // sized-range nor the known-code-range filter above can reject it, so it
-  // survives as a garbage `sub_<addr>` that is lifted and — in the in-place
-  // patcher — trampolined at its unaligned VA.  That trampoline lands inside
-  // the enclosing real function and overwrites live instructions (e.g. an
-  // ADRP+ADD literal load), crashing the otherwise-fit function (section mode
-  // escapes only because it relocates the whole function, leaving the clobbered
-  // original bytes dead).  Drop them. x86 is variable-length, and ARM/Thumb
-  // encode the instruction set in entry bit 0, so this guard is gated strictly
-  // to AArch64.
-  if (Img.Arch == Arch::AArch64) {
-    std::vector<std::pair<va_t, std::string>> Aligned;
-    Aligned.reserve(Results.size());
-    for (auto &R : Results) {
-      if ((R.first & 0x3) != 0) {
-        LLVM_DEBUG(llvm::dbgs()
-                   << "func-detector: dropping misaligned AArch64 entry 0x"
-                   << llvm::utohexstr(R.first) << "\n");
-        continue;
-      }
-      Aligned.push_back(std::move(R));
-    }
-    Results = std::move(Aligned);
-  }
-
-  // Publish only verified candidates that survived every later overlap and
-  // alignment filter. A transient decoder hit must never become patch-time
+  // Publish only verified candidates that survived every candidate and
+  // overlap filter. A transient decoder hit must never become patch-time
   // function identity after this routine has rejected it.
   for (const auto &[Addr, Name] : Results) {
     (void)Name;

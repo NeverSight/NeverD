@@ -82,6 +82,7 @@ llvm::json::Object recoverIOS(const Options &options, const fs::path &staging,
   }
   auto selection = selectSlice(readFile(executable, budget.limits.max_bytes),
                                options.architecture, budget);
+  auto build_target = buildTargetMetadata(selection, budget);
   if (selection.encrypted)
     throw Error("selected Mach-O slice is encrypted (cryptid != 0); supply a "
                 "decrypted executable");
@@ -200,6 +201,7 @@ llvm::json::Object recoverIOS(const Options &options, const fs::path &staging,
                 {"selected_artifact", selected},
                 {"architecture", selection.architecture},
                 {"cpu_subtype", selection.cpu_subtype},
+                {"build_target", std::move(build_target)},
                 {"available_architectures", std::move(available)},
                 {"encrypted", false},
                 {"bundle", std::move(bundle)},
