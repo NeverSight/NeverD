@@ -360,6 +360,11 @@ MachOLoader::load(const std::filesystem::path &Path) {
       NSect = Entry.n_sect;
     }
 
+    // STABS entries describe debug records, not addressable symbols. N_FUN
+    // duplicates ordinary function names; N_OSO carries an object timestamp.
+    if ((NType & llvm::MachO::N_STAB) != 0)
+      continue;
+
     bool IsSect = (NType & llvm::MachO::N_TYPE) == llvm::MachO::N_SECT &&
                   NSect > 0 && NSect <= Img.Sections.size();
     if (SymAddr == 0 && !IsSect)

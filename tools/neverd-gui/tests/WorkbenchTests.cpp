@@ -155,8 +155,24 @@ private slots:
     controller.loadMoreFunctions();
     QTRY_COMPARE(functions->get(256)["name"].toString(),
                  QString("function_256"));
+    const auto beforeFilter = functions->requestGeneration();
+    const auto selectedBeforeFilter = controller.selectedAddress();
+    controller.filterFunctions("function_59");
+    // Filtering must retire old selectable rows before either debounce or IPC.
+    QCOMPARE(functions->count(), 0);
+    QCOMPARE(controller.functionCount(), 0);
+    QVERIFY(functions->get(0).isEmpty());
+    QVERIFY(functions->requestGeneration() != beforeFilter);
     controller.filterFunctions("function_599");
+    QCOMPARE(functions->count(), 0);
     QTRY_COMPARE(functions->count(), 1);
+    QCOMPARE(functions->get(0)["name"].toString(), "function_599");
+    QCOMPARE(functions->get(0)["address"].toString(),
+             QString("0xffff800012342570"));
+    QCOMPARE(controller.selectedAddress(), selectedBeforeFilter);
+    // A previous debounce must not later replace the final one-row result.
+    QTest::qWait(250);
+    QCOMPARE(functions->count(), 1);
     QCOMPARE(functions->get(0)["name"].toString(), "function_599");
     controller.navigate("function_20");
     QTRY_COMPARE(controller.selectedAddress(), QString("0xffff800012340140"));

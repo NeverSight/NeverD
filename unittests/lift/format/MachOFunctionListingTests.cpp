@@ -15,6 +15,7 @@
 #include "llvm/Support/JSON.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -202,6 +203,86 @@ std::vector<uint8_t> makeMachOFunctionFixture() {
   return Binary;
 }
 
+// Build both nlist layouts without invoking a platform compiler. Debug records
+// deliberately overlap a real function, while an ordinary alias shares its VA.
+std::vector<uint8_t> makeMachOStabFixture(bool Is64) {
+  using namespace llvm::MachO;
+  auto Build = [&]<typename HeaderT, typename SegmentT, typename SectionT,
+                   typename SymbolT>(HeaderT, SegmentT, SectionT, SymbolT) {
+    constexpr uint32_t Base = 0x1000;
+    constexpr uint32_t FunctionVA = Base + kTextOff;
+    constexpr uint32_t StringOff = kLinkeditOff + 0x90;
+    constexpr uint32_t SegmentSize = sizeof(SegmentT) + sizeof(SectionT);
+    std::vector<uint8_t> Binary(kFileSize, 0);
+    HeaderT Header{};
+    Header.magic = Is64 ? MH_MAGIC_64 : MH_MAGIC;
+    Header.cputype = Is64 ? CPU_TYPE_X86_64 : CPU_TYPE_X86;
+    Header.cpusubtype = CPU_SUBTYPE_I386_ALL;
+    Header.filetype = MH_EXECUTE;
+    Header.ncmds = 2;
+    Header.sizeofcmds = SegmentSize + sizeof(symtab_command);
+    std::memcpy(Binary.data(), &Header, sizeof(Header));
+
+    SegmentT Segment{};
+    Segment.cmd = Is64 ? LC_SEGMENT_64 : LC_SEGMENT;
+    Segment.cmdsize = SegmentSize;
+    setMachOName(Segment.segname, "__TEXT");
+    Segment.vmaddr = Base;
+    Segment.vmsize = kFileSize;
+    Segment.filesize = kFileSize;
+    Segment.maxprot = VM_PROT_READ | VM_PROT_EXECUTE;
+    Segment.initprot = Segment.maxprot;
+    Segment.nsects = 1;
+    std::memcpy(Binary.data() + sizeof(Header), &Segment, sizeof(Segment));
+
+    SectionT Section{};
+    setMachOName(Section.sectname, "__text");
+    setMachOName(Section.segname, "__TEXT");
+    Section.addr = FunctionVA;
+    Section.size = 1;
+    Section.offset = kTextOff;
+    Section.flags = S_ATTR_PURE_INSTRUCTIONS;
+    std::memcpy(Binary.data() + sizeof(Header) + sizeof(Segment), &Section,
+                sizeof(Section));
+    Binary[kTextOff] = 0xc3; // ret, valid in both i386 and x86-64.
+
+    std::array<SymbolT, 6> Symbols{};
+    std::string Strings(1, '\0');
+    auto AddSymbol = [&](size_t Index, llvm::StringRef Name, uint8_t Type,
+                         uint8_t SectionID, uint32_t Value) {
+      auto &Symbol = Symbols[Index];
+      Symbol.n_strx = static_cast<uint32_t>(Strings.size());
+      Strings.append(Name.data(), Name.size());
+      Strings.push_back('\0');
+      Symbol.n_type = Type;
+      Symbol.n_sect = SectionID;
+      Symbol.n_value = Value;
+    };
+    AddSymbol(0, "_main", N_SECT | N_EXT, 1, FunctionVA);
+    AddSymbol(1, "_main", N_FUN, 1, FunctionVA);
+    AddSymbol(2, "_main_alias", N_SECT | N_EXT, 1, FunctionVA);
+    AddSymbol(3, "fixture-debug.o", N_OSO, 0, 0x65ab1234);
+    AddSymbol(4, "_debug_only_static", N_STSYM, 1, FunctionVA);
+    AddSymbol(5, "_debug_begin", N_BNSYM, 1, FunctionVA);
+    symtab_command Symtab{};
+    Symtab.cmd = LC_SYMTAB;
+    Symtab.cmdsize = sizeof(Symtab);
+    Symtab.symoff = kSymtabOff;
+    Symtab.nsyms = static_cast<uint32_t>(Symbols.size());
+    Symtab.stroff = StringOff;
+    Symtab.strsize = static_cast<uint32_t>(Strings.size());
+    std::memcpy(Binary.data() + sizeof(Header) + SegmentSize, &Symtab,
+                sizeof(Symtab));
+    std::memcpy(Binary.data() + kSymtabOff, Symbols.data(), sizeof(Symbols));
+    std::memcpy(Binary.data() + StringOff, Strings.data(), Strings.size());
+    return Binary;
+  };
+  if (Is64)
+    return Build(mach_header_64{}, segment_command_64{}, section_64{},
+                 nlist_64{});
+  return Build(mach_header{}, segment_command{}, section{}, nlist{});
+}
+
 const Symbol *findSymbol(const BinaryImage &Image, llvm::StringRef Name) {
   auto It = std::find_if(Image.Symbols.begin(), Image.Symbols.end(),
                          [&](const Symbol &Item) { return Item.Name == Name; });
@@ -210,9 +291,9 @@ const Symbol *findSymbol(const BinaryImage &Image, llvm::StringRef Name) {
 
 class MachOFunctionListingTest : public NeverDLiftTest {
 protected:
-  fs::path writeFixture() {
+  fs::path writeFixture(
+      const std::vector<uint8_t> &Binary = makeMachOFunctionFixture()) {
     const fs::path Path = tmpFile("function-listing.macho");
-    const std::vector<uint8_t> Binary = makeMachOFunctionFixture();
     std::ofstream Output(Path, std::ios::binary);
     Output.write(reinterpret_cast<const char *>(Binary.data()),
                  static_cast<std::streamsize>(Binary.size()));
@@ -220,6 +301,59 @@ protected:
     return Path;
   }
 };
+
+TEST_F(MachOFunctionListingTest,
+       IgnoresStabsAndPreservesSameAddressAliasesInBothNListLayouts) {
+  for (bool Is64 : {false, true}) {
+    SCOPED_TRACE(Is64 ? "nlist_64" : "nlist");
+    MachOLoader Loader;
+    auto ImageOrErr = Loader.load(writeFixture(makeMachOStabFixture(Is64)));
+    ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+        << llvm::toString(ImageOrErr.takeError());
+    EXPECT_EQ(ImageOrErr->Symbols.size(), 2u);
+    EXPECT_EQ(findSymbol(*ImageOrErr, "fixture-debug.o"), nullptr);
+    EXPECT_EQ(findSymbol(*ImageOrErr, "_debug_only_static"), nullptr);
+    EXPECT_EQ(findSymbol(*ImageOrErr, "_debug_begin"), nullptr);
+    EXPECT_EQ(
+        std::count_if(ImageOrErr->Symbols.begin(), ImageOrErr->Symbols.end(),
+                      [](const Symbol &Sym) { return Sym.Name == "_main"; }),
+        1);
+    const auto Functions = ImageOrErr->getFunctionSymbols();
+    ASSERT_EQ(Functions.size(), 2u);
+    std::vector<std::string> Names;
+    for (const Symbol *Function : Functions) {
+      EXPECT_EQ(Function->Addr, 0x1000u + kTextOff);
+      Names.push_back(Function->Name);
+    }
+    std::sort(Names.begin(), Names.end());
+    EXPECT_EQ(Names, (std::vector<std::string>{"_main", "_main_alias"}));
+  }
+}
+
+TEST_F(MachOFunctionListingTest,
+       CompactUnwindDoesNotPromoteDuplicateDebugFunctionRecords) {
+  auto Binary = makeMachOFunctionFixture();
+  auto *Symbols =
+      reinterpret_cast<llvm::MachO::nlist_64 *>(Binary.data() + kSymtabOff);
+  // Replace the unrelated const symbol with the duplicate debug function seen
+  // beside the ordinary N_SECT record in a real clang -g Mach-O executable.
+  Symbols[3] = Symbols[1];
+  Symbols[3].n_type = llvm::MachO::N_FUN;
+  MachOLoader Loader;
+  auto ImageOrErr = Loader.load(writeFixture(Binary));
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const auto Functions = ImageOrErr->getFunctionSymbols();
+  ASSERT_EQ(Functions.size(), 2u);
+  EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
+                          [](const Symbol *Sym) {
+                            return Sym->Name == "_main" &&
+                                   Sym->Addr == kImageBase + kTextOff;
+                          }),
+            1);
+  for (const Symbol *Function : Functions)
+    EXPECT_EQ(Function->Size, kFunctionSize);
+}
 
 TEST_F(MachOFunctionListingTest,
        LoaderClassifiesCodeSymbolsAndMergesExactUnwindSizes) {

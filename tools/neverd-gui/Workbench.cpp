@@ -402,7 +402,13 @@ void Workbench::openPending() {
 void Workbench::filterFunctions(const QString &filter) {
   filter_ = filter;
   ++filterGeneration_;
+  // Retire selectable rows immediately; only the worker query is debounced.
+  functions_.resetPages();
+  nextFunction_ = 0;
+  functionCount_ = 0;
+  functionRequest_ = false;
   filterTimer_.start();
+  emit changed();
 }
 void Workbench::loadFunctions(bool append) {
   if (!loaded_ || (append && (nextFunction_ < 0 || functionRequest_)))

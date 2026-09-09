@@ -41,13 +41,8 @@ Rectangle {
             Layout.topMargin: 4
             placeholderText: qsTr("Filter functions…")
             Accessible.name: qsTr("Filter functions")
-            onTextEdited: searchDebounce.restart()
+            onTextEdited: root.controller.filterFunctions(text)
             Keys.onDownPressed: functions.forceActiveFocus()
-        }
-        Timer {
-            id: searchDebounce
-            interval: 180
-            onTriggered: root.controller.filterFunctions(filter.text)
         }
         Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: Theme.border }
         RowLayout {
@@ -107,7 +102,9 @@ Rectangle {
                     functions.currentIndex = index
                     root.controller.selectFunction(address)
                 }
-                onDoubleClicked: root.controller.selectFunction(address)
+                // Consume the second click; the first already navigated.
+                // Without a handler, AbstractButton emits clicked again.
+                onDoubleClicked: {}
                 ToolTip {
                     visible: functionRow.hovered && functionRow.name.length > 24
                     text: functionRow.name + "  " + functionRow.address
@@ -116,16 +113,12 @@ Rectangle {
                     contentItem: Text { textFormat: Text.PlainText; text: functionRow.name + "  " + functionRow.address; color: Theme.foreground; font.pointSize: Theme.captionSize; wrapMode: Text.WordWrap; maximumLineCount: 8; elide: Text.ElideRight }
                 }
             }
-            footer: WorkbenchButton {
-                width: functions.width
-                visible: functions.count > 0
-                text: qsTr("Load more functions")
-                onClicked: root.controller.loadMoreFunctions()
-            }
-            Keys.onReturnPressed: {
+            function activateCurrentFunction() {
                 const row = currentItem as ItemDelegate
                 if (row) row.clicked()
             }
+            Keys.onReturnPressed: activateCurrentFunction()
+            Keys.onEnterPressed: activateCurrentFunction()
             EmptyPane {
                 anchors.fill: parent
                 visible: functions.count === 0
