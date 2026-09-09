@@ -1,12 +1,19 @@
 name: Desktop GUI
 
 on:
+  push:
+    branches: [dev]
+    paths: ['tools/neverd-gui/**', 'tools/neverd-worker/**', 'tools/neverd-mcp/**', 'scripts/check_gui_i18n.py', '.github/workflows/gui.yml']
   pull_request:
     paths: ['tools/neverd-gui/**', 'tools/neverd-worker/**', 'tools/neverd-mcp/**', 'scripts/check_gui_i18n.py', '.github/workflows/gui.yml']
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: desktop-gui-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   desktop:

@@ -41,6 +41,7 @@ private slots:
     QVERIFY(credentialFile.open(QIODevice::ReadOnly));
     const auto credentials =
         QJsonDocument::fromJson(credentialFile.readAll()).object();
+    credentialFile.close();
     const auto fileName = broker.credentialFile();
     QLocalSocket socket;
     socket.connectToServer(credentials.value("endpoint").toString());
@@ -99,6 +100,7 @@ private slots:
     QFile file(broker.credentialFile());
     QVERIFY(file.open(QIODevice::ReadOnly));
     const auto credentials = QJsonDocument::fromJson(file.readAll()).object();
+    file.close();
     QLocalSocket socket;
     socket.connectToServer(credentials.value("endpoint").toString());
     QVERIFY(socket.waitForConnected(1000));

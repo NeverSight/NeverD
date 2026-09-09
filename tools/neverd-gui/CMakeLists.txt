@@ -112,4 +112,12 @@ if(BUILD_TESTING)
     add_test(NAME NeverDGuiLanguages COMMAND neverd-gui-language-tests)
     set_tests_properties(NeverDGuiLanguages PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 20)
   endif()
+  # These are console test runners, even though they exercise Qt GUI objects.
+  # Keep their diagnostics connected to CTest's stdout on Windows.
+  foreach(_neverd_gui_test IN ITEMS neverd-gui-tests neverd-gui-graph-tests
+      neverd-gui-page-tests neverd-mcp-qt-tests neverd-gui-language-tests)
+    if(TARGET ${_neverd_gui_test})
+      set_target_properties(${_neverd_gui_test} PROPERTIES WIN32_EXECUTABLE FALSE)
+    endif()
+  endforeach()
 endif()

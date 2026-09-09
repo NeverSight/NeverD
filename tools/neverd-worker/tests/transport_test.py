@@ -2,6 +2,7 @@
 """Black-box protocol, cancellation, resource, and sidecar tests against fake C ABI."""
 import json
 import os
+from contextlib import ExitStack
 from pathlib import Path
 import queue
 import struct
@@ -93,12 +94,26 @@ class Client:
             self.process.wait(timeout=8)
         self.stderr.join(timeout=2)
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exception_type, exception, traceback):
+        if exception_type is None:
+            self.close()
+        else:
+            # Preserve the assertion and release the writer lock before the
+            # temporary directory is removed, including on Windows.
+            if self.process.poll() is None:
+                self.process.kill()
+            self.process.wait(timeout=8)
+            self.stderr.join(timeout=2)
+
 
 def run(executable):
-    with tempfile.TemporaryDirectory(prefix="neverd-worker-test-") as directory:
+    with tempfile.TemporaryDirectory(prefix="neverd-worker-test-") as directory, ExitStack() as clients:
         binary = Path(directory) / "fixture.bin"
         binary.write_bytes(b"mock input")
-        client = Client(executable)
+        client = clients.enter_context(Client(executable))
         assert client.call("metadata")["error"]["code"] == "not_loaded"
         opened = client.call("open", {"path": str(binary)}, fragmented=True)
         assert opened["status"] == "ok", opened
@@ -124,7 +139,7 @@ def run(executable):
         assert client.call("resolve", {"query": "0xffff800012340003"})["payload"]["function_address"] == BASE
         assert client.call("strings", {"offset": 599, "limit": 4})["payload"]["complete"]
 
-        competitor = Client(executable)
+        competitor = clients.enter_context(Client(executable))
         assert competitor.call("open", {"path": str(binary)})["error"]["code"] == "project_locked"
         assert competitor.call("open", {"path": str(binary), "read_only": True})["status"] == "ok"
         assert competitor.call("annotation_set", {"address": BASE, "text": "forbidden"})["error"]["code"] == "read_only"
@@ -135,7 +150,7 @@ def run(executable):
         assert edit["payload"]["dirty"] and not edit["payload"]["saved"]
         assert not Path(str(binary) + ".neverd-annotations.json").exists()
         assert client.call("save")["payload"]["saved"]
-        saved = json.loads(Path(str(binary) + ".neverd-annotations.json").read_text())
+        saved = json.loads(Path(str(binary) + ".neverd-annotations.json").read_text(encoding="utf-8"))
         assert saved == [dict(addr=BASE, text=note)]
         renamed = client.call("rename", {"address": BASE, "name": "renamed_function"})
         assert renamed["payload"]["saved"]
@@ -184,7 +199,7 @@ def run(executable):
         assert client.process.returncode == 0
 
         # OS releases the writer lock on exit, and acknowledged edits survive.
-        reopened = Client(executable)
+        reopened = clients.enter_context(Client(executable))
         assert reopened.call("open", {"path": str(binary)})["status"] == "ok"
         assert reopened.call("annotations")["payload"]["items"][0]["text"] == note
         assert reopened.call("functions", {"filter": "renamed_function"})["payload"]["total"] == 1

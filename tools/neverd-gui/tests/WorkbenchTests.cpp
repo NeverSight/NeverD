@@ -62,6 +62,7 @@ private slots:
     QFile saved(first + ".neverd-annotations.json");
     QVERIFY(saved.open(QIODevice::ReadOnly));
     QVERIFY(saved.readAll().contains("second revision"));
+    saved.close();
     QVERIFY2(controller.error().isEmpty(), qPrintable(controller.error()));
 
     controller.setComment("comment on A");
