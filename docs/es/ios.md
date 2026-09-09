@@ -18,13 +18,24 @@ neverd mobile executable -o metadata --metadata-only
 neverd mobile App.app -o recovered-framework --artifact Frameworks/Example.framework/Example
 ```
 
-Compile el objetivo `neverd` con una cadena compatible con C++20. El flujo móvil está integrado en la CLI nativa y no invoca un intérprete de Python. Distribuya el ejecutable con las bibliotecas nativas que requiera su compilación. Compilar de forma independiente las fuentes Apple generadas en macOS requiere Apple Clang, el SDK y la cadena Swift. Son requisitos separados del análisis estático; las herramientas externas opcionales no se descargan automáticamente.
+Compile el objetivo `neverd` con una cadena compatible con C++20. El flujo móvil se ejecuta dentro de la CLI nativa sin intérprete de Python. El desmanglado de firmas Swift lo proporciona `LLVMSwiftDemangle` en el fork de LLVM de NeverD. Tanto las compilaciones desde sus fuentes como los paquetes LLVM publicados correspondientes incluyen este componente; NeverD no descarga las fuentes de Swift como dependencia adicional. Compilar y ejecutar NeverD no requiere instalar el compilador ni la cadena Swift. Siguen siendo necesarias bibliotecas nativas como LLVM y Capstone; distribuya las bibliotecas y avisos de licencia requeridos por su compilación. La compilación independiente de las fuentes Apple generadas y las pruebas de comportamiento Swift en macOS requieren, según corresponda, Apple Clang, el SDK y `swiftc`.
 
-Las firmas Swift utilizan `--swift-demangle PATH`, después `NEVERD_SWIFT_DEMANGLE` y luego `swift-demangle` en PATH. En macOS se intenta finalmente `xcrun --find swift-demangle` con tiempo limitado. Una herramienta explícitamente configurada pero ausente provoca un error; si falla la búsqueda automática, los símbolos quedan sin clasificar con estado `unavailable`. Sin símbolos Swift no hace falta demangler. `--metadata-only` no invoca el backend nativo ni el demangler.
+La recuperación de firmas Swift utiliza directamente los nodos estructurados de `LLVMSwiftDemangle` dentro del proceso C++. No busca ni inicia un ejecutable externo de desmanglado ni comandos para localizar una cadena de herramientas. La antigua opción de ruta del ejecutable se ha eliminado y ya no se lee la antigua variable de entorno del desmanglador. `--metadata-only` no ejecuta ni el exportador nativo de fuentes ni el desmanglado de firmas.
+
+El inventario de firmas de `metadata/swift-signatures.json` identifica el componente integrado así:
+
+```json
+{
+  "demangler": {
+    "name": "llvm-swift-demangle",
+    "execution": "builtin",
+    "version": "6.3.3"
+  }
+}
+```
 
 ```sh
-neverd mobile App.ipa -o recovered-swift \
-  --swift-demangle /path/to/swift-demangle --timeout=600 --json
+neverd mobile App.ipa -o recovered-swift --timeout=600 --json
 ```
 
 ## Entradas y selección
@@ -43,7 +54,6 @@ Para binarios fat, `--arch=auto` prioriza arm64, arm, x86_64 e i386. Una secció
 | `--artifact PATH` | Programa principal | Ruta ejecutable relativa a la aplicación |
 | `--metadata-only` | Desactivado | Solo metadatos, sin recuperar fuentes ni invocar herramientas |
 | `--max-func N` | `0` | Límite de funciones nativas; cero indica todas las descubiertas; ignorado en modo metadatos |
-| `--swift-demangle PATH` | Entorno/PATH/cadena | Demangler de firmas Swift |
 | `--timeout N` | `300` | Presupuesto total positivo de análisis en segundos; los procesos hijos usan el tiempo restante |
 | `--max-files N` | `20000` | Presupuesto positivo de entradas; el inventario Swift también está limitado |
 | `--max-bytes N` | `2147483648` | Presupuesto positivo de bytes para entrada, extracción y salida final |
@@ -93,7 +103,7 @@ recovered-ios/
   report.json
 ```
 
-Los archivos del lenguaje fuente existen solo cuando se puede emitir código. `objc.json` guarda clases, categorías, ivars y codificaciones originales; `objc.h` contiene declaraciones compatibles. `swift.json` contiene tipos nominales y símbolos mangled. Los JSON de firmas/métodos conservan clasificación, omisiones, razones y conteos. Los registros incluyen diagnósticos nativos y, cuando se usan, búsqueda de herramientas Swift, demangling y exportación nativa Swift. Las rutas de `report.json` son relativas a su directorio. El binario seleccionado es un artefacto de análisis; el código generado no lo enlaza como puente de recuperación.
+Los archivos del lenguaje fuente existen solo cuando se puede emitir código. `objc.json` guarda clases, categorías, ivars y codificaciones originales; `objc.h` contiene declaraciones compatibles. `swift.json` contiene tipos nominales y símbolos mangled. Los JSON de firmas/métodos conservan clasificación, omisiones, razones y conteos. Los registros contienen diagnósticos nativos y del exportador Swift nativo cuando se ejecuta. No se generan registros de búsqueda de cadenas Swift externas ni de desmanglado externo. Las rutas de `report.json` son relativas a su directorio. El binario seleccionado es un artefacto de análisis; el código generado no lo enlaza como puente de recuperación.
 
 Se eliminan copias temporales del paquete y JSON intermedios. Sin cuerpos nativos, una ejecución normal falla aunque haya metadatos. El modo metadatos solo produce el artefacto seleccionado, `objc.h`, `objc.json`, `swift.json`, `report.json`; no hay fuentes ni archivos de firmas/cobertura, y `native_function_count`, `objc_method_recovery`, `swift_method_recovery` son `null`. Todos los modos usan los metadatos Objective-C resueltos por el cargador nativo. Los metadatos Swift se leen de la imagen nativa con límites comprobados; los ajustes, disposiciones reubicables o referencias no compatibles conservan diagnósticos de resultados parciales.
 
@@ -127,7 +137,7 @@ Este informe ilustrativo abreviado muestra deliberadamente recuperación parcial
 
 El `status: "success"` exterior indica que se publicó una salida validada. `recovered`, `partial`, `unrecovered`, `no-methods` describen el inventario descubierto, no equivalencia semántica ni integridad del programa original. Cada método no recuperado tiene una razón. Objective-C `recovered` exige también metadatos runtime completos. Un inventario vacío no demuestra que no existieran métodos.
 
-Swift `coverage_status` cuenta solo elementos invocables clasificados. El `status` Swift global contempla símbolos desconocidos y puede ser `unavailable`, `unclassified`, `unsupported-architecture` o `no-symbols`. Los metadatos no invocables aparecen en `non_method_symbols` como `not-callable`; los desconocidos, como `unclassified`. `types`, `type_metadata_count`, `source_type_count` cuentan por separado tipos y unidades emitidas, sin inflar la cantidad de métodos.
+Swift `coverage_status` cuenta solo elementos invocables clasificados. El `status` Swift global contempla símbolos desconocidos y puede ser `unclassified`, `unsupported-architecture` o `no-symbols`. Los metadatos no invocables aparecen en `non_method_symbols` como `not-callable`; los desconocidos, como `unclassified`. `types`, `type_metadata_count`, `source_type_count` cuentan por separado tipos y unidades emitidas, sin inflar la cantidad de métodos.
 
 Cada fila Swift recuperada indica `source_representation` como `native-method-body` o `compiler-generated-from-type`. Las proyecciones del compilador también conservan `compiler_projection_kind` y `compiler_projection_evidence`. `source_body_method_count` cuenta los cuerpos de métodos nativos recuperados; `compiler_projection_method_count` cuenta las proyecciones del compilador demostradas. Su suma es `recovered_method_count`. Las entradas del compilador permanecen en el denominador `method_count` y mantienen su identidad exacta en una única unidad fuente `type` correspondiente. Los metadatos de tipo o el nombre de una dependencia por sí solos no aumentan la cobertura recuperada. El JSON nativo por lotes incluye `source` en las filas del compilador y las unidades de tipo; los `source_units` del informe mobile conservan solo descripciones sin `source`, y el fuente completo está en `sources/swift.swift`.
 
@@ -143,7 +153,7 @@ neverd export recovered-ios/artifacts/selected.macho \
   --source-signatures=recovered-ios/metadata/swift-signatures.json -o swift-batch.json
 ```
 
-La exportación Swift consume el inventario estructurado de firmas generado por una ejecución mobile normal con demangler. El lote Objective-C incluye `native_source`, `native_function_count`, `objc_metadata` y, por método, fuente C, nombre, tipo de retorno y parámetros. Mobile comprueba además declaraciones, cuerpos y disposiciones antes de `.m`, por lo que su cobertura puede ser menor que la del lote C. Una exportación nativa exitosa puede no contener métodos recuperados.
+La exportación Swift consume el inventario estructurado de firmas que produce el analizador integrado durante una ejecución mobile normal. El lote Objective-C incluye `native_source`, `native_function_count`, `objc_metadata` y, por método, fuente C, nombre, tipo de retorno y parámetros. Mobile comprueba además declaraciones, cuerpos y disposiciones antes de `.m`, por lo que su cobertura puede ser menor que la del lote C. Una exportación nativa exitosa puede no contener métodos recuperados.
 
 En una sesión con Mach-O ya cargado, `neverd_objc_methods_json(session, max_functions)` y `neverd_swift_methods_json(session, signatures_json, max_functions)` devuelven los informes. Cero selecciona todas las funciones descubiertas. Libere las cadenas con `neverd_free_string`; `NULL` indica fallo, explicado por el error de sesión. Estas API no cargan contenedores IPA/`.app`.
 
@@ -169,4 +179,4 @@ Los tres scripts admiten `--arch all|arm64|x86_64`, `--fixups both|classic|defau
 
 La publicación es transaccional: elija una carpeta nueva, revise primero el estado de salida y redirija JSON fuera de ella. Los fallos eliminan resultados temporales y conservan los existentes. Un backend con salida no cero incluye una cola de registro limitada; timeout y presupuesto tienen mensajes separados. La CLI nativa devuelve cero si tiene éxito y un valor distinto de cero si falla la recuperación. Con `--json`, los errores controlados incluyen `schema_version`, `status: "error"` y `error`. El análisis de argumentos, los fallos de inicio del ejecutable o las bibliotecas nativas y las interrupciones pueden notificarse solo por stderr. Compruebe primero el estado de salida.
 
-Para secciones cifradas, proporcione entradas legibles; para arquitecturas ausentes, revise las disponibles; para Swift, seleccione el demangler real. Lea motivos exactos y diagnósticos de métodos omitidos. Ampliar `--max-func` solo ayuda a funciones excluidas por ese límite. Disposiciones, firmas, encabezados externos, excepciones o ABI ausentes requieren implementación o metadatos válidos adicionales, no una afirmación de recuperación completa. Conserve los avisos de licencia aplicables al distribuir herramientas o paquetes generados.
+Para secciones cifradas, proporcione entradas legibles; para arquitecturas ausentes, revise las disponibles. Lea motivos exactos y diagnósticos de métodos omitidos. Ampliar `--max-func` solo ayuda a funciones excluidas por ese límite. Disposiciones, firmas, encabezados externos, excepciones o ABI ausentes requieren implementación o metadatos válidos adicionales, no una afirmación de recuperación completa. Conserve los avisos de licencia aplicables al distribuir herramientas o paquetes generados.

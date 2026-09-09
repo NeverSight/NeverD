@@ -18,13 +18,24 @@ neverd mobile executable -o metadata --metadata-only
 neverd mobile App.app -o recovered-framework --artifact Frameworks/Example.framework/Example
 ```
 
-使用支援 C++20 的工具鏈建置 `neverd` 目標。行動端工作流程已編譯進原生 CLI，不呼叫 Python 直譯器。發佈時請附上目前建置所需的原生相依函式庫。在 macOS 上獨立編譯產生的 Apple 語言原始碼需要 Apple Clang、SDK 與 Swift 工具鏈。這些要求與靜態分析分開；選用的外部工具不會自動下載。
+使用支援 C++20 的工具鏈建置 `neverd` 目標。行動端工作流程在原生 CLI 內執行，不需要 Python 直譯器。Swift 簽名解名由 NeverD LLVM fork 中的 `LLVMSwiftDemangle` 提供；該 fork 的原始碼建置和相符版本的 LLVM 套件均包含此元件，NeverD 不另行取得 Swift 原始碼相依項目。建置和執行 NeverD 不需要本機安裝 Swift 編譯器或工具鏈。LLVM、Capstone 等原生函式庫相依需求仍然適用；發佈時請附上目前建置所需的函式庫及授權聲明。在 macOS 上獨立編譯產生的 Apple 語言原始碼和執行 Swift 行為迴歸測試，才視需要使用 Apple Clang、SDK 與 `swiftc`。
 
-Swift 簽名恢復依次選擇 `--swift-demangle PATH`、`NEVERD_SWIFT_DEMANGLE` 和 PATH 中的 `swift-demangle`。macOS 最後會嘗試有時間限制的 `xcrun --find swift-demangle`。顯式指定的工具不存在會失敗；自動查詢不可用時保留未分類符號並報告 `unavailable`。沒有 Swift 符號的輸入不需要 demangler。`--metadata-only` 不呼叫原生後端或 demangler。
+Swift 簽名恢復直接在 C++ 程序內讀取 `LLVMSwiftDemangle` 的結構化節點，不尋找或啟動外部解名程式，也不執行工具鏈探索命令。原執行檔路徑選項已移除，原解名環境變數不再讀取。`--metadata-only` 既不執行原生原始碼匯出器，也不執行簽名解名。
+
+`metadata/swift-signatures.json` 的簽名清單以以下欄位記錄內建元件：
+
+```json
+{
+  "demangler": {
+    "name": "llvm-swift-demangle",
+    "execution": "builtin",
+    "version": "6.3.3"
+  }
+}
+```
 
 ```sh
-neverd mobile App.ipa -o recovered-swift \
-  --swift-demangle /path/to/swift-demangle --timeout=600 --json
+neverd mobile App.ipa -o recovered-swift --timeout=600 --json
 ```
 
 ## 輸入與選擇
@@ -43,7 +54,6 @@ Fat 二進位檔案的 `--arch=auto` 優先順序是 arm64、arm、x86_64、i386
 | `--artifact PATH` | 主程式 | 相對於應用目錄的執行檔路徑 |
 | `--metadata-only` | 關閉 | 只讀中繼資料，不恢復原始碼或呼叫工具 |
 | `--max-func N` | `0` | 原生函式數量上限；零表示所有發現的函式；中繼資料模式忽略此項 |
-| `--swift-demangle PATH` | 環境/PATH/工具鏈 | Swift 簽名 demangler |
 | `--timeout N` | `300` | 正值總分析時間預算（秒）；子程序使用剩餘預算 |
 | `--max-files N` | `20000` | 正整數條目預算；Swift 符號清單也有數量限制 |
 | `--max-bytes N` | `2147483648` | 輸入、解包資料和最終輸出的正整數位元組預算 |
@@ -93,7 +103,7 @@ recovered-ios/
   report.json
 ```
 
-只有能夠輸出原始碼時，才生成對應來源語言檔案。`objc.json` 儲存類、Category、例項變數和原始方法編碼，`objc.h` 儲存受支援宣告；`swift.json` 儲存名義型別中繼資料及 mangled 符號。簽名和方法 JSON 保留分類、省略項、原因及數量。日誌包含原生診斷，以及實際使用時的 Swift 工具鏈發現、demangling 和原生 Swift 匯出診斷。`report.json` 中的輸出路徑相對於其目錄。選中的二進位檔案是分析產物，生成原始碼不會把它作為恢復橋接依賴來連結。
+只有能夠輸出原始碼時，才生成對應來源語言檔案。`objc.json` 儲存類、Category、例項變數和原始方法編碼，`objc.h` 儲存受支援宣告；`swift.json` 儲存名義型別中繼資料及 mangled 符號。簽名和方法 JSON 保留分類、省略項、原因及數量。日誌包含原生診斷，以及實際執行時的原生 Swift 匯出診斷，不再產生外部 Swift 工具鏈探索或解名日誌。`report.json` 中的輸出路徑相對於其目錄。選中的二進位檔案是分析產物，生成原始碼不會把它作為恢復橋接依賴來連結。
 
 臨時包副本和中間後端 JSON 會被刪除。正常執行若沒有原生函式體，即使存在中繼資料也會失敗。中繼資料模式僅生成選中的檔案、`objc.h`、`objc.json`、`swift.json` 和 `report.json`，沒有原始碼目錄或方法覆蓋/簽名檔案；`native_function_count`、`objc_method_recovery`、`swift_method_recovery` 均為 `null`。所有模式均使用原生載入器解析的 Objective-C 中繼資料。Swift 中繼資料透過有界的原生映像讀取取得；不支援的修正、可重定位配置或參照會保留部分還原診斷。
 
@@ -127,7 +137,7 @@ recovered-ios/
 
 最外層 `status: "success"` 表示已釋出通過校驗的輸出。方法覆蓋 `recovered`、`partial`、`unrecovered`、`no-methods` 描述的是已發現清單，不是語義等價或原程式完整性。每個未恢復方法都有原因。Objective-C 的 `recovered` 還要求執行階段中繼資料完整。空清單不能證明原程式沒有方法。
 
-Swift 的 `coverage_status` 只統計已分類的可呼叫項。整體 Swift `status` 還考慮未知符號，可為 `unavailable`、`unclassified`、`unsupported-architecture` 或 `no-symbols`。不可呼叫中繼資料位於 `non_method_symbols`，狀態為 `not-callable`；未知符號使用 `unclassified`。`types`、`type_metadata_count`、`source_type_count` 分別記錄型別中繼資料/輸出型別單元，不得用來增加方法數量。
+Swift 的 `coverage_status` 只統計已分類的可呼叫項。整體 Swift `status` 還考慮未知符號，可為 `unclassified`、`unsupported-architecture` 或 `no-symbols`。不可呼叫中繼資料位於 `non_method_symbols`，狀態為 `not-callable`；未知符號使用 `unclassified`。`types`、`type_metadata_count`、`source_type_count` 分別記錄型別中繼資料/輸出型別單元，不得用來增加方法數量。
 
 每個已還原 Swift 項目的 `source_representation` 為 `native-method-body` 或 `compiler-generated-from-type`。編譯器投影另保留 `compiler_projection_kind` 和 `compiler_projection_evidence`。`source_body_method_count` 計算已還原原生方法本體，`compiler_projection_method_count` 計算通過證明的編譯器投影，兩者相加等於 `recovered_method_count`。編譯器入口仍計入 `method_count` 分母，其確切身分必須出現在唯一對應的 `type` 原始碼單元中。只有型別中繼資料或相依項名稱不能增加已還原涵蓋率。原生批次 JSON 的編譯器項目和型別單元包含 `source`；mobile 的 `source_units` 僅保留描述、不含 `source`，完整原始碼請見 `sources/swift.swift`。
 
@@ -143,7 +153,7 @@ neverd export recovered-ios/artifacts/selected.macho \
   --source-signatures=recovered-ios/metadata/swift-signatures.json -o swift-batch.json
 ```
 
-Swift 匯出使用正常 mobile 流程通過 demangler 生成的結構化簽名清單。Objective-C 批次 JSON 包含 `native_source`、`native_function_count`、`objc_metadata`，以及逐方法 C 原始碼、函式名、返回型別和引數。Mobile 在生成 `.m` 前還會校驗宣告、方法本體和佈局，因此最終方法覆蓋可能少於批次 C 覆蓋。原生匯出成功也可能沒有任何已恢復方法。
+Swift 匯出使用正常 mobile 流程由內建簽名解析器產生的結構化簽名清單。Objective-C 批次 JSON 包含 `native_source`、`native_function_count`、`objc_metadata`，以及逐方法 C 原始碼、函式名、返回型別和引數。Mobile 在生成 `.m` 前還會校驗宣告、方法本體和佈局，因此最終方法覆蓋可能少於批次 C 覆蓋。原生匯出成功也可能沒有任何已恢復方法。
 
 對已載入 Mach-O 的會話，`neverd_objc_methods_json(session, max_functions)` 和 `neverd_swift_methods_json(session, signatures_json, max_functions)` 返回相應報告。零表示所有發現的函式。成功返回的字串用 `neverd_free_string` 釋放；`NULL` 表示失敗，原因見會話錯誤。這些 API 不載入 IPA 或 `.app` 容器。
 
@@ -169,4 +179,4 @@ macOS 上的 Objective-C 驗證腳本先編譯原始樣本，再還原 `.m`，�
 
 結果釋出具有事務性：選擇新目錄，先檢查程序退出狀態，並把重定向的 JSON 放在該目錄外。失敗會刪除暫存輸出並保留已有結果。後端非零退出附帶長度受限的日誌尾部；超時與預算失敗有獨立訊息。原生 CLI 成功時回傳零，還原失敗時回傳非零。使用 `--json` 時，已處理的失敗包含 `schema_version`、`status: "error"` 與 `error`。參數解析、原生程式或相依函式庫啟動失敗，以及中斷仍可能只透過 stderr 回報。使用端應先檢查結束狀態。
 
-加密切片需要可讀輸入；缺少架構時檢查可用切片；缺少 Swift 工具時指定實際 demangler；方法被省略時檢視其準確原因和中繼資料診斷。增加 `--max-func` 只對因數量上限被排除的函式有幫助。缺少佈局、簽名、外部標頭檔案、異常支援或 ABI 行為支援，需要補充實現或有效中繼資料，不能直接宣稱完整恢復。分發工具或生成的軟體包時保留適用的依賴許可證宣告。
+加密切片需要可讀輸入；缺少架構時檢查可用切片；方法被省略時檢視其準確原因和中繼資料診斷。增加 `--max-func` 只對因數量上限被排除的函式有幫助。缺少佈局、簽名、外部標頭檔案、異常支援或 ABI 行為支援，需要補充實現或有效中繼資料，不能直接宣稱完整恢復。分發工具或生成的軟體包時保留適用的依賴許可證宣告。

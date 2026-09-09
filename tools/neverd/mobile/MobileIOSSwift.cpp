@@ -1,7 +1,6 @@
 #include "MobileIOSInternal.h"
 
 #include <algorithm>
-#include <cstdlib>
 
 namespace neverd::mobile::ios {
 namespace {
@@ -45,7 +44,7 @@ Object unclassified(const Array &symbols, const std::string &reason) {
                 {"unclassified_symbol_count", symbols.size()},
                 {"supported_signature_count", 0},
                 {"unsupported_signature_count", 0},
-                {"logs", Array{}},
+                {"demangler", swiftDemanglerInfo()},
                 {"limitations", reason.empty() ? Array{} : Array{reason}}};
 }
 } // namespace
@@ -275,54 +274,7 @@ SwiftResult swiftSources(const Options &options, const fs::path &staging,
         symbols, "Swift source projection requires a 64-bit Mach-O slice.");
     workflow = "unsupported-architecture";
   } else {
-    std::optional<std::string> configured = options.swift_demangle;
-    if (!configured) {
-      if (auto *e = std::getenv("NEVERD_SWIFT_DEMANGLE"); e && *e)
-        configured = std::string(e);
-    }
-    if (configured &&
-        (configured->empty() || configured->find('\0') != configured->npos))
-      throw Error("Swift demangler path is empty or invalid");
-    auto tool = findProgram(configured.value_or("swift-demangle"));
-    if (!tool && configured)
-      throw Error("configured Swift demangler is unavailable; check "
-                  "--swift-demangle or NEVERD_SWIFT_DEMANGLE");
-#ifdef __APPLE__
-    if (!tool)
-      if (auto finder = findProgram("xcrun")) {
-        auto log = staging / "logs/swift-toolchain.log";
-        outputs["swift_toolchain_log"] = "logs/swift-toolchain.log";
-        try {
-          runTool({*finder, "--find", "swift-demangle"}, log,
-                  std::min<uint64_t>(toolTimeout(budget), 10), {},
-                  budget.limits);
-          auto candidate =
-              llvm::StringRef(readFile(log, budget.limits.max_bytes))
-                  .trim()
-                  .str();
-          if (candidate.find_first_of(std::string("\n\r\0", 3)) ==
-                  candidate.npos &&
-              pathFromUTF8(candidate).is_absolute())
-            tool = findProgram(candidate);
-        } catch (const Error &) {
-        }
-      }
-#endif
-    if (!tool) {
-      inventory = unclassified(
-          symbols,
-          "Swift demangler is unavailable; install swift-demangle or set "
-          "--swift-demangle to classify signatures and recover source.");
-      workflow = "unavailable";
-    } else {
-      inventory =
-          swiftSignatures(symbols, *tool, staging / "logs", ptr, budget);
-      Array paths;
-      for (const auto &v : array(inventory, "logs"))
-        paths.push_back("logs/" + v.getAsString()->str());
-      if (!paths.empty())
-        outputs["swift_demangle_logs"] = std::move(paths);
-    }
+    inventory = swiftSignatures(symbols, ptr, budget);
   }
   auto signature_path = staging / "metadata/swift-signatures.json";
   auto signature_text = jsonText(Value(Object(inventory)));

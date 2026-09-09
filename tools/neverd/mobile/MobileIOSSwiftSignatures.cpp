@@ -1,11 +1,9 @@
 #include "MobileIOSInternal.h"
 
+#include "llvm/Demangle/SwiftDemangle.h"
+
 #include <algorithm>
-#include <charconv>
-#include <iomanip>
-#include <memory>
 #include <regex>
-#include <sstream>
 
 namespace neverd::mobile::ios {
 namespace {
@@ -62,152 +60,58 @@ const std::set<std::string> metadata = {
     "ReflectionMetadataBuiltinDescriptor",
     "ReflectionMetadataAssocTypeDescriptor",
     "ReflectionMetadataSuperclassDescriptor"};
-struct Node {
-  std::string kind;
-  std::optional<std::string> text;
-  std::optional<uint64_t> index;
-  std::vector<std::unique_ptr<Node>> children;
-};
-std::unique_ptr<Node> tree(std::string_view text) {
-  std::unique_ptr<Node> root;
-  std::vector<Node *> stack;
-  size_t pos = 0, count = 0;
-  while (pos < text.size()) {
-    auto end = text.find('\n', pos);
-    if (end == text.npos)
-      end = text.size();
-    auto line = text.substr(pos, end - pos);
-    pos = end < text.size() ? end + 1 : end;
-    if (line.ends_with('\r'))
-      line.remove_suffix(1);
-    if (line.empty())
-      continue;
-    size_t indent = 0;
-    while (indent < line.size() && line[indent] == ' ')
-      ++indent;
-    auto depth = indent / 2;
-    if (indent % 2 || depth > 64 || ++count > 10000 || depth > stack.size())
-      throw Error("invalid or excessive Swift demangling tree depth");
-    line.remove_prefix(indent);
-    if (!line.starts_with("kind="))
-      throw Error("malformed Swift demangling tree");
-    line.remove_prefix(5);
-    auto comma = line.find(',');
-    auto kind = line.substr(0, comma);
-    if (!identifier(kind))
-      throw Error("malformed Swift node kind");
-    auto node = std::make_unique<Node>();
-    node->kind = kind;
-    if (comma != line.npos)
-      line.remove_prefix(comma);
-    else
-      line = {};
-    while (!line.empty()) {
-      if (line.starts_with(", text=")) {
-        if (node->text)
-          throw Error("duplicate Swift node text");
-        line.remove_prefix(7);
-        if (line.empty() || line[0] != '"')
-          throw Error("invalid Swift node text");
-        size_t p = 1;
-        bool closed = false;
-        while (p < line.size()) {
-          if (line[p] == '\\')
-            p += 2;
-          else if (line[p++] == '"') {
-            closed = true;
-            break;
-          }
-        }
-        if (!closed || p > line.size())
-          throw Error("unterminated Swift node text");
-        auto value = parseJSON(line.substr(0, p), "Swift node text");
-        auto s = value.getAsString();
-        if (!s)
-          throw Error("invalid Swift node text");
-        node->text = s->str();
-        line.remove_prefix(p);
-      } else if (line.starts_with(", index=")) {
-        if (node->index)
-          throw Error("duplicate Swift node index");
-        line.remove_prefix(8);
-        size_t p = 0;
-        while (p < line.size() && line[p] >= '0' && line[p] <= '9')
-          ++p;
-        uint64_t n = 0;
-        auto r = std::from_chars(line.data(), line.data() + p, n);
-        if (!p || r.ec != std::errc())
-          throw Error("invalid Swift node index");
-        node->index = n;
-        line.remove_prefix(p);
-      } else
-        throw Error("invalid Swift demangling node attribute");
-    }
-    auto raw = node.get();
-    if (!depth) {
-      if (root)
-        throw Error("multiple Swift demangling roots");
-      root = std::move(node);
-    } else
-      stack[depth - 1]->children.push_back(std::move(node));
-    stack.resize(depth);
-    stack.push_back(raw);
-  }
-  if (!root)
-    throw Error("empty Swift demangling tree");
-  return root;
-}
+using Node = llvm::SwiftDemangleNode;
 const Node &one(const Node &n, std::string_view kind = {}) {
-  if (n.children.size() != 1 || (!kind.empty() && n.children[0]->kind != kind))
+  if (n.Children.size() != 1 || (!kind.empty() && n.Children[0].Kind != kind))
     throw Error("unsupported Swift type or declaration shape");
-  return *n.children[0];
+  return n.Children[0];
 }
 std::string ident(const Node &n, std::string_view kind = "Identifier") {
-  if (n.kind != kind || !n.children.empty() || !n.text || !identifier(*n.text))
+  if (n.Kind != kind || !n.Children.empty() || !n.Text || !identifier(*n.Text))
     throw Error("unsafe or unsupported Swift declaration identifier");
-  return *n.text;
+  return *n.Text;
 }
 std::pair<std::string, std::string> nominal(const Node &n) {
-  if (n.children.size() != 2)
+  if (n.Children.size() != 2)
     throw Error("nested or generic Swift contexts are unsupported");
-  return {ident(*n.children[0], "Module"), ident(*n.children[1])};
+  return {ident(n.Children[0], "Module"), ident(n.Children[1])};
 }
 struct Context {
   std::string module, name, kind;
 };
 Context context(const Node &n) {
-  if (n.kind == "Module")
+  if (n.Kind == "Module")
     return {ident(n, "Module"), "", "global"};
-  if (n.kind == "Class" || n.kind == "Structure") {
+  if (n.Kind == "Class" || n.Kind == "Structure") {
     auto [m, name] = nominal(n);
-    return {m, name, n.kind == "Class" ? "class" : "struct"};
+    return {m, name, n.Kind == "Class" ? "class" : "struct"};
   }
   throw Error("unsupported Swift declaration context");
 }
 Object type(const Node &n, unsigned pointer_size, unsigned depth = 0) {
   if (depth > 8)
     throw Error("Swift pointer type is too deep");
-  if (n.kind == "Type")
+  if (n.Kind == "Type")
     return type(one(n), pointer_size, depth);
-  if (n.kind == "Tuple" && n.children.empty())
+  if (n.Kind == "Tuple" && n.Children.empty())
     return Object{{"kind", "void"}, {"name", "Void"}};
-  if (n.kind == "BoundGenericStructure") {
-    if (n.children.size() != 2 || n.children[0]->kind != "Type" ||
-        n.children[1]->kind != "TypeList")
+  if (n.Kind == "BoundGenericStructure") {
+    if (n.Children.size() != 2 || n.Children[0].Kind != "Type" ||
+        n.Children[1].Kind != "TypeList")
       throw Error("unsupported Swift generic type");
-    auto [module, name] = nominal(one(*n.children[0], "Structure"));
+    auto [module, name] = nominal(one(n.Children[0], "Structure"));
     if (module != "Swift" ||
         (name != "UnsafePointer" && name != "UnsafeMutablePointer"))
       throw Error(
           "Swift generic types other than ordinary pointers are unsupported");
-    auto pointee = type(one(*n.children[1], "Type"), pointer_size, depth + 1);
+    auto pointee = type(one(n.Children[1], "Type"), pointer_size, depth + 1);
     if (str(pointee, "kind") == "void")
       throw Error("typed Swift pointer has void pointee");
     return Object{
         {"kind", "pointer"}, {"name", name}, {"pointee", std::move(pointee)}};
   }
-  if (n.kind != "Structure")
-    throw Error("unsupported Swift signature type: " + n.kind);
+  if (n.Kind != "Structure")
+    throw Error("unsupported Swift signature type: " + n.Kind);
   auto [module, name] = nominal(n);
   if (module != "Swift")
     throw Error("user-defined Swift value layouts are not established");
@@ -239,24 +143,24 @@ struct Property {
 };
 Property property(const Node &n, bool is_static, unsigned ptr) {
   const auto &v = one(n, "Variable");
-  if (v.children.size() != 3)
+  if (v.Children.size() != 3)
     throw Error("unsupported Swift property shape");
-  auto c = context(*v.children[0]);
+  auto c = context(v.Children[0]);
   if (c.kind == "global" || is_static)
     throw Error(
         "global and static Swift property conventions are not established");
-  if (v.children[2]->kind != "Type")
+  if (v.Children[2].Kind != "Type")
     throw Error("Swift property type wrapper is missing");
-  auto t = type(*v.children[2], ptr);
+  auto t = type(v.Children[2], ptr);
   if (str(t, "kind") == "void")
     throw Error("Swift scalar property has a void type");
-  return {c, ident(*v.children[1]), std::move(t)};
+  return {c, ident(v.Children[1]), std::move(t)};
 }
 void runtime(Object &row, const Node &node, bool is_static, unsigned ptr,
              bool continuation = false) {
   Context c;
   std::string name, kind;
-  if (node.kind == "ModifyAccessor") {
+  if (node.Kind == "ModifyAccessor") {
     auto p = property(node, is_static, ptr);
     c = p.ctx;
     name = p.name;
@@ -266,17 +170,17 @@ void runtime(Object &row, const Node &node, bool is_static, unsigned ptr,
     if (is_static || continuation)
       throw Error("unsupported Swift runtime wrapper");
     auto *n = &one(node);
-    if (node.kind == "TypeMetadataAccessFunction" && n->kind == "Type")
+    if (node.Kind == "TypeMetadataAccessFunction" && n->Kind == "Type")
       n = &one(*n);
     c = context(*n);
     if (c.kind == "global" ||
-        (node.kind != "TypeMetadataAccessFunction" && c.kind != "class"))
+        (node.Kind != "TypeMetadataAccessFunction" && c.kind != "class"))
       throw Error("unsupported Swift runtime context");
-    kind = node.kind == "Destructor"    ? "destructor"
-           : node.kind == "Deallocator" ? "deallocator"
+    kind = node.Kind == "Destructor"    ? "destructor"
+           : node.Kind == "Deallocator" ? "deallocator"
                                         : "type_metadata_accessor";
     name =
-        node.kind == "TypeMetadataAccessFunction" ? "typeMetadata" : "deinit";
+        node.Kind == "TypeMetadataAccessFunction" ? "typeMetadata" : "deinit";
   }
   putContext(row, c);
   row["declaration_kind"] = "runtime";
@@ -298,46 +202,53 @@ bool swiftName(std::string_view s) {
   return s.starts_with("$s") || s.starts_with("$S") || s.starts_with("T0");
 }
 } // namespace
+Object swiftDemanglerInfo() {
+  return Object{{"name", "llvm-swift-demangle"},
+                {"execution", "builtin"},
+                {"version", llvm::swiftDemangleVersion()}};
+}
 Object swiftSignature(std::string_view entry, std::string_view mangled,
-                      std::string_view expanded, unsigned ptr) {
+                      unsigned ptr) {
   Object row{{"entry", std::string(entry)},
              {"mangled_symbol", std::string(mangled)},
              {"status", "unsupported"},
              {"classification", "unknown"}};
   try {
-    if (ptr != 8 || mangled.size() > 65536 || !swiftName(mangled) ||
+    if (ptr != 8 || mangled.size() > 8000 || !swiftName(mangled) ||
         !hexAddress(entry))
       throw Error("invalid Swift symbol identity or unsupported pointer size");
-    auto root = tree(expanded);
-    if (root->kind != "Global")
+    auto demangled = llvm::swiftDemangle(mangled);
+    if (!demangled.Root)
+      throw Error(demangled.Error);
+    const auto &root = demangled.Root;
+    if (root->Kind != "Global")
       throw Error("Swift root is not a global symbol");
-    if (root->children.size() == 2 &&
-        callables.count(root->children[0]->kind) &&
-        root->children[1]->kind == "Suffix" &&
-        root->children[1]->children.empty() && root->children[1]->text &&
-        std::regex_match(*root->children[1]->text,
+    if (root->Children.size() == 2 && callables.count(root->Children[0].Kind) &&
+        root->Children[1].Kind == "Suffix" &&
+        root->Children[1].Children.empty() && root->Children[1].Text &&
+        std::regex_match(*root->Children[1].Text,
                          std::regex("\\.resume\\.[0-9]+"))) {
       row["classification"] = "callable";
       row["node_kind"] = "CoroutineContinuation";
-      row["continuation_of"] = root->children[0]->kind;
-      row["compiler_suffix"] = *root->children[1]->text;
-      if (root->children[0]->kind == "ModifyAccessor")
-        runtime(row, *root->children[0], false, ptr, true);
+      row["continuation_of"] = root->Children[0].Kind;
+      row["compiler_suffix"] = *root->Children[1].Text;
+      if (root->Children[0].Kind == "ModifyAccessor")
+        runtime(row, root->Children[0], false, ptr, true);
       throw Error("Swift coroutine continuation requires suspended-frame "
                   "calling convention");
     }
     auto *n = &one(*root);
-    bool is_static = n->kind == "Static";
+    bool is_static = n->Kind == "Static";
     if (is_static)
       n = &one(*n);
-    row["node_kind"] = n->kind;
-    row["classification"] = callables.count(n->kind)  ? "callable"
-                            : metadata.count(n->kind) ? "metadata"
+    row["node_kind"] = n->Kind;
+    row["classification"] = callables.count(n->Kind)  ? "callable"
+                            : metadata.count(n->Kind) ? "metadata"
                                                       : "unknown";
-    if (n->kind == "Getter" || n->kind == "Setter") {
+    if (n->Kind == "Getter" || n->Kind == "Setter") {
       auto p = property(*n, is_static, ptr);
       putContext(row, p.ctx);
-      bool setter = n->kind == "Setter";
+      bool setter = n->Kind == "Setter";
       row["declaration_kind"] = setter ? "setter" : "getter";
       row["name"] = p.name;
       row["labels"] = setter ? Array{"_"} : Array{};
@@ -357,22 +268,25 @@ Object swiftSignature(std::string_view entry, std::string_view mangled,
       row["status"] = "supported";
       return row;
     }
-    if (n->kind == "Destructor" || n->kind == "Deallocator" ||
-        n->kind == "TypeMetadataAccessFunction" || n->kind == "ModifyAccessor")
+    if (n->Kind == "Destructor" || n->Kind == "Deallocator" ||
+        n->Kind == "TypeMetadataAccessFunction" || n->Kind == "ModifyAccessor")
       runtime(row, *n, is_static, ptr);
-    bool initializer = n->kind == "Constructor" || n->kind == "Allocator";
-    const Node *ctx, *labels, *fn;
+    bool initializer = n->Kind == "Constructor" || n->Kind == "Allocator";
+    const Node *ctx, *labels = nullptr, *fn;
     std::string name;
-    if (initializer && n->children.size() == 3) {
-      ctx = n->children[0].get();
-      labels = n->children[1].get();
-      fn = n->children[2].get();
+    if (initializer && (n->Children.size() == 2 || n->Children.size() == 3)) {
+      ctx = &n->Children[0];
+      if (n->Children.size() == 3)
+        labels = &n->Children[1];
+      fn = &n->Children.back();
       name = "init";
-    } else if (n->kind == "Function" && n->children.size() == 4) {
-      ctx = n->children[0].get();
-      name = ident(*n->children[1]);
-      labels = n->children[2].get();
-      fn = n->children[3].get();
+    } else if (n->Kind == "Function" &&
+               (n->Children.size() == 3 || n->Children.size() == 4)) {
+      ctx = &n->Children[0];
+      name = ident(n->Children[1]);
+      if (n->Children.size() == 4)
+        labels = &n->Children[2];
+      fn = &n->Children.back();
     } else
       throw Error("Swift symbol is not a plain fixed-signature function or "
                   "initializing constructor");
@@ -384,41 +298,46 @@ Object swiftSignature(std::string_view entry, std::string_view mangled,
     row["name"] = name;
     if (initializer && ((c.kind != "class" && c.kind != "struct") || is_static))
       throw Error("unsupported Swift initializer context");
-    if (labels->kind != "LabelList" || fn->kind != "Type")
+    if ((labels && labels->Kind != "LabelList") || fn->Kind != "Type")
       throw Error("unsupported Swift labels or function type");
     fn = &one(*fn, "FunctionType");
-    if (fn->children.size() != 2 || fn->children[0]->kind != "ArgumentTuple" ||
-        fn->children[1]->kind != "ReturnType")
+    if (fn->Children.size() != 2 || fn->Children[0].Kind != "ArgumentTuple" ||
+        fn->Children[1].Kind != "ReturnType")
       throw Error("async, throwing, generic or other Swift conventions are "
                   "unsupported");
-    const auto &arg = one(*fn->children[0], "Type");
+    const auto &arg = one(fn->Children[0], "Type");
     const auto &argvalue = one(arg);
     Array arguments;
-    if (argvalue.kind == "Tuple") {
-      for (const auto &e : argvalue.children) {
-        if (e->kind != "TupleElement")
+    if (argvalue.Kind == "Tuple") {
+      for (const auto &e : argvalue.Children) {
+        if (e.Kind != "TupleElement")
           throw Error("unsupported Swift argument tuple");
-        arguments.push_back(type(one(*e, "Type"), ptr));
+        arguments.push_back(type(one(e, "Type"), ptr));
       }
     } else
       arguments.push_back(type(arg, ptr));
     for (const auto &v : arguments)
       if (str(object(v, "argument"), "kind") == "void")
         throw Error("Swift function has a void argument");
+    // The mangling omits LabelList for a genuinely empty argument tuple.
+    // Its absence supplies no label evidence for a function taking arguments.
+    if (!labels && !arguments.empty())
+      throw Error("Swift parameter labels are missing for nonempty arguments");
     Array parameter_labels;
-    for (const auto &label : labels->children) {
-      if (label->kind == "FirstElementMarker" && label->children.empty() &&
-          !label->text)
-        parameter_labels.push_back("_");
-      else
-        parameter_labels.push_back(ident(*label));
-    }
+    if (labels)
+      for (const auto &label : labels->Children) {
+        if (label.Kind == "FirstElementMarker" && label.Children.empty() &&
+            !label.Text)
+          parameter_labels.push_back("_");
+        else
+          parameter_labels.push_back(ident(label));
+      }
     if (parameter_labels.empty())
       for (size_t i = 0; i < arguments.size(); ++i)
         parameter_labels.push_back("_");
     if (parameter_labels.size() != arguments.size())
       throw Error("Swift parameter labels disagree with argument count");
-    auto &returned = one(*fn->children[1], "Type");
+    auto &returned = one(fn->Children[1], "Type");
     Object returntype;
     if (initializer) {
       auto identity =
@@ -444,7 +363,7 @@ Object swiftSignature(std::string_view entry, std::string_view mangled,
     row["is_static"] = is_static;
     row["is_mutating"] = false;
     row["is_mutating_known"] = initializer || c.kind != "struct" || is_static;
-    if (n->kind == "Allocator" && c.kind == "class") {
+    if (n->Kind == "Allocator" && c.kind == "class") {
       row["declaration_kind"] = "runtime";
       row["runtime_source_kind"] = "allocating_initializer";
       row["requires_runtime_source_proof"] = true;
@@ -467,14 +386,11 @@ Object swiftSignature(std::string_view entry, std::string_view mangled,
   }
   return row;
 }
-Object swiftSignatures(const Array &symbols, const std::string &demangler,
-                       const fs::path &logs, unsigned ptr, Budget &budget) {
+Object swiftSignatures(const Array &symbols, unsigned ptr, Budget &budget) {
   if (symbols.size() > budget.limits.max_files)
     throw Error("Swift symbol inventory exceeds file limit");
-  fs::create_directories(logs);
-  Array rows, log_names;
-  std::vector<std::vector<std::pair<std::string, std::string>>> batches(1);
-  size_t command_bytes = 0;
+  Array rows;
+  uint64_t input_bytes = 0;
   for (const auto &v : symbols) {
     budget.tick();
     const auto &s = object(v, "Swift symbol");
@@ -482,52 +398,11 @@ Object swiftSignatures(const Array &symbols, const std::string &demangler,
          address = requiredString(s, "address");
     if (!swiftName(name))
       continue;
-    if (name.size() > 8000 ||
-        name.find_first_of(std::string("\r\n\0", 3)) != name.npos) {
-      rows.push_back(Object{
-          {"entry", address},
-          {"mangled_symbol", name},
-          {"status", "unsupported"},
-          {"classification", "unknown"},
-          {"reason", "Swift symbol exceeds safe demangler input limits"}});
-      continue;
-    }
-    if (command_bytes + name.size() > 12000 || batches.back().size() == 64) {
-      batches.emplace_back();
-      command_bytes = 0;
-    }
-    batches.back().emplace_back(name, address);
-    command_bytes += name.size() + 3;
-  }
-  for (size_t i = 0; i < batches.size(); ++i) {
-    if (batches[i].empty())
-      continue;
+    if (name.size() > budget.limits.max_bytes - input_bytes)
+      throw Error("Swift symbol inventory exceeds byte limit");
+    input_bytes += name.size();
+    rows.push_back(swiftSignature(address, name, ptr));
     budget.check();
-    std::ostringstream filename;
-    filename << "swift-demangle-" << std::setw(4) << std::setfill('0') << i
-             << ".log";
-    auto log = logs / filename.str();
-    std::vector<std::string> argv{demangler, "--expand", "--tree-only"};
-    for (const auto &[name, address] : batches[i])
-      argv.push_back(name);
-    runTool(argv, log, toolTimeout(budget), {}, budget.limits);
-    auto output = readFile(log, budget.limits.max_bytes);
-    log_names.push_back(filename.str());
-    size_t p = 0;
-    for (const auto &[name, address] : batches[i]) {
-      std::string title = "Demangling for " + name + "\n";
-      if (output.compare(p, title.size(), title) != 0)
-        throw Error("Swift demangler symbol identity disagrees with input");
-      p += title.size();
-      auto end = output.find("\nDemangling for ", p);
-      if (end == output.npos)
-        end = output.size();
-      rows.push_back(swiftSignature(
-          address, name, std::string_view(output).substr(p, end - p), ptr));
-      p = end == output.size() ? end : end + 1;
-    }
-    if (p != output.size())
-      throw Error("Swift demangler returned unexpected structured output");
   }
   Array methods, other;
   uint64_t supported = 0, unknown = 0;
@@ -551,7 +426,7 @@ Object swiftSignatures(const Array &symbols, const std::string &demangler,
       {"unsupported_signature_count", count - supported},
       {"methods", std::move(methods)},
       {"symbols", std::move(other)},
-      {"logs", std::move(log_names)},
+      {"demangler", swiftDemanglerInfo()},
       {"limitations",
        Array{"Mangled symbols describe source types, not authenticated ABI or "
              "complete native decoding.",

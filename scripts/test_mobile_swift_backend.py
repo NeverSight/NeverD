@@ -43,9 +43,9 @@ DECLARATIONS = {*(('global', '', name, 'function') for name in GLOBALS),
                 *(('struct', 'Counter', name, 'function') for name in ('add', 'affine', 'adjust'))}
 
 
-def run(argv: list[str], *, timeout: int = 120) -> str:
+def run(argv: list[str], *, timeout: int = 120, env: dict[str, str] | None = None) -> str:
     process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               text=True, start_new_session=True)
+                               text=True, start_new_session=True, env=env)
     try:
         stdout, stderr = process.communicate(timeout=timeout)
     except BaseException:
@@ -125,6 +125,14 @@ def validate_coverage(output: Path, original: Path, architecture: str) -> dict:
     report = json.loads((output / 'report.json').read_text())
     coverage = json.loads((output / 'metadata/swift-methods.json').read_text())
     inventory = json.loads((output / 'metadata/swift-signatures.json').read_text())
+    demangler = inventory.get('demangler', {})
+    if (demangler.get('name'), demangler.get('execution'), demangler.get('version')) != ('llvm-swift-demangle', 'builtin', '6.3.3'):
+        raise RuntimeError('Swift signatures did not use the builtin LLVM demangler')
+    if (inventory.get('logs') or any(key in report.get('outputs', {})
+                                     for key in ('swift_demangle_logs', 'swift_toolchain_log'))
+            or list((output / 'logs').glob('swift-demangle*'))
+            or (output / 'logs/swift-toolchain.log').exists()):
+        raise RuntimeError('Swift recovery retained external demangler/toolchain logs')
     if (report.get('status'), report.get('platform'), report.get('architecture')) != ('success', 'ios', architecture):
         raise RuntimeError('The mobile report does not identify the successful selected architecture')
     if report.get('swift_method_recovery') != coverage:
@@ -206,7 +214,6 @@ def verify(arguments: argparse.Namespace, work: Path) -> None:
         raise RuntimeError('This execution test requires macOS and its Swift compiler/SDK')
     if not arguments.setup_only and not arguments.neverd:
         raise RuntimeError('Pass --neverd PATH or --setup-only')
-    demangler = run(['xcrun', '--find', 'swift-demangle']).strip()
     module_cache = arguments.module_cache.resolve() if arguments.module_cache else work / 'module-cache'
     architectures = ('arm64', 'x86_64') if arguments.arch == 'all' else (arguments.arch,)
     fixups = ('classic', 'default') if arguments.fixups == 'both' else (arguments.fixups,)
@@ -247,7 +254,9 @@ def verify(arguments: argparse.Namespace, work: Path) -> None:
                     output = variant / 'recovered'
                     run([str(arguments.neverd.resolve()), 'mobile', str(library), '-o', str(output),
                          '--platform=ios', f'--arch={architecture}',
-                         '--swift-demangle', demangler, f'--timeout={arguments.timeout}'], timeout=arguments.timeout * 3 + 60)
+                         f'--timeout={arguments.timeout}'], timeout=arguments.timeout * 3 + 60,
+                        env={**os.environ, 'PATH': '',
+                             'NEVERD_SWIFT_DEMANGLE': str(work / 'missing-demangler')})
                     coverage = validate_coverage(output, library, architecture)
                     source = output / 'sources/swift.swift'
                     if not source.is_file() or not source.read_text().strip():

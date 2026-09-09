@@ -11,6 +11,7 @@ add_neverd_unittest(NeverDMobileTests
   MobileDalvikReaderTests.cpp
   MobileDalvikJavaTests.cpp
   MobileIOSTests.cpp
+  MobileSwiftDemangleTests.cpp
   MobileProcessTests.cpp
   LINK_LIBS NeverDMobile
 )

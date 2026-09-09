@@ -182,7 +182,6 @@ extern llvm::cl::SubCommand MobileCmd;
 int runMobile(const char *Argv0);
 extern llvm::cl::opt<std::string> MobilePlatform;
 extern llvm::cl::opt<std::string> MobileBackend;
-extern llvm::cl::opt<std::string> MobileSwiftDemangle;
 extern llvm::cl::opt<std::string> MobileArch;
 extern llvm::cl::opt<std::string> MobileArtifact;
 extern llvm::cl::opt<bool> MobileMetadataOnly;

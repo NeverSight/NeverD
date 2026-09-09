@@ -22,8 +22,6 @@ int runMobile(const char *Argv0) {
         llvm::sys::fs::getMainExecutable(Argv0, &ExecutableAnchor);
     if (!MobileBackend.empty())
       Options.jadx = MobileBackend;
-    if (!MobileSwiftDemangle.empty())
-      Options.swift_demangle = MobileSwiftDemangle;
     if (!MobileArtifact.empty())
       Options.artifact = MobileArtifact;
     auto Report = mobile::recover(Options);

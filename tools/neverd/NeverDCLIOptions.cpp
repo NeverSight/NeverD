@@ -47,10 +47,6 @@ cl::opt<std::string> MobilePlatform("platform",
 cl::opt<std::string> MobileBackend(
     "jadx", cl::desc("Explicit external Android backend (default: builtin)"),
     cl::init(""), cl::sub(MobileCmd));
-cl::opt<std::string> MobileSwiftDemangle(
-    "swift-demangle",
-    cl::desc("Swift demangler executable (or NEVERD_SWIFT_DEMANGLE)"),
-    cl::init(""), cl::sub(MobileCmd));
 cl::opt<std::string>
     MobileArch("arch", cl::desc("iOS slice: auto, arm64, arm, x86_64, or i386"),
                cl::init("auto"), cl::sub(MobileCmd));

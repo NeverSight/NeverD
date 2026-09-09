@@ -3163,7 +3163,6 @@ class RepositoryCapabilityTests(unittest.TestCase):
                     "neverd mobile --metadata-only",
                     "neverd mobile --o",
                     "neverd mobile --platform",
-                    "neverd mobile --swift-demangle",
                     "neverd mobile --timeout",
                     "neverd export --max-func",
                     "neverd export --source-signatures",

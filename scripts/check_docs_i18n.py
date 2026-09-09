@@ -489,8 +489,8 @@ EVM_FUNCTION_SCOPE_TEST_TOKENS = (
 GUIDE_REQUIRED_TOKENS = {
     "ios": (
         "neverd mobile", "IPA", ".app", "Mach-O", "C++20",
-        "NeverDMobileTests", "--swift-demangle", "NEVERD_SWIFT_DEMANGLE",
-        "xcrun --find swift-demangle", "--artifact", "CFBundleExecutable",
+        "NeverDMobileTests", "LLVMSwiftDemangle", "llvm-swift-demangle",
+        '"execution": "builtin"', '"version": "6.3.3"', "--artifact", "CFBundleExecutable",
         "--arch", "--metadata-only", "--max-func", "--timeout", "--max-files",
         "--max-bytes", "--json", "cryptid != 0", "2147483648", "20000", "300",
         "sources/objc.m", "sources/swift.swift", "metadata/objc-methods.json",
@@ -1648,12 +1648,19 @@ def validate_mobile_native_runtime(errors: list[str], view: RepositoryView) -> N
         *(Path(f"docs/{locale}/{name}.md")
           for locale in LOCALES for name in ("project", "README")),
     )
-    obsolete = ("--python", "NEVERD_PYTHON", "`mobile/`")
+    obsolete = (
+        "--python", "NEVERD_PYTHON", "`mobile/`", "--swift-demangle",
+        "NEVERD_SWIFT_DEMANGLE", "xcrun --find swift-demangle",
+    )
     for path in (*guides, *overviews, *entries):
         text = view.read_text(path)
         for token in obsolete:
             if token in text:
                 report(errors, f"{display_path(path)}: obsolete mobile runtime token {token!r}")
+        if path.name == "ios.md" or path in overviews:
+            prose = without_markdown_fences(text)
+            if "LLVMSwiftDemangle" not in prose:
+                report(errors, f"{display_path(path)}: builtin Swift signatures require LLVM component prose")
         if path in guides or path in overviews:
             if "C++20" not in without_markdown_fences(text):
                 report(errors, f"{display_path(path)}: native mobile runtime requires C++20 prose")

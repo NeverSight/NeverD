@@ -156,7 +156,7 @@ La primera configuración compila el fork LLVM localmente (a menudo 30–60 min)
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DNEVERD_LLVM_PREBUILT=ON \
-  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r1
+  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r2
 cmake --build build
 ```
 
@@ -172,7 +172,9 @@ El paquete publicado se elige según el host que ejecuta CMake:
 
 Cada archivo se coteja con el resumen fijado en `cmake/NeverDLLVMPrebuilt.cmake` —o con el `.sha256` publicado junto a él, para una etiqueta que esos anclajes no describan— antes de extraerlo en `~/.cache/neverd-llvm/<tag>/<arch>/` (o en la ruta que indique `NEVERD_LLVM_PREBUILT_CACHE_DIR`). La compilación de release usa ccache en macOS y Linux; las compilaciones clang-cl de Windows usan sccache con la caché de GitHub Actions como backend. Las cachés del compilador solo aceleran recompilaciones y nunca se publican como artefactos.
 
-La etiqueta de release versiona el paquete de NeverD, mientras que `BUILDINFO.txt` registra el commit exacto del fork de LLVM. Si LLVM sigue informando `23.0.0` pero las fuentes del fork cambiaron, la elección inmutable habitual es una revisión de paquete como `neverd-llvm-v23.0.0-r1` (luego `-r2`), no `23.0.1`, salvo que haya cambiado la propia versión de parche de LLVM. Apunte `NEVERD_LLVM_PREBUILT_TAG` a esa nueva revisión.
+La revisión de paquete predeterminada es `neverd-llvm-v23.0.0-r2`. Los directorios de compilación que aún guardan el antiguo tag sin revisión o `neverd-llvm-v23.0.0-r1` migran automáticamente a `r2`, salvo que se proporcione explícitamente `NEVERD_LLVM_PREBUILT_SHA256`; en ese caso se conserva el tag original.
+
+La etiqueta de release versiona el paquete de NeverD, mientras que `BUILDINFO.txt` registra el commit exacto del fork de LLVM. Si LLVM sigue informando `23.0.0` pero las fuentes del fork cambiaron, la elección inmutable habitual es una revisión de paquete como `neverd-llvm-v23.0.0-r3` (luego `-r4`), no `23.0.1`, salvo que haya cambiado la propia versión de parche de LLVM. Apunte `NEVERD_LLVM_PREBUILT_TAG` a esa nueva revisión.
 
 Para publicar la siguiente revisión inmutable, ejecute el workflow `NeverD LLVM Release` desde la rama `main` de llvm-project y deje desactivado `overwrite_existing_assets`:
 
@@ -180,7 +182,7 @@ Para publicar la siguiente revisión inmutable, ejecute el workflow `NeverD LLVM
 gh workflow run neverd-release.yml \
   --repo NeverSight/llvm-project \
   --ref main \
-  -f release_tag=neverd-llvm-v23.0.0-r2 \
+  -f release_tag=neverd-llvm-v23.0.0-r3 \
   -f overwrite_existing_assets=false
 ```
 

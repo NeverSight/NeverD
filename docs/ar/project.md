@@ -156,7 +156,7 @@ cmake --build build
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DNEVERD_LLVM_PREBUILT=ON \
-  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r1
+  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r2
 cmake --build build
 ```
 
@@ -172,7 +172,9 @@ cmake --build build
 
 يُطابَق كل أرشيف مع البصمة المثبَّتة في `cmake/NeverDLLVMPrebuilt.cmake` — أو مع ملف `.sha256` المنشور بجانبه، إن كان الـtag خارج ما تصفه تلك التثبيتات — قبل فكّه تحت `~/.cache/neverd-llvm/<tag>/<arch>/` (أو المسار الذي يحدده `NEVERD_LLVM_PREBUILT_CACHE_DIR`). ويستخدم بناء الإصدار ccache على macOS وLinux، بينما تستخدم بناءات clang-cl على Windows أداة sccache مع ذاكرة GitHub Actions المؤقتة كـbackend؛ وذاكرات المترجم المؤقتة تُسرّع إعادة البناء فقط ولا تُنشر أبدًا كمخرجات إصدار.
 
-يحدد tag الإصدار نسخة حزمة NeverD، بينما يسجّل `BUILDINFO.txt` الـcommit الدقيق لفرع LLVM. وإذا ظل LLVM يبلّغ عن `23.0.0` بينما تغيّر مصدر الفرع، فالخيار الثابت المعتاد هو مراجعة حزمة مثل `neverd-llvm-v23.0.0-r1` (ثم `-r2`) لا `23.0.1`، ما لم تتغير نسخة الترقيع الخاصة بـLLVM نفسه. وجّه `NEVERD_LLVM_PREBUILT_TAG` إلى تلك المراجعة الجديدة.
+مراجعة الحزمة الافتراضية هي `neverd-llvm-v23.0.0-r2`. تنتقل أدلة البناء التي تحتفظ بالـtag القديم دون رقم مراجعة أو بـ`neverd-llvm-v23.0.0-r1` تلقائيًا إلى `r2`، إلا عند تقديم `NEVERD_LLVM_PREBUILT_SHA256` صراحةً؛ حينها يُحفظ الـtag الأصلي.
+
+يحدد tag الإصدار نسخة حزمة NeverD، بينما يسجّل `BUILDINFO.txt` الـcommit الدقيق لفرع LLVM. وإذا ظل LLVM يبلّغ عن `23.0.0` بينما تغيّر مصدر الفرع، فالخيار الثابت المعتاد هو مراجعة حزمة مثل `neverd-llvm-v23.0.0-r3` (ثم `-r4`) لا `23.0.1`، ما لم تتغير نسخة الترقيع الخاصة بـLLVM نفسه. وجّه `NEVERD_LLVM_PREBUILT_TAG` إلى تلك المراجعة الجديدة.
 
 لنشر المراجعة التالية غير القابلة للتغيير، شغّل سير عمل `NeverD LLVM Release` من فرع `main` في llvm-project مع إبقاء `overwrite_existing_assets` معطلًا:
 
@@ -180,7 +182,7 @@ cmake --build build
 gh workflow run neverd-release.yml \
   --repo NeverSight/llvm-project \
   --ref main \
-  -f release_tag=neverd-llvm-v23.0.0-r2 \
+  -f release_tag=neverd-llvm-v23.0.0-r3 \
   -f overwrite_existing_assets=false
 ```
 

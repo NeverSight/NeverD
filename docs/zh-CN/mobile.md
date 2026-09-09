@@ -40,11 +40,11 @@ neverd mobile executable -o metadata --metadata-only
 
 每次运行只选择一个可执行文件，IPA 与 `.app` 的 `--artifact` 均相对于应用目录。Fat 选择顺序是 arm64、arm、x86_64、i386；源语言输出面向 arm64/x86_64，加密切片会被拒绝。实验性原生流程输出 C 和受支持的 Objective-C 方法体，包括标量/指针、浮点、混合及栈参数 ABI 绑定。经过校验的类/实例变量布局和独立 Category 会被保留；未解析布局、签名、调用和其他依赖仍明确标为省略项。
 
-Swift 恢复会分类 demangled 签名，将其绑定原生入口和 ABI 位置，然后输出受支持的函数、类方法/初始化器及固定布局结构体方法的实际 `.swift` 源码。Demangler 依次通过 `--swift-demangle`、`NEVERD_SWIFT_DEMANGLE`、PATH 和 macOS 的 `xcrun --find swift-demangle` 查找。自动查找失败会保留未分类覆盖，显式指定工具缺失则失败。泛型/resilient、async/throwing、不支持的运行时生成可调用形式和不完整源码依赖组仍未恢复。
+Swift 恢复通过 NeverD LLVM fork 中的 `LLVMSwiftDemangle`，直接在 C++ 进程内分类签名，不启动外部解名程序或工具链发现命令。构建和运行 NeverD 不需要本机安装 Swift 编译器。fork 源码构建及匹配版本的 LLVM 软件包均包含该组件，NeverD 不再单独获取 Swift 源码依赖。签名库存记录 `demangler: {"name": "llvm-swift-demangle", "execution": "builtin", "version": "6.3.3"}`。受支持签名绑定原生入口与 ABI 位置后，才输出函数、类方法/初始化器及固定布局结构体方法的实际 `.swift` 源码。泛型/resilient、async/throwing、不支持的运行时生成可调用形式和不完整源码依赖组仍未恢复。
 
-正常输出包含 `sources/native.c`、可选的 `sources/objc.m` 与 `sources/swift.swift`、声明和运行时元数据、方法/签名覆盖 JSON、日志、`artifacts/selected.macho` 和 `report.json`。生成源码不会通过桥接调用原始二进制。Swift `source_units` 将类型声明与方法成组组织，不能直接拼接逐方法源码来重建类。最外层 `status: "success"` 表示结果发布成功，不代表方法全部恢复或已证明语义等价。
+正常输出包含 `sources/native.c`、可选的 `sources/objc.m` 与 `sources/swift.swift`、声明和运行时元数据、方法/签名覆盖 JSON、日志、`artifacts/selected.macho` 和 `report.json`。不再生成外部 Swift 工具链发现或解名日志。生成源码不会通过桥接调用原始二进制。Swift `source_units` 将类型声明与方法成组组织，不能直接拼接逐方法源码来重建类。最外层 `status: "success"` 表示结果发布成功，不代表方法全部恢复或已证明语义等价。
 
-`--metadata-only` 不调用后端或 demangler，也不生成源码和方法覆盖。所有模式均使用原生加载器解析的 Objective-C 元数据。Swift 元数据通过有界的原生映像读取获取；不支持的修正、可重定位布局或引用会保留部分恢复诊断。 `--max-func` 限制原生函数数量，元数据模式忽略此项。正常运行若没有原生函数体会失败，临时解包输入会被清理。
+`--metadata-only` 既不运行原生源码导出器，也不执行签名解名，不生成源码和方法覆盖。所有模式均使用原生加载器解析的 Objective-C 元数据。Swift 元数据通过有界的原生映像读取获取；不支持的修正、可重定位布局或引用会保留部分恢复诊断。 `--max-func` 限制原生函数数量，元数据模式忽略此项。正常运行若没有原生函数体会失败，临时解包输入会被清理。
 
 原始注释、排版、已删除标识符和编译丢失的源语言结构无法精确还原。使用输出前请检查每个方法的状态与原因、Swift 的可调用/不可调用/未分类统计，以及文档列出的限制。
 

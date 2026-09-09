@@ -63,10 +63,10 @@ struct SourceResult {
 SourceResult objcSources(const Object &batch, const Object &metadata,
                          unsigned pointer_size, Budget &budget);
 uint64_t nativeFunctionCount(std::string_view source);
+Object swiftDemanglerInfo();
 Object swiftSignature(std::string_view entry, std::string_view mangled,
-                      std::string_view expanded, unsigned pointer_size = 8);
-Object swiftSignatures(const Array &symbols, const std::string &demangler,
-                       const fs::path &logs, unsigned pointer_size,
+                      unsigned pointer_size = 8);
+Object swiftSignatures(const Array &symbols, unsigned pointer_size,
                        Budget &budget);
 Object swiftCoverage(const Object &inventory, const Object *batch,
                      std::string_view workflow_status = {});

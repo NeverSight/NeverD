@@ -199,6 +199,9 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
             (Path("docs/ja/android.md"), "\n| Python | Python 3.10+ | PATH |\n"),
             (Path("docs/es/README.md"), "\n| [Android](android.md) | Python 3.10+ |\n"),
             (Path("docs/ar/README.md"), "\n`NEVERD_PYTHON`\n"),
+            (Path("docs/ios.md"), "\nneverd mobile App.app --swift-demangle tool\n"),
+            (Path("docs/zh-CN/ios.md"), "\n`NEVERD_SWIFT_DEMANGLE`\n"),
+            (Path("docs/ja/ios.md"), "\n`xcrun --find swift-demangle`\n"),
         )
         for path, addition in examples:
             with self.subTest(path=path):
@@ -208,6 +211,24 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                 }))
                 self.assertEqual(len(errors), 1, errors)
                 self.assertIn(path.as_posix(), errors[0])
+
+    def test_ios_builtin_signature_component_is_required_in_prose(self) -> None:
+        view = i18n.RepositoryView(use_index=False)
+        paths = (
+            Path("docs/ios.md"), Path("docs/mobile.md"), Path("docs/zh-CN/mobile.md"),
+            *(Path(f"docs/{locale}/ios.md") for locale in i18n.LOCALES),
+        )
+        for path in paths:
+            with self.subTest(path=path):
+                original = view.read_text(path)
+                self.assertIn("LLVMSwiftDemangle", original)
+                text = original.replace("LLVMSwiftDemangle", "removed-component")
+                text += "\n```text\nLLVMSwiftDemangle\n```\n"
+                errors: list[str] = []
+                i18n.validate_mobile_native_runtime(errors, _OverlayView({path: text}))
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn(path.as_posix(), errors[0])
+                self.assertIn("LLVM component prose", errors[0])
 
     def test_mobile_native_runtime_marker_must_be_in_localized_prose(self) -> None:
         view = i18n.RepositoryView(use_index=False)

@@ -3276,12 +3276,12 @@
         "Mobile recovery runs in the C++ CLI, with no Python interpreter or deployed helper directory. Android defaults to NeverD builtin DEX/smali readers, register verification and Java emission; it needs no external decompiler or JVM at runtime. Only explicit --jadx selects the separately installed compatibility backend. ZIP decompression uses zlib.",
         "Builtin Android emits verified Java dispatch bodies for its supported DEX/smali subset, with complete per-input method accounting and separate native/abstract declarations. Unsupported bodies reject the transaction; no backend fallback or placeholder body is used. Resources and native libraries are excluded.",
         "Builtin Android is experimental, not a guarantee for arbitrary APKs or all bytecode. Generic/dynamic invocation, monitor operations, unproven initialization, unsupported annotations, unavailable local member bindings, and non-representable Java declarations are rejected. Original source text and compilation-lost information cannot be recovered. Generation uses conservative byte, work and time budgets.",
-        "Android acceptance recompiles generated source without original classes and compares behavior against independently compiled owned fixtures. JDK and D8 are test tools only. iOS retains LLVM/Capstone dependencies and swift-demangle for Swift signatures; these dependencies are not the NeverD-owned recovery implementation.",
+        "Android acceptance recompiles generated source without original classes and compares behavior against independently compiled owned fixtures. JDK and D8 are test tools only. iOS retains LLVM/Capstone dependencies and uses LLVMSwiftDemangle from the NeverD LLVM fork for in-process structured Swift signature demangling. Fork source builds and matching LLVM packages include this component; NeverD does not fetch a separate Swift source dependency or require an installed Swift compiler/toolchain to build or run. Independent Swift behavior tests require swiftc.",
         "iOS emits native C and reconstructs supported Objective-C and Swift bodies from actual HighIR on arm64 and x86_64, with independently reported callable and metadata coverage.",
         "Proven Swift compiler-generated entries project into recovered type source and remain in the callable inventory. Native method bodies and compiler projections have separate counts and explicit source-representation evidence.",
         "Source recovery requires supported scalar/stack ABI bindings, storage layouts, and complete native dependency groups. Unsupported aggregate, variadic, generic, asynchronous, throwing, or unresolved runtime paths remain explicitly unrecovered.",
         "Runtime type hints guide source projection; they do not authenticate an ABI or prove semantic equivalence. Original comments and compilation-lost information cannot be recovered.",
-        "Encrypted native slices are rejected. Unresolved metadata and pointer encodings reduce coverage. Swift source signatures require swift-demangle and are checked against native symbol entries; metadata-only does not run a native decompiler or demangler.",
+        "Encrypted native slices are rejected. Unresolved metadata and pointer encodings reduce coverage. Swift source signatures use the built-in LLVM component and are checked against native symbol entries; metadata-only runs neither the native source exporter nor signature demangling. Signature inventory records demangler {name: llvm-swift-demangle, execution: builtin, version: 6.3.3}. No external demangler or toolchain-discovery process or logs are used; the former executable option and environment setting are removed.",
         "Overall success records output publication, not complete method recovery. Recovered coverage requires every inventoried callable to have its supported body or proven compiler projection; incomplete metadata can still make overall coverage partial or unknown. An exhaustive original-program inventory is not guaranteed.",
         "Metadata-only emits declarations, metadata and the selected binary, without native C, Objective-C bodies or method-body coverage. Full recovery analyzes one selected native artifact, and max-func can leave discovered methods unrecovered."
       ],
@@ -3393,7 +3393,6 @@
           "neverd mobile --metadata-only",
           "neverd mobile --o",
           "neverd mobile --platform",
-          "neverd mobile --swift-demangle",
           "neverd mobile --timeout",
           "neverd export --max-func",
           "neverd export --source-signatures"

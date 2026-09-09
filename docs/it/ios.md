@@ -18,13 +18,24 @@ neverd mobile executable -o metadata --metadata-only
 neverd mobile App.app -o recovered-framework --artifact Frameworks/Example.framework/Example
 ```
 
-Compilare il target `neverd` con una toolchain compatibile con C++20. Il flusso mobile è integrato nella CLI nativa e non richiama un interprete Python. Distribuire l’eseguibile con le librerie native richieste dalla propria compilazione. Per compilare indipendentemente i sorgenti Apple generati su macOS servono Apple Clang, SDK e toolchain Swift. Questi requisiti sono distinti dall’analisi statica; gli strumenti esterni opzionali non vengono scaricati automaticamente.
+Compilare il target `neverd` con una toolchain compatibile con C++20. Il flusso mobile viene eseguito nella CLI nativa senza interprete Python. Il demangling delle firme Swift è fornito da `LLVMSwiftDemangle` nel fork LLVM di NeverD. Sia le compilazioni dai sorgenti sia i pacchetti LLVM pubblicati corrispondenti includono questo componente; NeverD non scarica separatamente i sorgenti Swift. Compilare ed eseguire NeverD non richiede l’installazione del compilatore o della toolchain Swift. Restano le dipendenze native come LLVM e Capstone: distribuire le librerie e gli avvisi di licenza richiesti dalla propria compilazione. La compilazione indipendente dei sorgenti Apple generati e i test di comportamento Swift su macOS richiedono, secondo il caso, Apple Clang, SDK e `swiftc`.
 
-Le firme Swift usano, nell’ordine, `--swift-demangle PATH`, `NEVERD_SWIFT_DEMANGLE`, `swift-demangle` in PATH. Su macOS l’ultimo tentativo automatico è `xcrun --find swift-demangle` con tempo limitato. Un percorso esplicito non disponibile causa errore; una ricerca automatica fallita conserva i simboli non classificati con `unavailable`. In assenza di simboli Swift non serve il demangler. `--metadata-only` non invoca né backend nativo né demangler.
+Il recupero delle firme Swift usa direttamente i nodi strutturati di `LLVMSwiftDemangle` nel processo C++. Non cerca né avvia eseguibili esterni di demangling o comandi per individuare la toolchain. La precedente opzione per il percorso dell’eseguibile è stata rimossa e la precedente variabile d’ambiente del demangler non viene più letta. `--metadata-only` non esegue né l’esportatore nativo dei sorgenti né il demangling delle firme.
+
+L’inventario delle firme in `metadata/swift-signatures.json` identifica il componente integrato così:
+
+```json
+{
+  "demangler": {
+    "name": "llvm-swift-demangle",
+    "execution": "builtin",
+    "version": "6.3.3"
+  }
+}
+```
 
 ```sh
-neverd mobile App.ipa -o recovered-swift \
-  --swift-demangle /path/to/swift-demangle --timeout=600 --json
+neverd mobile App.ipa -o recovered-swift --timeout=600 --json
 ```
 
 ## Input e selezione
@@ -43,7 +54,6 @@ Per i binari fat, `--arch=auto` preferisce arm64, arm, x86_64, poi i386. Slice a
 | `--artifact PATH` | Programma principale | Percorso eseguibile relativo al bundle |
 | `--metadata-only` | Disattivato | Solo metadati, senza recupero sorgenti o invocazione di strumenti |
 | `--max-func N` | `0` | Limite di funzioni native; zero significa tutte quelle scoperte; ignorato in modalità metadati |
-| `--swift-demangle PATH` | Ambiente/PATH/toolchain | Demangler delle firme Swift |
 | `--timeout N` | `300` | Budget totale positivo di analisi in secondi; i processi figli usano il tempo rimanente |
 | `--max-files N` | `20000` | Budget positivo di voci; anche l’inventario Swift è limitato |
 | `--max-bytes N` | `2147483648` | Budget positivo in byte per input, estrazione e output finale |
@@ -93,7 +103,7 @@ recovered-ios/
   report.json
 ```
 
-I file del linguaggio sorgente esistono soltanto se può essere emesso codice. `objc.json` contiene classi, categorie, ivar e codifiche grezze; `objc.h` le dichiarazioni supportate. `swift.json` contiene tipi nominali e simboli mangled. JSON di firme/metodi mantengono classificazione, omissioni, motivi e conteggi. I log comprendono diagnostica nativa e, quando usati, ricerca della toolchain, demangling ed export Swift nativo. I percorsi in `report.json` sono relativi alla sua directory. Il binario selezionato è un artefatto d’analisi, non viene collegato come ponte di recupero al codice generato.
+I file del linguaggio sorgente esistono soltanto se può essere emesso codice. `objc.json` contiene classi, categorie, ivar e codifiche grezze; `objc.h` le dichiarazioni supportate. `swift.json` contiene tipi nominali e simboli mangled. JSON di firme/metodi mantengono classificazione, omissioni, motivi e conteggi. I log contengono la diagnostica nativa e quella dell’export Swift nativo quando viene eseguito. Non vengono generati log di ricerca di toolchain Swift esterne o di demangling esterno. I percorsi in `report.json` sono relativi alla sua directory. Il binario selezionato è un artefatto d’analisi, non viene collegato come ponte di recupero al codice generato.
 
 Copie temporanee del pacchetto e JSON intermedi vengono rimossi. Una normale esecuzione senza corpi nativi fallisce anche con metadati disponibili. La modalità metadati produce soltanto slice selezionata, `objc.h`, `objc.json`, `swift.json`, `report.json`; mancano sorgenti e file di firme/copertura, mentre `native_function_count`, `objc_method_recovery`, `swift_method_recovery` sono `null`. Tutte le modalità usano i metadati Objective-C risolti dal loader nativo. I metadati Swift vengono letti dall’immagine nativa entro limiti verificati; fixup, layout rilocabili o riferimenti non supportati mantengono diagnosi di risultati parziali.
 
@@ -127,7 +137,7 @@ Questo rapporto illustrativo abbreviato mostra volutamente un recupero parziale:
 
 Lo `status: "success"` esterno indica pubblicazione dell’output validato. `recovered`, `partial`, `unrecovered`, `no-methods` descrivono l’inventario scoperto, non equivalenza semantica o completezza del programma originale. Ogni metodo non recuperato ha un motivo. Per Objective-C, `recovered` richiede anche metadati runtime completi. Un inventario vuoto non dimostra che non esistessero metodi.
 
-Il `coverage_status` Swift conta soltanto gli elementi invocabili classificati. Lo `status` Swift complessivo considera anche simboli ignoti e può essere `unavailable`, `unclassified`, `unsupported-architecture`, `no-symbols`. I metadati non invocabili compaiono in `non_method_symbols` con `not-callable`, quelli ignoti con `unclassified`. `types`, `type_metadata_count`, `source_type_count` contano separatamente metadati e unità di tipo emesse, senza gonfiare il numero di metodi.
+Il `coverage_status` Swift conta soltanto gli elementi invocabili classificati. Lo `status` Swift complessivo considera anche simboli ignoti e può essere `unclassified`, `unsupported-architecture`, `no-symbols`. I metadati non invocabili compaiono in `non_method_symbols` con `not-callable`, quelli ignoti con `unclassified`. `types`, `type_metadata_count`, `source_type_count` contano separatamente metadati e unità di tipo emesse, senza gonfiare il numero di metodi.
 
 Ogni riga Swift recuperata riporta `source_representation` con valore `native-method-body` oppure `compiler-generated-from-type`. Le proiezioni del compilatore conservano anche `compiler_projection_kind` e `compiler_projection_evidence`. `source_body_method_count` conta i corpi nativi recuperati; `compiler_projection_method_count` conta le proiezioni del compilatore dimostrate. La loro somma è `recovered_method_count`. Gli ingressi del compilatore rimangono nel denominatore `method_count` e conservano l’identità esatta in una sola unità sorgente `type` corrispondente. I soli metadati di tipo o il nome di una dipendenza non aumentano la copertura recuperata. Il JSON nativo in batch include `source` nelle righe del compilatore e nelle unità di tipo; i `source_units` del report mobile conservano soltanto descrizioni senza `source`, mentre il sorgente completo si trova in `sources/swift.swift`.
 
@@ -143,7 +153,7 @@ neverd export recovered-ios/artifacts/selected.macho \
   --source-signatures=recovered-ios/metadata/swift-signatures.json -o swift-batch.json
 ```
 
-L’export Swift consuma l’inventario strutturato generato da una normale esecuzione mobile con demangler. Il batch Objective-C include `native_source`, `native_function_count`, `objc_metadata` e, per metodo, sorgente C, nome, tipo di ritorno e parametri. Prima di `.m`, Mobile verifica ulteriormente dichiarazioni, corpi e layout: la copertura finale può essere inferiore a quella del C batch. Un export nativo riuscito può non contenere alcun metodo recuperato.
+L’export Swift consuma l’inventario strutturato di firme prodotto dal parser integrato durante una normale esecuzione mobile. Il batch Objective-C include `native_source`, `native_function_count`, `objc_metadata` e, per metodo, sorgente C, nome, tipo di ritorno e parametri. Prima di `.m`, Mobile verifica ulteriormente dichiarazioni, corpi e layout: la copertura finale può essere inferiore a quella del C batch. Un export nativo riuscito può non contenere alcun metodo recuperato.
 
 Per una sessione con Mach-O già caricato, `neverd_objc_methods_json(session, max_functions)` e `neverd_swift_methods_json(session, signatures_json, max_functions)` restituiscono i rapporti. Zero seleziona tutte le funzioni scoperte. Liberare le stringhe riuscite con `neverd_free_string`; `NULL` indica un errore spiegato nello stato della sessione. Le API non caricano contenitori IPA o `.app`.
 
@@ -169,4 +179,4 @@ Tutti e tre gli script supportano `--arch all|arm64|x86_64`, `--fixups both|clas
 
 La pubblicazione è transazionale: scegliere una directory nuova, controllare prima lo stato d’uscita e salvare altrove il JSON rediretto. Gli errori eliminano l’output temporaneo e preservano quello esistente. L’uscita non zero del backend include una coda di log limitata; timeout e budget hanno messaggi distinti. La CLI nativa restituisce zero in caso di successo e un valore non nullo in caso di errore. Con `--json`, gli errori gestiti includono `schema_version`, `status: "error"` ed `error`. Parsing degli argomenti, errori di avvio dell’eseguibile o delle librerie native e interruzioni possono essere segnalati soltanto su stderr. Controllare prima lo stato di uscita.
 
-Per slice cifrate fornire input leggibili; per architetture assenti controllare le slice disponibili; per Swift selezionare il demangler effettivo. Leggere motivi esatti e diagnostica dei metodi omessi. Aumentare `--max-func` aiuta soltanto le funzioni escluse dal limite. Layout, firme, header esterni, eccezioni o ABI mancanti richiedono implementazione o ulteriori metadati validi, non una dichiarazione di recupero completo. Conservare gli avvisi di licenza applicabili distribuendo strumenti o pacchetti generati.
+Per slice cifrate fornire input leggibili; per architetture assenti controllare le slice disponibili. Leggere motivi esatti e diagnostica dei metodi omessi. Aumentare `--max-func` aiuta soltanto le funzioni escluse dal limite. Layout, firme, header esterni, eccezioni o ABI mancanti richiedono implementazione o ulteriori metadati validi, non una dichiarazione di recupero completo. Conservare gli avvisi di licenza applicabili distribuendo strumenti o pacchetti generati.

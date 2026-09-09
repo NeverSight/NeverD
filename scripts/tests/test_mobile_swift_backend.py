@@ -30,7 +30,8 @@ class SwiftBackendAcceptanceTests(unittest.TestCase):
                          'status': 'recovered', 'source_representation': 'native-method-body'})
         return rows
 
-    def check(self, rows, *, original=None, lying_count=False, counts=None):
+    def check(self, rows, *, original=None, lying_count=False, counts=None,
+              demangler=None, demangle_logs=False):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary)
             (output / 'metadata').mkdir()
@@ -46,13 +47,29 @@ class SwiftBackendAcceptanceTests(unittest.TestCase):
             report = {'status': 'success', 'platform': 'ios', 'architecture': 'arm64', 'swift_method_recovery': coverage}
             (output / 'report.json').write_text(json.dumps(report))
             (output / 'metadata/swift-methods.json').write_text(json.dumps(coverage))
-            (output / 'metadata/swift-signatures.json').write_text(json.dumps({'methods': rows, 'symbols': []}))
+            inventory = {'methods': rows, 'symbols': [],
+                         'demangler': demangler if demangler is not None else
+                         {'name': 'llvm-swift-demangle', 'execution': 'builtin', 'version': '6.3.3'}}
+            if demangle_logs:
+                inventory['logs'] = ['swift-demangle-0000.log']
+            (output / 'metadata/swift-signatures.json').write_text(json.dumps(inventory))
             nm = '\n'.join(row['mangled_symbol'] for row in (rows if original is None else original))
             with patch.object(backend, 'run', return_value=nm):
                 return backend.validate_coverage(output, output / 'original', 'arm64')
 
     def test_complete_declared_and_callable_inventory_passes(self):
         self.assertEqual(self.check(self.reports())['method_count'], len(backend.DECLARATIONS))
+
+    def test_missing_or_external_demangler_cannot_pass(self):
+        for demangler in ({}, {'name': 'llvm-swift-demangle', 'execution': 'external', 'version': '6.3.3'},
+                          {'name': 'llvm-swift-demangle', 'execution': 'builtin', 'version': '0.0.0'},
+                          {'name': 'llvm-swift-demangle', 'execution': 'builtin', 'version': 123}):
+            with self.subTest(demangler=demangler), self.assertRaisesRegex(RuntimeError, 'builtin LLVM demangler'):
+                self.check(self.reports(), demangler=demangler)
+
+    def test_external_demangler_logs_cannot_pass(self):
+        with self.assertRaisesRegex(RuntimeError, 'external demangler/toolchain logs'):
+            self.check(self.reports(), demangle_logs=True)
 
     def test_compiler_callable_is_not_ignored_when_user_methods_pass(self):
         rows = self.reports()

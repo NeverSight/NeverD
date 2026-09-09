@@ -18,13 +18,24 @@ neverd mobile executable -o metadata --metadata-only
 neverd mobile App.app -o recovered-framework --artifact Frameworks/Example.framework/Example
 ```
 
-C++20을 지원하는 도구 체인으로 `neverd` 대상을 빌드합니다. 모바일 작업 흐름은 네이티브 CLI에 포함되며 Python 인터프리터를 호출하지 않습니다. 배포할 때 해당 빌드에 필요한 네이티브 라이브러리를 함께 제공하세요. macOS에서 생성된 Apple 언어 소스를 독립적으로 컴파일하려면 Apple Clang, SDK 및 Swift 도구 체인이 필요합니다. 이는 정적 분석과 별도의 요구 사항이며 선택적 외부 도구는 자동으로 다운로드하지 않습니다.
+C++20을 지원하는 도구 체인으로 `neverd` 대상을 빌드합니다. 모바일 작업 흐름은 네이티브 CLI 안에서 실행되며 Python 인터프리터가 필요하지 않습니다. Swift 서명 디맹글링은 NeverD LLVM fork의 `LLVMSwiftDemangle`이 제공합니다. fork의 소스 빌드와 호환되는 배포 LLVM 패키지 모두 이 구성 요소를 포함하므로 NeverD는 Swift 소스를 별도 의존성으로 가져오지 않습니다. NeverD를 빌드하거나 실행하는 데 Swift 컴파일러나 도구 체인을 설치할 필요는 없습니다. LLVM, Capstone 등의 네이티브 라이브러리 의존성은 유지되며, 배포 시 빌드에 필요한 라이브러리와 라이선스 고지를 포함해야 합니다. macOS에서 생성된 Apple 언어 소스를 독립적으로 컴파일하거나 Swift 동작 회귀 테스트를 실행할 때는 용도에 맞게 Apple Clang, SDK, `swiftc`가 필요합니다.
 
-Swift 서명 복원은 `--swift-demangle PATH`, `NEVERD_SWIFT_DEMANGLE`, PATH의 `swift-demangle` 순서로 도구를 선택합니다. macOS에서는 마지막으로 시간 제한이 있는 `xcrun --find swift-demangle`을 시도합니다. 명시적으로 설정한 도구가 없으면 실패하며, 자동 검색 실패 시 미분류 심볼을 유지하고 `unavailable`을 보고합니다. Swift 심볼이 없는 입력에는 demangler가 필요 없습니다. `--metadata-only`는 네이티브 백엔드와 demangler를 모두 호출하지 않습니다.
+Swift 서명 복원은 C++ 프로세스 안에서 `LLVMSwiftDemangle`의 구조화된 노드를 직접 사용합니다. 외부 디맹글링 실행 파일을 찾거나 시작하지 않으며 도구 체인 탐색 명령도 실행하지 않습니다. 기존 실행 파일 경로 옵션은 제거되었고 기존 디맹글러 환경 변수도 읽지 않습니다. `--metadata-only`는 네이티브 소스 내보내기나 서명 디맹글링을 실행하지 않습니다.
+
+`metadata/swift-signatures.json`의 서명 목록은 내장 구성 요소를 다음과 같이 기록합니다.
+
+```json
+{
+  "demangler": {
+    "name": "llvm-swift-demangle",
+    "execution": "builtin",
+    "version": "6.3.3"
+  }
+}
+```
 
 ```sh
-neverd mobile App.ipa -o recovered-swift \
-  --swift-demangle /path/to/swift-demangle --timeout=600 --json
+neverd mobile App.ipa -o recovered-swift --timeout=600 --json
 ```
 
 ## 입력과 선택
@@ -43,7 +54,6 @@ Fat 바이너리에서 `--arch=auto`는 arm64, arm, x86_64, i386 순으로 우�
 | `--artifact PATH` | 주 실행 파일 | 앱 기준 실행 파일 상대 경로 |
 | `--metadata-only` | 꺼짐 | 소스 복원이나 도구 호출 없이 메타데이터 읽기 |
 | `--max-func N` | `0` | 네이티브 함수 제한. 0은 발견한 모든 함수이며 메타데이터 모드에서는 무시 |
-| `--swift-demangle PATH` | 환경/PATH/도구 체인 | Swift 서명 demangler |
 | `--timeout N` | `300` | 전체 분석의 양수 시간 예산(초). 자식 프로세스는 남은 예산 사용 |
 | `--max-files N` | `20000` | 양의 항목 예산. Swift 심볼 목록도 제한 대상 |
 | `--max-bytes N` | `2147483648` | 입력, 압축 해제 데이터, 최종 출력의 양의 바이트 예산 |
@@ -93,7 +103,7 @@ recovered-ios/
   report.json
 ```
 
-소스 언어 파일은 코드를 출력할 수 있을 때만 존재합니다. `objc.json`은 클래스, 카테고리, ivar, 원시 메서드 인코딩을 저장하고 `objc.h`는 지원되는 선언을 담습니다. `swift.json`은 명목 타입과 맹글링된 심볼을 포함합니다. 서명/메서드 JSON은 분류, 생략, 이유, 개수를 유지합니다. 로그에는 네이티브 진단과 사용된 경우 Swift 도구 탐색·demangling·네이티브 Swift 내보내기 진단이 들어갑니다. `report.json`의 경로는 해당 디렉터리 기준입니다. 선택한 바이너리는 분석 산출물이며 생성 소스에 복원 브리지로 링크하지 않습니다.
+소스 언어 파일은 코드를 출력할 수 있을 때만 존재합니다. `objc.json`은 클래스, 카테고리, ivar, 원시 메서드 인코딩을 저장하고 `objc.h`는 지원되는 선언을 담습니다. `swift.json`은 명목 타입과 맹글링된 심볼을 포함합니다. 서명/메서드 JSON은 분류, 생략, 이유, 개수를 유지합니다. 로그에는 네이티브 진단과 실제 실행한 네이티브 Swift 내보내기의 진단이 포함됩니다. 외부 Swift 도구 체인 탐색이나 디맹글링 로그는 생성하지 않습니다. `report.json`의 경로는 해당 디렉터리 기준입니다. 선택한 바이너리는 분석 산출물이며 생성 소스에 복원 브리지로 링크하지 않습니다.
 
 임시 패키지 복사본과 중간 JSON을 삭제합니다. 일반 실행에서 네이티브 본문이 없으면 메타데이터가 있어도 실패합니다. 메타데이터 모드는 선택 파일, `objc.h`, `objc.json`, `swift.json`, `report.json`만 만들며 소스와 서명/메서드 범위 파일은 없습니다. `native_function_count`, `objc_method_recovery`, `swift_method_recovery`는 `null`. 모든 모드는 네이티브 로더가 해석한 Objective-C 메타데이터를 사용합니다. Swift 메타데이터는 범위를 확인한 네이티브 이미지 읽기를 사용하며 지원하지 않는 fixup, 재배치 가능 레이아웃 또는 참조는 부분 분석 진단을 유지합니다.
 
@@ -127,7 +137,7 @@ recovered-ios/
 
 바깥쪽 `status: "success"`는 검증한 출력을 게시했다는 뜻입니다. `recovered`, `partial`, `unrecovered`, `no-methods`는 발견한 목록에 대한 상태이며 의미 동등성이나 원 프로그램 완전성이 아닙니다. 각 미복원 메서드에는 이유가 있습니다. Objective-C의 `recovered`는 완전한 런타임 메타데이터도 요구합니다. 빈 목록이 메서드가 없었다는 증거는 아닙니다.
 
-Swift `coverage_status`는 분류된 호출 가능 항목만 셉니다. 전체 Swift `status`는 알 수 없는 심볼도 고려하여 `unavailable`, `unclassified`, `unsupported-architecture`, `no-symbols`일 수 있습니다. 호출 불가능 메타데이터는 `non_method_symbols`에 `not-callable`, 알 수 없는 심볼은 `unclassified`로 저장합니다. `types`, `type_metadata_count`, `source_type_count`는 타입 메타데이터와 출력 타입 단위를 별도로 세며 메서드 수를 부풀리는 데 사용하면 안 됩니다.
+Swift `coverage_status`는 분류된 호출 가능 항목만 셉니다. 전체 Swift `status`는 알 수 없는 심볼도 고려하여 `unclassified`, `unsupported-architecture`, `no-symbols`일 수 있습니다. 호출 불가능 메타데이터는 `non_method_symbols`에 `not-callable`, 알 수 없는 심볼은 `unclassified`로 저장합니다. `types`, `type_metadata_count`, `source_type_count`는 타입 메타데이터와 출력 타입 단위를 별도로 세며 메서드 수를 부풀리는 데 사용하면 안 됩니다.
 
 복원된 Swift 행의 `source_representation`은 `native-method-body` 또는 `compiler-generated-from-type`입니다. 컴파일러 투영에는 `compiler_projection_kind`와 `compiler_projection_evidence`도 보존합니다. `source_body_method_count`는 복원된 네이티브 메서드 본문 수, `compiler_projection_method_count`는 증명된 컴파일러 투영 수이며 합계는 `recovered_method_count`와 같습니다. 컴파일러 진입점도 `method_count` 분모에 남고 정확한 식별 정보가 대응하는 하나의 `type` 소스 단위에 포함되어야 합니다. 타입 메타데이터나 의존성 이름만으로 복원 수를 늘리지 않습니다. 네이티브 일괄 JSON의 컴파일러 행과 타입 단위에는 `source`가 있지만, mobile의 `source_units`는 `source` 없이 설명만 보존하며 전체 소스는 `sources/swift.swift`에 저장됩니다.
 
@@ -143,7 +153,7 @@ neverd export recovered-ios/artifacts/selected.macho \
   --source-signatures=recovered-ios/metadata/swift-signatures.json -o swift-batch.json
 ```
 
-Swift 내보내기는 demangler를 사용하는 일반 mobile 실행에서 만든 구조화 서명 목록을 받습니다. Objective-C 배치 JSON에는 `native_source`, `native_function_count`, `objc_metadata`와 메서드별 C 소스, 함수 이름, 반환 타입, 인자가 들어 있습니다. Mobile은 `.m` 생성 전에 선언·본문·배치를 추가 검증하므로 최종 범위가 C 배치보다 작을 수 있습니다. 네이티브 내보내기가 성공해도 복원 메서드가 하나도 없을 수 있습니다.
+Swift 내보내기는 일반 mobile 실행에서 내장 서명 파서가 생성한 구조화된 서명 목록을 받습니다. Objective-C 배치 JSON에는 `native_source`, `native_function_count`, `objc_metadata`와 메서드별 C 소스, 함수 이름, 반환 타입, 인자가 들어 있습니다. Mobile은 `.m` 생성 전에 선언·본문·배치를 추가 검증하므로 최종 범위가 C 배치보다 작을 수 있습니다. 네이티브 내보내기가 성공해도 복원 메서드가 하나도 없을 수 있습니다.
 
 Mach-O를 이미 로드한 세션에서 `neverd_objc_methods_json(session, max_functions)`, `neverd_swift_methods_json(session, signatures_json, max_functions)`가 보고서를 반환합니다. 0은 발견한 모든 함수입니다. 성공 문자열은 `neverd_free_string`으로 해제합니다. `NULL`은 실패이며 세션 오류에 이유가 있습니다. 이 API는 IPA/`.app` 컨테이너를 로드하지 않습니다.
 
@@ -169,4 +179,4 @@ macOS의 Objective-C 검증 스크립트는 원본 샘플을 컴파일하고 `.m
 
 게시는 트랜잭션 방식입니다. 새 디렉터리를 선택하고 종료 상태부터 확인하며 리디렉션 JSON은 그 밖에 저장하세요. 실패 시 임시 출력을 삭제하고 기존 결과를 보존합니다. 백엔드의 비정상 종료에는 제한된 로그 끝부분이 포함되며 시간 초과와 예산 초과는 별도 메시지입니다. 네이티브 CLI는 성공 시 0, 복구 실패 시 0이 아닌 값을 반환합니다. `--json`은 처리된 실패에 `schema_version`, `status: "error"`, `error`를 포함합니다. 인수 분석, 네이티브 실행 파일이나 라이브러리 시작 실패, 중단은 stderr로만 보고될 수 있습니다. 호출자는 먼저 종료 상태를 확인해야 합니다.
 
-암호화된 슬라이스에는 읽을 수 있는 입력을, 아키텍처 부재에는 사용 가능한 슬라이스 확인을, Swift 도구 부재에는 실제 demangler 선택을 적용하세요. 생략된 메서드의 정확한 이유와 메타데이터 진단을 확인합니다. `--max-func`를 늘리는 것은 개수 제한으로 제외된 함수에만 유효합니다. 배치·서명·외부 헤더·예외·ABI 지원 누락은 구현이나 추가 유효 메타데이터가 필요하며 완전 복원이라는 주장으로 해결되지 않습니다. 배포할 때 적용되는 의존성 라이선스 고지를 보존하세요.
+암호화된 슬라이스에는 읽을 수 있는 입력을 제공하고, 필요한 아키텍처가 없으면 사용 가능한 슬라이스를 확인하세요. 생략된 메서드의 정확한 이유와 메타데이터 진단을 확인합니다. `--max-func`를 늘리는 것은 개수 제한으로 제외된 함수에만 유효합니다. 배치·서명·외부 헤더·예외·ABI 지원 누락은 구현이나 추가 유효 메타데이터가 필요하며 완전 복원이라는 주장으로 해결되지 않습니다. 배포할 때 적용되는 의존성 라이선스 고지를 보존하세요.

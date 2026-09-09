@@ -152,7 +152,7 @@ cmake --build build
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DNEVERD_LLVM_PREBUILT=ON \
-  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r1
+  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r2
 cmake --build build
 ```
 
@@ -168,7 +168,9 @@ NeverD의 일반 push 및 pull request CI는 의도적으로 LLVM submodule을 �
 
 각 아카이브는 `~/.cache/neverd-llvm/<tag>/<arch>/`(또는 `NEVERD_LLVM_PREBUILT_CACHE_DIR`가 가리키는 경로)에 풀리기 전에 `cmake/NeverDLLVMPrebuilt.cmake`에 고정된 다이제스트와 대조됩니다. 그 pin이 설명하지 않는 tag라면 아카이브와 함께 공개된 `.sha256`과 대조합니다. 릴리스 빌드는 macOS와 Linux에서 ccache를, Windows clang-cl에서는 GitHub Actions 캐시를 백엔드로 하는 sccache를 사용합니다. 컴파일러 캐시는 재빌드를 빠르게 할 뿐 릴리스 자산으로 공개되지 않습니다.
 
-릴리스 tag는 NeverD 패키지의 버전을 나타내고, `BUILDINFO.txt`는 정확한 LLVM fork commit을 기록합니다. LLVM이 여전히 `23.0.0`을 보고하더라도 fork 소스가 바뀌었다면, 통상적인 불변 선택은 `neverd-llvm-v23.0.0-r1`(다음은 `-r2`) 같은 패키지 리비전이며, LLVM 자체의 patch 버전이 바뀌지 않는 한 `23.0.1`이 아닙니다. `NEVERD_LLVM_PREBUILT_TAG`를 그 새 리비전으로 지정하십시오.
+기본 패키지 리비전은 `neverd-llvm-v23.0.0-r2`입니다. 기존 빌드 디렉터리에 리비전 번호 없는 이전 tag나 `neverd-llvm-v23.0.0-r1`이 캐시되어 있으면 자동으로 `r2`로 이전합니다. `NEVERD_LLVM_PREBUILT_SHA256`을 명시적으로 제공한 경우에는 원래 tag를 유지합니다.
+
+릴리스 tag는 NeverD 패키지의 버전을 나타내고, `BUILDINFO.txt`는 정확한 LLVM fork commit을 기록합니다. LLVM이 여전히 `23.0.0`을 보고하더라도 fork 소스가 바뀌었다면, 통상적인 불변 선택은 `neverd-llvm-v23.0.0-r3`(다음은 `-r4`) 같은 패키지 리비전이며, LLVM 자체의 patch 버전이 바뀌지 않는 한 `23.0.1`이 아닙니다. `NEVERD_LLVM_PREBUILT_TAG`를 그 새 리비전으로 지정하십시오.
 
 다음 불변 package revision을 게시하려면 llvm-project의 `main` 브랜치에서 `NeverD LLVM Release` 워크플로를 실행하고 `overwrite_existing_assets`는 비활성화로 둡니다:
 
@@ -176,7 +178,7 @@ NeverD의 일반 push 및 pull request CI는 의도적으로 LLVM submodule을 �
 gh workflow run neverd-release.yml \
   --repo NeverSight/llvm-project \
   --ref main \
-  -f release_tag=neverd-llvm-v23.0.0-r2 \
+  -f release_tag=neverd-llvm-v23.0.0-r3 \
   -f overwrite_existing_assets=false
 ```
 

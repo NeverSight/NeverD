@@ -18,13 +18,24 @@ neverd mobile executable -o metadata --metadata-only
 neverd mobile App.app -o recovered-framework --artifact Frameworks/Example.framework/Example
 ```
 
-Build the `neverd` target with C++20 support. The mobile workflow is compiled into the native CLI and does not use a Python interpreter. Distribute the executable with the native libraries required by your build. Apple Clang, the SDK, and the Swift toolchain are needed to independently compile generated Apple-language source on macOS. They are separate from static analysis; optional external tools are not downloaded automatically.
+Build the `neverd` target with C++20 support. The mobile workflow runs in the native CLI without a Python interpreter. Swift signature demangling comes from `LLVMSwiftDemangle` in the NeverD LLVM fork; both source builds and matching published LLVM packages include this component. NeverD does not fetch a separate Swift source dependency. Building and running NeverD require no installed Swift compiler or toolchain. LLVM, Capstone, and other native library dependencies still apply; distribute the libraries and license notices required by your build. Independently compiling generated Apple-language source and running the Swift behavior tests on macOS require Apple Clang, the SDK, and `swiftc` as appropriate.
 
-Swift signature recovery selects `--swift-demangle PATH`, then `NEVERD_SWIFT_DEMANGLE`, then `swift-demangle` on PATH. On macOS, a bounded `xcrun --find swift-demangle` lookup is the final automatic fallback. An explicitly configured missing tool fails; an unavailable automatic tool leaves Swift symbols unclassified and reports `unavailable`. Inputs without Swift symbols require no demangler. `--metadata-only` invokes neither the native backend nor a demangler.
+Swift signature recovery consumes structured nodes from `LLVMSwiftDemangle` directly inside the C++ process. It does not locate or start an external demangling executable or toolchain discovery command. The former executable-path option is removed, and the former demangler environment variable is not read. `--metadata-only` invokes neither the native source exporter nor signature demangling.
+
+The signature inventory in `metadata/swift-signatures.json` records the built-in component as:
+
+```json
+{
+  "demangler": {
+    "name": "llvm-swift-demangle",
+    "execution": "builtin",
+    "version": "6.3.3"
+  }
+}
+```
 
 ```sh
-neverd mobile App.ipa -o recovered-swift \
-  --swift-demangle /path/to/swift-demangle --timeout=600 --json
+neverd mobile App.ipa -o recovered-swift --timeout=600 --json
 ```
 
 ## Inputs and selection
@@ -43,7 +54,6 @@ For fat binaries, `--arch=auto` prefers arm64, arm, x86_64, then i386. Missing o
 | `--artifact PATH` | Main executable | Application-relative executable path |
 | `--metadata-only` | Off | Read metadata without source recovery or tool invocation |
 | `--max-func N` | `0` | Native function limit; zero means all discovered functions; ignored in metadata-only mode |
-| `--swift-demangle PATH` | Environment/PATH/toolchain | Swift signature demangler |
 | `--timeout N` | `300` | Positive total analysis budget in seconds; child processes use the remaining budget |
 | `--max-files N` | `20000` | Positive entry budget; Swift symbol inventory is also bounded |
 | `--max-bytes N` | `2147483648` | Positive input, extracted-data, and final-output byte budget |
@@ -93,7 +103,7 @@ recovered-ios/
   report.json
 ```
 
-Source-language files exist only when source can be emitted. `objc.json` contains classes, categories, ivars, and raw method encodings; `objc.h` contains supported declarations. `swift.json` contains nominal-type metadata and mangled symbols. Signature and method JSON files preserve classification, omissions, reasons, and counts. Logs include native diagnostics and, when used, Swift toolchain discovery, demangling, and native Swift export diagnostics. Output paths in `report.json` are relative to its directory. The selected binary is an analysis artifact; generated source does not link it as a recovery bridge.
+Source-language files exist only when source can be emitted. `objc.json` contains classes, categories, ivars, and raw method encodings; `objc.h` contains supported declarations. `swift.json` contains nominal-type metadata and mangled symbols. Signature and method JSON files preserve classification, omissions, reasons, and counts. Logs contain native diagnostics and native Swift export diagnostics when that export runs. There are no external Swift toolchain-discovery or demangling logs. Output paths in `report.json` are relative to its directory. The selected binary is an analysis artifact; generated source does not link it as a recovery bridge.
 
 Temporary package copies and intermediate backend JSON are removed. A normal run with no native function bodies fails even when metadata exists. Metadata-only output contains the selected artifact, `objc.h`, `objc.json`, `swift.json`, and `report.json`; source directories and method-coverage/signature files are absent, and `native_function_count`, `objc_method_recovery`, and `swift_method_recovery` are `null`. All modes use the native loader’s resolved Objective-C metadata. Swift metadata uses bounded native-image reads; unsupported fixups, relocatable layouts, or references retain partial diagnostics.
 
@@ -127,7 +137,7 @@ A shortened illustrative report deliberately shows partial recovery:
 
 Outer `status: "success"` means validated output was published. Method coverage `recovered`, `partial`, `unrecovered`, or `no-methods` describes the discovered inventory, not semantic equivalence or original-program completeness. Every unrecovered method has a reason. Objective-C `recovered` additionally requires complete runtime metadata. An empty inventory cannot prove there were no methods.
 
-Swift `coverage_status` counts classified callables only. Overall Swift `status` also accounts for unknown symbols and can be `unavailable`, `unclassified`, `unsupported-architecture`, or `no-symbols`. Non-callable metadata is listed under `non_method_symbols` with `not-callable`; unknown symbols use `unclassified`. `types`, `type_metadata_count`, and `source_type_count` count type metadata/emitted type units independently and must not inflate method counts.
+Swift `coverage_status` counts classified callables only. Overall Swift `status` also accounts for unknown symbols and can be `unclassified`, `unsupported-architecture`, or `no-symbols`. Non-callable metadata is listed under `non_method_symbols` with `not-callable`; unknown symbols use `unclassified`. `types`, `type_metadata_count`, and `source_type_count` count type metadata/emitted type units independently and must not inflate method counts.
 
 Each recovered Swift row reports `source_representation` as `native-method-body` or `compiler-generated-from-type`. Compiler projections also retain `compiler_projection_kind` and `compiler_projection_evidence`. `source_body_method_count` counts recovered native method bodies; `compiler_projection_method_count` counts proven compiler projections. Their sum equals `recovered_method_count`. Compiler entries remain in the `method_count` denominator and retain their exact identity in one corresponding `type` source unit. Neither type metadata nor a dependency name alone increases recovered coverage. Native batch JSON includes `source` on compiler rows and type units; mobile `source_units` retain descriptions without `source`, and the complete source is in `sources/swift.swift`.
 
@@ -143,7 +153,7 @@ neverd export recovered-ios/artifacts/selected.macho \
   --source-signatures=recovered-ios/metadata/swift-signatures.json -o swift-batch.json
 ```
 
-Swift export consumes the structured signature inventory produced by a normal mobile run with a demangler. Objective-C batch JSON includes `native_source`, `native_function_count`, `objc_metadata`, and per-method C source, function name, return type, and parameters. Mobile performs further declaration/body/layout checks before generating `.m`, so its final method coverage can be narrower than batch C coverage. A successful native export can contain no recovered methods.
+Swift export consumes the structured signature inventory produced by the built-in signature parser during a normal mobile run. Objective-C batch JSON includes `native_source`, `native_function_count`, `objc_metadata`, and per-method C source, function name, return type, and parameters. Mobile performs further declaration/body/layout checks before generating `.m`, so its final method coverage can be narrower than batch C coverage. A successful native export can contain no recovered methods.
 
 For an already loaded Mach-O session, `neverd_objc_methods_json(session, max_functions)` and `neverd_swift_methods_json(session, signatures_json, max_functions)` return the corresponding reports. Zero selects all discovered functions. Free successful strings with `neverd_free_string`; `NULL` indicates failure and the session error explains it. These APIs do not load IPA or `.app` containers.
 
@@ -169,4 +179,4 @@ All three scripts support `--arch all|arm64|x86_64`, `--fixups both|classic|defa
 
 Publication is transactional: choose a new output directory, inspect process exit status first, and keep redirected JSON outside that directory. Failures remove staged output and preserve existing output. Backend nonzero exits include a bounded log tail; timeouts and budget failures have separate messages. Successful native CLI runs return zero. Recovery failures return nonzero; `--json` reports handled failures with `schema_version`, `status: "error"`, and `error`. Argument parsing, native executable or library startup failures, and interruptions can instead report on stderr. Consumers must inspect the exit status first.
 
-For an encrypted slice, supply readable input; for an absent architecture, inspect available slices; for missing Swift tools, select the actual demangler; for omitted methods, read their exact reasons and metadata diagnostics. Increasing `--max-func` helps only functions excluded by the limit. Missing layouts, signatures, external headers, exception support, or unsupported ABI behavior require implementation or additional valid metadata, not a claim of complete recovery. Preserve applicable dependency license notices when distributing tools or generated packages.
+For an encrypted slice, supply readable input; for an absent architecture, inspect available slices; for omitted methods, read their exact reasons and metadata diagnostics. Increasing `--max-func` helps only functions excluded by the limit. Missing layouts, signatures, external headers, exception support, or unsupported ABI behavior require implementation or additional valid metadata, not a claim of complete recovery. Preserve applicable dependency license notices when distributing tools or generated packages.

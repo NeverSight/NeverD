@@ -156,7 +156,7 @@ cmake --build build
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DNEVERD_LLVM_PREBUILT=ON \
-  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r1
+  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r2
 cmake --build build
 ```
 
@@ -172,7 +172,9 @@ NeverD 常规的 push 与 pull request CI 刻意从源码编译 LLVM submodule�
 
 每个压缩包在解压到 `~/.cache/neverd-llvm/<tag>/<arch>/`（或 `NEVERD_LLVM_PREBUILT_CACHE_DIR` 指定的路径）之前，都会与 `cmake/NeverDLLVMPrebuilt.cmake` 中钉住的摘要核对；若 tag 不在这些 pin 的描述范围内，则与随包发布的 `.sha256` 核对。发布构建在 macOS 与 Linux 上使用 ccache，Windows clang-cl 使用 sccache 配合 GitHub Actions 缓存后端；编译器缓存只加速重建，从不作为发布产物上传。
 
-发布 tag 标识 NeverD 包的版本，`BUILDINFO.txt` 记录确切的 LLVM fork commit。若 LLVM 仍报告 `23.0.0` 但 fork 源码已变，常规的不可变做法是发布包修订版，如 `neverd-llvm-v23.0.0-r1`（再 `-r2`），而不是 `23.0.1`——除非 LLVM 自身的 patch 版本变了。把 `NEVERD_LLVM_PREBUILT_TAG` 指向该新修订版即可。
+默认包修订版为 `neverd-llvm-v23.0.0-r2`。已有构建目录若仍缓存旧的无修订号 tag 或 `neverd-llvm-v23.0.0-r1`，会自动迁移到 `r2`；显式提供 `NEVERD_LLVM_PREBUILT_SHA256` 时则保留原 tag。
+
+发布 tag 标识 NeverD 包的版本，`BUILDINFO.txt` 记录确切的 LLVM fork commit。若 LLVM 仍报告 `23.0.0` 但 fork 源码已变，常规的不可变做法是发布包修订版，如 `neverd-llvm-v23.0.0-r3`（再 `-r4`），而不是 `23.0.1`——除非 LLVM 自身的 patch 版本变了。把 `NEVERD_LLVM_PREBUILT_TAG` 指向该新修订版即可。
 
 要发布下一个不可变包修订版，从 llvm-project 的 `main` 分支运行 `NeverD LLVM Release` 工作流，并保持 `overwrite_existing_assets` 关闭：
 
@@ -180,7 +182,7 @@ NeverD 常规的 push 与 pull request CI 刻意从源码编译 LLVM submodule�
 gh workflow run neverd-release.yml \
   --repo NeverSight/llvm-project \
   --ref main \
-  -f release_tag=neverd-llvm-v23.0.0-r2 \
+  -f release_tag=neverd-llvm-v23.0.0-r3 \
   -f overwrite_existing_assets=false
 ```
 

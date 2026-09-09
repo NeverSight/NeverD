@@ -18,13 +18,24 @@ neverd mobile executable -o metadata --metadata-only
 neverd mobile App.app -o recovered-framework --artifact Frameworks/Example.framework/Example
 ```
 
-C++20 対応のツールチェーンで `neverd` ターゲットをビルドします。モバイル処理はネイティブ CLI に組み込まれており、Python インタープリターを呼び出しません。配布時は、そのビルドが必要とするネイティブライブラリを添付してください。生成した Apple 言語のソースを macOS で独立してコンパイルするには Apple Clang、SDK、Swift ツールチェーンが必要です。静的解析とは別の要件であり、任意の外部ツールは自動ダウンロードされません。
+C++20 対応のツールチェーンで `neverd` ターゲットをビルドします。モバイル処理はネイティブ CLI 内で動作し、Python インタープリターを必要としません。Swift 署名のデマングルには NeverD LLVM fork の `LLVMSwiftDemangle` を使います。このコンポーネントは fork のソースビルドと対応する配布 LLVM パッケージの両方に含まれ、NeverD が Swift ソースを別途取得することはありません。NeverD のビルドと実行に Swift コンパイラーやツールチェーンのインストールは不要です。LLVM、Capstone などのネイティブライブラリへの依存は引き続き存在するため、必要なライブラリとライセンス通知を配布してください。macOS で生成した Apple 言語のソースを独立してコンパイルし、Swift の動作回帰テストを実行する場合には、用途に応じて Apple Clang、SDK、`swiftc` が必要です。
 
-Swift の署名復元は `--swift-demangle PATH`、`NEVERD_SWIFT_DEMANGLE`、PATH の `swift-demangle` の順で選択します。macOS では最後に時間制限付きの `xcrun --find swift-demangle` を試します。明示指定したツールがなければ失敗し、自動検索で見つからなければ未分類シンボルを残して `unavailable` と報告します。Swift シンボルがない入力には demangler は不要です。`--metadata-only` はネイティブバックエンドも demangler も呼びません。
+Swift 署名の復元は、C++ プロセス内で `LLVMSwiftDemangle` の構造化ノードを直接利用します。外部のデマングル実行ファイルの検索・起動や、ツールチェーン探索コマンドの実行は行いません。従来の実行ファイルパス指定オプションは削除され、従来のデマングラー環境変数も読み取りません。`--metadata-only` はネイティブのソースエクスポーターも署名のデマングルも実行しません。
+
+`metadata/swift-signatures.json` の署名一覧には、内蔵コンポーネントが次のように記録されます。
+
+```json
+{
+  "demangler": {
+    "name": "llvm-swift-demangle",
+    "execution": "builtin",
+    "version": "6.3.3"
+  }
+}
+```
 
 ```sh
-neverd mobile App.ipa -o recovered-swift \
-  --swift-demangle /path/to/swift-demangle --timeout=600 --json
+neverd mobile App.ipa -o recovered-swift --timeout=600 --json
 ```
 
 ## 入力と選択
@@ -43,7 +54,6 @@ Fat バイナリの `--arch=auto` は arm64、arm、x86_64、i386 の順に優�
 | `--artifact PATH` | メイン実行ファイル | アプリ基準の実行ファイル相対パス |
 | `--metadata-only` | 無効 | ソース復元やツール呼び出しをせずメタデータを読む |
 | `--max-func N` | `0` | ネイティブ関数上限。ゼロは検出した全関数。メタデータモードでは無視 |
-| `--swift-demangle PATH` | 環境/PATH/ツールチェーン | Swift 署名 demangler |
 | `--timeout N` | `300` | 解析全体の正の時間上限（秒）。子プロセスには残りの時間を割り当てる |
 | `--max-files N` | `20000` | 正の項目数予算。Swift シンボル一覧も制限対象 |
 | `--max-bytes N` | `2147483648` | 入力、展開データ、最終出力の正のバイト予算 |
@@ -93,7 +103,7 @@ recovered-ios/
   report.json
 ```
 
-ソース言語のファイルはコードを出力できる場合だけ存在します。`objc.json` はクラス、カテゴリ、ivar、生のメソッド型記述を、`objc.h` は対応する宣言を保存します。`swift.json` は名義型メタデータと mangled シンボルです。署名/メソッド JSON は分類、省略、理由、件数を保持します。ログはネイティブ診断と、利用した場合の Swift ツール検索・demangling・ネイティブ Swift エクスポート診断を含みます。`report.json` の出力パスは同じディレクトリ基準です。選択バイナリは解析成果物であり、生成コードの復元ブリッジとしてリンクしません。
+ソース言語のファイルはコードを出力できる場合だけ存在します。`objc.json` はクラス、カテゴリ、ivar、生のメソッド型記述を、`objc.h` は対応する宣言を保存します。`swift.json` は名義型メタデータと mangled シンボルです。署名/メソッド JSON は分類、省略、理由、件数を保持します。ログにはネイティブ診断と、実行された場合のネイティブ Swift エクスポート診断が含まれます。外部 Swift ツールチェーンの探索やデマングルのログは生成されません。`report.json` の出力パスは同じディレクトリ基準です。選択バイナリは解析成果物であり、生成コードの復元ブリッジとしてリンクしません。
 
 パッケージの一時コピーと中間 JSON は削除します。通常実行でネイティブ本体がなければ、メタデータがあっても失敗します。メタデータモードは選択ファイル、`objc.h`、`objc.json`、`swift.json`、`report.json` のみを生成し、ソースや署名/メソッドカバレッジはありません。`native_function_count`、`objc_method_recovery`、`swift_method_recovery` は `null`。すべてのモードで、ネイティブローダーが解決した Objective-C メタデータを使用します。Swift メタデータは範囲を検証したネイティブイメージ読み取りを使用し、未対応の fixup、再配置可能レイアウト、参照には部分的な解析の診断が残ります。
 
@@ -127,7 +137,7 @@ recovered-ios/
 
 外側の `status: "success"` は検証済み出力の公開を意味します。`recovered`、`partial`、`unrecovered`、`no-methods` は検出一覧に対する状態であり、意味的同等性や元プログラムの完全性ではありません。未復元メソッドには理由があります。Objective-C の `recovered` はランタイムメタデータの完全性も必要です。空一覧はメソッドが存在しなかった証拠にはなりません。
 
-Swift の `coverage_status` は分類済みの呼び出し可能項目のみを数えます。全体の Swift `status` は未知シンボルも考慮し、`unavailable`、`unclassified`、`unsupported-architecture`、`no-symbols` になる場合があります。呼び出せないメタデータは `non_method_symbols` に `not-callable`、未知項目は `unclassified` として保存します。`types`、`type_metadata_count`、`source_type_count` は型情報と出力型単位を別に数え、メソッド数を増やす用途には使いません。
+Swift の `coverage_status` は分類済みの呼び出し可能項目のみを数えます。全体の Swift `status` は未知シンボルも考慮し、`unclassified`、`unsupported-architecture`、`no-symbols` になる場合があります。呼び出せないメタデータは `non_method_symbols` に `not-callable`、未知項目は `unclassified` として保存します。`types`、`type_metadata_count`、`source_type_count` は型情報と出力型単位を別に数え、メソッド数を増やす用途には使いません。
 
 復元済み Swift 行の `source_representation` は `native-method-body` または `compiler-generated-from-type` です。コンパイラー投影には `compiler_projection_kind` と `compiler_projection_evidence` も残します。`source_body_method_count` は復元したネイティブメソッド本体、`compiler_projection_method_count` は証明済みのコンパイラー投影を数え、合計は `recovered_method_count` と一致します。コンパイラーのエントリーも `method_count` の分母に残り、正確な識別情報を対応する一つの `type` ソース単位に記録します。型メタデータや依存先の名前だけで復元数を増やすことはありません。ネイティブの一括 JSON ではコンパイラーの行と型単位に `source` を含みますが、mobile の `source_units` は説明のみを保持して `source` を含まず、完全なソースは `sources/swift.swift` に保存されます。
 
@@ -143,7 +153,7 @@ neverd export recovered-ios/artifacts/selected.macho \
   --source-signatures=recovered-ios/metadata/swift-signatures.json -o swift-batch.json
 ```
 
-Swift エクスポートは demangler を使った通常の mobile 実行が生成する構造化署名一覧を受け取ります。Objective-C バッチ JSON は `native_source`、`native_function_count`、`objc_metadata` と、各メソッドの C ソース、関数名、戻り型、引数を含みます。Mobile は `.m` の前に宣言、本体、配置を追加検証するため、最終カバレッジは C バッチより狭くなる場合があります。ネイティブエクスポート成功時も復元メソッドがゼロの場合があります。
+Swift エクスポートは、通常の mobile 実行で内蔵の署名パーサーが生成した構造化署名一覧を受け取ります。Objective-C バッチ JSON は `native_source`、`native_function_count`、`objc_metadata` と、各メソッドの C ソース、関数名、戻り型、引数を含みます。Mobile は `.m` の前に宣言、本体、配置を追加検証するため、最終カバレッジは C バッチより狭くなる場合があります。ネイティブエクスポート成功時も復元メソッドがゼロの場合があります。
 
 Mach-O 読み込み済みセッションでは `neverd_objc_methods_json(session, max_functions)` と `neverd_swift_methods_json(session, signatures_json, max_functions)` が対応するレポートを返します。ゼロは検出した全関数です。返された文字列は `neverd_free_string` で解放してください。`NULL` は失敗で、理由はセッションエラーにあります。これらの API は IPA/`.app` コンテナを読み込みません。
 
@@ -169,4 +179,4 @@ macOS の Objective-C 検証スクリプトは元のサンプルをコンパイ�
 
 公開はトランザクション方式です。新規ディレクトリを選び、最初に終了状態を確認し、リダイレクトする JSON はその外に置いてください。失敗時は一時出力を削除し既存結果を保持します。バックエンドの非ゼロ終了は制限付きログ末尾を含み、タイムアウトと予算超過には個別のメッセージがあります。ネイティブ CLI は成功時にゼロ、復元失敗時に非ゼロを返します。`--json` では処理済みの失敗に `schema_version`、`status: "error"`、`error` が含まれます。引数解析、ネイティブ実行ファイルやライブラリの起動失敗、中断は stderr のみで報告される場合があります。まず終了状態を確認してください。
 
-暗号化スライスには読み取り可能な入力を、架構不足には利用可能スライスの確認を、Swift ツール不足には実在する demangler の指定を行ってください。省略メソッドの正確な理由とメタデータ診断を確認します。`--max-func` の増加が有効なのは上限で除外された関数だけです。配置、署名、外部ヘッダー、例外、ABI 対応不足には実装や追加の有効メタデータが必要で、完全復元という主張では解消しません。配布時には適用される依存ライセンス通知を保持してください。
+暗号化スライスには読み取り可能な入力を用意し、必要なアーキテクチャが見つからない場合は利用可能なスライスを確認してください。省略メソッドの正確な理由とメタデータ診断を確認します。`--max-func` の増加が有効なのは上限で除外された関数だけです。配置、署名、外部ヘッダー、例外、ABI 対応不足には実装や追加の有効メタデータが必要で、完全復元という主張では解消しません。配布時には適用される依存ライセンス通知を保持してください。

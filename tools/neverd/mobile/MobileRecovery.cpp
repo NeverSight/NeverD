@@ -74,10 +74,9 @@ llvm::json::Object recover(const Options &requested) {
     options.platform = detectPlatform(options.input);
   if (options.platform == "android" &&
       (options.metadata_only || options.artifact ||
-       options.architecture != "auto" || options.max_functions ||
-       options.swift_demangle))
-    throw Error("--metadata-only, --artifact, --arch, --max-func and "
-                "--swift-demangle apply only to iOS");
+       options.architecture != "auto" || options.max_functions))
+    throw Error("--metadata-only, --artifact, --arch and --max-func "
+                "apply only to iOS");
   if (options.platform == "ios" && options.jadx)
     throw Error("--jadx applies only to Android");
   fs::create_directories(options.output.parent_path());

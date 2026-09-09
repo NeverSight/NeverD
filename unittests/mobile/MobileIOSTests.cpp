@@ -160,22 +160,7 @@ std::pair<Object, Object> swiftFixture(bool alias = false) {
                  {"types", Array{}},
                  {"limitations", Array{}}}};
 }
-const char *plainTree = R"(kind=Global
-  kind=Function
-    kind=Module, text="Demo"
-    kind=Identifier, text="answer"
-    kind=LabelList
-    kind=Type
-      kind=FunctionType
-        kind=ArgumentTuple
-          kind=Type
-            kind=Tuple
-        kind=ReturnType
-          kind=Type
-            kind=Structure
-              kind=Module, text="Swift"
-              kind=Identifier, text="Int32"
-)";
+
 } // namespace
 TEST(MobileIOSNative, SelectsBothFatWidthsAndExplicitArchitecture) {
   for (bool wide : {false, true}) {
@@ -391,33 +376,55 @@ TEST(MobileIOSNative, IvarOffsetsAndSuperclassRemainInHeader) {
   EXPECT_NE(h.find("long long value;"), h.npos);
 }
 TEST(MobileIOSNative, ParsesStructuredSwiftFunction) {
-  auto s = swiftSignature("0x1000", "$s4Demo6answerys5Int32VF", plainTree);
+  auto s = swiftSignature("0x1000", "$s4Demo6answers5Int32VyF");
   EXPECT_EQ(str(s, "status"), "supported");
   EXPECT_EQ(str(s, "classification"), "callable");
   EXPECT_EQ(str(s, "name"), "answer");
   ASSERT_TRUE(s.getObject("return_type"));
   EXPECT_EQ(number(*s.getObject("return_type"), "bits"), 32);
 }
-TEST(MobileIOSNative, RetainsUnsupportedSwiftCallableAndMalformedTree) {
-  auto s = swiftSignature("0x1000", "$s4Demo6answerys5Int32VF",
-                          "kind=Global\n  kind=ReadAccessor\n");
+TEST(MobileIOSNative, RetainsUnsupportedSwiftCallableAndMalformedSymbol) {
+  auto s = swiftSignature("0x1000", "$s4Demo3BoxC5values5Int64Vvr");
   EXPECT_EQ(str(s, "classification"), "callable");
   EXPECT_EQ(str(s, "status"), "unsupported");
-  s = swiftSignature("0x1000", "$s4Demo6answerys5Int32VF",
-                     "kind=Global\n   kind=Function\n");
+  s = swiftSignature("0x1000", "$s4Demo6answers5Int32Vy");
   EXPECT_EQ(str(s, "classification"), "unknown");
   EXPECT_FALSE(str(s, "reason").empty());
 }
 TEST(MobileIOSNative, SwiftCompilerEntryRequiresSeparateNativeProof) {
-  auto s =
-      swiftSignature("0x1000", "$s4Demo3BoxCMa",
-                     "kind=Global\n  kind=TypeMetadataAccessFunction\n    "
-                     "kind=Type\n      kind=Class\n        kind=Module, "
-                     "text=\"Demo\"\n        kind=Identifier, text=\"Box\"\n");
+  auto s = swiftSignature("0x1000", "$s4Demo3BoxCMa");
   EXPECT_EQ(str(s, "status"), "unsupported");
   EXPECT_TRUE(flag(s, "requires_runtime_source_proof"));
   EXPECT_EQ(str(s, "runtime_source_kind"), "type_metadata_accessor");
   EXPECT_EQ(str(s, "context_name"), "Box");
+}
+TEST(MobileIOSNative, EmptyAndUnsupportedSwiftSlicesRetainBuiltinIdentity) {
+  for (unsigned pointer_size : {4u, 8u}) {
+    TemporaryDirectory directory;
+    Options options;
+    options.executable = "deliberately-unavailable-native-tool";
+    Array symbols;
+    if (pointer_size == 4)
+      symbols.push_back(
+          Object{{"name", "$s4Demo6answers5Int32VyF"}, {"address", "0x1000"}});
+    Budget budget;
+    auto result =
+        swiftSources(options, directory.path, directory.path / "unused-binary",
+                     symbols, pointer_size, budget);
+    auto stored = parseJSON(
+        readFile(directory.path / "metadata/swift-signatures.json", 65536),
+        "Swift signatures");
+    const auto &inventory = object(stored, "Swift signatures");
+    auto *demangler = inventory.getObject("demangler");
+    ASSERT_NE(demangler, nullptr);
+    EXPECT_EQ(str(*demangler, "execution"), "builtin");
+    EXPECT_EQ(str(*demangler, "name"), "llvm-swift-demangle");
+    EXPECT_EQ(number(inventory, "symbol_count"), pointer_size == 4 ? 1 : 0);
+    EXPECT_FALSE(inventory.get("logs"));
+    EXPECT_FALSE(fs::exists(directory.path / "logs"));
+    EXPECT_EQ(str(result.coverage, "status"),
+              pointer_size == 4 ? "unsupported-architecture" : "no-symbols");
+  }
 }
 TEST(MobileIOSNative, SameEntryDistinctSwiftSymbolsHaveSeparateCoverage) {
   auto [inventory, batch] = swiftFixture(true);
@@ -576,7 +583,6 @@ TEST(MobileIOSNative, MetadataOnlyAppUsesAppRelativeArtifactWithoutTools) {
   options.metadata_only = true;
   options.artifact = "Frameworks/Inside";
   options.executable = "deliberately-unavailable-native-tool";
-  options.swift_demangle = "deliberately-unavailable-symbol-tool";
   Budget budget;
   auto staging = directory.path / "output";
   fs::create_directory(staging);

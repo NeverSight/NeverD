@@ -157,7 +157,7 @@ cmake --build build
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DNEVERD_LLVM_PREBUILT=ON \
-  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r1
+  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r2
 cmake --build build
 ```
 
@@ -173,7 +173,9 @@ cmake --build build
 
 Каждый архив сверяется с дайджестом, закреплённым в `cmake/NeverDLLVMPrebuilt.cmake`, — или с опубликованным рядом `.sha256`, если тег этими пинами не описан, — прежде чем распаковаться в `~/.cache/neverd-llvm/<tag>/<arch>/` (или по пути из `NEVERD_LLVM_PREBUILT_CACHE_DIR`). Релизная сборка использует ccache на macOS и Linux; сборки clang-cl на Windows используют sccache с кэшем GitHub Actions в качестве backend. Кэши компилятора лишь ускоряют пересборку и никогда не публикуются как артефакты релиза.
 
-Тег релиза версионирует пакет NeverD, а `BUILDINFO.txt` фиксирует точный commit форка LLVM. Если LLVM по-прежнему сообщает `23.0.0`, но исходники форка изменились, обычный неизменяемый выбор — ревизия пакета вроде `neverd-llvm-v23.0.0-r1` (затем `-r2`), а не `23.0.1`, если только не изменилась собственная patch-версия LLVM. Направьте `NEVERD_LLVM_PREBUILT_TAG` на эту новую ревизию.
+Ревизия пакета по умолчанию — `neverd-llvm-v23.0.0-r2`. Существующие каталоги сборки, сохраняющие старый тег без номера ревизии или `neverd-llvm-v23.0.0-r1`, автоматически переходят на `r2`. Если `NEVERD_LLVM_PREBUILT_SHA256` задан явно, исходный тег сохраняется.
+
+Тег релиза версионирует пакет NeverD, а `BUILDINFO.txt` фиксирует точный commit форка LLVM. Если LLVM по-прежнему сообщает `23.0.0`, но исходники форка изменились, обычный неизменяемый выбор — ревизия пакета вроде `neverd-llvm-v23.0.0-r3` (затем `-r4`), а не `23.0.1`, если только не изменилась собственная patch-версия LLVM. Направьте `NEVERD_LLVM_PREBUILT_TAG` на эту новую ревизию.
 
 Чтобы опубликовать следующую неизменяемую ревизию, запустите workflow `NeverD LLVM Release` из ветки `main` репозитория llvm-project, оставив `overwrite_existing_assets` выключенным:
 
@@ -181,7 +183,7 @@ cmake --build build
 gh workflow run neverd-release.yml \
   --repo NeverSight/llvm-project \
   --ref main \
-  -f release_tag=neverd-llvm-v23.0.0-r2 \
+  -f release_tag=neverd-llvm-v23.0.0-r3 \
   -f overwrite_existing_assets=false
 ```
 

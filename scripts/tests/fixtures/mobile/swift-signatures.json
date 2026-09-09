@@ -1,0 +1,1750 @@
+{
+  "schema_version": 1,
+  "description": "Structured signatures from the independently compiled SwiftBehavior fixture, captured with the Swift 6.1.2 toolchain before in-process integration.",
+  "pointer_size": 8,
+  "cases": [
+    {
+      "classification": "callable",
+      "compiler_suffix": ".resume.0",
+      "context_kind": "struct",
+      "context_name": "Counter",
+      "continuation_of": "ModifyAccessor",
+      "declaration_kind": "runtime",
+      "entry": "0x8e4",
+      "is_mutating": false,
+      "is_mutating_known": false,
+      "is_static": false,
+      "labels": [
+
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior7CounterV5values5Int64VvM.resume.0",
+      "module": "SwiftBehavior",
+      "name": "value",
+      "node_kind": "CoroutineContinuation",
+      "parameters": [
+
+      ],
+      "property_type": {
+        "bits": 64,
+        "kind": "integer",
+        "name": "Int64",
+        "signed": true
+      },
+      "reason": "Swift compiler entry requires native effect and recovered source dependency proof",
+      "requires_runtime_source_proof": true,
+      "return_type": {
+        "kind": "void",
+        "name": "Void"
+      },
+      "runtime_source_kind": "modify_resume",
+      "status": "unsupported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "class",
+      "context_name": "Calculator",
+      "declaration_kind": "function",
+      "entry": "0xb28",
+      "is_mutating": false,
+      "is_mutating_known": true,
+      "is_static": false,
+      "labels": [
+        "_"
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior10CalculatorC3addys5Int64VAFF",
+      "module": "SwiftBehavior",
+      "name": "add",
+      "node_kind": "Function",
+      "parameters": [
+        {
+          "name": "arg0",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        }
+      ],
+      "return_type": {
+        "bits": 64,
+        "kind": "integer",
+        "name": "Int64",
+        "signed": true
+      },
+      "status": "supported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "class",
+      "context_name": "Calculator",
+      "declaration_kind": "getter",
+      "entry": "0xae4",
+      "is_mutating": false,
+      "is_mutating_known": true,
+      "is_static": false,
+      "labels": [
+
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior10CalculatorC4biass5Int64Vvg",
+      "module": "SwiftBehavior",
+      "name": "bias",
+      "node_kind": "Getter",
+      "parameters": [
+
+      ],
+      "return_type": {
+        "bits": 64,
+        "kind": "integer",
+        "name": "Int64",
+        "signed": true
+      },
+      "status": "supported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "class",
+      "context_name": "Calculator",
+      "declaration_kind": "function",
+      "entry": "0xb4c",
+      "is_mutating": false,
+      "is_mutating_known": true,
+      "is_static": true,
+      "labels": [
+        "_",
+        "_"
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior10CalculatorC7combineys5Int64VAF_AFtFZ",
+      "module": "SwiftBehavior",
+      "name": "combine",
+      "node_kind": "Function",
+      "parameters": [
+        {
+          "name": "arg0",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg1",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        }
+      ],
+      "return_type": {
+        "bits": 64,
+        "kind": "integer",
+        "name": "Int64",
+        "signed": true
+      },
+      "status": "supported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "class",
+      "context_name": "Calculator",
+      "declaration_kind": "function",
+      "entry": "0xb34",
+      "is_mutating": false,
+      "is_mutating_known": true,
+      "is_static": false,
+      "labels": [
+        "_"
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior10CalculatorC8selfCallys5Int64VAFF",
+      "module": "SwiftBehavior",
+      "name": "selfCall",
+      "node_kind": "Function",
+      "parameters": [
+        {
+          "name": "arg0",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        }
+      ],
+      "return_type": {
+        "bits": 64,
+        "kind": "integer",
+        "name": "Int64",
+        "signed": true
+      },
+      "status": "supported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "class",
+      "context_name": "Calculator",
+      "declaration_kind": "runtime",
+      "entry": "0xba4",
+      "is_mutating": false,
+      "is_mutating_known": false,
+      "is_static": false,
+      "labels": [
+
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior10CalculatorCMa",
+      "module": "SwiftBehavior",
+      "name": "typeMetadata",
+      "node_kind": "TypeMetadataAccessFunction",
+      "parameters": [
+
+      ],
+      "reason": "Swift compiler entry requires native effect and recovered source dependency proof",
+      "requires_runtime_source_proof": true,
+      "return_type": {
+        "kind": "void",
+        "name": "Void"
+      },
+      "runtime_source_kind": "type_metadata_accessor",
+      "status": "unsupported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "class",
+      "context_name": "Calculator",
+      "declaration_kind": "runtime",
+      "entry": "0xb5c",
+      "is_mutating": false,
+      "is_mutating_known": false,
+      "is_static": false,
+      "labels": [
+
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior10CalculatorCfD",
+      "module": "SwiftBehavior",
+      "name": "deinit",
+      "node_kind": "Deallocator",
+      "parameters": [
+
+      ],
+      "reason": "Swift compiler entry requires native effect and recovered source dependency proof",
+      "requires_runtime_source_proof": true,
+      "return_type": {
+        "kind": "void",
+        "name": "Void"
+      },
+      "runtime_source_kind": "deallocator",
+      "status": "unsupported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "class",
+      "context_name": "Calculator",
+      "declaration_kind": "runtime",
+      "entry": "0xb54",
+      "is_mutating": false,
+      "is_mutating_known": false,
+      "is_static": false,
+      "labels": [
+
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior10CalculatorCfd",
+      "module": "SwiftBehavior",
+      "name": "deinit",
+      "node_kind": "Destructor",
+      "parameters": [
+
+      ],
+      "reason": "Swift compiler entry requires native effect and recovered source dependency proof",
+      "requires_runtime_source_proof": true,
+      "return_type": {
+        "kind": "void",
+        "name": "Void"
+      },
+      "runtime_source_kind": "destructor",
+      "status": "unsupported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "class",
+      "context_name": "Calculator",
+      "declaration_kind": "runtime",
+      "entry": "0xaec",
+      "is_mutating": false,
+      "is_mutating_known": true,
+      "is_static": false,
+      "labels": [
+        "_"
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior10CalculatorCyACs5Int64VcfC",
+      "module": "SwiftBehavior",
+      "name": "init",
+      "node_kind": "Allocator",
+      "parameters": [
+        {
+          "name": "arg0",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        }
+      ],
+      "reason": "Swift allocating constructor requires native allocation and initializer effect proof",
+      "requires_runtime_source_proof": true,
+      "return_type": {
+        "kind": "pointer",
+        "name": "UnsafeMutableRawPointer"
+      },
+      "runtime_source_kind": "allocating_initializer",
+      "status": "unsupported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "class",
+      "context_name": "Calculator",
+      "declaration_kind": "initializer",
+      "entry": "0xb1c",
+      "is_mutating": false,
+      "is_mutating_known": true,
+      "is_static": false,
+      "labels": [
+        "_"
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior10CalculatorCyACs5Int64Vcfc",
+      "module": "SwiftBehavior",
+      "name": "init",
+      "node_kind": "Constructor",
+      "parameters": [
+        {
+          "name": "arg0",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        }
+      ],
+      "return_type": {
+        "kind": "pointer",
+        "name": "UnsafeMutableRawPointer"
+      },
+      "status": "supported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "global",
+      "context_name": "",
+      "declaration_kind": "function",
+      "entry": "0x8cc",
+      "is_mutating": false,
+      "is_mutating_known": true,
+      "is_static": false,
+      "labels": [
+        "_",
+        "_"
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior10callScalarys5Int64VAD_ADtF",
+      "module": "SwiftBehavior",
+      "name": "callScalar",
+      "node_kind": "Function",
+      "parameters": [
+        {
+          "name": "arg0",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg1",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        }
+      ],
+      "return_type": {
+        "bits": 64,
+        "kind": "integer",
+        "name": "Int64",
+        "signed": true
+      },
+      "status": "supported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "global",
+      "context_name": "",
+      "declaration_kind": "function",
+      "entry": "0x994",
+      "is_mutating": false,
+      "is_mutating_known": true,
+      "is_static": false,
+      "labels": [
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_"
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior10stackMixedySds5Int64V_A7DS8ds4Int8VSfs5Int16VSfs5Int32VSdADtF",
+      "module": "SwiftBehavior",
+      "name": "stackMixed",
+      "node_kind": "Function",
+      "parameters": [
+        {
+          "name": "arg0",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg1",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg2",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg3",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg4",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg5",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg6",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg7",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg8",
+          "type": {
+            "bits": 64,
+            "kind": "float",
+            "name": "Double"
+          }
+        },
+        {
+          "name": "arg9",
+          "type": {
+            "bits": 64,
+            "kind": "float",
+            "name": "Double"
+          }
+        },
+        {
+          "name": "arg10",
+          "type": {
+            "bits": 64,
+            "kind": "float",
+            "name": "Double"
+          }
+        },
+        {
+          "name": "arg11",
+          "type": {
+            "bits": 64,
+            "kind": "float",
+            "name": "Double"
+          }
+        },
+        {
+          "name": "arg12",
+          "type": {
+            "bits": 64,
+            "kind": "float",
+            "name": "Double"
+          }
+        },
+        {
+          "name": "arg13",
+          "type": {
+            "bits": 64,
+            "kind": "float",
+            "name": "Double"
+          }
+        },
+        {
+          "name": "arg14",
+          "type": {
+            "bits": 64,
+            "kind": "float",
+            "name": "Double"
+          }
+        },
+        {
+          "name": "arg15",
+          "type": {
+            "bits": 64,
+            "kind": "float",
+            "name": "Double"
+          }
+        },
+        {
+          "name": "arg16",
+          "type": {
+            "bits": 8,
+            "kind": "integer",
+            "name": "Int8",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg17",
+          "type": {
+            "bits": 32,
+            "kind": "float",
+            "name": "Float"
+          }
+        },
+        {
+          "name": "arg18",
+          "type": {
+            "bits": 16,
+            "kind": "integer",
+            "name": "Int16",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg19",
+          "type": {
+            "bits": 32,
+            "kind": "float",
+            "name": "Float"
+          }
+        },
+        {
+          "name": "arg20",
+          "type": {
+            "bits": 32,
+            "kind": "integer",
+            "name": "Int32",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg21",
+          "type": {
+            "bits": 64,
+            "kind": "float",
+            "name": "Double"
+          }
+        },
+        {
+          "name": "arg22",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        }
+      ],
+      "return_type": {
+        "bits": 64,
+        "kind": "float",
+        "name": "Double"
+      },
+      "status": "supported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "global",
+      "context_name": "",
+      "declaration_kind": "function",
+      "entry": "0xa2c",
+      "is_mutating": false,
+      "is_mutating_known": true,
+      "is_static": false,
+      "labels": [
+        "_"
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior11pointerReadys5Int32VSPyADGF",
+      "module": "SwiftBehavior",
+      "name": "pointerRead",
+      "node_kind": "Function",
+      "parameters": [
+        {
+          "name": "arg0",
+          "type": {
+            "kind": "pointer",
+            "name": "UnsafePointer",
+            "pointee": {
+              "bits": 32,
+              "kind": "integer",
+              "name": "Int32",
+              "signed": true
+            }
+          }
+        }
+      ],
+      "return_type": {
+        "bits": 32,
+        "kind": "integer",
+        "name": "Int32",
+        "signed": true
+      },
+      "status": "supported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "global",
+      "context_name": "",
+      "declaration_kind": "function",
+      "entry": "0xa34",
+      "is_mutating": false,
+      "is_mutating_known": true,
+      "is_static": false,
+      "labels": [
+        "_",
+        "_"
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior11pointerSwapys5Int32VSpyADG_ADtF",
+      "module": "SwiftBehavior",
+      "name": "pointerSwap",
+      "node_kind": "Function",
+      "parameters": [
+        {
+          "name": "arg0",
+          "type": {
+            "kind": "pointer",
+            "name": "UnsafeMutablePointer",
+            "pointee": {
+              "bits": 32,
+              "kind": "integer",
+              "name": "Int32",
+              "signed": true
+            }
+          }
+        },
+        {
+          "name": "arg1",
+          "type": {
+            "bits": 32,
+            "kind": "integer",
+            "name": "Int32",
+            "signed": true
+          }
+        }
+      ],
+      "return_type": {
+        "bits": 32,
+        "kind": "integer",
+        "name": "Int32",
+        "signed": true
+      },
+      "status": "supported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "global",
+      "context_name": "",
+      "declaration_kind": "function",
+      "entry": "0x95c",
+      "is_mutating": false,
+      "is_mutating_known": true,
+      "is_static": false,
+      "labels": [
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_"
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior11stackFloatsyS2f_S11ftF",
+      "module": "SwiftBehavior",
+      "name": "stackFloats",
+      "node_kind": "Function",
+      "parameters": [
+        {
+          "name": "arg0",
+          "type": {
+            "bits": 32,
+            "kind": "float",
+            "name": "Float"
+          }
+        },
+        {
+          "name": "arg1",
+          "type": {
+            "bits": 32,
+            "kind": "float",
+            "name": "Float"
+          }
+        },
+        {
+          "name": "arg2",
+          "type": {
+            "bits": 32,
+            "kind": "float",
+            "name": "Float"
+          }
+        },
+        {
+          "name": "arg3",
+          "type": {
+            "bits": 32,
+            "kind": "float",
+            "name": "Float"
+          }
+        },
+        {
+          "name": "arg4",
+          "type": {
+            "bits": 32,
+            "kind": "float",
+            "name": "Float"
+          }
+        },
+        {
+          "name": "arg5",
+          "type": {
+            "bits": 32,
+            "kind": "float",
+            "name": "Float"
+          }
+        },
+        {
+          "name": "arg6",
+          "type": {
+            "bits": 32,
+            "kind": "float",
+            "name": "Float"
+          }
+        },
+        {
+          "name": "arg7",
+          "type": {
+            "bits": 32,
+            "kind": "float",
+            "name": "Float"
+          }
+        },
+        {
+          "name": "arg8",
+          "type": {
+            "bits": 32,
+            "kind": "float",
+            "name": "Float"
+          }
+        },
+        {
+          "name": "arg9",
+          "type": {
+            "bits": 32,
+            "kind": "float",
+            "name": "Float"
+          }
+        },
+        {
+          "name": "arg10",
+          "type": {
+            "bits": 32,
+            "kind": "float",
+            "name": "Float"
+          }
+        },
+        {
+          "name": "arg11",
+          "type": {
+            "bits": 32,
+            "kind": "float",
+            "name": "Float"
+          }
+        }
+      ],
+      "return_type": {
+        "bits": 32,
+        "kind": "float",
+        "name": "Float"
+      },
+      "status": "supported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "global",
+      "context_name": "",
+      "declaration_kind": "function",
+      "entry": "0x8e4",
+      "is_mutating": false,
+      "is_mutating_known": true,
+      "is_static": false,
+      "labels": [
+        "_"
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior13floatIdentityyS2fF",
+      "module": "SwiftBehavior",
+      "name": "floatIdentity",
+      "node_kind": "Function",
+      "parameters": [
+        {
+          "name": "arg0",
+          "type": {
+            "bits": 32,
+            "kind": "float",
+            "name": "Float"
+          }
+        }
+      ],
+      "return_type": {
+        "bits": 32,
+        "kind": "float",
+        "name": "Float"
+      },
+      "status": "supported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "global",
+      "context_name": "",
+      "declaration_kind": "function",
+      "entry": "0x918",
+      "is_mutating": false,
+      "is_mutating_known": true,
+      "is_static": false,
+      "labels": [
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_",
+        "_"
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior13stackIntegersys5Int64Vs4Int8V_s5Int16Vs5Int32VAdfhjdfhjDtF",
+      "module": "SwiftBehavior",
+      "name": "stackIntegers",
+      "node_kind": "Function",
+      "parameters": [
+        {
+          "name": "arg0",
+          "type": {
+            "bits": 8,
+            "kind": "integer",
+            "name": "Int8",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg1",
+          "type": {
+            "bits": 16,
+            "kind": "integer",
+            "name": "Int16",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg2",
+          "type": {
+            "bits": 32,
+            "kind": "integer",
+            "name": "Int32",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg3",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg4",
+          "type": {
+            "bits": 8,
+            "kind": "integer",
+            "name": "Int8",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg5",
+          "type": {
+            "bits": 16,
+            "kind": "integer",
+            "name": "Int16",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg6",
+          "type": {
+            "bits": 32,
+            "kind": "integer",
+            "name": "Int32",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg7",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg8",
+          "type": {
+            "bits": 8,
+            "kind": "integer",
+            "name": "Int8",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg9",
+          "type": {
+            "bits": 16,
+            "kind": "integer",
+            "name": "Int16",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg10",
+          "type": {
+            "bits": 32,
+            "kind": "integer",
+            "name": "Int32",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg11",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        }
+      ],
+      "return_type": {
+        "bits": 64,
+        "kind": "integer",
+        "name": "Int64",
+        "signed": true
+      },
+      "status": "supported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "global",
+      "context_name": "",
+      "declaration_kind": "function",
+      "entry": "0x8e4",
+      "is_mutating": false,
+      "is_mutating_known": true,
+      "is_static": false,
+      "labels": [
+        "_"
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior14doubleIdentityyS2dF",
+      "module": "SwiftBehavior",
+      "name": "doubleIdentity",
+      "node_kind": "Function",
+      "parameters": [
+        {
+          "name": "arg0",
+          "type": {
+            "bits": 64,
+            "kind": "float",
+            "name": "Double"
+          }
+        }
+      ],
+      "return_type": {
+        "bits": 64,
+        "kind": "float",
+        "name": "Double"
+      },
+      "status": "supported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "global",
+      "context_name": "",
+      "declaration_kind": "function",
+      "entry": "0xa44",
+      "is_mutating": false,
+      "is_mutating_known": true,
+      "is_static": false,
+      "labels": [
+        "_",
+        "_"
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior3sumys5Int64VSPys5Int32VG_ADtF",
+      "module": "SwiftBehavior",
+      "name": "sum",
+      "node_kind": "Function",
+      "parameters": [
+        {
+          "name": "arg0",
+          "type": {
+            "kind": "pointer",
+            "name": "UnsafePointer",
+            "pointee": {
+              "bits": 32,
+              "kind": "integer",
+              "name": "Int32",
+              "signed": true
+            }
+          }
+        },
+        {
+          "name": "arg1",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        }
+      ],
+      "return_type": {
+        "bits": 64,
+        "kind": "integer",
+        "name": "Int64",
+        "signed": true
+      },
+      "status": "supported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "global",
+      "context_name": "",
+      "declaration_kind": "function",
+      "entry": "0x8f8",
+      "is_mutating": false,
+      "is_mutating_known": true,
+      "is_static": false,
+      "labels": [
+        "_",
+        "_",
+        "_",
+        "_"
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior5mixedySds4Int8V_Sds5Int64VSftF",
+      "module": "SwiftBehavior",
+      "name": "mixed",
+      "node_kind": "Function",
+      "parameters": [
+        {
+          "name": "arg0",
+          "type": {
+            "bits": 8,
+            "kind": "integer",
+            "name": "Int8",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg1",
+          "type": {
+            "bits": 64,
+            "kind": "float",
+            "name": "Double"
+          }
+        },
+        {
+          "name": "arg2",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg3",
+          "type": {
+            "bits": 32,
+            "kind": "float",
+            "name": "Float"
+          }
+        }
+      ],
+      "return_type": {
+        "bits": 64,
+        "kind": "float",
+        "name": "Double"
+      },
+      "status": "supported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "global",
+      "context_name": "",
+      "declaration_kind": "function",
+      "entry": "0x8c0",
+      "is_mutating": false,
+      "is_mutating_known": true,
+      "is_static": false,
+      "labels": [
+        "_",
+        "_"
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior6chooseys5Int64VAD_ADtF",
+      "module": "SwiftBehavior",
+      "name": "choose",
+      "node_kind": "Function",
+      "parameters": [
+        {
+          "name": "arg0",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg1",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        }
+      ],
+      "return_type": {
+        "bits": 64,
+        "kind": "integer",
+        "name": "Int64",
+        "signed": true
+      },
+      "status": "supported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "global",
+      "context_name": "",
+      "declaration_kind": "function",
+      "entry": "0x8b8",
+      "is_mutating": false,
+      "is_mutating_known": true,
+      "is_static": false,
+      "labels": [
+        "_",
+        "_"
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior6scalarys5Int64VAD_ADtF",
+      "module": "SwiftBehavior",
+      "name": "scalar",
+      "node_kind": "Function",
+      "parameters": [
+        {
+          "name": "arg0",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        },
+        {
+          "name": "arg1",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        }
+      ],
+      "return_type": {
+        "bits": 64,
+        "kind": "integer",
+        "name": "Int64",
+        "signed": true
+      },
+      "status": "supported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "struct",
+      "context_name": "Counter",
+      "declaration_kind": "function",
+      "entry": "0xbd4",
+      "is_mutating": false,
+      "is_mutating_known": false,
+      "is_static": false,
+      "labels": [
+        "_"
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior7CounterV3addys5Int64VAFF",
+      "module": "SwiftBehavior",
+      "name": "add",
+      "node_kind": "Function",
+      "parameters": [
+        {
+          "name": "arg0",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        }
+      ],
+      "reason": "value-type self layout and mutating convention are not established by mangling",
+      "requires_self_abi_proof": true,
+      "return_type": {
+        "bits": 64,
+        "kind": "integer",
+        "name": "Int64",
+        "signed": true
+      },
+      "status": "unsupported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "struct",
+      "context_name": "Counter",
+      "declaration_kind": "runtime",
+      "entry": "0xb74",
+      "is_mutating": false,
+      "is_mutating_known": false,
+      "is_static": false,
+      "labels": [
+
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior7CounterV5values5Int64VvM",
+      "module": "SwiftBehavior",
+      "name": "value",
+      "node_kind": "ModifyAccessor",
+      "parameters": [
+
+      ],
+      "property_type": {
+        "bits": 64,
+        "kind": "integer",
+        "name": "Int64",
+        "signed": true
+      },
+      "reason": "Swift compiler entry requires native effect and recovered source dependency proof",
+      "requires_runtime_source_proof": true,
+      "return_type": {
+        "kind": "void",
+        "name": "Void"
+      },
+      "runtime_source_kind": "modify_accessor",
+      "status": "unsupported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "struct",
+      "context_name": "Counter",
+      "declaration_kind": "getter",
+      "entry": "0x8e4",
+      "is_mutating": false,
+      "is_mutating_known": false,
+      "is_static": false,
+      "labels": [
+
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior7CounterV5values5Int64Vvg",
+      "module": "SwiftBehavior",
+      "name": "value",
+      "node_kind": "Getter",
+      "parameters": [
+
+      ],
+      "reason": "value-type accessor self layout and mutating convention require native ABI proof",
+      "requires_self_abi_proof": true,
+      "return_type": {
+        "bits": 64,
+        "kind": "integer",
+        "name": "Int64",
+        "signed": true
+      },
+      "status": "unsupported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "struct",
+      "context_name": "Counter",
+      "declaration_kind": "setter",
+      "entry": "0xb6c",
+      "is_mutating": false,
+      "is_mutating_known": false,
+      "is_static": false,
+      "labels": [
+        "_"
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior7CounterV5values5Int64Vvs",
+      "module": "SwiftBehavior",
+      "name": "value",
+      "node_kind": "Setter",
+      "parameters": [
+        {
+          "name": "arg0",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        }
+      ],
+      "reason": "value-type accessor self layout and mutating convention require native ABI proof",
+      "requires_self_abi_proof": true,
+      "return_type": {
+        "kind": "void",
+        "name": "Void"
+      },
+      "status": "unsupported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "struct",
+      "context_name": "Counter",
+      "declaration_kind": "function",
+      "entry": "0xb90",
+      "is_mutating": false,
+      "is_mutating_known": false,
+      "is_static": false,
+      "labels": [
+        "_"
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior7CounterV6adjustyys5Int64VF",
+      "module": "SwiftBehavior",
+      "name": "adjust",
+      "node_kind": "Function",
+      "parameters": [
+        {
+          "name": "arg0",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        }
+      ],
+      "reason": "value-type self layout and mutating convention are not established by mangling",
+      "requires_self_abi_proof": true,
+      "return_type": {
+        "kind": "void",
+        "name": "Void"
+      },
+      "status": "unsupported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "struct",
+      "context_name": "Counter",
+      "declaration_kind": "function",
+      "entry": "0xb84",
+      "is_mutating": false,
+      "is_mutating_known": false,
+      "is_static": false,
+      "labels": [
+        "_"
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior7CounterV6affineys5Int64VAFF",
+      "module": "SwiftBehavior",
+      "name": "affine",
+      "node_kind": "Function",
+      "parameters": [
+        {
+          "name": "arg0",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        }
+      ],
+      "reason": "value-type self layout and mutating convention are not established by mangling",
+      "requires_self_abi_proof": true,
+      "return_type": {
+        "bits": 64,
+        "kind": "integer",
+        "name": "Int64",
+        "signed": true
+      },
+      "status": "unsupported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "struct",
+      "context_name": "Counter",
+      "declaration_kind": "runtime",
+      "entry": "0xbc4",
+      "is_mutating": false,
+      "is_mutating_known": false,
+      "is_static": false,
+      "labels": [
+
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior7CounterVMa",
+      "module": "SwiftBehavior",
+      "name": "typeMetadata",
+      "node_kind": "TypeMetadataAccessFunction",
+      "parameters": [
+
+      ],
+      "reason": "Swift compiler entry requires native effect and recovered source dependency proof",
+      "requires_runtime_source_proof": true,
+      "return_type": {
+        "kind": "void",
+        "name": "Void"
+      },
+      "runtime_source_kind": "type_metadata_accessor",
+      "status": "unsupported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "struct",
+      "context_name": "Counter",
+      "declaration_kind": "initializer",
+      "entry": "0x8e4",
+      "is_mutating": false,
+      "is_mutating_known": true,
+      "is_static": false,
+      "labels": [
+        "_"
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior7CounterVyACs5Int64VcfC",
+      "module": "SwiftBehavior",
+      "name": "init",
+      "node_kind": "Allocator",
+      "parameters": [
+        {
+          "name": "arg0",
+          "type": {
+            "bits": 64,
+            "kind": "integer",
+            "name": "Int64",
+            "signed": true
+          }
+        }
+      ],
+      "reason": "value-type initializer return layout is not established by mangling",
+      "requires_storage_abi_proof": true,
+      "return_type": {
+        "context_kind": "struct",
+        "kind": "nominal",
+        "module": "SwiftBehavior",
+        "name": "Counter"
+      },
+      "status": "unsupported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "global",
+      "context_name": "",
+      "declaration_kind": "function",
+      "entry": "0x8e8",
+      "is_mutating": false,
+      "is_mutating_known": true,
+      "is_static": false,
+      "labels": [
+        "_",
+        "_"
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior8floatAddyS2f_SftF",
+      "module": "SwiftBehavior",
+      "name": "floatAdd",
+      "node_kind": "Function",
+      "parameters": [
+        {
+          "name": "arg0",
+          "type": {
+            "bits": 32,
+            "kind": "float",
+            "name": "Float"
+          }
+        },
+        {
+          "name": "arg1",
+          "type": {
+            "bits": 32,
+            "kind": "float",
+            "name": "Float"
+          }
+        }
+      ],
+      "return_type": {
+        "bits": 32,
+        "kind": "float",
+        "name": "Float"
+      },
+      "status": "supported"
+    },
+    {
+      "classification": "callable",
+      "context_kind": "global",
+      "context_name": "",
+      "declaration_kind": "function",
+      "entry": "0x8f0",
+      "is_mutating": false,
+      "is_mutating_known": true,
+      "is_static": false,
+      "labels": [
+        "_",
+        "_"
+      ],
+      "mangled_symbol": "_$s13SwiftBehavior9doubleAddyS2d_SdtF",
+      "module": "SwiftBehavior",
+      "name": "doubleAdd",
+      "node_kind": "Function",
+      "parameters": [
+        {
+          "name": "arg0",
+          "type": {
+            "bits": 64,
+            "kind": "float",
+            "name": "Double"
+          }
+        },
+        {
+          "name": "arg1",
+          "type": {
+            "bits": 64,
+            "kind": "float",
+            "name": "Double"
+          }
+        }
+      ],
+      "return_type": {
+        "bits": 64,
+        "kind": "float",
+        "name": "Double"
+      },
+      "status": "supported"
+    },
+    {
+      "classification": "metadata",
+      "entry": "0xc98",
+      "mangled_symbol": "_$s13SwiftBehaviorMXM",
+      "node_kind": "ModuleDescriptor",
+      "reason": "Swift symbol is not a plain fixed-signature function or initializing constructor",
+      "status": "unsupported"
+    },
+    {
+      "classification": "metadata",
+      "entry": "0xd1c",
+      "mangled_symbol": "_$s13SwiftBehavior10CalculatorCMF",
+      "node_kind": "ReflectionMetadataFieldDescriptor",
+      "reason": "Swift symbol is not a plain fixed-signature function or initializing constructor",
+      "status": "unsupported"
+    },
+    {
+      "classification": "metadata",
+      "entry": "0xd38",
+      "mangled_symbol": "_$s13SwiftBehavior7CounterVMF",
+      "node_kind": "ReflectionMetadataFieldDescriptor",
+      "reason": "Swift symbol is not a plain fixed-signature function or initializing constructor",
+      "status": "unsupported"
+    },
+    {
+      "classification": "metadata",
+      "entry": "0x4010",
+      "mangled_symbol": "_$s13SwiftBehavior7CounterVMf",
+      "node_kind": "FullTypeMetadata",
+      "reason": "Swift symbol is not a plain fixed-signature function or initializing constructor",
+      "status": "unsupported"
+    },
+    {
+      "classification": "metadata",
+      "entry": "0x8100",
+      "mangled_symbol": "_$s13SwiftBehavior10CalculatorCMf",
+      "node_kind": "FullTypeMetadata",
+      "reason": "Swift symbol is not a plain fixed-signature function or initializing constructor",
+      "status": "unsupported"
+    },
+    {
+      "classification": "metadata",
+      "entry": "0xc38",
+      "mangled_symbol": "_$s13SwiftBehavior10CalculatorC4biass5Int64VvpMV",
+      "node_kind": "PropertyDescriptor",
+      "reason": "Swift symbol is not a plain fixed-signature function or initializing constructor",
+      "status": "unsupported"
+    },
+    {
+      "classification": "metadata",
+      "entry": "0xc40",
+      "mangled_symbol": "_$s13SwiftBehavior10CalculatorC4biass5Int64VvpWvd",
+      "node_kind": "FieldOffset",
+      "reason": "Swift symbol is not a plain fixed-signature function or initializing constructor",
+      "status": "unsupported"
+    },
+    {
+      "classification": "metadata",
+      "entry": "0x80d8",
+      "mangled_symbol": "_$s13SwiftBehavior10CalculatorCMm",
+      "node_kind": "Metaclass",
+      "reason": "Swift symbol is not a plain fixed-signature function or initializing constructor",
+      "status": "unsupported"
+    },
+    {
+      "classification": "metadata",
+      "entry": "0xca4",
+      "mangled_symbol": "_$s13SwiftBehavior10CalculatorCMn",
+      "node_kind": "NominalTypeDescriptor",
+      "reason": "Swift symbol is not a plain fixed-signature function or initializing constructor",
+      "status": "unsupported"
+    },
+    {
+      "classification": "metadata",
+      "entry": "0x8118",
+      "mangled_symbol": "_$s13SwiftBehavior10CalculatorCN",
+      "node_kind": "TypeMetadata",
+      "reason": "Swift symbol is not a plain fixed-signature function or initializing constructor",
+      "status": "unsupported"
+    },
+    {
+      "classification": "metadata",
+      "entry": "0xcd8",
+      "mangled_symbol": "_$s13SwiftBehavior10CalculatorCyACs5Int64VcfCTq",
+      "node_kind": "MethodDescriptor",
+      "reason": "Swift symbol is not a plain fixed-signature function or initializing constructor",
+      "status": "unsupported"
+    },
+    {
+      "classification": "metadata",
+      "entry": "0xc38",
+      "mangled_symbol": "_$s13SwiftBehavior7CounterV5values5Int64VvpMV",
+      "node_kind": "PropertyDescriptor",
+      "reason": "Swift symbol is not a plain fixed-signature function or initializing constructor",
+      "status": "unsupported"
+    },
+    {
+      "classification": "metadata",
+      "entry": "0xce0",
+      "mangled_symbol": "_$s13SwiftBehavior7CounterVMn",
+      "node_kind": "NominalTypeDescriptor",
+      "reason": "Swift symbol is not a plain fixed-signature function or initializing constructor",
+      "status": "unsupported"
+    },
+    {
+      "classification": "metadata",
+      "entry": "0x4020",
+      "mangled_symbol": "_$s13SwiftBehavior7CounterVN",
+      "node_kind": "TypeMetadata",
+      "reason": "Swift symbol is not a plain fixed-signature function or initializing constructor",
+      "status": "unsupported"
+    },
+    {
+      "classification": "metadata",
+      "entry": "0x0",
+      "mangled_symbol": "_$sBi64_WV",
+      "node_kind": "ValueWitnessTable",
+      "reason": "Swift symbol is not a plain fixed-signature function or initializing constructor",
+      "status": "unsupported"
+    },
+    {
+      "classification": "metadata",
+      "entry": "0x0",
+      "mangled_symbol": "_$sBoWV",
+      "node_kind": "ValueWitnessTable",
+      "reason": "Swift symbol is not a plain fixed-signature function or initializing constructor",
+      "status": "unsupported"
+    },
+    {
+      "classification": "metadata",
+      "entry": "0x0",
+      "mangled_symbol": "_$ss5Int64VMn",
+      "node_kind": "NominalTypeDescriptor",
+      "reason": "Swift symbol is not a plain fixed-signature function or initializing constructor",
+      "status": "unsupported"
+    }
+  ]
+}
