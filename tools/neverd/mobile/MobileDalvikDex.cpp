@@ -107,7 +107,11 @@ struct Encoded {
   std::map<std::string, Encoded> elements;
 };
 using Annotation = std::pair<std::string, std::map<std::string, Encoded>>;
-using AnnotationSet = std::vector<Annotation>;
+struct AnnotationItem {
+  unsigned visibility;
+  Annotation value;
+};
+using AnnotationSet = std::vector<AnnotationItem>;
 struct OpSpec {
   std::string name, form;
   char pool = 0;
@@ -642,12 +646,14 @@ class Dex {
           AnnotationSet result;
           int64_t previous = -1;
           for (uint32_t i = 0; i < count; ++i) {
-            auto entry = item<Annotation>(0x2004, reader.u32(), [&](Cursor &r) {
-              if (r.u8() > 2)
-                bad("invalid annotation visibility");
-              return annotation(r);
-            });
-            unsigned index = type_indices.at(entry.first);
+            auto entry =
+                item<AnnotationItem>(0x2004, reader.u32(), [&](Cursor &r) {
+                  unsigned visibility = r.u8();
+                  if (visibility > 2)
+                    bad("invalid annotation visibility");
+                  return AnnotationItem{visibility, annotation(r)};
+                });
+            unsigned index = type_indices.at(entry.value.first);
             if (int64_t(index) <= previous)
               bad("annotation types are duplicate or unordered");
             previous = index;
@@ -656,6 +662,12 @@ class Dex {
           return result;
         },
         4);
+  }
+  void requireUnannotated(const AnnotationSet &values,
+                          const std::string &declaration) {
+    if (!values.empty())
+      bad("unsupported annotation " + values.front().value.first + " on " +
+          declaration);
   }
   void annotations(Class &cls, uint32_t offset) {
     if (!offset)
@@ -681,22 +693,37 @@ class Dex {
                             : at(methods, index, "annotated member").owner;
               if (owner != cls.name)
                 bad("annotation directory owner mismatch");
-              if (kind < 2)
-                annotationSet(annotation_off);
-              else {
-                size_t expected =
-                    at(methods, index, "annotated method").parameters.size();
-                item<bool>(
+              if (kind == 0) {
+                const auto &field = at(fields, index, "annotated field");
+                requireUnannotated(annotationSet(annotation_off),
+                                   "field " + field.owner + "->" +
+                                       field.name + ":" + field.type);
+              } else if (kind == 1) {
+                const auto &method = at(methods, index, "annotated method");
+                requireUnannotated(annotationSet(annotation_off),
+                                   "method " + method.identity());
+              } else {
+                const auto &method = at(methods, index, "annotated method");
+                size_t expected = method.parameters.size();
+                auto parameters = item<std::vector<uint32_t>>(
                     0x1002, annotation_off,
                     [&](Cursor &r) {
                       auto length = r.u32();
                       if (length != expected)
                         bad("parameter annotation count mismatch");
+                      std::vector<uint32_t> values;
                       for (uint32_t p = 0; p < length; ++p)
-                        annotationSet(r.u32());
-                      return true;
+                        values.push_back(r.u32());
+                      return values;
                     },
                     4);
+                // A shared ref-list is cached independently of its method.
+                if (parameters.size() != expected)
+                  bad("parameter annotation count mismatch");
+                for (size_t p = 0; p < parameters.size(); ++p)
+                  requireUnannotated(annotationSet(parameters[p]),
+                                     "parameter " + std::to_string(p) +
+                                         " of method " + method.identity());
               }
             }
           }
@@ -706,8 +733,21 @@ class Dex {
         4);
     if (has_members)
       context(0x2006, offset, cls.name);
-    std::map<std::string, std::map<std::string, Encoded>> values(all.begin(),
-                                                                 all.end());
+    std::map<std::string, std::map<std::string, Encoded>> values;
+    for (const auto &entry : all) {
+      const auto &[name, elements] = entry.value;
+      if (name == "Ldalvik/annotation/EnclosingMethod;")
+        bad("method-local/anonymous class source context is unsupported: " +
+            cls.name + " annotation " + name);
+      if (name != "Ldalvik/annotation/EnclosingClass;" &&
+          name != "Ldalvik/annotation/InnerClass;" &&
+          name != "Ldalvik/annotation/MemberClasses;")
+        bad("unsupported annotation " + name + " on class " + cls.name);
+      if (entry.visibility != 2)
+        bad("structural annotation " + name + " on class " + cls.name +
+            " requires system visibility");
+      values.emplace(name, elements);
+    }
     auto get =
         [&](std::string_view key) -> const std::map<std::string, Encoded> * {
       auto found = values.find(std::string(key));
@@ -723,8 +763,6 @@ class Dex {
         bad("invalid EnclosingClass annotation");
       cls.enclosing = std::get<std::string>(entry->second.value);
     }
-    if (get("Ldalvik/annotation/EnclosingMethod;"))
-      bad("method-local/anonymous class source context is unsupported");
     if (inner) {
       auto name = inner->find("name"), flags = inner->find("accessFlags");
       if (inner->size() != 2 || name == inner->end() ||

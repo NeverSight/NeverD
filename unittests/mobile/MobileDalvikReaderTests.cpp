@@ -12,6 +12,7 @@
 #include <bit>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <tuple>
 
@@ -66,6 +67,18 @@ void mutf8(std::string &out, const std::u16string &text) {
   }
   out += '\0';
 }
+struct Fixture;
+struct FixtureAnnotation {
+  std::string type;
+  unsigned visibility;
+  std::vector<std::string> extra_types;
+  std::vector<std::u16string> extra_strings;
+  // Write encoded_annotation's element count and elements using real pool
+  // indices. The fixture supplies the item visibility and annotation type.
+  std::function<void(std::string &, const Fixture &)> elements;
+  FixtureAnnotation(std::string type, unsigned visibility)
+      : type(std::move(type)), visibility(visibility) {}
+};
 struct FixtureOptions {
   std::vector<uint16_t> words{0x000f};
   std::vector<std::string> params{"I"};
@@ -77,6 +90,12 @@ struct FixtureOptions {
   std::optional<std::string> static_value;
   std::string field_type = "I";
   std::optional<MethodRef> referenced_method;
+  std::string owner = "Lfixture/Sample;";
+  std::vector<FixtureAnnotation> annotations;
+  std::vector<std::vector<size_t>> annotation_sets;
+  std::optional<size_t> class_annotations, field_annotations,
+      method_annotations;
+  std::optional<std::vector<std::optional<size_t>>> parameter_annotations;
 };
 struct Fixture {
   std::string data;
@@ -86,7 +105,7 @@ struct Fixture {
   std::vector<MethodRef> methods;
 };
 Fixture fixture(FixtureOptions options = {}) {
-  std::string owner = "Lfixture/Sample;", parent = "Ljava/lang/Object;";
+  std::string owner = options.owner, parent = "Ljava/lang/Object;";
   auto shortType = [](const std::string &t) {
     return t.starts_with('L') || t.starts_with('[') ? "L" : t;
   };
@@ -120,6 +139,16 @@ Fixture fixture(FixtureOptions options = {}) {
   }
   for (auto &extra : options.extras)
     names.insert(extra);
+  for (const auto &annotation : options.annotations) {
+    names.insert(utf16(annotation.type));
+    type_set.insert(annotation.type);
+    for (const auto &type : annotation.extra_types) {
+      names.insert(utf16(type));
+      type_set.insert(type);
+    }
+    names.insert(annotation.extra_strings.begin(),
+                 annotation.extra_strings.end());
+  }
   if (options.static_value) {
     names.insert(u"VALUE");
     names.insert(utf16(options.field_type));
@@ -271,6 +300,73 @@ Fixture fixture(FixtureOptions options = {}) {
     raw += *options.static_value;
     at["values"] = section(0x2005, 1, raw);
   }
+  if (!options.annotations.empty()) {
+    at["annotation_items"] = out.size();
+    for (size_t i = 0; i < options.annotations.size(); ++i) {
+      const auto &annotation = options.annotations[i];
+      at["annotation_item_" + std::to_string(i)] = out.size();
+      append(out, annotation.visibility, 1);
+      uleb(out, typeIndex(annotation.type));
+      if (annotation.elements)
+        annotation.elements(out, fixture);
+      else
+        uleb(out, 0);
+    }
+    sections.push_back(
+        {0x2004, at["annotation_items"], options.annotations.size()});
+  }
+  if (!options.annotation_sets.empty()) {
+    align();
+    at["annotation_sets"] = out.size();
+    for (size_t i = 0; i < options.annotation_sets.size(); ++i) {
+      auto entries = options.annotation_sets[i];
+      std::sort(entries.begin(), entries.end(), [&](size_t a, size_t b) {
+        return typeIndex(options.annotations.at(a).type) <
+               typeIndex(options.annotations.at(b).type);
+      });
+      at["annotation_set_" + std::to_string(i)] = out.size();
+      append(out, entries.size(), 4);
+      for (size_t entry : entries)
+        append(out, at.at("annotation_item_" + std::to_string(entry)), 4);
+    }
+    sections.push_back(
+        {0x1003, at["annotation_sets"], options.annotation_sets.size()});
+  }
+  auto annotationOffset = [&](std::optional<size_t> set) -> size_t {
+    return set ? at.at("annotation_set_" + std::to_string(*set)) : 0;
+  };
+  if (options.parameter_annotations) {
+    align();
+    at["parameter_annotations"] = out.size();
+    append(out, options.parameter_annotations->size(), 4);
+    for (auto slot : *options.parameter_annotations)
+      append(out, annotationOffset(slot), 4);
+    sections.push_back({0x1002, at["parameter_annotations"], 1});
+  }
+  if (options.class_annotations || options.field_annotations ||
+      options.method_annotations || options.parameter_annotations) {
+    if (options.field_annotations && !options.static_value)
+      throw Error("annotation fixture needs a defined field");
+    align();
+    at["annotations"] = out.size();
+    append(out, annotationOffset(options.class_annotations), 4);
+    append(out, bool(options.field_annotations), 4);
+    append(out, bool(options.method_annotations), 4);
+    append(out, bool(options.parameter_annotations), 4);
+    if (options.field_annotations) {
+      append(out, 0, 4);
+      append(out, annotationOffset(options.field_annotations), 4);
+    }
+    if (options.method_annotations) {
+      append(out, definition_index, 4);
+      append(out, annotationOffset(options.method_annotations), 4);
+    }
+    if (options.parameter_annotations) {
+      append(out, definition_index, 4);
+      append(out, at.at("parameter_annotations"), 4);
+    }
+    sections.push_back({0x2006, at["annotations"], 1});
+  }
   align();
   at["map"] = out.size();
   sections.push_back({0x1000, out.size(), 1});
@@ -306,8 +402,9 @@ Fixture fixture(FixtureOptions options = {}) {
           proto.second.empty() ? 0 : parameter_offsets.at(proto.second));
   }
   std::array<uint32_t, 8> cls{
-      typeIndex(owner), 1, typeIndex(parent),          0,
-      UINT32_MAX,       0, uint32_t(at["class_data"]), uint32_t(at["values"])};
+      typeIndex(owner), 1, typeIndex(parent), 0, UINT32_MAX,
+      uint32_t(at["annotations"]), uint32_t(at["class_data"]),
+      uint32_t(at["values"])};
   for (size_t i = 0; i < cls.size(); ++i)
     patch(out, at["class"] + i * 4, cls[i]);
   out = seal(std::move(out));
@@ -356,6 +453,97 @@ unsigned fixtureTypeIndex(const Fixture &f, const std::string &type) {
   auto found = std::find(f.types.begin(), f.types.end(), type);
   EXPECT_NE(found, f.types.end());
   return unsigned(found - f.types.begin());
+}
+unsigned fixtureStringIndex(const Fixture &f, const std::string &text) {
+  auto found = std::find(f.strings.begin(), f.strings.end(), utf16(text));
+  EXPECT_NE(found, f.strings.end());
+  return unsigned(found - f.strings.begin());
+}
+void annotationIndex(std::string &out, unsigned kind, unsigned index) {
+  // A four-byte unsigned pool index, encoded with value_arg == 3.
+  append(out, kind | 0x60, 1);
+  append(out, index, 4);
+}
+FixtureAnnotation enclosingClassAnnotation() {
+  FixtureAnnotation result{"Ldalvik/annotation/EnclosingClass;", 2};
+  result.extra_types = {"Lfixture/Outer;"};
+  result.extra_strings = {u"value"};
+  result.elements = [](std::string &out, const Fixture &f) {
+    uleb(out, 1);
+    uleb(out, fixtureStringIndex(f, "value"));
+    annotationIndex(out, 0x18, fixtureTypeIndex(f, "Lfixture/Outer;"));
+  };
+  return result;
+}
+FixtureAnnotation innerClassAnnotation(unsigned access = 9) {
+  FixtureAnnotation result{"Ldalvik/annotation/InnerClass;", 2};
+  result.extra_strings = {u"accessFlags", u"name", u"Nested"};
+  result.elements = [access](std::string &out, const Fixture &f) {
+    uleb(out, 2);
+    uleb(out, fixtureStringIndex(f, "accessFlags"));
+    append(out, 0x64, 1); // VALUE_INT, four bytes.
+    append(out, access, 4);
+    uleb(out, fixtureStringIndex(f, "name"));
+    annotationIndex(out, 0x17, fixtureStringIndex(f, "Nested"));
+  };
+  return result;
+}
+FixtureAnnotation typeArrayAnnotation(
+    std::string type = "Ldalvik/annotation/MemberClasses;",
+    std::vector<std::string> values = {}) {
+  FixtureAnnotation result{std::move(type), 2};
+  result.extra_types = values;
+  result.extra_strings = {u"value"};
+  result.elements = [values](std::string &out, const Fixture &f) {
+    uleb(out, 1);
+    uleb(out, fixtureStringIndex(f, "value"));
+    append(out, 0x1c, 1); // VALUE_ARRAY.
+    uleb(out, values.size());
+    for (const auto &value : values)
+      annotationIndex(out, 0x18, fixtureTypeIndex(f, value));
+  };
+  return result;
+}
+FixtureAnnotation nestedAnnotation(std::string nested_type) {
+  FixtureAnnotation result{"Lfixture/Unknown;", 1};
+  result.extra_types = {nested_type};
+  result.extra_strings = {u"value"};
+  result.elements = [nested_type](std::string &out, const Fixture &f) {
+    uleb(out, 1);
+    uleb(out, fixtureStringIndex(f, "value"));
+    append(out, 0x1d, 1); // VALUE_ANNOTATION has no visibility byte.
+    uleb(out, fixtureTypeIndex(f, nested_type));
+    uleb(out, 0);
+  };
+  return result;
+}
+FixtureAnnotation enclosingMethodAnnotation(const MethodRef &method) {
+  FixtureAnnotation result{"Ldalvik/annotation/EnclosingMethod;", 2};
+  result.extra_strings = {u"value"};
+  result.elements = [method](std::string &out, const Fixture &f) {
+    auto found = std::find(f.methods.begin(), f.methods.end(), method);
+    EXPECT_NE(found, f.methods.end());
+    uleb(out, 1);
+    uleb(out, fixtureStringIndex(f, "value"));
+    annotationIndex(out, 0x1a, unsigned(found - f.methods.begin()));
+  };
+  return result;
+}
+void attachFixtureAnnotation(FixtureOptions &options,
+                             std::string_view attachment, size_t set = 0) {
+  if (attachment == "class")
+    options.class_annotations = set;
+  else if (attachment == "field") {
+    options.static_value = std::string("\x04\x00", 2);
+    options.field_annotations = set;
+  } else if (attachment == "method")
+    options.method_annotations = set;
+  else if (attachment == "parameter") {
+    std::vector<std::optional<size_t>> parameters(options.params.size());
+    parameters.at(0) = set;
+    options.parameter_annotations = std::move(parameters);
+  } else
+    throw Error("unknown annotation fixture attachment");
 }
 // The first instruction is an invoke whose method index is patched from the
 // actual sorted method table, not an assumed index or an unused reference.
@@ -1007,6 +1195,224 @@ TEST(MobileDalvikReader, SmaliExceptionRegionAndHandlerOrderAreExact) {
   EXPECT_FALSE(region.handlers[1].type);
   EXPECT_EQ(region.handlers[1].target, 2u);
 }
+TEST(MobileDalvikReader, DexAttachedUnknownAnnotationsCannotLoseSemantics) {
+  for (const auto &type : {"Lfixture/Unknown;", "Ljava/lang/Deprecated;"}) {
+    for (unsigned visibility : {0u, 1u, 2u}) {
+      for (const auto &attachment : {"class", "field", "method", "parameter"}) {
+        SCOPED_TRACE(std::string(type) + " " + attachment + " visibility " +
+                     std::to_string(visibility));
+        FixtureOptions options;
+        options.annotations = {{type, visibility}};
+        options.annotation_sets = {{0}};
+        attachFixtureAnnotation(options, attachment);
+        std::string declaration;
+        if (std::string_view(attachment) == "class")
+          declaration = "class Lfixture/Sample;";
+        else if (std::string_view(attachment) == "field")
+          declaration = "field Lfixture/Sample;->VALUE:I";
+        else if (std::string_view(attachment) == "method")
+          declaration = "method Lfixture/Sample;->value(I)I";
+        else
+          declaration = "parameter 0 of method Lfixture/Sample;->value(I)I";
+        expectDexError(fixture(options).data,
+                       "Invalid DEX: unsupported annotation " +
+                           std::string(type) + " on " + declaration);
+      }
+    }
+  }
+}
+
+TEST(MobileDalvikReader, DexSystemClassAnnotationsKeepStructureAndVisibility) {
+  FixtureOptions options;
+  options.owner = "Lfixture/Outer$Nested;";
+  options.annotations = {enclosingClassAnnotation(), innerClassAnnotation(),
+                         typeArrayAnnotation()};
+  options.annotation_sets = {{2, 1, 0}};
+  options.class_annotations = 0;
+  auto parsed = parse(fixture(options).data);
+  ASSERT_EQ(parsed.size(), 1u);
+  EXPECT_EQ(parsed[0].name, "Lfixture/Outer$Nested;");
+  EXPECT_EQ(parsed[0].enclosing, "Lfixture/Outer;");
+  EXPECT_EQ(parsed[0].inner_name, "Nested");
+  EXPECT_EQ(parsed[0].inner_access, (Access{"public", "static"}));
+  ASSERT_EQ(parsed[0].methods.size(), 1u);
+  EXPECT_EQ(parsed[0].methods[0].reference.identity(),
+            "Lfixture/Outer$Nested;->value(I)I");
+  ASSERT_EQ(parsed[0].methods[0].instructions.size(), 1u);
+  EXPECT_EQ(parsed[0].methods[0].instructions[0].opcode, "return");
+  for (size_t index = 0; index < options.annotations.size(); ++index) {
+    for (unsigned visibility : {0u, 1u}) {
+      auto changed = options;
+      changed.annotations[index].visibility = visibility;
+      const auto &type = changed.annotations[index].type;
+      SCOPED_TRACE(type + " visibility " + std::to_string(visibility));
+      expectDexError(
+          fixture(changed).data,
+          "Invalid DEX: structural annotation " + type + " on class " +
+              options.owner + " requires system visibility");
+    }
+  }
+}
+
+TEST(MobileDalvikReader, DexKnownClassAnnotationsDoNotAuthorizeMemberUses) {
+  FixtureOptions options;
+  options.annotations = {typeArrayAnnotation()};
+  // Two different sets share the same correctly encoded annotation item.
+  options.annotation_sets = {{0}, {0}};
+  options.class_annotations = 0;
+  for (size_t set : {size_t(0), size_t(1)}) {
+    // Also attach the class's exact nonempty set to the method.
+    options.method_annotations = set;
+    expectDexError(
+        fixture(options).data,
+        "Invalid DEX: unsupported annotation "
+        "Ldalvik/annotation/MemberClasses; "
+        "on method Lfixture/Sample;->value(I)I");
+  }
+
+  options.annotations = {typeArrayAnnotation(
+      "Ldalvik/annotation/Throws;", {"Ljava/io/IOException;"})};
+  options.class_annotations.reset();
+  expectDexError(
+      fixture(options).data,
+      "Invalid DEX: unsupported annotation Ldalvik/annotation/Throws; "
+      "on method Lfixture/Sample;->value(I)I");
+}
+
+TEST(MobileDalvikReader, DexSharedEmptyAnnotationSetsKeepCompleteMethods) {
+  FixtureOptions options;
+  options.params = {"I", "J"};
+  options.registers = 3;
+  options.annotation_sets = {{}};
+  options.class_annotations = 0;
+  attachFixtureAnnotation(options, "field");
+  options.method_annotations = 0;
+  options.parameter_annotations =
+      std::vector<std::optional<size_t>>{std::nullopt, 0};
+  auto parsed = parse(fixture(options).data);
+  ASSERT_EQ(parsed.size(), 1u);
+  ASSERT_EQ(parsed[0].fields.size(), 1u);
+  ASSERT_EQ(parsed[0].methods.size(), 1u);
+  EXPECT_EQ(parsed[0].methods[0].reference.identity(),
+            "Lfixture/Sample;->value(IJ)I");
+  Budget budget;
+  auto result = recoverJava(linkClasses(std::move(parsed), budget), budget);
+  EXPECT_EQ(result.getInteger("method_count"), 1);
+  EXPECT_EQ(result.getInteger("recovered_method_count"), 1);
+  ASSERT_NE(result.getArray("source_units"), nullptr);
+  EXPECT_EQ(result.getArray("source_units")->size(), 1u);
+
+  FixtureOptions no_parameters;
+  no_parameters.params.clear();
+  no_parameters.words = {0x1012, 0x000f};
+  no_parameters.parameter_annotations =
+      std::vector<std::optional<size_t>>{};
+  auto zero = parse(fixture(no_parameters).data);
+  ASSERT_EQ(zero.size(), 1u);
+  ASSERT_EQ(zero[0].methods.size(), 1u);
+  EXPECT_EQ(zero[0].methods[0].reference.identity(),
+            "Lfixture/Sample;->value()I");
+}
+
+TEST(MobileDalvikReader, DexParameterAnnotationsUseLogicalSlotsAndExactCounts) {
+  FixtureOptions options;
+  options.params = {"J", "I"};
+  options.registers = 3;
+  options.words = {0x020f};
+  options.annotations = {{"Ljava/lang/Deprecated;", 1}};
+  options.annotation_sets = {{0}};
+  options.parameter_annotations =
+      std::vector<std::optional<size_t>>{std::nullopt, 0};
+  expectDexError(
+      fixture(options).data,
+      "Invalid DEX: unsupported annotation Ljava/lang/Deprecated; "
+      "on parameter 1 of method Lfixture/Sample;->value(JI)I");
+  options.parameter_annotations = std::vector<std::optional<size_t>>{0};
+  expectDexError(fixture(options).data,
+                 "Invalid DEX: parameter annotation count mismatch");
+  options.parameter_annotations =
+      std::vector<std::optional<size_t>>{0, 0, 0};
+  expectDexError(fixture(options).data,
+                 "Invalid DEX: parameter annotation count mismatch");
+}
+
+TEST(MobileDalvikReader, DexOrphanAnnotationsRetainNestedFormatChecks) {
+  FixtureOptions options;
+  options.annotations = {typeArrayAnnotation(),
+                         nestedAnnotation("Lfixture/NestedAnnotation;")};
+  // The second set reuses the class's item through the item cache. The
+  // third set is unattached, so its nested annotation has no source policy.
+  options.annotation_sets = {{0}, {0}, {1}};
+  options.class_annotations = 0;
+  for (unsigned visibility : {0u, 1u, 2u}) {
+    options.annotations[1].visibility = visibility;
+    auto parsed = parse(fixture(options).data);
+    ASSERT_EQ(parsed.size(), 1u);
+    ASSERT_EQ(parsed[0].methods.size(), 1u);
+    EXPECT_EQ(parsed[0].methods[0].reference.identity(),
+              "Lfixture/Sample;->value(I)I");
+  }
+  options.annotations[1] = nestedAnnotation("I");
+  expectDexError(fixture(options).data,
+                 "Invalid DEX: annotation type is not a class");
+  options.annotations[1] = nestedAnnotation("Lfixture/NestedAnnotation;");
+  options.annotations[1].visibility = 3;
+  expectDexError(fixture(options).data,
+                 "Invalid DEX: invalid annotation visibility");
+
+  options.annotations = {typeArrayAnnotation(), typeArrayAnnotation()};
+  options.annotation_sets = {{0, 1}};
+  expectDexError(fixture(options).data,
+                 "Invalid DEX: annotation types are duplicate or unordered");
+}
+
+TEST(MobileDalvikReader, DexEnclosingMethodRemainsExplicitlyUnsupported) {
+  FixtureOptions options;
+  options.owner = "Lfixture/Outer$1Nested;";
+  options.flags = 1;
+  options.registers = 2;
+  options.words = {0x010f};
+  options.referenced_method =
+      MethodRef{"Lfixture/Outer;", "factory", {}, "V"};
+  options.annotations = {
+      enclosingMethodAnnotation(*options.referenced_method),
+      innerClassAnnotation(0)};
+  options.annotation_sets = {{0, 1}};
+  options.class_annotations = 0;
+  expectDexError(
+      fixture(options).data,
+      "Invalid DEX: method-local/anonymous class source context is "
+      "unsupported: Lfixture/Outer$1Nested; annotation "
+      "Ldalvik/annotation/EnclosingMethod;");
+}
+
+TEST(MobileDalvikReader, DexRuntimeAnnotationFailureCannotPublishJava) {
+  FixtureOptions options;
+  options.annotations = {{"Ljava/lang/Deprecated;", 1}};
+  options.annotation_sets = {{0}};
+  options.class_annotations = 0;
+  const auto f = fixture(options);
+  DexRecoveryDirectory temporary;
+  auto input = temporary.path / "annotated.dex";
+  auto output = temporary.path / "output";
+  writeFile(input, f.data);
+  ASSERT_TRUE(fs::create_directory(output));
+  Options recovery;
+  recovery.input = input;
+  recovery.output = output;
+  Budget budget;
+  try {
+    (void)recoverAndroid(recovery, output, budget);
+    FAIL() << "Runtime annotation was silently dropped during recovery";
+  } catch (const Error &error) {
+    EXPECT_STREQ(error.what(),
+                 "Invalid DEX: unsupported annotation Ljava/lang/Deprecated; "
+                 "on class Lfixture/Sample;");
+  }
+  EXPECT_TRUE(fs::is_empty(output));
+  EXPECT_EQ(readFile(input, 1024 * 1024), f.data);
+}
+
 TEST(MobileDalvikReader, SmaliStructuralAnnotationsPreserveNestedOwnership) {
   auto cls = smali(
       ".class public final Lfixture/Outer$Nested;\n.super "
