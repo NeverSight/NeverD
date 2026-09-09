@@ -102,8 +102,7 @@ std::string symbolTable(uint32_t count, bool wide = true,
     const auto entry = symbols + i * entry_size;
     integer(data, entry, 1);
     integer(data, entry + 4, i + 1 == count ? 1 : 0x0f, 1);
-    integer(data, entry + 8, i + 1 == count ? 0 : 0x1000 + i * 4,
-            wide ? 8 : 4);
+    integer(data, entry + 8, i + 1 == count ? 0 : 0x1000 + i * 4, wide ? 8 : 4);
   }
   return data;
 }
@@ -928,7 +927,8 @@ TEST(MobileIOSNative, SymbolMetadataDoesNotConsumePublicationBudget) {
   EXPECT_EQ(budget.output_bytes, limits.max_bytes - 1);
 }
 
-TEST(MobileIOSNative, RepeatedSymbolNamesCannotAmplifyBeyondConstructionBudget) {
+TEST(MobileIOSNative,
+     RepeatedSymbolNamesCannotAmplifyBeyondConstructionBudget) {
   auto data = symbolTable(4000, true, "_$s" + std::string(900, 'x'));
   Limits limits;
   limits.max_bytes = data.size();

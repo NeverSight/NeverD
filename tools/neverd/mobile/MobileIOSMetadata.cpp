@@ -73,8 +73,8 @@ std::string_view symbolName(const Bytes &bytes, uint64_t strings,
                             Budget &budget) {
   if (index >= string_size)
     throw Error("Mach-O symbol string index is out of bounds");
-  auto name = bytes.d.substr(
-      strings + index, std::min<uint64_t>(16384, string_size - index));
+  auto name = bytes.d.substr(strings + index,
+                             std::min<uint64_t>(16384, string_size - index));
   auto end = name.find('\0');
   // Account for repeated references to long strings without allocating copies.
   // Each search is bounded even when the name is malformed.
