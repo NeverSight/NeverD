@@ -5,6 +5,8 @@ Requires macOS, its Swift toolchain, and a built NeverD. No downloads occur.
 Default verification fails on missing declarations, unclassified symbols, any
 unrecovered callable, compilation errors, or behavioral differences. Compiler
 accessors, allocators and runtime thunks remain in the inventory and counts.
+Every requested architecture/fixup variant must execute; unavailable host
+execution is a failure, including when --arch all requests both architectures.
 --setup-only verifies the originals against an independent mathematical oracle;
 it does not verify decompilation. Use --work-dir to retain failure evidence.
 """
@@ -121,6 +123,36 @@ def expected_results() -> dict[str, int]:
     return result
 
 
+def validate_fixture_callables(methods: list[dict], inventory_methods: list[dict], raw_names: Counter) -> None:
+    # These identities come from the owned fixture and its compiler output,
+    # independently of NeverD's two reports. Comparing only those reports and
+    # the nm name union cannot detect a callable reclassified as metadata.
+    manifest = json.loads(FIXTURE.with_suffix('.callables.json').read_text(encoding='utf-8'))
+    if (manifest.get('schema_version'), manifest.get('fixture'), manifest.get('module')) != (1, FIXTURE.name, MODULE):
+        raise RuntimeError('Invalid Swift fixture callable manifest')
+    expected = manifest['callables']
+    expected_names = Counter(row['mangled_symbol'] for row in expected)
+    if not expected_names or any(count != 1 for count in expected_names.values()):
+        raise RuntimeError('Swift fixture callable manifest has missing or duplicate identities')
+    for required in expected:
+        symbol = required['mangled_symbol']
+        if raw_names[symbol] != 1:
+            raise RuntimeError(f'required fixture callable {symbol} is absent or duplicated in the original; '
+                               'review the compiler output and fixture manifest')
+        for label, rows in (('coverage', methods), ('signature inventory', inventory_methods)):
+            matches = [row for row in rows if row.get('mangled_symbol') == symbol]
+            if len(matches) != 1 or matches[0].get('classification') != 'callable':
+                raise RuntimeError(f'required fixture callable {symbol} is absent, duplicated, or reclassified in {label}')
+            fields = ('node_kind', 'context_kind', 'context_name', 'name', 'declaration_kind')
+            if label == 'coverage':
+                fields += ('source_representation', 'compiler_projection_kind')
+            mismatches = [f'{field}={matches[0].get(field)!r} (expected {required.get(field)!r})'
+                          for field in fields if matches[0].get(field) != required.get(field)]
+            if mismatches:
+                raise RuntimeError(f'required fixture callable {symbol} has an incorrect role in {label}: '
+                                   + ', '.join(mismatches))
+
+
 def validate_coverage(output: Path, original: Path, architecture: str) -> dict:
     report = json.loads((output / 'report.json').read_text())
     coverage = json.loads((output / 'metadata/swift-methods.json').read_text())
@@ -150,6 +182,7 @@ def validate_coverage(output: Path, original: Path, architecture: str) -> dict:
     reported_names = Counter(row.get('mangled_symbol') for row in [*methods, *symbols])
     if raw_names != reported_names:
         raise RuntimeError(f'Swift symbol inventory is incomplete: missing={raw_names - reported_names}, extra={reported_names - raw_names}')
+    validate_fixture_callables(methods, inventory.get('methods', []), raw_names)
     if any(row.get('classification') != 'callable' or not row.get('node_kind') for row in methods):
         raise RuntimeError('A callable lacks its structural demangling classification')
     if any(row.get('classification') not in {'metadata', 'unknown'} or not row.get('node_kind') for row in symbols):
@@ -217,8 +250,9 @@ def verify(arguments: argparse.Namespace, work: Path) -> None:
     module_cache = arguments.module_cache.resolve() if arguments.module_cache else work / 'module-cache'
     architectures = ('arm64', 'x86_64') if arguments.arch == 'all' else (arguments.arch,)
     fixups = ('classic', 'default') if arguments.fixups == 'both' else (arguments.fixups,)
+    requested = {f'{architecture}-{fixup}' for architecture in architectures for fixup in fixups}
     expected = expected_results()
-    completed = 0
+    completed = set()
     failures = []
     for architecture in architectures:
         for fixup in fixups:
@@ -243,9 +277,9 @@ def verify(arguments: argparse.Namespace, work: Path) -> None:
                 try:
                     baseline = execution_results(original)
                 except OSError as error:
-                    if arguments.arch == 'all' and architecture != platform.machine() and error.errno in (errno.ENOEXEC, 86):
-                        print(f'SKIP {label}: this host cannot execute {architecture}', flush=True)
-                        break
+                    if error.errno in (errno.ENOEXEC, 86):
+                        raise RuntimeError(f'Requested {label} cannot execute on this host '
+                                           f'({platform.machine()}): {error}') from error
                     raise
                 assert_results(baseline, expected, f'Original {label}')
                 (variant / 'expected.json').write_text(json.dumps(expected, indent=2))
@@ -269,16 +303,18 @@ def verify(arguments: argparse.Namespace, work: Path) -> None:
                     print(f'PASS recovered {label}: {coverage["source_body_method_count"]} native bodies, '
                           f'{coverage["compiler_projection_method_count"]} compiler projections, '
                           f'{len(expected)} behavior checks', flush=True)
-                completed += 1
+                completed.add(label)
             except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
                 (variant / 'failure.txt').write_text(str(error))
                 failures.append(f'{label}: {error}')
                 print(f'FAIL {label}: {error}', file=sys.stderr, flush=True)
     if failures:
-        raise RuntimeError(f'{len(failures)} Swift variants failed; evidence: {work}\n' + '\n'.join(failures))
-    if not completed:
-        raise RuntimeError('No Swift variant was executed')
-    print(f'Verified {completed} {"original-only" if arguments.setup_only else "recovered"} variants')
+        raise RuntimeError(f'{len(failures)} Swift variants failed ({len(completed)}/{len(requested)} completed); '
+                           f'evidence: {work}\n' + '\n'.join(failures))
+    if completed != requested:
+        raise RuntimeError(f'Incomplete Swift execution matrix; missing variants: {sorted(requested - completed)}; '
+                           f'evidence: {work}')
+    print(f'Verified {len(completed)} {"original-only" if arguments.setup_only else "recovered"} variants')
 
 
 def main() -> int:

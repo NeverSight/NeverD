@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "fixture": "SwiftBehavior.swift",
+  "module": "SwiftBehavior",
+  "provenance": "Hand-reviewed from the Calculator.bias and Counter.value declarations in the owned SwiftBehavior.swift fixture, and the defined __TEXT,__text symbols in its Apple Swift 6.1.2 arm64/x86_64 -O outputs. Roles were independently checked with Apple's swift-demangle; the modify continuation is the compiler's defined .resume.0 symbol. NeverD output is not the source of this oracle. Changes in compiler-generated identities require explicit fixture review, not automatic regeneration from recovery reports.",
+  "callables": [
+    {
+      "mangled_symbol": "_$s13SwiftBehavior10CalculatorC4biass5Int64Vvg",
+      "node_kind": "Getter",
+      "context_kind": "class",
+      "context_name": "Calculator",
+      "name": "bias",
+      "declaration_kind": "getter",
+      "source_representation": "native-method-body"
+    },
+    {
+      "mangled_symbol": "_$s13SwiftBehavior7CounterV5values5Int64Vvg",
+      "node_kind": "Getter",
+      "context_kind": "struct",
+      "context_name": "Counter",
+      "name": "value",
+      "declaration_kind": "getter",
+      "source_representation": "native-method-body"
+    },
+    {
+      "mangled_symbol": "_$s13SwiftBehavior7CounterV5values5Int64Vvs",
+      "node_kind": "Setter",
+      "context_kind": "struct",
+      "context_name": "Counter",
+      "name": "value",
+      "declaration_kind": "setter",
+      "source_representation": "native-method-body"
+    },
+    {
+      "mangled_symbol": "_$s13SwiftBehavior10CalculatorCyACs5Int64VcfC",
+      "node_kind": "Allocator",
+      "context_kind": "class",
+      "context_name": "Calculator",
+      "name": "init",
+      "declaration_kind": "runtime",
+      "source_representation": "compiler-generated-from-type",
+      "compiler_projection_kind": "allocating_initializer"
+    },
+    {
+      "mangled_symbol": "_$s13SwiftBehavior10CalculatorCfd",
+      "node_kind": "Destructor",
+      "context_kind": "class",
+      "context_name": "Calculator",
+      "name": "deinit",
+      "declaration_kind": "runtime",
+      "source_representation": "compiler-generated-from-type",
+      "compiler_projection_kind": "trivial_destructor"
+    },
+    {
+      "mangled_symbol": "_$s13SwiftBehavior10CalculatorCfD",
+      "node_kind": "Deallocator",
+      "context_kind": "class",
+      "context_name": "Calculator",
+      "name": "deinit",
+      "declaration_kind": "runtime",
+      "source_representation": "compiler-generated-from-type",
+      "compiler_projection_kind": "deallocating_destructor"
+    },
+    {
+      "mangled_symbol": "_$s13SwiftBehavior10CalculatorCMa",
+      "node_kind": "TypeMetadataAccessFunction",
+      "context_kind": "class",
+      "context_name": "Calculator",
+      "name": "typeMetadata",
+      "declaration_kind": "runtime",
+      "source_representation": "compiler-generated-from-type",
+      "compiler_projection_kind": "type_metadata_accessor"
+    },
+    {
+      "mangled_symbol": "_$s13SwiftBehavior7CounterVMa",
+      "node_kind": "TypeMetadataAccessFunction",
+      "context_kind": "struct",
+      "context_name": "Counter",
+      "name": "typeMetadata",
+      "declaration_kind": "runtime",
+      "source_representation": "compiler-generated-from-type",
+      "compiler_projection_kind": "type_metadata_accessor"
+    },
+    {
+      "mangled_symbol": "_$s13SwiftBehavior7CounterV5values5Int64VvM",
+      "node_kind": "ModifyAccessor",
+      "context_kind": "struct",
+      "context_name": "Counter",
+      "name": "value",
+      "declaration_kind": "runtime",
+      "source_representation": "compiler-generated-from-type",
+      "compiler_projection_kind": "modify_accessor"
+    },
+    {
+      "mangled_symbol": "_$s13SwiftBehavior7CounterV5values5Int64VvM.resume.0",
+      "node_kind": "CoroutineContinuation",
+      "context_kind": "struct",
+      "context_name": "Counter",
+      "name": "value",
+      "declaration_kind": "runtime",
+      "source_representation": "compiler-generated-from-type",
+      "compiler_projection_kind": "modify_resume"
+    }
+  ]
+}
