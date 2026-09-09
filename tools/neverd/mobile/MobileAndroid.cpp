@@ -354,7 +354,8 @@ Object builtin(const Options &options, const fs::path &staging,
   std::vector<dalvik::Class> classes;
   for (size_t i = 0; i < paths.size(); ++i) {
     auto content = readFile(paths[i], limits.max_bytes);
-    budget.tick(content.size());
+    // Each reader charges byte scanning and structural work to this budget.
+    budget.check();
     if (dex) {
       auto parsed = dalvik::parseDex(content, inputs.names[i], budget);
       classes.insert(classes.end(), std::make_move_iterator(parsed.begin()),

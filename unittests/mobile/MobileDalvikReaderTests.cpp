@@ -3,6 +3,8 @@
 #include "MobileDalvik.h"
 #include "gtest/gtest.h"
 
+#include "llvm/ADT/SmallString.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SHA1.h"
 
 #include <algorithm>
@@ -314,6 +316,33 @@ Fixture fixture(FixtureOptions options = {}) {
 std::vector<Class> parse(const std::string &data) {
   Budget budget;
   return parseDex(data, "classes2.dex", budget);
+}
+struct DexRecoveryDirectory {
+  fs::path path;
+  DexRecoveryDirectory() {
+    llvm::SmallString<256> created;
+    auto prefix = pathText(fs::temp_directory_path() / "neverd-dex-budget");
+    if (auto error = llvm::sys::fs::createUniqueDirectory(prefix, created))
+      throw Error("cannot create DEX recovery fixture: " + error.message());
+    path = pathFromUTF8(created.str().str());
+  }
+  ~DexRecoveryDirectory() {
+    std::error_code ignored;
+    fs::remove_all(path, ignored);
+  }
+};
+Fixture stringReturningFixture(const std::u16string &literal) {
+  FixtureOptions options;
+  options.params.clear();
+  options.returns = "Ljava/lang/String;";
+  options.words = {0x001a, 0, 0x0011};
+  options.extras = {literal};
+  auto f = fixture(options);
+  auto found = std::find(f.strings.begin(), f.strings.end(), literal);
+  EXPECT_NE(found, f.strings.end());
+  patch(f.data, f.at["code"] + 18, found - f.strings.begin(), 2);
+  f.data = seal(std::move(f.data));
+  return f;
 }
 void expectDexError(const std::string &data, std::string_view reason) {
   try {
@@ -691,6 +720,95 @@ TEST(MobileDalvikReader, DexResourceLimitsApplyBeforeExpansion) {
   limits.max_bytes = 112;
   Budget bytes(limits);
   EXPECT_THROW(parseDex(f.data, "owned", bytes), Error);
+}
+TEST(MobileDalvikReader, DexStringRecoveryChargesReaderAndOutputWorkOnce) {
+  const std::string literal(40000, 'x');
+  auto f = stringReturningFixture(utf16(literal));
+  DexRecoveryDirectory temporary;
+  auto source = temporary.path / "literal.dex",
+       output = temporary.path / "output";
+  writeFile(source, f.data);
+  ASSERT_TRUE(fs::create_directory(output));
+  Options options;
+  options.input = source;
+  options.output = output;
+  Budget budget;
+  // About 40k actual MUTF8 bytes are decoded and another 40k are emitted.
+  // An additional full-input debit cannot fit this allowance. The large
+  // string is referenced by const-string and returned, not unused padding.
+  budget.remaining = 100000;
+  auto report = recoverAndroid(options, output, budget);
+  EXPECT_EQ(report.getString("status"), "success");
+  EXPECT_EQ(report.getInteger("dex_count"), 1);
+  EXPECT_EQ(report.getInteger("java_source_count"), 1);
+  auto *coverage = report.getObject("android_method_recovery");
+  ASSERT_NE(coverage, nullptr);
+  EXPECT_EQ(coverage->getInteger("method_count"), 1);
+  EXPECT_EQ(coverage->getInteger("recovered_method_count"), 1);
+  EXPECT_EQ(coverage->getInteger("declaration_only_method_count"), 0);
+  auto *methods = coverage->getArray("methods");
+  ASSERT_NE(methods, nullptr);
+  ASSERT_EQ(methods->size(), 1u);
+  auto *method = (*methods)[0].getAsObject();
+  ASSERT_NE(method, nullptr);
+  EXPECT_EQ(method->getString("identity"),
+            "Lfixture/Sample;->value()Ljava/lang/String;");
+  EXPECT_EQ(method->getString("status"), "recovered");
+  EXPECT_EQ(method->getInteger("instruction_count"), 2);
+  auto *sources = report.getArray("java_sources");
+  ASSERT_NE(sources, nullptr);
+  ASSERT_EQ(sources->size(), 1u);
+  EXPECT_EQ((*sources)[0].getAsString(), "sources/fixture/Sample.java");
+  auto java = readFile(output / "sources/fixture/Sample.java", 100000);
+  EXPECT_NE(java.find("class Sample"), std::string::npos);
+  EXPECT_NE(java.find("value()"), std::string::npos);
+  EXPECT_NE(java.find("\"" + literal + "\""), std::string::npos);
+  EXPECT_NE(java.find("return "), std::string::npos);
+  EXPECT_GT(budget.remaining, 0u);
+  EXPECT_LT(budget.remaining, 20000u);
+  EXPECT_EQ(readFile(source, 100000), f.data);
+  EXPECT_FALSE(fs::exists(output / ".android-work"));
+}
+TEST(MobileDalvikReader, DexStringReaderRetainsWorkAndIntegrityLimits) {
+  auto f = stringReturningFixture(std::u16string(40000, u'x'));
+  Budget reader_budget;
+  reader_budget.remaining = 30000;
+  try {
+    (void)parseDex(f.data, "literal.dex", reader_budget);
+    FAIL() << "DEX string decoding escaped its own work budget";
+  } catch (const Error &error) {
+    EXPECT_STREQ(error.what(), "mobile analysis exceeded its work budget");
+  }
+  // The header scan alone fits. Exhaustion must occur in the reader's actual
+  // table/string work, without any Android wrapper debit.
+  EXPECT_LT(reader_budget.remaining, 100u);
+
+  DexRecoveryDirectory temporary;
+  auto source = temporary.path / "literal.dex",
+       output = temporary.path / "output";
+  writeFile(source, f.data);
+  ASSERT_TRUE(fs::create_directory(output));
+  Options options;
+  options.input = source;
+  options.output = output;
+  Budget limited;
+  limited.remaining = 30000;
+  try {
+    (void)recoverAndroid(options, output, limited);
+    FAIL() << "Android recovery bypassed the reader's work budget";
+  } catch (const Error &error) {
+    EXPECT_STREQ(error.what(), "mobile analysis exceeded its work budget");
+  }
+  EXPECT_TRUE(fs::is_empty(output));
+  EXPECT_EQ(readFile(source, 100000), f.data);
+
+  auto corrupt = f.data;
+  corrupt[8] ^= 1;
+  expectDexError(corrupt, "Invalid DEX: checksum mismatch");
+  corrupt = f.data;
+  patch(corrupt, f.at["code"] + 18, 65535, 2);
+  expectDexError(seal(std::move(corrupt)),
+                 "Invalid DEX: string index out of bounds");
 }
 TEST(MobileDalvikReader, SmaliAbsoluteWordAliasesAndBodylessDeclarations) {
   auto cls =

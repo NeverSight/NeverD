@@ -88,6 +88,64 @@ TEST(MobileAndroid, DirectoryInputKeepsOriginalClassOwnershipAndDeclarations) {
   EXPECT_EQ((*names)[1].getAsString(), "nested/Value.smali");
   EXPECT_FALSE(fs::exists(output / ".android-work"));
 }
+TEST(MobileAndroid, SmaliFilesShareOneReaderBudgetWithoutDuplicateByteCharges) {
+  Temporary temporary;
+  auto source = temporary.path / "smali", output = temporary.path / "output";
+  const auto comment = "# " + std::string(40000, 'x') + "\n";
+  const auto first = comment + input("Lfixture/First;");
+  const auto second = comment + input("Lfixture/Second;");
+  writeFile(source / "First.smali", first);
+  writeFile(source / "Second.smali", second);
+  ASSERT_TRUE(fs::create_directory(output));
+  Options options;
+  options.input = source;
+  options.output = output;
+  Budget budget;
+  // Both valid inputs and their small Java outputs fit once. Charging each
+  // input again outside the reader cannot fit this shared allowance.
+  budget.remaining = 100000;
+  auto report = recoverAndroid(options, output, budget);
+  EXPECT_EQ(report.getString("status"), "success");
+  EXPECT_EQ(report.getInteger("smali_count"), 2);
+  EXPECT_EQ(report.getInteger("java_source_count"), 2);
+  auto *coverage = report.getObject("android_method_recovery");
+  ASSERT_NE(coverage, nullptr);
+  EXPECT_EQ(coverage->getInteger("method_count"), 2);
+  EXPECT_EQ(coverage->getInteger("recovered_method_count"), 2);
+  EXPECT_EQ(coverage->getInteger("declaration_only_method_count"), 0);
+  auto *names = report.getArray("input_code_files");
+  ASSERT_NE(names, nullptr);
+  ASSERT_EQ(names->size(), 2u);
+  EXPECT_EQ((*names)[0].getAsString(), "First.smali");
+  EXPECT_EQ((*names)[1].getAsString(), "Second.smali");
+  for (const std::string name : {"First", "Second"}) {
+    auto java = readFile(output / "sources/fixture" / (name + ".java"), 100000);
+    EXPECT_NE(java.find("class " + name), std::string::npos);
+    EXPECT_NE(java.find("int value(int arg0)"), std::string::npos);
+    EXPECT_NE(java.find("return "), std::string::npos);
+  }
+  EXPECT_GT(budget.remaining, 0u);
+  EXPECT_LT(budget.remaining, 20000u);
+  EXPECT_EQ(readFile(source / "First.smali", 100000), first);
+  EXPECT_EQ(readFile(source / "Second.smali", 100000), second);
+  EXPECT_FALSE(fs::exists(output / ".android-work"));
+
+  auto limited_output = temporary.path / "limited-output";
+  ASSERT_TRUE(fs::create_directory(limited_output));
+  options.output = limited_output;
+  Budget limited;
+  // Each file fits independently, but the pair must not receive fresh budgets.
+  limited.remaining = 60000;
+  try {
+    (void)recoverAndroid(options, limited_output, limited);
+    FAIL() << "multiple smali files escaped their shared work budget";
+  } catch (const Error &error) {
+    EXPECT_STREQ(error.what(), "mobile analysis exceeded its work budget");
+  }
+  EXPECT_TRUE(fs::is_empty(limited_output));
+  EXPECT_EQ(readFile(source / "First.smali", 100000), first);
+  EXPECT_EQ(readFile(source / "Second.smali", 100000), second);
+}
 TEST(MobileAndroid, ConflictingOutputClassesAreRejectedBeforeFirstSourceWrite) {
   Temporary temporary;
   auto source = temporary.path / "smali", output = temporary.path / "output";
