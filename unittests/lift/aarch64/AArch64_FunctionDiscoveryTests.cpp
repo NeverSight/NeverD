@@ -163,6 +163,116 @@ TEST(AArch64FunctionDiscovery, RejectsZeroSizedTypedFunctionStartWithBadCode) {
             0u);
 }
 
+TEST(AArch64FunctionDiscovery, RejectsMisalignedCandidatesBeforeTrialLifting) {
+  constexpr va_t ImageVA = 0x7000;
+  constexpr va_t MisalignedVA = ImageVA + 0xb;
+  constexpr va_t LeafVA = ImageVA + 0x20;
+  constexpr va_t SlotsVA = 0x8000;
+
+  for (bool FromRelocation : {false, true}) {
+    SCOPED_TRACE(FromRelocation ? "relocation" : "zero-sized symbol");
+    BinaryImage Img;
+    Img.Arch = Arch::AArch64;
+    Img.Bits = Bitness::Bits64;
+    Img.Format = BinaryFormat::MachO;
+    Img.Base = ImageVA;
+    Img.Entry = ImageVA;
+
+    Segment Text;
+    Text.Name = "__TEXT";
+    Text.VA = ImageVA;
+    Text.Size = 0x28;
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Data.assign(Text.Size, 0);
+    writeLE<uint32_t>(Text.Data.data(), 0xD65F03C0u); // ret
+    // These four bytes were observed at an unaligned candidate in a real
+    // image. Trial lifting them reached an invalid integer-width extension.
+    // A following ret makes the preliminary linear probe accept the bytes.
+    writeLE<uint32_t>(Text.Data.data() + (MisalignedVA - ImageVA), 0x04606DA9u);
+    writeLE<uint32_t>(Text.Data.data() + (MisalignedVA - ImageVA) + 4,
+                      0xD65F03C0u);
+    writeLE<uint32_t>(Text.Data.data() + (LeafVA - ImageVA), 0x52800540u);
+    writeLE<uint32_t>(Text.Data.data() + (LeafVA - ImageVA) + 4, 0xD65F03C0u);
+    Img.Segments.push_back(std::move(Text));
+    Img.Sections.push_back(makeMachOSection("__text", ImageVA, 0x28,
+                                            /*ContainsInstructions=*/true));
+
+    if (FromRelocation) {
+      Segment Data;
+      Data.Name = "__DATA";
+      Data.VA = SlotsVA;
+      Data.Size = 16;
+      Data.Flags = SegmentFlags::Readable;
+      Data.Data.assign(Data.Size, 0);
+      writeLE<uint64_t>(Data.Data.data(), MisalignedVA);
+      writeLE<uint64_t>(Data.Data.data() + 8, LeafVA);
+      Img.Segments.push_back(std::move(Data));
+      Img.CodePtrRelocSlots.insert(SlotsVA);
+      Img.CodePtrRelocSlots.insert(SlotsVA + 8);
+    } else {
+      Img.Symbols.push_back(Symbol::makeFunc(MisalignedVA));
+      Img.Symbols.push_back(Symbol::makeFunc(LeafVA));
+    }
+
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(Arch::AArch64));
+    FuncDetector Detector;
+    const auto Functions = Detector.detect(Img, Dec);
+
+    ASSERT_EQ(Functions.size(), 2u);
+    EXPECT_EQ(Functions[0].first, ImageVA);
+    EXPECT_EQ(Functions[1].first, LeafVA);
+    EXPECT_EQ(Img.VerifiedFunctionEntries.count(MisalignedVA), 0u);
+    EXPECT_EQ(Img.VerifiedFunctionEntries.count(LeafVA), 1u);
+  }
+}
+
+TEST(AArch64FunctionDiscovery,
+     RejectsMisalignedTrustedMetadataWithAndWithoutAnEntryPoint) {
+  constexpr va_t ImageVA = 0x9000;
+  constexpr va_t EntryVA = ImageVA + 0x3;
+  constexpr va_t SizedVA = ImageVA + 0xb;
+  constexpr va_t ExportVA = ImageVA + 0x13;
+  constexpr va_t LeafVA = ImageVA + 0x20;
+
+  for (bool HasEntry : {false, true}) {
+    SCOPED_TRACE(HasEntry ? "linked entry" : "relocatable without entry");
+    BinaryImage Img;
+    Img.Arch = Arch::AArch64;
+    Img.Bits = Bitness::Bits64;
+    Img.Format = BinaryFormat::MachO;
+    Img.Base = ImageVA;
+    Img.Entry = HasEntry ? EntryVA : 0;
+    Img.IsRelocatable = !HasEntry;
+
+    Segment Text;
+    Text.Name = "__TEXT";
+    Text.VA = ImageVA;
+    Text.Size = 0x24;
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Data.assign(Text.Size, 0);
+    for (va_t Addr : {EntryVA, SizedVA, ExportVA, LeafVA})
+      writeLE<uint32_t>(Text.Data.data() + (Addr - ImageVA), 0xD65F03C0u);
+    Img.Segments.push_back(std::move(Text));
+    Img.Sections.push_back(makeMachOSection("__text", ImageVA, 0x24,
+                                            /*ContainsInstructions=*/true));
+    Img.Symbols.push_back(Symbol::makeFunc(EntryVA, 4));
+    Img.Symbols.push_back(Symbol::makeFunc(SizedVA, 4));
+    Img.Symbols.push_back(Symbol::makeFunc(LeafVA, 4));
+    Img.Exports.push_back({"_misaligned", 0, ExportVA});
+
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(Arch::AArch64));
+    FuncDetector Detector;
+    const auto Functions = Detector.detect(Img, Dec);
+
+    ASSERT_EQ(Functions.size(), 1u);
+    EXPECT_EQ(Functions.front().first, LeafVA);
+    for (va_t Addr : {EntryVA, SizedVA, ExportVA})
+      EXPECT_EQ(Img.VerifiedFunctionEntries.count(Addr), 0u);
+  }
+}
+
 TEST(AArch64FunctionDiscovery,
      X64CallScanRejectsDataAndCodeToDataBoundaryPatterns) {
   constexpr va_t ImageVA = 0x3000;
