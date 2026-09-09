@@ -16,7 +16,9 @@ import subprocess
 import sys
 
 
-MAX_AST_BYTES = 256 * 1024 * 1024
+# SDK 26.5's complete Messages import produces about 263 MiB of JSON. Keep
+# the full declaration closure and a finite ceiling above that measured input.
+MAX_AST_BYTES = 384 * 1024 * 1024
 IMPORTS = {"Messages/Messages.h": "MSStickerBrowserViewController",
            "UserNotifications/UserNotifications.h": "UNNotificationServiceExtension"}
 
