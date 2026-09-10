@@ -179,6 +179,39 @@ protected:
     return Path;
   }
 
+  void expectSignatureJSONName(const std::string &Name) {
+    const auto Input =
+        write("signature-input.elf", makeNamedNativeELF("entry"));
+    ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1)
+        << takeString(neverd_last_error(Session));
+    const neverd_va_t Entry = neverd_session_entry_addr(Session);
+    ASSERT_EQ(neverd_func_count(Session), 1);
+    const auto Pattern =
+        write("signature-library.pat",
+              "B807000000C3 00 0000 0006 :0000 " + Name + "\n");
+    ASSERT_EQ(neverd_apply_signature_file(Session, Pattern.c_str()), 1)
+        << takeString(neverd_last_error(Session));
+    EXPECT_EQ(neverd_sig_match_count(Session), 1);
+    const std::string Text = takeString(neverd_sig_matches_json(Session));
+    auto Parsed = llvm::json::parse(Text);
+    ASSERT_TRUE(static_cast<bool>(Parsed))
+        << llvm::toString(Parsed.takeError());
+    const auto *Matches = Parsed->getAsArray();
+    ASSERT_NE(Matches, nullptr);
+    ASSERT_EQ(Matches->size(), 1U);
+    const auto *Match = (*Matches)[0].getAsObject();
+    ASSERT_NE(Match, nullptr);
+    EXPECT_EQ(Match->getString("name"), Name);
+    EXPECT_EQ(Match->getString("library"), "signature-library");
+    EXPECT_EQ(Match->getInteger("func_len"), 6);
+    const auto Address = Match->getString("addr");
+    ASSERT_TRUE(Address.has_value());
+    uint64_t ParsedAddress = 0;
+    ASSERT_FALSE(Address->getAsInteger(0, ParsedAddress));
+    EXPECT_EQ(ParsedAddress, Entry);
+    EXPECT_EQ(neverd_sig_match_count(Session), 1);
+  }
+
   std::filesystem::path Directory;
   neverd_session_t Session = nullptr;
 };
@@ -816,6 +849,14 @@ TEST_F(SessionCAPITest, IRViewPreservesMultibyteUTF8AcrossPhysicalPages) {
     EXPECT_EQ(Reassembled, Legacy);
     EXPECT_TRUE(takeString(neverd_last_error(Session)).empty());
   }
+}
+
+TEST_F(SessionCAPITest, SignatureJSONPreservesASCIINameAndMatchFields) {
+  expectSignatureJSONName("ascii_function");
+}
+
+TEST_F(SessionCAPITest, SignatureJSONPreservesUnicodeNameAndMatchFields) {
+  expectSignatureJSONName("\xe5\x87\xbd\xe6\x95\xb0_caf\xc3\xa9");
 }
 
 } // namespace

@@ -9,6 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "JSONText.h"
 #include "SessionImpl.h"
 
 #include "neverd/sigs/SignatureMatcher.h"
@@ -164,8 +165,8 @@ const char *neverd_sig_matches_json(neverd_session_t Sess) {
   for (const auto &M : S->SigDB.matches()) {
     llvm::json::Object Obj;
     Obj["addr"] = vaHex(M.Address);
-    Obj["name"] = M.Name;
-    Obj["library"] = M.LibraryName;
+    Obj["name"] = jsonSafeText(M.Name);
+    Obj["library"] = jsonSafeText(M.LibraryName);
     Obj["func_len"] = static_cast<int64_t>(M.FuncLen);
     Arr.push_back(std::move(Obj));
   }
