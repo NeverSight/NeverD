@@ -112,7 +112,7 @@ Rectangle {
                 }
                 event.accepted = true
             }
-            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+            ScrollBar.vertical: WorkbenchScrollBar { policy: ScrollBar.AsNeeded }
             delegate: ItemDelegate {
                 id: functionRow
                 required property string name

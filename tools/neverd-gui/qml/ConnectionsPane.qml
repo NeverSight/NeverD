@@ -3,11 +3,14 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-Item {
+Rectangle {
     id: root
+    color: Theme.editor
     required property var client
     required property var broker
     required property var controller
+    required property Item dialogParent
+    signal dialogRequested(var dialog, var focusItem)
     property string validationError: ""
     property var selectedTool: null
     property string selectedCallId: ""
@@ -38,17 +41,18 @@ Item {
             Text { textFormat: Text.PlainText; text: root.broker.enabled ? qsTr("Current session is available to external agents.") : qsTr("Connect tools and resources, or share this session with an external agent."); color: Theme.subdued; font.pointSize: Theme.bodySize; wrapMode: Text.WordWrap; Layout.fillWidth: true }
             Item { Layout.fillHeight: true }
         }
-        WorkbenchButton { text: qsTr("Manage Connections…"); onClicked: manager.open() }
+        WorkbenchButton { text: qsTr("Manage Connections…"); onClicked: root.dialogRequested(manager, endpoint) }
     }
     Dialog {
         id: manager
         objectName: "connectionManager"
         title: qsTr("MCP Connections")
-        parent: Overlay.overlay
+        parent: root.dialogParent
         anchors.centerIn: parent
-        width: Math.min(1080, parent.width - 50)
-        height: Math.min(760, parent.height - 50)
+        width: parent ? Math.min(1080, parent.width - 50) : 0
+        height: parent ? Math.min(760, parent.height - 50) : 0
         modal: true
+        palette: WorkbenchPalette {}
         standardButtons: Dialog.Close
         background: Rectangle { color: Theme.sidebar; border.color: Theme.border; radius: 4 }
         ColumnLayout {
@@ -64,7 +68,7 @@ Item {
             Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: Theme.border }
             RowLayout {
                 Layout.fillWidth: true
-                ComboBox { id: transport; model: ["stdio", "Streamable HTTP"]; Layout.preferredWidth: 175; enabled: !root.client.connected; Accessible.name: qsTr("Transport") }
+                ComboBox { id: transport; palette.dark: Theme.muted; model: ["stdio", "Streamable HTTP"]; Layout.preferredWidth: 175; enabled: !root.client.connected; Accessible.name: qsTr("Transport") }
                 WorkbenchField { id: endpoint; Layout.fillWidth: true; placeholderText: transport.currentIndex === 0 ? qsTr("Absolute path to server executable") : "https://localhost:8443/mcp"; enabled: !root.client.connected; LayoutMirroring.enabled: false; Accessible.name: qsTr("Server endpoint") }
                 WorkbenchButton {
                     text: root.client.connected ? qsTr("Disconnect") : qsTr("Connect")
@@ -118,7 +122,7 @@ Item {
                         clip: true
                         reuseItems: true
                         model: catalogTabs.currentIndex === 0 ? root.client.tools : catalogTabs.currentIndex === 1 ? root.client.resources : root.client.callHistory
-                        ScrollBar.vertical: ScrollBar {}
+                        ScrollBar.vertical: WorkbenchScrollBar {}
                         delegate: ItemDelegate {
                             id: catalogRow
                             required property var modelData
@@ -158,7 +162,7 @@ Item {
                         Layout.fillWidth: true
                         Layout.leftMargin: 10
                         Text { textFormat: Text.PlainText; text: root.selectedTool ? root.selectedTool.name : qsTr("Result"); color: Theme.foreground; font.pointSize: Theme.bodySize; elide: Text.ElideRight; Layout.fillWidth: true }
-                        WorkbenchButton { text: qsTr("Schema"); visible: catalogTabs.currentIndex !== 2; enabled: !!root.selectedTool; onClicked: schemaDialog.open() }
+                        WorkbenchButton { text: qsTr("Schema"); visible: catalogTabs.currentIndex !== 2; enabled: !!root.selectedTool; onClicked: root.dialogRequested(schemaDialog, null) }
                         WorkbenchButton { text: qsTr("Call Tool"); visible: catalogTabs.currentIndex !== 2; enabled: !!root.selectedTool && root.client.connected; onClicked: root.client.callTool(root.selectedTool.name, parameters.text) }
                         WorkbenchButton { text: qsTr("Cancel Call"); visible: catalogTabs.currentIndex === 2; enabled: !!root.selectedCall && root.selectedCall.status === "pending"; onClicked: root.client.cancelCall(root.selectedCallId) }
                     }
@@ -179,11 +183,12 @@ Item {
     Dialog {
         id: schemaDialog
         title: qsTr("Tool Input Schema")
-        parent: Overlay.overlay
+        parent: root.dialogParent
         anchors.centerIn: parent
-        width: Math.min(680, parent.width - 80)
-        height: Math.min(560, parent.height - 80)
+        width: parent ? Math.min(680, parent.width - 80) : 0
+        height: parent ? Math.min(560, parent.height - 80) : 0
         modal: true
+        palette: WorkbenchPalette {}
         standardButtons: Dialog.Close
         background: Rectangle { color: Theme.sidebar; border.color: Theme.border; radius: 4 }
         TextPane { anchors.fill: parent; text: root.selectedTool ? JSON.stringify(root.selectedTool.inputSchema, null, 2) : ""; codePointSize: Theme.bodySize }

@@ -25,7 +25,7 @@ Rectangle {
         boundsBehavior: Flickable.StopAtBounds
         LayoutMirroring.enabled: false
         LayoutMirroring.childrenInherit: true
-        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+        ScrollBar.vertical: WorkbenchScrollBar { policy: ScrollBar.AsNeeded }
         function moveCurrent(index) {
             if (count === 0) return
             currentIndex = Math.max(0, Math.min(count - 1, index))

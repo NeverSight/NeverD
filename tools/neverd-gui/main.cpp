@@ -41,6 +41,9 @@ public:
   QUrl groupFilename() const override {
     return QUrl("qrc:/qt/qml/NeverD/Workbench/qml/DockGroup.qml");
   }
+  QUrl floatingWindowFilename() const override {
+    return QUrl("qrc:/qt/qml/NeverD/Workbench/qml/DockFloatingWindow.qml");
+  }
   QUrl separatorFilename() const override {
     return QUrl("qrc:/qt/qml/NeverD/Workbench/qml/DockSeparator.qml");
   }

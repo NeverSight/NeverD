@@ -70,8 +70,8 @@ Rectangle {
                 contentWidth: Math.max(width, root.graphBounds.width * root.zoom)
                 contentHeight: Math.max(height, root.graphBounds.height * root.zoom)
                 boundsBehavior: Flickable.StopAtBounds
-                ScrollBar.vertical: ScrollBar {}
-                ScrollBar.horizontal: ScrollBar {}
+                ScrollBar.vertical: WorkbenchScrollBar {}
+                ScrollBar.horizontal: WorkbenchScrollBar {}
                 onContentXChanged: root.scheduleRefresh()
                 onContentYChanged: root.scheduleRefresh()
                 onWidthChanged: root.scheduleRefresh()

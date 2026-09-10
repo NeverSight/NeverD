@@ -33,7 +33,7 @@ Rectangle {
                 model: root.controller.contributions
                 clip: true
                 reuseItems: true
-                ScrollBar.vertical: ScrollBar { active: true }
+                ScrollBar.vertical: WorkbenchScrollBar { active: true }
                 delegate: ItemDelegate {
                     id: entry
                     required property var modelData

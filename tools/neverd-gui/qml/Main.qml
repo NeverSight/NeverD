@@ -16,17 +16,7 @@ ApplicationWindow {
     title: workbench.fileName ? (workbench.unsavedChanges ? "● " : "") + workbench.fileName + " — NeverD" : qsTr("NeverD — Binary Analysis")
     color: Theme.editor
     font.pointSize: Theme.bodySize
-    palette.window: Theme.editor
-    palette.windowText: Theme.foreground
-    palette.base: Theme.editor
-    palette.alternateBase: Theme.sidebar
-    palette.text: Theme.foreground
-    palette.button: Theme.elevated
-    palette.buttonText: Theme.foreground
-    palette.highlight: Theme.accent
-    palette.highlightedText: Theme.accentForeground
-    palette.mid: Theme.border
-    palette.dark: Theme.editor
+    palette: WorkbenchPalette {}
     LayoutMirroring.enabled: workbench.language === "ar"
     LayoutMirroring.childrenInherit: true
     readonly property bool interfaceMirrored: LayoutMirroring.enabled
@@ -168,7 +158,7 @@ ApplicationWindow {
                     Accessible.name: "NeverD"
                     Accessible.role: Accessible.Graphic
                 }
-                WorkbenchButton { text: qsTr("Open Binary"); hint: openAction.text + " (" + openAction.shortcut + ")"; primary: !workbench.loaded; onClicked: window.openMainDialog(fileDialog) }
+                WorkbenchButton { text: qsTr("Open Binary"); hint: openAction.text + " (" + openAction.shortcut + ")"; onClicked: window.openMainDialog(fileDialog) }
                 Rectangle { width: 1; Layout.preferredHeight: 20; color: Theme.border; Layout.margins: 5 }
                 WorkbenchButton { text: "←"; hint: backAction.text; enabled: backAction.enabled; onClicked: workbench.goBack(); rotation: workbench.language === "ar" ? 180 : 0 }
                 WorkbenchButton { text: "→"; hint: forwardAction.text; enabled: forwardAction.enabled; onClicked: workbench.goForward(); rotation: workbench.language === "ar" ? 180 : 0 }
@@ -238,20 +228,22 @@ ApplicationWindow {
             onRenameRequested: window.openRename()
             onCommentRequested: window.openComment()
             onImportExtensionsRequested: window.openMainDialog(extensionFileDialog)
+            onConnectionDialogRequested: (dialog, focusItem) => window.openMainDialog(dialog, focusItem)
         }
     }
 
     footer: Rectangle {
         height: 26
-        color: Theme.accent
+        color: Theme.sidebar
+        Rectangle { width: parent.width; height: 1; color: Theme.border }
         RowLayout {
             anchors.fill: parent
             anchors.leftMargin: 13
             anchors.rightMargin: 12
             spacing: 17
-            Text { textFormat: Text.PlainText; text: workbench.workerConnected ? qsTr("Worker connected") : qsTr("Worker offline"); color: Theme.accentForeground; font.pointSize: Theme.captionSize }
-            Rectangle { implicitWidth: 1; implicitHeight: 12; color: Theme.accentForegroundMuted }
-            Text { textFormat: Text.PlainText; text: workbench.status; color: Theme.accentForeground; font.pointSize: Theme.captionSize; elide: Text.ElideRight; Layout.fillWidth: true }
+            Text { textFormat: Text.PlainText; text: workbench.workerConnected ? qsTr("Worker connected") : qsTr("Worker offline"); color: Theme.foreground; font.pointSize: Theme.captionSize }
+            Rectangle { implicitWidth: 1; implicitHeight: 12; color: Theme.border }
+            Text { textFormat: Text.PlainText; text: workbench.status; color: Theme.foreground; font.pointSize: Theme.captionSize; elide: Text.ElideRight; Layout.fillWidth: true }
             ProgressBar {
                 id: analysisProgress
                 visible: workbench.busy
@@ -259,12 +251,12 @@ ApplicationWindow {
                 Layout.preferredHeight: 3
                 value: workbench.progress
                 indeterminate: workbench.progress < 0
-                background: Rectangle { color: Theme.accentTrack; radius: 1 }
+                background: Rectangle { color: Theme.border; radius: 1 }
                 contentItem: Item {
                     Rectangle {
                         width: parent.width * (analysisProgress.indeterminate ? 1 : analysisProgress.visualPosition)
                         height: parent.height
-                        color: Theme.accentForeground
+                        color: Theme.accent
                         SequentialAnimation on opacity {
                             running: analysisProgress.visible && analysisProgress.indeterminate
                             loops: Animation.Infinite
@@ -274,8 +266,8 @@ ApplicationWindow {
                     }
                 }
             }
-            Text { textFormat: Text.PlainText; text: workbench.selectedAddress || ""; color: Theme.accentForeground; font.family: Theme.monoFont; font.pointSize: Theme.captionSize; LayoutMirroring.enabled: false }
-            Text { textFormat: Text.PlainText; text: window.languageNames[Math.max(0, window.languageCodes.indexOf(workbench.language))]; color: Theme.accentForeground; font.pointSize: Theme.captionSize; visible: window.width > 1100 }
+            Text { textFormat: Text.PlainText; text: workbench.selectedAddress || ""; color: Theme.foreground; font.family: Theme.monoFont; font.pointSize: Theme.captionSize; LayoutMirroring.enabled: false }
+            Text { textFormat: Text.PlainText; text: window.languageNames[Math.max(0, window.languageCodes.indexOf(workbench.language))]; color: Theme.foreground; font.pointSize: Theme.captionSize; visible: window.width > 1100 }
         }
     }
 
@@ -404,6 +396,7 @@ ApplicationWindow {
             Text { textFormat: Text.PlainText; text: qsTr("Language"); color: Theme.foreground; font.pointSize: Theme.bodySize; font.weight: Font.Medium }
             ComboBox {
                 id: languageSelector
+                palette.dark: Theme.muted
                 objectName: "languageSelector"
                 Layout.fillWidth: true
                 model: window.languageNames

@@ -1,0 +1,29 @@
+import QtQuick
+
+Palette {
+    window: Theme.sidebar
+    windowText: Theme.foreground
+    base: Theme.editor
+    alternateBase: Theme.sidebar
+    text: Theme.foreground
+    button: Theme.elevated
+    buttonText: Theme.foreground
+    brightText: Theme.accentForeground
+    placeholderText: Theme.subdued
+    highlight: Theme.accent
+    highlightedText: Theme.accentForeground
+    light: Theme.hover
+    midlight: Theme.elevated
+    mid: Theme.border
+    dark: Theme.border
+    shadow: "#000000"
+    toolTipBase: Theme.sidebar
+    toolTipText: Theme.foreground
+    link: Theme.keyword
+    linkVisited: Theme.controlFlow
+    accent: Theme.accent
+    disabled.buttonText: Theme.subdued
+    disabled.windowText: Theme.subdued
+    disabled.text: Theme.subdued
+    disabled.placeholderText: Theme.subdued
+}

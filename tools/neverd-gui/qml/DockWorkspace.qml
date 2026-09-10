@@ -1,5 +1,6 @@
 pragma ComponentBehavior: Bound
 import QtQuick
+import QtQuick.Controls.Basic
 import NeverD.Native 1.0
 import com.kdab.dockwidgets 2.0 as Dock
 
@@ -34,6 +35,7 @@ Rectangle {
     signal renameRequested()
     signal commentRequested()
     signal importExtensionsRequested()
+    signal connectionDialogRequested(var dialog, var focusItem)
     color: Theme.editor
     readonly property var panels: [functionsDock, machineDock, representationDock, referencesDock, outputDock, connectionsDock, extensionsDock]
     readonly property var contents: [functions, machine, representation, references, output, connections, extensions]
@@ -302,7 +304,7 @@ Rectangle {
             objectName: "connectionsDock"
             uniqueName: "neverd.connections"
             title: qsTranslate("Main", "Connections")
-            ConnectionsPane { id: connections; anchors.fill: parent; client: root.client; broker: root.broker; controller: root.controller; property var kddockwidgets_min_size: Qt.size(420, 140) }
+            ConnectionsPane { id: connections; anchors.fill: parent; client: root.client; broker: root.broker; controller: root.controller; dialogParent: root.Overlay.overlay; onDialogRequested: (dialog, focusItem) => root.connectionDialogRequested(dialog, focusItem); property var kddockwidgets_min_size: Qt.size(420, 140) }
         }
         Dock.DockWidget {
             id: extensionsDock

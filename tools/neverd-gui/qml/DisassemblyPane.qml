@@ -67,8 +67,8 @@ Rectangle {
             contentWidth: Math.max(width, root.minimumListingWidth)
             flickableDirection: Flickable.AutoFlickIfNeeded
             boundsBehavior: Flickable.StopAtBounds
-            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-            ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
+            ScrollBar.vertical: WorkbenchScrollBar { policy: ScrollBar.AsNeeded }
+            ScrollBar.horizontal: WorkbenchScrollBar { policy: ScrollBar.AsNeeded }
             function moveCurrent(index) {
                 if (count === 0) return
                 currentIndex = Math.max(0, Math.min(count - 1, index))

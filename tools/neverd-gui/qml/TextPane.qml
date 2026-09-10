@@ -75,8 +75,12 @@ Rectangle {
         contentWidth: Math.max(availableWidth, code.implicitWidth)
         ScrollBar.vertical.policy: ScrollBar.AsNeeded
         ScrollBar.vertical.active: true
+        ScrollBar.vertical.palette.mid: Theme.subdued
+        ScrollBar.vertical.palette.dark: Theme.muted
         ScrollBar.horizontal.policy: ScrollBar.AsNeeded
         ScrollBar.horizontal.active: true
+        ScrollBar.horizontal.palette.mid: Theme.subdued
+        ScrollBar.horizontal.palette.dark: Theme.muted
         TextArea {
             id: code
             objectName: "codeText"
