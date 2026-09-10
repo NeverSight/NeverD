@@ -427,6 +427,87 @@ TEST_F(SessionCAPITest, FailedNativeReloadPreservesDecoderAndDebugSelection) {
   EXPECT_NE(NewDisassembly, Disassembly);
 }
 
+TEST_F(SessionCAPITest, NativeAnalysisPublishesRecoveredFunctions) {
+  for (bool AArch64 : {false, true}) {
+    SCOPED_TRACE(AArch64 ? "aarch64" : "x86_64");
+    const std::string Path =
+        write(AArch64 ? "recovered-arm.elf" : "recovered-x86.elf",
+              makeNativeELF(AArch64));
+    ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+    const neverd_va_t Entry = neverd_session_entry_addr(Session);
+    // Listing loader symbols must keep the inexpensive, unanalyzed path.
+    EXPECT_EQ(neverd_func_count(Session), 0);
+    ASSERT_EQ(neverd_session_analyze(Session), 1)
+        << takeString(neverd_last_error(Session));
+    ASSERT_EQ(neverd_func_count(Session), 1);
+    const int Index = neverd_func_find_by_addr(Session, Entry);
+    ASSERT_GE(Index, 0);
+    EXPECT_EQ(neverd_func_entry(Session, Index), Entry);
+    EXPECT_EQ(neverd_func_size(Session, Index), AArch64 ? 8 : 6);
+    const std::string Name = takeString(neverd_func_name(Session, Index));
+    EXPECT_FALSE(Name.empty());
+    EXPECT_EQ(neverd_func_find_by_name(Session, Name.c_str()), Index);
+    const std::string Resolved =
+        takeString(neverd_resolve_addr(Session, Entry));
+    auto Parsed = llvm::json::parse(Resolved);
+    ASSERT_TRUE(static_cast<bool>(Parsed)) << Resolved;
+    ASSERT_NE(Parsed->getAsObject(), nullptr);
+    EXPECT_EQ(Parsed->getAsObject()->getString("type"), "function");
+    ASSERT_EQ(neverd_session_analyze(Session), 1);
+    EXPECT_EQ(neverd_func_count(Session), 1);
+  }
+}
+
+TEST_F(SessionCAPITest, LazyNativeAnalysisRetainsRecoveredNamesAcrossReload) {
+  const std::string Path = write("recovered.elf", makeNativeELF(false));
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  const neverd_va_t Entry = neverd_session_entry_addr(Session);
+  ASSERT_FALSE(takeString(neverd_ir_low(Session, Entry)).empty());
+  const int Index = neverd_func_find_by_addr(Session, Entry);
+  ASSERT_GE(Index, 0);
+  const std::string Original = takeString(neverd_func_name(Session, Index));
+  ASSERT_EQ(neverd_rename_func(Session, Original.c_str(), "reviewed_entry"), 0)
+      << takeString(neverd_last_error(Session));
+  EXPECT_EQ(neverd_func_find_by_name(Session, "reviewed_entry"), Index);
+
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  EXPECT_EQ(neverd_func_count(Session), 0);
+  ASSERT_EQ(neverd_session_analyze(Session), 1);
+  EXPECT_EQ(neverd_func_count(Session), 1);
+  const int Reloaded = neverd_func_find_by_addr(Session, Entry);
+  ASSERT_GE(Reloaded, 0);
+  EXPECT_EQ(takeString(neverd_func_name(Session, Reloaded)), "reviewed_entry");
+  EXPECT_NE(takeString(neverd_renames_json(Session)).find(Original),
+            std::string::npos);
+
+  const std::string Replacement =
+      write("replacement.elf", makeNativeELF(true, 0x800000));
+  ASSERT_EQ(neverd_session_load(Session, Replacement.c_str()), 1);
+  EXPECT_EQ(neverd_func_count(Session), 0);
+  ASSERT_EQ(neverd_session_analyze(Session), 1);
+  EXPECT_EQ(neverd_func_count(Session), 1);
+  EXPECT_EQ(neverd_func_find_by_addr(Session, Entry), -1);
+  EXPECT_EQ(neverd_func_find_by_name(Session, "reviewed_entry"), -1);
+}
+
+TEST_F(SessionCAPITest, NativeAnalysisPreservesLoaderNamesAndSavedRenames) {
+  const std::string Path =
+      write("named.elf", makeNamedNativeELF("named_entry"));
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  ASSERT_EQ(neverd_func_count(Session), 1);
+  const neverd_va_t Entry = neverd_func_entry(Session, 0);
+  ASSERT_EQ(neverd_rename_func(Session, "named_entry", "reviewed_entry"), 0);
+  ASSERT_EQ(neverd_session_analyze(Session), 1);
+  EXPECT_EQ(neverd_func_count(Session), 1);
+  EXPECT_EQ(neverd_func_entry(Session, 0), Entry);
+  EXPECT_EQ(neverd_func_size(Session, 0), 6);
+  EXPECT_EQ(takeString(neverd_func_name(Session, 0)), "reviewed_entry");
+  ASSERT_TRUE(std::filesystem::remove(Path + ".neverd-renames.json"));
+  ASSERT_EQ(neverd_renames_load(Session), 0);
+  EXPECT_EQ(takeString(neverd_func_name(Session, 0)), "named_entry");
+  EXPECT_EQ(neverd_func_count(Session), 1);
+}
+
 TEST_F(SessionCAPITest,
        NativeLLVMQueryUsesOriginalAddressForDebugNamedFunction) {
   const std::string Path = write("named.elf", makeNativeELF(false));

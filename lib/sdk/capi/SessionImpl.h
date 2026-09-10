@@ -86,6 +86,7 @@ struct Session {
   PipelineResult PipeResult;
   bool PipeRan = false;
   bool SBFFunctionsSynchronized = false;
+  bool NativeFunctionsSynchronized = false;
   evm::Hardfork EVMFork = evm::Hardfork::Latest;
   bool EVMStrict = true;
   sbf::Version SBFVersion = sbf::Version::Auto;
@@ -288,6 +289,7 @@ struct Session {
     LLVMCtx.reset();
     PipeRan = false;
     SBFFunctionsSynchronized = false;
+    NativeFunctionsSynchronized = false;
   }
 
   void invalidatePipeline() {
@@ -316,8 +318,10 @@ struct Session {
     return PipeResult.Success;
   }
 
-  /// Merge loader symbols with functions recovered by the SBF analyzer. All
-  /// public function-oriented APIs consume this single session view.
+  /// Merge loader symbols with recovered functions. Native queries preserve
+  /// the cheap symbol-only view until analysis has run; SBF queries retain
+  /// their existing eager analysis contract. All public function-oriented APIs
+  /// consume this single session view.
   bool synchronizeFunctions();
 
   const LowFunc *findLowFunc(va_t Addr) const {

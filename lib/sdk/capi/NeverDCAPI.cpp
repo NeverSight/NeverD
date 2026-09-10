@@ -46,8 +46,35 @@ using namespace neverd::sdk;
 namespace neverd::sdk {
 
 bool Session::synchronizeFunctions() {
-  if (Img.Arch != Arch::SBF)
+  if (Img.Arch != Arch::SBF) {
+    // Native function discovery lives in the pipeline, not in the loader.
+    // Publish its accepted functions after either explicit or lazy analysis,
+    // without making metadata/function-list queries run the whole pipeline.
+    if (Img.Arch == Arch::EVM || !PipeRan || !PipeResult.Success ||
+        NativeFunctionsSynchronized)
+      return true;
+    llvm::DenseMap<va_t, size_t> FunctionIndices;
+    FunctionIndices.reserve(Functions.size() + PipeResult.LowFuncs.size());
+    for (size_t Index = 0; Index < Functions.size(); ++Index)
+      FunctionIndices.try_emplace(Functions[Index].Entry, Index);
+    for (const LowFunc &Function : PipeResult.LowFuncs) {
+      if (!FunctionIndices.try_emplace(Function.Entry, Functions.size()).second)
+        continue;
+      // Existing loader/debug names and sizes remain authoritative. A saved
+      // rename can precede discovery when reopening a stripped image.
+      OriginalNames.try_emplace(Function.Entry, Function.Name);
+      const auto Rename = Renames.find(Function.Entry);
+      Functions.push_back(
+          {Function.Entry, Function.OriginalSize,
+           Rename == Renames.end() ? Function.Name : Rename->second});
+    }
+    std::stable_sort(Functions.begin(), Functions.end(),
+                     [](const FuncInfo &Left, const FuncInfo &Right) {
+                       return Left.Entry < Right.Entry;
+                     });
+    NativeFunctionsSynchronized = true;
     return true;
+  }
   if (SBFFunctionsSynchronized)
     return true;
   if (!ensurePipeline() || !PipeResult.SBF)

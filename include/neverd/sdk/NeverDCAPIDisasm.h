@@ -36,6 +36,9 @@ extern "C" {
 // Function list
 // ===--------------------------------------------------------------------===//
 
+/// Native queries expose loader symbols without starting analysis. After an
+/// explicit or lazy analysis succeeds, the list also includes recovered
+/// functions; their insertion can change indices returned before analysis.
 NEVERD_API int neverd_func_count(neverd_session_t Sess);
 NEVERD_API neverd_va_t neverd_func_entry(neverd_session_t Sess, int Idx);
 NEVERD_API int neverd_func_size(neverd_session_t Sess, int Idx);

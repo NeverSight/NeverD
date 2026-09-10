@@ -25,7 +25,9 @@ def run(executable):
                 data, entry = native_elf(arm64, 0xffff800000400000 if arm64 else 0x400000)
                 binary = Path(directory) / ("arm64.elf" if arm64 else "x86.elf")
                 binary.write_bytes(data)
-                assert client.call("open", {"path": str(binary), "read_only": True})["status"] == "ok"
+                opened = client.call("open", {"path": str(binary), "read_only": True})
+                assert opened["status"] == "ok"
+                assert opened["payload"]["function_count"] == 0
                 decoded = client.call("disasm", {"address": hex(entry), "limit": 2})
                 assert decoded["status"] == "ok", decoded
                 instruction_addresses = {row["address"] for row in decoded["payload"]["items"]}
@@ -55,6 +57,19 @@ def run(executable):
                         assert page["next_offset"] > offset
                         offset = page["next_offset"]
                     assert text == result["text"] and rows == result["rows"]
+                # Analysis discovers the entry of this stripped fixture. The
+                # same shared session must publish it to navigation and lists.
+                functions = client.call("functions")
+                assert functions["status"] == "ok", functions
+                assert functions["revision"] != opened["revision"]
+                assert functions["payload"]["total"] == 1, functions
+                function = functions["payload"]["items"][0]
+                assert function["address"] == hex(entry)
+                assert function["size"] == (8 if arm64 else 6)
+                for query in (function["name"], hex(entry + 1)):
+                    resolved = client.call("resolve", {"query": query})
+                    assert resolved["status"] == "ok", resolved
+                    assert resolved["payload"]["function_address"] == hex(entry)
                 for stage in ("c", "high", "llvm"):
                     reply = client.call("decompile", {"address": hex(entry), "representation": stage, "limit": 2})
                     assert reply["status"] == "ok", reply
@@ -62,7 +77,7 @@ def run(executable):
                     assert reply["payload"]["rows"] == []
             finally:
                 client.close()
-        print("real native x86/AArch64 high-VA mapping: Low/Med exact instruction anchors, canonical hex, stable paged rows and explicit C/High/LLVM mapping status passed")
+        print("real native x86/AArch64: recovered function navigation, high-VA Low/Med instruction anchors, canonical hex, stable paged rows and explicit C/High/LLVM mapping status passed")
         return 0
 
 
