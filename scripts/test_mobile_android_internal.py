@@ -96,6 +96,8 @@ def choose_d8(override: Path | None) -> Path:
 
 
 def expected_keys(kind: str) -> set[str]:
+    if kind == "deprecated":
+        return set(deprecated_oracle())
     if kind == "constructor":
         return set(constructor_oracle())
     if kind == "generic":
@@ -307,6 +309,113 @@ CONSTRUCTOR_REFLECTION = {
 }
 
 
+DEPRECATED_CASES = ("deprecated-dex",)
+DEPRECATED_BASE = "Lfixture/DeprecatedBase;"
+DEPRECATED_CHILD = "Lfixture/PlainChild;"
+DEPRECATED_DECLARATIONS = {
+    DEPRECATED_BASE: {
+        "access": 0x21, "superclass": "Ljava/lang/Object;", "deprecated": True,
+        "fields": [("legacy", 1, True), ("current", 1, False), ("constructorCalls", 9, False)],
+        "methods": {"<init>()V": True, "<init>(I)V": False, "oldAdd(I)I": True, "combine(I)I": False},
+    },
+    DEPRECATED_CHILD: {
+        "access": 0x31, "superclass": DEPRECATED_BASE, "deprecated": False,
+        "fields": [("own", 1, False)],
+        "methods": {"<init>(I)V": False, "childValue(I)I": False},
+    },
+}
+DEPRECATED_REFLECTION = {
+    "DeprecatedBase.class": "declared=java.lang.Deprecated;present=true",
+    "PlainChild.class": "declared=;present=false",
+    "DeprecatedBase.field.legacy": "declared=java.lang.Deprecated;present=true",
+    "DeprecatedBase.field.current": "declared=;present=false",
+    "DeprecatedBase.field.constructorCalls": "declared=;present=false",
+    "PlainChild.field.own": "declared=;present=false",
+    "DeprecatedBase.constructor.empty": "declared=java.lang.Deprecated;present=true",
+    "DeprecatedBase.constructor.int": "declared=;present=false",
+    "PlainChild.constructor.int": "declared=;present=false",
+    "DeprecatedBase.method.oldAdd": "declared=java.lang.Deprecated;present=true",
+    "DeprecatedBase.method.combine": "declared=;present=false",
+    "PlainChild.method.childValue": "declared=;present=false",
+    "PlainChild.inherited": "field=fixture.DeprecatedBase;method=fixture.DeprecatedBase;class-present=false",
+}
+
+
+def deprecated_facts(present: bool = False) -> dict:
+    return {"deprecated_attribute": present, "runtime_visible_annotations":
+            [{"type": "Ljava/lang/Deprecated;", "elements": []}] if present else []}
+
+
+def deprecated_helpers() -> list[dict]:
+    return [{"class": owner, "name": "__neverdThrow", "prototype": class_identity.THROW_HELPER_PROTOTYPE,
+             "static": True, "source_unit": owner[1:-1] + ".java", "kind": "throw-helper"}
+            for owner in DEPRECATED_DECLARATIONS]
+
+
+def validate_deprecated_original(classes: dict):
+    if set(classes) != set(DEPRECATED_DECLARATIONS):
+        raise RuntimeError("Deprecated original class inventory changed")
+    for owner, expected in DEPRECATED_DECLARATIONS.items():
+        facts = classes[owner]
+        if (facts["name"] != owner or facts["major"] != 52 or facts["minor"] != 0
+                or facts["access"] != expected["access"] or facts["superclass"] != expected["superclass"]
+                or facts["interfaces"] or facts["enclosing_method"] is not None or facts["inner_class"] is not None
+                or facts["signature"] is not None
+                or facts.get("deprecated_attribute") is not expected["deprecated"]
+                or facts.get("runtime_visible_annotations") != deprecated_facts(expected["deprecated"])["runtime_visible_annotations"]):
+            raise RuntimeError("Deprecated original class declaration changed: " + owner)
+        fields = {owner + "->" + name + ":I": {"name": name, "descriptor": "I", "access": access,
+                  "constant_value": None, "signature": None, **deprecated_facts(marked)}
+                  for name, access, marked in expected["fields"]}
+        methods = {}
+        for member, marked in expected["methods"].items():
+            name, tail = member.split("(", 1)
+            methods[owner + "->" + member] = {"name": name, "prototype": "(" + tail, "access": 1,
+                                              "code": True, "signature": None, **deprecated_facts(marked)}
+        if facts["fields"] != fields or facts["methods"] != methods:
+            raise RuntimeError("Deprecated original field/method marker inventory changed: " + owner)
+        if any(type(row.get("deprecated_attribute")) is not bool
+               for rows in (facts["fields"], facts["methods"]) for row in rows.values()):
+            raise RuntimeError("Deprecated original marker fact is not a boolean")
+
+
+def deprecated_reflection(path: Path) -> dict[str, str]:
+    values = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        key, separator, value = line.partition("\t")
+        if not separator or not value or key in values:
+            raise RuntimeError("Malformed or duplicate Deprecated reflection evidence")
+        values[key] = value
+    if values != DEPRECATED_REFLECTION:
+        raise RuntimeError("Deprecated reflection evidence changed its independent declaration contract")
+    return values
+
+
+def deprecated_oracle() -> dict[str, int]:
+    expected = {"reflection:" + key: 1 for key in DEPRECATED_REFLECTION}
+    for index, value in enumerate((-100, -1, 0, 1, 7, 100)):
+        for route, old, new, combined in (("deprecated", 7, 7 + value, 33 - value),
+                                         ("plain", value, value - 2, 2 * value + 9),
+                                         ("child", value, value + 2, 2 * value + 9)):
+            prefix = f"{route}:{index}:"
+            expected.update({prefix + "constructor-delta": 1, prefix + "old": old,
+                             prefix + "new": new, prefix + "combine": combined})
+        expected[f"child:{index}:own"] = 5 * value - 2
+    expected["final:constructor-count"] = 18
+    return expected
+
+
+def compare_deprecated_behavior(baseline: dict, actual: dict):
+    oracle = deprecated_oracle()
+    for label, values in (("original", baseline), ("rebuilt", actual)):
+        if set(values) != set(oracle):
+            raise RuntimeError("Deprecated " + label + " behavior omitted an independent key")
+        changed = {key: {"expected": expected, "actual": values[key]}
+                   for key, expected in oracle.items() if values[key] != expected}
+        if changed:
+            raise RuntimeError("Deprecated " + label + " behavior oracle failed: " + json.dumps(changed))
+
+
 def constructor_helpers() -> list[dict]:
     return [{"class": owner, "name": "__neverdThrow", "prototype": class_identity.THROW_HELPER_PROTOTYPE,
              "static": True, "source_unit": owner[1:-1] + ".java", "kind": "throw-helper"}
@@ -321,15 +430,16 @@ def validate_constructor_original(classes: dict):
         if (facts["name"] != owner or facts["major"] != 52 or facts["minor"] != 0
                 or facts["access"] != expected["access"] or facts["superclass"] != expected["superclass"]
                 or facts["interfaces"] or facts["enclosing_method"] is not None or facts["inner_class"] is not None
-                or facts["signature"] is not None):
+                or facts["signature"] is not None or facts.get("deprecated_attribute") is not False
+                or facts.get("runtime_visible_annotations") != []):
             raise RuntimeError("Constructor original class declaration changed: " + owner)
         fields = {owner + "->" + name + ":" + descriptor:
                   {"name": name, "descriptor": descriptor, "access": access,
-                   "constant_value": None, "signature": None}
+                   "constant_value": None, "signature": None, **deprecated_facts()}
                   for name, descriptor, access in expected["fields"]}
         methods = {owner + "->" + member:
                    {"name": "<init>", "prototype": member[len("<init>"):], "access": 1,
-                    "code": True, "signature": signature}
+                    "code": True, "signature": signature, **deprecated_facts()}
                    for member, signature in expected["methods"].items()}
         if facts["fields"] != fields or facts["methods"] != methods:
             raise RuntimeError("Constructor original field/method Signature inventory changed: " + owner)
@@ -393,10 +503,12 @@ def validate_generic_original(classes: dict):
         if (facts["name"] != owner or facts["major"] != 52 or facts["minor"] != 0 or facts["access"] != 0x31
                 or facts["superclass"] != "Ljava/lang/Object;" or facts["interfaces"]
                 or facts["enclosing_method"] is not None or facts["inner_class"] is not None
-                or facts["signature"] != signature):
+                or facts["signature"] != signature or facts.get("deprecated_attribute") is not False
+                or facts.get("runtime_visible_annotations") != []):
             raise RuntimeError("Generic original class Signature/access/scope changed: " + owner)
         fields = {owner + "->" + name + ":" + descriptor:
-                  {"name": name, "descriptor": descriptor, "access": 1, "constant_value": None, "signature": generic}
+                  {"name": name, "descriptor": descriptor, "access": 1, "constant_value": None,
+                   "signature": generic, **deprecated_facts()}
                   for name, (descriptor, generic) in (GENERIC_FIELDS.items() if owner == GENERIC_BOX else [])}
         if facts["fields"] != fields:
             raise RuntimeError("Generic original field Signature inventory changed: " + owner)
@@ -405,7 +517,7 @@ def validate_generic_original(classes: dict):
             name, tail = member.split("(", 1)
             methods[owner + "->" + member] = {"name": name, "prototype": "(" + tail, "code": True,
                                              "access": 9 if owner == GENERIC_OPS and name != "<init>" else 1,
-                                             "signature": generic}
+                                             "signature": generic, **deprecated_facts()}
         if facts["methods"] != methods:
             raise RuntimeError("Generic original method Signature inventory changed: " + owner)
 
@@ -567,6 +679,98 @@ class Verify:
             changes = {key: {"original": baseline[key], "recovered": actual[key]} for key in baseline if baseline[key] != actual[key]}
             raise RuntimeError("Recovered Java changed behavior: " + json.dumps(changes))
         return len(actual)
+
+    def deprecated_cases(self, neverd: Path) -> tuple[list[dict], list[dict]]:
+        passed, failures = [], []
+        directory = self.work / "original-deprecated"
+        try:
+            self.run([self.javac, "-version"], "deprecated-javac-version")
+            self.run([self.java, "-version"], "deprecated-java-version")
+            source_dir = directory / "source"
+            for path in sorted((FIXTURES / "deprecated/java").rglob("*.java")):
+                target = source_dir / path.relative_to(FIXTURES / "deprecated/java")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, target)
+            harness_source = directory / "harness-source/DeprecatedHarness.java"
+            harness_source.parent.mkdir(parents=True)
+            shutil.copyfile(FIXTURES / "harness/DeprecatedHarness.java", harness_source)
+            classes_dir = directory / "classes"
+            self.compile_local(sorted(source_dir.rglob("*.java")), classes_dir)
+            original = class_identity.compiler_classes(classes_dir)
+            (directory / "class-inventory.json").write_text(json.dumps(original, indent=2) + "\n")
+            validate_deprecated_original(original)
+            methods = {identity: "body" if row["code"] else "declaration"
+                       for facts in original.values() for identity, row in facts["methods"].items()}
+            self.compile_local([harness_source], directory / "harness", classpath=classes_dir)
+            cp = os.pathsep.join(map(str, (directory / "harness", classes_dir)))
+            reflection_path = directory / "reflection.tsv"
+            baseline = results(self.run([self.java, "-cp", cp, "DeprecatedHarness", reflection_path],
+                                        "original-deprecated"), "deprecated")
+            (directory / "baseline.json").write_text(json.dumps(baseline, indent=2) + "\n")
+            compare_deprecated_behavior(baseline, baseline)
+            reflection = deprecated_reflection(reflection_path)
+            (directory / "reflection.json").write_text(json.dumps(reflection, indent=2) + "\n")
+            (directory / "source-hashes.json").write_text(json.dumps({"implementation": source_hashes(source_dir),
+                "harness": source_hashes(harness_source.parent)}, indent=2) + "\n")
+        except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+            for label in DEPRECATED_CASES:
+                failures.append({"case": label, "stage": "original-preparation", "error": str(error)})
+            (self.work / "deprecated-preparation-failure.json").write_text(json.dumps(failures, indent=2) + "\n")
+            return passed, failures
+        for label in DEPRECATED_CASES:
+            case = self.work / label
+            case.mkdir()
+            try:
+                inputs = {owner: "classes.dex" for owner in original}
+                paths = [classes_dir / original[owner]["path"] for owner in sorted(original)]
+                source = self.dex(paths, case / "dex", classes_dir)
+                (case / "input-inventory.json").write_text(json.dumps({"classes": original, "inputs": inputs,
+                    "expected_generated_helpers": deprecated_helpers(),
+                    "input_sha256": hashlib.sha256(source.read_bytes()).hexdigest()}, indent=2) + "\n")
+                output = case / "recovered"
+                self.run([neverd, "mobile", source, "-o", output, "--timeout", self.timeout, "--json"], label)
+                report = json.loads((output / "report.json").read_text())
+                if report.get("dex_count") != 1 or report.get("smali_count") != 0:
+                    raise RuntimeError("Deprecated DEX input inventory changed")
+                counts = validate_coverage(report, output, set(original), methods, inputs,
+                                           expected_generic_helpers=deprecated_helpers())
+                for row in report["android_method_recovery"]["methods"]:
+                    expected = original[row["class"]]["methods"][row["identity"]]["deprecated_attribute"]
+                    if row.get("deprecated") is not expected:
+                        raise RuntimeError("Deprecated method marker disagrees with original declaration: " + row["identity"])
+                sources = sorted((output / "sources").rglob("*.java"))
+                if sorted(report["java_sources"]) != ["sources/" + owner[1:-1] + ".java" for owner in sorted(original)]:
+                    raise RuntimeError("Deprecated source unit inventory changed")
+                (case / "generated-source-hashes.json").write_text(json.dumps(source_hashes(output / "sources"), indent=2) + "\n")
+                compiled = case / "compiled"
+                self.compile_local(sources, compiled)
+                rebuilt = class_identity.compiler_classes(compiled)
+                (case / "rebuilt-class-inventory.json").write_text(json.dumps(rebuilt, indent=2) + "\n")
+                identity = class_identity.match_deprecated_recompiled(original, rebuilt)
+                (case / "deprecated-identity.json").write_text(json.dumps(identity, indent=2) + "\n")
+                self.compile_local([harness_source], case / "harness", classpath=compiled)
+                cp = os.pathsep.join(map(str, (case / "harness", compiled)))
+                reflection_path = case / "reflection.tsv"
+                actual = results(self.run([self.java, "-cp", cp, "DeprecatedHarness", reflection_path],
+                                          label + "-execution"), "deprecated")
+                (case / "execution.json").write_text(json.dumps(actual, indent=2) + "\n")
+                actual_reflection = deprecated_reflection(reflection_path)
+                (case / "reflection.json").write_text(json.dumps(actual_reflection, indent=2) + "\n")
+                if actual_reflection != reflection:
+                    raise RuntimeError("Deprecated reflection declarations changed")
+                compare_deprecated_behavior(baseline, actual)
+                passed.append({"case": label, **counts, "matched_results": len(actual),
+                               "reflection_declaration_count": len(reflection), "compiler_identity": identity,
+                               "acceptance_scope": "owned-deprecated-marker-and-body"})
+                print(f"PASS {label}: {len(methods)} original bodies, {len(reflection)} Deprecated reflection declarations, {len(actual)} results", flush=True)
+            except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+                failure = {"case": label, "error": str(error)}
+                failures.append(failure)
+                (case / "failure.json").write_text(json.dumps(failure, indent=2) + "\n")
+                print(f"FAIL {label}: {error}", file=sys.stderr, flush=True)
+        if {row["case"] for row in passed + failures} != set(DEPRECATED_CASES) or len(passed + failures) != len(DEPRECATED_CASES):
+            raise RuntimeError("Deprecated acceptance omitted a required input case")
+        return passed, failures
 
     def constructor_cases(self, neverd: Path) -> tuple[list[dict], list[dict]]:
         passed, failures = [], []
@@ -931,6 +1135,9 @@ def main() -> int:
         constructor_passed, constructor_failures = verify.constructor_cases(neverd)
         passed.extend(constructor_passed)
         failures.extend(constructor_failures)
+        deprecated_passed, deprecated_failures = verify.deprecated_cases(neverd)
+        passed.extend(deprecated_passed)
+        failures.extend(deprecated_failures)
         broken = work / "broken-smali"
         broken.mkdir()
         shutil.copyfile(SMALI / "Peer.smali", broken / "Peer.smali")

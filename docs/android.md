@@ -33,6 +33,8 @@ Java name binding distinguishes class headers from class bodies and can resolve 
 
 The built-in C++ engine preserves and validates supported class, field, and method `Signature` metadata, including type variables, arrays, wildcards, bounds, and method-level shadowing. Erasure must match the original DEX declaration identity. `Throws` is retained; an unproven exception hierarchy is rejected. Generic inheritance or member substitution, bridge regeneration, generic method invocation, parameterized inner types, and hidden constructor parameter mapping remain explicitly unsupported where the required proof is unavailable.
 
+The empty, runtime-visible Java 8 `@java.lang.Deprecated` marker is preserved on classes, fields, methods and constructors. Parameter annotations, annotated static initializers, other visibility levels and element values such as `since` or `forRemoval` are rejected. CI separately compares the classfile `Deprecated` attribute and runtime annotations after recompilation, including unannotated controls and generated helpers; helpers remain outside the original method count.
+
 CI uses owned Java 8 fixtures through D8 and NeverD, recompiles all generated Java, and compares complete `Signature` metadata, reflection results, and behavior. These fixture checks do not qualify real applications for complete recovery.
 
 ### Linux and macOS

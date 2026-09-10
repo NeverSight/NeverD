@@ -33,6 +33,8 @@ Die Namensauflösung in Java unterscheidet zwischen Klassenkopf und Klassenrumpf
 
 Die eingebaute C++-Engine erhält und prüft unterstützte `Signature`-Metadaten für Klassen, Felder und Methoden, einschließlich Typvariablen, Arrays, Wildcards, Typgrenzen und Namensverdeckung durch Methodentypvariablen. Die Typlöschung muss zur Identität der ursprünglichen DEX-Deklaration passen. `Throws` bleibt erhalten; nicht nachweisbare Ausnahmehierarchien werden abgelehnt. Generische Vererbung oder die Substitution von Mitgliedstypen, die Neuerzeugung von Brückenmethoden, generische Methodenaufrufe, parametrisierte innere Typen und die Zuordnung versteckter Konstruktorparameter bleiben ohne die erforderlichen Nachweise ausdrücklich nicht unterstützt.
 
+Die leere, zur Laufzeit sichtbare Java-8-Markierung `@java.lang.Deprecated` bleibt an Klassen, Feldern, Methoden und Konstruktoren erhalten. Parameterannotationen, annotierte statische Initialisierer, andere Sichtbarkeitsstufen und Elementwerte etwa für `since` oder `forRemoval` werden abgelehnt. Die CI vergleicht nach der erneuten Kompilierung das Classfile-Attribut `Deprecated` und die Laufzeitannotationen getrennt, einschließlich nicht annotierter Kontrolldeklarationen und erzeugter Hilfsmethoden; die Hilfsmethoden zählen nicht zu den ursprünglichen Methoden.
+
 Die CI verarbeitet projekteigene Java-8-Testfälle mit D8 und NeverD, kompiliert sämtlichen erzeugten Java-Code erneut und vergleicht die vollständigen `Signature`-Metadaten, Reflection-Ergebnisse und das Verhalten. Diese Prüfungen belegen keine vollständige Wiederherstellung realer Anwendungen.
 
 ### Linux und macOS

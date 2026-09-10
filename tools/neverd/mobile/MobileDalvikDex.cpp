@@ -676,10 +676,22 @@ class Dex {
   void sourceAnnotations(const AnnotationSet &values,
                          std::optional<std::string> &signature,
                          std::optional<std::vector<std::string>> *throws_types,
-                         const std::string &declaration) {
+                         bool &deprecated, const std::string &declaration) {
     for (const auto &entry : values) {
       budget.tick();
       const auto &[name, elements] = entry.value;
+      if (name == "Ljava/lang/Deprecated;") {
+        if (entry.visibility != 1)
+          bad("Deprecated annotation on " + declaration +
+              " requires runtime visibility");
+        if (!elements.empty())
+          bad("Deprecated annotation on " + declaration +
+              " must have no elements");
+        if (deprecated)
+          bad("duplicate Deprecated annotation on " + declaration);
+        deprecated = true;
+        continue;
+      }
       bool is_signature = name == "Ldalvik/annotation/Signature;";
       bool is_throws = name == "Ldalvik/annotation/Throws;" && throws_types;
       if (!is_signature && !is_throws)
@@ -771,7 +783,8 @@ class Dex {
             bad("annotated field has no class_data definition");
           sourceAnnotations(
               annotationSet(annotation_off), found->second->generic_signature,
-              nullptr, "field " + ref.owner + "->" + ref.name + ":" + ref.type);
+              nullptr, found->second->deprecated,
+              "field " + ref.owner + "->" + ref.name + ":" + ref.type);
           continue;
         }
         const auto &ref = at(methods, index, "annotated method");
@@ -783,7 +796,8 @@ class Dex {
         if (kind == 1) {
           sourceAnnotations(
               annotationSet(annotation_off), found->second->generic_signature,
-              &found->second->declared_throws, "method " + ref.identity());
+              &found->second->declared_throws, found->second->deprecated,
+              "method " + ref.identity());
           continue;
         }
         auto parameters = item<std::vector<uint32_t>>(
@@ -809,9 +823,10 @@ class Dex {
     std::map<std::string, std::map<std::string, Encoded>> values;
     for (const auto &entry : directory.classes) {
       const auto &[name, elements] = entry.value;
-      if (name == "Ldalvik/annotation/Signature;") {
+      if (name == "Ldalvik/annotation/Signature;" ||
+          name == "Ljava/lang/Deprecated;") {
         sourceAnnotations({entry}, cls.generic_signature, nullptr,
-                          "class " + cls.name);
+                          cls.deprecated, "class " + cls.name);
         continue;
       }
       if (name != "Ldalvik/annotation/EnclosingClass;" &&

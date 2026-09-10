@@ -518,6 +518,20 @@ void validateSourceScopes(const ClassMap &classes, Budget &budget) {
     budget.tick();
     if (name != cls.name)
       scopeError(cls, "class map key disagrees with its descriptor");
+    bool deprecated = cls.deprecated;
+    for (const auto &field : cls.fields) {
+      budget.tick();
+      deprecated |= field.deprecated;
+    }
+    for (const auto &method : cls.methods) {
+      budget.tick();
+      deprecated |= method.deprecated;
+      if (method.deprecated && method.reference.name == "<clinit>")
+        scopeError(cls, "Deprecated cannot annotate a class initializer: " +
+                            method.reference.identity());
+    }
+    if (deprecated && classes.contains("Ljava/lang/Deprecated;"))
+      scopeError(cls, "Deprecated requires the platform annotation definition");
     checkSourceScope(cls, budget);
   }
   linkLocalScopes(classes, budget);

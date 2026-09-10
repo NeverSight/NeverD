@@ -1246,4 +1246,138 @@ TEST(MobileDalvikJava, GenericThrowableSubclassesCannotBecomeInvalidJava) {
   rejected([&] { recover({C, Base}); },
            "generic class cannot extend Throwable");
 }
+
+TEST(MobileDalvikJava, DeprecatedMarkersPreserveTheirExactDeclarations) {
+  auto Init = method(
+      "<init>", {}, "V", 1,
+      {op(0, "invoke-direct", {0}, {},
+          MethodRef{"Ljava/lang/Object;", "<init>", {}, "V"}),
+       op(1, "return-void")});
+  Init.access = {"public", "constructor"};
+  Init.deprecated = true;
+  auto Old = method("oldValue", {"I"}, "I", 1, {op(0, "return", {0})});
+  Old.deprecated = true;
+  auto Plain = method("plainValue", {"I"}, "I", 1, {op(0, "return", {0})});
+  Class C = klass("Lfixture/Core;", {Init, Old, Plain});
+  C.deprecated = true;
+  C.fields.push_back({{C.name, "legacy", "I"}, {"public"}, {}});
+  C.fields.back().deprecated = true;
+  C.fields.push_back({{C.name, "current", "I"}, {"public"}, {}});
+
+  const auto Report = recover({C});
+  const auto Java = source(Report);
+  EXPECT_NE(Java.find("@java.lang.Deprecated\npublic class Core"),
+            std::string::npos);
+  EXPECT_NE(Java.find("  @java.lang.Deprecated\n  public int legacy;"),
+            std::string::npos);
+  EXPECT_NE(Java.find("  @java.lang.Deprecated\n  public Core()"),
+            std::string::npos);
+  EXPECT_NE(Java.find("  @java.lang.Deprecated\n  public static int oldValue("),
+            std::string::npos);
+  EXPECT_NE(Java.find("  public int current;"), std::string::npos);
+  EXPECT_NE(Java.find("  public static int plainValue("), std::string::npos);
+  size_t Markers = 0;
+  for (size_t Pos = 0;
+       (Pos = Java.find("@java.lang.Deprecated", Pos)) != std::string::npos;
+       ++Pos)
+    ++Markers;
+  EXPECT_EQ(Markers, 4U);
+  EXPECT_EQ(Report.getInteger("method_count"), 3);
+  EXPECT_EQ(Report.getInteger("recovered_method_count"), 3);
+  const auto *Methods = Report.getArray("methods");
+  ASSERT_NE(Methods, nullptr);
+  ASSERT_EQ(Methods->size(), 3U);
+  for (const auto &Value : *Methods) {
+    const auto *Row = Value.getAsObject();
+    ASSERT_NE(Row, nullptr);
+    EXPECT_EQ(Row->getBoolean("deprecated"),
+              Row->getString("name") != "plainValue");
+  }
+  const auto *Helpers = Report.getArray("generated_source_helpers");
+  ASSERT_NE(Helpers, nullptr);
+  ASSERT_EQ(Helpers->size(), 1U);
+  ASSERT_NE((*Helpers)[0].getAsObject(), nullptr);
+  EXPECT_EQ((*Helpers)[0].getAsObject()->getString("kind"), "throw-helper");
+}
+
+TEST(MobileDalvikJava, DeprecatedDeclarationsDoNotInventNativeOrAbstractBodies) {
+  auto Native = method("nativeValue", {}, "I", 0, {});
+  Native.access = {"public", "native"};
+  Native.deprecated = true;
+  auto Abstract = method("abstractValue", {}, "I", 0, {});
+  Abstract.access = {"public", "abstract"};
+  Abstract.deprecated = true;
+  Class C = klass("Lfixture/Core;", {Native, Abstract});
+  C.access.insert("abstract");
+  const auto Report = recover({C});
+  const auto Java = source(Report);
+  EXPECT_NE(Java.find("  @java.lang.Deprecated\n  public native int nativeValue();"),
+            std::string::npos);
+  EXPECT_NE(Java.find(
+                "  @java.lang.Deprecated\n  public abstract int abstractValue();"),
+            std::string::npos);
+  EXPECT_EQ(Report.getInteger("method_count"), 2);
+  EXPECT_EQ(Report.getInteger("recovered_method_count"), 0);
+  EXPECT_EQ(Report.getInteger("declaration_only_method_count"), 2);
+}
+
+TEST(MobileDalvikJava, DeprecatedMethodModifiersExcludeOwnTypeParameters) {
+  auto M = method("observe", {}, "V", 0, {});
+  M.access = {"public", "native"};
+  M.generic_signature = "<java:Lfixture/Core;>()V";
+  EXPECT_EQ(recoverMethods({M}).getInteger("declaration_only_method_count"), 1);
+  M.deprecated = true;
+  const auto Report = recoverMethods({M});
+  EXPECT_EQ(Report.getInteger("declaration_only_method_count"), 1);
+  EXPECT_NE(source(Report).find("  @java.lang.Deprecated\n  public native "
+                               "<java extends fixture.Core> void observe();"),
+            std::string::npos);
+}
+
+TEST(MobileDalvikJava, DeprecatedClassModifiersExcludeOnlyOwnTypeParameters) {
+  Class Core = klass("Lfixture/Core;");
+  Class Marker = klass("Lfixture/Marker;");
+  Marker.access = {"public", "interface", "abstract"};
+  Marker.generic_signature = "<java:Lfixture/Core;>Ljava/lang/Object;";
+  Marker.deprecated = true;
+  const auto Report = recover({Core, Marker});
+  EXPECT_NE(source(Report, 1).find("@java.lang.Deprecated\npublic abstract "
+                                  "interface Marker<java extends fixture.Core>"),
+            std::string::npos);
+
+  auto M = method("observe", {}, "V", 0, {});
+  M.access = {"public", "abstract"};
+  M.reference.owner = Marker.name;
+  M.deprecated = true;
+  Marker.methods = {M};
+  // The interface type parameter is in scope at a member's modifiers.
+  rejected([&] { recover({Core, Marker}); }, "ambiguous Java type");
+}
+
+TEST(MobileDalvikJava, DeprecatedClassInitializersAreRejectedByBothEntryPoints) {
+  auto M = method("<clinit>", {}, "V", 0, {op(0, "return-void")});
+  M.access = {"static", "constructor"};
+  M.deprecated = true;
+  Class C = klass("Lfixture/Core;", {M});
+  rejected([&] { recover({C}); }, "Deprecated cannot annotate a class initializer");
+  rejected(
+      [&] {
+        Budget B(Limits{});
+        linkClasses({C}, B);
+      },
+      "Deprecated cannot annotate a class initializer");
+}
+
+TEST(MobileDalvikJava, DeprecatedRequiresThePlatformAnnotationDefinition) {
+  Class Replacement = klass("Ljava/lang/Deprecated;");
+  Class C = klass("Lfixture/Core;");
+  C.deprecated = true;
+  rejected([&] { recover({C, Replacement}); }, "platform annotation definition");
+  rejected(
+      [&] {
+        Budget B(Limits{});
+        linkClasses({C, Replacement}, B);
+      },
+      "platform annotation definition");
+}
 } // namespace

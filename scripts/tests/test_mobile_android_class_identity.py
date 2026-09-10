@@ -21,7 +21,8 @@ def u4(value):
 
 def class_bytes(owner, methods, *, enclosing=None, inner_name="Worker", inner_outer=None,
                 inner_access=0x10, duplicate_inner=False, wrong_enclosing_tag=False, fields=(),
-                signatures=None, field_descriptors=None, wrong_signature_tag=False):
+                signatures=None, field_descriptors=None, wrong_signature_tag=False,
+                extra_attributes=None, wrong_annotation_tag=False):
     """Build bounded JVM attributes with real typed constant-pool references."""
     pool, cache = [], {}
 
@@ -47,6 +48,22 @@ def class_bytes(owner, methods, *, enclosing=None, inner_name="Worker", inner_ou
         return [attr("Signature", value if isinstance(value, bytes) else
                      u2(cls("Ljava/lang/Object;") if wrong_signature_tag else utf(value))) for value in values]
 
+    def annotation_attrs(key):
+        result = []
+        for kind, value in (extra_attributes or {}).get(key, []):
+            if isinstance(value, bytes):
+                payload = value
+            else:
+                payload = u2(len(value))
+                for descriptor, elements in value:
+                    index = cls(descriptor) if wrong_annotation_tag else utf(descriptor)
+                    payload += u2(index) + u2(len(elements))
+                    for name, tag, text in elements:
+                        constant = entry(3, u4(int(text))) if tag == "Z" else utf(text)
+                        payload += u2(utf(name)) + tag.encode("ascii") + u2(constant)
+            result.append(attr(kind, payload))
+        return result
+
     this_class, superclass = cls(owner), cls("Ljava/lang/Object;")
     init_name_type = entry(12, u2(utf("<init>")) + u2(utf("()V")))
     super_init = entry(10, u2(superclass) + u2(init_name_type))
@@ -54,6 +71,7 @@ def class_bytes(owner, methods, *, enclosing=None, inner_name="Worker", inner_ou
     for name, flags, constant in fields:
         attributes = [] if constant is None else [attr("ConstantValue", u2(entry(3, u4(constant & 0xffffffff))))]
         attributes += signature_attrs(("field", name))
+        attributes += annotation_attrs(("field", name))
         descriptor = "I" if field_descriptors is None else field_descriptors.get(name, "I")
         field_rows.append(u2(flags) + u2(utf(name)) + u2(utf(descriptor)) + u2(len(attributes)) + b"".join(attributes))
     members = []
@@ -70,12 +88,16 @@ def class_bytes(owner, methods, *, enclosing=None, inner_name="Worker", inner_ou
                 instructions = b"\x01\xb0"
             else:
                 instructions = b"\x03\xac"
-            payload = u2(2) + u2(8) + u4(len(instructions)) + instructions + u2(0) + u2(0)
+            nested = annotation_attrs(("code", name, prototype))
+            payload = (u2(2) + u2(8) + u4(len(instructions)) + instructions + u2(0)
+                       + u2(len(nested)) + b"".join(nested))
             attributes.append(attr("Code", payload))
         attributes += signature_attrs(("method", name, prototype))
+        attributes += annotation_attrs(("method", name, prototype))
         members.append(u2(flags) + u2(utf(name)) + u2(utf(prototype))
                        + u2(len(attributes)) + b"".join(attributes))
     attributes = [attr("SourceFile", u2(utf("LocalClassBehavior.java")))] + signature_attrs("class")
+    attributes += annotation_attrs("class")
     if enclosing:
         outer, name, prototype = enclosing
         name_type = entry(12, u2(utf(name)) + u2(utf(prototype)))
@@ -175,6 +197,176 @@ class GenericCompilerIdentityTests(unittest.TestCase):
             else: methods[self.helper]["code"] = False
             with self.subTest(mutation=mutation), self.assertRaisesRegex(RuntimeError, "helper"):
                 oracle.match_generic_recompiled(self.original, rebuilt)
+
+
+class DeprecatedCompilerAttributesTests(unittest.TestCase):
+    owner = "Lfixture/DeprecatedFixture;"
+    marker = [("Ljava/lang/Deprecated;", [])]
+    scopes = ("class", ("field", "legacy"), ("method", "<init>", "()V"),
+              ("method", "oldAdd", "(I)I"))
+
+    def read(self, attributes, **options):
+        data = class_bytes(self.owner, [("<init>", "()V", 1, True), ("oldAdd", "(I)I", 1, True)],
+                           fields=[("legacy", 1, None)], extra_attributes=attributes, **options)
+        return oracle.ClassFile(data).facts()
+
+    def at(self, facts, scope):
+        if scope == "class":
+            return facts
+        if scope[0] == "field":
+            return facts["fields"][self.owner + "->legacy:I"]
+        return facts["methods"][self.owner + "->" + scope[1] + scope[2]]
+
+    def test_marker_and_zero_length_attribute_are_independent_at_all_four_scopes(self):
+        for scope in self.scopes:
+            for legacy, visible in ((False, False), (True, False), (False, True), (True, True)):
+                attributes = ([('Deprecated', b'')] if legacy else [])
+                if visible:
+                    attributes.append(("RuntimeVisibleAnnotations", self.marker))
+                with self.subTest(scope=scope, legacy=legacy, visible=visible):
+                    facts = self.read({scope: attributes})
+                    row = self.at(facts, scope)
+                    self.assertIs(row["deprecated_attribute"], legacy)
+                    self.assertEqual(row["runtime_visible_annotations"],
+                                     [{"type": "Ljava/lang/Deprecated;", "elements": []}] if visible else [])
+                    for other in self.scopes:
+                        if other != scope:
+                            self.assertFalse(self.at(facts, other)["deprecated_attribute"])
+                            self.assertEqual(self.at(facts, other)["runtime_visible_annotations"], [])
+                    self.assertEqual(len(facts["methods"]), 2)
+
+    def test_deprecated_attribute_cannot_have_payload_or_repeat(self):
+        for scope in self.scopes:
+            for attrs in ([('Deprecated', b'\0')], [('Deprecated', b'\0\0')],
+                          [('Deprecated', b''), ('Deprecated', b'')]):
+                with self.subTest(scope=scope, attrs=attrs), self.assertRaisesRegex(RuntimeError, "Deprecated"):
+                    self.read({scope: attrs})
+
+    def test_runtime_attribute_and_marker_cannot_repeat(self):
+        for scope in self.scopes:
+            for attrs in ([('RuntimeVisibleAnnotations', self.marker)] * 2,
+                          [('RuntimeVisibleAnnotations', self.marker * 2)],
+                          [('RuntimeVisibleAnnotations', []), ('RuntimeVisibleAnnotations', [])]):
+                with self.subTest(scope=scope, attrs=attrs), self.assertRaisesRegex(RuntimeError, "Duplicate"):
+                    self.read({scope: attrs})
+
+    def test_runtime_payload_must_end_exactly_and_reference_utf8(self):
+        bad_payloads = (b'', b'\0', u2(1), u2(1) + u2(0) + u2(0),
+                        u2(1) + u2(0xffff) + u2(0), u2(0) + b'\0')
+        for scope in self.scopes:
+            for payload in bad_payloads:
+                with self.subTest(scope=scope, payload=payload), self.assertRaises(RuntimeError):
+                    self.read({scope: [("RuntimeVisibleAnnotations", payload)]})
+            with self.subTest(scope=scope, wrong_tag=True), self.assertRaisesRegex(RuntimeError, "constant reference"):
+                self.read({scope: [("RuntimeVisibleAnnotations", self.marker)]}, wrong_annotation_tag=True)
+        self.assertEqual(self.read({"class": [("RuntimeVisibleAnnotations", [])]})["runtime_visible_annotations"], [])
+
+    def test_nonempty_or_unrecognized_annotations_never_become_ignored_identity_bytes(self):
+        annotations = ([('Ljava/lang/Deprecated;', [('since', 's', '9')])],
+                       [('Ljava/lang/Deprecated;', [('forRemoval', 'Z', '1')])],
+                       [('Lfixture/Unknown;', [])], [('I', [])],
+                       [('Ljava/lang/Deprecated;', []), ('Lfixture/Unknown;', [])])
+        for scope in self.scopes:
+            for value in annotations:
+                with self.subTest(scope=scope, value=value), self.assertRaisesRegex(RuntimeError, "annotation|Deprecated"):
+                    self.read({scope: [("RuntimeVisibleAnnotations", value)]})
+        with self.assertRaisesRegex(RuntimeError, self.owner + "->oldAdd"):
+            self.read({("method", "oldAdd", "(I)I"): [("RuntimeVisibleAnnotations", [('Lfixture/Unknown;', [])])]})
+
+    def test_other_annotation_attributes_and_code_attachments_are_explicitly_unsupported(self):
+        for kind in ("RuntimeInvisibleAnnotations", "RuntimeVisibleParameterAnnotations",
+                     "RuntimeInvisibleParameterAnnotations", "RuntimeVisibleTypeAnnotations",
+                     "RuntimeInvisibleTypeAnnotations", "AnnotationDefault"):
+            for scope in self.scopes:
+                with self.subTest(kind=kind, scope=scope), self.assertRaisesRegex(RuntimeError, "annotation"):
+                    self.read({scope: [(kind, b'\0\0')]})
+        for kind, payload in (("Deprecated", b''), ("RuntimeVisibleAnnotations", self.marker),
+                              ("RuntimeVisibleTypeAnnotations", b'\0\0')):
+            with self.subTest(code_attribute=kind), self.assertRaisesRegex(RuntimeError, "Code"):
+                self.read({("code", "oldAdd", "(I)I"): [(kind, payload)]})
+
+
+class DeprecatedCompilerMatchingTests(unittest.TestCase):
+    def setUp(self):
+        self.owner = "Lfixture/DeprecatedFixture;"
+        self.method = self.owner + "->oldAdd(I)I"
+        self.constructor = self.owner + "-><init>()V"
+        self.field = self.owner + "->legacy:I"
+        marker = [("Ljava/lang/Deprecated;", [])]
+        scopes = ("class", ("field", "legacy"), ("method", "<init>", "()V"), ("method", "oldAdd", "(I)I"))
+        attrs = {scope: [("Deprecated", b''), ("RuntimeVisibleAnnotations", marker)] for scope in scopes}
+        self.original = {self.owner: oracle.ClassFile(class_bytes(self.owner,
+            [("<init>", "()V", 1, True), ("oldAdd", "(I)I", 1, True)],
+            fields=[("legacy", 1, None), ("plain", 1, None)], extra_attributes=attrs)).facts()}
+        self.rebuilt = copy.deepcopy(self.original)
+        self.helper = self.owner + "->__neverdThrow" + oracle.THROW_HELPER_PROTOTYPE
+        self.rebuilt[self.owner]["methods"][self.helper] = {
+            "name": "__neverdThrow", "prototype": oracle.THROW_HELPER_PROTOTYPE,
+            "access": 10, "code": True, "signature": oracle.THROW_HELPER_SIGNATURE,
+            "deprecated_attribute": False, "runtime_visible_annotations": []}
+
+    def at(self, classes, scope):
+        facts = classes[self.owner]
+        if scope == "class": return facts
+        if scope == "field": return facts["fields"][self.field]
+        return facts["methods"][self.constructor if scope == "constructor" else self.method]
+
+    def test_exact_original_deprecation_counts_exclude_helpers(self):
+        result = oracle.match_deprecated_recompiled(self.original, self.rebuilt)
+        self.assertEqual(result["scope"], "owned-deprecated-attributes-and-body")
+        self.assertEqual(result["original_method_count"], 2)
+        self.assertEqual(result["generated_helper_count"], 1)
+        expected = {"classes": 1, "fields": 1, "constructors": 1, "methods": 1}
+        self.assertEqual(result["deprecated_attribute_count"], expected)
+        self.assertEqual(result["runtime_visible_deprecated_count"], expected)
+
+    def test_losing_either_fact_at_any_original_scope_is_not_equivalent(self):
+        for scope in ("class", "field", "constructor", "method"):
+            for key, absent in (("deprecated_attribute", False), ("runtime_visible_annotations", [])):
+                rebuilt = copy.deepcopy(self.rebuilt)
+                self.at(rebuilt, scope)[key] = absent
+                with self.subTest(scope=scope, key=key), self.assertRaisesRegex(RuntimeError, "declaration changed|Signature changed|deprecation"):
+                    oracle.match_deprecated_recompiled(self.original, rebuilt)
+
+    def test_attribute_only_and_visible_only_are_never_conflated(self):
+        original, rebuilt = copy.deepcopy(self.original), copy.deepcopy(self.rebuilt)
+        original[self.owner]["runtime_visible_annotations"] = []
+        rebuilt[self.owner]["deprecated_attribute"] = False
+        with self.assertRaisesRegex(RuntimeError, "deprecation"):
+            oracle.match_deprecated_recompiled(original, rebuilt)
+
+    def test_annotations_on_helper_or_unannotated_field_cannot_compensate_for_an_original(self):
+        for target in (self.helper, self.owner + "->plain:I"):
+            rebuilt = copy.deepcopy(self.rebuilt)
+            section = "methods" if target == self.helper else "fields"
+            rebuilt[self.owner][section][target].update(
+                deprecated_attribute=True,
+                runtime_visible_annotations=[{"type": "Ljava/lang/Deprecated;", "elements": []}])
+            with self.subTest(target=target), self.assertRaisesRegex(RuntimeError, "helper|field declaration changed"):
+                oracle.match_deprecated_recompiled(self.original, rebuilt)
+
+    def test_invalid_handcrafted_facts_do_not_pass_by_matching_on_both_sides(self):
+        for key, value in (("deprecated_attribute", 1), ("runtime_visible_annotations", ["Ljava/lang/Deprecated;"]),
+                           ("runtime_visible_annotations", [{"type": "Lfixture/Unknown;", "elements": []}]),
+                           ("runtime_visible_annotations", [{"type": "Ljava/lang/Deprecated;", "elements": ["since"]}])):
+            original, rebuilt = copy.deepcopy(self.original), copy.deepcopy(self.rebuilt)
+            original[self.owner][key] = value
+            rebuilt[self.owner][key] = copy.deepcopy(value)
+            with self.subTest(key=key, value=value), self.assertRaisesRegex(RuntimeError, "deprecation"):
+                oracle.match_deprecated_recompiled(original, rebuilt)
+
+    def test_only_legacy_absence_of_both_keys_means_no_helper_annotations(self):
+        helper = self.rebuilt[self.owner]["methods"][self.helper]
+        del helper["deprecated_attribute"]
+        with self.assertRaisesRegex(RuntimeError, "deprecation"):
+            oracle.match_deprecated_recompiled(self.original, self.rebuilt)
+        del helper["runtime_visible_annotations"]
+        self.assertEqual(oracle.match_deprecated_recompiled(self.original, self.rebuilt)["generated_helper_count"], 1)
+
+    def test_original_method_cannot_be_replaced_or_hidden_in_annotation_totals(self):
+        del self.rebuilt[self.owner]["methods"][self.constructor]
+        with self.assertRaisesRegex(RuntimeError, "original method"):
+            oracle.match_deprecated_recompiled(self.original, self.rebuilt)
 
 
 class CompilerClassFileTests(unittest.TestCase):
@@ -341,6 +533,10 @@ class LocalProjectionOracleTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "duplicates"): self.check([helper, helper])
         with self.assertRaisesRegex(RuntimeError, "wrong ABI"): self.check([dict(helper, static=True)])
         with self.assertRaisesRegex(RuntimeError, "source unit"): self.check([dict(helper, source_unit="sources/fixture/LocalClassBehavior.java")])
+        extra = self.rebuilt[target]["methods"][target + "->" + name + prototype]
+        extra.update(deprecated_attribute=True, runtime_visible_annotations=[])
+        with self.assertRaisesRegex(RuntimeError, "annotation or Deprecated"):
+            self.check([helper])
 
     def test_helper_prefix_cannot_exempt_an_unreported_method(self):
         self.rebuilt[OUTER]["methods"][OUTER + "->__neverdThrowExtra()I"] = {

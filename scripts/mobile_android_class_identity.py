@@ -9,6 +9,14 @@ import hashlib
 from pathlib import Path
 
 
+DEPRECATED_TYPE = "Ljava/lang/Deprecated;"
+ANNOTATION_ATTRIBUTES = frozenset({
+    "Deprecated", "RuntimeVisibleAnnotations", "RuntimeInvisibleAnnotations",
+    "RuntimeVisibleParameterAnnotations", "RuntimeInvisibleParameterAnnotations",
+    "RuntimeVisibleTypeAnnotations", "RuntimeInvisibleTypeAnnotations", "AnnotationDefault",
+})
+
+
 def require(condition, message):
     if not condition:
         raise RuntimeError(message)
@@ -98,7 +106,41 @@ class ClassFile:
         require(value and "\0" not in value, "Invalid compiler Signature text")
         return value
 
-    def code(self, data):
+    def deprecation(self, attributes, context, *, allowed=True):
+        """The Java 8 marker and the zero-length attribute are distinct facts.
+
+        This oracle's supported annotation grammar is intentionally narrow.
+        A nonempty element list or another annotation attachment is rejected,
+        never skipped and then accepted as equivalent compiler identity.
+        """
+        deprecated, visible, seen = False, [], set()
+        for kind, data in attributes:
+            if kind not in ANNOTATION_ATTRIBUTES:
+                continue
+            require(allowed, "Unsupported compiler annotation attribute in Code of " + context)
+            require(kind not in seen, "Duplicate compiler annotation attribute " + kind + " on " + context)
+            seen.add(kind)
+            if kind == "Deprecated":
+                require(not data, "Compiler Deprecated attribute must have zero length on " + context)
+                deprecated = True
+                continue
+            require(kind == "RuntimeVisibleAnnotations",
+                    "Unsupported compiler annotation attribute " + kind + " on " + context)
+            attribute = Bytes(data)
+            types = set()
+            for _ in range(attribute.number(2)):
+                descriptor = self.text(attribute.number(2))
+                require(descriptor not in types, "Duplicate compiler runtime annotation on " + context)
+                types.add(descriptor)
+                require(descriptor == DEPRECATED_TYPE,
+                        "Unsupported compiler runtime annotation " + descriptor + " on " + context)
+                require(attribute.number(2) == 0,
+                        "Compiler Deprecated annotation elements are unsupported on " + context)
+                visible.append({"type": descriptor, "elements": []})
+            attribute.finish()
+        return {"deprecated_attribute": deprecated, "runtime_visible_annotations": visible}
+
+    def code(self, data, context):
         reader = Bytes(data)
         reader.take(4)  # max_stack and max_locals
         length = reader.number(4)
@@ -109,7 +151,7 @@ class ClassFile:
             require(start < end <= length and handler < length, "Invalid compiler Code handler")
             if catch:
                 self.owner(catch)
-        self.attributes(reader)
+        self.deprecation(self.attributes(reader), context, allowed=False)
         reader.finish()
 
     def facts(self):
@@ -151,6 +193,7 @@ class ClassFile:
             require(identity not in fields, "Compiler emitted a duplicate field")
             attrs = self.attributes(reader)
             signature = self.signature(attrs)
+            deprecation = self.deprecation(attrs, identity)
             values = [data for kind, data in attrs if kind == "ConstantValue"]
             require(len(values) <= 1, "Duplicate compiler field ConstantValue")
             constant_value = None
@@ -164,7 +207,7 @@ class ClassFile:
                 value = self.constant(index, tag)
                 constant_value = {"tag": tag, "value": self.text(value) if tag == 8 else value.hex()}
             fields[identity] = {"name": name, "descriptor": descriptor, "access": flags,
-                                "constant_value": constant_value, "signature": signature}
+                                "constant_value": constant_value, "signature": signature, **deprecation}
         for _ in range(reader.number(2)):
             flags, name, descriptor = reader.number(2), self.text(reader.number(2)), self.text(reader.number(2))
             prototype_parts(descriptor)
@@ -173,16 +216,18 @@ class ClassFile:
             declaration = bool(flags & (0x100 | 0x400))
             require(len(bodies) == (0 if declaration else 1),
                     "Compiler method has inconsistent Code/access metadata")
-            for data in bodies:
-                self.code(data)
             identity = owner + "->" + name + descriptor
+            for data in bodies:
+                self.code(data, identity)
             require(identity not in methods, "Compiler emitted a duplicate method")
             methods[identity] = {"name": name, "prototype": descriptor, "access": flags,
-                                 "code": bool(bodies), "signature": self.signature(attrs)}
+                                 "code": bool(bodies), "signature": self.signature(attrs),
+                                 **self.deprecation(attrs, identity)}
         enclosing, own_inner, source_file = None, None, None
         seen = set()
         attrs = self.attributes(reader)
         signature = self.signature(attrs)
+        deprecation = self.deprecation(attrs, owner)
         for kind, data in attrs:
             if kind not in {"EnclosingMethod", "InnerClasses", "SourceFile"}:
                 continue
@@ -217,7 +262,7 @@ class ClassFile:
                        "interfaces": interfaces, "fields": fields, "methods": methods,
                        "enclosing_method": enclosing, "inner_class": own_inner,
                        "source_file": source_file, "major": major, "minor": minor,
-                       "signature": signature}
+                       "signature": signature, **deprecation}
         return self.result
 
     def inventory(self):
@@ -248,6 +293,28 @@ THROW_HELPER_PROTOTYPE = "(Ljava/lang/Throwable;)Ljava/lang/RuntimeException;"
 THROW_HELPER_SIGNATURE = "<E:Ljava/lang/Throwable;>(Ljava/lang/Throwable;)Ljava/lang/RuntimeException;^TE;"
 
 
+def deprecation_facts(row):
+    """Validate explicit facts, with absence only for old handwritten fixtures."""
+    require(isinstance(row, dict), "Malformed compiler deprecation facts")
+    keys = {"deprecated_attribute", "runtime_visible_annotations"}
+    present = keys.intersection(row)
+    require(not present or present == keys, "Incomplete compiler deprecation facts")
+    deprecated = row.get("deprecated_attribute", False)
+    visible = row.get("runtime_visible_annotations", [])
+    require(type(deprecated) is bool and isinstance(visible, list) and len(visible) <= 1,
+            "Malformed compiler deprecation facts")
+    for marker in visible:
+        require(isinstance(marker, dict) and set(marker) == {"type", "elements"}
+                and marker["type"] == DEPRECATED_TYPE and isinstance(marker["elements"], list)
+                and not marker["elements"], "Unsupported compiler deprecation facts")
+    return {"deprecated_attribute": deprecated, "runtime_visible_annotations": visible}
+
+
+def with_deprecation_facts(row):
+    facts = deprecation_facts(row)
+    return {**row, **facts}
+
+
 def match_generic_recompiled(original, rebuilt):
     """Exact owned top-level identities; only the known runtime helper is extra.
 
@@ -266,13 +333,19 @@ def match_generic_recompiled(original, rebuilt):
                     "Generic fixture unexpectedly acquired a nested scope")
         for key in ("name", "access", "superclass", "interfaces", "signature"):
             require(before[key] == after[key], "Generic class declaration changed: " + owner + ":" + key)
-        require(before["fields"] == after["fields"], "Generic field declaration changed: " + owner)
+        require(deprecation_facts(before) == deprecation_facts(after),
+                "Generic class deprecation changed: " + owner)
+        require({key: with_deprecation_facts(row) for key, row in before["fields"].items()}
+                == {key: with_deprecation_facts(row) for key, row in after["fields"].items()},
+                "Generic field declaration changed: " + owner)
         signatures["classes"] += before["signature"] is not None
         signatures["fields"] += sum(row["signature"] is not None for row in before["fields"].values())
         for identity, method in before["methods"].items():
             require(method["code"] and not (method["access"] & (0x40 | 0x1000)),
                     "Generic fixture contains a bridge, synthetic or declaration-only method")
-            require(after["methods"].get(identity) == method,
+            rebuilt_method = after["methods"].get(identity)
+            require(isinstance(rebuilt_method, dict)
+                    and with_deprecation_facts(rebuilt_method) == with_deprecation_facts(method),
                     "Generic original method or Signature changed: " + identity)
             method_count += 1
             signatures["methods"] += method["signature"] is not None
@@ -280,13 +353,31 @@ def match_generic_recompiled(original, rebuilt):
         require(helper not in before["methods"], "Generic fixture collides with its fixed auxiliary helper")
         require(set(after["methods"]) - set(before["methods"]) == {helper},
                 "Generic generated helper inventory changed: " + owner)
-        require(after["methods"][helper] == {
+        require(with_deprecation_facts(after["methods"][helper]) == {
             "name": "__neverdThrow", "prototype": THROW_HELPER_PROTOTYPE,
-            "access": 0xA, "code": True, "signature": THROW_HELPER_SIGNATURE},
+            "access": 0xA, "code": True, "signature": THROW_HELPER_SIGNATURE,
+            "deprecated_attribute": False, "runtime_visible_annotations": []},
             "Generic generated helper declaration changed: " + owner)
     return {"scope": "owned-generic-signature-and-body", "class_count": len(original),
             "original_method_count": method_count, "signature_count": signatures,
             "generated_helper_count": len(original)}
+
+
+def match_deprecated_recompiled(original, rebuilt):
+    """Exact Java 8 owned declarations; count only original annotation owners."""
+    result = match_generic_recompiled(original, rebuilt)
+    counts = {key: {scope: 0 for scope in ("classes", "fields", "constructors", "methods")}
+              for key in ("deprecated_attribute_count", "runtime_visible_deprecated_count")}
+    for before in original.values():
+        rows = [("classes", before)]
+        rows.extend(("fields", row) for row in before["fields"].values())
+        rows.extend(("constructors" if row["name"] == "<init>" else "methods", row)
+                    for row in before["methods"].values())
+        for scope, row in rows:
+            facts = deprecation_facts(row)
+            counts["deprecated_attribute_count"][scope] += int(facts["deprecated_attribute"])
+            counts["runtime_visible_deprecated_count"][scope] += len(facts["runtime_visible_annotations"])
+    return {**result, "scope": "owned-deprecated-attributes-and-body", **counts}
 
 
 def local_key(facts):
@@ -439,11 +530,12 @@ def match_recompiled(original, rebuilt, helpers):
                 "Local oracle requires Java 8 compiler output")
         require(before["access"] == after["access"] and before["superclass"] == after["superclass"]
                 and before["interfaces"] == after["interfaces"], "Recompiled class access or parents changed")
+        require(deprecation_facts(before) == deprecation_facts(after), "Recompiled class deprecation changed")
         if owner in locals_:
             require(before["inner_class"]["access"] == after["inner_class"]["access"],
                     "Recompiled InnerClasses access changed")
         def storage(row):
-            return {key: value for key, value in row.items() if key != "constant_value"}
+            return {key: value for key, value in with_deprecation_facts(row).items() if key != "constant_value"}
         wanted_fields = {target + "->" + row["name"] + ":" + row["descriptor"]: storage(row)
                          for row in before["fields"].values()}
         require(wanted_fields == {key: storage(row) for key, row in after["fields"].items()},
@@ -460,7 +552,9 @@ def match_recompiled(original, rebuilt, helpers):
         for identity, row in before["methods"].items():
             target_id = target + "->" + row["name"] + row["prototype"]
             wanted.add(target_id)
-            require(after["methods"].get(target_id) == row,
+            rebuilt_method = after["methods"].get(target_id)
+            require(isinstance(rebuilt_method, dict)
+                    and with_deprecation_facts(rebuilt_method) == with_deprecation_facts(row),
                     "Recompiled original method or Code/access role changed: " + identity)
         for identity in after["methods"].keys() - wanted:
             actual_extras[identity] = after["methods"][identity]
@@ -470,6 +564,8 @@ def match_recompiled(original, rebuilt, helpers):
         flags = 8 if helper["kind"] == "field-initializer" else (2 | (8 if helper["static"] else 0))
         require(row["code"] and row["access"] == flags,
                 "Generated helper Code/access role changed")
+        require(deprecation_facts(row) == {"deprecated_attribute": False, "runtime_visible_annotations": []},
+                "Generated helper acquired an annotation or Deprecated attribute")
     return {"schema_version": 1, "scope": "owned-local-source-projection",
             "binary_identity_equivalence": False,
             "all_measured_binary_names_equal": all(owner == target for owner, target in mapping.items()),

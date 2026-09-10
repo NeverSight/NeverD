@@ -33,6 +33,8 @@ La resolución de nombres Java distingue entre la cabecera y el cuerpo de una cl
 
 El motor C++ integrado conserva y valida los metadatos `Signature` admitidos de clases, campos y métodos, incluidas las variables de tipo, los arrays, los comodines, los límites de tipo y la ocultación de nombres a nivel de método. El borrado de tipos debe coincidir con la identidad de la declaración DEX original. `Throws` se conserva; se rechaza una jerarquía de excepciones que no pueda demostrarse. La herencia genérica o la sustitución de tipos de miembros, la regeneración de métodos puente, las llamadas a métodos genéricos, los tipos internos parametrizados y la correspondencia de parámetros ocultos de constructores siguen sin admitirse explícitamente cuando falta la prueba necesaria.
 
+El marcador vacío y visible en tiempo de ejecución de Java 8 `@java.lang.Deprecated` se conserva en clases, campos, métodos y constructores. Se rechazan las anotaciones de parámetros, los inicializadores estáticos anotados, otros niveles de visibilidad y los valores de elementos como `since` o `forRemoval`. Tras la recompilación, la CI compara por separado el atributo `Deprecated` del archivo de clase y las anotaciones de tiempo de ejecución, incluidas las declaraciones de control sin anotar y los métodos auxiliares generados; estos últimos no se incluyen en el número de métodos originales.
+
 La CI procesa ejemplos Java 8 propios del proyecto mediante D8 y NeverD, recompila todo el Java generado y compara los metadatos `Signature` completos, los resultados de reflexión y el comportamiento. Estas comprobaciones no certifican la recuperación completa de aplicaciones reales.
 
 ### Linux y macOS

@@ -97,6 +97,7 @@ struct FixtureOptions {
   std::optional<size_t> class_annotations, field_annotations,
       method_annotations;
   std::optional<std::vector<std::optional<size_t>>> parameter_annotations;
+  std::string method_name = "value";
 };
 struct Fixture {
   std::string data;
@@ -117,7 +118,8 @@ Fixture fixture(FixtureOptions options = {}) {
       shorty += shortType(p);
     return shorty;
   };
-  MethodRef definition{owner, "value", options.params, options.returns};
+  MethodRef definition{owner, options.method_name, options.params,
+                       options.returns};
   std::vector<MethodRef> method_refs{definition};
   if (options.referenced_method)
     method_refs.push_back(*options.referenced_method);
@@ -1277,7 +1279,7 @@ TEST(MobileDalvikReader, SmaliExceptionRegionAndHandlerOrderAreExact) {
   EXPECT_EQ(region.handlers[1].target, 2u);
 }
 TEST(MobileDalvikReader, DexAttachedUnknownAnnotationsCannotLoseSemantics) {
-  for (const auto &type : {"Lfixture/Unknown;", "Ljava/lang/Deprecated;"}) {
+  for (const auto &type : {"Lfixture/Unknown;"}) {
     for (unsigned visibility : {0u, 1u, 2u}) {
       for (const auto &attachment : {"class", "field", "method", "parameter"}) {
         SCOPED_TRACE(std::string(type) + " " + attachment + " visibility " +
@@ -1301,6 +1303,224 @@ TEST(MobileDalvikReader, DexAttachedUnknownAnnotationsCannotLoseSemantics) {
       }
     }
   }
+}
+
+TEST(MobileDalvikReader, DexDeprecatedBindsOnlyItsExactDeclaration) {
+  for (const auto &attachment : {"class", "field", "method"}) {
+    SCOPED_TRACE(attachment);
+    FixtureOptions options;
+    options.annotations = {{"Ljava/lang/Deprecated;", 1}};
+    options.annotation_sets = {{0}};
+    attachFixtureAnnotation(options, attachment);
+    auto classes = parse(fixture(options).data);
+    ASSERT_EQ(classes.size(), 1u);
+    const auto &cls = classes[0];
+    EXPECT_EQ(cls.deprecated, std::string_view(attachment) == "class");
+    ASSERT_EQ(cls.methods.size(), 1u);
+    EXPECT_EQ(cls.methods[0].deprecated,
+              std::string_view(attachment) == "method");
+    EXPECT_EQ(cls.methods[0].reference.identity(),
+              "Lfixture/Sample;->value(I)I");
+    ASSERT_EQ(cls.methods[0].instructions.size(), 1u);
+    EXPECT_EQ(cls.methods[0].instructions[0].opcode, "return");
+    if (std::string_view(attachment) == "field") {
+      ASSERT_EQ(cls.fields.size(), 1u);
+      EXPECT_TRUE(cls.fields[0].deprecated);
+      EXPECT_EQ(cls.fields[0].reference.name, "VALUE");
+    }
+  }
+  auto classes = parse(fixture().data);
+  EXPECT_FALSE(classes[0].deprecated);
+  EXPECT_FALSE(classes[0].methods[0].deprecated);
+}
+
+TEST(MobileDalvikReader, DexDeprecatedCachedSetBindsEveryDefinedSite) {
+  FixtureOptions options;
+  options.annotations = {{"Ljava/lang/Deprecated;", 1}};
+  options.annotation_sets = {{0}, {0}};
+  options.class_annotations = 0;
+  attachFixtureAnnotation(options, "field");
+  options.method_annotations = 0;
+  auto classes = parse(fixture(options).data);
+  ASSERT_EQ(classes.size(), 1u);
+  EXPECT_TRUE(classes[0].deprecated);
+  ASSERT_EQ(classes[0].fields.size(), 1u);
+  EXPECT_TRUE(classes[0].fields[0].deprecated);
+  ASSERT_EQ(classes[0].methods.size(), 1u);
+  EXPECT_TRUE(classes[0].methods[0].deprecated);
+  EXPECT_EQ(classes[0].methods[0].reference.identity(),
+            "Lfixture/Sample;->value(I)I");
+
+  // An unattached, structurally valid marker must not mark a declaration.
+  options.class_annotations.reset();
+  options.field_annotations.reset();
+  options.method_annotations.reset();
+  classes = parse(fixture(options).data);
+  EXPECT_FALSE(classes[0].deprecated);
+  EXPECT_FALSE(classes[0].fields[0].deprecated);
+  EXPECT_FALSE(classes[0].methods[0].deprecated);
+}
+
+TEST(MobileDalvikReader, DexDeprecatedRejectsVisibilityAndElementLoss) {
+  for (const auto &attachment : {"class", "field", "method"}) {
+    SCOPED_TRACE(attachment);
+    FixtureOptions options;
+    options.annotations = {{"Ljava/lang/Deprecated;", 1}};
+    options.annotation_sets = {{0}};
+    attachFixtureAnnotation(options, attachment);
+    std::string declaration;
+    if (std::string_view(attachment) == "class")
+      declaration = "class Lfixture/Sample;";
+    else if (std::string_view(attachment) == "field")
+      declaration = "field Lfixture/Sample;->VALUE:I";
+    else
+      declaration = "method Lfixture/Sample;->value(I)I";
+    for (unsigned visibility : {0u, 2u}) {
+      auto changed = options;
+      changed.annotations[0].visibility = visibility;
+      expectDexError(fixture(changed).data,
+                     "Invalid DEX: Deprecated annotation on " + declaration +
+                         " requires runtime visibility");
+    }
+    for (const auto &key : {"since", "forRemoval", "value"}) {
+      SCOPED_TRACE(key);
+      auto changed = options;
+      changed.annotations[0].extra_strings = {utf16(key), u"9"};
+      changed.annotations[0].elements =
+          [key](std::string &out, const Fixture &f) {
+            uleb(out, 1);
+            uleb(out, fixtureStringIndex(f, key));
+            if (std::string_view(key) == "since")
+              annotationIndex(out, 0x17, fixtureStringIndex(f, "9"));
+            else if (std::string_view(key) == "forRemoval")
+              append(out, 0x3f, 1); // VALUE_BOOLEAN, true.
+            else {
+              append(out, 0x04, 1); // VALUE_INT, one byte.
+              append(out, 1, 1);
+            }
+          };
+      expectDexError(fixture(changed).data,
+                     "Invalid DEX: Deprecated annotation on " + declaration +
+                         " must have no elements");
+    }
+    auto changed = options;
+    changed.annotations.push_back({"Ljava/lang/Deprecated;", 1});
+    changed.annotation_sets[0].push_back(1);
+    expectDexError(fixture(changed).data,
+                   "Invalid DEX: annotation types are duplicate or unordered");
+  }
+}
+
+TEST(MobileDalvikReader, DexDeprecatedConstructorRetainsItsRealInvoke) {
+  FixtureOptions options;
+  options.method_name = "<init>";
+  options.params.clear();
+  options.returns = "V";
+  options.flags = 0x10001;
+  options.words = {0x1070, 0, 0, 0x000e};
+  options.referenced_method =
+      MethodRef{"Ljava/lang/Object;", "<init>", {}, "V"};
+  options.annotations = {{"Ljava/lang/Deprecated;", 1}};
+  options.annotation_sets = {{0}};
+  options.method_annotations = 0;
+  auto f = fixture(options);
+  auto found =
+      std::find(f.methods.begin(), f.methods.end(), *options.referenced_method);
+  ASSERT_NE(found, f.methods.end());
+  patch(f.data, f.at.at("code") + 18, found - f.methods.begin(), 2);
+  auto classes = parse(seal(f.data));
+  ASSERT_EQ(classes.size(), 1u);
+  ASSERT_EQ(classes[0].methods.size(), 1u);
+  const auto &method = classes[0].methods[0];
+  EXPECT_TRUE(method.deprecated);
+  EXPECT_EQ(method.reference.identity(), "Lfixture/Sample;-><init>()V");
+  ASSERT_EQ(method.instructions.size(), 2u);
+  EXPECT_EQ(method.instructions[0].opcode, "invoke-direct");
+  EXPECT_EQ(std::get<MethodRef>(method.instructions[0].reference),
+            *options.referenced_method);
+  EXPECT_EQ(method.instructions[1].opcode, "return-void");
+}
+
+TEST(MobileDalvikReader, SmaliDeprecatedPreservesDeclarationsAndConstructor) {
+  const std::string marker =
+      ".annotation runtime Ljava/lang/Deprecated;\n.end annotation\n";
+  auto cls = smali(
+      ".class public Lfixture/Sample;\n.super Ljava/lang/Object;\n" +
+      marker + ".field public value:I\n" + marker + ".end field\n"
+      ".method public static value(I)I\n.registers 1\n" + marker +
+      "return p0\n.end method\n"
+      ".method public constructor <init>()V\n.registers 1\n" + marker +
+      "invoke-direct {p0}, Ljava/lang/Object;-><init>()V\n"
+      "return-void\n.end method\n");
+  EXPECT_TRUE(cls.deprecated);
+  ASSERT_EQ(cls.fields.size(), 1u);
+  EXPECT_TRUE(cls.fields[0].deprecated);
+  ASSERT_EQ(cls.methods.size(), 2u);
+  EXPECT_TRUE(cls.methods[0].deprecated);
+  EXPECT_TRUE(cls.methods[1].deprecated);
+  EXPECT_EQ(cls.methods[0].reference.identity(),
+            "Lfixture/Sample;->value(I)I");
+  ASSERT_EQ(cls.methods[0].instructions.size(), 1u);
+  EXPECT_EQ(cls.methods[0].instructions[0].opcode, "return");
+  EXPECT_EQ(cls.methods[1].reference.identity(),
+            "Lfixture/Sample;-><init>()V");
+  ASSERT_EQ(cls.methods[1].instructions.size(), 2u);
+  EXPECT_EQ(cls.methods[1].instructions[0].opcode, "invoke-direct");
+  EXPECT_EQ(std::get<MethodRef>(cls.methods[1].instructions[0].reference),
+            (MethodRef{"Ljava/lang/Object;", "<init>", {}, "V"}));
+  EXPECT_EQ(cls.methods[1].instructions[1].opcode, "return-void");
+  auto plain = smali(methodText("return p0", "value(I)I", 1));
+  EXPECT_FALSE(plain.deprecated);
+  EXPECT_FALSE(plain.methods[0].deprecated);
+}
+
+TEST(MobileDalvikReader, SmaliDeprecatedRetainsVisibilityShapeAndSiteGuards) {
+  const std::string start =
+      ".class public Lfixture/Sample;\n.super Ljava/lang/Object;\n";
+  const std::string method =
+      ".method public static value(I)I\n.registers 1\n";
+  const std::string end = "return p0\n.end method\n";
+  const std::string marker =
+      ".annotation runtime Ljava/lang/Deprecated;\n.end annotation\n";
+  auto source = [&](std::string_view site, const std::string &annotation) {
+    if (site == "class")
+      return start + annotation + method + end;
+    if (site == "field")
+      return start + ".field public value:I\n" + annotation +
+             ".end field\n" + method + end;
+    return start + method + annotation + end;
+  };
+  auto reject = [&](const std::string &text, std::string_view reason) {
+    try {
+      smali(text);
+      FAIL() << "Expected Deprecated metadata rejection";
+    } catch (const Error &error) {
+      EXPECT_NE(std::string(error.what()).find(reason), std::string::npos)
+          << error.what();
+    }
+  };
+  for (const auto &site : {"class", "field", "method"}) {
+    SCOPED_TRACE(site);
+    for (const auto &visibility : {"build", "system"})
+      reject(source(site, ".annotation " + std::string(visibility) +
+                              " Ljava/lang/Deprecated;\n.end annotation\n"),
+             "requires runtime visibility");
+    for (const auto &element : {"since = \"9\"", "forRemoval = true",
+                               "value = 1"})
+      reject(source(site, ".annotation runtime Ljava/lang/Deprecated;\n" +
+                              std::string(element) + "\n.end annotation\n"),
+             "must have no elements");
+    reject(source(site, marker + marker), "duplicate Deprecated annotation");
+  }
+  reject(start + method + ".param p0\n" + marker +
+             ".end param\n" + end,
+         "parameter annotations are not represented");
+  auto cls = smali(start + method + ".param p0\n.end param\n" + marker +
+                   end);
+  EXPECT_TRUE(cls.methods[0].deprecated);
+  reject(start + method +
+             ".annotation system Lfixture/Unknown;\n.end annotation\n" + end,
+         "unsupported annotation Lfixture/Unknown;");
 }
 
 TEST(MobileDalvikReader, DexSystemClassAnnotationsKeepStructureAndVisibility) {
@@ -1381,19 +1601,23 @@ TEST(MobileDalvikReader, DexSignaturesBindAllDeclarationsAndExactFragments) {
       signatureAnnotation(
           {"<U:Ljava/lang/Object;>(T", "U;)TU;", "^Ljava/lang/Exception;"}),
       typeArrayAnnotation("Ldalvik/annotation/Throws;",
-                          {"Ljava/lang/Exception;"})};
-  options.annotation_sets = {{0}, {1}, {2, 3}};
+                          {"Ljava/lang/Exception;"}),
+      {"Ljava/lang/Deprecated;", 1}};
+  options.annotation_sets = {{0, 4}, {1, 4}, {2, 3, 4}};
   options.class_annotations = 0;
   options.field_annotations = 1;
   options.method_annotations = 2;
   auto classes = parse(fixture(options).data);
   ASSERT_EQ(classes.size(), 1u);
   const auto &cls = classes[0];
+  EXPECT_TRUE(cls.deprecated);
   EXPECT_EQ(cls.generic_signature, "<T:Ljava/lang/Object;>Ljava/lang/Object;");
   ASSERT_EQ(cls.fields.size(), 1u);
+  EXPECT_TRUE(cls.fields[0].deprecated);
   EXPECT_EQ(cls.fields[0].generic_signature,
             "Ljava/util/List<Ljava/lang/String;>;");
   ASSERT_EQ(cls.methods.size(), 1u);
+  EXPECT_TRUE(cls.methods[0].deprecated);
   EXPECT_EQ(cls.methods[0].generic_signature,
             "<U:Ljava/lang/Object;>(TU;)TU;^Ljava/lang/Exception;");
   EXPECT_EQ(cls.methods[0].declared_throws,
@@ -1477,19 +1701,32 @@ TEST(MobileDalvikReader, DexSharedSourceSetsBindEachDefinedDeclaration) {
 }
 
 TEST(MobileDalvikReader, DexAnnotatedMethodMustHaveActualClassDataDefinition) {
-  FixtureOptions options;
-  options.annotations = {signatureAnnotation({"(I)I"})};
-  options.annotation_sets = {{0}};
-  options.method_annotations = 0;
-  options.referenced_method = MethodRef{options.owner, "unused", {"I"}, "I"};
-  auto f = fixture(options);
-  auto found =
-      std::find(f.methods.begin(), f.methods.end(), *options.referenced_method);
-  ASSERT_NE(found, f.methods.end());
-  patch(f.data, f.at.at("annotations") + 16,
-        unsigned(found - f.methods.begin()));
-  expectDexError(seal(f.data),
-                 "Invalid DEX: annotated method has no class_data definition");
+  for (const auto &annotation :
+       {signatureAnnotation({"(I)I"}),
+        FixtureAnnotation{"Ljava/lang/Deprecated;", 1}}) {
+    SCOPED_TRACE(annotation.type);
+    for (bool foreign_owner : {false, true}) {
+      SCOPED_TRACE(foreign_owner);
+      FixtureOptions options;
+      options.annotations = {annotation};
+      options.annotation_sets = {{0}};
+      options.method_annotations = 0;
+      options.referenced_method =
+          MethodRef{foreign_owner ? "Lfixture/Other;" : options.owner,
+                    "unused", {"I"}, "I"};
+      auto f = fixture(options);
+      auto found = std::find(f.methods.begin(), f.methods.end(),
+                             *options.referenced_method);
+      ASSERT_NE(found, f.methods.end());
+      patch(f.data, f.at.at("annotations") + 16,
+            unsigned(found - f.methods.begin()));
+      expectDexError(seal(f.data),
+                     foreign_owner
+                         ? "Invalid DEX: annotation directory owner mismatch"
+                         : "Invalid DEX: annotated method has no class_data "
+                           "definition");
+    }
+  }
 }
 
 TEST(MobileDalvikReader, EmptyAndNonJvmSignatureMetadataIsNotSilentlyLost) {
@@ -1801,7 +2038,7 @@ TEST(MobileDalvikReader, DexInnerClassAbsentAndNullAreDifferentModelStates) {
 
 TEST(MobileDalvikReader, DexRuntimeAnnotationFailureCannotPublishJava) {
   FixtureOptions options;
-  options.annotations = {{"Ljava/lang/Deprecated;", 1}};
+  options.annotations = {{"Lfixture/Unknown;", 1}};
   options.annotation_sets = {{0}};
   options.class_annotations = 0;
   const auto f = fixture(options);
@@ -1819,7 +2056,7 @@ TEST(MobileDalvikReader, DexRuntimeAnnotationFailureCannotPublishJava) {
     FAIL() << "Runtime annotation was silently dropped during recovery";
   } catch (const Error &error) {
     EXPECT_STREQ(error.what(),
-                 "Invalid DEX: unsupported annotation Ljava/lang/Deprecated; "
+                 "Invalid DEX: unsupported annotation Lfixture/Unknown; "
                  "on class Lfixture/Sample;");
   }
   EXPECT_TRUE(fs::is_empty(output));

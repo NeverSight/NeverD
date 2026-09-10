@@ -227,8 +227,10 @@ public:
 };
 
 struct JavaScope {
+  enum class Position { Declaration, ClassModifiers };
   const Class &owner;
   const MethodRef *method = nullptr;
+  Position position = Position::Declaration;
 };
 
 const MethodRef *localScope(const JavaScope &Scope) {
@@ -275,7 +277,8 @@ class JavaTypeNames {
     Strings types;
     bool unknown_inheritance = false;
   };
-  mutable std::map<std::tuple<std::string, std::string, std::string, bool>,
+  mutable std::map<std::tuple<std::string, std::string, std::string, bool,
+                              JavaScope::Position>,
                    Lookup>
       cache;
 
@@ -338,7 +341,7 @@ class JavaTypeNames {
     auto Key =
         std::tuple{Context.owner.name,
                    Context.method ? Context.method->identity() : std::string(),
-                   Name, InSupertypeHeader};
+                   Name, InSupertypeHeader, Context.position};
     if (auto I = cache.find(Key); I != cache.end())
       return I->second;
     Lookup Result;
@@ -372,7 +375,10 @@ class JavaTypeNames {
     const Class *Scope = &Context.owner;
     while (Scope) {
       budget.tick();
-      if (Variable(generics.classes, Scope->name)) {
+      bool ClassModifiers =
+          Scope == &Context.owner &&
+          Context.position == JavaScope::Position::ClassModifiers;
+      if (!ClassModifiers && Variable(generics.classes, Scope->name)) {
         if (auto I = members.find(Scope->name);
             I != members.end() && I->second.contains(Name))
           javaError("type variable collides with a member type in " +
@@ -380,9 +386,11 @@ class JavaTypeNames {
         return cache.emplace(std::move(Key), std::move(Result)).first->second;
       }
       // Declared and inherited members are in scope within the class body,
-      // not within its own extends/implements clause. Enclosing class bodies
+      // not within its own modifiers or extends/implements clause. Class
+      // type parameters also exclude the modifiers. Enclosing declarations
       // still contribute their complete lexical scopes to a nested header.
-      auto Local = InSupertypeHeader && Scope == &Context.owner
+      auto Local = (InSupertypeHeader || ClassModifiers) &&
+                           Scope == &Context.owner
                        ? Lookup{}
                        : memberTypes(*Scope, Name);
       Result.unknown_inheritance |= Local.unknown_inheritance;
@@ -1974,12 +1982,22 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
   bool HasGenericMetadata =
       !Generics.classes.empty() || !Generics.fields.empty() ||
       !Generics.methods.empty() || !Generics.declared_throws.empty();
+  bool HasDeclarationMetadata = HasGenericMetadata;
   llvm::json::Array Units, Methods, Bindings, Helpers;
   uint64_t Recovered = 0, Declared = 0, Projected = 0;
   LocalProjection Projection(Classes, B);
   std::map<std::string, std::vector<const Class *>> Enclosing;
   for (const auto &[Name, C] : Classes) {
     B.tick();
+    HasDeclarationMetadata |= C.deprecated;
+    for (const auto &F : C.fields) {
+      B.tick();
+      HasDeclarationMetadata |= F.deprecated;
+    }
+    for (const auto &M : C.methods) {
+      B.tick();
+      HasDeclarationMetadata |= M.deprecated;
+    }
     if (C.enclosing) {
       if (*C.enclosing == Name || !Classes.contains(*C.enclosing) ||
           !C.inner_name || C.inner_name->empty())
@@ -2008,7 +2026,7 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
   auto auxiliary = [&](const Class &C, const std::string &Name,
                        const std::string &Prototype, bool Static,
                        const std::string &Unit, const char *Kind) {
-    if (Projection.by_class.empty() && !HasGenericMetadata)
+    if (Projection.by_class.empty() && !HasDeclarationMetadata)
       return;
     B.tick();
     Helpers.push_back(llvm::json::Object{{"class", C.name},
@@ -2110,6 +2128,11 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
                 join(Interfaces, ", ");
     }
     Lines BodyLines(B, true);
+    if (C.deprecated)
+      BodyLines.append(
+          "@" + TypeNames.render(
+                    "Ljava/lang/Deprecated;",
+                    JavaScope{C, nullptr, JavaScope::Position::ClassModifiers}));
     BodyLines.append(Header + " {");
     if (Local) {
       const auto &R = *C.enclosing_method;
@@ -2161,6 +2184,8 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
       else
         FieldMods.push_back(TypeNames.render(F.reference.type, C));
       FieldMods.push_back(javaIdentifier(F.reference.name));
+      if (F.deprecated)
+        BodyLines.append("  @" + TypeNames.render("Ljava/lang/Deprecated;", C));
       BodyLines.append("  " + join(FieldMods, " ") +
                        (Value ? " = " + *Value : "") + ";");
     }
@@ -2186,6 +2211,7 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
           {"name", R.name},
           {"prototype", R.signature()},
           {"input", C.source_id},
+          {"deprecated", M.deprecated},
           {"instruction_count", static_cast<int64_t>(M.instructions.size())}};
       if (M.generic_signature)
         Row["generic_signature"] = *M.generic_signature;
@@ -2218,7 +2244,7 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
       if (R.name == "<clinit>") {
         if (!R.parameters.empty() || R.returns != "V" ||
             !M.access.contains("static") || MethodSignature ||
-            Generics.declared_throws.contains(R))
+            Generics.declared_throws.contains(R) || M.deprecated)
           javaError("invalid class initializer signature");
         Declaration = "static";
       } else if (R.name == "<init>") {
@@ -2239,6 +2265,9 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
       }
       if (!Throws.empty())
         Declaration += " throws " + join(Throws, ", ");
+      if (M.deprecated)
+        // Method and constructor type parameters exclude their modifiers.
+        BodyLines.append("  @" + TypeNames.render("Ljava/lang/Deprecated;", C));
       if (M.access.contains("abstract") || M.access.contains("native")) {
         BodyLines.append("  " + Declaration + ";");
         Row["status"] = "declaration-only";
@@ -2371,7 +2400,7 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
     Report["projected_method_count"] = static_cast<int64_t>(Projected);
     Report["class_source_bindings"] = std::move(Bindings);
   }
-  if (!Projection.by_class.empty() || HasGenericMetadata)
+  if (!Projection.by_class.empty() || HasDeclarationMetadata)
     Report["generated_source_helpers"] = std::move(Helpers);
   return Report;
 }

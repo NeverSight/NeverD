@@ -79,12 +79,14 @@ struct Method {
   unsigned incomingWords() const;
   std::optional<std::string> generic_signature;
   std::optional<std::vector<std::string>> declared_throws;
+  bool deprecated = false;
 };
 struct Field {
   FieldRef reference;
   Access access;
   FieldValue value;
   std::optional<std::string> generic_signature;
+  bool deprecated = false;
 };
 struct Class {
   std::string name;
@@ -100,6 +102,7 @@ struct Class {
   bool inner_class_present = false;
   std::optional<MethodRef> enclosing_method;
   std::optional<std::string> generic_signature;
+  bool deprecated = false;
 };
 using ClassMap = std::map<std::string, Class>;
 void validateSourceScopes(const ClassMap &classes, Budget &budget);

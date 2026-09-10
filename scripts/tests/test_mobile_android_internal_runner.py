@@ -250,15 +250,17 @@ def generic_facts():
         for member, signature in declarations.items():
             name, tail = member.split("(", 1)
             methods[owner + "->" + member] = {"name": name, "prototype": "(" + tail, "code": True,
-                "access": 9 if owner == runner.GENERIC_OPS and name != "<init>" else 1, "signature": signature}
+                "access": 9 if owner == runner.GENERIC_OPS and name != "<init>" else 1,
+                "signature": signature, **runner.deprecated_facts()}
         fields = {owner + "->" + name + ":" + descriptor:
-                  {"name": name, "descriptor": descriptor, "access": 1, "constant_value": None, "signature": signature}
+                  {"name": name, "descriptor": descriptor, "access": 1, "constant_value": None,
+                   "signature": signature, **runner.deprecated_facts()}
                   for name, (descriptor, signature) in (runner.GENERIC_FIELDS.items() if owner == runner.GENERIC_BOX else [])}
         classes[owner] = {"name": owner, "access": 0x31, "superclass": "Ljava/lang/Object;", "interfaces": [],
             "fields": fields, "methods": methods, "enclosing_method": None, "inner_class": None,
             "source_file": owner.rsplit("/", 1)[1][:-1] + ".java", "major": 52, "minor": 0,
             "signature": "<T:Ljava/lang/Object;>Ljava/lang/Object;" if owner == runner.GENERIC_BOX else None,
-            "path": owner[1:-1] + ".class", "size": 4, "sha256": "a" * 64}
+            "path": owner[1:-1] + ".class", "size": 4, "sha256": "a" * 64, **runner.deprecated_facts()}
     return classes
 
 
@@ -440,14 +442,16 @@ def constructor_facts():
     classes = {}
     for owner, declarations in runner.CONSTRUCTOR_DECLARATIONS.items():
         fields = {owner + "->" + name + ":" + descriptor:
-                  {"name": name, "descriptor": descriptor, "access": access, "constant_value": None, "signature": None}
+                  {"name": name, "descriptor": descriptor, "access": access, "constant_value": None,
+                   "signature": None, **runner.deprecated_facts()}
                   for name, descriptor, access in declarations["fields"]}
         methods = {owner + "->" + member: {"name": "<init>", "prototype": member[len("<init>"):],
-                   "access": 1, "code": True, "signature": signature}
+                   "access": 1, "code": True, "signature": signature, **runner.deprecated_facts()}
                    for member, signature in declarations["methods"].items()}
         classes[owner] = {"name": owner, "access": declarations["access"], "superclass": declarations["superclass"],
             "interfaces": [], "fields": fields, "methods": methods, "enclosing_method": None, "inner_class": None,
-            "signature": None, "major": 52, "minor": 0, "path": owner[1:-1] + ".class", "size": 4, "sha256": "b" * 64}
+            "signature": None, "major": 52, "minor": 0, "path": owner[1:-1] + ".class", "size": 4,
+            "sha256": "b" * 64, **runner.deprecated_facts()}
     return classes
 
 
@@ -655,6 +659,255 @@ class ConstructorWorkflowTests(unittest.TestCase):
         self.assertEqual(passed, [])
         self.assertEqual([row["case"] for row in failures], ["constructor-dex"])
         self.assertTrue((self.root / "constructor-preparation-failure.json").is_file())
+
+
+def deprecated_classes():
+    """Mock orchestration only; the real case obtains these facts from javac."""
+    classes = {}
+    for owner, declarations in runner.DEPRECATED_DECLARATIONS.items():
+        fields = {owner + "->" + name + ":I": {"name": name, "descriptor": "I", "access": access,
+                  "constant_value": None, "signature": None, **runner.deprecated_facts(marked)}
+                  for name, access, marked in declarations["fields"]}
+        methods = {}
+        for member, marked in declarations["methods"].items():
+            name, tail = member.split("(", 1)
+            methods[owner + "->" + member] = {"name": name, "prototype": "(" + tail, "access": 1,
+                                              "code": True, "signature": None, **runner.deprecated_facts(marked)}
+        classes[owner] = {"name": owner, "access": declarations["access"], "superclass": declarations["superclass"],
+            "interfaces": [], "fields": fields, "methods": methods, "enclosing_method": None, "inner_class": None,
+            "signature": None, "major": 52, "minor": 0, "path": owner[1:-1] + ".class", "size": 4,
+            "sha256": "c" * 64, **runner.deprecated_facts(declarations["deprecated"])}
+    return classes
+
+
+class DeprecatedOracleTests(unittest.TestCase):
+    def test_exact_original_six_bodies_and_four_independent_marker_roles(self):
+        original = deprecated_classes()
+        runner.validate_deprecated_original(original)
+        self.assertEqual(len(original), 2)
+        self.assertEqual(sum(len(row["methods"]) for row in original.values()), 6)
+        self.assertEqual(sum(row["deprecated_attribute"] for row in original.values()), 1)
+        self.assertEqual(sum(field["deprecated_attribute"] for row in original.values() for field in row["fields"].values()), 1)
+        methods = [method for row in original.values() for method in row["methods"].values()]
+        self.assertEqual(sum(method["deprecated_attribute"] for method in methods if method["name"] == "<init>"), 1)
+        self.assertEqual(sum(method["deprecated_attribute"] for method in methods if method["name"] != "<init>"), 1)
+        self.assertEqual(len(runner.DEPRECATED_REFLECTION), 13)
+        self.assertEqual(len(runner.expected_keys("deprecated")), 92)
+        values = runner.deprecated_oracle()
+        self.assertEqual(values["deprecated:0:new"], -93)
+        self.assertEqual(values["plain:5:combine"], 209)
+        self.assertEqual(values["child:0:own"], -502)
+        self.assertEqual(values["final:constructor-count"], 18)
+        runner.compare_deprecated_behavior(values, values)
+
+    def test_each_marker_fact_is_independent_and_plain_controls_cannot_gain_it(self):
+        for scope in ("class", "field", "constructor", "method", "control"):
+            for changed in ("attribute", "runtime", "both"):
+                original = deprecated_classes()
+                base = original[runner.DEPRECATED_BASE]
+                if scope == "class": target = base
+                elif scope == "field": target = base["fields"][runner.DEPRECATED_BASE + "->legacy:I"]
+                elif scope == "constructor": target = base["methods"][runner.DEPRECATED_BASE + "-><init>()V"]
+                elif scope == "method": target = base["methods"][runner.DEPRECATED_BASE + "->oldAdd(I)I"]
+                else: target = original[runner.DEPRECATED_CHILD]
+                replacement = runner.deprecated_facts(scope == "control")
+                if changed in ("attribute", "both"): target["deprecated_attribute"] = replacement["deprecated_attribute"]
+                if changed in ("runtime", "both"): target["runtime_visible_annotations"] = replacement["runtime_visible_annotations"]
+                with self.subTest(scope=scope, changed=changed), self.assertRaisesRegex(RuntimeError, "Deprecated original"):
+                    runner.validate_deprecated_original(original)
+
+    def test_false_reflection_or_behavior_cannot_pass_even_when_both_sides_agree(self):
+        for key, wrong in {"reflection:PlainChild.class": 0, "deprecated:0:old": -93,
+                           "child:5:constructor-delta": 2, "final:constructor-count": 36}.items():
+            values = runner.deprecated_oracle()
+            values[key] = wrong
+            with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, "original behavior oracle failed"):
+                runner.compare_deprecated_behavior(values, dict(values))
+        values = runner.deprecated_oracle()
+        del values["reflection:PlainChild.inherited"]
+        with self.assertRaisesRegex(RuntimeError, "omitted an independent key"):
+            runner.compare_deprecated_behavior(values, dict(values))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reflection.tsv"
+            lines = [key + "\t" + value for key, value in sorted(runner.DEPRECATED_REFLECTION.items())]
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            self.assertEqual(runner.deprecated_reflection(path), runner.DEPRECATED_REFLECTION)
+            for invalid in (lines[:-1], lines + [lines[0]],
+                            [line.replace("class-present=false", "class-present=true") for line in lines]):
+                path.write_text("\n".join(invalid) + "\n", encoding="utf-8")
+                with self.subTest(invalid=invalid), self.assertRaisesRegex(RuntimeError, "Deprecated reflection"):
+                    runner.deprecated_reflection(path)
+
+    def test_unannotated_generic_and_constructor_oracles_keep_annotation_absence(self):
+        for factory, validate in ((generic_facts, runner.validate_generic_original),
+                                  (constructor_facts, runner.validate_constructor_original)):
+            original = factory()
+            validate(original)
+            for scope in ("class", "field", "method"):
+                changed = copy.deepcopy(original)
+                facts = next(iter(changed.values()))
+                target = facts if scope == "class" else next(iter(facts["fields" if scope == "field" else "methods"].values()))
+                target.update(runner.deprecated_facts(True))
+                with self.subTest(factory=factory.__name__, scope=scope), self.assertRaises(RuntimeError):
+                    validate(changed)
+
+
+class DeprecatedWorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.verify = runner.Verify(self.root, self.root / "JDK", self.root / "d8", 30)
+        self.original = deprecated_classes()
+        self.rebuilt = copy.deepcopy(self.original)
+        for owner, facts in self.rebuilt.items():
+            prototype = runner.class_identity.THROW_HELPER_PROTOTYPE
+            facts["methods"][owner + "->__neverdThrow" + prototype] = {
+                "name": "__neverdThrow", "prototype": prototype, "access": 10, "code": True,
+                "signature": runner.class_identity.THROW_HELPER_SIGNATURE, **runner.deprecated_facts()}
+        self.actual = runner.deprecated_oracle()
+        self.reflection = dict(runner.DEPRECATED_REFLECTION)
+        self.helpers = runner.deprecated_helpers()
+        self.marker_override = None
+        self.compiles, self.commands, self.dexes = [], [], []
+
+    def compile(self, sources, output, *, classpath=None):
+        output.mkdir(parents=True)
+        self.compiles.append((list(map(Path, sources)), output, classpath))
+        for facts in self.original.values():
+            path = output / facts["path"]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"mock")
+
+    def dex(self, paths, output, classpath):
+        self.dexes.append((list(paths), output, classpath))
+        output.mkdir(parents=True)
+        source = output / "classes.dex"
+        source.write_bytes(b"mock deprecated input")
+        return source
+
+    def run_command(self, argv, label):
+        self.commands.append((list(map(str, argv)), label))
+        if label in runner.DEPRECATED_CASES:
+            output = Path(argv[argv.index("-o") + 1])
+            sources = ["sources/" + owner[1:-1] + ".java" for owner in sorted(self.original)]
+            for source in sources:
+                path = output / source
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("package fixture; class " + path.stem + " {}\n", encoding="utf-8")
+            rows = [{"identity": identity, "class": owner, "name": method["name"], "prototype": method["prototype"],
+                     "input": "classes.dex", "status": "recovered", "instruction_count": 2,
+                     "deprecated": method["deprecated_attribute"]}
+                    for owner, facts in self.original.items() for identity, method in facts["methods"].items()]
+            if self.marker_override is not None: rows[0]["deprecated"] = self.marker_override
+            coverage = {"schema_version": 1, "status": "recovered", "class_count": 2, "method_count": 6,
+                "recovered_method_count": 6, "declaration_only_method_count": 0, "unrecovered_method_count": 0,
+                "methods": rows, "generated_source_helpers": self.helpers}
+            report = {"status": "success", "platform": "android", "backend": {"name": "neverd", "version": "1", "execution": "builtin"},
+                "java_sources": sources, "java_source_count": 2, "dex_count": 1, "smali_count": 0,
+                "android_method_recovery": coverage}
+            (output / "metadata").mkdir()
+            (output / "report.json").write_text(json.dumps(report))
+            (output / "metadata/android-methods.json").write_text(json.dumps(coverage))
+        if label in ("original-deprecated", "deprecated-dex-execution"):
+            reflection = runner.DEPRECATED_REFLECTION if label == "original-deprecated" else self.reflection
+            Path(argv[-1]).write_text("".join(key + "\t" + value + "\n" for key, value in sorted(reflection.items())), encoding="utf-8")
+            values = runner.deprecated_oracle() if label == "original-deprecated" else self.actual
+            return "\n".join(key + "=" + str(value) for key, value in sorted(values.items()))
+        return ""
+
+    def execute(self):
+        def inventory(directory):
+            return copy.deepcopy(self.original if directory == self.root / "original-deprecated/classes" else self.rebuilt)
+        with patch.object(self.verify, "run", side_effect=self.run_command), patch.object(self.verify, "compile_local", side_effect=self.compile), \
+                patch.object(self.verify, "dex", side_effect=self.dex), \
+                patch.object(runner.class_identity, "compiler_classes", side_effect=inventory):
+            return self.verify.deprecated_cases(self.root / "neverd")
+
+    def test_real_case_requires_all_sources_isolated_classpaths_and_exact_marker_inventory(self):
+        passed, failures = self.execute()
+        self.assertEqual(failures, [])
+        self.assertEqual(len(passed), 1)
+        self.assertEqual(passed[0]["case"], "deprecated-dex")
+        self.assertEqual(passed[0]["method_count"], 6)
+        self.assertEqual(passed[0]["matched_results"], 92)
+        self.assertEqual(passed[0]["reflection_declaration_count"], 13)
+        expected = {"classes": 1, "fields": 1, "constructors": 1, "methods": 1}
+        self.assertEqual(passed[0]["compiler_identity"]["deprecated_attribute_count"], expected)
+        self.assertEqual(passed[0]["compiler_identity"]["runtime_visible_deprecated_count"], expected)
+        self.assertEqual(len(self.dexes), 1)
+        self.assertEqual(len(self.dexes[0][0]), 2)
+        compiled = self.root / "deprecated-dex/compiled"
+        invocation = next(row for row in self.compiles if row[1] == compiled)
+        self.assertIsNone(invocation[2])
+        self.assertEqual(invocation[0], [self.root / "deprecated-dex/recovered/sources" / (owner[1:-1] + ".java")
+                                        for owner in sorted(self.original)])
+        for label, directory in (("original-deprecated", self.root / "original-deprecated"),
+                                 ("deprecated-dex-execution", self.root / "deprecated-dex")):
+            classes = directory / ("classes" if label == "original-deprecated" else "compiled")
+            harness = next(row for row in self.compiles if row[1] == directory / "harness")
+            self.assertEqual(harness[2], classes)
+            argv = next(argv for argv, name in self.commands if name == label)
+            self.assertEqual(argv[argv.index("-cp") + 1], os.pathsep.join(map(str, (directory / "harness", classes))))
+        for name in ("input-inventory.json", "generated-source-hashes.json", "rebuilt-class-inventory.json",
+                     "deprecated-identity.json", "reflection.tsv", "reflection.json", "execution.json"):
+            self.assertTrue((self.root / "deprecated-dex" / name).is_file())
+
+    def test_recompiled_marker_loss_fails_before_reflection_execution(self):
+        self.rebuilt[runner.DEPRECATED_BASE]["runtime_visible_annotations"] = []
+        passed, failures = self.execute()
+        self.assertEqual(passed, [])
+        self.assertEqual(len(failures), 1)
+        self.assertFalse(any(label == "deprecated-dex-execution" for _, label in self.commands))
+        self.assertTrue((self.root / "deprecated-dex/rebuilt-class-inventory.json").is_file())
+
+    def test_successful_identity_cannot_hide_wrong_body_or_duplicate_constructor_effect(self):
+        self.actual["deprecated:0:old"] = -93
+        self.actual["child:5:constructor-delta"] = 2
+        passed, failures = self.execute()
+        self.assertEqual(passed, [])
+        self.assertEqual(len(failures), 1)
+        self.assertIn("behavior oracle failed", failures[0]["error"])
+        self.assertTrue((self.root / "deprecated-dex/deprecated-identity.json").is_file())
+        self.assertTrue((self.root / "deprecated-dex/execution.json").is_file())
+
+    def test_runtime_reflection_must_not_inherit_class_marker(self):
+        self.reflection["PlainChild.class"] = "declared=java.lang.Deprecated;present=true"
+        passed, failures = self.execute()
+        self.assertEqual(passed, [])
+        self.assertEqual(len(failures), 1)
+        self.assertIn("reflection evidence changed", failures[0]["error"])
+
+    def test_numeric_native_marker_is_not_a_boolean_fact(self):
+        self.marker_override = 1
+        passed, failures = self.execute()
+        self.assertEqual(passed, [])
+        self.assertEqual(len(failures), 1)
+        self.assertIn("method marker disagrees", failures[0]["error"])
+        self.assertFalse(any(label == "deprecated-dex-execution" for _, label in self.commands))
+
+    def test_zero_helpers_cannot_omit_actual_generated_declarations(self):
+        self.helpers.clear()
+        passed, failures = self.execute()
+        self.assertEqual(passed, [])
+        self.assertEqual(len(failures), 1)
+        self.assertIn("generated helper inventory", failures[0]["error"])
+
+    def test_helpers_cannot_receive_the_class_marker(self):
+        helper = next(method for method in self.rebuilt[runner.DEPRECATED_BASE]["methods"].values()
+                      if method["name"] == "__neverdThrow")
+        helper.update(runner.deprecated_facts(True))
+        passed, failures = self.execute()
+        self.assertEqual(passed, [])
+        self.assertEqual(len(failures), 1)
+        self.assertFalse(any(label == "deprecated-dex-execution" for _, label in self.commands))
+
+    def test_original_preparation_failure_records_required_case_without_skipping(self):
+        with patch.object(self.verify, "run", side_effect=RuntimeError("compiler unavailable")):
+            passed, failures = self.verify.deprecated_cases(self.root / "neverd")
+        self.assertEqual(passed, [])
+        self.assertEqual([row["case"] for row in failures], ["deprecated-dex"])
+        self.assertTrue((self.root / "deprecated-preparation-failure.json").is_file())
 
 
 class LocalCompilerIsolationTests(unittest.TestCase):

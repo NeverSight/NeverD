@@ -493,12 +493,28 @@ class Reader {
   void sourceAnnotation(const std::string &header,
                         std::optional<std::string> &signature,
                         std::optional<std::vector<std::string>> *throws_types,
-                        std::set<std::string> &seen,
+                        bool &deprecated, std::set<std::string> &seen,
                         const std::string &declaration) {
     Match match_result;
-    if (!match(header, match_result, R"(\.annotation system (L[^\s]+;))"))
+    if (!match(header, match_result,
+               R"(\.annotation (build|runtime|system) (L[^\s]+;))"))
       fail("unsupported source annotation visibility on " + declaration);
-    auto type = classType(match_result[1]);
+    auto type = classType(match_result[2]);
+    if (type == "Ljava/lang/Deprecated;") {
+      if (match_result[1] != "runtime")
+        fail("Deprecated annotation on " + declaration +
+             " requires runtime visibility");
+      if (!seen.insert(type).second || deprecated)
+        fail("duplicate Deprecated annotation on " + declaration);
+      if (peek() != ".end annotation")
+        fail("Deprecated annotation on " + declaration +
+             " must have no elements");
+      take();
+      deprecated = true;
+      return;
+    }
+    if (match_result[1] != "system")
+      fail("unsupported source annotation visibility on " + declaration);
     bool is_signature = type == "Ldalvik/annotation/Signature;";
     bool is_throws = type == "Ldalvik/annotation/Throws;" && throws_types;
     if (!is_signature && !is_throws)
@@ -540,14 +556,18 @@ class Reader {
   void annotation(const std::string &header, Class &cls,
                   std::set<std::string> &seen) {
     Match m;
-    if (!match(header, m, R"(\.annotation system (L[^\s]+;))"))
+    if (!match(header, m,
+               R"(\.annotation (build|runtime|system) (L[^\s]+;))"))
       fail("unsupported smali annotation visibility or declaration");
-    auto type = classType(m[1]);
-    if (type == "Ldalvik/annotation/Signature;") {
-      sourceAnnotation(header, cls.generic_signature, nullptr, seen,
-                       "class " + cls.name);
+    auto type = classType(m[2]);
+    if (type == "Ldalvik/annotation/Signature;" ||
+        type == "Ljava/lang/Deprecated;") {
+      sourceAnnotation(header, cls.generic_signature, nullptr, cls.deprecated,
+                       seen, "class " + cls.name);
       return;
     }
+    if (m[1] != "system")
+      fail("unsupported smali annotation visibility or declaration");
     if (!seen.insert(type).second)
       fail("duplicate smali structural annotation");
     if (type != "Ldalvik/annotation/InnerClass;" &&
@@ -667,7 +687,8 @@ class Reader {
     Field result{std::move(ref), std::move(flags), std::move(value)};
     std::set<std::string> seen;
     while (peek().starts_with(".annotation"))
-      sourceAnnotation(take(), result.generic_signature, nullptr, seen,
+      sourceAnnotation(take(), result.generic_signature, nullptr,
+                       result.deprecated, seen,
                        "field " + owner + "->" + result.reference.name + ":" +
                            result.reference.type);
     if (peek() == ".end field")
@@ -1128,8 +1149,8 @@ class Reader {
         if (parameter_annotation_scope)
           fail("parameter annotations are not represented in the source model");
         sourceAnnotation(text, result.generic_signature,
-                         &result.declared_throws, seen_annotations,
-                         "method " + ref.identity());
+                         &result.declared_throws, result.deprecated,
+                         seen_annotations, "method " + ref.identity());
       } else if (text.starts_with(".locals ") ||
                  text.starts_with(".registers ")) {
         if (total || !raw.empty() || !payloads.empty())
