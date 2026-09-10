@@ -396,7 +396,7 @@ static MedDefSite findFuncDef(const MedFunc &Func, const MedVar &V) {
           return Site;
       }
     for (const MedOp &Op : Block.Ops)
-      if (sameDefIdentity(Op.Output, V)) {
+      if (Op.Output.Size > 0 && sameDefIdentity(Op.Output, V)) {
         Record(Block, &Op, nullptr);
         if (Site.Ambiguous)
           return Site;
@@ -524,6 +524,46 @@ static bool preservesSpillAcrossCall(const MedBlock &Blk, int CallIndex,
   return Target && Context.FrameLocalLeafCallees->count(Target);
 }
 
+// One step in the heuristic stack-coordinate chain. Width casts retain the
+// existing ABI recovery policy; SUBBYTES only preserves that coordinate when
+// it selects byte zero. Keep operand roles so subtraction is never commuted.
+struct StackAddressStep {
+  const MedVar *Base;
+  int64_t Delta;
+  bool Subtract;
+};
+
+static std::optional<StackAddressStep> parseStackAddressStep(const MedOp &Op) {
+  switch (Op.Opcode) {
+  case NdOp::COPY:
+  case NdOp::INT_ZEXT:
+  case NdOp::INT_SEXT:
+    if (Op.NumInputs == 1)
+      return StackAddressStep{&Op.Inputs[0], 0, false};
+    return std::nullopt;
+  case NdOp::SUBBYTES:
+    if (Op.NumInputs == 2 && Op.Inputs[1].isConst() &&
+        Op.Inputs[1].ConstVal == 0)
+      return StackAddressStep{&Op.Inputs[0], 0, false};
+    return std::nullopt;
+  case NdOp::INT_ADD:
+  case NdOp::INT_SUB: {
+    if (Op.NumInputs != 2)
+      return std::nullopt;
+    const unsigned ConstantIndex = Op.Inputs[1].isConst() ? 1 : 0;
+    const auto &Constant = Op.Inputs[ConstantIndex];
+    const auto &Base = Op.Inputs[1 - ConstantIndex];
+    if (!Constant.isConst() || Base.isConst() ||
+        (Op.Opcode == NdOp::INT_SUB && ConstantIndex != 1))
+      return std::nullopt;
+    return StackAddressStep{&Base, static_cast<int64_t>(Constant.ConstVal),
+                            Op.Opcode == NdOp::INT_SUB};
+  }
+  default:
+    return std::nullopt;
+  }
+}
+
 std::optional<int64_t> stackPtrDelta(const MedFunc &Func,
                                      const TargetRegInfo &TRI, const MedVar &V,
                                      int Depth) {
@@ -556,46 +596,24 @@ std::optional<int64_t> stackPtrDelta(const MedFunc &Func,
   const MedOp *Def = Site.Op;
   const MedBlock &DefBlock = *Site.Block;
 
-  switch (Def->Opcode) {
-  case NdOp::COPY:
-    if (Def->NumInputs >= 1) {
-      const MedVar &In = Def->Inputs[0];
-      // The entry stack-pointer self-copy (`COPY ESP, ESP`, the live-in marker)
-      // is the zero reference; following it would recurse forever to the depth
-      // cap and report the whole push chain as un-traceable, collapsing every
-      // pushed argument onto slot 0.
-      if (In.Kind == MedVar::Reg && In.RegOff == TRI.StackPointer &&
-          In.Id == V.Id && In.SSAVer == V.SSAVer)
-        return 0;
-      return stackPtrDelta(Func, TRI, In, Depth + 1);
-    }
-    return std::nullopt;
-  case NdOp::SUBBYTES:
-  case NdOp::INT_ZEXT:
-  case NdOp::INT_SEXT:
-    return Def->NumInputs >= 1
-               ? stackPtrDelta(Func, TRI, Def->Inputs[0], Depth + 1)
-               : std::nullopt;
-  case NdOp::INT_ADD:
-  case NdOp::INT_SUB: {
-    if (Def->NumInputs < 2)
-      return std::nullopt;
-    std::optional<int64_t> Base;
-    int64_t K = 0;
-    bool HaveK = false;
-    for (uint8_t I = 0; I < Def->NumInputs; ++I) {
-      if (Def->Inputs[I].isConst()) {
-        K = static_cast<int64_t>(Def->Inputs[I].ConstVal);
-        HaveK = true;
-      } else if (!Base) {
-        Base = stackPtrDelta(Func, TRI, Def->Inputs[I], Depth + 1);
-      }
-    }
-    if (!Base || !HaveK)
-      return std::nullopt;
-    return Def->Opcode == NdOp::INT_ADD ? *Base + K : *Base - K;
+  if (Def->Opcode == NdOp::COPY && Def->NumInputs == 1) {
+    const MedVar &In = Def->Inputs[0];
+    // The entry stack-pointer self-copy (`COPY ESP, ESP`, the live-in marker)
+    // is the zero reference; following it would recurse forever to the depth
+    // cap and report the whole push chain as un-traceable, collapsing every
+    // pushed argument onto slot 0.
+    if (In.Kind == MedVar::Reg && In.RegOff == TRI.StackPointer &&
+        In.Id == V.Id && In.SSAVer == V.SSAVer)
+      return 0;
   }
-  case NdOp::LOAD: {
+  if (auto Step = parseStackAddressStep(*Def)) {
+    auto Base = stackPtrDelta(Func, TRI, *Step->Base, Depth + 1);
+    if (!Base)
+      return std::nullopt;
+    return safety::detail::checkedStackOffset(*Base, Step->Delta,
+                                              Step->Subtract);
+  }
+  if (Def->Opcode == NdOp::LOAD) {
     const int LoadIndex = static_cast<int>(Def - DefBlock.Ops.data());
     const auto Store = reachingStore(DefBlock, LoadIndex);
     if (!Store)
@@ -604,9 +622,7 @@ std::optional<int64_t> stackPtrDelta(const MedFunc &Func,
                          *safety::detail::storedValue(DefBlock.Ops[*Store]),
                          Depth + 1);
   }
-  default:
-    return std::nullopt;
-  }
+  return std::nullopt;
 }
 
 // Whether \p V is, or derives from (through copies, width casts and a constant
@@ -632,29 +648,8 @@ bool derivesFromFrameReg(const MedBlock &Blk, const TargetRegInfo &TRI,
     }
   if (!Def)
     return false;
-  switch (Def->Opcode) {
-  case NdOp::COPY:
-  case NdOp::SUBBYTES:
-  case NdOp::INT_ZEXT:
-  case NdOp::INT_SEXT:
-    return Def->NumInputs >= 1 &&
-           derivesFromFrameReg(Blk, TRI, Def->Inputs[0], Depth + 1);
-  case NdOp::INT_ADD:
-  case NdOp::INT_SUB: {
-    // A frame-relative buffer is `frame_reg +/- constant`: one operand derives
-    // from a frame register, the other is a constant displacement.
-    bool HaveBase = false, HaveConst = false;
-    for (uint8_t I = 0; I < Def->NumInputs; ++I) {
-      if (Def->Inputs[I].isConst())
-        HaveConst = true;
-      else if (derivesFromFrameReg(Blk, TRI, Def->Inputs[I], Depth + 1))
-        HaveBase = true;
-    }
-    return HaveBase && HaveConst;
-  }
-  default:
-    return false;
-  }
+  auto Step = parseStackAddressStep(*Def);
+  return Step && derivesFromFrameReg(Blk, TRI, *Step->Base, Depth + 1);
 }
 
 // Identifies an SSA stack-pointer value (Id, version, register offset).
@@ -664,8 +659,8 @@ static SpOffsetKey spOffsetKey(const MedVar &V) {
 
 // Records, for each stack-pointer value on the call-site SP's definition chain,
 // its byte offset *above* the call SP (call SP = 0, each earlier `push`'s SP
-// one slot higher).  Offset-preserving casts (SUBBYTES/ZEXT/SEXT/COPY) keep the
-// offset; a `sub`/`add` of a constant shifts it.  Used to place pushed
+// one slot higher). Copies, width casts and byte-zero SUBBYTES keep the
+// offset; a `sub`/`add` of a constant shifts it. Used to place pushed
 // arguments relative to the call SP when the absolute entry-relative delta is
 // unavailable (a post-loop push chain whose SP threads a loop-carried PHI,
 // where the chain round-trips ESP<->RSP and never reaches the entry SP as a
@@ -689,37 +684,15 @@ void buildCallSpOffsets(const MedFunc &Func, const TargetRegInfo &TRI,
   const MedOp *Def = Site.Op;
   if (!Def)
     return;
-  switch (Def->Opcode) {
-  case NdOp::COPY:
-  case NdOp::SUBBYTES:
-  case NdOp::INT_ZEXT:
-  case NdOp::INT_SEXT:
-    if (Def->NumInputs >= 1)
-      buildCallSpOffsets(Func, TRI, Def->Inputs[0], Off, Map, Depth + 1);
-    break;
-  case NdOp::INT_SUB:
-    // V = base - C  =>  base sits C higher  =>  base offset = Off + C.
-    if (Def->NumInputs >= 2 && Def->Inputs[1].isConst())
-      buildCallSpOffsets(Func, TRI, Def->Inputs[0],
-                         Off + static_cast<int64_t>(Def->Inputs[1].ConstVal),
-                         Map, Depth + 1);
-    break;
-  case NdOp::INT_ADD:
-    // V = base + C  =>  base sits C lower  =>  base offset = Off - C.
-    if (Def->NumInputs >= 2) {
-      for (uint8_t I = 0; I < Def->NumInputs; ++I)
-        if (Def->Inputs[I].isConst())
-          for (uint8_t J = 0; J < Def->NumInputs; ++J)
-            if (!Def->Inputs[J].isConst())
-              buildCallSpOffsets(
-                  Func, TRI, Def->Inputs[J],
-                  Off - static_cast<int64_t>(Def->Inputs[I].ConstVal), Map,
-                  Depth + 1);
-    }
-    break;
-  default:
-    break;
-  }
+  auto Step = parseStackAddressStep(*Def);
+  if (!Step)
+    return;
+  // Walk from the result to its base by reversing the operation, without
+  // negating a possibly minimum signed displacement.
+  auto BaseOffset =
+      safety::detail::checkedStackOffset(Off, Step->Delta, !Step->Subtract);
+  if (BaseOffset)
+    buildCallSpOffsets(Func, TRI, *Step->Base, *BaseOffset, Map, Depth + 1);
 }
 
 // Offset of store-address \p V above the call SP, resolved against the call
@@ -751,33 +724,13 @@ std::optional<int64_t> relStackOff(const MedFunc &Func,
   const MedOp *Def = Site.Op;
   if (!Def)
     return std::nullopt;
-  switch (Def->Opcode) {
-  case NdOp::COPY:
-  case NdOp::SUBBYTES:
-  case NdOp::INT_ZEXT:
-  case NdOp::INT_SEXT:
-    return Def->NumInputs >= 1
-               ? relStackOff(Func, TRI, Def->Inputs[0], Map, Depth + 1)
-               : std::nullopt;
-  case NdOp::INT_SUB:
-    if (Def->NumInputs >= 2 && Def->Inputs[1].isConst())
-      if (auto B = relStackOff(Func, TRI, Def->Inputs[0], Map, Depth + 1))
-        return *B - static_cast<int64_t>(Def->Inputs[1].ConstVal);
+  auto Step = parseStackAddressStep(*Def);
+  if (!Step)
     return std::nullopt;
-  case NdOp::INT_ADD:
-    if (Def->NumInputs >= 2) {
-      for (uint8_t I = 0; I < Def->NumInputs; ++I)
-        if (Def->Inputs[I].isConst())
-          for (uint8_t J = 0; J < Def->NumInputs; ++J)
-            if (!Def->Inputs[J].isConst())
-              if (auto B =
-                      relStackOff(Func, TRI, Def->Inputs[J], Map, Depth + 1))
-                return *B + static_cast<int64_t>(Def->Inputs[I].ConstVal);
-    }
+  auto Base = relStackOff(Func, TRI, *Step->Base, Map, Depth + 1);
+  if (!Base)
     return std::nullopt;
-  default:
-    return std::nullopt;
-  }
+  return safety::detail::checkedStackOffset(*Base, Step->Delta, Step->Subtract);
 }
 
 std::string relocCalleeName(const BinaryImage &Img, va_t InsnAddr) {

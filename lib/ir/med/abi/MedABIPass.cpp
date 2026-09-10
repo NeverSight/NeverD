@@ -753,6 +753,17 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         }
       }
 
+      // Preserve an established absolute relation, including negative offsets
+      // and overflow. Only a missing absolute relation may use the call-SP map.
+      auto CallRelativeStackOffset =
+          [&](const MedVar &Address) -> std::optional<int64_t> {
+        if (HaveCallSpDelta)
+          if (auto Delta = stackPtrDelta(Func, TRI, Address))
+            return safety::detail::checkedStackOffset(*Delta, CallSpDelta,
+                                                      /*Subtract=*/true);
+        return relStackOff(Func, TRI, Address, CallSpOffsets, 0);
+      };
+
       // A value spilled to the call frame before the call (an outgoing `push` /
       // `str [sp,#k]` landing at or above the call SP) means the ABI has run
       // out of parameter registers — so every parameter register is necessarily
@@ -768,21 +779,21 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
           break;
         if (Prev.Opcode == NdOp::STORE && Prev.NumInputs >= 2 &&
             Prev.MemoryAddressSpace == NdMemoryAddressSpace::Default)
-          if (auto D = stackPtrDelta(Func, TRI, Prev.Inputs[0]))
-            if (int64_t Rel = *D - CallSpDelta; Rel >= 0) {
-              if (IsWin64 && Rel < static_cast<int64_t>(IntParamRegs.size() *
-                                                        TRI.PointerSize))
-                continue;
-              HasStackArg = true;
-              const int64_t FirstStackOff =
-                  IsWin64 ? static_cast<int64_t>(IntParamRegs.size() *
-                                                 TRI.PointerSize)
-                          : 0;
-              if (Rel == FirstStackOff &&
-                  !(Prev.Inputs[1].Kind == MedVar::Reg &&
-                    TRI.isFrameOrLinkReg(Prev.Inputs[1].RegOff)))
-                HasStackArgAtCallSP = true;
-            }
+          if (auto Rel = CallRelativeStackOffset(Prev.Inputs[0]);
+              Rel && *Rel >= 0) {
+            if (IsWin64 && *Rel < static_cast<int64_t>(IntParamRegs.size() *
+                                                       TRI.PointerSize))
+              continue;
+            HasStackArg = true;
+            const int64_t FirstStackOff =
+                IsWin64 ? static_cast<int64_t>(IntParamRegs.size() *
+                                               TRI.PointerSize)
+                        : 0;
+            if (*Rel == FirstStackOff &&
+                !(Prev.Inputs[1].Kind == MedVar::Reg &&
+                  TRI.isFrameOrLinkReg(Prev.Inputs[1].RegOff)))
+              HasStackArgAtCallSP = true;
+          }
       }
       const int NumIntParamRegs = static_cast<int>(IntParamRegs.size());
 
@@ -1034,56 +1045,10 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
           continue;
 
         const auto &AddrVar = Prev.Inputs[0];
-        int64_t StackOff = -1;
-
-        // Resolve the store's true offset from the call SP via the
-        // stack-pointer delta chain, so consecutive `push`es land in distinct
-        // argument slots (the simple "SP register => offset 0" rule below would
-        // collapse every push onto slot 0).
-        if (auto D = stackPtrDelta(Func, TRI, AddrVar)) {
-          int64_t Rel = *D - CallSpDelta;
-          if (Rel >= 0)
-            StackOff = Rel;
-        }
-
-        // Fallback when the absolute SP delta is unavailable (post-loop push
-        // chain): place the store relative to the call SP via its definition
-        // chain.  Only runs when the absolute scan above did not resolve, so
-        // working cases are unaffected.
-        if (StackOff < 0)
-          if (auto R = relStackOff(Func, TRI, AddrVar, CallSpOffsets, 0))
-            if (*R >= 0)
-              StackOff = *R;
-
-        if (StackOff < 0 && AddrVar.Kind == MedVar::Reg &&
-            AddrVar.RegOff == TRI.StackPointer)
-          StackOff = 0;
-
-        if (StackOff < 0 && !AddrVar.isConst()) {
-          for (int K = J - 1; K >= 0; --K) {
-            auto &DefOp = Blk.Ops[K];
-            if (DefOp.Output.Id != AddrVar.Id ||
-                DefOp.Output.SSAVer != AddrVar.SSAVer)
-              continue;
-            if (DefOp.Opcode == NdOp::INT_ADD && DefOp.NumInputs >= 2) {
-              bool HasSP = false;
-              int64_t ConstOff = -1;
-              for (uint8_t KI = 0; KI < DefOp.NumInputs; ++KI) {
-                if (DefOp.Inputs[KI].Kind == MedVar::Reg &&
-                    DefOp.Inputs[KI].RegOff == TRI.StackPointer)
-                  HasSP = true;
-                if (DefOp.Inputs[KI].isConst())
-                  ConstOff = static_cast<int64_t>(DefOp.Inputs[KI].ConstVal);
-              }
-              if (HasSP && ConstOff >= 0)
-                StackOff = ConstOff;
-            }
-            break;
-          }
-        }
-
-        if (StackOff < 0)
+        const auto RelativeOffset = CallRelativeStackOffset(AddrVar);
+        if (!RelativeOffset || *RelativeOffset < 0)
           continue;
+        const int64_t StackOff = *RelativeOffset;
 
         int SlotSize = TRI.PointerSize;
         int64_t SlotOff = StackOff;
@@ -1318,13 +1283,16 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       // synthetic PHI is inserted at each join so recovered values dominate
       // the eventual call without treating unrelated stack writes as args.
       if (!CI.IsIndirect && DarwinVarArgBase >= 0 && Blk.Preds.size() > 1 &&
-          TRI.PointerSize > 0) {
+          TRI.PointerSize > 0 && HaveCallSpDelta) {
         for (int Slot = 0; Slot < MaxArgs - DarwinVarArgBase; ++Slot) {
           const int ArgIdx = DarwinVarArgBase + Slot;
           if (ArgIdx < 0 || ArgIdx >= MaxArgs || FoundMask[ArgIdx])
             continue;
-          const int64_t TargetOffset =
-              CallSpDelta + static_cast<int64_t>(Slot) * TRI.PointerSize;
+          const auto TargetOffset = safety::detail::checkedStackOffset(
+              CallSpDelta, static_cast<int64_t>(Slot) * TRI.PointerSize,
+              /*Subtract=*/false);
+          if (!TargetOffset)
+            continue;
           std::function<std::optional<MedVar>(int, std::set<int> &)> Resolve =
               [&](int BlockId, std::set<int> &Active) -> std::optional<MedVar> {
             if (!Active.insert(BlockId).second)
@@ -1354,7 +1322,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
                   Candidate.MemoryAddressSpace != NdMemoryAddressSpace::Default)
                 continue;
               auto D = stackPtrDelta(Func, TRI, Candidate.Inputs[0]);
-              if (D && *D == TargetOffset) {
+              if (D && *D == *TargetOffset) {
                 MedVar Value = Candidate.Inputs[1];
                 Active.erase(BlockId);
                 return Value;
@@ -1751,9 +1719,8 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
           if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL)
             break;
           if (Prev.Output.Kind == MedVar::Reg && Prev.Output.RegOff == IRR &&
-              Prev.Output.Size > 0 &&
-              derivesFromFrameReg(Blk, TRI, Prev.Output)) {
-            IndirectSretSetup = true;
+              Prev.Output.Size > 0) {
+            IndirectSretSetup = derivesFromFrameReg(Blk, TRI, Prev.Output);
             break;
           }
         }
