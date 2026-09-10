@@ -228,6 +228,7 @@ public:
       Stream.write(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
     Stream.flush();
     if (Stream.has_error()) {
+      Stream.clear_error();
       Error = "cannot write sanitizer temp '" + Path.string() + "'";
       return false;
     }
@@ -333,6 +334,7 @@ public:
       Stream.write(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
     Stream.close();
     if (Stream.has_error()) {
+      Stream.clear_error();
       Error = "cannot write sanitizer path temp '" + Path.string() + "'";
       return false;
     }
