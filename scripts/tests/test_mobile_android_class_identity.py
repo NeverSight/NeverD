@@ -20,7 +20,8 @@ def u4(value):
 
 
 def class_bytes(owner, methods, *, enclosing=None, inner_name="Worker", inner_outer=None,
-                inner_access=0x10, duplicate_inner=False, wrong_enclosing_tag=False, fields=()):
+                inner_access=0x10, duplicate_inner=False, wrong_enclosing_tag=False, fields=(),
+                signatures=None, field_descriptors=None, wrong_signature_tag=False):
     """Build bounded JVM attributes with real typed constant-pool references."""
     pool, cache = [], {}
 
@@ -41,13 +42,20 @@ def class_bytes(owner, methods, *, enclosing=None, inner_name="Worker", inner_ou
     def attr(name, payload):
         return u2(utf(name)) + u4(len(payload)) + payload
 
+    def signature_attrs(key):
+        values = [] if signatures is None else signatures.get(key, [])
+        return [attr("Signature", value if isinstance(value, bytes) else
+                     u2(cls("Ljava/lang/Object;") if wrong_signature_tag else utf(value))) for value in values]
+
     this_class, superclass = cls(owner), cls("Ljava/lang/Object;")
     init_name_type = entry(12, u2(utf("<init>")) + u2(utf("()V")))
     super_init = entry(10, u2(superclass) + u2(init_name_type))
     field_rows = []
     for name, flags, constant in fields:
         attributes = [] if constant is None else [attr("ConstantValue", u2(entry(3, u4(constant & 0xffffffff))))]
-        field_rows.append(u2(flags) + u2(utf(name)) + u2(utf("I")) + u2(len(attributes)) + b"".join(attributes))
+        attributes += signature_attrs(("field", name))
+        descriptor = "I" if field_descriptors is None else field_descriptors.get(name, "I")
+        field_rows.append(u2(flags) + u2(utf(name)) + u2(utf(descriptor)) + u2(len(attributes)) + b"".join(attributes))
     members = []
     for name, prototype, flags, code in methods:
         attributes = []
@@ -58,13 +66,16 @@ def class_bytes(owner, methods, *, enclosing=None, inner_name="Worker", inner_ou
                 instructions = b"\x09\xad"
             elif prototype.endswith("V"):
                 instructions = b"\xb1"
+            elif prototype.endswith(";") or prototype.rsplit(")", 1)[1].startswith("["):
+                instructions = b"\x01\xb0"
             else:
                 instructions = b"\x03\xac"
             payload = u2(2) + u2(8) + u4(len(instructions)) + instructions + u2(0) + u2(0)
             attributes.append(attr("Code", payload))
+        attributes += signature_attrs(("method", name, prototype))
         members.append(u2(flags) + u2(utf(name)) + u2(utf(prototype))
                        + u2(len(attributes)) + b"".join(attributes))
-    attributes = [attr("SourceFile", u2(utf("LocalClassBehavior.java")))]
+    attributes = [attr("SourceFile", u2(utf("LocalClassBehavior.java")))] + signature_attrs("class")
     if enclosing:
         outer, name, prototype = enclosing
         name_type = entry(12, u2(utf(name)) + u2(utf(prototype)))
@@ -105,7 +116,103 @@ def bindings(classes, inputs):
     return {"class_source_bindings": result}
 
 
+class GenericCompilerIdentityTests(unittest.TestCase):
+    def setUp(self):
+        self.owner = "Lfixture/GenericFixture;"
+        self.method = self.owner + "->identity(Ljava/lang/Object;)Ljava/lang/Object;"
+        self.field = self.owner + "->value:Ljava/lang/Object;"
+        descriptor = "(Ljava/lang/Object;)Ljava/lang/Object;"
+        before = oracle.ClassFile(class_bytes(self.owner,
+            [("<init>", "()V", 1, True), ("identity", descriptor, 9, True)],
+            fields=[("value", 1, None)], field_descriptors={"value": "Ljava/lang/Object;"},
+            signatures={"class": ["<T:Ljava/lang/Object;>Ljava/lang/Object;"],
+                        ("field", "value"): ["TT;"],
+                        ("method", "identity", descriptor): ["<U:Ljava/lang/Object;>(TU;)TU;"]})).facts()
+        self.original = {self.owner: before}
+        self.rebuilt = copy.deepcopy(self.original)
+        self.helper = self.owner + "->__neverdThrow" + oracle.THROW_HELPER_PROTOTYPE
+        self.rebuilt[self.owner]["methods"][self.helper] = {
+            "name": "__neverdThrow", "prototype": oracle.THROW_HELPER_PROTOTYPE,
+            "access": 10, "code": True, "signature": oracle.THROW_HELPER_SIGNATURE}
+
+    def test_exact_signatures_and_only_the_real_auxiliary_method_pass(self):
+        result = oracle.match_generic_recompiled(self.original, self.rebuilt)
+        self.assertEqual(result["original_method_count"], 2)
+        self.assertEqual(result["signature_count"], {"classes": 1, "fields": 1, "methods": 1})
+        self.assertEqual(result["generated_helper_count"], 1)
+
+    def test_erasure_or_wrong_binding_at_every_scope_is_not_equivalent(self):
+        for scope in ("class", "field", "method"):
+            for signature in (None, "Ljava/lang/Object;", "<T:Ljava/lang/Number;>(TT;)TT;"):
+                rebuilt = copy.deepcopy(self.rebuilt)
+                target = rebuilt[self.owner]
+                if scope == "field": target = target["fields"][self.field]
+                elif scope == "method": target = target["methods"][self.method]
+                target["signature"] = signature
+                with self.subTest(scope=scope, signature=signature), self.assertRaisesRegex(RuntimeError, "declaration changed|Signature changed"):
+                    oracle.match_generic_recompiled(self.original, rebuilt)
+
+    def test_complete_original_identity_cannot_be_replaced_by_bridge_or_helper(self):
+        for mutation in ("missing", "bridge", "access", "no-code", "extra", "new-class"):
+            rebuilt = copy.deepcopy(self.rebuilt)
+            methods = rebuilt[self.owner]["methods"]
+            if mutation == "missing": del methods[self.method]
+            elif mutation == "bridge": methods[self.method]["access"] |= 0x40 | 0x1000
+            elif mutation == "access": methods[self.method]["access"] = 1
+            elif mutation == "no-code": methods[self.method]["code"] = False
+            elif mutation == "new-class": rebuilt["Lfixture/Extra;"] = copy.deepcopy(rebuilt[self.owner])
+            else: methods[self.owner + "->__neverdThrowExtra()V"] = dict(methods[self.helper], name="__neverdThrowExtra", prototype="()V")
+            with self.subTest(mutation=mutation), self.assertRaises(RuntimeError):
+                oracle.match_generic_recompiled(self.original, rebuilt)
+
+    def test_helper_must_have_exact_staticness_signature_and_identity(self):
+        for mutation in ("missing", "static", "signature", "code"):
+            rebuilt = copy.deepcopy(self.rebuilt)
+            methods = rebuilt[self.owner]["methods"]
+            if mutation == "missing": del methods[self.helper]
+            elif mutation == "static": methods[self.helper]["access"] = 2
+            elif mutation == "signature": methods[self.helper]["signature"] = None
+            else: methods[self.helper]["code"] = False
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(RuntimeError, "helper"):
+                oracle.match_generic_recompiled(self.original, rebuilt)
+
+
 class CompilerClassFileTests(unittest.TestCase):
+    def test_signature_attributes_keep_class_field_and_method_scopes(self):
+        owner = "Lfixture/GenericFixture;"
+        descriptor = "(Ljava/lang/Object;)Ljava/lang/Object;"
+        signatures = {"class": ["<T:Ljava/lang/Object;>Ljava/lang/Object;"],
+                      ("field", "value"): ["TT;"],
+                      ("method", "identity", descriptor): ["<U:Ljava/lang/Object;>(TU;)TU;"]}
+        parsed = oracle.ClassFile(class_bytes(owner, [("identity", descriptor, 9, True)],
+            fields=[("value", 1, None)], field_descriptors={"value": "Ljava/lang/Object;"},
+            signatures=signatures))
+        facts = parsed.facts()
+        self.assertEqual(facts["signature"], signatures["class"][0])
+        self.assertEqual(facts["fields"][owner + "->value:Ljava/lang/Object;"]["signature"], "TT;")
+        self.assertEqual(facts["methods"][owner + "->identity" + descriptor]["signature"],
+                         "<U:Ljava/lang/Object;>(TU;)TU;")
+        self.assertEqual(parsed.inventory(), (owner, {owner + "->identity" + descriptor: "body"}))
+
+    def test_signature_payloads_are_unique_exact_u2_utf8_references_at_all_scopes(self):
+        descriptor = "(Ljava/lang/Object;)Ljava/lang/Object;"
+        for scope in ("class", ("field", "value"), ("method", "identity", descriptor)):
+            for values in (["TT;", "TT;"], [b""], [b"\0"], [b"\0\1\0"], [b"\xff\xff"], [""], ["T\0;"]):
+                with self.subTest(scope=scope, values=values), self.assertRaises(RuntimeError):
+                    oracle.ClassFile(class_bytes("Lfixture/GenericFixture;", [("identity", descriptor, 9, True)],
+                        fields=[("value", 1, None)], field_descriptors={"value": "Ljava/lang/Object;"},
+                        signatures={scope: values})).facts()
+            with self.subTest(scope=scope, wrong_tag=True), self.assertRaisesRegex(RuntimeError, "constant reference"):
+                oracle.ClassFile(class_bytes("Lfixture/GenericFixture;", [("identity", descriptor, 9, True)],
+                    fields=[("value", 1, None)], field_descriptors={"value": "Ljava/lang/Object;"},
+                    signatures={scope: ["TT;"]}, wrong_signature_tag=True)).facts()
+
+    def test_missing_signature_is_explicit_and_does_not_change_erased_inventory(self):
+        facts = oracle.ClassFile(class_bytes(OUTER, [("get", "()I", 9, True)], fields=[("count", 1, None)])).facts()
+        self.assertIsNone(facts["signature"])
+        self.assertIsNone(facts["fields"][OUTER + "->count:I"]["signature"])
+        self.assertIsNone(facts["methods"][OUTER + "->get()I"]["signature"])
+
     def test_real_attributes_keep_exact_overload_and_code_access_roles(self):
         classes = inventory()
         self.assertEqual(len(classes), 4)

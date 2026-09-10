@@ -31,6 +31,10 @@ Die Standard-Engine ist in C++20 implementiert und benötigt zur Ausführung wed
 
 Die Namensauflösung in Java unterscheidet zwischen Klassenkopf und Klassenrumpf und kann bekannte Namensverdeckungen innerhalb desselben Pakets auflösen; fehlen jedoch Deklarationen externer Oberklassen oder Interfaces, sodass sich Typnamen oder Verweise im erzeugten Java-Hilfscode nicht eindeutig zuordnen lassen, wird die Wiederherstellung ausdrücklich abgelehnt, wobei nur für `java.lang.Object` ohne vorliegende Deklaration angenommen wird, dass es keine vererbbaren Mitgliedstypen beiträgt. Gleitkommaliterale in smali werden direkt auf die einfache oder doppelte Zielgenauigkeit gerundet, wobei das resultierende Bitmuster erhalten bleibt.
 
+Die eingebaute C++-Engine erhält und prüft unterstützte `Signature`-Metadaten für Klassen, Felder und Methoden, einschließlich Typvariablen, Arrays, Wildcards, Typgrenzen und Namensverdeckung durch Methodentypvariablen. Die Typlöschung muss zur Identität der ursprünglichen DEX-Deklaration passen. `Throws` bleibt erhalten; nicht nachweisbare Ausnahmehierarchien werden abgelehnt. Generische Vererbung oder die Substitution von Mitgliedstypen, die Neuerzeugung von Brückenmethoden, generische Methodenaufrufe, parametrisierte innere Typen und die Zuordnung versteckter Konstruktorparameter bleiben ohne die erforderlichen Nachweise ausdrücklich nicht unterstützt.
+
+Die CI verarbeitet projekteigene Java-8-Testfälle mit D8 und NeverD, kompiliert sämtlichen erzeugten Java-Code erneut und vergleicht die vollständigen `Signature`-Metadaten, Reflection-Ergebnisse und das Verhalten. Diese Prüfungen belegen keine vollständige Wiederherstellung realer Anwendungen.
+
 ### Linux und macOS
 
 ```sh

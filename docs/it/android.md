@@ -31,6 +31,10 @@ Il motore predefinito è implementato in C++20 e non richiede Python, Java o JAD
 
 La risoluzione dei nomi Java distingue l’intestazione dal corpo della classe e può gestire i casi noti di oscuramento dei nomi nello stesso package; rifiuta esplicitamente i casi in cui mancano dichiarazioni di superclassi o interfacce esterne e non è possibile determinare i tipi o i riferimenti del codice ausiliario Java generato, assumendo soltanto per `java.lang.Object`, anche senza una dichiarazione disponibile, l’assenza di tipi membro ereditabili. I letterali in virgola mobile di smali vengono arrotondati direttamente alla precisione singola o doppia di destinazione, preservando la rappresentazione in bit risultante.
 
+Il motore C++ integrato conserva e verifica i metadati `Signature` supportati di classi, campi e metodi, comprese variabili di tipo, array, wildcard, limiti di tipo e oscuramento dei nomi a livello di metodo. La cancellazione dei tipi deve corrispondere all’identità della dichiarazione DEX originale. `Throws` viene conservato; una gerarchia di eccezioni non dimostrabile viene rifiutata. Ereditarietà generica o sostituzione dei tipi dei membri, rigenerazione dei metodi ponte, chiamate a metodi generici, tipi interni parametrizzati e corrispondenza dei parametri nascosti dei costruttori restano esplicitamente non supportati senza le prove necessarie.
+
+La CI elabora esempi Java 8 propri del progetto con D8 e NeverD, ricompila tutto il Java generato e confronta i metadati `Signature` completi, i risultati della reflection e il comportamento. Queste verifiche non certificano il recupero completo di applicazioni reali.
+
 ### Linux e macOS
 
 ```sh

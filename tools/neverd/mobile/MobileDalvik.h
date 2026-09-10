@@ -77,11 +77,14 @@ struct Method {
   std::vector<TryRegion> tries;
   uint32_t code_end = 0;
   unsigned incomingWords() const;
+  std::optional<std::string> generic_signature;
+  std::optional<std::vector<std::string>> declared_throws;
 };
 struct Field {
   FieldRef reference;
   Access access;
   FieldValue value;
+  std::optional<std::string> generic_signature;
 };
 struct Class {
   std::string name;
@@ -96,6 +99,7 @@ struct Class {
   Access inner_access;
   bool inner_class_present = false;
   std::optional<MethodRef> enclosing_method;
+  std::optional<std::string> generic_signature;
 };
 using ClassMap = std::map<std::string, Class>;
 void validateSourceScopes(const ClassMap &classes, Budget &budget);

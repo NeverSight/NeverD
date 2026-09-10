@@ -676,7 +676,8 @@ TEST(MobileDalvikJava,
   EXPECT_EQ(Report.getInteger("recovered_method_count"), 2);
   EXPECT_NE(source(Report).find("throw __neverdThrow((java.lang.Throwable)"),
             std::string::npos);
-  EXPECT_NE(source(Report, 1).find("super(arg0);"), std::string::npos);
+  EXPECT_NE(source(Report, 1).find("super(((java.lang.Throwable) arg0));"),
+            std::string::npos);
   C.methods[0].instructions[0].registers = {0, 0};
   rejected([&] { recover({Base, C}); }, "unavailable argument");
 }
@@ -983,5 +984,275 @@ TEST(MobileDalvikJava, RuntimeHelperTypesAlsoRequireProvenPackageBindings) {
                                        op(1, "return", {0})})});
   C.interfaces = {"Lexternal/Contract;"};
   rejected([&] { recover({C}); }, "unresolved inherited Java type");
+}
+
+TEST(MobileDalvikJava, GenericReturnsRetainErasedRegisterCarriers) {
+  auto Identity = method("identity", {"Ljava/lang/Object;"},
+                         "Ljava/lang/Object;", 1,
+                         {op(0, "return-object", {0})});
+  Identity.generic_signature = "<T:Ljava/lang/Object;>(TT;)TT;";
+  auto Array = method("array", {"[Ljava/lang/Object;"},
+                      "[Ljava/lang/Object;", 1,
+                      {op(0, "return-object", {0})});
+  Array.generic_signature = "<T:Ljava/lang/Object;>([TT;)[TT;";
+  auto R = recoverMethods({Identity, Array});
+  auto Text = source(R);
+  EXPECT_NE(Text.find("<T extends java.lang.Object> T identity(T arg0)"),
+            std::string::npos);
+  EXPECT_NE(Text.find("T[] array(T[] arg0)"), std::string::npos);
+  EXPECT_NE(Text.find("return ((T) ((java.lang.Object) o0));"),
+            std::string::npos);
+  EXPECT_NE(Text.find("return ((T[]) ((java.lang.Object[]) o0));"),
+            std::string::npos);
+  EXPECT_NE(Text.find("java.lang.Object o0 = null;"), std::string::npos);
+  EXPECT_EQ(R.getInteger("recovered_method_count"), 2);
+  ASSERT_NE(R.getArray("generated_source_helpers"), nullptr);
+  EXPECT_EQ(R.getArray("generated_source_helpers")->size(), 2);
+}
+
+TEST(MobileDalvikJava, ClassVariablesAndMethodShadowingHaveDistinctBindings) {
+  FieldRef Value{"Lfixture/Core;", "value", "Ljava/lang/Object;"};
+  auto Exchange = method(
+      "exchange", {"Ljava/lang/Object;"}, "Ljava/lang/Object;", 3,
+      {op(0, "iget-object", {0, 1}, {}, Value),
+       op(1, "iput-object", {2, 1}, {}, Value), op(2, "return-object", {0})});
+  Exchange.access = {"public"};
+  Exchange.generic_signature = "(TT;)TT;";
+  auto Shadow = method("shadow", {"Ljava/lang/Number;"},
+                       "Ljava/lang/Number;", 2,
+                       {op(0, "return-object", {1})});
+  Shadow.access = {"public"};
+  Shadow.generic_signature =
+      "<T:Ljava/lang/Number;:Ljava/lang/Comparable<TT;>;>(TT;)TT;";
+  Class C = klass("Lfixture/Core;", {Exchange, Shadow});
+  C.generic_signature = "<T:Ljava/lang/Object;>Ljava/lang/Object;";
+  Field F{Value, {"public"}, {}};
+  F.generic_signature = "TT;";
+  C.fields.push_back(F);
+  const auto Text = source(recover({C}));
+  EXPECT_NE(Text.find("class Core<T extends java.lang.Object>"),
+            std::string::npos);
+  EXPECT_NE(Text.find("public T value;"), std::string::npos);
+  EXPECT_NE(Text.find("public T exchange(T arg0)"), std::string::npos);
+  EXPECT_NE(Text.find(".value = ((java.lang.Object) o2);"), std::string::npos);
+  EXPECT_NE(Text.find("<T extends java.lang.Number & "
+                      "java.lang.Comparable<T>> T shadow(T arg0)"),
+            std::string::npos);
+  EXPECT_NE(Text.find("return ((T) ((java.lang.Number) o1));"),
+            std::string::npos);
+}
+
+TEST(MobileDalvikJava, GenericWildcardsAndInterfaceFirstBoundsArePreserved) {
+  auto Lower = method("lower", {"Ljava/util/List;"}, "Ljava/util/List;", 1,
+                       {op(0, "return-object", {0})});
+  Lower.generic_signature =
+      "<T:Ljava/lang/Object;>(Ljava/util/List<-TT;>;)"
+      "Ljava/util/List<-TT;>;";
+  auto Bound = method("bounded", {"Ljava/lang/CharSequence;"},
+                      "Ljava/lang/CharSequence;", 1,
+                      {op(0, "return-object", {0})});
+  Bound.generic_signature = "<T::Ljava/lang/CharSequence;>(TT;)TT;";
+  Class C = klass("Lfixture/Core;", {Lower, Bound});
+  Field F{{C.name, "values", "Ljava/util/List;"}, {"public"}, {}};
+  F.generic_signature = "Ljava/util/List<*>;";
+  C.fields.push_back(F);
+  const auto Text = source(recover({C}));
+  EXPECT_NE(Text.find("java.util.List<?> values;"), std::string::npos);
+  EXPECT_NE(Text.find("java.util.List<? super T> lower("), std::string::npos);
+  EXPECT_NE(Text.find("<T extends java.lang.CharSequence> T bounded("),
+            std::string::npos);
+}
+
+TEST(MobileDalvikJava, ExternalFormalBoundsCannotChangeDeclarationKind) {
+  auto M = method("identity", {"Ljava/lang/CharSequence;"},
+                   "Ljava/lang/CharSequence;", 1,
+                   {op(0, "return-object", {0})});
+  M.generic_signature = "<T:Ljava/lang/CharSequence;>(TT;)TT;";
+  rejected([&] { recoverMethods({M}); },
+           "class-bound position names a known interface");
+  M.reference.parameters = {"Ljava/lang/Object;"};
+  M.reference.returns = "Ljava/lang/Object;";
+  M.generic_signature = "<T::Ljava/lang/Object;>(TT;)TT;";
+  rejected([&] { recoverMethods({M}); },
+           "interface bound names a known class");
+}
+
+TEST(MobileDalvikJava, GenericTypeVariablesCannotObscureRequiredPackages) {
+  auto M = method("identity", {"Ljava/lang/Object;"}, "Ljava/lang/Object;",
+                   1, {op(0, "return-object", {0})});
+  M.generic_signature = "<java:Ljava/lang/Object;>(Tjava;)Tjava;";
+  rejected([&] { recoverMethods({M}); }, "shadowed");
+  M = method("identity", {"Lfixture/Core;"}, "Lfixture/Core;", 1,
+              {op(0, "return-object", {0})});
+  M.generic_signature =
+      "<fixture:Ljava/lang/Object;>(Lfixture/Core;)Lfixture/Core;";
+  // The enclosing class's proven simple name is an available fallback.
+  auto Text = source(recoverMethods({M}));
+  EXPECT_NE(Text.find("Core identity(Core arg0)"), std::string::npos);
+  EXPECT_EQ(Text.find("fixture.Core"), std::string::npos);
+}
+
+TEST(MobileDalvikJava, GenericConstructorsKeepExactTypeAndThrowsDeclarations) {
+  auto M = method(
+      "<init>", {"Ljava/lang/Exception;"}, "V", 2,
+      {op(0, "invoke-direct", {0}, {},
+          MethodRef{"Ljava/lang/Object;", "<init>", {}, "V"}),
+       op(1, "return-void")});
+  M.access = {"public", "constructor"};
+  M.generic_signature = "<E:Ljava/lang/Exception;>(TE;)V^TE;";
+  M.declared_throws = std::vector<std::string>{"Ljava/lang/Exception;"};
+  auto Text = source(recoverMethods({M}));
+  EXPECT_NE(Text.find("public <E extends java.lang.Exception> "
+                      "Core(E arg0) throws E"),
+            std::string::npos);
+  EXPECT_NE(Text.find("super();"), std::string::npos);
+  EXPECT_EQ(Text.find("throws java.lang.Throwable {"), std::string::npos);
+}
+
+TEST(MobileDalvikJava, ConstructorPrefixesKeepErasedOverloadArgumentTypes) {
+  auto Constructor = [](std::string Parameter) {
+    auto M = method(
+        "<init>", {std::move(Parameter)}, "V", 2,
+        {op(0, "invoke-direct", {0}, {},
+            MethodRef{"Ljava/lang/Object;", "<init>", {}, "V"}),
+         op(1, "return-void")});
+    M.access = {"public", "constructor"};
+    return M;
+  };
+  for (bool Super : {false, true}) {
+    Class Base = klass("Lfixture/Base;",
+                       {Constructor("Ljava/lang/Object;"),
+                        Constructor("Ljava/lang/CharSequence;")});
+    const std::string Owner = Super ? Base.name : "Lfixture/Core;";
+    auto M = method(
+        "<init>", {"Ljava/lang/Object;", "I"}, "V", 3,
+        {op(0, "invoke-direct", {0, 1}, {},
+            MethodRef{Owner, "<init>", {"Ljava/lang/Object;"}, "V"}),
+         op(1, "return-void")});
+    M.access = {"public", "constructor"};
+    M.generic_signature =
+        "<T:Ljava/lang/Object;:Ljava/lang/CharSequence;>(TT;I)V";
+    Class C = klass("Lfixture/Core;", {M});
+    llvm::json::Object Report;
+    if (Super) {
+      C.superclass = Base.name;
+      Report = recover({Base, C});
+    } else {
+      C.methods.push_back(Constructor("Ljava/lang/Object;"));
+      C.methods.push_back(Constructor("Ljava/lang/CharSequence;"));
+      Report = recover({C});
+    }
+    auto Text = source(Report, Super ? 1 : 0);
+    EXPECT_NE(Text.find("<T extends java.lang.Object & "
+                        "java.lang.CharSequence> Core(T arg0, int arg1)"),
+              std::string::npos);
+    EXPECT_NE(Text.find(std::string(Super ? "super" : "this") +
+                        "(((java.lang.Object) arg0));"),
+              std::string::npos);
+    EXPECT_EQ(Report.getInteger("recovered_method_count"), 3);
+  }
+}
+
+TEST(MobileDalvikJava, ConstructorPrefixesRejectClassVariableSubstitution) {
+  for (bool Array : {false, true}) {
+    std::string Parameter =
+        Array ? "[Ljava/lang/Object;" : "Ljava/lang/Object;";
+    auto Target = method(
+        "<init>", {Parameter}, "V", 2,
+        {op(0, "invoke-direct", {0}, {},
+            MethodRef{"Ljava/lang/Object;", "<init>", {}, "V"}),
+         op(1, "return-void")});
+    Target.access = {"public", "constructor"};
+    Target.generic_signature = Array ? "([TT;)V" : "(TT;)V";
+    auto Caller = method(
+        "<init>", {Parameter, "I"}, "V", 3,
+        {op(0, "invoke-direct", {0, 1}, {}, Target.reference),
+         op(1, "return-void")});
+    Caller.access = {"public", "constructor"};
+    Caller.generic_signature = Array ? "([TT;I)V" : "(TT;I)V";
+    Class C = klass("Lfixture/Core;", {Target, Caller});
+    C.generic_signature = "<T:Ljava/lang/Object;>Ljava/lang/Object;";
+    rejected([&] { recover({C}); }, "constructor overload");
+  }
+}
+
+TEST(MobileDalvikJava, ConstructorPrefixesRejectUnprovedGenericSiblings) {
+  auto Constructor = [](std::string Parameter) {
+    auto M = method(
+        "<init>", {std::move(Parameter)}, "V", 2,
+        {op(0, "invoke-direct", {0}, {},
+            MethodRef{"Ljava/lang/Object;", "<init>", {}, "V"}),
+         op(1, "return-void")});
+    M.access = {"public", "constructor"};
+    return M;
+  };
+  for (bool OwnFormal : {false, true}) {
+    auto Target = Constructor("Ljava/lang/Object;");
+    auto Sibling = Constructor(OwnFormal ? "Ljava/lang/CharSequence;"
+                                        : "Ljava/util/List;");
+    Sibling.generic_signature =
+        OwnFormal ? "<U:Ljava/lang/Object;>(Ljava/lang/CharSequence;)V"
+                  : "(Ljava/util/List<Ljava/lang/String;>;)V";
+    auto Caller = method(
+        "<init>", {"Ljava/lang/Object;", "I"}, "V", 3,
+        {op(0, "invoke-direct", {0, 1}, {}, Target.reference),
+         op(1, "return-void")});
+    Caller.access = {"public", "constructor"};
+    rejected([&] { recoverMethods({Target, Sibling, Caller}); },
+             "constructor overload");
+  }
+}
+
+TEST(MobileDalvikJava, ConcreteThrowsAreKeptWhenSignatureOmitsThem) {
+  auto M = method("value", {"I"}, "I", 1, {op(0, "return", {0})});
+  M.generic_signature = "<T:Ljava/lang/Object;>(I)I";
+  M.declared_throws = std::vector<std::string>{"Ljava/lang/Exception;"};
+  const auto Text = source(recoverMethods({M}));
+  EXPECT_NE(Text.find("int value(int arg0) throws java.lang.Exception"),
+            std::string::npos);
+}
+
+TEST(MobileDalvikJava, GenericInheritanceRequiresMemberSubstitutionProof) {
+  Class Base = klass("Lfixture/Base;");
+  Base.generic_signature = "<T:Ljava/lang/Object;>Ljava/lang/Object;";
+  Class Child = klass("Lfixture/Child;");
+  Child.superclass = Base.name;
+  Child.generic_signature = "Lfixture/Base<Ljava/lang/String;>;";
+  rejected([&] { recover({Base, Child}); }, "generic inheritance");
+}
+
+TEST(MobileDalvikJava, GenericBridgesAreNeverDroppedToAvoidSourceClashes) {
+  auto M = method("bridge", {"Ljava/lang/Object;"}, "Ljava/lang/Object;", 1,
+                   {op(0, "return-object", {0})});
+  M.access.insert("bridge");
+  Class C = klass("Lfixture/Core;", {M});
+  C.generic_signature = "<T:Ljava/lang/Object;>Ljava/lang/Object;";
+  rejected([&] { recover({C}); }, "generic bridge");
+}
+
+TEST(MobileDalvikJava, GenericCallsRequireErasedMemberBindingProof) {
+  auto M = method("identity", {"Ljava/lang/Object;"}, "Ljava/lang/Object;",
+                   1, {op(0, "return-object", {0})});
+  M.generic_signature = "<T:Ljava/lang/Object;>(TT;)TT;";
+  auto Caller = method("call", {"Ljava/lang/Object;"}, "Ljava/lang/Object;",
+                        1, {op(0, "invoke-static", {0}, {}, M.reference),
+                            op(1, "move-result-object", {0}),
+                            op(2, "return-object", {0})});
+  rejected([&] { recoverMethods({M, Caller}); }, "generic invocation");
+}
+
+TEST(MobileDalvikJava, GenericThrowableSubclassesCannotBecomeInvalidJava) {
+  Class C = klass("Lfixture/Core;");
+  C.superclass = "Ljava/lang/Exception;";
+  C.generic_signature = "<T:Ljava/lang/Object;>Ljava/lang/Exception;";
+  rejected([&] { recover({C}); }, "generic class cannot extend Throwable");
+  Class Base = klass("Lfixture/Base;");
+  Base.superclass = "Ljava/lang/Exception;";
+  C.superclass = Base.name;
+  C.generic_signature = "<T:Ljava/lang/Object;>Lfixture/Base;";
+  // Use a name which sorts before Base so this declaration's guard is tested
+  // before Base's missing external member namespace can reject emission.
+  C.name = "Lfixture/ABad;";
+  rejected([&] { recover({C, Base}); }, "generic class cannot extend Throwable");
 }
 } // namespace

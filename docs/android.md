@@ -31,6 +31,10 @@ The default engine is implemented in C++20 and needs no Python, Java, or JADX ru
 
 Java name binding distinguishes class headers from class bodies and can resolve known same-package shadowing; it explicitly rejects cases where missing external superclass or interface declarations prevent it from establishing type or generated Java helper bindings, and only `java.lang.Object` is assumed to contribute no inherited member types without a supplied declaration. Smali floating-point literals are rounded directly to their target single or double precision, preserving the resulting bit patterns.
 
+The built-in C++ engine preserves and validates supported class, field, and method `Signature` metadata, including type variables, arrays, wildcards, bounds, and method-level shadowing. Erasure must match the original DEX declaration identity. `Throws` is retained; an unproven exception hierarchy is rejected. Generic inheritance or member substitution, bridge regeneration, generic method invocation, parameterized inner types, and hidden constructor parameter mapping remain explicitly unsupported where the required proof is unavailable.
+
+CI uses owned Java 8 fixtures through D8 and NeverD, recompiles all generated Java, and compares complete `Signature` metadata, reflection results, and behavior. These fixture checks do not qualify real applications for complete recovery.
+
 ### Linux and macOS
 
 ```sh

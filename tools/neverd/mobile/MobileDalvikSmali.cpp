@@ -490,12 +490,63 @@ class Reader {
   std::string peek() const {
     return position < lines.size() ? lines[position].second : std::string();
   }
+  void sourceAnnotation(
+      const std::string &header, std::optional<std::string> &signature,
+      std::optional<std::vector<std::string>> *throws_types,
+      std::set<std::string> &seen, const std::string &declaration) {
+    Match match_result;
+    if (!match(header, match_result, R"(\.annotation system (L[^\s]+;))"))
+      fail("unsupported source annotation visibility on " + declaration);
+    auto type = classType(match_result[1]);
+    bool is_signature = type == "Ldalvik/annotation/Signature;";
+    bool is_throws = type == "Ldalvik/annotation/Throws;" && throws_types;
+    if (!is_signature && !is_throws)
+      fail("unsupported annotation " + type + " on " + declaration);
+    if (!seen.insert(type).second)
+      fail("duplicate source annotation on " + declaration);
+    std::string body;
+    while (peek() != ".end annotation") {
+      if (!body.empty())
+        body += ' ';
+      body += take();
+    }
+    take();
+    if (!match(body, match_result, R"(value\s*=\s*\{(.*)\})"))
+      fail("invalid source annotation value on " + declaration);
+    auto contents = trim(match_result[1]);
+    auto values = contents.empty() ? std::vector<std::string>{}
+                                  : parts(contents);
+    if (is_signature) {
+      std::string joined;
+      for (const auto &value : values) {
+        budget.tick();
+        auto piece = decodeQuoted(value);
+        budget.tick(1 + piece.size() / 16);
+        if (piece.size() > budget.limits.max_bytes - joined.size())
+          fail("Signature exceeds byte budget on " + declaration);
+        joined += piece;
+      }
+      signature = std::move(joined);
+    } else {
+      std::vector<std::string> types;
+      for (const auto &value : values) {
+        budget.tick();
+        types.push_back(classType(value));
+      }
+      *throws_types = std::move(types);
+    }
+  }
   void annotation(const std::string &header, Class &cls,
                   std::set<std::string> &seen) {
     Match m;
     if (!match(header, m, R"(\.annotation system (L[^\s]+;))"))
       fail("unsupported smali annotation visibility or declaration");
     auto type = classType(m[1]);
+    if (type == "Ldalvik/annotation/Signature;") {
+      sourceAnnotation(header, cls.generic_signature, nullptr, seen,
+                       "class " + cls.name);
+      return;
+    }
     if (!seen.insert(type).second)
       fail("duplicate smali structural annotation");
     if (type != "Ldalvik/annotation/InnerClass;" &&
@@ -612,11 +663,15 @@ class Reader {
         value = integer(text, count, typ != "C");
       }
     }
-    if (peek().starts_with(".annotation"))
-      fail("field annotations are not represented in the source model");
+    Field result{std::move(ref), std::move(flags), std::move(value)};
+    std::set<std::string> seen;
+    while (peek().starts_with(".annotation"))
+      sourceAnnotation(take(), result.generic_signature, nullptr, seen,
+                       "field " + owner + "->" + result.reference.name + ":" +
+                           result.reference.type);
     if (peek() == ".end field")
       take();
-    return {std::move(ref), std::move(flags), std::move(value)};
+    return result;
   }
   bool debug(const std::string &line) {
     if (line == ".prologue" || line == ".epilogue" || line == ".end param")
@@ -1062,11 +1117,20 @@ class Reader {
                            std::string>>
         catches;
     uint32_t pc = 0;
+    std::set<std::string> seen_annotations;
+    bool parameter_annotation_scope = false;
     while (true) {
       auto text = take();
       if (text == ".end method")
         break;
-      if (text.starts_with(".locals ") || text.starts_with(".registers ")) {
+      if (text.starts_with(".annotation")) {
+        if (parameter_annotation_scope)
+          fail("parameter annotations are not represented in the source model");
+        sourceAnnotation(text, result.generic_signature,
+                         &result.declared_throws, seen_annotations,
+                         "method " + ref.identity());
+      } else if (text.starts_with(".locals ") ||
+                 text.starts_with(".registers ")) {
         if (total || !raw.empty() || !payloads.empty())
           fail("duplicate or late smali register declaration");
         auto count = words(text);
@@ -1119,6 +1183,10 @@ class Reader {
         }
         payloads[pc++] = payload(text);
       } else if (debug(text)) {
+        if (text.starts_with(".param "))
+          parameter_annotation_scope = true;
+        else if (text == ".end param")
+          parameter_annotation_scope = false;
       } else if (text.starts_with('.'))
         fail("unsupported smali method directive");
       else

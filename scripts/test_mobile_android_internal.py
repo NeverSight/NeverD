@@ -96,6 +96,17 @@ def choose_d8(override: Path | None) -> Path:
 
 
 def expected_keys(kind: str) -> set[str]:
+    if kind == "constructor":
+        return set(constructor_oracle())
+    if kind == "generic":
+        return {*("reflection:" + key for key in GENERIC_REFLECTION_KEYS),
+                *(f"{name}:{i}" for name in ("constructor", "identity", "array-identity", "array-null",
+                                              "array-read", "array-old", "array-new") for i in range(4)),
+                *(f"{name}:{i}:{j}" for name in ("exchange-old", "exchange-new") for i in range(4) for j in range(4)),
+                *(f"scalar:{i}" for i in range(7)), "array-exceptions",
+                "wildcard-fields", "wildcard-identity", "wildcard-null", "intersection-integer",
+                "intersection-long", "intersection-null", "interface-string", "interface-builder",
+                "interface-null", "shadow-integer", "shadow-long", "shadow-null", "ops-constructor"}
     if kind == "local":
         return {*(f"{name}:{i}:{j}" for name in ("first", "first-count", "second", "second-count")
                   for i in range(7) for j in range(7)),
@@ -140,8 +151,11 @@ def results(text: str, kind: str) -> dict[str, int]:
 
 
 def validate_coverage(report: dict, output: Path, classes: set[str], expected: dict[str, str], inputs: dict[str, str],
-                      *, expected_projection: set[str] | None = None) -> dict:
+                      *, expected_projection: set[str] | None = None,
+                      expected_generic_helpers: list[dict] | None = None) -> dict:
     projected = set() if expected_projection is None else expected_projection
+    if expected_generic_helpers is not None and (expected_projection is not None or not expected_generic_helpers):
+        raise RuntimeError("Invalid independent generic helper inventory")
     if expected_projection is not None and (not projected or not projected <= expected.keys()
                                            or any(expected[key] != "body" for key in projected)):
         raise RuntimeError("Invalid independent projection inventory")
@@ -152,9 +166,17 @@ def validate_coverage(report: dict, output: Path, classes: set[str], expected: d
     coverage = json.loads((output / "metadata/android-methods.json").read_text())
     if report.get("android_method_recovery") != coverage or coverage.get("status") != ("partial" if projected else "recovered") or coverage.get("schema_version") != 1:
         raise RuntimeError("Standalone method coverage disagrees with the successful report")
-    if not projected and (coverage.get("projected_method_count", 0) != 0
-                          or coverage.get("class_source_bindings") or coverage.get("generated_source_helpers")):
-        raise RuntimeError("Ordinary recovery cannot conceal local source projection")
+    if not projected:
+        if coverage.get("projected_method_count", 0) != 0 or coverage.get("class_source_bindings"):
+            raise RuntimeError("Ordinary recovery cannot conceal local source projection")
+        if expected_generic_helpers is None:
+            if coverage.get("generated_source_helpers"):
+                raise RuntimeError("Ordinary recovery cannot conceal local source projection")
+        else:
+            helpers = coverage.get("generated_source_helpers")
+            if (not isinstance(helpers, list) or any(not isinstance(row, dict) or type(row.get("static")) is not bool
+                                                   for row in helpers) or helpers != expected_generic_helpers):
+                raise RuntimeError("Generic generated helper inventory disagrees with independent expected declarations")
     rows = coverage.get("methods")
     if not isinstance(rows, list): raise RuntimeError("Missing method inventory")
     actual = {}
@@ -206,6 +228,219 @@ LOCAL_ROLES = {"first-int": (LOCAL_OWNER, "first", "(II)I", "Worker"),
                "second-int": (LOCAL_OWNER, "second", "(II)I", "Worker"),
                "first-long": (LOCAL_OWNER, "first", "(J)J", "Worker")}
 LOCAL_CASES = ("local-dex", "local-multidex-outer-first", "local-multidex-overload-first")
+
+GENERIC_BOX = "Lfixture/GenericBox;"
+GENERIC_OPS = "Lfixture/GenericOps;"
+GENERIC_CASES = ("generic-dex", "generic-multidex")
+GENERIC_FIELDS = {
+    "value": ("Ljava/lang/Object;", "TT;"),
+    "values": ("[Ljava/lang/Object;", "[TT;"),
+    "upper": ("Ljava/util/List;", "Ljava/util/List<+TT;>;"),
+    "lower": ("Ljava/util/List;", "Ljava/util/List<-TT;>;"),
+    "any": ("Ljava/util/List;", "Ljava/util/List<*>;"),
+}
+GENERIC_METHODS = {
+    GENERIC_BOX: {
+        "<init>(Ljava/lang/Object;)V": "(TT;)V",
+        "get()Ljava/lang/Object;": "()TT;",
+        "exchange(Ljava/lang/Object;)Ljava/lang/Object;": "(TT;)TT;",
+        "arrayIdentity([Ljava/lang/Object;)[Ljava/lang/Object;": "([TT;)[TT;",
+        "first([Ljava/lang/Object;I)Ljava/lang/Object;": "([TT;I)TT;",
+        "arrayExchange([Ljava/lang/Object;ILjava/lang/Object;)Ljava/lang/Object;": "([TT;ITT;)TT;",
+        "shadow(Ljava/lang/Number;)Ljava/lang/Number;": "<T:Ljava/lang/Number;>(TT;)TT;",
+    },
+    GENERIC_OPS: {
+        "<init>()V": None,
+        "identity(Ljava/lang/Object;)Ljava/lang/Object;": "<U:Ljava/lang/Object;>(TU;)TU;",
+        "intersection(Ljava/lang/Number;)Ljava/lang/Number;": "<N:Ljava/lang/Number;:Ljava/lang/Comparable<TN;>;>(TN;)TN;",
+        "interfaceOnly(Ljava/lang/CharSequence;)Ljava/lang/CharSequence;": "<I::Ljava/lang/CharSequence;>(TI;)TI;",
+        "lowerIdentity(Ljava/util/List;)Ljava/util/List;": "<U:Ljava/lang/Object;>(Ljava/util/List<-TU;>;)Ljava/util/List<-TU;>;",
+        "scalar(I)I": None,
+    },
+}
+GENERIC_REFLECTION_KEYS = {
+    "platform.List", "platform.Comparable",
+    "GenericBox.class", "GenericOps.class", "GenericBox.constructor", "GenericOps.constructor",
+    *("GenericBox.field." + name for name in GENERIC_FIELDS),
+    *(owner[9:-1] + "." + member.split("(", 1)[0]
+      for owner, methods in GENERIC_METHODS.items() for member in methods if not member.startswith("<")),
+}
+
+
+CONSTRUCTOR_CASES = ("constructor-dex",)
+CONSTRUCTOR_SIGNATURE = "<T:Ljava/lang/Object;:Ljava/lang/CharSequence;>(TT;I)V"
+CONSTRUCTOR_DECLARATIONS = {
+    "Lfixture/PlainBase;": {
+        "access": 0x21, "superclass": "Ljava/lang/Object;",
+        "fields": [("objectCalls", "I", 9), ("sequenceCalls", "I", 9),
+                   ("tag", "I", 1), ("received", "Ljava/lang/Object;", 1)],
+        "methods": {"<init>(Ljava/lang/Object;)V": None, "<init>(Ljava/lang/CharSequence;)V": None},
+    },
+    "Lfixture/SuperChild;": {
+        "access": 0x31, "superclass": "Lfixture/PlainBase;",
+        "fields": [("bodyCalls", "I", 9), ("marker", "I", 1)],
+        "methods": {"<init>(Ljava/lang/Object;I)V": CONSTRUCTOR_SIGNATURE},
+    },
+    "Lfixture/ThisChoice;": {
+        "access": 0x31, "superclass": "Ljava/lang/Object;",
+        "fields": [("objectCalls", "I", 9), ("sequenceCalls", "I", 9), ("delegatingCalls", "I", 9),
+                   ("tag", "I", 1), ("marker", "I", 1), ("received", "Ljava/lang/Object;", 1)],
+        "methods": {"<init>(Ljava/lang/Object;)V": None, "<init>(Ljava/lang/CharSequence;)V": None,
+                    "<init>(Ljava/lang/Object;I)V": CONSTRUCTOR_SIGNATURE},
+    },
+}
+CONSTRUCTOR_REFLECTION = {
+    "KIND.java.lang.Object": "java.lang.Object;interface=false",
+    "KIND.java.lang.Number": "java.lang.Number;interface=false",
+    "KIND.java.lang.String": "java.lang.String;interface=false",
+    "KIND.java.lang.Exception": "java.lang.Exception;interface=false",
+    "KIND.java.lang.Throwable": "java.lang.Throwable;interface=false",
+    "KIND.java.lang.CharSequence": "java.lang.CharSequence;interface=true",
+    "KIND.java.io.Serializable": "java.io.Serializable;interface=true",
+    "KIND.java.lang.Comparable": "java.lang.Comparable;interface=true",
+    "KIND.java.util.List": "java.util.List;interface=true",
+    "PlainBase.class": "constructors=2;super=java.lang.Object;formals=0",
+    "SuperChild.class": "constructors=1;super=fixture.PlainBase;formals=0",
+    "ThisChoice.class": "constructors=3;super=java.lang.Object;formals=0",
+    "SuperChild.generic": "fixture.SuperChild#T;bounds=java.lang.Object,java.lang.CharSequence;erased=java.lang.Object,int",
+    "ThisChoice.generic": "fixture.ThisChoice#T;bounds=java.lang.Object,java.lang.CharSequence;erased=java.lang.Object,int",
+}
+
+
+def constructor_helpers() -> list[dict]:
+    return [{"class": owner, "name": "__neverdThrow", "prototype": class_identity.THROW_HELPER_PROTOTYPE,
+             "static": True, "source_unit": owner[1:-1] + ".java", "kind": "throw-helper"}
+            for owner in CONSTRUCTOR_DECLARATIONS]
+
+
+def validate_constructor_original(classes: dict):
+    if set(classes) != set(CONSTRUCTOR_DECLARATIONS):
+        raise RuntimeError("Constructor original class inventory changed")
+    for owner, expected in CONSTRUCTOR_DECLARATIONS.items():
+        facts = classes[owner]
+        if (facts["name"] != owner or facts["major"] != 52 or facts["minor"] != 0
+                or facts["access"] != expected["access"] or facts["superclass"] != expected["superclass"]
+                or facts["interfaces"] or facts["enclosing_method"] is not None or facts["inner_class"] is not None
+                or facts["signature"] is not None):
+            raise RuntimeError("Constructor original class declaration changed: " + owner)
+        fields = {owner + "->" + name + ":" + descriptor:
+                  {"name": name, "descriptor": descriptor, "access": access,
+                   "constant_value": None, "signature": None}
+                  for name, descriptor, access in expected["fields"]}
+        methods = {owner + "->" + member:
+                   {"name": "<init>", "prototype": member[len("<init>"):], "access": 1,
+                    "code": True, "signature": signature}
+                   for member, signature in expected["methods"].items()}
+        if facts["fields"] != fields or facts["methods"] != methods:
+            raise RuntimeError("Constructor original field/method Signature inventory changed: " + owner)
+
+
+def constructor_reflection(path: Path) -> dict[str, str]:
+    values = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        key, separator, value = line.partition("\t")
+        if not separator or not value or key in values:
+            raise RuntimeError("Malformed or duplicate constructor reflection evidence")
+        values[key] = value
+    if values != CONSTRUCTOR_REFLECTION:
+        raise RuntimeError("Constructor reflection evidence changed its independent declaration contract")
+    return values
+
+
+def constructor_oracle() -> dict[str, int]:
+    expected = {"reflection:" + key: 1 for key in CONSTRUCTOR_REFLECTION}
+    for route, tags in (("base-direct", (101, 202)), ("this-direct", (303, 404))):
+        for choice in range(2):
+            for index in range(3):
+                prefix = f"{route}:{choice}:{index}:"
+                expected.update({prefix + "tag": tags[choice], prefix + "object-count": 1 - choice,
+                                 prefix + "sequence-count": choice, prefix + "received": 1})
+    for route, tag in (("super", 101), ("this", 303)):
+        for index in range(3):
+            for marker_index, marker in enumerate((-7, 19)):
+                prefix = f"{route}:{index}:{marker_index}:"
+                expected.update({prefix + "tag": tag, prefix + "object-count": 1,
+                                 prefix + "sequence-count": 0, prefix + "body-count": 1,
+                                 prefix + "marker": marker, prefix + "received": 1})
+    expected.update({"final:base-object": 9, "final:base-sequence": 3, "final:super-body": 6,
+                     "final:this-object": 9, "final:this-sequence": 3, "final:this-body": 6})
+    return expected
+
+
+def compare_constructor_behavior(baseline: dict, actual: dict):
+    oracle = constructor_oracle()
+    for label, values in (("original", baseline), ("rebuilt", actual)):
+        if set(values) != set(oracle):
+            raise RuntimeError("Constructor " + label + " behavior omitted an independent key")
+        changed = {key: {"expected": expected, "actual": values[key]}
+                   for key, expected in oracle.items() if values[key] != expected}
+        if changed:
+            raise RuntimeError("Constructor " + label + " behavior oracle failed: " + json.dumps(changed))
+
+
+def generic_helpers() -> list[dict]:
+    return [{"class": owner, "name": "__neverdThrow", "prototype": class_identity.THROW_HELPER_PROTOTYPE,
+             "static": True, "source_unit": owner[1:-1] + ".java", "kind": "throw-helper"}
+            for owner in (GENERIC_BOX, GENERIC_OPS)]
+
+
+def validate_generic_original(classes: dict):
+    """A handwritten contract prevents an accidentally erased fixture becoming the oracle."""
+    if set(classes) != {GENERIC_BOX, GENERIC_OPS}:
+        raise RuntimeError("Generic original class inventory changed")
+    for owner, facts in classes.items():
+        signature = "<T:Ljava/lang/Object;>Ljava/lang/Object;" if owner == GENERIC_BOX else None
+        if (facts["name"] != owner or facts["major"] != 52 or facts["minor"] != 0 or facts["access"] != 0x31
+                or facts["superclass"] != "Ljava/lang/Object;" or facts["interfaces"]
+                or facts["enclosing_method"] is not None or facts["inner_class"] is not None
+                or facts["signature"] != signature):
+            raise RuntimeError("Generic original class Signature/access/scope changed: " + owner)
+        fields = {owner + "->" + name + ":" + descriptor:
+                  {"name": name, "descriptor": descriptor, "access": 1, "constant_value": None, "signature": generic}
+                  for name, (descriptor, generic) in (GENERIC_FIELDS.items() if owner == GENERIC_BOX else [])}
+        if facts["fields"] != fields:
+            raise RuntimeError("Generic original field Signature inventory changed: " + owner)
+        methods = {}
+        for member, generic in GENERIC_METHODS[owner].items():
+            name, tail = member.split("(", 1)
+            methods[owner + "->" + member] = {"name": name, "prototype": "(" + tail, "code": True,
+                                             "access": 9 if owner == GENERIC_OPS and name != "<init>" else 1,
+                                             "signature": generic}
+        if facts["methods"] != methods:
+            raise RuntimeError("Generic original method Signature inventory changed: " + owner)
+
+
+def generic_reflection(path: Path) -> dict[str, str]:
+    values = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        key, separator, value = line.partition("\t")
+        if not separator or not value or key in values:
+            raise RuntimeError("Malformed or duplicate generic reflection evidence")
+        values[key] = value
+    if set(values) != GENERIC_REFLECTION_KEYS:
+        raise RuntimeError("Incomplete independent generic reflection evidence")
+    return values
+
+
+def validate_generic_behavior(values: dict):
+    if set(values) != expected_keys("generic"):
+        raise RuntimeError("Generic behavior requires the complete independent key inventory")
+    scalars = [-2147483648, -100, -1, 0, 1, 100, 2147483647]
+    for key, value in values.items():
+        if key.startswith("scalar:"):
+            raw = (scalars[int(key.split(":")[1])] * 3 + 7) & 0xffffffff
+            expected = raw if raw < 0x80000000 else raw - 0x100000000
+        else:
+            expected = 7 if key == "array-exceptions" else 1
+        if type(value) is not int or value != expected:
+            raise RuntimeError("Generic independent reflection/behavior oracle failed: " + key)
+
+
+def compare_generic_behavior(baseline: dict, actual: dict):
+    validate_generic_behavior(baseline)
+    validate_generic_behavior(actual)
+    if actual != baseline:
+        raise RuntimeError("Generic recovery changed independent behavior")
 
 
 def local_roles(classes: dict) -> dict[str, str]:
@@ -332,6 +567,191 @@ class Verify:
             changes = {key: {"original": baseline[key], "recovered": actual[key]} for key in baseline if baseline[key] != actual[key]}
             raise RuntimeError("Recovered Java changed behavior: " + json.dumps(changes))
         return len(actual)
+
+    def constructor_cases(self, neverd: Path) -> tuple[list[dict], list[dict]]:
+        passed, failures = [], []
+        directory = self.work / "original-constructor"
+        try:
+            self.run([self.javac, "-version"], "constructor-javac-version")
+            self.run([self.java, "-version"], "constructor-java-version")
+            source_dir = directory / "source"
+            for path in sorted((FIXTURES / "constructor/java").rglob("*.java")):
+                target = source_dir / path.relative_to(FIXTURES / "constructor/java")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, target)
+            harness_source = directory / "harness-source/ConstructorHarness.java"
+            harness_source.parent.mkdir(parents=True)
+            shutil.copyfile(FIXTURES / "harness/ConstructorHarness.java", harness_source)
+            classes_dir = directory / "classes"
+            self.compile_local(sorted(source_dir.rglob("*.java")), classes_dir)
+            original = class_identity.compiler_classes(classes_dir)
+            (directory / "class-inventory.json").write_text(json.dumps(original, indent=2) + "\n")
+            validate_constructor_original(original)
+            methods = {identity: "body" if row["code"] else "declaration"
+                       for facts in original.values() for identity, row in facts["methods"].items()}
+            self.compile_local([harness_source], directory / "harness", classpath=classes_dir)
+            cp = os.pathsep.join(map(str, (directory / "harness", classes_dir)))
+            reflection_path = directory / "reflection.tsv"
+            baseline = results(self.run([self.java, "-cp", cp, "ConstructorHarness", reflection_path],
+                                        "original-constructor"), "constructor")
+            (directory / "baseline.json").write_text(json.dumps(baseline, indent=2) + "\n")
+            compare_constructor_behavior(baseline, baseline)
+            reflection = constructor_reflection(reflection_path)
+            (directory / "reflection.json").write_text(json.dumps(reflection, indent=2) + "\n")
+            (directory / "source-hashes.json").write_text(json.dumps({"implementation": source_hashes(source_dir),
+                "harness": source_hashes(harness_source.parent)}, indent=2) + "\n")
+        except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+            for label in CONSTRUCTOR_CASES:
+                failures.append({"case": label, "stage": "original-preparation", "error": str(error)})
+            (self.work / "constructor-preparation-failure.json").write_text(json.dumps(failures, indent=2) + "\n")
+            return passed, failures
+        for label in CONSTRUCTOR_CASES:
+            case = self.work / label
+            case.mkdir()
+            try:
+                inputs = {owner: "classes.dex" for owner in original}
+                paths = [classes_dir / original[owner]["path"] for owner in sorted(original)]
+                source = self.dex(paths, case / "dex", classes_dir)
+                (case / "input-inventory.json").write_text(json.dumps({"classes": original, "inputs": inputs,
+                    "expected_generated_helpers": constructor_helpers(),
+                    "input_sha256": hashlib.sha256(source.read_bytes()).hexdigest()}, indent=2) + "\n")
+                output = case / "recovered"
+                self.run([neverd, "mobile", source, "-o", output, "--timeout", self.timeout, "--json"], label)
+                report = json.loads((output / "report.json").read_text())
+                if report.get("dex_count") != 1 or report.get("smali_count") != 0:
+                    raise RuntimeError("Constructor DEX input inventory changed")
+                counts = validate_coverage(report, output, set(original), methods, inputs,
+                                           expected_generic_helpers=constructor_helpers())
+                sources = sorted((output / "sources").rglob("*.java"))
+                if sorted(report["java_sources"]) != ["sources/" + owner[1:-1] + ".java" for owner in sorted(original)]:
+                    raise RuntimeError("Constructor source unit inventory changed")
+                (case / "generated-source-hashes.json").write_text(json.dumps(source_hashes(output / "sources"), indent=2) + "\n")
+                compiled = case / "compiled"
+                self.compile_local(sources, compiled)
+                rebuilt = class_identity.compiler_classes(compiled)
+                (case / "rebuilt-class-inventory.json").write_text(json.dumps(rebuilt, indent=2) + "\n")
+                identity = class_identity.match_generic_recompiled(original, rebuilt)
+                (case / "constructor-identity.json").write_text(json.dumps(identity, indent=2) + "\n")
+                self.compile_local([harness_source], case / "harness", classpath=compiled)
+                cp = os.pathsep.join(map(str, (case / "harness", compiled)))
+                reflection_path = case / "reflection.tsv"
+                actual = results(self.run([self.java, "-cp", cp, "ConstructorHarness", reflection_path],
+                                          label + "-execution"), "constructor")
+                (case / "execution.json").write_text(json.dumps(actual, indent=2) + "\n")
+                actual_reflection = constructor_reflection(reflection_path)
+                (case / "reflection.json").write_text(json.dumps(actual_reflection, indent=2) + "\n")
+                if actual_reflection != reflection:
+                    raise RuntimeError("Constructor reflection declarations changed")
+                compare_constructor_behavior(baseline, actual)
+                passed.append({"case": label, **counts, "matched_results": len(actual),
+                               "reflection_declaration_count": len(reflection), "compiler_identity": identity,
+                               "acceptance_scope": "owned-constructor-overload-binding"})
+                print(f"PASS {label}: {len(methods)} original constructors, {len(actual)} reflection/behavior results", flush=True)
+            except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+                failure = {"case": label, "error": str(error)}
+                failures.append(failure)
+                (case / "failure.json").write_text(json.dumps(failure, indent=2) + "\n")
+                print(f"FAIL {label}: {error}", file=sys.stderr, flush=True)
+        if {row["case"] for row in passed + failures} != set(CONSTRUCTOR_CASES) or len(passed + failures) != len(CONSTRUCTOR_CASES):
+            raise RuntimeError("Constructor acceptance omitted a required input case")
+        return passed, failures
+
+    def generic_cases(self, neverd: Path) -> tuple[list[dict], list[dict]]:
+        passed, failures = [], []
+        directory = self.work / "original-generic"
+        try:
+            self.run([self.javac, "-version"], "generic-javac-version")
+            self.run([self.java, "-version"], "generic-java-version")
+            source_dir = directory / "source"
+            for path in sorted((FIXTURES / "generic/java").rglob("*.java")):
+                target = source_dir / path.relative_to(FIXTURES / "generic/java")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, target)
+            harness_source = directory / "harness-source/GenericHarness.java"
+            harness_source.parent.mkdir(parents=True)
+            shutil.copyfile(FIXTURES / "harness/GenericHarness.java", harness_source)
+            classes_dir = directory / "classes"
+            self.compile_local(sorted(source_dir.rglob("*.java")), classes_dir)
+            original = class_identity.compiler_classes(classes_dir)
+            (directory / "class-inventory.json").write_text(json.dumps(original, indent=2) + "\n")
+            validate_generic_original(original)
+            methods = {identity: "body" if row["code"] else "declaration"
+                       for facts in original.values() for identity, row in facts["methods"].items()}
+            self.compile_local([harness_source], directory / "harness", classpath=classes_dir)
+            cp = os.pathsep.join(map(str, (directory / "harness", classes_dir)))
+            reflection_path = directory / "reflection.tsv"
+            baseline = results(self.run([self.java, "-cp", cp, "GenericHarness", reflection_path], "original-generic"), "generic")
+            validate_generic_behavior(baseline)
+            reflection = generic_reflection(reflection_path)
+            (directory / "baseline.json").write_text(json.dumps(baseline, indent=2) + "\n")
+            (directory / "reflection.json").write_text(json.dumps(reflection, indent=2) + "\n")
+            (directory / "source-hashes.json").write_text(json.dumps({"implementation": source_hashes(source_dir),
+                "harness": source_hashes(harness_source.parent)}, indent=2) + "\n")
+        except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+            for label in GENERIC_CASES:
+                failures.append({"case": label, "stage": "original-preparation", "error": str(error)})
+            (self.work / "generic-preparation-failure.json").write_text(json.dumps(failures, indent=2) + "\n")
+            return passed, failures
+        partitions = {"generic-dex": [[GENERIC_BOX, GENERIC_OPS]],
+                      "generic-multidex": [[GENERIC_OPS], [GENERIC_BOX]]}
+        for label in GENERIC_CASES:
+            case = self.work / label
+            case.mkdir()
+            try:
+                inputs, dexes = {}, []
+                for number, owners in enumerate(partitions[label], 1):
+                    dex_name = "classes.dex" if number == 1 else f"classes{number}.dex"
+                    paths = [classes_dir / original[owner]["path"] for owner in owners]
+                    dexes.append(self.dex(paths, case / ("partition-" + str(number)), classes_dir))
+                    inputs.update({owner: dex_name for owner in owners})
+                if len(dexes) == 1:
+                    source = dexes[0]
+                else:
+                    source = case / "input.apk"
+                    with zipfile.ZipFile(source, "w") as archive:
+                        for number, dex in enumerate(dexes, 1):
+                            archive.write(dex, "classes.dex" if number == 1 else f"classes{number}.dex")
+                (case / "input-inventory.json").write_text(json.dumps({"classes": original, "inputs": inputs,
+                    "partitions": partitions[label], "expected_generated_helpers": generic_helpers(),
+                    "input_sha256": hashlib.sha256(source.read_bytes()).hexdigest()}, indent=2) + "\n")
+                output = case / "recovered"
+                self.run([neverd, "mobile", source, "-o", output, "--timeout", self.timeout, "--json"], label)
+                report = json.loads((output / "report.json").read_text())
+                if report.get("dex_count") != len(dexes) or report.get("smali_count") != 0:
+                    raise RuntimeError("Generic DEX partition inventory changed")
+                counts = validate_coverage(report, output, set(original), methods, inputs,
+                                           expected_generic_helpers=generic_helpers())
+                if sorted(report["java_sources"]) != ["sources/fixture/GenericBox.java", "sources/fixture/GenericOps.java"]:
+                    raise RuntimeError("Generic source unit inventory changed")
+                (case / "generated-source-hashes.json").write_text(json.dumps(source_hashes(output / "sources"), indent=2) + "\n")
+                compiled = case / "compiled"
+                self.compile_local(sorted((output / "sources").rglob("*.java")), compiled)
+                rebuilt = class_identity.compiler_classes(compiled)
+                (case / "rebuilt-class-inventory.json").write_text(json.dumps(rebuilt, indent=2) + "\n")
+                identity = class_identity.match_generic_recompiled(original, rebuilt)
+                (case / "generic-identity.json").write_text(json.dumps(identity, indent=2) + "\n")
+                self.compile_local([harness_source], case / "harness", classpath=compiled)
+                cp = os.pathsep.join(map(str, (case / "harness", compiled)))
+                reflection_path = case / "reflection.tsv"
+                actual = results(self.run([self.java, "-cp", cp, "GenericHarness", reflection_path], label + "-execution"), "generic")
+                (case / "execution.json").write_text(json.dumps(actual, indent=2) + "\n")
+                actual_reflection = generic_reflection(reflection_path)
+                (case / "reflection.json").write_text(json.dumps(actual_reflection, indent=2) + "\n")
+                if actual_reflection != reflection:
+                    raise RuntimeError("Generic reflection declarations changed")
+                compare_generic_behavior(baseline, actual)
+                passed.append({"case": label, **counts, "matched_results": len(actual),
+                               "reflection_declaration_count": len(reflection), "compiler_identity": identity,
+                               "acceptance_scope": "owned-generic-signature-and-body"})
+                print(f"PASS {label}: {len(methods)} original bodies, {len(reflection)} generic reflection declarations, {len(actual)} results", flush=True)
+            except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+                failure = {"case": label, "error": str(error)}
+                failures.append(failure)
+                (case / "failure.json").write_text(json.dumps(failure, indent=2) + "\n")
+                print(f"FAIL {label}: {error}", file=sys.stderr, flush=True)
+        if {row["case"] for row in passed + failures} != set(GENERIC_CASES) or len(passed + failures) != len(GENERIC_CASES):
+            raise RuntimeError("Generic acceptance omitted a required input case")
+        return passed, failures
 
     def local_cases(self, neverd: Path) -> tuple[list[dict], list[dict]]:
         passed, failures = [], []
@@ -505,6 +925,12 @@ def main() -> int:
         local_passed, local_failures = verify.local_cases(neverd)
         passed.extend(local_passed)
         failures.extend(local_failures)
+        generic_passed, generic_failures = verify.generic_cases(neverd)
+        passed.extend(generic_passed)
+        failures.extend(generic_failures)
+        constructor_passed, constructor_failures = verify.constructor_cases(neverd)
+        passed.extend(constructor_passed)
+        failures.extend(constructor_failures)
         broken = work / "broken-smali"
         broken.mkdir()
         shutil.copyfile(SMALI / "Peer.smali", broken / "Peer.smali")

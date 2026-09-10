@@ -1,6 +1,7 @@
 //===- MobileDalvikModel.cpp - Shared Dalvik declaration validation
 //--------===//
 #include "MobileDalvik.h"
+#include "MobileDalvikSignature.h"
 
 #include <algorithm>
 #include <array>
@@ -585,6 +586,7 @@ ClassMap linkClasses(std::vector<Class> classes, Budget &budget) {
     }
   }
   validateSourceScopes(result, budget);
+  validateGenericSignatures(result, budget);
   return result;
 }
 } // namespace neverd::mobile::dalvik

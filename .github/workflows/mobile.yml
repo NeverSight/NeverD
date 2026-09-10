@@ -192,6 +192,13 @@ jobs:
             ${{ runner.temp }}/android-native/local-multidex-outer-first/
             ${{ runner.temp }}/android-native/local-multidex-overload-first/
             ${{ runner.temp }}/android-native/local-preparation-failure.json
+            ${{ runner.temp }}/android-native/original-generic/
+            ${{ runner.temp }}/android-native/generic-dex/
+            ${{ runner.temp }}/android-native/generic-multidex/
+            ${{ runner.temp }}/android-native/generic-preparation-failure.json
+            ${{ runner.temp }}/android-native/original-constructor/
+            ${{ runner.temp }}/android-native/constructor-dex/
+            ${{ runner.temp }}/android-native/constructor-preparation-failure.json
             ${{ runner.temp }}/ios-native/scalar/
             ${{ runner.temp }}/ios-native/calls/
             ${{ runner.temp }}/ios-native/swift/

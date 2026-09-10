@@ -1,6 +1,7 @@
 //===- MobileDalvikReaderTests.cpp - Independent native reader fixtures
 //----===//
 #include "MobileDalvik.h"
+#include "MobileDalvikSignature.h"
 #include "gtest/gtest.h"
 
 #include "llvm/ADT/SmallString.h"
@@ -476,6 +477,21 @@ FixtureAnnotation enclosingClassAnnotation() {
     uleb(out, 1);
     uleb(out, fixtureStringIndex(f, "value"));
     annotationIndex(out, 0x18, fixtureTypeIndex(f, "Lfixture/Outer;"));
+  };
+  return result;
+}
+FixtureAnnotation signatureAnnotation(std::vector<std::string> pieces) {
+  FixtureAnnotation result{"Ldalvik/annotation/Signature;", 2};
+  result.extra_strings = {u"value"};
+  for (const auto &piece : pieces)
+    result.extra_strings.push_back(utf16(piece));
+  result.elements = [pieces](std::string &out, const Fixture &f) {
+    uleb(out, 1);
+    uleb(out, fixtureStringIndex(f, "value"));
+    append(out, 0x1c, 1);
+    uleb(out, pieces.size());
+    for (const auto &piece : pieces)
+      annotationIndex(out, 0x17, fixtureStringIndex(f, piece));
   };
   return result;
 }
@@ -1339,10 +1355,231 @@ TEST(MobileDalvikReader, DexKnownClassAnnotationsDoNotAuthorizeMemberUses) {
   options.annotations = {typeArrayAnnotation("Ldalvik/annotation/Throws;",
                                              {"Ljava/io/IOException;"})};
   options.class_annotations.reset();
-  expectDexError(
-      fixture(options).data,
-      "Invalid DEX: unsupported annotation Ldalvik/annotation/Throws; "
-      "on method Lfixture/Sample;->value(I)I");
+  options.method_annotations = 0;
+  options.annotation_sets = {{0}};
+  auto parsed = parse(fixture(options).data);
+  ASSERT_EQ(parsed.size(), 1u);
+  EXPECT_EQ(parsed[0].methods[0].declared_throws,
+            (std::vector<std::string>{"Ljava/io/IOException;"}));
+  options.method_annotations.reset();
+  attachFixtureAnnotation(options, "field");
+  expectDexError(fixture(options).data,
+                 "Invalid DEX: unsupported annotation "
+                 "Ldalvik/annotation/Throws; on field "
+                 "Lfixture/Sample;->VALUE:I");
+}
+
+TEST(MobileDalvikReader, DexSignaturesBindAllDeclarationsAndExactFragments) {
+  FixtureOptions options;
+  options.params = {"Ljava/lang/Object;"};
+  options.returns = "Ljava/lang/Object;";
+  options.words = {0x0011};
+  options.field_type = "Ljava/util/List;";
+  options.static_value = std::string(1, '\x1e');
+  options.annotations = {
+      signatureAnnotation({"<T:Ljava/lang/", "Object;>Ljava/lang/Object;"}),
+      signatureAnnotation({"Ljava/util/L", "ist<Ljava/lang/String;>;"}),
+      signatureAnnotation({"<U:Ljava/lang/Object;>(T", "U;)TU;",
+                           "^Ljava/lang/Exception;"}),
+      typeArrayAnnotation("Ldalvik/annotation/Throws;",
+                          {"Ljava/lang/Exception;"})};
+  options.annotation_sets = {{0}, {1}, {2, 3}};
+  options.class_annotations = 0;
+  options.field_annotations = 1;
+  options.method_annotations = 2;
+  auto classes = parse(fixture(options).data);
+  ASSERT_EQ(classes.size(), 1u);
+  const auto &cls = classes[0];
+  EXPECT_EQ(cls.generic_signature,
+            "<T:Ljava/lang/Object;>Ljava/lang/Object;");
+  ASSERT_EQ(cls.fields.size(), 1u);
+  EXPECT_EQ(cls.fields[0].generic_signature,
+            "Ljava/util/List<Ljava/lang/String;>;");
+  ASSERT_EQ(cls.methods.size(), 1u);
+  EXPECT_EQ(cls.methods[0].generic_signature,
+            "<U:Ljava/lang/Object;>(TU;)TU;^Ljava/lang/Exception;");
+  EXPECT_EQ(cls.methods[0].declared_throws,
+            (std::vector<std::string>{"Ljava/lang/Exception;"}));
+  ASSERT_EQ(cls.methods[0].instructions.size(), 1u);
+  EXPECT_EQ(cls.methods[0].instructions[0].opcode, "return-object");
+  Budget budget;
+  auto linked = linkClasses(std::move(classes), budget);
+  auto plans = validateGenericSignatures(linked, budget);
+  const auto &method = linked.at(options.owner).methods[0];
+  EXPECT_EQ(plans.methods.at(method.reference)
+                .types[*plans.methods.at(method.reference).result]
+                .erasure,
+            method.reference.returns);
+}
+
+TEST(MobileDalvikReader, DexSourceAnnotationsRejectWrongSitesAndValueKinds) {
+  FixtureOptions options;
+  options.annotations = {signatureAnnotation({"(I)I"})};
+  options.annotation_sets = {{0}};
+  options.method_annotations = 0;
+  for (unsigned visibility : {0u, 1u}) {
+    auto changed = options;
+    changed.annotations[0].visibility = visibility;
+    expectDexError(fixture(changed).data,
+                   "Invalid DEX: source annotation "
+                   "Ldalvik/annotation/Signature; on method "
+                   "Lfixture/Sample;->value(I)I requires system visibility");
+  }
+  auto changed = options;
+  changed.method_annotations.reset();
+  attachFixtureAnnotation(changed, "parameter");
+  expectDexError(fixture(changed).data,
+                 "Invalid DEX: unsupported annotation "
+                 "Ldalvik/annotation/Signature; on "
+                 "parameter 0 of method Lfixture/Sample;->value(I)I");
+  changed = options;
+  changed.annotations[0].elements = [](std::string &out, const Fixture &f) {
+    uleb(out, 1);
+    uleb(out, fixtureStringIndex(f, "value"));
+    annotationIndex(out, 0x17, fixtureStringIndex(f, "(I)I"));
+  };
+  expectDexError(fixture(changed).data,
+                 "Invalid DEX: invalid Ldalvik/annotation/Signature; value "
+                 "on method Lfixture/Sample;->value(I)I");
+  changed.annotations[0].elements = [](std::string &out, const Fixture &f) {
+    uleb(out, 1);
+    uleb(out, fixtureStringIndex(f, "value"));
+    append(out, 0x1c, 1);
+    uleb(out, 1);
+    annotationIndex(out, 0x18, fixtureTypeIndex(f, "Ljava/lang/Object;"));
+  };
+  expectDexError(fixture(changed).data,
+                 "Invalid DEX: Signature fragment is not a string on method "
+                 "Lfixture/Sample;->value(I)I");
+  changed = options;
+  changed.annotations = {typeArrayAnnotation("Ldalvik/annotation/Throws;",
+                                             {"[Ljava/lang/Exception;"})};
+  expectDexError(fixture(changed).data,
+                 "Invalid DEX: Throws entry is not a class on method "
+                 "Lfixture/Sample;->value(I)I");
+}
+
+TEST(MobileDalvikReader, DexSharedSourceSetsBindEachDefinedDeclaration) {
+  FixtureOptions options;
+  options.field_type = "Ljava/lang/Object;";
+  options.static_value = std::string(1, '\x1e');
+  options.annotations = {signatureAnnotation({"Ljava/lang/Object;"})};
+  options.annotation_sets = {{0}};
+  options.class_annotations = 0;
+  options.field_annotations = 0;
+  auto classes = parse(fixture(options).data);
+  ASSERT_EQ(classes.size(), 1u);
+  EXPECT_EQ(classes[0].generic_signature, "Ljava/lang/Object;");
+  ASSERT_EQ(classes[0].fields.size(), 1u);
+  EXPECT_EQ(classes[0].fields[0].generic_signature, "Ljava/lang/Object;");
+  EXPECT_FALSE(classes[0].methods[0].generic_signature);
+  Budget budget;
+  auto linked = linkClasses(std::move(classes), budget);
+  EXPECT_EQ(linked.at(options.owner).methods.size(), 1u);
+}
+
+TEST(MobileDalvikReader, DexAnnotatedMethodMustHaveActualClassDataDefinition) {
+  FixtureOptions options;
+  options.annotations = {signatureAnnotation({"(I)I"})};
+  options.annotation_sets = {{0}};
+  options.method_annotations = 0;
+  options.referenced_method =
+      MethodRef{options.owner, "unused", {"I"}, "I"};
+  auto f = fixture(options);
+  auto found = std::find(f.methods.begin(), f.methods.end(),
+                         *options.referenced_method);
+  ASSERT_NE(found, f.methods.end());
+  patch(f.data, f.at.at("annotations") + 16,
+        unsigned(found - f.methods.begin()));
+  expectDexError(seal(f.data),
+                 "Invalid DEX: annotated method has no class_data definition");
+}
+
+TEST(MobileDalvikReader, EmptyAndNonJvmSignatureMetadataIsNotSilentlyLost) {
+  for (const auto &pieces :
+       {std::vector<std::string>{}, std::vector<std::string>{"not JVM"}}) {
+    FixtureOptions options;
+    options.annotations = {signatureAnnotation(pieces)};
+    options.annotation_sets = {{0}};
+    options.method_annotations = 0;
+    auto classes = parse(fixture(options).data);
+    ASSERT_TRUE(classes[0].methods[0].generic_signature);
+    Budget budget;
+    try {
+      linkClasses(std::move(classes), budget);
+      FAIL() << "Signature metadata was silently discarded";
+    } catch (const Error &error) {
+      EXPECT_NE(std::string(error.what()).find("Invalid JVM generic signature"),
+                std::string::npos);
+      EXPECT_NE(std::string(error.what()).find("Lfixture/Sample;->value(I)I"),
+                std::string::npos);
+    }
+  }
+}
+
+TEST(MobileDalvikReader, SmaliSourceMetadataMatchesDexTypedBinding) {
+  auto cls = smali(
+      ".class public Lfixture/Box;\n.super Ljava/lang/Object;\n"
+      ".annotation system Ldalvik/annotation/Signature;\n"
+      "value = {\"<T:Ljava/lang/\", \"Object;>Ljava/lang/Object;\"}\n"
+      ".end annotation\n"
+      ".field public value:Ljava/lang/Object;\n"
+      ".annotation system Ldalvik/annotation/Signature;\n"
+      "value = {\"T\", \"T;\"}\n.end annotation\n.end field\n"
+      ".method public static identity(Ljava/lang/Object;)Ljava/lang/Object;\n"
+      ".registers 1\n"
+      ".annotation system Ldalvik/annotation/Signature;\n"
+      "value = {\"<U:Ljava/lang/Object;>(TU;)TU;\"}\n.end annotation\n"
+      ".annotation system Ldalvik/annotation/Throws;\n"
+      "value = {Ljava/lang/Exception;}\n.end annotation\n"
+      "return-object p0\n.end method\n");
+  EXPECT_EQ(cls.generic_signature,
+            "<T:Ljava/lang/Object;>Ljava/lang/Object;");
+  ASSERT_EQ(cls.fields.size(), 1u);
+  EXPECT_EQ(cls.fields[0].generic_signature, "TT;");
+  ASSERT_EQ(cls.methods.size(), 1u);
+  EXPECT_EQ(cls.methods[0].generic_signature,
+            "<U:Ljava/lang/Object;>(TU;)TU;");
+  EXPECT_EQ(cls.methods[0].declared_throws,
+            (std::vector<std::string>{"Ljava/lang/Exception;"}));
+  Budget budget;
+  auto linked = linkClasses({cls}, budget);
+  auto plans = validateGenericSignatures(linked, budget);
+  EXPECT_EQ(plans.methods.at(cls.methods[0].reference).parameters.size(), 1u);
+  EXPECT_EQ(plans.fields.at(cls.fields[0].reference)
+                .types[*plans.fields.at(cls.fields[0].reference).field_type]
+                .variable_owner,
+            cls.name);
+}
+
+TEST(MobileDalvikReader, SmaliGenericAnnotationsRetainSiteAndDuplicateGuards) {
+  const std::string start =
+      ".class public Lfixture/Box;\n.super Ljava/lang/Object;\n"
+      ".method public static value(I)I\n.registers 1\n";
+  const std::string annotation =
+      ".annotation system Ldalvik/annotation/Signature;\n"
+      "value = {\"(I)I\"}\n.end annotation\n";
+  auto reject = [&](const std::string &text, std::string_view reason) {
+    try {
+      smali(text);
+      FAIL() << "Expected metadata rejection";
+    } catch (const Error &error) {
+      EXPECT_NE(std::string(error.what()).find(reason), std::string::npos)
+          << error.what();
+    }
+  };
+  reject(start + annotation + annotation + "return p0\n.end method\n",
+         "duplicate source annotation");
+  reject(start + ".param p0\n" + annotation +
+             ".end param\nreturn p0\n.end method\n",
+         "parameter annotations are not represented");
+  auto cls = smali(start + ".param p0\n.end param\n" + annotation +
+                    "return p0\n.end method\n");
+  EXPECT_EQ(cls.methods[0].generic_signature, "(I)I");
+  reject(start + ".annotation runtime Ldalvik/annotation/Signature;\n"
+                 "value = {\"(I)I\"}\n.end annotation\n"
+                 "return p0\n.end method\n",
+         "unsupported source annotation visibility");
 }
 
 TEST(MobileDalvikReader, DexSharedEmptyAnnotationSetsKeepCompleteMethods) {

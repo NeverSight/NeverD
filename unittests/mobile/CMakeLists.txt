@@ -9,6 +9,7 @@ add_neverd_unittest(NeverDMobileTests
   MobileCLITests.cpp
   MobileAndroidTests.cpp
   MobileDalvikReaderTests.cpp
+  MobileDalvikSignatureTests.cpp
   MobileDalvikJavaTests.cpp
   MobileIOSTests.cpp
   MobileSwiftDemangleTests.cpp

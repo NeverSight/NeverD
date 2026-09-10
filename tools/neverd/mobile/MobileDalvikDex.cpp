@@ -112,6 +112,10 @@ struct AnnotationItem {
   Annotation value;
 };
 using AnnotationSet = std::vector<AnnotationItem>;
+struct AnnotationDirectory {
+  AnnotationSet classes;
+  std::array<std::vector<std::pair<uint32_t, uint32_t>>, 3> members;
+};
 struct OpSpec {
   std::string name, form;
   char pool = 0;
@@ -669,13 +673,62 @@ class Dex {
       bad("unsupported annotation " + values.front().value.first + " on " +
           declaration);
   }
+  void sourceAnnotations(
+      const AnnotationSet &values, std::optional<std::string> &signature,
+      std::optional<std::vector<std::string>> *throws_types,
+      const std::string &declaration) {
+    for (const auto &entry : values) {
+      budget.tick();
+      const auto &[name, elements] = entry.value;
+      bool is_signature = name == "Ldalvik/annotation/Signature;";
+      bool is_throws = name == "Ldalvik/annotation/Throws;" && throws_types;
+      if (!is_signature && !is_throws)
+        bad("unsupported annotation " + name + " on " + declaration);
+      if (entry.visibility != 2)
+        bad("source annotation " + name + " on " + declaration +
+            " requires system visibility");
+      auto found = elements.find("value");
+      if (elements.size() != 1 || found == elements.end() ||
+          found->second.kind != 0x1c)
+        bad("invalid " + name + " value on " + declaration);
+      if (is_signature) {
+        if (signature)
+          bad("duplicate Signature annotation on " + declaration);
+        std::string joined;
+        for (const auto &part : found->second.array) {
+          budget.tick();
+          if (part.kind != 0x17)
+            bad("Signature fragment is not a string on " + declaration);
+          const auto &text = std::get<std::string>(part.value);
+          budget.tick(1 + text.size() / 16);
+          if (text.size() > budget.limits.max_bytes - joined.size())
+            bad("Signature exceeds byte budget on " + declaration);
+          joined += text;
+        }
+        signature = std::move(joined);
+      } else {
+        if (*throws_types)
+          bad("duplicate Throws annotation on " + declaration);
+        std::vector<std::string> types;
+        for (const auto &part : found->second.array) {
+          budget.tick();
+          if (part.kind != 0x18 ||
+              !std::get<std::string>(part.value).starts_with('L'))
+            bad("Throws entry is not a class on " + declaration);
+          types.push_back(std::get<std::string>(part.value));
+        }
+        *throws_types = std::move(types);
+      }
+    }
+  }
   void annotations(Class &cls, uint32_t offset) {
     if (!offset)
       return;
-    auto [all, has_members] = item<std::pair<AnnotationSet, bool>>(
+    auto directory = item<AnnotationDirectory>(
         0x2006, offset,
         [&](Cursor &reader) {
           auto class_off = reader.u32();
+          AnnotationDirectory result;
           std::array<uint32_t, 3> counts{reader.u32(), reader.u32(),
                                          reader.u32()};
           for (unsigned kind = 0; kind < 3; ++kind) {
@@ -688,54 +741,81 @@ class Dex {
               if (int64_t(index) <= previous)
                 bad("annotation directory members unordered");
               previous = index;
-              std::string owner =
-                  kind == 0 ? at(fields, index, "annotated member").owner
-                            : at(methods, index, "annotated member").owner;
-              if (owner != cls.name)
-                bad("annotation directory owner mismatch");
-              if (kind == 0) {
-                const auto &field = at(fields, index, "annotated field");
-                requireUnannotated(annotationSet(annotation_off),
-                                   "field " + field.owner + "->" + field.name +
-                                       ":" + field.type);
-              } else if (kind == 1) {
-                const auto &method = at(methods, index, "annotated method");
-                requireUnannotated(annotationSet(annotation_off),
-                                   "method " + method.identity());
-              } else {
-                const auto &method = at(methods, index, "annotated method");
-                size_t expected = method.parameters.size();
-                auto parameters = item<std::vector<uint32_t>>(
-                    0x1002, annotation_off,
-                    [&](Cursor &r) {
-                      auto length = r.u32();
-                      if (length != expected)
-                        bad("parameter annotation count mismatch");
-                      std::vector<uint32_t> values;
-                      for (uint32_t p = 0; p < length; ++p)
-                        values.push_back(r.u32());
-                      return values;
-                    },
-                    4);
-                // A shared ref-list is cached independently of its method.
-                if (parameters.size() != expected)
-                  bad("parameter annotation count mismatch");
-                for (size_t p = 0; p < parameters.size(); ++p)
-                  requireUnannotated(annotationSet(parameters[p]),
-                                     "parameter " + std::to_string(p) +
-                                         " of method " + method.identity());
-              }
+              result.members[kind].emplace_back(index, annotation_off);
             }
           }
-          return std::pair{annotationSet(class_off),
-                           bool(counts[0] || counts[1] || counts[2])};
+          result.classes = annotationSet(class_off);
+          return result;
         },
         4);
-    if (has_members)
+    if (std::any_of(directory.members.begin(), directory.members.end(),
+                    [](const auto &members) { return !members.empty(); }))
       context(0x2006, offset, cls.name);
+    std::map<FieldRef, Field *> defined_fields;
+    std::map<MethodRef, Method *> defined_methods;
+    for (auto &field : cls.fields)
+      defined_fields.emplace(field.reference, &field);
+    for (auto &method : cls.methods)
+      defined_methods.emplace(method.reference, &method);
+    // Cached directory rows have no binding side effects. Every use is bound
+    // to the exact class_data declaration, including shared annotation sets.
+    for (unsigned kind = 0; kind < 3; ++kind) {
+      for (auto [index, annotation_off] : directory.members[kind]) {
+        budget.tick();
+        if (kind == 0) {
+          const auto &ref = at(fields, index, "annotated field");
+          if (ref.owner != cls.name)
+            bad("annotation directory owner mismatch");
+          auto found = defined_fields.find(ref);
+          if (found == defined_fields.end())
+            bad("annotated field has no class_data definition");
+          sourceAnnotations(annotationSet(annotation_off),
+                            found->second->generic_signature, nullptr,
+                            "field " + ref.owner + "->" + ref.name + ":" +
+                                ref.type);
+          continue;
+        }
+        const auto &ref = at(methods, index, "annotated method");
+        if (ref.owner != cls.name)
+          bad("annotation directory owner mismatch");
+        auto found = defined_methods.find(ref);
+        if (found == defined_methods.end())
+          bad("annotated method has no class_data definition");
+        if (kind == 1) {
+          sourceAnnotations(annotationSet(annotation_off),
+                            found->second->generic_signature,
+                            &found->second->declared_throws,
+                            "method " + ref.identity());
+          continue;
+        }
+        auto parameters = item<std::vector<uint32_t>>(
+            0x1002, annotation_off,
+            [&](Cursor &r) {
+              auto count = r.u32();
+              if (count > (r.end - r.pos) / 4)
+                bad("truncated parameter annotation list");
+              std::vector<uint32_t> values;
+              for (uint32_t p = 0; p < count; ++p)
+                values.push_back(r.u32());
+              return values;
+            },
+            4);
+        if (parameters.size() != ref.parameters.size())
+          bad("parameter annotation count mismatch");
+        for (size_t p = 0; p < parameters.size(); ++p)
+          requireUnannotated(annotationSet(parameters[p]),
+                             "parameter " + std::to_string(p) + " of method " +
+                                 ref.identity());
+      }
+    }
     std::map<std::string, std::map<std::string, Encoded>> values;
-    for (const auto &entry : all) {
+    for (const auto &entry : directory.classes) {
       const auto &[name, elements] = entry.value;
+      if (name == "Ldalvik/annotation/Signature;") {
+        sourceAnnotations({entry}, cls.generic_signature, nullptr,
+                          "class " + cls.name);
+        continue;
+      }
       if (name != "Ldalvik/annotation/EnclosingClass;" &&
           name != "Ldalvik/annotation/EnclosingMethod;" &&
           name != "Ldalvik/annotation/InnerClass;" &&

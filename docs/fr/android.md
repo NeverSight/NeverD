@@ -31,6 +31,10 @@ Le moteur par défaut est implémenté en C++20 et ne nécessite aucun environne
 
 La résolution des noms Java distingue l’en-tête du corps d’une classe et peut traiter les masquages connus au sein d’un même package ; elle refuse explicitement les cas où l’absence de déclarations d’une superclasse ou d’une interface externe empêche de déterminer les types ou les références du code auxiliaire Java généré, et seul `java.lang.Object` est supposé ne fournir aucun type membre héritable sans déclaration disponible. Les littéraux à virgule flottante smali sont arrondis directement à la précision simple ou double cible, en préservant la représentation binaire résultante.
 
+Le moteur C++ intégré conserve et valide les métadonnées `Signature` prises en charge pour les classes, champs et méthodes : variables de type, tableaux, jokers, bornes et masquage au niveau des méthodes. L’effacement doit correspondre à l’identité de la déclaration DEX d’origine. `Throws` est conservé ; une hiérarchie d’exceptions non prouvée est refusée. L’héritage générique ou la substitution des types membres, la régénération des méthodes ponts, les appels de méthodes génériques, les types internes paramétrés et la correspondance des paramètres cachés des constructeurs restent explicitement non pris en charge sans les preuves nécessaires.
+
+La CI traite des exemples Java 8 propres au projet avec D8 et NeverD, recompile tout le Java généré et compare les métadonnées `Signature` complètes, les résultats de réflexion et le comportement. Ces vérifications ne certifient pas la récupération complète d’applications réelles.
+
 ### Linux et macOS
 
 ```sh

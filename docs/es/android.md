@@ -31,6 +31,10 @@ El motor predeterminado está implementado en C++20 y no necesita Python, Java n
 
 La resolución de nombres Java distingue entre la cabecera y el cuerpo de una clase y puede resolver casos conocidos de ocultación de nombres dentro del mismo paquete; rechaza explícitamente los casos en que faltan declaraciones de superclases o interfaces externas y no se pueden determinar los tipos o las referencias del código auxiliar Java generado, y solo para `java.lang.Object` se supone, sin disponer de su declaración, que no aporta tipos miembro heredables. Los literales de coma flotante de smali se redondean directamente a la precisión simple o doble de destino, conservando los patrones de bits resultantes.
 
+El motor C++ integrado conserva y valida los metadatos `Signature` admitidos de clases, campos y métodos, incluidas las variables de tipo, los arrays, los comodines, los límites de tipo y la ocultación de nombres a nivel de método. El borrado de tipos debe coincidir con la identidad de la declaración DEX original. `Throws` se conserva; se rechaza una jerarquía de excepciones que no pueda demostrarse. La herencia genérica o la sustitución de tipos de miembros, la regeneración de métodos puente, las llamadas a métodos genéricos, los tipos internos parametrizados y la correspondencia de parámetros ocultos de constructores siguen sin admitirse explícitamente cuando falta la prueba necesaria.
+
+La CI procesa ejemplos Java 8 propios del proyecto mediante D8 y NeverD, recompila todo el Java generado y compara los metadatos `Signature` completos, los resultados de reflexión y el comportamiento. Estas comprobaciones no certifican la recuperación completa de aplicaciones reales.
+
 ### Linux y macOS
 
 ```sh

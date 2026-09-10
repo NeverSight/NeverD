@@ -87,6 +87,17 @@ class ClassFile:
         return [(self.text(reader.number(2)), reader.take(reader.number(4)))
                 for _ in range(reader.number(2))]
 
+    def signature(self, attributes):
+        values = [data for kind, data in attributes if kind == "Signature"]
+        require(len(values) <= 1, "Duplicate compiler Signature attribute")
+        if not values:
+            return None
+        attribute = Bytes(values[0])
+        value = self.text(attribute.number(2))
+        attribute.finish()
+        require(value and "\0" not in value, "Invalid compiler Signature text")
+        return value
+
     def code(self, data):
         reader = Bytes(data)
         reader.take(4)  # max_stack and max_locals
@@ -138,7 +149,9 @@ class ClassFile:
             require(len(parameters) == 1, "Invalid compiler field descriptor")
             identity = owner + "->" + name + ":" + descriptor
             require(identity not in fields, "Compiler emitted a duplicate field")
-            values = [data for kind, data in self.attributes(reader) if kind == "ConstantValue"]
+            attrs = self.attributes(reader)
+            signature = self.signature(attrs)
+            values = [data for kind, data in attrs if kind == "ConstantValue"]
             require(len(values) <= 1, "Duplicate compiler field ConstantValue")
             constant_value = None
             if values:
@@ -151,7 +164,7 @@ class ClassFile:
                 value = self.constant(index, tag)
                 constant_value = {"tag": tag, "value": self.text(value) if tag == 8 else value.hex()}
             fields[identity] = {"name": name, "descriptor": descriptor, "access": flags,
-                                "constant_value": constant_value}
+                                "constant_value": constant_value, "signature": signature}
         for _ in range(reader.number(2)):
             flags, name, descriptor = reader.number(2), self.text(reader.number(2)), self.text(reader.number(2))
             prototype_parts(descriptor)
@@ -165,10 +178,12 @@ class ClassFile:
             identity = owner + "->" + name + descriptor
             require(identity not in methods, "Compiler emitted a duplicate method")
             methods[identity] = {"name": name, "prototype": descriptor, "access": flags,
-                                 "code": bool(bodies)}
+                                 "code": bool(bodies), "signature": self.signature(attrs)}
         enclosing, own_inner, source_file = None, None, None
         seen = set()
-        for kind, data in self.attributes(reader):
+        attrs = self.attributes(reader)
+        signature = self.signature(attrs)
+        for kind, data in attrs:
             if kind not in {"EnclosingMethod", "InnerClasses", "SourceFile"}:
                 continue
             require(kind not in seen, "Duplicate compiler class identity attribute")
@@ -201,7 +216,8 @@ class ClassFile:
         self.result = {"name": owner, "access": access, "superclass": superclass,
                        "interfaces": interfaces, "fields": fields, "methods": methods,
                        "enclosing_method": enclosing, "inner_class": own_inner,
-                       "source_file": source_file, "major": major, "minor": minor}
+                       "source_file": source_file, "major": major, "minor": minor,
+                       "signature": signature}
         return self.result
 
     def inventory(self):
@@ -226,6 +242,51 @@ def compiler_classes(directory):
     require(classes and any(row["methods"] for row in classes.values()),
             "Original compiler emitted no declaration inventory")
     return classes
+
+
+THROW_HELPER_PROTOTYPE = "(Ljava/lang/Throwable;)Ljava/lang/RuntimeException;"
+THROW_HELPER_SIGNATURE = "<E:Ljava/lang/Throwable;>(Ljava/lang/Throwable;)Ljava/lang/RuntimeException;^TE;"
+
+
+def match_generic_recompiled(original, rebuilt):
+    """Exact owned top-level identities; only the known runtime helper is extra.
+
+    The expected original Signature contents are checked separately against the
+    handwritten fixture contract. These facts come from javac, not NeverD JSON.
+    """
+    require(original and set(original) == set(rebuilt), "Generic class inventory changed")
+    signatures = {"classes": 0, "fields": 0, "methods": 0}
+    method_count = 0
+    for owner, before in original.items():
+        after = rebuilt[owner]
+        for facts in (before, after):
+            require(facts["major"] == 52 and facts["minor"] == 0,
+                    "Generic oracle requires Java 8 compiler output")
+            require(facts["enclosing_method"] is None and facts["inner_class"] is None,
+                    "Generic fixture unexpectedly acquired a nested scope")
+        for key in ("name", "access", "superclass", "interfaces", "signature"):
+            require(before[key] == after[key], "Generic class declaration changed: " + owner + ":" + key)
+        require(before["fields"] == after["fields"], "Generic field declaration changed: " + owner)
+        signatures["classes"] += before["signature"] is not None
+        signatures["fields"] += sum(row["signature"] is not None for row in before["fields"].values())
+        for identity, method in before["methods"].items():
+            require(method["code"] and not (method["access"] & (0x40 | 0x1000)),
+                    "Generic fixture contains a bridge, synthetic or declaration-only method")
+            require(after["methods"].get(identity) == method,
+                    "Generic original method or Signature changed: " + identity)
+            method_count += 1
+            signatures["methods"] += method["signature"] is not None
+        helper = owner + "->__neverdThrow" + THROW_HELPER_PROTOTYPE
+        require(helper not in before["methods"], "Generic fixture collides with its fixed auxiliary helper")
+        require(set(after["methods"]) - set(before["methods"]) == {helper},
+                "Generic generated helper inventory changed: " + owner)
+        require(after["methods"][helper] == {
+            "name": "__neverdThrow", "prototype": THROW_HELPER_PROTOTYPE,
+            "access": 0xA, "code": True, "signature": THROW_HELPER_SIGNATURE},
+            "Generic generated helper declaration changed: " + owner)
+    return {"scope": "owned-generic-signature-and-body", "class_count": len(original),
+            "original_method_count": method_count, "signature_count": signatures,
+            "generated_helper_count": len(original)}
 
 
 def local_key(facts):

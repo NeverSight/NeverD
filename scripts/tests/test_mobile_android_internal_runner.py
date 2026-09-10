@@ -47,7 +47,7 @@ class AndroidInternalCoverageTests(unittest.TestCase):
                        "android_method_recovery": self.coverage,
                        "java_source_count": 1, "java_sources": ["sources/fixture/Sample.java"]}
 
-    def check(self, report=None, *, metadata=None, projection=None):
+    def check(self, report=None, *, metadata=None, projection=None, generic_helpers=None):
         report = self.report if report is None else report
         # Keep complete source artifacts and matching JSON in the negative
         # cases, so a later missing-file check cannot conceal a weak gate.
@@ -55,7 +55,42 @@ class AndroidInternalCoverageTests(unittest.TestCase):
         (self.output / "metadata/android-methods.json").write_text(json.dumps(
             report["android_method_recovery"] if metadata is None else metadata))
         return runner.validate_coverage(report, self.output, self.classes, self.expected, self.inputs,
-                                        expected_projection=projection)
+                                        expected_projection=projection, expected_generic_helpers=generic_helpers)
+
+    def test_generic_helpers_require_an_explicit_exact_independent_inventory(self):
+        helpers = [{"class": "Lfixture/Sample;", "name": "__neverdThrow", "static": True,
+                    "prototype": runner.class_identity.THROW_HELPER_PROTOTYPE,
+                    "source_unit": "fixture/Sample.java", "kind": "throw-helper"}]
+        self.coverage["generated_source_helpers"] = copy.deepcopy(helpers)
+        self.assertEqual(self.check(generic_helpers=helpers)["method_count"], 4)
+        with self.assertRaisesRegex(RuntimeError, "Ordinary recovery"):
+            self.check()
+        for mutation in ("omitted", "duplicate", "wrong-static", "numeric-static", "wrong-owner", "wrong-source", "extra"):
+            report = copy.deepcopy(self.report)
+            actual = report["android_method_recovery"]["generated_source_helpers"]
+            if mutation == "omitted": actual.clear()
+            elif mutation == "duplicate": actual.append(copy.deepcopy(actual[0]))
+            elif mutation == "wrong-static": actual[0]["static"] = False
+            elif mutation == "numeric-static": actual[0]["static"] = 1
+            elif mutation == "wrong-owner": actual[0]["class"] = "Lfixture/Other;"
+            elif mutation == "wrong-source": actual[0]["source_unit"] = "sources/fixture/Sample.java"
+            else: actual[0]["unverified_extra"] = True
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(RuntimeError, "Generic generated helper"):
+                self.check(report, generic_helpers=helpers)
+
+    def test_generic_helpers_do_not_allow_projection_or_inflate_original_counts(self):
+        helpers = [{"class": "Lfixture/Sample;", "name": "__neverdThrow", "static": True,
+                    "prototype": runner.class_identity.THROW_HELPER_PROTOTYPE,
+                    "source_unit": "fixture/Sample.java", "kind": "throw-helper"}]
+        self.coverage["generated_source_helpers"] = helpers
+        for mutation in ("projection", "count", "missing-original"):
+            report = copy.deepcopy(self.report)
+            coverage = report["android_method_recovery"]
+            if mutation == "projection": coverage["methods"][0]["projection_kind"] = "named-method-local"
+            elif mutation == "count": coverage["method_count"] += 1
+            else: coverage["methods"].pop(0)
+            with self.subTest(mutation=mutation), self.assertRaises(RuntimeError):
+                self.check(report, generic_helpers=helpers)
 
     def test_complete_body_and_declaration_inventory_passes(self):
         self.assertEqual(self.check(), {"class_count": 1, "method_count": 4, "recovered_method_count": 2,
@@ -205,6 +240,421 @@ class AndroidInternalCoverageTests(unittest.TestCase):
         del changed["constant-reflection"]
         with self.assertRaisesRegex(RuntimeError, "complete independent key"):
             runner.compare_local_behavior(baseline, changed)
+
+
+def generic_facts():
+    """Mock routing data, not a substitute for the actual javac/reflection fixture."""
+    classes = {}
+    for owner, declarations in runner.GENERIC_METHODS.items():
+        methods = {}
+        for member, signature in declarations.items():
+            name, tail = member.split("(", 1)
+            methods[owner + "->" + member] = {"name": name, "prototype": "(" + tail, "code": True,
+                "access": 9 if owner == runner.GENERIC_OPS and name != "<init>" else 1, "signature": signature}
+        fields = {owner + "->" + name + ":" + descriptor:
+                  {"name": name, "descriptor": descriptor, "access": 1, "constant_value": None, "signature": signature}
+                  for name, (descriptor, signature) in (runner.GENERIC_FIELDS.items() if owner == runner.GENERIC_BOX else [])}
+        classes[owner] = {"name": owner, "access": 0x31, "superclass": "Ljava/lang/Object;", "interfaces": [],
+            "fields": fields, "methods": methods, "enclosing_method": None, "inner_class": None,
+            "source_file": owner.rsplit("/", 1)[1][:-1] + ".java", "major": 52, "minor": 0,
+            "signature": "<T:Ljava/lang/Object;>Ljava/lang/Object;" if owner == runner.GENERIC_BOX else None,
+            "path": owner[1:-1] + ".class", "size": 4, "sha256": "a" * 64}
+    return classes
+
+
+def generic_values():
+    values = dict.fromkeys(runner.expected_keys("generic"), 1)
+    values["array-exceptions"] = 7
+    # Independent Java int overflow expectations for the seven fixture values.
+    for i, value in enumerate((-2147483641, -293, 4, 7, 10, 307, -2147483644)):
+        values["scalar:" + str(i)] = value
+    return values
+
+
+class GenericOracleTests(unittest.TestCase):
+    def test_handwritten_original_contract_has_complete_generic_scopes(self):
+        classes = generic_facts()
+        runner.validate_generic_original(classes)
+        self.assertEqual(sum(len(row["methods"]) for row in classes.values()), 13)
+        self.assertEqual(len(runner.GENERIC_REFLECTION_KEYS), 22)
+        self.assertEqual(len(runner.expected_keys("generic")), 103)
+        runner.validate_generic_behavior(generic_values())
+        for scope in ("class", "field", "method"):
+            altered = copy.deepcopy(classes)
+            box = altered[runner.GENERIC_BOX]
+            target = box if scope == "class" else next(iter(box["fields" if scope == "field" else "methods"].values()))
+            target["signature"] = None
+            with self.subTest(scope=scope), self.assertRaisesRegex(RuntimeError, "Signature"):
+                runner.validate_generic_original(altered)
+
+    def test_same_erased_type_does_not_hide_wrong_bounds_variance_or_shadowing(self):
+        for scope in ("variance", "shadow", "interface-first", "intersection"):
+            classes = generic_facts()
+            if scope == "variance":
+                classes[runner.GENERIC_BOX]["fields"][runner.GENERIC_BOX + "->lower:Ljava/util/List;"]["signature"] = "Ljava/util/List<+TT;>;"
+            else:
+                owner = runner.GENERIC_BOX if scope == "shadow" else runner.GENERIC_OPS
+                name = {"shadow": "shadow", "interface-first": "interfaceOnly", "intersection": "intersection"}[scope]
+                method = next(row for row in classes[owner]["methods"].values() if row["name"] == name)
+                method["signature"] = "(Ljava/lang/Object;)Ljava/lang/Object;"
+            with self.subTest(scope=scope), self.assertRaisesRegex(RuntimeError, "Signature"):
+                runner.validate_generic_original(classes)
+
+    def test_equal_but_wrong_original_and_rebuilt_behavior_cannot_pass(self):
+        for key in ("reflection:platform.List", "reflection:platform.Comparable",
+                    "reflection:GenericBox.shadow", "exchange-old:0:1", "array-exceptions", "scalar:6"):
+            values = generic_values()
+            values[key] = 0
+            with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, "oracle failed"):
+                runner.compare_generic_behavior(values, dict(values))
+        incomplete = generic_values()
+        del incomplete["reflection:GenericOps.interfaceOnly"]
+        with self.assertRaisesRegex(RuntimeError, "complete independent key"):
+            runner.compare_generic_behavior(incomplete, dict(incomplete))
+
+    def test_reflection_artifact_requires_all_keys_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reflection.tsv"
+            lines = [key + "\tobserved" for key in sorted(runner.GENERIC_REFLECTION_KEYS)]
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            self.assertEqual(set(runner.generic_reflection(path)), runner.GENERIC_REFLECTION_KEYS)
+            for invalid in (lines[:-1], lines + [lines[0]], lines + ["extra\tobserved"], ["bad"]):
+                path.write_text("\n".join(invalid) + "\n", encoding="utf-8")
+                with self.subTest(lines=len(invalid)), self.assertRaisesRegex(RuntimeError, "reflection evidence"):
+                    runner.generic_reflection(path)
+
+
+class GenericWorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.verify = runner.Verify(self.root, self.root / "JDK", self.root / "d8", 30)
+        self.original = generic_facts()
+        self.rebuilt = copy.deepcopy(self.original)
+        for owner, facts in self.rebuilt.items():
+            prototype = runner.class_identity.THROW_HELPER_PROTOTYPE
+            facts["methods"][owner + "->__neverdThrow" + prototype] = {
+                "name": "__neverdThrow", "prototype": prototype, "access": 10, "code": True,
+                "signature": runner.class_identity.THROW_HELPER_SIGNATURE}
+        self.compiles, self.commands, self.dexes = [], [], []
+
+    def compile(self, sources, output, *, classpath=None):
+        output = Path(output)
+        sources = list(map(Path, sources))
+        self.compiles.append((sources, output, classpath))
+        output.mkdir(parents=True)
+        # The routing mock creates no executable code. Class facts are supplied
+        # separately; cloud acceptance runs the real compiler and JVM instead.
+        for owner in self.original:
+            target = output / self.original[owner]["path"]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"mock")
+
+    def dex(self, paths, output, classpath):
+        self.dexes.append((list(paths), output, classpath))
+        output.mkdir(parents=True)
+        target = output / "classes.dex"
+        target.write_bytes(b"mock dex input")
+        return target
+
+    def run(self, argv, label):
+        self.commands.append((list(map(str, argv)), label))
+        if label in runner.GENERIC_CASES:
+            output = Path(argv[argv.index("-o") + 1])
+            sources = ["sources/fixture/GenericBox.java", "sources/fixture/GenericOps.java"]
+            for source in sources:
+                path = output / source
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("package fixture; class " + path.stem + " {}\n", encoding="utf-8")
+            (output / "metadata").mkdir()
+            rows = []
+            for owner, facts in self.original.items():
+                part = "classes2.dex" if label == "generic-multidex" and owner == runner.GENERIC_BOX else "classes.dex"
+                for identity, method in facts["methods"].items():
+                    rows.append({"identity": identity, "class": owner, "name": method["name"],
+                        "prototype": method["prototype"], "input": part, "status": "recovered", "instruction_count": 2})
+            coverage = {"schema_version": 1, "status": "recovered", "class_count": 2, "method_count": 13,
+                "recovered_method_count": 13, "declaration_only_method_count": 0, "unrecovered_method_count": 0,
+                "methods": rows, "generated_source_helpers": runner.generic_helpers()}
+            report = {"status": "success", "platform": "android", "backend": {"name": "neverd", "version": "1", "execution": "builtin"},
+                "java_sources": sources, "java_source_count": 2, "dex_count": 2 if label == "generic-multidex" else 1,
+                "smali_count": 0, "android_method_recovery": coverage}
+            (output / "report.json").write_text(json.dumps(report))
+            (output / "metadata/android-methods.json").write_text(json.dumps(coverage))
+        if label == "original-generic" or label.endswith("-execution"):
+            reflection = Path(argv[-1])
+            reflection.write_text("".join(key + "\tobserved " + key + "\n" for key in sorted(runner.GENERIC_REFLECTION_KEYS)), encoding="utf-8")
+            return "\n".join(key + "=" + str(value) for key, value in sorted(generic_values().items()))
+        return ""
+
+    def inventory(self, directory):
+        return copy.deepcopy(self.original if directory == self.root / "original-generic/classes" else self.rebuilt)
+
+    def execute(self):
+        with patch.object(self.verify, "run", side_effect=self.run), patch.object(self.verify, "compile_local", side_effect=self.compile), \
+                patch.object(self.verify, "dex", side_effect=self.dex), \
+                patch.object(runner.class_identity, "compiler_classes", side_effect=self.inventory):
+            return self.verify.generic_cases(self.root / "neverd")
+
+    def test_two_required_cases_recompile_every_source_and_keep_classpaths_separate(self):
+        passed, failures = self.execute()
+        self.assertEqual(failures, [])
+        self.assertEqual({row["case"] for row in passed}, set(runner.GENERIC_CASES))
+        self.assertTrue(all(row["method_count"] == 13 and row["matched_results"] == 103 for row in passed))
+        self.assertEqual(len(self.dexes), 3)
+        for case in runner.GENERIC_CASES:
+            compiled = self.root / case / "compiled"
+            invocation = next(row for row in self.compiles if row[1] == compiled)
+            self.assertIsNone(invocation[2])
+            self.assertEqual(invocation[0], [self.root / case / "recovered/sources/fixture/GenericBox.java",
+                                            self.root / case / "recovered/sources/fixture/GenericOps.java"])
+            harness = next(row for row in self.compiles if row[1] == self.root / case / "harness")
+            self.assertEqual(harness[2], compiled)
+            argv = next(argv for argv, label in self.commands if label == case + "-execution")
+            self.assertEqual(argv[argv.index("-cp") + 1], os.pathsep.join(map(str, (self.root / case / "harness", compiled))))
+            self.assertNotIn(str(self.root / "original-generic/classes"), argv[argv.index("-cp") + 1])
+            self.assertTrue((self.root / case / "rebuilt-class-inventory.json").is_file())
+            self.assertTrue((self.root / case / "generated-source-hashes.json").is_file())
+        partitions = json.loads((self.root / "generic-multidex/input-inventory.json").read_text())["partitions"]
+        self.assertEqual(partitions, [[runner.GENERIC_OPS], [runner.GENERIC_BOX]])
+
+    def test_preparation_failure_records_both_required_cases(self):
+        with patch.object(self.verify, "run", side_effect=RuntimeError("compiler unavailable")):
+            passed, failures = self.verify.generic_cases(self.root / "neverd")
+        self.assertEqual(passed, [])
+        self.assertEqual({row["case"] for row in failures}, set(runner.GENERIC_CASES))
+        self.assertTrue((self.root / "generic-preparation-failure.json").is_file())
+
+    def test_recompiled_erasure_fails_both_cases_instead_of_running_only_behavior(self):
+        self.rebuilt[runner.GENERIC_BOX]["signature"] = None
+        passed, failures = self.execute()
+        self.assertEqual(passed, [])
+        self.assertEqual({row["case"] for row in failures}, set(runner.GENERIC_CASES))
+        self.assertFalse(any(label.endswith("-execution") for _, label in self.commands))
+        self.assertTrue(all("class declaration changed" in row["error"] for row in failures))
+
+
+def constructor_facts():
+    """Routing facts only; CI obtains the actual inventory from javac output."""
+    classes = {}
+    for owner, declarations in runner.CONSTRUCTOR_DECLARATIONS.items():
+        fields = {owner + "->" + name + ":" + descriptor:
+                  {"name": name, "descriptor": descriptor, "access": access, "constant_value": None, "signature": None}
+                  for name, descriptor, access in declarations["fields"]}
+        methods = {owner + "->" + member: {"name": "<init>", "prototype": member[len("<init>"):],
+                   "access": 1, "code": True, "signature": signature}
+                   for member, signature in declarations["methods"].items()}
+        classes[owner] = {"name": owner, "access": declarations["access"], "superclass": declarations["superclass"],
+            "interfaces": [], "fields": fields, "methods": methods, "enclosing_method": None, "inner_class": None,
+            "signature": None, "major": 52, "minor": 0, "path": owner[1:-1] + ".class", "size": 4, "sha256": "b" * 64}
+    return classes
+
+
+class ConstructorOracleTests(unittest.TestCase):
+    def test_complete_handwritten_overloads_and_two_generic_signatures(self):
+        original = constructor_facts()
+        runner.validate_constructor_original(original)
+        self.assertEqual(len(original), 3)
+        methods = [method for facts in original.values() for method in facts["methods"].values()]
+        self.assertEqual(len(methods), 6)
+        self.assertEqual(sum(method["signature"] is not None for method in methods), 2)
+        self.assertEqual(len(runner.CONSTRUCTOR_REFLECTION), 14)
+        self.assertEqual(len(runner.expected_keys("constructor")), 140)
+        values = runner.constructor_oracle()
+        self.assertEqual(values["super:0:0:tag"], 101)
+        self.assertEqual(values["this:2:1:tag"], 303)
+        self.assertEqual(values["super:0:0:marker"], -7)
+        self.assertEqual(values["this:2:1:marker"], 19)
+        self.assertEqual(values["base-direct:1:0:tag"], 202)
+        self.assertEqual(values["this-direct:1:2:tag"], 404)
+        self.assertEqual(values["final:super-body"], 6)
+        self.assertEqual(values["final:this-body"], 6)
+
+    def test_missing_overload_erased_formal_and_wrong_parent_are_rejected(self):
+        for mutation in ("missing", "erased", "bound", "parent", "extra"):
+            original = constructor_facts()
+            if mutation == "missing":
+                del original["Lfixture/PlainBase;"]["methods"]["Lfixture/PlainBase;-><init>(Ljava/lang/Object;)V"]
+            elif mutation in ("erased", "bound"):
+                method = original["Lfixture/SuperChild;"]["methods"]["Lfixture/SuperChild;-><init>(Ljava/lang/Object;I)V"]
+                method["signature"] = None if mutation == "erased" else "<T::Ljava/lang/CharSequence;>(TT;I)V"
+            elif mutation == "parent":
+                original["Lfixture/SuperChild;"]["superclass"] = "Ljava/lang/Object;"
+            else:
+                original["Lfixture/ThisChoice;"]["methods"]["Lfixture/ThisChoice;-><init>()V"] = {
+                    "name": "<init>", "prototype": "()V", "code": True, "access": 1, "signature": None}
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(RuntimeError, "Constructor original"):
+                runner.validate_constructor_original(original)
+
+    def test_wrong_overload_or_duplicate_effect_cannot_pass_even_if_both_results_agree(self):
+        mutations = {"super:0:0:tag": 202, "this:2:1:tag": 404, "super:1:0:object-count": 2,
+                     "this:1:0:body-count": 0, "this:1:1:sequence-count": 1,
+                     "super:2:0:received": 0, "final:this-body": 12}
+        for key, changed in mutations.items():
+            baseline = runner.constructor_oracle()
+            actual = dict(baseline, **{key: changed})
+            with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, "rebuilt behavior oracle failed"):
+                runner.compare_constructor_behavior(baseline, actual)
+            with self.subTest(equal_wrong=key), self.assertRaisesRegex(RuntimeError, "original behavior oracle failed"):
+                runner.compare_constructor_behavior(actual, actual)
+
+    def test_each_constructor_behavior_key_and_reflection_fact_is_mandatory(self):
+        baseline = runner.constructor_oracle()
+        for key in ("super:0:0:tag", "this:2:1:body-count", "reflection:SuperChild.generic",
+                    "reflection:KIND.java.lang.Object", "reflection:KIND.java.lang.CharSequence"):
+            actual = dict(baseline)
+            del actual[key]
+            with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, "omitted an independent key"):
+                runner.compare_constructor_behavior(baseline, actual)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reflection.tsv"
+            lines = [key + "\t" + value for key, value in sorted(runner.CONSTRUCTOR_REFLECTION.items())]
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            self.assertEqual(runner.constructor_reflection(path), runner.CONSTRUCTOR_REFLECTION)
+            for invalid in (lines[:-1], lines + [lines[0]], lines + ["extra\tclass"],
+                            [line.replace("#T;", "#U;") for line in lines],
+                            [line.replace("java.lang.Object;interface=false", "java.lang.Object;interface=true") for line in lines]):
+                path.write_text("\n".join(invalid) + "\n", encoding="utf-8")
+                with self.subTest(invalid=invalid), self.assertRaisesRegex(RuntimeError, "constructor reflection|Constructor reflection"):
+                    runner.constructor_reflection(path)
+
+
+class ConstructorWorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.verify = runner.Verify(self.root, self.root / "JDK", self.root / "d8", 30)
+        self.original = constructor_facts()
+        self.rebuilt = copy.deepcopy(self.original)
+        for owner, facts in self.rebuilt.items():
+            prototype = runner.class_identity.THROW_HELPER_PROTOTYPE
+            facts["methods"][owner + "->__neverdThrow" + prototype] = {
+                "name": "__neverdThrow", "prototype": prototype, "access": 10, "code": True,
+                "signature": runner.class_identity.THROW_HELPER_SIGNATURE}
+        self.actual = runner.constructor_oracle()
+        self.helpers = runner.constructor_helpers()
+        self.compiles, self.commands, self.dexes = [], [], []
+
+    def compile(self, sources, output, *, classpath=None):
+        output.mkdir(parents=True)
+        self.compiles.append((list(map(Path, sources)), output, classpath))
+        for facts in self.original.values():
+            path = output / facts["path"]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"mock")
+
+    def dex(self, paths, output, classpath):
+        self.dexes.append((list(paths), output, classpath))
+        output.mkdir(parents=True)
+        source = output / "classes.dex"
+        source.write_bytes(b"mock constructor input")
+        return source
+
+    def run(self, argv, label):
+        self.commands.append((list(map(str, argv)), label))
+        if label in runner.CONSTRUCTOR_CASES:
+            output = Path(argv[argv.index("-o") + 1])
+            sources = ["sources/" + owner[1:-1] + ".java" for owner in sorted(self.original)]
+            for source in sources:
+                path = output / source
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("package fixture; class " + path.stem + " {}\n", encoding="utf-8")
+            rows = [{"identity": identity, "class": owner, "name": method["name"],
+                     "prototype": method["prototype"], "input": "classes.dex", "status": "recovered", "instruction_count": 2}
+                    for owner, facts in self.original.items() for identity, method in facts["methods"].items()]
+            coverage = {"schema_version": 1, "status": "recovered", "class_count": 3, "method_count": 6,
+                "recovered_method_count": 6, "declaration_only_method_count": 0, "unrecovered_method_count": 0,
+                "methods": rows, "generated_source_helpers": self.helpers}
+            report = {"status": "success", "platform": "android", "backend": {"name": "neverd", "version": "1", "execution": "builtin"},
+                "java_sources": sources, "java_source_count": 3, "dex_count": 1, "smali_count": 0,
+                "android_method_recovery": coverage}
+            (output / "metadata").mkdir()
+            (output / "report.json").write_text(json.dumps(report))
+            (output / "metadata/android-methods.json").write_text(json.dumps(coverage))
+        if label == "original-constructor" or label == "constructor-dex-execution":
+            Path(argv[-1]).write_text("".join(key + "\t" + value + "\n"
+                for key, value in sorted(runner.CONSTRUCTOR_REFLECTION.items())), encoding="utf-8")
+            values = runner.constructor_oracle() if label == "original-constructor" else self.actual
+            return "\n".join(key + "=" + str(value) for key, value in sorted(values.items()))
+        return ""
+
+    def execute(self):
+        def inventory(directory):
+            return copy.deepcopy(self.original if directory == self.root / "original-constructor/classes" else self.rebuilt)
+        with patch.object(self.verify, "run", side_effect=self.run), patch.object(self.verify, "compile_local", side_effect=self.compile), \
+                patch.object(self.verify, "dex", side_effect=self.dex), \
+                patch.object(runner.class_identity, "compiler_classes", side_effect=inventory):
+            return self.verify.constructor_cases(self.root / "neverd")
+
+    def test_native_case_preserves_full_inventory_and_rebuilds_all_three_sources_in_isolation(self):
+        passed, failures = self.execute()
+        self.assertEqual(failures, [])
+        self.assertEqual(len(passed), 1)
+        self.assertEqual(passed[0]["case"], "constructor-dex")
+        self.assertEqual(passed[0]["method_count"], 6)
+        self.assertEqual(passed[0]["matched_results"], 140)
+        self.assertEqual(passed[0]["compiler_identity"]["signature_count"], {"classes": 0, "fields": 0, "methods": 2})
+        self.assertEqual(len(self.dexes), 1)
+        self.assertEqual(len(self.dexes[0][0]), 3)
+        compiled = self.root / "constructor-dex/compiled"
+        invocation = next(row for row in self.compiles if row[1] == compiled)
+        self.assertIsNone(invocation[2])
+        self.assertEqual(invocation[0], [self.root / "constructor-dex/recovered/sources" / (owner[1:-1] + ".java")
+                                        for owner in sorted(self.original)])
+        for label, directory in (("original-constructor", self.root / "original-constructor"),
+                                 ("constructor-dex-execution", self.root / "constructor-dex")):
+            classes = directory / ("classes" if label == "original-constructor" else "compiled")
+            harness = next(row for row in self.compiles if row[1] == directory / "harness")
+            self.assertEqual(harness[2], classes)
+            argv = next(argv for argv, name in self.commands if name == label)
+            self.assertEqual(argv[argv.index("-cp") + 1], os.pathsep.join(map(str, (directory / "harness", classes))))
+        for name in ("input-inventory.json", "generated-source-hashes.json", "rebuilt-class-inventory.json",
+                     "constructor-identity.json", "reflection.tsv", "reflection.json", "execution.json"):
+            self.assertTrue((self.root / "constructor-dex" / name).is_file())
+
+    def test_wrong_overload_with_unchanged_signatures_and_complete_coverage_is_still_failed(self):
+        self.actual["super:0:0:tag"] = 202
+        self.actual["this:2:1:tag"] = 404
+        passed, failures = self.execute()
+        self.assertEqual(passed, [])
+        self.assertEqual(len(failures), 1)
+        self.assertIn("behavior oracle failed", failures[0]["error"])
+        self.assertTrue((self.root / "constructor-dex/constructor-identity.json").is_file())
+        self.assertTrue((self.root / "constructor-dex/execution.json").is_file())
+        self.assertTrue((self.root / "constructor-dex/failure.json").is_file())
+
+    def test_missing_rebuilt_constructor_fails_before_harness_execution(self):
+        del self.rebuilt["Lfixture/PlainBase;"]["methods"]["Lfixture/PlainBase;-><init>(Ljava/lang/Object;)V"]
+        passed, failures = self.execute()
+        self.assertEqual(passed, [])
+        self.assertEqual(len(failures), 1)
+        self.assertIn("original method or Signature changed", failures[0]["error"])
+        self.assertFalse(any(label == "constructor-dex-execution" for _, label in self.commands))
+
+    def test_missing_helpers_cannot_claim_full_constructor_recovery(self):
+        self.helpers = []
+        passed, failures = self.execute()
+        self.assertEqual(passed, [])
+        self.assertEqual(len(failures), 1)
+        self.assertIn("generated helper", failures[0]["error"])
+        self.assertFalse(any(label == "constructor-dex-execution" for _, label in self.commands))
+
+    def test_duplicate_helpers_cannot_compensate_for_declared_inventory(self):
+        self.helpers.append(copy.deepcopy(self.helpers[0]))
+        passed, failures = self.execute()
+        self.assertEqual(passed, [])
+        self.assertEqual(len(failures), 1)
+        self.assertIn("generated helper", failures[0]["error"])
+        self.assertFalse(any(label == "constructor-dex-execution" for _, label in self.commands))
+
+    def test_preparation_failure_records_the_required_case_without_skipping(self):
+        with patch.object(self.verify, "run", side_effect=RuntimeError("compiler unavailable")):
+            passed, failures = self.verify.constructor_cases(self.root / "neverd")
+        self.assertEqual(passed, [])
+        self.assertEqual([row["case"] for row in failures], ["constructor-dex"])
+        self.assertTrue((self.root / "constructor-preparation-failure.json").is_file())
 
 
 class LocalCompilerIsolationTests(unittest.TestCase):
