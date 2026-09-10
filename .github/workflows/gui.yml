@@ -58,6 +58,7 @@ jobs:
             -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/Qt/6.8.3/${{ matrix.qt_dir }}" \
             -DNEVERD_ENGINE_LIBRARY="$GITHUB_WORKSPACE/build-fixture/bin/${{ matrix.library }}" \
             -DNEVERD_ENGINE_IMPLIB="$GITHUB_WORKSPACE/build-fixture/bin/neverd_fixture.lib" \
+            -DNEVERD_GUI_CI_DIAGNOSTICS=${{ runner.os == 'Windows' && 'ON' || 'OFF' }} \
             -DNEVERD_WORKER_REAL_ENGINE_TESTS=OFF
           cmake --build build-gui --parallel 3
           cp "build-fixture/bin/${{ matrix.library }}" build-gui/bin/
@@ -67,6 +68,103 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           python scripts/check_gui_i18n.py
+          if [ '${{ runner.os }}' = Windows ]; then
+            mkdir -p build-gui/ci-diagnostics
+            set +e
+            ctest --test-dir build-gui --output-on-failure \
+              --output-junit "$GITHUB_WORKSPACE/build-gui/ci-diagnostics/ctest.xml" \
+              > build-gui/ci-diagnostics/ctest.log 2>&1
+            ctest_status=$?
+            set -e
+            printf '%s\n' "$ctest_status" > build-gui/ci-diagnostics/ctest-exit-code.txt || true
+            cat build-gui/ci-diagnostics/ctest.log || true
+            exit "$ctest_status"
+          fi
           ctest --test-dir build-gui --output-on-failure
+      - name: Retain Windows GUI contract diagnostics
+        id: gui_diagnostics
+        if: ${{ always() && runner.os == 'Windows' }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import sys
+
+          build = Path("build-gui").resolve()
+          output = Path("build-gui-ci-diagnostics")
+          output.mkdir(exist_ok=False)
+          limit = 4 * 1024 * 1024
+          files = {
+              "pane-navigation.txt": "ci-diagnostics/pane-navigation.txt",
+              "pane-navigation.xml": "ci-diagnostics/pane-navigation.xml",
+              "controller.txt": "ci-diagnostics/controller.txt",
+              "controller.xml": "ci-diagnostics/controller.xml",
+              "ctest.xml": "ci-diagnostics/ctest.xml",
+              "ctest.log": "ci-diagnostics/ctest.log",
+              "ctest-exit-code.txt": "ci-diagnostics/ctest-exit-code.txt",
+              "LastTest.log": "Testing/Temporary/LastTest.log",
+              "LastTestsFailed.log": "Testing/Temporary/LastTestsFailed.log",
+          }
+          records = []
+          for name, relative in files.items():
+              source = build / relative
+              record = {"name": name, "source": relative}
+              try:
+                  if not source.exists():
+                      record["status"] = "missing"
+                  elif (source.is_symlink() or not source.is_file()
+                        or not source.resolve().is_relative_to(build)):
+                      record["status"] = "rejected_path"
+                  else:
+                      size = source.stat().st_size
+                      with source.open("rb") as stream:
+                          data = stream.read(limit + 1)
+                      captured = data[:limit]
+                      (output / name).write_bytes(captured)
+                      record.update({
+                          "status": "truncated" if len(data) > limit else "copied",
+                          "source_bytes": size,
+                          "captured_bytes": len(captured),
+                          "captured_sha256": hashlib.sha256(captured).hexdigest(),
+                      })
+              except OSError as error:
+                  record.update({"status": "io_error", "error": str(error)[:1024]})
+              records.append(record)
+          complete = all(record["status"] == "copied" or
+                         (record["name"] == "LastTestsFailed.log" and
+                          record["status"] == "missing") for record in records)
+          manifest = {
+              "schema": "neverd-gui-ci-diagnostics-v1",
+              "run_id": os.environ.get("GITHUB_RUN_ID"),
+              "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+              "head_sha": os.environ.get("GITHUB_SHA"),
+              "collection_complete": complete,
+              "test_success": "read original CTest exit and child results",
+              "per_file_bytes_cap": limit,
+              "payload_bytes_cap": len(files) * limit,
+              "manifest_bytes_cap": 64 * 1024,
+              "files": records,
+          }
+          encoded = (json.dumps(manifest, indent=2) + "\n").encode("utf-8")
+          if len(encoded) > 64 * 1024:
+              raise RuntimeError("GUI diagnostic manifest exceeds its fixed cap")
+          (output / "manifest.json").write_bytes(encoded)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
+              stream.write("ready=true\n")
+          if not complete:
+              print("Incomplete GUI diagnostics; inspect the retained manifest.", file=sys.stderr)
+              sys.exit(1)
+          PY
+      - name: Upload Windows GUI contract diagnostics
+        if: ${{ always() && runner.os == 'Windows' && steps.gui_diagnostics.outputs.ready == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-gui-windows-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build-gui-ci-diagnostics/
+          if-no-files-found: error
+          retention-days: 7
       # These binaries use a deterministic fixture, not the NeverD engine.
       # Intentionally do not upload or publish them as product artifacts.

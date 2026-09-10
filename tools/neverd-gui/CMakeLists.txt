@@ -67,6 +67,26 @@ install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../neverd-mcp/server.py"
               "${CMAKE_CURRENT_SOURCE_DIR}/../neverd-mcp/transport.py" DESTINATION bin)
 
 if(BUILD_TESTING)
+  option(NEVERD_GUI_CI_DIAGNOSTICS
+    "Write file diagnostics for the two Windows GUI contract test runners" OFF)
+  set(_neverd_pane_test_log_args)
+  set(_neverd_controller_test_log_args)
+  if(NEVERD_GUI_CI_DIAGNOSTICS)
+    if(NOT WIN32 OR NOT "$ENV{CI}" STREQUAL "true" OR
+       NOT "$ENV{GITHUB_ACTIONS}" STREQUAL "true")
+      message(FATAL_ERROR "GUI contract diagnostics require Windows GitHub Actions")
+    endif()
+    set(_neverd_gui_ci_log_dir "${CMAKE_CURRENT_BINARY_DIR}/ci-diagnostics")
+    file(MAKE_DIRECTORY "${_neverd_gui_ci_log_dir}")
+    set(_neverd_pane_test_log_args
+      -o "${_neverd_gui_ci_log_dir}/pane-navigation.txt,txt"
+      -o "${_neverd_gui_ci_log_dir}/pane-navigation.xml,xml"
+      -o "-,txt")
+    set(_neverd_controller_test_log_args
+      -o "${_neverd_gui_ci_log_dir}/controller.txt,txt"
+      -o "${_neverd_gui_ci_log_dir}/controller.xml,xml"
+      -o "-,txt")
+  endif()
   target_sources(neverd-gui PRIVATE tests/DockingProbe.cpp tests/AnalysisProbe.cpp
     tests/ShortcutProbe.cpp)
   target_compile_definitions(neverd-gui PRIVATE NEVERD_GUI_TEST_PROBES=1)
@@ -84,7 +104,8 @@ if(BUILD_TESTING)
     Qt6::Quick Qt6::QuickControls2 Qt6::Test)
   target_compile_definitions(neverd-gui-pane-tests PRIVATE
     TEST_QML_DIR="${CMAKE_CURRENT_SOURCE_DIR}/qml")
-  add_test(NAME NeverDGuiPaneNavigation COMMAND neverd-gui-pane-tests)
+  add_test(NAME NeverDGuiPaneNavigation COMMAND neverd-gui-pane-tests
+    ${_neverd_pane_test_log_args})
   set_tests_properties(NeverDGuiPaneNavigation PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
   qt_add_executable(neverd-gui-query-tests
@@ -112,7 +133,8 @@ if(BUILD_TESTING)
         TEST_REAL_WORKER="$<TARGET_FILE:neverd-worker>")
       add_dependencies(neverd-gui-tests neverd-worker)
     endif()
-    add_test(NAME NeverDGuiController COMMAND neverd-gui-tests)
+    add_test(NAME NeverDGuiController COMMAND neverd-gui-tests
+      ${_neverd_controller_test_log_args})
     set_tests_properties(NeverDGuiController PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
   endif()
   qt_add_executable(neverd-gui-text-position-tests
