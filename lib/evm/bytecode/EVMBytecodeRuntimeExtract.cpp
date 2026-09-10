@@ -6,6 +6,7 @@
 
 #include "EVMBytecodeDetail.h"
 
+#include "neverd/evm/EVMConstants.h"
 #include "neverd/evm/bytecode/EVMDecoder.h"
 #include "neverd/evm/bytecode/EVMOpcodes.h"
 
@@ -47,8 +48,6 @@ extractStaticRuntime(llvm::ArrayRef<uint8_t> Code, Hardfork Fork) {
   std::vector<AbstractValue> Stack;
   std::optional<StaticCopy> LastCopy;
   auto Pop = [&]() -> AbstractValue {
-    if (Stack.empty())
-      return std::nullopt;
     AbstractValue Value = Stack.back();
     Stack.pop_back();
     return Value;
@@ -63,6 +62,17 @@ extractStaticRuntime(llvm::ArrayRef<uint8_t> Code, Hardfork Fork) {
     if (!Instruction.isExecutable())
       return std::nullopt;
 
+    // Unknown values still occupy valid stack slots. A stack fault instead
+    // ends execution, so no later copy/return can prove a deployed runtime.
+    const size_t Height = Stack.size();
+    const size_t Pops = Instruction.stackPops();
+    const size_t Pushes = Instruction.stackPushes();
+    if (Height < Instruction.requiredStackHeight() || Height < Pops)
+      return std::nullopt;
+    const size_t Retained = Height - Pops;
+    if (Retained > kStackLimit || Pushes > kStackLimit - Retained)
+      return std::nullopt;
+
     const Opcode Op = Instruction.opcode();
     if (isPush(Op)) {
       Stack.push_back(pushedValue(Instruction));
@@ -70,16 +80,12 @@ extractStaticRuntime(llvm::ArrayRef<uint8_t> Code, Hardfork Fork) {
     }
     if (isDup(Op)) {
       const size_t Depth = dupDepth(Op);
-      Stack.push_back(Stack.size() >= Depth ? Stack[Stack.size() - Depth]
-                                            : AbstractValue{});
+      Stack.push_back(Stack[Stack.size() - Depth]);
       continue;
     }
     if (isSwap(Op)) {
       const size_t Depth = swapDepth(Op);
-      if (Stack.size() > Depth)
-        std::swap(Stack.back(), Stack[Stack.size() - 1 - Depth]);
-      else
-        Stack.clear();
+      std::swap(Stack.back(), Stack[Stack.size() - 1 - Depth]);
       continue;
     }
     // The operand-indexed stack instructions reach an arbitrary depth chosen
@@ -131,9 +137,9 @@ extractStaticRuntime(llvm::ArrayRef<uint8_t> Code, Hardfork Fork) {
     // such as CALL and EXTCODECOPY whose primary effect is not memory access.
     if (mayWriteMemory(Instruction.Info))
       LastCopy.reset();
-    for (uint8_t I = 0; I < Instruction.Info.StackPops; ++I)
+    for (size_t I = 0; I < Pops; ++I)
       (void)Pop();
-    for (uint8_t I = 0; I < Instruction.Info.StackPushes; ++I)
+    for (size_t I = 0; I < Pushes; ++I)
       Stack.push_back(std::nullopt);
   }
   return std::nullopt;

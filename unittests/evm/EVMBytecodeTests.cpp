@@ -17,6 +17,8 @@
 
 #include "llvm/Support/Error.h"
 
+#include <utility>
+
 namespace neverd::evm {
 namespace {
 
@@ -239,6 +241,93 @@ TEST(EVMBytecode, RuntimeExtractionStopsAtTheFirstTerminalInstruction) {
   ASSERT_TRUE(static_cast<bool>(Loaded)) << llvm::toString(Loaded.takeError());
   EXPECT_FALSE(Loaded->RuntimeExtracted);
   EXPECT_EQ(Loaded->Code.size(), Creation.size() / kHexDigitsPerByte);
+}
+
+void expectRuntimeExtractionAfterPrefix(std::vector<uint8_t> Prefix,
+                                        bool Expected) {
+  // A PUSH2 source accommodates the stack-limit cases. The wrapper copies
+  // the single STOP after its RETURN, independently of the prefix's values.
+  constexpr size_t WrapperSize = 13;
+  ASSERT_LE(Prefix.size(), 0xffffU - WrapperSize);
+  const size_t Source = Prefix.size() + WrapperSize;
+  // PUSH1 size; PUSH2 source; PUSH1 destination; CODECOPY;
+  // PUSH1 size; PUSH1 offset; RETURN; STOP.
+  const std::vector<uint8_t> Wrapper = {0x60,
+                                        0x01,
+                                        0x61,
+                                        static_cast<uint8_t>(Source >> 8),
+                                        static_cast<uint8_t>(Source),
+                                        0x60,
+                                        0x00,
+                                        0x39,
+                                        0x60,
+                                        0x01,
+                                        0x60,
+                                        0x00,
+                                        0xf3,
+                                        0x00};
+  Prefix.insert(Prefix.end(), Wrapper.begin(), Wrapper.end());
+  BytecodeLoadOptions Options;
+  Options.Fork = Hardfork::Shanghai;
+  Options.StripMetadata = false;
+  auto Loaded =
+      normalizeBytecode(Prefix, BytecodeSourceKind::Raw,
+                        /*SourceIsRuntime=*/false, "stack.raw", Options);
+  ASSERT_TRUE(static_cast<bool>(Loaded)) << llvm::toString(Loaded.takeError());
+  EXPECT_EQ(Loaded->Original, Prefix);
+  EXPECT_EQ(Loaded->RuntimeExtracted, Expected);
+  EXPECT_EQ(Loaded->Code, Expected ? std::vector<uint8_t>{0x00} : Prefix);
+}
+
+TEST(EVMBytecode, RuntimeExtractionStopsAtStackUnderflow) {
+  const std::vector<std::vector<uint8_t>> Prefixes = {
+      {0x50},            // POP on an empty stack
+      {0x80},            // DUP1 on an empty stack
+      {0x5f, 0x81},      // DUP2 with only one slot
+      {0x5f, 0x90},      // SWAP1 with only one slot
+      {0x01},            // ADD on an empty stack
+      {0x5f, 0x01},      // ADD with only one operand
+      {0x5f, 0x5f, 0x39} // CODECOPY with only two operands
+  };
+  for (size_t I = 0; I < Prefixes.size(); ++I) {
+    SCOPED_TRACE(I);
+    expectRuntimeExtractionAfterPrefix(Prefixes[I], false);
+  }
+}
+
+TEST(EVMBytecode, RuntimeExtractionStopsAtStackOverflow) {
+  for (uint8_t Grow : {0x5f, 0x80, 0x30}) { // PUSH0, DUP1, ADDRESS
+    SCOPED_TRACE(static_cast<unsigned>(Grow));
+    std::vector<uint8_t> Prefix(kStackLimit, 0x5f);
+    Prefix.push_back(Grow);
+    // Drain the apparent stack so only the earlier fault can prevent the
+    // independent wrapper from being extracted.
+    Prefix.insert(Prefix.end(), kStackLimit + 1, 0x50);
+    expectRuntimeExtractionAfterPrefix(std::move(Prefix), false);
+  }
+}
+
+TEST(EVMBytecode, RuntimeExtractionPreservesLegalStackLimit) {
+  for (uint8_t Grow : {0x5f, 0x80, 0x30}) { // PUSH0, DUP1, ADDRESS
+    SCOPED_TRACE(static_cast<unsigned>(Grow));
+    std::vector<uint8_t> Prefix(kStackLimit - 1, 0x5f);
+    Prefix.push_back(Grow);
+    Prefix.insert(Prefix.end(), kStackLimit, 0x50);
+    expectRuntimeExtractionAfterPrefix(std::move(Prefix), true);
+  }
+}
+
+TEST(EVMBytecode, RuntimeExtractionPreservesValidUnknownStackValues) {
+  const std::vector<std::vector<uint8_t>> Prefixes = {
+      {0x30, 0x50},                               // ADDRESS; POP
+      {0x30, 0x80, 0x81, 0x90, 0x50, 0x50, 0x50}, // ADDRESS; DUP1; DUP2; SWAP1;
+                                                  // POP; POP; POP
+      {0x30, 0x5f, 0x01, 0x50}                    // ADDRESS; PUSH0; ADD; POP
+  };
+  for (size_t I = 0; I < Prefixes.size(); ++I) {
+    SCOPED_TRACE(I);
+    expectRuntimeExtractionAfterPrefix(Prefixes[I], true);
+  }
 }
 } // namespace
 } // namespace neverd::evm
