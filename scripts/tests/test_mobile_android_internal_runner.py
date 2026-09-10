@@ -358,7 +358,7 @@ class GenericWorkflowTests(unittest.TestCase):
         target.write_bytes(b"mock dex input")
         return target
 
-    def run(self, argv, label):
+    def run_command(self, argv, label):
         self.commands.append((list(map(str, argv)), label))
         if label in runner.GENERIC_CASES:
             output = Path(argv[argv.index("-o") + 1])
@@ -392,7 +392,7 @@ class GenericWorkflowTests(unittest.TestCase):
         return copy.deepcopy(self.original if directory == self.root / "original-generic/classes" else self.rebuilt)
 
     def execute(self):
-        with patch.object(self.verify, "run", side_effect=self.run), patch.object(self.verify, "compile_local", side_effect=self.compile), \
+        with patch.object(self.verify, "run", side_effect=self.run_command), patch.object(self.verify, "compile_local", side_effect=self.compile), \
                 patch.object(self.verify, "dex", side_effect=self.dex), \
                 patch.object(runner.class_identity, "compiler_classes", side_effect=self.inventory):
             return self.verify.generic_cases(self.root / "neverd")
@@ -552,7 +552,7 @@ class ConstructorWorkflowTests(unittest.TestCase):
         source.write_bytes(b"mock constructor input")
         return source
 
-    def run(self, argv, label):
+    def run_command(self, argv, label):
         self.commands.append((list(map(str, argv)), label))
         if label in runner.CONSTRUCTOR_CASES:
             output = Path(argv[argv.index("-o") + 1])
@@ -583,7 +583,7 @@ class ConstructorWorkflowTests(unittest.TestCase):
     def execute(self):
         def inventory(directory):
             return copy.deepcopy(self.original if directory == self.root / "original-constructor/classes" else self.rebuilt)
-        with patch.object(self.verify, "run", side_effect=self.run), patch.object(self.verify, "compile_local", side_effect=self.compile), \
+        with patch.object(self.verify, "run", side_effect=self.run_command), patch.object(self.verify, "compile_local", side_effect=self.compile), \
                 patch.object(self.verify, "dex", side_effect=self.dex), \
                 patch.object(runner.class_identity, "compiler_classes", side_effect=inventory):
             return self.verify.constructor_cases(self.root / "neverd")
