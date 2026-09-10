@@ -1,0 +1,991 @@
+{
+  "schema_version": 1,
+  "kind": "production-gui-startup-public-summary",
+  "publication": {
+    "redacted_summary": true,
+    "retained": "All eight measured GUI reports and one discarded warmup report are verbatim; all raw milestone values, Qt/backend/DPI/viewport data, fixture and artifact hashes are preserved.",
+    "omitted": [
+      "Absolute build and temporary paths",
+      "Per-process argv and diagnostic logs",
+      "Personal and host-specific environment values",
+      "Process identifiers"
+    ],
+    "complete_local_evidence_published": false,
+    "evidence_files": [
+      {
+        "basename": "startup-after-tls.json",
+        "sha256": "41ccb292542554d940c81636f91594afd7c2f3fea5820a4111754272c4b0d3d2"
+      },
+      {
+        "basename": "mcp-constructors-after-tls.json",
+        "sha256": "f8e7e09e7eb132fb6e1b57f9a66c57d2318e4f757dacee383bb855b8410d3182"
+      },
+      {
+        "basename": "receipt.json",
+        "sha256": "7460db05daeace36cc4cc3e099e169ee161af1167929de61134f482a7b8e903b"
+      },
+      {
+        "basename": "tests.xml",
+        "sha256": "9e30d01e1e91fedb5dd31f0f77fd071e1acefd5585b6e74e0f0de17c8fce24a6"
+      },
+      {
+        "basename": "source-before.json",
+        "sha256": "741890e1112783108594c6a9fa5b73a67f3cfeca0e7194e01495e0d21f171306"
+      },
+      {
+        "basename": "source-after.json",
+        "sha256": "741890e1112783108594c6a9fa5b73a67f3cfeca0e7194e01495e0d21f171306"
+      },
+      {
+        "basename": "artifacts-built.json",
+        "sha256": "db6820867ab7ad4ba9060f9c6e27e2ad5900e3493f8e8cbcb2e05f95c7b78338"
+      },
+      {
+        "basename": "artifacts-after.json",
+        "sha256": "db6820867ab7ad4ba9060f9c6e27e2ad5900e3493f8e8cbcb2e05f95c7b78338"
+      }
+    ]
+  },
+  "timestamp_utc": "2026-09-10T04:28:55Z",
+  "platform": "macOS-15.6.1-arm64-arm-64bit-Mach-O",
+  "machine": "arm64",
+  "cpu_count": 16,
+  "python": "3.14.5",
+  "build_type": "Release",
+  "scope": {
+    "workbench": "Isolated GUI polish build with the earlier Workbench facade; before PaneController integration",
+    "engine": "Private validation SDK build, identified by the engine SHA-256 below",
+    "final_sdk_sha256_prefix": "72",
+    "final_sdk_validated": false,
+    "pane_controller_integration_validated": false,
+    "build_configuration": "Release validation build with BUILD_TESTING=ON; GUI includes test probes and links Qt Test. This is not the probe-free distribution configuration."
+  },
+  "environment": {
+    "policy": "Every process received an explicit allowlisted environment; this public record omits host-specific values.",
+    "published_variables": {
+      "LANG": "C.UTF-8",
+      "LC_ALL": "C.UTF-8",
+      "LC_CTYPE": "C.UTF-8",
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "PYTHONUNBUFFERED": "1",
+      "QT_QPA_PLATFORM": "cocoa"
+    },
+    "omitted_variable_names": [
+      "HOME",
+      "LOGNAME",
+      "PATH",
+      "SHELL",
+      "TMPDIR",
+      "USER",
+      "XPC_FLAGS",
+      "XPC_SERVICE_NAME",
+      "__CF_USER_TEXT_ENCODING"
+    ],
+    "qt_overrides_not_set": [
+      "QT_QUICK_BACKEND",
+      "QSG_RHI_BACKEND",
+      "QSG_RENDER_LOOP",
+      "QT_SCALE_FACTOR",
+      "QT_FONT_DPI"
+    ]
+  },
+  "artifacts": {
+    "gui": {
+      "basename": "neverd-gui",
+      "sha256": "88497273c7e57051b3cc5dd2da1a314c2a6b510a979ffa0f4524ae2ef24fad88",
+      "bytes": 5562648
+    },
+    "worker": {
+      "basename": "neverd-worker",
+      "sha256": "0e849e5b6f5ed9e73ec3373e9e92cb717e33dfce7a243720679b25bfeb3d42a1",
+      "bytes": 617504
+    },
+    "engine": {
+      "basename": "libneverd.dylib",
+      "sha256": "e0a838dd1b70f4a64f26a8aeb3791b0f1e78220d33e5191cb0f2c3ad85637b6a",
+      "bytes": 96199840
+    }
+  },
+  "fixture": {
+    "basename": "named-native.elf",
+    "sha256": "6012774396976a5b5c424f3e5fc52171a76213abeb242da39570bfcf1b4d2797",
+    "bytes": 536,
+    "generator": "tools/neverd-gui/tests/analysis_probe_test.py:analysis_fixture"
+  },
+  "requested_samples": 8,
+  "warmup_launches": 1,
+  "percentile_method": "nearest rank; with 8 samples p95/p99 equal the maximum",
+  "samples": [
+    {
+      "index": 1,
+      "returncode": 0,
+      "process_wall_ms": 556.533917,
+      "report": {
+        "architecture": "arm64",
+        "clock_origin": "main entry, after dynamic loading",
+        "device_pixel_ratio": 2,
+        "error": "",
+        "failure_reason": "",
+        "graphics_api": "Metal",
+        "height": 950,
+        "measurement": "Qt frameSwapped emission after data synchronization; not hardware presentation",
+        "milestones": {
+          "application_created_ms": 56.746458,
+          "broker_created_ms": 57.98625,
+          "controller_created_ms": 57.790083,
+          "docking_frontend_ms": 56.905583,
+          "first_frame_ms": 359.436375,
+          "font_lookup_finished_ms": 102.2235,
+          "font_lookup_started_ms": 60.2045,
+          "instructions_ms": 454.725708,
+          "mcp_created_ms": 57.9595,
+          "metadata_ms": 447.879417,
+          "options_parsed_ms": 56.933917,
+          "qml_created_ms": 308.852875,
+          "qml_engine_created_ms": 59.376542,
+          "qml_load_started_ms": 102.227333,
+          "representation_ms": 455.349375,
+          "services_created_ms": 57.987542,
+          "services_started_ms": 57.856625,
+          "useful_frame_delivery_ms": 467.30775,
+          "useful_frame_ms": 467.289125,
+          "useful_frame_sync_ms": 465.835917,
+          "worker_ready_ms": 390.114958
+        },
+        "os": "macOS Sequoia (15.6.1)",
+        "platform_plugin": "cocoa",
+        "preferences": "temporary defaults; user settings are not read or written",
+        "qt_version": "6.11.1",
+        "rendering_thread_is_gui": false,
+        "schema_version": 2,
+        "success": true,
+        "timeout_ms": 30000,
+        "width": 1500
+      },
+      "success": true
+    },
+    {
+      "index": 2,
+      "returncode": 0,
+      "process_wall_ms": 612.860666,
+      "report": {
+        "architecture": "arm64",
+        "clock_origin": "main entry, after dynamic loading",
+        "device_pixel_ratio": 2,
+        "error": "",
+        "failure_reason": "",
+        "graphics_api": "Metal",
+        "height": 950,
+        "measurement": "Qt frameSwapped emission after data synchronization; not hardware presentation",
+        "milestones": {
+          "application_created_ms": 64.187333,
+          "broker_created_ms": 65.801041,
+          "controller_created_ms": 64.73225,
+          "docking_frontend_ms": 64.373208,
+          "first_frame_ms": 392.506375,
+          "font_lookup_finished_ms": 114.764458,
+          "font_lookup_started_ms": 68.131083,
+          "instructions_ms": 491.679458,
+          "mcp_created_ms": 65.768958,
+          "metadata_ms": 482.600833,
+          "options_parsed_ms": 64.405541,
+          "qml_created_ms": 342.20975,
+          "qml_engine_created_ms": 67.300666,
+          "qml_load_started_ms": 114.77025,
+          "representation_ms": 492.403708,
+          "services_created_ms": 65.802625,
+          "services_started_ms": 65.652458,
+          "useful_frame_delivery_ms": 501.181083,
+          "useful_frame_ms": 501.144208,
+          "useful_frame_sync_ms": 499.339875,
+          "worker_ready_ms": 423.308458
+        },
+        "os": "macOS Sequoia (15.6.1)",
+        "platform_plugin": "cocoa",
+        "preferences": "temporary defaults; user settings are not read or written",
+        "qt_version": "6.11.1",
+        "rendering_thread_is_gui": false,
+        "schema_version": 2,
+        "success": true,
+        "timeout_ms": 30000,
+        "width": 1500
+      },
+      "success": true
+    },
+    {
+      "index": 3,
+      "returncode": 0,
+      "process_wall_ms": 631.110792,
+      "report": {
+        "architecture": "arm64",
+        "clock_origin": "main entry, after dynamic loading",
+        "device_pixel_ratio": 2,
+        "error": "",
+        "failure_reason": "",
+        "graphics_api": "Metal",
+        "height": 950,
+        "measurement": "Qt frameSwapped emission after data synchronization; not hardware presentation",
+        "milestones": {
+          "application_created_ms": 62.077375,
+          "broker_created_ms": 63.5925,
+          "controller_created_ms": 63.376417,
+          "docking_frontend_ms": 62.258708,
+          "first_frame_ms": 395.148125,
+          "font_lookup_finished_ms": 112.777375,
+          "font_lookup_started_ms": 66.021417,
+          "instructions_ms": 502.363458,
+          "mcp_created_ms": 63.561458,
+          "metadata_ms": 456.563958,
+          "options_parsed_ms": 62.295667,
+          "qml_created_ms": 342.079583,
+          "qml_engine_created_ms": 65.085667,
+          "qml_load_started_ms": 112.781917,
+          "representation_ms": 503.141083,
+          "services_created_ms": 63.593833,
+          "services_started_ms": 63.452875,
+          "useful_frame_delivery_ms": 518.18075,
+          "useful_frame_ms": 517.683333,
+          "useful_frame_sync_ms": 516.056583,
+          "worker_ready_ms": 432.210125
+        },
+        "os": "macOS Sequoia (15.6.1)",
+        "platform_plugin": "cocoa",
+        "preferences": "temporary defaults; user settings are not read or written",
+        "qt_version": "6.11.1",
+        "rendering_thread_is_gui": false,
+        "schema_version": 2,
+        "success": true,
+        "timeout_ms": 30000,
+        "width": 1500
+      },
+      "success": true
+    },
+    {
+      "index": 4,
+      "returncode": 0,
+      "process_wall_ms": 637.080833,
+      "report": {
+        "architecture": "arm64",
+        "clock_origin": "main entry, after dynamic loading",
+        "device_pixel_ratio": 2,
+        "error": "",
+        "failure_reason": "",
+        "graphics_api": "Metal",
+        "height": 950,
+        "measurement": "Qt frameSwapped emission after data synchronization; not hardware presentation",
+        "milestones": {
+          "application_created_ms": 63.053042,
+          "broker_created_ms": 64.556709,
+          "controller_created_ms": 63.592792,
+          "docking_frontend_ms": 63.237042,
+          "first_frame_ms": 407.528417,
+          "font_lookup_finished_ms": 117.746625,
+          "font_lookup_started_ms": 67.142709,
+          "instructions_ms": 517.702584,
+          "mcp_created_ms": 64.521167,
+          "metadata_ms": 507.631209,
+          "options_parsed_ms": 63.267209,
+          "qml_created_ms": 354.655917,
+          "qml_engine_created_ms": 66.20775,
+          "qml_load_started_ms": 117.751334,
+          "representation_ms": 518.47275,
+          "services_created_ms": 64.558334,
+          "services_started_ms": 64.393667,
+          "useful_frame_delivery_ms": 527.630417,
+          "useful_frame_ms": 527.609917,
+          "useful_frame_sync_ms": 525.890125,
+          "worker_ready_ms": 442.666625
+        },
+        "os": "macOS Sequoia (15.6.1)",
+        "platform_plugin": "cocoa",
+        "preferences": "temporary defaults; user settings are not read or written",
+        "qt_version": "6.11.1",
+        "rendering_thread_is_gui": false,
+        "schema_version": 2,
+        "success": true,
+        "timeout_ms": 30000,
+        "width": 1500
+      },
+      "success": true
+    },
+    {
+      "index": 5,
+      "returncode": 0,
+      "process_wall_ms": 686.9435,
+      "report": {
+        "architecture": "arm64",
+        "clock_origin": "main entry, after dynamic loading",
+        "device_pixel_ratio": 2,
+        "error": "",
+        "failure_reason": "",
+        "graphics_api": "Metal",
+        "height": 950,
+        "measurement": "Qt frameSwapped emission after data synchronization; not hardware presentation",
+        "milestones": {
+          "application_created_ms": 69.178708,
+          "broker_created_ms": 70.223875,
+          "controller_created_ms": 69.748458,
+          "docking_frontend_ms": 69.375042,
+          "first_frame_ms": 432.680792,
+          "font_lookup_finished_ms": 124.81425,
+          "font_lookup_started_ms": 73.003708,
+          "instructions_ms": 551.273667,
+          "mcp_created_ms": 70.191417,
+          "metadata_ms": 537.284958,
+          "options_parsed_ms": 69.406708,
+          "qml_created_ms": 375.4255,
+          "qml_engine_created_ms": 71.902042,
+          "qml_load_started_ms": 124.819417,
+          "representation_ms": 552.074042,
+          "services_created_ms": 70.225417,
+          "services_started_ms": 70.075625,
+          "useful_frame_delivery_ms": 562.451792,
+          "useful_frame_ms": 562.434542,
+          "useful_frame_sync_ms": 560.688542,
+          "worker_ready_ms": 466.666667
+        },
+        "os": "macOS Sequoia (15.6.1)",
+        "platform_plugin": "cocoa",
+        "preferences": "temporary defaults; user settings are not read or written",
+        "qt_version": "6.11.1",
+        "rendering_thread_is_gui": false,
+        "schema_version": 2,
+        "success": true,
+        "timeout_ms": 30000,
+        "width": 1500
+      },
+      "success": true
+    },
+    {
+      "index": 6,
+      "returncode": 0,
+      "process_wall_ms": 727.459208,
+      "report": {
+        "architecture": "arm64",
+        "clock_origin": "main entry, after dynamic loading",
+        "device_pixel_ratio": 2,
+        "error": "",
+        "failure_reason": "",
+        "graphics_api": "Metal",
+        "height": 950,
+        "measurement": "Qt frameSwapped emission after data synchronization; not hardware presentation",
+        "milestones": {
+          "application_created_ms": 66.5235,
+          "broker_created_ms": 68.238625,
+          "controller_created_ms": 67.833459,
+          "docking_frontend_ms": 66.709792,
+          "first_frame_ms": 461.927125,
+          "font_lookup_finished_ms": 122.844834,
+          "font_lookup_started_ms": 70.958542,
+          "instructions_ms": 593.754417,
+          "mcp_created_ms": 68.204084,
+          "metadata_ms": 582.615917,
+          "options_parsed_ms": 66.744084,
+          "qml_created_ms": 396.29125,
+          "qml_engine_created_ms": 69.869917,
+          "qml_load_started_ms": 122.850375,
+          "representation_ms": 594.623,
+          "services_created_ms": 68.240209,
+          "services_started_ms": 68.077209,
+          "useful_frame_delivery_ms": 606.668209,
+          "useful_frame_ms": 606.415167,
+          "useful_frame_sync_ms": 604.403334,
+          "worker_ready_ms": 499.799709
+        },
+        "os": "macOS Sequoia (15.6.1)",
+        "platform_plugin": "cocoa",
+        "preferences": "temporary defaults; user settings are not read or written",
+        "qt_version": "6.11.1",
+        "rendering_thread_is_gui": false,
+        "schema_version": 2,
+        "success": true,
+        "timeout_ms": 30000,
+        "width": 1500
+      },
+      "success": true
+    },
+    {
+      "index": 7,
+      "returncode": 0,
+      "process_wall_ms": 896.748125,
+      "report": {
+        "architecture": "arm64",
+        "clock_origin": "main entry, after dynamic loading",
+        "device_pixel_ratio": 2,
+        "error": "",
+        "failure_reason": "",
+        "graphics_api": "Metal",
+        "height": 950,
+        "measurement": "Qt frameSwapped emission after data synchronization; not hardware presentation",
+        "milestones": {
+          "application_created_ms": 101.99875,
+          "broker_created_ms": 103.031458,
+          "controller_created_ms": 102.73625,
+          "docking_frontend_ms": 102.232417,
+          "first_frame_ms": 593.003167,
+          "font_lookup_finished_ms": 175.526542,
+          "font_lookup_started_ms": 106.836625,
+          "instructions_ms": 742.691042,
+          "mcp_created_ms": 102.991083,
+          "metadata_ms": 729.709167,
+          "options_parsed_ms": 102.273417,
+          "qml_created_ms": 517.977042,
+          "qml_engine_created_ms": 105.134125,
+          "qml_load_started_ms": 175.53325,
+          "representation_ms": 743.690792,
+          "services_created_ms": 103.03375,
+          "services_started_ms": 102.842083,
+          "useful_frame_delivery_ms": 758.86775,
+          "useful_frame_ms": 758.660208,
+          "useful_frame_sync_ms": 756.450208,
+          "worker_ready_ms": 640.678042
+        },
+        "os": "macOS Sequoia (15.6.1)",
+        "platform_plugin": "cocoa",
+        "preferences": "temporary defaults; user settings are not read or written",
+        "qt_version": "6.11.1",
+        "rendering_thread_is_gui": false,
+        "schema_version": 2,
+        "success": true,
+        "timeout_ms": 30000,
+        "width": 1500
+      },
+      "success": true
+    },
+    {
+      "index": 8,
+      "returncode": 0,
+      "process_wall_ms": 849.182917,
+      "report": {
+        "architecture": "arm64",
+        "clock_origin": "main entry, after dynamic loading",
+        "device_pixel_ratio": 2,
+        "error": "",
+        "failure_reason": "",
+        "graphics_api": "Metal",
+        "height": 950,
+        "measurement": "Qt frameSwapped emission after data synchronization; not hardware presentation",
+        "milestones": {
+          "application_created_ms": 86.879542,
+          "broker_created_ms": 87.933125,
+          "controller_created_ms": 87.645292,
+          "docking_frontend_ms": 87.148417,
+          "first_frame_ms": 553.10475,
+          "font_lookup_finished_ms": 159.623125,
+          "font_lookup_started_ms": 91.591667,
+          "instructions_ms": 702.436375,
+          "mcp_created_ms": 87.89125,
+          "metadata_ms": 691.264458,
+          "options_parsed_ms": 87.197583,
+          "qml_created_ms": 478.670333,
+          "qml_engine_created_ms": 90.037542,
+          "qml_load_started_ms": 159.627875,
+          "representation_ms": 703.448792,
+          "services_created_ms": 87.935042,
+          "services_started_ms": 87.741958,
+          "useful_frame_delivery_ms": 719.319458,
+          "useful_frame_ms": 719.295292,
+          "useful_frame_sync_ms": 716.919875,
+          "worker_ready_ms": 603.451208
+        },
+        "os": "macOS Sequoia (15.6.1)",
+        "platform_plugin": "cocoa",
+        "preferences": "temporary defaults; user settings are not read or written",
+        "qt_version": "6.11.1",
+        "rendering_thread_is_gui": false,
+        "schema_version": 2,
+        "success": true,
+        "timeout_ms": 30000,
+        "width": 1500
+      },
+      "success": true
+    }
+  ],
+  "warmup": [
+    {
+      "index": 0,
+      "returncode": 0,
+      "process_wall_ms": 530.495833,
+      "report": {
+        "architecture": "arm64",
+        "clock_origin": "main entry, after dynamic loading",
+        "device_pixel_ratio": 2,
+        "error": "",
+        "failure_reason": "",
+        "graphics_api": "Metal",
+        "height": 950,
+        "measurement": "Qt frameSwapped emission after data synchronization; not hardware presentation",
+        "milestones": {
+          "application_created_ms": 58.56825,
+          "broker_created_ms": 59.21075,
+          "controller_created_ms": 59.032333,
+          "docking_frontend_ms": 58.718,
+          "first_frame_ms": 335.498125,
+          "font_lookup_finished_ms": 100.4985,
+          "font_lookup_started_ms": 61.296208,
+          "instructions_ms": 416.848958,
+          "mcp_created_ms": 59.185583,
+          "metadata_ms": 368.531292,
+          "options_parsed_ms": 58.745875,
+          "qml_created_ms": 292.263333,
+          "qml_engine_created_ms": 60.530667,
+          "qml_load_started_ms": 100.503458,
+          "representation_ms": 417.644708,
+          "services_created_ms": 59.211917,
+          "services_started_ms": 59.097333,
+          "useful_frame_delivery_ms": 444.669708,
+          "useful_frame_ms": 442.515417,
+          "useful_frame_sync_ms": 439.551333,
+          "worker_ready_ms": 364.421333
+        },
+        "os": "macOS Sequoia (15.6.1)",
+        "platform_plugin": "cocoa",
+        "preferences": "temporary defaults; user settings are not read or written",
+        "qt_version": "6.11.1",
+        "rendering_thread_is_gui": false,
+        "schema_version": 2,
+        "success": true,
+        "timeout_ms": 30000,
+        "width": 1500
+      },
+      "success": true
+    }
+  ],
+  "milestone_distributions": {
+    "application_created_ms": {
+      "samples": 8,
+      "p50_ms": 64.187333,
+      "p95_ms": 101.99875,
+      "p99_ms": 101.99875,
+      "min_ms": 56.746458,
+      "max_ms": 101.99875,
+      "mean_ms": 71.3305885
+    },
+    "broker_created_ms": {
+      "samples": 8,
+      "p50_ms": 65.801041,
+      "p95_ms": 103.031458,
+      "p99_ms": 103.031458,
+      "min_ms": 57.98625,
+      "max_ms": 103.031458,
+      "mean_ms": 72.67044787500001
+    },
+    "controller_created_ms": {
+      "samples": 8,
+      "p50_ms": 64.73225,
+      "p95_ms": 102.73625,
+      "p99_ms": 102.73625,
+      "min_ms": 57.790083,
+      "max_ms": 102.73625,
+      "mean_ms": 72.181875125
+    },
+    "docking_frontend_ms": {
+      "samples": 8,
+      "p50_ms": 64.373208,
+      "p95_ms": 102.232417,
+      "p99_ms": 102.232417,
+      "min_ms": 56.905583,
+      "max_ms": 102.232417,
+      "mean_ms": 71.53002612499999
+    },
+    "first_frame_ms": {
+      "samples": 8,
+      "p50_ms": 407.528417,
+      "p95_ms": 593.003167,
+      "p99_ms": 593.003167,
+      "min_ms": 359.436375,
+      "max_ms": 593.003167,
+      "mean_ms": 449.41689075
+    },
+    "font_lookup_finished_ms": {
+      "samples": 8,
+      "p50_ms": 117.746625,
+      "p95_ms": 175.526542,
+      "p99_ms": 175.526542,
+      "min_ms": 102.2235,
+      "max_ms": 175.526542,
+      "mean_ms": 128.790088625
+    },
+    "font_lookup_started_ms": {
+      "samples": 8,
+      "p50_ms": 68.131083,
+      "p95_ms": 106.836625,
+      "p99_ms": 106.836625,
+      "min_ms": 60.2045,
+      "max_ms": 106.836625,
+      "mean_ms": 75.486281375
+    },
+    "instructions_ms": {
+      "samples": 8,
+      "p50_ms": 517.702584,
+      "p95_ms": 742.691042,
+      "p99_ms": 742.691042,
+      "min_ms": 454.725708,
+      "max_ms": 742.691042,
+      "mean_ms": 569.578338625
+    },
+    "mcp_created_ms": {
+      "samples": 8,
+      "p50_ms": 65.768958,
+      "p95_ms": 102.991083,
+      "p99_ms": 102.991083,
+      "min_ms": 57.9595,
+      "max_ms": 102.991083,
+      "mean_ms": 72.636114625
+    },
+    "metadata_ms": {
+      "samples": 8,
+      "p50_ms": 507.631209,
+      "p95_ms": 729.709167,
+      "p99_ms": 729.709167,
+      "min_ms": 447.879417,
+      "max_ms": 729.709167,
+      "mean_ms": 554.443739625
+    },
+    "options_parsed_ms": {
+      "samples": 8,
+      "p50_ms": 64.405541,
+      "p95_ms": 102.273417,
+      "p99_ms": 102.273417,
+      "min_ms": 56.933917,
+      "max_ms": 102.273417,
+      "mean_ms": 71.56551575
+    },
+    "qml_created_ms": {
+      "samples": 8,
+      "p50_ms": 354.655917,
+      "p95_ms": 517.977042,
+      "p99_ms": 517.977042,
+      "min_ms": 308.852875,
+      "max_ms": 517.977042,
+      "mean_ms": 389.52028125
+    },
+    "qml_engine_created_ms": {
+      "samples": 8,
+      "p50_ms": 67.300666,
+      "p95_ms": 105.134125,
+      "p99_ms": 105.134125,
+      "min_ms": 59.376542,
+      "max_ms": 105.134125,
+      "mean_ms": 74.364281375
+    },
+    "qml_load_started_ms": {
+      "samples": 8,
+      "p50_ms": 117.751334,
+      "p95_ms": 175.53325,
+      "p99_ms": 175.53325,
+      "min_ms": 102.227333,
+      "max_ms": 175.53325,
+      "mean_ms": 128.795218875
+    },
+    "representation_ms": {
+      "samples": 8,
+      "p50_ms": 518.47275,
+      "p95_ms": 743.690792,
+      "p99_ms": 743.690792,
+      "min_ms": 455.349375,
+      "max_ms": 743.690792,
+      "mean_ms": 570.40044275
+    },
+    "services_created_ms": {
+      "samples": 8,
+      "p50_ms": 65.802625,
+      "p95_ms": 103.03375,
+      "p99_ms": 103.03375,
+      "min_ms": 57.987542,
+      "max_ms": 103.03375,
+      "mean_ms": 72.672094
+    },
+    "services_started_ms": {
+      "samples": 8,
+      "p50_ms": 65.652458,
+      "p95_ms": 102.842083,
+      "p99_ms": 102.842083,
+      "min_ms": 57.856625,
+      "max_ms": 102.842083,
+      "mean_ms": 72.5115625
+    },
+    "useful_frame_delivery_ms": {
+      "samples": 8,
+      "p50_ms": 527.630417,
+      "p95_ms": 758.86775,
+      "p99_ms": 758.86775,
+      "min_ms": 467.30775,
+      "max_ms": 758.86775,
+      "mean_ms": 582.700901125
+    },
+    "useful_frame_ms": {
+      "samples": 8,
+      "p50_ms": 527.609917,
+      "p95_ms": 758.660208,
+      "p99_ms": 758.660208,
+      "min_ms": 467.289125,
+      "max_ms": 758.660208,
+      "mean_ms": 582.566474
+    },
+    "useful_frame_sync_ms": {
+      "samples": 8,
+      "p50_ms": 525.890125,
+      "p95_ms": 756.450208,
+      "p99_ms": 756.450208,
+      "min_ms": 465.835917,
+      "max_ms": 756.450208,
+      "mean_ms": 580.698057375
+    },
+    "worker_ready_ms": {
+      "samples": 8,
+      "p50_ms": 442.666625,
+      "p95_ms": 640.678042,
+      "p99_ms": 640.678042,
+      "min_ms": 390.114958,
+      "max_ms": 640.678042,
+      "mean_ms": 487.361974
+    }
+  },
+  "process_wall_distribution": {
+    "samples": 8,
+    "p50_ms": 637.080833,
+    "p95_ms": 896.748125,
+    "p99_ms": 896.748125,
+    "min_ms": 556.533917,
+    "max_ms": 896.748125,
+    "mean_ms": 699.7399947499999
+  },
+  "gui_mcp_constructor_phase": {
+    "definition": "mcp_created_ms minus services_started_ms for each measured GUI launch",
+    "samples_ms": [
+      0.10287499999999739,
+      0.11650000000000205,
+      0.10858300000000298,
+      0.12750000000001194,
+      0.115791999999999,
+      0.1268749999999983,
+      0.1490000000000009,
+      0.14929200000000264
+    ],
+    "distribution": {
+      "samples": 8,
+      "p50_ms": 0.11650000000000205,
+      "p95_ms": 0.14929200000000264,
+      "p99_ms": 0.14929200000000264,
+      "min_ms": 0.10287499999999739,
+      "max_ms": 0.14929200000000264
+    }
+  },
+  "mcp_constructor_probe": {
+    "application": "QCoreApplication",
+    "architecture": "arm64",
+    "caveat": "Fresh processes with warm OS caches; not GUI startup or hardware presentation",
+    "executable_sha256": "9175c7dcd3396ac4380f1ff9f8e87a22c4c0c12a6874efbcc116bff761c40e12",
+    "kind": "mcp-constructor-probe",
+    "manager_cpp_sha256": "d260f035debc7485b4ff35015b03bb9b3e98423157f63a2f753ccbb96a740d97",
+    "manager_header_sha256": "97181be32fc89e248e14309bbc3b05e65bec7657f4b4711402318e9b76a36ef3",
+    "measurement": "Constructor time after QCoreApplication initialization; excludes destruction",
+    "os": "macOS Sequoia (15.6.1)",
+    "qt_version": "6.11.1",
+    "samples_per_case": 3,
+    "schema_version": 1,
+    "success": true,
+    "executable_basename": "neverd-mcp-startup-probe",
+    "samples": [
+      {
+        "case": "mcp",
+        "constructor_ms": 0.164583,
+        "iteration": 0,
+        "returncode": 0
+      },
+      {
+        "case": "network",
+        "constructor_ms": 0.126792,
+        "iteration": 0,
+        "returncode": 0
+      },
+      {
+        "case": "tls",
+        "constructor_ms": 131.519584,
+        "iteration": 0,
+        "returncode": 0
+      },
+      {
+        "case": "process",
+        "constructor_ms": 0.004083,
+        "iteration": 0,
+        "returncode": 0
+      },
+      {
+        "case": "network-then-mcp",
+        "constructor_ms": 0.0105,
+        "iteration": 0,
+        "prefill_ms": 0.144333,
+        "returncode": 0
+      },
+      {
+        "case": "tls-then-mcp",
+        "constructor_ms": 0.112709,
+        "iteration": 0,
+        "prefill_ms": 132.701541,
+        "returncode": 0
+      },
+      {
+        "case": "mcp",
+        "constructor_ms": 0.176459,
+        "iteration": 1,
+        "returncode": 0
+      },
+      {
+        "case": "network",
+        "constructor_ms": 0.138125,
+        "iteration": 1,
+        "returncode": 0
+      },
+      {
+        "case": "tls",
+        "constructor_ms": 157.62825,
+        "iteration": 1,
+        "returncode": 0
+      },
+      {
+        "case": "process",
+        "constructor_ms": 0.004417,
+        "iteration": 1,
+        "returncode": 0
+      },
+      {
+        "case": "network-then-mcp",
+        "constructor_ms": 0.015125,
+        "iteration": 1,
+        "prefill_ms": 0.221333,
+        "returncode": 0
+      },
+      {
+        "case": "tls-then-mcp",
+        "constructor_ms": 0.108958,
+        "iteration": 1,
+        "prefill_ms": 135.715208,
+        "returncode": 0
+      },
+      {
+        "case": "mcp",
+        "constructor_ms": 0.191042,
+        "iteration": 2,
+        "returncode": 0
+      },
+      {
+        "case": "network",
+        "constructor_ms": 0.166292,
+        "iteration": 2,
+        "returncode": 0
+      },
+      {
+        "case": "tls",
+        "constructor_ms": 133.555959,
+        "iteration": 2,
+        "returncode": 0
+      },
+      {
+        "case": "process",
+        "constructor_ms": 0.004542,
+        "iteration": 2,
+        "returncode": 0
+      },
+      {
+        "case": "network-then-mcp",
+        "constructor_ms": 0.012708,
+        "iteration": 2,
+        "prefill_ms": 0.207,
+        "returncode": 0
+      },
+      {
+        "case": "tls-then-mcp",
+        "constructor_ms": 0.128625,
+        "iteration": 2,
+        "prefill_ms": 149.003583,
+        "returncode": 0
+      }
+    ],
+    "constructor_distributions": {
+      "mcp": {
+        "samples": 3,
+        "p50_ms": 0.176459,
+        "p95_ms": 0.191042,
+        "p99_ms": 0.191042,
+        "min_ms": 0.164583,
+        "max_ms": 0.191042
+      },
+      "network": {
+        "samples": 3,
+        "p50_ms": 0.138125,
+        "p95_ms": 0.166292,
+        "p99_ms": 0.166292,
+        "min_ms": 0.126792,
+        "max_ms": 0.166292
+      },
+      "network-then-mcp": {
+        "samples": 3,
+        "p50_ms": 0.012708,
+        "p95_ms": 0.015125,
+        "p99_ms": 0.015125,
+        "min_ms": 0.0105,
+        "max_ms": 0.015125
+      },
+      "process": {
+        "samples": 3,
+        "p50_ms": 0.004417,
+        "p95_ms": 0.004542,
+        "p99_ms": 0.004542,
+        "min_ms": 0.004083,
+        "max_ms": 0.004542
+      },
+      "tls": {
+        "samples": 3,
+        "p50_ms": 133.555959,
+        "p95_ms": 157.62825,
+        "p99_ms": 157.62825,
+        "min_ms": 131.519584,
+        "max_ms": 157.62825
+      },
+      "tls-then-mcp": {
+        "samples": 3,
+        "p50_ms": 0.112709,
+        "p95_ms": 0.128625,
+        "p99_ms": 0.128625,
+        "min_ms": 0.108958,
+        "max_ms": 0.128625
+      }
+    },
+    "comparison_limit": "This QCoreApplication probe is separate from the earlier QGuiApplication constructor experiment; absolute timings from those environments are not a controlled before/after comparison."
+  },
+  "validation": {
+    "ctest_total": 20,
+    "ctest_passed": 20,
+    "ctest_failed": [],
+    "ctest_skips": 0,
+    "ctest_parallelism": 2,
+    "native_platform": "cocoa",
+    "native_analysis_views_captured": [
+      "C",
+      "LowIR",
+      "CFG"
+    ],
+    "source_unchanged": true,
+    "artifacts_unchanged_during_tests": true,
+    "artifacts_unchanged_after_build": true,
+    "validation_window_elapsed_seconds": 82.41941354199662
+  },
+  "artifacts_unchanged": true,
+  "fixture_unchanged": true,
+  "success": true,
+  "caveats": [
+    "Fresh GUI and worker processes; OS and application caches are warm and are not flushed.",
+    "Qt frameSwapped emission is not independently measured hardware presentation.",
+    "Milestones begin at main entry after dynamic loading; process wall time includes shutdown.",
+    "Useful frame synchronizes instructions and representation in the fresh production layout.",
+    "The default tiny ELF is analyzed but never executed; large-image performance is not implied.",
+    "Other system activity is not controlled; this run establishes no world ranking or speedup.",
+    "The GUI and worker versions, environment, and system load differed from earlier exploratory runs; the total observed difference cannot be attributed entirely to lazy TLS initialization.",
+    "This private SDK and earlier Workbench facade do not qualify the finalized SDK or the later PaneController integration.",
+    "Build and test activity preceded the startup samples in this validation window; background load was not instrumented."
+  ],
+  "build_testing": true,
+  "test_probes_enabled": true
+}

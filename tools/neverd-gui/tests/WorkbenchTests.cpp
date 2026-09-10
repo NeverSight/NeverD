@@ -1,14 +1,122 @@
 #include "Workbench.h"
 
+#include <QDataStream>
 #include <QFile>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
 
+#ifdef TEST_REAL_WORKER
+namespace {
+// A non-executed ELF containing either one return-value body or a direct call
+// to a second body. The optional MAP names only the entry, so analysis must
+// publish the additional function discovered through the call.
+QByteArray nativeFixture(bool named) {
+  const auto code = QByteArray::fromHex(named ? "e803000000c30000b807000000c3"
+                                              : "b807000000c3");
+  QByteArray data;
+  QDataStream out(&data, QIODevice::WriteOnly);
+  out.setByteOrder(QDataStream::LittleEndian);
+  auto ident = QByteArray::fromHex("7f454c46020101");
+  ident.resize(16, '\0');
+  out.writeRawData(ident.constData(), ident.size());
+  out << quint16(2) << quint16(62) << quint32(1) << quint64(0x400078)
+      << quint64(64) << quint64(0) << quint32(0) << quint16(64) << quint16(56)
+      << quint16(1) << quint16(64) << quint16(0) << quint16(0);
+  out << quint32(1) << quint32(5) << quint64(0) << quint64(0x400000)
+      << quint64(0x400000) << quint64(120 + code.size())
+      << quint64(120 + code.size()) << quint64(4096);
+  data += code;
+  return data;
+}
+} // namespace
+#endif
+
 class WorkbenchTests : public QObject {
   Q_OBJECT
   QTemporaryDir settingsDirectory_;
 private slots:
+#ifdef TEST_REAL_WORKER
+  void nativeAnalysisRefreshesNavigation_data() {
+    QTest::addColumn<bool>("named");
+    QTest::newRow("stripped-entry") << false;
+    QTest::newRow("named-entry-with-recovered-callee") << true;
+  }
+  void nativeAnalysisRefreshesNavigation() {
+    QFETCH(bool, named);
+    QTemporaryDir directory;
+    const auto path = directory.filePath("native.elf");
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    const auto bytes = nativeFixture(named);
+    QCOMPARE(file.write(bytes), bytes.size());
+    file.close();
+    if (named) {
+      QFile map(directory.filePath("native.map"));
+      QVERIFY(map.open(QIODevice::WriteOnly));
+      map.write("VMA LMA Size Align Out In Symbol\n"
+                "00400078 00400078 0000000e 1 .text\n"
+                "00400078 00400078 00000006 1 named_main\n");
+    }
+    Workbench controller(QString::fromLocal8Bit(TEST_REAL_WORKER));
+    int initialCount = -1;
+    connect(&controller, &Workbench::changed, this, [&] {
+      if (controller.loaded() && initialCount < 0)
+        initialCount = controller.functionCount();
+    });
+    controller.openFile(QUrl::fromLocalFile(path));
+    QTRY_VERIFY_WITH_TIMEOUT(controller.loaded(), 5000);
+    QCOMPARE(initialCount, named ? 1 : 0);
+    QTRY_VERIFY_WITH_TIMEOUT(!controller.representationText().isEmpty(), 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(controller.functionCount(), named ? 2 : 1, 5000);
+    QCOMPARE(controller.selectedFunctionAddress(), QString("0x400078"));
+    QVERIFY(!controller.selectedFunctionName().isEmpty());
+    auto *functions = qobject_cast<PageModel *>(controller.functionsModel());
+    QVERIFY(functions);
+    QCOMPARE(functions->count(), named ? 2 : 1);
+    QSignalSpy resets(functions, &QAbstractItemModel::modelReset);
+    controller.setComment("ordinary revision after analysis");
+    QTRY_COMPARE(controller.selectedComment(),
+                 QString("ordinary revision after analysis"));
+    QCOMPARE(resets.size(), 0);
+    QVERIFY2(controller.error().isEmpty(), qPrintable(controller.error()));
+  }
+  void externalAnalysisRefreshesFunctionList() {
+    QTemporaryDir directory;
+    const auto path = directory.filePath("native.elf");
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    const auto bytes = nativeFixture(false);
+    QCOMPARE(file.write(bytes), bytes.size());
+    file.close();
+    Workbench controller(QString::fromLocal8Bit(TEST_REAL_WORKER));
+    QSignalSpy replies(&controller, &Workbench::externalResponse);
+    bool submitted = false;
+    connect(&controller, &Workbench::changed, this, [&] {
+      if (!controller.loaded() || submitted)
+        return;
+      submitted = true;
+      // Retire startup view requests so the external request is the first
+      // caller to complete analysis in this shared worker session.
+      controller.cancel();
+      controller.externalQuery(
+          "external-analysis", "decompile",
+          {{"address", "0x400078"}, {"representation", "c"}}, {});
+    });
+    controller.openFile(QUrl::fromLocalFile(path));
+    QTRY_COMPARE_WITH_TIMEOUT(replies.size(), 1, 5000);
+    const auto response = replies.first().at(1).toJsonObject();
+    QCOMPARE(response["status"].toString(), QString("ok"));
+    QCOMPARE(response["analysis_state"].toString(), QString("complete"));
+    QTRY_COMPARE_WITH_TIMEOUT(controller.functionCount(), 1, 5000);
+    auto *functions = qobject_cast<PageModel *>(controller.functionsModel());
+    QVERIFY(functions);
+    QCOMPARE(functions->count(), 1);
+    QTRY_VERIFY(!controller.busy());
+    QVERIFY(controller.selectedAddress().isEmpty());
+    QVERIFY(controller.representationText().isEmpty());
+  }
+#endif
   void initTestCase() {
     QVERIFY(settingsDirectory_.isValid());
     QCoreApplication::setOrganizationName("NeverDTests");
@@ -283,6 +391,14 @@ private slots:
     Workbench controller(QString::fromLocal8Bit(TEST_WORKER));
     controller.openFile(QUrl::fromLocalFile(path));
     QTRY_VERIFY_WITH_TIMEOUT(!controller.representationText().isEmpty(), 7000);
+    auto *functions = qobject_cast<PageModel *>(controller.functionsModel());
+    QVERIFY(functions);
+    // The first completed analysis refreshes the browser after publishing text.
+    // Establish a populated browser before checking synchronous Cancel effects.
+    QTRY_VERIFY_WITH_TIMEOUT(
+        !controller.busy() && controller.functionCount() == 600 &&
+            functions->count() == 600 && !functions->get(0).isEmpty(),
+        7000);
     QSignalSpy replies(&controller, &Workbench::externalResponse);
     controller.setRepresentation("low");
     controller.externalQuery("external-survives-cancel", "metadata", {}, {});

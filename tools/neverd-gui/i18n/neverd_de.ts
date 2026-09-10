@@ -318,11 +318,6 @@
             <translation>Adresse</translation>
         </message>
         <message>
-            <location filename="../qml/FunctionsPane.qml" line="118" />
-            <source>Load more functions</source>
-            <translation>Weitere Funktionen laden</translation>
-        </message>
-        <message>
             <location filename="../qml/FunctionsPane.qml" line="128" />
             <source>No functions</source>
             <translation>Keine Funktionen</translation>
@@ -814,21 +809,6 @@
             <translation>Änderungen werden sofort wirksam. Code, Symbole und Kommentare behalten ihre ursprüngliche Sprache.</translation>
         </message>
         <message>
-            <location filename="../qml/Main.qml" line="362" />
-            <source>Open binary: %1
-Go to address or symbol: G
-Rename function: N
-Edit comment: ;
-Toggle bottom panel: Ctrl+J
-Back / forward: %2 / %3</source>
-            <translation>Binärdatei öffnen: %1
-Zu Adresse oder Symbol springen: G
-Funktion umbenennen: N
-Kommentar bearbeiten: ;
-Unteres Panel ein-/ausblenden: Ctrl+J
-Zurück / vorwärts: %2 / %3</translation>
-        </message>
-        <message>
             <location filename="../qml/Main.qml" line="372" />
             <source>NeverD
 Binary analysis workbench
@@ -1016,6 +996,34 @@ Erkunden Sie Disassemblierung, Kontrollfluss, rekonstruierten C-Code und Zwische
         </message>
     </context>
     <context>
+        <name>PaneRegistry</name>
+        <message>
+            <location filename="../PaneRegistry.cpp" line="417" />
+            <source>Default</source>
+            <translation>Standard</translation>
+        </message>
+        <message>
+            <location filename="../PaneRegistry.cpp" line="424" />
+            <source>Cannot create pane: invalid kind or pane limit reached.</source>
+            <translation>Panel kann nicht erstellt werden: ungültiger Typ oder Höchstzahl an Panels erreicht.</translation>
+        </message>
+        <message>
+            <location filename="../PaneRegistry.cpp" line="429" />
+            <source>The source pane is unavailable.</source>
+            <translation>Das Quellpanel ist nicht verfügbar.</translation>
+        </message>
+        <message>
+            <location filename="../PaneRegistry.cpp" line="553" />
+            <source>Cannot create group: invalid name or group limit reached.</source>
+            <translation>Gruppe kann nicht erstellt werden: ungültiger Name oder Höchstzahl an Gruppen erreicht.</translation>
+        </message>
+        <message>
+            <location filename="../PaneRegistry.cpp" line="1004" />
+            <source>The saved pane catalog is invalid.</source>
+            <translation>Der gespeicherte Panelkatalog ist ungültig.</translation>
+        </message>
+    </context>
+    <context>
         <name>RepresentationPane</name>
         <message>
             <location filename="../qml/RepresentationPane.qml" line="31" />
@@ -1056,11 +1064,6 @@ Erkunden Sie Disassemblierung, Kontrollfluss, rekonstruierten C-Code und Zwische
             <translation>Aktion fehlgeschlagen</translation>
         </message>
         <message>
-            <location filename="../Workbench.cpp" line="94" />
-            <source>Worker unavailable or request queue full.</source>
-            <translation>Analyseprozess nicht verfügbar oder Anfragewarteschlange voll.</translation>
-        </message>
-        <message>
             <location filename="../Workbench.cpp" line="147" />
             <source>Incompatible analysis worker protocol.</source>
             <translation>Inkompatibles Analyseprozess-Protokoll.</translation>
@@ -1089,11 +1092,6 @@ Erkunden Sie Disassemblierung, Kontrollfluss, rekonstruierten C-Code und Zwische
             <location filename="../Workbench.cpp" line="228" />
             <source>Binary loaded</source>
             <translation>Binärdatei geladen</translation>
-        </message>
-        <message>
-            <location filename="../Workbench.cpp" line="295" />
-            <source>Reading analysis views…</source>
-            <translation>Analyseansichten werden geladen…</translation>
         </message>
         <message>
             <location filename="../Workbench.cpp" line="311" />
@@ -1188,6 +1186,11 @@ Erkunden Sie Disassemblierung, Kontrollfluss, rekonstruierten C-Code und Zwische
             <location filename="../Workbench.cpp" line="510" />
             <source>Annotations reloaded</source>
             <translation>Anmerkungen neu geladen</translation>
+        </message>
+        <message>
+            <location filename="../Workbench.cpp" line="193" />
+            <source>Finish opening the binary before editing.</source>
+            <translation>Warten Sie mit dem Bearbeiten, bis die Binärdatei vollständig geöffnet ist.</translation>
         </message>
     </context>
     <context>

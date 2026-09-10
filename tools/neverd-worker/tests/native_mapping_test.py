@@ -27,6 +27,7 @@ def run(executable):
                 binary.write_bytes(data)
                 opened = client.call("open", {"path": str(binary), "read_only": True})
                 assert opened["status"] == "ok"
+                assert opened["analysis_state"] == "not_analyzed"
                 assert opened["payload"]["function_count"] == 0
                 decoded = client.call("disasm", {"address": hex(entry), "limit": 2})
                 assert decoded["status"] == "ok", decoded
@@ -34,6 +35,7 @@ def run(executable):
                 for stage in ("low", "med"):
                     full = client.call("decompile", {"address": hex(entry), "representation": stage, "limit": 2048})
                     assert full["status"] == "ok", full
+                    assert full["analysis_state"] == "complete", full
                     result = full["payload"]
                     if result["mapping_status"] == "unavailable_engine_api":
                         print("SKIP: matching engine predates additive instruction mapping API")

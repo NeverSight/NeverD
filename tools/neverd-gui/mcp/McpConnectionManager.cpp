@@ -146,9 +146,9 @@ void McpConnectionManager::connectHttp(const QString &url,
       failSource(QT_TR_NOOP("Cannot load CA certificate"));
       return;
     }
-    auto authorities = tls_.caCertificates();
+    auto authorities = tls_->caCertificates();
     authorities.append(certificates);
-    tls_.setCaCertificates(authorities);
+    tls_->setCaCertificates(authorities);
   }
   endpoint_ = endpoint;
   token_ = bearerToken.toUtf8();
@@ -276,7 +276,8 @@ QNetworkRequest McpConnectionManager::request() const {
     request.setRawHeader("MCP-Session-Id", session_);
   if (!token_.isEmpty())
     request.setRawHeader("Authorization", "Bearer " + token_);
-  request.setSslConfiguration(tls_);
+  if (tls_)
+    request.setSslConfiguration(*tls_);
   request.setTransferTimeout(120000);
   // Never forward credentials to an endpoint selected by an HTTP redirect.
   request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,

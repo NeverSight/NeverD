@@ -79,6 +79,8 @@ public:
   QString projectId() const;
   QString revision() const;
   quint64 sessionEpoch() const;
+  // Monotonic within an open project; ordinary edit revisions do not reset it.
+  bool analysisComplete() const;
   bool hasPending() const;
   bool hasCommands() const;
   void setCacheBudgetMiB(int mebibytes);
@@ -88,6 +90,8 @@ public slots:
 
 signals:
   void contextChanged();
+  // Once per session, after the discovering job has delivered its replies.
+  void analysisCompleted();
   void pendingChanged();
   void idle();
 

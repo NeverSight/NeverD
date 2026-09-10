@@ -318,11 +318,6 @@
             <translation>Адрес</translation>
         </message>
         <message>
-            <location filename="../qml/FunctionsPane.qml" line="118" />
-            <source>Load more functions</source>
-            <translation>Загрузить ещё функции</translation>
-        </message>
-        <message>
             <location filename="../qml/FunctionsPane.qml" line="128" />
             <source>No functions</source>
             <translation>Нет функций</translation>
@@ -814,21 +809,6 @@
             <translation>Изменения применяются сразу. Код, символы и комментарии сохраняют исходный язык.</translation>
         </message>
         <message>
-            <location filename="../qml/Main.qml" line="362" />
-            <source>Open binary: %1
-Go to address or symbol: G
-Rename function: N
-Edit comment: ;
-Toggle bottom panel: Ctrl+J
-Back / forward: %2 / %3</source>
-            <translation>Открыть двоичный файл: %1
-Перейти к адресу или символу: G
-Переименовать функцию: N
-Изменить комментарий: ;
-Показать/скрыть нижнюю панель: Ctrl+J
-Назад / вперёд: %2 / %3</translation>
-        </message>
-        <message>
             <location filename="../qml/Main.qml" line="372" />
             <source>NeverD
 Binary analysis workbench
@@ -1016,6 +996,34 @@ Explore disassembly, control flow, recovered C, and intermediate representations
         </message>
     </context>
     <context>
+        <name>PaneRegistry</name>
+        <message>
+            <location filename="../PaneRegistry.cpp" line="417" />
+            <source>Default</source>
+            <translation>По умолчанию</translation>
+        </message>
+        <message>
+            <location filename="../PaneRegistry.cpp" line="424" />
+            <source>Cannot create pane: invalid kind or pane limit reached.</source>
+            <translation>Не удалось создать панель: недопустимый тип или достигнуто максимальное число панелей.</translation>
+        </message>
+        <message>
+            <location filename="../PaneRegistry.cpp" line="429" />
+            <source>The source pane is unavailable.</source>
+            <translation>Исходная панель недоступна.</translation>
+        </message>
+        <message>
+            <location filename="../PaneRegistry.cpp" line="553" />
+            <source>Cannot create group: invalid name or group limit reached.</source>
+            <translation>Не удалось создать группу: недопустимое имя или достигнуто максимальное число групп.</translation>
+        </message>
+        <message>
+            <location filename="../PaneRegistry.cpp" line="1004" />
+            <source>The saved pane catalog is invalid.</source>
+            <translation>Сохранённый каталог панелей некорректен.</translation>
+        </message>
+    </context>
+    <context>
         <name>RepresentationPane</name>
         <message>
             <location filename="../qml/RepresentationPane.qml" line="31" />
@@ -1056,11 +1064,6 @@ Explore disassembly, control flow, recovered C, and intermediate representations
             <translation>Действие не выполнено</translation>
         </message>
         <message>
-            <location filename="../Workbench.cpp" line="94" />
-            <source>Worker unavailable or request queue full.</source>
-            <translation>Процесс анализа недоступен или очередь запросов заполнена.</translation>
-        </message>
-        <message>
             <location filename="../Workbench.cpp" line="147" />
             <source>Incompatible analysis worker protocol.</source>
             <translation>Несовместимый протокол процесса анализа.</translation>
@@ -1089,11 +1092,6 @@ Explore disassembly, control flow, recovered C, and intermediate representations
             <location filename="../Workbench.cpp" line="228" />
             <source>Binary loaded</source>
             <translation>Двоичный файл загружен</translation>
-        </message>
-        <message>
-            <location filename="../Workbench.cpp" line="295" />
-            <source>Reading analysis views…</source>
-            <translation>Чтение представлений анализа…</translation>
         </message>
         <message>
             <location filename="../Workbench.cpp" line="311" />
@@ -1188,6 +1186,11 @@ Explore disassembly, control flow, recovered C, and intermediate representations
             <location filename="../Workbench.cpp" line="510" />
             <source>Annotations reloaded</source>
             <translation>Аннотации перезагружены</translation>
+        </message>
+        <message>
+            <location filename="../Workbench.cpp" line="193" />
+            <source>Finish opening the binary before editing.</source>
+            <translation>Дождитесь завершения открытия двоичного файла перед внесением изменений.</translation>
         </message>
     </context>
     <context>

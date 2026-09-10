@@ -4,7 +4,7 @@ import QtQuick.Controls.Basic
 
 TextField {
     id: control
-    implicitHeight: 30
+    implicitHeight: Theme.controlHeight
     font.pointSize: Theme.bodySize
     color: Theme.foreground
     placeholderTextColor: Theme.subdued

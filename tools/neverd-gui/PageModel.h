@@ -24,6 +24,7 @@ public:
   void pageRequestFailed(int offset);
   quint64 requestGeneration() const { return requestGeneration_; }
   Q_INVOKABLE QVariantMap get(int row) const;
+  Q_INVOKABLE int findRow(const QString &role, const QVariant &value) const;
 signals:
   void countChanged();
   void pageRequested(int offset);

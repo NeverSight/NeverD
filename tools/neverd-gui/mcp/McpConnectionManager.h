@@ -8,6 +8,7 @@
 #include <QSharedPointer>
 #include <QSslConfiguration>
 #include <QVariantList>
+#include <optional>
 
 // A manually operated MCP client. Server text is content, never host
 // instructions.
@@ -86,7 +87,9 @@ private:
   QUrl endpoint_;
   QByteArray token_;
   QByteArray session_;
-  QSslConfiguration tls_;
+  // Even the empty Qt SSL configuration initializes the platform TLS backend.
+  // Keep that work on the explicit HTTP connection path, away from GUI startup.
+  std::optional<QSslConfiguration> tls_;
   QVariantList tools_;
   QVariantList resources_;
   QVariantList history_;

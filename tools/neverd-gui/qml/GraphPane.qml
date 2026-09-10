@@ -15,6 +15,7 @@ Rectangle {
     color: Theme.editor
     LayoutMirroring.enabled: false
     LayoutMirroring.childrenInherit: true
+    function focusContent() { viewport.forceActiveFocus(Qt.ShortcutFocusReason) }
 
     function scheduleRefresh() { if (!refresh.running) refresh.start() }
     function requestViewport() {
@@ -97,6 +98,7 @@ Rectangle {
                     MouseArea {
                         anchors.fill: parent
                         onClicked: mouse => {
+                            root.focusContent()
                             const address = graph.addressAt(mouse.x, mouse.y)
                             if (address.length) root.controller.selectInstruction(address)
                         }

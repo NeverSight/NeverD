@@ -13,6 +13,7 @@ Rectangle {
     property bool syntaxHighlight: false
     property var mappings: []
     property string selectedAddress: ""
+    function focusContent() { code.forceActiveFocus(Qt.ShortcutFocusReason) }
     signal sourceLineSelected(int line)
     property bool anchorPending: false
     property var appendViewport: null
@@ -90,7 +91,7 @@ Rectangle {
             color: Theme.foreground
             selectionColor: Theme.selection
             selectedTextColor: Theme.accentForeground
-            leftPadding: 18
+            leftPadding: Theme.codeGutter
             rightPadding: 24
             topPadding: 18
             bottomPadding: 24

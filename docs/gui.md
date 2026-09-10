@@ -1,8 +1,12 @@
 # NeverD desktop workbench
 
 The desktop workbench uses Qt Quick/QML and a separate `neverd-worker` process.
-The worker uses NeverD's existing public C ABI. The GUI does not link the engine,
-LLVM, or the existing CLI, and no model service is required to browse binaries.
+The worker links the same `libneverd` shared library used by the CLI through its
+public C ABI. Analysis, function discovery and decompilation remain in that
+library; Qt owns presentation and asynchronous request coordination. Keeping the
+worker separate lets analysis run without blocking or crashing the UI. The GUI
+executable does not link LLVM or the CLI, and no model service is required to
+browse binaries.
 
 ## Build
 
@@ -81,6 +85,43 @@ preserve the previous file through atomic replacement.
 The UI starts in English and bundles all 11 project languages. Settings switches
 language without reloading the analysis; Arabic mirrors UI chrome while code and
 addresses stay left-to-right. Floating and tabbed dock layouts, window size and language preference are saved per user. Pin keeps a representation on one function while the instruction pane navigates independently.
+
+## Keyboard and reading workflow
+
+The workbench retains Dark+ and adds the common IDA navigation defaults. These
+shortcuts operate on analysis content; typing in a search field or annotation
+dialog keeps normal text editing behavior. A read-only C/IR view remains an
+analysis view, so navigation, rename and comment commands stay available there.
+
+| Key | Action |
+| --- | --- |
+| G | Focus the address/symbol field; Enter navigates, Esc returns to disassembly. |
+| Esc / Ctrl+Enter | Previous / next navigation position. Platform Back/Forward also work. |
+| Space | Toggle linear disassembly and CFG while reading the machine view. |
+| F5 | Show recovered C and focus its text. |
+| Tab | Move between machine and C/IR content; ordinary controls retain Tab traversal. |
+| X | Show and focus incoming references. |
+| Ctrl+P | Focus function search. |
+| N / ; | Rename the selected function / edit the selected address comment. |
+| F6 / Shift+F6 | Cycle open panes in either direction. |
+| Platform Save | Save annotations. |
+
+Function, instruction and reference lists support arrows, Home/End and
+PageUp/PageDown. Enter activates the current row; platform Copy copies an
+instruction or reference as plain text. Current keyboard rows remain visible,
+and linked instruction selections reveal their address without loading the full
+function catalog. Holding an arrow key updates selection immediately while
+coalescing comment/reference queries; each pane has at most one derived request
+in flight, with comment and reference reads dispatched serially.
+
+Instruction columns follow the configured font metrics, with horizontal
+scrolling where needed. Narrow references use two lines so both 64-bit addresses
+remain readable. View → Focus Panel temporarily expands a pane; selecting the
+same command again, or opening another pane, restores the saved arrangement.
+
+The shortcuts follow the [official IDA usage guide](https://docs.hex-rays.com/8.5/getting-started/basic-usage)
+and [shortcut reference](https://docs.hex-rays.com/user-guide/configuration/shortcuts).
+NeverD's multi-representation and pane navigation add to those familiar actions.
 
 ## History and extensions
 

@@ -56,6 +56,13 @@ lowercase hexadecimal string, including VAs above 2^53. Revisions and project ID
 strings. CFG node/edge IDs are strings, not addresses or floating-point values.
 Byte offsets inside a requested page and bounded counts are JSON integers.
 
+Responses from the Session executor also include
+`analysis_state:"not_analyzed"|"complete"`, even when the requested view is
+unsupported after successful analysis. This lets clients refresh recovered
+function lists once when a lazy query completes analysis. Ordinary edit
+revisions do not imply a new analysis. Administrative replies may omit this
+additive field.
+
 Session calls run serially on an execution thread; a separate input loop admits
 requests and cancellation while the synchronous engine runs. The queue holds at
 most 32 waiting requests and 16 MiB of request bodies; excess receives

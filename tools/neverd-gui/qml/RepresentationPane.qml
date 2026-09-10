@@ -10,6 +10,7 @@ Rectangle {
     property var kddockwidgets_min_size: Qt.size(300, 180)
     readonly property var representationIds: ["c", "low", "med", "high", "llvm"]
     color: Theme.editor
+    function focusContent() { code.focusContent() }
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
@@ -29,7 +30,7 @@ Rectangle {
                 anchors.rightMargin: 6
                 Text { textFormat: Text.PlainText; text: root.controller.representationFunctionName || qsTranslate("Main", "Pseudocode & intermediate representations"); color: root.controller.representationFunctionName ? Theme.functionName : Theme.subdued; font.pointSize: Theme.captionSize; elide: Text.ElideRight; Layout.fillWidth: true; LayoutMirroring.enabled: false }
                 WorkbenchButton { text: qsTr("Refresh"); enabled: root.controller.loaded && !root.controller.busy; implicitHeight: 25; onClicked: root.controller.reloadRepresentation() }
-                WorkbenchButton { text: root.controller.representationPinned ? qsTr("Unpin") : qsTr("Pin"); hint: qsTr("Keep this function while navigating"); enabled: root.controller.loaded; implicitHeight: 25; onClicked: root.controller.toggleRepresentationPin() }
+                WorkbenchButton { text: root.controller.representationPinned ? qsTr("Unpin") : qsTr("Pin"); hint: qsTr("Keep this function while navigating"); checked: root.controller.representationPinned; enabled: root.controller.loaded; implicitHeight: Theme.compactControlHeight; onClicked: root.controller.toggleRepresentationPin() }
             }
         }
         Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: Theme.border }

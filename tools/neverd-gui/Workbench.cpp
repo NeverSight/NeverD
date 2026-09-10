@@ -39,6 +39,7 @@ Workbench::Workbench(QString workerPath, QObject *parent)
   connect(&queries_, &QueryService::contextChanged, this, [this] {
     if (sessionEpoch_ != queries_.sessionEpoch()) {
       sessionEpoch_ = queries_.sessionEpoch();
+      analysisPublishedEpoch_ = 0;
       loaded_ = false;
       dirty_ = false;
       clearViews();
@@ -48,6 +49,8 @@ Workbench::Workbench(QString workerPath, QObject *parent)
     emit changed();
     emit selectionChanged(selection());
   });
+  connect(&queries_, &QueryService::analysisCompleted, this,
+          [this] { publishAnalysisCompletion(queries_.sessionEpoch()); });
   connect(&queries_, &QueryService::pendingChanged, this, [this] {
     finishTransition();
     if (!busy() && loaded_ && error_.isEmpty())
@@ -378,6 +381,18 @@ void Workbench::filterFunctions(const QString &filter) {
   filterTimer_.start();
   emit changed();
 }
+void Workbench::publishAnalysisCompletion(quint64 epoch) {
+  if (!loaded_ || epoch != queries_.sessionEpoch() ||
+      !queries_.analysisComplete() || analysisPublishedEpoch_ == epoch)
+    return;
+  // Mark before changing the model: its observers may synchronously reenter.
+  analysisPublishedEpoch_ = epoch;
+  const QPointer<Workbench> guard(this);
+  loadFunctions(false);
+  if (guard && loaded_ && queries_.sessionEpoch() == epoch)
+    panes_.repairAnalysisLocations();
+}
+
 void Workbench::loadFunctions(bool append) {
   if (!loaded_ || (append && (nextFunction_ < 0 || functionRequest_)))
     return;
@@ -458,20 +473,31 @@ void Workbench::requestGraphViewport(double x, double y, double width,
 void Workbench::analyze() {
   if (!loaded_)
     return;
+  const auto epoch = queries_.sessionEpoch();
+  const bool previouslyPublished = analysisPublishedEpoch_ == epoch;
+  const QPointer<Workbench> guard(this);
+  panes_.resumeAnalysisReads();
   status_ = QT_TR_NOOP("Analyzing…");
-  send("analyze", {}, [this](const auto &payload, const auto &) {
-    metadata_ = payload;
-    loadFunctions(false);
-    for (const auto &value : panes_.items()) {
-      auto *pane = panes_.findPane(value.toMap()["id"].toString());
-      if (pane->kind() == "representation")
-        pane->reloadRepresentation();
-      else
-        pane->requestView(pane->centralView());
-    }
-    status_ = QT_TR_NOOP("Ready");
-  });
-  emit changed();
+  send("analyze", {},
+       [this, epoch, previouslyPublished](const auto &payload, const auto &) {
+         metadata_ = payload;
+         status_ = QT_TR_NOOP("Ready");
+         // First analysis publishes after the command's complete delivery. A
+         // later explicit Analyze (or an older worker) retains its explicit
+         // list refresh.
+         if (previouslyPublished || !queries_.analysisComplete()) {
+           const QPointer<Workbench> guard(this);
+           loadFunctions(false);
+           if (guard && loaded_ && queries_.sessionEpoch() == epoch)
+             panes_.repairAnalysisLocations();
+         }
+       });
+  // Queue visible reads behind Analyze now. A subsequent Cancel can retire
+  // them; no delayed command callback may resume a cancelled pane.
+  if (guard && loaded_ && queries_.sessionEpoch() == epoch)
+    panes_.refreshAnalysisViews();
+  if (guard)
+    emit changed();
 }
 void Workbench::cancel() {
   panes_.cancelReads();

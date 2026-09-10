@@ -10,3 +10,21 @@ target_compile_definitions(neverd-viewport-bench PRIVATE BENCH_BUILD_TYPE="${CMA
 if(WIN32)
   target_link_libraries(neverd-viewport-bench PRIVATE psapi)
 endif()
+
+option(NEVERD_BUILD_MCP_STARTUP_PROBE "Build the real MCP constructor probe" OFF)
+if(NEVERD_BUILD_MCP_STARTUP_PROBE)
+  find_package(Qt6 6.8 REQUIRED COMPONENTS Core Network)
+  set(_neverd_mcp_source "${CMAKE_CURRENT_SOURCE_DIR}/../mcp/McpConnectionManager.cpp")
+  set(_neverd_mcp_header "${CMAKE_CURRENT_SOURCE_DIR}/../mcp/McpConnectionManager.h")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${_neverd_mcp_source}" "${_neverd_mcp_header}")
+  file(SHA256 "${_neverd_mcp_source}" _neverd_mcp_cpp_sha)
+  file(SHA256 "${_neverd_mcp_header}" _neverd_mcp_header_sha)
+  qt_add_executable(neverd-mcp-startup-probe mcp_startup_probe.cpp "${_neverd_mcp_source}")
+  set_target_properties(neverd-mcp-startup-probe PROPERTIES WIN32_EXECUTABLE FALSE)
+  target_include_directories(neverd-mcp-startup-probe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../mcp")
+  target_link_libraries(neverd-mcp-startup-probe PRIVATE Qt6::Core Qt6::Network)
+  target_compile_definitions(neverd-mcp-startup-probe PRIVATE
+    MCP_PROBE_CPP_SHA256="${_neverd_mcp_cpp_sha}"
+    MCP_PROBE_HEADER_SHA256="${_neverd_mcp_header_sha}")
+endif()

@@ -318,11 +318,6 @@
             <translation>Address</translation>
         </message>
         <message>
-            <location filename="../qml/FunctionsPane.qml" line="118" />
-            <source>Load more functions</source>
-            <translation>Load more functions</translation>
-        </message>
-        <message>
             <location filename="../qml/FunctionsPane.qml" line="128" />
             <source>No functions</source>
             <translation>No functions</translation>
@@ -814,21 +809,6 @@
             <translation>Changes apply immediately. Code, symbols, and comments keep their original language.</translation>
         </message>
         <message>
-            <location filename="../qml/Main.qml" line="362" />
-            <source>Open binary: %1
-Go to address or symbol: G
-Rename function: N
-Edit comment: ;
-Toggle bottom panel: Ctrl+J
-Back / forward: %2 / %3</source>
-            <translation>Open binary: %1
-Go to address or symbol: G
-Rename function: N
-Edit comment: ;
-Toggle bottom panel: Ctrl+J
-Back / forward: %2 / %3</translation>
-        </message>
-        <message>
             <location filename="../qml/Main.qml" line="372" />
             <source>NeverD
 Binary analysis workbench
@@ -1016,6 +996,34 @@ Explore disassembly, control flow, recovered C, and intermediate representations
         </message>
     </context>
     <context>
+        <name>PaneRegistry</name>
+        <message>
+            <location filename="../PaneRegistry.cpp" line="417" />
+            <source>Default</source>
+            <translation>Default</translation>
+        </message>
+        <message>
+            <location filename="../PaneRegistry.cpp" line="424" />
+            <source>Cannot create pane: invalid kind or pane limit reached.</source>
+            <translation>Cannot create pane: invalid kind or pane limit reached.</translation>
+        </message>
+        <message>
+            <location filename="../PaneRegistry.cpp" line="429" />
+            <source>The source pane is unavailable.</source>
+            <translation>The source pane is unavailable.</translation>
+        </message>
+        <message>
+            <location filename="../PaneRegistry.cpp" line="553" />
+            <source>Cannot create group: invalid name or group limit reached.</source>
+            <translation>Cannot create group: invalid name or group limit reached.</translation>
+        </message>
+        <message>
+            <location filename="../PaneRegistry.cpp" line="1004" />
+            <source>The saved pane catalog is invalid.</source>
+            <translation>The saved pane catalog is invalid.</translation>
+        </message>
+    </context>
+    <context>
         <name>RepresentationPane</name>
         <message>
             <location filename="../qml/RepresentationPane.qml" line="31" />
@@ -1056,11 +1064,6 @@ Explore disassembly, control flow, recovered C, and intermediate representations
             <translation>Action failed</translation>
         </message>
         <message>
-            <location filename="../Workbench.cpp" line="94" />
-            <source>Worker unavailable or request queue full.</source>
-            <translation>Worker unavailable or request queue full.</translation>
-        </message>
-        <message>
             <location filename="../Workbench.cpp" line="147" />
             <source>Incompatible analysis worker protocol.</source>
             <translation>Incompatible analysis worker protocol.</translation>
@@ -1089,11 +1092,6 @@ Explore disassembly, control flow, recovered C, and intermediate representations
             <location filename="../Workbench.cpp" line="228" />
             <source>Binary loaded</source>
             <translation>Binary loaded</translation>
-        </message>
-        <message>
-            <location filename="../Workbench.cpp" line="295" />
-            <source>Reading analysis views…</source>
-            <translation>Reading analysis views…</translation>
         </message>
         <message>
             <location filename="../Workbench.cpp" line="311" />
@@ -1188,6 +1186,11 @@ Explore disassembly, control flow, recovered C, and intermediate representations
             <location filename="../Workbench.cpp" line="510" />
             <source>Annotations reloaded</source>
             <translation>Annotations reloaded</translation>
+        </message>
+        <message>
+            <location filename="../Workbench.cpp" line="193" />
+            <source>Finish opening the binary before editing.</source>
+            <translation>Finish opening the binary before editing.</translation>
         </message>
     </context>
     <context>

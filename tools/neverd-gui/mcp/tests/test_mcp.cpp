@@ -181,11 +181,31 @@ private slots:
     }
   }
 
+  void rejectedHttpSettingsCanDisconnectAndSwitchToStdio() {
+    McpConnectionManager manager;
+    manager.disconnectServer();
+    manager.connectHttp("http://example.invalid/mcp", "");
+    QVERIFY(manager.status().contains("requires HTTPS"));
+    manager.connectHttp("https://localhost/mcp", "invalid\r\ntoken");
+    QVERIFY(manager.status().contains("Invalid authentication token"));
+    manager.connectHttp("https://localhost/mcp", "",
+                        ":/neverd-test-missing-certificate.pem");
+    QVERIFY(manager.status().contains("Cannot load CA certificate"));
+    QVERIFY(!manager.connected());
+    manager.disconnectServer();
+    manager.disconnectServer();
+    manager.connectStdio(TEST_PYTHON, {TEST_SERVER});
+    QTRY_VERIFY(manager.connected());
+    manager.callTool("echo", R"({"transport":"stdio-after-rejection"})");
+    QTRY_VERIFY(manager.lastResult().contains("stdio-after-rejection"));
+  }
+
   void httpSessionHeadersAndSse() {
     QTcpServer server;
     QVERIFY(server.listen(QHostAddress::LocalHost));
     bool sawSession = false;
     bool sawAuth = false;
+    int initializations = 0;
     connect(&server, &QTcpServer::newConnection, this, [&] {
       auto *socket = server.nextPendingConnection();
       auto buffer = QSharedPointer<QByteArray>::create();
@@ -210,12 +230,13 @@ private slots:
             headers.toLower().contains("mcp-protocol-version: 2025-11-25");
         const auto method = request.value("method").toString();
         QJsonObject result;
-        if (method == "initialize")
+        if (method == "initialize") {
+          ++initializations;
           result = {
               {"protocolVersion", "2025-11-25"},
               {"capabilities", QJsonObject{{"tools", QJsonObject{}},
                                            {"resources", QJsonObject{}}}}};
-        else if (method == "tools/list")
+        } else if (method == "tools/list")
           result = {{"tools", QJsonArray{QJsonObject{{"name", "sse-tool"}}}}};
         else if (method == "resources/list")
           result = {{"resources", QJsonArray{}}};
@@ -257,6 +278,23 @@ private slots:
     QCOMPARE(manager.tools()[0].toMap().value("name").toString(), "sse-tool");
     QVERIFY(sawSession);
     QVERIFY(sawAuth);
+    manager.disconnectServer();
+    manager.connectHttp(
+        QString("http://127.0.0.1:%1/mcp").arg(server.serverPort()),
+        "fixture-token");
+    QTRY_VERIFY(manager.connected());
+    QTRY_COMPARE(initializations, 2);
+    QTRY_COMPARE(manager.tools().size(), 1);
+    QCOMPARE(manager.tools()[0].toMap().value("name").toString(), "sse-tool");
+    manager.disconnectServer();
+    // Reconnecting through stdio must stop routing calls to the previous HTTP
+    // transport, regardless of whether TLS settings have been initialized.
+    manager.connectStdio(TEST_PYTHON, {TEST_SERVER});
+    QTRY_VERIFY(manager.connected());
+    QTRY_COMPARE(manager.tools().size(), 1);
+    QCOMPARE(manager.tools()[0].toMap().value("name").toString(), "echo");
+    manager.callTool("echo", R"({"transport":"stdio-after-http"})");
+    QTRY_VERIFY(manager.lastResult().contains("stdio-after-http"));
     manager.disconnectServer();
   }
 

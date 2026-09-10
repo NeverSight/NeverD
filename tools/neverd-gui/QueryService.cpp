@@ -114,7 +114,7 @@ struct QueryService::State {
     qsizetype bytes = 0;
     QList<Id> subscribers;
     QString wireId, wireOperation, wireProject, wireRevision;
-    bool cancelRequested = false;
+    bool cancelRequested = false, discoveredAnalysis = false;
     int graphRetries = 0;
     QJsonObject summary, result;
     QString summaryRevision;
@@ -130,7 +130,7 @@ struct QueryService::State {
   QueryService *q;
   Sender sender;
   Limits limits;
-  bool available = false, pumpScheduled = false;
+  bool available = false, pumpScheduled = false, analysisComplete = false;
   quint64 epoch = 1, fence = 0, nextJob = 0;
   Id nextSubscription = 0;
   QString project, revision = "0";
@@ -327,9 +327,13 @@ struct QueryService::State {
     job->subscribers.removeAll(id);
     if (!job->subscribers.isEmpty() || job->kind == Command)
       return;
-    if (job->phase == Queued || job->phase == Delivering) {
+    if (job->phase == Queued) {
       removeJob(job);
       schedulePump();
+    } else if (job->phase == Delivering) {
+      // Preserve the delivery barrier even if all subscribers have detached.
+      // Analysis discovery is published only after this job has finished.
+      return;
     } else if (!job->cancelRequested) {
       job->cancelRequested = true;
       // The administrative ACK has a different ID and is deliberately not
@@ -451,6 +455,13 @@ struct QueryService::State {
         return;
     }
     removeJob(job);
+    if (job->discoveredAnalysis && job->epoch == epoch) {
+      const auto discoveredEpoch = epoch;
+      QTimer::singleShot(0, q, [this, discoveredEpoch] {
+        if (epoch == discoveredEpoch && analysisComplete)
+          emit q->analysisCompleted();
+      });
+    }
     schedulePump();
     notify();
   }
@@ -458,6 +469,7 @@ struct QueryService::State {
   void retire(const JobPtr &keep, const QString &code) {
     ++epoch;
     ++fence;
+    analysisComplete = false;
     cache.clear();
     const auto currentJobs = jobs.values();
     for (const auto &job : currentJobs) {
@@ -535,6 +547,14 @@ struct QueryService::State {
     } else {
       response["project_id"] = project;
       response["revision"] = revision;
+    }
+
+    // This is an executor fact, including a view error after successful
+    // analysis. Administrative and uncorrelated replies cannot establish it.
+    if (!admissionFailure && status != "cancelled" && !project.isEmpty() &&
+        response.value("analysis_state") == "complete" && !analysisComplete) {
+      analysisComplete = true;
+      job->discoveredAnalysis = true;
     }
 
     if (job->kind == Graph && !job->cancelRequested) {
@@ -671,6 +691,7 @@ bool QueryService::available() const { return state_->available; }
 QString QueryService::projectId() const { return state_->project; }
 QString QueryService::revision() const { return state_->revision; }
 quint64 QueryService::sessionEpoch() const { return state_->epoch; }
+bool QueryService::analysisComplete() const { return state_->analysisComplete; }
 bool QueryService::hasPending() const { return state_->pending(); }
 bool QueryService::hasCommands() const {
   for (const auto &job : std::as_const(state_->jobs))

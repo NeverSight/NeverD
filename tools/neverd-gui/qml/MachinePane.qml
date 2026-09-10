@@ -7,11 +7,12 @@ Rectangle {
     objectName: "machinePane"
     required property var controller
     property real codePointSize: Theme.codeSize
-    property int currentIndex: 0
+    readonly property int currentIndex: ["disasm", "cfg", "hex"].indexOf(controller.centralView)
     property var kddockwidgets_min_size: Qt.size(280, 180)
     color: Theme.editor
+    function focusContent() { [disassembly, graph, hex][currentIndex].focusContent() }
     function selectView(index) {
-        currentIndex = index
+        if (index < 0 || index > 2) return
         controller.requestView(["disasm", "cfg", "hex"][index])
     }
     ColumnLayout {
@@ -27,9 +28,9 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
             currentIndex: root.currentIndex
-            DisassemblyPane { controller: root.controller; codePointSize: root.codePointSize }
-            GraphPane { controller: root.controller; codePointSize: root.codePointSize }
-            TextPane { text: root.controller.hexText; emptyTitle: qsTranslate("Main", "Hex view"); emptyDetail: qsTranslate("Main", "Select an address to inspect its bytes."); codePointSize: root.codePointSize }
+            DisassemblyPane { id: disassembly; controller: root.controller; codePointSize: root.codePointSize }
+            GraphPane { id: graph; controller: root.controller; codePointSize: root.codePointSize }
+            TextPane { id: hex; text: root.controller.hexText; emptyTitle: qsTranslate("Main", "Hex view"); emptyDetail: qsTranslate("Main", "Select an address to inspect its bytes."); codePointSize: root.codePointSize }
         }
     }
 }

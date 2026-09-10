@@ -99,6 +99,41 @@ def resolve_embedded(dependency: str, image: Path, bundle: Path) -> Path | None:
     return None
 
 
+def validate_and_prune_sql_drivers(bundle: Path) -> None:
+    """Keep SQLite for deployed LocalStorage; validate every entry before pruning."""
+    bundle = bundle.absolute()
+    if ".." in bundle.parts:
+        raise RuntimeError(f"Invalid bundle path for SQL deployment: {bundle}")
+    for ancestor in reversed((bundle, *bundle.parents)):
+        if ancestor.is_symlink() or not ancestor.is_dir():
+            raise RuntimeError(f"SQL deployment requires a real directory: {ancestor}")
+    root = bundle.resolve(strict=True)
+    drivers = bundle / "Contents/PlugIns/sqldrivers"
+    for directory in (bundle / "Contents", bundle / "Contents/PlugIns", drivers):
+        if directory.is_symlink():
+            raise RuntimeError(f"SQL deployment rejects a symlink directory: {directory}")
+        if not directory.exists():
+            consumers = (bundle / "Contents/Frameworks/QtSql.framework",
+                         bundle / "Contents/Frameworks/QtQmlLocalStorage.framework",
+                         bundle / "Contents/Resources/qml/QtQuick/LocalStorage")
+            if any(os.path.lexists(path) for path in consumers):
+                raise RuntimeError("Deployed SQL/LocalStorage requires the SQLite driver directory")
+            return
+        if not directory.is_dir() or not directory.resolve(strict=True).is_relative_to(root):
+            raise RuntimeError(f"Invalid SQL deployment directory: {directory}")
+    sqlite = "libqsqlite.dylib"
+    optional = {"libqsqlmimer.dylib", "libqsqlodbc.dylib", "libqsqlpsql.dylib"}
+    entries = list(drivers.iterdir())
+    for entry in entries:
+        if entry.name not in optional | {sqlite} or entry.is_symlink() or not entry.is_file():
+            raise RuntimeError(f"Unexpected SQL driver entry: {entry}")
+    if not any(entry.name == sqlite for entry in entries):
+        raise RuntimeError("SQL driver directory must contain libqsqlite.dylib")
+    for entry in entries:
+        if entry.name in optional:
+            entry.unlink()
+
+
 def repair_dependencies(bundle: Path, qt: Path, origins: set[Path]) -> None:
     frameworks = bundle / "Contents/Frameworks"
     qt_libs = Path(output(qt / "bin/qmake", "-query", "QT_INSTALL_LIBS").strip())
@@ -283,9 +318,12 @@ def main() -> None:
     with (bundle / "Contents/Info.plist").open("wb") as stream:
         plistlib.dump(plist, stream)
     run("install_name_tool", "-add_rpath", "@executable_path/../Frameworks", macos / "neverd-worker")
+    # Qt 6.8 does not support -no-codesign. Any deployment-time signatures
+    # are regenerated after dependency repairs by the signing steps below.
     run(args.qt_dir / "bin/macdeployqt", bundle, "-qmldir=" + str(source / "qml"),
         "-executable=" + str(macos / "neverd-worker"), "-libpath=" + str(args.qt_dir / "lib"),
-        "-libpath=" + str(frameworks), "-no-codesign")
+        "-libpath=" + str(frameworks))
+    validate_and_prune_sql_drivers(bundle)
     repair_dependencies(bundle, args.qt_dir, origins)
     report = audit_bundle(bundle)
     report["build_inputs"] = build_inputs

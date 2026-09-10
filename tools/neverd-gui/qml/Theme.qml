@@ -10,9 +10,11 @@ QtObject {
     readonly property color border: "#3c3c3c"
     readonly property color foreground: "#d4d4d4"
     readonly property color muted: "#a7a7a7"
-    readonly property color subdued: "#858585"
+    readonly property color subdued: "#969696"
     readonly property color accent: "#007acc"
     readonly property color selection: "#04395e"
+    readonly property color inactiveSelection: "#37373d"
+    readonly property color accentHover: "#1689d1"
     readonly property color focus: "#007fd4"
     readonly property color accentForeground: "#ffffff"
     readonly property color accentForegroundMuted: "#70b4e3"
@@ -32,4 +34,10 @@ QtObject {
     readonly property real bodySize: 10
     readonly property real codeSize: 11
     readonly property real titleSize: 15
+    readonly property int controlHeight: 30
+    readonly property int compactControlHeight: 26
+    readonly property int tabHeight: 32
+    readonly property int dockTitleHeight: 28
+    readonly property int rowHeight: 30
+    readonly property int codeGutter: 14
 }

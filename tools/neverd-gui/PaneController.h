@@ -5,6 +5,7 @@
 #include "QueryService.h"
 
 #include <QJsonObject>
+#include <QTimer>
 #include <array>
 #include <functional>
 
@@ -29,6 +30,7 @@ class PaneController final : public QObject {
   Q_PROPERTY(
       QString selectedFunctionName READ selectedFunctionName NOTIFY changed)
   Q_PROPERTY(QString selectedComment READ selectedComment NOTIFY changed)
+  Q_PROPERTY(bool commentReady READ commentReady NOTIFY changed)
   Q_PROPERTY(QString centralView READ centralView NOTIFY changed)
   Q_PROPERTY(QString representation READ representation NOTIFY changed)
   Q_PROPERTY(bool representationPinned READ pinned NOTIFY changed)
@@ -69,6 +71,7 @@ public:
   QString selectedFunctionAddress() const { return location_.functionAddress; }
   QString selectedFunctionName() const { return location_.functionName; }
   QString selectedComment() const { return location_.comment; }
+  bool commentReady() const { return location_.commentKnown; }
   QString centralView() const { return centralView_; }
   QString representation() const { return representation_; }
   QString representationText() const { return text_; }
@@ -119,7 +122,7 @@ private:
     ChannelCount
   };
   using Completion = std::function<void(const QJsonObject &)>;
-  void request(Channel channel, QueryService::QuerySpec spec,
+  bool request(Channel channel, QueryService::QuerySpec spec,
                Completion complete, bool graph = false);
   void cancelChannel(Channel channel);
   void cancelRequests();
@@ -132,7 +135,18 @@ private:
   void loadText(bool append = false);
   void loadXrefs();
   void loadComment();
+  struct DetailContext {
+    quint64 epoch = 0, navigation = 0, membership = 0, selection = 0;
+    QString address;
+  };
+  bool currentDetails(const DetailContext &context) const;
+  void queueDetail(Channel channel);
+  void loadSelectionDetail();
+  void finishSelectionDetail(quint64 generation);
+  void resetSelectionDetails();
   void refreshVisible();
+  void reloadRepresentationImpl();
+  void requestViewImpl(const QString &view);
   void fail(const QJsonObject &response);
   bool canFetch() const {
     return loaded_ && open_ && contentVisible_ && !removing_;
@@ -146,9 +160,15 @@ private:
   bool pinned_ = false, open_ = true, contentVisible_ = false;
   bool loaded_ = false, removing_ = false;
   bool navigationPending_ = false;
+  bool analysisRefreshSuppressed_ = false;
   quint64 navigationSequence_ = 0, membershipEpoch_ = 0;
   std::array<quint64, ChannelCount> generations_{};
   std::array<QueryService::SubscriptionId, ChannelCount> pending_{};
+  QTimer selectionTimer_;
+  DetailContext queuedDetailContext_;
+  unsigned queuedDetails_ = 0;
+  bool detailActive_ = false;
+  quint64 selectionGeneration_ = 0, detailRequestGeneration_ = 0;
   PageModel instructions_{
       {"address", "bytes", "mnemonic", "operands", "comment"}};
   PageModel xrefs_{{"from", "to", "kind"}};

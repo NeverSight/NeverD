@@ -41,6 +41,25 @@ QVariantMap PageModel::get(int row) const {
   return row >= 0 && row < rows_.size() ? rows_[row].toVariantMap()
                                         : QVariantMap{};
 }
+int PageModel::findRow(const QString &role, const QVariant &value) const {
+  if (!roles_.values().contains(role.toUtf8()))
+    return -1;
+  // Cursor synchronization searches only resident rows. A million-row model
+  // must never fetch the program just to locate a selection in its viewport.
+  if (paged_) {
+    for (const int page : pages_.keys()) {
+      const auto *rows = pages_.object(page);
+      for (int i = 0; i < rows->size(); ++i)
+        if (rows->at(i).toObject().value(role).toVariant() == value)
+          return page * PageSize + i;
+    }
+  } else {
+    for (int i = 0; i < rows_.size(); ++i)
+      if (rows_[i].value(role).toVariant() == value)
+        return i;
+  }
+  return -1;
+}
 void PageModel::replace(const QJsonArray &rows) {
   beginResetModel();
   paged_ = false;

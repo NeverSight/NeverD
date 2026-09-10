@@ -7,9 +7,32 @@ Rectangle {
     id: root
     required property var controller
     property bool showTitle: true
+    property bool canRename: controller.loaded && controller.selectedFunctionAddress.length > 0
+    property bool canComment: controller.loaded && controller.selectedAddress.length > 0
+    readonly property string selectedFunction: controller.selectedFunctionAddress
+    property bool selectionPending: true
     signal renameRequested()
     signal commentRequested()
+    signal navigationRequested(string address)
     color: Theme.sidebar
+    function focusContent() { functions.forceActiveFocus(Qt.OtherFocusReason) }
+    function focusSearch() { filter.forceActiveFocus(Qt.ShortcutFocusReason); filter.selectAll() }
+    function revealSelection() {
+        if (!selectionPending) return
+        const index = controller.functionsModel.findRow("address", selectedFunction)
+        if (index >= 0) {
+            selectionPending = false
+            functions.currentIndex = index
+            functions.positionViewAtIndex(index, ListView.Contain)
+        }
+    }
+    onSelectedFunctionChanged: { selectionPending = true; Qt.callLater(revealSelection) }
+    Component.onCompleted: Qt.callLater(revealSelection)
+    Connections {
+        target: root.controller.functionsModel
+        function onCountChanged() { root.selectionPending = true; Qt.callLater(root.revealSelection) }
+        function onDataChanged() { if (root.selectionPending) Qt.callLater(root.revealSelection) }
+    }
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
@@ -62,6 +85,33 @@ Rectangle {
             model: root.controller.functionsModel
             boundsBehavior: Flickable.StopAtBounds
             reuseItems: true
+            activeFocusOnTab: true
+            keyNavigationEnabled: false
+            function moveCurrent(index) {
+                if (count === 0) return
+                currentIndex = Math.max(0, Math.min(count - 1, index))
+                positionViewAtIndex(currentIndex, ListView.Contain)
+            }
+            function activateCurrentFunction() {
+                const row = root.controller.functionsModel.get(currentIndex)
+                if (row.address) root.navigationRequested(row.address)
+            }
+            Keys.onPressed: event => {
+                if (event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)) return
+                const page = Math.max(1, Math.floor(height / Theme.rowHeight) - 1)
+                switch (event.key) {
+                case Qt.Key_Up: moveCurrent(currentIndex - 1); break
+                case Qt.Key_Down: moveCurrent(currentIndex + 1); break
+                case Qt.Key_Home: moveCurrent(0); break
+                case Qt.Key_End: moveCurrent(count - 1); break
+                case Qt.Key_PageUp: moveCurrent(currentIndex - page); break
+                case Qt.Key_PageDown: moveCurrent(currentIndex + page); break
+                case Qt.Key_Return:
+                case Qt.Key_Enter: activateCurrentFunction(); break
+                default: return
+                }
+                event.accepted = true
+            }
             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
             delegate: ItemDelegate {
                 id: functionRow
@@ -70,8 +120,10 @@ Rectangle {
                 required property var size
                 required property int index
                 width: functions.width
-                height: 29
+                height: Theme.rowHeight
                 hoverEnabled: true
+                focusPolicy: Qt.NoFocus
+                highlighted: functions.activeFocus && ListView.isCurrentItem
                 text: name + " " + address
                 Accessible.name: text
                 contentItem: RowLayout {
@@ -88,37 +140,35 @@ Rectangle {
                         text: functionRow.address.replace(/^0x/, "")
                         font.family: Theme.monoFont
                         font.pointSize: Theme.captionSize
-                        color: Theme.subdued
+                        color: functionRow.highlighted || functionRow.address === root.selectedFunction || functionRow.hovered ? Theme.muted : Theme.subdued
                         LayoutMirroring.enabled: false
                     }
                 }
+                topPadding: 4
+                bottomPadding: 4
                 leftPadding: 13
                 rightPadding: 12
                 background: Rectangle {
-                    color: functionRow.address === root.controller.selectedFunctionAddress ? Theme.selection : functionRow.hovered ? Theme.hover : "transparent"
-                    border.color: functionRow.activeFocus ? Theme.focus : "transparent"
+                    color: functionRow.highlighted ? Theme.selection : functionRow.address === root.selectedFunction ? Theme.inactiveSelection : functionRow.hovered ? Theme.hover : "transparent"
+                    border.color: functionRow.highlighted ? Theme.focus : "transparent"
+                    Rectangle { visible: functionRow.address === root.selectedFunction; width: 2; height: parent.height; color: Theme.accent }
                 }
                 onClicked: {
                     functions.currentIndex = index
-                    root.controller.selectFunction(address)
+                    functions.forceActiveFocus(Qt.MouseFocusReason)
+                    root.navigationRequested(address)
                 }
                 // Consume the second click; the first already navigated.
                 // Without a handler, AbstractButton emits clicked again.
                 onDoubleClicked: {}
                 ToolTip {
-                    visible: functionRow.hovered && functionRow.name.length > 24
+                    visible: (functionRow.hovered || functionRow.highlighted) && functionRow.name.length > 24
                     text: functionRow.name + "  " + functionRow.address
                     delay: 700
                     width: 440
                     contentItem: Text { textFormat: Text.PlainText; text: functionRow.name + "  " + functionRow.address; color: Theme.foreground; font.pointSize: Theme.captionSize; wrapMode: Text.WordWrap; maximumLineCount: 8; elide: Text.ElideRight }
                 }
             }
-            function activateCurrentFunction() {
-                const row = currentItem as ItemDelegate
-                if (row) row.clicked()
-            }
-            Keys.onReturnPressed: activateCurrentFunction()
-            Keys.onEnterPressed: activateCurrentFunction()
             EmptyPane {
                 anchors.fill: parent
                 visible: functions.count === 0
@@ -151,8 +201,8 @@ Rectangle {
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 3
-                WorkbenchButton { text: qsTr("Rename"); enabled: root.controller.loaded; onClicked: root.renameRequested() }
-                WorkbenchButton { text: qsTr("Comment"); enabled: root.controller.loaded; onClicked: root.commentRequested() }
+                WorkbenchButton { text: qsTr("Rename"); enabled: root.canRename; onClicked: root.renameRequested() }
+                WorkbenchButton { text: qsTr("Comment"); enabled: root.canComment; onClicked: root.commentRequested() }
             }
         }
     }

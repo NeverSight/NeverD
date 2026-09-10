@@ -52,3 +52,18 @@ The helper produces a local development artifact. It does not notarize an app,
 produce a universal binary, or publish a release. A public distribution also
 needs the matching complete corresponding sources and dependency sources
 required by the licenses preserved in `Contents/Resources/Licenses`.
+
+Qt SQL deployment is limited to the local SQLite driver used by the deployed
+QtQuick.LocalStorage module. After `macdeployqt`, the helper validates the whole
+SQL-driver directory before removing the known Mimer, ODBC and PostgreSQL
+drivers. SQLite, QtSql and LocalStorage remain in the bundle; external SQL
+connectors are outside this GUI's deployment scope. Unknown entries, symbolic
+links, invalid directories or a missing required SQLite driver stop packaging
+before any optional driver is removed. Dependency repair and auditing remain
+strict for all retained components.
+
+The deployment-scope tests use only temporary files and require no Qt tools:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 tools/neverd-gui/tests/test_package_macos.py -v
+```

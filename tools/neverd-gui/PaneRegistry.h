@@ -11,6 +11,7 @@ class QueryService;
 
 struct PaneLocation {
   QString address, functionAddress, functionName, comment;
+  bool commentKnown = false;
 };
 
 enum class PaneNavigation { Function, Instruction };
@@ -68,8 +69,13 @@ public:
   Q_INVOKABLE bool restoreMetadata(const QVariantMap &metadata);
   void setBinaryIdentity(const QString &hash);
   quint64 navigationRevision() const;
+  bool hasPendingReads() const;
   void setLoaded(bool loaded);
   void cancelReads();
+  // Discovery repairs metadata at the current address; it is not navigation.
+  void repairAnalysisLocations(PaneController *only = nullptr);
+  void resumeAnalysisReads(PaneController *only = nullptr);
+  void refreshAnalysisViews();
   void refreshAnnotations();
   void renamed(const QString &address, const QString &name);
   void commented(const QString &address, const QString &comment);

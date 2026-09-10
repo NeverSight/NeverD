@@ -23,15 +23,28 @@ bool validAddress(const QString &address) {
       return false;
   return true;
 }
+bool sameAddress(const QString &left, const QString &right) {
+  return validAddress(left) && validAddress(right) &&
+         left.mid(2).toULongLong(nullptr, 16) ==
+             right.mid(2).toULongLong(nullptr, 16);
+}
 } // namespace
 
 PaneController::PaneController(QString id, QString kind, int ordinal,
                                QueryService *queries, PaneRegistry *registry,
                                QObject *parent)
     : QObject(parent), queries_(queries), registry_(registry),
-      id_(std::move(id)), kind_(std::move(kind)), ordinal_(ordinal) {}
+      id_(std::move(id)), kind_(std::move(kind)), ordinal_(ordinal) {
+  selectionTimer_.setSingleShot(true);
+  selectionTimer_.setInterval(40);
+  connect(&selectionTimer_, &QTimer::timeout, this,
+          &PaneController::loadSelectionDetail);
+}
 
-PaneController::~PaneController() { queries_->unsubscribeOwner(this); }
+PaneController::~PaneController() {
+  resetSelectionDetails();
+  queries_->unsubscribeOwner(this);
+}
 
 QString PaneController::dockId() const {
   return id_ == "machine" || id_ == "representation" ? "neverd." + id_
@@ -39,8 +52,9 @@ QString PaneController::dockId() const {
 }
 
 bool PaneController::busy() const {
-  return navigationPending_ || std::any_of(pending_.begin(), pending_.end(),
-                                           [](auto id) { return id != 0; });
+  return navigationPending_ || detailActive_ || queuedDetails_ ||
+         std::any_of(pending_.begin(), pending_.end(),
+                     [](auto id) { return id != 0; });
 }
 
 QJsonObject PaneController::selection() const {
@@ -64,6 +78,7 @@ void PaneController::cancelChannel(Channel channel) {
 }
 
 void PaneController::cancelRequests() {
+  resetSelectionDetails();
   const QPointer<PaneController> guard(this);
   for (int channel = 0; channel < ChannelCount; ++channel) {
     cancelChannel(Channel(channel));
@@ -72,7 +87,7 @@ void PaneController::cancelRequests() {
   }
 }
 
-void PaneController::request(Channel channel, QueryService::QuerySpec spec,
+bool PaneController::request(Channel channel, QueryService::QuerySpec spec,
                              Completion complete, bool graph) {
   const QPointer<PaneController> guard(this);
   const auto generation = generations_[channel] + 1;
@@ -87,7 +102,7 @@ void PaneController::request(Channel channel, QueryService::QuerySpec spec,
   };
   cancelChannel(channel);
   if (!current())
-    return;
+    return false;
   // Admission and cache completions are deferred, including zero-ID errors.
   const auto id = std::make_shared<QueryService::SubscriptionId>(0);
   auto callback = [guard, channel, generation, epoch, id,
@@ -106,18 +121,20 @@ void PaneController::request(Channel channel, QueryService::QuerySpec spec,
                                         std::move(callback))
               : queries_->subscribe(std::move(spec), this, std::move(callback));
   if (!guard)
-    return;
+    return false;
   if (!current()) {
     // Admission may synchronously notify Cancel or a newer request before its
     // ID is returned. Retire this subscription only; preserve any newer slot.
     if (*id)
       queries_->unsubscribe(*id);
-    return;
+    return false;
   }
   pending_[channel] = *id;
+  return true;
 }
 
 bool PaneController::clearResults() {
+  resetSelectionDetails();
   const QPointer<PaneController> guard(this);
   const auto navigation = navigationSequence_, membership = membershipEpoch_;
   const auto epoch = queries_->sessionEpoch();
@@ -180,7 +197,8 @@ void PaneController::navigateTo(const QString &query, int historyTarget) {
             PaneLocation location{payload["address"].toString(),
                                   payload["function_address"].toString(),
                                   payload["name"].toString(),
-                                  payload["comment"].toString()};
+                                  payload["comment"].toString(),
+                                  payload["comment"].isString()};
             if (!validAddress(location.address) ||
                 (!location.functionAddress.isEmpty() &&
                  !validAddress(location.functionAddress))) {
@@ -203,8 +221,10 @@ void PaneController::selectInstruction(const QString &address) {
       registry_->beginNavigation(this, PaneNavigation::Instruction);
   auto location = location_;
   location.address = address;
-  if (address != location_.address)
+  if (address != location_.address) {
     location.comment.clear();
+    location.commentKnown = false;
+  }
   registry_->commitNavigation(ticket, location);
 }
 
@@ -226,6 +246,7 @@ void PaneController::applyLocation(const PaneLocation &location,
       (kind == PaneNavigation::Function &&
        location.address != location_.address);
   const bool addressChanged = location.address != location_.address;
+  ++selectionGeneration_;
   location_ = location;
   error_.clear();
   if (kind == PaneNavigation::Function) {
@@ -248,12 +269,9 @@ void PaneController::applyLocation(const PaneLocation &location,
       return;
     nextInstruction_ = location_.address;
   } else if (addressChanged) {
-    cancelChannel(References);
-    if (!current())
-      return;
-    cancelChannel(Comment);
-    if (!current())
-      return;
+    // Keep an admitted detail read until its terminal callback. Replacing its
+    // subscriber on every cursor move would send cancellation/request storms.
+    // Its context guard prevents publication after this immediate selection.
     xrefs_.replace({});
     if (!current())
       return;
@@ -264,13 +282,14 @@ void PaneController::applyLocation(const PaneLocation &location,
   if (canFetch()) {
     if (documentChanged)
       refreshVisible();
-    else {
+    else
       loadXrefs();
-      if (!current())
-        return;
-      if (kind == PaneNavigation::Instruction)
-        loadComment();
-    }
+    if (!current())
+      return;
+    // Missing metadata is unknown, including after a function navigation.
+    // One ordinary detail read can fill it without treating absence as empty.
+    if (kind == PaneNavigation::Instruction || !location_.commentKnown)
+      loadComment();
   }
   if (current())
     emit changed();
@@ -366,12 +385,15 @@ QString PaneController::mappingStatus() const {
   if (text_.isEmpty())
     return {};
   if (mappingRevision_ != queries_->revision())
-    return translated(
-        "Mapping belongs to an earlier revision; reload the representation");
+    return translated(QT_TRANSLATE_NOOP(
+        "Workbench",
+        "Mapping belongs to an earlier revision; reload the representation"));
   if (mappingState_ == "instruction_anchors")
-    return translated(
-        "Linked instruction addresses; synthetic rows may be unmapped");
-  return translated("Instruction mapping unavailable for this representation");
+    return translated(QT_TRANSLATE_NOOP(
+        "Workbench",
+        "Linked instruction addresses; synthetic rows may be unmapped"));
+  return translated(QT_TRANSLATE_NOOP(
+      "Workbench", "Instruction mapping unavailable for this representation"));
 }
 QString PaneController::representationStatus() const {
   return translated(textStatus_.toUtf8().constData());
@@ -389,6 +411,14 @@ void PaneController::selectTextLine(int line) {
 }
 void PaneController::loadMoreText() { loadText(true); }
 void PaneController::reloadRepresentation() {
+  registry_->resumeAnalysisReads(this);
+  if (location_.functionAddress.isEmpty() && queries_->analysisComplete()) {
+    registry_->repairAnalysisLocations(this);
+    return;
+  }
+  reloadRepresentationImpl();
+}
+void PaneController::reloadRepresentationImpl() {
   const QPointer<PaneController> guard(this);
   const auto navigation = navigationSequence_, membership = membershipEpoch_;
   const auto epoch = queries_->sessionEpoch();
@@ -407,6 +437,7 @@ void PaneController::setRepresentation(const QString &representation) {
   if (kind_ != "representation" || representation_ == representation ||
       !QStringList{"c", "low", "med", "high", "llvm"}.contains(representation))
     return;
+  registry_->resumeAnalysisReads(this);
   const QPointer<PaneController> guard(this);
   const auto navigation = navigationSequence_, membership = membershipEpoch_;
   const auto epoch = queries_->sessionEpoch();
@@ -422,7 +453,10 @@ void PaneController::setRepresentation(const QString &representation) {
       membershipEpoch_ != membership || queries_->sessionEpoch() != epoch ||
       generations_[Text] != generation)
     return;
-  loadText();
+  if (location_.functionAddress.isEmpty() && queries_->analysisComplete())
+    registry_->repairAnalysisLocations(this);
+  else
+    loadText();
   if (guard)
     emit changed();
   if (guard)
@@ -434,6 +468,20 @@ void PaneController::toggleRepresentationPin() {
 }
 
 void PaneController::requestView(const QString &view) {
+  if (kind_ != "machine" || !QStringList{"disasm", "hex", "cfg"}.contains(view))
+    return;
+  registry_->resumeAnalysisReads(this);
+  const QPointer<PaneController> guard(this);
+  const auto navigation = navigationSequence_, membership = membershipEpoch_;
+  const auto epoch = queries_->sessionEpoch();
+  requestViewImpl(view);
+  if (guard && navigationSequence_ == navigation &&
+      membershipEpoch_ == membership && queries_->sessionEpoch() == epoch &&
+      centralView_ == view && location_.functionAddress.isEmpty() &&
+      queries_->analysisComplete())
+    registry_->repairAnalysisLocations(this);
+}
+void PaneController::requestViewImpl(const QString &view) {
   if (kind_ != "machine" || !QStringList{"disasm", "hex", "cfg"}.contains(view))
     return;
   const QPointer<PaneController> guard(this);
@@ -543,44 +591,122 @@ QVariantList PaneController::graphEdges() const {
 }
 QString PaneController::graphViewportStatus() const {
   if (graphViewport_.isEmpty() || graphRevision_ != queries_->revision())
-    return translated("Loading graph viewport…");
+    return translated(
+        QT_TRANSLATE_NOOP("Workbench", "Loading graph viewport…"));
   if (graphViewport_["nodes_truncated"].toBool() ||
       graphViewport_["edges_truncated"].toBool())
-    return translated("Viewport limit reached; zoom in for details");
-  return translated("%1 visible blocks · %2 edges")
+    return translated(QT_TRANSLATE_NOOP(
+        "Workbench", "Viewport limit reached; zoom in for details"));
+  return translated(
+             QT_TRANSLATE_NOOP("Workbench", "%1 visible blocks · %2 edges"))
       .arg(nodes_.size())
       .arg(edges_.size());
 }
 
-void PaneController::loadXrefs() {
-  if (!canFetch() || location_.address.isEmpty())
-    return;
-  request(
-      References,
-      {"xrefs",
-       {{"address", location_.address}, {"direction", "to"}, {"limit", 256}}},
-      [this](const auto &response) {
-        if (response["status"] == "ok")
-          xrefs_.replace(response["payload"].toObject()["items"].toArray());
-        else
-          fail(response);
-      });
+bool PaneController::currentDetails(const DetailContext &context) const {
+  return canFetch() && queries_->available() && !analysisRefreshSuppressed_ &&
+         !navigationPending_ && context.epoch == queries_->sessionEpoch() &&
+         context.navigation == navigationSequence_ &&
+         context.membership == membershipEpoch_ &&
+         context.selection == selectionGeneration_ &&
+         !context.address.isEmpty() && context.address == location_.address;
 }
-void PaneController::loadComment() {
-  if (!canFetch() || location_.address.isEmpty())
+
+void PaneController::queueDetail(Channel channel) {
+  const DetailContext context{queries_->sessionEpoch(), navigationSequence_,
+                              membershipEpoch_, selectionGeneration_,
+                              location_.address};
+  if (!currentDetails(context))
     return;
-  request(Comment, {"resolve", {{"query", location_.address}}},
-          [this](const auto &response) {
-            if (response["status"] == "ok") {
-              const auto payload = response["payload"].toObject();
-              location_.comment = payload["comment"].toString();
-              if (location_.functionAddress ==
+  if (!currentDetails(queuedDetailContext_))
+    queuedDetails_ = 0;
+  queuedDetailContext_ = context;
+  queuedDetails_ |= 1u << channel;
+  selectionTimer_.start();
+}
+
+void PaneController::resetSelectionDetails() {
+  selectionTimer_.stop();
+  queuedDetails_ = 0;
+  detailActive_ = false;
+  ++selectionGeneration_;
+  ++detailRequestGeneration_;
+}
+
+void PaneController::finishSelectionDetail(quint64 generation) {
+  if (generation != detailRequestGeneration_)
+    return;
+  detailActive_ = false;
+  if (queuedDetails_ && !selectionTimer_.isActive()) {
+    // Return through the dispatcher's delivery barrier before admitting the
+    // next read; queued edits can run before the remaining derived detail.
+    QTimer::singleShot(0, this, [this, generation] {
+      if (generation == detailRequestGeneration_)
+        loadSelectionDetail();
+    });
+  }
+}
+
+void PaneController::loadSelectionDetail() {
+  if (!queuedDetails_ || detailActive_ || selectionTimer_.isActive())
+    return;
+  const auto context = queuedDetailContext_;
+  if (!currentDetails(context)) {
+    queuedDetails_ = 0;
+    emit changed();
+    return;
+  }
+  // One admitted detail subscription per pane, plus the latest location's
+  // pending flags. Cursor movement replaces flags without detaching that read.
+  const Channel channel =
+      queuedDetails_ & (1u << References) ? References : Comment;
+  queuedDetails_ &= ~(1u << channel);
+  detailActive_ = true;
+  const auto generation = detailRequestGeneration_;
+  const QPointer<PaneController> guard(this);
+  QueryService::QuerySpec spec;
+  if (channel == References) {
+    spec = {
+        "xrefs",
+        {{"address", context.address}, {"direction", "to"}, {"limit", 256}}};
+  } else {
+    spec = {"resolve", {{"query", context.address}}};
+  }
+  const bool admitted = request(
+      channel, std::move(spec),
+      [guard, context, channel, generation](const QJsonObject &response) {
+        if (!guard || generation != guard->detailRequestGeneration_)
+          return;
+        if (guard->currentDetails(context)) {
+          if (response["status"] != "ok") {
+            guard->fail(response);
+          } else if (channel == References) {
+            guard->xrefs_.replace(
+                response["payload"].toObject()["items"].toArray());
+          } else {
+            const auto payload = response["payload"].toObject();
+            if (sameAddress(payload["address"].toString(), context.address)) {
+              if (payload["comment"].isString()) {
+                guard->location_.comment = payload["comment"].toString();
+                guard->location_.commentKnown = true;
+              }
+              if (guard->location_.functionAddress ==
                   payload["function_address"].toString())
-                location_.functionName = payload["name"].toString();
-            } else
-              fail(response);
-          });
+                guard->location_.functionName = payload["name"].toString();
+            }
+          }
+        }
+        if (guard)
+          guard->finishSelectionDetail(generation);
+      });
+  // A reentrant navigation/Cancel during admission can retire its callback.
+  // Release only this attempt; cancellation may already have started a new one.
+  if (guard && !admitted)
+    guard->finishSelectionDetail(generation);
 }
+
+void PaneController::loadXrefs() { queueDetail(References); }
+void PaneController::loadComment() { queueDetail(Comment); }
 void PaneController::refreshVisible() {
   if (!canFetch() || location_.address.isEmpty())
     return;
@@ -588,7 +714,7 @@ void PaneController::refreshVisible() {
   const auto navigation = navigationSequence_, membership = membershipEpoch_;
   const auto epoch = queries_->sessionEpoch();
   if (kind_ == "machine")
-    requestView(centralView_);
+    requestViewImpl(centralView_);
   else
     loadText();
   if (guard && navigationSequence_ == navigation &&

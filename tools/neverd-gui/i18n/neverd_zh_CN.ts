@@ -318,11 +318,6 @@
             <translation>地址</translation>
         </message>
         <message>
-            <location filename="../qml/FunctionsPane.qml" line="118" />
-            <source>Load more functions</source>
-            <translation>加载更多函数</translation>
-        </message>
-        <message>
             <location filename="../qml/FunctionsPane.qml" line="128" />
             <source>No functions</source>
             <translation>没有函数</translation>
@@ -814,21 +809,6 @@
             <translation>更改立即生效。代码、符号与注释保留原始语言。</translation>
         </message>
         <message>
-            <location filename="../qml/Main.qml" line="362" />
-            <source>Open binary: %1
-Go to address or symbol: G
-Rename function: N
-Edit comment: ;
-Toggle bottom panel: Ctrl+J
-Back / forward: %2 / %3</source>
-            <translation>打开二进制文件：%1
-跳转到地址或符号：G
-重命名函数：N
-编辑注释：;
-切换底部面板：Ctrl+J
-后退 / 前进：%2 / %3</translation>
-        </message>
-        <message>
             <location filename="../qml/Main.qml" line="372" />
             <source>NeverD
 Binary analysis workbench
@@ -1016,6 +996,34 @@ Explore disassembly, control flow, recovered C, and intermediate representations
         </message>
     </context>
     <context>
+        <name>PaneRegistry</name>
+        <message>
+            <location filename="../PaneRegistry.cpp" line="417" />
+            <source>Default</source>
+            <translation>默认</translation>
+        </message>
+        <message>
+            <location filename="../PaneRegistry.cpp" line="424" />
+            <source>Cannot create pane: invalid kind or pane limit reached.</source>
+            <translation>无法创建面板：类型无效或已达到面板数量上限。</translation>
+        </message>
+        <message>
+            <location filename="../PaneRegistry.cpp" line="429" />
+            <source>The source pane is unavailable.</source>
+            <translation>源面板不可用。</translation>
+        </message>
+        <message>
+            <location filename="../PaneRegistry.cpp" line="553" />
+            <source>Cannot create group: invalid name or group limit reached.</source>
+            <translation>无法创建分组：名称无效或已达到分组数量上限。</translation>
+        </message>
+        <message>
+            <location filename="../PaneRegistry.cpp" line="1004" />
+            <source>The saved pane catalog is invalid.</source>
+            <translation>已保存的面板目录无效。</translation>
+        </message>
+    </context>
+    <context>
         <name>RepresentationPane</name>
         <message>
             <location filename="../qml/RepresentationPane.qml" line="31" />
@@ -1056,11 +1064,6 @@ Explore disassembly, control flow, recovered C, and intermediate representations
             <translation>操作失败</translation>
         </message>
         <message>
-            <location filename="../Workbench.cpp" line="94" />
-            <source>Worker unavailable or request queue full.</source>
-            <translation>分析进程不可用或请求队列已满。</translation>
-        </message>
-        <message>
             <location filename="../Workbench.cpp" line="147" />
             <source>Incompatible analysis worker protocol.</source>
             <translation>分析进程协议不兼容。</translation>
@@ -1089,11 +1092,6 @@ Explore disassembly, control flow, recovered C, and intermediate representations
             <location filename="../Workbench.cpp" line="228" />
             <source>Binary loaded</source>
             <translation>二进制文件已加载</translation>
-        </message>
-        <message>
-            <location filename="../Workbench.cpp" line="295" />
-            <source>Reading analysis views…</source>
-            <translation>正在读取分析视图…</translation>
         </message>
         <message>
             <location filename="../Workbench.cpp" line="311" />
@@ -1188,6 +1186,11 @@ Explore disassembly, control flow, recovered C, and intermediate representations
             <location filename="../Workbench.cpp" line="510" />
             <source>Annotations reloaded</source>
             <translation>注释已重新加载</translation>
+        </message>
+        <message>
+            <location filename="../Workbench.cpp" line="193" />
+            <source>Finish opening the binary before editing.</source>
+            <translation>请等待二进制文件打开完成后再编辑。</translation>
         </message>
     </context>
     <context>

@@ -318,11 +318,6 @@
             <translation>العنوان</translation>
         </message>
         <message>
-            <location filename="../qml/FunctionsPane.qml" line="118" />
-            <source>Load more functions</source>
-            <translation>تحميل المزيد من الدوال</translation>
-        </message>
-        <message>
             <location filename="../qml/FunctionsPane.qml" line="128" />
             <source>No functions</source>
             <translation>لا توجد دوال</translation>
@@ -814,21 +809,6 @@
             <translation>تُطبّق التغييرات فوراً. تحتفظ الشيفرة والرموز والتعليقات بلغتها الأصلية.</translation>
         </message>
         <message>
-            <location filename="../qml/Main.qml" line="362" />
-            <source>Open binary: %1
-Go to address or symbol: G
-Rename function: N
-Edit comment: ;
-Toggle bottom panel: Ctrl+J
-Back / forward: %2 / %3</source>
-            <translation>فتح ملف ثنائي: %1
-الانتقال إلى عنوان أو رمز: G
-إعادة تسمية الدالة: N
-تحرير التعليق: ;
-إظهار أو إخفاء اللوحة السفلية: Ctrl+J
-رجوع / تقدم: %2 / %3</translation>
-        </message>
-        <message>
             <location filename="../qml/Main.qml" line="372" />
             <source>NeverD
 Binary analysis workbench
@@ -1016,6 +996,34 @@ Explore disassembly, control flow, recovered C, and intermediate representations
         </message>
     </context>
     <context>
+        <name>PaneRegistry</name>
+        <message>
+            <location filename="../PaneRegistry.cpp" line="417" />
+            <source>Default</source>
+            <translation>افتراضي</translation>
+        </message>
+        <message>
+            <location filename="../PaneRegistry.cpp" line="424" />
+            <source>Cannot create pane: invalid kind or pane limit reached.</source>
+            <translation>تعذر إنشاء اللوحة: النوع غير صالح أو تم بلوغ الحد الأقصى لعدد اللوحات.</translation>
+        </message>
+        <message>
+            <location filename="../PaneRegistry.cpp" line="429" />
+            <source>The source pane is unavailable.</source>
+            <translation>لوحة المصدر غير متاحة.</translation>
+        </message>
+        <message>
+            <location filename="../PaneRegistry.cpp" line="553" />
+            <source>Cannot create group: invalid name or group limit reached.</source>
+            <translation>تعذر إنشاء المجموعة: الاسم غير صالح أو تم بلوغ الحد الأقصى لعدد المجموعات.</translation>
+        </message>
+        <message>
+            <location filename="../PaneRegistry.cpp" line="1004" />
+            <source>The saved pane catalog is invalid.</source>
+            <translation>قائمة اللوحات المحفوظة غير صالحة.</translation>
+        </message>
+    </context>
+    <context>
         <name>RepresentationPane</name>
         <message>
             <location filename="../qml/RepresentationPane.qml" line="31" />
@@ -1056,11 +1064,6 @@ Explore disassembly, control flow, recovered C, and intermediate representations
             <translation>فشل الإجراء</translation>
         </message>
         <message>
-            <location filename="../Workbench.cpp" line="94" />
-            <source>Worker unavailable or request queue full.</source>
-            <translation>عملية التحليل غير متاحة أو قائمة الطلبات ممتلئة.</translation>
-        </message>
-        <message>
             <location filename="../Workbench.cpp" line="147" />
             <source>Incompatible analysis worker protocol.</source>
             <translation>بروتوكول عملية التحليل غير متوافق.</translation>
@@ -1089,11 +1092,6 @@ Explore disassembly, control flow, recovered C, and intermediate representations
             <location filename="../Workbench.cpp" line="228" />
             <source>Binary loaded</source>
             <translation>تم تحميل الملف الثنائي</translation>
-        </message>
-        <message>
-            <location filename="../Workbench.cpp" line="295" />
-            <source>Reading analysis views…</source>
-            <translation>جارٍ قراءة عروض التحليل…</translation>
         </message>
         <message>
             <location filename="../Workbench.cpp" line="311" />
@@ -1188,6 +1186,11 @@ Explore disassembly, control flow, recovered C, and intermediate representations
             <location filename="../Workbench.cpp" line="510" />
             <source>Annotations reloaded</source>
             <translation>تمت إعادة تحميل التعليقات</translation>
+        </message>
+        <message>
+            <location filename="../Workbench.cpp" line="193" />
+            <source>Finish opening the binary before editing.</source>
+            <translation>انتظر اكتمال فتح الملف الثنائي قبل إجراء أي تعديلات.</translation>
         </message>
     </context>
     <context>

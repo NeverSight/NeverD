@@ -21,6 +21,7 @@ public:
   Json execute(const std::string &operation, const Json &payload);
   std::string revision() const { return std::to_string(revision_); }
   std::string projectId() const { return projectId_; }
+  bool analyzed() const { return analyzed_; }
   static std::string version();
 
 private:

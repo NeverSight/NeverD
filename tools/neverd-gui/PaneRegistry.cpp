@@ -8,6 +8,7 @@
 #include <QSet>
 #include <QTimer>
 #include <QUuid>
+#include <algorithm>
 #include <optional>
 #include <utility>
 
@@ -24,14 +25,22 @@ bool validAddress(const QString &address) {
   static const QRegularExpression pattern("^0[xX][a-fA-F0-9]{1,16}$");
   return pattern.match(address).hasMatch();
 }
+bool sameAddress(const QString &left, const QString &right) {
+  return validAddress(left) && validAddress(right) &&
+         left.mid(2).toULongLong(nullptr, 16) ==
+             right.mid(2).toULongLong(nullptr, 16);
+}
 QVariantMap saveLocation(const PaneLocation &location) {
   // Names and comments are mutable. Resolve them from the active session.
   return {{"address", location.address},
           {"function_address", location.functionAddress}};
 }
 PaneLocation readLocation(const QVariantMap &data) {
-  return {
-      data["address"].toString(), data["function_address"].toString(), {}, {}};
+  return {data["address"].toString(),
+          data["function_address"].toString(),
+          {},
+          {},
+          false};
 }
 bool validLocation(const QVariantMap &data) {
   const auto address = data["address"].toString(),
@@ -53,6 +62,17 @@ struct PaneRegistry::State {
     QPointer<PaneController> pane;
     quint64 epoch = 0, navigation = 0, membership = 0;
   };
+  struct RepairPane {
+    QPointer<PaneController> pane;
+    quint64 navigation = 0, membership = 0;
+    PaneLocation location;
+  };
+  struct RepairTarget {
+    quint64 epoch = 0, incarnation = 0, sequence = 0;
+    QString groupId;
+    PaneLocation location;
+    QList<RepairPane> panes;
+  };
   PaneRegistry *q;
   QueryService *queries;
   QList<QPointer<PaneController>> panes;
@@ -62,6 +82,7 @@ struct PaneRegistry::State {
   quint64 nextIncarnation = 0, epoch = 0, navigationClock = 0, restoreClock = 0;
   int nextOrdinal = 1;
   bool loaded = false;
+  bool destroying = false;
   QVariantMap pendingRestore;
   QHash<QString, quint64> restoreMemberships;
 
@@ -113,6 +134,107 @@ struct PaneRegistry::State {
     return currentStructure(stamp, membershipAdvance) &&
            stamp.pane->navigationSequence_ == stamp.navigation;
   }
+  void refreshMembershipDetails(const PaneStamp &operation) {
+    // Membership changes retire the queued/held detail context even when the
+    // address stays put. Only the original operation may queue its replacement.
+    if (!currentOperation(operation, 1) || !operation.pane->canFetch() ||
+        operation.pane->analysisRefreshSuppressed_)
+      return;
+    operation.pane->loadXrefs();
+    if (!operation.pane->location_.commentKnown)
+      operation.pane->loadComment();
+  }
+  bool repairable(const PaneController *pane) const {
+    return pane && pane->loaded_ && pane->open_ && !pane->removing_ &&
+           !pane->analysisRefreshSuppressed_ && !pane->navigationPending_ &&
+           validAddress(pane->location_.address);
+  }
+  bool currentRepairPane(const RepairPane &target,
+                         const QString &groupId) const {
+    const auto *pane = target.pane.data();
+    return repairable(pane) && q->findPane(pane->id()) == pane &&
+           pane->navigationSequence_ == target.navigation &&
+           pane->membershipEpoch_ == target.membership &&
+           pane->location_.address == target.location.address &&
+           pane->location_.functionAddress == target.location.functionAddress &&
+           (groupId.isEmpty() ? pane->pinned_ || pane->groupId_.isEmpty()
+                              : !pane->pinned_ && pane->groupId_ == groupId);
+  }
+  Group *currentRepairGroup(const RepairTarget &target,
+                            const QString &function) {
+    auto *entry = group(target.groupId);
+    return entry && !entry->pending && entry->canonical &&
+                   entry->incarnation == target.incarnation &&
+                   entry->sequence == target.sequence &&
+                   entry->canonical->address == target.location.address &&
+                   entry->canonical->functionAddress == function
+               ? entry
+               : nullptr;
+  }
+  void publishRepair(const RepairTarget &target, const PaneLocation &resolved) {
+    if (destroying || !loaded || target.epoch != queries->sessionEpoch() ||
+        !sameAddress(target.location.address, resolved.address) ||
+        !validAddress(resolved.functionAddress))
+      return;
+    auto metadata = resolved;
+    if (!target.groupId.isEmpty()) {
+      auto *entry = currentRepairGroup(target, target.location.functionAddress);
+      if (!entry) {
+        // An earlier coalesced completion may have repaired the canonical
+        // before this subscription's newly reopened members were included.
+        if (!target.location.functionAddress.isEmpty() ||
+            !(entry = currentRepairGroup(target, resolved.functionAddress)))
+          return;
+      } else {
+        // Canonical metadata must be repaired before any member emits signals.
+        // Neither its address nor the group's navigation watermark changes.
+        entry->canonical->functionAddress = resolved.functionAddress;
+        if (!resolved.functionName.isEmpty())
+          entry->canonical->functionName = resolved.functionName;
+        if (resolved.commentKnown) {
+          entry->canonical->comment = resolved.comment;
+          entry->canonical->commentKnown = true;
+        }
+      }
+      metadata = *entry->canonical;
+    }
+    const QPointer<PaneRegistry> guard(q);
+    for (const auto &item : target.panes) {
+      if (destroying || target.epoch != queries->sessionEpoch() ||
+          (!target.groupId.isEmpty() &&
+           !currentRepairGroup(target, metadata.functionAddress)))
+        return;
+      if (!currentRepairPane(item, target.groupId))
+        continue;
+      const auto pane = item.pane;
+      auto location = pane->location_;
+      if (!location.functionAddress.isEmpty() &&
+          location.functionAddress != metadata.functionAddress)
+        continue;
+      location.functionAddress = metadata.functionAddress;
+      if (!metadata.functionName.isEmpty())
+        location.functionName = metadata.functionName;
+      if (metadata.commentKnown) {
+        location.comment = metadata.comment;
+        location.commentKnown = true;
+      }
+      if (pane->location_.functionAddress.isEmpty()) {
+        pane->applyLocation(location, PaneNavigation::Function, -1, false);
+      } else if (location.functionName != pane->location_.functionName ||
+                 location.comment != pane->location_.comment ||
+                 location.commentKnown != pane->location_.commentKnown) {
+        pane->location_ = location;
+        emit pane->selectionChanged();
+        if (!guard)
+          return;
+        if (currentRepairPane(item, target.groupId))
+          emit pane->changed();
+      }
+      if (!guard)
+        return;
+    }
+    emit q->changed();
+  }
   void adopt(PaneController *pane) {
     const QPointer<PaneRegistry> registryGuard(q);
     auto *entry = group(pane->groupId_);
@@ -125,8 +247,11 @@ struct PaneRegistry::State {
       if (location.functionName.isEmpty() &&
           location.functionAddress == pane->location_.functionAddress) {
         location.functionName = pane->location_.functionName;
-        if (location.address == pane->location_.address)
-          location.comment = pane->location_.comment;
+      }
+      if (!location.commentKnown && pane->location_.commentKnown &&
+          sameAddress(location.address, pane->location_.address)) {
+        location.comment = pane->location_.comment;
+        location.commentKnown = true;
       }
       const QPointer<PaneController> guard(pane);
       const auto membership = pane->membershipEpoch_;
@@ -210,6 +335,7 @@ PaneRegistry::PaneRegistry(QueryService *queries, QObject *parent)
         if (!pane)
           continue;
         pane->loaded_ = false;
+        pane->analysisRefreshSuppressed_ = false;
         pane->pinned_ = false;
         pane->location_ = {};
         pane->history_.clear();
@@ -237,6 +363,9 @@ PaneRegistry::PaneRegistry(QueryService *queries, QObject *parent)
 }
 
 PaneRegistry::~PaneRegistry() {
+  state_->destroying = true;
+  disconnect(state_->queries, nullptr, this, nullptr);
+  state_->queries->unsubscribeOwner(this);
   // Pane destructors detach subscriptions while both State and the borrowed
   // service still exist. QObject's later child teardown then has no panes.
   const auto panes = state_->panes;
@@ -267,6 +396,12 @@ QString PaneRegistry::activePaneId() const {
 QString PaneRegistry::error() const { return state_->error; }
 quint64 PaneRegistry::navigationRevision() const {
   return state_->navigationClock;
+}
+bool PaneRegistry::hasPendingReads() const {
+  for (const auto &pane : state_->panes)
+    if (pane && pane->busy())
+      return true;
+  return false;
 }
 
 QVariantList PaneRegistry::items() const {
@@ -350,6 +485,8 @@ void PaneRegistry::setPaneOpen(const QString &id, bool open) {
     return;
   if (pane)
     emit pane->changed();
+  if (guard && open && state_->currentOperation(operation, 1))
+    repairAnalysisLocations(pane);
   if (guard)
     emit changed();
 }
@@ -374,6 +511,8 @@ void PaneRegistry::setPaneVisible(const QString &id, bool visible) {
   }
   if (guard && pane)
     emit pane->changed();
+  if (guard && visible && state_->currentOperation(operation))
+    repairAnalysisLocations(pane);
 }
 void PaneRegistry::setPaneGroup(const QString &id, const QString &groupId) {
   const QPointer<PaneRegistry> guard(this);
@@ -392,10 +531,13 @@ void PaneRegistry::setPaneGroup(const QString &id, const QString &groupId) {
     state_->adopt(pane);
   if (!guard)
     return;
+  state_->refreshMembershipDetails(operation);
   if (pane)
     emit pane->changed();
   if (guard && pane == activePane())
     emit selectionChanged();
+  if (guard && state_->currentOperation(operation, 1))
+    repairAnalysisLocations(pane);
 }
 void PaneRegistry::setPanePinned(const QString &id, bool pinned) {
   const QPointer<PaneRegistry> guard(this);
@@ -410,8 +552,12 @@ void PaneRegistry::setPanePinned(const QString &id, bool pinned) {
   pane->pinned_ = pinned;
   if (!pinned && state_->currentOperation(operation, 1))
     state_->adopt(pane);
+  if (guard)
+    state_->refreshMembershipDetails(operation);
   if (guard && pane)
     emit pane->changed();
+  if (guard && state_->currentOperation(operation, 1))
+    repairAnalysisLocations(pane);
 }
 QString PaneRegistry::createGroup(const QString &name) {
   if (state_->groups.size() >= 16 || name.trimmed().isEmpty() ||
@@ -516,6 +662,7 @@ PaneNavigationTicket PaneRegistry::beginNavigation(PaneController *pane,
   }
   // Install the replacement only after both retirement notification boundaries
   // have preserved its original stamp. A nested Cancel cannot become its base.
+  pane->analysisRefreshSuppressed_ = false;
   ++state_->navigationClock;
   pane->navigationPending_ = true;
   PaneNavigationTicket ticket{pane,
@@ -562,9 +709,12 @@ bool PaneRegistry::commitNavigation(const PaneNavigationTicket &ticket,
     return false;
   const auto origin = ticket.origin;
   const QPointer<PaneRegistry> guard(this);
+  const auto operation = state_->operationStamp(origin);
   origin->navigationPending_ = false;
   if (ticket.groupId.isEmpty()) {
     origin->applyLocation(location, ticket.kind, ticket.historyTarget);
+    if (guard && state_->currentOperation(operation))
+      repairAnalysisLocations(origin);
     return true;
   }
   auto *group = state_->group(ticket.groupId);
@@ -582,6 +732,7 @@ bool PaneRegistry::commitNavigation(const PaneNavigationTicket &ticket,
         group->sequence != ticket.groupSequence)
       break;
     if (state_->eligible(pane, ticket.groupId)) {
+      pane->analysisRefreshSuppressed_ = false;
       pane->applyLocation(location, ticket.kind,
                           pane == origin ? ticket.historyTarget : -1);
       if (!guard)
@@ -589,6 +740,8 @@ bool PaneRegistry::commitNavigation(const PaneNavigationTicket &ticket,
     }
   }
   emit changed();
+  if (guard && state_->currentOperation(operation))
+    repairAnalysisLocations(origin);
   return true;
 }
 void PaneRegistry::finishNavigation(const PaneNavigationTicket &ticket) {
@@ -599,15 +752,38 @@ void PaneRegistry::finishNavigation(const PaneNavigationTicket &ticket) {
     group->pending = false;
     group->origin.clear();
   }
+  const QPointer<PaneRegistry> guard(this);
+  const auto operation = state_->operationStamp(ticket.origin);
   emit ticket.origin->changed();
+  if (guard && state_->currentOperation(operation))
+    repairAnalysisLocations(ticket.origin);
 }
 void PaneRegistry::retireNavigation(PaneController *pane) {
   if (!pane)
     return;
   if (auto *group = state_->group(pane->groupId_))
     if (group->pending && group->origin == pane) {
+      const auto id = group->id;
+      const auto incarnation = group->incarnation, sequence = group->sequence;
+      const auto epoch = state_->queries->sessionEpoch();
       group->pending = false;
       group->origin.clear();
+      // Closing/moving the pending origin must not strand the old group's
+      // unknown identity after its one discovery event has already passed.
+      // Wait until the caller has installed its new intent or membership.
+      QTimer::singleShot(0, this, [this, id, incarnation, sequence, epoch] {
+        auto *entry = state_->group(id);
+        if (state_->destroying || epoch != state_->queries->sessionEpoch() ||
+            !entry || entry->pending || entry->incarnation != incarnation ||
+            entry->sequence != sequence)
+          return;
+        for (const auto &member :
+             QList<QPointer<PaneController>>(state_->panes))
+          if (state_->eligible(member, id) && state_->repairable(member)) {
+            repairAnalysisLocations(member);
+            return;
+          }
+      });
     }
   pane->navigationPending_ = false;
   ++pane->navigationSequence_;
@@ -648,17 +824,22 @@ void PaneRegistry::cancelReads() {
   // Cancel is also intent against a deferred startup entry fallback. Advance
   // before any unsubscribe/changed observer can enter the same stack again.
   ++state_->navigationClock;
-  for (const auto &pane : QList<QPointer<PaneController>>(state_->panes))
-    if (pane) {
+  const auto panes = state_->panes;
+  // Mark every pane before unsubscribe can emit a reentrant pendingChanged.
+  for (const auto &pane : panes)
+    if (pane)
+      pane->analysisRefreshSuppressed_ = true;
+  for (const auto &pane : panes)
+    if (pane && pane->analysisRefreshSuppressed_) {
       retireNavigation(pane);
       if (!guard)
         return;
-      if (!pane)
+      if (!pane || !pane->analysisRefreshSuppressed_)
         continue;
       pane->cancelRequests();
       if (!guard)
         return;
-      if (!pane)
+      if (!pane || !pane->analysisRefreshSuppressed_)
         continue;
       pane->textStatus_ =
           QT_TRANSLATE_NOOP("Workbench", "Cancellation requested");
@@ -667,12 +848,110 @@ void PaneRegistry::cancelReads() {
         return;
     }
 }
+void PaneRegistry::resumeAnalysisReads(PaneController *only) {
+  for (const auto &pane : QList<QPointer<PaneController>>(state_->panes))
+    if (pane && (!only || pane == only) && pane->loaded_ && pane->open_ &&
+        !pane->removing_)
+      pane->analysisRefreshSuppressed_ = false;
+}
+void PaneRegistry::refreshAnalysisViews() {
+  const auto epoch = state_->queries->sessionEpoch();
+  const QPointer<PaneRegistry> guard(this);
+  for (const auto &pane : QList<QPointer<PaneController>>(state_->panes)) {
+    if (!pane || pane->analysisRefreshSuppressed_ || !pane->canFetch())
+      continue;
+    if (pane->kind_ == "representation")
+      pane->reloadRepresentationImpl();
+    else
+      pane->refreshVisible();
+    if (!guard || state_->queries->sessionEpoch() != epoch)
+      return;
+  }
+}
+void PaneRegistry::repairAnalysisLocations(PaneController *only) {
+  auto &s = *state_;
+  if (s.destroying || !s.loaded || !s.queries->analysisComplete() ||
+      (only && findPane(only->id()) != only))
+    return;
+  QList<State::RepairTarget> targets;
+  QSet<QString> groups;
+  const auto epoch = s.queries->sessionEpoch();
+  const auto panes = s.panes;
+  for (const auto &pane : panes) {
+    if (!s.repairable(pane) || (only && pane != only))
+      continue;
+    State::RepairTarget target;
+    target.epoch = epoch;
+    if (!pane->pinned_ && !pane->groupId_.isEmpty()) {
+      if (groups.contains(pane->groupId_))
+        continue;
+      groups.insert(pane->groupId_);
+      const auto *entry = s.group(pane->groupId_);
+      if (!entry || entry->pending || !entry->canonical ||
+          !validAddress(entry->canonical->address))
+        continue;
+      target.groupId = entry->id;
+      target.incarnation = entry->incarnation;
+      target.sequence = entry->sequence;
+      target.location = *entry->canonical;
+      for (const auto &member : panes)
+        if (s.repairable(member) && s.eligible(member, entry->id) &&
+            member->location_.address == target.location.address &&
+            (target.location.functionAddress.isEmpty() ||
+             member->location_.functionAddress.isEmpty()))
+          target.panes.append({member, member->navigationSequence_,
+                               member->membershipEpoch_, member->location_});
+    } else if (pane->location_.functionAddress.isEmpty()) {
+      target.location = pane->location_;
+      target.panes.append({pane, pane->navigationSequence_,
+                           pane->membershipEpoch_, pane->location_});
+    }
+    if (!target.panes.isEmpty())
+      targets.append(std::move(target));
+  }
+  const QPointer<PaneRegistry> guard(this);
+  for (const auto &target : targets) {
+    if (!s.loaded || s.destroying || s.queries->sessionEpoch() != epoch)
+      return;
+    if ((!target.groupId.isEmpty() &&
+         !s.currentRepairGroup(target, target.location.functionAddress)) ||
+        std::none_of(target.panes.begin(), target.panes.end(),
+                     [&s, &target](const auto &pane) {
+                       return s.currentRepairPane(pane, target.groupId);
+                     }))
+      continue;
+    if (!target.location.functionAddress.isEmpty()) {
+      s.publishRepair(target, target.location);
+    } else {
+      s.queries->subscribe(
+          {"resolve", {{"query", target.location.address}}}, this,
+          [guard, target](const QJsonObject &response) {
+            if (!guard || response.value("status") != "ok")
+              return;
+            const auto payload = response.value("payload").toObject();
+            auto location = target.location;
+            location.address = payload.value("address").toString();
+            location.functionAddress =
+                payload.value("function_address").toString();
+            if (payload.value("name").isString())
+              location.functionName = payload.value("name").toString();
+            if (payload.value("comment").isString()) {
+              location.comment = payload.value("comment").toString();
+              location.commentKnown = true;
+            }
+            guard->state_->publishRepair(target, location);
+          });
+    }
+    if (!guard)
+      return;
+  }
+}
 void PaneRegistry::refreshAnnotations() {
   for (const auto &pane : QList<QPointer<PaneController>>(state_->panes))
     if (pane && pane->canFetch()) {
       pane->loadComment();
       if (pane->kind_ == "machine" && pane->centralView_ == "cfg")
-        pane->requestView("cfg");
+        pane->requestViewImpl("cfg");
     }
 }
 void PaneRegistry::renamed(const QString &address, const QString &name) {
@@ -683,7 +962,7 @@ void PaneRegistry::renamed(const QString &address, const QString &name) {
     if (pane && pane->location_.functionAddress == address) {
       pane->location_.functionName = name;
       if (pane->kind_ == "representation")
-        pane->reloadRepresentation();
+        pane->reloadRepresentationImpl();
       emit pane->changed();
     }
   emit selectionChanged();
@@ -691,11 +970,14 @@ void PaneRegistry::renamed(const QString &address, const QString &name) {
 
 void PaneRegistry::commented(const QString &address, const QString &comment) {
   for (auto &group : state_->groups)
-    if (group.canonical && group.canonical->address == address)
+    if (group.canonical && group.canonical->address == address) {
       group.canonical->comment = comment;
+      group.canonical->commentKnown = true;
+    }
   for (const auto &pane : QList<QPointer<PaneController>>(state_->panes))
     if (pane && pane->location_.address == address) {
       pane->location_.comment = comment;
+      pane->location_.commentKnown = true;
       emit pane->changed();
     }
 }
@@ -790,15 +1072,25 @@ bool PaneRegistry::restoreMetadata(const QVariantMap &metadata) {
 
   // This restore deliberately retires earlier work once. Any further Cancel
   // or navigation during that retirement invalidates this original operation.
+  // Preserve existing suppression: catalog restoration is not a user Cancel.
   const auto operationEpoch = state_->queries->sessionEpoch();
   const auto operationClock = state_->navigationClock + 1;
   const auto current = [guard, operationEpoch, operationClock] {
     return guard && guard->state_->queries->sessionEpoch() == operationEpoch &&
            guard->state_->navigationClock == operationClock;
   };
-  cancelReads();
-  if (!current())
-    return false;
+  ++state_->navigationClock;
+  for (const auto &pane : QList<QPointer<PaneController>>(state_->panes)) {
+    if (!pane)
+      continue;
+    retireNavigation(pane);
+    if (!current())
+      return false;
+    if (pane)
+      pane->cancelRequests();
+    if (!current())
+      return false;
+  }
   state_->groups.clear();
   for (const auto &value : groups) {
     const auto group = value.toMap();
@@ -915,4 +1207,6 @@ void PaneRegistry::setBinaryIdentity(const QString &hash) {
   emit changed();
   if (current())
     emit selectionChanged();
+  if (current())
+    repairAnalysisLocations();
 }

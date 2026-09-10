@@ -39,7 +39,9 @@ target_include_directories(neverd_gui_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_features(neverd_gui_core PUBLIC cxx_std_20)
 target_link_libraries(neverd_gui_core PUBLIC Qt6::Core Qt6::Gui Qt6::Qml Qt6::Network)
 
-qt_add_executable(neverd-gui main.cpp NativeCodeHighlighter.cpp NativeGraphItem.cpp)
+qt_add_executable(neverd-gui main.cpp StartupMetrics.cpp WorkbenchFocus.cpp
+  NativeLayoutSaver.cpp NativeCodeHighlighter.cpp NativeGraphItem.cpp)
+target_include_directories(neverd-gui PRIVATE "${neverd_docking_SOURCE_DIR}/src")
 target_link_libraries(neverd-gui PRIVATE neverd_gui_core Qt6::Quick Qt6::QuickControls2 Qt6::Svg KDAB::kddockwidgets)
 file(GLOB NEVERD_QML_FILES CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "qml/*.qml")
 set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
@@ -65,10 +67,26 @@ install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../neverd-mcp/server.py"
               "${CMAKE_CURRENT_SOURCE_DIR}/../neverd-mcp/transport.py" DESTINATION bin)
 
 if(BUILD_TESTING)
-  target_sources(neverd-gui PRIVATE tests/DockingProbe.cpp tests/AnalysisProbe.cpp)
+  target_sources(neverd-gui PRIVATE tests/DockingProbe.cpp tests/AnalysisProbe.cpp
+    tests/ShortcutProbe.cpp)
   target_compile_definitions(neverd-gui PRIVATE NEVERD_GUI_TEST_PROBES=1)
   find_package(Qt6 6.8 REQUIRED COMPONENTS Test)
+  target_link_libraries(neverd-gui PRIVATE Qt6::Test)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  qt_add_executable(neverd-gui-focus-tests tests/WorkbenchFocusTests.cpp WorkbenchFocus.cpp)
+  target_include_directories(neverd-gui-focus-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(neverd-gui-focus-tests PRIVATE Qt6::Quick Qt6::Test)
+  add_test(NAME NeverDGuiFocus COMMAND neverd-gui-focus-tests)
+  set_tests_properties(NeverDGuiFocus PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+  qt_add_executable(neverd-gui-pane-tests tests/PaneNavigationTests.cpp)
+  target_link_libraries(neverd-gui-pane-tests PRIVATE neverd_gui_core
+    Qt6::Quick Qt6::QuickControls2 Qt6::Test)
+  target_compile_definitions(neverd-gui-pane-tests PRIVATE
+    TEST_QML_DIR="${CMAKE_CURRENT_SOURCE_DIR}/qml")
+  add_test(NAME NeverDGuiPaneNavigation COMMAND neverd-gui-pane-tests)
+  set_tests_properties(NeverDGuiPaneNavigation PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
   qt_add_executable(neverd-gui-query-tests
     tests/QueryServiceTests.cpp QueryService.cpp)
   target_link_libraries(neverd-gui-query-tests PRIVATE Qt6::Core Qt6::Test)
@@ -81,10 +99,19 @@ if(BUILD_TESTING)
   set_tests_properties(NeverDGuiIndependentPanes PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
   if(TARGET neverd-worker-test-server)
+    add_test(NAME NeverDGuiShortcuts COMMAND neverd-gui --shortcuts-test
+      --worker $<TARGET_FILE:neverd-worker-test-server>)
+    set_tests_properties(NeverDGuiShortcuts PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
     qt_add_executable(neverd-gui-tests tests/WorkbenchTests.cpp)
     target_link_libraries(neverd-gui-tests PRIVATE neverd_gui_core Qt6::Test)
     target_compile_definitions(neverd-gui-tests PRIVATE TEST_WORKER="$<TARGET_FILE:neverd-worker-test-server>")
     add_dependencies(neverd-gui-tests neverd-worker-test-server)
+    if(NEVERD_WORKER_REAL_ENGINE_TESTS)
+      target_compile_definitions(neverd-gui-tests PRIVATE
+        TEST_REAL_WORKER="$<TARGET_FILE:neverd-worker>")
+      add_dependencies(neverd-gui-tests neverd-worker)
+    endif()
     add_test(NAME NeverDGuiController COMMAND neverd-gui-tests)
     set_tests_properties(NeverDGuiController PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
   endif()
@@ -142,7 +169,7 @@ if(BUILD_TESTING)
   # Keep their diagnostics connected to CTest's stdout on Windows.
   foreach(_neverd_gui_test IN ITEMS neverd-gui-tests neverd-gui-graph-tests
       neverd-gui-text-position-tests neverd-gui-query-tests neverd-gui-independent-pane-tests neverd-gui-page-tests neverd-mcp-qt-tests
-      neverd-gui-language-tests)
+      neverd-gui-language-tests neverd-gui-focus-tests neverd-gui-pane-tests)
     if(TARGET ${_neverd_gui_test})
       set_target_properties(${_neverd_gui_test} PROPERTIES WIN32_EXECUTABLE FALSE)
     endif()

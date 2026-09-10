@@ -233,6 +233,8 @@ void executeLoop(State &state, Transport &transport) {
         result = failure(value, engine.revision(), engine.projectId(),
                          Error("engine_error", error.what()));
       }
+      result["analysis_state"] =
+          engine.analyzed() ? "complete" : "not_analyzed";
       {
         std::lock_guard lock(state.mutex);
         if (request->cancelled) {

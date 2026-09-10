@@ -13,7 +13,7 @@ ApplicationWindow {
     height: preferences.windowHeight
     minimumWidth: 900
     minimumHeight: 620
-    title: workbench.fileName ? workbench.fileName + " — NeverD" : qsTr("NeverD — Binary Analysis")
+    title: workbench.fileName ? (workbench.unsavedChanges ? "● " : "") + workbench.fileName + " — NeverD" : qsTr("NeverD — Binary Analysis")
     color: Theme.editor
     font.pointSize: Theme.bodySize
     palette.window: Theme.editor
@@ -30,7 +30,11 @@ ApplicationWindow {
     LayoutMirroring.enabled: workbench.language === "ar"
     LayoutMirroring.childrenInherit: true
     readonly property bool interfaceMirrored: LayoutMirroring.enabled
-    readonly property bool textEntryActive: activeFocusItem instanceof TextInput || activeFocusItem instanceof TextEdit
+    readonly property var effectiveFocusItem: workbenchFocus.focusedItem
+    readonly property bool textEntryActive: (effectiveFocusItem instanceof TextInput || effectiveFocusItem instanceof TextEdit) && !effectiveFocusItem.readOnly
+    readonly property bool modalActive: unsavedDialog.visible || renameDialog.visible || commentDialog.visible || settingsDialog.visible || shortcutsDialog.visible || aboutDialog.visible || fileDialog.visible || extensionFileDialog.visible
+    readonly property bool analysisShortcutsEnabled: workbench.loaded && !textEntryActive && !modalActive
+    readonly property var activeAnalysisPane: workbench.panes.activePane
     readonly property var representationIds: ["c", "low", "med", "high", "llvm"]
     readonly property var languageCodes: ["en", "zh-CN", "zh-TW", "ja", "ko", "fr", "de", "es", "it", "ru", "ar"]
     readonly property var languageNames: ["English", "简体中文", "繁體中文", "日本語", "한국어", "Français", "Deutsch", "Español", "Italiano", "Русский", "العربية"]
@@ -52,7 +56,7 @@ ApplicationWindow {
 
     Connections {
         target: workbench
-        function onConfirmSessionChange() { unsavedDialog.open() }
+        function onConfirmSessionChange() { window.openMainDialog(unsavedDialog) }
         function onCloseReady() { window.closeApproved = true; window.close() }
     }
     Dialog {
@@ -74,19 +78,33 @@ ApplicationWindow {
         }
     }
 
-    Action { id: openAction; text: qsTr("Open Binary…"); shortcut: StandardKey.Open; onTriggered: fileDialog.open() }
-    Action { id: navigateAction; text: qsTr("Go to Address or Symbol…"); shortcut: "G"; enabled: workbench.loaded && !window.textEntryActive; onTriggered: { addressField.forceActiveFocus(); addressField.selectAll() } }
-    Action { id: backAction; text: qsTr("Back"); shortcut: StandardKey.Back; enabled: workbench.canGoBack; onTriggered: workbench.goBack() }
-    Action { id: forwardAction; text: qsTr("Forward"); shortcut: StandardKey.Forward; enabled: workbench.canGoForward; onTriggered: workbench.goForward() }
-    Action { id: settingsAction; text: qsTr("Settings…"); shortcut: StandardKey.Preferences; onTriggered: settingsDialog.open() }
-    Action { id: renameAction; text: qsTr("Rename Function…"); shortcut: "N"; enabled: workbench.loaded && !window.textEntryActive; onTriggered: window.openRename() }
-    Action { id: commentAction; text: qsTr("Edit Comment…"); shortcut: ";"; enabled: workbench.loaded && !window.textEntryActive; onTriggered: window.openComment() }
-    Action { id: undoAction; text: qsTr("Undo"); shortcut: StandardKey.Undo; enabled: workbench.canUndo && !window.textEntryActive; onTriggered: workbench.undo() }
-    Action { id: redoAction; text: qsTr("Redo"); shortcut: StandardKey.Redo; enabled: workbench.canRedo && !window.textEntryActive; onTriggered: workbench.redo() }
+    Action { id: openAction; text: qsTr("Open Binary…"); shortcut: StandardKey.Open; onTriggered: window.openMainDialog(fileDialog) }
+    Action { id: navigateAction; text: qsTr("Go to Address or Symbol…"); shortcut: "G"; enabled: window.analysisShortcutsEnabled; onTriggered: { window.activateMainWindow(); addressField.forceActiveFocus(); addressField.selectAll() } }
+    Action { id: backAction; text: qsTr("Back"); shortcut: StandardKey.Back; enabled: window.activeAnalysisPane && workbench.canGoBack && !window.textEntryActive && !window.modalActive; onTriggered: workbench.goBack() }
+    Action { id: forwardAction; text: qsTr("Forward"); shortcut: StandardKey.Forward; enabled: window.activeAnalysisPane && workbench.canGoForward && !window.textEntryActive && !window.modalActive; onTriggered: workbench.goForward() }
+    Action { id: settingsAction; objectName: "settingsAction"; text: qsTr("Settings…"); shortcut: StandardKey.Preferences; onTriggered: window.openMainDialog(settingsDialog) }
+    Action { id: renameAction; text: qsTr("Rename Function…"); shortcut: "N"; enabled: window.analysisShortcutsEnabled && window.activeAnalysisPane && window.activeAnalysisPane.selectedFunctionAddress.length > 0; onTriggered: window.openRename() }
+    Action { id: commentAction; text: qsTr("Edit Comment…"); shortcut: ";"; enabled: window.analysisShortcutsEnabled && window.activeAnalysisPane && window.activeAnalysisPane.commentReady; onTriggered: window.openComment() }
+    Action { id: undoAction; text: qsTr("Undo"); shortcut: StandardKey.Undo; enabled: workbench.canUndo && !window.textEntryActive && !window.modalActive; onTriggered: workbench.undo() }
+    Action { id: redoAction; text: qsTr("Redo"); shortcut: StandardKey.Redo; enabled: workbench.canRedo && !window.textEntryActive && !window.modalActive; onTriggered: workbench.redo() }
     Action { id: cancelAction; text: qsTr("Cancel Analysis"); enabled: workbench.busy; onTriggered: workbench.cancel() }
     Action { id: restartAction; text: qsTr("Restart Worker"); onTriggered: workbench.restartWorker() }
     Action { id: toggleOutputAction; text: qsTr("Toggle Bottom Panel"); shortcut: "Ctrl+J"; onTriggered: dockWorkspace.toggleBottom() }
     Action { id: quitAction; text: qsTr("Quit NeverD"); shortcut: StandardKey.Quit; onTriggered: window.close() }
+
+    Action { id: saveAction; text: qsTr("Save Annotations"); shortcut: StandardKey.Save; enabled: workbench.loaded && !window.modalActive; onTriggered: workbench.saveAnnotations() }
+    Action { id: pseudocodeAction; text: qsTr("Pseudocode & intermediate representations"); shortcut: "F5"; enabled: window.analysisShortcutsEnabled; onTriggered: { workbench.setRepresentation("c"); dockWorkspace.showPanel("representation") } }
+    Action { id: referencesAction; text: qsTr("References"); shortcut: "X"; enabled: window.analysisShortcutsEnabled; onTriggered: dockWorkspace.showPanel("references") }
+    Action { id: functionsAction; text: qsTranslate("FunctionsPane", "FUNCTIONS"); shortcut: "Ctrl+P"; enabled: window.analysisShortcutsEnabled; onTriggered: dockWorkspace.focusFunctionSearch() }
+    Shortcut { sequence: "Escape"; enabled: window.analysisShortcutsEnabled && window.activeAnalysisPane && workbench.canGoBack; onActivated: workbench.goBack() }
+    Shortcut { sequence: "Ctrl+Return"; enabled: window.analysisShortcutsEnabled && window.activeAnalysisPane && workbench.canGoForward; onActivated: workbench.goForward() }
+    Shortcut { sequence: "Ctrl+Enter"; enabled: window.analysisShortcutsEnabled && window.activeAnalysisPane && workbench.canGoForward; onActivated: workbench.goForward() }
+    Shortcut { sequence: "Space"; enabled: window.analysisShortcutsEnabled && dockWorkspace.machineActive && dockWorkspace.analysisContentActive; onActivated: dockWorkspace.toggleMachineView() }
+    // Keep Tab available for controls and text fields; the IDA view switch is
+    // local to analysis content, where it never steals ordinary form traversal.
+    Shortcut { sequence: "Tab"; enabled: window.analysisShortcutsEnabled && dockWorkspace.analysisContentActive; onActivated: dockWorkspace.toggleAnalysisFocus() }
+    Shortcut { sequence: "F6"; enabled: !window.modalActive; onActivated: dockWorkspace.cyclePanel(1) }
+    Shortcut { sequence: "Shift+F6"; enabled: !window.modalActive; onActivated: dockWorkspace.cyclePanel(-1) }
 
     menuBar: MenuBar {
         background: Rectangle { color: Theme.sidebar }
@@ -95,18 +113,18 @@ ApplicationWindow {
             contentItem: Text { textFormat: Text.PlainText; text: menuItem.text; color: Theme.foreground; font.pointSize: Theme.bodySize; verticalAlignment: Text.AlignVCenter }
             background: Rectangle { color: menuItem.highlighted ? Theme.hover : "transparent" }
         }
-        Menu { title: qsTr("File"); Action { text: openAction.text; shortcut: openAction.shortcut; onTriggered: openAction.trigger() } MenuSeparator {} MenuItem { action: settingsAction } MenuSeparator {} MenuItem { action: quitAction } }
+        Menu { title: qsTr("File"); MenuItem { action: openAction } MenuSeparator {} MenuItem { action: settingsAction } MenuSeparator {} MenuItem { action: quitAction } }
         Menu { title: qsTr("Navigate"); MenuItem { action: backAction } MenuItem { action: forwardAction } MenuSeparator {} MenuItem { action: navigateAction } }
-        Menu { title: qsTr("Edit"); MenuItem { action: undoAction } MenuItem { action: redoAction } MenuSeparator {} MenuItem { action: renameAction } MenuItem { action: commentAction } MenuSeparator {} Action { text: qsTr("Save Annotations"); enabled: workbench.loaded; onTriggered: workbench.saveAnnotations() } Action { text: qsTr("Reload Annotations"); enabled: workbench.loaded; onTriggered: workbench.loadAnnotations() } }
+        Menu { title: qsTr("Edit"); MenuItem { action: undoAction } MenuItem { action: redoAction } MenuSeparator {} MenuItem { action: renameAction } MenuItem { action: commentAction } MenuSeparator {} MenuItem { action: saveAction } Action { text: qsTr("Reload Annotations"); enabled: workbench.loaded; onTriggered: workbench.loadAnnotations() } }
         Menu {
             title: qsTr("View")
             MenuItem { action: toggleOutputAction }
             Action { text: qsTr("Disassembly"); onTriggered: window.switchCenter(0) }
             Action { text: qsTr("Control Flow"); onTriggered: window.switchCenter(1) }
             Action { text: qsTr("Hex"); onTriggered: window.switchCenter(2) }
-            Action { text: qsTranslate("FunctionsPane", "FUNCTIONS"); onTriggered: dockWorkspace.showPanel("functions") }
-            Action { text: qsTr("Pseudocode & intermediate representations"); onTriggered: dockWorkspace.showPanel("representation") }
-            Action { text: qsTr("References"); onTriggered: dockWorkspace.showPanel("references") }
+            MenuItem { action: functionsAction }
+            MenuItem { action: pseudocodeAction }
+            MenuItem { action: referencesAction }
             Action { text: qsTr("Output"); onTriggered: dockWorkspace.showPanel("output") }
             Action { text: qsTr("Connections"); onTriggered: dockWorkspace.showPanel("connections") }
             Menu {
@@ -120,21 +138,21 @@ ApplicationWindow {
         Menu { title: qsTr("Analysis"); MenuItem { action: cancelAction } MenuItem { action: restartAction } }
         Menu {
             title: qsTr("Extensions")
-            Action { text: qsTr("Import Manifest…"); onTriggered: extensionFileDialog.open() }
+            Action { text: qsTr("Import Manifest…"); onTriggered: window.openMainDialog(extensionFileDialog) }
             Action { text: qsTr("Extensions"); onTriggered: dockWorkspace.showPanel("extensions") }
         }
-        Menu { title: qsTr("Help"); Action { text: qsTr("Keyboard Shortcuts"); onTriggered: shortcutsDialog.open() } Action { text: qsTr("About NeverD"); onTriggered: aboutDialog.open() } }
+        Menu { title: qsTr("Help"); Action { text: qsTr("Keyboard Shortcuts"); onTriggered: window.openMainDialog(shortcutsDialog) } Action { text: qsTr("About NeverD"); onTriggered: window.openMainDialog(aboutDialog) } }
     }
 
     header: Rectangle {
-        height: 78
+        height: 72
         color: Theme.sidebar
         ColumnLayout {
             anchors.fill: parent
             spacing: 0
             RowLayout {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 44
+                Layout.preferredHeight: 42
                 Layout.leftMargin: 9
                 Layout.rightMargin: 12
                 spacing: 6
@@ -150,7 +168,7 @@ ApplicationWindow {
                     Accessible.name: "NeverD"
                     Accessible.role: Accessible.Graphic
                 }
-                WorkbenchButton { text: qsTr("Open Binary"); hint: openAction.text + " (" + openAction.shortcut + ")"; primary: !workbench.loaded; onClicked: fileDialog.open() }
+                WorkbenchButton { text: qsTr("Open Binary"); hint: openAction.text + " (" + openAction.shortcut + ")"; primary: !workbench.loaded; onClicked: window.openMainDialog(fileDialog) }
                 Rectangle { width: 1; Layout.preferredHeight: 20; color: Theme.border; Layout.margins: 5 }
                 WorkbenchButton { text: "←"; hint: backAction.text; enabled: backAction.enabled; onClicked: workbench.goBack(); rotation: workbench.language === "ar" ? 180 : 0 }
                 WorkbenchButton { text: "→"; hint: forwardAction.text; enabled: forwardAction.enabled; onClicked: workbench.goForward(); rotation: workbench.language === "ar" ? 180 : 0 }
@@ -166,13 +184,13 @@ ApplicationWindow {
                     font.family: Theme.monoFont
                     LayoutMirroring.enabled: false
                     horizontalAlignment: TextInput.AlignLeft
-                    onAccepted: { if (text.trim()) workbench.navigate(text.trim()); focus = false }
-                    Keys.onEscapePressed: { clear(); focus = false }
+                    onAccepted: { if (text.trim()) dockWorkspace.navigateTo(text.trim()) }
+                    Keys.onEscapePressed: dockWorkspace.showPanel("machine")
                 }
                 Item { Layout.fillWidth: true; visible: window.width > 1200 }
                 Text { textFormat: Text.PlainText; text: workbench.architecture || ""; color: Theme.muted; font.pointSize: Theme.captionSize; visible: window.width > 1020 }
                 WorkbenchButton { text: qsTr("Cancel"); visible: workbench.busy; onClicked: workbench.cancel() }
-                WorkbenchButton { text: qsTr("Settings"); hint: qsTr("Language and editor preferences"); onClicked: settingsDialog.open() }
+                WorkbenchButton { text: qsTr("Settings"); hint: qsTr("Language and editor preferences"); onClicked: window.openMainDialog(settingsDialog) }
             }
             Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: Theme.border }
             RowLayout {
@@ -213,12 +231,13 @@ ApplicationWindow {
             Layout.fillWidth: true
             Layout.fillHeight: true
             controller: workbench
+            focusedItem: window.effectiveFocusItem
             client: mcp
             broker: sessionBroker
             codePointSize: preferences.codePointSize
             onRenameRequested: window.openRename()
             onCommentRequested: window.openComment()
-            onImportExtensionsRequested: extensionFileDialog.open()
+            onImportExtensionsRequested: window.openMainDialog(extensionFileDialog)
         }
     }
 
@@ -277,11 +296,39 @@ ApplicationWindow {
     function switchCenter(index) {
         dockWorkspace.selectMachineView(index)
     }
-    function openRename() { renameField.text = workbench.selectedFunctionName; renameDialog.open(); renameField.forceActiveFocus(); renameField.selectAll() }
-    function openComment() { commentField.text = workbench.selectedComment; commentDialog.open(); commentField.forceActiveFocus() }
+    function activateMainWindow() {
+        dockWorkspace.cancelPendingFocus()
+        window.raise()
+        window.requestActivate()
+    }
+    function openMainDialog(dialog, focusItem) {
+        activateMainWindow()
+        dialog.open()
+        if (focusItem) focusItem.forceActiveFocus(Qt.ShortcutFocusReason)
+    }
+    function openRename() {
+        if (!activeAnalysisPane) return
+        const target = workbench.captureCommandTarget()
+        if (!target.function_address) return
+        renameDialog.commandTarget = target
+        renameField.text = workbench.selectedFunctionName
+        openMainDialog(renameDialog, renameField)
+        renameField.selectAll()
+    }
+    function openComment() {
+        if (!activeAnalysisPane || !activeAnalysisPane.commentReady) return
+        const target = workbench.captureCommandTarget()
+        if (!target.address) return
+        commentDialog.commandTarget = target
+        commentField.text = workbench.selectedComment
+        openMainDialog(commentDialog, commentField)
+    }
 
     Dialog {
         id: renameDialog
+        objectName: "renameDialog"
+        property var commandTarget: ({})
+        onClosed: commandTarget = ({})
         title: qsTr("Rename Function")
         anchors.centerIn: parent
         width: Math.min(460, window.width - 40)
@@ -291,13 +338,16 @@ ApplicationWindow {
         ColumnLayout {
             anchors.fill: parent
             spacing: 12
-            Text { textFormat: Text.PlainText; text: workbench.selectedAddress; color: Theme.subdued; font.family: Theme.monoFont; font.pointSize: Theme.bodySize }
-            WorkbenchField { id: renameField; Layout.fillWidth: true; placeholderText: qsTr("Function name"); Accessible.name: qsTr("Function name"); onAccepted: { workbench.renameFunction(text); renameDialog.close() } }
+            Text { textFormat: Text.PlainText; text: renameDialog.commandTarget.function_address || ""; color: Theme.subdued; font.family: Theme.monoFont; font.pointSize: Theme.bodySize }
+            WorkbenchField { id: renameField; Layout.fillWidth: true; placeholderText: qsTr("Function name"); Accessible.name: qsTr("Function name"); onAccepted: renameDialog.accept() }
         }
-        onAccepted: workbench.renameFunction(renameField.text)
+        onAccepted: workbench.renameFunctionAt(commandTarget, renameField.text)
     }
     Dialog {
         id: commentDialog
+        objectName: "commentDialog"
+        property var commandTarget: ({})
+        onClosed: commandTarget = ({})
         title: qsTr("Edit Comment")
         anchors.centerIn: parent
         width: Math.min(580, window.width - 40)
@@ -307,7 +357,7 @@ ApplicationWindow {
         ColumnLayout {
             anchors.fill: parent
             spacing: 12
-            Text { textFormat: Text.PlainText; text: workbench.selectedAddress; color: Theme.subdued; font.family: Theme.monoFont; font.pointSize: Theme.bodySize; LayoutMirroring.enabled: false }
+            Text { textFormat: Text.PlainText; text: commentDialog.commandTarget.address || ""; color: Theme.subdued; font.family: Theme.monoFont; font.pointSize: Theme.bodySize; LayoutMirroring.enabled: false }
             ScrollView {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 180
@@ -324,7 +374,7 @@ ApplicationWindow {
                 }
             }
         }
-        onAccepted: workbench.setComment(commentField.text)
+        onAccepted: workbench.setCommentAt(commandTarget, commentField.text)
     }
     Dialog {
         id: settingsDialog
@@ -333,6 +383,7 @@ ApplicationWindow {
         anchors.centerIn: parent
         width: Math.min(520, window.width - 40)
         modal: true
+        focus: true
         standardButtons: Dialog.Close
         background: Rectangle { color: Theme.sidebar; border.color: Theme.border; radius: 4 }
         ColumnLayout {
@@ -371,7 +422,32 @@ ApplicationWindow {
         modal: true
         standardButtons: Dialog.Close
         background: Rectangle { color: Theme.sidebar; border.color: Theme.border; radius: 4 }
-        Label { text: qsTr("Open binary: %1\nGo to address or symbol: G\nRename function: N\nEdit comment: ;\nToggle bottom panel: Ctrl+J\nBack / forward: %2 / %3").arg(openAction.shortcut).arg(backAction.shortcut).arg(forwardAction.shortcut); color: Theme.foreground; font.pointSize: Theme.bodySize; lineHeight: 1.8 }
+        ColumnLayout {
+            width: parent.width
+            spacing: 7
+            Repeater {
+                model: [
+                    { label: openAction.text, key: openAction.shortcut.toString() },
+                    { label: navigateAction.text, key: "G" },
+                    { label: backAction.text, key: "Esc" },
+                    { label: forwardAction.text, key: "Ctrl+Enter" },
+                    { label: qsTr("Disassembly") + " / " + qsTr("Control Flow"), key: "Space" },
+                    { label: pseudocodeAction.text, key: "F5 / Tab" },
+                    { label: referencesAction.text, key: "X" },
+                    { label: functionsAction.text, key: "Ctrl+P" },
+                    { label: renameAction.text, key: "N" },
+                    { label: commentAction.text, key: ";" },
+                    { label: saveAction.text, key: saveAction.shortcut.toString() },
+                    { label: qsTr("Focus Panel"), key: "F6 / Shift+F6" }
+                ]
+                delegate: RowLayout {
+                    required property var modelData
+                    Layout.fillWidth: true
+                    Text { text: modelData.label; textFormat: Text.PlainText; color: Theme.foreground; font.pointSize: Theme.bodySize; Layout.fillWidth: true; elide: Text.ElideRight }
+                    Text { text: modelData.key; textFormat: Text.PlainText; color: Theme.muted; font.family: Theme.monoFont; font.pointSize: Theme.captionSize }
+                }
+            }
+        }
     }
     Dialog {
         id: aboutDialog

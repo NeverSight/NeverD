@@ -9,7 +9,7 @@ Rectangle {
     property int currentIndex: 0
     property string trailingText: ""
     signal selected(int index)
-    implicitHeight: 36
+    implicitHeight: Theme.tabHeight
     color: Theme.sidebar
     RowLayout {
         anchors.fill: parent
@@ -21,12 +21,14 @@ Rectangle {
                 required property string modelData
                 required property int index
                 Layout.fillHeight: true
-                implicitWidth: label.implicitWidth + 26
+                implicitWidth: label.implicitWidth + 24
                 hoverEnabled: true
                 Accessible.name: modelData
                 Accessible.role: Accessible.PageTab
+                Accessible.selected: root.currentIndex === index
                 contentItem: Text {
                     id: label
+                    textFormat: Text.PlainText
                     text: tab.modelData
                     color: root.currentIndex === tab.index ? Theme.foreground : Theme.muted
                     font.pointSize: Theme.bodySize
@@ -35,7 +37,7 @@ Rectangle {
                 }
                 background: Rectangle {
                     color: root.currentIndex === tab.index ? Theme.editor : tab.hovered ? Theme.hover : Theme.elevated
-                    border.color: tab.activeFocus ? Theme.focus : "transparent"
+                    border.color: tab.visualFocus ? Theme.focus : "transparent"
                     Rectangle {
                         width: parent.width
                         height: 2

@@ -36,7 +36,7 @@ struct Harness {
 
   void reply(int index, QJsonObject payload = {}, QString revision = "1",
              QString project = "project-one", QString status = "ok",
-             QString code = {}) {
+             QString code = {}, QString analysisState = {}) {
     const auto request = sent.at(index);
     QJsonObject response{
         {"protocol_major", 1},      {"type", "response"},
@@ -45,6 +45,8 @@ struct Harness {
         {"status", status},         {"payload", payload}};
     if (!code.isEmpty())
       response["error"] = QJsonObject{{"code", code}, {"message", code}};
+    if (!analysisState.isEmpty())
+      response["analysis_state"] = analysisState;
     service.receive(response);
   }
 };
@@ -92,6 +94,277 @@ class QueryServiceTests final : public QObject {
   }
 
 private slots:
+  void analysisCompletionSurvivesLastSubscriberCancellationInFlight_data() {
+    QTest::addColumn<bool>("graphAfterSummary");
+    QTest::newRow("read-cancelled-before-natural-completion") << false;
+    QTest::newRow("graph-cancelled-after-summary-discovery") << true;
+  }
+
+  void analysisCompletionSurvivesLastSubscriberCancellationInFlight() {
+    QFETCH(bool, graphAfterSummary);
+    Harness h;
+    establish(h);
+    QPointer<QueryService> service = &h.service;
+    QPointer<QObject> owner = &h.owner;
+    QSignalSpy discovered(&h.service, &QueryService::analysisCompleted);
+    int cancelledReplies = 0;
+    int commandReplies = 0;
+    const QString address = "0x1000";
+    const auto complete = [&](const QJsonObject &) { ++cancelledReplies; };
+    const auto id =
+        graphAfterSummary
+            ? h.service.graphViewport(viewport(address), &h.owner, complete)
+            : h.service.subscribe(text(address), &h.owner, complete);
+    QVERIFY(id);
+    QTRY_COMPARE(h.sent.size(), 1);
+    if (graphAfterSummary) {
+      QCOMPARE(h.sent[0].operation, QString("cfg_summary"));
+      h.reply(0, graph(address, "layout-1"), "2", "project-one", "ok", {},
+              "complete");
+      QTRY_COMPARE(h.sent.size(), 2);
+      QCOMPARE(h.sent[1].operation, QString("cfg_viewport"));
+      QVERIFY(h.service.analysisComplete());
+      QCoreApplication::processEvents();
+      QCOMPARE(discovered.size(), 0);
+    } else {
+      QCOMPARE(h.sent[0].operation, QString("decompile"));
+      QVERIFY(!h.service.analysisComplete());
+    }
+    const int executing = graphAfterSummary ? 1 : 0;
+    QVERIFY(h.service.enqueueCommand(
+        "save", {}, &h.owner, [&](const QJsonObject &response) {
+          QCOMPARE(response["status"].toString(), QString("ok"));
+          ++commandReplies;
+        }));
+
+    h.service.unsubscribe(id);
+    QCOMPARE(h.sent.size(), executing + 2);
+    const int cancellation = executing + 1;
+    QCOMPARE(h.sent[cancellation].operation, QString("cancel"));
+    QCOMPARE(h.sent[cancellation].payload["request_id"].toString(),
+             h.sent[executing].id);
+    QVERIFY(service && owner);
+    QVERIFY(h.service.hasPending());
+    QVERIFY(h.service.hasCommands());
+    QCOMPARE(cancelledReplies, 0);
+    QCOMPARE(commandReplies, 0);
+
+    // Even an ACK carrying complete is administrative, belongs to a separate
+    // wire ID, and cannot discover analysis or release the active-job barrier.
+    h.reply(cancellation, {{"accepted", true}, {"stopped", false}}, "0", "",
+            "ok", {}, "complete");
+    QCoreApplication::processEvents();
+    QCOMPARE(h.service.analysisComplete(), graphAfterSummary);
+    QCOMPARE(discovered.size(), 0);
+    QCOMPARE(h.sent.size(), executing + 2);
+    QCOMPARE(cancelledReplies, 0);
+    QCOMPARE(commandReplies, 0);
+
+    // Cancellation detached the reader; the executor may still finish the
+    // original request naturally and establish (or retain) the global fact.
+    const auto result = graphAfterSummary
+                            ? graph(address, "layout-1")
+                            : QJsonObject{{"text", "finished after Cancel"}};
+    h.reply(executing, result, "2", "project-one", "ok", {}, "complete");
+    QVERIFY(h.service.analysisComplete());
+    QCOMPARE(discovered.size(), 0);
+    QCOMPARE(cancelledReplies, 0);
+    QTRY_COMPARE(discovered.size(), 1);
+    QTRY_COMPARE(h.sent.size(), executing + 3);
+    const int queuedCommand = executing + 2;
+    QCOMPARE(h.sent[queuedCommand].operation, QString("save"));
+    QCOMPARE(h.sent[queuedCommand].expectedRevision, QString("2"));
+
+    h.reply(queuedCommand, {}, "2", "project-one", "ok", {}, "complete");
+    QTRY_COMPARE(commandReplies, 1);
+    QTRY_VERIFY(!h.service.hasPending());
+    QCoreApplication::processEvents();
+    QVERIFY(service && owner);
+    QVERIFY(h.service.analysisComplete());
+    QCOMPARE(discovered.size(), 1);
+    QCOMPARE(cancelledReplies, 0);
+    QVERIFY(!h.service.hasCommands());
+  }
+
+  void analysisCompletionFollowsAllSubscribersAndDoesNotRepeat() {
+    Harness h;
+    establish(h);
+    QObject external;
+    QStringList order;
+    connect(&h.service, &QueryService::analysisCompleted, &h.owner,
+            [&] { order.append("discovery"); });
+    const auto complete = [&](const QString &name) {
+      return [&, name](const QJsonObject &) {
+        QVERIFY(h.service.analysisComplete());
+        order.append(name);
+      };
+    };
+    h.service.subscribe(text(), &h.owner, complete("pane"));
+    h.service.subscribe(text(), &external, complete("external"));
+    QTRY_COMPARE(h.sent.size(), 1);
+    h.reply(0, {{"text", "recovered"}}, "2", "project-one", "ok", {},
+            "complete");
+    QVERIFY(order.isEmpty());
+    QTRY_COMPARE(order, (QStringList{"pane", "external", "discovery"}));
+
+    // Cached reads and later edit revisions cannot rediscover the project.
+    h.service.subscribe(text(), &h.owner, complete("cache"));
+    QTRY_COMPARE(order.size(), 4);
+    QCOMPARE(h.sent.size(), 1);
+    h.service.enqueueCommand("annotation_set", {}, &h.owner, {});
+    QTRY_COMPARE(h.sent.size(), 2);
+    h.reply(1, {}, "3", "project-one", "ok", {}, "complete");
+    QTRY_VERIFY(!h.service.hasPending());
+    QCOMPARE(order.count("discovery"), 1);
+    QVERIFY(h.service.analysisComplete());
+  }
+
+  void analysisCompletionCanAccompanyAnUnsupportedView() {
+    Harness h;
+    establish(h);
+    QSignalSpy discovered(&h.service, &QueryService::analysisCompleted);
+    QList<QJsonObject> replies;
+    h.service.subscribe(text(), &h.owner, [&](const auto &response) {
+      replies.append(response);
+    });
+    QTRY_COMPARE(h.sent.size(), 1);
+    h.reply(0, {}, "2", "project-one", "error", "unsupported_view", "complete");
+    QTRY_COMPARE(replies.size(), 1);
+    QTRY_COMPARE(discovered.size(), 1);
+    QCOMPARE(errorCode(replies[0]), "unsupported_view");
+    QVERIFY(h.service.analysisComplete());
+  }
+
+  void analysisCompletionRejectsUntrustedReplies_data() {
+    QTest::addColumn<QString>("variant");
+    for (const auto *variant : {"wire", "operation", "project", "admission",
+                                "cancelled", "nonterminal", "missing"})
+      QTest::newRow(variant) << QString(variant);
+  }
+
+  void analysisCompletionRejectsUntrustedReplies() {
+    QFETCH(QString, variant);
+    Harness h;
+    establish(h);
+    QSignalSpy discovered(&h.service, &QueryService::analysisCompleted);
+    h.service.subscribe(text(), &h.owner, {});
+    QTRY_COMPARE(h.sent.size(), 1);
+    QJsonObject response{{"type", "response"},
+                         {"request_id", h.sent[0].id},
+                         {"operation", h.sent[0].operation},
+                         {"status", "ok"},
+                         {"project_id", "project-one"},
+                         {"revision", "2"},
+                         {"analysis_state", "complete"}};
+    if (variant == "wire")
+      response["request_id"] = "unowned";
+    else if (variant == "operation")
+      response["operation"] = "cancel";
+    else if (variant == "project")
+      response["project_id"] = "other-project";
+    else if (variant == "admission") {
+      response["status"] = "error";
+      response["error"] = QJsonObject{{"code", "queue_full"}};
+    } else if (variant == "cancelled")
+      response["status"] = "cancelled";
+    else if (variant == "nonterminal")
+      response["status"] = "progress";
+    else if (variant == "missing")
+      response.remove("analysis_state");
+    h.service.receive(response);
+    QCoreApplication::processEvents();
+    QVERIFY(!h.service.analysisComplete());
+    QCOMPARE(discovered.size(), 0);
+  }
+
+  void graphAnalysisCompletionWaitsForViewportDelivery() {
+    Harness h;
+    establish(h);
+    QSignalSpy discovered(&h.service, &QueryService::analysisCompleted);
+    int replies = 0;
+    const QString address = "0x1000";
+    h.service.graphViewport(viewport(address), &h.owner, [&](const auto &) {
+      QCOMPARE(discovered.size(), 0);
+      ++replies;
+    });
+    QTRY_COMPARE(h.sent.size(), 1);
+    h.reply(0, graph(address, "layout-1"), "2", "project-one", "ok", {},
+            "complete");
+    QTRY_COMPARE(h.sent.size(), 2);
+    QCoreApplication::processEvents();
+    QVERIFY(h.service.analysisComplete());
+    QCOMPARE(discovered.size(), 0);
+    QCOMPARE(replies, 0);
+    h.reply(1, graph(address, "layout-1"), "2", "project-one", "ok", {},
+            "complete");
+    QTRY_COMPARE(replies, 1);
+    QTRY_COMPARE(discovered.size(), 1);
+  }
+
+  void analysisCompletionSurvivesLastSubscriberDetachingBeforeDelivery() {
+    Harness h;
+    establish(h);
+    QSignalSpy discovered(&h.service, &QueryService::analysisCompleted);
+    int replies = 0;
+    auto id =
+        h.service.subscribe(text(), &h.owner, [&](const auto &) { ++replies; });
+    QTRY_COMPARE(h.sent.size(), 1);
+    h.reply(0, {}, "2", "project-one", "ok", {}, "complete");
+    h.service.unsubscribe(id);
+    QTRY_COMPARE(discovered.size(), 1);
+    QTRY_VERIFY(!h.service.hasPending());
+    QCOMPARE(replies, 0);
+  }
+
+  void reentrantSubscriberCancellationCannotPublishDuringDelivery() {
+    Harness h;
+    establish(h);
+    QObject external;
+    QSignalSpy discovered(&h.service, &QueryService::analysisCompleted);
+    int replies = 0;
+    QueryService::SubscriptionId peer = 0;
+    h.service.subscribe(text(), &h.owner, [&](const auto &) {
+      h.service.unsubscribe(peer);
+      QCoreApplication::processEvents();
+      QCOMPARE(discovered.size(), 0);
+      ++replies;
+    });
+    peer = h.service.subscribe(text(), &external,
+                               [&](const auto &) { ++replies; });
+    QTRY_COMPARE(h.sent.size(), 1);
+    h.reply(0, {}, "2", "project-one", "ok", {}, "complete");
+    QTRY_COMPARE(discovered.size(), 1);
+    QCOMPARE(replies, 1);
+  }
+
+  void analysisCompletionDoesNotEscapeSessionRetirement() {
+    Harness h;
+    establish(h);
+    QSignalSpy discovered(&h.service, &QueryService::analysisCompleted);
+    bool delivered = false;
+    h.service.subscribe(text(), &h.owner, [&](const auto &) {
+      delivered = true;
+      h.service.resetSession();
+    });
+    QTRY_COMPARE(h.sent.size(), 1);
+    h.reply(0, {}, "2", "project-one", "ok", {}, "complete");
+    QTRY_VERIFY(delivered);
+    QCoreApplication::processEvents();
+    QVERIFY(!h.service.analysisComplete());
+    QCOMPARE(discovered.size(), 0);
+
+    h.service.setAvailable(true);
+    h.service.enqueueCommand("open", {{"path", "fixture-two"}}, &h.owner, {});
+    QTRY_COMPARE(h.sent.size(), 2);
+    h.reply(1, {}, "3", "project-two", "ok", {}, "not_analyzed");
+    QTRY_VERIFY(!h.service.hasPending());
+    h.service.subscribe(text(), &h.owner, {});
+    QTRY_COMPARE(h.sent.size(), 3);
+    h.reply(2, {}, "4", "project-two", "ok", {}, "complete");
+    QTRY_COMPARE(discovered.size(), 1);
+    QVERIFY(h.service.analysisComplete());
+  }
+
   void identicalReadsShareOneWireRequestAndCompleteAsynchronously() {
     Harness h;
     establish(h);

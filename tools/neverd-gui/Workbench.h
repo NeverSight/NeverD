@@ -69,7 +69,9 @@ public:
   void setQmlEngine(QQmlEngine *engine);
   bool loaded() const { return loaded_; }
   bool unsavedChanges() const { return dirty_ || pendingWrites_ > 0; }
-  bool busy() const { return opening_ || queries_.hasPending(); }
+  bool busy() const {
+    return opening_ || queries_.hasPending() || panes_.hasPendingReads();
+  }
   bool workerConnected() const { return connected_; }
   QString error() const { return error_; }
   QString status() const { return tr(status_.toUtf8().constData()); }
@@ -201,6 +203,7 @@ private:
   void clearViews();
   void setError(const QString &message);
   void log(const QString &message);
+  void publishAnalysisCompletion(quint64 epoch);
   void loadFunctions(bool append);
   void loadFunctionPage(int offset);
   void refreshHistory();
@@ -217,7 +220,7 @@ private:
       contributionResult_;
   QVariantList contributions_;
   QJsonObject historyState_, metadata_;
-  quint64 filterGeneration_ = 0, sessionEpoch_ = 0;
+  quint64 filterGeneration_ = 0, sessionEpoch_ = 0, analysisPublishedEpoch_ = 0;
   int functionCount_ = 0, nextFunction_ = 0, pendingWrites_ = 0;
   bool loaded_ = false, connected_ = false, opening_ = false;
   bool dirty_ = false, transitionReady_ = false, functionRequest_ = false;
