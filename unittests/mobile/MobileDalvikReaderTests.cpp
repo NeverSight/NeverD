@@ -1363,10 +1363,9 @@ TEST(MobileDalvikReader, DexKnownClassAnnotationsDoNotAuthorizeMemberUses) {
             (std::vector<std::string>{"Ljava/io/IOException;"}));
   options.method_annotations.reset();
   attachFixtureAnnotation(options, "field");
-  expectDexError(fixture(options).data,
-                 "Invalid DEX: unsupported annotation "
-                 "Ldalvik/annotation/Throws; on field "
-                 "Lfixture/Sample;->VALUE:I");
+  expectDexError(fixture(options).data, "Invalid DEX: unsupported annotation "
+                                        "Ldalvik/annotation/Throws; on field "
+                                        "Lfixture/Sample;->VALUE:I");
 }
 
 TEST(MobileDalvikReader, DexSignaturesBindAllDeclarationsAndExactFragments) {
@@ -1379,8 +1378,8 @@ TEST(MobileDalvikReader, DexSignaturesBindAllDeclarationsAndExactFragments) {
   options.annotations = {
       signatureAnnotation({"<T:Ljava/lang/", "Object;>Ljava/lang/Object;"}),
       signatureAnnotation({"Ljava/util/L", "ist<Ljava/lang/String;>;"}),
-      signatureAnnotation({"<U:Ljava/lang/Object;>(T", "U;)TU;",
-                           "^Ljava/lang/Exception;"}),
+      signatureAnnotation(
+          {"<U:Ljava/lang/Object;>(T", "U;)TU;", "^Ljava/lang/Exception;"}),
       typeArrayAnnotation("Ldalvik/annotation/Throws;",
                           {"Ljava/lang/Exception;"})};
   options.annotation_sets = {{0}, {1}, {2, 3}};
@@ -1390,8 +1389,7 @@ TEST(MobileDalvikReader, DexSignaturesBindAllDeclarationsAndExactFragments) {
   auto classes = parse(fixture(options).data);
   ASSERT_EQ(classes.size(), 1u);
   const auto &cls = classes[0];
-  EXPECT_EQ(cls.generic_signature,
-            "<T:Ljava/lang/Object;>Ljava/lang/Object;");
+  EXPECT_EQ(cls.generic_signature, "<T:Ljava/lang/Object;>Ljava/lang/Object;");
   ASSERT_EQ(cls.fields.size(), 1u);
   EXPECT_EQ(cls.fields[0].generic_signature,
             "Ljava/util/List<Ljava/lang/String;>;");
@@ -1483,11 +1481,10 @@ TEST(MobileDalvikReader, DexAnnotatedMethodMustHaveActualClassDataDefinition) {
   options.annotations = {signatureAnnotation({"(I)I"})};
   options.annotation_sets = {{0}};
   options.method_annotations = 0;
-  options.referenced_method =
-      MethodRef{options.owner, "unused", {"I"}, "I"};
+  options.referenced_method = MethodRef{options.owner, "unused", {"I"}, "I"};
   auto f = fixture(options);
-  auto found = std::find(f.methods.begin(), f.methods.end(),
-                         *options.referenced_method);
+  auto found =
+      std::find(f.methods.begin(), f.methods.end(), *options.referenced_method);
   ASSERT_NE(found, f.methods.end());
   patch(f.data, f.at.at("annotations") + 16,
         unsigned(found - f.methods.begin()));
@@ -1533,13 +1530,11 @@ TEST(MobileDalvikReader, SmaliSourceMetadataMatchesDexTypedBinding) {
       ".annotation system Ldalvik/annotation/Throws;\n"
       "value = {Ljava/lang/Exception;}\n.end annotation\n"
       "return-object p0\n.end method\n");
-  EXPECT_EQ(cls.generic_signature,
-            "<T:Ljava/lang/Object;>Ljava/lang/Object;");
+  EXPECT_EQ(cls.generic_signature, "<T:Ljava/lang/Object;>Ljava/lang/Object;");
   ASSERT_EQ(cls.fields.size(), 1u);
   EXPECT_EQ(cls.fields[0].generic_signature, "TT;");
   ASSERT_EQ(cls.methods.size(), 1u);
-  EXPECT_EQ(cls.methods[0].generic_signature,
-            "<U:Ljava/lang/Object;>(TU;)TU;");
+  EXPECT_EQ(cls.methods[0].generic_signature, "<U:Ljava/lang/Object;>(TU;)TU;");
   EXPECT_EQ(cls.methods[0].declared_throws,
             (std::vector<std::string>{"Ljava/lang/Exception;"}));
   Budget budget;
@@ -1574,7 +1569,7 @@ TEST(MobileDalvikReader, SmaliGenericAnnotationsRetainSiteAndDuplicateGuards) {
              ".end param\nreturn p0\n.end method\n",
          "parameter annotations are not represented");
   auto cls = smali(start + ".param p0\n.end param\n" + annotation +
-                    "return p0\n.end method\n");
+                   "return p0\n.end method\n");
   EXPECT_EQ(cls.methods[0].generic_signature, "(I)I");
   reject(start + ".annotation runtime Ldalvik/annotation/Signature;\n"
                  "value = {\"(I)I\"}\n.end annotation\n"

@@ -1,4 +1,5 @@
-//===- MobileDalvikSignature.cpp - Bounded generic grammar and scope checks -===//
+//===- MobileDalvikSignature.cpp - Bounded generic grammar and scope checks
+// -===//
 #include "MobileDalvikSignature.h"
 
 #include <algorithm>
@@ -7,8 +8,8 @@
 namespace neverd::mobile::dalvik {
 namespace {
 [[noreturn]] void invalid(std::string_view context, std::string message) {
-  throw Error("Unsupported generic declaration " + std::string(context) +
-              ": " + message);
+  throw Error("Unsupported generic declaration " + std::string(context) + ": " +
+              message);
 }
 
 // Java SE 8 declaration contracts only: each is an interface with exactly
@@ -61,8 +62,8 @@ class Parser {
   }
   std::string identifier() {
     size_t start = position;
-    while (peek() && std::string_view(".;[/<>:").find(peek()) ==
-                         std::string_view::npos)
+    while (peek() &&
+           std::string_view(".;[/<>:").find(peek()) == std::string_view::npos)
       take();
     if (start == position)
       fail("empty identifier");
@@ -143,9 +144,8 @@ class Parser {
       return element;
     } else if (!reference && code == 'V' && allow_void) {
       value.kind = GenericType::Kind::Void;
-    } else if (!reference &&
-               std::string_view("BCDFIJSZ").find(code) !=
-                   std::string_view::npos) {
+    } else if (!reference && std::string_view("BCDFIJSZ").find(code) !=
+                                 std::string_view::npos) {
       value.kind = GenericType::Kind::Primitive;
       value.primitive = code;
     } else {
@@ -344,15 +344,16 @@ class Validator {
     erase(*use.signature, use.id, *use.scope, context);
     const auto &node = use.signature->types[use.id];
     if (node.kind == GenericType::Kind::TypeVariable) {
-      auto found = substitutions.find({*node.variable_owner, node.variable_name});
+      auto found =
+          substitutions.find({*node.variable_owner, node.variable_name});
       if (found != substitutions.end())
         return found->second;
     }
     return use;
   }
   bool sameType(TypeUse actual, TypeUse expected,
-                const Substitutions &substitutions,
-                const std::string &context, unsigned depth) {
+                const Substitutions &substitutions, const std::string &context,
+                unsigned depth) {
     budget.tick();
     if (depth > 64)
       invalid(context, "generic bound comparison exceeds depth limit");
@@ -390,8 +391,8 @@ class Validator {
     return true;
   }
   bool satisfies(TypeUse actual, TypeUse expected,
-                 const Substitutions &substitutions,
-                 const std::string &context, unsigned depth = 0) {
+                 const Substitutions &substitutions, const std::string &context,
+                 unsigned depth = 0) {
     budget.tick();
     if (depth > 64)
       invalid(context, "generic bound proof exceeds depth limit");
@@ -402,8 +403,7 @@ class Validator {
     erase(*expected.signature, expected.id, *expected.scope, context);
     const auto &a = actual.signature->types[actual.id];
     const auto &e = expected.signature->types[expected.id];
-    if (e.erasure == "Ljava/lang/Object;" &&
-        e.kind == GenericType::Kind::Class)
+    if (e.erasure == "Ljava/lang/Object;" && e.kind == GenericType::Kind::Class)
       return a.kind != GenericType::Kind::Primitive &&
              a.kind != GenericType::Kind::Void;
     if (a.kind == GenericType::Kind::TypeVariable) {
@@ -413,8 +413,8 @@ class Validator {
       auto binding = scope->find(a.variable_name);
       if (binding == scope->end() || binding->second.owner != *a.variable_owner)
         return false;
-      const auto &formal = binding->second.signature
-                               ->type_parameters[binding->second.index];
+      const auto &formal =
+          binding->second.signature->type_parameters[binding->second.index];
       auto prove = [&](GenericTypeId bound) {
         return satisfies({binding->second.signature, bound, scope}, expected,
                          substitutions, context, depth + 1);
@@ -426,11 +426,9 @@ class Validator {
     }
     if (e.kind != GenericType::Kind::Class)
       return false;
-    bool parameterized =
-        std::any_of(e.segments.begin(), e.segments.end(),
-                    [](const auto &segment) {
-                      return !segment.arguments.empty();
-                    });
+    bool parameterized = std::any_of(
+        e.segments.begin(), e.segments.end(),
+        [](const auto &segment) { return !segment.arguments.empty(); });
     // Matching instantiated bounds may be proved structurally. Substitution
     // along a different generic superclass path needs a separate proof.
     if (parameterized)
@@ -523,8 +521,9 @@ class Validator {
           else
             kind = platformBoundKind(node.erasure);
           if (!kind)
-            invalid(context, "formal-bound declaration kind is not proven for " +
-                                 node.erasure);
+            invalid(context,
+                    "formal-bound declaration kind is not proven for " +
+                        node.erasure);
           if (is_interface && *kind != BoundDeclarationKind::Interface)
             invalid(context, "interface bound names a known class");
           if (!is_interface && *kind != BoundDeclarationKind::Class)
@@ -617,9 +616,9 @@ public:
       if (name != cls.name)
         invalid(name, "class map identity mismatch");
       if (cls.generic_signature)
-        plans.classes.emplace(
-            name, parse(GenericSignatureKind::Class, *cls.generic_signature,
-                        name + " from " + cls.source_id));
+        plans.classes.emplace(name, parse(GenericSignatureKind::Class,
+                                          *cls.generic_signature,
+                                          name + " from " + cls.source_id));
       for (const auto &field : cls.fields) {
         budget.tick();
         if (field.reference.owner != name)
@@ -723,7 +722,8 @@ public:
             throwable(type, context);
             throws_types.push_back(std::move(type));
           }
-          if (!method.declared_throws || throws_types != *method.declared_throws)
+          if (!method.declared_throws ||
+              throws_types != *method.declared_throws)
             invalid(context, "generic throws erasure disagrees with Throws "
                              "annotation");
         }

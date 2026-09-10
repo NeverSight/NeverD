@@ -490,10 +490,11 @@ class Reader {
   std::string peek() const {
     return position < lines.size() ? lines[position].second : std::string();
   }
-  void sourceAnnotation(
-      const std::string &header, std::optional<std::string> &signature,
-      std::optional<std::vector<std::string>> *throws_types,
-      std::set<std::string> &seen, const std::string &declaration) {
+  void sourceAnnotation(const std::string &header,
+                        std::optional<std::string> &signature,
+                        std::optional<std::vector<std::string>> *throws_types,
+                        std::set<std::string> &seen,
+                        const std::string &declaration) {
     Match match_result;
     if (!match(header, match_result, R"(\.annotation system (L[^\s]+;))"))
       fail("unsupported source annotation visibility on " + declaration);
@@ -514,8 +515,8 @@ class Reader {
     if (!match(body, match_result, R"(value\s*=\s*\{(.*)\})"))
       fail("invalid source annotation value on " + declaration);
     auto contents = trim(match_result[1]);
-    auto values = contents.empty() ? std::vector<std::string>{}
-                                  : parts(contents);
+    auto values =
+        contents.empty() ? std::vector<std::string>{} : parts(contents);
     if (is_signature) {
       std::string joined;
       for (const auto &value : values) {

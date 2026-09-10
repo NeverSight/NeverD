@@ -673,10 +673,10 @@ class Dex {
       bad("unsupported annotation " + values.front().value.first + " on " +
           declaration);
   }
-  void sourceAnnotations(
-      const AnnotationSet &values, std::optional<std::string> &signature,
-      std::optional<std::vector<std::string>> *throws_types,
-      const std::string &declaration) {
+  void sourceAnnotations(const AnnotationSet &values,
+                         std::optional<std::string> &signature,
+                         std::optional<std::vector<std::string>> *throws_types,
+                         const std::string &declaration) {
     for (const auto &entry : values) {
       budget.tick();
       const auto &[name, elements] = entry.value;
@@ -769,10 +769,9 @@ class Dex {
           auto found = defined_fields.find(ref);
           if (found == defined_fields.end())
             bad("annotated field has no class_data definition");
-          sourceAnnotations(annotationSet(annotation_off),
-                            found->second->generic_signature, nullptr,
-                            "field " + ref.owner + "->" + ref.name + ":" +
-                                ref.type);
+          sourceAnnotations(
+              annotationSet(annotation_off), found->second->generic_signature,
+              nullptr, "field " + ref.owner + "->" + ref.name + ":" + ref.type);
           continue;
         }
         const auto &ref = at(methods, index, "annotated method");
@@ -782,10 +781,9 @@ class Dex {
         if (found == defined_methods.end())
           bad("annotated method has no class_data definition");
         if (kind == 1) {
-          sourceAnnotations(annotationSet(annotation_off),
-                            found->second->generic_signature,
-                            &found->second->declared_throws,
-                            "method " + ref.identity());
+          sourceAnnotations(
+              annotationSet(annotation_off), found->second->generic_signature,
+              &found->second->declared_throws, "method " + ref.identity());
           continue;
         }
         auto parameters = item<std::vector<uint32_t>>(

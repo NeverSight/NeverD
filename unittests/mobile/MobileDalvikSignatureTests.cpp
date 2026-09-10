@@ -1,4 +1,5 @@
-//===- MobileDalvikSignatureTests.cpp - Generic grammar and binding checks --===//
+//===- MobileDalvikSignatureTests.cpp - Generic grammar and binding checks
+// --===//
 #include "MobileDalvikSignature.h"
 #include "gtest/gtest.h"
 
@@ -8,8 +9,8 @@ using namespace neverd::mobile;
 using namespace neverd::mobile::dalvik;
 
 namespace {
-Class genericClass(std::string signature =
-                       "<T:Ljava/lang/Object;>Ljava/lang/Object;") {
+Class genericClass(
+    std::string signature = "<T:Ljava/lang/Object;>Ljava/lang/Object;") {
   Class result;
   result.name = "Lfixture/Box;";
   result.superclass = "Ljava/lang/Object;";
@@ -19,8 +20,7 @@ Class genericClass(std::string signature =
   return result;
 }
 Method genericMethod(const Class &owner, std::string signature,
-                     std::vector<std::string> parameters,
-                     std::string returns) {
+                     std::vector<std::string> parameters, std::string returns) {
   Method result;
   result.reference = {owner.name, "convert", std::move(parameters),
                       std::move(returns)};
@@ -71,8 +71,8 @@ TEST(MobileDalvikSignature, GrammarPreservesArgumentsArraysAndInnerSegments) {
 }
 
 TEST(MobileDalvikSignature, FBoundsAndForwardReferencesHaveFiniteErasure) {
-  auto cls = genericClass(
-      "<T:TU;U::Ljava/lang/Comparable<TU;>;>Ljava/lang/Object;");
+  auto cls =
+      genericClass("<T:TU;U::Ljava/lang/Comparable<TU;>;>Ljava/lang/Object;");
   Field field;
   field.reference = {cls.name, "value", "Ljava/lang/Comparable;"};
   field.generic_signature = "TT;";
@@ -89,11 +89,10 @@ TEST(MobileDalvikSignature, FBoundsAndForwardReferencesHaveFiniteErasure) {
 }
 
 TEST(MobileDalvikSignature, MethodShadowingDoesNotRebindClassBounds) {
-  auto cls = genericClass(
-      "<T:TU;U:Ljava/lang/Number;>Ljava/lang/Object;");
-  cls.methods.push_back(genericMethod(
-      cls, "<U:Ljava/lang/String;>(TU;)TT;", {"Ljava/lang/String;"},
-      "Ljava/lang/Number;"));
+  auto cls = genericClass("<T:TU;U:Ljava/lang/Number;>Ljava/lang/Object;");
+  cls.methods.push_back(genericMethod(cls, "<U:Ljava/lang/String;>(TU;)TT;",
+                                      {"Ljava/lang/String;"},
+                                      "Ljava/lang/Number;"));
   auto plans = validate(cls);
   const auto &ref = cls.methods[0].reference;
   const auto &signature = plans.methods.at(ref);
@@ -112,8 +111,7 @@ TEST(MobileDalvikSignature, StaticDeclarationsCannotUseClassFormal) {
   method.access = {"public", "static"};
   cls.methods = {method};
   rejected([&] { validate(cls); }, "unbound type variable T");
-  cls.methods[0].generic_signature =
-      "<T:Ljava/lang/Object;>(TT;)TT;";
+  cls.methods[0].generic_signature = "<T:Ljava/lang/Object;>(TT;)TT;";
   auto plans = validate(cls);
   const auto &signature = plans.methods.at(method.reference);
   EXPECT_EQ(signature.types[*signature.result].variable_owner,
@@ -129,8 +127,7 @@ TEST(MobileDalvikSignature, StaticDeclarationsCannotUseClassFormal) {
 
 TEST(MobileDalvikSignature, ErasureChecksAllDeclarationPositions) {
   auto cls = genericClass();
-  cls.methods.push_back(genericMethod(cls, "([TT;)TT;",
-                                      {"[Ljava/lang/Object;"},
+  cls.methods.push_back(genericMethod(cls, "([TT;)TT;", {"[Ljava/lang/Object;"},
                                       "Ljava/lang/Object;"));
   auto plans = validate(cls);
   const auto &signature = plans.methods.at(cls.methods[0].reference);
@@ -166,8 +163,7 @@ TEST(MobileDalvikSignature, ConstructorParameterOmissionIsNotGuessed) {
 
 TEST(MobileDalvikSignature, ThrowsPreserveConcreteAndResolveGenericLists) {
   auto cls = genericClass();
-  auto method = genericMethod(cls, "<E:Ljava/lang/Exception;>()V^TE;", {},
-                              "V");
+  auto method = genericMethod(cls, "<E:Ljava/lang/Exception;>()V^TE;", {}, "V");
   method.declared_throws = std::vector<std::string>{"Ljava/lang/Exception;"};
   cls.methods = {method};
   auto plans = validate(cls);
@@ -190,8 +186,7 @@ TEST(MobileDalvikSignature, ThrowsPreserveConcreteAndResolveGenericLists) {
 
 TEST(MobileDalvikSignature, ThrowsCannotInventOrLoseHierarchyEvidence) {
   auto cls = genericClass();
-  auto method = genericMethod(cls, "<E:Ljava/lang/Exception;>()V^TE;", {},
-                              "V");
+  auto method = genericMethod(cls, "<E:Ljava/lang/Exception;>()V^TE;", {}, "V");
   cls.methods = {method};
   rejected([&] { validate(cls); }, "disagrees with Throws annotation");
   cls.methods[0].declared_throws =
@@ -214,9 +209,8 @@ TEST(MobileDalvikSignature, ThrowsCannotInventOrLoseHierarchyEvidence) {
 }
 
 TEST(MobileDalvikSignature, CyclesAndInvalidBoundsDoNotDefaultToObject) {
-  for (const auto &signature : {
-           "<T:TU;U:TT;>Ljava/lang/Object;",
-           "<T:TT;>Ljava/lang/Object;"}) {
+  for (const auto &signature :
+       {"<T:TU;U:TT;>Ljava/lang/Object;", "<T:TT;>Ljava/lang/Object;"}) {
     auto cls = genericClass(signature);
     rejected([&] { validate(cls); }, "cyclic type-variable erasure");
   }
@@ -257,8 +251,8 @@ TEST(MobileDalvikSignature, BudgetsBoundBytesNodesAndNestedGrammar) {
   budget.remaining = 5;
   rejected(
       [&] {
-        parseGenericSignature(GenericSignatureKind::Field,
-                              "Ljava/lang/String;", budget);
+        parseGenericSignature(GenericSignatureKind::Field, "Ljava/lang/String;",
+                              budget);
       },
       "work budget");
   std::string nested = "Ljava/lang/String;";
@@ -271,8 +265,8 @@ TEST(MobileDalvikSignature, BudgetsBoundBytesNodesAndNestedGrammar) {
       },
       "nesting exceeds limit");
   Budget array_budget;
-  auto arrays = parseGenericSignature(GenericSignatureKind::Field,
-                                      std::string(255, '[') + "I", array_budget);
+  auto arrays = parseGenericSignature(
+      GenericSignatureKind::Field, std::string(255, '[') + "I", array_budget);
   EXPECT_EQ(arrays.types.size(), 256u);
   rejected(
       [&] {
@@ -311,7 +305,8 @@ TEST(MobileDalvikSignature, LiteralDollarIsNotAnInnerOwnerProof) {
   ASSERT_EQ(node.segments.size(), 1u);
   EXPECT_EQ(node.segments[0].name, "Outer$Inner");
   EXPECT_TRUE(node.erasure.empty());
-  rejected([&] { validate(cls); }, "external generic declaration is not proven");
+  rejected([&] { validate(cls); },
+           "external generic declaration is not proven");
   cls.fields[0].generic_signature =
       "Lexternal/Outer<Ljava/lang/String;>.Inner;";
   rejected([&] { validate(cls); }, "inner owner binding is not proven");
@@ -385,8 +380,7 @@ TEST(MobileDalvikSignature, KnownTypeArgumentBoundsRequireActualSubtypeProof) {
 }
 
 TEST(MobileDalvikSignature, DependentBoundsSubstituteExactDeclarationFormals) {
-  auto box = genericClass(
-      "<T:TU;U:Ljava/lang/Object;>Ljava/lang/Object;");
+  auto box = genericClass("<T:TU;U:Ljava/lang/Object;>Ljava/lang/Object;");
   Class base;
   base.name = "Lfixture/Base;";
   base.superclass = "Ljava/lang/Object;";
@@ -395,8 +389,7 @@ TEST(MobileDalvikSignature, DependentBoundsSubstituteExactDeclarationFormals) {
   child.superclass = base.name;
   Field field;
   field.reference = {box.name, "other", box.name};
-  field.generic_signature =
-      "Lfixture/Box<Lfixture/Child;Lfixture/Base;>;";
+  field.generic_signature = "Lfixture/Box<Lfixture/Child;Lfixture/Base;>;";
   box.fields.push_back(field);
   auto check = [&] {
     Budget budget;
@@ -429,9 +422,9 @@ TEST(MobileDalvikSignature, KnownInterfaceCannotChangeClassBoundPosition) {
 }
 
 TEST(MobileDalvikSignature, ExternalBoundKindsPreserveClassAndInterfaceSlots) {
-  for (const auto &name : {"Ljava/lang/Object;", "Ljava/lang/Number;",
-                           "Ljava/lang/String;", "Ljava/lang/Exception;",
-                           "Ljava/lang/Throwable;"}) {
+  for (const auto &name :
+       {"Ljava/lang/Object;", "Ljava/lang/Number;", "Ljava/lang/String;",
+        "Ljava/lang/Exception;", "Ljava/lang/Throwable;"}) {
     SCOPED_TRACE(name);
     auto cls = genericClass("<T:" + std::string(name) + ">Ljava/lang/Object;");
     const auto plans = validate(cls);
@@ -443,9 +436,8 @@ TEST(MobileDalvikSignature, ExternalBoundKindsPreserveClassAndInterfaceSlots) {
     cls.generic_signature = "<T::" + std::string(name) + ">Ljava/lang/Object;";
     rejected([&] { validate(cls); }, "interface bound names a known class");
   }
-  for (const auto &name : {"Ljava/lang/CharSequence;",
-                           "Ljava/io/Serializable;", "Ljava/lang/Comparable;",
-                           "Ljava/util/List;"}) {
+  for (const auto &name : {"Ljava/lang/CharSequence;", "Ljava/io/Serializable;",
+                           "Ljava/lang/Comparable;", "Ljava/util/List;"}) {
     SCOPED_TRACE(name);
     auto cls = genericClass("<T::" + std::string(name) + ">Ljava/lang/Object;");
     const auto plans = validate(cls);
@@ -460,15 +452,16 @@ TEST(MobileDalvikSignature, ExternalBoundKindsPreserveClassAndInterfaceSlots) {
   }
 }
 
-TEST(MobileDalvikSignature, InputBoundKindOverridesPlatformFactInBothDirections) {
+TEST(MobileDalvikSignature,
+     InputBoundKindOverridesPlatformFactInBothDirections) {
   for (const auto &name : {"Ljava/lang/CharSequence;", "Ljava/lang/Number;"}) {
     SCOPED_TRACE(name);
     Class supplied;
     supplied.name = name;
     supplied.superclass = "Ljava/lang/Object;";
     bool supplied_interface = supplied.name == "Ljava/lang/Number;";
-    supplied.access = supplied_interface ? Access{"interface", "abstract"}
-                                        : Access{"public"};
+    supplied.access =
+        supplied_interface ? Access{"interface", "abstract"} : Access{"public"};
     auto prefix = supplied_interface ? "<T::" : "<T:";
     auto cls = genericClass(prefix + supplied.name + ">Ljava/lang/Object;");
     auto check = [&] {
@@ -480,13 +473,11 @@ TEST(MobileDalvikSignature, InputBoundKindOverridesPlatformFactInBothDirections)
     const auto &formal = plans.classes.at(cls.name).type_parameters[0];
     EXPECT_EQ(bool(formal.class_bound), !supplied_interface);
     EXPECT_EQ(formal.interface_bounds.size(), supplied_interface ? 1u : 0u);
-    cls.generic_signature =
-        (supplied_interface ? "<T:" : "<T::") + supplied.name +
-        ">Ljava/lang/Object;";
+    cls.generic_signature = (supplied_interface ? "<T:" : "<T::") +
+                            supplied.name + ">Ljava/lang/Object;";
     rejected([&] { check(); },
-             supplied_interface
-                 ? "class-bound position names a known interface"
-                 : "interface bound names a known class");
+             supplied_interface ? "class-bound position names a known interface"
+                                : "interface bound names a known class");
   }
 }
 
@@ -513,14 +504,15 @@ TEST(MobileDalvikSignature, TypeVariableBoundsKeepTheirOwnSignaturePosition) {
   EXPECT_EQ(bound.variable_owner, cls.name);
   EXPECT_EQ(bound.erasure, "Ljava/lang/CharSequence;");
   EXPECT_EQ(first.erasure, "Ljava/lang/CharSequence;");
-  cls.generic_signature = "<T::TU;U::Ljava/lang/CharSequence;>Ljava/lang/Object;";
+  cls.generic_signature =
+      "<T::TU;U::Ljava/lang/CharSequence;>Ljava/lang/Object;";
   rejected([&] { validate(cls); },
            "bound cannot be expressed as a Java type bound");
 }
 
 TEST(MobileDalvikSignature, BoundKindFactsDoNotAuthorizeTypeArguments) {
-  for (const auto &name : {"Ljava/lang/CharSequence;",
-                           "Ljava/io/Serializable;"}) {
+  for (const auto &name :
+       {"Ljava/lang/CharSequence;", "Ljava/io/Serializable;"}) {
     auto cls = genericClass();
     Field field;
     field.reference = {cls.name, "value", name};

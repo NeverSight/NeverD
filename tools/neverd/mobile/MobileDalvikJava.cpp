@@ -335,11 +335,10 @@ class JavaTypeNames {
   const Lookup &lookup(const JavaScope &Context, const std::string &Name,
                        bool InSupertypeHeader = false) const {
     const MethodRef *Method = localScope(Context);
-    auto Key = std::tuple{Context.owner.name,
-                          Context.method ? Context.method->identity()
-                                         : std::string(),
-                          Name,
-                          InSupertypeHeader};
+    auto Key =
+        std::tuple{Context.owner.name,
+                   Context.method ? Context.method->identity() : std::string(),
+                   Name, InSupertypeHeader};
     if (auto I = cache.find(Key); I != cache.end())
       return I->second;
     Lookup Result;
@@ -485,7 +484,7 @@ public:
           lookup(Context, Type.variable_name, InSupertypeHeader);
       if (!Type.variable_owner ||
           Binding.types != Strings{"type-variable:" + *Type.variable_owner +
-                                     ":" + Type.variable_name})
+                                   ":" + Type.variable_name})
         javaError("generic type variable has no unique source binding: " +
                   Type.variable_name);
       return javaIdentifier(Type.variable_name);
@@ -527,8 +526,8 @@ public:
         Arguments.push_back("?");
         continue;
       }
-      auto Value = render(Signature, *Argument.type, Context,
-                          InSupertypeHeader);
+      auto Value =
+          render(Signature, *Argument.type, Context, InSupertypeHeader);
       if (Argument.variance == Variance::Extends)
         Value = "? extends " + Value;
       else if (Argument.variance == Variance::Super)
@@ -549,7 +548,7 @@ public:
       std::vector<std::string> Bounds;
       if (Parameter.class_bound)
         Bounds.push_back(render(Signature, *Parameter.class_bound, Context,
-                                 InSupertypeHeader));
+                                InSupertypeHeader));
       for (auto Id : Parameter.interface_bounds)
         Bounds.push_back(render(Signature, Id, Context, InSupertypeHeader));
       if (!Bounds.empty())
@@ -561,7 +560,8 @@ public:
   void requireRuntimePackage(const JavaScope &Context) const {
     const auto &Binding = lookup(Context, "java");
     if (Binding.unknown_inheritance)
-      javaError("unresolved inherited Java type: java in " + Context.owner.name +
+      javaError("unresolved inherited Java type: java in " +
+                Context.owner.name +
                 " (external declarations are required to prove runtime "
                 "helper name binding)");
     if (!Binding.types.empty())
@@ -632,8 +632,8 @@ std::string helperName(const Class &C, std::string Base) {
     Base += '_';
   return Base;
 }
-bool constructorThrows(const Method &Input, const ClassMap &Classes,
-                       Budget &B, bool PreserveDeclaration = false) {
+bool constructorThrows(const Method &Input, const ClassMap &Classes, Budget &B,
+                       bool PreserveDeclaration = false) {
   const Method *M = &Input;
   std::set<MethodRef> Seen;
   for (;;) {
@@ -973,7 +973,7 @@ void Body::validateShape() {
     if (Actual != T)
       fail("constructor prefix argument types disagree");
     Args.push_back(isReference(T) ? "((" + sourceType(T) + ") " + Name + ")"
-                                 : Name);
+                                  : Name);
     if (wordWidth(T) == 2 &&
         (Cursor + 1 >= Head.registers.size() ||
          Head.registers[Cursor + 1] != Head.registers[Cursor] + 1))
@@ -1295,9 +1295,9 @@ Body::operation(const Instruction &Op, const State &Incoming, bool Strict) {
       auto Value = get(Regs[0], T);
       if (auto I = generics.methods.find(method.reference);
           isReference(T) && I != generics.methods.end()) {
-        auto Declared = type_names.render(
-            I->second, *I->second.result,
-            JavaScope{ownerClass(), &method.reference});
+        auto Declared =
+            type_names.render(I->second, *I->second.result,
+                              JavaScope{ownerClass(), &method.reference});
         // The signature validator proved this cast has the same erasure as
         // the existing register read. It adds no stronger runtime check.
         Value = "((" + Declared + ") " + Value + ")";
@@ -1971,10 +1971,9 @@ std::vector<std::string> modifiers(const Access &Flags,
 llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
   validateSourceScopes(Classes, B);
   const auto Generics = validateGenericSignatures(Classes, B);
-  bool HasGenericMetadata = !Generics.classes.empty() ||
-                            !Generics.fields.empty() ||
-                            !Generics.methods.empty() ||
-                            !Generics.declared_throws.empty();
+  bool HasGenericMetadata =
+      !Generics.classes.empty() || !Generics.fields.empty() ||
+      !Generics.methods.empty() || !Generics.declared_throws.empty();
   llvm::json::Array Units, Methods, Bindings, Helpers;
   uint64_t Recovered = 0, Declared = 0, Projected = 0;
   LocalProjection Projection(Classes, B);
@@ -2044,7 +2043,8 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
           B.tick();
           if (!Segment.arguments.empty())
             javaError("generic inheritance requires a proven member "
-                      "substitution and bridge mapping: " + C.name);
+                      "substitution and bridge mapping: " +
+                      C.name);
         }
       if (!ClassSignature->type_parameters.empty()) {
         auto Parent = C.superclass;
@@ -2059,8 +2059,8 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
                   .contains(*Parent))
             javaError("generic class cannot extend Throwable: " + C.name);
           auto Base = Classes.find(*Parent);
-          Parent = Base == Classes.end() ? std::nullopt
-                                         : Base->second.superclass;
+          Parent =
+              Base == Classes.end() ? std::nullopt : Base->second.superclass;
         }
       }
     }
@@ -2086,28 +2086,26 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
       std::erase(Mods, "static");
     std::string Kind = C.access.contains("interface") ? "interface" : "class";
     Mods.push_back(Kind);
-    Mods.push_back(Name + (ClassSignature
-                              ? TypeNames.formals(*ClassSignature,
-                                                  JavaScope{C}, true)
-                              : ""));
+    Mods.push_back(Name +
+                   (ClassSignature
+                        ? TypeNames.formals(*ClassSignature, JavaScope{C}, true)
+                        : ""));
     std::string Header = join(Mods, " ");
     if (Kind == "class" && C.superclass &&
         *C.superclass != "Ljava/lang/Object;")
       Header += " extends " +
-                (ClassSignature
-                     ? TypeNames.render(*ClassSignature,
-                                         *ClassSignature->superclass,
-                                         JavaScope{C}, true)
-                     : TypeNames.render(*C.superclass, C, true));
+                (ClassSignature ? TypeNames.render(*ClassSignature,
+                                                   *ClassSignature->superclass,
+                                                   JavaScope{C}, true)
+                                : TypeNames.render(*C.superclass, C, true));
     if (!C.interfaces.empty()) {
       std::vector<std::string> Interfaces;
       for (size_t I = 0; I < C.interfaces.size(); ++I)
         Interfaces.push_back(
-            ClassSignature
-                ? TypeNames.render(*ClassSignature,
-                                    ClassSignature->interfaces.at(I),
-                                    JavaScope{C}, true)
-                : TypeNames.render(C.interfaces[I], C, true));
+            ClassSignature ? TypeNames.render(*ClassSignature,
+                                              ClassSignature->interfaces.at(I),
+                                              JavaScope{C}, true)
+                           : TypeNames.render(C.interfaces[I], C, true));
       Header += (Kind == "interface" ? " extends " : " implements ") +
                 join(Interfaces, ", ");
     }
@@ -2158,8 +2156,8 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
       }
       if (auto I = Generics.fields.find(F.reference);
           I != Generics.fields.end())
-        FieldMods.push_back(TypeNames.render(
-            I->second, *I->second.field_type, JavaScope{C}));
+        FieldMods.push_back(
+            TypeNames.render(I->second, *I->second.field_type, JavaScope{C}));
       else
         FieldMods.push_back(TypeNames.render(F.reference.type, C));
       FieldMods.push_back(javaIdentifier(F.reference.name));
@@ -2172,7 +2170,8 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
       const auto &R = M.reference;
       if (HasGenericMetadata && M.access.contains("bridge"))
         javaError("generic bridge method requires an exact regeneration "
-                  "mapping: " + R.identity());
+                  "mapping: " +
+                  R.identity());
       const GenericSignature *MethodSignature = nullptr;
       if (auto I = Generics.methods.find(R); I != Generics.methods.end())
         MethodSignature = &I->second;
@@ -2202,16 +2201,15 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
       for (size_t I = 0; I < R.parameters.size(); ++I) {
         auto Type = MethodSignature
                         ? TypeNames.render(*MethodSignature,
-                                            MethodSignature->parameters.at(I),
-                                            MethodScope)
+                                           MethodSignature->parameters.at(I),
+                                           MethodScope)
                         : TypeNames.render(R.parameters[I], MethodScope);
         Params.push_back(Type + " arg" + std::to_string(I));
       }
       std::vector<std::string> Throws;
       if (MethodSignature && !MethodSignature->throws_types.empty()) {
         for (auto Id : MethodSignature->throws_types)
-          Throws.push_back(
-              TypeNames.render(*MethodSignature, Id, MethodScope));
+          Throws.push_back(TypeNames.render(*MethodSignature, Id, MethodScope));
       } else if (auto I = Generics.declared_throws.find(R);
                  I != Generics.declared_throws.end())
         for (const auto &Type : I->second)
@@ -2231,11 +2229,11 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
         if (constructorThrows(M, Classes, B, HasGenericMetadata))
           Throws.push_back("java.lang.Throwable");
       } else {
-        MethodMods.push_back(
-            MethodSignature
-                ? TypeNames.render(*MethodSignature, *MethodSignature->result,
-                                    MethodScope)
-                : TypeNames.render(R.returns, MethodScope));
+        MethodMods.push_back(MethodSignature
+                                 ? TypeNames.render(*MethodSignature,
+                                                    *MethodSignature->result,
+                                                    MethodScope)
+                                 : TypeNames.render(R.returns, MethodScope));
         MethodMods.push_back(javaIdentifier(R.name));
         Declaration = join(MethodMods, " ") + "(" + join(Params, ", ") + ")";
       }

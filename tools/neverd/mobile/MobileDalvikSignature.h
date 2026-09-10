@@ -1,4 +1,5 @@
-//===- MobileDalvikSignature.h - Parsed JVM generic source declarations -----===//
+//===- MobileDalvikSignature.h - Parsed JVM generic source declarations
+// -----===//
 #pragma once
 
 #include "MobileDalvik.h"
