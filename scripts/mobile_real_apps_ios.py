@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -32,6 +33,7 @@ MAX_DEMANGLE_BATCHES = 128
 MAX_PRESERVED_BYTES = 4 * 1024 * 1024 * 1024
 ARTIFACT_INVENTORY_SECONDS = 120
 ARTIFACT_RECOVERY_SECONDS = 180
+ARTIFACT_RECOVERY_CLEANUP_SECONDS = 15
 MACHO_MAGICS = {
     b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xfe\xed\xfa\xce",
     b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca", b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca",
@@ -72,7 +74,8 @@ class Session:
             raise EvidenceError("total case or artifact evidence budget exhausted")
         return remaining
 
-    def command(self, name, argv, *, cwd=None, cap=60, deadline=None, optional=False):
+    def command(self, name, argv, *, cwd=None, cap=60, deadline=None, optional=False,
+                minimum_timeout=None):
         timeout = min(cap, self.remaining(deadline))
         if argv[0] == "xcrun":
             swift_tool = any(value in ("swiftc", "swift-frontend", "swift-demangle") for value in argv[1:])
@@ -80,6 +83,12 @@ class Session:
             argv = ["xcrun", "--toolchain", selected, *argv[1:]]
         if argv[0] == "xcodebuild" and "-toolchain" not in argv:
             argv = ["xcodebuild", "-toolchain", self.toolchain, *argv[1:]]
+        if minimum_timeout is not None:
+            # This is a handoff check, not a guarantee about process startup.
+            # The common runner still applies the final application deadline.
+            timeout = min(timeout, self.remaining(deadline))
+            if timeout < minimum_timeout:
+                raise EvidenceError("insufficient recovery handoff budget before command launch")
         result = self.ctx.command(name, [str(arg) for arg in argv], cwd=cwd,
                                   env={"DEVELOPER_DIR": DEVELOPER_DIR, "TOOLCHAINS": self.toolchain or "XcodeDefault"},
                                   timeout=timeout, allow_failure=True)
@@ -525,13 +534,27 @@ def artifact_inventory(session, item, index, architecture):
 def artifact_recovery(session, item, index, architecture):
     output = session.ctx.work / "recovered" / f"artifact-{index:04d}"
     name = f"artifact-{index:04d}-neverd"
+    policy = {"status": "unallocated",
+              "nominal_cleanup_allowance_seconds": ARTIFACT_RECOVERY_CLEANUP_SECONDS}
+    record = {"artifact": item["path"], "output": str(output), "command_name": name,
+              "status": "failed", "timeout_policy": policy}
     try:
-        remaining = min(ARTIFACT_RECOVERY_SECONDS, session.remaining())
+        native_timeout = min(ARTIFACT_RECOVERY_SECONDS,
+                             math.floor(session.remaining() - ARTIFACT_RECOVERY_CLEANUP_SECONDS))
+        if native_timeout < 1:
+            raise EvidenceError("insufficient recovery and cleanup budget: need at least one native second "
+                                "and the nominal cleanup allowance")
+        outer_timeout = native_timeout + ARTIFACT_RECOVERY_CLEANUP_SECONDS
+        policy.update(status="planned", native_timeout_seconds=native_timeout,
+                      planned_outer_timeout_seconds=outer_timeout,
+                      minimum_session_timeout_seconds=native_timeout + 1)
+        # The extra time lets a native timeout return diagnostics before the
+        # runner's hard stop. Scheduling and common's final deadline clamp may
+        # reduce it; the actual outer limit is recorded in the command receipt.
         result = session.command(name, [session.ctx.neverd, "mobile", item["resolved"], "-o", output,
-                                       f"--arch={architecture}", f"--timeout={max(1, int(remaining))}"],
-                                 cap=remaining, optional=True)
-        record = {"artifact": item["path"], "output": str(output), "returncode": result.returncode,
-                  "command_name": name, "status": "failed" if result.returncode else "incomplete"}
+                                       f"--arch={architecture}", f"--timeout={native_timeout}"],
+                                 cap=outer_timeout, minimum_timeout=native_timeout + 1, optional=True)
+        record.update(returncode=result.returncode, status="failed" if result.returncode else "incomplete")
         report_path = output / "report.json"
         if report_path.is_file():
             report = read_json(report_path)
@@ -550,8 +573,8 @@ def artifact_recovery(session, item, index, architecture):
         record.setdefault("reason", "independent native/Objective-C denominator and source acceptance remain unproven")
         return record
     except Exception as error:
-        return {"artifact": item["path"], "output": str(output), "command_name": name,
-                "status": "failed", "reason": str(error)}
+        record.update(status="failed", reason=str(error))
+        return record
 
 
 def retained_build_files(derived, session):

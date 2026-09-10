@@ -12,6 +12,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from scripts import mobile_real_apps_common as common
+from scripts.tests.test_mobile_real_apps_common import ProcessDouble
 from scripts.tests.test_mobile_swift_toolchain import installed_identity_fixture
 
 
@@ -439,6 +441,7 @@ class IOSRealAppOrchestrationTests(unittest.TestCase):
         rows = ctx.stages["recovery"]["artifacts"]
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[1]["status"], "failed")
+        self.assertEqual(rows[1]["timeout_policy"]["status"], "unallocated")
         self.assertIn("budget exhausted", rows[1]["reason"])
         self.assertIn("ios-artifact-0001-recovery.json", ctx.documents)
 
@@ -540,6 +543,157 @@ class IOSRealAppOrchestrationTests(unittest.TestCase):
             ios.relative_path(ctx.source, "outside/file")
         with self.assertRaisesRegex(ios.EvidenceError, "escapes"):
             ios.relative_path(ctx.source, "../elsewhere")
+
+
+class IOSRecoveryBudgetTests(unittest.TestCase):
+    """Exercise the real receipt writer with mocked process and clock boundaries."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.source = self.root / "source"
+        self.source.mkdir()
+        self.clock = [100.0]
+        self.enterContext(patch.object(ios.time, "monotonic", side_effect=lambda: self.clock[0]))
+
+    def context(self, remaining):
+        ctx = common.CaseContext(
+            app={"source_commit": "a" * 40},
+            variant={"id": "owned-ios-release", "app": "owned", "platform": "ios",
+                     "toolchain": "XcodeDefault"},
+            source=self.source, work=self.root / "evidence", neverd=self.root / "neverd",
+            timeout=4200, consumer_commit="b" * 40, manifest_sha256="c" * 64)
+        ctx.deadline = self.clock[0] + remaining
+        session = ios.Session(ctx)
+        item = {"path": "Owned", "resolved": str(self.source / "Owned")}
+        return ctx, session, item
+
+    def invoke(self, ctx, session, item, process, *, handoff_delay=0, advance_wait=False):
+        original_command = session.command
+        original_wait = process.wait
+
+        def delayed_command(*args, **kwargs):
+            self.clock[0] += handoff_delay
+            return original_command(*args, **kwargs)
+
+        def bounded_wait(timeout=None):
+            if advance_wait and not process.killed:
+                self.clock[0] += timeout
+            return original_wait(timeout=timeout)
+
+        with patch.object(session, "command", side_effect=delayed_command), \
+                patch.object(common.subprocess, "Popen", side_effect=process.start), \
+                patch.object(common.os, "killpg", side_effect=process.killpg, create=True), \
+                patch.object(process, "wait", side_effect=bounded_wait):
+            return ios.artifact_recovery(session, item, 0, "arm64")
+
+    def test_full_native_budget_has_separate_nominal_outer_allowance(self):
+        ctx, session, item = self.context(4200)
+        record = self.invoke(ctx, session, item, ProcessDouble(code=1))
+        command = ctx.result["commands"][0]
+        self.assertIn("--timeout=180", command["argv"])
+        self.assertEqual(command["timeout_seconds"], 195)
+        self.assertEqual(record["timeout_policy"], {
+            "status": "planned", "native_timeout_seconds": 180,
+            "planned_outer_timeout_seconds": 195,
+            "nominal_cleanup_allowance_seconds": 15,
+            "minimum_session_timeout_seconds": 181,
+        })
+        self.assertEqual(record["status"], "failed")
+
+    def test_fractional_case_budget_bounds_both_timeouts(self):
+        ctx, session, item = self.context(40.9)
+        deadline = ctx.deadline
+        record = self.invoke(ctx, session, item, ProcessDouble(code=1))
+        command = ctx.result["commands"][0]
+        self.assertIn("--timeout=25", command["argv"])
+        self.assertEqual(command["timeout_seconds"], 40)
+        self.assertEqual(record["timeout_policy"]["planned_outer_timeout_seconds"], 40)
+        self.assertEqual(ctx.deadline, deadline)
+        self.assertLessEqual(command["timeout_seconds"], deadline - 100.0)
+
+    def test_insufficient_native_and_nominal_cleanup_budget_never_spawns(self):
+        ctx, session, item = self.context(15.999)
+        record = self.invoke(ctx, session, item, ProcessDouble())
+        self.assertEqual(ctx.result["commands"], [])
+        self.assertEqual(record["status"], "failed")
+        self.assertEqual(record["timeout_policy"]["status"], "unallocated")
+        self.assertIn("insufficient recovery and cleanup budget", record["reason"])
+
+    def test_minimum_one_second_native_budget_is_not_rounded_up_past_case(self):
+        ctx, session, item = self.context(16)
+        record = self.invoke(ctx, session, item, ProcessDouble(code=1))
+        command = ctx.result["commands"][0]
+        self.assertIn("--timeout=1", command["argv"])
+        self.assertEqual(command["timeout_seconds"], 16)
+        self.assertEqual(record["timeout_policy"]["minimum_session_timeout_seconds"], 2)
+
+    def test_handoff_budget_reduction_keeps_policy_nominal_and_receipt_actual(self):
+        ctx, session, item = self.context(40.9)
+        record = self.invoke(ctx, session, item, ProcessDouble(code=1), handoff_delay=14.5)
+        command = ctx.result["commands"][0]
+        self.assertIn("--timeout=25", command["argv"])
+        self.assertAlmostEqual(command["timeout_seconds"], 26.4)
+        self.assertEqual(record["timeout_policy"]["planned_outer_timeout_seconds"], 40)
+        self.assertEqual(record["timeout_policy"]["status"], "planned")
+        self.assertGreaterEqual(command["timeout_seconds"], 26)
+        self.assertLess(command["timeout_seconds"], 40)
+
+    def test_handoff_without_one_second_allowance_fails_before_common_launch(self):
+        ctx, session, item = self.context(40.9)
+        record = self.invoke(ctx, session, item, ProcessDouble(), handoff_delay=15.1)
+        self.assertEqual(ctx.result["commands"], [])
+        self.assertEqual(record["status"], "failed")
+        self.assertEqual(record["timeout_policy"]["native_timeout_seconds"], 25)
+        self.assertIn("insufficient recovery handoff budget", record["reason"])
+
+    def test_common_final_case_clamp_is_authoritative_after_session_handoff(self):
+        ctx, session, item = self.context(40.9)
+        deadline = ctx.deadline
+        original_command = ctx.command
+
+        def delayed_common_command(*args, **kwargs):
+            self.clock[0] += 16
+            return original_command(*args, **kwargs)
+
+        with patch.object(ctx, "command", side_effect=delayed_common_command):
+            record = self.invoke(ctx, session, item, ProcessDouble(code=1))
+        command = ctx.result["commands"][0]
+        self.assertAlmostEqual(command["timeout_seconds"], 24.9)
+        self.assertLess(command["timeout_seconds"], record["timeout_policy"]["minimum_session_timeout_seconds"])
+        self.assertEqual(record["timeout_policy"]["planned_outer_timeout_seconds"], 40)
+        self.assertEqual(record["timeout_policy"]["status"], "planned")
+        self.assertEqual(record["status"], "failed")
+        self.assertEqual(ctx.deadline, deadline)
+        self.assertLessEqual(command["timeout_seconds"], deadline - self.clock[0])
+
+    def test_native_budget_failure_retains_command_receipt_and_stderr(self):
+        ctx, session, item = self.context(4200)
+        process = ProcessDouble(code=1, stderr=b"mobile analysis exceeded its time budget\n")
+        record = self.invoke(ctx, session, item, process)
+        command = ctx.result["commands"][0]
+        self.assertEqual(record["status"], "failed")
+        self.assertEqual(record["returncode"], 1)
+        self.assertEqual(command["status"], "failed")
+        self.assertEqual(command["exitcode"], 1)
+        self.assertEqual((ctx.work / command["stderr"]).read_bytes(), process.stderr_bytes)
+        self.assertEqual(json.loads((ctx.work / "commands" / (command["id"] + ".json")).read_text()), command)
+
+    def test_outer_hard_timeout_remains_failed_with_raw_evidence(self):
+        ctx, session, item = self.context(20)
+        process = ProcessDouble(running=True, stderr=b"native diagnostic before hard timeout\n")
+        record = self.invoke(ctx, session, item, process, advance_wait=True)
+        command = ctx.result["commands"][0]
+        self.assertEqual(record["status"], "failed")
+        self.assertIn("timeout", record["reason"])
+        self.assertEqual(record["timeout_policy"]["native_timeout_seconds"], 5)
+        self.assertEqual(command["timeout_seconds"], 20)
+        self.assertEqual(command["status"], "timeout")
+        self.assertEqual(command["exitcode"], -9)
+        self.assertTrue(process.killed)
+        self.assertEqual((ctx.work / command["stderr"]).read_bytes(), process.stderr_bytes)
+        self.assertEqual(json.loads((ctx.work / "commands" / (command["id"] + ".json")).read_text()), command)
 
 
 if __name__ == "__main__":
