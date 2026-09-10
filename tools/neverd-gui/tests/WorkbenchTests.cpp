@@ -2,6 +2,8 @@
 
 #include <QDataStream>
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
@@ -347,14 +349,30 @@ private slots:
     QFile saved(path + ".neverd-annotations.json");
     QVERIFY(saved.open(QIODevice::ReadOnly));
     const auto bytes = saved.readAll();
+    QCOMPARE(saved.error(), QFileDevice::NoError);
+    // Rename also replaces this sidecar; an open QFile blocks that on Windows.
+    saved.close();
     QVERIFY(bytes.contains("0xffff800012340140"));
     QVERIFY(bytes.contains("comment on captured extra pane"));
     controller.navigate("function_20");
     QTRY_COMPARE(controller.selectedComment(),
                  QString("comment on captured extra pane"));
     controller.renameFunctionAt(target, "captured_function");
-    QTRY_COMPARE(controller.selectedFunctionName(),
-                 QString("captured_function"));
+    QTRY_VERIFY2(
+        controller.selectedFunctionName() == QString("captured_function"),
+        qPrintable(
+            QString("Expected captured_function; actual=%1; error=%2")
+                .arg(controller.selectedFunctionName(), controller.error())));
+    QFile renames(path + ".neverd-renames.json");
+    QVERIFY(renames.open(QIODevice::ReadOnly));
+    const auto renameBytes = renames.readAll();
+    QCOMPARE(renames.error(), QFileDevice::NoError);
+    renames.close();
+    const auto entries = QJsonDocument::fromJson(renameBytes).array();
+    QCOMPARE(entries.size(), 1);
+    const auto entry = entries.first().toObject();
+    QCOMPARE(entry.value("addr").toString(), QString("0xffff800012340140"));
+    QCOMPARE(entry.value("renamed").toString(), QString("captured_function"));
   }
   void queuedOpenIntentsUseTheNewSessionAndOldDialogTargetsExpire() {
     QTemporaryDir directory;

@@ -133,12 +133,32 @@ struct PaneFixture {
     return list->property("currentItem").value<QQuickItem *>();
   }
   int index() const { return list->property("currentIndex").toInt(); }
-  bool currentVisible() const {
-    auto *item = current();
-    return item &&
-           list->boundingRect()
-               .adjusted(-1, -1, 1, 1)
-               .contains(item->mapRectToItem(list, item->boundingRect()));
+  bool currentRowVisible() const {
+    const auto *item = current();
+    if (!item)
+      return false;
+    const auto viewport = list->boundingRect().adjusted(-1, -1, 1, 1);
+    const auto row = item->mapRectToItem(list, item->boundingRect());
+    // Disassembly rows can be wider than a dock and scroll horizontally.
+    // Keyboard navigation must reveal the complete row vertically.
+    return row.width() > 0 && row.height() > 0 && viewport.intersects(row) &&
+           row.top() >= viewport.top() && row.bottom() <= viewport.bottom();
+  }
+  QString rowVisibilityDetails() const {
+    const auto *item = current();
+    const auto row =
+        item ? item->mapRectToItem(list, item->boundingRect()) : QRectF{};
+    return QStringLiteral("index=%1 viewport=%2x%3 row=(%4,%5 %6x%7) "
+                          "content=(%8,%9)")
+        .arg(index())
+        .arg(list->width())
+        .arg(list->height())
+        .arg(row.x())
+        .arg(row.y())
+        .arg(row.width())
+        .arg(row.height())
+        .arg(list->property("contentX").toDouble())
+        .arg(list->property("contentY").toDouble());
   }
   void focusList() { list->forceActiveFocus(Qt::TabFocusReason); }
 };
@@ -168,7 +188,8 @@ private slots:
     QCOMPARE(fixture.controller.selection, address(fixture.index()));
     QTest::keyClick(&fixture.window, Qt::Key_End);
     QTRY_COMPARE(fixture.index(), 599);
-    QTRY_VERIFY(fixture.currentVisible());
+    QTRY_VERIFY2(fixture.currentRowVisible(),
+                 qPrintable(fixture.rowVisibilityDetails()));
     QTest::keyClick(&fixture.window, Qt::Key_C, Qt::ControlModifier);
     QCOMPARE(fixture.controller.copied,
              address(599) + "  mov rax, rbx ; annotation");
@@ -188,7 +209,8 @@ private slots:
     drainQueuedCallbacks();
     QCOMPARE(fixture.index(), 0);
     QCOMPARE(fixture.controller.selection, address(0));
-    QTRY_VERIFY(fixture.currentVisible());
+    QTRY_VERIFY2(fixture.currentRowVisible(),
+                 qPrintable(fixture.rowVisibilityDetails()));
 
     const auto positionMode = fixture.list->metaObject()->enumerator(
         fixture.list->metaObject()->indexOfEnumerator("PositionMode"));
@@ -199,7 +221,7 @@ private slots:
     drainQueuedCallbacks();
     const auto readingY = fixture.list->property("contentY").toDouble();
     QVERIFY(readingY > fixture.list->height());
-    QVERIFY(!fixture.currentVisible());
+    QVERIFY(!fixture.currentRowVisible());
 
     QJsonArray nextPage;
     for (int row = 600; row < 640; ++row)
@@ -232,7 +254,8 @@ private slots:
     QCOMPARE(fixture.index(), 0);
     fixture.controller.instructions.append(nextPage);
     QTRY_COMPARE(fixture.index(), 500);
-    QTRY_VERIFY(fixture.currentVisible());
+    QTRY_VERIFY2(fixture.currentRowVisible(),
+                 qPrintable(fixture.rowVisibilityDetails()));
     QJsonArray replacement;
     for (int row = 480; row < 520; ++row)
       replacement.append(QJsonObject{{"address", address(row)},
@@ -242,7 +265,8 @@ private slots:
                                      {"comment", ""}});
     fixture.controller.instructions.replace(replacement);
     QTRY_COMPARE(fixture.index(), 20);
-    QTRY_VERIFY(fixture.currentVisible());
+    QTRY_VERIFY2(fixture.currentRowVisible(),
+                 qPrintable(fixture.rowVisibilityDetails()));
     QCOMPARE(fixture.controller.selection, address(500));
   }
 
@@ -322,6 +346,18 @@ private slots:
           item->mapRectToItem(row, item->boundingRect())));
     QVERIFY(fixture.list->property("contentWidth").toDouble() >
             fixture.list->width());
+    QVERIFY(row->width() > fixture.list->width());
+    QTRY_VERIFY2(fixture.currentRowVisible(),
+                 qPrintable(fixture.rowVisibilityDetails()));
+    fixture.focusList();
+    QTest::keyClick(&fixture.window, Qt::Key_End);
+    QTRY_COMPARE(fixture.index(), 599);
+    QTRY_VERIFY2(fixture.currentRowVisible(),
+                 qPrintable(fixture.rowVisibilityDetails()));
+    QTest::keyClick(&fixture.window, Qt::Key_Home);
+    QTRY_COMPARE(fixture.index(), 0);
+    QTRY_VERIFY2(fixture.currentRowVisible(),
+                 qPrintable(fixture.rowVisibilityDetails()));
   }
 
   void narrowReferencesKeepBothAddressesInsideRow() {
