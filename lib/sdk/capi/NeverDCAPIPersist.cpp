@@ -82,6 +82,9 @@ parsePersistedAddress(const llvm::json::Value &Value) {
     return Addr;
   }
 
+  if (auto Integer = Value.getAsUINT64())
+    return *Integer;
+
   if (auto Num = Value.getAsNumber()) {
     if (!std::isfinite(*Num) || *Num < 0.0 || *Num >= 18446744073709551616.0 ||
         std::trunc(*Num) != *Num)
@@ -139,8 +142,8 @@ int neverd_annotations_save(neverd_session_t Sess) {
   llvm::json::Array Arr;
   for (const auto &[Addr, Text] : S->Annotations) {
     llvm::json::Object Obj;
-    // Store the address as a hex string, mirroring neverd_annotations_json;
-    // a JSON number is a double and would lose precision for VAs >= 2^53.
+    // Store the address as a hex string, mirroring neverd_annotations_json,
+    // to preserve full address precision across JSON consumers.
     Obj["addr"] = vaHex(Addr);
     Obj["text"] = Text;
     Arr.push_back(std::move(Obj));

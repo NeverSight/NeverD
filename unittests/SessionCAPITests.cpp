@@ -20,6 +20,9 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <limits>
+#include <map>
 #include <set>
 #include <string>
 #include <string_view>
@@ -81,10 +84,11 @@ std::string makeNativeELF(bool AArch64, uint64_t Base = 0x400000,
 
 // Give the native function a loader-provided name without passing it through
 // another JSON API before the IR page boundary under test.
-std::string makeNamedNativeELF(const std::string &Name) {
+std::string makeNamedNativeELF(const std::string &Name,
+                               uint64_t Base = 0x400000) {
   using ELF = llvm::object::ELF64LE;
   using namespace llvm::ELF;
-  std::string Bytes = makeNativeELF(false);
+  std::string Bytes = makeNativeELF(false, Base);
   ELF::Ehdr Header{};
   std::memcpy(&Header, Bytes.data(), sizeof(Header));
   std::array<ELF::Shdr, 5> Sections{};
@@ -210,6 +214,37 @@ protected:
     ASSERT_FALSE(Address->getAsInteger(0, ParsedAddress));
     EXPECT_EQ(ParsedAddress, Entry);
     EXPECT_EQ(neverd_sig_match_count(Session), 1);
+  }
+
+  std::string readSidecar(std::string_view Name) {
+    std::ifstream Input(Directory / Name, std::ios::binary);
+    EXPECT_TRUE(Input.is_open());
+    return std::string(std::istreambuf_iterator<char>(Input),
+                       std::istreambuf_iterator<char>());
+  }
+
+  void expectPersistedRows(const std::string &Text, llvm::StringRef ValueField,
+                           const std::map<uint64_t, std::string> &Expected) {
+    auto Parsed = llvm::json::parse(Text);
+    ASSERT_TRUE(static_cast<bool>(Parsed))
+        << llvm::toString(Parsed.takeError());
+    const auto *Rows = Parsed->getAsArray();
+    ASSERT_NE(Rows, nullptr);
+    ASSERT_EQ(Rows->size(), Expected.size());
+    std::map<uint64_t, std::string> Actual;
+    for (const auto &Row : *Rows) {
+      const auto *Object = Row.getAsObject();
+      ASSERT_NE(Object, nullptr);
+      const auto Address = Object->getString("addr");
+      const auto Value = Object->getString(ValueField);
+      ASSERT_TRUE(Address.has_value());
+      ASSERT_TRUE(Value.has_value());
+      ASSERT_TRUE(Address->starts_with("0x"));
+      uint64_t Key = 0;
+      ASSERT_FALSE(Address->drop_front(2).getAsInteger(16, Key));
+      ASSERT_TRUE(Actual.emplace(Key, Value->str()).second);
+    }
+    EXPECT_EQ(Actual, Expected);
   }
 
   std::filesystem::path Directory;
@@ -857,6 +892,136 @@ TEST_F(SessionCAPITest, SignatureJSONPreservesASCIINameAndMatchFields) {
 
 TEST_F(SessionCAPITest, SignatureJSONPreservesUnicodeNameAndMatchFields) {
   expectSignatureJSONName("\xe5\x87\xbd\xe6\x95\xb0_caf\xc3\xa9");
+}
+
+TEST_F(SessionCAPITest, AnnotationsPreserveExactNumericAddressKeys) {
+  const auto Input = write("integer-notes.elf", makeNamedNativeELF("entry"));
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  const std::map<uint64_t, std::string> Expected = {
+      {37, "small"},
+      {uint64_t(1) << 53 | 1, "above_binary64_exact_range"},
+      {static_cast<uint64_t>(std::numeric_limits<int64_t>::max()),
+       "signed_maximum"},
+      {uint64_t(1) << 63 | 1, "unsigned_low_bit"},
+      {std::numeric_limits<uint64_t>::max(), "unsigned_maximum"}};
+  std::string Rows = "[";
+  for (const auto &[Address, Text] : Expected) {
+    if (Rows.size() > 1)
+      Rows += ',';
+    Rows +=
+        "{\"addr\":" + std::to_string(Address) + ",\"text\":\"" + Text + "\"}";
+  }
+  Rows += ']';
+  write("integer-notes.elf.neverd-annotations.json", Rows);
+  ASSERT_EQ(neverd_annotations_load(Session), 0);
+  for (const auto &[Address, Text] : Expected)
+    EXPECT_EQ(takeString(neverd_annotation_get(Session, Address)), Text);
+  for (uint64_t Other :
+       {uint64_t(1) << 53, uint64_t(1) << 63, (uint64_t(1) << 63) + 2,
+        std::numeric_limits<uint64_t>::max() - 1})
+    EXPECT_TRUE(takeString(neverd_annotation_get(Session, Other)).empty());
+  expectPersistedRows(takeString(neverd_annotations_json(Session)), "text",
+                      Expected);
+  ASSERT_EQ(neverd_annotations_save(Session), 0);
+  expectPersistedRows(readSidecar("integer-notes.elf.neverd-annotations.json"),
+                      "text", Expected);
+  for (const auto &Item : Expected)
+    neverd_annotation_remove(Session, Item.first);
+  ASSERT_EQ(neverd_annotations_load(Session), 0);
+  expectPersistedRows(takeString(neverd_annotations_json(Session)), "text",
+                      Expected);
+  for (const auto &[Address, Text] : Expected)
+    EXPECT_EQ(takeString(neverd_annotation_get(Session, Address)), Text);
+}
+
+TEST_F(SessionCAPITest, NumericRenameReachesExactHighAddressFunction) {
+  constexpr uint64_t Base = 0xffff800000000000ULL;
+  const auto Input =
+      write("integer-rename.elf", makeNamedNativeELF("entry", Base));
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  ASSERT_EQ(neverd_func_count(Session), 1);
+  const neverd_va_t Entry = neverd_session_entry_addr(Session);
+  ASSERT_EQ(Entry, Base + sizeof(llvm::object::ELF64LE::Ehdr) +
+                       sizeof(llvm::object::ELF64LE::Phdr));
+  ASSERT_EQ(neverd_func_entry(Session, 0), Entry);
+  ASSERT_EQ(takeString(neverd_func_name(Session, 0)), "entry");
+  write("integer-rename.elf.neverd-renames.json",
+        "[{\"addr\":" + std::to_string(Entry) +
+            ",\"renamed\":\"high_renamed\"}]");
+  ASSERT_EQ(neverd_renames_load(Session), 0);
+  EXPECT_EQ(takeString(neverd_func_name(Session, 0)), "high_renamed");
+  EXPECT_EQ(neverd_func_find_by_name(Session, "high_renamed"), 0);
+  EXPECT_EQ(neverd_func_find_by_addr(Session, Entry), 0);
+  const std::map<uint64_t, std::string> Expected = {{Entry, "high_renamed"}};
+  expectPersistedRows(takeString(neverd_renames_json(Session)), "renamed",
+                      Expected);
+  ASSERT_EQ(neverd_renames_save(Session), 0);
+  expectPersistedRows(readSidecar("integer-rename.elf.neverd-renames.json"),
+                      "renamed", Expected);
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  ASSERT_EQ(neverd_func_count(Session), 1);
+  EXPECT_EQ(neverd_func_entry(Session, 0), Entry);
+  EXPECT_EQ(takeString(neverd_func_name(Session, 0)), "high_renamed");
+  EXPECT_EQ(neverd_func_find_by_name(Session, "high_renamed"), 0);
+  expectPersistedRows(takeString(neverd_renames_json(Session)), "renamed",
+                      Expected);
+}
+
+TEST_F(SessionCAPITest, PersistedAddressEncodingsKeepCanonicalSaveRoundTrips) {
+  const auto Input = write("encodings.elf", makeNamedNativeELF("entry"));
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  ASSERT_EQ(neverd_func_count(Session), 1);
+  constexpr uint64_t Entry = 0x400078;
+  ASSERT_EQ(neverd_session_entry_addr(Session), Entry);
+  ASSERT_EQ(neverd_func_entry(Session, 0), Entry);
+  struct Encoding {
+    const char *Annotation;
+    const char *Rename;
+  };
+  const Encoding Encodings[] = {{"37", "4194424"},
+                                {"37.0", "4194424.0"},
+                                {"\"0x25\"", "\"0x400078\""},
+                                {"\"25\"", "\"400078\""},
+                                {"\"0X25\"", "\"0X400078\""}};
+  unsigned Index = 0;
+  for (const auto &Value : Encodings) {
+    SCOPED_TRACE(Value.Annotation);
+    const std::string Text = "note_" + std::to_string(Index);
+    const std::string Name = "renamed_" + std::to_string(Index++);
+    write("encodings.elf.neverd-annotations.json",
+          "[{\"addr\":" + std::string(Value.Annotation) + ",\"text\":\"" +
+              Text + "\"}]");
+    write("encodings.elf.neverd-renames.json",
+          "[{\"addr\":" + std::string(Value.Rename) + ",\"renamed\":\"" + Name +
+              "\"}]");
+    ASSERT_EQ(neverd_annotations_load(Session), 0);
+    ASSERT_EQ(neverd_renames_load(Session), 0);
+    EXPECT_EQ(takeString(neverd_annotation_get(Session, 37)), Text);
+    EXPECT_EQ(takeString(neverd_func_name(Session, 0)), Name);
+    EXPECT_EQ(neverd_func_find_by_name(Session, Name.c_str()), 0);
+    const std::map<uint64_t, std::string> Notes = {{37, Text}};
+    const std::map<uint64_t, std::string> Renames = {{Entry, Name}};
+    expectPersistedRows(takeString(neverd_annotations_json(Session)), "text",
+                        Notes);
+    expectPersistedRows(takeString(neverd_renames_json(Session)), "renamed",
+                        Renames);
+    ASSERT_EQ(neverd_annotations_save(Session), 0);
+    ASSERT_EQ(neverd_renames_save(Session), 0);
+    expectPersistedRows(readSidecar("encodings.elf.neverd-annotations.json"),
+                        "text", Notes);
+    expectPersistedRows(readSidecar("encodings.elf.neverd-renames.json"),
+                        "renamed", Renames);
+    ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+    ASSERT_EQ(neverd_func_count(Session), 1);
+    EXPECT_EQ(neverd_func_entry(Session, 0), Entry);
+    EXPECT_EQ(takeString(neverd_func_name(Session, 0)), Name);
+    EXPECT_EQ(neverd_func_find_by_name(Session, Name.c_str()), 0);
+    EXPECT_EQ(takeString(neverd_annotation_get(Session, 37)), Text);
+    expectPersistedRows(takeString(neverd_annotations_json(Session)), "text",
+                        Notes);
+    expectPersistedRows(takeString(neverd_renames_json(Session)), "renamed",
+                        Renames);
+  }
 }
 
 } // namespace
