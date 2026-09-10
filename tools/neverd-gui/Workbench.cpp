@@ -8,12 +8,15 @@
 #include <QJsonDocument>
 #include <QQmlEngine>
 #include <QScreen>
+#include <QSet>
 #include <QStandardPaths>
 #include <QWindow>
-#include <cmath>
+#include <utility>
 
 Workbench::Workbench(QString workerPath, QObject *parent)
-    : QObject(parent), workerPath_(std::move(workerPath)) {
+    : QObject(parent), queries_(&client_), panes_(&queries_),
+      workerPath_(std::move(workerPath)),
+      sessionEpoch_(queries_.sessionEpoch()) {
   status_ = QT_TR_NOOP("Open a binary to begin");
   filterTimer_.setSingleShot(true);
   filterTimer_.setInterval(180);
@@ -23,12 +26,40 @@ Workbench::Workbench(QString workerPath, QObject *parent)
   });
   connect(&functions_, &PageModel::pageRequested, this,
           &Workbench::loadFunctionPage);
+  connect(&panes_, &PaneRegistry::changed, this, &Workbench::changed);
+  connect(&panes_, &PaneRegistry::selectionChanged, this,
+          [this] { emit selectionChanged(selection()); });
+  connect(&panes_, &PaneRegistry::paneError, this,
+          [this](const QString &id, const QString &message) {
+            if (id == panes_.activePaneId() || id == representationPane()->id())
+              setError(message);
+            else
+              log(message);
+          });
+  connect(&queries_, &QueryService::contextChanged, this, [this] {
+    if (sessionEpoch_ != queries_.sessionEpoch()) {
+      sessionEpoch_ = queries_.sessionEpoch();
+      loaded_ = false;
+      dirty_ = false;
+      clearViews();
+    }
+    revision_ = queries_.revision();
+    projectId_ = queries_.projectId();
+    emit changed();
+    emit selectionChanged(selection());
+  });
+  connect(&queries_, &QueryService::pendingChanged, this, [this] {
+    finishTransition();
+    if (!busy() && loaded_ && error_.isEmpty())
+      status_ = QT_TR_NOOP("Ready");
+    emit changed();
+  });
   connect(&client_, &EngineClient::message, this, &Workbench::receive);
   connect(&client_, &EngineClient::diagnostic, this, &Workbench::log);
   connect(&client_, &EngineClient::failure, this, &Workbench::setError);
   connect(&client_, &EngineClient::stopped, this, [this] {
     connected_ = false;
-    busy_ = false;
+    opening_ = false;
     resetSessionRequests();
     emit changed();
     emit selectionChanged(selection());
@@ -36,9 +67,14 @@ Workbench::Workbench(QString workerPath, QObject *parent)
   language_ = QSettings().value("ui/language", "en").toString();
   if (!languages().contains(language_))
     language_ = "en";
-  cache_.setMaxCost(
-      qBound(16, QSettings().value("analysis/cacheMiB", 256).toInt(), 1024) *
-      1024);
+  queries_.setCacheBudgetMiB(
+      QSettings().value("analysis/cacheMiB", 256).toInt());
+}
+
+Workbench::~Workbench() {
+  disconnect(&queries_, nullptr, this, nullptr);
+  disconnect(&panes_, nullptr, this, nullptr);
+  disconnect(&client_, nullptr, this, nullptr);
 }
 
 void Workbench::setQmlEngine(QQmlEngine *engine) {
@@ -80,13 +116,6 @@ QStringList Workbench::languages() const {
   return {"en", "zh-CN", "zh-TW", "ja", "ko", "fr",
           "de", "es",    "it",    "ru", "ar"};
 }
-QJsonObject Workbench::selection() const {
-  return {
-      {"project_id", projectId_},       {"revision", revision_},
-      {"address", selectedAddress_},    {"function_address", functionAddress_},
-      {"function_name", functionName_}, {"representation", representation_},
-      {"loaded", loaded_ && connected_}};
-}
 void Workbench::setLanguage(const QString &language) {
   if (!languages().contains(language))
     return;
@@ -119,101 +148,108 @@ void Workbench::setError(const QString &message) {
   log(message);
   emit changed();
 }
+
+PaneController *Workbench::selectedPane() const {
+  return panes_.activePane() ? panes_.activePane() : panes_.defaultMachine();
+}
+PaneController *Workbench::machinePane() const {
+  auto *active = panes_.activePane();
+  return active && active->kind() == "machine" ? active
+                                               : panes_.defaultMachine();
+}
+PaneController *Workbench::representationPane() const {
+  auto *active = panes_.activePane();
+  return active && active->kind() == "representation"
+             ? active
+             : panes_.defaultRepresentation();
+}
+QJsonObject Workbench::selection() const {
+  auto selection = selectedPane()->selection();
+  selection["project_id"] = projectId_;
+  selection["revision"] = revision_;
+  selection["representation"] = representation();
+  selection["loaded"] = loaded_ && connected_;
+  return selection;
+}
+
 QString Workbench::send(const QString &operation, const QJsonObject &payload,
-                        Callback callback, bool contextual, bool mutation,
+                        Callback callback, bool mutation,
                         FailureCallback failed) {
-  if (!connected_ ||
-      pending_.size() + external_.size() + mutations_.size() >= 48) {
-    const auto detail = tr("Worker unavailable or request queue full.");
+  static const QSet<QString> commands{"open",
+                                      "analyze",
+                                      "rename",
+                                      "annotation_set",
+                                      "save",
+                                      "reload",
+                                      "undo",
+                                      "redo",
+                                      "history_reset",
+                                      "contribution_register",
+                                      "contribution_unregister"};
+  if (opening_ && mutation) {
+    const auto detail = tr("Finish opening the binary before editing.");
     setError(detail);
-    if (operation == "decompile") {
-      textRequest_ = false;
-      textStatus_ = detail;
-      busy_ = false;
-    }
-    if (operation == "disasm")
-      instructionRequest_ = false;
-    if (operation == "open")
-      busy_ = false;
     if (failed)
       QTimer::singleShot(0, this, [failed, detail] {
         failed({{"status", "error"},
-                {"error",
-                 QJsonObject{{"code", "queue_full"}, {"message", detail}}}});
+                {"error", QJsonObject{{"code", "session_changing"},
+                                      {"message", detail}}}});
       });
     return {};
   }
-  if (mutation) {
-    mutations_.enqueue(
-        {operation, payload, std::move(callback), std::move(failed)});
-    dispatchMutation();
-    emit changed();
-    return "queued";
-  }
-  const auto cacheKey =
-      contextual ? operation + ':' +
-                       QString::fromUtf8(QJsonDocument(payload).toJson(
-                           QJsonDocument::Compact))
-                 : QString{};
-  if (!cacheKey.isEmpty()) {
-    if (const auto *cached = cache_.object(cacheKey)) {
-      const auto response = *cached;
-      const auto generation = generation_;
-      const auto revision = revision_, project = projectId_;
-      QTimer::singleShot(
-          0, this,
-          [this, generation, revision, project, response, operation, payload,
-           callback, failed] {
-            if (generation != generation_ || project != projectId_)
-              return;
-            if (revision != revision_) {
-              send(operation, payload, callback, true, false, failed);
-              return;
-            }
-            if (callback)
-              callback(response["payload"].toObject(), response);
-            emit changed();
-          });
-      return "cached";
+  const auto epoch = queries_.sessionEpoch();
+  const auto counted = std::make_shared<bool>(mutation);
+  if (mutation)
+    ++pendingWrites_;
+  auto complete = [this, epoch, operation, counted,
+                   callback = std::move(callback),
+                   failed = std::move(failed)](const QJsonObject &response) {
+    const bool openingSuccess = operation == "open" &&
+                                response["status"] == "ok" &&
+                                queries_.sessionEpoch() == epoch + 1;
+    if (epoch == queries_.sessionEpoch() || openingSuccess) {
+      const auto payload = response["payload"].toObject();
+      if (response["status"] == "ok") {
+        if (payload.contains("dirty"))
+          dirty_ = payload["dirty"].toBool();
+        if (callback)
+          callback(payload, response);
+      } else {
+        const auto code = response["error"].toObject()["code"].toString();
+        if (response["status"] != "cancelled" && code != "worker_stopped" &&
+            code != "session_changed")
+          setError(response["error"].toObject()["message"].toString(
+              response["status"].toString()));
+        if (failed)
+          failed(response);
+        if (*counted && operation == "save") {
+          transitionReady_ = false;
+          transition_.clear();
+        }
+      }
     }
-  }
-  const auto id = client_.request(operation, payload);
-  pending_.insert(id, {operation, generation_, contextual, std::move(callback),
-                       cacheKey, std::move(failed), false});
-  return id;
-}
-void Workbench::dispatchMutation() {
-  // A revision is stamped only after previously dispatched work has completed.
-  // Pipeline reads may themselves publish a revision, so they are a barrier
-  // too.
-  if (!connected_ || mutationActive_ || mutations_.isEmpty() ||
-      !pending_.isEmpty() || !external_.isEmpty())
-    return;
-  auto mutation = mutations_.dequeue();
-  mutationActive_ = true;
+    if (*counted)
+      --pendingWrites_;
+    emit changed();
+    // QueryService emits pendingChanged after completing this delivery. The
+    // transition then observes both the callback's result and retired write.
+  };
   const auto id =
-      client_.request(mutation.operation, mutation.payload, revision_);
-  pending_.insert(id, {mutation.operation,
-                       generation_,
-                       false,
-                       std::move(mutation.callback),
-                       {},
-                       std::move(mutation.failed),
-                       true});
+      commands.contains(operation)
+          ? queries_.enqueueCommand(operation, payload, this,
+                                    std::move(complete))
+          : queries_.subscribe({operation, payload}, &workspaceReads_,
+                               std::move(complete));
+  if (!id && *counted) {
+    *counted = false;
+    --pendingWrites_;
+  }
+  return id ? QString::number(id) : QString{};
 }
 void Workbench::resetSessionRequests() {
-  for (auto it = external_.begin(); it != external_.end(); ++it)
-    emit externalResponse(
-        it.value(), {{"status", "error"},
-                     {"error", QJsonObject{{"code", "worker_stopped"},
-                                           {"message", "Worker stopped"}}}});
-  external_.clear();
-  pending_.clear();
-  mutations_.clear();
-  mutationActive_ = false;
-  functionRequest_ = instructionRequest_ = textRequest_ = false;
-  cache_.clear();
-  ++generation_;
+  queries_.setAvailable(false);
+  panes_.setLoaded(false);
+  functionRequest_ = false;
   ++filterGeneration_;
 }
 void Workbench::receive(const QJsonObject &message) {
@@ -225,126 +261,30 @@ void Workbench::receive(const QJsonObject &message) {
       return;
     }
     connected_ = true;
+    queries_.setAvailable(true);
     log(tr("Connected to %1").arg(message["engine_version"].toString()));
     emit changed();
     emit ready();
     openPending();
-    return;
-  }
-  if (type == "fatal") {
+  } else if (type == "fatal") {
     setError(message["error"].toObject()["message"].toString());
     client_.stop();
-    return;
-  }
-  if (type == "heartbeat") {
-    activeJob_ = message["active_request_id"].toString();
-    busy_ = !activeJob_.isEmpty();
+  } else if (type == "heartbeat") {
     emit changed();
-    return;
   }
-  if (type != "response")
-    return;
-  const auto id = message["request_id"].toString();
-  // Administrative cancellation and old process messages never own project
-  // state.
-  if (!pending_.contains(id) && !external_.contains(id))
-    return;
-  if (message.contains("revision")) {
-    const auto nextRevision = message["revision"].toString();
-    if (revision_ != nextRevision)
-      cache_.clear();
-    revision_ = nextRevision;
-  }
-  if (message.contains("project_id"))
-    projectId_ = message["project_id"].toString();
-  emit selectionChanged(selection());
-  if (external_.contains(id)) {
-    emit externalResponse(external_.take(id), message);
-    dispatchMutation();
-    finishTransition();
-    return;
-  }
-  auto pending = pending_.take(id);
-  if (pending.mutation)
-    mutationActive_ = false;
-  if (pending.contextual && pending.generation != generation_) {
-    dispatchMutation();
-    finishTransition();
-    return;
-  }
-  const auto payload = message["payload"].toObject();
-  const auto state = message["status"].toString();
-  if (state != "ok") {
-    const auto detail = message["error"].toObject()["message"].toString(state);
-    if (state != "cancelled")
-      setError(detail);
-    if (pending.operation == "decompile" && !pending.failed) {
-      textRequest_ = false;
-      textStatus_ = detail;
-      busy_ = false;
-    }
-    if (pending.operation == "functions")
-      functionRequest_ = false;
-    if (pending.operation == "disasm")
-      instructionRequest_ = false;
-    if (pending.operation == "open")
-      busy_ = false;
-    if (pending.failed)
-      pending.failed(message);
-    if (pending.mutation) {
-      mutations_.clear();
-      transitionReady_ = false;
-      transition_.clear();
-    }
-    dispatchMutation();
-    finishTransition();
-    emit changed();
-    return;
-  }
-  if (payload.contains("dirty"))
-    dirty_ = payload["dirty"].toBool();
-  if (!pending.cacheKey.isEmpty()) {
-    const auto bytes =
-        QJsonDocument(message).toJson(QJsonDocument::Compact).size();
-    cache_.insert(pending.cacheKey, new QJsonObject(message),
-                  qMax(1, int((bytes * 4 + 1023) / 1024)));
-  }
-  if (pending.callback)
-    pending.callback(payload, message);
-  if (pending.mutation && centralView_ == "cfg" && !graphSummary_.isEmpty())
-    requestView("cfg");
-  dispatchMutation();
-  finishTransition();
-  emit changed();
 }
-
 void Workbench::clearViews() {
-  cache_.clear();
-  ++textGeneration_;
-  representationPinned_ = false;
-  pinnedAddress_.clear();
-  pinnedName_.clear();
+  filterTimer_.stop();
+  ++filterGeneration_;
+  functions_.resetPages();
   historyState_ = {};
-  functions_.replace({});
-  instructions_.replace({});
-  xrefs_.replace({});
-  graphSummary_ = {};
-  graphViewport_ = {};
-  ++graphGeneration_;
-  nodes_.clear();
-  edges_.clear();
-  text_.clear();
-  textStatus_.clear();
-  hexText_.clear();
-  nextInstruction_.clear();
-  nextText_ = 0;
-  textMappings_.clear();
-  mappingRevision_.clear();
-  mappingState_.clear();
-  functionRequest_ = instructionRequest_ = textRequest_ = false;
+  contributions_.clear();
+  contributionResult_.clear();
+  functionCount_ = nextFunction_ = 0;
+  functionRequest_ = false;
 }
 void Workbench::openFile(const QUrl &url) {
-  auto path = url.isLocalFile() ? url.toLocalFile() : url.toString();
+  const auto path = url.isLocalFile() ? url.toLocalFile() : url.toString();
   const QFileInfo file(path);
   if (!file.isFile()) {
     setError(tr("Select an existing binary file."));
@@ -356,49 +296,77 @@ void Workbench::openFile(const QUrl &url) {
     return;
   }
   if (!connected_) {
-    busy_ = true;
     status_ = QT_TR_NOOP("Starting analysis worker…");
     client_.start(workerPath_);
     emit changed();
-  } else
+  } else {
     openPending();
+  }
 }
 void Workbench::openPending() {
-  if (pendingFile_.isEmpty())
+  if (pendingFile_.isEmpty() || opening_ || !connected_)
     return;
-  const auto path = pendingFile_;
-  pendingFile_.clear();
-  ++generation_;
-  busy_ = true;
+  // A Cancel/new navigation during loaded notifications must invalidate the
+  // deferred startup entry fallback, including before history is subscribed.
+  const auto navigation = panes_.navigationRevision();
+  const auto path = std::exchange(pendingFile_, {});
+  opening_ = true;
   error_.clear();
   status_ = QT_TR_NOOP("Opening binary…");
-  send("open", {{"path", path}},
-       [this, path](const auto &payload, const auto &) {
-         clearViews();
-         dirty_ = false;
-         metadata_ = payload;
-         filePath_ = path;
-         loaded_ = true;
-         busy_ = false;
-         history_.clear();
-         historyIndex_ = -1;
-         selectedAddress_.clear();
-         functionAddress_.clear();
-         functionCount_ = payload["function_count"].toInt();
-         nextFunction_ = 0;
-         status_ = QT_TR_NOOP("Binary loaded");
-         QSettings().setValue("files/last", filePath_);
-         loadFunctions(false);
-         const auto entry = payload["entry_address"].toString();
-         if (!entry.isEmpty())
-           navigate(entry);
-         refreshHistory();
-         send("contributions", {}, [this](const auto &payload, const auto &) {
-           contributions_ = payload["items"].toArray().toVariantList();
-         });
-       });
+  send(
+      "open", {{"path", path}},
+      [this, path, navigation](const auto &payload, const auto &) {
+        opening_ = false;
+        dirty_ = false;
+        metadata_ = payload;
+        filePath_ = path;
+        loaded_ = true;
+        functionCount_ = payload["function_count"].toInt();
+        panes_.setLoaded(true);
+        status_ = QT_TR_NOOP("Binary loaded");
+        QSettings().setValue("files/last", filePath_);
+        // A later open gesture is enqueued only after this replacement
+        // established its new epoch. Never replay it as an old-project queued
+        // command.
+        if (!pendingFile_.isEmpty()) {
+          openPending();
+          return;
+        }
+        loadFunctions(false);
+        const auto entry = payload["entry_address"].toString();
+        const auto epoch = queries_.sessionEpoch();
+        send(
+            "history", {{"limit", 1}},
+            [this, entry, epoch, navigation](const auto &history,
+                                             const auto &) {
+              if (epoch != queries_.sessionEpoch())
+                return;
+              historyState_ = history;
+              panes_.setBinaryIdentity(history["source_sha256"].toString());
+              if (navigation == panes_.navigationRevision() &&
+                  selectedAddress().isEmpty() && !entry.isEmpty())
+                navigate(entry);
+            },
+            false,
+            [this, entry, epoch, navigation](const auto &) {
+              if (epoch == queries_.sessionEpoch() &&
+                  navigation == panes_.navigationRevision() &&
+                  selectedAddress().isEmpty() && !entry.isEmpty())
+                navigate(entry);
+            });
+        send("contributions", {}, [this](const auto &result, const auto &) {
+          contributions_ = result["items"].toArray().toVariantList();
+        });
+      },
+      false,
+      [this](const auto &) {
+        opening_ = false;
+        if (!pendingFile_.isEmpty())
+          openPending();
+      });
   emit changed();
 }
+
 void Workbench::filterFunctions(const QString &filter) {
   filter_ = filter;
   ++filterGeneration_;
@@ -443,7 +411,7 @@ void Workbench::loadFunctionPage(int offset) {
                             : payload["next_offset"].toInt(-1);
         functionCount_ = payload["total"].toInt();
       },
-      false, false,
+      false,
       [this, offset, filterGeneration, pageGeneration, project](const auto &) {
         if (filterGeneration != filterGeneration_ ||
             pageGeneration != functions_.requestGeneration() ||
@@ -454,358 +422,63 @@ void Workbench::loadFunctionPage(int offset) {
       });
 }
 void Workbench::loadMoreFunctions() { loadFunctions(true); }
+
 void Workbench::selectFunction(const QString &address) { navigate(address); }
 void Workbench::navigate(const QString &query) {
-  if (!loaded_ || query.trimmed().isEmpty())
-    return;
-  for (auto it = pending_.cbegin(); it != pending_.cend(); ++it)
-    if (it->contextual)
-      client_.request("cancel", {{"request_id", it.key()}});
-  ++generation_;
-  instructionRequest_ = false;
-  if (!representationPinned_) {
-    textRequest_ = false;
-    ++textGeneration_;
-  }
-  const bool record = !replayHistory_;
-  replayHistory_ = false;
-  send(
-      "resolve", {{"query", query.trimmed()}},
-      [this, record](const auto &payload, const auto &) {
-        functionAddress_ = payload["function_address"].toString();
-        selectedComment_ = payload["comment"].toString();
-        moveTo(payload["address"].toString(), payload["name"].toString(),
-               record);
-      },
-      true);
+  selectedPane()->navigate(query);
 }
-void Workbench::moveTo(const QString &address, const QString &name,
-                       bool recordHistory) {
-  selectedAddress_ = address;
-  functionName_ = name;
-  error_.clear();
-  if (recordHistory &&
-      (historyIndex_ < 0 || history_.value(historyIndex_) != address)) {
-    while (history_.size() > historyIndex_ + 1)
-      history_.removeLast();
-    history_.append(address);
-    if (history_.size() > 256)
-      history_.removeFirst();
-    historyIndex_ = history_.size() - 1;
-  }
-  nextInstruction_ = address;
-  if (!representationPinned_)
-    nextText_ = 0;
-  graphSummary_ = {};
-  graphViewport_ = {};
-  ++graphGeneration_;
-  nodes_.clear();
-  edges_.clear();
-  hexText_.clear();
-  xrefs_.replace({});
-  if (!representationPinned_) {
-    text_.clear();
-    textMappings_.clear();
-    mappingState_.clear();
-  }
-  status_ = QT_TR_NOOP("Reading analysis views…");
-  loadInstructions(false);
-  if (centralView_ != "disasm")
-    requestView(centralView_);
-  if (!representationPinned_)
-    loadText();
-  loadXrefs();
-  emit selectionChanged(selection());
-  emit changed();
-}
-void Workbench::goBack() {
-  if (canGoBack()) {
-    --historyIndex_;
-    replayHistory_ = true;
-    navigate(history_[historyIndex_]);
-  }
-}
-void Workbench::goForward() {
-  if (canGoForward()) {
-    ++historyIndex_;
-    replayHistory_ = true;
-    navigate(history_[historyIndex_]);
-  }
-}
-void Workbench::loadInstructions(bool append) {
-  if (nextInstruction_.isEmpty() || instructionRequest_)
-    return;
-  instructionRequest_ = true;
-  send(
-      "disasm", {{"address", nextInstruction_}, {"limit", 256}},
-      [this, append](const auto &payload, const auto &) {
-        instructionRequest_ = false;
-        if (append)
-          instructions_.append(payload["items"].toArray());
-        else
-          instructions_.replace(payload["items"].toArray());
-        nextInstruction_ = payload["next_address"].toString();
-        status_ = QT_TR_NOOP("Ready");
-      },
-      true);
-}
-void Workbench::loadMoreInstructions() { loadInstructions(true); }
 void Workbench::selectInstruction(const QString &address) {
-  if (address.isEmpty() || address == selectedAddress_)
-    return;
-  selectedAddress_ = address;
-  selectedComment_.clear();
-  loadComment();
-  loadXrefs();
-  emit changed();
-  emit selectionChanged(selection());
-}
-void Workbench::loadComment() {
-  const auto address = selectedAddress_;
-  send(
-      "resolve", {{"query", address}},
-      [this, address](const auto &payload, const auto &) {
-        if (address == selectedAddress_)
-          selectedComment_ = payload["comment"].toString();
-      },
-      true);
-}
-void Workbench::loadText(bool append) {
-  const auto address =
-      representationPinned_ ? pinnedAddress_ : functionAddress_;
-  if (address.isEmpty()) {
-    textStatus_ = QT_TR_NOOP("No function at this address");
-    return;
-  }
-  if (textRequest_ || (append && nextText_ < 0))
-    return;
-  textRequest_ = true;
-  busy_ = true;
-  textStatus_ = QT_TR_NOOP("Analyzing…");
-  const auto representation = representation_;
-  const auto textGeneration = ++textGeneration_;
-  send(
-      "decompile",
-      {{"address", address},
-       {"representation", representation},
-       {"offset", append ? nextText_ : 0},
-       {"limit", 512}},
-      [this, append, representation, address,
-       textGeneration](const auto &payload, const auto &response) {
-        if (textGeneration != textGeneration_)
-          return;
-        if (representation != representation_ ||
-            address !=
-                (representationPinned_ ? pinnedAddress_ : functionAddress_))
-          return;
-        textRequest_ = false;
-        busy_ = false;
-        const auto page = payload["text"].toString();
-        // Keep the reader bounded even for huge generated functions.
-        if (append && text_.size() + page.size() <= 2 * 1024 * 1024 &&
-            mappingRevision_ == response["revision"].toString()) {
-          text_ += page;
-        } else {
-          text_ = page;
-          textMappings_.clear();
-          textStartLine_ = payload["offset"].toInt();
-        }
-        mappingRevision_ = response["revision"].toString();
-        mappingState_ = payload["mapping_status"].toString();
-        for (const auto &value : payload["rows"].toArray()) {
-          auto row = value.toObject();
-          row["line"] = row["line"].toInt() - textStartLine_;
-          textMappings_.append(row.toVariantMap());
-        }
-        nextText_ = payload["next_offset"].isNull()
-                        ? -1
-                        : payload["next_offset"].toInt(-1);
-        textStatus_ = nextText_ < 0 ? QT_TR_NOOP("Complete")
-                                    : QT_TR_NOOP("More lines available");
-        status_ = QT_TR_NOOP("Ready");
-      },
-      !representationPinned_, false,
-      [this, textGeneration](const auto &response) {
-        if (textGeneration != textGeneration_)
-          return;
-        textRequest_ = false;
-        busy_ = false;
-        textStatus_ = response["error"].toObject()["message"].toString(
-            response["status"].toString());
-      });
-}
-QString Workbench::mappingStatus() const {
-  if (text_.isEmpty())
-    return {};
-  if (mappingRevision_ != revision_)
-    return tr(
-        "Mapping belongs to an earlier revision; reload the representation");
-  if (mappingState_ == "instruction_anchors")
-    return tr("Linked instruction addresses; synthetic rows may be unmapped");
-  return tr("Instruction mapping unavailable for this representation");
+  selectedPane()->selectInstruction(address);
 }
 void Workbench::selectTextLine(int line) {
-  if (mappingRevision_ != revision_ ||
-      (representationPinned_ && pinnedAddress_ != functionAddress_))
-    return;
-  for (const auto &value : textMappings_) {
-    const auto row = value.toMap();
-    if (row["line"].toInt() != line)
-      continue;
-    const auto addresses = row["addresses"].toList();
-    if (!addresses.isEmpty())
-      selectInstruction(addresses.first().toString());
-    return;
-  }
+  representationPane()->selectTextLine(line);
 }
-void Workbench::loadMoreText() { loadText(true); }
+void Workbench::goBack() { selectedPane()->goBack(); }
+void Workbench::goForward() { selectedPane()->goForward(); }
+void Workbench::loadMoreInstructions() {
+  machinePane()->loadMoreInstructions();
+}
+void Workbench::loadMoreText() { representationPane()->loadMoreText(); }
 void Workbench::reloadRepresentation() {
-  textRequest_ = false;
-  nextText_ = 0;
-  loadText();
-}
-void Workbench::toggleRepresentationPin() {
-  if (!loaded_ || functionAddress_.isEmpty())
-    return;
-  representationPinned_ = !representationPinned_;
-  pinnedAddress_ = representationPinned_ ? functionAddress_ : QString{};
-  pinnedName_ = representationPinned_ ? functionName_ : QString{};
-  textRequest_ = false;
-  nextText_ = 0;
-  loadText();
-  emit changed();
+  representationPane()->reloadRepresentation();
 }
 void Workbench::setRepresentation(const QString &representation) {
-  if (!QStringList{"c", "low", "med", "high", "llvm"}.contains(
-          representation) ||
-      representation_ == representation)
-    return;
-  representation_ = representation;
-  textRequest_ = false;
-  nextText_ = 0;
-  text_.clear();
-  textMappings_.clear();
-  mappingState_.clear();
-  loadText();
-  emit changed();
-  emit selectionChanged(selection());
+  representationPane()->setRepresentation(representation);
+}
+void Workbench::toggleRepresentationPin() {
+  representationPane()->toggleRepresentationPin();
 }
 void Workbench::requestView(const QString &view) {
-  centralView_ = view;
-  if (!loaded_ || selectedAddress_.isEmpty())
-    return;
-  if (view == "hex") {
-    send(
-        "bytes", {{"address", selectedAddress_}, {"size", 1024}},
-        [this](const auto &payload, const auto &) {
-          const auto data =
-              QByteArray::fromHex(payload["data"].toString().toLatin1());
-          bool ok;
-          const auto start = payload["address"].toString().toULongLong(&ok, 16);
-          if (!ok)
-            return;
-          QStringList lines;
-          for (int i = 0; i < data.size(); i += 16) {
-            const auto row = data.mid(i, 16);
-            QString printable;
-            for (const auto c : row)
-              printable += c >= 32 && c < 127 ? QChar(c) : QChar('.');
-            lines << QString("%1  %2  %3")
-                         .arg(start + quint64(i), 16, 16, QChar('0'))
-                         .arg(QString::fromLatin1(row.toHex(' '))
-                                  .leftJustified(47),
-                              printable);
-          }
-          hexText_ = lines.join('\n');
-        },
-        true);
-  } else if (view == "cfg" && !functionAddress_.isEmpty()) {
-    send(
-        "cfg_summary", {{"address", functionAddress_}},
-        [this](const auto &payload, const auto &) {
-          graphSummary_ = payload;
-          graphViewport_ = {};
-          nodes_.clear();
-          edges_.clear();
-          const auto bounds = payload["bounds"].toObject();
-          requestGraphViewport(bounds["x"].toDouble(), bounds["y"].toDouble(),
-                               1000, 700, 1);
-        },
-        true);
-  }
-}
-QString Workbench::graphViewportStatus() const {
-  if (graphViewport_.isEmpty())
-    return tr("Loading graph viewport…");
-  if (graphViewport_["nodes_truncated"].toBool() ||
-      graphViewport_["edges_truncated"].toBool())
-    return tr("Viewport limit reached; zoom in for details");
-  return tr("%1 visible blocks · %2 edges")
-      .arg(nodes_.size())
-      .arg(edges_.size());
+  machinePane()->requestView(view);
 }
 void Workbench::requestGraphViewport(double x, double y, double width,
                                      double height, double scale) {
-  const auto layout = graphSummary_["layout_revision"].toString();
-  if (layout.isEmpty() || !loaded_ || functionAddress_.isEmpty() ||
-      !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(width) ||
-      !std::isfinite(height) || !std::isfinite(scale) || width <= 0 ||
-      height <= 0 || scale <= 0)
-    return;
-  const auto graphGeneration = ++graphGeneration_;
-  send(
-      "cfg_viewport",
-      {{"address", functionAddress_},
-       {"layout_revision", layout},
-       {"x", x},
-       {"y", y},
-       {"width", width},
-       {"height", height},
-       {"scale", scale}},
-      [this, layout, graphGeneration](const auto &payload, const auto &) {
-        if (graphGeneration != graphGeneration_ ||
-            layout != graphSummary_["layout_revision"].toString())
-          return;
-        graphViewport_ = payload;
-        nodes_ = payload["nodes"].toArray().toVariantList();
-        edges_ = payload["edges"].toArray().toVariantList();
-      },
-      true);
-}
-void Workbench::loadXrefs() {
-  const auto address = selectedAddress_;
-  send(
-      "xrefs", {{"address", address}, {"direction", "to"}, {"limit", 256}},
-      [this, address](const auto &payload, const auto &) {
-        if (address == selectedAddress_)
-          xrefs_.replace(payload["items"].toArray());
-      },
-      true);
+  machinePane()->requestGraphViewport(x, y, width, height, scale);
 }
 void Workbench::analyze() {
   if (!loaded_)
     return;
-  busy_ = true;
   status_ = QT_TR_NOOP("Analyzing…");
   send("analyze", {}, [this](const auto &payload, const auto &) {
     metadata_ = payload;
-    busy_ = false;
     loadFunctions(false);
-    loadText();
+    for (const auto &value : panes_.items()) {
+      auto *pane = panes_.findPane(value.toMap()["id"].toString());
+      if (pane->kind() == "representation")
+        pane->reloadRepresentation();
+      else
+        pane->requestView(pane->centralView());
+    }
     status_ = QT_TR_NOOP("Ready");
   });
   emit changed();
 }
 void Workbench::cancel() {
-  for (auto it = pending_.cbegin(); it != pending_.cend(); ++it)
-    if (!it->mutation)
-      client_.request("cancel", {{"request_id", it.key()}});
-  ++generation_;
-  ++textGeneration_;
-  instructionRequest_ = textRequest_ = functionRequest_ = false;
+  panes_.cancelReads();
+  // The function browser, annotation state and external callers remain useful
+  // while a pane's analysis is cancelled; they have independent ownership.
   status_ = QT_TR_NOOP(
       "Cancellation requested; restart stops the worker immediately.");
-  textStatus_ = QT_TR_NOOP("Cancellation requested");
   emit changed();
 }
 void Workbench::requestTransition(const QString &action) {
@@ -826,49 +499,42 @@ void Workbench::resolveSessionChange(const QString &choice) {
     transition_.clear();
     transitionReady_ = false;
     pendingFile_.clear();
-    return;
-  }
-  if (choice == "save") {
+  } else if (choice == "save") {
     send(
         "save", {},
         [this](const auto &, const auto &) {
           dirty_ = false;
           transitionReady_ = true;
         },
-        false, true);
+        true);
   } else if (choice == "discard") {
-    // An acknowledged edit can be discarded; an edit still executing must
-    // finish first.
     transitionReady_ = true;
     finishTransition();
   }
 }
 void Workbench::finishTransition() {
-  if (!transitionReady_ || mutationActive_ || !mutations_.isEmpty())
+  if (!transitionReady_ || pendingWrites_ > 0)
     return;
-  // Restart can interrupt read-only work, but must never interrupt a write.
-  const auto action = transition_;
-  transition_.clear();
+  const auto action = std::exchange(transition_, {});
   transitionReady_ = false;
   if (action == "close") {
     emit closeReady();
-    return;
-  }
-  if (action == "restart")
+  } else if (action == "restart") {
     performRestart();
-  else if (action == "open")
+  } else if (action == "open") {
     openPending();
-  else if (action == "reload")
+  } else if (action == "reload") {
     send(
         "reload", {},
         [this](const auto &, const auto &) {
           dirty_ = false;
           refreshHistory();
-          loadComment();
+          panes_.refreshAnnotations();
           loadFunctions(false);
           status_ = QT_TR_NOOP("Annotations reloaded");
         },
-        false, true);
+        true);
+  }
 }
 void Workbench::restartWorker() {
   if (unsavedChanges()) {
@@ -879,49 +545,66 @@ void Workbench::restartWorker() {
 }
 void Workbench::performRestart() {
   pendingFile_ = filePath_;
+  // Retire the physical transport before the local epoch can dispatch work.
+  client_.stop();
   resetSessionRequests();
-  loaded_ = connected_ = busy_ = false;
+  loaded_ = connected_ = opening_ = false;
   dirty_ = false;
-  revision_.clear();
-  projectId_.clear();
   clearViews();
   status_ = QT_TR_NOOP("Restarting analysis worker…");
   client_.start(workerPath_);
   emit changed();
   emit selectionChanged(selection());
 }
+QVariantMap Workbench::captureCommandTarget() const {
+  return {{"session_epoch", QString::number(queries_.sessionEpoch())},
+          {"project_id", projectId_},
+          {"address", selectedAddress()},
+          {"function_address", selectedFunctionAddress()}};
+}
+bool Workbench::validCommandTarget(const QVariantMap &target) const {
+  return loaded_ && connected_ && !opening_ && transition_.isEmpty() &&
+         target["project_id"].toString() == projectId_ &&
+         target["session_epoch"].toString() ==
+             QString::number(queries_.sessionEpoch());
+}
 void Workbench::renameFunction(const QString &name) {
-  if (functionAddress_.isEmpty() || name.trimmed().isEmpty())
+  renameFunctionAt(captureCommandTarget(), name);
+}
+void Workbench::renameFunctionAt(const QVariantMap &target,
+                                 const QString &name) {
+  const auto address = target["function_address"].toString();
+  if (!validCommandTarget(target) || address.isEmpty() ||
+      name.trimmed().isEmpty())
     return;
-  const auto address = functionAddress_;
   send(
       "rename", {{"address", address}, {"name", name}},
       [this, name, address](const auto &, const auto &) {
-        if (functionAddress_ == address) {
-          functionName_ = name;
-          textRequest_ = false;
-          loadText();
-        }
+        panes_.renamed(address, name);
         loadFunctions(false);
         refreshHistory();
         status_ = QT_TR_NOOP("Rename saved");
       },
-      false, true);
+      true);
 }
 void Workbench::setComment(const QString &comment) {
-  if (selectedAddress_.isEmpty())
+  setCommentAt(captureCommandTarget(), comment);
+}
+void Workbench::setCommentAt(const QVariantMap &target,
+                             const QString &comment) {
+  const auto address = target["address"].toString();
+  if (!validCommandTarget(target) || address.isEmpty())
     return;
-  const auto address = selectedAddress_;
   send(
       "annotation_set", {{"address", address}, {"text", comment}},
       [this, comment, address](const auto &, const auto &) {
         dirty_ = true;
-        if (selectedAddress_ == address)
-          selectedComment_ = comment;
+        panes_.commented(address, comment);
+        panes_.refreshAnnotations();
         refreshHistory();
         status_ = QT_TR_NOOP("Comment changed; save annotations to keep it.");
       },
-      false, true);
+      true);
 }
 void Workbench::saveAnnotations() {
   send(
@@ -931,7 +614,7 @@ void Workbench::saveAnnotations() {
         refreshHistory();
         status_ = QT_TR_NOOP("Annotations saved");
       },
-      false, true);
+      true);
 }
 void Workbench::loadAnnotations() {
   if (unsavedChanges()) {
@@ -942,37 +625,40 @@ void Workbench::loadAnnotations() {
       "reload", {},
       [this](const auto &, const auto &) {
         refreshHistory();
-        loadComment();
+        panes_.refreshAnnotations();
         loadFunctions(false);
         status_ = QT_TR_NOOP("Annotations reloaded");
       },
-      false, true);
+      true);
 }
 void Workbench::refreshHistory() {
   if (!loaded_)
     return;
-  send("history", {{"limit", 1}},
-       [this](const auto &payload, const auto &) { historyState_ = payload; });
+  send("history", {{"limit", 1}}, [this](const auto &payload, const auto &) {
+    historyState_ = payload;
+    panes_.setBinaryIdentity(payload["source_sha256"].toString());
+  });
 }
 void Workbench::applyHistory(const QString &operation) {
+  const QPointer<PaneController> target(selectedPane());
   send(
       operation, {},
-      [this](const auto &payload, const auto &) {
+      [this, target](const auto &payload, const auto &) {
         historyState_ = payload;
         loadFunctions(false);
-        loadComment();
+        panes_.refreshAnnotations();
         const auto address = payload["address"].toString();
-        if (!address.isEmpty())
-          navigate(address);
+        if (target && !address.isEmpty())
+          target->navigate(address);
       },
-      false, true);
+      true);
 }
 void Workbench::undo() {
-  if (canUndo())
+  if (canUndo() && !opening_ && transition_.isEmpty())
     applyHistory("undo");
 }
 void Workbench::redo() {
-  if (canRedo())
+  if (canRedo() && !opening_ && transition_.isEmpty())
     applyHistory("redo");
 }
 void Workbench::importContributions(const QUrl &url) {
@@ -991,8 +677,8 @@ void Workbench::unloadContributions(const QString &nameSpace) {
 }
 void Workbench::runContribution(const QString &id) {
   QJsonObject payload{{"id", id}};
-  if (!selectedAddress_.isEmpty())
-    payload["address"] = selectedAddress_;
+  if (!selectedAddress().isEmpty())
+    payload["address"] = selectedAddress();
   send("contribution_execute", payload,
        [this](const auto &result, const auto &) {
          contributionResult_ = QString::fromUtf8(
@@ -1002,7 +688,7 @@ void Workbench::runContribution(const QString &id) {
 void Workbench::externalQuery(const QString &id, const QString &operation,
                               const QJsonObject &payload,
                               const QString &revision) {
-  if (!connected_ || !loaded_ || pending_.size() + external_.size() >= 48) {
+  if (!connected_ || !loaded_) {
     emit externalResponse(
         id, {{"status", "error"},
              {"error",
@@ -1010,5 +696,14 @@ void Workbench::externalQuery(const QString &id, const QString &operation,
                           {"message", "No active project or queue is full"}}}});
     return;
   }
-  external_.insert(client_.request(operation, payload, revision), id);
+  QueryService::QuerySpec spec{operation, payload};
+  if (!revision.isEmpty()) {
+    spec.policy = QueryService::QuerySpec::Exact;
+    spec.expectedRevision = revision;
+  }
+  // Capture caller identity even for rejected (zero-ID) subscriptions. Session
+  // retirement must still deliver exactly one terminal response to this caller.
+  queries_.subscribe(std::move(spec), this, [this, id](const auto &response) {
+    emit externalResponse(id, response);
+  });
 }

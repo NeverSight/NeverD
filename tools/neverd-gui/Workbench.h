@@ -2,9 +2,10 @@
 
 #include "EngineClient.h"
 #include "PageModel.h"
+#include "PaneController.h"
+#include "PaneRegistry.h"
+#include "QueryService.h"
 
-#include <QHash>
-#include <QQueue>
 #include <QSettings>
 #include <QTimer>
 #include <QTranslator>
@@ -14,6 +15,7 @@
 class QQmlEngine;
 class Workbench final : public QObject {
   Q_OBJECT
+  Q_PROPERTY(QObject *panes READ panes CONSTANT)
   Q_PROPERTY(bool loaded READ loaded NOTIFY changed)
   Q_PROPERTY(bool unsavedChanges READ unsavedChanges NOTIFY changed)
   Q_PROPERTY(bool busy READ busy NOTIFY changed)
@@ -54,8 +56,8 @@ class Workbench final : public QObject {
   Q_PROPERTY(QString language READ language NOTIFY languageChanged)
   Q_PROPERTY(QStringList languages READ languages CONSTANT)
   Q_PROPERTY(QObject *functionsModel READ functionsModel CONSTANT)
-  Q_PROPERTY(QObject *instructionsModel READ instructionsModel CONSTANT)
-  Q_PROPERTY(QObject *xrefsModel READ xrefsModel CONSTANT)
+  Q_PROPERTY(QObject *instructionsModel READ instructionsModel NOTIFY changed)
+  Q_PROPERTY(QObject *xrefsModel READ xrefsModel NOTIFY changed)
   Q_PROPERTY(QString dockLayoutPath READ dockLayoutPath CONSTANT)
   Q_PROPERTY(bool canUndo READ canUndo NOTIFY changed)
   Q_PROPERTY(bool canRedo READ canRedo NOTIFY changed)
@@ -63,59 +65,77 @@ class Workbench final : public QObject {
   Q_PROPERTY(QString contributionResult READ contributionResult NOTIFY changed)
 public:
   explicit Workbench(QString workerPath, QObject *parent = nullptr);
+  ~Workbench() override;
   void setQmlEngine(QQmlEngine *engine);
   bool loaded() const { return loaded_; }
-  bool unsavedChanges() const {
-    return dirty_ || mutationActive_ || !mutations_.isEmpty();
-  }
-  bool busy() const { return busy_; }
+  bool unsavedChanges() const { return dirty_ || pendingWrites_ > 0; }
+  bool busy() const { return opening_ || queries_.hasPending(); }
   bool workerConnected() const { return connected_; }
   QString error() const { return error_; }
   QString status() const { return tr(status_.toUtf8().constData()); }
-  double progress() const { return busy_ ? -1 : 1; }
+  double progress() const { return busy() ? -1 : 1; }
   QString fileName() const;
   QString filePath() const { return filePath_; }
   QString architecture() const { return metadata_["architecture"].toString(); }
   QString format() const { return metadata_["format"].toString(); }
-  QString selectedAddress() const { return selectedAddress_; }
-  QString selectedFunctionName() const { return functionName_; }
-  QString selectedFunctionAddress() const { return functionAddress_; }
-  QString selectedComment() const { return selectedComment_; }
-  QString representation() const { return representation_; }
-  bool representationPinned() const { return representationPinned_; }
+  QString selectedAddress() const { return selectedPane()->selectedAddress(); }
+  QString selectedFunctionName() const {
+    return selectedPane()->selectedFunctionName();
+  }
+  QString selectedFunctionAddress() const {
+    return selectedPane()->selectedFunctionAddress();
+  }
+  QString selectedComment() const { return selectedPane()->selectedComment(); }
+  QString representation() const {
+    return representationPane()->representation();
+  }
+  bool representationPinned() const { return representationPane()->pinned(); }
   QString representationFunctionName() const {
-    return representationPinned_ ? pinnedName_ : functionName_;
+    return representationPane()->selectedFunctionName();
   }
-  QString representationText() const { return text_; }
+  QString representationText() const {
+    return representationPane()->representationText();
+  }
   QVariantList textMappings() const {
-    return mappingRevision_ == revision_ ? textMappings_ : QVariantList{};
+    return representationPane()->textMappings();
   }
-  QString mappingStatus() const;
+  QString mappingStatus() const {
+    return representationPane()->mappingStatus();
+  }
   QString representationStatus() const {
-    return tr(textStatus_.toUtf8().constData());
+    return representationPane()->representationStatus();
   }
-  bool hasMoreText() const { return nextText_ > 0; }
-  QString hexText() const { return hexText_; }
+  bool hasMoreText() const { return representationPane()->hasMoreText(); }
+  QString hexText() const { return machinePane()->hexText(); }
   QString logText() const { return log_; }
-  QVariantList graphNodes() const { return nodes_; }
-  QVariantMap graphSummary() const { return graphSummary_.toVariantMap(); }
-  QString graphViewportStatus() const;
-  QVariantList graphEdges() const { return edges_; }
+  QVariantList graphNodes() const { return machinePane()->graphNodes(); }
+  QVariantMap graphSummary() const { return machinePane()->graphSummary(); }
+  QString graphViewportStatus() const {
+    return machinePane()->graphViewportStatus();
+  }
+  QVariantList graphEdges() const { return machinePane()->graphEdges(); }
   int functionCount() const { return functionCount_; }
-  bool canGoBack() const { return historyIndex_ > 0; }
-  bool canGoForward() const { return historyIndex_ + 1 < history_.size(); }
+  bool canGoBack() const { return selectedPane()->canGoBack(); }
+  bool canGoForward() const { return selectedPane()->canGoForward(); }
   QString language() const { return language_; }
   QStringList languages() const;
   QObject *functionsModel() { return &functions_; }
-  QObject *instructionsModel() { return &instructions_; }
-  QObject *xrefsModel() { return &xrefs_; }
+  QObject *instructionsModel() { return machinePane()->instructionsModel(); }
+  QObject *xrefsModel() { return selectedPane()->xrefsModel(); }
   QString dockLayoutPath() const;
   bool canUndo() const { return historyState_["can_undo"].toBool(); }
   bool canRedo() const { return historyState_["can_redo"].toBool(); }
   QVariantList contributions() const { return contributions_; }
   QString contributionResult() const { return contributionResult_; }
   void setDockLayoutPath(const QString &path) { dockLayoutOverride_ = path; }
+  QObject *panes() { return &panes_; }
+  PaneRegistry *paneRegistry() { return &panes_; }
   QJsonObject selection() const;
+  Q_INVOKABLE QVariantMap captureCommandTarget() const;
+  Q_INVOKABLE void renameFunctionAt(const QVariantMap &target,
+                                    const QString &name);
+  Q_INVOKABLE void setCommentAt(const QVariantMap &target,
+                                const QString &comment);
   Q_INVOKABLE void openFile(const QUrl &url);
   Q_INVOKABLE bool requestClose();
   Q_INVOKABLE void resolveSessionChange(const QString &choice);
@@ -165,26 +185,14 @@ private:
   using Callback =
       std::function<void(const QJsonObject &, const QJsonObject &)>;
   using FailureCallback = std::function<void(const QJsonObject &)>;
-  struct Pending {
-    QString operation;
-    quint64 generation;
-    bool contextual;
-    Callback callback;
-    QString cacheKey;
-    FailureCallback failed;
-    bool mutation = false;
-  };
-  struct Mutation {
-    QString operation;
-    QJsonObject payload;
-    Callback callback;
-    FailureCallback failed;
-  };
   QString send(const QString &operation, const QJsonObject &payload,
-               Callback callback, bool contextual = false,
-               bool mutation = false, FailureCallback failed = {});
+               Callback callback, bool mutation = false,
+               FailureCallback failed = {});
+  PaneController *selectedPane() const;
+  PaneController *machinePane() const;
+  PaneController *representationPane() const;
+  bool validCommandTarget(const QVariantMap &target) const;
   void receive(const QJsonObject &message);
-  void dispatchMutation();
   void resetSessionRequests();
   void performRestart();
   void finishTransition();
@@ -195,52 +203,24 @@ private:
   void log(const QString &message);
   void loadFunctions(bool append);
   void loadFunctionPage(int offset);
-  void loadInstructions(bool append);
-  void loadText(bool append = false);
-  void loadXrefs();
-  void loadComment();
   void refreshHistory();
   void applyHistory(const QString &operation);
-  void moveTo(const QString &address, const QString &name,
-              bool recordHistory = true);
   EngineClient client_;
+  QueryService queries_;
+  QObject workspaceReads_;
+  PaneRegistry panes_;
   PageModel functions_{{"name", "address", "size"}};
-  PageModel instructions_{
-      {"address", "bytes", "mnemonic", "operands", "comment"}};
-  PageModel xrefs_{{"from", "to", "kind"}};
-  QHash<QString, Pending> pending_;
-  QHash<QString, QString> external_;
-  QQueue<Mutation> mutations_;
-  bool mutationActive_ = false, dirty_ = false, transitionReady_ = false;
-  QString transition_;
-  QCache<QString, QJsonObject> cache_{
-      256 * 1024}; // Cost in conservatively estimated KiB.
   QTimer filterTimer_;
-  QString workerPath_, filePath_, pendingFile_, error_, status_,
-      selectedAddress_;
-  QString functionAddress_, functionName_, selectedComment_,
-      representation_ = "c";
-  QString text_, textStatus_, hexText_, log_, language_ = "en", revision_,
-                                              projectId_;
-  QString filter_, nextInstruction_, centralView_ = "disasm", activeJob_;
-  QString pinnedAddress_, pinnedName_;
-  QString dockLayoutOverride_;
-  QString contributionResult_;
-  QVariantList contributions_, textMappings_;
-  QString mappingRevision_, mappingState_;
-  int textStartLine_ = 0;
-  QJsonObject historyState_;
-  QJsonObject metadata_, graphSummary_, graphViewport_;
-  QVariantList nodes_, edges_;
-  QStringList history_;
-  int historyIndex_ = -1, functionCount_ = 0, nextFunction_ = 0, nextText_ = 0;
-  quint64 generation_ = 0, filterGeneration_ = 0, graphGeneration_ = 0,
-          textGeneration_ = 0;
-  bool loaded_ = false, busy_ = false, connected_ = false;
-  bool functionRequest_ = false, instructionRequest_ = false,
-       textRequest_ = false;
-  bool replayHistory_ = false;
-  bool representationPinned_ = false;
+  QString workerPath_, filePath_, pendingFile_, error_, status_, log_,
+      language_ = "en";
+  QString revision_, projectId_, filter_, transition_, dockLayoutOverride_,
+      contributionResult_;
+  QVariantList contributions_;
+  QJsonObject historyState_, metadata_;
+  quint64 filterGeneration_ = 0, sessionEpoch_ = 0;
+  int functionCount_ = 0, nextFunction_ = 0, pendingWrites_ = 0;
+  bool loaded_ = false, connected_ = false, opening_ = false;
+  bool dirty_ = false, transitionReady_ = false, functionRequest_ = false;
   QQmlEngine *qmlEngine_ = nullptr;
   QTranslator translator_;
 };

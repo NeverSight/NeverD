@@ -32,7 +32,8 @@ FetchContent_Declare(neverd_docking
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(neverd_docking)
 
-add_library(neverd_gui_core STATIC EngineClient.cpp PageModel.cpp Workbench.cpp
+add_library(neverd_gui_core STATIC EngineClient.cpp QueryService.cpp PageModel.cpp
+  PaneController.cpp PaneRegistry.cpp Workbench.cpp
   mcp/McpConnectionManager.cpp mcp/GuiSessionBroker.cpp)
 target_include_directories(neverd_gui_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_features(neverd_gui_core PUBLIC cxx_std_20)
@@ -68,6 +69,17 @@ if(BUILD_TESTING)
   target_compile_definitions(neverd-gui PRIVATE NEVERD_GUI_TEST_PROBES=1)
   find_package(Qt6 6.8 REQUIRED COMPONENTS Test)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  qt_add_executable(neverd-gui-query-tests
+    tests/QueryServiceTests.cpp QueryService.cpp)
+  target_link_libraries(neverd-gui-query-tests PRIVATE Qt6::Core Qt6::Test)
+  target_include_directories(neverd-gui-query-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  add_test(NAME NeverDGuiQueries COMMAND neverd-gui-query-tests)
+  set_tests_properties(NeverDGuiQueries PROPERTIES TIMEOUT 60)
+  qt_add_executable(neverd-gui-independent-pane-tests tests/IndependentPaneTests.cpp)
+  target_link_libraries(neverd-gui-independent-pane-tests PRIVATE neverd_gui_core Qt6::Test)
+  add_test(NAME NeverDGuiIndependentPanes COMMAND neverd-gui-independent-pane-tests)
+  set_tests_properties(NeverDGuiIndependentPanes PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
   if(TARGET neverd-worker-test-server)
     qt_add_executable(neverd-gui-tests tests/WorkbenchTests.cpp)
     target_link_libraries(neverd-gui-tests PRIVATE neverd_gui_core Qt6::Test)
@@ -129,7 +141,7 @@ if(BUILD_TESTING)
   # These are console test runners, even though they exercise Qt GUI objects.
   # Keep their diagnostics connected to CTest's stdout on Windows.
   foreach(_neverd_gui_test IN ITEMS neverd-gui-tests neverd-gui-graph-tests
-      neverd-gui-text-position-tests neverd-gui-page-tests neverd-mcp-qt-tests
+      neverd-gui-text-position-tests neverd-gui-query-tests neverd-gui-independent-pane-tests neverd-gui-page-tests neverd-mcp-qt-tests
       neverd-gui-language-tests)
     if(TARGET ${_neverd_gui_test})
       set_target_properties(${_neverd_gui_test} PROPERTIES WIN32_EXECUTABLE FALSE)

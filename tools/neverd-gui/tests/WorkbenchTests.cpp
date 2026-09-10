@@ -7,7 +7,16 @@
 
 class WorkbenchTests : public QObject {
   Q_OBJECT
+  QTemporaryDir settingsDirectory_;
 private slots:
+  void initTestCase() {
+    QVERIFY(settingsDirectory_.isValid());
+    QCoreApplication::setOrganizationName("NeverDTests");
+    QCoreApplication::setApplicationName("WorkbenchTests");
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
+                       settingsDirectory_.path());
+  }
   void pageModelBoundaries() {
     PageModel model({"address", "name"});
     QJsonArray rows;
@@ -197,6 +206,156 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(controller.loaded(), 5000);
     QTRY_VERIFY_WITH_TIMEOUT(!controller.representationText().isEmpty(), 7000);
     QVERIFY(controller.error().isEmpty());
+  }
+  void capturedEditTargetsSurviveFocusAndSourcePaneRemoval() {
+    QTemporaryDir directory;
+    const auto path = directory.filePath("targets.bin");
+    QFile input(path);
+    QVERIFY(input.open(QIODevice::WriteOnly));
+    input.write("fixture");
+    input.close();
+    Workbench controller(QString::fromLocal8Bit(TEST_WORKER));
+    controller.openFile(QUrl::fromLocalFile(path));
+    QTRY_VERIFY_WITH_TIMEOUT(!controller.representationText().isEmpty(), 7000);
+    auto *panes = controller.paneRegistry();
+    const auto sourceId = panes->createPane("machine");
+    auto *source = panes->findPane(sourceId);
+    panes->setPaneVisible(sourceId, true);
+    panes->setActivePane(sourceId);
+    source->navigate("function_20");
+    QTRY_COMPARE(source->selectedAddress(), QString("0xffff800012340140"));
+    const auto target = controller.captureCommandTarget();
+    panes->setActivePane("machine");
+    QCOMPARE(controller.selectedAddress(), QString("0xffff800012340000"));
+    controller.setCommentAt(target, "comment on captured extra pane");
+    QVERIFY(panes->beginRemovePane(sourceId));
+    panes->finishRemovePane(sourceId);
+    QTRY_VERIFY(!controller.busy());
+    QVERIFY(controller.unsavedChanges());
+    QVERIFY(controller.selectedComment() != "comment on captured extra pane");
+    controller.saveAnnotations();
+    QTRY_VERIFY(QFile::exists(path + ".neverd-annotations.json"));
+    QTRY_VERIFY(!controller.unsavedChanges());
+    QFile saved(path + ".neverd-annotations.json");
+    QVERIFY(saved.open(QIODevice::ReadOnly));
+    const auto bytes = saved.readAll();
+    QVERIFY(bytes.contains("0xffff800012340140"));
+    QVERIFY(bytes.contains("comment on captured extra pane"));
+    controller.navigate("function_20");
+    QTRY_COMPARE(controller.selectedComment(),
+                 QString("comment on captured extra pane"));
+    controller.renameFunctionAt(target, "captured_function");
+    QTRY_COMPARE(controller.selectedFunctionName(),
+                 QString("captured_function"));
+  }
+  void queuedOpenIntentsUseTheNewSessionAndOldDialogTargetsExpire() {
+    QTemporaryDir directory;
+    const auto first = directory.filePath("first.bin");
+    const auto second = directory.filePath("second.bin");
+    const auto third = directory.filePath("third.bin");
+    for (const auto &path : {first, second, third}) {
+      QFile input(path);
+      QVERIFY(input.open(QIODevice::WriteOnly));
+      input.write("fixture");
+    }
+    Workbench controller(QString::fromLocal8Bit(TEST_WORKER));
+    controller.openFile(QUrl::fromLocalFile(first));
+    QTRY_VERIFY_WITH_TIMEOUT(!controller.representationText().isEmpty(), 7000);
+    const auto oldTarget = controller.captureCommandTarget();
+    QSignalSpy confirmation(&controller, &Workbench::confirmSessionChange);
+    controller.openFile(QUrl::fromLocalFile(second));
+    controller.openFile(QUrl::fromLocalFile(third));
+    QTRY_COMPARE_WITH_TIMEOUT(controller.filePath(), third, 7000);
+    QTRY_VERIFY_WITH_TIMEOUT(!controller.representationText().isEmpty(), 7000);
+    QCOMPARE(confirmation.size(), 0);
+    controller.setCommentAt(oldTarget, "must not enter new project");
+    QVERIFY(!controller.unsavedChanges());
+    QVERIFY(controller.selectedComment().isEmpty());
+    QVERIFY2(controller.error().isEmpty(), qPrintable(controller.error()));
+  }
+  void cancellingPaneReadsStillCompletesExternalQueries() {
+    QTemporaryDir directory;
+    const auto path = directory.filePath("external.bin");
+    QFile input(path);
+    QVERIFY(input.open(QIODevice::WriteOnly));
+    input.write("fixture");
+    input.close();
+    Workbench controller(QString::fromLocal8Bit(TEST_WORKER));
+    controller.openFile(QUrl::fromLocalFile(path));
+    QTRY_VERIFY_WITH_TIMEOUT(!controller.representationText().isEmpty(), 7000);
+    QSignalSpy replies(&controller, &Workbench::externalResponse);
+    controller.setRepresentation("low");
+    controller.externalQuery("external-survives-cancel", "metadata", {}, {});
+    const auto count = controller.functionCount();
+    controller.cancel();
+    QCOMPARE(qobject_cast<PageModel *>(controller.functionsModel())->count(),
+             count);
+    QTRY_COMPARE_WITH_TIMEOUT(replies.size(), 1, 5000);
+    QCOMPARE(replies.first().first().toString(), "external-survives-cancel");
+    QCOMPARE(replies.first()[1].toJsonObject()["status"].toString(), "ok");
+    replies.clear();
+    controller.externalQuery("exact-stale", "metadata", {}, "invalid-revision");
+    QTRY_COMPARE(replies.size(), 1);
+    QCOMPARE(replies.first()[1]
+                 .toJsonObject()["error"]
+                 .toObject()["code"]
+                 .toString(),
+             "stale_revision");
+  }
+  void cancelAtFirstLoadedNotificationPreventsLateEntryNavigation() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const auto path = directory.filePath("startup-cancel.bin");
+    QFile input(path);
+    QVERIFY(input.open(QIODevice::WriteOnly));
+    input.write("fixture");
+    input.close();
+    Workbench controller(QString::fromLocal8Bit(TEST_WORKER));
+    bool cancelled = false;
+    QObject observer;
+    connect(
+        &controller, &Workbench::changed, &observer,
+        [&] {
+          if (cancelled || !controller.loaded())
+            return;
+          cancelled = true;
+          controller.cancel();
+        },
+        Qt::DirectConnection);
+
+    controller.openFile(QUrl::fromLocalFile(path));
+    QTRY_VERIFY_WITH_TIMEOUT(cancelled, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 7000);
+    // The workspace's startup reads finish, but their history callback must
+    // respect the Cancel observed during the first loaded notification.
+    QCOMPARE(controller.functionCount(), 600);
+    QVERIFY(controller.selectedAddress().isEmpty());
+    QVERIFY(controller.representationText().isEmpty());
+    QVERIFY2(controller.error().isEmpty(), qPrintable(controller.error()));
+  }
+  void saveBeforeCloseDoesNotAcceptAnUncoveredLateEdit() {
+    QTemporaryDir directory;
+    const auto path = directory.filePath("transition.bin");
+    QFile input(path);
+    QVERIFY(input.open(QIODevice::WriteOnly));
+    input.write("fixture");
+    input.close();
+    Workbench controller(QString::fromLocal8Bit(TEST_WORKER));
+    controller.openFile(QUrl::fromLocalFile(path));
+    QTRY_VERIFY_WITH_TIMEOUT(!controller.representationText().isEmpty(), 7000);
+    controller.setComment("accepted before close");
+    const auto target = controller.captureCommandTarget();
+    QVERIFY(!controller.requestClose());
+    QSignalSpy ready(&controller, &Workbench::closeReady);
+    controller.resolveSessionChange("save");
+    controller.setCommentAt(target, "late edit after save intent");
+    QTRY_COMPARE_WITH_TIMEOUT(ready.size(), 1, 5000);
+    QVERIFY(!controller.unsavedChanges());
+    QFile saved(path + ".neverd-annotations.json");
+    QVERIFY(saved.open(QIODevice::ReadOnly));
+    const auto bytes = saved.readAll();
+    QVERIFY(bytes.contains("accepted before close"));
+    QVERIFY(!bytes.contains("late edit after save intent"));
   }
 };
 QTEST_MAIN(WorkbenchTests)
