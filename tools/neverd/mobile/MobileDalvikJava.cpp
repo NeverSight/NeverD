@@ -389,10 +389,10 @@ class JavaTypeNames {
       // not within its own modifiers or extends/implements clause. Class
       // type parameters also exclude the modifiers. Enclosing declarations
       // still contribute their complete lexical scopes to a nested header.
-      auto Local = (InSupertypeHeader || ClassModifiers) &&
-                           Scope == &Context.owner
-                       ? Lookup{}
-                       : memberTypes(*Scope, Name);
+      auto Local =
+          (InSupertypeHeader || ClassModifiers) && Scope == &Context.owner
+              ? Lookup{}
+              : memberTypes(*Scope, Name);
       Result.unknown_inheritance |= Local.unknown_inheritance;
       if (simple(*Scope) == Name)
         Local.types.insert(Scope->name);
@@ -2130,9 +2130,10 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
     Lines BodyLines(B, true);
     if (C.deprecated)
       BodyLines.append(
-          "@" + TypeNames.render(
-                    "Ljava/lang/Deprecated;",
-                    JavaScope{C, nullptr, JavaScope::Position::ClassModifiers}));
+          "@" +
+          TypeNames.render(
+              "Ljava/lang/Deprecated;",
+              JavaScope{C, nullptr, JavaScope::Position::ClassModifiers}));
     BodyLines.append(Header + " {");
     if (Local) {
       const auto &R = *C.enclosing_method;

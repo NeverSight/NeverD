@@ -556,8 +556,7 @@ class Reader {
   void annotation(const std::string &header, Class &cls,
                   std::set<std::string> &seen) {
     Match m;
-    if (!match(header, m,
-               R"(\.annotation (build|runtime|system) (L[^\s]+;))"))
+    if (!match(header, m, R"(\.annotation (build|runtime|system) (L[^\s]+;))"))
       fail("unsupported smali annotation visibility or declaration");
     auto type = classType(m[2]);
     if (type == "Ldalvik/annotation/Signature;" ||

@@ -1386,19 +1386,19 @@ TEST(MobileDalvikReader, DexDeprecatedRejectsVisibilityAndElementLoss) {
       SCOPED_TRACE(key);
       auto changed = options;
       changed.annotations[0].extra_strings = {utf16(key), u"9"};
-      changed.annotations[0].elements =
-          [key](std::string &out, const Fixture &f) {
-            uleb(out, 1);
-            uleb(out, fixtureStringIndex(f, key));
-            if (std::string_view(key) == "since")
-              annotationIndex(out, 0x17, fixtureStringIndex(f, "9"));
-            else if (std::string_view(key) == "forRemoval")
-              append(out, 0x3f, 1); // VALUE_BOOLEAN, true.
-            else {
-              append(out, 0x04, 1); // VALUE_INT, one byte.
-              append(out, 1, 1);
-            }
-          };
+      changed.annotations[0].elements = [key](std::string &out,
+                                              const Fixture &f) {
+        uleb(out, 1);
+        uleb(out, fixtureStringIndex(f, key));
+        if (std::string_view(key) == "since")
+          annotationIndex(out, 0x17, fixtureStringIndex(f, "9"));
+        else if (std::string_view(key) == "forRemoval")
+          append(out, 0x3f, 1); // VALUE_BOOLEAN, true.
+        else {
+          append(out, 0x04, 1); // VALUE_INT, one byte.
+          append(out, 1, 1);
+        }
+      };
       expectDexError(fixture(changed).data,
                      "Invalid DEX: Deprecated annotation on " + declaration +
                          " must have no elements");
@@ -1444,26 +1444,27 @@ TEST(MobileDalvikReader, DexDeprecatedConstructorRetainsItsRealInvoke) {
 TEST(MobileDalvikReader, SmaliDeprecatedPreservesDeclarationsAndConstructor) {
   const std::string marker =
       ".annotation runtime Ljava/lang/Deprecated;\n.end annotation\n";
-  auto cls = smali(
-      ".class public Lfixture/Sample;\n.super Ljava/lang/Object;\n" +
-      marker + ".field public value:I\n" + marker + ".end field\n"
-      ".method public static value(I)I\n.registers 1\n" + marker +
-      "return p0\n.end method\n"
-      ".method public constructor <init>()V\n.registers 1\n" + marker +
-      "invoke-direct {p0}, Ljava/lang/Object;-><init>()V\n"
-      "return-void\n.end method\n");
+  auto cls =
+      smali(".class public Lfixture/Sample;\n.super Ljava/lang/Object;\n" +
+            marker + ".field public value:I\n" + marker +
+            ".end field\n"
+            ".method public static value(I)I\n.registers 1\n" +
+            marker +
+            "return p0\n.end method\n"
+            ".method public constructor <init>()V\n.registers 1\n" +
+            marker +
+            "invoke-direct {p0}, Ljava/lang/Object;-><init>()V\n"
+            "return-void\n.end method\n");
   EXPECT_TRUE(cls.deprecated);
   ASSERT_EQ(cls.fields.size(), 1u);
   EXPECT_TRUE(cls.fields[0].deprecated);
   ASSERT_EQ(cls.methods.size(), 2u);
   EXPECT_TRUE(cls.methods[0].deprecated);
   EXPECT_TRUE(cls.methods[1].deprecated);
-  EXPECT_EQ(cls.methods[0].reference.identity(),
-            "Lfixture/Sample;->value(I)I");
+  EXPECT_EQ(cls.methods[0].reference.identity(), "Lfixture/Sample;->value(I)I");
   ASSERT_EQ(cls.methods[0].instructions.size(), 1u);
   EXPECT_EQ(cls.methods[0].instructions[0].opcode, "return");
-  EXPECT_EQ(cls.methods[1].reference.identity(),
-            "Lfixture/Sample;-><init>()V");
+  EXPECT_EQ(cls.methods[1].reference.identity(), "Lfixture/Sample;-><init>()V");
   ASSERT_EQ(cls.methods[1].instructions.size(), 2u);
   EXPECT_EQ(cls.methods[1].instructions[0].opcode, "invoke-direct");
   EXPECT_EQ(std::get<MethodRef>(cls.methods[1].instructions[0].reference),
@@ -1477,8 +1478,7 @@ TEST(MobileDalvikReader, SmaliDeprecatedPreservesDeclarationsAndConstructor) {
 TEST(MobileDalvikReader, SmaliDeprecatedRetainsVisibilityShapeAndSiteGuards) {
   const std::string start =
       ".class public Lfixture/Sample;\n.super Ljava/lang/Object;\n";
-  const std::string method =
-      ".method public static value(I)I\n.registers 1\n";
+  const std::string method = ".method public static value(I)I\n.registers 1\n";
   const std::string end = "return p0\n.end method\n";
   const std::string marker =
       ".annotation runtime Ljava/lang/Deprecated;\n.end annotation\n";
@@ -1486,8 +1486,8 @@ TEST(MobileDalvikReader, SmaliDeprecatedRetainsVisibilityShapeAndSiteGuards) {
     if (site == "class")
       return start + annotation + method + end;
     if (site == "field")
-      return start + ".field public value:I\n" + annotation +
-             ".end field\n" + method + end;
+      return start + ".field public value:I\n" + annotation + ".end field\n" +
+             method + end;
     return start + method + annotation + end;
   };
   auto reject = [&](const std::string &text, std::string_view reason) {
@@ -1505,18 +1505,16 @@ TEST(MobileDalvikReader, SmaliDeprecatedRetainsVisibilityShapeAndSiteGuards) {
       reject(source(site, ".annotation " + std::string(visibility) +
                               " Ljava/lang/Deprecated;\n.end annotation\n"),
              "requires runtime visibility");
-    for (const auto &element : {"since = \"9\"", "forRemoval = true",
-                               "value = 1"})
+    for (const auto &element :
+         {"since = \"9\"", "forRemoval = true", "value = 1"})
       reject(source(site, ".annotation runtime Ljava/lang/Deprecated;\n" +
                               std::string(element) + "\n.end annotation\n"),
              "must have no elements");
     reject(source(site, marker + marker), "duplicate Deprecated annotation");
   }
-  reject(start + method + ".param p0\n" + marker +
-             ".end param\n" + end,
+  reject(start + method + ".param p0\n" + marker + ".end param\n" + end,
          "parameter annotations are not represented");
-  auto cls = smali(start + method + ".param p0\n.end param\n" + marker +
-                   end);
+  auto cls = smali(start + method + ".param p0\n.end param\n" + marker + end);
   EXPECT_TRUE(cls.methods[0].deprecated);
   reject(start + method +
              ".annotation system Lfixture/Unknown;\n.end annotation\n" + end,
@@ -1713,7 +1711,9 @@ TEST(MobileDalvikReader, DexAnnotatedMethodMustHaveActualClassDataDefinition) {
       options.method_annotations = 0;
       options.referenced_method =
           MethodRef{foreign_owner ? "Lfixture/Other;" : options.owner,
-                    "unused", {"I"}, "I"};
+                    "unused",
+                    {"I"},
+                    "I"};
       auto f = fixture(options);
       auto found = std::find(f.methods.begin(), f.methods.end(),
                              *options.referenced_method);

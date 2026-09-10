@@ -1248,11 +1248,10 @@ TEST(MobileDalvikJava, GenericThrowableSubclassesCannotBecomeInvalidJava) {
 }
 
 TEST(MobileDalvikJava, DeprecatedMarkersPreserveTheirExactDeclarations) {
-  auto Init = method(
-      "<init>", {}, "V", 1,
-      {op(0, "invoke-direct", {0}, {},
-          MethodRef{"Ljava/lang/Object;", "<init>", {}, "V"}),
-       op(1, "return-void")});
+  auto Init = method("<init>", {}, "V", 1,
+                     {op(0, "invoke-direct", {0}, {},
+                         MethodRef{"Ljava/lang/Object;", "<init>", {}, "V"}),
+                      op(1, "return-void")});
   Init.access = {"public", "constructor"};
   Init.deprecated = true;
   auto Old = method("oldValue", {"I"}, "I", 1, {op(0, "return", {0})});
@@ -1300,7 +1299,8 @@ TEST(MobileDalvikJava, DeprecatedMarkersPreserveTheirExactDeclarations) {
   EXPECT_EQ((*Helpers)[0].getAsObject()->getString("kind"), "throw-helper");
 }
 
-TEST(MobileDalvikJava, DeprecatedDeclarationsDoNotInventNativeOrAbstractBodies) {
+TEST(MobileDalvikJava,
+     DeprecatedDeclarationsDoNotInventNativeOrAbstractBodies) {
   auto Native = method("nativeValue", {}, "I", 0, {});
   Native.access = {"public", "native"};
   Native.deprecated = true;
@@ -1311,11 +1311,13 @@ TEST(MobileDalvikJava, DeprecatedDeclarationsDoNotInventNativeOrAbstractBodies) 
   C.access.insert("abstract");
   const auto Report = recover({C});
   const auto Java = source(Report);
-  EXPECT_NE(Java.find("  @java.lang.Deprecated\n  public native int nativeValue();"),
-            std::string::npos);
-  EXPECT_NE(Java.find(
-                "  @java.lang.Deprecated\n  public abstract int abstractValue();"),
-            std::string::npos);
+  EXPECT_NE(
+      Java.find("  @java.lang.Deprecated\n  public native int nativeValue();"),
+      std::string::npos);
+  EXPECT_NE(
+      Java.find(
+          "  @java.lang.Deprecated\n  public abstract int abstractValue();"),
+      std::string::npos);
   EXPECT_EQ(Report.getInteger("method_count"), 2);
   EXPECT_EQ(Report.getInteger("recovered_method_count"), 0);
   EXPECT_EQ(Report.getInteger("declaration_only_method_count"), 2);
@@ -1330,7 +1332,7 @@ TEST(MobileDalvikJava, DeprecatedMethodModifiersExcludeOwnTypeParameters) {
   const auto Report = recoverMethods({M});
   EXPECT_EQ(Report.getInteger("declaration_only_method_count"), 1);
   EXPECT_NE(source(Report).find("  @java.lang.Deprecated\n  public native "
-                               "<java extends fixture.Core> void observe();"),
+                                "<java extends fixture.Core> void observe();"),
             std::string::npos);
 }
 
@@ -1341,9 +1343,10 @@ TEST(MobileDalvikJava, DeprecatedClassModifiersExcludeOnlyOwnTypeParameters) {
   Marker.generic_signature = "<java:Lfixture/Core;>Ljava/lang/Object;";
   Marker.deprecated = true;
   const auto Report = recover({Core, Marker});
-  EXPECT_NE(source(Report, 1).find("@java.lang.Deprecated\npublic abstract "
-                                  "interface Marker<java extends fixture.Core>"),
-            std::string::npos);
+  EXPECT_NE(
+      source(Report, 1).find("@java.lang.Deprecated\npublic abstract "
+                             "interface Marker<java extends fixture.Core>"),
+      std::string::npos);
 
   auto M = method("observe", {}, "V", 0, {});
   M.access = {"public", "abstract"};
@@ -1354,12 +1357,14 @@ TEST(MobileDalvikJava, DeprecatedClassModifiersExcludeOnlyOwnTypeParameters) {
   rejected([&] { recover({Core, Marker}); }, "ambiguous Java type");
 }
 
-TEST(MobileDalvikJava, DeprecatedClassInitializersAreRejectedByBothEntryPoints) {
+TEST(MobileDalvikJava,
+     DeprecatedClassInitializersAreRejectedByBothEntryPoints) {
   auto M = method("<clinit>", {}, "V", 0, {op(0, "return-void")});
   M.access = {"static", "constructor"};
   M.deprecated = true;
   Class C = klass("Lfixture/Core;", {M});
-  rejected([&] { recover({C}); }, "Deprecated cannot annotate a class initializer");
+  rejected([&] { recover({C}); },
+           "Deprecated cannot annotate a class initializer");
   rejected(
       [&] {
         Budget B(Limits{});
@@ -1372,7 +1377,8 @@ TEST(MobileDalvikJava, DeprecatedRequiresThePlatformAnnotationDefinition) {
   Class Replacement = klass("Ljava/lang/Deprecated;");
   Class C = klass("Lfixture/Core;");
   C.deprecated = true;
-  rejected([&] { recover({C, Replacement}); }, "platform annotation definition");
+  rejected([&] { recover({C, Replacement}); },
+           "platform annotation definition");
   rejected(
       [&] {
         Budget B(Limits{});
