@@ -136,6 +136,9 @@ const char *neverd_disasm_json(neverd_session_t Sess, neverd_va_t Addr,
     return dupStr(jsonToString(llvm::json::Value(std::move(Instructions))));
   }
 
+  if (!S->synchronizeFunctions())
+    return dupStr(std::string("[]"));
+
   llvm::json::Array Arr;
   va_t Cur = Addr;
   uint64_t Span = 0;

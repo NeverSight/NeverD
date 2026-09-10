@@ -41,12 +41,14 @@ std::string takeString(const char *Value) {
 
 // A sectionless executable with one RX segment and a two-instruction body.
 // Keeping both ISAs in the fixture makes decoder state observable on reload.
-std::string makeNativeELF(bool AArch64, uint64_t Base = 0x400000) {
+std::string makeNativeELF(bool AArch64, uint64_t Base = 0x400000,
+                          std::string_view TrailingCode = {}) {
   using ELF = llvm::object::ELF64LE;
   using namespace llvm::ELF;
-  const std::string Code =
-      AArch64 ? std::string("\xe0\x00\x80\x52\xc0\x03\x5f\xd6", 8)
-              : std::string("\xb8\x07\x00\x00\x00\xc3", 6);
+  std::string Code = AArch64
+                         ? std::string("\xe0\x00\x80\x52\xc0\x03\x5f\xd6", 8)
+                         : std::string("\xb8\x07\x00\x00\x00\xc3", 6);
+  Code += TrailingCode;
   const size_t CodeOffset = sizeof(ELF::Ehdr) + sizeof(ELF::Phdr);
   std::string Bytes(CodeOffset + Code.size(), '\0');
   ELF::Ehdr Header{};
@@ -488,6 +490,70 @@ TEST_F(SessionCAPITest, LazyNativeAnalysisRetainsRecoveredNamesAcrossReload) {
   EXPECT_EQ(neverd_func_count(Session), 1);
   EXPECT_EQ(neverd_func_find_by_addr(Session, Entry), -1);
   EXPECT_EQ(neverd_func_find_by_name(Session, "reviewed_entry"), -1);
+}
+
+TEST_F(SessionCAPITest, NativeDisassemblyUsesRecoveredExtentAfterLazyAnalysis) {
+  for (bool AArch64 : {false, true}) {
+    SCOPED_TRACE(AArch64 ? "aarch64" : "x86_64");
+    // Two executable NOPs follow the return, outside the recovered body. The
+    // segment boundary alone must not make an unclipped decoder look correct.
+    const std::string Tail =
+        AArch64 ? std::string("\x1f\x20\x03\xd5\x1f\x20\x03\xd5", 8)
+                : std::string("\x90\x90", 2);
+    const std::string Path =
+        write(AArch64 ? "extent-arm.elf" : "extent-x86.elf",
+              makeNativeELF(AArch64, 0x400000, Tail));
+    ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+    const neverd_va_t Entry = neverd_session_entry_addr(Session);
+    const uint64_t FunctionSize = AArch64 ? 8 : 6;
+    const uint64_t ReturnOffset = AArch64 ? 4 : 5;
+    const std::string BeforeAnalysis =
+        takeString(neverd_disasm_json(Session, Entry, 16));
+    auto Before = llvm::json::parse(BeforeAnalysis);
+    ASSERT_TRUE(static_cast<bool>(Before)) << BeforeAnalysis;
+    ASSERT_NE(Before->getAsArray(), nullptr);
+    EXPECT_EQ(Before->getAsArray()->size(), 4U);
+    // A quick native decode must not start the full pipeline and publish the
+    // entry. Function listing remains an inexpensive loader-only operation.
+    EXPECT_EQ(neverd_func_count(Session), 0);
+
+    std::array<std::string, 3> Disassemblies;
+    for (size_t Order = 0; Order < Disassemblies.size(); ++Order) {
+      SCOPED_TRACE(Order);
+      ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+      if (Order == 2) {
+        ASSERT_EQ(neverd_session_analyze(Session), 1)
+            << takeString(neverd_last_error(Session));
+      } else {
+        ASSERT_FALSE(takeString(neverd_ir_low(Session, Entry)).empty())
+            << takeString(neverd_last_error(Session));
+        if (Order == 1)
+          EXPECT_GT(neverd_func_count(Session), 0);
+      }
+      // Order 0 deliberately performs no synchronizing list/metadata query
+      // between lazy IR production and disassembly.
+      Disassemblies[Order] = takeString(neverd_disasm_json(Session, Entry, 16));
+      auto Parsed = llvm::json::parse(Disassemblies[Order]);
+      ASSERT_TRUE(static_cast<bool>(Parsed)) << Disassemblies[Order];
+      const auto *Rows = Parsed->getAsArray();
+      ASSERT_NE(Rows, nullptr);
+      ASSERT_EQ(Rows->size(), 2U) << Disassemblies[Order];
+      for (size_t I = 0; I < Rows->size(); ++I) {
+        const auto *Row = (*Rows)[I].getAsObject();
+        ASSERT_NE(Row, nullptr);
+        const auto Address = Row->getString("addr");
+        ASSERT_TRUE(Address);
+        const uint64_t VA = std::stoull(Address->str(), nullptr, 16);
+        EXPECT_EQ(VA, Entry + (I == 0 ? 0 : ReturnOffset));
+        EXPECT_LT(VA, Entry + FunctionSize);
+      }
+      const int Index = neverd_func_find_by_addr(Session, Entry);
+      ASSERT_GE(Index, 0);
+      EXPECT_EQ(neverd_func_size(Session, Index), FunctionSize);
+    }
+    EXPECT_EQ(Disassemblies[0], Disassemblies[1]);
+    EXPECT_EQ(Disassemblies[0], Disassemblies[2]);
+  }
 }
 
 TEST_F(SessionCAPITest, NativeAnalysisPreservesLoaderNamesAndSavedRenames) {
