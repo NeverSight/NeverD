@@ -56,7 +56,10 @@ class Client:
                 return self.backlog.pop(index)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            message = self.messages.get(timeout=max(0.01, deadline - time.monotonic()))
+            try:
+                message = self.messages.get(timeout=max(0.01, deadline - time.monotonic()))
+            except queue.Empty as error:
+                raise TimeoutError("response timeout") from error
             if isinstance(message, BaseException):
                 raise message
             if predicate(message):
@@ -85,7 +88,14 @@ class Client:
         return self.next(lambda message: message.get("type") == "response" and message.get("request_id") == request_id)
 
     def call(self, operation, payload=None, **kwargs):
-        return self.response(self.send(operation, payload, **kwargs))
+        request_id = self.send(operation, payload, **kwargs)
+        try:
+            return self.response(request_id)
+        except TimeoutError as error:
+            raise TimeoutError(
+                f"worker response timeout: operation={operation!r}, "
+                f"request_id={request_id!r}, worker_returncode={self.process.poll()!r}"
+            ) from error
 
     def close(self):
         if self.process.poll() is None:
