@@ -551,7 +551,7 @@ FixtureAnnotation enumAnnotation(std::string type, std::vector<FieldRef> values,
       unsigned index = unsigned(found - f.fields.begin());
       if (kind == 0x17)
         index = fixtureStringIndex(f, value.owner + "->" + value.name + ":" +
-                                      value.type);
+                                          value.type);
       else if (kind == 0x18)
         index = fixtureTypeIndex(f, value.owner);
       annotationIndex(out, kind, index);
