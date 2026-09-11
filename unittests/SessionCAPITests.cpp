@@ -6,11 +6,15 @@
 
 #include "gtest/gtest.h"
 
+#include "NativeMobileSession.h"
+
+#include "neverd/loader/BinaryImage.h"
 #include "neverd/sdk/NeverDCAPI.h"
 #include "neverd/support/ProjectWriteLock.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/ELF.h"
+#include "llvm/BinaryFormat/MachO.h"
 #include "llvm/Object/ELFTypes.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/JSON.h"
@@ -30,6 +34,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #ifndef _WIN32
@@ -48,6 +53,120 @@ std::string takeString(const char *Value) {
   neverd_free_string(Value);
   return Text;
 }
+
+// Owned linked Mach-O bytes, not a Swift compiler fixture. The symbol's raw
+// bytes make the pre-normalization observer boundary directly observable.
+std::string makeObservedMachO(bool AArch64, const std::string &Name) {
+  using namespace llvm::MachO;
+  constexpr uint64_t Base = 0x100000000ULL;
+  constexpr uint32_t CodeOffset = 0x400;
+  constexpr uint32_t SymbolsOffset = 0x1000;
+  constexpr uint32_t StringsOffset = 0x1010;
+  constexpr uint32_t TextCommandSize =
+      sizeof(segment_command_64) + sizeof(section_64);
+  constexpr uint32_t CommandsSize =
+      TextCommandSize + sizeof(segment_command_64) + sizeof(symtab_command) +
+      sizeof(entry_point_command);
+  static_assert(sizeof(mach_header_64) + CommandsSize < CodeOffset);
+  if (Name.empty() || Name.size() > 127 || Name.find('\0') != std::string::npos)
+    throw std::invalid_argument("invalid owned Mach-O fixture symbol");
+  const std::string Code =
+      AArch64 ? std::string("\xe0\x00\x80\x52\xc0\x03\x5f\xd6", 8)
+              : std::string("\xb8\x07\x00\x00\x00\xc3", 6);
+  std::string Bytes(0x1200, '\0');
+  const auto Put = [&Bytes](size_t Offset, const auto &Object) {
+    std::memcpy(Bytes.data() + Offset, &Object, sizeof(Object));
+  };
+  mach_header_64 Header{};
+  Header.magic = MH_MAGIC_64;
+  Header.cputype = AArch64 ? CPU_TYPE_ARM64 : CPU_TYPE_X86_64;
+  Header.cpusubtype = AArch64 ? uint32_t(CPU_SUBTYPE_ARM64_ALL)
+                             : uint32_t(CPU_SUBTYPE_X86_64_ALL);
+  Header.filetype = MH_EXECUTE;
+  Header.ncmds = 4;
+  Header.sizeofcmds = CommandsSize;
+  Header.flags = MH_NOUNDEFS;
+  Put(0, Header);
+  size_t Command = sizeof(Header);
+  segment_command_64 Segment{};
+  Segment.cmd = LC_SEGMENT_64;
+  Segment.cmdsize = TextCommandSize;
+  std::memcpy(Segment.segname, "__TEXT", 6);
+  Segment.vmaddr = Base;
+  Segment.vmsize = Segment.filesize = 0x1000;
+  Segment.maxprot = Segment.initprot = VM_PROT_READ | VM_PROT_EXECUTE;
+  Segment.nsects = 1;
+  Put(Command, Segment);
+  section_64 Section{};
+  std::memcpy(Section.sectname, "__text", 6);
+  std::memcpy(Section.segname, "__TEXT", 6);
+  Section.addr = Base + CodeOffset;
+  Section.size = Code.size();
+  Section.offset = CodeOffset;
+  Section.align = AArch64 ? 2 : 0;
+  Section.flags = static_cast<uint32_t>(S_REGULAR) |
+                  static_cast<uint32_t>(S_ATTR_PURE_INSTRUCTIONS);
+  Put(Command + sizeof(Segment), Section);
+  Command += TextCommandSize;
+  Segment = {};
+  Segment.cmd = LC_SEGMENT_64;
+  Segment.cmdsize = sizeof(Segment);
+  std::memcpy(Segment.segname, "__LINKEDIT", 10);
+  Segment.vmaddr = Base + SymbolsOffset;
+  Segment.fileoff = SymbolsOffset;
+  Segment.vmsize = Segment.filesize = 0x200;
+  Segment.maxprot = Segment.initprot = VM_PROT_READ;
+  Put(Command, Segment);
+  Command += sizeof(Segment);
+  symtab_command Symbols{};
+  Symbols.cmd = LC_SYMTAB;
+  Symbols.cmdsize = sizeof(Symbols);
+  Symbols.symoff = SymbolsOffset;
+  Symbols.nsyms = 1;
+  Symbols.stroff = StringsOffset;
+  Symbols.strsize = static_cast<uint32_t>(Name.size() + 2);
+  Put(Command, Symbols);
+  Command += sizeof(Symbols);
+  entry_point_command Main{};
+  Main.cmd = LC_MAIN;
+  Main.cmdsize = sizeof(Main);
+  Main.entryoff = CodeOffset;
+  Put(Command, Main);
+  nlist_64 Symbol{};
+  Symbol.n_strx = 1;
+  Symbol.n_type = static_cast<uint8_t>(N_SECT) | static_cast<uint8_t>(N_EXT);
+  Symbol.n_sect = 1;
+  Symbol.n_value = Base + CodeOffset;
+  Put(SymbolsOffset, Symbol);
+  Bytes.replace(CodeOffset, Code.size(), Code);
+  Bytes.replace(StringsOffset + 1, Name.size(), Name);
+  return Bytes;
+}
+
+struct ObservedMobileImage {
+  unsigned Calls = 0;
+  neverd::BinaryFormat Format = neverd::BinaryFormat::Unknown;
+  neverd::Arch Architecture = neverd::Arch::Unknown;
+  std::string Raw;
+  std::vector<std::string> Names;
+
+  static void observe(const neverd::BinaryImage &Image, void *Context) {
+    auto &Snapshot = *static_cast<ObservedMobileImage *>(Context);
+    ++Snapshot.Calls;
+    Snapshot.Format = Image.Format;
+    Snapshot.Architecture = Image.Arch;
+    Snapshot.Raw.assign(reinterpret_cast<const char *>(Image.Raw.data()),
+                         Image.Raw.size());
+    Snapshot.Names.clear();
+    for (const auto &Symbol : Image.Symbols)
+      Snapshot.Names.push_back(Symbol.Name);
+  }
+};
+
+class MobileObserverFailure : public std::runtime_error {
+public:
+  MobileObserverFailure() : std::runtime_error("owned mobile metadata failure") {}
+};
 
 class ScopedNativePhaseEnvironment {
 public:
@@ -430,6 +549,208 @@ protected:
   std::filesystem::path Directory;
   neverd_session_t Session = nullptr;
 };
+
+TEST_F(SessionCAPITest,
+       NativeMobileObserverSeesRawImageBeforeNormalizedPublication) {
+  ScopedNativePhaseEnvironment Environment;
+  ASSERT_EQ(Environment.set("1"), 0);
+  const std::string RawName = "_owned_\xff";
+  for (bool AArch64 : {false, true}) {
+    SCOPED_TRACE(AArch64);
+    const auto Bytes = makeObservedMachO(AArch64, RawName);
+    const auto Input = write(AArch64 ? "observed-arm64.macho"
+                                    : "observed-x64.macho", Bytes);
+    ObservedMobileImage Observed;
+    testing::internal::CaptureStderr();
+    const int Status = neverd::sdk::loadNativeMobileSession(
+        Session, Input.c_str(), ObservedMobileImage::observe, &Observed);
+    const auto Trace = testing::internal::GetCapturedStderr();
+    ASSERT_EQ(Status, 1) << takeString(neverd_last_error(Session));
+    expectSessionPhasePair(Trace, "completed");
+    ASSERT_EQ(Observed.Calls, 1U);
+    EXPECT_EQ(Observed.Format, neverd::BinaryFormat::MachO);
+    EXPECT_EQ(Observed.Architecture,
+              AArch64 ? neverd::Arch::AArch64 : neverd::Arch::X64);
+    EXPECT_EQ(Observed.Raw, Bytes);
+    EXPECT_EQ(Observed.Names, std::vector<std::string>{RawName});
+    ASSERT_EQ(neverd_func_count(Session), 1);
+    EXPECT_EQ(neverd_func_entry(Session, 0), 0x100000400ULL);
+    EXPECT_EQ(takeString(neverd_func_name(Session, 0)), "_owned_\\xFF");
+    EXPECT_TRUE(takeString(neverd_last_error(Session)).empty());
+
+    std::unique_ptr<void, decltype(&neverd_session_destroy)> Public(
+        neverd_session_create(), &neverd_session_destroy);
+    ASSERT_NE(Public.get(), nullptr);
+    ASSERT_EQ(neverd_session_load(Public.get(), Input.c_str()), 1)
+        << takeString(neverd_last_error(Public.get()));
+    EXPECT_EQ(takeString(neverd_symbols_json(Session)),
+              takeString(neverd_symbols_json(Public.get())));
+    EXPECT_EQ(takeString(neverd_headers_json(Session)),
+              takeString(neverd_headers_json(Public.get())));
+    EXPECT_EQ(takeString(neverd_disasm_json(Session, 0x100000400ULL, 2)),
+              takeString(neverd_disasm_json(Public.get(), 0x100000400ULL, 2)));
+  }
+}
+
+TEST_F(SessionCAPITest, NativeMobileLoadRejectsBeforeCallingTheObserver) {
+  ScopedNativePhaseEnvironment Environment;
+  ASSERT_EQ(Environment.set("1"), 0);
+  const auto Valid = write("valid-mobile.macho",
+                           makeObservedMachO(false, "_owned"));
+  const auto Invalid = write("invalid-mobile.macho", "not a Mach-O file");
+  const auto ELF = write("other-format.elf", makeNativeELF(false));
+  const auto Missing = (Directory / "missing-mobile.macho").string();
+  ObservedMobileImage Observed;
+  testing::internal::CaptureStderr();
+  const int NullStatus = neverd::sdk::loadNativeMobileSession(
+      nullptr, Valid.c_str(), ObservedMobileImage::observe, &Observed);
+  const auto NullTrace = testing::internal::GetCapturedStderr();
+  EXPECT_EQ(NullStatus, 0);
+  EXPECT_TRUE(NullTrace.empty());
+  EXPECT_EQ(Observed.Calls, 0U);
+  struct RejectedInput {
+    const char *Path;
+    neverd::sdk::NativeMobileMetadataObserver Observer;
+    std::string ErrorPrefix;
+  };
+  const RejectedInput Inputs[] = {
+      {nullptr, nullptr, "input path is empty"},
+      {"", ObservedMobileImage::observe, "input path is empty"},
+      {Valid.c_str(), nullptr, "mobile metadata observer is missing"},
+      {Missing.c_str(), ObservedMobileImage::observe, "file not found: "},
+      {Invalid.c_str(), ObservedMobileImage::observe, "invalid selected Mach-O: "},
+      {ELF.c_str(), ObservedMobileImage::observe, "invalid selected Mach-O: "},
+  };
+  for (const auto &Input : Inputs) {
+    SCOPED_TRACE(Input.ErrorPrefix);
+    testing::internal::CaptureStderr();
+    const int Status = neverd::sdk::loadNativeMobileSession(
+        Session, Input.Path, Input.Observer, &Observed);
+    const auto Trace = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Status, 0);
+    expectSessionPhasePair(Trace, "failed");
+    EXPECT_TRUE(takeString(neverd_last_error(Session))
+                    .starts_with(Input.ErrorPrefix));
+    EXPECT_EQ(Observed.Calls, 0U);
+    EXPECT_EQ(neverd_session_is_loaded(Session), 0);
+    EXPECT_EQ(neverd_func_count(Session), 0);
+  }
+  ASSERT_EQ(neverd::sdk::loadNativeMobileSession(
+                Session, Valid.c_str(), ObservedMobileImage::observe, &Observed),
+            1)
+      << takeString(neverd_last_error(Session));
+  EXPECT_EQ(Observed.Calls, 1U);
+  EXPECT_EQ(neverd_session_is_loaded(Session), 1);
+}
+
+TEST_F(SessionCAPITest,
+       NativeMobileObserverFailurePreservesLoadedAnalysisAndEdits) {
+  ScopedNativePhaseEnvironment Environment;
+  ASSERT_EQ(Environment.set("0"), 0);
+  const auto Original = write("mobile-old.evm", "6001600055");
+  ASSERT_EQ(neverd_session_load(Session, Original.c_str()), 1);
+  ASSERT_EQ(neverd_session_analyze(Session), 1);
+  const auto IR = takeString(neverd_ir_llvm(Session, 0));
+  const auto Source = takeString(neverd_decompile(Session, 0));
+  ASSERT_FALSE(IR.empty());
+  ASSERT_FALSE(Source.empty());
+  neverd_annotation_set(Session, 0, "keep observer failure comment");
+  ASSERT_EQ(neverd_rename_func(Session, "evm_entry", "retained_entry"), 0);
+  const auto Renames = takeString(neverd_renames_json(Session));
+  const auto MissingMap = (Directory / "missing-observer.map").string();
+  neverd_session_set_map_path(Session, MissingMap.c_str());
+  ASSERT_EQ(Environment.set("1"), 0);
+  for (bool AArch64 : {false, true}) {
+    SCOPED_TRACE(AArch64);
+    const auto Bytes = makeObservedMachO(AArch64, "_replacement");
+    const auto Replacement = write("observer-replacement.macho", Bytes);
+    ObservedMobileImage Observed;
+    // This exact exception must win over the configured missing debug file.
+    const auto Reject = [](const neverd::BinaryImage &Image, void *Context) {
+      ObservedMobileImage::observe(Image, Context);
+      throw MobileObserverFailure();
+    };
+    testing::internal::CaptureStderr();
+    EXPECT_THROW(neverd::sdk::loadNativeMobileSession(
+                     Session, Replacement.c_str(), Reject, &Observed),
+                 MobileObserverFailure);
+    const auto Trace = testing::internal::GetCapturedStderr();
+    expectSessionPhasePair(Trace, "aborted");
+    EXPECT_EQ(Observed.Calls, 1U);
+    EXPECT_EQ(Observed.Raw, Bytes);
+    EXPECT_EQ(neverd_session_is_loaded(Session), 1);
+    EXPECT_EQ(takeString(neverd_session_file_path(Session)), Original);
+    EXPECT_EQ(takeString(neverd_func_name(Session, 0)), "retained_entry");
+    EXPECT_EQ(takeString(neverd_annotation_get(Session, 0)),
+              "keep observer failure comment");
+    EXPECT_EQ(takeString(neverd_renames_json(Session)), Renames);
+    EXPECT_EQ(neverd_session_analyze(Session), 1);
+    EXPECT_EQ(takeString(neverd_ir_llvm(Session, 0)), IR);
+    EXPECT_EQ(takeString(neverd_decompile(Session, 0)), Source);
+    std::array<unsigned char, 2> BytesAtEntry{};
+    EXPECT_EQ(neverd_read_bytes(Session, 0, BytesAtEntry.data(),
+                                BytesAtEntry.size()), 2);
+    EXPECT_EQ(BytesAtEntry[1], 1);
+  }
+}
+
+TEST_F(SessionCAPITest,
+       NativeMobileDebugFailureRetainsDecoderAndAllowsReplacement) {
+  ScopedNativePhaseEnvironment Environment;
+  ASSERT_EQ(Environment.set("0"), 0);
+  const auto Original = write("mobile-before.elf", makeNativeELF(false));
+  const auto Map = write("mobile-selected.map",
+                        "VMA LMA Size Align Out In Symbol\n"
+                        "00400078 00400078 00000006 1 .text\n"
+                        "00400078 00400078 00000006 1 kept_function\n");
+  neverd_session_set_map_path(Session, Map.c_str());
+  ASSERT_EQ(neverd_session_load(Session, Original.c_str()), 1)
+      << takeString(neverd_last_error(Session));
+  const auto Entry = neverd_session_entry_addr(Session);
+  const auto Disassembly = takeString(neverd_disasm_json(Session, Entry, 2));
+  ASSERT_NE(Disassembly.find("eax"), std::string::npos);
+  ASSERT_EQ(takeString(neverd_session_debug_info_kind(Session)), "map");
+  const auto Missing = (Directory / "missing-mobile.map").string();
+  neverd_session_set_map_path(Session, Missing.c_str());
+  ASSERT_EQ(Environment.set("1"), 0);
+  for (bool AArch64 : {false, true}) {
+    SCOPED_TRACE(AArch64);
+    const auto Replacement = write("debug-replacement.macho",
+                                    makeObservedMachO(AArch64, "_replacement"));
+    ObservedMobileImage Observed;
+    testing::internal::CaptureStderr();
+    const int Status = neverd::sdk::loadNativeMobileSession(
+        Session, Replacement.c_str(), ObservedMobileImage::observe, &Observed);
+    const auto Trace = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Status, 0);
+    expectSessionPhasePair(Trace, "failed");
+    EXPECT_EQ(Observed.Calls, 1U);
+    EXPECT_NE(takeString(neverd_last_error(Session)).find("file not found"),
+              std::string::npos);
+    EXPECT_EQ(takeString(neverd_session_file_path(Session)), Original);
+    EXPECT_EQ(takeString(neverd_session_arch_name(Session)), "x86_64");
+    EXPECT_EQ(takeString(neverd_session_debug_info_kind(Session)), "map");
+    EXPECT_EQ(takeString(neverd_session_debug_info_path(Session)), Map);
+    EXPECT_EQ(takeString(neverd_disasm_json(Session, Entry, 2)), Disassembly);
+  }
+  neverd_session_set_map_path(Session, nullptr);
+  const auto Replacement = write("successful-mobile.macho",
+                                  makeObservedMachO(true, "_replacement"));
+  ObservedMobileImage Observed;
+  ASSERT_EQ(neverd::sdk::loadNativeMobileSession(
+                Session, Replacement.c_str(), ObservedMobileImage::observe,
+                &Observed),
+            1)
+      << takeString(neverd_last_error(Session));
+  EXPECT_EQ(Observed.Calls, 1U);
+  EXPECT_EQ(takeString(neverd_session_arch_name(Session)), "aarch64");
+  EXPECT_EQ(takeString(neverd_session_file_path(Session)), Replacement);
+  EXPECT_EQ(takeString(neverd_session_debug_info_kind(Session)), "none");
+  ASSERT_EQ(neverd_func_count(Session), 1);
+  EXPECT_EQ(takeString(neverd_func_name(Session, 0)), "_replacement");
+  EXPECT_NE(takeString(neverd_disasm_json(Session, 0x100000400ULL, 2))
+                .find("w0"), std::string::npos);
+}
 
 TEST_F(SessionCAPITest, NativePhaseTraceRequiresExactEnvironmentValue) {
   ScopedNativePhaseEnvironment Environment;

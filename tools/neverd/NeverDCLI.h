@@ -185,6 +185,7 @@ extern llvm::cl::opt<std::string> MobileBackend;
 extern llvm::cl::opt<std::string> MobileArch;
 extern llvm::cl::opt<std::string> MobileArtifact;
 extern llvm::cl::opt<bool> MobileMetadataOnly;
+extern llvm::cl::opt<bool> MobileInternalIOSWorker;
 extern llvm::cl::opt<unsigned> MobileTimeout;
 extern llvm::cl::opt<unsigned> MobileMaxFiles;
 extern llvm::cl::opt<uint64_t> MobileMaxBytes;

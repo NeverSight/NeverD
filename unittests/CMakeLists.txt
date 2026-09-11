@@ -85,10 +85,11 @@ if(TARGET neverd_shared)
   )
   target_include_directories(NeverDSessionCAPITests PRIVATE
     "${CMAKE_SOURCE_DIR}/include"
+    "${CMAKE_SOURCE_DIR}/lib/sdk/capi"
     ${LLVM_INCLUDE_DIRS})
   if(WIN32)
-    # Windows exports only the public C ABI from the engine. The test uses the
-    # JSON parser to validate mapped pages; no GUI/worker links LLVM here.
+    # The shared engine supplies SDK queries and the private mobile seam. The
+    # test also uses LLVM's JSON parser; no GUI/worker links LLVM here.
     target_link_libraries(NeverDSessionCAPITests PRIVATE LLVMSupport)
   endif()
 endif()

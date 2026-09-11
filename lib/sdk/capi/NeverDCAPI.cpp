@@ -24,11 +24,13 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "NativeMobileSession.h"
 #include "NativePhaseTrace.h"
 #include "SessionImpl.h"
 
 #include "neverd/Common.h"
 #include "neverd/debug/DebugInfoDiscovery.h"
+#include "neverd/loader/MachO/MachOLoader.h"
 #include "neverd/sbf/analysis/SBFAnalysisLimits.h"
 #include "neverd/sbf/analysis/SBFFunctionBody.h"
 #include "neverd/sdk/NeverDPlugin.h"
@@ -183,6 +185,50 @@ void neverd_session_destroy(neverd_session_t Sess) {
   delete S;
 }
 
+namespace {
+int finishSessionLoad(neverd_session_t Sess, Session &S, BinaryImage Image,
+                      std::filesystem::path Path,
+                      std::filesystem::path SanitizeSourcePath) {
+  // Prepare the complete replacement before changing the current image, its
+  // analysis, or the user's edits. An authoritative debug-file failure must
+  // leave a previously loaded session usable.
+  auto Found = loadDebugInfo(Path, Image, S.DbgRequest);
+  if (!Found.Error.empty()) {
+    S.setError(Found.Error);
+    return 0;
+  }
+  if (Found)
+    applyDebugSymbols(Image, *Found.Context);
+
+  // Decoder::init retains its existing state on failure, so it is the final
+  // preparation step before publishing the replacement.
+  if (Image.Arch != Arch::EVM && Image.Arch != Arch::SBF &&
+      !S.Dec.init(Image.Arch, Image.Mode)) {
+    S.setError("failed to init decoder for arch");
+    return 0;
+  }
+
+  // Dispose analysis while the image/debug objects it was built from still
+  // exist. clearPipeline also releases LLVM modules before their context.
+  S.clearPipeline();
+  S.Img = std::move(Image);
+  S.FilePath = std::move(Path);
+  S.SanitizeSourcePath = std::move(SanitizeSourcePath);
+  S.Dbg = std::move(Found.Context);
+  S.DbgKind = Found.Kind;
+  S.DbgPath = std::move(Found.Path);
+  S.Loaded = true;
+  S.Annotations.clear();
+  S.Renames.clear();
+  S.resetFunctionsFromImage();
+
+  neverd_annotations_load(Sess);
+  neverd_renames_load(Sess);
+
+  return 1;
+}
+} // namespace
+
 int neverd_session_load(neverd_session_t Sess, const char *Path) {
   auto *S = toSession(Sess);
   if (!S)
@@ -223,47 +269,54 @@ int neverd_session_load(neverd_session_t Sess, const char *Path) {
     Trace.finish(false);
     return 0;
   }
+  const int Result = finishSessionLoad(Sess, *S, std::move(*ImgOrErr),
+                                       std::move(P),
+                                       std::move(SanitizeSourcePath));
+  Trace.finish(Result != 0);
+  return Result;
+}
 
-  // Prepare the complete replacement before changing the current image, its
-  // analysis, or the user's edits. An authoritative debug-file failure must
-  // leave a previously loaded session usable.
-  auto Found = loadDebugInfo(P, *ImgOrErr, S->DbgRequest);
-  if (!Found.Error.empty()) {
-    S->setError(Found.Error);
+int neverd::sdk::loadNativeMobileSession(
+    neverd_session_t Sess, const char *UTF8Path,
+    NativeMobileMetadataObserver Observer, void *Context) {
+  auto *S = toSession(Sess);
+  if (!S)
+    return 0;
+  NativePhaseTrace Trace(NativePhaseTrace::Phase::SessionLoad);
+  S->clearError();
+  if (!UTF8Path || !*UTF8Path || !Observer) {
+    S->setError(!UTF8Path || !*UTF8Path ? "input path is empty"
+                                     : "mobile metadata observer is missing");
     Trace.finish(false);
     return 0;
   }
-  if (Found)
-    applyDebugSymbols(*ImgOrErr, *Found.Context);
-
-  // Decoder::init retains its existing state on failure, so it is the final
-  // preparation step before publishing the replacement.
-  if (ImgOrErr->Arch != Arch::EVM && ImgOrErr->Arch != Arch::SBF &&
-      !S->Dec.init(ImgOrErr->Arch, ImgOrErr->Mode)) {
-    S->setError("failed to init decoder for arch");
+  auto Path = std::filesystem::u8path(UTF8Path);
+  if (!std::filesystem::exists(Path)) {
+    S->setError(std::string("file not found: ") + UTF8Path);
     Trace.finish(false);
     return 0;
   }
-
-  // Dispose analysis while the image/debug objects it was built from still
-  // exist. clearPipeline also releases LLVM modules before their context.
-  S->clearPipeline();
-  S->Img = std::move(*ImgOrErr);
-  S->FilePath = std::move(P);
-  S->SanitizeSourcePath = std::move(SanitizeSourcePath);
-  S->Dbg = std::move(Found.Context);
-  S->DbgKind = Found.Kind;
-  S->DbgPath = std::move(Found.Path);
-  S->Loaded = true;
-  S->Annotations.clear();
-  S->Renames.clear();
-  S->resetFunctionsFromImage();
-
-  neverd_annotations_load(Sess);
-  neverd_renames_load(Sess);
-
-  Trace.finish(true);
-  return 1;
+  std::error_code Error;
+  auto Canonical = std::filesystem::canonical(Path, Error);
+  if (Error) {
+    S->setError("cannot canonicalize input path: " + Error.message());
+    Trace.finish(false);
+    return 0;
+  }
+  MachOLoader Loader;
+  auto Image = Loader.load(Path);
+  if (!Image) {
+    S->setError("invalid selected Mach-O: " +
+                llvm::toString(Image.takeError()));
+    Trace.finish(false);
+    return 0;
+  }
+  Observer(*Image, Context);
+  normalizeBinaryMetadata(*Image);
+  const int Result = finishSessionLoad(Sess, *S, std::move(*Image),
+                                       std::move(Path), std::move(Canonical));
+  Trace.finish(Result != 0);
+  return Result;
 }
 
 int neverd_session_is_loaded(neverd_session_t Sess) {

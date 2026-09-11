@@ -13,6 +13,29 @@ namespace neverd::mobile::ios {
 using Object = llvm::json::Object;
 using Array = llvm::json::Array;
 using Value = llvm::json::Value;
+// Internal same-executable protocol. Control files are temporary workspace
+// artifacts; published output accounting is carried explicitly without renewal.
+inline constexpr uint64_t WorkerRequestByteLimit = 4096;
+inline constexpr std::string_view WorkerRequestPath =
+    "artifacts/ios-worker-request.json";
+inline constexpr std::string_view WorkerResultPath =
+    "artifacts/ios-worker-result.json";
+struct WorkerRequest {
+  Limits limits;
+  std::string architecture, selected_sha256;
+  unsigned pointer_size = 0;
+  uint64_t max_functions = 0, remaining = 0, output_bytes = 0;
+  uint64_t time_remaining_ms = 0;
+};
+Object workerRequestJSON(const WorkerRequest &request);
+WorkerRequest parseWorkerRequest(const Object &request);
+Object workerResultJSON(const WorkerRequest &request, const Budget &budget,
+                        Object report);
+// Validate the envelope and merge once before inspecting the report under the
+// remaining combined budget. Report failure still aborts parent publication.
+void mergeWorkerBudget(const Object &result, const WorkerRequest &request,
+                        Budget &budget);
+void runIOSWorker(const fs::path &staging);
 inline uint64_t toolTimeout(Budget &budget) {
   budget.check();
   auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -86,7 +109,9 @@ struct SwiftResult {
   Object coverage;
   Object outputs;
 };
+using SwiftBatchExporter = std::function<Value(std::string_view)>;
 SwiftResult swiftSources(const Options &options, const fs::path &staging,
                          const fs::path &binary, const Array &symbols,
-                         unsigned pointer_size, Budget &budget);
+                         unsigned pointer_size, Budget &budget,
+                         const SwiftBatchExporter &exporter = {});
 } // namespace neverd::mobile::ios

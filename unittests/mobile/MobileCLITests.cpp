@@ -6,6 +6,7 @@
 #include "llvm/Support/FileSystem.h"
 
 #include <mutex>
+#include <string_view>
 
 #ifndef NEVERD_MOBILE_CLI
 #error "Define NEVERD_MOBILE_CLI to the built native neverd executable"
@@ -37,6 +38,72 @@ public:
                     << EC.message();
   }
 };
+
+
+// An owned executable with one defined text symbol, not an executable payload
+// for the test host. Both decoder architectures are exercised on every host.
+std::string nativeMachO(bool AArch64) {
+  std::string Bytes(4096, '\0');
+  auto Put = [&](size_t Offset, uint64_t Value, unsigned Width = 4) {
+    for (unsigned I = 0; I < Width; ++I)
+      Bytes.at(Offset + I) = static_cast<char>(Value >> (I * 8));
+  };
+  constexpr uint64_t Base = 0x100000000;
+  constexpr size_t Text = 0x200, Symbols = 0x300, Strings = 0x310;
+  const std::string_view Name = "_single_session";
+  const std::string_view Code =
+      AArch64 ? std::string_view("\xe0\x00\x80\x52\xc0\x03\x5f\xd6", 8)
+              : std::string_view("\xb8\x07\x00\x00\x00\xc3", 6);
+  Put(0, 0xfeedfacf);
+  Put(4, AArch64 ? 0x0100000c : 0x01000007);
+  Put(8, AArch64 ? 0 : 3);
+  Put(12, 2); // MH_EXECUTE
+  Put(16, 3);
+  Put(20, 152 + 24 + 24);
+  const size_t Segment = 32, Section = Segment + 72;
+  Put(Segment, 0x19); // LC_SEGMENT_64
+  Put(Segment + 4, 152);
+  Bytes.replace(Segment + 8, 6, "__TEXT");
+  Put(Segment + 24, Base, 8);
+  Put(Segment + 32, Bytes.size(), 8);
+  Put(Segment + 48, Bytes.size(), 8);
+  Put(Segment + 56, 5);
+  Put(Segment + 60, 5);
+  Put(Segment + 64, 1);
+  Bytes.replace(Section, 6, "__text");
+  Bytes.replace(Section + 16, 6, "__TEXT");
+  Put(Section + 32, Base + Text, 8);
+  Put(Section + 40, Code.size(), 8);
+  Put(Section + 48, Text);
+  Put(Section + 52, AArch64 ? 2 : 0);
+  Put(Section + 64, 0x80000400);
+  const size_t Main = Segment + 152, Symtab = Main + 24;
+  Put(Main, 0x80000028); // LC_MAIN
+  Put(Main + 4, 24);
+  Put(Main + 8, Text, 8);
+  Put(Symtab, 2); // LC_SYMTAB
+  Put(Symtab + 4, 24);
+  Put(Symtab + 8, Symbols);
+  Put(Symtab + 12, 1);
+  Put(Symtab + 16, Strings);
+  Put(Symtab + 20, Name.size() + 2);
+  Put(Symbols, 1);
+  Put(Symbols + 4, 0x0f, 1); // N_SECT | N_EXT
+  Put(Symbols + 5, 1, 1);
+  Put(Symbols + 8, Base + Text, 8);
+  Bytes.replace(Strings + 1, Name.size(), Name);
+  Bytes.replace(Text, Code.size(), Code);
+  return Bytes;
+}
+
+size_t occurrences(std::string_view Text, std::string_view Needle) {
+  size_t Count = 0, Offset = 0;
+  while ((Offset = Text.find(Needle, Offset)) != std::string_view::npos) {
+    ++Count;
+    Offset += Needle.size();
+  }
+  return Count;
+}
 
 class MobileCLITest : public testing::Test {
 protected:
@@ -85,7 +152,8 @@ protected:
         runTool(
             command(Executable, Source, Output, Extra), Log, 30, {}, {},
             {{"NEVERD_PYTHON", pathText(Root / "missing interpreter")},
-             {"NEVERD_JADX", pathText(Root / "missing compatibility tool")}});
+             {"NEVERD_JADX", pathText(Root / "missing compatibility tool")},
+             {"NEVERD_NATIVE_PHASES", "1"}});
       } catch (const Error &E) {
         Rejected = true;
         EXPECT_TRUE(Failure) << E.what();
@@ -221,6 +289,103 @@ TEST_F(MobileCLITest, RemovedPythonOptionIsRejectedByTheNativeArgumentParser) {
   EXPECT_NE(Diagnostic.find("--python"), std::string::npos);
   EXPECT_NE(lowerASCII(Diagnostic).find("unknown"), std::string::npos);
   EXPECT_FALSE(fs::exists(Output));
+  noStaging();
+}
+
+TEST_F(MobileCLITest, RelocatedIOSWorkerKeepsOneSessionAndMetadataAcrossISAs) {
+  const auto Executable = deploy();
+  for (bool AArch64 : {false, true}) {
+    const std::string Architecture = AArch64 ? "arm64" : "x86_64";
+    SCOPED_TRACE(Architecture);
+    const auto Original = nativeMachO(AArch64);
+    const auto Source = Input.parent_path() / (Architecture + " native.macho");
+    writeFile(Source, Original);
+    const auto Output = Root / (Architecture + " recovered");
+    const auto Control = Root / (Architecture + " metadata only");
+    const auto Report =
+        invoke(Executable, Source, Output, false,
+               {"--platform=ios", "--arch=" + Architecture, "--timeout=20"});
+    const auto *Object = Report.getAsObject();
+    ASSERT_NE(Object, nullptr);
+    EXPECT_EQ(Object->getString("platform"), "ios");
+    EXPECT_EQ(Object->getString("architecture"), Architecture);
+    EXPECT_EQ(Object->getBoolean("metadata_only"), false);
+    EXPECT_EQ(Object->getInteger("native_function_count"), 1);
+    const auto *Outputs = Object->getObject("outputs");
+    ASSERT_NE(Outputs, nullptr);
+    EXPECT_EQ(Outputs->getString("native_log"), "logs/native.log");
+    EXPECT_FALSE(Outputs->get("swift_native_log"));
+    const auto *ObjC = Object->getObject("objc_method_recovery");
+    const auto *Swift = Object->getObject("swift_method_recovery");
+    ASSERT_NE(ObjC, nullptr);
+    ASSERT_NE(Swift, nullptr);
+    EXPECT_EQ(ObjC->getInteger("method_count"), 0);
+    EXPECT_EQ(Swift->getInteger("method_count"), 0);
+    const auto Native = readFile(Output / "sources/native.c", 1024 * 1024);
+    EXPECT_FALSE(Native.empty());
+    const auto Log = readFile(Output / "logs/native.log", 1024 * 1024);
+    for (const auto *Phase : {"session_load", "objc_export"}) {
+      const auto Prefix = std::string("[neverd-child-phase] phase=") + Phase;
+      EXPECT_EQ(occurrences(Log, Prefix + " event=begin iteration=0 "), 1U);
+      EXPECT_EQ(occurrences(Log, Prefix + " event=completed iteration=0 "), 1U);
+      EXPECT_EQ(occurrences(Log, Prefix + " event="), 2U);
+    }
+    EXPECT_LT(Log.find("phase=session_load event=completed "),
+              Log.find("phase=objc_export event=begin "));
+    EXPECT_NE(Log.find("phase=pipeline event=completed iteration=0 "),
+              std::string::npos);
+    EXPECT_EQ(Log.find(" event=failed "), std::string::npos);
+    EXPECT_EQ(Log.find(" event=aborted "), std::string::npos);
+    EXPECT_EQ(std::distance(fs::directory_iterator(Output / "logs"),
+                            fs::directory_iterator()),
+              1);
+    EXPECT_FALSE(fs::exists(Output / "artifacts/ios-worker-request.json"));
+    EXPECT_FALSE(fs::exists(Output / "artifacts/ios-worker-result.json"));
+    const auto Published =
+        parseJSON(readFile(Output / "report.json", 1024 * 1024), "report");
+    EXPECT_EQ(Report, Published);
+    const auto Metadata =
+        invoke(Executable, Source, Control, false,
+               {"--platform=ios", "--arch=" + Architecture, "--metadata-only",
+                "--timeout=20"});
+    const auto *ControlObject = Metadata.getAsObject();
+    ASSERT_NE(ControlObject, nullptr);
+    EXPECT_EQ(ControlObject->getBoolean("metadata_only"), true);
+    for (const auto *Key : {"native_function_count", "objc_method_recovery",
+                            "swift_method_recovery"}) {
+      const auto *Value = ControlObject->get(Key);
+      ASSERT_NE(Value, nullptr) << Key;
+      EXPECT_EQ(*Value, llvm::json::Value(nullptr)) << Key;
+    }
+    EXPECT_FALSE(fs::exists(Control / "logs"));
+    EXPECT_EQ(readFile(Source, 1024 * 1024), Original);
+    EXPECT_EQ(readFile(Output / "artifacts/selected.macho", 1024 * 1024),
+              Original);
+    EXPECT_EQ(readFile(Control / "artifacts/selected.macho", 1024 * 1024),
+              Original);
+    for (const auto *Name : {"swift.json", "objc.json"}) {
+      SCOPED_TRACE(Name);
+      const auto WorkerMetadata = parseJSON(
+          readFile(Output / "metadata" / Name, 1024 * 1024), "worker metadata");
+      const auto DirectMetadata = parseJSON(
+          readFile(Control / "metadata" / Name, 1024 * 1024), "direct metadata");
+      EXPECT_EQ(WorkerMetadata, DirectMetadata);
+    }
+    noStaging();
+  }
+}
+
+TEST_F(MobileCLITest, IOSOutputBudgetFailureLeavesNoWorkerOrPartialResult) {
+  const auto Source = Input.parent_path() / "bounded native.macho";
+  const auto Original = nativeMachO(false);
+  writeFile(Source, Original);
+  const auto Output = Root / "failed native publication";
+  // Slice publication fits exactly; metadata and source cannot fit as well.
+  invoke(Binary, Source, Output, true,
+         {"--platform=ios", "--arch=x86_64", "--timeout=20",
+          "--max-bytes=" + std::to_string(Original.size())});
+  EXPECT_FALSE(fs::exists(Output));
+  EXPECT_EQ(readFile(Source, 1024 * 1024), Original);
   noStaging();
 }
 } // namespace

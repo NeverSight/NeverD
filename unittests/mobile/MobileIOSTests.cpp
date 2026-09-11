@@ -1763,7 +1763,7 @@ TEST(MobileIOSNative, RecoveryFailureReportsSlicePhaseAndPreservesCleanup) {
     EXPECT_EQ(entry.path(), options.input);
 }
 
-TEST(MobileIOSNative, RecoveryFailureReportsNativePhaseAfterMetadata) {
+TEST(MobileIOSNative, RecoveryFailureReportsWorkerLaunchBeforeMetadata) {
   TemporaryDirectory directory;
   Options options;
   options.input = directory.path / "input.macho";
@@ -1781,7 +1781,7 @@ TEST(MobileIOSNative, RecoveryFailureReportsNativePhaseAfterMetadata) {
                         "cannot execute backend " + options.executable,
                         "native_export",
                         {"input_staging", "slice_selection", "build_target",
-                         "macho_loading", "objc_metadata", "swift_metadata"});
+                         "worker_preparation"});
   }
   EXPECT_FALSE(fs::exists(options.output));
   for (const auto &entry : fs::directory_iterator(directory.path))
@@ -1862,4 +1862,178 @@ TEST(MobileIOSNative,
   Budget budget;
   EXPECT_THROW(recoverIOS(options, staging, budget), Error);
   EXPECT_EQ(readFile(staging / "artifacts/selected.macho", 16), "keep");
+}
+
+namespace {
+WorkerRequest workerRequestFixture(const Budget &parent) {
+  WorkerRequest request;
+  request.limits = parent.limits;
+  request.architecture = "arm64";
+  request.pointer_size = 8;
+  request.selected_sha256 = std::string(64, 'a');
+  request.max_functions = 37;
+  request.remaining = parent.remaining;
+  request.output_bytes = parent.output_bytes;
+  request.time_remaining_ms = 1234;
+  return request;
+}
+} // namespace
+
+TEST(MobileIOSNative, WorkerRequestPreservesOriginalLimitsAndSpentCounters) {
+  Budget parent({17, 456, 9000000});
+  parent.tick(123);
+  parent.output(789);
+  for (auto architecture : {"arm64", "x86_64", "arm", "i386"}) {
+    auto request = workerRequestFixture(parent);
+    request.architecture = architecture;
+    request.pointer_size = request.architecture == "arm" ||
+                                   request.architecture == "i386"
+                               ? 4
+                               : 8;
+    request.max_functions = std::numeric_limits<size_t>::max();
+    const auto encoded = workerRequestJSON(request);
+    const auto text = jsonText(Value(Object(encoded)));
+    EXPECT_LT(text.size(), WorkerRequestByteLimit);
+    const auto parsed = parseJSON(text, "owned worker request");
+    auto decoded = parseWorkerRequest(object(parsed, "owned worker request"));
+    EXPECT_EQ(decoded.architecture, request.architecture);
+    EXPECT_EQ(decoded.pointer_size, request.pointer_size);
+    EXPECT_EQ(decoded.selected_sha256, std::string(64, 'a'));
+    EXPECT_EQ(decoded.limits.timeout, 17u);
+    EXPECT_EQ(decoded.limits.max_files, 456u);
+    EXPECT_EQ(decoded.limits.max_bytes, 9000000u);
+    EXPECT_EQ(decoded.remaining, 20000000u - 123);
+    EXPECT_EQ(decoded.output_bytes, 789u);
+    EXPECT_EQ(decoded.time_remaining_ms, 1234u);
+    EXPECT_EQ(decoded.max_functions, std::numeric_limits<size_t>::max());
+    if constexpr (sizeof(size_t) > sizeof(unsigned)) {
+      request.max_functions = uint64_t(std::numeric_limits<unsigned>::max()) + 1;
+      EXPECT_EQ(parseWorkerRequest(workerRequestJSON(request)).max_functions,
+                uint64_t(std::numeric_limits<unsigned>::max()) + 1);
+    }
+  }
+}
+
+TEST(MobileIOSNative, WorkerRequestRejectsNoncanonicalAndRenewedBudgets) {
+  Budget parent({17, 456, 9000000});
+  const auto valid = workerRequestJSON(workerRequestFixture(parent));
+  for (auto field : {"max_functions", "remaining", "output_bytes",
+                     "time_remaining_ms"}) {
+    for (auto spelling : {"", "00", "+1", "-1", "1x", "1.0", " 1",
+                           "18446744073709551616"}) {
+      SCOPED_TRACE(std::string(field) + ":" + spelling);
+      Object malformed(valid);
+      malformed[field] = spelling;
+      EXPECT_THROW(parseWorkerRequest(malformed), Error);
+    }
+    for (int kind = 0; kind != 4; ++kind) {
+      SCOPED_TRACE(std::string(field) + ":type:" + std::to_string(kind));
+      Object malformed(valid);
+      if (kind == 0)
+        malformed.erase(field);
+      else if (kind == 1)
+        malformed[field] = 1;
+      else if (kind == 2)
+        malformed[field] = true;
+      else
+        malformed[field] = 1.0;
+      EXPECT_THROW(parseWorkerRequest(malformed), Error);
+    }
+  }
+  for (unsigned mutation = 0; mutation != 13; ++mutation) {
+    SCOPED_TRACE(mutation);
+    Object malformed(valid);
+    switch (mutation) {
+    case 0: malformed["remaining"] = "20000001"; break;
+    case 1: malformed["output_bytes"] = "9000001"; break;
+    case 2: malformed["time_remaining_ms"] = "0"; break;
+    case 3: malformed["time_remaining_ms"] = "17001"; break;
+    case 4: malformed["architecture"] = "auto"; break;
+    case 5: malformed["pointer_size"] = 4; break;
+    case 6: malformed["selected_sha256"] = std::string(64, 'A'); break;
+    case 7: malformed["selected_sha256"] = std::string(63, 'a'); break;
+    case 8: malformed["schema_version"] = 2; break;
+    case 9: malformed["extra"] = "unknown"; break;
+    case 10: (*malformed.getObject("limits"))["timeout"] = "0"; break;
+    case 11: (*malformed.getObject("limits"))["max_bytes"] = "0"; break;
+    case 12: (*malformed.getObject("limits"))["extra"] = "0"; break;
+    }
+    EXPECT_THROW(parseWorkerRequest(malformed), Error);
+  }
+}
+
+TEST(MobileIOSNative, WorkerEnvelopeMergesConsumptionWithoutRenewingDeadline) {
+  Budget parent({17, 456, 9000000});
+  parent.tick(123);
+  parent.output(789);
+  const auto request = workerRequestFixture(parent);
+  Budget child(parent);
+  child.tick(321);
+  child.output(456);
+  auto result = workerResultJSON(request, child, Object{});
+  const auto deadline = parent.deadline;
+  mergeWorkerBudget(result, request, parent);
+  EXPECT_EQ(parent.remaining, 20000000u - 123 - 321);
+  EXPECT_EQ(parent.output_bytes, 789u + 456);
+  EXPECT_EQ(parent.deadline, deadline);
+  EXPECT_EQ(parent.limits.timeout, 17u);
+  EXPECT_EQ(parent.limits.max_files, 456u);
+  EXPECT_EQ(parent.limits.max_bytes, 9000000u);
+  EXPECT_THROW(mergeWorkerBudget(result, request, parent), Error);
+  EXPECT_EQ(parent.remaining, 20000000u - 123 - 321);
+  EXPECT_EQ(parent.output_bytes, 789u + 456);
+}
+
+TEST(MobileIOSNative, WorkerEnvelopeRejectsWrongIdentityAndCounterReversal) {
+  Budget initial({17, 456, 9000000});
+  initial.tick(123);
+  initial.output(789);
+  const auto request = workerRequestFixture(initial);
+  Budget child(initial);
+  child.tick(321);
+  child.output(456);
+  const auto valid = workerResultJSON(request, child, Object{});
+  for (unsigned mutation = 0; mutation != 12; ++mutation) {
+    SCOPED_TRACE(mutation);
+    Budget parent(initial);
+    Object result(valid);
+    switch (mutation) {
+    case 0: result["architecture"] = "x86_64"; break;
+    case 1: result["pointer_size"] = 4; break;
+    case 2: result["selected_sha256"] = std::string(64, 'b'); break;
+    case 3: result["remaining"] = std::to_string(request.remaining + 1); break;
+    case 4: result["output_bytes"] = "788"; break;
+    case 5: result["output_bytes"] = "9000001"; break;
+    case 6: result["remaining"] = "01"; break;
+    case 7: result["status"] = "failed"; break;
+    case 8: result.erase("report"); break;
+    case 9: result["report"] = Array{}; break;
+    case 10: result["schema_version"] = 2; break;
+    case 11: result["extra"] = "unknown"; break;
+    }
+    EXPECT_THROW(mergeWorkerBudget(result, request, parent), Error);
+    EXPECT_EQ(parent.remaining, initial.remaining);
+    EXPECT_EQ(parent.output_bytes, initial.output_bytes);
+    EXPECT_EQ(parent.deadline, initial.deadline);
+  }
+  for (unsigned mutation = 0; mutation != 6; ++mutation) {
+    SCOPED_TRACE(mutation);
+    Budget parent(initial);
+    switch (mutation) {
+    case 0: --parent.remaining; break;
+    case 1: ++parent.output_bytes; break;
+    case 2: ++parent.limits.timeout; break;
+    case 3: ++parent.limits.max_files; break;
+    case 4: ++parent.limits.max_bytes; break;
+    case 5:
+      parent.deadline = std::chrono::steady_clock::now() -
+                        std::chrono::seconds(1);
+      break;
+    }
+    const auto remaining = parent.remaining;
+    const auto output = parent.output_bytes;
+    EXPECT_THROW(mergeWorkerBudget(valid, request, parent), Error);
+    EXPECT_EQ(parent.remaining, remaining);
+    EXPECT_EQ(parent.output_bytes, output);
+  }
 }

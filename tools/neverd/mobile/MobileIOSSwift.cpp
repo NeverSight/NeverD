@@ -328,7 +328,8 @@ Object swiftCoverage(const Object &inventory, const Object *batch,
 }
 SwiftResult swiftSources(const Options &options, const fs::path &staging,
                          const fs::path &binary, const Array &symbols,
-                         unsigned ptr, Budget &budget) {
+                         unsigned ptr, Budget &budget,
+                         const SwiftBatchExporter &exporter) {
   if (symbols.size() > budget.limits.max_files)
     throw Error("Swift symbol inventory exceeds file limit");
   Object outputs{{"swift_signatures", "metadata/swift-signatures.json"},
@@ -357,22 +358,27 @@ SwiftResult swiftSources(const Options &options, const fs::path &staging,
   auto batch_path = staging / "artifacts/swift-recovery.json";
   if (!array(inventory, "methods").empty()) {
     budget.check();
-    std::vector<std::string> argv{options.executable,
-                                  "export",
-                                  pathText(binary),
-                                  "--format=swift-methods",
-                                  "--source-signatures=" +
-                                      pathText(signature_path),
-                                  "-o",
-                                  pathText(batch_path)};
-    if (options.max_functions)
-      argv.push_back("--max-func=" + std::to_string(options.max_functions));
-    runTool(argv, staging / "logs/swift-native.log", toolTimeout(budget),
-            staging, budget.limits);
-    batch_value = parseJSON(readFile(batch_path, budget.limits.max_bytes),
-                            "Swift backend source report");
+    if (exporter) {
+      batch_value = exporter(signature_text);
+      outputs["swift_native_log"] = "logs/native.log";
+    } else {
+      std::vector<std::string> argv{options.executable,
+                                    "export",
+                                    pathText(binary),
+                                    "--format=swift-methods",
+                                    "--source-signatures=" +
+                                        pathText(signature_path),
+                                    "-o",
+                                    pathText(batch_path)};
+      if (options.max_functions)
+        argv.push_back("--max-func=" + std::to_string(options.max_functions));
+      runTool(argv, staging / "logs/swift-native.log", toolTimeout(budget),
+              staging, budget.limits);
+      batch_value = parseJSON(readFile(batch_path, budget.limits.max_bytes),
+                              "Swift backend source report");
+      outputs["swift_native_log"] = "logs/swift-native.log";
+    }
     batch = &object(*batch_value, "Swift backend source report");
-    outputs["swift_native_log"] = "logs/swift-native.log";
   }
   auto coverage = swiftCoverage(inventory, batch, workflow);
   if (batch) {
@@ -382,7 +388,8 @@ SwiftResult swiftSources(const Options &options, const fs::path &staging,
       writeFile(staging / "sources/swift.swift", source);
       outputs["swift_source"] = "sources/swift.swift";
     }
-    fs::remove(batch_path);
+    if (!exporter)
+      fs::remove(batch_path);
   }
   auto text = jsonText(Value(Object(coverage)));
   budget.output(text.size());
