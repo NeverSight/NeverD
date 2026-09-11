@@ -733,6 +733,57 @@ class Dex {
       }
     }
   }
+  bool annotationMetadata(const AnnotationItem &entry, Class &cls) {
+    const auto &[name, elements] = entry.value;
+    bool retention = name == "Ljava/lang/annotation/Retention;";
+    bool target = name == "Ljava/lang/annotation/Target;";
+    bool documented = name == "Ljava/lang/annotation/Documented;";
+    bool inherited = name == "Ljava/lang/annotation/Inherited;";
+    if (!retention && !target && !documented && !inherited)
+      return false;
+    if (entry.visibility != 1)
+      bad("annotation metadata " + name + " on " + cls.name +
+          " requires runtime visibility");
+    auto &metadata = cls.annotation_metadata;
+    if (documented || inherited) {
+      if (!elements.empty())
+        bad("annotation metadata " + name + " must have no elements");
+      bool &present = documented ? metadata.documented : metadata.inherited;
+      if (present)
+        bad("duplicate annotation metadata " + name);
+      present = true;
+      return true;
+    }
+    auto value = elements.find("value");
+    if (elements.size() != 1 || value == elements.end())
+      bad("annotation metadata " + name + " requires exactly value");
+    auto enumValue = [&](const Encoded &encoded, const std::string &owner) {
+      budget.tick();
+      if (encoded.kind != 0x1b)
+        bad("annotation metadata " + name + " requires an enum value");
+      const auto ref = fieldRef(std::get<std::string>(encoded.value));
+      if (ref.owner != owner || ref.type != owner)
+        bad("annotation metadata " + name + " has an invalid enum identity");
+      return ref.name;
+    };
+    if (retention) {
+      if (metadata.retention)
+        bad("duplicate Retention annotation");
+      metadata.retention = enumValue(
+          value->second, "Ljava/lang/annotation/RetentionPolicy;");
+    } else {
+      if (metadata.targets)
+        bad("duplicate Target annotation");
+      if (value->second.kind != 0x1c)
+        bad("Target annotation requires an enum array");
+      std::vector<std::string> targets;
+      for (const auto &item : value->second.array)
+        targets.push_back(
+            enumValue(item, "Ljava/lang/annotation/ElementType;"));
+      metadata.targets = std::move(targets);
+    }
+    return true;
+  }
   void annotations(Class &cls, uint32_t offset) {
     if (!offset)
       return;
@@ -822,6 +873,7 @@ class Dex {
     }
     std::map<std::string, std::map<std::string, Encoded>> values;
     for (const auto &entry : directory.classes) {
+      budget.tick();
       const auto &[name, elements] = entry.value;
       if (name == "Ldalvik/annotation/Signature;" ||
           name == "Ljava/lang/Deprecated;") {
@@ -829,11 +881,19 @@ class Dex {
                           cls.deprecated, "class " + cls.name);
         continue;
       }
+      if (annotationMetadata(entry, cls))
+        continue;
       if (name != "Ldalvik/annotation/EnclosingClass;" &&
           name != "Ldalvik/annotation/EnclosingMethod;" &&
           name != "Ldalvik/annotation/InnerClass;" &&
-          name != "Ldalvik/annotation/MemberClasses;")
-        bad("unsupported annotation " + name + " on class " + cls.name);
+          name != "Ldalvik/annotation/MemberClasses;") {
+        if (entry.visibility == 2 || !elements.empty())
+          bad("unsupported annotation " + name + " on class " + cls.name);
+        // The complete input must later prove an exact marker declaration,
+        // its retention and its class target. Parsing is not acceptance.
+        cls.marker_annotations.push_back({name, entry.visibility});
+        continue;
+      }
       if (entry.visibility != 2)
         bad("structural annotation " + name + " on class " + cls.name +
             " requires system visibility");

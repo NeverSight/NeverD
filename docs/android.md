@@ -35,6 +35,12 @@ The built-in C++ engine preserves and validates supported class, field, and meth
 
 The empty, runtime-visible Java 8 `@java.lang.Deprecated` marker is preserved on classes, fields, methods and constructors. Parameter annotations, annotated static initializers, other visibility levels and element values such as `since` or `forRemoval` are rejected. CI separately compares the classfile `Deprecated` attribute and runtime annotations after recompilation, including unannotated controls and generated helpers; helpers remain outside the original method count.
 
+The built-in engine also preserves runtime-visible `@Retention`, `@Target`, `@Documented` and `@Inherited` on supported annotation declarations, emitting a real `@interface`. This subset has no fields, methods, type parameters or nested declarations. It permits top-level annotations and static member annotations with proven names, access and enclosing identity; local or anonymous scopes are rejected.
+
+Empty marker applications are supported on class, interface and annotation declarations only when the same analyzed class set contains an accessible, matching marker definition. Its Retention and Target must permit the actual application. A `SOURCE` declaration can be reconstructed, but a persisted application is rejected; `CLASS` or absent Retention requires DEX build visibility (`0`), and `RUNTIME` requires runtime visibility (`1`). Missing Retention remains distinct from explicit `CLASS`; absent Target remains distinct from an empty array, and target array order is preserved. Target values follow Java 8; newer values such as `MODULE` and `RECORD_COMPONENT` are rejected. `@Inherited` is preserved without copying inherited applications onto subclass declarations.
+
+Annotation element declarations and defaults, nonempty custom applications, custom markers on fields/methods/parameters, external annotation definitions, repeatable annotation containers and `kotlin.Metadata` remain unsupported. A marker definition is emitted as a class declaration without element or helper methods, and does not increase the recovered-method count.
+
 CI uses owned Java 8 fixtures through D8 and NeverD, recompiles all generated Java, and compares complete `Signature` metadata, reflection results, and behavior. These fixture checks do not qualify real applications for complete recovery.
 
 ### Linux and macOS

@@ -910,6 +910,349 @@ class DeprecatedWorkflowTests(unittest.TestCase):
         self.assertTrue((self.root / "deprecated-preparation-failure.json").is_file())
 
 
+def marker_classes(*, rebuilt=False):
+    """Mock pipeline facts only; the real oracle reads javac output from disk."""
+    classes = {}
+    for name in runner.MARKER_VISIBLE:
+        owner = "Lfixture/" + name + ";"
+        annotation = name in runner.MARKER_DEFINITIONS
+        access, superclass, interfaces, fields, members = runner.MARKER_CONCRETE.get(
+            name, (0x2601 if annotation else 0x601, "Ljava/lang/Object;",
+                   ["Ljava/lang/annotation/Annotation;"] if annotation else [], [], []))
+        field_rows = {owner + "->" + field + ":" + descriptor: {
+            "name": field, "descriptor": descriptor, "access": flags, "constant_value": None,
+            "signature": None, **runner.deprecated_facts()} for field, descriptor, flags in fields}
+        method_rows = {}
+        for member in members:
+            method, tail = member.split("(", 1)
+            method_rows[owner + "->" + member] = {"name": method, "prototype": "(" + tail,
+                "access": 1, "code": True, "signature": None, **runner.deprecated_facts()}
+        if rebuilt and name in runner.MARKER_CONCRETE:
+            prototype = runner.class_identity.THROW_HELPER_PROTOTYPE
+            method_rows[owner + "->__neverdThrow" + prototype] = {
+                "name": "__neverdThrow", "prototype": prototype, "access": 10, "code": True,
+                "signature": runner.class_identity.THROW_HELPER_SIGNATURE, **runner.deprecated_facts()}
+        classes[owner] = {"name": owner, "access": access, "superclass": superclass,
+            "interfaces": list(interfaces), "fields": field_rows, "methods": method_rows,
+            "enclosing_method": None, "inner_class": None, "signature": None,
+            "source_file": name + ".java", "major": 52, "minor": 0,
+            "path": owner[1:-1] + ".class", "size": 4, "sha256": "d" * 64,
+            "deprecated_attribute": False,
+            "runtime_visible_annotations": copy.deepcopy(runner.MARKER_VISIBLE[name]),
+            "runtime_invisible_annotations": copy.deepcopy(runner.MARKER_INVISIBLE.get(name, []))}
+    return classes
+
+
+class MarkerOracleTests(unittest.TestCase):
+    def test_fixed_counts_roles_default_distinctions_and_independent_numeric_values(self):
+        for rebuilt in (False, True):
+            classes = marker_classes(rebuilt=rebuilt)
+            result = runner.validate_marker_compiler(classes, rebuilt=rebuilt)
+            self.assertEqual(result["class_count"], 15)
+            self.assertEqual(result["annotation_declaration_count"], 9)
+            self.assertEqual(result["original_method_count"], 10)
+            self.assertEqual(result["generated_helper_count"], 5 if rebuilt else 0)
+            self.assertEqual(sum(len(row["methods"]) for row in classes.values()), 15 if rebuilt else 10)
+        self.assertEqual(len(runner.marker_helpers()), 5)
+        self.assertEqual(len(runner.MARKER_REFLECTION), 39)
+        self.assertEqual(len(runner.expected_keys("marker")), 81)
+        self.assertEqual(len(runner.expected_keys("deprecated")), 92)
+        self.assertIn("retention=absent;target=absent", runner.MARKER_REFLECTION["MarkerDefault.definition"])
+        self.assertIn("retention=CLASS;target=[TYPE_USE]", runner.MARKER_REFLECTION["MarkerClass.definition"])
+        self.assertIn("retention=absent;target=[]", runner.MARKER_REFLECTION["MarkerEmptyTarget.definition"])
+        self.assertIn("target=[TYPE,ANNOTATION_TYPE]", runner.MARKER_REFLECTION["MarkerRuntime.definition"])
+        self.assertEqual(runner.MARKER_REFLECTION["MarkerChild.declared"], "types=")
+        self.assertEqual(runner.MARKER_REFLECTION["MarkerChild.present"], "types=fixture.MarkerInherited")
+        self.assertEqual(runner.MARKER_REFLECTION["MarkerImplementer.present"], "types=")
+        self.assertEqual(runner.MARKER_REFLECTION["MarkerSourceUse.declared"], "types=")
+        values = runner.marker_oracle()
+        self.assertEqual(values["base-seed:0"], -97)
+        self.assertEqual(values["base-adjust:5"], 201)
+        self.assertEqual(values["child-shifted:0"], -187)
+        self.assertEqual(values["child-shifted:5"], 213)
+        self.assertEqual(values["plain:4"], 17)
+        self.assertEqual(values["implements:1"], 10)
+        self.assertEqual(values["source-use:2"], -7)
+        runner.compare_marker_behavior(values, dict(values))
+
+    def test_matching_wrong_original_and_rebuilt_metadata_both_fail_fixed_contract(self):
+        def change(classes, kind):
+            owner = "Lfixture/MarkerDefault;"
+            if kind == "explicit-class-default":
+                classes[owner]["runtime_visible_annotations"] = runner.marker_meta(retention="CLASS")
+            elif kind == "explicit-empty-default":
+                classes[owner]["runtime_visible_annotations"] = runner.marker_meta(targets=[])
+            elif kind == "missing-empty-target":
+                classes["Lfixture/MarkerEmptyTarget;"]["runtime_visible_annotations"] = []
+            elif kind == "sorted-target":
+                rows = classes["Lfixture/MarkerRuntime;"]["runtime_visible_annotations"]
+                target = next(row for row in rows if row["type"] == "Ljava/lang/annotation/Target;")
+                target["elements"][0]["values"].reverse()
+            elif kind == "inherited-on-plain":
+                classes["Lfixture/MarkerPlain;"]["runtime_visible_annotations"] = runner.marker_uses("MarkerInherited")
+            elif kind == "meta-inherited-on-plain":
+                classes["Lfixture/MarkerPlain;"]["runtime_visible_annotations"] = runner.marker_meta(inherited=True)
+            elif kind == "source-application":
+                classes["Lfixture/MarkerSourceUse;"]["runtime_invisible_annotations"] = runner.marker_uses("MarkerSource")
+            elif kind == "runtime-as-class":
+                row = classes["Lfixture/MarkerBase;"]
+                marker = next(value for value in row["runtime_visible_annotations"] if value["type"] == "Lfixture/MarkerRuntime;")
+                row["runtime_visible_annotations"].remove(marker)
+                row["runtime_invisible_annotations"].append(marker)
+            elif kind == "type-use-becomes-type":
+                classes["Lfixture/MarkerClass;"]["runtime_visible_annotations"] = runner.marker_meta(retention="CLASS", targets=["TYPE"])
+            elif kind == "missing-type-use-annotation-role":
+                rows = classes["Lfixture/MarkerTagged;"]["runtime_invisible_annotations"]
+                rows[:] = [row for row in rows if row["type"] != "Lfixture/MarkerClass;"]
+            elif kind == "nonempty-marker":
+                classes["Lfixture/MarkerTagged;"]["runtime_visible_annotations"][0]["elements"] = [{"name": "value", "tag": "s", "value": "x"}]
+            else:
+                classes["Lfixture/MarkerPlain;"]["runtime_visible_annotations"] = [{"type": "Lfixture/External;", "elements": []}]
+        kinds = ("explicit-class-default", "explicit-empty-default", "missing-empty-target", "sorted-target",
+                 "inherited-on-plain", "meta-inherited-on-plain", "source-application", "runtime-as-class",
+                 "type-use-becomes-type", "missing-type-use-annotation-role", "nonempty-marker", "external")
+        for kind in kinds:
+            original, rebuilt = marker_classes(), marker_classes(rebuilt=True)
+            change(original, kind)
+            change(rebuilt, kind)
+            for is_rebuilt, classes in ((False, original), (True, rebuilt)):
+                with self.subTest(kind=kind, rebuilt=is_rebuilt), self.assertRaisesRegex(RuntimeError, "annotation contract"):
+                    runner.validate_marker_compiler(classes, rebuilt=is_rebuilt)
+
+    def test_exact_member_and_helper_inventory_rejects_shape_flags_and_boolean_aliases(self):
+        for kind in ("missing-body", "invented-member", "annotation-helper", "interface-helper", "missing-helper",
+                     "helper-marker", "helper-signature", "helper-access", "code-integer", "body-removed"):
+            classes = marker_classes(rebuilt=True)
+            plain = classes["Lfixture/MarkerPlain;"]
+            body_key = "Lfixture/MarkerPlain;->value(I)I"
+            helper_key = "Lfixture/MarkerPlain;->__neverdThrow" + runner.class_identity.THROW_HELPER_PROTOTYPE
+            if kind == "missing-body": del plain["methods"][body_key]
+            elif kind == "invented-member":
+                classes["Lfixture/MarkerDefault;"]["methods"]["Lfixture/MarkerDefault;->value()I"] = {
+                    "name": "value", "prototype": "()I", "access": 0x401, "code": False,
+                    "signature": None, **runner.deprecated_facts()}
+            elif kind in ("annotation-helper", "interface-helper"):
+                owner = "Lfixture/MarkerDefault;" if kind == "annotation-helper" else "Lfixture/MarkerInterface;"
+                classes[owner]["methods"][owner + "->__neverdThrow" + runner.class_identity.THROW_HELPER_PROTOTYPE] = copy.deepcopy(plain["methods"][helper_key])
+            elif kind == "missing-helper": del plain["methods"][helper_key]
+            elif kind == "helper-marker": plain["methods"][helper_key]["runtime_visible_annotations"] = runner.marker_uses("MarkerRuntime")
+            elif kind == "helper-signature": plain["methods"][helper_key]["signature"] = None
+            elif kind == "helper-access": plain["methods"][helper_key]["access"] = 9
+            elif kind == "code-integer": plain["methods"][body_key]["code"] = 1
+            else: plain["methods"][body_key]["code"] = False
+            with self.subTest(kind=kind), self.assertRaisesRegex(RuntimeError, "member|Code"):
+                runner.validate_marker_compiler(classes, rebuilt=True)
+
+    def test_reflection_and_behavior_equal_wrong_pairs_are_independently_rejected(self):
+        for key, wrong in (("base-adjust:5", 200), ("child-shifted:0", -188),
+                           ("reflection:MarkerChild.present", 0), ("implements:1", True)):
+            values = runner.marker_oracle()
+            values[key] = wrong
+            with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, "original independent"):
+                runner.compare_marker_behavior(values, dict(values))
+        values = runner.marker_oracle()
+        del values["source-use:5"]
+        with self.assertRaisesRegex(RuntimeError, "original independent"):
+            runner.compare_marker_behavior(values, dict(values))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reflection.tsv"
+            lines = [key + "\t" + value for key, value in sorted(runner.MARKER_REFLECTION.items())]
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            self.assertEqual(runner.marker_reflection(path), runner.MARKER_REFLECTION)
+            changes = {
+                "MarkerDefault.definition": runner.MARKER_REFLECTION["MarkerDefault.definition"].replace("retention=absent", "retention=CLASS"),
+                "MarkerDefault.definition-empty": runner.MARKER_REFLECTION["MarkerDefault.definition"].replace("target=absent", "target=[]"),
+                "MarkerRuntime.definition": runner.MARKER_REFLECTION["MarkerRuntime.definition"].replace("TYPE,ANNOTATION_TYPE", "ANNOTATION_TYPE,TYPE"),
+                "MarkerPlain.present": "types=fixture.MarkerInherited",
+                "MarkerImplementer.present": "types=fixture.MarkerInherited",
+            }
+            for key, value in changes.items():
+                actual_key = key.removesuffix("-empty")
+                wrong = dict(runner.MARKER_REFLECTION)
+                wrong[actual_key] = value
+                # Identical original and generated files still fail the fixed contract.
+                for side in ("original", "rebuilt"):
+                    path.write_text("".join(name + "\t" + text + "\n" for name, text in sorted(wrong.items())), encoding="utf-8")
+                    with self.subTest(key=key, side=side), self.assertRaisesRegex(RuntimeError, "independent declaration"):
+                        runner.marker_reflection(path)
+            for invalid in (lines[:-1], lines + [lines[0]], lines + ["unknown\ttypes="]):
+                path.write_text("\n".join(invalid) + "\n", encoding="utf-8")
+                with self.subTest(invalid=invalid), self.assertRaises(RuntimeError):
+                    runner.marker_reflection(path)
+
+
+class MarkerWorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.verify = runner.Verify(self.root, self.root / "JDK", self.root / "d8", 30)
+        self.original, self.rebuilt = marker_classes(), marker_classes(rebuilt=True)
+        self.baseline, self.actual = runner.marker_oracle(), runner.marker_oracle()
+        self.original_reflection, self.reflection = dict(runner.MARKER_REFLECTION), dict(runner.MARKER_REFLECTION)
+        self.helpers = runner.marker_helpers()
+        self.coverage_mutation = None
+        self.compiles, self.commands, self.dexes, self.inventory_modes = [], [], [], []
+
+    def compile(self, sources, output, *, classpath=None):
+        output.mkdir(parents=True)
+        self.compiles.append((list(map(Path, sources)), output, classpath))
+        for facts in self.original.values():
+            path = output / facts["path"]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"mock")
+
+    def dex(self, paths, output, classpath):
+        self.dexes.append((list(paths), output, classpath))
+        output.mkdir(parents=True)
+        path = output / "classes.dex"
+        path.write_bytes(b"mock owned marker input")
+        return path
+
+    def run_command(self, argv, label):
+        self.commands.append((list(map(str, argv)), label))
+        if label == "marker-dex":
+            output = Path(argv[argv.index("-o") + 1])
+            sources = ["sources/" + owner[1:-1] + ".java" for owner in sorted(self.original)]
+            for source in sources:
+                path = output / source
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("package fixture; class " + path.stem + " {}\n", encoding="utf-8")
+            rows = [{"identity": identity, "class": owner, "name": method["name"], "prototype": method["prototype"],
+                     "input": "classes.dex", "status": "recovered", "instruction_count": 2, "deprecated": False}
+                    for owner, facts in self.original.items() for identity, method in facts["methods"].items()]
+            coverage = {"schema_version": 1, "status": "recovered", "class_count": 15, "method_count": 10,
+                "recovered_method_count": 10, "declaration_only_method_count": 0, "unrecovered_method_count": 0,
+                "methods": rows, "generated_source_helpers": self.helpers}
+            if self.coverage_mutation is not None:
+                self.coverage_mutation(coverage)
+            report = {"status": "success", "platform": "android", "backend": {"name": "neverd", "version": "1", "execution": "builtin"},
+                "java_sources": sources, "java_source_count": 15, "dex_count": 1, "smali_count": 0,
+                "android_method_recovery": coverage}
+            (output / "metadata").mkdir()
+            (output / "report.json").write_text(json.dumps(report))
+            (output / "metadata/android-methods.json").write_text(json.dumps(coverage))
+        if label in ("original-marker", "marker-dex-execution"):
+            reflection = self.original_reflection if label == "original-marker" else self.reflection
+            Path(argv[-1]).write_text("".join(key + "\t" + value + "\n" for key, value in sorted(reflection.items())), encoding="utf-8")
+            values = self.baseline if label == "original-marker" else self.actual
+            return "\n".join(key + "=" + str(value) for key, value in sorted(values.items()))
+        return ""
+
+    def execute(self):
+        def inventory(directory, *, owned_markers):
+            self.inventory_modes.append((directory, owned_markers))
+            return copy.deepcopy(self.original if directory == self.root / "original-marker/classes" else self.rebuilt)
+        with patch.object(self.verify, "run", side_effect=self.run_command), patch.object(self.verify, "compile_local", side_effect=self.compile), \
+                patch.object(self.verify, "dex", side_effect=self.dex), \
+                patch.object(runner.class_identity, "compiler_classes", side_effect=inventory):
+            return self.verify.marker_cases(self.root / "neverd")
+
+    def test_full_case_binds_exact_sources_denominator_and_isolated_compiler_modes(self):
+        passed, failures = self.execute()
+        self.assertEqual(failures, [])
+        self.assertEqual(len(passed), 1)
+        result = passed[0]
+        self.assertEqual(result["case"], "marker-dex")
+        self.assertEqual(result["class_count"], 15)
+        self.assertEqual(result["method_count"], 10)
+        self.assertEqual(result["matched_results"], 81)
+        self.assertEqual(result["reflection_declaration_count"], 39)
+        self.assertEqual(result["compiler_identity"]["annotation_declaration_count"], 9)
+        self.assertEqual(result["compiler_identity"]["generated_helper_count"], 5)
+        self.assertEqual(self.inventory_modes, [(self.root / "original-marker/classes", True), (self.root / "marker-dex/compiled", True)])
+        self.assertEqual(len(self.dexes), 1)
+        self.assertEqual(self.dexes[0][0], [self.root / "original-marker/classes" / (owner[1:-1] + ".class") for owner in sorted(self.original)])
+        self.assertEqual(self.dexes[0][2], self.root / "original-marker/classes")
+        self.assertEqual(len(self.compiles), 4)
+        self.assertEqual(len(self.compiles[0][0]), 15)
+        self.assertIsNone(self.compiles[0][2])
+        compiled = self.root / "marker-dex/compiled"
+        invocation = next(row for row in self.compiles if row[1] == compiled)
+        self.assertIsNone(invocation[2])
+        self.assertEqual(invocation[0], [self.root / "marker-dex/recovered/sources" / (owner[1:-1] + ".java") for owner in sorted(self.original)])
+        for label, directory in (("original-marker", self.root / "original-marker"), ("marker-dex-execution", self.root / "marker-dex")):
+            classes = directory / ("classes" if label == "original-marker" else "compiled")
+            harness = next(row for row in self.compiles if row[1] == directory / "harness")
+            self.assertEqual(harness[0], [self.root / "original-marker/harness-source/MarkerHarness.java"])
+            self.assertEqual(harness[2], classes)
+            argv = next(argv for argv, name in self.commands if name == label)
+            self.assertEqual(argv[argv.index("-cp") + 1], os.pathsep.join(map(str, (directory / "harness", classes))))
+        for name in ("input-inventory.json", "generated-source-hashes.json", "rebuilt-class-inventory.json",
+                     "marker-identity.json", "reflection.tsv", "reflection.json", "execution.json"):
+            self.assertTrue((self.root / "marker-dex" / name).is_file())
+        self.assertTrue((self.root / "original-marker/marker-identity.json").is_file())
+
+    def test_matching_wrong_default_metadata_fails_before_d8(self):
+        for classes in (self.original, self.rebuilt):
+            classes["Lfixture/MarkerDefault;"]["runtime_visible_annotations"] = runner.marker_meta(retention="CLASS")
+        passed, failures = self.execute()
+        self.assertEqual(passed, [])
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]["stage"], "original-preparation")
+        self.assertEqual(self.dexes, [])
+        self.assertFalse(any(label == "original-marker" for _, label in self.commands))
+
+    def test_rebuilt_target_loss_fails_before_reflection_execution(self):
+        self.rebuilt["Lfixture/MarkerEmptyTarget;"]["runtime_visible_annotations"] = []
+        passed, failures = self.execute()
+        self.assertEqual(passed, [])
+        self.assertEqual(len(failures), 1)
+        self.assertIn("annotation contract", failures[0]["error"])
+        self.assertFalse(any(label == "marker-dex-execution" for _, label in self.commands))
+        self.assertTrue((self.root / "marker-dex/rebuilt-class-inventory.json").is_file())
+
+    def test_matching_wrong_behavior_is_rejected_at_original_preparation(self):
+        self.baseline["child-shifted:5"] = self.actual["child-shifted:5"] = 212
+        passed, failures = self.execute()
+        self.assertEqual(passed, [])
+        self.assertEqual(len(failures), 1)
+        self.assertIn("original independent behavior", failures[0]["error"])
+        self.assertEqual(self.dexes, [])
+
+    def test_generated_numeric_failure_remains_failure_after_declaration_acceptance(self):
+        self.actual["plain:4"] = 18
+        passed, failures = self.execute()
+        self.assertEqual(passed, [])
+        self.assertEqual(len(failures), 1)
+        self.assertIn("rebuilt independent behavior", failures[0]["error"])
+        self.assertTrue((self.root / "marker-dex/marker-identity.json").is_file())
+        self.assertTrue((self.root / "marker-dex/execution.json").is_file())
+
+    def test_matching_wrong_inheritance_reflection_fails_original_contract(self):
+        self.original_reflection["MarkerPlain.present"] = self.reflection["MarkerPlain.present"] = "types=fixture.MarkerInherited"
+        passed, failures = self.execute()
+        self.assertEqual(passed, [])
+        self.assertEqual(len(failures), 1)
+        self.assertIn("independent declaration contract", failures[0]["error"])
+        self.assertEqual(self.dexes, [])
+
+    def test_missing_native_body_cannot_reduce_the_original_method_denominator(self):
+        def missing(coverage):
+            coverage["methods"].pop()
+            coverage["method_count"] -= 1
+            coverage["recovered_method_count"] -= 1
+        self.coverage_mutation = missing
+        passed, failures = self.execute()
+        self.assertEqual(passed, [])
+        self.assertEqual(len(failures), 1)
+        self.assertFalse(any(output == self.root / "marker-dex/compiled" for _, output, _ in self.compiles))
+
+    def test_zero_helpers_cannot_hide_generated_declarations(self):
+        self.helpers.clear()
+        passed, failures = self.execute()
+        self.assertEqual(passed, [])
+        self.assertEqual(len(failures), 1)
+        self.assertIn("generated helper inventory", failures[0]["error"])
+
+    def test_original_preparation_exception_records_the_required_case(self):
+        with patch.object(self.verify, "run", side_effect=RuntimeError("compiler unavailable")):
+            passed, failures = self.verify.marker_cases(self.root / "neverd")
+        self.assertEqual(passed, [])
+        self.assertEqual([row["case"] for row in failures], ["marker-dex"])
+        self.assertTrue((self.root / "marker-preparation-failure.json").is_file())
+
+
 class LocalCompilerIsolationTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

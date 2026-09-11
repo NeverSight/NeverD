@@ -580,6 +580,43 @@ public:
   void requireRuntimePackage(const Class &Context) const {
     requireRuntimePackage(JavaScope{Context});
   }
+  void requireAnnotationEnumQualifier(const Class &Context) const {
+    // An enum constant is an expression name. A field named java can shadow
+    // its package qualifier even when type-name lookup is unambiguous.
+    Strings Visited;
+    std::vector<std::string> Pending;
+    const Class *Scope = &Context;
+    while (Scope) {
+      budget.tick();
+      Pending.push_back(Scope->name);
+      Scope = Scope->enclosing ? &classes.at(*Scope->enclosing) : nullptr;
+    }
+    while (!Pending.empty()) {
+      budget.tick();
+      auto Name = std::move(Pending.back());
+      Pending.pop_back();
+      if (!Visited.insert(Name).second)
+        continue;
+      auto I = classes.find(Name);
+      if (I == classes.end()) {
+        if (Name != "Ljava/lang/Object;" &&
+            Name != "Ljava/lang/annotation/Annotation;")
+          javaError("unresolved inherited annotation enum value scope: " +
+                    Name);
+        continue;
+      }
+      for (const auto &Field : I->second.fields) {
+        budget.tick();
+        if (Field.reference.name == "java")
+          javaError("annotation enum package qualifier is shadowed by a "
+                    "field in " + Name);
+      }
+      if (I->second.superclass)
+        Pending.push_back(*I->second.superclass);
+      for (const auto &Interface : I->second.interfaces)
+        Pending.push_back(Interface);
+    }
+  }
 };
 
 template <typename Ref>
@@ -1989,7 +2026,9 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
   std::map<std::string, std::vector<const Class *>> Enclosing;
   for (const auto &[Name, C] : Classes) {
     B.tick();
-    HasDeclarationMetadata |= C.deprecated;
+    HasDeclarationMetadata |= C.deprecated || C.access.contains("annotation") ||
+                              !C.annotation_metadata.empty() ||
+                              !C.marker_annotations.empty();
     for (const auto &F : C.fields) {
       B.tick();
       HasDeclarationMetadata |= F.deprecated;
@@ -2048,7 +2087,8 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
       javaError("Android class ownership emitted a declaration more than once");
     bool Nested = Site == DeclarationSite::Member;
     bool Local = Site == DeclarationSite::MethodLocal;
-    if (C.access.contains("annotation") || C.access.contains("enum"))
+    bool Annotation = C.access.contains("annotation");
+    if (C.access.contains("enum"))
       javaError("unsupported Java declaration shape: " + C.name);
     const GenericSignature *ClassSignature = nullptr;
     if (auto I = Generics.classes.find(C.name); I != Generics.classes.end()) {
@@ -2102,7 +2142,11 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
       Mods = modifiers(Flags, {"final"});
     if (!Nested)
       std::erase(Mods, "static");
-    std::string Kind = C.access.contains("interface") ? "interface" : "class";
+    if (Annotation)
+      std::erase(Mods, "abstract");
+    std::string Kind = Annotation ? "@interface"
+                       : C.access.contains("interface") ? "interface"
+                                                        : "class";
     Mods.push_back(Kind);
     Mods.push_back(Name +
                    (ClassSignature
@@ -2116,7 +2160,7 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
                                                    *ClassSignature->superclass,
                                                    JavaScope{C}, true)
                                 : TypeNames.render(*C.superclass, C, true));
-    if (!C.interfaces.empty()) {
+    if (!Annotation && !C.interfaces.empty()) {
       std::vector<std::string> Interfaces;
       for (size_t I = 0; I < C.interfaces.size(); ++I)
         Interfaces.push_back(
@@ -2128,6 +2172,40 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
                 join(Interfaces, ", ");
     }
     Lines BodyLines(B, true);
+    const JavaScope ModifierScope{
+        C, nullptr, JavaScope::Position::ClassModifiers};
+    auto annotationType = [&](const std::string &Type) {
+      return "@" + TypeNames.render(Type, ModifierScope);
+    };
+    const auto &Metadata = C.annotation_metadata;
+    if (Metadata.retention || (Metadata.targets && !Metadata.targets->empty()))
+      TypeNames.requireAnnotationEnumQualifier(C);
+    if (Metadata.retention)
+      BodyLines.append(
+          annotationType("Ljava/lang/annotation/Retention;") + "(" +
+          TypeNames.render("Ljava/lang/annotation/RetentionPolicy;",
+                           ModifierScope) +
+          "." + *Metadata.retention + ")");
+    if (Metadata.targets) {
+      std::vector<std::string> Values;
+      for (const auto &Target : *Metadata.targets) {
+        B.tick();
+        Values.push_back(
+            TypeNames.render("Ljava/lang/annotation/ElementType;",
+                             ModifierScope) +
+            "." + Target);
+      }
+      BodyLines.append(annotationType("Ljava/lang/annotation/Target;") +
+                       "({" + join(Values, ", ") + "})");
+    }
+    if (Metadata.documented)
+      BodyLines.append(annotationType("Ljava/lang/annotation/Documented;"));
+    if (Metadata.inherited)
+      BodyLines.append(annotationType("Ljava/lang/annotation/Inherited;"));
+    for (const auto &Use : C.marker_annotations) {
+      B.tick();
+      BodyLines.append(annotationType(Use.type));
+    }
     if (C.deprecated)
       BodyLines.append(
           "@" +

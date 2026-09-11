@@ -511,9 +511,168 @@ void linkLocalScopes(const ClassMap &classes, Budget &budget) {
     }
   }
 }
+std::vector<const Class *> annotationScopes(const Class &cls,
+                                           const ClassMap &classes,
+                                           Budget &budget) {
+  std::set<std::string> seen;
+  std::vector<const Class *> result;
+  const Class *scope = &cls;
+  while (scope) {
+    budget.tick();
+    if (!seen.insert(scope->name).second)
+      scopeError(cls, "recursive marker annotation ownership");
+    checkClass(*scope, budget);
+    if (scope->enclosing_method ||
+        (scope->inner_class_present && !scope->inner_name))
+      scopeError(cls, "marker annotations require a proven non-local "
+                      "declaration scope");
+    result.push_back(scope);
+    if (!scope->enclosing)
+      break;
+    auto parent = classes.find(*scope->enclosing);
+    if (parent == classes.end())
+      scopeError(cls, "unresolved marker annotation enclosing class");
+    if (!scope->inner_class_present || !scope->inner_name ||
+        scope->inner_name->empty() ||
+        scope->name !=
+            scope->enclosing->substr(0, scope->enclosing->size() - 1) + "$" +
+                *scope->inner_name + ";")
+      scopeError(cls, "marker declaration ownership changes its binary "
+                      "identity");
+    scope = &parent->second;
+  }
+  return result;
+}
+void checkAnnotationClass(const Class &cls, const ClassMap &classes,
+                          const std::set<std::string> &owners,
+                          Budget &budget) {
+  static const Access reserved = {
+      "Ljava/lang/Deprecated;", "Ljava/lang/annotation/Retention;",
+      "Ljava/lang/annotation/Target;", "Ljava/lang/annotation/Documented;",
+      "Ljava/lang/annotation/Inherited;", "Ldalvik/annotation/Signature;",
+      "Ldalvik/annotation/Throws;", "Ldalvik/annotation/InnerClass;",
+      "Ldalvik/annotation/EnclosingClass;", "Ldalvik/annotation/EnclosingMethod;",
+      "Ldalvik/annotation/MemberClasses;", "Ldalvik/annotation/AnnotationDefault;"};
+  const auto &metadata = cls.annotation_metadata;
+  bool annotation = has(cls.access, "annotation");
+  if (!annotation && !metadata.empty())
+    scopeError(cls, "standard annotation metadata requires an annotation "
+                    "declaration");
+  if (annotation) {
+    checkClass(cls, budget);
+    if (cls.name.starts_with("Ljava/"))
+      scopeError(cls, "marker annotation requires a non-platform definition");
+    if (cls.superclass != "Ljava/lang/Object;" ||
+        cls.interfaces !=
+            std::vector<std::string>{"Ljava/lang/annotation/Annotation;"} ||
+        !cls.fields.empty() || !cls.methods.empty() || cls.generic_signature ||
+        owners.contains(cls.name))
+      scopeError(cls, "marker annotation requires no elements, fields, type "
+                      "parameters or nested declarations");
+    for (const auto *flags : {&cls.access, &cls.inner_access}) {
+      if (flags == &cls.inner_access && !cls.enclosing)
+        continue;
+      checkFlags(*flags,
+                 {"public", "private", "protected", "static", "abstract",
+                  "interface", "annotation"},
+                 cls.name);
+      if (!has(*flags, "annotation") || !has(*flags, "interface") ||
+          !has(*flags, "abstract"))
+        scopeError(cls, "marker annotation requires "
+                        "annotation/interface/abstract flags");
+    }
+    if (cls.enclosing && !has(cls.inner_access, "static"))
+      scopeError(cls, "member marker annotation requires static ownership");
+  }
+  if (metadata.retention &&
+      !Access{"SOURCE", "CLASS", "RUNTIME"}.contains(*metadata.retention))
+    scopeError(cls, "invalid marker annotation retention policy");
+  if (metadata.targets) {
+    Access seen;
+    const Access allowed = {
+        "TYPE", "FIELD", "METHOD", "PARAMETER", "CONSTRUCTOR",
+        "LOCAL_VARIABLE", "ANNOTATION_TYPE", "PACKAGE", "TYPE_PARAMETER",
+        "TYPE_USE"};
+    for (const auto &target : *metadata.targets) {
+      budget.tick();
+      if (!allowed.contains(target) || !seen.insert(target).second)
+        scopeError(cls, "invalid or duplicate Java 8 annotation target");
+    }
+  }
+  std::vector<const Class *> scopes;
+  if (annotation || !cls.marker_annotations.empty()) {
+    scopes = annotationScopes(cls, classes, budget);
+    for (const auto *type : {"Ljava/lang/annotation/Annotation;",
+                             "Ljava/lang/annotation/Retention;",
+                             "Ljava/lang/annotation/RetentionPolicy;",
+                             "Ljava/lang/annotation/Target;",
+                             "Ljava/lang/annotation/ElementType;",
+                             "Ljava/lang/annotation/Documented;",
+                             "Ljava/lang/annotation/Inherited;"})
+      if (classes.contains(type))
+        scopeError(cls, "marker annotations require the platform definition: " +
+                            std::string(type));
+  }
+  std::set<std::string> seen;
+  for (const auto &use : cls.marker_annotations) {
+    budget.tick();
+    if (reserved.contains(use.type))
+      scopeError(cls, "reserved marker annotation descriptor: " + use.type);
+    if (!descriptor(use.type).starts_with('L') ||
+        !seen.insert(use.type).second)
+      scopeError(cls, "invalid or duplicate marker annotation application");
+    auto definition = classes.find(use.type);
+    if (definition == classes.end() ||
+        !has(definition->second.access, "annotation"))
+      scopeError(cls, "unresolved marker annotation definition: " + use.type);
+    auto definition_scopes =
+        annotationScopes(definition->second, classes, budget);
+    if (definition_scopes.back()->name != scopes.back()->name) {
+      auto package = [](const Class &type) {
+        auto slash = type.name.rfind('/');
+        return slash == std::string::npos ? std::string()
+                                         : type.name.substr(1, slash - 1);
+      };
+      for (const auto *scope : definition_scopes) {
+        budget.tick();
+        bool member = scope->enclosing.has_value();
+        const auto &flags = member ? scope->inner_access : scope->access;
+        if ((member || package(*scope) != package(*scopes.back())) &&
+            !has(flags, "public"))
+          scopeError(cls, "marker annotation definition is not accessible: " +
+                              use.type);
+      }
+    }
+    const auto &policy = definition->second.annotation_metadata;
+    auto retention = policy.retention.value_or("CLASS");
+    if (retention == "SOURCE" ||
+        use.visibility != (retention == "RUNTIME" ? 1u : 0u))
+      scopeError(cls, "marker annotation visibility disagrees with "
+                      "retention: " + use.type);
+    if (policy.targets) {
+      const auto &targets = *policy.targets;
+      auto permits = [&](const char *target) {
+        return std::find(targets.begin(), targets.end(), target) !=
+               targets.end();
+      };
+      if (!permits("TYPE") && !permits("TYPE_USE") &&
+          !(annotation && permits("ANNOTATION_TYPE")))
+        scopeError(cls, "marker annotation target excludes this class "
+                        "declaration: " + use.type);
+    }
+  }
+}
 } // namespace
 
 void validateSourceScopes(const ClassMap &classes, Budget &budget) {
+  std::set<std::string> owners;
+  for (const auto &[name, cls] : classes) {
+    budget.tick();
+    if (cls.enclosing)
+      owners.insert(*cls.enclosing);
+    if (cls.enclosing_method)
+      owners.insert(cls.enclosing_method->owner);
+  }
   for (const auto &[name, cls] : classes) {
     budget.tick();
     if (name != cls.name)
@@ -532,6 +691,7 @@ void validateSourceScopes(const ClassMap &classes, Budget &budget) {
     }
     if (deprecated && classes.contains("Ljava/lang/Deprecated;"))
       scopeError(cls, "Deprecated requires the platform annotation definition");
+    checkAnnotationClass(cls, classes, owners, budget);
     checkSourceScope(cls, budget);
   }
   linkLocalScopes(classes, budget);

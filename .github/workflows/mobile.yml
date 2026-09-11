@@ -202,6 +202,9 @@ jobs:
             ${{ runner.temp }}/android-native/original-deprecated/
             ${{ runner.temp }}/android-native/deprecated-dex/
             ${{ runner.temp }}/android-native/deprecated-preparation-failure.json
+            ${{ runner.temp }}/android-native/original-marker/
+            ${{ runner.temp }}/android-native/marker-dex/
+            ${{ runner.temp }}/android-native/marker-preparation-failure.json
             ${{ runner.temp }}/ios-native/scalar/
             ${{ runner.temp }}/ios-native/calls/
             ${{ runner.temp }}/ios-native/swift/

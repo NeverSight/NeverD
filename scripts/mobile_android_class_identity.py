@@ -10,6 +10,13 @@ from pathlib import Path
 
 
 DEPRECATED_TYPE = "Ljava/lang/Deprecated;"
+MARKER_META_TYPES = frozenset("Ljava/lang/annotation/" + name + ";"
+                              for name in ("Retention", "Target", "Documented", "Inherited"))
+OWNED_MARKER_TYPES = frozenset("Lfixture/" + name + ";" for name in (
+    "MarkerDefault", "MarkerClass", "MarkerSource", "MarkerRuntime", "MarkerInherited",
+    "MarkerEmptyTarget", "MarkerTypeOnly", "MarkerAnnotationOnly", "MarkerTagged"))
+JAVA8_ELEMENT_TYPES = frozenset({"TYPE", "FIELD", "METHOD", "PARAMETER", "CONSTRUCTOR",
+                               "LOCAL_VARIABLE", "ANNOTATION_TYPE", "PACKAGE", "TYPE_PARAMETER", "TYPE_USE"})
 ANNOTATION_ATTRIBUTES = frozenset({
     "Deprecated", "RuntimeVisibleAnnotations", "RuntimeInvisibleAnnotations",
     "RuntimeVisibleParameterAnnotations", "RuntimeInvisibleParameterAnnotations",
@@ -73,9 +80,11 @@ class Bytes:
 
 
 class ClassFile:
-    def __init__(self, data):
+    def __init__(self, data, *, owned_markers=False):
         require(len(data) <= 16 * 1024 * 1024, "Compiler class file exceeds its byte limit")
+        require(type(owned_markers) is bool, "Invalid owned marker compiler mode")
         self.reader, self.constants, self.result = Bytes(data), {}, None
+        self.owned_markers = owned_markers
 
     def constant(self, index, tag):
         entry = self.constants.get(index)
@@ -106,14 +115,44 @@ class ClassFile:
         require(value and "\0" not in value, "Invalid compiler Signature text")
         return value
 
-    def deprecation(self, attributes, context, *, allowed=True):
+    def marker_elements(self, reader, descriptor, context, *, definition):
+        """Only four Java 8 meta annotations and this fixture's empty markers."""
+        count = reader.number(2)
+        if descriptor in OWNED_MARKER_TYPES:
+            require(count == 0, "Owned compiler marker has elements on " + context)
+            return []
+        require(definition and descriptor in MARKER_META_TYPES,
+                "Compiler meta annotation requires an annotation definition on " + context)
+        if descriptor in {"Ljava/lang/annotation/Documented;", "Ljava/lang/annotation/Inherited;"}:
+            require(count == 0, "Compiler meta marker has elements on " + context)
+            return []
+        require(count == 1 and self.text(reader.number(2)) == "value",
+                "Compiler meta annotation requires exactly value on " + context)
+
+        def enum_value(owner, names):
+            require(reader.take(1) == b"e", "Compiler meta annotation requires an enum tag on " + context)
+            enum_owner, name = self.text(reader.number(2)), self.text(reader.number(2))
+            require(enum_owner == owner and name in names, "Invalid compiler meta enum identity on " + context)
+            return {"tag": "e", "type": enum_owner, "constant": name}
+
+        if descriptor == "Ljava/lang/annotation/Retention;":
+            return [{"name": "value", **enum_value("Ljava/lang/annotation/RetentionPolicy;",
+                                                   {"SOURCE", "CLASS", "RUNTIME"})}]
+        require(reader.take(1) == b"[", "Compiler Target requires an array tag on " + context)
+        length = reader.number(2)
+        require(length <= len(JAVA8_ELEMENT_TYPES), "Compiler Target exceeds the Java 8 enum domain")
+        values = [enum_value("Ljava/lang/annotation/ElementType;", JAVA8_ELEMENT_TYPES) for _ in range(length)]
+        require(len({value["constant"] for value in values}) == length, "Duplicate compiler Target enum")
+        return [{"name": "value", "tag": "[", "values": values}]
+
+    def deprecation(self, attributes, context, *, allowed=True, marker_class=False, definition=False):
         """The Java 8 marker and the zero-length attribute are distinct facts.
 
-        This oracle's supported annotation grammar is intentionally narrow.
-        A nonempty element list or another annotation attachment is rejected,
-        never skipped and then accepted as equivalent compiler identity.
+        The default grammar accepts only empty Deprecated applications. The
+        explicit owned mode adds typed class-level marker metadata; other
+        annotation payloads and attachments remain errors, never ignored facts.
         """
-        deprecated, visible, seen = False, [], set()
+        deprecated, visible, invisible, seen, types = False, [], [], set(), set()
         for kind, data in attributes:
             if kind not in ANNOTATION_ATTRIBUTES:
                 continue
@@ -124,21 +163,31 @@ class ClassFile:
                 require(not data, "Compiler Deprecated attribute must have zero length on " + context)
                 deprecated = True
                 continue
-            require(kind == "RuntimeVisibleAnnotations",
+            marker_mode = self.owned_markers and marker_class
+            require(kind == "RuntimeVisibleAnnotations" or (marker_mode and kind == "RuntimeInvisibleAnnotations"),
                     "Unsupported compiler annotation attribute " + kind + " on " + context)
             attribute = Bytes(data)
-            types = set()
             for _ in range(attribute.number(2)):
                 descriptor = self.text(attribute.number(2))
                 require(descriptor not in types, "Duplicate compiler runtime annotation on " + context)
                 types.add(descriptor)
-                require(descriptor == DEPRECATED_TYPE,
-                        "Unsupported compiler runtime annotation " + descriptor + " on " + context)
-                require(attribute.number(2) == 0,
-                        "Compiler Deprecated annotation elements are unsupported on " + context)
-                visible.append({"type": descriptor, "elements": []})
+                if marker_mode and descriptor in MARKER_META_TYPES | OWNED_MARKER_TYPES:
+                    require(kind == "RuntimeVisibleAnnotations" or descriptor in OWNED_MARKER_TYPES,
+                            "Compiler meta annotation must be runtime visible on " + context)
+                    elements = self.marker_elements(attribute, descriptor, context, definition=definition)
+                else:
+                    require(descriptor == DEPRECATED_TYPE and kind == "RuntimeVisibleAnnotations",
+                            "Unsupported compiler runtime annotation " + descriptor + " on " + context)
+                    require(attribute.number(2) == 0,
+                            "Compiler Deprecated annotation elements are unsupported on " + context)
+                    elements = []
+                target = visible if kind == "RuntimeVisibleAnnotations" else invisible
+                target.append({"type": descriptor, "elements": elements})
             attribute.finish()
-        return {"deprecated_attribute": deprecated, "runtime_visible_annotations": visible}
+        result = {"deprecated_attribute": deprecated, "runtime_visible_annotations": visible}
+        if self.owned_markers and marker_class:
+            result["runtime_invisible_annotations"] = invisible
+        return result
 
     def code(self, data, context):
         reader = Bytes(data)
@@ -227,7 +276,7 @@ class ClassFile:
         seen = set()
         attrs = self.attributes(reader)
         signature = self.signature(attrs)
-        deprecation = self.deprecation(attrs, owner)
+        deprecation = self.deprecation(attrs, owner, marker_class=True, definition=bool(access & 0x2000))
         for kind, data in attrs:
             if kind not in {"EnclosingMethod", "InnerClasses", "SourceFile"}:
                 continue
@@ -271,12 +320,12 @@ class ClassFile:
                                for identity, row in facts["methods"].items()}
 
 
-def compiler_classes(directory):
+def compiler_classes(directory, *, owned_markers=False):
     classes = {}
     for path in sorted(Path(directory).rglob("*.class")):
         require(not path.is_symlink(), "Compiler class inventory contains a symlink")
         data = path.read_bytes()
-        facts = ClassFile(data).facts()
+        facts = ClassFile(data, owned_markers=owned_markers).facts()
         owner = facts["name"]
         require(owner not in classes, "Duplicate compiler inventory")
         require(path.relative_to(directory).as_posix() == owner[1:-1] + ".class",

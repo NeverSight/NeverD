@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 import struct
+import tempfile
 import unittest
 
 from scripts import mobile_android_class_identity as oracle
@@ -22,7 +24,8 @@ def u4(value):
 def class_bytes(owner, methods, *, enclosing=None, inner_name="Worker", inner_outer=None,
                 inner_access=0x10, duplicate_inner=False, wrong_enclosing_tag=False, fields=(),
                 signatures=None, field_descriptors=None, wrong_signature_tag=False,
-                extra_attributes=None, wrong_annotation_tag=False):
+                extra_attributes=None, wrong_annotation_tag=False, class_access=None,
+                interfaces=(), wrong_enum_reference=False, annotation_trailer=b""):
     """Build bounded JVM attributes with real typed constant-pool references."""
     pool, cache = [], {}
 
@@ -49,6 +52,16 @@ def class_bytes(owner, methods, *, enclosing=None, inner_name="Worker", inner_ou
                      u2(cls("Ljava/lang/Object;") if wrong_signature_tag else utf(value))) for value in values]
 
     def annotation_attrs(key):
+        def element(tag, value):
+            if tag == "e":
+                owner, name = value
+                index = cls(owner) if wrong_enum_reference else utf(owner)
+                return b"e" + u2(index) + u2(utf(name))
+            if tag == "[":
+                return b"[" + u2(len(value)) + b"".join(element(kind, item) for kind, item in value)
+            constant = entry(3, u4(int(value))) if tag == "Z" else utf(value)
+            return tag.encode("ascii") + u2(constant)
+
         result = []
         for kind, value in (extra_attributes or {}).get(key, []):
             if isinstance(value, bytes):
@@ -59,8 +72,8 @@ def class_bytes(owner, methods, *, enclosing=None, inner_name="Worker", inner_ou
                     index = cls(descriptor) if wrong_annotation_tag else utf(descriptor)
                     payload += u2(index) + u2(len(elements))
                     for name, tag, text in elements:
-                        constant = entry(3, u4(int(text))) if tag == "Z" else utf(text)
-                        payload += u2(utf(name)) + tag.encode("ascii") + u2(constant)
+                        payload += u2(utf(name)) + element(tag, text)
+                payload += annotation_trailer
             result.append(attr(kind, payload))
         return result
 
@@ -108,9 +121,11 @@ def class_bytes(owner, methods, *, enclosing=None, inner_name="Worker", inner_ou
                + u2(utf(inner_name) if inner_name is not None else 0) + u2(inner_access))
         attributes.append(attr("InnerClasses", u2(2 if duplicate_inner else 1)
                                + row + (row if duplicate_inner else b"")))
-    access = 0x30 if enclosing else 0x31
+    access = (0x30 if enclosing else 0x31) if class_access is None else class_access
+    interface_rows = [u2(cls(value)) for value in interfaces]
     return (b"\xca\xfe\xba\xbe" + u2(0) + u2(52) + u2(len(pool) + 1) + b"".join(pool)
-            + u2(access) + u2(this_class) + u2(superclass) + u2(0) + u2(len(field_rows)) + b"".join(field_rows)
+            + u2(access) + u2(this_class) + u2(superclass) + u2(len(interface_rows)) + b"".join(interface_rows)
+            + u2(len(field_rows)) + b"".join(field_rows)
             + u2(len(members)) + b"".join(members) + u2(len(attributes)) + b"".join(attributes))
 
 
@@ -284,6 +299,144 @@ class DeprecatedCompilerAttributesTests(unittest.TestCase):
                               ("RuntimeVisibleTypeAnnotations", b'\0\0')):
             with self.subTest(code_attribute=kind), self.assertRaisesRegex(RuntimeError, "Code"):
                 self.read({("code", "oldAdd", "(I)I"): [(kind, payload)]})
+
+
+class MarkerCompilerAttributesTests(unittest.TestCase):
+    owner = "Lfixture/MarkerRuntime;"
+    retention = "Ljava/lang/annotation/Retention;"
+    target = "Ljava/lang/annotation/Target;"
+    policy = "Ljava/lang/annotation/RetentionPolicy;"
+    element_type = "Ljava/lang/annotation/ElementType;"
+
+    def read(self, annotations, *, invisible=(), definition=True, **options):
+        attrs = [("RuntimeVisibleAnnotations", annotations)]
+        if invisible:
+            attrs.append(("RuntimeInvisibleAnnotations", invisible))
+        data = class_bytes(self.owner, [], extra_attributes={"class": attrs},
+                           class_access=0x2601 if definition else 0x31,
+                           interfaces=["Ljava/lang/annotation/Annotation;"] if definition else [], **options)
+        return oracle.ClassFile(data, owned_markers=True).facts()
+
+    def test_all_java8_enum_values_have_typed_references_and_target_order_is_preserved(self):
+        targets = ["TYPE_USE", "ANNOTATION_TYPE", "TYPE", "FIELD", "METHOD", "PARAMETER",
+                   "CONSTRUCTOR", "LOCAL_VARIABLE", "PACKAGE", "TYPE_PARAMETER"]
+        for policy in ("SOURCE", "CLASS", "RUNTIME"):
+            values = [(self.retention, [("value", "e", (self.policy, policy))]),
+                      (self.target, [("value", "[", [("e", (self.element_type, value)) for value in targets])]),
+                      ("Ljava/lang/annotation/Documented;", []), ("Ljava/lang/annotation/Inherited;", [])]
+            with self.subTest(policy=policy):
+                facts = self.read(values)
+                visible = facts["runtime_visible_annotations"]
+                self.assertEqual(visible[0]["elements"], [{"name": "value", "tag": "e", "type": self.policy, "constant": policy}])
+                array = visible[1]["elements"][0]
+                self.assertEqual(array["name"], "value")
+                self.assertEqual(array["tag"], "[")
+                self.assertEqual([row["constant"] for row in array["values"]], targets)
+                self.assertTrue(all(row["tag"] == "e" and row["type"] == self.element_type for row in array["values"]))
+                self.assertEqual(visible[2:], [{"type": "Ljava/lang/annotation/Documented;", "elements": []},
+                                               {"type": "Ljava/lang/annotation/Inherited;", "elements": []}])
+                self.assertEqual(facts["runtime_invisible_annotations"], [])
+                self.assertEqual(facts["methods"], {})
+
+    def test_missing_defaults_and_explicit_empty_arrays_are_distinct_facts(self):
+        missing = self.read([])["runtime_visible_annotations"]
+        explicit_class = self.read([(self.retention, [("value", "e", (self.policy, "CLASS"))])])["runtime_visible_annotations"]
+        empty = self.read([(self.target, [("value", "[", [])])])["runtime_visible_annotations"]
+        self.assertEqual(missing, [])
+        self.assertNotEqual(missing, explicit_class)
+        self.assertEqual(empty, [{"type": self.target, "elements": [{"name": "value", "tag": "[", "values": []}]}])
+        self.assertNotEqual(missing, empty)
+
+    def test_only_owned_empty_class_applications_enter_explicit_reader_mode(self):
+        for descriptor in sorted(oracle.OWNED_MARKER_TYPES):
+            for kind in ("RuntimeVisibleAnnotations", "RuntimeInvisibleAnnotations"):
+                data = class_bytes("Lfixture/MarkerPlain;", [("value", "(I)I", 1, True)],
+                                   extra_attributes={"class": [(kind, [(descriptor, [])])]})
+                with self.subTest(descriptor=descriptor, kind=kind):
+                    with self.assertRaises(RuntimeError):
+                        oracle.ClassFile(data).facts()
+                    with self.assertRaises(RuntimeError):
+                        oracle.ClassFile(data, owned_markers=False).facts()
+                    facts = oracle.ClassFile(data, owned_markers=True).facts()
+                    key = "runtime_visible_annotations" if kind == "RuntimeVisibleAnnotations" else "runtime_invisible_annotations"
+                    self.assertEqual(facts[key], [{"type": descriptor, "elements": []}])
+                    self.assertNotIn("runtime_invisible_annotations", next(iter(facts["methods"].values())))
+
+    def test_enum_grammar_rejects_wrong_owner_name_tag_cardinality_and_duplicates(self):
+        bad = [
+            (self.retention, []),
+            (self.retention, [("other", "e", (self.policy, "CLASS"))]),
+            (self.retention, [("value", "s", "CLASS")]),
+            (self.retention, [("value", "e", (self.element_type, "CLASS"))]),
+            (self.retention, [("value", "e", (self.policy, "UNKNOWN"))]),
+            (self.retention, [("value", "e", (self.policy, "CLASS"))] * 2),
+            (self.target, [("value", "e", (self.element_type, "TYPE"))]),
+            (self.target, [("value", "[", [("s", "TYPE")])]),
+            (self.target, [("value", "[", [("e", (self.policy, "TYPE"))])]),
+            (self.target, [("value", "[", [("e", (self.element_type, "MODULE"))])]),
+            (self.target, [("value", "[", [("e", (self.element_type, "TYPE"))] * 2)]),
+            (self.target, [("value", "[", [("e", (self.element_type, "TYPE"))] * 11)]),
+            ("Ljava/lang/annotation/Documented;", [("value", "s", "extra")]),
+            ("Ljava/lang/annotation/Inherited;", [("value", "s", "extra")]),
+            ("Lfixture/MarkerRuntime;", [("value", "s", "extra")]),
+            ("Lfixture/Unknown;", []),
+        ]
+        for row in bad:
+            with self.subTest(row=row), self.assertRaises(RuntimeError):
+                self.read([row])
+        valid = [(self.retention, [("value", "e", (self.policy, "RUNTIME"))])]
+        for options in ({"wrong_enum_reference": True}, {"wrong_annotation_tag": True}, {"annotation_trailer": b"\0"}):
+            with self.subTest(options=options), self.assertRaises(RuntimeError):
+                self.read(valid, **options)
+
+    def test_meta_annotations_require_runtime_visible_annotation_declarations(self):
+        values = [(self.retention, [("value", "e", (self.policy, "CLASS"))]),
+                  (self.target, [("value", "[", [])]),
+                  ("Ljava/lang/annotation/Documented;", []), ("Ljava/lang/annotation/Inherited;", [])]
+        for row in values:
+            with self.subTest(row=row, ordinary=True), self.assertRaises(RuntimeError):
+                self.read([row], definition=False)
+            with self.subTest(row=row, invisible=True), self.assertRaises(RuntimeError):
+                self.read([], invisible=[row])
+
+    def test_owned_mode_rejects_duplicate_visibility_and_nonclass_annotation_scopes(self):
+        marker = [("Lfixture/MarkerRuntime;", [])]
+        for attrs in ([('RuntimeVisibleAnnotations', marker)] * 2,
+                      [('RuntimeVisibleAnnotations', marker * 2)],
+                      [('RuntimeVisibleAnnotations', marker), ('RuntimeInvisibleAnnotations', marker)]):
+            data = class_bytes(self.owner, [], extra_attributes={"class": attrs}, class_access=0x2601)
+            with self.subTest(attrs=attrs), self.assertRaisesRegex(RuntimeError, "Duplicate"):
+                oracle.ClassFile(data, owned_markers=True).facts()
+        for scope in (("field", "value"), ("method", "value", "(I)I"), ("code", "value", "(I)I")):
+            for kind in ("RuntimeVisibleAnnotations", "RuntimeInvisibleAnnotations"):
+                data = class_bytes(self.owner, [("value", "(I)I", 1, True)], fields=[("value", 1, None)],
+                                   extra_attributes={scope: [(kind, marker)]})
+                with self.subTest(scope=scope, kind=kind), self.assertRaises(RuntimeError):
+                    oracle.ClassFile(data, owned_markers=True).facts()
+        for kind in ("RuntimeVisibleTypeAnnotations", "RuntimeInvisibleTypeAnnotations", "AnnotationDefault",
+                     "RuntimeVisibleParameterAnnotations", "RuntimeInvisibleParameterAnnotations"):
+            data = class_bytes(self.owner, [], extra_attributes={"class": [(kind, b"\0\0")]})
+            with self.subTest(kind=kind), self.assertRaises(RuntimeError):
+                oracle.ClassFile(data, owned_markers=True).facts()
+
+    def test_inventory_propagates_explicit_mode_without_changing_the_default(self):
+        data = class_bytes("Lfixture/MarkerPlain;", [("value", "(I)I", 1, True)],
+                           extra_attributes={"class": [("RuntimeVisibleAnnotations", [("Lfixture/MarkerRuntime;", [])])]})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "fixture/MarkerPlain.class"
+            path.parent.mkdir()
+            path.write_bytes(data)
+            for options in ({}, {"owned_markers": False}):
+                with self.subTest(options=options), self.assertRaises(RuntimeError):
+                    oracle.compiler_classes(root, **options)
+            facts = oracle.compiler_classes(root, owned_markers=True)
+            self.assertEqual(set(facts), {"Lfixture/MarkerPlain;"})
+            self.assertEqual(facts["Lfixture/MarkerPlain;"]["runtime_visible_annotations"],
+                             [{"type": "Lfixture/MarkerRuntime;", "elements": []}])
+        for value in (1, "true", None):
+            with self.subTest(value=value), self.assertRaises(RuntimeError):
+                oracle.ClassFile(data, owned_markers=value)
 
 
 class DeprecatedCompilerMatchingTests(unittest.TestCase):

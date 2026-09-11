@@ -88,6 +88,19 @@ struct Field {
   std::optional<std::string> generic_signature;
   bool deprecated = false;
 };
+struct AnnotationMetadata {
+  std::optional<std::string> retention;
+  std::optional<std::vector<std::string>> targets;
+  bool documented = false;
+  bool inherited = false;
+  bool empty() const {
+    return !retention && !targets && !documented && !inherited;
+  }
+};
+struct MarkerAnnotation {
+  std::string type;
+  unsigned visibility = 1;
+};
 struct Class {
   std::string name;
   std::optional<std::string> superclass;
@@ -103,6 +116,8 @@ struct Class {
   std::optional<MethodRef> enclosing_method;
   std::optional<std::string> generic_signature;
   bool deprecated = false;
+  AnnotationMetadata annotation_metadata;
+  std::vector<MarkerAnnotation> marker_annotations;
 };
 using ClassMap = std::map<std::string, Class>;
 void validateSourceScopes(const ClassMap &classes, Budget &budget);

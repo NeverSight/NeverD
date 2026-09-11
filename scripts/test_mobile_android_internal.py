@@ -96,6 +96,8 @@ def choose_d8(override: Path | None) -> Path:
 
 
 def expected_keys(kind: str) -> set[str]:
+    if kind == "marker":
+        return set(marker_oracle())
     if kind == "deprecated":
         return set(deprecated_oracle())
     if kind == "constructor":
@@ -307,6 +309,162 @@ CONSTRUCTOR_REFLECTION = {
     "SuperChild.generic": "fixture.SuperChild#T;bounds=java.lang.Object,java.lang.CharSequence;erased=java.lang.Object,int",
     "ThisChoice.generic": "fixture.ThisChoice#T;bounds=java.lang.Object,java.lang.CharSequence;erased=java.lang.Object,int",
 }
+
+
+MARKER_CASES = ("marker-dex",)
+
+
+def marker_meta(*, retention=None, targets=None, documented=False, inherited=False):
+    """Literal fixture contracts, independent of the DEX/Java implementation."""
+    result = []
+    if retention is not None:
+        result.append({"type": "Ljava/lang/annotation/Retention;", "elements": [
+            {"name": "value", "tag": "e", "type": "Ljava/lang/annotation/RetentionPolicy;", "constant": retention}]})
+    if targets is not None:
+        result.append({"type": "Ljava/lang/annotation/Target;", "elements": [{"name": "value", "tag": "[", "values": [
+            {"tag": "e", "type": "Ljava/lang/annotation/ElementType;", "constant": value} for value in targets]}]})
+    for name, present in (("Documented", documented), ("Inherited", inherited)):
+        if present:
+            result.append({"type": "Ljava/lang/annotation/" + name + ";", "elements": []})
+    return result
+
+
+def marker_uses(*names):
+    return [{"type": "Lfixture/" + name + ";", "elements": []} for name in names]
+
+
+MARKER_DEFINITIONS = {
+    "MarkerDefault": (None, None, False, False),
+    "MarkerClass": ("CLASS", ["TYPE_USE"], False, False),
+    "MarkerSource": ("SOURCE", ["TYPE"], False, False),
+    "MarkerRuntime": ("RUNTIME", ["TYPE", "ANNOTATION_TYPE"], True, False),
+    "MarkerInherited": ("RUNTIME", ["TYPE"], True, True),
+    "MarkerEmptyTarget": (None, [], False, False),
+    "MarkerTypeOnly": (None, ["TYPE"], False, False),
+    "MarkerAnnotationOnly": ("RUNTIME", ["ANNOTATION_TYPE"], False, False),
+    "MarkerTagged": (None, None, False, False),
+}
+MARKER_VISIBLE = {name: marker_meta(retention=retention, targets=targets, documented=documented, inherited=inherited)
+                  for name, (retention, targets, documented, inherited) in MARKER_DEFINITIONS.items()}
+MARKER_VISIBLE.update({
+    "MarkerTagged": marker_uses("MarkerRuntime", "MarkerAnnotationOnly"),
+    "MarkerBase": marker_uses("MarkerRuntime", "MarkerInherited"),
+    "MarkerChild": [], "MarkerPlain": [], "MarkerImplementer": [], "MarkerSourceUse": [],
+    "MarkerInterface": marker_uses("MarkerRuntime", "MarkerInherited"),
+})
+MARKER_INVISIBLE = {
+    "MarkerTagged": marker_uses("MarkerDefault", "MarkerClass", "MarkerTypeOnly"),
+    "MarkerBase": marker_uses("MarkerDefault", "MarkerClass"),
+}
+MARKER_CONCRETE = {
+    "MarkerBase": (0x21, "Ljava/lang/Object;", [], [("seed", "I", 1)], ["<init>(I)V", "adjust(I)I"]),
+    "MarkerChild": (0x31, "Lfixture/MarkerBase;", [], [], ["<init>(I)V", "shifted(I)I"]),
+    "MarkerPlain": (0x31, "Ljava/lang/Object;", [], [], ["<init>()V", "value(I)I"]),
+    "MarkerImplementer": (0x31, "Ljava/lang/Object;", ["Lfixture/MarkerInterface;"], [], ["<init>()V", "value(I)I"]),
+    "MarkerSourceUse": (0x31, "Ljava/lang/Object;", [], [], ["<init>()V", "value(I)I"]),
+}
+MARKER_REFLECTION_NAMES = {
+    "MarkerDefault": "", "MarkerClass": "java.lang.annotation.Retention,java.lang.annotation.Target",
+    "MarkerSource": "java.lang.annotation.Retention,java.lang.annotation.Target",
+    "MarkerRuntime": "java.lang.annotation.Documented,java.lang.annotation.Retention,java.lang.annotation.Target",
+    "MarkerInherited": "java.lang.annotation.Documented,java.lang.annotation.Inherited,java.lang.annotation.Retention,java.lang.annotation.Target",
+    "MarkerEmptyTarget": "java.lang.annotation.Target", "MarkerTypeOnly": "java.lang.annotation.Target",
+    "MarkerAnnotationOnly": "java.lang.annotation.Retention,java.lang.annotation.Target",
+    "MarkerTagged": "fixture.MarkerAnnotationOnly,fixture.MarkerRuntime",
+    "MarkerBase": "fixture.MarkerInherited,fixture.MarkerRuntime", "MarkerChild": "", "MarkerPlain": "",
+    "MarkerInterface": "fixture.MarkerInherited,fixture.MarkerRuntime", "MarkerImplementer": "", "MarkerSourceUse": "",
+}
+MARKER_REFLECTION = {name + suffix: "types=" + value for name, value in MARKER_REFLECTION_NAMES.items()
+                     for suffix in (".declared", ".present")}
+MARKER_REFLECTION["MarkerChild.present"] = "types=fixture.MarkerInherited"
+for _name, (_retention, _targets, _documented, _inherited) in MARKER_DEFINITIONS.items():
+    MARKER_REFLECTION[_name + ".definition"] = (
+        "annotation=true;members=0;retention=" + (_retention if _retention is not None else "absent")
+        + ";target=" + ("absent" if _targets is None else "[" + ",".join(_targets) + "]")
+        + ";documented=" + str(_documented).lower() + ";inherited=" + str(_inherited).lower())
+
+
+def marker_helpers() -> list[dict]:
+    return [{"class": "Lfixture/" + name + ";", "name": "__neverdThrow", "prototype": class_identity.THROW_HELPER_PROTOTYPE,
+             "static": True, "source_unit": "fixture/" + name + ".java", "kind": "throw-helper"}
+            for name in sorted(MARKER_CONCRETE)]
+
+
+def validate_marker_compiler(classes: dict, *, rebuilt: bool) -> dict:
+    """Both sides satisfy fixed facts; matching two equally wrong inputs fails."""
+    if type(rebuilt) is not bool or set(classes) != {"Lfixture/" + name + ";" for name in MARKER_VISIBLE}:
+        raise RuntimeError("Marker compiler class inventory changed")
+    for owner, facts in classes.items():
+        name = owner[len("Lfixture/"):-1]
+        access, parent, interfaces, field_specs, members = MARKER_CONCRETE.get(name, (
+            0x2601 if name in MARKER_DEFINITIONS else 0x601, "Ljava/lang/Object;",
+            ["Ljava/lang/annotation/Annotation;"] if name in MARKER_DEFINITIONS else [], [], []))
+        if (facts["name"] != owner or facts["major"] != 52 or facts["minor"] != 0
+                or type(facts["access"]) is not int or facts["access"] != access
+                or facts["superclass"] != parent or facts["interfaces"] != interfaces
+                or facts["enclosing_method"] is not None or facts["inner_class"] is not None
+                or facts["signature"] is not None or facts["source_file"] != name + ".java"
+                or facts.get("deprecated_attribute") is not False):
+            raise RuntimeError("Marker compiler declaration violates its fixed contract: " + owner)
+        for key, expected in (("runtime_visible_annotations", MARKER_VISIBLE[name]),
+                              ("runtime_invisible_annotations", MARKER_INVISIBLE.get(name, []))):
+            values = facts.get(key)
+            if (not isinstance(values, list) or any(not isinstance(row, dict) or not isinstance(row.get("type"), str)
+                                                    for row in values)
+                    or sorted(values, key=lambda row: row["type"]) != sorted(expected, key=lambda row: row["type"])):
+                raise RuntimeError("Marker compiler annotation contract changed: " + owner + ":" + key)
+        fields = {owner + "->" + field + ":" + descriptor: {
+            "name": field, "descriptor": descriptor, "access": flags, "constant_value": None,
+            "signature": None, **deprecated_facts()} for field, descriptor, flags in field_specs}
+        methods = {}
+        for member in members:
+            method, tail = member.split("(", 1)
+            methods[owner + "->" + member] = {"name": method, "prototype": "(" + tail, "access": 1,
+                                               "code": True, "signature": None, **deprecated_facts()}
+        if rebuilt and name in MARKER_CONCRETE:
+            methods[owner + "->__neverdThrow" + class_identity.THROW_HELPER_PROTOTYPE] = {
+                "name": "__neverdThrow", "prototype": class_identity.THROW_HELPER_PROTOTYPE,
+                "access": 0xA, "code": True, "signature": class_identity.THROW_HELPER_SIGNATURE, **deprecated_facts()}
+        if facts["fields"] != fields or facts["methods"] != methods:
+            raise RuntimeError("Marker compiler member/helper contract changed: " + owner)
+        for row in [*facts["fields"].values(), *facts["methods"].values()]:
+            if type(row["access"]) is not int or row.get("deprecated_attribute") is not False:
+                raise RuntimeError("Marker compiler member has malformed facts: " + owner)
+        if any(type(row["code"]) is not bool for row in facts["methods"].values()):
+            raise RuntimeError("Marker compiler method Code fact is not a boolean: " + owner)
+    return {"scope": "owned-java8-marker-declarations-and-body", "class_count": 15,
+            "annotation_declaration_count": 9, "original_method_count": 10,
+            "generated_helper_count": 5 if rebuilt else 0}
+
+
+def marker_reflection(path: Path) -> dict[str, str]:
+    values = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        key, separator, value = line.partition("\t")
+        if not separator or not value or key in values:
+            raise RuntimeError("Malformed or duplicate marker reflection evidence")
+        values[key] = value
+    if values != MARKER_REFLECTION:
+        raise RuntimeError("Marker reflection evidence changed its independent declaration contract")
+    return values
+
+
+def marker_oracle() -> dict[str, int]:
+    values = {"reflection:" + key: 1 for key in MARKER_REFLECTION}
+    for index, value in enumerate((-100, -1, 0, 1, 7, 100)):
+        values.update({"base-seed:" + str(index): value + 3, "base-adjust:" + str(index): 2 * value + 1,
+                       "child-seed:" + str(index): value + 3, "child-shifted:" + str(index): 2 * value + 13,
+                       "plain:" + str(index): 3 * value - 4, "implements:" + str(index): value + 11,
+                       "source-use:" + str(index): value - 7})
+    return values
+
+
+def compare_marker_behavior(baseline: dict, actual: dict):
+    expected = marker_oracle()
+    for label, values in (("original", baseline), ("rebuilt", actual)):
+        if (set(values) != set(expected) or any(type(value) is not int for value in values.values())
+                or values != expected):
+            raise RuntimeError("Marker " + label + " independent behavior oracle failed")
 
 
 DEPRECATED_CASES = ("deprecated-dex",)
@@ -679,6 +837,95 @@ class Verify:
             changes = {key: {"original": baseline[key], "recovered": actual[key]} for key in baseline if baseline[key] != actual[key]}
             raise RuntimeError("Recovered Java changed behavior: " + json.dumps(changes))
         return len(actual)
+
+    def marker_cases(self, neverd: Path) -> tuple[list[dict], list[dict]]:
+        passed, failures = [], []
+        directory = self.work / "original-marker"
+        try:
+            self.run([self.javac, "-version"], "marker-javac-version")
+            self.run([self.java, "-version"], "marker-java-version")
+            source_dir = directory / "source"
+            for path in sorted((FIXTURES / "marker/java").rglob("*.java")):
+                target = source_dir / path.relative_to(FIXTURES / "marker/java")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, target)
+            harness_source = directory / "harness-source/MarkerHarness.java"
+            harness_source.parent.mkdir(parents=True)
+            shutil.copyfile(FIXTURES / "harness/MarkerHarness.java", harness_source)
+            classes_dir = directory / "classes"
+            self.compile_local(sorted(source_dir.rglob("*.java")), classes_dir)
+            original = class_identity.compiler_classes(classes_dir, owned_markers=True)
+            (directory / "class-inventory.json").write_text(json.dumps(original, indent=2) + "\n")
+            original_contract = validate_marker_compiler(original, rebuilt=False)
+            (directory / "marker-identity.json").write_text(json.dumps(original_contract, indent=2) + "\n")
+            methods = {identity: "body" if row["code"] else "declaration"
+                       for facts in original.values() for identity, row in facts["methods"].items()}
+            self.compile_local([harness_source], directory / "harness", classpath=classes_dir)
+            cp = os.pathsep.join(map(str, (directory / "harness", classes_dir)))
+            reflection_path = directory / "reflection.tsv"
+            baseline = results(self.run([self.java, "-cp", cp, "MarkerHarness", reflection_path],
+                                        "original-marker"), "marker")
+            (directory / "baseline.json").write_text(json.dumps(baseline, indent=2) + "\n")
+            compare_marker_behavior(baseline, baseline)
+            reflection = marker_reflection(reflection_path)
+            (directory / "reflection.json").write_text(json.dumps(reflection, indent=2) + "\n")
+            (directory / "source-hashes.json").write_text(json.dumps({"implementation": source_hashes(source_dir),
+                "harness": source_hashes(harness_source.parent)}, indent=2) + "\n")
+        except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+            for label in MARKER_CASES:
+                failures.append({"case": label, "stage": "original-preparation", "error": str(error)})
+            (self.work / "marker-preparation-failure.json").write_text(json.dumps(failures, indent=2) + "\n")
+            return passed, failures
+        for label in MARKER_CASES:
+            case = self.work / label
+            case.mkdir()
+            try:
+                inputs = {owner: "classes.dex" for owner in original}
+                paths = [classes_dir / original[owner]["path"] for owner in sorted(original)]
+                source = self.dex(paths, case / "dex", classes_dir)
+                (case / "input-inventory.json").write_text(json.dumps({"classes": original, "inputs": inputs,
+                    "expected_generated_helpers": marker_helpers(),
+                    "input_sha256": hashlib.sha256(source.read_bytes()).hexdigest()}, indent=2) + "\n")
+                output = case / "recovered"
+                self.run([neverd, "mobile", source, "-o", output, "--timeout", self.timeout, "--json"], label)
+                report = json.loads((output / "report.json").read_text())
+                if report.get("dex_count") != 1 or report.get("smali_count") != 0:
+                    raise RuntimeError("Marker DEX input inventory changed")
+                counts = validate_coverage(report, output, set(original), methods, inputs,
+                                           expected_generic_helpers=marker_helpers())
+                if any(row.get("deprecated") is not False for row in report["android_method_recovery"]["methods"]):
+                    raise RuntimeError("Marker method inventory invented a Deprecated declaration")
+                if sorted(report["java_sources"]) != ["sources/" + owner[1:-1] + ".java" for owner in sorted(original)]:
+                    raise RuntimeError("Marker source unit inventory changed")
+                sources = sorted((output / "sources").rglob("*.java"))
+                (case / "generated-source-hashes.json").write_text(json.dumps(source_hashes(output / "sources"), indent=2) + "\n")
+                compiled = case / "compiled"
+                self.compile_local(sources, compiled)
+                rebuilt = class_identity.compiler_classes(compiled, owned_markers=True)
+                (case / "rebuilt-class-inventory.json").write_text(json.dumps(rebuilt, indent=2) + "\n")
+                identity = validate_marker_compiler(rebuilt, rebuilt=True)
+                (case / "marker-identity.json").write_text(json.dumps(identity, indent=2) + "\n")
+                self.compile_local([harness_source], case / "harness", classpath=compiled)
+                cp = os.pathsep.join(map(str, (case / "harness", compiled)))
+                reflection_path = case / "reflection.tsv"
+                actual = results(self.run([self.java, "-cp", cp, "MarkerHarness", reflection_path],
+                                          label + "-execution"), "marker")
+                (case / "execution.json").write_text(json.dumps(actual, indent=2) + "\n")
+                actual_reflection = marker_reflection(reflection_path)
+                (case / "reflection.json").write_text(json.dumps(actual_reflection, indent=2) + "\n")
+                compare_marker_behavior(baseline, actual)
+                passed.append({"case": label, **counts, "matched_results": len(actual),
+                               "reflection_declaration_count": len(reflection), "compiler_identity": identity,
+                               "acceptance_scope": "owned-java8-marker-declarations-and-body"})
+                print(f"PASS {label}: {len(methods)} original bodies, 9 marker definitions, {len(actual)} independent results", flush=True)
+            except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+                failure = {"case": label, "error": str(error)}
+                failures.append(failure)
+                (case / "failure.json").write_text(json.dumps(failure, indent=2) + "\n")
+                print(f"FAIL {label}: {error}", file=sys.stderr, flush=True)
+        if {row["case"] for row in passed + failures} != set(MARKER_CASES) or len(passed + failures) != len(MARKER_CASES):
+            raise RuntimeError("Marker acceptance omitted a required input case")
+        return passed, failures
 
     def deprecated_cases(self, neverd: Path) -> tuple[list[dict], list[dict]]:
         passed, failures = [], []
@@ -1138,6 +1385,9 @@ def main() -> int:
         deprecated_passed, deprecated_failures = verify.deprecated_cases(neverd)
         passed.extend(deprecated_passed)
         failures.extend(deprecated_failures)
+        marker_passed, marker_failures = verify.marker_cases(neverd)
+        passed.extend(marker_passed)
+        failures.extend(marker_failures)
         broken = work / "broken-smali"
         broken.mkdir()
         shutil.copyfile(SMALI / "Peer.smali", broken / "Peer.smali")

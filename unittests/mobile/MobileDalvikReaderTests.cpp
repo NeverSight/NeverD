@@ -74,6 +74,7 @@ struct FixtureAnnotation {
   unsigned visibility;
   std::vector<std::string> extra_types;
   std::vector<std::u16string> extra_strings;
+  std::vector<FieldRef> extra_fields;
   // Write encoded_annotation's element count and elements using real pool
   // indices. The fixture supplies the item visibility and annotation type.
   std::function<void(std::string &, const Fixture &)> elements;
@@ -98,6 +99,9 @@ struct FixtureOptions {
       method_annotations;
   std::optional<std::vector<std::optional<size_t>>> parameter_annotations;
   std::string method_name = "value";
+  unsigned class_flags = 1;
+  std::vector<std::string> interfaces;
+  bool define_method = true;
 };
 struct Fixture {
   std::string data;
@@ -105,6 +109,7 @@ struct Fixture {
   std::vector<std::u16string> strings;
   std::vector<std::string> types;
   std::vector<MethodRef> methods;
+  std::vector<FieldRef> fields;
 };
 Fixture fixture(FixtureOptions options = {}) {
   std::string owner = options.owner, parent = "Ljava/lang/Object;";
@@ -120,11 +125,18 @@ Fixture fixture(FixtureOptions options = {}) {
   };
   MethodRef definition{owner, options.method_name, options.params,
                        options.returns};
-  std::vector<MethodRef> method_refs{definition};
+  std::vector<MethodRef> method_refs;
+  if (options.define_method)
+    method_refs.push_back(definition);
   if (options.referenced_method)
     method_refs.push_back(*options.referenced_method);
-  std::set<std::u16string> names{utf16(parent)};
-  std::set<std::string> type_set{parent};
+  std::set<std::u16string> names{utf16(owner), utf16(parent)};
+  std::set<std::string> type_set{owner, parent};
+  std::set<FieldRef> field_set;
+  for (const auto &type : options.interfaces) {
+    names.insert(utf16(type));
+    type_set.insert(type);
+  }
   std::set<Proto> proto_set;
   for (const auto &ref : method_refs) {
     names.insert(utf16(ref.name));
@@ -151,11 +163,21 @@ Fixture fixture(FixtureOptions options = {}) {
     }
     names.insert(annotation.extra_strings.begin(),
                  annotation.extra_strings.end());
+    field_set.insert(annotation.extra_fields.begin(),
+                     annotation.extra_fields.end());
   }
   if (options.static_value) {
     names.insert(u"VALUE");
     names.insert(utf16(options.field_type));
     type_set.insert(options.field_type);
+    field_set.insert({owner, "VALUE", options.field_type});
+  }
+  for (const auto &field : field_set) {
+    names.insert(utf16(field.name));
+    for (const auto &type : {field.owner, field.type}) {
+      names.insert(utf16(type));
+      type_set.insert(type);
+    }
   }
   Fixture fixture;
   fixture.strings.assign(names.begin(), names.end());
@@ -173,6 +195,18 @@ Fixture fixture(FixtureOptions options = {}) {
   auto typeIndex = [&](const std::string &s) {
     return unsigned(std::find(types.begin(), types.end(), s) - types.begin());
   };
+  fixture.fields.assign(field_set.begin(), field_set.end());
+  std::sort(fixture.fields.begin(), fixture.fields.end(),
+            [&](const auto &a, const auto &b) {
+              return std::tuple{typeIndex(a.owner), stringIndex(a.name),
+                                typeIndex(a.type)} <
+                     std::tuple{typeIndex(b.owner), stringIndex(b.name),
+                                typeIndex(b.type)};
+            });
+  const FieldRef defined_field{owner, "VALUE", options.field_type};
+  unsigned field_index = unsigned(
+      std::find(fixture.fields.begin(), fixture.fields.end(), defined_field) -
+      fixture.fields.begin());
   std::vector<Proto> protos(proto_set.begin(), proto_set.end());
   auto protoKey = [&](const Proto &proto) {
     std::vector<unsigned> args;
@@ -222,14 +256,17 @@ Fixture fixture(FixtureOptions options = {}) {
   for (auto &typ : types)
     append(raw, stringIndex(typ), 4);
   at["types"] = section(2, types.size(), raw);
-  at["protos"] =
-      section(3, protos.size(), std::string(12 * protos.size(), '\0'));
-  if (options.static_value) {
+  if (!protos.empty())
+    at["protos"] =
+        section(3, protos.size(), std::string(12 * protos.size(), '\0'));
+  if (!fixture.fields.empty()) {
     raw.clear();
-    append(raw, typeIndex(owner), 2);
-    append(raw, typeIndex(options.field_type), 2);
-    append(raw, stringIndex("VALUE"), 4);
-    at["fields"] = section(4, 1, raw);
+    for (const auto &field : fixture.fields) {
+      append(raw, typeIndex(field.owner), 2);
+      append(raw, typeIndex(field.type), 2);
+      append(raw, stringIndex(field.name), 4);
+    }
+    at["fields"] = section(4, fixture.fields.size(), raw);
   }
   raw.clear();
   for (const auto &ref : method_refs) {
@@ -237,8 +274,10 @@ Fixture fixture(FixtureOptions options = {}) {
     append(raw, protoIndex(ref), 2);
     append(raw, stringIndex(ref.name), 4);
   }
-  at["methods"] = section(5, method_refs.size(), raw);
-  at["defined_method"] = at["methods"] + definition_index * 8;
+  if (!method_refs.empty())
+    at["methods"] = section(5, method_refs.size(), raw);
+  if (options.define_method)
+    at["defined_method"] = at["methods"] + definition_index * 8;
   at["class"] = section(6, 1, std::string(32, '\0'));
   size_t data_off = out.size();
   at["string_data"] = out.size();
@@ -259,9 +298,23 @@ Fixture fixture(FixtureOptions options = {}) {
       append(out, typeIndex(p), 2);
     align();
   }
+  size_t interfaces = 0;
+  if (!options.interfaces.empty()) {
+    auto found = parameter_offsets.find(options.interfaces);
+    if (found != parameter_offsets.end())
+      interfaces = found->second;
+    else {
+      interfaces = out.size();
+      parameter_offsets[options.interfaces] = interfaces;
+      append(out, options.interfaces.size(), 4);
+      for (const auto &type : options.interfaces)
+        append(out, typeIndex(type), 2);
+      align();
+    }
+  }
   if (!parameter_offsets.empty())
     sections.push_back({0x1001, first_parameters, parameter_offsets.size()});
-  bool no_code = options.flags & (0x100 | 0x400);
+  bool no_code = !options.define_method || (options.flags & (0x100 | 0x400));
   size_t code = 0;
   if (!no_code) {
     raw.clear();
@@ -288,16 +341,19 @@ Fixture fixture(FixtureOptions options = {}) {
   raw.clear();
   uleb(raw, bool(options.static_value));
   uleb(raw, 0);
-  uleb(raw, direct);
-  uleb(raw, !direct);
+  uleb(raw, options.define_method && direct);
+  uleb(raw, options.define_method && !direct);
   if (options.static_value) {
-    uleb(raw, 0);
+    uleb(raw, field_index);
     uleb(raw, 0x19);
   }
-  uleb(raw, definition_index);
-  uleb(raw, options.flags);
-  uleb(raw, code);
-  at["class_data"] = section(0x2000, 1, raw);
+  if (options.define_method) {
+    uleb(raw, definition_index);
+    uleb(raw, options.flags);
+    uleb(raw, code);
+  }
+  if (options.define_method || options.static_value)
+    at["class_data"] = section(0x2000, 1, raw);
   if (options.static_value) {
     raw = "\1";
     raw += *options.static_value;
@@ -350,6 +406,9 @@ Fixture fixture(FixtureOptions options = {}) {
       options.method_annotations || options.parameter_annotations) {
     if (options.field_annotations && !options.static_value)
       throw Error("annotation fixture needs a defined field");
+    if ((options.method_annotations || options.parameter_annotations) &&
+        !options.define_method)
+      throw Error("annotation fixture needs a defined method");
     align();
     at["annotations"] = out.size();
     append(out, annotationOffset(options.class_annotations), 4);
@@ -357,7 +416,7 @@ Fixture fixture(FixtureOptions options = {}) {
     append(out, bool(options.method_annotations), 4);
     append(out, bool(options.parameter_annotations), 4);
     if (options.field_annotations) {
-      append(out, 0, 4);
+      append(out, field_index, 4);
       append(out, annotationOffset(options.field_annotations), 4);
     }
     if (options.method_annotations) {
@@ -389,7 +448,7 @@ Fixture fixture(FixtureOptions options = {}) {
            {1, fixture.strings.size(), at["strings"]},
            {2, types.size(), at["types"]},
            {3, protos.size(), at["protos"]},
-           {4, size_t(bool(options.static_value)), at["fields"]},
+           {4, fixture.fields.size(), at["fields"]},
            {5, method_refs.size(), at["methods"]},
            {6, 1, at["class"]}}) {
     patch(out, 56 + (kind - 1) * 8, count);
@@ -405,9 +464,9 @@ Fixture fixture(FixtureOptions options = {}) {
           proto.second.empty() ? 0 : parameter_offsets.at(proto.second));
   }
   std::array<uint32_t, 8> cls{typeIndex(owner),
-                              1,
+                              options.class_flags,
                               typeIndex(parent),
-                              0,
+                              uint32_t(interfaces),
                               UINT32_MAX,
                               uint32_t(at["annotations"]),
                               uint32_t(at["class_data"]),
@@ -470,6 +529,69 @@ void annotationIndex(std::string &out, unsigned kind, unsigned index) {
   // A four-byte unsigned pool index, encoded with value_arg == 3.
   append(out, kind | 0x60, 1);
   append(out, index, 4);
+}
+FixtureAnnotation enumAnnotation(std::string type,
+                                 std::vector<FieldRef> values, bool array,
+                                 unsigned kind = 0x1b) {
+  FixtureAnnotation result{std::move(type), 1};
+  result.extra_fields = values;
+  result.extra_strings = {u"value"};
+  for (const auto &value : values)
+    result.extra_strings.push_back(
+        utf16(value.owner + "->" + value.name + ":" + value.type));
+  result.elements = [values, array, kind](std::string &out, const Fixture &f) {
+    uleb(out, 1);
+    uleb(out, fixtureStringIndex(f, "value"));
+    if (array) {
+      append(out, 0x1c, 1);
+      uleb(out, values.size());
+    }
+    for (const auto &value : values) {
+      auto found = std::find(f.fields.begin(), f.fields.end(), value);
+      ASSERT_NE(found, f.fields.end());
+      unsigned index = unsigned(found - f.fields.begin());
+      if (kind == 0x17)
+        index = fixtureStringIndex(
+            f, value.owner + "->" + value.name + ":" + value.type);
+      else if (kind == 0x18)
+        index = fixtureTypeIndex(f, value.owner);
+      annotationIndex(out, kind, index);
+    }
+  };
+  return result;
+}
+FixtureAnnotation retentionAnnotation(std::string policy = "RUNTIME") {
+  const std::string type = "Ljava/lang/annotation/RetentionPolicy;";
+  return enumAnnotation("Ljava/lang/annotation/Retention;",
+                        {{type, std::move(policy), type}}, false);
+}
+FixtureAnnotation targetAnnotation(std::vector<std::string> targets) {
+  const std::string type = "Ljava/lang/annotation/ElementType;";
+  std::vector<FieldRef> values;
+  for (const auto &target : targets)
+    values.push_back({type, target, type});
+  return enumAnnotation("Ljava/lang/annotation/Target;", std::move(values),
+                        true);
+}
+FixtureOptions markerOptions(std::vector<FixtureAnnotation> annotations = {}) {
+  FixtureOptions options;
+  options.owner = "Lfixture/ZMarker;";
+  options.class_flags = 0x2601;
+  options.interfaces = {"Ljava/lang/annotation/Annotation;"};
+  options.define_method = false;
+  options.annotations = std::move(annotations);
+  if (!options.annotations.empty()) {
+    options.annotation_sets.emplace_back();
+    for (size_t i = 0; i < options.annotations.size(); ++i)
+      options.annotation_sets[0].push_back(i);
+    options.class_annotations = 0;
+  }
+  return options;
+}
+ClassMap linkedDex(const FixtureOptions &options) {
+  auto classes = parse(fixture(options).data);
+  Budget budget;
+  return linkClasses(std::move(classes), budget);
 }
 FixtureAnnotation enclosingClassAnnotation() {
   FixtureAnnotation result{"Ldalvik/annotation/EnclosingClass;", 2};
@@ -1288,6 +1410,16 @@ TEST(MobileDalvikReader, DexAttachedUnknownAnnotationsCannotLoseSemantics) {
         options.annotations = {{type, visibility}};
         options.annotation_sets = {{0}};
         attachFixtureAnnotation(options, attachment);
+        if (std::string_view(attachment) == "class" && visibility != 2) {
+          auto classes = parse(fixture(options).data);
+          ASSERT_EQ(classes.size(), 1u);
+          ASSERT_EQ(classes[0].marker_annotations.size(), 1u);
+          EXPECT_EQ(classes[0].marker_annotations[0].type, type);
+          EXPECT_EQ(classes[0].marker_annotations[0].visibility, visibility);
+          Budget budget;
+          EXPECT_THROW(linkClasses(std::move(classes), budget), Error);
+          continue;
+        }
         std::string declaration;
         if (std::string_view(attachment) == "class")
           declaration = "class Lfixture/Sample;";
@@ -1303,6 +1435,380 @@ TEST(MobileDalvikReader, DexAttachedUnknownAnnotationsCannotLoseSemantics) {
       }
     }
   }
+}
+
+TEST(MobileDalvikReader, DexMarkerUsesRealEnumPoolAndHasNoElementMethods) {
+  const std::vector<std::string> targets{"TYPE_USE", "FIELD", "TYPE"};
+  auto options = markerOptions(
+      {retentionAnnotation(), targetAnnotation(targets),
+       {"Ljava/lang/annotation/Documented;", 1},
+       {"Ljava/lang/annotation/Inherited;", 1}, {"Ljava/lang/Deprecated;", 1}});
+  const auto f = fixture(options);
+  ASSERT_EQ(f.fields.size(), 4u);
+  EXPECT_TRUE(f.methods.empty());
+  auto classes = parse(f.data);
+  ASSERT_EQ(classes.size(), 1u);
+  const auto &marker = classes[0];
+  EXPECT_EQ(marker.access,
+            (Access{"public", "interface", "abstract", "annotation"}));
+  EXPECT_EQ(marker.interfaces,
+            (std::vector<std::string>{"Ljava/lang/annotation/Annotation;"}));
+  EXPECT_TRUE(marker.fields.empty());
+  EXPECT_TRUE(marker.methods.empty());
+  EXPECT_TRUE(marker.deprecated);
+  EXPECT_EQ(marker.annotation_metadata.retention, "RUNTIME");
+  ASSERT_TRUE(marker.annotation_metadata.targets);
+  EXPECT_EQ(*marker.annotation_metadata.targets, targets);
+  EXPECT_TRUE(marker.annotation_metadata.documented);
+  EXPECT_TRUE(marker.annotation_metadata.inherited);
+  Budget budget;
+  auto linked = linkClasses(std::move(classes), budget);
+  validateSourceScopes(linked, budget);
+  EXPECT_EQ(*linked.at(options.owner).annotation_metadata.targets, targets);
+}
+
+TEST(MobileDalvikReader, DexMarkerPreservesExplicitAndAbsentMetaValues) {
+  const std::vector<std::optional<std::string>> policies{
+      std::nullopt, "SOURCE", "CLASS", "RUNTIME"};
+  const std::vector<std::optional<std::vector<std::string>>> targets{
+      std::nullopt, std::vector<std::string>{},
+      std::vector<std::string>{"ANNOTATION_TYPE", "TYPE"}};
+  for (const auto &policy : policies) {
+    for (const auto &target : targets) {
+      SCOPED_TRACE(policy.value_or("absent") + " target " +
+                   (target ? std::to_string(target->size()) : "absent"));
+      std::vector<FixtureAnnotation> annotations;
+      if (policy)
+        annotations.push_back(retentionAnnotation(*policy));
+      if (target)
+        annotations.push_back(targetAnnotation(*target));
+      const auto options = markerOptions(std::move(annotations));
+      auto classes = linkedDex(options);
+      Budget budget;
+      validateSourceScopes(classes, budget);
+      validateSourceScopes(classes, budget);
+      const auto &meta = classes.at(options.owner).annotation_metadata;
+      EXPECT_EQ(meta.retention, policy);
+      EXPECT_EQ(meta.targets, target);
+      EXPECT_FALSE(meta.documented);
+      EXPECT_FALSE(meta.inherited);
+    }
+  }
+}
+
+TEST(MobileDalvikReader, DexMetaEnumsRequireExactKindOwnerTypeAndConstant) {
+  for (bool target : {false, true}) {
+    const std::string annotation = target ? "Ljava/lang/annotation/Target;"
+                                          : "Ljava/lang/annotation/Retention;";
+    const std::string owner = target ? "Ljava/lang/annotation/ElementType;"
+                                     : "Ljava/lang/annotation/RetentionPolicy;";
+    const FieldRef valid{owner, target ? "TYPE" : "RUNTIME", owner};
+    const auto valid_options =
+        markerOptions({enumAnnotation(annotation, {valid}, target)});
+    ASSERT_NO_THROW(linkedDex(valid_options));
+    for (unsigned kind : {0x17u, 0x18u, 0x19u}) {
+      SCOPED_TRACE(annotation + " encoded kind " + std::to_string(kind));
+      EXPECT_THROW(linkedDex(markerOptions(
+                       {enumAnnotation(annotation, {valid}, target, kind)})),
+                   Error);
+    }
+    for (unsigned mutation = 0; mutation != 3; ++mutation) {
+      SCOPED_TRACE(annotation + " enum identity " +
+                   std::to_string(mutation));
+      auto field = valid;
+      if (mutation == 0)
+        field.owner = "Lfixture/OtherEnum;";
+      else if (mutation == 1)
+        field.type = "Ljava/lang/String;";
+      else
+        field.name = "UNKNOWN";
+      EXPECT_THROW(linkedDex(markerOptions(
+                       {enumAnnotation(annotation, {field}, target)})),
+                   Error);
+    }
+    EXPECT_THROW(linkedDex(markerOptions(
+                     {enumAnnotation(annotation, {valid}, !target)})),
+                 Error);
+  }
+  EXPECT_THROW(linkedDex(markerOptions({targetAnnotation({"TYPE", "TYPE"})})),
+               Error);
+  for (const auto &newer : {"MODULE", "RECORD_COMPONENT"})
+    EXPECT_THROW(linkedDex(markerOptions({targetAnnotation({newer})})), Error);
+  const std::vector<std::string> java8_targets{
+      "TYPE_USE", "TYPE_PARAMETER", "PACKAGE", "ANNOTATION_TYPE",
+      "LOCAL_VARIABLE", "CONSTRUCTOR", "PARAMETER", "METHOD", "FIELD", "TYPE"};
+  auto all = linkedDex(markerOptions({targetAnnotation(java8_targets)}));
+  ASSERT_TRUE(all.at("Lfixture/ZMarker;").annotation_metadata.targets);
+  EXPECT_EQ(*all.at("Lfixture/ZMarker;").annotation_metadata.targets,
+            java8_targets);
+  auto out_of_bounds = retentionAnnotation();
+  out_of_bounds.elements = [](std::string &out, const Fixture &f) {
+    uleb(out, 1);
+    uleb(out, fixtureStringIndex(f, "value"));
+    annotationIndex(out, 0x1b, UINT32_MAX);
+  };
+  expectDexError(fixture(markerOptions({out_of_bounds})).data,
+                 "Invalid DEX: field index out of bounds");
+}
+
+TEST(MobileDalvikReader, DexMetaValuesCannotBeMissingExtraOrRepeated) {
+  for (const auto &type : {"Ljava/lang/annotation/Retention;",
+                           "Ljava/lang/annotation/Target;"}) {
+    SCOPED_TRACE(type);
+    EXPECT_THROW(linkedDex(markerOptions({{type, 1}})), Error);
+  }
+  auto duplicate = retentionAnnotation();
+  EXPECT_THROW(linkedDex(markerOptions({duplicate, duplicate})), Error);
+  for (const auto &base :
+       {retentionAnnotation(), targetAnnotation({"TYPE"}),
+        FixtureAnnotation{"Ljava/lang/annotation/Documented;", 1},
+        FixtureAnnotation{"Ljava/lang/annotation/Inherited;", 1}}) {
+    SCOPED_TRACE(base.type);
+    auto extra = base;
+    extra.extra_strings = {u"other", u"value"};
+    extra.elements = [](std::string &out, const Fixture &f) {
+      uleb(out, 2);
+      for (const auto &key : {"other", "value"}) {
+        uleb(out, fixtureStringIndex(f, key));
+        append(out, 0x1f, 1); // Two well-formed false values, neither ignored.
+      }
+    };
+    EXPECT_THROW(linkedDex(markerOptions({extra})), Error);
+  }
+}
+
+TEST(MobileDalvikReader, DexMetaVisibilityAndDeclarationRolesRemainExact) {
+  for (const auto &annotation :
+       {retentionAnnotation(), targetAnnotation({"TYPE"}),
+        FixtureAnnotation{"Ljava/lang/annotation/Documented;", 1},
+        FixtureAnnotation{"Ljava/lang/annotation/Inherited;", 1}}) {
+    for (unsigned visibility : {0u, 2u, 3u}) {
+      SCOPED_TRACE(annotation.type + " visibility " +
+                   std::to_string(visibility));
+      auto wrong = annotation;
+      wrong.visibility = visibility;
+      EXPECT_THROW(linkedDex(markerOptions({wrong})), Error);
+    }
+    for (const auto &site : {"class", "field", "method", "parameter"}) {
+      SCOPED_TRACE(annotation.type + " on " + site);
+      FixtureOptions options;
+      options.annotations = {annotation};
+      options.annotation_sets = {{0}};
+      attachFixtureAnnotation(options, site);
+      EXPECT_THROW(linkedDex(options), Error);
+    }
+  }
+}
+
+TEST(MobileDalvikReader, DexMarkerApplicationsLinkAcrossInputsAndRetainPolicy) {
+  for (const auto &policy : {"absent", "CLASS", "RUNTIME"}) {
+    SCOPED_TRACE(policy);
+    const unsigned visibility = std::string_view(policy) == "RUNTIME" ? 1 : 0;
+    auto definition = markerOptions({targetAnnotation({"TYPE"})});
+    if (std::string_view(policy) != "absent") {
+      definition.annotations.push_back(retentionAnnotation(policy));
+      definition.annotation_sets[0].push_back(1);
+    }
+    FixtureOptions use;
+    use.owner = "Lfixture/AUse;";
+    use.annotations = {{definition.owner, visibility}};
+    use.annotation_sets = {{0}};
+    use.class_annotations = 0;
+    auto users = parse(fixture(use).data);
+    ASSERT_EQ(users.size(), 1u);
+    ASSERT_EQ(users[0].marker_annotations.size(), 1u);
+    EXPECT_EQ(users[0].marker_annotations[0].type, definition.owner);
+    EXPECT_EQ(users[0].marker_annotations[0].visibility, visibility);
+    Budget unresolved_budget;
+    EXPECT_THROW(linkClasses(users, unresolved_budget), Error);
+    auto definitions = parse(fixture(definition).data);
+    users[0].source_id = "classes.dex";
+    definitions[0].source_id = "classes2.dex";
+    users.push_back(definitions[0]);
+    Budget budget;
+    auto linked = linkClasses(users, budget);
+    validateSourceScopes(linked, budget);
+    EXPECT_EQ(linked.at(use.owner).marker_annotations[0].visibility,
+              visibility);
+    EXPECT_EQ(linked.at(definition.owner).source_id, "classes2.dex");
+    use.annotations[0].visibility = 1 - visibility;
+    auto wrong = parse(fixture(use).data);
+    wrong.push_back(definitions[0]);
+    Budget wrong_budget;
+    EXPECT_THROW(linkClasses(std::move(wrong), wrong_budget), Error);
+  }
+}
+
+TEST(MobileDalvikReader, DexMarkerApplicationsRejectSourceAndPayloadLoss) {
+  auto definition = markerOptions({retentionAnnotation("SOURCE")});
+  auto definitions = parse(fixture(definition).data);
+  for (unsigned visibility : {0u, 1u}) {
+    FixtureOptions use;
+    use.annotations = {{definition.owner, visibility}};
+    use.annotation_sets = {{0}};
+    use.class_annotations = 0;
+    auto classes = parse(fixture(use).data);
+    classes.push_back(definitions[0]);
+    Budget budget;
+    EXPECT_THROW(linkClasses(std::move(classes), budget), Error);
+    use.annotations[0].extra_strings = {u"value"};
+    use.annotations[0].elements = [](std::string &out, const Fixture &f) {
+      uleb(out, 1);
+      uleb(out, fixtureStringIndex(f, "value"));
+      append(out, 0x1f, 1);
+    };
+    EXPECT_THROW(parse(fixture(use).data), Error);
+    use.annotations[0].elements = {};
+    use.annotations.push_back({definition.owner, visibility});
+    use.annotation_sets[0].push_back(1);
+    EXPECT_THROW(parse(fixture(use).data), Error);
+  }
+}
+
+TEST(MobileDalvikReader, DexReservedEmptyAnnotationsCannotBecomeMarkers) {
+  for (const auto &Type : {"Ldalvik/annotation/Throws;",
+                           "Ldalvik/annotation/AnnotationDefault;"}) {
+    SCOPED_TRACE(Type);
+    auto definition = markerOptions({retentionAnnotation()});
+    definition.owner = Type;
+    FixtureOptions use;
+    use.annotations = {{Type, 1}};
+    use.annotation_sets = {{0}};
+    use.class_annotations = 0;
+    auto classes = parse(fixture(use).data);
+    ASSERT_EQ(classes.size(), 1u);
+    ASSERT_EQ(classes[0].marker_annotations.size(), 1u);
+    EXPECT_EQ(classes[0].marker_annotations[0].type, Type);
+    auto definitions = parse(fixture(definition).data);
+    classes.push_back(definitions[0]);
+    Budget budget;
+    try {
+      (void)linkClasses(std::move(classes), budget);
+      FAIL() << "Reserved annotation was reinterpreted as a user marker";
+    } catch (const Error &error) {
+      EXPECT_NE(std::string(error.what()).find("reserved marker annotation"),
+                std::string::npos);
+    }
+  }
+}
+
+TEST(MobileDalvikReader, SmaliMarkerMetaGrammarPreservesEnumsAndOrder) {
+  const std::string header =
+      ".class public interface abstract annotation Lfixture/Marker;\n"
+      ".super Ljava/lang/Object;\n"
+      ".implements Ljava/lang/annotation/Annotation;\n";
+  for (const auto &policy : {"SOURCE", "CLASS", "RUNTIME"}) {
+    SCOPED_TRACE(policy);
+    auto cls = smali(
+        header + ".annotation runtime Ljava/lang/annotation/Retention;\n"
+                 "value = .enum Ljava/lang/annotation/RetentionPolicy;->" +
+        policy + ":Ljava/lang/annotation/RetentionPolicy;\n.end annotation\n"
+                 ".annotation runtime Ljava/lang/annotation/Target;\n"
+                 "value = {\n.enum Ljava/lang/annotation/ElementType;->"
+                 "ANNOTATION_TYPE:Ljava/lang/annotation/ElementType;,\n"
+                 ".enum Ljava/lang/annotation/ElementType;->"
+                 "TYPE:Ljava/lang/annotation/ElementType;\n}\n.end annotation\n"
+                 ".annotation runtime Ljava/lang/annotation/Documented;\n"
+                 ".end annotation\n"
+                 ".annotation runtime Ljava/lang/annotation/Inherited;\n"
+                 ".end annotation\n");
+    EXPECT_EQ(cls.annotation_metadata.retention, policy);
+    ASSERT_TRUE(cls.annotation_metadata.targets);
+    EXPECT_EQ(*cls.annotation_metadata.targets,
+              (std::vector<std::string>{"ANNOTATION_TYPE", "TYPE"}));
+    EXPECT_TRUE(cls.annotation_metadata.documented);
+    EXPECT_TRUE(cls.annotation_metadata.inherited);
+    EXPECT_TRUE(cls.fields.empty());
+    EXPECT_TRUE(cls.methods.empty());
+    Budget budget;
+    EXPECT_NO_THROW(linkClasses({cls}, budget));
+  }
+  auto absent = smali(header);
+  auto empty = smali(
+      header + ".annotation runtime Ljava/lang/annotation/Target;\n"
+               "value = {}\n.end annotation\n");
+  EXPECT_FALSE(absent.annotation_metadata.targets);
+  ASSERT_TRUE(empty.annotation_metadata.targets);
+  EXPECT_TRUE(empty.annotation_metadata.targets->empty());
+  EXPECT_FALSE(empty.annotation_metadata.retention);
+}
+
+TEST(MobileDalvikReader, SmaliMarkerMetadataRejectsMalformedEnumAndMetaSites) {
+  const std::string header =
+      ".class public interface abstract annotation Lfixture/Marker;\n"
+      ".super Ljava/lang/Object;\n"
+      ".implements Ljava/lang/annotation/Annotation;\n";
+  const std::string start =
+      ".annotation runtime Ljava/lang/annotation/Retention;\n";
+  const std::string valid =
+      "value = .enum Ljava/lang/annotation/RetentionPolicy;->"
+      "RUNTIME:Ljava/lang/annotation/RetentionPolicy;\n";
+  for (const auto &value : {
+           "value = Ljava/lang/annotation/RetentionPolicy;->RUNTIME:"
+           "Ljava/lang/annotation/RetentionPolicy;\n",
+           "value = .enum Lfixture/Policy;->RUNTIME:"
+           "Ljava/lang/annotation/RetentionPolicy;\n",
+           "value = .enum Ljava/lang/annotation/RetentionPolicy;->RUNTIME:"
+           "Ljava/lang/String;\n",
+           "value = .enum Ljava/lang/annotation/RetentionPolicy;->UNKNOWN:"
+           "Ljava/lang/annotation/RetentionPolicy;\n",
+           "value = {}\n", "other = 1\n", ""}) {
+    SCOPED_TRACE(value);
+    Budget budget;
+    EXPECT_THROW(linkClasses({smali(header + start + value +
+                                     ".end annotation\n")},
+                             budget),
+                 Error);
+  }
+  EXPECT_THROW(smali(header + start + valid + valid + ".end annotation\n"),
+               Error);
+  const auto annotation = start + valid + ".end annotation\n";
+  EXPECT_THROW(smali(header + annotation + annotation), Error);
+  for (const auto &visibility : {"build", "system"})
+    EXPECT_THROW(smali(header + ".annotation " + visibility +
+                       " Ljava/lang/annotation/Retention;\n" + valid +
+                       ".end annotation\n"),
+                 Error);
+  for (const auto &meta : {"Retention", "Target", "Documented", "Inherited"}) {
+    SCOPED_TRACE(meta);
+    const std::string bare =
+        ".annotation runtime Ljava/lang/annotation/" + std::string(meta) +
+        ";\n.end annotation\n";
+    EXPECT_THROW(smali(header + ".field public static final flag:I = 0\n" +
+                       bare + ".end field\n"),
+                 Error);
+    EXPECT_THROW(smali(header + ".method public abstract item()I\n" + bare +
+                       ".end method\n"),
+                 Error);
+  }
+}
+
+TEST(MobileDalvikReader, SmaliEmptyClassApplicationsRequireLinkedDefinition) {
+  const std::string definition =
+      ".class public interface abstract annotation Lfixture/ZMarker;\n"
+      ".super Ljava/lang/Object;\n"
+      ".implements Ljava/lang/annotation/Annotation;\n";
+  const std::string use =
+      ".class public Lfixture/AUse;\n.super Ljava/lang/Object;\n"
+      ".annotation build Lfixture/ZMarker;\n.end annotation\n";
+  auto cls = smali(use);
+  ASSERT_EQ(cls.marker_annotations.size(), 1u);
+  EXPECT_EQ(cls.marker_annotations[0].type, "Lfixture/ZMarker;");
+  EXPECT_EQ(cls.marker_annotations[0].visibility, 0u);
+  Budget missing_budget;
+  EXPECT_THROW(linkClasses({cls}, missing_budget), Error);
+  Budget linked_budget;
+  auto linked = linkClasses({cls, smali(definition)}, linked_budget);
+  EXPECT_EQ(linked.at(cls.name).marker_annotations[0].visibility, 0u);
+  EXPECT_FALSE(linked.at("Lfixture/ZMarker;").annotation_metadata.retention);
+  EXPECT_THROW(smali(use + ".annotation build Lfixture/ZMarker;\n"
+                          ".end annotation\n"),
+               Error);
+  EXPECT_THROW(smali(".class public Lfixture/AUse;\n"
+                     ".super Ljava/lang/Object;\n"
+                     ".annotation build Lfixture/ZMarker;\n"
+                     "value = 1\n.end annotation\n"),
+               Error);
 }
 
 TEST(MobileDalvikReader, DexDeprecatedBindsOnlyItsExactDeclaration) {
@@ -2055,9 +2561,11 @@ TEST(MobileDalvikReader, DexRuntimeAnnotationFailureCannotPublishJava) {
     (void)recoverAndroid(recovery, output, budget);
     FAIL() << "Runtime annotation was silently dropped during recovery";
   } catch (const Error &error) {
-    EXPECT_STREQ(error.what(),
-                 "Invalid DEX: unsupported annotation Lfixture/Unknown; "
-                 "on class Lfixture/Sample;");
+    const std::string message = error.what();
+    EXPECT_NE(message.find("unresolved marker annotation definition"),
+              std::string::npos);
+    EXPECT_NE(message.find("Lfixture/Unknown;"), std::string::npos);
+    EXPECT_NE(message.find("Lfixture/Sample;"), std::string::npos);
   }
   EXPECT_TRUE(fs::is_empty(output));
   EXPECT_EQ(readFile(input, 1024 * 1024), f.data);
@@ -2075,10 +2583,13 @@ TEST(MobileDalvikReader, SmaliStructuralAnnotationsPreserveNestedOwnership) {
   EXPECT_FALSE(cls.enclosing_method);
   EXPECT_EQ(cls.inner_name, "Nested");
   EXPECT_TRUE(has(cls.inner_access, "static"));
-  EXPECT_THROW(
+  auto unknown =
       smali(".class public LBad;\n.super Ljava/lang/Object;\n.annotation "
-            "runtime LUnknown;\n.end annotation\n"),
-      Error);
+            "runtime LUnknown;\n.end annotation\n");
+  ASSERT_EQ(unknown.marker_annotations.size(), 1u);
+  EXPECT_EQ(unknown.marker_annotations[0].type, "LUnknown;");
+  Budget budget;
+  EXPECT_THROW(linkClasses({unknown}, budget), Error);
 }
 TEST(MobileDalvikReader, SmaliLocalMetadataRetainsExactMethodAndPresence) {
   const MethodRef enclosing{"Lfixture/Outer;", "first", {"I"}, "I"};
@@ -2656,8 +3167,14 @@ TEST(MobileDalvikReader, PersistentReaderVectorsMatchCompleteTypedModels) {
     if (*expired)
       budget.deadline = std::chrono::steady_clock::time_point::min();
     auto parseModel = [&]() -> Value {
-      if (*kind == "smali")
-        return modelJSON(parseSmali(bytes, input_id->str(), budget));
+      if (*kind == "smali") {
+        auto cls = parseSmali(bytes, input_id->str(), budget);
+        // The unchanged unknown-marker negative vector is now rejected at
+        // linking, after the reader retains its empty application record.
+        if (*rejected && !cls.marker_annotations.empty())
+          (void)linkClasses({cls}, budget);
+        return modelJSON(cls);
+      }
       Array classes;
       for (const auto &cls : parseDex(bytes, input_id->str(), budget))
         classes.push_back(modelJSON(cls));

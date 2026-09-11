@@ -553,6 +553,64 @@ class Reader {
       *throws_types = std::move(types);
     }
   }
+  bool annotationMetadata(const std::string &type,
+                          const std::string &visibility, Class &cls,
+                          std::set<std::string> &seen) {
+    bool retention = type == "Ljava/lang/annotation/Retention;";
+    bool target = type == "Ljava/lang/annotation/Target;";
+    bool documented = type == "Ljava/lang/annotation/Documented;";
+    bool inherited = type == "Ljava/lang/annotation/Inherited;";
+    if (!retention && !target && !documented && !inherited)
+      return false;
+    if (visibility != "runtime")
+      fail("annotation metadata " + type + " on " + cls.name +
+           " requires runtime visibility");
+    if (!seen.insert(type).second)
+      fail("duplicate annotation metadata " + type);
+    auto &metadata = cls.annotation_metadata;
+    if (documented || inherited) {
+      if (peek() != ".end annotation")
+        fail("annotation metadata " + type + " must have no elements");
+      take();
+      (documented ? metadata.documented : metadata.inherited) = true;
+      return true;
+    }
+    std::string body;
+    while (peek() != ".end annotation") {
+      if (!body.empty())
+        body += ' ';
+      body += take();
+    }
+    take();
+    Match value;
+    auto enumValue = [&](const std::string &text, const std::string &owner) {
+      budget.tick();
+      Match item;
+      if (!match(text, item, R"(\.enum\s+(\S+))"))
+        fail("annotation metadata " + type + " requires an enum value");
+      auto ref = fieldRef(item[1]);
+      if (ref.owner != owner || ref.type != owner)
+        fail("annotation metadata " + type + " has an invalid enum identity");
+      return ref.name;
+    };
+    if (retention) {
+      if (!match(body, value, R"(value\s*=\s*(.*))"))
+        fail("Retention annotation requires exactly value");
+      metadata.retention = enumValue(
+          trim(value[1]), "Ljava/lang/annotation/RetentionPolicy;");
+    } else {
+      if (!match(body, value, R"(value\s*=\s*\{(.*)\})"))
+        fail("Target annotation requires an enum array");
+      std::vector<std::string> targets;
+      auto contents = trim(value[1]);
+      if (!contents.empty())
+        for (const auto &item : parts(contents))
+          targets.push_back(
+              enumValue(item, "Ljava/lang/annotation/ElementType;"));
+      metadata.targets = std::move(targets);
+    }
+    return true;
+  }
   void annotation(const std::string &header, Class &cls,
                   std::set<std::string> &seen) {
     Match m;
@@ -565,15 +623,24 @@ class Reader {
                        seen, "class " + cls.name);
       return;
     }
+    if (annotationMetadata(type, m[1], cls, seen))
+      return;
+    if (type != "Ldalvik/annotation/InnerClass;" &&
+        type != "Ldalvik/annotation/EnclosingClass;" &&
+        type != "Ldalvik/annotation/EnclosingMethod;" &&
+        type != "Ldalvik/annotation/MemberClasses;") {
+      if (m[1] == "system" || peek() != ".end annotation")
+        fail("unsupported annotation " + type + " on class " + cls.name);
+      if (!seen.insert(type).second)
+        fail("duplicate marker annotation on class " + cls.name);
+      take();
+      cls.marker_annotations.push_back({type, m[1] == "runtime" ? 1u : 0u});
+      return;
+    }
     if (m[1] != "system")
       fail("unsupported smali annotation visibility or declaration");
     if (!seen.insert(type).second)
       fail("duplicate smali structural annotation");
-    if (type != "Ldalvik/annotation/InnerClass;" &&
-        type != "Ldalvik/annotation/EnclosingClass;" &&
-        type != "Ldalvik/annotation/EnclosingMethod;" &&
-        type != "Ldalvik/annotation/MemberClasses;")
-      fail("smali annotation is not representable in the source model");
     std::vector<std::string> body;
     while (peek() != ".end annotation")
       body.push_back(take());

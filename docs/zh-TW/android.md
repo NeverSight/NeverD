@@ -35,6 +35,12 @@ Java 名稱繫結區分類別標頭與類別本體，可處理已知的同套件
 
 類別、欄位、方法及建構式上不含元素且執行時可見的 Java 8 `@java.lang.Deprecated` 標記會被保留。參數註解、帶有註解的靜態初始化器、其他可見性層級，以及 `since` 或 `forRemoval` 等元素值均會被拒絕。重新編譯後，CI 分別比對 classfile 的 `Deprecated` 屬性與執行時註解，並檢查未加註解的對照宣告及產生的輔助方法；輔助方法不計入原始方法數。
 
+內建引擎也會保留受支援註解宣告上執行時可見的 `@Retention`、`@Target`、`@Documented` 和 `@Inherited`，並輸出真正的 `@interface`。此子集不含欄位、方法、型別參數或巢狀宣告，僅支援名稱、存取權限及所屬關係均可確認的頂層註解和靜態成員註解；區域類別或匿名類別作用域會被拒絕。
+
+類別、介面和註解宣告上的空 marker 套用，要求同一批分析的類別中包含可存取且相符的 marker 定義，而且其 Retention 和 Target 允許該套用。可以重建 `SOURCE` 宣告，但已持久化至輸入中的套用會被拒絕；`CLASS` 或未指定 Retention 的套用要求 DEX build 可見性（`0`），`RUNTIME` 要求 runtime 可見性（`1`）。缺少 Retention 與明確指定 `CLASS` 保持區別，缺少 Target 與空陣列也保持區別，Target 陣列順序不會改變。Target 值限定為 Java 8，`MODULE`、`RECORD_COMPONENT` 等較新值會被拒絕。保留 `@Inherited` 時，不會將繼承而來的套用複製成子類別上的直接宣告。
+
+註解元素宣告與預設值、非空自訂註解套用、欄位／方法／參數上的自訂 marker、外部註解定義、可重複註解的容器和 `kotlin.Metadata` 仍不支援。marker 定義會輸出為類別宣告，不包含元素方法或輔助方法，也不增加已恢復方法數。
+
 CI 使用自有 Java 8 範例，經 D8 與 NeverD 處理後重新編譯全部產生的 Java，並比對完整 `Signature` 中繼資料、反射結果與行為。這些範例檢查不代表真實應用程式已達到完整恢復標準。
 
 ### Linux 與 macOS
