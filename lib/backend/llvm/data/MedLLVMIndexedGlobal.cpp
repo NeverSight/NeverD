@@ -10,6 +10,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "MedLLVMFailureSnapshot.h"
+
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/support/Diagnostic.h"
@@ -56,14 +58,17 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
   auto constInRodata = [&](uint64_t C) {
     return isMaterializableReadOnlyDataAddress(C);
   };
-  auto failAmbiguousAddress = [&]() {
+  auto failAmbiguousAddress = [&](const char *SnapshotBranch) {
     if (!FailClosed)
       return;
-    if (!FatalDataPointerResolution)
+    if (!FatalDataPointerResolution) {
       syncError() << "med_llvm_emitter: ambiguous reachable read-only table-"
                      "base address "
                   << AddrVar.display() << " in " << CurMedFunc->Name
                   << "; refusing stale-address fallback\n";
+      detail::failure_snapshot::capture(Img, CurMedFunc, SnapshotBranch,
+                                        AddrVar, FatalCodePointerResolution);
+    }
     FatalDataPointerResolution = true;
   };
   auto failAmbiguousPhi = [&](const PhiNode &Phi) {
@@ -192,7 +197,7 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
   }
 
   if (SawInvalidTableBlend) {
-    failAmbiguousAddress();
+    failAmbiguousAddress("indexed-failAmbiguousAddress-L195");
     return nullptr;
   }
 
@@ -828,12 +833,12 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
       }
     }
   }
-  auto failAmbiguousFallback = [&]() {
+  auto failAmbiguousFallback = [&](const char *SnapshotBranch) {
     if (PrimaryPhi) {
       failAmbiguousPhi(*PrimaryPhi);
       return;
     }
-    failAmbiguousAddress();
+    failAmbiguousAddress(SnapshotBranch);
   };
 
   // Fallback for a SELECT-merged base with no induction PHI: the ARM32 unrolled
@@ -899,7 +904,7 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
       // prove a compatible pointer model. A live scalar cannot be discarded
       // merely because another arm happens to be recoverable.
       if (static_cast<bool>(L) != static_cast<bool>(R)) {
-        failAmbiguousFallback();
+        failAmbiguousFallback("indexed-failAmbiguousFallback-L902");
         return nullptr;
       }
       if (!L) {
@@ -910,7 +915,7 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
         // the only safe alternative to retaining their original absolute VAs.
         if (selectionArmIsTableShaped(Left) ||
             selectionArmIsTableShaped(Right)) {
-          failAmbiguousFallback();
+          failAmbiguousFallback("indexed-failAmbiguousFallback-L913");
           return nullptr;
         }
         continue;
@@ -918,7 +923,7 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
       L->insert(L->end(), R->begin(), R->end());
       for (const RecoveredPhiBase &Recovered : *L) {
         if (BaseAddressModel && *BaseAddressModel != Recovered.Model) {
-          failAmbiguousFallback();
+          failAmbiguousFallback("indexed-failAmbiguousFallback-L921");
           return nullptr;
         }
         BaseAddressModel = Recovered.Model;
@@ -937,7 +942,7 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
           if (!RunGV || (ProvenRun &&
                          (RunGV != ProvenRun || RunStart != ProvenRunStart))) {
             if (!FatalCodePointerResolution && !FatalDataPointerResolution)
-              failAmbiguousFallback();
+              failAmbiguousFallback("indexed-failAmbiguousFallback-L940");
             return nullptr;
           }
           ProvenRun = RunGV;
@@ -1167,11 +1172,20 @@ MedLLVMEmitter::tryResolveIndexedGlobalPtr(const MedVar &AddrVar,
     if (!valueIsStableAddressOffset(T) &&
         !isBoundedScalarLookup(T)) {
       if (FailClosed) {
-        if (!FatalDataPointerResolution)
+        if (!FatalDataPointerResolution) {
           syncError() << "med_llvm_emitter: read-only table address "
                       << AddrVar.display() << " in " << CurMedFunc->Name
                       << " has an unproved runtime offset; refusing stale-"
                          "address fallback\n";
+          detail::failure_snapshot::capture(
+              Img, CurMedFunc, "indexed-runtime-offset", AddrVar,
+              FatalCodePointerResolution, &T,
+              {{"base", Base}, {"have_base", HaveBase},
+               {"base_is_rodata_symbol", BaseIsRodataSymbol},
+               {"base_owner_present", BaseOwner.has_value()},
+               {"base_owner", BaseOwner.value_or(InvalidVA)},
+               {"index_term_count", IdxTerms.size()}});
+        }
         FatalDataPointerResolution = true;
       }
       return nullptr;

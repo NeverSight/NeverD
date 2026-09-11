@@ -10,6 +10,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../data/MedLLVMFailureSnapshot.h"
+
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
@@ -3285,11 +3287,14 @@ bool MedLLVMEmitter::isMaskedSelectOr(const MedOp &Or, MedVar &Cond,
 }
 
 void MedLLVMEmitter::failAmbiguousDataPointerPhi(const PhiNode &Phi) const {
-  if (!FatalDataPointerResolution)
+  if (!FatalDataPointerResolution) {
     syncError() << "med_llvm_emitter: ambiguous reachable read-only table-base "
                    "PHI "
                 << Phi.Output.display() << " in " << CurMedFunc->Name
                 << "; refusing stale-address fallback\n";
+    detail::failure_snapshot::capture(Img, CurMedFunc, "ambiguous-phi",
+                                      Phi.Output, FatalCodePointerResolution);
+  }
   FatalDataPointerResolution = true;
 }
 

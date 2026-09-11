@@ -28,6 +28,7 @@
 #define NEVERD_UNITTESTS_SEMANTIC_SEMANTICROUNDTRIPFIXTURE_H
 
 #include "../TestProcess.h"
+#include "FailureSnapshotInput.h"
 #include "UnicornSemanticFixture.h"
 
 #include "neverd/libc/LibCNames.h"
@@ -367,6 +368,8 @@ private:
       GTEST_SKIP() << "clang compilation failed: " << CR.Err;
       return;
     }
+    neverd::test::retainFailureSnapshotInput(TC.Name, CPath, ObjPath,
+                                             CompileCmd);
 
     // When LinkMemBuiltins is on (the default) and the source actually emits a
     // mem* builtin (clang lowers a runtime-size __builtin_mem* / a large local

@@ -10,6 +10,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "MedLLVMFailureSnapshot.h"
+
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/object/SectionNames.h"
@@ -1578,7 +1580,7 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       Proof = BaseProof::HasBase;
     }
   }
-  auto failAmbiguousAddress = [&]() {
+  auto failAmbiguousAddress = [&](const char *SnapshotBranch) {
     if (SawAmbiguous)
       *SawAmbiguous = true;
     if (!FailClosed)
@@ -1587,33 +1589,46 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       failAmbiguousDataPointerPhi(*EvidencePhi);
       return;
     }
-    if (!FatalDataPointerResolution)
+    if (!FatalDataPointerResolution) {
       syncError() << "med_llvm_emitter: ambiguous reachable read-only table-"
                      "base address "
                   << BaseVar.display() << " in " << CurMedFunc->Name
                   << "; refusing stale-address fallback\n";
+      detail::failure_snapshot::capture(
+          Img, CurMedFunc, SnapshotBranch, BaseVar, FatalCodePointerResolution,
+          nullptr,
+          {{"proof", static_cast<uint64_t>(Proof)},
+           {"audit_incomplete", AuditIncomplete},
+           {"invalid_pointer_expression", SawInvalidPointerExpression},
+           {"table_shaped_invalid_expression", SawTableShapedInvalidExpression},
+           {"unproved_frame_reload", SawUnprovedFrameReload},
+           {"raw_original_base", SawRawOriginalBase},
+           {"symbolized_base", SawSymbolizedBase},
+           {"non_base_value_merge", SawNonBaseValueMerge},
+           {"base_count", Bases.size()}});
+    }
     FatalDataPointerResolution = true;
   };
   if (AuditIncomplete) {
-    failAmbiguousAddress();
+    failAmbiguousAddress("literal-ambiguity-L1598");
     return nullptr;
   }
   if (Proof == BaseProof::Invalid && SawInvalidPointerExpression &&
       (!Bases.empty() || SawTableShapedInvalidExpression)) {
-    failAmbiguousAddress();
+    failAmbiguousAddress("literal-ambiguity-L1603");
     return nullptr;
   }
   if (Proof == BaseProof::HasBase && SawUnprovedFrameReload) {
-    failAmbiguousAddress();
+    failAmbiguousAddress("literal-ambiguity-L1607");
     return nullptr;
   }
   if (Proof == BaseProof::HasBase && SawRawOriginalBase && SawSymbolizedBase) {
-    failAmbiguousAddress();
+    failAmbiguousAddress("literal-ambiguity-L1611");
     return nullptr;
   }
   if (Proof == BaseProof::HasBase && SawNonBaseValueMerge &&
       SawRawOriginalBase) {
-    failAmbiguousAddress();
+    failAmbiguousAddress("literal-ambiguity-L1616");
     return nullptr;
   }
   if (Proof != BaseProof::HasBase)
@@ -1633,7 +1648,7 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   // relocatable ptrtoint values. Mixing the two representations cannot be
   // repaired by either a raw-VA anchor or a direct pointer use.
   if (SawRawOriginalBase && SawSymbolizedBase) {
-    failAmbiguousAddress();
+    failAmbiguousAddress("literal-ambiguity-L1636");
     return nullptr;
   }
 
@@ -1703,7 +1718,7 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
     const uint64_t LookupVA = B.OwnerVA == InvalidVA ? B.VA : B.OwnerVA;
     const Segment *BaseSeg = Img->getSegmentFor(LookupVA);
     if (!BaseSeg || (Seg && Seg != BaseSeg)) {
-      failAmbiguousAddress();
+      failAmbiguousAddress("literal-ambiguity-L1706");
       return nullptr;
     }
     Seg = BaseSeg;
@@ -1712,7 +1727,7 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       continue;
     }
     if (ExactOwner && *ExactOwner != B.OwnerVA) {
-      failAmbiguousAddress();
+      failAmbiguousAddress("literal-ambiguity-L1715");
       return nullptr;
     }
     ExactOwner = B.OwnerVA;
@@ -1721,7 +1736,7 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   // jointly prove one raw address model.  The same numeric VA may denote the
   // one-past end of one object and the beginning of another.
   if ((ExactOwner && SawUnownedBase) || !Seg) {
-    failAmbiguousAddress();
+    failAmbiguousAddress("literal-ambiguity-L1724");
     return nullptr;
   }
 
@@ -1732,7 +1747,7 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   auto [G, Anchor] = materializeReadOnlyDataRun(Seg);
   if (!G) {
     if (!FatalCodePointerResolution && !FatalDataPointerResolution)
-      failAmbiguousAddress();
+      failAmbiguousAddress("literal-ambiguity-L1735");
     else if (SawAmbiguous)
       *SawAmbiguous = true;
     return nullptr;

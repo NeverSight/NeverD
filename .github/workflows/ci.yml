@@ -142,6 +142,7 @@ jobs:
             scripts.tests.test_ci_configuration \
             scripts.tests.test_audit_ci_test_inventory \
             scripts.tests.test_audit_ci_test_results \
+            scripts.tests.test_first_fatal_snapshots \
             scripts.tests.test_neverd_bench_harness \
             scripts.tests.test_audit_evm_opcode_metadata \
             scripts.tests.test_eh_signature_generation \
@@ -743,6 +744,27 @@ jobs:
             build-ci/ctest-exit-status.txt
             build-ci/ctest-outcomes.json
             ctest.log
+          if-no-files-found: error
+
+      - name: Capture the existing first-fatal semantic failures
+        id: first_fatal_snapshot
+        timeout-minutes: 30
+        if: ${{ !cancelled() && steps.inventory.outcome == 'success' }}
+        shell: bash
+        run: |
+          "$PYTHON" scripts/collect_first_fatal_snapshots.py \
+            --build-dir build-ci \
+            --inventory build-ci/ctest-inventory.json \
+            --output-dir build-ci/first-fatal-snapshots
+        env:
+          PYTHON: ${{ matrix.python }}
+
+      - name: Upload first-fatal semantic evidence
+        if: ${{ always() && steps.inventory.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: first-fatal-snapshots-${{ matrix.test_profile }}
+          path: build-ci/first-fatal-snapshots
           if-no-files-found: error
 
       - name: Audit configured and executable capability evidence
