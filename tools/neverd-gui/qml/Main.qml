@@ -15,6 +15,7 @@ ApplicationWindow {
     minimumHeight: 620
     title: workbench.fileName ? (workbench.unsavedChanges ? "● " : "") + workbench.fileName + " — NeverD" : qsTr("NeverD — Binary Analysis")
     color: Theme.editor
+    font.family: Theme.uiFont
     font.pointSize: Theme.bodySize
     palette: WorkbenchPalette {}
     LayoutMirroring.enabled: workbench.language === "ar"
@@ -34,7 +35,7 @@ ApplicationWindow {
         category: "Workbench"
         property int windowWidth: 1500
         property int windowHeight: 950
-        property real codePointSize: 11
+        property real codePointSize: Theme.codeSize
     }
     property bool closeApproved: false
     onClosing: close => {
@@ -135,29 +136,18 @@ ApplicationWindow {
     }
 
     header: Rectangle {
-        height: 72
+        height: Theme.toolbarHeight + Theme.contextHeight + 1
         color: Theme.sidebar
         ColumnLayout {
             anchors.fill: parent
             spacing: 0
             RowLayout {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 42
-                Layout.leftMargin: 9
+                Layout.minimumHeight: Theme.toolbarHeight
+                Layout.maximumHeight: Theme.toolbarHeight
+                Layout.leftMargin: 12
                 Layout.rightMargin: 12
                 spacing: 6
-                Image {
-                    objectName: "neverdBrandLogo"
-                    source: "qrc:/brand/neverd-logo-dark.svg"
-                    sourceSize: Qt.size(32, 32)
-                    fillMode: Image.PreserveAspectFit
-                    Layout.preferredWidth: 32
-                    Layout.preferredHeight: 32
-                    Layout.leftMargin: 7
-                    Layout.rightMargin: 8
-                    Accessible.name: "NeverD"
-                    Accessible.role: Accessible.Graphic
-                }
                 WorkbenchButton { text: qsTr("Open Binary"); hint: openAction.text + " (" + openAction.shortcut + ")"; onClicked: window.openMainDialog(fileDialog) }
                 Rectangle { width: 1; Layout.preferredHeight: 20; color: Theme.border; Layout.margins: 5 }
                 WorkbenchButton { text: "←"; hint: backAction.text; enabled: backAction.enabled; onClicked: workbench.goBack(); rotation: workbench.language === "ar" ? 180 : 0 }
@@ -185,9 +175,10 @@ ApplicationWindow {
             Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: Theme.border }
             RowLayout {
                 Layout.fillWidth: true
-                Layout.fillHeight: true
-                Layout.leftMargin: 16
-                Layout.rightMargin: 14
+                Layout.minimumHeight: Theme.contextHeight
+                Layout.maximumHeight: Theme.contextHeight
+                Layout.leftMargin: 12
+                Layout.rightMargin: 12
                 spacing: 11
                 Text { textFormat: Text.PlainText; text: workbench.loaded ? workbench.fileName : qsTr("WORKSPACE"); color: workbench.loaded ? Theme.foreground : Theme.subdued; font.pointSize: Theme.captionSize; elide: Text.ElideMiddle; Layout.maximumWidth: window.width * 0.35 }
                 Text { textFormat: Text.PlainText; text: "›"; color: Theme.subdued; visible: workbench.loaded }

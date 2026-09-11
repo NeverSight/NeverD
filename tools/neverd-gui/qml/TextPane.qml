@@ -97,8 +97,8 @@ Rectangle {
             selectedTextColor: Theme.accentForeground
             leftPadding: Theme.codeGutter
             rightPadding: 24
-            topPadding: 18
-            bottomPadding: 24
+            topPadding: 8
+            bottomPadding: 12
             background: Rectangle { color: Theme.editor }
             Accessible.name: root.emptyTitle
             property string previousText: ""

@@ -44,7 +44,6 @@ Rectangle {
             Text { textFormat: Text.PlainText;
                 text: qsTr("FUNCTIONS")
                 font.pointSize: Theme.captionSize
-                font.letterSpacing: 1
                 color: Theme.muted
                 Layout.leftMargin: 14
             }
@@ -128,8 +127,9 @@ Rectangle {
                 Accessible.name: text
                 contentItem: RowLayout {
                     spacing: 9
-                    Text { textFormat: Text.PlainText; text: "ƒ"; font.pointSize: 12; color: Theme.functionName }
+                    Text { textFormat: Text.PlainText; text: "ƒ"; font.pointSize: Theme.bodySize; color: Theme.functionName }
                     Text { textFormat: Text.PlainText;
+                        id: functionName
                         text: functionRow.name
                         color: Theme.foreground
                         font.pointSize: Theme.bodySize
@@ -144,8 +144,8 @@ Rectangle {
                         LayoutMirroring.enabled: false
                     }
                 }
-                topPadding: 4
-                bottomPadding: 4
+                topPadding: 2
+                bottomPadding: 2
                 leftPadding: 13
                 rightPadding: 12
                 background: Rectangle {
@@ -162,7 +162,7 @@ Rectangle {
                 // Without a handler, AbstractButton emits clicked again.
                 onDoubleClicked: {}
                 ToolTip {
-                    visible: (functionRow.hovered || functionRow.highlighted) && functionRow.name.length > 24
+                    visible: (functionRow.hovered || functionRow.highlighted) && functionName.truncated
                     text: functionRow.name + "  " + functionRow.address
                     delay: 700
                     width: 440
@@ -176,12 +176,12 @@ Rectangle {
                 detail: root.controller.loaded ? qsTr("Try another filter or wait for analysis.") : qsTr("Open a binary to browse its functions.")
             }
         }
-        Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: Theme.border }
+        Rectangle { visible: root.selectedFunction.length > 0; Layout.fillWidth: true; implicitHeight: 1; color: Theme.border }
         ColumnLayout {
+            visible: root.selectedFunction.length > 0
             Layout.fillWidth: true
-            Layout.margins: 14
-            spacing: 8
-            Text { textFormat: Text.PlainText; text: qsTr("CURRENT FUNCTION"); font.pointSize: Theme.captionSize; font.letterSpacing: 1; color: Theme.subdued }
+            Layout.margins: 10
+            spacing: 4
             Text { textFormat: Text.PlainText;
                 text: root.controller.selectedFunctionName || "—"
                 font.family: Theme.monoFont

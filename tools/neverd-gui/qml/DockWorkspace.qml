@@ -127,9 +127,11 @@ Rectangle {
                 panel.isFloating = false
                 panel.forceClose()
             }
-            area.addDockWidget(functionsDock, Dock.KDDockWidgets.Location_OnLeft, null, Qt.size(250, height - 180))
-            area.addDockWidget(machineDock, Dock.KDDockWidgets.Location_OnRight, functionsDock, Qt.size(Math.max(360, width - 255), height - 180))
-            area.addDockWidget(representationDock, width < 1150 ? Dock.KDDockWidgets.Location_OnBottom : Dock.KDDockWidgets.Location_OnRight, machineDock, Qt.size(Math.max(360, (width - 255) / 2), Math.max(230, height / 2)))
+            // Insert the sidebar last so later analysis panes cannot squeeze
+            // its initial width down to the minimum allowed for saved layouts.
+            area.addDockWidget(machineDock, Dock.KDDockWidgets.Location_OnLeft, null, Qt.size(width, height - 180))
+            area.addDockWidget(representationDock, width < 1150 ? Dock.KDDockWidgets.Location_OnBottom : Dock.KDDockWidgets.Location_OnRight, machineDock, Qt.size(Math.max(360, (width - 5) / 2), Math.max(230, height / 2)))
+            area.addDockWidget(functionsDock, Dock.KDDockWidgets.Location_OnLeft, null, Qt.size(280, height - 180))
             area.addDockWidget(referencesDock, Dock.KDDockWidgets.Location_OnBottom, null, Qt.size(width, 180))
             referencesDock.addDockWidgetAsTab(outputDock)
             referencesDock.addDockWidgetAsTab(connectionsDock)

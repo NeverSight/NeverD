@@ -11,13 +11,13 @@ Rectangle {
     property bool selectionPending: true
     readonly property real addressColumnWidth: Math.ceil(addressMetrics.advanceWidth)
     readonly property real mnemonicColumnWidth: Math.ceil(codeMetrics.averageCharacterWidth * 8)
-    readonly property real instructionRowHeight: Math.ceil(codeMetrics.height + 8)
+    readonly property real instructionRowHeight: Math.ceil(codeMetrics.height + 4)
     readonly property real minimumListingWidth: addressColumnWidth + mnemonicColumnWidth + Math.ceil(codeMetrics.averageCharacterWidth * 24) + Theme.codeGutter * 4
     color: Theme.editor
     LayoutMirroring.enabled: false
     LayoutMirroring.childrenInherit: true
 
-    TextMetrics { id: addressMetrics; text: "0000000000000000"; font.family: Theme.monoFont; font.pointSize: root.codePointSize - 1 }
+    TextMetrics { id: addressMetrics; text: "0000000000000000"; font.family: Theme.monoFont; font.pointSize: root.codePointSize }
     FontMetrics { id: codeMetrics; font.family: Theme.monoFont; font.pointSize: root.codePointSize }
     function focusContent() { listing.forceActiveFocus(Qt.OtherFocusReason) }
     function revealSelection() {
@@ -42,7 +42,7 @@ Rectangle {
         spacing: 0
         Item {
             Layout.fillWidth: true
-            Layout.preferredHeight: 30
+            Layout.preferredHeight: Theme.compactControlHeight
             clip: true
             RowLayout {
                 x: Theme.codeGutter - listing.contentX
@@ -116,8 +116,8 @@ Rectangle {
                 required property string comment
                 width: listing.contentWidth
                 height: root.instructionRowHeight
-                topPadding: 4
-                bottomPadding: 4
+                topPadding: 2
+                bottomPadding: 2
                 leftPadding: Theme.codeGutter
                 rightPadding: Theme.codeGutter
                 hoverEnabled: true
