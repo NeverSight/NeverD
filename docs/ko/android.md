@@ -177,7 +177,7 @@ neverd mobile app.apk -o recovered-app --json > recovery-result.json
 
 `--jadx PATH`는 내장 구현이 아닌 외부 JADX를 선택합니다. 표준 DEX/smali 입력 플러그인이 포함된 JADX 1.5.6 이상과 Java 11 이상을 설치하세요. 완전한 [JADX 배포본](https://github.com/skylot/jadx/releases/tag/v1.5.6)을 받고 `bin/`, `lib/` 구조를 유지하며 재배포 시 동봉된 의존성 라이선스를 보존하세요. 자동 다운로드는 없습니다. 어댑터 보고서는 실제 `jadx` 엔진과 감지한 버전을 기록하며 내장 메서드 복원 현황을 제공한다고 주장하지 않습니다.
 
-Windows에서는 배포본의 `.bat`/`.cmd` 실행기 또는 `lib/jadx-*-all.jar`를 지정하세요. NeverD는 배포본 JAR을 찾아 Java를 직접 호출하므로 애플리케이션 경로가 명령 셸에 들어가지 않습니다. Java는 `JAVA_HOME` 또는 PATH로 선택합니다. 어댑터 실행이 성공하면 `logs/jadx-version.log`, `logs/jadx.log`를 보관하고 실패한 임시 디렉터리와 로그는 삭제합니다. 백엔드가 0이 아닌 값으로 종료할 때만 길이가 제한된 로그 끝부분이 오류에 포함됩니다. 실행 실패, 시간 초과, 예산 초과는 별도의 진단을 제공합니다.
+Windows에서는 배포본의 `.bat`/`.cmd` 실행기 또는 `lib/jadx-*-all.jar`를 지정하세요. NeverD는 배포본 JAR을 찾아 Java를 직접 호출하므로 애플리케이션 경로가 명령 셸에 들어가지 않습니다. Java는 `JAVA_HOME` 또는 PATH로 선택합니다. 어댑터 실행이 성공하면 `logs/jadx-version.log`, `logs/jadx.log`를 보관하고 실패한 임시 디렉터리와 로그는 삭제합니다. 백엔드가 0이 아닌 값으로 종료하면 길이가 제한된 로그 끝부분이 오류에 포함됩니다. 백엔드 시간 초과도 이미 캡처한 로그 텍스트를 사용할 수 있으면 원래 시간 초과 메시지를 유지하면서 길이가 제한된 끝부분을 덧붙입니다. 실행 실패와 예산 초과의 진단은 그대로 유지됩니다.
 
 ```sh
 neverd mobile app.apk -o recovered-jadx --jadx /opt/jadx/bin/jadx

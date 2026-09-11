@@ -177,7 +177,7 @@ neverd mobile app.apk -o recovered-app --json > recovery-result.json
 
 `--jadx PATH` 選用外部 JADX，而非內建實作。必須安裝含標準 DEX/smali 輸入外掛的 JADX 1.5.6 或更新版本，以及 Java 11 或更新版本。請取得完整的 [JADX 發行套件](https://github.com/skylot/jadx/releases/tag/v1.5.6)，保留 `bin/`、`lib/` 結構，重新散布時保留隨附的相依套件授權文件。不會自動下載任何相依套件。轉接器報告會記錄實際的 `jadx` 引擎與偵測到的版本，不宣稱提供內建方法覆蓋資訊。
 
-Windows 可指定發行套件的 `.bat`/`.cmd` 啟動器或 `lib/jadx-*-all.jar`。NeverD 會解析套件 JAR 並直接呼叫 Java，應用程式路徑不會進入命令殼層。`JAVA_HOME` 或 PATH 用於選擇 Java。成功執行的轉接器會保留 `logs/jadx-version.log` 與 `logs/jadx.log`；失敗的暫存目錄與日誌會刪除。只有後端非零退出會附帶有界日誌尾端；啟動失敗、逾時與預算錯誤各有自己的診斷。
+Windows 可指定發行套件的 `.bat`/`.cmd` 啟動器或 `lib/jadx-*-all.jar`。NeverD 會解析套件 JAR 並直接呼叫 Java，應用程式路徑不會進入命令殼層。`JAVA_HOME` 或 PATH 用於選擇 Java。成功執行的轉接器會保留 `logs/jadx-version.log` 與 `logs/jadx.log`；失敗的暫存目錄與日誌會刪除。後端非零退出會附帶長度受限的日誌尾端。後端逾時會保留原始逾時訊息，若已擷取的日誌文字可用，會附加長度受限的尾端。啟動失敗與預算錯誤仍保留各自的診斷。
 
 ```sh
 neverd mobile app.apk -o recovered-jadx --jadx /opt/jadx/bin/jadx

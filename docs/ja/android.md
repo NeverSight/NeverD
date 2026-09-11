@@ -177,7 +177,7 @@ neverd mobile app.apk -o recovered-app --json > recovery-result.json
 
 `--jadx PATH` は内蔵実装ではなく外部 JADX を選択します。標準の DEX/smali 入力プラグインを含む JADX 1.5.6 以降と Java 11 以降が必要です。完全な [JADX 配布パッケージ](https://github.com/skylot/jadx/releases/tag/v1.5.6)を取得し、`bin/` と `lib/` の構成を保ち、再配布時は同梱の依存ソフトウェアのライセンスも保持してください。自動ダウンロードは行いません。アダプターのレポートには実際の `jadx` エンジンと検出したバージョンを記録し、内蔵エンジンのメソッド網羅情報を提供するとは主張しません。
 
-Windows では配布パッケージの `.bat`/`.cmd` または `lib/jadx-*-all.jar` を指定できます。NeverD は配布 JAR を解決して Java を直接起動し、アプリケーションのパスをコマンドシェルに渡しません。Java は `JAVA_HOME` または PATH で選択します。成功時は `logs/jadx-version.log` と `logs/jadx.log` を保持し、失敗した一時領域とログは削除します。長さを制限したログ末尾がエラーに付くのはバックエンドの非ゼロ終了時だけです。起動失敗、タイムアウト、処理上限超過には専用の診断があります。
+Windows では配布パッケージの `.bat`/`.cmd` または `lib/jadx-*-all.jar` を指定できます。NeverD は配布 JAR を解決して Java を直接起動し、アプリケーションのパスをコマンドシェルに渡しません。Java は `JAVA_HOME` または PATH で選択します。成功時は `logs/jadx-version.log` と `logs/jadx.log` を保持し、失敗した一時領域とログは削除します。バックエンドの非ゼロ終了時には、長さを制限したログ末尾がエラーに付きます。バックエンドのタイムアウトでも、すでに取得したログテキストが利用可能な場合は、元のタイムアウトメッセージを保ったまま長さを制限した末尾を付加します。起動失敗と処理上限超過の診断は従来どおりです。
 
 ```sh
 neverd mobile app.apk -o recovered-jadx --jadx /opt/jadx/bin/jadx

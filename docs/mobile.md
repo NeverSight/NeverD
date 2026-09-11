@@ -56,7 +56,7 @@ The defaults are 20,000 entries, 2 GiB of input/extracted or final output data, 
 
 APK staging writes only root `classes.dex`, `classes2.dex`, and subsequent numbered DEX files. Every ZIP member still undergoes header/range checks, decompression, length and CRC validation, and counts toward archive entry and uncompressed-byte limits. Unwritten resources may have distinct case-sensitive names such as `res/-A.xml` and `res/-a.xml`. Exact duplicate ZIP names and file/directory identity conflicts remain errors; portable filesystem case-collision checks apply to members actually written. Full extraction, including IPA input, still rejects such output collisions. Traversal paths, links, special files, and encrypted ZIP entries remain rejected throughout the archive. Directory inputs also reject symbolic links and special files.
 
-These limits are robustness controls, not a sandbox for third-party backend code. Explicit JADX and native source-export commands run as local child processes. Failed staging output is removed. A backend's nonzero exit includes the bounded diagnostic tail; launch failures, timeouts and budget violations have their own error messages.
+These limits are robustness controls, not a sandbox for third-party backend code. Explicit JADX and native source-export commands run as local child processes. Failed staging output is removed. Nonzero backend exits include a bounded diagnostic tail. Backend timeouts preserve the timeout message and append a bounded tail when captured log text is available. Launch failures and budget violations retain their own error messages.
 
 ## Validation
 
