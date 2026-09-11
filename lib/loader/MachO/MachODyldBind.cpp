@@ -46,6 +46,7 @@ void parseBindStreams(const uint8_t *BasePtr, size_t FileSize,
     uint64_t SegOff = 0;
     int64_t Addend = 0;
     uint8_t BindType = BIND_TYPE_POINTER;
+    bool SymbolWeakImport = false;
 
     auto ReadULEB = [&](uint64_t &Val) -> bool {
       if (P >= End)
@@ -88,6 +89,7 @@ void parseBindStreams(const uint8_t *BasePtr, size_t FileSize,
         SegOff = 0;
         Addend = 0;
         BindType = BIND_TYPE_POINTER;
+        SymbolWeakImport = false;
         break;
       case BIND_OPCODE_SET_DYLIB_ORDINAL_IMM:
         LibOrdinal = Imm;
@@ -108,6 +110,7 @@ void parseBindStreams(const uint8_t *BasePtr, size_t FileSize,
           LibOrdinal = static_cast<int8_t>(BIND_OPCODE_MASK | Imm);
         break;
       case BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM: {
+        SymbolWeakImport = (Imm & BIND_SYMBOL_FLAGS_WEAK_IMPORT) != 0;
         size_t MaxLen = static_cast<size_t>(End - P);
         const void *Term = std::memchr(P, 0, MaxLen);
         if (!Term) {
@@ -168,9 +171,21 @@ void parseBindStreams(const uint8_t *BasePtr, size_t FileSize,
           const va_t BindAddr = Seg.VA + Offset;
           std::string DylibName;
           if (LibOrdinal > 0 &&
-              static_cast<size_t>(LibOrdinal) <= Img.DynInfo.NeededLibs.size())
+              static_cast<uint64_t>(LibOrdinal) <=
+                  Img.DynInfo.NeededLibs.size())
             DylibName =
                 Img.DynInfo.NeededLibs[static_cast<size_t>(LibOrdinal - 1)];
+          // The legacy symbol-level display is not exact-slot evidence.
+          std::string BindingModule;
+          bool WeakImport = SymbolWeakImport;
+          if (LibOrdinal > 0 &&
+              static_cast<uint64_t>(LibOrdinal) <=
+                  Img.MachODylibReferences.size()) {
+            const MachODylibReference &Reference =
+                Img.MachODylibReferences[static_cast<size_t>(LibOrdinal - 1)];
+            BindingModule = Reference.Name;
+            WeakImport = WeakImport || Reference.Weak;
+          }
 
           auto It = ImportIndex.find(SymName);
           if (It != ImportIndex.end()) {
@@ -188,10 +203,11 @@ void parseBindStreams(const uint8_t *BasePtr, size_t FileSize,
           }
 
           if (BindType == BIND_TYPE_POINTER) {
-            detail::clearLocalPointerClassification(Img, BindAddr);
-            Img.DyldBindSlots[BindAddr] = ImportBindSlot{SymName, Addend};
-            Img.recordImportStorageSlot(BindAddr, SymName, Addend,
-                                        ImportStorageEvidence::LoaderBind);
+            if (Img.isValidImportStorageSlot(BindAddr, SymName)) {
+              detail::clearLocalPointerClassification(Img, BindAddr);
+              Img.recordDyldBindSlot(BindAddr, SymName, Addend, BindingModule,
+                                      WeakImport);
+            }
           }
         };
 

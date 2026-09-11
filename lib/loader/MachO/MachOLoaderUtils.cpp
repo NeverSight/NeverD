@@ -173,7 +173,32 @@ void parseDyldInfoLoadCommands(const llvm::object::MachOObjectFile &Obj,
 
 void parseNeededLibraries(const llvm::object::MachOObjectFile &Obj,
                           BinaryImage &Img) {
+  const uint32_t Flags =
+      Obj.is64Bit() ? Obj.getHeader64().flags : Obj.getHeader().flags;
+  Img.MachOTwoLevelNamespace =
+      (Flags & MH_TWOLEVEL) != 0 && (Flags & MH_FORCE_FLAT) == 0;
+  Img.MachODylibReferences.clear();
   for (const auto &LC : Obj.load_commands()) {
+    const bool IsDependency =
+        LC.C.cmd == LC_LOAD_DYLIB || LC.C.cmd == LC_LOAD_WEAK_DYLIB ||
+        LC.C.cmd == LC_REEXPORT_DYLIB || LC.C.cmd == LC_LOAD_UPWARD_DYLIB;
+    if (IsDependency) {
+      MachODylibReference Reference;
+      Reference.Weak = LC.C.cmd == LC_LOAD_WEAK_DYLIB;
+      if (LC.C.cmdsize >= sizeof(dylib_command)) {
+        const auto Command = Obj.getDylibIDLoadCommand(LC);
+        const uint32_t Offset = Command.dylib.name;
+        if (Offset >= sizeof(dylib_command) && Offset < LC.C.cmdsize) {
+          const char *Name = reinterpret_cast<const char *>(LC.Ptr) + Offset;
+          if (const void *End = std::memchr(Name, 0, LC.C.cmdsize - Offset))
+            Reference.Name.assign(Name, static_cast<const char *>(End) - Name);
+        }
+      }
+      Img.MachODylibReferences.push_back(std::move(Reference));
+    }
+
+    // Retain the format-neutral compatibility display and its deduplication.
+    // It must not be used as the ordinal table for native binding evidence.
     if ((LC.C.cmd != LC_LOAD_DYLIB && LC.C.cmd != LC_LOAD_WEAK_DYLIB &&
          LC.C.cmd != LC_REEXPORT_DYLIB && LC.C.cmd != LC_LAZY_LOAD_DYLIB) ||
         LC.C.cmdsize < sizeof(dylib_command))

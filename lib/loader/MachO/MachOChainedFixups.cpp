@@ -34,9 +34,17 @@ namespace {
 struct ChainedImportRecord {
   std::string Name;
   std::string Module;
+  std::string DisplayModule;
   int64_t Addend = 0;
+  bool WeakImport = false;
   bool Valid = false;
 };
+
+/// Only the last fifteen encodings denote negative special library ordinals.
+int32_t chainedLibraryOrdinal(uint32_t Raw, uint32_t Modulus) {
+  const int32_t Value = static_cast<int32_t>(Raw);
+  return Raw > Modulus - 16 ? Value - static_cast<int32_t>(Modulus) : Value;
+}
 
 /// Decode the import table without deduplicating it: chained pointer records
 /// refer to this table by ordinal, so even two equal names must retain distinct
@@ -94,6 +102,7 @@ decodeChainedImports(const uint8_t *BasePtr, size_t FileSize,
     uint32_t NameOff = 0;
     int32_t LibOrdinal = 0;
     int64_t Addend = 0;
+    bool WeakImport = false;
     uint64_t EntOff = ImportsAbs;
     uint64_t EntSize = 0;
 
@@ -108,7 +117,8 @@ decodeChainedImports(const uint8_t *BasePtr, size_t FileSize,
       dyld_chained_import E{};
       std::memcpy(&E, BasePtr + EntOff, sizeof(E));
       NameOff = E.name_offset;
-      LibOrdinal = static_cast<int8_t>(E.lib_ordinal);
+      LibOrdinal = chainedLibraryOrdinal(E.lib_ordinal, 256);
+      WeakImport = E.weak_import != 0;
       break;
     }
     case DYLD_CHAINED_IMPORT_ADDEND: {
@@ -121,7 +131,8 @@ decodeChainedImports(const uint8_t *BasePtr, size_t FileSize,
       dyld_chained_import_addend E{};
       std::memcpy(&E, BasePtr + EntOff, sizeof(E));
       NameOff = E.name_offset;
-      LibOrdinal = static_cast<int8_t>(E.lib_ordinal);
+      LibOrdinal = chainedLibraryOrdinal(E.lib_ordinal, 256);
+      WeakImport = E.weak_import != 0;
       Addend = E.addend;
       break;
     }
@@ -135,7 +146,8 @@ decodeChainedImports(const uint8_t *BasePtr, size_t FileSize,
       dyld_chained_import_addend64 E{};
       std::memcpy(&E, BasePtr + EntOff, sizeof(E));
       NameOff = E.name_offset;
-      LibOrdinal = static_cast<int16_t>(E.lib_ordinal);
+      LibOrdinal = chainedLibraryOrdinal(E.lib_ordinal, 65536);
+      WeakImport = E.weak_import != 0;
       std::memcpy(&Addend, &E.addend, sizeof(Addend));
       break;
     }
@@ -157,12 +169,22 @@ decodeChainedImports(const uint8_t *BasePtr, size_t FileSize,
 
     std::string DylibName;
     if (LibOrdinal > 0 &&
-        static_cast<size_t>(LibOrdinal) <= Img.DynInfo.NeededLibs.size())
+        static_cast<uint64_t>(LibOrdinal) <= Img.DynInfo.NeededLibs.size())
       DylibName = Img.DynInfo.NeededLibs[static_cast<size_t>(LibOrdinal - 1)];
+    std::string BindingModule;
+    if (LibOrdinal > 0 &&
+        static_cast<uint64_t>(LibOrdinal) <= Img.MachODylibReferences.size()) {
+      const MachODylibReference &Reference =
+          Img.MachODylibReferences[static_cast<size_t>(LibOrdinal - 1)];
+      BindingModule = Reference.Name;
+      WeakImport = WeakImport || Reference.Weak;
+    }
     Records[I].Name = std::move(SymName);
-    Records[I].Module =
+    Records[I].Module = std::move(BindingModule);
+    Records[I].DisplayModule =
         DylibName.empty() ? kExternModule.str() : std::move(DylibName);
     Records[I].Addend = Addend;
+    Records[I].WeakImport = WeakImport;
     Records[I].Valid = true;
   }
   return Records;
@@ -199,7 +221,7 @@ void parseChainedFixupsImports(const uint8_t *BasePtr, size_t FileSize,
 
     Import Imp;
     Imp.Name = Record.Name;
-    Imp.Module = Record.Module;
+    Imp.Module = Record.DisplayModule;
     // Chained-import records identify symbols by ordinal but do not carry the
     // address of the pointer that dyld fixes up.  The indirect symbol table
     // parsed above does: join the two views so data-only imports such as
@@ -307,17 +329,18 @@ void parseChainedFixupsRebases(const uint8_t *BasePtr, size_t FileSize,
           if (ImportRecords && B.ordinal < ImportRecords->size()) {
             const ChainedImportRecord &Record = (*ImportRecords)[B.ordinal];
             int64_t EffectiveAddend = 0;
-            const int64_t PointerAddend =
-                static_cast<int64_t>(static_cast<int8_t>(B.addend));
+            const int64_t PointerAddend = static_cast<int64_t>(B.addend);
             if (Record.Valid && !llvm::AddOverflow(Record.Addend, PointerAddend,
                                                    EffectiveAddend)) {
-              detail::clearLocalPointerClassification(Img, ChainVA);
-              Img.DyldBindSlots[ChainVA] =
-                  ImportBindSlot{Record.Name, EffectiveAddend};
-              Img.recordImportStorageSlot(ChainVA, Record.Name, EffectiveAddend,
-                                          ImportStorageEvidence::LoaderBind);
-              joinImportSlot(Img, Record.Name, Record.Module, ChainVA);
-              ++NumRecorded;
+              if (Img.isValidImportStorageSlot(ChainVA, Record.Name)) {
+                detail::clearLocalPointerClassification(Img, ChainVA);
+                if (Img.recordDyldBindSlot(ChainVA, Record.Name, EffectiveAddend,
+                                            Record.Module, Record.WeakImport)) {
+                  joinImportSlot(Img, Record.Name, Record.DisplayModule,
+                                  ChainVA);
+                  ++NumRecorded;
+                }
+              }
             }
           }
         } else {

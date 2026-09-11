@@ -50,6 +50,18 @@ namespace neverd {
 struct ImportBindSlot {
   std::string Name;
   int64_t Addend = 0;
+  /// Raw install-name requested by the exact positive library ordinal. Empty
+  /// means no specific dependency is known; it is never an aggregate lookup.
+  std::string Module = {};
+  bool WeakImport = false;
+};
+
+/// One dependency load command, including duplicate names and invalid-name
+/// placeholders. Its position, not a deduplicated library list, owns the
+/// one-based dyld library ordinal.
+struct MachODylibReference {
+  std::string Name;
+  bool Weak = false;
 };
 
 /// Strength of the format metadata that identifies one imported pointer
@@ -232,6 +244,10 @@ struct BinaryImage {
   bool MachOHasChainedFixups = false;
   bool MachOChainedFixupsAmbiguous = false;
   std::set<va_t> MachOResolvedChainedPointerSlots;
+  std::vector<MachODylibReference> MachODylibReferences;
+  /// A requested module is not a specific-provider proof under flat lookup.
+  /// Filled from MH_TWOLEVEL only when MH_FORCE_FLAT is absent.
+  bool MachOTwoLevelNamespace = false;
   /// Exact data-object boundaries.  Conflicting entries are retained so a
   /// consumer can fail closed; producers must never collapse them by order.
   std::vector<ExactDataObjectExtent> ExactDataObjects;
@@ -1420,12 +1436,50 @@ struct BinaryImage {
   /// the slot so downstream code fails closed instead of choosing by order.
   bool recordImportStorageSlot(va_t SlotVA, llvm::StringRef Name,
                                int64_t Addend, ImportStorageEvidence Evidence) {
-    if (!isValidImportStorageSlot(SlotVA, Name) ||
-        ConflictingImportStorageSlots.count(SlotVA))
+    if (!isValidImportStorageSlot(SlotVA, Name))
       return false;
-    return mergeImportStorageSlot(ImportStorageSlots,
-                                  ConflictingImportStorageSlots, SlotVA, Name,
-                                  Addend, Evidence);
+    if (ConflictingImportStorageSlots.count(SlotVA)) {
+      DyldBindSlots.erase(SlotVA);
+      return false;
+    }
+    const bool Accepted = mergeImportStorageSlot(
+        ImportStorageSlots, ConflictingImportStorageSlots, SlotVA, Name,
+        Addend, Evidence);
+    if (!Accepted)
+      DyldBindSlots.erase(SlotVA);
+    return Accepted;
+  }
+
+  /// Publish an exact dyld binding without collapsing provider or weakness
+  /// disagreements into the format-neutral name/addend view. A conflicting
+  /// native or canonical identity poisons both records permanently.
+  bool recordDyldBindSlot(va_t SlotVA, llvm::StringRef Name, int64_t Addend,
+                          llvm::StringRef Module, bool WeakImport) {
+    if (!isValidImportStorageSlot(SlotVA, Name))
+      return false;
+    ImportBindSlot Incoming{Name.str(), Addend, Module.str(), WeakImport};
+    auto Reject = [&]() {
+      ConflictingImportStorageSlots.insert(SlotVA);
+      DyldBindSlots.erase(SlotVA);
+      ImportStorageSlots.erase(SlotVA);
+      return false;
+    };
+    if (ConflictingImportStorageSlots.count(SlotVA))
+      return Reject();
+    auto It = DyldBindSlots.find(SlotVA);
+    if (It != DyldBindSlots.end()) {
+      const ImportBindSlot &Existing = It->second;
+      if (Existing.Name != Incoming.Name || Existing.Addend != Incoming.Addend ||
+          Existing.Module != Incoming.Module ||
+          Existing.WeakImport != Incoming.WeakImport)
+        return Reject();
+    }
+    if (!recordImportStorageSlot(SlotVA, Incoming.Name, Incoming.Addend,
+                                  ImportStorageEvidence::LoaderBind))
+      return Reject();
+    if (It == DyldBindSlots.end())
+      DyldBindSlots.emplace(SlotVA, std::move(Incoming));
+    return true;
   }
 
   /// Build the single import-storage evidence surface used after loading.

@@ -115,13 +115,15 @@ std::vector<uint8_t> makeThreadCommand(uint32_t Type, va_t Entry) {
 }
 
 std::vector<uint8_t>
-makeMachOImage(const std::vector<std::vector<uint8_t>> &Commands) {
+makeMachOImage(const std::vector<std::vector<uint8_t>> &Commands,
+               uint32_t Flags = 0) {
   using namespace llvm::MachO;
   mach_header_64 Header{};
   Header.magic = MH_MAGIC_64;
   Header.cputype = CPU_TYPE_X86_64;
   Header.cpusubtype = CPU_SUBTYPE_X86_64_ALL;
   Header.filetype = MH_EXECUTE;
+  Header.flags = Flags;
   Header.ncmds = static_cast<uint32_t>(Commands.size());
   for (const auto &Command : Commands)
     Header.sizeofcmds += static_cast<uint32_t>(Command.size());
@@ -143,6 +145,280 @@ createMachOObject(const std::vector<uint8_t> &Bytes) {
     return nullptr;
   }
   return std::move(*ObjOrErr);
+}
+
+std::vector<uint8_t> makeDylibReferenceCommand(uint32_t Kind,
+                                              llvm::StringRef Name) {
+  llvm::MachO::dylib_command Command{};
+  Command.cmd = Kind;
+  Command.cmdsize = static_cast<uint32_t>(
+      (sizeof(Command) + Name.size() + 1 + 7) & ~size_t(7));
+  Command.dylib.name = sizeof(Command);
+  std::vector<uint8_t> Bytes(Command.cmdsize, 0);
+  std::memcpy(Bytes.data(), &Command, sizeof(Command));
+  std::memcpy(Bytes.data() + sizeof(Command), Name.data(), Name.size());
+  return Bytes;
+}
+
+void bindRuntimeDylibOrdinal(BinaryImage &Img, uint8_t Ordinal) {
+  using namespace llvm::MachO;
+  std::vector<uint8_t> Bytes(0x10, 0);
+  const std::vector<uint8_t> Stream = {
+      static_cast<uint8_t>(BIND_OPCODE_SET_DYLIB_ORDINAL_IMM | Ordinal),
+      BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM, '_', 's', 0,
+      BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB, 0x20,
+      BIND_OPCODE_DO_BIND, BIND_OPCODE_DONE};
+  Bytes.insert(Bytes.end(), Stream.begin(), Stream.end());
+  macho_loader::DyldInfoOffsets Info;
+  Info.BindOff = 0x10;
+  Info.BindSize = static_cast<uint32_t>(Stream.size());
+  macho_loader::parseBindStreams(Bytes.data(), Bytes.size(), Info, Img);
+}
+
+TEST(RuntimeMetadata, DyldBindingsValidateStorageBeforeMutation) {
+  BinaryImage Img;
+  Img.Bits = Bitness::Bits64;
+  Img.Segments.push_back(makeSegment(0x1000, 0x100, true));
+  Img.Segments.push_back(makeSegment(0x3000, 0x100, false));
+  Img.Segments.push_back(makeSegment(0x5000, 0x100, false));
+  Img.Segments.back().Data.resize(4);
+  for (va_t Slot : {0x1010, 0x3021, 0x4000, 0x5000}) {
+    SCOPED_TRACE(Slot);
+    EXPECT_FALSE(Img.recordDyldBindSlot(Slot, "_s", 0, "module", false));
+  }
+  EXPECT_FALSE(Img.recordDyldBindSlot(0x3020, "", 0, "module", false));
+  EXPECT_TRUE(Img.DyldBindSlots.empty());
+  EXPECT_TRUE(Img.ImportStorageSlots.empty());
+  EXPECT_TRUE(Img.ConflictingImportStorageSlots.empty());
+  ASSERT_TRUE(Img.recordDyldBindSlot(0x3020, "_s", -3, "module", false));
+  EXPECT_TRUE(Img.recordDyldBindSlot(0x3020, "_s", -3, "module", false));
+  ASSERT_EQ(Img.DyldBindSlots.size(), 1U);
+  EXPECT_EQ(Img.DyldBindSlots.at(0x3020).Module, "module");
+  EXPECT_EQ(Img.ImportStorageSlots.at(0x3020).Addend, -3);
+
+  BinaryImage Aliased;
+  Aliased.Bits = Bitness::Bits64;
+  Aliased.Segments.push_back(makeSegment(0x3000, 0x100, false));
+  const std::string LongName = "_" + std::string(128, 's');
+  ASSERT_TRUE(Aliased.recordImportStorageSlot(
+      0x3020, LongName, 0, ImportStorageEvidence::PointerTable));
+  const llvm::StringRef Borrowed = Aliased.ImportStorageSlots.at(0x3020).Name;
+  // Refinement replaces canonical storage. The API must own its borrowed name
+  // before that replacement rather than reread a potentially freed buffer.
+  ASSERT_TRUE(
+      Aliased.recordDyldBindSlot(0x3020, Borrowed, -3, "module", false));
+  ASSERT_EQ(Aliased.DyldBindSlots.size(), 1U);
+  EXPECT_EQ(Aliased.DyldBindSlots.at(0x3020).Name, LongName);
+  EXPECT_EQ(Aliased.DyldBindSlots.at(0x3020).Addend, -3);
+  EXPECT_EQ(Aliased.DyldBindSlots.at(0x3020).Module, "module");
+  EXPECT_FALSE(Aliased.DyldBindSlots.at(0x3020).WeakImport);
+  EXPECT_EQ(Aliased.ImportStorageSlots.at(0x3020).Name, LongName);
+  EXPECT_EQ(Aliased.ImportStorageSlots.at(0x3020).Addend, -3);
+  EXPECT_EQ(Aliased.ImportStorageSlots.at(0x3020).Evidence,
+            ImportStorageEvidence::LoaderBind);
+}
+
+TEST(RuntimeMetadata, DyldBindingIdentityConflictsAreSticky) {
+  const ImportBindSlot First{"_s", 0, "first-module", false};
+  const std::vector<ImportBindSlot> Conflicts = {
+      {"_different", 0, "first-module", false},
+      {"_s", 1, "first-module", false},
+      {"_s", 0, "other-module", false},
+      {"_s", 0, "first-module", true}};
+  for (const auto &Other : Conflicts)
+    for (bool Reverse : {false, true}) {
+      SCOPED_TRACE(Other.Name);
+      SCOPED_TRACE(Other.Addend);
+      SCOPED_TRACE(Other.Module);
+      SCOPED_TRACE(Other.WeakImport);
+      SCOPED_TRACE(Reverse);
+      BinaryImage Img;
+      Img.Bits = Bitness::Bits64;
+      Img.Segments.push_back(makeSegment(0x3000, 0x100, false));
+      auto Record = [&](const ImportBindSlot &Binding) {
+        return Img.recordDyldBindSlot(0x3020, Binding.Name, Binding.Addend,
+                                      Binding.Module, Binding.WeakImport);
+      };
+      ASSERT_TRUE(Record(Reverse ? Other : First));
+      EXPECT_FALSE(Record(Reverse ? First : Other));
+      EXPECT_FALSE(Record(First));
+      EXPECT_FALSE(Record(Other));
+      EXPECT_TRUE(Img.DyldBindSlots.empty());
+      EXPECT_TRUE(Img.ImportStorageSlots.empty());
+      EXPECT_EQ(Img.ConflictingImportStorageSlots.count(0x3020), 1U);
+      EXPECT_TRUE(Img.collectImportStorageSlots().Slots.empty());
+    }
+}
+
+TEST(RuntimeMetadata, CanonicalConflictCannotReviveDyldProvider) {
+  for (bool CanonicalFirst : {false, true})
+    for (bool DifferentAddend : {false, true}) {
+      SCOPED_TRACE(CanonicalFirst);
+      SCOPED_TRACE(DifferentAddend);
+      BinaryImage Img;
+      Img.Bits = Bitness::Bits64;
+      Img.Segments.push_back(makeSegment(0x3000, 0x100, false));
+      if (!CanonicalFirst)
+        ASSERT_TRUE(Img.recordDyldBindSlot(0x3020, "_s", 0, "module", false));
+      EXPECT_EQ(Img.recordImportStorageSlot(
+                    0x3020, DifferentAddend ? "_s" : "_other",
+                    DifferentAddend ? 1 : 0, ImportStorageEvidence::LoaderBind),
+                CanonicalFirst);
+      // Standalone canonical conflicts must invalidate direct native readers
+      // before another dyld binding attempts to use or republish this slot.
+      EXPECT_TRUE(Img.DyldBindSlots.empty());
+      EXPECT_FALSE(Img.recordDyldBindSlot(0x3020, "_s", 0, "module", false));
+      EXPECT_FALSE(Img.recordDyldBindSlot(0x3020, "_s", 0, "module", false));
+      EXPECT_TRUE(Img.DyldBindSlots.empty());
+      EXPECT_TRUE(Img.ImportStorageSlots.empty());
+      EXPECT_EQ(Img.ConflictingImportStorageSlots.count(0x3020), 1U);
+    }
+}
+
+TEST(RuntimeMetadata, NativeDylibBytesSurviveDisplayNormalization) {
+  BinaryImage Img;
+  Img.Bits = Bitness::Bits64;
+  Img.Segments.push_back(makeSegment(0x3000, 0x100, false));
+  const std::string Module("raw\xff", 4);
+  Img.MachODylibReferences = {{Module, true}};
+  ASSERT_TRUE(Img.recordDyldBindSlot(0x3020, "_s", 0, Module, true));
+  normalizeBinaryMetadata(Img);
+  normalizeBinaryMetadata(Img);
+  ASSERT_EQ(Img.MachODylibReferences.size(), 1U);
+  EXPECT_EQ(Img.MachODylibReferences.front().Name, Module);
+  EXPECT_EQ(Img.DyldBindSlots.at(0x3020).Module, Module);
+  EXPECT_TRUE(Img.DyldBindSlots.at(0x3020).WeakImport);
+  EXPECT_EQ(Img.ImportStorageSlots.at(0x3020).Name, "_s");
+}
+
+TEST(RuntimeMetadata, NativeDylibOrdinalsExcludeLazyAndKeepDuplicates) {
+  using namespace llvm::MachO;
+  const std::vector<std::vector<uint8_t>> Ordinary = {
+      makeDylibReferenceCommand(LC_LOAD_DYLIB, "first"),
+      makeDylibReferenceCommand(LC_LOAD_WEAK_DYLIB, "first"),
+      makeDylibReferenceCommand(LC_REEXPORT_DYLIB, "reexport"),
+      makeDylibReferenceCommand(LC_LOAD_UPWARD_DYLIB, "upward")};
+  for (size_t LazyPosition : {0U, 2U, 4U}) {
+    SCOPED_TRACE(LazyPosition);
+    auto Commands = Ordinary;
+    Commands.insert(Commands.begin() + LazyPosition,
+                    makeDylibReferenceCommand(LC_LAZY_LOAD_DYLIB, "lazy"));
+    auto Bytes = makeMachOImage(Commands, MH_TWOLEVEL);
+    auto Obj = createMachOObject(Bytes);
+    ASSERT_NE(Obj, nullptr);
+    for (uint8_t Ordinal : {1, 2, 3, 4, 5}) {
+      SCOPED_TRACE(unsigned(Ordinal));
+      BinaryImage Img;
+      Img.Bits = Bitness::Bits64;
+      Img.Segments.push_back(makeSegment(0x3000, 0x100, false));
+      macho_loader::parseNeededLibraries(*Obj, Img);
+      ASSERT_EQ(Img.MachODylibReferences.size(), 4U);
+      EXPECT_EQ(Img.MachODylibReferences[0].Name, "first");
+      EXPECT_EQ(Img.MachODylibReferences[1].Name, "first");
+      EXPECT_FALSE(Img.MachODylibReferences[0].Weak);
+      EXPECT_TRUE(Img.MachODylibReferences[1].Weak);
+      EXPECT_EQ(Img.MachODylibReferences[2].Name, "reexport");
+      EXPECT_EQ(Img.MachODylibReferences[3].Name, "upward");
+      EXPECT_TRUE(Img.MachOTwoLevelNamespace);
+      const std::vector<std::string> Expected = {
+          "first", "first", "reexport", "upward", ""};
+      bindRuntimeDylibOrdinal(Img, Ordinal);
+      ASSERT_EQ(Img.DyldBindSlots.size(), 1U);
+      EXPECT_EQ(Img.DyldBindSlots.at(0x3020).Module, Expected[Ordinal - 1]);
+      EXPECT_EQ(Img.DyldBindSlots.at(0x3020).WeakImport, Ordinal == 2);
+      // Recollecting does not append a second native ordinal table.
+      macho_loader::parseNeededLibraries(*Obj, Img);
+      EXPECT_EQ(Img.MachODylibReferences.size(), 4U);
+    }
+  }
+}
+
+TEST(RuntimeMetadata, NativeDylibOrdinalsPreserveInvalidNamePlaceholders) {
+  using namespace llvm::MachO;
+  for (unsigned Damage : {0U, 1U, 2U, 3U}) {
+    SCOPED_TRACE(Damage);
+    auto First = makeDylibReferenceCommand(LC_LOAD_WEAK_DYLIB, "first");
+    auto Bytes = makeMachOImage(
+        {First, makeDylibReferenceCommand(LC_LOAD_DYLIB, "second")});
+    auto Obj = createMachOObject(Bytes);
+    ASSERT_NE(Obj, nullptr);
+    // LLVM rejects malformed names at construction. Mutate its retained owned
+    // backing bytes only after successful construction to test this reader's
+    // own bounded fallback; this is not a public malformed-file acceptance.
+    auto *CommandBytes = Bytes.data() + sizeof(mach_header_64);
+    dylib_command Command{};
+    std::memcpy(&Command, CommandBytes, sizeof(Command));
+    if (Damage == 0)
+      Command.dylib.name = 4;
+    else if (Damage == 1)
+      Command.dylib.name = Command.cmdsize;
+    else if (Damage == 2)
+      std::memset(CommandBytes + sizeof(Command), 'x',
+                  Command.cmdsize - sizeof(Command));
+    else
+      CommandBytes[sizeof(Command)] = 0; // Valid empty name is also unknown.
+    std::memcpy(CommandBytes, &Command, sizeof(Command));
+    const llvm::StringRef DamagedBytes(
+        reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+    auto Reparsed = llvm::object::ObjectFile::createMachOObjectFile(
+        llvm::MemoryBufferRef(DamagedBytes, "damaged dylib command"));
+    if (Damage < 3) {
+      EXPECT_FALSE(Reparsed);
+      if (!Reparsed)
+        llvm::consumeError(Reparsed.takeError());
+    } else {
+      ASSERT_TRUE(Reparsed) << llvm::toString(Reparsed.takeError());
+    }
+    BinaryImage Img;
+    Img.Bits = Bitness::Bits64;
+    Img.Segments.push_back(makeSegment(0x3000, 0x100, false));
+    macho_loader::parseNeededLibraries(*Obj, Img);
+    ASSERT_EQ(Img.MachODylibReferences.size(), 2U);
+    EXPECT_TRUE(Img.MachODylibReferences[0].Name.empty());
+    EXPECT_TRUE(Img.MachODylibReferences[0].Weak);
+    EXPECT_EQ(Img.MachODylibReferences[1].Name, "second");
+    BinaryImage Unknown = Img;
+    bindRuntimeDylibOrdinal(Unknown, 1);
+    ASSERT_EQ(Unknown.DyldBindSlots.size(), 1U);
+    EXPECT_TRUE(Unknown.DyldBindSlots.at(0x3020).Module.empty());
+    EXPECT_TRUE(Unknown.DyldBindSlots.at(0x3020).WeakImport);
+    bindRuntimeDylibOrdinal(Img, 2);
+    ASSERT_EQ(Img.DyldBindSlots.size(), 1U);
+    EXPECT_EQ(Img.DyldBindSlots.at(0x3020).Module, "second");
+    EXPECT_FALSE(Img.DyldBindSlots.at(0x3020).WeakImport);
+  }
+}
+
+TEST(RuntimeMetadata, MachOTwoLevelNamespaceUsesActualHeaderFlags) {
+  using namespace llvm::MachO;
+  for (bool Is64 : {false, true})
+    for (uint32_t Flags : {0U, uint32_t(MH_TWOLEVEL),
+                           uint32_t(MH_FORCE_FLAT),
+                           uint32_t(MH_TWOLEVEL | MH_FORCE_FLAT)}) {
+      SCOPED_TRACE(Is64);
+      SCOPED_TRACE(Flags);
+      auto Bytes = makeMachOImage({}, Flags);
+      if (!Is64) {
+        mach_header Header{};
+        Header.magic = MH_MAGIC;
+        Header.cputype = CPU_TYPE_I386;
+        Header.cpusubtype = CPU_SUBTYPE_I386_ALL;
+        Header.filetype = MH_EXECUTE;
+        Header.flags = Flags;
+        Bytes = objectBytes(Header);
+      }
+      auto Obj = createMachOObject(Bytes);
+      ASSERT_NE(Obj, nullptr);
+      BinaryImage Img;
+      Img.MachOTwoLevelNamespace = true;
+      Img.MachODylibReferences = {{"stale", true}};
+      Img.DynInfo.NeededLibs = {"display-only"};
+      macho_loader::parseNeededLibraries(*Obj, Img);
+      EXPECT_EQ(Img.MachOTwoLevelNamespace, Flags == MH_TWOLEVEL);
+      EXPECT_TRUE(Img.MachODylibReferences.empty());
+      EXPECT_EQ(Img.DynInfo.NeededLibs,
+                (std::vector<std::string>{"display-only"}));
+    }
 }
 
 TEST(RuntimeMetadata, KeepsNativeIATAddressWhenRecordingStub) {
