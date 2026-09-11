@@ -166,7 +166,7 @@ if(BUILD_TESTING)
   target_compile_definitions(neverd-mcp-qt-tests PRIVATE
     TEST_PYTHON="${Python3_EXECUTABLE}" TEST_SERVER="${CMAKE_CURRENT_SOURCE_DIR}/mcp/tests/fake_mcp.py")
   add_test(NAME NeverDMcpQt COMMAND neverd-mcp-qt-tests)
-  set_tests_properties(NeverDMcpQt PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+  set_tests_properties(NeverDMcpQt PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_FORCE_STDERR_LOGGING=1" TIMEOUT 30)
   add_test(NAME NeverDMcpProtocol COMMAND "${Python3_EXECUTABLE}" -m unittest discover
     -s "${CMAKE_CURRENT_SOURCE_DIR}/../neverd-mcp/tests" -v)
   if(NEVERD_WORKER_REAL_ENGINE_TESTS)
