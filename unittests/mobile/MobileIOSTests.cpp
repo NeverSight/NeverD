@@ -1301,8 +1301,8 @@ TEST(MobileIOSNative, RecoveryFailureReportsNativePhaseAfterMetadata) {
     recover(options);
     FAIL() << "missing native backend unexpectedly recovered";
   } catch (const Error &error) {
-    expectFailurePhases(error.what(), "cannot execute backend " +
-                                         options.executable,
+    expectFailurePhases(error.what(),
+                        "cannot execute backend " + options.executable,
                         "native_export",
                         {"input_staging", "slice_selection", "build_target",
                          "macho_loading", "objc_metadata", "swift_metadata"});
@@ -1331,10 +1331,11 @@ TEST(MobileIOSNative, MetadataOnlyRecoveryDoesNotPublishFailureDiagnostics) {
   EXPECT_TRUE(fs::is_regular_file(options.output / "metadata/swift.json"));
   EXPECT_FALSE(fs::exists(options.output / "sources"));
   EXPECT_FALSE(fs::exists(options.output / "input"));
-  for (auto key : {"active_phase", "active_elapsed_ms", "elapsed_ms",
-                   "completed_phases"})
+  for (auto key :
+       {"active_phase", "active_elapsed_ms", "elapsed_ms", "completed_phases"})
     EXPECT_EQ(report.get(key), nullptr);
-  auto text = readFile(options.output / "report.json", options.limits.max_bytes);
+  auto text =
+      readFile(options.output / "report.json", options.limits.max_bytes);
   EXPECT_EQ(text.find("[neverd-ios-phases]"), std::string::npos);
   EXPECT_EQ(parseJSON(text, "successful mobile report"), Value(Object(report)));
   for (const auto &entry : fs::directory_iterator(directory.path))
