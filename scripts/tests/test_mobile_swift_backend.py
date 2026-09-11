@@ -98,7 +98,8 @@ class SwiftBackendAcceptanceTests(unittest.TestCase):
         rows = self.reports()
         oracle = '\n'.join(f'{key}={value}' for key, value in backend.expected_results().items())
         executed = []
-        compiler = '/test-tools/swiftc'
+        compiler = str((work / 'test-tools' / 'swiftc').resolve())
+        demangler = str((work / 'test-tools' / 'apple-swift-demangle').resolve())
 
         def tool(argv, **options):
             # Replace only the external tool boundary. Report validation, the
@@ -121,8 +122,8 @@ class SwiftBackendAcceptanceTests(unittest.TestCase):
                     return '\n'.join(row['mangled_symbol'] for row in rows)
                 return '\n'.join(f'{int(row["entry"], 16):016x} T {row["mangled_symbol"]}' for row in rows)
             if argv == ['/usr/bin/xcrun', '--find', 'swift-demangle']:
-                return '/test-tools/apple-swift-demangle\n'
-            if argv == ['/test-tools/apple-swift-demangle', '--compact', backend.EMPTY_SYMBOL]:
+                return demangler + '\n'
+            if argv == [demangler, '--compact', backend.EMPTY_SYMBOL]:
                 return 'type metadata accessor for SwiftBehavior.Empty\n'
             executable = Path(argv[0])
             label = executable.parent.name
@@ -389,21 +390,23 @@ class SwiftBackendAcceptanceTests(unittest.TestCase):
         library = work / 'original.dylib'
         library.write_bytes(b'owned command-boundary input, not compiled Swift')
         calls = []
+        compiler = str((work / 'test-tools' / 'swiftc').resolve())
+        demangler = str((work / 'test-tools' / 'apple-swift-demangle').resolve())
 
         def tool(argv, **options):
             calls.append(argv)
             if argv == ['/usr/bin/nm', '-a', '-n', str(library)]:
                 return nm
             if argv == ['/usr/bin/xcrun', '--find', 'swift-demangle']:
-                return '/test-tools/apple-swift-demangle\n'
-            if argv == ['/test-tools/apple-swift-demangle', '--compact', backend.EMPTY_SYMBOL]:
+                return demangler + '\n'
+            if argv == [demangler, '--compact', backend.EMPTY_SYMBOL]:
                 return demangled
-            if argv == ['/test-tools/swiftc', '--version']:
+            if argv == [compiler, '--version']:
                 return 'Mock Apple Swift version\n'
             raise AssertionError(f'Unexpected external command: {argv!r}')
 
         with patch.object(backend, 'run', side_effect=tool):
-            entry = backend.record_empty_callable(library, '/test-tools/swiftc', work, 1)
+            entry = backend.record_empty_callable(library, compiler, work, 1)
         return entry, calls
 
     def test_compiled_empty_oracle_records_external_commands_and_actual_input_hash(self):
