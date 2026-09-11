@@ -570,13 +570,13 @@ class Proof {
     Options.MaxMemoryBytes = 1024 * 1024;
     Options.MaxOperations = 100000;
     const auto Parsed = llvm::swiftDemangle(ID.MangledSymbol, Options);
-    const auto Shape = [](const llvm::SwiftDemangleNode &Node,
-                          const char *Kind, size_t Children) {
+    const auto Shape = [](const llvm::SwiftDemangleNode &Node, const char *Kind,
+                          size_t Children) {
       return Node.Kind == Kind && !Node.Text && !Node.Index &&
              Node.Children.size() == Children;
     };
-    const auto Text = [](const llvm::SwiftDemangleNode &Node,
-                         const char *Kind, const std::string &Value) {
+    const auto Text = [](const llvm::SwiftDemangleNode &Node, const char *Kind,
+                         const std::string &Value) {
       return Node.Kind == Kind && Node.Text && *Node.Text == Value &&
              !Node.Index && Node.Children.empty();
     };
@@ -706,8 +706,7 @@ public:
       const auto Slot = Type.Descriptor + 12;
       auto Offset = Data.u32(Slot);
       const int64_t Delta = Offset ? static_cast<int32_t>(*Offset) : 0;
-      if (!Offset || !*Offset ||
-          (Delta < 0 && Slot < uint64_t(-Delta)) ||
+      if (!Offset || !*Offset || (Delta < 0 && Slot < uint64_t(-Delta)) ||
           (Delta > 0 && Slot > InvalidVA - Delta) ||
           (Delta < 0 ? Slot - uint64_t(-Delta) : Slot + Delta) !=
               Accessor.Entry)

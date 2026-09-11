@@ -312,7 +312,8 @@ std::pair<Object, Object> emptyInitializerCoverageFixture() {
     row["source_representation"] = "compiler-generated-from-type";
     row["compiler_projection_kind"] =
         s == &init ? "empty_value_initializer" : "type_metadata_accessor";
-    // Explicit serializer inputs; actual native proofs have separate CAPI tests.
+    // Explicit serializer inputs; actual native proofs have separate CAPI
+    // tests.
     row["compiler_projection_evidence"] = Array{"owned native proof contract"};
     rows.push_back(std::move(row));
     identities.push_back(std::move(id));
@@ -335,10 +336,13 @@ std::pair<Object, Object> emptyInitializerCoverageFixture() {
                                 {"size", 0},
                                 {"alignment", 1},
                                 {"fields", Array{}}}};
-  batch["source_units"] = Array{Object{
-      {"kind", "type"}, {"module", "Demo"}, {"name", "Empty"},
-      {"source", source}, {"method_entries", Array{"0x1000", "0x2000"}},
-      {"method_identities", std::move(identities)}}};
+  batch["source_units"] =
+      Array{Object{{"kind", "type"},
+                   {"module", "Demo"},
+                   {"name", "Empty"},
+                   {"source", source},
+                   {"method_entries", Array{"0x1000", "0x2000"}},
+                   {"method_identities", std::move(identities)}}};
   return pair;
 }
 
@@ -1085,7 +1089,8 @@ TEST(MobileIOSNative, CompilerCoverageRequiresEvidenceAndActualTypeSourceUnit) {
   EXPECT_EQ(number(c, "compiler_projection_method_count"), 1);
 }
 
-TEST(MobileIOSNative, EmptyInitializerCoverageKeepsDeclarationAndTwoIdentities) {
+TEST(MobileIOSNative,
+     EmptyInitializerCoverageKeepsDeclarationAndTwoIdentities) {
   auto [inventory, batch] = emptyInitializerCoverageFixture();
   const auto coverage = swiftCoverage(inventory, &batch);
   EXPECT_EQ(number(coverage, "method_count"), 2);

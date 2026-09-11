@@ -316,7 +316,8 @@ inline RuntimeProjectionPlan planRuntimeProjections(
     const auto Accessor = RuntimeRows.find(runtimeIdentity(*R.RelatedEntry));
     if (Accessor == RuntimeRows.end() || !Proofs[Accessor->second] ||
         !bindsEmptyStructSourceContext(*Requests[Accessor->second],
-                                       *Proofs[Accessor->second], Found->second))
+                                       *Proofs[Accessor->second],
+                                       Found->second))
       return nullptr;
     return &Found->second;
   };

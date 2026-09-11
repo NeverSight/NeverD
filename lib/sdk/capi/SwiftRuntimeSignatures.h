@@ -27,9 +27,9 @@ inline std::optional<SwiftRuntimeSourceRequest> emptyValueInitializerRequest(
       throw std::invalid_argument("ambiguous Swift empty initializer context");
     Context = &T;
   }
-  if (!Context || Context->Status != "recovered" ||
-      !Context->Reason.empty() || !Context->Descriptor || !Context->Metadata ||
-      Context->Size != 0 || Context->Alignment != 1 || !Context->Fields.empty())
+  if (!Context || Context->Status != "recovered" || !Context->Reason.empty() ||
+      !Context->Descriptor || !Context->Metadata || Context->Size != 0 ||
+      Context->Alignment != 1 || !Context->Fields.empty())
     return std::nullopt;
   const auto *Declared = Object.getObject("return_type");
   const auto *Parameters = Object.getArray("parameters");

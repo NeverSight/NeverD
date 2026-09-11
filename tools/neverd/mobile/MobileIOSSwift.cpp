@@ -213,8 +213,7 @@ Object swiftCoverage(const Object &inventory, const Object *batch,
               name != str(s, "context_name") || text != str(r, "source"))
             throw Error("Swift compiler projection does not belong to actual "
                         "type source unit");
-          if (str(r, "compiler_projection_kind") ==
-              "empty_value_initializer") {
+          if (str(r, "compiler_projection_kind") == "empty_value_initializer") {
             size_t accessors = 0;
             for (const auto &other : identities) {
               const auto other_id = identity(object(other, "unit identity"));

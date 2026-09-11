@@ -437,9 +437,9 @@ protected:
             bool WithMember = false, bool WithInitializer = false,
             bool InitializerRead = false, bool InitializerAlias = false,
             const NominalNames &Names = {}) {
-    const auto Bytes = makeMachO(Arm64, Fault, WithGlobal, WithMember,
-                                WithInitializer, InitializerRead,
-                                InitializerAlias, Names);
+    const auto Bytes =
+        makeMachO(Arm64, Fault, WithGlobal, WithMember, WithInitializer,
+                  InitializerRead, InitializerAlias, Names);
     const auto Path = (Directory / "owned.macho").string();
     std::ofstream Output(Path, std::ios::binary | std::ios::trunc);
     Output.write(reinterpret_cast<const char *>(Bytes.data()),
@@ -449,8 +449,9 @@ protected:
     ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1)
         << takeString(neverd_last_error(Session));
     EXPECT_EQ(neverd_session_entry_addr(Session), kBase + kAccessor);
-    ASSERT_EQ(neverd_func_count(Session),
-              1 + int(WithGlobal) + int(WithInitializer) + int(InitializerAlias));
+    ASSERT_EQ(neverd_func_count(Session), 1 + int(WithGlobal) +
+                                              int(WithInitializer) +
+                                              int(InitializerAlias));
     const int Index = neverd_func_find_by_addr(Session, kBase + kAccessor);
     ASSERT_GE(Index, 0);
     EXPECT_EQ(takeString(neverd_func_name(Session, Index)), Names.Accessor);
@@ -604,13 +605,13 @@ TEST_F(SwiftNominalContextCAPI,
        WordSubstitutedAccessorRetainsNativeAndSourceIdentity) {
   for (bool Arm64 : {true, false})
     for (const auto *Symbol : {"_$s16WidgetsExtension09WikipediaA0VMa",
-                              "_$s16WidgetsExtension16WikipediaWidgetsVMa"}) {
+                               "_$s16WidgetsExtension16WikipediaWidgetsVMa"}) {
       SCOPED_TRACE(Arm64);
       SCOPED_TRACE(Symbol);
       const NominalNames Names{"WidgetsExtension", "WikipediaWidgets", Symbol,
                                "_$s16WidgetsExtension09WikipediaA0VN"};
-      ASSERT_NO_FATAL_FAILURE(load(Arm64, Damage::None, false, false, false,
-                                   false, false, Names));
+      ASSERT_NO_FATAL_FAILURE(
+          load(Arm64, Damage::None, false, false, false, false, false, Names));
       const auto Value = report(llvm::json::Array{nominalRequest(Names)});
       const auto *Report = Value.getAsObject();
       ASSERT_NE(Report, nullptr);
@@ -662,17 +663,17 @@ TEST_F(SwiftNominalContextCAPI,
 TEST_F(SwiftNominalContextCAPI,
        ExistingAccessorSymbolCannotClaimAnotherSemanticContext) {
   for (bool Arm64 : {true, false})
-    for (const auto *Symbol : {"_$s5Other16WikipediaWidgetsVMa",
-                              "_$s16WidgetsExtension5OtherVMa",
-                              "_$s16WidgetsExtension09WikipediaA0CMa",
-                              "_$s16WidgetsExtension09WikipediaA0VMn"}) {
+    for (const auto *Symbol :
+         {"_$s5Other16WikipediaWidgetsVMa", "_$s16WidgetsExtension5OtherVMa",
+          "_$s16WidgetsExtension09WikipediaA0CMa",
+          "_$s16WidgetsExtension09WikipediaA0VMn"}) {
       SCOPED_TRACE(Arm64);
       SCOPED_TRACE(Symbol);
       const NominalNames Names{"WidgetsExtension", "WikipediaWidgets", Symbol,
                                "_$s16WidgetsExtension09WikipediaA0VN"};
       // load() verifies the real function table and file-backed code bytes.
-      ASSERT_NO_FATAL_FAILURE(load(Arm64, Damage::None, false, false, false,
-                                   false, false, Names));
+      ASSERT_NO_FATAL_FAILURE(
+          load(Arm64, Damage::None, false, false, false, false, false, Names));
       const auto Value = report(llvm::json::Array{nominalRequest(Names)});
       const auto *Report = Value.getAsObject();
       ASSERT_NE(Report, nullptr);
@@ -689,8 +690,9 @@ TEST_F(SwiftNominalContextCAPI,
       EXPECT_EQ(Row->getString("entry"), kAccessorEntry);
       EXPECT_EQ(Row->getString("mangled_symbol"), Symbol);
       EXPECT_EQ(Row->getString("status"), "unrecovered");
-      EXPECT_EQ(Row->getString("reason"),
-                "runtime identity disagrees with its context and compiler role");
+      EXPECT_EQ(
+          Row->getString("reason"),
+          "runtime identity disagrees with its context and compiler role");
       EXPECT_FALSE(Row->get("source"));
       EXPECT_FALSE(Row->get("source_representation"));
       EXPECT_FALSE(Row->get("compiler_projection_evidence"));
@@ -720,8 +722,8 @@ TEST_F(SwiftNominalContextCAPI,
                     "native metadata"}}) {
       SCOPED_TRACE(Arm64);
       SCOPED_TRACE(static_cast<int>(Fault));
-      ASSERT_NO_FATAL_FAILURE(load(Arm64, Fault, false, false, false, false,
-                                   false, Names));
+      ASSERT_NO_FATAL_FAILURE(
+          load(Arm64, Fault, false, false, false, false, false, Names));
       const auto Value = report(llvm::json::Array{nominalRequest(Names)});
       const auto *Report = Value.getAsObject();
       ASSERT_NE(Report, nullptr);
@@ -794,8 +796,9 @@ TEST_F(SwiftNominalContextCAPI,
           ASSERT_NE(Row, nullptr);
           Accessors += Row->getString("entry") == kAccessorEntry &&
                        Row->getString("mangled_symbol") == kAccessorSymbol;
-          Initializers += Row->getString("entry") == kInitializerEntry &&
-                          Row->getString("mangled_symbol") == kInitializerSymbol;
+          Initializers +=
+              Row->getString("entry") == kInitializerEntry &&
+              Row->getString("mangled_symbol") == kInitializerSymbol;
         }
         EXPECT_EQ(Accessors, 1U);
         EXPECT_EQ(Initializers, 1U);
@@ -817,12 +820,12 @@ TEST_F(SwiftNominalContextCAPI,
           load(Arm64, Fault, false, false, true, Mutation == 3));
       auto Init = initializerRequest();
       if (Mutation == 4) {
-        Init["parameters"] = llvm::json::Array{llvm::json::Object{
-            {"name", "arg0"},
-            {"type", llvm::json::Object{{"kind", "integer"},
-                                         {"name", "Int64"},
-                                         {"bits", 64},
-                                         {"signed", true}}}}};
+        Init["parameters"] = llvm::json::Array{
+            llvm::json::Object{{"name", "arg0"},
+                               {"type", llvm::json::Object{{"kind", "integer"},
+                                                           {"name", "Int64"},
+                                                           {"bits", 64},
+                                                           {"signed", true}}}}};
         Init["labels"] = llvm::json::Array{"_"};
       } else if (Mutation == 5) {
         Init["is_mutating"] = true;
@@ -857,11 +860,10 @@ TEST_F(SwiftNominalContextCAPI,
     for (bool Member : {false, true}) {
       SCOPED_TRACE(Arm64);
       SCOPED_TRACE(Member);
-      ASSERT_NO_FATAL_FAILURE(
-          load(Arm64, Damage::None, true, Member, true));
-      const auto Value = report(llvm::json::Array{
-          request(), initializerRequest(),
-          Member ? memberRequest() : request(true)});
+      ASSERT_NO_FATAL_FAILURE(load(Arm64, Damage::None, true, Member, true));
+      const auto Value =
+          report(llvm::json::Array{request(), initializerRequest(),
+                                   Member ? memberRequest() : request(true)});
       const auto *Report = Value.getAsObject();
       ASSERT_NE(Report, nullptr);
       EXPECT_EQ(Report->getInteger("method_count"), 3);

@@ -409,9 +409,12 @@ struct EmptyStructFixture {
     R.Signature.DeclarationKind = "initializer";
     Proofs[1] = Proofs[0];
     Proofs[1]->ProjectionKind = "empty_value_initializer";
-    Proofs[1]->Dependencies.push_back(
-        {"compiler_entry", "Demo", "struct", "Empty", "typeMetadata",
-         {0x3000, "_$s4Demo5EmptyVMa"}});
+    Proofs[1]->Dependencies.push_back({"compiler_entry",
+                                       "Demo",
+                                       "struct",
+                                       "Empty",
+                                       "typeMetadata",
+                                       {0x3000, "_$s4Demo5EmptyVMa"}});
   }
 
   RuntimeProjectionPlan plan(const EmptyStructSourceContexts &Contexts) const {
@@ -446,7 +449,8 @@ TEST(SwiftRuntimeProjection,
   EXPECT_FALSE(P.ContextSources.at(Context).TrivialDestructor);
 }
 
-TEST(SwiftRuntimeProjection, EmptyInitializerRequiresItsRecoveredNominalAccessor) {
+TEST(SwiftRuntimeProjection,
+     EmptyInitializerRequiresItsRecoveredNominalAccessor) {
   EmptyStructFixture F;
   F.addInitializer();
   EXPECT_TRUE(linkRuntimeRequests(F.Requests, F.Signatures).empty());
@@ -462,7 +466,8 @@ TEST(SwiftRuntimeProjection, EmptyInitializerRequiresItsRecoveredNominalAccessor
   EXPECT_EQ(F.Requests[1]->Signature.DeclarationKind, "initializer");
 }
 
-TEST(SwiftRuntimeProjection, EmptyInitializerCannotBorrowOrReplaceSourceContext) {
+TEST(SwiftRuntimeProjection,
+     EmptyInitializerCannotBorrowOrReplaceSourceContext) {
   for (unsigned Mutation = 0; Mutation < 9; ++Mutation) {
     SCOPED_TRACE(Mutation);
     EmptyStructFixture F;

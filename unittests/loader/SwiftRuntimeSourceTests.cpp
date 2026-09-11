@@ -459,8 +459,7 @@ TEST(SwiftRuntimeSource, MetadataAccessorUsesSemanticNominalIdentity) {
 TEST(SwiftRuntimeSource, MetadataAccessorRejectsNonmatchingOrUnboundedTrees) {
   const std::vector<std::string> Names{
       // Wrong module, name, nominal kind and compiler role.
-      "_$s5Other16WikipediaWidgetsVMa",
-      "_$s16WidgetsExtension5OtherVMa",
+      "_$s5Other16WikipediaWidgetsVMa", "_$s16WidgetsExtension5OtherVMa",
       "_$s16WidgetsExtension09WikipediaA0CMa",
       "_$s16WidgetsExtension09WikipediaA0VMn",
       // Extra suffix, nested context, generic form and incomplete mangling.
@@ -482,8 +481,9 @@ TEST(SwiftRuntimeSource, MetadataAccessorRejectsNonmatchingOrUnboundedTrees) {
       ASSERT_EQ(F.Image.Symbols.back().Addr, F.Request.Signature.Entry);
       const auto P = F.proof();
       EXPECT_FALSE(P.Proven);
-      EXPECT_EQ(P.Reason,
-                "runtime identity disagrees with its context and compiler role");
+      EXPECT_EQ(
+          P.Reason,
+          "runtime identity disagrees with its context and compiler role");
     }
 }
 TEST(SwiftRuntimeSource, SemanticMetadataIdentityDoesNotReplaceNativeProof) {
@@ -515,8 +515,9 @@ TEST(SwiftRuntimeSource, SemanticMetadataIdentityDoesNotReplaceNativeProof) {
       const auto P = F.proof();
       EXPECT_FALSE(P.Proven);
       EXPECT_FALSE(P.Reason.empty());
-      EXPECT_NE(P.Reason,
-                "runtime identity disagrees with its context and compiler role");
+      EXPECT_NE(
+          P.Reason,
+          "runtime identity disagrees with its context and compiler role");
     }
 }
 TEST(SwiftRuntimeSource, EmptyInitializerUsesSemanticMetadataDependency) {
@@ -730,7 +731,8 @@ TEST(SwiftRuntimeSource, FrameOwnershipMustHoldAtTheInstructionThatUsesIt) {
   EXPECT_NE(P.Reason.find("undefined stack slot"), std::string::npos);
 }
 
-TEST(SwiftRuntimeSource, EmptyInitializerProvesNoValueStorageAndRetainsAliases) {
+TEST(SwiftRuntimeSource,
+     EmptyInitializerProvesNoValueStorageAndRetainsAliases) {
   for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
     for (bool Frame : {false, true}) {
       SCOPED_TRACE(static_cast<unsigned>(Architecture));
@@ -758,7 +760,8 @@ TEST(SwiftRuntimeSource, EmptyInitializerProvesNoValueStorageAndRetainsAliases) 
   }
 }
 
-TEST(SwiftRuntimeSource, EmptyInitializerRejectsLayoutIdentityAndNativeEffects) {
+TEST(SwiftRuntimeSource,
+     EmptyInitializerRejectsLayoutIdentityAndNativeEffects) {
   for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
     for (unsigned Mutation = 0; Mutation < 16; ++Mutation) {
       SCOPED_TRACE(static_cast<unsigned>(Architecture));
@@ -796,12 +799,10 @@ TEST(SwiftRuntimeSource, EmptyInitializerRejectsLayoutIdentityAndNativeEffects) 
         B.InstructionBoundaries.clear();
         break;
       case 7:
-        F.op(N, NdOp::LOAD, NdVar::reg(F.Return, 8),
-             {NdVar::cst(0x1400, 8)});
+        F.op(N, NdOp::LOAD, NdVar::reg(F.Return, 8), {NdVar::cst(0x1400, 8)});
         break;
       case 8:
-        F.op(N, NdOp::STORE, {},
-             {NdVar::cst(0x1400, 8), NdVar::cst(1, 8)});
+        F.op(N, NdOp::STORE, {}, {NdVar::cst(0x1400, 8), NdVar::cst(1, 8)});
         break;
       case 9:
         F.call(N, "_unknown_effect");
