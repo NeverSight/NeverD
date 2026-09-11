@@ -347,6 +347,24 @@ jobs:
                    "NeverDLiftTests"),
                   ("MachOChainedPointerBoundary.RejectsMalformedOrdinalNameAndAddendOverflow",
                    "NeverDLiftTests"),
+                  ("SwiftRuntimeSource.EmptyInitializerProvesNoValueStorageAndRetainsAliases",
+                   "NeverDLiftTests"),
+                  ("SwiftRuntimeSource.EmptyInitializerRejectsLayoutIdentityAndNativeEffects",
+                   "NeverDLiftTests"),
+                  ("SwiftRuntimeProjection.EmptyInitializerRequiresItsRecoveredNominalAccessor",
+                   "NeverDLiftTests"),
+                  ("SwiftRuntimeProjection.EmptyInitializerCannotBorrowOrReplaceSourceContext",
+                   "NeverDLiftTests"),
+                  ("SwiftNominalContextCAPI.OwnedEmptyInitializerKeepsItsIdentityAndTypeProjection",
+                   "NeverDMetadataJSONTests"),
+                  ("SwiftNominalContextCAPI.OwnedEmptyInitializerRejectsMissingProofAndEffects",
+                   "NeverDMetadataJSONTests"),
+                  ("SwiftNominalContextCAPI.OwnedEmptyInitializerRetainsOrdinaryAndNamespaceGates",
+                   "NeverDMetadataJSONTests"),
+                  ("MobileIOSNative.EmptyInitializerCoverageKeepsDeclarationAndTwoIdentities",
+                   "NeverDMobileTests"),
+                  ("MobileIOSNative.EmptyInitializerCoverageRejectsFalseProjectionContracts",
+                   "NeverDMobileTests"),
                   ("SessionCAPITest.NativePhaseTraceRequiresExactEnvironmentValue",
                    "NeverDSessionCAPITests"),
                   ("SessionCAPITest.NativePhaseTracePreservesLoadFailuresAndExactPairing",
@@ -359,9 +377,9 @@ jobs:
           )
           runner_os = os.environ["RUNNER_OS"]
           expected_count = {
-              ("Linux", "linux-semantic"): 54,
-              ("macOS", "macos-patch"): 53,
-              ("Windows", "windows-focused"): 52,
+              ("Linux", "linux-semantic"): 63,
+              ("macOS", "macos-patch"): 62,
+              ("Windows", "windows-focused"): 61,
           }[(runner_os, os.environ["TEST_PROFILE"])]
           if runner_os in ("Linux", "macOS"):
               expected += (TestRecord(

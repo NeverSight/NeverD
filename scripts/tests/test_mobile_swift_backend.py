@@ -27,6 +27,15 @@ spec.loader.exec_module(backend)
 
 class SwiftBackendAcceptanceTests(unittest.TestCase):
     EMPTY_NATIVE_ENTRY = 0x40a0
+    EMPTY_INITIALIZER_ENTRY = 0x40b0
+
+    def empty_entries(self):
+        return {backend.EMPTY_SYMBOL: self.EMPTY_NATIVE_ENTRY,
+                backend.EMPTY_INITIALIZER_SYMBOL: self.EMPTY_INITIALIZER_ENTRY}
+
+    def empty_nm(self, entries=None):
+        return ''.join(f'{entry:016x} t {symbol}\n'
+                       for symbol, entry in (self.empty_entries() if entries is None else entries).items())
 
     def compiler_roles(self):
         manifest = backend.FIXTURE.with_suffix('.callables.json')
@@ -44,24 +53,28 @@ class SwiftBackendAcceptanceTests(unittest.TestCase):
         for index, expected in enumerate(self.compiler_roles()):
             row = {**expected, 'entry': hex(0x4000 + index * 16),
                    'classification': 'callable', 'status': 'recovered'}
-            if row['declaration_kind'] == 'runtime':
+            if row['source_representation'] == 'compiler-generated-from-type':
                 row['compiler_projection_evidence'] = ['Native fixture entry and compiler role verified.']
             rows.append(row)
         return rows
 
     def write_reports(self, output, rows, *, lying_count=False, counts=None,
                       demangler=None, demangle_logs=False, symbols=(), inventory_rows=None,
-                      architecture='arm64', source_units=None, types=None):
+                      architecture='arm64', source_units=None, types=None, source_text=None):
         (output / 'metadata').mkdir(parents=True)
+        (output / 'sources').mkdir()
+        (output / 'sources/swift.swift').write_text(backend.EMPTY_SOURCE if source_text is None else source_text)
         recovered = sum(row['status'] == 'recovered' for row in rows)
-        compiler = sum(row['status'] == 'recovered' and row.get('declaration_kind') == 'runtime' for row in rows)
+        compiler = sum(row['status'] == 'recovered'
+                       and row.get('source_representation') == 'compiler-generated-from-type' for row in rows)
         status = 'recovered' if recovered == len(rows) else 'partial'
-        empty = next((row for row in rows if row.get('mangled_symbol') == backend.EMPTY_SYMBOL), None)
+        empty = [row for row in rows if row.get('mangled_symbol') in self.empty_entries()]
         if source_units is None:
-            source_units = [] if empty is None else [{
+            source_units = [] if not empty else [{
                 'kind': 'type', 'module': backend.MODULE, 'name': 'Empty',
-                'method_entries': [empty['entry']],
-                'method_identities': [{'entry': empty['entry'], 'mangled_symbol': backend.EMPTY_SYMBOL}],
+                'method_entries': [row['entry'] for row in empty],
+                'method_identities': [{'entry': row['entry'], 'mangled_symbol': row['mangled_symbol']}
+                                      for row in empty],
             }]
         if types is None:
             types = [{'module': backend.MODULE, 'kind': 'struct', 'name': 'Empty',
@@ -83,14 +96,14 @@ class SwiftBackendAcceptanceTests(unittest.TestCase):
             inventory['logs'] = ['swift-demangle-0000.log']
         (output / 'metadata/swift-signatures.json').write_text(json.dumps(inventory))
 
-    def check(self, rows, *, original=None, symbols=(), **options):
+    def check(self, rows, *, original=None, symbols=(), empty_entries=None, **options):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary)
             self.write_reports(output, rows, symbols=symbols, **options)
             nm = '\n'.join(row['mangled_symbol'] for row in ([*rows, *symbols] if original is None else original))
             with patch.object(backend, 'run', return_value=nm):
                 return backend.validate_coverage(output, output / 'original', 'arm64',
-                                                 empty_entry=self.EMPTY_NATIVE_ENTRY)
+                                                 empty_entries=self.empty_entries() if empty_entries is None else empty_entries)
 
     def verify_matrix(self, work, *, arch='all', fixups='both', unavailable=None, error_number=errno.ENOEXEC):
         arguments = SimpleNamespace(arch=arch, fixups=fixups, setup_only=False,
@@ -114,8 +127,6 @@ class SwiftBackendAcceptanceTests(unittest.TestCase):
                 output = Path(argv[argv.index('-o') + 1])
                 architecture = next(arg.removeprefix('--arch=') for arg in argv if arg.startswith('--arch='))
                 self.write_reports(output, rows, architecture=architecture)
-                (output / 'sources').mkdir()
-                (output / 'sources/swift.swift').write_text('// mocked compiler input\n')
                 return ''
             if argv[0] == '/usr/bin/nm':
                 if '-j' in argv:
@@ -125,6 +136,8 @@ class SwiftBackendAcceptanceTests(unittest.TestCase):
                 return demangler + '\n'
             if argv == [demangler, '--compact', backend.EMPTY_SYMBOL]:
                 return 'type metadata accessor for SwiftBehavior.Empty\n'
+            if argv == [demangler, '--compact', backend.EMPTY_INITIALIZER_SYMBOL]:
+                return 'SwiftBehavior.Empty.init() -> SwiftBehavior.Empty\n'
             executable = Path(argv[0])
             label = executable.parent.name
             if executable.name not in ('original', 'rebuilt'):
@@ -178,10 +191,10 @@ class SwiftBackendAcceptanceTests(unittest.TestCase):
 
     def test_complete_declared_and_callable_inventory_passes(self):
         coverage = self.check(self.reports())
-        self.assertEqual(coverage['method_count'], 33)
+        self.assertEqual(coverage['method_count'], 34)
         self.assertEqual(coverage['source_body_method_count'], 25)
-        self.assertEqual(coverage['compiler_projection_method_count'], 8)
-        old = [row for row in coverage['methods'] if row['mangled_symbol'] != backend.EMPTY_SYMBOL]
+        self.assertEqual(coverage['compiler_projection_method_count'], 9)
+        old = [row for row in coverage['methods'] if row['mangled_symbol'] not in self.empty_entries()]
         self.assertEqual(len(old), 32)
         self.assertEqual(sum(row['declaration_kind'] != 'runtime' for row in old), 25)
         self.assertEqual(sum(row['declaration_kind'] == 'runtime' for row in old), 7)
@@ -250,15 +263,15 @@ class SwiftBackendAcceptanceTests(unittest.TestCase):
         resume['entry'] = getter['entry']
         # The real optimized corpus aliases these symbols; identity is not VA alone.
         coverage = self.check(rows)
-        self.assertEqual(coverage['method_count'], 33)
-        self.assertEqual(coverage['compiler_projection_method_count'], 8)
+        self.assertEqual(coverage['method_count'], 34)
+        self.assertEqual(coverage['compiler_projection_method_count'], 9)
 
     def test_real_type_metadata_stays_outside_the_callable_denominator(self):
         metadata = {'entry': '0x9000', 'mangled_symbol': '_$s13SwiftBehavior7CounterVN',
                     'classification': 'metadata', 'node_kind': 'TypeMetadata'}
         coverage = self.check(self.reports(), symbols=[metadata])
-        self.assertEqual(coverage['method_count'], 33)
-        self.assertEqual(coverage['symbol_count'], 34)
+        self.assertEqual(coverage['method_count'], 34)
+        self.assertEqual(coverage['symbol_count'], 35)
 
     def test_missing_or_external_demangler_cannot_pass(self):
         for demangler in ({}, {'name': 'llvm-swift-demangle', 'execution': 'external', 'version': '6.3.3'},
@@ -286,7 +299,8 @@ class SwiftBackendAcceptanceTests(unittest.TestCase):
     def test_declared_initializer_identity_must_remain_visible(self):
         rows = self.reports()
         for row in rows:
-            if row['context_kind'] == 'struct' and row['declaration_kind'] == 'initializer':
+            if (row['context_kind'] == 'struct' and row['context_name'] == 'Counter'
+                    and row['declaration_kind'] == 'initializer'):
                 row.pop('name')
         with self.assertRaisesRegex(RuntimeError, 'missing declared method.*Counter.*init'):
             self.check(rows)
@@ -304,7 +318,7 @@ class SwiftBackendAcceptanceTests(unittest.TestCase):
                     'compiler_projection_kind': 'type-metadata-accessor',
                     'compiler_projection_evidence': ['Native metadata identity and return shape verified.']}
         rows.append(compiler)
-        self.assertEqual(self.check(rows)['compiler_projection_method_count'], 9)
+        self.assertEqual(self.check(rows)['compiler_projection_method_count'], 10)
         with self.assertRaisesRegex(RuntimeError, 'aggregate counts'):
             self.check(rows, counts={'compiler_projection_method_count': 0,
                                      'source_body_method_count': len(rows)})
@@ -328,20 +342,24 @@ class SwiftBackendAcceptanceTests(unittest.TestCase):
         self.assertEqual(expected['struct-adjust:0'], 0)
         self.assertEqual(expected['pointerAfter:0'], 2**31 - 1)
 
-    def test_empty_accessor_has_separate_unobserved_static_provenance(self):
+    def test_empty_callables_retain_distinct_observed_provenance(self):
         manifest = json.loads(backend.FIXTURE.with_suffix('.callables.json').read_text())
-        self.assertEqual(len(manifest['callables'][:-1]), 10)
+        self.assertEqual(len(manifest['callables'][:-2]), 10)
         self.assertIn('Apple Swift 6.1.2', manifest['provenance'])
-        self.assertIn('has not been observed', manifest['additional_expectation_provenance'])
-        empty = manifest['callables'][-1]
-        self.assertEqual(empty['mangled_symbol'], backend.EMPTY_SYMBOL)
-        self.assertEqual(empty['provenance_kind'], 'static-abi-expectation-pending-ci')
+        self.assertIn('not direct execution', manifest['additional_expectation_provenance'])
+        accessor, initializer = manifest['callables'][-2:]
+        self.assertEqual(accessor['mangled_symbol'], backend.EMPTY_SYMBOL)
+        self.assertEqual(accessor['provenance_kind'], 'compiled-original-nm-and-apple-demangle')
+        self.assertEqual(initializer['mangled_symbol'], backend.EMPTY_INITIALIZER_SYMBOL)
+        self.assertEqual(initializer['provenance_kind'], 'compiled-original-nm-pending-apple-role')
 
     def test_empty_accessor_address_cannot_be_substituted_in_both_reports(self):
-        rows = self.reports()
-        next(row for row in rows if row['mangled_symbol'] == backend.EMPTY_SYMBOL)['entry'] = '0x7000'
-        with self.assertRaisesRegex(RuntimeError, 'Empty Ma identity'):
-            self.check(rows)
+        for symbol in self.empty_entries():
+            with self.subTest(symbol=symbol):
+                rows = self.reports()
+                next(row for row in rows if row['mangled_symbol'] == symbol)['entry'] = '0x7000'
+                with self.assertRaisesRegex(RuntimeError, 'Empty callable identity'):
+                    self.check(rows)
 
     def test_empty_cannot_gain_an_ordinary_body_with_self_consistent_counts(self):
         rows = self.reports()
@@ -354,13 +372,17 @@ class SwiftBackendAcceptanceTests(unittest.TestCase):
             self.check(rows)
 
     def test_empty_source_unit_requires_unique_exact_owner_and_identity(self):
-        identity = {'entry': hex(self.EMPTY_NATIVE_ENTRY), 'mangled_symbol': backend.EMPTY_SYMBOL}
+        identities = [{'entry': hex(entry), 'mangled_symbol': symbol}
+                      for symbol, entry in self.empty_entries().items()]
+        identity = identities[0]
         original = {'kind': 'type', 'module': backend.MODULE, 'name': 'Empty',
-                    'method_entries': [identity['entry']], 'method_identities': [identity]}
+                    'method_entries': [item['entry'] for item in identities], 'method_identities': identities}
         cases = [[], [original, original]]
         for key, value in (('kind', 'function'), ('module', 'Other'), ('name', 'Other'),
                            ('method_entries', ['0x7000']), ('method_identities', []),
                            ('method_identities', [identity, identity]),
+                           ('method_identities', identities[:1]),
+                           ('method_identities', identities[1:]),
                            ('method_identities', [{'entry': identity['entry'], 'mangled_symbol': 'substituted'}])):
             changed = deepcopy(original)
             changed[key] = value
@@ -386,7 +408,9 @@ class SwiftBackendAcceptanceTests(unittest.TestCase):
             with self.subTest(types=types), self.assertRaisesRegex(RuntimeError, 'exact recovered storage metadata'):
                 self.check(self.reports(), types=types)
 
-    def record_empty(self, work, nm, demangled='type metadata accessor for SwiftBehavior.Empty\n'):
+    def record_empty(self, work, nm, demangled='type metadata accessor for SwiftBehavior.Empty\n',
+                     init_demangled='SwiftBehavior.Empty.init() -> SwiftBehavior.Empty\n',
+                     locator=None, mutate_library=False):
         library = work / 'original.dylib'
         library.write_bytes(b'owned command-boundary input, not compiled Swift')
         calls = []
@@ -398,54 +422,156 @@ class SwiftBackendAcceptanceTests(unittest.TestCase):
             if argv == ['/usr/bin/nm', '-a', '-n', str(library)]:
                 return nm
             if argv == ['/usr/bin/xcrun', '--find', 'swift-demangle']:
-                return demangler + '\n'
+                return demangler + '\n' if locator is None else locator
             if argv == [demangler, '--compact', backend.EMPTY_SYMBOL]:
                 return demangled
+            if argv == [demangler, '--compact', backend.EMPTY_INITIALIZER_SYMBOL]:
+                return init_demangled
             if argv == [compiler, '--version']:
+                if mutate_library:
+                    library.write_bytes(b'changed after the symbol and role evidence')
                 return 'Mock Apple Swift version\n'
             raise AssertionError(f'Unexpected external command: {argv!r}')
 
         with patch.object(backend, 'run', side_effect=tool):
-            entry = backend.record_empty_callable(library, compiler, work, 1)
-        return entry, calls
+            entries = backend.record_empty_callables(library, compiler, work, 1)
+        return entries, calls
 
     def test_compiled_empty_oracle_records_external_commands_and_actual_input_hash(self):
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)
-            text = f'{self.EMPTY_NATIVE_ENTRY:016x} T {backend.EMPTY_SYMBOL}\n'
-            entry, calls = self.record_empty(work, text)
-            self.assertEqual(entry, self.EMPTY_NATIVE_ENTRY)
-            self.assertEqual(len(calls), 4)
+            text = self.empty_nm()
+            entries, calls = self.record_empty(work, text)
+            self.assertEqual(entries, self.empty_entries())
+            self.assertEqual(len(calls), 5)
             self.assertEqual((work / 'original-symbols.txt').read_text(), text)
             receipt = json.loads((work / 'original-empty-callable.json').read_text())
-            self.assertEqual(receipt['entry'], hex(self.EMPTY_NATIVE_ENTRY))
-            self.assertEqual(receipt['mangled_symbol'], backend.EMPTY_SYMBOL)
+            self.assertEqual(receipt['schema_version'], 2)
+            self.assertEqual({row['mangled_symbol']: int(row['entry'], 16) for row in receipt['callables']},
+                             self.empty_entries())
+            self.assertEqual(len(receipt['callables']), 2)
+            self.assertEqual([row['demangled'] for row in receipt['callables']],
+                             ['type metadata accessor for SwiftBehavior.Empty',
+                              'SwiftBehavior.Empty.init() -> SwiftBehavior.Empty'])
             self.assertEqual(receipt['library_sha256'],
                              backend.hashlib.sha256((work / 'original.dylib').read_bytes()).hexdigest())
             self.assertEqual(receipt['source_sha256'], backend.hashlib.sha256(backend.FIXTURE.read_bytes()).hexdigest())
             self.assertEqual(receipt['nm_argv'], calls[0])
-            self.assertEqual(receipt['demangle_argv'], calls[2])
+            self.assertEqual([row['demangle_argv'] for row in receipt['callables']], calls[2:4])
+            self.assertEqual(receipt['compiler'], calls[4][0])
+            self.assertEqual((work / 'original-empty-demangle.txt').read_text(),
+                             'type metadata accessor for SwiftBehavior.Empty\n')
+            self.assertEqual((work / 'original-empty-initializer-demangle.txt').read_text(),
+                             'SwiftBehavior.Empty.init() -> SwiftBehavior.Empty\n')
 
     def test_empty_oracle_rejects_missing_duplicate_undefined_and_nontext_symbols(self):
-        good = f'{self.EMPTY_NATIVE_ENTRY:016x} T {backend.EMPTY_SYMBOL}\n'
-        for text in ('', good + good, f'                 U {backend.EMPTY_SYMBOL}\n',
-                     good.replace(' T ', ' D '), good.replace('00000000000040a0', 'not-hex'),
-                     f'0000000000000000 T {backend.EMPTY_SYMBOL}\n'):
-            with self.subTest(text=text), tempfile.TemporaryDirectory() as temporary:
-                work = Path(temporary)
-                with self.assertRaisesRegex(RuntimeError, 'Empty Ma'):
-                    self.record_empty(work, text)
-                self.assertEqual((work / 'original-symbols.txt').read_text(), text)
-                self.assertFalse((work / 'original-empty-callable.json').exists())
+        good = self.empty_nm()
+        for symbol, entry in self.empty_entries().items():
+            line = f'{entry:016x} t {symbol}\n'
+            for replacement in ('', line + line, f'                 U {symbol}\n',
+                                line.replace(' t ', ' D '), f'not-hex t {symbol}\n',
+                                f'0000000000000000 T {symbol}\n', f'10000000000000000 t {symbol}\n'):
+                text = good.replace(line, replacement)
+                with self.subTest(symbol=symbol, text=text), tempfile.TemporaryDirectory() as temporary:
+                    work = Path(temporary)
+                    with self.assertRaisesRegex(RuntimeError, 'Empty callable'):
+                        self.record_empty(work, text)
+                    self.assertEqual((work / 'original-symbols.txt').read_text(), text)
+                    self.assertFalse((work / 'original-empty-callable.json').exists())
 
     def test_empty_oracle_rejects_independent_demangler_role_disagreement(self):
+        for changed in ({'demangled': 'type metadata for SwiftBehavior.Empty\n'},
+                        {'init_demangled': 'SwiftBehavior.Empty.other() -> SwiftBehavior.Empty\n'}):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as temporary:
+                work = Path(temporary)
+                with self.assertRaisesRegex(RuntimeError, 'Apple demangler disagrees'):
+                    self.record_empty(work, self.empty_nm(), **changed)
+                self.assertTrue((work / 'original-empty-demangle.txt').is_file())
+                if 'init_demangled' in changed:
+                    self.assertTrue((work / 'original-empty-initializer-demangle.txt').is_file())
+                self.assertFalse((work / 'original-empty-callable.json').exists())
+
+    def test_empty_initializer_requires_its_exact_projection_and_evidence(self):
+        for field, value, diagnostic in (
+                ('source_representation', 'native-method-body', 'incorrect role'),
+                ('compiler_projection_kind', 'type_metadata_accessor', 'incorrect role'),
+                ('compiler_projection_evidence', [], 'projection evidence'),
+                ('compiler_projection_evidence', [' '], 'projection evidence')):
+            with self.subTest(field=field, value=value):
+                rows = self.reports()
+                next(row for row in rows if row['mangled_symbol'] == backend.EMPTY_INITIALIZER_SYMBOL)[field] = value
+                with self.assertRaisesRegex(RuntimeError, diagnostic):
+                    self.check(rows)
+        with self.assertRaisesRegex(RuntimeError, 'aggregate counts'):
+            self.check(self.reports(), counts={'source_body_method_count': 26,
+                                               'compiler_projection_method_count': 8})
+
+    def test_empty_callable_roles_remain_exact_in_each_report(self):
+        for symbol in self.empty_entries():
+            for label in ('coverage', 'signature inventory'):
+                changes = [('module', 'Other'), ('node_kind', 'Function'),
+                           ('context_kind', 'class'), ('context_name', 'Counter'),
+                           ('name', 'other'), ('declaration_kind', 'function')]
+                if symbol == backend.EMPTY_INITIALIZER_SYMBOL:
+                    changes += [('parameters', [{'kind': 'int', 'name': 'Int'}]),
+                                ('labels', ['value']), ('is_static', True), ('is_static', 0),
+                                ('is_mutating', True), ('is_mutating', 0), ('is_mutating', 1),
+                                ('is_mutating_known', False), ('is_mutating_known', 0), ('is_mutating_known', 1),
+                                ('return_type', {'kind': 'void', 'name': 'Void'})]
+                for field, value in changes:
+                    with self.subTest(symbol=symbol, label=label, field=field):
+                        rows = self.reports()
+                        inventory = deepcopy(rows)
+                        target = rows if label == 'coverage' else inventory
+                        next(row for row in target if row['mangled_symbol'] == symbol)[field] = value
+                        with self.assertRaisesRegex(RuntimeError, 'required fixture callable.*role'):
+                            self.check(rows, inventory_rows=inventory)
+
+    def test_empty_source_preserves_both_aliased_callable_identities(self):
+        entries = {symbol: 0x6000 for symbol in self.empty_entries()}
+        rows = self.reports()
+        for row in rows:
+            if row['mangled_symbol'] in entries:
+                row['entry'] = '0x6000'
+        coverage = self.check(rows, empty_entries=entries)
+        unit = coverage['source_units'][0]
+        self.assertEqual(unit['method_entries'], ['0x6000', '0x6000'])
+        self.assertEqual(len(unit['method_identities']), 2)
+        with tempfile.TemporaryDirectory() as temporary:
+            actual, _ = self.record_empty(Path(temporary), self.empty_nm(entries))
+            self.assertEqual(actual, entries)
+        unit['method_entries'] = ['0x6000']
+        with self.assertRaisesRegex(RuntimeError, 'exact nominal source unit'):
+            self.check(rows, empty_entries=entries, source_units=[unit])
+
+    def test_empty_source_cannot_gain_explicit_or_unreported_members(self):
+        for source in ('struct `Empty` {\n  init() {}\n}\n',
+                       'struct `Empty` {\n  func fake() {}\n}\n', '',
+                       backend.EMPTY_SOURCE + backend.EMPTY_SOURCE,
+                       backend.EMPTY_SOURCE + '\nextension Empty { init(unreported: Int) {} }\n',
+                       backend.EMPTY_SOURCE + '\nextension `Empty` { func unreported() {} }\n',
+                       backend.EMPTY_SOURCE + '\nextension SwiftBehavior.Empty { init(unreported: Int) {} }\n',
+                       backend.EMPTY_SOURCE + '\nstruct Empty {}\n',
+                       backend.EMPTY_SOURCE + '\nstruct /* alternate */ `Empty`\n{\n}\n'):
+            with self.subTest(source=source), self.assertRaisesRegex(RuntimeError, 'canonical nominal-only source'):
+                self.check(self.reports(), source_text=source)
+
+    def test_empty_oracle_rejects_input_mutation_during_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)
-            with self.assertRaisesRegex(RuntimeError, 'Apple demangler disagrees'):
-                self.record_empty(work, f'{self.EMPTY_NATIVE_ENTRY:016x} T {backend.EMPTY_SYMBOL}\n',
-                                  'type metadata for SwiftBehavior.Empty\n')
-            self.assertTrue((work / 'original-empty-demangle.txt').is_file())
+            with self.assertRaisesRegex(RuntimeError, 'input changed during collection'):
+                self.record_empty(work, self.empty_nm(), mutate_library=True)
+            self.assertTrue((work / 'original-empty-initializer-demangle.txt').is_file())
             self.assertFalse((work / 'original-empty-callable.json').exists())
+
+    def test_empty_oracle_rejects_invalid_locator_before_demangling(self):
+        for locator in ('relative-demangler\n', '/rooted-without-drive\nsecond-line\n'):
+            with self.subTest(locator=locator), tempfile.TemporaryDirectory() as temporary:
+                work = Path(temporary)
+                with self.assertRaisesRegex(RuntimeError, 'locator is invalid'):
+                    self.record_empty(work, self.empty_nm(), locator=locator)
+                self.assertFalse((work / 'original-empty-demangle.txt').exists())
+                self.assertFalse((work / 'original-empty-callable.json').exists())
 
 
 if __name__ == '__main__':

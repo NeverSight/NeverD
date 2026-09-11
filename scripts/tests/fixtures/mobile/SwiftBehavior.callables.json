@@ -3,7 +3,7 @@
   "fixture": "SwiftBehavior.swift",
   "module": "SwiftBehavior",
   "provenance": "Hand-reviewed from the Calculator.bias and Counter.value declarations in the owned SwiftBehavior.swift fixture, and the defined __TEXT,__text symbols in its Apple Swift 6.1.2 arm64/x86_64 -O outputs. Roles were independently checked with Apple's swift-demangle; the modify continuation is the compiler's defined .resume.0 symbol. NeverD output is not the source of this oracle. Changes in compiler-generated identities require explicit fixture review, not automatic regeneration from recovery reports.",
-  "additional_expectation_provenance": "The Empty metadata accessor below is a static Swift ABI spelling/role expectation for the added owned public frozen empty struct. It has not been observed in a compiler run for this change. The runner must independently confirm its defined text symbol, address and Apple demangler role in every actual compiled variant before NeverD recovery. The preceding Apple Swift 6.1.2 provenance applies only to the original ten entries, not to Empty.",
+  "additional_expectation_provenance": "At NeverD commit 6ca7de2395dae7a5fb6005815ee964a0dabda9c6, the owned Empty fixture was compiled by Apple Swift 6.1.2 for arm64/x86_64 with classic/default fixups. Retained original nm and Apple demangler receipts independently confirmed Empty Ma in all four variants. Original nm also contains the defined local Empty.init Allocator spelling below; its Apple demangler role remains an explicit expectation to be independently checked by the updated runner. NeverD recovery reports are not the source of these required identities. Both original entries and Apple roles must be checked in every new variant. The preceding provenance applies only to the original ten entries. Empty remains a public frozen struct with no explicit initializer; its 858 harness checks include layout, not direct execution of the internal default initializer.",
   "callables": [
     {
       "mangled_symbol": "_$s13SwiftBehavior10CalculatorC4biass5Int64Vvg",
@@ -112,7 +112,30 @@
       "declaration_kind": "runtime",
       "source_representation": "compiler-generated-from-type",
       "compiler_projection_kind": "type_metadata_accessor",
-      "provenance_kind": "static-abi-expectation-pending-ci"
+      "provenance_kind": "compiled-original-nm-and-apple-demangle"
+    },
+    {
+      "mangled_symbol": "_$s13SwiftBehavior5EmptyVACycfC",
+      "module": "SwiftBehavior",
+      "node_kind": "Allocator",
+      "context_kind": "struct",
+      "context_name": "Empty",
+      "name": "init",
+      "declaration_kind": "initializer",
+      "parameters": [],
+      "labels": [],
+      "is_static": false,
+      "is_mutating": false,
+      "is_mutating_known": true,
+      "return_type": {
+        "kind": "nominal",
+        "context_kind": "struct",
+        "module": "SwiftBehavior",
+        "name": "Empty"
+      },
+      "source_representation": "compiler-generated-from-type",
+      "compiler_projection_kind": "empty_value_initializer",
+      "provenance_kind": "compiled-original-nm-pending-apple-role"
     }
   ]
 }

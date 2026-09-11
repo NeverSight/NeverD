@@ -36,6 +36,12 @@ HARNESS = ROOT / "scripts/tests/fixtures/mobile/SwiftBehaviorHarness.swift"
 MODULE = "SwiftBehavior"
 EMPTY_SYMBOL = '_$s13SwiftBehavior5EmptyVMa'
 EMPTY_PREFIX = '_$s13SwiftBehavior5EmptyV'
+EMPTY_INITIALIZER_SYMBOL = EMPTY_PREFIX + 'ACycfC'
+EMPTY_SOURCE = 'struct `Empty` {\n}\n'
+EMPTY_ROLES = {
+    EMPTY_SYMBOL: 'type metadata accessor for SwiftBehavior.Empty',
+    EMPTY_INITIALIZER_SYMBOL: 'SwiftBehavior.Empty.init() -> SwiftBehavior.Empty',
+}
 VALUES = (-(2**63), -(2**63) + 1, -65537, -1, 0, 1, 65537, 2**63 - 2, 2**63 - 1)
 GLOBALS = {"scalar", "choose", "callScalar", "floatIdentity", "doubleIdentity", "floatAdd", "doubleAdd",
            "mixed", "stackIntegers", "stackFloats", "stackMixed", "pointerRead", "pointerSwap", "sum"}
@@ -126,61 +132,92 @@ def expected_results() -> dict[str, int]:
     return result
 
 
-def record_empty_callable(original: Path, swift: str, variant: Path, timeout: int) -> int:
+def record_empty_callables(original: Path, swift: str, variant: Path, timeout: int) -> dict[str, int]:
     # This is independent compiler evidence. NeverD reports are not inputs.
+    source_sha256 = hashlib.sha256(FIXTURE.read_bytes()).hexdigest()
+    library_sha256 = hashlib.sha256(original.read_bytes()).hexdigest()
     nm_argv = ['/usr/bin/nm', '-a', '-n', str(original)]
     nm = run(nm_argv, timeout=timeout)
     (variant / 'original-symbols.txt').write_text(nm)
-    matches = [line.split() for line in nm.splitlines()
-               if line.split() and line.split()[-1] == EMPTY_SYMBOL]
-    if (len(matches) != 1 or len(matches[0]) != 3 or matches[0][1] not in ('T', 't')
-            or not matches[0][0] or any(c not in '0123456789abcdefABCDEF' for c in matches[0][0])):
-        raise RuntimeError('Empty Ma must be one defined original text symbol')
-    entry = int(matches[0][0], 16)
-    if not 0 < entry < 2**64:
-        raise RuntimeError('Empty Ma has an invalid original address')
+    entries = {}
+    for symbol in EMPTY_ROLES:
+        matches = [line.split() for line in nm.splitlines()
+                   if line.split() and line.split()[-1] == symbol]
+        if (len(matches) != 1 or len(matches[0]) != 3 or matches[0][1] not in ('T', 't')
+                or not matches[0][0] or any(c not in '0123456789abcdefABCDEF' for c in matches[0][0])):
+            raise RuntimeError(f'Empty callable {symbol} must be one defined original text symbol')
+        entry = int(matches[0][0], 16)
+        if not 0 < entry < 2**64:
+            raise RuntimeError(f'Empty callable {symbol} has an invalid original address')
+        entries[symbol] = entry
     demangler = run(['/usr/bin/xcrun', '--find', 'swift-demangle'], timeout=timeout).strip()
     if not Path(demangler).is_absolute() or '\n' in demangler:
         raise RuntimeError('Apple Swift demangler locator is invalid')
-    demangle_argv = [demangler, '--compact', EMPTY_SYMBOL]
-    demangled = run(demangle_argv, timeout=timeout)
-    (variant / 'original-empty-demangle.txt').write_text(demangled)
-    if demangled.strip() != 'type metadata accessor for SwiftBehavior.Empty':
-        raise RuntimeError('Apple demangler disagrees with the expected Empty Ma role')
+    callables = []
+    for symbol, role in EMPTY_ROLES.items():
+        demangle_argv = [demangler, '--compact', symbol]
+        demangled = run(demangle_argv, timeout=timeout)
+        filename = ('original-empty-demangle.txt' if symbol == EMPTY_SYMBOL
+                    else 'original-empty-initializer-demangle.txt')
+        (variant / filename).write_text(demangled)
+        if demangled.strip() != role:
+            raise RuntimeError(f'Apple demangler disagrees with the expected Empty callable role: {symbol}')
+        callables.append({'mangled_symbol': symbol, 'entry': hex(entries[symbol]),
+                          'demangled': role, 'demangle_argv': demangle_argv})
     version = run([swift, '--version'], timeout=timeout)
+    if (hashlib.sha256(FIXTURE.read_bytes()).hexdigest() != source_sha256
+            or hashlib.sha256(original.read_bytes()).hexdigest() != library_sha256):
+        raise RuntimeError('Empty callable evidence input changed during collection')
     (variant / 'original-empty-callable.json').write_text(json.dumps({
-        'schema_version': 1, 'mangled_symbol': EMPTY_SYMBOL, 'entry': hex(entry),
+        'schema_version': 2, 'callables': callables,
         'evidence_kind': 'compiled-original-nm-and-apple-demangle',
-        'source_sha256': hashlib.sha256(FIXTURE.read_bytes()).hexdigest(),
-        'library_sha256': hashlib.sha256(original.read_bytes()).hexdigest(),
+        'source_sha256': source_sha256, 'library_sha256': library_sha256,
         'compiler': swift, 'compiler_version': version,
-        'nm_argv': nm_argv, 'demangle_argv': demangle_argv,
+        'nm_argv': nm_argv,
     }, indent=2))
-    return entry
+    return entries
 
 
-def validate_empty_nominal_context(coverage: dict, original_entry: int) -> None:
+def validate_empty_nominal_context(coverage: dict, original_entries: dict[str, int], source: str) -> None:
     methods = coverage.get('methods', [])
     empty = [row for row in methods if row.get('context_name') == 'Empty'
              or row.get('mangled_symbol', '').startswith(EMPTY_PREFIX)]
-    if len(empty) != 1 or empty[0].get('mangled_symbol') != EMPTY_SYMBOL:
-        raise RuntimeError('Empty must retain only its original Ma callable and no ordinary body')
-    row = empty[0]
-    if (row.get('entry') != hex(original_entry) or row.get('module') != MODULE
-            or row.get('context_kind') != 'struct' or row.get('context_name') != 'Empty'
-            or row.get('declaration_kind') != 'runtime'
-            or row.get('source_representation') != 'compiler-generated-from-type'
-            or row.get('compiler_projection_kind') != 'type_metadata_accessor'):
-        raise RuntimeError('Empty Ma identity or compiler-only representation changed')
-    identity = {'entry': row['entry'], 'mangled_symbol': EMPTY_SYMBOL}
+    if Counter(row.get('mangled_symbol') for row in empty) != Counter(EMPTY_ROLES.keys()):
+        raise RuntimeError('Empty must retain its two original callables and no ordinary body')
+    if (set(original_entries) != set(EMPTY_ROLES)
+            or any(type(entry) is not int or not 0 < entry < 2**64 for entry in original_entries.values())):
+        raise RuntimeError('Empty original callable evidence is incomplete or invalid')
+    identities = []
+    for row in empty:
+        symbol = row['mangled_symbol']
+        accessor = symbol == EMPTY_SYMBOL
+        if (row.get('entry') != hex(original_entries[symbol]) or row.get('module') != MODULE
+                or row.get('context_kind') != 'struct' or row.get('context_name') != 'Empty'
+                or row.get('name') != ('typeMetadata' if accessor else 'init')
+                or row.get('node_kind') != ('TypeMetadataAccessFunction' if accessor else 'Allocator')
+                or row.get('declaration_kind') != ('runtime' if accessor else 'initializer')
+                or row.get('source_representation') != 'compiler-generated-from-type'
+                or row.get('compiler_projection_kind') != ('type_metadata_accessor' if accessor else 'empty_value_initializer')):
+            raise RuntimeError('Empty callable identity or compiler-only representation changed')
+        identities.append({'entry': row['entry'], 'mangled_symbol': symbol})
     units = coverage.get('source_units', [])
-    owners = [unit for unit in units if identity in unit.get('method_identities', [])]
+    owners = [unit for unit in units if any(identity in unit.get('method_identities', [])
+                                          for identity in identities)]
     named = [unit for unit in units if unit.get('name') == 'Empty']
     if (len(owners) != 1 or len(named) != 1 or owners[0] != named[0]
             or owners[0].get('kind') != 'type' or owners[0].get('module') != MODULE
-            or owners[0].get('method_entries') != [row['entry']]
-            or owners[0].get('method_identities') != [identity]):
-        raise RuntimeError('Empty Ma must uniquely own its exact nominal source unit')
+            or Counter((item.get('entry'), item.get('mangled_symbol'))
+                       for item in owners[0].get('method_identities', []))
+               != Counter((item['entry'], item['mangled_symbol']) for item in identities)
+            or owners[0].get('method_entries')
+               != [item.get('entry') for item in owners[0].get('method_identities', [])]):
+        raise RuntimeError('Empty callables must uniquely own their exact nominal source unit')
+    # Mobile metadata retains identities, not per-unit source text. Check the
+    # actual file that the following compilation will consume instead. This
+    # owned fixture has no other Empty references; reject even textual uses
+    # outside the canonical unit, including declarations and extensions.
+    if source.count(EMPTY_SOURCE) != 1 or 'Empty' in source.replace(EMPTY_SOURCE, '', 1):
+        raise RuntimeError('Empty requires canonical nominal-only source')
     types = [item for item in coverage.get('types', []) if item.get('name') == 'Empty']
     if (len(types) != 1 or types[0].get('module') != MODULE
             or types[0].get('kind') != 'struct' or types[0].get('status') != 'recovered'
@@ -192,8 +229,8 @@ def validate_empty_nominal_context(coverage: dict, original_entry: int) -> None:
 
 def validate_fixture_callables(methods: list[dict], inventory_methods: list[dict], raw_names: Counter) -> None:
     # The original ten identities retain their reviewed compiler provenance.
-    # Empty adds a static ABI expectation checked against actual nm/demangle
-    # output before recovery. Neither oracle is derived from NeverD reports.
+    # Empty's two identities are checked against actual nm/demangle output
+    # before recovery. Neither oracle is derived from NeverD reports.
     manifest = json.loads(FIXTURE.with_suffix('.callables.json').read_text(encoding='utf-8'))
     if (manifest.get('schema_version'), manifest.get('fixture'), manifest.get('module')) != (1, FIXTURE.name, MODULE):
         raise RuntimeError('Invalid Swift fixture callable manifest')
@@ -211,16 +248,20 @@ def validate_fixture_callables(methods: list[dict], inventory_methods: list[dict
             if len(matches) != 1 or matches[0].get('classification') != 'callable':
                 raise RuntimeError(f'required fixture callable {symbol} is absent, duplicated, or reclassified in {label}')
             fields = ('node_kind', 'context_kind', 'context_name', 'name', 'declaration_kind')
+            fields += tuple(field for field in ('module', 'parameters', 'labels', 'return_type',
+                                                'is_static', 'is_mutating', 'is_mutating_known')
+                            if field in required)
             if label == 'coverage':
                 fields += ('source_representation', 'compiler_projection_kind')
             mismatches = [f'{field}={matches[0].get(field)!r} (expected {required.get(field)!r})'
-                          for field in fields if matches[0].get(field) != required.get(field)]
+                          for field in fields if (type(matches[0].get(field)) is not type(required.get(field))
+                                                 or matches[0].get(field) != required.get(field))]
             if mismatches:
                 raise RuntimeError(f'required fixture callable {symbol} has an incorrect role in {label}: '
                                    + ', '.join(mismatches))
 
 
-def validate_coverage(output: Path, original: Path, architecture: str, *, empty_entry: int) -> dict:
+def validate_coverage(output: Path, original: Path, architecture: str, *, empty_entries: dict[str, int]) -> dict:
     report = json.loads((output / 'report.json').read_text())
     coverage = json.loads((output / 'metadata/swift-methods.json').read_text())
     inventory = json.loads((output / 'metadata/swift-signatures.json').read_text())
@@ -282,7 +323,9 @@ def validate_coverage(output: Path, original: Path, architecture: str, *, empty_
     for row in methods:
         if row.get('status') != 'recovered':
             continue
-        if row.get('declaration_kind') == 'runtime':
+        if (row.get('declaration_kind') == 'runtime'
+                or (row.get('mangled_symbol') == EMPTY_INITIALIZER_SYMBOL
+                    and row.get('declaration_kind') == 'initializer')):
             compiler_projections += 1
             evidence = row.get('compiler_projection_evidence')
             if (row.get('source_representation') != 'compiler-generated-from-type'
@@ -305,7 +348,8 @@ def validate_coverage(output: Path, original: Path, architecture: str, *, empty_
         errors.append(f'coverage is {coverage.get("status")}/{coverage.get("coverage_status")}')
     if errors:
         raise RuntimeError('Incomplete Swift recovery:\n' + '\n'.join(errors))
-    validate_empty_nominal_context(coverage, empty_entry)
+    validate_empty_nominal_context(coverage, empty_entries,
+                                   (output / 'sources/swift.swift').read_text())
     return coverage
 
 
@@ -351,7 +395,7 @@ def verify(arguments: argparse.Namespace, work: Path) -> None:
                     raise
                 assert_results(baseline, expected, f'Original {label}')
                 (variant / 'expected.json').write_text(json.dumps(expected, indent=2))
-                empty_entry = record_empty_callable(library, swift, variant, arguments.timeout)
+                empty_entries = record_empty_callables(library, swift, variant, arguments.timeout)
                 print(f'PASS original {label}: {len(expected)} oracle checks, chained_fixups={chained}', flush=True)
                 if not arguments.setup_only:
                     output = variant / 'recovered'
@@ -360,7 +404,7 @@ def verify(arguments: argparse.Namespace, work: Path) -> None:
                          f'--timeout={arguments.timeout}'], timeout=arguments.timeout * 3 + 60,
                         env={**os.environ, 'PATH': '',
                              'NEVERD_SWIFT_DEMANGLE': str(work / 'missing-demangler')})
-                    coverage = validate_coverage(output, library, architecture, empty_entry=empty_entry)
+                    coverage = validate_coverage(output, library, architecture, empty_entries=empty_entries)
                     source = output / 'sources/swift.swift'
                     if not source.is_file() or not source.read_text().strip():
                         raise RuntimeError('The CLI produced no actual Swift source')
