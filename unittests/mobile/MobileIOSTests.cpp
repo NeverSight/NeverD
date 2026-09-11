@@ -813,9 +813,9 @@ TEST(MobileIOSNative, NativeBackendReasonSurvivesDeclarationAndLayoutFailure) {
 }
 
 TEST(MobileIOSNative, NativeBackendSummaryRequiresExactRuntimeIdentity) {
-  for (const auto *field : {"class_name", "selector", "class_method",
-                            "category_name", "category_address",
-                            "implementation", "type_encoding"}) {
+  for (const auto *field :
+       {"class_name", "selector", "class_method", "category_name",
+        "category_address", "implementation", "type_encoding"}) {
     SCOPED_TRACE(field);
     auto [batch, metadata] = objcDiagnosticFixture();
     unavailableObjCDeclaration(metadata);
@@ -909,10 +909,9 @@ TEST(MobileIOSNative, AmbiguousNativeOrRuntimeRowsCannotPublishBackendSummary) {
         copy["diagnostics"] = Array{"different native result"};
       batch.getArray("methods")->push_back(std::move(copy));
     } else if (duplicate == 2) {
-      auto *methods = metadata.getArray("classes")
-                          ->front()
-                          .getAsObject()
-                          ->getArray("methods");
+      auto *methods =
+          metadata.getArray("classes")->front().getAsObject()->getArray(
+              "methods");
       auto copy = methods->front();
       methods->push_back(std::move(copy));
     } else {
@@ -985,8 +984,8 @@ TEST(MobileIOSNative, InvalidOrExcessiveNativeDiagnosticPayloadIsUnavailable) {
       native["diagnostics"] = Array{std::string(513, 'x')};
       break;
     case 13:
-      native["diagnostics"] = Array{"1", "2", "3", "4", "5", "6", "7", "8",
-                                    "9"};
+      native["diagnostics"] =
+          Array{"1", "2", "3", "4", "5", "6", "7", "8", "9"};
       break;
     case 14:
       native["diagnostics"] = Array{std::string("bad\x7ftext", 8)};
@@ -1008,7 +1007,8 @@ TEST(MobileIOSNative, InvalidOrExcessiveNativeDiagnosticPayloadIsUnavailable) {
 TEST(MobileIOSNative, NativeBackendSummaryHasAnAggregateBoundAndIsReadOnly) {
   auto [prototype_batch, prototype_metadata] = objcDiagnosticFixture();
   unavailableObjCDeclaration(prototype_metadata);
-  Object batch{{"schema_version", 1}, {"pointer_size", 8}, {"methods", Array{}}};
+  Object batch{
+      {"schema_version", 1}, {"pointer_size", 8}, {"methods", Array{}}};
   Object metadata{{"status", "recovered"}, {"classes", Array{}}};
   for (unsigned index = 0; index < 64; ++index) {
     const auto name = "Calculator" + std::to_string(index);
@@ -1052,16 +1052,18 @@ TEST(MobileIOSNative, NativeBackendSummaryHasAnAggregateBoundAndIsReadOnly) {
   EXPECT_EQ(jsonText(Value(Object(metadata))), original_metadata);
 }
 
-TEST(MobileIOSNative, NativeBackendSummaryLeavesSuccessAndBudgetsAuthoritative) {
+TEST(MobileIOSNative,
+     NativeBackendSummaryLeavesSuccessAndBudgetsAuthoritative) {
   auto [baseline_batch, baseline_metadata] = objcFixture();
   Budget baseline_budget;
-  auto baseline = objcSources(baseline_batch, baseline_metadata, 8,
-                              baseline_budget);
+  auto baseline =
+      objcSources(baseline_batch, baseline_metadata, 8, baseline_budget);
   auto [batch, metadata] = objcDiagnosticFixture();
   Budget successful_budget;
   const auto successful = objcSources(batch, metadata, 8, successful_budget);
   EXPECT_EQ(successful.source, baseline.source);
-  EXPECT_EQ(Value(Object(successful.coverage)), Value(Object(baseline.coverage)));
+  EXPECT_EQ(Value(Object(successful.coverage)),
+            Value(Object(baseline.coverage)));
   EXPECT_EQ(number(successful.coverage, "recovered_method_count"), 1);
   EXPECT_FALSE(object(array(successful.coverage, "methods")[0], "method")
                    .get("native_backend"));

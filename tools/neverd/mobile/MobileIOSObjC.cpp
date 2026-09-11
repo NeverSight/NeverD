@@ -1188,8 +1188,8 @@ SourceResult objcSources(const Object &batch, const Object &metadata,
                  {"status", "unrecovered"},
                  {"diagnostics", Array{}}};
       try {
-        auto [entry, fresh] = encountered.emplace(
-            key, RuntimeMatch{coverage.size(), &m, &name});
+        auto [entry, fresh] =
+            encountered.emplace(key, RuntimeMatch{coverage.size(), &m, &name});
         if (!fresh) {
           entry->second.duplicate = true;
           throw Error("duplicate runtime method identity");
@@ -1342,7 +1342,8 @@ SourceResult objcSources(const Object &batch, const Object &metadata,
         native->second.size() != 1)
       continue;
     const auto &record = native->second.front();
-    const auto bytes = backendDiagnosticSize(record, *match.method, *match.owner);
+    const auto bytes =
+        backendDiagnosticSize(record, *match.method, *match.owner);
     if (!bytes || bytes > diagnostic_bytes)
       continue;
     try {
