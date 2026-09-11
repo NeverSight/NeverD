@@ -508,6 +508,13 @@
           "neverd xrefs --no-debug",
           "neverd xrefs --pdb"
         ]
+      },
+      {
+        "owner": "mobile",
+        "reason": "Private iOS worker entry for the native mobile parent process and its fixed staging protocol; not a supported standalone user command.",
+        "names": [
+          "neverd mobile --internal-ios-worker"
+        ]
       }
     ],
     "json": [
