@@ -5,7 +5,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "CompactUnwindTestsDetail.h"
+#include "LanguageEHTestsDetail.h"
 #include "gtest/gtest.h"
+
+#include "neverd/loader/MachO/MachOExceptions.h"
 
 #include <cstring>
 
@@ -330,6 +333,148 @@ TEST(CompactUnwindSection, ModeZeroIsAnAbsenceOfInformation) {
   ASSERT_EQ(Result.Entries.size(), 1u);
   EXPECT_EQ(Result.Entries.front().Kind, CompactUnwindKind::None);
   EXPECT_EQ(Result.ParseStatus, ExceptionParseStatus::Complete);
+}
+
+//===----------------------------------------------------------------------===//
+// Darwin function symbols
+//===----------------------------------------------------------------------===//
+
+TEST(DarwinUnwindSymbols, PromotesAllAliasesAfterSymbolVectorGrowth) {
+  BinaryImage Img = makeImage();
+  const va_t NewVA = kImageBase + 0x100;
+  const va_t AliasVA = kImageBase + 0x200;
+  Img.Symbols = {{"_first_zero", AliasVA, 0, false},
+                 {"_sized", AliasVA, 7, false},
+                 {"_last_zero", AliasVA, 0, false}};
+
+  // Fill the observed capacity: reserve alone does not promise an exact one.
+  // The first range must then grow the vector before the aliases are visited.
+  const size_t OriginalCapacity = Img.Symbols.capacity();
+  while (Img.Symbols.size() < OriginalCapacity)
+    Img.Symbols.push_back({"_unrelated", kImageBase + 0x1000, 3, false});
+  const std::vector<Symbol> OriginalSymbols = Img.Symbols;
+  ASSERT_EQ(Img.Symbols.size(), OriginalCapacity);
+  const std::vector<RawEntry> Entries = {{0x100, kX86_64ModeRBPFrame},
+                                         {0x200, kX86_64ModeRBPFrame}};
+  attachUnwindInfo(Img, buildUnwindInfo(Entries, 0x280));
+
+  parseDarwinExceptions(Img);
+
+  ASSERT_EQ(Img.Symbols.size(), OriginalCapacity + 1);
+  EXPECT_GT(Img.Symbols.capacity(), OriginalCapacity);
+  for (size_t I = 0; I < OriginalSymbols.size(); ++I) {
+    SCOPED_TRACE(I);
+    const Symbol &Before = OriginalSymbols[I];
+    const Symbol &After = Img.Symbols[I];
+    EXPECT_EQ(After.Name, Before.Name);
+    EXPECT_EQ(After.Addr, Before.Addr);
+    EXPECT_EQ(After.IsFunc, Before.Addr == AliasVA);
+    EXPECT_EQ(After.Size,
+              Before.Addr == AliasVA && Before.Size == 0 ? 0x80u : Before.Size);
+  }
+  const Symbol &Created = Img.Symbols.back();
+  EXPECT_EQ(Created.Addr, NewVA);
+  EXPECT_EQ(Created.Size, 0x100u);
+  EXPECT_TRUE(Created.IsFunc);
+  EXPECT_FALSE(Created.Name.empty());
+  ASSERT_EQ(Img.ExceptionMetadata.Functions.size(), 2u);
+  EXPECT_EQ(Img.ExceptionMetadata.ParseStatus, ExceptionParseStatus::Complete);
+  const std::vector<std::pair<va_t, va_t>> ExpectedRanges = {
+      {NewVA, AliasVA}, {AliasVA, kImageBase + 0x280}};
+  EXPECT_EQ(Img.KnownCodeRanges, ExpectedRanges);
+}
+
+TEST(DarwinUnwindSymbols, ReusesNewSymbolForLaterSameAddressFDE) {
+  BinaryImage Img = makeImage();
+  const va_t FunctionVA = kImageBase + 0x100;
+  const va_t FrameVA = kImageBase + 0x2800;
+  auto First =
+      language_eh_test::buildSimpleFrame(FrameVA, FunctionVA, 0x40, "zR", 0, 0);
+  std::vector<uint8_t> Bytes = First.Bytes;
+  ASSERT_GE(Bytes.size(), sizeof(uint32_t));
+  Bytes.resize(Bytes.size() - sizeof(uint32_t));
+  const size_t SecondOffset = Bytes.size();
+  // Each chunk retains its own CIE. Its PC-relative fields must be encoded
+  // for the chunk's actual position; only the last terminator is retained.
+  auto Second = language_eh_test::buildSimpleFrame(
+      FrameVA + SecondOffset, FunctionVA, 0x80, "zR", 0, 0);
+  Bytes.insert(Bytes.end(), Second.Bytes.begin(), Second.Bytes.end());
+
+  Section Frames;
+  Frames.Name = "__eh_frame";
+  Frames.SegmentName = "__TEXT";
+  Frames.VA = FrameVA;
+  Frames.Size = Bytes.size();
+  Frames.Flags = SegmentFlags::Readable;
+  Frames.Data = std::move(Bytes);
+  Img.Sections.push_back(std::move(Frames));
+
+  // No compact entry consumes either FDE before the standalone FDE loop.
+  parseDarwinExceptions(Img);
+
+  ASSERT_EQ(Img.ExceptionMetadata.CIEs.size(), 2u);
+  ASSERT_EQ(Img.ExceptionMetadata.Functions.size(), 2u);
+  EXPECT_EQ(Img.ExceptionMetadata.ParseStatus, ExceptionParseStatus::Complete);
+  for (size_t I = 0; I < 2; ++I) {
+    SCOPED_TRACE(I);
+    const ExceptionFunction &Function = Img.ExceptionMetadata.Functions[I];
+    ASSERT_TRUE(Function.Dwarf.has_value());
+    EXPECT_FALSE(Function.Compact.has_value());
+    EXPECT_EQ(Function.Encoding, ExceptionEncoding::DwarfFDE);
+    EXPECT_EQ(Function.CodeRange.Begin, FunctionVA);
+    EXPECT_EQ(Function.CodeRange.End, FunctionVA + (I == 0 ? 0x40u : 0x80u));
+    EXPECT_EQ(Function.Dwarf->SectionOffset,
+              I == 0 ? First.FDEOffset : SecondOffset + Second.FDEOffset);
+  }
+  ASSERT_EQ(Img.Symbols.size(), 1u);
+  EXPECT_EQ(Img.Symbols.front().Addr, FunctionVA);
+  EXPECT_EQ(Img.Symbols.front().Size, 0x40u);
+  EXPECT_TRUE(Img.Symbols.front().IsFunc);
+  const std::vector<std::pair<va_t, va_t>> ExpectedRanges = {
+      {FunctionVA, FunctionVA + 0x40}, {FunctionVA, FunctionVA + 0x80}};
+  EXPECT_EQ(Img.KnownCodeRanges, ExpectedRanges);
+}
+
+TEST(DarwinUnwindSymbols, KeepsNonExecutableRangesWithoutChangingSymbols) {
+  for (bool Mapped : {false, true}) {
+    for (bool HasSymbol : {false, true}) {
+      SCOPED_TRACE(Mapped ? "read-only segment" : "unmapped range");
+      SCOPED_TRACE(HasSymbol ? "existing symbol" : "no symbol");
+      BinaryImage Img = makeImage();
+      const va_t FunctionVA = kImageBase + 0x8000;
+      if (Mapped) {
+        Segment Data;
+        Data.Name = "__DATA";
+        Data.VA = FunctionVA;
+        Data.Size = 0x100;
+        Data.Flags = SegmentFlags::Readable;
+        Data.Data.assign(0x100, 0);
+        Img.Segments.push_back(std::move(Data));
+      }
+      if (HasSymbol)
+        Img.Symbols.push_back({"_data", FunctionVA, 0, false});
+      attachUnwindInfo(
+          Img, buildUnwindInfo({{0x8000, kX86_64ModeRBPFrame}}, 0x8080));
+
+      parseDarwinExceptions(Img);
+
+      ASSERT_EQ(Img.ExceptionMetadata.Functions.size(), 1u);
+      const ExceptionFunction &Function = Img.ExceptionMetadata.Functions[0];
+      ASSERT_TRUE(Function.Compact.has_value());
+      EXPECT_EQ(Function.CodeRange.Begin, FunctionVA);
+      EXPECT_EQ(Function.CodeRange.End, FunctionVA + 0x80);
+      const std::vector<std::pair<va_t, va_t>> ExpectedRanges = {
+          {FunctionVA, FunctionVA + 0x80}};
+      EXPECT_EQ(Img.KnownCodeRanges, ExpectedRanges);
+      ASSERT_EQ(Img.Symbols.size(), HasSymbol ? 1u : 0u);
+      if (HasSymbol) {
+        EXPECT_EQ(Img.Symbols.front().Name, "_data");
+        EXPECT_EQ(Img.Symbols.front().Addr, FunctionVA);
+        EXPECT_EQ(Img.Symbols.front().Size, 0u);
+        EXPECT_FALSE(Img.Symbols.front().IsFunc);
+      }
+    }
+  }
 }
 
 //===----------------------------------------------------------------------===//

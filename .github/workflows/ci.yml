@@ -225,12 +225,170 @@ jobs:
           PYTHON: ${{ matrix.python }}
 
       - name: Build default targets
+        id: default_build
         shell: bash
         run: |
           cmake --build build-ci --config Release --parallel "$BUILD_PARALLEL"
           cmake -E touch build-ci/.neverd-capability-build-complete
         env:
           BUILD_PARALLEL: ${{ matrix.parallel }}
+
+      - name: Run and audit seven Darwin unwind regressions
+        if: ${{ !cancelled() && steps.default_build.outcome == 'success' }}
+        shell: bash
+        run: |
+          "$PYTHON" - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          import xml.etree.ElementTree as ET
+
+          from scripts.audit_ci_test_inventory import TestRecord, parse_inventory
+          from scripts.audit_ci_test_results import parse_junit
+
+          expected = tuple(
+              TestRecord(name, frozenset({owner}))
+              for name, owner in (
+                  ("DarwinUnwindSymbols.PromotesAllAliasesAfterSymbolVectorGrowth",
+                   "NeverDLanguageEHTests"),
+                  ("DarwinUnwindSymbols.ReusesNewSymbolForLaterSameAddressFDE",
+                   "NeverDLanguageEHTests"),
+                  ("DarwinUnwindSymbols.KeepsNonExecutableRangesWithoutChangingSymbols",
+                   "NeverDLanguageEHTests"),
+                  ("MachOFunctionListingTest.IgnoresStabsAndPreservesSameAddressAliasesInBothNListLayouts",
+                   "NeverDLiftTests"),
+                  ("MachOFunctionListingTest.CompactUnwindDoesNotPromoteDuplicateDebugFunctionRecords",
+                   "NeverDLiftTests"),
+                  ("MachOFunctionListingTest.LoaderClassifiesCodeSymbolsAndMergesExactUnwindSizes",
+                   "NeverDLiftTests"),
+                  ("MachOFunctionListingTest.FuncsJSONListsOnlyFunctionsWithStableNamesAndExactSizes",
+                   "NeverDLiftTests"),
+              )
+          )
+          if len(expected) != 7 or len(set(expected)) != 7:
+              raise RuntimeError("focused contract must contain seven unique identities")
+          evidence = Path("build-ci/macho-range-focused").resolve()
+          evidence.mkdir()
+          errors = []
+          statuses = {}
+
+          def write_json(name, value):
+              (evidence / name).write_text(
+                  json.dumps(value, indent=2) + "\n", encoding="utf-8"
+              )
+
+          def identities(records):
+              return [
+                  {"name": item.name, "labels": sorted(item.labels)}
+                  for item in records
+              ]
+
+          name_regex = "^(" + "|".join(re.escape(item.name) for item in expected) + ")$"
+          common = [
+              "ctest", "--test-dir", "build-ci", "--build-config", "Release",
+              "--label-regex", "^(NeverDLanguageEHTests|NeverDLiftTests)$",
+              "--tests-regex", name_regex,
+          ]
+          discovery = common + ["--show-only=json-v1"]
+          execution = common + [
+              "--no-tests=error", "--output-on-failure", "--parallel", "1",
+              "--output-junit", str(evidence / "results.xml"),
+              "--output-log", str(evidence / "ctest.log"),
+          ]
+          write_json("expected.json", identities(expected))
+          write_json("commands.json", {
+              "head_sha": os.environ["GITHUB_SHA"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "profile": os.environ["TEST_PROFILE"],
+              "cwd": str(Path.cwd()),
+              "discovery": discovery,
+              "execution": execution,
+          })
+
+          def run(name, command, stdout_name):
+              status = {"returncode": None}
+              try:
+                  with (evidence / stdout_name).open("wb") as stdout, \
+                       (evidence / (name + ".stderr")).open("wb") as stderr:
+                      result = subprocess.run(command, stdout=stdout, stderr=stderr, check=False)
+                  status["returncode"] = result.returncode
+              except OSError as error:
+                  status["error"] = str(error)
+              statuses[name] = status
+              write_json("exit-status.json", statuses)
+              if status["returncode"] != 0:
+                  errors.append(f"{name} command failed: {status}")
+
+          run("discovery", discovery, "inventory.json")
+          # Still attempt every selected test when discovery reports an error.
+          run("execution", execution, "execution.stdout")
+
+          def check_identities(name, records):
+              actual = set(records)
+              required = set(expected)
+              order = lambda item: (item.name, tuple(sorted(item.labels)))
+              if len(records) != 7 or actual != required:
+                  errors.append(
+                      f"{name} identities differ: count={len(records)}, "
+                      f"missing={identities(sorted(required - actual, key=order))}, "
+                      f"unexpected={identities(sorted(actual - required, key=order))}"
+                  )
+
+          selected = None
+          outcomes = None
+          try:
+              selected = parse_inventory(json.loads(
+                  (evidence / "inventory.json").read_text(encoding="utf-8")
+              ))
+              check_identities("discovery", selected)
+          except Exception as error:
+              errors.append(f"inventory audit failed: {type(error).__name__}: {error}")
+          try:
+              outcomes = parse_junit(ET.parse(evidence / "results.xml").getroot())
+              check_identities("execution", tuple(item.test for item in outcomes))
+              for item in outcomes:
+                  if item.outcome != "passed":
+                      errors.append(
+                          f"{item.test.name} {sorted(item.test.labels)}: "
+                          f"{item.outcome}: {item.message}"
+                      )
+          except Exception as error:
+              errors.append(f"JUnit audit failed: {type(error).__name__}: {error}")
+          report = {
+              "status": "failed" if errors else "passed",
+              "expected_count": 7,
+              "selected_count": None if selected is None else len(selected),
+              "reported_count": None if outcomes is None else len(outcomes),
+              "passed_count": None if outcomes is None else sum(
+                  item.outcome == "passed" for item in outcomes
+              ),
+              "selected": None if selected is None else identities(selected),
+              "outcomes": None if outcomes is None else [
+                  {"name": item.test.name, "labels": sorted(item.test.labels),
+                   "outcome": item.outcome, "message": item.message}
+                  for item in outcomes
+              ],
+              "command_statuses": statuses,
+              "errors": errors,
+          }
+          write_json("outcomes.json", report)
+          print(json.dumps(report, indent=2))
+          raise SystemExit(1 if errors else 0)
+          PY
+        env:
+          PYTHON: ${{ matrix.python }}
+          TEST_PROFILE: ${{ matrix.test_profile }}
+
+      - name: Upload Darwin unwind regression evidence
+        if: ${{ always() && steps.default_build.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macho-range-focused-${{ matrix.test_profile }}
+          path: build-ci/macho-range-focused/
+          if-no-files-found: error
 
       # The C++ side alone cannot prove agreement with the implementation that
       # validators execute. Build the process-isolated oracle from the exact

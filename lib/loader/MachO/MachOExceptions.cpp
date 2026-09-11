@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <map>
+#include <vector>
 
 #define DEBUG_TYPE "neverd-macho-unwind"
 
@@ -141,6 +142,12 @@ void parseDarwinExceptions(BinaryImage &Img) {
     Personality = It->second.second;
   };
 
+  // Keep every alias, using indices that remain valid when a new function
+  // grows the symbol vector. Rebuild the index for each parser invocation.
+  std::map<va_t, std::vector<size_t>> SymbolsByAddress;
+  for (size_t I = 0; I < Img.Symbols.size(); ++I)
+    SymbolsByAddress[Img.Symbols[I].Addr].push_back(I);
+
   auto recordFunctionRange = [&](const ExceptionAddressRange &Range) {
     if (!Range.isValid())
       return;
@@ -149,17 +156,19 @@ void parseDarwinExceptions(BinaryImage &Img) {
     if (!Seg || !Seg->isExecutable())
       return;
 
-    bool Found = false;
-    for (Symbol &Sym : Img.Symbols) {
-      if (Sym.Addr != Range.Begin)
-        continue;
-      Found = true;
+    auto It = SymbolsByAddress.find(Range.Begin);
+    if (It == SymbolsByAddress.end()) {
+      const size_t Index = Img.Symbols.size();
+      Img.Symbols.push_back(Symbol::makeFunc(Range.Begin, Range.size()));
+      SymbolsByAddress[Range.Begin].push_back(Index);
+      return;
+    }
+    for (size_t Index : It->second) {
+      Symbol &Sym = Img.Symbols[Index];
       Sym.IsFunc = true;
       if (Sym.Size == 0)
         Sym.Size = Range.size();
     }
-    if (!Found)
-      Img.Symbols.push_back(Symbol::makeFunc(Range.Begin, Range.size()));
   };
 
   for (const CompactUnwindEntry &Entry : Compact.Entries) {
