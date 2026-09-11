@@ -27,6 +27,10 @@ using namespace neverd::sdk;
 
 namespace {
 
+bool hasMainEntryPoint(const BinaryImage &Img) {
+  return Img.Entry != 0 || Img.Arch == Arch::EVM;
+}
+
 /// Render one compiler trailer. The whole point of reporting a trailer is that
 /// it says who built the contract, so the version and the source address are
 /// named rather than left as an opaque byte count.
@@ -379,8 +383,8 @@ const char *neverd_entrypoints_json(neverd_session_t Sess) {
   llvm::json::Array Arr;
 
   auto addEntry = [&](const char *Type, neverd::va_t Addr,
-                      const std::string &Name) {
-    if (!Addr)
+                      const std::string &Name, bool AllowZero = false) {
+    if (!Addr && !AllowZero)
       return;
     llvm::json::Object O;
     O["type"] = Type;
@@ -389,7 +393,8 @@ const char *neverd_entrypoints_json(neverd_session_t Sess) {
     Arr.push_back(std::move(O));
   };
 
-  addEntry("entry", Img.Entry, Img.getFunctionNameAt(Img.Entry));
+  addEntry("entry", Img.Entry, Img.getFunctionNameAt(Img.Entry),
+           hasMainEntryPoint(Img));
   addEntry("init", DI.InitAddr, Img.getFunctionNameAt(DI.InitAddr));
   addEntry("fini", DI.FiniAddr, Img.getFunctionNameAt(DI.FiniAddr));
 
@@ -481,7 +486,7 @@ const char *neverd_dashboard_json(neverd_session_t Sess) {
   Counts["sections"] = static_cast<int64_t>(S->Img.Sections.size());
   Counts["relocations"] = static_cast<int64_t>(S->Img.Relocations.size());
   Counts["entrypoints"] = static_cast<int64_t>(
-      (S->Img.Entry ? 1 : 0) + S->Img.DynInfo.PreinitArray.size() +
+      (hasMainEntryPoint(S->Img) ? 1 : 0) + S->Img.DynInfo.PreinitArray.size() +
       S->Img.DynInfo.InitArray.size() + S->Img.DynInfo.FiniArray.size() +
       (S->Img.DynInfo.InitAddr ? 1 : 0) + (S->Img.DynInfo.FiniAddr ? 1 : 0));
   Root["counts"] = std::move(Counts);

@@ -251,6 +251,87 @@ protected:
   neverd_session_t Session = nullptr;
 };
 
+TEST_F(SessionCAPITest, EntryPointsIncludeEVMZeroAddress) {
+  const std::string Input = write("entry.evm", "00");
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  auto Parsed = llvm::json::parse(takeString(neverd_entrypoints_json(Session)));
+  ASSERT_TRUE(static_cast<bool>(Parsed)) << llvm::toString(Parsed.takeError());
+  const auto *Entries = Parsed->getAsArray();
+  ASSERT_NE(Entries, nullptr);
+  ASSERT_EQ(Entries->size(), 1u);
+  const auto *Entry = (*Entries)[0].getAsObject();
+  ASSERT_NE(Entry, nullptr);
+  EXPECT_EQ(Entry->getString("type"), "entry");
+  EXPECT_EQ(Entry->getString("addr"), "0x0");
+  EXPECT_EQ(Entry->getString("name"), "evm_entry");
+
+  auto Dashboard =
+      llvm::json::parse(takeString(neverd_dashboard_json(Session)));
+  ASSERT_TRUE(static_cast<bool>(Dashboard))
+      << llvm::toString(Dashboard.takeError());
+  const auto *Object = Dashboard->getAsObject();
+  ASSERT_NE(Object, nullptr);
+  const auto *Counts = Object->getObject("counts");
+  ASSERT_NE(Counts, nullptr);
+  EXPECT_EQ(Counts->getInteger("entrypoints"), 1);
+  EXPECT_EQ(Counts->getInteger("entrypoints"),
+            static_cast<int64_t>(Entries->size()));
+}
+
+TEST_F(SessionCAPITest, EntryPointsPreserveNativeAddress) {
+  const std::string Input = write("entry.elf", makeNamedNativeELF("entry"));
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  auto Parsed = llvm::json::parse(takeString(neverd_entrypoints_json(Session)));
+  ASSERT_TRUE(static_cast<bool>(Parsed)) << llvm::toString(Parsed.takeError());
+  const auto *Entries = Parsed->getAsArray();
+  ASSERT_NE(Entries, nullptr);
+  ASSERT_EQ(Entries->size(), 1u);
+  const auto *Entry = (*Entries)[0].getAsObject();
+  ASSERT_NE(Entry, nullptr);
+  EXPECT_EQ(Entry->getString("type"), "entry");
+  EXPECT_EQ(Entry->getString("addr"), "0x400078");
+  EXPECT_EQ(Entry->getString("name"), "entry");
+
+  auto Dashboard =
+      llvm::json::parse(takeString(neverd_dashboard_json(Session)));
+  ASSERT_TRUE(static_cast<bool>(Dashboard))
+      << llvm::toString(Dashboard.takeError());
+  const auto *Object = Dashboard->getAsObject();
+  ASSERT_NE(Object, nullptr);
+  const auto *Counts = Object->getObject("counts");
+  ASSERT_NE(Counts, nullptr);
+  EXPECT_EQ(Counts->getInteger("entrypoints"), 1);
+  EXPECT_EQ(Counts->getInteger("entrypoints"),
+            static_cast<int64_t>(Entries->size()));
+}
+
+TEST_F(SessionCAPITest, EntryPointsOmitAbsentNativeAddress) {
+  std::string Bytes = makeNativeELF(false);
+  llvm::object::ELF64LE::Ehdr Header{};
+  std::memcpy(&Header, Bytes.data(), sizeof(Header));
+  Header.e_entry = 0;
+  std::memcpy(Bytes.data(), &Header, sizeof(Header));
+  const std::string Input = write("no-entry.elf", Bytes);
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  auto Parsed = llvm::json::parse(takeString(neverd_entrypoints_json(Session)));
+  ASSERT_TRUE(static_cast<bool>(Parsed)) << llvm::toString(Parsed.takeError());
+  const auto *Entries = Parsed->getAsArray();
+  ASSERT_NE(Entries, nullptr);
+  EXPECT_TRUE(Entries->empty());
+
+  auto Dashboard =
+      llvm::json::parse(takeString(neverd_dashboard_json(Session)));
+  ASSERT_TRUE(static_cast<bool>(Dashboard))
+      << llvm::toString(Dashboard.takeError());
+  const auto *Object = Dashboard->getAsObject();
+  ASSERT_NE(Object, nullptr);
+  const auto *Counts = Object->getObject("counts");
+  ASSERT_NE(Counts, nullptr);
+  EXPECT_EQ(Counts->getInteger("entrypoints"), 0);
+  EXPECT_EQ(Counts->getInteger("entrypoints"),
+            static_cast<int64_t>(Entries->size()));
+}
+
 TEST_F(SessionCAPITest, SidecarWritesRespectWorkerOwnership) {
   const std::string Input = write("owned.evm", "6001600055");
   ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
