@@ -647,6 +647,41 @@ public:
     Result.Metadata = Type.Metadata;
     dependency("context");
     switch (R.Kind) {
+    case Kind::EmptyValueInitializer: {
+      const auto &S = R.Signature;
+      if (Type.Kind != "struct" || Type.Size != 0 || Type.Alignment != 1 ||
+          !Type.Fields.empty() || S.DeclarationKind != "initializer" ||
+          S.Name != "init" || S.IsStatic || S.IsMutating ||
+          !S.IsMutatingKnown || !S.Parameters.empty() || !S.Labels.empty() ||
+          S.ReturnType.TheKind != SwiftSourceType::Kind::Void || R.Initializer)
+        throw Unproven("empty value initializer requires exact zero-size "
+                       "native storage and no arguments");
+      exactRole(identity(), Prefix + "ACycfC");
+      const auto Accessor = related();
+      exactRole(Accessor, Prefix + "Ma");
+      objc::RuntimeData Data(Image);
+      if (Type.Descriptor > InvalidVA - 12)
+        throw Unproven("empty value initializer descriptor address overflows");
+      const auto Slot = Type.Descriptor + 12;
+      auto Offset = Data.u32(Slot);
+      const int64_t Delta = Offset ? static_cast<int32_t>(*Offset) : 0;
+      if (!Offset || !*Offset ||
+          (Delta < 0 && Slot < uint64_t(-Delta)) ||
+          (Delta > 0 && Slot > InvalidVA - Delta) ||
+          (Delta < 0 ? Slot - uint64_t(-Delta) : Slot + Delta) !=
+              Accessor.Entry)
+        throw Unproven("empty value initializer has no descriptor-owned "
+                       "metadata accessor dependency");
+      auto E = NativeFlow(Image, Type, R.Kind).run(F);
+      noEffects(E);
+      dependency("compiler_entry", "typeMetadata", Accessor);
+      Result.ProjectionKind = "empty_value_initializer";
+      Result.Evidence.push_back(
+          "The exact zero-size value initializer returns normally with no "
+          "observable memory or call effects and restores its native frame; "
+          "its zero-size result has no scalar return storage.");
+      break;
+    }
     case Kind::AllocatingInitializer: {
       if (Type.Kind != "class" || !R.Initializer ||
           R.Initializer->DeclarationKind != "initializer" ||

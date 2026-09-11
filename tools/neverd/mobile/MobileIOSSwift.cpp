@@ -15,6 +15,44 @@ Identity identity(const Object &o) {
 bool sourceText(const std::string &s) {
   return !llvm::StringRef(s).trim().empty() && s.find('\0') == s.npos;
 }
+bool emptyInitializer(const Object &s, const Array &types) {
+  const auto *parameters = s.getArray("parameters");
+  const auto *labels = s.getArray("labels");
+  const auto *returned = s.getObject("return_type");
+  if (str(s, "declaration_kind") != "initializer" ||
+      str(s, "node_kind") != "Allocator" || str(s, "name") != "init" ||
+      str(s, "context_kind") != "struct" ||
+      !flag(s, "requires_storage_abi_proof") ||
+      s.getBoolean("is_static") != false ||
+      s.getBoolean("is_mutating") != false ||
+      s.getBoolean("is_mutating_known") != true || !parameters ||
+      !parameters->empty() || !labels || !labels->empty() || !returned ||
+      str(*returned, "kind") != "nominal" ||
+      str(*returned, "context_kind") != "struct" ||
+      str(*returned, "module") != str(s, "module") ||
+      str(*returned, "name") != str(s, "context_name"))
+    return false;
+  auto symbol = str(s, "mangled_symbol");
+  if (symbol.starts_with("_"))
+    symbol.erase(0, 1);
+  const auto module = str(s, "module"), name = str(s, "context_name");
+  if (symbol != "$s" + std::to_string(module.size()) + module +
+                    std::to_string(name.size()) + name + "VACycfC")
+    return false;
+  size_t matches = 0;
+  for (const auto &value : types) {
+    const auto &type = object(value, "Swift type");
+    if (str(type, "module") != module || str(type, "name") != name ||
+        str(type, "kind") != "struct")
+      continue;
+    const auto *fields = type.getArray("fields");
+    if (++matches != 1 || str(type, "status") != "recovered" ||
+        !str(type, "reason").empty() || type.getInteger("size") != 0 ||
+        type.getInteger("alignment") != 1 || !fields || !fields->empty())
+      return false;
+  }
+  return matches == 1;
+}
 std::string callableStatus(size_t count, size_t recovered) {
   return !count               ? "no-methods"
          : !recovered         ? "unrecovered"
@@ -101,15 +139,23 @@ Object swiftCoverage(const Object &inventory, const Object *batch,
           throw Error(
               "Swift recovery has empty source or duplicate method identity");
         ++recovered;
-        if (flag(s, "requires_runtime_source_proof")) {
+        const bool empty_init =
+            str(r, "compiler_projection_kind") == "empty_value_initializer";
+        if (flag(s, "requires_runtime_source_proof") || empty_init) {
           auto kind = projections.find(str(s, "runtime_source_kind"));
           auto *e = r.getArray("compiler_projection_evidence");
-          if (str(s, "declaration_kind") != "runtime" ||
-              kind == projections.end() ||
+          if ((empty_init
+                   ? (!emptyInitializer(s, types) ||
+                      flag(s, "requires_runtime_source_proof") ||
+                      str(r, "declaration_kind") != "initializer" ||
+                      str(r, "source") !=
+                          "struct `" + str(s, "context_name") + "` {\n}\n")
+                   : (str(s, "declaration_kind") != "runtime" ||
+                      kind == projections.end() ||
+                      str(r, "compiler_projection_kind") != kind->second)) ||
               str(r, "source_representation") !=
                   "compiler-generated-from-type" ||
-              str(r, "compiler_projection_kind") != kind->second || !e ||
-              e->empty() || e->size() > 128)
+              !e || e->empty() || e->size() > 128)
             throw Error("Swift compiler projection lacks exact role or native "
                         "evidence");
           for (const auto &v : *e) {
@@ -167,6 +213,30 @@ Object swiftCoverage(const Object &inventory, const Object *batch,
               name != str(s, "context_name") || text != str(r, "source"))
             throw Error("Swift compiler projection does not belong to actual "
                         "type source unit");
+          if (str(r, "compiler_projection_kind") ==
+              "empty_value_initializer") {
+            size_t accessors = 0;
+            for (const auto &other : identities) {
+              const auto other_id = identity(object(other, "unit identity"));
+              auto found = compiler_rows.find(other_id);
+              if (found == compiler_rows.end())
+                continue;
+              auto symbol = other_id.second;
+              if (symbol.starts_with("_"))
+                symbol.erase(0, 1);
+              const auto expected = "$s" + std::to_string(module.size()) +
+                                    module + std::to_string(name.size()) +
+                                    name + "VMa";
+              if (symbol == expected &&
+                  str(*found->second, "compiler_projection_kind") ==
+                      "type_metadata_accessor" &&
+                  str(*found->second, "source") == text)
+                ++accessors;
+            }
+            if (identities.size() != 2 || accessors != 1)
+              throw Error("Swift empty initializer lacks its exact nominal "
+                          "accessor source unit");
+          }
         }
       }
       combined += text + "\n";

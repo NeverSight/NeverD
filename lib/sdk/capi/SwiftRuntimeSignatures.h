@@ -7,6 +7,55 @@
 
 namespace neverd::sdk::swift_source {
 
+/// This adapter requests an effect proof, not an ordinary void-return ABI.
+/// The original declaration remains an initializer returning its nominal type.
+inline std::optional<SwiftRuntimeSourceRequest> emptyValueInitializerRequest(
+    const llvm::json::Object &Object, const BinaryImage &Image,
+    const std::vector<SwiftRecoveredType> &NativeTypes) {
+  if (Object.getString("declaration_kind") != "initializer" ||
+      Object.getString("context_kind") != "struct" ||
+      Object.getString("node_kind") != "Allocator" ||
+      !Object.getBoolean("requires_storage_abi_proof").value_or(false))
+    return std::nullopt;
+  const SwiftRecoveredType *Context = nullptr;
+  for (const auto &T : NativeTypes) {
+    if (T.Module != Object.getString("module").value_or("") ||
+        T.Name != Object.getString("context_name").value_or("") ||
+        T.Kind != "struct")
+      continue;
+    if (Context)
+      throw std::invalid_argument("ambiguous Swift empty initializer context");
+    Context = &T;
+  }
+  if (!Context || Context->Status != "recovered" ||
+      !Context->Reason.empty() || !Context->Descriptor || !Context->Metadata ||
+      Context->Size != 0 || Context->Alignment != 1 || !Context->Fields.empty())
+    return std::nullopt;
+  const auto *Declared = Object.getObject("return_type");
+  const auto *Parameters = Object.getArray("parameters");
+  const auto *Labels = Object.getArray("labels");
+  if (!Declared || Declared->getString("kind") != "nominal" ||
+      Declared->getString("module") != Context->Module ||
+      Declared->getString("name") != Context->Name ||
+      Declared->getString("context_kind") != "struct" || !Parameters ||
+      !Parameters->empty() || !Labels || !Labels->empty() ||
+      Object.getString("name") != "init" ||
+      Object.getBoolean("is_static") != false ||
+      Object.getBoolean("is_mutating") != false ||
+      Object.getBoolean("is_mutating_known") != true ||
+      Object.get("runtime_source_kind") || Object.get("property_type"))
+    throw std::invalid_argument("invalid Swift empty value initializer schema");
+  auto Fields = Object;
+  Fields["declaration_kind"] = "function";
+  Fields["return_type"] =
+      llvm::json::Object{{"kind", "void"}, {"name", "Void"}};
+  SwiftRuntimeSourceRequest Request;
+  Request.Kind = SwiftRuntimeSourceKind::EmptyValueInitializer;
+  Request.Signature = signature(Fields, Image, NativeTypes);
+  Request.Signature.DeclarationKind = "initializer";
+  return Request;
+}
+
 inline bool sameRuntimePropertyType(const SwiftSourceType &A,
                                     const SwiftSourceType &B,
                                     unsigned Depth = 0) {

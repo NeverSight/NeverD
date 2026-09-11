@@ -276,6 +276,30 @@ struct Fixture {
        {NdVar::cst(Functions[Resume].Entry, 8)});
     ret(F);
   }
+  size_t emptyInitializer(bool Frame = false) {
+    u32(0x1114, 0);
+    u32(0x1118, 0);
+    u32(0x130c, 0);
+    u64(0x13f8, 0x1500);
+    u64(0x1540, 0);
+    u64(0x1548, 1);
+    u32(0x1550, 0);
+    u32(0x1554, 0);
+    const auto Accessor = function(Prefix + "Ma");
+    relative(0x110c, Functions[Accessor].Entry);
+    const auto F = function(Prefix + "ACycfC");
+    select(F, Kind::EmptyValueInitializer);
+    Request.RelatedEntry = identity(Accessor);
+    Request.Signature.Name = "init";
+    Request.Signature.DeclarationKind = "initializer";
+    Request.Signature.IsMutatingKnown = true;
+    if (Frame) {
+      saveFrame(F);
+      restoreFrame(F);
+    }
+    ret(F);
+    return F;
+  }
   void metadata() {
     auto F = function(Prefix + "Ma");
     select(F, Kind::TypeMetadataAccessor);
@@ -562,4 +586,114 @@ TEST(SwiftRuntimeSource, FrameOwnershipMustHoldAtTheInstructionThatUsesIt) {
   auto P = F.proof();
   EXPECT_FALSE(P.Proven);
   EXPECT_NE(P.Reason.find("undefined stack slot"), std::string::npos);
+}
+
+TEST(SwiftRuntimeSource, EmptyInitializerProvesNoValueStorageAndRetainsAliases) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    for (bool Frame : {false, true}) {
+      SCOPED_TRACE(static_cast<unsigned>(Architecture));
+      SCOPED_TRACE(Frame);
+      Fixture F(false, Architecture);
+      const auto N = F.emptyInitializer(Frame);
+      Symbol Alias;
+      Alias.Name = "_$s4Demo8identityys5Int64VADF";
+      Alias.Addr = F.Functions[N].Entry;
+      Alias.IsFunc = true;
+      F.Image.Symbols.push_back(Alias);
+      const auto P = F.proof();
+      ASSERT_TRUE(P.Proven) << P.Reason;
+      EXPECT_EQ(P.ProjectionKind, "empty_value_initializer");
+      EXPECT_EQ(P.Descriptor, 0x1100U);
+      EXPECT_EQ(P.Metadata, 0x1400U);
+      ASSERT_EQ(P.Dependencies.size(), 2U);
+      EXPECT_EQ(P.Dependencies[0].Kind, "context");
+      EXPECT_EQ(P.Dependencies[1].Kind, "compiler_entry");
+      EXPECT_EQ(P.Dependencies[1].Identity.Entry,
+                F.Request.RelatedEntry->Entry);
+      EXPECT_EQ(P.Dependencies[1].Identity.MangledSymbol, F.Prefix + "Ma");
+      EXPECT_FALSE(P.Evidence.empty());
+    }
+  }
+}
+
+TEST(SwiftRuntimeSource, EmptyInitializerRejectsLayoutIdentityAndNativeEffects) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    for (unsigned Mutation = 0; Mutation < 16; ++Mutation) {
+      SCOPED_TRACE(static_cast<unsigned>(Architecture));
+      SCOPED_TRACE(Mutation);
+      Fixture F(false, Architecture);
+      const auto N = F.emptyInitializer();
+      auto &B = F.Functions[N].Blocks[0];
+      if ((Mutation >= 7 && Mutation <= 11) || Mutation == 15) {
+        B.Ops.clear();
+        B.InstructionBoundaries.clear();
+      }
+      switch (Mutation) {
+      case 0:
+        F.u32(0x1550, 15); // Overaligned zero-field storage is not plain empty.
+        break;
+      case 1:
+        F.u64(0x1540, 8);
+        break;
+      case 2:
+        F.Request.Signature.Parameters.push_back(
+            {"arg0", {SwiftSourceType::Kind::Integer, "Int64", 64, true}});
+        F.Request.Signature.Labels.push_back("_");
+        break;
+      case 3:
+        F.Request.Signature.MangledSymbol = F.Prefix + "ACycfc";
+        F.Image.Symbols.back().Name = F.Request.Signature.MangledSymbol;
+        break;
+      case 4:
+        F.Request.RelatedEntry.reset();
+        break;
+      case 5:
+        F.relative(0x110c, F.Request.RelatedEntry->Entry + 4);
+        break;
+      case 6:
+        B.InstructionBoundaries.clear();
+        break;
+      case 7:
+        F.op(N, NdOp::LOAD, NdVar::reg(F.Return, 8),
+             {NdVar::cst(0x1400, 8)});
+        break;
+      case 8:
+        F.op(N, NdOp::STORE, {},
+             {NdVar::cst(0x1400, 8), NdVar::cst(1, 8)});
+        break;
+      case 9:
+        F.call(N, "_unknown_effect");
+        break;
+      case 10:
+        F.op(N, NdOp::INT_SUB, NdVar::reg(F.SP, 8),
+             {NdVar::reg(F.SP, 8), NdVar::cst(16, 8)});
+        break;
+      case 11:
+        F.op(N, NdOp::COPY, NdVar::reg(F.Self, 8), {NdVar::cst(0, 8)});
+        break;
+      case 12:
+        B.Ops.back().Inputs[0] = NdVar::reg(F.SP, 8);
+        break;
+      case 13:
+        F.Functions.push_back(F.Functions[N]);
+        break;
+      case 14:
+        F.u32(0x1550, 0x00800000); // Noncopyable declared values.
+        break;
+      case 15:
+        F.op(N, NdOp::COPY,
+             NdVar::reg(Architecture == Arch::AArch64
+                            ? a64reg::V0 + 8 * 16
+                            : getTargetRegInfo(Architecture).FramePointer,
+                        8),
+             {NdVar::cst(0, 8)});
+        break;
+      }
+      if ((Mutation >= 7 && Mutation <= 11) || Mutation == 15)
+        F.ret(N);
+      const auto P = F.proof();
+      EXPECT_FALSE(P.Proven);
+      EXPECT_FALSE(P.Reason.empty());
+    }
+  }
 }

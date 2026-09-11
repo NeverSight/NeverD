@@ -85,6 +85,11 @@ const char *neverd_swift_methods_json(neverd_session_t Sess,
                 .value_or(false)) {
           RuntimeRequest =
               swift_source::runtimeRequest(*Method, Session->Img, Types);
+        } else {
+          RuntimeRequest = swift_source::emptyValueInitializerRequest(
+              *Method, Session->Img, Types);
+        }
+        if (RuntimeRequest) {
           if (!Identities
                    .insert(
                        swift_source::runtimeIdentity(RuntimeRequest->Signature))
@@ -94,7 +99,7 @@ const char *neverd_swift_methods_json(neverd_session_t Sess,
           Row["context_kind"] = RuntimeRequest->Signature.ContextKind;
           Row["context_name"] = RuntimeRequest->Signature.ContextName;
           Row["name"] = RuntimeRequest->Signature.Name;
-          Row["declaration_kind"] = "runtime";
+          Row["declaration_kind"] = RuntimeRequest->Signature.DeclarationKind;
         } else {
           const bool SelfCandidate =
               Method->getBoolean("requires_self_abi_proof").value_or(false) &&

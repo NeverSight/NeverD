@@ -17,7 +17,8 @@ enum class SwiftRuntimeSourceKind {
   DeallocatingDestructor,
   TypeMetadataAccessor,
   ModifyAccessor,
-  ModifyResume
+  ModifyResume,
+  EmptyValueInitializer
 };
 
 struct SwiftRuntimeSourceIdentity {
@@ -33,6 +34,7 @@ struct SwiftRuntimeSourceRequest {
   std::optional<SwiftSourceSignature> Initializer;
   /// Deallocators name their destructor; modifiers name their continuation;
   /// continuations name their modifier. Both native bodies are inspected.
+  /// Empty value initializers name their separately proven metadata accessor.
   std::optional<SwiftRuntimeSourceIdentity> RelatedEntry;
 };
 

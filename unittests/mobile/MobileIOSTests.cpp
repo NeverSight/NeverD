@@ -297,6 +297,51 @@ std::pair<Object, Object> swiftFixture(bool alias = false) {
                  {"limitations", Array{}}}};
 }
 
+std::pair<Object, Object> emptyInitializerCoverageFixture() {
+  const std::string source = "struct `Empty` {\n}\n";
+  auto init = swiftSignature("0x1000", "$s4Demo5EmptyVACycfC");
+  auto accessor = swiftSignature("0x2000", "$s4Demo5EmptyVMa");
+  Array rows, identities;
+  for (const auto *s : {&init, &accessor}) {
+    Object id{{"entry", str(*s, "entry")},
+              {"mangled_symbol", str(*s, "mangled_symbol")}};
+    Object row = id;
+    row["status"] = "recovered";
+    row["declaration_kind"] = s == &init ? "initializer" : "runtime";
+    row["source"] = source;
+    row["source_representation"] = "compiler-generated-from-type";
+    row["compiler_projection_kind"] =
+        s == &init ? "empty_value_initializer" : "type_metadata_accessor";
+    // Explicit serializer inputs; actual native proofs have separate CAPI tests.
+    row["compiler_projection_evidence"] = Array{"owned native proof contract"};
+    rows.push_back(std::move(row));
+    identities.push_back(std::move(id));
+  }
+  auto pair = swiftFixture(true);
+  auto &inventory = pair.first;
+  inventory["methods"] = Array{std::move(init), std::move(accessor)};
+  inventory["supported_signature_count"] = 0;
+  inventory["unsupported_signature_count"] = 2;
+  auto &batch = pair.second;
+  batch["methods"] = std::move(rows);
+  batch["source"] = source + "\n";
+  batch["source_body_method_count"] = 0;
+  batch["compiler_projection_method_count"] = 2;
+  batch["types"] = Array{Object{{"module", "Demo"},
+                                {"name", "Empty"},
+                                {"kind", "struct"},
+                                {"status", "recovered"},
+                                {"reason", ""},
+                                {"size", 0},
+                                {"alignment", 1},
+                                {"fields", Array{}}}};
+  batch["source_units"] = Array{Object{
+      {"kind", "type"}, {"module", "Demo"}, {"name", "Empty"},
+      {"source", source}, {"method_entries", Array{"0x1000", "0x2000"}},
+      {"method_identities", std::move(identities)}}};
+  return pair;
+}
+
 } // namespace
 TEST(MobileIOSNative, SelectsBothFatWidthsAndExplicitArchitecture) {
   for (bool wide : {false, true}) {
@@ -1038,6 +1083,83 @@ TEST(MobileIOSNative, CompilerCoverageRequiresEvidenceAndActualTypeSourceUnit) {
   auto c = swiftCoverage(inventory, &batch);
   EXPECT_EQ(number(c, "source_body_method_count"), 0);
   EXPECT_EQ(number(c, "compiler_projection_method_count"), 1);
+}
+
+TEST(MobileIOSNative, EmptyInitializerCoverageKeepsDeclarationAndTwoIdentities) {
+  auto [inventory, batch] = emptyInitializerCoverageFixture();
+  const auto coverage = swiftCoverage(inventory, &batch);
+  EXPECT_EQ(number(coverage, "method_count"), 2);
+  EXPECT_EQ(number(coverage, "recovered_method_count"), 2);
+  EXPECT_EQ(number(coverage, "source_body_method_count"), 0);
+  EXPECT_EQ(number(coverage, "compiler_projection_method_count"), 2);
+  const auto &methods = array(coverage, "methods");
+  ASSERT_EQ(methods.size(), 2U);
+  const auto &init = object(methods[0], "initializer");
+  EXPECT_EQ(str(init, "declaration_kind"), "initializer");
+  EXPECT_EQ(str(init, "node_kind"), "Allocator");
+  EXPECT_EQ(str(init, "compiler_projection_kind"), "empty_value_initializer");
+  EXPECT_EQ(str(init, "signature_status"), "unsupported");
+  const auto &units = array(coverage, "source_units");
+  ASSERT_EQ(units.size(), 1U);
+  EXPECT_EQ(array(object(units[0], "unit"), "method_identities").size(), 2U);
+}
+
+TEST(MobileIOSNative, EmptyInitializerCoverageRejectsFalseProjectionContracts) {
+  for (unsigned mutation = 0; mutation < 12; ++mutation) {
+    SCOPED_TRACE(mutation);
+    auto [inventory, batch] = emptyInitializerCoverageFixture();
+    auto &init = *inventory.getArray("methods")->front().getAsObject();
+    auto &row = *batch.getArray("methods")->front().getAsObject();
+    auto &type = *batch.getArray("types")->front().getAsObject();
+    auto &unit = *batch.getArray("source_units")->front().getAsObject();
+    switch (mutation) {
+    case 0:
+      unit["method_entries"] = Array{"0x1000"};
+      unit.getArray("method_identities")->pop_back();
+      break;
+    case 1: {
+      auto &accessor = *(*batch.getArray("methods"))[1].getAsObject();
+      accessor["compiler_projection_kind"] = "trivial_destructor";
+      break;
+    }
+    case 2:
+      type["size"] = 8;
+      break;
+    case 3:
+      type["fields"] = Array{Object{{"name", "value"}}};
+      break;
+    case 4:
+      init["node_kind"] = "Constructor";
+      break;
+    case 5:
+      init["parameters"] = Array{Object{{"name", "arg0"}}};
+      break;
+    case 6:
+      (*init.getObject("return_type"))["name"] = "Other";
+      break;
+    case 7:
+      init["requires_runtime_source_proof"] = true;
+      break;
+    case 8:
+      row["declaration_kind"] = "runtime";
+      break;
+    case 9: {
+      const std::string changed = "struct `Empty` { init() {} }\n";
+      batch["source"] = changed + "\n";
+      unit["source"] = changed;
+      for (auto &value : *batch.getArray("methods"))
+        (*value.getAsObject())["source"] = changed;
+      break;
+    }
+    case 10:
+      row["compiler_projection_evidence"] = Array{};
+      break;
+    case 11:
+      type["status"] = "unrecovered";
+      break;
+    }
+    EXPECT_THROW(swiftCoverage(inventory, &batch), Error);
+  }
 }
 
 TEST(MobileIOSNative, SwiftNominalIndirectMetadataUsesResolvedNativeStorage) {

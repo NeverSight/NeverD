@@ -399,6 +399,21 @@ struct EmptyStructFixture {
     return collectEmptyStructSourceContexts(Requests, Proofs, Types);
   }
 
+  void addInitializer() {
+    Requests[1] = Requests[0];
+    auto &R = *Requests[1];
+    R.Kind = Kind::EmptyValueInitializer;
+    R.Signature.Entry = 0x3100;
+    R.Signature.MangledSymbol = "_$s4Demo5EmptyVACycfC";
+    R.Signature.Name = "init";
+    R.Signature.DeclarationKind = "initializer";
+    Proofs[1] = Proofs[0];
+    Proofs[1]->ProjectionKind = "empty_value_initializer";
+    Proofs[1]->Dependencies.push_back(
+        {"compiler_entry", "Demo", "struct", "Empty", "typeMetadata",
+         {0x3000, "_$s4Demo5EmptyVMa"}});
+  }
+
   RuntimeProjectionPlan plan(const EmptyStructSourceContexts &Contexts) const {
     return planRuntimeProjections(Requests, Proofs, Signatures, {}, Contexts);
   }
@@ -429,6 +444,79 @@ TEST(SwiftRuntimeProjection,
   EXPECT_FALSE(F.Requests[1]);
   EXPECT_TRUE(P.ContextSources.at(Context).Modifiers.empty());
   EXPECT_FALSE(P.ContextSources.at(Context).TrivialDestructor);
+}
+
+TEST(SwiftRuntimeProjection, EmptyInitializerRequiresItsRecoveredNominalAccessor) {
+  EmptyStructFixture F;
+  F.addInitializer();
+  EXPECT_TRUE(linkRuntimeRequests(F.Requests, F.Signatures).empty());
+  ASSERT_TRUE(F.Requests[1]->RelatedEntry);
+  EXPECT_EQ(F.Requests[1]->RelatedEntry->MangledSymbol, "_$s4Demo5EmptyVMa");
+  const auto P = F.plan(F.collect());
+  EXPECT_EQ(P.Recovered, (std::set<size_t>{0, 1}));
+  ASSERT_EQ(P.NominalContexts.size(), 1U);
+  EXPECT_EQ(assembleEmptyStructContext(P.NominalContexts.begin()->second),
+            "struct `Empty` {\n}\n");
+  EXPECT_FALSE(F.Signatures[0]);
+  EXPECT_FALSE(F.Signatures[1]);
+  EXPECT_EQ(F.Requests[1]->Signature.DeclarationKind, "initializer");
+}
+
+TEST(SwiftRuntimeProjection, EmptyInitializerCannotBorrowOrReplaceSourceContext) {
+  for (unsigned Mutation = 0; Mutation < 9; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    EmptyStructFixture F;
+    F.addInitializer();
+    ASSERT_TRUE(linkRuntimeRequests(F.Requests, F.Signatures).empty());
+    const auto Contexts = F.collect();
+    switch (Mutation) {
+    case 0:
+      F.Requests[0].reset();
+      break;
+    case 1:
+      F.Proofs[0]->Proven = false;
+      break;
+    case 2:
+      F.Proofs[0]->Dependencies.push_back(
+          {"method", "Demo", "struct", "Empty", "missing", {0x3200, "x"}});
+      break;
+    case 3:
+      F.Proofs[1]->Metadata += 8;
+      break;
+    case 4:
+      F.Requests[1]->RelatedEntry->Entry += 4;
+      break;
+    case 5:
+      F.Proofs[1]->Dependencies.back().Identity.MangledSymbol = "other";
+      break;
+    case 6:
+      F.Proofs[1]->Dependencies.pop_back();
+      break;
+    case 7:
+      F.Proofs[1]->Dependencies.push_back(F.Proofs[1]->Dependencies.back());
+      break;
+    case 8:
+      F.Proofs[1]->Proven = false;
+      break;
+    }
+    EXPECT_FALSE(F.plan(Contexts).Recovered.count(1));
+  }
+  for (const auto *Declaration : {"function", "initializer"}) {
+    EmptyStructFixture F;
+    F.addInitializer();
+    ASSERT_TRUE(linkRuntimeRequests(F.Requests, F.Signatures).empty());
+    auto S = F.Requests[1]->Signature;
+    S.Entry = 0x3200;
+    S.MangledSymbol = "_$s4Demo5EmptyVother";
+    S.DeclarationKind = Declaration;
+    F.Signatures.push_back(S);
+    F.Requests.emplace_back();
+    F.Proofs.emplace_back();
+    const auto P = planRuntimeProjections(F.Requests, F.Proofs, F.Signatures,
+                                          {2}, F.collect());
+    EXPECT_FALSE(P.Recovered.count(1));
+    EXPECT_TRUE(P.Recovered.count(0));
+  }
 }
 
 TEST(SwiftRuntimeProjection,

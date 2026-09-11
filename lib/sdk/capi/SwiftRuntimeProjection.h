@@ -38,6 +38,8 @@ inline std::string runtimeProjectionKind(SwiftRuntimeSourceKind K) {
     return "modify_accessor";
   case SwiftRuntimeSourceKind::ModifyResume:
     return "modify_resume";
+  case SwiftRuntimeSourceKind::EmptyValueInitializer:
+    return "empty_value_initializer";
   }
   return {};
 }
@@ -158,6 +160,10 @@ inline std::map<size_t, std::string> linkRuntimeRequests(
       Related = Kind::ModifyAccessor;
       if (Symbol.ends_with(".resume.0"))
         Expected = Symbol.substr(0, Symbol.size() - 9);
+    } else if (R.Kind == Kind::EmptyValueInitializer) {
+      Related = Kind::TypeMetadataAccessor;
+      if (Symbol.ends_with("ACycfC"))
+        Expected = Symbol.substr(0, Symbol.size() - 6) + "Ma";
     }
     if (!Related)
       continue;
@@ -295,11 +301,24 @@ inline RuntimeProjectionPlan planRuntimeProjections(
   }
   auto Nominal = [&](size_t I) -> const SwiftRecoveredType * {
     const auto Found = Nominals.find(propertyContext(Requests[I]->Signature));
-    return Found != Nominals.end() && Proofs[I] &&
-                   bindsEmptyStructSourceContext(*Requests[I], *Proofs[I],
-                                                 Found->second)
-               ? &Found->second
-               : nullptr;
+    if (Found == Nominals.end() || !Proofs[I])
+      return nullptr;
+    if (bindsEmptyStructSourceContext(*Requests[I], *Proofs[I], Found->second))
+      return &Found->second;
+    const auto &R = *Requests[I];
+    const auto &P = *Proofs[I];
+    if (R.Kind != Kind::EmptyValueInitializer || !P.Proven ||
+        P.ProjectionKind != "empty_value_initializer" || !R.RelatedEntry ||
+        !isEmptyStructSourceContext(Found->second) ||
+        P.Descriptor != Found->second.Descriptor ||
+        P.Metadata != Found->second.Metadata)
+      return nullptr;
+    const auto Accessor = RuntimeRows.find(runtimeIdentity(*R.RelatedEntry));
+    if (Accessor == RuntimeRows.end() || !Proofs[Accessor->second] ||
+        !bindsEmptyStructSourceContext(*Requests[Accessor->second],
+                                       *Proofs[Accessor->second], Found->second))
+      return nullptr;
+    return &Found->second;
   };
   auto Dependency = [&](size_t I, const SwiftRuntimeSourceDependency &D,
                         const std::set<size_t> &Group) {
@@ -345,6 +364,17 @@ inline RuntimeProjectionPlan planRuntimeProjections(
     if (Counts["context"] != 1)
       return false;
     const auto &R = *Requests[I];
+    if (R.Kind == Kind::EmptyValueInitializer) {
+      // Only the nominal-only source unit synthesizes this initializer.
+      // Ordinary declarations can suppress or replace implicit initialization.
+      if (Contexts.count(propertyContext(R.Signature)) || !Nominal(I) ||
+          !R.RelatedEntry || Counts["compiler_entry"] != 1)
+        return false;
+      for (const auto &D : Proofs[I]->Dependencies)
+        if (D.Kind == "compiler_entry" &&
+            runtimeIdentity(D.Identity) != runtimeIdentity(*R.RelatedEntry))
+          return false;
+    }
     if (R.Kind == Kind::AllocatingInitializer) {
       if (!R.Initializer || Counts["method"] != 1)
         return false;

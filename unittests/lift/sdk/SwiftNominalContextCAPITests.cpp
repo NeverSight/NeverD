@@ -32,6 +32,7 @@ namespace {
 constexpr uint64_t kBase = 0x100000000ULL;
 constexpr uint32_t kAccessor = 0x400;
 constexpr uint32_t kGlobal = 0x420;
+constexpr uint32_t kInitializer = 0x440;
 constexpr uint32_t kDescriptor = 0x1100;
 constexpr uint32_t kMetadata = 0x1400;
 constexpr uint32_t kValueWitnesses = 0x1600;
@@ -40,6 +41,8 @@ constexpr char kGlobalEntry[] = "0x100000420";
 constexpr char kAccessorSymbol[] = "_$s4Demo5EmptyVMa";
 constexpr char kGlobalSymbol[] = "_$s4Demo5EmptySiyF";
 constexpr char kMemberSymbol[] = "_$s4Demo5EmptyV5valueSiyFZ";
+constexpr char kInitializerEntry[] = "0x100000440";
+constexpr char kInitializerSymbol[] = "_$s4Demo5EmptyVACycfC";
 constexpr char kSource[] = "struct `Empty` {\n}\n";
 
 enum class Damage {
@@ -76,7 +79,9 @@ void setName(char (&Destination)[16], llvm::StringRef Name) {
 // Owned linked Mach-O bytes, not captured Swift compiler output. There are
 // no internal BinaryImage, Session, LowIR or runtime-proof test doubles.
 std::vector<uint8_t> makeMachO(bool Arm64, Damage Fault, bool WithGlobal,
-                               bool WithMember) {
+                               bool WithMember, bool WithInitializer = false,
+                               bool InitializerRead = false,
+                               bool InitializerAlias = false) {
   using namespace llvm::MachO;
   constexpr uint32_t TextCommandSize =
       sizeof(segment_command_64) + sizeof(section_64);
@@ -124,7 +129,7 @@ std::vector<uint8_t> makeMachO(bool Arm64, Damage Fault, bool WithGlobal,
   setName(Section.sectname, "__text");
   setName(Section.segname, "__TEXT");
   Section.addr = kBase + kAccessor;
-  Section.size = WithGlobal ? 0x28 : 0x10;
+  Section.size = WithInitializer ? 0x48 : (WithGlobal ? 0x28 : 0x10);
   Section.offset = kAccessor;
   Section.align = 2;
   Section.flags = static_cast<uint32_t>(S_REGULAR) |
@@ -187,11 +192,17 @@ std::vector<uint8_t> makeMachO(bool Arm64, Damage Fault, bool WithGlobal,
   Symbol(1, "_$s4Demo5EmptyVN", 3, kMetadata);
   if (WithGlobal)
     Symbol(2, WithMember ? kMemberSymbol : kGlobalSymbol, 1, kGlobal);
+  uint32_t SymbolCount = WithGlobal ? 3 : 2;
+  if (WithInitializer) {
+    Symbol(SymbolCount++, kInitializerSymbol, 1, kInitializer);
+    if (InitializerAlias)
+      Symbol(SymbolCount++, "_$s4Demo13floatIdentityyS2fF", 1, kInitializer);
+  }
   symtab_command Symbols{};
   Symbols.cmd = LC_SYMTAB;
   Symbols.cmdsize = sizeof(Symbols);
   Symbols.symoff = 0x2000;
-  Symbols.nsyms = WithGlobal ? 3 : 2;
+  Symbols.nsyms = SymbolCount;
   Symbols.stroff = 0x2080;
   Symbols.strsize = static_cast<uint32_t>(Strings.size());
   writeObject(Bytes, Command, Symbols);
@@ -292,6 +303,21 @@ std::vector<uint8_t> makeMachO(bool Arm64, Damage Fault, bool WithGlobal,
       Bytes[kGlobal + 5] = 0xc3;
     }
   }
+  if (WithInitializer) {
+    if (Arm64) {
+      // Optional ldr x0,[x0] is an observable read, never a plain empty init.
+      U32(kInitializer, InitializerRead ? 0xf9400000 : 0xd65f03c0);
+      if (InitializerRead)
+        U32(kInitializer + 4, 0xd65f03c0);
+    } else if (InitializerRead) {
+      Bytes[kInitializer] = 0x48; // mov rax,[rax]; ret.
+      Bytes[kInitializer + 1] = 0x8b;
+      Bytes[kInitializer + 2] = 0x00;
+      Bytes[kInitializer + 3] = 0xc3;
+    } else {
+      Bytes[kInitializer] = 0xc3;
+    }
+  }
   return Bytes;
 }
 
@@ -330,6 +356,24 @@ llvm::json::Object memberRequest() {
   Result["context_name"] = "Empty";
   Result["name"] = "value";
   Result["is_static"] = true;
+  return Result;
+}
+
+llvm::json::Object initializerRequest() {
+  auto Result = request();
+  Result["entry"] = kInitializerEntry;
+  Result["mangled_symbol"] = kInitializerSymbol;
+  Result["name"] = "init";
+  Result["declaration_kind"] = "initializer";
+  Result["node_kind"] = "Allocator";
+  Result["status"] = "unsupported";
+  Result.erase("requires_runtime_source_proof");
+  Result.erase("runtime_source_kind");
+  Result["requires_storage_abi_proof"] = true;
+  Result["return_type"] = llvm::json::Object{{"kind", "nominal"},
+                                             {"module", "Demo"},
+                                             {"context_kind", "struct"},
+                                             {"name", "Empty"}};
   return Result;
 }
 
@@ -374,8 +418,11 @@ protected:
   }
 
   void load(bool Arm64, Damage Fault = Damage::None, bool WithGlobal = false,
-            bool WithMember = false) {
-    const auto Bytes = makeMachO(Arm64, Fault, WithGlobal, WithMember);
+            bool WithMember = false, bool WithInitializer = false,
+            bool InitializerRead = false, bool InitializerAlias = false) {
+    const auto Bytes = makeMachO(Arm64, Fault, WithGlobal, WithMember,
+                                WithInitializer, InitializerRead,
+                                InitializerAlias);
     const auto Path = (Directory / "owned.macho").string();
     std::ofstream Output(Path, std::ios::binary | std::ios::trunc);
     Output.write(reinterpret_cast<const char *>(Bytes.data()),
@@ -385,7 +432,8 @@ protected:
     ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1)
         << takeString(neverd_last_error(Session));
     EXPECT_EQ(neverd_session_entry_addr(Session), kBase + kAccessor);
-    ASSERT_EQ(neverd_func_count(Session), WithGlobal ? 2 : 1);
+    ASSERT_EQ(neverd_func_count(Session),
+              1 + int(WithGlobal) + int(WithInitializer) + int(InitializerAlias));
     const int Index = neverd_func_find_by_addr(Session, kBase + kAccessor);
     ASSERT_GE(Index, 0);
     EXPECT_EQ(takeString(neverd_func_name(Session, Index)), kAccessorSymbol);
@@ -395,6 +443,8 @@ protected:
       EXPECT_EQ(takeString(neverd_func_name(Session, Global)),
                 WithMember ? kMemberSymbol : kGlobalSymbol);
     }
+    if (WithInitializer)
+      EXPECT_GE(neverd_func_find_by_addr(Session, kBase + kInitializer), 0);
     std::array<unsigned char, 16> Loaded{};
     ASSERT_EQ(neverd_read_bytes(Session, kBase + kAccessor, Loaded.data(),
                                 static_cast<int>(Loaded.size())),
@@ -403,12 +453,13 @@ protected:
         std::equal(Loaded.begin(), Loaded.end(), Bytes.begin() + kAccessor));
   }
 
-  llvm::json::Value report(llvm::json::Array Methods) {
+  llvm::json::Value report(llvm::json::Array Methods, size_t MaxFunctions = 0) {
     std::string Input;
     llvm::raw_string_ostream Stream(Input);
     Stream << llvm::json::Value(llvm::json::Object{
         {"schema_version", 1}, {"methods", std::move(Methods)}});
-    const char *Raw = neverd_swift_methods_json(Session, Input.c_str(), 0);
+    const char *Raw =
+        neverd_swift_methods_json(Session, Input.c_str(), MaxFunctions);
     if (!Raw) {
       ADD_FAILURE() << takeString(neverd_last_error(Session));
       return llvm::json::Object{};
@@ -529,6 +580,151 @@ TEST_F(SwiftNominalContextCAPI, OwnedAccessorPublishesTypeWithoutOrdinaryBody) {
     ASSERT_NE((*IDs)[0].getAsObject(), nullptr);
     identity(*(*IDs)[0].getAsObject());
     EXPECT_EQ(neverd_func_count(Session), 1);
+  }
+}
+
+TEST_F(SwiftNominalContextCAPI,
+       OwnedEmptyInitializerKeepsItsIdentityAndTypeProjection) {
+  for (bool Arm64 : {true, false}) {
+    for (bool Alias : {false, true}) {
+      for (bool InitFirst : {false, true}) {
+        SCOPED_TRACE(Arm64);
+        SCOPED_TRACE(Alias);
+        SCOPED_TRACE(InitFirst);
+        ASSERT_NO_FATAL_FAILURE(
+            load(Arm64, Damage::None, false, false, true, false, Alias));
+        auto Methods = InitFirst
+                           ? llvm::json::Array{initializerRequest(), request()}
+                           : llvm::json::Array{request(), initializerRequest()};
+        const auto Value = report(std::move(Methods));
+        const auto *Report = Value.getAsObject();
+        ASSERT_NE(Report, nullptr);
+        counts(*Report, 2, 0, 2);
+        EXPECT_EQ(Report->getString("source"), std::string(kSource) + "\n");
+        const auto *Rows = Report->getArray("methods");
+        ASSERT_NE(Rows, nullptr);
+        ASSERT_EQ(Rows->size(), 2U);
+        const auto *Init = (*Rows)[InitFirst ? 0 : 1].getAsObject();
+        ASSERT_NE(Init, nullptr);
+        EXPECT_EQ(Init->getString("entry"), kInitializerEntry);
+        EXPECT_EQ(Init->getString("mangled_symbol"), kInitializerSymbol);
+        EXPECT_EQ(Init->getString("declaration_kind"), "initializer");
+        EXPECT_EQ(Init->getString("source_representation"),
+                  "compiler-generated-from-type");
+        EXPECT_EQ(Init->getString("compiler_projection_kind"),
+                  "empty_value_initializer");
+        EXPECT_EQ(Init->getString("source"), kSource);
+        const auto *Evidence = Init->getArray("compiler_projection_evidence");
+        ASSERT_NE(Evidence, nullptr);
+        EXPECT_FALSE(Evidence->empty());
+        const auto *Units = Report->getArray("source_units");
+        ASSERT_NE(Units, nullptr);
+        ASSERT_EQ(Units->size(), 1U);
+        const auto *Unit = Units->front().getAsObject();
+        ASSERT_NE(Unit, nullptr);
+        EXPECT_EQ(Unit->getString("source"), kSource);
+        const auto *Identities = Unit->getArray("method_identities");
+        ASSERT_NE(Identities, nullptr);
+        ASSERT_EQ(Identities->size(), 2U);
+        unsigned Accessors = 0, Initializers = 0;
+        for (const auto &ID : *Identities) {
+          const auto *Row = ID.getAsObject();
+          ASSERT_NE(Row, nullptr);
+          Accessors += Row->getString("entry") == kAccessorEntry &&
+                       Row->getString("mangled_symbol") == kAccessorSymbol;
+          Initializers += Row->getString("entry") == kInitializerEntry &&
+                          Row->getString("mangled_symbol") == kInitializerSymbol;
+        }
+        EXPECT_EQ(Accessors, 1U);
+        EXPECT_EQ(Initializers, 1U);
+      }
+    }
+  }
+}
+
+TEST_F(SwiftNominalContextCAPI,
+       OwnedEmptyInitializerRejectsMissingProofAndEffects) {
+  for (bool Arm64 : {true, false}) {
+    for (unsigned Mutation = 0; Mutation < 8; ++Mutation) {
+      SCOPED_TRACE(Arm64);
+      SCOPED_TRACE(Mutation);
+      const auto Fault = Mutation == 1   ? Damage::IncompleteState
+                         : Mutation == 2 ? Damage::NoncopyableValues
+                                         : Damage::None;
+      ASSERT_NO_FATAL_FAILURE(
+          load(Arm64, Fault, false, false, true, Mutation == 3));
+      auto Init = initializerRequest();
+      if (Mutation == 4) {
+        Init["parameters"] = llvm::json::Array{llvm::json::Object{
+            {"name", "arg0"},
+            {"type", llvm::json::Object{{"kind", "integer"},
+                                         {"name", "Int64"},
+                                         {"bits", 64},
+                                         {"signed", true}}}}};
+        Init["labels"] = llvm::json::Array{"_"};
+      } else if (Mutation == 5) {
+        Init["is_mutating"] = true;
+      } else if (Mutation == 6) {
+        (*Init.getObject("return_type"))["name"] = "Other";
+      }
+      llvm::json::Array Methods;
+      if (Mutation != 0)
+        Methods.push_back(request());
+      Methods.push_back(std::move(Init));
+      const auto Value = report(std::move(Methods), Mutation == 7 ? 1 : 0);
+      const auto *Report = Value.getAsObject();
+      ASSERT_NE(Report, nullptr);
+      EXPECT_EQ(Report->getInteger("source_body_method_count"), 0);
+      const auto *Rows = Report->getArray("methods");
+      ASSERT_NE(Rows, nullptr);
+      ASSERT_EQ(Rows->size(), Mutation == 0 ? 1U : 2U);
+      const auto *Row = Rows->back().getAsObject();
+      ASSERT_NE(Row, nullptr);
+      EXPECT_EQ(Row->getString("mangled_symbol"), kInitializerSymbol);
+      EXPECT_EQ(Row->getString("status"), "unrecovered");
+      EXPECT_FALSE(Row->getString("reason").value_or("").empty());
+      EXPECT_FALSE(Row->get("source_representation"));
+      EXPECT_FALSE(Row->get("compiler_projection_kind"));
+    }
+  }
+}
+
+TEST_F(SwiftNominalContextCAPI,
+       OwnedEmptyInitializerRetainsOrdinaryAndNamespaceGates) {
+  for (bool Arm64 : {true, false}) {
+    for (bool Member : {false, true}) {
+      SCOPED_TRACE(Arm64);
+      SCOPED_TRACE(Member);
+      ASSERT_NO_FATAL_FAILURE(
+          load(Arm64, Damage::None, true, Member, true));
+      const auto Value = report(llvm::json::Array{
+          request(), initializerRequest(),
+          Member ? memberRequest() : request(true)});
+      const auto *Report = Value.getAsObject();
+      ASSERT_NE(Report, nullptr);
+      EXPECT_EQ(Report->getInteger("method_count"), 3);
+      EXPECT_EQ(Report->getInteger("source_body_method_count"), Member ? 1 : 0);
+      EXPECT_EQ(Report->getInteger("compiler_projection_method_count"),
+                Member ? 1 : 0);
+      const auto *Rows = Report->getArray("methods");
+      ASSERT_NE(Rows, nullptr);
+      ASSERT_EQ(Rows->size(), 3U);
+      const auto *Init = (*Rows)[1].getAsObject();
+      ASSERT_NE(Init, nullptr);
+      EXPECT_EQ(Init->getString("status"), "unrecovered");
+      EXPECT_FALSE(Init->getString("reason").value_or("").empty());
+      if (Member) {
+        const auto *Ordinary = Rows->back().getAsObject();
+        ASSERT_NE(Ordinary, nullptr);
+        EXPECT_EQ(Ordinary->getString("status"), "recovered");
+        EXPECT_EQ(Ordinary->getString("source_representation"),
+                  "native-method-body");
+        EXPECT_NE(Ordinary->getString("source").value_or("").find("42"),
+                  llvm::StringRef::npos);
+      } else {
+        EXPECT_EQ(Report->getString("source"), "");
+      }
+    }
   }
 }
 
