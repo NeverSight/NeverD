@@ -48,6 +48,10 @@ constexpr uint64_t LogLimit = UINT64_C(16) * 1024 * 1024;
 using Clock = std::chrono::steady_clock;
 using Environment = std::map<std::string, std::optional<std::string>>;
 
+struct DeadlineExpired : Error {
+  using Error::Error;
+};
+
 [[noreturn]] void processError(std::string_view What) {
 #ifdef _WIN32
   throw Error(std::string(What) + " (Windows error " +
@@ -92,8 +96,8 @@ Limits workLimits(const Limits &Input) {
 
 void checkDeadline(Clock::time_point Deadline, uint64_t Timeout) {
   if (Clock::now() >= Deadline)
-    throw Error("backend timed out after " + std::to_string(Timeout) +
-                " seconds");
+    throw DeadlineExpired("backend timed out after " + std::to_string(Timeout) +
+                          " seconds");
 }
 
 bool retired(const std::error_code &EC, bool Live) {
@@ -848,33 +852,50 @@ void runTool(const std::vector<std::string> &Args, const fs::path &LogPath,
     throw Error("invalid backend timeout: deadline is not representable");
   auto Deadline = Now + std::chrono::seconds(Timeout);
   Log Output(LogPath);
-  scanWorkspace(Workspace, Work, false, Deadline, Timeout);
-  Child Process(Args, Overrides);
-  auto NextScan = Clock::time_point::min();
-  for (;;) {
-    Process.drain(Output);
-    if (Process.exited()) {
-      Process
-          .stop(); // Descendants must be stopped before inspecting final files.
-      auto DrainDeadline =
-          std::min(Deadline, Clock::now() + std::chrono::seconds(1));
-      while (!Process.drain(Output)) {
-        if (Clock::now() >= DrainDeadline)
-          throw Error("backend descendants did not close their output pipe");
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  try {
+    scanWorkspace(Workspace, Work, false, Deadline, Timeout);
+    Child Process(Args, Overrides);
+    auto NextScan = Clock::time_point::min();
+    for (;;) {
+      Process.drain(Output);
+      if (Process.exited()) {
+        // Descendants must be stopped before inspecting final files.
+        Process.stop();
+        auto DrainDeadline =
+            std::min(Deadline, Clock::now() + std::chrono::seconds(1));
+        while (!Process.drain(Output)) {
+          if (Clock::now() >= DrainDeadline)
+            throw Error("backend descendants did not close their output pipe");
+          std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        scanWorkspace(Workspace, Work, false, Deadline, Timeout);
+        break;
       }
-      scanWorkspace(Workspace, Work, false, Deadline, Timeout);
-      break;
+      checkDeadline(Deadline, Timeout);
+      if (!Workspace.empty() && Clock::now() >= NextScan) {
+        scanWorkspace(Workspace, Work, true, Deadline, Timeout);
+        NextScan = Clock::now() + std::chrono::milliseconds(250);
+      }
+      Process.pause();
     }
-    checkDeadline(Deadline, Timeout);
-    if (!Workspace.empty() && Clock::now() >= NextScan) {
-      scanWorkspace(Workspace, Work, true, Deadline, Timeout);
-      NextScan = Clock::now() + std::chrono::milliseconds(250);
+    if (Process.status() != 0)
+      throw Error("backend exited with status " +
+                  std::to_string(Process.status()) + ": " + Output.tail());
+  } catch (DeadlineExpired &Failure) {
+    // Child cleanup and pipe closure precede this read. In particular, the
+    // Windows tail seek must not be followed by another log append.
+    try {
+      auto Tail = Output.tail();
+      if (!Tail.empty()) {
+        Error Detailed(std::string(Failure.what()) + ": " + Tail);
+        // Construct first; runtime_error copy assignment is noexcept, so a
+        // diagnostic allocation failure cannot replace the original timeout.
+        static_cast<std::runtime_error &>(Failure) = Detailed;
+      }
+    } catch (...) {
+      // The timeout remains authoritative if its diagnostic cannot be read.
     }
-    Process.pause();
+    throw;
   }
-  if (Process.status() != 0)
-    throw Error("backend exited with status " +
-                std::to_string(Process.status()) + ": " + Output.tail());
 }
 } // namespace neverd::mobile

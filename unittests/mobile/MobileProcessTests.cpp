@@ -178,17 +178,36 @@ TEST_F(MobileProcessTests, NonzeroExitUsesOnlyABoundedDiagnosticTail) {
 }
 TEST_F(MobileProcessTests, TimeoutStopsTheChildWithinTheConfiguredBudget) {
   auto Begin = std::chrono::steady_clock::now();
-  rejection([&] { runTool(command({"sleep", "10000"}), Root / "log", 1); },
-            "timed out");
+  auto Error =
+      rejection([&] { runTool(command({"sleep", "10000"}), Root / "log", 1); },
+                "timed out");
   EXPECT_LT(std::chrono::steady_clock::now() - Begin, std::chrono::seconds(5));
+  EXPECT_EQ(Error, "backend timed out after 1 seconds");
+  EXPECT_TRUE(log().empty());
+}
+TEST_F(MobileProcessTests, TimeoutRetainsOnlyTheCapturedBoundedDiagnosticTail) {
+  auto Error = rejection(
+      [&] {
+        runTool(command({"log-sleep", "12000", "10000"}), Root / "log", 1);
+      },
+      "timed out");
+  EXPECT_EQ(log(), "first-line\n" + std::string(12000, 'x') +
+                       "\nlast-out\nlast-error\n");
+  // The ASCII capture ends in 21 suffix bytes. Its last 4096 bytes contain
+  // 4075 fill bytes; the existing tail formatter trims the final newline.
+  EXPECT_EQ(Error, "backend timed out after 1 seconds: " +
+                       std::string(4075, 'x') + "\nlast-out\nlast-error");
+  EXPECT_EQ(Error.find("first-line"), std::string::npos);
+  EXPECT_LT(Error.size(), 4200u);
 }
 TEST_F(MobileProcessTests, DiagnosticCapIsExactEvenForAFastWriter) {
-  rejection(
+  auto Error = rejection(
       [&] {
         runTool(command({"spam", std::to_string(17 * 1024 * 1024)}),
                 Root / "log", 10);
       },
       "diagnostic output");
+  EXPECT_EQ(Error, "backend diagnostic output exceeded 16 MiB");
   EXPECT_EQ(fs::file_size(Root / "log"), UINT64_C(16) * 1024 * 1024);
 }
 TEST_F(MobileProcessTests, SuccessfulWrapperCannotLeaveADescendantWriting) {
@@ -212,12 +231,14 @@ TEST_F(MobileProcessTests, FailingWrapperCannotLeaveADescendantWriting) {
 }
 TEST_F(MobileProcessTests, TimeoutAlsoStopsDescendants) {
   fs::path Marker = Root / "late";
-  rejection(
+  auto Error = rejection(
       [&] {
         runTool(command({"spawn", pathText(Marker), "0", "10000", "2200"}),
                 Root / "log", 1);
       },
       "timed out");
+  EXPECT_EQ(Error, "backend timed out after 1 seconds: spawned");
+  EXPECT_EQ(log(), "spawned\n");
   std::this_thread::sleep_for(std::chrono::milliseconds(1500));
   EXPECT_FALSE(fs::exists(Marker));
 }

@@ -184,6 +184,12 @@ int run(const std::vector<std::string> &Args) {
 #endif
   } else if (Mode == "sleep") {
     sleep(std::stoul(Args.at(2)));
+  } else if (Mode == "log-sleep") {
+    std::cout << "first-line\n"
+              << std::string(std::stoul(Args.at(2)), 'x') << "\nlast-out\n"
+              << std::flush;
+    std::cerr << "last-error\n" << std::flush;
+    sleep(std::stoul(Args.at(3)));
   } else if (Mode == "late") {
     sleep(std::stoul(Args.at(3)));
     std::ofstream(path(Args.at(2)), std::ios::binary) << "late";
