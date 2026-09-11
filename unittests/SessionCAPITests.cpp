@@ -207,10 +207,11 @@ std::string makeNativeELF(bool AArch64, uint64_t Base = 0x400000,
 // Give the native function a loader-provided name without passing it through
 // another JSON API before the IR page boundary under test.
 std::string makeNamedNativeELF(const std::string &Name,
-                               uint64_t Base = 0x400000) {
+                               uint64_t Base = 0x400000, bool AArch64 = false) {
   using ELF = llvm::object::ELF64LE;
   using namespace llvm::ELF;
-  std::string Bytes = makeNativeELF(false, Base);
+  std::string Bytes = makeNativeELF(AArch64, Base);
+  const uint64_t CodeSize = AArch64 ? 8 : 6;
   ELF::Ehdr Header{};
   std::memcpy(&Header, Bytes.data(), sizeof(Header));
   std::array<ELF::Shdr, 5> Sections{};
@@ -219,8 +220,8 @@ std::string makeNamedNativeELF(const std::string &Name,
   Sections[1].sh_flags = SHF_ALLOC | SHF_EXECINSTR;
   Sections[1].sh_addr = Header.e_entry;
   Sections[1].sh_offset = sizeof(ELF::Ehdr) + sizeof(ELF::Phdr);
-  Sections[1].sh_size = 6;
-  Sections[1].sh_addralign = 1;
+  Sections[1].sh_size = CodeSize;
+  Sections[1].sh_addralign = AArch64 ? 4 : 1;
 
   Bytes.resize((Bytes.size() + 7) & ~size_t(7), '\0');
   std::array<ELF::Sym, 2> Symbols{};
@@ -228,7 +229,7 @@ std::string makeNamedNativeELF(const std::string &Name,
   Symbols[1].setBindingAndType(STB_GLOBAL, STT_FUNC);
   Symbols[1].st_shndx = 1;
   Symbols[1].st_value = Header.e_entry;
-  Symbols[1].st_size = 6;
+  Symbols[1].st_size = CodeSize;
   Sections[2].sh_name = 7;
   Sections[2].sh_type = SHT_SYMTAB;
   Sections[2].sh_offset = Bytes.size();
@@ -488,8 +489,10 @@ TEST_F(SessionCAPITest,
   ScopedNativePhaseEnvironment Environment;
   for (bool AArch64 : {false, true}) {
     SCOPED_TRACE(AArch64);
-    const std::string Path = write(
-        AArch64 ? "phase-arm64.elf" : "phase-x64.elf", makeNativeELF(AArch64));
+    // Load-only native queries expose defined symbols, not pipeline discovery.
+    const std::string Path =
+        write(AArch64 ? "phase-arm64.elf" : "phase-x64.elf",
+              makeNamedNativeELF("phase_entry", 0x400000, AArch64));
     ASSERT_EQ(Environment.set(nullptr), 0);
     const auto Before = capturePhaseLoad(Session, Path.c_str());
     ASSERT_EQ(Before.Status, 1) << Before.Error;
@@ -501,6 +504,12 @@ TEST_F(SessionCAPITest,
     EXPECT_EQ(Entry, 0x400000u + sizeof(llvm::object::ELF64LE::Ehdr) +
                          sizeof(llvm::object::ELF64LE::Phdr));
     ASSERT_EQ(neverd_func_count(Session), 1);
+    const neverd_va_t FunctionEntry = neverd_func_entry(Session, 0);
+    const int FunctionSize = neverd_func_size(Session, 0);
+    const std::string FunctionName = takeString(neverd_func_name(Session, 0));
+    EXPECT_EQ(FunctionEntry, Entry);
+    EXPECT_EQ(FunctionSize, AArch64 ? 8 : 6);
+    EXPECT_EQ(FunctionName, "phase_entry");
 
     ASSERT_EQ(Environment.set("1"), 0);
     const auto Traced = capturePhaseLoad(Session, Path.c_str());
@@ -510,7 +519,10 @@ TEST_F(SessionCAPITest,
     EXPECT_EQ(neverd_session_is_loaded(Session), 1);
     EXPECT_EQ(neverd_session_entry_addr(Session), Entry);
     EXPECT_EQ(takeString(neverd_session_file_path(Session)), Path);
-    EXPECT_EQ(neverd_func_count(Session), 1);
+    ASSERT_EQ(neverd_func_count(Session), 1);
+    EXPECT_EQ(neverd_func_entry(Session, 0), FunctionEntry);
+    EXPECT_EQ(neverd_func_size(Session, 0), FunctionSize);
+    EXPECT_EQ(takeString(neverd_func_name(Session, 0)), FunctionName);
     EXPECT_EQ(takeString(neverd_headers_json(Session)), Headers);
   }
 }
