@@ -17,6 +17,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/libc/LibCNames.h"
+#include "neverd/loader/ObjC/ObjCCallHints.h"
 #include "neverd/object/SectionNames.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -870,6 +871,17 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
             Found[K].Id = -1;
           }
         }
+
+      // A verified selector stub overwrites x1 before reading it. Even a
+      // recovered caller value may be a call clobber or a stale PHI; do not
+      // turn that unobserved value into a source read. This proof is separate
+      // from a complete method signature and does not bind unknown calls.
+      if (IsObjCMessageStub && TheArch == Arch::AArch64 &&
+          objcSelectorStubOverwritesCommand(*Img, CI.TargetAddr)) {
+        Found[1] =
+            MedVar::makeConst(0, static_cast<uint16_t>(TRI.PointerSize));
+        FoundMask[1] = true;
+      }
 
       // A stripped Mach-O no longer names its linker-specialized
       // `_objc_msgSend$selector` entries, so varArgFixedCount cannot derive

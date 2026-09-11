@@ -205,6 +205,179 @@ TEST(ObjCCallHints, PreservesReceiverArgumentAndReturnBeforeSSA) {
   EXPECT_FALSE(Disabled.CallInfos[0].SourceCallHint);
 }
 
+BinaryImage selectorStubImage() {
+  auto Image = image();
+  Image.Sections[0].Name = "__objc_stubs";
+  return Image;
+}
+
+MedFunc callerWithStaleCommand(bool Clobbered) {
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  auto Register = [&](int Id, int Version, unsigned Index) {
+    MedVar Value;
+    Value.Kind = MedVar::Reg;
+    Value.Id = Id;
+    Value.SSAVer = Version;
+    Value.Size = 8;
+    Value.RegOff = TRI.IntParamRegs[Index];
+    Value.TheArch = Arch::AArch64;
+    return Value;
+  };
+  MedFunc Function;
+  Function.Entry = 0x1200;
+  Function.Name = "stale_selector_caller";
+  Function.Blocks.resize(1);
+  auto &Block = Function.Blocks[0];
+  Block.Id = 0;
+  auto Append = [&](NdOp Opcode, MedVar Output, MedVar Input,
+                    unsigned CallSite = 0) {
+    MedOp Op;
+    Op.Opcode = Opcode;
+    Op.Output = Output;
+    Op.Addr = 0x1200 + Block.Ops.size() * 4;
+    Op.CallSiteId = CallSite;
+    Op.addInput(Input);
+    Block.Ops.push_back(Op);
+  };
+  MedVar Command = MedVar::makeConst(0x777777, 8);
+  if (Clobbered) {
+    Append(NdOp::CALL, Register(10, 1, 0), MedVar::makeConst(0x1500, 8), 1);
+    Command = Register(20, 1, 1);
+    Function.CallClobbers.push_back({Command, 1});
+  }
+  Append(NdOp::COPY, Register(11, 2, 0), MedVar::makeConst(0x2222, 8));
+  Append(NdOp::COPY, Register(21, 2, 1), Command);
+  Append(NdOp::COPY, Register(30, 1, 2), MedVar::makeConst(0x123456, 8));
+  Append(NdOp::CALL, Register(12, 3, 0), MedVar::makeConst(0x1100, 8), 2);
+  Append(NdOp::RETURN, {}, Register(12, 3, 0));
+  return Function;
+}
+
+TEST(ObjCCallHints, SelectorStubCommandProofDoesNotRequireMethodSignature) {
+  for (unsigned Mode = 0; Mode < 3; ++Mode) {
+    SCOPED_TRACE(Mode);
+    auto Image = selectorStubImage();
+    if (Mode == 0)
+      Image.ObjCMethods.clear();
+    else if (Mode == 1)
+      Image.ObjCMethods[0].TypeHint.reset();
+    else {
+      auto Conflicting = Image.ObjCMethods[0];
+      Conflicting.TypeHint->ReturnType = NdType::makeInt(8);
+      Image.ObjCMethods.push_back(std::move(Conflicting));
+    }
+    EXPECT_TRUE(objcSelectorStubOverwritesCommand(Image, 0x1100));
+    EXPECT_TRUE(buildObjCSourceCallHints(Image, caller()).empty());
+  }
+}
+
+TEST(ObjCCallHints, SelectorStubCommandProofRejectsUnverifiedCodeAndSlots) {
+  for (unsigned Mutation = 0; Mutation < 16; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Image = selectorStubImage();
+    switch (Mutation) {
+    case 0:
+      Image.Format = BinaryFormat::ELF;
+      break;
+    case 1:
+      Image.IsRelocatable = true;
+      break;
+    case 2:
+      Image.Arch = Arch::X64;
+      break;
+    case 3:
+      Image.Bits = Bitness::Bits32;
+      break;
+    case 4:
+      Image.Sections[0].Name = "__text";
+      break;
+    case 5:
+      Image.Sections[0].Flags = SegmentFlags::Readable;
+      break;
+    case 6:
+      Image.Segments[0].Flags = SegmentFlags::Readable;
+      break;
+    case 7:
+      Image.Sections[0].FileSz = 0x110;
+      break;
+    case 8:
+      Image.Segments[0].FileSz = 0x110;
+      break;
+    case 9:
+      Image.ObjCSourceReferences.clear();
+      break;
+    case 10:
+      Image.ObjCSourceReferences[0x2100].TheKind =
+          ObjCSourceReference::Kind::Class;
+      break;
+    case 11:
+      Image.ObjCSourceReferences[0x2100].Size = 4;
+      break;
+    case 12:
+      Image.ObjCSourceReferences[0x2100].Name.clear();
+      break;
+    case 13:
+      Image.ImportPtrSlots[0x2180] = "_unrelated_runtime";
+      break;
+    case 14:
+      llvm::support::endian::write32le(
+          Image.Segments[0].Data.data() + 0x104, 0xf9408000); // LDR x0
+      break;
+    case 15:
+      llvm::support::endian::write32le(
+          Image.Segments[0].Data.data() + 0x110, 0xd61f0220); // BR x17
+      break;
+    }
+    EXPECT_FALSE(objcSelectorStubOverwritesCommand(Image, 0x1100));
+  }
+}
+
+TEST(ObjCCallHints, VerifiedSelectorStubDiscardsStaleCallerCommand) {
+  for (bool Clobbered : {false, true}) {
+    SCOPED_TRACE(Clobbered);
+    auto Image = selectorStubImage();
+    Image.ObjCMethods.clear();
+    auto Function = callerWithStaleCommand(Clobbered);
+    ASSERT_TRUE(verifyMedFunc(Function, "before-selector-stub-abi"));
+    const auto ClobberCount = Function.CallClobbers.size();
+    recoverCallAbi(Function, Arch::AArch64, {}, &Image);
+    ASSERT_EQ(Function.CallInfos.size(), Clobbered ? 2U : 1U);
+    const auto &Call = Function.CallInfos.back();
+    EXPECT_EQ(Call.TargetAddr, 0x1100U);
+    EXPECT_FALSE(Call.SourceCallHint);
+    ASSERT_EQ(Call.Args.size(), 3U);
+    ASSERT_TRUE(Call.Args[0].isConst());
+    EXPECT_EQ(Call.Args[0].ConstVal, 0x2222U);
+    ASSERT_TRUE(Call.Args[1].isConst());
+    EXPECT_EQ(Call.Args[1].ConstVal, 0U);
+    EXPECT_EQ(Call.Args[1].Size, 8U);
+    ASSERT_TRUE(Call.Args[2].isConst());
+    EXPECT_EQ(Call.Args[2].ConstVal, 0x123456U);
+    EXPECT_EQ(Function.CallClobbers.size(), ClobberCount);
+    EXPECT_TRUE(verifyMedFunc(Function, "after-selector-stub-abi"));
+  }
+}
+
+TEST(ObjCCallHints, UnverifiedSelectorStubKeepsObservedCallerCommand) {
+  for (bool NamedSection : {false, true}) {
+    SCOPED_TRACE(NamedSection);
+    auto Image = selectorStubImage();
+    if (NamedSection)
+      Image.ImportPtrSlots[0x2180] = "_unrelated_runtime";
+    else
+      Image.Sections[0].Name = "__text";
+    auto Function = callerWithStaleCommand(false);
+    recoverCallAbi(Function, Arch::AArch64, {}, &Image);
+    ASSERT_EQ(Function.CallInfos.size(), 1U);
+    const auto &Call = Function.CallInfos.front();
+    EXPECT_FALSE(Call.SourceCallHint);
+    ASSERT_EQ(Call.Args.size(), 3U);
+    ASSERT_TRUE(Call.Args[1].isConst());
+    EXPECT_EQ(Call.Args[1].ConstVal, 0x777777U);
+    EXPECT_TRUE(verifyMedFunc(Function, "unverified-selector-stub-abi"));
+  }
+}
+
 TEST(ObjCCallHints, ResolvesX64CallsiteSelectorAndRejectsStaleAlias) {
   auto Image = image(Arch::X64);
   auto Low = caller(Arch::X64);

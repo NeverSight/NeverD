@@ -4,6 +4,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/object/SectionNames.h"
 
 #include "llvm/Support/Endian.h"
 
@@ -159,6 +160,19 @@ struct Value {
 using Key = std::tuple<VnodeSpace, uint64_t, uint16_t>;
 Key key(const NdVar &V) { return {V.Space, V.Offset, V.Size}; }
 } // namespace
+
+bool objcSelectorStubOverwritesCommand(const BinaryImage &Image,
+                                        va_t Address) {
+  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64)
+    return false;
+  const auto *Section = Image.getSectionFor(Address);
+  if (!Section || Section->Name != section_names::macho::ObjCStubs)
+    return false;
+  const auto Target = veneer(Image, Address);
+  return Target && Target->Name == "objc_msgSend" &&
+         Target->SelectorSlot != 0 && !Target->Selector.empty();
+}
 
 std::map<va_t, SourceCallTypeHint>
 buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
