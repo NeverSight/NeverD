@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <new>
 #include <regex>
 #include <sstream>
 
@@ -297,6 +298,56 @@ Identity identity(const Object &m, std::string owner = {}) {
   return {str(m, "class_name", owner), str(m, "selector"),
           flag(m, "class_method"), str(m, "category_name"),
           str(m, "category_address", "0x0")};
+}
+bool diagnosticText(llvm::StringRef text, size_t maximum) noexcept {
+  return !text.empty() && text.size() <= maximum && llvm::json::isUTF8(text) &&
+         std::all_of(text.begin(), text.end(), [](unsigned char c) {
+           return (c >= 0x20 && c != 0x7f) || c == '\n' || c == '\r' ||
+                  c == '\t';
+         });
+}
+size_t backendDiagnosticSize(const Object &native, const Object &runtime,
+                             const std::string &owner) noexcept {
+  auto name = native.getString("class_name");
+  if (!name || *name != owner)
+    return 0;
+  for (auto key : {"selector", "category_name", "category_address",
+                   "implementation", "type_encoding"}) {
+    auto a = native.getString(key), b = runtime.getString(key);
+    if (!a || !b || *a != *b ||
+        (a->empty() && llvm::StringRef(key) != "category_name"))
+      return 0;
+    if ((llvm::StringRef(key) == "implementation" ||
+         llvm::StringRef(key) == "category_address") &&
+        !hexAddress(*a))
+      return 0;
+  }
+  auto a = native.getBoolean("class_method"),
+       b = runtime.getBoolean("class_method");
+  if (!a || !b || *a != *b)
+    return 0;
+  auto status = native.getString("status"), reason = native.getString("reason");
+  if (!status || (*status != "recovered" && *status != "unrecovered"))
+    return 0;
+  size_t bytes = 0;
+  if (*status == "unrecovered") {
+    if (!reason || !diagnosticText(*reason, 2048))
+      return 0;
+    bytes += reason->size();
+  } else if (native.get("reason") && (!reason || !reason->empty()))
+    return 0;
+  auto diagnostics = native.getArray("diagnostics");
+  if (!diagnostics || diagnostics->size() > 8)
+    return 0;
+  for (const auto &value : *diagnostics) {
+    auto text = value.getAsString();
+    if (!text || !diagnosticText(*text, 512))
+      return 0;
+    bytes += text->size();
+  }
+  // Six bytes per input byte covers JSON escaping; fixed overhead covers the
+  // bounded array and indentation. Normal publication accounts each embedding.
+  return 512 + 6 * bytes;
 }
 struct Inventory {
   std::map<std::string, Object> classes;
@@ -1107,7 +1158,13 @@ SourceResult objcSources(const Object &batch, const Object &metadata,
   std::vector<Candidate> candidates;
   std::map<size_t, std::set<std::string>> class_dependencies;
   Array coverage;
-  std::set<Identity> encountered;
+  struct RuntimeMatch {
+    size_t row;
+    const Object *method;
+    const std::string *owner;
+    bool duplicate = false;
+  };
+  std::map<Identity, RuntimeMatch> encountered;
   std::map<std::pair<std::string, std::string>, std::set<std::string>>
       cataddresses;
   for (const auto &[name, c] : runtime)
@@ -1131,8 +1188,12 @@ SourceResult objcSources(const Object &batch, const Object &metadata,
                  {"status", "unrecovered"},
                  {"diagnostics", Array{}}};
       try {
-        if (!encountered.insert(key).second)
+        auto [entry, fresh] = encountered.emplace(
+            key, RuntimeMatch{coverage.size(), &m, &name});
+        if (!fresh) {
+          entry->second.duplicate = true;
           throw Error("duplicate runtime method identity");
+        }
         if (inv.conflicts.count(name))
           throw Error("duplicate inconsistent runtime class records");
         if (auto it = declarations.errors.find(name);
@@ -1204,6 +1265,7 @@ SourceResult objcSources(const Object &batch, const Object &metadata,
       auto row = entries[0];
       row.erase("source");
       row.erase("parameters");
+      row.erase("native_backend");
       row["status"] = "unrecovered";
       row["reason"] = "native method has no matching runtime metadata";
       coverage.push_back(std::move(row));
@@ -1267,6 +1329,33 @@ SourceResult objcSources(const Object &batch, const Object &metadata,
     for (const auto &m : ms)
       source += m;
     source += "@end\n\n";
+  }
+  size_t diagnostic_bytes = 256 * 1024;
+  for (const auto &[key, match] : encountered) {
+    if (diagnostic_bytes < 512)
+      break;
+    budget.tick();
+    auto &row = *coverage[match.row].getAsObject();
+    auto native = batches.find(key);
+    if (match.duplicate || inv.conflicts.count(*match.owner) ||
+        row.getString("status") != "unrecovered" || native == batches.end() ||
+        native->second.size() != 1)
+      continue;
+    const auto &record = native->second.front();
+    const auto bytes = backendDiagnosticSize(record, *match.method, *match.owner);
+    if (!bytes || bytes > diagnostic_bytes)
+      continue;
+    try {
+      Object summary{{"status", record.getString("status")->str()},
+                     {"reason", nullptr},
+                     {"diagnostics", Array(*record.getArray("diagnostics"))}};
+      if (record.getString("status") == "unrecovered")
+        summary["reason"] = record.getString("reason")->str();
+      row["native_backend"] = std::move(summary);
+      diagnostic_bytes -= bytes;
+    } catch (const std::bad_alloc &) {
+      row.erase("native_backend");
+    }
   }
   std::string status =
       coverage.empty() ? "no-methods"

@@ -250,6 +250,26 @@ Object emptyLocalClass(const std::string &name) {
                 {"ivars", Array{}},
                 {"methods", Array{}}};
 }
+std::pair<Object, Object> objcDiagnosticFixture() {
+  auto result = objcFixture();
+  auto &native = *result.first.getArray("methods")->front().getAsObject();
+  auto &cls = *result.second.getArray("classes")->front().getAsObject();
+  auto &runtime = *cls.getArray("methods")->front().getAsObject();
+  for (auto *method : {&native, &runtime}) {
+    (*method)["category_name"] = "";
+    (*method)["category_address"] = "0x0";
+  }
+  native["diagnostics"] = Array{};
+  return result;
+}
+void unavailableObjCDeclaration(Object &metadata) {
+  auto &cls = *metadata.getArray("classes")->front().getAsObject();
+  cls["root_class"] = false;
+  cls["superclass"] = "ExternalBase";
+}
+constexpr char kUnavailableObjCDeclaration[] =
+    "required class declaration is unavailable: Calculator: "
+    "superclass declaration is unavailable: ExternalBase";
 std::pair<Object, Object> swiftFixture(bool alias = false) {
   Array supplied, rows, units;
   std::string combined;
@@ -737,6 +757,329 @@ TEST(MobileIOSNative, UnavailableSuperclassDeclarationCannotRecoverScalarBody) {
             std::string::npos);
   EXPECT_EQ(objcHeader(metadata).find("@interface Calculator"),
             std::string::npos);
+}
+
+TEST(MobileIOSNative, NativeBackendReasonSurvivesDeclarationAndLayoutFailure) {
+  for (bool layout_failure : {false, true})
+    for (bool native_recovered : {false, true}) {
+      SCOPED_TRACE(layout_failure);
+      SCOPED_TRACE(native_recovered);
+      auto [batch, metadata] = objcDiagnosticFixture();
+      auto &cls = *metadata.getArray("classes")->front().getAsObject();
+      auto &native = *batch.getArray("methods")->front().getAsObject();
+      if (layout_failure) {
+        cls["ivar_status"] = "unrecovered";
+        native["instance_layout_classes"] = Array{"Calculator"};
+      } else
+        unavailableObjCDeclaration(metadata);
+      constexpr char reason[] =
+          "method has no complete typed source body (possibly limited by "
+          "max-func)";
+      if (!native_recovered) {
+        native["status"] = "unrecovered";
+        native["reason"] = reason;
+      }
+      native["diagnostics"] = Array{"retained native diagnostic"};
+      Budget budget;
+      auto result = objcSources(batch, metadata, 8, budget);
+      EXPECT_EQ(number(result.coverage, "method_count"), 1);
+      EXPECT_EQ(number(result.coverage, "recovered_method_count"), 0);
+      EXPECT_EQ(number(result.coverage, "unrecovered_method_count"), 1);
+      const auto &row = object(array(result.coverage, "methods")[0], "method");
+      EXPECT_EQ(str(row, "status"), "unrecovered");
+      EXPECT_EQ(str(row, "reason"),
+                layout_failure
+                    ? "required instance-variable layout is unavailable: "
+                      "Calculator"
+                    : kUnavailableObjCDeclaration);
+      EXPECT_EQ(array(row, "diagnostics").size(), layout_failure ? 1U : 0U);
+      const auto *backend = row.getObject("native_backend");
+      ASSERT_NE(backend, nullptr);
+      EXPECT_EQ(backend->size(), 3U);
+      EXPECT_EQ(str(*backend, "status"),
+                native_recovered ? "recovered" : "unrecovered");
+      if (native_recovered) {
+        ASSERT_NE(backend->get("reason"), nullptr);
+        EXPECT_TRUE(backend->get("reason")->getAsNull().has_value());
+      } else
+        EXPECT_EQ(str(*backend, "reason"), reason);
+      EXPECT_EQ(array(*backend, "diagnostics"),
+                (Array{"retained native diagnostic"}));
+      EXPECT_FALSE(backend->get("source"));
+      EXPECT_FALSE(backend->get("parameters"));
+      EXPECT_EQ(result.source.find("@implementation Calculator"),
+                std::string::npos);
+    }
+}
+
+TEST(MobileIOSNative, NativeBackendSummaryRequiresExactRuntimeIdentity) {
+  for (const auto *field : {"class_name", "selector", "class_method",
+                            "category_name", "category_address",
+                            "implementation", "type_encoding"}) {
+    SCOPED_TRACE(field);
+    auto [batch, metadata] = objcDiagnosticFixture();
+    unavailableObjCDeclaration(metadata);
+    auto &native = *batch.getArray("methods")->front().getAsObject();
+    if (std::string_view(field) == "class_method")
+      native[field] = true;
+    else if (std::string_view(field) == "implementation" ||
+             std::string_view(field) == "category_address")
+      native[field] = "0x9999";
+    else
+      native[field] = "Other";
+    // An unmatched input must not inject its own purported matched summary.
+    native["native_backend"] = Object{{"status", "recovered"}};
+    Budget budget;
+    auto result = objcSources(batch, metadata, 8, budget);
+    const auto &rows = array(result.coverage, "methods");
+    const bool same_key = std::string_view(field) == "implementation" ||
+                          std::string_view(field) == "type_encoding";
+    EXPECT_EQ(rows.size(), same_key ? 1U : 2U);
+    EXPECT_EQ(number(result.coverage, "recovered_method_count"), 0);
+    EXPECT_EQ(str(object(rows[0], "method"), "reason"),
+              kUnavailableObjCDeclaration);
+    for (const auto &value : rows)
+      EXPECT_FALSE(object(value, "method").get("native_backend"));
+  }
+  for (const auto *field : {"class_method", "category_name", "category_address",
+                            "implementation", "type_encoding"})
+    for (bool wrong_type : {false, true}) {
+      SCOPED_TRACE(field);
+      SCOPED_TRACE(wrong_type);
+      auto [batch, metadata] = objcDiagnosticFixture();
+      unavailableObjCDeclaration(metadata);
+      auto &native = *batch.getArray("methods")->front().getAsObject();
+      if (wrong_type)
+        native[field] = 0;
+      else
+        native.erase(field);
+      Budget budget;
+      const auto result = objcSources(batch, metadata, 8, budget);
+      EXPECT_EQ(number(result.coverage, "method_count"), 1);
+      const auto &row = object(array(result.coverage, "methods")[0], "method");
+      EXPECT_EQ(str(row, "reason"), kUnavailableObjCDeclaration);
+      EXPECT_FALSE(row.get("native_backend"));
+    }
+}
+
+TEST(MobileIOSNative, NativeBackendSummaryRemainsSecondaryAfterClassClosure) {
+  auto [batch, metadata] = objcDiagnosticFixture();
+  auto &native = *batch.getArray("methods")->front().getAsObject();
+  native["category_name"] = "Arithmetic";
+  native["category_address"] = "0x4000";
+  native["instance_layout_classes"] = Array{};
+  auto cls = emptyLocalClass("Calculator");
+  auto method = object(
+      array(object(array(metadata, "classes")[0], "class"), "methods")[0],
+      "method");
+  method["category_name"] = "Arithmetic";
+  method["category_address"] = "0x4000";
+  cls["methods"] = Array{std::move(method)};
+  metadata["classes"] = Array{std::move(cls)};
+  Budget complete_budget;
+  const auto complete = objcSources(batch, metadata, 8, complete_budget);
+  ASSERT_EQ(number(complete.coverage, "recovered_method_count"), 1);
+  EXPECT_FALSE(object(array(complete.coverage, "methods")[0], "method")
+                   .get("native_backend"));
+  metadata["status"] = "partial";
+  Budget partial_budget;
+  const auto partial = objcSources(batch, metadata, 8, partial_budget);
+  EXPECT_EQ(number(partial.coverage, "method_count"), 1);
+  EXPECT_EQ(number(partial.coverage, "recovered_method_count"), 0);
+  const auto &row = object(array(partial.coverage, "methods")[0], "method");
+  EXPECT_EQ(str(row, "reason"),
+            "required local class definition is unavailable: Calculator: "
+            "local class method inventory is incomplete");
+  const auto *backend = row.getObject("native_backend");
+  ASSERT_NE(backend, nullptr);
+  EXPECT_EQ(str(*backend, "status"), "recovered");
+  EXPECT_EQ(str(row, "status"), "unrecovered");
+  EXPECT_EQ(partial.source.find("@implementation Calculator"),
+            std::string::npos);
+}
+
+TEST(MobileIOSNative, AmbiguousNativeOrRuntimeRowsCannotPublishBackendSummary) {
+  for (unsigned duplicate : {0U, 1U, 2U, 3U}) {
+    SCOPED_TRACE(duplicate);
+    auto [batch, metadata] = objcDiagnosticFixture();
+    unavailableObjCDeclaration(metadata);
+    if (duplicate < 2) {
+      auto copy = object(array(batch, "methods")[0], "native");
+      if (duplicate == 1)
+        copy["diagnostics"] = Array{"different native result"};
+      batch.getArray("methods")->push_back(std::move(copy));
+    } else if (duplicate == 2) {
+      auto *methods = metadata.getArray("classes")
+                          ->front()
+                          .getAsObject()
+                          ->getArray("methods");
+      auto copy = methods->front();
+      methods->push_back(std::move(copy));
+    } else {
+      auto copy = object(array(metadata, "classes")[0], "class");
+      copy["address"] = "0x3000";
+      metadata.getArray("classes")->push_back(std::move(copy));
+    }
+    Budget budget;
+    const auto result = objcSources(batch, metadata, 8, budget);
+    EXPECT_EQ(number(result.coverage, "method_count"), duplicate < 2 ? 1 : 2);
+    EXPECT_EQ(number(result.coverage, "recovered_method_count"), 0);
+    const auto &rows = array(result.coverage, "methods");
+    for (const auto &value : rows)
+      EXPECT_FALSE(object(value, "method").get("native_backend"));
+    EXPECT_EQ(str(object(rows[0], "method"), "reason"),
+              duplicate == 3 ? "duplicate inconsistent runtime class records"
+                             : kUnavailableObjCDeclaration);
+    if (duplicate >= 2)
+      EXPECT_EQ(str(object(rows[1], "method"), "reason"),
+                "duplicate runtime method identity");
+  }
+}
+
+TEST(MobileIOSNative, InvalidOrExcessiveNativeDiagnosticPayloadIsUnavailable) {
+  for (unsigned mutation = 0; mutation < 16; ++mutation) {
+    SCOPED_TRACE(mutation);
+    auto [batch, metadata] = objcDiagnosticFixture();
+    unavailableObjCDeclaration(metadata);
+    auto &native = *batch.getArray("methods")->front().getAsObject();
+    native["status"] = "unrecovered";
+    native["reason"] = "native proof failed";
+    switch (mutation) {
+    case 0:
+      native.erase("status");
+      break;
+    case 1:
+      native["status"] = "success";
+      break;
+    case 2:
+      native["status"] = false;
+      break;
+    case 3:
+      native.erase("reason");
+      break;
+    case 4:
+      native["reason"] = "";
+      break;
+    case 5:
+      native["reason"] = 1;
+      break;
+    case 6:
+      native["reason"] = std::string(2049, 'x');
+      break;
+    case 7:
+      native["reason"] = std::string("bad\0reason", 10);
+      break;
+    case 8:
+      native.erase("diagnostics");
+      break;
+    case 9:
+      native["diagnostics"] = "invalid array";
+      break;
+    case 10:
+      native["diagnostics"] = Array{false};
+      break;
+    case 11:
+      native["diagnostics"] = Array{""};
+      break;
+    case 12:
+      native["diagnostics"] = Array{std::string(513, 'x')};
+      break;
+    case 13:
+      native["diagnostics"] = Array{"1", "2", "3", "4", "5", "6", "7", "8",
+                                    "9"};
+      break;
+    case 14:
+      native["diagnostics"] = Array{std::string("bad\x7ftext", 8)};
+      break;
+    case 15:
+      native["status"] = "recovered"; // A conflicting failure reason remains.
+      break;
+    }
+    Budget budget;
+    const auto result = objcSources(batch, metadata, 8, budget);
+    EXPECT_EQ(number(result.coverage, "method_count"), 1);
+    EXPECT_EQ(number(result.coverage, "recovered_method_count"), 0);
+    const auto &row = object(array(result.coverage, "methods")[0], "method");
+    EXPECT_EQ(str(row, "reason"), kUnavailableObjCDeclaration);
+    EXPECT_FALSE(row.get("native_backend"));
+  }
+}
+
+TEST(MobileIOSNative, NativeBackendSummaryHasAnAggregateBoundAndIsReadOnly) {
+  auto [prototype_batch, prototype_metadata] = objcDiagnosticFixture();
+  unavailableObjCDeclaration(prototype_metadata);
+  Object batch{{"schema_version", 1}, {"pointer_size", 8}, {"methods", Array{}}};
+  Object metadata{{"status", "recovered"}, {"classes", Array{}}};
+  for (unsigned index = 0; index < 64; ++index) {
+    const auto name = "Calculator" + std::to_string(index);
+    auto cls = object(array(prototype_metadata, "classes")[0], "class");
+    cls["name"] = name;
+    auto native = object(array(prototype_batch, "methods")[0], "native");
+    native["class_name"] = name;
+    native["status"] = "unrecovered";
+    native["reason"] = std::string(2048, 'r');
+    Array diagnostics;
+    for (unsigned message = 0; message < 8; ++message)
+      diagnostics.push_back(std::string(512, 'd'));
+    native["diagnostics"] = std::move(diagnostics);
+    batch.getArray("methods")->push_back(std::move(native));
+    metadata.getArray("classes")->push_back(std::move(cls));
+  }
+  const auto original_batch = jsonText(Value(Object(batch)));
+  const auto original_metadata = jsonText(Value(Object(metadata)));
+  Budget budget;
+  const auto result = objcSources(batch, metadata, 8, budget);
+  EXPECT_EQ(number(result.coverage, "method_count"), 64);
+  EXPECT_EQ(number(result.coverage, "recovered_method_count"), 0);
+  EXPECT_EQ(number(result.coverage, "unrecovered_method_count"), 64);
+  size_t summaries = 0, bytes = 0;
+  for (const auto &value : array(result.coverage, "methods")) {
+    const auto &row = object(value, "method");
+    EXPECT_EQ(str(row, "status"), "unrecovered");
+    EXPECT_NE(str(row, "reason").find("required class declaration"),
+              std::string::npos);
+    if (auto backend = row.getObject("native_backend")) {
+      ++summaries;
+      bytes += jsonText(Value(Object(*backend))).size();
+      EXPECT_EQ(str(*backend, "reason"), std::string(2048, 'r'));
+      EXPECT_EQ(array(*backend, "diagnostics").size(), 8U);
+    }
+  }
+  EXPECT_GT(summaries, 0U);
+  EXPECT_LT(summaries, 64U);
+  EXPECT_LE(bytes, 256U * 1024U);
+  EXPECT_EQ(jsonText(Value(Object(batch))), original_batch);
+  EXPECT_EQ(jsonText(Value(Object(metadata))), original_metadata);
+}
+
+TEST(MobileIOSNative, NativeBackendSummaryLeavesSuccessAndBudgetsAuthoritative) {
+  auto [baseline_batch, baseline_metadata] = objcFixture();
+  Budget baseline_budget;
+  auto baseline = objcSources(baseline_batch, baseline_metadata, 8,
+                              baseline_budget);
+  auto [batch, metadata] = objcDiagnosticFixture();
+  Budget successful_budget;
+  const auto successful = objcSources(batch, metadata, 8, successful_budget);
+  EXPECT_EQ(successful.source, baseline.source);
+  EXPECT_EQ(Value(Object(successful.coverage)), Value(Object(baseline.coverage)));
+  EXPECT_EQ(number(successful.coverage, "recovered_method_count"), 1);
+  EXPECT_FALSE(object(array(successful.coverage, "methods")[0], "method")
+                   .get("native_backend"));
+  unavailableObjCDeclaration(metadata);
+  Budget control;
+  const auto before = control.remaining;
+  const auto failed = objcSources(batch, metadata, 8, control);
+  const auto work = before - control.remaining;
+  ASSERT_GT(work, 0U);
+  ASSERT_NE(object(array(failed.coverage, "methods")[0], "method")
+                .getObject("native_backend"),
+            nullptr);
+  Budget insufficient;
+  insufficient.remaining = work - 1;
+  EXPECT_THROW(objcSources(batch, metadata, 8, insufficient), Error);
+  Budget expired;
+  expired.deadline = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+  EXPECT_THROW(objcSources(batch, metadata, 8, expired), Error);
 }
 
 TEST(MobileIOSNative,
