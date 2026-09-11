@@ -1054,11 +1054,15 @@ TEST(MobileIOSNative, NativeBackendSummaryHasAnAggregateBoundAndIsReadOnly) {
 
 TEST(MobileIOSNative,
      NativeBackendSummaryLeavesSuccessAndBudgetsAuthoritative) {
-  auto [baseline_batch, baseline_metadata] = objcFixture();
+  auto [baseline_batch, baseline_metadata] = objcDiagnosticFixture();
   Budget baseline_budget;
   auto baseline =
       objcSources(baseline_batch, baseline_metadata, 8, baseline_budget);
   auto [batch, metadata] = objcDiagnosticFixture();
+  // Keep runtime identity identical: it determines generated source names.
+  // Only the native diagnostic differs between these successful recoveries.
+  (*batch.getArray("methods")->front().getAsObject())["diagnostics"] =
+      Array{"ignored diagnostic on recovered method"};
   Budget successful_budget;
   const auto successful = objcSources(batch, metadata, 8, successful_budget);
   EXPECT_EQ(successful.source, baseline.source);
