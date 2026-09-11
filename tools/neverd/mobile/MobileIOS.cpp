@@ -23,7 +23,8 @@ uint64_t workerInteger(const Object &object, llvm::StringRef key) {
       (text->size() > 1 && text->front() == '0'))
     throw Error("invalid iOS worker integer: " + key.str());
   uint64_t value = 0;
-  auto parsed = std::from_chars(text->data(), text->data() + text->size(), value);
+  auto parsed =
+      std::from_chars(text->data(), text->data() + text->size(), value);
   if (parsed.ec != std::errc{} || parsed.ptr != text->data() + text->size())
     throw Error("invalid iOS worker integer: " + key.str());
   return value;
@@ -42,9 +43,10 @@ Object workerRequestJSON(const WorkerRequest &request) {
       {"architecture", request.architecture},
       {"pointer_size", request.pointer_size},
       {"selected_sha256", request.selected_sha256},
-      {"limits", Object{{"timeout", std::to_string(request.limits.timeout)},
-                        {"max_files", std::to_string(request.limits.max_files)},
-                        {"max_bytes", std::to_string(request.limits.max_bytes)}}},
+      {"limits",
+       Object{{"timeout", std::to_string(request.limits.timeout)},
+              {"max_files", std::to_string(request.limits.max_files)},
+              {"max_bytes", std::to_string(request.limits.max_bytes)}}},
       {"max_functions", std::to_string(request.max_functions)},
       {"remaining", std::to_string(request.remaining)},
       {"output_bytes", std::to_string(request.output_bytes)},
@@ -64,8 +66,8 @@ WorkerRequest parseWorkerRequest(const Object &request) {
   Budget initial(result.limits);
   result.architecture = requiredString(request, "architecture");
   auto pointer_size = request.getInteger("pointer_size");
-  const bool wide = result.architecture == "arm64" ||
-                    result.architecture == "x86_64";
+  const bool wide =
+      result.architecture == "arm64" || result.architecture == "x86_64";
   if ((!wide && result.architecture != "arm" &&
        result.architecture != "i386") ||
       !pointer_size || *pointer_size != (wide ? 8 : 4))
@@ -109,7 +111,7 @@ Object workerResultJSON(const WorkerRequest &request, const Budget &budget,
 }
 
 void mergeWorkerBudget(const Object &result, const WorkerRequest &request,
-                        Budget &budget) {
+                       Budget &budget) {
   budget.check();
   if (result.size() != 8 || result.getInteger("schema_version") != 1 ||
       result.getString("status") != "success" || !result.getObject("report"))
@@ -218,19 +220,18 @@ std::string imageDigest(llvm::ArrayRef<uint8_t> bytes, Budget &budget) {
   return llvm::toHex(digest.final(), true);
 }
 std::string imageDigest(std::string_view bytes, Budget &budget) {
-  return imageDigest(llvm::ArrayRef<uint8_t>(
-                         reinterpret_cast<const uint8_t *>(bytes.data()),
-                         bytes.size()),
-                     budget);
+  return imageDigest(
+      llvm::ArrayRef<uint8_t>(reinterpret_cast<const uint8_t *>(bytes.data()),
+                              bytes.size()),
+      budget);
 }
-std::string nativeText(const char *raw, Budget &budget,
-                       std::string_view what) {
+std::string nativeText(const char *raw, Budget &budget, std::string_view what) {
   std::unique_ptr<const char, decltype(&neverd_free_string)> text(
       raw, neverd_free_string);
   if (!text)
     throw Error(std::string(what) + " returned no text");
-  const auto limit = std::min<uint64_t>(budget.limits.max_bytes,
-                                       std::string().max_size());
+  const auto limit =
+      std::min<uint64_t>(budget.limits.max_bytes, std::string().max_size());
   for (size_t length = 0;; ++length) {
     if (!(length % (64 * 1024)))
       budget.check();
@@ -240,8 +241,8 @@ std::string nativeText(const char *raw, Budget &budget,
       throw Error(std::string(what) + " exceeds its byte budget");
   }
 }
-ios::Value nativeJSON(const char *raw, neverd_session_t session,
-                      Budget &budget, std::string_view what) {
+ios::Value nativeJSON(const char *raw, neverd_session_t session, Budget &budget,
+                      std::string_view what) {
   if (!raw)
     throw Error(std::string(what) + " failed: " +
                 nativeText(neverd_last_error(session), budget, what));
@@ -283,10 +284,10 @@ ios::Object recoverWorkerImage(const ios::WorkerRequest &request,
   auto observe = [](const BinaryImage &image, void *opaque) {
     auto &state = *static_cast<Observation *>(opaque);
     const char *architecture = image.Arch == Arch::AArch64 ? "arm64"
-                               : image.Arch == Arch::X64  ? "x86_64"
-                               : image.Arch == Arch::ARM  ? "arm"
-                               : image.Arch == Arch::X86  ? "i386"
-                                                         : "unknown";
+                               : image.Arch == Arch::X64   ? "x86_64"
+                               : image.Arch == Arch::ARM   ? "arm"
+                               : image.Arch == Arch::X86   ? "i386"
+                                                           : "unknown";
     if (image.Format != BinaryFormat::MachO ||
         architecture != state.request.architecture ||
         (image.is64Bit() ? 8u : 4u) != state.request.pointer_size ||
@@ -305,7 +306,7 @@ ios::Object recoverWorkerImage(const ios::WorkerRequest &request,
   if (!sdk::loadNativeMobileSession(session.get(), pathText(thin).c_str(),
                                     observe, &observation))
     throw Error(nativeText(neverd_last_error(session.get()), budget,
-                            "native session load"));
+                           "native session load"));
   Object outputs = initialOutputs();
   Value native_count(nullptr), objc_recovery(nullptr);
   Array native_limitations;
@@ -355,9 +356,9 @@ ios::Object recoverWorkerImage(const ios::WorkerRequest &request,
       options, staging, thin, array(swift, "symbols"), request.pointer_size,
       budget, [&](std::string_view signatures) {
         // swiftSources owns the NUL-terminated signature string for this call.
-        return nativeJSON(neverd_swift_methods_json(
-                              session.get(), signatures.data(),
-                              request.max_functions),
+        return nativeJSON(neverd_swift_methods_json(session.get(),
+                                                    signatures.data(),
+                                                    request.max_functions),
                           session.get(), budget, "Swift export");
       });
   for (auto &[key, value] : swift_result.outputs)
@@ -375,7 +376,7 @@ ios::Object recoverWorkerImage(const ios::WorkerRequest &request,
                 {"swift_method_recovery", std::move(swift_result.coverage)}};
 }
 void validateWorkerReport(const ios::Object &report, const fs::path &staging,
-                           const ios::WorkerRequest &request, Budget &budget) {
+                          const ios::WorkerRequest &request, Budget &budget) {
   using namespace ios;
   if (report.size() != 7 || !report.getObject("objc_metadata") ||
       !report.getObject("swift_metadata") || !report.getObject("outputs") ||
@@ -403,16 +404,16 @@ void validateWorkerReport(const ios::Object &report, const fs::path &staging,
       throw Error("invalid iOS worker output path");
     workerFile(staging / path->second);
   }
-  for (auto key : {"selected_binary", "objc_metadata", "objc_declarations",
-                   "swift_metadata", "native_source", "native_log",
-                   "objc_method_coverage", "swift_signatures",
-                   "swift_method_coverage"})
+  for (auto key :
+       {"selected_binary", "objc_metadata", "objc_declarations",
+        "swift_metadata", "native_source", "native_log", "objc_method_coverage",
+        "swift_signatures", "swift_method_coverage"})
     if (!outputs.getString(key))
       throw Error("iOS worker omitted a required output");
   auto equalJSON = [&](const char *name, const Object &expected) {
     budget.check();
     auto value = parseJSON(readFile(staging / name, budget.limits.max_bytes),
-                            "iOS worker published metadata");
+                           "iOS worker published metadata");
     if (!value.getAsObject() || *value.getAsObject() != expected)
       throw Error("iOS worker report disagrees with published metadata");
   };
@@ -530,7 +531,8 @@ void validateWorkerReport(const ios::Object &report, const fs::path &staging,
     if (!outputs.get(key) && fs::exists(staging / allowed.at(key)))
       throw Error("iOS worker left an unreported source file");
   budget.check();
-  const auto native = readFile(staging / "sources/native.c", budget.limits.max_bytes);
+  const auto native =
+      readFile(staging / "sources/native.c", budget.limits.max_bytes);
   const auto count = nativeFunctionCount(native);
   auto reported = report.getInteger("native_function_count");
   if (!count || !reported || *reported < 0 || uint64_t(*reported) != count)
@@ -539,8 +541,8 @@ void validateWorkerReport(const ios::Object &report, const fs::path &staging,
       objcHeader(objc, request.pointer_size))
     throw Error("iOS worker declarations disagree with runtime metadata");
   if (imageDigest(readFile(staging / "artifacts/selected.macho",
-                            budget.limits.max_bytes), budget) !=
-      request.selected_sha256)
+                           budget.limits.max_bytes),
+                  budget) != request.selected_sha256)
     throw Error("iOS worker changed the selected image");
   checkStringArray(array(report, "native_limitations"), budget);
 }
@@ -625,8 +627,10 @@ llvm::json::Object recoverIOSImpl(const Options &options,
     request.remaining = budget.remaining;
     request.output_bytes = budget.output_bytes;
     budget.check();
-    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
-        budget.deadline - std::chrono::steady_clock::now()).count();
+    const auto remaining =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            budget.deadline - std::chrono::steady_clock::now())
+            .count();
     if (remaining <= 0)
       throw Error("mobile analysis exceeded its time budget");
     request.time_remaining_ms = static_cast<uint64_t>(remaining);
@@ -638,17 +642,18 @@ llvm::json::Object recoverIOSImpl(const Options &options,
     writeFile(staging / WorkerRequestPath, text);
     phases.enter("native_export");
     const std::vector<std::string> argv{options.executable, "mobile",
-                                       "--internal-ios-worker",
-                                       pathText(staging)};
+                                        "--internal-ios-worker",
+                                        pathText(staging)};
     runTool(argv, staging / "logs/native.log", toolTimeout(budget), staging,
             budget.limits);
     workerFile(staging / WorkerResultPath);
-    auto value = parseJSON(readFile(staging / WorkerResultPath,
-                                    budget.limits.max_bytes),
-                           "iOS worker result");
+    auto value =
+        parseJSON(readFile(staging / WorkerResultPath, budget.limits.max_bytes),
+                  "iOS worker result");
     const auto &result = object(value, "iOS worker result");
     // Merge the structurally validated envelope before charging validation
-    // work. Any later failure still aborts the parent's publication transaction.
+    // work. Any later failure still aborts the parent's publication
+    // transaction.
     mergeWorkerBudget(result, request, budget);
     const auto &report = *result.getObject("report");
     phases.enter("worker_validation");
@@ -666,8 +671,8 @@ llvm::json::Object recoverIOSImpl(const Options &options,
   phases.enter("output_publication");
   if (options.metadata_only) {
     publishJSON(staging / "metadata/objc.json", objc, budget);
-    publish(staging / "metadata/objc.h", objcHeader(objc, selection.pointer_size),
-            budget);
+    publish(staging / "metadata/objc.h",
+            objcHeader(objc, selection.pointer_size), budget);
   }
   Object bundle;
   for (auto key :
@@ -733,26 +738,30 @@ void ios::runIOSWorker(const fs::path &staging) {
         throw Error("iOS worker workspace directory is unavailable");
     workerFile(staging / WorkerRequestPath);
     workerFile(staging / "artifacts/selected.macho");
-    auto value = parseJSON(readFile(staging / WorkerRequestPath,
-                                    WorkerRequestByteLimit),
-                           "iOS worker request");
-    const auto request = parseWorkerRequest(object(value, "iOS worker request"));
+    auto value =
+        parseJSON(readFile(staging / WorkerRequestPath, WorkerRequestByteLimit),
+                  "iOS worker request");
+    const auto request =
+        parseWorkerRequest(object(value, "iOS worker request"));
     Budget budget(request.limits);
     budget.remaining = request.remaining;
     budget.output_bytes = request.output_bytes;
     const auto now = std::chrono::steady_clock::now();
-    const auto available = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::time_point::max() - now).count();
+    const auto available =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::time_point::max() - now)
+            .count();
     if (available < 0 || request.time_remaining_ms > uint64_t(available))
       throw Error("iOS worker deadline is not representable");
-    budget.deadline = std::min(
-        budget.deadline,
-        now + std::chrono::milliseconds(request.time_remaining_ms));
-    for (auto name : {"artifacts/ios-worker-result.json", "metadata/objc.json",
-                      "metadata/swift.json", "metadata/objc.h",
-                      "metadata/objc-methods.json", "metadata/swift-methods.json",
-                      "metadata/swift-signatures.json", "sources/native.c",
-                      "sources/objc.m", "sources/swift.swift"}) {
+    budget.deadline =
+        std::min(budget.deadline,
+                 now + std::chrono::milliseconds(request.time_remaining_ms));
+    for (auto name :
+         {"artifacts/ios-worker-result.json", "metadata/objc.json",
+          "metadata/swift.json", "metadata/objc.h",
+          "metadata/objc-methods.json", "metadata/swift-methods.json",
+          "metadata/swift-signatures.json", "sources/native.c",
+          "sources/objc.m", "sources/swift.swift"}) {
       std::error_code error;
       auto status = fs::symlink_status(staging / name, error);
       if ((error && error != std::errc::no_such_file_or_directory) ||
@@ -773,8 +782,8 @@ void ios::runIOSWorker(const fs::path &staging) {
   } catch (const Error &error) {
     std::optional<Error> diagnostic;
     try {
-      diagnostic.emplace(std::string(error.what()) + "\n[neverd-ios-worker-phases] " +
-                         phases.diagnostic());
+      diagnostic.emplace(std::string(error.what()) +
+                         "\n[neverd-ios-worker-phases] " + phases.diagnostic());
     } catch (...) {
       // Optional diagnostics never replace the original worker failure.
     }

@@ -269,24 +269,26 @@ int neverd_session_load(neverd_session_t Sess, const char *Path) {
     Trace.finish(false);
     return 0;
   }
-  const int Result = finishSessionLoad(Sess, *S, std::move(*ImgOrErr),
-                                       std::move(P),
-                                       std::move(SanitizeSourcePath));
+  const int Result =
+      finishSessionLoad(Sess, *S, std::move(*ImgOrErr), std::move(P),
+                        std::move(SanitizeSourcePath));
   Trace.finish(Result != 0);
   return Result;
 }
 
-int neverd::sdk::loadNativeMobileSession(
-    neverd_session_t Sess, const char *UTF8Path,
-    NativeMobileMetadataObserver Observer, void *Context) {
+int neverd::sdk::loadNativeMobileSession(neverd_session_t Sess,
+                                         const char *UTF8Path,
+                                         NativeMobileMetadataObserver Observer,
+                                         void *Context) {
   auto *S = toSession(Sess);
   if (!S)
     return 0;
   NativePhaseTrace Trace(NativePhaseTrace::Phase::SessionLoad);
   S->clearError();
   if (!UTF8Path || !*UTF8Path || !Observer) {
-    S->setError(!UTF8Path || !*UTF8Path ? "input path is empty"
-                                     : "mobile metadata observer is missing");
+    S->setError(!UTF8Path || !*UTF8Path
+                    ? "input path is empty"
+                    : "mobile metadata observer is missing");
     Trace.finish(false);
     return 0;
   }

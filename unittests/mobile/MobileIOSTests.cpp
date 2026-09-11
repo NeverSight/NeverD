@@ -1886,10 +1886,8 @@ TEST(MobileIOSNative, WorkerRequestPreservesOriginalLimitsAndSpentCounters) {
   for (auto architecture : {"arm64", "x86_64", "arm", "i386"}) {
     auto request = workerRequestFixture(parent);
     request.architecture = architecture;
-    request.pointer_size = request.architecture == "arm" ||
-                                   request.architecture == "i386"
-                               ? 4
-                               : 8;
+    request.pointer_size =
+        request.architecture == "arm" || request.architecture == "i386" ? 4 : 8;
     request.max_functions = std::numeric_limits<size_t>::max();
     const auto encoded = workerRequestJSON(request);
     const auto text = jsonText(Value(Object(encoded)));
@@ -1907,7 +1905,8 @@ TEST(MobileIOSNative, WorkerRequestPreservesOriginalLimitsAndSpentCounters) {
     EXPECT_EQ(decoded.time_remaining_ms, 1234u);
     EXPECT_EQ(decoded.max_functions, std::numeric_limits<size_t>::max());
     if constexpr (sizeof(size_t) > sizeof(unsigned)) {
-      request.max_functions = uint64_t(std::numeric_limits<unsigned>::max()) + 1;
+      request.max_functions =
+          uint64_t(std::numeric_limits<unsigned>::max()) + 1;
       EXPECT_EQ(parseWorkerRequest(workerRequestJSON(request)).max_functions,
                 uint64_t(std::numeric_limits<unsigned>::max()) + 1);
     }
@@ -1917,10 +1916,10 @@ TEST(MobileIOSNative, WorkerRequestPreservesOriginalLimitsAndSpentCounters) {
 TEST(MobileIOSNative, WorkerRequestRejectsNoncanonicalAndRenewedBudgets) {
   Budget parent({17, 456, 9000000});
   const auto valid = workerRequestJSON(workerRequestFixture(parent));
-  for (auto field : {"max_functions", "remaining", "output_bytes",
-                     "time_remaining_ms"}) {
-    for (auto spelling : {"", "00", "+1", "-1", "1x", "1.0", " 1",
-                           "18446744073709551616"}) {
+  for (auto field :
+       {"max_functions", "remaining", "output_bytes", "time_remaining_ms"}) {
+    for (auto spelling :
+         {"", "00", "+1", "-1", "1x", "1.0", " 1", "18446744073709551616"}) {
       SCOPED_TRACE(std::string(field) + ":" + spelling);
       Object malformed(valid);
       malformed[field] = spelling;
@@ -1944,19 +1943,45 @@ TEST(MobileIOSNative, WorkerRequestRejectsNoncanonicalAndRenewedBudgets) {
     SCOPED_TRACE(mutation);
     Object malformed(valid);
     switch (mutation) {
-    case 0: malformed["remaining"] = "20000001"; break;
-    case 1: malformed["output_bytes"] = "9000001"; break;
-    case 2: malformed["time_remaining_ms"] = "0"; break;
-    case 3: malformed["time_remaining_ms"] = "17001"; break;
-    case 4: malformed["architecture"] = "auto"; break;
-    case 5: malformed["pointer_size"] = 4; break;
-    case 6: malformed["selected_sha256"] = std::string(64, 'A'); break;
-    case 7: malformed["selected_sha256"] = std::string(63, 'a'); break;
-    case 8: malformed["schema_version"] = 2; break;
-    case 9: malformed["extra"] = "unknown"; break;
-    case 10: (*malformed.getObject("limits"))["timeout"] = "0"; break;
-    case 11: (*malformed.getObject("limits"))["max_bytes"] = "0"; break;
-    case 12: (*malformed.getObject("limits"))["extra"] = "0"; break;
+    case 0:
+      malformed["remaining"] = "20000001";
+      break;
+    case 1:
+      malformed["output_bytes"] = "9000001";
+      break;
+    case 2:
+      malformed["time_remaining_ms"] = "0";
+      break;
+    case 3:
+      malformed["time_remaining_ms"] = "17001";
+      break;
+    case 4:
+      malformed["architecture"] = "auto";
+      break;
+    case 5:
+      malformed["pointer_size"] = 4;
+      break;
+    case 6:
+      malformed["selected_sha256"] = std::string(64, 'A');
+      break;
+    case 7:
+      malformed["selected_sha256"] = std::string(63, 'a');
+      break;
+    case 8:
+      malformed["schema_version"] = 2;
+      break;
+    case 9:
+      malformed["extra"] = "unknown";
+      break;
+    case 10:
+      (*malformed.getObject("limits"))["timeout"] = "0";
+      break;
+    case 11:
+      (*malformed.getObject("limits"))["max_bytes"] = "0";
+      break;
+    case 12:
+      (*malformed.getObject("limits"))["extra"] = "0";
+      break;
     }
     EXPECT_THROW(parseWorkerRequest(malformed), Error);
   }
@@ -1998,18 +2023,42 @@ TEST(MobileIOSNative, WorkerEnvelopeRejectsWrongIdentityAndCounterReversal) {
     Budget parent(initial);
     Object result(valid);
     switch (mutation) {
-    case 0: result["architecture"] = "x86_64"; break;
-    case 1: result["pointer_size"] = 4; break;
-    case 2: result["selected_sha256"] = std::string(64, 'b'); break;
-    case 3: result["remaining"] = std::to_string(request.remaining + 1); break;
-    case 4: result["output_bytes"] = "788"; break;
-    case 5: result["output_bytes"] = "9000001"; break;
-    case 6: result["remaining"] = "01"; break;
-    case 7: result["status"] = "failed"; break;
-    case 8: result.erase("report"); break;
-    case 9: result["report"] = Array{}; break;
-    case 10: result["schema_version"] = 2; break;
-    case 11: result["extra"] = "unknown"; break;
+    case 0:
+      result["architecture"] = "x86_64";
+      break;
+    case 1:
+      result["pointer_size"] = 4;
+      break;
+    case 2:
+      result["selected_sha256"] = std::string(64, 'b');
+      break;
+    case 3:
+      result["remaining"] = std::to_string(request.remaining + 1);
+      break;
+    case 4:
+      result["output_bytes"] = "788";
+      break;
+    case 5:
+      result["output_bytes"] = "9000001";
+      break;
+    case 6:
+      result["remaining"] = "01";
+      break;
+    case 7:
+      result["status"] = "failed";
+      break;
+    case 8:
+      result.erase("report");
+      break;
+    case 9:
+      result["report"] = Array{};
+      break;
+    case 10:
+      result["schema_version"] = 2;
+      break;
+    case 11:
+      result["extra"] = "unknown";
+      break;
     }
     EXPECT_THROW(mergeWorkerBudget(result, request, parent), Error);
     EXPECT_EQ(parent.remaining, initial.remaining);
@@ -2020,14 +2069,24 @@ TEST(MobileIOSNative, WorkerEnvelopeRejectsWrongIdentityAndCounterReversal) {
     SCOPED_TRACE(mutation);
     Budget parent(initial);
     switch (mutation) {
-    case 0: --parent.remaining; break;
-    case 1: ++parent.output_bytes; break;
-    case 2: ++parent.limits.timeout; break;
-    case 3: ++parent.limits.max_files; break;
-    case 4: ++parent.limits.max_bytes; break;
+    case 0:
+      --parent.remaining;
+      break;
+    case 1:
+      ++parent.output_bytes;
+      break;
+    case 2:
+      ++parent.limits.timeout;
+      break;
+    case 3:
+      ++parent.limits.max_files;
+      break;
+    case 4:
+      ++parent.limits.max_bytes;
+      break;
     case 5:
-      parent.deadline = std::chrono::steady_clock::now() -
-                        std::chrono::seconds(1);
+      parent.deadline =
+          std::chrono::steady_clock::now() - std::chrono::seconds(1);
       break;
     }
     const auto remaining = parent.remaining;

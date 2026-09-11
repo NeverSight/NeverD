@@ -12,9 +12,9 @@ int runMobile(const char *Argv0) {
   try {
     if (MobileInternalIOSWorker) {
       if (!OutputFile.empty() || MobilePlatform != "auto" ||
-          MobileArch != "auto" || MobileMetadataOnly || !MobileBackend.empty() ||
-          !MobileArtifact.empty() || MaxFunc || JsonOutput ||
-          MobileTimeout.getNumOccurrences() ||
+          MobileArch != "auto" || MobileMetadataOnly ||
+          !MobileBackend.empty() || !MobileArtifact.empty() || MaxFunc ||
+          JsonOutput || MobileTimeout.getNumOccurrences() ||
           MobileMaxFiles.getNumOccurrences() ||
           MobileMaxBytes.getNumOccurrences())
         throw mobile::Error("iOS worker accepts only its staging directory");

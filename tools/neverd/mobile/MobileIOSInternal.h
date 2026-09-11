@@ -34,7 +34,7 @@ Object workerResultJSON(const WorkerRequest &request, const Budget &budget,
 // Validate the envelope and merge once before inspecting the report under the
 // remaining combined budget. Report failure still aborts parent publication.
 void mergeWorkerBudget(const Object &result, const WorkerRequest &request,
-                        Budget &budget);
+                       Budget &budget);
 void runIOSWorker(const fs::path &staging);
 inline uint64_t toolTimeout(Budget &budget) {
   budget.check();

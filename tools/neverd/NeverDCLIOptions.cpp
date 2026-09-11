@@ -58,8 +58,8 @@ cl::opt<bool> MobileMetadataOnly(
     "metadata-only",
     cl::desc("Export iOS metadata without native C decompilation"),
     cl::sub(MobileCmd));
-cl::opt<bool> MobileInternalIOSWorker(
-    "internal-ios-worker", cl::Hidden, cl::init(false), cl::sub(MobileCmd));
+cl::opt<bool> MobileInternalIOSWorker("internal-ios-worker", cl::Hidden,
+                                      cl::init(false), cl::sub(MobileCmd));
 cl::opt<unsigned> MobileTimeout(
     "timeout", cl::desc("Seconds for builtin analysis or each backend process"),
     cl::init(300), cl::sub(MobileCmd));

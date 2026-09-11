@@ -39,7 +39,6 @@ public:
   }
 };
 
-
 // An owned executable with one defined text symbol, not an executable payload
 // for the test host. Both decoder architectures are exercised on every host.
 std::string nativeMachO(bool AArch64) {
@@ -149,11 +148,10 @@ protected:
         // Preserve the normal DLL/plugin-host search environment. This test
         // proves mobile needs no Python helper, not that the optional embedded
         // Python plugin host has no native runtime dependency.
-        runTool(
-            command(Executable, Source, Output, Extra), Log, 30, {}, {},
-            {{"NEVERD_PYTHON", pathText(Root / "missing interpreter")},
-             {"NEVERD_JADX", pathText(Root / "missing compatibility tool")},
-             {"NEVERD_NATIVE_PHASES", "1"}});
+        runTool(command(Executable, Source, Output, Extra), Log, 30, {}, {},
+                {{"NEVERD_PYTHON", pathText(Root / "missing interpreter")},
+                 {"NEVERD_JADX", pathText(Root / "missing compatibility tool")},
+                 {"NEVERD_NATIVE_PHASES", "1"}});
       } catch (const Error &E) {
         Rejected = true;
         EXPECT_TRUE(Failure) << E.what();
@@ -344,10 +342,9 @@ TEST_F(MobileCLITest, RelocatedIOSWorkerKeepsOneSessionAndMetadataAcrossISAs) {
     const auto Published =
         parseJSON(readFile(Output / "report.json", 1024 * 1024), "report");
     EXPECT_EQ(Report, Published);
-    const auto Metadata =
-        invoke(Executable, Source, Control, false,
-               {"--platform=ios", "--arch=" + Architecture, "--metadata-only",
-                "--timeout=20"});
+    const auto Metadata = invoke(Executable, Source, Control, false,
+                                 {"--platform=ios", "--arch=" + Architecture,
+                                  "--metadata-only", "--timeout=20"});
     const auto *ControlObject = Metadata.getAsObject();
     ASSERT_NE(ControlObject, nullptr);
     EXPECT_EQ(ControlObject->getBoolean("metadata_only"), true);
@@ -367,8 +364,9 @@ TEST_F(MobileCLITest, RelocatedIOSWorkerKeepsOneSessionAndMetadataAcrossISAs) {
       SCOPED_TRACE(Name);
       const auto WorkerMetadata = parseJSON(
           readFile(Output / "metadata" / Name, 1024 * 1024), "worker metadata");
-      const auto DirectMetadata = parseJSON(
-          readFile(Control / "metadata" / Name, 1024 * 1024), "direct metadata");
+      const auto DirectMetadata =
+          parseJSON(readFile(Control / "metadata" / Name, 1024 * 1024),
+                    "direct metadata");
       EXPECT_EQ(WorkerMetadata, DirectMetadata);
     }
     noStaging();

@@ -14,9 +14,9 @@ namespace sdk {
 // leave any previously loaded session intact.
 using NativeMobileMetadataObserver = void (*)(const BinaryImage &, void *);
 NEVERD_API int loadNativeMobileSession(neverd_session_t Session,
-                                      const char *UTF8Path,
-                                      NativeMobileMetadataObserver Observer,
-                                      void *Context);
+                                       const char *UTF8Path,
+                                       NativeMobileMetadataObserver Observer,
+                                       void *Context);
 
 } // namespace sdk
 } // namespace neverd
