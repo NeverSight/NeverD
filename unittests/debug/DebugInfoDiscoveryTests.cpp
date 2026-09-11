@@ -913,6 +913,114 @@ TEST(LoadDebugInfoTest, ELFMapKeepsSymbolsUnderADotPrefixedObjectPath) {
   EXPECT_EQ(Funcs[1].Name, "emit_record");
 }
 
+TEST(LoadDebugInfoTest, ELFMapPreservesCompleteDemangledSymbolNames) {
+  const llvm::StringRef Maps[] = {
+      "     VMA      LMA     Size Align Out     In      Symbol\n"
+      "    1000     1000       a0     1 .text\n"
+      "    1000     1000       a0     1         .build with "
+      "spaces/probe.o:(.text)\n"
+      "    1000     1000       10     1                 demo::mix(int, long)\n"
+      "    1020     1020       11     1                 operator new(unsigned "
+      "long)\n"
+      "    1040     1040       12     1                 "
+      "demo::Box::operator=(demo::Box const&)\n"
+      "    1060     1060       13     1                 (anonymous "
+      "namespace)::work(int, long)\n"
+      "    1080     1080       14     1                 demo::(anonymous "
+      "namespace)::work(int, long)\n"
+      "    3000     3000       20     1 .rodata\n"
+      "    3000     3000       20     1         probe.o:(.rodata)\n"
+      "    3000     3000        8     1                 demo::table\n",
+      "             VMA              LMA     Size Align Out     In      "
+      "Symbol\n"
+      "            1000             1000 100000080     1 .text\n"
+      "            1000             1000 100000080     1         .build with "
+      "spaces/probe.o:(.text)\n"
+      "            1000             1000       10     1                 "
+      "demo::mix(int, long)\n"
+      "            1020             1020       11     1                 "
+      "operator new(unsigned long)\n"
+      "            1040             1040       12     1                 "
+      "demo::Box::operator=(demo::Box const&)\n"
+      "            1060             1060       13     1                 "
+      "(anonymous namespace)::work(int, long)\n"
+      "            1080             1080       14     1                 "
+      "demo::(anonymous namespace)::work(int, long)\n"
+      "       200000000        200000000       20     1 .rodata\n"
+      "       200000000        200000000       20     1         "
+      "probe.o:(.rodata)\n"
+      "       200000000        200000000        8     1                 "
+      "demo::table\n"};
+  const llvm::StringRef Names[] = {
+      "demo::mix(int, long)", "operator new(unsigned long)",
+      "demo::Box::operator=(demo::Box const&)",
+      "(anonymous namespace)::work(int, long)",
+      "demo::(anonymous namespace)::work(int, long)"};
+  for (unsigned Layout = 0; Layout < 2; ++Layout) {
+    SCOPED_TRACE(Layout);
+    ScratchDir Dir;
+    DebugInfoRequest Req;
+    Req.MapPath = Dir.write("names.elf.map", Maps[Layout]);
+    BinaryImage Img;
+    Img.Format = BinaryFormat::ELF;
+    Img.Arch = Layout == 0 ? Arch::X86 : Arch::X64;
+    Img.Bits = Layout == 0 ? Bitness::Bits32 : Bitness::Bits64;
+    DebugInfoResult R = loadDebugInfo(Dir.path("names.elf"), Img, Req);
+    ASSERT_TRUE(static_cast<bool>(R));
+    EXPECT_EQ(R.Kind, DebugInfoKind::Map);
+    std::vector<FunctionSym> Funcs = R.Context->allFunctions();
+    ASSERT_EQ(Funcs.size(), 5u);
+    for (unsigned I = 0; I < 5; ++I) {
+      EXPECT_EQ(Funcs[I].Name, Names[I].str());
+      EXPECT_EQ(Funcs[I].Addr, 0x1000u + I * 0x20u);
+      EXPECT_EQ(Funcs[I].Size, 0x10u + I);
+    }
+  }
+}
+
+TEST(LoadDebugInfoTest, ELFMapDistinguishesSymbolsFromScriptAndInputRows) {
+  constexpr llvm::StringLiteral Map =
+      "             VMA              LMA     Size Align Out     In      "
+      "Symbol\n"
+      "            1000             1000       32    16 .text\n"
+      "            1000             1000       10    16         .build with "
+      "spaces/first.o:(.text)\n"
+      "            1000             1000       10     1                 "
+      "demo::Box::operator=(demo::Box const&)\n"
+      "            1010             1010        0     1         inner=.\n"
+      "            1010             1010        0     1         . = ALIGN(16)\n"
+      "            1010             1010        1     1         BYTE(0)\n"
+      "            1020             1020       12    16         "
+      "second.o:(.text)\n"
+      "            1020             1020       12     1                 "
+      "demo::mix(int, long)\n"
+      "            1032             1032        0     1 alias=.\n"
+      "            1032             1032        e     1 . = ALIGN(16)\n"
+      "            2000             2000       20    16 my_data\n"
+      "            2000             2000       20     1         "
+      "probe.o:(my_data)\n"
+      "            2000             2000        8     1                 "
+      "data_symbol\n";
+  ScratchDir Dir;
+  DebugInfoRequest Req;
+  Req.MapPath = Dir.write("rows.elf.map", Map);
+  BinaryImage Img;
+  Img.Format = BinaryFormat::ELF;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  DebugInfoResult R = loadDebugInfo(Dir.path("rows.elf"), Img, Req);
+  ASSERT_TRUE(static_cast<bool>(R));
+  EXPECT_EQ(R.Kind, DebugInfoKind::Map);
+  std::vector<FunctionSym> Funcs = R.Context->allFunctions();
+  ASSERT_EQ(Funcs.size(), 2u);
+  EXPECT_EQ(Funcs[0].Name, "demo::Box::operator=(demo::Box const&)");
+  EXPECT_EQ(Funcs[0].Addr, 0x1000u);
+  EXPECT_EQ(Funcs[0].Size, 0x10u);
+  EXPECT_EQ(Funcs[1].Name, "demo::mix(int, long)");
+  EXPECT_EQ(Funcs[1].Addr, 0x1020u);
+  EXPECT_EQ(Funcs[1].Size, 0x12u);
+}
+
 TEST(LoadDebugInfoTest, MissingExplicitPDBIsAnError) {
   ScratchDir Dir;
 
