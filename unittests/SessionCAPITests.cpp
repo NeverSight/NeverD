@@ -216,6 +216,32 @@ protected:
     EXPECT_EQ(neverd_sig_match_count(Session), 1);
   }
 
+  void expectQueryJSONFileSpelling(const std::string &Input) {
+    ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1)
+        << takeString(neverd_last_error(Session));
+    EXPECT_EQ(takeString(neverd_session_file_path(Session)), Input);
+
+    auto Headers = llvm::json::parse(takeString(neverd_headers_json(Session)));
+    ASSERT_TRUE(static_cast<bool>(Headers))
+        << llvm::toString(Headers.takeError());
+    const auto *HeaderObject = Headers->getAsObject();
+    ASSERT_NE(HeaderObject, nullptr);
+    EXPECT_EQ(HeaderObject->getString("file_path"), Input);
+
+    auto Dashboard =
+        llvm::json::parse(takeString(neverd_dashboard_json(Session)));
+    ASSERT_TRUE(static_cast<bool>(Dashboard))
+        << llvm::toString(Dashboard.takeError());
+    const auto *DashboardObject = Dashboard->getAsObject();
+    ASSERT_NE(DashboardObject, nullptr);
+    const auto *File = DashboardObject->getObject("file");
+    ASSERT_NE(File, nullptr);
+    EXPECT_EQ(File->getString("path"), Input);
+    EXPECT_EQ(File->getString("name"),
+              std::filesystem::path(Input).filename().string());
+    EXPECT_EQ(takeString(neverd_session_file_path(Session)), Input);
+  }
+
   std::string readSidecar(std::string_view Name) {
     std::ifstream Input(Directory / Name, std::ios::binary);
     EXPECT_TRUE(Input.is_open());
@@ -250,6 +276,20 @@ protected:
   std::filesystem::path Directory;
   neverd_session_t Session = nullptr;
 };
+
+TEST_F(SessionCAPITest, QueryJSONPreservesASCIIFileSpelling) {
+  const auto Input = write("query sample.elf", makeNamedNativeELF("entry"));
+  expectQueryJSONFileSpelling(Input);
+}
+
+#ifndef _WIN32
+TEST_F(SessionCAPITest, QueryJSONPreservesUTF8FileSpelling) {
+  // Valid UTF-8 bytes exercise the POSIX path spelling contract.
+  const auto Input = write("r\xc3\xa9sum\xc3\xa9-\xe5\x85\xa5\xe5\x8f\xa3.elf",
+                           makeNamedNativeELF("entry"));
+  expectQueryJSONFileSpelling(Input);
+}
+#endif
 
 TEST_F(SessionCAPITest, EntryPointsIncludeEVMZeroAddress) {
   const std::string Input = write("entry.evm", "00");
