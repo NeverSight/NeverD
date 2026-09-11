@@ -1443,8 +1443,8 @@ struct BinaryImage {
       return false;
     }
     const bool Accepted = mergeImportStorageSlot(
-        ImportStorageSlots, ConflictingImportStorageSlots, SlotVA, Name,
-        Addend, Evidence);
+        ImportStorageSlots, ConflictingImportStorageSlots, SlotVA, Name, Addend,
+        Evidence);
     if (!Accepted)
       DyldBindSlots.erase(SlotVA);
     return Accepted;
@@ -1469,13 +1469,14 @@ struct BinaryImage {
     auto It = DyldBindSlots.find(SlotVA);
     if (It != DyldBindSlots.end()) {
       const ImportBindSlot &Existing = It->second;
-      if (Existing.Name != Incoming.Name || Existing.Addend != Incoming.Addend ||
+      if (Existing.Name != Incoming.Name ||
+          Existing.Addend != Incoming.Addend ||
           Existing.Module != Incoming.Module ||
           Existing.WeakImport != Incoming.WeakImport)
         return Reject();
     }
     if (!recordImportStorageSlot(SlotVA, Incoming.Name, Incoming.Addend,
-                                  ImportStorageEvidence::LoaderBind))
+                                 ImportStorageEvidence::LoaderBind))
       return Reject();
     if (It == DyldBindSlots.end())
       DyldBindSlots.emplace(SlotVA, std::move(Incoming));

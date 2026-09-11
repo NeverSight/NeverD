@@ -334,10 +334,11 @@ void parseChainedFixupsRebases(const uint8_t *BasePtr, size_t FileSize,
                                                    EffectiveAddend)) {
               if (Img.isValidImportStorageSlot(ChainVA, Record.Name)) {
                 detail::clearLocalPointerClassification(Img, ChainVA);
-                if (Img.recordDyldBindSlot(ChainVA, Record.Name, EffectiveAddend,
-                                            Record.Module, Record.WeakImport)) {
+                if (Img.recordDyldBindSlot(ChainVA, Record.Name,
+                                           EffectiveAddend, Record.Module,
+                                           Record.WeakImport)) {
                   joinImportSlot(Img, Record.Name, Record.DisplayModule,
-                                  ChainVA);
+                                 ChainVA);
                   ++NumRecorded;
                 }
               }

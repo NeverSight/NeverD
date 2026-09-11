@@ -55,8 +55,8 @@ inline bool isEmptyStructSourceContext(const SwiftRecoveredType &T) {
 /// This is a source dependency, never an ordinary method or callable ABI hint.
 /// The existing native proof owns the exact accessor identity and effects.
 inline bool bindsEmptyStructSourceContext(const SwiftRuntimeSourceRequest &R,
-                                         const SwiftRuntimeSourceProof &P,
-                                         const SwiftRecoveredType &T) {
+                                          const SwiftRuntimeSourceProof &P,
+                                          const SwiftRecoveredType &T) {
   return R.Kind == SwiftRuntimeSourceKind::TypeMetadataAccessor && P.Proven &&
          P.ProjectionKind == "type_metadata_accessor" &&
          isEmptyStructSourceContext(T) &&
@@ -64,9 +64,10 @@ inline bool bindsEmptyStructSourceContext(const SwiftRuntimeSourceRequest &R,
          P.Descriptor == T.Descriptor && P.Metadata == T.Metadata;
 }
 
-inline EmptyStructSourceContexts collectEmptyStructSourceContexts(
-    const RuntimeRequests &Requests, const RuntimeProofs &Proofs,
-    const std::vector<SwiftRecoveredType> &Types) {
+inline EmptyStructSourceContexts
+collectEmptyStructSourceContexts(const RuntimeRequests &Requests,
+                                 const RuntimeProofs &Proofs,
+                                 const std::vector<SwiftRecoveredType> &Types) {
   if (Requests.size() != Proofs.size())
     throw std::invalid_argument(
         "Swift nominal source inventory dimensions disagree");
@@ -293,8 +294,7 @@ inline RuntimeProjectionPlan planRuntimeProjections(
       Candidates.insert(I);
   }
   auto Nominal = [&](size_t I) -> const SwiftRecoveredType * {
-    const auto Found =
-        Nominals.find(propertyContext(Requests[I]->Signature));
+    const auto Found = Nominals.find(propertyContext(Requests[I]->Signature));
     return Found != Nominals.end() && Proofs[I] &&
                    bindsEmptyStructSourceContext(*Requests[I], *Proofs[I],
                                                  Found->second)

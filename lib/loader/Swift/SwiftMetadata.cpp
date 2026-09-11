@@ -59,7 +59,8 @@ class Reader {
                         "ambiguous fixups");
     const va_t Slot = Metadata - 8;
     if (!Data.bytes(Slot, 8))
-      throw Unsupported("Swift empty struct value-witness table is unavailable");
+      throw Unsupported(
+          "Swift empty struct value-witness table is unavailable");
     const auto Binding = Image.DyldBindSlots.find(Slot);
     const auto Canonical = Imports.Slots.find(Slot);
     // Model the ABI declared by a strong two-level reference to the standard
@@ -84,7 +85,8 @@ class Reader {
                         "or ambiguous");
     const auto Table = Data.pointer(Slot);
     if (!Table || !*Table || *Table % 8 || !Data.bytes(*Table, 88))
-      throw Unsupported("Swift empty struct value-witness table is unavailable");
+      throw Unsupported(
+          "Swift empty struct value-witness table is unavailable");
     // The 64-bit ABI places size, stride, flags, and extra-inhabitant count
     // after eight required function pointers. Validate the declared storage
     // and value traits; this does not prove those functions' implementations.

@@ -486,9 +486,10 @@ TEST(SwiftRuntimeProjection,
       T.Alignment = 8;
       break;
     case 14:
-      T.Fields.push_back(
-          {"value", {SwiftSourceType::Kind::Integer, "Int64", 64, true},
-           0, true});
+      T.Fields.push_back({"value",
+                          {SwiftSourceType::Kind::Integer, "Int64", 64, true},
+                          0,
+                          true});
       break;
     case 15:
       T.Kind = "class";
@@ -638,9 +639,9 @@ TEST(SwiftRuntimeProjection,
     EXPECT_EQ(C.Methods, (std::set<size_t>{0}));
     EXPECT_EQ(C.Nominals, (std::set<size_t>{0}));
   }
-  const auto C = namespaceConflicts(
-      {}, {{"Demo", "struct", "Empty"}, {"Other", "struct", "Empty"},
-           {"Demo", "struct", "Independent"}});
+  const auto C = namespaceConflicts({}, {{"Demo", "struct", "Empty"},
+                                         {"Other", "struct", "Empty"},
+                                         {"Demo", "struct", "Independent"}});
   EXPECT_TRUE(C.Methods.empty());
   EXPECT_EQ(C.Nominals, (std::set<size_t>{0, 1}));
 }
@@ -652,8 +653,7 @@ TEST(SwiftRuntimeProjection,
   S.ContextName = "Empty";
   S.ContextFields.clear();
   F.Signatures[1] = S;
-  const std::vector<NominalSourceContext> Nominals{
-      {"Demo", "struct", "Empty"}};
+  const std::vector<NominalSourceContext> Nominals{{"Demo", "struct", "Empty"}};
   auto C = namespaceConflicts(F.Signatures, Nominals);
   EXPECT_TRUE(C.Methods.empty());
   EXPECT_TRUE(C.Nominals.empty());
@@ -661,8 +661,7 @@ TEST(SwiftRuntimeProjection,
                                         F.collect());
   EXPECT_EQ(P.Recovered, (std::set<size_t>{0}));
   EXPECT_TRUE(P.NominalContexts.empty());
-  const std::string Member =
-      "    func value() -> Swift.Int64 { return 7 }\n";
+  const std::string Member = "    func value() -> Swift.Int64 { return 7 }\n";
   EXPECT_EQ(assemblePropertyContext(S, {{&S, Member}}),
             "struct `Empty` {\n" + Member + "\n}\n");
 

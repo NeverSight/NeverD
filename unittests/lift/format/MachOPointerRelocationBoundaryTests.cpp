@@ -7583,10 +7583,11 @@ TEST(MachOChainedPointerBoundary,
 
 // Table index 0 is a decoy; selected table index 1 has an independent library
 // ordinal. These fixtures call both actual chained parser entry points.
-std::vector<uint8_t> makeChainedNumericBlob(
-    macho_loader::ChainedFixupsInfo &Info, uint32_t ImportFormat,
-    uint16_t PointerFormat, uint32_t LibraryOrdinal, int64_t OutlineAddend,
-    bool SymbolWeak = false) {
+std::vector<uint8_t>
+makeChainedNumericBlob(macho_loader::ChainedFixupsInfo &Info,
+                       uint32_t ImportFormat, uint16_t PointerFormat,
+                       uint32_t LibraryOrdinal, int64_t OutlineAddend,
+                       bool SymbolWeak = false) {
   auto Bytes = makeChainedBlob(Info);
   dyld_chained_fixups_header Header{};
   std::memcpy(&Header, Bytes.data() + Info.DataOff, sizeof(Header));
@@ -7653,8 +7654,8 @@ TEST(MachOChainedPointerBoundary, PreservesHighPositiveLibraryOrdinals) {
         ImportFormat == DYLD_CHAINED_IMPORT_ADDEND64
             ? std::vector<uint32_t>{1, 32767, 32768, 65519, 65520}
             : std::vector<uint32_t>{1, 127, 128, 239, 240};
-    for (uint16_t PointerFormat : {DYLD_CHAINED_PTR_64,
-                                   DYLD_CHAINED_PTR_64_OFFSET})
+    for (uint16_t PointerFormat :
+         {DYLD_CHAINED_PTR_64, DYLD_CHAINED_PTR_64_OFFSET})
       for (uint32_t LibraryOrdinal : Ordinals) {
         SCOPED_TRACE(ImportFormat);
         SCOPED_TRACE(PointerFormat);
@@ -7671,9 +7672,9 @@ TEST(MachOChainedPointerBoundary, PreservesHighPositiveLibraryOrdinals) {
         auto Bytes = makeChainedNumericBlob(Info, ImportFormat, PointerFormat,
                                             LibraryOrdinal, 0);
         macho_loader::parseChainedFixupsImports(Bytes.data(), Bytes.size(),
-                                                 Info, Image);
+                                                Info, Image);
         macho_loader::parseChainedFixupsRebases(Bytes.data(), Bytes.size(),
-                                                 Info, TextVA, Image);
+                                                Info, TextVA, Image);
         ASSERT_EQ(Image.Imports.size(), 2U);
         EXPECT_EQ(Image.Imports[0].Name, "_table_zero");
         EXPECT_EQ(Image.Imports[0].IATAddr, 0U);
@@ -7700,8 +7701,8 @@ TEST(MachOChainedPointerBoundary,
     for (uint32_t Encoding = LastEncoding - 14; Encoding <= LastEncoding;
          ++Encoding)
       Ordinals.push_back(Encoding);
-    for (uint16_t PointerFormat : {DYLD_CHAINED_PTR_64,
-                                   DYLD_CHAINED_PTR_64_OFFSET})
+    for (uint16_t PointerFormat :
+         {DYLD_CHAINED_PTR_64, DYLD_CHAINED_PTR_64_OFFSET})
       for (uint32_t LibraryOrdinal : Ordinals) {
         SCOPED_TRACE(ImportFormat);
         SCOPED_TRACE(PointerFormat);
@@ -7719,9 +7720,9 @@ TEST(MachOChainedPointerBoundary,
         auto Bytes = makeChainedNumericBlob(Info, ImportFormat, PointerFormat,
                                             LibraryOrdinal, 0);
         macho_loader::parseChainedFixupsImports(Bytes.data(), Bytes.size(),
-                                                 Info, Image);
+                                                Info, Image);
         macho_loader::parseChainedFixupsRebases(Bytes.data(), Bytes.size(),
-                                                 Info, TextVA, Image);
+                                                Info, TextVA, Image);
         ASSERT_EQ(Image.Imports.size(), 2U);
         EXPECT_EQ(Image.Imports[0].Module, "display-first");
         EXPECT_EQ(Image.Imports[0].IATAddr, 0U);
@@ -7739,8 +7740,8 @@ TEST(MachOChainedPointerBoundary,
 TEST(MachOChainedPointerBoundary, Keeps64BitInlineAddendsUnsigned) {
   for (uint32_t ImportFormat : {DYLD_CHAINED_IMPORT, DYLD_CHAINED_IMPORT_ADDEND,
                                 DYLD_CHAINED_IMPORT_ADDEND64})
-    for (uint16_t PointerFormat : {DYLD_CHAINED_PTR_64,
-                                   DYLD_CHAINED_PTR_64_OFFSET})
+    for (uint16_t PointerFormat :
+         {DYLD_CHAINED_PTR_64, DYLD_CHAINED_PTR_64_OFFSET})
       for (uint8_t InlineAddend : {0, 127, 128, 254, 255}) {
         SCOPED_TRACE(ImportFormat);
         SCOPED_TRACE(PointerFormat);
@@ -7749,12 +7750,12 @@ TEST(MachOChainedPointerBoundary, Keeps64BitInlineAddendsUnsigned) {
         Image.CodePtrRelocSlots.insert(DataVA);
         Image.DataPtrRelocSlots.insert(DataVA);
         macho_loader::ChainedFixupsInfo Info;
-        auto Bytes = makeChainedNumericBlob(Info, ImportFormat, PointerFormat,
-                                            1, 0);
+        auto Bytes =
+            makeChainedNumericBlob(Info, ImportFormat, PointerFormat, 1, 0);
         macho_loader::parseChainedFixupsImports(Bytes.data(), Bytes.size(),
-                                                 Info, Image);
+                                                Info, Image);
         macho_loader::parseChainedFixupsRebases(Bytes.data(), Bytes.size(),
-                                                 Info, TextVA, Image);
+                                                Info, TextVA, Image);
         ASSERT_EQ(Image.DyldBindSlots.size(), 1U);
         EXPECT_EQ(Image.DyldBindSlots.at(DataVA).Name, "_numeric_target");
         EXPECT_EQ(Image.DyldBindSlots.at(DataVA).Addend, InlineAddend);
@@ -7777,22 +7778,25 @@ TEST(MachOChainedPointerBoundary,
     uint8_t Inline;
     int64_t Expected;
   };
-  for (uint32_t ImportFormat : {DYLD_CHAINED_IMPORT_ADDEND,
-                                DYLD_CHAINED_IMPORT_ADDEND64}) {
-    std::vector<Case> Cases = {{-2, 0, -2}, {-300, 255, -45},
-                               {-2, 128, 126}, {7, 254, 261}, {2, 254, 256},
+  for (uint32_t ImportFormat :
+       {DYLD_CHAINED_IMPORT_ADDEND, DYLD_CHAINED_IMPORT_ADDEND64}) {
+    std::vector<Case> Cases = {{-2, 0, -2},
+                               {-300, 255, -45},
+                               {-2, 128, 126},
+                               {7, 254, 261},
+                               {2, 254, 256},
                                {-2147483647 - 1, 255, -2147483393},
                                {2147483647, 255, 2147483902LL}};
     if (ImportFormat == DYLD_CHAINED_IMPORT_ADDEND64) {
       Cases.push_back({std::numeric_limits<int64_t>::min(), 255,
-                        std::numeric_limits<int64_t>::min() + 255});
+                       std::numeric_limits<int64_t>::min() + 255});
       Cases.push_back({std::numeric_limits<int64_t>::max() - 255, 255,
-                        std::numeric_limits<int64_t>::max()});
+                       std::numeric_limits<int64_t>::max()});
       Cases.push_back({std::numeric_limits<int64_t>::max(), 0,
-                        std::numeric_limits<int64_t>::max()});
+                       std::numeric_limits<int64_t>::max()});
     }
-    for (uint16_t PointerFormat : {DYLD_CHAINED_PTR_64,
-                                   DYLD_CHAINED_PTR_64_OFFSET})
+    for (uint16_t PointerFormat :
+         {DYLD_CHAINED_PTR_64, DYLD_CHAINED_PTR_64_OFFSET})
       for (const auto &Test : Cases) {
         SCOPED_TRACE(ImportFormat);
         SCOPED_TRACE(PointerFormat);
@@ -7803,9 +7807,9 @@ TEST(MachOChainedPointerBoundary,
         auto Bytes = makeChainedNumericBlob(Info, ImportFormat, PointerFormat,
                                             1, Test.Outline);
         macho_loader::parseChainedFixupsImports(Bytes.data(), Bytes.size(),
-                                                 Info, Image);
+                                                Info, Image);
         macho_loader::parseChainedFixupsRebases(Bytes.data(), Bytes.size(),
-                                                 Info, TextVA, Image);
+                                                Info, TextVA, Image);
         ASSERT_EQ(Image.DyldBindSlots.size(), 1U);
         EXPECT_EQ(Image.DyldBindSlots.at(DataVA).Name, "_numeric_target");
         EXPECT_EQ(Image.DyldBindSlots.at(DataVA).Addend, Test.Expected);
@@ -7820,8 +7824,8 @@ TEST(MachOChainedPointerBoundary,
 
 TEST(MachOChainedPointerBoundary,
      OverflowingUnsignedInlineDoesNotPublishOrReclassifySlot) {
-  for (uint16_t PointerFormat : {DYLD_CHAINED_PTR_64,
-                                 DYLD_CHAINED_PTR_64_OFFSET})
+  for (uint16_t PointerFormat :
+       {DYLD_CHAINED_PTR_64, DYLD_CHAINED_PTR_64_OFFSET})
     for (int64_t Outline : {std::numeric_limits<int64_t>::max(),
                             std::numeric_limits<int64_t>::max() - 254}) {
       SCOPED_TRACE(PointerFormat);
@@ -7834,9 +7838,9 @@ TEST(MachOChainedPointerBoundary,
       auto Bytes = makeChainedNumericBlob(Info, DYLD_CHAINED_IMPORT_ADDEND64,
                                           PointerFormat, 1, Outline);
       macho_loader::parseChainedFixupsImports(Bytes.data(), Bytes.size(), Info,
-                                               Image);
+                                              Image);
       macho_loader::parseChainedFixupsRebases(Bytes.data(), Bytes.size(), Info,
-                                               TextVA, Image);
+                                              TextVA, Image);
       EXPECT_TRUE(Image.DyldBindSlots.empty());
       EXPECT_EQ(Image.ImportStorageSlots.count(DataVA), 0U);
       EXPECT_EQ(Image.CodePtrRelocSlots.count(DataVA), 1U);
@@ -7853,8 +7857,8 @@ std::vector<uint8_t> makeProviderBindStream(int64_t LibraryOrdinal,
                                             bool NegativeAddend = false) {
   std::vector<uint8_t> Stream;
   if (LibraryOrdinal < 0) {
-    Stream.push_back(static_cast<uint8_t>(
-        BIND_OPCODE_SET_DYLIB_SPECIAL_IMM | (LibraryOrdinal & 0xf)));
+    Stream.push_back(static_cast<uint8_t>(BIND_OPCODE_SET_DYLIB_SPECIAL_IMM |
+                                          (LibraryOrdinal & 0xf)));
   } else {
     Stream.push_back(BIND_OPCODE_SET_DYLIB_ORDINAL_ULEB);
     uint64_t Remaining = static_cast<uint64_t>(LibraryOrdinal);
@@ -7864,22 +7868,22 @@ std::vector<uint8_t> makeProviderBindStream(int64_t LibraryOrdinal,
       Stream.push_back(Byte | (Remaining ? 0x80 : 0));
     } while (Remaining);
   }
-  Stream.push_back(static_cast<uint8_t>(
-      BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM |
-      (SymbolWeak ? BIND_SYMBOL_FLAGS_WEAK_IMPORT : 0)));
+  Stream.push_back(
+      static_cast<uint8_t>(BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM |
+                           (SymbolWeak ? BIND_SYMBOL_FLAGS_WEAK_IMPORT : 0)));
   constexpr char Name[] = "_numeric_target";
   Stream.insert(Stream.end(), Name, Name + sizeof(Name));
-  Stream.insert(Stream.end(),
-                {BIND_OPCODE_SET_ADDEND_SLEB,
-                 static_cast<uint8_t>(NegativeAddend ? 0x7d : 0),
-                 static_cast<uint8_t>(BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB | 1),
-                 Offset, BIND_OPCODE_DO_BIND, BIND_OPCODE_DONE});
+  Stream.insert(Stream.end(), {BIND_OPCODE_SET_ADDEND_SLEB,
+                               static_cast<uint8_t>(NegativeAddend ? 0x7d : 0),
+                               static_cast<uint8_t>(
+                                   BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB | 1),
+                               Offset, BIND_OPCODE_DO_BIND, BIND_OPCODE_DONE});
   return Stream;
 }
 
 void parseProviderBindStream(BinaryImage &Image,
-                              const std::vector<uint8_t> &Stream,
-                              bool Lazy = false) {
+                             const std::vector<uint8_t> &Stream,
+                             bool Lazy = false) {
   std::vector<uint8_t> Bytes(0x20, 0);
   Bytes.insert(Bytes.end(), Stream.begin(), Stream.end());
   macho_loader::DyldInfoOffsets Info;
@@ -7900,10 +7904,11 @@ TEST(MachOClassicBindBoundary, RecordsNativeProviderAndWeakness) {
     bool LibraryWeak;
   };
   const std::vector<Case> Cases = {
-      {1, "first", false}, {2, "second", true}, {3, "", true},
-      {255, "high-classic", false}, {256, "", false},
-      {0, "", false}, {-1, "", false}, {-2, "", false}, {-3, "", false},
-      {0x100000001LL, "", false}};
+      {1, "first", false}, {2, "second", true},
+      {3, "", true},       {255, "high-classic", false},
+      {256, "", false},    {0, "", false},
+      {-1, "", false},     {-2, "", false},
+      {-3, "", false},     {0x100000001LL, "", false}};
   for (const auto &Test : Cases)
     for (bool SymbolWeak : {false, true}) {
       SCOPED_TRACE(Test.Ordinal);
@@ -7915,8 +7920,8 @@ TEST(MachOClassicBindBoundary, RecordsNativeProviderAndWeakness) {
       Image.MachODylibReferences[2] = {"", true};
       Image.MachODylibReferences[254] = {"high-classic", false};
       Image.DynInfo.NeededLibs = {"display-only"};
-      const auto Stream = makeProviderBindStream(Test.Ordinal, 0, SymbolWeak,
-                                                  true);
+      const auto Stream =
+          makeProviderBindStream(Test.Ordinal, 0, SymbolWeak, true);
       parseProviderBindStream(Image, Stream);
       parseProviderBindStream(Image, Stream);
       ASSERT_EQ(Image.DyldBindSlots.size(), 1U);
@@ -7966,9 +7971,9 @@ TEST(MachOClassicBindBoundary, LazyEntriesResetProviderAndAddend) {
   Stream.push_back(BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM);
   constexpr char Name[] = "_numeric_target";
   Stream.insert(Stream.end(), Name, Name + sizeof(Name));
-  Stream.insert(Stream.end(),
-                {static_cast<uint8_t>(BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB | 1),
-                 8, BIND_OPCODE_DO_BIND, BIND_OPCODE_DONE});
+  Stream.insert(Stream.end(), {static_cast<uint8_t>(
+                                   BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB | 1),
+                               8, BIND_OPCODE_DO_BIND, BIND_OPCODE_DONE});
   parseProviderBindStream(Image, Stream, true);
   ASSERT_EQ(Image.DyldBindSlots.size(), 2U);
   EXPECT_EQ(Image.DyldBindSlots.at(DataVA).Module, "first");
@@ -7982,8 +7987,8 @@ TEST(MachOClassicBindBoundary, LazyEntriesResetProviderAndAddend) {
 TEST(MachOChainedPointerBoundary, PreservesNativeProviderAndWeakness) {
   for (uint32_t Format : {DYLD_CHAINED_IMPORT, DYLD_CHAINED_IMPORT_ADDEND,
                           DYLD_CHAINED_IMPORT_ADDEND64})
-    for (uint16_t PointerFormat : {DYLD_CHAINED_PTR_64,
-                                   DYLD_CHAINED_PTR_64_OFFSET})
+    for (uint16_t PointerFormat :
+         {DYLD_CHAINED_PTR_64, DYLD_CHAINED_PTR_64_OFFSET})
       for (uint32_t Ordinal : {0U, 1U, 2U, 3U})
         for (bool LibraryWeak : {false, true})
           for (bool SymbolWeak : {false, true}) {
@@ -7993,25 +7998,25 @@ TEST(MachOChainedPointerBoundary, PreservesNativeProviderAndWeakness) {
             SCOPED_TRACE(LibraryWeak);
             SCOPED_TRACE(SymbolWeak);
             auto Image = makeChainedNumericImage(0);
-            Image.MachODylibReferences = {
-                {"native-module", LibraryWeak}, {"", LibraryWeak}};
+            Image.MachODylibReferences = {{"native-module", LibraryWeak},
+                                          {"", LibraryWeak}};
             Image.DynInfo.NeededLibs = {"display-only"};
             macho_loader::ChainedFixupsInfo Info;
             auto Bytes = makeChainedNumericBlob(Info, Format, PointerFormat,
                                                 Ordinal, 0, SymbolWeak);
             macho_loader::parseChainedFixupsImports(Bytes.data(), Bytes.size(),
-                                                     Info, Image);
+                                                    Info, Image);
             macho_loader::parseChainedFixupsRebases(Bytes.data(), Bytes.size(),
-                                                     Info, TextVA, Image);
+                                                    Info, TextVA, Image);
             macho_loader::parseChainedFixupsRebases(Bytes.data(), Bytes.size(),
-                                                     Info, TextVA, Image);
+                                                    Info, TextVA, Image);
             ASSERT_EQ(Image.DyldBindSlots.size(), 1U);
             const auto &Binding = Image.DyldBindSlots.at(DataVA);
             EXPECT_EQ(Binding.Name, "_numeric_target");
             EXPECT_EQ(Binding.Module, Ordinal == 1 ? "native-module" : "");
             EXPECT_EQ(Binding.WeakImport,
-                      SymbolWeak || ((Ordinal == 1 || Ordinal == 2) &&
-                                     LibraryWeak));
+                      SymbolWeak ||
+                          ((Ordinal == 1 || Ordinal == 2) && LibraryWeak));
             EXPECT_EQ(Binding.Addend, 0);
             EXPECT_TRUE(Image.ConflictingImportStorageSlots.empty());
           }
@@ -8038,9 +8043,9 @@ TEST(MachOChainedPointerBoundary, DuplicateNamesKeepIndependentProviderSlots) {
   Entry.lib_ordinal = 2;
   writeObject(Bytes, Info.DataOff + 0x60 + sizeof(Entry), Entry);
   macho_loader::parseChainedFixupsImports(Bytes.data(), Bytes.size(), Info,
-                                           Image);
+                                          Image);
   macho_loader::parseChainedFixupsRebases(Bytes.data(), Bytes.size(), Info,
-                                           TextVA, Image);
+                                          TextVA, Image);
   ASSERT_EQ(Image.Imports.size(), 1U);
   ASSERT_EQ(Image.DyldBindSlots.size(), 2U);
   EXPECT_EQ(Image.DyldBindSlots.at(DataVA).Name, "___stdoutp");
@@ -8067,9 +8072,9 @@ TEST(MachOChainedPointerBoundary, ProviderConflictsAreStickyAcrossParsers) {
                                             DYLD_CHAINED_PTR_64_OFFSET, 1, 0);
         auto Chain = [&]() {
           macho_loader::parseChainedFixupsImports(Bytes.data(), Bytes.size(),
-                                                   Info, Image);
+                                                  Info, Image);
           macho_loader::parseChainedFixupsRebases(Bytes.data(), Bytes.size(),
-                                                   Info, TextVA, Image);
+                                                  Info, TextVA, Image);
         };
         auto Classic = [&]() {
           parseProviderBindStream(

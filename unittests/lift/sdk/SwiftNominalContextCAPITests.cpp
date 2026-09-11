@@ -76,7 +76,7 @@ void setName(char (&Destination)[16], llvm::StringRef Name) {
 // Owned linked Mach-O bytes, not captured Swift compiler output. There are
 // no internal BinaryImage, Session, LowIR or runtime-proof test doubles.
 std::vector<uint8_t> makeMachO(bool Arm64, Damage Fault, bool WithGlobal,
-                             bool WithMember) {
+                               bool WithMember) {
   using namespace llvm::MachO;
   constexpr uint32_t TextCommandSize =
       sizeof(segment_command_64) + sizeof(section_64);
@@ -348,10 +348,9 @@ protected:
     const auto Stamp =
         std::chrono::steady_clock::now().time_since_epoch().count();
     for (unsigned Attempt = 0; Attempt < 100; ++Attempt) {
-      auto Candidate =
-          std::filesystem::temp_directory_path() /
-          ("neverd-swift-nominal-" + std::to_string(Stamp) + "-" +
-           std::to_string(Sequence.fetch_add(1)));
+      auto Candidate = std::filesystem::temp_directory_path() /
+                       ("neverd-swift-nominal-" + std::to_string(Stamp) + "-" +
+                        std::to_string(Sequence.fetch_add(1)));
       std::error_code Error;
       if (std::filesystem::create_directory(Candidate, Error)) {
         Directory = std::move(Candidate);
@@ -399,8 +398,8 @@ protected:
     ASSERT_EQ(neverd_read_bytes(Session, kBase + kAccessor, Loaded.data(),
                                 static_cast<int>(Loaded.size())),
               static_cast<int>(Loaded.size()));
-    EXPECT_TRUE(std::equal(Loaded.begin(), Loaded.end(),
-                          Bytes.begin() + kAccessor));
+    EXPECT_TRUE(
+        std::equal(Loaded.begin(), Loaded.end(), Bytes.begin() + kAccessor));
   }
 
   llvm::json::Value report(llvm::json::Array Methods) {
@@ -426,7 +425,8 @@ protected:
     EXPECT_EQ(Report.getInteger("schema_version"), 1);
     EXPECT_EQ(Report.getString("status"), "success");
     EXPECT_EQ(Report.getInteger("method_count"), Total);
-    EXPECT_EQ(Report.getInteger("recovered_method_count"), Bodies + Projections);
+    EXPECT_EQ(Report.getInteger("recovered_method_count"),
+              Bodies + Projections);
     EXPECT_EQ(Report.getInteger("source_body_method_count"), Bodies);
     EXPECT_EQ(Report.getInteger("compiler_projection_method_count"),
               Projections);
@@ -587,15 +587,12 @@ TEST_F(SwiftNominalContextCAPI, IncompleteMetadataCannotSeedNominalSource) {
 TEST_F(SwiftNominalContextCAPI, EmptyFieldsDoNotReplaceValueWitnessLayout) {
   for (bool Arm64 : {true, false}) {
     SCOPED_TRACE(Arm64 ? "AArch64" : "x86-64");
-    for (Damage Fault : {Damage::MissingValueWitnesses,
-                         Damage::TruncatedValueWitnesses,
-                         Damage::NonemptyStorage,
-                         Damage::ZeroStride,
-                         Damage::OveralignedStorage,
-                         Damage::NontrivialValues,
-                         Damage::NoncopyableValues,
-                         Damage::ExtraInhabitants,
-                         Damage::UnknownValueFlags}) {
+    for (Damage Fault :
+         {Damage::MissingValueWitnesses, Damage::TruncatedValueWitnesses,
+          Damage::NonemptyStorage, Damage::ZeroStride,
+          Damage::OveralignedStorage, Damage::NontrivialValues,
+          Damage::NoncopyableValues, Damage::ExtraInhabitants,
+          Damage::UnknownValueFlags}) {
       SCOPED_TRACE(static_cast<int>(Fault));
       ASSERT_NO_FATAL_FAILURE(load(Arm64, Fault));
       const auto Value = report({request()});
@@ -621,9 +618,9 @@ TEST_F(SwiftNominalContextCAPI, EmptyFieldsDoNotReplaceValueWitnessLayout) {
 TEST_F(SwiftNominalContextCAPI, OrdinaryMemberCannotBypassEmptyLayoutCheck) {
   for (bool Arm64 : {true, false}) {
     SCOPED_TRACE(Arm64 ? "AArch64" : "x86-64");
-    for (Damage Fault : {Damage::None, Damage::MissingValueWitnesses,
-                         Damage::OveralignedStorage,
-                         Damage::NoncopyableValues}) {
+    for (Damage Fault :
+         {Damage::None, Damage::MissingValueWitnesses,
+          Damage::OveralignedStorage, Damage::NoncopyableValues}) {
       SCOPED_TRACE(static_cast<int>(Fault));
       ASSERT_NO_FATAL_FAILURE(load(Arm64, Fault, true, true));
       const auto Value = report({memberRequest()});
@@ -646,8 +643,7 @@ TEST_F(SwiftNominalContextCAPI, OrdinaryMemberCannotBypassEmptyLayoutCheck) {
         EXPECT_EQ(Row->getString("source_representation"),
                   "native-method-body");
         ASSERT_TRUE(Row->getString("source"));
-        EXPECT_NE(Row->getString("source")->find("42"),
-                  llvm::StringRef::npos);
+        EXPECT_NE(Row->getString("source")->find("42"), llvm::StringRef::npos);
         ASSERT_EQ(Units->size(), 1u);
         ASSERT_NE((*Units)[0].getAsObject(), nullptr);
         EXPECT_EQ((*Units)[0].getAsObject()->getString("kind"), "type");

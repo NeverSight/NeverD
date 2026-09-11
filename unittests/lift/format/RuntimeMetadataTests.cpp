@@ -6,13 +6,13 @@
 
 #include "gtest/gtest.h"
 
-#include "neverd/support/BinaryEncoding.h"
-#include "neverd/support/BinaryLoading.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
 #include "neverd/loader/ELF/ELFLoaderUtils.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/loader/PointerRelocation.h"
+#include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/BinaryLoading.h"
 
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/BinaryFormat/MachO.h"
@@ -148,7 +148,7 @@ createMachOObject(const std::vector<uint8_t> &Bytes) {
 }
 
 std::vector<uint8_t> makeDylibReferenceCommand(uint32_t Kind,
-                                              llvm::StringRef Name) {
+                                               llvm::StringRef Name) {
   llvm::MachO::dylib_command Command{};
   Command.cmd = Kind;
   Command.cmdsize = static_cast<uint32_t>(
@@ -165,9 +165,14 @@ void bindRuntimeDylibOrdinal(BinaryImage &Img, uint8_t Ordinal) {
   std::vector<uint8_t> Bytes(0x10, 0);
   const std::vector<uint8_t> Stream = {
       static_cast<uint8_t>(BIND_OPCODE_SET_DYLIB_ORDINAL_IMM | Ordinal),
-      BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM, '_', 's', 0,
-      BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB, 0x20,
-      BIND_OPCODE_DO_BIND, BIND_OPCODE_DONE};
+      BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM,
+      '_',
+      's',
+      0,
+      BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB,
+      0x20,
+      BIND_OPCODE_DO_BIND,
+      BIND_OPCODE_DONE};
   Bytes.insert(Bytes.end(), Stream.begin(), Stream.end());
   macho_loader::DyldInfoOffsets Info;
   Info.BindOff = 0x10;
@@ -320,8 +325,8 @@ TEST(RuntimeMetadata, NativeDylibOrdinalsExcludeLazyAndKeepDuplicates) {
       EXPECT_EQ(Img.MachODylibReferences[2].Name, "reexport");
       EXPECT_EQ(Img.MachODylibReferences[3].Name, "upward");
       EXPECT_TRUE(Img.MachOTwoLevelNamespace);
-      const std::vector<std::string> Expected = {
-          "first", "first", "reexport", "upward", ""};
+      const std::vector<std::string> Expected = {"first", "first", "reexport",
+                                                 "upward", ""};
       bindRuntimeDylibOrdinal(Img, Ordinal);
       ASSERT_EQ(Img.DyldBindSlots.size(), 1U);
       EXPECT_EQ(Img.DyldBindSlots.at(0x3020).Module, Expected[Ordinal - 1]);
@@ -392,8 +397,7 @@ TEST(RuntimeMetadata, NativeDylibOrdinalsPreserveInvalidNamePlaceholders) {
 TEST(RuntimeMetadata, MachOTwoLevelNamespaceUsesActualHeaderFlags) {
   using namespace llvm::MachO;
   for (bool Is64 : {false, true})
-    for (uint32_t Flags : {0U, uint32_t(MH_TWOLEVEL),
-                           uint32_t(MH_FORCE_FLAT),
+    for (uint32_t Flags : {0U, uint32_t(MH_TWOLEVEL), uint32_t(MH_FORCE_FLAT),
                            uint32_t(MH_TWOLEVEL | MH_FORCE_FLAT)}) {
       SCOPED_TRACE(Is64);
       SCOPED_TRACE(Flags);
@@ -453,8 +457,7 @@ TEST(RuntimeMetadata, RecordsOnlyExactMappedImportStorageSlots) {
   Img.Segments.back().Data.resize(4);
 
   EXPECT_TRUE(Img.recordImportStorageSlot(
-      0x3020, "imported", 0,
-      ImportStorageEvidence::ImportDirectory));
+      0x3020, "imported", 0, ImportStorageEvidence::ImportDirectory));
   ASSERT_EQ(Img.ImportStorageSlots.size(), 1u);
   EXPECT_EQ(Img.ImportStorageSlots.at(0x3020).Name, "imported");
   EXPECT_EQ(Img.ImportStorageSlots.at(0x3020).Addend, 0);
@@ -463,17 +466,13 @@ TEST(RuntimeMetadata, RecordsOnlyExactMappedImportStorageSlots) {
   EXPECT_TRUE(Img.CodePtrRelocSlots.empty());
 
   EXPECT_FALSE(Img.recordImportStorageSlot(
-      0x3021, "unaligned", 0,
-      ImportStorageEvidence::ImportDirectory));
+      0x3021, "unaligned", 0, ImportStorageEvidence::ImportDirectory));
   EXPECT_FALSE(Img.recordImportStorageSlot(
-      0x1010, "executable", 0,
-      ImportStorageEvidence::ImportDirectory));
+      0x1010, "executable", 0, ImportStorageEvidence::ImportDirectory));
   EXPECT_FALSE(Img.recordImportStorageSlot(
-      0x4000, "unmapped", 0,
-      ImportStorageEvidence::ImportDirectory));
+      0x4000, "unmapped", 0, ImportStorageEvidence::ImportDirectory));
   EXPECT_FALSE(Img.recordImportStorageSlot(
-      0x5000, "truncated", 0,
-      ImportStorageEvidence::ImportDirectory));
+      0x5000, "truncated", 0, ImportStorageEvidence::ImportDirectory));
   EXPECT_FALSE(Img.recordImportStorageSlot(
       0x3028, "", 0, ImportStorageEvidence::ImportDirectory));
   EXPECT_EQ(Img.ImportStorageSlots.size(), 1u);
@@ -490,8 +489,7 @@ TEST(RuntimeMetadata, RecordsOnlyExactMappedImportStorageSlots) {
   // Legacy format-native maps are normalized through the same validator; a
   // direct-map fixture cannot turn an executable stub into storage either.
   Img.ImportPtrSlots[0x1010] = "legacy_veneer";
-  const ImportStorageSlotCollection Collected =
-      Img.collectImportStorageSlots();
+  const ImportStorageSlotCollection Collected = Img.collectImportStorageSlots();
   EXPECT_EQ(Collected.Slots.count(0x1010), 0u);
   EXPECT_FALSE(Img.hasRelocationProvenanceAt(0x1010));
 }
@@ -543,16 +541,15 @@ TEST(RuntimeMetadata, TextNormalizationKeepsImportStorageViewsConsistent) {
   Img.Bits = Bitness::Bits64;
   Img.Segments.push_back(makeSegment(0x3000, 0x100, false));
   const std::string InvalidName(1, static_cast<char>(0xff));
-  ASSERT_TRUE(Img.recordImportStorageSlot(
-      0x3020, InvalidName, 0, ImportStorageEvidence::PointerTable));
+  ASSERT_TRUE(Img.recordImportStorageSlot(0x3020, InvalidName, 0,
+                                          ImportStorageEvidence::PointerTable));
   Img.ImportPtrSlots[0x3020] = InvalidName;
 
   normalizeBinaryMetadata(Img);
   ASSERT_EQ(Img.ImportStorageSlots.count(0x3020), 1u);
   EXPECT_EQ(Img.ImportStorageSlots.at(0x3020).Name,
             Img.ImportPtrSlots.at(0x3020));
-  const ImportStorageSlotCollection Collected =
-      Img.collectImportStorageSlots();
+  const ImportStorageSlotCollection Collected = Img.collectImportStorageSlots();
   EXPECT_EQ(Collected.Slots.count(0x3020), 1u);
   EXPECT_TRUE(Collected.Conflicts.empty());
 }
