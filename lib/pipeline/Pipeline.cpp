@@ -108,7 +108,8 @@ private:
          << " stage=" << name() << " event=" << Event
          << " elapsed_ms=" << Elapsed << '\n';
       if (Line.size() <= 192) {
-        llvm::raw_fd_ostream Sink(2, /*shouldClose=*/false, /*unbuffered=*/true);
+        llvm::raw_fd_ostream Sink(2, /*shouldClose=*/false,
+                                  /*unbuffered=*/true);
         llvm::scope_exit ClearError([&Sink]() noexcept { Sink.clear_error(); });
         Sink.write(Line.data(), Line.size());
         Sink.flush();
@@ -374,8 +375,8 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
 
   // Phase 3: MedIR -> HighIR (parallel).
   Trace.start(NativePipelineTrace::Stage::HighIR);
-  if (!pipeline_detail::runHighIRStage(Result,
-                                       [&] { buildHighIR(Img, Opts, Result); })) {
+  if (!pipeline_detail::runHighIRStage(
+          Result, [&] { buildHighIR(Img, Opts, Result); })) {
     Trace.finish(false);
     return Result;
   }

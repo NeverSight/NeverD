@@ -878,8 +878,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       // from a complete method signature and does not bind unknown calls.
       if (IsObjCMessageStub && TheArch == Arch::AArch64 &&
           objcSelectorStubOverwritesCommand(*Img, CI.TargetAddr)) {
-        Found[1] =
-            MedVar::makeConst(0, static_cast<uint16_t>(TRI.PointerSize));
+        Found[1] = MedVar::makeConst(0, static_cast<uint16_t>(TRI.PointerSize));
         FoundMask[1] = true;
       }
 

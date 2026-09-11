@@ -580,13 +580,12 @@ BinaryImage stageTraceImage(Arch Architecture) {
   Text.VA = Image.Entry;
   Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
   // Owned mov-return bodies; no fixture compiler or external image is used.
-  Text.Data = Architecture == Arch::AArch64
-                  ? std::vector<uint8_t>{0x40, 0x05, 0x80, 0x52,
-                                         0xc0, 0x03, 0x5f, 0xd6}
-                  : std::vector<uint8_t>{0xb8, 0x2a, 0, 0, 0, 0xc3};
+  Text.Data =
+      Architecture == Arch::AArch64
+          ? std::vector<uint8_t>{0x40, 0x05, 0x80, 0x52, 0xc0, 0x03, 0x5f, 0xd6}
+          : std::vector<uint8_t>{0xb8, 0x2a, 0, 0, 0, 0xc3};
   Text.Size = Text.FileSz = Text.Data.size();
-  Image.Symbols.push_back(
-      {"owned_trace_return", Image.Entry, Text.Size, true});
+  Image.Symbols.push_back({"owned_trace_return", Image.Entry, Text.Size, true});
   Image.Segments.push_back(std::move(Text));
   return Image;
 }
@@ -635,8 +634,9 @@ void expectStageRecords(const std::string &Diagnostic, unsigned Invocation,
       const std::string Prefix =
           "[neverd-pipeline-stage] invocation=" + std::to_string(Invocation) +
           " stage=" + Stage + " event=" +
-          (Begin ? "begin"
-                 : StageIndex + 1 == Stages.size() ? FinalEvent : "completed") +
+          (Begin                             ? "begin"
+           : StageIndex + 1 == Stages.size() ? FinalEvent
+                                             : "completed") +
           " elapsed_ms=";
       ASSERT_TRUE(Fields.consume_front(Prefix)) << Line;
       ASSERT_FALSE(Fields.empty());
@@ -738,8 +738,8 @@ void exerciseExactPipelineTraceEnvironment() {
   ScopedThreadCount Threads(1);
   const auto Image = stageTraceImage(Arch::X64);
   const auto Options = stageTraceOptions(Image.Arch);
-  const char *Values[] = {nullptr, "", "0", "01", "11", "true", "1 ",
-                           " 1", "1\n"};
+  const char *Values[] = {nullptr, "",   "0",  "01", "11",
+                          "true",  "1 ", " 1", "1\n"};
   for (const char *Value : Values) {
     SCOPED_TRACE(Value ? Value : "unset");
     ASSERT_EQ(Environment.set(Value), 0);

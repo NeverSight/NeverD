@@ -320,12 +320,12 @@ TEST(ObjCCallHints, SelectorStubCommandProofRejectsUnverifiedCodeAndSlots) {
       Image.ImportPtrSlots[0x2180] = "_unrelated_runtime";
       break;
     case 14:
-      llvm::support::endian::write32le(
-          Image.Segments[0].Data.data() + 0x104, 0xf9408000); // LDR x0
+      llvm::support::endian::write32le(Image.Segments[0].Data.data() + 0x104,
+                                       0xf9408000); // LDR x0
       break;
     case 15:
-      llvm::support::endian::write32le(
-          Image.Segments[0].Data.data() + 0x110, 0xd61f0220); // BR x17
+      llvm::support::endian::write32le(Image.Segments[0].Data.data() + 0x110,
+                                       0xd61f0220); // BR x17
       break;
     }
     EXPECT_FALSE(objcSelectorStubOverwritesCommand(Image, 0x1100));
