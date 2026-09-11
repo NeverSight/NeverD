@@ -314,6 +314,24 @@ struct Fixture {
     op(F, NdOp::COPY, NdVar::reg(Second, 8), {NdVar::cst(0, 8)});
     ret(F);
   }
+  void widgets() {
+    text(0x1180, "WikipediaWidgets");
+    text(0x1210, "WidgetsExtension");
+    Request.Signature.Module = "WidgetsExtension";
+    Request.Signature.ContextName = "WikipediaWidgets";
+    Prefix = "_$s16WidgetsExtension16WikipediaWidgets";
+    Prefix += Request.Signature.ContextKind == "class" ? "C" : "V";
+    Image.Symbols[0].Name = Prefix + "N";
+  }
+  void replaceIdentity(va_t Entry, const std::string &Name) {
+    for (auto &S : Image.Symbols)
+      if (S.IsFunc && S.Addr == Entry)
+        S.Name = Name;
+    if (Request.Signature.Entry == Entry)
+      Request.Signature.MangledSymbol = Name;
+    if (Request.RelatedEntry && Request.RelatedEntry->Entry == Entry)
+      Request.RelatedEntry->MangledSymbol = Name;
+  }
   SwiftRuntimeSourceProof proof() {
     return recoverSwiftRuntimeSource(Request, Image, Functions);
   }
@@ -412,6 +430,130 @@ TEST(SwiftRuntimeSource,
   EXPECT_FALSE(F.proof().Proven);
   F.Image.Imports[0].Name = "_objc_lookUpClass";
   EXPECT_FALSE(F.proof().Proven);
+}
+TEST(SwiftRuntimeSource, MetadataAccessorUsesSemanticNominalIdentity) {
+  for (auto Arch : {Arch::AArch64, Arch::X64})
+    for (bool Class : {false, true})
+      for (unsigned Spelling : {0u, 1u, 2u}) {
+        SCOPED_TRACE(static_cast<int>(Arch));
+        SCOPED_TRACE(Class);
+        SCOPED_TRACE(Spelling);
+        Fixture F(Class, Arch);
+        F.widgets();
+        F.metadata();
+        std::string Name = F.Prefix + "Ma";
+        if (Spelling != 0) {
+          Name = Spelling == 1 ? "_$s" : "$s";
+          Name += "16WidgetsExtension09WikipediaA0";
+          Name += Class ? "CMa" : "VMa";
+        }
+        F.replaceIdentity(F.Request.Signature.Entry, Name);
+        const auto P = F.proof();
+        ASSERT_TRUE(P.Proven) << P.Reason;
+        EXPECT_EQ(P.ProjectionKind, "type_metadata_accessor");
+        EXPECT_EQ(P.Descriptor, 0x1100u);
+        EXPECT_EQ(P.Metadata, 0x1400u);
+        EXPECT_EQ(F.Request.Signature.MangledSymbol, Name);
+      }
+}
+TEST(SwiftRuntimeSource, MetadataAccessorRejectsNonmatchingOrUnboundedTrees) {
+  const std::vector<std::string> Names{
+      // Wrong module, name, nominal kind and compiler role.
+      "_$s5Other16WikipediaWidgetsVMa",
+      "_$s16WidgetsExtension5OtherVMa",
+      "_$s16WidgetsExtension09WikipediaA0CMa",
+      "_$s16WidgetsExtension09WikipediaA0VMn",
+      // Extra suffix, nested context, generic form and incomplete mangling.
+      "_$s16WidgetsExtension09WikipediaA0VMa.resume.0",
+      "_$s16WidgetsExtension5OuterV16WikipediaWidgetsVMa",
+      "_$s16WidgetsExtension09WikipediaA0VySiGMa",
+      "_$s16WidgetsExtension09WikipediaA0VM",
+      std::string("_$s16WidgetsExtension09WikipediaA0VMa") + '\0',
+      std::string(8001, 'A')};
+  for (auto Arch : {Arch::AArch64, Arch::X64})
+    for (const auto &Name : Names) {
+      SCOPED_TRACE(static_cast<int>(Arch));
+      SCOPED_TRACE(Name.size());
+      Fixture F(false, Arch);
+      F.widgets();
+      F.metadata();
+      F.replaceIdentity(F.Request.Signature.Entry, Name);
+      ASSERT_EQ(F.Image.Symbols.back().Name, Name);
+      ASSERT_EQ(F.Image.Symbols.back().Addr, F.Request.Signature.Entry);
+      const auto P = F.proof();
+      EXPECT_FALSE(P.Proven);
+      EXPECT_EQ(P.Reason,
+                "runtime identity disagrees with its context and compiler role");
+    }
+}
+TEST(SwiftRuntimeSource, SemanticMetadataIdentityDoesNotReplaceNativeProof) {
+  for (auto Arch : {Arch::AArch64, Arch::X64})
+    for (unsigned Fault : {0u, 1u, 2u, 3u}) {
+      SCOPED_TRACE(static_cast<int>(Arch));
+      SCOPED_TRACE(Fault);
+      Fixture F(false, Arch);
+      F.widgets();
+      F.metadata();
+      F.replaceIdentity(F.Request.Signature.Entry,
+                        "_$s16WidgetsExtension09WikipediaA0VMa");
+      ASSERT_TRUE(F.proof().Proven);
+      auto &Ops = F.Functions[0].Blocks[0].Ops;
+      if (Fault == 0)
+        F.relative(0x110c, 0x3800);
+      else if (Fault == 1)
+        Ops[1].Inputs[0] = NdVar::cst(1, 8); // Not Complete.
+      else if (Fault == 2)
+        Ops[0].Inputs[0] = NdVar::cst(0x1408, 8); // Wrong metadata.
+      else {
+        // A write to native data is not a harmless metadata accessor.
+        Ops[0].Opcode = NdOp::STORE;
+        Ops[0].Output = {};
+        Ops[0].Inputs[0] = NdVar::cst(0x1400, 8);
+        Ops[0].Inputs[1] = NdVar::cst(1, 8);
+        Ops[0].NumInputs = 2;
+      }
+      const auto P = F.proof();
+      EXPECT_FALSE(P.Proven);
+      EXPECT_FALSE(P.Reason.empty());
+      EXPECT_NE(P.Reason,
+                "runtime identity disagrees with its context and compiler role");
+    }
+}
+TEST(SwiftRuntimeSource, EmptyInitializerUsesSemanticMetadataDependency) {
+  for (auto Arch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(static_cast<int>(Arch));
+    Fixture F(false, Arch);
+    F.widgets();
+    F.emptyInitializer();
+    const auto Entry = F.Request.RelatedEntry->Entry;
+    F.replaceIdentity(Entry, "_$s16WidgetsExtension09WikipediaA0VMa");
+    F.op(0, NdOp::COPY, NdVar::reg(F.Return, 8), {NdVar::cst(0x1400, 8)});
+    F.op(0, NdOp::COPY, NdVar::reg(F.Second, 8), {NdVar::cst(0, 8)});
+    F.ret(0);
+    auto AccessorRequest = F.Request;
+    AccessorRequest.Kind = Kind::TypeMetadataAccessor;
+    AccessorRequest.Signature.Entry = Entry;
+    AccessorRequest.Signature.MangledSymbol =
+        "_$s16WidgetsExtension09WikipediaA0VMa";
+    AccessorRequest.Signature.DeclarationKind = "runtime";
+    AccessorRequest.RelatedEntry.reset();
+    const auto Accessor =
+        recoverSwiftRuntimeSource(AccessorRequest, F.Image, F.Functions);
+    ASSERT_TRUE(Accessor.Proven) << Accessor.Reason;
+    const auto P = F.proof();
+    ASSERT_TRUE(P.Proven) << P.Reason;
+    EXPECT_EQ(P.ProjectionKind, "empty_value_initializer");
+    EXPECT_EQ(F.Request.Signature.MangledSymbol,
+              "_$s16WidgetsExtension16WikipediaWidgetsVACycfC");
+    F.replaceIdentity(Entry, "_$s16WidgetsExtension5OtherVMa");
+    EXPECT_EQ(F.proof().Reason,
+              "runtime identity disagrees with its context and compiler role");
+    F.replaceIdentity(Entry, "_$s16WidgetsExtension09WikipediaA0VMa");
+    F.relative(0x110c, Entry + 4);
+    EXPECT_EQ(F.proof().Reason,
+              "empty value initializer has no descriptor-owned metadata "
+              "accessor dependency");
+  }
 }
 TEST(SwiftRuntimeSource,
      ModifyAndContinuationKeepDistinctIdentityAndPropertyDependency) {

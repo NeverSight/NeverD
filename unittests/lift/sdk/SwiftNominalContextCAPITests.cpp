@@ -45,6 +45,13 @@ constexpr char kInitializerEntry[] = "0x100000440";
 constexpr char kInitializerSymbol[] = "_$s4Demo5EmptyVACycfC";
 constexpr char kSource[] = "struct `Empty` {\n}\n";
 
+struct NominalNames {
+  llvm::StringRef Module = "Demo";
+  llvm::StringRef Type = "Empty";
+  llvm::StringRef Accessor = kAccessorSymbol;
+  llvm::StringRef Metadata = "_$s4Demo5EmptyVN";
+};
+
 enum class Damage {
   None,
   MissingAccessor,
@@ -81,7 +88,8 @@ void setName(char (&Destination)[16], llvm::StringRef Name) {
 std::vector<uint8_t> makeMachO(bool Arm64, Damage Fault, bool WithGlobal,
                                bool WithMember, bool WithInitializer = false,
                                bool InitializerRead = false,
-                               bool InitializerAlias = false) {
+                               bool InitializerAlias = false,
+                               const NominalNames &Names = {}) {
   using namespace llvm::MachO;
   constexpr uint32_t TextCommandSize =
       sizeof(segment_command_64) + sizeof(section_64);
@@ -188,8 +196,8 @@ std::vector<uint8_t> makeMachO(bool Arm64, Damage Fault, bool WithGlobal,
     Entry.n_value = kBase + Offset;
     writeObject(Bytes, 0x2000 + Index * sizeof(Entry), Entry);
   };
-  Symbol(0, kAccessorSymbol, 1, kAccessor);
-  Symbol(1, "_$s4Demo5EmptyVN", 3, kMetadata);
+  Symbol(0, Names.Accessor, 1, kAccessor);
+  Symbol(1, Names.Metadata, 3, kMetadata);
   if (WithGlobal)
     Symbol(2, WithMember ? kMemberSymbol : kGlobalSymbol, 1, kGlobal);
   uint32_t SymbolCount = WithGlobal ? 3 : 2;
@@ -222,9 +230,9 @@ std::vector<uint8_t> makeMachO(bool Arm64, Damage Fault, bool WithGlobal,
     Relative(kDescriptor + 12,
              kAccessor + (Fault == Damage::OtherAccessor ? 4 : 0));
   Relative(kDescriptor + 16, 0x1300);
-  Text(0x1180, "Empty");
+  Text(0x1180, Names.Type);
   Relative(0x1208, 0x1210);
-  Text(0x1210, "Demo");
+  Text(0x1210, Names.Module);
   U32(0x1308, 12u << 16); // Struct field descriptor; zero stored fields.
   U32(0x130c, Fault == Damage::MismatchedFieldCount ? 1 : 0);
   U64(kMetadata, Fault == Damage::MissingMetadata ? 0 : 0x200);
@@ -359,6 +367,14 @@ llvm::json::Object memberRequest() {
   return Result;
 }
 
+llvm::json::Object nominalRequest(const NominalNames &Names) {
+  auto Result = request();
+  Result["module"] = Names.Module.str();
+  Result["context_name"] = Names.Type.str();
+  Result["mangled_symbol"] = Names.Accessor.str();
+  return Result;
+}
+
 llvm::json::Object initializerRequest() {
   auto Result = request();
   Result["entry"] = kInitializerEntry;
@@ -419,10 +435,11 @@ protected:
 
   void load(bool Arm64, Damage Fault = Damage::None, bool WithGlobal = false,
             bool WithMember = false, bool WithInitializer = false,
-            bool InitializerRead = false, bool InitializerAlias = false) {
+            bool InitializerRead = false, bool InitializerAlias = false,
+            const NominalNames &Names = {}) {
     const auto Bytes = makeMachO(Arm64, Fault, WithGlobal, WithMember,
                                 WithInitializer, InitializerRead,
-                                InitializerAlias);
+                                InitializerAlias, Names);
     const auto Path = (Directory / "owned.macho").string();
     std::ofstream Output(Path, std::ios::binary | std::ios::trunc);
     Output.write(reinterpret_cast<const char *>(Bytes.data()),
@@ -436,7 +453,7 @@ protected:
               1 + int(WithGlobal) + int(WithInitializer) + int(InitializerAlias));
     const int Index = neverd_func_find_by_addr(Session, kBase + kAccessor);
     ASSERT_GE(Index, 0);
-    EXPECT_EQ(takeString(neverd_func_name(Session, Index)), kAccessorSymbol);
+    EXPECT_EQ(takeString(neverd_func_name(Session, Index)), Names.Accessor);
     if (WithGlobal) {
       const int Global = neverd_func_find_by_addr(Session, kBase + kGlobal);
       ASSERT_GE(Global, 0);
@@ -581,6 +598,151 @@ TEST_F(SwiftNominalContextCAPI, OwnedAccessorPublishesTypeWithoutOrdinaryBody) {
     identity(*(*IDs)[0].getAsObject());
     EXPECT_EQ(neverd_func_count(Session), 1);
   }
+}
+
+TEST_F(SwiftNominalContextCAPI,
+       WordSubstitutedAccessorRetainsNativeAndSourceIdentity) {
+  for (bool Arm64 : {true, false})
+    for (const auto *Symbol : {"_$s16WidgetsExtension09WikipediaA0VMa",
+                              "_$s16WidgetsExtension16WikipediaWidgetsVMa"}) {
+      SCOPED_TRACE(Arm64);
+      SCOPED_TRACE(Symbol);
+      const NominalNames Names{"WidgetsExtension", "WikipediaWidgets", Symbol,
+                               "_$s16WidgetsExtension09WikipediaA0VN"};
+      ASSERT_NO_FATAL_FAILURE(load(Arm64, Damage::None, false, false, false,
+                                   false, false, Names));
+      const auto Value = report(llvm::json::Array{nominalRequest(Names)});
+      const auto *Report = Value.getAsObject();
+      ASSERT_NE(Report, nullptr);
+      counts(*Report, 1, 0, 1);
+      constexpr char Source[] = "struct `WikipediaWidgets` {\n}\n";
+      EXPECT_EQ(Report->getString("source"), std::string(Source) + "\n");
+      const auto *Types = Report->getArray("types");
+      ASSERT_NE(Types, nullptr);
+      ASSERT_EQ(Types->size(), 1U);
+      const auto *Type = Types->front().getAsObject();
+      ASSERT_NE(Type, nullptr);
+      EXPECT_EQ(Type->getString("module"), "WidgetsExtension");
+      EXPECT_EQ(Type->getString("name"), "WikipediaWidgets");
+      EXPECT_EQ(Type->getString("status"), "recovered");
+      EXPECT_EQ(Type->getInteger("size"), 0);
+      EXPECT_EQ(Type->getInteger("alignment"), 1);
+      const auto *Rows = Report->getArray("methods");
+      ASSERT_NE(Rows, nullptr);
+      ASSERT_EQ(Rows->size(), 1U);
+      const auto *Row = Rows->front().getAsObject();
+      ASSERT_NE(Row, nullptr);
+      EXPECT_EQ(Row->getString("entry"), kAccessorEntry);
+      EXPECT_EQ(Row->getString("mangled_symbol"), Symbol);
+      EXPECT_EQ(Row->getString("status"), "recovered");
+      EXPECT_EQ(Row->getString("source_representation"),
+                "compiler-generated-from-type");
+      EXPECT_EQ(Row->getString("compiler_projection_kind"),
+                "type_metadata_accessor");
+      EXPECT_EQ(Row->getString("source"), Source);
+      const auto *Units = Report->getArray("source_units");
+      ASSERT_NE(Units, nullptr);
+      ASSERT_EQ(Units->size(), 1U);
+      const auto *Unit = Units->front().getAsObject();
+      ASSERT_NE(Unit, nullptr);
+      EXPECT_EQ(Unit->getString("module"), "WidgetsExtension");
+      EXPECT_EQ(Unit->getString("name"), "WikipediaWidgets");
+      EXPECT_EQ(Unit->getString("source"), Source);
+      const auto *IDs = Unit->getArray("method_identities");
+      ASSERT_NE(IDs, nullptr);
+      ASSERT_EQ(IDs->size(), 1U);
+      const auto *ID = IDs->front().getAsObject();
+      ASSERT_NE(ID, nullptr);
+      EXPECT_EQ(ID->getString("entry"), kAccessorEntry);
+      EXPECT_EQ(ID->getString("mangled_symbol"), Symbol);
+      EXPECT_EQ(neverd_func_count(Session), 1);
+    }
+}
+
+TEST_F(SwiftNominalContextCAPI,
+       ExistingAccessorSymbolCannotClaimAnotherSemanticContext) {
+  for (bool Arm64 : {true, false})
+    for (const auto *Symbol : {"_$s5Other16WikipediaWidgetsVMa",
+                              "_$s16WidgetsExtension5OtherVMa",
+                              "_$s16WidgetsExtension09WikipediaA0CMa",
+                              "_$s16WidgetsExtension09WikipediaA0VMn"}) {
+      SCOPED_TRACE(Arm64);
+      SCOPED_TRACE(Symbol);
+      const NominalNames Names{"WidgetsExtension", "WikipediaWidgets", Symbol,
+                               "_$s16WidgetsExtension09WikipediaA0VN"};
+      // load() verifies the real function table and file-backed code bytes.
+      ASSERT_NO_FATAL_FAILURE(load(Arm64, Damage::None, false, false, false,
+                                   false, false, Names));
+      const auto Value = report(llvm::json::Array{nominalRequest(Names)});
+      const auto *Report = Value.getAsObject();
+      ASSERT_NE(Report, nullptr);
+      counts(*Report, 1, 0, 0);
+      EXPECT_EQ(Report->getString("source"), "");
+      const auto *Units = Report->getArray("source_units");
+      ASSERT_NE(Units, nullptr);
+      EXPECT_TRUE(Units->empty());
+      const auto *Rows = Report->getArray("methods");
+      ASSERT_NE(Rows, nullptr);
+      ASSERT_EQ(Rows->size(), 1U);
+      const auto *Row = Rows->front().getAsObject();
+      ASSERT_NE(Row, nullptr);
+      EXPECT_EQ(Row->getString("entry"), kAccessorEntry);
+      EXPECT_EQ(Row->getString("mangled_symbol"), Symbol);
+      EXPECT_EQ(Row->getString("status"), "unrecovered");
+      EXPECT_EQ(Row->getString("reason"),
+                "runtime identity disagrees with its context and compiler role");
+      EXPECT_FALSE(Row->get("source"));
+      EXPECT_FALSE(Row->get("source_representation"));
+      EXPECT_FALSE(Row->get("compiler_projection_evidence"));
+    }
+}
+
+TEST_F(SwiftNominalContextCAPI,
+       WordSubstitutionDoesNotBypassDescriptorResultOrValueWitnesses) {
+  const NominalNames Names{"WidgetsExtension", "WikipediaWidgets",
+                           "_$s16WidgetsExtension09WikipediaA0VMa",
+                           "_$s16WidgetsExtension09WikipediaA0VN"};
+  for (bool Arm64 : {true, false})
+    for (const auto &[Fault, Reason] :
+         {std::pair{Damage::MissingAccessor,
+                    "native descriptor has no metadata accessor reference"},
+          std::pair{Damage::OtherAccessor,
+                    "native type descriptor does not own this metadata "
+                    "accessor"},
+          std::pair{Damage::OtherMetadataReturn,
+                    "metadata accessor does not return its exact context "
+                    "metadata and complete state"},
+          std::pair{Damage::IncompleteState,
+                    "metadata accessor does not return its exact context "
+                    "metadata and complete state"},
+          std::pair{Damage::NoncopyableValues,
+                    "runtime source context has ambiguous or unsupported "
+                    "native metadata"}}) {
+      SCOPED_TRACE(Arm64);
+      SCOPED_TRACE(static_cast<int>(Fault));
+      ASSERT_NO_FATAL_FAILURE(load(Arm64, Fault, false, false, false, false,
+                                   false, Names));
+      const auto Value = report(llvm::json::Array{nominalRequest(Names)});
+      const auto *Report = Value.getAsObject();
+      ASSERT_NE(Report, nullptr);
+      counts(*Report, 1, 0, 0);
+      EXPECT_EQ(Report->getString("source"), "");
+      const auto *Units = Report->getArray("source_units");
+      ASSERT_NE(Units, nullptr);
+      EXPECT_TRUE(Units->empty());
+      const auto *Rows = Report->getArray("methods");
+      ASSERT_NE(Rows, nullptr);
+      ASSERT_EQ(Rows->size(), 1U);
+      const auto *Row = Rows->front().getAsObject();
+      ASSERT_NE(Row, nullptr);
+      EXPECT_EQ(Row->getString("entry"), kAccessorEntry);
+      EXPECT_EQ(Row->getString("mangled_symbol"), Names.Accessor);
+      EXPECT_EQ(Row->getString("status"), "unrecovered");
+      EXPECT_EQ(Row->getString("reason"), Reason);
+      EXPECT_FALSE(Row->get("source"));
+      EXPECT_FALSE(Row->get("source_representation"));
+      EXPECT_FALSE(Row->get("compiler_projection_evidence"));
+    }
 }
 
 TEST_F(SwiftNominalContextCAPI,

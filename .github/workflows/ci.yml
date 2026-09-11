@@ -365,6 +365,20 @@ jobs:
                    "NeverDMobileTests"),
                   ("MobileIOSNative.EmptyInitializerCoverageRejectsFalseProjectionContracts",
                    "NeverDMobileTests"),
+                  ("SwiftRuntimeSource.MetadataAccessorUsesSemanticNominalIdentity",
+                   "NeverDLiftTests"),
+                  ("SwiftRuntimeSource.MetadataAccessorRejectsNonmatchingOrUnboundedTrees",
+                   "NeverDLiftTests"),
+                  ("SwiftRuntimeSource.SemanticMetadataIdentityDoesNotReplaceNativeProof",
+                   "NeverDLiftTests"),
+                  ("SwiftRuntimeSource.EmptyInitializerUsesSemanticMetadataDependency",
+                   "NeverDLiftTests"),
+                  ("SwiftNominalContextCAPI.WordSubstitutedAccessorRetainsNativeAndSourceIdentity",
+                   "NeverDMetadataJSONTests"),
+                  ("SwiftNominalContextCAPI.ExistingAccessorSymbolCannotClaimAnotherSemanticContext",
+                   "NeverDMetadataJSONTests"),
+                  ("SwiftNominalContextCAPI.WordSubstitutionDoesNotBypassDescriptorResultOrValueWitnesses",
+                   "NeverDMetadataJSONTests"),
                   ("SessionCAPITest.NativePhaseTraceRequiresExactEnvironmentValue",
                    "NeverDSessionCAPITests"),
                   ("SessionCAPITest.NativePhaseTracePreservesLoadFailuresAndExactPairing",
@@ -377,9 +391,9 @@ jobs:
           )
           runner_os = os.environ["RUNNER_OS"]
           expected_count = {
-              ("Linux", "linux-semantic"): 63,
-              ("macOS", "macos-patch"): 62,
-              ("Windows", "windows-focused"): 61,
+              ("Linux", "linux-semantic"): 70,
+              ("macOS", "macos-patch"): 69,
+              ("Windows", "windows-focused"): 68,
           }[(runner_os, os.environ["TEST_PROFILE"])]
           if runner_os in ("Linux", "macOS"):
               expected += (TestRecord(

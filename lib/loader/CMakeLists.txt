@@ -81,4 +81,7 @@ add_neverd_component_library(NeverDLoader
   EVM
   IR
   SBF
+
+  LINK_LIBS
+  LLVMSwiftDemangle
 )

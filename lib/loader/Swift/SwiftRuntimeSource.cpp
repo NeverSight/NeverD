@@ -10,6 +10,8 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/Swift/SwiftMetadata.h"
 
+#include "llvm/Demangle/SwiftDemangle.h"
+
 #include <algorithm>
 #include <cctype>
 #include <map>
@@ -560,6 +562,45 @@ class Proof {
       throw Unproven(
           "runtime identity disagrees with its context and compiler role");
   }
+  void metadataAccessorRole(const Identity &ID) const {
+    llvm::SwiftDemangleOptions Options;
+    Options.MaxInputBytes = 8000;
+    Options.MaxNodes = 1024;
+    Options.MaxDepth = 64;
+    Options.MaxMemoryBytes = 1024 * 1024;
+    Options.MaxOperations = 100000;
+    const auto Parsed = llvm::swiftDemangle(ID.MangledSymbol, Options);
+    const auto Shape = [](const llvm::SwiftDemangleNode &Node,
+                          const char *Kind, size_t Children) {
+      return Node.Kind == Kind && !Node.Text && !Node.Index &&
+             Node.Children.size() == Children;
+    };
+    const auto Text = [](const llvm::SwiftDemangleNode &Node,
+                         const char *Kind, const std::string &Value) {
+      return Node.Kind == Kind && Node.Text && *Node.Text == Value &&
+             !Node.Index && Node.Children.empty();
+    };
+    const auto Matches = [&] {
+      if (!Parsed.Root || !Parsed.Error.empty() ||
+          !Shape(*Parsed.Root, "Global", 1))
+        return false;
+      const auto &Role = Parsed.Root->Children[0];
+      if (!Shape(Role, "TypeMetadataAccessFunction", 1))
+        return false;
+      const auto &TypeNode = Role.Children[0];
+      if (!Shape(TypeNode, "Type", 1))
+        return false;
+      const auto &Nominal = TypeNode.Children[0];
+      return Shape(Nominal, Type.Kind == "class" ? "Class" : "Structure", 2) &&
+             Text(Nominal.Children[0], "Module", Type.Module) &&
+             Text(Nominal.Children[1], "Identifier", Type.Name);
+    };
+    // Spelling substitutions are valid only when the complete bounded tree
+    // identifies this exact native nominal and this compiler entry role.
+    if (!Matches())
+      throw Unproven(
+          "runtime identity disagrees with its context and compiler role");
+  }
   const Identity &related() const {
     if (!R.RelatedEntry)
       throw Unproven("runtime projection is missing its related native entry");
@@ -658,7 +699,7 @@ public:
                        "native storage and no arguments");
       exactRole(identity(), Prefix + "ACycfC");
       const auto Accessor = related();
-      exactRole(Accessor, Prefix + "Ma");
+      metadataAccessorRole(Accessor);
       objc::RuntimeData Data(Image);
       if (Type.Descriptor > InvalidVA - 12)
         throw Unproven("empty value initializer descriptor address overflows");
@@ -766,7 +807,7 @@ public:
       break;
     }
     case Kind::TypeMetadataAccessor: {
-      exactRole(identity(), Prefix + "Ma");
+      metadataAccessorRole(identity());
       objc::RuntimeData Data(Image);
       auto Offset = Data.u32(Type.Descriptor + 12);
       if (!Offset || !*Offset)
