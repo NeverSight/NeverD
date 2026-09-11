@@ -1060,14 +1060,23 @@ TEST(MobileIOSNative,
       objcSources(baseline_batch, baseline_metadata, 8, baseline_budget);
   auto [batch, metadata] = objcDiagnosticFixture();
   // Keep runtime identity identical: it determines generated source names.
-  // Only the native diagnostic differs between these successful recoveries.
+  // Native diagnostics remain in coverage without changing recovery.
   (*batch.getArray("methods")->front().getAsObject())["diagnostics"] =
-      Array{"ignored diagnostic on recovered method"};
+      Array{"retained diagnostic on recovered method"};
   Budget successful_budget;
   const auto successful = objcSources(batch, metadata, 8, successful_budget);
   EXPECT_EQ(successful.source, baseline.source);
+  Object expected_coverage(baseline.coverage);
+  ASSERT_EQ(array(expected_coverage, "methods").size(), 1U);
+  auto &expected_row =
+      *expected_coverage.getArray("methods")->front().getAsObject();
+  EXPECT_TRUE(array(expected_row, "diagnostics").empty());
+  expected_row["diagnostics"] =
+      Array{"retained diagnostic on recovered method"};
   EXPECT_EQ(Value(Object(successful.coverage)),
-            Value(Object(baseline.coverage)));
+            Value(Object(expected_coverage)))
+      << jsonText(Value(Object(successful.coverage))) << "\nexpected:\n"
+      << jsonText(Value(Object(expected_coverage)));
   EXPECT_EQ(number(successful.coverage, "recovered_method_count"), 1);
   EXPECT_FALSE(object(array(successful.coverage, "methods")[0], "method")
                    .get("native_backend"));
